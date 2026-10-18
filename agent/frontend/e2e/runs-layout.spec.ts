@@ -2,7 +2,11 @@ import type { Page } from "@playwright/test";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { dbUser } from "./fixtures/auth";
 import { chooseSelectFieldOption, withListFilters } from "./fixtures/select-field";
-import { jumpToPage, measureHorizontalOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
+import {
+  findIconTextMisalignment,
+  jumpToPage,
+  measureHorizontalOverflow,
+} from "../../../platform/packages/ui/e2e/layout-checks";
 
 function seedRun(
   mockApi: MockApi,
@@ -241,6 +245,8 @@ test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査�
   await page.keyboard.press("Enter");
   await expect(step).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByTestId("run-timeline-section").getByText("売上の集計")).toBeVisible();
+  // 文字の横のアイコン（状態・開閉の印）は、文字の 1 行目の中心にそろえる（#2371）。
+  expect(await findIconTextMisalignment(page, { root: '[data-testid="run-timeline-section"]' })).toEqual([]);
   // 処理の詳細・監査ログは既定で閉じる。監査ログは開いたときだけ読む。
   await expect(page.getByTestId("run-technical-section")).not.toHaveAttribute("open", "");
   expect(mockApi.lastRequest("GET", "/api/runs/run-layout/audit")).toBeUndefined();

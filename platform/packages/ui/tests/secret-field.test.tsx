@@ -36,7 +36,7 @@ describe("SecretField", () => {
   it("既定はマスク入力で、未設定のバッジ（アイコン付き）と表示の切り替えを入力欄の直後に出す", () => {
     const html = render({ helper: "Bearer 認証で使います。" });
     expect(html).toMatch(/<label for="api-key"[^>]*>API key<\/label>/);
-    expect(html).toMatch(/data-status-variant="neutral"[^>]*><svg[^>]*>.*?<\/svg>未設定<\/span>/);
+    expect(html).toMatch(/data-status-variant="neutral"[^>]*><span class="pr-icon-line"><svg[^>]*>.*?<\/svg><\/span>未設定<\/span>/);
     const input = secretInput(html);
     expect(input).toContain('type="password"');
     expect(input).toContain('aria-describedby="api-key-hint"');

@@ -576,7 +576,9 @@ function QueueWaitNote({ wait }: { wait: QueueWaitView }) {
       className="mt-3 flex items-start gap-1.5 text-xs text-fg-muted"
       data-testid="recipe-queue-wait"
     >
-      <Clock3 size={14} className="mt-px shrink-0 text-info-fg" aria-hidden />
+      <span className="pr-icon-line text-info-fg">
+        <Clock3 size={12} aria-hidden />
+      </span>
       <span className="min-w-0">
         <span className="font-medium text-fg">{queueWaitLabel(wait.phase)}</span>
         {[ahead, reason].map((part) =>

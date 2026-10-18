@@ -328,6 +328,7 @@ export {
   DisclosureChevron,
   type DisclosureChevronProps,
 } from "./components/ui/disclosure-chevron";
+export { TEXT_ICON_SIZE, type TextIconSize } from "./components/ui/text-icon";
 export {
   Disclosure,
   type DisclosureProps,

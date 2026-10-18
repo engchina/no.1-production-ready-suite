@@ -473,9 +473,11 @@ describe("RunTimeline の段の詳細（#2294）", () => {
     const chevron = toggle?.querySelector("svg");
     expect(chevron?.getAttribute("width")).toBe(px);
     expect(chevron?.getAttribute("height")).toBe(px);
-    // 印の箱は行の高さ（leading-5 = 20px）で、印をその縦の中央に置く。
-    expect(chevron?.parentElement?.className).toContain("h-5");
-    expect(chevron?.parentElement?.className).toContain("items-center");
+    // 印の箱は文字の 1 行目の行の高さ（.pr-icon-line = 1lh）で、印をその縦の中央に置く（#2371）。
+    expect(chevron?.parentElement?.className).toContain("pr-icon-line");
+    // 状態のアイコンも同じ大きさ・同じ置き場所。
+    const status = toggle?.parentElement?.querySelector(":scope > .pr-icon-line > svg");
+    expect(status?.getAttribute("width")).toBe(px);
   });
 
   it("失敗した段の詳細は最初から開き、詳細と自由な中身を両方出す。印の文言は labels で変えられる", () => {

@@ -9,6 +9,7 @@ import {
 } from "../../lib/operation-timing";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
+import { TEXT_ICON_SIZE } from "../ui/text-icon";
 
 const DEFAULT_SLOW_AFTER_MS = 10_000;
 
@@ -176,11 +177,16 @@ export function ProcessingIndicator({
         </span>
       ) : null}
       <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-fg">
+        {/* 印は折り返した文字の 1 行目の中心にそろえる（#2371）。 */}
+        <span className="flex min-w-0 items-start gap-2 text-sm font-medium text-fg">
           {timing.active && showActivityIcon ? (
-            <Spinner size={16} className="text-accent-fg" />
+            <span className="pr-icon-line">
+              <Spinner size={16} className="text-accent-fg" />
+            </span>
           ) : !timing.active && showActivityIcon ? (
-            <Clock3 size={16} className="shrink-0 text-fg-muted" aria-hidden="true" />
+            <span className="pr-icon-line text-fg-muted">
+              <Clock3 size={16} aria-hidden="true" />
+            </span>
           ) : null}
           <span className="min-w-0 break-words">{displayLabel}</span>
         </span>
@@ -192,7 +198,7 @@ export function ProcessingIndicator({
             aria-label={`${timing.active ? labels.elapsed : labels.duration} ${timing.elapsedClock}`}
             data-testid={testId ? `${testId}-timer` : undefined}
           >
-            <Clock3 size={14} aria-hidden="true" />
+            <Clock3 size={TEXT_ICON_SIZE.xs} aria-hidden="true" />
             <span>{timing.active ? labels.elapsed : labels.duration}</span>
             <span className="min-w-[3.25rem] text-right font-sans tabular-nums text-fg">
               {timing.elapsedClock}

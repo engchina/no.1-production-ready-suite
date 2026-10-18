@@ -10,6 +10,7 @@ import {
 
 import { surfaceTintFor } from "../../lib/surface-tint";
 import { cn } from "../../lib/utils";
+import { TEXT_ICON_SIZE } from "../ui/text-icon";
 
 /**
  * 汎用ステータスバッジの配色トークン。
@@ -66,12 +67,18 @@ export function StatusBadge({
       data-status-variant={variant}
       data-surface-tint={surfaceTintFor(VARIANT_STYLES[variant])}
       className={cn(
-        "inline-flex items-center justify-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium",
+        // 折り返すバッジでもアイコンは 1 行目の中心にそろえる（items-start + 行の高さの箱。#2371）。
+        "inline-flex items-start justify-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium",
         VARIANT_STYLES[variant],
         className
       )}
     >
-      {Icon ? <Icon size={14} className="shrink-0" aria-hidden /> : null}
+      {/* アイコンはバッジの文字の大きさ（12px）にそろえる（#2371）。 */}
+      {Icon ? (
+        <span className="pr-icon-line">
+          <Icon size={TEXT_ICON_SIZE.xs} aria-hidden />
+        </span>
+      ) : null}
       {label}
     </span>
   );

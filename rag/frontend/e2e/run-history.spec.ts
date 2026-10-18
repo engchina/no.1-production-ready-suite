@@ -7,7 +7,11 @@ import {
   mockLocalAuth,
   openSidebarNav,
 } from "./_helpers";
-import { jumpToPage, measureHorizontalOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
+import {
+  findIconTextMisalignment,
+  jumpToPage,
+  measureHorizontalOverflow,
+} from "../../../platform/packages/ui/e2e/layout-checks";
 
 // Issue 1890・1955（段 2）: RAG の「AI 活用」の「実行履歴」を 3 製品の共通の型（UX 契約 run-history.md）で作る。
 // - 一覧: RunHistoryToolbar（検索 → 状態 → 種類 → 期間 → 実行者。FilterSelect）→ RunHistoryTable → OffsetPagination
@@ -490,6 +494,8 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(searchDetails.locator("dt").first()).toHaveText("検索の候補");
     await expect(searchDetails).toContainText("12 件（3 文書）");
     await expect(searchDetails).toContainText("1. 文書 A › 第 1 章（p.3）");
+    // 文字の横のアイコン（状態・開閉の印）は、文字の 1 行目の中心にそろえる（#2371）。
+    expect(await findIconTextMisalignment(page, { root: '[data-testid="run-history-timeline"]' })).toEqual([]);
     await expectNoPageOverflow(page);
     await searchToggle.click();
     await expect(searchDetails).toBeHidden();

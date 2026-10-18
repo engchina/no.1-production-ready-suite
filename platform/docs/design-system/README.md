@@ -140,6 +140,15 @@ TIER 3   components/components.css  hover / focus / disabled の状態のみ。T
 --icon-state: 24px  空/エラー状態の大アイコン
 ```
 
+### 文字の横のアイコン（新設。#2371）
+
+| 決定 | 理由 |
+|---|---|
+| 文字に添えるアイコン（開閉の印・処理の経過の段の状態・補足の行の印・バッジのアイコン）は文字の大きさにそろえる: `text-xs` は 12px、`text-sm` は 14px（`TEXT_ICON_SIZE`。`--font-size-xs` / `--font-size-sm`） | 印が文字より大きいと行の中で目立ち、行の高さもずれる |
+| 置き場所は `.pr-icon-line`（文字の 1 行目の行の高さ `1lh` の箱の縦の中央）。行は `items-start` にし、折り返した文字・補足のある見出しでも 1 行目に合わせる。1 行の見出しを最小の高さの中央に置くときは、行の高さを引いた残りを上下の余白にする（`Disclosure` の summary） | 固定の `h-5`（ルート 14px で 17.5px）や `mt-0.5` は、行の高さ（`--line-height-sm` 20px・`leading-relaxed`）と合わず、アイコンが文字の中心より上下にずれた。`items-center` は折り返した文字のまとまりの中央に来る |
+| 例外: 状態を知らせる `Banner` / `Toast` / `FormStatus` と `Button` のアイコンは 16px（`--icon-md`）のまま、置き場所だけ `.pr-icon-line`。見出しと説明の 2 行のまとまりの横の印の箱（アイコンの入った 32〜40px の箱・グラフの節点・利用者のアイコン）は 2 行の中央に置き、`data-icon-align-skip` を付ける | 状態の印は目立たせる。箱はまとまり全体の印 |
+| e2e は `platform/packages/ui/e2e/layout-checks.ts` の `findIconTextMisalignment(page, { root })`（アイコンの縦の中心と、隣の文字の 1 行目の中心のずれが 1px を超えたものを返す）で確かめる | 目で見て気づきにくい 1〜2px のずれを、画面ごとに数値で止める |
+
 ---
 
 ## 4. 柱 C — 新コンポーネントと統一基準

@@ -19,15 +19,20 @@ function OptionCheckbox({
 }) {
   return (
     <label className="flex min-h-11 items-start gap-3 rounded-md border border-border bg-surface p-3 text-fg">
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(event) => onChange(event.currentTarget.checked)}
-        className="mt-1 h-4 w-4 shrink-0 rounded border-border text-accent-fg disabled:cursor-not-allowed disabled:opacity-60"
-      />
+      {/* チェックボックスとアイコンは文字の 1 行目の中心にそろえる（#2371）。 */}
+      <span className="pr-icon-line">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={(event) => onChange(event.currentTarget.checked)}
+          className="h-4 w-4 shrink-0 rounded border-border text-accent-fg disabled:cursor-not-allowed disabled:opacity-60"
+        />
+      </span>
       <span className="flex min-w-0 items-start gap-2">
-        <Icon size={16} className="mt-0.5 shrink-0 text-fg-muted" aria-hidden="true" />
+        <span className="pr-icon-line text-fg-muted">
+          <Icon size={16} aria-hidden="true" />
+        </span>
         <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>
       </span>
     </label>

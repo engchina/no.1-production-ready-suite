@@ -62,7 +62,10 @@ export function UploadSelectionList({
             className="flex items-center justify-between gap-3 px-3 py-2"
           >
             <div className="flex min-w-0 items-start gap-2">
-              <FileText size={16} className="mt-0.5 shrink-0 text-accent-fg" aria-hidden />
+              {/* ファイル名の 1 行目の中心にそろえる（#2371）。 */}
+              <span className="pr-icon-line text-sm text-accent-fg">
+                <FileText size={16} aria-hidden />
+              </span>
               <div className="min-w-0">
                 <p className="truncate text-sm text-fg" title={file.name}>
                   {file.name}

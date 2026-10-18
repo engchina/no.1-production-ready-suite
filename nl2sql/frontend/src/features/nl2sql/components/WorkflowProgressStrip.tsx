@@ -187,10 +187,12 @@ export function WorkflowProgressStrip({
         }`}
       >
         <div className="flex min-w-0 items-start gap-3">
+          {/* 見出しと説明の 2 行のまとまりの横の印の箱（文字の 1 行目にそろえる規則の例外。#2371）。 */}
           <span
             data-surface-tint={surfaceTintFor(toneIconClass(tone))}
             className={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md ${toneIconClass(tone)}`}
             aria-hidden="true"
+            data-icon-align-skip=""
           >
             {spinnerTarget === "header" ? <Spinner size={20} /> : toneIcon(tone)}
           </span>
@@ -210,7 +212,7 @@ export function WorkflowProgressStrip({
         <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-4 gap-y-2 text-xs text-fg-muted sm:justify-end">
           {meta}
           <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5 font-sans tabular-nums">
-            <Clock3 size={14} className="shrink-0" aria-hidden="true" />
+            <Clock3 size={12} className="shrink-0" aria-hidden="true" />
             <span>{timerKind}</span>
             <span
               className="min-w-0 break-all"
@@ -257,37 +259,45 @@ export function WorkflowProgressStrip({
                 data-step-status={step.dataStatus ?? step.status}
               >
                 {index < steps.length - 1 && (
+                  // 線は丸の下端から（丸は見出しの 1 行目の中心の高さ。li の上の余白 0.5rem + 見出しの上の余白 + 1 行の半分 +
+                  // 丸の半分 = 3rem）。
                   <span
-                    className={`absolute bottom-[-0.5rem] left-[0.84375rem] top-9 w-px ${
+                    className={`absolute bottom-[-0.5rem] left-[0.84375rem] top-12 w-px ${
                       done ? "bg-success-emphasis" : "bg-border"
                     }`}
                     aria-hidden="true"
                   />
                 )}
-                <span
-                  data-surface-tint={surfaceTintFor(stepCircleClass(step.status))}
-                  className={`relative z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold ${stepCircleClass(step.status)}`}
-                >
-                  <StepIcon status={step.status} index={index} spinning={spinnerTarget === index} />
+                {/* 丸の中心を工程の見出しの 1 行目の中心にそろえる（見出しの上の余白の分だけ下げ、見出しと同じ文字の
+                    大きさの行の高さの箱の中央に置く。#2371）。 */}
+                <span className="flex justify-center pt-[calc(0.25rem+(2.75rem-var(--line-height-sm))/2)] text-sm">
+                  <span className="pr-icon-line">
+                    <span
+                      data-surface-tint={surfaceTintFor(stepCircleClass(step.status))}
+                      className={`relative z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold ${stepCircleClass(step.status)}`}
+                    >
+                      <StepIcon status={step.status} index={index} spinning={spinnerTarget === index} />
+                    </span>
+                  </span>
                 </span>
                 {/*
                   工程の見出し（名前 + Chevron）と状態（右端、375px では次の行）を 1 行に並べる工程表の行。
                   見出しと Chevron だけを持つ Disclosure では表せないため手書きし、状態は DisclosureChevron で示す（#397）。
                   中の Disclosure（オントロジー構築の工程）は自分の状態で Chevron を回すので、入れ子でも向きは混ざらない。
                 */}
+                {/* 開いた枠は ring で描く（枠線の幅で見出しの位置をずらさない）。見出しは 1 行目に合わせて上から並べ、
+                    1 行のときは最小の高さの中央に来るよう上下の余白を行の高さから決める（#2371）。 */}
                 {/* oxlint-disable-next-line design-system/restricted-syntax -- 上の説明のとおり工程表の行。 */}
                 <details
-                  className="group/disclosure min-w-0 rounded-md border border-transparent px-1 py-1 open:border-border open:bg-surface-sunken sm:px-2"
+                  className="group/disclosure min-w-0 rounded-md px-1 py-1 ring-1 ring-transparent open:bg-surface-sunken open:ring-border sm:px-2"
                   open={step.open}
                 >
-                  <summary className="flex min-h-11 min-w-0 max-w-full cursor-pointer list-none flex-wrap items-center justify-between gap-2 overflow-hidden rounded-sm text-sm sm:gap-3 [&::-webkit-details-marker]:hidden">
-                    <span className="flex min-w-0 max-w-full flex-1 basis-full items-center gap-2 font-semibold text-fg sm:basis-0">
+                  <summary className="flex min-h-11 min-w-0 max-w-full cursor-pointer list-none flex-wrap items-start justify-between gap-2 overflow-hidden rounded-sm py-[calc((2.75rem-1lh)/2)] text-sm sm:gap-3 [&::-webkit-details-marker]:hidden">
+                    <span className="flex min-w-0 max-w-full flex-1 basis-full items-start gap-2 font-semibold text-fg sm:basis-0">
                       <span className="min-w-0 break-words sm:truncate">{step.label}</span>
-                      <DisclosureChevron
-                        expanded="group"
-                        size={14}
-                        className="text-fg-muted"
-                      />
+                      <span className="pr-icon-line text-fg-muted">
+                        <DisclosureChevron expanded="group" size={14} />
+                      </span>
                     </span>
                     <span
                       className={`min-w-0 max-w-full basis-full break-all text-right text-xs font-medium leading-5 sm:basis-auto sm:break-normal ${stepTextClass(step.status)}`}

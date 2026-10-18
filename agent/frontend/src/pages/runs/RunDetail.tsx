@@ -473,9 +473,13 @@ function RunTimelineItem({ event }: { event: RunEvent }) {
   const view = timelineEventView(event);
   return (
     <li className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] gap-3">
-      <div className="flex justify-center">
-        <div className="mt-1 flex size-8 items-center justify-center rounded-full border border-border bg-surface-sunken text-fg-muted">
-          {view.icon}
+      {/* 印の丸の中心を、右の枠の中の見出しの 1 行目の中心にそろえる（枠の上の余白と枠線の分だけ下げ、見出しと同じ
+          文字の大きさの行の高さの箱の中央に置く。#2371）。 */}
+      <div className="flex justify-center pt-[calc(0.75rem+1px)] text-sm">
+        <div className="pr-icon-line">
+          <div className="flex size-8 items-center justify-center rounded-full border border-border bg-surface-sunken text-fg-muted">
+            {view.icon}
+          </div>
         </div>
       </div>
       <div className="min-w-0 rounded-md border border-border p-3">

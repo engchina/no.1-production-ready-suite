@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from "react";
 import { Info, ShieldCheck } from "lucide-react";
-import { Disclosure, StatusBadge, type StatusVariant } from "@production-ready/ui";
+import { Disclosure, StatusBadge, TEXT_ICON_SIZE, type StatusVariant } from "@production-ready/ui";
 
 import type {
   AnswerReview,
@@ -26,8 +26,9 @@ export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; te
     review.guide !== null ||
     review.gaps.length > 0;
   // 見出しとバッジは同じ行に置き、狭い幅ではバッジを次の行へ折り返す（見出しの文字を縦に潰さない）。
+  // バッジは上下にはみ出させて行の高さを文字の行の高さに保つ（見出しのアイコンを文字の 1 行目の中心にそろえる。#2371）。
   const heading = (
-    <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
+    <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1 [&_[data-status-variant]]:-my-0.5">
       <span className="whitespace-nowrap">{t("chat.review.title")}</span>
       {review.outcome ? <OutcomeBadge outcome={review.outcome} testId={`${testId}-outcome`} /> : null}
       {review.validation ? <ValidationBadge validation={review.validation} /> : null}
@@ -49,8 +50,10 @@ export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; te
         </Disclosure>
       ) : review.outcome ? (
         // 対応だけがある回答（検証も支援タスクの状態も無い）は、開いても中身が無いので畳まずに見出しだけを出す。
-        <p className="flex items-center gap-1.5 text-xs font-medium text-fg" data-testid={testId}>
-          <ShieldCheck size={14} className="shrink-0 text-fg-muted" aria-hidden="true" />
+        <p className="flex items-start gap-1.5 text-xs font-medium text-fg" data-testid={testId}>
+          <span className="pr-icon-line text-fg-muted">
+            <ShieldCheck size={TEXT_ICON_SIZE.xs} aria-hidden="true" />
+          </span>
           <span className="min-w-0 break-words">{heading}</span>
         </p>
       ) : null}
@@ -188,7 +191,10 @@ function PointText({ point }: { point: UnverifiedPoint }) {
 export function LimitNote({ testId }: { testId: string }) {
   return (
     <p className="flex items-start gap-1.5 text-xs text-fg-muted" data-testid={testId}>
-      <Info size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+      {/* 印は文字の大きさで、1 行目の中心にそろえる（#2371）。 */}
+      <span className="pr-icon-line">
+        <Info size={TEXT_ICON_SIZE.xs} aria-hidden="true" />
+      </span>
       <span className="min-w-0 break-words">{t("chat.review.limitReached")}</span>
     </p>
   );
