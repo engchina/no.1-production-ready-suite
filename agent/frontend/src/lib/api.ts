@@ -273,18 +273,21 @@ export interface ConfirmationRequest {
   decided_at?: string | null;
 }
 
-export type ConfirmationAction = "answer" | "skip" | "cancel";
+/**
+ * 回答前の確認の操作。確認を終えるのは「確認せずに回答」（`skip`）だけで、画面は「確認をやめる」を持たない
+ * （質問を取り消すのは入力欄の「停止」。#2311）。
+ */
+export type ConfirmationAction = "answer" | "skip";
 
 export interface ConfirmationDecisionPayload {
   action: ConfirmationAction;
   answers?: ConfirmationAnswer[];
 }
 
-/** 回答前の確認の操作の結果。答えで作った次の回答（ツールの結果の確認）か、入力欄に戻す質問（やめる）。 */
+/** 回答前の確認の操作の結果。答え・スキップで作った次の回答（ツールの結果の確認）。 */
 export interface ConfirmationOutcome {
   run: RunState;
   next_run?: RunState | null;
-  question?: string | null;
 }
 
 /** ツールの結果の確認に答えて作った回答の、答えの記録（Run の metadata `clarification_response`）。 */

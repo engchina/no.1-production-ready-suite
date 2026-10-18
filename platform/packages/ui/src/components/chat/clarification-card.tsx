@@ -2,10 +2,12 @@ import { Info, MessageCircleQuestion, Send, SkipForward, X } from "lucide-react"
 import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from "react";
 
 import { cn } from "../../lib/utils";
+import { ProcessingIndicator } from "../feedback/processing-state";
 import { Button } from "../ui/button";
 import type { ControlSize } from "../ui/control-size";
 import { TextareaField } from "../ui/textarea-field";
 import { DEFAULT_CLARIFICATION_LABELS, type ClarificationLabels } from "./clarification-labels";
+import { clarificationRecordAnswerText } from "./clarification-record";
 
 /** 確認事項の選択肢。 */
 export interface ClarificationOption {
@@ -55,23 +57,47 @@ export interface ClarificationAnswer {
   otherText: string;
 }
 
-/** 処理中の操作（押したボタンだけを `loading` にし、ほかは押せなくする）。 */
-export type ClarificationBusyAction = "confirm" | "skip" | "cancel";
+/**
+ * 処理中の操作。`confirm` はフォームを答えた内容の記録と経過の行 1 つに置き換え、`skip` は押したボタンだけを
+ * `loading` にしてほかを押せなくする。
+ */
+export type ClarificationBusyAction = "confirm" | "skip";
+
+/**
+ * 入力の取りやめ（NL2SQL の「直すのをやめる」など、開いた入力を閉じて前の確認事項に戻る操作）。質問も確認も
+ * 取り消さない。確認を終える操作は「確認せずに〈回答〉」（`onSkip`）だけで、「確認をやめる」には使わない。
+ */
+export interface ClarificationDismissAction {
+  label: string;
+  onClick: () => void;
+}
 
 export interface ClarificationCardProps {
   /** 確認事項（ふつうは 1 件。1 件ずつ聞くときは `progress` で位置を出す）。 */
   items: ClarificationItem[];
   /** 確定（「この内容で〈回答〉」）。すべての確認事項に答えがあるときだけ押せる。 */
   onConfirm: (answers: ClarificationAnswer[]) => void;
-  /** スキップ（「確認せずに〈回答〉」。前提を示して回答する）。渡さなければボタンを出さない。 */
+  /**
+   * スキップ（「確認せずに〈回答〉」。前提を示して回答する）。確認を終える唯一の操作で、質問は取り消さない
+   * （質問を取り消すのは入力欄の「停止」だけ）。渡さなければボタンを出さない。
+   */
   onSkip?: () => void;
-  /** キャンセル（「確認をやめる」。質問を入力欄に戻す）。渡さなければボタンを出さない。 */
-  onCancel?: () => void;
+  /**
+   * 確定の後の経過の行に出す「確認せずに〈回答〉」（待たずに進める）。送った答えの処理を取りやめられる製品
+   * （NL2SQL の AI の再検査）だけが渡す。
+   */
+  onSkipWhileConfirming?: () => void;
+  /** 入力の取りやめ（操作の行の右端の ghost）。質問・確認は取り消さない。 */
+  dismissAction?: ClarificationDismissAction;
   /** 1 件ずつ聞くときの位置（「確認事項 1 / 3」）。 */
   progress?: { current: number; total: number };
   /** 確認の往復（「確認 1 回目（上限 2 回）」）。上限の回では最後の確認であることを添える。 */
   round?: { current: number; max: number };
-  /** 処理中の操作。 */
+  /**
+   * 処理中の操作。`confirm` の間はフォーム（選択肢・自由入力・操作の行・押せない理由・製品の中身）を出さず、
+   * 答えた内容の記録と経過の行 1 つ（スピナー・経過時間・遅いときの案内）に置き換える。失敗したら `null` に
+   * 戻すとフォームと入力が戻り、`error` を操作の行の直上に出す。
+   */
   busyAction?: ClarificationBusyAction | null;
   /** カード全体を操作できない（古い会話の確認など）。 */
   disabled?: boolean;
@@ -91,7 +117,7 @@ export interface ClarificationCardProps {
   error?: ReactNode;
   /**
    * 確定の右に置く製品の操作（NL2SQL の「直しを伝える」など。`Button` を同じ `size` で渡す）。多用しない
-   * （操作の行は 確定 → 製品の操作 → スキップ、反対の端にキャンセル）。
+   * （操作の行は 確定 → 製品の操作 → スキップ、反対の端に入力の取りやめ）。
    */
   actions?: ReactNode;
   labels?: Partial<ClarificationLabels>;
@@ -130,13 +156,15 @@ export function clarificationAnswers(items: ClarificationItem[], draft: Clarific
 
 /**
  * 回答前の確認のカード（#1839。3 製品共通）。曖昧な質問に答える前に、確認事項・確認する理由・選択肢（ラジオ /
- * チェックボックス）と、常に「その他（自由入力）」を出し、「この内容で〈回答〉」「確認せずに〈回答〉」「確認をやめる」
- * を並べる。文言は `clarificationLabels({ stage, action })` で製品の名詞だけを変える。
+ * チェックボックス）と、常に「その他（自由入力）」を出し、「この内容で〈回答〉」「確認せずに〈回答〉」を並べる。
+ * 確認を終えるのは「確認せずに〈回答〉」だけで、カードに「確認をやめる」は置かない（質問を取り消すのは入力欄の
+ * 「停止」だけ。#2311）。文言は `clarificationLabels({ stage, action })` で製品の名詞だけを変える。
  *
  * - 1 つだけ選ぶ確認事項では、選択肢と自由入力はどちらか一方（選ぶと自由入力を空に、書くと選択を外す）。
  *   複数選ぶ確認事項では併せて答えられる。
  * - 確定を押せない間は、理由を操作の行の下に出し、確定のボタンの aria-describedby で結ぶ（#1772）。
- * - 処理中は押したボタンだけを `loading` にし、ほかの操作と入力を押せなくする（buttons.md §8）。
+ * - 確定を押したら、フォームを答えた内容の記録と経過の行 1 つに置き換える（1 つの処理にスピナー 1 つ。
+ *   messaging.md §3.7）。スキップの処理中は押したボタンだけを `loading` にし、ほかを押せなくする（buttons.md §8）。
  * - 確認事項の文は題の 1 段下の見出し。確認事項が変わったら答えを空にし、最初の確認事項の文へフォーカスを移す
  *   （読み上げで新しい確認事項をそのまま聞ける）。
  * - 業務の語彙は知らない。製品固有の中身は選択肢の `detail`・確認事項の `meta`・`children` で渡す。
@@ -145,7 +173,8 @@ export function ClarificationCard({
   items,
   onConfirm,
   onSkip,
-  onCancel,
+  onSkipWhileConfirming,
+  dismissAction,
   progress,
   round,
   busyAction = null,
@@ -172,7 +201,6 @@ export function ClarificationCard({
   const titleId = `${baseId}-title`;
   const blockedId = `${baseId}-blocked`;
   const skipHintId = `${baseId}-skip-hint`;
-  const cancelHintId = `${baseId}-cancel-hint`;
   const Heading = `h${headingLevel}` as "h2" | "h3" | "h4";
 
   // 確認事項が変わったレンダーで、非受控の答えを空にする（effect で setState しない）。
@@ -196,12 +224,23 @@ export function ClarificationCard({
   };
 
   const promptRef = useRef<HTMLHeadingElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
   const focusedKeyRef = useRef<string | null>(autoFocus ? null : stepKey);
+  const confirming = busyAction === "confirm";
+  const wasConfirmingRef = useRef(false);
   useEffect(() => {
-    if (focusedKeyRef.current === stepKey) return;
+    const wasConfirming = wasConfirmingRef.current;
+    wasConfirmingRef.current = confirming;
+    // 確定でボタンが消えるので、フォーカスを題へ移す（経過は経過の行の status が読み上げる）。
+    if (confirming) {
+      if (!wasConfirming) titleRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    // 確認事項が変わった・確定に失敗してフォームが戻ったら、最初の確認事項の文へ移す。
+    if (focusedKeyRef.current === stepKey && !wasConfirming) return;
     focusedKeyRef.current = stepKey;
     promptRef.current?.focus({ preventScroll: true });
-  }, [stepKey]);
+  }, [stepKey, confirming]);
 
   const busy = busyAction !== null;
   const inputsDisabled = disabled || busy;
@@ -240,13 +279,15 @@ export function ClarificationCard({
           </p>
         ) : null}
         <Heading
+          ref={titleRef}
           id={titleId}
+          tabIndex={-1}
           className="flex items-center gap-2 text-sm font-semibold leading-6 text-fg"
         >
           <MessageCircleQuestion size={16} aria-hidden className="shrink-0 text-accent-fg" />
           {labels.title}
         </Heading>
-        {lastRound ? (
+        {lastRound && !confirming ? (
           <p className="flex items-start gap-1.5 text-xs leading-5 text-fg-muted" data-testid={`${testId}-last-round`}>
             <Info size={14} aria-hidden className="mt-0.5 shrink-0" />
             {labels.lastRound}
@@ -254,95 +295,161 @@ export function ClarificationCard({
         ) : null}
       </header>
 
-      {items.map((item, index) => (
-        <ClarificationItemFields
-          key={item.id}
-          item={item}
-          entry={entryOf(draft, item.id)}
-          baseId={`${baseId}-item-${index}`}
-          promptLevel={Math.min(headingLevel + 1, 6) as 3 | 4 | 5}
-          promptRef={index === 0 ? promptRef : undefined}
+      {confirming ? (
+        <ClarificationConfirming
+          items={items}
+          draft={draft}
           labels={labels}
-          disabled={inputsDisabled}
-          separated={index > 0}
+          operationKey={`${baseId}-confirm-${stepKey}`}
+          onSkip={onSkipWhileConfirming}
           testId={testId}
-          onChange={(entry) => update(item.id, entry)}
         />
-      ))}
+      ) : (
+        <>
+        {items.map((item, index) => (
+          <ClarificationItemFields
+            key={item.id}
+            item={item}
+            entry={entryOf(draft, item.id)}
+            baseId={`${baseId}-item-${index}`}
+            promptLevel={Math.min(headingLevel + 1, 6) as 3 | 4 | 5}
+            promptRef={index === 0 ? promptRef : undefined}
+            labels={labels}
+            disabled={inputsDisabled}
+            separated={index > 0}
+            testId={testId}
+            onChange={(entry) => update(item.id, entry)}
+          />
+        ))}
 
-      {children}
-      {error}
+        {children}
+        {error}
 
-      <div className="grid min-w-0 gap-2">
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-          <Button
-            type="button"
-            variant="primary"
-            size={size}
-            icon={Send}
-            className="w-full sm:w-auto"
-            loading={busyAction === "confirm"}
-            disabled={busy ? busyAction !== "confirm" : disabled || !ready}
-            aria-describedby={blocked && !busy ? blockedId : undefined}
-            onClick={() => onConfirm(clarificationAnswers(items, draft))}
-            data-testid={`${testId}-confirm`}
-          >
-            {labels.confirm}
-          </Button>
-          {actions}
-          {onSkip ? (
+        <div className="grid min-w-0 gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
             <Button
               type="button"
-              variant="secondary"
+              variant="primary"
               size={size}
-              icon={SkipForward}
+              icon={Send}
               className="w-full sm:w-auto"
-              loading={busyAction === "skip"}
-              disabled={busy ? busyAction !== "skip" : disabled}
-              aria-describedby={labels.skipHint ? skipHintId : undefined}
-              onClick={onSkip}
-              data-testid={`${testId}-skip`}
+              disabled={busy || disabled || !ready}
+              aria-describedby={blocked && !busy ? blockedId : undefined}
+              onClick={() => onConfirm(clarificationAnswers(items, draft))}
+              data-testid={`${testId}-confirm`}
             >
-              {labels.skip}
+              {labels.confirm}
             </Button>
-          ) : null}
-          {onCancel ? (
-            // 二者択一の「やめる」は確定と反対の端に置く（README §4「カード内の操作行」）。質問は消えないので danger にしない。
-            <Button
-              type="button"
-              variant="ghost"
-              size={size}
-              icon={X}
-              className="w-full sm:ml-auto sm:w-auto"
-              loading={busyAction === "cancel"}
-              disabled={busy ? busyAction !== "cancel" : disabled}
-              aria-describedby={labels.cancelHint ? cancelHintId : undefined}
-              onClick={onCancel}
-              data-testid={`${testId}-cancel`}
-            >
-              {labels.cancel}
-            </Button>
-          ) : null}
+            {actions}
+            {onSkip ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size={size}
+                icon={SkipForward}
+                className="w-full sm:w-auto"
+                loading={busyAction === "skip"}
+                disabled={busy ? busyAction !== "skip" : disabled}
+                aria-describedby={labels.skipHint ? skipHintId : undefined}
+                onClick={onSkip}
+                data-testid={`${testId}-skip`}
+              >
+                {labels.skip}
+              </Button>
+            ) : null}
+            {dismissAction ? (
+              // 入力の取りやめは確定と反対の端に置く（README §4「カード内の操作行」）。質問は消えないので danger にしない。
+              <Button
+                type="button"
+                variant="ghost"
+                size={size}
+                icon={X}
+                className="w-full sm:ml-auto sm:w-auto"
+                disabled={busy || disabled}
+                onClick={dismissAction.onClick}
+                data-testid={`${testId}-dismiss`}
+              >
+                {dismissAction.label}
+              </Button>
+            ) : null}
+          </div>
+          <div className="grid gap-0.5 text-xs leading-5 text-fg-muted">
+            {blocked && !busy && !disabled ? (
+              <p id={blockedId} data-testid={`${testId}-blocked`}>
+                {blocked}
+              </p>
+            ) : null}
+            {onSkip && labels.skipHint ? (
+              <p id={skipHintId}>
+                <span className="font-medium">{labels.skip}</span>: {labels.skipHint}
+              </p>
+            ) : null}
+          </div>
         </div>
-        <div className="grid gap-0.5 text-xs leading-5 text-fg-muted">
-          {blocked && !busy && !disabled ? (
-            <p id={blockedId} data-testid={`${testId}-blocked`}>
-              {blocked}
-            </p>
-          ) : null}
-          {onSkip && labels.skipHint ? (
-            <p id={skipHintId}>
-              <span className="font-medium">{labels.skip}</span>: {labels.skipHint}
-            </p>
-          ) : null}
-          {onCancel && labels.cancelHint ? (
-            <p id={cancelHintId}>
-              <span className="font-medium">{labels.cancel}</span>: {labels.cancelHint}
-            </p>
-          ) : null}
-        </div>
-      </div>
+        </>
+      )}
     </section>
+  );
+}
+
+/**
+ * 確定の後の表示: 答えた内容の短い記録（確認事項の文と答え）と、経過の行 1 つ（スピナー・その確定から数える
+ * 経過時間・遅いときの案内。製品が渡せば「確認せずに〈回答〉」）。答えの無い任意の確認事項は記録に出さない。
+ */
+function ClarificationConfirming({
+  items,
+  draft,
+  labels,
+  operationKey,
+  onSkip,
+  testId,
+}: {
+  items: ClarificationItem[];
+  draft: ClarificationDraft;
+  labels: ClarificationLabels;
+  operationKey: string;
+  onSkip?: () => void;
+  testId: string;
+}) {
+  const entries = items
+    .filter((item) => !item.optional || isClarificationEntryAnswered(draft[item.id]))
+    .map((item) => {
+      const entry = entryOf(draft, item.id);
+      return {
+        id: item.id,
+        prompt: item.prompt,
+        selected: entry.optionIds
+          .map((optionId) => item.options.find((option) => option.id === optionId)?.label)
+          .filter((label): label is string => Boolean(label)),
+        otherText: entry.otherText,
+      };
+    });
+  return (
+    <div className="grid min-w-0 gap-3" data-testid={`${testId}-confirming`}>
+      {entries.length > 0 ? (
+        <dl className="grid min-w-0 gap-1.5" data-testid={`${testId}-answered`}>
+          {entries.map((entry) => (
+            <div key={entry.id} className="min-w-0" data-testid={`${testId}-answered-entry`} data-entry-id={entry.id}>
+              <dt className="break-words text-xs leading-5 text-fg-muted">{entry.prompt}</dt>
+              <dd className="whitespace-pre-wrap break-words text-sm leading-6 text-fg">
+                {clarificationRecordAnswerText(entry, labels)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      <div className="rounded-md border border-border bg-surface-sunken p-4">
+        <ProcessingIndicator
+          active
+          operationKey={operationKey}
+          label={labels.confirming}
+          placement="panel"
+          testId={`${testId}-progress`}
+          onCancel={onSkip}
+          labels={{ cancel: labels.skip }}
+        />
+      </div>
+    </div>
   );
 }
 

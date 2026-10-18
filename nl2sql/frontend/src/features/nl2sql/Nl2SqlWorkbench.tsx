@@ -1447,7 +1447,6 @@ function ExecutableNl2SqlWorkbench() {
                             profileId={profileId}
                             engine={engine}
                             allowedObjects={toAllowedObjects(selection)}
-                            onClose={() => setGuidedClarificationOpen(false)}
                             onApplyRequirement={handleApplyRequirement}
                             onSkip={skipGuidedClarification}
                           />

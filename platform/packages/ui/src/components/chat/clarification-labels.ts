@@ -39,10 +39,8 @@ export interface ClarificationLabels {
   skip: string;
   /** スキップの補足（例:「前提を示して回答します。」）。空なら出さない。 */
   skipHint: string;
-  /** キャンセルのボタン。 */
-  cancel: string;
-  /** キャンセルの補足（質問は入力欄に戻る）。空なら出さない（直すのをやめるなど、入力欄に戻らない取り消し）。 */
-  cancelHint: string;
+  /** 確定の後、フォームを置き換える経過の行の文（例:「答えを反映しています」）。 */
+  confirming: string;
   /** 会話に残す表示の題。 */
   recordTitle: string;
   /** 会話に残す表示の自由入力の答え。 */
@@ -79,8 +77,7 @@ export function clarificationLabels(nouns: ClarificationNouns): ClarificationLab
       `すべての確認事項で、選択肢を選ぶか「その他（自由入力）」に書くと押せます（残り ${remaining} 件）。`,
     skip: spaced("確認せずに", action),
     skipHint: `${spaced("前提を示して", action)}します。`,
-    cancel: "確認をやめる",
-    cancelHint: "質問は入力欄に戻ります。",
+    confirming: "答えを反映しています",
     recordTitle: `${stage}前に確認した内容`,
     recordOther: (text) => `その他: ${text}`,
     recordNoAnswer: "（答えなし）",

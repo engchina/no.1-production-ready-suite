@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { CheckCircle2, X } from "lucide-react";
+import { CheckCircle2, MessageSquareText } from "lucide-react";
 
 import { Button, StatusBadge } from "@production-ready/ui";
 
@@ -26,7 +26,6 @@ interface GuidedClarificationPanelProps {
   profileId: string;
   engine: Nl2SqlEngine;
   allowedObjects: { table_names: string[]; columns: Record<string, string[]> };
-  onClose: () => void;
   /**
    * 「この内容で SQL を生成して実行」で要件を確定した（session は閉じた）。確かめた時の利用者の質問・確かめた
    * 質問の文・業務プロファイル・session の ID を渡し、画面はその要件で SQL を生成して実行する（#1439 / #1761）。
@@ -40,7 +39,7 @@ interface GuidedClarificationPanelProps {
     sessionId: string
   ) => boolean;
   /**
-   * 要件の検査ができなかったときの「確認せずに SQL を生成」（チャットと同じ操作。#1715）。パネルを閉じ、
+   * 「確認せずに SQL を生成」（チャットと同じ操作。確認を終える唯一の操作。#1715 / #2311）。パネルを閉じ、
    * 入力した質問のまま SQL を生成する。
    */
   onSkip: () => void;
@@ -57,7 +56,6 @@ export function GuidedClarificationPanel({
   profileId,
   engine,
   allowedObjects,
-  onClose,
   onApplyRequirement,
   onSkip,
 }: GuidedClarificationPanelProps) {
@@ -75,7 +73,7 @@ export function GuidedClarificationPanel({
   const startControllerRef = useRef<AbortController | null>(null);
   // 画面を離れた（unmount・再読込）ときに、サーバーの session を中止するための参照。
   const sessionRef = useRef<QuerySession | null>(null);
-  // 「確認を中止して閉じる」で中止済み、または要件を反映した（閉じた）session は中止しない。
+  // 「確認せずに SQL を生成」で中止済み、または要件を反映した（閉じた）session は中止しない。
   const releasedRef = useRef(false);
   const mountedRef = useRef(false);
   // session を作った時の利用者の質問（サーバーの `original_question`。生成のときに照らし合わせる。#1727）。
@@ -223,32 +221,17 @@ export function GuidedClarificationPanel({
     applyToGeneration(applied);
   };
 
-  const closePanel = async () => {
-    if (starting) {
-      startControllerRef.current?.abort();
-      onClose();
-      return;
-    }
-    if (busyAction) return;
-    if (await controller.cancelSession()) {
+  // 「確認せずに SQL を生成」。開始の処理を止め、開いている確認をサーバーで中止してから、質問のまま生成する。
+  const skip = () => {
+    startControllerRef.current?.abort();
+    // 確認事項に答えている途中で飛ばしたときは、開いている確認をサーバーで中止する（#1839）。
+    const open = controller.session;
+    if (isSessionOpen(open)) {
       releasedRef.current = true;
-      onClose();
+      void cancelQuerySession(open.id).catch(() => undefined);
     }
+    onSkip();
   };
-
-  const closeButton = (
-    <Button
-      type="button"
-      variant="ghost"
-      size="lg"
-      loading={busyAction === "cancel"}
-      disabled={busyAction === "answer" || busyAction === "apply"}
-      onClick={() => void closePanel()}
-      icon={X}
-    >
-      {t("nl2sql.clarification.close")}
-    </Button>
-  );
 
   // 入口の前段: 「ALL」の業務プロファイルのときは、推薦から使う業務プロファイルを選ぶ。
   const profileChooser =
@@ -299,7 +282,17 @@ export function GuidedClarificationPanel({
           >
             {t("nl2sql.clarification.confirmProfile")}
           </Button>
-          {closeButton}
+          <Button
+            type="button"
+            variant="secondary"
+            size="lg"
+            icon={MessageSquareText}
+            disabled={Boolean(busyAction)}
+            onClick={skip}
+            data-testid="nl2sql-clarification-skip"
+          >
+            {t("chat.requirement.skip")}
+          </Button>
         </div>
       </fieldset>
     ) : null;
@@ -310,15 +303,8 @@ export function GuidedClarificationPanel({
       check={{ ...requirementCheck, checking: starting }}
       startPhase={startPhase}
       onRetry={() => (recommendation ? void confirmRecommendedProfile() : beginCheck())}
-      onSkip={() => {
-        startControllerRef.current?.abort();
-        // 確認事項に答えている途中で飛ばしたときは、開いている確認をサーバーで中止する（#1839）。
-        const open = controller.session;
-        if (isSessionOpen(open)) void cancelQuerySession(open.id).catch(() => undefined);
-        onSkip();
-      }}
+      onSkip={skip}
       onApply={() => void applyRequirement()}
-      onClose={() => void closePanel()}
       startSlot={profileChooser}
       size="lg"
       idPrefix="nl2sql"

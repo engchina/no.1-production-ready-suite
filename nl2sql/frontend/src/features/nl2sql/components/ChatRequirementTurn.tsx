@@ -232,8 +232,8 @@ export function ChatRequirementTurn({
           onRetry={flow.retry}
           onSkip={flow.skip}
           onApply={flow.generate}
-          // 「確認をやめる」は出さない（#2303）。確認を終えるのは「確認せずに SQL を生成」（flow.skip）で、
-          // 質問を取り消さずに SQL の生成へ進む。
+          // 確認を終えるのは「確認せずに SQL を生成」（flow.skip）だけで、質問を取り消さずに SQL の生成へ進む
+          // （#2303 / #2311）。質問を取り消すのは入力欄の「停止」。
           canExecuteSql={canExecuteSql}
           size="sm"
           idPrefix="sql-chat"

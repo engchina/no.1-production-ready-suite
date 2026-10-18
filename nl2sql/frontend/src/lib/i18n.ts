@@ -1357,12 +1357,12 @@ const nl2sqlJa = {
   "nl2sql.clarification.title": CONFIRM_FEATURE,
   "nl2sql.clarification.description":
     "質問と、データベースの Schema・業務プロファイル・用語集・オントロジーを合わせて、SQL を作るのに足りない情報・明確でない情報を 1 つずつ確認します。表のデータは読みません。",
-  "nl2sql.clarification.close": "確認をやめる",
   "nl2sql.clarification.loading.recommendProfile": "質問に合う業務プロファイルを確認しています",
   "nl2sql.clarification.loading.confirmProfile": "利用する業務プロファイルを確定しています",
   "nl2sql.clarification.loading.prepareQuestions": "SQL の要件の下書きを作っています",
   "nl2sql.clarification.loading.answer":
     "回答を反映しています。すべて答えると、AI が要件のまとめを検査し直します",
+  "nl2sql.clarification.loading.apply": "確かめた要件を反映しています",
   "nl2sql.clarification.profileQuestion": "どの業務プロファイルで確認しますか？",
   "nl2sql.clarification.profileReason": "業務定義と参照できるデータを固定してから確認を始めます。",
   "nl2sql.clarification.recommended": "おすすめ",
