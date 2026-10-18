@@ -10080,6 +10080,20 @@ test("sql to question page reports generation errors beside the action bar", asy
   await expect(sqlToQuestionInput(inputPanel)).toBeEnabled();
 });
 
+/** フィードバック履歴の一覧の列（共有 ListDetailLayout。#2283）。 */
+function feedbackHistoryList(page: Page) {
+  return page.getByTestId("list-detail-feedback-management-list");
+}
+
+/** 1 ペイン（xl 未満）で詳細を開いているときだけ「一覧へ戻る」で一覧へ戻る（2 ペインでは何もしない）。 */
+async function backToFeedbackHistoryList(page: Page) {
+  const back = page.getByTestId("app-feedback-detail-back");
+  if (await back.isVisible()) {
+    await back.click();
+    await expect(feedbackHistoryList(page)).toBeVisible();
+  }
+}
+
 test("feedback management defaults to app feedback and keeps explicit tab deep links", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.goto("/feedback-management");
@@ -10092,7 +10106,7 @@ test("feedback management defaults to app feedback and keeps explicit tab deep l
   ]);
   await expect(page.getByRole("tab", { name: "アプリ内フィードバック" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("tab", { name: "Select AI feedback" })).toHaveAttribute("aria-selected", "false");
-  await expect(page.getByTestId("feedback-history-pane")).toBeVisible();
+  await expect(feedbackHistoryList(page)).toBeVisible();
 
   await page.evaluate(() => {
     window.history.pushState(null, "", "/feedback-management?tab=entries");
@@ -10117,9 +10131,10 @@ test("feedback management initial load covers only the history list with the lis
   });
 
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto("/feedback-management?tab=appFeedback");
+  // 選んだ履歴を URL で開く（先頭の行は自動で選ばない。#2283）。
+  await page.goto("/feedback-management?tab=appFeedback&feedback=hist-001");
   const panel = page.locator("#feedback-management-panel-appFeedback");
-  const historyPane = panel.getByTestId("feedback-history-pane");
+  const historyPane = feedbackHistoryList(page);
   // タブ・一覧の見出し・絞り込みは隠さず、一覧の領域だけを TimedLoadingState と一覧の形の Skeleton にする。
   await expect(page.getByRole("tab", { name: "アプリ内フィードバック" })).toHaveAttribute("aria-selected", "true");
   await expect(historyPane).toBeVisible();
@@ -10147,16 +10162,18 @@ test("feedback management initial load covers only the history list with the lis
   await expectSingleSpinner(page, page.getByTestId("feedback-management-actions"));
   await expectNoHorizontalScroll(page);
 
+  // 375px は 1 ペイン。選んだ履歴を開いているので、詳細（編集欄の Skeleton）だけを出す。
   await page.setViewportSize({ width: 375, height: 900 });
-  await expect(loadingState).toBeVisible();
   await expect(panel.getByTestId("app-feedback-editor-skeleton")).toBeVisible();
+  await expect(loadingState).toBeHidden();
   await expectNoHorizontalScroll(page);
 
   feedbackGate.release();
   await expect(loadingState).toHaveCount(0);
   await expect(panel.getByTestId("app-feedback-editor-skeleton")).toHaveCount(0);
-  await expect(panel.getByTestId("feedback-history-row").first()).toBeVisible();
   await expect(panel.getByText("生成 SQL", { exact: true })).toBeVisible();
+  await backToFeedbackHistoryList(page);
+  await expect(panel.getByTestId("feedback-history-row").first()).toBeVisible();
 });
 
 test("feedback management refresh keeps the previous content and shows the header button loading (#1777)", async ({
@@ -10181,9 +10198,9 @@ test("feedback management refresh keeps the previous content and shows the heade
   });
 
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto("/feedback-management?tab=appFeedback");
+  await page.goto("/feedback-management?tab=appFeedback&feedback=hist-001");
   const panel = page.locator("#feedback-management-panel-appFeedback");
-  await expect(panel.getByTestId("feedback-history-pane")).toBeVisible();
+  await expect(feedbackHistoryList(page)).toBeVisible();
   await expect(panel.getByTestId("app-feedback-editor-pane")).toBeVisible();
   await expect(panel.getByText("生成 SQL", { exact: true })).toBeVisible();
   const firstQuestion = (await panel.getByTestId("feedback-history-question").first().textContent()) ?? "";
@@ -10200,7 +10217,7 @@ test("feedback management refresh keeps the previous content and shows the heade
   await expect(processing).toHaveAttribute("data-processing-placement", "workspace");
   await expect(processing).toHaveAttribute("data-processing-activity-icon", "none");
   await expect(panel).toHaveAttribute("aria-busy", "true");
-  await expect(panel.getByTestId("feedback-history-pane")).toBeVisible();
+  await expect(feedbackHistoryList(page)).toBeVisible();
   await expect(panel.getByTestId("app-feedback-editor-pane")).toBeVisible();
   await expect(panel.getByText("生成 SQL", { exact: true })).toBeVisible();
   await expect(panel.getByTestId("feedback-history-question").first()).toHaveText(firstQuestion);
@@ -10212,16 +10229,18 @@ test("feedback management refresh keeps the previous content and shows the heade
   await expectSingleSpinner(page, page.getByTestId("feedback-management-actions"));
   await expectNoHorizontalScroll(page);
 
+  // 375px は 1 ペイン（選んだ履歴の詳細だけ）。
   await page.setViewportSize({ width: 375, height: 900 });
   await expect(processing).toBeVisible();
-  await expect(panel.getByTestId("feedback-history-pane")).toBeVisible();
+  await expect(panel.getByTestId("app-feedback-editor-pane")).toBeVisible();
   await expectNoHorizontalScroll(page);
 
   refreshGate.release();
   await expect(processing).toHaveCount(0);
   await expect(panel).not.toHaveAttribute("aria-busy", "true");
-  await expect(panel.getByTestId("feedback-history-pane")).toBeVisible();
   await expect(panel.getByTestId("app-feedback-editor-pane")).toBeVisible();
+  await backToFeedbackHistoryList(page);
+  await expect(feedbackHistoryList(page)).toBeVisible();
 });
 
 test("feedback management profile switch shows the entries skeleton instead of the previous profile entries (#265)", async ({
@@ -10292,7 +10311,7 @@ test("admin good feedback is available as similar history without manual index r
     await route.fallback();
   });
 
-  await page.goto("/feedback-management?tab=appFeedback");
+  await page.goto("/feedback-management?tab=appFeedback&feedback=hist-001");
   await chooseSelectFieldOption(page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }), "good");
   await page.getByRole("button", { name: "フィードバック保存" }).click();
   await expect(page.getByText("管理者レビューを保存し、類似検索に公開しました。")).toBeVisible();
@@ -10412,10 +10431,6 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
   await page.getByRole("tab", { name: "アプリ内フィードバック" }).click();
   await expect(page.getByText("Embedding + LogisticRegression 分類器")).toHaveCount(0);
   await expect(page.getByText("質問の学習候補")).toHaveCount(0);
-  await expect(page.getByText("既定プロファイル").last()).toBeVisible();
-  await expect(page.getByLabel("生成 SQL")).toContainText("SELECT");
-  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("履歴から再実行したい請求金額");
-  await expect(page.getByText("確認待ち", { exact: true }).first()).toBeVisible();
   const feedbackFilters = page.getByTestId("feedback-app-filters");
   const feedbackSearch = feedbackFilters.getByRole("searchbox", { name: "履歴検索" });
   // 一覧の絞り込みは入力に合わせて適用する（「絞り込み」ボタンを置かない。#535）。
@@ -10424,6 +10439,17 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
   expect(feedbackSearchBox).not.toBeNull();
   // 絞り込みの欄は md（タッチ端末は 44px。#613）。
   expect(feedbackSearchBox!.height).toBe(await expectedControlHeight(page));
+  // 一覧の行の補足は評価の日時・利用者評価・管理者レビュー（#2283）。
+  await expect(page.getByText("利用者評価: 良い", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("管理者レビュー: 良い", { exact: true }).first()).toBeVisible();
+  // 先頭の行を自動で選ばない（#2283）。行を選ぶと管理者レビューの詳細を出す（375px は詳細だけの 1 ペイン）。
+  await expect(page.getByTestId("app-feedback-selected-question")).toHaveCount(0);
+  await page.getByTestId("feedback-history-row").filter({ hasText: "履歴から再実行したい請求金額" }).click();
+  await expect(page).toHaveURL(/feedback=hist-001/);
+  await expect(page.getByText("既定プロファイル").last()).toBeVisible();
+  await expect(page.getByLabel("生成 SQL")).toContainText("SELECT");
+  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("履歴から再実行したい請求金額");
+  await expect(page.getByText("確認待ち", { exact: true }).first()).toBeVisible();
   const appFeedbackActions = page.getByTestId("feedback-app-actions");
   const saveAppFeedbackButton = appFeedbackActions.getByRole("button", {
     name: "フィードバック保存",
@@ -10446,8 +10472,6 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
   const appFeedbackEditorPane = page.getByTestId("app-feedback-editor-pane");
   await expect(appFeedbackEditorPane.getByText("利用者からの評価", { exact: true })).toBeVisible();
   await expect(appFeedbackEditorPane.getByText("管理者レビュー結果", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("利用者評価: 良い", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("管理者レビュー: 良い", { exact: true }).first()).toBeVisible();
   await expect(page.getByLabel("利用者コメント（feedback_content）")).toHaveValue("SQL は期待通りです");
   await page.getByRole("button", { name: "利用者コメントを反映" }).click();
   await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveValue("SQL は期待通りです");
@@ -10520,7 +10544,8 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
   await expect(registerSelectAiCheckbox).not.toBeChecked();
   await expect(page.getByLabel("Select AI response SQL")).toHaveCount(0);
   await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveValue("");
-  // 375px は検索・利用者評価・業務プロファイルの 3 つをシート（「絞り込み」）にまとめる（#1933）。
+  // 一覧の列（20rem）と 375px は、検索・利用者評価・業務プロファイルの 3 つをシート（「絞り込み」）にまとめる（#1933）。
+  await backToFeedbackHistoryList(page);
   const appFeedbackToolbar = page.getByTestId("feedback-app-filters");
   await withListToolbarFilters(appFeedbackToolbar, async (filters) => {
     const ratingFilter = filters.getByRole("combobox", { name: "利用者評価", exact: true });
@@ -10544,10 +10569,16 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
   );
   await expect(page.getByTestId("feedback-history-row")).toHaveCount(1);
   await expect(page.getByTestId("app-feedback-list-count")).toHaveText("1 件（全 2 件）");
-  await expect(
-    page.getByTestId("feedback-history-row").filter({ hasText: "別プロファイルの請求確認" }).filter({ hasText: "違う" })
-  ).toBeVisible();
+  const otherProfileRow = page
+    .getByTestId("feedback-history-row")
+    .filter({ hasText: "別プロファイルの請求確認" })
+    .filter({ hasText: "違う" });
+  await expect(otherProfileRow).toBeVisible();
+  // 絞り込みで選んでいた行が一覧から外れても、選択を別の行へ置き換えない（#2283）。
+  await expect(page).toHaveURL(/feedback=hist-001/);
+  await otherProfileRow.click();
   await expect(page.getByTestId("app-feedback-selected-question")).toContainText("別プロファイルの請求確認");
+  await backToFeedbackHistoryList(page);
   const filterGate = createRequestGate();
   await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, async (route) => {
     const url = new URL(route.request().url());
@@ -10622,27 +10653,22 @@ test("feedback management keeps long query text contained in app feedback and si
     });
   });
 
-  await page.goto("/feedback-management?tab=appFeedback");
-  const historyPane = page.getByTestId("feedback-history-pane");
+  await page.goto(`/feedback-management?tab=appFeedback&feedback=${longHistoryItem.id}`);
+  const historyPane = feedbackHistoryList(page);
   const editorPane = page.getByTestId("app-feedback-editor-pane");
   const row = page.getByTestId("feedback-history-row").first();
   const rowQuestion = row.getByTestId("feedback-history-question");
   const selectedQuestion = page.getByTestId("app-feedback-selected-question");
   await expect(rowQuestion).toContainText("対象テーブル");
   await expect(selectedQuestion).toContainText("対象テーブル");
-  // 行は実行履歴と同じ複数行で、質問は 2 行まで折り返す（#1764）。
-  await expectQuestionClamp(rowQuestion, longHistoryItem.question, 2);
+  // 一覧の行（狭い列）の質問は 2 行まで折り返す（#1764・#2283）。切り詰めは題名のボタンの題名の要素が持つ。
+  await expectQuestionClamp(rowQuestion.locator("xpath=.."), longHistoryItem.question, 2);
   await expectQuestionClamp(selectedQuestion, longHistoryItem.question, 3);
   await expectHorizontallyContained(row, historyPane);
-  await expectHorizontallyContained(rowQuestion, row);
+  await expectHorizontallyContained(rowQuestion.locator("xpath=.."), row);
   await expectHorizontallyContained(selectedQuestion, editorPane);
-  const historySelect = page.getByRole("combobox", { name: "対象履歴" });
-  await historySelect.click();
-  const listbox = page.getByRole("listbox", { name: "対象履歴" });
-  await expect(listbox).toBeVisible();
-  await expect(listbox.getByRole("option")).toContainText("対象テーブル");
-  await expectHorizontallyContained(listbox, editorPane);
-  await page.keyboard.press("Escape");
+  // 編集欄の上に履歴の選択欄は置かない（一覧と前へ / 次へ で選ぶ。#2283）。
+  await expect(page.getByRole("combobox", { name: "対象履歴" })).toHaveCount(0);
   const questionExpandButton = page.getByRole("button", { name: "全文表示" });
   await expect(questionExpandButton.locator('svg[data-state]')).toHaveAttribute("data-state", "collapsed");
   await questionExpandButton.click();
@@ -10811,7 +10837,7 @@ test("app feedback uses the shared responsive pagination for offset pages", { ta
 
   await page.goto("/feedback-management?tab=appFeedback");
 
-  const historyPane = page.getByTestId("feedback-history-pane");
+  const historyPane = feedbackHistoryList(page);
   const rows = historyPane.getByTestId("feedback-history-row");
   const pagination = historyPane.getByTestId("app-feedback-pagination");
   // 40 件は 25 件ずつの 2 ページ。
@@ -10842,9 +10868,11 @@ test("app feedback uses the shared responsive pagination for offset pages", { ta
   await nextButton.click();
   await expect(rows).toHaveCount(1);
   await expect(rows).toContainText("ページング対象 51");
+  // 先頭の行を自動で選ばない（#2283）。行を選ぶと詳細に出る。
+  await expect(rows.first()).not.toHaveAttribute("aria-current", /.*/);
+  await rows.first().click();
   await expect(rows.first()).toHaveAttribute("aria-current", "true");
   await expect(page.getByTestId("app-feedback-selected-question")).toContainText("ページング対象 51");
-  await expect(page.getByRole("combobox", { name: "対象履歴" })).toContainText("ページング対象 51");
   await expect(pagination).toContainText("51–51 / 51 件");
   await expect(pagination).toContainText("3 / 3 ページ");
   await expect(previousButton).toBeEnabled();
@@ -10856,7 +10884,6 @@ test("app feedback uses the shared responsive pagination for offset pages", { ta
   await expect(rows).toContainText("ページング対象 51");
   await expect(rows.first()).toHaveAttribute("aria-current", "true");
   await expect(page.getByTestId("app-feedback-selected-question")).toContainText("ページング対象 51");
-  await expect(page.getByRole("combobox", { name: "対象履歴" })).toContainText("ページング対象 51");
   expect(api.adminFeedbackPayload).toMatchObject({
     history_id: "cursor-feedback-51",
   });
@@ -10870,7 +10897,9 @@ test("app feedback uses the shared responsive pagination for offset pages", { ta
   await expect(pagination).toContainText("26–50 / 51 件");
   await expect(previousButton).toBeEnabled();
 
+  // 375px は 1 ペイン。選んだ履歴（前のページ）の詳細から一覧へ戻ってページ送りを確かめる。
   await page.setViewportSize({ width: 375, height: 900 });
+  await backToFeedbackHistoryList(page);
   await pagination.scrollIntoViewIfNeeded();
   await expect(pagination).toBeVisible();
   await expectHorizontallyContained(pagination, historyPane);
@@ -10905,91 +10934,65 @@ test("feedback management keeps utility actions usable in empty and load error s
   await expectNoHorizontalScroll(page);
 });
 
-test("app feedback keeps history left of the editor without crossing the divider", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "desktop project covers desktop resizing and the 375px stacked layout");
+test("app feedback keeps the history list narrow beside the editor and switches to one pane below xl (#2283)", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop project covers desktop widths and the 375px single pane");
   await page.setViewportSize({ width: 2048, height: 1100 });
   await page.addInitScript(() => {
-    window.localStorage.removeItem(
-      "production-ready-nl2sql.fixedSplitPane.feedback-management-app-feedback-history-left-v2"
-    );
+    if (window.sessionStorage.getItem("feedback-list-detail-cleared")) return;
+    window.localStorage.removeItem("production-ready-nl2sql.listDetail.feedback-management");
+    window.sessionStorage.setItem("feedback-list-detail-cleared", "true");
   });
   await mockNl2SqlApi(page);
   await page.goto("/feedback-management?tab=appFeedback");
 
-  const pane = page.getByTestId(
-    "fixed-split-pane-feedback-management-app-feedback-history-left-v2"
-  );
-  const left = page.getByTestId(
-    "fixed-split-pane-feedback-management-app-feedback-history-left-v2-left"
-  );
-  const divider = page.getByTestId(
-    "fixed-split-pane-feedback-management-app-feedback-history-left-v2-divider"
-  );
-  const right = page.getByTestId(
-    "fixed-split-pane-feedback-management-app-feedback-history-left-v2-right"
-  );
-  const historyPane = page.getByTestId("feedback-history-pane");
-  const editorPane = page.getByTestId("app-feedback-editor-pane");
+  const layout = page.getByTestId("list-detail-feedback-management");
+  const list = feedbackHistoryList(page);
+  const detail = page.getByTestId("list-detail-feedback-management-detail");
   const historyRow = page.getByTestId("feedback-history-row").first();
+  const editorPane = page.getByTestId("app-feedback-editor-pane");
   const generatedSql = page.getByLabel("生成 SQL");
 
-  await expect(pane).toHaveAttribute("data-split-layout", "split");
-  // 保存が無いときは 50% から始める（#1572）。
-  await expect(pane).toHaveAttribute("data-split-ratio", "equal");
-  await expect(left.getByRole("heading", { name: "フィードバック履歴" })).toBeVisible();
-  await expect(right.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
-  await expectSplitPaneReservedTrack(pane);
-  await expectHorizontallyContained(historyPane, left);
-  await expectHorizontallyContained(historyRow, historyPane);
-  await expectHorizontallyContained(editorPane, right);
+  await expect(layout).toHaveAttribute("data-list-detail-layout", "split");
+  await expect(list.getByRole("heading", { name: "フィードバック履歴" })).toBeVisible();
+  // 先頭の行を自動で選ばない。未選択の詳細は選び方を案内する。
+  await expect(detail).toContainText("フィードバックが未選択です");
+  await expect(page).not.toHaveURL(/feedback=/);
+  await historyRow.click();
+  await expect(page).toHaveURL(/feedback=hist-001/);
+  await expect(detail.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
+  await expectHorizontallyContained(historyRow, list);
+  await expectHorizontallyContained(editorPane, detail);
   await expectHorizontallyContained(generatedSql, editorPane);
-  const [initialLeft, initialRight] = await Promise.all([left.boundingBox(), right.boundingBox()]);
-  expect(initialLeft).not.toBeNull();
-  expect(initialRight).not.toBeNull();
-  expect(Math.abs(initialLeft!.width - initialRight!.width)).toBeLessThan(2);
+  // 一覧は既定 20rem（280px）の狭い列のまま、詳細は残りの広い列。
+  const [listBox, detailBox] = await Promise.all([list.boundingBox(), detail.boundingBox()]);
+  expect(listBox!.width).toBeCloseTo(280, 0);
+  expect(detailBox!.x).toBeGreaterThan(listBox!.x + listBox!.width);
+  expect(detailBox!.width).toBeGreaterThan(listBox!.width * 2);
   await expectNoHorizontalScroll(page);
 
+  // 1440px: 一覧を最大（32rem）まで広げても、行・編集欄が列の外にはみ出さない。
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await expect(pane).toHaveAttribute("data-split-layout", "split");
-  for (const deltaX of [-4_000, 8_000]) {
-    await dragSplitDivider(page, divider, deltaX);
-    await expectSplitPaneReservedTrack(pane);
-    await expectHorizontallyContained(historyPane, left);
-    await expectHorizontallyContained(historyRow, historyPane);
-    await expectHorizontallyContained(editorPane, right);
-    await expectHorizontallyContained(generatedSql, editorPane);
-    await expectNoHorizontalScroll(page);
-  }
+  await expect(layout).toHaveAttribute("data-list-detail-layout", "split");
+  const resizer = page.getByTestId("list-detail-feedback-management-resizer");
+  await resizer.focus();
+  for (let step = 0; step < 4; step += 1) await page.keyboard.press("Shift+ArrowRight");
+  await expect(resizer).toHaveAttribute("aria-valuenow", "32");
+  await expectHorizontallyContained(historyRow, list);
+  await expectHorizontallyContained(editorPane, detail);
+  await expectHorizontallyContained(generatedSql, editorPane);
+  await expectNoHorizontalScroll(page);
+  await resizer.press("Home");
+  await expect(resizer).toHaveAttribute("aria-valuenow", "20");
 
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await page.evaluate(() => document.documentElement.classList.add("dark"));
-  await expect(divider).toBeVisible();
-  await expect(divider.locator(".fixed-split-pane__line")).not.toHaveCSS(
-    "background-color",
-    "rgba(0, 0, 0, 0)"
-  );
+  await expectNoHorizontalScroll(page);
 
+  // 375px: 1 ペイン。選んだ履歴の詳細だけを出し、確定の行の操作は全幅。
   await page.setViewportSize({ width: 375, height: 900 });
-  await expectSplitPaneStacked(pane);
-  const [stackedHistory, stackedEditor] = await Promise.all([
-    historyPane.boundingBox(),
-    editorPane.boundingBox(),
-  ]);
-  expect(stackedHistory).not.toBeNull();
-  expect(stackedEditor).not.toBeNull();
-  expect(stackedHistory!.y + stackedHistory!.height).toBeLessThanOrEqual(stackedEditor!.y + 1);
-  const mobileFeedbackFilters = page.getByTestId("feedback-app-filters");
-  const mobileFeedbackSearch = mobileFeedbackFilters.getByRole("searchbox", { name: "履歴検索" });
-  const [mobileFilterFormBox, mobileSearchBox] = await Promise.all([
-    mobileFeedbackFilters.boundingBox(),
-    mobileFeedbackSearch.boundingBox(),
-  ]);
-  expect(mobileFilterFormBox).not.toBeNull();
-  expect(mobileSearchBox).not.toBeNull();
-  expect(mobileSearchBox!.width).toBeCloseTo(mobileFilterFormBox!.width, 0);
-  expect(mobileSearchBox!.height).toBe(await expectedControlHeight(page));
-  // 「絞り込み」ボタンは置かない（#535）。
-  await expect(mobileFeedbackFilters.locator("button:not([aria-haspopup=dialog])").filter({ hasText: /^絞り込み$/ })).toHaveCount(0); // 狭い画面のシートを開くボタン（#1933）は除く
+  await expect(layout).toHaveAttribute("data-list-detail-layout", "single");
+  await expect(list).toBeHidden();
+  await expect(detail).toBeVisible();
   const mobileActionBar = page.getByTestId("feedback-app-actions");
   const mobileActionControls = [
     mobileActionBar.getByRole("button", { name: "フィードバック保存" }),
@@ -11008,6 +11011,25 @@ test("app feedback keeps history left of the editor without crossing the divider
   }
   await mobileActionBar.getByRole("button", { name: "その他の操作" }).click();
   await expect(page.getByRole("menuitem", { name: "フィードバックを解除" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expectNoHorizontalScroll(page);
+
+  // 「一覧へ戻る」（左上）で一覧へ戻り、選んでいた行へフォーカスを戻す。検索欄は一覧の列の全幅。
+  await page.getByTestId("app-feedback-detail-back").click();
+  await expect(page).not.toHaveURL(/feedback=/);
+  await expect(list).toBeVisible();
+  await expect(detail).toBeHidden();
+  await expect(historyRow).toBeFocused();
+  const mobileFeedbackFilters = page.getByTestId("feedback-app-filters");
+  const mobileFeedbackSearch = mobileFeedbackFilters.getByRole("searchbox", { name: "履歴検索" });
+  const [mobileFilterFormBox, mobileSearchBox] = await Promise.all([
+    mobileFeedbackFilters.boundingBox(),
+    mobileFeedbackSearch.boundingBox(),
+  ]);
+  expect(mobileSearchBox!.width).toBeCloseTo(mobileFilterFormBox!.width, 0);
+  expect(mobileSearchBox!.height).toBe(await expectedControlHeight(page));
+  // 「絞り込み」ボタンは置かない（#535）。
+  await expect(mobileFeedbackFilters.locator("button:not([aria-haspopup=dialog])").filter({ hasText: /^絞り込み$/ })).toHaveCount(0); // 狭い画面のシートを開くボタン（#1933）は除く
   await expectNoHorizontalScroll(page);
 });
 
@@ -11025,10 +11047,7 @@ test("shared split panes reserve their divider track across NL2SQL management pa
     { path: "/sample-data", splitIds: ["sample-data-import"] },
     { path: "/sql-to-question", splitIds: ["sql-to-question-input"] },
     { path: "/feedback-management?tab=entries", splitIds: ["feedback-management-entries-split"] },
-    {
-      path: "/feedback-management?tab=appFeedback",
-      splitIds: ["feedback-management-app-feedback-history-left-v2"],
-    },
+    // フィードバック履歴（アプリ内フィードバック）は ListDetailLayout に移した（#2283）。
   ];
 
   for (const scenario of scenarios) {
@@ -18051,7 +18070,7 @@ test("フィードバックの前ページ取得失敗後も同じボタンで�
   await expect(pagination).toContainText("2 / 2 ページ");
   await previous.press("Enter");
   await expect(pagination).toContainText("1 / 2 ページ");
-  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("1ページ目の質問");
+  await expect(page.getByTestId("feedback-history-question")).toHaveText("1ページ目の質問");
   await pagination.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("feedback-page-recovered.png") });
 });
@@ -18673,8 +18692,11 @@ test("クエリ初期値だけを消費し他の URL 条件と編集後の草稿
 });
 
 test("feedback refresh preserves drafts and pending review locks competing actions", async ({ page }, testInfo) => {
+  // 一覧の絞り込みと管理者レビューの欄を同時に操作するので 2 ペインの幅で確かめる（xl 未満は 1 ペイン。#2283）。
+  await page.setViewportSize({ width: 1280, height: 900 });
   await mockNl2SqlApi(page);
-  await page.goto("/feedback-management");
+  // 選んだ履歴は URL の `?feedback=` で開く（先頭の行は自動で選ばない。#2283）。
+  await page.goto("/feedback-management?feedback=hist-001");
   const comment = page.getByLabel("管理者レビューコメント（feedback_content）");
   await comment.fill("未保存のレビューを保持");
   await clickPageHeaderAction(page, "feedback-management-actions", "最新情報を取得");
