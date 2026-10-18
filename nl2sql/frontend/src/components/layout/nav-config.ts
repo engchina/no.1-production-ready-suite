@@ -1,5 +1,6 @@
 import {
   BookA,
+  BotMessageSquare,
   Boxes,
   BrainCircuit,
   BriefcaseBusiness,
@@ -96,6 +97,13 @@ export const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.section.prepare",
     defaultCollapsed: true,
     items: [
+      // DB 管理チャット（#2264）。全種類の SQL を生成し、SELECT 以外は実行確認語で実行する。
+      {
+        href: APP_ROUTES.dbAdminChat,
+        labelKey: "nav.dbAdminChat",
+        icon: BotMessageSquare,
+        permission: MENU_PERMISSIONS.dbAdminChat,
+      },
       {
         href: APP_ROUTES.adminSql,
         labelKey: "nav.adminSql",

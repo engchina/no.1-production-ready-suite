@@ -116,8 +116,9 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   const menuIconSignatures = await sidebar.locator("nav a svg").evaluateAll((icons) =>
     icons.map((icon) => icon.innerHTML.replace(/\s+/g, " ").trim())
   );
-  // AI 活用の先頭にチャットを足した（#871）。ユーザーとロールの末尾の API キー（#1805）を足して 32 項目。
-  expect(menuIconSignatures).toHaveLength(32);
+  // AI 活用の先頭にチャットを足した（#871）。ユーザーとロールの末尾の API キー（#1805）、データ準備の
+  // DB 管理チャット（#2264）を足して 33 項目。
+  expect(menuIconSignatures).toHaveLength(33);
   expect(new Set(menuIconSignatures).size).toBe(menuIconSignatures.length);
 
   for (const section of ["データ準備", "AI 活用", "改善・運用", "セキュリティ設定", "ユーザーとロール", "運用設定", "システム設定"]) {

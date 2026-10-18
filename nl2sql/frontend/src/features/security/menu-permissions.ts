@@ -6,6 +6,8 @@ export const MENU_PERMISSIONS = {
   directSql: "menu.direct_sql",
   sqlToQuestion: "menu.sql_to_question",
   history: "menu.history",
+  // DB 管理チャット（#2264）。既定はどのロールにも付けない（system_admin だけ）。
+  dbAdminChat: "menu.db_admin_chat",
   adminSql: "menu.admin_sql",
   tableManagement: "menu.table_management",
   viewManagement: "menu.view_management",
@@ -78,6 +80,10 @@ const PERMISSION_IMPLIES: Record<string, string[]> = {
   [MENU_PERMISSIONS.sqlToQuestion]: [
     CAPABILITY_PERMISSIONS.profilesRead,
     CAPABILITY_PERMISSIONS.schemaRead,
+  ],
+  [MENU_PERMISSIONS.dbAdminChat]: [
+    CAPABILITY_PERMISSIONS.schemaRead,
+    CAPABILITY_PERMISSIONS.schemaRefresh,
   ],
   [MENU_PERMISSIONS.adminSql]: [
     CAPABILITY_PERMISSIONS.schemaRead,
