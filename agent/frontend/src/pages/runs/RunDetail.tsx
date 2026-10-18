@@ -17,13 +17,17 @@ import {
   ProcessingIndicator,
   RunDetailLayout,
   RunDetailSection,
+  RunEventLog,
   RunProcessDetails,
   RunFactList,
   RunSummary,
   RunTimeline,
   SqlSafetyBadge,
   StatusBadge,
+  formatRunDateTime,
+  runStepDetailsJson,
   type EntityAction,
+  type RunEventLogItem,
   type StatusVariant,
 } from "@production-ready/ui";
 import {
@@ -36,7 +40,7 @@ import {
   type RunSummary as RunSummaryData,
   type ToolAuditRecord,
 } from "@/lib/api";
-import { QueryState } from "@/components/ListViews";
+import { QueryState, listCountLabels } from "@/components/ListViews";
 import { useAuth } from "@/components/security/AuthProvider";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { AnswerReviewSections, LimitNote, OutcomeBadge, ValidationBadge } from "@/components/chat/AnswerReview";
@@ -461,163 +465,144 @@ function RunProgressIndicator({ run }: { run: RunState }) {
   );
 }
 
-interface TimelineEventView {
-  title: string;
-  subtitle: string;
-  icon: ReactNode;
-  badgeLabel: string;
-  badgeVariant: StatusVariant;
-  details: Array<{ label: string; value: string }>;
-  warnings: string[];
-  payloadPreview?: Record<string, unknown>;
-}
-
-/** イベントの記録（技術的な詳細。モデルが呼んだツールと承認の判断を時系列で）。 */
+/** イベントの記録（技術的な詳細。モデルが呼んだツールと承認の判断を時系列で。共通の `RunEventLog`。#2386）。 */
 function EventLog({ events }: { events: RunEvent[] }) {
-  if (!events.length) {
-    return <EmptyState title={t("run.timeline.empty")} />;
-  }
   return (
-    <ol className="relative space-y-3" aria-label={t("run.timeline")} data-testid="run-event-log">
-      {events.map((event) => (
-        <RunTimelineItem key={event.id} event={event} />
-      ))}
-    </ol>
+    <RunEventLog
+      items={events.map(runEventItem)}
+      labels={{
+        title: t("run.timeline"),
+        filter: t("run.events.filter"),
+        all: t("common.all"),
+        first: t("run.events.first"),
+        latest: t("run.events.latest"),
+        empty: t("run.timeline.empty"),
+        count: listCountLabels(),
+        detailsTruncated: t("run.events.truncated"),
+      }}
+      testId="run-event-log"
+    />
   );
 }
 
-function RunTimelineItem({ event }: { event: RunEvent }) {
-  const view = timelineEventView(event);
-  return (
-    <li className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] gap-3">
-      {/* 印の丸の中心を、右の枠の中の見出しの 1 行目の中心にそろえる（枠の上の余白と枠線の分だけ下げ、見出しと同じ
-          文字の大きさの行の高さの箱の中央に置く。#2371）。 */}
-      <div className="flex justify-center pt-[calc(0.75rem+1px)] text-sm">
-        <div className="pr-icon-line">
-          <div className="flex size-8 items-center justify-center rounded-full border border-border bg-surface-sunken text-fg-muted">
-            {view.icon}
-          </div>
-        </div>
+/** 種類の絞り込みのまとまり（実行環境のイベントは「実行」にまとめ、チップを 4 つまでにする）。 */
+function eventCategory(type: string): { id: string; label: string } {
+  const prefix = type.split(".")[0] ?? "";
+  if (prefix === "tool") return { id: "tool", label: t("status.eventCategory.tool") };
+  if (prefix === "approval") return { id: "approval", label: t("status.eventCategory.approval") };
+  if (prefix === "artifact") return { id: "artifact", label: t("status.eventCategory.artifact") };
+  return { id: "run", label: t("status.eventCategory.run") };
+}
+
+/**
+ * Run のイベントを 1 行の形に写す。行は要約（ツール名・イベントの文）と状態のバッジ・処理時間だけにし、
+ * イベントの種類のコード・時刻・ステップ・承認・成果物の ID・payload は行を開いた詳細に置く。
+ */
+function runEventItem(event: RunEvent): RunEventLogItem {
+  const view = eventTypeView(event.type);
+  const payload = event.payload ?? {};
+  const base = {
+    id: event.id,
+    at: event.created_at,
+    category: eventCategory(event.type),
+    status: { variant: view.variant, label: view.label },
+  };
+  const fields = (items: Array<[string, string | null]>) => [
+    { label: t("run.timeline.eventType"), value: event.type, mono: true },
+    { label: t("run.timeline.time"), value: formatRunDateTime(event.created_at, { seconds: true }) },
+    ...compactTimelineDetails(items).map((item) => ({ ...item, mono: true })),
+  ];
+  const withWarnings = (warnings: string[]) =>
+    warnings.length ? (
+      // 警告は手書きのチップにせず、アイコン付きの FormStatus で出す（色だけに頼らない）。
+      <div className="min-w-0 space-y-1 break-words [overflow-wrap:anywhere]">
+        {warnings.map((warning) => (
+          <FormStatus key={warning} tone="warning" message={warning} />
+        ))}
       </div>
-      <div className="min-w-0 rounded-md border border-border p-3">
-        <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">{view.title}</p>
-            <p className="mt-1 break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">{view.subtitle}</p>
-          </div>
-          <StatusBadge variant={view.badgeVariant} label={view.badgeLabel} />
-        </div>
+    ) : undefined;
+  const payloadCode = (show: boolean) => {
+    if (!show) return { code: undefined, truncated: false };
+    const json = runStepDetailsJson(payload);
+    return { code: [{ label: t("run.events.payload"), language: "json" as const, text: json.text }], truncated: json.truncated };
+  };
+  const failed = event.type.includes("failed") || event.type.endsWith("error");
 
-        {/* key / value は <dl> で並べ、枠の中にさらに地の付いた箱を重ねない（入れ子の枠は 1 段まで。#818）。 */}
-        <dl className="mt-3 grid min-w-0 gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
-          <TimelineFact label={t("run.timeline.eventType")} value={event.type} />
-          <TimelineFact label={t("run.timeline.time")} value={formatDate(event.created_at)} />
-          {view.details.map((detail) => (
-            <TimelineFact key={`${detail.label}:${detail.value}`} label={detail.label} value={detail.value} />
-          ))}
-        </dl>
-
-        {view.warnings.length ? (
-          // 警告は手書きのチップにせず、アイコン付きの FormStatus で出す（色だけに頼らない）。
-          <div className="mt-3 min-w-0 space-y-1 break-words [overflow-wrap:anywhere]">
-            {view.warnings.map((warning) => (
-              <FormStatus key={warning} tone="warning" message={warning} />
-            ))}
-          </div>
-        ) : null}
-
-        {view.payloadPreview ? <JsonPreview value={view.payloadPreview} /> : null}
-      </div>
-    </li>
-  );
-}
-
-function TimelineFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-fg-muted">{label}</dt>
-      <dd className="break-words font-medium text-fg [overflow-wrap:anywhere]">{value}</dd>
-    </div>
-  );
-}
-
-function timelineEventView(event: RunEvent): TimelineEventView {
   if (event.type.startsWith("runtime.")) {
+    const extra = payloadCode(event.type === "runtime.failed");
     return {
+      ...base,
       title: t("run.runtime"),
-      subtitle: event.message,
-      icon: <Server size={16} aria-hidden />,
-      ...timelineBadge(event.type),
-      details: compactTimelineDetails([
-        [t("run.timeline.runtime"), payloadString(event.payload, "runtime_id")],
-        [t("run.timeline.externalRun"), payloadString(event.payload, "external_run_id")],
-      ]),
-      warnings: [],
-      payloadPreview: event.type === "runtime.failed" ? event.payload : undefined,
+      summary: event.message,
+      icon: Server,
+      details: {
+        fields: fields([
+          [t("run.timeline.runtime"), payloadString(payload, "runtime_id")],
+          [t("run.timeline.externalRun"), payloadString(payload, "external_run_id")],
+        ]),
+        code: extra.code,
+        truncated: extra.truncated,
+      },
+      defaultOpen: failed,
     };
   }
   if (event.type === "tool.guardrail_warning") {
+    const warnings = payloadStringArray(payload, "warnings");
+    const extra = payloadCode(true);
     return {
+      ...base,
       title: t("run.guardrailWarning"),
-      subtitle: event.message,
-      icon: <ShieldAlert size={16} aria-hidden />,
-      ...timelineBadge(event.type),
-      details: [],
-      warnings: payloadStringArray(event.payload, "warnings"),
-      payloadPreview: event.payload,
+      summary: event.message,
+      icon: ShieldAlert,
+      details: { fields: fields([]), code: extra.code, truncated: extra.truncated },
+      children: withWarnings(warnings),
+      defaultOpen: warnings.length > 0,
     };
   }
   if (event.type.startsWith("tool.")) {
-    const toolName = payloadString(event.payload, "tool_name") ?? t("common.tool");
+    const warnings = payloadStringArray(payload, "guardrail_warnings");
+    const duration = payload.duration_ms;
     return {
-      title: toolName,
-      subtitle: event.message,
-      icon: <PlayCircle size={16} aria-hidden />,
-      ...timelineBadge(event.type),
-      details: compactTimelineDetails([
-        [t("run.timeline.step"), payloadString(event.payload, "step_id")],
-        [t("run.auditDuration"), payloadNumberText(event.payload, "duration_ms", "ms")],
-      ]),
-      warnings: payloadStringArray(event.payload, "guardrail_warnings"),
+      ...base,
+      title: payloadString(payload, "tool_name") ?? t("common.tool"),
+      summary: event.message,
+      icon: PlayCircle,
+      durationMs: typeof duration === "number" && Number.isFinite(duration) ? duration : null,
+      details: { fields: fields([[t("run.timeline.step"), payloadString(payload, "step_id")]]) },
+      children: withWarnings(warnings),
+      defaultOpen: failed || warnings.length > 0,
     };
   }
   if (event.type.startsWith("approval.")) {
     return {
+      ...base,
       title: t("run.auditApproval"),
-      subtitle: event.message,
-      icon: <Check size={16} aria-hidden />,
-      ...timelineBadge(event.type),
-      details: compactTimelineDetails([
-        [t("run.timeline.approval"), payloadString(event.payload, "approval_id")],
-        [t("run.timeline.step"), payloadString(event.payload, "step_id")],
-      ]),
-      warnings: [],
+      summary: event.message,
+      icon: Check,
+      details: {
+        fields: fields([
+          [t("run.timeline.approval"), payloadString(payload, "approval_id")],
+          [t("run.timeline.step"), payloadString(payload, "step_id")],
+        ]),
+      },
     };
   }
   if (event.type === "artifact.created") {
     return {
-      title: payloadString(event.payload, "name") ?? t("run.artifacts"),
-      subtitle: event.message,
-      icon: <FileText size={16} aria-hidden />,
-      ...timelineBadge(event.type),
-      details: compactTimelineDetails([[t("run.auditArtifacts"), payloadString(event.payload, "artifact_id")]]),
-      warnings: [],
+      ...base,
+      title: payloadString(payload, "name") ?? t("run.artifacts"),
+      summary: event.message,
+      icon: FileText,
+      details: { fields: fields([[t("run.auditArtifacts"), payloadString(payload, "artifact_id")]]) },
     };
   }
   return {
+    ...base,
     title: event.message,
-    subtitle: `${event.type} / ${formatDate(event.created_at)}`,
-    icon: <GitBranch size={16} aria-hidden />,
-    ...timelineBadge(event.type),
-    details: [],
-    warnings: [],
+    icon: GitBranch,
+    details: { fields: fields([]) },
+    defaultOpen: failed,
   };
-}
-
-/** タイムラインのバッジ（イベントの種類を日本語にする。lib/status-labels.ts）。 */
-function timelineBadge(type: string): Pick<TimelineEventView, "badgeLabel" | "badgeVariant"> {
-  const view = eventTypeView(type);
-  return { badgeLabel: view.label, badgeVariant: view.variant };
 }
 
 function compactTimelineDetails(items: Array<[string, string | null]>): Array<{ label: string; value: string }> {
@@ -635,14 +620,6 @@ function payloadString(payload: Record<string, unknown> | null, key: string): st
 function payloadStringArray(payload: Record<string, unknown>, key: string): string[] {
   const value = payload[key];
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
-
-function payloadNumberText(payload: Record<string, unknown>, key: string, suffix = ""): string | null {
-  const value = payload[key];
-  if (typeof value !== "number" || Number.isNaN(value)) {
-    return null;
-  }
-  return suffix ? `${value}${suffix}` : String(value);
 }
 
 /** イベントの購読（SSE）の状態。push は SSE、操作は REST だけ（#2260）。 */

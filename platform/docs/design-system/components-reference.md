@@ -3798,6 +3798,25 @@ import {
 
 ---
 
+## RunEventLog — **新規**（#2386）
+
+実行のイベントの記録（モデルが呼んだツール・承認の判断・成果物の保存など）を、時間の順に 1 イベント = 1 行で並べる。実行の詳細の「処理の詳細」（`RunProcessDetails`）の中に置く。製品はイベントを `RunEventLogItem` に写すだけで、描き方は部品が持つ。
+
+| prop | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `items` | `RunEventLogItem[]` | — | `id`・`title`（要約）・`summary?`（淡い補足）・`at?`（ISO）・`category?`（`{ id, label }`。絞り込み）・`icon?`・`status?`（`{ variant, label }`）・`durationMs?`・`details?`（`RunStepDetails`）・`children?`（警告など）・`defaultOpen?` |
+| `labels` | `Partial<RunEventLogLabels>` | 日本語の既定 | `title`（領域・一覧の読み上げ名）・`filter`・`all`・`first`・`latest`・`empty`・`count`（`ListCountLabels`）・`detailsTruncated` |
+| `formatDateTime` | `(iso) => string` | `formatRunDateTime(iso, { seconds: true })` | 時刻の `title` の表記 |
+| `testId` | `string` | — | 行 `<testId>-event-<id>`・開閉 `…-toggle`・詳細 `…-details`・スクロール領域 `<testId>-scroll`（`data-overflowing`）・件数 `-count`・絞り込み `-filter`・`-first` / `-latest` |
+
+| 決定 | 理由 |
+|---|---|
+| 行は「開閉の印・種類のアイコン・時刻（時:分:秒）・要約・状態のバッジ・処理時間」だけ。種類のコード・ID・payload・警告は行を開く（`button[aria-expanded][aria-controls]`。Enter / Space） | 監査・イベントのタイムライン（GitHub Actions・Datadog / Sentry・Temporal）と同じく、時刻・種類・状態を縦に読み比べる。開く行は要約を 375px で 2 行・36rem 以上で 1 行に切り詰め、全文は開いた詳細で読む |
+| 一覧は `INFORMATION_LIST_SCROLL_CLASS`（md 未満 17.5rem・md 以上 28rem）の `role="region"` の中で縦にスクロールし、あふれたときだけ `tabIndex=0` | 件数でページを伸ばさない（表ではない行リストの標準）。あふれないときに空の Tab 止まりを作らない |
+| 種類が 2 つ以上なら件数つきの絞り込み（4 つまで `FilterChipGroup`・それ以上 `FilterSelect`）、件数は `ListCount`（「全 N 件」/「N 件（全 M 件）」。読み上げは止める）、あふれたときだけ「最初へ」「最新へ」（端では無効） | 長い記録の中の目的のイベントにすぐ届く。実行中の追加のたびに件数を読み上げない |
+| 末尾を見ている間に増えたイベントは末尾に付いて行き、途中を読んでいる間は動かさない | ログの追尾（tail）。読んでいる位置を奪わない |
+| 失敗・警告のイベントは `defaultOpen` で最初から開く | `RunTimeline` の失敗した段と同じ |
+
 ## 回答の根拠と本文の節: AnswerEvidence / EvidenceViews / EvidenceCard / AnswerSections — **新規**（#2328。RAG の `AnswerCitations` / `CitationCard` / `AnswerText` から移した）
 
 3 製品のチャット・RAG 検索・実行の詳細で、回答の根拠と回答の本文の節を**同じ部品**で出す（見た目が似た製品ごとの写しを作らない）。製品は自分の根拠の形を下のデータの契約に写して渡すだけで、文言は `evidenceLabels()`（3 製品で同じ書き方。上書きは `evidenceLabels({ … })`）。
