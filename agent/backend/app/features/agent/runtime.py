@@ -1202,6 +1202,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     def note_builtin_tool_titles(self, run_id: str, titles: Mapping[str, str]) -> None: ...
     def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None: ...
     def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None: ...
+    def record_context_compaction(self, run_id: str, payload: JsonObject) -> None: ...
     def set_run_feedback(
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
     ) -> RunState: ...
@@ -2901,6 +2902,26 @@ class AgentRuntimeRepository:
                 RunEventType.RUNTIME_EVENT,
                 message,
                 {"tool_grounding": {"action": action, "original_answer": answer[:20000]}},
+            )
+            run.updated_at = _now()
+            self._persist_locked()
+
+    def record_context_compaction(self, run_id: str, payload: JsonObject) -> None:
+        """モデルの入力の上限に収めるためにツールの結果を縮めたことをイベントに残す（#2383）。
+
+        `payload` はモデル・予算・見積もりの前後・縮めた結果（`context_window` の記録）。縮めたのは
+        モデルに渡す入力だけで、step のツールの結果は全文のまま。
+        """
+        outputs = payload.get("outputs")
+        count = len(outputs) if isinstance(outputs, list) else 0
+        with self._lock:
+            run = self._require_run(run_id)
+            self._append_event(
+                run,
+                RunEventType.RUNTIME_EVENT,
+                f"モデルの入力の上限に収めるため、ツールの結果 {count} 件を縮めて"
+                "モデルに渡しました。",
+                {"context_compaction": deepcopy(payload)},
             )
             run.updated_at = _now()
             self._persist_locked()

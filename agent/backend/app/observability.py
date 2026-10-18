@@ -83,6 +83,14 @@ MODEL_INCOMPLETE_RETRIES_TOTAL = Counter(
     "Agent model call resent after an incomplete response with little output.",
     ("model",),
 )
+# モデルの入力の上限に収めるためにツールの結果を縮めた・収まらずに失敗した回数（#2383。組み込み
+# Runtime の `context_window`）。trigger は budget（呼び出しの前の見積もり）/ provider_limit
+# （プロバイダの入力の超過の後の送り直し）、outcome は compacted / failed。
+CONTEXT_COMPACTIONS_TOTAL = Counter(
+    "agent_context_compactions_total",
+    "Agent model input compacted to fit the model input limit.",
+    ("model", "trigger", "outcome"),
+)
 ARTIFACTS_TOTAL = Counter(
     "agent_artifacts_total",
     "Agent artifact count.",
