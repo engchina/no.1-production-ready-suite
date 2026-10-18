@@ -219,7 +219,10 @@ export function ProcessingIndicator({
             </span>
           ) : null}
           <span className="grid min-w-0">
-            <span className="min-w-0 break-words">{displayLabel}</span>
+            {/* e2e は見える処理の名前を data-processing-label で探す（class で探さない。直下の案内の行と区別する）。 */}
+            <span className="min-w-0 break-words" data-processing-label="true">
+              {displayLabel}
+            </span>
             {/*
               遅延の案内は処理の名前の直下（#2426）。行は最初から置き、遅延するまでは同じ文言を見えない状態で高さだけ
               予約する（#902）。後から行を足すと領域が 1 行高くなり、中央寄せの置き場所（DB ゲート）ではスピナーごと

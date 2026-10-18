@@ -1026,7 +1026,7 @@ test("回答前の確認の開始中は実処理に合わせて案内を切り�
   await expect(progress).toBeVisible();
   await expect(progress).toHaveAttribute("data-processing-placement", "panel");
   await expect(progress).toHaveAttribute("aria-busy", "true");
-  const visibleProgressLabel = progress.locator("span.min-w-0.break-words");
+  const visibleProgressLabel = progress.locator("[data-processing-label]");
   await expect(visibleProgressLabel).toHaveText("質問に合う業務プロファイルを確認しています");
   await expect(timer).toContainText("経過時間");
   await expect(timer).toHaveAttribute("role", "timer");
