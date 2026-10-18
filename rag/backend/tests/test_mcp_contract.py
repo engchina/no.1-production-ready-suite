@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import cast
 
 from fastapi import Request
 
-from app.mcp.tools import MCP_OUTPUT_SCHEMA_VERSION, build_rag_mcp_server
+from app.mcp.tools import INSTRUCTIONS, MCP_OUTPUT_SCHEMA_VERSION, build_rag_mcp_server
 
 CONTRACT = Path(__file__).resolve().parents[3] / "platform/contracts/mcp/rag-tools.json"
 
@@ -46,3 +47,29 @@ def test_rag_mcp_tool_outputs_have_schema_version() -> None:
         version = schema["properties"].get("schema_version")
         assert version is not None, tool.name
         assert version["default"] == MCP_OUTPUT_SCHEMA_VERSION, tool.name
+
+
+_ISSUE_REF = re.compile(r"#\d{3,}")
+
+
+def _descriptions(node: object) -> list[str]:
+    if isinstance(node, dict):
+        found = [node["description"]] if isinstance(node.get("description"), str) else []
+        return found + [text for value in node.values() for text in _descriptions(value)]
+    if isinstance(node, list):
+        return [text for item in node for text in _descriptions(item)]
+    return []
+
+
+def test_model_visible_texts_have_no_issue_numbers() -> None:
+    """モデルに渡す文（instructions・ツールの説明・inputSchema）に Issue 番号を書かない（#2275）。
+
+    経緯はコードのコメントに置く（AGENTS.md「プロンプト（LLM への指示・skill・ツールの説明）の
+    書き方」）。
+    """
+    server = build_rag_mcp_server(cast(Request, None))
+    texts = [INSTRUCTIONS]
+    for tool in server.tools.values():
+        descriptor = tool.descriptor()
+        texts += [descriptor["description"], *_descriptions(descriptor["inputSchema"])]
+    assert [text for text in texts if _ISSUE_REF.search(text)] == []
