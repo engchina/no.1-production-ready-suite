@@ -215,7 +215,11 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(
       items.getByRole("link", { name: "文脈ヘッダを検索対象へ追加 を設定する画面を開く" })
     ).toHaveAttribute("href", "/settings/chunking");
-    await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(9);
+    await expect(
+      items.getByRole("link", { name: "見出しの階層の推定（AI） を設定する画面を開く" })
+    ).toHaveAttribute("href", "/settings/parser-adapters#post-parse-heading-levels");
+    await expect(items.locator('[data-config-field="heading_level_inference_enabled"]')).toContainText("無効");
+    await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(10);
     // 実体の索引は全体の既定で有効（文書ごとに無効にできる。変える画面は持たない。#1388）。
     const entityIndex = items.locator('[data-config-field="entity_index_enabled"]');
     await expect(entityIndex).toContainText("有効");
