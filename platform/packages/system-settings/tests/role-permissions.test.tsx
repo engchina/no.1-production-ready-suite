@@ -75,14 +75,14 @@ const catalog: PermissionDefinition[] = [
 ];
 
 describe("RolePermissionsPage", () => {
-  it("読み込み中は状態表示を出し、NL2SQL と同じテスト ID と対象ごとの列を持つ", () => {
+  it("読み込み中は状態表示を出し、NL2SQL と同じテスト ID の一覧 + 詳細を持つ", () => {
     const html = render(<RolePermissionsPage api={api} canManage targets={ragTargets} />);
     expect(html).toContain("権限管理");
     expect(html).toContain('data-testid="security-permissions-loading"');
     expect(html).toContain('data-testid="security-permissions-actions"');
     expect(html).toContain('data-testid="security-permissions-search"');
-    expect(html).toContain("検索・回答プロファイル");
-    expect(html).toContain("ナレッジベース");
+    // 一覧の列は狭いので、利用できる対象の件数は列にせず詳細に出す（#2282）。
+    expect(html).toContain('data-testid="list-detail-security-permissions"');
   });
 
   it("文言は messages で上書きできる", () => {
@@ -161,7 +161,7 @@ describe("候補にない ID の直接入力（allowCustomIds。#215）", () => 
     ];
     const html = render(<RolePermissionsPage api={api} canManage targets={agentTargets} />);
     expect(html).toContain('data-testid="security-permissions-grid"');
-    expect(html).toContain("検索・回答プロファイル");
+    expect(html).toContain('data-testid="list-detail-security-permissions-list"');
   });
 });
 

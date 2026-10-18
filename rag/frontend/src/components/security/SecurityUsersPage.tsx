@@ -1,6 +1,6 @@
 import { UserManagementPage } from "@production-ready/system-settings";
 
-import { RAG_SPLIT_STORAGE_PREFIX } from "@/components/layout/EntityLayout";
+import { RAG_LIST_DETAIL_STORAGE_PREFIX } from "@/components/layout/EntityLayout";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
 import { describeSecurityApiError, securityApi } from "@/lib/security-api";
 import { useAuth } from "./AuthProvider";
@@ -14,7 +14,7 @@ export function SecurityUsersPage() {
       canManage={hasPermission(MENU_PERMISSIONS.securityUsers)}
       currentUserUuid={user?.user_uuid ?? null}
       describeError={describeSecurityApiError}
-      splitStoragePrefix={RAG_SPLIT_STORAGE_PREFIX}
+      listDetailStoragePrefix={RAG_LIST_DETAIL_STORAGE_PREFIX}
     />
   );
 }

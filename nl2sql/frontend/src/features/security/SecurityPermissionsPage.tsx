@@ -5,7 +5,7 @@ import {
 } from "@production-ready/system-settings";
 
 import { t } from "@/lib/i18n";
-import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
+import { LIST_DETAIL_STORAGE_PREFIX } from "@/lib/ui-store";
 import { useAuth } from "./AuthProvider";
 import { securityApi } from "./api";
 import { MENU_PERMISSIONS } from "./menu-permissions";
@@ -87,7 +87,7 @@ export function SecurityPermissionsPage() {
       api={PERMISSIONS_API}
       canManage={hasPermission(MENU_PERMISSIONS.securityPermissions)}
       targets={PERMISSION_TARGETS}
-      splitStoragePrefix={FIXED_SPLIT_STORAGE_PREFIX}
+      listDetailStoragePrefix={LIST_DETAIL_STORAGE_PREFIX}
       messages={{
         title: t("nav.securityPermissions"),
         subtitle: t("security.permissions.subtitle"),

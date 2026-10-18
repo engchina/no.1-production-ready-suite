@@ -26,7 +26,6 @@ import {
   type EntityAction,
   SaveErrorBanner,
   INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_VISIBLE_ROWS,
   RowTitleButton,
 } from "@production-ready/ui";
 import {
@@ -60,7 +59,8 @@ import { roleDisplayName } from "./RoleNameBadges";
 import { userDisplayName } from "./userDisplayName";
 import {
   SecurityDetailField,
-  SecurityEmptySelection,
+  SecurityDetailFallback,
+  SecurityListDetail,
   SecurityManagementPanelShell,
   SecurityPanelHeader,
   SecuritySearchField,
@@ -74,8 +74,8 @@ import {
   unmappedErrorMessage,
   useFocusAfterCommit,
   usePagedSelectionList,
+  useSecurityUrlSelection,
   withoutFieldError,
-  type ListSelection,
 } from "./shared";
 import {
   SYSTEM_ADMIN_ROLE_CODE,
@@ -94,8 +94,8 @@ export interface UserManagementPageProps {
   currentUserUuid?: string | null;
   /** 製品の API エラーから入力項目のエラーとエラーコードを取り出す。 */
   describeError?: DescribeApiError;
-  /** 一覧と詳細の分割比率を保存する localStorage key の前置き。 */
-  splitStoragePrefix?: string;
+  /** 一覧 + 詳細（ListDetailLayout）の一覧の幅と開閉を保存する localStorage key の前置き（製品ごと。#2282）。 */
+  listDetailStoragePrefix?: string;
 }
 
 /** ユーザー管理（3製品共通。NL2SQL の画面を移設。#206）。 */
@@ -151,7 +151,7 @@ export function UserManagementPage({
   canManage,
   currentUserUuid = null,
   describeError = describeErrorMessageOnly,
-  splitStoragePrefix,
+  listDetailStoragePrefix,
 }: UserManagementPageProps) {
   const confirm = useConfirm();
   const [users, setUsers] = useState<SecurityUser[]>([]);
@@ -165,10 +165,10 @@ export function UserManagementPage({
   const [actionError, setActionError] = useState("");
   const [formError, setFormError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<UserFieldErrors>({});
-  // 選択中の利用者と、利用者が自分で選んだか（manual）を 1 つの state で持つ（render で manual を読むため ref にしない）。
-  // 選んだ行が今のページの外（作成・保存・削除の後）なら、そのページへ移して見せる（reveal。#1891）。
-  const [selection, setSelection] = useState<ListSelection>({ id: null, manual: false });
-  const selectUser = (id: string | null, manual = true) => setSelection({ id, manual, reveal: manual });
+  // 選択中の利用者は URL の `?user=<user_uuid>` が唯一の情報源（#2282）。先頭の行を自動で選ばない。
+  // 一覧から選ぶときは select（1 ペインでは履歴に積む）、操作の結果で選び直すときは replace。
+  const selection = useSecurityUrlSelection("user");
+  const selectedUserId = selection.selectedId;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<UserPanelView>("list");
   const [search, setSearch] = useState("");
@@ -290,16 +290,14 @@ export function UserManagementPage({
   const userList = usePagedSelectionList({
     items: filteredUsers,
     getKey: (user) => user.user_uuid,
-    selection,
-    onSelectionChange: setSelection,
+    selectedId: selectedUserId,
     active: activeView === "list",
     ready: !loading,
     resetKey: `${search}\u0000${sort.key}\u0000${sort.direction}`,
     pagingKey: "users",
   });
-  const visibleSelectedId = userList.visibleSelectedId;
   const userListCount = securityListCount(users.length, filteredUsers.length, search);
-  const selectedUser = users.find((user) => user.user_uuid === visibleSelectedId) ?? null;
+  const selectedUser = users.find((user) => user.user_uuid === selectedUserId) ?? null;
 
   const load = async (announce = false) => {
     if (busy || accountActionBusy) return;
@@ -330,11 +328,6 @@ export function UserManagementPage({
         if (signal.aborted || sequence !== loadSequence.current) return;
         setUsers(userRows);
         setRoles(roleRows.filter((role) => !role.archived));
-        setSelection((current) =>
-          !current.id || userRows.some((user) => user.user_uuid === current.id)
-            ? current
-            : { ...current, id: null }
-        );
       });
       if (announce && sequence === loadSequence.current) {
         toast.success(t("common.action.refreshed"));
@@ -406,7 +399,7 @@ export function UserManagementPage({
   };
 
   const startEdit = (user: SecurityUser, temporaryPassword = "") => {
-    selectUser(user.user_uuid);
+    selection.replace(user.user_uuid);
     setEditingId(user.user_uuid);
     setActiveView("edit");
     const nextDraft = {
@@ -479,7 +472,6 @@ export function UserManagementPage({
           role_ids: nextUserRoleIds(editingUser.role_ids, baseline.selectedRoleId, submittedRoleId),
         });
         setUsers((rows) => rows.map((row) => (row.user_uuid === updated.user_uuid ? updated : row)));
-        selectUser(updated.user_uuid);
         // 応答のロールの並びは選んだ順と限らないため、保存したロールが残っていればそれを選択のままにする。
         const savedRoleId = updated.role_ids.includes(submittedRoleId)
           ? submittedRoleId
@@ -548,7 +540,6 @@ export function UserManagementPage({
     try {
       const updated = await api.setUserEnabled(user, enabling);
       setUsers((rows) => rows.map((row) => (row.user_uuid === updated.user_uuid ? updated : row)));
-      selectUser(updated.user_uuid);
       toast.success(
         t(enabling ? "security.users.enableSuccess" : "security.users.disableSuccess")
       );
@@ -570,7 +561,6 @@ export function UserManagementPage({
     ) {
       return;
     }
-    selectUser(user.user_uuid);
     setActionError("");
     setCopyPasswordError("");
     setResetPasswordError(null);
@@ -607,7 +597,6 @@ export function UserManagementPage({
     try {
       const updated = await api.unlockUser(user.user_uuid);
       setUsers((rows) => rows.map((row) => (row.user_uuid === updated.user_uuid ? updated : row)));
-      selectUser(updated.user_uuid);
       toast.success(t("security.common.saved"));
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : t("security.common.saveError"));
@@ -623,7 +612,6 @@ export function UserManagementPage({
 
   const handleDelete = async (user: SecurityUser) => {
     if (operationBusy || !canDeleteUser(user)) return;
-    selectUser(user.user_uuid);
     if (
       !(await confirm({
         title: t("security.users.delete"),
@@ -641,11 +629,9 @@ export function UserManagementPage({
     setDeletingUserId(user.user_uuid);
     try {
       await api.deleteUser(user);
-      const deletedIndex = filteredUsers.findIndex((row) => row.user_uuid === user.user_uuid);
-      const nextUser =
-        filteredUsers[deletedIndex + 1] ?? filteredUsers[deletedIndex - 1] ?? null;
       setUsers((rows) => rows.filter((row) => row.user_uuid !== user.user_uuid));
-      selectUser(nextUser?.user_uuid ?? null, Boolean(nextUser));
+      // 削除した対象の選択を外す（ほかの行へ置き換えない。page-archetypes.md §1 B。#2282）。
+      selection.replace(null);
       setEditingId(null);
       setActiveView("list");
       setFormError("");
@@ -734,41 +720,34 @@ export function UserManagementPage({
     updateDraftField("selectedRoleId", roleId);
   };
 
+  // 一覧の列は狭い（既定 20rem）ので、名前と補足 1 行（割り当てロール）と状態だけを出す（#2282）。
+  // ログイン ID は詳細の「ログインユーザーID」の項目に出す（#1696）。
   const userColumns: Array<DataTableColumn<SecurityUser>> = [
     {
       key: "user",
       header: t("security.users.column.user"),
       sortable: true,
-      className: "min-w-48 align-top",
-      render: (user) => {
-        const selected = visibleSelectedId === user.user_uuid;
-        return (
-          // 表示名だけを出す。ログイン ID は詳細の「ログインユーザーID」の項目に出す（#1696）。
-          <RowTitleButton
-            title={userDisplayName(user)}
-            current={selected}
-            aria-label={t("security.users.showUser", { name: userDisplayName(user) })}
-            onClick={(event) => {
-              event.stopPropagation();
-              if (operationBusy) return;
-              selectUser(user.user_uuid);
-            }}
-          />
-        );
-      },
-    },
-    {
-      key: "roles",
-      header: t("security.users.roles"),
-      sortable: true,
-      className: "min-w-48 align-top",
-      render: (user) => roleSummary(user),
+      className: "align-top",
+      render: (user) => (
+        <RowTitleButton
+          title={userDisplayName(user)}
+          subtitle={<span className="line-clamp-1 break-all">{roleSummary(user)}</span>}
+          current={selectedUserId === user.user_uuid}
+          aria-label={t("security.users.showUser", { name: userDisplayName(user) })}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (operationBusy) return;
+            selection.select(user.user_uuid);
+          }}
+        />
+      ),
     },
     {
       key: "status",
       header: t("security.common.status"),
       sortable: true,
-      className: "min-w-28 align-top",
+      headerClassName: "w-[6.5rem]",
+      className: "align-top",
       render: (user) => <UserStatusBadges user={user} />,
     },
   ];
@@ -816,10 +795,13 @@ export function UserManagementPage({
             : []
         }
         // 詳細・作成・編集の画面の「一覧へ戻る」は左上（#618）。確定（作成・保存）はフォームの末尾の FormActionBar（#1786）。
+        // 一覧 + 詳細の 1 ペイン（xl 未満）で詳細を出している間も、左上の「一覧へ戻る」で一覧へ戻る（#2282）。
         back={
-          activeView === "list"
-            ? undefined
-            : { label: t("security.common.backToList"), onClick: returnToList, disabled: operationBusy, testId: "security-users-back" }
+          activeView !== "list"
+            ? { label: t("security.common.backToList"), onClick: returnToList, disabled: operationBusy, testId: "security-users-back" }
+            : !selection.split && selectedUserId
+              ? { label: t("security.common.backToList"), onClick: selection.clear, testId: "security-users-back" }
+              : undefined
         }
         actionsLabel={t("security.users.actionsLabel")}
         actionsTestId="security-users-actions"
@@ -833,91 +815,109 @@ export function UserManagementPage({
         {initialLoadFailed ? (
           <ErrorState message={loadError} onRetry={() => void load()} />
         ) : activeView === "list" ? (
-          <SecurityManagementPanelShell
-              id="security-users-panel-list"
-              idPrefix="security-users"
-              ariaLabel={t("security.users.workspaceLabel")}
-              splitId="security-users-list"
-              splitStoragePrefix={splitStoragePrefix}
-            >
-              <section className="grid min-w-0 content-start gap-3" aria-labelledby="security-users-list-heading">
-                <SecurityPanelHeader
-                  headingId="security-users-list-heading"
-                  icon={Users}
-                  title={t("security.users.list")}
-                  description={t("security.users.listHint")}
-                />
-                {/* 件数はツールバーの右の ListCount 1 か所（見出しのバッジに出さない。#1891）。件数の読み上げは
-                    検索欄の resultCountLabel が行うので、ListCount は読み上げない（二重にしない）。 */}
-                <ListToolbar
-                  testId="security-users-toolbar"
-                  search={
-                    <SecuritySearchField
-                      label={t("security.common.search")}
-                      placeholder={t("security.users.searchPlaceholder")}
-                      value={search}
-                      testId="security-users-search"
-                      disabled={operationBusy}
-                      resultCountLabel={listCountText(userListCount)}
-                      onChange={setSearch}
-                    />
-                  }
-                  count={{ ...userListCount, live: false, testId: "security-users-count" }}
-                />
-                {loading ? (
-                  <ProcessingIndicator
-                    active
-                    label={t("security.common.loading")}
-                    operationKey="security-users-load"
-                    placement="panel"
-                    testId="security-users-loading"
-                    activityIcon={refreshRequested ? "none" : "spinner"}
+          // 一覧は狭い列・詳細は広い列（xl 未満は 1 ペイン）。選択は URL の ?user=（#2282）。
+          <SecurityListDetail
+            id="security-users"
+            storagePrefix={listDetailStoragePrefix}
+            icon={Users}
+            headingId="security-users-list-heading"
+            listLabel={t("security.users.list")}
+            detailLabel={t("security.users.detail")}
+            toolbar={
+              // 件数はツールバーの右の ListCount 1 か所（見出しのバッジに出さない。#1891）。件数の読み上げは
+              // 検索欄の resultCountLabel が行うので、ListCount は読み上げない（二重にしない）。
+              <ListToolbar
+                testId="security-users-toolbar"
+                search={
+                  <SecuritySearchField
+                    label={t("security.common.search")}
+                    placeholder={t("security.users.searchPlaceholder")}
+                    value={search}
+                    testId="security-users-search"
+                    disabled={operationBusy}
+                    resultCountLabel={listCountText(userListCount)}
+                    onChange={setSearch}
                   />
-                ) : null}
-                <DataTable
-                  dense
-                  loading={loading}
-                  rows={userList.pageItems}
-                  sort={sort}
-                  onSortChange={(next) => { if (!operationBusy) setSort(next); }}
-                  selectedRowKey={visibleSelectedId}
-                  onRowClick={(user) => {
-                    if (operationBusy) return;
-                    selectUser(user.user_uuid);
-                  }}
-                  getRowKey={(user) => user.user_uuid}
-                  rowProps={(user) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.users.showUser", { name: userDisplayName(user) }) })}
-                  ariaLabel={t("security.users.list")}
-                  testId="security-users-grid"
-                  scrollAriaLabel={t("security.common.listScrollLabel", {
-                    list: t("security.users.list"),
-                  })}
-                  scrollTestId="security-users-scroll-region"
-                  stickyHeader
-                  visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
-                  empty={<EmptyState title={search ? t("security.users.noResultsTitle") : t("security.common.empty")} hint={search ? t("security.users.noResultsHint") : undefined} action={search ? <SecurityClearSearchAction onClear={() => setSearch("")} /> : undefined} />}
-                  columns={userColumns}
-                />
-                <SecurityListPagination
-                  list={userList}
-                  ariaLabel={t("security.users.pagination")}
-                  testId="security-users-pagination"
-                  disabled={operationBusy}
-                />
-              </section>
-
-              <UserDetailPanel
-                user={selectedUser}
-                canManage={canManage}
-                assignedRoles={selectedUser ? assignedRoles(selectedUser) : []}
-                actions={selectedUser ? userActions(selectedUser) : []}
-                resetError={
-                  selectedUser && resetPasswordError?.userUuid === selectedUser.user_uuid
-                    ? resetPasswordError.message
-                    : ""
                 }
+                count={{ ...userListCount, live: false, testId: "security-users-count" }}
               />
-            </SecurityManagementPanelShell>
+            }
+            loadingIndicator={
+              loading ? (
+                <ProcessingIndicator
+                  active
+                  label={t("security.common.loading")}
+                  operationKey="security-users-load"
+                  placement="panel"
+                  testId="security-users-loading"
+                  activityIcon={refreshRequested ? "none" : "spinner"}
+                />
+              ) : null
+            }
+            list={
+              <DataTable
+                dense
+                loading={loading}
+                rows={userList.pageItems}
+                sort={sort}
+                onSortChange={(next) => { if (!operationBusy) setSort(next); }}
+                selectedRowKey={selectedUserId}
+                onRowClick={(user) => {
+                  if (operationBusy) return;
+                  selection.select(user.user_uuid);
+                }}
+                getRowKey={(user) => user.user_uuid}
+                rowProps={(user) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.users.showUser", { name: userDisplayName(user) }) })}
+                ariaLabel={t("security.users.list")}
+                testId="security-users-grid"
+                scrollAriaLabel={t("security.common.listScrollLabel", {
+                  list: t("security.users.list"),
+                })}
+                scrollTestId="security-users-scroll-region"
+                // 一覧の列（sticky・画面の高さまで）の中で縦にスクロールし、表頭を固定する。列の枠と二重にしない。
+                className="min-h-0 rounded-none border-0"
+                tableClassName="w-full table-fixed"
+                stickyHeader
+                empty={<EmptyState title={search ? t("security.users.noResultsTitle") : t("security.common.empty")} hint={search ? t("security.users.noResultsHint") : undefined} action={search ? <SecurityClearSearchAction onClear={() => setSearch("")} /> : undefined} />}
+                columns={userColumns}
+              />
+            }
+            footer={
+              <SecurityListPagination
+                list={userList}
+                ariaLabel={t("security.users.pagination")}
+                testId="security-users-pagination"
+                disabled={operationBusy}
+              />
+            }
+            pageItems={userList.pageItems}
+            getKey={(user) => user.user_uuid}
+            selectedId={selectedUserId}
+            onSelect={selection.replace}
+            disabled={operationBusy}
+            emptyTitle={t("security.users.noSelectionTitle")}
+            emptyHint={t("security.users.noSelectionHint")}
+            detail={
+              selectedUser ? (
+                <UserDetailPanel
+                  user={selectedUser}
+                  canManage={canManage}
+                  assignedRoles={assignedRoles(selectedUser)}
+                  actions={userActions(selectedUser)}
+                  resetError={
+                    resetPasswordError?.userUuid === selectedUser.user_uuid ? resetPasswordError.message : ""
+                  }
+                />
+              ) : (
+                <SecurityDetailFallback
+                  loading={loading}
+                  title={t("security.users.notFoundTitle")}
+                  hint={t("security.users.notFoundHint")}
+                  testId="security-users-detail-not-found"
+                />
+              )
+            }
+          />
         ) : (
           <>
             <SecurityManagementPanelShell
@@ -1182,25 +1182,17 @@ function UserDetailPanel({
   actions,
   resetError,
 }: {
-  user: SecurityUser | null;
+  user: SecurityUser;
   assignedRoles: AssignedRole[];
   canManage: boolean;
   actions: EntityAction[];
   resetError: string;
 }) {
-  if (!user) {
-    return (
-      <SecurityEmptySelection
-        title={t("security.users.noSelectionTitle")}
-        hint={t("security.users.noSelectionHint")}
-      />
-    );
-  }
-
   const hasArchivedRole = assignedRoles.some((role) => role.archived);
 
   return (
-    <section className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-surface-sunken p-4" aria-labelledby="security-users-detail-heading">
+    // 枠は一覧 + 詳細（ListDetailLayout）の詳細の列が持つ（カードの入れ子を 1 段減らす。#2282）。
+    <section className="grid min-w-0 content-start gap-4" aria-labelledby="security-users-detail-heading" data-testid="security-users-detail">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">

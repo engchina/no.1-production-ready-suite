@@ -7,7 +7,6 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { useSearchParams } from "react-router-dom";
 import { LockKeyhole, Pencil, Plus, RefreshCw, RotateCcw, Save, ShieldCheck } from "lucide-react";
 import {
   Banner,
@@ -36,7 +35,6 @@ import {
   type EntityAction,
   SaveErrorBanner,
   INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_VISIBLE_ROWS,
   apiErrorMessage,
   cn,
 } from "@production-ready/ui";
@@ -49,7 +47,8 @@ import { RoleStatusBadges } from "../users-roles/RoleManagementPage";
 import { RoleNameRowTitleButton, roleDisplayName } from "../users-roles/RoleNameBadges";
 import {
   SecurityDetailField,
-  SecurityEmptySelection,
+  SecurityDetailFallback,
+  SecurityListDetail,
   SecurityManagementPanelShell,
   SecurityPanelHeader,
   SecuritySearchField,
@@ -59,7 +58,7 @@ import {
   securityFilteredCountWithSelected,
   securityListCount,
   usePagedSelectionList,
-  type ListSelection,
+  useSecurityUrlSelection,
 } from "../users-roles/shared";
 import { SYSTEM_ADMIN_ROLE_CODE } from "../users-roles/types";
 import { ROLE_PERMISSIONS_MESSAGES, type RolePermissionsMessages } from "./messages";
@@ -258,8 +257,8 @@ export interface RolePermissionsPageProps<R extends PermissionRole = PermissionR
    * 一覧の検索を毎 render 作り直さないよう、module 定数か useMemo で安定した配列を渡す。
    */
   targets?: RolePermissionTargetSection<R>[];
-  /** 一覧と詳細の分割比率を保存する localStorage key の前置き。 */
-  splitStoragePrefix?: string;
+  /** 一覧 + 詳細（ListDetailLayout）の一覧の幅と開閉を保存する localStorage key の前置き（製品ごと。#2282）。 */
+  listDetailStoragePrefix?: string;
   /** 既定の文言（日本語）の一部を上書きする。 */
   messages?: Partial<RolePermissionsMessages>;
 }
@@ -272,25 +271,19 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
   api,
   canManage,
   targets = NO_TARGETS,
-  splitStoragePrefix,
+  listDetailStoragePrefix,
   messages,
 }: RolePermissionsPageProps<R>) {
   const m = { ...ROLE_PERMISSIONS_MESSAGES, ...messages };
   const confirm = useConfirm();
-  const [searchParams] = useSearchParams();
-  const requestedRoleId = searchParams.get("role");
   const [roles, setRoles] = useState<R[]>([]);
   const [permissions, setPermissions] = useState<PermissionDefinition[]>([]);
   const [targetItems, setTargetItems] = useState<Record<string, RolePermissionTargetItem[]>>({});
   const [targetLoadWarnings, setTargetLoadWarnings] = useState<Record<string, string>>({});
-  // ロール管理からの導線（?role=）で開いた場合は、そのロールを利用者が選んだものとして扱い、そのロールのある
-  // ページを開く（reveal。#1891）。選んだ行が今のページの外（保存の後）のときも同じ。
-  const [selection, setSelection] = useState<ListSelection>({
-    id: requestedRoleId,
-    manual: Boolean(requestedRoleId),
-    reveal: Boolean(requestedRoleId),
-  });
-  const selectRole = (id: string | null, manual = true) => setSelection({ id, manual, reveal: manual });
+  // 選択中のロールは URL の `?role=<role_id>` が唯一の情報源（#2282）。ロール管理からの導線（?role=）で開くと
+  // そのロールを選び、そのロールのあるページを開く。先頭の行を自動で選ばない。
+  const selection = useSecurityUrlSelection("role");
+  const selectedRoleId = selection.selectedId;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<PermissionPanelView>("list");
   const [search, setSearch] = useState("");
@@ -394,16 +387,14 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
   const roleList = usePagedSelectionList({
     items: filteredRoles,
     getKey: (role) => role.role_id,
-    selection,
-    onSelectionChange: setSelection,
+    selectedId: selectedRoleId,
     active: activeView === "list",
     ready: !loading,
     resetKey: `${search}\u0000${sort.key}\u0000${sort.direction}`,
     pagingKey: "permissionRoles",
   });
-  const visibleSelectedId = roleList.visibleSelectedId;
   const roleListCount = securityListCount(roles.length, filteredRoles.length, search);
-  const selectedRole = roles.find((role) => role.role_id === visibleSelectedId) ?? null;
+  const selectedRole = roles.find((role) => role.role_id === selectedRoleId) ?? null;
 
   const load = async (announce = false) => {
     if (busy) return;
@@ -453,11 +444,6 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
         setTargetLoadWarnings(
           Object.fromEntries(targetRows.filter((row) => row.warning).map((row) => [row.key, row.warning])),
         );
-        setSelection((current) =>
-          !current.id || roleRows.some((role) => role.role_id === current.id)
-            ? current
-            : { ...current, id: null },
-        );
       });
       if (announce && sequence === loadSequence.current) {
         toast.success(m.refreshed);
@@ -487,7 +473,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
   }, [abortAll]);
 
   const startEdit = (role: R) => {
-    selectRole(role.role_id);
+    selection.replace(role.role_id);
     setEditingId(role.role_id);
     setActiveView("edit");
     const nextDraft: RolePermissionsDraft = {
@@ -596,39 +582,35 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
     setTargetLoadWarnings((current) => (current[key] === warning ? current : { ...current, [key]: warning }));
   }, []);
 
+  // 一覧の列は狭い（既定 20rem）ので、ロール名と補足 1 行（状態）と機能権限の件数だけを出す（#2282）。
+  // 利用できる対象の件数は詳細に出す。
   const roleColumns: Array<DataTableColumn<R>> = [
     {
       key: "role",
       header: m.columnRole,
       sortable: true,
-      className: "min-w-52 align-top",
-      render: (role) => {
-        const selected = visibleSelectedId === role.role_id;
-        return (
-          <RoleNameRowTitleButton
-            securityRole={role}
-            current={selected}
-            aria-label={formatMessage(m.showRole, { name: roleDisplayName(role) })}
-            onClick={(event) => {
-              event.stopPropagation();
-              if (operationBusy) return;
-              selectRole(role.role_id);
-            }}
-          />
-        );
-      },
-    },
-    {
-      key: "status",
-      header: m.status,
-      className: "min-w-32 align-top",
-      render: (role) => <RoleStatusBadges role={role} />,
+      className: "align-top",
+      render: (role) => (
+        <RoleNameRowTitleButton
+          securityRole={role}
+          subtitle={<RoleStatusBadges role={role} />}
+          current={selectedRoleId === role.role_id}
+          aria-label={formatMessage(m.showRole, { name: roleDisplayName(role) })}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (operationBusy) return;
+            selection.select(role.role_id);
+          }}
+        />
+      ),
     },
     {
       key: "permissions",
       header: m.permissions,
       sortable: true,
-      className: "min-w-28 align-top",
+      align: "right",
+      headerClassName: "w-[7.5rem]",
+      className: "whitespace-nowrap align-top tabular-nums",
       render: (role) =>
         role.role_code === SYSTEM_ADMIN_ROLE_CODE
           ? m.allPermissions
@@ -636,17 +618,6 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
               count: effectivePermissionCodes(role.permissions, permissionByCode).size,
             }),
     },
-    ...targets.map<DataTableColumn<R>>((target) => ({
-      key: `target-${target.key}`,
-      header: target.messages.title,
-      className: "min-w-32 align-top",
-      render: (role) =>
-        targetGrantsAll(target, role.role_code, effectivePermissionCodes(role.permissions, permissionByCode))
-          ? target.messages.all
-          : formatMessage(target.messages.count ?? m.permissionCount, {
-              count: target.selectedIds(role).length,
-            }),
-    })),
   ];
 
   return (
@@ -671,10 +642,13 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
             : []
         }
         // 詳細・作成・編集の画面の「一覧へ戻る」は左上（#618）。保存はフォームの末尾の FormActionBar（#1786）。
+        // 一覧 + 詳細の 1 ペイン（xl 未満）で詳細を出している間も、左上の「一覧へ戻る」で一覧へ戻る（#2282）。
         back={
-          activeView === "list"
-            ? undefined
-            : { label: m.backToList, onClick: () => void returnToList(), disabled: operationBusy, testId: "security-permissions-back" }
+          activeView !== "list"
+            ? { label: m.backToList, onClick: () => void returnToList(), disabled: operationBusy, testId: "security-permissions-back" }
+            : !selection.split && selectedRoleId
+              ? { label: m.backToList, onClick: selection.clear, testId: "security-permissions-back" }
+              : undefined
         }
         actionsLabel={m.actionsLabel}
         actionsTestId="security-permissions-actions"
@@ -690,22 +664,17 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
         )}
 
         {activeView === "list" ? (
-          <SecurityManagementPanelShell
-            id="security-permissions-panel-list"
-            idPrefix="security-permissions"
-            ariaLabel={m.workspaceLabel}
-            splitId="security-permissions-list"
-            splitStoragePrefix={splitStoragePrefix}
-          >
-            <section className="grid min-w-0 content-start gap-3" aria-labelledby="security-permissions-list-heading">
-              <SecurityPanelHeader
-                headingId="security-permissions-list-heading"
-                icon={LockKeyhole}
-                title={m.listTitle}
-                description={m.listHint}
-              />
-              {/* 件数はツールバーの右の ListCount 1 か所（見出しのバッジに出さない。#1891）。件数の読み上げは
-                  検索欄の resultCountLabel が行うので、ListCount は読み上げない（二重にしない）。 */}
+          // 一覧は狭い列・詳細は広い列（xl 未満は 1 ペイン）。選択は URL の ?role=（#2282）。
+          <SecurityListDetail
+            id="security-permissions"
+            storagePrefix={listDetailStoragePrefix}
+            icon={LockKeyhole}
+            headingId="security-permissions-list-heading"
+            listLabel={m.listTitle}
+            detailLabel={m.detailTitle}
+            toolbar={
+              // 件数はツールバーの右の ListCount 1 か所（見出しのバッジに出さない。#1891）。件数の読み上げは
+              // 検索欄の resultCountLabel が行うので、ListCount は読み上げない（二重にしない）。
               <ListToolbar
                 testId="security-permissions-toolbar"
                 search={
@@ -721,7 +690,9 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                 }
                 count={{ ...roleListCount, live: false, testId: "security-permissions-count" }}
               />
-              {loading ? (
+            }
+            loadingIndicator={
+              loading ? (
                 <ProcessingIndicator
                   active
                   label={m.loading}
@@ -730,7 +701,9 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                   testId="security-permissions-loading"
                   activityIcon="none"
                 />
-              ) : null}
+              ) : null
+            }
+            list={
               <DataTable
                 dense
                 loading={loading}
@@ -739,10 +712,10 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                 onSortChange={(next) => {
                   if (!operationBusy) setSort(next);
                 }}
-                selectedRowKey={visibleSelectedId}
+                selectedRowKey={selectedRoleId}
                 onRowClick={(role) => {
                   if (operationBusy) return;
-                  selectRole(role.role_id);
+                  selection.select(role.role_id);
                 }}
                 getRowKey={(role) => role.role_id}
                 rowProps={(role) => ({
@@ -753,8 +726,10 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                 testId="security-permissions-grid"
                 scrollAriaLabel={formatMessage(m.listScrollLabel, { list: m.listTitle })}
                 scrollTestId="security-permissions-scroll-region"
+                // 一覧の列（sticky・画面の高さまで）の中で縦にスクロールし、表頭を固定する。列の枠と二重にしない。
+                className="min-h-0 rounded-none border-0"
+                tableClassName="w-full table-fixed"
                 stickyHeader
-                visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
                 empty={
                   <EmptyState
                     title={search ? m.noResultsTitle : m.empty}
@@ -764,24 +739,43 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                 }
                 columns={roleColumns}
               />
+            }
+            footer={
               <SecurityListPagination
                 list={roleList}
                 ariaLabel={m.pagination}
                 testId="security-permissions-pagination"
                 disabled={operationBusy}
               />
-            </section>
-
-            <PermissionDetailPanel
-              role={selectedRole}
-              canManage={canManage}
-              permissionByCode={permissionByCode}
-              targets={targets}
-              targetItems={targetItems}
-              actions={selectedRole ? roleActions(selectedRole) : []}
-              messages={m}
-            />
-          </SecurityManagementPanelShell>
+            }
+            pageItems={roleList.pageItems}
+            getKey={(role) => role.role_id}
+            selectedId={selectedRoleId}
+            onSelect={selection.replace}
+            disabled={operationBusy}
+            emptyTitle={m.noSelectionTitle}
+            emptyHint={m.noSelectionHint}
+            detail={
+              selectedRole ? (
+                <PermissionDetailPanel
+                  role={selectedRole}
+                  canManage={canManage}
+                  permissionByCode={permissionByCode}
+                  targets={targets}
+                  targetItems={targetItems}
+                  actions={roleActions(selectedRole)}
+                  messages={m}
+                />
+              ) : (
+                <SecurityDetailFallback
+                  loading={loading}
+                  title={m.notFoundTitle}
+                  hint={m.notFoundHint}
+                  testId="security-permissions-detail-not-found"
+                />
+              )
+            }
+          />
         ) : (
           <>
             <SecurityManagementPanelShell
@@ -1336,7 +1330,7 @@ function PermissionDetailPanel<R extends PermissionRole>({
   actions,
   messages: m,
 }: {
-  role: R | null;
+  role: R;
   canManage: boolean;
   permissionByCode: Map<string, PermissionDefinition>;
   targets: RolePermissionTargetSection<R>[];
@@ -1344,10 +1338,6 @@ function PermissionDetailPanel<R extends PermissionRole>({
   actions: EntityAction[];
   messages: RolePermissionsMessages;
 }) {
-  if (!role) {
-    return <SecurityEmptySelection title={m.noSelectionTitle} hint={m.noSelectionHint} />;
-  }
-
   const effectiveCodes = effectivePermissionCodes(role.permissions, permissionByCode);
   const targetSummaries = targets.map((target) => {
     const grantsAll = targetGrantsAll(target, role.role_code, effectiveCodes);
@@ -1357,9 +1347,11 @@ function PermissionDetailPanel<R extends PermissionRole>({
   });
 
   return (
+    // 枠は一覧 + 詳細（ListDetailLayout）の詳細の列が持つ（カードの入れ子を 1 段減らす。#2282）。
     <section
-      className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-surface-sunken p-4"
+      className="grid min-w-0 content-start gap-4"
       aria-labelledby="security-permissions-detail-heading"
+      data-testid="security-permissions-detail"
     >
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div className="min-w-0">

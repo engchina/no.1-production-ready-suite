@@ -12,6 +12,9 @@ import { t } from "@/lib/i18n";
 /** Agent の分割ペインの比率を保存する localStorage key の前置き（製品ごとに分ける）。 */
 export const AGENT_SPLIT_STORAGE_PREFIX = "production-ready-agent.fixedSplitPane";
 
+/** 一覧 + 詳細（共有 ListDetailLayout）の一覧の幅と開閉を保存する localStorage key の前置き（#2282）。 */
+export const AGENT_LIST_DETAIL_STORAGE_PREFIX = "production-ready-agent.listDetail";
+
 /** URL の `?id=` が一覧に無いときの説明。黙って別の対象に置き換えず、一覧へ戻る導線を出す。 */
 export function MissingEditorTarget({ id, onBack }: { id: string; onBack: () => void }) {
   return (

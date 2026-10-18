@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { RolePermissionsPage } from "@production-ready/system-settings";
 
-import { AGENT_SPLIT_STORAGE_PREFIX } from "@/components/EntityLayout";
+import { AGENT_LIST_DETAIL_STORAGE_PREFIX } from "@/components/EntityLayout";
 import type { SecurityRole } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
@@ -28,7 +28,7 @@ export function SecurityPermissionsPage() {
       api={PERMISSIONS_API}
       canManage={hasPermission(MENU_PERMISSIONS.securityPermissions)}
       targets={targets}
-      splitStoragePrefix={AGENT_SPLIT_STORAGE_PREFIX}
+      listDetailStoragePrefix={AGENT_LIST_DETAIL_STORAGE_PREFIX}
       messages={{
         title: t("nav.securityPermissions"),
         subtitle: t("security.permissions.subtitle"),

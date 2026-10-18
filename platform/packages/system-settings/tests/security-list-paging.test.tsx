@@ -20,6 +20,7 @@ import { bindListPagingOwner, LIST_PAGING_NAMESPACE, readListPaging } from "../s
 
 // #1891: ユーザー・ロール・権限管理の一覧の件数は ListToolbar の ListCount 1 か所、一覧は 25 件ずつのページ
 // （表示件数 10 / 25 / 50 / 100。既定 25。#1952）。検索・並べ替え・表示件数で 1 ページ目へ戻し、一覧 ⇄ 編集の行き来ではページを残す。
+// #2282: 選択は URL（?user= / ?role=）が持ち、先頭の行を自動で選ばない。URL の選択が別のページにあればそのページを開く。
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -114,16 +115,19 @@ function buttonByName(name: string, scope: ParentNode = host) {
   );
 }
 
+/** 行の名前（RowTitleButton の 1 行目。2 行目の補足は含めない）。 */
+function rowTitleText(row: Element | null | undefined) {
+  return row?.querySelector("[data-row-title-button] > span")?.textContent?.trim() ?? "";
+}
+
 /** 表の行の 1 列目（表示名・ロール名）。 */
 function rowTitles(gridTestId: string) {
-  return Array.from(host.querySelectorAll(`[data-testid="${gridTestId}"] tbody tr`)).map(
-    (row) => row.querySelector("td, th")?.textContent?.trim() ?? "",
-  );
+  return Array.from(host.querySelectorAll(`[data-testid="${gridTestId}"] tbody tr`)).map(rowTitleText);
 }
 
 function selectedRowTitle(gridTestId: string) {
   const row = host.querySelector(`[data-testid="${gridTestId}"] tbody tr[data-selected="true"]`);
-  return row?.querySelector("td, th")?.textContent?.trim() ?? null;
+  return row ? rowTitleText(row) : null;
 }
 
 async function choosePageSize(paginationTestId: string, size: number) {
@@ -152,21 +156,41 @@ describe("ユーザー管理の一覧の件数とページ（#1891）", () => {
     expect(byTestId("security-users-count")?.textContent).toBe("全 53 件");
     // 以前の見出しのバッジ（「53 / 53 件」）は出さない。
     expect(host.textContent).not.toContain("53 / 53 件");
-    const heading = host.querySelector("#security-users-list-heading")?.closest("div");
+    const heading = host.querySelector("#security-users-list-heading");
     expect(heading?.textContent).not.toContain("件");
   });
 
-  it("25 件ずつに分け、次のページへ移ると、選択をそのページの先頭の行に合わせる", async () => {
+  it("25 件ずつに分け、先頭の行を自動で選ばず、次のページへ移っても選ばない（#2282）", async () => {
     await render(<UserManagementPage api={userApi} canManage />);
     expect(rowTitles("security-users-grid")).toHaveLength(25);
     expect(rowTitles("security-users-grid")[0]).toBe("利用者01");
     expect(byTestId("security-users-pagination")?.textContent).toContain("1–25 / 53 件");
-    expect(selectedRowTitle("security-users-grid")).toBe("利用者01");
+    expect(selectedRowTitle("security-users-grid")).toBeNull();
+    // 未選択の詳細は空の状態。
+    expect(byTestId("list-detail-security-users-detail")?.textContent).toContain("ユーザーを選択してください");
 
     await click(buttonByName("次へ", byTestId("security-users-pagination") ?? host));
     expect(rowTitles("security-users-grid")[0]).toBe("利用者26");
     expect(byTestId("security-users-pagination")?.textContent).toContain("26–50 / 53 件");
-    expect(selectedRowTitle("security-users-grid")).toBe("利用者26");
+    expect(selectedRowTitle("security-users-grid")).toBeNull();
+  });
+
+  it("?user= で開いた利用者が 3 ページ目にあれば、そのページを開いて選び、前へ / 次へで移る（#2282）", async () => {
+    await render(<UserManagementPage api={userApi} canManage />, "/settings/security/users?user=user-52");
+    expect(byTestId("security-users-pagination")?.textContent).toContain("51–53 / 53 件");
+    expect(selectedRowTitle("security-users-grid")).toBe("利用者52");
+    expect(host.querySelector("#security-users-detail-heading")?.textContent).toBe("利用者52");
+
+    await click(byTestId("security-users-detail-pager-next"));
+    expect(selectedRowTitle("security-users-grid")).toBe("利用者53");
+    // 今のページの末尾では次へを押せない。
+    expect(byTestId("security-users-detail-pager-next")?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("URL の利用者が一覧に無ければ、詳細に「見つかりません」を出し、ほかの行を選ばない（#2282）", async () => {
+    await render(<UserManagementPage api={userApi} canManage />, "/settings/security/users?user=missing");
+    expect(byTestId("security-users-detail-not-found")?.textContent).toContain("ユーザーが見つかりません");
+    expect(selectedRowTitle("security-users-grid")).toBeNull();
   });
 
   it("表示件数を変えると 1 ページ目に戻り、その件数で並べる", async () => {
@@ -262,12 +286,53 @@ describe("権限管理のロール一覧の件数とページ（#1891）", () =>
     expect(byTestId("security-permissions-count")?.textContent).toBe("全 27 件");
     expect(host.textContent).not.toContain("27 / 27 件");
     expect(rowTitles("security-permissions-grid")).toHaveLength(25);
-    expect(selectedRowTitle("security-permissions-grid")).toContain("ロール01");
+    // 先頭の行を自動で選ばない（#2282）。
+    expect(selectedRowTitle("security-permissions-grid")).toBeNull();
   });
 
   it("?role= で開いたロールが 2 ページ目にあれば、そのページを開いて選ぶ", async () => {
     await render(<RolePermissionsPage api={api} canManage />, "/settings/security/permissions?role=role-27");
     expect(byTestId("security-permissions-pagination")?.textContent).toContain("26–27 / 27 件");
     expect(selectedRowTitle("security-permissions-grid")).toContain("ロール27");
+  });
+});
+
+describe("xl 未満の 1 ペイン（#2282）", () => {
+  const original = window.matchMedia;
+
+  beforeEach(() => {
+    // xl（1280px）未満: ListDetailLayout の 2 ペインの media query に一致しない。
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  });
+
+  afterEach(() => {
+    window.matchMedia = original;
+  });
+
+  it("一覧だけを出し、選ぶと詳細だけと「一覧へ戻る」を出し、戻ると一覧と選んでいたページに戻る", async () => {
+    await render(<UserManagementPage api={userApi} canManage />, "/settings/security/users");
+    const layout = () => byTestId("list-detail-security-users");
+    expect(layout()?.getAttribute("data-list-detail-layout")).toBe("single");
+    expect(layout()?.getAttribute("data-list-detail-view")).toBe("list");
+    expect(byTestId("security-users-back")).toBeNull();
+
+    await click(buttonByName("次へ", byTestId("security-users-pagination") ?? host));
+    await click(host.querySelector<HTMLElement>('[data-testid="security-users-grid"] [data-row-title-button]'));
+    expect(layout()?.getAttribute("data-list-detail-view")).toBe("detail");
+    expect(host.querySelector("#security-users-detail-heading")?.textContent).toBe("利用者26");
+
+    await click(byTestId("security-users-back"));
+    expect(layout()?.getAttribute("data-list-detail-view")).toBe("list");
+    expect(byTestId("security-users-pagination")?.textContent).toContain("26–50 / 53 件");
+    expect(selectedRowTitle("security-users-grid")).toBeNull();
   });
 });

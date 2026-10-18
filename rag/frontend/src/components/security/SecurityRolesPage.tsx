@@ -1,6 +1,6 @@
 import { RoleManagementPage } from "@production-ready/system-settings";
 
-import { RAG_SPLIT_STORAGE_PREFIX } from "@/components/layout/EntityLayout";
+import { RAG_LIST_DETAIL_STORAGE_PREFIX } from "@/components/layout/EntityLayout";
 import type { SecurityRole } from "@/lib/api";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
 import { APP_ROUTES } from "@/lib/routes";
@@ -18,7 +18,7 @@ export function SecurityRolesPage() {
       api={securityApi}
       canManage={hasPermission(MENU_PERMISSIONS.securityRoles)}
       describeError={describeSecurityApiError}
-      splitStoragePrefix={RAG_SPLIT_STORAGE_PREFIX}
+      listDetailStoragePrefix={RAG_LIST_DETAIL_STORAGE_PREFIX}
       permissionSummary={{
         count: (role) => role.permissions?.length ?? 0,
         permissionsPath: APP_ROUTES.securityPermissions,
