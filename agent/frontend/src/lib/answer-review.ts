@@ -1,8 +1,8 @@
 import type { Artifact, ClarificationKind, RunState } from "@/lib/api";
 
 /**
- * 回答の確かめ（#1286）。Run の成果物の「支援タスクの状態」（kind=`support_task`。#1243）と
- * 「回答の検証」（kind=`answer_validation`。#1246 / #1277）を、業務の利用者が読める形にする。
+ * 資料との照合（#1286・#2361）。Run の成果物の「支援タスクの状態」（kind=`support_task`。#1243）と
+ * 「資料との照合」（kind=`answer_validation`。#1246 / #1277）を、業務の利用者が読める形にする。
  *
  * 成果物の内容（JSON）の項目名・内部の語（`budget_exceeded`・`no_rag_evidence`・条件の出所の値など）は
  * 画面に出さない（handoff §13）。ここは値を取り出して分類するだけで、文言は画面が i18n で決める。
@@ -61,7 +61,7 @@ export interface ReviewGuide {
 }
 
 /**
- * 資料で確かめた結果。
+ * 資料との照合の結果。
  * - verified: 資料で確かめた（回答はそのまま）
  * - withheld: 確かめられない点がある（段落を外した・本文を載せていない・不足を示した）
  * - unvalidated: 確かめられなかった（照合の失敗・資料を使わなかった回答）
@@ -80,15 +80,6 @@ export type ValidationCause =
   | "failure"
   | null;
 
-/** 根拠で確かめられなかった段落の判定（RAG の `rag_validate_answer` の claim の status）。 */
-export type UnverifiedClaimKind = "contradicted" | "unsupported" | "citation_error" | "unassessed";
-
-export type UnverifiedPoint =
-  | { kind: "claim"; claim: UnverifiedClaimKind; quote: string; reason: string }
-  | { kind: "finding"; message: string }
-  | { kind: "stale"; count: number }
-  | { kind: "missing"; count: number };
-
 export interface ReviewValidation {
   state: ValidationState;
   cause: ValidationCause;
@@ -96,7 +87,11 @@ export interface ReviewValidation {
   withheldClaims: number;
   /** 回答の本文をすべて載せていないか。 */
   withheldAll: boolean;
-  points: UnverifiedPoint[];
+  /**
+   * 回答の本文の「資料で確認できず除いた内容」の節（画面の「資料から確認できなかった事項」）の項目の数（backend の
+   * `notice.items`。#2361）。除いた内容の一覧は節の 1 か所だけに出し、件数のバッジはこの数を使う（節と一致させる）。
+   */
+  listedItems: number;
 }
 
 export interface AnswerReview {
@@ -110,9 +105,6 @@ export interface AnswerReview {
   /** 回答の対応（出すものだけ。対応の無い古い Run・「答えた」は null）。 */
   outcome: ReviewOutcome | null;
 }
-
-const BLOCKING_CLAIMS = new Set<UnverifiedClaimKind>(["contradicted", "unsupported", "citation_error", "unassessed"]);
-const MAX_LISTED = 10;
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -199,6 +191,8 @@ function cause(reason: unknown): ValidationCause {
   return reason ? "failure" : null;
 }
 
+const BLOCKING_CLAIMS = new Set(["contradicted", "unsupported", "citation_error", "unassessed"]);
+
 function errorFindings(result: Record<string, unknown>): Record<string, unknown>[] {
   return records(result.findings).filter((item) => item.severity === "error");
 }
@@ -209,7 +203,7 @@ function errorFindings(result: Record<string, unknown>): Record<string, unknown>
  */
 function blockingClaims(result: Record<string, unknown>): Record<string, unknown>[] {
   return records(result.claims).filter(
-    (claim) => BLOCKING_CLAIMS.has(claim.status as UnverifiedClaimKind) && !claim.non_claim,
+    (claim) => typeof claim.status === "string" && BLOCKING_CLAIMS.has(claim.status) && !claim.non_claim,
   );
 }
 
@@ -225,58 +219,20 @@ function publishedAsIs(result: Record<string, unknown>): boolean {
   return claims.some((claim) => claim.status === "supported" || Boolean(claim.non_claim));
 }
 
-/**
- * 回答の本文の「資料で確認できず除いた内容」の節に書いた項目の数（backend の `notice`。#2328）。外した内容は本文の節に
- * 1 回だけ出し、回答の確かめには節に書けなかった残り（上限を超えた項目）だけを出す。
- */
-interface NoticeListing {
-  claims: number;
-  findings: number;
-  evidence: boolean;
-}
-
-function noticeListing(content: Record<string, unknown>): NoticeListing {
-  const notice = record(content.notice);
-  return {
-    claims: count(notice?.claims),
-    findings: count(notice?.findings),
-    evidence: notice?.evidence === true,
-  };
-}
-
-function unverifiedPoints(result: Record<string, unknown>, listed: NoticeListing): UnverifiedPoint[] {
-  const points: UnverifiedPoint[] = [];
-  for (const claim of blockingClaims(result).slice(listed.claims)) {
-    const status = claim.status as UnverifiedClaimKind;
-    points.push({ kind: "claim", claim: status, quote: text(claim.answer_quote), reason: text(claim.reason) });
-  }
-  const findings = errorFindings(result)
-    .map((finding) => text(finding.message))
-    .filter(Boolean);
-  for (const message of findings.slice(listed.findings)) points.push({ kind: "finding", message });
-  if (!listed.evidence) {
-    const stale = records(result.stale_evidence).length;
-    if (stale) points.push({ kind: "stale", count: stale });
-    const missing = records(result.missing_evidence).length;
-    if (missing) points.push({ kind: "missing", count: missing });
-  }
-  return points.slice(0, MAX_LISTED);
-}
-
-/** 「回答の検証」の成果物を、資料で確かめた結果にする（backend の `publish_answer` と同じ判定）。 */
+/** 成果物「資料との照合」を、照合の結果にする（backend の `publish_answer` と同じ判定）。 */
 export function validationReview(content: Record<string, unknown>): ReviewValidation | null {
   const status = content.status;
   const reasonCause = cause(content.reason);
   if (status === "skipped") {
-    return { state: "skipped", cause: reasonCause, withheldClaims: 0, withheldAll: false, points: [] };
+    return { state: "skipped", cause: reasonCause, withheldClaims: 0, withheldAll: false, listedItems: 0 };
   }
   if (status === "unvalidated") {
-    return { state: "unvalidated", cause: reasonCause ?? "failure", withheldClaims: 0, withheldAll: false, points: [] };
+    return { state: "unvalidated", cause: reasonCause ?? "failure", withheldClaims: 0, withheldAll: false, listedItems: 0 };
   }
   if (status !== "completed") return null;
   const result = record(content.result) ?? {};
   if (publishedAsIs(result)) {
-    return { state: "verified", cause: null, withheldClaims: 0, withheldAll: false, points: [] };
+    return { state: "verified", cause: null, withheldClaims: 0, withheldAll: false, listedItems: 0 };
   }
   const withheld = record(content.withheld);
   return {
@@ -284,7 +240,7 @@ export function validationReview(content: Record<string, unknown>): ReviewValida
     cause: null,
     withheldClaims: count(withheld?.claims),
     withheldAll: withheld?.all === true,
-    points: unverifiedPoints(result, noticeListing(content)),
+    listedItems: count(record(content.notice)?.items),
   };
 }
 
@@ -318,7 +274,7 @@ export function cancelledClarificationKinds(run: Pick<RunState, "metadata">): Cl
   return CLARIFICATION_KINDS.filter((kind) => kinds.has(kind));
 }
 
-/** Run の成果物から、回答の確かめを作る。出すものが何も無ければ null。 */
+/** Run の成果物から、資料との照合の表示を作る。出すものが何も無ければ null。 */
 export function answerReview(artifacts: Artifact[]): AnswerReview | null {
   const state = latest(artifacts, SUPPORT_TASK_KIND);
   const validationContent = latest(artifacts, ANSWER_VALIDATION_KIND);

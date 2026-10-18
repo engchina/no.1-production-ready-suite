@@ -268,11 +268,14 @@ export {
   type SqlBlockLabels,
 } from "./components/chat/chat-sql-block";
 export {
+  ANSWER_SECTION_COLLAPSE_AFTER,
   AnswerCitationLinks,
   AnswerSections,
+  DEFAULT_ANSWER_SECTIONS_LABELS,
   type AnswerCitationRef,
   type AnswerSectionEntry,
   type AnswerSectionsBlock,
+  type AnswerSectionsLabels,
   type AnswerSectionsProps,
 } from "./components/chat/answer-sections";
 export {
@@ -536,6 +539,11 @@ export {
   type PageSizeSelectLabels,
 } from "./components/data/page-size-select";
 export { PagedDataTable, type PagedDataTableProps } from "./components/data/paged-data-table";
+export {
+  publishedVersionColumns,
+  type PublishedVersionColumnLabels,
+  type PublishedVersionColumnsOptions,
+} from "./components/data/published-version-columns";
 export {
   ResultTable,
   ResultCell,

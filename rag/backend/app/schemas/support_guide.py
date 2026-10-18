@@ -265,6 +265,8 @@ class SupportGuideDetail(SupportGuideSummary):
     draft: SupportGuideContent
     published: SupportGuideContent | None = None
     revisions: list[SupportGuideRevisionSummary] = Field(default_factory=list)
+    # 公開の履歴に残す版の数（画面の公開の履歴の案内に出す。#2356）。
+    max_published_revisions: int = 5
     issues: list[SupportGuideIssue] = Field(default_factory=list)
 
 

@@ -183,6 +183,7 @@ export function StructuredAnswer({
       key: block.key,
       title: block.title ?? undefined,
       ordered: block.ordered,
+      collapsible: block.collapsible,
       entries: block.entries.map((entry) => ({
         key: entry.key,
         content: <MarkdownInlineText text={entry.text} />,

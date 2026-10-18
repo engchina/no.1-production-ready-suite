@@ -364,7 +364,7 @@ function seedUngroundedRun(mockApi: MockApi, id: string, goal: string, steps: Re
     artifacts: [
       {
         id: `${id}-validation`,
-        name: "回答の検証",
+        name: "資料との照合",
         kind: "answer_validation",
         content: { status: "unvalidated", reason: "no_rag_evidence" },
         created_at: MOCK_NOW,

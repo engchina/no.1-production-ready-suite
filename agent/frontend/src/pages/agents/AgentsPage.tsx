@@ -16,6 +16,7 @@ import {
   type DataTableColumn,
   type EntityAction,
   PageBody,
+  publishedVersionColumns,
   RowTitleButton,
   ApiErrorBanner,
   apiErrorMessage,
@@ -26,6 +27,7 @@ import { listScrollLabel, PagedDataTable, QueryState } from "@/components/ListVi
 import {
   ListSearchField,
   listCount,
+  listTotal,
   matchesSearch,
   NoMatchState,
   useListSearch,
@@ -258,93 +260,86 @@ export function AgentVersionsSection({ agent, readOnly }: { agent: AgentProfile;
   }
 
   const rows = [...(agent.versions ?? [])].reverse();
-  const columns: DataTableColumn<AgentVersion>[] = [
-    {
-      key: "version",
-      header: t("agent.version.number"),
-      rowHeader: true,
-      render: (version) => (
-        <span className="inline-flex flex-wrap items-center gap-2">
-          <span className="font-medium text-fg">{`v${version.version}`}</span>
-          {version.version === agent.published_version ? (
-            <StatusBadge variant="success" label={t("agent.version.current")} />
-          ) : null}
-        </span>
-      ),
+  // 版の履歴は直近 N 版（AGENT_MAX_PUBLISHED_VERSIONS。公開中の版は常に残る。#2356）。N は API の値。
+  const maxVersions = agents.data?.max_published_versions;
+  // 列の並びとバッジは RAG の業務ガイドの公開の履歴と同じ共通の列（#2356）。
+  const columns = publishedVersionColumns<AgentVersion>({
+    getVersion: (version) => version.version,
+    currentVersion: agent.published_version,
+    formatVersion: (version) => `v${version}`,
+    labels: {
+      version: t("agent.version.number"),
+      current: t("agent.version.current"),
+      publishedAt: t("agent.version.publishedAt"),
+      publishedBy: t("agent.version.publishedBy"),
+      note: t("agent.version.note"),
+      actions: t("settings.mcpServers.actions"),
     },
-    {
-      key: "published_at",
-      header: t("agent.version.publishedAt"),
-      className: "text-fg-muted",
-      render: (version) => formatDate(version.published_at),
-    },
-    {
-      key: "published_by",
-      header: t("agent.version.publishedBy"),
-      className: "text-fg-muted",
-      // 公開者は表示名で出す（ログイン ID は出さない。#1696）。
-      render: (version) => actorDisplayName(version.published_by, agents.data?.user_display_names) ?? "-",
-    },
-    {
-      key: "skills",
-      header: t("agent.version.pinnedSkills"),
-      className: "max-w-xs break-words text-fg-muted",
-      // 公開のときに固定したスキル（#1855）。固定していない版は今のスキルで動く。
-      render: (version) =>
-        version.skills ? version.skills.map((skill) => skill.name).join("、") || "-" : t("agent.version.notPinned"),
-    },
-    {
-      key: "note",
-      header: t("agent.version.note"),
-      className: "max-w-sm break-words text-fg-muted",
-      render: (version) => version.note || "-",
-    },
-    {
-      key: "actions",
-      header: t("settings.mcpServers.actions"),
-      align: "right",
-      render: (version) => (
-        <RowActionMenu
-          actions={
-            readOnly
-              ? []
-              : [
-                  {
-                    id: "restore",
-                    label: t("agent.version.restore"),
-                    icon: RotateCcw,
-                    visible: version.version !== agent.published_version || agent.unpublished_changes,
-                    disabled: restore.isPending,
-                    onSelect: () => void confirmRestore(version),
-                  },
-                ]
-          }
-          ariaLabel={t("common.entityActions", { name: `v${version.version}` })}
-          testId={`agent-version-actions-${version.version}`}
-        />
-      ),
-    },
-  ];
+    renderPublishedAt: (version) => formatDate(version.published_at),
+    // 公開者は表示名で出す（ログイン ID は出さない。#1696）。
+    renderPublishedBy: (version) => actorDisplayName(version.published_by, agents.data?.user_display_names) ?? "-",
+    renderNote: (version) => version.note || "-",
+    extraColumns: [
+      {
+        key: "skills",
+        header: t("agent.version.pinnedSkills"),
+        className: "max-w-xs break-words text-fg-muted",
+        // 公開のときに固定したスキル（#1855）。固定していない版は今のスキルで動く。
+        render: (version) =>
+          version.skills ? version.skills.map((skill) => skill.name).join("、") || "-" : t("agent.version.notPinned"),
+      },
+    ],
+    renderActions: (version) => (
+      <RowActionMenu
+        actions={
+          readOnly
+            ? []
+            : [
+                {
+                  id: "restore",
+                  label: t("agent.version.restore"),
+                  icon: RotateCcw,
+                  visible: version.version !== agent.published_version || agent.unpublished_changes,
+                  disabled: restore.isPending,
+                  onSelect: () => void confirmRestore(version),
+                },
+              ]
+        }
+        ariaLabel={t("common.entityActions", { name: `v${version.version}` })}
+        testId={`agent-version-actions-${version.version}`}
+      />
+    ),
+  });
+  const description = [
+    t("agent.version.description"),
+    maxVersions ? t("agent.version.retention", { count: maxVersions }) : null,
+  ]
+    .filter(Boolean)
+    .join("");
 
   return (
-    <Section title={t("agent.version.title")} description={t("agent.version.description")}>
+    <Section title={t("agent.version.title")} description={description}>
       {rows.length === 0 ? (
         <EmptyState title={t("agent.version.empty")} />
       ) : (
-        // 版は公開のたびに増える。一覧の基準どおり表頭を固定して表の中を縦スクロールにし、直下にページ送りを置く（#2135）。
-        <PagedDataTable
-          rows={rows}
-          columns={columns}
-          getRowKey={(version) => String(version.version)}
-          resetKey={agent.id}
-          paginationTestId="agent-version-pagination"
-          rowProps={() => ({ className: "align-top" })}
-          tableClassName="w-full min-w-[40rem]"
-          ariaLabel={t("agent.version.title")}
-          // 375px では横にスクロールする（min-w-[40rem]）。キーボードでも届くよう、スクロール領域に名前と Tab を付ける
-          // （WCAG 2.1.1。axe の scrollable-region-focusable。#1671）。
-          scrollAriaLabel={listScrollLabel(t("agent.version.title"))}
-        />
+        <>
+          {/* 件数は一覧の上の右に 1 か所（ListCount。RAG の公開の履歴と同じ。#1891・#2356）。 */}
+          <ListToolbar count={listTotal(rows.length)} testId="agent-version-toolbar" />
+          {/* 表頭を固定して表の中を縦スクロールにし、直下にページ送りを置く（#2135）。 */}
+          <PagedDataTable
+            rows={rows}
+            columns={columns}
+            getRowKey={(version) => String(version.version)}
+            resetKey={agent.id}
+            paginationTestId="agent-version-pagination"
+            rowProps={() => ({ className: "align-top" })}
+            tableClassName="w-full min-w-[40rem]"
+            ariaLabel={t("agent.version.title")}
+            // 375px では横にスクロールする（min-w-[40rem]）。キーボードでも届くよう、スクロール領域に名前と Tab を付ける
+            // （WCAG 2.1.1。axe の scrollable-region-focusable。#1671）。
+            scrollAriaLabel={listScrollLabel(t("agent.version.title"))}
+          />
+        </>
       )}
     </Section>
   );

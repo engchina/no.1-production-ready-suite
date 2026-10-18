@@ -2,25 +2,19 @@ import { useId, type ReactNode } from "react";
 import { Info, ShieldCheck } from "lucide-react";
 import { Disclosure, StatusBadge, type StatusVariant } from "@production-ready/ui";
 
-import type {
-  AnswerReview,
-  ConditionSource,
-  ReviewOutcome,
-  ReviewValidation,
-  UnverifiedClaimKind,
-  UnverifiedPoint,
-} from "@/lib/answer-review";
+import type { AnswerReview, ConditionSource, ReviewOutcome, ReviewValidation } from "@/lib/answer-review";
 import { t, type I18nKey } from "@/lib/i18n";
 
 /**
- * 回答の確かめ（#1286）。回答の下に、確かめた条件・確認待ちの質問・使った業務ガイド・資料で確かめた結果を
- * 業務の言葉で畳んで出す（出典と同じ plain の Disclosure）。資料で確かめた結果は畳んでいても
- * 見出しの StatusBadge で分かるようにする。回答の対応（条件付きの回答・確認が必要など。#1314）も、検証のバッジと
- * 並べて見出しに出す。成果物の JSON・内部の語は出さない（handoff §13。元の JSON は実行の詳細の成果物で管理者だけが見る）。
+ * 資料との照合（#1286・#2361）。回答の下に、照合の結果（回答の対応と照合のバッジ）を 1 行で出す。確かめた条件・
+ * 確認待ちの質問・使った業務ガイド・足りない情報、照合できなかった・対象外の理由があるときだけ、同じ行を開いて
+ * 見られるようにする（出典と同じ plain の Disclosure）。除いた内容の一覧は回答の本文の節
+ * 「資料から確認できなかった事項」の 1 か所だけに出し、ここには出さない（件数はバッジで節と一致させる）。
+ * 成果物の JSON・内部の語は出さない（handoff §13。元の JSON は実行の詳細の成果物で管理者だけが見る）。
  */
 export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; testId: string }) {
   const hasDetails =
-    review.validation !== null ||
+    (review.validation !== null && validationMessage(review.validation) !== null) ||
     review.conditions.length > 0 ||
     review.clarifications.length > 0 ||
     review.guide !== null ||
@@ -47,8 +41,8 @@ export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; te
         >
           <AnswerReviewSections review={review} />
         </Disclosure>
-      ) : review.outcome ? (
-        // 対応だけがある回答（検証も支援タスクの状態も無い）は、開いても中身が無いので畳まずに見出しだけを出す。
+      ) : review.outcome || review.validation ? (
+        // 開いても中身が無い（対応と照合のバッジだけ）ときは、畳まずに見出しだけを出す（⌄ を出さない）。
         <p className="flex items-center gap-1.5 text-xs font-medium text-fg" data-testid={testId}>
           <ShieldCheck size={14} className="shrink-0 text-fg-muted" aria-hidden="true" />
           <span className="min-w-0 break-words">{heading}</span>
@@ -58,7 +52,7 @@ export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; te
   );
 }
 
-/** 回答の確かめの中身（チャットの回答の下と、実行の詳細の成果物で使う）。 */
+/** 資料との照合の中身（チャットの回答の下と、実行の詳細の成果物で使う）。 */
 export function AnswerReviewSections({ review }: { review: AnswerReview }) {
   return (
     <div className="space-y-3 text-xs [overflow-wrap:anywhere]">
@@ -141,47 +135,18 @@ function ReviewGroup({ title, testId, children }: { title: string; testId: strin
   );
 }
 
+/**
+ * 照合の結果の説明（照合できなかった・対象外の理由だけ。#2361）。見出しのバッジと同じ内容（小見出し・バッジ）と、
+ * 回答の本文の節にある除いた内容・その説明は出し直さない。
+ */
 function ValidationGroup({ validation }: { validation: ReviewValidation }) {
+  const message = validationMessage(validation);
+  if (message === null) return null;
   return (
-    <ReviewGroup title={t("chat.review.validation")} testId="answer-review-validation">
-      <div className="space-y-1.5">
-        <ValidationBadge validation={validation} />
-        <p className="break-words text-fg">{validationMessage(validation)}</p>
-        {validation.points.length > 0 ? (
-          <div className="space-y-1">
-            <p className="font-medium text-fg">{t("chat.review.unverifiedPoints")}</p>
-            <ul className="list-disc space-y-1 pl-4" data-testid="answer-review-unverified">
-              {validation.points.map((point, index) => (
-                <li key={index} className="break-words text-fg">
-                  <PointText point={point} />
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-      </div>
-    </ReviewGroup>
+    <p className="break-words text-fg" data-testid="answer-review-validation">
+      {message}
+    </p>
   );
-}
-
-function PointText({ point }: { point: UnverifiedPoint }) {
-  switch (point.kind) {
-    case "claim":
-      return (
-        <>
-          <span className="font-medium">{t(CLAIM_LABEL[point.claim])}</span>
-          {t("chat.review.separator")}
-          {point.quote ? t("chat.review.quote", { quote: point.quote }) : null}
-          {point.reason ? <span className="text-fg-muted">{t("chat.review.reasonWrap", { reason: point.reason })}</span> : null}
-        </>
-      );
-    case "finding":
-      return <>{point.message}</>;
-    case "stale":
-      return <>{t("chat.review.staleEvidence", { count: point.count })}</>;
-    case "missing":
-      return <>{t("chat.review.missingEvidence", { count: point.count })}</>;
-  }
 }
 
 /** 予算の上限に達したときの控えめな案内（内部の語は出さない）。 */
@@ -193,13 +158,6 @@ export function LimitNote({ testId }: { testId: string }) {
     </p>
   );
 }
-
-const CLAIM_LABEL: Record<UnverifiedClaimKind, I18nKey> = {
-  contradicted: "chat.review.claim.contradicted",
-  unsupported: "chat.review.claim.unsupported",
-  citation_error: "chat.review.claim.citationError",
-  unassessed: "chat.review.claim.unassessed",
-};
 
 function sourceLabel(source: Exclude<ConditionSource, null>): string {
   return source === "user" ? t("chat.review.source.user") : t("chat.review.source.question");
@@ -217,7 +175,7 @@ const OUTCOME_BADGE: Record<ReviewOutcome, { variant: StatusVariant; label: I18n
   insufficient_evidence: { variant: "danger", label: "chat.review.outcome.insufficientEvidence" },
 };
 
-/** 回答の対応のバッジ（チャットの回答の確かめの見出しと、実行の詳細の回答で使う。アイコン付き）。 */
+/** 回答の対応のバッジ（チャットの資料との照合の見出しと、実行の詳細の回答で使う。アイコン付き）。 */
 export function OutcomeBadge({ outcome, testId }: { outcome: ReviewOutcome; testId: string }) {
   const { variant, label } = OUTCOME_BADGE[outcome];
   return (
@@ -227,7 +185,7 @@ export function OutcomeBadge({ outcome, testId }: { outcome: ReviewOutcome; test
   );
 }
 
-/** 資料で確かめた結果のバッジ（状態の対応表。色だけに頼らず StatusBadge のアイコンを付ける）。 */
+/** 照合の結果のバッジ（状態の対応表。色だけに頼らず StatusBadge のアイコンを付ける）。 */
 export function ValidationBadge({ validation }: { validation: ReviewValidation }) {
   const { variant, label } = validationBadge(validation);
   return <StatusBadge variant={variant} label={label} />;
@@ -237,12 +195,17 @@ function validationBadge(validation: ReviewValidation): { variant: StatusVariant
   switch (validation.state) {
     case "verified":
       return { variant: "success", label: t("chat.review.state.verified") };
-    case "withheld":
+    case "withheld": {
       if (validation.withheldAll) return { variant: "warning", label: t("chat.review.state.withheldAll") };
+      // 件数は本文の節の項目の数（節と一致させる。#2361）。節の記録が無い古い Run は外した段落の数。
+      const count = validation.listedItems || validation.withheldClaims;
       if (validation.withheldClaims > 0) {
-        return { variant: "warning", label: t("chat.review.state.withheld", { count: validation.withheldClaims }) };
+        return { variant: "warning", label: t("chat.review.state.withheld", { count }) };
       }
-      return { variant: "warning", label: t("chat.review.state.unverifiedPoints") };
+      return count > 0
+        ? { variant: "warning", label: t("chat.review.state.unverifiedPoints", { count }) }
+        : { variant: "warning", label: t("chat.review.state.unverifiedPointsNoCount") };
+    }
     case "unvalidated":
       return { variant: "warning", label: t("chat.review.state.unvalidated") };
     case "skipped":
@@ -250,16 +213,15 @@ function validationBadge(validation: ReviewValidation): { variant: StatusVariant
   }
 }
 
-function validationMessage(validation: ReviewValidation): string {
+/**
+ * 開いた中に出す説明。照合できなかった・対象外の理由だけで、照合済み・除いた内容があるとき（バッジと本文の節で
+ * 分かる）は null。
+ */
+function validationMessage(validation: ReviewValidation): string | null {
   switch (validation.state) {
     case "verified":
-      return t("chat.review.message.verified");
     case "withheld":
-      if (validation.withheldAll) return t("chat.review.message.withheldAll");
-      if (validation.withheldClaims > 0) {
-        return t("chat.review.message.withheld", { count: validation.withheldClaims });
-      }
-      return t("chat.review.message.unverifiedPoints");
+      return null;
     case "unvalidated":
       return validation.cause === "noEvidence"
         ? t("chat.review.message.noEvidence")

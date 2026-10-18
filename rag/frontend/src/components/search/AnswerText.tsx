@@ -24,6 +24,9 @@ import { CitationSourceSheet } from "./CitationSourceSheet";
 
 // rag_engine の grounded.py の UNVERIFIED_SECTION_TITLE（#1436・#2040）。
 const UNREAD_SECTION_TITLE = "回答に未反映の関連章節";
+// rag_engine の grounded.py の GAPS_SECTION_TITLE。項目が多ければ共通の「すべて表示」で畳む（Agent の同じ節と
+// 同じ規則。#2361）。
+const GAPS_SECTION_TITLE = "資料から確認できなかった事項";
 
 /**
  * 回答本文（#651）。回答エンジンの書式（節の見出し・説明・「根拠：」の行）に合う本文は、節・説明・根拠に分けて出す。
@@ -75,6 +78,7 @@ export function AnswerText({
               key: String(index),
               title: block.title,
               ordered: block.ordered,
+              collapsible: block.title === GAPS_SECTION_TITLE,
               entries: block.entries.map((entry, entryIndex) => toEntry(entry, entryIndex, block.title)),
             }
       )}

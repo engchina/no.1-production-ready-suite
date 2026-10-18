@@ -2405,7 +2405,7 @@ async def _finish(
             validation = validation_content(
                 STATUS_UNVALIDATED,
                 reason=REASON_VALIDATION_ERROR,
-                message="回答の検証の途中で予期しない失敗が起きました。",
+                message="資料との照合の途中で予期しない失敗が起きました。",
             )
             runtime_repository.save_builtin_artifact(
                 run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=validation
@@ -2780,7 +2780,7 @@ async def _validate_with_connection(
     if tool is None:
         return unvalidated(
             REASON_VALIDATOR_UNAVAILABLE,
-            f"MCP 接続「{config.label or config.server_id}」は回答の検証を提供していません。",
+            f"MCP 接続「{config.label or config.server_id}」は資料との照合を提供していません。",
             **connection,
         )
     definition = mcp_tool_definition(config, tool)
