@@ -238,7 +238,8 @@ describe("段階の名前", () => {
       terminal(3, "failed"),
     ];
     expect(chatProgressStepsFromEvents(events, definitions)).toEqual([
-      { id: "tool:rag_search", label: "rag_search をdone", status: "done", detail: "2 件" },
+      // 状態で変わらない名詞の名前（未実行の名前）も付ける（失敗のカードの止まった段。#2342）。
+      { id: "tool:rag_search", label: "rag_search をdone", name: "rag_search をidle", status: "done", detail: "2 件" },
       { id: "unknown", label: "unknown", status: "running", detail: "補足" },
     ]);
     expect(chatProgressTerminalOf(events)).toBe("failed");

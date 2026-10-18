@@ -169,13 +169,6 @@ export function runDurationMs(run: RunState): number | null {
   return Number.isFinite(ms) ? Math.max(0, ms) : null;
 }
 
-/** 失敗・取消の理由（最後の失敗の Event の文）。 */
-export function runFailureMessage(run: RunState): string | null {
-  if (run.status !== "failed") return null;
-  const failed = [...run.events].reverse().find((event) => event.type.endsWith("failed"));
-  return failed?.message || null;
-}
-
 function stepTimelineStatus(step: RunStep): RunTimelineStepStatus {
   switch (step.status) {
     case "completed":

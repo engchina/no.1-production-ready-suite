@@ -9,6 +9,7 @@ import {
   FormStatus,
   ListSkeleton,
   ObjectActionBar,
+  ProcessFailureNotice,
   ProcessingIndicator,
   RunDetailLayout,
   RunDetailSection,
@@ -46,6 +47,7 @@ import {
 import { dataScopeNotes } from "@/lib/data-scope";
 import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
+import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { type AgentCapabilities } from "@/lib/permissions";
 import { ragEvidenceItems } from "@/lib/rag-evidence";
 import { RagFigureButton } from "@/components/evidence/RagFigure";
@@ -53,7 +55,6 @@ import {
   agentRunDetailLabels,
   commonRunStatus,
   runDurationMs,
-  runFailureMessage,
   runFinishedAt,
   runStatusLabel,
   runTimelineSteps,
@@ -132,13 +133,13 @@ export function RunDetail({
   // 自分では操作できない待ち（system_admin が自分の会話で実行した Run の承認・確認。#1928・#1954）。
   const waitingForExecutor =
     run.can_decide === false && (run.status === "waiting_approval" || run.status === "waiting_confirmation");
-  const failure = runFailureMessage(run);
   // 最終の回答は「回答」の節、それ以外の成果物（根拠・確かめ・構造化データ・ツールの結果）は「成果物」の節。
   const answers = run.artifacts.filter(isAnswerArtifact);
   const others = run.artifacts.filter((artifact) => !isAnswerArtifact(artifact));
   const latestAnswer = answers.at(-1);
   const outcome = latestAnswer ? answerOutcome(latestAnswer.content) : null;
   const timelineSteps = runTimelineSteps(run, (step) => stepDetails(step));
+  const failure = runFailure(run, timelineSteps, "detail");
   const usage = run.usage;
 
   return (
@@ -205,9 +206,8 @@ export function RunDetail({
                   </Banner>
                 ) : null}
                 {failure ? (
-                  <Banner severity="danger" title={t("run.failedTitle")}>
-                    <span className="break-words [overflow-wrap:anywhere]">{failure}</span>
-                  </Banner>
+                  // 失敗は 3 製品共通の失敗のカード（チャットと同じ 1 文目・「詳細」。#2342）。
+                  <ProcessFailureNotice failure={failure} labels={processFailureLabels()} testId="run-failure" />
                 ) : null}
               </>
             }

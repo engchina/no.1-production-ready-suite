@@ -40,7 +40,7 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
-from app.schemas.search import RetrievedChunk, SearchResponse
+from app.schemas.search import RetrievedChunk, SearchResponse, StorageFailure
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -1297,3 +1297,116 @@ def test_stream_message_resolves_the_clarification_answer_into_scope_and_page_ra
     )
     assert bad.status_code == 422
     assert len(fake.messages["conv-x"]) == saved
+
+
+class _DatabaseError(Exception):
+    """python-oracledb の例外の形（args[0] が `full_code` を持つ object）。"""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(type("DriverError", (), {"full_code": code})())
+
+
+class _RecordSaveFailedPipeline(_FakePipeline):
+    """回答の記録の保存が失敗した回答（工程の失敗と保存の失敗の記録を持つ。#2342）。"""
+
+    async def run(  # type: ignore[no-untyped-def]
+        self,
+        request,
+        trace_id=None,
+        progress_callback=None,
+        token_callback=None,
+        *,
+        history=None,
+        query_guardrail_result=None,
+    ):
+        assert progress_callback is not None
+        for outcome, attributes in (
+            ("started", {}),
+            ("error", {"error_type": "DatabaseError", "error_code": "ORA-03146"}),
+        ):
+            await progress_callback(
+                SearchStageProgress(
+                    trace_id=trace_id or "trace",
+                    stage="answer_record_save",
+                    outcome=outcome,
+                    elapsed_ms=0.0,
+                    attributes=attributes,
+                )
+            )
+        result = await super().run(  # type: ignore[no-untyped-call]
+            request, trace_id, progress_callback, token_callback, history=history
+        )
+        failure = StorageFailure(
+            step="answer_record_save", error_type="DatabaseError", error_code="ORA-03146"
+        )
+        return result.model_copy(update={"storage_failures": [failure]})
+
+
+def test_stream_message_marks_failed_record_save_step_and_still_answers(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """回答の記録を保存できなくても回答を返し、工程「回答の記録の保存」を失敗にする（#2342）。"""
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-record")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(chat_route, "RagPipeline", _RecordSaveFailedPipeline)
+
+    resp = client.post(
+        "/api/chat/conversations/conv-record/messages/stream", json={"content": "経費の上限は?"}
+    )
+
+    assert resp.status_code == 200
+    assert "event: error" not in resp.text
+    assert "event: done" in resp.text
+    (metadata,) = _sse_events(resp.text, "metadata")
+    assert metadata["storage_failures"] == [
+        {"step": "answer_record_save", "error_type": "DatabaseError", "error_code": "ORA-03146"}
+    ]
+    events = _progress_events(resp.text)
+    failed = [event for event in events if event.get("status") == "failed"]
+    assert {event.get("kind") for event in failed} == {"answer_record_save"}
+    assert failed[-1]["details"]["lines"] == [
+        "回答の記録をデータベースに保存できませんでした。回答は表示しています。",
+        "エラーの種類: DatabaseError",
+        "エラーコード: ORA-03146",
+    ]
+    assistant = fake.messages["conv-record"][1]
+    assert (assistant.status, assistant.content) == ("COMPLETE", "回答")
+
+
+def test_stream_message_delivers_answer_when_chat_message_save_fails(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """会話の回答を保存できなくても、作った回答は配信で届け、保存できなかったことを示す（#2342）。
+
+    以前は回答の生成の失敗として扱い、作った回答を捨てて定型の失敗の文を返していた。
+    読み込み直したときは、保存できなかった理由の文（定型の失敗の文ではない）を出す。
+    """
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-unsaved")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    original = fake.finish_chat_message
+
+    async def failing_finish(message: StoredMessage, *, lease_owner: str) -> bool:
+        if message.status == "COMPLETE":
+            raise _DatabaseError("ORA-40441")
+        return await original(message, lease_owner=lease_owner)
+
+    monkeypatch.setattr(fake, "finish_chat_message", failing_finish)
+
+    resp = client.post(
+        "/api/chat/conversations/conv-unsaved/messages/stream", json={"content": "経費の上限は?"}
+    )
+
+    assert resp.status_code == 200
+    assert "event: error" not in resp.text
+    assert "event: done" in resp.text
+    assert "".join(str(event["text"]) for event in _sse_events(resp.text, "delta")) == "回答"
+    (metadata,) = _sse_events(resp.text, "metadata")
+    assert metadata["storage_failures"] == [
+        {"step": "chat_message_save", "error_type": "_DatabaseError", "error_code": "ORA-40441"}
+    ]
+    assistant = fake.messages["conv-unsaved"][1]
+    assert assistant.status == "ERROR"
+    assert assistant.content == chat_route.CHAT_ANSWER_NOT_SAVED_MESSAGE
+    assert assistant.trace_id == metadata["trace_id"]

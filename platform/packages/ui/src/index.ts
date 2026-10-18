@@ -160,6 +160,16 @@ export {
   type ApiErrorStateProps,
 } from "./components/feedback/api-error-banner";
 export {
+  DEFAULT_PROCESS_FAILURE_LABELS,
+  ProcessFailureNotice,
+  failedStepName,
+  processFailureDetails,
+  processFailureFacts,
+  type ProcessFailure,
+  type ProcessFailureLabels,
+  type ProcessFailureNoticeProps,
+} from "./components/feedback/process-failure";
+export {
   ApiTransportError,
   DEFAULT_API_ERROR_DETAIL_LABELS,
   DEFAULT_API_TRANSPORT_MESSAGES,

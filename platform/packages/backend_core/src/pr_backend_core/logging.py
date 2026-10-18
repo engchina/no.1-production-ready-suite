@@ -86,17 +86,37 @@ def _safe_text(value: str) -> str:
     ]
 
 
+_ORACLE_CODE_RE = re.compile(r"\b(?:ORA|DPY|DPI)-[0-9]{4,5}\b")
+
+
+def safe_error_code(error: BaseException) -> str | int | None:
+    """例外のコード（``ORA-03146`` / ``DPY-4011`` / 製品の code）だけを返す。本文は返さない。
+
+    python-oracledb の例外は ``args[0]`` が ``_Error``（``full_code`` に ``ORA-03146`` などを
+    持つ）なので、文字列の本文ではなく ``full_code`` から取る（#2342。以前はコードが出なかった）。
+    画面の「詳細」とログに出してよい値だけにする（業務データを含む本文は出さない）。
+    """
+    code = error.__dict__.get("code")
+    if isinstance(code, int) or isinstance(code, str) and re.fullmatch(r"[A-Z0-9_:-]{1,64}", code):
+        return code
+    first = error.args[0] if error.args else None
+    driver_code = getattr(first, "full_code", None)
+    if isinstance(driver_code, str) and _ORACLE_CODE_RE.fullmatch(driver_code):
+        return driver_code
+    if isinstance(first, str):
+        # Oracle の既知コードだけを抽出し、例外本文は出力しない。
+        match = _ORACLE_CODE_RE.search(first[:_MAX_STRING])
+        if match:
+            return match[0]
+    return None
+
+
 def safe_exception_fields(error: BaseException) -> dict[str, object]:
     """型・コード・stack の位置だけを残す。例外本文・locals・ソース行は残さない。"""
     fields: dict[str, object] = {"exception_type": type(error).__name__[:128]}
-    code = error.__dict__.get("code")
-    if isinstance(code, int) or isinstance(code, str) and re.fullmatch(r"[A-Z0-9_:-]{1,64}", code):
+    code = safe_error_code(error)
+    if code is not None:
         fields["error_code"] = code
-    elif error.args and isinstance(error.args[0], str):
-        # Oracle の既知コードだけを抽出し、例外本文は出力しない。
-        match = re.search(r"\b(?:ORA|DPY|DPI)-[0-9]{4,5}\b", error.args[0][:_MAX_STRING])
-        if match:
-            fields["error_code"] = match[0]
     frames = deque(traceback.walk_tb(error.__traceback__), maxlen=16)
     if frames:
         fields["exception_frames"] = [

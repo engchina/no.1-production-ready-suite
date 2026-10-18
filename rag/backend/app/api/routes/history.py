@@ -107,6 +107,10 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
         **{key: value for key, value in fields.items() if not key.endswith("_json")},
         "stages": stages.get("stages") or [],
         "steps": stages.get("steps") or [],
+        "error_code": _text_or_none(stages.get("error_code")),
+        "storage_failures": [
+            item for item in stages.get("storage_failures") or [] if isinstance(item, dict)
+        ],
         "citations": _citations(row.get("citations_json")),
     }
     if detail["answer_generated"]:
@@ -136,6 +140,10 @@ async def _conversation_owner_fields(row: dict[str, Any]) -> dict[str, Any]:
         "conversation_owner_display_name": names.get(str(owner_hash), ""),
         "owned_by_me": caller is not None and caller == owner_hash,
     }
+
+
+def _text_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _citations(value: object) -> list[RetrievedChunk]:

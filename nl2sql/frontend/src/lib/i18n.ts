@@ -126,6 +126,17 @@ const nl2sqlJa = {
   "chat.safe": "安全検査済み・未実行",
   "chat.blocked": "安全検査でブロック",
   "chat.cancelled": "SQL の生成を停止しました。もう一度送ると、新しく SQL を生成します。",
+  // 処理の失敗のカード（3 製品共通の ProcessFailureNotice。#2342）。
+  "failure.details": "詳細",
+  "failure.failedStep": "止まった段",
+  "failure.errorType": "エラーの種類",
+  "failure.errorCode": "エラーコード",
+  "failure.jobId": "ジョブ ID",
+  "failure.occurredAt": "時刻",
+  "failure.summary": "SQL の生成と実行ができませんでした。",
+  "failure.summaryAt": "「{step}」で処理が止まりました。",
+  "failure.next": "もう一度送信してください。続くときは、詳細のジョブ ID を添えて管理者に連絡してください。",
+  "failure.execute.next": "生成した SQL と「詳細」のエラーを確かめ、質問を言い換えて送り直してください。",
   "chat.limit": "会話が長くなりました。新しい会話を始めてください。",
   // チャットのターンの SQL の実行（#1154）。結果の表の文言は共通の ChatResultTable の既定。
   "chat.safeExecuted": "安全検査済み・実行済み",

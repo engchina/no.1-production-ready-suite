@@ -10,9 +10,9 @@ import {
   PageBody,
   PageHeader,
   Button,
-  ApiErrorDetailList,
   Banner,
   Card,
+  ProcessFailureNotice,
   CardContent,
   ToggleChip,
   TimedLoadingState,
@@ -65,8 +65,15 @@ import type {
   CompareModel,
   ConversationDetail,
   RetrievedChunk,
+  StorageFailure,
 } from "@/lib/api";
 import { api, ApiError } from "@/lib/api";
+import {
+  chatAnswerFailure,
+  processFailureLabels,
+  storageFailureNotice,
+  type ChatAnswerFailureInfo,
+} from "@/lib/process-failure";
 import { ApprovedFaqSuggestions } from "@/components/search/ApprovedFaqSuggestions";
 import { ClarificationChoice } from "./ClarificationChoice";
 import { CHAT_PROGRESS_DEFINITIONS, chatSubmitProgressSteps } from "@/lib/chat-progress";
@@ -167,6 +174,10 @@ interface LiveColumn {
   status: "streaming" | "done" | "error" | "stopped";
   traceId: string | null;
   errorMessage: string | null;
+  /** 失敗の「詳細」（エラーの種類・コード・止まった工程・時刻。#2342）。 */
+  failure?: ColumnFailureDetail | null;
+  /** 作ったが保存できなかった記録（#2342）。 */
+  storageFailures?: StorageFailure[];
   guardrailWarnings: string[];
   /** 回答の根拠・実行記録(無い回答では null)。 */
   answerDiagnostics: unknown;
@@ -176,6 +187,9 @@ interface LiveColumn {
   progressEvents: ChatProgressEvent[];
   startedAtMs: number;
 }
+
+/** 回答の失敗の「詳細」（SSE の `error` の項目。#2342）。 */
+type ColumnFailureDetail = Pick<ChatAnswerFailureInfo, "errorType" | "errorCode" | "stage" | "occurredAt">;
 
 /** 送信の条件（再送信で同じ条件のまま送り直す）。 */
 interface DeliverRequest {
@@ -238,6 +252,8 @@ function AssistantColumn({
   messageId,
   streaming,
   errorMessage,
+  failure = null,
+  storageFailures,
   guardrailWarnings,
   answerDiagnostics = null,
   savedAnswer = false,
@@ -254,6 +270,10 @@ function AssistantColumn({
   messageId: string | null;
   streaming: boolean;
   errorMessage: string | null;
+  /** 失敗の「詳細」（#2342）。保存済みの ERROR の回答は持たない（本文と trace_id だけ）。 */
+  failure?: ColumnFailureDetail | null;
+  /** 作ったが保存できなかった記録（回答は出したまま warning を出す。#2342）。 */
+  storageFailures?: StorageFailure[];
   guardrailWarnings: string[];
   answerDiagnostics?: unknown;
   /** 保存された回答がある(trace_id から回答の実行記録を開ける)。 */
@@ -273,6 +293,7 @@ function AssistantColumn({
   const canOpenSections = canOpenDocumentDetail(useAuth().hasPermission);
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
   const finished = !streaming && !errorMessage && !stoppedMessage;
+  const storageNotice = storageFailureNotice(storageFailures, traceId);
   const listId = useId();
   return (
     // 回答の枠は 3 製品共通の ChatAnswer（#1161）。比較（複数モデル）では列ごとに 1 つの枠にし、列の高さをそろえる。
@@ -318,8 +339,11 @@ function AssistantColumn({
           {stoppedMessage}
         </p>
       ) : errorMessage ? (
-        <Banner
-          severity="danger"
+        // 失敗は 3 製品共通の失敗のカード（何が起きたか → 原因 → 次の操作 →「詳細」。#2342）。
+        <ProcessFailureNotice
+          failure={chatAnswerFailure({ message: errorMessage, traceId, ...failure })}
+          labels={processFailureLabels()}
+          testId="chat-answer-failure"
           action={
             onRetry ? (
               <Button
@@ -333,18 +357,21 @@ function AssistantColumn({
               </Button>
             ) : undefined
           }
-        >
-          <div className="min-w-0 space-y-2">
-            <p>{errorMessage}</p>
-            {/* 技術的な詳細は「詳細」に畳む（messaging.md §10.3。#2023）。trace_id で実行履歴・ログを引ける。 */}
-            <ApiErrorDetailList
-              details={traceId ? [{ label: t("chat.error.traceId"), value: traceId }] : []}
-              label={t("chat.error.details")}
-            />
-          </div>
-        </Banner>
+        />
       ) : waitingForAnswer ? null : (
         <>
+          {/*
+            作った回答を保存できなかった（#2342）。回答は出したまま、読む前に欠けたもの（読み込み直すと消える等）と
+            理由が分かるよう、処理の経過の直下・回答の本文の上に 1 つだけ出す。
+          */}
+          {finished && storageNotice ? (
+            <ProcessFailureNotice
+              failure={storageNotice}
+              severity="warning"
+              labels={processFailureLabels()}
+              testId="chat-answer-storage-failure"
+            />
+          ) : null}
           <AnswerText
             text={answer}
             streaming={streaming}
@@ -426,6 +453,8 @@ function MessageTurn({
     messageId: string | null;
     streaming: boolean;
     errorMessage: string | null;
+    failure?: ColumnFailureDetail | null;
+    storageFailures?: StorageFailure[];
     guardrailWarnings: string[];
     answerDiagnostics?: unknown;
     savedAnswer?: boolean;
@@ -497,6 +526,8 @@ function MessageTurn({
               messageId={column.messageId}
               streaming={column.streaming}
               errorMessage={column.errorMessage}
+              failure={column.failure}
+              storageFailures={column.storageFailures}
               guardrailWarnings={column.guardrailWarnings}
               answerDiagnostics={column.answerDiagnostics}
               savedAnswer={column.savedAnswer}
@@ -671,6 +702,11 @@ export function ChatClient() {
   // この画面で送って保存された回答の処理の段階のイベント（message_id → イベント。#1146 / #1359）。保存済みの
   // 回答の段階（`progress`）が無いとき（保存に失敗した・取り直しが間に合わない）も、この画面の間は「処理の経過」を残す。
   const [finishedProgress, setFinishedProgress] = useState<Record<string, ChatProgressEvent[]>>({});
+  // 配信で受け取った失敗の「詳細」と保存できなかった記録（回答のメッセージごと）。取り直した会話（保存済みの回答）
+  // には無いので、この画面の間は同じ回答に引き継ぐ（#2342。処理の経過の finishedProgress と同じ考え方）。
+  const [answerOutcomes, setAnswerOutcomes] = useState<
+    Record<string, { failure?: ColumnFailureDetail; storageFailures?: StorageFailure[] }>
+  >({});
   const [errorText, setErrorText] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const previousSearchAnswerProfileIdRef = useRef(searchAnswerProfileId);
@@ -1202,12 +1238,17 @@ export function ChatClient() {
           };
         });
       },
-      onMetadata: ({ model_id, trace_id, guardrail_warnings, answer_diagnostics }) =>
+      onMetadata: ({ model_id, message_id, trace_id, guardrail_warnings, answer_diagnostics, storage_failures }) => {
         updateColumn(model_id, {
           traceId: trace_id,
           guardrailWarnings: guardrail_warnings,
           answerDiagnostics: answer_diagnostics ?? null,
-        }),
+          storageFailures: storage_failures ?? [],
+        });
+        if (message_id && storage_failures?.length) {
+          setAnswerOutcomes((current) => ({ ...current, [message_id]: { storageFailures: storage_failures } }));
+        }
+      },
       onCitations: (modelId, citations) => updateColumn(modelId, { citations }),
       onModelDone: ({ model_id, message_id }) => {
         updateColumn(model_id, { status: "done" });
@@ -1217,17 +1258,34 @@ export function ChatClient() {
           setFinishedProgress((current) => ({ ...current, [message_id]: events }));
         }
       },
-      onModelError: ({ model_id, message, cancelled, trace_id }) =>
+      onModelError: ({ model_id, message_id, message, cancelled, trace_id, error_type, error_code, stage, occurred_at }) => {
+        const failure = { errorType: error_type, errorCode: error_code, stage, occurredAt: occurred_at };
         updateColumn(model_id, {
           ...(cancelled ? { status: "stopped" as const } : { status: "error" as const }),
           errorMessage: message,
+          failure,
           ...(trace_id ? { traceId: trace_id } : {}),
-        }),
+        });
+        if (message_id && !cancelled) {
+          setAnswerOutcomes((current) => ({ ...current, [message_id]: { failure } }));
+          // 失敗した段（✗）の処理の経過も、取り直した会話の同じ回答に残す（完了の onModelDone と同じ）。
+          const events = latestProgress.get(model_id);
+          if (events?.length) setFinishedProgress((current) => ({ ...current, [message_id]: events }));
+        }
+      },
       onAllDone: async () => {
         void queryClient.invalidateQueries({ queryKey: ["answer-records"] });
         // 取り直した会話に引き継いでから外す（質問と回答を一瞬消したり、二重に出したりしない）。
         await queryClient.invalidateQueries({ queryKey: ["conversations"] });
-        setLiveTurn(null);
+        // 会話に保存できなかった回答は、取り直した会話に無い（保存できなかった理由の文になる）ので、この画面の
+        // 間は作った回答を出したままにする（#2342）。次の送信で新しい往復に置き換わる。
+        setLiveTurn((current) =>
+          current?.columns.some((column) =>
+            column.storageFailures?.some((failure) => failure.step === "chat_message_save")
+          )
+            ? current
+            : null
+        );
       },
       onActivity: () => {
         stampNow(streamActivityAtRef);
@@ -1371,6 +1429,8 @@ export function ChatClient() {
         messageId: null,
         streaming: column.status === "streaming",
         errorMessage: column.status === "error" ? column.errorMessage : null,
+        failure: column.status === "error" ? (column.failure ?? null) : null,
+        storageFailures: column.storageFailures,
         stoppedMessage: column.status === "stopped" ? column.errorMessage : null,
         guardrailWarnings: column.guardrailWarnings,
         answerDiagnostics: column.answerDiagnostics,
@@ -1692,6 +1752,8 @@ export function ChatClient() {
                         // 作成中の回答（再読込の後など）は「作成中」で出し、会話の取り直しで完了に変わる（#1175）。
                         streaming,
                         errorMessage: reply.status === "ERROR" ? reply.content : null,
+                        failure: reply.status === "ERROR" ? (answerOutcomes[reply.message_id]?.failure ?? null) : null,
+                        storageFailures: answerOutcomes[reply.message_id]?.storageFailures,
                         stoppedMessage: reply.status === "CANCELLED" ? reply.content : null,
                         guardrailWarnings: reply.guardrail_warnings,
                         savedAnswer: Boolean(

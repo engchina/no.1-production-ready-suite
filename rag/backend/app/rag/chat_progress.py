@@ -49,8 +49,14 @@ ANSWER_STEP_KIND = "answer_step"
 
 # 回答フローの外の工程のうち、段階にするもの（工程の名前を種類にする）。
 PIPELINE_STEP_KINDS: frozenset[str] = frozenset(
-    {"history_rewrite", "field_filter", "answer_guardrail"}
+    {"history_rewrite", "field_filter", "answer_guardrail", "answer_record_save"}
 )
+
+# 工程の失敗の詳細の行（段を開いて見る。利用者向けの短い要約とコード。#2342）。
+_STEP_FAILURE_SUMMARY: Mapping[str, str] = {
+    "answer_record_save": "回答の記録をデータベースに保存できませんでした。回答は表示しています。",
+}
+_STEP_FAILURE_DEFAULT = "この工程でエラーが発生しました。"
 
 # 全体を包む工程（中の工程を段階にするので、包む工程は段階にしない）。
 _WRAPPER_STAGES: frozenset[str] = frozenset({"answer", "retrieval"})
@@ -172,8 +178,23 @@ class ChatProgressTracker:
             self._recorder.finish(step_id, "done")
         elif progress.outcome == "error":
             self._recorder.finish(step_id, "failed")
+            self._describe_failure(step_id, kind, progress.attributes)
         # cancelled（時間切れなどの中断）は終端（fail / close）で失敗・停止にする。
         return self._recorder.last_seq != before
+
+    def _describe_failure(self, step_id: str, kind: str, attributes: Mapping[str, object]) -> None:
+        """失敗した段に、短い要約とエラーの種類・コードの行を足す（段を開いて見る。#2342）。
+
+        例外の本文は入れない（ORA のメッセージ・業務データを出さない）。
+        """
+        lines = [_STEP_FAILURE_SUMMARY.get(kind, _STEP_FAILURE_DEFAULT)]
+        error_type = attributes.get("error_type")
+        error_code = attributes.get("error_code")
+        if isinstance(error_type, str) and error_type:
+            lines.append(f"エラーの種類: {error_type}")
+        if isinstance(error_code, str | int) and str(error_code):
+            lines.append(f"エラーコード: {error_code}")
+        self._recorder.update(step_id, details=chat_progress_details(lines=lines))
 
     def finish(self, *, execution_steps: object = None) -> None:
         """回答ができた。回答の記録の工程の値を段階に足してから、終端（完了）にする。

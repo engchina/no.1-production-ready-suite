@@ -15,13 +15,13 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
-from pr_backend_core.logging import safe_exception_fields
+from pr_backend_core.logging import safe_error_code, safe_exception_fields
 
 from app.config import Settings
 from app.rag.stored_answer import stored_citations
-from app.schemas.search import RetrievedChunk
+from app.schemas.search import RetrievedChunk, StorageFailure
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +119,8 @@ class RunRecorder:
     stages: list[dict[str, object]] = field(default_factory=list)
     # 安全チェックの後の質問（pipeline が受け取った時点で入れる。失敗の記録に使う）。
     question: str | None = None
+    # 最後に保存した記録（後から保存の失敗を足して保存し直す。#2342）。
+    _last_record: dict[str, object] | None = field(default=None, repr=False)
 
     def observe(self, callback: _ProgressCallback | None) -> _ProgressCallback:
         """段の進捗の callback を包み、終わった段（成功・失敗・停止）と時間を集める。"""
@@ -150,10 +152,19 @@ class RunRecorder:
         answer_diagnostics: Mapping[str, Any] | None = None,
         error: BaseException | None = None,
         error_stage: str | None = None,
+        storage_failures: Iterable[StorageFailure] = (),
     ) -> None:
-        """実行を保存する。失敗してもログだけにする（検索・回答の返却を止めない）。"""
+        """実行を保存する。失敗してもログだけにする（検索・回答の返却を止めない）。
+
+        失敗した実行は、止まった段（渡されなければ集めた段の最後の失敗）とエラーコード（``ORA-03146``
+        など）を残す。``storage_failures`` は回答を作ったが保存できなかった記録（#2342）。
+        """
         cited = list(citations)
         diagnostics = answer_diagnostics if answer_generated else None
+        if error is not None and error_stage is None:
+            error_stage = _failed_stage(self.stages)
+        error_code = safe_error_code(error) if error is not None else None
+        failures = list(storage_failures)
         record: dict[str, object] = {
             "run_id": run_id,
             "surface": self.surface,
@@ -179,11 +190,37 @@ class RunRecorder:
             "stages": {
                 "stages": list(self.stages),
                 "steps": _answer_steps(answer_diagnostics),
+                # 失敗のエラーコードと保存できなかった記録（処理の段と一緒に持つ。#2342）。
+                **({"error_code": str(error_code)} if error_code is not None else {}),
+                **(
+                    {"storage_failures": [item.model_dump() for item in failures]}
+                    if failures
+                    else {}
+                ),
             },
             # 回答を作った実行の根拠は回答の記録にある。回答を作らない RAG 検索の結果だけを持つ。
             "citations": None if answer_generated else stored_citations(cited),
         }
+        self._last_record = record
+        await self._save(record)
+
+    async def add_storage_failure(self, failure: StorageFailure) -> None:
+        """保存した実行に、後から分かった保存の失敗（会話の回答の保存など）を足して保存し直す（#2342）。"""
+        record = self._last_record
+        if record is None:
+            return
+        stages = dict(cast(Mapping[str, object], record.get("stages") or {}))
+        existing = stages.get("storage_failures")
+        stages["storage_failures"] = [
+            *(existing if isinstance(existing, list) else []),
+            failure.model_dump(),
+        ]
+        self._last_record = {**record, "stages": stages}
+        await self._save(self._last_record)
+
+    async def _save(self, record: Mapping[str, object]) -> None:
         store = self.store
+        run_id = record.get("run_id")
         try:
             if store is None:
                 from app.clients.oracle_run_history import RunHistoryStore
@@ -196,6 +233,16 @@ class RunRecorder:
                 "run history record failed",
                 extra={"trace_id": run_id, **safe_exception_fields(exc)},
             )
+
+
+def _failed_stage(stages: Iterable[Mapping[str, object]]) -> str | None:
+    """集めた段の最後の失敗・中断（止まった段。時間切れ以外の失敗でも空にしない。#2342）。"""
+    failed = [
+        str(stage.get("stage") or "")
+        for stage in stages
+        if stage.get("outcome") in {"error", "cancelled"} and stage.get("stage")
+    ]
+    return failed[-1] if failed else None
 
 
 async def _purge_if_due(store: _RunStore, settings: Settings) -> None:

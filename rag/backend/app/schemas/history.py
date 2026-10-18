@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.schemas.common import JsonValue
-from app.schemas.search import RetrievedChunk
+from app.schemas.search import RetrievedChunk, StorageFailure
 
 RunSurface = Literal["search", "chat"]
 RunStatus = Literal["success", "blocked", "error"]
@@ -83,6 +83,10 @@ class RunDetail(RunSummary):
     """実行の詳細（質問の全文・回答・根拠・回答の診断・処理の段・フィードバック）。"""
 
     error_type: str | None = None
+    # 失敗のエラーコード（ORA-03146 など。例外の本文は持たない。#2342）。
+    error_code: str | None = None
+    # 回答を作ったが保存できなかった記録（回答の記録・会話の回答。#2342）。
+    storage_failures: list[StorageFailure] = Field(default_factory=list)
     # 会話の持ち主の表示名（#1954）。会話の無い実行（RAG 検索）・会話が削除された実行は None、
     # 引けない利用者は空文字。
     conversation_owner_display_name: str | None = None
