@@ -2421,11 +2421,16 @@ def render_with_citations(
     unverified: Sequence[str] = (),
     deadline: Sequence[str] = (),
     applications: Sequence[CheckedApplication] = (),
+    subquestions: Sequence[dict] = (),
 ) -> tuple[str, list[dict[str, Any]]]:
     """``render`` の本文と、本文に出した出典行（「根拠：」）ごとの根拠を出した順に返す（#1330）。
 
     unverified は章節の拡張が上限で読めなかった章節（#1436）。不足の節の後に「回答に未反映の関連章節」として出す。
     deadline は回答時間の上限で省いた処理（#1516）。その後に「回答時間の上限により省略した処理」として出す（#2040）。
+
+    subquestions は丸数字・(1) などで並べた小問の要求単位（#2399）。2 つ以上あり、説明がどれかの小問に付いていれば、
+    小問ごとの見出しの下に、その小問の説明と不足を出す。説明の無い小問と監査が missing とした小問には
+    「確認できませんでした」の行を出す。小問に付かない説明は小問の後に、従来の節で出す。
 
     出典行の n 番目（1 始まり）が、返す list の n 番目の根拠を指す。画面はこの順で出典行を根拠の chunk に
     結び、ファイル名と頁で推測しない。
@@ -2449,6 +2454,52 @@ def render_with_citations(
                 citation_spans.append(entry.span)
         return out
 
+    def body_sections(
+        checked: Sequence[CheckedItem], unanswered: Sequence[str], applications: Sequence[CheckedApplication]
+    ) -> list[tuple[str, list[str]]]:
+        """説明・当てはめ・手順・参考情報・不足の節（小問ごとと、小問に付かない分で同じ組み立て）。"""
+        return _body_sections(checked, unanswered, applications, lines, citation_spans.append)
+
+    blocks: list[str] = []
+    if groups := _subquestion_groups(subquestions, checked, applications):
+        rest_unanswered = list(unanswered)
+        grouped = {id(entry) for _, entries, _ in groups for entry in entries}
+        grouped_apps = {id(app) for _, _, apps in groups for app in apps}
+        for unit, entries, apps in groups:
+            missing = missing_request_line({"request_id": unit["id"]}, subquestions)
+            answered = any(entry.span or entry.item.kind == "gap" for entry in entries) or any(app.published for app in apps)
+            own_gaps = [missing] if missing in unanswered or not answered else []
+            rest_unanswered = [line for line in rest_unanswered if line != missing]
+            heading = answer_labels().subquestion_heading(str(unit.get("subquestion") or ""), _subquestion_text(unit))
+            content = body_sections(entries, own_gaps, apps)
+            blocks.append("\n\n".join([heading, *(title + "\n\n" + "\n".join(lines_) for title, lines_ in content)]))
+        sections = body_sections(
+            [entry for entry in checked if id(entry) not in grouped],
+            rest_unanswered,
+            [app for app in applications if id(app) not in grouped_apps],
+        )
+    else:
+        sections = body_sections(checked, unanswered, applications)
+    bullet = answer_labels().item_bullet
+    if unverified:
+        sections.append((answer_labels().unverified_section, [f"{bullet}{line}" for line in dict.fromkeys(unverified)]))
+    if deadline:
+        sections.append((answer_labels().deadline_section, [f"{bullet}{line}" for line in dict.fromkeys(deadline)]))
+    if confirmations:
+        sections.append((answer_labels().confirmations_section, [f"{bullet}{line}" for line in confirmations]))
+    body = "\n\n".join([*blocks, *(title + "\n\n" + "\n".join(content) for title, content in sections)])
+    text = "\n\n".join(part for part in (summary.strip(), body) if part)
+    return text, [citation_line_ref(span) for span in citation_spans]
+
+
+def _body_sections(
+    checked: Sequence[CheckedItem],
+    unanswered: Sequence[str],
+    applications: Sequence[CheckedApplication],
+    lines: Callable[[Sequence[CheckedItem], bool], list[str]],
+    add_citation: Callable[[dict], None],
+) -> list[tuple[str, list[str]]]:
+    """``render_with_citations`` の説明・当てはめ・手順・参考情報・不足の節。lines は出典行を数えながら行を作る。"""
     # 適用が未確認（unverified）の説明は、結論の節ではなく「参考情報」の節に置く。行末の注記は
     # 付けず、節の直下の説明で該当が未確認であることを伝える (#2040)。
     verified = [entry for entry in checked if entry.span and not entry.quote_only and entry.item.applies != "unverified"]
@@ -2457,7 +2508,7 @@ def render_with_citations(
     if rules:
         sections.append((answer_labels().rules_section, lines(rules, False)))
     # 規則を質問の事実に当てはめた結果（#2155）。検査と監査を通ったものだけ。出典は当てはめた規則の根拠。
-    if applied := application_lines(applications, _citation, citation_spans.append):
+    if applied := application_lines(applications, _citation, add_citation):
         sections.append((APPLICATIONS_SECTION_TITLE, applied))
     # 別機能の操作を一つの番号列に並べない。機能ごとに手順を分けて見出しに機能名を出す。
     # 機能が 1 つでも機能名を出す。「どの画面・機能の手順か」が問い合わせ回答の中心情報で、item 本文が
@@ -2498,15 +2549,45 @@ def render_with_citations(
     ]
     if gap_lines:
         sections.append((answer_labels().gaps_section, gap_lines))
-    if unverified:
-        sections.append((answer_labels().unverified_section, [f"{bullet}{line}" for line in dict.fromkeys(unverified)]))
-    if deadline:
-        sections.append((answer_labels().deadline_section, [f"{bullet}{line}" for line in dict.fromkeys(deadline)]))
-    if confirmations:
-        sections.append((answer_labels().confirmations_section, [f"{bullet}{line}" for line in confirmations]))
-    body = "\n\n".join(title + "\n\n" + "\n".join(content) for title, content in sections)
-    text = "\n\n".join(part for part in (summary.strip(), body) if part)
-    return text, [citation_line_ref(span) for span in citation_spans]
+    return sections
+
+
+def _subquestion_text(unit: dict) -> str:
+    """小問の見出しの文（印を除き、1 行に収める）。"""
+    text = " ".join(str(unit.get("text") or "").split())
+    text = text.removeprefix(str(unit.get("subquestion") or "")).strip()
+    return text[:MISSING_REQUEST_MAX_CHARS] + "…" if len(text) > MISSING_REQUEST_MAX_CHARS else text
+
+
+def _subquestion_groups(
+    subquestions: Sequence[dict], checked: Sequence[CheckedItem], applications: Sequence[CheckedApplication]
+) -> list[tuple[dict, list[CheckedItem], list[CheckedApplication]]]:
+    """小問ごとの (要求単位, 説明, 当てはめ)。小問が 2 つ未満か、どの小問にも説明が付かなければ空 (#2399)。
+
+    説明・当てはめは request_id が小問の id か、その子要求（「Q2.R1」）なら、その小問に付ける。
+    """
+    if len(subquestions) < 2:
+        return []
+
+    def owner(request_id: str) -> str:
+        return next(
+            (str(unit["id"]) for unit in subquestions if request_id == unit["id"] or request_id.startswith(f"{unit['id']}.")),
+            "",
+        )
+
+    groups = [
+        (
+            unit,
+            [entry for entry in checked if owner(entry.item.request_id) == unit["id"]],
+            [app for app in applications if owner(app.application.request_id) == unit["id"]],
+        )
+        for unit in subquestions
+    ]
+    if not any(entry.span or entry.item.kind == "gap" for _, entries, _ in groups for entry in entries) and not any(
+        app.published for _, _, apps in groups for app in apps
+    ):
+        return []
+    return groups
 
 
 # ---- 生成・監査・是正 ---------------------------------------------------------
