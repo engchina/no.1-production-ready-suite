@@ -352,7 +352,9 @@ export function ListDetailLayout({
         onKeyDown={onListKeyDown}
       >
         {listHeader ? <div className="shrink-0 border-b border-border p-3">{listHeader}</div> : null}
-        <div className="flex min-h-0 shrink flex-col overflow-y-auto [scrollbar-gutter:stable]" data-list-detail-body="">{list}</div>
+        {/* 溝（scrollbar-gutter）は取らない: 行の表（DataTable）は自分のスクロール領域に溝を持つので、ここでも取ると
+            表の右に 2 本分の空白が残る（#2282）。 */}
+        <div className="flex min-h-0 shrink flex-col overflow-y-auto" data-list-detail-body="">{list}</div>
         {/* 中身が何も描かない（1 ページの Pagination など）ときは、列の下の帯を出さない（empty:hidden。#2283）。 */}
         {listFooter ? <div className="shrink-0 border-t border-border px-3 py-2 empty:hidden">{listFooter}</div> : null}
       </section>

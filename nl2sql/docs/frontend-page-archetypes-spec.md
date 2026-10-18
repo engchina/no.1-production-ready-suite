@@ -31,6 +31,7 @@
 
 - `FixedSplitPane`（C 型の入力 | 結果と比較）は共有の `@production-ready/ui` の部品で、`DbObjectManagementPanelShell` の `splitId` に渡すと左右に並べる。保存 key の前置きは `FIXED_SPLIT_STORAGE_PREFIX`（`src/lib/ui-store.ts`）。
 - `ListDetailLayout`（B 型の一覧 + 詳細）は `DbObjectListDetail` が包む。一覧の幅と開閉の保存 key の前置きは `LIST_DETAIL_STORAGE_PREFIX`（`production-ready-nl2sql.listDetail`）。一覧 + 詳細の画面は `DbObjectManagementPanelShell` に `framed={false}` を渡し、外側の枠を付けない（一覧と詳細の列がそれぞれ枠を持つ）。
+- 共通のユーザー管理・ロール管理・権限管理（`@production-ready/system-settings` の `UserManagementPage` / `RoleManagementPage` / `RolePermissionsPage`）は共有の `ListDetailLayout` の一覧 + 詳細（#2282）。選択は URL の `?user=` / `?role=`（ロール管理の詳細の「権限管理で設定」は `?role=` を付けて権限管理を開く）、先頭の行を自動で選ばない。作成・編集は今までどおり一覧に代わる 1 枚のフォーム。製品のラッパー（`features/security/Security*Page.tsx`）は `listDetailStoragePrefix={LIST_DETAIL_STORAGE_PREFIX}` を渡す。
 
 ## 4. 色の移行
 

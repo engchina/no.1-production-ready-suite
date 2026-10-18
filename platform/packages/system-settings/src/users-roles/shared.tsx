@@ -1,17 +1,25 @@
 // ユーザー管理・ロール管理（と製品の権限管理など）で使う一覧＋詳細レイアウトの部品と補助関数。
 // NL2SQL の features/security/SecurityManagementShared.tsx などを移設した（#206）。
-import { Children, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { type LucideIcon } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ClearActionButton,
-  FixedSplitPane,
+  EmptyState,
+  ListDetailLayout,
+  ListDetailPager,
   PAGE_SIZE_OPTIONS,
   Pagination,
   RowTitleButton,
   SearchField,
+  ListSkeleton,
+  adjacentListItems,
   cn,
+  useListDetailSplit,
   usePagination,
+  useUrlSelection,
   type RowTitleButtonProps,
+  type UrlSelection,
 } from "@production-ready/ui";
 
 import { usePersistedListPaging, type ListPagingKey } from "../lists/listPaging";
@@ -52,30 +60,33 @@ export function useValuesChanged(values: readonly unknown[]): boolean {
 }
 
 /**
- * 一覧＋詳細の画面の選択。`manual` は利用者（か操作の結果）が選んだもの、`reveal` はその行のあるページへ
- * 移して見せる（作成・保存・削除の後や `?role=` で選んだ行が、今のページの外にあることがあるため。#1891）。
+ * 一覧 + 詳細（`ListDetailLayout`）の選択を URL の検索パラメータに持つ（共有の `useUrlSelection`。#2282）。
+ * 再読込・戻る / 進む・リンクの共有で同じ対象が開き、先頭の行を自動で選ばない。`split` は 2 ペイン（xl 以上）か。
  */
-export interface ListSelection {
-  id: string | null;
-  manual: boolean;
-  reveal?: boolean;
+export function useSecurityUrlSelection(param: string): UrlSelection & { split: boolean } {
+  const split = useListDetailSplit();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // 「一覧へ戻る」の履歴の戻りは router を通す（ブラウザの戻ると同じ。MemoryRouter の画面でも動く）。
+  const goBack = useCallback(() => navigate(-1), [navigate]);
+  const selection = useUrlSelection({ param, searchParams, setSearchParams, singlePane: !split, goBack });
+  return { ...selection, split };
 }
 
 /**
  * 一覧＋詳細の画面のページング（#1891）。クライアント側で全件を持つ一覧を 25 件ずつ（表示件数は 10 / 25 / 50 / 100）
- * に分け、選択（詳細に出す行）を今のページの行から決める。
+ * に分ける。選択は URL（`useSecurityUrlSelection`）が持ち、ここでは選ばない（先頭の行を自動で選ばない。#2282）。
  *
  * - ページと表示件数は作業状態（`pagingKey`。このタブの sessionStorage）に残す。別の画面へ移って戻っても、
  *   再読込しても同じページ・件数に戻る（`lists/listPaging.ts`）。
  * - 検索語・並べ替え（`resetKey`）か表示件数が変わったら 1 ページ目へ戻す。
- * - 選択が今のページに無ければ、そのページの先頭の行を選ぶ（詳細に見えない行を出さない）。`reveal` の選択は、
- *   その行のあるページへ移してから選ぶ。
+ * - 選択が変わったとき（URL から開いた・作成 / 保存の後）・一覧へ戻ったとき・読み込みが終わったときに、選んだ行が
+ *   今のページの外なら、その行のあるページへ移して見せる。利用者がページを移ったときは選択の行へ引き戻さない。
  */
 export function usePagedSelectionList<T>({
   items,
   getKey,
-  selection,
-  onSelectionChange,
+  selectedId,
   active,
   ready,
   resetKey,
@@ -84,11 +95,11 @@ export function usePagedSelectionList<T>({
   /** 絞り込み・並べ替えの後の全件。 */
   items: readonly T[];
   getKey: (item: T) => string;
-  selection: ListSelection;
-  onSelectionChange: (next: ListSelection) => void;
-  /** 一覧を表示しているか（作成・編集の画面では選択を動かさない）。 */
+  /** 選んでいる行（URL の検索パラメータ）。 */
+  selectedId: string | null;
+  /** 一覧を表示しているか（作成・編集の画面ではページを動かさない）。 */
   active: boolean;
-  /** 読み込みが終わっているか（読み込み中は選択を動かさない）。 */
+  /** 読み込みが終わっているか（読み込み中はページを動かさない）。 */
   ready: boolean;
   /** 1 ページ目へ戻す契機（検索語・並べ替え）。 */
   resetKey: unknown;
@@ -97,39 +108,25 @@ export function usePagedSelectionList<T>({
 }) {
   const { page, setPage, pageSize, setPageSize } = usePersistedListPaging(pagingKey);
   const pagination = usePagination(items, pageSize, { page, onPageChange: setPage, resetKey });
-  const { pageItems } = pagination;
-  const pageChanged = useValuesChanged([active, pageItems, ready]);
+  const revealRequested = useValuesChanged([selectedId, active, ready]);
 
-  const settled = active && ready;
-  if (settled && selection.reveal) {
-    // 選んだ行のあるページへ移す（render 中に自分の state を直す。次の render で選択を合わせる）。
-    const index = selection.id ? items.findIndex((item) => getKey(item) === selection.id) : -1;
+  if (revealRequested && active && ready && selectedId) {
+    // 選んだ行のあるページへ移す（render 中に自分の state を直す。次の render でそのページを出す）。
+    const index = items.findIndex((item) => getKey(item) === selectedId);
     const targetPage = index >= 0 ? Math.floor(index / pageSize) + 1 : null;
     if (targetPage !== null && targetPage !== pagination.page) setPage(targetPage);
-    onSelectionChange({ id: selection.id, manual: selection.manual });
-  } else if (pageChanged && settled) {
-    // 一覧の表示内容（ページ）が変わったら、見えている行へ選択を合わせる。
-    const nextId = selectedVisibleKey(pageItems, selection.id, getKey, { preserveSelected: selection.manual });
-    if (nextId !== selection.id) onSelectionChange({ id: nextId, manual: false });
   }
-
-  const visibleSelectedId = active
-    ? selectedVisibleKey(pageItems, selection.id, getKey, {
-        preserveSelected: selection.manual || Boolean(selection.reveal),
-      })
-    : selection.id;
 
   return {
     ...pagination,
     pageSize,
-    visibleSelectedId,
     /** 表示件数を変える（1 ページ目へ戻す）。 */
     changePageSize: setPageSize,
   };
 }
 
 /**
- * 一覧＋詳細の画面のページ送り（表の直下。#1891）。`usePagedSelectionList` の戻り値を渡す。
+ * 一覧＋詳細の画面のページ送り（一覧の列の下端。#1891 / #2282）。`usePagedSelectionList` の戻り値を渡す。
  * 1 ページに収まるときは部品が範囲と表示件数の選択だけを出す（件数は `ListToolbar` の `ListCount`）。
  */
 export function SecurityListPagination({
@@ -165,19 +162,6 @@ export function SecurityListPagination({
 /** 一覧の件数（`ListToolbar` の `count`）。検索語があるときだけ一致した件数を添える（#1891）。 */
 export function securityListCount(total: number, matched: number, search: string) {
   return search.trim() ? { total, matched } : { total };
-}
-
-/** 表示中の行から選択を決める。選択行が見えていればそのまま、なければ先頭行。 */
-export function selectedVisibleKey<T, K extends string | number>(
-  items: readonly T[],
-  selectedKey: K | null | undefined,
-  getKey: (item: T) => K,
-  options: { preserveSelected?: boolean } = {},
-) {
-  const preserveSelected = options.preserveSelected ?? true;
-  const keys = items.map(getKey);
-  if (preserveSelected && selectedKey != null && keys.includes(selectedKey)) return selectedKey;
-  return keys[0] ?? null;
 }
 
 /**
@@ -281,14 +265,13 @@ export const describeErrorMessageOnly: DescribeApiError = (error) =>
 
 // ---- レイアウト部品 ----
 
+/** 作成・編集のフォームのパネル（カード 1 枚）。一覧 + 詳細は `SecurityListDetail`（#2282）。 */
 export function SecurityManagementPanelShell({
   id,
   labelledBy,
   ariaLabel,
   idPrefix,
   className = "",
-  splitId,
-  splitStoragePrefix,
   children,
 }: {
   id: string;
@@ -296,14 +279,8 @@ export function SecurityManagementPanelShell({
   ariaLabel?: string;
   idPrefix: string;
   className?: string;
-  splitId?: string;
-  /** 分割比率を保存する localStorage key の前置き（製品ごと）。 */
-  splitStoragePrefix?: string;
   children: ReactNode;
 }) {
-  const panelChildren = Children.toArray(children);
-  const splitPaneId = splitId && panelChildren.length === 2 ? splitId : null;
-
   return (
     <section
       id={id}
@@ -314,17 +291,121 @@ export function SecurityManagementPanelShell({
       data-testid="security-management-panel-shell"
       data-management-id={idPrefix}
     >
-      {splitPaneId ? (
-        <FixedSplitPane
-          storagePrefix={splitStoragePrefix}
-          splitId={splitPaneId}
-          left={panelChildren[0]}
-          right={panelChildren[1]}
-        />
-      ) : (
-        children
-      )}
+      {children}
     </section>
+  );
+}
+
+/**
+ * ユーザー・ロール・権限管理の一覧 + 詳細（B 型。#2282）。共有の `ListDetailLayout` に、一覧の列（見出し・
+ * `ListToolbar`・読み込み中 → 行の表 → ページ送り）と、選んだ対象の詳細（詳細の列。上端の行に一覧の開閉と前へ / 次へ）を渡す。
+ * 選択は URL（`useSecurityUrlSelection`）が持ち、未選択の 2 ペインは詳細に空の状態を出す。
+ */
+export function SecurityListDetail<T>({
+  id,
+  storagePrefix,
+  icon: Icon,
+  headingId,
+  listLabel,
+  detailLabel,
+  toolbar,
+  loadingIndicator,
+  list,
+  footer,
+  pageItems,
+  getKey,
+  selectedId,
+  onSelect,
+  disabled = false,
+  detail,
+  emptyTitle,
+  emptyHint,
+}: {
+  /** `<feature>-<view>`（例: `security-users`）。幅・開閉の保存 key と data-testid（`list-detail-<id>…`）。 */
+  id: string;
+  /** 幅と開閉を保存する localStorage key の前置き（製品ごと）。 */
+  storagePrefix?: string;
+  icon: LucideIcon;
+  headingId: string;
+  /** 一覧の列の名前（見出し・開閉ボタンの名前）。 */
+  listLabel: string;
+  /** 詳細の列の名前。 */
+  detailLabel: string;
+  /** 検索・件数（`ListToolbar`。狭い列なので縦に積む）。 */
+  toolbar: ReactNode;
+  /** 読み込み中の表示（一覧の列の先頭に 1 か所）。 */
+  loadingIndicator?: ReactNode;
+  /** 行の表（`DataTable`。列の高さの中でスクロールする）。 */
+  list: ReactNode;
+  /** ページ送り（列の下端に固定）。 */
+  footer?: ReactNode;
+  /** 今のページの行（前へ / 次へ の並び）。 */
+  pageItems: readonly T[];
+  getKey: (item: T) => string;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  /** 処理中は前へ / 次へを押せない。 */
+  disabled?: boolean;
+  /** 選んだ対象の詳細（見つからない・読み込み中の表示も中に置く）。 */
+  detail: ReactNode;
+  emptyTitle: string;
+  emptyHint: string;
+}) {
+  const { previous, next } = adjacentListItems(pageItems, selectedId, getKey);
+  return (
+    <ListDetailLayout
+      id={id}
+      storagePrefix={storagePrefix}
+      listLabel={listLabel}
+      detailLabel={detailLabel}
+      listHeader={
+        <div className="grid gap-3">
+          <h2 id={headingId} className="flex items-center gap-2 text-sm font-semibold text-fg">
+            <Icon size={16} aria-hidden="true" />
+            {listLabel}
+          </h2>
+          {toolbar}
+          {loadingIndicator}
+        </div>
+      }
+      list={list}
+      listFooter={footer}
+      hasSelection={selectedId !== null}
+      detail={detail}
+      emptyDetail={<EmptyState title={emptyTitle} hint={emptyHint} />}
+      detailToolbar={
+        selectedId !== null ? (
+          <ListDetailPager
+            onPrevious={previous ? () => onSelect(getKey(previous)) : null}
+            onNext={next ? () => onSelect(getKey(next)) : null}
+            labels={{ previous: t("security.common.previous"), next: t("security.common.next") }}
+            disabled={disabled}
+            testId={`${id}-detail-pager`}
+          />
+        ) : undefined
+      }
+      labels={{ resize: t("security.common.listWidth"), resizeHint: t("security.common.listWidthHint") }}
+    />
+  );
+}
+
+/** 選んだ対象が一覧に無いときの詳細（読み込み中はスケルトン、読み込んだ後は「見つかりません」）。 */
+export function SecurityDetailFallback({
+  loading,
+  title,
+  hint,
+  testId,
+}: {
+  loading: boolean;
+  title: string;
+  hint: string;
+  testId?: string;
+}) {
+  if (loading) return <ListSkeleton rows={4} rowClassName="h-12" testId={testId ? `${testId}-loading` : undefined} />;
+  return (
+    <div data-testid={testId}>
+      <EmptyState title={title} hint={hint} />
+    </div>
   );
 }
 
@@ -494,17 +575,6 @@ export function SecurityIdentityLines({
         <span className="block break-words text-xs text-fg-muted">{secondary}</span>
       ) : null}
     </>
-  );
-}
-
-export function SecurityEmptySelection({ title, hint }: { title: string; hint: string }) {
-  return (
-    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-4">
-      <div className="py-10 text-center">
-        <p className="text-sm font-semibold text-fg">{title}</p>
-        <p className="mt-1 text-sm leading-6 text-fg-muted">{hint}</p>
-      </div>
-    </section>
   );
 }
 

@@ -15,7 +15,7 @@ const securityRolesSource = readFileSync(
   new URL("../../../platform/packages/system-settings/src/users-roles/RoleManagementPage.tsx", import.meta.url),
   "utf8"
 );
-// 一覧の行の選択とページング（今のページの行から選ぶ）は 2 画面で共通の hook（#1891）。
+// 一覧の行の選択（URL）とページングは 2 画面で共通の hook（#1891 / #2282）。
 const securitySharedSource = readFileSync(
   new URL("../../../platform/packages/system-settings/src/users-roles/shared.tsx", import.meta.url),
   "utf8"
@@ -34,22 +34,25 @@ test("一覧/詳細ページは共有 DataTable の行選択（selectedRowKey / 
     assert.match(source, /onRowClick=/u);
   }
 
-  // 選択は今のページの行から決める共通の hook（usePagedSelectionList。#1891）。
-  assert.match(securitySharedSource, /selectedVisibleKey/u);
-  // 利用者が選んだ行は manual として保持し、絞り込み後も選択を残す（render で読むため state で持つ。#181）。
-  assert.match(securitySharedSource, /preserveSelected: selection\.manual/u);
+  // 選択は URL の検索パラメータ（共有の useUrlSelection）が持ち、先頭の行を自動で選ばない（#2282）。
+  // 一覧 + 詳細は共有の ListDetailLayout（一覧の列の中で縦にスクロールし、visibleRows の固定の高さにしない）。
+  assert.match(securitySharedSource, /useUrlSelection\(/u);
+  assert.match(securitySharedSource, /<ListDetailLayout/u);
+  assert.doesNotMatch(securitySharedSource, /selectedVisibleKey|FixedSplitPane/u);
   assert.match(securityUsersSource, /usePagedSelectionList/u);
-  assert.match(securityUsersSource, /selectedRowKey=\{visibleSelectedId\}/u);
-  assert.match(securityUsersSource, /selectUser\(user\.user_uuid\)/u);
-  assert.match(securityUsersSource, /visibleRows=\{INFORMATION_TABLE_VISIBLE_ROWS\}/u);
+  assert.match(securityUsersSource, /useSecurityUrlSelection\("user"\)/u);
+  assert.match(securityUsersSource, /selectedRowKey=\{selectedUserId\}/u);
+  assert.match(securityUsersSource, /selection\.select\(user\.user_uuid\)/u);
+  assert.doesNotMatch(securityUsersSource, /visibleRows=/u);
   assert.match(securityUsersSource, /className: INFORMATION_TABLE_ROW_CLASS/u);
   assert.match(securityUsersSource, /scrollTestId="security-users-scroll-region"/u);
   assert.match(securityUsersSource, /scrollAriaLabel/u);
 
   assert.match(securityRolesSource, /usePagedSelectionList/u);
-  assert.match(securityRolesSource, /selectedRowKey=\{visibleSelectedId\}/u);
-  assert.match(securityRolesSource, /selectRole\(role\.role_id\)/u);
-  assert.match(securityRolesSource, /visibleRows=\{INFORMATION_TABLE_VISIBLE_ROWS\}/u);
+  assert.match(securityRolesSource, /useSecurityUrlSelection\("role"\)/u);
+  assert.match(securityRolesSource, /selectedRowKey=\{selectedRoleId\}/u);
+  assert.match(securityRolesSource, /selection\.select\(role\.role_id\)/u);
+  assert.doesNotMatch(securityRolesSource, /visibleRows=/u);
   assert.match(securityRolesSource, /className: INFORMATION_TABLE_ROW_CLASS/u);
   assert.match(securityRolesSource, /scrollTestId="security-roles-scroll-region"/u);
   assert.match(securityRolesSource, /scrollAriaLabel/u);

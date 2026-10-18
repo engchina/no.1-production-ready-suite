@@ -39,10 +39,10 @@ afterEach(() => {
   host.remove();
 });
 
-async function render(node: ReactNode) {
+async function render(node: ReactNode, entry = "/") {
   await act(async () => {
     root.render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[entry]}>
         <ConfirmProvider>{node}</ConfirmProvider>
       </MemoryRouter>,
     );
@@ -173,7 +173,8 @@ describe("ロール管理の一覧と詳細（#1682）", () => {
       restoreRole: never,
       deleteRole: never,
     };
-    await render(<RoleManagementPage api={api} canManage />);
+    // 選択は URL の ?role= が持つ（先頭の行を自動で選ばない。#2282）。
+    await render(<RoleManagementPage api={api} canManage />, `/?role=${SYSTEM_ADMIN_ID}`);
 
     const grid = host.querySelector<HTMLElement>('[data-testid="security-roles-grid"]');
     expect(grid?.textContent).toContain("システム管理者");

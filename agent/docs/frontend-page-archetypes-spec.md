@@ -69,6 +69,8 @@
 
 ### 1.2 B 型（一覧 + 詳細）
 
+共通のユーザー管理・ロール管理・権限管理（`@production-ready/system-settings` の `UserManagementPage` / `RoleManagementPage` / `RolePermissionsPage`）は共有の `ListDetailLayout` の一覧 + 詳細（#2282）。選択は URL の `?user=` / `?role=`（ロール管理の詳細の「権限管理で設定」は `?role=` を付けて権限管理を開く）、先頭の行を自動で選ばない。作成・編集は今までどおり一覧に代わる 1 枚のフォーム。製品のラッパー（`frontend/src/components/security/Security*Page.tsx`）は `listDetailStoragePrefix={AGENT_LIST_DETAIL_STORAGE_PREFIX}`（`production-ready-agent.listDetail`。`EntityLayout.tsx`）を渡す。
+
 フィードバック（`/feedback`）は共有の `ListDetailLayout`（UX 契約 page-archetypes.md §1 B。#2283）で、保存 key の前置きは `AGENT_LIST_DETAIL_STORAGE_PREFIX`（`production-ready-agent.listDetail`。`frontend/src/components/EntityLayout.tsx`）、文言は `listDetail.*`。見方の `Tabs`〔確かめるべき実行（既定。#1822）/ 利用者の評価〕→ 絞り込み（`ListToolbar` の `FilterSelect`。3 つ以上なので狭い置き場所ではシートに畳む。#1933）→ 集計のカード → 一覧 + 詳細。
 
 | 見方 | `id` | 選択（URL） | 一覧の列（行） | 詳細の列 |

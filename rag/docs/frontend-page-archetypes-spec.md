@@ -90,6 +90,8 @@
 
 ## 4. 一覧 + 詳細と分割ペイン
 
+共通のユーザー管理・ロール管理・権限管理（`@production-ready/system-settings` の `UserManagementPage` / `RoleManagementPage` / `RolePermissionsPage`）は共有の `ListDetailLayout` の一覧 + 詳細（#2282）。選択は URL の `?user=` / `?role=`（ロール管理の詳細の「権限管理で設定」は `?role=` を付けて権限管理を開く）、先頭の行を自動で選ばない。作成・編集は今までどおり一覧に代わる 1 枚のフォーム。製品のラッパー（`src/components/security/Security*Page.tsx`）は `listDetailStoragePrefix={RAG_LIST_DETAIL_STORAGE_PREFIX}`（`production-ready-rag.listDetail`。`EntityLayout.tsx`）を渡す。
+
 一覧と詳細を常に並べる画面はフィードバックだけで、共有の `ListDetailLayout`（UX 契約 page-archetypes.md §1 B・§3。#2283）を使う。保存 key の前置きは `RAG_LIST_DETAIL_STORAGE_PREFIX`（`production-ready-rag.listDetail`）、文言は `listDetail.*`。RAG の画面で `FixedSplitPane` を使うものは今は無い（入力と結果・比較の画面を足すときに使う）。
 
 | 画面 | `id` | 補足 |

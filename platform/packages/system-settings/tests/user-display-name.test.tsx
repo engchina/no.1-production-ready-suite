@@ -37,10 +37,11 @@ afterEach(() => {
   host.remove();
 });
 
-async function render(node: ReactNode) {
+// 選択は URL の ?user= が持ち、先頭の行を自動で選ばない（#2282）。詳細を見るテストは URL で選んで開く。
+async function render(node: ReactNode, entry = `/?user=${USER_UUID}`) {
   await act(async () => {
     root.render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[entry]}>
         <ConfirmProvider>{node}</ConfirmProvider>
       </MemoryRouter>,
     );

@@ -12,11 +12,15 @@ export const ROLE_PERMISSIONS_MESSAGES = {
   taskPanelLabel: "権限管理タスク",
   listTitle: "ロール一覧",
   listHint: "ロールを選ぶと、付与している機能権限の件数と利用できる対象を確認できます。",
-  // placeholder は検索欄（lg 28rem）に収める（#1891）。
-  searchPlaceholder: "ロール・機能権限・対象で絞り込み",
+  // placeholder は一覧の列（既定 20rem）の検索欄に収める（#1891 / #2282）。
+  searchPlaceholder: "ロール・権限・対象で絞り込み",
   pagination: "ロール一覧のページ",
   noSelectionTitle: "ロールを選択してください",
   noSelectionHint: "一覧のロールを選ぶと、付与している権限を確認できます。",
+  // 一覧 + 詳細の詳細の列の名前と、URL のロールが見つからないとき（#2282）。
+  detailTitle: "ロールの権限",
+  notFoundTitle: "ロールが見つかりません",
+  notFoundHint: "削除されたか、URL が正しくありません。一覧から選び直してください。",
   noResultsTitle: "条件に一致するロールがありません",
   noResultsHint: "検索語を変更してください。",
   showRole: "{name} を表示",

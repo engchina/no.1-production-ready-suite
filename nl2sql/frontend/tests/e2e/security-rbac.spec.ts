@@ -5,11 +5,9 @@ import {
   type Locator,
   type Page,
   type Route,
-  type TestInfo,
 } from "./_helpers/test";
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, profileAccessPage, systemAdminMe } from "./_helpers/database-gate";
-import { expectSplitPaneReservedTrack } from "./_helpers/fixed-split-pane";
 import { expectSingleSpinner, visibleSpinners } from "./_helpers/single-spinner";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 import { remToPx, SUBPIXEL_TOLERANCE } from "./_helpers/spacing";
@@ -139,54 +137,27 @@ async function expectScopeFilterControlsInsideRow(locator: Locator) {
     .toBeTruthy();
 }
 
-function expectedInformationRows(testInfo: TestInfo) {
-  return testInfo.project.name === "mobile-375" ? 5 : 8;
-}
-
-async function expectBoundedSecurityTableScroll(
-  scrollRegion: Locator,
-  visibleRowLimit: number
-) {
-  const metrics = await scrollRegion.evaluate((node, expectedRows) => {
-    const regionRect = node.getBoundingClientRect();
+async function expectBoundedSecurityTableScroll(page: Page, scrollRegion: Locator) {
+  // 一覧 + 詳細（ListDetailLayout。#2282）の一覧の列は sticky で画面の高さの中に収まり、行は列の中の表で
+  // 縦にスクロールする（visibleRows の 8 行の固定の高さにしない。表頭は固定）。
+  const metrics = await scrollRegion.evaluate((node) => {
     const header = node.querySelector("thead");
-    const rows = Array.from(node.querySelectorAll("tbody tr"));
-    if (!header) throw new Error("security table header is missing");
-    const headerRect = header.getBoundingClientRect();
+    const column = node.closest('[data-testid^="list-detail-"][data-testid$="-list"]');
+    if (!header || !column) throw new Error("security table header or list column is missing");
     const computed = window.getComputedStyle(node);
-    const rootFontSize = Number.parseFloat(
-      window.getComputedStyle(document.documentElement).fontSize
-    );
-    const visibleRows = rows.filter((row) => {
-      const rect = row.getBoundingClientRect();
-      return rect.top >= headerRect.bottom - 1 && rect.bottom <= regionRect.bottom + 1;
-    });
-    const table = node.querySelector("table");
-    const limitRow = rows[expectedRows - 1];
-    if (!table || !limitRow) throw new Error("security table rows are missing");
     return {
       clientHeight: node.clientHeight,
       scrollHeight: node.scrollHeight,
-      maxHeight: Number.parseFloat(computed.maxHeight),
-      // 表頭 + 先頭 N 行の実測下端 + 枠（border・横スクロールバー）。行高が 3.5rem を超える 2 行セルでも N 行ちょうどになる。
-      measuredMaxHeight:
-        limitRow.getBoundingClientRect().bottom - table.getBoundingClientRect().top + (node as HTMLElement).offsetHeight - node.clientHeight,
-      overflowX: computed.overflowX,
+      columnHeight: column.getBoundingClientRect().height,
+      viewportHeight: window.innerHeight,
       overflowY: computed.overflowY,
       headerPosition: window.getComputedStyle(header).position,
-      visibleRowCount: visibleRows.length,
-      rootFontSize,
-      expectedRows,
     };
-  }, visibleRowLimit);
-
-  // 共有 DataTable の visibleRows は表頭と先頭 N 行の実測高さから枠を決める（#530）。
-  // 2 行セル（表示名 + ログイン ID）で行高が 3.5rem を超えても、デスクトップ 8 行・モバイル 5 行ちょうどが見える。
-  expect(Math.abs(metrics.maxHeight - metrics.measuredMaxHeight)).toBeLessThanOrEqual(1);
+  });
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
-  expect(metrics.visibleRowCount).toBe(visibleRowLimit);
+  // 列の高さは画面の高さまで（sticky で本文をスクロールしても一覧が見え続ける）。
+  expect(metrics.columnHeight).toBeLessThanOrEqual(metrics.viewportHeight);
   expect(metrics.headerPosition).toBe("sticky");
-  expect(metrics.overflowX).toBe("auto");
   expect(metrics.overflowY).toBe("auto");
 
   await scrollRegion.evaluate((node) => node.scrollTo({ top: 0, left: 0 }));
@@ -212,6 +183,7 @@ async function expectBoundedSecurityTableScroll(
   });
   expect(bottomState.headerOffset).toBeLessThanOrEqual(1);
   expect(bottomState.lastRowVisible).toBe(true);
+  await expectNoPageHorizontalScroll(page);
 }
 
 async function waitForAnimationFrames(page: Page) {
@@ -520,11 +492,13 @@ test("ユーザー管理の migration 未適用は初回 ErrorState、再取得�
   await expectNoPageHorizontalScroll(page);
 });
 
-test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行で固定表頭の内部スクロールになる", { tag: "@responsive" }, async ({
+test("ユーザー・ロール一覧は一覧の列（画面の高さまで）の中で固定表頭の内部スクロールになる", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   await mockDatabaseGateReady(page);
-  const visibleRowLimit = expectedInformationRows(testInfo);
+  // 1 ページ（25 件）が一覧の列の高さを超える件数。
+  const rowCount = 30;
+  const singlePane = testInfo.project.name === "mobile-375";
   const viewerRole = {
     ...systemRole,
     role_id: "role-viewer",
@@ -534,7 +508,7 @@ test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行
     is_built_in: false,
     permissions: ["menu.security_users", "menu.security_roles"],
   };
-  const users = Array.from({ length: visibleRowLimit + 1 }, (_, index) => {
+  const users = Array.from({ length: rowCount }, (_, index) => {
     const sequence = String(index + 1).padStart(2, "0");
     return {
       user_uuid: `scroll-user-${sequence}`,
@@ -548,7 +522,7 @@ test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行
       is_bootstrap_admin: false,
     };
   });
-  const roles = Array.from({ length: visibleRowLimit + 1 }, (_, index) => {
+  const roles = Array.from({ length: rowCount }, (_, index) => {
     const sequence = String(index + 1).padStart(2, "0");
     return {
       ...viewerRole,
@@ -571,7 +545,7 @@ test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行
     "aria-label",
     "ユーザー一覧。必要に応じて縦方向または横方向にスクロールできます。"
   );
-  await expect(userScrollRegion.locator("tbody tr")).toHaveCount(visibleRowLimit + 1);
+  await expect(userScrollRegion.locator("tbody tr")).toHaveCount(25);
 
   const lastUser = users.at(-1)!;
   await page.getByTestId("security-users-search").fill(lastUser.display_name);
@@ -582,15 +556,21 @@ test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行
     )
     .toBeTruthy();
   await page.getByTestId("security-users-search").fill("");
-  await expect(userScrollRegion.locator("tbody tr")).toHaveCount(visibleRowLimit + 1);
-  await expectBoundedSecurityTableScroll(userScrollRegion, visibleRowLimit);
+  await expect(userScrollRegion.locator("tbody tr")).toHaveCount(25);
+  await expectBoundedSecurityTableScroll(page, userScrollRegion);
 
   const lastUserRow = userScrollRegion.locator("tbody tr").last();
   await lastUserRow.locator("td").nth(1).click();
-  await expect(lastUserRow).toHaveAttribute("data-selected", "true");
+  await expect(page).toHaveURL(/[?&]user=scroll-user-25/u);
   await expect(
-    page.getByRole("heading", { name: lastUser.display_name, exact: true })
+    page.getByRole("heading", { name: users[24].display_name, exact: true })
   ).toBeVisible();
+  if (singlePane) {
+    // xl 未満は 1 ペイン: 選ぶと詳細だけになり、一覧は隠れる。
+    await expect(userScrollRegion).toBeHidden();
+  } else {
+    await expect(lastUserRow).toHaveAttribute("data-selected", "true");
+  }
   await expectNoPageHorizontalScroll(page);
 
   await page.route("**/api/security/roles?include_archived=true", (route) =>
@@ -605,7 +585,7 @@ test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行
     "aria-label",
     "ロール一覧。必要に応じて縦方向または横方向にスクロールできます。"
   );
-  await expect(roleScrollRegion.locator("tbody tr")).toHaveCount(visibleRowLimit + 1);
+  await expect(roleScrollRegion.locator("tbody tr")).toHaveCount(25);
 
   const lastRole = roles.at(-1)!;
   await page.getByTestId("security-roles-search").fill(lastRole.display_name);
@@ -616,16 +596,17 @@ test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行
     )
     .toBeTruthy();
   await page.getByTestId("security-roles-search").fill("");
-  await expect(roleScrollRegion.locator("tbody tr")).toHaveCount(visibleRowLimit + 1);
-  await expectBoundedSecurityTableScroll(roleScrollRegion, visibleRowLimit);
+  await expect(roleScrollRegion.locator("tbody tr")).toHaveCount(25);
+  await expectBoundedSecurityTableScroll(page, roleScrollRegion);
 
   const lastRoleRow = roleScrollRegion.locator("tbody tr").last();
   await lastRoleRow.locator("td").nth(1).click();
-  await expect(lastRoleRow).toHaveAttribute("data-selected", "true");
+  await expect(page).toHaveURL(/[?&]role=scroll-role-25/u);
   // 詳細の見出しはロール名（コード・ID は出さない。#1682）。
   await expect(
-    page.getByRole("heading", { name: lastRole.display_name, exact: true })
+    page.getByRole("heading", { name: roles[24].display_name, exact: true })
   ).toBeVisible();
+  if (!singlePane) await expect(lastRoleRow).toHaveAttribute("data-selected", "true");
   await expectNoPageHorizontalScroll(page);
 });
 
@@ -2141,6 +2122,8 @@ test("ユーザー一覧と詳細のパスワードリセット結果を編集�
     });
   });
 
+  // 一覧と詳細を並べて行を選び直す操作を確かめる（xl 未満の 1 ペインでは選ぶと一覧が隠れる。#2282）。
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/settings/security/users");
   const grid = page.getByTestId("security-users-grid");
   await expect(grid.getByRole("columnheader", { name: "操作" })).toHaveCount(0);
@@ -2468,7 +2451,7 @@ test("ユーザー編集はパスワードリセットと無効化・有効化�
   await expectNoPageHorizontalScroll(page);
 });
 
-test("無効ユーザーの削除は確認・フォーカス復帰・選択移動を保つ", async ({ page }) => {
+test("無効ユーザーの削除は確認・フォーカス復帰を保ち、削除後は選択を外す", async ({ page }) => {
   await mockDatabaseGateReady(page);
   const viewerRole = {
     ...systemRole,
@@ -2564,7 +2547,10 @@ test("無効ユーザーの削除は確認・フォーカス復帰・選択移�
   await deleteDialog.getByRole("button", { name: "削除", exact: true }).click();
 
   await expect(page.getByText("削除対象ユーザー", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "有効ユーザー" })).toBeVisible();
+  // 削除した対象の選択を外し、ほかの行へ置き換えない（page-archetypes.md §1 B。#2282）。
+  await expect(page).not.toHaveURL(/[?&]user=/u);
+  await expect(grid.locator('tbody tr[data-selected="true"]')).toHaveCount(0);
+  await expect(page.getByTestId("list-detail-security-users-detail")).toContainText("ユーザーを選択してください");
   await expect(page.getByText("削除対象ユーザー を完全に削除しました。", { exact: true }).last()).toBeVisible();
   expect(observedIfMatch).toBe('"7"');
   expect(deleteCount).toBe(1);
@@ -2637,7 +2623,7 @@ test("詳細アクションメニューを閉じた直後に別要素へフォ�
   await expect(trigger).not.toBeFocused();
 });
 
-test("ユーザー管理は一覧・作成・編集をテーブル管理型パネルで統一する", { tag: "@responsive" }, async ({ page }) => {
+test("ユーザー管理は一覧 + 詳細（狭い一覧・広い詳細）で、作成・編集は同じパネルにする", { tag: "@responsive" }, async ({ page }) => {
   await mockDatabaseGateReady(page);
   const users = [
     {
@@ -2682,10 +2668,13 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await page.setViewportSize({ width: 2048, height: 1000 });
   await page.goto("/settings/security/users");
 
-  const listStyle = await topLevelPanelStyle(page, "list", "security-users");
-  const usersSplitPane = page.getByTestId("fixed-split-pane-security-users-list");
-  await expect(usersSplitPane).toHaveAttribute("data-split-layout", "split");
-  await expectSplitPaneReservedTrack(usersSplitPane);
+  // 一覧 + 詳細（ListDetailLayout。#2282）: xl 以上は 2 ペイン、一覧の列は既定 20rem。
+  const usersLayout = page.getByTestId("list-detail-security-users");
+  await expect(usersLayout).toHaveAttribute("data-list-detail-layout", "split");
+  const usersListWidth = await page.getByTestId("list-detail-security-users-list").evaluate((node) =>
+    node.getBoundingClientRect().width / Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
+  );
+  expect(Math.abs(usersListWidth - 20)).toBeLessThanOrEqual(0.1);
   await expect(page.getByTestId("security-users-grid")).toBeVisible();
   const grid = page.getByTestId("security-users-grid");
   await expect(grid.locator("tbody tr")).toHaveCount(2);
@@ -2693,12 +2682,16 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
   const salesUserRow = grid.locator("tbody tr").filter({ hasText: "営業ユーザー" });
   const adminUserRow = grid.locator("tbody tr").filter({ hasText: "システム管理者" });
-  // 一覧は表示名の順（システム管理者 < 営業ユーザー）、詳細見出しは表示名で、ログイン ID は出さない（#1696）。
-  await expect(adminUserRow).toHaveAttribute("data-selected", "true");
-  await expect(page.getByRole("region", { name: "システム管理者" })).toBeVisible();
+  // 先頭の行を自動で選ばず、詳細は空の状態（#2282）。
+  await expect(grid.locator('tbody tr[data-selected="true"]')).toHaveCount(0);
+  await expect(page.getByTestId("list-detail-security-users-detail")).toContainText("ユーザーを選択してください");
   await expect(grid).not.toContainText("sales.user");
   await expect(grid.getByRole("button", { name: "編集" })).toHaveCount(0);
   await adminUserRow.locator("td").first().click();
+  // 一覧は表示名の順（システム管理者 < 営業ユーザー）、詳細見出しは表示名で、ログイン ID は出さない（#1696）。
+  await expect(adminUserRow).toHaveAttribute("data-selected", "true");
+  await expect(page).toHaveURL(/[?&]user=admin-user/u);
+  await expect(page.getByRole("region", { name: "システム管理者" })).toBeVisible();
   const adminUserDetailActions = page.getByTestId("security-users-detail-actions");
   const adminMoreButton = adminUserDetailActions.getByRole("button", { name: "その他の操作" });
   await adminMoreButton.focus();
@@ -2750,19 +2743,21 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await page.getByTestId("security-users-search").fill("");
 
   await page.getByTestId("security-users-actions").getByRole("button", { name: "新規作成" }).click();
-  expect(await topLevelPanelStyle(page, "create", "security-users")).toEqual(listStyle);
+  const formStyle = await topLevelPanelStyle(page, "create", "security-users");
   await page.getByRole("button", { name: "一覧へ戻る" }).click();
-  await expect(page.locator("#security-users-panel-list")).toBeVisible();
+  await expect(usersLayout).toBeVisible();
 
   await adminUserRow.locator("td").first().click();
   await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" }).click();
-  expect(await topLevelPanelStyle(page, "edit", "security-users")).toEqual(listStyle);
+  expect(await topLevelPanelStyle(page, "edit", "security-users")).toEqual(formStyle);
   // 既存の割り当てを持つユーザーの編集でも、システム管理者のロールは選択肢に出さない（#1792）。
   await expect(page.getByRole("radio", { name: /システム管理者/ })).toHaveCount(0);
   await expect(page.getByTestId("security-users-other-roles")).toContainText("システム管理者");
   await page.getByRole("button", { name: "一覧へ戻る" }).click();
-  await expect(page.locator("#security-users-panel-list")).toBeVisible();
+  await expect(usersLayout).toBeVisible();
   await page.setViewportSize({ width: 375, height: 812 });
+  // xl 未満は 1 ペイン。選んでいる利用者の詳細だけを出す。
+  await expect(usersLayout).toHaveAttribute("data-list-detail-view", "detail");
   await expectNoPageHorizontalScroll(page);
   await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
   await expect(page.getByTestId("security-users-detail-actions").getByRole("button", { name: "パスワードをリセット" })).toHaveCount(0);
@@ -2839,7 +2834,9 @@ test("ユーザー管理はアーカイブ済み割り当てロールを無効�
     ])
   );
 
-  await page.goto("/settings/security/users");
+  // 一覧と詳細を並べて行を選び直す操作を確かめる（xl 未満の 1 ペインでは選ぶと一覧が隠れる。#2282）。
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/settings/security/users?user=archived-role-user");
 
   const grid = page.getByTestId("security-users-grid");
   await expect(grid.getByText("データ管理者（アーカイブ済み・無効）", { exact: true })).toBeVisible();
@@ -2898,7 +2895,9 @@ test("ユーザー管理は復元済みロールを通常表示し、割り当�
     ])
   );
 
-  await page.goto("/settings/security/users");
+  // 一覧と詳細を並べて行を選び直す操作を確かめる（xl 未満の 1 ペインでは選ぶと一覧が隠れる。#2282）。
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/settings/security/users?user=restored-role-user");
 
   const grid = page.getByTestId("security-users-grid");
   await expect(grid.getByText("データ管理者", { exact: true })).toBeVisible();
@@ -2959,16 +2958,21 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
   await page.setViewportSize({ width: 2048, height: 1000 });
   await page.goto("/settings/security/roles");
 
-  const listStyle = await topLevelPanelStyle(page, "list", "security-roles");
-  const rolesSplitPane = page.getByTestId("fixed-split-pane-security-roles-list");
-  await expect(rolesSplitPane).toHaveAttribute("data-split-layout", "split");
-  await expectSplitPaneReservedTrack(rolesSplitPane);
+  // 一覧 + 詳細（ListDetailLayout。#2282）: xl 以上は 2 ペイン。
+  const rolesLayout = page.getByTestId("list-detail-security-roles");
+  await expect(rolesLayout).toHaveAttribute("data-list-detail-layout", "split");
   const grid = page.getByTestId("security-roles-grid");
   await expect(grid).toBeVisible();
   await expect(grid.getByRole("columnheader", { name: "ロール" })).toBeVisible();
+  // 一覧の列は狭いので、説明は列にせず名前の下の補足 1 行に出す（#2282）。
   // ロール管理（共通画面）は権限を扱わない。権限は権限管理で設定する（#206）。
-  await expect(grid.getByRole("columnheader", { name: "説明" })).toBeVisible();
+  await expect(grid.getByRole("columnheader", { name: "説明" })).toHaveCount(0);
   await expect(grid.getByRole("columnheader", { name: "機能権限" })).toHaveCount(0);
+  // 先頭の行を自動で選ばない（#2282）。
+  await expect(grid.locator('tbody tr[data-selected="true"]')).toHaveCount(0);
+  await expect(page.getByTestId("list-detail-security-roles-detail")).toContainText("ロールを選択してください");
+  await grid.locator("tbody tr").filter({ hasText: "アプリ閲覧" }).locator("td").first().click();
+  await expect(page).toHaveURL(/[?&]role=role-viewer/u);
   await expect(page.getByTestId("security-roles-permission-summary")).toContainText(
     "付与している機能権限: 1 件"
   );
@@ -2988,7 +2992,7 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
   await expect(grid).not.toContainText("SECURITY_VIEWER");
   await expect(grid.getByRole("button", { name: "編集" })).toHaveCount(0);
   await expect(page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" })).toBeVisible();
-  await viewerRoleRow.locator("td").nth(2).click();
+  await viewerRoleRow.locator("td").nth(1).click();
   await expect(viewerRoleRow).toHaveAttribute("data-selected", "true");
   await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
   const customRoleEditActions = page.getByRole("group", { name: "ロール編集操作" });
@@ -3007,11 +3011,11 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
   await page.getByTestId("security-roles-search").fill("");
 
   await page.getByTestId("security-roles-actions").getByRole("button", { name: "新規作成" }).click();
-  expect(await topLevelPanelStyle(page, "create", "security-roles")).toEqual(listStyle);
+  const formStyle = await topLevelPanelStyle(page, "create", "security-roles");
   await expect(page.getByLabel("ロールコード")).toBeVisible();
   await expect(page.getByRole("checkbox")).toHaveCount(0);
   await page.getByRole("button", { name: "一覧へ戻る" }).click();
-  await expect(page.locator("#security-roles-panel-list")).toBeVisible();
+  await expect(rolesLayout).toBeVisible();
 
   // 権限管理: ロールごとの機能権限を一括選択できる。
   await page.getByTestId("security-roles-open-permissions").click();
@@ -3058,7 +3062,7 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
   await expect(page.getByRole("checkbox", { name: /^ロール管理/ })).not.toBeChecked();
   await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "破棄して移動" }).click();
-  await expect(page.locator("#security-permissions-panel-list")).toBeVisible();
+  await expect(page.getByTestId("list-detail-security-permissions")).toBeVisible();
   // 組み込みロールの権限は変更できないため、編集操作を出さない。
   await permissionGrid.locator("tbody tr").filter({ hasText: "システム管理者" }).locator("td").first().click();
   await expect(page.getByTestId("security-permissions-detail-actions")).toHaveCount(0);
@@ -3068,15 +3072,17 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
   const systemRoleRow = grid.locator("tbody tr").filter({ hasText: "システム管理者" });
   await systemRoleRow.locator("td").first().click();
   await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
-  expect(await topLevelPanelStyle(page, "edit", "security-roles")).toEqual(listStyle);
+  expect(await topLevelPanelStyle(page, "edit", "security-roles")).toEqual(formStyle);
   const roleEditActions = page.getByRole("group", { name: "ロール編集操作" });
   await expect(page.getByTestId("security-roles-submit")).toHaveCount(0);
   await expect(page.getByTestId("security-roles-back")).toBeVisible();
   await expect(roleEditActions.getByRole("button", { name: "アーカイブ" })).toHaveCount(0);
   await expect(roleEditActions.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
   await page.getByRole("button", { name: "一覧へ戻る" }).click();
-  await expect(page.locator("#security-roles-panel-list")).toBeVisible();
+  await expect(rolesLayout).toBeVisible();
   await page.setViewportSize({ width: 375, height: 812 });
+  // xl 未満は 1 ペイン。選んでいるロールの詳細だけを出す。
+  await expect(rolesLayout).toHaveAttribute("data-list-detail-view", "detail");
   await expectNoPageHorizontalScroll(page);
   await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
 });
@@ -3720,6 +3726,8 @@ test("アーカイブ済みロールは権限が無効であることを明示�
   await page.route("**/api/security/permissions", (route) => fulfill(route, permissionRows));
 
   // 権限管理: アーカイブ済みロールは権限を編集できず、無効であることを示す。
+  // 一覧と詳細を並べて行を選び直す操作を確かめる（xl 未満の 1 ペインでは選ぶと一覧が隠れる。#2282）。
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/settings/security/permissions");
   const permissionGrid = page.getByTestId("security-permissions-grid");
   await permissionGrid.locator("tbody tr").filter({ hasText: "データ管理者" }).locator("td").first().click();
@@ -3739,7 +3747,7 @@ test("アーカイブ済みロールは権限が無効であることを明示�
   await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
   const archivedRow = grid.locator("tbody tr").filter({ hasText: "データ管理者" });
   await archivedRow.locator("td").first().click();
-  await expect(archivedRow.getByText("アーカイブ済み・権限無効", { exact: true })).toBeVisible();
+  await expect(archivedRow.getByText("アーカイブ済み", { exact: true })).toBeVisible();
   await expect(
     page.getByText(
       "このロールはアーカイブ済みです。保存済みの権限は利用者の実アクセス権には反映されません。",
@@ -3778,10 +3786,10 @@ test("アーカイブ済みロールは権限が無効であることを明示�
     )
   ).toBeVisible();
   await restoreDialog.getByRole("button", { name: "実行" }).click();
-  await expect(page.locator("#security-roles-panel-list")).toBeVisible();
+  await expect(page.getByTestId("list-detail-security-roles")).toBeVisible();
   const restoredRow = grid.locator("tbody tr").filter({ hasText: "データ管理者" });
   await expect(restoredRow.getByText("カスタム", { exact: true })).toBeVisible();
-  await expect(restoredRow.getByText("アーカイブ済み・権限無効", { exact: true })).toHaveCount(0);
+  await expect(restoredRow.getByText("アーカイブ済み", { exact: true })).toHaveCount(0);
   await expect(
     page.getByText(
       "このロールはアーカイブ済みです。保存済みの権限は利用者の実アクセス権には反映されません。",
@@ -6247,7 +6255,7 @@ test("ユーザー管理レビュー: リセット待機中は編集対象と入
   const user = await mockReviewedUsers(page);
   let pending: Route | undefined;
   await page.route("**/api/security/users/review-user/reset-password", route => { pending = route; });
-  await page.goto("/settings/security/users");
+  await page.goto("/settings/security/users?user=review-user");
   await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集", exact: true }).click();
   await page.getByRole("button", { name: "パスワードをリセット", exact: true }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "実行", exact: true }).click();
@@ -6265,7 +6273,7 @@ test("ユーザー管理レビュー: ロック解除の重複送信を抑止し
   let pending: Route | undefined;
   let calls = 0;
   await page.route("**/api/security/users/review-user/unlock", route => { pending = route; calls += 1; });
-  await page.goto("/settings/security/users");
+  await page.goto("/settings/security/users?user=review-user");
   const actions = page.getByTestId("security-users-detail-actions");
   await actions.getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "ロック解除" }).click();
@@ -6328,7 +6336,7 @@ for (const action of ["archive", "restore"] as const) {
     let pending: Route | undefined;
     let calls = 0;
     await page.route(`**/api/security/roles/review-role/${action}`, route => { pending = route; calls += 1; });
-    await page.goto("/settings/security/roles");
+    await page.goto("/settings/security/roles?role=review-role");
     const actions = page.getByTestId("security-roles-detail-actions");
     const invoke = async () => {
       const direct = actions.getByRole("button", { name: label, exact: true });
@@ -6358,11 +6366,11 @@ test("ロール管理レビュー: 未保存変更を保護し保存中は入力
   const role = await mockReviewedRoles(page);
   let pending: Route | undefined;
   await page.route("**/api/security/roles/review-role", route => { pending = route; });
-  await page.goto("/settings/security/roles");
+  await page.goto("/settings/security/roles?role=review-role");
   const edit = () => page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集", exact: true }).click();
   await edit();
   await page.getByRole("button", { name: "一覧へ戻る" }).click();
-  await expect(page.getByTestId("security-roles-grid")).toBeVisible();
+  await expect(page.getByTestId("list-detail-security-roles")).toBeVisible();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
   await edit();
   const name = page.getByLabel("ロール名", { exact: false });
@@ -6383,7 +6391,7 @@ test("ロール管理レビュー: 未保存変更を保護し保存中は入力
   await fulfill(pending!, { ...role, display_name: "未保存ロール", version: role.version + 1 });
   await expect(name).toBeEnabled();
   await page.getByRole("button", { name: "一覧へ戻る" }).click();
-  await expect(page.getByTestId("security-roles-grid")).toBeVisible();
+  await expect(page.getByTestId("list-detail-security-roles")).toBeVisible();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });
 
@@ -6391,14 +6399,14 @@ test("権限管理レビュー: 選択順を除いて未保存変更を保護し
   const role = await mockReviewedRoles(page);
   let pending: Route | undefined;
   await page.route("**/api/security/roles/review-role/permissions", route => { pending = route; });
-  await page.goto("/settings/security/permissions");
+  await page.goto("/settings/security/permissions?role=review-role");
   const edit = () => page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集", exact: true }).click();
   await edit();
   const query = page.getByRole("checkbox", { name: /SQL 生成/ });
   await query.uncheck();
   await query.check();
   await page.getByRole("button", { name: "一覧へ戻る" }).click();
-  await expect(page.getByTestId("security-permissions-grid")).toBeVisible();
+  await expect(page.getByTestId("list-detail-security-permissions")).toBeVisible();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
   await edit();
   await query.uncheck();
@@ -6418,7 +6426,7 @@ test("権限管理レビュー: 選択順を除いて未保存変更を保護し
   await fulfill(pending!, { ...role, permissions: ["menu.history"], version: role.version + 1 });
   await expect(query).toBeEnabled();
   await page.getByRole("button", { name: "一覧へ戻る" }).click();
-  await expect(page.getByTestId("security-permissions-grid")).toBeVisible();
+  await expect(page.getByTestId("list-detail-security-permissions")).toBeVisible();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });
 
@@ -7414,6 +7422,8 @@ test("ユーザー / ロール一覧の選択行はライト / ダークで文�
   await page.route("**/api/security/roles?include_archived=*", (route) => fulfill(route, [systemRole, customRole]));
   await page.route("**/api/security/users", (route) => fulfill(route, users));
   await page.route("**/api/security/permissions", (route) => fulfill(route, []));
+  // 選択行と一覧を並べて見る 2 ペイン（xl 以上）で測る（xl 未満は選ぶと一覧が隠れる。#2282）。
+  await page.setViewportSize({ width: 1440, height: 900 });
 
   for (const theme of ["light", "dark"] as const) {
     // theme.ts は ui-store のテーマ選好から html.dark を決めるため、永続化された選好として描画前に与える
@@ -7426,7 +7436,12 @@ test("ユーザー / ロール一覧の選択行はライト / ダークで文�
     }, theme);
 
     for (const prefix of ["security-users", "security-roles"] as const) {
-      await page.goto(`/settings/security/${prefix === "security-users" ? "users" : "roles"}`);
+      // 選択は URL が持ち、先頭の行を自動で選ばない（#2282）。
+      await page.goto(
+        prefix === "security-users"
+          ? "/settings/security/users?user=contrast-user-0"
+          : "/settings/security/roles?role=role-contrast"
+      );
       if (theme === "dark") await expect(page.locator("html")).toHaveClass(/\bdark\b/);
       else await expect(page.locator("html")).not.toHaveClass(/\bdark\b/);
       const grid = page.getByTestId(`${prefix}-grid`);
@@ -7460,8 +7475,8 @@ test("ユーザー / ロール一覧の選択行はライト / ダークで文�
         const subtitle = button.querySelector(":scope > span:nth-of-type(2)");
         const code = button.querySelector("span.font-mono");
         return {
-          // ユーザーは表示名だけ（ログイン ID・UUID を出さない。#1696）、ロールはロール名だけを出す
-          // （コード・ID は出さない。#1682）。どちらも共有 RowTitleButton（#421）の題名の枠だけで、補足の行は無い。
+          // ユーザーは表示名（ログイン ID・UUID を出さない。#1696）、ロールはロール名（コード・ID は出さない。#1682）。
+          // 2 行目の補足は割り当てロール・説明（狭い一覧の列。#2282）。
           firstLineIsCode: button.firstElementChild?.querySelector(".font-mono") != null,
           hasSubtitle: subtitle != null,
           title: contrast(rgb(getComputedStyle(button.firstElementChild!).color), rowBg),
@@ -7475,9 +7490,11 @@ test("ユーザー / ロール一覧の選択行はライト / ダークで文�
       // ダークの選択行は暗い地のまま（明るい地に文字を載せない）。
       if (theme === "dark") expect(measured.rowBgLuminance).toBeLessThan(0.05);
       expect(measured.title, `${prefix} ${theme} 題名`).toBeGreaterThanOrEqual(4.5);
-      // ユーザーの行は表示名だけ（#1696）、ロールの行はロール名だけ（#1682）。ID・コードの mono も補足の行も出さない。
+      // ユーザーの行は表示名（#1696）、ロールの行はロール名（#1682）。ID・コードの mono は出さない。
+      // 補足の行（割り当てロール・説明。#2282）も 4.5:1 以上。
       expect(measured.firstLineIsCode, `${prefix} ${theme} ID・コードを出さない`).toBe(false);
-      expect(measured.hasSubtitle, `${prefix} ${theme} 補足なし`).toBe(false);
+      expect(measured.hasSubtitle, `${prefix} ${theme} 補足あり`).toBe(true);
+      expect(measured.name, `${prefix} ${theme} 補足`).toBeGreaterThanOrEqual(4.5);
       expect(measured.body, `${prefix} ${theme} 本文`).toBeGreaterThanOrEqual(4.5);
       // 選択を背景色の差だけで示さない（WCAG 1.4.1）。左バーは非テキストの 3:1 以上。
       expect(measured.bar, `${prefix} ${theme} 左バー`).toBeGreaterThanOrEqual(3);

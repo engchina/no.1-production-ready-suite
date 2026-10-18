@@ -477,6 +477,12 @@ export function Pagination({
   );
 }
 
+/**
+ * 前へ / 次へ の文字。置き場所（Pagination の container）が 20rem 未満（一覧 + 詳細の一覧の列の下端など。#2282）では
+ * 見た目をアイコンだけにし、文字は読み上げに残す（ボタンの名前は変わらない）。
+ */
+const PAGER_LABEL_CLASS = "sr-only @xs:not-sr-only";
+
 interface PagerProps {
   page: number;
   totalPages: number;
@@ -563,7 +569,7 @@ function AdvancedPager({ page, totalPages, labels, disabled, onPageChange }: Pag
           disabled={disabled || atFirst}
           onClick={() => go(page - 1)}
         >
-          <span>{labels.prev}</span>
+          <span className={PAGER_LABEL_CLASS}>{labels.prev}</span>
         </Button>
         <span className="flex items-center gap-1.5">
           <input
@@ -602,7 +608,7 @@ function AdvancedPager({ page, totalPages, labels, disabled, onPageChange }: Pag
           disabled={disabled || atLast}
           onClick={() => go(page + 1)}
         >
-          <span>{labels.next}</span>
+          <span className={PAGER_LABEL_CLASS}>{labels.next}</span>
         </Button>
         <Button
           type="button"
@@ -650,7 +656,7 @@ function CursorPager({
         disabled={disabled || page <= 1}
         onClick={() => onPageChange(page - 1)}
       >
-        <span>{labels.prev}</span>
+        <span className={PAGER_LABEL_CLASS}>{labels.prev}</span>
       </Button>
       <span
         role="status"
@@ -666,7 +672,7 @@ function CursorPager({
         disabled={disabled || page >= totalPages}
         onClick={() => onPageChange(page + 1)}
       >
-        <span>{labels.next}</span>
+        <span className={PAGER_LABEL_CLASS}>{labels.next}</span>
       </Button>
     </div>
   );

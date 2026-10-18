@@ -16,7 +16,6 @@ import {
 } from "../src";
 import {
   mapFieldErrors,
-  selectedVisibleKey,
   unmappedErrorMessage,
 } from "../src/users-roles/shared";
 
@@ -112,13 +111,6 @@ describe("入力エラーの結び付け", () => {
 });
 
 describe("選択と表示名", () => {
-  it("選択行が見えていれば保ち、見えなければ先頭行を選ぶ", () => {
-    const rows = [{ id: "a" }, { id: "b" }];
-    expect(selectedVisibleKey(rows, "b", (row) => row.id)).toBe("b");
-    expect(selectedVisibleKey(rows, "z", (row) => row.id)).toBe("a");
-    expect(selectedVisibleKey([], "z", (row: { id: string }) => row.id)).toBeNull();
-  });
-
   it("表示名は ID と異なるときだけ補助表示する", () => {
     expect(identitySecondaryName("data_user", " データユーザー ")).toBe("データユーザー");
     expect(identitySecondaryName("data_user", "data_user")).toBe("");

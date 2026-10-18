@@ -119,6 +119,8 @@ describe("ロール管理の読み込みと操作の失敗（#1038）", () => {
       deleteRole: never,
     };
     await render(<RoleManagementPage api={api} canManage />);
+    // 先頭の行は自動で選ばれない（#2282）。一覧の行を選んでから詳細の「編集」を押す。
+    await click(host.querySelector<HTMLElement>('[data-testid="security-roles-grid"] [data-row-title-button]') ?? undefined);
 
     const detailActions = host.querySelector<HTMLElement>('[data-testid="security-roles-detail-actions"]');
     await click(buttons("編集", detailActions ?? undefined)[0]);

@@ -67,10 +67,10 @@ export function RoleNameBadges({ roles, deletedLabel, ariaLabel, className }: Ro
   );
 }
 
-/** 一覧の行の題名のボタン（ロール名だけを出す）。 */
+/** 一覧の行の題名のボタン（ロール名。補足 1 行は `subtitle` で渡す。#2282）。 */
 export function RoleNameRowTitleButton({
   securityRole,
   ...props
-}: { securityRole: RoleNameReference } & Omit<RowTitleButtonProps, "title" | "subtitle">) {
+}: { securityRole: RoleNameReference } & Omit<RowTitleButtonProps, "title">) {
   return <RowTitleButton {...props} title={roleDisplayName(securityRole)} />;
 }

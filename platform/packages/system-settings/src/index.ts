@@ -251,6 +251,7 @@ export {
 export { UserManagementPage, type UserManagementPageProps } from "./users-roles/UserManagementPage";
 export {
   RoleManagementPage,
+  RoleListStatusBadge,
   RoleStatusBadges,
   type RoleManagementPageProps,
   type RolePermissionSummary,
@@ -274,7 +275,6 @@ export {
 } from "./users-roles/userDisplayName";
 export {
   SecurityDetailField,
-  SecurityEmptySelection,
   SecurityIdentityLines,
   SecurityIdentityRowTitleButton,
   SecurityManagementPanelShell,

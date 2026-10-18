@@ -30,11 +30,18 @@ export const USERS_ROLES_MESSAGES = {
   "security.common.filteredCountWithSelected": "{filtered} / {total} 件、選択 {selected} 件",
   "security.common.listScrollLabel":
     "{list}。必要に応じて縦方向または横方向にスクロールできます。",
+  // 一覧 + 詳細（ListDetailLayout）の一覧の列の幅の分割線（#2282）。
+  "security.common.listWidth": "一覧の幅",
+  "security.common.listWidthHint":
+    "ドラッグ・左右の矢印キーで一覧の幅を変更・ダブルクリックか Home で既定の幅に戻す",
   "security.common.loadError":
     "読み込みに失敗しました。接続状態と権限を確認して再試行してください。",
   "security.common.loading": "セキュリティ設定を読み込んでいます。",
+  // 一覧 + 詳細の詳細の上端の「前へ / 次へ」（#2282）。
+  "security.common.next": "次へ",
   "security.common.no": "いいえ",
   "security.common.none": "なし",
+  "security.common.previous": "前へ",
   "security.common.save": "保存",
   "security.common.saveError": "保存に失敗しました。入力内容を確認して再試行してください。",
   "security.common.saved": "変更を保存しました。",
@@ -47,6 +54,8 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.archive": "アーカイブ",
   "security.roles.archiveConfirm":
     "このロールをアーカイブすると、このロール由来の権限は利用者に反映されなくなります。ユーザー自体は無効化されません。",
+  // 一覧の列（狭い）の状態のバッジ（#2282）。詳細は archivedDisabled（権限が無効なことまで）を出す。
+  "security.roles.archived": "アーカイブ済み",
   "security.roles.archivedDisabled": "アーカイブ済み・権限無効",
   "security.roles.archivedPermissionNotice":
     "このロールはアーカイブ済みです。保存済みの権限は利用者の実アクセス権には反映されません。",
@@ -71,6 +80,7 @@ export const USERS_ROLES_MESSAGES = {
     "ロールを削除できませんでした。割り当てユーザーを解除し、最新の表示で再試行してください。",
   "security.roles.deleteSuccess": "{name} を完全に削除しました。",
   "security.roles.description": "説明",
+  "security.roles.detail": "ロールの詳細",
   "security.roles.editActions": "ロール編集操作",
   "security.roles.form.create": "ロールを作成",
   "security.roles.form.edit": "ロールを編集",
@@ -85,6 +95,8 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.noResultsTitle": "条件に一致するロールがありません",
   "security.roles.pagination": "ロール一覧のページ",
   "security.roles.noSelectionHint": "一覧のロールを選ぶと、状態や基本情報を確認できます。",
+  "security.roles.notFoundHint": "削除されたか、URL が正しくありません。一覧から選び直してください。",
+  "security.roles.notFoundTitle": "ロールが見つかりません",
   "security.roles.noSelectionTitle": "ロールを選択してください",
   "security.roles.openPermissions": "権限管理で設定",
   "security.roles.permissionSummary": "付与している機能権限: {count} 件",
@@ -92,7 +104,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.restore": "復元",
   "security.roles.restoreConfirm":
     "このロールを復元すると、このロールに紐づくユーザーへ、このロール由来の権限が次回リクエストから反映されます。",
-  "security.roles.searchPlaceholder": "コード・ロール名・説明で絞り込み",
+  "security.roles.searchPlaceholder": "ロール名・説明で絞り込み",
   "security.roles.showRole": "{name} を表示",
   "security.roles.subtitle":
     "ロールの作成・名称・説明・アーカイブを管理します。ロールに付ける権限は権限管理で設定します。",
@@ -119,6 +131,7 @@ export const USERS_ROLES_MESSAGES = {
     "このユーザーを無効化し、既存セッションを失効させます。続行しますか。",
   "security.users.disableSuccess": "ユーザーを無効化しました。既存セッションは失効しました。",
   "security.users.displayName": "表示名",
+  "security.users.detail": "ユーザーの詳細",
   "security.users.displayNameRequired": "表示名を入力してください。",
   "security.users.editActions": "ユーザー編集操作",
   "security.users.enable": "有効化",
@@ -143,6 +156,8 @@ export const USERS_ROLES_MESSAGES = {
   "security.users.noSelectionHint":
     "一覧のユーザーを選ぶと、状態と割り当てロールを確認できます。",
   "security.users.noSelectionTitle": "ユーザーを選択してください",
+  "security.users.notFoundHint": "削除されたか、URL が正しくありません。一覧から選び直してください。",
+  "security.users.notFoundTitle": "ユーザーが見つかりません",
   "security.users.oneTimePassword.copy": "一時パスワードをコピー",
   "security.users.oneTimePassword.copyError":
     "一時パスワードをコピーできませんでした。ブラウザのクリップボード権限を確認するか、表示内容を手動で選択してください。",
@@ -155,7 +170,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.users.resetPassword": "パスワードをリセット",
   "security.users.roleRequired": "ロールを選択してください。",
   "security.users.roles": "割り当てるロール",
-  "security.users.searchPlaceholder": "ログインID・表示名・ロールで絞り込み",
+  "security.users.searchPlaceholder": "名前・ID・ロールで絞り込み",
   "security.users.showUser": "{name} を表示",
   "security.users.subtitle": "ローカルユーザー、割り当てロール、ロック状態を管理します。",
   "security.users.systemAdminConfigOnly":
