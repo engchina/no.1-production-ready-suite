@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode, type RefO
 import { createPortal } from "react-dom";
 
 import { cn } from "../../lib/utils";
+import { ListDetailPager, type ListDetailPagerProps } from "../app-shell/list-detail-layout";
 import { focusableIn, navDrawerKeyAction } from "../app-shell/nav-drawer";
 
 import { Button } from "./button";
@@ -31,16 +32,22 @@ export interface SideSheetProps {
   /** 出す側（既定は左）。 */
   side?: "left" | "right";
   /**
-   * 幅（#1154）。`default` は 22rem（画面幅 − 3.5rem まで。会話の履歴などの一覧）。`wide` は表など横に広い
-   * 内容を見る大きなパネルで、sm 以上は 64rem（画面幅 − 3.5rem まで）、sm 未満は全画面。
+   * 幅（#1154 / #2281）。`default` は 22rem（画面幅 − 3.5rem まで。会話の履歴・絞り込みなどの短い一覧）。
+   * `md` は 40rem（画面幅 − 3.5rem まで）で、一覧の 1 件の詳細（評価のケース・回答・コメントなど文章を読む内容）。
+   * `wide` は表など横に広い内容を見る大きなパネルで、sm 以上は 64rem（画面幅 − 3.5rem まで）、sm 未満は全画面。
    */
-  size?: "default" | "wide";
+  size?: "default" | "md" | "wide";
   /** シートの要素の id（開くボタンの `aria-controls` に渡す）。 */
   id?: string;
   /** 閉じたときにフォーカスを戻す先。省略時は開く前にフォーカスがあった要素。 */
   returnFocusRef?: RefObject<HTMLElement | null>;
   /** 見出しの行の右（閉じるボタンの左）に置く操作。 */
   headerActions?: ReactNode;
+  /**
+   * 見出しの行の「前へ / 次へ」（#2281。一覧の前後の項目の詳細へシートを開いたまま移る）。
+   * 見出しの右・`headerActions` の左に置く。
+   */
+  pager?: ListDetailPagerProps;
   children: ReactNode;
   className?: string;
   bodyClassName?: string;
@@ -57,6 +64,7 @@ export function SideSheet({
   id,
   returnFocusRef,
   headerActions,
+  pager,
   children,
   className,
   bodyClassName,
@@ -131,7 +139,9 @@ export function SideSheet({
           "fixed inset-y-0 z-[var(--z-dialog)] flex flex-col bg-surface-overlay text-fg shadow-[var(--shadow-dialog)] outline-none",
           size === "wide"
             ? "w-full max-w-full sm:w-[64rem] sm:max-w-[calc(100vw-3.5rem)]"
-            : "w-[22rem] max-w-[calc(100vw-3.5rem)]",
+            : size === "md"
+              ? "w-[40rem] max-w-[calc(100vw-3.5rem)]"
+              : "w-[22rem] max-w-[calc(100vw-3.5rem)]",
           left ? "left-0 border-r border-border" : "right-0 border-l border-border",
           "duration-200 ease-out motion-reduce:transition-none",
           // 開くときは visibility を即座に visible にする（遷移させると開いた瞬間にフォーカスを移せない）。
@@ -150,6 +160,7 @@ export function SideSheet({
           <h2 id={titleId} className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">
             {title}
           </h2>
+          {pager ? <ListDetailPager {...pager} /> : null}
           {headerActions}
           <Button type="button" variant="ghost" size="sm" iconOnly icon={X} aria-label={closeLabel} onClick={onClose} />
         </div>

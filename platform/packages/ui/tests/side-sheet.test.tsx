@@ -148,4 +148,32 @@ describe("SideSheet（#664）", () => {
     expect(wideClasses).toEqual(expect.arrayContaining(["w-full", "max-w-full", "sm:w-[64rem]", "sm:max-w-[calc(100vw-3.5rem)]"]));
     expect(wideClasses).not.toContain("w-[22rem]");
   });
+  it("size=md は 40rem（画面幅 − 3.5rem まで）、pager は見出しの行に前へ / 次へを出す（#2281）", () => {
+    const onPrevious = vi.fn();
+    act(() =>
+      root.render(
+        <SideSheet
+          open
+          onClose={() => {}}
+          title="ケースの詳細"
+          closeLabel="閉じる"
+          size="md"
+          side="right"
+          pager={{ onPrevious, onNext: null, testId: "case-pager" }}
+          data-testid="md-sheet"
+        >
+          <p>詳細</p>
+        </SideSheet>
+      )
+    );
+    const classes = $('[data-testid="md-sheet"]').className.split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(["w-[40rem]", "max-w-[calc(100vw-3.5rem)]"]));
+    expect(classes).not.toContain("w-[22rem]");
+    const previous = $<HTMLButtonElement>('[data-testid="case-pager-previous"]');
+    const next = $<HTMLButtonElement>('[data-testid="case-pager-next"]');
+    expect(previous.getAttribute("aria-label")).toBe("前へ");
+    expect(next.disabled).toBe(true);
+    click(previous);
+    expect(onPrevious).toHaveBeenCalledTimes(1);
+  });
 });

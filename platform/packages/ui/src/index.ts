@@ -643,6 +643,26 @@ export {
   type FixedSplitPaneLabels,
 } from "./components/app-shell/fixed-split-pane";
 export * from "./lib/fixed-split-pane";
+export {
+  ListDetailLayout,
+  ListDetailPager,
+  adjacentListItems,
+  useListDetailSplit,
+  DEFAULT_LIST_DETAIL_LAYOUT_LABELS,
+  DEFAULT_LIST_DETAIL_PAGER_LABELS,
+  LIST_DETAIL_ITEM_SELECTOR,
+  type ListDetailLayoutProps,
+  type ListDetailLayoutLabels,
+  type ListDetailPagerProps,
+  type ListDetailPagerLabels,
+} from "./components/app-shell/list-detail-layout";
+export * from "./lib/list-detail";
+export {
+  useUrlSelection,
+  type UrlSelection,
+  type UrlSelectionSetSearchParams,
+  type UseUrlSelectionOptions,
+} from "./lib/url-selection";
 export * from "./lib/measured-size";
 export {
   Breadcrumbs,
