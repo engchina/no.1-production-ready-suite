@@ -267,13 +267,18 @@ export function toolStepDetails(step: RunStep): RunStepDetails | undefined {
   return details;
 }
 
-/** チャットの処理の経過の段に、ツールの段の詳細を足す（Run の step と結べた段だけ）。 */
+/**
+ * チャットの処理の経過の段に、ツールの段の詳細を足す（Run の step と結べた段だけ）。段の終わりのイベントは backend が
+ * 詳細（内部名・引数・結果）を持って届く（#2373）ので、取り直した Run の step がまだ結果を持たないときはイベントの
+ * 詳細を残す。結果を持つ step はデータの範囲の記録も足した詳細にする。
+ */
 export function withToolStepDetails(progress: ChatProgressStep[], steps: readonly RunStep[]): ChatProgressStep[] {
   const pairs = pairToolProgressSteps(progress, steps);
   if (pairs.size === 0) return progress;
   return progress.map((item) => {
     const runStep = pairs.get(item.id);
-    const details = runStep ? toolStepDetails(runStep) : undefined;
+    if (!runStep || (item.details && !runStep.tool_result)) return item;
+    const details = toolStepDetails(runStep);
     return details ? { ...item, details } : item;
   });
 }

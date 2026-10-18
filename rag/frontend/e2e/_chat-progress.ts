@@ -22,6 +22,7 @@ export interface ChatProgressStepEventJson {
   started_at?: string;
   finished_at?: string;
   params?: ChatStepParams;
+  details?: Record<string, unknown>;
 }
 
 export interface ChatProgressTerminalEventJson {
@@ -41,6 +42,7 @@ interface StepState {
   started_at?: string;
   finished_at?: string;
   params?: ChatStepParams;
+  details?: Record<string, unknown>;
 }
 
 /** 1 つの回答（`targetId`）の段階のイベントを記録する。`now` は時刻の文字列（配信の時刻に置き換える印でもよい）。 */
@@ -65,7 +67,8 @@ export function chatProgressRecorder(targetId: string, now: () => string = () =>
     /** 段階の状態を変える（変わった段階だけを記録する）。`params` は段階ごとの値（根拠の件数など）。 */
     set(
       statuses: Partial<Record<ChatStepId, ChatStepStatus>>,
-      params: Partial<Record<ChatStepId, ChatStepParams>> = {}
+      params: Partial<Record<ChatStepId, ChatStepParams>> = {},
+      details: Partial<Record<ChatStepId, Record<string, unknown>>> = {}
     ): ChatProgressEventJson[] {
       const events: ChatProgressEventJson[] = [];
       for (const id of CHAT_STEP_IDS) {
@@ -85,6 +88,7 @@ export function chatProgressRecorder(targetId: string, now: () => string = () =>
               ? { finished_at: at }
               : {}),
             ...(value ? { params: value } : {}),
+            ...(details[id] ? { details: details[id] } : {}),
           })
         );
       }

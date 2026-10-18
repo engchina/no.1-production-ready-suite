@@ -84,6 +84,37 @@ function toolStep(id: string, name: string, status: string, extra: Record<string
 }
 
 for (const viewport of VIEWPORTS) {
+  test(`終わったツールの段は、段の終わりのイベントの詳細で、後の段の実行中から開ける（#2373） (${viewport.name})`, async ({ page, mockApi }) => {
+    const { progress: log } = seedRunningRun(mockApi);
+    // Run の step はまだ取り直していない（steps は空）。詳細は段のイベントだけで届く。
+    log
+      .step("plan", "done")
+      .step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search", title: "ナレッジベースの検索" } })
+      .step("tool:rag__rag_search", "done", {
+        details: {
+          fields: [{ label: "ツール", value: "rag__rag_search", mono: true }],
+          code: [{ label: "引数", language: "json", text: JSON.stringify({ query: "合成の語" }, null, 2) }],
+        },
+      })
+      .step("respond", "running");
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await openThread(page);
+
+    const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+    const current = turn.getByTestId("chat-progress-current");
+    await expect(current).toHaveAttribute("data-step-id", "respond");
+    const toggle = turn.getByTestId("chat-progress-step-tool:rag__rag_search-toggle");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const details = turn.getByTestId("chat-progress-step-tool:rag__rag_search-details");
+    await expect(details.locator("dd").first()).toHaveText("rag__rag_search");
+    await expect(details.getByLabel("引数")).toContainText("合成の語");
+    // 後の段は実行中のまま。
+    await expect(current).toHaveAttribute("data-step-id", "respond");
+    await expectNoHorizontalOverflow(page);
+  });
+
   test(`処理の経過のツールの段は表示名で出し、開くと内部名と引数・結果の JSON を出す（詳細の無い段は開かない。#2294 / #2324） (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
     const { run, progress: log } = seedRunningRun(mockApi);
     run.status = "completed";

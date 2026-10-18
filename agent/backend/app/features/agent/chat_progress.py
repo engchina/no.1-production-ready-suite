@@ -28,10 +28,16 @@ lock の中で）`record_run_progress(run)` を呼ぶ。Run の状態から段�
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
-from pr_backend_core.chat_progress import ChatProgressRecorder, ChatProgressStepState
+from pr_backend_core.chat_progress import (
+    ChatProgressRecorder,
+    ChatProgressStepDetails,
+    ChatProgressStepState,
+    chat_progress_details,
+)
 
 if TYPE_CHECKING:
     from app.features.agent.confirmation import ConfirmationRequest
@@ -159,7 +165,14 @@ def _sync_tool_step(
         return
     if status == "running":
         _close_thinking(recorder, at=step.started_at)
-        recorder.start(step_id, kind=KIND_TOOL, params=params, at=step.started_at)
+        # 実行中のツールの段も、呼んだ引数を開いて見られる（#2373）。
+        recorder.start(
+            step_id,
+            kind=KIND_TOOL,
+            params=params,
+            details=tool_step_details(step),
+            at=step.started_at,
+        )
         return
     if status not in _FINISHED_TOOL_STATUSES:
         return
@@ -173,6 +186,7 @@ def _sync_tool_step(
             "skipped",
             kind=KIND_TOOL,
             params=params,
+            details=tool_step_details(step),
             at=step.completed_at,
         )
         return
@@ -180,13 +194,52 @@ def _sync_tool_step(
         # 開始を記録する前に終わった（1 回の更新で始まって終わった）ツールも、開始の時刻を残す。
         _close_thinking(recorder, at=step.started_at)
         recorder.start(step_id, kind=KIND_TOOL, params=params, at=step.started_at)
+    # 終わったツールの段の詳細（内部名・エラー・引数と結果）は、終わったときの段のイベントで
+    # 送る（会話の取り直しを待たずに、後の段の実行中から開ける。#2373）。データの範囲の記録は
+    # 画面が Run の step から足す。
     recorder.finish(
         step_id,
         "done" if status == "completed" else "failed",
         kind=KIND_TOOL,
         params=params,
+        details=tool_step_details(step),
         at=step.completed_at,
     )
+
+
+# ツールの段の詳細の見出し（画面の `chat.progress.details.*` と同じ文言）。
+_DETAIL_TOOL = "ツール"
+_DETAIL_ERROR = "エラー"
+_DETAIL_ARGUMENTS = "引数"
+_DETAIL_RESULT = "結果"
+
+
+def tool_step_details(step: RunStep) -> ChatProgressStepDetails | None:
+    """ツールの段の詳細（内部名・エラー・引数と結果の JSON）。
+
+    上限で切り、秘密らしい値を伏せる（共通の規則）。
+    """
+
+    call = step.tool_call
+    result = step.tool_result
+    fields: list[tuple[str, object] | tuple[str, object, bool]] = []
+    if call is not None and call.name:
+        fields.append((_DETAIL_TOOL, call.name, True))
+    if result is not None and result.error:
+        fields.append((_DETAIL_ERROR, result.error))
+    code: list[tuple[str | None, str, Literal["json", "sql", "text"] | None]] = []
+    if call is not None and call.arguments:
+        code.append((_DETAIL_ARGUMENTS, _json_text(call.arguments), "json"))
+    if result is not None and result.output is not None:
+        code.append((_DETAIL_RESULT, _json_text(result.output), "json"))
+    return chat_progress_details(fields=fields, code=code)
+
+
+def _json_text(value: object) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def _sync_approval_round(

@@ -212,7 +212,8 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
             status: runStepStatus(stage.outcome),
             durationMs: stage.elapsed_ms,
             detail: detailFor(name),
-            details: detailsFor(name),
+            // 回答の記録が無い（失敗した）実行は、工程が終わったときの段の詳細を出す（#2373）。
+            details: detailsFor(name) ?? parseRunStepDetails(stage.details),
           };
         })
       : run.steps.map((step) => ({

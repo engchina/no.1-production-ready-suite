@@ -54,8 +54,8 @@ const citation = {
   metadata: {},
 };
 
-function searchStage(stage: string, outcome: string, elapsed_ms = 0) {
-  return sse("stage", { trace_id: "trace-1", stage, outcome, elapsed_ms, attributes: {} });
+function searchStage(stage: string, outcome: string, elapsed_ms = 0, extra: Record<string, unknown> = {}) {
+  return sse("stage", { trace_id: "trace-1", stage, outcome, elapsed_ms, attributes: {}, ...extra });
 }
 
 /**
@@ -73,7 +73,11 @@ const slowSearchStream: TimedChunk[] = [
   {
     afterMs: 1500,
     text: [
-      searchStage("answer_step:質問の理解", "success", 1500),
+      // 終わった工程の詳細と計測値は、工程が終わったときのイベントで届く（#2373）。
+      searchStage("answer_step:質問の理解", "success", 1500, {
+        attributes: { llm_calls: 1, status: "complete" },
+        details: { fields: [{ label: "答える要求", value: "1 件" }], lines: ["読み取った条件: なし"] },
+      }),
       searchStage("answer_step:文書検索", "started"),
     ].join(""),
   },
@@ -273,6 +277,14 @@ for (const viewport of [
     // 終わった工程は一覧に増えていく（既定で開く）。
     await expect(page.getByTestId("search-run-progress-running")).toContainText("処理中（1 ステップ完了）");
     await expect(progress.locator("li").filter({ hasText: "質問の条件の読み取り" })).toContainText("1.5 秒");
+    // 終わった工程の詳細は、後の工程の実行中から開ける（回答の完了を待たない。#2373）。計測値も実行中から出す。
+    await expect(current).toContainText("文書の検索");
+    await expect(page.getByTestId("search-run-progress-step-s1")).toContainText("（LLM 1 回）");
+    const liveToggle = page.getByTestId("search-run-progress-step-s1-toggle");
+    await liveToggle.click();
+    await expect(liveToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("search-run-progress-step-s1-details")).toContainText("答える要求");
+    await expect(current).toContainText("文書の検索");
     // 検索のボタンは実行中に「停止」になりスピナーを出さないため、動くスピナーは今の工程の 1 つだけ（#413）。
     await expect(progress.locator("svg.animate-spin")).toHaveCount(1);
     await expect(page.getByTestId("search-run-stop")).toHaveAccessibleName("停止");
@@ -468,8 +480,9 @@ function chatProgressStream(messageId: string) {
     declare: () => send(recorder.declare()),
     set: (
       statuses: Partial<Record<ChatStepId, ChatStepStatus>>,
-      params: Partial<Record<ChatStepId, ChatStepParams>> = {}
-    ) => send(recorder.set(statuses, params)),
+      params: Partial<Record<ChatStepId, ChatStepParams>> = {},
+      details: Partial<Record<ChatStepId, Record<string, unknown>>> = {}
+    ) => send(recorder.set(statuses, params, details)),
     terminal: (status: "done" | "failed" | "cancelled") => send(recorder.terminal(status)),
   };
 }
@@ -497,7 +510,12 @@ const timedOutChatStream: TimedChunk[] = [
     text: [
       chatStage("answer_step:質問の理解", "success", 1500),
       chatStage("answer_step:文書検索", "started"),
-      timedOutProgress.set({ rewrite_query: "done", retrieve: "running" }),
+      // 終わった段階の詳細は、終わったときのイベントで届く（後の段階の実行中から開ける。#2373）。
+      timedOutProgress.set(
+        { rewrite_query: "done", retrieve: "running" },
+        {},
+        { rewrite_query: { fields: [{ label: "答える要求", value: "1 件" }] } }
+      ),
     ].join(""),
   },
   {
@@ -653,6 +671,12 @@ for (const viewport of [
       timeout: 4_000,
     });
     await expect(page.getByTestId("chat-answer-progress-running")).toContainText("処理中（1 ステップ完了）");
+    // 終わった段階の詳細は、後の段階の実行中から開ける（回答の完了・失敗を待たない。#2373）。
+    const liveToggle = page.getByTestId("chat-answer-progress-step-rewrite_query-toggle");
+    await liveToggle.click();
+    await expect(liveToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("chat-answer-progress-step-rewrite_query-details")).toContainText("答える要求");
+    await expect(current).toContainText("関係する文書を探しています");
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
     await progress.scrollIntoViewIfNeeded();
     await page.screenshot({

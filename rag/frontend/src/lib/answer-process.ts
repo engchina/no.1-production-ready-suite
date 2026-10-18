@@ -111,8 +111,10 @@ export interface AnswerStageRecord {
   stage: string;
   outcome: "started" | "success" | "error" | "cancelled";
   elapsed_ms: number;
-  /** 終わった工程の詳細（backend の共有の詳細の形。回答の安全チェックの結果など。#2341）。 */
+  /** 終わった工程の詳細（backend の共有の詳細の形。工程が終わったときに届く。#2341 / #2373）。 */
   details?: unknown;
+  /** 工程の属性（回答フローの工程が終わったときの `llm_calls`・`status`。#2373）。 */
+  attributes?: Record<string, unknown>;
   /** 画面が受け取った時刻（epoch ms。実行中の工程の経過時間の起点）。 */
   receivedAtMs?: number;
 }
@@ -173,9 +175,16 @@ export function answerProcessStepsFromStages(
     }
     row.status = event.outcome === "success" ? "done" : "failed";
     if (Number.isFinite(event.elapsed_ms)) row.durationMs = Math.max(0, event.elapsed_ms);
-    // パイプラインの工程の詳細（回答の安全チェックの結果など。#2341）。
+    // 終わった工程の詳細と計測値は、工程が終わったときのイベントで届く（回答の完了を待たずに段を開ける。#2341 / #2373）。
     const stageDetails = parseRunStepDetails(event.details);
     if (stageDetails) row.details = stageDetails;
+    if (row.stepName !== undefined && event.attributes) {
+      const calls = event.attributes.llm_calls;
+      const note = typeof event.attributes.status === "string" ? event.attributes.status : null;
+      const meta = answerStepMeta({ llmCalls: typeof calls === "number" ? calls : null, note });
+      if (meta) row.meta = meta;
+      if (note && FAILED_STEP_STATUSES.has(note.trim())) row.status = "failed";
+    }
   }
   if (terminal !== null) {
     for (const row of rows) {
