@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  AnswerNotice,
   Banner,
   ProcessFailureNotice,
   Button,
@@ -82,6 +83,7 @@ import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { useCapabilities } from "@/lib/permissions";
+import { answerNoticeText } from "@/lib/run-artifacts";
 import { withToolStepDetails } from "@/lib/run-history";
 import { runToolResultTables } from "@/lib/run-tables";
 import { runStatusView } from "@/lib/status-labels";
@@ -1136,6 +1138,11 @@ function RunChatTurn({
             idPrefix={`chat-${run.id}`}
             className="border-t border-border px-2 pt-1"
           />
+        ) : null}
+
+        {/* 回答の注意書きは回答の本文と根拠の後（3 製品共通の AnswerNotice。#2405）。 */}
+        {run.status === "completed" ? (
+          <AnswerNotice notice={answerNoticeText(run.artifacts)} label={t("answer.notice.label")} />
         ) : null}
 
         {canRate && run.status === "completed" && answer ? (

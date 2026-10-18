@@ -25,6 +25,7 @@ from app.rag.support_guide_process_import import (
     KnowledgeDocument,
     build_item,
     draft_context,
+    page_ranges_from_text,
     parse_draft_output,
     process_headings,
     read_process_workbook,
@@ -156,6 +157,38 @@ def test_recorded_response_becomes_a_validated_draft_with_rule_candidates() -> N
     assert "ナレッジベースに取り込んで" in error.message
     assert [rule.title for rule in item.rule_candidates] == ["通知の質問は設定画面Aを案内する"]
     assert item.rule_candidates[0].triggers == ["通知"]
+
+
+def test_reference_pages_and_step_references_are_filled() -> None:
+    """頁を資料の頁の範囲にし、手順を指す資料はその手順の参照にする（#2395・#2397）。"""
+    recorded = json.loads(RECORDED)
+    common, _missing = recorded["references"]
+    recorded["references"] = [
+        {**common, "pages": "p.12〜14、20"},
+        {**common, "pages": "5", "step_ids": ["s2", "s9"]},
+    ]
+    item = build_item(_row(), parse_draft_output(json.dumps(recorded)), DOCUMENTS)
+    assert item.content is not None
+    assert [
+        [(r.page_start, r.page_end) for r in ref.page_ranges] for ref in item.content.references
+    ] == [[(12, 14), (20, 20)]]
+    # 手順を指す資料はその手順の参照にする（無い手順の id は捨てる）。共通の資料には入れない。
+    assert item.content.steps[0].references == []
+    step_ref = item.content.steps[1].references
+    assert [
+        (ref.document_id, [(r.page_start, r.page_end) for r in ref.page_ranges]) for ref in step_ref
+    ] == [("doc-a", [(5, 5)])]
+    assert item.references[1].step_ids == ["s2", "s9"]
+
+
+def test_page_ranges_from_text_reads_numbers_and_ranges_only() -> None:
+    assert page_ranges_from_text("12-14") == [{"page_start": 12, "page_end": 14}]
+    assert page_ranges_from_text("ｐ．３～５, 3-5, 9") == [
+        {"page_start": 3, "page_end": 5},
+        {"page_start": 9, "page_end": 9},
+    ]
+    assert page_ranges_from_text("") == []
+    assert page_ranges_from_text("14-12") == []
 
 
 def test_draft_is_importable_when_all_references_resolve() -> None:

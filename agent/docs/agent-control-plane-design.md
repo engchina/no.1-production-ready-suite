@@ -801,6 +801,7 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 （`guide_check_note`。判断が `clarify` なら `ask_clarification`、`handoff` なら引き継ぎ、`branch` なら条件ごとに答える、
 `answer` なら分かっている条件に当たる場合の手順だけを答え、係るときだけ影響範囲・承認を示す）。照合の結果
 （業務ガイド・分かった条件・確かめ中の問い）は支援タスクの状態にも残す。モデルが自分で `rag_lookup_guides` を呼んだときも、同じ次の手を結果に `next_step` として足す（答える判断なら、業務ガイドは資料の根拠ではないので、根拠を集めて確かめてから答えるよう添える）。
+業務ガイドの手順を段として引く（#2396。動的な多段）: `rag_lookup_guides` は手順の中身（目的・検索の手がかり`retrieval_hints`・参照の資料と頁 `references`・必要な根拠・終わりの条件）・当たる分岐・共通の資料・完了の条件を返し、分かっている条件で外れた分岐の手順は返さない。判断が `answer` / `branch` で手順があれば、次の手に手順ごとの検索の語（手がかり、無ければ題名）と参照の資料・頁（`steps`）と「手順を段として順に引く」を足す（`guide_steps.guide_steps_next_step`。この実行で残る検索の回数が手順の数より少なければ、手順の語をまとめて `rag_retrieve_evidence` を 1 回呼び、参照の頁は予算の外の `rag_read_document` で読む案内にする）。この Run の根拠（根拠を集める・読むツールの結果）が手順に紐づくかは決定的に判定する（参照の文書で頁が重なる・呼び出しの query に手順の手がかりが出る・根拠の本文に手がかりが出る）。回答を確定する前に、根拠で確かめられる手順（手がかりか参照を持つ手順）のうち根拠の無い手順があれば、略号・別名と同じ 1 回の枠で、手順と検索の手がかり・参照の頁を挙げて差し戻す（`guide_steps.unresolved_guide_steps`。経過の`tool_grounding` の `guide_step_retry`。略号・別名も残っていれば 1 つの差し戻しにまとめる）。手順ごとの根拠の有無は支援タスクの状態の `guide.steps` に残す。根拠の `references` に別の文書（`document_title`）があれば、同じ文書の参照（`text_references`）と同じ形で、参照先の文書名と表記で引く手がかりを結果の `references` に足す。
 回答の最終の検証（#1246・#1277）: `AGENT_FINAL_VALIDATION_ENABLED`（既定 true）が true のとき、RAG の根拠を使った Run の
 回答を保存する前に、Control Plane が（モデルではなく）根拠を返した MCP 接続ごとに `rag_validate_answer` を呼ぶ。渡すのは
 その Run の質問・回答と、その接続の `rag_search` / `rag_retrieve_evidence` が返した根拠と `rag_read_source` / `rag_read_document` /

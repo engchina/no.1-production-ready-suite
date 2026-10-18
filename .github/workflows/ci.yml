@@ -360,6 +360,7 @@ jobs:
               - "rag/backend/tests/_ai_stubs.py"
               - "rag/backend/tests/test_*oracle*.py"
               - "rag/backend/tests/test_document_categories.py"
+              - "rag/backend/app/clients/support_guide_store.py"
             nl2sql_oracle:
               - "nl2sql/backend/migrations/**"
               - "nl2sql/backend/app/cli/nl2sql_system_schema.py"
@@ -370,6 +371,7 @@ jobs:
               - "nl2sql/backend/app/features/nl2sql/synthetic_oracle.py"
               - "nl2sql/backend/tests/conftest.py"
               - "nl2sql/backend/tests/*oracle_live*.py"
+              - "nl2sql/backend/app/features/nl2sql/db_admin_chat_columns.py"
             agent_oracle:
               - "agent/backend/app/system_schema.py"
               - "agent/backend/app/oracle_connection.py"

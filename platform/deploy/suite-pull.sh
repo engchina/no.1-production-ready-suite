@@ -59,8 +59,14 @@ suite_pull() {
   fi
   before="$(suite_git rev-parse --short HEAD)"
   pull_log "origin/${SUITE_GIT_REF} を取得します（${SUITE_REPO_DIR}、今は ${before}）。"
-  # clone は depth 1 のため、取得した commit へ branch を付け替える（fast-forward の判定は履歴が要るので使わない）。
-  suite_git fetch --depth 1 origin "${SUITE_GIT_REF}" || { pull_fail "取得に失敗しました。"; return 1; }
+  # 配備の clone は depth 1 のため、取得した commit へ branch を付け替える（fast-forward の判定は履歴が要るので使わない）。
+  # 履歴をすべて持つ clone（開発機を配備にも使う場合。worktree が同じ .git を共有する）は depth を付けずに取る。
+  # depth を付けると .git が shallow になり、worktree の merge-base・merge が誤る。
+  local depth_args=()
+  if [ "$(suite_git rev-parse --is-shallow-repository)" = "true" ]; then
+    depth_args=(--depth 1)
+  fi
+  suite_git fetch "${depth_args[@]}" origin "${SUITE_GIT_REF}" || { pull_fail "取得に失敗しました。"; return 1; }
   if ! suite_git checkout -B "${SUITE_GIT_REF}" FETCH_HEAD; then
     pull_fail "取得した commit へ切り替えられませんでした（未追跡のファイルとの衝突など）。上の git のエラーを確認してください。"
     return 1

@@ -928,6 +928,15 @@ def run_answer_text(run: RunState) -> str | None:
     return None
 
 
+def run_answer_notice(run: RunState) -> str | None:
+    """最終回答に付けた回答の注意書き（#2405。付けていない回答・古い Run は None）。"""
+    for artifact in reversed(run.artifacts):
+        if artifact.kind == "answer" and isinstance(artifact.content, dict):
+            notice = artifact.content.get("notice")
+            return notice if isinstance(notice, str) and notice else None
+    return None
+
+
 def is_withdrawn_run(run: RunState) -> bool:
     """「確認をやめる」で会話から外した Run か（回答前の確認。#1839）。"""
     return run.metadata.get(WITHDRAWN_METADATA_KEY) is True
@@ -1185,6 +1194,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         *,
         outcome: JsonObject | None = None,
         confirmations: Sequence[ConfirmationRequest] = (),
+        notice: str | None = None,
     ) -> RunState: ...
     def decide_confirmation(
         self,
@@ -2605,12 +2615,14 @@ class AgentRuntimeRepository:
         *,
         outcome: JsonObject | None = None,
         confirmations: Sequence[ConfirmationRequest] = (),
+        notice: str | None = None,
     ) -> RunState:
         """モデルの最終回答を成果物に残して完了にする。
 
         `outcome` は回答の対応（#1305。`answer_outcome.answer_outcome`）。あれば成果物の
         `outcome` に残す。`confirmations` はツールの結果の回答前の確認（NL2SQL・RAG。#1839）で、
-        完了した Run に出し、利用者の答えで次の Run を作る。
+        完了した Run に出し、利用者の答えで次の Run を作る。`notice` は回答の注意書き（#2405）で、
+        本文（`text`。会話の履歴に使う）とは別の項目に残す。
         """
         with self._lock:
             run = self._require_run(run_id)
@@ -2621,6 +2633,8 @@ class AgentRuntimeRepository:
             content: JsonObject = {"text": answer}
             if outcome is not None:
                 content["outcome"] = outcome
+            if notice:
+                content["notice"] = notice
             artifact = Artifact(name="回答", kind="answer", content=content)
             run.artifacts.append(artifact)
             self._append_event(
@@ -2842,7 +2856,8 @@ class AgentRuntimeRepository:
 
         `action` は `retry`（モデルへ差し戻した）か `hop_retry`（根拠の台帳の行の略号・別名を
         引かずに答えたため差し戻した。#1958）か `data_retry`（業務データを引かずに資料に無いとして
-        答えたため差し戻した。#1979）か `hop_reverted`（差し戻しの後の回答が前より悪いため、
+        答えたため差し戻した。#1979）か `guide_step_retry`（業務ガイドの手順の根拠を集めずに答えた
+        ため差し戻した。#2396）か `hop_reverted`（差し戻しの後の回答が前より悪いため、
         前の回答を使った。残すのは使わなかった差し戻しの後の回答。#1978）か `refused`（拒答の文に
         置き換えた）か
         `text_clarification`（回答前の確認のツールを渡したのに本文で確認の質問だけを返した。
@@ -2876,6 +2891,15 @@ class AgentRuntimeRepository:
                 message = (
                     "資料に無いとした値を業務データで確かめずに回答を作ったため、"
                     "業務データを引くようモデルに差し戻しました。"
+                )
+            elif action == "guide_step_retry":
+                # 業務ガイドの手順の根拠を集めずに回答したため差し戻した（#2396。#1958 と同じ
+                # 1 回の枠）。
+                record["hop_retries"] = 1
+                record["guide_step_retry"] = True
+                message = (
+                    "業務ガイドの手順の根拠を集めずに回答を作ったため、"
+                    "手順の根拠を引くようモデルに差し戻しました。"
                 )
             elif action == "hop_reverted":
                 # 差し戻しの後の回答が前の回答より悪かったため、前の回答を使った（#1978）。

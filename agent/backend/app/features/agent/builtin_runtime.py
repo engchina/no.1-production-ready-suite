@@ -85,6 +85,7 @@ from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_NAME,
     answer_evidence,
 )
+from app.features.agent.answer_notice import answer_takes_notice, current_answer_notice
 from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.answer_passages import is_absence_only, is_clarification_only
 from app.features.agent.answer_validation import (
@@ -175,6 +176,7 @@ from app.features.agent.context_window import (
     provider_overflow_message,
     tools_text,
 )
+from app.features.agent.guide_steps import unresolved_guide_steps, unresolved_guide_steps_message
 from app.features.agent.skills import (
     reset_pinned_skills,
     resolve_skill,
@@ -1161,7 +1163,13 @@ class _ToolRecorder:
                     output = {**output, "guide_check": note}
             if base == RAG_LOOKUP_GUIDES and isinstance(output, dict):
                 # モデルが自分で引いた業務ガイドにも次の手を足す（業務ガイドだけで答えさせない）。
-                note = guide_check_note(output, evidence_gathered=False)
+                note = guide_check_note(
+                    output,
+                    evidence_gathered=False,
+                    rag_calls_remaining=self.budget.rag_calls_remaining
+                    if self.budget is not None
+                    else None,
+                )
                 if note is not None:
                     output = {**output, "next_step": self._without_asking(note["next_step"])}
             if isinstance(output, dict):
@@ -1321,7 +1329,12 @@ class _ToolRecorder:
         )
         if not result.success or not isinstance(result.output, dict):
             return None
-        note = guide_check_note(result.output)
+        note = guide_check_note(
+            result.output,
+            rag_calls_remaining=self.budget.rag_calls_remaining
+            if self.budget is not None
+            else None,
+        )
         if note is not None:
             note = {**note, "next_step": self._without_asking(note.get("next_step"))}
         return note
@@ -2504,6 +2517,9 @@ async def _require_hops(
     同じ 1 回の枠で、業務データのツールを持つのに引かずに資料に無いとして答えた回答
     （`support_task.missing_data_lookup`。#1979）も差し戻す（利用者が業務データの確認を取り消した
     Run は除く。経過には `data_retry`）。略号・別名が残っていれば、そちらを先にする（重ねない）。
+    同じ枠で、照合した業務ガイドの手順のうち根拠を集めていない手順
+    （`guide_steps.unresolved_guide_steps`。#2396。経過には `guide_step_retry`）も差し戻す
+    （略号・別名と両方なら 1 つの差し戻しにまとめる）。
     """
     from app.features.agent.runtime import runtime_repository
 
@@ -2516,12 +2532,24 @@ async def _require_hops(
     if is_clarification_only(answer):
         return result
     pending = unresolved_hops(current.steps, answer, str(getattr(current, "goal", "") or ""))
+    # 業務ガイドの手順のうち根拠を集めていない手順（#2396）。略号・別名と同じ 1 回の枠で、両方あれば
+    # 1 つの差し戻しにまとめる。
+    guide_pending = unresolved_guide_steps(current.steps)
     if pending:
         head = unresolved_hops_message(pending)
+        if guide_pending:
+            head += "\n\n" + unresolved_guide_steps_message(guide_pending)
         runtime_repository.record_tool_grounding(run.id, "hop_retry", answer)
         logger.info(
             "builtin_runtime_unresolved_hops_retry",
             extra={"run_id": run.id, "values": [item["value"] for item in pending]},
+        )
+    elif guide_pending:
+        head = unresolved_guide_steps_message(guide_pending)
+        runtime_repository.record_tool_grounding(run.id, "guide_step_retry", answer)
+        logger.info(
+            "builtin_runtime_unresolved_guide_steps_retry",
+            extra={"run_id": run.id, "steps": [item["id"] for item in guide_pending]},
         )
     elif KIND_NL2SQL not in declined_kinds(current.metadata) and missing_data_lookup(
         current.steps, answer, [str(getattr(tool, "name", "")) for tool in sdk_agent.tools]
@@ -2621,8 +2649,12 @@ async def _finish(
                 STATUS_SKIPPED, reason=tool_grounding.REASON_NO_TOOL_GROUNDING
             ),
         )
+        # 拒答も回答なので、回答の注意書きを付ける（#2405）。
         runtime_repository.complete_builtin_run(
-            run_id, refusal, outcome=tool_grounding.refusal_outcome()
+            run_id,
+            refusal,
+            outcome=tool_grounding.refusal_outcome(),
+            notice=current_answer_notice(),
         )
         return
     answer = _answer_text(result.final_output)
@@ -2662,11 +2694,19 @@ async def _finish(
             )
             answer = with_unverified_notice(answer)
     _save_answer_evidence(run_id, answer, validation)
+    outcome = _answer_outcome(run_id, model_answer, validation)
     runtime_repository.complete_builtin_run(
         run_id,
         answer,
-        outcome=_answer_outcome(run_id, model_answer, validation),
+        outcome=outcome,
         confirmations=tool_confirmations,
+        # 回答の注意書き（#2405）。最終の検証の後に、本文とは別の項目として付ける。回答前の確認
+        # （カード）と確認の質問だけの回答には付けない。
+        notice=(
+            current_answer_notice()
+            if answer_takes_notice(outcome, confirmations=bool(tool_confirmations))
+            else None
+        ),
     )
 
 
