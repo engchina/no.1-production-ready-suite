@@ -66,7 +66,8 @@ SUITE_RAG_LONG_API_PATHS=(
   'mcp'
 )
 # NL2SQL: LLM を同期で呼ぶ API（SQL の分析・SQL から質問へ・コメント / 注釈 / ドメインの SQL の生成・
-# DB 管理の失敗の分析と結合条件の抽出）。SQL の生成と実行は job（POST /nl2sql/jobs と進み具合の SSE）。
+# DB 管理の失敗の分析と結合条件の抽出・DB 管理チャットの SQL の生成と失敗の分析（#2264））。
+# SQL の生成と実行は job（POST /nl2sql/jobs と進み具合の SSE）。
 # shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
 SUITE_NL2SQL_LONG_API_PATHS=(
   'nl2sql/analyze'
@@ -79,6 +80,8 @@ SUITE_NL2SQL_LONG_API_PATHS=(
   'nl2sql/domains/generate-sql'
   'nl2sql/db-admin/analyze-error'
   'nl2sql/db-admin/extract-join-where'
+  'nl2sql/db-admin-chat/generate'
+  'nl2sql/db-admin-chat/analyze-error'
 )
 # Agent: ツールを同期で呼ぶ API（RAG の rag_search などの外部 MCP を待つ）。Run は非同期で、進み具合は SSE。
 # shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する

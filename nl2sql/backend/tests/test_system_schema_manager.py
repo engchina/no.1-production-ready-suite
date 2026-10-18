@@ -92,10 +92,10 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
     assert created["TABLE"] == set(MANAGED_TABLES)
     assert created["INDEX"] == set(MANAGED_INDEXES)
     assert created["SEQUENCE"] == set(MANAGED_SEQUENCES)
-    assert len(MANAGED_TABLES) == 29
-    assert len(MANAGED_INDEXES) == 25
+    assert len(MANAGED_TABLES) == 30
+    assert len(MANAGED_INDEXES) == 27
     assert len(MANAGED_SEQUENCES) == 1
-    assert len(MANAGED_OBJECTS) == 57
+    assert len(MANAGED_OBJECTS) == 60
     assert [migration.version for migration in MIGRATIONS] == [
         0,
         1,
@@ -112,6 +112,7 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
         19,
         21,
         22,
+        23,
     ]
     assert all("security" not in migration.filename for migration in MIGRATIONS)
     assert set(MANAGED_TABLES).isdisjoint(PRESERVED_TABLES)
@@ -120,6 +121,20 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
     assert "NL2SQL_FEEDBACK_VECTORS" not in MANAGED_TABLES
     assert "NL2SQL_STATE_STORE" not in MANAGED_TABLES
     assert "USER_BUSINESS_SENTINEL" not in MANAGED_TABLES
+
+
+def test_admin_audit_migration_creates_named_table_and_indexes() -> None:
+    migration = next(item for item in MIGRATIONS if item.version == 23)
+    assert migration.created_objects == frozenset(
+        {
+            ("NL2SQL_ADMIN_AUDIT_LOG", "TABLE"),
+            ("IX_NL2SQL_ADMIN_AUDIT_TIME", "INDEX"),
+            ("IX_NL2SQL_ADMIN_AUDIT_ACTOR", "INDEX"),
+        }
+    )
+    statements = split_migration_sql(migration.path.read_text())
+    assert len(statements) == 3
+    assert "CONSTRAINT PK_NL2SQL_ADMIN_AUDIT_LOG PRIMARY KEY" in statements[0]
 
 
 def test_object_metadata_covers_manifest_order_and_marks_missing_objects() -> None:
@@ -142,8 +157,8 @@ def test_object_metadata_covers_manifest_order_and_marks_missing_objects() -> No
     metadata = manager._build_object_metadata(existing_objects, table_metadata, owner="NL2SQL_APP")
 
     assert [(item["name"], item["object_type"]) for item in metadata] == list(MANAGED_OBJECTS)
-    assert sum(item["object_type"] == "TABLE" for item in metadata) == 29
-    assert sum(item["object_type"] == "INDEX" for item in metadata) == 25
+    assert sum(item["object_type"] == "TABLE" for item in metadata) == 30
+    assert sum(item["object_type"] == "INDEX" for item in metadata) == 27
     assert sum(item["object_type"] == "SEQUENCE" for item in metadata) == 1
     assert metadata[0] == {
         "name": MANAGED_TABLES[0],
@@ -557,7 +572,7 @@ class _IncrementalWorkflowManager(_WorkflowManager):
         super().__init__("partial")
         self.before = _partial_status(
             applied_versions=[0, 1, 2, 3, 5, 6],
-            pending_versions=[7, 8, 9, 15, 17, 18, 19, 21, 22],
+            pending_versions=[7, 8, 9, 15, 17, 18, 19, 21, 22, 23],
             missing_objects=[
                 ("NL2SQL_EVALUATION_JOBS", "TABLE"),
                 ("NL2SQL_EVALUATION_RESULTS", "TABLE"),
@@ -576,7 +591,7 @@ def test_incremental_update_reaches_ready_without_replaying_old_migrations() -> 
 
     result = manager.initialize()
 
-    assert manager.applied_migrations == [7, 8, 9, 15, 17, 18, 19, 21, 22]
+    assert manager.applied_migrations == [7, 8, 9, 15, 17, 18, 19, 21, 22, 23]
     assert result["operation"] == "migrated"
     assert result["status"] == "ready"
     assert result["existing_object_count"] == len(MANAGED_OBJECTS)
@@ -1035,7 +1050,7 @@ async def test_system_table_post_requires_csrf_and_sql_execute_permission(
 
 
 def test_action_package_migration_preserves_complete_plsql_and_transaction() -> None:
-    migration = MIGRATIONS[-1]
+    migration = next(item for item in MIGRATIONS if item.version == 22)
     assert migration.created_objects == frozenset(
         {("NL2SQL_ONT_ACTION_TX", "PACKAGE"), ("NL2SQL_ONT_ACTION_TX", "PACKAGE BODY")}
     )

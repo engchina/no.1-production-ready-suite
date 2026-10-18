@@ -7,6 +7,7 @@ export const APP_ROUTES = {
   forbidden: "/forbidden",
   home: "/",
   chat: "/chat",
+  dbAdminChat: "/db-admin-chat",
   adminSql: "/admin-sql",
   tableManagement: "/table-management",
   viewManagement: "/view-management",

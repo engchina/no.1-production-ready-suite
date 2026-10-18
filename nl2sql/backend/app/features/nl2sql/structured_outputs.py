@@ -24,6 +24,13 @@ class AnalysisOutput(BaseModel):
     analysis: str
 
 
+class DbAdminChatAnalysisOutput(BaseModel):
+    """DB 管理チャットの失敗の分析（#2264）。直せないときは corrected_sql が空。"""
+
+    analysis: str
+    corrected_sql: str = ""
+
+
 class StructureOutput(BaseModel):
     logical_structure: str
 

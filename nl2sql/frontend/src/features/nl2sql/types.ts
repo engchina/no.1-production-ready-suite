@@ -1292,6 +1292,56 @@ export interface DbAdminExecuteData {
   timing: TimingEnvelope;
 }
 
+/** DB 管理チャット（#2264）の、実行の前の 1 文の分類。 */
+export interface DbAdminChatStatementPlan {
+  index: number;
+  statement_type: string;
+  sql: string;
+  select_only: boolean;
+  implicit_commit: boolean;
+  blocked_reason: string;
+}
+
+/** DB 管理チャットの、実行の前の分類（サーバーが必ず分類する）。 */
+export interface DbAdminChatPlan {
+  sql: string;
+  statements: DbAdminChatStatementPlan[];
+  read_only: boolean;
+  requires_confirmation: boolean;
+  /** 確認語（ADMIN_EXECUTE、1 つの対象を消す DROP / TRUNCATE は対象の名前）。不要なら空。 */
+  confirmation_target: string;
+  implicit_commit: boolean;
+  blocked: boolean;
+  blocked_reasons: string[];
+}
+
+/** DB 管理チャットの SQL の生成の結果（実行はしない）。 */
+export interface DbAdminChatGenerateData {
+  question: string;
+  explanation: string;
+  plan: DbAdminChatPlan;
+  context_tables: string[];
+  model: string;
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
+/** DB 管理チャットの同じ画面の前の往復（保存しない。続きの質問の文脈）。 */
+export interface DbAdminChatHistoryTurn {
+  question: string;
+  sql: string;
+  outcome: string;
+}
+
+/** DB 管理チャットの失敗の分析と直した SQL。 */
+export interface DbAdminChatAnalyzeData {
+  analysis: string;
+  corrected_plan: DbAdminChatPlan | null;
+  source: string;
+  model: string;
+  warnings: string[];
+}
+
 export type SampleDataset = "hr" | "sales" | "inquiries";
 
 export interface SampleDataInfo {

@@ -200,4 +200,25 @@ describe("ChatLayout", () => {
     click(buttons[0]);
     expect(onNew).toHaveBeenCalledTimes(1);
   });
+  it("会話を保存しない画面（history を渡さない）は、履歴のパネルと開閉ボタンを出さない（#2264）", () => {
+    act(() =>
+      root.render(
+        <ChatLayout
+          label="DB 管理チャット"
+          newConversation={{ label: "新しい会話", onClick: () => undefined }}
+          logLabel="会話"
+          composer={<textarea aria-label="質問" />}
+          testIdPrefix="db-chat"
+        >
+          <p>質問と回答</p>
+        </ChatLayout>
+      )
+    );
+    expect($('[data-testid="db-chat-history"]')).toBeNull();
+    expect($('[data-testid="db-chat-history-toggle"]')).toBeNull();
+    expect($('[data-testid="db-chat-panel"]')).not.toBeNull();
+    expect($('[role="log"]')!.textContent).toBe("質問と回答");
+    setWide(false);
+    expect($('[data-testid="db-chat-history"]')).toBeNull();
+  });
 });

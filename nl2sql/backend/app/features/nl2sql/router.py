@@ -98,6 +98,11 @@ from .models import (
     CommentSuggestionRequest,
     DbAdminAiAnalysisData,
     DbAdminAiAnalysisRequest,
+    DbAdminChatAnalyzeData,
+    DbAdminChatAnalyzeRequest,
+    DbAdminChatExecuteRequest,
+    DbAdminChatGenerateData,
+    DbAdminChatGenerateRequest,
     DbAdminCsvUploadData,
     DbAdminCsvUploadRequest,
     DbAdminDataPreviewData,
@@ -230,6 +235,7 @@ from .select_ai_readiness import (
 from .service import (
     _SCHEMA_EMPTY_MESSAGE,
     ChatConversationBusyError,
+    DbAdminChatGenerationError,
     JobIdConflictError,
     JobProgressData,
     ProfileNameConflict,
@@ -3040,6 +3046,34 @@ def db_admin_analyze_error(
 ) -> ApiResponse[DbAdminAiAnalysisData]:
     """Admin SQL 実行結果の AI 分析(OCI Enterprise AI、未設定時は deterministic)。"""
     return ApiResponse(data=nl2sql_service.analyze_db_admin_failure(req))
+
+
+# ---- DB 管理チャット（#2264）。画面だけの API（Cookie / CSRF）。API キー・MCP・Agent は使えない
+
+
+@router.post("/db-admin-chat/generate", response_model=ApiResponse[DbAdminChatGenerateData])
+def db_admin_chat_generate(
+    req: DbAdminChatGenerateRequest,
+) -> ApiResponse[DbAdminChatGenerateData]:
+    """質問から Oracle の SQL を作る（Enterprise AI Direct。実行はしない）。"""
+    try:
+        return ApiResponse(data=nl2sql_service.generate_db_admin_chat_sql(req))
+    except DbAdminChatGenerationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post("/db-admin-chat/execute", response_model=ApiResponse[DbAdminExecuteData])
+def db_admin_chat_execute(req: DbAdminChatExecuteRequest) -> ApiResponse[DbAdminExecuteData]:
+    """SELECT は押せば実行、それ以外は確認語があるときだけ実行する（監査の表に残す）。"""
+    return ApiResponse(data=nl2sql_service.execute_db_admin_chat_sql(req))
+
+
+@router.post("/db-admin-chat/analyze-error", response_model=ApiResponse[DbAdminChatAnalyzeData])
+def db_admin_chat_analyze_error(
+    req: DbAdminChatAnalyzeRequest,
+) -> ApiResponse[DbAdminChatAnalyzeData]:
+    """失敗の原因と直した SQL（直した SQL も確認からやり直す）。"""
+    return ApiResponse(data=nl2sql_service.analyze_db_admin_chat_failure(req))
 
 
 @router.post("/db-admin/extract-join-where", response_model=ApiResponse[DbAdminJoinWhereData])

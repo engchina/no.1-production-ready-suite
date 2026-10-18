@@ -198,6 +198,11 @@ const SecurityRolesPage = lazy(() =>
     default: module.SecurityRolesPage,
   }))
 );
+const DbAdminChatPage = lazy(() =>
+  import("@/features/nl2sql/DbAdminChatPage").then((module) => ({
+    default: module.DbAdminChatPage,
+  }))
+);
 const SecurityPermissionsPage = lazy(() =>
   import("@/features/security/SecurityPermissionsPage").then((module) => ({
     default: module.SecurityPermissionsPage,
@@ -319,6 +324,8 @@ function AuthorizedApplication() {
             {KEEP_ALIVE_PAGES.map((page) => (
               <Route key={page.path} path={page.path} element={null} />
             ))}
+            {/* DB 管理チャット（#2264）は会話を保存しないので常時マウントしない（画面を離れると消える）。 */}
+            <Route path={APP_ROUTES.dbAdminChat} element={<DbAdminChatPage />} />
             <Route path={APP_ROUTES.profiles} element={<ProfileManagementPage />} />
             <Route path={APP_ROUTES.ontologyBuild} element={<OntologyBuildPage />} />
             <Route path={APP_ROUTES.glossaryRules} element={<GlossaryRulesPage />} />

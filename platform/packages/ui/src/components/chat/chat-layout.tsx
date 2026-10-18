@@ -42,7 +42,8 @@ export interface ChatLayoutLatest {
   onClick: () => void;
 }
 
-export interface ChatLayoutProps {
+/** 会話の履歴のパネル・シート（保存しない会話の画面では渡さない）。 */
+export interface ChatLayoutHistory {
   /** `useChatHistoryPanel` の戻り値。 */
   history: ChatHistoryPanel;
   /** 「会話の履歴」（翻訳済み）。パネル・シートの見出しと名前、開閉ボタンの名前に使う。 */
@@ -51,6 +52,19 @@ export interface ChatLayoutProps {
   historyCloseLabel: string;
   /** 履歴の中身（一覧・読み込み中・失敗・空・ページング）。 */
   historyContent: ReactNode;
+}
+
+/** 会話を保存しない画面（NL2SQL の DB 管理チャット。#2264）の、履歴を持たない形。 */
+export interface ChatLayoutWithoutHistory {
+  history?: undefined;
+  historyTitle?: undefined;
+  historyCloseLabel?: undefined;
+  historyContent?: undefined;
+}
+
+export type ChatLayoutProps = (ChatLayoutHistory | ChatLayoutWithoutHistory) & ChatLayoutBaseProps;
+
+export interface ChatLayoutBaseProps {
   /** 会話の領域（`<section>`）の名前（翻訳済み）。 */
   label: string;
   /** 今の会話の名前。会話を選んでいない・まだ分からないときは `null` / `undefined`。 */
@@ -84,6 +98,7 @@ export interface ChatLayoutProps {
  * - 会話の領域: 上端の行（履歴の開閉・今の会話の名前・「新しい会話」）、`role="log"` の会話の欄（中だけスクロール）、
  *   入力欄の領域の 3 段。lg 未満は高さを 70dvh（最小 28rem）にし、長い会話でページを伸ばさない。lg 以上は残りの高さ。
  * - 文言は翻訳済みを受け、業務の語彙を持たない。往復の表示・入力欄・履歴の中身は製品が渡す。
+ * - 会話を保存しない画面（`history` を渡さない）は、履歴のパネル・シートと開閉ボタンを出さない（#2264）。
  */
 export function ChatLayout({
   history,
@@ -119,11 +134,11 @@ export function ChatLayout({
     <div
       className={cn(
         "grid min-w-0 gap-4 lg:min-h-0 lg:flex-1",
-        history.inline && history.inlineOpen && "lg:grid-cols-[20rem_minmax(0,1fr)]"
+        history?.inline && history.inlineOpen && "lg:grid-cols-[20rem_minmax(0,1fr)]"
       )}
       data-chat-layout=""
     >
-      {history.inline ? (
+      {!history ? null : history.inline ? (
         <aside
           id={history.id}
           aria-label={historyTitle}
@@ -159,6 +174,7 @@ export function ChatLayout({
       >
         {/* 上端の行: 履歴の開閉（左端）・今の会話の名前・新しい会話（右端）。履歴を閉じていても使える。 */}
         <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+          {history ? (
           <Button
             ref={history.toggleRef}
             type="button"
@@ -173,6 +189,7 @@ export function ChatLayout({
             disabled={historyToggleDisabled}
             onClick={history.toggle}
           />
+          ) : null}
           <div className="min-w-0 flex-1">
             {conversationTitle ? (
               <h2 className="truncate text-sm font-medium text-fg" title={conversationTitle} data-testid={ids.title}>

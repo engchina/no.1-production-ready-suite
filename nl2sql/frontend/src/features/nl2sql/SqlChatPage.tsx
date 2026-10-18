@@ -8,7 +8,6 @@ import {
 import {
   Play,
   RefreshCw,
-  RotateCcw,
 } from "lucide-react";
 import {
   ApiErrorBanner,
@@ -16,15 +15,12 @@ import {
   Button,
   Card,
   CardContent,
-  ChatComposer,
   ClarificationRecord,
   ChatComposerOption,
   ChatHistoryList,
-  ChatLayout,
   ChatProgress,
   ChatSkeleton,
   ChatAnswer,
-  ChatPendingTurn,
   ChatTurn,
   Disclosure,
   EmptyState,
@@ -47,7 +43,6 @@ import {
   useChatHistoryPanel,
   DEFAULT_PAGE_SIZE,
   type ChatProgressPage,
-  CopyButton,
 } from "@production-ready/ui";
 import {
   useWorkspaceActive,
@@ -77,6 +72,12 @@ import {
   useChatSqlExecution,
 } from "./components/ChatSqlExecution";
 import {
+  ChatSqlBlock,
+  Nl2SqlChatComposer,
+  Nl2SqlChatLayout,
+  Nl2SqlPendingTurn,
+} from "./components/ChatScaffold";
+import {
   ChatRequirementTurn,
   useChatRequirementFlow,
 } from "./components/ChatRequirementTurn";
@@ -96,7 +97,6 @@ import {
   CHAT_PROGRESS_LABELS,
   CHAT_PROGRESS_STEP_DEFINITIONS,
   chatJobElapsedMs,
-  chatSubmitProgressSteps,
 } from "./chatProgress";
 import type { JobCreateData, JobData, Nl2SqlEngine, OffsetPage } from "./types";
 import { useProfileEngine } from "./useProfileEngine";
@@ -207,17 +207,6 @@ async function submitChatJob(
   }
 }
 
-/** 送信の応答が届かなかったときは、ジョブが作られている可能性と確かめ方を出す。 */
-function sendFailureText(error: unknown) {
-  if (!isTransportError(error) || error.kind !== "timeout" || !error.timeoutMs)
-    return {};
-  return {
-    summary: t("chat.sendTimeout", {
-      seconds: Math.ceil(error.timeoutMs / 1000),
-    }),
-    nextAction: t("chat.sendTimeout.action"),
-  };
-}
 const dateFormatter = new Intl.DateTimeFormat("ja-JP", {
   timeZone: "Asia/Tokyo",
   month: "numeric",
@@ -802,12 +791,13 @@ export function SqlChatPage() {
         </Card>
         {noProfiles || profilesFailed ? null : (
           // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
-          <ChatLayout
-            history={historyPanel}
-            historyTitle={t("chat.history")}
-            historyCloseLabel={t("chat.closeHistory")}
-            historyContent={historyContent}
-            historyToggleDisabled={profilesLoading}
+          // NL2SQL の文言は DB 管理チャットと共通の Nl2SqlChatLayout が付ける（#2264）。
+          <Nl2SqlChatLayout
+            history={{
+              panel: historyPanel,
+              content: historyContent,
+              toggleDisabled: profilesLoading,
+            }}
             label={t("chat.conversation")}
             // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。
             conversationTitle={
@@ -816,25 +806,16 @@ export function SqlChatPage() {
             conversationTitleLoading={
               Boolean(conversationId) && conversation.isPending
             }
-            newConversation={{
-              label: t("chat.new"),
-              onClick: resetConversation,
-              disabled: busy || profilesLoading,
-            }}
-            logLabel={t("chat.messages")}
-            logRef={autoScroll.logRef}
-            latest={{
-              visible: autoScroll.showLatest,
-              label: t("chat.latest"),
-              onClick: () => autoScroll.scrollToLatest("smooth"),
-            }}
+            onNewConversation={resetConversation}
+            newConversationDisabled={busy || profilesLoading}
+            autoScroll={autoScroll}
             testIdPrefix="sql-chat"
             composer={
               <>
                 {/* 入力欄の領域（設定の行・入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。
                     業務プロファイルの一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
                     会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
-                <ChatComposer
+                <Nl2SqlChatComposer
                   id="sql-chat-composer"
                   value={draft}
                   onValueChange={setDraft}
@@ -851,11 +832,6 @@ export function SqlChatPage() {
                   textareaRef={composerRef}
                   submitBlocked={blocked}
                   disabled={profilesLoading}
-                  label={t("chat.query")}
-                  placeholder={t("chat.placeholder")}
-                  sendLabel={t("chat.send")}
-                  stopLabel={t("chat.stop")}
-                  maxLength={10000}
                   sendTestId="sql-chat-send"
                   // system_admin が他の利用者の会話で入力するとき、持ち主にも回答と途中の結果が見えることを
                   // 送る前に示す（新しい会話・自分の会話では出さない。#1954）。
@@ -981,46 +957,16 @@ export function SqlChatPage() {
             {pending ? (
               // 送った質問はジョブの投入の応答を待たずに出す。失敗しても残す（#907）。
               // 1 往復の入れ物・送信中の回答の場所・失敗の出し方は 3 製品共通の ChatPendingTurn（#1161）。
-              <ChatPendingTurn
+              <Nl2SqlPendingTurn
                 message={pending}
-                failedLabel={t("chat.sendFailedStatus")}
-                testId="sql-chat-pending-turn"
-                // 送信の応答（ジョブの投入）を待つ間も段階として出す。投入が遅いと、この段階に
-                // 遅延の案内が付き、生成ではなく送信で待っていることが分かる（#1145）。
-                progress={
-                  <ChatProgress
-                    key={pending.localId}
-                    steps={chatSubmitProgressSteps(pending.sentAtMs)}
-                    labels={CHAT_PROGRESS_LABELS}
-                    testId="sql-chat-progress"
-                  />
-                }
-                failure={
-                  send.isError ? (
-                    // 失敗の理由は送った質問の直下（会話の中）に出す（messaging.md §10.1 のチャットの扱い）。
-                    <ApiErrorBanner
-                      error={send.error}
-                      fallback={t("chat.sendFailed")}
-                      testId="sql-chat-send-error"
-                      {...sendFailureText(send.error)}
-                      action={
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          icon={RotateCcw}
-                          disabled={blocked}
-                          onClick={resend}
-                        >
-                          {t("chat.resend")}
-                        </Button>
-                      }
-                    />
-                  ) : null
-                }
+                error={send.isError ? send.error : null}
+                fallback={t("chat.sendFailed")}
+                onResend={resend}
+                resendDisabled={blocked}
+                testIdPrefix="sql-chat"
               />
             ) : null}
-          </ChatLayout>
+          </Nl2SqlChatLayout>
         )}
       </PageBody>
     </div>
@@ -1140,28 +1086,25 @@ function SqlChatTurn({
           ) : null}
           {result ? (
             <>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <StatusBadge
-                  variant={result.safety.is_safe ? "success" : "danger"}
-                  label={
-                    !result.safety.is_safe
-                      ? t("chat.blocked")
-                      : executed
-                        ? t("chat.safeExecuted")
-                        : t("chat.safe")
-                  }
-                />
-                <div className="flex flex-wrap items-center gap-2">
-                  <CopyButton
-                    size="sm"
-                    text={result.generated_sql}
-                    label={t("chat.copySql")}
-                    copiedMessage={t("chat.sqlCopied")}
-                    failedMessage={t("chat.copyFailed")}
-                    onCopied={() => setCopyError("")}
-                    onCopyError={setCopyError}
+              {/* SQL の表示（状態・コピー・実行・本文）は DB 管理チャットと共通（#2264）。 */}
+              <ChatSqlBlock
+                sql={result.generated_sql}
+                onCopied={() => setCopyError("")}
+                onCopyError={setCopyError}
+                badges={
+                  <StatusBadge
+                    variant={result.safety.is_safe ? "success" : "danger"}
+                    label={
+                      !result.safety.is_safe
+                        ? t("chat.blocked")
+                        : executed
+                          ? t("chat.safeExecuted")
+                          : t("chat.safe")
+                    }
                   />
-                  {executable && canExecuteSql ? (
+                }
+                actions={
+                  executable && canExecuteSql ? (
                     // 吹き出しの中の操作なので secondary。実行中はラベルを変えず、アイコンがスピナーになる。
                     <Button
                       type="button"
@@ -1174,12 +1117,9 @@ function SqlChatTurn({
                     >
                       {executed ? t("chat.execute.again") : t("chat.execute")}
                     </Button>
-                  ) : null}
-                </div>
-              </div>
-              <pre className="max-w-full overflow-x-auto rounded-md border border-border bg-canvas p-3 text-sm [scrollbar-gutter:stable]">
-                <code>{result.generated_sql}</code>
-              </pre>
+                  ) : null
+                }
+              />
               {result.explanation ? (
                 <MessageText text={result.explanation} />
               ) : null}

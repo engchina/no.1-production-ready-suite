@@ -3278,7 +3278,7 @@ const history = useChatHistoryPanel({ inlineOpen: historyOpen, onInlineOpenChang
 
 | prop | 型 | 既定 | 説明 |
 |---|---|---|---|
-| `history` | `ChatHistoryPanel` | — | `useChatHistoryPanel` の戻り値 |
+| `history` | `ChatHistoryPanel` | — | `useChatHistoryPanel` の戻り値。会話を保存しない画面（NL2SQL の DB 管理チャット。#2264）は `history`・`historyTitle`・`historyCloseLabel`・`historyContent` をまとめて省き、履歴のパネル・シートと上端の行の開閉ボタンを出さない |
 | `historyTitle` / `historyCloseLabel` | `string` | — | 履歴の見出し・名前（開閉ボタンの名前にも使う）と、シートを閉じるボタンの名前 |
 | `historyContent` | `ReactNode` | — | 履歴の中身（一覧・読み込み中・失敗・空・ページング） |
 | `label` | `string` | — | 会話の領域（`<section>`）の名前 |

@@ -46,6 +46,7 @@ const EXPECTED_ICON_NAMES_BY_LABEL_KEY = new Map<string, string>([
   ["nav.directSql", "FileCode2"],
   ["nav.sqlToQuestion", "MessageSquareCode"],
   ["nav.history", "History"],
+  ["nav.dbAdminChat", "BotMessageSquare"],
   ["nav.adminSql", "SquareTerminal"],
   ["nav.tableManagement", "Table2"],
   ["nav.viewManagement", "Eye"],
