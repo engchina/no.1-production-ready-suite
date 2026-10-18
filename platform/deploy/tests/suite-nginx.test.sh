@@ -66,11 +66,15 @@ assert_contains "${site_all_https}" "location = /platform/ca.crt" "CA 証明書�
 assert_contains "${site_all_https}" "alias /srv/ssl/ca.crt;" "CA 証明書の場所"
 assert_not_contains "${site_all_https}" "ca.key" "CA の秘密鍵を配らない"
 assert_contains "${site_all_https}" "return 302 /agent/;" "/ は /agent/ へ"
+assert_contains "${site_all_https}" 'add_header Cache-Control "no-cache" always;' "index.html は毎回確かめる"
+assert_contains "${site_all_https}" 'add_header Cache-Control "public, max-age=31536000, immutable" always;' "hash 付きの build の出力は長く cache"
 for product in rag nl2sql agent; do
   assert_contains "${site_all_https}" "location /${product}/api/ {" "${product} の API"
   assert_contains "${site_all_https}" "location = /${product}/api/auth/login {" "${product} のログインの上限"
   assert_contains "${site_all_https}" "location = /${product}/health {" "${product} の health"
   assert_contains "${site_all_https}" "alias /srv/suite/${product}/frontend/dist/;" "${product} の frontend"
+  assert_contains "${site_all_https}" "location /${product}/assets/ {" "${product} の build の出力"
+  assert_contains "${site_all_https}" "alias /srv/suite/${product}/frontend/dist/assets/;" "${product} の build の出力の場所"
 done
 assert_contains "${site_all_https}" "proxy_pass http://127.0.0.1:8000\$pr_suite_upstream_uri;" "RAG の backend は 8000"
 assert_contains "${site_all_https}" "proxy_pass http://127.0.0.1:8010\$pr_suite_upstream_uri;" "NL2SQL の backend は 8010"
