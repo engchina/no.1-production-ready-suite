@@ -773,6 +773,8 @@ function createState() {
     databaseSettings: d.databaseSettings as Json,
     adbInfo: d.adbInfo as Json,
     uploadStorage: d.uploadStorage as Json,
+    // 回答の注意書き（3 製品で共通の文。#2405）。既定は未設定（既定の文）。
+    answerNotice: { enabled: true, text: null } as { enabled: boolean; text: string | null },
     ociSettings: d.ociSettings as Json,
     // システムテーブルの状態（#751）。既定は旧版の DB（検索・回答プロファイルの表の削除を承認する前）。
     systemTables: clone(SYSTEM_TABLES_LEGACY) as Json,
@@ -2764,6 +2766,19 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         region: state.databaseSettings.region || null,
       };
       return state.adbInfo;
+    }
+    if (at("settings", "answer-notice")) {
+      if (method === "PUT") {
+        state.answerNotice = { enabled: Boolean(body.enabled), text: (body.text as string | null) ?? null };
+      }
+      const defaultText = "この回答は AI が生成したもので、誤りや不足を含む場合があります。";
+      return {
+        ...state.answerNotice,
+        default_text: defaultText,
+        effective_text: state.answerNotice.text ?? defaultText,
+        max_chars: 500,
+        updated_at: null,
+      };
     }
     if (at("settings", "upload-storage")) {
       if (method === "GET") return state.uploadStorage;
