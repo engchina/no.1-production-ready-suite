@@ -2369,9 +2369,10 @@ def test_route_permissions_cover_every_mounted_route() -> None:
     # （#1524）は業務プロファイルの管理と SQL の生成の権限。業務プロファイルの保存（Oracle 反映）の
     # 事前条件の Select AI の Credential の状態（#1683 / #1688）は、Credential が前提の操作の
     # いずれかの権限で読める。会話の名前の変更・削除（#1817）は生成の権限で本人の会話だけ。
-    # 実行履歴の 1 行（全幅の詳細。#1955）は一覧と同じ権限。
-    assert len(mounted) == 290
-    assert len(ROUTE_PERMISSIONS) == 278
+    # 実行履歴の 1 行（全幅の詳細。#1955）は一覧と同じ権限。DB 管理チャット（#2264）の生成・実行・
+    # 失敗の分析は menu.db_admin_chat だけ。
+    assert len(mounted) == 293
+    assert len(ROUTE_PERMISSIONS) == 281
     assert ROUTE_PERMISSIONS[("GET", "/nl2sql/select-ai/credential-readiness")] == frozenset(
         {
             "nl2sql.profiles.manage",
@@ -5643,6 +5644,102 @@ def test_nested_synthetic_routes_use_authenticated_effective_path(
                 },
             )
             assert response.status_code == (403 if actor_kind == "denied" else 400), response.text
+
+    asyncio.run(exercise())
+
+
+def test_db_admin_chat_requires_its_own_menu_permission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DB 管理チャット（#2264）は menu.db_admin_chat だけで通し、管理 SQL を実行の権限では通さない。
+
+    画面の API（Cookie / CSRF）だけで、権限の無い利用者は API でも拒否する。権限管理の画面から
+    自分の持たない menu.db_admin_chat を付与することもできない（越権の防止）。
+    """
+
+    import importlib
+
+    from app.features.nl2sql.models import DbAdminChatExecuteRequest
+    from app.features.nl2sql.service import Nl2SqlService
+    from app.features.nl2sql.store import MemoryNl2SqlStore
+    from app.security.request_actor import actor_scope
+
+    for route in ("generate", "execute", "analyze-error"):
+        assert permission_for_route("POST", f"/nl2sql/db-admin-chat/{route}") == frozenset(
+            {"menu.db_admin_chat"}
+        )
+    security = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = _login(security)
+    nl2sql = Nl2SqlService(store=MemoryNl2SqlStore())
+    router = importlib.import_module("app.features.nl2sql.router")
+    monkeypatch.setattr(router, "nl2sql_service", nl2sql)
+    monkeypatch.setattr(nl2sql, "_use_oracle_runtime", lambda: False)
+    monkeypatch.setattr(nl2sql, "_current_schema_owner", lambda: "APP")
+
+    async def exercise() -> None:
+        for index, permissions in enumerate(
+            [
+                {"menu.admin_sql"},
+                {"menu.db_admin_chat"},
+                {"menu.security_permissions", "menu.security_roles", "menu.admin_sql"},
+            ]
+        ):
+            role = security.create_role(
+                role_code=f"DBCHAT_{index}",
+                display_name=f"DB 管理チャットのテスト {index}",
+                description="操作権限テスト",
+                permissions=permissions,
+                entitlements=[],
+                actor=admin,
+            )
+            user = _create_active_user(
+                security,
+                admin,
+                login_user_id=f"dbchat_{index}",
+                display_name=f"dbchat {index}",
+                role_ids=[role.role_id],
+                password="DbChatPass!123",
+            )
+            allowed = "menu.db_admin_chat" in permissions
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                _, csrf = await _login_api(client, f"dbchat_{index}", "DbChatPass!123")
+                headers = {"X-CSRF-Token": csrf}
+                for route, body in (
+                    ("execute", {"sql": "SELECT 1 FROM DUAL"}),
+                    ("analyze-error", {"sql": "SELECT 1 FROM DUAL", "result_text": "ORA-00942"}),
+                ):
+                    response = await client.post(
+                        f"/api/nl2sql/db-admin-chat/{route}", headers=headers, json=body
+                    )
+                    assert response.status_code == (200 if allowed else 403), (
+                        permissions,
+                        route,
+                        response.text,
+                    )
+                # API の判定を通さないサービスの直呼びも同じ判定になる。
+                with actor_scope(user.user_uuid):
+                    request = DbAdminChatExecuteRequest(sql="SELECT 1 FROM DUAL")
+                    if allowed:
+                        nl2sql.execute_db_admin_chat_sql(request)
+                    else:
+                        with pytest.raises(SecurityApiError) as denied:
+                            nl2sql.execute_db_admin_chat_sql(request)
+                        assert denied.value.status_code == 403
+                if "menu.security_permissions" in permissions:
+                    # 自分の持たない menu.db_admin_chat は、自分のロールにも付与できない。
+                    current = security.store.get_role(role.role_id)
+                    assert current is not None
+                    granted = await client.put(
+                        f"/api/security/roles/{role.role_id}/permissions",
+                        headers=headers,
+                        json={
+                            "version": current.version,
+                            "permissions": sorted({*permissions, "menu.db_admin_chat"}),
+                        },
+                    )
+                    assert granted.status_code == 403, granted.text
 
     asyncio.run(exercise())
 

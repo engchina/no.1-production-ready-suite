@@ -148,6 +148,47 @@ const nl2sqlJa = {
   "chat.execute.last.truncated":
     "前回の実行（{at}）: 先頭の {rows} 行を取得（さらに行があります）・{columns} 列。結果の行は保存していないため、見るにはもう一度実行してください。",
   "chat.execute.last.failed": "前回の実行（{at}）は失敗しました。もう一度実行できます。",
+  // DB 管理チャット（#2264）。チャットと同じ部品・同じ書き方（副題・空の状態）にし、名詞だけを変える。
+  "dbAdminChat.subtitle":
+    "データベースに質問し、生成した SQL と実行の結果を確かめながら会話を続ける",
+  "dbAdminChat.conversation": "DB 管理の会話",
+  "dbAdminChat.emptyHint":
+    "同じ会話の中では、前の質問と SQL を踏まえて SQL を生成します（例: 「表領域の使用状況」の後に「使用率の高い順にして」）。生成した SQL は自動では実行しません。SELECT は「実行」で、それ以外は実行確認語を入力して実行します。会話は保存しないので、画面を離れると消えます。",
+  "dbAdminChat.sendFailed": "SQL を生成できませんでした。",
+  "dbAdminChat.noSql": "SQL は生成しませんでした。",
+  "dbAdminChat.badge.readOnly": "読み取り専用・未実行",
+  "dbAdminChat.badge.readOnlyExecuted": "読み取り専用・実行済み",
+  "dbAdminChat.badge.confirmation": "確認語が必要・未実行",
+  "dbAdminChat.badge.confirmationExecuted": "確認語で実行済み",
+  "dbAdminChat.badge.blocked": "実行できない SQL",
+  "dbAdminChat.blocked.title": "この SQL は実行できません",
+  "dbAdminChat.blocked.hint":
+    "データベースの停止・ユーザーの作成と削除・システムの設定の変更・動的 SQL・アプリのシステムの表への操作は、DB 管理チャットでは実行できません。",
+  "dbAdminChat.warning.mutation":
+    "この SQL はデータベースを変更します。内容を確かめ、実行確認語を入力してから実行してください。",
+  "dbAdminChat.warning.implicitCommit":
+    "DDL（CREATE・ALTER・DROP・TRUNCATE など）は Oracle が暗黙に commit するため、実行すると元に戻せません。",
+  "dbAdminChat.confirmation.helper":
+    "SELECT 以外の SQL は、確認語 {target} を入力すると実行できます。SQL が変わると確認はやり直しになります。",
+  "dbAdminChat.check.readOnly": "読み取り専用（確認語は不要）",
+  "dbAdminChat.check.confirmation": "確認語 {target} が必要",
+  "dbAdminChat.check.blocked": "実行できない文を含みます",
+  "dbAdminChat.contextTables": "生成に渡した表: {tables}",
+  "dbAdminChat.execute.failed": "SQL を実行できませんでした。",
+  "dbAdminChat.fullResultHint":
+    "すべての行が必要なときは、「管理 SQL を実行」で取得件数上限を指定して実行してください。",
+  "dbAdminChat.analyze": "AI でエラーを分析",
+  "dbAdminChat.analyze.running": "エラーを分析しています",
+  "dbAdminChat.analyze.failed": "エラーを分析できませんでした。",
+  "dbAdminChat.analyze.title": "AI のエラー分析",
+  "dbAdminChat.analyze.corrected": "修正した SQL",
+  "dbAdminChat.analyze.useCorrected": "修正した SQL を使う",
+  "dbAdminChat.analyze.correctedHint":
+    "修正した SQL を使うと、実行の前に分類し直し、確認語からやり直します。",
+  "dbAdminChat.correctedApplied": "AI のエラー分析で修正した SQL です。",
+  "dbAdminChat.outcome.success": "成功",
+  "dbAdminChat.outcome.rows": "成功（{count} 行）",
+  "dbAdminChat.outcome.failed": "失敗: {message}",
   "security.deepsec.entitlements.expression.group": "条件グループ",
   "security.deepsec.entitlements.expression.match": "条件の組み合わせ",
   "security.deepsec.entitlements.expression.and": "すべて満たす（AND）",
@@ -220,6 +261,7 @@ const nl2sqlJa = {
   "nav.questionClassifierModels": "質問分類モデル管理",
   "nav.history": "実行履歴",
   "nav.directSql": "SELECT SQL を実行",
+  "nav.dbAdminChat": "DB 管理チャット",
   "nav.adminSql": "管理 SQL を実行",
   "nav.evaluation": "SQL生成評価",
   "nav.settingsConnection": "接続設定",
