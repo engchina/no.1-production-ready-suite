@@ -14,6 +14,8 @@ import {
   ChatProgress,
   CopyButton,
   DEFAULT_PAGE_SIZE,
+  PageBody,
+  PageHeader,
   type ChatAutoScroll,
   type ChatComposerProps,
   type ChatHistoryActions,
@@ -164,6 +166,32 @@ export function Nl2SqlChatHistoryList<T extends Nl2SqlConversationItem>({
 /** 会話の履歴の位置（offset）を作業状態の値から読む（不正な値は先頭）。 */
 export function normalizeHistoryOffset(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+/**
+ * NL2SQL のチャットの画面の外枠（見出しと本文）。本文を画面の高さに収め、会話の欄（`Nl2SqlChatLayout`）の
+ * 中だけをスクロールさせる（入力欄は会話のカードの下端、履歴のパネルは左に固定）。「チャット」と「DB 管理チャット」
+ * はこの部品で描き、高さの渡し方を画面ごとに書き写さない（#2332）。画面の route は `FILL_HEIGHT_ROUTES` にも置く。
+ */
+export function Nl2SqlChatPage({
+  title,
+  subtitle,
+  testId,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  testId?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-1 flex-col">
+      <PageHeader wide title={title} subtitle={subtitle} />
+      <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4" data-testid={testId}>
+        {children}
+      </PageBody>
+    </div>
+  );
 }
 
 /**

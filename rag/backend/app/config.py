@@ -1257,7 +1257,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_article_catalog_max_documents: int = Field(
-        default=5,
+        default=8,
         ge=0,
         le=10,
         description=(
@@ -1266,7 +1266,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_article_catalog_max_articles: int = Field(
-        default=8,
+        default=12,
         ge=0,
         le=20,
         description="条の目録から 1 つの文書で選ぶ条の上限(#2254)。",
@@ -1287,6 +1287,14 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description=(
             "検索の範囲の条で構成された文書の一覧から、LLM が選んで目録を読む文書の数"
             "(検索の候補に出ない文書。手続の一般的な規則の文書など。#2254)。0 は候補の文書だけ。"
+        ),
+    )
+    rag_article_catalog_original_question_search: bool = Field(
+        default=True,
+        description=(
+            "元の質問(業務 Agent が注入する original_question)でも 1 回ベクトル検索し、"
+            "その候補を条の目録を読む文書の順位に足す(候補・context には足さない)。"
+            "短い検索文で事例の論点の文書が候補に出ないことへの対策。"
         ),
     )
     rag_answer_validation_max_input_bytes: int = Field(

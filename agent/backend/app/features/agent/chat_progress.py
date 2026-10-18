@@ -8,10 +8,12 @@ lock の中で）`record_run_progress(run)` を呼ぶ。Run の状態から段�
 段階（並びは最初に出た順。画面の名前は frontend の段階の定義が `kind` から付ける）:
 
 - `plan`（kind `plan`）: Run を受け付けたら実行中。モデルが進め方を考えている。
-- `tool:<名前>`（2 回目から `#n`。kind `tool`、params `{"tool": 名前}`）: ツールの呼び出し。
+- `tool:<名前>`（2 回目から `#n`。kind `tool`、params `{"tool": 名前}`。ツールに表示名（MCP の
+  `title`。Run の metadata `tool_titles`）があれば `title` も）: ツールの呼び出し。
   呼び出しを始めたら、開いている「考える」段階（plan / respond）を完了にする。
   却下したツールはスキップ（params に `rejected: true`）。
-- `approval_wait`（2 回目から `#n`。kind `approval`、params `{"tools": 承認を待つツール名}`）:
+- `approval_wait`（2 回目から `#n`。kind `approval`、params `{"tools": 承認を待つツール名}`。
+  表示名のあるツールは表示名）:
   承認を求めた回ごとに 1 つ。承認を待つツールの前に出し、ツールは待機中で出す（承認の後に実行）。
   その回の承認がすべて決まったら完了。
 - `confirmation_wait`（2 回目から `#n`。kind `confirmation`）: Agent 自身の回答前の確認
@@ -50,6 +52,8 @@ KIND_RESPOND = "respond"
 KIND_CONFIRMATION = "confirmation"
 # 承認を待つツール名をつなぐ記号（画面の補足にそのまま出す）。
 TOOL_NAME_SEPARATOR = "、"
+# Run に渡したツールの表示名（function tool の名前 → MCP の `title`）を残す metadata の key。
+TOOL_TITLES_METADATA_KEY = "tool_titles"
 
 # 記録する Run の Runtime（組み込み Runtime だけ。旧エンジンの Run は実行しない）。
 _BUILTIN_RUNTIME_ID = "builtin"
@@ -99,6 +103,7 @@ def _reconcile(run: RunState, recorder: ChatProgressRecorder) -> None:
     approvals = {approval.id: approval for approval in run.approvals}
     rounds = approval_rounds(run.approvals)
     round_index = {approval.id: index for index, round_ in enumerate(rounds) for approval in round_}
+    titles = tool_titles(run)
 
     counts: dict[str, int] = {}
     for step in tool_steps:
@@ -108,8 +113,8 @@ def _reconcile(run: RunState, recorder: ChatProgressRecorder) -> None:
         approval = approvals.get(step.approval_id) if step.approval_id else None
         if approval is not None and approval.id in round_index:
             index = round_index[approval.id]
-            _sync_approval_round(recorder, rounds[index], index)
-        _sync_tool_step(recorder, step, step_id, name, approval)
+            _sync_approval_round(recorder, rounds[index], index, titles)
+        _sync_tool_step(recorder, step, step_id, name, approval, titles.get(name))
 
     confirmations = sorted(
         (item for item in run.confirmations if item.source == "agent"),
@@ -135,8 +140,11 @@ def _sync_tool_step(
     step_id: str,
     name: str,
     approval: ApprovalRequest | None,
+    title: str | None = None,
 ) -> None:
     params: dict[str, str | int | float | bool] = {"tool": name}
+    if title:
+        params["title"] = title
     status = str(step.status)
     current = recorder.step(step_id)
     if current is not None and current.status in _RECORDED_FINISHED:
@@ -182,7 +190,10 @@ def _sync_tool_step(
 
 
 def _sync_approval_round(
-    recorder: ChatProgressRecorder, round_: list[ApprovalRequest], index: int
+    recorder: ChatProgressRecorder,
+    round_: list[ApprovalRequest],
+    index: int,
+    titles: dict[str, str],
 ) -> None:
     step_id = approval_step_id(index)
     pending = [approval for approval in round_ if str(approval.status) == "pending"]
@@ -194,7 +205,7 @@ def _sync_approval_round(
         recorder.start(
             step_id,
             kind=KIND_APPROVAL,
-            params={"tools": _tool_names(pending)},
+            params={"tools": _tool_names(pending, titles)},
             at=started_at,
         )
         return
@@ -203,7 +214,10 @@ def _sync_approval_round(
         return
     if current is None:
         recorder.start(
-            step_id, kind=KIND_APPROVAL, params={"tools": _tool_names(round_)}, at=started_at
+            step_id,
+            kind=KIND_APPROVAL,
+            params={"tools": _tool_names(round_, titles)},
+            at=started_at,
         )
     decided = [approval.decided_at for approval in round_ if approval.decided_at is not None]
     recorder.finish(step_id, kind=KIND_APPROVAL, at=max(decided) if decided else None)
@@ -265,12 +279,22 @@ def _next_respond_id(recorder: ChatProgressRecorder) -> str:
     return RESPOND_STEP if count == 0 else f"{RESPOND_STEP}#{count + 1}"
 
 
-def _tool_names(approvals: list[ApprovalRequest]) -> str:
+def _tool_names(approvals: list[ApprovalRequest], titles: dict[str, str]) -> str:
+    """承認を待つツールの名前（表示名があれば表示名）。"""
     names: list[str] = []
     for approval in approvals:
-        if approval.tool_call.name not in names:
-            names.append(approval.tool_call.name)
+        name = titles.get(approval.tool_call.name) or approval.tool_call.name
+        if name not in names:
+            names.append(name)
     return TOOL_NAME_SEPARATOR.join(names)
+
+
+def tool_titles(run: RunState) -> dict[str, str]:
+    """Run に渡したツールの表示名（function tool の名前 → MCP の `title`）。無ければ空。"""
+    value = run.metadata.get(TOOL_TITLES_METADATA_KEY)
+    if not isinstance(value, dict):
+        return {}
+    return {str(name): title for name, title in value.items() if isinstance(title, str) and title}
 
 
 def tool_step_id(name: str, count: int) -> str:

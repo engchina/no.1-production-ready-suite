@@ -4,6 +4,7 @@ import {
   runStepDetailsJson,
   type ChatProgressStep,
   type RunStepDetailCode,
+  type RunStepDetailField,
   type RunStepDetails,
   type RunExecutorFilter as CommonRunExecutorFilter,
   type RunDetailLabelsInput,
@@ -192,11 +193,21 @@ function stepTimelineStatus(step: RunStep): RunTimelineStepStatus {
   }
 }
 
-/** ツールの段（`run.steps`）の名前（チャットの処理の経過と同じ文言）。 */
-function toolStepLabel(step: RunStep, status: RunTimelineStepStatus): string {
+/** Run に渡したツールの表示名（MCP の `title`。backend の metadata `tool_titles`）。 */
+export function runToolTitles(run: Pick<RunState, "metadata">): Record<string, string> {
+  const value = run.metadata?.tool_titles;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1] !== "")
+  );
+}
+
+/** ツールの段（`run.steps`）の名前（チャットの処理の経過と同じ文言。表示名があれば表示名）。 */
+function toolStepLabel(step: RunStep, status: RunTimelineStepStatus, titles: Record<string, string>): string {
   const tool = step.tool_call?.name ?? step.kind;
   const progressStatus = status === "waiting" ? "running" : status;
-  return AGENT_CHAT_PROGRESS_STEPS.tool.label(progressStatus, { tool });
+  const title = step.tool_call ? titles[step.tool_call.name] : undefined;
+  return AGENT_CHAT_PROGRESS_STEPS.tool.label(progressStatus, title ? { tool, title } : { tool });
 }
 
 /**
@@ -227,8 +238,9 @@ export function pairToolProgressSteps(
 }
 
 /**
- * ツールの段の詳細（データの範囲の記録・エラー・引数と結果の JSON。#2294）。チャットの処理の経過で段を開いて見る。
- * 長い JSON は先頭だけにして省略の印を付ける。中身が無ければ undefined（段に開閉のボタンを付けない）。
+ * ツールの段の詳細（ツールの内部名・データの範囲の記録・エラー・引数と結果の JSON。#2294）。チャットの処理の経過で
+ * 段を開いて見る。段の名前は表示名（MCP の `title`）のことがあるので、調べる用に内部名を先頭に出す（#2324）。
+ * 長い JSON は先頭だけにして省略の印を付ける。ツールの呼び出しでなければ undefined（段に開閉のボタンを付けない）。
  */
 export function toolStepDetails(step: RunStep): RunStepDetails | undefined {
   const lines = dataScopeNotes(step.tool_call?.data_scope);
@@ -247,9 +259,13 @@ export function toolStepDetails(step: RunStep): RunStepDetails | undefined {
     truncated ||= json.truncated;
     code.push({ label: t("chat.progress.details.result"), language: "json", text: json.text });
   }
-  if (!lines.length && !error && !code.length) return undefined;
+  const name = step.tool_call?.name;
+  if (!name && !lines.length && !error && !code.length) return undefined;
   const details: RunStepDetails = {};
-  if (error) details.fields = [{ label: t("chat.progress.details.error"), value: error }];
+  const fields: RunStepDetailField[] = [];
+  if (name) fields.push({ label: t("chat.progress.details.tool"), value: name, mono: true });
+  if (error) fields.push({ label: t("chat.progress.details.error"), value: error });
+  if (fields.length) details.fields = fields;
   if (lines.length) details.lines = lines;
   if (code.length) details.code = code;
   if (truncated) details.truncated = true;
@@ -276,6 +292,7 @@ export function runTimelineSteps(
     : [];
   const pairs = pairToolProgressSteps(progress, run.steps);
   const used = new Set([...pairs.values()].map((step) => step.id));
+  const titles = runToolTitles(run);
   const steps: RunTimelineStep[] = progress.map((item) => {
     const waiting =
       item.status === "running" &&
@@ -299,7 +316,7 @@ export function runTimelineSteps(
     const status = stepTimelineStatus(step);
     steps.push({
       id: `step:${step.id}`,
-      label: toolStepLabel(step, status),
+      label: toolStepLabel(step, status, titles),
       status,
       startedAt: step.started_at ?? step.tool_result?.started_at ?? null,
       finishedAt: step.completed_at ?? step.tool_result?.completed_at ?? null,

@@ -85,6 +85,9 @@ class ToolCall(BaseModel):
 class ToolDefinition(BaseModel):
     name: str
     description: str
+    # 人が読む表示名（MCP のツールの `title`）。画面の処理の経過が内部名の代わりに出す。モデルには
+    # 渡さない（モデルが見るのは name と description）。無ければ None（画面は内部名を出す）。
+    title: str | None = None
     input_schema: JsonObject
     output_schema: JsonObject
     permission_level: ToolPermissionLevel = ToolPermissionLevel.READ
@@ -119,6 +122,8 @@ class ToolResult(BaseModel):
 
 class ExternalMcpToolInfo(BaseModel):
     name: str
+    # MCP のツールの `title`（表示名。古い版の仕様の `annotations.title` も読む）。
+    title: str | None = None
     description: str = ""
     input_schema: JsonObject = Field(default_factory=dict)
     output_schema: JsonObject | None = None
@@ -1354,6 +1359,7 @@ def _mcp_tools_from_result(server_id: str, response: JsonRpcResponse) -> Externa
         tools.append(
             ExternalMcpToolInfo(
                 name=name,
+                title=_mcp_tool_title(raw_tool),
                 description=description if isinstance(description, str) else "",
                 input_schema=_mcp_schema_value(raw_tool, "inputSchema", "input_schema") or {},
                 output_schema=_mcp_schema_value(raw_tool, "outputSchema", "output_schema"),
@@ -1372,6 +1378,18 @@ def _mcp_tools_from_result(server_id: str, response: JsonRpcResponse) -> Externa
             "next_cursor": next_cursor if isinstance(next_cursor, str) else None,
         },
     )
+
+
+def _mcp_tool_title(raw_tool: JsonObject) -> str | None:
+    """`tools/list` のツールの表示名（`title`、無ければ `annotations.title`）。無ければ None。"""
+    annotations = raw_tool.get("annotations")
+    for value in (
+        raw_tool.get("title"),
+        annotations.get("title") if isinstance(annotations, dict) else None,
+    ):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 # 組み込みの接続のツールのうち、結果が実行中のジョブ（`status` が pending / running と
@@ -1487,6 +1505,7 @@ def mcp_tool_definition(config: McpConnectionConfig, tool: ExternalMcpToolInfo) 
         timeout_seconds += _job_wait_budget_seconds()
     return ToolDefinition(
         name=tool.function_name or mcp_function_name(config.server_id, tool.name),
+        title=tool.title,
         description=f"[{label}] {tool.description}".strip(),
         input_schema=schema,
         output_schema=tool.output_schema or {"type": "object"},

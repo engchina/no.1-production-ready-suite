@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
-// #768: 業務利用者のチャット。会話（スレッド）の続き・出典・使ったツール・承認待ちを確かめる。
+// #768: 業務利用者のチャット。会話（スレッド）の続き・出典・処理の経過のツールの段・承認待ちを確かめる。
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
@@ -144,7 +144,7 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
-test("回答の出典と使ったツールを畳んで出し、承認待ちはその場で判断できる", async ({ page, mockApi }) => {
+test("回答の出典を畳んで出し、使ったツールは処理の経過の段で見て、承認待ちはその場で判断できる", async ({ page, mockApi }) => {
   seedThread(mockApi, {
     status: "waiting_approval",
     steps: [
@@ -231,8 +231,8 @@ test("回答の出典と使ったツールを畳んで出し、承認待ちは�
     "コード表 · 3–6 行（A3:C6）",
   ]);
   await expect(turn.getByText("別紙.pdf")).toHaveCount(0);
-  await turn.getByText("使ったツール（2）").click();
-  await expect(turn.getByText("rag__rag_search", { exact: true })).toBeVisible();
+  // 使ったツールは処理の経過のツールの段で見る（「使ったツール」の一覧を重ねて出さない。#2324）。
+  await expect(turn.getByText(/使ったツール/)).toHaveCount(0);
 
   await turn.getByRole("button", { name: "承認して実行" }).click();
   await expect(page.getByText("承認しました")).toBeVisible();
