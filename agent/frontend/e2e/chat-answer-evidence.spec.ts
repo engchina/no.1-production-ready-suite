@@ -51,7 +51,7 @@ function evidenceItem(chunkId: string, overrides: Record<string, unknown> = {}) 
   };
 }
 
-function seedRun(mockApi: MockApi) {
+function seedRun(mockApi: MockApi, excerptA?: string) {
   mockApi.state.runs.push({
     id: RUN_ID,
     goal: GOAL,
@@ -104,7 +104,7 @@ function seedRun(mockApi: MockApi) {
         created_at: MOCK_NOW,
         content: {
           items: [
-            evidenceItem(CHUNK_A, { cited: true, answer_use: "confirmed" }),
+            evidenceItem(CHUNK_A, { cited: true, answer_use: "confirmed", ...(excerptA ? { excerpt: excerptA } : {}) }),
             evidenceItem(CHUNK_B, { cited: true, locator: { page_start: 5, page_end: 5, section_path: [] } }),
             evidenceItem(CHUNK_C, { file_name: "文書 C.pdf", rerank_score: null }),
           ],
@@ -230,6 +230,54 @@ for (const viewport of VIEWPORTS) {
   });
 }
 
+// #2387: 文書の表を解析した chunk の抜粋（HTML の表）は、タグの文字を出さず、全文の表示では表、畳んだ表示では「セル | セル」の行。
+const TABLE_EXCERPT =
+  "見出し A<br><table><tbody><tr><td>項目</td><td>記録内容</td><td>備考</td></tr>" +
+  "<tr><td>区分 X</td><td>合成の記録の本文。長い文の折り返しを確かめるための合成の文です。</td><td>なし</td></tr>" +
+  "<tr><td>区分 Y</td><td>A&amp;B<br>二行目</td><td>合成</td></tr></tbody></table>" +
+  "<script>window.__xss = 1</script><img src=x onerror=\"window.__xss = 2\">";
+
+for (const viewport of VIEWPORTS) {
+  test(`根拠の抜粋の表の HTML をサイドパネルでは表、カードでは行の文字で出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    seedRun(mockApi, TABLE_EXCERPT);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await openThread(page);
+    const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+    const body = turn.getByTestId(`chat-answer-${RUN_ID}`);
+    await body.getByTestId("answer-section").nth(0).getByTestId("answer-citation-link").first().click();
+    const sheet = page.getByRole("dialog", { name: "回答の根拠" });
+    const excerpt = sheet.getByTestId("evidence-source-summary").getByTestId("citation-text");
+    await expect(excerpt).toHaveAttribute("data-expanded", "true");
+    await expect(excerpt.locator("p").first()).toHaveText("見出し A");
+    const table = excerpt.getByRole("table", { name: "抜粋の表" });
+    await expect(table.getByRole("columnheader")).toHaveText(["項目", "記録内容", "備考"]);
+    await expect(table.getByRole("row")).toHaveCount(3);
+    await expect(table.getByRole("row").nth(2).getByRole("cell").nth(1)).toHaveText("A&B\n二行目");
+    await expect(excerpt).not.toContainText("<");
+    expect(await page.evaluate(() => (window as { __xss?: number }).__xss)).toBeUndefined();
+    // 表はサイドパネルの幅に収め、収まらない分は表の中の横スクロールにする（パネルと画面は横にはみ出さない）。
+    const sheetBox = (await sheet.boundingBox())!;
+    const tableScroller = (await table.locator("xpath=..").boundingBox())!;
+    expect(tableScroller.x + tableScroller.width).toBeLessThanOrEqual(sheetBox.x + sheetBox.width + 1);
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`evidence-table-sheet-${viewport.name}.png`) });
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+
+    // 根拠のカードの 3 行の抜粋は「セル | セル」の行の文字。
+    const evidence = turn.getByTestId("answer-citations");
+    await evidence.locator("summary").click();
+    const card = evidence.getByTestId("evidence-card").nth(0);
+    await expect(card.getByTestId("citation-text")).toHaveText(
+      "見出し A\n項目 | 記録内容 | 備考\n区分 X | 合成の記録の本文。長い文の折り返しを確かめるための合成の文です。 | なし\n区分 Y | A&B 二行目 | 合成"
+    );
+    await expect(card.getByRole("table")).toHaveCount(0);
+    await card.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`evidence-table-card-${viewport.name}.png`) });
+  });
+}
+
 test("段落に根拠を結び付けられない回答は今までの Markdown のまま出す", async ({ page, mockApi }) => {
   seedRun(mockApi);
   const run = mockApi.state.runs.find((item) => item.id === RUN_ID) as {
@@ -260,11 +308,9 @@ test("実行の詳細の回答も同じ節・根拠の塊で出す", async ({ pa
   await expect(section.getByTestId("answer-citations").locator("summary")).toHaveText(
     "AI に渡した 3 件 ／ 回答で引用 2 件 ／ うち該当確認済み 1 件"
   );
-  // 成果物の一覧に回答の根拠を重ねない。
+  // 回答の根拠・資料との照合は「成果物」に重ねない（内部の記録は監査ログで見る。#2403）。
   await expect(page.getByTestId("run-artifact-artifact-evidence")).toHaveCount(0);
-  // 資料との照合の成果物も、本文の節に書いた項目を出し直さない（件数のバッジだけ）。
-  await expect(page.getByTestId("run-review-artifact-validation").getByTestId("answer-review-unverified")).toHaveCount(0);
-  await expect(page.getByTestId("run-review-validation-artifact-validation")).toHaveText("一部を確かめられず省略 1 件");
+  await expect(page.getByTestId("run-artifacts-section")).toHaveCount(0);
 });
 
 // #2361: 除いた内容が多い回答も、本文の節に全件を同じ書式で出し（「ほか N 件」で切らない）、件数のバッジと一致させる。

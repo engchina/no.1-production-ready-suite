@@ -18,40 +18,6 @@ export function elementVision(element: DocumentElement): ElementVision | null {
   return { status, retrievalText, excluded };
 }
 
-const ENTITY: Record<string, string> = {
-  "&amp;": "&",
-  "&lt;": "<",
-  "&gt;": ">",
-  "&quot;": '"',
-  "&#39;": "'",
-  "&nbsp;": " ",
-};
-
-/**
- * Docling の表 HTML を読みやすいテキストへ落とす(行=改行、セル=" | ")。
- * 表でない text はそのまま返す。セル単位の確認は表セルパネルが担う。
- * HTML の無害化ではない: 結果は React の text node にだけ入れ(HTML として解釈しない)、
- * `&lt;` などの実体参照はセルの文字として戻す(#1646。CodeQL の incomplete-multi-character-sanitization は誤検知)。
- */
-export function tableHtmlToText(text: string): string {
-  if (!/^\s*<table[\s>]/i.test(text)) return text;
-  const rows = text.match(/<tr[\s\S]*?<\/tr>/gi) ?? [];
-  return rows
-    .map((row) =>
-      (row.match(/<t[hd][^>]*>[\s\S]*?<\/t[hd]>/gi) ?? [])
-        .map((cell) =>
-          cell
-            .replace(/<br\s*\/?>/gi, " ")
-            .replace(/<[^>]+>/g, "")
-            .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (entity) => ENTITY[entity] ?? entity)
-            .trim()
-        )
-        .join(" | ")
-    )
-    .filter((line) => line.replace(/[|\s]/g, ""))
-    .join("\n");
-}
-
 /** Vision 説明の表示用 1 行(ラベルキーと値)。 */
 export type VisionDetailLine = { field: string; value: string };
 
