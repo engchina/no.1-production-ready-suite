@@ -1,5 +1,10 @@
 import { WarningsBanner } from "@/components/WarningsBanner";
-import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent } from "@/components/WorkspaceState";
+import {
+  useWorkspaceState,
+  useWorkspaceRevalidation,
+  useResetExecutionConsent,
+  useWorkspaceUrlSelection,
+} from "@/components/WorkspaceState";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
@@ -24,11 +29,10 @@ import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { listLoadMoreErrorMessage } from "@/lib/load-more-error";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
-import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import {
   DbManagementLoadingSkeleton,
   DbObjectDetailPanel,
-  DbObjectGrid,
+  DbObjectListDetail,
   DbObjectManagementPanelShell,
   DbObjectPanelHeader,
   DbObjectStepIndicator,
@@ -354,20 +358,19 @@ export function ViewManagementPage() {
     }),
   });
   const {
-    selectedName: selectedViewName,
     detail,
-    loading: detailLoading,
     ddlLoading: detailDdlLoading,
     ddlError: detailDdlError,
     loadDdl: loadDetailDdl,
     clear: clearDetail,
   } = detailRequest;
-  const selectedViewManualSelection = useRef(false);
+  // 選んだビューは URL の `?view=` が唯一の情報源（#2281）。先頭の行を自動で選ばない。
+  const selection = useWorkspaceUrlSelection("view");
+  const selectedViewName = selection.selectedId ?? "";
 
-  const fetchDetail = async (name: string, options: { manualSelection?: boolean } = {}) => {
+  const fetchDetail = async (name: string) => {
     joinWhereRequest.current += 1;
     setLoading((current) => current === "join-where" ? "" : current);
-    if (options.manualSelection) selectedViewManualSelection.current = true;
     autoJoinWhereDdlName.current = "";
     setDetailTab("columns");
     setJoinWhere(null);
@@ -474,37 +477,17 @@ export function ViewManagementPage() {
       });
   }, [viewItems, viewOwnerPrefix, viewSearch, viewSort]);
 
-  // 選択の補正は一覧・選択が変わったときだけ行う。fetchDetail は毎レンダー作り直すので、最新のものを ref から呼ぶ。
+  // 選択（URL）が変わったら詳細を取り直す。外れたら詳細を消す。fetchDetail は毎レンダー作り直すので、最新のものを ref から呼ぶ。
   const fetchDetailRef = useRef(fetchDetail);
   useLayoutEffect(() => { fetchDetailRef.current = fetchDetail; });
   useEffect(() => {
-    if (activeView !== "list") return;
-    if (viewObjectsQuery.isPending || detailLoading) return;
-    if (viewObjectsQuery.error && !viewObjectsQuery.data) return;
-    const nextViewName = selectedVisibleStringKey(
-      filteredViews,
-      selectedViewName,
-      formatDbObjectName,
-      { preserveSelected: selectedViewManualSelection.current }
-    );
-    if (!nextViewName) {
-      selectedViewManualSelection.current = false;
-      if (selectedViewName) clearDetail();
+    if (!selectedViewName) {
+      if (detailRequest.selectedName) clearDetail();
       return;
     }
-    if (nextViewName === selectedViewName) return;
-    selectedViewManualSelection.current = false;
-    void fetchDetailRef.current(nextViewName);
-  }, [
-    activeView,
-    filteredViews,
-    viewObjectsQuery.isPending,
-    viewObjectsQuery.error,
-    viewObjectsQuery.data,
-    selectedViewName,
-    detailLoading,
-    clearDetail,
-  ]);
+    if (selectedViewName === detailRequest.selectedName) return;
+    void fetchDetailRef.current(selectedViewName);
+  }, [selectedViewName, detailRequest.selectedName, clearDetail]);
 
   const toggleSort = (key: DbObjectSortKey) => {
     setViewSort((current) => ({
@@ -563,6 +546,8 @@ export function ViewManagementPage() {
         setDropConfirmation("");
         setDropError("");
         toast.success(t("viewMgmt.drop.success", { name: dropped }));
+        // 削除した対象を選んでいたら選択を外す（詳細の空の状態・1 ペインは一覧へ）。
+        if (dropped === selectedViewName) selection.replace(null);
         await reloadAfterMutation(result);
         return;
       }
@@ -652,11 +637,13 @@ export function ViewManagementPage() {
             : undefined
         }
         status={<SchemaRefreshHeaderStatus testId="view-schema-refresh-status" />}
-        // 作業（作成）の画面の「一覧へ戻る」はページの左上（#618）。
+        // 作業（作成）の画面と、1 ペイン（xl 未満）の詳細の「一覧へ戻る」はページの左上（#618・#2281）。
         back={
-          activeView === "list"
-            ? undefined
-            : { label: t("viewMgmt.action.backToList"), onClick: returnToList, testId: "view-management-back" }
+          activeView !== "list"
+            ? { label: t("viewMgmt.action.backToList"), onClick: returnToList, testId: "view-management-back" }
+            : !selection.split && selectedViewName
+              ? { label: t("viewMgmt.action.backToList"), onClick: selection.clear, testId: "view-management-detail-back" }
+              : undefined
         }
         actionsLabel={t("viewMgmt.tabs.label")}
         actionsTestId="view-management-actions"
@@ -729,7 +716,7 @@ export function ViewManagementPage() {
               role="region"
               idPrefix={VIEW_MANAGEMENT_ID}
               ariaLabel={t("viewMgmt.workspace.label")}
-              splitId="view-management-list"
+              framed={false}
               processing={
                 schemaRefreshing && !schemaSync.ownsProgress ? (
                   <SchemaRefreshProcessing testId="view-management-workspace-processing" />
@@ -747,7 +734,7 @@ export function ViewManagementPage() {
                 ) : undefined
               }
             >
-            <DbObjectGrid
+            <DbObjectListDetail
               showComments
               idPrefix={VIEW_MANAGEMENT_ID}
               headingId="view-grid-heading"
@@ -788,43 +775,46 @@ export function ViewManagementPage() {
               onSearchChange={setViewSearch}
               onOwnerPrefixChange={setViewOwnerPrefix}
               onSortChange={toggleSort}
-              onSelect={(name) => void fetchDetail(name, { manualSelection: true })}
+              onSelect={selection.select}
               onLoadMore={() => void viewObjectsQuery.fetchNextPage()}
               onRetryLoadMore={() => void viewObjectsQuery.fetchNextPage()}
               onRetry={() => void refreshObjects()}
-            />
-            <DbObjectDetailPanel
-              idPrefix={VIEW_MANAGEMENT_ID}
-              operationKey={selectedViewName}
-              headingId="view-detail-heading"
-              detail={detail}
-              loading={detailRequest.loading || (viewObjectsQuery.isPending && !viewObjectsQuery.data)}
-              // 一覧の初回の読込では、スピナーは一覧の Skeleton の 1 つだけにする（#416）。
-              loadingActivityIcon={viewObjectsQuery.isPending && !viewObjectsQuery.data ? "none" : undefined}
-              ddlLoading={detailRequest.ddlLoading}
-              error={detailRequest.error}
-              ddlError={detailRequest.ddlError}
-              exporting={loading === "view-export"}
-              tab={detailTab}
-              labels={{
-                actions: t("viewMgmt.grid.actions"),
-                loading: t("viewMgmt.detail.loading"),
-                ddlLoading: t("viewMgmt.detail.ddlLoading"),
-                tabsLabel: t("viewMgmt.detailTabs.label"),
-                columns: t("viewMgmt.detailTabs.columns"),
-                ddl: t("viewMgmt.detailTabs.ddl"),
-                export: t("viewMgmt.export"),
-                exportAria: t("viewMgmt.exportColumns"),
-                drop: t("viewMgmt.grid.drop"),
-              }}
-              onTabChange={handleDetailTabChange}
-              onRetry={() => void fetchDetail(selectedViewName)}
-              onRetryDdl={() => {
-                if (detail) void detailRequest.loadDdl(formatDbObjectName(detail));
-              }}
-              onCancel={detailRequest.cancel}
-              onExport={(name) => void downloadColumnsXlsx(name)}
-              onDrop={openDropDialog}
+              detailLabel={t("viewMgmt.detail.label")}
+              detail={
+                <DbObjectDetailPanel
+                  idPrefix={VIEW_MANAGEMENT_ID}
+                  operationKey={selectedViewName}
+                  headingId="view-detail-heading"
+                  detail={detail}
+                  loading={detailRequest.loading || (viewObjectsQuery.isPending && !viewObjectsQuery.data)}
+                  // 一覧の初回の読込では、スピナーは一覧の Skeleton の 1 つだけにする（#416）。
+                  loadingActivityIcon={viewObjectsQuery.isPending && !viewObjectsQuery.data ? "none" : undefined}
+                  ddlLoading={detailRequest.ddlLoading}
+                  error={detailRequest.error}
+                  ddlError={detailRequest.ddlError}
+                  exporting={loading === "view-export"}
+                  tab={detailTab}
+                  labels={{
+                    actions: t("viewMgmt.grid.actions"),
+                    loading: t("viewMgmt.detail.loading"),
+                    ddlLoading: t("viewMgmt.detail.ddlLoading"),
+                    tabsLabel: t("viewMgmt.detailTabs.label"),
+                    columns: t("viewMgmt.detailTabs.columns"),
+                    ddl: t("viewMgmt.detailTabs.ddl"),
+                    export: t("viewMgmt.export"),
+                    exportAria: t("viewMgmt.exportColumns"),
+                    drop: t("viewMgmt.grid.drop"),
+                  }}
+                  onTabChange={handleDetailTabChange}
+                  onRetry={() => void fetchDetail(selectedViewName)}
+                  onRetryDdl={() => {
+                    if (detail) void detailRequest.loadDdl(formatDbObjectName(detail));
+                  }}
+                  onCancel={detailRequest.cancel}
+                  onExport={(name) => void downloadColumnsXlsx(name)}
+                  onDrop={openDropDialog}
+                />
+              }
             />
             </DbObjectManagementPanelShell>
           </>

@@ -1,6 +1,12 @@
 import { WarningsBanner } from "@/components/WarningsBanner";
-import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useWorkspaceState,
+  useWorkspaceRevalidation,
+  useResetExecutionConsent,
+  useTransientDraftGuard,
+  useWorkspaceUrlSelection,
+} from "@/components/WorkspaceState";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
 import {
@@ -25,7 +31,6 @@ import { t } from "@/lib/i18n";
 import { listLoadMoreErrorMessage } from "@/lib/load-more-error";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
-import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import {
   StatementRunnerCard,
   DbAdminErrorNotice,
@@ -35,7 +40,7 @@ import {
 import { QueryResultTable } from "../components/QueryResultTable";
 import {
   DbObjectDetailPanel,
-  DbObjectGrid,
+  DbObjectListDetail,
   DbObjectManagementPanelShell,
   DbObjectPanelHeader,
   DbObjectStepIndicator,
@@ -379,20 +384,26 @@ export function TableManagementPage() {
       seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveDetail),
     }),
   });
-  const {
-    selectedName: selectedTableName,
-    detail,
-    setDetail,
-    loading: detailLoading,
-    clear: clearDetail,
-  } = detailRequest;
-  const selectedTableManualSelection = useRef(false);
+  const { detail, setDetail, clear: clearDetail, load: loadDetail } = detailRequest;
+  // 選んだテーブルは URL の `?table=` が唯一の情報源（#2281）。先頭の行を自動で選ばない。
+  const selection = useWorkspaceUrlSelection("table");
+  const selectedTableName = selection.selectedId ?? "";
 
-  const fetchDetail = async (name: string, options: { manualSelection?: boolean } = {}) => {
-    if (options.manualSelection) selectedTableManualSelection.current = true;
+  const fetchDetail = async (name: string) => {
     setDetailTab("columns");
-    await detailRequest.load(name);
+    await loadDetail(name);
   };
+
+  // 選択（URL）が変わったら詳細を取り直す。外れたら詳細を消す。
+  useEffect(() => {
+    if (!selectedTableName) {
+      if (detailRequest.selectedName) clearDetail();
+      return;
+    }
+    if (selectedTableName === detailRequest.selectedName) return;
+    setDetailTab("columns");
+    void loadDetail(selectedTableName);
+  }, [selectedTableName, detailRequest.selectedName, clearDetail, loadDetail, setDetailTab]);
 
   // DDL は重い GET_DDL を伴うため列タブでは取得せず、DDL タブ初回表示時に後追いで取得する。
   const handleDetailTabChange = (nextTab: DbObjectDetailTab) => {
@@ -490,38 +501,6 @@ export function TableManagementPage() {
         return tableSort.direction === "asc" ? result : -result;
       });
   }, [tableItems, tableOwnerPrefix, tableSearch, tableSort]);
-
-  // 選択の補正は一覧・選択が変わったときだけ行う。fetchDetail は毎レンダー作り直すので、最新のものを ref から呼ぶ。
-  const fetchDetailRef = useRef(fetchDetail);
-  useLayoutEffect(() => { fetchDetailRef.current = fetchDetail; });
-  useEffect(() => {
-    if (activeView !== "list") return;
-    if (tableObjectsQuery.isPending || detailLoading) return;
-    if (tableObjectsQuery.error && !tableObjectsQuery.data) return;
-    const nextTableName = selectedVisibleStringKey(
-      filteredTables,
-      selectedTableName,
-      formatDbObjectName,
-      { preserveSelected: selectedTableManualSelection.current }
-    );
-    if (!nextTableName) {
-      selectedTableManualSelection.current = false;
-      if (selectedTableName) clearDetail();
-      return;
-    }
-    if (nextTableName === selectedTableName) return;
-    selectedTableManualSelection.current = false;
-    void fetchDetailRef.current(nextTableName);
-  }, [
-    activeView,
-    filteredTables,
-    tableObjectsQuery.isPending,
-    tableObjectsQuery.error,
-    tableObjectsQuery.data,
-    selectedTableName,
-    detailLoading,
-    clearDetail,
-  ]);
 
   const toggleSort = (key: DbObjectSortKey) => {
     setTableSort((current) => ({
@@ -666,6 +645,8 @@ export function TableManagementPage() {
         setDropConfirmation("");
         setDropError("");
         toast.success(t("tableMgmt.drop.success", { name: dropped }));
+        // 削除した対象を選んでいたら選択を外す（詳細の空の状態・1 ペインは一覧へ）。
+        if (dropped === selectedTableName) selection.replace(null);
         await reloadAfterMutation(result);
         return;
       }
@@ -758,11 +739,13 @@ export function TableManagementPage() {
             : undefined
         }
         status={<SchemaRefreshHeaderStatus testId="table-schema-refresh-status" />}
-        // 作業（作成・取込）の画面の「一覧へ戻る」はページの左上（#618）。
+        // 作業（作成・取込）の画面と、1 ペイン（xl 未満）の詳細の「一覧へ戻る」はページの左上（#618・#2281）。
         back={
-          activeView === "list"
-            ? undefined
-            : { label: t("tableMgmt.action.backToList"), onClick: returnToList, testId: "table-management-back" }
+          activeView !== "list"
+            ? { label: t("tableMgmt.action.backToList"), onClick: returnToList, testId: "table-management-back" }
+            : !selection.split && selectedTableName
+              ? { label: t("tableMgmt.action.backToList"), onClick: selection.clear, testId: "table-management-detail-back" }
+              : undefined
         }
         actionsLabel={t("tableMgmt.tabs.label")}
         actionsTestId="table-management-actions"
@@ -835,7 +818,7 @@ export function TableManagementPage() {
               role="region"
               idPrefix="table-management"
               ariaLabel={t("tableMgmt.workspace.label")}
-              splitId="table-management-list"
+              framed={false}
               processing={
                 schemaRefreshing && !schemaSync.ownsProgress ? (
                   <SchemaRefreshProcessing testId="table-management-workspace-processing" />
@@ -853,7 +836,7 @@ export function TableManagementPage() {
                 ) : undefined
               }
             >
-            <DbObjectGrid
+            <DbObjectListDetail
               showComments
               idPrefix="table-management"
               headingId="table-grid-heading"
@@ -894,47 +877,50 @@ export function TableManagementPage() {
               onSearchChange={setTableSearch}
               onOwnerPrefixChange={setTableOwnerPrefix}
               onSortChange={toggleSort}
-              onSelect={(name) => void fetchDetail(name, { manualSelection: true })}
+              onSelect={selection.select}
               onLoadMore={() => void tableObjectsQuery.fetchNextPage()}
               onRetryLoadMore={() => void tableObjectsQuery.fetchNextPage()}
               onRetry={() => void refreshObjects()}
-            />
-            <DbObjectDetailPanel
-              idPrefix="table-management"
-              operationKey={selectedTableName}
-              headingId="table-detail-heading"
-              detail={detail}
-              loading={detailRequest.loading || (tableObjectsQuery.isPending && !tableObjectsQuery.data)}
-              // 一覧の初回の読込では、スピナーは一覧の Skeleton の 1 つだけにする（#416）。
-              loadingActivityIcon={tableObjectsQuery.isPending && !tableObjectsQuery.data ? "none" : undefined}
-              ddlLoading={detailRequest.ddlLoading}
-              error={detailRequest.error}
-              ddlError={detailRequest.ddlError}
-              exporting={loading === "table-export"}
-              countingRows={loading === "count"}
-              tab={detailTab}
-              labels={{
-                actions: t("tableMgmt.grid.actions"),
-                loading: t("tableMgmt.detail.loading"),
-                ddlLoading: t("tableMgmt.detail.ddlLoading"),
-                tabsLabel: t("tableMgmt.detailTabs.label"),
-                columns: t("tableMgmt.detailTabs.columns"),
-                ddl: t("tableMgmt.detailTabs.ddl"),
-                export: t("tableMgmt.export"),
-                exportAria: t("tableMgmt.exportColumns"),
-                exactCount: t("tableMgmt.exactCount"),
-                exactCountAria: t("tableMgmt.exactCountAria"),
-                drop: t("tableMgmt.grid.drop"),
-              }}
-              onTabChange={handleDetailTabChange}
-              onRetry={() => void fetchDetail(selectedTableName)}
-              onRetryDdl={() => {
-                if (detail) void detailRequest.loadDdl(formatDbObjectName(detail));
-              }}
-              onCancel={detailRequest.cancel}
-              onExport={(name) => void downloadColumnsXlsx(name)}
-              onExactCount={(name) => void handleExactCount(name)}
-              onDrop={openDropDialog}
+              detailLabel={t("tableMgmt.detail.label")}
+              detail={
+                <DbObjectDetailPanel
+                  idPrefix="table-management"
+                  operationKey={selectedTableName}
+                  headingId="table-detail-heading"
+                  detail={detail}
+                  loading={detailRequest.loading || (tableObjectsQuery.isPending && !tableObjectsQuery.data)}
+                  // 一覧の初回の読込では、スピナーは一覧の Skeleton の 1 つだけにする（#416）。
+                  loadingActivityIcon={tableObjectsQuery.isPending && !tableObjectsQuery.data ? "none" : undefined}
+                  ddlLoading={detailRequest.ddlLoading}
+                  error={detailRequest.error}
+                  ddlError={detailRequest.ddlError}
+                  exporting={loading === "table-export"}
+                  countingRows={loading === "count"}
+                  tab={detailTab}
+                  labels={{
+                    actions: t("tableMgmt.grid.actions"),
+                    loading: t("tableMgmt.detail.loading"),
+                    ddlLoading: t("tableMgmt.detail.ddlLoading"),
+                    tabsLabel: t("tableMgmt.detailTabs.label"),
+                    columns: t("tableMgmt.detailTabs.columns"),
+                    ddl: t("tableMgmt.detailTabs.ddl"),
+                    export: t("tableMgmt.export"),
+                    exportAria: t("tableMgmt.exportColumns"),
+                    exactCount: t("tableMgmt.exactCount"),
+                    exactCountAria: t("tableMgmt.exactCountAria"),
+                    drop: t("tableMgmt.grid.drop"),
+                  }}
+                  onTabChange={handleDetailTabChange}
+                  onRetry={() => void fetchDetail(selectedTableName)}
+                  onRetryDdl={() => {
+                    if (detail) void detailRequest.loadDdl(formatDbObjectName(detail));
+                  }}
+                  onCancel={detailRequest.cancel}
+                  onExport={(name) => void downloadColumnsXlsx(name)}
+                  onExactCount={(name) => void handleExactCount(name)}
+                  onDrop={openDropDialog}
+                />
+              }
             />
             </DbObjectManagementPanelShell>
           </>

@@ -1,8 +1,8 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
-import { useLocation } from "react-router-dom";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
-import { Banner } from "@production-ready/ui";
+import { Banner, useListDetailSplit, useUrlSelection, type UrlSelection } from "@production-ready/ui";
 import { useAuth } from "@/features/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { draftKey, readDraft, writeDraft } from "@/lib/workspace-drafts";
@@ -107,6 +107,53 @@ export function useWorkspaceActivation(onActivate: () => void) {
     if (active && !wasActive.current) callback.current();
     wasActive.current = active;
   }, [active]);
+}
+
+const NO_SEARCH_PARAMS_UPDATE = () => undefined;
+
+/**
+ * 一覧 + 詳細（`ListDetailLayout`）の選択を URL の検索パラメータに持つ（共有の `useUrlSelection`。#2281）。
+ *
+ * NL2SQL の画面は keep-alive（離れても描いたまま隠す）なので、次の 2 つを足す。
+ * - 隠れている間は、ほかの画面の URL を読まず、最後に開いていた選択のまま止める（詳細を消さない）。
+ * - サイドナビから戻る（URL に選択が無いまま画面が表に出る）ときは、最後の選択を URL に戻す（replace）。
+ *   作業状態の「対象の選択は残して検証し直す」（workspace-state.md）。「一覧へ戻る」で外した選択は戻さない。
+ */
+export function useWorkspaceUrlSelection(param: string): UrlSelection & { split: boolean } {
+  const active = useWorkspaceActive();
+  const split = useListDetailSplit();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [remembered, setRemembered] = useWorkspaceState(`selection:${param}`, "");
+  const urlValue = searchParams.get(param)?.trim() ?? "";
+  const frozenParams = useMemo(
+    () => new URLSearchParams(remembered ? { [param]: remembered } : {}),
+    [param, remembered]
+  );
+  const selection = useUrlSelection({
+    param,
+    searchParams: active ? searchParams : frozenParams,
+    setSearchParams: active ? setSearchParams : NO_SEARCH_PARAMS_UPDATE,
+    singlePane: !split,
+  });
+  const wasActive = useRef(false);
+  useEffect(() => {
+    const activated = active && !wasActive.current;
+    wasActive.current = active;
+    if (!active) return;
+    if (activated && !urlValue && remembered) {
+      setSearchParams(
+        (previous) => {
+          const next = new URLSearchParams(previous);
+          next.set(param, remembered);
+          return next;
+        },
+        { replace: true }
+      );
+      return;
+    }
+    if (urlValue !== remembered) setRemembered(urlValue);
+  }, [active, param, remembered, setRemembered, setSearchParams, urlValue]);
+  return { ...selection, split };
 }
 
 /** Profile の推薦を明示適用するときだけ、そのクエリを移動先の草稿へ引き継ぐ。 */
