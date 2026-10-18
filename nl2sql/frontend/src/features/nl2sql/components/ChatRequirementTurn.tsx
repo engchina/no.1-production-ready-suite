@@ -37,9 +37,12 @@ export interface ChatRequirementFlow {
   scrollKey: string;
   /** もう一度確かめる（新しい session を作る）。 */
   retry: () => void;
-  /** 確認せずに SQL を生成する（要件の検査ができなかったとき）。 */
+  /**
+   * 確認を終えて、確認せずに SQL を生成する（質問は取り消さない。#2303）。AI の処理中（要件の下書き・回答の後の
+   * 再検査）なら、その応答を待たずに捨てて進む。
+   */
   skip: () => void;
-  /** 確認を中止する（質問は入力欄に戻す）。 */
+  /** 確認を中止する（入力欄の「停止」。質問は入力欄に戻す）。 */
   cancel: () => void;
   /** 確かめた要件で SQL を生成する。 */
   generate: () => void;
@@ -148,6 +151,11 @@ export function useChatRequirementFlow({
 
   const skip = () => {
     if (!check) return;
+    // AI の処理中でも待たない（#2303）。作成の応答はこの送信のものでなくなり、届いたらサーバーで中止する
+    // （上の検査の effect）。送っている回答は中断し、その応答・失敗は出さない。
+    abandonedRef.current.add(check.request.client_job_id);
+    controller.abortAnswer();
+    resetCheck();
     // 開いている確認はサーバーで中止してから、確認を使わずに作る（会話には「確認せずに…」を残す。#1839）。
     if (isSessionOpen(session)) void cancelQuerySession(session.id).catch(() => undefined);
     onSubmit(check, null, undefined, true);
@@ -224,7 +232,8 @@ export function ChatRequirementTurn({
           onRetry={flow.retry}
           onSkip={flow.skip}
           onApply={flow.generate}
-          onClose={flow.cancel}
+          // 「確認をやめる」は出さない（#2303）。確認を終えるのは「確認せずに SQL を生成」（flow.skip）で、
+          // 質問を取り消さずに SQL の生成へ進む。
           canExecuteSql={canExecuteSql}
           size="sm"
           idPrefix="sql-chat"

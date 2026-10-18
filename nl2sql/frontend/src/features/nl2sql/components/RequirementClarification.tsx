@@ -133,6 +133,11 @@ export interface RequirementSessionController {
   applyRequirement: () => Promise<QuerySession | null>;
   /** 開いている session をサーバーで中止する。中止できた（または開いていない）ら true。 */
   cancelSession: () => Promise<boolean>;
+  /**
+   * 送っている回答（AI の再検査を待っている要求）を取りやめる。応答は待たずに捨て、失敗も出さない
+   * （チャットの「確認せずに SQL を生成」で、再検査を待たずに SQL の生成へ進むとき）。
+   */
+  abortAnswer: () => void;
   /** 回答・反映・中止のどれかが要件確認を進められる状態か（SELECT / FROM が明確で、直している途中でない）。 */
   showApply: boolean;
   unresolvedCount: number;
@@ -154,6 +159,8 @@ export function useRequirementSession(
   const [error, setError] = useState<unknown>("");
   const [busyAction, setBusyAction] = useState<RequirementBusyAction>(initialBusy);
   const mountedRef = useRef(false);
+  // 送っている回答の要求（取りやめるときに中断する）。
+  const answerAbortRef = useRef<AbortController | null>(null);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -234,25 +241,40 @@ export function useRequirementSession(
     answer: { selected_candidate_ids: string[]; free_text: string }
   ) => {
     if (!session || busyAction) return;
+    const abort = new AbortController();
+    answerAbortRef.current = abort;
     setBusyAction("answer");
     setError("");
     try {
-      const updated = await answerQuerySessionClarification(session.id, {
-        base_version: session.current_intent_version ?? 1,
-        item_id: itemId,
-        ...answer,
-      });
+      const updated = await answerQuerySessionClarification(
+        session.id,
+        {
+          base_version: session.current_intent_version ?? 1,
+          item_id: itemId,
+          ...answer,
+        },
+        { signal: abort.signal }
+      );
+      if (abort.signal.aborted) return;
       setSession(updated);
       setCorrectingItemId(null);
     } catch (cause) {
+      // 取りやめた回答（確認せずに SQL の生成へ進んだ）の失敗は出さない。
+      if (abort.signal.aborted) return;
       await reloadAfterConflict(cause, session);
       setError(cause instanceof Error ? cause : t("nl2sql.clarification.error.answer"));
     } finally {
+      if (answerAbortRef.current === abort) answerAbortRef.current = null;
       if (mountedRef.current) {
         setBusyAction("");
         setAnsweringCandidateId("");
       }
     }
+  };
+
+  const abortAnswer = () => {
+    answerAbortRef.current?.abort();
+    answerAbortRef.current = null;
   };
 
   const submitAnswer = async () => {
@@ -363,6 +385,7 @@ export function useRequirementSession(
     submitCorrection,
     applyRequirement,
     cancelSession,
+    abortAnswer,
     showApply: Boolean(state?.can_apply) && !correctingItem,
     unresolvedCount,
     answeredCount: state?.answered_count ?? 0,
@@ -518,8 +541,12 @@ export function RequirementStateBanners({ state, unresolvedCount }: { state: Req
   );
 }
 
-/** 回答を反映している間の経過（回答の後に LLM の再検査が走ると数秒以上かかる）。 */
-export function RequirementAnswerProgress({ active }: { active: boolean }) {
+/**
+ * 回答を反映している間の経過（回答の後に LLM の再検査が走ると数秒以上かかる）。経過時間はこの回答を送った時から
+ * 数える（前の段階・利用者が答えていた時間を含めない）。`onSkip` を渡すと、待たずに「確認せずに SQL を生成」へ
+ * 進む操作を経過の行に出す（チャット）。
+ */
+export function RequirementAnswerProgress({ active, onSkip }: { active: boolean; onSkip?: () => void }) {
   if (!active) return null;
   // スピナーは回答のボタンが担う（messaging.md §3.7）。
   return (
@@ -531,6 +558,8 @@ export function RequirementAnswerProgress({ active }: { active: boolean }) {
       activityIcon="none"
       className="rounded-md border border-border bg-surface-sunken px-3 py-2"
       testId="nl2sql-guided-answer-progress"
+      onCancel={onSkip}
+      labels={{ cancel: t("chat.requirement.skip") }}
     />
   );
 }
@@ -608,8 +637,11 @@ export function RequirementCard({
   onApply: () => void;
   /** 確認を使わずに SQL を生成する（要件が生成に進めないときのスキップ）。 */
   onSkip: () => void;
-  /** 確認をやめる（質問を入力欄に戻す・SQL 生成の画面のパネルを閉じる）。 */
-  onClose: () => void;
+  /**
+   * 確認をやめる（SQL 生成の画面のパネルを閉じる）。渡さなければ「確認をやめる」を出さない（チャット。確認を
+   * 終えるのは「確認せずに SQL を生成」で、質問は取り消さずに SQL の生成へ進む）。
+   */
+  onClose?: () => void;
   idPrefix: string;
 }) {
   const {
@@ -753,6 +785,8 @@ export function RequirementCard({
         disabled={sendingCorrection}
         blockedReason={pendingHint}
         onConfirm={onApply}
+        // 「確認をやめる」を出さない画面（チャット）は、確かめた要件を使わずに質問のまま SQL を生成する操作を出す。
+        onSkip={onClose ? undefined : onSkip}
         onCancel={onClose}
         labels={{ ...baseLabels, confirm: applyLabel }}
         actions={
