@@ -92,10 +92,10 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
     assert created["TABLE"] == set(MANAGED_TABLES)
     assert created["INDEX"] == set(MANAGED_INDEXES)
     assert created["SEQUENCE"] == set(MANAGED_SEQUENCES)
-    assert len(MANAGED_TABLES) == 30
-    assert len(MANAGED_INDEXES) == 27
+    assert len(MANAGED_TABLES) == 32
+    assert len(MANAGED_INDEXES) == 30
     assert len(MANAGED_SEQUENCES) == 1
-    assert len(MANAGED_OBJECTS) == 60
+    assert len(MANAGED_OBJECTS) == 65
     assert [migration.version for migration in MIGRATIONS] == [
         0,
         1,
@@ -113,6 +113,7 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
         21,
         22,
         23,
+        24,
     ]
     assert all("security" not in migration.filename for migration in MIGRATIONS)
     assert set(MANAGED_TABLES).isdisjoint(PRESERVED_TABLES)
@@ -137,6 +138,27 @@ def test_admin_audit_migration_creates_named_table_and_indexes() -> None:
     assert "CONSTRAINT PK_NL2SQL_ADMIN_AUDIT_LOG PRIMARY KEY" in statements[0]
 
 
+def test_db_admin_chat_migration_creates_conversation_tables_and_indexes() -> None:
+    migration = next(item for item in MIGRATIONS if item.version == 24)
+    assert migration.created_objects == frozenset(
+        {
+            ("NL2SQL_DB_ADMIN_CHATS", "TABLE"),
+            ("NL2SQL_DB_ADMIN_CHAT_TURNS", "TABLE"),
+            ("IX_NL2SQL_DB_ADMIN_CHAT_OWNER", "INDEX"),
+            ("IX_NL2SQL_DB_ADMIN_CHAT_TIME", "INDEX"),
+            ("IX_NL2SQL_DB_ADMIN_CHAT_TURN_CONV", "INDEX"),
+        }
+    )
+    statements = split_migration_sql(migration.path.read_text())
+    assert len(statements) == 5
+    # ターンは会話を消すと一緒に消える（FK の ON DELETE CASCADE）。
+    assert "ON DELETE CASCADE" in statements[1]
+    # 会話の表はターンの表より先に作り、DROP は manifest の逆順（ターンが先）。
+    assert MANAGED_TABLES.index("NL2SQL_DB_ADMIN_CHATS") < MANAGED_TABLES.index(
+        "NL2SQL_DB_ADMIN_CHAT_TURNS"
+    )
+
+
 def test_object_metadata_covers_manifest_order_and_marks_missing_objects() -> None:
     manager = SystemSchemaManager(ddl_lock_timeout_seconds=1)
     created_at = datetime(2026, 8, 29, tzinfo=UTC)
@@ -157,8 +179,8 @@ def test_object_metadata_covers_manifest_order_and_marks_missing_objects() -> No
     metadata = manager._build_object_metadata(existing_objects, table_metadata, owner="NL2SQL_APP")
 
     assert [(item["name"], item["object_type"]) for item in metadata] == list(MANAGED_OBJECTS)
-    assert sum(item["object_type"] == "TABLE" for item in metadata) == 30
-    assert sum(item["object_type"] == "INDEX" for item in metadata) == 27
+    assert sum(item["object_type"] == "TABLE" for item in metadata) == 32
+    assert sum(item["object_type"] == "INDEX" for item in metadata) == 30
     assert sum(item["object_type"] == "SEQUENCE" for item in metadata) == 1
     assert metadata[0] == {
         "name": MANAGED_TABLES[0],
@@ -572,7 +594,7 @@ class _IncrementalWorkflowManager(_WorkflowManager):
         super().__init__("partial")
         self.before = _partial_status(
             applied_versions=[0, 1, 2, 3, 5, 6],
-            pending_versions=[7, 8, 9, 15, 17, 18, 19, 21, 22, 23],
+            pending_versions=[7, 8, 9, 15, 17, 18, 19, 21, 22, 23, 24],
             missing_objects=[
                 ("NL2SQL_EVALUATION_JOBS", "TABLE"),
                 ("NL2SQL_EVALUATION_RESULTS", "TABLE"),
@@ -591,7 +613,7 @@ def test_incremental_update_reaches_ready_without_replaying_old_migrations() -> 
 
     result = manager.initialize()
 
-    assert manager.applied_migrations == [7, 8, 9, 15, 17, 18, 19, 21, 22, 23]
+    assert manager.applied_migrations == [7, 8, 9, 15, 17, 18, 19, 21, 22, 23, 24]
     assert result["operation"] == "migrated"
     assert result["status"] == "ready"
     assert result["existing_object_count"] == len(MANAGED_OBJECTS)

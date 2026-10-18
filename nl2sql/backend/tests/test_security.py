@@ -2370,9 +2370,9 @@ def test_route_permissions_cover_every_mounted_route() -> None:
     # 事前条件の Select AI の Credential の状態（#1683 / #1688）は、Credential が前提の操作の
     # いずれかの権限で読める。会話の名前の変更・削除（#1817）は生成の権限で本人の会話だけ。
     # 実行履歴の 1 行（全幅の詳細。#1955）は一覧と同じ権限。DB 管理チャット（#2264）の生成・実行・
-    # 失敗の分析は menu.db_admin_chat だけ。
-    assert len(mounted) == 293
-    assert len(ROUTE_PERMISSIONS) == 281
+    # 失敗の分析と会話の履歴（#2319）は menu.db_admin_chat だけ。
+    assert len(mounted) == 298
+    assert len(ROUTE_PERMISSIONS) == 286
     assert ROUTE_PERMISSIONS[("GET", "/nl2sql/select-ai/credential-readiness")] == frozenset(
         {
             "nl2sql.profiles.manage",
@@ -5668,6 +5668,16 @@ def test_db_admin_chat_requires_its_own_menu_permission(
         assert permission_for_route("POST", f"/nl2sql/db-admin-chat/{route}") == frozenset(
             {"menu.db_admin_chat"}
         )
+    # 会話の履歴（#2319）も同じメニュー権限だけ。
+    conversation = "/nl2sql/db-admin-chat/conversations/{conversation_id}"
+    for method, path in (
+        ("GET", "/nl2sql/db-admin-chat/conversations"),
+        ("GET", conversation),
+        ("PATCH", conversation),
+        ("DELETE", conversation),
+        ("PUT", f"{conversation}/turns/{{turn_id}}/plan"),
+    ):
+        assert permission_for_route(method, path) == frozenset({"menu.db_admin_chat"})
     security = _configure_memory_api_auth(monkeypatch)
     admin, _, _ = _login(security)
     nl2sql = Nl2SqlService(store=MemoryNl2SqlStore())
@@ -5706,18 +5716,27 @@ def test_db_admin_chat_requires_its_own_menu_permission(
             ) as client:
                 _, csrf = await _login_api(client, f"dbchat_{index}", "DbChatPass!123")
                 headers = {"X-CSRF-Token": csrf}
-                for route, body in (
-                    ("execute", {"sql": "SELECT 1 FROM DUAL"}),
-                    ("analyze-error", {"sql": "SELECT 1 FROM DUAL", "result_text": "ORA-00942"}),
+                for route, body, allowed_status in (
+                    # 無い会話のターンの実行は、権限があれば 404（存在を漏らさない）。
+                    ("execute", {"conversation_id": "missing", "turn_id": "missing"}, 404),
+                    (
+                        "analyze-error",
+                        {"sql": "SELECT 1 FROM DUAL", "result_text": "ORA-00942"},
+                        200,
+                    ),
                 ):
                     response = await client.post(
                         f"/api/nl2sql/db-admin-chat/{route}", headers=headers, json=body
                     )
-                    assert response.status_code == (200 if allowed else 403), (
+                    assert response.status_code == (allowed_status if allowed else 403), (
                         permissions,
                         route,
                         response.text,
                     )
+                listed = await client.get(
+                    "/api/nl2sql/db-admin-chat/conversations", headers=headers
+                )
+                assert listed.status_code == (200 if allowed else 403), listed.text
                 # API の判定を通さないサービスの直呼びも同じ判定になる。
                 with actor_scope(user.user_uuid):
                     request = DbAdminChatExecuteRequest(sql="SELECT 1 FROM DUAL")

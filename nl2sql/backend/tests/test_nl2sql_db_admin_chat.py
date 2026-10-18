@@ -18,7 +18,6 @@ from app.features.nl2sql.db_admin_chat import (
 from app.features.nl2sql.models import (
     DbAdminChatAnalyzeRequest,
     DbAdminChatExecuteRequest,
-    DbAdminChatGenerateRequest,
     DbAdminChatHistoryTurn,
     QueryResults,
     SchemaCatalog,
@@ -360,10 +359,8 @@ def test_generate_returns_plan_without_executing() -> None:
     )
     service = _catalog_service(adapter, ai)
     data = service.generate_db_admin_chat_sql(
-        DbAdminChatGenerateRequest(
-            question="ITEM_STOCK の QTY が 0 の行を消す",
-            history=[DbAdminChatHistoryTurn(question="前の質問", sql="SELECT 1 FROM DUAL")],
-        )
+        "ITEM_STOCK の QTY が 0 の行を消す",
+        [DbAdminChatHistoryTurn(question="前の質問", sql="SELECT 1 FROM DUAL")],
     )
     assert data.plan.sql == "DELETE FROM APP.ITEM_STOCK WHERE QTY = 0"
     assert data.plan.requires_confirmation is True
@@ -382,16 +379,14 @@ def test_generate_returns_plan_without_executing() -> None:
 def test_generate_requires_enterprise_ai() -> None:
     service = _catalog_service(_FakeAdapter(), _FakeEnterpriseAi([], configured=False))
     with pytest.raises(DbAdminChatGenerationError) as error:
-        service.generate_db_admin_chat_sql(DbAdminChatGenerateRequest(question="版"))
+        service.generate_db_admin_chat_sql("版")
     assert error.value.status_code == 409
 
 
 def test_generate_with_empty_sql_keeps_the_explanation() -> None:
     ai = _FakeEnterpriseAi([{"sql": "", "explanation": "方針で実行できません"}])
     service = _catalog_service(_FakeAdapter(), ai)
-    data = service.generate_db_admin_chat_sql(
-        DbAdminChatGenerateRequest(question="インスタンスを停止して")
-    )
+    data = service.generate_db_admin_chat_sql("インスタンスを停止して")
     assert data.plan.statements == []
     assert data.explanation == "方針で実行できません"
 

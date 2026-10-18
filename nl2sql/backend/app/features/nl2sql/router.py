@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Literal, NamedTuple
 
+import anyio
 from fastapi import (
     APIRouter,
     Depends,
@@ -100,9 +101,14 @@ from .models import (
     DbAdminAiAnalysisRequest,
     DbAdminChatAnalyzeData,
     DbAdminChatAnalyzeRequest,
-    DbAdminChatExecuteRequest,
-    DbAdminChatGenerateData,
+    DbAdminChatData,
     DbAdminChatGenerateRequest,
+    DbAdminChatPage,
+    DbAdminChatPlanUpdateRequest,
+    DbAdminChatSendData,
+    DbAdminChatSummary,
+    DbAdminChatTurn,
+    DbAdminChatTurnExecuteRequest,
     DbAdminCsvUploadData,
     DbAdminCsvUploadRequest,
     DbAdminDataPreviewData,
@@ -235,6 +241,7 @@ from .select_ai_readiness import (
 from .service import (
     _SCHEMA_EMPTY_MESSAGE,
     ChatConversationBusyError,
+    DbAdminChatConversationFullError,
     DbAdminChatGenerationError,
     JobIdConflictError,
     JobProgressData,
@@ -440,8 +447,13 @@ def _chat_owner_names(owners: list[str]) -> dict[str, str]:
     return {uuid: identity.display_name for uuid, identity in identities.items()}
 
 
-def _with_chat_owners(page: SqlChatPage, *, actor: str, all_users: bool) -> SqlChatPage:
-    """会話の一覧に、本人の会話かと、system_admin には利用者の表示名を足す（#1889・#1696）。"""
+def _with_chat_owners[PageT: (SqlChatPage, DbAdminChatPage)](
+    page: PageT, *, actor: str, all_users: bool
+) -> PageT:
+    """会話の一覧に、本人の会話かと、system_admin には利用者の表示名を足す（#1889・#1696）。
+
+    チャットと DB 管理チャット（#2319）の会話の一覧で同じ見え方にする。
+    """
     owners = sorted({item.actor_user_uuid for item in page.items if item.actor_user_uuid})
     names = _chat_owner_names(owners) if all_users and owners else {}
     return page.model_copy(
@@ -454,13 +466,13 @@ def _with_chat_owners(page: SqlChatPage, *, actor: str, all_users: bool) -> SqlC
     )
 
 
-def _with_chat_owner(
-    item: SqlChatSummary,
+def _with_chat_owner[SummaryT: (SqlChatSummary, DbAdminChatSummary)](
+    item: SummaryT,
     *,
     actor: str,
     all_users: bool,
     names: dict[str, str] | None = None,
-) -> SqlChatSummary:
+) -> SummaryT:
     owner = item.actor_user_uuid
     if names is None:
         names = _chat_owner_names([owner]) if all_users and owner else {}
@@ -3051,21 +3063,181 @@ def db_admin_analyze_error(
 # ---- DB 管理チャット（#2264）。画面だけの API（Cookie / CSRF）。API キー・MCP・Agent は使えない
 
 
-@router.post("/db-admin-chat/generate", response_model=ApiResponse[DbAdminChatGenerateData])
-def db_admin_chat_generate(
-    req: DbAdminChatGenerateRequest,
-) -> ApiResponse[DbAdminChatGenerateData]:
-    """質問から Oracle の SQL を作る（Enterprise AI Direct。実行はしない）。"""
+# 会話の履歴（#2319）の見え方は「AI 活用」と同じ（system_admin は全員、それ以外は本人だけ。他人と
+# 無い会話は 404）。
+
+
+def _db_admin_chat_actor(request: Request) -> tuple[str, bool]:
+    principal = getattr(request.state, "principal", None)
+    return str(getattr(principal, "user_uuid", "") or ""), _chat_all_users(request)
+
+
+def _with_db_admin_chat_senders(turns: list[DbAdminChatTurn]) -> list[DbAdminChatTurn]:
+    """持ち主以外（system_admin）が送ったターンに、送り手の表示名を足す（チャットと同じ。#1928）。"""
+    senders = sorted({turn.sender_user_uuid for turn in turns if turn.sender_user_uuid})
+    names = _chat_owner_names(senders) if senders else {}
+    return [
+        turn
+        if turn.sender_user_uuid is None
+        else turn.model_copy(update={"sender_display_name": names.get(turn.sender_user_uuid, "")})
+        for turn in turns
+    ]
+
+
+def _client_stopped_waiting(request: Request) -> bool:
+    """画面が生成を待つのをやめた（停止した・接続が切れた）か。分からなければ待っているとみなす。"""
     try:
-        return ApiResponse(data=nl2sql_service.generate_db_admin_chat_sql(req))
+        return bool(anyio.from_thread.run(request.is_disconnected))
+    except RuntimeError:
+        return False
+
+
+@router.get("/db-admin-chat/conversations", response_model=ApiResponse[DbAdminChatPage])
+def list_db_admin_chats(
+    request: Request,
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
+    ],
+) -> ApiResponse[DbAdminChatPage]:
+    """DB 管理チャットの会話の履歴（新しい順。offset 型）。"""
+    actor, all_users = _db_admin_chat_actor(request)
+    try:
+        page = nl2sql_service.list_db_admin_chats(
+            actor=actor, all_users=all_users, offset=paging.offset, limit=paging.limit
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return ApiResponse(data=_with_chat_owners(page, actor=actor, all_users=all_users))
+
+
+@router.get(
+    "/db-admin-chat/conversations/{conversation_id}", response_model=ApiResponse[DbAdminChatData]
+)
+def get_db_admin_chat(conversation_id: str, request: Request) -> ApiResponse[DbAdminChatData]:
+    """DB 管理チャットの会話の内容（ターン・生成した SQL・最後の実行の要約）。"""
+    actor, all_users = _db_admin_chat_actor(request)
+    try:
+        data = nl2sql_service.get_db_admin_chat(conversation_id, actor=actor, all_users=all_users)
+    except (PermissionError, LookupError) as exc:
+        raise _chat_not_found() from exc
+    return ApiResponse(
+        data=data.model_copy(
+            update={
+                "conversation": _with_chat_owner(
+                    data.conversation, actor=actor, all_users=all_users
+                ),
+                "turns": _with_db_admin_chat_senders(data.turns),
+            }
+        )
+    )
+
+
+@router.patch(
+    "/db-admin-chat/conversations/{conversation_id}",
+    response_model=ApiResponse[DbAdminChatSummary],
+)
+def rename_db_admin_chat(
+    conversation_id: str, update: SqlChatUpdateRequest, request: Request
+) -> ApiResponse[DbAdminChatSummary]:
+    """DB 管理チャットの会話の名前を変える（チャットと同じ規則: 1〜80 文字）。"""
+    actor, all_users = _db_admin_chat_actor(request)
+    try:
+        data = nl2sql_service.rename_db_admin_chat(
+            conversation_id, actor=actor, all_users=all_users, title=update.title
+        )
+    except (PermissionError, LookupError) as exc:
+        raise _chat_not_found() from exc
+    return ApiResponse(data=_with_chat_owner(data, actor=actor, all_users=all_users))
+
+
+@router.delete("/db-admin-chat/conversations/{conversation_id}", response_model=ApiResponse[None])
+def delete_db_admin_chat(conversation_id: str, request: Request) -> ApiResponse[None]:
+    """DB 管理チャットの会話を消す（実行の監査の表は残す）。"""
+    actor, all_users = _db_admin_chat_actor(request)
+    try:
+        nl2sql_service.delete_db_admin_chat(conversation_id, actor=actor, all_users=all_users)
+    except (PermissionError, LookupError) as exc:
+        raise _chat_not_found() from exc
+    return ApiResponse(data=None)
+
+
+@router.put(
+    "/db-admin-chat/conversations/{conversation_id}/turns/{turn_id}/plan",
+    response_model=ApiResponse[DbAdminChatTurn],
+)
+def replace_db_admin_chat_turn_sql(
+    conversation_id: str, turn_id: str, req: DbAdminChatPlanUpdateRequest, request: Request
+) -> ApiResponse[DbAdminChatTurn]:
+    """ターンの SQL を、AI のエラー分析で直した SQL に置き換える（サーバーが分類し直す）。"""
+    actor, all_users = _db_admin_chat_actor(request)
+    try:
+        turn = nl2sql_service.replace_db_admin_chat_turn_sql(
+            conversation_id, turn_id, req.sql, actor=actor, all_users=all_users
+        )
+    except (PermissionError, LookupError) as exc:
+        raise HTTPException(
+            status_code=OWNER_NOT_FOUND_STATUS, detail=_CHAT_TURN_NOT_FOUND_DETAIL
+        ) from exc
+    [named] = _with_db_admin_chat_senders([turn])
+    return ApiResponse(data=named)
+
+
+@router.post("/db-admin-chat/generate", response_model=ApiResponse[DbAdminChatSendData])
+def db_admin_chat_generate(
+    req: DbAdminChatGenerateRequest, request: Request
+) -> ApiResponse[DbAdminChatSendData]:
+    """質問から Oracle の SQL を作り、会話のターンとして保存する（Enterprise AI Direct）。
+
+    前の往復はサーバーが保存した会話から復元する。画面が停止した（待つのをやめた）生成は保存しない。
+    """
+    actor, all_users = _db_admin_chat_actor(request)
+    try:
+        data = nl2sql_service.send_db_admin_chat_question(
+            req,
+            actor=actor,
+            all_users=all_users,
+            keep_result=lambda: not _client_stopped_waiting(request),
+        )
     except DbAdminChatGenerationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except DbAdminChatConversationFullError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="この会話は往復の上限に達しました。新しい会話を始めてください。",
+        ) from exc
+    except (PermissionError, LookupError) as exc:
+        raise _chat_not_found() from exc
+    if data is None:
+        # 画面は応答を待っていない（停止した）。保存していないことだけを返す。
+        raise HTTPException(status_code=409, detail="生成を停止したため、保存しませんでした。")
+    return ApiResponse(
+        data=data.model_copy(
+            update={
+                "conversation": _with_chat_owner(
+                    data.conversation, actor=actor, all_users=all_users
+                ),
+                "turn": _with_db_admin_chat_senders([data.turn])[0],
+            }
+        )
+    )
 
 
 @router.post("/db-admin-chat/execute", response_model=ApiResponse[DbAdminExecuteData])
-def db_admin_chat_execute(req: DbAdminChatExecuteRequest) -> ApiResponse[DbAdminExecuteData]:
-    """SELECT は押せば実行、それ以外は確認語があるときだけ実行する（監査の表に残す）。"""
-    return ApiResponse(data=nl2sql_service.execute_db_admin_chat_sql(req))
+def db_admin_chat_execute(
+    req: DbAdminChatTurnExecuteRequest, request: Request
+) -> ApiResponse[DbAdminExecuteData]:
+    """ターンに保存した SQL を実行する。SELECT は押せば実行、それ以外は確認語があるときだけ
+    （監査の表に残し、ターンに最後の実行の要約を残す）。"""
+    actor, all_users = _db_admin_chat_actor(request)
+    try:
+        data = nl2sql_service.execute_db_admin_chat_turn(req, actor=actor, all_users=all_users)
+    except (PermissionError, LookupError) as exc:
+        raise HTTPException(
+            status_code=OWNER_NOT_FOUND_STATUS, detail=_CHAT_TURN_NOT_FOUND_DETAIL
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ApiResponse(data=data)
 
 
 @router.post("/db-admin-chat/analyze-error", response_model=ApiResponse[DbAdminChatAnalyzeData])
