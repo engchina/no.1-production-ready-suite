@@ -55,7 +55,14 @@ async def test_long_answer_record_saves_on_real_oracle() -> None:
     try:
         await client.save_answer_record(record)
         # 同じ trace_id の上書き（MERGE の UPDATE の側）も通る。
-        await client.save_answer_record({**record, "answer": LONG_ANSWER + "（追記）"})
+        # 回答に付けた注意書き（#2405）も別の列に保存する。
+        await client.save_answer_record(
+            {
+                **record,
+                "answer": LONG_ANSWER + "（追記）",
+                "answer_notice": "合成の注意書き\n2 行目",
+            }
+        )
         saved = await client.get_answer_record(trace_id)
     finally:
         # 作った行を消す（回答の記録の削除の API は無い。テストの行だけを trace_id で消す）。
@@ -68,6 +75,7 @@ async def test_long_answer_record_saves_on_real_oracle() -> None:
         )
     assert saved is not None
     assert saved["answer"] == LONG_ANSWER + "（追記）"
+    assert saved["answer_notice"] == "合成の注意書き\n2 行目"
     citations = saved["citations_json"]
     assert isinstance(citations, list)
     assert len(citations) == len(CITATIONS)
