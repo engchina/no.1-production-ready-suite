@@ -40,6 +40,7 @@ import {
   type StatusVariant,
   ApiErrorState,
   apiErrorMessage,
+  adjacentListItems,
 } from "@production-ready/ui";
 
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -237,7 +238,8 @@ function EvaluationOverview({
 }) {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
-  const [selectedCase, setSelectedCase] = useState<EvaluationCaseResult | null>(null);
+  // シートで開いているケース（ID）。内容は表示中の評価の結果から引き、実行中の評価の取り直しで更新する。
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
 
   const sets = useQuery({
     queryKey: ["evaluation-sets", agentId],
@@ -280,6 +282,10 @@ function EvaluationOverview({
   useEffect(() => {
     if (jobId && job.isError) onJobChange(null);
   }, [jobId, job.isError, onJobChange]);
+  // シートのケースと「前へ / 次へ」の前後（評価の結果の並び。結果の表の並びと同じ）。
+  const caseResults = job.data?.results ?? [];
+  const selectedCase = caseResults.find((result) => result.case.id === selectedCaseId) ?? null;
+  const { previous: previousCase, next: nextCase } = adjacentListItems(caseResults, selectedCaseId, (result) => result.case.id);
   // 実行中の評価が終わったら、評価セットと最近の評価を取り直す。
   const shownStatus = job.data?.status;
   useEffect(() => {
@@ -458,7 +464,8 @@ function EvaluationOverview({
             job={job.data}
             cancelling={cancel.isPending}
             onCancel={() => cancel.mutate(job.data.id)}
-            onOpenCase={setSelectedCase}
+            selectedCaseId={selectedCaseId}
+            onOpenCase={(result) => setSelectedCaseId(result.case.id)}
           />
         ) : null}
 
@@ -504,13 +511,22 @@ function EvaluationOverview({
 
         <EvaluationCompare />
 
+        {/* ケースの詳細は一覧の文脈を保ったまま 1 件をのぞく補助の内容なので、40rem（md）のシートで読み、
+            見出しの行の「前へ / 次へ」で評価の結果の前後のケースへ移る（page-archetypes.md §1「詳細の出し方」。#2283）。 */}
         <SideSheet
           open={selectedCase !== null}
-          onClose={() => setSelectedCase(null)}
+          onClose={() => setSelectedCaseId(null)}
           title={t("evaluation.detail.title")}
           closeLabel={t("evaluation.detail.close")}
           id="evaluation-case-detail"
           side="right"
+          size="md"
+          pager={{
+            onPrevious: previousCase ? () => setSelectedCaseId(previousCase.case.id) : null,
+            onNext: nextCase ? () => setSelectedCaseId(nextCase.case.id) : null,
+            labels: { previous: t("listDetail.previous"), next: t("listDetail.next") },
+            testId: "evaluation-case-pager",
+          }}
         >
           {selectedCase ? <CaseDetail result={selectedCase} /> : null}
         </SideSheet>
@@ -627,11 +643,14 @@ function JobView({
   job,
   cancelling,
   onCancel,
+  selectedCaseId,
   onOpenCase,
 }: {
   job: EvaluationJob;
   cancelling: boolean;
   onCancel: () => void;
+  /** シートで開いているケース（結果の表の題名のボタンに aria-current を付ける）。 */
+  selectedCaseId: string | null;
   onOpenCase: (result: EvaluationCaseResult) => void;
 }) {
   const active = ACTIVE.has(job.status);
@@ -714,7 +733,7 @@ function JobView({
           <CardDescription>{t("evaluation.results.description")}</CardDescription>
         </CardHeader>
         <CardContent>
-          <ResultsTable results={job.results} jobId={job.id} onOpen={onOpenCase} />
+          <ResultsTable results={job.results} jobId={job.id} selectedCaseId={selectedCaseId} onOpen={onOpenCase} />
         </CardContent>
       </Card>
     </div>
@@ -775,10 +794,12 @@ function Metric({ label, value, detail }: { label: string; value: string; detail
 function ResultsTable({
   results,
   jobId,
+  selectedCaseId,
   onOpen,
 }: {
   results: EvaluationCaseResult[];
   jobId: string;
+  selectedCaseId: string | null;
   onOpen: (result: EvaluationCaseResult) => void;
 }) {
   const columns: DataTableColumn<EvaluationCaseResult>[] = [
@@ -788,7 +809,12 @@ function ResultsTable({
       rowHeader: true,
       className: "min-w-56 max-w-96",
       render: (result) => (
-        <RowTitleButton title={result.case.question} subtitle={result.case.id} onClick={() => onOpen(result)} />
+        <RowTitleButton
+          title={result.case.question}
+          subtitle={result.case.id}
+          current={result.case.id === selectedCaseId}
+          onClick={() => onOpen(result)}
+        />
       ),
     },
     {

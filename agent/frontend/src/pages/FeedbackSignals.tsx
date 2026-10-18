@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { History } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
@@ -11,7 +12,8 @@ import {
   DataTable,
   EmptyState,
   INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_VISIBLE_ROWS,
+  ListDetailLayout,
+  ListDetailPager,
   MessageText,
   ListToolbar,
   OffsetPagination,
@@ -22,8 +24,10 @@ import {
   TableSkeleton,
   type DataTableColumn,
   type StatusVariant,
+  adjacentListItems,
 } from "@production-ready/ui";
 
+import { AGENT_LIST_DETAIL_STORAGE_PREFIX } from "@/components/EntityLayout";
 import { listCount } from "@/components/ListFilters";
 import { agentPaginationLabels, listScrollLabel } from "@/components/ListViews";
 import { ReportSourceNote } from "@/components/ReportSourceNote";
@@ -93,19 +97,29 @@ export function SignalsContent({
   report,
   filtered,
   onClearFilters,
-  onOpen,
+  selectedId,
+  onSelect,
   onPageChange,
   onPageSizeChange,
 }: {
   report: SignalReport;
   filtered: boolean;
   onClearFilters: () => void;
-  onOpen: (item: SignalItem) => void;
+  /** 選んだ実行（URL の `?signal=`。#2283）。 */
+  selectedId: string | null;
+  onSelect: (runId: string) => void;
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
 }) {
   const { summary, previous } = report;
-  if (summary.runs === 0) {
+  // 選んだ実行が今のページに無い（絞り込み・ページ送りで外れた）ときは、最後に見た内容を出したままにし、
+  // 別の行へ置き換えない（page-archetypes.md §1 B「選択」）。
+  const found = report.items.find((item) => item.run_id === selectedId) ?? null;
+  const [lastSeen, setLastSeen] = useState<SignalItem | null>(found);
+  if (found && found !== lastSeen) setLastSeen(found);
+  const selected = found ?? (lastSeen && lastSeen.run_id === selectedId ? lastSeen : null);
+  const { previous: previousItem, next: nextItem } = adjacentListItems(report.items, selectedId, (item) => item.run_id);
+  if (summary.runs === 0 && !selectedId) {
     return (
       <Card>
         <CardContent className="pt-4">
@@ -145,14 +159,10 @@ export function SignalsContent({
         </CardContent>
       </Card>
 
-      <Card className="min-w-0">
-        <CardHeader>
-          <CardTitle>{t("feedback.signals.list.title")}</CardTitle>
-          <CardDescription>{t("feedback.signals.list.description")}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {report.total === 0 ? (
-            filtered ? (
+      {report.total === 0 && !selectedId ? (
+        <Card className="min-w-0">
+          <CardContent className="pt-4">
+            {filtered ? (
               <EmptyState
                 title={t("feedback.signals.noMatch.title")}
                 action={
@@ -163,28 +173,73 @@ export function SignalsContent({
               />
             ) : (
               <EmptyState title={t("feedback.signals.none.title")} hint={t("feedback.signals.none.hint")} />
-            )
-          ) : (
-            <div className="grid min-w-0 gap-2">
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        // B 型の一覧 + 詳細（共有 ListDetailLayout。#2283）。xl 以上は「狭い一覧 | 広い詳細」、xl 未満は 1 ペイン。
+        <ListDetailLayout
+          id="feedback-signals"
+          listLabel={t("feedback.signals.list.title")}
+          detailLabel={t("feedback.signals.detail.title")}
+          storagePrefix={AGENT_LIST_DETAIL_STORAGE_PREFIX}
+          listHeader={
+            <div className="grid gap-2">
+              <h2 className="text-sm font-semibold text-fg">{t("feedback.signals.list.title")}</h2>
               {/* 件数: 種類の絞り込み中は「N 件（全 M 件）」。M は期間・業務 Agent の確かめるべき実行の全件（#1891）。 */}
               <ListToolbar count={listCount(summary.flagged, report.total, filtered)} testId="signals-list-toolbar" />
-              <SignalTable items={report.items} onOpen={onOpen} />
-              <OffsetPagination
-                offset={report.offset}
-                limit={report.limit}
-                total={report.total}
-                count={report.items.length}
-                onPageChange={(next) => onPageChange(next)}
-                onPageSizeChange={onPageSizeChange}
-                pageSizeOptions={PAGE_SIZE_OPTIONS}
-                labels={agentPaginationLabels()}
-                ariaLabel={t("feedback.signals.pagerLabel")}
-                testId="signals-pagination"
-              />
             </div>
-          )}
-        </CardContent>
-      </Card>
+          }
+          list={
+            report.items.length ? (
+              <SignalList items={report.items} selectedId={selectedId} onSelect={onSelect} />
+            ) : (
+              <div className="p-3">
+                <EmptyState title={t("feedback.signals.noMatch.title")} />
+              </div>
+            )
+          }
+          listFooter={
+            <OffsetPagination
+              offset={report.offset}
+              limit={report.limit}
+              total={report.total}
+              count={report.items.length}
+              onPageChange={(next) => onPageChange(next)}
+              onPageSizeChange={onPageSizeChange}
+              pageSizeOptions={PAGE_SIZE_OPTIONS}
+              labels={agentPaginationLabels()}
+              ariaLabel={t("feedback.signals.pagerLabel")}
+              testId="signals-pagination"
+            />
+          }
+          hasSelection={selectedId !== null}
+          detail={
+            selected ? (
+              <SignalDetail item={selected} />
+            ) : (
+              <EmptyState
+                title={t("feedback.signals.detail.notInListTitle")}
+                hint={t("feedback.signals.detail.notInListHint")}
+              />
+            )
+          }
+          emptyDetail={
+            <EmptyState title={t("feedback.signals.detail.emptyTitle")} hint={t("feedback.signals.detail.emptyHint")} />
+          }
+          detailToolbar={
+            selectedId ? (
+              <ListDetailPager
+                onPrevious={previousItem ? () => onSelect(previousItem.run_id) : null}
+                onNext={nextItem ? () => onSelect(nextItem.run_id) : null}
+                labels={{ previous: t("listDetail.previous"), next: t("listDetail.next") }}
+                testId="signals-detail-pager"
+              />
+            ) : undefined
+          }
+          labels={{ resize: t("listDetail.resize"), resizeHint: t("listDetail.resizeHint") }}
+        />
+      )}
     </div>
   );
 }
@@ -225,52 +280,42 @@ function SignalCounts({ summary, previous }: { summary: SignalSummary; previous:
   );
 }
 
-function SignalTable({ items, onOpen }: { items: SignalItem[]; onOpen: (item: SignalItem) => void }) {
+/**
+ * 一覧の列（ListDetailLayout の狭い列。#2283）の行。質問（2 行まで）と補足 1 行（シグナル・実行日時）だけにし、
+ * 状態・業務 Agent・利用者は詳細で見る（page-archetypes.md §1 B「一覧の行」）。
+ */
+function SignalList({
+  items,
+  selectedId,
+  onSelect,
+}: {
+  items: SignalItem[];
+  selectedId: string | null;
+  onSelect: (runId: string) => void;
+}) {
   const columns: DataTableColumn<SignalItem>[] = [
     {
       key: "question",
       header: t("feedback.column.question"),
       rowHeader: true,
-      className: "min-w-56 max-w-96",
-      render: (item) => <RowTitleButton title={item.question} subtitle={item.run_id} onClick={() => onOpen(item)} />,
-    },
-    {
-      key: "signals",
-      header: t("feedback.signals.column.signals"),
-      className: "min-w-48",
+      className: "py-2.5 align-top",
       render: (item) => (
-        <div className="flex flex-wrap gap-1">
-          {item.signals.map((kind) => (
-            <SignalBadge key={kind} kind={kind} />
-          ))}
-        </div>
+        <RowTitleButton
+          title={item.question}
+          maxLines={2}
+          subtitle={
+            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+              {item.signals.map((kind) => (
+                <SignalBadge key={kind} kind={kind} />
+              ))}
+              <span className="tabular-nums">{formatDateTime(item.created_at)}</span>
+            </span>
+          }
+          current={item.run_id === selectedId}
+          aria-label={t("feedback.list.selectNamed", { name: item.question })}
+          onClick={() => onSelect(item.run_id)}
+        />
       ),
-    },
-    {
-      key: "status",
-      header: t("feedback.signals.column.status"),
-      render: (item) => {
-        const status = runStatusView(item.status);
-        return <StatusBadge variant={status.variant} label={status.label} />;
-      },
-    },
-    {
-      key: "agent",
-      header: t("feedback.column.agent"),
-      className: "text-xs text-fg",
-      render: (item) => item.agent_name || t("feedback.agentDeleted"),
-    },
-    {
-      key: "user",
-      header: t("feedback.column.user"),
-      className: "text-xs text-fg",
-      render: (item) => item.display_name || t("feedback.userUnknown"),
-    },
-    {
-      key: "created_at",
-      header: t("feedback.signals.column.createdAt"),
-      className: "whitespace-nowrap text-xs tabular-nums text-fg-muted",
-      render: (item) => formatDateTime(item.created_at),
     },
   ];
   return (
@@ -278,12 +323,15 @@ function SignalTable({ items, onOpen }: { items: SignalItem[]; onOpen: (item: Si
       rows={items}
       columns={columns}
       getRowKey={(item) => item.run_id}
-      rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
+      onRowClick={(item) => onSelect(item.run_id)}
+      selectedRowKey={selectedId}
+      rowProps={(item) => ({ className: INFORMATION_TABLE_ROW_CLASS, "data-testid": `signals-row-${item.run_id}` })}
       ariaLabel={t("feedback.signals.list.label")}
       scrollAriaLabel={listScrollLabel(t("feedback.signals.list.label"))}
-      tableClassName="w-full min-w-[62rem]"
       stickyHeader
-      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+      // 一覧の列の高さの中で縦にスクロールし、表頭を固定する。列の枠と二重にしない。
+      className="min-h-0 rounded-none border-0"
+      tableClassName="w-full table-fixed"
     />
   );
 }
@@ -300,12 +348,13 @@ function signalDetail(item: SignalItem, kind: SignalKind): string | null {
   return null;
 }
 
-export function SignalDetail({ item }: { item: SignalItem }) {
+function SignalDetail({ item }: { item: SignalItem }) {
   const capabilities = useCapabilities();
   const canAddCase = useCanEditEvaluationSets();
   const status = runStatusView(item.status);
   return (
-    <div className="space-y-4 text-sm">
+    <div className="space-y-4 text-sm" data-testid="signals-detail">
+      <h2 className="text-base font-semibold text-fg">{t("feedback.signals.detail.title")}</h2>
       <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
         <dt className="text-fg-muted">{t("feedback.column.agent")}</dt>
         <dd className="break-words text-fg">{item.agent_name || t("feedback.agentDeleted")}</dd>
