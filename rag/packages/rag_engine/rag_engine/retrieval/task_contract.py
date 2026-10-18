@@ -45,6 +45,12 @@ class _Cues:
     parallel_objects: re.Pattern[str]
     chained_operations: re.Pattern[str]
     circled: str
+    # 小問の印（#2399）: 丸数字の並び（範囲ごと）・番号の型（(正規表現, 文中のどこでもよいか)）・印の後に続けば
+    # 資料の番号への言及になる語・印の前の区切り（文頭・空白のほかに、文末・読点・コロンの字）。
+    subquestion_circled: tuple[str, ...]
+    subquestion_numbers: tuple[tuple[re.Pattern[str], bool], ...]
+    subquestion_reference: re.Pattern[str]
+    subquestion_boundary: str
 
     def has(self, key: str, text: str) -> bool:
         """語の一覧のどれかが text にあるか。"""
@@ -122,6 +128,17 @@ def _build_cues(pack: LanguagePack) -> _Cues:
             rf"(?:[^{comma_chars}{sentence_chars}]{{0,20}}?{alt['target_particles']})?({alt['split_operation_words']})"
         ),
         circled="".join(_expand(pack.words("markers", "circled_numbers"))),
+        subquestion_circled=tuple("".join(_expand((item,))) for item in words["subquestion_circled_numbers"]),
+        # 記号で始まる型（「(N)」）は文中のどこでも、数・字で始まる型（「N)」「問N」）は区切りの後だけを印にする。
+        subquestion_numbers=tuple(
+            (re.compile(re.escape(pattern).replace("N", r"([0-9０-９]{1,2})")), not pattern[0].isalnum())
+            for pattern in words["subquestion_number_patterns"]
+            if "N" in pattern
+        ),
+        subquestion_reference=re.compile(rf"\s*{alt['subquestion_reference_followers']}"),
+        subquestion_boundary="".join(
+            (*words["unit_split_chars"], *words["comma_chars"], *pack.words("evidence_cues", "label_colon_chars"))
+        ),
     )
 
 
@@ -372,6 +389,65 @@ def _sentence_units(question: str) -> list[dict[str, str]]:
     return [{"id": f"Q{i}", "text": part} for i, part in enumerate(parts, 1) if part]
 
 
+def subquestion_markers(question: str) -> list[tuple[int, str]]:
+    """質問に並べた小問の印の (位置, 印の原文) を返す (#2399)。小問として並んでいなければ空。
+
+    印は言語資源の小問の印（丸数字の範囲・「(N)」などの型）。1 から始まり 1 ずつ増える同じ種類の印が 2 つ以上
+    あるときだけ小問とみなす（1 つだけの「③」や「①と②の違い」は資料の番号への言及）。印の直後に言及の語
+    （「の」「と」「～」など）が続く印は数えない。数・字で始まる型（「1)」）は文頭・空白・文末・読点・コロンの後だけ。
+    種類が混ざるときは、最初の小問が前にある並びを使う。
+    """
+    cues = _cues()
+    candidates: dict[str, list[tuple[int, int, str]]] = {}
+
+    def add(style: str, start: int, end: int, ordinal: int) -> None:
+        if not cues.subquestion_reference.match(question, end):
+            candidates.setdefault(style, []).append((start, ordinal, question[start:end]))
+
+    for index, chars in enumerate(cues.subquestion_circled):
+        if len(chars) < 2:
+            continue
+        for match in re.finditer(f"[{re.escape(chars)}]", question):
+            add(f"c{index}", match.start(), match.end(), chars.index(match.group()) + 1)
+    for index, (pattern, anywhere) in enumerate(cues.subquestion_numbers):
+        for match in pattern.finditer(question):
+            start = match.start()
+            before = question[start - 1] if start else ""
+            if not anywhere and before and not before.isspace() and before not in cues.subquestion_boundary:
+                continue
+            add(f"n{index}", start, match.end(), int(unicodedata.normalize("NFKC", match.group(1))))
+    best: list[tuple[int, str]] = []
+    for found in candidates.values():
+        sequence: list[tuple[int, str]] = []
+        for start, ordinal, label in sorted(found):
+            if ordinal == len(sequence) + 1:
+                sequence.append((start, label))
+        if len(sequence) >= 2 and (not best or sequence[0][0] < best[0][0]):
+            best = sequence
+    return best
+
+
+def _subquestion_units(question: str, markers: Sequence[tuple[int, str]]) -> list[dict[str, str]]:
+    """小問ごとの要求単位。前置きの文は背景（context）にし、各小問に preamble として付ける (#2399)。"""
+    preamble_text = question[: markers[0][0]]
+    preamble = " ".join(preamble_text.split())
+    units = [{**unit, "kind": "context"} for unit in _sentence_units(preamble_text)]
+    ends = [start for start, _ in markers[1:]] + [len(question)]
+    for (start, label), end in zip(markers, ends, strict=True):
+        text = " ".join(question[start:end].split())
+        unit = {"id": f"Q{len(units) + 1}", "text": text, "kind": "request", "subquestion": label}
+        if preamble:
+            unit["preamble"] = preamble
+        units.append(unit)
+    return units
+
+
+def _base_units(question: str) -> list[dict[str, str]]:
+    """原文の要求単位（子要求を付ける前）。小問の印が並ぶ質問は小問ごと、それ以外は文ごと。"""
+    markers = subquestion_markers(question)
+    return _subquestion_units(question, markers) if markers else _with_request_kind(_sentence_units(question))
+
+
 def definition_targets(question: str) -> list[dict[str, str]]:
     """原要求IDを維持して定義項目に子IDを付ける。記号は照合用にだけ正規化する。"""
     return [
@@ -381,7 +457,7 @@ def definition_targets(question: str) -> list[dict[str, str]]:
             label=label,
             marker="*" if "*" in unicodedata.normalize("NFKC", unit["text"]) else "",
         )
-        for unit in _sentence_units(question)
+        for unit in _base_units(question)
         for n, label in enumerate(definition_labels(unit["text"]), 1)
     ]
 
@@ -394,12 +470,14 @@ def definition_targets(question: str) -> list[dict[str, str]]:
 def request_units(question: str) -> list[dict[str, str]]:
     """質問原文を句点・疑問符・改行で固定ID化する。背景文も捨てず判定側へ渡す。
 
+    丸数字・(1) などで小問を並べた質問は、小問ごとに 1 つの要求単位にする（`subquestion` に印、`preamble` に
+    小問の前の共通の前置き。前置きの文は背景）。小問の印の無い質問の単位は変わらない (#2399)。
     長い入力も切り捨てず、定義項目と経緯に埋もれた明示目的を子要求にする。
     原文単位のIDは維持し、既に独立した目的文は重複させない。
     """
     cues = _cues()
     withdrawn = f"{cues.alt['facet_withdrawal_objects']}?{cues.alt['topic_particles']}{cues.alt['facet_withdrawal_words']}"
-    units = _with_request_kind(_sentence_units(question))
+    units = _base_units(question)
     goals = question_intent_parts(question)["desired_outcomes"] if goal_retrieval_queries(question) else []
     goal_units = [
         dict(id=f"{unit['id']}.G{n}", text=goal, kind="desired_outcome", request_id=unit["id"])

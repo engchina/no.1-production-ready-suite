@@ -2149,6 +2149,8 @@ def synthesize_grounded_answer(
     # どちらも是正と insufficient_reason には使うが本文には出さない (#622)。
     # 本文に出す文は要求原文の定型日本語。監査の reason（LLM の自由文）は言語が揺れるので trace と
     # insufficient_reason にだけ使う (#728)。
+    # 丸数字・(1) などで並べた小問（#2399）。説明があれば小問ごとの見出しで分け、根拠の無い小問だけを「確認できない」にする。
+    subquestions = [unit for unit in current.requests if unit.get("subquestion")]
     reviewed_unanswered = [
         grounded.missing_request_line(entry, current.requests)
         for entry in current.unanswered
@@ -2195,6 +2197,7 @@ def synthesize_grounded_answer(
             unverified=unread_lines,
             deadline=deadline_lines,
             applications=current.applications,
+            subquestions=subquestions,
         )
     elif needed:
         # 実行できる説明が無い（公開 item が無い、または降格した原文だけ）なら、モデルが選んだ降格済みの原文より、
@@ -2218,6 +2221,7 @@ def synthesize_grounded_answer(
             unverified=unread_lines,
             deadline=deadline_lines,
             applications=current.applications,
+            subquestions=subquestions,
         )
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
@@ -2383,6 +2387,8 @@ def _request_coverage_budget(settings: Settings) -> CoverageBudget:
         max_queries=max(0, int(getattr(settings, "request_coverage_max_queries", 0) or 0)),
         max_chunks=max(0, int(getattr(settings, "request_coverage_max_chunks", 0) or 0)),
         deadline_seconds=max(0.0, float(getattr(settings, "request_coverage_deadline_seconds", 0.0) or 0.0)),
+        max_subquestions=max(0, int(getattr(settings, "request_coverage_max_subquestions", 0) or 0)),
+        chunks_per_subquestion=max(0, int(getattr(settings, "request_coverage_chunks_per_subquestion", 0) or 0)),
     )
 
 
@@ -2411,7 +2417,7 @@ def _cover_missing_requests(
     runtime_knowledge: RuntimeKnowledgeContext | None,
     clock: Callable[[], float] = monotonic,
 ) -> tuple[AnswerContext, dict[str, Any]]:
-    """要求ごとの根拠の覆域を判定し、根拠の無い要求だけを予算の範囲で 1 回ずつ再検索する (#1279)。
+    """要求ごとの根拠の覆域を判定し、根拠の無い要求と小問（#2399）を予算の範囲で 1 回ずつ再検索する (#1279)。
 
     覆域の判定は決定的（LLM を呼ばない）。再検索は embedding・hybrid 検索・rerank だけで、文書の選択と
     画面目録（LLM を呼ぶ）は使わない。足した根拠は既存の根拠の後ろに置き、既存の根拠は追い出さない。
@@ -2435,7 +2441,7 @@ def _cover_missing_requests(
 
     # 欠けた要求の検索では、文書の選択（後回し）と画面目録（LLM を呼ぶ）を使わない。
     search_settings = replace(settings, document_selection_enabled=False, screen_linking_enabled=False)
-    per_query = max(1, min(int(top_k), budget.max_chunks))
+    per_query = max(1, min(int(top_k), max(budget.max_chunks, budget.chunks_per_subquestion)))
 
     def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
         return build_adb_hybrid_answer_context(

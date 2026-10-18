@@ -1391,6 +1391,22 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=60,
         description=("根拠の無い要求の再検索の期限(秒)。過ぎたら次の要求の検索を始めない(#1279)。"),
     )
+    rag_request_coverage_max_subquestions: int = Field(
+        default=5,
+        ge=0,
+        le=10,
+        description=(
+            "丸数字・(1) などで並べた小問のうち、根拠が無いか一部だけの小問ごとに"
+            "検索する小問の数の上限(1 小問 1 回。0 で小問ごとの検索をしない。#2399)。"
+            "期限は再検索と共通。"
+        ),
+    )
+    rag_request_coverage_chunks_per_subquestion: int = Field(
+        default=2,
+        ge=0,
+        le=6,
+        description="小問ごとの検索で、小問ごとに回答の材料に確保する根拠(親 chunk)の数(#2399)。",
+    )
     rag_strategy_reasoning_effort: ReasoningEffortOverride = Field(
         default="model",
         description=(

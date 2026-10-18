@@ -1724,6 +1724,42 @@
       "リリース",
       "旧版",
       "新版"
+    ],
+    "subquestion_circled_numbers": [
+      "①-⑳",
+      "⑴-⒇",
+      "⒈-⒛",
+      "❶-❿"
+    ],
+    "subquestion_number_patterns": [
+      "(N)",
+      "（N）",
+      "N)",
+      "N）",
+      "問N"
+    ],
+    "subquestion_reference_followers": [
+      "の",
+      "と",
+      "や",
+      "を",
+      "に",
+      "で",
+      "は",
+      "が",
+      "も",
+      "から",
+      "まで",
+      "及び",
+      "又は",
+      "、",
+      "・",
+      "～",
+      "〜",
+      "~",
+      "-",
+      "－",
+      "→"
     ]
   },
   "inquiry_cues": {
@@ -2343,6 +2379,7 @@
     "condition_template": "（{condition}）",
     "condition_suffix": "場合",
     "condition_link": "の",
+    "subquestion_heading_template": "質問{label}：{text}",
     "predicate_endings": [
       "た",
       "だ",

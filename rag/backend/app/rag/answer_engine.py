@@ -471,6 +471,13 @@ def build_engine_settings(
         "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": str(
             settings.rag_request_coverage_deadline_seconds
         ),
+        # 小問ごとの検索の上限(#2399。期限は再検索と共通)。
+        "RAG_ENGINE_REQUEST_COVERAGE_MAX_SUBQUESTIONS": str(
+            settings.rag_request_coverage_max_subquestions
+        ),
+        "RAG_ENGINE_REQUEST_COVERAGE_CHUNKS_PER_SUBQUESTION": str(
+            settings.rag_request_coverage_chunks_per_subquestion
+        ),
         # 当たった chunk の章節から親の章節へ段階的に広げる(#1436。検索・回答プロファイルで選ぶ)。
         "RAG_ENGINE_SECTION_EXPANSION": "1" if settings.rag_section_expansion_enabled else "0",
         "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS": str(settings.rag_section_expansion_max_levels),

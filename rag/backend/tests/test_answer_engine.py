@@ -3108,6 +3108,8 @@ def test_build_engine_settings_passes_request_coverage(tmp_path: Any) -> None:
             rag_request_coverage_max_queries=1,
             rag_request_coverage_max_chunks=2,
             rag_request_coverage_deadline_seconds=3.5,
+            rag_request_coverage_max_subquestions=3,
+            rag_request_coverage_chunks_per_subquestion=1,
         ),
         output_dir=tmp_path,
     )
@@ -3118,6 +3120,15 @@ def test_build_engine_settings_passes_request_coverage(tmp_path: Any) -> None:
     assert custom.request_coverage_retrieval_enabled is False
     assert (custom.request_coverage_max_queries, custom.request_coverage_max_chunks) == (1, 2)
     assert custom.request_coverage_deadline_seconds == 3.5
+    # 小問ごとの検索の上限(#2399)。
+    assert (
+        default.request_coverage_max_subquestions,
+        default.request_coverage_chunks_per_subquestion,
+    ) == (5, 2)
+    assert (
+        custom.request_coverage_max_subquestions,
+        custom.request_coverage_chunks_per_subquestion,
+    ) == (3, 1)
 
 
 def test_search_answer_profile_overrides_request_coverage() -> None:
