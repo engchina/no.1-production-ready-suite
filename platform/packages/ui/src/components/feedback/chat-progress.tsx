@@ -69,8 +69,12 @@ export interface ChatProgressLabels {
   steps: string;
   /** 処理全体の経過時間の見出し（実行中の見出しの右に出す。#1176）。 */
   elapsed: string;
-  /** 今の段階の遅延の案内（今の段階の経過時間で判断し、一覧の最後の行の下に出す。#1176）。 */
+  /** 今の段階の遅延の案内（今の段階の経過時間で判断する。#1176）。今の段階の名前が無いときに出す。 */
   slow: string;
+  /**
+   * 今の段階の名前つきの遅延の案内（見出しの経過時間の下に出す。どの段階で時間がかかっているかを示す。#2375）。
+   */
+  slowStep: (step: string) => string;
   /**
    * 終端でないのに実行中・待機中の段階が無い（段階の外で処理が続いている）ときの今の行（#1176）。
    * 製品は段階を写し漏らさないようにし、これは最後の備えにする。
@@ -97,6 +101,7 @@ export const DEFAULT_CHAT_PROGRESS_LABELS: ChatProgressLabels = {
   steps: "処理の段階",
   elapsed: "経過時間",
   slow: "通常より時間がかかっています。",
+  slowStep: (step) => `通常より時間がかかっています（${step}）`,
   working: "処理を続けています",
   reconnecting: "接続を確認しています。",
   status: {
@@ -289,13 +294,24 @@ function StepList({
   );
 }
 
-/** 処理全体の経過時間（実行中の見出しの右。段階が変わっても 0 に戻さない。#1176）。 */
-function TotalTimer({
+/**
+ * 実行中の見出しの右（#1176 / #2375）: 1 行目は処理全体の経過時間（段階が変わっても 0 に戻さない）、2 行目は遅延・
+ * 再接続の案内。案内は今の段階の経過時間で判断し、どの段階で時間がかかっているかを名前で示す。案内の行は最初から
+ * 見えない文言で高さを予約し、出たときに見出しが動かないようにする（#902 と同じ）。取り直している間は、遅延の
+ * 案内の代わりに「接続を確認しています」を同じ場所に出す（#1160）。
+ */
+function HeaderStatus({
   startedAt,
+  step,
+  slowAfterMs,
+  reconnecting,
   labels,
   testId,
 }: {
   startedAt: number | null;
+  step: ChatProgressStep | null;
+  slowAfterMs: number;
+  reconnecting: boolean;
   labels: ChatProgressLabels;
   testId?: string;
 }) {
@@ -305,23 +321,58 @@ function TotalTimer({
     operationKey: "chat-progress-total",
     startedAt: startedAt ?? undefined,
   });
+  // 遅延は今の段階の経過時間で判断する（全体で判断すると LLM を使う処理では毎回出る。#1176）。
+  const current = useOperationTiming({
+    active: true,
+    operationKey: step ? `step:${step.id}` : "step:working",
+    startedAt: step?.startedAt,
+    slowAfterMs,
+  });
+  const slowText = step ? labels.slowStep(step.label) : labels.slow;
   return (
     <span
-      className="ml-auto inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap pl-3 text-xs font-normal text-fg-muted"
-      role="timer"
-      aria-live="off"
-      aria-label={`${labels.elapsed} ${total.elapsedClock}`}
-      data-testid={testId ? `${testId}-timer` : undefined}
+      className="ml-auto flex max-w-[14rem] shrink-0 flex-col items-end gap-0.5 pl-3 text-right text-xs font-normal leading-5 text-fg-muted sm:max-w-[24rem]"
+      data-testid={testId ? `${testId}-header-status` : undefined}
+      data-slow={current.slow ? "true" : "false"}
+      data-reconnecting={reconnecting ? "true" : "false"}
     >
-      <Clock3 size={TEXT_ICON_SIZE.xs} aria-hidden="true" />
-      <span>{labels.elapsed}</span>
-      <span className="min-w-[3.25rem] text-right tabular-nums text-fg">{total.elapsedClock}</span>
+      <span
+        className="inline-flex items-center gap-1.5 whitespace-nowrap"
+        role="timer"
+        aria-live="off"
+        aria-label={`${labels.elapsed} ${total.elapsedClock}`}
+        data-testid={testId ? `${testId}-timer` : undefined}
+      >
+        <Clock3 size={TEXT_ICON_SIZE.xs} aria-hidden="true" />
+        <span>{labels.elapsed}</span>
+        <span className="min-w-[3.25rem] text-right tabular-nums text-fg">{total.elapsedClock}</span>
+      </span>
+      <span
+        className="min-w-0 break-words [overflow-wrap:anywhere]"
+        data-testid={
+          testId && reconnecting ? `${testId}-reconnecting` : testId && current.slow ? `${testId}-slow` : undefined
+        }
+      >
+        {reconnecting ? (
+          labels.reconnecting
+        ) : current.slow ? (
+          slowText
+        ) : (
+          // 予約用の文言は ::before の content で描く（textContent・読み上げに入れない。折り返しは同じ）。
+          <span
+            className="invisible before:content-[attr(data-placeholder)]"
+            aria-hidden="true"
+            data-placeholder={slowText}
+          />
+        )}
+      </span>
     </span>
   );
 }
 
 /**
- * 実行中の段階の行（一覧の最後の行。スピナー・段階の名前・今の段階の経過時間・遅延 / 再接続の案内）。
+ * 実行中の段階の行（一覧の最後の行。スピナー・段階の名前・今の段階の経過時間）。遅延・再接続の案内は見出しの
+ * 経過時間の下に出す（`HeaderStatus`。#2375）。この行には判断の結果を `data-slow` / `data-reconnecting` で残す。
  *
  * 完了した段階の行（`RunTimeline` の段）と同じ列・字下げで描き、段階が終わると同じ位置で完了の行に変わる
  * （行が跳ばない）。今の段階の経過時間は秒の単位で数え、遅延の案内もこの経過時間で判断する（#1176）。
@@ -375,29 +426,6 @@ function CurrentStepRow({
           {labels.formatDuration(Math.floor(current.elapsedMs / 1000) * 1000)}
         </span>
       </div>
-      {/*
-        遅延の案内の行は最初から高さを予約する（#902 と同じ。後から行を足して一覧を動かさない）。
-        案内は今の段階の行に付け、どの段階で時間がかかっているかを示す。
-      */}
-      <p
-        className="pl-6 text-xs leading-5 text-fg-muted"
-        data-testid={
-          testId && reconnecting ? `${testId}-reconnecting` : testId && current.slow ? `${testId}-slow` : undefined
-        }
-      >
-        {/* 取り直している間は、遅延の案内の代わりに「接続を確認しています」を出す（#1160）。 */}
-        {reconnecting ? (
-          labels.reconnecting
-        ) : current.slow ? (
-          labels.slow
-        ) : (
-          <span
-            className="invisible before:content-[attr(data-placeholder)]"
-            aria-hidden="true"
-            data-placeholder={labels.slow}
-          />
-        )}
-      </p>
     </div>
   );
 }
@@ -488,7 +516,16 @@ export function ChatProgress({
               {labels.running(finished.length, summaryIsOpen ? null : currentLabel)}
             </SummaryText>
           }
-          meta={<TotalTimer startedAt={overallStartedAt} labels={labels} testId={testId} />}
+          meta={
+            <HeaderStatus
+              startedAt={overallStartedAt}
+              step={current ?? null}
+              slowAfterMs={slowAfterMs}
+              reconnecting={reconnecting}
+              labels={labels}
+              testId={testId}
+            />
+          }
           open={summaryIsOpen}
           onOpenChange={setSummaryOpen}
           summaryProps={{ "data-testid": testId ? `${testId}-running` : undefined }}

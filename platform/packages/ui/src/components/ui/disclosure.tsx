@@ -171,7 +171,8 @@ export function Disclosure({
             <Icon size={iconSize} aria-hidden />
           </span>
         ) : null}
-        <span className={cn("min-w-0 break-words", card && "flex-1")}>
+        {/* 補足（meta）があるときは見出しが残りの幅を取り、補足を右端に置く（#2375）。 */}
+        <span className={cn("min-w-0 break-words", (card || meta) && "flex-1")}>
           {summary}
           {card && description ? (
             <span className="mt-0.5 block text-xs font-normal leading-relaxed text-fg-muted">
@@ -179,7 +180,8 @@ export function Disclosure({
             </span>
           ) : null}
         </span>
-        {meta ? <span className="pr-icon-line">{meta}</span> : null}
+        {/* 補足は見出しの 1 行目の高さで縦の中央に置く（2 行の補足〔経過時間と遅延の案内〕は上から並べる）。 */}
+        {meta ? <span className="flex min-h-[1lh] shrink-0 items-center">{meta}</span> : null}
         <span className={cn("pr-icon-line", !toned && "text-fg-muted")}>
           <DisclosureChevron expanded={open} size={iconSize} />
         </span>

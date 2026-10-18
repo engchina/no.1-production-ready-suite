@@ -120,19 +120,35 @@ describe("ChatProgress", () => {
     expect(host.querySelector("details")!.open).toBe(false);
   });
 
-  it("遅延の案内は今の段階の行に付け、行は最初から高さを予約する（スピナーの行を動かさない）", () => {
+  it("遅延の案内は見出しの経過時間の直下に、今の段階の名前つきで出し、行は最初から高さを予約する（#2375）", () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse(at(5)));
     render(<ChatProgress steps={runningSteps} testId="p" />);
     expect(q("p-current")!.dataset.slow).toBe("false");
     expect(q("p-slow")).toBeNull();
-    expect(host.querySelector('[data-placeholder="通常より時間がかかっています。"]')).not.toBeNull();
+    const status = q("p-header-status")!;
+    // 経過時間と同じ右の列の 2 行目（見出しの中）。今の段階の行の下には出さない。
+    expect(status.contains(q("p-timer"))).toBe(true);
+    expect(status.querySelector('[data-placeholder="通常より時間がかかっています（SQL を生成しています）"]')).not.toBeNull();
+    expect(q("p-running")!.contains(status)).toBe(true);
     act(() => {
       vi.setSystemTime(Date.parse(at(13)));
       vi.advanceTimersByTime(1000);
     });
     expect(q("p-current")!.dataset.slow).toBe("true");
-    expect(q("p-slow")!.textContent).toBe("通常より時間がかかっています。");
+    expect(status.dataset.slow).toBe("true");
+    expect(q("p-slow")!.textContent).toBe("通常より時間がかかっています（SQL を生成しています）");
+    expect(status.contains(q("p-slow"))).toBe(true);
+    expect(q("p-current")!.contains(q("p-slow"))).toBe(false);
+  });
+
+  it("取り直している間は、遅延の案内の場所に「接続を確認しています」を出す（#1160 / #2375）", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse(at(13)));
+    render(<ChatProgress steps={runningSteps} reconnecting testId="p" />);
+    expect(q("p-slow")).toBeNull();
+    expect(q("p-reconnecting")!.textContent).toBe("接続を確認しています。");
+    expect(q("p-header-status")!.contains(q("p-reconnecting"))).toBe(true);
   });
 
   it("段階が変わっても、処理全体の経過時間は 0 に戻らない（#1176）", () => {
@@ -215,7 +231,7 @@ describe("ChatProgress", () => {
       vi.advanceTimersByTime(1000);
     });
     expect(q("p-current")!.dataset.slow).toBe("true");
-    expect(q("p-slow")!.textContent).toBe("通常より時間がかかっています。");
+    expect(q("p-slow")!.textContent).toBe("通常より時間がかかっています（安全性を確認しています）");
   });
 
   it("実行中の段階が無いときは、次の段階を今の段階として出す", () => {
