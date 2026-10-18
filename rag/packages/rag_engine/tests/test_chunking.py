@@ -41,6 +41,7 @@ class ChunkingTests(unittest.TestCase):
                 _record(1, 3, "List-item", "支払区分に5を設定します。"),
                 _record(1, 4, "Page-footer", "31"),
                 _record(2, 1, "Text", "次ページの説明です。"),
+                _record(2, 2, "Page-footer", "32"),
             ]
         )
 
@@ -64,8 +65,9 @@ class ChunkingTests(unittest.TestCase):
             children[0].source_seq_ranges, [{"page": 1, "seq_start": 1, "seq_end": 3}, {"page": 2, "seq_start": 1, "seq_end": 1}]
         )
         self.assertEqual(children[0].metadata["section_path"], ["Ⅰ. 仕入先の登録"])
-        self.assertEqual(children[0].metadata["layout"]["logical_page_labels"], {"1": 31})
+        self.assertEqual(children[0].metadata["layout"]["logical_page_labels"], {"1": 31, "2": 32})
         self.assertNotIn("31", children[0].text)
+        self.assertNotIn("32", children[0].text)
         for chunk in [*children, *parents]:
             ranges = chunk.metadata["layout"]["native_text_ranges"]
             native_text = [chunk.text[r["start"] : r["end"]] for r in ranges]

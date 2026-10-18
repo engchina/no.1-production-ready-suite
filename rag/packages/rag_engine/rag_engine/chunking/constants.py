@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+import unicodedata
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
@@ -13,6 +14,7 @@ from typing import Any, Literal
 
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.markers import marker_patterns
+from rag_parser_core.language.text import parse_roman, text_patterns
 
 CHUNK_SCHEMA_VERSION = 3
 CHUNK_STRATEGY = "small_to_big_parent_child"
@@ -36,6 +38,11 @@ DEFAULT_NEIGHBOR_CHILD_COUNT = 3
 DEFAULT_CONTEXTUAL_SEARCH_TEXT_ENABLED = True
 DEFAULT_SEARCH_TEXT_CONTEXT_MAX_CHARS = 700
 DEFAULT_CHILD_SEARCH_TEXT_MAX_CHARS = 2200
+# 頁番号のフッターから論理頁を決めるとき（#2289）、物理頁に対して差が一定の並びに乗る頁番号だけを使う。
+# 並びとして使う最小の頁数（文書の頁数がこれより少なければ文書の頁数）と、隣り合う頁番号の間で許す差のずれ
+# （0 = 差が一定。1 以上は番号の無い挿入頁などで差が変わる文書のため）。
+DEFAULT_PAGE_NUMBER_MIN_RUN_PAGES = 2
+DEFAULT_PAGE_NUMBER_OFFSET_TOLERANCE = 0
 
 CHILD_TARGET_CHARS_RANGE = (300, 1600, 50)
 TABLE_CHILD_TARGET_CHARS_RANGE = (300, 8000, 100)
@@ -47,6 +54,8 @@ RETRIEVAL_TOP_K_RANGE = (3, 50, 1)
 NEIGHBOR_CHILD_COUNT_RANGE = (0, 20, 1)
 SEARCH_TEXT_CONTEXT_CHARS_RANGE = (200, 1600, 50)
 CHILD_SEARCH_TEXT_CHARS_RANGE = (1000, 4000, 100)
+PAGE_NUMBER_MIN_RUN_PAGES_RANGE = (1, 10, 1)
+PAGE_NUMBER_OFFSET_TOLERANCE_RANGE = (0, 5, 1)
 SEARCH_TEXT_SCHEMA_VERSION = 9
 CHUNK_METADATA_SCHEMA_VERSION = 4
 SOURCE_TABLE_CROP_RELATIONSHIP = "source_table_crop"
@@ -112,6 +121,8 @@ class ChunkingConfig:
     contextual_search_text_enabled: bool = DEFAULT_CONTEXTUAL_SEARCH_TEXT_ENABLED
     search_text_context_max_chars: int = DEFAULT_SEARCH_TEXT_CONTEXT_MAX_CHARS
     child_search_text_max_chars: int = DEFAULT_CHILD_SEARCH_TEXT_MAX_CHARS
+    page_number_min_run_pages: int = DEFAULT_PAGE_NUMBER_MIN_RUN_PAGES
+    page_number_offset_tolerance: int = DEFAULT_PAGE_NUMBER_OFFSET_TOLERANCE
 
     def validate(self) -> ChunkingConfig:
         """チャンキング設定が許容範囲内かを検証します。"""
@@ -161,6 +172,18 @@ class ChunkingConfig:
                 "child search text 最大文字数",
                 CHILD_SEARCH_TEXT_CHARS_RANGE[0],
                 CHILD_SEARCH_TEXT_CHARS_RANGE[1],
+            ),
+            page_number_min_run_pages=_checked_int(
+                self.page_number_min_run_pages,
+                "頁番号の並びの最小頁数",
+                PAGE_NUMBER_MIN_RUN_PAGES_RANGE[0],
+                PAGE_NUMBER_MIN_RUN_PAGES_RANGE[1],
+            ),
+            page_number_offset_tolerance=_checked_int(
+                self.page_number_offset_tolerance,
+                "頁番号の並びの差のずれ",
+                PAGE_NUMBER_OFFSET_TOLERANCE_RANGE[0],
+                PAGE_NUMBER_OFFSET_TOLERANCE_RANGE[1],
             ),
         )
 
@@ -289,32 +312,51 @@ def _metadata_classification(metadata: dict[str, Any]) -> Any:
     return document.get("classification")
 
 
-# 空白除去後のフッター全体がページ番号だけの表記（3 / - 3 - / 3ページ / 3頁 / P.3 / Page 3 / 3/20）。
+# 空白除去後のフッター全体がページ番号だけの表記（3 / - 3 - / 3ページ / 3頁 / P.3 / Page 3 / 3/20 / ii / 三頁）。
 def _page_number_footer_pattern() -> re.Pattern[str]:
-    """ページ番号だけのフッター。ページの語・範囲の記号は言語資源(#2181)。"""
+    """ページ番号だけのフッター。ページの語・範囲の記号・数の体系（ローマ数字・漢数字）は言語資源(#2181・#2289)。
+
+    group 1 が頁番号の字（算用数字・ローマ数字・漢数字）。値の読み取りは ``page_numbers.read_page_number``。
+    """
     return _page_regexes(current_pack().hash)[0]
 
 
 @lru_cache(maxsize=16)
-def _page_regexes(_pack_hash: str) -> tuple[re.Pattern[str], re.Pattern[str]]:
+def _page_regexes(_pack_hash: str) -> tuple[re.Pattern[str], re.Pattern[str], re.Pattern[str]]:
     m = marker_patterns()
+    t = text_patterns()
     return (
         re.compile(
-            rf"(?:p\.?|{m.page_words})?{m.range_dash}?(\d{{1,3}})"
+            rf"(?:p\.?|{m.page_words})?{m.range_dash}?(\d{{1,3}}|{t.roman}+|{t.kanji}+)"
             rf"(?:{m.range_dash}|{m.page_words}|/\d{{1,4}})?",
             re.IGNORECASE,
         ),
-        re.compile(rf"\d{{1,4}}(?=\s*{m.page_words})", re.IGNORECASE),
+        re.compile(rf"(?:\d{{1,4}}|{t.kanji}+)(?=\s*{m.page_words})", re.IGNORECASE),
+        # 前後が語の字でないローマ数字の語（「ii」「Part iv」）。標準の書き方かは parse_roman で確かめる。
+        re.compile(rf"(?<!\w){t.roman}+(?!\w)", re.IGNORECASE),
     )
 
 
 def _boilerplate_text_key(text: str) -> str:
+    """柱・フッターの繰り返しを比べる鍵（頁番号の数を伏せる）。数の体系は言語資源(#2289)。"""
     normalized = re.sub(r"\s+", " ", text or "").strip().lower()
+    patterns = _page_regexes(current_pack().hash)
+    if patterns[0].fullmatch(_compact_page_text(normalized)):
+        # 頁番号だけの文（「- 3 -」「ii」「三頁」）は数の体系・飾りによらず同じ鍵にする。
+        return "#"
     normalized = re.sub(r"\b\d{1,4}\b", "#", normalized)
-    # 漢字・かなは \w 扱いで \b が成立しないため、ページ表記の数字は別に正規化します。
+    normalized = patterns[2].sub(lambda match: "#" if parse_roman(match.group(0)) is not None else match.group(0), normalized)
+    # 漢字・かなは \w 扱いで \b が成立しないため、ページ表記の数字（算用数字・漢数字）は別に正規化します。
     # 「第3章」のような章番号は対象外とし、章ごとに異なるヘッダーを同一視しません。
-    normalized = _page_regexes(current_pack().hash)[1].sub("#", normalized)
+    normalized = patterns[1].sub("#", normalized)
     return normalized
+
+
+def _compact_page_text(text: str) -> str:
+    """頁番号の形を比べる文（言語資源の文字の正規化（既定 NFKC）をして空白を除く）。"""
+    form = current_pack().value("symbols", "normalization")
+    normalized = unicodedata.normalize(form, text or "") if form != "none" else text or ""
+    return re.sub(r"\s+", "", normalized)
 
 
 def _seq_ranges(refs: Sequence[dict[str, Any]]) -> list[dict[str, int]]:

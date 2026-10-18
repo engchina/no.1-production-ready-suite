@@ -136,6 +136,8 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     ),
     *_fields("numbers", _PT, "item_patterns"),
     *_fields("numbers", _CV, "kanji_digits", "kanji_multipliers"),
+    # ローマ数字の字と値（「ii」「xiv」。前付きの頁番号を読む。英字の大小は区別しない）。
+    *_fields("numbers", _CV, "roman_digits"),
     *_fields(
         "numbers", _W, "branch_connectors", "branch_stop_chars", "era_names", "first_year_words"
     ),
