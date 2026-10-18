@@ -276,7 +276,7 @@ function DraftTryResult({ result }: { result: SupportGuideDraftTryData }) {
           {/* trace_id を渡さない（試した回答にはフィードバックを付けない）。 */}
           <ul className="bounded-scroll-area-lg space-y-2 pr-1">
             {result.citations.map((chunk, index) => (
-              <CitationCard key={chunk.chunk_id} chunk={chunk} index={index} />
+              <CitationCard key={chunk.chunk_id} chunk={chunk} index={index} sourceKind="answer" />
             ))}
           </ul>
         </section>

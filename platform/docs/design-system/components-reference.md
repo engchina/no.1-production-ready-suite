@@ -2810,6 +2810,11 @@ export interface SideSheetProps {
   headerActions?: React.ReactNode;
   /** 見出しの行の「前へ / 次へ」（ListDetailPager の props。#2281）。headerActions の左に置く。 */
   pager?: ListDetailPagerProps;
+  /**
+   * 開いたときのフォーカスの先（#2360）。first（既定）は先頭の操作（閉じるボタン）、dialog はシートそのもの
+   * （読むための内容のシート。キーボードで開いた直後の Escape 1 回で閉じる。最初の Tab で先頭の操作へ）。
+   */
+  initialFocus?: "first" | "dialog";
   children: React.ReactNode;
   className?: string;
   /** 本文（flex の縦並び・中でスクロール・p-3）への追加のクラス。 */
@@ -3823,6 +3828,8 @@ import { AnswerEvidence, AnswerSections, evidenceLabels, type EvidenceListItem }
 | `AnswerEvidence` | `items`・`groups?`・`groupCount?`・`idPrefix?`・`labels?`・`renderActions?`・`renderExtra?`・`listTestId?`・`open?` / `onOpenChange?`・`className?`・`testId?`（既定 `answer-citations`） | 見出し「AI に渡した N 件（K のまとまり）／ 回答で引用 M 件 ／ うち該当確認済み X 件 ／ 参考 Y 件」の plain の `Disclosure`（**既定は閉じる**）。中身は `EvidenceViews`。根拠が 0 件なら何も出さない |
 | `EvidenceViews` | `items`・`groups?`・`idPrefix`・`labels?`・`renderActions?`・`renderExtra?`・`listTestId?` | `groups` があれば `Tabs`（「順に表示 N」「まとまりごと K」）。どちらの見方も一覧は `bounded-scroll-area-lg`（**一定の高さの中で縦にスクロール**し、回答の評価を押し下げない） |
 | `EvidenceList` / `EvidenceCard` | `item`・`index`・`labels?`・`actions?`・`children?` | カード: 番号・文書名・旧版・引用の印（`EvidenceAnswerUseBadge`）・経路のバッジ・本文 3 行・場所のチップ（`dl`）・補足のタグ・原典のリンク・スコアの面（取得スコアと Rerank のメーター）・操作の行（無ければ区切り線の行を出さない） |
+| `EvidenceSourceSheet` | `open`・`onClose`・`item: EvidenceListItem \| null`・`index`・`labels?`・`kind?`（`answer` 既定 / `search`）・`actions?`・`children?`（原文のプレビュー）・`returnFocusRef?`・`data-testid?`（既定 `evidence-source-sheet`） | 根拠 1 件を**右のサイドパネル**で開く（#2360）。枠は `SideSheet`（右・`wide`。sm 未満は全画面。×・Escape・scrim で閉じ、開いた操作へフォーカスを戻す）。見出しは「回答の根拠」（`kind="search"`。回答を作らない検索の結果の箇所は「検索で見つかった箇所」）。上部の要約（`evidence-source-summary`）はカードと同じ描画（番号・文書名・引用の印・経路・抜粋・チップ・スコア）と `actions`、下に `children`（`evidence-source-preview`。パネルの残りの高さ、最小 24rem / sm 以上 32rem）。`children` があれば抜粋は 3 行に畳み「抜粋をすべて表示」で広げ、無ければ全文。本文の根拠の行と、一覧の「引用箇所を表示」・まとまりの箇所は、どちらもこのパネルを開く（RAG は原文のプレビュー、Agent は要約と図を開く操作） |
+| `useEvidenceSource<T>()` | — | パネルで開く根拠の状態（`selected`・`shown`・`mounted`・`open(value)`・`close()`）。`shown` は閉じた後も前の根拠を覚え（滑って消える間も中身を出す）、`mounted` は一度開くまで false（閉じた後もパネルを描いたままにし、フォーカスを戻す） |
 | `EvidenceAnswerUseBadge` | `use`・`labels?` | 該当確認済み =「回答で引用」（success）、参考 =「参考」（neutral・`BookOpen`）、使われ方が不明 =「回答で引用」（info） |
 | `evidenceCountLabel` | `(items, groupCount?, labels?)` | 見出しの文。引用したかが分からない（`usedInAnswer: null`。検索だけ）なら件数だけ、0 件の項目は出さない |
 | `AnswerSections` / `AnswerCitationLinks` | `blocks`・`live?`・`children?`（シート・ダイアログ）・`testId?`（既定 `answer-text`） | 段落（`paragraph`）・段落にできない塊（`content`。表など）・見出しつきの箇条書き（`section`。`muted` の項目は印なしの補足）と、各段落・項目の下の根拠の行（`onOpen` があれば強調色の押せる行、無ければ文字だけ） |
@@ -3830,8 +3837,8 @@ import { AnswerEvidence, AnswerSections, evidenceLabels, type EvidenceListItem }
 
 **データの契約（`EvidenceListItem`）**: `key`・`fileName`・`text`・`usedInAnswer: boolean | null`・`answerUse: "confirmed" | "reference" | null`・`superseded?`・`routeBadges?`（翻訳済み）・`score: number | null`・`rerankScore: number | null`・`chips?: { id, label, value }[]`（`label` は読み上げ）・`tags?: { id, value, icon?, tone? }[]`・`sourceUrl?`（https）。まとまりは `EvidenceGroup`（`key`・`fileName`・`section`・`pages`・`entries: EvidenceGroupEntry[]`〔`index`・`roleLabel`・`roleIcon`・`roleKind`・`location`・`excerpt`・`usedInAnswer`・`answerUse`・`chunkId`・`onOpen?`〕）。
 
-- RAG: `RetrievedChunk` → `citationEvidenceItem`（`rag/frontend/src/components/search/CitationCard.tsx`）。まとまりは回答の診断の根拠の木（#2097）。
-- Agent: 成果物 `answer_evidence`（backend の `answer_evidence.py`）→ `answerEvidenceData`（`agent/frontend/src/lib/answer-evidence.ts`）。本文の節は `structureAnswer`（`answer-structure.ts`。本文の文は書き換えず、段落ごとの根拠・根拠の ID の印・最終の検証の節から組み立てる。結び付けられなければ Markdown のまま）。
+- RAG: `RetrievedChunk` → `citationEvidenceItem`（`rag/frontend/src/components/search/citation-evidence.ts`）。根拠のパネルは `CitationSourceSheet`（`EvidenceSourceSheet` に原文のプレビュー `DocumentPreview` と「文書の詳細を別タブで開く」を渡す）。まとまりは回答の診断の根拠の木（#2097）。
+- Agent: 成果物 `answer_evidence`（backend の `answer_evidence.py`）→ `answerEvidenceData`（`agent/frontend/src/lib/answer-evidence.ts`）。根拠のパネルは `EvidenceSourceSheet` に要約と「図を開く」だけを渡し、原文のプレビューは出さない（RAG の原文の API は RAG の画面用の Cookie の API で、他の製品の画面から呼ばない。#2360）。本文の節は `structureAnswer`（`answer-structure.ts`。本文の文は書き換えず、段落ごとの根拠・根拠の ID の印・最終の検証の節から組み立てる。結び付けられなければ Markdown のまま）。
 - 単体テストは `packages/ui/tests/answer-evidence.test.tsx`・`answer-sections.test.tsx`。
 
 ---

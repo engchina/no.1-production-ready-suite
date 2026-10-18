@@ -981,7 +981,7 @@ for (const theme of ["light", "dark"] as const) {
     await expectNoPageOverflow(page);
   });
 }
-test("回答の根拠はまとまりごとに役割・位置・抜粋で出し、件数の合計を AI に渡した件数にそろえる（#2097）", { tag: "@responsive" }, async ({ page }) => {
+test("回答の根拠はまとまりごとに役割・位置・抜粋で出し、件数の合計を AI に渡した件数にそろえる（#2097）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   // chunk の ID は「文書 ID:chunk set の hash:番号」の長い文字列。既定では画面に出さない。
   const longId = (n: number) => `doc-1:${"a1b2c3d4".repeat(8)}:${n}`;
   const evidenceChunk = (n: number, text: string, metadata: Record<string, unknown>) => ({
@@ -1077,12 +1077,35 @@ test("回答の根拠はまとまりごとに役割・位置・抜粋で出し�
   await first.locator("summary").filter({ hasText: "詳細" }).click();
   await expect(first.getByTestId("evidence-item-chunk-id")).toHaveText(longId(1));
   await expect(first.getByRole("button", { name: "ID をコピー" })).toBeVisible();
-  // 箇所を押すと引用箇所のダイアログを開く。
+  // 箇所を押すと、本文の根拠の行と同じ右のサイドパネル（#2360）で根拠の要約と原文のプレビューを開く。
   await first.getByTestId("evidence-item-open").click();
-  const preview = page.getByRole("dialog", { name: /経費規程\.pdf/ });
+  const preview = page.getByRole("dialog", { name: "回答の根拠" });
   await expect(preview).toBeVisible();
+  await expect(preview.getByTestId("evidence-source-summary").getByTestId("evidence-file-name")).toHaveText("経費規程.pdf");
+  await expect(preview.getByTestId("evidence-source-preview")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(preview).toBeHidden();
+  // 「順に表示」のカードの「引用箇所を表示」も同じパネルを開く。
+  await evidence.getByRole("tab", { name: /順に表示/ }).click();
+  const cardOpen = evidence.getByRole("button", { name: "経費規程.pdf の引用箇所を表示" }).first();
+  await cardOpen.click();
+  await expect(preview.getByTestId("evidence-source-summary")).toContainText("1 回の申請の上限は 10 万円です。");
+  await expect(preview.getByTestId("evidence-source-preview")).toBeVisible();
+  // 右端に付き、375px は全画面のシート。
+  // 右から滑り出し切るのを待つ。
+  const viewport = page.viewportSize()!;
+  await expect
+    .poll(async () => {
+      const box = await preview.boundingBox();
+      return box ? Math.round(box.x + box.width) : -1;
+    })
+    .toBe(viewport.width);
+  if (viewport.width < 640) expect(Math.round((await preview.boundingBox())!.x)).toBe(0);
+  await page.screenshot({ path: testInfo.outputPath(`chat-citation-source-sheet-${testInfo.project.name}.png`) });
+  await preview.getByRole("button", { name: "閉じる" }).click();
+  await expect(preview).toBeHidden();
+  await expect(cardOpen).toBeFocused();
+  await evidence.getByRole("tab", { name: /まとまりごと/ }).click();
   // 一覧は一定の高さを超えたら中で縦にスクロールする（共有の bounded-scroll-area-lg）。
   await expect(evidence.getByTestId("evidence-groups")).toHaveCSS("overflow-y", "auto");
   await evidence.getByRole("tab", { name: /順に表示/ }).click();
@@ -1200,12 +1223,14 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   expect(headingGap!).toBeCloseTo(17.5, 0);
   await expect(answerText.getByRole("listitem")).toContainText("1 回の申請の上限は 10 万円です。");
   await expect(answerText.getByText("根拠：経費規程.pdf p.2")).toBeVisible();
-  // 根拠の行から、当たる引用の原文のプレビューを開ける（#657）。Esc で閉じるとフォーカスは根拠の行へ戻る。
+  // 根拠の行から、当たる引用の原文のプレビューを右のサイドパネルで開ける（#657 / #2360）。Esc で閉じると
+  // フォーカスは根拠の行へ戻る。
   const citationButton = answerText.getByRole("button", { name: "根拠：経費規程.pdf p.2 の原文を開く" });
   await citationButton.focus();
   await page.keyboard.press("Enter");
-  const preview = page.getByRole("dialog", { name: /経費規程\.pdf/ });
+  const preview = page.getByRole("dialog", { name: "回答の根拠" });
   await expect(preview).toBeVisible();
+  await expect(preview.getByTestId("evidence-source-summary").getByTestId("evidence-file-name")).toHaveText("経費規程.pdf");
   await page.keyboard.press("Escape");
   await expect(preview).toBeHidden();
   await expect(citationButton).toBeFocused();

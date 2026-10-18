@@ -1,7 +1,6 @@
-import { ExternalLink, FileText, X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { ExternalLink } from "lucide-react";
 import { Link } from "react-router-dom";
-import { Button } from "@production-ready/ui";
+import { EvidenceSourceSheet } from "@production-ready/ui";
 
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -23,26 +22,63 @@ import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { firstMetadataToken, integerMetadataValue } from "@/lib/table-cell-focus";
 
+import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
+
 /**
- * 引用 1 件の原文のプレビュー（ダイアログ。該当箇所を強調する。#349 / #442）。引用カードの「引用箇所を表示」と、
- * 回答本文の根拠の行（#657）から開く。`open` で開閉し、閉じたら `onClose` を呼ぶ（Esc・背景の押下・閉じるボタン）。
+ * 根拠 1 件を右のサイドパネルで開く（#2360。Agent のチャットと同じ共通の `EvidenceSourceSheet`）。上部に根拠の
+ * 要約（番号・文書名・引用の印・経路・スコア・抜粋・頁と章節）、その下に原文のプレビュー（該当箇所を強調する。
+ * #349 / #442）を出す。引用カードの「引用箇所を表示」・まとまりの箇所・回答本文の根拠の行（#657）から開く。
+ * `chunk` は閉じる間も前の根拠を渡す（`useEvidenceSource` の `shown`）。
  */
-export function CitationPreviewDialog({
+export function CitationSourceSheet({
   chunk,
+  index,
   open,
   onClose,
+  kind = "answer",
 }: {
-  chunk: RetrievedChunk;
+  chunk: RetrievedChunk | null;
+  /** 根拠の番号（0 始まり）。 */
+  index: number;
   open: boolean;
   onClose: () => void;
+  /** 回答の根拠（既定）か、回答を作らない検索の結果の箇所か（見出しが変わる）。 */
+  kind?: "answer" | "search";
 }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const previewUrl = citationPreviewUrl(chunk);
   // 文書の詳細を開けない利用者（検索・チャット・KB だけ）には詳細へのリンクを出さない（#303）。
   const canOpenDetail = canOpenDocumentDetail(useAuth().hasPermission);
+  return (
+    <EvidenceSourceSheet
+      open={open}
+      onClose={onClose}
+      item={chunk ? citationEvidenceItem(chunk) : null}
+      index={index}
+      labels={EVIDENCE_LABELS}
+      kind={kind}
+      actions={
+        chunk && canOpenDetail ? (
+          <Link
+            to={citationPreviewUrl(chunk)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          >
+            {t("search.citation.openDetail")}
+            <ExternalLink size={14} aria-hidden />
+          </Link>
+        ) : null
+      }
+    >
+      {chunk ? <CitationSourcePreview chunk={chunk} open={open} /> : null}
+    </EvidenceSourceSheet>
+  );
+}
+
+/** 原文のプレビュー（Office 原本は変換済みの PDF。要素の表示領域を要素ごとに強調する。#349）。 */
+function CitationSourcePreview({ chunk, open }: { chunk: RetrievedChunk; open: boolean }) {
   const previewFileName = chunk.file_name ?? chunk.document_id;
   const recipeId = firstMetadataToken(chunk.metadata.recipe_id);
-  // ドロワーを開いたときだけ文書詳細を取得し、Office 原本でも変換済 PDF を表示する。
+  // パネルを開いたときだけ文書詳細を取得し、Office 原本でも変換済 PDF を表示する。
   const previewDoc = useDocument(open ? chunk.document_id : null);
   const previewRecipes = useDocumentRecipes(open ? chunk.document_id : null);
   const previewRecipe = previewRecipes.data?.find((recipe) => recipe.recipe_id === recipeId);
@@ -54,94 +90,33 @@ export function CitationPreviewDialog({
     bboxPageSizeFromMetadata(chunk.metadata),
     bboxPageRotationFromMetadata(chunk.metadata)
   );
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    if (!open && dialog.open) dialog.close();
-  }, [open]);
-
   // 回答の根拠でも、要素の表示領域（要素ごとの bbox）を要素ごとに強調する（#349）。
-  const previewHighlights = open
-    ? buildPreviewHighlights({
-        focusPage,
-        focusBbox,
-        focusBboxMode,
-        focusBboxUnit,
-        focusPageSize,
-        regions: displayRegionsFromMetadata(chunk.metadata),
-      })
-    : null;
-
-  function closePreview() {
-    dialogRef.current?.close();
-  }
-
+  const previewHighlights = buildPreviewHighlights({
+    focusPage,
+    focusBbox,
+    focusBboxMode,
+    focusBboxUnit,
+    focusPageSize,
+    regions: displayRegionsFromMetadata(chunk.metadata),
+  });
   return (
-    <dialog
-      ref={dialogRef}
-      onClose={onClose}
-      onClick={(event) => {
-        if (event.target === dialogRef.current) closePreview();
-      }}
-      aria-label={t("search.citation.openPreview", { file: previewFileName })}
-      // プレビューは 1 画面分の高さにし、ページはビューアの中でスクロールする(#349)。
-      className="m-auto h-[calc(100dvh-2rem)] max-h-[calc(100dvh-2rem)] w-[min(96vw,75rem)] max-w-[calc(100vw-1rem)] overflow-hidden rounded-lg border border-border bg-surface-overlay p-0 text-fg shadow-[var(--shadow-dialog)] backdrop:bg-[var(--scrim)]"
-    >
-      {open ? (
-        <div className="flex h-full min-h-0 flex-col">
-          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-surface px-4 py-3">
-            <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fg">
-              <FileText size={14} className="shrink-0 text-fg-muted" aria-hidden />
-              <span className="truncate" title={previewFileName}>
-                {previewFileName}
-              </span>
-            </span>
-            <div className="flex shrink-0 items-center gap-2">
-              {canOpenDetail ? (
-                <Link
-                  to={previewUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  {t("search.citation.openDetail")}
-                  <ExternalLink size={14} aria-hidden />
-                </Link>
-              ) : null}
-              <Button
-                type="button"
-                variant="ghost"
-                iconOnly
-                icon={X}
-                onClick={closePreview}
-                aria-label={t("search.citation.previewClose")}
-              />
-            </div>
-          </div>
-          <div className="flex min-h-0 flex-1 flex-col p-2 sm:p-4">
-            <DocumentPreview
-              documentId={chunk.document_id}
-              recipeId={recipeId}
-              fileName={previewFileName}
-              preparedArtifact={
-                recipeId
-                  ? (previewRecipe?.preprocess_artifact ?? null)
-                  : (previewDoc.data?.preprocess_artifact ?? null)
-              }
-              focusPage={focusPage}
-              focusBbox={focusBbox}
-              focusBboxMode={focusBboxMode}
-              focusBboxUnit={focusBboxUnit}
-              focusPageSize={focusPageSize}
-              highlights={previewHighlights}
-              className="min-h-0 flex-1"
-            />
-          </div>
-        </div>
-      ) : null}
-    </dialog>
+    <DocumentPreview
+      documentId={chunk.document_id}
+      recipeId={recipeId}
+      fileName={previewFileName}
+      preparedArtifact={
+        recipeId
+          ? (previewRecipe?.preprocess_artifact ?? null)
+          : (previewDoc.data?.preprocess_artifact ?? null)
+      }
+      focusPage={focusPage}
+      focusBbox={focusBbox}
+      focusBboxMode={focusBboxMode}
+      focusBboxUnit={focusBboxUnit}
+      focusPageSize={focusPageSize}
+      highlights={previewHighlights}
+      className="min-h-0 flex-1"
+    />
   );
 }
 
