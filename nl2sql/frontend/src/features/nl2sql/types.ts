@@ -606,6 +606,8 @@ export interface Nl2SqlResult {
   timing: TimingEnvelope;
   interpretation?: Nl2SqlInterpretationArtifact | null;
   show_prompt?: Nl2SqlShowPromptArtifact | null;
+  /** 回答の注意書き（システム設定の文。SQL を実行して答えた job だけ。#2405）。 */
+  notice?: string | null;
 }
 
 export interface GeneratedSqlPanelData {
@@ -1421,6 +1423,8 @@ export interface DbAdminChatTurn {
   sender_user_uuid?: string | null;
   /** 会話の持ち主以外（system_admin）が送ったターンだけに付く送り手の表示名（引けなければ空）。 */
   sender_display_name?: string | null;
+  /** 回答の注意書き（システム設定の文。#2405）。この機能より前のターンは null / 未指定。 */
+  notice?: string | null;
 }
 
 /** DB 管理チャットの会話（#2319。チャットの会話と同じ見え方の項目）。 */

@@ -490,6 +490,11 @@ class Nl2SqlJobResult(BaseModel):
             "業務プロファイル（それ以外は null）"
         ),
     )
+    # 回答の注意書き（#2405）。API キーで呼んだ外部のクライアントにだけ返す（Agent がサービス
+    # トークンで呼んだときは返さず、Agent の回答の末尾には Agent が付ける 1 つだけを出す）。
+    notice: str | None = Field(
+        default=None, description="利用者に回答を示すときは、末尾にこの文をそのまま添える。"
+    )
 
 
 def _translate_domain_errors[A, R](
@@ -556,7 +561,16 @@ def _job_error_message(job: JobData) -> str | None:
     return job.error_message
 
 
-def _job_result(job: JobData) -> Nl2SqlJobResult:
+def called_with_api_key(request: Request) -> bool:
+    """利用者の API キー（`prak_…`）で呼んだ外部の MCP クライアントか（#2405）。
+
+    Agent のサービストークン・local（認証なし）の呼び出しは False。
+    """
+    return getattr(request.state, "api_key", None) is not None
+
+
+def _job_result(job: JobData, *, include_notice: bool = False) -> Nl2SqlJobResult:
+    """job の応答。`include_notice` なら、答えた job（done）の回答の注意書きを付ける。"""
     result = job.result
     output = Nl2SqlJobResult(
         job_id=job.job_id,
@@ -584,6 +598,8 @@ def _job_result(job: JobData) -> Nl2SqlJobResult:
     output.has_more = result.results.has_more
     output.truncated = result.results.truncated
     output.history_id = result.history_id or None
+    if include_notice and job.status == JobStatus.DONE:
+        output.notice = result.notice
     return output
 
 
@@ -735,7 +751,7 @@ def build_mcp_server(request: Request) -> McpServer:
             job = await run_sync_io(own_job, job_id)
             remaining = deadline - time.monotonic()
             if job.status in _TERMINAL_STATUSES or remaining <= 0:
-                return _job_result(job)
+                return _job_result(job, include_notice=called_with_api_key(request))
             await asyncio.sleep(min(JOB_POLL_INTERVAL_SECONDS, remaining))
 
     @_translate_domain_errors
