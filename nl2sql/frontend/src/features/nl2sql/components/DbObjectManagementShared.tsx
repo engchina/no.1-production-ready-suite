@@ -975,9 +975,10 @@ export function dbObjectListCount({
 }
 
 /**
- * テーブル・ビューの管理の一覧 + 詳細（B 型。#2281）。共有の `ListDetailLayout` に、DB オブジェクトの一覧
- * （左の狭い列: 検索・所有者・件数 → 名前とコメントの 2 段 + 行数の表 → 「さらに読み込む」）と、選んだ対象の詳細
- * （右の広い列。`DbObjectDetailPanel`）を渡す。選択は URL（`useWorkspaceUrlSelection`）が持ち、先頭の行を自動で選ばない。
+ * DB オブジェクトの一覧 + 詳細（B 型。#2281）。共有の `ListDetailLayout` に、DB オブジェクトの一覧
+ * （左の狭い列: 検索・所有者・絞り込み・件数 → 名前とコメントの 2 段 + 行数（と種類）の表 → 「さらに読み込む」）と、
+ * 選んだ対象の詳細（右の広い列）を渡す。選択は URL（`useWorkspaceUrlSelection`）が持ち、先頭の行を自動で選ばない。
+ * テーブル / ビューの管理（詳細は `DbObjectDetailPanel`）と、データの管理のデータの表示（詳細はデータの結果。#2315）が使う。
  */
 export function DbObjectListDetail({
   idPrefix,
@@ -1000,6 +1001,13 @@ export function DbObjectListDetail({
   loadingActivityIcon,
   detail,
   detailLabel,
+  emptyDetail,
+  filters,
+  activeFilterCount = 0,
+  onClearFilters,
+  filtersLayout,
+  kindLabel,
+  formatRowCount = rowCountLabel,
   onSearchChange,
   onOwnerPrefixChange,
   onSortChange,
@@ -1040,6 +1048,20 @@ export function DbObjectListDetail({
   detail: ReactNode;
   /** 詳細の列の名前（翻訳済み。例:「テーブルの詳細」）。 */
   detailLabel: string;
+  /** 未選択の 2 ペインの詳細の空の状態。省略すると列情報・CREATE SQL の案内。 */
+  emptyDetail?: ReactNode;
+  /** 所有者の右に並べる絞り込み（`FilterSelect` など）。 */
+  filters?: ReactNode;
+  /** `filters` のうち既定と違う値の数（検索語・所有者は数えない）。 */
+  activeFilterCount?: number;
+  /** 「条件をクリア」で `filters` を既定に戻す（検索語・所有者はこの部品が戻す）。 */
+  onClearFilters?: () => void;
+  /** 狭い置き場所の絞り込みの出し方。検索・所有者のほかに絞り込みがあるときは `sheet`（#1933）。 */
+  filtersLayout?: "wrap" | "sheet";
+  /** 行の右の短い値に添える種類（例:「テーブル」「ビュー」）。省略すると出さない。 */
+  kindLabel?: (item: DbAdminObjectSummary) => string;
+  /** 行数の表示（既定は件数か `-`）。 */
+  formatRowCount?: (rowCount?: number | null) => string;
   onSearchChange: (value: string) => void;
   onOwnerPrefixChange: (value: DbObjectOwnerPrefix) => void;
   onSortChange: (key: DbObjectSortKey) => void;
@@ -1048,7 +1070,7 @@ export function DbObjectListDetail({
   onRetryLoadMore?: () => void;
   onRetry?: () => void;
 }) {
-  const hasActiveFilter = Boolean(search.trim()) || Boolean(ownerPrefix.trim());
+  const hasActiveFilter = Boolean(search.trim()) || Boolean(ownerPrefix.trim()) || activeFilterCount > 0;
   const count = dbObjectListCount({
     matched: totalCount ?? items.length,
     unfilteredTotal: unfilteredTotalCount,
@@ -1081,9 +1103,13 @@ export function DbObjectListDetail({
             onOwnerChange={onOwnerPrefixChange}
             count={count}
             testId={`${idPrefix}-toolbar`}
+            filters={filters}
+            activeFilterCount={activeFilterCount}
+            filtersLayout={filtersLayout}
             onClearFilters={() => {
               onSearchChange("");
               onOwnerPrefixChange("");
+              onClearFilters?.();
             }}
           />
         </div>
@@ -1139,7 +1165,20 @@ export function DbObjectListDetail({
                 align: "right",
                 headerClassName: "w-[6.5rem]",
                 className: "whitespace-nowrap align-top font-sans tabular-nums",
-                render: (item) => rowCountLabel(item.row_count),
+                render: (item) =>
+                  kindLabel ? (
+                    // 種類は行数の下に短い値として添える（狭い列で列を増やさない。#2315）。
+                    <span className="grid justify-items-end gap-1">
+                      <span>{formatRowCount(item.row_count)}</span>
+                      <StatusBadge
+                        icon={false}
+                        variant={item.object_type === "view" ? "info" : "neutral"}
+                        label={kindLabel(item)}
+                      />
+                    </span>
+                  ) : (
+                    formatRowCount(item.row_count)
+                  ),
               },
             ]}
             rows={items}
@@ -1175,7 +1214,7 @@ export function DbObjectListDetail({
       }
       hasSelection={Boolean(selectedName)}
       detail={detail}
-      emptyDetail={<EmptyState title={t("dbAdmin.detail.emptyTitle")} hint={t("dbAdmin.detail.emptyHint")} />}
+      emptyDetail={emptyDetail ?? <EmptyState title={t("dbAdmin.detail.emptyTitle")} hint={t("dbAdmin.detail.emptyHint")} />}
       detailToolbar={
         selectedName ? (
           <ListDetailPager
