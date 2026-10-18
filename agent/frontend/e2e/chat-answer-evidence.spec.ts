@@ -275,6 +275,7 @@ const TABLE_EXCERPT =
 for (const viewport of VIEWPORTS) {
   test(`根拠の抜粋の表の HTML をサイドパネルでは表、カードでは行の文字で出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
     seedRun(mockApi, TABLE_EXCERPT);
+    await serveSourcePreviews(page);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/chat");
     await openThread(page);
@@ -283,6 +284,9 @@ for (const viewport of VIEWPORTS) {
     await body.getByTestId("answer-section").nth(0).getByTestId("answer-citation-link").first().click();
     const sheet = page.getByRole("dialog", { name: "回答の根拠" });
     const excerpt = sheet.getByTestId("evidence-source-summary").getByTestId("citation-text");
+    // 原文のプレビュー（#2389）に場所を空けるため抜粋は 3 行に畳む（RAG と同じ）。「抜粋をすべて表示」で表を出す。
+    await expect(excerpt).toHaveAttribute("data-expanded", "false");
+    await sheet.getByTestId("evidence-excerpt-toggle").click();
     await expect(excerpt).toHaveAttribute("data-expanded", "true");
     await expect(excerpt.locator("p").first()).toHaveText("見出し A");
     const table = excerpt.getByRole("table", { name: "抜粋の表" });
