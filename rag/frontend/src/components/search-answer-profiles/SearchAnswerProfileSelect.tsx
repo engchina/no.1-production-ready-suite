@@ -27,6 +27,7 @@ export function SearchAnswerProfileSelect({
   onChange,
   disabled = false,
   error,
+  label,
 }: {
   id: string;
   items: SearchAnswerProfileSummary[];
@@ -35,6 +36,8 @@ export function SearchAnswerProfileSelect({
   disabled?: boolean;
   /** 欄の直下に出す誤り（未選択・参照 KB なしなど）。 */
   error?: string;
+  /** 欄のラベル（既定は「検索・回答プロファイル」。品質評価の比べる対象など、用途を示すとき。#2402）。 */
+  label?: string;
 }) {
   const options = useMemo<SearchableSelectOption[]>(
     () =>
@@ -50,7 +53,7 @@ export function SearchAnswerProfileSelect({
   return (
     <SearchableSelectField
       id={id}
-      label={t("searchAnswerProfiles.scope.label")}
+      label={label ?? t("searchAnswerProfiles.scope.label")}
       required
       value={value ?? ""}
       options={options}

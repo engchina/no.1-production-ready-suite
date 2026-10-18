@@ -14,13 +14,25 @@ import {
   ProcessingIndicator,
   Skeleton,
   StatusBadge,
+  Switch,
+  TabPanel,
+  Tabs,
   TimedLoadingState,
   useConfirm,
   ListToolbar,
   PagedDataTable,
   PAGE_SIZE_OPTIONS,
 } from "@production-ready/ui";
-import { BarChart3, CheckCircle2, ClipboardCheck, Settings2, XCircle } from "lucide-react";
+import {
+  BarChart3,
+  CheckCircle2,
+  ClipboardCheck,
+  Minus,
+  Settings2,
+  TrendingDown,
+  TrendingUp,
+  XCircle,
+} from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -28,6 +40,10 @@ import { listCountProps, useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { EmptyState } from "@/components/StateViews";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
+import {
+  SearchAnswerProfileSelect,
+  SearchAnswerProfileSelectSkeleton,
+} from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import {
   api,
   ApiError,
@@ -37,16 +53,19 @@ import {
   type EvaluationCaseResult,
   type EvaluationCategorySummary,
   type EvaluationImportResult,
+  type EvaluationMetricName,
   type EvaluationMetrics,
+  type EvaluationProcessDraft,
 } from "@/lib/api";
 import { saveDownloadedFile } from "@/lib/download";
 import { t } from "@/lib/i18n";
-import { useWorkspaceState } from "@/lib/workspace-state";
+import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
 import {
   useCancelEvaluationJob,
   useEvaluationJob,
   useEvaluationSettings,
   useImportEvaluationCases,
+  useSearchAnswerProfiles,
   useSubmitRunEvaluationJob,
 } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
@@ -58,7 +77,9 @@ import {
   isEvaluationJobId,
 } from "./evaluation-job";
 import {
+  applyProcessDrafts,
   buildEvaluationCaseLabels,
+  evaluationProcessRows,
   evaluationCaseRowLabel,
   evaluationEvidenceSummary,
   sameIdSet,
@@ -66,8 +87,16 @@ import {
   type EvaluationCaseLabels,
 } from "./evaluation-input";
 import {
+  comparisonRows,
+  EVALUATION_GUIDANCE_METRICS,
   EVALUATION_PERSPECTIVES,
+  formatMetricDelta,
+  isGuidanceShown,
   isPerspectiveShown,
+  LOWER_IS_BETTER_METRICS,
+  type ComparisonDirection,
+  type EvaluationComparisonRow,
+  type EvaluationGuidanceMetricName,
   outcomeLabel,
   STANDARD_ANSWER_METRICS,
   failureReasonLabel,
@@ -87,6 +116,7 @@ import {
   EvaluationJobPanel,
   EvaluationResultSkeleton,
 } from "./EvaluationJobPanel";
+import { EvaluationProcessDrafts } from "./EvaluationProcessDrafts";
 import {
   EVALUATION_UPLOAD_ID,
   EvaluationRequestUpload,
@@ -94,6 +124,8 @@ import {
 } from "./EvaluationRequestUpload";
 
 const KNOWLEDGE_BASE_ERROR_ID = "evaluation-knowledge-base-error";
+const COMPARE_SWITCH_ID = "evaluation-compare-switch";
+const COMPARE_PROFILE_ID = "evaluation-compare-profile";
 /** アップロードの上限（backend の `EVALUATION_EXCEL_MAX_ROWS` / `_BYTES`。検証の前の案内に出す）。 */
 const EVALUATION_EXCEL_MAX_ROWS = 200;
 const EVALUATION_EXCEL_MAX_MEGABYTES = 10;
@@ -128,6 +160,35 @@ export function EvaluationClient() {
     {},
     isCaseLabels
   );
+  // 検索・回答プロファイル（業務ガイドあり）でも流して比べるか（#2402）。条件と同じく作業状態に残す。
+  const [compareEnabled, setCompareEnabled] = useWorkspaceState<boolean>(
+    "evaluation.compareEnabled",
+    false,
+    isBoolean
+  );
+  const [compareProfileId, setCompareProfileId] = useWorkspaceState<string | null>(
+    "evaluation.compareProfileId",
+    null,
+    isNullableString
+  );
+  // 実行した評価の比べたプロファイルの名前（結果の見出し。条件を変えても結果と合う）。
+  const [runCompareName, setRunCompareName] = useWorkspaceState<string | null>(
+    "evaluation.runCompareName",
+    null,
+    isNullableString
+  );
+  const [compareError, setCompareError] = useState<string | null>(null);
+  // 回答の過程から作った期待の下書きと、確かめて評価に使うか（#2402）。検証した Excel ごとに作り直す。
+  const [processDrafts, setProcessDrafts] = useWorkspaceState<
+    Record<string, EvaluationProcessDraft>
+  >("evaluation.processDrafts", {}, isProcessDrafts);
+  const [useProcessDrafts, setUseProcessDrafts] = useWorkspaceState<boolean>(
+    "evaluation.useProcessDrafts",
+    false,
+    isBoolean
+  );
+  const profilesQuery = useSearchAnswerProfiles({ status: "ACTIVE", limit: 50, offset: 0 });
+  const profiles = profilesQuery.data?.items ?? [];
   // 選んだファイル（KB を変えたときに検証し直す）。再読込の後は無い（検証の結果だけが残る）。
   const [file, setFile] = useState<File | null>(null);
   const importSequence = useRef(0);
@@ -144,6 +205,7 @@ export function EvaluationClient() {
   const importStale =
     importResult !== null && !sameIdSet(importResult.knowledge_base_ids, knowledgeBaseIds);
   const shownResult = importStale ? null : importResult;
+  const processRows = shownResult ? evaluationProcessRows(shownResult) : [];
   const uploadNotice = validating
     ? null
     : fileName && knowledgeBaseIds.length === 0
@@ -162,7 +224,10 @@ export function EvaluationClient() {
       {
         // 検証中に別のファイル・KB に変えたときは、前の結果を捨てる。
         onSuccess: (result) => {
-          if (sequence === importSequence.current) setImportResult(result);
+          if (sequence !== importSequence.current) return;
+          setImportResult(result);
+          setProcessDrafts({});
+          setUseProcessDrafts(false);
         },
         onError: (error) => {
           if (sequence !== importSequence.current) return;
@@ -184,6 +249,8 @@ export function EvaluationClient() {
     setFile(selected);
     setFileName(selected.name);
     setImportResult(null);
+    setProcessDrafts({});
+    setUseProcessDrafts(false);
     if (knowledgeBaseIds.length > 0) validate(selected, knowledgeBaseIds);
     else setUploadError(null);
   };
@@ -227,8 +294,11 @@ export function EvaluationClient() {
         : shownResult.error_count > 0
           ? t("evaluation.import.fixErrors")
           : null;
+    const nextCompareError =
+      compareEnabled && !compareProfileId ? t("evaluation.compare.profileRequired") : null;
     setKnowledgeBaseError(nextKnowledgeBaseError);
     setUploadError(nextUploadError);
+    setCompareError(nextCompareError);
     if (nextKnowledgeBaseError) {
       document
         .querySelector<HTMLElement>('[data-testid="evaluation-knowledge-base"] input')
@@ -239,14 +309,25 @@ export function EvaluationClient() {
       document.getElementById(EVALUATION_UPLOAD_ID)?.focus();
       return;
     }
+    if (nextCompareError) {
+      document.getElementById(COMPARE_PROFILE_ID)?.focus();
+      return;
+    }
+    const compareId = compareEnabled ? compareProfileId : null;
+    // 確かめた期待の下書きを足したケース（#2402。オンにしたときだけ）。
+    const runInput = useProcessDrafts ? applyProcessDrafts(shownResult, processDrafts) : shownResult;
     setRunError("");
     runMutation.reset();
     try {
       const job = await runMutation.mutateAsync({
-        cases: shownResult.cases,
+        cases: runInput.cases,
         knowledge_base_ids: knowledgeBaseIds,
+        ...(compareId ? { compare_search_answer_profile_id: compareId } : {}),
       });
-      setRunCaseLabels(buildEvaluationCaseLabels(shownResult));
+      setRunCaseLabels(buildEvaluationCaseLabels(runInput));
+      setRunCompareName(
+        compareId ? (profiles.find((profile) => profile.id === compareId)?.name ?? compareId) : null
+      );
       runJob.start(job);
       toast.info(t("evaluation.toast.started"));
     } catch (error) {
@@ -310,6 +391,32 @@ export function EvaluationClient() {
                     onDownloadTemplate={() => void downloadTemplate()}
                   />
                 </FormGrid>
+                {shownResult && shownResult.error_count === 0 && processRows.length ? (
+                  <EvaluationProcessDrafts
+                    rows={processRows}
+                    knowledgeBaseIds={knowledgeBaseIds}
+                    drafts={processDrafts}
+                    onDrafts={setProcessDrafts}
+                    confirmed={useProcessDrafts}
+                    onConfirmedChange={setUseProcessDrafts}
+                    disabled={runMutation.isPending}
+                  />
+                ) : null}
+                <CompareOption
+                  enabled={compareEnabled}
+                  onEnabledChange={(enabled) => {
+                    setCompareEnabled(enabled);
+                    setCompareError(null);
+                  }}
+                  profileId={compareProfileId}
+                  onProfileChange={(id) => {
+                    setCompareProfileId(id);
+                    setCompareError(null);
+                  }}
+                  query={profilesQuery}
+                  error={compareError}
+                  disabled={runMutation.isPending}
+                />
                 <div className="grid min-w-0 gap-3">
                   <div>
                     <Button
@@ -348,7 +455,15 @@ export function EvaluationClient() {
             state={runJob}
             renderResult={(job) =>
               job.run_result ? (
-                <EvaluationResult metrics={job.run_result} caseLabels={runCaseLabels} />
+                job.run_result.comparison ? (
+                  <EvaluationComparisonResult
+                    metrics={job.run_result}
+                    comparedName={runCompareName}
+                    caseLabels={runCaseLabels}
+                  />
+                ) : (
+                  <EvaluationResult metrics={job.run_result} caseLabels={runCaseLabels} />
+                )
               ) : null
             }
           />
@@ -366,6 +481,25 @@ export function EvaluationClient() {
         )}
       </PageBody>
     </div>
+  );
+}
+
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === "boolean";
+}
+
+/** 作業状態に残した期待の下書き（ケースの id → 下書き。壊れた値は捨てる）。 */
+function isProcessDrafts(value: unknown): value is Record<string, EvaluationProcessDraft> {
+  return (
+    isRecord(value) &&
+    Object.values(value).every(
+      (draft) =>
+        isRecord(draft) &&
+        typeof draft.case_id === "string" &&
+        Array.isArray(draft.expected_steps) &&
+        Array.isArray(draft.required_evidence) &&
+        Array.isArray(draft.references)
+    )
   );
 }
 
@@ -585,6 +719,188 @@ function SuiteSummary({ query }: { query: ReturnType<typeof useEvaluationSetting
   );
 }
 
+/**
+ * 検索・回答プロファイル（業務ガイドあり）でも流して比べる選択（#2402）。オンにしたときだけ、比べる
+ * プロファイルの欄を出す（段階的に開く）。
+ */
+function CompareOption({
+  enabled,
+  onEnabledChange,
+  profileId,
+  onProfileChange,
+  query,
+  error,
+  disabled,
+}: {
+  enabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+  profileId: string | null;
+  onProfileChange: (id: string) => void;
+  query: ReturnType<typeof useSearchAnswerProfiles>;
+  error: string | null;
+  disabled: boolean;
+}) {
+  return (
+    <div className="grid min-w-0 gap-3" data-testid="evaluation-compare">
+      <div className="flex items-start gap-3">
+        <Switch
+          id={COMPARE_SWITCH_ID}
+          checked={enabled}
+          disabled={disabled}
+          aria-describedby={`${COMPARE_SWITCH_ID}-help`}
+          onCheckedChange={onEnabledChange}
+        />
+        <div className="min-w-0">
+          <label htmlFor={COMPARE_SWITCH_ID} className="cursor-pointer text-sm font-medium text-fg">
+            {t("evaluation.compare.toggle")}
+          </label>
+          <p id={`${COMPARE_SWITCH_ID}-help`} className="text-xs text-fg-muted">
+            {t("evaluation.compare.helper")}
+          </p>
+        </div>
+      </div>
+      {enabled ? (
+        query.isPending ? (
+          <SearchAnswerProfileSelectSkeleton />
+        ) : query.isError ? (
+          <Banner severity="warning">{t("evaluation.compare.profilesLoadError")}</Banner>
+        ) : (
+          <SearchAnswerProfileSelect
+            id={COMPARE_PROFILE_ID}
+            label={t("evaluation.compare.profileLabel")}
+            items={query.data?.items ?? []}
+            value={profileId}
+            onChange={onProfileChange}
+            disabled={disabled}
+            error={error ?? undefined}
+          />
+        )
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * ナレッジベースの範囲と検索・回答プロファイルの範囲の結果を並べる（#2402）。指標の表（差はポイントと
+ * 改善・悪化の文言とアイコンで示し、色だけに頼らない）と、どちらの結果の詳細を見るかのタブ。
+ */
+function EvaluationComparisonResult({
+  metrics,
+  comparedName,
+  caseLabels,
+}: {
+  metrics: EvaluationMetrics;
+  comparedName: string | null;
+  caseLabels: EvaluationCaseLabels;
+}) {
+  const [tab, setTab] = useState("base");
+  const compared = metrics.comparison?.metrics;
+  if (!compared) return null;
+  const name = comparedName ?? metrics.comparison?.search_answer_profile_id ?? "";
+  const rows = comparisonRows(metrics, compared);
+  const tabs = [
+    { id: "base", label: t("evaluation.compare.tab.base") },
+    { id: "compared", label: t("evaluation.compare.tab.compared", { name }) },
+  ];
+  return (
+    <section className="min-w-0 space-y-4" aria-labelledby="evaluation-compare-title">
+      <div className="space-y-1">
+        <h2 id="evaluation-compare-title" className="text-base font-semibold text-fg">
+          {t("evaluation.compare.title")}
+        </h2>
+        <p className="text-xs text-fg-muted">{t("evaluation.compare.description", { name })}</p>
+      </div>
+      <div data-testid="evaluation-compare-table">
+        <DataTable<EvaluationComparisonRow>
+          ariaLabel={t("evaluation.compare.title")}
+          rows={rows}
+          getRowKey={(row) => row.metric}
+          columns={[
+            {
+              key: "metric",
+              header: t("evaluation.compare.column.metric"),
+              rowHeader: true,
+              className: "min-w-[9rem] font-medium text-fg",
+              render: (row) => (
+                <span className="grid gap-0.5">
+                  <span>{metricLabel(row.metric)}</span>
+                  {LOWER_IS_BETTER_METRICS.has(row.metric) ? (
+                    <span className="text-xs font-normal text-fg-muted">
+                      {t("evaluation.compare.lowerIsBetter")}
+                    </span>
+                  ) : null}
+                </span>
+              ),
+            },
+            {
+              key: "base",
+              header: t("evaluation.compare.column.base"),
+              className: "tnum whitespace-nowrap",
+              render: (row) => formatMetricValue(row.base),
+            },
+            {
+              key: "compared",
+              header: t("evaluation.compare.column.compared"),
+              className: "tnum whitespace-nowrap",
+              render: (row) => formatMetricValue(row.compared),
+            },
+            {
+              key: "delta",
+              header: t("evaluation.compare.column.delta"),
+              className: "whitespace-nowrap",
+              render: (row) => <DeltaCell delta={row.delta} direction={row.direction} />,
+            },
+          ]}
+        />
+      </div>
+      <Tabs
+        items={tabs}
+        value={tab}
+        onChange={setTab}
+        ariaLabel={t("evaluation.compare.tabsLabel")}
+        idPrefix="evaluation-compare"
+      />
+      <TabPanel id="base" value={tab} idPrefix="evaluation-compare">
+        <EvaluationResult metrics={metrics} caseLabels={caseLabels} />
+      </TabPanel>
+      <TabPanel id="compared" value={tab} idPrefix="evaluation-compare">
+        <EvaluationResult metrics={compared} caseLabels={caseLabels} />
+      </TabPanel>
+    </section>
+  );
+}
+
+const DIRECTION_KEYS = {
+  better: "evaluation.compare.better",
+  worse: "evaluation.compare.worse",
+  same: "evaluation.compare.same",
+} as const;
+
+/** 差（ポイント）と向き。向きはアイコンと文言で示す（色だけに頼らない）。 */
+function DeltaCell({
+  delta,
+  direction,
+}: {
+  delta: number | null;
+  direction: ComparisonDirection | null;
+}) {
+  if (direction === null) return <span className="text-fg-muted">—</span>;
+  const Icon = direction === "better" ? TrendingUp : direction === "worse" ? TrendingDown : Minus;
+  const tone =
+    direction === "better"
+      ? "text-success-fg"
+      : direction === "worse"
+        ? "text-danger-fg"
+        : "text-fg-muted";
+  return (
+    <span className="inline-flex items-center gap-1.5" data-testid="evaluation-compare-delta">
+      <Icon size={14} className={`shrink-0 ${tone}`} aria-hidden />
+      <span className="tnum">{formatMetricDelta(delta)}</span>
+      <span className="text-xs text-fg-muted">{t(DIRECTION_KEYS[direction])}</span>
+    </span>
+  );
+}
+
 function EvaluationResult({
   metrics,
   caseLabels,
@@ -625,11 +941,25 @@ function EvaluationResult({
       {EVALUATION_PERSPECTIVES.filter((perspective) => isPerspectiveShown(metrics, perspective)).map((perspective) => (
         <MetricGroup
           key={perspective.id}
-          perspective={perspective}
+          groupId={perspective.id}
+          title={perspectiveLabel(perspective.id)}
+          description={perspectiveDescription(perspective.id)}
+          metricNames={perspective.metrics}
           metrics={metrics}
           failedMetrics={failedMetrics}
         />
       ))}
+      {/* 案内（#2402）。参考の集計で閾値は無い。案内すべき画面・監査の記録のあるケースがあるときだけ。 */}
+      {isGuidanceShown(metrics) ? (
+        <MetricGroup
+          groupId="guidance"
+          title={t("evaluation.perspective.guidance")}
+          description={t("evaluation.perspective.guidance.description")}
+          metricNames={EVALUATION_GUIDANCE_METRICS}
+          metrics={metrics}
+          failedMetrics={failedMetrics}
+        />
+      ) : null}
 
       {metrics.threshold_failures.length ? (
         <Banner severity="warning" title={t("evaluation.thresholdFailures")}>
@@ -667,27 +997,33 @@ function EvaluationResult({
   );
 }
 
-/** 1 つの観点（検索・根拠・回答）の指標。測れなかった指標は「—」と「対象のケースなし」。 */
+/** 1 つの観点（検索・根拠・回答・案内）の指標。測れなかった指標は「—」と「対象のケースなし」。 */
 function MetricGroup({
-  perspective,
+  groupId,
+  title,
+  description,
+  metricNames,
   metrics,
   failedMetrics,
 }: {
-  perspective: (typeof EVALUATION_PERSPECTIVES)[number];
+  groupId: string;
+  title: string;
+  description: string;
+  metricNames: readonly (EvaluationMetricName | EvaluationGuidanceMetricName)[];
   metrics: EvaluationMetrics;
   failedMetrics: ReadonlySet<string>;
 }) {
-  const titleId = `evaluation-perspective-${perspective.id}`;
+  const titleId = `evaluation-perspective-${groupId}`;
   return (
     <section aria-labelledby={titleId} className="space-y-2" data-testid={titleId}>
       <div>
         <h3 id={titleId} className="text-sm font-semibold text-fg">
-          {perspectiveLabel(perspective.id)}
+          {title}
         </h3>
-        <p className="text-xs text-fg-muted">{perspectiveDescription(perspective.id)}</p>
+        <p className="text-xs text-fg-muted">{description}</p>
       </div>
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        {perspective.metrics.map((metric) => {
+        {metricNames.map((metric) => {
           const value = metricValue(metrics, metric);
           const count = metricCaseCount(metrics, metric);
           return (
@@ -700,7 +1036,7 @@ function MetricGroup({
                 <div className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
                   {value === null ? (
                     <span>
-                      {STANDARD_ANSWER_METRICS.has(metric)
+                      {STANDARD_ANSWER_METRICS.has(metric as EvaluationMetricName)
                         ? t("evaluation.metric.needsStandardAnswer")
                         : t("evaluation.metric.notMeasured")}
                     </span>
@@ -782,6 +1118,16 @@ function CaseTable({
             className: "whitespace-nowrap",
             render: (result) => <AnswerCell result={result} />,
           },
+          ...(results.some((result) => result.screen_match != null)
+            ? [
+                {
+                  key: "screens",
+                  header: t("evaluation.case.screens"),
+                  className: "min-w-[9rem]",
+                  render: (result: EvaluationCaseResult) => <ScreenCell result={result} />,
+                },
+              ]
+            : []),
           ...(metrics.case_results.some((result) => result.handling_correct != null || result.missing_steps?.length || result.forbidden_hits?.length)
             ? [
                 {
@@ -957,6 +1303,45 @@ function HandlingCell({ result }: { result: EvaluationCaseResult }) {
           ) : null}
         </span>
       ) : null}
+      {notes.map((note) => (
+        <p key={note} className="break-words text-xs text-fg-muted">
+          {note}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 案内した画面の採点（#2402）。案内すべき画面をすべて案内したか（アイコンと文言）、案内していない画面・
+ * 別の画面。判定器で決めたときと決められなかったときは、その旨を添える。
+ */
+function ScreenCell({ result }: { result: EvaluationCaseResult }) {
+  if (result.screen_match == null) return <span className="text-fg-muted">—</span>;
+  const matched = result.screen_match;
+  const notes = [
+    result.missing_screens?.length
+      ? t("evaluation.case.missingScreens", { screens: result.missing_screens.join("、") })
+      : null,
+    result.wrong_screens?.length
+      ? t("evaluation.case.wrongScreens", { screens: result.wrong_screens.join("、") })
+      : null,
+    result.screen_judged_by === "judge"
+      ? t("evaluation.case.screenJudged")
+      : result.screen_judged_by === "unresolved"
+        ? t("evaluation.case.screenUnresolved")
+        : null,
+  ].filter((note): note is string => Boolean(note));
+  return (
+    <div className="grid min-w-0 gap-1" data-testid="evaluation-case-screens">
+      <span className="inline-flex items-center gap-1.5">
+        {matched && !result.wrong_screen ? (
+          <CheckCircle2 size={16} className="shrink-0 text-success-fg" aria-hidden />
+        ) : (
+          <XCircle size={16} className="shrink-0 text-danger-fg" aria-hidden />
+        )}
+        <span>{t(matched ? "evaluation.case.screenMatched" : "evaluation.case.screenMissing")}</span>
+      </span>
       {notes.map((note) => (
         <p key={note} className="break-words text-xs text-fg-muted">
           {note}

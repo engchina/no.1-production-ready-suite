@@ -14,6 +14,11 @@ from app.schemas.search import (
     normalize_search_id_list,
     parse_search_id_filter,
 )
+from app.schemas.support_guide import (
+    PROCESS_IMPORT_QUESTION_MAX_CHARS,
+    PROCESS_IMPORT_TEXT_MAX_CHARS,
+    SupportGuideProcessReference,
+)
 
 EvaluationSuiteName = EvaluationSuite
 
@@ -114,6 +119,12 @@ EvaluationFailureReason = Literal[
     "evidence_miss",
     # 質問・前の返答で渡した条件を、確認の質問でもう一度聞いた（#1284）。
     "known_condition_reasked",
+    # 案内すべき画面（expected_screens）の一部を回答が案内しなかった（#2402）。
+    "screen_missing",
+    # 案内すべき画面のほかの画面を回答が案内した（#2402）。
+    "wrong_screen",
+    # 回答の監査が、回答は質問の目的に答えていない（goal_alignment=off_target）と判定した（#2402）。
+    "off_target",
     "case_error",
 ]
 
@@ -156,6 +167,12 @@ EVALUATION_METRIC_NAMES: tuple[EvaluationMetricName, ...] = (
 EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = (
     "required_evidence_recall",
     "evidence_chain_complete_rate",
+    # 案内した画面（#2402）。案内すべき画面をすべて案内したケースの割合（screen_match_rate）と、
+    # 案内すべき画面のほかの画面を案内したケースの割合（wrong_screen_rate。低いほどよい）。
+    "screen_match_rate",
+    "wrong_screen_rate",
+    # 回答の監査が目的外（goal_alignment=off_target）と判定したケースの割合（#2402。低いほどよい）。
+    "off_target_rate",
 )
 
 # 期待する手順の別解の上限（列の数）。
@@ -334,6 +351,45 @@ class EvaluationEvidence(BaseModel):
         return self
 
 
+# 案内すべき画面の数・別名の数・名前の長さの上限（#2402）。
+EVALUATION_MAX_SCREENS = 20
+EVALUATION_MAX_SCREEN_ALIASES = 10
+EVALUATION_SCREEN_NAME_MAX_CHARS = 200
+
+
+class EvaluationScreen(BaseModel):
+    """回答が案内すべき画面（#2402）。名前と、同じ画面の別の呼び方（別名）。
+
+    回答の手順の見出しに名前か別名が出れば、その画面を案内したとみなす（文字の比較は NFKC・
+    大小文字・空白を無視する）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=EVALUATION_SCREEN_NAME_MAX_CHARS)
+    aliases: list[str] = Field(default_factory=list, max_length=EVALUATION_MAX_SCREEN_ALIASES)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        """前後の空白を除き、空の名前を拒否する。"""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("画面の名前を入力してください。")
+        return cleaned
+
+    @field_validator("aliases")
+    @classmethod
+    def validate_aliases(cls, value: list[str]) -> list[str]:
+        """前後の空白を除き、空の別名・長すぎる別名を拒否する。"""
+        cleaned = _clean_phrase_list(value)
+        if any(len(item) > EVALUATION_SCREEN_NAME_MAX_CHARS for item in cleaned):
+            raise ValueError(
+                f"画面の別名は {EVALUATION_SCREEN_NAME_MAX_CHARS} 文字以内にしてください。"
+            )
+        return list(dict.fromkeys(cleaned))
+
+
 class EvaluationCase(EvaluationHandlingExpectation):
     """1 件の評価ケース。
 
@@ -379,6 +435,10 @@ class EvaluationCase(EvaluationHandlingExpectation):
     # 新しい版に置き換えた文書（旧版）も検索して答えるケース（版の比較など。#1366）。true なら、
     # 利用者が旧版・変更点を尋ねるときと同じく filters に include_superseded=true を足して回答する。
     include_superseded: bool = False
+    # 回答が案内すべき画面（任意。#2402）。最後の回答が案内した画面と比べる（一致・別の画面）。
+    expected_screens: list[EvaluationScreen] = Field(
+        default_factory=list, max_length=EVALUATION_MAX_SCREENS
+    )
 
     def canonical_document_id(self, document_id: str) -> str:
         """同じ文書とみなす文書（`equivalent_document_ids`）を、正解の文書の ID にそろえる。"""
@@ -559,6 +619,21 @@ class EvaluationCaseResult(BaseModel):
     missing_evidence: list[str] = Field(default_factory=list)
     # 必要な根拠をすべて取れたか（#1335。evidence_recall が 1 のとき True）。測れないときは None。
     evidence_chain_complete: bool | None = None
+    # 案内した画面の採点（#2402。案内すべき画面のあるケースだけ。測れないときは None / 空）。
+    # screen_match は案内すべき画面をすべて案内したか、wrong_screen はほかの画面を案内したか。
+    # guided_screens は回答が案内した画面、matched_screens は案内すべき画面のうち案内したもの
+    # （名前）、missing_screens は案内しなかったもの、wrong_screens はほかの画面の名前。
+    # screen_judged_by は deterministic（回答の手順の見出しと根拠の画面名で決めた）/ judge
+    # （決められず判定器で決めた）/ unresolved（決められず判定器も使えなかった）。
+    screen_match: bool | None = None
+    wrong_screen: bool | None = None
+    guided_screens: list[str] = Field(default_factory=list)
+    matched_screens: list[str] = Field(default_factory=list)
+    missing_screens: list[str] = Field(default_factory=list)
+    wrong_screens: list[str] = Field(default_factory=list)
+    screen_judged_by: Literal["deterministic", "judge", "unresolved"] | None = None
+    # 回答の監査の目的との合い方（#2402。aligned / partial / off_target。記録の無い回答は None）。
+    goal_alignment: str | None = None
     # 往復ごとの採点（往復のあるケースだけ。#1284）。
     turn_results: list[EvaluationTurnResult] = Field(default_factory=list)
     answer_evaluation: EvaluationAnswerJudgement | None = None
@@ -662,6 +737,10 @@ class EvaluationMetrics(BaseModel):
     required_evidence_recall: float | None = None
     # 必要な根拠をすべて取れたケースの割合（参考の集計で閾値の判定には使わない。#1335）。
     evidence_chain_complete_rate: float | None = None
+    # 案内した画面と目的外の割合（参考の集計で閾値の判定には使わない。#2402）。
+    screen_match_rate: float | None = None
+    wrong_screen_rate: float | None = None
+    off_target_rate: float | None = None
     metric_case_counts: dict[str, int] = Field(default_factory=dict)
     passed: bool = True
     threshold_failures: list[EvaluationThresholdFailure] = Field(default_factory=list)
@@ -675,6 +754,19 @@ class EvaluationMetrics(BaseModel):
     reasoning_type_breakdown: dict[str, EvaluationReasoningSummary] = Field(default_factory=dict)
     hops_breakdown: dict[str, EvaluationReasoningSummary] = Field(default_factory=dict)
     case_results: list[EvaluationCaseResult] = Field(default_factory=list)
+    # 同じ評価セットを検索・回答プロファイル（業務ガイド・ルールあり）でも流した結果（#2402）。
+    # この結果（ナレッジベースの範囲）と並べて比べる。比べないときは None。
+    comparison: "EvaluationComparison | None" = None
+
+
+class EvaluationComparison(BaseModel):
+    """比べるために、検索・回答プロファイルの範囲で流した評価の結果（#2402）。"""
+
+    search_answer_profile_id: str
+    metrics: EvaluationMetrics
+
+
+EvaluationMetrics.model_rebuild()
 
 
 class EvaluationThresholds(BaseModel):
@@ -776,6 +868,10 @@ class EvaluationRunRequest(BaseModel):
     rag_overrides: EvaluationRagOverrides | None = None
     # 検索・回答プロファイル（任意。#1249）。指定しなければ全体の既定で評価する（#301）。
     search_answer_profile_id: str | None = Field(default=None, max_length=128)
+    # 比べる検索・回答プロファイル（任意。#2402）。指定すると、同じケースをナレッジベースの範囲
+    # （`knowledge_base_ids`）と、このプロファイルの範囲（参照 KB・業務ガイド・ルール）の 2 回流し、
+    # 結果の `comparison` に後者を入れる。`search_answer_profile_id` とは一緒に指定しない。
+    compare_search_answer_profile_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("filters")
     @classmethod
@@ -793,6 +889,15 @@ class EvaluationRunRequest(BaseModel):
     def validate_search_options(self) -> Self:
         """SearchRequest と同じ KB 指定制約を適用し、ケースの id の重複を拒否する。"""
         _reject_duplicate_case_ids(self.cases)
+        if self.compare_search_answer_profile_id is not None:
+            self.compare_search_answer_profile_id = (
+                self.compare_search_answer_profile_id.strip() or None
+            )
+        if self.compare_search_answer_profile_id and self.search_answer_profile_id:
+            raise ValueError(
+                "compare_search_answer_profile_id は search_answer_profile_id と"
+                "一緒に指定できません（比べる元はナレッジベースの範囲です）。"
+            )
         self.filters, self.knowledge_base_ids = _sync_knowledge_base_filter(
             self.filters,
             self.knowledge_base_ids,
@@ -877,6 +982,70 @@ class EvaluationImportRow(BaseModel):
     has_standard_answer: bool = False
     # 根拠も標準回答も無い行（資料に答えが無い質問として、回答を控えたかを測る）。
     expects_answer: bool = True
+    # 案内すべき画面（#2402。Excel に書いた 1 行ずつの元の文）。
+    screens: list[str] = Field(default_factory=list)
+    # 回答の過程（#2402）。期待の下書きを作るときに、この全文を下書きの API に渡す。
+    answer_process: str | None = None
+
+
+# 1 回の下書きの API で構造化する行の数の上限（#2402。画面は行を分けて順に送る）。
+EVALUATION_PROCESS_MAX_REQUEST_ROWS = 10
+
+
+class EvaluationProcessRow(BaseModel):
+    """期待の下書きを作る評価のケースの 1 行（#2402）。"""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    case_id: str = Field(..., min_length=1, max_length=EVALUATION_CASE_ID_MAX_CHARS)
+    row: int = Field(..., ge=1)
+    question: str = Field(..., min_length=1, max_length=PROCESS_IMPORT_QUESTION_MAX_CHARS)
+    answer_process: str = Field(..., min_length=1, max_length=PROCESS_IMPORT_TEXT_MAX_CHARS)
+    standard_answer: str = Field(default="", max_length=PROCESS_IMPORT_TEXT_MAX_CHARS)
+
+
+class EvaluationProcessDraftRequest(BaseModel):
+    """回答の過程から期待の下書きを作る request（#2402）。
+
+    資料の名前は選んだ KB の文書で解決する。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    knowledge_base_ids: list[str] = Field(..., min_length=1, max_length=200)
+    rows: list[EvaluationProcessRow] = Field(
+        ..., min_length=1, max_length=EVALUATION_PROCESS_MAX_REQUEST_ROWS
+    )
+
+    @field_validator("knowledge_base_ids")
+    @classmethod
+    def validate_knowledge_base_ids(cls, values: list[str]) -> list[str]:
+        """ナレッジベース ID を重複排除する。"""
+        return normalize_search_id_list(values)
+
+
+class EvaluationProcessDraft(BaseModel):
+    """1 行の回答の過程から作った評価の期待の下書き（#2402。保存しない）。
+
+    画面で確かめてから、ケースの期待（手順・条件・対応・正解の文書・必要な根拠）に足す。`references`
+    は回答の過程に書いた資料と文書の対応、`warnings` は解決できない資料など、`error` は下書きを
+    作れなかった理由（そのときは期待は空）。
+    """
+
+    case_id: str
+    row: int
+    expected_steps: list[str] = Field(default_factory=list)
+    required_conditions: list[str] = Field(default_factory=list)
+    expected_outcomes: list[EvaluationOutcome] = Field(default_factory=list)
+    relevant_document_ids: list[str] = Field(default_factory=list)
+    required_evidence: list[EvaluationEvidence] = Field(default_factory=list)
+    references: list[SupportGuideProcessReference] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class EvaluationProcessDraftData(BaseModel):
+    drafts: list[EvaluationProcessDraft]
 
 
 class EvaluationImportResult(BaseModel):

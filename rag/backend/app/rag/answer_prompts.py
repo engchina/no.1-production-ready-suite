@@ -217,6 +217,15 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "evaluation",
         (("system", "rag_engine.evaluation.answer_validation:VALIDATION_SYSTEM_PROMPT"),),
     ),
+    # 品質評価の案内した画面を、回答に画面の名前が出ず決められないときだけ判定する(#2402)。
+    PromptStage(
+        "evaluation_screen_judge",
+        "evaluation",
+        (
+            ("system", "app.rag.evaluation_screens:SCREEN_JUDGE_SYSTEM_PROMPT"),
+            ("instruction", "app.rag.evaluation_screens:SCREEN_JUDGE_PROMPT"),
+        ),
+    ),
 )
 
 
