@@ -1820,7 +1820,13 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     // 実行の詳細（実行履歴の詳細・行の判断の前の読み直しが読む。#1897）。
     if (method === "GET" && at("runs", "*")) return { ...run, ...runViewerOf(state, run) };
     if (method === "GET" && at("runs", "*", "audit")) {
-      return { run_id: run.id, goal: run.goal, status: run.status, records: [] };
+      // 実行の監査（backend の `GET /api/runs/{id}/audit`）。監査の記録のうち、この実行のものを返す（#2403）。
+      return {
+        run_id: run.id,
+        goal: run.goal,
+        status: run.status,
+        records: state.auditRecords.filter((record) => record.run_id === run.id),
+      };
     }
     if (method === "GET" && at("runs", "*", "artifacts")) return { artifacts: [] };
     // チャットの処理の段階のイベント（polling。`since` より後。#1359）。

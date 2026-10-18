@@ -10,7 +10,7 @@ import { t, type I18nKey } from "@/lib/i18n";
  * 確認待ちの質問・使った業務ガイド・足りない情報、照合できなかった・対象外の理由があるときだけ、同じ行を開いて
  * 見られるようにする（出典と同じ plain の Disclosure）。除いた内容の一覧は回答の本文の節
  * 「資料から確認できなかった事項」の 1 か所だけに出し、ここには出さない（件数はバッジで節と一致させる）。
- * 成果物の JSON・内部の語は出さない（handoff §13。元の JSON は実行の詳細の成果物で管理者だけが見る）。
+ * 成果物の JSON・内部の語は出さない（handoff §13。元の JSON は実行の詳細の監査ログで、監査の閲覧の権限のある利用者だけが見る。#2403）。
  */
 export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; testId: string }) {
   const hasDetails =
@@ -55,8 +55,8 @@ export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; te
   );
 }
 
-/** 資料との照合の中身（チャットの回答の下と、実行の詳細の成果物で使う）。 */
-export function AnswerReviewSections({ review }: { review: AnswerReview }) {
+/** 資料との照合の中身（チャットの回答の下で使う）。 */
+function AnswerReviewSections({ review }: { review: AnswerReview }) {
   return (
     <div className="space-y-3 text-xs [overflow-wrap:anywhere]">
       {review.conditions.length > 0 ? (
@@ -153,7 +153,7 @@ function ValidationGroup({ validation }: { validation: ReviewValidation }) {
 }
 
 /** 予算の上限に達したときの控えめな案内（内部の語は出さない）。 */
-export function LimitNote({ testId }: { testId: string }) {
+function LimitNote({ testId }: { testId: string }) {
   return (
     <p className="flex items-start gap-1.5 text-xs text-fg-muted" data-testid={testId}>
       {/* 印は文字の大きさで、1 行目の中心にそろえる（#2371）。 */}
@@ -192,7 +192,7 @@ export function OutcomeBadge({ outcome, testId }: { outcome: ReviewOutcome; test
 }
 
 /** 照合の結果のバッジ（状態の対応表。色だけに頼らず StatusBadge のアイコンを付ける）。 */
-export function ValidationBadge({ validation }: { validation: ReviewValidation }) {
+function ValidationBadge({ validation }: { validation: ReviewValidation }) {
   const { variant, label } = validationBadge(validation);
   return <StatusBadge variant={variant} label={label} />;
 }
