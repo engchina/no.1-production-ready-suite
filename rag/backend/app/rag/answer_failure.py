@@ -17,6 +17,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from pr_backend_core.logging import safe_error_code
 from rag_engine.adapters.oci import IncompleteResponse
 
 # 未完了の応答の error_type（画面・SSE・MCP の error code）。3 製品の共通の error code と同じ値。
@@ -39,6 +40,8 @@ class AnswerFailure:
     detail: str | None = None
     # 例外で終わった工程の名前（分かるときだけ）。
     stage: str | None = None
+    # エラーコード（ORA-03146 など。例外の本文は持たない。画面の「詳細」に出す。#2342）。
+    error_code: str | None = None
 
     @property
     def incomplete(self) -> bool:
@@ -47,7 +50,7 @@ class AnswerFailure:
     def event_fields(self) -> dict[str, Any]:
         """SSE の `error` event に足す項目（値の無いものは入れない）。"""
         fields: dict[str, Any] = {"message": self.message, "error_type": self.error_type}
-        for key in ("reason", "detail", "stage"):
+        for key in ("reason", "detail", "stage", "error_code"):
             if (value := getattr(self, key)) is not None:
                 fields[key] = value
         return fields
@@ -106,4 +109,10 @@ def describe_answer_failure(exc: BaseException, fallback: str) -> AnswerFailure:
             detail=incomplete.detail or None,
             stage=stage,
         )
-    return AnswerFailure(message=fallback, error_type=type(exc).__name__, stage=stage)
+    code = safe_error_code(exc)
+    return AnswerFailure(
+        message=fallback,
+        error_type=type(exc).__name__,
+        stage=stage,
+        error_code=str(code) if code is not None else None,
+    )

@@ -624,6 +624,17 @@ const agentJa = {
   "chat.resend": "再送信",
   "chat.failed": "回答できませんでした",
   "chat.failedUnknown": "実行に失敗しました。時間をおいて、もう一度送ってください。",
+  // 処理の失敗のカード（3 製品共通の ProcessFailureNotice。#2342）。
+  "failure.details": "詳細",
+  "failure.failedStep": "止まった段",
+  "failure.errorType": "エラーの種類",
+  "failure.errorCode": "エラーコード",
+  "failure.runId": "実行 ID",
+  "failure.occurredAt": "時刻",
+  "failure.summary": "回答できませんでした。",
+  "failure.summaryAt": "「{step}」で処理が止まりました。",
+  "failure.next.chat": "もう一度送信してください。続くときは、詳細の実行 ID を添えて管理者に連絡してください。",
+  "failure.next.detail": "チャットでもう一度質問してください。続くときは、実行 ID を添えて管理者に連絡してください。",
   "chat.cancelled": "回答の作成を停止しました。もう一度送ると、新しく回答を作成します。",
   // 確認の取り消し（#1441・#1445）。確認の質問のそばの操作と、押した後（会話の文で取り消した後）の補足。
   "chat.clarificationCancel.group": "確認の取り消し",

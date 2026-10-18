@@ -255,3 +255,5 @@ def _load_prompt(name: str) -> str:
 # LLM への指示（日本語）。DB の管理の質問に使うデータ辞書・動的性能ビューと、作らない文を書く。
 SYSTEM_PROMPT = _load_prompt("system")
 ANALYSIS_SYSTEM_PROMPT = _load_prompt("analysis")
+# 存在しない列・object を参照する文を、参照する object の実際の列で 1 回だけ直させる（#2352）。
+REPAIR_SYSTEM_PROMPT = _load_prompt("repair")

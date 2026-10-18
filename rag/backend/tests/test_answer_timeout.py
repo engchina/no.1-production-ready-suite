@@ -71,7 +71,7 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
 
 
 def test_stage_labels_cover_answer_stages() -> None:
-    """進捗の工程は回答の工程・回答側の安全チェック(#1146)と検索だけの工程。
+    """進捗の工程は回答の工程・回答側の安全チェック(#1146)・保存(#2342)と検索だけの工程。
 
     旧 standard の工程は #595 で削除した。
     """
@@ -81,6 +81,8 @@ def test_stage_labels_cover_answer_stages() -> None:
         "field_filter",
         "answer",
         "answer_guardrail",
+        "answer_record_save",
+        "chat_message_save",
     }
 
 

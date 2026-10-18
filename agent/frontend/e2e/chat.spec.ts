@@ -429,7 +429,7 @@ test("実行に失敗した回答は理由を出す", async ({ page, mockApi }) 
         run_id: "run-chat-seed",
         type: "runtime.failed",
         message: "モデルの呼び出しに失敗しました（BadRequestError）。",
-        payload: {},
+        payload: { error_code: "runtime.model_failed" },
         created_at: MOCK_NOW,
       },
     ],
@@ -440,8 +440,15 @@ test("実行に失敗した回答は理由を出す", async ({ page, mockApi }) 
   await page.getByRole("dialog", { name: "会話の履歴" }).getByText("契約の更新条件は？").click();
 
   const turn = page.getByTestId("chat-turn-run-chat-seed");
-  await expect(turn.getByText("回答できませんでした")).toBeVisible();
+  // 1 文目は止まった段（名詞の名前）。本文は失敗のイベントの文（#2342）。
+  await expect(turn.getByRole("alert")).toContainText("「進め方の検討」で処理が止まりました。");
   await expect(turn.getByText("モデルの呼び出しに失敗しました（BadRequestError）。")).toBeVisible();
+  // 3 製品共通の失敗のカード: 次の操作と、開いた「詳細」（エラーコード・実行 ID。#2342）。
+  const failure = turn.getByTestId("chat-failure-run-chat-seed");
+  await expect(failure).toContainText("実行 ID を添えて管理者に連絡してください");
+  await expect(failure.locator("details")).toHaveAttribute("open", "");
+  await expect(failure.locator("details")).toContainText("runtime.model_failed");
+  await expect(failure.locator("details")).toContainText("run-chat-seed");
   await expectNoHorizontalOverflow(page);
 });
 

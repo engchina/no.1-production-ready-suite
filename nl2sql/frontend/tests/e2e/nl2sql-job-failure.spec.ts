@@ -83,10 +83,11 @@ for (const width of [1280, 375]) {
     await page.getByTestId("sql-chat-history").getByText("カテゴリ別売上", { exact: true }).click();
     if (width >= 1024) await page.getByRole("button", { name: "会話の履歴", exact: true }).click();
 
-    const failure = page.getByTestId("nl2sql-job-failure");
+    // 3 製品共通の失敗のカード（#2342）。backend の利用者向けの文は原因の段落に 1 回だけ出す。
+    const failure = page.getByTestId("sql-chat-turn-failure");
     await expect(failure).toBeVisible();
-    // 1 文目（本文）には例外・ORA の文を出さない。
-    const summary = failure.locator("p").first();
+    // 本文には例外・ORA の文を出さない。
+    const summary = failure.locator("[data-process-failure-cause]");
     await expect(summary).toHaveText(failureMessage);
     await expect(summary).not.toContainText("ORA-");
     // 「詳細」は失敗なので開いて出し、エラーコードと元のメッセージを並べる。
@@ -119,11 +120,13 @@ for (const width of [1280, 375]) {
     await page.getByTestId("sql-chat-history").getByText("カテゴリ別売上", { exact: true }).click();
     if (width >= 1024) await page.getByRole("button", { name: "会話の履歴", exact: true }).click();
 
-    const failure = page.getByTestId("nl2sql-job-failure");
+    const failure = page.getByTestId("sql-chat-turn-failure");
     await expect(failure).toBeVisible();
-    const summary = failure.locator("p").first();
+    const summary = failure.locator("[data-process-failure-cause]");
     await expect(summary).toHaveText(revalidationMessage);
     await expect(summary).not.toContainText("時間をおいてもう一度");
+    // 再試行を案内しない（次の操作は管理者への連絡だけ）。
+    await expect(failure).not.toContainText("もう一度送信");
     await expect(summary).not.toContainText("BUSINESS_SCOPE_CHANGED");
     const details = failure.locator("details");
     await expect(details).toHaveAttribute("open", "");

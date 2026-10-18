@@ -14,7 +14,7 @@ import re
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -690,6 +690,75 @@ def close_runtime_connection_pool() -> None:
     """
     _RUNTIME_ADMIN_CONNECTION_POOL.close()
     _RUNTIME_USER_CONNECTION_POOL.close()
+
+
+class OracleAdminSqlDescriber:
+    """DB 管理チャットの列の検査（#2352）。管理の接続で、実行しない解析（`cursor.parse`）だけ。
+
+    object の列は `SELECT * FROM <object> WHERE 1 = 0` を解析した `cursor.description` から読む
+    （データは読まない）。文の検査も解析だけで、実行しない。接続は最初に要るときに開き、
+    つなげなければ `available` を False にして「分からない」を返す（生成は止めない）。
+    """
+
+    def __init__(self, adapter: OracleNl2SqlAdapter) -> None:
+        self._adapter = adapter
+        self._stack: ExitStack | None = None
+        self._cursor: Any = None
+        self._available = True
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    def _open(self) -> Any:
+        if not self._available:
+            return None
+        if self._cursor is None:
+            stack = ExitStack()
+            try:
+                conn = stack.enter_context(self._adapter.connection())
+                self._cursor = stack.enter_context(conn.cursor())
+            except Exception as exc:
+                stack.close()
+                self._available = False
+                logger.warning(
+                    "nl2sql_db_admin_column_check_unavailable",
+                    extra={"error": str(exc)[:300]},
+                )
+                return None
+            self._stack = stack
+        return self._cursor
+
+    def describe(self, reference_sql: str) -> tuple[str, ...] | None:
+        cursor = self._open()
+        if cursor is None:
+            return None
+        try:
+            # reference_sql は検査済みの識別子だけ（ObjectRef.reference_sql）。
+            cursor.parse(f"SELECT * FROM {reference_sql} WHERE 1 = 0")  # nosec B608
+        except Exception:
+            return None
+        return tuple(str(item[0]) for item in cursor.description or ())
+
+    def parse_error(self, sql: str) -> str | None:
+        cursor = self._open()
+        if cursor is None:
+            return None
+        try:
+            cursor.parse(sql)
+        except Exception as exc:
+            message = str(exc).strip()
+            if "ORA-" not in message:
+                # 接続の切断など、文の誤りではないもの。
+                return None
+            return message.splitlines()[0]
+        return ""
+
+    def close(self) -> None:
+        if self._stack is not None:
+            self._stack.close()
+            self._stack = None
+            self._cursor = None
 
 
 class OracleNl2SqlAdapter:
@@ -2137,6 +2206,15 @@ class OracleNl2SqlAdapter:
                 success_message=self._admin_success_message,
                 ignored_error_codes=ignored_error_codes,
             )
+
+    @contextmanager
+    def admin_sql_describer(self) -> Iterator[OracleAdminSqlDescriber]:
+        """DB 管理チャットの列の検査に使う、管理の接続の解析だけの describer（#2352）。"""
+        describer = OracleAdminSqlDescriber(self)
+        try:
+            yield describer
+        finally:
+            describer.close()
 
     def execute_admin_script(
         self, statements: list[str], *, query_indexes: frozenset[int], max_rows: int | None

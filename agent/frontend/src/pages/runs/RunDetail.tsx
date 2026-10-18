@@ -12,6 +12,7 @@ import {
   ListSkeleton,
   ObjectActionBar,
   OpenConversationAction,
+  ProcessFailureNotice,
   ProcessingIndicator,
   RunDetailLayout,
   RunDetailSection,
@@ -50,6 +51,7 @@ import {
 import { dataScopeNotes } from "@/lib/data-scope";
 import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
+import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { MENU_PERMISSIONS, type AgentCapabilities } from "@/lib/permissions";
 import { ANSWER_EVIDENCE_KIND, ragArtifactEvidence, runAnswerEvidence } from "@/lib/answer-evidence";
 import { noticeHeading, structureAnswer } from "@/lib/answer-structure";
@@ -59,7 +61,6 @@ import {
   commonRunStatus,
   runDurationMs,
   runConversationHref,
-  runFailureMessage,
   runFinishedAt,
   runStatusLabel,
   runTimelineSteps,
@@ -142,7 +143,6 @@ export function RunDetail({
   // 自分では操作できない待ち（system_admin が自分の会話で実行した Run の承認・確認。#1928・#1954）。
   const waitingForExecutor =
     run.can_decide === false && (run.status === "waiting_approval" || run.status === "waiting_confirmation");
-  const failure = runFailureMessage(run);
   // 最終の回答は「回答」の節、それ以外の成果物（根拠・確かめ・構造化データ・ツールの結果）は「成果物」の節。
   const answers = run.artifacts.filter(isAnswerArtifact);
   // 回答の根拠（#2328）は回答の下にチャットと同じ部品で出す（成果物の一覧には重ねない）。
@@ -155,6 +155,7 @@ export function RunDetail({
   const latestAnswer = answers.at(-1);
   const outcome = latestAnswer ? answerOutcome(latestAnswer.content) : null;
   const timelineSteps = runTimelineSteps(run, (step) => stepDetails(step));
+  const failure = runFailure(run, timelineSteps, "detail");
   const usage = run.usage;
 
   return (
@@ -230,9 +231,8 @@ export function RunDetail({
                   </Banner>
                 ) : null}
                 {failure ? (
-                  <Banner severity="danger" title={t("run.failedTitle")}>
-                    <span className="break-words [overflow-wrap:anywhere]">{failure}</span>
-                  </Banner>
+                  // 失敗は 3 製品共通の失敗のカード（チャットと同じ 1 文目・「詳細」。#2342）。
+                  <ProcessFailureNotice failure={failure} labels={processFailureLabels()} testId="run-failure" />
                 ) : null}
               </>
             }

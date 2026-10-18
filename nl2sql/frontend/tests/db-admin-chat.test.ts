@@ -33,6 +33,8 @@ function statement(index: number, sql: string, overrides: Partial<DbAdminChatSta
     blocked_reason: "",
     requires_confirmation: !select,
     confirmation_target: select ? "" : "ADMIN_EXECUTE",
+    unknown_columns: [],
+    warnings: [],
     ...overrides,
   };
 }

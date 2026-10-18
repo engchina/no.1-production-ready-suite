@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import {
   Banner,
+  ProcessFailureNotice,
   Button,
   Card,
   CardContent,
@@ -79,6 +80,7 @@ import { agentPaginationLabels } from "@/components/ListViews";
 import { AnswerBody, ToolResultTable } from "@/components/chat/ResultTables";
 import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
+import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { useCapabilities } from "@/lib/permissions";
 import { withToolStepDetails } from "@/lib/run-history";
 import { runToolResultTables } from "@/lib/run-tables";
@@ -888,7 +890,6 @@ function RunChatTurn({
   const evidence = useMemo(() => runAnswerEvidence(run.artifacts), [run.artifacts]);
   const toolTables = runToolResultTables(run);
   const pendingApprovals = run.approvals.filter((approval) => approval.status === "pending");
-  const failure = run.status === "failed" ? failureMessage(run) : null;
   // 回答の確かめ（確かめた条件・確認待ちの質問・業務ガイド・資料で確かめた結果。#1286）。作成中は出さない。
   const review = ACTIVE_STATUSES.has(run.status) ? null : answerReview(run.artifacts);
   // 回答の本文の節（要約 →「資料により確認できた事項」と根拠の行 →「資料から確認できなかった事項」。RAG のチャットと
@@ -941,6 +942,7 @@ function RunChatTurn({
       if (stoppable) onProgressTerminal();
     },
   });
+  const failure = runFailure(run, progress.steps, "chat");
   // ツールの段に、Run の step の引数・結果・エラーを段を開いて見る詳細として結ぶ（実行の詳細と同じ対応。#2294）。
   // 結果は会話の取り直し（実行中は 1.5 秒ごと・終わったとき）で届く。
   const progressSteps = progress.progressProps.steps;
@@ -977,6 +979,11 @@ function RunChatTurn({
           slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}
           testId="chat-progress"
         />
+        {failure ? (
+          // 失敗は 3 製品共通の失敗のカード（止まった段・原因・次の操作・「詳細」。#2342）。進めない理由を先に
+          // 読めるよう、処理の経過の直下（回答・結果の上）に 1 つだけ出す。
+          <ProcessFailureNotice failure={failure} labels={processFailureLabels()} testId={`chat-failure-${run.id}`} />
+        ) : null}
         {/*
           使ったツールは処理の経過のツールの段（表示名・状態、開くと内部名・引数・結果・データの範囲。#2294）で見る。
           同じ内容を「使ったツール」の一覧で 2 か所に出さない（#2324）。
@@ -1030,7 +1037,6 @@ function RunChatTurn({
             onDecide={(action, answers) => onDecideConfirmation(run, confirmation, action, answers)}
           />
         ) : null}
-        {failure ? <Banner severity="danger" title={t("chat.failed")}>{failure}</Banner> : null}
         {run.status === "cancelled" ? (
           // 止めた回答の状態（途中までの回答は上に残す）。色だけに頼らず、停止のアイコンを添える（#805）。
           <p className="flex items-center gap-1.5 text-sm text-fg-muted" data-testid="chat-cancelled">
@@ -1210,11 +1216,6 @@ function latestContent(artifacts: Artifact[], kind: string): Record<string, unkn
 /** 会話が消えた・読めなくなった失敗か（一時的な失敗ではなく、新しい会話に戻すもの）。 */
 function isThreadGone(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 404 || error.status === 403);
-}
-
-function failureMessage(run: RunState): string {
-  const event = [...run.events].reverse().find((item) => item.type === "runtime.failed");
-  return event?.message || t("chat.failedUnknown");
 }
 
 function formatTime(value: string): string {

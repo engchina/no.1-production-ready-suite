@@ -14250,9 +14250,11 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await page.getByRole("button", { name: "取り込み実行" }).last().click();
   await expect(page.getByText("実行エラー").first()).toBeVisible();
-  await expect(page.getByText("エラー概要")).toBeVisible();
-  await expect(page.getByText("原因候補")).toBeVisible();
-  await expect(page.getByText("次の対応")).toBeVisible();
+  // 文の失敗は 3 製品共通の失敗のカード 1 枚（何が起きたか・DB の文・原因の説明・次の対応・「詳細」。#2342）。
+  const statementFailure = page.getByTestId("db-admin-statement-failure").first();
+  await expect(statementFailure.getByRole("alert")).toContainText("この文の実行に失敗しました。");
+  await expect(statementFailure.locator("[data-process-failure-explanation]")).toBeVisible();
+  await expect(statementFailure.locator("[data-process-failure-next]")).toBeVisible();
   await expect(page.getByText("ORA-00922: missing or invalid option", { exact: true })).toBeVisible();
   api.sampleImportError = false;
 
@@ -16581,9 +16583,17 @@ test("annotation management explains ORA-11548 before Oracle execution", async (
     .toBeVisible();
   await expect(executePanel.getByText(/"COMMENT" のように二重引用符/)).toBeVisible();
 
-  const details = executePanel.locator("details");
+  // 実行の前に止めた文は「この文は実行できません。」のカード。技術的な詳細は「詳細」に畳む（#2342）。
+  await expect(executePanel.getByTestId("db-admin-statement-failure").getByRole("alert")).toContainText(
+    "この文は実行できません。"
+  );
+  const details = executePanel.getByTestId("db-admin-statement-failure").locator("details");
   const summary = details.locator("summary");
-  await expect(summary).toContainText("詳細ログ");
+  await expect(summary).toContainText("詳細");
+  // 失敗のカードの「詳細」は開いて出す（messaging.md §10.3）。閉じてから開き直せる。
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(details).not.toHaveAttribute("open", "");
   await summary.focus();
   await page.keyboard.press("Enter");
   await expect(details).toHaveAttribute("open", "");

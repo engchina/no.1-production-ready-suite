@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, Literal
 
 import pytest
@@ -41,6 +43,43 @@ from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.security.request_actor import actor_scope
 
 
+class _FakeDescriber:
+    """列の検査（#2352）の合成の object の列。`objects` に無い object は調べられない。
+
+    `oracle_parse=True` なら Oracle の解析の代わりに、静的に分かる存在しない列で ORA-00904 を返す
+    （`parse_errors` に文ごとの応答を置ける）。`available=False` は接続できない構成。
+    """
+
+    def __init__(
+        self,
+        objects: dict[str, tuple[str, ...]] | None = None,
+        *,
+        available: bool = True,
+        parse_errors: dict[str, str] | None = None,
+    ) -> None:
+        self.objects = objects or {}
+        self._available = available
+        self.parse_errors = parse_errors or {}
+        self.described: list[str] = []
+        self.parsed: list[str] = []
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    def describe(self, reference_sql: str) -> tuple[str, ...] | None:
+        self.described.append(reference_sql)
+        if not self._available:
+            return None
+        return self.objects.get(reference_sql)
+
+    def parse_error(self, sql: str) -> str | None:
+        self.parsed.append(sql)
+        if not self._available:
+            return None
+        return self.parse_errors.get(sql)
+
+
 class _FakeAdapter:
     """管理の実行（更新系）と SELECT の呼び出しを記録する。"""
 
@@ -49,12 +88,19 @@ class _FakeAdapter:
         statement_results: list[dict[str, Any]] | None = None,
         *,
         script_fail_at: int | None = None,
+        describer: _FakeDescriber | None = None,
     ) -> None:
         self.statement_results = statement_results or []
         self.statement_calls: list[tuple[list[str], bool]] = []
         self.select_calls: list[tuple[str, int | None, bool]] = []
         self.script_fail_at = script_fail_at
         self.script_calls: list[tuple[list[str], frozenset[int], int | None]] = []
+        # 既定は接続できない describer（列を確かめない。列の検査のテストは object を渡す）。
+        self.describer = describer or _FakeDescriber(available=False)
+
+    @contextmanager
+    def admin_sql_describer(self) -> Iterator[_FakeDescriber]:
+        yield self.describer
 
     def execute_admin_script(
         self, statements: list[str], *, query_indexes: frozenset[int], max_rows: int | None

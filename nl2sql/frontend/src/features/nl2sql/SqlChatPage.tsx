@@ -27,6 +27,7 @@ import {
   Disclosure,
   EmptyState,
   MessageText,
+  ProcessFailureNotice,
   parseChatProgressEvents,
   parseChatProgressPage,
   SearchableSelectField,
@@ -89,7 +90,7 @@ import {
   type ChatJobRequest,
   type ChatRequirementCheck,
 } from "./chatRequirement";
-import { JobFailureBody } from "./components/JobFailureBody";
+import { chatJobFailure, processFailureLabels } from "./processFailure";
 import {
   useProfileUsageContext,
   useProfileSummaries,
@@ -1041,6 +1042,17 @@ function SqlChatTurn({
             labels={CHAT_PROGRESS_LABELS}
             testId="sql-chat-progress"
           />
+          {turn.error_message && turn.error_code === "JOB_CANCELLED" ? (
+            <Banner severity="info">{t("chat.cancelled")}</Banner>
+          ) : turn.error_message ? (
+            // 失敗は 3 製品共通の失敗のカード（止まった段・原因・次の操作・「詳細」。#2342）。進めない理由を先に
+            // 読めるよう、処理の経過の直下（SQL・説明・結果の上）に 1 つだけ出す。
+            <ProcessFailureNotice
+              failure={chatJobFailure(turn, progress.steps)}
+              labels={processFailureLabels()}
+              testId="sql-chat-turn-failure"
+            />
+          ) : null}
           {turn.requirement_question ? (
             // 回答前の確認で確かめた質問の文（#1442）。生成はこの文と構造化した要件で行った（回答の根拠なので SQL の前）。
             <Disclosure
@@ -1101,21 +1113,6 @@ function SqlChatTurn({
                 />
               ) : null}
             </>
-          ) : null}
-          {turn.error_message ? (
-            <Banner
-              severity={turn.error_code === "JOB_CANCELLED" ? "info" : "danger"}
-            >
-              {turn.error_code === "JOB_CANCELLED" ? (
-                t("chat.cancelled")
-              ) : (
-                <JobFailureBody
-                  message={turn.error_message}
-                  errorCode={turn.error_code}
-                  errorDetail={turn.error_detail}
-                />
-              )}
-            </Banner>
           ) : null}
           {turn.warning_message ? (
             <Banner severity="warning">{turn.warning_message}</Banner>
