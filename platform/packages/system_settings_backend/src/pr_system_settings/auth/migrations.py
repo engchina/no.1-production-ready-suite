@@ -1,4 +1,4 @@
-"""共通認証の DDL（PLATFORM_* テーブル。#212）。
+"""共通の DDL（PLATFORM_* テーブル。認証は #212、回答の注意書きは #2405）。
 
 3 製品が同じ Oracle schema で共有する。各製品の migration
 （NL2SQL の `app_security_migrate`、RAG / Agent のシステムテーブル初期化）から冪等に実行する。
@@ -127,6 +127,18 @@ PLATFORM_AUTH_DDL: tuple[str, ...] = (
     # 製品ごとの対象の範囲（#1874。JSON `{"agent": ["<業務 Agent の ID>", …]}`。NULL は範囲なし）。
     # #1805 で作った表に足す（作り直したばかりの表では ORA-01430 で読み飛ばす）。
     "ALTER TABLE PLATFORM_API_KEYS ADD (RESOURCE_SCOPES CLOB)",
+    # 回答の注意書き（3 製品で 1 つ。#2405。`pr_system_settings.answer_notice`）。1 行だけを持つ。
+    # NOTICE_TEXT が NULL なら既定の文を使う（既定の文は DB に書き込まない）。
+    """
+    CREATE TABLE PLATFORM_ANSWER_NOTICE (
+        SETTING_KEY VARCHAR2(32) NOT NULL,
+        ENABLED NUMBER(1) DEFAULT 1 NOT NULL,
+        NOTICE_TEXT VARCHAR2(1000 CHAR),
+        UPDATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+        CONSTRAINT PK_PLATFORM_ANSWER_NOTICE PRIMARY KEY (SETTING_KEY),
+        CONSTRAINT CK_PLATFORM_ANSWER_NOTICE_ENABLED CHECK (ENABLED IN (0, 1))
+    )
+    """,
 )
 
 

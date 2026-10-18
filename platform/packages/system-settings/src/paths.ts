@@ -4,6 +4,7 @@ import {
   Database,
   KeyRound,
   KeySquare,
+  MessageSquareWarning,
   Palette,
   Shield,
   Users,
@@ -20,6 +21,7 @@ export const SYSTEM_SETTINGS_PATHS = {
   model: "/settings/model",
   database: "/settings/database",
   appearance: "/settings/appearance",
+  answerNotice: "/settings/answer-notice",
 } as const;
 
 export type SystemSettingsKey = keyof typeof SYSTEM_SETTINGS_PATHS;
@@ -34,7 +36,7 @@ export interface SystemSettingsNavItem {
 }
 
 /**
- * サイドナビ「システム設定」の共通5項目（#116）。項目・並び順・アイコンは共有パッケージが決め、
+ * サイドナビ「システム設定」の共通6項目（#116。回答の注意書きは #2405）。項目・並び順・アイコンは共有パッケージが決め、
  * 各製品の nav config はこれをそのまま使う（NL2SQL は各項目に menu 権限を付ける）。
  */
 export const SYSTEM_SETTINGS_NAV_ITEMS = [
@@ -70,6 +72,12 @@ export const SYSTEM_SETTINGS_NAV_ITEMS = [
     href: SYSTEM_SETTINGS_PATHS.appearance,
     labelKey: "nav.settingsAppearance",
     icon: Palette,
+  },
+  {
+    key: "answerNotice",
+    href: SYSTEM_SETTINGS_PATHS.answerNotice,
+    labelKey: "nav.settingsAnswerNotice",
+    icon: MessageSquareWarning,
   },
 ] as const satisfies readonly SystemSettingsNavItem[];
 

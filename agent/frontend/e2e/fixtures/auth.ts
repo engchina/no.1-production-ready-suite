@@ -31,6 +31,7 @@ export const MENU_PERMISSION_CODES = [
   "menu.settings_model",
   "menu.settings_database",
   "menu.settings_appearance",
+  "menu.settings_answer_notice",
 ] as const;
 
 export const CAPABILITY_PERMISSION_CODES = [
@@ -62,6 +63,7 @@ const ADMIN_MENUS = [
   "menu.settings_model",
   "menu.settings_database",
   "menu.settings_appearance",
+  "menu.settings_answer_notice",
 ];
 
 const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string, label: string]> = {
@@ -86,6 +88,7 @@ const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string
   "menu.settings_model": ["システム設定", "モデル"],
   "menu.settings_database": ["システム設定", "データベース"],
   "menu.settings_appearance": ["システム設定", "外観と証明書"],
+  "menu.settings_answer_notice": ["システム設定", "回答の注意書き"],
 };
 
 // capability のグループは NL2SQL / RAG と同じ「参照権限 / 実行権限 / 管理権限」（#791）。

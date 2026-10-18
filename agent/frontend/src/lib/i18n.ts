@@ -575,6 +575,9 @@ const agentJa = {
     "管理対象の Agent のテーブルを削除して再作成します。ロールに付けた Agent の権限と利用できるエージェントは復元できません。",
   "nav.section.settings": "システム設定",
   "nav.settingsAppearance": "外観と証明書",
+  "nav.settingsAnswerNotice": "回答の注意書き",
+  "settings.answerNotice.subtitle":
+    "AI の回答の末尾に毎回出す注意書き（誤りの可能性・確かめ方・連絡先）を設定します。3 製品で同じ文を使います。",
   "appearance.theme.label": "配色テーマ",
   "appearance.theme.hint": "画面全体の配色を切り替えます。「自動」は OS の設定に追従します。",
   "appearance.theme.light": "ライト",

@@ -36,6 +36,7 @@ export const MENU_PERMISSIONS = {
   settingsSystemTables: "menu.settings_system_tables",
   settingsSelectAiCredential: "menu.settings_select_ai_credential",
   settingsAppearance: "menu.settings_appearance",
+  settingsAnswerNotice: "menu.settings_answer_notice",
 } as const;
 
 export const CAPABILITY_PERMISSIONS = {

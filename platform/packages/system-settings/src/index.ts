@@ -21,6 +21,21 @@ export { AppearanceSettingsPage, type AppearanceSettingsPageProps } from "./appe
 export { CA_CERTIFICATE_PATH, probeCaCertificate } from "./appearance/CaCertificateCard";
 export { APPEARANCE_MESSAGES, type AppearanceMessages } from "./appearance/messages";
 
+// 回答の注意書き（3 製品で共通の文。#2405）
+export {
+  AnswerNoticeSettingsPage,
+  answerNoticePayload,
+  normalizeAnswerNoticeText,
+  type AnswerNoticeSettingsPageProps,
+} from "./answer-notice/AnswerNoticeSettingsPage";
+export { ANSWER_NOTICE_MESSAGES, type AnswerNoticeMessages } from "./answer-notice/messages";
+export {
+  ANSWER_NOTICE_QUERY_KEY,
+  type AnswerNoticeApi,
+  type AnswerNoticeSettingsData,
+  type AnswerNoticeSettingsUpdate,
+} from "./answer-notice/types";
+
 // 未保存変更の離脱ガード（NL2SQL から移設。#97）。戻る / 進むの blocker はアプリで 1 つ（#586）。
 export {
   confirmUnsavedChanges,

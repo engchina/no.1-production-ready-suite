@@ -18,6 +18,7 @@ from typing import Literal
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from fastapi import APIRouter, HTTPException, Request
 from pr_backend_core import ApiResponse
+from pr_system_settings.answer_notice import build_answer_notice_router
 from pr_system_settings.database import build_database_router
 from pr_system_settings.model import build_model_router
 from pr_system_settings.model_test_input import (
@@ -68,6 +69,7 @@ from app.schemas.settings import (
     SystemTablesOperationData,
     SystemTablesStatusData,
 )
+from app.security.service import get_security_service
 from app.settings import (
     MODEL_SETTINGS_STORE,
     Settings,
@@ -114,6 +116,13 @@ router.include_router(
         connection_failure_log_extra=lambda exc: oracle_connection_diagnostics(exc),
         connection_security_enabled=True,
         password_reveal_enabled=True,
+    )
+)
+# 回答の注意書きも3製品共通の実装（pr_system_settings.answer_notice。#2405）。保存先は共通の表。
+router.include_router(
+    build_answer_notice_router(
+        load=lambda: get_security_service().load_answer_notice(),
+        save=lambda record: get_security_service().save_answer_notice(record),
     )
 )
 logger = logging.getLogger(__name__)
