@@ -17,7 +17,6 @@ import {
   CardContent,
   ClarificationRecord,
   ChatComposerOption,
-  ChatHistoryList,
   ChatProgress,
   ChatSkeleton,
   ChatAnswer,
@@ -59,7 +58,6 @@ import {
 } from "@/lib/api";
 import { appPath } from "@/lib/base-path";
 import { t } from "@/lib/i18n";
-import { paginationLabels } from "@/lib/pagination-labels";
 import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useAuth } from "@/features/security/AuthProvider";
@@ -74,8 +72,10 @@ import {
 import {
   ChatSqlBlock,
   Nl2SqlChatComposer,
+  Nl2SqlChatHistoryList,
   Nl2SqlChatLayout,
   Nl2SqlPendingTurn,
+  normalizeHistoryOffset,
 } from "./components/ChatScaffold";
 import {
   ChatRequirementTurn,
@@ -207,14 +207,6 @@ async function submitChatJob(
   }
 }
 
-const dateFormatter = new Intl.DateTimeFormat("ja-JP", {
-  timeZone: "Asia/Tokyo",
-  month: "numeric",
-  day: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-});
-
 /**
  * チャットの生成方法（#890）。SQL 生成画面の実行エンジン（`EngineSelector`）と同じ 3 つ。どれも SQL の
  * 生成だけを生成方法が行い（Select AI Agent の SQL ツールは SHOWSQL）、安全検査と実行は SQL 生成の画面と
@@ -339,8 +331,7 @@ export function SqlChatPage() {
   // 会話の履歴は 3 製品と同じく 1 ページずつ出す（offset 型。#1265 / #1891）。ページの位置は作業状態に残す
   // （再読込・画面の移動で同じページに戻る）。
   const [historyOffset, setHistoryOffset] = useWorkspaceState<number>("historyOffset", 0);
-  const historyPageOffset =
-    Number.isSafeInteger(historyOffset) && historyOffset > 0 ? historyOffset : 0;
+  const historyPageOffset = normalizeHistoryOffset(historyOffset);
   const history = useQuery({
     // 会話の key（[...chatKey, 会話の ID]）と重ならないよう、一覧は object の要素で分ける。
     queryKey: [...chatKey, { list: historyPageOffset }],
@@ -358,8 +349,6 @@ export function SqlChatPage() {
     // 次のページを取得している間は、表示中のページを出したままにする。
     placeholderData: keepPreviousData,
   });
-  const historyItems = history.data?.items ?? [];
-  // 会話が減って今のページが空になったら、ChatHistoryList の共通の OffsetPagination が最後のページへ戻す（#1265 / #1266）。
   const conversation = useQuery({
     queryKey: conversationKey,
     enabled: active && Boolean(conversationId),
@@ -627,63 +616,23 @@ export function SqlChatPage() {
     },
     disabled: busy,
   });
-  // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。カーソルの API なので「さらに読み込む」。
+  // 一覧の行・読み込み中・失敗・0 件・ページングは DB 管理チャットと共通の Nl2SqlChatHistoryList
+  // （3 製品共通の ChatHistoryList。#1161・#2319）。
   const historyContent = (
-    <ChatHistoryList
-      items={historyItems.map((item) => ({
-        id: item.id,
-        title: item.title,
-        meta: seesAllUsers && item.owned === false
-          ? // system_admin が見る他の利用者の会話には、日時に利用者の表示名を添える（#1889）。
-            t("chat.historyOwner", {
-              date: dateFormatter.format(new Date(item.created_at)),
-              name: item.actor_display_name || t("chat.historyOwnerMissing"),
-            })
-          : dateFormatter.format(new Date(item.created_at)),
-      }))}
-      currentId={conversationId || null}
-      onSelect={(item) => {
-        const conversationItem = historyItems.find(
-          (candidate) => candidate.id === item.id,
-        );
-        if (conversationItem) openConversation(conversationItem);
-      }}
-      disabled={busy}
+    <Nl2SqlChatHistoryList
+      page={history.data}
       loading={history.isPending}
       error={history.isError ? history.error : null}
       onRetry={() => void history.refetch()}
       retrying={history.isFetching}
-      labels={{
-        list: t("chat.history"),
-        loading: t("chat.historyLoading"),
-        error: t("chat.historyLoadFailed"),
-        retry: t("chat.retry"),
-        empty: t("chat.historyEmpty"),
-      }}
-      renderActions={historyActions.renderActions}
-      renderEditor={historyActions.renderEditor}
-      operationKey="sql-chat-history-load"
-      testIds={{
-        loading: "sql-chat-history-loading",
-        error: "sql-chat-history-error",
-        list: "sql-chat-history-list",
-        pagination: "sql-chat-history-pagination",
-      }}
-      // 3 製品共通の会話の履歴のページング（offset 型。ページ番号を入れて移れる。#1265 / #1266 / #1891）。
-      pagination={
-        history.data
-          ? {
-              type: "offset",
-              offset: historyPageOffset,
-              limit: DEFAULT_PAGE_SIZE,
-              total: history.data.total,
-              count: historyItems.length,
-              onPageChange: (_page, nextOffset) => setHistoryOffset(nextOffset),
-              labels: paginationLabels(),
-              ariaLabel: t("chat.historyPagination.label"),
-            }
-          : undefined
-      }
+      currentId={conversationId || null}
+      onSelect={openConversation}
+      disabled={busy}
+      seesAllUsers={seesAllUsers}
+      offset={historyPageOffset}
+      onOffsetChange={setHistoryOffset}
+      actions={historyActions}
+      testIdPrefix="sql-chat"
     />
   );
   return (

@@ -194,10 +194,7 @@ export {
   ChatLayout,
   type ChatLayoutLatest,
   type ChatLayoutNewConversation,
-  type ChatLayoutBaseProps,
-  type ChatLayoutHistory,
   type ChatLayoutProps,
-  type ChatLayoutWithoutHistory,
   type ChatLayoutTestIds,
 } from "./components/chat/chat-layout";
 export {

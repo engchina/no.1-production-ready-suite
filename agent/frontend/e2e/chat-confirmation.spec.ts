@@ -3,7 +3,9 @@ import type { Page } from "@playwright/test";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
 // #1839: 回答前の確認。Agent 自身の確認（ask_user_confirmation）とツールの結果の確認（NL2SQL・RAG）を、3 製品共通の
-// 確認のカード（ClarificationCard）で出す。答えで続きが動き、スキップは前提を示して回答し、やめると質問を入力欄に戻す。
+// 確認のカード（ClarificationCard）で出す。答えで続きが動き、スキップは前提を示して回答する。カードに「確認をやめる」は
+// 無く、質問を取り消すのは入力欄の「停止」だけ（#2311）。答えを送っている間は、フォームを答えた内容と経過の行 1 つに
+// 置き換える。
 // 答えた内容は会話の利用者の側に「回答前に確認した内容」で残す。desktop と mobile-375 の 2 project で実行する。
 
 const THREAD_ID = `thread_${"e".repeat(32)}`;
@@ -151,7 +153,28 @@ test.describe("回答前の確認のカード", { tag: "@responsive" }, () => {
     await page.keyboard.press("Space");
     await expect(option).toBeChecked();
     await expect(confirm).toBeEnabled();
+    // 答えを送っている間を見るため、応答を止めておく（後に登録した route が先に動き、fallback で mock に渡す）。
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/api/runs/run-ask-1/confirmations/*", async (route) => {
+      await gate;
+      await route.fallback();
+    });
     await confirm.click();
+    // フォーム（選択肢・自由入力・操作の行）は消え、答えた内容と経過の行 1 つ（スピナー 1 つ）だけを出す。
+    await expect(card.getByTestId("chat-confirmation-progress")).toBeVisible();
+    await expect(card.getByTestId("chat-confirmation-progress")).toContainText("答えを反映しています");
+    await expect(card.getByRole("radio")).toHaveCount(0);
+    await expect(card.getByLabel("その他（自由入力）")).toHaveCount(0);
+    await expect(card.getByRole("button", { name: "この内容で回答" })).toHaveCount(0);
+    await expect(card.getByTestId("chat-confirmation-blocked")).toHaveCount(0);
+    await expect(card.getByTestId("chat-confirmation-answered-entry")).toHaveText(["どの期間の売上を見ますか？今年度"]);
+    await expect(card.locator(".pr-spinner")).toHaveCount(1);
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath("agent-confirmation-confirming.png"), fullPage: true });
+    release();
 
     await expect
       .poll(() => mockApi.lastRequest("POST", "/api/runs/run-ask-1/confirmations/confirmation_agent_1")?.body)
@@ -198,18 +221,18 @@ test.describe("回答前の確認のカード", { tag: "@responsive" }, () => {
     );
   });
 
-  test("「確認をやめる」は質問を入力欄に戻し、会話には何も残さない", async ({ page, mockApi }) => {
-    seedRun(mockApi, "run-before", { goal: "前の質問", artifacts: answer("run-before", "前の回答") , created_at: "2026-09-01T00:00:00Z" });
+  test("カードに「確認をやめる」は無く、質問を取り消すのは入力欄の「停止」だけ", async ({ page, mockApi }) => {
     seedRun(mockApi, "run-ask-3", { status: "waiting_confirmation", confirmations: [AGENT_CONFIRMATION] });
-    await openSeedThread(page, "前の質問");
+    await openSeedThread(page);
     const turn = page.getByTestId("chat-turn-run-ask-3");
-    await expect(turn.getByText("確認をやめる: 質問は入力欄に戻ります。")).toBeVisible();
-    await turn.getByRole("button", { name: "確認をやめる" }).click();
-    const composer = page.getByRole("textbox", { name: "質問" });
-    await expect(composer).toHaveValue(GOAL);
-    await expect(composer).toBeFocused();
-    await expect(page.getByTestId("chat-turn-run-ask-3")).toHaveCount(0);
-    await expect(page.getByTestId("chat-turn-run-before")).toBeVisible();
+    const card = turn.getByTestId("chat-confirmation");
+    await expect(card.getByRole("button")).toHaveText(["この内容で回答", "確認せずに回答"]);
+    await expect(card.getByText("確認をやめる")).toHaveCount(0);
+    await expect(card.getByText("質問は入力欄に戻ります。")).toHaveCount(0);
+    await page.getByTestId("chat-send").click();
+    await expect.poll(() => mockApi.lastRequest("POST", "/api/runs/run-ask-3/cancel")).toBeTruthy();
+    await expect(turn.getByTestId("chat-cancelled")).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "質問" })).toHaveValue("");
   });
 
   test("RAG の確認はカードで出し、その他（自由入力）の答えで次の回答を作り、質問の代わりに答えを残す", async ({
@@ -255,7 +278,7 @@ test.describe("回答前の確認のカード", { tag: "@responsive" }, () => {
     await expect(card.getByTestId("chat-confirmation-source")).toHaveText("データベース（NL2SQL）の確認事項です。");
     await expect(card.getByRole("radio", { name: "SALES.ORDER_DATE（受注日）" })).toBeVisible();
     await expect(card.getByRole("button", { name: "データベースの検索は不要" })).toBeVisible();
-    await expect(card.getByRole("button", { name: "確認をやめる" })).toBeVisible();
+    await expect(card.getByRole("button", { name: "確認をやめる" })).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
 
     await card.getByRole("button", { name: "確認せずに回答" }).click();

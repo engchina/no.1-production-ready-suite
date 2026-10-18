@@ -171,6 +171,24 @@ export function ChatQueryResult({
   );
 }
 
+/**
+ * 会話を開き直したときの前回の実行の要約（「前回の実行（…）: 12 行・5 列。…」。行は保存していない）。
+ * チャットと DB 管理チャット（#2319）で同じ文にする。
+ */
+export function ChatLastExecutionText({
+  summary,
+  testId,
+}: {
+  summary: Parameters<typeof lastExecutionText>[0] & { executed_at: string };
+  testId: string;
+}) {
+  return (
+    <p className="text-sm text-fg-muted" data-testid={testId}>
+      {lastExecutionText(summary, executedAtFormatter.format(new Date(summary.executed_at)))}
+    </p>
+  );
+}
+
 /** 「SELECT SQL を実行」へ SQL を履歴の state で渡すリンク（URL には SQL を載せない）。 */
 function directSqlLink(sql: string): ButtonLinkComponent {
   return function DirectSqlLink(props: ComponentProps<ButtonLinkComponent>) {
@@ -267,12 +285,7 @@ export function ChatSqlExecutionResult({
         />
       ) : null}
       {!running && !receiving && !error && !data && lastExecution ? (
-        <p className="text-sm text-fg-muted" data-testid="sql-chat-last-execution">
-          {lastExecutionText(
-            lastExecution,
-            executedAtFormatter.format(new Date(lastExecution.executed_at)),
-          )}
-        </p>
+        <ChatLastExecutionText summary={lastExecution} testId="sql-chat-last-execution" />
       ) : null}
     </section>
   );

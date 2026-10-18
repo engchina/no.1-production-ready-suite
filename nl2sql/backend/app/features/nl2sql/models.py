@@ -1062,7 +1062,7 @@ class DbAdminJoinWhereRequest(BaseModel):
 
 
 class DbAdminChatHistoryTurn(BaseModel):
-    """DB 管理チャットの同じ画面の前の往復（保存しない。続きの質問の文脈だけに使う。#2264）。"""
+    """DB 管理チャットの同じ会話の前の往復（続きの質問の文脈。保存したターンから作る。#2319）。"""
 
     question: str = Field(default="", max_length=4000)
     sql: str = Field(default="", max_length=20000)
@@ -1071,10 +1071,16 @@ class DbAdminChatHistoryTurn(BaseModel):
 
 
 class DbAdminChatGenerateRequest(BaseModel):
-    """DB 管理チャットの SQL の生成（Enterprise AI Direct だけ）。"""
+    """DB 管理チャットの SQL の生成（Enterprise AI Direct だけ）。
+
+    前の往復は画面から受け取らず、サーバーが保存した会話から復元する（#2319）。`conversation_id` が
+    空なら新しい会話を始める（会話の ID は最初のターンの ID）。`client_turn_id` は画面が送信の前に
+    決めるターンの ID で、応答が届かずに送り直しても同じターンを返す（二重に生成しない）。
+    """
 
     question: str = Field(min_length=1, max_length=4000)
-    history: list[DbAdminChatHistoryTurn] = Field(default_factory=list, max_length=20)
+    conversation_id: str = Field(default="", max_length=64)
+    client_turn_id: UUID
 
 
 class DbAdminChatStatementPlan(BaseModel):
@@ -1128,6 +1134,29 @@ class DbAdminChatExecuteRequest(AdminExecutionConfirmation):
         return value
 
 
+class DbAdminChatTurnExecuteRequest(AdminExecutionConfirmation):
+    """DB 管理チャットのターンの SQL の実行（#2319）。
+
+    SQL は画面から受け取らず、ターンに保存した SQL（AI のエラー分析で直したら直した SQL）を使う。
+    """
+
+    conversation_id: str = Field(min_length=1, max_length=64)
+    turn_id: str = Field(min_length=1, max_length=64)
+    row_limit: int = 100
+
+    @field_validator("row_limit")
+    @classmethod
+    def validate_row_limit(cls, value: int) -> int:
+        _validate_sql_row_limit(value)
+        return value
+
+
+class DbAdminChatPlanUpdateRequest(BaseModel):
+    """ターンの SQL を、AI のエラー分析で直した SQL に置き換える（サーバーが分類し直す。#2319）。"""
+
+    sql: str = Field(min_length=1, max_length=200000)
+
+
 class DbAdminChatAnalyzeRequest(BaseModel):
     """DB 管理チャットの失敗の AI 分析。"""
 
@@ -1144,6 +1173,79 @@ class DbAdminChatAnalyzeData(BaseModel):
     source: str = "deterministic"
     model: str = ""
     warnings: list[str] = Field(default_factory=list)
+
+
+class DbAdminChatLastExecution(BaseModel):
+    """ターンの今の SQL の最後の実行の要約（#2319）。
+
+    結果の行はチャットと同じく保存しない（`result.select_result` は空。行数・列数・打ち切りだけ）。
+    会話を開き直したら要約と「もう一度実行」を出す。確認語は保存しない（実行は 1 回ごとに確認）。
+    """
+
+    executed_at: str
+    # 実行した SQL の版（AI のエラー分析で直すと版が進み、前の版の実行の要約は消える）。
+    revision: int = 0
+    confirmation_given: bool = False
+    succeeded: bool = False
+    row_count: int | None = None
+    column_count: int | None = None
+    has_more: bool = False
+    # 続きの質問の文脈に渡す短い要約（成功・行数・失敗のメッセージ）。
+    outcome: str = ""
+    result: DbAdminExecuteData
+
+
+class DbAdminChatTurn(BaseModel):
+    """DB 管理チャットの保存したターン（#2319）。画面が開き直したときの再表示に要るものを持つ。"""
+
+    turn_id: str
+    question: str
+    created_at: str
+    generated_at: str
+    explanation: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    context_tables: list[str] = Field(default_factory=list)
+    model: str = ""
+    plan: DbAdminChatPlan
+    # AI のエラー分析で直した SQL に置き換えると進む（画面の実行の状態を版ごとに分ける）。
+    revision: int = 0
+    corrected: bool = False
+    last_execution: DbAdminChatLastExecution | None = None
+    # 会話の持ち主以外（system_admin）が送ったターンだけに付く送り手（#1928 と同じ）。
+    sender_user_uuid: str | None = None
+    sender_display_name: str | None = None
+
+
+class DbAdminChatSummary(BaseModel):
+    """DB 管理チャットの会話（#2319。チャットの `SqlChatSummary` と同じ見え方の項目）。"""
+
+    id: str
+    title: str
+    created_at: str
+    updated_at: str = ""
+    # 会話の持ち主（応答には出さない。表示名の解決と本人の会話の判定に使う）。
+    actor_user_uuid: str = Field(default="", exclude=True)
+    owned: bool = True
+    # system_admin の一覧だけに出す利用者の表示名（引けない利用者は空）。
+    actor_display_name: str = ""
+
+
+class DbAdminChatPage(Page[DbAdminChatSummary]):
+    """DB 管理チャットの会話の履歴の 1 ページ（新しい順。offset 型）。"""
+
+
+class DbAdminChatData(BaseModel):
+    """DB 管理チャットの会話の内容。"""
+
+    conversation: DbAdminChatSummary
+    turns: list[DbAdminChatTurn] = Field(default_factory=list)
+
+
+class DbAdminChatSendData(BaseModel):
+    """質問を送った結果（保存したターンと、その会話）。SQL は実行しない。"""
+
+    conversation: DbAdminChatSummary
+    turn: DbAdminChatTurn
 
 
 class DbAdminJoinWhereData(BaseModel):

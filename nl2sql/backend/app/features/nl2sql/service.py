@@ -81,6 +81,9 @@ from .db_admin_chat import (
     ANALYSIS_SYSTEM_PROMPT as _DB_ADMIN_CHAT_ANALYSIS_SYSTEM_PROMPT,
 )
 from .db_admin_chat import (
+    HISTORY_TURN_LIMIT as _DB_ADMIN_CHAT_HISTORY_LIMIT,
+)
+from .db_admin_chat import (
     SYSTEM_PROMPT as _DB_ADMIN_CHAT_SYSTEM_PROMPT,
 )
 from .db_admin_chat import (
@@ -95,6 +98,7 @@ from .db_admin_chat import (
 from .db_admin_chat import (
     single_object_confirmation_target as _db_admin_chat_single_object_target,
 )
+from .db_admin_chat_store import DbAdminChatStore
 from .embedding_client import (
     EmbeddingClientError,
     FeedbackEmbeddingClient,
@@ -206,11 +210,19 @@ from .models import (
     DbAdminAiAnalysisRequest,
     DbAdminChatAnalyzeData,
     DbAdminChatAnalyzeRequest,
+    DbAdminChatData,
     DbAdminChatExecuteRequest,
     DbAdminChatGenerateData,
     DbAdminChatGenerateRequest,
+    DbAdminChatHistoryTurn,
+    DbAdminChatLastExecution,
+    DbAdminChatPage,
     DbAdminChatPlan,
+    DbAdminChatSendData,
     DbAdminChatStatementPlan,
+    DbAdminChatSummary,
+    DbAdminChatTurn,
+    DbAdminChatTurnExecuteRequest,
     DbAdminCsvUploadData,
     DbAdminCsvUploadRequest,
     DbAdminDataPreviewData,
@@ -4528,6 +4540,56 @@ _DB_ADMIN_CHAT_MODEL_UNAVAILABLE = (
     "システム設定 › モデルで既定のテキストモデルを設定してください。"
 )
 _DB_ADMIN_CHAT_MULTI_SELECT_REASON = "複数 statement 実行に SELECT は含められません。"
+# DB 管理チャットの 1 つの会話の往復の上限（チャットと同じ 50。画面は超えたら新しい会話を勧める）。
+DB_ADMIN_CHAT_TURN_LIMIT = 50
+# 会話の名前の既定（最初の質問の先頭。チャットの会話と同じ 120 文字）。
+_DB_ADMIN_CHAT_DEFAULT_TITLE_CHARS = 120
+_DB_ADMIN_CHAT_OUTCOME_MESSAGE_CHARS = 300
+
+
+class DbAdminChatConversationFullError(ValueError):
+    """DB 管理チャットの会話の往復が上限に達した（#2319。新しい会話を始める）。"""
+
+
+def _db_admin_chat_execution_succeeded(result: DbAdminExecuteData) -> bool:
+    return bool(result.statements) and all(
+        item.status in {"success", "executed"} for item in result.statements
+    )
+
+
+def _db_admin_chat_outcome(result: DbAdminExecuteData, *, succeeded: bool) -> str:
+    """続きの質問の文脈に渡す、実行の結果の短い要約（画面の要約と同じ書き方）。"""
+
+    if succeeded:
+        rows = result.select_result.returned_count if result.select_result else None
+        return f"成功（{rows} 行）" if rows is not None else "成功"
+    lines = [
+        f"#{item.index} {item.statement_type}: {item.error_message}"
+        for item in result.statements
+        if item.error_message
+    ]
+    message = "\n".join([*lines, *result.warnings])
+    return f"失敗: {message[:_DB_ADMIN_CHAT_OUTCOME_MESSAGE_CHARS]}"
+
+
+def _db_admin_chat_last_execution(
+    result: DbAdminExecuteData, *, revision: int, confirmation_given: bool
+) -> DbAdminChatLastExecution:
+    """ターンに残す最後の実行の要約。結果の行は残さない（行数・列数・打ち切りだけ）。"""
+
+    succeeded = _db_admin_chat_execution_succeeded(result)
+    select = result.select_result
+    return DbAdminChatLastExecution(
+        executed_at=result.timing.finished_at or _utc_now(),
+        revision=revision,
+        confirmation_given=confirmation_given,
+        succeeded=succeeded,
+        row_count=select.returned_count if select else None,
+        column_count=len(select.columns) if select else None,
+        has_more=bool(select and (select.has_more or select.truncated)),
+        outcome=_db_admin_chat_outcome(result, succeeded=succeeded),
+        result=result.model_copy(update={"select_result": None}),
+    )
 
 
 class Nl2SqlService:
@@ -4635,6 +4697,12 @@ class Nl2SqlService:
         # DB 管理の操作の監査（#2264）。Oracle の永続化では表 NL2SQL_ADMIN_AUDIT_LOG に
         # 件数の上限なく残す。
         self._admin_audit_store = AdminAuditStore(
+            self._oracle_adapter.state_connection
+            if self._incremental_repository is not None
+            else None
+        )
+        # DB 管理チャットの会話の履歴（#2319）。Oracle の永続化では表（migration 024）に残す。
+        self._db_admin_chat_store = DbAdminChatStore(
             self._oracle_adapter.state_connection
             if self._incremental_repository is not None
             else None
@@ -17383,9 +17451,12 @@ class Nl2SqlService:
         )
 
     def generate_db_admin_chat_sql(
-        self, request: DbAdminChatGenerateRequest
+        self, question: str, history: Sequence[DbAdminChatHistoryTurn] = ()
     ) -> DbAdminChatGenerateData:
-        """質問から Oracle の SQL を作る（実行しない）。業務プロファイルで限らず DB 全体が対象。"""
+        """質問から Oracle の SQL を作る（実行も保存もしない）。DB 全体が対象。
+
+        `history` は同じ会話の前の往復（保存したターンから作る。#2319）。
+        """
 
         self._require_db_admin_chat_permission()
         started = time.monotonic()
@@ -17398,7 +17469,7 @@ class Nl2SqlService:
             tables = list(self.get_catalog().tables)
         except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
             warnings.append(f"DB 構造を読めなかったため、表を渡さずに生成しました: {exc}")
-        query_text = " ".join([*(turn.question for turn in request.history), request.question])
+        query_text = " ".join([*(turn.question for turn in history), question])
         context_tables = _db_admin_chat_context_tables(
             tables, _similarity_tokens(query_text), _similarity_tokens
         )
@@ -17411,11 +17482,11 @@ class Nl2SqlService:
                 for table in tables
                 if table.qualified_name not in context_names
             ),
-            history=request.history,
+            history=history,
         )
         try:
             raw = self._enterprise_ai_client.generate(
-                prompt=request.question,
+                prompt=question,
                 context=context,
                 system_prompt=_DB_ADMIN_CHAT_SYSTEM_PROMPT,
                 response_format=response_format(SqlOutput, name="DbAdminChatSql"),
@@ -17429,7 +17500,7 @@ class Nl2SqlService:
             ) from exc
         sql = _strip_sql_code_fence(output.sql)
         return DbAdminChatGenerateData(
-            question=request.question,
+            question=question,
             explanation=output.explanation.strip(),
             plan=self._db_admin_chat_plan(sql) if sql else DbAdminChatPlan(),
             context_tables=[table.qualified_name for table in context_tables],
@@ -17528,6 +17599,225 @@ class Nl2SqlService:
             source="oci_enterprise_ai",
             model=self._enterprise_ai_client.model_id(),
         )
+
+    # ---- DB 管理チャットの会話の履歴（#2319）----
+    # 見え方は「AI 活用」と同じ: `all_users`（system_admin）は全員の会話、それ以外は本人の会話
+    # だけ（他人の会話は PermissionError、無い会話は LookupError。router はどちらも 404）。
+    # system_admin が他の利用者の会話で操作しても、実行は操作した本人（actor）で持ち主は変えない。
+
+    def _db_admin_chat_conversation(
+        self, conversation_id: str, *, actor: str, all_users: bool
+    ) -> DbAdminChatSummary:
+        if not actor:
+            raise PermissionError("会話には認証済みの利用者が必要です。")
+        conversation = self._db_admin_chat_store.get_conversation(conversation_id)
+        if conversation is None:
+            raise LookupError(conversation_id)
+        if not all_users and conversation.actor_user_uuid != actor:
+            raise PermissionError("他の利用者の会話は参照できません。")
+        return conversation
+
+    def list_db_admin_chats(
+        self, *, actor: str, all_users: bool, offset: int = 0, limit: int = DEFAULT_PAGE_LIMIT
+    ) -> DbAdminChatPage:
+        """会話の履歴の 1 ページ（新しい順。offset 型）。"""
+
+        self._require_db_admin_chat_permission()
+        if not actor:
+            raise PermissionError("会話には認証済みの利用者が必要です。")
+        items, total = self._db_admin_chat_store.list_conversations(
+            owner_user_uuid=None if all_users else actor, offset=offset, limit=limit
+        )
+        page = paginate(items, total=total, limit=limit, offset=offset)
+        return DbAdminChatPage.model_validate(dict(page))
+
+    def get_db_admin_chat(
+        self, conversation_id: str, *, actor: str, all_users: bool
+    ) -> DbAdminChatData:
+        """会話の内容（送った順のターン）。"""
+
+        self._require_db_admin_chat_permission()
+        conversation = self._db_admin_chat_conversation(
+            conversation_id, actor=actor, all_users=all_users
+        )
+        return DbAdminChatData(
+            conversation=conversation,
+            turns=self._db_admin_chat_store.list_turns(conversation_id),
+        )
+
+    def rename_db_admin_chat(
+        self, conversation_id: str, *, actor: str, all_users: bool, title: str
+    ) -> DbAdminChatSummary:
+        self._require_db_admin_chat_permission()
+        self._db_admin_chat_conversation(conversation_id, actor=actor, all_users=all_users)
+        renamed = self._db_admin_chat_store.rename_conversation(
+            conversation_id, title.strip()[:SQL_CHAT_TITLE_MAX_LENGTH]
+        )
+        if renamed is None:
+            raise LookupError(conversation_id)
+        return renamed
+
+    def delete_db_admin_chat(self, conversation_id: str, *, actor: str, all_users: bool) -> None:
+        """会話とターンを消す（実行の監査の表は消さない）。"""
+
+        self._require_db_admin_chat_permission()
+        self._db_admin_chat_conversation(conversation_id, actor=actor, all_users=all_users)
+        if not self._db_admin_chat_store.delete_conversation(conversation_id):
+            raise LookupError(conversation_id)
+        logger.info("nl2sql_db_admin_chat_deleted", extra={"conversation_id": conversation_id})
+
+    def send_db_admin_chat_question(
+        self,
+        request: DbAdminChatGenerateRequest,
+        *,
+        actor: str,
+        all_users: bool,
+        keep_result: Callable[[], bool] | None = None,
+    ) -> DbAdminChatSendData | None:
+        """質問から SQL を作り、会話のターンとして保存する（実行はしない）。
+
+        前の往復はサーバーが保存した会話から復元する。会話の ID が空なら新しい会話を始める（会話の
+        ID は最初のターンの ID）。同じ `client_turn_id` の送り直しは、保存済みのターンを返す（二重に
+        生成しない）。`keep_result` が False を返す（画面が待つのをやめた＝停止した）ときは保存せず
+        None を返す。
+        """
+
+        self._require_db_admin_chat_permission()
+        if not actor:
+            raise PermissionError("会話には認証済みの利用者が必要です。")
+        store = self._db_admin_chat_store
+        turn_id = str(request.client_turn_id)
+        conversation_id = request.conversation_id.strip() or turn_id
+        conversation = store.get_conversation(conversation_id)
+        turns: list[DbAdminChatTurn] = []
+        if conversation is not None:
+            conversation = self._db_admin_chat_conversation(
+                conversation_id, actor=actor, all_users=all_users
+            )
+            turns = store.list_turns(conversation_id)
+            sent = next((turn for turn in turns if turn.turn_id == turn_id), None)
+            if sent is not None:
+                return DbAdminChatSendData(conversation=conversation, turn=sent)
+            if len(turns) >= DB_ADMIN_CHAT_TURN_LIMIT:
+                raise DbAdminChatConversationFullError(conversation_id)
+        elif conversation_id != turn_id:
+            # 消した会話への続きの質問。
+            raise LookupError(conversation_id)
+        owner = conversation.actor_user_uuid if conversation is not None else actor
+        history = [
+            DbAdminChatHistoryTurn(
+                question=turn.question,
+                sql=turn.plan.sql,
+                outcome=(
+                    turn.last_execution.outcome
+                    if turn.last_execution and turn.last_execution.revision == turn.revision
+                    else ""
+                ),
+            )
+            for turn in turns[-_DB_ADMIN_CHAT_HISTORY_LIMIT:]
+        ]
+        sent_at = _utc_now()
+        generated = self.generate_db_admin_chat_sql(request.question, history)
+        if keep_result is not None and not keep_result():
+            logger.info(
+                "nl2sql_db_admin_chat_generation_discarded",
+                extra={"conversation_id": conversation_id},
+            )
+            return None
+        turn = DbAdminChatTurn(
+            turn_id=turn_id,
+            question=request.question,
+            created_at=sent_at,
+            generated_at=_utc_now(),
+            explanation=generated.explanation,
+            warnings=generated.warnings,
+            context_tables=generated.context_tables,
+            model=generated.model,
+            plan=generated.plan,
+            sender_user_uuid=None if owner == actor else actor,
+        )
+        if conversation is None:
+            store.create_conversation(
+                conversation_id,
+                owner_user_uuid=actor,
+                title=request.question[:_DB_ADMIN_CHAT_DEFAULT_TITLE_CHARS],
+            )
+        store.append_turn(conversation_id, turn)
+        saved = store.get_conversation(conversation_id)
+        if saved is None:  # pragma: no cover - 直前に保存した会話が読めないのは DB の異常
+            raise LookupError(conversation_id)
+        return DbAdminChatSendData(conversation=saved, turn=turn)
+
+    def _db_admin_chat_turn(
+        self, conversation_id: str, turn_id: str, *, actor: str, all_users: bool
+    ) -> DbAdminChatTurn:
+        self._db_admin_chat_conversation(conversation_id, actor=actor, all_users=all_users)
+        turn = self._db_admin_chat_store.get_turn(conversation_id, turn_id)
+        if turn is None:
+            raise LookupError(turn_id)
+        return turn
+
+    def execute_db_admin_chat_turn(
+        self, request: DbAdminChatTurnExecuteRequest, *, actor: str, all_users: bool
+    ) -> DbAdminExecuteData:
+        """ターンに保存した SQL を実行し（画面から SQL を受け取らない）、最後の実行の要約を残す。
+
+        確認語の待ち（`confirmation_required`）だけの応答は要約に残さない（監査と同じ）。
+        """
+
+        self._require_db_admin_chat_permission()
+        turn = self._db_admin_chat_turn(
+            request.conversation_id, request.turn_id, actor=actor, all_users=all_users
+        )
+        if not turn.plan.statements:
+            raise ValueError("このターンには実行する SQL がありません。")
+        result = self.execute_db_admin_chat_sql(
+            DbAdminChatExecuteRequest(
+                sql=turn.plan.sql,
+                confirmation=request.confirmation,
+                reason=request.reason,
+                row_limit=request.row_limit,
+            )
+        )
+        if result.statements and all(
+            item.status == "confirmation_required" for item in result.statements
+        ):
+            return result
+        confirmation_given = bool(
+            turn.plan.requires_confirmation and not turn.plan.blocked and result.executed
+        )
+        self._db_admin_chat_store.update_turn(
+            request.conversation_id,
+            turn.model_copy(
+                update={
+                    "last_execution": _db_admin_chat_last_execution(
+                        result, revision=turn.revision, confirmation_given=confirmation_given
+                    )
+                }
+            ),
+        )
+        return result
+
+    def replace_db_admin_chat_turn_sql(
+        self, conversation_id: str, turn_id: str, sql: str, *, actor: str, all_users: bool
+    ) -> DbAdminChatTurn:
+        """ターンの SQL を AI のエラー分析で直した SQL に置き換える（サーバーで分類し直す）。
+
+        版を進め、前の版の実行の要約は消す（確認語からやり直す）。
+        """
+
+        self._require_db_admin_chat_permission()
+        turn = self._db_admin_chat_turn(conversation_id, turn_id, actor=actor, all_users=all_users)
+        updated = turn.model_copy(
+            update={
+                "plan": self._db_admin_chat_plan(_strip_sql_code_fence(sql)),
+                "revision": turn.revision + 1,
+                "corrected": True,
+                "last_execution": None,
+            }
+        )
+        self._db_admin_chat_store.update_turn(conversation_id, updated)
+        return updated
 
     def _run_db_admin_sql(
         self, request: DbAdminExecuteRequest, *, chat: bool = False

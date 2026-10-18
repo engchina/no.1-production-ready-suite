@@ -3348,7 +3348,7 @@ const history = useChatHistoryPanel({ inlineOpen: historyOpen, onInlineOpenChang
 
 | prop | 型 | 既定 | 説明 |
 |---|---|---|---|
-| `history` | `ChatHistoryPanel` | — | `useChatHistoryPanel` の戻り値。会話を保存しない画面（NL2SQL の DB 管理チャット。#2264）は `history`・`historyTitle`・`historyCloseLabel`・`historyContent` をまとめて省き、履歴のパネル・シートと上端の行の開閉ボタンを出さない |
+| `history` | `ChatHistoryPanel` | — | `useChatHistoryPanel` の戻り値 |
 | `historyTitle` / `historyCloseLabel` | `string` | — | 履歴の見出し・名前（開閉ボタンの名前にも使う）と、シートを閉じるボタンの名前 |
 | `historyContent` | `ReactNode` | — | 履歴の中身（一覧・読み込み中・失敗・空・ページング） |
 | `label` | `string` | — | 会話の領域（`<section>`）の名前 |
@@ -3619,11 +3619,11 @@ const labels = clarificationLabels({ stage: "SQL の生成", action: "SQL を生
     }]}
     progress={{ current: answered + 1, total: answered + unresolved }}   // 1 件ずつ聞くとき
     round={{ current: reviewRound, max: maxReviewRounds }}
-    busyAction={busy}                                  // "confirm" | "skip" | "cancel" | null
+    busyAction={busy}                                  // "confirm"（フォームを記録と経過の行に置き換え）| "skip" | null
     error={error ? <ApiErrorBanner error={error} fallback={t("…")} /> : null}
     onConfirm={(answers) => submit(answers)}           // [{ itemId, optionIds, otherText }]
-    onSkip={() => skipAndAnswerWithAssumptions()}
-    onCancel={() => cancelAndRestoreQuestion()}
+    onSkip={() => skipAndAnswerWithAssumptions()}      // 確認を終える唯一の操作（「確認をやめる」は置かない）
+    onSkipWhileConfirming={() => skipWithoutWaiting()} // 任意: 確定の後の経過の行に出す
   >
     <RequirementItemsList controller={controller} />  {/* 製品の中身（任意） */}
   </ClarificationCard>
@@ -3644,11 +3644,12 @@ const labels = clarificationLabels({ stage: "SQL の生成", action: "SQL を生
 | `items` | `ClarificationItem[]` | — | 確認事項（ふつうは 1 件）。`{ id, prompt, reason?, selection?: "single" \| "multiple", options: ClarificationOption[], meta?, optional? }`。`optional` は答えなくても確定できる確認事項（NL2SQL の確認のカードの表の選び直し・直しの自由入力） |
 | `items[].options[]` | `ClarificationOption` | — | `{ id, label, description?, detail?, disabled? }`。`detail` は製品固有の中身（物理名・根拠・章節）。1 回 8 個までを目安にする |
 | `onConfirm` | `(answers: ClarificationAnswer[]) => void` | — | 「この内容で〈回答〉」。`{ itemId, optionIds, otherText }`（自由入力は前後の空白を除く）。すべての確認事項に答えるまで押せない |
-| `onSkip` | `() => void` | — | 「確認せずに〈回答〉」。渡さなければ出さない（3 製品とも渡す） |
-| `onCancel` | `() => void` | — | 「確認をやめる」（質問を入力欄に戻す）。渡さなければ出さない |
+| `onSkip` | `() => void` | — | 「確認せずに〈回答〉」。確認を終える唯一の操作で、質問は取り消さない（質問を取り消すのは入力欄の「停止」。#2311）。渡さなければ出さない（3 製品とも渡す） |
+| `onSkipWhileConfirming` | `() => void` | — | 確定の後の経過の行に出す「確認せずに〈回答〉」（待たずに進める）。送った答えの処理を取りやめられる製品（NL2SQL の AI の再検査）だけが渡す |
+| `dismissAction` | `{ label, onClick }` | — | 入力の取りやめ（NL2SQL の「直すのをやめる」「追加をやめる」。前の確認事項に戻るだけで、質問・確認は取り消さない）。操作の行の右端の ghost。「確認をやめる」には使わない |
 | `progress` | `{ current, total }` | — | 1 件ずつ聞くときの位置「確認事項 1 / 3」。無くて 2 件以上なら「確認事項 2 件」 |
 | `round` | `{ current, max }` | — | 「確認 1 回目（上限 2 回）」。`current >= max` で「これが最後の確認です。…」を添える |
-| `busyAction` | `"confirm" \| "skip" \| "cancel" \| null` | `null` | 押したボタンだけ `loading`、ほかの操作と入力は `disabled` |
+| `busyAction` | `"confirm" \| "skip" \| null` | `null` | `confirm` はフォーム（選択肢・自由入力・操作の行・押せない理由・`children`）を、答えた内容の記録（`-answered-entry`）と経過の行 1 つ（`ProcessingIndicator`。`-progress`、文言は `labels.confirming`）に置き換える（確定のボタンは `loading` にしない）。`null` に戻すとフォームと入力が戻る。`skip` は押したボタンだけ `loading`、ほかの操作と入力は `disabled` |
 | `disabled` | `boolean` | `false` | カード全体を操作できない（古い会話の確認） |
 | `value` / `onValueChange` | `ClarificationDraft` | — | 受控の答え（作業状態に残すとき）。`Record<itemId, { optionIds, otherText }>` |
 | `defaultValue` | `ClarificationDraft` | `{}` | 非受控の初期の答え。確認事項（`items` の ID）が変わると空に戻る |
@@ -3656,12 +3657,12 @@ const labels = clarificationLabels({ stage: "SQL の生成", action: "SQL を生
 | `children` | `ReactNode` | — | 確認事項の下・操作の行の上に置く製品の中身 |
 | `error` | `ReactNode` | — | 操作の失敗（`ApiErrorBanner`）。操作の行の直上 |
 | `actions` | `ReactNode` | — | 確定の右に置く製品の操作（NL2SQL の「直しを伝える」。同じ `size` の `Button`）。多用しない |
-| `labels` | `Partial<ClarificationLabels>` | `DEFAULT_CLARIFICATION_LABELS` | 文言。ふつうは `clarificationLabels({ stage, action })` を渡す。`skipHint` / `cancelHint` を空にすると補足を出さない（入力欄に戻らない取り消し） |
+| `labels` | `Partial<ClarificationLabels>` | `DEFAULT_CLARIFICATION_LABELS` | 文言。ふつうは `clarificationLabels({ stage, action })` を渡す。`skipHint` を空にすると補足を出さない。`confirming` は確定の後の経過の行の文（既定「答えを反映しています」） |
 | `size` | `"sm" \| "md" \| "lg"` | `"md"` | ボタンの高さ（チャットの回答の中は md、画面のパネルは lg） |
 | `headingLevel` | `2 \| 3 \| 4` | `3` | 題の見出しの段（確認事項の文はその 1 段下） |
 | `autoFocus` | `boolean` | `false` | 最初に出たときに最初の確認事項の文（題の 1 段下の見出し）へフォーカスを移す（確認事項が変わったときは常に移す） |
 | `variant` | `"card" \| "plain"` | `"card"` | `plain` は枠なし（回答の枠の中） |
-| `idPrefix` / `className` / `testId` | `string` | `testId="clarification-card"` | `testId` から `-confirm` / `-skip` / `-cancel` / `-blocked` / `-meta` / `-last-round` / `-item`（`data-item-id`）/ `-option`（`data-option-id`）/ `-other` を作る |
+| `idPrefix` / `className` / `testId` | `string` | `testId="clarification-card"` | `testId` から `-confirm` / `-skip` / `-dismiss` / `-confirming` / `-answered-entry`（`data-entry-id`）/ `-progress` / `-blocked` / `-meta` / `-last-round` / `-item`（`data-item-id`）/ `-option`（`data-option-id`）/ `-other` を作る |
 
 - helper: `clarificationAnswers(items, draft)`（確定した答えを組む）、`isClarificationEntryAnswered(entry)`。
 

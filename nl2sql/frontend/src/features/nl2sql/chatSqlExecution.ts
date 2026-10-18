@@ -20,7 +20,10 @@ export function formatCount(value: number): string {
 export { isIncompleteResult, toResultTableData as toChatResultTable } from "./queryResultTable";
 
 /** 会話を開き直したときの前回の実行の要約（行は保存していない）。 */
-export function lastExecutionText(summary: SqlChatExecutionSummary, executedAtLabel: string): string {
+export function lastExecutionText(
+  summary: Pick<SqlChatExecutionSummary, "status" | "row_count" | "column_count" | "has_more">,
+  executedAtLabel: string,
+): string {
   if (summary.status === "error") return t("chat.execute.last.failed", { at: executedAtLabel });
   return t(summary.has_more ? "chat.execute.last.truncated" : "chat.execute.last.done", {
     at: executedAtLabel,
