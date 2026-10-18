@@ -3113,7 +3113,21 @@ def _original_question_children(
     return [_stored_chunk_answer_record(chunk) for chunk in result.child_chunks]
 
 
-def _select_catalog_articles(question: str, catalogs: Sequence[Any], settings: Settings) -> tuple[list[Any], list[tuple[str, str]]]:
+def _catalog_terms(question: str, settings: Settings) -> tuple[Any, ...]:
+    """条の選択に渡す用語: 質問（元の質問と検索文）に一致した登録の用語と、その別名・説明。
+
+    事例の語（業務の通称）と文書の言い方（法令の用語）が違うと、目録の見出しだけでは条を結び付けられない。
+    対応は利用者が登録した用語（実行時の知識）が持ち、コードには置かない。読めないときは渡さない。
+    """
+    from rag_engine.retrieval.article_catalog import CatalogTerm
+
+    runtime = build_runtime_knowledge_context(question, settings.output_dir, settings.runtime_knowledge_path)
+    return tuple(CatalogTerm(term=term.term, aliases=tuple(term.aliases), description=term.description) for term in runtime.matched_terms)
+
+
+def _select_catalog_articles(
+    question: str, catalogs: Sequence[Any], settings: Settings, *, terms: Sequence[Any] = ()
+) -> tuple[list[Any], list[tuple[str, str]]]:
     """文書ごとに目録から条を選び（並行に呼ぶ）、文書を順に回した順と、選べなかった文書（名前, 理由）を返す（#2254）。
 
     呼び出し 1 回の出力と時間は役目に合わせて抑える（`article_catalog_output_token_cap` /
@@ -3130,7 +3144,9 @@ def _select_catalog_articles(question: str, catalogs: Sequence[Any], settings: S
     model = str(getattr(settings, "default_answer_llm", "") or "")
     max_output = int(getattr(settings, "article_catalog_output_token_cap", 0) or 0)
     timeout = float(getattr(settings, "article_catalog_call_timeout_seconds", 0.0) or 0.0)
-    keys = [(question, catalog.document_id, catalog.chunk_set_id, len(catalog.lines), limit, model) for catalog in catalogs]
+    # 登録の用語を変えたら選び直す（用語は選択の入力）。
+    term_key = tuple((term.term, tuple(term.aliases), term.description) for term in terms)
+    keys = [(question, catalog.document_id, catalog.chunk_set_id, len(catalog.lines), limit, model, term_key) for catalog in catalogs]
     missing = [index for index, key in enumerate(keys) if key not in _ARTICLE_SELECTION_CACHE]
     failures: dict[int, str] = {}
     if missing:
@@ -3148,7 +3164,7 @@ def _select_catalog_articles(question: str, catalogs: Sequence[Any], settings: S
                     failures[index] = "呼び出しの失敗"
 
             with bind_deadline(own), bind_output_cap(max_output):
-                return select_articles(question, catalogs[index], parse_text_response, settings, limit=limit, on_error=failed)
+                return select_articles(question, catalogs[index], parse_text_response, settings, limit=limit, terms=terms, on_error=failed)
 
         with ThreadPoolExecutor(max_workers=len(missing), thread_name_prefix="article-catalog") as pool:
             futures = {index: pool.submit(contextvars.copy_context().run, call, index) for index in missing}
@@ -3247,7 +3263,10 @@ def _catalog_article_children(
     if extra:
         catalogs += list(load_catalogs(document_ids=extra, limit=len(extra), settings=settings))
     with _execution_step("条の選択", "候補の文書の条の目録から、質問の根拠になる条を選び、その条の根拠を候補に加えます。") as step:
-        selected, failed = _select_catalog_articles(question, catalogs, settings)
+        terms = _catalog_terms(question, settings)
+        selected, failed = _select_catalog_articles(question, catalogs, settings, terms=terms)
+        if terms:
+            step.field("選択に渡した用語", join_values(term.term for term in terms))
         step.field("条の目録を読んだ文書", f"{len(catalogs)} 件")
         if extra:
             step.field("範囲の一覧から加えた文書", f"{len(extra)} 件")
