@@ -195,7 +195,9 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     足した（当たらなければ使える全件を返す）。rag_search / rag_retrieve_evidence に、id を
 #     誤ったときに自動で選んだ検索・回答プロファイル（auto_selected_search_answer_profile）を
 #     足した（#2355）。
-MCP_OUTPUT_SCHEMA_VERSION = 16
+# 17: rag_search に回答の注意書き（notice。API キーで呼んだ外部のクライアントだけ）を足した
+#     （#2405）。
+MCP_OUTPUT_SCHEMA_VERSION = 17
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -1437,6 +1439,11 @@ class SearchOutput(VersionedOutput):
     )
     auto_selected_search_answer_profile: AutoSelectedProfile | None = Field(
         default=None, description=AUTO_SELECTED_PROFILE_DESCRIPTION
+    )
+    # 回答の注意書き（#2405）。API キーで呼んだ外部のクライアントにだけ返す（Agent がサービス
+    # トークンで呼んだときは返さず、Agent の回答の末尾には Agent が付ける 1 つだけを出す）。
+    notice: str | None = Field(
+        default=None, description="利用者に回答を示すときは、末尾にこの文をそのまま添える。"
     )
 
 
@@ -3252,6 +3259,14 @@ def _lookup_item(match: GuideMatch) -> LookupGuideItem:
     )
 
 
+def called_with_api_key(http_request: Request) -> bool:
+    """利用者の API キー（`prak_…`）で呼んだ外部の MCP クライアントか（#2405）。
+
+    Agent のサービストークン・local（認証なし）の呼び出しは False。
+    """
+    return getattr(http_request.state, "api_key", None) is not None
+
+
 def _figure_url_request(http_request: Request) -> FigureUrlRequest | None:
     """ブラウザで開く URL（図 #1311・原文のプレビュー #2389）を作ってよい呼び出しの文脈を返す。
 
@@ -3559,6 +3574,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         return SearchOutput(
             **_answer_fields(result, arguments.evidence_limit, sections),
             older_versions=await _older_versions(arguments, request, citations),
+            notice=result.notice if called_with_api_key(http_request) else None,
         )
 
     async def lookup_guides(arguments: LookupGuidesInput) -> LookupGuidesOutput:

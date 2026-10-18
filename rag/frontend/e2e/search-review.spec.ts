@@ -640,3 +640,36 @@ test.describe("類似 FAQ の照会中も、検索を始めたことを示す（
     await expect(button).toHaveAccessibleName("検索");
   });
 });
+
+// 回答の注意書き（3 製品で共通の文。#2405）。回答の本文と根拠の後に出す。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`RAG 検索の回答の末尾に注意書きを出す (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const notice = "この回答は AI が生成したものです。\n業務に使う前に根拠で確かめてください。";
+    await page.route("**/api/search/stream", (route) =>
+      fulfillStream(
+        route,
+        sse([
+          ["metadata", { trace_id: "t-notice", elapsed_ms: 5, guardrail_warnings: [], diagnostics: {}, notice }],
+          ["delta", { text: "交通費の上限は 1 万円です。" }],
+          ["citations", []],
+          ["done", { trace_id: "t-notice" }],
+        ])
+      )
+    );
+
+    await page.goto("/search");
+    await selectSearchAnswerProfile(page, /経理ビュー/);
+    await search(page, "交通費の上限");
+
+    await expect(page.getByText("交通費の上限は 1 万円です。")).toBeVisible();
+    const noticeBlock = page.getByRole("complementary", { name: "回答の注意書き" });
+    await expect(noticeBlock).toBeVisible();
+    await expect(noticeBlock).toContainText("業務に使う前に根拠で確かめてください。");
+    await expect(page.getByText("交通費の上限は 1 万円です。")).not.toContainText("AI が生成");
+    await expectNoPageOverflow(page);
+  });
+}

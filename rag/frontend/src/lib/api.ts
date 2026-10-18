@@ -1328,6 +1328,8 @@ export interface ChatMessage {
   progress?: unknown[] | null;
   /** 回答前に確認した内容（USER のメッセージだけ。確認しなかった質問は null / 未指定。#1839）。 */
   clarification?: ChatClarificationRecord | null;
+  /** 回答の注意書き（システム設定の文。backend が回答の確定の後に付ける。確認の質問・無効のときは null / 未指定。#2405）。 */
+  notice?: string | null;
   /** 会話の持ち主が送った質問か。system_admin が他の利用者の会話で送った質問は false（#1928）。 */
   sent_by_owner?: boolean;
   /** 持ち主以外が送った質問の、送った人の表示名（引けない利用者は空。#1928）。 */
@@ -1452,6 +1454,8 @@ export interface SearchResponse {
   guardrail_warnings: string[];
   elapsed_ms: number;
   diagnostics: SearchDiagnostics;
+  /** 回答の注意書き（システム設定の文。backend が回答の確定の後に付ける。確認の質問・無効のときは null / 未指定。#2405）。 */
+  notice?: string | null;
 }
 
 export interface FeedbackRequestBody {
@@ -4549,6 +4553,8 @@ export interface RunDetail extends RunSummary {
   answer: string | null;
   /** 回答の記録が保持期間で消えた・読めないとき false。 */
   answer_available: boolean;
+  /** 回答に付けた注意書き（回答の記録から。この機能より前の回答は null / 未指定。#2405）。 */
+  answer_notice?: string | null;
   citations: RetrievedChunk[];
   answer_diagnostics: Record<string, JsonValue> | null;
   stages: RunStage[];
@@ -4572,6 +4578,8 @@ export interface AnswerRecordDetail extends AnswerRecordSummary {
   answer: string;
   citations: RetrievedChunk[];
   answer_diagnostics: Record<string, JsonValue>;
+  /** 回答に付けた注意書き（この機能より前の回答・確認の質問は null / 未指定。#2405）。 */
+  notice?: string | null;
   /** 標準回答で評価できるか(この機能より前の回答は評価の入力を持たない)。 */
   evaluation_available?: boolean;
   /** 標準回答による評価の結果(未評価は null)。 */

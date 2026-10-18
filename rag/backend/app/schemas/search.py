@@ -407,6 +407,9 @@ class SearchResponse(BaseModel):
     answer_replaced: bool = False
     # 作った回答を保存できなかった記録（回答は返し、画面が「保存できなかった」ことを出す。#2342）。
     storage_failures: list[StorageFailure] = Field(default_factory=list)
+    # 回答の注意書き（システム設定の文。#2405）。backend が回答の確定の後に付け、
+    # 回答の本文・会話の履歴・回答の検証には入れない。確認の質問・無効のときは None。
+    notice: str | None = None
     # 標準回答による評価の入力(回答の記録に保存するものと同じ。#591)。応答には出さず、
     # 品質評価が同じプロセスの中で回答の根拠・引用・実行記録を受け取るためだけに使う。
     _evaluation_input: dict[str, object] | None = PrivateAttr(default=None)
@@ -657,6 +660,8 @@ class AnswerRecordDetail(AnswerRecordSummary):
     answer: str
     citations: list[RetrievedChunk] = Field(default_factory=list)
     answer_diagnostics: dict[str, JsonValue] = Field(default_factory=dict)
+    # 回答に付けた注意書き（#2405。この機能より前の回答・確認の質問は None）。
+    notice: str | None = None
     # 標準回答で評価できるか(この機能より前の回答は評価の入力を持たない)。
     evaluation_available: bool = False
     evaluation: dict[str, JsonValue] | None = None

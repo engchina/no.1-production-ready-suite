@@ -27,6 +27,7 @@ from app.clients.oracle import OracleClient
 from app.clients.oracle_read_stats import track_db_calls
 from app.config import Settings, get_settings
 from app.rag.answer_engine import ANSWER_ENGINE, AnswerEngine, AnswerScope, answer_step_stage
+from app.rag.answer_notice import AnswerNoticeSource, answer_outcome_takes_notice
 from app.rag.answer_route import answer_route
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
@@ -176,6 +177,7 @@ class RagPipeline:
         approved_faq: tuple[str, str] | None = None,
         scope: AnswerScope | None = None,
         run_recorder: RunRecorder | None = None,
+        answer_notice: AnswerNoticeSource | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._genai = genai or OciGenAiClient(settings=self._settings)
@@ -195,6 +197,9 @@ class RagPipeline:
 
             run_recorder.store = RunHistoryStore(self._oracle)
         self._run_recorder = run_recorder
+        # 回答の注意書きの文（#2405）。チャットと RAG 検索（MCP を含む）の経路だけが渡す
+        # （品質評価・確かめのスクリプトは渡さない）。
+        self._answer_notice = answer_notice
 
     async def run(
         self,
@@ -445,6 +450,14 @@ class RagPipeline:
                 allowed=True, sanitized_text=outcome.answer, findings=[]
             )
         final_answer = answer_guardrail.sanitized_text
+        # 回答の注意書き（#2405）。回答の確定の後に、本文とは別の項目として付ける。
+        notice = (
+            await asyncio.to_thread(self._answer_notice)
+            if request.generate_answer
+            and self._answer_notice is not None
+            and answer_outcome_takes_notice(outcome.diagnostics)
+            else None
+        )
         if token_callback is not None and final_answer:
             await token_callback(SearchTokenDelta(trace_id=trace_id, text=final_answer))
         diagnostics = build_search_diagnostics(
@@ -497,6 +510,7 @@ class RagPipeline:
                         diagnostics=diagnostics.answer or {},
                         surface="search" if history is None else "chat",
                         evaluation_input=outcome.evaluation_input,
+                        answer_notice=notice,
                     ),
                     progress_callback=stage_callback,
                 )
@@ -532,6 +546,7 @@ class RagPipeline:
             diagnostics=diagnostics,
             answer_replaced=final_answer != outcome.answer,
             storage_failures=storage_failures,
+            notice=notice,
             # 品質評価が標準回答で比較するときに使う(応答には出さない。#591)。
         ).with_evaluation_input(outcome.evaluation_input)
 
@@ -612,6 +627,7 @@ class RagPipeline:
         diagnostics: Mapping[str, JsonValue],
         surface: str,
         evaluation_input: Mapping[str, object] | None = None,
+        answer_notice: str | None = None,
     ) -> None:
         """回答を保存する(rag_poc の answer JSON 保存に相当)。
 
@@ -635,6 +651,7 @@ class RagPipeline:
                 "citations": stored,
                 "diagnostics": dict(diagnostics),
                 "evaluation_input": evaluation_input,
+                "answer_notice": answer_notice,
             }
         )
         if self._settings.rag_answer_record_retention_days > 0:

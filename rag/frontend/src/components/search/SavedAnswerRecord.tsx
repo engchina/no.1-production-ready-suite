@@ -1,4 +1,4 @@
-import { FormStatus, Skeleton, TimedLoadingState } from "@production-ready/ui";
+import { AnswerNotice, FormStatus, Skeleton, TimedLoadingState } from "@production-ready/ui";
 
 import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -79,6 +79,8 @@ export function SavedAnswerRecord({
           }}
         />
       ) : null}
+      {/* 回答に付けた注意書き（そのときの文。回答の本文と根拠の後。#2405）。 */}
+      {showAnswer ? <AnswerNotice notice={record.notice} label={t("answer.notice.label")} /> : null}
       {/* 根拠（引用の一覧）を先、回答の記録の詳細を後に並べる（#1417。page-archetypes.md §6.1）。 */}
       <AnswerDetailsPanel
         diagnostics={record.answer_diagnostics}
