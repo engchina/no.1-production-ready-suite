@@ -76,18 +76,20 @@ class AdminAuditStore:
                 if len(self._records) > _MEMORY_MAX_RECORDS:
                     self._records = self._records[-_MEMORY_MAX_RECORDS:]
             return
+        # 時刻は DB の SYSTIMESTAMP（列の既定）で残す（python-oracledb は datetime を秒までの
+        # DATE で渡すので、同じ秒の行の並びが崩れる）。
         with self.connection() as conn, conn.cursor() as cursor:
-            clob = _clob_type(conn)
-            if clob is not None:
+            if hasattr(cursor, "setinputsizes"):
                 # SQL の全文は 32KB を超えることがあるので CLOB で渡す。
+                clob = _clob_type()
                 cursor.setinputsizes(sql_text=clob, detail_json=clob)
             cursor.execute(
                 "INSERT INTO NL2SQL_ADMIN_AUDIT_LOG ("
-                "AUDIT_ID, CREATED_AT, SOURCE, OPERATION, TARGET, ACTOR_USER_UUID, "
+                "AUDIT_ID, SOURCE, OPERATION, TARGET, ACTOR_USER_UUID, "
                 "ACTOR_IS_SYSTEM_ADMIN, OUTCOME, EXECUTED, CONFIRMATION_GIVEN, COMMITTED, "
                 "ROLLED_BACK, STATEMENT_COUNT, SUCCESS_COUNT, STATEMENT_TYPES, AFFECTED_ROWS, "
                 "DURATION_MS, REASON, ERROR_MESSAGE, SQL_TEXT, DETAIL_JSON) VALUES ("
-                ":audit_id, :created_at, :source, :operation, :target, :actor_user_uuid, "
+                ":audit_id, :source, :operation, :target, :actor_user_uuid, "
                 ":actor_is_system_admin, :outcome, :executed, :confirmation_given, :committed, "
                 ":rolled_back, :statement_count, :success_count, :statement_types, "
                 ":affected_rows, :duration_ms, :reason, :error_message, :sql_text, :detail_json)",
@@ -99,7 +101,6 @@ class AdminAuditStore:
     def _binds(record: AdminAuditRecord) -> dict[str, Any]:
         return {
             "audit_id": record.audit_id,
-            "created_at": record.created_at,
             "source": _clip(record.source, 40),
             "operation": _clip(record.operation, 80),
             "target": _clip(record.target, _TARGET_MAX),
@@ -175,12 +176,9 @@ class AdminAuditStore:
         )
 
 
-def _clob_type(conn: Any) -> Any:
-    """CLOB の bind の型（python-oracledb の `DB_TYPE_CLOB`）。偽の接続（テスト）は None。"""
+def _clob_type() -> Any:
+    """CLOB の bind の型（python-oracledb の `DB_TYPE_CLOB`）。"""
 
-    module = type(conn).__module__.split(".")[0]
-    if module != "oracledb":
-        return None
     import oracledb
 
     return oracledb.DB_TYPE_CLOB
