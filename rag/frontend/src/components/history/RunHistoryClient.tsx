@@ -55,9 +55,8 @@ import { useAuth } from "@/components/security/AuthProvider";
 import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
-import { CitationList } from "@/components/search/CitationList";
+import { AnswerCitations, CitationList } from "@/components/search/CitationList";
 import { answerStageLabel } from "@/lib/answer-progress";
-import { citationCountLabel } from "@/lib/chunk-metadata";
 import { evidenceGroups } from "@/lib/evidence-groups";
 import { api, type RunDetail, type RunFeedback, type RunSummary } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
@@ -568,14 +567,22 @@ function RunDetailView({ run }: { run: RunDetail }) {
         succeeded ? (
           <RunDetailSection
             title={
-              // 回答を作った実行は AI に渡した件数と内訳、検索だけの実行は検索結果の件数（RAG 検索と同じ。#2040）。
-              run.answer_generated
-                ? citationCountLabel(run.citations, evidence?.length ?? null)
-                : `${t("search.results")}（${run.citations.length}）`
+              // 回答を作った実行は回答の根拠（件数と内訳はチャットと同じ折りたたみの見出し。#2328）、検索だけの実行は
+              // 検索結果の件数（RAG 検索と同じ。#2040）。
+              run.answer_generated ? t("history.result.evidence") : `${t("search.results")}（${run.citations.length}）`
             }
             testId="run-history-evidence"
           >
-            {run.citations.length ? (
+            {run.citations.length && run.answer_generated ? (
+              // チャットと同じ部品（「AI に渡した N 件 ／ 回答で引用 M 件」の折りたたみ・一定の高さの中のスクロール）。
+              <AnswerCitations
+                citations={run.citations}
+                diagnostics={run.answer_diagnostics}
+                idPrefix={`run-${run.run_id}`}
+                listTestId="run-history-citations"
+                cardProps={{ preview: canPreview }}
+              />
+            ) : run.citations.length ? (
               <CitationList
                 citations={run.citations}
                 groups={evidence}

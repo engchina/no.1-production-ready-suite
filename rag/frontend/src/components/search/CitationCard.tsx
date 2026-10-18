@@ -1,6 +1,6 @@
-import { ExternalLink, FileText, History, Layers, LocateFixed } from "lucide-react";
+import { Layers, LocateFixed } from "lucide-react";
 import { useState } from "react";
-import { Button, StatusBadge } from "@production-ready/ui";
+import { Button, EvidenceCard, evidenceLabels, type EvidenceListItem, type EvidenceTag } from "@production-ready/ui";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import type {
@@ -18,24 +18,15 @@ import {
 import { t } from "@/lib/i18n";
 import { integerMetadataValue } from "@/lib/table-cell-focus";
 
-import { AnswerUseBadge } from "./AnswerUseBadge";
 import { CitationPreviewDialog } from "./CitationPreviewDialog";
 
 export { citationPreviewUrl } from "./CitationPreviewDialog";
 
-/** 引用チャンク1件の表示。retrieval 由来の score/metadata を併記。 */
-export function CitationCard({
-  chunk,
-  index,
-  traceId,
-  searchAnswerProfileId,
-  sourceSurface = "search",
-  messageId = null,
-  contentSnapshot = null,
-  preview = true,
-}: {
-  chunk: RetrievedChunk;
-  index: number;
+/** 根拠の文言（3 製品で共通。#2328）。 */
+export const EVIDENCE_LABELS = evidenceLabels();
+
+/** 根拠のカードの操作の設定（チャット・RAG 検索・回答の記録・実行履歴で渡す）。 */
+export interface CitationCardOptions {
   traceId?: string | null;
   searchAnswerProfileId?: string | null;
   sourceSurface?: FeedbackSourceSurface;
@@ -46,134 +37,101 @@ export function CitationCard({
    * （実行履歴だけの利用者。#1890）では false にする（押すと 403 で権限なしの画面へ移るため）。
    */
   preview?: boolean;
-}) {
-  const chips = citationMetadataChips(chunk.metadata);
-  const sourceUrl = citationSourceUrl(chunk.metadata);
-  const retrievalBadges = citationRetrievalBadges(chunk);
-  const recipeSlot = integerMetadataValue(chunk.metadata.recipe_slot_no);
-  const previewFileName = chunk.file_name ?? chunk.document_id;
+}
+
+/**
+ * 引用チャンク1件の表示。retrieval 由来の score/metadata を併記する。見た目は 3 製品で共通の `EvidenceCard`
+ * （#2328）で、ここは RAG の根拠（`RetrievedChunk`）をデータの契約に写し、引用箇所のプレビューと根拠の評価を足す。
+ */
+export function CitationCard({ chunk, index, ...options }: CitationCardOptions & { chunk: RetrievedChunk; index: number }) {
   const [previewOpen, setPreviewOpen] = useState(false);
-
-  const hasMetadata =
-    chips.length > 0 || recipeSlot != null || Boolean(chunk.category_name) || Boolean(sourceUrl);
-
+  const preview = options.preview ?? true;
   return (
-    <li className="rounded-lg border border-border bg-surface p-3">
-      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_176px] sm:items-start">
-        <div data-testid="citation-main" className="min-w-0">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-            <span data-surface-tint="accent" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-subtle text-xs font-semibold text-accent-fg">
-              {index + 1}
-            </span>
-            <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fg">
-              <FileText size={14} className="shrink-0 text-fg-muted" aria-hidden />
-              <span className="truncate" title={chunk.file_name ?? chunk.document_id}>
-                {chunk.file_name ?? chunk.document_id}
-              </span>
-            </span>
-            {/* 新しい版に置き換えた文書（旧版）の根拠（#1248。include_superseded で含めたときだけ出る）。 */}
-            {chunk.metadata.document_superseded === true ? (
-              <StatusBadge
-                variant="warning"
-                icon={History}
-                label={t("search.citation.superseded")}
-              />
-            ) : null}
-            {/* AI に渡した箇所のうち、回答で引用したもの（#1208）。該当確認済みの記載と参考の記載を分ける（#2040）。 */}
-            {citationModelUsed(chunk) ? <AnswerUseBadge use={citationAnswerUse(chunk)} /> : null}
-            {retrievalBadges.length ? (
-              <span className="flex flex-wrap gap-1">
-                {retrievalBadges.map((badge) => (
-                  <span
-                    key={badge}
-                    className="rounded-full border border-border bg-surface-sunken px-1.5 py-0.5 text-xs font-medium leading-none text-fg-muted"
-                  >
-                    {badge}
-                  </span>
-                ))}
-              </span>
-            ) : null}
-          </div>
-          <p
-            data-testid="citation-text"
-            className="mt-2.5 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-fg/90"
-          >
-            {chunk.text}
-          </p>
-          {hasMetadata ? (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              {chips.length > 0 ? (
-                <dl className="flex flex-wrap gap-1.5">
-                  {chips.map((chip) => (
-                    <MetadataChip key={chip.id} chip={chip} />
-                  ))}
-                </dl>
-              ) : null}
-              {recipeSlot ? (
-                <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
-                  <Layers size={14} aria-hidden />
-                  {t("documents.recipes.name", { slot: recipeSlot })}
-                </span>
-              ) : null}
-              {chunk.category_name ? (
-                <span data-surface-tint="info" className="inline-flex rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg">
-                  {chunk.category_name}
-                </span>
-              ) : null}
-              {/* 原典の URL（XML ツリー JSON の文書。#2024）。根拠を原典で確かめる。 */}
-              {sourceUrl ? (
-                <a
-                  href={sourceUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  {t("search.citation.openSource")}
-                  <ExternalLink size={14} aria-hidden />
-                </a>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-        <CitationScores chunk={chunk} />
-      </div>
-      {/* 操作が 1 つも無いとき（実行履歴の閲覧だけ）は、区切り線の行を出さない。 */}
-      <div
-        className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5 empty:hidden sm:flex-row sm:items-center sm:justify-between"
-      >
-        {/* 引用箇所は画面を移動せずダイアログで見せる。文書の詳細はダイアログの中から別タブで開く（#442）。 */}
-        {preview ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              icon={LocateFixed}
-              onClick={() => setPreviewOpen(true)}
-              aria-label={t("search.citation.previewOpenLabel", { file: previewFileName })}
-            >
-              {t("search.citation.previewOpen")}
-            </Button>
-          </div>
-        ) : null}
-        {traceId && searchAnswerProfileId ? (
-          <FeedbackControls
-            traceId={traceId}
-            searchAnswerProfileId={searchAnswerProfileId}
-            targetType="citation"
-            sourceSurface={sourceSurface}
-            documentId={chunk.document_id}
-            chunkId={chunk.chunk_id}
-            messageId={messageId}
-            contentSnapshot={contentSnapshot}
-            compact
-          />
-        ) : null}
-      </div>
+    <EvidenceCard
+      item={citationEvidenceItem(chunk)}
+      index={index}
+      labels={EVIDENCE_LABELS}
+      actions={<CitationActions chunk={chunk} {...options} onPreview={() => setPreviewOpen(true)} />}
+    >
       {preview ? (
         <CitationPreviewDialog chunk={chunk} open={previewOpen} onClose={() => setPreviewOpen(false)} />
       ) : null}
-    </li>
+    </EvidenceCard>
   );
+}
+
+/** 根拠のカードの操作の行（引用箇所の表示・根拠の評価）。 */
+export function CitationActions({
+  chunk,
+  traceId,
+  searchAnswerProfileId,
+  sourceSurface = "search",
+  messageId = null,
+  contentSnapshot = null,
+  preview = true,
+  onPreview,
+}: CitationCardOptions & { chunk: RetrievedChunk; onPreview: () => void }) {
+  const previewFileName = chunk.file_name ?? chunk.document_id;
+  return (
+    <>
+      {/* 引用箇所は画面を移動せずダイアログで見せる。文書の詳細はダイアログの中から別タブで開く（#442）。 */}
+      {preview ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            icon={LocateFixed}
+            onClick={onPreview}
+            aria-label={t("search.citation.previewOpenLabel", { file: previewFileName })}
+          >
+            {t("search.citation.previewOpen")}
+          </Button>
+        </div>
+      ) : null}
+      {traceId && searchAnswerProfileId ? (
+        <FeedbackControls
+          traceId={traceId}
+          searchAnswerProfileId={searchAnswerProfileId}
+          targetType="citation"
+          sourceSurface={sourceSurface}
+          documentId={chunk.document_id}
+          chunkId={chunk.chunk_id}
+          messageId={messageId}
+          contentSnapshot={contentSnapshot}
+          compact
+        />
+      ) : null}
+    </>
+  );
+}
+
+/** RAG の根拠 → 共通の根拠のデータの契約（#2328）。 */
+export function citationEvidenceItem(chunk: RetrievedChunk): EvidenceListItem {
+  const recipeSlot = integerMetadataValue(chunk.metadata.recipe_slot_no);
+  const tags: EvidenceTag[] = [];
+  if (recipeSlot) tags.push({ id: "recipe", value: t("documents.recipes.name", { slot: recipeSlot }), icon: Layers });
+  if (chunk.category_name) tags.push({ id: "category", value: chunk.category_name, tone: "info" });
+  return {
+    key: chunk.chunk_id,
+    fileName: chunk.file_name ?? chunk.document_id,
+    text: chunk.text,
+    // AI に渡した箇所のうち、回答で引用したもの（#1208）。該当確認済みの記載と参考の記載を分ける（#2040）。
+    usedInAnswer: citationModelUsed(chunk),
+    answerUse: citationAnswerUse(chunk),
+    // 新しい版に置き換えた文書（旧版）の根拠（#1248。include_superseded で含めたときだけ出る）。
+    superseded: chunk.metadata.document_superseded === true,
+    routeBadges: citationRetrievalBadges(chunk),
+    score: chunk.score,
+    rerankScore: chunk.rerank_score,
+    chips: citationMetadataChips(chunk.metadata).map((chip) => ({
+      id: chip.id,
+      label: chipLabel(chip),
+      value: chipValue(chip),
+    })),
+    tags,
+    // 原典の URL（XML ツリー JSON の文書。#2024）。根拠を原典で確かめる。
+    sourceUrl: citationSourceUrl(chunk.metadata),
+  };
 }
 
 function citationRetrievalBadges(chunk: RetrievedChunk): string[] {
@@ -186,95 +144,15 @@ function citationRetrievalBadges(chunk: RetrievedChunk): string[] {
   if (keywordRank != null) badges.push(t("search.citation.badge.keyword", { rank: keywordRank }));
   if (rerankRank != null) badges.push(t("search.citation.badge.rerank", { rank: rerankRank }));
   if (chunk.metadata.context_role === "evidence" || badges.length > 0) {
-    badges.push(t("search.citation.badge.evidence"));
+    badges.push(EVIDENCE_LABELS.evidenceBadge);
   }
   return badges;
-}
-
-function CitationScores({ chunk }: { chunk: RetrievedChunk }) {
-  return (
-    <div
-      data-testid="citation-score-panel"
-      className="w-full space-y-2 rounded-md bg-surface-sunken px-2.5 py-2 sm:w-[12.57rem] sm:shrink-0"
-    >
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <span className="font-medium text-fg-muted">{t("search.citation.score.retrieval")}</span>
-        <span className="tnum shrink-0 text-fg">{formatScoreValue(chunk.score)}</span>
-      </div>
-      <ScoreMeter label={t("search.citation.score.rerank")} value={chunk.rerank_score} />
-    </div>
-  );
-}
-
-function ScoreMeter({
-  label,
-  value,
-}: {
-  label: string;
-  value: number | null;
-}) {
-  if (value == null || !Number.isFinite(value)) {
-    return (
-      <p className="text-xs font-medium text-fg-muted">
-        {t("search.citation.score.rerankMissing")}
-      </p>
-    );
-  }
-  const valueText = formatScoreValue(value);
-  const ariaNow = Math.min(Math.max(value, 0), 1);
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <span className="font-medium text-fg-muted">{label}</span>
-        <span className="tnum shrink-0 text-fg">{valueText}</span>
-      </div>
-      <div
-        data-surface-tint="neutral"
-        role="meter"
-        aria-label={t("search.citation.score.meter", { label, value: valueText })}
-        aria-valuemin={0}
-        aria-valuemax={1}
-        aria-valuenow={ariaNow}
-        aria-valuetext={valueText}
-        className="h-1.5 overflow-hidden rounded-full bg-surface-hover"
-      >
-        <div
-          data-testid="citation-rerank-fill"
-          className="h-full rounded-full bg-success-emphasis"
-          style={{ width: `${scoreMeterPercent(value)}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function formatScoreValue(value: number): string {
-  return Number.isFinite(value) ? value.toFixed(3) : "—";
-}
-
-export function scoreMeterPercent(value: number | null): number {
-  if (value == null || !Number.isFinite(value) || value <= 0) {
-    return 0;
-  }
-  return Math.min(100, value * 100);
 }
 
 /** chunk_id(document:chunk_set:index)から chunk_set(variant)id を取り出す。無ければ null。 */
 export function variantIdFromChunkId(chunkId: string): string | null {
   const parts = chunkId.split(":");
   return parts.length === 3 ? parts[1] : null;
-}
-
-function MetadataChip({ chip }: { chip: CitationMetadataChip }) {
-  return (
-    <div className="min-w-0 max-w-full rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted sm:max-w-80">
-      <dt className="sr-only">{chipLabel(chip)}</dt>
-      {/* 幅で切れたときも全文を確かめられるよう title に同じ文を入れる。 */}
-      <dd className="truncate" title={chipValue(chip)}>
-        {chipValue(chip)}
-      </dd>
-    </div>
-  );
 }
 
 function chipValue(chip: CitationMetadataChip): string {

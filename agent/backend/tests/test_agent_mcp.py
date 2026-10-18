@@ -394,16 +394,24 @@ def test_api_key_limits_runs_per_day_and_calls_per_minute(
 
 
 def test_run_output_sources_use_the_rag_tool_results_checked_by_the_validation() -> None:
-    """根拠は RAG のツールの結果の evidence のうち、最終の検証で確かめた chunk（無ければ全件）。"""
+    """根拠は RAG のツールの結果の evidence のうち、回答で引用した chunk（最終の検証が段落を
+    裏付けた chunk・回答が書いた ID。画面と同じ判定。#2328）で、無ければ全件。"""
     evidence = [
         {
             "evidence_id": "e1",
+            "document_id": "d1",
             "chunk_id": "c1",
             "file_name": "経費精算規程.pdf",
             "excerpt": "翌月10日までに申請する。",
             "locator": {"page_start": 1, "section_path": ["第2条（精算の期限）"]},
         },
-        {"evidence_id": "e2", "chunk_id": "c2", "file_name": "在宅勤務規程.pdf", "excerpt": "x"},
+        {
+            "evidence_id": "e2",
+            "document_id": "d2",
+            "chunk_id": "c2",
+            "file_name": "在宅勤務規程.pdf",
+            "excerpt": "x",
+        },
     ]
     run = RunState(
         id="run_sources",
@@ -425,7 +433,11 @@ def test_run_output_sources_use_the_rag_tool_results_checked_by_the_validation()
             Artifact(
                 name="回答の検証",
                 kind="answer_validation",
-                content={"evidence": [{"chunk_id": "c1"}]},
+                content={
+                    "status": "completed",
+                    "evidence": [{"chunk_id": "c1"}, {"chunk_id": "c2"}],
+                    "result": {"claims": [{"status": "supported", "chunk_id": "c1"}]},
+                },
             ),
         ],
     )

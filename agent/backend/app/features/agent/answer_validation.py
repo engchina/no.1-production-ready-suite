@@ -50,12 +50,14 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from app.features.agent.answer_passages import (
     environment_check_passages,
     is_heading,
+    is_lookup_note,
     is_structure,
     list_heading_lines,
     non_claim_passages,
@@ -293,7 +295,7 @@ def _written_id_matches(written: str, actual: str) -> bool:
     )
 
 
-def _cited_chunk_ids(answer: str, chunk_ids: list[str]) -> set[str]:
+def cited_chunk_ids(answer: str, chunk_ids: Sequence[str]) -> set[str]:
     """回答が書いた根拠の id（そのままの形と、省いて書いて 1 つの根拠に決まる形）。"""
     cited = {chunk_id for chunk_id in chunk_ids if _cited_in(answer, chunk_id)}
     for match in dict.fromkeys(item.group(0) for item in _CITED_ID.finditer(answer)):
@@ -330,7 +332,7 @@ def _ordered(refs: list[_GroupRef], answer: str) -> list[tuple[str, str]]:
         return [item.ref for item in refs]
     features = answer_features(answer)
     weights = order_weights([matched_features(features, item.evidence) for item in refs])
-    cited = _cited_chunk_ids(answer, [item.ref[1] for item in refs])
+    cited = cited_chunk_ids(answer, [item.ref[1] for item in refs])
 
     def key(index: int) -> tuple[int, float, int]:
         item = refs[index]
@@ -907,6 +909,25 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(line for line, _h, _c in lines)).strip()
 
 
+def without_lookup_notes(answer: str) -> str:
+    """回答から、調べるのに使ったツール・プロファイル・内部の ID だけを述べる行を外す（#2328）。
+
+    最終の検証の前（と、検証をしない設定でも）に組み込み Runtime が呼ぶ。資料の主張では
+    ないので検証に渡さず、「資料で確認できず除いた内容」にも書かない（内部の ID を利用者に
+    見せない）。外すと本文が残らない・位置を決められないときはそのまま返す。
+    """
+    quotes = {
+        text
+        for line in answer.split("\n")
+        for _start, _end, text in passage_spans(line)
+        if is_lookup_note(text)
+    }
+    if not quotes:
+        return answer
+    body = withhold_paragraphs(answer, quotes)
+    return body or answer
+
+
 def error_findings(result: JsonObject) -> list[JsonObject]:
     """決定的な検査の error の指摘（valid にしない。warning は確かめたい点なので出さない）。"""
     return [
@@ -939,6 +960,23 @@ def _notice_lines(result: JsonObject, claims: list[JsonObject]) -> list[str]:
     return lines
 
 
+def _listed(result: JsonObject, claims: list[JsonObject]) -> JsonObject:
+    """「資料で確認できず除いた内容」の節に書いた項目の数（#2328）。
+
+    画面の「回答の確かめ」は、節に書いた項目（段落は先頭から `claims` 件、決定的な検査の
+    指摘は先頭から `findings` 件、古い版・見つからない根拠）を出し直さず、節に書けなかった
+    残りだけを出す。
+    """
+    findings = [item for item in error_findings(result) if item.get("message")]
+    return {
+        "claims": min(len(claims), _MAX_LISTED_CLAIMS),
+        "findings": min(len(findings), _MAX_LISTED_FINDINGS),
+        "evidence": True,
+        # 節の見出し（画面が回答の本文と節を分ける）。
+        "heading": UNVERIFIED_HEADING,
+    }
+
+
 def mark_non_claims(answer: str, result: JsonObject) -> JsonObject:
     """判定の段落のうち、主張ではない段落（見出し・出典・表の形・質問・不足の文・「資料で確認できず除いた内容」の節）に
     `non_claim`（判定の種類）を付けた結果の写しを返す（#1306。`answer_passages.non_claim_passages`）。
@@ -967,7 +1005,7 @@ def mark_non_claims(answer: str, result: JsonObject) -> JsonObject:
     return {**result, "claims": claims}
 
 
-def publish_answer(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
+def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     """判定（判定として使える結果）から、利用者に見せる回答と、外した内容の記録を返す。
 
     valid（または確かめる主張も error の指摘も無い）ならそのまま。主張ではない段落（見出し・
@@ -1025,14 +1063,32 @@ def publish_answer(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         # （`unassessed`）段落を外すと本文が空になる: 検証が確かめきれなかったので、本文は消さずに
         # 確かめきれなかった点を示す（検証の失敗で内容を落とさないのと同じ。#1391）。
         lines = [UNVERIFIED_KEPT_INTRO, *_notice_lines(result, blocking)]
-        withheld = {"claims": 0, "findings": 0, "all": False, "unverified": len(blocking)}
+        withheld = {
+            "claims": 0,
+            "findings": 0,
+            "all": False,
+            "unverified": len(blocking),
+            "listed": _listed(result, blocking),
+        }
         return f"{answer.rstrip()}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), withheld
     lines = _notice_lines(result, blocking)
     if blocking or (not body and not guide_errors):
         lines.insert(0, WITHHELD_INTRO)
     text = body or (GUIDE_WITHHELD if guide_errors else NOTHING_CONFIRMED)
-    withheld = {"claims": len(blocking), "findings": len(errors), "all": not body}
+    withheld = {
+        "claims": len(blocking),
+        "findings": len(errors),
+        "all": not body,
+        "listed": _listed(result, blocking),
+    }
     return f"{text}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), withheld
+
+
+def publish_answer(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
+    """`_publish` の、利用者に見せる回答と外した内容の記録（節に書いた項目の数を除く）。"""
+    published, withheld = _publish(answer, result)
+    withheld.pop("listed", None)
+    return published, withheld
 
 
 def combine_validations(answer: str, validations: list[JsonObject]) -> tuple[JsonObject, str]:
@@ -1062,7 +1118,13 @@ def combine_validations(answer: str, validations: list[JsonObject]) -> tuple[Jso
     else:
         merged = mark_non_claims(answer, merge_results([item["result"] for item in validations]))
         content = validation_content(STATUS_COMPLETED, result=merged, **common)
-        published, content["withheld"] = publish_answer(answer, merged)
+        published, withheld = _publish(answer, merged)
+        listed = withheld.pop("listed", None)
+        content["withheld"] = withheld
+        if listed is not None:
+            # 回答の本文の「資料で確認できず除いた内容」の節に書いた項目の数
+            # （#2328。画面の「回答の確かめ」は出し直さない）。
+            content["notice"] = listed
     content["connections"] = validations
     return content, published
 

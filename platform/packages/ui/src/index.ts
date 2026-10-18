@@ -184,7 +184,12 @@ export {
   type ApiTransportRequest,
 } from "./lib/api-error";
 export { MessageText, type MessageTextProps } from "./components/ui/message-text";
-export { MarkdownText, type MarkdownTextLabels, type MarkdownTextProps } from "./components/ui/markdown-text";
+export {
+  MarkdownInlineText,
+  MarkdownText,
+  type MarkdownTextLabels,
+  type MarkdownTextProps,
+} from "./components/ui/markdown-text";
 export {
   ChatUserMessage,
   type ChatUserMessageProps,
@@ -243,6 +248,38 @@ export {
   type ClarificationLabels,
   type ClarificationNouns,
 } from "./components/chat/clarification-labels";
+export {
+  AnswerCitationLinks,
+  AnswerSections,
+  type AnswerCitationRef,
+  type AnswerSectionEntry,
+  type AnswerSectionsBlock,
+  type AnswerSectionsProps,
+} from "./components/chat/answer-sections";
+export {
+  AnswerEvidence,
+  DEFAULT_EVIDENCE_LABELS,
+  EVIDENCE_LIST_CLASS,
+  EvidenceAnswerUseBadge,
+  EvidenceCard,
+  EvidenceList,
+  EvidenceViews,
+  evidenceCountLabel,
+  evidenceLabels,
+  evidenceScoreMeterPercent,
+  formatEvidenceScore,
+  type AnswerEvidenceProps,
+  type EvidenceAnswerUse,
+  type EvidenceCardProps,
+  type EvidenceChip,
+  type EvidenceGroup,
+  type EvidenceGroupEntry,
+  type EvidenceViewsProps,
+  type EvidenceLabels,
+  type EvidenceListItem,
+  type EvidenceListProps,
+  type EvidenceTag,
+} from "./components/chat/answer-evidence";
 export {
   ChatAnswer,
   ChatPendingTurn,

@@ -843,6 +843,36 @@ def is_guide_not_found(text: str) -> bool:
     return not _OPERATION.search(value)
 
 
+# 調べ方の行（#2328）の内部の識別子: 「ID: …」のラベル、英字（a〜f）と数字を含む 8 文字以上の 16 進
+# （UUID の区切りを含む）、ツールの名前（`rag_search`・`<接続>__<ツール>`）。
+_INTERNAL_ID = re.compile(
+    r"(?<![A-Za-z])(?:ID|Id|id)\s*[:：=]\s*\S"
+    r"|(?<![0-9A-Za-z])(?=[0-9A-Fa-f-]*[A-Fa-f])(?=[0-9A-Fa-f-]*[0-9])[0-9A-Fa-f]{8,}(?:-[0-9A-Fa-f]{4,})*"
+    r"(?![0-9A-Za-z])"
+    r"|(?<![0-9A-Za-z_])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![0-9A-Za-z_])"
+    r"|[0-9A-Za-z]__[a-z]"
+)
+# 調べ方の行の述語（「〜を用いて上記根拠を取得しました」「〜で検索しました」）。
+_LOOKUP_ACTION = re.compile(
+    r"(?:用いて|使って|使用して|利用して|により|によって|から|で)[、,]?[^。]{0,30}?"
+    r"(?:取得|検索|参照|照会|抽出|収集|調査|確認)(?:しました|しています|します|した)[。．]?$"
+)
+
+
+def is_lookup_note(text: str) -> bool:
+    """調べるのに使ったツール・プロファイル・内部の ID だけを述べる行か（#2328）。
+
+    「〈プロファイル名〉（ID: 0f3a9c2e…）を用いて上記根拠を取得しました。」のような
+    作業の経過で、資料の主張ではない（使ったツールと根拠は画面と MCP の `sources` が
+    別に示す）。内部の識別子（`_INTERNAL_ID`）と調べ方の述語（`_LOOKUP_ACTION`）の
+    両方がある文に限る。操作の指示・質問は除く。
+    """
+    value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+    if not value or len(value) > 200 or is_question(value) or _OPERATION.search(value):
+        return False
+    return bool(_INTERNAL_ID.search(value) and _LOOKUP_ACTION.search(value))
+
+
 # 結論の不足の文の前の、調べたことだけを述べる節（「資料を確認しましたが、」「確認できる根拠を
 # 検索しましたが、」。#1454）。
 _SEARCHED_LEAD = re.compile(
