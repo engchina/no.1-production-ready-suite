@@ -26,6 +26,7 @@ SUPPORT_GUIDE_TOOLS: tuple[str, ...] = (
 # 1 つの資料の頁の範囲・1 つの手順の参照の数の上限（#2395）。
 MAX_REFERENCE_PAGE_RANGES = 10
 MAX_STEP_REFERENCES = 10
+MAX_PAGE_NUMBER = 100_000
 _ID_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]{0,63}$"
 _SHORT = 200
 _TEXT = 2000
@@ -157,8 +158,8 @@ class SupportGuideBranch(_Strict):
 class SupportGuidePageRange(_Strict):
     """参照する資料の頁の範囲（両端を含む）。``page_end`` を省けば 1 頁。"""
 
-    page_start: int = Field(ge=1, le=100_000)
-    page_end: int | None = Field(default=None, ge=1, le=100_000)
+    page_start: int = Field(ge=1, le=MAX_PAGE_NUMBER)
+    page_end: int | None = Field(default=None, ge=1, le=MAX_PAGE_NUMBER)
 
     @model_validator(mode="after")
     def _ordered(self) -> SupportGuidePageRange:
@@ -514,6 +515,10 @@ class SupportGuideProcessReference(BaseModel):
     name: str = Field(description="回答の過程に書いた資料の名前。")
     pages: str = Field(default="", description="回答の過程に書いた頁（書いたまま）。")
     section: str = Field(default="", description="回答の過程に書いた章節（書いたまま）。")
+    step_ids: list[str] = Field(
+        default_factory=list,
+        description="この資料を根拠にする手順の id（空なら全手順に共通の資料。#2395）。",
+    )
     status: Literal["resolved", "unresolved", "ambiguous"]
     document_id: str | None = None
     file_name: str | None = None
