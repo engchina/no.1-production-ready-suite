@@ -162,50 +162,109 @@ describe("ClarificationCard", () => {
     expect(byTestId<HTMLButtonElement>("clarification-card-confirm").disabled).toBe(false);
   });
 
-  it("スキップ・キャンセルは渡したときだけ出し、補足を説明として結ぶ", () => {
+  it("スキップは渡したときだけ出して補足を説明として結び、「確認をやめる」は置かない", () => {
     const onSkip = vi.fn();
-    const onCancel = vi.fn();
     render();
     expect(host.querySelector('[data-testid="clarification-card-skip"]')).toBeNull();
-    expect(host.querySelector('[data-testid="clarification-card-cancel"]')).toBeNull();
 
-    render({ onSkip, onCancel });
+    render({ onSkip });
     const skip = byTestId<HTMLButtonElement>("clarification-card-skip");
-    const cancel = byTestId<HTMLButtonElement>("clarification-card-cancel");
     expect(skip.textContent).toBe("確認せずに回答");
     expect(document.getElementById(skip.getAttribute("aria-describedby")!)?.textContent).toContain(
       "前提を示して回答します。"
     );
-    expect(cancel.textContent).toBe("確認をやめる");
-    expect(document.getElementById(cancel.getAttribute("aria-describedby")!)?.textContent).toContain(
-      "質問は入力欄に戻ります。"
-    );
-    // 答える前でもスキップ・キャンセルは押せる。
+    // 確認を終えるのは「確認せずに回答」だけ（質問を取り消すのは入力欄の「停止」。#2311）。
+    expect(host.textContent).not.toContain("確認をやめる");
+    expect(host.textContent).not.toContain("質問は入力欄に戻ります。");
+    expect(Array.from(host.querySelectorAll("button")).map((button) => button.textContent)).toEqual([
+      "この内容で回答",
+      "確認せずに回答",
+    ]);
+    // 答える前でもスキップは押せる。
     click(skip);
-    click(cancel);
     expect(onSkip).toHaveBeenCalledTimes(1);
-    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it("処理中は押したボタンだけを loading にし、ほかの操作と入力を押せなくする", () => {
+  it("確定の処理中はフォームを答えた内容の記録と経過の行 1 つに置き換える", () => {
     const onConfirm = vi.fn();
-    render({ onConfirm, onSkip: vi.fn(), onCancel: vi.fn(), defaultValue: { period: { optionIds: ["month"], otherText: "" } } });
+    const onSkipWhileConfirming = vi.fn();
+    const items = [period, regions, { ...regions, id: "extra", prompt: "任意の確認", optional: true }];
+    const value = {
+      period: { optionIds: ["month"], otherText: "" },
+      regions: { optionIds: ["east", "west"], otherText: "沖縄" },
+    };
+    render({ items, value, onValueChange: vi.fn(), onConfirm, onSkip: vi.fn(), error: <p data-testid="err">失敗</p> });
+    const confirm = byTestId<HTMLButtonElement>("clarification-card-confirm");
+    act(() => confirm.focus());
+    render({
+      items,
+      value,
+      onValueChange: vi.fn(),
+      onConfirm,
+      onSkip: vi.fn(),
+      onSkipWhileConfirming,
+      busyAction: "confirm",
+      round: { current: 2, max: 2 },
+    });
+    // フォーム（選択肢・自由入力・操作の行・押せない理由・最後の確認の補足）は出さない。
+    expect(host.querySelector("fieldset")).toBeNull();
+    expect(host.querySelector("textarea")).toBeNull();
+    expect(host.querySelector('[data-testid="clarification-card-confirm"]')).toBeNull();
+    expect(host.querySelector('[data-testid="clarification-card-skip"]')).toBeNull();
+    expect(host.querySelector('[data-testid="clarification-card-last-round"]')).toBeNull();
+    // 答えた内容の記録（答えの無い任意の確認事項は出さない）。
+    const answered = Array.from(host.querySelectorAll('[data-testid="clarification-card-answered-entry"]')).map(
+      (entry) => [entry.querySelector("dt")?.textContent, entry.querySelector("dd")?.textContent]
+    );
+    expect(answered).toEqual([
+      [period.prompt, "今月"],
+      [regions.prompt, "東日本、西日本、その他: 沖縄"],
+    ]);
+    // 経過の行は 1 つで、スピナーもカードの中に 1 つだけ。待たずに進める「確認せずに回答」を経過の行に出す。
+    const progress = byTestId("clarification-card-progress");
+    expect(progress.textContent).toContain(DEFAULT_CLARIFICATION_LABELS.confirming);
+    expect(byTestId("clarification-card-progress-timer").textContent).toContain("00:00");
+    expect(host.querySelectorAll(".pr-spinner")).toHaveLength(1);
+    const skipWhileConfirming = Array.from(progress.querySelectorAll("button")).find(
+      (button) => button.textContent === "確認せずに回答"
+    )!;
+    click(skipWhileConfirming);
+    expect(onSkipWhileConfirming).toHaveBeenCalledTimes(1);
+    // ボタンが消えたので、フォーカスは題へ移す。
+    expect(document.activeElement).toBe(host.querySelector("h3"));
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    // 失敗したらフォームと入力が戻り、失敗を操作の行の直上に出し、確認事項の文へフォーカスを移す。
+    render({ items, value, onValueChange: vi.fn(), onConfirm, onSkip: vi.fn(), error: <p data-testid="err">失敗</p> });
+    expect(optionInput("period", "month").checked).toBe(true);
+    expect(otherField("regions").value).toBe("沖縄");
+    expect(byTestId("err").nextElementSibling?.querySelector('[data-testid="clarification-card-confirm"]')).toBeTruthy();
+    expect(document.activeElement?.textContent).toBe(period.prompt);
+  });
+
+  it("経過の行の「確認せずに回答」は渡したときだけ出す", () => {
+    render({ onSkip: vi.fn(), busyAction: "confirm", defaultValue: { period: { optionIds: ["month"], otherText: "" } } });
+    expect(byTestId("clarification-card-progress").querySelector("button")).toBeNull();
+  });
+
+  it("スキップの処理中は押したボタンだけを loading にし、ほかの操作と入力を押せなくする", () => {
+    const onConfirm = vi.fn();
     render({
       onConfirm,
       onSkip: vi.fn(),
-      onCancel: vi.fn(),
-      busyAction: "confirm",
+      dismissAction: { label: "直すのをやめる", onClick: vi.fn() },
+      defaultValue: { period: { optionIds: ["month"], otherText: "" } },
     });
-    const confirm = byTestId<HTMLButtonElement>("clarification-card-confirm");
-    expect(confirm.getAttribute("aria-busy")).toBe("true");
-    expect(confirm.disabled).toBe(false);
-    expect(byTestId<HTMLButtonElement>("clarification-card-skip").disabled).toBe(true);
-    expect(byTestId<HTMLButtonElement>("clarification-card-cancel").disabled).toBe(true);
+    render({ onConfirm, onSkip: vi.fn(), dismissAction: { label: "直すのをやめる", onClick: vi.fn() }, busyAction: "skip" });
+    const skip = byTestId<HTMLButtonElement>("clarification-card-skip");
+    expect(skip.getAttribute("aria-busy")).toBe("true");
+    expect(byTestId<HTMLButtonElement>("clarification-card-confirm").disabled).toBe(true);
+    expect(byTestId<HTMLButtonElement>("clarification-card-dismiss").disabled).toBe(true);
     expect(optionInput("period", "month").disabled).toBe(true);
     expect(otherField("period").disabled).toBe(true);
     // 選んだ内容は処理中も残る。
     expect(optionInput("period", "month").checked).toBe(true);
-    click(confirm);
+    click(byTestId("clarification-card-confirm"));
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
@@ -265,17 +324,19 @@ describe("ClarificationCard", () => {
     expect(byTestId("clarification-card-blocked").textContent).toContain("残り 1 件");
   });
 
-  it("製品の操作を確定の右に置き、空の補足は出さない", () => {
+  it("製品の操作を確定の右に、入力の取りやめを反対の端に置く", () => {
+    const onDismiss = vi.fn();
     render({
       onSkip: vi.fn(),
-      onCancel: vi.fn(),
       actions: <button type="button" data-testid="product-action">直しを伝える</button>,
-      labels: { cancel: "直すのをやめる", cancelHint: "" },
+      dismissAction: { label: "直すのをやめる", onClick: onDismiss },
     });
     const buttons = Array.from(host.querySelectorAll("button")).map((button) => button.textContent);
     expect(buttons).toEqual(["この内容で回答", "直しを伝える", "確認せずに回答", "直すのをやめる"]);
-    expect(byTestId("clarification-card-cancel").getAttribute("aria-describedby")).toBeNull();
-    expect(host.textContent).not.toContain("質問は入力欄に戻ります。");
+    const dismiss = byTestId<HTMLButtonElement>("clarification-card-dismiss");
+    expect(dismiss.getAttribute("aria-describedby")).toBeNull();
+    click(dismiss);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
   it("製品の名詞で文言を組む（NL2SQL）", () => {
@@ -287,6 +348,7 @@ describe("ClarificationCard", () => {
     expect(labels.recordTitle).toBe("SQL の生成前に確認した内容");
     expect(DEFAULT_CLARIFICATION_LABELS.confirm).toBe("この内容で回答");
     expect(DEFAULT_CLARIFICATION_LABELS.recordTitle).toBe("回答前に確認した内容");
+    expect(DEFAULT_CLARIFICATION_LABELS).not.toHaveProperty("cancel");
   });
 });
 

@@ -3,7 +3,7 @@
 // 要件のまとめと SQL の骨組みを出す。session の作り方（業務プロファイルの推薦・会話の履歴）と、反映の後の操作
 // （質問の欄に入れる・チャットで SQL を生成する）だけを画面ごとに持つ。
 // 「SQL の要件（AI の理解）」の一覧（#1718）も両方の画面で同じ部品・同じ振る舞いにする（違いは置き場所と幅だけ）。
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Check, MessageSquareText, Pencil, Plus, RotateCcw } from "lucide-react";
 
 import {
@@ -476,20 +476,18 @@ export function useRequirementProceed(controller: RequirementSessionController) 
 /**
  * 要件の検査ができなかったときの表示（チャットと SQL 生成の画面で共通。#1442 / #1715）。理由（backend の 1 行）と
  * 「詳細」（失敗の種類・HTTP ステータス・モデル・所要時間・request ID）を `ApiErrorBanner` で出し、
- * 「もう一度確認」「確認せずに SQL を生成」と、画面の中止の操作を並べる。
+ * 「もう一度確認」「確認せずに SQL を生成」を並べる（確認を終える操作は「確認せずに SQL を生成」だけ。#2311）。
  */
 export function RequirementCheckFailure({
   error,
   onRetry,
   onSkip,
-  cancelAction,
   size = "sm",
   testId,
 }: {
   error: unknown;
   onRetry: () => void;
   onSkip: () => void;
-  cancelAction?: ReactNode;
   size?: ButtonSize;
   testId?: string;
 }) {
@@ -507,7 +505,6 @@ export function RequirementCheckFailure({
           <Button type="button" variant="secondary" size={size} icon={MessageSquareText} onClick={onSkip}>
             {t("chat.requirement.skip")}
           </Button>
-          {cancelAction}
         </div>
       }
     />
@@ -542,9 +539,10 @@ export function RequirementStateBanners({ state, unresolvedCount }: { state: Req
 }
 
 /**
- * 回答を反映している間の経過（回答の後に LLM の再検査が走ると数秒以上かかる）。経過時間はこの回答を送った時から
- * 数える（前の段階・利用者が答えていた時間を含めない）。`onSkip` を渡すと、待たずに「確認せずに SQL を生成」へ
- * 進む操作を経過の行に出す（チャット）。
+ * 確認のカードの外から送った回答（確認済みの一覧の候補・確かめて生成するカードの「直しを伝える」）を反映している
+ * 間の経過（回答の後に LLM の再検査が走ると数秒以上かかる）。経過時間はこの回答を送った時から数える（前の段階・
+ * 利用者が答えていた時間を含めない）。`onSkip` を渡すと、待たずに「確認せずに SQL を生成」へ進む操作を経過の行に
+ * 出す。確認のカードの「この内容で回答」の経過は、カードがフォームを置き換えて出す（`requirementCardConfirming`）。
  */
 export function RequirementAnswerProgress({ active, onSkip }: { active: boolean; onSkip?: () => void }) {
   if (!active) return null;
@@ -573,8 +571,16 @@ export function requirementClarificationLabels(): ClarificationLabels {
     }),
     other: t("nl2sql.clarification.other"),
     otherPlaceholder: t("nl2sql.clarification.otherPlaceholder"),
-    cancel: t("nl2sql.clarification.close"),
+    confirming: t("nl2sql.clarification.loading.answer"),
   };
+}
+
+/**
+ * 確認のカードの「この内容で回答」を送っている（カードがフォームを答えた内容と経過の行に置き換えている）か。
+ * 確認済みの一覧の候補から答えているときは含めない（カードは押せなくするだけ）。
+ */
+export function requirementCardConfirming(controller: RequirementSessionController): boolean {
+  return controller.busyAction === "answer" && Boolean(controller.activeItem) && !controller.answeringCandidateId;
 }
 
 /** 回答の候補を共通のカードの選択肢にする（説明・物理名・根拠は選択肢の `detail` に出す）。 */
@@ -598,7 +604,7 @@ function candidateOption(candidate: RequirementCandidate): ClarificationOption {
   };
 }
 
-/** カードの処理中の操作（押したボタンだけを loading にする）。 */
+/** カードの処理中の操作（確定はフォームを経過の行に置き換え、スキップは押したボタンだけを loading にする）。 */
 function cardBusyAction(
   busyAction: RequirementBusyAction,
   map: Partial<Record<RequirementBusyAction, ClarificationBusyAction>>
@@ -626,7 +632,7 @@ export function RequirementCard({
   applyLabel,
   onApply,
   onSkip,
-  onClose,
+  onSkipWhileConfirming,
   idPrefix,
 }: {
   controller: RequirementSessionController;
@@ -635,13 +641,10 @@ export function RequirementCard({
   applyLabel: string;
   /** 確かめた要件で SQL を生成する（反映して次へ進む）。 */
   onApply: () => void;
-  /** 確認を使わずに SQL を生成する（要件が生成に進めないときのスキップ）。 */
+  /** 確認を使わずに SQL を生成する（要件が生成に進めないときのスキップ。確認を終える唯一の操作。#2311）。 */
   onSkip: () => void;
-  /**
-   * 確認をやめる（SQL 生成の画面のパネルを閉じる）。渡さなければ「確認をやめる」を出さない（チャット。確認を
-   * 終えるのは「確認せずに SQL を生成」で、質問は取り消さずに SQL の生成へ進む）。
-   */
-  onClose?: () => void;
+  /** 「この内容で回答」の経過の行に出す「確認せずに SQL を生成」（AI の再検査を待たずに進む）。 */
+  onSkipWhileConfirming?: () => void;
   idPrefix: string;
 }) {
   const {
@@ -697,6 +700,7 @@ export function RequirementCard({
     };
     // スキップは、要件が SQL の生成に進めるなら残りを AI の推測のまま反映し、進めないなら確認を使わずに作る。
     const skipApplies = showApply && unresolvedCount > 0;
+    const answeringFromList = busyAction === "answer" && Boolean(controller.answeringCandidateId);
     return (
       <div className="min-w-0" data-testid="nl2sql-clarification-question" data-item-key={activeItem.key}>
         <ClarificationCard
@@ -717,14 +721,23 @@ export function RequirementCard({
             correctingItem ? undefined : { current: answeredCount + 1, total: answeredCount + unresolvedCount }
           }
           round={round}
-          busyAction={cardBusyAction(busyAction, {
-            answer: "confirm",
-            apply: "skip",
-            cancel: "cancel",
-          })}
+          // 確認済みの一覧の候補から答えている間は、カードは押せなくするだけ（経過は一覧の側の行）。
+          busyAction={
+            answeringFromList ? null : cardBusyAction(busyAction, { answer: "confirm", apply: "skip" })
+          }
+          disabled={answeringFromList}
           onConfirm={() => void controller.submitAnswer()}
           onSkip={correctingItem ? undefined : skipApplies ? onApply : onSkip}
-          onCancel={correctingItem ? () => controller.setCorrectingItemId(null) : onClose}
+          onSkipWhileConfirming={correctingItem ? undefined : onSkipWhileConfirming}
+          // 直す・足す入力の取りやめ（前の確認事項に戻る。質問・確認は取り消さない）。
+          dismissAction={
+            correctingItem
+              ? {
+                  label: adding ? t("nl2sql.clarification.addCancel") : t("nl2sql.clarification.correctCancel"),
+                  onClick: () => controller.setCorrectingItemId(null),
+                }
+              : undefined
+          }
           labels={{
             ...baseLabels,
             confirm: adding
@@ -732,12 +745,6 @@ export function RequirementCard({
               : correctingItem
                 ? t("nl2sql.clarification.correctSubmit")
                 : t("nl2sql.clarification.answer"),
-            ...(correctingItem
-              ? {
-                  cancel: adding ? t("nl2sql.clarification.addCancel") : t("nl2sql.clarification.correctCancel"),
-                  cancelHint: "",
-                }
-              : {}),
           }}
         />
       </div>
@@ -781,14 +788,13 @@ export function RequirementCard({
           if (entry) controller.setAnswerDraft(entry.optionIds, entry.otherText);
         }}
         round={round}
-        busyAction={cardBusyAction(busyAction, { apply: "confirm", cancel: "cancel" })}
+        busyAction={cardBusyAction(busyAction, { apply: "confirm" })}
         disabled={sendingCorrection}
         blockedReason={pendingHint}
         onConfirm={onApply}
-        // 「確認をやめる」を出さない画面（チャット）は、確かめた要件を使わずに質問のまま SQL を生成する操作を出す。
-        onSkip={onClose ? undefined : onSkip}
-        onCancel={onClose}
-        labels={{ ...baseLabels, confirm: applyLabel }}
+        // 確かめた要件を使わずに、質問のまま SQL を生成する（確認を終える唯一の操作。#2311）。
+        onSkip={onSkip}
+        labels={{ ...baseLabels, confirm: applyLabel, confirming: t("nl2sql.clarification.loading.apply") }}
         actions={
           <Button
             type="button"

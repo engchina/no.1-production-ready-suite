@@ -1632,6 +1632,50 @@ test("要件の下書きの最中も、経過の行の「確認せずに SQL を
   expect(state.requests).toHaveLength(1);
 });
 
+test("「この内容で回答」を押すと、フォームと警告を消して答えた内容と経過の行 1 つだけを出す (#2311)", { tag: "@responsive" }, async ({
+  page,
+}, testInfo) => {
+  const width = page.viewportSize()?.width ?? 0;
+  await setup(page, { create: "minimum", answers: ["ready"], answerDelayMs: 3_000 });
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
+  await composer.fill("受注の一覧");
+  await composer.press("Enter");
+  const turn = page.getByTestId("sql-chat-requirement-turn");
+  const question = turn.getByTestId("nl2sql-clarification-question");
+  const warning = turn.getByText("SELECT（何を表示するか）と FROM（どの表から）が明確になるまで、SQL の生成に進めません。");
+  await expect(question.getByRole("heading", { name: "どの表のデータを使いますか？" })).toBeVisible();
+  await expect(warning).toBeVisible();
+  await question.getByRole("checkbox", { name: /APP\.ORDERS（受注）/ }).check();
+  await question.getByRole("button", { name: "この内容で回答" }).click();
+
+  const card = question.getByTestId("nl2sql-clarification-card");
+  const progress = card.getByTestId("nl2sql-clarification-card-progress");
+  await expect(progress).toBeVisible();
+  await expect(progress).toContainText("回答を反映しています");
+  await expect(progress.getByRole("timer")).toContainText(/00:0[01]/);
+  await expect(progress.getByRole("button", { name: "確認せずに SQL を生成" })).toBeVisible();
+  // 送ったフォーム（選択肢・自由入力・操作の行）と、送った確認事項の警告は出さない。
+  await expect(card.getByRole("checkbox")).toHaveCount(0);
+  await expect(card.getByRole("textbox", { name: "その他（自由入力）" })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "この内容で回答" })).toHaveCount(0);
+  await expect(warning).toHaveCount(0);
+  // 答えた内容の記録。スピナーは確認の中に 1 つだけ（1 つの処理にスピナー 1 つ）。
+  const answered = card.getByTestId("nl2sql-clarification-card-answered-entry");
+  await expect(answered).toHaveCount(1);
+  await expect(answered.locator("dt")).toHaveText("どの表のデータを使いますか？");
+  await expect(answered.locator("dd")).toHaveText("APP.ORDERS（受注）");
+  await expect(turn.locator(".pr-spinner")).toHaveCount(1);
+  await expect(turn.getByTestId("nl2sql-guided-answer-progress")).toHaveCount(0);
+  expect(await noHorizontalOverflow(page)).toBeLessThanOrEqual(0);
+  await turn.screenshot({ path: testInfo.outputPath(`chat-requirement-confirming-${width}.png`) });
+
+  // 応答が届いたら次の状態（ここでは確認の完了）を出し直す。
+  await expect(turn.getByTestId("nl2sql-clarification-summary")).toBeVisible({ timeout: 10_000 });
+  await expect(progress).toHaveCount(0);
+  await expect(warning).toHaveCount(0);
+});
+
 test("回答の後の再検査の経過時間は回答を送った時から数え、待たずに SQL を生成できる (#2303)", async ({ page }) => {
   const state = await setup(page, {
     create: "needs_answer",
@@ -1651,8 +1695,10 @@ test("回答の後の再検査の経過時間は回答を送った時から数�
   await expect(turn.getByTestId("nl2sql-guided-start-progress")).toHaveCount(0);
   await question.getByRole("textbox", { name: "その他（自由入力）" }).fill("2026 年度（4 月始まり）");
   await question.getByRole("button", { name: "この内容で回答" }).click();
-  const answerProgress = turn.getByTestId("nl2sql-guided-answer-progress");
+  // 確認のカードはフォームを答えた内容と経過の行 1 つに置き換える（#2311）。
+  const answerProgress = turn.getByTestId("nl2sql-clarification-card-progress");
   await expect(answerProgress).toBeVisible();
+  await expect(turn.getByTestId("nl2sql-guided-answer-progress")).toHaveCount(0);
   // 下書きの時間・答えていた時間を足さず、回答を送った時から数える。
   await expect(answerProgress.getByRole("timer")).toContainText(/00:0[01]/);
   await expect(turn.getByTestId("nl2sql-guided-start-progress")).toHaveCount(0);

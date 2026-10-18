@@ -17,7 +17,9 @@ import { t } from "@/lib/i18n";
 
 /**
  * 回答前の確認のカード（#1839）。部品・文言・操作は 3 製品共通の `ClarificationCard`（「この内容で回答」「確認せずに
- * 回答」「確認をやめる」と「その他（自由入力）」）。回答の枠の中に出すので `variant="plain"`。
+ * 回答」と「その他（自由入力）」）。確認を終えるのは「確認せずに回答」だけで、「確認をやめる」は置かない（質問を
+ * 取り消すのは入力欄の「停止」。#2311）。「この内容で回答」を押すと、カードは答えた内容と経過の行 1 つに変わる。
+ * 回答の枠の中に出すので `variant="plain"`。
  *
  * - Agent 自身の確認（`ask_user_confirmation`）: 答え・スキップで同じ回答の続きが動く。
  * - ツールの結果の確認（NL2SQL・RAG）: 確認事項は呼び先が作ったまま。答え・スキップで次の回答を作る（NL2SQL の
@@ -57,7 +59,6 @@ export function PendingConfirmationCard({
       disabled={disabled}
       onConfirm={(answers) => onDecide("answer", confirmationAnswers(answers))}
       onSkip={confirmation.can_skip ? () => onDecide("skip") : undefined}
-      onCancel={() => onDecide("cancel")}
       error={error ? <ApiErrorBanner error={error} fallback={t("chat.confirmation.failed")} testId="chat-confirmation-error" /> : null}
       actions={actions}
       autoFocus={autoFocus}

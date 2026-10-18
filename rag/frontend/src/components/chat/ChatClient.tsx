@@ -1093,15 +1093,6 @@ export function ChatClient() {
     );
   }
 
-  /** 「確認をやめる」: 送らずに、質問を入力欄へ戻す（書き始めた文があれば上書きしない。#1839）。 */
-  function cancelClarification() {
-    if (!clarifyChoice) return;
-    const { content } = clarifyChoice;
-    setClarifyChoice(null);
-    if (!composer.trim()) setComposer(content);
-    requestAnimationFrame(() => composerRef.current?.focus());
-  }
-
   /** 範囲を指定せずに同じ質問を送る（類似問・確認の質問は出さない。#721）。 */
   function askUnscoped(content: string) {
     setSending(true);
@@ -1787,7 +1778,6 @@ export function ChatClient() {
                       suggestion={clarifyChoice.suggestion}
                       onAnswer={(answer) => chooseClarification(answer)}
                       onSkip={() => chooseClarification()}
-                      onCancel={cancelClarification}
                     />
                   </div>
                 ) : null}

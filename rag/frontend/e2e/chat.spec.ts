@@ -1465,7 +1465,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`回答前の確認に答えてから回答し、確認せずに回答・確認をやめるもできる（#717 / #1839） (${viewport.name})`, { tag: "@responsive" }, async ({
+  test(`回答前の確認に答えてから回答し、確認せずに回答もできる（「確認をやめる」は無い。#717 / #1839 / #2311） (${viewport.name})`, { tag: "@responsive" }, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -1511,7 +1511,9 @@ for (const viewport of [
     await expect(confirm).toHaveAccessibleDescription(
       "選択肢を選ぶか、「その他（自由入力）」に書くと押せます。"
     );
-    await expect(choice.getByRole("button")).toHaveText(["この内容で回答", "確認せずに回答", "確認をやめる"]);
+    // 確認を終えるのは「確認せずに回答」だけ（質問を取り消すのは入力欄の「停止」。#2311）。
+    await expect(choice.getByRole("button")).toHaveText(["この内容で回答", "確認せずに回答"]);
+    await expect(choice.getByRole("button", { name: "確認をやめる" })).toHaveCount(0);
     await expect(choice.getByRole("textbox", { name: "その他（自由入力）" })).toBeVisible();
     await expect(page.getByRole("button", { name: "送信" })).toBeDisabled();
     expect(clarifyQueries).toEqual([{ query: "申請の期限は？" }]);
@@ -1549,18 +1551,11 @@ for (const viewport of [
     );
     await choice.getByRole("button", { name: "確認せずに回答" }).click();
     await expect.poll(() => streamBodies.length).toBe(2);
+    // 質問はそのまま送り（入力欄には戻さない）、取り消さない。
+    expect(streamBodies[1]).toMatchObject({ content: "交通費の期限は？", clarification_skipped_rule_id: "R01" });
     expect(streamBodies[1]).not.toHaveProperty("clarification");
-    expect(streamBodies[1]).toMatchObject({ clarification_skipped_rule_id: "R01" });
-
-    // 「確認をやめる」は送らずに、質問を入力欄へ戻す。
-    await composer.fill("宿泊費の上限は？");
-    await page.getByRole("button", { name: "送信" }).click();
-    await expect(composer).toHaveValue("");
-    await choice.getByRole("button", { name: "確認をやめる" }).click();
     await expect(choice).toHaveCount(0);
-    await expect(composer).toHaveValue("宿泊費の上限は？");
-    await expect(composer).toBeFocused();
-    expect(streamBodies).toHaveLength(2);
+    await expect(composer).toHaveValue("");
   });
 
   test(`回答前に確認した内容を、会話の利用者の側に残す（#1839） (${viewport.name})`, { tag: "@responsive" }, async ({
