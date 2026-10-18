@@ -70,7 +70,13 @@ def test_template_has_headers_guide_examples_and_document_sheets() -> None:
 
     assert book.sheetnames == ALL_SHEETS
     cases = book[CASES_SHEET_TITLE]
-    assert [cell.value for cell in cases[1]] == ["質問", "期待する根拠", "標準回答"]
+    assert [cell.value for cell in cases[1]] == [
+        "質問",
+        "期待する根拠",
+        "標準回答",
+        "案内すべき画面",
+        "回答の過程",
+    ]
     # 見出しのセルに意味・必須か任意か・書き方を注記する（形式ごとの位置の書き方も短く）。
     assert "必須" in cases["A1"].comment.text
     evidence_note = cases["B1"].comment.text
