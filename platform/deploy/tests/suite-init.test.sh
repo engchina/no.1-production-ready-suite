@@ -199,6 +199,21 @@ prepare_case() {
   done
   grep -qxF "semanage fcontext -a -t cert_t ${SUITE_SSL_DIR}(/.*)?" "${calls}" || fail "証明書を cert_t にしない"
   grep -qxF "restorecon -R ${SUITE_REPO_DIR}" "${calls}" || fail "repository の context を戻さない"
+  # 開発用の worktree と repository の中の一時ファイルは、あれば restorecon で辿らない（#2258）。
+  mkdir -p "${SUITE_REPO_DIR}/.claude/worktrees/x"
+  : > "${calls}"
+  configure_selinux >/dev/null
+  grep -qxF "restorecon -R -e ${SUITE_REPO_DIR}/.claude/worktrees ${SUITE_REPO_DIR}" "${calls}" \
+    || fail "worktree を restorecon から外さない（無い tmp は渡さない）"
+  mkdir -p "${SUITE_REPO_DIR}/tmp"
+  : > "${calls}"
+  configure_selinux >/dev/null
+  grep -qxF "restorecon -R -e ${SUITE_REPO_DIR}/.claude/worktrees -e ${SUITE_REPO_DIR}/tmp ${SUITE_REPO_DIR}" "${calls}" \
+    || fail "tmp を restorecon から外さない"
+  : > "${calls}"
+  SUITE_SELINUX_EXCLUDE_DIRS="" configure_selinux >/dev/null
+  grep -qxF "restorecon -R ${SUITE_REPO_DIR}" "${calls}" || fail "除外を空にしても repository 全体を辿らない"
+  rm -rf "${SUITE_REPO_DIR}/.claude" "${SUITE_REPO_DIR}/tmp"
   grep -qx 'setsebool -P httpd_can_network_connect 1' "${calls}" || fail "Nginx から backend へ proxy できない"
   if grep -q '^semanage port' "${calls}"; then fail "80 / 443 は http_port_t に足さない"; fi
   # 再配備（suite-restart.sh / suite-update.sh）: 以前の配備で開けた 80 が permanent に残っていれば閉じる（#1638）。

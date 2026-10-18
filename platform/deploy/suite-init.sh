@@ -230,10 +230,26 @@ selinux_enabled() {
   command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled
 }
 
+# repository の中で配備に使わないディレクトリ（repository からの相対。空白区切り）。開発用の worktree（#2032。
+# .venv・node_modules で大きい）と repository の中の一時ファイル（#1616）。systemd の service も Nginx も読まないので、
+# restorecon で辿らない（辿る間に消えると restorecon が失敗して配備が止まる。#2258）。
+SUITE_SELINUX_EXCLUDE_DIRS="${SUITE_SELINUX_EXCLUDE_DIRS-.claude/worktrees tmp}"
+
+# restorecon -R に渡す、存在する除外のディレクトリの -e（1 行に 1 つずつ。-e と path の 2 行）。
+selinux_exclude_args() {
+  local dir
+  for dir in ${SUITE_SELINUX_EXCLUDE_DIRS}; do
+    if [ -d "${SUITE_REPO_DIR}/${dir}" ]; then
+      printf '%s\n%s\n' -e "${SUITE_REPO_DIR}/${dir}"
+    fi
+  done
+}
+
 # 製品の配備（venv・systemd の unit）の前に行う SELinux の設定。file context の規則は、同じ規則があれば
 # semanage が置き換える（再実行してよい）。
 configure_selinux() {
   local port product
+  local -a excludes=()
   if ! selinux_enabled; then
     log "SELinux is disabled; skipping SELinux contexts."
     return 0
@@ -244,7 +260,8 @@ configure_selinux() {
     semanage fcontext -a -t httpd_sys_content_t "${SUITE_REPO_DIR}/${product}/frontend/dist(/.*)?"
   done
   semanage fcontext -a -t cert_t "${SSL_DIR}(/.*)?"
-  restorecon -R "${SUITE_REPO_DIR}"
+  mapfile -t excludes < <(selinux_exclude_args)
+  restorecon -R "${excludes[@]}" "${SUITE_REPO_DIR}"
   # Nginx から 127.0.0.1 の各製品の backend へ proxy する。
   setsebool -P httpd_can_network_connect 1
   while IFS= read -r port; do
