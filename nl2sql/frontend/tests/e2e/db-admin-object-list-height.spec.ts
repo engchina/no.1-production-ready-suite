@@ -1476,9 +1476,8 @@ test("データプレビューは検索・所有者・種別フィルタを共�
   // 行を選ぶと今の取得件数上限でデータを表示する。「データを表示」は件数を変えた後の取り直し。
   await expect(page.getByTestId("query-results-summary")).toBeVisible();
   const previewShowButton = page.getByRole("button", { name: "データを表示", exact: true });
-  const previewClearButton = page.getByRole("button", { name: "表示件数・結果をリセット", exact: true });
   await expect(previewShowButton).toBeEnabled();
-  await expect(previewClearButton).toBeEnabled();
+  await expect(page.getByRole("button", { name: "表示件数・結果をリセット", exact: true })).toHaveCount(0);
   await previewShowButton.click();
   await expect(page.getByTestId("query-results-summary")).toBeVisible();
   const previewResultsActions = page.getByTestId("data-preview-results-actions");

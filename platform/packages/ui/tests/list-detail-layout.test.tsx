@@ -8,6 +8,7 @@ import { RowTitleButton } from "../src/components/data/row-title-button";
 import {
   LIST_DETAIL_DEFAULT_LIST_WIDTH_REM,
   clampListWidthRem,
+  fitListColumn,
   listDetailStorageKey,
   maxListWidthForContainer,
   nextListItemIndex,
@@ -206,6 +207,43 @@ describe("ListDetailLayout（#2281）", () => {
     expect(listColumn().classList.contains("hidden")).toBe(false);
   });
 
+  it("2 ペインの一覧の列は「見える高さ − 列の上端 − 下の余白」の高さで、貼り付く見出しの下に貼り付く（#2330）", () => {
+    // container を本文のスクロール領域（AppShell の main）に見立て、見える高さ 700px・下の余白 21px にする。
+    container.style.overflowY = "auto";
+    container.style.paddingBottom = "21px";
+    Object.defineProperty(container, "clientHeight", { configurable: true, value: 700 });
+    const rects = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      // 見出しは高さ 100px、一覧 + 詳細の上端は 150px（見出し・タブ・余白の下）。
+      if (this.hasAttribute("data-page-header")) return new DOMRect(0, 0, 1000, 100);
+      if (this.dataset.testid === "list-detail-things") return new DOMRect(0, 150, 1000, 400);
+      return new DOMRect(0, 0, 0, 0);
+    });
+    try {
+      act(() =>
+        root.render(
+          <>
+            <header data-page-header="" style={{ position: "sticky", top: 0 }} />
+            <Harness />
+          </>
+        )
+      );
+      const fontSize = Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize) || 14;
+      // 高さ = 700 − 150 − 21 = 529px、貼り付く位置 = 見出しの 100px + 1rem。
+      expect(layout().style.getPropertyValue("--list-detail-list-height")).toBe(`${Math.floor((529 / fontSize) * 1000) / 1000}rem`);
+      expect(layout().style.getPropertyValue("--list-detail-list-top")).toBe(`${Math.ceil(((100 + fontSize) / fontSize) * 1000) / 1000}rem`);
+      expect(listColumn().className).toContain("max-h-[var(--list-detail-list-height,calc(100dvh-2rem))]");
+      expect(listColumn().className).toContain("top-[var(--list-detail-list-top,1rem)]");
+
+      // 1 ペインは測った値を使わず、画面の高さからの既定のまま。
+      setWide(false);
+      expect(layout().style.getPropertyValue("--list-detail-list-height")).toBe("");
+      expect(listColumn().className).toContain("top-4");
+      expect(listColumn().className).toContain("max-h-[calc(100dvh-5.5rem)]");
+    } finally {
+      rects.mockRestore();
+    }
+  });
+
   it("畳んだ状態は 1 ペインでは効かない（一覧は 1 ペインの規則で出す）", () => {
     window.localStorage.setItem(listDetailStorageKey("things"), serializeListDetailStoredState({ listWidthRem: 20, collapsed: true }));
     wide = false;
@@ -229,6 +267,20 @@ describe("list-detail の純粋関数", () => {
     expect(maxListWidthForContainer(70)).toBe(32);
     expect(maxListWidthForContainer(55)).toBe(25);
     expect(maxListWidthForContainer(40)).toBe(16);
+  });
+
+  it("一覧の列の高さは見える高さ − 列の上端 − 下の余白で、最小の高さと貼り付いた位置からの上限を守る（#2330）", () => {
+    const base = { viewportHeight: 900, columnTop: 200, stickyTop: 120, bottomInset: 21, minHeight: 280 };
+    expect(fitListColumn(base)).toEqual({ height: 679, top: 120 });
+    // 端数は切り捨て（丸めで列の下端が画面の外に出ない）。
+    expect(fitListColumn({ ...base, columnTop: 200.6 })).toEqual({ height: 678, top: 120 });
+    // 列の上の内容が多く低い画面でも、最小の高さは残す（このときは本文がスクロールする）。
+    expect(fitListColumn({ ...base, viewportHeight: 400 })).toEqual({ height: 280, top: 120 });
+    // 列の上端が貼り付く位置より上でも、貼り付いた位置から画面の下端を越えない。
+    expect(fitListColumn({ ...base, columnTop: 40 })).toEqual({ height: 759, top: 120 });
+    // 寸法が取れないときは既定の CSS のまま。
+    expect(fitListColumn({ ...base, viewportHeight: 0 })).toBeNull();
+    expect(fitListColumn({ ...base, columnTop: Number.NaN })).toBeNull();
   });
 
   it("↑ / ↓ / Home / End の移る先", () => {

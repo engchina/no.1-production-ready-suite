@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { expectListColumnFitsViewport, expectListColumnStaysFitWhileScrolling } from "./_helpers/list-detail-fit";
 import { measureHorizontalOverflow } from "../../../../platform/packages/ui/e2e/layout-checks";
 
 // テーブルの管理・ビューの管理の一覧 + 詳細（共有 ListDetailLayout。#2281）。
@@ -20,7 +21,19 @@ async function fulfillJson(route: Route, data: unknown) {
   await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data }) });
 }
 
-async function mockTableManagement(page: Page) {
+async function mockTableManagement(page: Page, options: { tableCount?: number; columnCount?: number } = {}) {
+  const tables = options.tableCount
+    ? Array.from({ length: options.tableCount }, (_, index) => ({
+        ...TABLES[0],
+        name: `TABLE_${String(index + 1).padStart(2, "0")}`,
+        qualified_name: `APP.TABLE_${String(index + 1).padStart(2, "0")}`,
+        row_count: (index + 1) * 10,
+        comment: `合成のテーブル ${index + 1}`,
+      }))
+    : TABLES;
+  const columnTypes = options.columnCount
+    ? Array.from({ length: options.columnCount }, (_, index) => COLUMN_TYPES[index % COLUMN_TYPES.length])
+    : COLUMN_TYPES;
   const detailRequests: string[] = [];
   await mockDatabaseGateReady(page);
   await page.route("**/api/nl2sql/synthetic-data/runs", (route) => fulfillJson(route, []));
@@ -28,9 +41,9 @@ async function mockTableManagement(page: Page) {
     fulfillJson(route, {
       runtime: "oracle",
       owner: "APP",
-      items: TABLES,
-      total: TABLES.length,
-      table_count: TABLES.length,
+      items: tables,
+      total: tables.length,
+      table_count: tables.length,
       view_count: 0,
       next_cursor: null,
       refreshed_at: "2026-10-18T09:00:00.000Z",
@@ -42,10 +55,10 @@ async function mockTableManagement(page: Page) {
     const url = new URL(route.request().url());
     const name = decodeURIComponent(url.pathname.split("/").pop() ?? "");
     detailRequests.push(name);
-    const table = TABLES.find((item) => item.name === name) ?? TABLES[0];
+    const table = tables.find((item) => item.name === name) ?? tables[0];
     return fulfillJson(route, {
       ...table,
-      columns: COLUMN_TYPES.map((dataType, index) => ({
+      columns: columnTypes.map((dataType, index) => ({
         column_name: `COLUMN_${index + 1}`,
         logical_name: `列 ${index + 1}`,
         data_type: dataType,
@@ -118,6 +131,44 @@ test.describe("テーブルの管理の一覧 + 詳細（ListDetailLayout。#228
     await page.getByTestId("table-management-detail-pager-previous").click();
     await expect(page).toHaveURL(/\?table=APP\.TABLE_05$/);
     expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  });
+
+  for (const viewport of [
+    { width: 1280, height: 900 },
+    { width: 1920, height: 1000 },
+  ]) {
+    test(`${viewport.width}px: 一覧の列は画面の高さに収まり、詳細が短ければ本文は縦にスクロールしない（#2330）`, async ({ page }, testInfo) => {
+      test.skip(testInfo.project.name !== "desktop", "2 ペインは xl 以上の幅で確かめる");
+      await page.setViewportSize(viewport);
+      await clearListDetailStorage(page);
+      await mockTableManagement(page, { tableCount: 40 });
+      await page.goto("/table-management");
+      await expect(rowButton(page, "TABLE_01")).toBeVisible();
+      await expect(page.getByTestId("list-detail-table-management-detail")).toContainText("オブジェクトが未選択です");
+      const fit = await expectListColumnFitsViewport(page, "table-management");
+      expect(fit.bodyScrolls).toBe(true);
+      // 一覧の中を最後までスクロールしても、本文は動かない。
+      await page.getByTestId("list-detail-table-management-list").evaluate((column) => {
+        column.querySelectorAll<HTMLElement>("*").forEach((node) => {
+          if (node.scrollHeight > node.clientHeight + 1) node.scrollTop = node.scrollHeight;
+        });
+      });
+      await expect(rowButton(page, "TABLE_40")).toBeInViewport();
+      await expectListColumnFitsViewport(page, "table-management");
+      await page.screenshot({ path: testInfo.outputPath(`table-management-list-fit-${viewport.width}.png`) });
+    });
+  }
+
+  test("詳細が長いと本文はスクロールし、一覧の列は見出しの下に貼り付いたまま高さを変えない（#2330）", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "2 ペインは xl 以上の幅で確かめる");
+    await clearListDetailStorage(page);
+    // 列の多いテーブル（列情報はページと一緒にスクロールする）。
+    await mockTableManagement(page, { tableCount: 40, columnCount: 60 });
+    await page.goto("/table-management?table=APP.TABLE_03");
+    await expect(page.getByTestId("table-management-detail-header")).toContainText("APP.TABLE_03");
+    await expect(page.getByTestId("db-admin-detail-columns").getByRole("rowheader", { name: "COLUMN_60" })).toBeAttached();
+    await expectListColumnStaysFitWhileScrolling(page, "table-management");
+    await page.screenshot({ path: testInfo.outputPath("table-management-list-fit-scrolled.png") });
   });
 
   test("↑ / ↓ で一覧の行の間を移り、Enter で選ぶ", async ({ page }, testInfo) => {

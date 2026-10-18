@@ -152,26 +152,49 @@ const nl2sqlJa = {
     "データベースに質問し、生成した SQL と実行の結果を確かめながら会話を続ける",
   "dbAdminChat.conversation": "DB 管理の会話",
   "dbAdminChat.emptyHint":
-    "同じ会話の中では、前の質問と SQL を踏まえて SQL を生成します（例: 「表領域の使用状況」の後に「使用率の高い順にして」）。生成した SQL は自動では実行しません。SELECT は「実行」で、それ以外は実行確認語を入力して実行します。",
+    "同じ会話の中では、前の質問と SQL を踏まえて SQL を生成します（例: 「表領域の使用状況」の後に「使用率の高い順にして」）。生成した SQL は自動では実行しません。文ごとに、SELECT は「実行」で、データや構造を変える文は実行確認語を入力して実行します。複数の文は「すべて実行」で上から順に実行できます。",
   "dbAdminChat.sendFailed": "SQL を生成できませんでした。",
   "dbAdminChat.noSql": "SQL は生成しませんでした。",
-  "dbAdminChat.badge.readOnly": "読み取り専用・未実行",
-  "dbAdminChat.badge.readOnlyExecuted": "読み取り専用・実行済み",
-  "dbAdminChat.badge.confirmation": "確認語が必要・未実行",
-  "dbAdminChat.badge.confirmationExecuted": "確認語で実行済み",
-  "dbAdminChat.badge.blocked": "実行できない SQL",
-  "dbAdminChat.blocked.title": "この SQL は実行できません",
+  // 文ごとの分類（#2333）。バッジはアイコンでも状態を示す（色だけにしない）。
+  "dbAdminChat.kind.readOnly": "読み取り専用",
+  "dbAdminChat.kind.change": "変更あり",
+  "dbAdminChat.kind.blocked": "実行できない",
+  "dbAdminChat.statement.label": "文 {index}",
+  "dbAdminChat.statement.region": "文 {index} / {total}",
+  "dbAdminChat.statement.notRun": "実行しなかった",
+  "dbAdminChat.statement.notRunHint":
+    "「すべて実行」が前の文の失敗で止めたため、この文は実行しませんでした。",
+  "dbAdminChat.blocked.title": "この文は実行できません",
   "dbAdminChat.blocked.hint":
     "データベースの停止・ユーザーの作成と削除・システムの設定の変更・動的 SQL・アプリのシステムの表への操作は、DB 管理チャットでは実行できません。",
   "dbAdminChat.warning.mutation":
-    "この SQL はデータベースを変更します。内容を確かめ、実行確認語を入力してから実行してください。",
+    "この文はデータベースを変更します。内容を確かめ、実行確認語を入力してから実行してください。",
   "dbAdminChat.warning.implicitCommit":
     "DDL（CREATE・ALTER・DROP・TRUNCATE など）は Oracle が暗黙に commit するため、実行すると元に戻せません。",
   "dbAdminChat.confirmation.helper":
-    "SELECT 以外の SQL は、確認語 {target} を入力すると実行できます。SQL が変わると確認はやり直しになります。",
+    "データや構造を変える文は、確認語 {target} を入力すると実行できます。SQL が変わると確認はやり直しになります。",
   "dbAdminChat.check.readOnly": "読み取り専用（確認語は不要）",
   "dbAdminChat.check.confirmation": "確認語 {target} が必要",
-  "dbAdminChat.check.blocked": "実行できない文を含みます",
+  "dbAdminChat.check.blocked": "実行できない文です",
+  "dbAdminChat.check.count": "{kind} {count}",
+  // 「すべて実行」（#2333）。上から順に実行し、最初のエラーで止める。
+  "dbAdminChat.runAll": "すべて実行",
+  "dbAdminChat.runAll.region": "すべて実行",
+  "dbAdminChat.runAll.hint":
+    "{count} 個の文があります。1 文ずつ「実行」するか、「すべて実行」で上から順に実行します（最初のエラーで止めます）。",
+  "dbAdminChat.runAll.blocked":
+    "実行できない文（{statements}）を含むため、すべて実行はできません。実行できる文は 1 文ずつ実行してください。",
+  "dbAdminChat.runAll.transaction":
+    "すべて実行は、1 つのトランザクションで上から順に実行します。最初のエラーで止め、全部成功したときだけ commit し、失敗したら DML を rollback します。",
+  "dbAdminChat.runAll.confirmationHelper":
+    "確認語 {target} を 1 回入力すると、すべての文を実行できます。SQL が変わると確認はやり直しになります。",
+  "dbAdminChat.runAll.running": "すべての文を実行しています",
+  "dbAdminChat.runAll.badge.succeeded": "すべて成功",
+  "dbAdminChat.runAll.badge.stopped": "文 {index} で停止",
+  "dbAdminChat.runAll.succeeded": "{count} 文すべてが成功しました。",
+  "dbAdminChat.runAll.stopped": "文 {index} で失敗して止めました（成功 {succeeded} 文・実行しなかった文 {notRun} 文）。",
+  "dbAdminChat.runAll.last": "前回のすべて実行（{at}）",
+  "dbAdminChat.runAll.failed": "すべて実行できませんでした。",
   "dbAdminChat.contextTables": "生成に渡した表: {tables}",
   "dbAdminChat.execute.failed": "SQL を実行できませんでした。",
   "dbAdminChat.fullResultHint":
@@ -3200,6 +3223,7 @@ const nl2sqlJa = {
   "dataTools.syntheticData.generatedHint": "対象: {tables}。結果テーブルを選択し、「データを表示」で内容を確認してください。",
   "dataTools.syntheticData.timeout": "生成完了の応答を待つ時間を超過しました。Oracle 側では処理が継続している可能性があります。再生成する前に、結果テーブルの「データを表示」で内容を確認してください。",
   "dataTools.syntheticData.results": "データを表示",
+  "dataTools.syntheticData.clearResults": "表示件数・結果をリセット",
   "dataTools.syntheticData.profilesLoading": "Profile を読み込んでいます",
   "dataTools.syntheticData.tablesLoading": "対象テーブルを読み込んでいます",
   "dataTools.syntheticData.resultsLoading": "結果データを読み込んでいます",
@@ -3609,7 +3633,6 @@ const nl2sqlJa = {
   "dataMgmt.preview.rowUnknown": "統計未取得",
   "dataMgmt.preview.show": "データを表示",
   "dataMgmt.preview.showObject": "{name} のデータを表示",
-  "dataMgmt.preview.clear": "表示件数・結果をリセット",
   "dataMgmt.preview.exportXlsx": "XLSX ダウンロード",
   "dataMgmt.preview.sql": "実行 SQL",
   "dataMgmt.preview.emptyTitle": "データ未表示",
