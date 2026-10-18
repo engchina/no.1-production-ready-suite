@@ -9,12 +9,26 @@ from rag_engine.retrieval.article_catalog import (
     ARTICLE_CATALOG_KEY,
     ARTICLE_SELECTION_SYSTEM_PROMPT,
     ArticleCatalog,
+    ArticleIssue,
+    ArticleIssueSelection,
     ArticleSelection,
+    CatalogTerm,
     interleave_selections,
     is_catalog_article,
     select_articles,
 )
 from tests.test_document_selection import child
+
+
+def _articles(lines, *more):
+    """条の選択の出力（論点ごと）。`more` は 2 つ目以降の論点の行。"""
+    return ArticleIssueSelection(issues=[ArticleIssue(issue=f"論点{i}", lines=list(group)) for i, group in enumerate((lines, *more), 1)])
+
+
+def _picked(schema, lines):
+    """呼ばれた schema に合わせて、文書の選択・条の選択の出力を返す。"""
+    return _articles(lines) if schema is ArticleIssueSelection else ArticleSelection(lines=lines)
+
 
 CATALOG = ArticleCatalog(
     document_id="doc-a",
@@ -28,9 +42,9 @@ CATALOG = ArticleCatalog(
 def _parse(lines):
     def parse(system, prompt, settings, schema, **kwargs):
         assert system == ARTICLE_SELECTION_SYSTEM_PROMPT
-        assert schema is ArticleSelection
+        assert schema is ArticleIssueSelection
         parse.prompt = json.loads(prompt)
-        return ArticleSelection(lines=lines)
+        return _articles(lines)
 
     return parse
 
@@ -150,7 +164,7 @@ def test_catalog_article_children_reads_catalogs_and_chunks_from_injected_depend
         check_ready=unused,
         rerank=unused,
         parse_images=unused,
-        parse_text=lambda system, prompt, settings, schema, **kwargs: ArticleSelection(lines=[2, 3]),
+        parse_text=lambda system, prompt, settings, schema, **kwargs: _articles([2, 3]),
         article_catalogs=article_catalogs,
         article_chunks=article_chunks,
     )
@@ -293,7 +307,7 @@ def test_catalog_article_children_adds_documents_chosen_from_the_scope_list():
         if "documents" in body:
             asked.append(body["max_lines"])
             return Selection(lines=[1, 0])
-        return Selection(lines=[2])
+        return _articles([2])
 
     def unused(*args, **kwargs):
         raise AssertionError("呼ばない")
@@ -385,7 +399,7 @@ def test_catalog_selection_uses_the_original_question_with_the_query():
 
     def parse(system, prompt, settings, schema, **kwargs):
         prompts.append(json.loads(prompt)["question"])
-        return ArticleSelection(lines=[])
+        return _picked(schema, [])
 
     def dependencies(original):
         return AnswerDependencies(
@@ -480,7 +494,7 @@ def test_original_question_search_runs_once_vector_only_and_only_when_injected(m
         assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings) == []
 
 
-def _select_with(parse, settings, catalogs):
+def _select_with(parse, settings, catalogs, terms=()):
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 
     def unused(*args, **kwargs):
@@ -488,7 +502,7 @@ def _select_with(parse, settings, catalogs):
 
     dependencies = AnswerDependencies(search=unused, check_ready=unused, rerank=unused, parse_images=unused, parse_text=parse)
     with bind_dependencies(dependencies):
-        return answering._select_catalog_articles("届出の期限は", catalogs, settings)
+        return answering._select_catalog_articles("届出の期限は", catalogs, settings, terms=terms)
 
 
 def test_runaway_selection_skips_only_that_document_and_is_not_cached():
@@ -502,7 +516,7 @@ def test_runaway_selection_skips_only_that_document_and_is_not_cached():
         caps.append(oci._output_cap.get())
         if json.loads(prompt)["document"] == other.file_name:
             raise oci.IncompleteResponse("未完了", "max_output_tokens")
-        return ArticleSelection(lines=[2])
+        return _articles([2])
 
     settings = replace(get_settings(environ={}, dotenv_path=None), article_catalog_output_token_cap=512)
     answering._ARTICLE_SELECTION_CACHE.clear()
@@ -529,7 +543,7 @@ def test_slow_selection_is_cut_by_the_per_call_time_limit():
             while True:
                 check_deadline()
                 time.sleep(0.01)
-        return ArticleSelection(lines=[3])
+        return _articles([3])
 
     settings = replace(get_settings(environ={}, dotenv_path=None), article_catalog_call_timeout_seconds=0.1)
     answering._ARTICLE_SELECTION_CACHE.clear()
@@ -553,3 +567,47 @@ def test_article_catalog_call_limits_come_from_the_environment():
     )
     assert (defaults.article_catalog_output_token_cap, defaults.article_catalog_call_timeout_seconds) == (4096, 90.0)
     assert (custom.article_catalog_output_token_cap, custom.article_catalog_call_timeout_seconds) == (1024, 20.0)
+
+
+def test_select_articles_takes_each_issue_in_turn_and_passes_terms():
+    """論点ごとの条は、各論点の 1 番目から順に回して上限で切る。登録の用語は別名・説明つきで渡す。"""
+    parse = _parse([2, 3])
+
+    def parse_issues(system, prompt, settings, schema, **kwargs):
+        parse_issues.prompt = json.loads(prompt)
+        return _articles([2, 3], [4])
+
+    terms = (CatalogTerm(term="架空の通称", aliases=("届出の特例",), description="規程の届出の特例。"),)
+
+    chosen = select_articles("通称の手続は", CATALOG, parse_issues, None, limit=2, terms=terms)
+
+    # 1 つ目の論点の 2 番目より、2 つ目の論点の 1 番目を先に取る。
+    assert chosen == [("s2", "第一条（目的）"), ("s4", "第三条｜前条の届出は、")]
+    assert parse_issues.prompt["terms"] == [{"term": "架空の通称", "aliases": ["届出の特例"], "description": "規程の届出の特例。"}]
+    # 用語が無ければ terms を渡さない。
+    select_articles("届出の期限は", CATALOG, parse, None, limit=2)
+    assert "terms" not in parse.prompt
+
+
+def test_catalog_selection_passes_matched_registered_terms(tmp_path):
+    """質問に一致した登録の用語（実行時の知識）を条の選択に渡し、工程に残す。"""
+    knowledge = tmp_path / "runtime_knowledge.json"
+    knowledge.write_text(
+        json.dumps(
+            {"schema_version": 1, "terms": [{"term": "架空の通称", "aliases": ["届出の特例"], "status": "approved"}]}, ensure_ascii=False
+        ),
+        encoding="utf-8",
+    )
+    seen = []
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        seen.append(json.loads(prompt).get("terms"))
+        return _articles([2])
+
+    settings = replace(get_settings(environ={}, dotenv_path=None), runtime_knowledge_path=str(knowledge), output_dir=str(tmp_path))
+    answering._ARTICLE_SELECTION_CACHE.clear()
+
+    selected, failed = _select_with(parse, settings, [CATALOG], terms=answering._catalog_terms("架空の通称の届出は", settings))
+
+    assert [a.section_id for a in selected] == ["s2"] and failed == []
+    assert seen == [[{"term": "架空の通称", "aliases": ["届出の特例"]}]]
