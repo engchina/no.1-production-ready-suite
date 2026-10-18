@@ -17,6 +17,10 @@ Control Plane の中で業務 Agent を実行する。外部の Runtime・Bindin
 - 承認: 中断した Run は SDK の状態を Run に保存して `waiting_approval` にする。すべての承認が
   決まったら状態を復元し、承認・却下を反映して再開する。無人の Run（品質評価・自動実行）は
   承認待ちにせず、承認が要るツールを却下してモデルへ理由を返し、回答まで続ける（#776・#1813）。
+- 入力の上限: モデルの呼び出しの直前に、入力（指示・ツールの定義・会話・ツールの結果）を登録モデルの
+  入力の上限から出力の上限と余白を引いた予算に収める（#2383。古いツールの結果から縮める。縮め方は
+  `context_window`）。収まらなければモデルを呼ばずに理由の分かる失敗にし、プロバイダが入力の超過を
+  返したら縮めて 1 回だけ送り直す。
 """
 
 from __future__ import annotations
@@ -26,10 +30,11 @@ import json
 import logging
 import re
 from collections.abc import Callable, Collection, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any, cast
+from typing import Any, Never, cast
 
 from agents import (
     Agent,
@@ -44,7 +49,7 @@ from agents import (
     RunState,
     set_tracing_disabled,
 )
-from agents.run_config import ToolErrorFormatterArgs
+from agents.run_config import CallModelData, ModelInputData, ToolErrorFormatterArgs
 from agents.tool_context import ToolContext
 from openai import DEFAULT_MAX_RETRIES, APIStatusError, AsyncOpenAI, BadRequestError
 from openai.types.shared import Reasoning, ReasoningEffort
@@ -60,9 +65,11 @@ from pr_system_settings.enterprise_ai_errors import (
     enterprise_ai_incomplete_message,
 )
 from pr_system_settings.model import (
+    DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
     DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
+    enterprise_ai_max_input_tokens,
     enterprise_ai_model_catalog,
     enterprise_ai_output_token_budget,
     enterprise_ai_reasoning_effort,
@@ -155,6 +162,19 @@ from app.features.agent.confirmation import (
     used_rounds,
     validation_premises,
 )
+from app.features.agent.context_window import (
+    FALLBACK_PROVIDER_SCALE,
+    CompactionResult,
+    ContextBudget,
+    ContextLimits,
+    ProviderOverflow,
+    compact_items,
+    estimate_tokens,
+    overflow_message,
+    provider_overflow,
+    provider_overflow_message,
+    tools_text,
+)
 from app.features.agent.skills import (
     reset_pinned_skills,
     resolve_skill,
@@ -216,7 +236,7 @@ from app.features.agent.tools import (
     mcp_tool_handler,
     tool_registry,
 )
-from app.observability import MODEL_INCOMPLETE_RETRIES_TOTAL
+from app.observability import CONTEXT_COMPACTIONS_TOTAL, MODEL_INCOMPLETE_RETRIES_TOTAL
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -229,6 +249,16 @@ SDK_PACKAGE = "openai-agents"
 CONTROL_PLANE_SERVER_ID = "control-plane"
 # 業務データを含む trace を外部（OpenAI）へ送らない。
 set_tracing_disabled(True)
+# モデルの入力の上限に収まらない失敗の code（#2383）。
+CONTEXT_OVERFLOW_CODE = "runtime.context_overflow"
+# 業務 Agent（SDK の Agent）に付ける、入力を収める上限（`ContextLimits`）の属性の名前。
+_CONTEXT_LIMITS_ATTR = "_agent_context_limits"
+# いまモデルを呼んでいる Run の入力の管理（`_ContextWindow`）。呼び出しの直前に SDK の
+# `call_model_input_filter` が入れ、プロバイダの入力の超過の送り直し
+# （`_OciResponses.create`）が読む。
+_ACTIVE_CONTEXT_WINDOW: ContextVar[_ContextWindow | None] = ContextVar(
+    "agent_context_window", default=None
+)
 
 
 class BuiltinRuntimeError(RuntimeError):
@@ -254,6 +284,9 @@ class ModelTarget:
     seed: int = 42
     # 1 回の呼び出しの出力の上限（#1719。システム設定 > モデル の登録モデルの値。既定 32768）。
     max_output_tokens: int = DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS
+    # 入力の上限（#2383。prompt と応答の合計。システム設定 > モデル の登録モデルの値。
+    # 既定 128000）。
+    max_input_tokens: int = DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS
     # openai SDK の再試行の回数（#2004）。None は SDK の既定。上限つきの並行の実行器
     # （pr_backend_core.bounded_calls）を通す呼び出しは 0 にし、再試行を実行器に任せる。
     sdk_max_retries: int | None = None
@@ -296,6 +329,7 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
         seed=enterprise_ai_seed(settings),
         # モデルの出力の上限と入力の上限の小さい方（#1719。prompt は会話で伸びるので見積もらない）。
         max_output_tokens=enterprise_ai_output_token_budget(settings, resolved),
+        max_input_tokens=enterprise_ai_max_input_tokens(settings, resolved),
     )
 
 
@@ -501,6 +535,7 @@ class _OciResponses:
         attempt = 0
         lowered_effort = False
         transient_retried = False
+        overflow_retried = False
         while True:
             try:
                 response = await self._inner.create(**request)
@@ -557,6 +592,16 @@ class _OciResponses:
                 request, lowered_effort = cast(dict[str, Any], lowered), True
                 continue
             except BadRequestError as exc:
+                overflow = provider_overflow(model_error_code(exc), _model_error_message(exc))
+                window = _ACTIVE_CONTEXT_WINDOW.get()
+                if overflow is not None and window is not None:
+                    # 入力の超過（#2383）: 返った token 数で見積もりを補正して縮め、1 回だけ
+                    # 送り直す。送り直しも超過なら、利用者に分かる失敗にする（400 のままにしない）。
+                    if overflow_retried:
+                        window.fail_after_retry(overflow)
+                    request = window.retry_request(request, overflow)
+                    overflow_retried = True
+                    continue
                 if (
                     model_error_code(exc) != MODEL_OUTPUT_INVALID_CODE
                     or attempt >= MODEL_OUTPUT_INVALID_RETRIES
@@ -1545,13 +1590,24 @@ def build_sdk_agent(
         ):
             if text:
                 composed = f"{composed}\n\n{render_tool_names(text, confirmation_names)}"
-    return Agent(
+    sdk_agent = Agent(
         name=name or "agent",
         instructions=composed,
         tools=list(tools),
         model=model_factory(target),
         model_settings=model_settings_for(target),
     )
+    # 入力を収める上限（#2383。`_run_config` の `_ContextWindow` が読む）。
+    setattr(
+        sdk_agent,
+        _CONTEXT_LIMITS_ATTR,
+        ContextLimits(
+            model_id=target.model_id,
+            max_input_tokens=target.max_input_tokens,
+            max_output_tokens=target.max_output_tokens,
+        ),
+    )
+    return sdk_agent
 
 
 # 無いツールの呼び出しの返答で、候補として並べるツールの数の上限（#1303）。
@@ -1585,6 +1641,187 @@ def tool_not_found_message(called: str, exposed: Collection[str]) -> str:
     return f"ツール「{called}」はありません。使えるツールの名前: {listed}{more}。"
 
 
+# 縮めた結果に読み直すツールを案内する、RAG の根拠を返すツール（本文は `rag_read_source` で
+# 読める）。
+_RAG_EVIDENCE_OUTPUT_TOOLS = frozenset(
+    {*RAG_BUDGET_TOOLS, RAG_READ_SOURCE, RAG_READ_DOCUMENT, RAG_READ_SECTION}
+)
+
+
+class _ContextWindow:
+    """Run のモデルの入力を、モデルの入力の上限に収める（#2383。SDK の `call_model_input_filter`）。
+
+    呼び出しの直前に入力を見積もり、予算を超えるときは古いツールの結果から縮める（縮め方は
+    `context_window`）。縮めても収まらなければモデルを呼ばずに `runtime.context_overflow` で失敗
+    させる。縮めたことは Run のイベント・metric・ログに残す（同じ縮め方が続く呼び出しでは
+    1 回だけ）。
+    プロバイダが入力の超過を返したら（`retry_request`）、返った prompt の token 数で Run の残りの
+    見積もりを補正し、縮めた要求を返す。
+    """
+
+    def __init__(self, run_id: str, limits: ContextLimits, exposed: Collection[str]) -> None:
+        settings = get_settings()
+        self.run_id = run_id
+        self.enabled = bool(settings.agent_context_compaction_enabled)
+        self.budget = ContextBudget(
+            limits,
+            estimate_scale=float(settings.agent_context_token_estimate_scale),
+            margin_ratio=float(settings.agent_context_safety_margin_ratio),
+        )
+        self._exposed = set(exposed)
+        self._tools_text: str | None = None
+        # プロバイダが返した入力の上限（設定より小さいとき。Run の残りの呼び出しにも使う）。
+        self._provider_limit: int | None = None
+        self._recorded: tuple[object, ...] | None = None
+
+    def read_tool_for(self, tool_name: str) -> str | None:
+        """縮めた結果の本文を読み直すツール（モデルに渡した名前。無ければ None）。"""
+        prefix = _connection_prefix(tool_name)
+        if prefix is None or mcp_base_tool_name(tool_name) not in _RAG_EVIDENCE_OUTPUT_TOOLS:
+            return None
+        name = f"{prefix}{MCP_TOOL_SEPARATOR}{RAG_READ_SOURCE}"
+        return name if name in self._exposed else None
+
+    def __call__(self, data: CallModelData[Any]) -> ModelInputData:
+        _ACTIVE_CONTEXT_WINDOW.set(self)
+        model_data = data.model_data
+        if not self.enabled:
+            return model_data
+        if self._tools_text is None:
+            self._tools_text = tools_text(list(data.agent.tools))
+        result = compact_items(
+            model_data.input,
+            budget=self.budget,
+            fixed_text=f"{model_data.instructions or ''}\n{self._tools_text}",
+            read_tool_for=self.read_tool_for,
+            max_input_tokens=self._provider_limit,
+        )
+        if not result.fits:
+            self._fail(result, trigger="budget")
+        if result.outputs:
+            self._record(result, trigger="budget")
+        return ModelInputData(input=result.items, instructions=model_data.instructions)
+
+    def retry_request(self, request: dict[str, Any], overflow: ProviderOverflow) -> dict[str, Any]:
+        """プロバイダが入力の超過を返した要求を縮める（縮められなければ失敗させる）。"""
+        items = request.get("input")
+        if not isinstance(items, list):
+            self.fail_after_retry(overflow)
+        fixed = f"{request.get('instructions') or ''}\n{tools_text(request.get('tools') or [])}"
+        estimated = estimate_tokens(items, budget=self.budget, fixed_text=fixed)
+        # 見積もりを、プロバイダが数えた prompt の token 数に合わせる（読めなければ一定の倍率）。
+        ratio = (
+            overflow.prompt_tokens / estimated
+            if overflow.prompt_tokens and estimated > 0
+            else FALLBACK_PROVIDER_SCALE
+        )
+        if ratio <= 1.0 and overflow.limit_tokens is None:
+            ratio = FALLBACK_PROVIDER_SCALE
+        self.budget.estimate_scale *= max(ratio, 1.0)
+        if overflow.limit_tokens is not None:
+            self._provider_limit = overflow.limit_tokens
+        result = compact_items(
+            items,
+            budget=self.budget,
+            fixed_text=fixed,
+            read_tool_for=self.read_tool_for,
+            max_input_tokens=self._provider_limit,
+        )
+        logger.warning(
+            "builtin_runtime_context_overflow_retry",
+            extra={
+                "run_id": self.run_id,
+                "model": self.budget.limits.model_id,
+                "provider_prompt_tokens": overflow.prompt_tokens,
+                "provider_limit_tokens": overflow.limit_tokens,
+                "estimate_scale": round(self.budget.estimate_scale, 3),
+                "fits": result.fits,
+                "compacted_outputs": len(result.outputs),
+            },
+        )
+        if not result.fits:
+            self._fail(result, trigger="provider_limit")
+        if not result.outputs:
+            # 縮める結果が無い（同じ要求を送り直しても同じ超過になる）。
+            self.fail_after_retry(overflow)
+        self._record(result, trigger="provider_limit")
+        return {**request, "input": result.items}
+
+    def fail_after_retry(self, overflow: ProviderOverflow) -> Never:
+        """縮めて送り直しても（縮められずに）プロバイダが入力の超過を返したときの失敗。"""
+        model = self.budget.limits.model_id
+        CONTEXT_COMPACTIONS_TOTAL.labels(
+            model=model, trigger="provider_limit", outcome="failed"
+        ).inc()
+        logger.warning(
+            "builtin_runtime_context_overflow",
+            extra={
+                "run_id": self.run_id,
+                "model": model,
+                "trigger": "provider_limit",
+                "provider_prompt_tokens": overflow.prompt_tokens,
+                "provider_limit_tokens": overflow.limit_tokens,
+            },
+        )
+        raise BuiltinRuntimeError(
+            CONTEXT_OVERFLOW_CODE, provider_overflow_message(self.budget, overflow)
+        )
+
+    def _fail(self, result: CompactionResult, *, trigger: str) -> Never:
+        model = self.budget.limits.model_id
+        CONTEXT_COMPACTIONS_TOTAL.labels(model=model, trigger=trigger, outcome="failed").inc()
+        logger.warning(
+            "builtin_runtime_context_overflow",
+            extra={"run_id": self.run_id, **self._summary(result, trigger)},
+        )
+        raise BuiltinRuntimeError(CONTEXT_OVERFLOW_CODE, overflow_message(result, self.budget))
+
+    def _summary(self, result: CompactionResult, trigger: str) -> dict[str, Any]:
+        limits = self.budget.limits
+        return {
+            "trigger": trigger,
+            "model": limits.model_id,
+            "max_input_tokens": limits.max_input_tokens,
+            "max_output_tokens": limits.max_output_tokens,
+            "provider_limit_tokens": self._provider_limit,
+            "budget_tokens": result.budget_tokens,
+            "fixed_tokens": result.fixed_tokens,
+            "estimated_tokens_before": result.tokens_before,
+            "estimated_tokens_after": result.tokens_after,
+            "estimate_scale": round(self.budget.estimate_scale, 3),
+        }
+
+    def _record(self, result: CompactionResult, *, trigger: str) -> None:
+        from app.features.agent.runtime import runtime_repository
+
+        key = (trigger, tuple((item.call_id, item.level) for item in result.outputs))
+        if key == self._recorded:
+            return
+        self._recorded = key
+        payload = {
+            **self._summary(result, trigger),
+            "outputs": [item.as_record() for item in result.outputs],
+        }
+        CONTEXT_COMPACTIONS_TOTAL.labels(
+            model=self.budget.limits.model_id, trigger=trigger, outcome="compacted"
+        ).inc()
+        logger.info(
+            "builtin_runtime_context_compacted",
+            extra={
+                "run_id": self.run_id,
+                **self._summary(result, trigger),
+                "compacted_outputs": len(result.outputs),
+            },
+        )
+        try:
+            runtime_repository.record_context_compaction(self.run_id, payload)
+        except Exception as exc:  # noqa: BLE001 - 記録は補助。残せなくてもモデルは呼ぶ
+            logger.warning(
+                "builtin_runtime_context_compaction_record_failed",
+                extra={"run_id": self.run_id, "exception_type": type(exc).__name__},
+            )
+
+
 def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
     """Run の SDK の設定。無いツールの呼び出しで Run を落とさず、モデルへ案内を返す（#1303）。
 
@@ -1605,10 +1842,34 @@ def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
         )
         return message
 
+    limits = getattr(sdk_agent, _CONTEXT_LIMITS_ATTR, None)
     return RunConfig(
         tool_not_found_behavior="return_error_to_model",
         tool_error_formatter=format_error,
+        call_model_input_filter=(
+            _ContextWindow(run_id, limits, exposed) if isinstance(limits, ContextLimits) else None
+        ),
     )
+
+
+async def _run_sdk(
+    run_id: str,
+    sdk_agent: Agent[Any],
+    run_input: Any,
+    *,
+    context: RunContextWrapper[Any] | None = None,
+) -> Any:
+    """Run の SDK の実行（設定は `_run_config`）。終わったら入力の管理の文脈を外す（#2383）。"""
+    try:
+        return await Runner.run(
+            sdk_agent,
+            run_input,
+            context=context,
+            max_turns=_max_turns(),
+            run_config=_run_config(run_id, sdk_agent),
+        )
+    finally:
+        _ACTIVE_CONTEXT_WINDOW.set(None)
 
 
 def conversation_input(run_id: str, goal: str) -> str | list[Any]:
@@ -1795,12 +2056,7 @@ async def execute_run(run_id: str) -> None:
                 confirmation=task.confirmation,
                 confirmation_response=task.response,
             )
-            result = await Runner.run(
-                sdk_agent,
-                conversation_input(run_id, run.goal),
-                max_turns=_max_turns(),
-                run_config=_run_config(run_id, sdk_agent),
-            )
+            result = await _run_sdk(run_id, sdk_agent, conversation_input(run_id, run.goal))
             result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
             result, refused = await _require_tool_grounding(
                 run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
@@ -1862,9 +2118,7 @@ async def resume_run(run_id: str) -> None:
                     state.approve(item)
                 else:
                     state.reject(item)
-            result = await Runner.run(
-                sdk_agent, state, max_turns=_max_turns(), run_config=_run_config(run_id, sdk_agent)
-            )
+            result = await _run_sdk(run_id, sdk_agent, state)
             result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
             result, refused = await _require_tool_grounding(
                 run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
@@ -2121,9 +2375,7 @@ async def _unattended_approvals(
                     else automation_approval_message(call.name)
                 ),
             )
-        result = await Runner.run(
-            sdk_agent, state, max_turns=_max_turns(), run_config=_run_config(run.id, sdk_agent)
-        )
+        result = await _run_sdk(run.id, sdk_agent, state)
     return result
 
 
@@ -2223,14 +2475,13 @@ async def _require_tool_grounding(
         # 利用量は新しい Run の文脈に前の分を足して続ける（承認待ちで保存する状態にも入る）。
         context: RunContextWrapper[Any] = RunContextWrapper(context=result.context_wrapper.context)
         context.usage.add(result.context_wrapper.usage)
-        result = await Runner.run(
+        result = await _run_sdk(
+            run.id,
             sdk_agent,
             tool_grounding.retry_input(
                 result.to_input_list(), answer, confirmable=confirmable, assume=assume
             ),
             context=context,
-            max_turns=_max_turns(),
-            run_config=_run_config(run.id, sdk_agent),
         )
         result = await _unattended_approvals(run, sdk_agent, result, data_scopes)
     return result, False
@@ -2283,12 +2534,11 @@ async def _require_hops(
         return result
     context: RunContextWrapper[Any] = RunContextWrapper(context=result.context_wrapper.context)
     context.usage.add(result.context_wrapper.usage)
-    result = await Runner.run(
+    result = await _run_sdk(
+        run.id,
         sdk_agent,
         tool_grounding.retry_input(result.to_input_list(), answer, head=head),
         context=context,
-        max_turns=_max_turns(),
-        run_config=_run_config(run.id, sdk_agent),
     )
     return await _unattended_approvals(run, sdk_agent, result, data_scopes)
 
