@@ -3375,6 +3375,7 @@ const nl2sqlJa = {
   "dbAdmin.result.error.ora01031.cause": "この操作を実行する Oracle 権限がありません。",
   "dbAdmin.result.error.ora01031.action.privilege": "実行ユーザーの権限を管理者に確認してください。",
   "dbAdmin.result.error.statementFailed": "この文の実行に失敗しました。",
+  "dbAdmin.result.error.statementBlocked": "この文は実行できません。",
   "dbAdmin.result.error.ora00904.cause": "SQL に書いた列名・識別子が対象の表に存在しません（綴り・二重引用符の大文字と小文字の違いを含む）。",
   "dbAdmin.result.error.ora00904.action.column": "対象の表の列名を確かめ、SQL の列名を直してください。",
   "dbAdmin.result.error.dataType.cause": "取込データまたは SQL の値が対象列のデータ型・長さに一致していません。",

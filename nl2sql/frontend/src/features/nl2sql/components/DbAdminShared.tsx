@@ -523,10 +523,16 @@ function SqlRecoveryExamples({ examples }: { examples: { label: string; sql: str
  * 1 文目は「この文の実行に失敗しました。」、本文は DB の文（1 回だけ）とコードから引ける具体的な原因、次の対応、
  * 「詳細」はエラーコード・Oracle のエラーヘルプ。以前は警告の帯・エラー概要・詳細ログの 3 か所に同じ文を出していた。
  */
-export function dbAdminStatementFailure(statement: Pick<DbAdminStatementResult, "error_message" | "error_code">): ProcessFailure {
+export function dbAdminStatementFailure(
+  statement: Pick<DbAdminStatementResult, "error_message" | "error_code" | "status">
+): ProcessFailure {
   const error = parseDbAdminError(statement.error_message ?? "", undefined, statement.error_code ?? undefined);
   return {
-    summary: t("dbAdmin.result.error.statementFailed"),
+    // 実行の前に止めた文（ポリシーの確認）は「実行できません」、実行した後の失敗は「実行に失敗しました」。
+    summary:
+      statement.status === "blocked"
+        ? t("dbAdmin.result.error.statementBlocked")
+        : t("dbAdmin.result.error.statementFailed"),
     cause: error.summary,
     explanation: error.genericCause ? null : error.cause,
     nextAction: error.actions.join(""),
