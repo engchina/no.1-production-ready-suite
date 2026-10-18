@@ -16,8 +16,6 @@ import {
   RunSummary,
   RunTimeline,
   StatusBadge,
-  InfoTip,
-  ToggleChip,
   type EntityAction,
   type StatusVariant,
 } from "@production-ready/ui";
@@ -46,7 +44,7 @@ import {
 } from "@/lib/answer-review";
 import { dataScopeNotes } from "@/lib/data-scope";
 import { formatNumber } from "@/lib/format";
-import { t } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 import { type AgentCapabilities } from "@/lib/permissions";
 import { ragEvidenceItems } from "@/lib/rag-evidence";
 import { RagFigureButton } from "@/components/evidence/RagFigure";
@@ -70,16 +68,10 @@ import {
   runStatusView,
   stepStatusView,
 } from "@/lib/status-labels";
-import {
-  type RunEventSourceState,
-  type RunStreamMode,
-  type RunWebSocketState,
-  type WebSocketStreamStatus,
-  websocketStatusVariant,
-} from "@/pages/runs/run-event-stream";
+import { type RunEventSourceState, type SseStreamStatus } from "@/pages/runs/run-event-stream";
 import { JsonPanel, JsonPreview, MetricPill, formatDate } from "@/pages/shared/page-helpers";
 
-/** Run の取消・再開の可否。一覧の行メニューと詳細の ObjectActionBar・ストリーム操作で同じ判定を使う。 */
+/** Run の取消・再開の可否。一覧の行メニューと詳細の ObjectActionBar で同じ判定を使う。 */
 export function runCapabilities(run: RunState): {
   canCancel: boolean;
   canResume: boolean;
@@ -106,9 +98,6 @@ export function RunDetail({
   run,
   agentName,
   actions,
-  streamMode,
-  onStreamModeChange,
-  websocketState,
   sseState,
   capabilities,
 }: {
@@ -116,9 +105,6 @@ export function RunDetail({
   /** 業務 Agent の名前（一覧に無いときは ID）。 */
   agentName: string;
   actions: EntityAction[];
-  streamMode: RunStreamMode;
-  onStreamModeChange: (mode: RunStreamMode) => void;
-  websocketState: RunWebSocketState;
   sseState: RunEventSourceState;
   capabilities: AgentCapabilities;
 }) {
@@ -306,12 +292,7 @@ export function RunDetail({
                 <p className="text-xs text-fg-muted">{t("run.timelineDescription")}</p>
                 <EventLog events={run.events} />
               </div>
-              <RunStreamControls
-                mode={streamMode}
-                onModeChange={onStreamModeChange}
-                websocketState={websocketState}
-                sseState={sseState}
-              />
+              <RunStreamControls sseState={sseState} />
             </RunDetailSection>
             {capabilities.viewAudit ? (
               <RunDetailSection
@@ -602,17 +583,9 @@ function payloadNumberText(payload: Record<string, unknown>, key: string, suffix
   return suffix ? `${value}${suffix}` : String(value);
 }
 
-function RunStreamControls({
-  mode,
-  onModeChange,
-  websocketState,
-  sseState,
-}: {
-  mode: RunStreamMode;
-  onModeChange: (mode: RunStreamMode) => void;
-  websocketState: RunWebSocketState;
-  sseState: RunEventSourceState;
-}) {
+/** イベントの購読（SSE）の状態。push は SSE、操作は REST だけ（#2260）。 */
+function RunStreamControls({ sseState }: { sseState: RunEventSourceState }) {
+  const status = SSE_STATUS_VIEW[sseState.status];
   return (
     <div className="grid min-w-0 gap-3" data-testid="run-stream">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
@@ -620,98 +593,30 @@ function RunStreamControls({
           <h3 className="text-sm font-medium text-fg">{t("run.stream")}</h3>
           <p className="mt-1 text-xs text-fg-muted">{t("run.streamDescription")}</p>
         </div>
-        <StatusBadge
-          variant={mode === "websocket" ? websocketStatusVariant[websocketState.status] : "info"}
-          label={mode === "websocket" ? websocketStatusLabel(websocketState.status) : t("run.stream.sse")}
-          // WebSocket は接続状態（アイコンあり）、SSE は方式名（状態ではない）
-          icon={mode === "websocket"}
-        />
+        <StatusBadge variant={status.variant} label={t(status.labelKey)} icon />
       </div>
-      <div className="min-w-0 space-y-4">
-        {/* 購読の方式（モード）の切り替え。共有の ToggleChip を使う（buttons.md §6。手書きのセグメントは作らない）。 */}
-        {/* 選んだ方式の説明は常設せず、チップの横の info アイコンから出す（#901）。 */}
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex flex-wrap gap-2" role="group" aria-label={t("run.streamMode")}>
-            <ToggleChip selected={mode === "sse"} onClick={() => onModeChange("sse")}>
-              {t("run.stream.sse")}
-            </ToggleChip>
-            <ToggleChip selected={mode === "websocket"} onClick={() => onModeChange("websocket")}>
-              {t("run.stream.websocket")}
-            </ToggleChip>
-          </div>
-          <InfoTip
-            label={t("run.streamMode.infoLabel")}
-            content={mode === "websocket" ? t("run.stream.websocketDescription") : t("run.stream.sseDescription")}
-            contentTestId="run-stream-description"
-            data-testid="run-stream-info"
-          />
-        </div>
-
-        {mode === "websocket" && websocketState.stopReason ? (
-          <Banner
-            severity="warning"
-            title={t("run.stream.stoppedTitle")}
-            action={
-              <Button variant="secondary" size="sm" icon={RefreshCw} onClick={websocketState.reconnect}>
-                {t("run.stream.reconnect")}
-              </Button>
-            }
-          >
-            <span data-testid="run-stream-stopped">{websocketState.stopReason}</span>
-          </Banner>
-        ) : null}
-        {mode === "sse" && sseState.status === "failed" ? (
-          <Banner
-            severity="warning"
-            title={t("run.stream.stoppedTitle")}
-            action={
-              <Button variant="secondary" size="sm" icon={RefreshCw} onClick={sseState.reconnect}>
-                {t("run.stream.reconnect")}
-              </Button>
-            }
-          >
-            <span data-testid="run-stream-stopped">{t("run.stream.sseFailed")}</span>
-          </Banner>
-        ) : null}
-
-        {/* 通信の指標は業務の判断に使わないので「接続の詳細」に畳む（messaging.md §10.3）。 */}
-        {mode === "websocket" ? (
-          <Disclosure summary={t("run.stream.details")} variant="plain" size="sm" data-testid="run-stream-details">
-            <dl className="grid min-w-0 gap-x-4 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-3">
-              <StreamMetric label={t("run.stream.heartbeat")} value={websocketState.lastHeartbeat ?? "-"} />
-              <StreamMetric label={t("run.stream.ack")} value={websocketState.lastAck ?? "-"} />
-              <StreamMetric label={t("run.stream.error")} value={websocketState.lastError ?? "-"} />
-              <StreamMetric label={t("run.stream.lastEvent")} value={websocketState.lastEventId ?? "-"} />
-              <StreamMetric label={t("run.stream.reconnects")} value={String(websocketState.reconnectAttempts)} />
-            </dl>
-          </Disclosure>
-        ) : null}
-      </div>
+      {sseState.status === "failed" ? (
+        <Banner
+          severity="warning"
+          title={t("run.stream.stoppedTitle")}
+          action={
+            <Button variant="secondary" size="sm" icon={RefreshCw} onClick={sseState.reconnect}>
+              {t("run.stream.reconnect")}
+            </Button>
+          }
+        >
+          <span data-testid="run-stream-stopped">{t("run.stream.sseFailed")}</span>
+        </Banner>
+      ) : null}
     </div>
   );
 }
 
-function StreamMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="font-medium text-fg">{label}</dt>
-      <dd className="break-words text-fg-muted [overflow-wrap:anywhere]">{value}</dd>
-    </div>
-  );
-}
-
-function websocketStatusLabel(status: WebSocketStreamStatus): string {
-  const labels: Record<WebSocketStreamStatus, string> = {
-    idle: t("run.stream.wsIdle"),
-    connecting: t("run.stream.wsConnecting"),
-    open: t("run.stream.wsOpen"),
-    reconnecting: t("run.stream.wsReconnecting"),
-    closed: t("run.stream.wsClosed"),
-    error: t("run.stream.wsError"),
-    stopped: t("run.stream.wsStopped"),
-  };
-  return labels[status];
-}
+const SSE_STATUS_VIEW: Record<SseStreamStatus, { variant: StatusVariant; labelKey: I18nKey }> = {
+  idle: { variant: "neutral", labelKey: "run.stream.idle" },
+  open: { variant: "info", labelKey: "run.stream.open" },
+  failed: { variant: "warning", labelKey: "run.stream.failed" },
+};
 
 function AuditPanel({ runId }: { runId: string }) {
   const audit = useQuery({

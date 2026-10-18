@@ -1152,36 +1152,15 @@ const agentJa = {
   "run.replayTitle": "同じ条件で再実行しますか?",
   "run.guardrailWarning": "安全検査の警告",
   "run.stream": "ストリーム",
-  "run.streamDescription": "実行のイベントの受け取り方と、接続の状態",
-  "run.streamMode": "ストリーム方式",
-  "run.streamMode.infoLabel": "ストリーム方式の説明",
-  "run.stream.sse": "SSE",
-  "run.stream.websocket": "WebSocket",
-  "run.stream.sseDescription": "SSE で、終わっていない実行のイベントを受け取ります。",
-  "run.stream.heartbeat": "最後の応答確認",
-  "run.stream.ack": "操作の受付",
-  "run.stream.error": "操作のエラー",
-  "run.stream.lastEvent": "最後のイベント",
-  "run.stream.reconnects": "再接続の回数",
-  "run.stream.duplicate": "重複",
-  "run.stream.wsIdle": "未接続",
-  "run.stream.wsConnecting": "接続中",
-  "run.stream.wsOpen": "接続済み",
-  "run.stream.wsReconnecting": "再接続中",
-  "run.stream.wsClosed": "切断",
-  "run.stream.wsError": "エラー",
-  "run.stream.wsStopped": "停止",
-  // WebSocket / SSE の購読が権限・認証・接続の理由で止まったとき（#215）。再接続はしない。
+  "run.streamDescription": "終わっていない実行のイベントを SSE で受け取り、画面を自動で更新します。",
+  "run.stream.idle": "受信していません",
+  "run.stream.open": "受信中",
+  "run.stream.failed": "停止",
+  // SSE の購読が切れたとき（#215）。自動の再接続はしない。
   "run.stream.stoppedTitle": "イベントの購読を停止しました",
-  "run.stream.stoppedForbidden": "この実行のイベントを購読する権限がありません。",
-  "run.stream.stoppedUnauthenticated": "ログインの有効期限が切れました。もう一度ログインしてください。",
-  "run.stream.stoppedNotFound": "実行が見つかりません。削除されたか、参照できなくなった可能性があります。",
-  "run.stream.stoppedUnreachable":
-    "イベントの購読に接続できませんでした。権限とログイン状態、接続先を確認してから再接続してください。",
   "run.stream.sseFailed":
     "SSE の接続が切れたため、イベントの自動更新を停止しました。権限とログイン状態を確認してから再接続してください。",
   "run.stream.reconnect": "再接続",
-  "run.stream.commandForbidden": "この操作を行う権限がありません。",
   "audit.csvFailed": "CSV をダウンロードできませんでした",
 
 
@@ -1646,11 +1625,6 @@ const agentJa = {
   "automation.noMatch": "検索に一致する自動実行がありません",
   // 操作の結果の出し方（messaging.md §10。#814）。
   "run.decideFailed": "承認の判断を送れませんでした",
-  "run.stream.commandFailed": "実行の操作を送れませんでした",
-  "run.stream.commandFailedDefault": "サーバーが操作を受け付けませんでした。",
-  "run.stream.websocketDescription":
-    "WebSocket で、終わっていない実行のイベントを受け取ります。接続中は、承認・再開・キャンセルもこの接続で送ります。",
-  "run.stream.details": "接続の詳細",
   "settings.mcpConnections.fetchSucceeded": "{name} から {count} 個のツールを取得しました。",
   "settings.mcpConnections.fetchEmpty": "{name} に接続できましたが、公開されているツールがありません。",
   "settings.mcpConnections.fetchEmptyHint": "接続先の MCP サーバーがツールを公開しているか確かめてください。",

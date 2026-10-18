@@ -2932,9 +2932,6 @@ export async function installMockApi(page: Page): Promise<MockApi> {
     }
   });
 
-  // Run のイベント購読（WebSocket）も実 backend へ接続しない。接続は開いたまま何も送らない。
-  await page.routeWebSocket(/\/api\//, () => {});
-
   return mockApi;
 }
 

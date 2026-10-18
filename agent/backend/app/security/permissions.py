@@ -537,11 +537,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", "/security/api-keys/{key_id}"): _ADMIN_ONLY,
 }
 
-# WebSocket（OpenAPI に出ない）。handler の中で同じ規則で確認する。
-WEBSOCKET_PERMISSIONS: dict[str, frozenset[str]] = {
-    "/runs/{run_id}/events/ws": _any(MENU_RUNS, MENU_APPROVALS),
-}
-
 
 def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
     """method + route template（`/api` なし）→ 許可する権限の集合。

@@ -175,8 +175,7 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 | `GET/POST/PATCH` | `/api/agents` | Business Agent |
 | `GET/POST/PATCH` | `/api/skills` | Skill registry |
 | `POST` | `/api/runs` | Run 作成（組み込み Runtime で実行） |
-| `GET` | `/api/runs/{id}/events` | SSE event |
-| `WS` | `/api/runs/{id}/events/ws` | WebSocket event |
+| `GET` | `/api/runs/{id}/events` | SSE event（Run のイベントの push は SSE だけ。取消・再開・承認は REST。#2260） |
 | `POST` | `/api/runs/{id}/cancel` | Run の取消 |
 | `GET` | `/api/runs/{id}/artifacts` | normalized Artifact |
 
@@ -187,7 +186,7 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 
 - production（`AGENT_AUTH_MODE=production`）は全 API を既定拒否の権限 manifest で守ります。Cookie のないリクエストは 401 です
   （RAG / NL2SQL と同じ。`X-Agent-Roles` などの header は使いません）（[docs/security-rbac.md](docs/security-rbac.md)）。
-- WebSocket は Cookie のセッションで `Origin` と `Host` の一致を必須にします。承認の決定者はログイン中の利用者です。
+- 承認の決定者はログイン中の利用者です。
 - モデルの API key・外部の token は API/snapshot/log/Artifact に出しません。SDK の tracing は無効です。
 - ツールは Skill が必要とするものだけをモデルに渡し、ポリシーが「拒否」のツールは渡しません。
 - 業務 Agent が使う Skill は削除できません。

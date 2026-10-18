@@ -76,7 +76,7 @@
 | ツール | `tools-list` | ツール一覧 | schema と監査タグ | なし |
 
 - 行の操作以外の領域のクリックで選び、選択は行の背景と `aria-current` で示す。行の操作は `RowActionMenu`、詳細は同じ定義を `ObjectActionBar` に渡す。
-- 実行の詳細の操作は `ObjectActionBar` の 1 か所だけ（#814）。イベントを WebSocket で購読していて接続済みなら、操作は handler の中でその接続のコマンドとして送り、それ以外は REST を呼ぶ。押した操作だけを `loading` にし（WebSocket はコマンドの受付・拒否まで）、ほかは `disabled`。通信の指標（最後の応答確認・操作の受付・再接続の回数など）は「接続の詳細」の `Disclosure`（既定で閉じる）に畳む。
+- 実行の詳細の操作は `ObjectActionBar` の 1 か所だけ（#814）。操作は REST を呼び、押した操作だけを応答まで `loading` にし、ほかは `disabled`。イベントは SSE だけで購読し（方式の切り替えは持たない。#2260）、「技術的な詳細」のストリームに受信の状態（`StatusBadge`）と、切れたときの停止と「再接続」（`Banner`）を出す。
 
 ### 1.3 実行履歴の全幅の導線（#875）
 
@@ -115,7 +115,7 @@
 | 画面 | 保存する field | 戻ったときの検証 |
 |---|---|---|
 | チャット | 選んだ業務 Agent（`chat.agentId`）、会話（`chat.threadId`）、送る前の下書き（`chat.draft`）、デスクトップの履歴の開閉（`chat.historyOpen`。既定で閉じる）、会話の履歴のページ（`chat.historyPage`。業務 Agent と offset。別の業務 Agent では 1 ページ目。#1265） | 会話が無くなっていれば新しい会話にする |
-| 実行履歴 | 目標の下書き（`runs.goal`）、選択中の実行（`runs.selectedRunId`）、イベント購読方式（`runs.streamMode`） | 詳細の対象は URL が正本。一覧へ戻ると最後に選んだ行へフォーカスを戻す。対象が無い場合は説明を出す。業務 Agent は実行条件なので保存しない |
+| 実行履歴 | 目標の下書き（`runs.goal`）、選択中の実行（`runs.selectedRunId`） | 詳細の対象は URL が正本。一覧へ戻ると最後に選んだ行へフォーカスを戻す。対象が無い場合は説明を出す。業務 Agent は実行条件なので保存しない |
 | 承認 | 最後に開いた承認（`approvals.selectedId`） | 詳細の対象は URL が正本。一覧へ戻る時の行のフォーカスにだけ使い、判断は確認し直す |
 | フィードバック / 品質評価 / 利用状況 | 見方のタブと絞り込み（`feedback.*`。シグナルの種類 `signalKind` を含む）、業務 Agent と表示中の評価・比べる 2 つの評価（`evaluation.*`）、期間と内訳のタブ（`usage.*`） | 期間・対象で取り直す |
 | 監査 | 入力中の絞り込み（`audit.filterForm`）、適用済みの絞り込み（`audit.appliedForm`）、ページ（`audit.page`） | 適用済みの条件とページ（API の offset）で一覧を取り直す。範囲外になったページは最後のページに寄せる。条件を適用し直すと 1 ページ目へ戻す |

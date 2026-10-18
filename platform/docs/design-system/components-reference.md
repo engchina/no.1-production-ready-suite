@@ -2994,7 +2994,7 @@ function submit() {
 
 ### 段階の形（3 製品共通の契約）
 
-AG-UI の `STEP_STARTED` / `STEP_FINISHED` / `TOOL_CALL_*` / `RUN_ERROR` に倣う。backend は製品の既存の配信（polling / SSE / WebSocket）で、この形の一覧を画面へ渡す（画面が backend の値からこの形を作ってもよい。NL2SQL はジョブの `steps` から作る）。
+AG-UI の `STEP_STARTED` / `STEP_FINISHED` / `TOOL_CALL_*` / `RUN_ERROR` に倣う。backend は製品の既存の配信（polling / SSE）で、この形の一覧を画面へ渡す（画面が backend の値からこの形を作ってもよい。NL2SQL はジョブの `steps` から作る）。
 
 ```ts
 import type { ChatProgressStep } from "@production-ready/ui";

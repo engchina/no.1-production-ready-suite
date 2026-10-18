@@ -20,7 +20,7 @@ const MAX_VALUE_CHARS = 20_000;
 export const WORKSPACE_FIELDS = {
   // チャット（#768）: 選んだ Agent・会話と、送る前の下書き。会話の履歴のページ（Agent と offset。#1265）。
   chat: ["agentId", "threadId", "draft", "historyOpen", "historyPage"],
-  runs: ["selectedRunId", "streamMode", "goal"],
+  runs: ["selectedRunId", "goal"],
   // 承認の一覧で選んだ承認（#808）。判断は確認し直すので残さない。
   approvals: ["selectedId"],
   audit: ["filterForm", "appliedForm", "page"],

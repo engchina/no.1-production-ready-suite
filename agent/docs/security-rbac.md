@@ -96,7 +96,6 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 | `POST /agents/{id}/publish`・`POST /agents/{id}/versions/{version}/restore`（#770） | `agent.admin` | 下書きで実行（`POST /runs` の `draft=true`）も `agent.admin` だけ |
 | `GET /runs/{id}`・`/audit`・`/artifacts*`・`/figure-url` | `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上（監査は auditor）・ほかの利用者の Run は 404（§4.1。自分の会話の Run は読める）・範囲外は 403 |
 | `GET /runs/{id}/events`（SSE） | `menu.runs` / `menu.approvals` | viewer 以上・ほかの利用者の Run は 404・範囲外は 403 |
-| `WS /runs/{id}/events/ws` | `menu.runs` / `menu.approvals` | viewer 以上・ほかの利用者の Run は `run.not_found`・範囲外は close 1008 |
 | `GET /runs/{id}/progress`・`/progress/stream`（チャットの処理の段階の polling と SSE。#1359） | `menu.chat` / `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上・ほかの利用者の Run は 404・範囲外は 403 |
 | `POST /runs`・`/runs/{id}/cancel`・`resume`・`replay`・`/runs/{id}/confirmations/{id}`・`PUT /runs/{id}/feedback` | `agent.runs.operate` / `agent.admin` | operator・ほかの利用者の Run・会話は 404（system_admin は全員。§4.1）・範囲外は 403・新しい Run は操作した利用者の Run |
 | `GET /threads`・`GET`・`PATCH`・`DELETE /threads/{thread_id}`（チャットの会話。#768） | `menu.chat` | 会話の持ち主の会話だけ（別の利用者の会話は 404）。system_admin は全員の会話（利用者の表示名・送った人の表示名つき。§4.1）・範囲外の Agent の会話は出さない |
@@ -133,14 +132,14 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 
 - Run の持ち主は Run を実行した利用者（actor。`RunState.created_by_user_uuid`）。自動実行の Run は実行する利用者（`run_as_user_uuid`）、品質評価の Run は評価を始めた利用者。持ち主の無い古い Run は system_admin だけが見られる。
 - 会話の持ち主は会話を始めた利用者（`RunState.thread_owner_user_uuid`。記録の無い既存の Run は会話の最初の Run の `created_by_user_uuid`）。system_admin が続けても会話の持ち主は変わらない（#1928）。
-- 「AI 活用」の API（実行履歴の `GET /runs`、Run の詳細・監査・成果物・図の URL・イベント・処理の段階・WebSocket、取消・再開・再実行・回答前の確認への回答・評価、チャットの会話）は、自分が実行した Run・自分の会話の Run か system_admin だけ。ほかの利用者の Run は 404（WebSocket は `run.not_found`）で、存在を漏らさない。対象範囲（業務 Agent）の判定はその上に重ねてかかる（自分の Run でも範囲外は 403）。
+- 「AI 活用」の API（実行履歴の `GET /runs`、Run の詳細・監査・成果物・図の URL・イベント・処理の段階、取消・再開・再実行・回答前の確認への回答・評価、チャットの会話）は、自分が実行した Run・自分の会話の Run か system_admin だけ。ほかの利用者の Run は 404 で、存在を漏らさない。対象範囲（業務 Agent）の判定はその上に重ねてかかる（自分の Run でも範囲外は 403）。
 - `agent.admin`（Agent 管理）・`agent.audit.view`・`agent.approvals.decide` は、「AI 活用」の画面で全員を見る理由にしない。
 - **実行履歴（#1954。3 製品で同じ規則）**: 行は実行した人と会話の持ち主の両方に出る（system_admin は全件）。一般の利用者には、自分が実行した Run と、自分の会話で他の人（system_admin）が実行した Run だけ（判定は `can_access_run` と同じ範囲。Agent は in-memory の store を router の `_run_visible_to` で絞る）。
   - API（`GET /runs` の行・`GET /runs/{id}`・会話の Run）: `executed_by_me`・`executor_display_name`（実行した人の表示名。見る人を問わず返す。引けなければ空）・`can_decide`（待ちの操作をできるか）。詳細と会話の Run は `owned_by_me`・`conversation_owner_display_name`（会話の無い Run は null）も返す（`RunViewer` / `RunView`。保存はしない）。
   - 絞り込み `GET /runs?executor=all|mine|others`（既定 `all`。`run_executor_matches`。`total` も同じ条件、`unfiltered_total` は見られる全件）。
   - 画面: 「実行者」の列（全員。system_admin の旧「利用者」の列を置き換えた。system_admin には `RunsData.creator_display_names` も返す）、実行した人が自分でない行の目標の下に「〈名前〉 が実行」、ツールバーに「実行者で絞り込み」（すべて / 自分が実行 / 他の人が実行。作業状態 `listFilter.runsExecutor`）、詳細に「実行者」「会話の持ち主」。
   - 利用量・API キーの上限・監査は実行した人（`created_by_user_uuid`）に数える（#1928 のまま）。
-- **承認（ユーザーの指示による設計の変更）**: 承認の権限（`agent.approvals.decide`）を持つ利用者は、自分が実行した Run の承認だけを見て判断する。以前は、業務 Agent の範囲のほかの利用者の Run も判断できた。ほかの利用者の Run の承認は system_admin だけが判断する。承認したツールは Run の利用者の権限（サービストークンの `sub`）で実行するため、自分の会話でも system_admin が実行した Run の承認は判断しない（一覧・詳細・決定は 404。画面は判断のボタンを出さない）。WebSocket の `approval_decision` も、承認ごとに持ち主と範囲を確かめ直す。system_admin が他の利用者の会話で始めた Run の承認は、system_admin の承認の一覧に出る（#1954）。
+- **承認（ユーザーの指示による設計の変更）**: 承認の権限（`agent.approvals.decide`）を持つ利用者は、自分が実行した Run の承認だけを見て判断する。以前は、業務 Agent の範囲のほかの利用者の Run も判断できた。ほかの利用者の Run の承認は system_admin だけが判断する。承認したツールは Run の利用者の権限（サービストークンの `sub`）で実行するため、自分の会話でも system_admin が実行した Run の承認は判断しない（一覧・詳細・決定は 404。画面は判断のボタンを出さない）。system_admin が他の利用者の会話で始めた Run の承認は、system_admin の承認の一覧に出る（#1954）。
 - **持ち主の側の待ち（#1954）**: 再開・Agent 自身の確認への回答も承認と同じく実行した人と system_admin だけ（`can_decide=false`）。持ち主のチャット・実行の詳細は、system_admin が実行して承認・確認の待ちで止まった Run に「システム管理者（〈名前〉）の承認・回答を待っています」（info の Banner）を出し、操作のボタンは出さない（実行履歴の行メニューも承認・却下・再開を出さない）。チャットの「自分で質問し直す」は、その Run を止め（取消は持ち主もできる）、同じ質問を同じ会話で送る。新しい Run は持ち主の権限（`created_by_user_uuid`・業務 Agent の範囲・サービストークンの `sub`）で動く。持ち主の「再実行」（`POST /runs/{id}/replay`）も操作した持ち主の権限で、新しい会話の Run を作る。
 - **送る前の案内（#1954）**: system_admin が他の利用者の会話（`ThreadData.owned=false`）を開いているとき、チャットの入力欄の上に「この会話の持ち主にも、回答と途中の結果が見えます」（共有 UI の `ChatComposer` の `notice`）を出す。新しい会話・自分の会話では出さない。
 - **system_admin の操作（ユーザーの指示による設計の変更。#1928。#1889 の「続きは本人だけ」を外した）**: system_admin は他の利用者の会話・Run に、本人と同じすべての操作ができる（見る・名前の変更・削除・続きの質問・停止・回答前の確認への回答・評価・取消・再開・再実行・承認の判断）。
@@ -157,17 +156,12 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
   ロールに足すと 403。新しく足す存在しないエージェント ID・未登録の権限コードは 400。組み込み / アーカイブ済みのロールは 409。
 - ユーザーへのロールの割り当て・ロールの復元は、ロールの権限と対象範囲が操作者に収まる場合だけ（共通の判定と、他製品の権限テーブルの判定）。
 
-## 6. WebSocket と承認の決定者
+## 6. Run のイベントの配信と承認の決定者
 
-- `WS /runs/{id}/events/ws` は Request 前提の認可を通らないため、handler の中で accept 前に認証します。
-  production で session Cookie があるときは **`Origin` が `Host` と一致すること**を必須にし（CSRF header を送れないため）、
-  セッション・強制パスワード変更・manifest を確認します。失敗は accept せずに close 1008。
-  Cookie がなければ close 1008。local はローカル利用者として接続します。
-  接続後のロール・範囲の不足は従来どおり `rbac.*` の error を送って close 1008。ほかの利用者の Run（system_admin でない利用者）は `run.not_found` で close 1008（§4.1）。コマンド（cancel / resume / approval_decision）も同じ利用者で判定し、`approval_decision` は承認ごとに持ち主と範囲を確かめ直します。
-- Nginx は `/api/` に `proxy_set_header Host $http_host;`（port を含む）を渡します。前段に HTTPS の終端を置く場合も、ブラウザの Origin と
-  backend に届く Host を一致させてください。
-- 承認の決定者（`decided_by`）は利用者の `login_user_id` です（HTTP の body・WebSocket の message の値は使わない。local は `local`）。
-- 承認の「承認して今後は自動で実行」（`POST /api/approvals/{approval_id}/decision` の `always_allow=true`。#1832）はツール権限を変えるので、`agent.approvals.decide` に加えて `agent.admin` が要る（ない利用者は 403 で、承認もしない）。ツールのポリシーは全業務 Agent・全利用者に効く。Run のイベントとログ `agent_tool_policy_always_allow` に残す。WebSocket の承認では選べない。
+- Run のイベントの push は SSE（`GET /runs/{id}/events`）だけで、取消・再開・承認の判断は REST の API です。WebSocket は持ちません（#2260）。
+  どちらも `/api` の HTTP の認可（Cookie のセッション・更新系の CSRF・manifest）を通ります。
+- 承認の決定者（`decided_by`）は利用者の `login_user_id` です（HTTP の body の値は使わない。local は `local`）。
+- 承認の「承認して今後は自動で実行」（`POST /api/approvals/{approval_id}/decision` の `always_allow=true`。#1832）はツール権限を変えるので、`agent.approvals.decide` に加えて `agent.admin` が要る（ない利用者は 403 で、承認もしない）。ツールのポリシーは全業務 Agent・全利用者に効く。Run のイベントとログ `agent_tool_policy_always_allow` に残す。
 - MCP 接続の「ツールの注釈（readOnlyHint）を信頼する」（`trust_tool_annotations`。#1832・#1875）は、外部の接続では既定でオフです（新しい接続も、値を保存していない既存の接続も）。MCP の仕様どおり、信頼しないサーバーの注釈は untrusted として扱い、`readOnlyHint=true` のツールも承認を求めます（ツール権限で個別に指定しない限り）。オンにすると読み取り専用と申告したツールが承認なしで動くので、変えられるのは `agent.admin` だけで、画面は確認のダイアログでその注意を示します。標準の接続（RAG / NL2SQL）は常に信頼します（API でオフにすると 400）。
 
 ## 7. 画面以外からの呼出し
@@ -218,7 +212,6 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 
 ## 9. 既知の制約
 
-- WebSocket のセッションは接続時だけ確認します（接続中に失効・権限変更しても切断しません）。
 - 範囲が制限された利用者の `GET /observability/events` は、件数上限（limit）を適用した後に範囲で絞ります。
 - local の Run は Run の利用者が `00000000-0000-0000-0000-000000000000`（ローカル利用者）です。production の RAG / NL2SQL を呼ぶと、
   その利用者は呼び先に存在しないため拒否されます（local 同士で使う）。

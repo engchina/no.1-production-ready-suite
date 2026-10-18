@@ -1303,7 +1303,7 @@ def _verify_nginx_limits() -> None:
         if actual != expected:
             raise AssertionError(f"{context}: {product} client_max_body_size must be {expected} (backend + margin): {actual}")
 
-    # 時間切れ: 既定は 600 秒。SSE / WebSocket の heartbeat はそれより十分短い（間が空かない）。
+    # 時間切れ: 既定は 600 秒。SSE の heartbeat はそれより十分短い（間が空かない）。
     default_timeout = float(_shell_scalar(suite_nginx, "SUITE_PROXY_TIMEOUT_SECONDS", context=context))
     chat_progress = (
         REPO_ROOT / "platform" / "packages" / "backend_core" / "src" / "pr_backend_core" / "chat_progress.py"
@@ -1321,9 +1321,6 @@ def _verify_nginx_limits() -> None:
             (REPO_ROOT / "agent" / "backend" / "app" / "features" / "agent" / "runtime.py").read_text(encoding="utf-8"),
             r"idle_timeout_seconds: float = ([0-9.]+)",
             context="agent runtime",
-        ),
-        "agent run WebSocket": _python_number(
-            agent_router, r"heartbeat_interval_seconds: float = ([0-9.]+)", context="agent router"
         ),
     }
     for name, seconds in heartbeats.items():

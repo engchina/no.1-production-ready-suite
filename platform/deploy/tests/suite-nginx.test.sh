@@ -82,7 +82,7 @@ count_of() {
   printf '%s\n' "$1" | grep -cF -- "$2" || true
 }
 # 長い待ち時間: RAG 660 秒（回答の上限 600 秒・画面 630 秒より長く）・NL2SQL 2460 秒（LLM 600 秒 × 4 回 + 60）・
-# Agent の tools/invoke 960 秒（外部 MCP の上限 900 秒 + 60）。ほかの API は 600 秒（SSE / WebSocket は heartbeat）。
+# Agent の tools/invoke 960 秒（外部 MCP の上限 900 秒 + 60）。ほかの API は 600 秒（SSE は heartbeat）。
 assert_contains "${site_all_https}" "search-answer-profiles/[^/]+/support-guides/[^/]+/try|" "RAG の業務ガイドを試すは長い timeout"
 assert_contains "${site_all_https}" "location ~ ^/nl2sql/api/(nl2sql/analyze|nl2sql/reverse/deep|" "NL2SQL の LLM の同期の API は長い timeout"
 assert_contains "${site_all_https}" "location ~ ^/agent/api/(tools/invoke)\$ {" "Agent の tools/invoke は長い timeout"
@@ -97,12 +97,13 @@ assert_contains "${site_all_https}" "proxy_read_timeout 600s;" "既定の待ち�
 assert_contains "${site_all_https}" "client_max_body_size 10m;" "製品の外の本文の上限"
 site_custom_body="$(SUITE_NL2SQL_CLIENT_MAX_BODY_SIZE=60M suite_nginx_site true /srv/suite /srv/ssl 80 443 nl2sql)"
 [ "$(count_of "${site_custom_body}" "client_max_body_size 60M;")" = 2 ] || fail "NL2SQL の本文の上限を変えられない"
-# WebSocket は Agent だけ。Upgrade があるときだけ Connection: upgrade（map）。ほかは Connection を空にする。
-assert_contains "${site_all_https}" 'map $http_upgrade $pr_suite_connection_upgrade {' "WebSocket の Connection の map"
-assert_not_contains "${site_all_https}" 'proxy_set_header Connection "upgrade";' "WebSocket でない要求に upgrade を渡さない"
-[ "$(count_of "${site_all_https}" 'proxy_set_header Upgrade $http_upgrade;')" = 3 ] || fail "Upgrade は Agent の API の location だけ"
-[ "$(count_of "$(suite_nginx_site true /srv/suite /srv/ssl 80 443 rag nl2sql)" 'Upgrade')" = 0 ] \
-  || fail "RAG・NL2SQL に Upgrade を渡さない"
+# 3 製品とも HTTP だけ（push は SSE、操作は REST。WebSocket は持たない。#2260）。Upgrade を渡さず、
+# Connection を空にし、Host は 3 製品で同じ $host にする。
+assert_not_contains "${site_all_https}" 'Upgrade' "WebSocket の Upgrade を渡さない"
+assert_not_contains "${site_all_https}" 'pr_suite_connection_upgrade' "WebSocket の Connection の map を持たない"
+assert_not_contains "${site_all_https}" '$http_host' "Host は 3 製品で同じ"
+[ "$(count_of "${site_all_https}" 'proxy_set_header Connection "";')" = 9 ] || fail "API の location の Connection"
+[ "$(count_of "${site_all_https}" 'proxy_set_header Host $host;')" = 12 ] || fail "API と health の location の Host"
 # ストリーム: API の location（製品ごとに login・長い API・API 全体の 3 つ）は buffering・cache・gzip を切る。
 for directive in "proxy_buffering off;" "proxy_cache off;" "gzip off;"; do
   [ "$(count_of "${site_all_https}" "${directive}")" = 9 ] || fail "API の location の ${directive}"
@@ -327,21 +328,16 @@ for product in ("rag", "nl2sql", "agent"):
     # MCP（他製品・外部から呼ぶ。Agent → RAG / NL2SQL は 127.0.0.1 の backend を直接呼ぶ）。
     assert backend(f"/{product}/api/mcp", "POST")["path"] == "/api/mcp", product
 
-# Agent は WebSocket の Origin 検査のため、port を含む Host を渡す。
-agent_host = backend("/agent/api/runs")["headers"]["Host"]
-assert agent_host == f"127.0.0.1:{https_port if https_enabled else http_port}", agent_host
-# WebSocket（Agent）の要求だけ Upgrade と Connection: upgrade を渡す。ほかの要求・NL2SQL・RAG には渡さない（#1597）。
 def echo_headers(path, headers):
     status, _, data = call(path, headers=headers)
     assert status == 200, (path, status, data)
     return json.loads(data)["headers"]
+# 3 製品とも HTTP だけ（WebSocket は持たない。#2260）。Host は同じ $host（port なし）で、
+# 要求に Upgrade があっても upstream へ渡さない（#1597）。
 ws_headers = {"Upgrade": "websocket", "Connection": "Upgrade"}
-upgraded = echo_headers("/agent/api/runs/r1/events/ws", ws_headers)
-assert (upgraded.get("Connection"), upgraded.get("Upgrade")) == ("upgrade", "websocket"), upgraded
-plain = echo_headers("/agent/api/runs/r1/events", {})
-assert "upgrade" not in (plain.get("Connection") or "").lower() and "Upgrade" not in plain, plain
-for product in ("rag", "nl2sql"):
-    other = echo_headers(f"/{product}/api/runs/r1/events/ws", ws_headers)
+for product in ("rag", "nl2sql", "agent"):
+    assert backend(f"/{product}/api/runs")["headers"]["Host"] == "127.0.0.1", product
+    other = echo_headers(f"/{product}/api/runs/r1/events", ws_headers)
     assert "upgrade" not in (other.get("Connection") or "").lower() and "Upgrade" not in other, (product, other)
 
 # 大きな Cookie（16k の buffer の範囲）と大きな応答の header を通す（#1597）。

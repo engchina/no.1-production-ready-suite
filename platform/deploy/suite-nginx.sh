@@ -34,8 +34,8 @@ SUITE_NL2SQL_CLIENT_MAX_BODY_SIZE="${SUITE_NL2SQL_CLIENT_MAX_BODY_SIZE:-210M}"
 SUITE_AGENT_CLIENT_MAX_BODY_SIZE="${SUITE_AGENT_CLIENT_MAX_BODY_SIZE:-110M}"
 
 # backend へ転送する API の待ち時間（秒。proxy_read_timeout / proxy_send_timeout）。値の根拠（#1597）:
-# - 既定（全 API）600 秒: SSE / WebSocket は 10〜15 秒ごとに heartbeat を送る（共通の進み具合の SSE
-#   pr_backend_core.chat_progress・RAG のチャットの SSE・Agent の Run の SSE / WebSocket）ので、間が空かない。
+# - 既定（全 API）600 秒: SSE は 10〜15 秒ごとに heartbeat を送る（共通の進み具合の SSE
+#   pr_backend_core.chat_progress・RAG のチャットの SSE・Agent の Run の SSE）ので、間が空かない。
 # - RAG の LLM を呼ぶ同期の API 660 秒: 回答の通しの上限 rag_answer_timeout_seconds（既定・上限 600 秒）と
 #   画面の待ち時間 630 秒より長く。RAG 検索のストリーム（search/stream）は heartbeat が無く、LLM 1 回の間
 #   （最大 600 秒）何も届かない。
@@ -80,7 +80,7 @@ SUITE_NL2SQL_LONG_API_PATHS=(
   'nl2sql/db-admin/analyze-error'
   'nl2sql/db-admin/extract-join-where'
 )
-# Agent: ツールを同期で呼ぶ API（RAG の rag_search などの外部 MCP を待つ）。Run は非同期で、進み具合は SSE / WebSocket。
+# Agent: ツールを同期で呼ぶ API（RAG の rag_search などの外部 MCP を待つ）。Run は非同期で、進み具合は SSE。
 # shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
 SUITE_AGENT_LONG_API_PATHS=(
   'tools/invoke'
@@ -180,33 +180,19 @@ suite_contains() {
   return 1
 }
 
-# backend へ渡す proxy の共通の設定。
-#   $1: Host header（Agent は WebSocket の Origin と Host の一致を確かめるため、port を含む $http_host）
-#   $2: "websocket" なら、WebSocket の要求（Upgrade がある）のときだけ Upgrade と Connection: upgrade を渡す
-#       （map $pr_suite_connection_upgrade。ほかの要求は Connection を空にする）。WebSocket を持つのは Agent だけ。
-#   $3: X-Forwarded-Prefix（/<製品>）
+# backend へ渡す proxy の共通の設定。3 製品とも HTTP だけ（push は SSE、操作は REST。WebSocket は持たない。#2260）。
+#   $1: X-Forwarded-Prefix（/<製品>）
 _suite_proxy_headers() {
-  local host_header="$1"
-  local websocket="$2"
   cat <<EOF
         proxy_http_version 1.1;
-        proxy_set_header Host ${host_header};
+        proxy_set_header Host \$host;
         proxy_set_header X-Request-ID \$pr_request_id;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Prefix ${3};
-EOF
-  if [ "${websocket}" = "websocket" ]; then
-    cat <<'EOF'
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $pr_suite_connection_upgrade;
-EOF
-  else
-    cat <<'EOF'
+        proxy_set_header X-Forwarded-Prefix ${1};
         proxy_set_header Connection "";
 EOF
-  fi
   # SSE（text/event-stream）と応答の流れを溜めない: buffering・cache・gzip を切る（gzip は出力を溜めて
   # 圧縮するため、SSE の event と heartbeat が届かなくなる。backend も X-Accel-Buffering: no を付ける）。
   cat <<'EOF'
@@ -234,16 +220,10 @@ EOF
 _suite_product_locations() {
   local product="$1"
   local dist_dir="$2"
-  local port host_header websocket body_size timeout
+  local port body_size timeout
   port="$(suite_backend_port "${product}")"
   body_size="$(suite_client_max_body_size "${product}")"
   timeout="$(suite_long_api_timeout "${product}")"
-  host_header="\$host"
-  websocket=""
-  if [ "${product}" = "agent" ]; then
-    host_header="\$http_host"
-    websocket="websocket"
-  fi
 
   cat <<EOF
 
@@ -268,7 +248,7 @@ EOF
         error_page 429 = @pr_login_rate_limited;
         proxy_pass http://127.0.0.1:${port}\$pr_suite_upstream_uri;
 EOF
-  _suite_proxy_headers "${host_header}" "${websocket}" "/${product}"
+  _suite_proxy_headers "/${product}"
   echo "    }"
 
   cat <<'EOF'
@@ -280,7 +260,7 @@ EOF
         client_max_body_size ${body_size};
         proxy_pass http://127.0.0.1:${port}\$pr_suite_upstream_uri;
 EOF
-  _suite_proxy_headers "${host_header}" "${websocket}" "/${product}"
+  _suite_proxy_headers "/${product}"
   cat <<EOF
         proxy_send_timeout ${timeout}s;
         proxy_read_timeout ${timeout}s;
@@ -292,7 +272,7 @@ EOF
         client_max_body_size ${body_size};
         proxy_pass http://127.0.0.1:${port}\$pr_suite_upstream_uri;
 EOF
-  _suite_proxy_headers "${host_header}" "${websocket}" "/${product}"
+  _suite_proxy_headers "/${product}"
   cat <<EOF
     }
 
@@ -443,12 +423,6 @@ suite_nginx_site() {
 map $request_uri $pr_suite_upstream_uri {
     default "/";
     "~^/(?:rag|nl2sql|agent)(?<pr_suite_rest>/api(?:[/?].*)?)$" $pr_suite_rest;
-}
-# WebSocket（Agent の /api/runs/{run_id}/events/ws）の要求のときだけ upstream へ Connection: upgrade を渡す。
-# ほかの要求に upgrade を渡さない（#1597）。
-map $http_upgrade $pr_suite_connection_upgrade {
-    default upgrade;
-    "" "";
 }
 EOF
 

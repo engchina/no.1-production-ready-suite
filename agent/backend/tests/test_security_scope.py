@@ -4,8 +4,7 @@
 Binding 一覧が、利用者のエージェント・検索・回答プロファイルで
 
   絞られること（header の RBAC 情報は使わない）
-- 承認の決定者（decided_by）が利用者になること（HTTP と WebSocket）
-- WebSocket の Cookie・Origin の検証と、範囲外の Run の close 1008
+- 承認の決定者（decided_by）が利用者になること
 - 「AI 活用」の Run（実行履歴・承認・詳細・操作）は、system_admin は全員、それ以外は自分の Run
   だけ（ほかの利用者の Run は 404。#1889）。範囲の判定は自分の Run に重ねてかかる。system_admin が
   他の利用者の会話で操作する流れは test_admin_operates_others.py（#1928）
@@ -21,15 +20,12 @@ from typing import Any
 import pytest
 from pytest import MonkeyPatch
 from security_support import (
-    SESSION_COOKIE,
     ProductionAuth,
     client,
     enable_production_auth,
     login,
     login_configured_admin,
 )
-from starlette.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
 
 from app.features.agent import builtin_runtime
 from app.features.agent.runtime import (
@@ -41,7 +37,6 @@ from app.features.agent.runtime import (
 )
 from app.features.agent.tools import ToolCall
 from app.features.agent.user_names import login_display_names, user_display_names
-from app.main import app
 from app.security.domain import CONFIGURED_SYSTEM_ADMIN_USER_UUID
 from app.security.service import set_security_service
 
@@ -430,139 +425,6 @@ def test_agent_list_is_scoped(auth: ProductionAuth, scope_data: ScopeData) -> No
         item["id"] for item in client.get("/api/agents", headers=admin).json()["data"]["agents"]
     }
     assert {AGENT_A, AGENT_B, "default"} <= all_agents
-
-
-# ---------------------------------------------------------------------------
-# WebSocket
-# ---------------------------------------------------------------------------
-
-
-def _ws_path(run: RunState) -> str:
-    return f"/api/runs/{run.id}/events/ws?heartbeat_interval_seconds=60"
-
-
-def _session_cookie(headers: dict[str, str]) -> str:
-    return headers["cookie"].split(";")[0]
-
-
-def test_websocket_requires_cookie_in_production(
-    auth: ProductionAuth, scope_data: ScopeData
-) -> None:
-    with TestClient(app) as test_client:
-        with (
-            pytest.raises(WebSocketDisconnect) as closed,
-            test_client.websocket_connect(
-                _ws_path(scope_data.run_a1),
-                headers={"origin": "http://testserver", "X-Agent-Roles": "admin"},
-            ) as websocket,
-        ):
-            websocket.receive_json()
-        assert closed.value.code == 1008
-
-
-def test_websocket_rejects_cross_origin_and_invalid_session(
-    auth: ProductionAuth, scope_data: ScopeData
-) -> None:
-    _scoped_user(auth, "ws-viewer", ["agent.runs.view"])
-    cookie = _session_cookie(login("ws-viewer"))
-    with TestClient(app) as test_client:
-        for headers in (
-            {"cookie": cookie},  # Origin なし
-            {"cookie": cookie, "origin": "https://evil.example.com"},
-            {"cookie": cookie, "origin": "http://testserver:8080"},
-            {"cookie": f"{SESSION_COOKIE}=tampered", "origin": "http://testserver"},
-        ):
-            with (
-                pytest.raises(WebSocketDisconnect) as closed,
-                test_client.websocket_connect(
-                    _ws_path(scope_data.run_a1), headers=headers
-                ) as websocket,
-            ):
-                websocket.receive_json()
-            assert closed.value.code == 1008, headers
-
-
-def test_websocket_streams_in_scope_run_and_closes_out_of_scope(
-    auth: ProductionAuth, scope_data: ScopeData
-) -> None:
-    _scoped_user(auth, "ws-scoped", ["agent.runs.view"], owns=scope_data)
-    headers = {"cookie": _session_cookie(login("ws-scoped")), "origin": "http://testserver"}
-    with TestClient(app) as test_client:
-        with test_client.websocket_connect(
-            _ws_path(scope_data.run_a1), headers=headers
-        ) as websocket:
-            first = websocket.receive_json()
-            assert first["type"] != "error"
-            assert first["event"]["run_id"] == scope_data.run_a1.id
-
-        for run, error_code in ((scope_data.run_b, "rbac.agent_forbidden"),):
-            with test_client.websocket_connect(_ws_path(run), headers=headers) as websocket:
-                message = websocket.receive_json()
-                assert message["type"] == "error"
-                assert message["error_code"] == error_code
-                with pytest.raises(WebSocketDisconnect) as closed:
-                    websocket.receive_json()
-                assert closed.value.code == 1008
-
-    # ほかの利用者の Run は、存在を漏らさず run.not_found で close 1008（#1889）。
-    _scoped_user(auth, "ws-peer", ["agent.runs.view"])
-    peer = {"cookie": _session_cookie(login("ws-peer")), "origin": "http://testserver"}
-    with (
-        TestClient(app) as test_client,
-        test_client.websocket_connect(_ws_path(scope_data.run_a1), headers=peer) as websocket,
-    ):
-        message = websocket.receive_json()
-        assert message["error_code"] == "run.not_found"
-        with pytest.raises(WebSocketDisconnect) as closed:
-            websocket.receive_json()
-        assert closed.value.code == 1008
-
-
-def test_websocket_requires_run_capability(auth: ProductionAuth, scope_data: ScopeData) -> None:
-    """メニューだけの利用者は接続後に rbac.forbidden で close 1008。"""
-    auth.user_with_permissions("ws-menu-only", ["menu.runs"], agent_ids=[AGENT_A])
-    headers = {"cookie": _session_cookie(login("ws-menu-only")), "origin": "http://testserver"}
-    with (
-        TestClient(app) as test_client,
-        test_client.websocket_connect(_ws_path(scope_data.run_a1), headers=headers) as websocket,
-    ):
-        message = websocket.receive_json()
-        assert message["error_code"] == "rbac.forbidden"
-        with pytest.raises(WebSocketDisconnect) as closed:
-            websocket.receive_json()
-        assert closed.value.code == 1008
-
-
-def test_websocket_commands_use_principal(auth: ProductionAuth, scope_data: ScopeData) -> None:
-    """WebSocket のコマンドも同じ利用者で判定し、承認の決定者は利用者にする。"""
-    _scoped_user(auth, "ws-approver", ["agent.approvals.decide"], owns=scope_data)
-    headers = {"cookie": _session_cookie(login("ws-approver")), "origin": "http://testserver"}
-    approval_id = scope_data.run_a1.approvals[0].id
-    with (
-        TestClient(app) as test_client,
-        test_client.websocket_connect(_ws_path(scope_data.run_a1), headers=headers) as websocket,
-    ):
-        websocket.send_json({"type": "cancel", "command_id": "ws-cancel-215"})
-        websocket.send_json(
-            {
-                "type": "approval_decision",
-                "command_id": "ws-approval-215",
-                "approval_id": approval_id,
-                "approved": False,
-                "decided_by": "spoofed-user",
-            }
-        )
-        replies: dict[str, dict[str, object]] = {}
-        while len(replies) < 2:
-            message = websocket.receive_json()
-            if message.get("command") in {"cancel", "approval_decision"}:
-                replies[str(message["command"])] = message
-    # approver は cancel（operator）を使えない。
-    assert replies["cancel"]["error_code"] == "rbac.forbidden"
-    assert replies["approval_decision"]["type"] == "command.accepted"
-    run = runtime_repository.get_run(scope_data.run_a1.id)
-    approval = next(item for item in run.approvals if item.id == approval_id)
-    assert approval.decided_by == "ws-approver"
 
 
 def test_trace_events_are_scoped_for_restricted_principal(
