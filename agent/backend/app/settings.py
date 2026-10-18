@@ -15,6 +15,10 @@ from pr_backend_core.chat_history import (
     CHAT_HISTORY_MIN_CHARS,
     CHAT_HISTORY_MIN_CHARS_PER_TURN,
 )
+from pr_backend_core.chat_history_window import (
+    CHAT_HISTORY_DAYS_LIMIT,
+    CHAT_HISTORY_DEFAULT_DAYS,
+)
 from pr_backend_core.config import (
     PLATFORM_SETTING_FIELDS,
     BaseServiceSettings,
@@ -139,6 +143,11 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
         default=CHAT_HISTORY_DEFAULT_MAX_CHARS,
         ge=CHAT_HISTORY_MIN_CHARS,
         le=CHAT_HISTORY_MAX_CHARS_LIMIT,
+    )
+    # チャットの「会話の履歴」に出す期間（日。共通の設定。#2340）。0 は期間で絞らない。
+    # 解釈は pr_backend_core.chat_history_window（最後の更新が直近 N 日の会話だけを一覧に出す）。
+    chat_history_days: int = Field(
+        default=CHAT_HISTORY_DEFAULT_DAYS, ge=0, le=CHAT_HISTORY_DAYS_LIMIT
     )
     oci_genai_embedding_model: str = "cohere.embed-v4.0"
     oci_genai_embedding_dim: int = 1536

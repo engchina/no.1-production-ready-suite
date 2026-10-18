@@ -26,6 +26,7 @@ from pr_backend_core.api import (
     offset_fetch_binds,
     offset_fetch_clause,
 )
+from pr_backend_core.chat_history_window import chat_history_cutoff, within_chat_history
 
 from .incremental_observability import record_cache, record_repository
 from .japanese_collation import japanese_collation_key
@@ -960,6 +961,7 @@ class IncrementalNl2SqlRepository(Protocol):
         profile_ids: Iterable[str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
+        updated_within_days: int = 0,
         sort_key: str = "created_at",
         direction: str = "desc",
         offset: int | None = None,
@@ -985,6 +987,7 @@ class IncrementalNl2SqlRepository(Protocol):
         profile_ids: Iterable[str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
+        updated_within_days: int = 0,
     ) -> int:
         """`list_documents_page` と同じ条件に合う文書の件数（一覧の「全 M 件」。#1891）。"""
         ...
@@ -1643,6 +1646,7 @@ class MemoryIncrementalNl2SqlRepository:
         payload_exclude_filters: Mapping[str, str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
+        updated_within_days: int = 0,
     ) -> list[dict[str, Any]]:
         """`list_documents_page` / `count_documents` の条件に合う文書（lock を持って呼ぶ）。"""
         query_key = query.casefold().strip()
@@ -1650,6 +1654,8 @@ class MemoryIncrementalNl2SqlRepository:
         scoped_profile_ids = _normalize_profile_id_filter(profile_ids)
         if scoped_profile_ids is not None and not scoped_profile_ids:
             return []
+        # 最後の更新の下限（チャットの会話の履歴の期間。#2340。0 は絞らない）。
+        updated_since = chat_history_cutoff(updated_within_days)
         return [
             value
             for (item_collection, _entity_id), value in self._documents.items()
@@ -1669,6 +1675,7 @@ class MemoryIncrementalNl2SqlRepository:
                 payload_present_filters=payload_present_filters,
             )
             and _state_document_created_since_matches(collection, value, created_since)
+            and within_chat_history(str(value.get("_updated_at") or ""), updated_since)
         ]
 
     def count_documents(
@@ -1684,6 +1691,7 @@ class MemoryIncrementalNl2SqlRepository:
         profile_ids: Iterable[str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
+        updated_within_days: int = 0,
     ) -> int:
         with self._lock:
             return len(
@@ -1698,6 +1706,7 @@ class MemoryIncrementalNl2SqlRepository:
                     profile_ids=profile_ids,
                     payload_present_filters=payload_present_filters,
                     created_since=created_since,
+                    updated_within_days=updated_within_days,
                 )
             )
 
@@ -1716,6 +1725,7 @@ class MemoryIncrementalNl2SqlRepository:
         profile_ids: Iterable[str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
+        updated_within_days: int = 0,
         sort_key: str = "created_at",
         direction: str = "desc",
         offset: int | None = None,
@@ -1736,6 +1746,7 @@ class MemoryIncrementalNl2SqlRepository:
                 profile_ids=profile_ids,
                 payload_present_filters=payload_present_filters,
                 created_since=created_since,
+                updated_within_days=updated_within_days,
             )
 
             def order_key(item: Mapping[str, Any]) -> tuple[Any, str]:
@@ -2977,6 +2988,7 @@ class OracleIncrementalNl2SqlRepository:
         payload_exclude_filters: Mapping[str, str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
+        updated_within_days: int = 0,
     ) -> tuple[list[str], dict[str, Any]] | None:
         """`list_documents_page` / `count_documents` の WHERE と bind（対象が空なら None）。"""
         where = ["COLLECTION = :collection"]
@@ -3018,6 +3030,13 @@ class OracleIncrementalNl2SqlRepository:
             # 並べ替えと同じ式で比べる。
             where.append(f"{_state_document_sort_sql(collection)} >= :created_since")  # nosec B608
             filter_binds["created_since"] = created_since
+        if updated_within_days > 0:
+            # 最後の更新が直近 N 日（チャットの会話の履歴の期間。#2340）。時刻は DB の時刻で比べる
+            # （UPDATED_AT は SYSTIMESTAMP で書く）。
+            where.append(
+                "UPDATED_AT >= SYSTIMESTAMP - NUMTODSINTERVAL(:updated_within_days, 'DAY')"
+            )
+            filter_binds["updated_within_days"] = updated_within_days
         return where, filter_binds
 
     def count_documents(
@@ -3033,6 +3052,7 @@ class OracleIncrementalNl2SqlRepository:
         profile_ids: Iterable[str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
+        updated_within_days: int = 0,
     ) -> int:
         filtered = self._state_document_where(
             collection,
@@ -3045,6 +3065,7 @@ class OracleIncrementalNl2SqlRepository:
             profile_ids=profile_ids,
             payload_present_filters=payload_present_filters,
             created_since=created_since,
+            updated_within_days=updated_within_days,
         )
         if filtered is None:
             return 0
@@ -3074,6 +3095,7 @@ class OracleIncrementalNl2SqlRepository:
         profile_ids: Iterable[str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
+        updated_within_days: int = 0,
         sort_key: str = "created_at",
         direction: str = "desc",
         offset: int | None = None,
@@ -3092,6 +3114,7 @@ class OracleIncrementalNl2SqlRepository:
             profile_ids=profile_ids,
             payload_present_filters=payload_present_filters,
             created_since=created_since,
+            updated_within_days=updated_within_days,
         )
         if filtered is None:
             return [], None, 0

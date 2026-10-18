@@ -48,6 +48,7 @@ from pr_backend_core.chat_history import (
     fit_chat_history,
     render_chat_history,
 )
+from pr_backend_core.chat_history_window import chat_history_cutoff, within_chat_history
 from pr_backend_core.chat_progress import (
     ChatProgressPage,
     ChatProgressParamValue,
@@ -3912,6 +3913,9 @@ class StoredJob:
     last_execution: SqlChatExecutionSummary | None = None
     # 会話の名前（利用者が変えたもの。会話の最初のジョブにだけ置く。#1817）。空なら最初の質問。
     chat_title: str = ""
+    # 会話の最後のターンを送った時刻（会話の最初のジョブにだけ置く。#2340）。空なら最初のジョブを
+    # 作った時刻。続きのターンを送ると進み、会話の履歴の並びと期間（最後の更新）に使う。
+    chat_activity_at: str = ""
     # 利用者が消した会話のジョブ（#1817）。ジョブは監査・フィードバック・実行履歴のために残し、
     # 会話の一覧・詳細・続きから外す。
     chat_deleted: bool = False
@@ -5598,6 +5602,7 @@ class Nl2SqlService:
             if job.request.is_chat_turn and not job.request.previous_job_id and not job.chat_deleted
             else "",
             "chat_title": job.chat_title,
+            "chat_activity_at": job.chat_activity_at,
             "chat_deleted": job.chat_deleted,
             "profile_id": job.request.profile_id or "default",
             "request": job.request.model_dump(mode="json"),
@@ -5786,6 +5791,7 @@ class Nl2SqlService:
             # 形の違う記録（#1359 より前のジョブには無い）は捨てる。
             progress_events=parse_chat_progress_events(data.get("progress_events")),
             chat_title=str(data.get("chat_title") or ""),
+            chat_activity_at=str(data.get("chat_activity_at") or ""),
             chat_deleted=_coerce_bool(data.get("chat_deleted", False)),
             conversation_owner_user_uuid=str(data.get("conversation_owner_user_uuid") or ""),
             origin=JobOrigin.from_snapshot(data),
@@ -8636,6 +8642,8 @@ class Nl2SqlService:
             self._jobs[job_id] = job
             self._prune_terminal_jobs_locked()
         self._persist_job(job_id)
+        if request.is_chat_turn and request.previous_job_id:
+            self._record_sql_chat_activity(conversation_id, known, at=job.created_at)
         response = JobCreateData(
             job_id=job_id,
             status=job.status,
@@ -9322,10 +9330,14 @@ class Nl2SqlService:
         offset: int = 0,
         limit: int = DEFAULT_PAGE_LIMIT,
         all_users: bool = False,
+        history_days: int = 0,
     ) -> SqlChatPage:
-        """会話の一覧の任意のページ（新しい順。offset。#1891）。
+        """会話の一覧の任意のページ（最後の更新の新しい順。offset。#1891）。
 
-        `all_users`（system_admin。#1889）なら全員の会話、ほかは本人の会話だけ。
+        `all_users`（system_admin。#1889）なら全員の会話、ほかは本人の会話だけ。`history_days` は
+        会話の履歴の期間（最後の更新が直近 N 日の会話だけを件数と 1 ページの両方で返す。0 は
+        絞らない。#2340）。最後の更新は会話の最初のジョブの記録の更新（続きのターンを送ると
+        `_record_sql_chat_activity` が進める）。
         """
         if not actor:
             raise PermissionError("会話には認証済みの利用者が必要です。")
@@ -9342,6 +9354,7 @@ class Nl2SqlService:
                     limit=limit,
                     profile_ids=profile_ids,
                     payload_filters=payload_filters,
+                    updated_within_days=history_days,
                 )
             except Exception as exc:
                 self._raise_incremental_repository_failure(
@@ -9351,6 +9364,7 @@ class Nl2SqlService:
                 )
             jobs = [self._job_from_snapshot(document) for document in documents]
         else:
+            updated_since = chat_history_cutoff(history_days)
             with self._lock:
                 matched = sorted(
                     (
@@ -9364,8 +9378,11 @@ class Nl2SqlService:
                             profile_ids is None
                             or (job.request.profile_id or "default") in profile_ids
                         )
+                        and within_chat_history(
+                            job.chat_activity_at or job.created_at, updated_since
+                        )
                     ),
-                    key=lambda job: (job.created_at, job.job_id),
+                    key=lambda job: (job.chat_activity_at or job.created_at, job.job_id),
                     reverse=True,
                 )
             jobs = matched[offset : offset + limit]
@@ -9373,7 +9390,33 @@ class Nl2SqlService:
         page = paginate(
             [self._sql_chat_summary(job) for job in jobs], total=total, limit=limit, offset=offset
         )
-        return SqlChatPage.model_validate(dict(page))
+        return SqlChatPage.model_validate({**dict(page), "history_days": history_days})
+
+    def _record_sql_chat_activity(
+        self, conversation_id: str, known: Mapping[str, StoredJob], *, at: str
+    ) -> None:
+        """続きのターンを送った時刻を会話の最初のジョブに残す（#2340）。
+
+        会話の履歴は最後の更新で並べ、期間で絞る（`list_sql_chats`）。最初のジョブの記録を
+        書き直すと、保存先の更新時刻（Oracle の `UPDATED_AT`）も進む。最初のジョブは終わっている
+        （前のターンが終わるまで続きを送れない）ので、実行中の記録を上書きしない。残せなくても
+        送信は失敗にしない（一覧の並びが古いままになるだけ）。
+        """
+        root = known.get(conversation_id) or self._load_job_record(conversation_id)
+        if root is None or root.status in {JobStatus.PENDING, JobStatus.RUNNING}:
+            return
+        with self._lock:
+            stored = self._jobs.get(root.job_id) or root
+            stored.chat_activity_at = at
+            self._jobs[root.job_id] = stored
+            snapshot = self._job_to_snapshot(stored)
+        try:
+            self._persist_entities([("jobs", root.job_id, snapshot)])
+        except Exception as exc:  # noqa: BLE001 - 一覧の並びのための記録で、送信は止めない
+            logger.warning(
+                "nl2sql_chat_activity_save_failed",
+                extra={"conversation_id": conversation_id, "error_type": type(exc).__name__},
+            )
 
     @staticmethod
     def _sql_chat_summary(job: StoredJob) -> SqlChatSummary:
@@ -17618,18 +17661,30 @@ class Nl2SqlService:
         return conversation
 
     def list_db_admin_chats(
-        self, *, actor: str, all_users: bool, offset: int = 0, limit: int = DEFAULT_PAGE_LIMIT
+        self,
+        *,
+        actor: str,
+        all_users: bool,
+        offset: int = 0,
+        limit: int = DEFAULT_PAGE_LIMIT,
+        history_days: int = 0,
     ) -> DbAdminChatPage:
-        """会話の履歴の 1 ページ（新しい順。offset 型）。"""
+        """会話の履歴の 1 ページ（新しい順。offset 型）。
+
+        `history_days` は会話の履歴の期間（最後の更新が直近 N 日の会話だけ。0 は絞らない。#2340）。
+        """
 
         self._require_db_admin_chat_permission()
         if not actor:
             raise PermissionError("会話には認証済みの利用者が必要です。")
         items, total = self._db_admin_chat_store.list_conversations(
-            owner_user_uuid=None if all_users else actor, offset=offset, limit=limit
+            owner_user_uuid=None if all_users else actor,
+            offset=offset,
+            limit=limit,
+            updated_within_days=history_days,
         )
         page = paginate(items, total=total, limit=limit, offset=offset)
-        return DbAdminChatPage.model_validate(dict(page))
+        return DbAdminChatPage.model_validate({**dict(page), "history_days": history_days})
 
     def get_db_admin_chat(
         self, conversation_id: str, *, actor: str, all_users: bool

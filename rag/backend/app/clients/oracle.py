@@ -3955,12 +3955,16 @@ class OracleClient:
         self,
         *,
         search_answer_profile_id: str | None = None,
+        updated_since: datetime | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[StoredConversation]:
-        """会話一覧を更新が新しい順に返す(tenant/user scope で絞る)。"""
+        """会話一覧を更新が新しい順に返す(tenant/user scope で絞る)。
+
+        `updated_since` は会話の履歴の期間(最後の更新がこの時刻以後の会話だけ。#2340)。
+        """
         where_sql, binds = _oracle_conversation_where(
-            search_answer_profile_id=search_answer_profile_id
+            search_answer_profile_id=search_answer_profile_id, updated_since=updated_since
         )
         binds.update(offset_fetch_binds(offset=offset, limit=limit))
         paging_sql = offset_fetch_clause(with_limit=limit is not None)
@@ -3989,10 +3993,15 @@ class OracleClient:
         )
         return [_stored_conversation_from_row(row) for row in rows]
 
-    async def count_conversations(self, *, search_answer_profile_id: str | None = None) -> int:
-        """条件に一致する会話数を返す。"""
+    async def count_conversations(
+        self,
+        *,
+        search_answer_profile_id: str | None = None,
+        updated_since: datetime | None = None,
+    ) -> int:
+        """条件に一致する会話数を返す(`list_conversations` と同じ条件)。"""
         where_sql, binds = _oracle_conversation_where(
-            search_answer_profile_id=search_answer_profile_id
+            search_answer_profile_id=search_answer_profile_id, updated_since=updated_since
         )
         row = await self._fetch_one(
             _render_sql(
@@ -13295,12 +13304,17 @@ def _message_binds(message: StoredMessage) -> dict[str, object]:
 def _oracle_conversation_where(
     *,
     search_answer_profile_id: str | None = None,
+    updated_since: datetime | None = None,
 ) -> tuple[str, dict[str, object]]:
     clauses = [_oracle_conversation_access_predicate_sql(alias="c")]
     binds = _with_conversation_access_bind({})
     if search_answer_profile_id is not None:
         clauses.append("c.search_answer_profile_id = :search_answer_profile_id")
         binds["search_answer_profile_id"] = search_answer_profile_id
+    if updated_since is not None:
+        # 会話の履歴の期間(最後の更新が直近 N 日。#2340)。保存と同じ UTC の時刻で比べる。
+        clauses.append("c.updated_at >= :updated_since")
+        binds["updated_since"] = updated_since
     return " AND ".join(clauses), binds
 
 
