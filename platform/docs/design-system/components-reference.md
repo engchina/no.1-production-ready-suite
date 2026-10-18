@@ -2827,11 +2827,12 @@ const { previous, next } = adjacentListItems(items, selection.selectedId, (item)
 | `storagePrefix` | `string` | 既定 `production-ready.listDetail`。製品ごとに分ける |
 | `labels` | `Partial<ListDetailLayoutLabels>` | 分割線の名前・案内・値の読み上げ（既定は日本語） |
 
-- 状態は `data-list-detail-layout="split" \| "single"`・`data-list-detail-view="both" \| "list" \| "detail"`・`data-list-collapsed`。
+- 状態は `data-list-detail-layout="split" \| "single"`・`data-list-detail-view="both" \| "list" \| "detail"`・`data-list-collapsed`。列の上・下の帯は `data-list-detail-header` / `data-list-detail-footer`。
+- **一覧の列の高さ（2 ペイン。#2330）**: 列の高さ = 本文のスクロール領域（`AppShell` の main）の見える高さ − 列の上端（本文の中の位置。スクロールに依らない）− 置き場所の下の余白（祖先の `padding-bottom`・`border-bottom`。`PageBody` の 1.5rem）。最小 `LIST_DETAIL_MIN_LIST_HEIGHT_REM`（20rem）。貼り付く位置は上端に貼り付く `PageHeader`（`[data-page-header]`）の下 + `LIST_DETAIL_STICKY_GAP_REM`（1rem）。最初の描画の前（layout effect）と、祖先・見出し・本文の大きさが変わったとき（`ResizeObserver`・window の resize）に測り、`--list-detail-list-height` / `--list-detail-list-top`（rem）で渡す。本文のスクロールでは測り直さない（詳細が長くても列は伸びない）。計算は純粋関数 `fitListColumn`（`lib/list-detail.ts`）。詳細が短ければ本文に縦のスクロールは出ず、列の下の帯は本文をスクロールせずに見える。**置き場所の末尾に置く**（後ろに兄弟の要素を置くと、その分だけ本文がスクロールする）。1 ペインは `top: 1rem`・高さは画面 − 2rem（md 未満は − 5.5rem）のまま。
 - `useUrlSelection({ param, searchParams, setSearchParams, singlePane })` は `{ selectedId, select, clear, replace }`。`select` は 1 ペインで未選択から選ぶときだけ push、それ以外は replace。`clear` はこの画面で push して入ったなら `history.back()`、URL から直接開いたなら検索パラメータを消して replace。`replace(null)` は削除の後に選択を外す。`packages/ui` は router に依存しないので、`searchParams` / `setSearchParams` は製品が `useSearchParams()` から渡す。
 - `ListDetailPager`（`onPrevious` / `onNext` は無ければ `null`、`testId` で `-previous` / `-next`）と `adjacentListItems(items, selectedKey, getKey)` は、詳細の上端の行と `SideSheet` の `pager` で共有する。
 - 共通のユーザー・ロール・権限管理（`@production-ready/system-settings`）は `SecurityListDetail`（`users-roles/shared.tsx`）がこの部品に一覧の列（見出し・`ListToolbar`・`DataTable`・`Pagination`）と詳細を渡し、選択は `useSecurityUrlSelection`（`?user=` / `?role=`。「一覧へ戻る」の履歴の戻りは router の `navigate(-1)`）。製品は `listDetailStoragePrefix` を渡す（#2282）。
-- 単体テストは `packages/ui/tests/list-detail-layout.test.tsx`・`url-selection.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/table-management-list-detail.spec.ts`（2 ペイン・幅・開閉・↑ / ↓・1 ペインの戻るとフォーカス・1920px）。
+- 単体テストは `packages/ui/tests/list-detail-layout.test.tsx`・`url-selection.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/table-management-list-detail.spec.ts`（2 ペイン・幅・開閉・↑ / ↓・1 ペインの戻るとフォーカス・1920px）と、一覧の列の高さ（1280px / 1920px で本文がスクロールしない・詳細が長いと列の高さが変わらず見出しの下に貼り付く。`data-management-list-detail.spec.ts` も。判定は `tests/e2e/_helpers/list-detail-fit.ts`。#2330）。
 
 ---
 

@@ -360,13 +360,6 @@ export function DataManagementPage() {
     parsedPreviewRowLimit === null ? t("queryResults.rowLimit.error") : "";
   const canShowPreview =
     Boolean(previewObject) && !previewLoadingObject && parsedPreviewRowLimit !== null;
-  const canClearPreview =
-    Boolean(previewLoadingObject) ||
-    Boolean(preview) ||
-    Boolean(previewError) ||
-    Boolean(exportError) ||
-    executedPreviewRowLimit !== null ||
-    previewRowLimitInput !== String(DEFAULT_DATA_PREVIEW_ROW_LIMIT);
   const csvTablePickerItems = useMemo(
     () =>
       sortDbObjectPickerItems(
@@ -686,16 +679,6 @@ export function DataManagementPage() {
     setExecutedPreviewRowLimit(null);
     setPreviewError("");
     setExportError("");
-  };
-
-  const clearPreview = () => {
-    previewRequestSequence.current += 1;
-    setPreview(null);
-    setExecutedPreviewRowLimit(null);
-    setPreviewLoadingObject("");
-    setPreviewError("");
-    setExportError("");
-    setPreviewRowLimitInput(String(DEFAULT_DATA_PREVIEW_ROW_LIMIT));
   };
 
   const csvReadSequence = useRef(0);
@@ -1152,13 +1135,11 @@ export function DataManagementPage() {
                   rowLimitError={previewRowLimitError}
                   executedRowLimit={executedPreviewRowLimit}
                   canShowPreview={canShowPreview}
-                  canClearPreview={canClearPreview}
                   selectedObjectName={previewObject}
                   selectedObject={selectedPreviewObjectItem}
                   truncateDisabled={Boolean(previewLoadingObject) || truncateLoading}
                   onRowLimitChange={updatePreviewRowLimitInput}
                   onShowPreview={() => void showPreview(previewObject, { fromButton: true })}
-                  onClearPreview={clearPreview}
                   onRetryPreview={() => void showPreview(previewObject)}
                   onDownload={() => void downloadPreviewXlsx()}
                   onTruncateTable={openTruncateDialog}
@@ -1444,13 +1425,11 @@ function PreviewResultsPanel({
   rowLimitError,
   executedRowLimit,
   canShowPreview,
-  canClearPreview,
   selectedObjectName,
   selectedObject,
   truncateDisabled,
   onRowLimitChange,
   onShowPreview,
-  onClearPreview,
   onRetryPreview,
   onDownload,
   onTruncateTable,
@@ -1466,14 +1445,12 @@ function PreviewResultsPanel({
   rowLimitError: string;
   executedRowLimit: number | null;
   canShowPreview: boolean;
-  canClearPreview: boolean;
   selectedObjectName: string;
   /** 一覧に読み込まれている選んだ対象（種類・行数・コメント）。一覧の外の対象（絞り込み・未読込）は undefined。 */
   selectedObject?: DbAdminObjectSummary;
   truncateDisabled?: boolean;
   onRowLimitChange: (value: string) => void;
   onShowPreview: () => void;
-  onClearPreview: () => void;
   onRetryPreview: () => void;
   onDownload: () => void;
   onTruncateTable: (objectName: string) => void;
@@ -1562,15 +1539,6 @@ function PreviewResultsPanel({
             disabled={!canShowPreview && !(loading && showButtonLoading)}
             onClick={onShowPreview} icon={Play}>
             <span>{t("dataMgmt.preview.show")}</span>
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            size="lg"
-            className="w-full sm:w-auto"
-            disabled={!canClearPreview}
-            onClick={onClearPreview} icon={X}>
-            <span>{t("dataMgmt.preview.clear")}</span>
           </Button>
         </div>
       </div>
@@ -2361,7 +2329,7 @@ function SyntheticWorkspace({
               className="w-full sm:w-auto"
               disabled={!canClearSyntheticDataResults || loading === "results"}
               onClick={onClearSyntheticDataResults} icon={X}>
-              <span>{t("dataMgmt.preview.clear")}</span>
+              <span>{t("dataTools.syntheticData.clearResults")}</span>
             </Button>
           </div>
         </FormGrid>
