@@ -2335,7 +2335,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       );
       if (!published) return true;
       // データの範囲は、無い・空（{}）を同じとみなす（backend は空の範囲を {} で持つ）。
-      // 回答前の確認（#1839）の項目の無い版は既定（確認してから回答する・上限 2 回）と同じ（backend の既定値）。
+      // 回答前の確認（#1839）の項目の無い版は既定（確認してから回答する・上限 3 回）と同じ（backend の既定値）。
       const comparable = (field: string, value: unknown) =>
         field === "data_scopes" && (!value || Object.keys(value as Json).length === 0)
           ? null

@@ -280,7 +280,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     nl2sql_query_session_idle_ttl_seconds: int = Field(default=86_400, ge=600, le=2_592_000)
     # 回答前の確認で、全部の質問に答えた後に要件のまとめを LLM で検査し直す回数の上限（#1439）。
     # 上限に達したら、残った確認の項目を画面に明示し、利用者が SQL の生成に進むかを決める。
-    nl2sql_requirement_max_review_rounds: int = Field(default=3, ge=1, le=10)
+    # 確認のカードの往復の上限はこの値 + 1（最初の確認を 1 回目に数える）で、既定は 3 回
+    # （3 製品の「回答前の確認」の既定。platform/docs/ux-contracts/confirm-before-answer.md §5）。
+    nl2sql_requirement_max_review_rounds: int = Field(default=2, ge=1, le=10)
     # 回答前の確認の LLM の呼び出し（#1715）。利用者が画面で待つので、共通の LLM の設定
     # （待ち時間 600 秒・再試行 3 回）より短くする。出力の上限は、推論（reasoning）の token も
     # 上限に数えるモデル（openai.gpt-oss-120b など）で推論と JSON が収まる量（2026-10-13 の実測。
