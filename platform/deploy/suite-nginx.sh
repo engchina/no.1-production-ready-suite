@@ -286,6 +286,8 @@ EOF
     }
 
     # frontend（/${product}/ を base に build した dist）。画面の URL は index.html に返す（SPA）。
+    # index.html（と名前に hash の無いファイル）は毎回 server に確かめさせる（no-cache。etag で変わらなければ 304）。
+    # 付けないとブラウザが古い index.html を経験則で使い続け、配備の後も古い JS を読む。
     location /${product}/ {
         set \$pr_service_name "production-ready-${product}";
         access_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-${product}-access.log production_ready_json if=\$pr_loggable;
@@ -293,6 +295,16 @@ EOF
         alias ${dist_dir}/;
         index index.html;
         try_files \$uri \$uri/ /${product}/index.html;
+        add_header Cache-Control "no-cache" always;
+    }
+
+    # build の出力（名前に内容の hash が付く JS・CSS・フォントなど）は変わらないので長く cache させる。
+    location /${product}/assets/ {
+        set \$pr_service_name "production-ready-${product}";
+        access_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-${product}-access.log production_ready_json if=\$pr_loggable;
+        error_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-${product}-error.log warn;
+        alias ${dist_dir}/assets/;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
     }
 EOF
 }
