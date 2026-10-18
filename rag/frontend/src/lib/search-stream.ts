@@ -23,6 +23,8 @@ export interface SearchStageEvent {
   outcome: "started" | "success" | "error" | "cancelled";
   elapsed_ms: number;
   attributes: Record<string, unknown>;
+  /** 終わった工程の詳細（共有の詳細の形。回答の安全チェックの結果など。#2341）。 */
+  details?: unknown;
 }
 
 export interface SearchStreamHandlers {

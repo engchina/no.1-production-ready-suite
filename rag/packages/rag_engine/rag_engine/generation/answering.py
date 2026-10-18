@@ -184,6 +184,17 @@ from rag_engine.generation.query_prompts import (
     _retrieval_queries,
     _text_search_query_source,
 )
+from rag_engine.generation.step_details import (
+    add_evidence_lines,
+    aspect_labels,
+    evidence_summary,
+    join_values,
+    numbered,
+    record_label,
+    record_rerank_top,
+    record_search_candidates,
+    recovery_label,
+)
 from rag_engine.knowledge.classification import ClassificationFilter, classification_filter_from_values
 from rag_engine.knowledge.domain_keywords import load_domain_keywords
 from rag_engine.knowledge.prompt_files import (
@@ -303,7 +314,7 @@ def rerank_records(
     画面名（`inquiry_conditions.screen_terms`）。どちらも None なら質問文から推定する。rerank の有効・無効に関わらず、
     業務の絞り込み（`_same_business_records`。#954）と画面名の先頭寄せ（`_named_screen_first`。#1044）は適用する。
     """
-    with _execution_step("Rerank") as step:
+    with _execution_step("Rerank", "検索の候補を、質問との関連度（並べ替えのモデル）の高い順に並べ替えます。") as step:
         ranked = _rerank_records(
             question, records, settings, step, enabled=enabled, candidate_limit=candidate_limit, extra_queries=extra_queries
         )
@@ -312,7 +323,10 @@ def rerank_records(
         screens = getattr(conditions, "screen_terms", ()) if screen_terms is None else screen_terms
         ranked = _named_screen_first(_same_business_records(ranked, domains, step), screens, step)
         # 交差参照で足した参照先は、参照元の直後へ置く（質問で並べると橋渡しの参照先が下がる。#1549）。
-        return follow_reference_sources(ranked, step)
+        ranked = follow_reference_sources(ranked, step)
+        # 並べ替えた後の上位と関連度（処理の経過の段を開いて見る。#2341）。
+        record_rerank_top(step, ranked)
+        return ranked
 
 
 def _category_label(value: Any) -> str:
@@ -462,7 +476,7 @@ def _rerank_records(
         step.status = "未実行: 並べ替える本文なし"
         step.add("並べ替え対象のテキストがありません。")
         return [protected_candidates[index] for index in sorted(protected_candidates)] + remainder
-    step.add(f"関連度で並べ替える根拠: {len(rerankable_candidates)} 件")
+    step.field("並べ替える候補", f"{len(rerankable_candidates)} 件" + (f"（ほか {len(remainder)} 件は取得順のまま）" if remainder else ""))
     documents = [_rerank_document(record) for record in rerankable_candidates]
     try:
         reranked = _best_rerank_ranks(question, extra_queries, documents, settings, step)
@@ -628,9 +642,18 @@ def select_documents(
     kept = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) not in excluded or keep]
     deferred = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) in excluded and not keep]
     if step is not None:
+        # 文書ごとの最高の関連度と命中数、残す / 後回しを示す（処理の経過の段を開いて見る。#2341）。
+        step.field("判定の基準", f"最上位の文書の {ratio:g} 倍未満の関連度で、命中が {min_hits} 件未満の文書を後回し")
+        step.field("文書", f"{len(scores)} 文書（残す {len(scores) - len(excluded)}・後回し {len(excluded)}）")
         step.add(
-            f"文書の選択: {len(scores)} 文書のうち {len(excluded)} 文書を後回し"
-            + (f"（{'、'.join(e['source'] for e in trace['deferred'])}）" if excluded else "")
+            *numbered(
+                [
+                    f"{'後回し' if index >= len(trace['selected']) else '残す'}: {Path(entry['source']).name or entry['source']}"
+                    f"（最高 {entry['score']:.3f}・命中 {entry['hits']} 件）"
+                    for index, entry in enumerate([*trace["selected"], *trace["deferred"]])
+                ],
+                limit=8,
+            )
         )
     return kept, deferred, trace
 
@@ -667,8 +690,16 @@ def cap_anchors_per_document(
     capped = kept + later
     if step is not None:
         head = {id(record) for record in capped[:top_k]}
-        moved = sum(1 for record in ranked_children[:top_k] if id(record) not in head)
+        moved_records = [record for record in ranked_children[:top_k] if id(record) not in head]
+        moved = len(moved_records)
         step.result(f"文書ごとの起点の上限 {limit} 件: 上位 {top_k} 件のうち {moved} 件を後ろへ回します")
+        # 後ろへ回した候補と、代わりに起点に入った候補（#2341）。
+        if moved_records:
+            step.add("後ろへ回した候補:", *numbered([record_label(record) for record in moved_records]))
+            original = {id(record) for record in ranked_children[:top_k]}
+            raised = [record for record in capped[:top_k] if id(record) not in original]
+            if raised:
+                step.add("代わりに起点に入った候補:", *numbered([record_label(record) for record in raised]))
     return capped
 
 
@@ -871,6 +902,15 @@ def build_adb_hybrid_answer_context(
     )
 
 
+def _record_search_result(step: _ExecutionStep, context: AnswerContext, *, title: str = "回答に渡す根拠", note: str = "") -> None:
+    """文書の検索の結果（候補の件数と経路ごとの件数、根拠の件数と上位の根拠）を工程の詳細に書く（#2341）。"""
+    record_search_candidates(step, context.ranked_candidates)
+    if context.deferred_records:
+        step.field("後回しにした候補", f"{len(context.deferred_records)} 件")
+    step.result(f"{title} {evidence_summary(context.records)}{note}")
+    add_evidence_lines(step, context.records, title=title)
+
+
 def build_crag_answer_context(
     question: str,
     run_id: Any,
@@ -936,7 +976,7 @@ def build_crag_answer_context(
                     runtime_knowledge=runtime_knowledge,
                     vector_only_queries=vector_only_queries,
                 )
-                step.result(f"回答に渡す根拠 {len(context.records)} 件")
+                _record_search_result(step, context)
         new_evidence_count = _new_evidence_count(context.records, seen_evidence)
         if attempt_number > 1 and best_context.records and not new_evidence_count:
             # rewrite が同じ本文を返した場合も、未閲覧の同一機能文脈を試してから停止する。
@@ -1059,6 +1099,21 @@ def build_crag_answer_context(
                 f"{status}（判定の確からしさ {_format_crag_confidence(attempt.confidence)}）",
                 *([f"理由: {attempt.reason}"] if attempt.reason else []),
             )
+            # 見た候補・関係あり / なしの件数、足りない観点、次の対処（#2341）。
+            step.field("判定した根拠", f"{len(context.records)} 件")
+            step.field("関係あり / なし", f"{len(attempt.relevant_chunk_ids)} 件 / {len(attempt.rejected_chunk_ids)} 件")
+            if attempt.new_evidence_count and attempt_number > 1:
+                step.field("今回の新しい根拠", f"{attempt.new_evidence_count} 件")
+            step.field("足りない観点", aspect_labels(attempt.missing_aspects))
+            if not attempt.sufficient or attempt.missing_aspects:
+                step.field(
+                    "次の対処",
+                    "取得済みの根拠で回答の作成へ進む"
+                    if attempt_number >= CRAG_MAX_RETRIEVAL_ATTEMPTS
+                    else recovery_label(attempt.recovery_action),
+                )
+            if attempt.rewritten_query:
+                step.field("書き換えた検索文", _display_query(attempt.rewritten_query))
 
         rejected = tuple(uid for uid in dict.fromkeys((*rejected, *attempt.rejected_chunk_ids)) if uid not in attempt.relevant_chunk_ids)
         refined_context = _refine_crag_context(context, attempt.relevant_chunk_ids, max_chars=max_chars, rejected_chunk_ids=rejected)
@@ -1125,6 +1180,8 @@ def build_crag_answer_context(
                     max_chars=max_chars,
                 )
                 step.result(f"後回しにした {len(best_context.deferred_records)} 件の候補を戻しました")
+                step.field("作り直した根拠", evidence_summary(pending_context.records))
+                add_evidence_lines(step, pending_context.records, title="作り直した根拠")
             attempts[-1] = replace(attempts[-1], stop_reason=attempts[-1].stop_reason or "deferred_documents_restored")
             continue
         if attempt_number >= CRAG_MAX_RETRIEVAL_ATTEMPTS and not attempt.sufficient:
@@ -1143,6 +1200,8 @@ def build_crag_answer_context(
         with _execution_step("補正検索の準備", "根拠が不足したため、検索文を書き換えて探し直します。") as step:
             rewrites.append(rewrite)
             step.result(f"追加する検索文: {_display_query(rewrite)}")
+            step.field("探し直しの回数", f"{len(rewrites)} 回目（上限 {CRAG_MAX_RETRIEVAL_ATTEMPTS - 1} 回）")
+            step.field("足りない観点", aspect_labels(attempt.missing_aspects))
 
     if rejected:
         # 評価枠を使い切って取得済みの根拠で回答する場合も、明示的に不適合とした候補は末尾へ回し、全候補が不適合なら
@@ -1343,6 +1402,8 @@ def _recover_crag_context(
         with _execution_step("文脈の追加", "根拠が不足したため、取得済みの資料から同じ機能の前後を追加します。") as step:
             labels = {"neighbor_children": "前後の段落", "parent": "上位のまとまり", "neighbor_parents": "隣接するまとまり"}
             step.result(f"{labels.get(action, action)}を {len(bundle.records)} 件追加")
+            step.field("起点にした根拠", f"{len(recovery.anchor_ids)} 件")
+            add_evidence_lines(step, bundle.records, title="追加した根拠")
         return AnswerContext(
             records=list(bundle.records),
             text=bundle.text,
@@ -1758,6 +1819,26 @@ def _stop_without_improvement(budget: Any, rounds: list[dict[str, Any]], reason:
             stop_step.add(f"残った指摘: {'・'.join(labels)}")
 
 
+def _record_round_audit(step: _ExecutionStep, current: Any, *, accepted: bool, first: bool) -> None:
+    """回答の作成と根拠の確認の 1 組の結果（監査の判定の件数・残った指摘・採否）を見出しと値で書く（#2341）。"""
+    from rag_engine.generation import grounded
+
+    reviews = current.audit.request_reviews if current.audit is not None else []
+    if reviews:
+        counts = {status: sum(1 for review in reviews if review.status == status) for status in ("addressed", "partial", "missing")}
+        step.field("要求の充足（監査）", f"答えた {counts['addressed']}・一部 {counts['partial']}・未回答 {counts['missing']}")
+    elif current.requests:
+        step.field("要求の充足（監査）", f"監査なし（要求 {len(current.requests)} 件を未確認として扱う）")
+    step.field("監査した説明", f"{current.audited_items} 件（監査の呼び出し {current.audit_calls} 回）")
+    if current.withdrawn:
+        step.field("監査で撤回した説明", f"{current.withdrawn} 件")
+    if current.applications:
+        step.field("規則の当てはめ", f"{sum(1 for item in current.applications if item.published)} / {len(current.applications)} 件を公開")
+    step.field("残った指摘", join_values(grounded.pending_feedback_labels(current.feedback())))
+    if not first:
+        step.field("採否", "この回の回答を採用" if accepted else "前の回の回答を残す（良くならなかった）")
+
+
 def _public_span(span: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in span.items() if key not in _CHECK_ONLY_SPAN_KEYS}
 
@@ -1910,7 +1991,8 @@ def synthesize_grounded_answer(
                 step.impact(
                     "回答の時間の上限までに監査が終わらなかったため、原文との照合だけを済ませた説明を示し、条件つきの回答にします。"
                 )
-        accepted = best is None or grounded.better(current, best[0])
+            accepted = best is None or grounded.better(current, best[0])
+            _record_round_audit(step, current, accepted=accepted, first=best is None)
         if accepted:
             best = (current, context, spans, images, mode)
             best_number = number
@@ -1988,6 +2070,14 @@ def synthesize_grounded_answer(
                     "correction": "検査の指摘を渡して作り直します",
                 }[remedy["remedy"]]
             )
+            # 直す指摘と、作り直しに使う材料（#2341）。
+            remedy_step.field("直す指摘", join_values(grounded.pending_feedback_labels(feedback)))
+            remedy_step.field("次の回答の作成", f"{number + 2} 回目（上限 {max_rounds} 回）")
+            if remedy["remedy"] == "context":
+                remedy_step.field("加えた根拠", f"{len(remedy.get('added_chunk_ids') or ())} 件")
+                remedy_step.field("回答の材料の根拠", evidence_summary(context.records))
+            elif remedy["remedy"] == "images":
+                remedy_step.field("添付する画像", f"{len(images)} 件")
 
     current, context, spans, images, mode = best
     # 同じ質問・同じ根拠に対する summary が 1 度でも不支持と監査されたら、採用 round の summary も公開しない。
@@ -2428,6 +2518,15 @@ def _cover_missing_requests(
     return context, trace
 
 
+# 要求ごとの根拠の探し直しをしなかった理由（`re_retrieval_skip_reason`）の表示名（#2341）。
+_COVERAGE_SKIP_LABELS = {
+    "disabled": "しない（設定で無効）",
+    "no_budget": "しない（探し直しの上限が 0）",
+    "single_request": "しない（答える要求が 1 つ）",
+    "all_covered": "しない（すべての要求に根拠あり）",
+}
+
+
 def _coverage_step_lines(trace: dict[str, Any]) -> list[str]:
     """覆域の工程の記録の行。"""
     labels = {"supported": "根拠あり", "weak": "根拠が一部", "missing": "根拠なし", "unassessed": "判定なし"}
@@ -2459,6 +2558,16 @@ def _legacy_schema_notice(document_count: int) -> str:
         f"※ 検索範囲に旧 schema の文書が {document_count} 件あり、検索対象外です。"
         "対象文書の再チャンキングと「Embedding作成・ADB保存」を再実行してください。"
     )
+
+
+def _record_search_readiness(step: _ExecutionStep, readiness: Any, engine_ids: Sequence[str], chunk_run_id: str) -> None:
+    """検索の準備の確認の結果を見出しと値で示す（#2341）。"""
+    step.field("検索用データ", "準備済み（意味の近さと語の一致の両方で検索します）")
+    step.field("対象の解析", join_values(engine_ids))
+    step.field("チャンクの実行", chunk_run_id)
+    legacy = readiness.legacy_document_count if isinstance(readiness, AdbSearchReadiness) else 0
+    if legacy:
+        step.field("検索の対象外の文書（旧 schema）", f"{legacy} 件")
 
 
 def _format_classification_filter(classification_filter: ClassificationFilter) -> str:
@@ -2829,7 +2938,10 @@ def _add_text_search_details(step: _ExecutionStep, info: QuestionTextSearchInfo)
     details = _text_search_details(info)
     if not info.error and any(line.strip() == details[0] for line in _execution_lines.get() or []):
         return False
-    step.add(*details)
+    # 先頭の「全文検索のキーワード: …」は見出しと値にする（処理の経過の段を開いて見る。#2341）。
+    label, _, value = details[0].partition(": ")
+    step.field(label, value)
+    step.add(*details[1:])
     return True
 
 
@@ -2860,6 +2972,25 @@ def _record_question_understanding(step: _ExecutionStep, question: str, plan: Qu
     if conditions.codes_and_errors:
         results.append("コード・エラー: " + " / ".join(conditions.codes_and_errors))
     step.result(*results)
+    # 読み取った条件を種類ごとに見出しと値で示す（処理の経過の段を開いて見る。#2341）。
+    step.field("答える要求", f"{max(1, len(units))} 件")
+    read = [
+        ("業務", conditions.business_domains),
+        ("文書の種類", conditions.document_kinds),
+        ("画面", conditions.screen_terms),
+        ("メニューの経路", conditions.menu_routes),
+        ("ファイル", conditions.file_terms),
+        ("列・項目", conditions.column_terms),
+        ("コード・エラー", conditions.codes_and_errors),
+        ("日付・期間", conditions.date_terms),
+        ("判断の種類", conditions.decision_types),
+    ]
+    for label, values in read:
+        step.field(f"読み取った{label}", join_values(values))
+    if not any(values for _, values in read):
+        step.field("読み取った条件", "なし（質問の文のまま検索します）")
+    if conditions.retrieval_queries:
+        step.field("補助の検索文", f"{len(conditions.retrieval_queries)} 本")
     impacts = []
     if len(units) > 1:
         impacts.append("回答後、要求ごとに答えたかを確認します")
@@ -2924,8 +3055,10 @@ def _linked_screen_children(
         else:
             added = screen_candidates(pool, links, existing)
             expansion = []
-        step.add("選んだ画面: " + " / ".join(f"{source} {heading}" for source, heading in links))
-        step.add(f"候補に加えた根拠: {len(added)} 件")
+        step.field("画面目録", f"{len(catalog)} 文書")
+        step.field("選んだ画面", f"{len(links)} 件")
+        step.add("選んだ画面:", *numbered([f"{Path(source).name or source} {heading}" for source, heading in links], limit=8))
+        step.result(f"候補に加えた根拠 {len(added)} 件")
         return [_stored_chunk_answer_record(chunk) for chunk in added], links, expansion
 
 
@@ -3089,7 +3222,10 @@ def _catalog_article_children(
         catalogs += list(load_catalogs(document_ids=extra, limit=len(extra), settings=settings))
     with _execution_step("条の選択", "候補の文書の条の目録から、質問の根拠になる条を選び、その条の根拠を候補に加えます。") as step:
         selected = _select_catalog_articles(question, catalogs, settings)
-        step.add("条の目録を読んだ文書: " + "、".join(catalog.file_name for catalog in catalogs))
+        step.field("条の目録を読んだ文書", f"{len(catalogs)} 件")
+        if extra:
+            step.field("範囲の一覧から加えた文書", f"{len(extra)} 件")
+        step.add("条の目録を読んだ文書:", *numbered([catalog.file_name for catalog in catalogs], limit=8))
         if not selected:
             step.status = "該当なし"
             step.add("目録から根拠になる条を選べませんでした。")
@@ -3113,7 +3249,8 @@ def _catalog_article_children(
             for record in loaded
             if record.chunk_uid in info and record.chunk_uid not in existing and record.chunk_level == CHILD_CHUNK_LEVEL
         ]
-        step.add("選んだ条: " + " / ".join(f"{article.file_name} {article.title}" for article in selected))
+        step.field("選んだ条", f"{len(selected)} 件")
+        step.add("選んだ条:", *numbered([f"{article.file_name} {article.title}" for article in selected], limit=8))
         step.result(f"候補に加えた根拠: {len(added)} 件（候補にあった条 {len(info) - len(added)} 件）")
         return [*marked, *added], loaded
 
@@ -3245,6 +3382,16 @@ def answer_question_result(
             step.status = "補助情報なしで続行"
         else:
             step.result(runtime_knowledge_status(runtime_knowledge))
+            # 登録の数と、一致した用語の別名・ルールを見出しと値で示す（#2341）。
+            if runtime_knowledge.loaded:
+                step.field("有効な登録", f"{runtime_knowledge.active_count} 件（登録 {runtime_knowledge.registered_count} 件）")
+            step.field(
+                "一致した用語",
+                join_values(
+                    term.term + (f"（別名: {'・'.join(term.aliases)}）" if term.aliases else "") for term in runtime_knowledge.matched_terms
+                ),
+            )
+            step.field("一致したルール", join_values(rule.title or rule.rule_id for rule in runtime_knowledge.matched_rules))
             if runtime_knowledge.has_matches:
                 step.impact("一致した用語の別名を補助の検索文に加え、一致したルールを回答時の参考情報として渡します。")
         if scope is not None:
@@ -3317,6 +3464,7 @@ def answer_question_result(
         legacy_notice = _legacy_schema_notice(readiness.legacy_document_count if isinstance(readiness, AdbSearchReadiness) else 0)
         if legacy_notice:
             step.add(legacy_notice)
+        _record_search_readiness(step, readiness, preferred_engine_ids, chunk_run_id)
 
     # 戦略の LLM の応答を待つ間に、元の質問の検索を先に読む (#1499)。検索の結果は並行にしないときと同じ。
     prefetch = _start_original_query_prefetch(
@@ -3327,7 +3475,7 @@ def answer_question_result(
         inquiry_conditions=inquiry_conditions,
     )
     with _execution_step("質問拡張戦略", "原質問の言い回しでは届きにくい資料の表現を補う検索文を作ります。") as step:
-        step.add(f"設定: {query_strategy_label(query_strategy_id(query_strategy_value))}")
+        step.field("設定", query_strategy_label(query_strategy_id(query_strategy_value)))
         try:
             expansion = build_query_expansion(
                 normalized_question,
@@ -3342,6 +3490,11 @@ def answer_question_result(
         step.add(
             *_query_expansion_details(expansion, original_query_weighting=bool(getattr(settings, "original_query_weighting_enabled", True)))
         )
+        # 言い換えた検索文そのもの（処理の経過の段を開いて見る。#2341）。最終の一覧は次の工程が示す。
+        if added_queries := [*expansion.generated_queries, *expansion.provision_queries]:
+            step.add("言い換えた検索文:", *numbered([_display_query(query) for query in added_queries], limit=8))
+        if expansion.rejected_queries:
+            step.field("使わなかった検索文", f"{len(expansion.rejected_queries)} 本（質問の目的から外れる）")
         if query_strategy_id(query_strategy_value) != SIMPLE_RETRIEVAL_STRATEGY and (
             note := llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY, answer_llm_provider)
         ):
@@ -3427,8 +3580,8 @@ def answer_question_result(
             classification_filter=selected_classification_filter,
         )
 
-    with _execution_step("回答生成フロー") as flow_step:
-        flow_step.add(f"設定: {answer_flow_label(selected_answer_flow)}")
+    with _execution_step("回答生成フロー", "根拠を集めて確かめ、根拠に基づく回答を作ります。") as flow_step:
+        flow_step.field("設定", answer_flow_label(selected_answer_flow))
         crag_attempts: tuple[CragRetrievalAttempt, ...] = ()
         crag_rewrites: tuple[str, ...] = ()
         try:
@@ -3466,8 +3619,11 @@ def answer_question_result(
                         note = _text_search_limit_note(_text_search_variants(crag_attempts[-1].retrieval_queries, expansion), settings)
                         if note:
                             keyword_step.add(note)
+                        keyword_step.field("検索文", f"{len(crag_attempts[-1].retrieval_queries)} 本")
                         if not shown and not note:
+                            # 記録の文からは省くが、処理の経過の段は出るので結果を残す（#2341）。
                             keyword_step.hide()
+                            keyword_step.result("全文検索のキーワードは書き換える前と同じです")
                         if text_search_info.error:
                             keyword_step.status = "検索語の抽出に失敗"
             else:
@@ -3487,7 +3643,8 @@ def answer_question_result(
                         runtime_knowledge=runtime_knowledge,
                         vector_only_queries=expansion.vector_only_queries,
                     )
-                    retrieval_step.result(f"回答に渡す根拠 {len(context.records)} 件")
+                    retrieval_step.field("検索文", f"{len(retrieval_queries)} 本")
+                    _record_search_result(retrieval_step, context)
         except AdbHybridSearchUnavailable as exc:
             flow_step.status = "中止"
             flow_step.add("文書検索を続行できません。回答文の生成は未実行です。")
@@ -3576,6 +3733,14 @@ def answer_question_result(
                 f"根拠あり {counts['supported']} 件、一部 {counts['weak']} 件、なし {counts['missing']} 件",
                 *_coverage_step_lines(request_coverage),
             )
+            # 探し直しをしたか・しなかった理由（記録の文から省いた工程も段は出る。#2341）。
+            skipped = str(re_retrieval.get("skipped") or "")
+            coverage_step.field(
+                "根拠の無い要求の探し直し",
+                f"{len(re_retrieval.get('queries') or ())} 件の要求で実行"
+                if re_retrieval.get("queries")
+                else _COVERAGE_SKIP_LABELS.get(skipped, f"しない（{skipped}）" if skipped else "しない（根拠の無い要求なし）"),
+            )
             if re_retrieval.get("applied"):
                 coverage_step.impact(f"根拠の無い要求の根拠 {len(re_retrieval['added_chunk_ids'])} 件を回答の材料に加えます。")
 
@@ -3594,15 +3759,30 @@ def answer_question_result(
             )
             image_prompt_mode = _image_prompt_mode(image_evidence, settings)
             if not image_evidence:
+                # 記録の文からは省くが、処理の経過の段は出るので理由を残す（#2341）。
                 image_step.hide()
-            image_step.result(
-                f"画像 {len(image_evidence)} 件を"
-                + (
-                    "原画像のまま添付し、既定の Vision モデルで回答します"
-                    if image_prompt_mode == "vision_attachments"
-                    else "文字の説明として使います（画像の添付が無効か、Vision モデルか画像ファイルがありません）"
+                image_step.result("回答で見せる画像はありません（質問が画像を要しないか、根拠に画像がありません）")
+            else:
+                image_step.result(
+                    f"画像 {len(image_evidence)} 件を"
+                    + (
+                        "原画像のまま添付し、既定の Vision モデルで回答します"
+                        if image_prompt_mode == "vision_attachments"
+                        else "文字の説明として使います（画像の添付が無効か、Vision モデルか画像ファイルがありません）"
+                    )
                 )
-            )
+                image_step.field("画像ファイルのある画像", f"{sum(1 for item in image_evidence if item.get('prompt_path'))} 件")
+                image_step.add(
+                    "回答に使う画像:",
+                    *numbered(
+                        [
+                            f"{Path(str(item.get('source') or '')).name or item.get('image_id')}"
+                            + (f"（p.{item['page']}）" if item.get("page") else "")
+                            + (f" {item['visual_kind']}" if item.get("visual_kind") else "")
+                            for item in image_evidence
+                        ]
+                    ),
+                )
 
         grounded_answer = synthesize_grounded_answer(
             normalized_question,
@@ -3785,7 +3965,12 @@ def _expand_context_by_sections(
                 f"長い章節は、質問に関係する原文を抜き出してから根拠にしました（抜き出しの呼び出し {extractor.calls} 回 / "
                 f"上限 {extractor.limits.max_calls} 回）。"
             )
+        # 広げた段・判定の回数・止めた理由・読めなかった章節（#2341）。
+        step.field("広げた段", f"{result.levels} 段（足りるかの判定 {len(graded)} 回）")
+        step.field("止めた理由", _SECTION_STOP_LABELS.get(result.stop_reason, result.stop_reason))
+        step.field("回答の材料の根拠", evidence_summary(result.context.records))
         if result.unread:
+            step.field("読めなかった章節", f"{len(result.unread)} 件")
             step.impact("上限に達したため、読めなかった章節を「回答に未反映の関連章節」に示し、条件つきの回答にします。")
     return result.context, result
 
@@ -3882,7 +4067,8 @@ def _retrieve_without_answer(
             answer = f"ADB hybrid search を使用できません: {exc}"
         else:
             records, evidence_tree = context.records, context.evidence_tree
-            step.result(f"検索結果 {len(records)} 件（回答は生成しません）")
+            step.field("検索文", f"{len(retrieval_queries)} 本")
+            _record_search_result(step, context, title="検索結果", note="（回答は生成しません）")
     return _answer_question_result(
         expansion=expansion,
         answer=answer,

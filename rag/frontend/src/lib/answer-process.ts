@@ -14,7 +14,7 @@
  */
 import type { ChatProgressStep, ChatProgressStepStatus } from "@production-ready/ui";
 
-import type { AnswerDiagnostics } from "./answer-diagnostics";
+import { parseRunStepDetails, type AnswerDiagnostics } from "./answer-diagnostics";
 import { t, type I18nKey } from "./i18n";
 
 /**
@@ -110,6 +110,8 @@ export interface AnswerStageRecord {
   stage: string;
   outcome: "started" | "success" | "error" | "cancelled";
   elapsed_ms: number;
+  /** 終わった工程の詳細（backend の共有の詳細の形。回答の安全チェックの結果など。#2341）。 */
+  details?: unknown;
   /** 画面が受け取った時刻（epoch ms。実行中の工程の経過時間の起点）。 */
   receivedAtMs?: number;
 }
@@ -170,6 +172,9 @@ export function answerProcessStepsFromStages(
     }
     row.status = event.outcome === "success" ? "done" : "failed";
     if (Number.isFinite(event.elapsed_ms)) row.durationMs = Math.max(0, event.elapsed_ms);
+    // パイプラインの工程の詳細（回答の安全チェックの結果など。#2341）。
+    const stageDetails = parseRunStepDetails(event.details);
+    if (stageDetails) row.details = stageDetails;
   }
   if (terminal !== null) {
     for (const row of rows) {
@@ -193,8 +198,8 @@ export function answerProcessStepsFromStages(
     const meta = answerStepMeta({ llmCalls: record.llmCalls, note: record.status });
     if (meta) row.meta = meta;
     if (FAILED_STEP_STATUSES.has(record.status.trim())) row.status = "failed";
-    // 工程の詳細の行（段を開いて見る。#2294）。
-    if (record.details?.length) row.details = { lines: record.details };
+    // 工程の詳細（見出しと値・行。段を開いて見る。#2294 / #2341）。
+    if (record.details) row.details = record.details;
   }
   return rows.map((row) => {
     const step: ChatProgressStep = { id: row.id, label: row.label, status: row.status };
