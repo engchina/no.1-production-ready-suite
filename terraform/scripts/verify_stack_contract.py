@@ -1551,7 +1551,9 @@ def _verify_oracle_linux(
             'semanage fcontext -a -t httpd_sys_content_t "${SUITE_REPO_DIR}/${product}/frontend/dist(/.*)?"',
             'semanage fcontext -a -t cert_t "${SSL_DIR}(/.*)?"',
             'semanage port -a -t http_port_t -p tcp "${port}"',
-            'restorecon -R "${SUITE_REPO_DIR}"',
+            # 開発用の worktree と repository の中の一時ファイルは辿らない（#2258）。
+            'restorecon -R "${excludes[@]}" "${SUITE_REPO_DIR}"',
+            'SUITE_SELINUX_EXCLUDE_DIRS="${SUITE_SELINUX_EXCLUDE_DIRS-.claude/worktrees tmp}"',
         ],
         context="platform/deploy/suite-init.sh (Oracle Linux)",
     )
