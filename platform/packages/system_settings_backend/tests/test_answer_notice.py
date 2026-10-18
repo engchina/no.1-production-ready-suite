@@ -13,9 +13,14 @@ from fastapi.testclient import TestClient
 from test_auth import _service
 
 from pr_system_settings.answer_notice import (
+    ANSWER_NOTICE_CONTACT_MAX_CHARS,
+    ANSWER_NOTICE_CONTACT_TEMPLATE,
     ANSWER_NOTICE_MAX_CHARS,
     ANSWER_NOTICE_TABLE,
+    DEFAULT_ANSWER_NOTICE_BODY,
+    DEFAULT_ANSWER_NOTICE_CONTACT,
     DEFAULT_ANSWER_NOTICE_TEXT,
+    AnswerNoticeParts,
     AnswerNoticeProvider,
     AnswerNoticeRecord,
     AnswerNoticeSettingsUpdate,
@@ -52,9 +57,17 @@ def test_get_returns_default_text_when_unset() -> None:
     data = response.json()["data"]
     assert data["enabled"] is True
     assert data["text"] is None
-    assert data["default_text"] == DEFAULT_ANSWER_NOTICE_TEXT
+    assert data["contact"] is None
+    assert data["default_text"] == DEFAULT_ANSWER_NOTICE_BODY
+    assert data["default_contact"] == DEFAULT_ANSWER_NOTICE_CONTACT
+    assert data["contact_template"] == ANSWER_NOTICE_CONTACT_TEMPLATE
+    # 回答に付ける文は本文の後に窓口の案内の 1 行を続ける（#2400）。
     assert data["effective_text"] == DEFAULT_ANSWER_NOTICE_TEXT
+    assert DEFAULT_ANSWER_NOTICE_TEXT == (
+        DEFAULT_ANSWER_NOTICE_BODY + "\n解決しない場合は、ヘルプデスクへお問い合わせください。"
+    )
     assert data["max_chars"] == ANSWER_NOTICE_MAX_CHARS
+    assert data["contact_max_chars"] == ANSWER_NOTICE_CONTACT_MAX_CHARS
 
 
 def test_put_saves_custom_text_and_next_answer_uses_it() -> None:
@@ -68,15 +81,16 @@ def test_put_saves_custom_text_and_next_answer_uses_it() -> None:
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["text"] == "1 行目\n2 行目 https://example.com/help"
-    assert data["effective_text"] == data["text"]
+    expected = data["text"] + "\n解決しない場合は、ヘルプデスクへお問い合わせください。"
+    assert data["effective_text"] == expected
     assert data["updated_at"]
-    assert service.answer_notice.current_text() == data["text"]
+    assert service.answer_notice.current_text() == expected
     assert client.get("/api/settings/answer-notice").json()["data"]["text"] == data["text"]
 
 
 @pytest.mark.parametrize(
     "text",
-    [None, "", "  \n ", DEFAULT_ANSWER_NOTICE_TEXT],
+    [None, "", "  \n ", DEFAULT_ANSWER_NOTICE_BODY],
     ids=["null", "empty", "blank", "same-as-default"],
 )
 def test_put_resets_to_default_text(text: str | None) -> None:
@@ -101,8 +115,9 @@ def test_disabled_notice_is_not_attached() -> None:
     data = response.json()["data"]
     assert data["enabled"] is False
     # 無効にしても文は残し、画面は有効にしたときの文を出せる。
-    assert data["effective_text"] == "独自の文"
+    assert data["effective_text"].startswith("独自の文\n")
     assert service.answer_notice.current_text() is None
+    assert service.answer_notice.current_parts() is None
 
 
 @pytest.mark.parametrize(
@@ -131,7 +146,9 @@ def test_provider_caches_and_expires() -> None:
     now[0] += 5
     assert provider.current_text() == DEFAULT_ANSWER_NOTICE_TEXT
     now[0] += 6
-    assert provider.current_text() == "別の製品で保存した文"
+    assert provider.current_text() == (
+        "別の製品で保存した文\n解決しない場合は、ヘルプデスクへお問い合わせください。"
+    )
 
 
 class _FailingStore:
@@ -201,13 +218,16 @@ def _oracle_store(
 
 def test_oracle_store_loads_row() -> None:
     updated = datetime(2026, 10, 18, 9, 0)
-    store, log = _oracle_store(row=(0, "本文\r\n2 行目", updated))
+    store, log = _oracle_store(row=(0, "本文\r\n2 行目", updated, " 窓口 A\n（内線 1） "))
     record = store.load()
     assert record == AnswerNoticeRecord(
-        enabled=False, text="本文\n2 行目", updated_at=updated.replace(tzinfo=UTC)
+        enabled=False,
+        text="本文\n2 行目",
+        contact="窓口 A （内線 1）",
+        updated_at=updated.replace(tzinfo=UTC),
     )
     assert log[0][0].startswith(
-        "SELECT ENABLED, NOTICE_TEXT, UPDATED_AT FROM PLATFORM_ANSWER_NOTICE"
+        "SELECT ENABLED, NOTICE_TEXT, UPDATED_AT, CONTACT_TEXT FROM PLATFORM_ANSWER_NOTICE"
     )
 
 
@@ -224,6 +244,7 @@ def test_oracle_store_upserts_single_row() -> None:
     assert binds["setting_key"] == "answer_notice"
     assert binds["enabled"] == 1
     assert binds["notice_text"] is None
+    assert binds["contact_text"] is None
     assert log[-1][0] == "COMMIT"
     assert saved.updated_at is not None
 
@@ -239,5 +260,45 @@ def test_ddl_creates_answer_notice_table_and_it_is_preserved() -> None:
     joined = "\n".join(PLATFORM_AUTH_DDL)
     assert "CREATE TABLE PLATFORM_ANSWER_NOTICE" in joined
     assert "CONSTRAINT PK_PLATFORM_ANSWER_NOTICE PRIMARY KEY (SETTING_KEY)" in joined
+    # 窓口の列は #2405 で作った表に足す（#2400）。
+    assert "ALTER TABLE PLATFORM_ANSWER_NOTICE ADD (CONTACT_TEXT VARCHAR2(400 CHAR))" in joined
     # 製品のシステムテーブルの全再作成で消さない（共通の表）。
     assert ANSWER_NOTICE_TABLE in PLATFORM_AUTH_TABLES
+
+
+def test_put_saves_contact_and_composes_the_contact_line() -> None:
+    """窓口（連絡先の名前・連絡の方法。#2400）は本文と分けて保存し、案内の 1 行に入れる。"""
+    client, service = _client()
+    response = client.put(
+        "/api/settings/answer-notice",
+        json={"enabled": True, "text": None, "contact": "  窓口 A\n（https://example.com/help） "},
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["contact"] == "窓口 A （https://example.com/help）"
+    assert data["effective_text"] == (
+        DEFAULT_ANSWER_NOTICE_BODY
+        + "\n解決しない場合は、窓口 A （https://example.com/help）へお問い合わせください。"
+    )
+    parts = service.answer_notice.current_parts()
+    assert parts == AnswerNoticeParts(
+        body=DEFAULT_ANSWER_NOTICE_BODY, contact="窓口 A （https://example.com/help）"
+    )
+    # 製品は窓口の案内の行を差し替えて組み立てられる（RAG の検索・回答プロファイル）。
+    assert parts.text("別の行") == DEFAULT_ANSWER_NOTICE_BODY + "\n別の行"
+    assert parts.text("") == DEFAULT_ANSWER_NOTICE_BODY
+
+    reset = client.put(
+        "/api/settings/answer-notice",
+        json={"enabled": True, "text": None, "contact": DEFAULT_ANSWER_NOTICE_CONTACT},
+    )
+    assert reset.json()["data"]["contact"] is None
+
+
+def test_put_rejects_too_long_contact() -> None:
+    client, _ = _client()
+    response = client.put(
+        "/api/settings/answer-notice",
+        json={"enabled": True, "contact": "あ" * (ANSWER_NOTICE_CONTACT_MAX_CHARS + 1)},
+    )
+    assert response.status_code == 422

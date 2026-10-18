@@ -43,6 +43,7 @@ import { Archive, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
+import { ContactGuidanceFieldset } from "@/components/search-answer-profiles/ContactGuidanceFieldset";
 import { EmptyState, ApiErrorState } from "@/components/StateViews";
 import {
   KnowledgeBaseScopePicker,
@@ -212,6 +213,8 @@ function normalizeSearchAnswerProfileConfig(config: SearchAnswerProfileConfig): 
     query: { ...emptyQueryConfig(), ...config.query },
     clarification_policy: config.clarification_policy ?? "confirm",
     language_pack: config.language_pack ?? {},
+    contact_override: config.contact_override ?? "",
+    spec_then_contact: config.spec_then_contact ?? false,
   };
 }
 
@@ -228,6 +231,8 @@ function emptyConfig(): SearchAnswerProfileConfig {
     query: emptyQueryConfig(),
     clarification_policy: "confirm",
     language_pack: {},
+    contact_override: "",
+    spec_then_contact: false,
   };
 }
 
@@ -1154,6 +1159,13 @@ function SearchAnswerProfileEditor({
                   />
                 </div>
               </fieldset>
+              {/* 回答の末尾の窓口の案内（#2400。回答の注意書きの窓口を、このプロファイルの回答だけ上書きする）。 */}
+              <ContactGuidanceFieldset
+                contactOverride={config.contact_override ?? ""}
+                specThenContact={config.spec_then_contact ?? false}
+                disabled={locked}
+                onChange={(patch) => setConfig((current) => ({ ...current, ...patch }))}
+              />
               {/* 言語資源の上書き（#2181。検索・回答の項目だけ。全体の値に重ねる）。 */}
               <LanguagePackOverridesFieldset
                 value={config.language_pack ?? {}}

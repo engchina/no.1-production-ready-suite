@@ -32,7 +32,7 @@ from app.rag.answer_failure import (
     describe_answer_failure,
     find_incomplete_response,
 )
-from app.rag.answer_notice import current_answer_notice
+from app.rag.answer_notice import GUIDE_HANDOFF_CONTACT_KEY, current_answer_notice
 from app.rag.answer_provenance import search_answer_profile_revision
 from app.rag.answer_threads import run_answer_in_thread
 from app.rag.answer_timeout import (
@@ -375,6 +375,10 @@ async def _resolve_query_context(
                             short_circuit_answer(match)
                             if match.decision in {"clarify", "handoff"}
                             else ""
+                        ),
+                        # 引き継ぎの窓口（#2400。回答の注意書きで同じ窓口の案内を重ねない）。
+                        GUIDE_HANDOFF_CONTACT_KEY: (
+                            match.content.handoff.contact if match.decision == "handoff" else ""
                         ),
                     }
                 }
