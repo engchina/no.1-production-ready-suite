@@ -165,6 +165,22 @@ describe("チャットの処理の経過のツールの段の詳細", () => {
     expect(pairToolProgressSteps(progress, steps).get("tool:rag__rag_search#2")?.id).toBe("s2");
   });
 
+  // #2373
+  it("段の終わりのイベントの詳細は、結果をまだ持たない step で上書きしない", () => {
+    const eventDetails = { fields: [{ label: "ツール", value: "rag__rag_search", mono: true }], lines: ["イベントの詳細"] };
+    const progress = [
+      { id: "tool:rag__rag_search", label: "ツール rag__rag_search を呼びました", status: "done" as const, details: eventDetails },
+    ];
+    const [kept] = withToolStepDetails(progress, [toolStep("s1", "rag__rag_search", { status: "running" })]);
+    expect(kept.details).toEqual(eventDetails);
+    const [replaced] = withToolStepDetails(progress, [
+      toolStep("s1", "rag__rag_search", {
+        tool_result: { name: "rag__rag_search", success: true, output: { answer: "回答 A" } } as never,
+      }),
+    ]);
+    expect(replaced.details?.code?.[1].text).toContain("回答 A");
+  });
+
   it("長い結果は先頭だけにして省略の印を付け、ツールの呼び出しでなければ詳細を付けない", () => {
     const long = toolStep("s1", "nl2sql__query", {
       tool_call: { name: "nl2sql__query", arguments: {} },

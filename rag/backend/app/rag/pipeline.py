@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from time import perf_counter
-from typing import cast
+from typing import Any, cast
 
 from pr_backend_core.chat_history import (
     CHAT_HISTORY_UNTRUSTED_NOTE,
@@ -356,14 +356,20 @@ class RagPipeline:
             scope=self._scope,
         )
 
-        async def emit_step(name: str, outcome: str, elapsed: float) -> None:
+        async def emit_step(
+            name: str, outcome: str, elapsed: float, record: Mapping[str, Any]
+        ) -> None:
+            # 終わった工程の詳細を進捗の詳細に、LLM の回数・結果の説明を属性に入れる
+            # （実行中から段を開ける。#2373）。
+            details = record.get("details")
             await _emit_stage_progress(
                 progress_callback,
                 trace_id=trace_id,
                 stage=answer_step_stage(name),
                 outcome=outcome,
                 elapsed=elapsed,
-                attributes={},
+                attributes={key: record[key] for key in ("llm_calls", "status") if key in record},
+                details=details if isinstance(details, Mapping) and details else None,
             )
 
         # 回答エンジンは検索と回答の生成（LLM）を中で行う。

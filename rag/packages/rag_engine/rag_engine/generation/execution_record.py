@@ -150,7 +150,9 @@ _step_depth: ContextVar[int] = ContextVar("answer_step_depth", default=0)
 
 # 工程の開始・終了を呼び出し側へ知らせる(進捗の表示。#593)。引数は (工程名, "started" /
 # "success" / "error", 経過秒)。通知の失敗は回答を止めない。
-StepListener = Callable[[str, str, float], None]
+# 4 つ目は終わった工程の記録（``details``: 構造化した詳細、``llm_calls``: LLM の回数、``status``: 結果の説明）。
+# 工程が終わったとき（成功・失敗）に渡し、処理の経過の段を実行中から開けるようにする（#2373）。開始は空。
+StepListener = Callable[[str, str, float, Mapping[str, Any]], None]
 _step_listener: ContextVar[StepListener | None] = ContextVar("answer_step_listener", default=None)
 
 
@@ -200,13 +202,13 @@ def _step_metrics_delta(before: Mapping[str, int | float]) -> dict[str, int | fl
     return delta
 
 
-def _notify_step(name: str, outcome: str, elapsed: float) -> None:
+def _notify_step(name: str, outcome: str, elapsed: float, record: Mapping[str, Any] | None = None) -> None:
     listener = _step_listener.get()
     if listener is None:
         return
     # 進捗の通知は補助。回答の処理を止めない。
     with suppress(Exception):
-        listener(name, outcome, elapsed)
+        listener(name, outcome, elapsed, dict(record or {}))
 
 
 class AnswerExecutionError(RuntimeError):
@@ -254,8 +256,14 @@ def _execution_step(name: str, purpose: str = ""):
     finally:
         _step_depth.reset(depth_token)
         elapsed = monotonic() - start
-        _notify_step(name, "error" if failed else "success", elapsed)
         llm_calls = llm_call_count.get() - llm_before
+        # 終わった工程の詳細・LLM の回数・結果の説明を、終わったときの通知で渡す（回答の完了を待たない。#2373）。
+        _notify_step(
+            name,
+            "error" if failed else "success",
+            elapsed,
+            {"details": step.structured_details(), "llm_calls": llm_calls, "status": step.status or "complete"},
+        )
         if steps is not None:
             steps[index] = {
                 "name": name,

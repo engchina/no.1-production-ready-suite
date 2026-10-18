@@ -59,6 +59,20 @@ _WRAPPER_STAGES: frozenset[str] = frozenset({"answer", "retrieval"})
 _PLAIN_STEP_STATUSES: frozenset[str] = frozenset({"", "complete", "エラーで中断"})
 
 
+def _with_step_values(
+    params: dict[str, str | int | float | bool], record: Mapping[str, object]
+) -> dict[str, str | int | float | bool]:
+    """回答フローの工程の記録の LLM の回数（``llm_calls``）と結果の説明（``note``）を
+    段の値に足す。"""
+    llm_calls = record.get("llm_calls")
+    if isinstance(llm_calls, int) and not isinstance(llm_calls, bool) and llm_calls > 0:
+        params["llm_calls"] = llm_calls
+    note = str(record.get("status") or "").strip()
+    if note not in _PLAIN_STEP_STATUSES:
+        params["note"] = note
+    return params
+
+
 def chat_progress_step_kind(stage: str) -> str | None:
     """内部の工程の名前を段階の種類にする。段階にしない工程（全体を包む工程など）は None。"""
     if stage.startswith(ANSWER_STEP_STAGE_PREFIX):
@@ -168,15 +182,25 @@ class ChatProgressTracker:
         if index is None:
             return False
         _, step_id = self._open.pop(index)
-        if progress.outcome == "success":
-            # パイプラインの工程の詳細（書き換えた質問・読み取った条件・安全チェック。#2341）。
+        if progress.outcome in ("success", "error"):
+            # 終わった工程の詳細（見出しと値・行）と、回答フローの工程の LLM の回数・結果の説明を、
+            # 終わったときに段に付ける（回答の完了を待たない。実行中から段を開ける。失敗した回答でも
+            # 残る。#2341 / #2373）。
+            current = next(
+                (step for step in self._recorder.steps() if step.step_id == step_id), None
+            )
+            params = dict(current.params or {}) if current is not None else {}
+            if kind == ANSWER_STEP_KIND:
+                params = _with_step_values(params, progress.attributes)
             details = step_details_model(progress.details)
+            values: dict[str, Any] = {}
             if details is not None:
-                self._recorder.finish(step_id, "done", details=details)
-            else:
-                self._recorder.finish(step_id, "done")
-        elif progress.outcome == "error":
-            self._recorder.finish(step_id, "failed")
+                values["details"] = details
+            if current is not None and params != (current.params or {}):
+                values["params"] = params
+            self._recorder.finish(
+                step_id, "done" if progress.outcome == "success" else "failed", **values
+            )
         # cancelled（時間切れなどの中断）は終端（fail / close）で失敗・停止にする。
         return self._recorder.last_seq != before
 
@@ -205,13 +229,7 @@ class ChatProgressTracker:
                 continue
             cursor = match + 1
             record = records[match]
-            params = dict(step.params)
-            llm_calls = record.get("llm_calls")
-            if isinstance(llm_calls, int) and not isinstance(llm_calls, bool) and llm_calls > 0:
-                params["llm_calls"] = llm_calls
-            note = str(record.get("status") or "").strip()
-            if note not in _PLAIN_STEP_STATUSES:
-                params["note"] = note
+            params = _with_step_values(dict(step.params), record)
             # 工程の詳細（見出しと値・行。旧い記録の行の list は行。#2294 / #2341）。
             details = step_details_model(record.get("details")) or step.details
             if params != step.params or details != step.details:

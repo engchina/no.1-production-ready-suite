@@ -1351,6 +1351,31 @@ for (const width of [1280, 375]) {
     expect(streams.length).toBeGreaterThan(0);
     // 完了は会話の取り直しで届く（記録に終端が入る）。
     const generatedSql = "SELECT CATEGORY, SUM(AMOUNT) FROM APP.SALES GROUP BY CATEGORY";
+    // 終わった段階の詳細は段階の終わりの記録で届き、後の段階の実行中から開ける（ジョブの終わりを待たない。#2373）。
+    Object.assign(state.turns[0], {
+      progress_events: jobProgressEvents("chat-1", {
+        at: createdAt,
+        steps: {
+          queue: "done",
+          prepare_context: "done",
+          generate_sql: {
+            status: "done",
+            params: { engine: "select_ai" },
+            details: { code: [{ label: "生成した SQL", language: "sql", text: generatedSql }] },
+          },
+          safety_check: "running",
+        },
+      }),
+    });
+    const liveProgress = page.getByTestId("sql-chat-turn").getByTestId("sql-chat-progress");
+    await expect(current).toHaveAttribute("data-step-id", "safety_check");
+    const liveToggle = liveProgress.getByTestId("sql-chat-progress-step-generate_sql-toggle");
+    await liveToggle.click();
+    await expect(liveToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(
+      liveProgress.getByTestId("sql-chat-progress-step-generate_sql-details").getByLabel("生成した SQL"),
+    ).toHaveText(generatedSql);
+    await expect(current).toHaveAttribute("data-step-id", "safety_check");
     Object.assign(state.turns[0], {
       status: "done",
       finished_at: iso(0),

@@ -193,7 +193,8 @@ _STEP_DB_METRIC_KEYS = frozenset(
 )
 
 # 回答フローの工程の通知: (工程名, "started" / "success" / "error", 経過秒)。
-type StepCallback = Callable[[str, str, float], Awaitable[None]]
+# 4 つ目は終わった工程の記録（詳細・LLM の回数・結果の説明。開始は空。#2373）。
+type StepCallback = Callable[[str, str, float, Mapping[str, Any]], Awaitable[None]]
 # 回答フローの各工程を進捗(SSE の stage)へ出すときの名前の接頭辞。後ろに工程名
 # (「質問の理解」「文書検索（1回目）」など、利用者向けの日本語)を付け、
 # 画面と時間切れの文言はその工程名を出す(#593)。
@@ -807,11 +808,11 @@ class AnswerEngine:
             article_question=lambda: request.original_question,
         )
 
-        def notify_step(name: str, outcome: str, elapsed: float) -> None:
+        def notify_step(name: str, outcome: str, elapsed: float, record: Mapping[str, Any]) -> None:
             # 工程の順序を保つため、イベントループで通知し終わるのを待つ(短い上限付き)。
             if step_callback is not None:
                 asyncio.run_coroutine_threadsafe(
-                    _call(lambda: step_callback(name, outcome, elapsed)), loop
+                    _call(lambda: step_callback(name, outcome, elapsed, record)), loop
                 ).result(_STEP_NOTIFY_TIMEOUT_SECONDS)
 
         # 工程ごとの SQL の回数・行数・時間(#1490)。計測の範囲は工程の span(pipeline)が作る。

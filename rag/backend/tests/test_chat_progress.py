@@ -303,6 +303,50 @@ def test_pipeline_step_details_are_attached_when_the_step_succeeds() -> None:
     assert any(event.get("details") for event in tracker.dump())
 
 
+def test_answer_step_details_arrive_when_the_step_finishes() -> None:
+    """回答フローの工程の詳細・LLM の回数・結果の説明は、その工程が終わったときに段に付く
+    （回答の完了を待たない。
+    後の工程の実行中から開け、失敗した回答でも残る。#2373）。"""
+    tracker = _tracker()
+    tracker.observe(_progress("answer_step:質問拡張戦略", "started"))
+    tracker.observe(
+        SearchStageProgress(
+            trace_id="trace-1",
+            stage="answer_step:質問拡張戦略",
+            outcome="success",
+            elapsed_ms=800.0,
+            attributes={"llm_calls": 1, "status": "complete"},
+            details={
+                "fields": [{"label": "設定", "value": "自動"}],
+                "lines": ["言い換えた検索文:"],
+            },
+        )
+    )
+    tracker.observe(_progress("answer_step:文書検索", "started"))
+    finished = _step(tracker, "s1")
+    assert finished.status == "done"
+    assert finished.params == {"name": "質問拡張戦略", "depth": 0, "llm_calls": 1}
+    assert finished.details is not None
+    assert [(field.label, field.value) for field in finished.details.fields] == [("設定", "自動")]
+    # 後の工程は実行中のまま。
+    assert _step(tracker, "s2").status == "running"
+    # 失敗した工程も、その時点の詳細と結果の説明を残す。
+    tracker.observe(
+        SearchStageProgress(
+            trace_id="trace-1",
+            stage="answer_step:文書検索",
+            outcome="error",
+            elapsed_ms=10.0,
+            attributes={"llm_calls": 0, "status": "エラーで中断"},
+            details={"fields": [{"label": "検索文", "value": "2 本"}]},
+        )
+    )
+    failed = _step(tracker, "s2")
+    assert failed.status == "failed"
+    assert failed.details is not None and failed.details.fields[0].value == "2 本"
+    assert "note" not in (failed.params or {})
+
+
 def test_inner_step_error_marks_only_that_step_failed() -> None:
     """工程の失敗はその段階だけを失敗にする（回答フローは続けることがある）。"""
     tracker = _tracker()

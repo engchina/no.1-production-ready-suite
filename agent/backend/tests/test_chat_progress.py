@@ -139,6 +139,38 @@ def test_tool_call_records_tool_then_respond(monkeypatch: MonkeyPatch) -> None:
     assert all(event.kind is None for event in plan_events)
 
 
+def test_finished_tool_step_carries_its_details_in_the_progress_event(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """終わったツールの段の詳細（内部名・引数・結果）は、その段の終わりのイベントで送る（会話の取り直しを
+    待たずに、後の段の実行中から開ける。#2373）。"""
+    _script(
+        monkeypatch,
+        [function_call(LOOKUP, {"query": "合成の語"}, call_id="call-1")],
+        [assistant_message("3 件です。")],
+    )
+    run_id = _create_run()
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    finished = [
+        event
+        for event in run.progress_events
+        if isinstance(event, ChatProgressStepEvent)
+        and event.step_id == f"tool:{LOOKUP}"
+        and event.status == "done"
+    ]
+    assert len(finished) == 1
+    details = finished[0].details
+    assert details is not None
+    assert [(field.label, field.value) for field in details.fields][0] == ("ツール", LOOKUP)
+    labels = [block.label for block in details.code]
+    assert labels[0] == "引数"
+    assert "合成の語" in details.code[0].text
+    assert "結果" in labels
+
+
 def test_same_tool_twice_and_tool_after_tool(monkeypatch: MonkeyPatch) -> None:
     """同じツールの 2 回目は `#2`。ツールの後にまたツールを呼んだら、回答の作成を「進め方の検討」の
     完了に変える（完了した段階を実行中に戻さない・消さない。#1358）。"""

@@ -87,6 +87,21 @@ describe("answerProcessStepsFromStages（RAG 検索）", () => {
     expect(rows[1].details).toEqual({ fields: [{ label: "結果", value: "問題なし" }] });
   });
 
+  // #2373
+  it("終わった工程の詳細と計測値は、工程が終わったときのイベントで後の工程の実行中から出す", () => {
+    const rows = answerProcessStepsFromStages([
+      stage("answer_step:質問拡張戦略", "started"),
+      {
+        ...stage("answer_step:質問拡張戦略", "success", 800),
+        attributes: { llm_calls: 1, status: "complete" },
+        details: { fields: [{ label: "設定", value: "自動" }] },
+      },
+      stage("answer_step:文書検索", "started"),
+    ]);
+    expect(rows[0]).toMatchObject({ status: "done", meta: "LLM 1 回", details: { fields: [{ label: "設定", value: "自動" }] } });
+    expect(rows[1].status).toBe("running");
+  });
+
   it("停止した検索の実行中の工程はスキップにする", () => {
     const rows = answerProcessStepsFromStages(
       [stage("answer_step:文書検索", "started"), stage("answer_step:文書検索", "cancelled")],

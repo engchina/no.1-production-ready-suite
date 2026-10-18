@@ -17,6 +17,8 @@ export interface ProgressStepOptions {
   params?: Record<string, string | number | boolean>;
   startedAt?: string;
   finishedAt?: string;
+  /** 段を開いて見る詳細（backend が段の終わりのイベントに入れる。#2373）。 */
+  details?: Record<string, unknown>;
 }
 
 /** step_id から種類を決める（backend の記録と同じ規則）。 */
@@ -63,6 +65,7 @@ export class ProgressLog {
       this.params.set(stepId, params);
       event.params = params;
     }
+    if (options.details) event.details = options.details;
     this.events.push(event);
     return this;
   }
