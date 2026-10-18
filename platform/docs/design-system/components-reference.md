@@ -2827,11 +2827,12 @@ const { previous, next } = adjacentListItems(items, selection.selectedId, (item)
 | `storagePrefix` | `string` | 既定 `production-ready.listDetail`。製品ごとに分ける |
 | `labels` | `Partial<ListDetailLayoutLabels>` | 分割線の名前・案内・値の読み上げ（既定は日本語） |
 
-- 状態は `data-list-detail-layout="split" \| "single"`・`data-list-detail-view="both" \| "list" \| "detail"`・`data-list-collapsed`。
+- 状態は `data-list-detail-layout="split" \| "single"`・`data-list-detail-view="both" \| "list" \| "detail"`・`data-list-collapsed`。列の上・下の帯は `data-list-detail-header` / `data-list-detail-footer`。
+- **一覧の列の高さ（2 ペイン。#2330）**: 列の高さ = 本文のスクロール領域（`AppShell` の main）の見える高さ − 列の上端（本文の中の位置。スクロールに依らない）− 置き場所の下の余白（祖先の `padding-bottom`・`border-bottom`。`PageBody` の 1.5rem）。最小 `LIST_DETAIL_MIN_LIST_HEIGHT_REM`（20rem）。貼り付く位置は上端に貼り付く `PageHeader`（`[data-page-header]`）の下 + `LIST_DETAIL_STICKY_GAP_REM`（1rem）。最初の描画の前（layout effect）と、祖先・見出し・本文の大きさが変わったとき（`ResizeObserver`・window の resize）に測り、`--list-detail-list-height` / `--list-detail-list-top`（rem）で渡す。本文のスクロールでは測り直さない（詳細が長くても列は伸びない）。計算は純粋関数 `fitListColumn`（`lib/list-detail.ts`）。詳細が短ければ本文に縦のスクロールは出ず、列の下の帯は本文をスクロールせずに見える。**置き場所の末尾に置く**（後ろに兄弟の要素を置くと、その分だけ本文がスクロールする）。1 ペインは `top: 1rem`・高さは画面 − 2rem（md 未満は − 5.5rem）のまま。
 - `useUrlSelection({ param, searchParams, setSearchParams, singlePane })` は `{ selectedId, select, clear, replace }`。`select` は 1 ペインで未選択から選ぶときだけ push、それ以外は replace。`clear` はこの画面で push して入ったなら `history.back()`、URL から直接開いたなら検索パラメータを消して replace。`replace(null)` は削除の後に選択を外す。`packages/ui` は router に依存しないので、`searchParams` / `setSearchParams` は製品が `useSearchParams()` から渡す。
 - `ListDetailPager`（`onPrevious` / `onNext` は無ければ `null`、`testId` で `-previous` / `-next`）と `adjacentListItems(items, selectedKey, getKey)` は、詳細の上端の行と `SideSheet` の `pager` で共有する。
 - 共通のユーザー・ロール・権限管理（`@production-ready/system-settings`）は `SecurityListDetail`（`users-roles/shared.tsx`）がこの部品に一覧の列（見出し・`ListToolbar`・`DataTable`・`Pagination`）と詳細を渡し、選択は `useSecurityUrlSelection`（`?user=` / `?role=`。「一覧へ戻る」の履歴の戻りは router の `navigate(-1)`）。製品は `listDetailStoragePrefix` を渡す（#2282）。
-- 単体テストは `packages/ui/tests/list-detail-layout.test.tsx`・`url-selection.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/table-management-list-detail.spec.ts`（2 ペイン・幅・開閉・↑ / ↓・1 ペインの戻るとフォーカス・1920px）。
+- 単体テストは `packages/ui/tests/list-detail-layout.test.tsx`・`url-selection.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/table-management-list-detail.spec.ts`（2 ペイン・幅・開閉・↑ / ↓・1 ペインの戻るとフォーカス・1920px）と、一覧の列の高さ（1280px / 1920px で本文がスクロールしない・詳細が長いと列の高さが変わらず見出しの下に貼り付く。`data-management-list-detail.spec.ts` も。判定は `tests/e2e/_helpers/list-detail-fit.ts`。#2330）。
 
 ---
 
@@ -3729,9 +3730,52 @@ import {
 | `RunHistoryToolbar` | `search`・`searchActive`・`status`（`options` は製品が写せる状態）・`kind`・`period`・`executor`・`onClearFilters`・`count`・`labels`・`idPrefix` | 無い絞り込みは飛ばす。3 つ以上で 375px はシート |
 | `RunSummary` | `status`・`question`・`startedAt`・`finishedAt?`・`durationMs?`・`kind?`・`executor?`・`owner?`・`target?`・`model?`・`usage?`・`runId`・`extraFacts?`・`badges?`・`actions?`・`alert?` | 概要のカード（`data-run-summary`） |
 | `RunDetailSection` | `title`・`description?`・`meta?`・`actions?`・`collapsible?`・`open?` / `onOpenChange?` | 節のカード。`collapsible` は既定で閉じた `Disclosure`（開いたときだけ中身を読む節は `open` / `onOpenChange` で受控にする。Agent の監査ログ） |
-| `RunTimeline` | `steps: RunTimelineStep[]`・`totalDurationMs?`・`defaultExpanded?`・`showSummary?`（既定 true）・`showBars?`（既定 true）・`size?`（`sm` / `md`）・`formatDuration?`・`stepTestIdPrefix?` | 段は `id`・`label`・`status`・`startedAt?`・`finishedAt?`・`durationMs?`・`detail?`（名前の後ろの括弧）・`meta?`・`details?`（`RunStepDetails`: `fields`〔見出しと値・`mono`〕・`lines`・`code`〔`label`・`language`（`json` / `sql` / `text`）・`text`〕・`truncated`。`RunStepDetailsView` で描く。#2294）・`children?`（`details` の下に出す自由な中身）・`level?`（0 以上。字下げは 3 段まで）。線の位置は `runTimelineBars`（時刻の無い段は所要時間を積み、入れ子の段は親の段の始まりから積む）。チャットの `ChatProgress` も一覧をこの部品で描く（#2265）。詳細か `children` のある段だけに開閉のボタン（`stepTestIdPrefix` があれば `<…>-step-<id>-toggle` と `<…>-step-<id>-details`。属性 `data-run-timeline-toggle`）。コードの箱は高さ 16rem で中をスクロールし、focus を受ける |
+| `RunTimeline` | `steps: RunTimelineStep[]`・`totalDurationMs?`・`defaultExpanded?`・`showSummary?`（既定 true）・`showBars?`（既定 true）・`size?`（`sm` / `md`）・`formatDuration?`・`stepTestIdPrefix?` | 段は `id`・`label`・`status`・`startedAt?`・`finishedAt?`・`durationMs?`・`detail?`（名前の後ろの括弧）・`meta?`・`details?`（`RunStepDetails`: `fields`〔見出しと値・`mono`〕・`lines`・`code`〔`label`・`language`（`json` / `sql` / `text`）・`text`〕・`truncated`。`RunStepDetailsView` で描く。#2294）・`children?`（`details` の下に出す自由な中身）・`level?`（0 以上。字下げは 3 段まで）。線の位置は `runTimelineBars`（時刻の無い段は所要時間を積み、入れ子の段は親の段の始まりから積む）。チャットの `ChatProgress` も一覧をこの部品で描く（#2265）。詳細か `children` のある段だけに開閉のボタン（印の `DisclosureChevron` は行の文字の大きさ: `md` 14px / `sm` 12px〔`RUN_TIMELINE_CHEVRON_SIZE`。#2338〕、`stepTestIdPrefix` があれば `<…>-step-<id>-toggle` と `<…>-step-<id>-details`。属性 `data-run-timeline-toggle`）。コードの箱は高さ 16rem で中をスクロールし、focus を受ける |
 | `RunProcessDetails` | `title?`（既定「処理の詳細」）・`description?`・`defaultOpen?`・`testId?`（`<details>`）・`summaryTestId?` | 処理の経過に属する技術的な詳細（回答の記録の詳細・識別子・生成した SQL・イベントの記録）を、処理の経過のタイムラインの後ろに既定で閉じて置く `Disclosure` の plain・sm（`data-run-process-details`。#2325）。実行の詳細の「処理の経過」の節と、チャット・RAG 検索の `ChatProgress` の `footer` で同じ部品・名前・位置にする |
 | `RunDetailLayout` | `summary`・`answer?`・`timeline?`・`evidence?`・`feedback?`・`technical?` | 節の順を固定（`data-run-detail`）。`technical` は処理の経過に属さない技術的な節（Agent の監査ログ）だけ。読み込み中は `RunDetailSkeleton` |
 
 - 書式: `formatRunDateTime(iso, { seconds })`・`formatRunDuration(ms)`・`formatRunTokens(n)`。期間: `RUN_PERIODS`・`runPeriodSince(period)`。実行者: `RUN_EXECUTOR_FILTERS`。
 - 単体テストは `packages/ui/tests/run-history.test.tsx`。
+
+---
+
+## 回答の根拠と本文の節: AnswerEvidence / EvidenceViews / EvidenceCard / AnswerSections — **新規**（#2328。RAG の `AnswerCitations` / `CitationCard` / `AnswerText` から移した）
+
+3 製品のチャット・RAG 検索・実行の詳細で、回答の根拠と回答の本文の節を**同じ部品**で出す（見た目が似た製品ごとの写しを作らない）。製品は自分の根拠の形を下のデータの契約に写して渡すだけで、文言は `evidenceLabels()`（3 製品で同じ書き方。上書きは `evidenceLabels({ … })`）。
+
+```tsx
+import { AnswerEvidence, AnswerSections, evidenceLabels, type EvidenceListItem } from "@production-ready/ui";
+
+// 回答の本文の下・回答の評価の前（チャット・実行の詳細で同じ位置）
+<AnswerEvidence
+  items={items}                       // EvidenceListItem[]
+  groups={groups}                     // 任意。渡すと「順に表示 / まとまりごと」のタブ
+  idPrefix={`message-${id}`}
+  labels={evidenceLabels()}
+  renderActions={(item, index) => …}  // カードの下の操作（引用箇所を表示・根拠の評価・図を開く）
+/>
+
+// 回答の本文: 要約の段落 →「資料により確認できた事項」（各項目の下に「根拠：文書 p.N」）→「資料から確認できなかった事項」
+<AnswerSections blocks={[
+  { kind: "paragraph", key: "p", content: "…" },
+  { kind: "section", key: "s", title: "資料により確認できた事項",
+    entries: [{ key: "e", content: "…", citations: [{ key: "c", label: "根拠：文書 A.pdf p.3", ariaLabel: "…", onOpen }] }] },
+  { kind: "content", key: "t", content: <表など>, citations: [...] },
+]} />
+```
+
+| 部品 | 主な props | 説明 |
+|---|---|---|
+| `AnswerEvidence` | `items`・`groups?`・`groupCount?`・`idPrefix?`・`labels?`・`renderActions?`・`renderExtra?`・`listTestId?`・`open?` / `onOpenChange?`・`className?`・`testId?`（既定 `answer-citations`） | 見出し「AI に渡した N 件（K のまとまり）／ 回答で引用 M 件 ／ うち該当確認済み X 件 ／ 参考 Y 件」の plain の `Disclosure`（**既定は閉じる**）。中身は `EvidenceViews`。根拠が 0 件なら何も出さない |
+| `EvidenceViews` | `items`・`groups?`・`idPrefix`・`labels?`・`renderActions?`・`renderExtra?`・`listTestId?` | `groups` があれば `Tabs`（「順に表示 N」「まとまりごと K」）。どちらの見方も一覧は `bounded-scroll-area-lg`（**一定の高さの中で縦にスクロール**し、回答の評価を押し下げない） |
+| `EvidenceList` / `EvidenceCard` | `item`・`index`・`labels?`・`actions?`・`children?` | カード: 番号・文書名・旧版・引用の印（`EvidenceAnswerUseBadge`）・経路のバッジ・本文 3 行・場所のチップ（`dl`）・補足のタグ・原典のリンク・スコアの面（取得スコアと Rerank のメーター）・操作の行（無ければ区切り線の行を出さない） |
+| `EvidenceAnswerUseBadge` | `use`・`labels?` | 該当確認済み =「回答で引用」（success）、参考 =「参考」（neutral・`BookOpen`）、使われ方が不明 =「回答で引用」（info） |
+| `evidenceCountLabel` | `(items, groupCount?, labels?)` | 見出しの文。引用したかが分からない（`usedInAnswer: null`。検索だけ）なら件数だけ、0 件の項目は出さない |
+| `AnswerSections` / `AnswerCitationLinks` | `blocks`・`live?`・`children?`（シート・ダイアログ）・`testId?`（既定 `answer-text`） | 段落（`paragraph`）・段落にできない塊（`content`。表など）・見出しつきの箇条書き（`section`。`muted` の項目は印なしの補足）と、各段落・項目の下の根拠の行（`onOpen` があれば強調色の押せる行、無ければ文字だけ） |
+| `MarkdownInlineText` | `text`・`labels?` | 段落・項目の中の太字・斜体・コード・リンクだけを描く（`<p>` / `<li>` の中に置く） |
+
+**データの契約（`EvidenceListItem`）**: `key`・`fileName`・`text`・`usedInAnswer: boolean | null`・`answerUse: "confirmed" | "reference" | null`・`superseded?`・`routeBadges?`（翻訳済み）・`score: number | null`・`rerankScore: number | null`・`chips?: { id, label, value }[]`（`label` は読み上げ）・`tags?: { id, value, icon?, tone? }[]`・`sourceUrl?`（https）。まとまりは `EvidenceGroup`（`key`・`fileName`・`section`・`pages`・`entries: EvidenceGroupEntry[]`〔`index`・`roleLabel`・`roleIcon`・`roleKind`・`location`・`excerpt`・`usedInAnswer`・`answerUse`・`chunkId`・`onOpen?`〕）。
+
+- RAG: `RetrievedChunk` → `citationEvidenceItem`（`rag/frontend/src/components/search/CitationCard.tsx`）。まとまりは回答の診断の根拠の木（#2097）。
+- Agent: 成果物 `answer_evidence`（backend の `answer_evidence.py`）→ `answerEvidenceData`（`agent/frontend/src/lib/answer-evidence.ts`）。本文の節は `structureAnswer`（`answer-structure.ts`。本文の文は書き換えず、段落ごとの根拠・根拠の ID の印・最終の検証の節から組み立てる。結び付けられなければ Markdown のまま）。
+- 単体テストは `packages/ui/tests/answer-evidence.test.tsx`・`answer-sections.test.tsx`。

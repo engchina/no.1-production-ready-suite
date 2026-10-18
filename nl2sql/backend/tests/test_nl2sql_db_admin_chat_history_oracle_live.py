@@ -190,7 +190,9 @@ class _LiveService(Nl2SqlService):
         super().__init__(store=MemoryNl2SqlStore())
         self._oracle_adapter = adapter
         self._db_admin_chat_store = store
-        self._enterprise_ai_client = _FakeEnterpriseAi("SELECT 1 AS N FROM DUAL")
+        self._enterprise_ai_client = _FakeEnterpriseAi(
+            "SELECT 1 AS N FROM DUAL;\nSELECT 2 AS M FROM DUAL;"
+        )
 
     def _use_oracle_runtime(self) -> bool:
         return True
@@ -212,21 +214,37 @@ def test_sent_turn_and_execution_summary_are_saved_on_oracle(
             all_users=True,
         )
         assert sent is not None
-        executed = service.execute_db_admin_chat_turn(
+        # 1 文ずつの実行と「すべて実行」（#2333）。
+        single = service.execute_db_admin_chat_turn(
             DbAdminChatTurnExecuteRequest(
-                conversation_id=sent.conversation.id, turn_id=sent.turn.turn_id
+                conversation_id=sent.conversation.id, turn_id=sent.turn.turn_id, statement_index=2
             ),
             actor="t2319-actor",
             all_users=True,
         )
-    assert executed.executed is True
-    assert executed.execution_context == "admin_control_plane"
+        assert single.executed is True
+        result = single.statements[0].result
+        assert result is not None and result.execution_context == "admin_control_plane"
+        executed = service.execute_db_admin_chat_turn(
+            DbAdminChatTurnExecuteRequest(
+                conversation_id=sent.conversation.id, turn_id=sent.turn.turn_id, mode="all"
+            ),
+            actor="t2319-actor",
+            all_users=True,
+        )
+    assert [item.status for item in executed.statements] == ["succeeded", "succeeded"]
     data = service.get_db_admin_chat(sent.conversation.id, actor="t2319-actor", all_users=True)
     [turn] = data.turns
     assert turn.turn_id == str(turn_id)
     assert turn.plan.read_only is True
-    assert turn.last_execution is not None
-    assert turn.last_execution.succeeded is True
-    assert turn.last_execution.row_count == 1
+    assert [(item.index, item.status, item.mode) for item in turn.statement_executions] == [
+        (1, "succeeded", "all"),
+        (2, "succeeded", "all"),
+    ]
+    assert all(item.row_count == 1 for item in turn.statement_executions)
     # 結果の行は保存しない。
-    assert turn.last_execution.result.select_result is None
+    assert all(
+        item.result is not None and item.result.select_result is None
+        for item in turn.statement_executions
+    )
+    assert turn.last_run_all is not None and turn.last_run_all.batch_id == executed.batch_id

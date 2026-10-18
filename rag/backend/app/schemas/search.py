@@ -673,9 +673,3 @@ class AnswerEvaluationRequest(BaseModel):
         if not value.strip():
             raise ValueError("標準回答を入力してください。")
         return value
-
-
-class AnswerRecordDeleteResult(BaseModel):
-    """保存された回答の削除結果。"""
-
-    trace_id: str

@@ -29,12 +29,19 @@ class OracleStatementExecutor:
         success_message: Callable[[str, int | None], str] | None = None,
         ignored_error_codes: frozenset[str] = frozenset(),
         stop_on_error: bool = False,
+        query_indexes: frozenset[int] = frozenset(),
+        query_reader: Callable[[Any], tuple[int, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """statement 群を順に実行する。
 
         `stop_on_error=True` なら最初の error で止め、後続の statement を実行しない。
         DDL は暗黙 commit で rollback できないため、順序で安全を保つ処理（DeepSec の
         Data Grant の付け外しなど）は、失敗した工程の後ろを実行してはならない（#1022）。
+        `query_indexes`（1 始まりの番号）の文は SELECT として実行し、`query_reader` で同じ cursor
+        から
+        行を読む（返す `(行数, 結果)` の結果は `select_result` に入れる）。
+        同じトランザクションの中なので、
+        前の文の commit 前の変更が見える（DB 管理チャットの「すべて実行」。#2333）。
         """
         results: list[dict[str, Any]] = []
         all_ok = True
@@ -57,6 +64,20 @@ class OracleStatementExecutor:
                     result["sql"] = normalized
                 try:
                     cursor.execute(normalized)
+                    if query_reader is not None and index in query_indexes:
+                        selected_count, selected = query_reader(cursor)
+                        result.update(
+                            status="success",
+                            row_count=selected_count,
+                            message=f"{selected_count} rows",
+                            select_result=selected,
+                        )
+                        success_count += 1
+                        result["elapsed_ms"] = int(
+                            (datetime.now(UTC) - started).total_seconds() * 1000
+                        )
+                        results.append(result)
+                        continue
                     row_count = getattr(cursor, "rowcount", None)
                     message = output_reader(cursor) if output_reader else ""
                     result.update(

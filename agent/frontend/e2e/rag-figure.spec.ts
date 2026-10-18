@@ -2,7 +2,8 @@ import type { Page, Route } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
-// #1311: チャットの出典・実行の詳細の RAG の図の根拠から、元の図（RAG の短命の署名つきの URL）を開く。
+// #1311: チャットの回答の根拠・実行の詳細の RAG の図の根拠から、元の図（RAG の短命の署名つきの URL）を開く。
+// 根拠の塊は RAG のチャットと同じ共有の部品（#2328）。
 
 const THREAD_ID = `thread_${"f".repeat(32)}`;
 const RUN_ID = "run-figure-seed";
@@ -14,6 +15,36 @@ const FIGURE_PNG = Buffer.from(
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile-375", width: 375, height: 812 },
+];
+
+const FIGURE_EVIDENCE = [
+  {
+    document_id: "doc-1",
+    chunk_id: "chunk-figure",
+    file_name: "申請手順.pdf",
+    evidence_type: "figure_description",
+    image_ref: { document_id: "doc-1", chunk_id: "chunk-figure", page: 2, bbox: [60, 80, 300, 200], bbox_unit: "absolute" },
+    locator: { section_path: ["申請手順"], page_start: 2, page_end: 2 },
+    excerpt: "申請画面。右上の「承認」ボタンを押す。",
+    score: 0.9,
+    rerank_score: 0.8,
+    cited: true,
+    answer_use: "confirmed",
+  },
+  {
+    document_id: "doc-1",
+    chunk_id: "chunk-text",
+    file_name: "規程.pdf",
+    evidence_type: "text",
+    image_ref: null,
+    locator: { section_path: ["規程"], page_start: 1, page_end: 1 },
+    excerpt: "承認は課長が行う。",
+    score: 0.7,
+    rerank_score: null,
+    cited: true,
+    // 該当が確認できていない参考の記載（RAG の answer_use。#2040）。
+    answer_use: "reference",
+  },
 ];
 
 function seedFigureRun(mockApi: MockApi) {
@@ -34,6 +65,13 @@ function seedFigureRun(mockApi: MockApi) {
     updated_at: MOCK_NOW,
     artifacts: [
       { id: "answer-figure", kind: "answer", name: "回答", created_at: MOCK_NOW, content: { text: "右上の「承認」ボタンを押します。" } },
+      {
+        id: "answer-evidence-figure",
+        kind: "answer_evidence",
+        name: "回答の根拠",
+        created_at: MOCK_NOW,
+        content: { items: FIGURE_EVIDENCE, passed: 2, cited: 2, markers: [], passages: [] },
+      },
       {
         id: "artifact-rag-figure",
         name: "rag__rag_search:step-1",
@@ -118,7 +156,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`チャットの出典の図の根拠から元の図を開き、Escape で閉じる (${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    test(`チャットの回答の根拠の図から元の図を開き、Escape で閉じる (${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
       seedFigureRun(mockApi);
       const figures = await serveFigures(page);
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -127,10 +165,14 @@ for (const viewport of VIEWPORTS) {
       await openThread(page);
 
       const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
-      await turn.getByText("出典（2）").click();
+      const evidence = turn.getByTestId("answer-citations");
+      await expect(evidence.locator("summary")).toHaveText(
+        "AI に渡した 2 件 ／ 回答で引用 2 件 ／ うち該当確認済み 1 件 ／ 参考 1 件"
+      );
+      await evidence.locator("summary").click();
       // 図の根拠だけに「図を開く」を出し、AI が読んだ説明であることを添える。
       await expect(turn.getByRole("button", { name: /^図を開く/ })).toHaveCount(1);
-      await expect(turn.getByTestId("chat-source-figure-description")).toHaveText(
+      await expect(turn.getByTestId("evidence-figure-description")).toHaveText(
         "AI が図を読んだ説明です。元の図で確かめてください。"
       );
       const open = turn.getByRole("button", { name: "図を開く: 申請手順.pdf" });
@@ -178,7 +220,7 @@ test("図の画像を読めない（期限切れなど）ときは理由を出�
   await page.goto("/chat");
   await openThread(page);
   const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
-  await turn.getByText("出典（2）").click();
+  await turn.getByTestId("answer-citations").locator("summary").click();
   await turn.getByRole("button", { name: "図を開く: 申請手順.pdf" }).click();
 
   const sheet = page.getByRole("dialog", { name: "図の根拠: 申請手順.pdf" });
@@ -208,7 +250,7 @@ test("URL を取得できないときは backend の理由を出す", async ({ p
   await page.goto("/chat");
   await openThread(page);
   const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
-  await turn.getByText("出典（2）").click();
+  await turn.getByTestId("answer-citations").locator("summary").click();
   await turn.getByRole("button", { name: "図を開く: 申請手順.pdf" }).click();
   const error = page.getByRole("dialog", { name: "図の根拠: 申請手順.pdf" }).getByTestId("rag-figure-error");
   await expect(error).toContainText("資料が更新されたため、この図は開けません。");
@@ -221,11 +263,15 @@ for (const viewport of VIEWPORTS) {
     await serveFigures(page);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto(`/runs?id=${RUN_ID}`);
-    // AI に渡した箇所のうち、回答で引用した記載と参考の記載を文言で分ける（RAG と同じ語。#2040）。
-    await expect(page.getByRole("heading", { name: "AI に渡した箇所" })).toBeVisible();
-    await expect(page.getByText("回答で引用 · p.2 · 申請手順", { exact: true })).toBeVisible();
-    await expect(page.getByText("参考 · p.1 · 規程", { exact: true })).toBeVisible();
-    const open = page.getByRole("button", { name: "図を開く: 申請手順.pdf" });
+    // 回答の根拠はチャットと同じ部品で回答の下に出す（#2328）。回答で引用した記載と参考の記載を文言で分ける（#2040）。
+    const evidence = page.getByTestId("run-answer-section").getByTestId("answer-citations");
+    await evidence.locator("summary").click();
+    const cards = evidence.getByTestId("evidence-card");
+    await expect(cards).toHaveCount(2);
+    await expect(cards.nth(0)).toContainText("回答で引用");
+    await expect(cards.nth(1)).toContainText("参考");
+    await expect(cards.nth(0).getByTestId("evidence-chips")).toContainText("p.2");
+    const open = evidence.getByRole("button", { name: "図を開く: 申請手順.pdf" });
     await open.scrollIntoViewIfNeeded();
     await open.click();
     const sheet = page.getByRole("dialog", { name: "図の根拠: 申請手順.pdf" });

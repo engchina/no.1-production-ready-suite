@@ -49,8 +49,9 @@ import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { type AgentCapabilities } from "@/lib/permissions";
-import { ragEvidenceItems } from "@/lib/rag-evidence";
-import { RagFigureButton } from "@/components/evidence/RagFigure";
+import { ANSWER_EVIDENCE_KIND, ragArtifactEvidence, runAnswerEvidence } from "@/lib/answer-evidence";
+import { noticeHeading, structureAnswer } from "@/lib/answer-structure";
+import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
 import {
   agentRunDetailLabels,
   commonRunStatus,
@@ -135,7 +136,13 @@ export function RunDetail({
     run.can_decide === false && (run.status === "waiting_approval" || run.status === "waiting_confirmation");
   // 最終の回答は「回答」の節、それ以外の成果物（根拠・確かめ・構造化データ・ツールの結果）は「成果物」の節。
   const answers = run.artifacts.filter(isAnswerArtifact);
-  const others = run.artifacts.filter((artifact) => !isAnswerArtifact(artifact));
+  // 回答の根拠（#2328）は回答の下にチャットと同じ部品で出す（成果物の一覧には重ねない）。
+  const others = run.artifacts.filter(
+    (artifact) => !isAnswerArtifact(artifact) && artifact.kind !== ANSWER_EVIDENCE_KIND
+  );
+  const evidence = runAnswerEvidence(run.artifacts);
+  const validationContent =
+    [...run.artifacts].reverse().find((artifact) => artifact.kind === ANSWER_VALIDATION_KIND)?.content ?? null;
   const latestAnswer = answers.at(-1);
   const outcome = latestAnswer ? answerOutcome(latestAnswer.content) : null;
   const timelineSteps = runTimelineSteps(run, (step) => stepDetails(step));
@@ -217,14 +224,36 @@ export function RunDetail({
         answer={
           answers.length ? (
             <RunDetailSection title={t("run.section.answer")} testId="run-answer-section">
-              {answers.map((artifact) => (
-                // 回答の Markdown は、表を共通の結果の表（#1158）、表以外を見出し・太字・箇条書きなどで描く（#1808）。
-                <AnswerBody
-                  key={artifact.id}
-                  text={String(artifact.content.text ?? artifact.content.answer)}
-                  testId={`run-answer-${artifact.id}`}
+              {answers.map((artifact) => {
+                const text = String(artifact.content.text ?? artifact.content.answer);
+                // 回答の本文はチャットと同じ節の形（根拠の行つき。#2328）。結び付けられなければ Markdown のまま
+                // （表は共通の結果の表。#1158 / #1808）。
+                const blocks = evidence
+                  ? structureAnswer(text, evidence, noticeHeading(validationContent), {
+                      confirmed: t("chat.answer.confirmed"),
+                      unconfirmed: t("chat.answer.unconfirmed"),
+                    })
+                  : null;
+                return blocks && evidence ? (
+                  <StructuredAnswer
+                    key={artifact.id}
+                    runId={run.id}
+                    blocks={blocks}
+                    evidence={evidence}
+                    testId={`run-answer-${artifact.id}`}
+                  />
+                ) : (
+                  <AnswerBody key={artifact.id} text={text} testId={`run-answer-${artifact.id}`} />
+                );
+              })}
+              {evidence ? (
+                <AnswerEvidenceBlock
+                  runId={run.id}
+                  evidence={evidence}
+                  idPrefix={`run-${run.id}`}
+                  className="mt-3 border-t border-border px-2 pt-1"
                 />
-              ))}
+              ) : null}
             </RunDetailSection>
           ) : null
         }
@@ -800,7 +829,8 @@ function ReviewArtifact({ artifact, showRaw }: { artifact: Artifact; showRaw: bo
 
 function RagEvidenceArtifact({ artifact, runId }: { artifact: Artifact; runId: string }) {
   const answer = typeof artifact.content.answer === "string" ? artifact.content.answer : null;
-  const evidence = ragEvidenceItems(artifact.content);
+  // この検索の根拠（回答で引用 = RAG の回答が引用した根拠）。
+  const evidence = ragArtifactEvidence(artifact.content);
   const contexts = arrayOfRecords(artifact.content.contexts);
 
   return (
@@ -811,45 +841,9 @@ function RagEvidenceArtifact({ artifact, runId }: { artifact: Artifact; runId: s
           <p className="break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">{answer}</p>
         </section>
       ) : null}
-      {evidence.length ? (
-        <section className="space-y-2">
-          <h3 className="flex items-center gap-2 text-sm font-medium text-fg">
-            <FileText size={16} aria-hidden />
-            {t("run.citations")}
-          </h3>
-          <div className="grid gap-2">
-            {evidence.map((item) => (
-              <EvidenceItem
-                key={item.key}
-                title={item.title}
-                subtitle={
-                  item.usedInAnswer
-                    ? [
-                        // 回答で引用した箇所のうち、該当が確認できていない記載は「参考」（RAG と同じ語。#2040）。
-                        item.answerUse === "reference" ? t("run.evidenceReference") : t("run.evidenceUsed"),
-                        item.location,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")
-                    : item.location
-                }
-                detail={item.text}
-                action={
-                  item.figure ? (
-                    // 図の根拠は元の図を開いて確かめられる（#1311）。
-                    <RagFigureButton
-                      runId={runId}
-                      figure={item.figure}
-                      title={item.title}
-                      location={item.location}
-                      testId={`run-evidence-figure-${item.key}`}
-                    />
-                  ) : null
-                }
-              />
-            ))}
-          </div>
-        </section>
+      {evidence ? (
+        // 根拠はチャットと同じ共有の部品（「AI に渡した N 件 ／ 回答で引用 M 件」。#2328）。
+        <AnswerEvidenceBlock runId={runId} evidence={evidence} idPrefix={`run-artifact-${artifact.id}`} />
       ) : null}
       {contexts.length ? (
         <section className="space-y-2">

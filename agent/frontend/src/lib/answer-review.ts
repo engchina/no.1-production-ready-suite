@@ -225,20 +225,41 @@ function publishedAsIs(result: Record<string, unknown>): boolean {
   return claims.some((claim) => claim.status === "supported" || Boolean(claim.non_claim));
 }
 
-function unverifiedPoints(result: Record<string, unknown>): UnverifiedPoint[] {
+/**
+ * 回答の本文の「資料で確認できず除いた内容」の節に書いた項目の数（backend の `notice`。#2328）。外した内容は本文の節に
+ * 1 回だけ出し、回答の確かめには節に書けなかった残り（上限を超えた項目）だけを出す。
+ */
+interface NoticeListing {
+  claims: number;
+  findings: number;
+  evidence: boolean;
+}
+
+function noticeListing(content: Record<string, unknown>): NoticeListing {
+  const notice = record(content.notice);
+  return {
+    claims: count(notice?.claims),
+    findings: count(notice?.findings),
+    evidence: notice?.evidence === true,
+  };
+}
+
+function unverifiedPoints(result: Record<string, unknown>, listed: NoticeListing): UnverifiedPoint[] {
   const points: UnverifiedPoint[] = [];
-  for (const claim of blockingClaims(result)) {
+  for (const claim of blockingClaims(result).slice(listed.claims)) {
     const status = claim.status as UnverifiedClaimKind;
     points.push({ kind: "claim", claim: status, quote: text(claim.answer_quote), reason: text(claim.reason) });
   }
-  for (const finding of errorFindings(result)) {
-    const message = text(finding.message);
-    if (message) points.push({ kind: "finding", message });
+  const findings = errorFindings(result)
+    .map((finding) => text(finding.message))
+    .filter(Boolean);
+  for (const message of findings.slice(listed.findings)) points.push({ kind: "finding", message });
+  if (!listed.evidence) {
+    const stale = records(result.stale_evidence).length;
+    if (stale) points.push({ kind: "stale", count: stale });
+    const missing = records(result.missing_evidence).length;
+    if (missing) points.push({ kind: "missing", count: missing });
   }
-  const stale = records(result.stale_evidence).length;
-  if (stale) points.push({ kind: "stale", count: stale });
-  const missing = records(result.missing_evidence).length;
-  if (missing) points.push({ kind: "missing", count: missing });
   return points.slice(0, MAX_LISTED);
 }
 
@@ -263,7 +284,7 @@ export function validationReview(content: Record<string, unknown>): ReviewValida
     cause: null,
     withheldClaims: count(withheld?.claims),
     withheldAll: withheld?.all === true,
-    points: unverifiedPoints(result),
+    points: unverifiedPoints(result, noticeListing(content)),
   };
 }
 

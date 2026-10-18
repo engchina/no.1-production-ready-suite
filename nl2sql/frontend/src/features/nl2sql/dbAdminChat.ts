@@ -1,45 +1,125 @@
 // DB 管理チャット（#2264）の画面のロジック。会話とターンはサーバーが保存し（#2319）、続きの質問の
 // 文脈もサーバーが保存した会話から作る。結果の行は保存しない（開き直したら要約と「もう一度実行」）。
 //
+// 生成した SQL はサーバーが文に分け（PL/SQL のブロックは 1 文）、文ごとに分類・実行する（#2333。
+// SQL Developer などのワークシートと同じ）。「すべて実行」は上から順に実行し、最初のエラーで止める。
+//
 // 処理の経過は NL2SQL のチャットと同じ段階の名前（`CHAT_PROGRESS_STEP_DEFINITIONS`）と共通の
-// `ChatProgress` で出す（生成 → SQL の確認（サーバーの分類）→ 実行）。
+// `ChatProgress` で出す（生成 → SQL の確認（サーバーの分類））。実行は経過に足さない（文の区画に出す）。
 import type { ChatProgressStep, ChatProgressStepStatus } from "@production-ready/ui";
 
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
 import { t } from "../../lib/i18n";
 import { CHAT_PROGRESS_STEP_DEFINITIONS } from "./chatProgress";
-import type { DbAdminChatPlan, DbAdminChatTurn, DbAdminExecuteData } from "./types";
+import type {
+  DbAdminChatExecuteData,
+  DbAdminChatPlan,
+  DbAdminChatRunAllSummary,
+  DbAdminChatStatementLastExecution,
+  DbAdminChatStatementOutcome,
+  DbAdminChatStatementPlan,
+  DbAdminChatTurn,
+  DbAdminExecuteData,
+} from "./types";
 
 /** 会話の往復の上限（backend の DB_ADMIN_CHAT_TURN_LIMIT と同じ。超えたら新しい会話を勧める）。 */
 export const DB_ADMIN_CHAT_TURN_LIMIT = 50;
 
-/** 実行の状態（1 往復の今の SQL について）。 */
+/** 1 文の実行の状態。 */
 export interface DbAdminChatExecution {
-  status: "running" | "done" | "failed";
+  /** `not_run` は「すべて実行」が前の文の失敗で止めたため実行しなかった文。 */
+  status: "running" | "done" | "failed" | "not_run";
   startedAtMs: number;
   finishedAtMs?: number;
   result?: DbAdminExecuteData | null;
-  /** 結果の行を持たない（開き直した）ときの行数。 */
-  rowCount?: number | null;
-  /** 実行の要求そのものの失敗（権限・通信・timeout）。SQL の失敗は `result` の文ごとの状態。 */
+  /** 開き直したときの保存した要約（行は持たない）。この画面で受け取った結果には無い。 */
+  saved?: DbAdminChatStatementLastExecution | null;
+  /** 実行の要求そのものの失敗（権限・通信・timeout）。SQL の失敗は `result` の文の状態。 */
   requestError?: unknown;
 }
 
-/**
- * 保存したターンの最後の実行（今の SQL の版のもの）を、画面の実行の状態にする。行は保存していないので
- * `result.select_result` は空で、行数は `rowCount`。前の版（AI のエラー分析で直す前）の実行は無視する。
- */
-export function dbAdminChatSavedExecution(turn: DbAdminChatTurn): DbAdminChatExecution | null {
-  const last = turn.last_execution;
-  if (!last || last.revision !== turn.revision) return null;
-  const finishedAtMs = Date.parse(last.executed_at);
-  const elapsed = last.result.timing?.elapsed_ms ?? 0;
+/** ターンの「すべて実行」の状態。 */
+export interface DbAdminChatRunAll {
+  status: "running" | "done" | "failed";
+  startedAtMs: number;
+  finishedAtMs?: number;
+  data?: DbAdminChatExecuteData | null;
+  /** 開き直したときの保存した要約。 */
+  saved?: DbAdminChatRunAllSummary | null;
+  requestError?: unknown;
+}
+
+/** 1 往復の実行の状態（文の番号ごとの実行と「すべて実行」）。 */
+export interface DbAdminChatTurnExecutions {
+  statements: Record<number, DbAdminChatExecution>;
+  runAll: DbAdminChatRunAll | null;
+}
+
+/** 文の分類（バッジ）: 読み取り専用 / 変更あり / 実行できない。 */
+export type DbAdminChatStatementKind = "readOnly" | "change" | "blocked";
+
+export function dbAdminChatStatementKind(statement: DbAdminChatStatementPlan): DbAdminChatStatementKind {
+  if (statement.blocked_reason) return "blocked";
+  return statement.select_only ? "readOnly" : "change";
+}
+
+function savedTimes(executedAt: string, elapsedMs: number): { startedAtMs: number; finishedAtMs?: number } {
+  const finishedAtMs = Date.parse(executedAt);
+  return Number.isFinite(finishedAtMs)
+    ? { startedAtMs: finishedAtMs - elapsedMs, finishedAtMs }
+    : { startedAtMs: Date.now() };
+}
+
+/** 保存した 1 文の最後の実行の要約を、画面の実行の状態にする（行は保存していない）。 */
+export function dbAdminChatSavedStatementExecution(
+  saved: DbAdminChatStatementLastExecution,
+): DbAdminChatExecution {
   return {
-    status: last.succeeded ? "done" : "failed",
-    startedAtMs: Number.isFinite(finishedAtMs) ? finishedAtMs - elapsed : Date.now(),
-    finishedAtMs: Number.isFinite(finishedAtMs) ? finishedAtMs : undefined,
-    result: last.result,
-    rowCount: last.row_count,
+    status: saved.status === "succeeded" ? "done" : saved.status === "not_run" ? "not_run" : "failed",
+    ...savedTimes(saved.executed_at, saved.result?.timing?.elapsed_ms ?? 0),
+    result: saved.result,
+    saved,
+  };
+}
+
+/** 保存したターンの文ごとの最後の実行と「すべて実行」の要約を、画面の実行の状態にする。 */
+export function dbAdminChatSavedExecutions(turn: DbAdminChatTurn): DbAdminChatTurnExecutions {
+  const statements: Record<number, DbAdminChatExecution> = {};
+  for (const saved of turn.statement_executions ?? []) {
+    statements[saved.index] = dbAdminChatSavedStatementExecution(saved);
+  }
+  const last = turn.last_run_all;
+  return {
+    statements,
+    runAll: last
+      ? { status: last.succeeded ? "done" : "failed", ...savedTimes(last.executed_at, 0), saved: last }
+      : null,
+  };
+}
+
+/** 実行の応答の 1 文の結果を、画面の実行の状態にする。 */
+export function dbAdminChatExecutionFromOutcome(
+  outcome: DbAdminChatStatementOutcome,
+  data: DbAdminChatExecuteData,
+  startedAtMs: number,
+  finishedAtMs: number,
+): DbAdminChatExecution {
+  if (outcome.status === "not_run") return { status: "not_run", startedAtMs, finishedAtMs, result: null };
+  if (outcome.status === "confirmation_required") {
+    // 画面は確認語が合うまで押せないので、ここに来るのは確認語の規則が変わったときだけ。
+    return {
+      status: "failed",
+      startedAtMs,
+      finishedAtMs,
+      result: null,
+      requestError: new Error(data.warnings[0] ?? t("dbAdminChat.execute.failed")),
+    };
+  }
+  return {
+    status: outcome.status === "succeeded" ? "done" : "failed",
+    startedAtMs,
+    finishedAtMs,
+    result: outcome.result,
   };
 }
 
@@ -48,17 +128,26 @@ function iso(ms: number): string {
 }
 
 /** 段階の名前はチャットと同じ定義から作る（文言を 2 つの画面で分けない）。 */
-function stepLabel(stage: "generate_sql" | "safety_check" | "execute_sql", status: ChatProgressStepStatus) {
+function stepLabel(stage: "generate_sql" | "safety_check", status: ChatProgressStepStatus) {
   return CHAT_PROGRESS_STEP_DEFINITIONS[stage]?.label(status, {}) ?? stage;
 }
 
-/** SQL の確認（サーバーの分類）の段階の補足。 */
+/** SQL の確認（サーバーの分類）の段階の補足（文の分類ごとの数）。 */
 export function planCheckDetail(plan: DbAdminChatPlan): string {
-  if (plan.blocked) return t("dbAdminChat.check.blocked");
-  if (plan.requires_confirmation) {
-    return t("dbAdminChat.check.confirmation", { target: plan.confirmation_target });
+  const counts: Record<DbAdminChatStatementKind, number> = { readOnly: 0, change: 0, blocked: 0 };
+  for (const statement of plan.statements) counts[dbAdminChatStatementKind(statement)] += 1;
+  if (plan.statements.length === 1) {
+    const [only] = plan.statements;
+    if (only?.blocked_reason) return t("dbAdminChat.check.blocked");
+    if (only?.requires_confirmation) {
+      return t("dbAdminChat.check.confirmation", { target: only.confirmation_target });
+    }
+    return t("dbAdminChat.check.readOnly");
   }
-  return t("dbAdminChat.check.readOnly");
+  return (["readOnly", "change", "blocked"] as const)
+    .filter((kind) => counts[kind] > 0)
+    .map((kind) => t("dbAdminChat.check.count", { kind: t(`dbAdminChat.kind.${kind}`), count: counts[kind] }))
+    .join("・");
 }
 
 /** 生成の段階（送信中・失敗の表示にも使う）。 */
@@ -77,44 +166,32 @@ export function dbAdminChatGenerateStep(
   };
 }
 
-/** 1 往復の処理の経過（生成 → SQL の確認 → 実行）。 */
+/**
+ * 1 往復の処理の経過（生成 → SQL の確認）。実行（「実行」「もう一度実行」「すべて実行」）は利用者が後から押す
+ * 操作なので経過に足さず、その文の区画の実行の表示（実行中の経過時間・結果の要約）に出す。経過は生成した
+ * ときのまま変わらない。
+ */
 export function dbAdminChatProgressSteps({
   sentAtMs,
   generatedAtMs,
   plan,
-  execution,
 }: {
   sentAtMs: number;
   generatedAtMs: number;
   plan: DbAdminChatPlan;
-  execution?: DbAdminChatExecution | null;
 }): ChatProgressStep[] {
   const steps: ChatProgressStep[] = [dbAdminChatGenerateStep("done", sentAtMs, generatedAtMs)];
   if (plan.statements.length === 0) return steps;
+  // 止める文があっても、ほかの文は実行できる。すべての文が止める文のときだけ確認の段を失敗にする。
+  const allBlocked = plan.statements.every((statement) => statement.blocked_reason);
   steps.push({
     id: "safety_check",
-    label: stepLabel("safety_check", plan.blocked ? "failed" : "done"),
-    status: plan.blocked ? "failed" : "done",
+    label: stepLabel("safety_check", allBlocked ? "failed" : "done"),
+    status: allBlocked ? "failed" : "done",
     detail: planCheckDetail(plan),
     startedAt: iso(generatedAtMs),
     finishedAt: iso(generatedAtMs),
   });
-  if (execution) {
-    const status: ChatProgressStepStatus =
-      execution.status === "running" ? "running" : execution.status === "failed" ? "failed" : "done";
-    const rows = execution.result?.select_result?.returned_count ?? execution.rowCount;
-    steps.push({
-      id: "execute_sql",
-      label: stepLabel("execute_sql", status),
-      status,
-      detail:
-        status === "done" && typeof rows === "number"
-          ? t("chat.progress.rows", { count: rows.toLocaleString("ja-JP") })
-          : undefined,
-      startedAt: iso(execution.startedAtMs),
-      finishedAt: execution.finishedAtMs === undefined ? undefined : iso(execution.finishedAtMs),
-    });
-  }
   return steps;
 }
 
@@ -134,13 +211,29 @@ export function dbAdminFailureText(result: DbAdminExecuteData): string {
   return [...lines, ...result.warnings].join("\n");
 }
 
-/** 確認語が一致したか（前後の空白は無視。確認語が要らない SQL は常に true）。 */
-export function dbAdminChatConfirmed(plan: DbAdminChatPlan, value: string): boolean {
-  if (!plan.requires_confirmation) return true;
-  return value.trim() === plan.confirmation_target;
+/** 確認語が一致したか（前後の空白は無視。確認語が要らないなら常に true）。 */
+export function dbAdminChatConfirmed(
+  target: { requires_confirmation: boolean; confirmation_target: string },
+  value: string,
+): boolean {
+  if (!target.requires_confirmation) return true;
+  return value.trim() === target.confirmation_target;
 }
 
-/** 実行できるか（止める文が無く、確認語が要るなら一致している）。 */
-export function dbAdminChatCanExecute(plan: DbAdminChatPlan, confirmation: string): boolean {
+/** 1 文を実行できるか（止める文でなく、確認語が要るなら一致している）。 */
+export function dbAdminChatCanRunStatement(statement: DbAdminChatStatementPlan, confirmation: string): boolean {
+  return !statement.blocked_reason && dbAdminChatConfirmed(statement, confirmation);
+}
+
+/** 「すべて実行」できるか（止める文が無く、確認語が要るなら一致している）。 */
+export function dbAdminChatCanRunAll(plan: DbAdminChatPlan, confirmation: string): boolean {
   return plan.statements.length > 0 && !plan.blocked && dbAdminChatConfirmed(plan, confirmation);
+}
+
+/** 「すべて実行」を止める文の番号（「#2・#4」）。 */
+export function dbAdminChatBlockedStatementLabels(plan: DbAdminChatPlan): string {
+  return plan.statements
+    .filter((statement) => statement.blocked_reason)
+    .map((statement) => `#${statement.index}`)
+    .join("・");
 }

@@ -1748,45 +1748,7 @@ class OracleNl2SqlAdapter:
         try:
             with connection_cm as conn, conn.cursor() as cursor:
                 cursor.execute(sql)
-                column_names = [description[0] for description in cursor.description or []]
-                # 既存の一意な名前を予約してから重名列へキーを割り当てる。
-                reserved = set(column_names)
-                used: set[str] = set()
-                columns: list[str] = []
-                for name in column_names:
-                    key = name
-                    suffix = 2
-                    if key in used:
-                        key = f"{name}_{suffix}"
-                        while key in used or key in reserved:
-                            suffix += 1
-                            key = f"{name}_{suffix}"
-                    used.add(key)
-                    columns.append(key)
-                rows: list[dict[str, Any]] = []
-                has_more = False
-                if max_rows is not None and max_rows > 0:
-                    fetched_rows = cursor.fetchmany(max_rows + 1)
-                    has_more = len(fetched_rows) > max_rows
-                    fetched_rows = fetched_rows[:max_rows]
-                else:
-                    # 件数未指定でも全件をメモリ・job 結果・応答へ載せないよう、安全上限で打ち切る。
-                    cap = self.settings.nl2sql_max_result_rows
-                    fetched_rows = []
-                    while len(fetched_rows) <= cap:
-                        batch = cursor.fetchmany(SELECT_FETCH_BATCH_SIZE)
-                        if not batch:
-                            break
-                        fetched_rows.extend(batch)
-                    has_more = len(fetched_rows) > cap
-                    fetched_rows = fetched_rows[:cap]
-                for row in fetched_rows:
-                    rows.append(
-                        {
-                            columns[index]: _coerce_result_value(value)
-                            for index, value in enumerate(row)
-                        }
-                    )
+                columns, rows, has_more = self._fetch_query_rows(cursor, max_rows)
             from app.security.request_actor import current_actor_context
 
             actor = current_actor_context()
@@ -1816,6 +1778,51 @@ class OracleNl2SqlAdapter:
             raise
         except Exception as exc:
             raise OracleAdapterError(f"SELECT の実行に失敗しました: {exc}") from exc
+
+    def _fetch_query_rows(
+        self, cursor: Any, max_rows: int | None
+    ) -> tuple[list[str], list[dict[str, Any]], bool]:
+        """実行した SELECT の cursor から列の名前（重名は `_2` を付ける）と行を読む。
+
+        `max_rows` があればその行数まで（超えたら has_more）、無ければ安全上限で打ち切る。
+        """
+        column_names = [description[0] for description in cursor.description or []]
+        # 既存の一意な名前を予約してから重名列へキーを割り当てる。
+        reserved = set(column_names)
+        used: set[str] = set()
+        columns: list[str] = []
+        for name in column_names:
+            key = name
+            suffix = 2
+            if key in used:
+                key = f"{name}_{suffix}"
+                while key in used or key in reserved:
+                    suffix += 1
+                    key = f"{name}_{suffix}"
+            used.add(key)
+            columns.append(key)
+        rows: list[dict[str, Any]] = []
+        has_more = False
+        if max_rows is not None and max_rows > 0:
+            fetched_rows = cursor.fetchmany(max_rows + 1)
+            has_more = len(fetched_rows) > max_rows
+            fetched_rows = fetched_rows[:max_rows]
+        else:
+            # 件数未指定でも全件をメモリ・job 結果・応答へ載せないよう、安全上限で打ち切る。
+            cap = self.settings.nl2sql_max_result_rows
+            fetched_rows = []
+            while len(fetched_rows) <= cap:
+                batch = cursor.fetchmany(SELECT_FETCH_BATCH_SIZE)
+                if not batch:
+                    break
+                fetched_rows.extend(batch)
+            has_more = len(fetched_rows) > cap
+            fetched_rows = fetched_rows[:cap]
+        for row in fetched_rows:
+            rows.append(
+                {columns[index]: _coerce_result_value(value) for index, value in enumerate(row)}
+            )
+        return columns, rows, has_more
 
     def explain_select(self, sql: str) -> ExplainPlanData:
         """Oracle PLAN_TABLE から cost/cardinality と full scan を要約する。"""
@@ -2129,6 +2136,44 @@ class OracleNl2SqlAdapter:
                 output_reader=self._fetch_dbms_output,
                 success_message=self._admin_success_message,
                 ignored_error_codes=ignored_error_codes,
+            )
+
+    def execute_admin_script(
+        self, statements: list[str], *, query_indexes: frozenset[int], max_rows: int | None
+    ) -> list[dict[str, Any]]:
+        """SELECT を含む文を、1 つの管理の接続で上から順に実行する（「すべて実行」。#2333）。
+
+        DB 管理チャットの「すべて実行」が使う。最初のエラーで止め（後ろの文は実行しない）、
+        全部成功したときだけ commit、失敗したら rollback する（DDL は Oracle の暗黙の commit で
+        戻らない）。`query_indexes`（1 始まり）の文は SELECT として同じ cursor から `max_rows` 行
+        まで読み、結果の dict の `select_result`（`QueryResults`）に入れる。
+        """
+        from app.clients.oracle_statement_executor import oracle_statement_executor
+
+        def read_query(cursor: Any) -> tuple[int, QueryResults]:
+            columns, rows, has_more = self._fetch_query_rows(cursor, max_rows)
+            return len(rows), QueryResults(
+                columns=columns,
+                rows=rows,
+                total=len(rows),
+                returned_count=len(rows),
+                has_more=has_more,
+                truncated=has_more,
+                execution_context="admin_control_plane",
+            )
+
+        with self.connection() as conn:
+            return oracle_statement_executor.execute(
+                conn,
+                statements,
+                atomic=True,
+                normalize=self._normalize_admin_statement,
+                statement_type=self._admin_statement_type,
+                output_reader=self._fetch_dbms_output,
+                success_message=self._admin_success_message,
+                stop_on_error=True,
+                query_indexes=query_indexes,
+                query_reader=read_query,
             )
 
     def import_tabular_table(

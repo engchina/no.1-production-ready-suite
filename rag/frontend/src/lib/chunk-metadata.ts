@@ -1,5 +1,6 @@
+import { evidenceCountLabel } from "@production-ready/ui";
+
 import type { RetrievedChunk } from "./api";
-import { t } from "./i18n";
 
 export type CitationMetadataChipId =
   | "citation_label"
@@ -120,27 +121,15 @@ export function citationAnswerUse(chunk: Pick<RetrievedChunk, "metadata">): Cita
 
 /**
  * AI に渡した件数と内訳（#1208・#2040）。「AI に渡した 45 件（12 のまとまり）／ 回答で引用 13 件 ／ うち該当確認済み
- * 10 件 ／ 参考 3 件」。まとまり（同じ節ごとにまとめて渡した単位。#2097）は数が分かるときだけ、回答で引用したかが
- * 分からない（検索だけ）なら件数だけ、0 件の項目は出さない。
+ * 10 件 ／ 参考 3 件」。書き方は 3 製品で共通の `evidenceCountLabel`（#2328）。まとまり（同じ節ごとにまとめて渡した
+ * 単位。#2097）は数が分かるときだけ、回答で引用したかが分からない（検索だけ）なら件数だけ、0 件の項目は出さない。
  */
 export function citationCountLabel(
   citations: readonly Pick<RetrievedChunk, "metadata">[],
   groupCount: number | null = null,
 ): string {
-  const parts = [
-    groupCount
-      ? t("citations.countWithGroups", { count: citations.length, groups: groupCount })
-      : t("citations.count", { count: citations.length }),
-  ];
-  const flags = citations.map(citationModelUsed);
-  if (flags.some((flag) => flag !== null)) {
-    const used = flags.filter((flag) => flag === true).length;
-    const uses = citations.map(citationAnswerUse);
-    const confirmed = uses.filter((use) => use === "confirmed").length;
-    const reference = uses.filter((use) => use === "reference").length;
-    if (used) parts.push(t("citations.used", { count: used }));
-    if (confirmed) parts.push(t("citations.confirmed", { count: confirmed }));
-    if (reference) parts.push(t("citations.reference", { count: reference }));
-  }
-  return parts.join(t("citations.separator"));
+  return evidenceCountLabel(
+    citations.map((chunk) => ({ usedInAnswer: citationModelUsed(chunk), answerUse: citationAnswerUse(chunk) })),
+    groupCount,
+  );
 }

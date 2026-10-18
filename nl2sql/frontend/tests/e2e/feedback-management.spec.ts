@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { expectListColumnFitsViewport } from "./_helpers/list-detail-fit";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
 import { closeListToolbarFilters, listToolbarUsesSheet, openListToolbarFilters } from "./_helpers/db-object-toolbar";
 import {
@@ -349,7 +350,7 @@ test("フィードバック履歴の行は質問（2 行まで）と補足 1 行
   await page.screenshot({ path: testInfo.outputPath("feedback-history-rows.png"), fullPage: true });
 });
 
-test("フィードバック履歴は 26 件以上で 25 件ずつのページを一覧の直下で移り、ページを作業状態に残す (#1764)", { tag: "@responsive" }, async ({ page }) => {
+test("フィードバック履歴は 26 件以上で 25 件ずつのページを一覧の直下で移り、ページを作業状態に残す (#1764)", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const state = await mockFeedbackApi(page, { items: () => manyFeedbackItems(27) });
   await page.goto("/feedback-management?tab=appFeedback");
   const pane = historyList(page);
@@ -364,6 +365,8 @@ test("フィードバック履歴は 26 件以上で 25 件ずつのページを
   const pager = await box(pagination);
   expect(pager.y).toBeGreaterThanOrEqual(surface.y + surface.height - 1);
   expect(pager.y - (surface.y + surface.height)).toBeLessThanOrEqual(24);
+  // 2 ペインでは一覧の列が画面の高さに収まり、ページ送りは本文をスクロールせずに見える（#2330）。
+  if (testInfo.project.name === "desktop") await expectListColumnFitsViewport(page, "feedback-management");
 
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(rows).toHaveCount(2);

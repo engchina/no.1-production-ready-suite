@@ -175,6 +175,11 @@ export function ChatQueryResult({
  * 会話を開き直したときの前回の実行の要約（「前回の実行（…）: 12 行・5 列。…」。行は保存していない）。
  * チャットと DB 管理チャット（#2319）で同じ文にする。
  */
+/** 前回の実行の日時の表示（チャットの前回の実行の要約と同じ書き方）。 */
+export function formatLastExecutedAt(executedAt: string): string {
+  return executedAtFormatter.format(new Date(executedAt));
+}
+
 export function ChatLastExecutionText({
   summary,
   testId,

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BookOpen,
   Check,
   RefreshCw,
   RotateCcw,
@@ -24,7 +23,6 @@ import {
   ChatAnswer,
   ChatPendingTurn,
   ChatTurn,
-  Disclosure,
   EmptyState,
   PageBody,
   PageHeader,
@@ -61,10 +59,17 @@ import {
   type ThreadSummary,
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
-import { answerReview, cancelledClarificationKinds, pendingClarificationKinds } from "@/lib/answer-review";
+import {
+  ANSWER_VALIDATION_KIND,
+  answerReview,
+  cancelledClarificationKinds,
+  pendingClarificationKinds,
+} from "@/lib/answer-review";
+import { runAnswerEvidence } from "@/lib/answer-evidence";
+import { noticeHeading, structureAnswer } from "@/lib/answer-structure";
 import { AGENT_CHAT_PROGRESS_STEPS, chatSubmitProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
-import { RagFigureButton } from "@/components/evidence/RagFigure";
+import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
 import { AnswerReviewPanel } from "@/components/chat/AnswerReview";
 import { ClarificationCancelActions, ClarificationCancelNote } from "@/components/chat/ClarificationCancel";
 import { ConfirmationRecordBubble, PendingConfirmationCard } from "@/components/chat/RunConfirmation";
@@ -75,7 +80,6 @@ import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { useCapabilities } from "@/lib/permissions";
-import { answerSources, type RagEvidenceView } from "@/lib/rag-evidence";
 import { withToolStepDetails } from "@/lib/run-history";
 import { runToolResultTables } from "@/lib/run-tables";
 import { runStatusView } from "@/lib/status-labels";
@@ -855,11 +859,24 @@ function RunChatTurn({
   onProgressTerminal: () => void;
 }) {
   const answer = answerText(run.artifacts);
-  const citations = runCitations(run.artifacts);
+  // 回答の根拠（AI に渡した根拠・回答で引用した根拠。RAG のチャットと同じ塊。#2328）。
+  const evidence = useMemo(() => runAnswerEvidence(run.artifacts), [run.artifacts]);
   const toolTables = runToolResultTables(run);
   const pendingApprovals = run.approvals.filter((approval) => approval.status === "pending");
   // 回答の確かめ（確かめた条件・確認待ちの質問・業務ガイド・資料で確かめた結果。#1286）。作成中は出さない。
   const review = ACTIVE_STATUSES.has(run.status) ? null : answerReview(run.artifacts);
+  // 回答の本文の節（要約 →「資料により確認できた事項」と根拠の行 →「資料から確認できなかった事項」。RAG のチャットと
+  // 同じ形。#2328）。段落に根拠を結び付けられないときは今までの Markdown の描き方にする。
+  const answerBlocks = useMemo(
+    () =>
+      answer && evidence
+        ? structureAnswer(answer, evidence, noticeHeading(latestContent(run.artifacts, ANSWER_VALIDATION_KIND)), {
+            confirmed: t("chat.answer.confirmed"),
+            unconfirmed: t("chat.answer.unconfirmed"),
+          })
+        : null,
+    [answer, evidence, run.artifacts]
+  );
   // 確認の取り消し（#1441・#1445）。取り消した往復には補足の文を、利用者の答えを待っている最後の回答には操作を出す。
   const cancelledKinds = cancelledClarificationKinds(run);
   // 回答前の確認（#1839）。答えていない確認は最後の往復だけにカードで出し、答えた内容は利用者の側に残す。
@@ -951,7 +968,11 @@ function RunChatTurn({
           // 回答の Markdown の表と、表の形のツールの結果（NL2SQL の SQL の実行の結果など）は、NL2SQL のチャットと
           // 同じ共通の結果の表で出す（#1158）。表でない部分は見出し・太字・箇条書きなどを描く（#1808）。
           // チャットの画面にはページの見出し（h1）の下の見出しが無いため、回答の見出しは h2 から始める。
-          <AnswerBody text={answer} headingLevel={2} testId={`chat-answer-${run.id}`} />
+          answerBlocks && evidence ? (
+            <StructuredAnswer runId={run.id} blocks={answerBlocks} evidence={evidence} testId={`chat-answer-${run.id}`} />
+          ) : (
+            <AnswerBody text={answer} headingLevel={2} testId={`chat-answer-${run.id}`} />
+          )
         ) : null}
         {toolTables.map((table) => (
           <ToolResultTable
@@ -1076,52 +1097,14 @@ function RunChatTurn({
           />
         ) : null}
 
-        {citations.length > 0 ? (
-          <Disclosure
-            variant="plain"
-            size="sm"
-            summary={
-              <span className="inline-flex items-center gap-1">
-                <BookOpen size={14} aria-hidden="true" />
-                {t("chat.sources", { count: citations.length })}
-              </span>
-            }
-          >
-            <ol className="space-y-2">
-              {citations.map((citation, index) => (
-                <li key={citation.key} className="rounded-sm bg-surface-sunken p-2 text-xs">
-                  <p className="font-medium text-fg">
-                    {index + 1}. {citation.title}
-                  </p>
-                  {citation.location ? (
-                    <p className="mt-0.5 break-words text-fg-muted" data-testid="chat-source-location">
-                      {citation.location}
-                    </p>
-                  ) : null}
-                  {citation.text ? (
-                    <p className="mt-1 line-clamp-3 break-words text-fg-muted">{citation.text}</p>
-                  ) : null}
-                  {citation.figure ? (
-                    // 図の根拠は元の図を開いて確かめられる（#1311）。AI が読んだ説明ならその旨を添える。
-                    <div className="mt-2 space-y-1">
-                      {citation.aiFigureDescription ? (
-                        <p className="text-fg-muted" data-testid="chat-source-figure-description">
-                          {t("evidence.figureDescription")}
-                        </p>
-                      ) : null}
-                      <RagFigureButton
-                        runId={run.id}
-                        figure={citation.figure}
-                        title={citation.title}
-                        location={citation.location}
-                        testId={`chat-source-figure-${index}`}
-                      />
-                    </div>
-                  ) : null}
-                </li>
-              ))}
-            </ol>
-          </Disclosure>
+        {/* 回答の根拠は回答の本文の下・回答の評価の前（RAG のチャットと同じ位置と部品。#2328）。 */}
+        {evidence ? (
+          <AnswerEvidenceBlock
+            runId={run.id}
+            evidence={evidence}
+            idPrefix={`chat-${run.id}`}
+            className="border-t border-border px-2 pt-1"
+          />
         ) : null}
 
         {canRate && run.status === "completed" && answer ? (
@@ -1194,9 +1177,12 @@ function answerText(artifacts: Artifact[]): string | null {
   return null;
 }
 
-/** RAG の結果（`rag_evidence` の成果物）のうち、回答の出典にする根拠（#1219）。 */
-function runCitations(artifacts: Artifact[]): RagEvidenceView[] {
-  return answerSources(artifacts.filter((artifact) => artifact.kind === "rag_evidence").map((artifact) => artifact.content));
+/** 最も新しい成果物の内容（無ければ null）。 */
+function latestContent(artifacts: Artifact[], kind: string): Record<string, unknown> | null {
+  for (const artifact of [...artifacts].reverse()) {
+    if (artifact.kind === kind) return artifact.content;
+  }
+  return null;
 }
 
 /** 会話が消えた・読めなくなった失敗か（一時的な失敗ではなく、新しい会話に戻すもの）。 */

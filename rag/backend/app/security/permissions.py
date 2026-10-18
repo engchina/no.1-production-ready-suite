@@ -463,7 +463,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/history/runs/{run_id}"): _any(MENU_HISTORY),
     ("GET", "/search/answers"): _ANSWER_USE,
     ("GET", "/search/answers/{trace_id}"): _ANSWER_USE,
-    ("DELETE", "/search/answers/{trace_id}"): _ANSWER_USE,
     ("POST", "/search/answers/{trace_id}/evaluation"): _ANSWER_USE,
     # ---- 検索・回答プロファイル: 品質評価 ----
     ("POST", "/evaluation/run"): _any(MENU_EVALUATION),

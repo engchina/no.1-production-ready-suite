@@ -108,7 +108,7 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 - 認可: 全 API は router の dependency で確認し、`app/security/permissions.py` の manifest に登録されていない API は拒否します（公開は `/health`・`/ready`・`/ready/database`・`/auth/login` だけ）。
 - 権限: ロールごとにメニュー権限（`menu.*`）と、`rag.search_answer_profiles.manage`（全検索・回答プロファイル・検索・回答プロファイルの作成とアーカイブ）、`rag.knowledge_bases.manage`（全ナレッジベース・KB の作成とアーカイブ）、`rag.feedback.manage`（承認 FAQ への反映と、他の利用者の保存済みの回答の表示・評価・削除。#304）、`rag.system_tables.manage`（システムテーブルの初期化・再作成）を付けます。「RAG セキュリティ > 権限管理」で編集し、`RAG_ROLE_PERMISSIONS` / `RAG_ROLE_SEARCH_ANSWER_PROFILES` / `RAG_ROLE_KNOWLEDGE_BASES` に保存します。
 - 対象範囲: 検索・回答プロファイル・ナレッジベースを割り当てたロールの利用者は、その検索・回答プロファイル・ナレッジベース（と、そこに属する文書・回答履歴・フィードバック・会話）だけを使えます。範囲外の検索・回答プロファイルは 404、検索・回答プロファイルの KB を 1 つも許可されていない検索・チャットは 403（`error_code: RAG_SCOPE_FORBIDDEN`。画面はその場で理由を表示する。#224）です。検索・回答プロファイルで検索させるには、その検索・回答プロファイルのナレッジベースも許可してください。
-- 保存済みの回答: 回答履歴（`GET /api/search/answers`。総件数つきのページング）・詳細・評価・削除は、回答を生成した利用者（持ち主）の回答だけが対象です。SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者は全員の回答を扱えます（検索・回答プロファイルの範囲の制限は別にかかる）。参照するナレッジベースが 0 件の検索・回答プロファイルでの検索・チャットは 409 です（#304）。
+- 保存済みの回答: 回答履歴（`GET /api/search/answers`。総件数つきのページング）・詳細・評価は、回答を生成した利用者（持ち主）の回答だけが対象です。SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者は全員の回答を扱えます（検索・回答プロファイルの範囲の制限は別にかかる）。参照するナレッジベースが 0 件の検索・回答プロファイルでの検索・チャットは 409 です（#304）。
 
 ## MCP（Agent からの呼び出し）
 

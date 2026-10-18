@@ -5659,7 +5659,6 @@ def test_db_admin_chat_requires_its_own_menu_permission(
 
     import importlib
 
-    from app.features.nl2sql.models import DbAdminChatExecuteRequest
     from app.features.nl2sql.service import Nl2SqlService
     from app.features.nl2sql.store import MemoryNl2SqlStore
     from app.security.request_actor import actor_scope
@@ -5718,7 +5717,11 @@ def test_db_admin_chat_requires_its_own_menu_permission(
                 headers = {"X-CSRF-Token": csrf}
                 for route, body, allowed_status in (
                     # 無い会話のターンの実行は、権限があれば 404（存在を漏らさない）。
-                    ("execute", {"conversation_id": "missing", "turn_id": "missing"}, 404),
+                    (
+                        "execute",
+                        {"conversation_id": "missing", "turn_id": "missing", "statement_index": 1},
+                        404,
+                    ),
                     (
                         "analyze-error",
                         {"sql": "SELECT 1 FROM DUAL", "result_text": "ORA-00942"},
@@ -5739,12 +5742,11 @@ def test_db_admin_chat_requires_its_own_menu_permission(
                 assert listed.status_code == (200 if allowed else 403), listed.text
                 # API の判定を通さないサービスの直呼びも同じ判定になる。
                 with actor_scope(user.user_uuid):
-                    request = DbAdminChatExecuteRequest(sql="SELECT 1 FROM DUAL")
                     if allowed:
-                        nl2sql.execute_db_admin_chat_sql(request)
+                        nl2sql.list_db_admin_chats(actor=user.user_uuid, all_users=False)
                     else:
                         with pytest.raises(SecurityApiError) as denied:
-                            nl2sql.execute_db_admin_chat_sql(request)
+                            nl2sql.list_db_admin_chats(actor=user.user_uuid, all_users=False)
                         assert denied.value.status_code == 403
                 if "menu.security_permissions" in permissions:
                     # 自分の持たない menu.db_admin_chat は、自分のロールにも付与できない。
