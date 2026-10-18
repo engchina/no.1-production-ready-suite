@@ -436,6 +436,111 @@ test("会話は履歴から開き直せ、SQL・分類・前回の実行の要�
   await expectNoHorizontalOverflow(page);
 });
 
+/** 会話の欄の末尾からの距離（px）。 */
+function distanceFromBottom(page: Page) {
+  return page
+    .getByTestId("db-admin-chat-conversation")
+    .evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+}
+
+// 往復の多い会話でも、チャットと同じく本文は画面の高さに収め、会話の欄の中だけをスクロールする（#2332）。
+// 入力欄は会話のカードの下端、履歴のパネルは左に固定。375px はチャットと同じく会話のカードの高さを決めて
+// その中をスクロールし、ページは縦に流れる。長い SQL と結果の表は会話の欄の中に収める。
+for (const width of [1280, 1920, 375]) {
+  test(`往復の多い会話は会話の欄の中でスクロールし、入力欄を画面内に保つ (#2332, ${width}px)`, async ({ page }, testInfo) => {
+    const longSql = `SELECT ${Array.from({ length: 40 }, (_, index) => `COLUMN_${index + 1}`).join(", ")} FROM APP.SAMPLE_ITEMS`;
+    const turns = Array.from({ length: 12 }, (_, index) =>
+      storedTurn(
+        `turn-many-${index + 1}`,
+        `質問 ${index + 1}`,
+        generated(plan(index % 3 === 0 ? longSql : `SELECT ${index + 1} FROM DUAL`)),
+      ),
+    );
+    const wideColumns = Array.from({ length: 16 }, (_, index) => `COLUMN_${index + 1}`);
+    await setup(page, {
+      responses: [generated(plan(longSql))],
+      conversations: [savedConversation("conversation-many", "会話 M", turns)],
+      execute: () => ({
+        ...selectResult,
+        select_result: {
+          ...selectResult.select_result,
+          columns: wideColumns,
+          rows: [Object.fromEntries(wideColumns.map((column) => [column, `${column}_VALUE_LONG_TEXT`]))],
+        },
+      }),
+    });
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/db-admin-chat");
+    await openFromHistory(page, "会話 M");
+    const log = page.getByTestId("db-admin-chat-conversation");
+    await expect(page.getByTestId("db-admin-chat-turn")).toHaveCount(12);
+    // 会話を開き直したら会話の欄の末尾を出す（チャットと同じ）。
+    await expect.poll(() => distanceFromBottom(page)).toBeLessThanOrEqual(2);
+    // 会話の欄の中にスクロールがある。
+    expect(await log.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+
+    const composer = page.locator("#db-admin-chat-composer");
+    if (width >= 1024) {
+      // ページも本文（#pr-main）も縦にスクロールしない。
+      expect(
+        await page.evaluate(() => document.scrollingElement!.scrollHeight - window.innerHeight),
+      ).toBeLessThanOrEqual(0);
+      expect(await page.locator("#pr-main").evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
+      // 入力欄は会話のカードの下端にあり、スクロールせずに画面内に見える。
+      await expect(composer).toBeInViewport();
+      const panel = (await page.getByTestId("db-admin-chat-panel").boundingBox())!;
+      const composerRegion = (await page.getByTestId("db-admin-chat-composer-region").boundingBox())!;
+      expect(Math.abs(panel.y + panel.height - (composerRegion.y + composerRegion.height))).toBeLessThanOrEqual(2);
+      expect(panel.y + panel.height).toBeLessThanOrEqual(900);
+      // 履歴のパネルは左に開いたまま、会話の欄を上へスクロールしても動かない。
+      const history = page.getByTestId("db-admin-chat-history");
+      await expect(history).toBeVisible();
+      const historyBefore = (await history.boundingBox())!;
+      await log.evaluate((el) => el.scrollTo({ top: 0, behavior: "auto" }));
+      await expect.poll(() => log.evaluate((el) => el.scrollTop)).toBe(0);
+      const historyAfter = (await history.boundingBox())!;
+      expect(historyAfter.y).toBe(historyBefore.y);
+      await expect(composer).toBeInViewport();
+      await page.screenshot({ path: testInfo.outputPath(`db-admin-chat-many-${width}.png`) });
+      // 新しい往復を送ると、上を読んでいても末尾へ移る（送った本人の操作なので末尾へ追う）。
+      await ask(page, "続きの質問");
+      await expect(page.getByTestId("db-admin-chat-turn")).toHaveCount(13);
+      await expect.poll(() => distanceFromBottom(page)).toBeLessThanOrEqual(2);
+      await expect(composer).toBeInViewport();
+    } else {
+      // 375px はチャットと同じ形: 履歴はシートで閉じ、会話のカードは画面の高さ以内で、その中をスクロールする。
+      await expect(page.getByRole("dialog", { name: "会話の履歴" })).toHaveCount(0);
+      const panel = (await page.getByTestId("db-admin-chat-panel").boundingBox())!;
+      expect(panel.height).toBeLessThanOrEqual(900);
+      await composer.focus();
+      await expect(composer).toBeInViewport();
+      await ask(page, "続きの質問");
+      await expect(page.getByTestId("db-admin-chat-turn")).toHaveCount(13);
+      await expect.poll(() => distanceFromBottom(page)).toBeLessThanOrEqual(2);
+    }
+
+    // 長い SQL と横に広い結果の表は会話の欄の中で横にスクロールし、ページを横に広げない。
+    const last = page.getByTestId("db-admin-chat-turn").last();
+    await last.getByTestId("db-admin-chat-execute").click();
+    await expect(last.getByTestId("db-admin-chat-result")).toBeVisible();
+    const logBox = (await log.boundingBox())!;
+    for (const box of [
+      (await last.getByTestId("db-admin-chat-sql").boundingBox())!,
+      (await last.getByTestId("db-admin-chat-result").boundingBox())!,
+    ]) {
+      expect(box.x).toBeGreaterThanOrEqual(logBox.x - 1);
+      expect(box.x + box.width).toBeLessThanOrEqual(logBox.x + logBox.width + 1);
+    }
+    await expectNoHorizontalOverflow(page);
+    if (width >= 1024) {
+      expect(
+        await page.evaluate(() => document.scrollingElement!.scrollHeight - window.innerHeight),
+      ).toBeLessThanOrEqual(0);
+      await expect(composer).toBeInViewport();
+    }
+  });
+}
+
 test("会話の名前の変更と削除はチャットと同じ操作でできる", { tag: "@responsive" }, async ({ page }) => {
   const mock = await setup(page, {
     conversations: [
