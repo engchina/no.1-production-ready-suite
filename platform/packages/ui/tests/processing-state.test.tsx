@@ -1,3 +1,6 @@
+// @vitest-environment happy-dom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -67,6 +70,44 @@ describe("ProcessingIndicator", () => {
     expect(slow).toContain('data-testid="p-slow"');
     expect(slow.match(/role="status"/g)).toHaveLength(2);
     expect(slow).toContain(">通常より時間がかかっています。<");
+  });
+
+  it("遅延の案内は処理の名前の直下に出し、経過時間の列には置かない（#2426）", () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const startedAt = new Date(Date.now() - 11_000).toISOString();
+    act(() => root.render(<ProcessingIndicator active label="取得しています" testId="p" startedAt={startedAt} />));
+    const slow = host.querySelector('[data-testid="p-slow"]')!;
+    const timer = host.querySelector('[data-testid="p-timer"]')!;
+    expect(slow.textContent).toBe("通常より時間がかかっています。");
+    // 処理の名前と同じ列（名前の次の行）。
+    expect(slow.previousElementSibling?.textContent).toBe("取得しています");
+    expect(timer.parentElement!.contains(slow)).toBe(false);
+    // 一度出たら、同じ処理の間は時刻の取り直しで経過時間が閾値を下回っても消さない。
+    act(() =>
+      root.render(
+        <ProcessingIndicator active label="取得しています" testId="p" startedAt={new Date().toISOString()} />
+      )
+    );
+    expect(host.querySelector('[data-testid="p-slow"]')?.textContent).toBe("通常より時間がかかっています。");
+    // 別の処理（operationKey が変わる）・処理の終わりでは忘れる。
+    act(() =>
+      root.render(
+        <ProcessingIndicator
+          active
+          label="取得しています"
+          testId="p"
+          operationKey="next"
+          startedAt={new Date().toISOString()}
+        />
+      )
+    );
+    expect(host.querySelector('[data-testid="p-slow"]')).toBeNull();
+    expect(host.querySelector('[data-processing-slow="false"]')).not.toBeNull();
+    act(() => root.unmount());
+    host.remove();
   });
 
   it("showSlowMessage=false と完了後は遅延の案内の行を置かない", () => {

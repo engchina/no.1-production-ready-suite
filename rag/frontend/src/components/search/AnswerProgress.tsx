@@ -5,7 +5,8 @@ import { t } from "@/lib/i18n";
 
 /**
  * 回答生成（RAG 検索・チャット）の処理中の表示（#375）。共有の `ProcessingIndicator`（NL2SQL と同じ）で
- * 「回答を生成しています（今の工程）」と経過時間を出し、10 秒を超えたら時間がかかる理由を添える。
+ * 「回答を生成しています（今の工程）」と経過時間を出し、10 秒を超えたら共通の遅延の案内（「通常より時間が
+ * かかっています。」。3 製品で同じ文言。#2426）を処理の名前の直下に出す。
  * 完了後は `finalLabel` と処理時間を出す。
  */
 export function AnswerProgress({
@@ -46,7 +47,6 @@ export function AnswerProgress({
       labels={{
         elapsed: t("answer.progress.elapsed"),
         duration: t("answer.progress.duration"),
-        slow: t("answer.progress.slow"),
       }}
     />
   );

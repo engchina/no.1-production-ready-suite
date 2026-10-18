@@ -4042,8 +4042,6 @@ export const ja = {
   "answer.progress.label": "回答を生成しています（{stage}）",
   "answer.progress.searchLabel": "検索しています（{stage}）",
   "answer.progress.preparing": "検索の準備",
-  "answer.progress.slow":
-    "質問の理解・文書検索・回答の生成などで AI を複数回呼ぶため、数分かかることがあります。",
   "answer.progress.elapsed": "経過時間",
   "answer.progress.duration": "処理時間",
   "search.noResults": "一致する根拠が見つかりませんでした。",

@@ -39,6 +39,12 @@ export interface DisclosureProps
   description?: ReactNode;
   /** 見出しと Chevron の間に置く件数・状態バッジなど。操作できる要素（ボタン・リンク）は置かない。 */
   meta?: ReactNode;
+  /**
+   * 見出しの行の下に、見出しの行の全幅で出す内容（押せる見出しの中。開閉にかかわらず見える。#2426）。処理の経過の
+   * 実行中の遅延・再接続の案内など、見出しに属する短い補足に使う。補足（`meta`）の列に押し込まず全幅で折り返す。
+   * 操作できる要素は置かない。
+   */
+  summaryFooter?: ReactNode;
   /** 受控の開閉状態。渡すときは onOpenChange も渡す。 */
   open?: boolean;
   /** 非受控の初期状態。 */
@@ -86,6 +92,7 @@ export function Disclosure({
   icon: Icon,
   description,
   meta,
+  summaryFooter,
   open: openProp,
   defaultOpen = false,
   onOpenChange,
@@ -162,6 +169,8 @@ export function Disclosure({
                 open && "rounded-b-none",
               ]
             : "-mx-1 flex w-fit max-w-full min-h-[var(--button-height-sm)] gap-1.5 rounded-sm px-1 py-[max(calc((var(--button-height-sm)-1lh)/2),0px)] font-medium",
+          // 見出しの下の全幅の行（summaryFooter）は折り返した 2 行目に置く（行の間は空けない）。
+          summaryFooter != null && "flex-wrap gap-y-0",
           summaryClassName,
           summaryProps?.className
         )}
@@ -171,8 +180,9 @@ export function Disclosure({
             <Icon size={iconSize} aria-hidden />
           </span>
         ) : null}
-        {/* 補足（meta）があるときは見出しが残りの幅を取り、補足を右端に置く（#2375）。 */}
-        <span className={cn("min-w-0 break-words", (card || meta) && "flex-1")}>
+        {/* 補足（meta）・全幅の 2 行目があるときは見出しが残りの幅を取り（flex-1 は basis 0。折り返しで補足を 2 行目へ
+            押し出さない）、補足を右端に置く（#2375 / #2426）。 */}
+        <span className={cn("min-w-0 break-words", (card || meta || summaryFooter != null) && "flex-1")}>
           {summary}
           {card && description ? (
             <span className="mt-0.5 block text-xs font-normal leading-relaxed text-fg-muted">
@@ -185,6 +195,7 @@ export function Disclosure({
         <span className={cn("pr-icon-line", !toned && "text-fg-muted")}>
           <DisclosureChevron expanded={open} size={iconSize} />
         </span>
+        {summaryFooter != null ? <span className="min-w-0 basis-full">{summaryFooter}</span> : null}
       </summary>
       <div
         className={cn(

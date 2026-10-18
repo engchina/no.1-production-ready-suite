@@ -170,7 +170,7 @@ test("状態の確認中は経過時間付きの読み込み表示を出す", as
   await expect(page.getByRole("heading", { name: "データベースに接続できません" })).toBeVisible();
 });
 
-test("確認が 10 秒を超えて遅延の案内が出ても、読み込みのカードとスピナーは動かない（#902）", { tag: "@responsive" }, async ({ page }) => {
+test("確認が 10 秒を超えて遅延の案内が出ても、読み込みのカードとスピナーは動かない（#902）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await page.clock.install();
   await routeAuth(page);
   await page.route("**/api/ready/database", () => new Promise<void>(() => undefined));
@@ -210,6 +210,16 @@ test("確認が 10 秒を超えて遅延の案内が出ても、読み込みの�
   expect(Math.abs(after.y - before.y)).toBeLessThan(0.5);
   expect(Math.abs(after.top - before.top)).toBeLessThan(0.5);
   expect(Math.abs(after.height - before.height)).toBeLessThan(0.5);
+  // 遅延の案内は処理の名前の直下（右の経過時間の列ではない。#2426）。
+  const slow = loading.getByTestId("database-gate-loading-processing-slow");
+  await expect(slow).toHaveText("通常より時間がかかっています。");
+  const label = slow.locator("xpath=preceding-sibling::span[1]");
+  await expect(label).toContainText("データベースの状態を確認しています");
+  const labelBox = await label.boundingBox();
+  const slowBox = await slow.boundingBox();
+  expect(labelBox && slowBox && slowBox.y >= labelBox.y + labelBox.height - 1).toBeTruthy();
+  expect(labelBox && slowBox && Math.abs(slowBox.x - labelBox.x) <= 1).toBeTruthy();
+  await loading.screenshot({ path: testInfo.outputPath("db-gate-slow.png") });
 });
 
 for (const theme of ["light", "dark"] as const) {
