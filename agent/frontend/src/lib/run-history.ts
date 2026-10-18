@@ -1,6 +1,10 @@
 import {
   chatProgressStepsFromEvents,
   chatProgressTimelineStep,
+  runStepDetailsJson,
+  type ChatProgressStep,
+  type RunStepDetailCode,
+  type RunStepDetails,
   type RunExecutorFilter as CommonRunExecutorFilter,
   type RunDetailLabelsInput,
   type RunHistoryLabelsInput,
@@ -12,6 +16,7 @@ import {
 
 import type { RunExecutorFilter, RunListKind, RunListKindQuery, RunListStatus, RunState, RunStep } from "@/lib/api";
 import { AGENT_CHAT_PROGRESS_STEPS } from "@/lib/chat-progress";
+import { dataScopeNotes } from "@/lib/data-scope";
 import { t } from "@/lib/i18n";
 import { runStatusView } from "@/lib/status-labels";
 
@@ -199,28 +204,85 @@ function toolStepLabel(step: RunStep, status: RunTimelineStepStatus): string {
  * `AGENT_CHAT_PROGRESS_STEPS`）と同じにし、ツールの段には Run の step（引数・結果・エラー）を中身として結び付ける
  * （同じツールの n 回目の段 ↔ n 回目の step）。段の記録の無い古い Run は step だけで並べる。
  */
+/**
+ * 処理の経過のツールの段（`tool:<name>` / `tool:<name>#n`）と Run の step（引数・結果）を結ぶ（同じツールの n 回目の段
+ * ↔ n 回目の step）。実行の詳細とチャットの処理の経過で同じ対応にする（#2294）。
+ */
+export function pairToolProgressSteps(
+  progress: readonly Pick<ChatProgressStep, "id">[],
+  steps: readonly RunStep[]
+): Map<string, RunStep> {
+  const toolSteps = steps.filter((step) => step.tool_call);
+  const used = new Set<string>();
+  const pairs = new Map<string, RunStep>();
+  for (const item of progress) {
+    if (!item.id.startsWith("tool:")) continue;
+    const tool = item.id.slice("tool:".length).replace(/#\d+$/, "");
+    const match = toolSteps.find((step) => step.tool_call?.name === tool && !used.has(step.id));
+    if (!match) continue;
+    used.add(match.id);
+    pairs.set(item.id, match);
+  }
+  return pairs;
+}
+
+/**
+ * ツールの段の詳細（データの範囲の記録・エラー・引数と結果の JSON。#2294）。チャットの処理の経過で段を開いて見る。
+ * 長い JSON は先頭だけにして省略の印を付ける。中身が無ければ undefined（段に開閉のボタンを付けない）。
+ */
+export function toolStepDetails(step: RunStep): RunStepDetails | undefined {
+  const lines = dataScopeNotes(step.tool_call?.data_scope);
+  const error = step.tool_result?.error;
+  const args = step.tool_call?.arguments;
+  const output = step.tool_result?.output;
+  const code: RunStepDetailCode[] = [];
+  let truncated = false;
+  if (args && Object.keys(args).length > 0) {
+    const json = runStepDetailsJson(args);
+    truncated ||= json.truncated;
+    code.push({ label: t("chat.progress.details.arguments"), language: "json", text: json.text });
+  }
+  if (output != null) {
+    const json = runStepDetailsJson(output);
+    truncated ||= json.truncated;
+    code.push({ label: t("chat.progress.details.result"), language: "json", text: json.text });
+  }
+  if (!lines.length && !error && !code.length) return undefined;
+  const details: RunStepDetails = {};
+  if (error) details.fields = [{ label: t("chat.progress.details.error"), value: error }];
+  if (lines.length) details.lines = lines;
+  if (code.length) details.code = code;
+  if (truncated) details.truncated = true;
+  return details;
+}
+
+/** チャットの処理の経過の段に、ツールの段の詳細を足す（Run の step と結べた段だけ）。 */
+export function withToolStepDetails(progress: ChatProgressStep[], steps: readonly RunStep[]): ChatProgressStep[] {
+  const pairs = pairToolProgressSteps(progress, steps);
+  if (pairs.size === 0) return progress;
+  return progress.map((item) => {
+    const runStep = pairs.get(item.id);
+    const details = runStep ? toolStepDetails(runStep) : undefined;
+    return details ? { ...item, details } : item;
+  });
+}
+
 export function runTimelineSteps(
   run: RunState,
   detailsOf: (step: RunStep) => RunTimelineStep["children"]
 ): RunTimelineStep[] {
-  const toolSteps = run.steps.filter((step) => step.tool_call);
-  const used = new Set<string>();
-  const stepFor = (tool: string): RunStep | undefined => {
-    const match = toolSteps.find((step) => step.tool_call?.name === tool && !used.has(step.id));
-    if (match) used.add(match.id);
-    return match;
-  };
   const progress = run.progress_events?.length
     ? chatProgressStepsFromEvents(run.progress_events, AGENT_CHAT_PROGRESS_STEPS, run.id)
     : [];
+  const pairs = pairToolProgressSteps(progress, run.steps);
+  const used = new Set([...pairs.values()].map((step) => step.id));
   const steps: RunTimelineStep[] = progress.map((item) => {
     const waiting =
       item.status === "running" &&
       (item.id.startsWith("approval") || item.id.startsWith("confirmation")) &&
       (run.status === "waiting_approval" || run.status === "waiting_confirmation");
     const status: RunTimelineStepStatus = waiting ? "waiting" : item.status;
-    const tool = item.id.startsWith("tool:") ? item.id.slice("tool:".length).replace(/#\d+$/, "") : null;
-    const runStep = tool ? stepFor(tool) : undefined;
+    const runStep = pairs.get(item.id);
     // 段の写しはチャットの処理の経過と同じ共通の変換（補足・計測値・入れ子。#2265）に、Run の step の時刻と中身を足す。
     return {
       ...chatProgressTimelineStep(item),

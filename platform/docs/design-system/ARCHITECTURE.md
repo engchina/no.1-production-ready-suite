@@ -179,7 +179,7 @@ const FILE_STATUS: Record<FileStatus, StatusBadgeProps["variant"]> = {
 ### lint で機械的に守る
 
 `docs/design-system/adherence.oxlintrc.json` を3アプリの lint 設定から参照すると、`src/**/*.{ts,tsx}` の以下がエラーになります。
-取り込み方（oxlint は `extends`、ESLint は同じ JSON を `no-restricted-syntax` に渡す）は、リポジトリ直下の `AGENTS.md`「lint」節を参照してください。
+取り込み方（oxlint は `extends`、ESLint は同じ JSON を `no-restricted-syntax` に渡す）は、`platform/AGENTS.md`「lint」節を参照してください。
 
 - 生の hex（`#1a73c1` など）→ 色トークンを使う
 - inline style の生の px → 余白・寸法トークンか Tailwind のユーティリティを使う（Tailwind のレイアウト寸法 `min-w-[640px]` 等は画面固有のレイアウトとして許容）
@@ -288,7 +288,7 @@ prop の妥当性（`Button` に存在しない prop を渡す等）は lint で
 | 意図的な見た目の変更（QA 共有用） | `README.md` §7 |
 | 検収基準 | `README.md` §9 |
 | まだ決まっていないこと | `README.md` §11 |
-| UI 変更時の禁止事項とレビュー観点 | リポジトリ直下の `AGENTS.md`「デザインシステム / UI」節 |
+| UI 変更時の禁止事項とレビュー観点 | リポジトリ直下の `docs/agents/ui.md`（要約は `AGENTS.md`「デザインシステム / UI」節） |
 
 ---
 

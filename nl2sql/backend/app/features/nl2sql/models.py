@@ -1061,6 +1061,91 @@ class DbAdminJoinWhereRequest(BaseModel):
     prompt_profile: Literal["sql_structure"] = "sql_structure"
 
 
+class DbAdminChatHistoryTurn(BaseModel):
+    """DB 管理チャットの同じ画面の前の往復（保存しない。続きの質問の文脈だけに使う。#2264）。"""
+
+    question: str = Field(default="", max_length=4000)
+    sql: str = Field(default="", max_length=20000)
+    # 実行の結果の短い要約（成功 / 失敗のメッセージ）。
+    outcome: str = Field(default="", max_length=2000)
+
+
+class DbAdminChatGenerateRequest(BaseModel):
+    """DB 管理チャットの SQL の生成（Enterprise AI Direct だけ）。"""
+
+    question: str = Field(min_length=1, max_length=4000)
+    history: list[DbAdminChatHistoryTurn] = Field(default_factory=list, max_length=20)
+
+
+class DbAdminChatStatementPlan(BaseModel):
+    """実行の前の 1 文の分類。"""
+
+    index: int
+    statement_type: str
+    sql: str
+    select_only: bool = False
+    implicit_commit: bool = False
+    blocked_reason: str = ""
+
+
+class DbAdminChatPlan(BaseModel):
+    """実行の前の分類（生成エンジンに関係なく、サーバーで分類する）。"""
+
+    sql: str = ""
+    statements: list[DbAdminChatStatementPlan] = Field(default_factory=list)
+    # 1 つの SELECT / WITH…SELECT（読み取り専用）だけなら確認語は要らない。
+    read_only: bool = False
+    requires_confirmation: bool = False
+    # 確認語（`ADMIN_EXECUTE`、1 つの対象を消す DROP / TRUNCATE は対象の名前）。不要なら空。
+    confirmation_target: str = ""
+    implicit_commit: bool = False
+    blocked: bool = False
+    blocked_reasons: list[str] = Field(default_factory=list)
+
+
+class DbAdminChatGenerateData(BaseModel):
+    """DB 管理チャットの SQL の生成の結果。SQL は実行しない（実行は利用者が押す）。"""
+
+    question: str
+    explanation: str = ""
+    plan: DbAdminChatPlan
+    context_tables: list[str] = Field(default_factory=list)
+    model: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class DbAdminChatExecuteRequest(AdminExecutionConfirmation):
+    """DB 管理チャットの SQL の実行。SELECT 以外は確認語が要る。"""
+
+    sql: str = Field(min_length=1, max_length=200000)
+    row_limit: int = 100
+
+    @field_validator("row_limit")
+    @classmethod
+    def validate_row_limit(cls, value: int) -> int:
+        _validate_sql_row_limit(value)
+        return value
+
+
+class DbAdminChatAnalyzeRequest(BaseModel):
+    """DB 管理チャットの失敗の AI 分析。"""
+
+    question: str = Field(default="", max_length=4000)
+    sql: str = Field(min_length=1, max_length=200000)
+    result_text: str = Field(default="", max_length=20000)
+
+
+class DbAdminChatAnalyzeData(BaseModel):
+    """失敗の分析と直した SQL（直した SQL も確認からやり直す）。"""
+
+    analysis: str = ""
+    corrected_plan: DbAdminChatPlan | None = None
+    source: str = "deterministic"
+    model: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
 class DbAdminJoinWhereData(BaseModel):
     """ビュー DDL の JOIN/WHERE 条件抽出 response。"""
 

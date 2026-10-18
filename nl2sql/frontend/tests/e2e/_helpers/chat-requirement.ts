@@ -29,6 +29,8 @@ export interface ChatRequirementMockOptions {
   answers?: RequirementStage[];
   /** 作成の応答を遅らせる（要件の検査の経過を確かめる）。 */
   createDelayMs?: number;
+  /** 回答の応答を遅らせる（回答の後の再検査の経過・待たずに進む操作を確かめる。#2303）。 */
+  answerDelayMs?: number;
   /** 作成を失敗させる（HTTP status と本文の error。`body` を渡すとその本文で返す。#1715）。 */
   createFailure?: { status: number; error: string; body?: Record<string, unknown> };
 }
@@ -80,10 +82,14 @@ export async function mockChatRequirement(
       }
       if (pathname.endsWith("/clarification-answers")) {
         state.answers.push(request.postDataJSON());
+        if (options.answerDelayMs) await new Promise((resolve) => setTimeout(resolve, options.answerDelayMs));
+        // 待っている間に中止した session には、backend と同じく答えを反映しない。
+        if (state.stage === "cancelled") return route.fulfill({ status: 409, json: { error: "cancelled" } }).catch(() => undefined);
         state.stage = options.answers?.[answerIndex] ?? options.answers?.at(-1) ?? "ready";
         answerIndex += 1;
         version += 1;
-        return route.fulfill({ json: { data: data() } });
+        // 画面が回答の要求を中断した（#2303）ときは応答を返せない。
+        return route.fulfill({ json: { data: data() } }).catch(() => undefined);
       }
       if (pathname.endsWith("/apply")) {
         state.applies += 1;

@@ -532,12 +532,12 @@
     },
     {
       "name": "nl2sql_query",
-      "description": "質問から SELECT SQL を生成して実行し、結果の行を返します。SQL の生成の方式は、業務プロファイルの既定の生成方式です。SQL を作る前に、足りない情報・明確でない情報を確かめます（SQL の生成前の確認）。確かめる項目があれば SQL を作らずに status=needs_clarification と requirement.question（質問・候補・理由。表・列は物理名）を 1 つだけ返すので、利用者に聞いてから requirement_session_id と answer を付けて呼び直します。wait_seconds 内に終わらなければ job_id を返すので、nl2sql_get_job で続きを取ります。",
+      "description": "質問から SELECT SQL を生成して実行し、結果の行を返します。SQL を作る前に、足りない情報・明確でない情報を確かめます（SQL の生成前の確認）。確かめる項目があれば SQL を作らずに status=needs_clarification と requirement.question（質問・候補・理由。表・列は物理名）を 1 つだけ返すので、利用者に聞いてから requirement_session_id と answer を付けて呼び直します。wait_seconds 内に終わらなければ job_id を返すので、nl2sql_get_job で続きを取ります。",
       "inputSchema": {
         "$defs": {
           "RequirementAnswerInput": {
             "additionalProperties": false,
-            "description": "SQL の生成前の確認の項目への利用者の答え（#1441）。",
+            "description": "SQL の生成前の確認の項目への利用者の答え。",
             "properties": {
               "item_id": {
                 "description": "答える確認の項目の ID（前の結果の requirement.question.item_id）",
@@ -631,7 +631,7 @@
           },
           "skip_clarification": {
             "default": false,
-            "description": "利用者が確認せずに SQL を生成するよう選んだとき true（#1839）。確認事項を聞かず、要件を反映できれば反映し、できなければ確認を使わずに作る（requirement.status は skipped）。利用者が選んでいないのに true にしない。answer と一緒には指定しない",
+            "description": "利用者が確認せずに SQL を生成するよう選んだとき true。確認事項を聞かず、要件を反映できれば反映し、できなければ確認を使わずに作る（requirement.status は skipped）。利用者が選んでいないのに true にしない。answer と一緒には指定しない",
             "title": "Skip Clarification",
             "type": "boolean"
           }
@@ -1022,7 +1022,7 @@
     },
     {
       "name": "nl2sql_recommend_profile",
-      "description": "質問に合う業務プロファイルを推薦します。推薦できないときは null で、candidates に score の高い順の候補（説明・表の名前と質問の語が重なるもの）を返します。profile_ids を渡すと、その中からだけ推薦します。同じ会話の続きの質問では前のターンと同じ業務プロファイルを使い、推薦し直すのは話題が変わったときだけです。question には、指示語・省略を前の質問で補った、それだけで意味の通る質問を渡します。",
+      "description": "質問に合う業務プロファイルを推薦します。推薦できないときは null で、candidates に score の高い順の候補（説明・表の名前と質問の語が重なるもの）を返します。profile_ids を渡すと、その中からだけ推薦します。同じ会話の続きの質問では前のターンと同じ業務プロファイルを使い、推薦し直すのは話題が変わったときだけです。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

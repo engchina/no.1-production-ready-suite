@@ -1,23 +1,37 @@
 # AGENTS.md — No.1 Production Ready Suite（monorepo 共通ルール）
 
 > monorepo 全体の共通ルールの正本（Claude Code と Codex が直接読む。`CLAUDE.md` は置かない）。作業対象のディレクトリの `AGENTS.md` もあわせて適用し、矛盾する場合は製品固有のルールを優先する（GitHub 運用と CI は本ファイルが優先）。
-> 本ファイルには規則と正本への入口だけを書く。寸法・部品の仕様・画面の振る舞い・CI の内部は、各節が指す正本にある。
+> 本ファイルには守る規則と、作業ごとに読む文書の案内だけを書く。詳細は下の表の文書にあり、**その作業を始める前に読む**（本ファイルと同じ強さで守る）。詳細を足すときは表の文書に書き、本ファイルには規則の要約と案内だけを足す。Codex は repo の直下から起動したディレクトリまでの `AGENTS.md` を合計 32 KiB で切るため、本ファイルは 20 KB 以下、製品の `AGENTS.md` との合計は 32 KB 以下に保つ（`scripts/check-agents-md-size.sh`）。`@path` の import は使わない。
+
+## 作業ごとに読む文書
+
+| 作業 | 読む文書 |
+|---|---|
+| `platform/` `rag/` `nl2sql/` `agent/` の下の作業 | その下の `AGENTS.md`（repo の直下で起動したときも自分で読む） |
+| Issue・ブランチ・PR・CI の待ちと merge・worktree・開発の ADB | [docs/agents/github-workflow.md](./docs/agents/github-workflow.md) |
+| CI の job・workflow・テストの書き方・ローカルの検証の範囲 | [docs/agents/ci.md](./docs/agents/ci.md) |
+| UI（画面・部品・lint・e2e） | [docs/agents/ui.md](./docs/agents/ui.md) と [ARCHITECTURE.md](./platform/docs/design-system/ARCHITECTURE.md) |
+| LLM への指示・`skills/`・MCP の instructions とツールの説明・Runtime の指示 | [docs/agents/prompts.md](./docs/agents/prompts.md) |
+| 配備（Terraform・Compute・Nginx・DB ユーザー・release） | [docs/agents/deploy.md](./docs/agents/deploy.md) |
+| 3 製品で同じ機能（システム設定・ナビ・API キー・アカウント・データの見え方・権限管理） | [docs/agents/shared-features.md](./docs/agents/shared-features.md) |
+| `.env` の変数・DB の object の名前 | [docs/agents/naming.md](./docs/agents/naming.md) |
+| backend の実装の標準 | [platform/docs/backend-standard.md](./platform/docs/backend-standard.md) |
 
 ## 構成
 
-| ディレクトリ | 内容 | 固有ルール |
-|---|---|---|
-| `platform/` | 3 製品の共通基盤: `packages/ui`（`@production-ready/ui`）、`packages/system-settings`（`@production-ready/system-settings`。共通のシステム設定・ユーザー / ロール管理の画面）、`packages/backend_core`（`pr_backend_core`）、`packages/system_settings_backend`（`pr_system_settings`。共通の設定 API と認証基盤）、`docs/design-system/`、`deploy/`（1 台の Compute の配備） | [platform/AGENTS.md](./platform/AGENTS.md) |
-| `rag/` | Production Ready RAG | [rag/AGENTS.md](./rag/AGENTS.md) |
-| `nl2sql/` | Production Ready NL2SQL（SQL 専用の自然言語問い合わせ） | [nl2sql/AGENTS.md](./nl2sql/AGENTS.md) |
-| `agent/` | Production Control Plane for AI Agents | [agent/AGENTS.md](./agent/AGENTS.md) |
-| `skills/` | 組み込みのスキル（Agent Skills の形式 `skills/<name>/SKILL.md`）。Agent が読み、Claude Code・Codex などの外部の Agent にも配る（`.claude-plugin/` の plugin marketplace。#1816） | [agent/docs/agent-control-plane-design.md](./agent/docs/agent-control-plane-design.md) |
-| `terraform/` | OCI Resource Manager の統合 stack（ADB 1 つ＋選んだ製品をすべて入れる 1 台の Compute） | [terraform/README.md](./terraform/README.md) |
+| ディレクトリ | 内容 |
+|---|---|
+| `platform/` | 3 製品の共通基盤: `packages/ui`（`@production-ready/ui`）、`packages/system-settings`（`@production-ready/system-settings`。共通のシステム設定・ユーザー / ロール管理の画面）、`packages/backend_core`（`pr_backend_core`）、`packages/system_settings_backend`（`pr_system_settings`。共通の設定 API と認証基盤）、`docs/design-system/`、`deploy/`（1 台の Compute の配備） |
+| `rag/` | Production Ready RAG |
+| `nl2sql/` | Production Ready NL2SQL（SQL 専用の自然言語問い合わせ） |
+| `agent/` | Production Control Plane for AI Agents |
+| `skills/` | 組み込みのスキル（Agent Skills の形式 `skills/<name>/SKILL.md`）。Agent が読み、Claude Code・Codex などの外部の Agent にも配る（`.claude-plugin/` の plugin marketplace。#1816。[設計](./agent/docs/agent-control-plane-design.md)） |
+| `terraform/` | OCI Resource Manager の統合 stack（ADB 1 つ＋選んだ製品をすべて入れる 1 台の Compute。[README](./terraform/README.md)） |
 
 - **依存の向きは `platform/` → 各製品の一方向。** 製品同士はコードで依存せず、HTTP API で連携する。Agent → RAG / NL2SQL は呼び先の `POST /api/mcp` を、Run の利用者を `sub` にした短命のサービストークン（署名鍵は `PLATFORM_SERVICE_TOKEN_SECRET`）で呼び、画面用の Cookie / CSRF の API を機械から呼ばない。呼び先は画面と同じ権限・対象範囲で判定する（[backend-standard.md](./platform/docs/backend-standard.md)「製品間の連携（MCP とサービストークン）」）。
-- **外部の MCP クライアント（Claude Code など）は 3 製品の `POST /api/mcp` を、利用者が自分で発行した API キー（`Authorization: Bearer prak_…`）で呼ぶ**（RAG / NL2SQL は調べるツール、Agent は業務 Agent へのチャットのツール。手順は [platform/docs/mcp-api-keys.md](./platform/docs/mcp-api-keys.md)。#1805・#1874）。RAG / NL2SQL は Agent を呼ばない（向きは外部のクライアント → Agent → RAG / NL2SQL）。
+- **外部の MCP クライアント（Claude Code など）は 3 製品の `POST /api/mcp` を、利用者が自分で発行した API キー（`Authorization: Bearer prak_…`）で呼ぶ**（RAG / NL2SQL は調べるツール、Agent は業務 Agent へのチャットのツール。[手順](./platform/docs/mcp-api-keys.md)。#1805・#1874）。RAG / NL2SQL は Agent を呼ばない（向きは外部のクライアント → Agent → RAG / NL2SQL）。
 - 製品は `platform/` を相対パスで参照する（`file:../../platform/packages/ui`・`path = "../../platform/packages/backend_core"`・`../../platform/docs/design-system/…`）。publish や version pin はしない。
-- 各製品の backend / frontend / uv の venv は独立している。配備は 1 台の Compute にまとめる（「配備」）。
+- 各製品の backend / frontend / uv の venv は独立している。配備は 1 台の Compute にまとめる（[docs/agents/deploy.md](./docs/agents/deploy.md)）。
 - commit message の `engchina/no.1-production-ready-<製品>#N` は、統合（#71）前の旧 repo（archive 済み）の番号。
 
 ## 言語
@@ -28,139 +42,40 @@
 
 ## 開発ワークフロー / GitHub 運用
 
-- **`main` へ直接 commit / push しない。** Issue を先に作り（label `product:rag` / `product:nl2sql` / `product:agent` / `platform`。複数ならすべて）、作業ブランチ `codex/<issue-number>-<short-topic>`（使えなければ Issue 番号と作業内容が分かる名前）で変更し、PR を出す。`platform/` と製品にまたがる変更は 1 つの PR でよい。
-- **検証と PR 本文の更新が済み、PR の最新 commit の `CI OK` が成功したら、ユーザーの確認を求めず `gh pr merge <PR> --merge`（merge commit）で merge する。** PR の作成や CI の成功の報告だけで終わらない。
-- **CI はエージェント自身が待ち、merge の可否は `scripts/pr-merge-check.sh <PR>` で判定する**（「pass したら声をかけて」と止まらない。待つ間は別の独立した作業をしてよい。実行環境の PR / CI の監視機能を使ってもよい）。スクリプトは最新 commit の CI の run を待って `CI OK` を確かめ、`ready-to-merge`（終了 0）/ `needs-update-branch`（3）/ `ci-failed`（1）を出す。merge はしない（`--update` で `gh pr update-branch` も行う、`--no-wait` は待たない）。`gh pr checks --watch --required` は使わない（CI の開始直後は `CI OK` がまだ無く、待たずに終わる）。
-- **main の取り込みは必要なときだけ（#339・#1581。ruleset は up-to-date を求めない）。** PR の最新の CI の開始後に main で変わったファイルが、PR が変えたファイルと同じか、全体に効くファイル（直下・`platform/` の `package.json`・`package-lock.json`・`uv.lock`・`pyproject.toml`、製品の下のそれらは PR が同じディレクトリを触るときだけ（#1634）、`.github/workflows/`・`.github/actions/`、`playwright` / `vite` / `vitest` の config・`tsconfig*.json`、e2e の fixture、`platform/scripts/e2e_impact.py` など。一覧は `scripts/pr-merge-check.sh` の `GLOBAL_PATTERNS`）のときだけ、main を取り込んで（`gh pr update-branch <PR>` か `git merge origin/main`）CI をやり直す。重ならない変更はそのまま merge してよく、merge の後の main の push の CI（失敗すれば `ci-failure` の Issue）で確かめる。続けて merge するときは、前の merge の後にもう一度判定する。
-- CI の失敗・merge conflict は直して再検証してから merge する。ruleset を迂回した強制 merge はしない。解消できなければ原因と未完了の操作を明示する。
-- **main が赤になったら（`ci-failure-issue.yml` が label `ci-failure` の Issue を作る）、ほかの作業より先に直す。** 直す PR はその Issue を `Closes` する。
-- **merge 後はローカルを `main` に切り替え、`git fetch --prune` のうえ `origin/main` へ fast-forward し、その作業の worktree とローカルのブランチを消してから完了を報告する**（PR の merge 状態・ブランチ・同期を確かめる）。未保存の変更を破棄する `reset --hard` 等は使わない。同期できなければ理由と残作業を明示する。
-- docs-only や緊急の修正も同じ流れ。例外が要るなら理由を添えてユーザーに確認する。
-- 並行する別のセッションの未コミット変更・stash・worktree を、確認なしに破棄・上書きしない。
-- **使わなくなった worktree は消す（#2032）。** PR の merge・作業の中止の後、その作業の worktree を `git worktree remove <path>` で消し（各 worktree が `.venv`・`node_modules` を持ち、1 つで 1〜3GB を使う）、merge 済みのローカルのブランチを `git branch -d` で消す。未 commit の変更か push していない commit がある worktree は消さない。他の session・実行中の agent の worktree（`git worktree list` の locked）は、使われていないことを確かめてから消す。
-- **開発の ADB が停止していたら、利用者に聞かずに起動する**（夜間に自動で停止することがある。#1825）。対象は `platform/.env` の `PLATFORM_ORACLE_ADB_OCID` の DB。実サービスの確認・長い評価の前と、DB に接続できない（`DPY-6005`・`ORA-12541`・画面の「データベースに接続できません」など）ときに状態を確かめ、`STOPPED` なら起動して `AVAILABLE` になるまで待ってから続ける（数分かかる。止まっていた間の評価・確認はやり直す）。
-  - backend が動いていれば: `GET /api/settings/database/adb` で状態、`POST /api/settings/database/adb/start` で起動（どの製品の backend でもよい。local の認証なら認証なしで呼べる）。
-  - 動いていなければ: `agent/backend` で `uv run python -c "import asyncio; from app.settings import get_settings; from pr_system_settings.database import control_adb; print(asyncio.run(control_adb(get_settings(), action='start')).lifecycle_state)"`（状態は同じ module の `load_adb_info`）。
-  - 停止（`stop`）は利用者の指示が無い限りしない。起動したことは作業の報告に書く。
-- **一時ファイルは `/tmp` に置かず、repo の直下の `./tmp/` に置く**（開発環境の WSL がよく再起動し、`/tmp` が消えるため。#1616）。作業用の worktree は `.claude/worktrees/`、PR / Issue の本文・測定の結果・展開した binary などは `./tmp/<作業の名前>/`。`./tmp/` は `.gitignore` で無視し、commit しない。
+詳細（判定の条件・手順・コマンド）は [docs/agents/github-workflow.md](./docs/agents/github-workflow.md)。
 
-### GitHub Issue / Pull Request の記述規約
+- **`main` へ直接 commit / push しない。** Issue を先に作り（label `product:rag` / `product:nl2sql` / `product:agent` / `platform`。複数ならすべて）、ブランチ `codex/<issue-number>-<short-topic>` で変更して PR を出す。docs-only・緊急の修正も同じ（例外は理由を添えてユーザーに確認）。
+- **CI はエージェント自身が待ち、merge の可否は `scripts/pr-merge-check.sh <PR>` で判定する**（`gh pr checks --watch --required` は使わない）。検証と PR 本文の更新が済み、最新 commit の `CI OK` が成功したら、ユーザーの確認を求めず `gh pr merge <PR> --merge` で merge する（報告だけで終わらない）。main の取り込みは、main の変更が PR と重なるか全体に効くときだけ。
+- CI の失敗・conflict は直して再検証してから merge する。ruleset を迂回した強制 merge はしない。**main が赤（label `ci-failure` の Issue）なら、ほかの作業より先に直す。**
+- **merge 後は `main` へ fast-forward し、その作業の worktree とローカルのブランチを消してから完了を報告する**（`reset --hard` 等で未保存の変更を破棄しない）。他のセッションの未コミット変更・stash・worktree を確認なしに破棄・上書きしない。
+- **開発の ADB（`platform/.env` の `PLATFORM_ORACLE_ADB_OCID`）が停止していたら、利用者に聞かずに起動する**（停止は指示が無い限りしない。起動したことは報告に書く）。
+- **一時ファイルは `/tmp` ではなく repo の直下の `./tmp/<作業の名前>/` に置き、commit しない**（作業用の worktree は `.claude/worktrees/`）。
 
-見出しと各項目の書き方はテンプレート（[Issue](./.github/ISSUE_TEMPLATE/issue.md)・[PR](./.github/PULL_REQUEST_TEMPLATE.md)）にある。`gh issue create` / `gh pr create` で本文を渡すときも、テンプレートの見出しと注記どおりに書く。
+## Issue / PR の書き方
 
-- 日本語で書く。タイトルは対象と事象が分かる具体的な文にする（「修正」「対応」だけにしない）。
-- 確認した事実と推測を分け、未確定は「調査中」「未確認」と書いて判明したら更新する。再現・レビューに要る具体情報（API・設定 key・status code・error message・再現値）を書き、secret・token・個人情報・実 credential は書かない。
-- **業務の内容は書かない（repo は public。#2019）。** 利用者が扱う文書・データの業務の内容（顧客・案件・制度・文書・法令などの名前、ナレッジベース・プロファイル・業務 Agent などの利用者が付けた名前、質問や文書の実データの抜粋）を、Issue・PR・commit message・ブランチ名・コード・コメント・識別子・ログ・画面の文言・i18n・docs・テストの fixture のどこにも書かない。再現情報は技術の言葉と匿名の名前（「ナレッジベース A」「PDF 15 件」「条件の多い質問」）で書き、テストは合成の内容の fixture を使う。機能・エンジン・設定の名前も技術の言葉で付ける（業務の名前を付けない。例: 「XML ツリー JSON」）。利用者が会話で示した業務の文書・質問は、ローカルの確認（repo の外か `./tmp/`）だけに使う。
-- 製品の用語は各製品の `AGENTS.md` に従う（例: RAG の「DocRAG」は地の文にも識別子にも使わない）。
-- **Issue** は `問題` / `症状` / `原因` / `修正方針` の 4 項目を必ず含める（原因が未確定でも仮説か「調査中」を書く）。`完了条件` は判定できる形で書く。
-- **PR title** は `<type>(<scope>): <日本語の要約> (#<issue-number>)`（`scope` は `rag` / `nl2sql` / `agent` / `platform`。複数・全体なら省略可）。本文は `関連 Issue`（`Closes #N` / `Refs #N`）/ `背景 / 原因` / `変更内容` / `検証結果` / `既知の制約・残課題`。
-- `検証結果` は実行した command と結果を正確に書き、失敗・skip・未実行を隠さない。ローカルで実行しなかった全件の検査は CI の job の結果を引用してよい。`platform/` の変更は影響を受ける製品の結果、UI の変更は Playwright の結果、OCI / Oracle / LLM はスタブと実サービスの確認を分けて書く（詳細はテンプレート）。
-- PR 作成後の追加修正・検証結果の変化は、本文を最終状態へ更新してから merge する。
+見出しと各項目はテンプレート（[Issue](./.github/ISSUE_TEMPLATE/issue.md)・[PR](./.github/PULL_REQUEST_TEMPLATE.md)）、規約の全文は [docs/agents/github-workflow.md](./docs/agents/github-workflow.md)「GitHub Issue / Pull Request の記述規約」。
+
+- 日本語で、対象と事象が分かる具体的なタイトルにする。事実と推測を分け、secret・token・個人情報・実 credential は書かない。
+- **Issue** は `問題` / `症状` / `原因` / `修正方針` を必ず含める。**PR title** は `<type>(<scope>): <日本語の要約> (#<issue-number>)`。`検証結果` は実行した command と結果を正確に書き、失敗・skip・未実行を隠さない。PR 作成後の変化は本文を最終状態へ更新してから merge する。
+- **業務の内容は書かない（repo は public。#2019）。** 利用者が扱う文書・データの業務の内容（顧客・案件・制度・文書・法令などの名前、ナレッジベース・プロファイル・業務 Agent などの利用者が付けた名前、質問や文書の実データの抜粋）を、Issue・PR・commit message・ブランチ名・コード・コメント・識別子・ログ・画面の文言・i18n・docs・テストの fixture のどこにも書かない。再現情報は技術の言葉と匿名の名前（「ナレッジベース A」）で書き、テストは合成の fixture を使い、機能・設定の名前も技術の言葉で付ける。利用者が会話で示した業務の文書・質問は、ローカルの確認（repo の外か `./tmp/`）だけに使う。
 
 ## CI
 
-- PR と `main` の push で `.github/workflows/ci.yml` が動き、`changes` job が**変更のあった製品の job だけ**を動かす（platform の frontend / backend の分け方と、全製品を動かす変更の規則は `ci.yml` の冒頭）。製品のテストが platform の別の側のファイルを読むなら、`changes` の filter にそのファイルを足す。
-- 必須 check は **`CI OK`** だけ（skip は成功扱い）。**job を追加したら `ci-ok` の `needs` に足し、すべての job に `timeout-minutes`（通常 10〜15 分、e2e は実測の倍程度）を付ける。**
-- PR の e2e は約 1 分の smoke と、差分に影響を受ける spec（`e2e-impact`。smoke の spec は重ねず、全件なら smoke を飛ばす）。全件は `e2e-nightly.yml` が毎晩実行する。キャッシュの方針は `ci.yml` の platform の節のコメント。
-- **PR の e2e は desktop が全件、375px（mobile）の project は画面幅に依存する test（`@responsive` の tag と、名前の括弧で `mobile` / `375px` を前提にするもの）だけ**（`ci.yml` の `E2E_MOBILE_SCOPE=responsive`。#1582）。nightly とローカルは両方の project で全件。
-- **実 Oracle の結合テスト**（Oracle AI Database Free。`.github/workflows/oracle-integration.yml`）は、3 製品を `integration-nightly.yml` が毎晩、PR と main の push では DB の層（migration・system schema・Oracle の adapter / store・実 Oracle の fixture。`ci.yml` の changes の `<製品>_oracle`）を変えた製品だけを実行する。DB の層のファイルを足したら filter にも足す。**実 Oracle のテストは skip のまま成功にしない**: この CI では RAG の `oracle_db` が `RAG_TEST_REQUIRE_ORACLE=1` で失敗にし、`.github/scripts/pytest-skip-gate.py` が許可の一覧に無い skip と 0 件を失敗にする（#1595。DB の準備が壊れても「全部 skip で成功」にならない）。
-- backend の pytest は CI で並列（`-n auto`）に実行する。**テストは並列でも直列でも通るように書く**（`tmp_path`・`parametrize` の `ids=`・差し替えられる待ち・`xdist_group`。[backend-standard.md](./platform/docs/backend-standard.md)「テストの並列実行」）。
-- `pip-audit` はその backend の `uv.lock` / `pyproject.toml`（か `ci.yml`）が変わったときだけ、`bandit` は毎回。`npm audit` は PR では実行しない。全件は `dependency-audit-nightly.yml` が毎晩（pip-audit と、4 つの `package-lock.json` の `npm audit --omit=dev --audit-level=high`）。
-- **依存の manifest / lock（`package.json`・`package-lock.json`・`uv.lock`・`pyproject.toml`）か workflow・composite action を変えた PR は、`Dependency review` が追加・更新した依存の脆弱性（high 以上で失敗）と license を確かめる**（#1588）。
-- CodeQL（python・javascript-typescript・actions）は `codeql.yml` が毎週の schedule と手動だけで実行する（PR では実行しない。#1594）。
-- **schedule の workflow を足したら `ci-failure-issue.yml` の `workflows` にも足す**（nightly の失敗も Issue になる）。job の時間切れ（cancelled）も Issue になる（#1586）。
-- runner は `runs-on: ubuntu-24.04`（`ubuntu-latest` は使わない。#1587）。本番の Compute の OS は Oracle Linux 9 だが、GitHub に Oracle Linux の runner が無いので ubuntu-24.04 を使い、OS の差は `oraclelinux:9` の container の job（`Suite / Oracle Linux 9`。配備のスクリプトの変更時）で確かめる（#1611）。
-- main の push の CI は commit ごとに実行し、続けて merge しても前の run を取り消さない（PR だけ古い run を取り消す。#1585）。main の CI（push・毎日の schedule・手動）は、main で最後に成功した CI の commit からの変更で job を選ぶ。Dependabot の自動 merge（`GITHUB_TOKEN`）は push の CI を起動しないので、毎日の schedule で確かめる（#1609）。
-- secret 検出は `.gitleaks.toml` / `.gitleaksignore`（書き方は `.gitleaks.toml` の冒頭）。誤検知は fingerprint 単位で `.gitleaksignore` に理由付きで除外する。
-- Dependabot は 3 製品の backend（uv）・frontend（npm）、platform の package（uv・npm。lock だけを上げる）、RAG のサービス、actions を対象にする。公開から 5 日の `cooldown` を置き、npm は monthly（lock の変更は e2e の全件になる）、security updates は entry ごとの group にまとめる。patch / minor は `CI OK` の後に自動 merge される。major・一式の更新・group PR の失敗の扱いは `.github/dependabot.yml` の冒頭。
-- Python の整形は `ruff format`（black は使わない。CI は `uv run ruff format --check .`）。整形だけの commit は `.git-blame-ignore-revs` に載せる。pre-commit（`.pre-commit-config.yaml`）は gitleaks と、commit する backend のファイルへの `ruff format --check` / `ruff check`。
-- root の `scripts/` と `.github/` は `Suite / Scripts` が検査する（shellcheck・`scripts/tests/`・workflow の actionlint・zizmor。zizmor の設定と除外の理由は `.github/zizmor.yml`）。
+詳細は [docs/agents/ci.md](./docs/agents/ci.md)（正本は `.github/workflows/ci.yml`）。
+
+- 必須 check は **`CI OK`** だけ。`changes` job が変更のあった製品の job だけを動かす。**job を追加したら `ci-ok` の `needs` に足し、すべての job に `timeout-minutes` を付ける。** schedule の workflow を足したら `ci-failure-issue.yml` の `workflows` にも足す。runner は `ubuntu-24.04`。
+- **テストは並列でも直列でも通るように書く**（CI の pytest は `-n auto`）。**実 Oracle のテストは skip のまま成功にしない。** DB の層・テストが読むファイルを足したら `changes` の filter にも足す。
+- Python の整形は `ruff format`（black は使わない）。
 
 ## デザインシステム / UI（platform が正本）
 
-- **UI に触る前に [ARCHITECTURE.md](./platform/docs/design-system/ARCHITECTURE.md) を読む。** トークン値・部品の仕様・意図的な見た目の変更は [README.md](./platform/docs/design-system/README.md)（以下 README）、実装の参照は [components-reference.md](./platform/docs/design-system/components-reference.md)、画面の振る舞いは [UX 契約](./platform/docs/ux-contracts/README.md)。
-- **依存は「デザインシステムの決定 → `platform/packages/ui` → 各製品」の一方向。** 製品で部品やトークンを新規実装せず、`packages/ui` に入れる（同じ PR でよい）。
-- **製品が持てるのは**: ナビ構造（nav config）と業務コピー（i18n）、データ取得・状態管理・権限、ドメイン enum → prop の対応表、画面固有の業務レイアウト、1 製品しか使わない部品（他の 2 製品が欲しがるなら `packages/ui`）。
-- **色・型・余白・角丸・影・モーション・フォーカス表示・テーマは `packages/ui` が持つ。** `frontend/src/globals.css` は `@import "tailwindcss"` → `@import "@production-ready/ui/styles.css"` → `@source "../node_modules/@production-ready/ui/dist"` と、画面固有のレイアウトだけ（`main.tsx` から import すると共有ユーティリティが生成されない）。
+**UI に触る前に [docs/agents/ui.md](./docs/agents/ui.md)（禁止事項・画面の構成・操作部品の高さと幅・読み込み中・一覧・ページング・メッセージ・lint・UI 変更の検証）と [ARCHITECTURE.md](./platform/docs/design-system/ARCHITECTURE.md) を読む。** 特に次を守る。
 
-### 禁止事項
-
-- 生の hex・`rgba()` などの色の関数・生の px（inline style の数値を含む）。色は `--color-*` トークン（`bg-surface` / `text-fg-muted` 等）。旧名（`bg-card` / `text-muted` / `var(--primary)` 等）は未定義。
-- `globals.css` に色トークンや `.dark { … }` の上書きを書く。
-- 共有部品（`TextField` / `PageHeader` / `Button` / `StatusBadge` 等）の再実装。
-- 操作部品の高さ・幅の手書き（「操作部品の高さと幅」）。
-- `<table>` の手書き（`DataTable` を使う）。例外は元の文書の表を再現して編集するグリッド（RAG の `ReviewTextEditor.tsx`）だけで、理由をコメントに書く。
-- 余白コンテナの手書き（`<div className="px-8 py-6">` 等）。`PageBody` を使う。
-- `ToggleChip` をタブに使う（見方の切り替えは `Tabs`、一覧のツールバーの絞り込みは `FilterChipGroup`、それ以外の切り替えは `ToggleChip`）。
-- `loading` 中のボタンのラベルの差し替え。アイコンは `icon={Upload}` で渡し、`loading` を渡す `Button` は必ず `icon` を持つ。
-- `Spinner` 以外の回転するアイコン（`animate-spin` / `animate-[spin…]`・inline style の `animation: spin`・lucide の `Loader` / `Loader2` / `LoaderCircle` / `LoaderPinwheel`）。処理中は `Spinner`、ボタンは `loading`、領域は `ProcessingIndicator` / `TimedLoadingState`。`Spinner` の形と箱は変えない（README §4「`Spinner`」、e2e の `expectSpinnerStable`）。
-- `focus(-visible|-within):ring-*` のフォーカス表示と `focus(-visible):outline-none`。表示はグローバルの `:focus-visible` に任せ、調整は `focus-visible:outline-*` / `-outline-offset-*`。
-- 必須の印の手書き（`*`・独自のバッジ・`RequiredBadge` の直置き）と「(任意)」。必須の欄だけに部品の `required`（入力は `TextField` / `SelectField` / `SecretField`、それ以外は `FieldLabel` / `FieldLegend` / `Fieldset`。README §4「必須の表示」）。
-- 製品ごとのアクセント色（製品は wordmark・ナビ・内容で区別する）。
-- 絵文字と手描き SVG。アイコンは `lucide-react`（14 / 16 / 20 / 24px）。
-- 共有 UI の内部パス（`dist/components/**`・`dist/tokens/*.css`）の import・テストでの読み込み。パッケージのルートと `styles.css` だけを使う。
-
-### 画面の構成
-
-```tsx
-<AppShell sidebar={<Sidebar … footer={<SidebarAccountFooter … />} />}>
-  <PageHeader title="…" actions={[{ id, kind: "primary", label, icon }]} tabs={<Tabs … />} />
-  <PageBody>
-    <Section title="…">…</Section>
-  </PageBody>
-</AppShell>
-```
-
-- この構成を外れた画面は review で差し戻す。`PageHeader` の `actions` は配列で渡す（JSX を渡さない。danger → utility → secondary → primary の順に並び、右端が primary）。画面を移るだけの操作は `ButtonLink`（`<Link className={buttonVariants(...)}>` に手書きしない）。
-- **詳細・作成・編集の画面**: 「一覧へ戻る」は `PageHeader` の `back`。「作成」「保存」（primary）と「変更を破棄」（その右）はフォームの末尾の `FormActionBar` に置き、左端を入力欄の左端にそろえる（`PageHeader` の右端に置かない。長いフォームは `sticky` で画面の下端に貼り付ける。#1786）。一覧の「新規作成」は `PageHeader` のまま。対象への操作は最初のカードの `ObjectActionBar` 1 か所、保存の失敗は確定の行の直上の `SaveErrorBanner`。例外を含む正本は README §4「詳細・作成・編集の画面の操作」。
-- `PageHeader` と `PageBody` の `wide` は必ず同じ値にする（1920px で左端がずれる）。
-- 単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem（14px ルート）。本文は `"Noto Sans JP", "Roboto", system-ui, sans-serif` の 14px。
-
-### 操作部品の高さと幅
-
-正本は README §4「操作部品の高さと幅」と `page-archetypes.md`「入力欄・選択欄・ボタンの高さと幅」。
-
-- 高さは `size`（`sm` 32 / **`md` 36（既定）** / `lg` 40px。タッチ端末は 44px）。**1 つの行の中の入力欄・選択欄・ボタンには同じ `size` を渡す。**
-- 幅は入る値の種類で `width`（`xs` 数値・短いコード・表示件数 / `sm` 日付・期間・短い選択 / `md` 名前・ID・一般の選択 / `lg` 長い名前・対象の選択・一覧の検索欄 / `full` URL・OCID・文章・SQL・`TextareaField`）。**grid のセルの欄にも、grid の外の単独の欄にも渡す**（段の幅が上限。#1891）。フォームの本文は `FormGrid`（最大 60rem）に置く。例外: RAG の検索・3 製品のチャットの対象の選択は、問い合わせの入力と端をそろえて `full`（#635）。入力欄とその操作の行は `FieldActionRow`、複数行の高さは `rows`。
-- **placeholder は欄の幅に収める**（収まらなければ短い例にし、説明は `helper` へ）。e2e は共通の `findClippedPlaceholders`（`platform/packages/ui/e2e/layout-checks.ts`）で確かめる。
-- **製品で書かない**: `touchTarget`、操作部品への `h-*` / `min-h-*`、欄への `w-*` / `max-w-*`（lint が検出する）。
-- **フォームの入力は共有の部品**（`SelectField` / `SearchableSelectField` / `TextField` / `SecretField` / `SearchField` / `TextareaField`）。ネイティブで残すのは checkbox / radio / file / range / hidden / color と部品で表せない所だけで、理由を添えて lint を局所的に除外し `fieldControlClassName({ size, width })` を使う。e2e は combobox を押して選び（`chooseSelectFieldOption`）、高さは入力方式で期待する（`expectedControlHeight`）。
-
-### 読み込み中・一覧・ページング
-
-3 製品で NL2SQL の基準にそろえ、新しい一覧は NL2SQL の同種の画面を見本にする。部品と定数は components-reference.md「読み込み中と一覧の表示密度」、一覧の型と例外は `page-archetypes.md`「一覧の型と、基準から外す例外」。
-
-- **読み込み中**: 領域の先頭に `TimedLoadingState`（または `ProcessingIndicator`）で「〜を読み込んでいます」と経過時間を 1 か所だけ出し、領域は内容の形の `Skeleton` で覆う。文字だけの「読み込み中…」・空白・画面全体のスピナーは使わない。再読み込みは前の内容を出したまま、ボタンの `loading` で示す（`messaging.md` §3.6）。
-- **一覧**: `DataTable` の `stickyHeader` と `visibleRows`（共通の定数）で表の中を縦スクロールにし、製品で行数・高さを書かない。
-- **件数**: 一覧の件数は `ListToolbar` の `count`（`ListCount`。「全 N 件」/「N 件（全 M 件）」）1 か所。1 ページでも出し、見出しのバッジと二重にしない。一覧の検索欄は `ListToolbar` が `lg` で固定する（#1891）。
-- **ページング**: 共通の `Pagination` / `usePagination`（既定 25 件。#1952）を表の直下に置き、1 ページならページ送りを出さない。形は advanced（「1–25 / 123 件」・表示件数・最初へ / 前へ / ページ番号の入力 / 次へ / 最後へ。#1891）。サーバー側は `OffsetPagination`、カーソル型は `useCursorPages` + `CursorPagination`（前へ・N / M ページ・次への縮約版）、表示件数の選択は `onPageSizeChange`（10 / 25 / 50 / 100。既定 25）、文言は `paginationLabels()`。製品でページングのつなぎを書かない。ページ番号と表示件数は作業状態に残す。backend は `pr_backend_core.api` の helper（backend-standard.md「一覧のページング」）。
-- **一覧の絞り込み**は `SearchField`（検索ボタンを置かない）。重い検索（LLM・ベクトル検索・SQL の生成）は `type="search"` にせず、ボタンと Enter（`isSubmitEnter`）で実行する（`page-archetypes.md`「一覧の絞り込みの検索」）。
-- **一覧のツールバーの絞り込み**は、部品を同じ高さ（md）で縦の中心にそろえ、欄の上にラベルを置かない: 選択は `FilterSelect`（「種類: すべて」）、「すべて」を含め 5 つまでの排他の状態は `FilterChipGroup`（件数つき可）、条件があるときだけ `ListToolbar` の `onClearFilters`（「条件をクリア」）。375px は検索欄を先頭に全幅、絞り込みが 3 つ以上なら `filtersLayout="sheet"`（「絞り込み（N）」→ シート）。期間はプリセットの `FilterSelect`、状態は作業状態に残す。ツールバーの中の欄の幅の段は画面ではなくツールバーの幅（container）で切り替わる（`ListToolbar` が包む）。e2e は `findToolbarMisalignment` / `findToolbarFieldWidthMismatch`（`page-archetypes.md`「一覧の絞り込みの部品」。#1933）。
-- 基準から外す一覧は、`page-archetypes.md` の例外の表に理由を書く。
-- Playwright で読み込み中・行が多いとき・2 ページ以上（ページ番号を入れて移る `jumpToPage`）を desktop と 375px で確かめる。
-
-### 操作の結果・状態のメッセージ
-
-正本は [`messaging.md` §10](./platform/docs/ux-contracts/messaging.md#10-操作の結果状態の出し方位置幅形出す情報705)。新しい画面は最初から、既存の画面は触るときに従う。結果は起点の操作の**直下**に**全幅**で出し、テスト・接続確認は結果パネル、保存は Toast / `FormStatus`、処理の失敗は danger の `Banner`、対象の状態は見出しの `StatusBadge`。技術的な詳細は「詳細」に畳み、自動で消さない。
-
-### lint
-
-- 遵守ルールの正本は `platform/docs/design-system/adherence.oxlintrc.json` と `design-system-plugin.mjs`。各製品は **コピーせず相対パスで参照する**（書き方は [platform/AGENTS.md](./platform/AGENTS.md)「lint」）。
-- 製品固有のルールは adherence と同じルール名を上書きせず（セレクタが消える）、別名にする。
-- 誤検知・正当な例外は `// oxlint-disable-next-line <rule>`（ESLint は `eslint-disable-next-line`）と理由のコメントで局所的に除外する。ルールを緩めるなら adherence を変える Issue を立てる。
-
-### 既存ルールとの優先順位
-
-- 部品の見た目と振る舞い（サイズ・variant・アイコン・loading・ヘッダーの並び・フォーカス・ダークテーマ）は、`ui-ux-pro-max` skill の一般論や製品の `docs/` より `platform/docs/design-system/` を優先する。
-- 画面の振る舞いは `platform/docs/ux-contracts/` が 3 製品共通の正本。製品の `docs/frontend-*.md` には、それらが決めない製品固有の差分（割り当て・例外）だけを書く。
-
-### UI 変更の検証
-
-- **UI/UX の作業（設計・実装・レビュー・改善）は必ず `ui-ux-pro-max` skill を使う。**
-- 変更ごとに Playwright で実画面を確かめる: desktop と 375px、必要に応じて空 / 読込 / エラー / ブロック、ライト / ダーク、1280px / 1920px（タイトルと本文の左端が揃う）、キーボード（最初の Tab で「本文へスキップ」、フォーカスリング、`Tabs` の ← → / Home / End）。状態は色だけで表さない。意図的な見た目の変更は README §7 と照合して PR に書く。
-- ローカルの e2e は関係する spec だけを、1 回おおむね 1 分以内で（`-g` や spec のパス）。
-- **画面幅で結果が変わる test には `{ tag: "@responsive" }` を付ける**（レイアウトの位置・幅・並び、ナビのドロワー、横スクロール・折り返し、タッチ端末の高さ・タップ、`isMobile` / project 名で確かめる内容が変わるもの。mobile だけで実行する test は必ず。spec 全体なら先頭の describe に）。中で `setViewportSize` で幅を決める test と、末尾の汎用の横あふれの確認だけの test には付けない。迷ったら付ける。規則の正本は `platform/scripts/e2e-impact/mobile-scope.ts`。PR の mobile と同じ範囲は `E2E_MOBILE_SCOPE=responsive npx playwright test …` で確かめる。
-- **画面のコードを変えたら、その画面を検証する既存の spec も同じ PR で直す（#885）。** 影響を受ける spec は `python3 platform/scripts/e2e_impact.py select --product <製品> --base origin/main --download`（CI の `e2e-impact` と同じ選択）で選び、PR の前に実行する。spec は `test` を製品の fixture（RAG・Agent `e2e/fixtures/test.ts`、NL2SQL `tests/e2e/_helpers/test.ts`）から import する（CI の `check-imports`）。
+- 依存は「デザインシステムの決定 → `platform/packages/ui` → 各製品」の一方向。製品で部品やトークンを新規実装せず、`packages/ui` に入れる（同じ PR でよい）。色・型・余白・角丸・影・モーション・フォーカス表示・テーマは `packages/ui` が持つ。
+- 生の hex・色の関数・生の px、共有部品の再実装、`<table>` の手書き（`DataTable`）、余白コンテナの手書き（`PageBody`）、操作部品の高さ・幅の手書き（`size` / `width`）、`Spinner` 以外の回転するアイコン、絵文字と手描き SVG（アイコンは `lucide-react`）を使わない。
+- 画面は `AppShell` → `PageHeader`（`actions` は配列）→ `PageBody` → `Section` の構成にする。単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem。
+- 読み込み中は `TimedLoadingState` と内容の形の `Skeleton`、一覧は `DataTable` と共通の `Pagination`（既定 25 件）と `ListToolbar` の件数。
+- **UI/UX の作業は必ず `ui-ux-pro-max` skill を使い、変更ごとに Playwright で desktop と 375px の実画面を確かめる。** 画面のコードを変えたら、その画面の既存の spec も同じ PR で直す。画面幅で結果が変わる test には `{ tag: "@responsive" }` を付ける。
 
 ## 共通の技術方針
 
@@ -171,61 +86,22 @@
 - シークレットは `.env` / secret store 経由（ハードコード・commit・API 応答への展開をしない）。LLM の出力は Pydantic で検証してから使う。
 - **ハードコードしない。** 特定の文書・業務・質問・データに合わせた語・規則・閾値・手順をコード（分岐・正規表現・プロンプトの例）に書かない。必要なら skill（`skills/<name>/SKILL.md`）か設定（`.env`・設定画面・検索・回答プロファイル・言語資源）に置き、コードは汎用の仕組みにする。
 - OCI / Oracle / LLM を呼ぶ層は CI では決定論スタブ / 録画応答でテストし、実サービスは手動 / ステージングで確かめる。
-- 実装と同時にテストを追加・更新し、該当範囲の lint・型チェック・テストの結果を報告する。
+- 実装と同時にテストを追加・更新し、該当範囲の lint・型チェック・テストの結果を報告する。ローカルでは変更した範囲だけを検査し、全件は CI に任せる（[docs/agents/ci.md](./docs/agents/ci.md)「ローカルの検証の範囲」）。
 - 文書（.docx / .pptx / .xlsx / .pdf）の生成は対応する skill（`document-skills:*` / `pdf`）を使う。
+- **LLM に渡す文（プロンプト・skill・MCP の説明）を書く・変える前に [docs/agents/prompts.md](./docs/agents/prompts.md) を読む。** 1 つの規則は 1 つの層にだけ書き、コードで保証できることはコードに置き、経緯や内部の仕組みを書かない。変えたら同じ PR で関係するテストを直し、最初のターンに渡す字数の前後を PR に書く。
 
-### プロンプト（LLM への指示・skill・ツールの説明）の書き方
+## 配備
 
-LLM に渡す文（製品の LLM への指示、組み込みのスキル `skills/`、MCP の server instructions・ツールと引数の説明、Agent の組み込み Runtime の指示とツールの結果の案内）は、pi（[badlogic/pi-mono](https://github.com/badlogic/pi-mono) の coding agent。[作者の解説](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)）と DeepSeek Harness（[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) の `.agents/skills/` の `agent-experience`・`dsh-prose-standard`・`dsh-trim-cot-leakage`）の書き方に従う。
+詳細は [docs/agents/deploy.md](./docs/agents/deploy.md)。
 
-- **1 つの規則は 1 つの層にだけ書く**（MCP の instructions / ツールの説明 / 引数の説明 / validator / スキル / Runtime の指示）。引数の既定・範囲・組み合わせ・いつ渡すかは引数の説明、ツールをいつ使うかはツールの説明、複数のツールをつなぐ手順はスキルに置き、ほかの層で繰り返さない。
-- **コードで保証できることはコードに置く**（validator・正規化・既定値・上限）。プロンプトに重ねない。誤りのメッセージは、何が違反でどう直せばよいかを書く（モデルが読んで呼び直せる形）。
-- **状態で変わる案内はツールの結果に置く**（`next_step` などの次にすること）。静的な指示に「〜のときは〜」を並べない。呼べば結果で分かること（無いファイルは読めない等）は書かない。
-- **目的と判断の基準を書き、経緯を書かない。** 事故・評価の経緯・Issue 番号・「以前は」はプロンプトに入れず、コードのコメント・docs・PR に置く。今の振る舞いとして書く。
-- **システムの内部を説明しない。** 何をして何を返すかを書き、内部の仕組み（キャッシュ・モデルの呼び出しの回数・強制の方法・結果に付く印の作り方）は書かない。
-- **数値・名前は正本から差し込む**（定数・設定・ツールの定義。文に手で写さない）。
-- **決まった形は型とテンプレートで渡す**（構造化出力・JSON schema・出力の雛形）。誤りやすい判断にだけ短い例を 1 つ付ける。
-- **読み手を分ける。** 外部の Agent に配るスキル（`skills/`）は MCP が実際に返すフィールドだけを使い、組み込み Runtime だけが結果に足すもの（`next_step` など）は「組み込みの Agent では」と分かる 1 か所にまとめる（契約は `agent/backend/tests/test_skill_md_spec.py`）。
-- **節の価値は、外した版と比べて確かめる**（ablation・記録の replay。実モデルの評価は 1 回 5 問）。短くすることを目的にせず、条件・様相（必ず / してよい / しない）・否定・例外を落とさない。変えたら、最初のターンに渡す字数（token）の前後を PR に書く。
-- **モデルの力を前提にする。** 既定のモデルは frontier のモデルより弱い。意味の判断の規則・例・出力の雛形・中核の制約は残し、構造化出力・ツールの結果の次の手・差し戻しと再試行・Runtime が決定的に行う手順を優先する。
-- **プロンプトの文は振る舞い。** 変えたら同じ PR で関係するテストを直す。文字列をそのまま固定するテストより、契約（スキルが参照するフィールドが MCP の出力にある、ツールの結果に次の手がある等）を確かめるテストにする。
+- 自前のコードは Docker を使わずネイティブで動かす（開発は `uv run` / `npm run dev`、本番は systemd + Nginx。Dockerfile・compose は持たない）。
+- Terraform stack は `terraform/stack/` に 1 つだけ。選んだ製品を 1 台の Compute（Oracle Linux 9、ユーザー `opc`）に入れ、`platform/deploy/suite-init.sh` が各製品の `init_script.sh` を呼ぶ（製品は単独では配備しない）。Nginx の location は `platform/deploy/suite-nginx.sh` だけに書く。
+- 3 製品は既定で ADB のアプリ用の DB ユーザー（ADMIN ではない）で接続する。DB の新しい機能を使うときは付ける権限で足りるかを確かめる。release tag は `suite-v*` だけ。
 
-### 配備
+## 共通の仕組みと設定・命名
 
-- 自前のコードは Docker を使わずネイティブで動かす（開発は `uv run` / `npm run dev`、本番は systemd + Nginx。Dockerfile・compose は持たない。Agent も組み込み Runtime で、Docker の Runtime は持たない）。
-- Terraform stack は `terraform/stack/` に 1 つだけ。ADB を 1 つ作り（新規 / 既存）、選んだ製品（`deploy_rag` / `deploy_nl2sql` / `deploy_agent`、最低 1 つ）を 1 台の Compute に入れる。製品固有の入力は `rag_` / `nl2sql_` / `agent_` を付ける。
-- Compute の上では `platform/deploy/suite-init.sh` が各製品の `init_script.sh`（製品は単独では配備しない）を順に呼び、Nginx の site（`/rag/` `/nl2sql/` `/agent/` の prefix・HTTPS・自作の CA・公開の port）を 1 つだけ書く。Nginx の location は `platform/deploy/suite-nginx.sh` だけに書く。frontend の base は build の `FRONTEND_BASE_PATH`（未指定は `/`。配備は `/<製品>/`）。
-- **3 製品は既定で ADB のアプリ用の DB ユーザー（ADMIN ではない。既定の名前 `ADB_APP_USER`）で接続する**（#1668・#1675）。ユーザーの作成と grant は Compute の `suite-init.sh` が製品の配備の前に ADMIN で行い（`platform/deploy/suite-db-user.py`）、Terraform からは DB に接続しない（ADB は Compute からしか届かない）。DB の新しい機能を使うときは、付ける権限（`PDB_DBA` と Deep Data Security の 3 つ）で足りるかを確かめ、[terraform/README.md](./terraform/README.md)「アプリ用の DB ユーザー」の表を更新する。
-- **Compute の OS は Oracle Linux 9（image の OCID は `terraform/stack` で固定）、ログインと 3 製品のプロセスのユーザーは `opc`**（#1611）。配備のスクリプトは `dnf`（Nginx は AppStream の module）・`firewalld`・SELinux（enforcing のまま。context と boolean は `suite-init.sh` の `configure_selinux`）を前提にし、Ubuntu の分岐を持たない。
-- CI は `Suite / Deploy`（`suite-deploy.yml`。release も再利用する）が各製品の `init_script.sh` と配備のスクリプト・`terraform/scripts/package_stack.py`・`verify_stack_contract.py`・`platform/deploy/tests/` を 1 つの job で実行し、`Suite / Oracle Linux 9` が `oraclelinux:9` の container で package の名前と Nginx の配置を確かめる（`Suite / Deploy` は製品の frontend・共有 UI・Markdown だけの変更では動かない。#1592）。実際の配備の通しは `deploy-nightly.yml` が毎晩、`oraclelinux:9` の systemd の container で `suite-init.sh` を実行して Nginx を通した 3 製品を確かめる（Oracle・SELinux・OCI の network は対象外。理由は `.github/scripts/deploy-run-through.sh` の冒頭。#1595）。
-- release tag は `suite-v*`（`terraform-release.yml` が zip と sha256 と provenance を公開する）。release する commit は main にあり、その commit で main の CI が成功している必要がある（手動の実行は main から。#1594）。製品ごとの release（`<製品>-v*`）は作らない（既存の `nl2sql-v*` は残す）。README の配備ボタンは `releases/latest/download/<asset>` を指す（asset 名は変えない。新しい release を GitHub の Latest にする）。
+詳細は [docs/agents/shared-features.md](./docs/agents/shared-features.md) と [docs/agents/naming.md](./docs/agents/naming.md)。
 
-### ローカルの検証の範囲
-
-ローカルでは変更した範囲だけを検査し、全件は CI に任せる。PR の `検証結果` には、ローカルの command と CI の job の結果を分けて書く。
-
-- backend: 変更したファイルの `ruff check` / `ruff format --check`、関係するテスト（`uv run pytest tests/test_<対象>.py`）と `uv run pytest --lf -x`。`mypy` は変更したパッケージを渡してよい。全件を流すなら `-n auto`。全テスト・全体の `mypy`・`pip-audit` は CI。
-- frontend: `npm run lint` と `npm run build`（型検査を兼ねる）、関係する単体テスト（`npx vitest related <ファイル>` / `--changed`、NL2SQL は `node --import jiti/register --test tests/<対象>.test.ts`）。
-- e2e: 関係する spec だけ（「UI 変更の検証」）。
-- worktree の準備は `scripts/setup-worktree.sh <製品…>`。
-
-### 共通の仕組みと製品固有の仕組みの分け方
-
-- **3 製品で同じ機能は platform に 1 セットだけ置く。** システム設定（OCI 認証・アップロード保存先・モデル・データベース・外観と証明書）とユーザー / ロール管理は、画面を `packages/system-settings`、API を `packages/system_settings_backend` に置き、製品は `api` や権限判定を渡す薄いラッパーだけを持つ。製品固有の機能は製品固有のセクションに置く（例: NL2SQL の権限管理・Deep Data Security は「セキュリティ設定」）。
-- **サイドナビの下部は 3 製品で同じ並びと名前**: 業務のセクション →「改善・運用」（あれば）→「セキュリティ設定」→「ユーザーとロール」→「運用設定」（システムテーブルが先頭）→「システム設定」。backend の権限カタログの `group` と並びもそろえる。
-- **外部の MCP クライアント向けの API キーは 3 製品で共通**（使える製品は RAG / NL2SQL / Agent。発行の既定は 3 つとも。#1805・#1874）。Agent のキーは使える業務 Agent を絞れ（共通の表の `RESOURCE_SCOPES`）、キーごとに呼び出しの回数（`PLATFORM_API_KEY_CALLS_PER_MINUTE`）と Agent の Run の数（`PLATFORM_API_KEY_RUNS_PER_DAY`）の上限がある。仕組みは platform の共通（表 `PLATFORM_API_KEYS`・`authorize_request` の `api_key_paths`・`build_auth_router(api_keys=True)`・画面 `MyApiKeysPanel` / `ApiKeysAdminPage`）。キーは各利用者がアカウントの画面（下の「アカウントの画面」）の「API キー」のタブから自分で発行し（メニュー権限を要しない）、全員のキーの一覧と削除は「ユーザーとロール」の末尾の「API キー」（`menu.security_api_keys`）。キーは MCP の入口（`POST /api/mcp`）だけで使え、画面用の Cookie / CSRF の API には使わせない。
-- **アカウントの画面は 3 製品で同じ**（`/account`。共通の `AccountPage`。#1873）: サイドナビの下部のアカウントの欄（名前・ロール）の行全体がこの画面へのリンクで、タブ「API キー」「パスワード変更」（`?tab=api-keys` / `?tab=password`）を持つ。個人の操作（API キー・パスワード変更）はサイドナビの行に置かない。初回・リセット後のパスワードの強制の変更は単独の画面（`/password/change`）のまま。ログインの画面の「パスワードを忘れた場合」は管理者に一時パスワードの発行を依頼する案内（メールの送信は無い）。
-- **ナビのアイコンは、同じ機能なら 3 製品で同じ、違う機能なら違うもの**（1 製品の中で重ねない）。共通の項目は `packages/system-settings` のアイコン、製品間で同じ機能は 権限管理 `LockKeyhole`・システムテーブル `TableProperties`・品質評価 `FlaskConical`・フィードバック `ThumbsUp`・検索・回答プロファイル / 業務プロファイル `BriefcaseBusiness`・実行履歴 `History`（RAG の文書の分類は `FolderTree`）。各製品のテスト（RAG `src/lib/route-permissions.test.ts`、NL2SQL `tests/nav-config-icons.test.ts`、Agent `e2e/appearance.spec.ts`）が検出する。
-- **「AI 活用」の下の機能は、system_admin は全員のデータ、それ以外は自分のデータだけ**を一覧・詳細・操作で扱う（3 製品共通。backend で絞り、他人のデータは 404。判定は `pr_system_settings.auth.visibility`。規則は [backend-standard.md](./platform/docs/backend-standard.md)「「AI 活用」の下の機能のデータの見え方」。#1889）。system_admin は他の利用者のデータにも本人と同じすべての操作（続きの質問・SQL の実行・停止・評価・Run の操作・承認）ができ、操作した system_admin 自身の権限・接続で実行して actor を記録する（持ち主は変えない。#1928）。実行履歴の行・Run は実行した人と会話の持ち主の両方に見え、利用量・上限・監査は実行した人に数える（承認・再開・確認への回答は実行した人と system_admin だけ。#1954）。
-- ロールの基本情報は共通のロール管理が、ロールの権限は製品の権限管理が扱う（共通のロール API は権限を変えない）。
-- **権限管理のメニューの一覧は左のナビを正本にする**: 製品の `nav-config.ts` から `permissionNavSections` / `arrangePermissionsByNav`（製品の `PERMISSIONS_API.permissions` を通す）で作り、backend の `group` / `label` を画面に使わない（名前はサイドナビの表示名。`sidebarLabelKey` があればそれ）。ナビに無い capability はナビの後ろに置く。画面のあるメニュー権限は必ずナビの項目にし、ずれは各製品のテスト（RAG `src/lib/permission-nav.test.ts`、NL2SQL `tests/permission-nav.test.ts`、Agent `e2e/permission-catalog.spec.ts`）が検出する。権限の code・保存値は変えない。
-
-### 設定（`.env`）とデータベース object の命名
-
-- **3 製品共通の設定は `platform/.env`（雛形 `platform/.env.example`）1 つで、変数名は `PLATFORM_` で始める。** システム設定画面の保存先・共通認証の設定もここで、`model-settings.json` も共有する。3 製品が同じファイルを読み、場所は `PLATFORM_ENV_FILE` で変えられる。
-- **製品の `backend/.env` には、その製品だけが使う変数を `RAG_` / `NL2SQL_` / `AGENT_` で置く**（共通の設定を重複させない）。変数名は Settings の属性名から決まる（規則と、共通の設定の足し方は backend-standard.md「設定（`.env`）の変数名」）。
-- **表・view・sequence・package・scheduler の job / program・Credential は、共通の仕組みが `PLATFORM_`、製品固有が `RAG_` / `NL2SQL_` / `AGENT_` で始める**（例: NL2SQL のロールの権限・Data Grant は `NL2SQL_`、Select AI の Credential は `NL2SQL_OCI_CRED`）。index・制約は種別を先に付けた形（`PK_` / `FK_` / `CK_` / `UX_` / `IX_` ＋接頭辞。例 `IX_NL2SQL_…`）でもよい（#1712）。
-- Oracle が名前を決める object（名前の無い制約の `SYS_C…`・LOB の `SYS_IL…$$` / `SYS_LOB…$$`・identity 列の `ISEQ$$_…`・Oracle Text の `DR$…`・vector 索引の `VECTOR$…`）は、接頭辞の規則の外とする（名前を付けて作る object は規則に従う）。
-- 名前を変えるときは旧名との互換を持たない（旧名の環境変数は読まず、テーブルは migration で改名する）。既存環境の更新手順を配備ドキュメントに書く。
-- 3 製品は同じ schema を共有するため、4 つの接頭辞で始まる object と、名前に `$` / `#` を含む object（Oracle の内部の object）を業務データとして扱わない。業務の object の一覧・件数（例: NL2SQL の業務プロファイルの対象・管理 SQL）では、SQL の条件で除外する（#1710）。
-- ロールの割り当て・復元では製品をまたぐ権限昇格を防ぐ（`pr_system_settings.auth` の `PRODUCT_ROLE_PERMISSION_TABLES`）。製品が権限テーブルを足すときは、この登録と `PLATFORM_ROLES` への `ON DELETE CASCADE` の FK を用意する。
+- **3 製品で同じ機能は platform に 1 セットだけ置く**（システム設定・ユーザー / ロール管理・API キー・アカウントの画面）。サイドナビの下部の並びと名前、ナビのアイコン、権限管理のメニューの一覧（左のナビが正本）は 3 製品でそろえる。
+- **「AI 活用」の下の機能は、system_admin は全員のデータ、それ以外は自分のデータだけ**を扱う（backend で絞り、他人のデータは 404）。system_admin は他の利用者のデータにも本人と同じすべての操作ができ、操作した本人の権限で実行して actor を記録する。
+- 共通の設定は `platform/.env`（`PLATFORM_`）、製品だけの設定は製品の `backend/.env`（`RAG_` / `NL2SQL_` / `AGENT_`）。表などの DB object の名前は、共通が `PLATFORM_`、製品固有が `RAG_` / `NL2SQL_` / `AGENT_` で始める。名前を変えるときは旧名との互換を持たない。

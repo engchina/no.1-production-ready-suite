@@ -253,6 +253,56 @@ def _cited_in(answer: str, chunk_id: str) -> bool:
     return bool(re.search(re.escape(chunk_id) + r"(?!\d)", answer))
 
 
+# 回答が書いた chunk の id の形（「文書:chunk_set:番号」と、途中を「…」で省いた・先頭の文書の
+# id を落とした・区切りを横線で書いた形）。RAG の最終の検証が段落の ID を根拠に結び付ける規則と
+# 同じ形で数える。
+_ID_DASHES = "‐‑‒–—―-"
+_CITED_ID = re.compile(
+    rf"(?<![0-9A-Za-z])[0-9A-Fa-f]{{6,}}(?:[0-9A-Fa-f:…‥{_ID_DASHES}]|\.{{2,}})*[:{_ID_DASHES}][0-9]+(?![0-9A-Za-z])"
+)
+_ID_ELLIPSIS = re.compile(r"…+|‥+|\.{2,}")
+# 省いて書いた ID の残した先頭の最短の長さ（これより短いと別の根拠と区別しにくい）。
+_MIN_ABBREVIATED_ID_CHARS = 7
+
+
+def _abbreviated_part(written: str, actual: str) -> bool:
+    """ID の部分を、後ろを切って・途中を「…」で省いて書いたか。"""
+    pieces = _ID_ELLIPSIS.split(written)
+    if len(pieces[0]) < _MIN_ABBREVIATED_ID_CHARS:
+        return False
+    if len(pieces) == 1:
+        return len(written) < len(actual) and actual.startswith(written)
+    return re.fullmatch(".+".join(re.escape(piece) for piece in pieces), actual) is not None
+
+
+def _written_id_matches(written: str, actual: str) -> bool:
+    """回答が省いて書いた chunk の id（`written`）が `actual` を指すか（番号はそのまま一致）。"""
+    # 区切りの横線（「78f40985‑…‑244」）は「:」にし、省略の印の直前の区切りは除く。
+    written = re.sub(r":+(?=…|‥|\.{2,})", "", re.sub(f"[{_ID_DASHES}]", ":", written))
+    written, actual = written.lower(), actual.lower()
+    if written == actual or (_ID_ELLIPSIS.search(written) and _abbreviated_part(written, actual)):
+        return True
+    written_parts, actual_parts = written.split(":"), actual.split(":")
+    if 2 <= len(written_parts) < len(actual_parts):
+        actual_parts = actual_parts[-len(written_parts) :]
+    if len(written_parts) != len(actual_parts) or written_parts[-1] != actual_parts[-1]:
+        return False
+    return all(
+        w == a or _abbreviated_part(w, a)
+        for w, a in zip(written_parts[:-1], actual_parts[:-1], strict=True)
+    )
+
+
+def _cited_chunk_ids(answer: str, chunk_ids: list[str]) -> set[str]:
+    """回答が書いた根拠の id（そのままの形と、省いて書いて 1 つの根拠に決まる形）。"""
+    cited = {chunk_id for chunk_id in chunk_ids if _cited_in(answer, chunk_id)}
+    for match in dict.fromkeys(item.group(0) for item in _CITED_ID.finditer(answer)):
+        matches = {chunk_id for chunk_id in chunk_ids if _written_id_matches(match, chunk_id)}
+        if len(matches) == 1:
+            cited |= matches
+    return cited
+
+
 @dataclass
 class _GroupRef:
     """接続の中の根拠 1 件（並べ替えの材料）。"""
@@ -269,7 +319,7 @@ class _GroupRef:
 def _ordered(refs: list[_GroupRef], answer: str) -> list[tuple[str, str]]:
     """回答が使った根拠を先にした並び（#1364・#1451）。
 
-    1. 回答が `chunk_id` を書いた根拠（新しい呼び出しから順）
+    1. 回答が `chunk_id` を書いた根拠（省いて書いて 1 つに決まる形を含む。新しい呼び出しから順）
     2. 回答に固有の特徴（ID・コード・引用・見出し・同じ並び・「文書名＋第 N 章」の章節の参照）で
        当たった根拠（重みの大きい順）
     3. 同じ会話の前のターンで回答の段落を裏付けた根拠（#1837。新しいターンから順）
@@ -280,10 +330,11 @@ def _ordered(refs: list[_GroupRef], answer: str) -> list[tuple[str, str]]:
         return [item.ref for item in refs]
     features = answer_features(answer)
     weights = order_weights([matched_features(features, item.evidence) for item in refs])
+    cited = _cited_chunk_ids(answer, [item.ref[1] for item in refs])
 
     def key(index: int) -> tuple[int, float, int]:
         item = refs[index]
-        if _cited_in(answer, item.ref[1]):
+        if item.ref[1] in cited:
             return (0, 0.0, item.order)
         distinct, weight = weights[index]
         if distinct:

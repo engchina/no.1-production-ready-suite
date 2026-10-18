@@ -6,17 +6,27 @@ from unittest.mock import patch
 
 import pytest
 
-from rag_engine.evaluation.answer_validation import VALIDATION_RUBRIC_VERSION, ClaimAuditOutput, validate_answer_claims
+from rag_engine.evaluation.answer_validation import (
+    QUESTION_ID,
+    VALIDATION_RUBRIC_VERSION,
+    ClaimAuditOutput,
+    validate_answer_claims,
+)
 
 EVIDENCE = [{"id": "c1", "source": "manual.pdf", "page_start": 1, "page_end": 1, "text": "検証用アカウントの有効期限は最長 30 日です。"}]
 ANSWER = "検証用アカウントの有効期限は最長 30 日です。\n\n延長は 90 日までできます。"
+
+
+def _documents(payload: dict) -> list[dict]:
+    """モデルに渡した根拠のうち、質問の文（先頭に足す資料ではない根拠）を除いたもの。"""
+    return [item for item in payload["evidence_items"] if item.get("id") != QUESTION_ID]
 
 
 def _passages(inputs: str) -> list[str]:
     import json
 
     payload = json.loads(inputs)
-    return [item["id"] for item in payload["answer_passages"]], payload["evidence_items"][0]["evidence_id"]
+    return [item["id"] for item in payload["answer_passages"]], _documents(payload)[0]["evidence_id"]
 
 
 def test_claims_are_bound_to_passages_and_evidence() -> None:
@@ -109,7 +119,7 @@ def test_headings_citations_and_questions_are_not_audited() -> None:
 
         payload = json.loads(inputs)
         seen.append([item["text"] for item in payload["answer_passages"]])
-        evidence_id = payload["evidence_items"][0]["evidence_id"]
+        evidence_id = _documents(payload)[0]["evidence_id"]
         ids = [item["id"] for item in payload["answer_passages"]]
         assert "reason も日本語で書く" in system
         return ClaimAuditOutput.model_validate(
@@ -189,7 +199,7 @@ def test_location_lines_evidence_ids_and_table_structure_are_not_audited() -> No
 
         payload = json.loads(inputs)
         seen.append([item["text"] for item in payload["answer_passages"]])
-        evidence_id = payload["evidence_items"][0]["evidence_id"]
+        evidence_id = _documents(payload)[0]["evidence_id"]
         return ClaimAuditOutput.model_validate(
             {
                 "claim_checks": [
@@ -262,7 +272,7 @@ def _bridge_validation(evidence_id: str, *, evidence_quote: str = "") -> dict:
         import json
 
         payload = json.loads(inputs)
-        ids = {item["id"]: item["evidence_id"] for item in payload["evidence_items"]}
+        ids = {item["id"]: item["evidence_id"] for item in _documents(payload)}
         assert "「,」で区切って evidence_id に書く" in system
         return ClaimAuditOutput.model_validate(
             {
@@ -369,7 +379,7 @@ def test_citation_lines_of_the_evaluation_answers_are_not_audited(case: dict) ->
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
         seen.append([item["text"] for item in payload["answer_passages"]])
-        evidence_id = payload["evidence_items"][0]["evidence_id"]
+        evidence_id = _documents(payload)[0]["evidence_id"]
         return ClaimAuditOutput.model_validate(
             {
                 "claim_checks": [
@@ -532,7 +542,7 @@ def test_headings_of_the_evaluation_answers_are_not_audited(case: dict) -> None:
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
         seen.append([item["text"] for item in payload["answer_passages"]])
-        evidence_id = payload["evidence_items"][0]["evidence_id"]
+        evidence_id = _documents(payload)[0]["evidence_id"]
         return ClaimAuditOutput.model_validate(
             {
                 "claim_checks": [
@@ -716,7 +726,7 @@ def _portal_validation(written: list[str]) -> dict:
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
-        ids = [item["evidence_id"] for item in payload["evidence_items"]]
+        ids = [item["evidence_id"] for item in _documents(payload)]
         assert "省かず・短くせずにそのまま書く" in system
         return ClaimAuditOutput.model_validate(
             {
@@ -861,7 +871,7 @@ def test_chunk_ids_abbreviated_in_the_answer_are_bound_when_copied_by_the_model(
     assert result["claim_checks"][1]["source_id"] == f"{RETENTION_SET}:1"
     [recheck] = rechecks
     assert [passage["id"] for passage in recheck["answer_passages"]] == ["A1", "A3"]
-    assert [item["id"] for item in recheck["evidence_items"]] == [f"{RETENTION_SET}:1"]
+    assert [item["id"] for item in _documents(recheck)] == [f"{RETENTION_SET}:1"]
     assert result["rechecked_passage_ids"] == []
     # 「…」を落とした ID も、番号が違う・残した部分が短い・部分の数が違うものは結び付けない。
     result = _retention_validation([dropped.replace(":1", ":9"), f"{RETENTION_SET.split(':')[0]}:16f112:1", f"{RETENTION_SET}:extra:1"])
@@ -926,7 +936,7 @@ def _deadline_validation(
             answers = claims
         else:
             assert recheck is not None, "確かめ直しを想定していない"
-            ids = [item["evidence_id"] for item in payload["evidence_items"]]
+            ids = [item["evidence_id"] for item in _documents(payload)]
             answers = [(status, evidence_id.format(*ids)) for status, evidence_id in recheck]
         return ClaimAuditOutput.model_validate(
             {
@@ -1000,7 +1010,7 @@ def test_model_citation_errors_with_resolved_ids_are_not_kept() -> None:
     result = _deadline_validation(first, recheck=[("supported", "{0},{1}")], calls=calls)
     assert [claim["status"] for claim in result["claim_checks"]] == ["unassessed", "unassessed", "supported", "supported"]
     assert result["claim_checks"][3]["source_id"] == MES and result["rechecked_passage_ids"] == ["A4"]
-    assert [item["id"] for item in calls[1]["evidence_items"]] == [MES, QMS]
+    assert [item["id"] for item in _documents(calls[1])] == [MES, QMS]
 
 
 def test_unresolved_ids_in_the_answer_stay_citation_errors() -> None:
@@ -1096,7 +1106,7 @@ def _window_validation(
         assert answers is not None, "確かめ直しを想定していない"
         if isinstance(answers, Exception):
             raise answers
-        ids = {item["id"]: item["evidence_id"] for item in payload["evidence_items"]}
+        ids = {item["id"]: item["evidence_id"] for item in _documents(payload)}
 
         def written(passage_id: str) -> str:
             text = answers[passage_id][1]
@@ -1145,7 +1155,7 @@ def test_unreferenced_conclusions_are_rechecked_with_evidence_cited_by_other_pas
     assert "その evidence_id を evidence_id に書く" in system
     assert [passage["id"] for passage in first["answer_passages"]] == ["A2", "A4", "A5", "A6"]
     assert [passage["id"] for passage in recheck["answer_passages"]] == ["A2", "A6"]
-    assert [item["id"] for item in recheck["evidence_items"]] == [f"{PLAN}:1", f"{CHANGE}:4"]
+    assert [item["id"] for item in _documents(recheck)] == [f"{PLAN}:1", f"{CHANGE}:4"]
     assert recheck["answer_text"] == WINDOW_ANSWER and recheck["question"] == first["question"]
 
 
@@ -1184,7 +1194,7 @@ def test_written_ids_missing_from_the_evidence_stay_citation_errors_and_are_not_
     # 確かめ直しの段落に A4（ID を書いた段落）は入らず、候補は A5 が引いた根拠だけ。
     recheck = calls[1][1]
     assert [passage["id"] for passage in recheck["answer_passages"]] == ["A2", "A6"]
-    assert [item["id"] for item in recheck["evidence_items"]] == [f"{CHANGE}:4"]
+    assert [item["id"] for item in _documents(recheck)] == [f"{CHANGE}:4"]
     # 他の段落が引いた根拠がどれも決まらなければ、確かめ直さない。
     answer = answer.replace(f"{CHANGE}:4】", f"{unknown}】")
     result, calls = _window_validation({**first, "A5": ("supported", unknown)}, None, answer=answer)
@@ -1243,7 +1253,7 @@ def _oms_validation(answer: str, verdict) -> tuple[dict, str]:
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
         seen.append((system, [passage["text"] for passage in payload["answer_passages"]]))
-        ids = {item["id"]: item["evidence_id"] for item in payload["evidence_items"]}
+        ids = {item["id"]: item["evidence_id"] for item in _documents(payload)}
         status, chunk_id = verdict(system)
         return ClaimAuditOutput.model_validate(
             {
@@ -1356,7 +1366,7 @@ def test_paragraphs_that_only_write_the_location_differently_are_not_unsupported
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
-        [item] = payload["evidence_items"]
+        [item] = _documents(payload)
         seen["system"] = system
         located = item.get("row_start") == 23 and item.get("sheet_name") == "システム台帳"
         return ClaimAuditOutput.model_validate(
@@ -1414,7 +1424,7 @@ def test_quoted_ledger_header_is_audited_as_one_passage() -> None:
                         "answer_quote": "段落",
                         "answer_passage_id": item["id"],
                         "status": "supported",
-                        "evidence_id": payload["evidence_items"][0]["evidence_id"],
+                        "evidence_id": _documents(payload)[0]["evidence_id"],
                         "source_id": "",
                         "evidence_quote": "",
                         "reason": "根拠に記載",
@@ -1459,7 +1469,7 @@ def test_premises_support_the_user_answer_and_the_conclusion_drawn_from_it() -> 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
         seen.update(payload=payload, system=system)
-        premise, document = payload["evidence_items"]
+        premise, document = _documents(payload)
         ids = [item["id"] for item in payload["answer_passages"]]
 
         def check(passage_id: str, status: str, evidence_id: str) -> dict:
@@ -1487,7 +1497,7 @@ def test_premises_support_the_user_answer_and_the_conclusion_drawn_from_it() -> 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = validate_answer_claims("アカウントを削除する手順", PREMISE_ANSWER, PREMISE_EVIDENCE, settings=None, premises=premises)
 
-    premise = seen["payload"]["evidence_items"][0]
+    premise = _documents(seen["payload"])[0]
     assert (premise["id"], premise["source"]) == (f"{PREMISE_ID_PREFIX}1", PREMISE_SOURCE)
     # モデルには根拠の本文の文字の形をそろえて渡す（「？」は半角になる。#1350）。
     assert premise["text"].endswith("\n利用者の答え: いいえ")
@@ -1512,7 +1522,7 @@ def test_premises_are_not_truncated_by_the_evidence_budget() -> None:
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
-        seen.append(payload["evidence_items"])
+        seen.append(_documents(payload))
         return ClaimAuditOutput.model_validate({"claim_checks": []})
 
     long_evidence = [{"id": f"c{i}", "source": "m.pdf", "page_start": 1, "page_end": 1, "text": "あ" * 4000} for i in range(200)]
@@ -1542,7 +1552,7 @@ def test_data_results_support_values_and_conclusions_drawn_from_them() -> None:
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
         seen.update(payload=payload, system=system)
-        data, document = payload["evidence_items"]
+        data, document = _documents(payload)
         ids = [item["id"] for item in payload["answer_passages"]]
         return ClaimAuditOutput.model_validate(
             {
@@ -1581,7 +1591,7 @@ def test_data_results_support_values_and_conclusions_drawn_from_them() -> None:
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = validate_answer_claims("q", DATA_ANSWER, DATA_EVIDENCE, settings=None, data_results=data_results)
 
-    data = seen["payload"]["evidence_items"][0]
+    data = _documents(seen["payload"])[0]
     assert (data["id"], data["source"]) == (f"{DATA_RESULT_ID_PREFIX}1", DATA_RESULT_SOURCE)
     assert "実行した SQL: SELECT COUNT(*)" in data["text"]
     assert DATA_RESULT_SOURCE in seen["system"]
@@ -1593,3 +1603,102 @@ def test_data_results_support_values_and_conclusions_drawn_from_them() -> None:
     assert is_premise_id("data:1")
     assert len(data_result_items(data_results)) == 1
     assert len(data_result_items([{"result": "x"}] * 20)) == 10
+
+
+QUESTION_TEXT = "年収 120 万円の配偶者は、収入の要件を満たしますか。"
+QUESTION_ANSWER = (
+    "配偶者の年収は 120 万円です。\n\n年収 120 万円は 130 万円未満なので、収入の要件を満たします。\n\n要件の確認は年に 2 回行います。"
+)
+QUESTION_EVIDENCE = [
+    {"id": "c1", "source": "rules.pdf", "page_start": 1, "page_end": 1, "text": "収入の要件は年収 130 万円未満であること。"},
+]
+
+
+def test_question_facts_support_stated_facts_and_rules_applied_to_them() -> None:
+    """質問の文を資料ではない根拠として先頭に渡し、質問の事実を述べた段落と規則を当てはめた結論を確かめる。
+
+    質問だけで裏付けた段落の出典は質問の id、資料の根拠と合わせて裏付けた段落の出典は資料の根拠。質問は検証した
+    根拠（evidence_ids）に数えない。
+    """
+    from rag_engine.evaluation.answer_validation import QUESTION_SOURCE, is_premise_id, question_items
+
+    seen: dict = {}
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        seen.update(payload=payload, system=system)
+        question, document = payload["evidence_items"]
+        ids = [item["id"] for item in payload["answer_passages"]]
+
+        def check(passage_id: str, status: str, evidence_id: str) -> dict:
+            return {
+                "answer_quote": "段落",
+                "answer_passage_id": passage_id,
+                "status": status,
+                "evidence_id": evidence_id,
+                "source_id": "",
+                "evidence_quote": "",
+                "reason": "判定",
+            }
+
+        return ClaimAuditOutput.model_validate(
+            {
+                "claim_checks": [
+                    check(ids[0], "supported", question["evidence_id"]),
+                    check(ids[1], "supported", f"{document['evidence_id']},{question['evidence_id']}"),
+                    check(ids[2], "unsupported", ""),
+                ]
+            }
+        )
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims(QUESTION_TEXT, QUESTION_ANSWER, QUESTION_EVIDENCE, settings=None)
+
+    question = seen["payload"]["evidence_items"][0]
+    assert (question["id"], question["source"], question["text"]) == (QUESTION_ID, QUESTION_SOURCE, QUESTION_TEXT)
+    assert QUESTION_SOURCE in seen["system"]
+    stated, applied, other = result["claim_checks"]
+    assert (stated["status"], stated["source_id"]) == ("supported", QUESTION_ID)
+    assert (applied["status"], applied["source_id"]) == ("supported", "c1")
+    assert other["status"] == "unsupported"
+    assert result["evidence_ids"] == ["c1"]
+    assert is_premise_id(QUESTION_ID)
+    assert question_items("  ") == []
+
+
+def test_validation_budget_comes_from_the_settings_and_keeps_the_question() -> None:
+    """根拠の予算は設定（answer_validation_max_input_bytes）で決まり、切り詰めても先頭の質問の文は残る。"""
+    from types import SimpleNamespace
+
+    seen: list = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        seen.append(json.loads(inputs)["evidence_items"])
+        return ClaimAuditOutput.model_validate({"claim_checks": []})
+
+    evidence = [{"id": f"c{i}", "source": "m.pdf", "page_start": 1, "page_end": 1, "text": "あ" * 1500} for i in range(40)]
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        small = validate_answer_claims("q", "承認は得ていません。", evidence, settings=None)
+        large = validate_answer_claims(
+            "q", "承認は得ていません。", evidence, settings=SimpleNamespace(answer_validation_max_input_bytes=400_000)
+        )
+    assert small["evidence_truncated"] is True and seen[0][0]["id"] == QUESTION_ID
+    assert large["evidence_truncated"] is False
+    assert [item["id"] for item in seen[1]] == [QUESTION_ID, *(f"c{i}" for i in range(40))]
+
+
+@pytest.mark.parametrize(
+    ("written", "expected"),
+    [
+        ("set0123456789abcdef:37", True),
+        ("set0123…:37", True),
+        ("set0123456789abcdef:38", False),
+        ("37", False),
+        ("set:37", False),
+    ],
+)
+def test_chunk_ids_written_without_the_document_id_point_to_their_evidence(written: str, expected: bool) -> None:
+    """先頭の文書の id を落とした「chunk_set:番号」の ID は、後ろの部分にそろえて照合する（番号はそのまま一致）。"""
+    from rag_engine.evaluation.answer_eval import _abbreviated_id_matches
+
+    assert _abbreviated_id_matches(written, "doc0123456789:set0123456789abcdef:37") is expected

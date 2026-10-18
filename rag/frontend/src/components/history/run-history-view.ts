@@ -12,6 +12,7 @@ import {
   type RunStatus as SharedRunStatus,
   type RunStatusFilter as SharedRunStatusFilter,
   type RunStatusLabels,
+  type RunStepDetails,
   type RunTimelineStep,
   type RunTimelineStepStatus,
   type StatusVariant,
@@ -190,6 +191,17 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
     const calls = llmCalls.get(name) ?? 0;
     return calls > 0 ? t("history.process.llmCalls", { count: formatNumber(calls) }) : undefined;
   };
+  // 工程の詳細の行（段を開いて見る。#2294）。同じ名前の工程は記録の順に対応させる。
+  const detailsQueue = new Map<string, (string[] | undefined)[]>();
+  for (const step of run.steps) {
+    const queue = detailsQueue.get(step.name) ?? [];
+    queue.push(step.details);
+    detailsQueue.set(step.name, queue);
+  }
+  const detailsFor = (name: string): RunStepDetails | undefined => {
+    const lines = detailsQueue.get(name)?.shift()?.filter(Boolean);
+    return lines && lines.length > 0 ? { lines } : undefined;
+  };
   const topLevel = run.stages.filter((stage) => !stage.stage.startsWith(ANSWER_STEP_STAGE_PREFIX));
   // 回答フローの中の工程: 進捗の `answer_step:` の段（チャット・流した RAG 検索）か、無ければ回答の記録の工程。
   const nestedStages = run.stages.filter((stage) => stage.stage.startsWith(ANSWER_STEP_STAGE_PREFIX));
@@ -202,6 +214,7 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
             status: runStepStatus(stage.outcome),
             durationMs: stage.elapsed_ms,
             detail: detailFor(name),
+            details: detailsFor(name),
           };
         })
       : run.steps.map((step) => ({
@@ -209,6 +222,7 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
           status: answerStepStatus(step.status),
           durationMs: step.elapsed_seconds == null ? null : step.elapsed_seconds * 1000,
           detail: detailFor(step.name),
+          details: detailsFor(step.name),
         }));
 
   // 段は順に並び、時刻は記録していないので所要時間から位置を作る（工程は「根拠の検索と回答の生成」の段の始まりから）。
@@ -231,6 +245,7 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
         startedAt: timed ? iso(childCursor) : null,
         finishedAt: timed ? iso(childCursor + duration) : null,
         detail: child.detail,
+        ...(child.details ? { details: child.details } : {}),
         level: 1,
       });
       if (timed) childCursor += duration;

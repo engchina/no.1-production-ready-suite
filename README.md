@@ -30,6 +30,19 @@ stack は VCN・subnet・security list・NSG を作らず、フォームで選�
 - egress: Compute は配備と実行で外部（GitHub・dnf・uv / npm の取得、OCI Generative AI・OCI Enterprise AI・Object Storage）へ HTTPS で出ます。Compute の subnet の security list の egress（既定は `0.0.0.0/0` のすべて）を絞っているなら TCP `443` の egress を残し、private subnet なら NAT gateway（と Service gateway）の経路を用意します。
 - 製品間の通信（Agent → RAG / NL2SQL の MCP）は同じ Compute の `127.0.0.1` なので、security list は要りません。
 
+### 配備の前に: Object Storage の bucket
+
+アップロードした原本（RAG の文書・NL2SQL のオントロジーの資料）は、配備の直後は Compute のディスク（`/u01/data/production-ready-<製品>` の下）に保存します（stack が `platform/.env` に `PLATFORM_UPLOAD_STORAGE_BACKEND=local` を書きます）。保存先を OCI Object Storage にするときは、stack が bucket も IAM の policy も作らないので、次を用意してください。ローカルのまま使うなら要りません。
+
+| 用意するもの | 内容 |
+|---|---|
+| bucket | OCI のコンソールの「ストレージ › オブジェクト・ストレージとアーカイブ・ストレージ › バケット」で作ります。名前は `platform/.env` の既定の `production-ready`（別の名前なら配備の後に画面で指定します）。リージョンは既定では stack と同じ（stack が `PLATFORM_OBJECT_STORAGE_REGION` に stack の `region` を書きます）。3 製品は OCI SDK の署名付きの要求で読み書きするので、bucket は公開しなくてかまいません。 |
+| IAM の policy | 「システム設定 › OCI 認証」で設定する API キーのユーザーのグループに、bucket の参照と object の読み書き・削除を許します: `Allow group <group> to read buckets in compartment <bucket の compartment>` と `Allow group <group> to manage objects in compartment <bucket の compartment>` |
+
+- 配備の後に `system_admin` でログインし、「システム設定 › OCI 認証」の「Object Storage」で、namespace を「取得」ボタンで取得して（手入力はできません）リージョンとともに保存します。続けて「システム設定 › アップロード保存先」で「OCI Object Storage」を選び、bucket を指定して「接続を確認」を押します。設定は 3 製品で共通です。
+- 「接続を確認」と保存のときは、bucket の参照（`read buckets`）と、確認用の小さな object の書き込み・読み取り・削除（`manage objects`）を試します。bucket が無い・権限が足りないときは保存しません（#2101）。
+- Object Storage へは Compute から HTTPS（TCP `443`）で出ます。private subnet なら NAT gateway か Service gateway の経路を用意します（上の egress）。
+
 ## 配備した後の初期設定（推奨のロールとユーザー）
 
 配備の直後にログインできるのは、構成のシステム管理者（ログイン ID `system_admin`）だけです。
@@ -202,8 +215,9 @@ claude plugin list   # production-ready-skills@production-ready-suite が ✔ en
 
 ## 開発ルール
 
-- 共通ルール（GitHub 運用・Issue / PR 規約・CI・デザインシステム）: [AGENTS.md](./AGENTS.md)
-- 製品固有ルール: 各ディレクトリの `AGENTS.md`
+- 共通ルール（GitHub 運用・Issue / PR 規約・CI・デザインシステム）: [AGENTS.md](./AGENTS.md)。詳細は作業ごとに [docs/agents/](./docs/agents/) の文書を読む
+- 製品固有ルール: 各ディレクトリの `AGENTS.md`（詳細は各製品の `docs/agents/`）
+- `AGENTS.md` の大きさの上限（root は 20 KB、root と製品の合計は 32 KB。Codex の `project_doc_max_bytes` の既定 32 KiB に収める）は `scripts/check-agents-md-size.sh` が CI で確かめる
 - Claude Code（2.1.277 以降）と Codex は `AGENTS.md` を直接読み込みます。`CLAUDE.md` は置いていません。
 
 ## CI

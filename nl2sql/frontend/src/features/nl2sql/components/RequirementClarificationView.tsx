@@ -7,8 +7,12 @@
 // 入力）・「この内容で SQL を生成して実行」・「確認をやめる」）・終わった確認は、ここで決める。確認事項が 0 件でも、
 // 利用者が「この内容で SQL を生成して実行」を押すまで要件を生成に渡さない（#1761）。確認事項と確かめて生成する
 // カードは 3 製品共通の回答前の確認のカード（`ClarificationCard`。#1839）で出す。
+//
+// チャットは「確認をやめる」を出さない（#2303）。確認を終える操作は「確認せずに SQL を生成」だけにし、質問を
+// 取り消さずに SQL の生成へ進む。AI の処理中（要件の下書き・回答の後の再検査）も、経過の行の同じ操作で待たずに
+// 進める。経過時間はその処理を始めた時から数える（利用者が答えていた時間を含めない）。
 import type { ReactNode } from "react";
-import { CheckCircle2, Sparkles, X } from "lucide-react";
+import { CheckCircle2, MessageSquareText, Sparkles, X } from "lucide-react";
 
 import { Banner, Button, ProcessingIndicator, StatusBadge } from "@production-ready/ui";
 
@@ -46,8 +50,11 @@ export interface RequirementClarificationViewProps {
   onSkip: () => void;
   /** 確かめた要件で次へ進む（反映 / SQL の生成）。 */
   onApply: () => void;
-  /** 「確認をやめる」（チャットは質問を入力欄に戻す）。 */
-  onClose: () => void;
+  /**
+   * 「確認をやめる」（SQL 生成の画面のパネルを閉じる）。渡さなければ（チャット）「確認をやめる」を出さず、
+   * 確認を終える操作を「確認せずに SQL を生成」（`onSkip`）にし、AI の処理中の経過の行にも出す（#2303）。
+   */
+  onClose?: () => void;
   /**
    * SQL を実行できる（実行の権限がある）か。無ければ確定の操作は「この内容で SQL を生成」（生成だけ）にする。
    * 画面ごとの文言の違いではなく、権限による違い（#1761。文言は両方の画面で同じ）。
@@ -79,7 +86,9 @@ export function RequirementClarificationView({
   // 確定して進む操作の文言は、SQL 生成の画面とチャットで同じ（#1761。押すと確定した要件で SQL を生成して実行する）。
   const applyLabel = canExecuteSql ? t("chat.requirement.generate") : t("chat.requirement.generateOnly");
   const titleId = `${idPrefix}-guided-clarification-title`;
-  const closeButton = (
+  // 「確認をやめる」を出さない画面（チャット）は、AI の処理中も経過の行から待たずに SQL の生成へ進める。
+  const skipWhileWorking = onClose ? undefined : onSkip;
+  const closeButton = onClose ? (
     <Button
       type="button"
       variant="ghost"
@@ -92,7 +101,22 @@ export function RequirementClarificationView({
     >
       {t("nl2sql.clarification.close")}
     </Button>
-  );
+  ) : null;
+  // 確認を終える操作（チャットは「確認せずに SQL を生成」。終わった確認・答える項目の無い状態の出口）。
+  const exitButton =
+    closeButton ?? (
+      <Button
+        type="button"
+        variant="secondary"
+        size={size}
+        icon={MessageSquareText}
+        disabled={Boolean(busyAction)}
+        onClick={onSkip}
+        data-testid="nl2sql-clarification-skip"
+      >
+        {t("chat.requirement.skip")}
+      </Button>
+    );
   return (
     <section
       aria-labelledby={titleId}
@@ -122,7 +146,7 @@ export function RequirementClarificationView({
           error={check.checkError}
           onRetry={onRetry}
           onSkip={onSkip}
-          cancelAction={closeButton}
+          cancelAction={closeButton ?? undefined}
           size={size}
           testId="nl2sql-guided-clarification-error"
         />
@@ -139,10 +163,12 @@ export function RequirementClarificationView({
             label={t(START_PHASE_LABELS[startPhase])}
             placement="panel"
             testId="nl2sql-guided-start-progress"
+            onCancel={skipWhileWorking}
+            labels={{ cancel: t("chat.requirement.skip") }}
           />
         </div>
       ) : null}
-      <RequirementAnswerProgress active={busyAction === "answer"} />
+      <RequirementAnswerProgress active={busyAction === "answer"} onSkip={skipWhileWorking} />
 
       {startSlot}
 
@@ -182,8 +208,8 @@ export function RequirementClarificationView({
         </div>
       ) : null}
 
-      {!activeItem && !showApply && !startSlot && !check.checkError ? (
-        <div className="flex flex-wrap justify-end border-t border-border pt-4">{closeButton}</div>
+      {!activeItem && !showApply && !startSlot && !check.checkError && !(skipWhileWorking && check.checking) ? (
+        <div className="flex flex-wrap justify-end border-t border-border pt-4">{exitButton}</div>
       ) : null}
     </section>
   );

@@ -246,12 +246,12 @@ def _next_batch(fixed: dict[str, Any], pending: deque, previous, batch_index: in
     return inputs
 
 
-def _parse_checked(system, inputs, settings, schema, provider_id, check):
+def _parse_checked(system, inputs, settings, schema, provider_id, check, *, max_input_bytes: int = MAX_EVALUATION_INPUT_BYTES):
     """同じ根拠と採点範囲を保ち、違反内容を指摘して1回だけ再試行する。根拠の本文は ``model_request`` の形で渡す。"""
     request = dict(model_request(inputs))
     for attempt in range(2):
         size = len((system + _json(request) + _json(schema.model_json_schema())).encode("utf-8"))
-        if size > MAX_EVALUATION_INPUT_BYTES:
+        if size > max_input_bytes:
             raise EvaluationInputTooLarge
         try:
             raw = parse_text_response(system, _json(request), settings, schema, provider_id=provider_id)
@@ -398,7 +398,11 @@ _EVIDENCE_ID_LABEL = re.compile(
 # 「証拠」や「第3章」のような ID でない語は ID として数えない（#1404）。
 _ID_SHAPE = re.compile(r":|[0-9a-f]{6,}", re.IGNORECASE)
 # 回答の段落に書かれた chunk の id（「文書:chunk_set:番号」。途中を「…」で省いたものを含む。#1404）。
-_CITED_CHUNK_ID = re.compile(r"(?<![0-9A-Za-z])[0-9A-Fa-f]{6,}(?:[0-9A-Fa-f:…‥]|\.{2,})*:[0-9]+(?![0-9A-Za-z])")
+# 区切りの「:」の代わりに書かれる横線（「78f40985‑…‑244」）。照合の前に「:」へそろえる。
+_ID_DASHES = "‐‑‒–—―-"
+_CITED_CHUNK_ID = re.compile(
+    rf"(?<![0-9A-Za-z])[0-9A-Fa-f]{{6,}}(?:[0-9A-Fa-f:…‥{_ID_DASHES}]|\.{{2,}})*[:{_ID_DASHES}][0-9]+(?![0-9A-Za-z])"
+)
 # ID の途中・末尾を省いた印（「af25…:1」「E0d7d98...」）。
 _ID_ELLIPSIS = re.compile(r"…+|‥+|\.{2,}")
 # 片段の ID（「E + 16 進」）。モデルは後ろを切って短く書くことがある（「E0d7d982」。#1391）。
@@ -418,6 +422,12 @@ def _abbreviated_part_matches(written: str, actual: str) -> bool:
     return re.fullmatch(".+".join(re.escape(piece) for piece in pieces), actual) is not None
 
 
+def _normalize_written_id(written: str) -> str:
+    """書いた ID の区切りの横線を「:」にし、省略の印の直前の区切りを除く（「78f40985‑…‑244」→「78f40985…:244」）。"""
+    written = re.sub(f"[{_ID_DASHES}]", ":", written)
+    return re.sub(r":+(?=…|‥|\.{2,})", "", written)
+
+
 def _abbreviated_id_matches(written: str, actual: str) -> bool:
     """省いて書いた ID（後ろを切った片段の ID・途中を省いた chunk の id）が actual を指すか (#1391)。
 
@@ -426,7 +436,7 @@ def _abbreviated_id_matches(written: str, actual: str) -> bool:
     chunk の id は「:」で区切った部分ごとに照合し、最後の部分（chunk の番号）はそのまま一致することを求める。
     大文字・小文字は区別しない。
     """
-    written, actual = written.lower(), actual.lower()
+    written, actual = _normalize_written_id(written).lower(), actual.lower()
     if written == actual:
         return True
     if ":" not in actual:
@@ -438,6 +448,10 @@ def _abbreviated_id_matches(written: str, actual: str) -> bool:
     if _ID_ELLIPSIS.search(written) and _abbreviated_part_matches(written, actual):
         return True
     written_parts, actual_parts = written.split(":"), actual.split(":")
+    # 先頭の部分（文書の id）を落として「chunk_set:番号」とだけ書いた ID は、後ろの部分にそろえて照合する。
+    # 番号だけの ID は別の文書の同じ番号と区別できないので、番号の前の部分を 1 つ以上求める。
+    if 2 <= len(written_parts) < len(actual_parts):
+        actual_parts = actual_parts[-len(written_parts) :]
     if len(written_parts) != len(actual_parts) or written_parts[-1] != actual_parts[-1]:
         return False
     return all(w == a or _abbreviated_part_matches(w, a) for w, a in zip(written_parts[:-1], actual_parts[:-1], strict=True))

@@ -639,6 +639,45 @@ def test_evidence_groups_keep_chunks_the_answer_cited_within_the_limit() -> None
     assert {"document_id": "doc-1", "chunk_id": "doc-1:set:12"} not in newest
 
 
+def test_evidence_groups_keep_chunks_cited_with_abbreviated_ids() -> None:
+    """回答が根拠の id を省いて書いた（文書の id を落とした・途中を「…」で省いた・区切りを
+    横線で書いた）引用も、1 つの根拠に決まれば上限の中に入れる。番号だけ・どの根拠か決まらない
+    書き方は数えない。"""
+
+    def ids(call: int) -> tuple[str, str]:
+        return f"{call}f1e2d3c4b5a69788796a5b4c3d2e1f0", f"{call}1b2c3d4e5f60718293a4b5c6d7e8f90"
+
+    def evidence(call: int) -> dict[str, Any]:
+        doc, chunk_set = ids(call)
+        return {
+            "evidence": [
+                {"document_id": doc, "chunk_id": f"{doc}:{chunk_set}:{index}"}
+                for index in range(1, 13)
+            ]
+        }
+
+    steps = [
+        _step("rag__rag_retrieve_evidence", {"query": f"段 {call}"}, evidence(call))
+        for call in (1, 2, 3)
+    ]
+    doc, chunk_set = ids(1)
+    answer = (
+        f"台帳の行で担当部署は経理部です【evidence_id: {chunk_set}:12】。"
+        f"承認者は管理本部長です【証拠 ID {doc[:8]}‑…‑11】。"
+        f"期限は 30 日です【{chunk_set[:10]}…:10】。"
+        "番号だけの引用は数えません【:9】。"
+    )
+
+    [(_name, refs)] = run_evidence_groups(steps, answer)
+
+    assert {ref["chunk_id"] for ref in refs[:3]} == {
+        f"{doc}:{chunk_set}:12",
+        f"{doc}:{chunk_set}:11",
+        f"{doc}:{chunk_set}:10",
+    }
+    assert {"document_id": doc, "chunk_id": f"{doc}:{chunk_set}:9"} not in refs
+
+
 def _previous_validation(
     chunk_status: list[tuple[str, str]], *, status: str = "completed", connection: str = "rag"
 ) -> dict[str, Any]:

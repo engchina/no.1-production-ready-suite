@@ -494,6 +494,27 @@ def layout_section_paths(records: Sequence[dict[str, Any]]) -> dict[str, list[st
     return paths
 
 
+def heading_level_candidates(records: Sequence[dict[str, Any]]) -> list[tuple[str, str, int | None]]:
+    """見出しの階層を推定するとき（backend の LLM の段。#2277）に渡す見出しを読み順に返す。
+
+    要素は (record の id, 見出しの文字列, 番号の体系から決まる階層。決まらなければ None)。見出しは
+    `_promote_headings` を通したもの（chunk の section_path と同じ判定）で、深さが既に決まっている
+    見出し（柱の初出・しおりの深さ）と、本文中の見出しの再掲は除く。入力は変更しない。
+    """
+    ordered = sorted(_promote_headings(records), key=lambda item: (int(item.get("page") or 0), int(item.get("seq_no") or 0)))
+    candidates: list[tuple[str, str, int | None]] = []
+    for record in ordered:
+        if str(record.get("category") or "") not in SECTION_CATEGORIES:
+            continue
+        record_id = str(record.get("id") or "")
+        text = _record_text(record).strip()
+        raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+        if not record_id or not text or raw.get("recurring_heading") or _int_value(raw.get("heading_level")) is not None:
+            continue
+        candidates.append((record_id, text, _heading_level(text)))
+    return candidates
+
+
 def _section_unit(path: Sequence[str]) -> tuple[str, ...]:
     """section_path のうち番号付き機能見出しまで（機能ユニット）。番号見出しがなければ空。"""
     return _section_unit_cached(tuple(str(item) for item in path), current_pack().hash)

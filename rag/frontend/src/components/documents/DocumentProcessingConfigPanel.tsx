@@ -71,6 +71,7 @@ function emptyConfig(): DocumentProcessingConfig {
     parser_dots_ocr_enabled: null,
     parser_xml_tree_json_enabled: null,
     vision_enabled: null,
+    heading_level_inference_enabled: null,
     chunking_strategy: null,
     chunk_size: null,
     chunk_overlap: null,
@@ -99,6 +100,7 @@ const EDITOR_ID_SUFFIX: Record<RecipeConfigField, string> = {
   auto_parse_after_preprocess_enabled: "auto-parse",
   parser_adapter_backend: "parser",
   vision_enabled: "vision",
+  heading_level_inference_enabled: "heading-levels",
   field_extraction_enabled: "field",
   navigation_summary_enabled: "navigation",
   auto_chunk_after_extract_enabled: "auto-chunk",
@@ -309,6 +311,8 @@ export function DocumentProcessingConfigPanel({
                 ? t("knowledgeBases.adapter.field.vision.hint")
                 : field === "entity_index_enabled"
                   ? t("knowledgeBases.adapter.field.entityIndex.hint")
+                : field === "heading_level_inference_enabled"
+                  ? t("knowledgeBases.adapter.field.headingLevels.hint")
                 : field === "field_extraction_enabled" && fieldSchemaStandard
                   ? t("documents.processingConfig.fieldSchemaStandard")
                   : null

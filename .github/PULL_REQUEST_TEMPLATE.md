@@ -1,5 +1,5 @@
 <!--
-記述規約の正本は AGENTS.md の「GitHub Issue / Pull Request の記述規約」。
+記述規約の正本は docs/agents/github-workflow.md の「GitHub Issue / Pull Request の記述規約」（要約は AGENTS.md の「Issue / PR の書き方」）。
 - PR title は `<type>(<scope>): <日本語の要約> (#<issue-number>)`。
   type は feat / fix / docs / test / refactor / chore / ci など。scope は rag / nl2sql / agent / platform
   （複数にまたがる場合や monorepo 全体は省略可）。

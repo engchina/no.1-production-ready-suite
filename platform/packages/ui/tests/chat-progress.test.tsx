@@ -296,6 +296,51 @@ describe("ChatProgress", () => {
     expect(host.querySelector("details")!.open).toBe(true);
   });
 
+  it("詳細のある段階だけに開閉のボタンを付け、完了後に一覧を開いても詳細は閉じたまま（#2294）", () => {
+    render(
+      <ChatProgress
+        steps={[
+          { id: "a", label: "準備しました", status: "done", startedAt: at(0), finishedAt: at(1) },
+          {
+            id: "b",
+            label: "SQL を生成しました",
+            status: "done",
+            startedAt: at(1),
+            finishedAt: at(3),
+            details: { code: [{ label: "生成した SQL", language: "sql", text: "SELECT 1 FROM DUAL" }] },
+          },
+        ]}
+        labels={{ detailsTruncated: "省略あり" }}
+        testId="p"
+      />
+    );
+    act(() => q("p-summary")!.click());
+    expect(q("p-step-a-toggle")).toBeNull();
+    const toggle = q("p-step-b-toggle")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(q("p-step-b-details")!.hidden).toBe(true);
+    act(() => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(q("p-step-b-details")!.querySelector("pre")?.textContent).toBe("SELECT 1 FROM DUAL");
+  });
+
+  it("実行中の段階の一覧でも、届いた詳細で開閉のボタンが付く（同じ状態の詳細の更新を捨てない）", () => {
+    const base: ChatProgressStep[] = [
+      { id: "a", label: "検索しました", status: "done", startedAt: at(0), finishedAt: at(1) },
+      { id: "b", label: "回答しています", status: "running", startedAt: at(1) },
+    ];
+    render(<ChatProgress steps={base} progressKey="k" testId="p" />);
+    expect(q("p-step-a-toggle")).toBeNull();
+    render(
+      <ChatProgress
+        steps={[{ ...base[0], details: { lines: ["検索文: 2 本"] } }, base[1]]}
+        progressKey="k"
+        testId="p"
+      />
+    );
+    expect(q("p-step-a-toggle")).not.toBeNull();
+  });
+
   it("失敗した段階があれば開いた状態で出し、失敗を文字とアイコンで示す", () => {
     render(
       <ChatProgress

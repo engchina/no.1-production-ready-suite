@@ -79,7 +79,7 @@ function timelineSteps(item: HistoryItem): RunTimelineStep[] {
     finishedAt: at(step.offsetMs + Math.max(0, step.durationMs)),
     durationMs: step.durationMs,
     level: step.level,
-    children: step.error ? <p className="break-words text-sm text-fg [overflow-wrap:anywhere]">{step.error}</p> : undefined,
+    details: step.details,
   }));
 }
 

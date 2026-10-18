@@ -10,7 +10,10 @@ import {
   runDurationMs,
   runFinishedAt,
   runStatusLabel,
+  pairToolProgressSteps,
   runTimelineSteps,
+  toolStepDetails,
+  withToolStepDetails,
 } from "@/lib/run-history";
 
 const NOW = "2026-10-15T09:00:00.000Z";
@@ -92,5 +95,55 @@ describe("詳細の時間と処理の経過", () => {
     expect(steps).toHaveLength(1);
     expect(steps[0]).toMatchObject({ id: "step:s1", status: "failed", label: "ツール rag__rag_search を呼べませんでした" });
     expect(steps[0].children).toBe("中身");
+  });
+});
+
+// #2294: チャットの処理の経過のツールの段を開いて見る詳細。
+describe("チャットの処理の経過のツールの段の詳細", () => {
+  const toolStep = (id: string, name: string, extra: Partial<RunState["steps"][number]> = {}) =>
+    ({
+      id,
+      run_id: "run-1",
+      kind: "tool",
+      status: "completed",
+      tool_call: { name, arguments: { query: "条件 A" } },
+      ...extra,
+    }) as RunState["steps"][number];
+
+  it("同じツールの n 回目の段を n 回目の step に結び、引数と結果の JSON・エラーを詳細にする", () => {
+    const progress = [
+      { id: "plan", label: "進め方を決めました", status: "done" as const },
+      { id: "tool:rag__rag_search", label: "ツール rag__rag_search を呼びました", status: "done" as const },
+      { id: "tool:rag__rag_search#2", label: "ツール rag__rag_search を呼べませんでした", status: "failed" as const },
+    ];
+    const steps = [
+      toolStep("s1", "rag__rag_search", {
+        tool_result: { name: "rag__rag_search", success: true, output: { answer: "回答 A" } } as never,
+      }),
+      toolStep("s2", "rag__rag_search", {
+        status: "failed",
+        tool_result: { name: "rag__rag_search", success: false, error: "時間切れ" } as never,
+      }),
+    ];
+    const [plan, first, second] = withToolStepDetails(progress, steps);
+    expect(plan.details).toBeUndefined();
+    expect(first.details?.code?.map((block) => [block.label, block.language])).toEqual([
+      ["引数", "json"],
+      ["結果", "json"],
+    ]);
+    expect(first.details?.code?.[1].text).toContain("回答 A");
+    expect(second.details?.fields).toEqual([{ label: "エラー", value: "時間切れ" }]);
+    expect(pairToolProgressSteps(progress, steps).get("tool:rag__rag_search#2")?.id).toBe("s2");
+  });
+
+  it("長い結果は先頭だけにして省略の印を付け、中身が無ければ詳細を付けない", () => {
+    const long = toolStep("s1", "nl2sql__query", {
+      tool_call: { name: "nl2sql__query", arguments: {} },
+      tool_result: { name: "nl2sql__query", success: true, output: { text: "x".repeat(10_000) } } as never,
+    });
+    const details = toolStepDetails(long);
+    expect(details?.truncated).toBe(true);
+    expect(details?.code).toHaveLength(1);
+    expect(toolStepDetails(toolStep("s2", "a", { tool_call: { name: "a", arguments: {} } }))).toBeUndefined();
   });
 });

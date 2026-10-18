@@ -7,7 +7,7 @@ assignees: []
 ---
 
 <!--
-記述規約の正本は AGENTS.md の「GitHub Issue / Pull Request の記述規約」。
+記述規約の正本は docs/agents/github-workflow.md の「GitHub Issue / Pull Request の記述規約」（要約は AGENTS.md の「Issue / PR の書き方」）。
 - 種別にかかわらず 問題 / 症状 / 原因 / 修正方針 の4項目は必須。原因が未確定でも省略せず、仮説または「調査中」と書く。
 - 本文は日本語。code identifier / API path / file path / command / 製品名は英語のままでよい。
 - 確認した事実と推測を区別する。未確定は「調査中」「未確認」と明記し、判明後に本文を更新する。

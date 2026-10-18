@@ -25,7 +25,7 @@ import {
   lastExecutionText,
   toChatResultTable,
 } from "../chatSqlExecution";
-import type { JobData, SqlChatExecuteData } from "../types";
+import type { JobData, QueryResults, SqlChatExecuteData } from "../types";
 import { JobFailureBody } from "./JobFailureBody";
 
 const executedAtFormatter = new Intl.DateTimeFormat("ja-JP", {
@@ -129,6 +129,48 @@ export function useChatSqlExecution(
   };
 }
 
+/**
+ * チャットの回答の中の SELECT の結果の表（共通の `ChatResultTable`。要約・先頭の行のプレビュー・打ち切りの明示・
+ * すべての行・CSV）。チャットと DB 管理チャット（#2264）で同じ形にする。
+ */
+export function ChatQueryResult({
+  results,
+  rowLimit,
+  cellsTruncated,
+  maxCellChars,
+  elapsedMs,
+  executedAt,
+  fullResult,
+  testId,
+}: {
+  results: QueryResults;
+  rowLimit?: number | null;
+  cellsTruncated?: boolean;
+  maxCellChars?: number;
+  elapsedMs?: number | null;
+  executedAt: string;
+  fullResult: ComponentProps<typeof ChatResultTable>["fullResult"];
+  testId: string;
+}) {
+  const table = useMemo(() => toChatResultTable(results), [results]);
+  return (
+    <ChatResultTable
+      columns={table.columns}
+      rows={table.rows}
+      truncated={isIncompleteResult(results)}
+      rowLimit={rowLimit ?? undefined}
+      cellsTruncated={cellsTruncated}
+      maxCellChars={maxCellChars}
+      elapsedMs={elapsedMs ?? undefined}
+      csvFilename={chatResultCsvFilename(executedAt)}
+      onCsvDownloaded={() => toast.success(t("common.action.downloaded"))}
+      fullResult={fullResult}
+      labels={RESULT_TABLE_LABELS}
+      testId={testId}
+    />
+  );
+}
+
 /** 「SELECT SQL を実行」へ SQL を履歴の state で渡すリンク（URL には SQL を載せない）。 */
 function directSqlLink(sql: string): ButtonLinkComponent {
   return function DirectSqlLink(props: ComponentProps<ButtonLinkComponent>) {
@@ -153,10 +195,6 @@ export function ChatSqlExecutionResult({
   const { data, running, receiving, error } = execution;
   const sql = turn.result?.generated_sql ?? "";
   const DirectSqlLink = useMemo(() => directSqlLink(sql), [sql]);
-  const table = useMemo(
-    () => (data?.status === "done" ? toChatResultTable(data.results) : null),
-    [data],
-  );
   const lastExecution = turn.last_execution;
   if (!running && !receiving && !error && !data && !lastExecution) return null;
 
@@ -207,17 +245,14 @@ export function ChatSqlExecutionResult({
           </Banner>
         </div>
       ) : null}
-      {data?.status === "done" && table && !error ? (
-        <ChatResultTable
-          columns={table.columns}
-          rows={table.rows}
-          truncated={isIncompleteResult(data.results)}
+      {data?.status === "done" && !error ? (
+        <ChatQueryResult
+          results={data.results}
           rowLimit={data.row_limit}
           cellsTruncated={data.cells_truncated}
           maxCellChars={data.max_cell_chars}
           elapsedMs={data.elapsed_ms}
-          csvFilename={chatResultCsvFilename(data.executed_at)}
-          onCsvDownloaded={() => toast.success(t("common.action.downloaded"))}
+          executedAt={data.executed_at}
           fullResult={
             canOpenDirectSql
               ? {
@@ -228,7 +263,6 @@ export function ChatSqlExecutionResult({
                 }
               : { hint: t("chat.execute.fullResultHintNoLink") }
           }
-          labels={RESULT_TABLE_LABELS}
           testId="sql-chat-result"
         />
       ) : null}

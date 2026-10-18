@@ -1746,17 +1746,20 @@ def test_statements_partial_success_commits_and_records_audit() -> None:
     assert any("部分的に成功" in warning for warning in result.warnings)
     audit = next(
         item
-        for item in service._admin_audit
-        if item["operation"] == "db_admin_statements_table_ddl"
+        for item in service._admin_audit_store.list_recent()
+        if item.operation == "db_admin_statements_table_ddl"
     )
-    assert audit["actor_user_uuid"] == "audit-user-uuid"
-    assert audit["actor_is_system_admin"] is True
-    assert audit["detail"]["statement_count"] == 2
-    assert audit["detail"]["success_count"] == 1
-    assert len(audit["detail"]["sql_sha256"]) == 64
-    assert audit["detail"]["sql_preview"] == sql
-    assert len(audit["detail"]["statement_hashes"]) == 2
-    assert audit["detail"]["statement_previews"] == [
+    assert audit.actor_user_uuid == "audit-user-uuid"
+    assert audit.actor_is_system_admin is True
+    assert audit.source == "data_preparation"
+    assert audit.outcome == "partial"
+    assert audit.sql_text == sql
+    assert audit.statement_count == 2
+    assert audit.success_count == 1
+    assert len(audit.detail["sql_sha256"]) == 64
+    assert audit.detail["sql_preview"] == sql
+    assert len(audit.detail["statement_hashes"]) == 2
+    assert audit.detail["statement_previews"] == [
         "CREATE TABLE T1 (ID NUMBER)",
         "COMMENT ON TABLE MISSING IS 'x'",
     ]
@@ -1794,16 +1797,22 @@ def test_admin_sql_execute_audit_records_actor_and_sql_hash(
         )
 
     assert result.executed is True
-    audit = service._admin_audit[-1]
-    assert audit["operation"] == "db_admin_execute"
-    assert audit["actor_user_uuid"] == "direct-audit-user"
-    assert audit["actor_is_system_admin"] is False
-    assert audit["detail"]["statement_count"] == 1
-    assert audit["detail"]["success_count"] == 1
-    assert audit["detail"]["types"] == ["CREATE"]
-    assert len(audit["detail"]["sql_sha256"]) == 64
-    assert audit["detail"]["sql_preview"] == sql
-    assert audit["detail"]["statement_previews"] == [sql]
+    audit = service._admin_audit_store.list_recent(1)[0]
+    assert audit.operation == "db_admin_execute"
+    assert audit.source == "admin_sql"
+    assert audit.outcome == "success"
+    assert audit.confirmation_given is True
+    assert audit.committed is True
+    assert audit.sql_text == sql
+    assert audit.actor_user_uuid == "direct-audit-user"
+    assert audit.actor_is_system_admin is False
+    assert audit.statement_count == 1
+    assert audit.success_count == 1
+    assert audit.statement_types == ["CREATE"]
+    assert audit.duration_ms is not None
+    assert len(audit.detail["sql_sha256"]) == 64
+    assert audit.detail["sql_preview"] == sql
+    assert audit.detail["statement_previews"] == [sql]
 
 
 def test_admin_sql_delegates_data_dml_batch_to_partial_commit_policy() -> None:
@@ -1847,7 +1856,11 @@ def test_admin_sql_delegates_data_dml_batch_to_partial_commit_policy() -> None:
     assert result.execution_context == "admin_control_plane"
     assert result.vpd_context_enforced is False
     assert any("部分的に成功しました(1/2 件)" in warning for warning in result.warnings)
-    assert any(item["operation"] == "db_admin_statements_data_dml" for item in service._admin_audit)
+    # 管理 SQL を実行からの委譲は、管理 SQL の 1 行だけを残す（二重に残さない。#2264）。
+    audits = service._admin_audit_store.list_recent()
+    assert [item.operation for item in audits] == ["db_admin_execute"]
+    assert audits[0].source == "admin_sql"
+    assert audits[0].outcome == "partial"
 
 
 def test_admin_sql_commits_when_all_data_dml_statements_succeed() -> None:
