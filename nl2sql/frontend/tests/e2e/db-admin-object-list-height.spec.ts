@@ -268,7 +268,8 @@ const prepareManagementScenarios = [
     path: "/data-management",
     idPrefix: "data-management",
     tabs: [
-      { id: "preview", tabName: "テーブル・ビューデータの表示" },
+      // データの表示は一覧 + 詳細（ListDetailLayout）で、一覧と詳細の列がそれぞれ枠を持つので外側の枠を付けない（#2315）。
+      { id: "preview", tabName: "テーブル・ビューデータの表示", listDetail: true },
       { id: "csv", tabName: "Excel/CSV アップロード(既存テーブル)" },
       { id: "synthetic", tabName: "合成データ生成" },
     ],
@@ -985,11 +986,11 @@ test("データ管理の対象一覧はコメントを名前の下に表示し�
   });
   await page.goto("/data-management");
 
-  const controls = page.locator("section[aria-labelledby='data-preview-controls-heading']");
-  // 件数は見出しのバッジではなく、ツールバーの ListCount 1 か所（#1891）。
-  await expect(controls.locator("[data-status-variant]")).toHaveCount(0);
-  await expect(page.getByTestId("data-preview-object-toolbar").locator("[data-list-count]")).toHaveText("全 4 件");
-  const previewList = page.getByTestId("data-preview-object-list");
+  // 件数は見出しのバッジではなく、ツールバーの ListCount 1 か所（#1891）。行の種類のバッジは数えない（#2315）。
+  await expect(page.getByTestId("data-management-preview-toolbar").locator("[data-status-variant]")).toHaveCount(0);
+  await expect(page.locator("#data-preview-list-heading [data-status-variant]")).toHaveCount(0);
+  await expect(page.getByTestId("data-management-preview-toolbar").locator("[data-list-count]")).toHaveText("全 4 件");
+  const previewList = page.getByTestId("data-management-preview-grid");
   await expect(previewList.locator("tbody tr")).toHaveCount(4);
   for (const [name, comment] of [
     ["DENPYO_ACTIVITY_LOG", shortComment],
@@ -1026,7 +1027,9 @@ test("データ管理の対象一覧はコメントを名前の下に表示し�
   await previewList.screenshot({ path: testInfo.outputPath("data-preview-name-comments.png") });
 
   await previewList.getByText(shortComment, { exact: true }).click();
-  await expect(previewList.getByRole("button", { name: "ADMIN.DENPYO_ACTIVITY_LOG を選択", exact: true })).toHaveAttribute("aria-current", "true");
+  // 選択は URL が持つ（375px の 1 ペインでは選ぶと一覧が隠れる。#2315）。
+  await expect(page).toHaveURL(/[?&]object=ADMIN\.DENPYO_ACTIVITY_LOG/);
+  await expect(page.getByTestId("data-preview-detail-header")).toContainText("ADMIN.DENPYO_ACTIVITY_LOG");
   await expectNoHorizontalScroll(page);
 
   await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" }).click();
@@ -1420,21 +1423,21 @@ test("データ管理のテーブル・ビュー件数 badge は API 総数を�
   await mockPagedDbAdminObjectsApi(page);
   await page.goto("/data-management");
 
-  const controls = page.locator("section[aria-labelledby='data-preview-controls-heading']");
-  await expect(controls.getByRole("heading", { name: "テーブル・ビューデータの表示" })).toBeVisible();
+  const controls = page.getByTestId("list-detail-data-management-preview-list");
+  await expect(controls.getByRole("heading", { name: "対象テーブル/ビュー" })).toBeVisible();
   // 件数はツールバーの ListCount（API の total。#1891）。見出しのバッジは出さない。
-  await expect(page.getByTestId("data-preview-object-toolbar").locator("[data-list-count]")).toHaveText("全 151 件");
+  await expect(page.getByTestId("data-management-preview-toolbar").locator("[data-list-count]")).toHaveText("全 151 件");
   for (const badge of ["全151件", "テーブル149", "ビュー2"]) {
     await expect(controls.getByText(badge, { exact: true })).toHaveCount(0);
   }
-  await expect(page.getByTestId("data-preview-object-footer")).toContainText("100 / 151 件を表示");
+  await expect(page.getByTestId("data-management-preview-footer")).toContainText("100 / 151 件を表示");
 });
 
 test("データプレビューは検索・所有者・種別フィルタを共通配置する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockDataManagementApi(page);
   await page.goto("/data-management");
 
-  const toolbar = page.getByTestId("data-preview-object-toolbar");
+  const toolbar = page.getByTestId("data-management-preview-toolbar");
   const search = toolbar.getByRole("searchbox", { name: "検索" });
   // 375px は検索・所有者・種別の 3 つをシート（「絞り込み」）にまとめる（#1933）。
   const sheet = await listToolbarUsesSheet(toolbar);
@@ -1455,11 +1458,9 @@ test("データプレビューは検索・所有者・種別フィルタを共�
   await page.keyboard.press("Tab");
   await expect(kindFilter).toBeFocused();
 
-  const previewRowLimitInput = page.getByLabel("取得件数上限");
-  await expect(previewRowLimitInput).toHaveValue("100");
-  await expect(page.getByText("1〜100000 の整数。取得上限を明示してください。")).toBeVisible();
-  await expect(page.getByText("表示件数 10 件固定")).toHaveCount(0);
-  const previewList = page.getByTestId("data-preview-object-list");
+  // 対象を選ぶまで詳細（取得件数上限・結果）は出さない（一覧 + 詳細。#2315）。
+  await expect(page.getByLabel("取得件数上限")).toHaveCount(0);
+  const previewList = page.getByTestId("data-management-preview-grid");
   await expect(previewList.getByText("操作", { exact: true })).toHaveCount(0);
   await expect(previewList.getByRole("button", { name: /^操作: / })).toHaveCount(0);
   await chooseSelectFieldOption(kindFilter, "view");
@@ -1468,12 +1469,18 @@ test("データプレビューは検索・所有者・種別フィルタを共�
   await expect(previewList.getByText("APP.TABLE_01", { exact: true })).toHaveCount(0);
   await toolbar.getByRole("button", { name: "条件をクリア", exact: true }).click();
   await page.getByRole("button", { name: "APP.TABLE_01 を選択" }).click();
+  const previewRowLimitInput = page.getByLabel("取得件数上限");
+  await expect(previewRowLimitInput).toHaveValue("100");
+  await expect(page.getByText("1〜100000 の整数。取得上限を明示してください。")).toBeVisible();
+  await expect(page.getByText("表示件数 10 件固定")).toHaveCount(0);
+  // 行を選ぶと今の取得件数上限でデータを表示する。「データを表示」は件数を変えた後の取り直し。
+  await expect(page.getByTestId("query-results-summary")).toBeVisible();
   const previewShowButton = page.getByRole("button", { name: "データを表示", exact: true });
   const previewClearButton = page.getByRole("button", { name: "表示件数・結果をリセット", exact: true });
   await expect(previewShowButton).toBeEnabled();
-  await expect(previewClearButton).toBeDisabled();
-  await previewShowButton.click();
   await expect(previewClearButton).toBeEnabled();
+  await previewShowButton.click();
+  await expect(page.getByTestId("query-results-summary")).toBeVisible();
   const previewResultsActions = page.getByTestId("data-preview-results-actions");
   const previewExportButton = previewResultsActions.getByRole("button", { name: "XLSX ダウンロード" });
   const previewMoreButton = previewResultsActions.getByRole("button", { name: "その他の操作" });
@@ -1497,7 +1504,8 @@ test("データプレビューは検索・所有者・種別フィルタを共�
 
   if (testInfo.project.name === "mobile-375") {
     await page.setViewportSize({ width: 812, height: 375 });
-    // 広い置き場所に戻ると絞り込みはツールバーの中の 1 行に戻る。
+    // 812px も xl 未満の 1 ペイン。一覧へ戻ると、列の幅いっぱいのツールバーは絞り込みを 1 行に並べる。
+    await page.getByTestId("data-management-detail-back").click();
     await expectDbObjectToolbarLayout(
       search,
       toolbar.getByRole("searchbox", { name: "所有者" }),
@@ -1511,26 +1519,22 @@ test("データ管理の対象ピッカーはヘッダーで並び替えでき�
   await mockSortableDataManagementApi(page);
   await page.goto("/data-management");
 
-  const previewList = page.getByTestId("data-preview-object-list");
+  // データの表示の一覧は一覧 + 詳細の狭い列（#2315）。列は名前（+ コメント）と行数（+ 種類）の 2 つだけで、
+  // 375px でも同じ 2 列のまま横スクロールを出さない。並べ替えは名前・行数の列見出し。
+  const previewList = page.getByTestId("data-management-preview-grid");
   await expect(previewList).toBeVisible();
   await expectNoHorizontalScroll(page);
-
-  if (testInfo.project.name === "mobile-375") {
-    // md 未満は対象名の列だけを表示し、種類・行数・所有者は名前の下に補足として並べる（横スクロールを出さない）。
-    await expect(previewList.getByRole("columnheader").filter({ visible: true })).toHaveText([/対象名/]);
-    await expect(previewList.getByTestId("db-object-picker-row-meta").first()).toBeVisible();
-    await expectCompactSortHeaders(previewList);
-    return;
-  }
-
+  await expect(previewList.getByRole("columnheader").filter({ visible: true })).toHaveText([/対象名/, /行数/]);
   await expectCompactSortHeaders(previewList);
+
   await expect.poll(() => pickerRowNames(previewList)).toEqual([
     "APP.A_VIEW",
     "APP.B_AUDIT",
     "APP.M_EMPTY",
     "BILLING.Z_PAYMENTS",
   ]);
-  await expect(previewList.locator("tbody tr").first()).toHaveAttribute("aria-current", "true");
+  // 先頭の行を自動で選ばない（#2281・#2315）。
+  await expect(previewList.locator("tbody tr[aria-current]")).toHaveCount(0);
 
   await previewList.getByRole("button", { name: /対象名/ }).click();
   await expect.poll(() => pickerRowNames(previewList)).toEqual([
@@ -1539,15 +1543,7 @@ test("データ管理の対象ピッカーはヘッダーで並び替えでき�
     "APP.B_AUDIT",
     "APP.A_VIEW",
   ]);
-  await expect(previewList.locator("tbody tr").first()).toHaveAttribute("aria-current", "true");
-
-  await previewList.getByRole("button", { name: /種類/ }).click();
-  await expect.poll(() => pickerRowNames(previewList)).toEqual([
-    "BILLING.Z_PAYMENTS",
-    "APP.M_EMPTY",
-    "APP.B_AUDIT",
-    "APP.A_VIEW",
-  ]);
+  await expect(previewList.locator("tbody tr[aria-current]")).toHaveCount(0);
 
   await previewList.getByRole("button", { name: /行数/ }).click();
   await expect.poll(() => pickerRowNames(previewList)).toEqual([
@@ -1556,14 +1552,7 @@ test("データ管理の対象ピッカーはヘッダーで並び替えでき�
     "APP.B_AUDIT",
     "BILLING.Z_PAYMENTS",
   ]);
-
-  await previewList.getByRole("button", { name: /所有者/ }).click();
-  await expect.poll(() => pickerRowNames(previewList)).toEqual([
-    "APP.A_VIEW",
-    "APP.M_EMPTY",
-    "APP.B_AUDIT",
-    "BILLING.Z_PAYMENTS",
-  ]);
+  if (testInfo.project.name === "mobile-375") return;
 
   await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" }).click();
   const csvList = page.getByTestId("data-csv-table-list");
@@ -1663,7 +1652,7 @@ test("データ管理の対象 picker は NL2SQL_ システム object を表示�
 
   await page.goto("/data-management");
 
-  const previewList = page.getByTestId("data-preview-object-list");
+  const previewList = page.getByTestId("data-management-preview-grid");
   await expect(previewList.getByText("APP.ORDERS", { exact: true })).toBeVisible();
   await expect(previewList.getByText("NL2SQL_APP.ORDERS", { exact: true })).toBeVisible();
   await expect(previewList.getByText("APP.TD_NL2SQL_ORDERS", { exact: true })).toBeVisible();
@@ -3069,7 +3058,9 @@ for (const scenario of prepareManagementScenarios) {
     await mockPrepareManagementApi(page, scenario.path);
     await page.goto(scenario.path);
 
-    const first = scenario.tabs[0];
+    const isListDetail = (target: (typeof scenario.tabs)[number]) => "listDetail" in target && target.listDetail;
+    const first = scenario.tabs.find((target) => !isListDetail(target))!;
+    await page.getByRole("tab", { name: first.tabName }).click();
     const baseStyle = await topLevelPanelStyle(page, first.id, scenario.idPrefix);
     expect(baseStyle.backgroundColor).toBe("rgb(255, 255, 255)");
     expect(baseStyle.borderTopWidth).toBe("1px");
@@ -3079,6 +3070,14 @@ for (const scenario of prepareManagementScenarios) {
       await page.getByRole("tab", { name: target.tabName }).click();
       const panel = page.locator(`#${scenario.idPrefix}-panel-${target.id}`);
       await expect(panel).toBeVisible();
+      if (isListDetail(target)) {
+        const style = await topLevelPanelStyle(page, target.id, scenario.idPrefix);
+        expect(style.borderTopWidth).toBe("0px");
+        expect(style.paddingTop).toBe("0px");
+        await expect(panel.getByTestId(`list-detail-${scenario.idPrefix}-${target.id}`)).toBeVisible();
+        await expectSingleLine(page.getByRole("tab", { name: target.tabName }).locator("span").last());
+        continue;
+      }
       expect(await topLevelPanelStyle(page, target.id, scenario.idPrefix)).toEqual(baseStyle);
       await expectSingleLine(page.getByRole("tab", { name: target.tabName }).locator("span").last());
     }
@@ -3259,7 +3258,7 @@ const dbObjectListScreens = [
   {
     title: "データ管理のプレビュー",
     path: "/data-management",
-    toolbar: "data-preview-object-toolbar",
+    toolbar: "data-management-preview-toolbar",
     query: "PAGED_VIEW",
     total: "全 151 件",
     filtered: "2 件（全 151 件）",

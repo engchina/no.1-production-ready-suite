@@ -118,9 +118,16 @@ const NO_SEARCH_PARAMS_UPDATE = () => undefined;
  * - 隠れている間は、ほかの画面の URL を読まず、最後に開いていた選択のまま止める（詳細を消さない）。
  * - サイドナビから戻る（URL に選択が無いまま画面が表に出る）ときは、最後の選択を URL に戻す（replace）。
  *   作業状態の「対象の選択は残して検証し直す」（workspace-state.md）。「一覧へ戻る」で外した選択は戻さない。
+ *
+ * 画面の中のタブの 1 つだけが一覧 + 詳細のとき（データの管理のデータの表示。#2315）は `enabled` にそのタブが
+ * 開いているかを渡す。ほかのタブの間は隠れている画面と同じに扱い（URL を読まず書かない）、タブへ戻ると最後の選択を
+ * URL に戻す。タブを離れるときに URL からパラメータを外すのは呼び出し側が行う。
  */
-export function useWorkspaceUrlSelection(param: string): UrlSelection & { split: boolean } {
-  const active = useWorkspaceActive();
+export function useWorkspaceUrlSelection(
+  param: string,
+  options: { enabled?: boolean } = {}
+): UrlSelection & { split: boolean } {
+  const active = useWorkspaceActive() && (options.enabled ?? true);
   const split = useListDetailSplit();
   const [searchParams, setSearchParams] = useSearchParams();
   const [remembered, setRemembered] = useWorkspaceState(`selection:${param}`, "");
