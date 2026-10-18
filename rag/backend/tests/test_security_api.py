@@ -333,6 +333,9 @@ def test_manifest_key_assignments() -> None:
     assert _perm("PATCH", "/settings/pipeline") == {"menu.settings_pipeline"}
     assert _perm("PATCH", "/settings/parser-adapters") == {"menu.settings_parser_adapters"}
     assert _perm("PATCH", "/settings/extraction-fields") == {"menu.settings_parser_adapters"}
+    # 回答の注意書き（3 製品で共通の文。#2405）。
+    assert _perm("GET", "/settings/answer-notice") == {"menu.settings_answer_notice"}
+    assert _perm("PUT", "/settings/answer-notice") == {"menu.settings_answer_notice"}
 
 
 def test_capabilities_imply_their_menu() -> None:

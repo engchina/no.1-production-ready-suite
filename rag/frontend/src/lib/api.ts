@@ -93,6 +93,9 @@ import type {
   OciSettingsUpdate,
 } from "@production-ready/system-settings";
 
+// 回答の注意書き API の型は platform の共有パッケージが正本（#2405）。
+import type { AnswerNoticeSettingsData, AnswerNoticeSettingsUpdate } from "@production-ready/system-settings";
+
 // アップロード保存先 API の型は platform の共有パッケージが正本（#97）。
 export type {
   UploadStorageBackend,
@@ -3808,6 +3811,16 @@ export const api = {
   updateHuggingFaceSettings: (body: HuggingFaceSettingsUpdate) =>
     request<HuggingFaceSettingsData>("/api/settings/huggingface", {
       method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: 回答の注意書き（3 製品で共通の文。#2405）
+  getAnswerNoticeSettings: (options: SettingsRequestOptions = {}) =>
+    request<AnswerNoticeSettingsData>("/api/settings/answer-notice", { signal: options.signal }),
+  updateAnswerNoticeSettings: (body: AnswerNoticeSettingsUpdate) =>
+    request<AnswerNoticeSettingsData>("/api/settings/answer-notice", {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),

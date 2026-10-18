@@ -76,6 +76,8 @@ MENU_SETTINGS_UPLOAD_STORAGE = "menu.settings_upload_storage"
 MENU_SETTINGS_MODEL = "menu.settings_model"
 MENU_SETTINGS_DATABASE = "menu.settings_database"
 MENU_SETTINGS_APPEARANCE = "menu.settings_appearance"
+# 回答の注意書き（3 製品で共通の文。#2405）。
+MENU_SETTINGS_ANSWER_NOTICE = "menu.settings_answer_notice"
 
 # ---- capability（従来の 5 ロールに対応） ----
 
@@ -117,6 +119,7 @@ _SYSTEM_SETTINGS_MENUS = (
     MENU_SETTINGS_MODEL,
     MENU_SETTINGS_DATABASE,
     MENU_SETTINGS_APPEARANCE,
+    MENU_SETTINGS_ANSWER_NOTICE,
 )
 # agent.admin が暗黙に含むメニュー（ユーザーとロール・権限管理は含まない）。
 _ADMIN_MENUS = (
@@ -172,6 +175,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SETTINGS_MODEL, _GROUP_SETTINGS, "モデル"),
     _menu_permission(MENU_SETTINGS_DATABASE, _GROUP_SETTINGS, "データベース"),
     _menu_permission(MENU_SETTINGS_APPEARANCE, _GROUP_SETTINGS, "外観と証明書"),
+    _menu_permission(MENU_SETTINGS_ANSWER_NOTICE, _GROUP_SETTINGS, "回答の注意書き"),
     # capability は従来の 5 ロール（viewer / operator / approver / auditor / admin）に対応する。
     # 名前は利用者の言葉にし、ロール名は docs/security-rbac.md の対応表に書く（#791）。
     _permission(
@@ -511,6 +515,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/settings/database/adb/settings"): _any(MENU_SETTINGS_DATABASE),
     ("POST", "/settings/database/adb/start"): _any(MENU_SETTINGS_DATABASE),
     ("POST", "/settings/database/adb/stop"): _any(MENU_SETTINGS_DATABASE),
+    # 回答の注意書き（3 製品で共通の文。#2405）。
+    ("GET", "/settings/answer-notice"): _any(MENU_SETTINGS_ANSWER_NOTICE),
+    ("PUT", "/settings/answer-notice"): _any(MENU_SETTINGS_ANSWER_NOTICE),
     # ---- ユーザーとロール（platform の共通 router。RAG / NL2SQL と同じ割り当て）----
     # 前方一致で割り当てず、route ごとに登録する（新しい route は登録するまで拒否。#503）。
     ("GET", "/security/users"): _any(MENU_SECURITY_USERS),

@@ -33,6 +33,7 @@ SHARED_NAV_ITEMS: dict[str, tuple[tuple[str, str], ...]] = {
         ("nav.settingsModel.sidebar", "settingsModel"),
         ("nav.settingsDatabase.sidebar", "settingsDatabase"),
         ("nav.settingsAppearance", "settingsAppearance"),
+        ("nav.settingsAnswerNotice", "settingsAnswerNotice"),
     ),
 }
 
