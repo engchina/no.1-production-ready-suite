@@ -56,6 +56,7 @@ from app.config import (
 from app.db_degradation import load_or_degrade
 from app.rag.answer_engine import AnswerScope
 from app.rag.answer_failure import describe_answer_failure
+from app.rag.answer_notice import current_answer_notice
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 from app.rag.chat_answer_runs import (
     CHAT_ANSWER_CANCELLED_MESSAGE,
@@ -215,6 +216,8 @@ def _to_chat_message(
         created_at=message.created_at,
         progress=_saved_progress_events(message),
         clarification=_saved_clarification(message),
+        # 回答に付けた注意書き（終わった回答だけ。#2405）。
+        notice=message.answer_notice if message.status == "COMPLETE" else None,
         sent_by_owner=sent_by_owner,
         sender_display_name=(
             "" if sent_by_owner else (sender_names or {}).get(message.user_id_hash or "", "")
@@ -743,6 +746,7 @@ async def _generate_chat_answer(
             approved_faq=turn.approved_faq,
             scope=turn.scope,
             run_recorder=run_recorder,
+            answer_notice=current_answer_notice,
         )
         result = await run_answer_with_timeout(
             lambda progress_tracker: pipeline.run(
@@ -773,6 +777,8 @@ async def _generate_chat_answer(
             elapsed_ms=result.elapsed_ms,
             created_at=datetime.now(UTC),
             progress=tracker.dump() if tracker is not None else None,
+            # 回答の注意書き（#2405）。本文（会話の履歴に使う）とは別の列に保存する。
+            answer_notice=result.notice,
         )
     except Exception as exc:
         if tracker is not None:
@@ -1042,6 +1048,8 @@ async def _answer_turn(
                 "answer_diagnostics": result.diagnostics.answer,
                 # 作ったが保存できなかった記録（回答の記録・会話の回答。#2342）。
                 "storage_failures": [item.model_dump() for item in result.storage_failures],
+                # 回答の注意書き（#2405）。画面は回答の本文と根拠の後に出す。
+                "notice": result.notice,
             },
         )
         for chunk in _answer_chunks(result.answer):

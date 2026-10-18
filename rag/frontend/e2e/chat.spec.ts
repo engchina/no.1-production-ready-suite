@@ -451,6 +451,68 @@ for (const viewport of [
   );
 }
 
+// 回答の注意書き（3 製品で共通の文。#2405）。回答の本文と根拠の後に出し、本文には混ぜない。
+const NOTICE = "この回答は AI が生成したものです。\n連絡先: https://example.com/help";
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`回答の注意書きを回答の根拠の後に出す (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const streamBody = sseBody.replace(
+      '"guardrail_warnings":[]}',
+      `"guardrail_warnings":[],"notice":${JSON.stringify(NOTICE)}}`
+    );
+    expect(streamBody).toContain('"notice"');
+    await mockChat(page, "ready", [], {
+      streamBody,
+      sentMessages: [userMessage, { ...assistantMessage, notice: NOTICE }],
+    });
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    await page.getByRole("button", { name: "新しい会話" }).click();
+    await page.getByRole("textbox").fill("経費の上限は？");
+    await page.getByRole("button", { name: "送信" }).click();
+
+    const notice = page.getByRole("complementary", { name: "回答の注意書き" });
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("この回答は AI が生成したものです。");
+    await expect(notice.getByRole("link", { name: "https://example.com/help" })).toHaveAttribute(
+      "href",
+      "https://example.com/help"
+    );
+    // 根拠の一覧の後に出す（本文には混ぜない）。
+    const citations = page.locator("summary").filter({ hasText: "AI に渡した 1 件" }).first();
+    const [citationsBox, noticeBox] = await Promise.all([citations.boundingBox(), notice.boundingBox()]);
+    expect(noticeBox!.y).toBeGreaterThan(citationsBox!.y);
+    await expect(page.getByText("経費の上限は 10 万円です。").first()).not.toContainText("AI が生成");
+    await expectNoPageOverflow(page);
+  });
+}
+
+test("保存した会話の回答に注意書きを出し、失敗した回答には出さない", async ({ page }) => {
+  await mockChat(page, "ready", [
+    userMessage,
+    { ...assistantMessage, notice: NOTICE },
+    { ...userMessage, message_id: "u2", created_at: "2026-01-01T00:00:02Z" },
+    {
+      ...assistantMessage,
+      message_id: "a2",
+      reply_to_message_id: "u2",
+      status: "ERROR",
+      content: "回答を作れませんでした。",
+      notice: null,
+      created_at: "2026-01-01T00:00:03Z",
+    },
+  ]);
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  const history = await openChatHistory(page);
+  await history.getByRole("button", { name: /^経費の上限は？ 4件/ }).click();
+  await expect(page.getByRole("complementary", { name: "回答の注意書き" })).toHaveCount(1);
+});
+
 test("送信開始後に永続化された質問を重複表示しない", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await mockChat(page, "ready", [], { streamBody: sseStart });

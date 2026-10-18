@@ -445,7 +445,16 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "CREATE TABLE rag_support_guide_embeddings" in embeddings_migration
     assert "table_name = 'RAG_SUPPORT_GUIDE_EMBEDDINGS'" in embeddings_migration
     assert "DROP" not in embeddings_migration
-    assert len(statements) == 97
+    # 回答に付けた注意書きの列を無いときだけ足す（#2405。会話の回答と回答の記録）。
+    for name, table in (
+        ("20261018_002_message_answer_notice", "rag_messages"),
+        ("20261018_003_answer_record_notice", "rag_answer_records"),
+    ):
+        notice_migration = sql.split(f"-- migration: {name}", 1)[1].split("-- migration:", 1)[0]
+        assert f"'ALTER TABLE {table} ADD (answer_notice CLOB)'" in notice_migration
+        assert "column_name = 'ANSWER_NOTICE'" in notice_migration
+        assert "DROP" not in notice_migration
+    assert len(statements) == 99
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -531,6 +540,8 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261016_001_retire_evaluation_compare",
         "20261016_003_document_categories",
         "20261018_001_support_guide_embeddings",
+        "20261018_002_message_answer_notice",
+        "20261018_003_answer_record_notice",
     ]
 
 

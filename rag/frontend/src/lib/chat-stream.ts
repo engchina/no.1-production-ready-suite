@@ -57,6 +57,8 @@ export interface ChatStreamHandlers {
     answer_diagnostics?: unknown;
     /** 作ったが保存できなかった記録（回答の記録・会話の回答。#2342）。 */
     storage_failures?: StorageFailure[];
+    /** 回答の注意書き（回答の本文と根拠の後に出す。無いときは null / 未指定。#2405）。 */
+    notice?: string | null;
   }) => void;
   onCitations?: (modelId: string, citations: RetrievedChunk[]) => void;
   onModelDone?: (payload: { model_id: string; message_id: string }) => void;
