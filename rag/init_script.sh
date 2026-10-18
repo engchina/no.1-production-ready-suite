@@ -25,6 +25,8 @@ source "${INIT_SCRIPT_DIR}/scripts/rag-systemd.sh"
 # backend の起動の待ち方（suite_wait_for_service_health。#1642）は platform の配備の共通の helper（製品は単独では配備しない）。
 # shellcheck source-path=SCRIPTDIR source=../platform/deploy/suite-health.sh
 source "${INIT_SCRIPT_DIR}/../platform/deploy/suite-health.sh"
+# shellcheck source-path=SCRIPTDIR source=../platform/deploy/suite-repo.sh
+source "${INIT_SCRIPT_DIR}/../platform/deploy/suite-repo.sh"
 
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
 # リポジトリの所有者（git pull・uv sync・frontend の build を行う）。
@@ -485,7 +487,8 @@ prepare_filesystem() {
   chmod 0775 "${APP_ROOT}"
   install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" "${DATA_DIR}"
   # git pull・uv sync・frontend の build は APP_USER が行う。
-  chown -R "${APP_USER}:${APP_GROUP}" "${SUITE_REPO_DIR}"
+  # 開発の worktree・一時ファイルは辿らない（配備の途中で消えると chown が失敗する。#2307）。
+  suite_chown_repo "${APP_USER}:${APP_GROUP}" "${SUITE_REPO_DIR}"
   # 画面から保存する .env（backend/.env・platform/.env・model-settings.json・backend/parser-settings.json）は、同じディレクトリの
   # 一時ファイルと lock で置き換えるため、SERVICE_USER が backend/ と platform/ に書けるようにする。
   chgrp "${SERVICE_GROUP}" "${BACKEND_DIR}" "${PLATFORM_DIR}"
