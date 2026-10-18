@@ -1,8 +1,7 @@
-import { expect, test, type Locator, type Page, type Route, type TestInfo } from "./_helpers/test";
+import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { expectedControlHeight } from "./_helpers/control-height";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
-import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { expectCompactSortHeaders } from "./_helpers/sort-header";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
 import { remToPx, SUBPIXEL_TOLERANCE } from "./_helpers/spacing";
@@ -835,55 +834,7 @@ async function returnToListIfSinglePane(page: Page, idPrefix: string) {
   }
 }
 
-function expectedObjectListRows(testInfo: TestInfo) {
-  return testInfo.project.name === "mobile-375" ? 5 : 8;
-}
 
-async function expectObjectListRowLimit(
-  list: Locator,
-  rowSelector: string,
-  visibleRows: number,
-  options: { expectedHeightRem?: number } = {}
-) {
-  const fit = await list.evaluate(
-    (node, { rowSelector: selector, visibleRows: limit }) => {
-      const listBox = node.getBoundingClientRect();
-      const rows = Array.from(node.querySelectorAll(selector)).map((row) =>
-        row.getBoundingClientRect()
-      );
-      const computed = window.getComputedStyle(node);
-      const maxHeight = Number.parseFloat(computed.maxHeight);
-      const rootFontSize = Number.parseFloat(
-        window.getComputedStyle(document.documentElement).fontSize
-      );
-      const limitRow = rows[limit - 1];
-      const nextRow = rows[limit];
-      return {
-        listHeight: listBox.height,
-        maxHeight,
-        rootFontSize,
-        touchTarget: window.matchMedia("(max-width: 639px), (pointer: coarse)").matches,
-        firstInside: rows[0].top >= listBox.top - 1 && rows[0].bottom <= listBox.bottom + 1,
-        limitInside: Boolean(limitRow && limitRow.bottom <= listBox.bottom + 1),
-        nextBelow: Boolean(nextRow && nextRow.bottom > listBox.bottom + 1),
-        lastBelow: rows[rows.length - 1].bottom > listBox.bottom + 1,
-      };
-    },
-    { rowSelector, visibleRows }
-  );
-
-  // 共有 DataTable は表頭と先頭 N 行の実測で高さを決める（#530）。表以外の一覧は rem の期待値を渡す。
-  const expectedMaxHeight = options.expectedHeightRem != null
-    ? options.expectedHeightRem * fit.rootFontSize
-    : await measuredVisibleRowsHeight(list, rowSelector, visibleRows);
-  expect(fit.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
-  expect(fit.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
-  expect(Math.abs(fit.listHeight - fit.maxHeight)).toBeLessThanOrEqual(2);
-  expect(fit.firstInside).toBe(true);
-  expect(fit.limitInside).toBe(true);
-  expect(fit.nextBelow).toBe(true);
-  expect(fit.lastBelow).toBe(true);
-}
 
 async function topLevelPanelStyle(page: Page, id: string, idPrefix = "table-management") {
   return page.locator(`#${idPrefix}-panel-${id}`).evaluate((node) => {
