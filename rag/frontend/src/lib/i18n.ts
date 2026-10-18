@@ -4269,6 +4269,49 @@ export const ja = {
   "evaluation.failureReason.condition_missing": "条件に触れていない",
   "evaluation.failureReason.evidence_miss": "必要な根拠を取れなかった",
   "evaluation.failureReason.known_condition_reasked": "分かっている条件を聞き直した",
+  "evaluation.failureReason.screen_missing": "案内すべき画面を案内していない",
+  "evaluation.failureReason.wrong_screen": "別の画面を案内した",
+  "evaluation.failureReason.off_target": "目的外の回答",
+  // 案内した画面と目的外の割合・ナレッジベースと検索・回答プロファイルの比較（#2402）。
+  "evaluation.perspective.guidance": "案内",
+  "evaluation.perspective.guidance.description":
+    "目的に合う画面へ案内したか・別の画面へ案内していないか・質問の目的に答えたか（参考の集計で、評価の基準の閾値には使いません）",
+  "evaluation.metric.screen_match_rate": "案内すべき画面の一致",
+  "evaluation.metric.screen_match_rate.description":
+    "案内すべき画面をすべて回答の手順で案内したケースの割合。回答を控えたケースは一致しない扱いです。",
+  "evaluation.metric.wrong_screen_rate": "別の画面への案内",
+  "evaluation.metric.wrong_screen_rate.description":
+    "案内すべき画面のほかの画面（根拠に写っていた別の画面など）を回答が案内したケースの割合。低いほどよい値です。",
+  "evaluation.metric.off_target_rate": "目的外の回答",
+  "evaluation.metric.off_target_rate.description":
+    "回答の監査が、回答は質問の目的と別の対象・業務に答えていると判定したケースの割合。低いほどよい値です。",
+  "evaluation.case.screens": "案内した画面",
+  "evaluation.case.screenMatched": "一致",
+  "evaluation.case.screenMissing": "不一致",
+  "evaluation.case.missingScreens": "案内していない画面: {screens}",
+  "evaluation.case.wrongScreens": "別の画面: {screens}",
+  "evaluation.case.screenJudged": "回答に画面の名前が無いため、判定器で判定しました。",
+  "evaluation.case.screenUnresolved": "回答に画面の名前が無く、判定できませんでした。",
+  "evaluation.compare.toggle": "検索・回答プロファイル（業務ガイドあり）でも流して比べる",
+  "evaluation.compare.helper":
+    "同じケースを、選んだナレッジベースの範囲と、検索・回答プロファイルの範囲（参照するナレッジベース・業務ガイド・ルール）の 2 回流して並べます。評価の時間は約 2 倍です。",
+  "evaluation.compare.profileLabel": "比べる検索・回答プロファイル",
+  "evaluation.compare.profileRequired": "比べる検索・回答プロファイルを選んでください。",
+  "evaluation.compare.profilesLoadError": "検索・回答プロファイルを読み込めませんでした。",
+  "evaluation.compare.title": "ナレッジベースと検索・回答プロファイルの比較",
+  "evaluation.compare.description":
+    "同じ評価セットを、ナレッジベースの範囲と検索・回答プロファイル「{name}」の範囲で流した結果です。差は検索・回答プロファイル − ナレッジベースの範囲（ポイント）です。",
+  "evaluation.compare.column.metric": "指標",
+  "evaluation.compare.column.base": "ナレッジベースの範囲",
+  "evaluation.compare.column.compared": "検索・回答プロファイル",
+  "evaluation.compare.column.delta": "差",
+  "evaluation.compare.better": "改善",
+  "evaluation.compare.worse": "悪化",
+  "evaluation.compare.same": "変化なし",
+  "evaluation.compare.lowerIsBetter": "低いほどよい",
+  "evaluation.compare.tabsLabel": "結果の詳細",
+  "evaluation.compare.tab.base": "ナレッジベースの範囲",
+  "evaluation.compare.tab.compared": "検索・回答プロファイル: {name}",
 
   // 業務ガイド（SupportGuide。#1237）。下書きを検証して公開した版だけを回答に使う。
   "supportGuides.title": "業務ガイド",

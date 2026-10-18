@@ -45,6 +45,27 @@ export const EVALUATION_PERSPECTIVES: ReadonlyArray<{
 export const EVALUATION_METRIC_NAMES: readonly EvaluationMetricName[] =
   EVALUATION_PERSPECTIVES.flatMap((perspective) => perspective.metrics);
 
+/**
+ * 案内の指標（#2402。参考の集計で、評価の基準の閾値には使わない）。案内すべき画面をすべて案内した
+ * 割合・ほかの画面を案内した割合・回答の監査が目的外とした割合。後ろの 2 つは低いほどよい。
+ */
+export type EvaluationGuidanceMetricName =
+  | "screen_match_rate"
+  | "wrong_screen_rate"
+  | "off_target_rate";
+
+export const EVALUATION_GUIDANCE_METRICS: readonly EvaluationGuidanceMetricName[] = [
+  "screen_match_rate",
+  "wrong_screen_rate",
+  "off_target_rate",
+];
+
+/** 低いほどよい指標（比べる表の差の向き。#2402）。 */
+export const LOWER_IS_BETTER_METRICS: ReadonlySet<string> = new Set([
+  "wrong_screen_rate",
+  "off_target_rate",
+]);
+
 /** 標準回答による LLM の評価で求める指標（標準回答のあるケースだけが対象）。 */
 export const STANDARD_ANSWER_METRICS: ReadonlySet<EvaluationMetricName> = new Set([
   "claim_support_rate",
@@ -106,6 +127,24 @@ const METRIC_KEYS: Record<EvaluationMetricName, { label: I18nKey; description: I
   },
 };
 
+const GUIDANCE_METRIC_KEYS: Record<
+  EvaluationGuidanceMetricName,
+  { label: I18nKey; description: I18nKey }
+> = {
+  screen_match_rate: {
+    label: "evaluation.metric.screen_match_rate",
+    description: "evaluation.metric.screen_match_rate.description",
+  },
+  wrong_screen_rate: {
+    label: "evaluation.metric.wrong_screen_rate",
+    description: "evaluation.metric.wrong_screen_rate.description",
+  },
+  off_target_rate: {
+    label: "evaluation.metric.off_target_rate",
+    description: "evaluation.metric.off_target_rate.description",
+  },
+};
+
 const PERSPECTIVE_KEYS: Record<EvaluationPerspective, { label: I18nKey; description: I18nKey }> = {
   retrieval: {
     label: "evaluation.perspective.retrieval",
@@ -143,6 +182,9 @@ const FAILURE_REASON_KEYS: Record<string, I18nKey> = {
   condition_missing: "evaluation.failureReason.condition_missing",
   evidence_miss: "evaluation.failureReason.evidence_miss",
   known_condition_reasked: "evaluation.failureReason.known_condition_reasked",
+  screen_missing: "evaluation.failureReason.screen_missing",
+  wrong_screen: "evaluation.failureReason.wrong_screen",
+  off_target: "evaluation.failureReason.off_target",
   case_error: "evaluation.failureReason.case_error",
 };
 
@@ -165,13 +207,20 @@ export function isEvaluationSuite(name: string): name is EvaluationSuiteName {
   return Object.hasOwn(SUITE_KEYS, name);
 }
 
-/** 指標の表示名。削除した指標（保存済みの結果）は原文の名前を返す。 */
-export function metricLabel(name: string): string {
-  return isEvaluationMetric(name) ? t(METRIC_KEYS[name].label) : name;
+export function isGuidanceMetric(name: string): name is EvaluationGuidanceMetricName {
+  return Object.hasOwn(GUIDANCE_METRIC_KEYS, name);
 }
 
-export function metricDescription(name: EvaluationMetricName): string {
-  return t(METRIC_KEYS[name].description);
+/** 指標の表示名。削除した指標（保存済みの結果）は原文の名前を返す。 */
+export function metricLabel(name: string): string {
+  if (isEvaluationMetric(name)) return t(METRIC_KEYS[name].label);
+  return isGuidanceMetric(name) ? t(GUIDANCE_METRIC_KEYS[name].label) : name;
+}
+
+export function metricDescription(name: EvaluationMetricName | EvaluationGuidanceMetricName): string {
+  return isGuidanceMetric(name)
+    ? t(GUIDANCE_METRIC_KEYS[name].description)
+    : t(METRIC_KEYS[name].description);
 }
 
 export function perspectiveLabel(perspective: EvaluationPerspective): string {
@@ -204,7 +253,10 @@ export function formatMetricValue(value: number | null | undefined): string {
 }
 
 /** 集計結果の指標の値（保存済みの古い結果で欄が無いときは null）。 */
-export function metricValue(metrics: EvaluationMetrics, name: EvaluationMetricName): number | null {
+export function metricValue(
+  metrics: EvaluationMetrics,
+  name: EvaluationMetricName | EvaluationGuidanceMetricName
+): number | null {
   const value = metrics[name];
   return typeof value === "number" ? value : null;
 }
@@ -212,7 +264,7 @@ export function metricValue(metrics: EvaluationMetrics, name: EvaluationMetricNa
 /** 指標の対象のケース数。古い結果で件数が無いときは null（件数を表示しない）。 */
 export function metricCaseCount(
   metrics: EvaluationMetrics,
-  name: EvaluationMetricName
+  name: EvaluationMetricName | EvaluationGuidanceMetricName
 ): number | null {
   const count = metrics.metric_case_counts?.[name];
   return typeof count === "number" ? count : null;
@@ -258,3 +310,50 @@ export function outcomeLabel(outcome: string): string {
   return outcome in OUTCOME_KEYS ? t(OUTCOME_KEYS[outcome as EvaluationOutcome]) : outcome;
 }
 
+
+/** 案内の指標を出すか（案内すべき画面・監査の記録のあるケースが 1 件でもあるとき。#2402）。 */
+export function isGuidanceShown(metrics: EvaluationMetrics): boolean {
+  return EVALUATION_GUIDANCE_METRICS.some((metric) => (metricCaseCount(metrics, metric) ?? 0) > 0);
+}
+
+export type ComparisonDirection = "better" | "worse" | "same";
+
+/** 比べる表の 1 行（#2402）。差はプロファイル − ナレッジベース（0..1）。 */
+export interface EvaluationComparisonRow {
+  metric: EvaluationMetricName | EvaluationGuidanceMetricName;
+  base: number | null;
+  compared: number | null;
+  delta: number | null;
+  direction: ComparisonDirection | null;
+}
+
+/**
+ * ナレッジベースの範囲と検索・回答プロファイルの範囲の結果を、指標ごとに並べる（#2402）。
+ * どちらでも測れなかった指標は出さない。差の向きは、低いほどよい指標では逆にする。
+ */
+export function comparisonRows(
+  base: EvaluationMetrics,
+  compared: EvaluationMetrics
+): EvaluationComparisonRow[] {
+  const names = [...EVALUATION_GUIDANCE_METRICS, ...EVALUATION_METRIC_NAMES];
+  return names.flatMap((metric) => {
+    const left = metricValue(base, metric);
+    const right = metricValue(compared, metric);
+    if (left === null && right === null) return [];
+    const delta = left !== null && right !== null ? Math.round((right - left) * 10000) / 10000 : null;
+    let direction: ComparisonDirection | null = null;
+    if (delta !== null) {
+      const improved = LOWER_IS_BETTER_METRICS.has(metric) ? delta < 0 : delta > 0;
+      direction = delta === 0 ? "same" : improved ? "better" : "worse";
+    }
+    return [{ metric, base: left, compared: right, delta, direction }];
+  });
+}
+
+/** 差を百分率のポイントで表示する（+12.5pt / −3pt / ±0pt。測れなければ「—」）。 */
+export function formatMetricDelta(delta: number | null): string {
+  if (delta === null || Number.isNaN(delta)) return "—";
+  const points = Math.round(delta * 1000) / 10;
+  if (points === 0) return "±0pt";
+  return `${points > 0 ? "+" : "−"}${Math.abs(points)}pt`;
+}

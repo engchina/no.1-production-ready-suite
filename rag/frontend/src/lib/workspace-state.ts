@@ -43,6 +43,9 @@ export type WorkspaceField =
   | "evaluation.knowledgeBaseIds"
   | "evaluation.runJobId"
   | "evaluation.runCaseLabels"
+  | "evaluation.compareEnabled"
+  | "evaluation.compareProfileId"
+  | "evaluation.runCompareName"
   | "feedback.search"
   | "history.view"
   // クライアント側で全件を持つ一覧のページと表示件数（#1891。lib/list-paging.ts の useClientListPaging）

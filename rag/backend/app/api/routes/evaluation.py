@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import logging
+import time
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import PurePath
@@ -51,6 +52,7 @@ from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.common import ApiResponse
 from app.schemas.evaluation import (
     EvaluationCase,
+    EvaluationComparison,
     EvaluationImportIssue,
     EvaluationImportResult,
     EvaluationImportRow,
@@ -116,8 +118,10 @@ async def submit_run_evaluation_job(
 ) -> ApiResponse[EvaluationJob]:
     """golden set の評価を job として投入する（#390）。進捗は `GET /jobs/{job_id}` で取得する。"""
     enforce_rate_limit("evaluation", http_request)
+    # 比べる検索・回答プロファイルがあれば、同じケースを 2 回流す（#2402）。
+    passes = 2 if request.compare_search_answer_profile_id else 1
     time_limit = evaluation_job_time_limit_seconds(
-        get_settings(), answer_runs=evaluation_answer_runs(request.cases)
+        get_settings(), answer_runs=evaluation_answer_runs(request.cases) * passes
     )
 
     async def execute(progress: EvaluationProgressCallback) -> EvaluationJobOutcome:
@@ -129,7 +133,10 @@ async def submit_run_evaluation_job(
         )
 
     job = await _submit_job(
-        kind="run", total_cases=len(request.cases), time_limit=time_limit, executor=execute
+        kind="run",
+        total_cases=len(request.cases) * passes,
+        time_limit=time_limit,
+        executor=execute,
     )
     return ApiResponse(data=job)
 
@@ -356,6 +363,7 @@ async def _execute_run(
         if request.thresholds is not None
         else resolve_evaluation_suite(suite_name)
     )
+    started = time.monotonic()
     metrics = await EvaluationRunner().run(
         cases=request.cases,
         top_k=request.top_k,
@@ -365,9 +373,35 @@ async def _execute_run(
         rag_overrides=request.rag_overrides,
         search_answer_profile_id=request.search_answer_profile_id,
         time_budget_seconds=time_budget_seconds,
-        progress=progress,
+        progress=_offset_progress(progress, offset=0, final=False)
+        if request.compare_search_answer_profile_id
+        else progress,
     )
     metrics = metrics.model_copy(update={"evaluation_suite": suite_name})
+    if request.compare_search_answer_profile_id:
+        # 同じケースを検索・回答プロファイルの範囲（参照 KB・業務ガイド・ルール）でも流す（#2402）。
+        # 範囲はプロファイルが決めるため、ナレッジベースの指定は渡さない。
+        compared = await EvaluationRunner().run(
+            cases=request.cases,
+            top_k=request.top_k,
+            filters={
+                key: value for key, value in request.filters.items() if key != "knowledge_base_id"
+            },
+            knowledge_base_ids=[],
+            thresholds=effective_thresholds,
+            rag_overrides=request.rag_overrides,
+            search_answer_profile_id=request.compare_search_answer_profile_id,
+            time_budget_seconds=max(0.0, time_budget_seconds - (time.monotonic() - started)),
+            progress=_offset_progress(progress, offset=len(request.cases), final=True),
+        )
+        metrics = metrics.model_copy(
+            update={
+                "comparison": EvaluationComparison(
+                    search_answer_profile_id=request.compare_search_answer_profile_id,
+                    metrics=compared.model_copy(update={"evaluation_suite": suite_name}),
+                )
+            }
+        )
     evaluation_run_id = await _save_evaluation_artifact(
         request_summary=_run_request_summary(request),
         result_summary=metrics.model_dump(mode="json"),
@@ -375,6 +409,24 @@ async def _execute_run(
         passed=_metrics_passed(metrics),
     )
     return metrics, evaluation_run_id
+
+
+def _offset_progress(
+    progress: EvaluationProgressCallback | None, *, offset: int, final: bool
+) -> EvaluationProgressCallback | None:
+    """2 回流す評価（#2402）の進捗を、job 全体（ケース × 2）の数にする。
+
+    1 回目の最後の通知（今のケース無し）は、2 回目が始まる前なので job へ渡さない（`final=False`）。
+    """
+    if progress is None:
+        return None
+
+    async def report(*, completed_cases: int, current_case_id: str | None) -> None:
+        if current_case_id is None and not final:
+            return
+        await progress(completed_cases=offset + completed_cases, current_case_id=current_case_id)
+
+    return report
 
 
 async def _save_evaluation_artifact(
@@ -412,6 +464,7 @@ def _run_request_summary(request: EvaluationRunRequest) -> dict[str, Any]:
         "filter_keys": sorted(request.filters),
         "knowledge_base_ids": request.knowledge_base_ids,
         "search_answer_profile_id": request.search_answer_profile_id,
+        "compare_search_answer_profile_id": request.compare_search_answer_profile_id,
         "thresholds": (
             request.thresholds.model_dump(mode="json", exclude_none=True)
             if request.thresholds is not None
@@ -444,6 +497,8 @@ def _case_summary(case: EvaluationCase) -> dict[str, Any]:
         "turn_count": len(case.turns),
         "condition_ids": sorted(case.all_condition_ids()),
         "required_evidence_ids": [evidence.id for evidence in case.required_evidence],
+        # 案内すべき画面の数（#2402。画面の名前は残さない）。
+        "expected_screen_count": len(case.expected_screens),
     }
 
 

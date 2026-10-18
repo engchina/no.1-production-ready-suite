@@ -190,6 +190,9 @@ export type EvaluationFailureReason =
   | "condition_missing"
   | "evidence_miss"
   | "known_condition_reasked"
+  | "screen_missing"
+  | "wrong_screen"
+  | "off_target"
   | "case_error";
 /** 評価の指標（#591）。検索・根拠・回答の 3 つの観点の 9 つと、業務支援の対応の 4 つ（#1231）。 */
 export type EvaluationMetricName =
@@ -1650,6 +1653,14 @@ export interface EvaluationCase {
   turns?: EvaluationTurn[];
   /** 最後の回答に必要な根拠（#1284）。 */
   required_evidence?: EvaluationEvidence[];
+  /** 回答が案内すべき画面（名前と別名。#2402）。 */
+  expected_screens?: EvaluationScreen[];
+}
+
+/** 回答が案内すべき画面（#2402）。名前と、同じ画面の別の呼び方。 */
+export interface EvaluationScreen {
+  name: string;
+  aliases?: string[];
 }
 
 /** 評価のケースの区分（#1284）。 */
@@ -1738,6 +1749,8 @@ export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number |
 export interface EvaluationRunRequestBody {
   cases: EvaluationCase[];
   knowledge_base_ids: string[];
+  /** 比べる検索・回答プロファイル（#2402）。同じケースをプロファイルの範囲でも流す。 */
+  compare_search_answer_profile_id?: string | null;
 }
 
 /** 標準回答による LLM の評価の要約（詳細は回答の記録）。 */
@@ -1831,6 +1844,19 @@ export interface EvaluationCaseResult {
   reasked_conditions?: string[];
   evidence_recall?: number | null;
   missing_evidence?: string[];
+  /**
+   * 案内した画面の採点（#2402。案内すべき画面のあるケースだけ）。screen_match は案内すべき画面を
+   * すべて案内したか、wrong_screen はほかの画面を案内したか。
+   */
+  screen_match?: boolean | null;
+  wrong_screen?: boolean | null;
+  guided_screens?: string[];
+  matched_screens?: string[];
+  missing_screens?: string[];
+  wrong_screens?: string[];
+  screen_judged_by?: "deterministic" | "judge" | "unresolved" | null;
+  /** 回答の監査の目的との合い方（aligned / partial / off_target。#2402）。 */
+  goal_alignment?: string | null;
   turn_results?: EvaluationTurnResult[];
   answer_evaluation?: EvaluationAnswerJudgement | null;
   guardrail_warnings: string[];
@@ -1866,8 +1892,20 @@ export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | nu
   split_breakdown?: Partial<Record<string, EvaluationSplitSummary>>;
   /** 必要な根拠ごとの再現率（参考の集計。閾値の判定には使わない。#1284）。 */
   required_evidence_recall?: number | null;
+  /** 案内した画面と目的外の割合（参考の集計。閾値の判定には使わない。#2402）。 */
+  screen_match_rate?: number | null;
+  wrong_screen_rate?: number | null;
+  off_target_rate?: number | null;
   case_results: EvaluationCaseResult[];
+  /** 同じケースを検索・回答プロファイルの範囲でも流した結果（#2402）。比べないときは null。 */
+  comparison?: EvaluationComparison | null;
 };
+
+/** 比べるために検索・回答プロファイルの範囲で流した評価の結果（#2402）。 */
+export interface EvaluationComparison {
+  search_answer_profile_id: string;
+  metrics: EvaluationMetrics;
+}
 
 export type EvaluationJobKind = "run";
 export type EvaluationJobStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
