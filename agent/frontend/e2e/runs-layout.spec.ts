@@ -257,6 +257,94 @@ test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査�
   await expect(page.getByTestId("run-stream").getByText("受信していません", { exact: true })).toBeVisible();
 });
 
+// #2403: 実行の詳細の監査ログは、ツールの記録と内部の記録（支援タスクの状態など）を 1 行 = 1 記録で並べる
+// （イベントの記録と同じ共通の RunEventLog）。多いときは内側だけをスクロールし、種類で絞れる。内部の記録は「成果物」に出さない。
+test("監査ログはツールの記録と内部の記録を 1 行ずつ並べ、多いときは内側だけをスクロールする", { tag: "@responsive" }, async ({
+  page,
+  mockApi,
+}, testInfo) => {
+  seedRun(mockApi);
+  const run = mockApi.state.runs[mockApi.state.runs.length - 1] as unknown as { artifacts: unknown[] };
+  run.artifacts.push(
+    ...Array.from({ length: 4 }, (_, index) => ({
+      id: `internal-${index}`,
+      kind: index % 2 === 0 ? "support_task" : "answer_validation",
+      name: index % 2 === 0 ? "支援タスクの状態" : "資料との照合",
+      content: { schema_version: 1, sequence: index },
+      created_at: MOCK_NOW,
+    }))
+  );
+  mockApi.state.auditRecords.push(
+    ...Array.from({ length: 30 }, (_, index) => ({
+      run_id: "run-layout",
+      run_goal: "売上を調べる run-layout",
+      run_status: "completed",
+      agent_id: "default",
+      run_created_at: MOCK_NOW,
+      run_updated_at: MOCK_NOW,
+      step_id: `step-${index}`,
+      tool_name: "nl2sql__nl2sql_query",
+      status: "completed",
+      policy_decision: "allow",
+      permission_level: "read",
+      started_at: MOCK_NOW,
+      duration_ms: 1200,
+      guardrail_warnings: [],
+      trace_id: `trace-${index}`,
+      artifact_ids: [],
+      audit_metadata: { connection: "nl2sql" },
+    }))
+  );
+  await page.goto("/runs?id=run-layout");
+  // 内部の記録だけなので「成果物」の節は出さない。
+  await expect(page.getByTestId("run-answer-section")).toBeVisible();
+  await expect(page.getByTestId("run-artifacts-section")).toHaveCount(0);
+
+  await page.getByTestId("run-audit-section").locator("summary").click();
+  const log = page.getByTestId("run-audit-log");
+  await expect(log.locator("[data-run-event]")).toHaveCount(34);
+  await expect(page.getByTestId("run-audit-log-count")).toHaveText("全 34 件");
+  const scroll = page.getByTestId("run-audit-log-scroll");
+  await expect(scroll).toHaveAttribute("data-overflowing", "true");
+  const box = await scroll.evaluate((node) => ({
+    height: node.clientHeight,
+    scrollHeight: node.scrollHeight,
+    rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
+    wide: window.innerWidth >= 768,
+  }));
+  expect(box.scrollHeight).toBeGreaterThan(box.height);
+  expect(box.height).toBeLessThanOrEqual((box.wide ? 28 : 17.5) * box.rem + 2);
+
+  // ツールの記録の行は ツール名・状態・処理時間。判断・権限・ID・メタデータは行を開いた詳細に出す。
+  const tool = page.getByTestId("run-audit-log-event-tool-step-0");
+  await expect(tool).toContainText("nl2sql__nl2sql_query");
+  await expect(tool).toContainText("完了");
+  await expect(tool).toContainText("1.2 秒");
+  const toggle = page.getByTestId("run-audit-log-event-tool-step-0-toggle");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  const details = page.getByTestId("run-audit-log-event-tool-step-0-details");
+  await expect(details).toContainText("自動実行");
+  await expect(details).toContainText("読み取り");
+  await expect(details).toContainText("trace-0");
+  await expect(details).toContainText("監査メタデータ");
+  await page.keyboard.press("Space");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+  // 種類で絞ると、内部の記録だけになる。行を開くと元の JSON を出す。
+  await page.getByTestId("run-audit-log-filter").getByRole("button", { name: /^内部の記録/ }).click();
+  await expect(log.locator("[data-run-event]")).toHaveCount(4);
+  await expect(page.getByTestId("run-audit-log-count")).toHaveText("4 件（全 34 件）");
+  await page.getByTestId("run-audit-log-event-record-internal-0-toggle").click();
+  const record = page.getByTestId("run-audit-log-event-record-internal-0-details");
+  await expect(record).toContainText("元の JSON");
+  await expect(record).toContainText('"sequence": 0');
+  await log.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("run-audit-log.png") });
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+});
+
 // #2386: イベントの記録は 1 行 = 1 イベント。件数が多いときは一定の高さで内側だけをスクロールし、ページを伸ばさない。
 test("イベントの記録は 1 行ずつ並び、多いときは内側だけをスクロールし、種類で絞れる", { tag: "@responsive" }, async ({
   page,
@@ -415,13 +503,13 @@ test("取得中・取得失敗・再試行・空の履歴を区別する", { tag
   await expect(page.locator("a[data-run-id]")).toHaveCount(0);
 });
 
-test("回答を中間成果物より先に出し、失敗した実行は理由と処理の経過を同じ画面に出す", { tag: "@responsive" }, async ({ page, mockApi }) => {
+test("回答を成果物より先に出し、失敗した実行は理由と処理の経過を同じ画面に出す", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi);
   const run = mockApi.state.runs[0];
   (run.artifacts as Record<string, unknown>[]).unshift({
     id: "raw-result",
     name: "中間結果",
-    kind: "json",
+    kind: "structured_table",
     content: { rows: [1] },
     created_at: MOCK_NOW,
   });

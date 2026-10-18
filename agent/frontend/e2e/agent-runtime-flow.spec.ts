@@ -284,7 +284,8 @@ test.describe("AI Agent Control Plane", () => {
     });
   }
 
-  test("監査のエラーは要約を title に、エラーコードを開いた「詳細」に出す", async ({ page }) => {
+  // #2403: 実行の詳細の監査ログは 1 行 = 1 記録（共通の RunEventLog）。失敗の行は最初から開き、要約とエラーコードを出す。
+  test("監査ログのツールのエラーは行を開いて要約とエラーコードを出す", async ({ page }) => {
     await installControlPlaneApi(page, {
       auditRecords: [
         {
@@ -304,13 +305,15 @@ test.describe("AI Agent Control Plane", () => {
     await page.getByRole("button", { name: "実行を作成" }).click();
 
     await page.getByTestId("run-audit-section").locator("summary").click();
-    const alert = page.getByRole("alert").filter({ hasText: "ツールの実行でエラーが発生しました" });
-    await expect(alert).toContainText("RAG に接続できませんでした。");
-    const details = alert.locator("details");
-    await expect(details).toHaveAttribute("open", "");
-    await expect(details).toContainText("エラーコード: mcp.http_error");
+    const row = page.getByTestId("run-audit-log-event-tool-step-1");
+    await expect(row).toContainText("rag__rag_search");
+    await expect(row.getByTestId("run-audit-log-event-tool-step-1-toggle")).toHaveAttribute("aria-expanded", "true");
+    const details = row.getByTestId("run-audit-log-event-tool-step-1-details");
+    await expect(details.getByText("RAG に接続できませんでした。")).toBeVisible();
+    await expect(details).toContainText("エラーコード");
+    await expect(details).toContainText("mcp.http_error");
     await page.setViewportSize({ width: 375, height: 812 });
-    await expect(alert).toBeVisible();
+    await expect(details).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
 });
