@@ -8,13 +8,7 @@ metadata:
   production-ready-mcp-tools: "rag:rag_search rag:rag_retrieve_evidence rag:rag_outline rag:rag_read_section"
   production-ready-tags: "rag research articles"
 ---
-検索で当たらない根拠の条を、文書の条の目録から選んで読む。
-
-## 使う MCP ツール
-
-- MCP サーバー `rag`: `rag_search`・`rag_retrieve_evidence`・`rag_outline`・`rag_read_section`
-
-ツールは MCP の素の名前で書く。使う Agent によって名前に接続の前置きが付く（例: `rag__rag_outline`）。
+検索で当たらない根拠の条を、文書の条の目録から選んで読む（MCP サーバー `rag`）。ツールは MCP の素の名前で書く（Agent によって `mcp__rag__` などの前置きが付く）。
 
 ## 手順
 
