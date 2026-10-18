@@ -153,7 +153,7 @@ const nl2sqlJa = {
     "データベースに質問し、生成した SQL と実行の結果を確かめながら会話を続ける",
   "dbAdminChat.conversation": "DB 管理の会話",
   "dbAdminChat.emptyHint":
-    "同じ会話の中では、前の質問と SQL を踏まえて SQL を生成します（例: 「表領域の使用状況」の後に「使用率の高い順にして」）。生成した SQL は自動では実行しません。SELECT は「実行」で、それ以外は実行確認語を入力して実行します。会話は保存しないので、画面を離れると消えます。",
+    "同じ会話の中では、前の質問と SQL を踏まえて SQL を生成します（例: 「表領域の使用状況」の後に「使用率の高い順にして」）。生成した SQL は自動では実行しません。SELECT は「実行」で、それ以外は実行確認語を入力して実行します。",
   "dbAdminChat.sendFailed": "SQL を生成できませんでした。",
   "dbAdminChat.noSql": "SQL は生成しませんでした。",
   "dbAdminChat.badge.readOnly": "読み取り専用・未実行",
