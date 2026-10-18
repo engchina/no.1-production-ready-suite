@@ -54,7 +54,7 @@ test("対象画面の検索・所有者・種類フィルタを共通化する",
   assert.equal(t("dbAdmin.search.label"), "検索");
   assert.equal(t("dbAdmin.search.placeholder"), "名前・コメントを入力");
   assert.equal(t("dbAdmin.owner.label"), "所有者");
-  assert.equal(t("dbAdmin.ownerPrefix.placeholder"), "所有者の先頭を入力（例：ADM）");
+  assert.equal(t("dbAdmin.ownerPrefix.placeholder"), "所有者の先頭（例：ADM）");
   assert.match(dbObjectFilterFieldsSource, /export function DbManagementSearchField/u);
   assert.match(dbObjectFilterFieldsSource, /export function DbOwnerPrefixFilterField/u);
   assert.match(dbObjectFilterFieldsSource, /export function DbManagementSelectField/u);

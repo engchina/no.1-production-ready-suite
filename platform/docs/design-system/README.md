@@ -844,6 +844,26 @@ import { SearchField } from "@production-ready/ui";
 - 文言（`title` / `closeLabel`）は翻訳済みを渡す。開閉ボタンは製品の画面に置き、`aria-expanded`・`aria-controls`（`id` に渡した値）を付ける。Playwright では `data-testid`（シート）と `<testId>-scrim`、または role（`dialog` の名前）で操作する。
 
 - `size="wide"`（#1154）: 表など横に広い内容を見る大きなパネル。sm 以上は 64rem（画面幅 − 3.5rem まで）、sm 未満は全画面。データの結果の「すべての行を見る」（`ResultTable`）が使う。既定（`default`）は 22rem のまま。
+- `size="md"`（#2281）: 一覧の 1 件の詳細（評価のケース・回答・コメントなど文章を読む内容）を、一覧の文脈を保ったままのぞくシート。40rem（画面幅 − 3.5rem まで）。Fluent 2 の Drawer の medium の段。文章を読む詳細に既定（22rem）を使わない。`pager`（`ListDetailPager` の props）を渡すと、見出しの行の右（閉じるボタンの左）に「前へ / 次へ」を出し、シートを開いたまま前後の項目へ移れる。
+- 一覧の行を次々に開いて点検する作業は、モーダルのシートではなく `ListDetailLayout`（下）にする（背後の一覧を操作できるようにする）。
+
+### `ListDetailLayout`（新規）— ★ 一覧は狭く、詳細は広く。xl 未満は 1 ペイン（#2281）
+
+B 型（マスタ詳細の閲覧）の一覧 + 詳細の部品です。以前は `FixedSplitPane` の 1:1 で並べ、1280px で詳細が約 30rem に押し込まれていました（NL2SQL のテーブルの管理の列情報の 6 列が横スクロール・カードの入れ子が 3 段・一覧が 8 行の固定で下に空白・選択が URL に無い・先頭の行を自動で選んでいた）。画面の規則は UX 契約 page-archetypes.md §1 B、props は components-reference.md。
+
+| 決めたこと | 理由 |
+|---|---|
+| xl（1280px）以上は「一覧の列（既定 20rem）\| 分割線（0.75rem）\| 詳細の列（残り）」、xl 未満は 1 ペイン（一覧 → 詳細 → `PageHeader` の `back`「一覧へ戻る」） | Material 3 の list-detail の canonical layout（2 ペインは expanded の幅だけ、それ以外は 1 ペイン + 戻る）。一覧は名前と補足 1 行を見分けられればよく、詳細は表・フォームを読む幅が要る |
+| 一覧の列の幅は 16〜32rem（詳細に 30rem を残す）。分割線はドラッグ・← →（1rem、Shift で 4rem）・ダブルクリック / Home / Enter で既定の 20rem。`role="separator"`・`aria-valuenow`（rem）。幅は `id` ごとに localStorage に残す | 長い名前の一覧は利用者が広げられる。既定はチャットの会話の履歴の列と同じ幅 |
+| 詳細の上端の行の左に開閉ボタン（チャットの会話の履歴と同じ `PanelLeftClose` / `PanelLeftOpen`・ghost の sm・名前は一覧の列の名前・`aria-expanded` / `aria-controls`）。畳むと詳細が全幅になり、開閉も残す | 同じ形の開閉を 3 製品の画面で同じ操作にする。詳細だけを広く読む時間がある |
+| 一覧の列は sticky（`top: 1rem`、高さは画面 − 2rem、md 未満はナビのバーの分を引く）で、行は列の中でスクロールする。検索・件数は列の上、ページ送り・「さらに読み込む」は列の下に固定。詳細はページと一緒にスクロールし、中に縦のスクロールを入れ子にしない | 長い詳細を読んでも一覧が見え続ける。8 行の固定の高さの一覧の下に空白を残さない。入れ子のスクロールで行き場を失わない |
+| 一覧の列と詳細の列がそれぞれカード（`bg-surface`・枠・`shadow-sm`・角丸 lg）。外側にパネルの枠を付けず、製品の詳細は枠を重ねない | カードの入れ子を 1 段減らす |
+| ↑ / ↓ / Home / End で一覧の行の名前のボタン（`RowTitleButton`）の間を移り、Enter で選ぶ（検索欄などの矢印キーは奪わない）。詳細の上端の行の右に任意の「前へ / 次へ」（`ListDetailPager`。アイコンだけ・名前と Tooltip は「前へ」「次へ」） | キーボードだけで一覧を点検できる。詳細から一覧へ戻らずに前後を見られる |
+| 1 ペインで詳細へ入ると本文の先頭へ移って詳細の領域（`tabIndex=-1`）へフォーカス。戻ると一覧（描いたまま隠していた）を出し、本文のスクロールの位置と選んでいた行へのフォーカスを戻す | 検索・ページ・一覧の中のスクロールを失わない。読み上げで今の領域が分かる |
+| 選択は `useUrlSelection`（URL の検索パラメータを唯一の情報源）。先頭の行を自動で選ばず、未選択の 2 ペインは詳細に空の状態。1 ペインで一覧から入るときは push、2 ペインの選び直し・前へ / 次へは replace | 再読込・戻る / 進む・リンクの共有で同じ対象が開く。利用者の操作なしに詳細の取得を走らせない。見比べるたびに履歴を積まない |
+
+- `FixedSplitPane` は API を変えず、C 型（入力 | 結果）と 2 つの対象の比較だけに使う。
+- 保存済みの分割の比率（`<prefix>.fixedSplitPane.<splitId>`）のうち、一覧 + 詳細へ移した画面のものは使われなくなる（未リリースのため移さない）。
 
 ### `ResultTable`（新規。旧名 `ChatResultTable`）— ★ データの結果の表（#1154 / #1178）
 
@@ -1279,6 +1299,7 @@ QA に事前共有してください。**96点あります。**
 | 136 | **RAG の文書の分類を段ごとの列（カラムブラウザ）で見る**（#2141。`ColumnBrowser`） | 大分類・中分類・小分類を全段展開した 1 本の縦の一覧で、件数が増えるとページ全体が伸びた → 3 列（大分類・中分類・小分類）。選んだ行の下の段を右の列に出し、各列は中で縦にスクロールする。375px は 1 列ずつ（戻るで上の段へ）。追加は各列の見出し（ページの見出しの「大分類を追加」は列の見出しへ移した）。全段の名前の検索を足した | 階層の 1 つの枝だけを見て操作でき、ページの見出しが隠れない（ユーザーの指示・業界の型） |
 | 137 | **Agent の実行の詳細のストリームから、購読の方式（SSE / WebSocket）の切り替えと「接続の詳細」が無くなる**（#2260。Agent の `RunDetail`） | 「技術的な詳細」のストリームに SSE / WebSocket の `ToggleChip` と方式の説明の `InfoTip`、WebSocket の接続の状態の `StatusBadge`、「接続の詳細」（最後の応答確認・操作の受付・操作のエラー・最後のイベント・再接続の回数）の `Disclosure` があった。SSE のときの `StatusBadge` は方式名（「SSE」・アイコンなし） → 切り替えと「接続の詳細」を外し、SSE の受信の状態を `StatusBadge`（アイコンあり。「受信中」/「受信していません」/「停止」）で出す。切れたときの停止の `Banner` と「再接続」は従来どおり | WebSocket の経路を消し、push は SSE、操作は REST だけにした（取消・再開・承認は REST の API があり、WebSocket はシステムでこの 1 か所だけだった） |
 | 138 | **3 製品のチャットの処理の経過が、完了したら閉じ、開くと実行の詳細と同じ時間の線つきの一覧になる**（#2265。`ChatProgress` が `RunTimeline` で描く。`collapseWhenDone` / `defaultOpen` を削除） | NL2SQL のチャットは完了後も一覧を開いたまま（RAG・Agent だけが `collapseWhenDone` で閉じていた）。開いた一覧はチャット独自の行（右の列に「LLM 1 回 · 0.8 秒」、時間の線なし）で、実行の詳細の「処理の経過」（`RunTimeline`）と形が違った → 3 製品とも実行中は開き、完了したら「処理の経過（N ステップ・M 秒）」の 1 行に閉じる（会話の履歴から開いた往復も閉じる。失敗は開いたまま。製品は開閉を選べない）。押すと `RunTimeline` の形（入れ子の字下げ〔3 段まで、1 段 1.5rem〕・全体の中の位置と長さの線・右の所要時間・計測値は名前の後ろの括弧「（LLM 5 回）」）で出す。線は置き場所が 36rem 以上のときだけ（375px は隠し、所要時間の文字だけ）。実行中の「N ステップ完了」の一覧も同じ行の形（線なし。全体の長さが伸び続けるため）。一覧の中に「N ステップ・合計 M 秒」の行は重ねない（開閉の見出しが同じ情報）。時刻の無い入れ子の段の線は親の段の始まりから積む（実行の詳細も同じ） | 回答ができた後は回答の本文を主にし、同じ工程を 3 製品のチャットと実行の詳細で 1 つの部品・1 つの形で見せる（ユーザーの指示。製品ごとにずれない） |
+| 139 | **NL2SQL のテーブル・ビューの管理が「狭い一覧 \| 広い詳細」になり、xl 未満は 1 ペイン、先頭の行を自動で選ばない**（#2281。`ListDetailLayout`・`useUrlSelection`。`SideSheet` に `size="md"`（40rem）と `pager` を追加） | 外枠のカードの中に `FixedSplitPane` の 1:1（1280px で詳細が約 30rem。列情報の 6 列は横スクロール・最小 52rem）、詳細はさらに `bg-surface-sunken` の枠、一覧は 3 列（名前・行数・所有者）の 8 行の固定の高さ。xl 未満は一覧の下に詳細を縦に積む。開くと先頭の行を選び、選択は URL に無かった → 外枠を外し、一覧の列（20rem・幅を変えられ・畳める。sticky で画面の高さの中をスクロール。2 列: 名前とコメント・行数。所有者は名前の `OWNER.` に出る）と詳細の列（カード 1 枚。上端の行に一覧の開閉と前へ / 次へ）。列情報は最小 44rem で詳細の列に収まり、全行をページと一緒にスクロールする。未選択は詳細に「オブジェクトが未選択です」。選択は `?table=` / `?view=`。xl 未満は一覧だけ → 選ぶと詳細だけ・左上に「一覧へ戻る」。所有者の欄の placeholder を「所有者の先頭（例：ADM）」に短くした（20rem の列に収める） | 一覧は名前を見分けられればよく、詳細は表を読む幅が要る（Material 3 の list-detail・NN/g の modal と nonmodal）。§4「`ListDetailLayout`」 |
 
 ### API の非互換
 
@@ -1300,6 +1321,7 @@ QA に事前共有してください。**96点あります。**
 | `Button`（#372） | `tooltip`（`string \| false`）/ `tooltipPlacement` プロップ新設。`iconOnly` は既定で `aria-label` と同じ文言の Tooltip を出す。Tooltip を出すときは `title` を無視する |
 | `Tooltip` | **新規 export。** `Tooltip` / `TooltipProps` / `TooltipPlacement` |
 | `SideSheet`（#664） | **新規 export。** `SideSheet` / `SideSheetProps`。既存の部品の props は変えない |
+| `ListDetailLayout` ほか（#2281） | **新規 export** `ListDetailLayout` / `ListDetailLayoutProps` / `ListDetailLayoutLabels` / `DEFAULT_LIST_DETAIL_LAYOUT_LABELS` / `ListDetailPager` / `ListDetailPagerProps` / `ListDetailPagerLabels` / `DEFAULT_LIST_DETAIL_PAGER_LABELS` / `adjacentListItems` / `useListDetailSplit` / `LIST_DETAIL_ITEM_SELECTOR` / `useUrlSelection` / `UrlSelection` / `UrlSelectionSetSearchParams` / `UseUrlSelectionOptions` と `lib/list-detail` の定数・関数（`LIST_DETAIL_SPLIT_QUERY` ほか）。`SideSheet` の `size` に `"md"`、`pager` を追加（既定は今までどおり） |
 | `ChatResultTable`（#1154） | **新規 export。** `ChatResultTable` / `ChatResultTableProps` / `ChatResultTableColumn` / `ChatResultTableLabels` / `ChatResultFullResultLink` / `DEFAULT_CHAT_RESULT_TABLE_LABELS` / `ResultCell` / `isNumericResultColumn` / `isNullResultValue` / `resultValueText` / `resultRowsToCsv` / `chatResultSummaryText` / `CHAT_RESULT_PREVIEW_ROWS` / `CHAT_RESULT_PAGE_SIZES`。`SideSheet` に `size`（`"default" \| "wide"`）を追加（既定は今までどおり） |
 | 段の幅の欄の補足（#2063） | 補足・エラーのある段の欄の外枠は `labeledFieldWidthClasses(width, scope, true).box` が `FIELD_BOX_TEXT_WIDTH_CLASS`（`w-full sm:w-auto sm:max-w-full`）+ `FIELD_BOX_TEXT_MIN_WIDTH_CLASS`（従来の `sm:w-fit` ではない）。`FIELD_TEXT_CONTAIN_CLASS` は `sm:max-w-[var(--form-max-width)]` を足した 2 クラス（container 版も同じ）。**新規 export** `FIELD_BOX_TEXT_WIDTH_CLASS`・`FIELD_BOX_TEXT_WIDTH_CONTAINER_CLASS`。system-settings の `fieldActionRowWidthClasses` は `{ row, footer, fit }` を返し、`row` は常に `undefined`（`FieldActionRow` に `fit` を渡す）。e2e の `layout-checks.ts` に `measureShellHiddenOverflow`・`findEscapedAbsoluteElements`（#2064）を追加し、`findNarrowFieldTexts` は block・grid のセルの欄で置き場所の幅（60rem まで）を期待する |
 | `FormGrid` ほか（#1891 段 5） | 2 列の境を 42rem（`@2xl`）→ 57.5rem（`@[57.5rem]`）に変更。**新規 export** `FORM_GRID_TWO_COLUMN_MIN_REM`・`FIELD_BOX_TEXT_MIN_WIDTH_CLASS`・`FIELD_TEXT_MIN_WIDTH_REM`・`FIELD_BOX_TEXT_MIN_WIDTH_CONTAINER_CLASS`（ツールバーの中の欄の container 版）。`labeledFieldWidthClasses(width, scope?, hasText?)` に第 3 引数（補足・エラーの文があるか）を追加（省略時は従来どおり）。e2e の `layout-checks.ts` に `findNarrowFieldTexts`・`setFormGridMaxWidth`・`FORM_GRID_PROBE_WIDTHS_REM` を追加し、`findFieldsOffWidthScale` は `FormGrid` のセルからはみ出した欄（`reason: "exceeds-cell"`）も返す。製品の画面固有の grid の `lg` より狭い列で止められた欄は返さない |

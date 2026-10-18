@@ -1,4 +1,3 @@
-import { useWorkspaceState, useWorkspaceActivation } from "@/components/WorkspaceState";
 import {
   useCallback,
   useEffect,
@@ -61,7 +60,8 @@ export function useDbObjectDetailRequest({
   loadErrorMessage,
   timeoutErrorMessage,
 }: DbObjectDetailRequestOptions): DbObjectDetailRequestState {
-  const [selectedName, setSelectedName] = useWorkspaceState(`detail:${collectionPath}`, "");
+  // 選んだ対象は画面の URL（useWorkspaceUrlSelection）が持つ。ここは取得中・取得済みの対象の名前だけ（#2281）。
+  const [selectedName, setSelectedName] = useState("");
   const [detail, setDetail] = useState<DbAdminObjectDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [ddlLoading, setDdlLoading] = useState(false);
@@ -204,8 +204,6 @@ export function useDbObjectDetailRequest({
   );
 
   const requestVersion = useCallback(() => sequenceRef.current, []);
-
-  useWorkspaceActivation(() => { if (selectedName) void load(selectedName); });
 
   return {
     selectedName,

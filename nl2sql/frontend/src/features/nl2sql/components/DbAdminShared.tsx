@@ -16,7 +16,6 @@ import {
   ActionResultRegion,
   ContentActionBar,
   INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_VISIBLE_ROWS,
   ExecutionConfirmationField,
   FormGrid,
   TextareaField,
@@ -282,11 +281,12 @@ export function DbObjectColumnsTable({
       rows={columns}
       getRowKey={(column) => column.column_name}
       rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
-      tableClassName={showComment ? "w-full min-w-[52rem] table-fixed" : "w-full min-w-[42rem] table-fixed"}
+      // 一覧 + 詳細（#2281）の広い詳細の列（1280px で約 49rem）に横スクロールなしで収まる最小の幅。
+      // それより狭い置き場所（xl 未満の 1 ペインの 375px など）は表の中で横にスクロールする。
+      tableClassName={showComment ? "w-full min-w-[44rem] table-fixed" : "w-full min-w-[36rem] table-fixed"}
       scrollAriaLabel={t("dbAdmin.detail.columnsScrollLabel")}
       scrollTestId="db-admin-detail-columns"
-      stickyHeader
-      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+      // 詳細はページと一緒にスクロールする（詳細の中に縦のスクロールを入れ子にしない。#2281）。
     />
   );
 }

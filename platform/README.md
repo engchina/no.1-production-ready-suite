@@ -51,7 +51,7 @@ packages/ui/
                              ActionResultRegion / ProcessingIndicator / TimedLoadingState
       data/                  StatusBadge(汎用 variant) / DataTable / Pagination /
                              RowActionMenu / ObjectActionBar（EntityAction）
-      app-shell/             AppShell / Sidebar / PageHeader / PageBody / Section / Breadcrumbs / FixedSplitPane
+      app-shell/             AppShell / Sidebar / PageHeader / PageBody / Section / Breadcrumbs / ListDetailLayout / FixedSplitPane
     navigation/types.ts      NavItem / NavSection / NavLinkComponent / SidebarLabels
     store/                   createUiStore(factory) / toast store
     index.ts                 公開 API バレル
