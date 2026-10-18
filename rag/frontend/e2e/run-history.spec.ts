@@ -106,13 +106,32 @@ function detail(row: RunRow) {
           { stage: "answer_step:質問の理解", outcome: "success", elapsed_ms: 300 },
           { stage: "answer_step:文書検索", outcome: "success", elapsed_ms: 500 },
           { stage: "answer", outcome: "success", elapsed_ms: 1100 },
-          { stage: "answer_guardrail", outcome: "success", elapsed_ms: 40 },
+          // 段と工程の詳細（見出しと値・行。#2341）。
+          {
+            stage: "answer_guardrail",
+            outcome: "success",
+            elapsed_ms: 40,
+            details: { fields: [{ label: "結果", value: "問題なし" }] },
+          },
         ]
       : [{ stage: "retrieval", outcome: row.status === "error" ? "error" : "success", elapsed_ms: 1100 }],
     steps: row.answer_generated
       ? [
           { name: "質問の理解", status: "complete", elapsed_seconds: 0.3, llm_calls: 1 },
-          { name: "文書検索", status: "complete", elapsed_seconds: 0.5, llm_calls: 0 },
+          {
+            name: "文書検索",
+            status: "complete",
+            elapsed_seconds: 0.5,
+            llm_calls: 0,
+            details: {
+              fields: [
+                { label: "検索の候補", value: "12 件（3 文書）" },
+                { label: "候補の経路", value: "ベクトルと全文の両方 4・ベクトルだけ 6・全文だけ 2" },
+                { label: "結果", value: "回答に渡す根拠 4 件（2 文書）" },
+              ],
+              lines: ["回答に渡す根拠:", "1. 文書 A › 第 1 章（p.3）"],
+            },
+          },
         ]
       : [],
     feedback: row.answer_generated
@@ -464,6 +483,23 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問の条件の読み取り（LLM 1 回）");
     await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答の安全チェック");
     if (!isNarrow(page)) await expect(timeline.locator("[data-run-timeline-bar]").first()).toBeVisible();
+    // 段の詳細（#2341）: 詳細のある工程・段だけを開ける（既定で閉じる）。詳細の無い工程に開閉の印は出さない。
+    const steps = timeline.locator("[data-run-timeline-step]");
+    await expect(steps.nth(1).locator("[data-run-timeline-toggle]")).toHaveCount(0);
+    const searchToggle = steps.nth(2).locator("[data-run-timeline-toggle]");
+    await expect(searchToggle).toHaveAttribute("aria-expanded", "false");
+    await searchToggle.click();
+    await expect(searchToggle).toHaveAttribute("aria-expanded", "true");
+    const searchDetails = steps.nth(2).locator("[data-run-timeline-details]");
+    await expect(searchDetails.locator("dt").first()).toHaveText("検索の候補");
+    await expect(searchDetails).toContainText("12 件（3 文書）");
+    await expect(searchDetails).toContainText("1. 文書 A › 第 1 章（p.3）");
+    await expectNoPageOverflow(page);
+    await searchToggle.click();
+    await expect(searchDetails).toBeHidden();
+    const guardrailToggle = steps.nth(3).locator("[data-run-timeline-toggle]");
+    await guardrailToggle.click();
+    await expect(steps.nth(3).locator("[data-run-timeline-details]")).toContainText("問題なし");
 
     await expect(page.getByTestId("run-history-feedback-open-fb-1")).toHaveAttribute(
       "href",

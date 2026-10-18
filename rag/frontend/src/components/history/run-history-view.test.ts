@@ -174,18 +174,32 @@ describe("実行履歴の表示の対応表", () => {
     expect(rows[2]).toMatchObject({ level: 1, durationMs: null, startedAt: null });
   });
 
-  it("処理の経過: 工程の詳細の行を段を開いて見る詳細にする（同じ名前は記録の順）", () => {
+  it("処理の経過: 工程と段の詳細を段を開いて見る詳細にする（同じ名前は記録の順。旧い行の配列も読む）", () => {
     const rows = runTimelineSteps({
       stages: [
         { stage: "answer_step:文書検索", outcome: "success", elapsed_ms: 300 },
         { stage: "answer_step:文書検索", outcome: "success", elapsed_ms: 200 },
         { stage: "answer_step:質問の理解", outcome: "success", elapsed_ms: 100 },
         { stage: "answer", outcome: "success", elapsed_ms: 900 },
+        // 回答の安全チェックの段の詳細（#2341）。
+        {
+          stage: "answer_guardrail",
+          outcome: "success",
+          elapsed_ms: 20,
+          details: { fields: [{ label: "結果", value: "問題なし" }] },
+        },
       ],
       steps: [
+        // 旧い記録（#2294）は行の配列。
         { name: "文書検索", status: "complete", elapsed_seconds: 0.3, llm_calls: 0, details: ["検索文: 2 本"] },
-        { name: "文書検索", status: "complete", elapsed_seconds: 0.2, llm_calls: 0, details: ["結果: 根拠 4 件"] },
-        { name: "質問の理解", status: "complete", elapsed_seconds: 0.1, llm_calls: 1 },
+        {
+          name: "文書検索",
+          status: "complete",
+          elapsed_seconds: 0.2,
+          llm_calls: 0,
+          details: { fields: [{ label: "検索の候補", value: "4 件（2 文書）" }], lines: ["1. 文書 A"], truncated: true },
+        },
+        { name: "質問の理解", status: "complete", elapsed_seconds: 0.1, llm_calls: 1, details: null },
       ],
       created_at: "2026-10-15T09:00:01Z",
       elapsed_ms: 900,
@@ -193,8 +207,9 @@ describe("実行履歴の表示の対応表", () => {
     expect(rows.map((row) => row.details)).toEqual([
       undefined,
       { lines: ["検索文: 2 本"] },
-      { lines: ["結果: 根拠 4 件"] },
+      { fields: [{ label: "検索の候補", value: "4 件（2 文書）" }], lines: ["1. 文書 A"], truncated: true },
       undefined,
+      { fields: [{ label: "結果", value: "問題なし" }] },
     ]);
   });
 });

@@ -258,6 +258,51 @@ def test_finish_attaches_detail_lines_of_each_step_as_details() -> None:
     assert tracker.terminal == "done"
 
 
+def test_finish_attaches_fields_and_lines_of_each_step_as_details() -> None:
+    """工程の詳細（見出しと値・行）を段の詳細にする。秘密らしい値は伏せる（#2341）。"""
+    tracker = _tracker()
+    _feed(tracker, [("answer_step:Rerank", "started"), ("answer_step:Rerank", "success")])
+    tracker.finish(
+        execution_steps=[
+            {
+                "name": "Rerank",
+                "status": "complete",
+                "details": {
+                    "fields": [{"label": "最上位の関連度", "value": "0.940"}],
+                    "lines": ["1. 0.940 文書 A", "api_key=secret-value"],
+                    "truncated": True,
+                },
+            }
+        ]
+    )
+    details = _step(tracker, "s1").details
+    assert details is not None
+    assert [(field.label, field.value) for field in details.fields] == [("最上位の関連度", "0.940")]
+    assert details.lines == ["1. 0.940 文書 A", "api_key=***"]
+    assert details.truncated is True
+
+
+def test_pipeline_step_details_are_attached_when_the_step_succeeds() -> None:
+    """パイプラインの工程（回答の安全チェックなど）の詳細は、成功の進捗で段に付ける（#2341）。"""
+    tracker = _tracker()
+    tracker.observe(_progress("answer_guardrail", "started"))
+    tracker.observe(
+        SearchStageProgress(
+            trace_id="trace-1",
+            stage="answer_guardrail",
+            outcome="success",
+            elapsed_ms=12.0,
+            attributes={},
+            details={"fields": [{"label": "結果", "value": "問題なし"}]},
+        )
+    )
+    step = _step(tracker, "s1")
+    assert step.status == "done"
+    assert step.details is not None
+    assert [(field.label, field.value) for field in step.details.fields] == [("結果", "問題なし")]
+    assert any(event.get("details") for event in tracker.dump())
+
+
 def test_inner_step_error_marks_only_that_step_failed() -> None:
     """工程の失敗はその段階だけを失敗にする（回答フローは続けることがある）。"""
     tracker = _tracker()

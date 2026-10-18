@@ -16,9 +16,13 @@ def settings(limit):
 class Step:
     def __init__(self):
         self.results = []
+        self.lines = []
 
     def result(self, *details):
         self.results.extend(details)
+
+    def add(self, *details):
+        self.lines.extend(details)
 
 
 class AnchorDocumentCapTest(unittest.TestCase):
@@ -33,6 +37,16 @@ class AnchorDocumentCapTest(unittest.TestCase):
         self.assertEqual([r.id for r in capped], ["a1", "a2", "b1", "a3", "a4", "a5"])
         # 上位 3 件のうち a3 を後ろへ回した。
         self.assertEqual(step.results, ["文書ごとの起点の上限 2 件: 上位 3 件のうち 1 件を後ろへ回します"])
+        # 後ろへ回した候補と、代わりに起点に入った候補を名前で示す（#2341）。本文は入れない。
+        self.assertEqual(
+            step.lines,
+            [
+                "後ろへ回した候補:",
+                "1. A.pdf › 管理-(1)登録（p.3）",
+                "代わりに起点に入った候補:",
+                "1. B.json › 管理-(1)登録（p.5）",
+            ],
+        )
 
     def test_zero_keeps_the_order(self):
         ranked = self.ranked()

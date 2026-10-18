@@ -12,6 +12,27 @@ export interface ToolResultTable {
   stepId: string;
   toolName: string;
   data: TabularData;
+  /** 業務データの照会（NL2SQL）の結果なら、生成した SQL と安全検査・実行の状態（#2346）。 */
+  sql: ToolResultSql | null;
+}
+
+export interface ToolResultSql {
+  text: string;
+  safe: boolean;
+  executed: boolean;
+}
+
+/**
+ * NL2SQL の照会の結果（`nl2sql_query` / `nl2sql_get_job` の出力）の SQL。実行した SQL（`executable_sql`）を優先し、
+ * 無ければ生成した SQL。SQL の無い結果は null。
+ */
+export function toolResultSql(output: Record<string, unknown> | null | undefined): ToolResultSql | null {
+  if (!output) return null;
+  const sql = [output.executable_sql, output.generated_sql].find(
+    (value): value is string => typeof value === "string" && value.trim() !== ""
+  );
+  if (!sql) return null;
+  return { text: sql, safe: output.is_safe !== false, executed: output.status === "done" };
 }
 
 /** ツールの結果の表（完了したツールだけ。表の形でない結果は含めない）。 */
@@ -30,7 +51,12 @@ export function runToolResultTables(run: RunState): ToolResultTable[] {
   for (const step of run.steps) {
     const data = stepResultTable(step);
     if (!data || !step.tool_call) continue;
-    const table = { stepId: step.id, toolName: step.tool_call.name, data };
+    const table = {
+      stepId: step.id,
+      toolName: step.tool_call.name,
+      data,
+      sql: toolResultSql(step.tool_result?.output ?? null),
+    };
     const jobId = step.tool_result?.output?.job_id;
     if (typeof jobId === "string" && jobId) {
       const previous = indexByJob.get(jobId);

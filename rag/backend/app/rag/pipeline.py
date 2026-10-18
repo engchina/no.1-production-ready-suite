@@ -45,6 +45,11 @@ from app.rag.observability import (
 )
 from app.rag.query_history import record_query_history
 from app.rag.run_history import RunRecorder
+from app.rag.step_details import (
+    answer_guardrail_details,
+    field_filter_details,
+    history_rewrite_details,
+)
 from app.rag.stored_answer import stored_citations, warn_if_large_answer_record
 from app.rag.support_guide_runtime import (
     GUIDE_PREVIEW_KEY,
@@ -84,6 +89,9 @@ class SearchStageProgress:
     outcome: str
     elapsed_ms: float
     attributes: Mapping[str, object]
+    # 終わった工程の詳細（処理の経過の段を開いて見る。共有の詳細の形 fields / lines。#2341）。
+    # 会話を踏まえた質問の書き換え・検索条件の読み取り・回答の安全チェックが成功のときに付ける。
+    details: Mapping[str, object] | None = None
 
 
 type SearchStageProgressCallback = Callable[[SearchStageProgress], Awaitable[None]]
@@ -334,6 +342,7 @@ class RagPipeline:
                 "history_rewrite",
                 self._safe_rewritten_query(original_query, history),
                 progress_callback=stage_callback,
+                result_details=lambda rewritten: history_rewrite_details(rewritten, history),
             )
             if rewritten_query:
                 request = request.model_copy(update={"query": rewritten_query})
@@ -346,6 +355,7 @@ class RagPipeline:
                 "field_filter",
                 self._read_field_conditions(request),
                 progress_callback=stage_callback,
+                result_details=field_filter_details,
             )
         guide = dict(self._settings.rag_support_guide or {})
         engine = AnswerEngine(
@@ -412,6 +422,7 @@ class RagPipeline:
                     self._guardrails.validate_answer, outcome.answer, outcome.context_text
                 ),
                 progress_callback=stage_callback,
+                result_details=lambda result: answer_guardrail_details(result, outcome.answer),
             )
             record_guardrail_findings(
                 "answer",
@@ -709,6 +720,7 @@ async def _observe_stage[T](
     *,
     attributes: Mapping[str, object] | None = None,
     result_attributes: Callable[[T], Mapping[str, object]] | None = None,
+    result_details: Callable[[T], Mapping[str, object] | None] | None = None,
     progress_callback: SearchStageProgressCallback | None = None,
 ) -> T:
     """非同期 stage の処理時間を outcome 付きで記録する。
@@ -789,6 +801,13 @@ async def _observe_stage[T](
         seconds=elapsed,
         attributes=base_attributes,
     )
+    details: Mapping[str, object] | None = None
+    if result_details is not None and progress_callback is not None:
+        # 詳細は処理の経過の補助。作れなくても工程は成功のまま続ける。
+        try:
+            details = result_details(result)
+        except Exception as exc:
+            logger.warning("stage details failed", extra={**safe_exception_fields(exc)})
     await _emit_stage_progress(
         progress_callback,
         trace_id=trace_id,
@@ -796,6 +815,7 @@ async def _observe_stage[T](
         outcome="success",
         elapsed=elapsed,
         attributes=base_attributes,
+        details=details,
     )
     return result
 
@@ -808,6 +828,7 @@ async def _emit_stage_progress(
     outcome: str,
     elapsed: float,
     attributes: Mapping[str, object],
+    details: Mapping[str, object] | None = None,
 ) -> None:
     if progress_callback is None:
         return
@@ -818,5 +839,6 @@ async def _emit_stage_progress(
             outcome=outcome,
             elapsed_ms=round(elapsed * 1000, 3),
             attributes=dict(attributes),
+            details=details,
         )
     )

@@ -4,6 +4,7 @@ import { Check, FileText, GitBranch, PlayCircle, RefreshCw, Server, ShieldAlert 
 import {
   Banner,
   Button,
+  ChatSqlBlock,
   Disclosure,
   EmptyState,
   FormStatus,
@@ -17,6 +18,7 @@ import {
   RunFactList,
   RunSummary,
   RunTimeline,
+  SqlSafetyBadge,
   StatusBadge,
   type EntityAction,
   type StatusVariant,
@@ -885,7 +887,14 @@ function StructuredArtifactSummary({ artifact }: { artifact: Artifact }) {
           <MetricPill label={t("run.columns")} value={String(arrayOfRecords(artifact.content.columns).length)} />
         </div>
       )}
-      {sql ? <JsonPanel title={t("run.sql")} value={sql} /> : null}
+      {sql ? (
+        // SQL は NL2SQL のチャットと同じ共有の部品（安全検査・実行の状態・コピー。#2346）。
+        <ChatSqlBlock
+          sql={sql}
+          badges={<SqlSafetyBadge safe={artifact.content.is_safe !== false} executed={artifact.content.status === "done"} />}
+          testId={`run-artifact-sql-${artifact.id}`}
+        />
+      ) : null}
       {warnings.length ? (
         <Banner severity="warning">
           <div className="space-y-1">
@@ -961,12 +970,22 @@ function EvidenceItem({
  */
 function StructuredResultCard({ run, table }: { run: RunState; table: ToolResultTable }) {
   const output = run.steps.find((step) => step.id === table.stepId)?.tool_result?.output ?? {};
+  const sql = table.sql;
   return (
     <RunDetailSection
       title={t("run.structuredResult")}
-      description={structuredSql(output) ?? t("run.sqlHidden")}
+      description={sql || structuredSql(output) ? undefined : t("run.sqlHidden")}
       testId="run-structured-section"
     >
+      {sql ? (
+        <div className="mb-3 space-y-2">
+          <ChatSqlBlock
+            sql={sql.text}
+            badges={<SqlSafetyBadge safe={sql.safe} executed={sql.executed} />}
+            testId="run-structured-sql"
+          />
+        </div>
+      ) : null}
       <ResultTable
         data={table.data}
         name={t("resultTable.toolName", { tool: table.toolName })}

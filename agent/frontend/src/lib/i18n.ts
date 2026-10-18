@@ -1157,6 +1157,7 @@ const agentJa = {
   "run.rawJson": "元の JSON",
   "run.reviewEmpty": "表示できる内容はありません。",
   "resultTable.toolName": "ツール {tool} の結果",
+  "resultTable.sqlResultName": "SQL の実行結果",
   "resultTable.answerName": "回答の表",
   "resultTable.answerNameIndexed": "回答の表 {index}",
   "resultTable.scrollLabel": "{name}。表の中をスクロールできます。",

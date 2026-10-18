@@ -15,32 +15,33 @@ import {
   Button,
   Card,
   CardContent,
-  ClarificationRecord,
+  ChatAnswer,
   ChatComposerOption,
   ChatProgress,
   ChatSkeleton,
-  ChatAnswer,
+  ChatSqlBlock,
   ChatTurn,
+  ClarificationRecord,
+  createOptimisticChatMessage,
+  DEFAULT_PAGE_SIZE,
   Disclosure,
   EmptyState,
   MessageText,
   ProcessFailureNotice,
+  parseChatProgressEvents,
+  parseChatProgressPage,
   SearchableSelectField,
   SelectField,
   Skeleton,
-  StatusBadge,
+  SqlSafetyBadge,
   TimedLoadingState,
-  createOptimisticChatMessage,
-  parseChatProgressEvents,
-  parseChatProgressPage,
-  useChatProgressStream,
-  withOptimisticChatStatus,
-  type OptimisticChatMessage,
   useChatAutoScroll,
   useChatHistoryActions,
   useChatHistoryPanel,
-  DEFAULT_PAGE_SIZE,
+  useChatProgressStream,
+  withOptimisticChatStatus,
   type ChatProgressPage,
+  type OptimisticChatMessage,
 } from "@production-ready/ui";
 import {
   useWorkspaceActive,
@@ -69,13 +70,13 @@ import {
   useChatSqlExecution,
 } from "./components/ChatSqlExecution";
 import {
-  ChatSqlBlock,
   Nl2SqlChatComposer,
   Nl2SqlChatHistoryList,
   Nl2SqlChatLayout,
   Nl2SqlChatPage,
   Nl2SqlPendingTurn,
   normalizeHistoryOffset,
+  SQL_BLOCK_LABELS,
 } from "./components/ChatScaffold";
 import {
   ChatRequirementTurn,
@@ -1046,19 +1047,15 @@ function SqlChatTurn({
             <>
               {/* SQL の表示（状態・コピー・実行・本文）は DB 管理チャットと共通（#2264）。 */}
               <ChatSqlBlock
+                labels={SQL_BLOCK_LABELS}
                 sql={result.generated_sql}
                 onCopied={() => setCopyError("")}
                 onCopyError={setCopyError}
                 badges={
-                  <StatusBadge
-                    variant={result.safety.is_safe ? "success" : "danger"}
-                    label={
-                      !result.safety.is_safe
-                        ? t("chat.blocked")
-                        : executed
-                          ? t("chat.safeExecuted")
-                          : t("chat.safe")
-                    }
+                  <SqlSafetyBadge
+                    safe={result.safety.is_safe}
+                    executed={executed}
+                    labels={SQL_BLOCK_LABELS}
                   />
                 }
                 actions={

@@ -250,6 +250,32 @@ async def test_answer_diagnostics_keep_llm_usage_and_round_budget(
     assert "stop" not in budget
 
 
+async def test_execution_steps_carry_structured_details(monkeypatch: pytest.MonkeyPatch) -> None:
+    """回答の記録の工程は、共有の詳細の形（見出しと値・行）の詳細を持つ（#2341）。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    engine = AnswerEngine(
+        Settings(rag_domain_keywords=["受注番号"]),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(
+        SearchRequest(query="受注の登録方法は？", filters={"knowledge_base_id": "kb-1"})
+    )
+
+    steps = outcome.diagnostics["execution_steps"]
+    assert steps
+    for step in steps:
+        details = step.get("details")
+        assert isinstance(details, dict), step["name"]
+        assert details.get("fields") or details.get("lines"), step["name"]
+    search = next(step for step in steps if step["name"].startswith("文書検索"))
+    labels = {field["label"] for field in search["details"]["fields"]}
+    assert {"目的", "検索の候補", "結果"} <= labels
+
+
 async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     import rag_engine.adapters.oci as engine_oci
 
@@ -263,13 +289,18 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
     )
 
     observed: list[tuple[str, str]] = []
+    details: dict[str, Any] = {}
 
     async def capture(progress: Any) -> None:
         observed.append((progress.stage, progress.outcome))
+        if progress.details:
+            details[progress.stage] = progress.details
 
     response = await pipeline.run(
         SearchRequest(query="受注の登録方法は？"), progress_callback=capture
     )
+    # 回答の安全チェックの結果は、成功の進捗の詳細で運ぶ（処理の経過の段を開いて見る。#2341）。
+    assert details["answer_guardrail"]["fields"][0]["label"] == "結果"
 
     assert "登録ボタン" in response.answer
     # 最後は回答の記録の保存の工程（#2342。この FakeOracle は保存できないので失敗にし、回答は返す）。

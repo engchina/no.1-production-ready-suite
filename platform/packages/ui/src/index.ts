@@ -259,6 +259,14 @@ export {
   type ClarificationNouns,
 } from "./components/chat/clarification-labels";
 export {
+  ChatSqlBlock,
+  DEFAULT_SQL_BLOCK_LABELS,
+  SqlSafetyBadge,
+  sqlBlockLabels,
+  type ChatSqlBlockProps,
+  type SqlBlockLabels,
+} from "./components/chat/chat-sql-block";
+export {
   AnswerCitationLinks,
   AnswerSections,
   type AnswerCitationRef,

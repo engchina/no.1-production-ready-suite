@@ -20,6 +20,7 @@ from typing import Any, Literal, Protocol, cast
 from pr_backend_core.logging import safe_error_code, safe_exception_fields
 
 from app.config import Settings
+from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_citations
 from app.schemas.search import RetrievedChunk, StorageFailure
 
@@ -43,6 +44,9 @@ class _StageProgress(Protocol):
 
     @property
     def elapsed_ms(self) -> float: ...
+
+    @property
+    def details(self) -> Mapping[str, object] | None: ...
 
 
 type _ProgressCallback = Callable[[Any], Awaitable[None]]
@@ -79,11 +83,11 @@ def answer_verification(diagnostics: Mapping[str, Any] | None) -> RunVerificatio
 
 
 def _answer_steps(diagnostics: Mapping[str, Any] | None) -> list[dict[str, object]]:
-    """回答フローの各工程（名前・状態・秒・LLM の回数・詳細の行）。既存の記録（execution_steps）。
+    """回答フローの各工程（名前・状態・秒・LLM の回数・詳細）。既存の記録（execution_steps）。
 
-    詳細の行（``details``。選んだ条・検索文・件数など）は回答の記録で上限まで切った値を残す（実行の
-    詳細の処理の経過で段を開いて見る。回答の記録の保存期間が過ぎても見えるよう、実行の記録にも持つ。
-    #2294）。
+    詳細（``details``。見出しと値・行。選んだ条・検索文・件数など）は共有の詳細の形で上限まで切った
+    値を残す（実行の詳細の処理の経過で段を開いて見る。回答の記録の保存期間が過ぎても見えるよう、
+    実行の記録にも持つ。#2294 / #2341）。
     """
     steps = diagnostics.get("execution_steps") if diagnostics else None
     result: list[dict[str, object]] = []
@@ -97,8 +101,8 @@ def _answer_steps(diagnostics: Mapping[str, Any] | None) -> list[dict[str, objec
                 "elapsed_seconds": step.get("elapsed_seconds"),
                 "llm_calls": step.get("llm_calls"),
                 **(
-                    {"details": [line for line in details if isinstance(line, str)]}
-                    if isinstance(details := step.get("details"), list) and details
+                    {"details": details}
+                    if (details := step_details_payload(step.get("details")))
                     else {}
                 ),
             }
@@ -127,11 +131,14 @@ class RunRecorder:
 
         async def collect(progress: _StageProgress) -> None:
             if progress.outcome != "started":
+                details = step_details_payload(getattr(progress, "details", None))
                 self.stages.append(
                     {
                         "stage": progress.stage,
                         "outcome": progress.outcome,
                         "elapsed_ms": progress.elapsed_ms,
+                        # パイプラインの工程の詳細（書き換えた質問・安全チェックなど。#2341）。
+                        **({"details": details} if details else {}),
                     }
                 )
             if callback is not None:

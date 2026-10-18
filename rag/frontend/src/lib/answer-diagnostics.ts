@@ -1,3 +1,5 @@
+import { hasRunStepDetails, type RunStepDetailField, type RunStepDetails } from "@production-ready/ui";
+
 import type { ExtractionFieldCondition } from "@/components/search/extraction-field-filters";
 
 /** 回答フローの診断(backend の diagnostics.answer)。 */
@@ -101,8 +103,8 @@ export type AnswerDiagnostics = {
     status: string;
     elapsedSeconds: number | null;
     llmCalls: number;
-    /** この工程だけの詳細の行（選んだ条・検索文・件数など。#2294）。 */
-    details?: string[];
+    /** この工程だけの詳細（見出しと値・行。選んだ条・検索文・件数など。#2294 / #2341）。 */
+    details?: RunStepDetails;
   }[];
   tree: {
     parentId: string;
@@ -131,6 +133,34 @@ function list(value: unknown): unknown[] {
 
 function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * 段の詳細（backend の共有の詳細の形 `{ fields, lines, truncated }`）を画面の `RunStepDetails` にする。旧い記録
+ * （#2294）の行の配列は行として読む。中身が無ければ undefined（段に開閉の印を出さない）。
+ */
+export function parseRunStepDetails(value: unknown): RunStepDetails | undefined {
+  const text = (item: unknown): item is string => typeof item === "string" && item.length > 0;
+  if (Array.isArray(value)) {
+    const lines = value.filter(text);
+    return lines.length ? { lines } : undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const fields: RunStepDetailField[] = list(raw.fields).flatMap((field) => {
+    const item = record(field);
+    const label = item.label;
+    const fieldValue = item.value;
+    if (!text(label) || !text(fieldValue)) return [];
+    return [{ label, value: fieldValue, ...(item.mono === true ? { mono: true } : {}) }];
+  });
+  const lines = list(raw.lines).filter(text);
+  const details: RunStepDetails = {
+    ...(fields.length ? { fields } : {}),
+    ...(lines.length ? { lines } : {}),
+    ...(raw.truncated === true ? { truncated: true } : {}),
+  };
+  return hasRunStepDetails(details) ? details : undefined;
 }
 
 /** diagnostics.answer を表示用に正規化する。回答フローの診断が無い回答では null。 */
@@ -170,14 +200,14 @@ export function parseAnswerDiagnostics(
     models: parseModels(raw.models),
     steps: list(raw.execution_steps).map((step) => {
       const item = record(step);
-      const details = list(item.details).filter((line): line is string => typeof line === "string" && line.length > 0);
+      const details = parseRunStepDetails(item.details);
       return {
         name: String(item.name ?? ""),
         status: String(item.status ?? ""),
         elapsedSeconds: num(item.elapsed_seconds),
         llmCalls: num(item.llm_calls) ?? 0,
-        // 工程の詳細の行（段を開いて見る。#2294）。古い記録には無い。
-        ...(details.length ? { details } : {}),
+        // 工程の詳細（段を開いて見る。#2294 / #2341）。古い記録には無い。
+        ...(details ? { details } : {}),
       };
     }),
     tree: list(raw.evidence_tree).map((parent) => {
