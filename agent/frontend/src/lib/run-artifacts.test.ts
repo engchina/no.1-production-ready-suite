@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { answerNoticeText } from "./run-artifacts";
 
 describe("answerNoticeText", () => {
-  it("最終回答の成果物の notice を返し、資料との照合の notice は読まない（#2405）", () => {
+  it("最終回答の成果物の notice を返し、資料との照合の notice は読まない", () => {
     expect(
       answerNoticeText([
         { kind: "answer_validation", content: { notice: { items: 1, heading: "除いた内容" } } },
