@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 17,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -445,7 +445,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 17,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -615,7 +615,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 17,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -938,7 +938,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 17,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1318,7 +1318,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 17,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1964,7 +1964,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 17,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2281,7 +2281,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 17,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3135,7 +3135,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 17,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4283,7 +4283,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 17,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4431,6 +4431,19 @@
             ],
             "default": null,
             "description": "見つからない search_answer_profile_id を渡したときに自動で選んだ検索・回答プロファイル（それ以外は null）。"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "利用者に回答を示すときは、末尾にこの文をそのまま添える。",
+            "title": "Notice"
           }
         },
         "required": [
@@ -4869,7 +4882,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 17,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

@@ -71,6 +71,8 @@ type Plan = ReturnType<typeof plan>;
 interface Generated {
   plan: Plan;
   explanation?: string;
+  /** 回答の注意書き（#2405。backend がターンに付ける文）。 */
+  notice?: string | null;
 }
 
 function generated(planData: Plan, explanation = "説明の文です。"): Generated {
@@ -172,6 +174,7 @@ function storedTurn(turnId: string, question: string, next: Generated): StoredTu
     corrected: false,
     statement_executions: [],
     last_run_all: null,
+    notice: next.notice ?? null,
   };
 }
 
@@ -1001,5 +1004,28 @@ test("複数の文の会話を開き直すと、文ごとの前回の実行の�
   await blocks.nth(2).getByTestId("db-admin-chat-execute").click();
   await expect(blocks.nth(2).getByTestId("db-admin-chat-result")).toBeVisible();
   expect(mock.executeBodies.at(-1)).toMatchObject({ turn_id: "turn-m1", mode: "statement", statement_index: 3 });
+  await expectNoHorizontalOverflow(page);
+});
+
+test("回答の注意書きを SQL の後に出す", { tag: "@responsive" }, async ({ page }) => {
+  await setup(page, {
+    responses: [
+      {
+        ...generated(plan("SELECT BANNER_FULL FROM V$VERSION")),
+        notice: "この回答は AI が生成したものです。\n実行の前に SQL を確かめてください。",
+      },
+    ],
+  });
+  await page.goto("/db-admin-chat");
+  await ask(page, "データベースの版");
+  const turn = page.getByTestId("db-admin-chat-turn").first();
+  const notice = turn.getByRole("complementary", { name: "回答の注意書き" });
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText("実行の前に SQL を確かめてください。");
+  const [sqlBox, noticeBox] = await Promise.all([
+    turn.getByTestId("db-admin-chat-sql").boundingBox(),
+    notice.boundingBox(),
+  ]);
+  expect(noticeBox!.y).toBeGreaterThan(sqlBox!.y);
   await expectNoHorizontalOverflow(page);
 });

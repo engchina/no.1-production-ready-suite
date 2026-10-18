@@ -3996,6 +3996,8 @@ export const ja = {
   "search.stage.chatMessageSave": "会話への回答の保存",
   // 回答（チャット・RAG 検索）の処理の経過（#2096。3 製品共通の ChatProgress と、その下の「詳細」）。
   "answer.process.title": "処理の経過",
+  // 回答の注意書き（3 製品で共通の文。#2405）
+  "answer.notice.label": "回答の注意書き",
   "answer.process.details": "処理の詳細",
   // 回答の工程の利用者向けの名前（backend の工程名 → 画面の名前。#2096。lib/answer-process.ts）。
   "answer.step.understandQuestion": "質問の条件の読み取り",

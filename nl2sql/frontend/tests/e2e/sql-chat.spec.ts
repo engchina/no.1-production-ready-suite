@@ -60,6 +60,8 @@ async function setup(page: Page, requirementOptions: ChatRequirementMockOptions 
     pending: false,
     // 投入したジョブを、backend と同じく worker の開始前（status: pending・段階はすべて待機中）で作る。
     queued: false,
+    // 回答の注意書き（#2405。backend が答えた job に付ける文）。
+    notice: null as string | null,
   };
   await page.route("**/api/nl2sql/profiles/search**", (route) =>
     route.fulfill({
@@ -104,6 +106,7 @@ async function setup(page: Page, requirementOptions: ChatRequirementMockOptions 
       original_question: body.question,
       explanation: "カテゴリごとの売上合計です。",
       safety: { is_safe: true },
+      notice: state.notice,
     };
     const turn: Turn = {
       job_id: id,
@@ -2233,3 +2236,26 @@ test("実行の詳細の「会話を開く」の URL で、その会話をチャ
   await page.reload();
   await expect(page.getByTestId("sql-chat-turn").first()).toContainText("カテゴリ別売上");
 });
+
+for (const width of [1280, 375]) {
+  test(`回答の注意書きを SQL と説明の後に出す (${width}px)`, { tag: "@responsive" }, async ({ page }) => {
+    const state = await setup(page);
+    state.notice = "この回答は AI が生成したものです。\n業務に使う前に SQL と結果で確かめてください。";
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/chat");
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
+    await composer.fill("カテゴリ別売上");
+    await composer.press("Enter");
+    await confirmChatRequirement(page);
+    const turn = page.getByTestId("sql-chat-turn").last();
+    const notice = turn.getByRole("complementary", { name: "回答の注意書き" });
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("SQL と結果で確かめてください。");
+    // SQL・説明の後に出す（説明の本文には混ぜない）。
+    const explanation = turn.getByText("カテゴリごとの売上合計です。");
+    const [explanationBox, noticeBox] = await Promise.all([explanation.boundingBox(), notice.boundingBox()]);
+    expect(noticeBox!.y).toBeGreaterThan(explanationBox!.y);
+    await expect(explanation).not.toContainText("AI が生成");
+    expect(await noHorizontalOverflow(page)).toBeLessThanOrEqual(0);
+  });
+}

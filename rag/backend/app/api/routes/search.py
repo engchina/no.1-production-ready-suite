@@ -32,6 +32,7 @@ from app.rag.answer_failure import (
     describe_answer_failure,
     find_incomplete_response,
 )
+from app.rag.answer_notice import current_answer_notice
 from app.rag.answer_provenance import search_answer_profile_revision
 from app.rag.answer_threads import run_answer_in_thread
 from app.rag.answer_timeout import (
@@ -583,6 +584,7 @@ async def _run_search_with_timeout(
                 answer_model_id=answer_model_id,
                 run_recorder=run_recorder,
                 scope=scope,
+                answer_notice=current_answer_notice,
             ).run(request, trace_id=trace_id, progress_callback=tracker),
             settings,
             _report_tool_progress,
@@ -710,6 +712,7 @@ async def _stream_search_events_with_timeout(
                     settings=settings,
                     answer_model_id=answer_model_id,
                     run_recorder=run_recorder,
+                    answer_notice=current_answer_notice,
                 ).run(
                     request,
                     trace_id=trace_id,
@@ -803,6 +806,8 @@ async def _search_events(
             "elapsed_ms": result.elapsed_ms,
             "guardrail_warnings": result.guardrail_warnings,
             "diagnostics": diagnostics,
+            # 回答の注意書き（#2405）。画面は回答の本文と根拠の後に出す。
+            "notice": result.notice,
         },
     )
     for chunk in _answer_chunks(result.answer):
@@ -929,6 +934,7 @@ def _answer_record_detail(row: dict[str, object]) -> AnswerRecordDetail:
             "answer_diagnostics": row.get("diagnostics_json") or {},
             "evaluation_available": bool(row.get("evaluation_input_json")),
             "evaluation": row.get("evaluation_json") or None,
+            "notice": row.get("answer_notice") or None,
         }
     )
 

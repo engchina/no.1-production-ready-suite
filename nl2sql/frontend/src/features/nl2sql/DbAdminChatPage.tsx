@@ -4,6 +4,7 @@ import { Check, ListChecks, Play, RefreshCw, Sparkles } from "lucide-react";
 import {
   ApiErrorBanner,
   Banner,
+  AnswerNotice,
   Button,
   ChatAnswer,
   ChatProgress,
@@ -691,6 +692,8 @@ function DbAdminChatTurn({
             {warning}
           </Banner>
         ))}
+        {/* 回答の注意書きは SQL と実行の結果の後（3 製品共通の AnswerNotice。#2405）。 */}
+        <AnswerNotice notice={turn.notice} label={t("answer.notice.label")} />
       </ChatAnswer>
     </ChatTurn>
   );
