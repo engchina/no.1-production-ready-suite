@@ -663,6 +663,7 @@ export function StatementRunnerCard({
   confirmationTitle,
   footerProcessing,
   executionBlocked = false,
+  executionBlockedHint,
   draftScope = "",
   executeOnly = false,
   framed = true,
@@ -678,6 +679,8 @@ export function StatementRunnerCard({
   confirmationTitle?: string;
   footerProcessing?: ReactNode;
   executionBlocked?: boolean;
+  /** `executionBlocked` の間、確認語の欄の説明（実行のボタンの直上）に出す押せない理由。 */
+  executionBlockedHint?: string;
   draftScope?: string;
   executeOnly?: boolean;
   framed?: boolean;
@@ -809,7 +812,7 @@ export function StatementRunnerCard({
       confirmed={isConfirmed}
       placeholder="ADMIN_EXECUTE"
       expectedLabel="ADMIN_EXECUTE"
-      helper={t("dbAdmin.confirmation.adminHelper")}
+      helper={executionBlocked && executionBlockedHint ? executionBlockedHint : t("dbAdmin.confirmation.adminHelper")}
       actions={
         <>
           {runButton}

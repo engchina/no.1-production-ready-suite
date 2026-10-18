@@ -332,9 +332,6 @@ const nl2sqlJa = {
   "workspace.previousResult": "前回の実行結果",
   "workspace.executedAt": "実行日時: {date}",
   "workspace.inputChanged": "入力が変更されています。現在の入力は未実行です。",
-  "workspace.snapshot": "参照情報は取得時点の内容です。現在の対象・権限・構造を確認するには、「選択対象の最新情報を取得」を押してください。SQL の下書きは保持されます。",
-  "workspace.unverified": "選択対象は未確認です。「選択対象の最新情報を取得」で存在・権限・構造を確認してください。SQL の下書きは保持されます。",
-  "workspace.refresh": "選択対象の最新情報を取得",
   "workspace.clearInput": "入力をクリア",
   "workspace.discardTitle": "未保存の入力を破棄しますか？",
   // 共通のシステム設定の画面（モデル・データベース・アップロード保存先）の離脱の確認（#1118）
@@ -3774,6 +3771,7 @@ const nl2sqlJa = {
   "metadataSql.execute.loading": "生成結果を読み込んでいます",
   "metadataSql.execute.emptyTitle": "生成済み SQL がありません",
   "metadataSql.execute.emptyHint": "入力確認・SQL生成で SQL を生成すると、ここで確認できます。",
+  "metadataSql.execute.blockedHint": "対象情報を取得し、ADMIN_EXECUTE を入力すると実行できます。",
   "metadataSql.comment.runner": "3. COMMENT ON SQL 実行",
   "metadataSql.annotation.runner": "3. Annotation SQL 実行",
   "metadataSql.domain.runner": "3. Domain SQL 実行",
