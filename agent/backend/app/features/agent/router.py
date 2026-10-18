@@ -191,7 +191,7 @@ from app.features.agent.mcp_url import (
     url_has_credentials,
 )
 from app.features.agent.rag_figures import (
-    RAG_EVIDENCE_KIND,
+    EVIDENCE_ARTIFACT_KINDS,
     RunFigureUrlData,
     RunFigureUrlError,
     RunSourcePreviewData,
@@ -2965,7 +2965,7 @@ async def get_run_figure_url(
         if artifact.content_ref is not None
         else artifact
         for artifact in run.artifacts
-        if artifact.kind == RAG_EVIDENCE_KIND
+        if artifact.kind in EVIDENCE_ARTIFACT_KINDS
     ]
     try:
         data = await run_in_threadpool(
@@ -3009,7 +3009,7 @@ async def get_run_source_preview(
         if artifact.content_ref is not None
         else artifact
         for artifact in run.artifacts
-        if artifact.kind == RAG_EVIDENCE_KIND
+        if artifact.kind in EVIDENCE_ARTIFACT_KINDS
     ]
     try:
         data = await run_in_threadpool(

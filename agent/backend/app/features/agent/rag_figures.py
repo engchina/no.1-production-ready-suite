@@ -11,8 +11,8 @@ RAG が作る短命・対象（利用者・chunk・版）に縛った署名つ�
   URL を作らない（URL を Run の記録・モデルの文脈に残さない）。
 - 画面の操作で、Run のツール呼び出しではないので ``tool_registry.invoke`` を通さない（承認・
   ガードレール・成果物の対象ではない。URL は保存しない）。
-- 開けるのは、その Run の RAG の根拠（``rag_evidence`` の成果物）にある根拠だけ（図は ``image_ref``
-  がある根拠だけ）。
+- 開けるのは、画面の根拠の一覧と同じ集合（``run_evidence_items``）にある根拠だけ（図は ``image_ref``
+  がある根拠だけ。#2427）。
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from app.features.agent.answer_evidence import ANSWER_EVIDENCE_KIND, passed_evidence
 from app.features.agent.config import runtime_config_store
 from app.features.agent.runtime import Artifact, RunState
 from app.features.agent.tools import (
@@ -133,6 +134,10 @@ class RunFigureUrlError(Exception):
         self.message = message
 
 
+# 画面から根拠を開くときに読む成果物の種類（router が中身を読み込んでから渡す）。
+EVIDENCE_ARTIFACT_KINDS = frozenset({RAG_EVIDENCE_KIND, ANSWER_EVIDENCE_KIND})
+
+
 def _is_rag_evidence(artifact: Artifact) -> bool:
     # 成果物の名前は `<接続>__rag_search:<step>`。組み込みの接続 `rag` の根拠だけを対象にする。
     return artifact.kind == RAG_EVIDENCE_KIND and artifact.name.startswith(
@@ -140,32 +145,52 @@ def _is_rag_evidence(artifact: Artifact) -> bool:
     )
 
 
-def _run_evidence_items(artifacts: list[Artifact]) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
+def _artifact_evidence(artifact: Artifact) -> list[Any]:
+    if artifact.kind == ANSWER_EVIDENCE_KIND:
+        items = artifact.content.get("items")
+    elif _is_rag_evidence(artifact):
+        items = artifact.content.get("evidence")
+    else:
+        return []
+    return items if isinstance(items, list) else []
+
+
+def run_evidence_items(run: RunState, artifacts: list[Artifact]) -> list[dict[str, Any]]:
+    """画面から開いてよい、その Run の RAG の根拠（画面の根拠の一覧と同じ集合。#2427）。
+
+    - 画面の根拠の一覧と同じ関数（``answer_evidence.passed_evidence``）で、Run の根拠のツール
+      （``rag_search`` / ``rag_retrieve_evidence``）の step の出力から作る根拠（回答の確定の前も）。
+    - 成果物「回答の根拠」（``answer_evidence``）の ``items``（画面の一覧の正本）。
+    - 成果物「検索の根拠」（``rag_evidence``。組み込みの接続 ``rag`` の ``rag_search``）の
+      ``evidence``。
+
+    ``artifacts`` は中身を読み込んだ成果物（種類は ``EVIDENCE_ARTIFACT_KINDS``）。
+    """
+    items: list[Any] = list(passed_evidence(run.steps))
     for artifact in artifacts:
-        if not _is_rag_evidence(artifact):
-            continue
-        evidence = artifact.content.get("evidence")
-        if isinstance(evidence, list):
-            items.extend(item for item in evidence if isinstance(item, dict))
-    return items
+        items.extend(_artifact_evidence(artifact))
+    return [item for item in items if isinstance(item, dict)]
 
 
-def run_has_figure_evidence(artifacts: list[Artifact], *, document_id: str, chunk_id: str) -> bool:
+def run_has_figure_evidence(
+    run: RunState, artifacts: list[Artifact], *, document_id: str, chunk_id: str
+) -> bool:
     """Run の RAG の根拠に、その図（``image_ref`` がある根拠）があるか。"""
     return any(
         item.get("document_id") == document_id
         and item.get("chunk_id") == chunk_id
         and isinstance(item.get("image_ref"), dict)
-        for item in _run_evidence_items(artifacts)
+        for item in run_evidence_items(run, artifacts)
     )
 
 
-def run_has_rag_evidence(artifacts: list[Artifact], *, document_id: str, chunk_id: str) -> bool:
+def run_has_rag_evidence(
+    run: RunState, artifacts: list[Artifact], *, document_id: str, chunk_id: str
+) -> bool:
     """Run の RAG の根拠に、その根拠があるか。"""
     return any(
         item.get("document_id") == document_id and item.get("chunk_id") == chunk_id
-        for item in _run_evidence_items(artifacts)
+        for item in run_evidence_items(run, artifacts)
     )
 
 
@@ -250,7 +275,7 @@ def issue_run_source_preview(
     viewer_user_uuid: str,
 ) -> RunSourcePreviewData:
     """画面を見ている利用者として RAG に根拠の原文のプレビューを作らせる（同期。thread で呼ぶ）。"""
-    if not run_has_rag_evidence(artifacts, document_id=document_id, chunk_id=chunk_id):
+    if not run_has_rag_evidence(run, artifacts, document_id=document_id, chunk_id=chunk_id):
         raise RunFigureUrlError(404, PREVIEW_NOT_IN_RUN_MESSAGE)
     try:
         client, trace_id = _rag_service_client(run, viewer_user_uuid, SOURCE_PREVIEW_PURPOSE)
@@ -314,7 +339,7 @@ def issue_run_figure_url(
     viewer_user_uuid: str,
 ) -> RunFigureUrlData:
     """画面を見ている利用者として RAG に図の URL を作らせる（同期。thread で呼ぶ）。"""
-    if not run_has_figure_evidence(artifacts, document_id=document_id, chunk_id=chunk_id):
+    if not run_has_figure_evidence(run, artifacts, document_id=document_id, chunk_id=chunk_id):
         raise RunFigureUrlError(404, NOT_IN_RUN_MESSAGE)
     client, trace_id = _rag_service_client(run, viewer_user_uuid, FIGURE_URL_PURPOSE)
     try:

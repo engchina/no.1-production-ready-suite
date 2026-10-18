@@ -21,8 +21,15 @@ from security_support import (
     login_configured_admin,
 )
 
-from app.features.agent.runtime import Artifact, RunState, RunStatus, runtime_repository
-from app.features.agent.tools import mcp_function_name
+from app.features.agent.runtime import (
+    Artifact,
+    RunState,
+    RunStatus,
+    RunStep,
+    StepStatus,
+    runtime_repository,
+)
+from app.features.agent.tools import ToolCall, ToolResult, mcp_function_name
 from app.security.domain import CONFIGURED_SYSTEM_ADMIN_USER_UUID
 from app.security.permissions import MENU_RUNS, RUNS_VIEW
 from app.security.service import set_security_service
@@ -198,6 +205,54 @@ def test_only_evidence_in_the_run_and_own_runs_can_be_previewed(
     auth.user_with_permissions("no-runs", [], agent_ids=["default"])
     assert client.get(_url(), headers=login("no-runs")).status_code == 403
     assert client.get(_url()).status_code == 401
+
+
+def _evidence_step(tool: str, chunk_id: str) -> RunStep:
+    name = mcp_function_name("rag", tool)
+    return RunStep(
+        run_id=RUN_ID,
+        status=StepStatus.COMPLETED,
+        tool_call=ToolCall(name=name, arguments={}),
+        tool_result=ToolResult(name=name, success=True, output={"evidence": [_evidence(chunk_id)]}),
+    )
+
+
+def test_evidence_shown_on_screen_from_any_rag_call_can_be_previewed(
+    auth: ProductionAuth, rag: FakeProductMcp, seeded_run: RunState
+) -> None:
+    """画面の根拠の一覧と同じ集合で確かめる（#2427）。
+
+    成果物「検索の根拠」は `rag_search` の結果だけを持つ。前の `rag_retrieve_evidence` の根拠・
+    成果物「回答の根拠」だけにある根拠も、画面に出ているので開ける。
+    """
+    seeded_run.steps = [
+        _evidence_step("rag_retrieve_evidence", "c-earlier"),
+        _evidence_step("rag_search", "c-1"),
+    ]
+    seeded_run.artifacts.append(
+        Artifact(
+            name="回答の根拠",
+            kind="answer_evidence",
+            content={"items": [{**_evidence("c-answer"), "cited": True}]},
+        )
+    )
+    _owner_viewer(auth, seeded_run)
+    headers = login("preview-viewer")
+    for chunk_id in ("c-earlier", "c-1", "c-answer"):
+        assert client.get(_url(chunk_id), headers=headers).status_code == 200, chunk_id
+    assert [call["arguments"]["chunk_id"] for call in rag.calls_of("rag_read_source")] == [
+        "c-earlier",
+        "c-1",
+        "c-answer",
+    ]
+    # 画面に出ない根拠（失敗した呼び出し・根拠を返さないツール・その Run に無い根拠）は 404。
+    failed = _evidence_step("rag_retrieve_evidence", "c-failed")
+    failed.status = StepStatus.FAILED
+    seeded_run.steps.append(failed)
+    seeded_run.steps.append(_evidence_step("rag_read_source", "c-read"))
+    for chunk_id in ("c-failed", "c-read", "other"):
+        assert client.get(_url(chunk_id), headers=headers).status_code == 404, chunk_id
+    assert len(rag.calls_of("rag_read_source")) == 3
 
 
 @pytest.mark.parametrize(
