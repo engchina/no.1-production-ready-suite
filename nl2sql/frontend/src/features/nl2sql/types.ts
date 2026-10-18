@@ -1297,44 +1297,102 @@ export interface DbAdminExecuteData {
   timing: TimingEnvelope;
 }
 
-/** DB 管理チャット（#2264）の、実行の前の 1 文の分類。 */
+/** DB 管理チャット（#2264）の、実行の前の 1 文の分類（文ごとに実行できる。#2333）。 */
 export interface DbAdminChatStatementPlan {
   index: number;
   statement_type: string;
   sql: string;
+  /** 読み取り専用の SELECT / WITH…SELECT（確認語なしで実行できる）。 */
   select_only: boolean;
   implicit_commit: boolean;
+  /** 方針で止める文・製品の object など、実行できない理由（実行できるなら空）。 */
   blocked_reason: string;
-}
-
-/** DB 管理チャットの、実行の前の分類（サーバーが必ず分類する）。 */
-export interface DbAdminChatPlan {
-  sql: string;
-  statements: DbAdminChatStatementPlan[];
-  read_only: boolean;
+  /** データ・構造を変える文（止めない文）は確認語が要る。 */
   requires_confirmation: boolean;
   /** 確認語（ADMIN_EXECUTE、1 つの対象を消す DROP / TRUNCATE は対象の名前）。不要なら空。 */
   confirmation_target: string;
+}
+
+/**
+ * DB 管理チャットの、実行の前の分類（サーバーが必ず分類する）。文ごとの分類は `statements`、ここの値は
+ * 「すべて実行」（上から順に・最初のエラーで止める）の判定。
+ */
+export interface DbAdminChatPlan {
+  sql: string;
+  statements: DbAdminChatStatementPlan[];
+  /** すべての文が読み取り専用の SELECT。 */
+  read_only: boolean;
+  /** 「すべて実行」に確認語が要る（変える文を含む）。 */
+  requires_confirmation: boolean;
+  /** 「すべて実行」の確認語。不要なら空。 */
+  confirmation_target: string;
   implicit_commit: boolean;
+  /** 止める文を含む（「すべて実行」はできない。ほかの文は 1 文ずつ実行できる）。 */
   blocked: boolean;
   blocked_reasons: string[];
 }
 
+export type DbAdminChatStatementStatus =
+  | "succeeded"
+  | "failed"
+  | "blocked"
+  | "not_run"
+  | "confirmation_required";
+
+/** 1 文の実行の結果（#2333）。`result` はその文だけの結果。実行しなかった文と確認語の待ちは空。 */
+export interface DbAdminChatStatementOutcome {
+  index: number;
+  status: DbAdminChatStatementStatus;
+  result: DbAdminExecuteData | null;
+}
+
+/** DB 管理チャットの実行の結果（1 文か「すべて実行」。#2333）。 */
+export interface DbAdminChatExecuteData {
+  mode: "statement" | "all";
+  batch_id: string;
+  executed: boolean;
+  committed: boolean;
+  rolled_back: boolean;
+  /** 「すべて実行」で止まった文（最初のエラー）の番号。 */
+  stopped_at: number | null;
+  statements: DbAdminChatStatementOutcome[];
+  schema_refresh_job_id?: string;
+  schema_refresh_required?: boolean;
+  schema_refresh_reason_code?: string;
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
 /**
- * DB 管理チャットのターンの今の SQL の最後の実行の要約（#2319）。結果の行はチャットと同じく保存しない
+ * ターンの 1 文の最後の実行の要約（#2319・#2333）。結果の行はチャットと同じく保存しない
  * （`result.select_result` は空。行数・列数・打ち切りだけ）。確認語は保存しない。
  */
-export interface DbAdminChatLastExecution {
+export interface DbAdminChatStatementLastExecution {
+  index: number;
   executed_at: string;
-  /** 実行した SQL の版（ターンの `revision` と違えば前の版の実行）。 */
-  revision: number;
+  mode: "statement" | "all";
+  batch_id: string;
   confirmation_given: boolean;
-  succeeded: boolean;
+  status: "succeeded" | "failed" | "blocked" | "not_run";
   row_count: number | null;
   column_count: number | null;
   has_more: boolean;
   outcome: string;
-  result: DbAdminExecuteData;
+  result: DbAdminExecuteData | null;
+}
+
+/** ターンの最後の「すべて実行」の要約（#2333）。 */
+export interface DbAdminChatRunAllSummary {
+  executed_at: string;
+  batch_id: string;
+  confirmation_given: boolean;
+  succeeded: boolean;
+  statement_count: number;
+  succeeded_count: number;
+  stopped_at: number | null;
+  committed: boolean;
+  rolled_back: boolean;
+  warnings: string[];
 }
 
 /** DB 管理チャットの保存したターン（#2319）。 */
@@ -1351,7 +1409,9 @@ export interface DbAdminChatTurn {
   /** AI のエラー分析で直した SQL に置き換えると進む。 */
   revision: number;
   corrected: boolean;
-  last_execution: DbAdminChatLastExecution | null;
+  /** 文ごとの最後の実行の要約（今の SQL の文のもの。文の番号の順。#2333）。 */
+  statement_executions: DbAdminChatStatementLastExecution[];
+  last_run_all: DbAdminChatRunAllSummary | null;
   sender_user_uuid?: string | null;
   /** 会話の持ち主以外（system_admin）が送ったターンだけに付く送り手の表示名（引けなければ空）。 */
   sender_display_name?: string | null;

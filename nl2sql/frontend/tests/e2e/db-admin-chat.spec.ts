@@ -1,7 +1,9 @@
-// DB 管理チャット（#2264）。質問から Oracle の SQL を作り、生成した SQL を必ず見せる。SELECT は「実行」で、
-// それ以外は実行確認語を入力したときだけ実行する。画面の骨格・会話の履歴・入力欄・送信中の往復・SQL の表示・
-// 結果の表・処理の経過は「チャット」と同じ共通の部品で描く。会話はサーバーが保存し、チャットと同じ会話の
-// 履歴のパネル（開き直し・名前の変更・削除・新しい会話）を持つ（#2319）。
+// DB 管理チャット（#2264）。質問から Oracle の SQL を作り、生成した SQL を必ず見せる。生成した SQL はサーバーが
+// 文に分け、文ごとに分類・実行する（#2333）: SELECT は「実行」で、データや構造を変える文は実行確認語を入力した
+// ときだけ実行し、止める文はその文だけを実行できなくする。「すべて実行」は上から順に実行し、最初のエラーで止める。
+// 画面の骨格・会話の履歴・入力欄・送信中の往復・SQL の表示・結果の表・処理の経過は「チャット」と同じ共通の部品で
+// 描く。会話はサーバーが保存し、チャットと同じ会話の履歴のパネル（開き直し・名前の変更・削除・新しい会話）を持つ
+// （#2319）。
 // LLM・Oracle・会話の保存は page.route の決定論の mock に置き換える（表・列の名前は合成のもの）。
 // 各 test は playwright.config の desktop（1280px）と mobile-375 の両方で動く。
 import { expect, test, type Page, type Request, type Route } from "./_helpers/test";
@@ -10,26 +12,52 @@ import { openSidebarNav } from "./_helpers/sidebar-nav";
 
 const timing = { created_at: "2026-10-18T00:00:00Z", finished_at: "2026-10-18T00:00:01Z", elapsed_ms: 120 };
 
-function plan(sql: string, overrides: Record<string, unknown> = {}) {
+type Json = Record<string, unknown>;
+
+interface StatementPlan extends Json {
+  index: number;
+  statement_type: string;
+  sql: string;
+  select_only: boolean;
+  implicit_commit: boolean;
+  blocked_reason: string;
+  requires_confirmation: boolean;
+  confirmation_target: string;
+}
+
+/** サーバーと同じ規則の、文ごとの分類（SELECT は確認語なし、それ以外は ADMIN_EXECUTE、止める文は実行できない）。 */
+function statementPlan(index: number, sql: string, blockedReason = ""): StatementPlan {
   const select = /^\s*(select|with)\b/i.test(sql);
+  const changes = !select && !blockedReason;
   return {
+    index,
+    statement_type: select ? "SELECT" : sql.trim().split(/\s+/)[0]!.toUpperCase(),
     sql,
-    statements: [
-      {
-        index: 1,
-        statement_type: select ? "SELECT" : sql.trim().split(/\s+/)[0]!.toUpperCase(),
-        sql,
-        select_only: select,
-        implicit_commit: false,
-        blocked_reason: "",
-      },
-    ],
-    read_only: select,
-    requires_confirmation: !select,
-    confirmation_target: select ? "" : "ADMIN_EXECUTE",
+    select_only: select,
     implicit_commit: false,
-    blocked: false,
-    blocked_reasons: [],
+    blocked_reason: blockedReason,
+    requires_confirmation: changes,
+    confirmation_target: changes ? "ADMIN_EXECUTE" : "",
+  };
+}
+
+/** 1 文（文字列）か、文の並び（文字列か [SQL, 止める理由]）の分類。 */
+function plan(sqls: string | (string | [string, string])[], overrides: Record<string, unknown> = {}) {
+  const items = (Array.isArray(sqls) ? sqls : [sqls]).map((item, index) =>
+    Array.isArray(item) ? statementPlan(index + 1, item[0], item[1]) : statementPlan(index + 1, item),
+  );
+  const changing = items.filter((item) => !item.select_only);
+  const blockedReasons = items.map((item) => item.blocked_reason).filter(Boolean);
+  const requiresConfirmation = changing.length > 0 && blockedReasons.length === 0;
+  return {
+    sql: Array.isArray(sqls) ? items.map((item) => `${item.sql};`).join("\n") : sqls,
+    statements: items,
+    read_only: items.length > 0 && changing.length === 0,
+    requires_confirmation: requiresConfirmation,
+    confirmation_target: requiresConfirmation ? "ADMIN_EXECUTE" : "",
+    implicit_commit: false,
+    blocked: blockedReasons.length > 0,
+    blocked_reasons: blockedReasons,
     ...overrides,
   };
 }
@@ -45,38 +73,42 @@ function generated(planData: Plan, explanation = "説明の文です。"): Gener
   return { plan: planData, explanation };
 }
 
-const selectResult = {
-  executed: true,
-  runtime: "oracle",
-  execution_context: "admin_control_plane",
-  select_result: {
-    columns: ["BANNER_FULL"],
-    rows: [{ BANNER_FULL: "Oracle AI Database Release 1.0" }],
-    total: 1,
-    returned_count: 1,
-    has_more: false,
-    truncated: false,
+function selectResultFor(index: number, column = "BANNER_FULL", value = "Oracle AI Database Release 1.0") {
+  return {
+    executed: true,
+    runtime: "oracle",
     execution_context: "admin_control_plane",
-  },
-  statements: [
-    { index: 1, statement_type: "SELECT", status: "executed", sql: "SELECT 1", row_count: 1, message: "1 rows", elapsed_ms: 5 },
-  ],
-  committed: false,
-  rolled_back: false,
-  warnings: [],
-  timing,
-};
+    select_result: {
+      columns: [column],
+      rows: [{ [column]: value }],
+      total: 1,
+      returned_count: 1,
+      has_more: false,
+      truncated: false,
+      execution_context: "admin_control_plane",
+    },
+    statements: [
+      { index, statement_type: "SELECT", status: "executed", sql: "SELECT 1", row_count: 1, message: "1 rows", elapsed_ms: 5 },
+    ],
+    committed: false,
+    rolled_back: false,
+    warnings: [],
+    timing,
+  };
+}
 
-function mutationResult(sql: string, ok = true) {
+const selectResult = selectResultFor(1);
+
+function mutationResult(sql: string, ok = true, index = 1) {
   return {
     executed: ok,
     runtime: "oracle",
     execution_context: "admin_control_plane",
     statements: [
       ok
-        ? { index: 1, statement_type: "DELETE", status: "success", sql, row_count: 3, message: "RowsAffected=3", elapsed_ms: 5 }
+        ? { index, statement_type: "DELETE", status: "success", sql, row_count: 3, message: "RowsAffected=3", elapsed_ms: 5 }
         : {
-            index: 1,
+            index,
             statement_type: "DELETE",
             status: "error",
             sql,
@@ -93,15 +125,14 @@ function mutationResult(sql: string, ok = true) {
   };
 }
 
-type Json = Record<string, unknown>;
-
 interface StoredTurn extends Json {
   turn_id: string;
   question: string;
   plan: Plan;
   revision: number;
   corrected: boolean;
-  last_execution: Json | null;
+  statement_executions: Json[];
+  last_run_all: Json | null;
 }
 
 interface StoredConversation {
@@ -134,7 +165,26 @@ function storedTurn(turnId: string, question: string, next: Generated): StoredTu
     plan: next.plan,
     revision: 0,
     corrected: false,
-    last_execution: null,
+    statement_executions: [],
+    last_run_all: null,
+  };
+}
+
+/** 保存した 1 文の最後の実行の要約（サーバーと同じく、結果の行は残さない）。 */
+function savedExecution(index: number, status: string, result: Json | null, mode = "statement"): Json {
+  const select = result?.select_result as Json | undefined;
+  return {
+    index,
+    executed_at: "2026-10-17T09:31:00Z",
+    mode,
+    batch_id: `batch-${index}`,
+    confirmation_given: false,
+    status,
+    row_count: select ? select.returned_count : null,
+    column_count: select ? (select.columns as unknown[]).length : null,
+    has_more: false,
+    outcome: status,
+    result: result ? { ...result, select_result: null } : null,
   };
 }
 
@@ -148,17 +198,27 @@ function savedConversation(
   return { id, title, created_at: "2026-10-17T09:30:00Z", owned: true, actor_display_name: "", turns, ...overrides };
 }
 
+function outcomeStatus(result: Json | null): string {
+  if (!result) return "not_run";
+  const statements = (result.statements as Json[]) ?? [];
+  return statements.every((item) => item.status === "success" || item.status === "executed") ? "succeeded" : "failed";
+}
+
 /** 会話の保存・生成・実行・分析を、サーバーと同じ契約の mock にする。 */
 async function setup(
   page: Page,
   {
     responses = [],
     execute,
+    executeAll,
     analyze,
     conversations = [],
   }: {
     responses?: Generated[];
-    execute?: (body: Json, turn: StoredTurn) => Json;
+    /** 1 文の実行の結果（その文だけの管理 SQL の実行の結果）。 */
+    execute?: (body: Json, turn: StoredTurn, statement: StatementPlan) => Json;
+    /** 「すべて実行」の文ごとの結果（null は実行しなかった文）。既定はすべて成功。 */
+    executeAll?: (body: Json, turn: StoredTurn) => (Json | null)[];
     analyze?: unknown;
     conversations?: StoredConversation[];
   } = {},
@@ -200,11 +260,17 @@ async function setup(
       const update = body(request);
       mock.planBodies.push(update);
       const turn = conversation.turns.find((item) => item.turn_id === parts[2])!;
+      // statement_index があればその文だけを置き換え、サーバーが分類し直す。
+      const index = typeof update.statement_index === "number" ? update.statement_index : null;
+      const sqls = index
+        ? turn.plan.statements.map((item) => (item.index === index ? String(update.sql) : item.sql))
+        : [String(update.sql)];
       Object.assign(turn, {
-        plan: plan(String(update.sql)),
+        plan: plan(sqls.length === 1 ? sqls[0]! : sqls),
         revision: turn.revision + 1,
         corrected: true,
-        last_execution: null,
+        statement_executions: [],
+        last_run_all: null,
       });
       return route.fulfill({ json: { data: turn } });
     }
@@ -239,22 +305,57 @@ async function setup(
     mock.executeBodies.push(request);
     const conversation = find(String(request.conversation_id))!;
     const turn = conversation.turns.find((item) => item.turn_id === request.turn_id)!;
-    const data = execute ? execute(request, turn) : selectResult;
-    const statements = (data.statements as Json[]) ?? [];
-    const succeeded = statements.every((item) => item.status === "success" || item.status === "executed");
-    const select = data.select_result as Json | undefined;
-    turn.last_execution = {
-      executed_at: "2026-10-18T00:00:01Z",
-      revision: turn.revision,
-      confirmation_given: Boolean(request.confirmation),
-      succeeded,
-      row_count: select ? select.returned_count : null,
-      column_count: select ? (select.columns as unknown[]).length : null,
-      has_more: false,
-      outcome: succeeded ? "成功" : "失敗",
-      result: { ...data, select_result: null },
-    };
-    return route.fulfill({ json: { data } });
+    const statements = turn.plan.statements;
+    const results =
+      request.mode === "all"
+        ? (executeAll?.(request, turn) ?? statements.map((item) => selectResultFor(item.index)))
+        : statements.map((item) =>
+            item.index === request.statement_index
+              ? (execute ? execute(request, turn, item) : selectResultFor(item.index))
+              : undefined,
+          );
+    const outcomes = statements
+      .map((item, position) => ({ item, result: results[position] }))
+      .filter(({ result }) => result !== undefined)
+      .map(({ item, result }) => ({ index: item.index, status: outcomeStatus(result ?? null), result: result ?? null }));
+    const stopped = outcomes.find((outcome) => outcome.status === "failed");
+    const committed = outcomes.some((outcome) => Boolean(outcome.result?.committed));
+    const rolledBack = outcomes.some((outcome) => Boolean(outcome.result?.rolled_back));
+    for (const outcome of outcomes) {
+      turn.statement_executions = [
+        ...turn.statement_executions.filter((saved) => saved.index !== outcome.index),
+        savedExecution(outcome.index, outcome.status, outcome.result, String(request.mode)),
+      ].sort((a, b) => Number(a.index) - Number(b.index));
+    }
+    if (request.mode === "all") {
+      turn.last_run_all = {
+        executed_at: "2026-10-17T09:31:00Z",
+        batch_id: "batch-all",
+        confirmation_given: Boolean(request.confirmation),
+        succeeded: !stopped && outcomes.every((outcome) => outcome.status === "succeeded"),
+        statement_count: outcomes.length,
+        succeeded_count: outcomes.filter((outcome) => outcome.status === "succeeded").length,
+        stopped_at: stopped?.index ?? null,
+        committed,
+        rolled_back: rolledBack,
+        warnings: [],
+      };
+    }
+    return route.fulfill({
+      json: {
+        data: {
+          mode: request.mode,
+          batch_id: "batch-all",
+          executed: outcomes.some((outcome) => outcome.status === "succeeded"),
+          committed,
+          rolled_back: rolledBack,
+          stopped_at: request.mode === "all" ? (stopped?.index ?? null) : null,
+          statements: outcomes,
+          warnings: [],
+          timing,
+        },
+      },
+    });
   });
   await page.route("**/api/nl2sql/db-admin-chat/analyze-error", (route) => {
     mock.analyzeBodies.push(body(route.request()));
@@ -338,21 +439,34 @@ test("SELECT は「実行」を押すと実行し、結果を表で出す。続�
 
   const turn = page.getByTestId("db-admin-chat-turn").first();
   await expect(turn.getByTestId("db-admin-chat-sql")).toHaveText("SELECT BANNER_FULL FROM V$VERSION");
-  await expect(turn.getByText("読み取り専用・未実行")).toBeVisible();
+  await expect(turn.getByText("読み取り専用", { exact: true })).toBeVisible();
+  // 1 文だけのターンには「すべて実行」を出さない。
+  await expect(turn.getByTestId("db-admin-chat-run-all")).toHaveCount(0);
   // 生成しただけでは実行しない。
   expect(mock.executeBodies).toHaveLength(0);
   // SELECT は確認語の欄を出さない。
   await expect(turn.getByRole("textbox", { name: "実行確認語" })).toHaveCount(0);
+  // 処理の経過は生成と SQL の確認まで。実行は経過に足さず（段の数・合計時間を変えない）、SQL の区画に出す。
+  const progress = turn.getByTestId("db-admin-chat-progress-summary");
+  await expect(progress).toHaveText(/^処理の経過（2 ステップ・/);
+  const progressBefore = (await progress.textContent()) ?? "";
   await turn.getByTestId("db-admin-chat-execute").click();
   await expect(turn.getByTestId("db-admin-chat-result")).toBeVisible();
   await expect(turn.getByText("Oracle AI Database Release 1.0")).toBeVisible();
-  await expect(turn.getByText("読み取り専用・実行済み")).toBeVisible();
+  await expect(turn.getByTestId("db-admin-chat-execute")).toHaveText("もう一度実行");
+  await expect(progress).toHaveText(progressBefore);
+  await turn.getByTestId("db-admin-chat-execute").click();
+  await expect.poll(() => mock.executeBodies.length).toBe(2);
+  await expect(turn.getByTestId("db-admin-chat-result")).toBeVisible();
+  await expect(progress).toHaveText(progressBefore);
   // SQL は送らず、ターンに保存した SQL を実行する（#2319）。
   const conversationId = String(mock.generateBodies[0]!.client_turn_id);
   expect(mock.generateBodies[0]).toMatchObject({ question: "データベースの版", conversation_id: "" });
   expect(mock.executeBodies[0]).toEqual({
     conversation_id: conversationId,
     turn_id: conversationId,
+    mode: "statement",
+    statement_index: 1,
     confirmation: "",
     row_limit: expect.any(Number),
   });
@@ -368,30 +482,10 @@ test("SELECT は「実行」を押すと実行し、結果を表で出す。続�
 
 test("会話は履歴から開き直せ、SQL・分類・前回の実行の要約が戻る。「新しい会話」は空から始める", { tag: "@responsive" }, async ({ page }) => {
   const selectTurn = storedTurn("turn-a1", "データベースの版", generated(plan("SELECT BANNER_FULL FROM V$VERSION")));
-  selectTurn.last_execution = {
-    executed_at: "2026-10-17T09:31:00Z",
-    revision: 0,
-    confirmation_given: false,
-    succeeded: true,
-    row_count: 1,
-    column_count: 1,
-    has_more: false,
-    outcome: "成功（1 行）",
-    result: { ...selectResult, select_result: null },
-  };
+  selectTurn.statement_executions = [savedExecution(1, "succeeded", selectResult)];
   const deleteSql = "DELETE FROM APP.TEMP_ITEMS WHERE QTY = 0";
   const mutationTurn = storedTurn("turn-a2", "在庫が 0 の行を消す", generated(plan(deleteSql)));
-  mutationTurn.last_execution = {
-    executed_at: "2026-10-17T09:32:00Z",
-    revision: 0,
-    confirmation_given: true,
-    succeeded: true,
-    row_count: null,
-    column_count: null,
-    has_more: false,
-    outcome: "成功",
-    result: mutationResult(deleteSql),
-  };
+  mutationTurn.statement_executions = [savedExecution(1, "succeeded", mutationResult(deleteSql))];
   const mock = await setup(page, {
     responses: [generated(plan("SELECT 1 FROM DUAL"))],
     conversations: [
@@ -405,10 +499,10 @@ test("会話は履歴から開き直せ、SQL・分類・前回の実行の要�
   await expect(turns).toHaveCount(2);
   // 結果の行は保存しないので、SELECT は前回の実行の要約と「もう一度実行」（チャットと同じ）。
   await expect(turns.nth(0).getByTestId("db-admin-chat-last-execution")).toContainText("1 行・1 列");
-  await expect(turns.nth(0).getByText("読み取り専用・実行済み")).toBeVisible();
+  await expect(turns.nth(0).getByText("読み取り専用", { exact: true })).toBeVisible();
   await expect(turns.nth(0).getByTestId("db-admin-chat-execute")).toHaveText("もう一度実行");
   // 更新系は文ごとの状態・影響行数・commit。確認語は保存しないので空からやり直す。
-  await expect(turns.nth(1).getByText("確認語で実行済み")).toBeVisible();
+  await expect(turns.nth(1).getByText("変更あり", { exact: true })).toBeVisible();
   await expect(turns.nth(1).getByText("影響件数 3 件", { exact: true })).toBeVisible();
   await expect(turns.nth(1).getByRole("textbox", { name: "実行確認語" })).toHaveValue("");
   // 開いている会話の名前を会話の欄の上端に出す。
@@ -612,8 +706,8 @@ test("SELECT 以外は実行確認語を入れたときだけ実行し、失敗�
   await page.goto("/db-admin-chat");
   await ask(page, "在庫が 0 の行を消す");
   const turn = page.getByTestId("db-admin-chat-turn").first();
-  await expect(turn.getByText("確認語が必要・未実行")).toBeVisible();
-  await expect(turn.getByText("この SQL はデータベースを変更します。", { exact: false })).toBeVisible();
+  await expect(turn.getByText("変更あり", { exact: true })).toBeVisible();
+  await expect(turn.getByText("この文はデータベースを変更します。", { exact: false })).toBeVisible();
   const confirmation = turn.getByRole("textbox", { name: "実行確認語" });
   const execute = turn.getByTestId("db-admin-chat-execute");
   await expect(execute).toBeDisabled();
@@ -632,8 +726,8 @@ test("SELECT 以外は実行確認語を入れたときだけ実行し、失敗�
   await expect(turn.getByTestId("db-admin-chat-corrected-sql")).toHaveText(corrected);
   expect(mock.analyzeBodies[0]).toMatchObject({ sql, question: "在庫が 0 の行を消す" });
   await turn.getByTestId("db-admin-chat-use-corrected").click();
-  // 直した SQL はサーバーがターンの SQL を置き換えて分類し直す。
-  await expect.poll(() => mock.planBodies).toEqual([{ sql: corrected }]);
+  // 直した SQL はサーバーがその文を置き換えて分類し直す。
+  await expect.poll(() => mock.planBodies).toEqual([{ sql: corrected, statement_index: 1 }]);
 
   const updated = page.getByTestId("db-admin-chat-turn").first();
   await expect(updated.getByTestId("db-admin-chat-sql")).toHaveText(corrected);
@@ -644,7 +738,8 @@ test("SELECT 以外は実行確認語を入れたときだけ実行し、失敗�
   await updated.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
   await updated.getByTestId("db-admin-chat-execute").click();
   expect(mock.executeBodies[1]).toMatchObject({ confirmation: "ADMIN_EXECUTE" });
-  await expect(updated.getByText("確認語で実行済み")).toBeVisible();
+  await expect(updated.getByText("影響件数 3 件", { exact: true })).toBeVisible();
+  await expect(updated.getByTestId("db-admin-chat-execute")).toHaveText("もう一度実行");
   await expectNoHorizontalOverflow(page);
 });
 
@@ -652,19 +747,15 @@ test("実行できない SQL は理由を出し、実行の操作を出さない
   const sql = "ALTER SYSTEM SET OPEN_CURSORS = 300";
   await setup(page, {
     responses: [
-      generated(
-        plan(sql, {
-          blocked: true,
-          blocked_reasons: ["ALTER SYSTEM（インスタンスの設定・セッションの強制終了など）は実行できません。"],
-        }),
-      ),
+      generated(plan([[sql, "ALTER SYSTEM（インスタンスの設定・セッションの強制終了など）は実行できません。"]])),
     ],
   });
   await page.goto("/db-admin-chat");
   await ask(page, "カーソルの上限を変える");
   const turn = page.getByTestId("db-admin-chat-turn").first();
-  await expect(turn.getByText("この SQL は実行できません")).toBeVisible();
-  await expect(turn.getByText("実行できない SQL")).toBeVisible();
+  await expect(turn.getByText("この文は実行できません")).toBeVisible();
+  await expect(turn.getByText("実行できない", { exact: true })).toBeVisible();
+  await expect(turn.getByText("ALTER SYSTEM（インスタンスの設定・セッションの強制終了など）は実行できません。")).toBeVisible();
   await expect(turn.getByTestId("db-admin-chat-execute")).toHaveCount(0);
   await expect(turn.getByRole("textbox", { name: "実行確認語" })).toHaveCount(0);
 });
@@ -704,4 +795,165 @@ test("DB 管理チャットの権限の無い利用者には出ず、画面も�
   await expect(sidebar.getByRole("link", { name: "DB 管理チャット" })).toHaveCount(0);
   await page.goto("/db-admin-chat");
   await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
+});
+
+// ---- 複数の文（#2333）: 文ごとの実行・すべて実行・止める文の分離・開き直し ----
+
+function statements(page: Page) {
+  return page.getByTestId("db-admin-chat-turn").first().getByTestId("db-admin-chat-statement");
+}
+
+test("複数の SELECT は文ごとに確認語なしで実行でき、結果はその文の直下に出る。「すべて実行」も確認語なし", { tag: "@responsive" }, async ({ page }) => {
+  const mock = await setup(page, {
+    responses: [
+      generated(
+        plan(["SELECT BANNER_FULL FROM V$VERSION", "SELECT TABLESPACE_NAME, USED_PERCENT FROM DBA_TABLESPACE_USAGE_METRICS"]),
+        "**版**と**表領域の使用率**を、文ごとに読みます。",
+      ),
+    ],
+  });
+  await page.goto("/db-admin-chat");
+  await ask(page, "版と表領域");
+  const blocks = statements(page);
+  await expect(blocks).toHaveCount(2);
+  // 説明は共通の Markdown の表示で描き、記号を生で出さない。
+  const answer = page.getByTestId("db-admin-chat-turn").first();
+  await expect(answer.locator("strong", { hasText: "表領域の使用率" })).toBeVisible();
+  await expect(answer).not.toContainText("**");
+  await expect(blocks.nth(0).getByText("文 1", { exact: true })).toBeVisible();
+  await expect(blocks.nth(1).getByText("文 2", { exact: true })).toBeVisible();
+  await expect(blocks.nth(1).getByTestId("db-admin-chat-sql")).toHaveText(
+    "SELECT TABLESPACE_NAME, USED_PERCENT FROM DBA_TABLESPACE_USAGE_METRICS",
+  );
+  // 複数の SELECT も止めない。確認語の欄は 1 つも出さない。
+  await expect(page.getByText("実行できない", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "実行確認語" })).toHaveCount(0);
+
+  await blocks.nth(1).getByTestId("db-admin-chat-execute").click();
+  await expect(blocks.nth(1).getByTestId("db-admin-chat-result")).toBeVisible();
+  // ほかの文には結果を出さない。
+  await expect(blocks.nth(0).getByTestId("db-admin-chat-result")).toHaveCount(0);
+  expect(mock.executeBodies[0]).toMatchObject({ mode: "statement", statement_index: 2, confirmation: "" });
+
+  const progress = page.getByTestId("db-admin-chat-progress-summary");
+  const progressBefore = (await progress.textContent()) ?? "";
+  await page.getByTestId("db-admin-chat-run-all").click();
+  await expect(blocks.nth(0).getByTestId("db-admin-chat-result")).toBeVisible();
+  // 「すべて実行」も処理の経過を変えない。
+  await expect(progress).toHaveText(progressBefore);
+  await expect(blocks.nth(1).getByTestId("db-admin-chat-result")).toBeVisible();
+  expect(mock.executeBodies[1]).toMatchObject({ mode: "all", confirmation: "" });
+  expect(mock.executeBodies[1]).not.toHaveProperty("statement_index");
+  await expect(page.getByTestId("db-admin-chat-run-all-summary")).toContainText("2 文すべてが成功しました");
+  await expectNoHorizontalOverflow(page);
+});
+
+test("変更する文を含む「すべて実行」は確認語を 1 回入れて実行し、最初のエラーで止めて失敗の文と実行しなかった文を示す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const deleteSql = "DELETE FROM APP.TEMP_ITEMS WHERE QTY = 0";
+  const mock = await setup(page, {
+    responses: [generated(plan(["SELECT COUNT(*) FROM APP.TEMP_ITEMS", deleteSql, "SELECT COUNT(*) FROM APP.TEMP_ITEMS"]))],
+    executeAll: () => [selectResultFor(1, "N", "3"), { ...mutationResult(deleteSql, false, 2), rolled_back: true }, null],
+  });
+  await page.goto("/db-admin-chat");
+  await ask(page, "件数を見てから消す");
+  const region = page.getByTestId("db-admin-chat-run-all-region");
+  // トランザクションの扱い（上から順に・最初のエラーで止める・全部成功したときだけ commit）を示す。
+  await expect(region.getByText("1 つのトランザクションで上から順に実行します", { exact: false })).toBeVisible();
+  const runAll = region.getByTestId("db-admin-chat-run-all");
+  await expect(runAll).toBeDisabled();
+  await region.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
+  await expect(runAll).toBeEnabled();
+  await runAll.click();
+  // 確認語は「すべて実行」に 1 回だけ。文ごとの確認語の欄は使わない。
+  await expect.poll(() => mock.executeBodies.length).toBe(1);
+  expect(mock.executeBodies[0]).toMatchObject({ mode: "all", confirmation: "ADMIN_EXECUTE" });
+
+  const summary = page.getByTestId("db-admin-chat-run-all-summary");
+  await expect(summary).toContainText("文 2 で失敗して止めました（成功 1 文・実行しなかった文 1 文）");
+  await expect(summary.getByText("ロールバック済み", { exact: true })).toBeVisible();
+  const blocks = statements(page);
+  await expect(blocks.nth(0).getByTestId("db-admin-chat-result")).toBeVisible();
+  await expect(blocks.nth(1).getByText("ORA-00942: table or view does not exist").first()).toBeVisible();
+  await expect(blocks.nth(1).getByTestId("db-admin-chat-analyze")).toBeVisible();
+  await expect(blocks.nth(2).getByTestId("db-admin-chat-not-run")).toContainText("実行しなかった");
+  // 実行の確認は 1 回ごと。
+  await expect(region.getByRole("textbox", { name: "実行確認語" })).toHaveValue("");
+  await expectNoHorizontalOverflow(page);
+  // 要約のバッジは会話の欄の幅に収める（375px でも切れない）。
+  const logBox = (await page.getByTestId("db-admin-chat-conversation").boundingBox())!;
+  for (const badge of await summary.locator("span").all()) {
+    const box = await badge.boundingBox();
+    if (box) expect(box.x + box.width).toBeLessThanOrEqual(logBox.x + logBox.width + 1);
+  }
+  await summary.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("db-admin-chat-run-all.png") });
+});
+
+test("止める文はその文だけを実行できなくし、ほかの文は実行できる。「すべて実行」は押せず理由を出す", { tag: "@responsive" }, async ({ page }) => {
+  const mock = await setup(page, {
+    responses: [
+      generated(
+        plan([
+          "SELECT NAME, VALUE FROM V$PARAMETER WHERE NAME = 'open_cursors'",
+          ["ALTER SYSTEM SET OPEN_CURSORS = 300", "ALTER SYSTEM（インスタンスの設定・セッションの強制終了など）は実行できません。"],
+        ]),
+      ),
+    ],
+  });
+  await page.goto("/db-admin-chat");
+  await ask(page, "カーソルの上限を確かめて変える");
+  await expect(page.getByTestId("db-admin-chat-run-all")).toBeDisabled();
+  await expect(page.getByTestId("db-admin-chat-run-all-blocked")).toContainText("実行できない文（#2）を含むため");
+  const blocks = statements(page);
+  await expect(blocks.nth(1).getByText("この文は実行できません")).toBeVisible();
+  await expect(blocks.nth(1).getByTestId("db-admin-chat-execute")).toHaveCount(0);
+  await expect(blocks.nth(1).getByRole("textbox", { name: "実行確認語" })).toHaveCount(0);
+  await blocks.nth(0).getByTestId("db-admin-chat-execute").click();
+  await expect(blocks.nth(0).getByTestId("db-admin-chat-result")).toBeVisible();
+  expect(mock.executeBodies).toEqual([expect.objectContaining({ mode: "statement", statement_index: 1 })]);
+});
+
+test("複数の文の会話を開き直すと、文ごとの前回の実行の要約・「すべて実行」の要約と「実行」が戻る", { tag: "@responsive" }, async ({ page }) => {
+  const deleteSql = "DELETE FROM APP.TEMP_ITEMS WHERE QTY = 0";
+  const turn = storedTurn(
+    "turn-m1",
+    "件数を見てから消す",
+    generated(plan(["SELECT COUNT(*) FROM APP.TEMP_ITEMS", deleteSql, "SELECT 1 FROM DUAL"])),
+  );
+  turn.statement_executions = [
+    savedExecution(1, "succeeded", selectResultFor(1, "N", "3"), "all"),
+    savedExecution(2, "failed", mutationResult(deleteSql, false, 2), "all"),
+    savedExecution(3, "not_run", null, "all"),
+  ];
+  turn.last_run_all = {
+    executed_at: "2026-10-17T09:31:00Z",
+    batch_id: "batch-all",
+    confirmation_given: true,
+    succeeded: false,
+    statement_count: 3,
+    succeeded_count: 1,
+    stopped_at: 2,
+    committed: false,
+    rolled_back: true,
+    warnings: [],
+  };
+  const mock = await setup(page, { conversations: [savedConversation("conversation-m", "会話 M", [turn])] });
+  await page.goto("/db-admin-chat");
+  await openFromHistory(page, "会話 M");
+  const blocks = statements(page);
+  await expect(blocks).toHaveCount(3);
+  await expect(blocks.nth(0).getByTestId("db-admin-chat-last-execution")).toContainText("1 行・1 列");
+  await expect(blocks.nth(0).getByTestId("db-admin-chat-execute")).toHaveText("もう一度実行");
+  await expect(blocks.nth(1).getByText("ORA-00942: table or view does not exist").first()).toBeVisible();
+  await expect(blocks.nth(2).getByTestId("db-admin-chat-not-run")).toBeVisible();
+  await expect(blocks.nth(2).getByTestId("db-admin-chat-execute")).toHaveText("実行");
+  const summary = page.getByTestId("db-admin-chat-run-all-summary");
+  await expect(summary).toContainText("前回のすべて実行");
+  await expect(summary).toContainText("文 2 で失敗して止めました");
+  // 開き直した文も、保存した SQL のその文を実行する。
+  if ((page.viewportSize()?.width ?? 0) >= 1024) await historyToggle(page).click();
+  await blocks.nth(2).getByTestId("db-admin-chat-execute").click();
+  await expect(blocks.nth(2).getByTestId("db-admin-chat-result")).toBeVisible();
+  expect(mock.executeBodies.at(-1)).toMatchObject({ turn_id: "turn-m1", mode: "statement", statement_index: 3 });
+  await expectNoHorizontalOverflow(page);
 });

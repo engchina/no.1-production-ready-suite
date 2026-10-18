@@ -99,6 +99,8 @@ const slowSearchStream: TimedChunk[] = [
           filter_keys: [],
           knowledge_base_count: 1,
           config_fingerprint: "fp-1",
+          // 回答の記録の詳細（処理の経過の中の「処理の詳細」に出す。#2325）。
+          answer: { confidence: "high", needs_human_review: false },
         },
       }),
       sse("delta", { text: "銀行の得点は 82 点です。" }),
@@ -286,8 +288,21 @@ for (const viewport of [
     // 完了したら一覧を閉じ（チャットと同じ。#2118）、押すと開く。全体を包む工程（根拠の検索と回答の生成）は行にしない。
     const process = page.getByRole("region", { name: "処理の経過" });
     await expect(process.getByText("文書の検索", { exact: true })).toBeHidden();
+    // 「処理の詳細」は処理の経過の中にあり、閉じているときは一緒に隠れる（回答の本文との間に独立して置かない。#2325）。
+    const details = page.getByTestId("search-run-progress-details");
+    await expect(details).toBeHidden();
     await summary.click();
     await expect(process.getByText("文書の検索", { exact: true })).toBeVisible();
+    // 開くとタイムラインの後ろ（中の最後の要素）に「処理の詳細」が出る。
+    await expect(details).toHaveText("処理の詳細");
+    const timelineBox = await page.getByTestId("search-run-progress-timeline").boundingBox();
+    const detailsBox = await details.boundingBox();
+    expect(timelineBox && detailsBox && detailsBox.y >= timelineBox.y + timelineBox.height).toBeTruthy();
+    await details.click();
+    await expect(process.getByRole("region", { name: "処理の詳細" }).getByText("信頼度: high")).toBeVisible();
+    // 回答を読む場には回答の記録の削除（「その他の操作」）を出さない（#2325）。
+    await expect(process.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
+    await process.screenshot({ path: `test-results/answer-progress-search-details-${viewport.name}.png` });
     await expect(process.getByText("根拠の検索と回答の生成", { exact: true })).toHaveCount(0);
     // 名前は「処理の経過」1 つ（旧「検索実行」「実行記録」「ステージ」は出さない）。
     await expect(page.getByRole("region", { name: "検索実行" })).toHaveCount(0);
@@ -298,7 +313,7 @@ for (const viewport of [
     const answerBox = await page.getByText("銀行の得点は 82 点です。").first().boundingBox();
     const processBox = await process.boundingBox();
     expect(answerBox && processBox && processBox.y < answerBox.y).toBeTruthy();
-    // 「詳細」はチャットと同じ回答の記録の詳細だけで、開始・トレース ID は出さない（#2118）。
+    // 「処理の詳細」はチャットと同じ回答の記録の詳細だけで、開始・トレース ID は出さない（#2118）。
     await expect(process.getByText("トレース ID")).toHaveCount(0);
     await expectNoPageOverflow(page);
   });

@@ -163,15 +163,15 @@ test("データ管理プレビューは取得件数上限を指定でき、詳�
   assert.match(dataManagementSource, /icon=\{Play\}/u);
   assert.match(dataManagementSource, /icon=\{X\}/u);
   assert.match(dataManagementSource, /size="lg"[\s\S]*?\{t\("dataMgmt\.preview\.show"\)\}/u);
-  assert.match(dataManagementSource, /size="lg"[\s\S]*?\{t\("dataMgmt\.preview\.clear"\)\}/u);
+  // 行を選ぶとすぐにデータを表示し、取得のたびに結果を置き換えるので、取得件数上限と結果を既定に戻すボタンは持たない（#2330）。
+  assert.doesNotMatch(dataManagementSource, /dataMgmt\.preview\.clear|onClearPreview|canClearPreview/u);
   // 行を選ぶと URL の選択を変え、選んでいる行をもう一度押すとデータを取り直す（#2315）。
   assert.match(dataManagementSource, /onSelect=\{\(name\) => \(name === previewObject \? void showPreview\(name\) : previewSelection\.select\(name\)\)\}/u);
-  assert.match(dataManagementSource, /setPreviewRowLimitInput\(String\(DEFAULT_DATA_PREVIEW_ROW_LIMIT\)\)/u);
   // 表示結果は共通の結果の表（要約・プレビュー・すべての行のシート・CSV。#1178）。
   assert.match(dataManagementSource, /<QueryResultTable\s+results=\{preview\.results\}\s+rowLimit=\{executedRowLimit\}/u);
   assert.match(dataManagementSource, /where_clause: ""/u);
   assert.equal(t("queryResults.rowLimit.helper"), "1〜100000 の整数。取得上限を明示してください。");
-  assert.equal(t("dataMgmt.preview.clear"), "表示件数・結果をリセット");
+  assert.equal(t("dataMgmt.preview.clear"), "dataMgmt.preview.clear");
   assert.doesNotMatch(dataManagementSource, /const DATA_PREVIEW_ROW_LIMIT/u);
   assert.doesNotMatch(dataManagementSource, /limit: DATA_PREVIEW_ROW_LIMIT/u);
   assert.doesNotMatch(dataManagementSource, /dataMgmt\.preview\.fixedLimit/u);

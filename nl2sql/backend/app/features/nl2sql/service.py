@@ -212,15 +212,18 @@ from .models import (
     DbAdminChatAnalyzeData,
     DbAdminChatAnalyzeRequest,
     DbAdminChatData,
-    DbAdminChatExecuteRequest,
+    DbAdminChatExecuteData,
     DbAdminChatGenerateData,
     DbAdminChatGenerateRequest,
     DbAdminChatHistoryTurn,
-    DbAdminChatLastExecution,
     DbAdminChatPage,
     DbAdminChatPlan,
+    DbAdminChatRunAllSummary,
     DbAdminChatSendData,
+    DbAdminChatStatementLastExecution,
+    DbAdminChatStatementOutcome,
     DbAdminChatStatementPlan,
+    DbAdminChatStatementStatus,
     DbAdminChatSummary,
     DbAdminChatTurn,
     DbAdminChatTurnExecuteRequest,
@@ -427,6 +430,7 @@ from .structured_outputs import (
     AnalysisOutput,
     CommentsOutput,
     DbAdminChatAnalysisOutput,
+    DbAdminChatSqlOutput,
     SqlOutput,
     StructureOutput,
     response_format,
@@ -4543,7 +4547,36 @@ _DB_ADMIN_CHAT_MODEL_UNAVAILABLE = (
     "OCI Enterprise AI のモデルの接続が設定されていないため、SQL を生成できません。"
     "システム設定 › モデルで既定のテキストモデルを設定してください。"
 )
-_DB_ADMIN_CHAT_MULTI_SELECT_REASON = "複数 statement 実行に SELECT は含められません。"
+# SQL の無い応答（文章だけの答え）の作り直しの回数と、作り直させる理由・最後の失敗（#2333）。
+_DB_ADMIN_CHAT_GENERATION_ATTEMPTS = 2
+_DB_ADMIN_CHAT_NO_SQL_RETRY = (
+    "前の応答の sql に実行できる SQL がありませんでした。説明の文章だけで答えず、"
+    "質問に答えるための Oracle の SQL を sql に入れてください。"
+)
+_DB_ADMIN_CHAT_NO_SQL = (
+    "SQL を生成できませんでした。AI が SQL ではなく文章で答えたため、回答として出しません。"
+    "質問を言い換えて送り直してください。"
+)
+
+
+def _db_admin_chat_has_sql(sql: str) -> bool:
+    """実行できる SQL の文が 1 つ以上あるか。
+
+    文の種類が分からない文だけなら、SQL ではない文章とみなす。
+    """
+
+    return any(
+        _admin_statement_type(statement) != "UNKNOWN" for statement in _split_sql_statements(sql)
+    )
+
+
+# DDL を含む複数の文の途中の失敗の警告（DDL は暗黙の commit で戻らない）。
+# 「管理 SQL を実行」と DB 管理チャットが使う。
+_DB_ADMIN_IMPLICIT_COMMIT_PARTIAL_WARNING = (
+    "DDL/metadata 系 statement は Oracle の暗黙 commit により、"
+    "成功した文が rollback されていません。失敗した SQL を修正し、"
+    "必要に応じて DB 構造を再取得してください。"
+)
 # DB 管理チャットの 1 つの会話の往復の上限（チャットと同じ 50。画面は超えたら新しい会話を勧める）。
 DB_ADMIN_CHAT_TURN_LIMIT = 50
 # 会話の名前の既定（最初の質問の先頭。チャットの会話と同じ 120 文字）。
@@ -4555,45 +4588,96 @@ class DbAdminChatConversationFullError(ValueError):
     """DB 管理チャットの会話の往復が上限に達した（#2319。新しい会話を始める）。"""
 
 
-def _db_admin_chat_execution_succeeded(result: DbAdminExecuteData) -> bool:
-    return bool(result.statements) and all(
-        item.status in {"success", "executed"} for item in result.statements
-    )
+def _db_admin_chat_statement_status(result: DbAdminExecuteData) -> DbAdminChatStatementStatus:
+    """1 文の実行の結果（`statements` は 1 件）の状態。"""
+
+    statuses = {item.status for item in result.statements}
+    if "confirmation_required" in statuses:
+        return "confirmation_required"
+    if "blocked" in statuses:
+        return "blocked"
+    if statuses and statuses <= {"success", "executed"}:
+        return "succeeded"
+    return "failed"
 
 
-def _db_admin_chat_outcome(result: DbAdminExecuteData, *, succeeded: bool) -> str:
-    """続きの質問の文脈に渡す、実行の結果の短い要約（画面の要約と同じ書き方）。"""
+def _db_admin_chat_statement_outcome_text(outcome: DbAdminChatStatementOutcome) -> str:
+    """続きの質問の文脈に渡す、1 文の実行の結果の短い要約（画面の要約と同じ書き方）。"""
 
-    if succeeded:
+    result = outcome.result
+    if outcome.status == "not_run":
+        return "実行しなかった（前の文の失敗で止めた）"
+    if result is None:
+        return ""
+    if outcome.status == "succeeded":
         rows = result.select_result.returned_count if result.select_result else None
         return f"成功（{rows} 行）" if rows is not None else "成功"
     lines = [
-        f"#{item.index} {item.statement_type}: {item.error_message}"
+        f"{item.statement_type}: {item.error_message}"
         for item in result.statements
         if item.error_message
     ]
     message = "\n".join([*lines, *result.warnings])
-    return f"失敗: {message[:_DB_ADMIN_CHAT_OUTCOME_MESSAGE_CHARS]}"
+    label = "実行できない" if outcome.status == "blocked" else "失敗"
+    return f"{label}: {message[:_DB_ADMIN_CHAT_OUTCOME_MESSAGE_CHARS]}"
 
 
-def _db_admin_chat_last_execution(
-    result: DbAdminExecuteData, *, revision: int, confirmation_given: bool
-) -> DbAdminChatLastExecution:
-    """ターンに残す最後の実行の要約。結果の行は残さない（行数・列数・打ち切りだけ）。"""
+def _db_admin_chat_statement_last_execution(
+    outcome: DbAdminChatStatementOutcome,
+    *,
+    mode: Literal["statement", "all"],
+    batch_id: str,
+    executed_at: str,
+    confirmation_given: bool,
+) -> DbAdminChatStatementLastExecution:
+    """ターンに残す 1 文の最後の実行の要約。結果の行は残さない（行数・列数・打ち切りだけ）。"""
 
-    succeeded = _db_admin_chat_execution_succeeded(result)
-    select = result.select_result
-    return DbAdminChatLastExecution(
-        executed_at=result.timing.finished_at or _utc_now(),
-        revision=revision,
+    result = outcome.result
+    select = result.select_result if result else None
+    status = outcome.status
+    if status == "confirmation_required":  # pragma: no cover - 確認語の待ちは呼び出し側が残さない
+        raise ValueError(status)
+    return DbAdminChatStatementLastExecution(
+        index=outcome.index,
+        executed_at=executed_at,
+        mode=mode,
+        batch_id=batch_id,
         confirmation_given=confirmation_given,
-        succeeded=succeeded,
+        status=status,
         row_count=select.returned_count if select else None,
         column_count=len(select.columns) if select else None,
         has_more=bool(select and (select.has_more or select.truncated)),
-        outcome=_db_admin_chat_outcome(result, succeeded=succeeded),
-        result=result.model_copy(update={"select_result": None}),
+        outcome=_db_admin_chat_statement_outcome_text(outcome),
+        result=result.model_copy(update={"select_result": None}) if result else None,
     )
+
+
+def _db_admin_chat_turn_outcome(turn: DbAdminChatTurn) -> str:
+    """ターンの文ごとの最後の実行の要約を、続きの質問の文脈の 1 つの文にする。"""
+
+    lines = [f"#{item.index}: {item.outcome}" for item in turn.statement_executions if item.outcome]
+    return "\n".join(lines)[:2000]
+
+
+def _db_admin_chat_join_statements(statements: Sequence[str]) -> str:
+    """文を 1 つの SQL に戻す（`_split_sql_statements` で同じ文に分かれる形）。
+
+    PL/SQL のブロック（`;` で終わる文）の後ろは `/` だけの行、ほかの文は `;` で終える（最後の行が
+    `--` のコメントなら、`;` を次の行に置く）。
+    """
+
+    parts: list[str] = []
+    for statement in statements:
+        text = statement.strip()
+        if not text:
+            continue
+        if text.endswith(";"):
+            parts.append(f"{text}\n/")
+        elif "--" in text.splitlines()[-1]:
+            parts.append(f"{text}\n;")
+        else:
+            parts.append(f"{text};")
+    return "\n".join(parts)
 
 
 class Nl2SqlService:
@@ -17342,6 +17426,7 @@ class Nl2SqlService:
         source: str = "admin_sql",
         chat: bool = False,
         confirmation_given: bool | None = None,
+        audit_detail: Mapping[str, Any] | None = None,
     ) -> DbAdminExecuteData:
         """管理 SQL を実行し、実行・止めた結果を監査の表に残す（SELECT も残す。#2264）。
 
@@ -17364,6 +17449,7 @@ class Nl2SqlService:
                 operation="db_admin_chat_execute" if chat else "db_admin_execute",
                 confirmation_given=confirmation_given,
                 duration_ms=_elapsed_ms(started),
+                extra_detail=audit_detail,
             )
         except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
             data.warnings.append(f"Admin SQL の監査保存に失敗しました: {exc}")
@@ -17378,6 +17464,7 @@ class Nl2SqlService:
         operation: str,
         confirmation_given: bool,
         duration_ms: int,
+        extra_detail: Mapping[str, Any] | None = None,
     ) -> None:
         statuses = [item.status for item in data.statements]
         # 確認語の待ち・Oracle の実行環境が無いだけの応答は、実行も拒否もしていないので残さない。
@@ -17409,6 +17496,8 @@ class Nl2SqlService:
             detail["returned_rows"] = data.select_result.returned_count
         if data.warnings:
             detail["warnings"] = data.warnings[:5]
+        if extra_detail:
+            detail.update(extra_detail)
         self._record_admin_audit(
             operation=operation,
             target="ADMIN_EXECUTE",
@@ -17449,44 +17538,58 @@ class Nl2SqlService:
             raise SecurityApiError(403, "DB 管理チャットを使う権限がありません。")
 
     def _db_admin_chat_plan(self, sql: str) -> DbAdminChatPlan:
-        """実行の前の分類（生成エンジンに関係なく、サーバーで必ず分類する）。"""
+        """実行の前の分類（生成エンジンに関係なく、サーバーで必ず分類する）。
+
+        文ごとに分類し（PL/SQL のブロックは 1 文）、文ごとに実行できる（#2333）。読み取り専用の
+        SELECT は
+        確認語なし、変える文は確認語、止める文は実行できない。ターンの値は「すべて実行」の判定で、止める
+        文が 1 つでもあれば「すべて実行」はできない（ほかの文は 1 文ずつ実行できる）。
+        """
 
         statements = _split_sql_statements(sql)
         current_owner = self._current_schema_owner()
         plans: list[DbAdminChatStatementPlan] = []
         for index, statement in enumerate(statements):
             statement_type = _admin_statement_type(statement)
+            select_only = is_select_only(statement)
+            blocked_reason = _db_admin_chat_forbidden_error(
+                statement
+            ) or _db_admin_system_object_error(
+                statement,
+                current_owner=current_owner,
+                allow_dynamic_performance_views=True,
+            )
+            requires_confirmation = not select_only and not blocked_reason
             plans.append(
                 DbAdminChatStatementPlan(
                     index=index + 1,
                     statement_type=statement_type,
                     sql=statement,
-                    select_only=is_select_only(statement),
+                    select_only=select_only,
                     implicit_commit=statement_type in _IMPLICIT_COMMIT_STATEMENT_TYPES,
-                    blocked_reason=(
-                        _db_admin_chat_forbidden_error(statement)
-                        or _db_admin_system_object_error(
-                            statement,
-                            current_owner=current_owner,
-                            allow_dynamic_performance_views=True,
-                        )
+                    blocked_reason=blocked_reason,
+                    requires_confirmation=requires_confirmation,
+                    confirmation_target=(
+                        _db_admin_chat_confirmation_target([statement])
+                        if requires_confirmation
+                        else ""
                     ),
                 )
             )
         blocked_reasons = list(
             dict.fromkeys(plan.blocked_reason for plan in plans if plan.blocked_reason)
         )
-        if len(plans) > 1 and any(plan.select_only for plan in plans):
-            blocked_reasons.append(_DB_ADMIN_CHAT_MULTI_SELECT_REASON)
-        read_only = len(plans) == 1 and plans[0].select_only
-        requires_confirmation = bool(plans) and not read_only
+        changing = [plan for plan in plans if not plan.select_only]
+        requires_confirmation = bool(changing) and not blocked_reasons
         return DbAdminChatPlan(
             sql=sql.strip(),
             statements=plans,
-            read_only=read_only,
+            read_only=bool(plans) and not changing,
             requires_confirmation=requires_confirmation,
             confirmation_target=(
-                _db_admin_chat_confirmation_target(statements) if requires_confirmation else ""
+                (changing[0].confirmation_target if len(changing) == 1 else "ADMIN_EXECUTE")
+                if requires_confirmation
+                else ""
             ),
             implicit_commit=any(plan.implicit_commit for plan in plans),
             blocked=bool(blocked_reasons),
@@ -17527,75 +17630,44 @@ class Nl2SqlService:
             ),
             history=history,
         )
-        try:
-            raw = self._enterprise_ai_client.generate(
-                prompt=question,
-                context=context,
-                system_prompt=_DB_ADMIN_CHAT_SYSTEM_PROMPT,
-                response_format=response_format(SqlOutput, name="DbAdminChatSql"),
-            )
-            output = SqlOutput.model_validate_json(raw)
-        except EnterpriseAiDirectError as exc:
-            raise DbAdminChatGenerationError(f"SQL の生成に失敗しました: {exc}") from exc
-        except ValueError as exc:
-            raise DbAdminChatGenerationError(
-                "SQL の生成に失敗しました: AI の応答を読み取れませんでした。"
-            ) from exc
-        sql = _strip_sql_code_fence(output.sql)
+        # 質問には SQL で答える（事実は SQL の実行の結果から利用者が確かめる）。
+        # SQL の無い応答（文章だけの答え）は、理由を添えて 1 回だけ作り直させ、
+        # それでも無ければ生成の失敗にする（文章を回答として出さない）。
+        prompt = question
+        sql = ""
+        output: DbAdminChatSqlOutput | None = None
+        for _attempt in range(_DB_ADMIN_CHAT_GENERATION_ATTEMPTS):
+            try:
+                raw = self._enterprise_ai_client.generate(
+                    prompt=prompt,
+                    context=context,
+                    system_prompt=_DB_ADMIN_CHAT_SYSTEM_PROMPT,
+                    response_format=response_format(DbAdminChatSqlOutput, name="DbAdminChatSql"),
+                )
+                output = DbAdminChatSqlOutput.model_validate_json(raw)
+            except EnterpriseAiDirectError as exc:
+                raise DbAdminChatGenerationError(f"SQL の生成に失敗しました: {exc}") from exc
+            except ValueError as exc:
+                raise DbAdminChatGenerationError(
+                    "SQL の生成に失敗しました: AI の応答を読み取れませんでした。"
+                ) from exc
+            sql = _strip_sql_code_fence(output.sql)
+            if _db_admin_chat_has_sql(sql):
+                break
+            logger.info("nl2sql_db_admin_chat_generation_without_sql")
+            prompt = f"{question}\n\n{_DB_ADMIN_CHAT_NO_SQL_RETRY}"
+        else:
+            raise DbAdminChatGenerationError(_DB_ADMIN_CHAT_NO_SQL)
+        if output is None:  # pragma: no cover - 上のループは SQL を受け取るか例外で抜ける
+            raise DbAdminChatGenerationError(_DB_ADMIN_CHAT_NO_SQL)
         return DbAdminChatGenerateData(
             question=question,
             explanation=output.explanation.strip(),
-            plan=self._db_admin_chat_plan(sql) if sql else DbAdminChatPlan(),
+            plan=self._db_admin_chat_plan(sql),
             context_tables=[table.qualified_name for table in context_tables],
             model=self._enterprise_ai_client.model_id(),
             warnings=warnings,
             timing=self._timing(created_at, started, "db_admin_chat_generate"),
-        )
-
-    def execute_db_admin_chat_sql(self, request: DbAdminChatExecuteRequest) -> DbAdminExecuteData:
-        """SELECT は押せば実行、それ以外は確認語（ADMIN_EXECUTE か対象の名前）があるときだけ。"""
-
-        self._require_db_admin_chat_permission()
-        plan = self._db_admin_chat_plan(request.sql)
-        internal_confirmation = ""
-        confirmation_given = False
-        if plan.requires_confirmation and not plan.blocked:
-            confirmation_error = self._admin_confirmation_error(
-                confirmation=request.confirmation,
-                target=plan.confirmation_target,
-            )
-            if confirmation_error:
-                started = time.monotonic()
-                return DbAdminExecuteData(
-                    executed=False,
-                    runtime="oracle" if self._use_oracle_runtime() else "deterministic",
-                    execution_context="admin_control_plane",
-                    statements=[
-                        DbAdminStatementResult(
-                            index=item.index,
-                            statement_type=item.statement_type,
-                            status="confirmation_required",
-                            sql=item.sql,
-                            error_message=confirmation_error,
-                        )
-                        for item in plan.statements
-                    ],
-                    warnings=[confirmation_error],
-                    timing=self._timing(_utc_now(), started, "db_admin_chat_execute"),
-                )
-            # 確認語は対象の名前で確かめたので、管理 SQL の実行には ADMIN_EXECUTE として渡す。
-            internal_confirmation = "ADMIN_EXECUTE"
-            confirmation_given = True
-        return self._execute_db_admin_sql(
-            DbAdminExecuteRequest(
-                sql=request.sql,
-                row_limit=request.row_limit,
-                confirmation=internal_confirmation,
-                reason=request.reason or "db-admin-chat",
-            ),
-            source="db_admin_chat",
-            chat=True,
-            confirmation_given=confirmation_given,
         )
 
     def analyze_db_admin_chat_failure(
@@ -17763,11 +17835,7 @@ class Nl2SqlService:
             DbAdminChatHistoryTurn(
                 question=turn.question,
                 sql=turn.plan.sql,
-                outcome=(
-                    turn.last_execution.outcome
-                    if turn.last_execution and turn.last_execution.revision == turn.revision
-                    else ""
-                ),
+                outcome=_db_admin_chat_turn_outcome(turn),
             )
             for turn in turns[-_DB_ADMIN_CHAT_HISTORY_LIMIT:]
         ]
@@ -17814,10 +17882,11 @@ class Nl2SqlService:
 
     def execute_db_admin_chat_turn(
         self, request: DbAdminChatTurnExecuteRequest, *, actor: str, all_users: bool
-    ) -> DbAdminExecuteData:
-        """ターンに保存した SQL を実行し（画面から SQL を受け取らない）、最後の実行の要約を残す。
+    ) -> DbAdminChatExecuteData:
+        """ターンの SQL の 1 文か、すべての文を実行し、文ごとの最後の実行の要約を残す（#2333）。
 
-        確認語の待ち（`confirmation_required`）だけの応答は要約に残さない（監査と同じ）。
+        画面から SQL を受け取らない。確認語の待ち（`confirmation_required`）だけの応答は、要約に
+        残さない（監査と同じ）。
         """
 
         self._require_db_admin_chat_permission()
@@ -17826,53 +17895,505 @@ class Nl2SqlService:
         )
         if not turn.plan.statements:
             raise ValueError("このターンには実行する SQL がありません。")
-        result = self.execute_db_admin_chat_sql(
-            DbAdminChatExecuteRequest(
-                sql=turn.plan.sql,
-                confirmation=request.confirmation,
-                reason=request.reason,
-                row_limit=request.row_limit,
+        audit_link = {
+            "batch_id": str(uuid.uuid4()),
+            "batch_mode": request.mode,
+            "conversation_id": request.conversation_id,
+            "turn_id": request.turn_id,
+            "statement_total": len(turn.plan.statements),
+        }
+        if request.mode == "all":
+            data, confirmation_given = self._execute_db_admin_chat_all(turn, request, audit_link)
+        else:
+            data, confirmation_given = self._execute_db_admin_chat_statement(
+                turn, request, audit_link
             )
+        if any(item.status == "confirmation_required" for item in data.statements):
+            return data
+        self._save_db_admin_chat_execution(
+            request.conversation_id, turn, data, confirmation_given=confirmation_given
         )
-        if result.statements and all(
-            item.status == "confirmation_required" for item in result.statements
-        ):
-            return result
-        confirmation_given = bool(
-            turn.plan.requires_confirmation and not turn.plan.blocked and result.executed
-        )
-        self._db_admin_chat_store.update_turn(
-            request.conversation_id,
-            turn.model_copy(
-                update={
-                    "last_execution": _db_admin_chat_last_execution(
-                        result, revision=turn.revision, confirmation_given=confirmation_given
-                    )
-                }
+        return data
+
+    def _execute_db_admin_chat_statement(
+        self,
+        turn: DbAdminChatTurn,
+        request: DbAdminChatTurnExecuteRequest,
+        audit_link: dict[str, Any],
+    ) -> tuple[DbAdminChatExecuteData, bool]:
+        """1 文を実行する。SELECT は押せば実行、変える文は確認語があるときだけ実行する。"""
+
+        statements = turn.plan.statements
+        index = int(request.statement_index or 0)
+        if not 1 <= index <= len(statements):
+            raise ValueError(
+                f"文 {index} はありません（このターンの文は {len(statements)} 個です）。"
+            )
+        statement = statements[index - 1]
+        internal_confirmation = ""
+        confirmation_given = False
+        if statement.requires_confirmation:
+            confirmation_error = self._admin_confirmation_error(
+                confirmation=request.confirmation, target=statement.confirmation_target
+            )
+            if confirmation_error:
+                return (
+                    self._db_admin_chat_confirmation_pending(
+                        "statement", audit_link["batch_id"], [statement], confirmation_error
+                    ),
+                    False,
+                )
+            # 確認語は対象の名前で確かめたので、管理 SQL の実行には ADMIN_EXECUTE として渡す。
+            internal_confirmation = "ADMIN_EXECUTE"
+            confirmation_given = True
+        result = self._execute_db_admin_sql(
+            DbAdminExecuteRequest(
+                sql=statement.sql,
+                row_limit=request.row_limit,
+                confirmation=internal_confirmation,
+                reason=request.reason or "db-admin-chat",
             ),
+            source="db_admin_chat",
+            chat=True,
+            confirmation_given=confirmation_given,
+            audit_detail={**audit_link, "statement_index": index},
         )
-        return result
+        # 1 文だけを実行したので、結果の文の番号をターンの中の番号にそろえる。
+        result.statements = [item.model_copy(update={"index": index}) for item in result.statements]
+        return (
+            DbAdminChatExecuteData(
+                mode="statement",
+                batch_id=audit_link["batch_id"],
+                executed=result.executed,
+                committed=result.committed,
+                rolled_back=result.rolled_back,
+                statements=[
+                    DbAdminChatStatementOutcome(
+                        index=index,
+                        status=_db_admin_chat_statement_status(result),
+                        result=result,
+                    )
+                ],
+                schema_refresh_job_id=result.schema_refresh_job_id,
+                schema_refresh_required=result.schema_refresh_required,
+                schema_refresh_reason_code=result.schema_refresh_reason_code,
+                warnings=list(result.warnings),
+                timing=result.timing,
+            ),
+            confirmation_given,
+        )
+
+    def _db_admin_chat_confirmation_pending(
+        self,
+        mode: Literal["statement", "all"],
+        batch_id: str,
+        statements: Sequence[DbAdminChatStatementPlan],
+        message: str,
+    ) -> DbAdminChatExecuteData:
+        """確認語が合わないときの応答（実行しない。要約・監査にも残さない）。"""
+
+        started = time.monotonic()
+        return DbAdminChatExecuteData(
+            mode=mode,
+            batch_id=batch_id,
+            statements=[
+                DbAdminChatStatementOutcome(index=item.index, status="confirmation_required")
+                for item in statements
+            ],
+            warnings=[message],
+            timing=self._timing(_utc_now(), started, "db_admin_chat_execute"),
+        )
+
+    def _execute_db_admin_chat_all(
+        self,
+        turn: DbAdminChatTurn,
+        request: DbAdminChatTurnExecuteRequest,
+        audit_link: dict[str, Any],
+    ) -> tuple[DbAdminChatExecuteData, bool]:
+        """すべての文を上から順に、1 つの管理の接続とトランザクションで実行する。
+
+        最初のエラーで止める。止める文が 1 つでもあれば実行しない（黙って飛ばさない）。変える文を
+        含むなら確認語を 1 回だけ確かめる。全部成功したときだけ commit し、失敗したら rollback する
+        （DDL は Oracle の暗黙の commit で戻らない）。監査は実行した文ごとに 1 行（`detail` の
+        `batch_id` で結び付ける）。
+        """
+
+        plan = turn.plan
+        statements = plan.statements
+        if plan.blocked:
+            blocked = "・".join(f"#{item.index}" for item in statements if item.blocked_reason)
+            raise ValueError(
+                f"実行できない文（{blocked}）を含むため、すべて実行できません。"
+                "実行できる文は 1 文ずつ実行してください。"
+            )
+        batch_id = str(audit_link["batch_id"])
+        confirmation_given = False
+        if plan.requires_confirmation:
+            confirmation_error = self._admin_confirmation_error(
+                confirmation=request.confirmation, target=plan.confirmation_target
+            )
+            if confirmation_error:
+                return (
+                    self._db_admin_chat_confirmation_pending(
+                        "all", batch_id, statements, confirmation_error
+                    ),
+                    False,
+                )
+            confirmation_given = True
+        started = time.monotonic()
+        created_at = _utc_now()
+        warnings: list[str] = []
+        runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+        sql_list = [
+            normalize_executable_sql(item.sql) if item.select_only else item.sql
+            for item in statements
+        ]
+        raw: list[dict[str, Any]] = []
+        unavailable_status = ""
+        if self._use_oracle_runtime():
+            try:
+                raw = self._oracle_adapter.execute_admin_script(
+                    sql_list,
+                    query_indexes=frozenset(item.index for item in statements if item.select_only),
+                    max_rows=request.row_limit,
+                )
+            except OracleAdapterError as exc:
+                # 接続できないなど、文を実行する前の失敗。最初の文の失敗として示し、
+                # 後ろは実行しない。
+                warnings.append(str(exc))
+                raw = [
+                    {
+                        "index": 1,
+                        "statement_type": statements[0].statement_type,
+                        "status": "error",
+                        "sql": sql_list[0],
+                        "error_message": str(exc),
+                    }
+                ]
+        elif plan.read_only:
+            for item, sql in zip(statements, sql_list, strict=True):
+                selected = self._mock_execute(sql, request.row_limit)
+                raw.append(
+                    {
+                        "index": item.index,
+                        "statement_type": "SELECT",
+                        "status": "success",
+                        "sql": sql,
+                        "row_count": selected.total,
+                        "message": f"{selected.total} rows",
+                        "select_result": selected,
+                    }
+                )
+        else:
+            warnings.append("Admin SQL 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。")
+            unavailable_status = "requires_oracle"
+
+        by_index = {int(item.get("index") or 0): item for item in raw}
+        succeeded = [
+            item for item in statements if by_index.get(item.index, {}).get("status") == "success"
+        ]
+        ok = not unavailable_status and len(succeeded) == len(statements)
+        stopped_at = next(
+            (
+                item.index
+                for item in statements
+                if by_index.get(item.index, {}).get("status") == "error"
+            ),
+            None,
+        )
+        # DDL の暗黙の commit は、その文より前の成功した変更も commit する。
+        # 全部成功なら全部 commit。
+        last_implicit = max(
+            (
+                item.index
+                for item in succeeded
+                if item.statement_type in _IMPLICIT_COMMIT_STATEMENT_TYPES
+            ),
+            default=0,
+        )
+
+        def statement_committed(item: DbAdminChatStatementPlan) -> bool:
+            return not item.select_only and (ok or item.index <= last_implicit)
+
+        def statement_rolled_back(item: DbAdminChatStatementPlan) -> bool:
+            return (
+                not ok
+                and item.statement_type in _ROLLBACKABLE_DML_STATEMENT_TYPES
+                and item.index > last_implicit
+            )
+
+        committed = any(statement_committed(item) for item in succeeded)
+        rolled_back = any(statement_rolled_back(item) for item in succeeded)
+        if last_implicit and not ok:
+            warnings.append(_DB_ADMIN_IMPLICIT_COMMIT_PARTIAL_WARNING)
+        schema_refresh: tuple[str, bool, str] = ("", False, "")
+        if succeeded:
+            schema_refresh = self._schema_refresh_after_db_admin_statements(
+                [item.sql for item in succeeded],
+                [item.statement_type for item in succeeded],
+                warnings,
+            )
+        timing = self._timing(created_at, started, "db_admin_chat_execute")
+
+        outcomes: list[DbAdminChatStatementOutcome] = []
+        for item, sql in zip(statements, sql_list, strict=True):
+            row = dict(by_index.get(item.index) or {})
+            if unavailable_status:
+                row = {"status": unavailable_status}
+            if not row:
+                outcomes.append(DbAdminChatStatementOutcome(index=item.index, status="not_run"))
+                continue
+            selected = row.pop("select_result", None)
+            success = row.get("status") == "success"
+            statement_result = DbAdminStatementResult.model_validate(
+                {
+                    "statement_type": item.statement_type,
+                    "sql": sql,
+                    **row,
+                    "index": item.index,
+                }
+            )
+            outcomes.append(
+                DbAdminChatStatementOutcome(
+                    index=item.index,
+                    status="succeeded" if success else "failed",
+                    result=DbAdminExecuteData(
+                        executed=success,
+                        runtime=runtime,
+                        execution_context="admin_control_plane",
+                        select_result=selected if isinstance(selected, QueryResults) else None,
+                        statements=[statement_result],
+                        committed=success and statement_committed(item),
+                        rolled_back=success and statement_rolled_back(item),
+                        timing=timing,
+                    ),
+                )
+            )
+            if unavailable_status:
+                continue
+            self._record_db_admin_chat_statement_audit(
+                item,
+                statement_result,
+                selected if isinstance(selected, QueryResults) else None,
+                committed=success and statement_committed(item),
+                rolled_back=success and statement_rolled_back(item),
+                confirmation_given=confirmation_given and item.requires_confirmation,
+                reason=request.reason or "db-admin-chat",
+                audit_detail={
+                    **audit_link,
+                    "statement_index": item.index,
+                    "batch_committed": committed,
+                    "batch_rolled_back": rolled_back,
+                },
+                warnings=warnings,
+            )
+        return (
+            DbAdminChatExecuteData(
+                mode="all",
+                batch_id=batch_id,
+                executed=bool(succeeded),
+                committed=committed,
+                rolled_back=rolled_back,
+                stopped_at=stopped_at,
+                statements=outcomes,
+                schema_refresh_job_id=schema_refresh[0],
+                schema_refresh_required=schema_refresh[1],
+                schema_refresh_reason_code=schema_refresh[2],
+                warnings=warnings,
+                timing=timing,
+            ),
+            confirmation_given,
+        )
+
+    def _record_db_admin_chat_statement_audit(
+        self,
+        statement: DbAdminChatStatementPlan,
+        result: DbAdminStatementResult,
+        selected: QueryResults | None,
+        *,
+        committed: bool,
+        rolled_back: bool,
+        confirmation_given: bool,
+        reason: str,
+        audit_detail: Mapping[str, Any],
+        warnings: list[str],
+    ) -> None:
+        """「すべて実行」の 1 文の監査の行（1 文の実行と同じ項目。保存の失敗は警告に足す）。"""
+
+        success = result.status == "success"
+        detail: dict[str, Any] = {
+            **_admin_sql_audit_detail(statement.sql, [statement.sql]),
+            "execution_context": "admin_control_plane",
+            **audit_detail,
+        }
+        if selected is not None:
+            detail["returned_rows"] = selected.returned_count
+        try:
+            self._record_admin_audit(
+                operation="db_admin_chat_execute",
+                target="ADMIN_EXECUTE",
+                executed=success,
+                reason=reason,
+                detail=detail,
+                source="db_admin_chat",
+                outcome="success" if success else "failure",
+                sql_text=statement.sql,
+                statement_types=[statement.statement_type],
+                confirmation_given=confirmation_given,
+                committed=committed,
+                rolled_back=rolled_back,
+                affected_rows=(
+                    result.row_count
+                    if statement.statement_type != "SELECT" and result.row_count is not None
+                    else None
+                ),
+                duration_ms=result.elapsed_ms,
+                error_message=result.error_message,
+                statement_count=1,
+                success_count=1 if success else 0,
+            )
+        except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
+            warnings.append(f"Admin SQL の監査保存に失敗しました: {exc}")
+
+    def _save_db_admin_chat_execution(
+        self,
+        conversation_id: str,
+        turn: DbAdminChatTurn,
+        data: DbAdminChatExecuteData,
+        *,
+        confirmation_given: bool,
+    ) -> None:
+        """文ごとの最後の実行の要約（と「すべて実行」の要約）をターンに残す。
+
+        実行の間に SQL が置き換わった（版が進んだ）ら残さない。
+        ほかの文の要約は保ったまま差し替える。
+        """
+
+        latest = self._db_admin_chat_store.get_turn(conversation_id, turn.turn_id)
+        if latest is None or latest.revision != turn.revision:
+            return
+        executed_at = data.timing.finished_at or _utc_now()
+        changed = {
+            outcome.index: _db_admin_chat_statement_last_execution(
+                outcome,
+                mode=data.mode,
+                batch_id=data.batch_id,
+                executed_at=executed_at,
+                confirmation_given=confirmation_given,
+            )
+            for outcome in data.statements
+            if outcome.status != "confirmation_required"
+        }
+        kept = [item for item in latest.statement_executions if item.index not in changed]
+        update: dict[str, Any] = {
+            "statement_executions": sorted([*kept, *changed.values()], key=lambda item: item.index)
+        }
+        if data.mode == "all":
+            update["last_run_all"] = DbAdminChatRunAllSummary(
+                executed_at=executed_at,
+                batch_id=data.batch_id,
+                confirmation_given=confirmation_given,
+                succeeded=all(outcome.status == "succeeded" for outcome in data.statements),
+                statement_count=len(data.statements),
+                succeeded_count=sum(
+                    1 for outcome in data.statements if outcome.status == "succeeded"
+                ),
+                stopped_at=data.stopped_at,
+                committed=data.committed,
+                rolled_back=data.rolled_back,
+                warnings=data.warnings[:5],
+            )
+        self._db_admin_chat_store.update_turn(conversation_id, latest.model_copy(update=update))
 
     def replace_db_admin_chat_turn_sql(
-        self, conversation_id: str, turn_id: str, sql: str, *, actor: str, all_users: bool
+        self,
+        conversation_id: str,
+        turn_id: str,
+        sql: str,
+        *,
+        actor: str,
+        all_users: bool,
+        statement_index: int | None = None,
     ) -> DbAdminChatTurn:
         """ターンの SQL を AI のエラー分析で直した SQL に置き換える（サーバーで分類し直す）。
 
-        版を進め、前の版の実行の要約は消す（確認語からやり直す）。
+        `statement_index` があればその文だけを置き換える（#2333）。版を進め、
+        変わった文の実行の要約と
+        「すべて実行」の要約は消す（確認語からやり直す）。番号と SQL が同じ文の要約は残す。
         """
 
         self._require_db_admin_chat_permission()
         turn = self._db_admin_chat_turn(conversation_id, turn_id, actor=actor, all_users=all_users)
+        corrected = _strip_sql_code_fence(sql)
+        if statement_index is not None:
+            current = [item.sql for item in turn.plan.statements]
+            if not 1 <= statement_index <= len(current):
+                raise ValueError(
+                    f"文 {statement_index} はありません（このターンの文は {len(current)} 個です）。"
+                )
+            corrected = _db_admin_chat_join_statements(
+                [*current[: statement_index - 1], corrected, *current[statement_index:]]
+            )
+        plan = self._db_admin_chat_plan(corrected)
+        previous_sql = {item.index: item.sql for item in turn.plan.statements}
+        unchanged = {
+            item.index for item in plan.statements if previous_sql.get(item.index) == item.sql
+        }
         updated = turn.model_copy(
             update={
-                "plan": self._db_admin_chat_plan(_strip_sql_code_fence(sql)),
+                "plan": plan,
                 "revision": turn.revision + 1,
                 "corrected": True,
-                "last_execution": None,
+                "statement_executions": [
+                    item for item in turn.statement_executions if item.index in unchanged
+                ],
+                "last_run_all": None,
             }
         )
         self._db_admin_chat_store.update_turn(conversation_id, updated)
         return updated
+
+    def _schema_refresh_after_db_admin_statements(
+        self,
+        successful_statements: Sequence[str],
+        successful_types: Sequence[str],
+        warnings: list[str],
+    ) -> tuple[str, bool, str]:
+        """成功した管理 SQL の文が DB 構造を変えたら、DB 構造の再取得を投入する。
+
+        返すのは job の ID・要否・理由。PL/SQL は何を変えたか分からないので手動の再取得を案内し、
+        DDL は変えた object だけを再取得する。投入できなければ警告に足す。
+        """
+
+        has_unresolved_schema_side_effect = any(
+            statement_type == "PLSQL" for statement_type in successful_types
+        )
+        successful_schema_statements = [
+            statement
+            for statement, statement_type in zip(
+                successful_statements, successful_types, strict=False
+            )
+            if statement_type in _SCHEMA_MUTATION_STATEMENT_TYPES
+        ]
+        if not has_unresolved_schema_side_effect and not _statements_change_schema(
+            successful_schema_statements
+        ):
+            return "", False, ""
+        try:
+            if has_unresolved_schema_side_effect:
+                sync = self._manual_schema_refresh_sync()
+            else:
+                sync = self._submit_schema_refresh_after_admin_mutation(
+                    target_objects=_schema_refresh_targets_for_statements(
+                        successful_schema_statements,
+                        current_owner=self._current_schema_owner(),
+                    ),
+                    source="db_admin_execute",
+                )
+        except Nl2SqlPersistenceUnavailable as exc:
+            warnings.append(f"Admin SQL 後の Schema job 投入に失敗しました: {exc}")
+            return "", False, ""
+        return sync.job_id, sync.required, sync.reason_code
 
     def _run_db_admin_sql(
         self, request: DbAdminExecuteRequest, *, chat: bool = False
@@ -18160,46 +18681,16 @@ class Nl2SqlService:
             committed = ok or bool(successful_implicit_commit_statements)
             rolled_back = not ok and successful_rollbackable_dml and not committed
             if successful_implicit_commit_statements and not ok:
-                warnings.append(
-                    "DDL/metadata 系 statement は Oracle の暗黙 commit により、"
-                    "成功した文が rollback されていません。失敗した SQL を修正し、"
-                    "必要に応じて DB 構造を再取得してください。"
-                )
-            schema_refresh_job_id = ""
-            schema_refresh_required = False
-            schema_refresh_reason_code = ""
-            has_unresolved_schema_side_effect = any(
-                (statement_results[index].statement_type or statement_types[index]) == "PLSQL"
-                for index in successful_statement_indexes
+                warnings.append(_DB_ADMIN_IMPLICIT_COMMIT_PARTIAL_WARNING)
+            (
+                schema_refresh_job_id,
+                schema_refresh_required,
+                schema_refresh_reason_code,
+            ) = self._schema_refresh_after_db_admin_statements(
+                [statements[index] for index in successful_statement_indexes],
+                successful_types,
+                warnings,
             )
-            successful_schema_statements = [
-                statements[index]
-                for index, statement_type in zip(
-                    successful_statement_indexes,
-                    successful_types,
-                    strict=False,
-                )
-                if statement_type in _SCHEMA_MUTATION_STATEMENT_TYPES
-            ]
-            if has_unresolved_schema_side_effect or _statements_change_schema(
-                successful_schema_statements
-            ):
-                try:
-                    if has_unresolved_schema_side_effect:
-                        sync = self._manual_schema_refresh_sync()
-                    else:
-                        sync = self._submit_schema_refresh_after_admin_mutation(
-                            target_objects=_schema_refresh_targets_for_statements(
-                                successful_schema_statements,
-                                current_owner=self._current_schema_owner(),
-                            ),
-                            source="db_admin_execute",
-                        )
-                    schema_refresh_job_id = sync.job_id
-                    schema_refresh_required = sync.required
-                    schema_refresh_reason_code = sync.reason_code
-                except Nl2SqlPersistenceUnavailable as exc:
-                    warnings.append(f"Admin SQL 後の Schema job 投入に失敗しました: {exc}")
             return DbAdminExecuteData(
                 executed=ok or committed,
                 runtime="oracle",

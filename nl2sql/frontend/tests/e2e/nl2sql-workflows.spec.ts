@@ -14355,7 +14355,6 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expect(dataPreviewPanel.getByRole("button", { name: / を選択$/ })).toHaveCount(4);
   await expect(dataPreviewPanel.getByRole("button", { name: / のデータを表示$/ })).toHaveCount(0);
   const previewShowButton = dataPreviewPanel.getByRole("button", { name: "データを表示", exact: true });
-  const previewClearButton = dataPreviewPanel.getByRole("button", { name: "表示件数・結果をリセット", exact: true });
   const previewResultsActions = dataPreviewPanel.getByTestId("data-preview-results-actions");
   const previewExportButton = previewResultsActions.getByRole("button", { name: "XLSX ダウンロード" });
   const previewMoreButton = previewResultsActions.getByRole("button", { name: "その他の操作" });
@@ -14373,7 +14372,8 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expect(previewRowLimitInput).toHaveValue("100");
   await expect(dataPreviewPanel.getByText("1〜100000 の整数。取得上限を明示してください。")).toBeVisible();
   await expect(dataPreviewPanel.getByTestId("query-results-summary")).toContainText("100 行・");
-  await expect(previewClearButton).toBeEnabled();
+  // 取得のたびに結果を置き換えるので、取得件数上限と結果を既定に戻すボタンは持たない（#2330）。
+  await expect(dataPreviewPanel.getByRole("button", { name: "表示件数・結果をリセット", exact: true })).toHaveCount(0);
   await previewRowLimitInput.fill("-1");
   await expect(dataPreviewPanel.getByText("取得件数上限は 1 以上 100000 以下の整数を入力してください。")).toBeVisible();
   await expect(previewShowButton).toBeDisabled();
@@ -14400,11 +14400,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expect(previewSheet.getByRole("cell", { name: "顧客26" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(previewSheet).toBeHidden();
-  await previewClearButton.click();
-  await expect(previewRowLimitInput).toHaveValue("100");
-  await expect(dataPreviewPanel.getByText("データ未表示")).toBeVisible();
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveAttribute("aria-current", "true");
-  await expect(previewClearButton).toBeDisabled();
   await expect(previewShowButton).toBeEnabled();
   await expectBoundedRowLimit(previewRowLimitInput, previewShowButton);
   api.previewDataPayload = null;

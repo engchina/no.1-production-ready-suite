@@ -224,9 +224,9 @@ test.describe("AI Agent Control Plane", () => {
 
     await expect(page.getByText("実行を作成しました", { exact: true })).toBeVisible();
     await expect(page.getByText(goal).first()).toBeVisible();
-    // 実行環境とイベントの記録は「技術的な詳細」に畳む（#1955）。
+    // 実行環境とイベントの記録は処理の経過の中の「処理の詳細」に畳む（#1955 / #2325）。
     const technical = page.getByTestId("run-technical-section");
-    await technical.locator("summary").click();
+    await page.getByTestId("run-process-details").click();
     await expect(technical.locator('[data-run-fact="runtime"] dd')).toHaveText("組み込みの実行環境");
     await expect(technical.getByText("run.status_changed").first()).toBeVisible();
     // 実行中の Run は、サーバーの開始時刻からの経過時間を出す（#376）。

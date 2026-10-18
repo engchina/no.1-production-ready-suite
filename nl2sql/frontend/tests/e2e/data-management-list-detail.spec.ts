@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { expectListColumnFitsViewport, expectListColumnStaysFitWhileScrolling } from "./_helpers/list-detail-fit";
 import { measureHorizontalOverflow } from "../../../../platform/packages/ui/e2e/layout-checks";
 
 // データの管理の「テーブル・ビューデータの表示」の一覧 + 詳細（共有 ListDetailLayout。#2315）。
@@ -59,6 +60,31 @@ async function mockDataManagement(page: Page) {
     });
   });
   return { previewRequests };
+}
+
+// 一覧の列に収まらない数の対象と続き（「さらに読み込む」）。一覧の列の高さ（#2330）を確かめる。
+async function mockManyObjects(page: Page) {
+  const items = Array.from({ length: 40 }, (_, index) => ({
+    name: `TABLE_${String(index + 1).padStart(2, "0")}`,
+    owner: "APP",
+    object_type: "table",
+    row_count: (index + 1) * 10,
+    comment: `合成のテーブル ${index + 1}`,
+  }));
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) =>
+    fulfillJson(route, {
+      runtime: "oracle",
+      owner: "APP",
+      items,
+      total: 80,
+      table_count: 80,
+      view_count: 0,
+      next_cursor: "cursor-2",
+      refreshed_at: "2026-10-18T09:00:00.000Z",
+      catalog_version: 1,
+      warnings: [],
+    })
+  );
 }
 
 async function clearListDetailStorage(page: Page) {
@@ -178,6 +204,40 @@ test.describe("データの管理のデータの表示の一覧 + 詳細（ListD
     expect(Math.abs(list!.x - title!.x)).toBeLessThanOrEqual(1);
     expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
     await page.screenshot({ path: testInfo.outputPath("data-management-list-detail-1920.png"), fullPage: true });
+  });
+
+  for (const viewport of [
+    { width: 1280, height: 900 },
+    { width: 1920, height: 1000 },
+  ]) {
+    test(`${viewport.width}px: 一覧の列は画面の高さに収まり、詳細が短ければ本文は縦にスクロールしない（#2330）`, async ({ page }, testInfo) => {
+      test.skip(testInfo.project.name !== "desktop", "2 ペインは xl 以上の幅で確かめる");
+      await page.setViewportSize(viewport);
+      await clearListDetailStorage(page);
+      await mockDataManagement(page);
+      await mockManyObjects(page);
+      await page.goto("/data-management");
+      await expect(rowButton(page, "TABLE_01")).toBeVisible();
+      await expect(page.getByTestId("list-detail-data-management-preview-detail")).toContainText("対象が未選択です");
+      const fit = await expectListColumnFitsViewport(page, "data-management-preview");
+      // 行は列の中でスクロールし、列の下の「さらに読み込む」は本文をスクロールせずに見える。
+      expect(fit.bodyScrolls).toBe(true);
+      await expect(page.getByRole("button", { name: "さらに読み込む" })).toBeInViewport();
+      await page.screenshot({ path: testInfo.outputPath(`data-management-list-fit-${viewport.width}.png`) });
+    });
+  }
+
+  test("詳細が長いと本文はスクロールし、一覧の列は見出しの下に貼り付いたまま高さを変えない（#2330）", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "2 ペインは xl 以上の幅で確かめる");
+    // 低い画面で、データの結果（12 行）が詳細の列を画面より高くする。
+    await page.setViewportSize({ width: 1280, height: 640 });
+    await clearListDetailStorage(page);
+    await mockDataManagement(page);
+    await mockManyObjects(page);
+    await page.goto("/data-management?object=APP.TABLE_02");
+    await expect(page.getByTestId("query-results-summary")).toBeVisible();
+    await expectListColumnStaysFitWhileScrolling(page, "data-management-preview");
+    await page.screenshot({ path: testInfo.outputPath("data-management-list-fit-scrolled.png") });
   });
 
   test("xl 未満は 1 ペイン: 選ぶと詳細だけ、「一覧へ戻る」で一覧に戻り選んだ行へフォーカスを戻す", { tag: "@responsive" }, async ({ page }, testInfo) => {
