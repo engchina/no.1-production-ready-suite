@@ -1460,7 +1460,9 @@ test("チャットで確認の質問・回答・まとめ・骨組みを経て S
   const question = turn.getByTestId("nl2sql-clarification-question");
   await expect(question.getByRole("heading", { name: "「今年度」は、どの期間ですか？" })).toBeVisible();
   await expect(question.getByText("確認事項 1 / 1")).toBeVisible();
-  await expect(turn.getByRole("button", { name: "確認をやめる" })).toBeVisible();
+  // チャットは「確認をやめる」を出さず、確認を終えるのは「確認せずに SQL を生成」だけ（#2303）。
+  await expect(turn.getByRole("button", { name: "確認せずに SQL を生成" })).toBeVisible();
+  await expect(turn.getByRole("button", { name: "確認をやめる" })).toHaveCount(0);
   // 確認に答えるまでは次の質問を送らない（ジョブも作らない）。
   await expect(page.getByTestId("sql-chat-send")).toBeDisabled();
   expect(state.requests).toHaveLength(0);
@@ -1549,22 +1551,88 @@ test("確認の質問は複数選択・自由入力で答えられ、答える�
   expect(state.requests).toHaveLength(0);
 });
 
-test("確認を中止すると、送った質問を入力欄に戻し、SQL を作らない (#1442)", async ({ page }) => {
+test("確認を終えると、質問を取り消さずに確認せずに SQL を生成する (#2303)", async ({ page }) => {
   const state = await setup(page, { create: "needs_answer" });
   await page.goto("/chat");
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("今年度の地域ごとの受注金額");
   await composer.press("Enter");
   const turn = page.getByTestId("sql-chat-requirement-turn");
-  await expect(turn.getByTestId("nl2sql-clarification-question")).toBeVisible();
+  const question = turn.getByTestId("nl2sql-clarification-question");
+  await expect(question).toBeVisible();
   await expect(composer).toHaveValue("");
-  await turn.getByRole("button", { name: "確認をやめる" }).click();
+  await expect(turn.getByRole("button", { name: "確認をやめる" })).toHaveCount(0);
+  // 同じ操作のボタンを 2 つ並べない（確認事項のカードのスキップだけ）。
+  await expect(turn.getByRole("button", { name: "確認せずに SQL を生成" })).toHaveCount(1);
+  await question.getByRole("button", { name: "確認せずに SQL を生成" }).click();
   await expect(turn).toHaveCount(0);
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+  // 開いていた確認はサーバーで中止し、質問のまま（要件を使わずに）SQL を生成する。入力欄には戻さない。
   expect(state.requirement.cancels).toBe(1);
-  await expect(composer).toHaveValue("今年度の地域ごとの受注金額");
-  await expect(composer).toBeFocused();
-  await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
-  expect(state.requests).toHaveLength(0);
+  expect(state.requests[0]).toMatchObject({ question: "今年度の地域ごとの受注金額", requirement_skipped: true });
+  expect(state.requests[0]).not.toHaveProperty("requirement_session_id");
+  await expect(composer).toHaveValue("");
+  await expect(page.getByTestId("sql-chat-turn-clarification")).toContainText(
+    "確認せずに SQL を生成しました（前提を示して SQL を生成）",
+  );
+});
+
+test("要件の下書きの最中も、経過の行の「確認せずに SQL を生成」で待たずに SQL を生成する (#2303)", async ({ page }) => {
+  const state = await setup(page, { create: "needs_answer", createDelayMs: 2_000 });
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
+  await composer.fill("今年度の地域ごとの受注金額");
+  await composer.press("Enter");
+  const turn = page.getByTestId("sql-chat-requirement-turn");
+  const progress = turn.getByTestId("nl2sql-guided-start-progress");
+  await expect(progress).toContainText("SQL の要件の下書きを作っています");
+  await expect(turn.getByRole("button", { name: "確認をやめる" })).toHaveCount(0);
+  await progress.getByRole("button", { name: "確認せずに SQL を生成" }).click();
+  await expect(turn).toHaveCount(0);
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+  expect(state.requests[0]).toMatchObject({ question: "今年度の地域ごとの受注金額", requirement_skipped: true });
+  expect(state.requests[0]).not.toHaveProperty("requirement_session_id");
+  // 下書きの応答が届いたら、その確認をサーバーで中止する（確認のカードは出さない）。
+  await expect.poll(() => state.requirement.cancels, { timeout: 10_000 }).toBe(1);
+  await expect(page.getByTestId("sql-chat-requirement-turn")).toHaveCount(0);
+  expect(state.requests).toHaveLength(1);
+});
+
+test("回答の後の再検査の経過時間は回答を送った時から数え、待たずに SQL を生成できる (#2303)", async ({ page }) => {
+  const state = await setup(page, {
+    create: "needs_answer",
+    createDelayMs: 2_500,
+    answers: ["ready"],
+    answerDelayMs: 5_000,
+  });
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
+  await composer.fill("今年度の地域ごとの受注金額");
+  await composer.press("Enter");
+  const turn = page.getByTestId("sql-chat-requirement-turn");
+  await expect(turn.getByTestId("nl2sql-guided-start-progress-timer")).toContainText(/00:0[2-9]/);
+  const question = turn.getByTestId("nl2sql-clarification-question");
+  await expect(question).toBeVisible();
+  // 下書きが終わったら経過の表示を外す（「下書きを作っています」に戻らない）。
+  await expect(turn.getByTestId("nl2sql-guided-start-progress")).toHaveCount(0);
+  await question.getByRole("textbox", { name: "その他（自由入力）" }).fill("2026 年度（4 月始まり）");
+  await question.getByRole("button", { name: "この内容で回答" }).click();
+  const answerProgress = turn.getByTestId("nl2sql-guided-answer-progress");
+  await expect(answerProgress).toBeVisible();
+  // 下書きの時間・答えていた時間を足さず、回答を送った時から数える。
+  await expect(answerProgress.getByRole("timer")).toContainText(/00:0[01]/);
+  await expect(turn.getByTestId("nl2sql-guided-start-progress")).toHaveCount(0);
+  await answerProgress.getByRole("button", { name: "確認せずに SQL を生成" }).click();
+  await expect(turn).toHaveCount(0);
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+  expect(state.requests[0]).toMatchObject({ requirement_skipped: true });
+  expect(state.requests[0]).not.toHaveProperty("requirement_session_id");
+  expect(state.requirement.cancels).toBe(1);
+  // 取りやめた回答の応答・失敗は出さない。
+  await page.waitForTimeout(5_500);
+  await expect(page.getByTestId("sql-chat-requirement-turn")).toHaveCount(0);
+  await expect(page.getByText("回答を反映できませんでした。")).toHaveCount(0);
+  expect(state.requests).toHaveLength(1);
 });
 
 test("要件の検査の最中は送信のボタンが「停止」になり、押すと確認を中止する (#1442)", async ({ page }) => {
@@ -1658,7 +1726,9 @@ test("要件の検査の失敗は、理由と「詳細」（種類・HTTP ステ
   // 要約に code を重ねない（code は「詳細」のエラーコードだけ）。
   await expect(error).not.toContainText("(REQUIREMENT_AI_FAILED)");
   await expect(error.getByRole("button", { name: "もう一度確認" })).toBeVisible();
-  await expect(error.getByRole("button", { name: "確認をやめる" })).toBeVisible();
+  await expect(error.getByRole("button", { name: "確認せずに SQL を生成" })).toBeVisible();
+  // チャットは「確認をやめる」を出さない（#2303）。
+  await expect(error.getByRole("button", { name: "確認をやめる" })).toHaveCount(0);
 });
 
 test("質問が SQL の文でも同じに要件を確かめ、確認の質問が無くても確認のカードで確かめてから SQL を作る。送った質問は書き換えない (#1727 / #1761)", async ({ page }) => {
@@ -1701,7 +1771,8 @@ test("OCI Enterprise AI が無い環境では、要件の検査を使わずに�
 });
 
 // #1761: 確認の質問が 0 件でも自動では SQL を作らず、SQL 生成の画面と同じ確認のカード（同じ部品・同じ文言）で
-// 対象の選び直し・その他（自由入力）・「この内容で SQL を生成して実行」・「確認を中止して閉じる」を出す。
+// 対象の選び直し・その他（自由入力）・「この内容で SQL を生成して実行」を出す。チャットは「確認をやめる」の代わりに
+// 「確認せずに SQL を生成」を出す（#2303。質問を取り消さずに生成へ進む）。
 test.describe("チャットの回答前の確認の確認のカード (#1761)", { tag: "@responsive" }, () => {
   test("質問 0 件でも確認のカードを出し、押すまで SQL を作らない", async ({ page }, testInfo) => {
     const state = await setup(page, { create: "target_choice" });
@@ -1719,7 +1790,7 @@ test.describe("チャットの回答前の確認の確認のカード (#1761)", 
     await expect(confirm.getByRole("button")).toHaveText([
       "この内容で SQL を生成して実行",
       "直しを伝える",
-      "確認をやめる",
+      "確認せずに SQL を生成",
     ]);
     // 送った質問は吹き出しのまま（書き換えない）。押すまで反映もジョブの投入もしない。
     await expect(requirementTurn.getByText(TARGET_QUESTION, { exact: true })).toBeVisible();
@@ -1738,19 +1809,22 @@ test.describe("チャットの回答前の確認の確認のカード (#1761)", 
     await expect(page.getByTestId("sql-chat-turn").getByText(TARGET_QUESTION, { exact: true })).toBeVisible();
   });
 
-  test("「確認をやめる」は SQL を作らず、送った質問を入力欄に戻す", async ({ page }) => {
+  test("「確認せずに SQL を生成」は確かめた要件を使わず、質問を取り消さずに SQL を作る (#2303)", async ({ page }) => {
     const state = await setup(page, { create: "target_choice" });
     await page.goto("/chat");
     const composer = page.getByRole("textbox", { name: "質問", exact: true });
     await composer.fill(TARGET_QUESTION);
     await composer.press("Enter");
     const confirm = page.getByTestId("sql-chat-requirement-turn").getByTestId("nl2sql-clarification-confirm");
-    await confirm.getByRole("button", { name: "確認をやめる" }).click();
+    await expect(confirm.getByRole("button", { name: "確認をやめる" })).toHaveCount(0);
+    await confirm.getByRole("button", { name: "確認せずに SQL を生成" }).click();
     await expect(page.getByTestId("sql-chat-requirement-turn")).toHaveCount(0);
-    await expect(composer).toHaveValue(TARGET_QUESTION);
+    await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+    await expect(composer).toHaveValue("");
     expect(state.requirement.cancels).toBe(1);
     expect(state.requirement.applies).toBe(0);
-    expect(state.requests).toHaveLength(0);
+    expect(state.requests[0]).toMatchObject({ question: TARGET_QUESTION, requirement_skipped: true });
+    expect(state.requests[0]).not.toHaveProperty("requirement_session_id");
   });
 
   test("対象の表を選び直すと再検査に回し、直した要件を確かめてから SQL を作る", async ({ page }) => {
@@ -1834,7 +1908,7 @@ test.describe("チャットの回答前の確認の確認のカード (#1761)", 
     await expect(confirm.getByRole("button")).toHaveText([
       "この内容で SQL を生成して実行",
       "直しを伝える",
-      "確認をやめる",
+      "確認せずに SQL を生成",
     ]);
     const hintBox = await hint.boundingBox();
     const textBox = await freeText.boundingBox();
@@ -1894,7 +1968,7 @@ test.describe("チャットの回答前の確認の確認のカード (#1761)", 
     await expect(confirm.getByRole("button")).toHaveText([
       "この内容で SQL を生成して実行",
       "直しを伝える",
-      "確認をやめる",
+      "確認せずに SQL を生成",
     ]);
     const hintBox = await hint.boundingBox();
     const textBox = await freeText.boundingBox();
