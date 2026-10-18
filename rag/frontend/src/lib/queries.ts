@@ -1542,18 +1542,6 @@ export function useFeedbackEvaluationCase() {
   });
 }
 
-/** 保存された回答の削除。一覧・詳細のキャッシュを捨てる。 */
-export function useDeleteAnswerRecord() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (traceId: string) => api.deleteAnswerRecord(traceId),
-    onSuccess: (_data, traceId) => {
-      qc.removeQueries({ queryKey: ["answer-record", traceId] });
-      qc.invalidateQueries({ queryKey: ["answer-records"] });
-    },
-  });
-}
-
 /** 回答の検索と生成の全体既定(#593)。 */
 export function useAnsweringSettings() {
   return useQuery({

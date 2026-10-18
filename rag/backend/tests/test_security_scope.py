@@ -147,9 +147,8 @@ async def test_answer_records_are_scoped_to_allowed_search_answer_profiles() -> 
         await oracle.list_answer_records(search_answer_profile_id="bv-9", limit=10)
         assert await oracle.get_answer_record("trace-1") is None
         assert await oracle.save_answer_evaluation("trace-1", {"score": 1}) is False
-        assert await oracle.delete_answer_record("trace-1") is False
     statements = [call.statement for call in pool.connection.calls]
-    assert len(statements) == 5
+    assert len(statements) == 4
     for call in pool.connection.calls:
         assert "search_answer_profile_id IN (:access_search_answer_profile_id_0)" in call.statement
         assert call.parameters["access_search_answer_profile_id_0"] == "bv-1"
@@ -167,7 +166,7 @@ async def test_answer_records_are_unrestricted_without_scope() -> None:
 
 @pytest.mark.anyio
 async def test_answer_records_are_scoped_to_owner() -> None:
-    """保存済みの回答は持ち主の回答だけを一覧・件数・詳細・評価・削除の対象にする（#304）。"""
+    """保存済みの回答は持ち主の回答だけを一覧・件数・詳細・評価の対象にする（#304）。"""
     pool = FakeOraclePool(execute_results=[[], [{"count_value": 0}], [], [], []])
     oracle = _client(pool)
     with _scope(user_id_hash="owner-hash"):
@@ -175,9 +174,8 @@ async def test_answer_records_are_scoped_to_owner() -> None:
         assert await oracle.count_answer_records(search_answer_profile_id="bv-1") == 0
         assert await oracle.get_answer_record("trace-1") is None
         assert await oracle.save_answer_evaluation("trace-1", {"score": 1}) is False
-        assert await oracle.delete_answer_record("trace-1") is False
     calls = pool.connection.calls
-    assert len(calls) == 5
+    assert len(calls) == 4
     for call in calls:
         assert "user_id_hash = :answer_owner_user_id_hash" in call.statement
         assert call.parameters["answer_owner_user_id_hash"] == "owner-hash"

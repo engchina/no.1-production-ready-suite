@@ -3656,21 +3656,6 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
-    async def delete_answer_record(self, trace_id: str) -> bool:
-        """保存済み回答を 1 件削除する。削除した場合 True。"""
-
-        def operation(connection: OracleConnectionProtocol) -> int:
-            return _execute_count(
-                connection,
-                _render_sql(
-                    "DELETE FROM rag_answer_records WHERE trace_id = :trace_id AND {scope_sql}",
-                    scope_sql=_answer_record_scope_sql(),
-                ),
-                _with_answer_record_scope_bind({"trace_id": trace_id}),
-            )
-
-        return await self._run_transaction(operation) > 0
-
     async def purge_answer_records(self, retention_days: int) -> int:
         """保持期間を過ぎた回答を削除し、削除件数を返す。"""
 

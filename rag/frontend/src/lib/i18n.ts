@@ -3651,13 +3651,7 @@ export const ja = {
   "search.history.loadError": "保存された回答を読み込めませんでした。",
   "search.history.detailLoading": "回答の詳細を読み込んでいます",
   "search.history.question": "質問: {question}",
-  "search.history.delete": "この回答を削除",
-  "search.history.objectName": "保存された回答",
   "search.history.savedAt": "保存日時: {value}",
-  "search.history.deleteTitle": "保存された回答を削除しますか？",
-  "search.history.deleteDescription": "回答・根拠・実行記録を削除します。元に戻せません。",
-  "search.history.deleteError": "回答を削除できませんでした。時間をおいて再度お試しください。",
-  "search.history.deleted": "保存された回答を削除しました。",
   "settings.answerPrompts.vlm_answer.title": "回答生成のプロンプト",
   "settings.answerPrompts.vlm_answer.description":
     "根拠と質問を回答モデルへ渡す指示のテンプレートです。全体で 1 つの設定で、保存した内容は次の回答から使います。",
