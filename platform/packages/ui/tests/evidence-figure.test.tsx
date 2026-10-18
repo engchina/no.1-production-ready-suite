@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   EvidenceFigureAction,
+  EvidenceCard,
   EvidenceList,
   evidenceFigureLabels,
   type EvidenceFigureImage,
@@ -142,5 +143,40 @@ describe("EvidenceList の図を開く", () => {
     expect(leading.contains(cards[0].querySelector('[data-testid="product-action"]'))).toBe(false);
     // 図でない根拠には出さない。
     expect(cards[1].querySelector('[aria-label^="図を開く"]')).toBeNull();
+  });
+});
+
+describe("EvidenceCard の図を開く", () => {
+  it("1 件のカードも「根拠を表示」のすぐ後ろ（左の組）に置き、製品の操作は右の組に置く（#2433）", () => {
+    act(() =>
+      root.render(
+        <ul>
+          <EvidenceCard
+            index={0}
+            item={{
+              key: "A",
+              fileName: "文書 A.pdf",
+              text: "合成の本文。",
+              usedInAnswer: null,
+              answerUse: null,
+              score: null,
+              rerankScore: null,
+            }}
+            leadingActions={
+              <>
+                <button type="button" data-testid="source">根拠を表示</button>
+                <EvidenceFigureAction title="文書 A.pdf" location={null} load={vi.fn()} testId="figure-A" />
+              </>
+            }
+            actions={<span data-testid="product-action">評価</span>}
+          />
+        </ul>
+      )
+    );
+    const source = host.querySelector('[data-testid="source"]')!;
+    const leading = source.parentElement!;
+    const buttons = Array.from(leading.querySelectorAll("button")).map((button) => button.textContent);
+    expect(buttons).toEqual(["根拠を表示", "図を開く"]);
+    expect(leading.contains(host.querySelector('[data-testid="product-action"]'))).toBe(false);
   });
 });

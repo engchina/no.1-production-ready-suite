@@ -192,7 +192,11 @@ export interface EvidenceCardProps {
   index: number;
   labels?: EvidenceLabels;
   /**
-   * カードの下の操作の行（根拠を開く・根拠の評価・図を開くなど）。無ければ区切り線の行を出さない。
+   * カードの下の操作の行の左の組（「根拠を表示」と、そのすぐ後ろの「図を開く」。#2428・#2433）。
+   */
+  leadingActions?: ReactNode;
+  /**
+   * カードの下の操作の行の右の組（根拠の評価など）。左右どちらも無ければ区切り線の行を出さない。
    */
   actions?: ReactNode;
   /** カードの最後に置くもの（操作が開くダイアログなど。表示の流れには入らない）。 */
@@ -200,11 +204,21 @@ export interface EvidenceCardProps {
 }
 
 /** 根拠 1 件のカード（文書名・引用の印・経路・抜粋・場所のチップ・スコア・操作）。 */
-export function EvidenceCard({ item, index, labels = DEFAULT_EVIDENCE_LABELS, actions, children }: EvidenceCardProps) {
+export function EvidenceCard({
+  item,
+  index,
+  labels = DEFAULT_EVIDENCE_LABELS,
+  leadingActions,
+  actions,
+  children,
+}: EvidenceCardProps) {
   return (
     <li className="rounded-lg border border-border bg-surface p-3" data-testid="evidence-card">
       <EvidenceSummaryBody item={item} index={index} labels={labels} excerpt="card" />
-      <EvidenceActionRow>{actions}</EvidenceActionRow>
+      <EvidenceActionRow>
+        {leadingActions ? <EvidenceLeadingActions>{leadingActions}</EvidenceLeadingActions> : null}
+        {actions}
+      </EvidenceActionRow>
       {children}
     </li>
   );
@@ -546,24 +560,22 @@ export function EvidenceList({
             item={item}
             index={index}
             labels={labels}
-            actions={
-              onOpenSource || figure || extraActions ? (
+            leadingActions={
+              onOpenSource || figure ? (
                 <>
-                  <EvidenceLeadingActions>
-                    {onOpenSource ? (
-                      <EvidenceSourceButton
-                        fileName={item.fileName}
-                        onOpen={() => onOpenSource(index)}
-                        labels={labels}
-                        data-testid={`${idPrefix}-source-${index}`}
-                      />
-                    ) : null}
-                    {figure}
-                  </EvidenceLeadingActions>
-                  {extraActions}
+                  {onOpenSource ? (
+                    <EvidenceSourceButton
+                      fileName={item.fileName}
+                      onOpen={() => onOpenSource(index)}
+                      labels={labels}
+                      data-testid={`${idPrefix}-source-${index}`}
+                    />
+                  ) : null}
+                  {figure}
                 </>
               ) : undefined
             }
+            actions={extraActions}
           >
             {renderExtra?.(item, index)}
           </EvidenceCard>

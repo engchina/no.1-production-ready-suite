@@ -9,6 +9,7 @@ import type {
 import { citationModelUsed } from "@/lib/chunk-metadata";
 
 import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
+import { CitationFigureAction } from "./CitationFigure";
 import { CitationSourceSheet } from "./CitationSourceSheet";
 
 export { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
@@ -36,7 +37,7 @@ export interface CitationCardOptions {
 /**
  * 引用チャンク1件の表示。retrieval 由来の score/metadata を併記する。見た目は 3 製品で共通の `EvidenceCard`
  * （#2328）で、ここは RAG の根拠（`RetrievedChunk`）をデータの契約に写し、引用箇所のプレビュー（右のサイドパネル。
- * #2360）と根拠の評価を足す。
+ * #2360）、そのすぐ後ろの「図を開く」（一覧のカードと同じ共通の部品・位置。#2433）と根拠の評価を足す。
  */
 export function CitationCard({ chunk, index, ...options }: CitationCardOptions & { chunk: RetrievedChunk; index: number }) {
   const source = useEvidenceSource<RetrievedChunk>();
@@ -47,14 +48,16 @@ export function CitationCard({ chunk, index, ...options }: CitationCardOptions &
       item={item}
       index={index}
       labels={EVIDENCE_LABELS}
-      actions={
-        <>
-          {preview ? (
+      // 「根拠を表示」と「図を開く」は文書を読む権限がある画面（preview）だけ。
+      leadingActions={
+        preview ? (
+          <>
             <EvidenceSourceButton fileName={item.fileName} onOpen={() => source.open(chunk)} labels={EVIDENCE_LABELS} />
-          ) : null}
-          <CitationActions chunk={chunk} {...options} />
-        </>
+            <CitationFigureAction chunk={chunk} testId={`citation-card-figure-${index}`} />
+          </>
+        ) : undefined
       }
+      actions={<CitationActions chunk={chunk} {...options} />}
     >
       {preview && source.mounted ? (
         <CitationSourceSheet

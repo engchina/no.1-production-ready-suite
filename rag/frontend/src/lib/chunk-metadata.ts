@@ -54,9 +54,13 @@ export interface CitationFigure {
   section: string;
 }
 
-/** 内容の種類が図の根拠なら、その図の情報（図でなければ null）。 */
-export function citationFigure(metadata: RetrievedChunk["metadata"]): CitationFigure | null {
-  if (stringMetadata(metadata, "content_kind") !== "figure") return null;
+/**
+ * 元の図の画像を開ける図の根拠なら、その図の情報（それ以外は null）。backend が図の画像を切り出せると返した根拠
+ * （`figure_image_available`。Agent の `image_ref` と同じ判定。#2433）で、内容の種類が図のものに限る。
+ */
+export function citationFigure(chunk: Pick<RetrievedChunk, "metadata" | "figure_image_available">): CitationFigure | null {
+  const { metadata } = chunk;
+  if (!chunk.figure_image_available || stringMetadata(metadata, "content_kind") !== "figure") return null;
   return {
     aiDescription: stringMetadata(metadata, "figure_text_source") !== "ocr",
     page: pageRange(metadata),

@@ -34,7 +34,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import json
 import logging
 import math
 import sys
@@ -114,6 +113,7 @@ from app.rag.element_locator import (
     chunk_element_locator,
     parse_element_locator,
 )
+from app.rag.figure_region import FigureRegion, bbox_numbers, figure_region
 from app.rag.figure_url import (
     FIGURE_URL_TTL_SECONDS,
     FigureUrlUnavailableError,
@@ -1748,8 +1748,10 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
         cell_range=_metadata_str(metadata, "cell_range") if sheet_name else None,
         page_label_start=_metadata_str(metadata, "page_label_start") if page_start else None,
         page_label_end=_metadata_str(metadata, "page_label_end") if page_start else None,
-        bbox=_bbox(metadata.get("bbox")),
-        bbox_unit=_metadata_str(metadata, "bbox_unit") if _bbox(metadata.get("bbox")) else None,
+        bbox=bbox_numbers(metadata.get("bbox")),
+        bbox_unit=_metadata_str(metadata, "bbox_unit")
+        if bbox_numbers(metadata.get("bbox"))
+        else None,
         element_locator=str(element) if (element := chunk_element_locator(metadata)) else None,
     )
 
@@ -1801,20 +1803,6 @@ def _references(metadata: dict[str, Any]) -> list[EvidenceReference]:
     ]
 
 
-def _bbox(value: object) -> list[float] | None:
-    """chunk の metadata の bbox（JSON の文字列か list）を 4 つの数にする。"""
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except ValueError:
-            return None
-    if not isinstance(value, list) or len(value) != 4:
-        return None
-    if not all(isinstance(item, int | float) and not isinstance(item, bool) for item in value):
-        return None
-    return [float(item) for item in value]
-
-
 def _float_or_none(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
@@ -1835,95 +1823,8 @@ def _evidence_type(metadata: dict[str, Any]) -> EvidenceType:
     return "text"
 
 
-BboxUnit = Literal["absolute", "ratio", "percent"]
-
-
-@dataclass(frozen=True, slots=True)
-class _ImageRegion:
-    page: int
-    bbox: tuple[float, float, float, float]
-    unit: BboxUnit
-    page_size: tuple[float, float]
-
-
-def _positive(value: object) -> float | None:
-    number = _float_or_none(value)
-    return number if number is not None and number > 0 else None
-
-
-def _engine_image_bbox(metadata: dict[str, Any], page: int) -> list[float] | None:
-    """親子階層（small-to-big）の chunk の image_evidence から、その頁の図の bbox を取る。"""
-    raw = metadata.get("engine_metadata_json")
-    try:
-        engine = json.loads(raw) if isinstance(raw, str) else raw
-    except ValueError:
-        return None
-    images = engine.get("image_evidence") if isinstance(engine, dict) else None
-    for image in images if isinstance(images, list) else []:
-        if not isinstance(image, dict) or _metadata_int(image, "page") != page:
-            continue
-        if (bbox := _bbox(image.get("bbox"))) is not None:
-            return bbox
-    return None
-
-
-def _bbox_unit_value(value: str | None) -> BboxUnit | None:
-    if value in (None, "absolute"):
-        return "absolute"
-    if value in {"ratio", "normalized"}:
-        return "ratio"
-    if value == "percent":
-        return "percent"
-    return None
-
-
-def _image_region(metadata: dict[str, Any]) -> _ImageRegion | None:
-    """図の根拠の元の画像の領域を、保存した chunk の metadata から決める（#1282）。
-
-    利用者が渡した座標は使わない。頁・領域・頁の大きさのどれかが分からない、頁が回転している、
-    領域が頁からはみ出す根拠は、画像を返さない（None）。
-    """
-    if _metadata_str(metadata, "content_kind") != "figure":
-        return None
-    page = _metadata_int(metadata, "page_start") or _metadata_int(metadata, "page_number")
-    if not page or page < 1:
-        return None
-    rotation = _metadata_int(metadata, "page_rotation")
-    if rotation is not None and rotation % 360 != 0:
-        return None
-    unit: BboxUnit | None
-    engine_bbox = _engine_image_bbox(metadata, page)
-    if engine_bbox is not None:
-        bbox, unit = engine_bbox, "absolute"
-    else:
-        stored = _bbox(metadata.get("bbox"))
-        if stored is None:
-            return None
-        bbox, unit = stored, _bbox_unit_value(_metadata_str(metadata, "bbox_unit"))
-        if _metadata_str(metadata, "bbox_coordinate_mode") == "xywh":
-            bbox = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
-    if unit == "absolute":
-        width = _positive(metadata.get("page_width"))
-        height = _positive(metadata.get("page_height"))
-        if width is None or height is None:
-            return None
-        page_size = (width, height)
-    elif unit == "ratio":
-        page_size = (1.0, 1.0)
-    elif unit == "percent":
-        page_size = (100.0, 100.0)
-    else:
-        return None
-    x0, y0, x1, y1 = bbox
-    if x0 < 0 or y0 < 0 or x1 <= x0 or y1 <= y0:
-        return None
-    if x1 > page_size[0] * 1.001 or y1 > page_size[1] * 1.001:
-        return None
-    return _ImageRegion(page=page, bbox=(x0, y0, x1, y1), unit=unit, page_size=page_size)
-
-
 def _image_ref(
-    chunk: RetrievedChunk, metadata: dict[str, Any], region: _ImageRegion | None
+    chunk: RetrievedChunk, metadata: dict[str, Any], region: FigureRegion | None
 ) -> EvidenceImageRef | None:
     if region is None:
         return None
@@ -1989,7 +1890,7 @@ def _evidence(
         recipe_id=_metadata_str(metadata, "recipe_id"),
         content_kind=_metadata_str(metadata, "content_kind"),
         evidence_type=_evidence_type(metadata),
-        image_ref=_image_ref(chunk, metadata, _image_region(metadata)),
+        image_ref=_image_ref(chunk, metadata, figure_region(metadata)),
         locator=_locator(metadata),
         excerpt=chunk.text[:EVIDENCE_EXCERPT_MAX_CHARS],
         truncated=len(chunk.text) > EVIDENCE_EXCERPT_MAX_CHARS,
@@ -2437,7 +2338,7 @@ async def crop_figure(
     oracle: OracleClient,
     chunk: RetrievedChunk,
     metadata: dict[str, Any],
-    region: _ImageRegion | None,
+    region: FigureRegion | None,
 ) -> BoundedCrop:
     """図の領域を、解析に使ったファイル（処理レシピの artifact）から上限つきで切り出す（#1282）。
 
@@ -2485,7 +2386,7 @@ async def _read_image(
     oracle: OracleClient,
     chunk: RetrievedChunk,
     metadata: dict[str, Any],
-    region: _ImageRegion | None,
+    region: FigureRegion | None,
 ) -> tuple[EvidenceImage, dict[str, Any]]:
     """図の領域を切り出し、大きさと MCP の content の image のブロックを返す（#1282）。"""
     crop = await crop_figure(oracle, chunk, metadata, region)
@@ -2951,11 +2852,6 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
     )
 
 
-def figure_region(metadata: dict[str, Any]) -> _ImageRegion | None:
-    """図の根拠の領域（保存した chunk の metadata から決める。署名つきの URL の読み取りで使う）。"""
-    return _image_region(metadata)
-
-
 @dataclass(frozen=True, slots=True)
 class FigureUrlRequest:
     """ブラウザで開く署名つきの URL（図 #1311・原文のプレビュー #2389）を作る文脈。
@@ -2971,7 +2867,7 @@ def _figure_url(
     issuer: FigureUrlRequest | None,
     chunk: RetrievedChunk,
     metadata: dict[str, Any],
-    region: _ImageRegion | None,
+    region: FigureRegion | None,
 ) -> EvidenceImageUrl:
     if region is None:
         raise McpToolError(
@@ -3119,7 +3015,7 @@ async def read_source(
     text, more, next_offset = _text_window(chunk.text, arguments.offset, arguments.max_chars)
     parent = metadata.get("parent_text")
     parent_text = parent if isinstance(parent, str) and parent.strip() else None
-    region = _image_region(metadata)
+    region = figure_region(metadata)
     image: EvidenceImage | None = None
     image_url: EvidenceImageUrl | None = None
     preview: EvidencePreview | None = None
