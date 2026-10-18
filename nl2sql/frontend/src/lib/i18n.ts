@@ -2712,7 +2712,7 @@ const nl2sqlJa = {
   "history.detail.rows": "結果の行数",
   "history.detail.columns": "結果の列",
   "history.detail.timeline": "処理の経過",
-  "history.detail.technical": "技術的な詳細",
+  "history.detail.technical": "処理の詳細",
   "history.detail.apiKey": "API キー",
   "history.detail.agentRunId": "Agent の実行 ID",
   "history.detail.sqlSection": "SQL と結果",

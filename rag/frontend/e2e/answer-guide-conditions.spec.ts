@@ -4,6 +4,7 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
+  openAnswerProcessDetails,
   selectSearchAnswerProfile,
 } from "./_helpers";
 
@@ -124,9 +125,8 @@ async function ask(page: Page) {
   await enableSearchAnswer(page);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("受注を取り消すには？");
   await page.getByRole("button", { name: "検索", exact: true }).click();
-  // 回答の記録の詳細は、処理の経過の「詳細」に畳む（#2096）。
-  await page.getByTestId("search-run-progress-details").click();
-  const panel = page.getByRole("region", { name: "処理の経過" }).getByRole("region", { name: "詳細" });
+  // 回答の記録の詳細は、処理の経過の中の「処理の詳細」に畳む（#2096 / #2325）。
+  const panel = await openAnswerProcessDetails(page, "search-run-progress");
   await expect(panel).toBeVisible();
   return panel;
 }

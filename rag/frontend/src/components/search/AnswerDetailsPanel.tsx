@@ -14,8 +14,8 @@ import { extractionFieldConditionLabel } from "./extraction-field-filters";
 
 /**
  * 回答の記録の詳細（対応・信頼度・人手確認・使ったモデルなど）。工程の一覧は「処理の経過」
- * （`AnswerProcess`）が出す（#2096。工程を 2 か所に出さない）。チャット・RAG 検索では「処理の経過」の
- * 「詳細」の中に見出しなしで置き、実行履歴では見出し（`title`）を付けて置く。根拠の一覧とまとまりは
+ * （`AnswerProcess`）が出す（#2096。工程を 2 か所に出さない）。チャット・RAG 検索では「処理の経過」の中の
+ * 「処理の詳細」（#2325）に見出しなしで置き、実行履歴では見出し（`title`）を付けて置く。根拠の一覧とまとまりは
  * `CitationList`（#2097）。
  * traceId を渡すと、保存した回答を標準回答で評価する欄も出す。
  */
@@ -30,7 +30,7 @@ export function AnswerDetailsPanel({
   diagnostics: unknown;
   traceId?: string | null;
   evaluation?: unknown;
-  /** 見出し。省略すると見出しを出さない（「処理の経過」の「詳細」の中）。 */
+  /** 見出し。省略すると見出しを出さない（「処理の経過」の中の「処理の詳細」）。 */
   title?: string;
   /** 質問から読み取った条件（#652）を出すか。RAG 検索は外せるチップで出すので出さない。 */
   showAutoFieldFilter?: boolean;
