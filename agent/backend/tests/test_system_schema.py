@@ -487,7 +487,7 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
         "FK_AGENT_ROLE_AGENTS_ROLE",
     }
     assert all(fk.delete_rule == "CASCADE" for fk in MANAGED_FOREIGN_KEYS)
-    # 名前は AGENT_ で始める（AGENTS.md「データベース object の命名」）。
+    # 名前は AGENT_ で始める（root の docs/agents/naming.md）。
     assert all(name.startswith("AGENT_") for name, _ in MANAGED_OBJECTS)
     assert len({migration.name for migration in MIGRATIONS}) == len(MIGRATIONS)
 

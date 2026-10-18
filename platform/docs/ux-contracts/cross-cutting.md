@@ -1,7 +1,7 @@
 # 横断的な保守・セキュリティ契約
 
 > 3製品共通の原則。NL2SQL の再発防止策（engchina/no.1-production-ready-nl2sql#168–#185）から、製品に依存しない部分を移した。
-> 製品固有の権限モデル（role の権限昇格の規則など）は各製品の `AGENTS.md` に書く。
+> 製品固有の権限モデル（role の権限昇格の規則など）は各製品の `AGENTS.md`（とそこから案内する `docs/agents/`）に書く。
 
 ## 更新 API とデータの所有範囲
 
@@ -14,7 +14,7 @@
 
 - ボタンの非表示・disabled は UX であり、認可の境界ではない。すべての mutation は、store を更新する前に backend の domain service で actor の実効権限と resource の状態を検証し、API を直接呼んでも迂回できないようにする。store の実装（InMemory / Oracle など）が複数あるときは、判定・status code・状態の保持をそろえる。
 - archive 済みの resource は、明示的な restore / delete の流れを除いて変更できないものとする。通常の更新 endpoint は `409` で拒み、更新による暗黙の restore や、一部の field だけの書き換えを許さない。
-- 権限の割当・変更では、actor が自分の持たない権限を他人（または自分）に与えられないようにする（権限昇格の防止）。規則の詳細は製品の権限モデルに合わせて各製品の `AGENTS.md` に書く。
+- 権限の割当・変更では、actor が自分の持たない権限を他人（または自分）に与えられないようにする（権限昇格の防止）。規則の詳細は製品の権限モデルに合わせて各製品の `AGENTS.md`（とそこから案内する `docs/agents/`）に書く。
 
 ## i18n の変更と E2E の locator
 

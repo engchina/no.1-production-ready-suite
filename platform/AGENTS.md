@@ -1,12 +1,12 @@
 # AGENTS.md — Production Ready Platform
 
-> 共通基盤（`platform/`）固有のルール。GitHub 運用・Issue / PR 規約・CI・デザインシステムの共通ルール・共通の技術方針は、root の [../AGENTS.md](../AGENTS.md) を先に適用する。ルールを変えるときはこのファイル（共通ルールは root）を編集する。
+> 共通基盤（`platform/`）固有のルール。GitHub 運用・Issue / PR 規約・CI・デザインシステムの共通ルール・共通の技術方針は、root の [../AGENTS.md](../AGENTS.md) と、そこから案内する root の `docs/agents/` を先に適用する。ルールを変えるときはこのファイル（共通ルールは root）を編集する。
 > 共有パッケージの運用（版管理・変更時の確認範囲）は [CONTRIBUTING.md](./CONTRIBUTING.md)。Issue の label と PR title の scope は `platform`。
 
 ## デザインシステム / UI
 
-- **`packages/ui` と各製品の `frontend/` の UI は `docs/design-system/` が正本。** 依存の向き・製品が持てるもの・禁止事項・画面の構成・UI 変更の検証は root の「デザインシステム / UI」に従う。
-- 共通の権限管理（`packages/system-settings` の `RolePermissionsPage`）は、渡された権限の一覧の順にグループを並べる。一覧は製品が `permissionNavSections` / `arrangePermissionsByNav` で左のナビにそろえてから渡す（root「共通の仕組みと製品固有の仕組みの分け方」）。
+- **`packages/ui` と各製品の `frontend/` の UI は `docs/design-system/` が正本。** 依存の向き・製品が持てるもの・禁止事項・画面の構成・UI 変更の検証は root の [docs/agents/ui.md](../docs/agents/ui.md) に従う。
+- 共通の権限管理（`packages/system-settings` の `RolePermissionsPage`）は、渡された権限の一覧の順にグループを並べる。一覧は製品が `permissionNavSections` / `arrangePermissionsByNav` で左のナビにそろえてから渡す（root の [docs/agents/shared-features.md](../docs/agents/shared-features.md)）。
 - 1 製品しか使わないもの（`WorkflowProgressStrip`、オントロジーグラフ等）はその製品に置いてよい。
 
 ### `packages/ui` の実装の規則
@@ -61,7 +61,7 @@ export default [
 
 ## CI / 検証コマンド
 
-CI の job は `Platform / UI`・`Platform / backend_core`・`Platform / system_settings_backend` と、影響を受ける全製品の job（root「CI」）。ローカルでは変更した package の command を実行し、製品の全件の検査は CI の job の結果を引用してよい。
+CI の job は `Platform / UI`・`Platform / backend_core`・`Platform / system_settings_backend` と、影響を受ける全製品の job（root の [docs/agents/ci.md](../docs/agents/ci.md)）。ローカルでは変更した package の command を実行し、製品の全件の検査は CI の job の結果を引用してよい。
 
 ```bash
 # frontend（共有 UI）— platform/ で実行

@@ -89,7 +89,7 @@ usePagination<T>(items: T[], pageSize?: number, options?)
 
 ### 一覧の型と、基準から外す例外（#265 / #403）
 
-一覧は次の基準にそろえる（ルートの `AGENTS.md`「読み込み中・一覧・ページング」）。
+一覧は次の基準にそろえる（ルートの `docs/agents/ui.md`「読み込み中・一覧・ページング」）。
 
 - 表は `DataTable` の `stickyHeader` + `visibleRows`（md 未満 5 行・md 以上 8 行）、表ではない行リストは `INFORMATION_LIST_SCROLL_CLASS`。それを超える行は一覧の中で縦スクロールにし、ページ全体を伸ばさない。手書きの `max-h-[…]` で高さを決めない。
 - ページングは一覧の直下の共通 `Pagination`（既定 25 件/ページ。advanced の形。上の「Pagination」）。1 ページしかないときはページ送りを出さない（件数は `ListCount`）。
