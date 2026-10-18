@@ -153,6 +153,7 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
                 "rag_engine.retrieval.article_catalog:ARTICLE_DOCUMENT_SELECTION_SYSTEM_PROMPT",
             ),
             ("system", "rag_engine.retrieval.article_catalog:ARTICLE_SELECTION_SYSTEM_PROMPT"),
+            ("refineSystem", "rag_engine.retrieval.article_catalog:ARTICLE_REFINE_SYSTEM_PROMPT"),
         ),
     ),
     PromptStage(
