@@ -806,6 +806,57 @@ for (const viewport of [
   );
 }
 
+// #2361: 「資料から確認できなかった事項」は Agent の除いた内容の節と同じ規則（共通の AnswerSections）。項目が多ければ
+// 先頭の 10 件だけを出し、「すべて表示（全 N 件）」で残りを同じ書式で開く（「ほか N 件」で切らない）。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`資料から確認できなかった事項が多い回答は先頭だけを出し、すべて表示で全件を開く (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const gaps = Array.from({ length: 12 }, (_, index) => `合成の条件 ${index + 1} は資料に記載がありません。`);
+    const text = [
+      "点検は月に 1 回行います。",
+      "",
+      "資料により確認できた事項",
+      "",
+      "・点検は月に 1 回行います。",
+      "根拠：点検要領.pdf p.2",
+      "",
+      "資料から確認できなかった事項",
+      "",
+      ...gaps.map((gap) => `・${gap}`),
+    ].join("\n");
+    const streamBody = [
+      sseStart,
+      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text })}\n\n`,
+      `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [] })}\n\n`,
+      `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+    ].join("");
+    await mockChat(page, "ready", [], { streamBody });
+
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    await page.getByRole("button", { name: "新しい会話" }).click();
+    await page.getByRole("textbox").fill(userMessage.content);
+    await page.getByRole("button", { name: "送信" }).click();
+
+    const answer = page.getByTestId("answer-text");
+    const sections = answer.getByTestId("answer-section");
+    await expect(sections.locator("h4")).toHaveText(["資料により確認できた事項", "資料から確認できなかった事項"]);
+    // 確認できた事項の節は畳まない。
+    await expect(sections.nth(0).getByTestId("answer-section-toggle")).toHaveCount(0);
+    const items = sections.nth(1).getByRole("listitem");
+    await expect(items).toHaveCount(10);
+    const toggle = sections.nth(1).getByTestId("answer-section-toggle");
+    await expect(toggle).toHaveText(`すべて表示（全 ${gaps.length} 件）`);
+    await toggle.click();
+    await expect(items).toHaveText(gaps);
+    await expect(toggle).toHaveText("折りたたむ");
+    await expectNoPageOverflow(page);
+  });
+}
+
 // #2096: 回答の処理の経過は、回答の工程ごとの段階（answer_step。工程名・入れ子の深さ・LLM の回数）を 1 か所に
 // 既定で開いて出す。名前は「処理の経過」1 つで、処理の経過 → 回答の本文 → 根拠の一覧 → 評価 の順（#2115）。
 for (const theme of ["light", "dark"] as const) {
