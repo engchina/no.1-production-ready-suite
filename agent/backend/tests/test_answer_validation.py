@@ -22,6 +22,7 @@ from agents import FunctionTool
 from agents.testing import ScriptedModel, assistant_message, function_call
 from mcp_support import DEFAULT_OUTPUTS, FakeProductMcp, McpToolError, fake_product_mcp
 from pr_backend_core.mcp import McpServer
+from pr_system_settings.answer_notice import DEFAULT_ANSWER_NOTICE_TEXT
 from pytest import MonkeyPatch
 from test_clarification_preface import CLARIFICATIONS
 
@@ -2172,7 +2173,8 @@ def test_answer_is_saved_without_an_outcome_when_it_cannot_be_decided(
 
     assert run.status == RunStatus.COMPLETED
     [artifact] = [item for item in run.artifacts if item.kind == "answer"]
-    assert artifact.content == {"text": ANSWER}
+    # 対応は付けない（回答の注意書きは付ける。#2405）。
+    assert artifact.content == {"text": ANSWER, "notice": DEFAULT_ANSWER_NOTICE_TEXT}
 
 
 def test_outcome_is_recorded_when_the_validation_is_disabled(

@@ -19,6 +19,7 @@ from agents import FunctionTool, Usage
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from mcp_support import fake_product_mcp
 from pr_backend_core.chat_history import CHAT_HISTORY_UNTRUSTED_NOTE, ChatHistoryTurn
+from pr_system_settings.answer_notice import DEFAULT_ANSWER_NOTICE_TEXT
 from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
@@ -207,6 +208,8 @@ def test_run_calls_tool_and_records_answer(monkeypatch: MonkeyPatch, calls: _Cal
             "rag_outcome": None,
             "signals": [],
         },
+        # 回答の注意書き（#2405。本文とは別の項目）。
+        "notice": DEFAULT_ANSWER_NOTICE_TEXT,
     }
     # モデルには Agent と Skill の指示と、ツールの結果を渡している。
     first, second = model.calls

@@ -42,6 +42,7 @@ import {
   type DocumentProcessingConfig,
   type DocumentExtractionExportFormat,
   type EvaluationJob,
+  type EvaluationProcessRow,
   type EvaluationRunRequestBody,
   type ExternalParserBackendName,
   type ExternalParserConnectionStatusData,
@@ -1896,6 +1897,14 @@ export function useImportEvaluationCases() {
   return useMutation({
     mutationFn: ({ file, knowledgeBaseIds }: { file: File; knowledgeBaseIds: string[] }) =>
       api.importEvaluationCases(file, knowledgeBaseIds),
+  });
+}
+
+/** 回答の過程から評価の期待の下書きを作る（#2402。1 回 10 行まで。保存しない）。 */
+export function useDraftEvaluationProcess() {
+  return useMutation({
+    mutationFn: (body: { knowledge_base_ids: string[]; rows: EvaluationProcessRow[] }) =>
+      api.draftEvaluationProcess(body),
   });
 }
 

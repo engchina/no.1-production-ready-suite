@@ -3708,7 +3708,7 @@ export const ja = {
     "解析後の処理の「メタデータ/項目抽出」を有効にしたとき（文書ごと）",
   "settings.answerPrompts.stage.support_guide_draft": "回答の過程から業務ガイドの下書きを作る",
   "settings.answerPrompts.stage.support_guide_draft.condition":
-    "業務ガイドの取り込みで「回答の過程（Excel・テキスト）」から下書きを作るとき（行ごと）",
+    "業務ガイドの取り込みで「回答の過程（Excel・テキスト）」から下書きを作るときと、品質評価で「回答の過程」から期待の下書きを作るとき（行ごと）",
   "settings.answerPrompts.stage.navigation_summary": "章節の要約",
   "settings.answerPrompts.stage.navigation_summary.condition":
     "解析後の処理の「ナビゲーション要約(章節木)」を有効にしたとき（章節ごと。上限あり）",
@@ -3751,6 +3751,9 @@ export const ja = {
   "settings.answerPrompts.stage.answer_validation": "資料との照合",
   "settings.answerPrompts.stage.answer_validation.condition":
     "MCP の資料との照合（rag_validate_answer）を呼んだときだけ",
+  "settings.answerPrompts.stage.evaluation_screen_judge": "回答が案内した画面の判定",
+  "settings.answerPrompts.stage.evaluation_screen_judge.condition":
+    "品質評価で「案内すべき画面」のあるケースの回答に、画面の名前が出ないときだけ（ケースごと）",
   "settings.answerPrompts.part.system": "system プロンプト",
   "settings.answerPrompts.part.template": "入力テンプレート",
   "settings.answerPrompts.part.scope": "評価範囲の固定",
@@ -4287,6 +4290,68 @@ export const ja = {
   "evaluation.failureReason.condition_missing": "条件に触れていない",
   "evaluation.failureReason.evidence_miss": "必要な根拠を取れなかった",
   "evaluation.failureReason.known_condition_reasked": "分かっている条件を聞き直した",
+  "evaluation.failureReason.screen_missing": "案内すべき画面を案内していない",
+  "evaluation.failureReason.wrong_screen": "別の画面を案内した",
+  "evaluation.failureReason.off_target": "目的外の回答",
+  // 案内した画面と目的外の割合・ナレッジベースと検索・回答プロファイルの比較（#2402）。
+  "evaluation.perspective.guidance": "案内",
+  "evaluation.perspective.guidance.description":
+    "目的に合う画面へ案内したか・別の画面へ案内していないか・質問の目的に答えたか（参考の集計で、評価の基準の閾値には使いません）",
+  "evaluation.metric.screen_match_rate": "案内すべき画面の一致",
+  "evaluation.metric.screen_match_rate.description":
+    "案内すべき画面をすべて回答の手順で案内したケースの割合。回答を控えたケースは一致しない扱いです。",
+  "evaluation.metric.wrong_screen_rate": "別の画面への案内",
+  "evaluation.metric.wrong_screen_rate.description":
+    "案内すべき画面のほかの画面（根拠に写っていた別の画面など）を回答が案内したケースの割合。低いほどよい値です。",
+  "evaluation.metric.off_target_rate": "目的外の回答",
+  "evaluation.metric.off_target_rate.description":
+    "回答の監査が、回答は質問の目的と別の対象・業務に答えていると判定したケースの割合。低いほどよい値です。",
+  "evaluation.case.screens": "案内した画面",
+  "evaluation.case.screenMatched": "一致",
+  "evaluation.case.screenMissing": "不一致",
+  "evaluation.case.missingScreens": "案内していない画面: {screens}",
+  "evaluation.case.wrongScreens": "別の画面: {screens}",
+  "evaluation.case.screenJudged": "回答に画面の名前が無いため、判定器で判定しました。",
+  "evaluation.case.screenUnresolved": "回答に画面の名前が無く、判定できませんでした。",
+  "evaluation.compare.toggle": "検索・回答プロファイル（業務ガイドあり）でも流して比べる",
+  "evaluation.compare.helper":
+    "同じケースを、選んだナレッジベースの範囲と、検索・回答プロファイルの範囲（参照するナレッジベース・業務ガイド・ルール）の 2 回流して並べます。評価の時間は約 2 倍です。",
+  "evaluation.compare.profileLabel": "比べる検索・回答プロファイル",
+  "evaluation.compare.profileRequired": "比べる検索・回答プロファイルを選んでください。",
+  "evaluation.compare.profilesLoadError": "検索・回答プロファイルを読み込めませんでした。",
+  "evaluation.compare.title": "ナレッジベースと検索・回答プロファイルの比較",
+  "evaluation.compare.description":
+    "同じ評価セットを、ナレッジベースの範囲と検索・回答プロファイル「{name}」の範囲で流した結果です。差は検索・回答プロファイル − ナレッジベースの範囲（ポイント）です。",
+  "evaluation.compare.column.metric": "指標",
+  "evaluation.compare.column.base": "ナレッジベースの範囲",
+  "evaluation.compare.column.compared": "検索・回答プロファイル",
+  "evaluation.compare.column.delta": "差",
+  "evaluation.compare.better": "改善",
+  "evaluation.compare.worse": "悪化",
+  "evaluation.compare.same": "変化なし",
+  "evaluation.compare.lowerIsBetter": "低いほどよい",
+  "evaluation.compare.tabsLabel": "結果の詳細",
+  "evaluation.compare.tab.base": "ナレッジベースの範囲",
+  "evaluation.compare.tab.compared": "検索・回答プロファイル: {name}",
+  "evaluation.import.column.screens": "案内すべき画面",
+  "evaluation.process.title": "回答の過程から作る期待の下書き",
+  "evaluation.process.description":
+    "「回答の過程」のある {count} 行から、期待する手順・触れるべき条件・必要な根拠（資料と頁）・受け入れる対応の下書きを作ります。下書きは保存しません。行ごとに確かめてから評価に使います。",
+  "evaluation.process.build": "期待の下書きを作る",
+  "evaluation.process.rebuild": "下書きを作り直す",
+  "evaluation.process.building": "期待の下書きを作っています（{done} / {total} 行）",
+  "evaluation.process.error": "期待の下書きを作れませんでした。時間をおいて、もう一度作ってください。",
+  "evaluation.process.tableLabel": "期待の下書き。スクロールできます。",
+  "evaluation.process.column.steps": "期待する手順",
+  "evaluation.process.column.conditions": "触れるべき条件",
+  "evaluation.process.column.evidence": "必要な根拠",
+  "evaluation.process.column.outcomes": "受け入れる対応",
+  "evaluation.process.column.warnings": "確認すること",
+  "evaluation.process.failed": "作れませんでした",
+  "evaluation.process.unresolved": "{name}（ナレッジベースに無い資料）",
+  "evaluation.process.confirm": "確かめた下書き {count} 行を評価に使う",
+  "evaluation.process.confirmHelp":
+    "オンにすると、下書きの手順・条件・根拠・対応を評価のケースに足して評価します。作れなかった行とナレッジベースに無い資料は足しません。",
 
   // 業務ガイド（SupportGuide。#1237）。下書きを検証して公開した版だけを回答に使う。
   "supportGuides.title": "業務ガイド",

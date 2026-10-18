@@ -6,6 +6,9 @@ import {
   EVALUATION_METRIC_NAMES,
   EVALUATION_PERSPECTIVES,
   STANDARD_ANSWER_METRICS,
+  comparisonRows,
+  formatMetricDelta,
+  isGuidanceShown,
   failureReasonLabel,
   formatMetricValue,
   isPerspectiveShown,
@@ -103,6 +106,47 @@ describe("business support handling (issue 1231)", () => {
     expect(failureReasonLabel("evidence_miss")).toBe("必要な根拠を取れなかった");
     expect(failureReasonLabel("known_condition_reasked")).toBe("分かっている条件を聞き直した");
     expect(metricLabel("safe_answer_rate")).toBe("危険な回答の無さ");
+  });
+});
+
+describe("guidance metrics and comparison (issue 2402)", () => {
+  const base = {
+    case_count: 2,
+    error_count: 0,
+    evaluation_suite: "standard",
+    passed: true,
+    threshold_failures: [],
+    failure_reason_counts: {},
+    case_results: [],
+  } satisfies EvaluationMetrics;
+
+  it("labels the guidance metrics and shows them only when measured", () => {
+    expect(metricLabel("screen_match_rate")).toBe("案内すべき画面の一致");
+    expect(failureReasonLabel("wrong_screen")).toBe("別の画面を案内した");
+    expect(isGuidanceShown(base)).toBe(false);
+    expect(isGuidanceShown({ ...base, metric_case_counts: { off_target_rate: 1 } })).toBe(true);
+  });
+
+  it("compares two runs and flips the direction for lower-is-better metrics", () => {
+    const rows = comparisonRows(
+      { ...base, screen_match_rate: 0.5, wrong_screen_rate: 0.5, context_recall: 1 },
+      { ...base, screen_match_rate: 0.75, wrong_screen_rate: 0.25, context_recall: 1, mrr: 0.5 }
+    );
+    const byMetric = Object.fromEntries(rows.map((row) => [row.metric, row]));
+    expect(rows[0]?.metric).toBe("screen_match_rate");
+    expect(byMetric.screen_match_rate).toMatchObject({ delta: 0.25, direction: "better" });
+    expect(byMetric.wrong_screen_rate).toMatchObject({ delta: -0.25, direction: "better" });
+    expect(byMetric.context_recall).toMatchObject({ delta: 0, direction: "same" });
+    expect(byMetric.mrr).toMatchObject({ base: null, delta: null, direction: null });
+    // どちらでも測れなかった指標は出さない。
+    expect(byMetric.off_target_rate).toBeUndefined();
+  });
+
+  it("formats the delta in percentage points", () => {
+    expect(formatMetricDelta(0.125)).toBe("+12.5pt");
+    expect(formatMetricDelta(-0.03)).toBe("−3pt");
+    expect(formatMetricDelta(0)).toBe("±0pt");
+    expect(formatMetricDelta(null)).toBe("—");
   });
 });
 
