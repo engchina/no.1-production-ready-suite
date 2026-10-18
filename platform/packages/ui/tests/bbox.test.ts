@@ -9,7 +9,7 @@ import {
   bboxUnitFromMetadata,
   formatBboxPercent,
   normalizeBboxForPreview,
-} from "./bbox";
+} from "../src/lib/bbox";
 
 describe("normalizeBboxForPreview", () => {
   it("normalizes ratio xyxy coordinates into preview percentages", () => {

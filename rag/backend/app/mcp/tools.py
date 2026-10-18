@@ -65,6 +65,8 @@ from pydantic import (
 from rag_engine.retrieval.entity_expansion import entity_expansion_relevant
 from rag_parser_core.xml_tree_json import xml_tree_citation_key
 
+from app.api.errors import DocumentFileMissingError
+from app.api.routes import documents as documents_route
 from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.clients.oci_genai import OciGenAiClient
@@ -104,6 +106,7 @@ from app.rag.document_crop import (
     DocumentSourceNotFoundError,
     crop_png_bounded,
     load_parsed_source,
+    page_sizes,
 )
 from app.rag.document_sections_service import current_section_pages
 from app.rag.element_locator import (
@@ -141,6 +144,14 @@ from app.rag.section_map_service import (
     evidence_sections,
     section_outline,
 )
+from app.rag.signed_url import SignedUrlUnavailableError
+from app.rag.source_preview import (
+    SOURCE_PREVIEW_TTL_SECONDS,
+    PreviewKind,
+    issue_source_preview_token,
+    preview_kind,
+)
+from app.rag.stored_answer import stored_citation_metadata
 from app.rag.support_guide_query import build_guide_query
 from app.rag.support_guide_runtime import (
     GuideMatch,
@@ -148,6 +159,7 @@ from app.rag.support_guide_runtime import (
     impact_applies,
     rank_guides,
 )
+from app.schemas.document import DocumentPreprocessArtifact
 from app.schemas.search import (
     INCLUDE_SUPERSEDED_FILTER_KEY,
     PAGE_RANGES_FILTER_KEY,
@@ -225,10 +237,20 @@ IMAGE_SOURCE_MISSING_CODE = "image_source_missing"
 # 図をブラウザで開く短命の URL（rag_read_source の include_image_url。#1311）。
 IMAGE_URL_NOT_ALLOWED_CODE = "image_url_not_allowed"
 IMAGE_URL_UNAVAILABLE_CODE = "image_url_unavailable"
-# URL を作ってよい呼び出し（Agent の画面の操作）のサービストークンの claim `purpose` の値。
+# 根拠の原文のプレビュー（rag_read_source の include_preview。#2389）。
+PREVIEW_NOT_ALLOWED_CODE = "preview_not_allowed"
+PREVIEW_UNAVAILABLE_CODE = "preview_unavailable"
+PREVIEW_FILE_MISSING_CODE = "preview_file_missing"
+# ブラウザで開く URL（図・原文のプレビュー）を作ってよい呼び出し（Agent の画面の操作）の、
+# サービストークンの
+# claim `purpose` の値。Run の中でモデルが呼んだ token（purpose 無し）では作らない。
 FIGURE_URL_PURPOSE = "figure_url"
+SOURCE_PREVIEW_PURPOSE = "source_preview"
+BROWSER_URL_PURPOSES = frozenset({FIGURE_URL_PURPOSE, SOURCE_PREVIEW_PURPOSE})
 # 図の画像の読み取りの path（`app.api.routes.figures`。/api の下）。
 FIGURE_URL_PATH_PREFIX = "/api/figures"
+# 原文のプレビューの読み取りの path（`app.api.routes.source_previews`。/api の下）。
+SOURCE_PREVIEW_PATH_PREFIX = "/api/source-previews"
 # 根拠の種類（#1282）。figure_description=図を VLM が読んだ説明（元の図で確かめる）/
 # ocr=図の中・周りの文字（解析の OCR・キャプション）。
 EvidenceType = Literal["text", "table", "figure_description", "ocr"]
@@ -646,6 +668,13 @@ class ReadSourceInput(BaseModel):
             "画面の操作からだけ使える（それ以外は image_url_not_allowed のエラー）。"
         ),
     )
+    include_preview: bool = Field(
+        default=False,
+        description=(
+            "true のとき、根拠の文書の原文をブラウザで開くプレビューの情報（preview）を返す。"
+            "Agent の画面の操作からだけ使える（それ以外は preview_not_allowed のエラー）。"
+        ),
+    )
 
     @model_validator(mode="after")
     def _one_reference(self) -> ReadSourceInput:
@@ -1057,6 +1086,62 @@ class EvidenceImageUrl(BaseModel):
 
     url: str = Field(description="図の画像の URL（MCP の呼び出しを受けた RAG の起点から作る）。")
     path: str = Field(description="url の path（RAG の公開の起点に付け替えるときに使う）。")
+    expires_at: str = Field(description="期限（ISO 8601、UTC）。")
+    expires_in_seconds: int = Field(description="発行からの有効な秒数。")
+
+
+class EvidencePreviewPage(BaseModel):
+    """プレビューの 1 ページの表示寸法（pt）。"""
+
+    page_number: int = Field(description="1 始まりのページ番号。")
+    width: float
+    height: float
+
+
+class EvidencePreview(BaseModel):
+    """根拠の文書の原文をブラウザで開くプレビュー（rag_read_source の include_preview。#2389）。
+
+    URL は利用者・根拠・版・ファイルに縛った署名つきのトークンを path に持ち、期限（5 分）で
+    切れる。読むたびに今の権限・版を確かめ直す（版が変われば 409、見えなければ 404）。
+    """
+
+    kind: PreviewKind = Field(
+        description=(
+            "pdf=ページの画像（Office は処理後の PDF）/ image=画像 / text=本文 / "
+            "unsupported=表示できない形式。"
+        )
+    )
+    file_name: str
+    pages: list[EvidencePreviewPage] = Field(
+        default_factory=list,
+        description=(
+            "kind=pdf のページの一覧。ページの画像を描けないファイルは空（content_url を開く）。"
+        ),
+    )
+    page_url_template: str | None = Field(
+        default=None,
+        description=(
+            "ページの画像の URL のひな形（{page} をページ番号に置き換え、query の dpi で"
+            "解像度を選ぶ）。"
+        ),
+    )
+    page_path_template: str | None = Field(
+        default=None,
+        description="page_url_template の path（RAG の公開の起点に付け替えるときに使う）。",
+    )
+    content_url: str = Field(
+        description=(
+            "原文のファイルの URL（画像・本文・ページの画像を描けない PDF。query の "
+            "disposition=attachment でダウンロード）。"
+        )
+    )
+    content_path: str = Field(description="content_url の path。")
+    highlight_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "強調する位置を決める根拠の metadata（頁・bbox・座標の解釈・要素の表示領域だけ）。"
+        ),
+    )
     expires_at: str = Field(description="期限（ISO 8601、UTC）。")
     expires_in_seconds: int = Field(description="発行からの有効な秒数。")
 
@@ -1512,6 +1597,10 @@ class ReadSourceOutput(VersionedOutput):
     image_url: EvidenceImageUrl | None = Field(
         default=None,
         description="include_image_url=true で返した、図をブラウザで開く短命の URL（#1311）。",
+    )
+    preview: EvidencePreview | None = Field(
+        default=None,
+        description="include_preview=true で返した、原文をブラウザで開くプレビュー（#2389）。",
     )
     locator: EvidenceLocator
     text: str = Field(description="offset から最大 max_chars 文字の本文。")
@@ -2791,7 +2880,10 @@ def figure_region(metadata: dict[str, Any]) -> _ImageRegion | None:
 
 @dataclass(frozen=True, slots=True)
 class FigureUrlRequest:
-    """図の署名つきの URL を作る文脈（MCP の呼び出しの利用者と、URL の起点。#1311）。"""
+    """ブラウザで開く署名つきの URL（図 #1311・原文のプレビュー #2389）を作る文脈。
+
+    MCP の呼び出しの利用者と、URL の起点。
+    """
 
     subject: str
     base_url: str
@@ -2833,6 +2925,104 @@ def _figure_url(
     )
 
 
+async def preview_document(
+    oracle: OracleClient, document_id: str, recipe_id: str | None
+) -> tuple[Any, DocumentPreprocessArtifact | None]:
+    """プレビューする文書と、処理後のファイル（処理レシピの根拠はそのレシピの処理後のファイル）。
+
+    呼ぶ前に、根拠の chunk が検索と同じ見え方の条件で見えることを確かめておく
+    （``readable_chunk``）。
+    """
+    detail = await oracle.get_document(document_id)
+    if detail is None or getattr(detail, "object_storage_path", None) is None:
+        raise McpToolError(SOURCE_NOT_FOUND_CODE, "根拠の文書が見つかりません。")
+    artifact: DocumentPreprocessArtifact | None = detail.preprocess_artifact
+    if recipe_id:
+        row = await oracle.get_document_recipe(document_id, recipe_id)
+        if row is None:
+            raise McpToolError(SOURCE_NOT_FOUND_CODE, "根拠の処理レシピが見つかりません。")
+        raw = row.get("preprocess_artifact")
+        artifact = DocumentPreprocessArtifact.model_validate(raw) if raw else None
+    return detail, artifact
+
+
+async def preview_file(
+    detail: Any,
+    artifact: DocumentPreprocessArtifact | None,
+    variant: Literal["original", "prepared"],
+) -> bytes:
+    """プレビューするファイルの中身（文書の画面のプレビューと同じ読み方）。
+
+    ファイルが保存先に無ければ preview_file_missing のエラー。
+    """
+    try:
+        data, _file_name, _content_type = await documents_route.load_document_content(
+            detail, variant=variant, preprocess_artifact=artifact
+        )
+    except DocumentFileMissingError as exc:
+        raise McpToolError(PREVIEW_FILE_MISSING_CODE, str(exc.detail), status=404) from exc
+    except HTTPException as exc:
+        raise McpToolError(PREVIEW_FILE_MISSING_CODE, str(exc.detail), status=404) from exc
+    return data
+
+
+async def _source_preview(
+    issuer: FigureUrlRequest | None,
+    oracle: OracleClient,
+    chunk: RetrievedChunk,
+    metadata: dict[str, Any],
+) -> EvidencePreview:
+    if issuer is None:
+        raise McpToolError(
+            PREVIEW_NOT_ALLOWED_CODE,
+            "原文のプレビューは、Agent の画面の操作からだけ作れます。",
+            status=403,
+        )
+    recipe_id = _metadata_str(metadata, "recipe_id")
+    detail, artifact = await preview_document(oracle, chunk.document_id, recipe_id)
+    file_name = str(getattr(detail, "file_name", None) or chunk.file_name or chunk.document_id)
+    kind, variant = preview_kind(file_name, artifact)
+    try:
+        token, expires_at = issue_source_preview_token(
+            get_settings().app_service_token_secret,
+            subject=issuer.subject,
+            document_id=chunk.document_id,
+            chunk_id=chunk.chunk_id,
+            chunk_set_id=_metadata_str(metadata, "chunk_set_id"),
+            recipe_id=recipe_id,
+            variant=variant,
+        )
+    except SignedUrlUnavailableError as exc:
+        raise McpToolError(PREVIEW_UNAVAILABLE_CODE, str(exc), status=503) from exc
+    pages: list[EvidencePreviewPage] = []
+    if kind == "pdf":
+        data = await preview_file(detail, artifact, variant)
+        try:
+            sizes = await asyncio.to_thread(page_sizes, data)
+        except ValueError:
+            # ページの画像を描けないファイルは、画面が原文の URL をブラウザの PDF 表示で開く。
+            sizes = []
+        pages = [
+            EvidencePreviewPage(page_number=index + 1, width=width, height=height)
+            for index, (width, height) in enumerate(sizes)
+        ]
+    base_path = f"{SOURCE_PREVIEW_PATH_PREFIX}/{token}"
+    base_url = issuer.base_url.rstrip("/")
+    page_path = f"{base_path}/pages/{{page}}" if pages else None
+    return EvidencePreview(
+        kind=kind,
+        file_name=file_name,
+        pages=pages,
+        page_url_template=f"{base_url}{page_path}" if page_path else None,
+        page_path_template=page_path,
+        content_url=f"{base_url}{base_path}/content",
+        content_path=f"{base_path}/content",
+        highlight_metadata=stored_citation_metadata(metadata),
+        expires_at=datetime.fromtimestamp(expires_at, tz=UTC).isoformat(),
+        expires_in_seconds=SOURCE_PREVIEW_TTL_SECONDS,
+    )
+
+
 async def read_source(
     arguments: ReadSourceInput, *, figure_url_request: FigureUrlRequest | None = None
 ) -> ReadSourceOutput | McpToolResult:
@@ -2854,9 +3044,12 @@ async def read_source(
     region = _image_region(metadata)
     image: EvidenceImage | None = None
     image_url: EvidenceImageUrl | None = None
+    preview: EvidencePreview | None = None
     blocks: tuple[dict[str, Any], ...] = ()
     if arguments.include_image_url:
         image_url = _figure_url(figure_url_request, chunk, metadata, region)
+    if arguments.include_preview:
+        preview = await _source_preview(figure_url_request, oracle, chunk, metadata)
     if arguments.include_image:
         image, block = await _read_image(oracle, chunk, metadata, region)
         blocks = (block,)
@@ -2872,6 +3065,7 @@ async def read_source(
         image_ref=_image_ref(chunk, metadata, region),
         image=image,
         image_url=image_url,
+        preview=preview,
         locator=_locator(metadata),
         text=text,
         offset=arguments.offset,
@@ -3055,11 +3249,15 @@ def _lookup_item(match: GuideMatch) -> LookupGuideItem:
 
 
 def _figure_url_request(http_request: Request) -> FigureUrlRequest | None:
-    """図を開く URL（#1311）を作ってよい呼び出しなら、その利用者と URL の起点を返す。
+    """ブラウザで開く URL（図 #1311・原文のプレビュー #2389）を作ってよい呼び出しの文脈を返す。
+
+    作ってよければ、その利用者と URL の起点を返す（作れなければ None）。
 
     URL は Agent の画面の操作（Agent の backend が閲覧者を ``sub`` にし、``purpose`` に
-    ``figure_url`` を入れたサービストークンで呼ぶ）でだけ作る。Run の中でモデルが呼んだときは
-    作らない（URL を Run の記録・モデルの文脈に残さない）。local（認証なし）は確かめない。
+    ``figure_url`` か ``source_preview`` を入れたサービストークンで呼ぶ）でだけ作る。Run
+    の中でモデルが
+    呼んだときは作らない（URL を Run の記録・モデルの文脈に残さない）。local（認証なし）
+    は確かめない。
     """
     principal = getattr(http_request.state, "principal", None)
     subject = getattr(principal, "user_uuid", None)
@@ -3067,7 +3265,7 @@ def _figure_url_request(http_request: Request) -> FigureUrlRequest | None:
         return None
     if not get_settings().local_debug_enabled:
         claims = getattr(http_request.state, "service_token_claims", None)
-        if not isinstance(claims, dict) or claims.get("purpose") != FIGURE_URL_PURPOSE:
+        if not isinstance(claims, dict) or claims.get("purpose") not in BROWSER_URL_PURPOSES:
             return None
     return FigureUrlRequest(subject=subject, base_url=str(http_request.base_url))
 
@@ -3430,14 +3628,14 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         )
 
     async def read(arguments: ReadSourceInput) -> ReadSourceOutput | McpToolResult:
-        if arguments.include_image:
-            # 図の切り出しは元のファイルを読んで描くので、検索と同じ上限で守る（#1282）。
+        if arguments.include_image or arguments.include_preview:
+            # 図の切り出し・プレビューのページの一覧は元のファイルを読むので、
+            # 検索と同じ上限で守る（#1282）。
             enforce_rate_limit("search", http_request)
+        browser_url = arguments.include_image_url or arguments.include_preview
         return await read_source(
             arguments,
-            figure_url_request=(
-                _figure_url_request(http_request) if arguments.include_image_url else None
-            ),
+            figure_url_request=_figure_url_request(http_request) if browser_url else None,
         )
 
     async def validate(arguments: ValidateAnswerInput) -> ValidateAnswerOutput:

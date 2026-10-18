@@ -11,7 +11,7 @@ import {
   previewKeyAction,
   previewLayout,
   steppedZoom,
-} from "./preview-viewer";
+} from "../src/lib/preview-viewer";
 
 const A4 = 595 / 842;
 

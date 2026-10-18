@@ -674,6 +674,8 @@ const agentJa = {
   "evidence.figureReload": "もう一度読み込む",
   "evidence.figureDescription": "AI が図を読んだ説明です。元の図で確かめてください。",
   "evidence.figureNote": "元の文書の図の領域です。表示のたびに今の権限と資料の版で確かめます。",
+  "evidence.previewUnsupported": "この形式の資料は原文を表示できません。ファイルをダウンロードして確かめてください。",
+  "evidence.previewTextFailed": "原文の本文を読み込めませんでした。URL の期限が切れたか、資料が更新された可能性があります。",
   // 資料との照合（回答の文を AI に渡した資料と照らし合わせた結果と、支援タスクの状態を業務の言葉で出す。#1286・#2361）。
   // 3 製品で同じ概念は「資料との照合」と呼ぶ。内部の語（予算・reason の値）は出さない。
   "chat.review.title": "資料との照合",

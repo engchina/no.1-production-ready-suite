@@ -1475,6 +1475,12 @@
             "description": "true のとき、図の根拠の元の画像をブラウザで開く短命の URL（image_url）を返す（300 秒で切れ、読むたびに今の権限・版を確かめる）。Agent の画面の操作からだけ使える（それ以外は image_url_not_allowed のエラー）。",
             "title": "Include Image Url",
             "type": "boolean"
+          },
+          "include_preview": {
+            "default": false,
+            "description": "true のとき、根拠の文書の原文をブラウザで開くプレビューの情報（preview）を返す。Agent の画面の操作からだけ使える（それ以外は preview_not_allowed のエラー）。",
+            "title": "Include Preview",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1798,6 +1804,121 @@
             "title": "EvidenceLocator",
             "type": "object"
           },
+          "EvidencePreview": {
+            "description": "根拠の文書の原文をブラウザで開くプレビュー（rag_read_source の include_preview。#2389）。\n\nURL は利用者・根拠・版・ファイルに縛った署名つきのトークンを path に持ち、期限（5 分）で\n切れる。読むたびに今の権限・版を確かめ直す（版が変われば 409、見えなければ 404）。",
+            "properties": {
+              "kind": {
+                "description": "pdf=ページの画像（Office は処理後の PDF）/ image=画像 / text=本文 / unsupported=表示できない形式。",
+                "enum": [
+                  "pdf",
+                  "image",
+                  "text",
+                  "unsupported"
+                ],
+                "title": "Kind",
+                "type": "string"
+              },
+              "file_name": {
+                "title": "File Name",
+                "type": "string"
+              },
+              "pages": {
+                "description": "kind=pdf のページの一覧。ページの画像を描けないファイルは空（content_url を開く）。",
+                "items": {
+                  "$ref": "#/$defs/EvidencePreviewPage"
+                },
+                "title": "Pages",
+                "type": "array"
+              },
+              "page_url_template": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "ページの画像の URL のひな形（{page} をページ番号に置き換え、query の dpi で解像度を選ぶ）。",
+                "title": "Page Url Template"
+              },
+              "page_path_template": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "page_url_template の path（RAG の公開の起点に付け替えるときに使う）。",
+                "title": "Page Path Template"
+              },
+              "content_url": {
+                "description": "原文のファイルの URL（画像・本文・ページの画像を描けない PDF。query の disposition=attachment でダウンロード）。",
+                "title": "Content Url",
+                "type": "string"
+              },
+              "content_path": {
+                "description": "content_url の path。",
+                "title": "Content Path",
+                "type": "string"
+              },
+              "highlight_metadata": {
+                "additionalProperties": true,
+                "description": "強調する位置を決める根拠の metadata（頁・bbox・座標の解釈・要素の表示領域だけ）。",
+                "title": "Highlight Metadata",
+                "type": "object"
+              },
+              "expires_at": {
+                "description": "期限（ISO 8601、UTC）。",
+                "title": "Expires At",
+                "type": "string"
+              },
+              "expires_in_seconds": {
+                "description": "発行からの有効な秒数。",
+                "title": "Expires In Seconds",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "file_name",
+              "content_url",
+              "content_path",
+              "expires_at",
+              "expires_in_seconds"
+            ],
+            "title": "EvidencePreview",
+            "type": "object"
+          },
+          "EvidencePreviewPage": {
+            "description": "プレビューの 1 ページの表示寸法（pt）。",
+            "properties": {
+              "page_number": {
+                "description": "1 始まりのページ番号。",
+                "title": "Page Number",
+                "type": "integer"
+              },
+              "width": {
+                "title": "Width",
+                "type": "number"
+              },
+              "height": {
+                "title": "Height",
+                "type": "number"
+              }
+            },
+            "required": [
+              "page_number",
+              "width",
+              "height"
+            ],
+            "title": "EvidencePreviewPage",
+            "type": "object"
+          },
           "EvidenceReference": {
             "description": "根拠の本文が参照する節・文書（「第3章を参照」など。取込時に抜き出す。#1280）。",
             "properties": {
@@ -1953,6 +2074,18 @@
             ],
             "default": null,
             "description": "include_image_url=true で返した、図をブラウザで開く短命の URL（#1311）。"
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EvidencePreview"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "include_preview=true で返した、原文をブラウザで開くプレビュー（#2389）。"
           },
           "locator": {
             "$ref": "#/$defs/EvidenceLocator"
