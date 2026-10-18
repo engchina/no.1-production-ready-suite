@@ -84,6 +84,9 @@ from .db_admin_chat import (
     HISTORY_TURN_LIMIT as _DB_ADMIN_CHAT_HISTORY_LIMIT,
 )
 from .db_admin_chat import (
+    REPAIR_SYSTEM_PROMPT as _DB_ADMIN_CHAT_REPAIR_SYSTEM_PROMPT,
+)
+from .db_admin_chat import (
     SYSTEM_PROMPT as _DB_ADMIN_CHAT_SYSTEM_PROMPT,
 )
 from .db_admin_chat import (
@@ -97,6 +100,19 @@ from .db_admin_chat import (
 )
 from .db_admin_chat import (
     single_object_confirmation_target as _db_admin_chat_single_object_target,
+)
+from .db_admin_chat_columns import (
+    CachedDescriber,
+    ObjectColumnsCache,
+    ObjectRef,
+    SqlObjectDescriber,
+    StatementColumnCheck,
+    check_statement,
+    object_columns_context,
+    referenced_objects,
+    statement_object_names,
+    undescribed_warning,
+    unknown_column_reason,
 )
 from .db_admin_chat_store import DbAdminChatStore
 from .embedding_client import (
@@ -429,6 +445,7 @@ from .structured_outputs import (
     AnalysisOutput,
     CommentsOutput,
     DbAdminChatAnalysisOutput,
+    DbAdminChatRepairOutput,
     DbAdminChatSqlOutput,
     SqlOutput,
     StructureOutput,
@@ -4676,6 +4693,19 @@ def _db_admin_chat_join_statements(statements: Sequence[str]) -> str:
     return "\n".join(parts)
 
 
+def _db_admin_chat_plan_warnings(plan: DbAdminChatPlan) -> list[str]:
+    """文ごとの注意（列を確かめられなかった object など。#2352）を、ターンの警告の形にする。"""
+
+    many = len(plan.statements) > 1
+    return list(
+        dict.fromkeys(
+            f"文 {item.index}: {warning}" if many else warning
+            for item in plan.statements
+            for warning in item.warnings
+        )
+    )
+
+
 class Nl2SqlService:
     """NL2SQL orchestration with pluggable state store."""
 
@@ -4791,6 +4821,8 @@ class Nl2SqlService:
             if self._incremental_repository is not None
             else None
         )
+        # DB 管理チャットの列の検査で調べた object の列（#2352。process ごと・TTL つき）。
+        self._db_admin_object_columns = ObjectColumnsCache()
         self._legacy_learning_material = LegacyLearningMaterialData()
         self._legacy_learning_material_io_lock = threading.RLock()
         self._legacy_learning_material_loaded = False
@@ -17495,31 +17527,90 @@ class Nl2SqlService:
             raise SecurityApiError(403, "DB 管理チャットを使う権限がありません。")
 
     def _db_admin_chat_plan(self, sql: str) -> DbAdminChatPlan:
-        """実行の前の分類（生成エンジンに関係なく、サーバーで必ず分類する）。
+        return self._db_admin_chat_checked_plan(sql)[0]
+
+    @contextmanager
+    def _db_admin_chat_describer(self) -> Iterator[SqlObjectDescriber | None]:
+        """列の検査に使う describer（実行と同じ管理の接続。Oracle の実行環境だけ。#2352）。"""
+
+        if not self._use_oracle_runtime():
+            yield None
+            return
+        with self._oracle_adapter.admin_sql_describer() as describer:
+            yield CachedDescriber(describer, self._db_admin_object_columns)
+
+    def _db_admin_chat_column_checks(
+        self, statements: Sequence[str], skip: set[int]
+    ) -> dict[int, StatementColumnCheck]:
+        """文ごとに、参照する object の実際の列で列を確かめる（#2352。番号は 1 始まり）。
+
+        SELECT と DML だけを確かめ、`skip`（方針で止める文）は調べない（製品の object などを
+        describe しない）。同じターンの前の文（SELECT・DML 以外）に名前が出る object を参照する
+        文は、実行の前は object が無い・列が違うので確かめない。
+        """
+
+        checks: dict[int, StatementColumnCheck] = {}
+        with self._db_admin_chat_describer() as describer:
+            if describer is None:
+                return checks
+            changed_names: set[str] = set()
+            for index, statement in enumerate(statements, start=1):
+                statement_type = _admin_statement_type(statement)
+                select_only = is_select_only(statement)
+                if index not in skip and (
+                    select_only or statement_type in _ROLLBACKABLE_DML_STATEMENT_TYPES
+                ):
+                    check = check_statement(
+                        statement,
+                        describer,
+                        select_only=select_only,
+                        changed_names=changed_names,
+                    )
+                    if check is not None:
+                        checks[index] = check
+                if not select_only and statement_type not in _ROLLBACKABLE_DML_STATEMENT_TYPES:
+                    changed_names |= statement_object_names(statement)
+        return checks
+
+    def _db_admin_chat_checked_plan(
+        self, sql: str
+    ) -> tuple[DbAdminChatPlan, dict[int, StatementColumnCheck]]:
+        """実行の前の分類（生成エンジンに関係なく、サーバーで必ず分類する）と列の検査の結果。
 
         文ごとに分類し（PL/SQL のブロックは 1 文）、文ごとに実行できる（#2333）。読み取り専用の
-        SELECT は
-        確認語なし、変える文は確認語、止める文は実行できない。ターンの値は「すべて実行」の判定で、止める
-        文が 1 つでもあれば「すべて実行」はできない（ほかの文は 1 文ずつ実行できる）。
+        SELECT は確認語なし、変える文は確認語、止める文は実行できない。参照する object に無い列を
+        使う文も実行できない（#2352。理由に実際の列を添える）。ターンの値は「すべて実行」の判定で、
+        止める文が 1 つでもあれば「すべて実行」はできない（ほかの文は 1 文ずつ実行できる）。
         """
 
         statements = _split_sql_statements(sql)
         current_owner = self._current_schema_owner()
-        plans: list[DbAdminChatStatementPlan] = []
-        for index, statement in enumerate(statements):
-            statement_type = _admin_statement_type(statement)
-            select_only = is_select_only(statement)
-            blocked_reason = _db_admin_chat_forbidden_error(
-                statement
-            ) or _db_admin_system_object_error(
+        policy_reasons = [
+            _db_admin_chat_forbidden_error(statement)
+            or _db_admin_system_object_error(
                 statement,
                 current_owner=current_owner,
                 allow_dynamic_performance_views=True,
             )
+            for statement in statements
+        ]
+        checks = self._db_admin_chat_column_checks(
+            statements,
+            {index for index, reason in enumerate(policy_reasons, start=1) if reason},
+        )
+        plans: list[DbAdminChatStatementPlan] = []
+        for index, statement in enumerate(statements, start=1):
+            statement_type = _admin_statement_type(statement)
+            select_only = is_select_only(statement)
+            check = checks.get(index)
+            invalid = check is not None and check.invalid
+            blocked_reason = policy_reasons[index - 1] or (
+                unknown_column_reason(check) if check is not None and invalid else ""
+            )
             requires_confirmation = not select_only and not blocked_reason
             plans.append(
                 DbAdminChatStatementPlan(
-                    index=index + 1,
+                    index=index,
                     statement_type=statement_type,
                     sql=statement,
                     select_only=select_only,
@@ -17531,6 +17622,16 @@ class Nl2SqlService:
                         if requires_confirmation
                         else ""
                     ),
+                    unknown_columns=(
+                        list(dict.fromkeys(item.column for item in check.unknown))
+                        if check is not None and invalid
+                        else []
+                    ),
+                    warnings=(
+                        [undescribed_warning(key) for key in check.undescribed]
+                        if check is not None
+                        else []
+                    ),
                 )
             )
         blocked_reasons = list(
@@ -17538,7 +17639,7 @@ class Nl2SqlService:
         )
         changing = [plan for plan in plans if not plan.select_only]
         requires_confirmation = bool(changing) and not blocked_reasons
-        return DbAdminChatPlan(
+        plan = DbAdminChatPlan(
             sql=sql.strip(),
             statements=plans,
             read_only=bool(plans) and not changing,
@@ -17551,6 +17652,104 @@ class Nl2SqlService:
             implicit_commit=any(plan.implicit_commit for plan in plans),
             blocked=bool(blocked_reasons),
             blocked_reasons=blocked_reasons,
+        )
+        return plan, checks
+
+    def _repair_db_admin_chat_sql(
+        self,
+        question: str,
+        plan: DbAdminChatPlan,
+        checks: Mapping[int, StatementColumnCheck],
+    ) -> str:
+        """存在しない列・object を参照する文を、実際の列を渡して 1 回だけ直させる（#2352）。
+
+        直した文だけを置き換えた SQL を返す（直す文が無い・直せなかったら空）。直ったかどうかは
+        呼び出し側が分類し直して確かめる。
+        """
+
+        targets = [
+            item
+            for item in plan.statements
+            if (check := checks.get(item.index)) is not None and check.needs_repair
+        ]
+        if not targets:
+            return ""
+        lines = [f"質問: {question}", "直す文:"]
+        for item in targets:
+            check = checks[item.index]
+            error = unknown_column_reason(check) if check.invalid else str(check.oracle_error or "")
+            lines.extend(
+                [
+                    f"## 文 {item.index}",
+                    f"SQL: {item.sql}",
+                    f"エラー: {error}",
+                    "参照するオブジェクトの実際の列:",
+                    *object_columns_context(check.objects, check.undescribed),
+                ]
+            )
+        try:
+            raw = self._enterprise_ai_client.generate(
+                prompt="存在しない列・オブジェクトを参照する文を、実際の列を使って直してください。",
+                context="\n".join(lines),
+                system_prompt=_DB_ADMIN_CHAT_REPAIR_SYSTEM_PROMPT,
+                response_format=response_format(DbAdminChatRepairOutput, name="DbAdminChatRepair"),
+            )
+            output = DbAdminChatRepairOutput.model_validate_json(raw)
+        except (EnterpriseAiDirectError, ValueError) as exc:
+            logger.info("nl2sql_db_admin_chat_repair_failed", extra={"error": str(exc)[:300]})
+            return ""
+        target_indexes = {item.index for item in targets}
+        repaired: dict[int, str] = {}
+        for repaired_item in output.statements:
+            text = _strip_sql_code_fence(repaired_item.sql).strip().rstrip(";").strip()
+            if repaired_item.index in target_indexes and text:
+                repaired[repaired_item.index] = text
+        if not repaired:
+            return ""
+        logger.info(
+            "nl2sql_db_admin_chat_repaired",
+            extra={"repaired": sorted(repaired), "targets": sorted(target_indexes)},
+        )
+        return _db_admin_chat_join_statements(
+            [repaired.get(item.index, item.sql) for item in plan.statements]
+        )
+
+    def _db_admin_chat_referenced_objects_context(self, sql: str) -> str:
+        """エラーの分析の文脈に足す、SQL が参照する object の実際の列（#2352）。
+
+        方針で止める文（製品の object など）の object は調べない。調べられなければ空。
+        """
+
+        current_owner = self._current_schema_owner()
+        refs: dict[str, ObjectRef] = {}
+        for statement in _split_sql_statements(sql):
+            if _db_admin_chat_forbidden_error(statement) or _db_admin_system_object_error(
+                statement,
+                current_owner=current_owner,
+                allow_dynamic_performance_views=True,
+            ):
+                continue
+            for ref in referenced_objects(statement) or []:
+                refs.setdefault(ref.key, ref)
+        if not refs:
+            return ""
+        objects: dict[str, tuple[str, ...]] = {}
+        undescribed: list[str] = []
+        with self._db_admin_chat_describer() as describer:
+            if describer is None:
+                return ""
+            for key, ref in refs.items():
+                reference = ref.reference_sql()
+                columns = describer.describe(reference) if reference is not None else None
+                if columns is not None:
+                    objects[key] = columns
+                elif reference is not None and describer.available:
+                    undescribed.append(key)
+        lines = object_columns_context(objects, undescribed)
+        if not lines:
+            return ""
+        return "\n\nreferenced_objects（SQL が参照するオブジェクトの実際の列）:\n" + "\n".join(
+            lines
         )
 
     def generate_db_admin_chat_sql(
@@ -17617,10 +17816,17 @@ class Nl2SqlService:
             raise DbAdminChatGenerationError(_DB_ADMIN_CHAT_NO_SQL)
         if output is None:  # pragma: no cover - 上のループは SQL を受け取るか例外で抜ける
             raise DbAdminChatGenerationError(_DB_ADMIN_CHAT_NO_SQL)
+        # 参照する object の実際の列で確かめ、存在しない列・object を参照する文は 1 回だけ直させる
+        # （#2352）。直らなければ文は残し、理由を添えてその文の実行を止める。
+        plan, checks = self._db_admin_chat_checked_plan(sql)
+        repaired_sql = self._repair_db_admin_chat_sql(question, plan, checks)
+        if repaired_sql:
+            plan = self._db_admin_chat_plan(repaired_sql)
+        warnings.extend(_db_admin_chat_plan_warnings(plan))
         return DbAdminChatGenerateData(
             question=question,
             explanation=output.explanation.strip(),
-            plan=self._db_admin_chat_plan(sql),
+            plan=plan,
             context_tables=[table.qualified_name for table in context_tables],
             model=self._enterprise_ai_client.model_id(),
             warnings=warnings,
@@ -17654,6 +17860,7 @@ class Nl2SqlService:
                 context=(
                     f"質問:\n{request.question}\n\nSQL:\n{request.sql}\n\n"
                     f"実行結果:\n{request.result_text}"
+                    + self._db_admin_chat_referenced_objects_context(request.sql)
                 ),
                 system_prompt=_DB_ADMIN_CHAT_ANALYSIS_SYSTEM_PROMPT,
                 response_format=response_format(DbAdminChatAnalysisOutput),
@@ -17875,6 +18082,8 @@ class Nl2SqlService:
                 f"文 {index} はありません（このターンの文は {len(statements)} 個です）。"
             )
         statement = statements[index - 1]
+        if statement.unknown_columns:
+            return self._db_admin_chat_column_blocked(statement, request, audit_link), False
         internal_confirmation = ""
         confirmation_given = False
         if statement.requires_confirmation:
@@ -17926,6 +18135,60 @@ class Nl2SqlService:
                 timing=result.timing,
             ),
             confirmation_given,
+        )
+
+    def _db_admin_chat_column_blocked(
+        self,
+        statement: DbAdminChatStatementPlan,
+        request: DbAdminChatTurnExecuteRequest,
+        audit_link: dict[str, Any],
+    ) -> DbAdminChatExecuteData:
+        """存在しない列を参照する文（#2352）は実行せず、止めた文として監査に残す。
+
+        方針で止める文は管理 SQL の実行の実装が止めるが、列の検査はターンの分類の結果なので、
+        ここで止める（AI のエラー分析で直した SQL に置き換えると分類し直す）。
+        """
+
+        started = time.monotonic()
+        result = DbAdminExecuteData(
+            executed=False,
+            runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+            execution_context="admin_control_plane",
+            statements=[
+                DbAdminStatementResult(
+                    index=statement.index,
+                    statement_type=statement.statement_type,
+                    status="blocked",
+                    sql=statement.sql,
+                    error_message=statement.blocked_reason,
+                )
+            ],
+            timing=self._timing(_utc_now(), started, "db_admin_chat_execute"),
+        )
+        try:
+            self._record_db_admin_sql_audit(
+                DbAdminExecuteRequest(
+                    sql=statement.sql,
+                    row_limit=request.row_limit,
+                    reason=request.reason or "db-admin-chat",
+                ),
+                result,
+                source="db_admin_chat",
+                operation="db_admin_chat_execute",
+                confirmation_given=False,
+                duration_ms=_elapsed_ms(started),
+                extra_detail={**audit_link, "statement_index": statement.index},
+            )
+        except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
+            result.warnings.append(f"Admin SQL の監査保存に失敗しました: {exc}")
+        return DbAdminChatExecuteData(
+            mode="statement",
+            batch_id=audit_link["batch_id"],
+            statements=[
+                DbAdminChatStatementOutcome(index=statement.index, status="blocked", result=result)
+            ],
+            warnings=list(result.warnings),
+            timing=result.timing,
         )
 
     def _db_admin_chat_confirmation_pending(
@@ -18284,9 +18547,20 @@ class Nl2SqlService:
         unchanged = {
             item.index for item in plan.statements if previous_sql.get(item.index) == item.sql
         }
+        # 前の SQL の文ごとの注意（列を確かめられなかった object など）は、新しい SQL の注意に
+        # 替える。
+        previous_warnings = set(_db_admin_chat_plan_warnings(turn.plan))
         updated = turn.model_copy(
             update={
                 "plan": plan,
+                "warnings": list(
+                    dict.fromkeys(
+                        [
+                            *(item for item in turn.warnings if item not in previous_warnings),
+                            *_db_admin_chat_plan_warnings(plan),
+                        ]
+                    )
+                ),
                 "revision": turn.revision + 1,
                 "corrected": True,
                 "statement_executions": [
@@ -18310,6 +18584,12 @@ class Nl2SqlService:
         DDL は変えた object だけを再取得する。投入できなければ警告に足す。
         """
 
+        # DDL・権限の変更の後は、DB 管理チャットの列の検査の cache を捨てる（#2352）。
+        if any(
+            statement_type not in {"SELECT", *_ROLLBACKABLE_DML_STATEMENT_TYPES}
+            for statement_type in successful_types
+        ):
+            self._db_admin_object_columns.clear()
         has_unresolved_schema_side_effect = any(
             statement_type == "PLSQL" for statement_type in successful_types
         )

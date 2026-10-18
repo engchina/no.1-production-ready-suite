@@ -1306,6 +1306,10 @@ export interface DbAdminChatStatementPlan {
   requires_confirmation: boolean;
   /** 確認語（ADMIN_EXECUTE、1 つの対象を消す DROP / TRUNCATE は対象の名前）。不要なら空。 */
   confirmation_target: string;
+  /** 参照する object に無い列（#2352）。空でなければ実行できない（AI のエラー分析で直せる）。 */
+  unknown_columns: string[];
+  /** 列を確かめられなかった object など、止めない注意（#2352）。 */
+  warnings: string[];
 }
 
 /**

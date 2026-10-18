@@ -1098,6 +1098,11 @@ class DbAdminChatStatementPlan(BaseModel):
     requires_confirmation: bool = False
     # 確認語（`ADMIN_EXECUTE`、1 つの対象を消す DROP / TRUNCATE は対象の名前）。不要なら空。
     confirmation_target: str = ""
+    # 参照する object に無い列（#2352）。空でなければ `blocked_reason` に実際の列を添えて実行を
+    # 止める（AI のエラー分析で直した SQL に置き換えると分類し直す）。
+    unknown_columns: list[str] = Field(default_factory=list)
+    # 列を確かめられなかった object など、止めない注意（#2352）。
+    warnings: list[str] = Field(default_factory=list)
 
 
 class DbAdminChatPlan(BaseModel):
