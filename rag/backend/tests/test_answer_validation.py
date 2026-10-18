@@ -1060,3 +1060,15 @@ def test_mcp_validate_answer_passes_data_results_and_hides_their_sources(
             "rag_validate_answer", {**arguments, "data_results": invalid}, _token(user.user_uuid)
         )
         assert denied["isError"] is True
+
+
+def test_engine_settings_pass_the_validation_input_budget(tmp_path: Path) -> None:
+    """回答の最終の検証の入力の上限は backend の設定から rag_engine に渡る。"""
+    from app.config import Settings
+    from app.rag.answer_engine import build_engine_settings
+
+    settings = Settings(rag_answer_validation_max_input_bytes=120_000)
+    engine_settings = build_engine_settings(settings, output_dir=tmp_path)
+
+    assert engine_settings.answer_validation_max_input_bytes == 120_000
+    assert Settings().rag_answer_validation_max_input_bytes == 96_000

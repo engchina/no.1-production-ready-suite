@@ -137,7 +137,7 @@ def test_answer_validation_reads_folded_evidence_and_keeps_the_original_quote():
                         "answer_quote": "段落",
                         "answer_passage_id": passage,
                         "status": "supported",
-                        "evidence_id": payload["evidence_items"][0]["evidence_id"],
+                        "evidence_id": [i for i in payload["evidence_items"] if i.get("id") != "question:1"][0]["evidence_id"],
                         "source_id": "",
                         "evidence_quote": "",
                         "reason": "根拠に記載",
@@ -148,7 +148,7 @@ def test_answer_validation_reads_folded_evidence_and_keeps_the_original_quote():
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = validate_answer_claims(QUESTION, answer, evidence, settings=None)
-    assert "HRM:第2水曜" in seen["payload"]["evidence_items"][0]["text"]
+    assert "HRM:第2水曜" in [i for i in seen["payload"]["evidence_items"] if i.get("id") != "question:1"][0]["text"]
     assert "ＨＲＭ" not in json.dumps(seen["payload"], ensure_ascii=False)
     assert seen["payload"]["answer_text"] == answer
     assert result["status"] == "completed" and result["counts"] == {"supported": 1}

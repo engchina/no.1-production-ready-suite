@@ -408,6 +408,10 @@ def build_engine_settings(
         "RAG_ENGINE_ARTICLE_CATALOG_SCOPE_DOCUMENTS": str(
             settings.rag_article_catalog_scope_documents
         ),
+        # 回答の最終の検証の入力の上限。
+        "RAG_ENGINE_ANSWER_VALIDATION_MAX_INPUT_BYTES": str(
+            settings.rag_answer_validation_max_input_bytes
+        ),
         # 根拠の無い要求だけの再検索と予算(#1279)。
         "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL": (
             "1" if settings.rag_request_coverage_retrieval_enabled else "0"

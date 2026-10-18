@@ -1289,6 +1289,17 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "(検索の候補に出ない文書。手続の一般的な規則の文書など。#2254)。0 は候補の文書だけ。"
         ),
     )
+    rag_answer_validation_max_input_bytes: int = Field(
+        default=96_000,
+        ge=16_000,
+        le=1_000_000,
+        description=(
+            "回答の最終の検証(rag_validate_answer)でモデルに渡す入力の上限"
+            "(UTF-8 の bytes。指示・質問・回答・根拠を含む)。根拠は渡された順に収まるだけ使い、"
+            "収まらない根拠は検証に使わない(evidence_truncated)。"
+            "検証のモデルの入力の上限より小さくする。"
+        ),
+    )
     rag_request_coverage_retrieval_enabled: bool = Field(
         default=True,
         description=(
