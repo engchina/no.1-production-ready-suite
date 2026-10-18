@@ -900,11 +900,13 @@ function EvidenceCell({
             key={`${index}:${item.label}`}
             className="flex min-w-0 items-start gap-1 text-xs text-fg-muted"
           >
-            {item.found ? (
-              <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-success-fg" aria-hidden />
-            ) : (
-              <XCircle size={14} className="mt-0.5 shrink-0 text-danger-fg" aria-hidden />
-            )}
+            <span className="pr-icon-line">
+              {item.found ? (
+                <CheckCircle2 size={12} className="text-success-fg" aria-hidden />
+              ) : (
+                <XCircle size={12} className="text-danger-fg" aria-hidden />
+              )}
+            </span>
             <span className="min-w-0 break-all">
               <span className="sr-only">
                 {t(item.found ? "evaluation.case.evidenceItemFound" : "evaluation.case.evidenceItemMissing")}

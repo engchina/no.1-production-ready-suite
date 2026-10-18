@@ -242,9 +242,11 @@ const OntologyNodeCard = memo(function OntologyNodeCard({
       <Handle id="t-bottom" type="target" position={Position.Bottom} style={HIDDEN_HANDLE_STYLE} />
       <Handle id="s-left" type="source" position={Position.Left} style={HIDDEN_HANDLE_STYLE} />
       <Handle id="s-top" type="source" position={Position.Top} style={HIDDEN_HANDLE_STYLE} />
+      {/* グラフの節点の印の箱（名前と種類の 2 行のまとまりの中央。文字の 1 行目にそろえる規則の例外。#2371）。 */}
       <span
         className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
         style={{ background: "color-mix(in srgb, currentColor 12%, transparent)" }}
+        data-icon-align-skip=""
       >
         <Icon size={16} aria-hidden="true" />
       </span>

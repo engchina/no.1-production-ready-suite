@@ -644,7 +644,9 @@ function EvidenceGroupRow({ entry, labels }: { entry: EvidenceGroupEntry; labels
           data-testid="evidence-item-open"
         >
           <span className="line-clamp-3 min-w-0 flex-1 break-words">{entry.excerpt}</span>
-          <LocateFixed size={14} className="mt-1 shrink-0 text-accent-fg" aria-hidden />
+          <span className="pr-icon-line text-accent-fg">
+            <LocateFixed size={14} aria-hidden />
+          </span>
           <span className="sr-only">{labels.itemOpen(entry.index + 1)}</span>
         </button>
       ) : (

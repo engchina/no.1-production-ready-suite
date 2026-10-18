@@ -770,7 +770,7 @@ function DetailSummary({ detail }: { detail: FeedbackDetail }) {
 }
 
 function LegacyNotice() {
-  return <div data-surface-tint="warning" className="rounded-lg border border-warning-border bg-warning-subtle p-3 text-sm text-warning-fg" role="status"><div className="flex items-start gap-2"><FileText size={16} className="mt-0.5 shrink-0" aria-hidden /><div><p className="font-medium">{t("feedback.detail.legacyTitle")}</p><p className="mt-1 text-xs leading-5">{t("feedback.detail.legacyHint")}</p></div></div></div>;
+  return <div data-surface-tint="warning" className="rounded-lg border border-warning-border bg-warning-subtle p-3 text-sm text-warning-fg" role="status"><div className="flex items-start gap-2"><span className="pr-icon-line"><FileText size={16} aria-hidden /></span><div><p className="font-medium">{t("feedback.detail.legacyTitle")}</p><p className="mt-1 text-xs leading-5">{t("feedback.detail.legacyHint")}</p></div></div></div>;
 }
 
 function TextSection({ title, value, empty = "—" }: { title: string; value: string | null; empty?: string }) {

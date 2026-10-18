@@ -175,9 +175,12 @@ export function RequirementClarificationView({
 
       {showApply && !activeItem ? (
         <div className="grid min-w-0 gap-3 border-t border-border pt-4">
-          <p className="flex items-center gap-2 text-sm text-success-fg">
-            <CheckCircle2 size={16} aria-hidden="true" className="shrink-0" />
-            {t("chat.requirement.ready")}
+          <p className="flex items-start gap-2 text-sm text-success-fg">
+            {/* 折り返しても文字の 1 行目の中心にそろえる（#2371）。 */}
+            <span className="pr-icon-line">
+              <CheckCircle2 size={16} aria-hidden="true" />
+            </span>
+            <span className="min-w-0">{t("chat.requirement.ready")}</span>
           </p>
           <RequirementCard
             controller={controller}

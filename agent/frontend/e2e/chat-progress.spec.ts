@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
 
+import { findIconTextMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
+
 import { ProgressLog } from "./fixtures/chat-progress-events";
 import { expect, test, type MockApi } from "./fixtures/mock-api";
 import { expectProgressTimerMonotonic, startProgressTimerSampler } from "./fixtures/progress-timer";
@@ -161,6 +163,8 @@ for (const viewport of VIEWPORTS) {
     await expect(details.locator("dd").first()).toHaveText("rag__rag_search");
     await expect(details.getByLabel("引数")).toContainText('"query": "契約"');
     await expect(details.getByLabel("結果")).toContainText("合成の回答 A");
+    // 文字の横のアイコン（状態・開閉の印）は、文字の 1 行目の中心にそろえる（#2371）。
+    expect(await findIconTextMisalignment(page, { root: `[data-testid="chat-turn-${RUN_ID}"]` })).toEqual([]);
     await expectNoHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`progress-tool-details-${viewport.name}.png`) });
     await toggle.click();

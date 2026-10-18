@@ -54,7 +54,10 @@ export function Banner({
         className
       )}
     >
-      <Icon size={16} className="mt-0.5 shrink-0" aria-hidden />
+      {/* 状態のアイコンは文字の 1 行目の中心にそろえる（行の高さの箱。#2371）。 */}
+      <span className="pr-icon-line leading-relaxed">
+        <Icon size={16} aria-hidden />
+      </span>
       <div className="min-w-0 flex-1">
         {title ? (
           <p className="font-medium leading-relaxed">

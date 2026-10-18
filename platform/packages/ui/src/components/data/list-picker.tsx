@@ -901,36 +901,41 @@ function PickerOption({
       data-active={active || undefined}
       onClick={onSelect}
     >
-      <span
-        aria-hidden="true"
-        className={cn(
-          "flex size-4 shrink-0 items-center justify-center rounded-sm border",
-          disabled
-            ? "border-border-strong bg-surface-sunken text-fg-muted"
-            : selected
-              ? "border-accent-emphasis bg-accent-emphasis text-fg-on-accent"
-              : "border-border-control bg-surface"
-        )}
-      >
-        {selected ? <Check size={14} strokeWidth={3} /> : null}
-      </span>
-      <span className="grid min-w-0 flex-1 gap-0.5">
-        <span
-          id={labelId}
-          className={cn("block truncate text-sm leading-5", disabled ? "text-fg-muted" : "text-fg")}
-          title={item.textValue}
-        >
-          {item.label}
-        </span>
-        {item.description ? (
+      {/* 選択の印は名前の 1 行目の中心にそろえる（補足のある行でも 2 行のまとまりの中央にしない。#2371）。 */}
+      <span className="flex min-w-0 flex-1 items-start gap-3">
+        <span className="pr-icon-line text-sm leading-5">
           <span
-            id={descriptionId}
-            className="block truncate text-xs leading-4 text-fg-muted"
-            title={typeof item.description === "string" ? item.description : undefined}
+            aria-hidden="true"
+            className={cn(
+              "flex size-4 shrink-0 items-center justify-center rounded-sm border",
+              disabled
+                ? "border-border-strong bg-surface-sunken text-fg-muted"
+                : selected
+                  ? "border-accent-emphasis bg-accent-emphasis text-fg-on-accent"
+                  : "border-border-control bg-surface"
+            )}
           >
-            {item.description}
+            {selected ? <Check size={14} strokeWidth={3} /> : null}
           </span>
-        ) : null}
+        </span>
+        <span className="grid min-w-0 flex-1 gap-0.5">
+          <span
+            id={labelId}
+            className={cn("block truncate text-sm leading-5", disabled ? "text-fg-muted" : "text-fg")}
+            title={item.textValue}
+          >
+            {item.label}
+          </span>
+          {item.description ? (
+            <span
+              id={descriptionId}
+              className="block truncate text-xs leading-4 text-fg-muted"
+              title={typeof item.description === "string" ? item.description : undefined}
+            >
+              {item.description}
+            </span>
+          ) : null}
+        </span>
       </span>
       {item.meta ? (
         <span id={metaId} className="flex shrink-0 items-center gap-2">

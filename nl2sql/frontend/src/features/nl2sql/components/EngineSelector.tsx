@@ -51,8 +51,9 @@ export function EngineSelector({
             /* 排他選択の segmented control。primary は画面の主 CTA(SQL を生成して実行)専用なので
                (button spec §0.2/§6)、選択状態は枠線 + チェックアイコンで表現する。
                説明文を含むカード型の選択肢なので、操作部品の高さの段（#613）ではなく内容の高さにする。 */
+            // アイコンとチェックは名前の 1 行目の中心にそろえる（items-start + 名前と同じ文字の大きさの行の高さの箱。#2371）。
             // oxlint-disable-next-line design-system/restricted-syntax
-            <Button className="h-auto min-h-[64px] justify-start whitespace-normal py-3 text-left [&>span]:whitespace-normal"
+            <Button className="h-auto min-h-[64px] items-start justify-start whitespace-normal py-3 text-left [&>span]:whitespace-normal"
               key={option.value}
               type="button"
               variant="secondary"
@@ -61,12 +62,18 @@ export function EngineSelector({
               aria-pressed={selected}
               onClick={() => onChange(option.value)}
             >
-              <EngineIcon engine={option.value} />
+              <span className="pr-icon-line text-base">
+                <EngineIcon engine={option.value} />
+              </span>
               <span className="grid min-w-0 flex-1 gap-1 text-left">
                 <span className="text-base font-semibold">{option.label}</span>
                 <span className="text-sm font-normal leading-relaxed opacity-80">{option.description}</span>
               </span>
-              {selected ? <Check size={16} aria-hidden="true" className="ml-auto shrink-0" /> : null}
+              {selected ? (
+                <span className="pr-icon-line ml-auto text-base">
+                  <Check size={16} aria-hidden="true" />
+                </span>
+              ) : null}
             </Button>
           );
         })}

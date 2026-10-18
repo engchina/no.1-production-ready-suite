@@ -1067,7 +1067,12 @@ function SectionHeader({
   return (
     <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="flex min-w-0 items-start gap-3">
-        <span data-surface-tint="accent" className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-subtle text-accent-fg">
+        {/* 見出しと説明の 2 行のまとまりの横の印の箱（文字の 1 行目にそろえる規則の例外。#2371）。 */}
+        <span
+          data-surface-tint="accent"
+          data-icon-align-skip=""
+          className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-subtle text-accent-fg"
+        >
           <Icon className="size-5" aria-hidden="true" />
         </span>
         <div className="min-w-0">

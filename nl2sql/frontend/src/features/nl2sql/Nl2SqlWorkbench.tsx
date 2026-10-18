@@ -1344,8 +1344,11 @@ function ExecutableNl2SqlWorkbench() {
                       className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-accent-emphasis bg-accent-subtle px-3 py-2 text-sm"
                       data-testid="nl2sql-recommend-hint"
                     >
-                      <span className="flex min-w-0 items-center gap-2 text-fg">
-                        <Sparkles size={16} className="shrink-0 text-accent-fg" aria-hidden="true" />
+                      {/* 折り返しても文字の 1 行目の中心にそろえる（#2371）。 */}
+                      <span className="flex min-w-0 items-start gap-2 text-fg">
+                        <span className="pr-icon-line text-accent-fg">
+                          <Sparkles size={16} aria-hidden="true" />
+                        </span>
                         <span className="min-w-0 [overflow-wrap:anywhere]">
                           {t("nl2sql.recommend.switchHint", {
                             name: profileDisplayLabel({

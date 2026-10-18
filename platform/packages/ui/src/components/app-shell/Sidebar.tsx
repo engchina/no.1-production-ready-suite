@@ -471,7 +471,8 @@ function SidebarAccountIdentity({
 }) {
   return (
     <>
-      <UserRound className="shrink-0" size={20} aria-hidden />
+      {/* 利用者のアイコンは名前と役割の 2 行のまとまりの中央に置く（ナビの行のアイコン。文字の 1 行目にそろえる規則の例外。#2371）。 */}
+      <UserRound className="shrink-0" size={20} aria-hidden data-icon-align-skip="" />
       <div className="min-w-0 flex-1">
         <div className={cn("truncate whitespace-nowrap text-sm font-medium leading-6", active ? "text-fg-on-accent" : "text-fg")} title={name}>
           {name}

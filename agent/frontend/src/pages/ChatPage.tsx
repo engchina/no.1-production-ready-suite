@@ -1039,9 +1039,12 @@ function RunChatTurn({
         ) : null}
         {run.status === "cancelled" ? (
           // 止めた回答の状態（途中までの回答は上に残す）。色だけに頼らず、停止のアイコンを添える（#805）。
-          <p className="flex items-center gap-1.5 text-sm text-fg-muted" data-testid="chat-cancelled">
-            <Square size={14} aria-hidden="true" />
-            {t("chat.cancelled")}
+          <p className="flex items-start gap-1.5 text-sm text-fg-muted" data-testid="chat-cancelled">
+            {/* 折り返しても文字の 1 行目の中心にそろえる（#2371）。 */}
+            <span className="pr-icon-line">
+              <Square size={14} aria-hidden="true" />
+            </span>
+            <span className="min-w-0">{t("chat.cancelled")}</span>
           </p>
         ) : null}
 

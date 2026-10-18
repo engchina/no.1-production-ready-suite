@@ -103,7 +103,10 @@ describe("Disclosure", () => {
     expect(plain).not.toContain("border-border");
     expect(plain).toContain("w-fit");
     expect(plain).toContain("text-xs");
-    expect(plain).toContain('width="14"');
+    // 開閉の印は見出しの文字の大きさ（sm 12px）で、見出しの 1 行目の行の高さの箱に置く（#2371）。
+    expect(plain).toContain('width="12"');
+    expect(plain).toContain("pr-icon-line");
+    expect(plain).toContain("items-start");
   });
 
   it("非受控: クリックで開閉し、Chevron と data-state が追従する", () => {

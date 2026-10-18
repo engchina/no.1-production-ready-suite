@@ -96,7 +96,7 @@ describe("DatabaseSettingsPage", () => {
     // サポートするリージョンの保存値では案内を出さない（#660）。
     expect(html).not.toContain("はサポートしていません");
     // Wallet の状態は色の文字ではなく StatusBadge（アイコン付き）で出す（#722）。
-    expect(html).toMatch(/Wallet状態:<\/span><span data-status-variant="success"[^>]*><svg[\s\S]*?<\/svg>設定済み<\/span>/);
+    expect(html).toMatch(/Wallet状態:<\/span><span data-status-variant="success"[^>]*><span class="pr-icon-line"><svg[\s\S]*?<\/svg><\/span>設定済み<\/span>/);
   });
 
   it("ADB のリージョンの保存値が候補に無い us-chicago-1 のときは、値をそのまま出して選び直しを案内する（#660）", () => {

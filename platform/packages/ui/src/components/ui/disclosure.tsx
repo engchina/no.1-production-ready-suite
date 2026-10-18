@@ -10,6 +10,7 @@ import {
 
 import { cn } from "../../lib/utils";
 import { DisclosureChevron } from "./disclosure-chevron";
+import { TEXT_ICON_SIZE } from "./text-icon";
 
 export type DisclosureVariant = "card" | "plain";
 export type DisclosureSurface = "surface" | "sunken";
@@ -104,7 +105,8 @@ export function Disclosure({
   const open = controlled ? openProp : openState;
   const card = variant === "card";
   const toned = card && tone !== "neutral";
-  const iconSize = size === "sm" ? 14 : 16;
+  // アイコン（先頭のアイコン・開閉の印）は見出しの文字の大きさにそろえる（sm 12px / md 14px。#2371）。
+  const iconSize = TEXT_ICON_SIZE[size === "sm" ? "xs" : "sm"];
 
   function setOpen(next: boolean) {
     if (!controlled) setOpenState(next);
@@ -146,24 +148,28 @@ export function Disclosure({
         {...summaryProps}
         onClick={handleSummaryClick}
         className={cn(
-          "cursor-pointer list-none items-center transition-colors duration-150 motion-reduce:transition-none [&::-webkit-details-marker]:hidden",
+          // アイコンは見出しの 1 行目の中心にそろえる（items-start + 行の高さの箱。折り返した見出し・補足のある見出しでも
+          // 1 行目に合わせる）。1 行の見出しは、行の高さを引いた残りを上下の余白に分けて最小の高さの中央に置く（#2371）。
+          "cursor-pointer list-none items-start transition-colors duration-150 motion-reduce:transition-none [&::-webkit-details-marker]:hidden",
           // 状態色の面では灰色の hover を重ねず、文字色（状態色）を薄く重ねる。
           toned ? "hover:bg-current/5" : "text-fg hover:bg-surface-hover",
           size === "sm" ? "text-xs" : "text-sm",
           card
             ? [
-                "flex min-h-[var(--button-height-lg)] gap-2 px-3 py-2 font-semibold",
+                "flex min-h-[var(--button-height-lg)] gap-2 px-3 py-[max(calc((var(--button-height-lg)-1lh)/2),0.5rem)] font-semibold",
                 // 枠の内側に描く（枠線とフォーカスの輪郭を重ねない）。角は枠に合わせる。
                 "rounded-md focus-visible:-outline-offset-2",
                 open && "rounded-b-none",
               ]
-            : "-mx-1 flex w-fit max-w-full min-h-[var(--button-height-sm)] gap-1.5 rounded-sm px-1 font-medium",
+            : "-mx-1 flex w-fit max-w-full min-h-[var(--button-height-sm)] gap-1.5 rounded-sm px-1 py-[max(calc((var(--button-height-sm)-1lh)/2),0px)] font-medium",
           summaryClassName,
           summaryProps?.className
         )}
       >
         {Icon ? (
-          <Icon size={iconSize} className={cn("shrink-0", !toned && "text-fg-muted")} aria-hidden />
+          <span className={cn("pr-icon-line", !toned && "text-fg-muted")}>
+            <Icon size={iconSize} aria-hidden />
+          </span>
         ) : null}
         <span className={cn("min-w-0 break-words", card && "flex-1")}>
           {summary}
@@ -173,8 +179,10 @@ export function Disclosure({
             </span>
           ) : null}
         </span>
-        {meta}
-        <DisclosureChevron expanded={open} size={iconSize} className={toned ? undefined : "text-fg-muted"} />
+        {meta ? <span className="pr-icon-line">{meta}</span> : null}
+        <span className={cn("pr-icon-line", !toned && "text-fg-muted")}>
+          <DisclosureChevron expanded={open} size={iconSize} />
+        </span>
       </summary>
       <div
         className={cn(

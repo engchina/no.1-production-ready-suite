@@ -7,6 +7,7 @@ import type { ChatProgressStepStatus } from "../feedback/chat-progress";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Disclosure } from "../ui/disclosure";
 import { DisclosureChevron } from "../ui/disclosure-chevron";
+import { TEXT_ICON_SIZE } from "../ui/text-icon";
 import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
 import { formatRunDateTime, formatRunDuration, formatRunTokens } from "./run-history";
@@ -442,10 +443,11 @@ function stepIndent(level: number | undefined): string {
 /** 段の行の字下げ（`level`。3 段で止める）。`RunTimeline` の外で同じ形の行を描く部品（チャットの実行中の段）が使う。 */
 export const runTimelineStepIndent = stepIndent;
 
-function StepIcon({ status }: { status: RunTimelineStepStatus }) {
-  if (status === "running") return <Spinner size={14} className="text-accent-fg" />;
+/** 段の状態のアイコン。大きさは行の文字の大きさ（`sm` 12px / `md` 14px。#2371）。 */
+function StepIcon({ status, size = TEXT_ICON_SIZE.sm }: { status: RunTimelineStepStatus; size?: number }) {
+  if (status === "running") return <Spinner size={size} className="text-accent-fg" />;
   const { icon: Icon, className } = STEP_ICON[status];
-  return <Icon size={14} className={cn("shrink-0", className)} aria-hidden="true" />;
+  return <Icon size={size} className={cn("shrink-0", className)} aria-hidden="true" />;
 }
 
 export interface RunTimelineBar {
@@ -508,7 +510,10 @@ function stepDurationMs(step: RunTimelineStep): number | null {
  * 24px になり、行の文字より大きく見える。印は行の 1 行目（`leading-5`）の縦の中央に置き、押せる範囲は
  * ボタンの `pr-touch-target` が保つ。
  */
-export const RUN_TIMELINE_CHEVRON_SIZE = { sm: 12, md: 14 } as const satisfies Record<"sm" | "md", number>;
+export const RUN_TIMELINE_CHEVRON_SIZE = {
+  sm: TEXT_ICON_SIZE.xs,
+  md: TEXT_ICON_SIZE.sm,
+} as const satisfies Record<"sm" | "md", number>;
 
 export interface RunTimelineProps {
   steps: readonly RunTimelineStep[];
@@ -631,8 +636,8 @@ export function RunTimeline({
                 )}
               >
                 <div className={cn("flex min-w-0 items-start gap-2 leading-5", nameText, stepIndent(level))}>
-                  <span className="flex h-5 shrink-0 items-center">
-                    <StepIcon status={step.status} />
+                  <span className="pr-icon-line">
+                    <StepIcon status={step.status} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />
                   </span>
                   {hasDetails ? (
                     <button
@@ -645,7 +650,7 @@ export function RunTimeline({
                       onClick={() => setExpanded((current) => ({ ...current, [step.id]: !current[step.id] }))}
                     >
                       {name}
-                      <span className="flex h-5 shrink-0 items-center text-fg-muted">
+                      <span className="pr-icon-line text-fg-muted">
                         <DisclosureChevron expanded={open} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />
                       </span>
                     </button>

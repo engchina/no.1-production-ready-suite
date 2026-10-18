@@ -289,7 +289,9 @@ export function ClarificationCard({
         </Heading>
         {lastRound && !confirming ? (
           <p className="flex items-start gap-1.5 text-xs leading-5 text-fg-muted" data-testid={`${testId}-last-round`}>
-            <Info size={14} aria-hidden className="mt-0.5 shrink-0" />
+            <span className="pr-icon-line">
+              <Info size={12} aria-hidden />
+            </span>
             {labels.lastRound}
           </p>
         ) : null}

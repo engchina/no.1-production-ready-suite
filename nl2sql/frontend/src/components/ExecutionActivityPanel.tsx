@@ -97,6 +97,8 @@ export function ExecutionActivityPanel({
             data-surface-tint={surfaceTintFor(statusClass)}
             className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border ${statusClass}`}
             aria-hidden="true"
+            // 見出しと説明の 2 行のまとまりの横の印の箱（文字の 1 行目にそろえる規則の例外。#2371）。
+            data-icon-align-skip=""
           >
             <ActivityIcon status={status} />
           </span>

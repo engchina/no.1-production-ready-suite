@@ -36,6 +36,7 @@
 @import "./structure/fixed-split-pane.css";
 @import "./structure/touch-target.css";
 @import "./structure/tabs.css";
+@import "./structure/icon-line.css";
 
 /* 外部ライブラリの配色を意味トークンに結び付ける（React Flow の Controls・帰属表示など）。 */
 @import "./integrations/react-flow.css";

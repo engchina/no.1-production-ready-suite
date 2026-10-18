@@ -13,6 +13,8 @@
  * - `findToolbarMisalignment`: 一覧のツールバー（`ListToolbar`）の同じ行の操作部品の高さ・縦の中心のずれ（#1933）
  * - `findToolbarFieldWidthMismatch`: 縦に積んだ（狭い）ツールバーで、検索欄と幅のそろわない絞り込みの欄（#1933）
  * - `measureSearchablePanels`: 開いた検索つきの複数選択のパネルの下部の行（1 行か・件数の折り返し・操作の組の分かれ）と位置（#2091）
+ * - `findIconTextMisalignment`: 文字の横のアイコン（lucide の svg）のうち、縦の中心が隣の文字の 1 行目の中心から
+ *   ずれたもの（px。#2371）
  *
  * 製品の spec は相対パスで import し（RAG・Agent `../../platform/packages/ui/e2e/layout-checks`、NL2SQL
  * `../../../../platform/packages/ui/e2e/layout-checks`）、結果を製品の `expect` で確かめる:
@@ -759,4 +761,117 @@ export async function measureSearchablePanels(page: EvaluatePage): Promise<Searc
     }
     return results;
   }, undefined);
+}
+
+/** 文字の横のアイコンの縦の中心のずれ（`findIconTextMisalignment`）。 */
+export interface IconTextMisalignment {
+  /** 隣の文字の先頭（20 字まで）。 */
+  text: string;
+  /** アイコンの縦の中心 − 文字の 1 行目の縦の中心（px。正はアイコンが下）。 */
+  delta: number;
+  /** アイコンの高さ（px）と文字の大きさ（px）。 */
+  iconSize: number;
+  fontSize: number;
+  /** アイコンに近い祖先の `data-testid`（無ければ要素名と class の先頭）。 */
+  where: string;
+  /** 文字の行の高さ（computed）・アイコンの親の箱の高さ・文字の字面の箱の高さ（px。原因を調べる手がかり）。 */
+  lineHeight: string;
+  box: string;
+  textBox: string;
+}
+
+export interface IconTextScanOptions {
+  /** 調べる範囲（CSS セレクタ。既定は body）。 */
+  root?: string;
+  /** 許すずれ（px。既定 1）。 */
+  tolerance?: number;
+}
+
+/**
+ * 文字の横に並ぶアイコン（lucide の `svg.lucide`）の縦の中心が、隣の文字の 1 行目の縦の中心にそろうかを確かめる（#2371）。
+ *
+ * - 対象: 見えている 8〜20px のアイコンのうち、祖先 3 段の中に同じ行（縦の範囲が重なり、横の隙間が 48px 以内）の文字が
+ *   あるもの。操作（ボタン・リンク・summary・label）の中のアイコンは同じ操作の中の文字とだけ比べる（アイコンだけの
+ *   ボタンの隣の文字とは比べない）。`Spinner`（`.pr-spinner`）・`[data-icon-align-skip]` の中・読み上げだけの文字は除く。
+ * - 文字の中心は、最初の文字の字面の箱（Range の矩形）の中心。複数行に折り返した文字は 1 行目で比べる。
+ * - 規則: アイコンの縦の中心は文字の 1 行目の中心にそろえる（README §3「文字の横のアイコン」）。ずれが `tolerance` を
+ *   超えたものを返す。
+ */
+export async function findIconTextMisalignment(
+  page: EvaluatePage,
+  options: IconTextScanOptions = {}
+): Promise<IconTextMisalignment[]> {
+  return page.evaluate(
+    ({ root, tolerance }) => {
+      const scope = document.querySelector(root) ?? document.body;
+      const results: Array<{
+        text: string;
+        delta: number;
+        iconSize: number;
+        fontSize: number;
+        where: string;
+        lineHeight: string;
+        box: string;
+        textBox: string;
+      }> = [];
+      const whereOf = (element: Element): string => {
+        const tagged = element.closest("[data-testid]");
+        const host = element.parentElement ?? element;
+        const own = `${host.tagName.toLowerCase()}.${String(host.getAttribute("class") ?? "").split(/\s+/).slice(0, 3).join(".")}`;
+        return tagged ? `${tagged.getAttribute("data-testid")} > ${own}` : own;
+      };
+      const firstCharRect = (node: Text): DOMRect | null => {
+        const value = node.textContent ?? "";
+        const start = value.search(/\S/);
+        if (start < 0) return null;
+        const range = document.createRange();
+        range.setStart(node, start);
+        range.setEnd(node, start + 1);
+        const rect = range.getClientRects()[0];
+        return rect && rect.width > 0 && rect.height > 0 ? rect : null;
+      };
+      for (const svg of Array.from(scope.querySelectorAll<SVGElement>("svg.lucide"))) {
+        if (svg.closest(".pr-spinner, [data-icon-align-skip]") || svg.hasAttribute("data-icon-align-skip")) continue;
+        const icon = svg.getBoundingClientRect();
+        const style = getComputedStyle(svg);
+        if (icon.width < 8 || icon.height < 8 || icon.height > 20 || style.visibility === "hidden") continue;
+        const control = svg.closest("button, a, [role=button], summary, label");
+        let match: { node: Text; rect: DOMRect } | null = null;
+        let host: Element | null = svg.parentElement;
+        for (let depth = 0; host && depth < 3 && !match; depth += 1, host = host.parentElement) {
+          const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const parent = node.parentElement;
+            if (!parent || parent.closest("svg")) continue;
+            // 読み上げだけの文字（sr-only）と、アイコンだけの操作（ボタン・リンク）の外の文字は比べない。
+            if (parent.getBoundingClientRect().width <= 1) continue;
+            if (control && !control.contains(parent)) continue;
+            const rect = firstCharRect(node as Text);
+            if (!rect) continue;
+            const overlaps = rect.bottom > icon.top && rect.top < icon.bottom;
+            const gap = Math.max(rect.left - icon.right, icon.left - rect.right, 0);
+            if (overlaps && gap <= 48) {
+              match = { node: node as Text, rect };
+              break;
+            }
+          }
+        }
+        if (!match) continue;
+        const delta = icon.top + icon.height / 2 - (match.rect.top + match.rect.height / 2);
+        if (Math.abs(delta) <= tolerance) continue;
+        results.push({
+          text: (match.node.textContent ?? "").trim().slice(0, 20),
+          delta: Math.round(delta * 100) / 100,
+          iconSize: Math.round(icon.height * 10) / 10,
+          fontSize: Number.parseFloat(getComputedStyle(match.node.parentElement as Element).fontSize),
+          where: whereOf(svg),
+          lineHeight: getComputedStyle(match.node.parentElement as Element).lineHeight,
+          box: `${Math.round((svg.parentElement?.getBoundingClientRect().height ?? 0) * 10) / 10}`,
+          textBox: `${Math.round(match.rect.height * 10) / 10}`,
+        });
+      }
+      return results;
+    },
+    { root: options.root ?? "body", tolerance: options.tolerance ?? 1 }
+  );
 }
