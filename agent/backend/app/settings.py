@@ -241,6 +241,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 上限つきの並行の実行器（pr_backend_core.bounded_calls）を共有し、429 を受けたら全体で待って
     # 並行の数を下げる（最小 1）。結果はケースの順のまま。1 は 1 件ずつ（#2004 より前と同じ）。
     agent_evaluation_concurrency: int = Field(default=2, ge=1, le=8)
+    # 業務 Agent の版の履歴に残す版の数（#2356）。新しい版を公開したとき、公開日時の新しい順に
+    # 超えた版を消す（公開中の版は古くても残す。版の番号は振り直さない）。
+    agent_max_published_versions: int = Field(default=5, ge=1, le=100)
     # 回答の最終の検証（#1246。#1277 で既定 on）。on のとき、RAG の根拠を使った Run の回答を、
     # 保存する前に Control Plane が根拠を返した RAG の接続ごとに MCP rag_validate_answer で検証する
     # （RAG がモデルを 1 回呼ぶため、接続ごとに 10〜20 秒増える）。根拠で確かめられない段落は回答に

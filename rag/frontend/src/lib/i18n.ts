@@ -4491,11 +4491,13 @@ export const ja = {
   // 履歴
   "supportGuides.history.title": "公開の履歴",
   "supportGuides.history.hint": "公開した版を新しい順に並べています。前の版の内容を見て、その版に戻せます。",
+  "supportGuides.history.retention": "直近 {count} 版を保存します（公開中の版は常に残ります）。",
   "supportGuides.history.empty": "まだ公開していません",
   "supportGuides.history.aria": "公開の履歴",
   "supportGuides.history.scrollLabel": "公開の履歴（スクロールできます）",
   "supportGuides.history.revision": "版",
   "supportGuides.history.publishedAt": "公開日時",
+  "supportGuides.history.publishedBy": "公開者",
   "supportGuides.history.note": "備考",
   "supportGuides.history.actions": "操作",
   "supportGuides.history.current": "公開中",

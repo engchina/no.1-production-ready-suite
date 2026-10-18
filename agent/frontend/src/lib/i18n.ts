@@ -766,6 +766,7 @@ const agentJa = {
   "agent.version.column": "公開",
   "agent.version.title": "版の履歴",
   "agent.version.description": "公開した版です。利用者のチャット・実行は公開中の版で動き、下書きの変更は公開するまで使われません。",
+  "agent.version.retention": "直近 {count} 版を保存します（公開中の版は常に残ります）。",
   "agent.version.empty": "まだ公開していません。",
   "agent.version.number": "版",
   "agent.version.current": "公開中",

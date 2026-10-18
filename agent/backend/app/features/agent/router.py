@@ -244,6 +244,7 @@ from app.features.agent.runtime import (
     ThreadView,
     agent_unavailable_reason,
     builtin_resume_pending,
+    max_published_versions,
     reserved_run_metadata_keys,
     run_summary,
     run_thread_owner,
@@ -3332,7 +3333,11 @@ async def _agents_data(agents: list[AgentProfile]) -> AgentsData:
         }
     )
     names = await run_in_threadpool(login_display_names, publishers) if publishers else {}
-    return AgentsData(agents=agents, user_display_names=names)
+    return AgentsData(
+        agents=agents,
+        user_display_names=names,
+        max_published_versions=max_published_versions(),
+    )
 
 
 # 画面・API で作る業務 Agent の ID（URL の path に置くため `/`・空白などを断る。#1033）。

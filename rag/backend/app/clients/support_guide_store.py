@@ -3,6 +3,8 @@
 ガイドの頭（`rag_support_guides`）に下書きと楽観ロックの版（`draft_revision`）を持ち、公開した版を
 `rag_support_guide_revisions` に積む。公開・ロールバックは 1 つの transaction で版を足して頭の
 `published_revision` を切り替える（失敗したら前の公開の版のまま）。回答は公開の版だけを使う。
+同じ transaction で、公開の履歴の上限（``RAG_SUPPORT_GUIDE_MAX_PUBLISHED_REVISIONS``）を
+超えた古い版を消す（公開中の版は残す。版の番号は振り直さない。#2356）。
 """
 
 from __future__ import annotations
@@ -12,14 +14,18 @@ import uuid
 from collections.abc import Mapping
 from typing import Any, cast
 
+from pr_backend_core.version_retention import versions_to_prune
+
 from app.clients.oracle import (
     OracleClient,
     OracleConnectionProtocol,
     _execute,
+    _fetch_all,
     _fetch_one,
     _json_bind,
     _json_input_sizes,
 )
+from app.config import get_settings
 from app.rag.support_guide import content_sha256
 from app.schemas.support_guide import (
     SupportGuideContent,
@@ -367,6 +373,7 @@ class SupportGuideStore:
                 binds,
                 input_sizes=_json_input_sizes("draft_json") if rollback_from is not None else None,
             )
+            _prune_revisions(connection, guide_id, published=revision)
             return revision
 
         return int(await self._oracle._run_transaction(operation))
@@ -406,12 +413,43 @@ class SupportGuideStore:
         return _int(row["draft_revision"])
 
 
+def max_published_revisions() -> int:
+    """業務ガイドの公開の履歴に残す版の数（``RAG_SUPPORT_GUIDE_MAX_PUBLISHED_REVISIONS``。#2356）。"""
+    return max(1, int(get_settings().rag_support_guide_max_published_revisions))
+
+
+def _prune_revisions(
+    connection: OracleConnectionProtocol, guide_id: str, *, published: int
+) -> None:
+    """上限を超えた古い版を消す（公開中の版は残す。公開と同じ transaction。#2356）。
+
+    版を参照する記録（回答の検証の ``guide_revision``・ロールバックの ``rollback_from``）は
+    番号だけを持ち、版の行への FK は無いので、版を消しても残る。
+    """
+    rows = _fetch_all(
+        connection,
+        f"SELECT revision FROM {REVISIONS_TABLE} WHERE guide_id = :guide_id",
+        {"guide_id": guide_id},
+    )
+    for revision in versions_to_prune(
+        (_int(row["revision"]) for row in rows),
+        keep=(published,),
+        limit=max_published_revisions(),
+    ):
+        _execute(
+            connection,
+            f"DELETE FROM {REVISIONS_TABLE} WHERE guide_id = :guide_id AND revision = :revision",
+            {"guide_id": guide_id, "revision": revision},
+        )
+
+
 __all__ = [
     "GUIDES_TABLE",
     "REVISIONS_TABLE",
     "SupportGuideConflictError",
     "SupportGuideNotFoundError",
     "SupportGuideStore",
+    "max_published_revisions",
     "oracle_support_guide_revision_schema_sql",
     "oracle_support_guide_schema_sql",
 ]

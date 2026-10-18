@@ -21,6 +21,7 @@ from app.clients.support_guide_store import (
     SupportGuideConflictError,
     SupportGuideNotFoundError,
     SupportGuideStore,
+    max_published_revisions,
 )
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.support_guide import diff_contents, has_errors, reference_issues, validate_content
@@ -134,6 +135,7 @@ async def _detail(
         draft=draft,
         published=published,
         revisions=await store.list_revisions(guide_id),
+        max_published_revisions=max_published_revisions(),
         issues=validate_content(draft),
     )
 

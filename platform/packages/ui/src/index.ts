@@ -523,6 +523,11 @@ export {
 } from "./components/data/page-size-select";
 export { PagedDataTable, type PagedDataTableProps } from "./components/data/paged-data-table";
 export {
+  publishedVersionColumns,
+  type PublishedVersionColumnLabels,
+  type PublishedVersionColumnsOptions,
+} from "./components/data/published-version-columns";
+export {
   ResultTable,
   ResultCell,
   RESULT_PAGE_SIZES,

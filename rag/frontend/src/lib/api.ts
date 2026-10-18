@@ -4241,6 +4241,8 @@ export interface SupportGuideDetail extends SupportGuideSummary {
   draft: SupportGuideContent;
   published: SupportGuideContent | null;
   revisions: SupportGuideRevisionSummary[];
+  /** 公開の履歴に残す版の数（RAG_SUPPORT_GUIDE_MAX_PUBLISHED_REVISIONS。#2356）。 */
+  max_published_revisions: number;
   issues: SupportGuideIssue[];
 }
 
