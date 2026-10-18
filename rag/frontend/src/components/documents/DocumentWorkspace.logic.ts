@@ -456,6 +456,7 @@ function pipelineVisionMessage(progress: IngestionJobProgress): string | null {
 
 const CALL_STAGE_LABELS: Record<IngestionCallProgress["stage"], I18nKey> = {
   vision: "flow.stages.api.stage.vision",
+  heading_levels: "flow.stages.api.stage.headingLevels",
   field_extraction: "flow.stages.api.stage.fieldExtraction",
   navigation_summary: "flow.stages.api.stage.navigationSummary",
   raptor_summary: "flow.stages.api.stage.raptorSummary",

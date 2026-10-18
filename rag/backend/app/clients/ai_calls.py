@@ -30,6 +30,7 @@ from pr_backend_core.bounded_calls import (
 
 AiCallStage = Literal[
     "vision",
+    "heading_levels",
     "field_extraction",
     "navigation_summary",
     "raptor_summary",
@@ -40,6 +41,7 @@ AiCallStage = Literal[
 
 STAGE_LABELS: dict[str, str] = {
     "vision": "図・表の説明（Vision）",
+    "heading_levels": "見出しの階層の推定",
     "field_extraction": "メタデータ／項目抽出",
     "navigation_summary": "ナビゲーション要約",
     "raptor_summary": "RAPTOR 要約",

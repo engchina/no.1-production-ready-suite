@@ -80,6 +80,8 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "parser_xml_tree_json_enabled": "rag_parser_xml_tree_json_enabled",
     # 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく効く(#497)。
     "vision_enabled": "rag_vision_enabled",
+    # 見出しの階層の推定(#2277)。原本全体の整理の後に抽出結果の見出しの階層を変える。
+    "heading_level_inference_enabled": "rag_heading_level_inference_enabled",
     "chunking_strategy": "rag_chunking_strategy",
     "chunk_size": "rag_chunk_size",
     "chunk_overlap": "rag_chunk_overlap",
@@ -250,6 +252,7 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     entity_index_enabled: bool | None = None
     entity_name_columns: list[EntityColumnName] | None = Field(default=None, max_length=20)
     entity_attribute_columns: list[EntityColumnName] | None = Field(default=None, max_length=40)
+    heading_level_inference_enabled: bool | None = None
     field_extraction_enabled: bool | None = None
     navigation_summary_enabled: bool | None = None
     auto_parse_after_preprocess_enabled: bool | None = None

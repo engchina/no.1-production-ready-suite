@@ -230,6 +230,8 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "parser_xml_tree_json_enabled",
         # Vision は解析の後の共通の段で、解析結果(図の要素の本文)を変える(#497)。
         "vision_enabled",
+        # 見出しの階層の推定(#2277)も解析結果(見出しの階層)を変える。
+        "heading_level_inference_enabled",
     ),
     "chunking_strategy": (
         "chunking_strategy",

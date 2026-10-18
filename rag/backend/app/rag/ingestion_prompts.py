@@ -6,6 +6,16 @@
 
 from __future__ import annotations
 
+# 見出しの階層の推定(#2277)。続けて見出しの JSON(``[{"i": 番号, "text": 見出し}]``)を渡す。
+HEADING_LEVEL_PROMPT = (
+    "次の JSON は、1 つの文書の見出しを読み順に並べたものです"
+    "(i は見出しの番号、text は見出しの文字列)。"
+    "文書の章・節の構成として自然になるように、各見出しの階層を 1(最上位)から 6(最も深い)の整数で"
+    "決めてください。"
+    '{"levels": [{"i": 見出しの番号, "level": 階層}]} の JSON だけを出力し、すべての見出しを'
+    "1 回ずつ含めてください。見出しを足したり省いたり、文字列を書き換えたりしないでください。"
+)
+
 # 項目抽出(メタデータ/項目抽出)。末尾に「抽出する field 定義: …」を足して渡す。
 FIELD_EXTRACTION_PROMPT = (
     "次の文書から、指定された field を抽出してください。"
@@ -26,6 +36,7 @@ RAPTOR_SUMMARY_PROMPT = "次のテキスト群の要点を簡潔な日本語で�
 
 __all__ = [
     "FIELD_EXTRACTION_PROMPT",
+    "HEADING_LEVEL_PROMPT",
     "NAVIGATION_SUMMARY_PROMPT",
     "RAPTOR_SUMMARY_PROMPT",
     "RAPTOR_SUMMARY_SYSTEM_PROMPT",

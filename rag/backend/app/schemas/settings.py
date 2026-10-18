@@ -406,6 +406,7 @@ class ParserAdapterSettingsData(BaseModel):
     # 「解析後の処理」の全体の既定（#528）。文書のレシピで上書きしないときに使う。
     # 保存先は parser-settings.json ではなく RAG の backend/.env（RAG_VISION_ENABLED など）。
     vision_enabled: bool = False
+    heading_level_inference_enabled: bool = False
     field_extraction_enabled: bool = False
     navigation_summary_enabled: bool = False
     # 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。#2002）。
@@ -416,6 +417,7 @@ class ParserAdapterSettingsData(BaseModel):
 # 「解析後の処理」の項目（#528）。parser の選択（parser-settings.json）とは保存先が違う。
 POST_PARSE_SETTING_FIELDS = (
     "vision_enabled",
+    "heading_level_inference_enabled",
     "field_extraction_enabled",
     "navigation_summary_enabled",
     "vision_concurrency",
@@ -438,6 +440,7 @@ class ParserAdapterSettingsUpdate(BaseModel):
     xml_tree_json_enabled: bool | None = None
     connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=2)
     vision_enabled: bool | None = None
+    heading_level_inference_enabled: bool | None = None
     field_extraction_enabled: bool | None = None
     navigation_summary_enabled: bool | None = None
     vision_concurrency: int | None = Field(default=None, ge=1, le=16)
