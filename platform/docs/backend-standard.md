@@ -122,11 +122,13 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
   （`prak_…`）の呼び出しは claim を持たないので、外部の MCP クライアントは品質評価と偽れない（偽れても変わるのは
   一覧の種類だけ）。RAG は claim を読まない（MCP・品質評価の実行は RAG の実行履歴に残さない）。local の認証
   （token を検証しない）は claim が無く、すべて「MCP」になる。
-- 呼び先がブラウザで開く短命の URL を返すとき（RAG の図の根拠。#1311）は、呼び出し元の画面の操作だけに限るため claim の
-  `purpose`（例: `figure_url`）を確かめ、Run の中でモデルが呼んだ token（`purpose` 無し）では作らない。URL のトークンは
-  サービストークンの鍵そのものでは署名せず、`PLATFORM_SERVICE_TOKEN_SECRET` から HKDF-SHA256 で用途の印を変えて導いた鍵で
-  署名し、利用者・対象・版・期限（5 分以内）に縛る。トークンは URL の path に置いてアクセスログで伏せ、読むたびに
-  利用者の今の権限と対象の版を確かめ直す（RAG の `app/rag/figure_url.py`・`app/api/routes/figures.py`）。
+- 呼び先がブラウザで開く短命の URL を返すとき（RAG の図の根拠 #1311・根拠の原文のプレビュー #2389）は、呼び出し元の画面の
+  操作だけに限るため claim の `purpose`（`figure_url` / `source_preview`）を確かめ、Run の中でモデルが呼んだ token（`purpose`
+  無し）では作らない。URL のトークンはサービストークンの鍵そのものでは署名せず、`PLATFORM_SERVICE_TOKEN_SECRET` から
+  HKDF-SHA256 で用途の印を変えて導いた鍵で署名し、利用者・対象・版・期限（5 分以内）に縛る（用途ごとに鍵が違うので、別の
+  用途のトークンとしては使えない）。トークンは URL の path に置いてアクセスログで伏せ、読むたびに利用者の今の権限と対象の版を
+  確かめ直す（RAG の `app/rag/signed_url.py`・`figure_url.py`・`source_preview.py`、`app/api/routes/figures.py`・
+  `source_previews.py`）。
 - 呼び出し元の再試行と timeout（#854。Agent の `McpSession`）: 送信前の失敗（接続できない・接続の timeout）と 429 / 503 はどのメッセージも、502 / 504 は状態を変えない手順（`initialize`・`tools/list`）と読み取り専用（`annotations.readOnlyHint=true`）のツールの `tools/call` だけ、上限付きの指数 backoff + jitter（`Retry-After` に従う）で再試行する。書き込みのツールは呼び先に届いた可能性がある失敗（読み取りの timeout・500 / 502 / 504）では再送しない。1 回のツールの呼び出し全体は接続の timeout に収める。呼び先は、副作用のあるツールに `readOnlyHint` を付けない・429 / 503 は処理を始める前にだけ返す（`Retry-After` を付けてよい）こと。
 - ツールの契約（名前・`inputSchema`・`outputSchema`（`McpTool.output_model`。#250）・`annotations`）の正本は `platform/contracts/mcp/<製品>-tools.json`（#248。Agent の外部向けのツールは `agent-tools.json`。#1874）。3 製品の `tests/test_mcp_contract.py` が実装と一致を、Agent の `tests/test_product_mcp.py` が組み込み Skill の使うツールが契約にあることと、契約どおりの fake の MCP（`tests/mcp_support.py`）の引数が契約（必須の項目・項目の名前）と合うことを確かめる。ツールを変えたら呼び先の製品で `UPDATE_MCP_CONTRACT=1 uv run pytest tests/test_mcp_contract.py` で契約を書き直し、Agent のテストも通す。
 

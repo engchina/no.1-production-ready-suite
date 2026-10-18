@@ -29,8 +29,8 @@ import {
   type PreviewHighlight,
   highlightPages,
   highlightRectsForPage,
-} from "@/lib/bbox";
-import { t } from "@/lib/i18n";
+} from "../../lib/bbox";
+import { MEASURED_SIZE_TOLERANCE_PX, stabilizeMeasuredBox } from "../../lib/measured-size";
 import {
   type PreviewFitMode,
   PREVIEW_MAX_ZOOM,
@@ -43,14 +43,11 @@ import {
   previewKeyAction,
   previewLayout,
   steppedZoom,
-} from "@/lib/preview-viewer";
-import {
-  Button,
-  MEASURED_SIZE_TOLERANCE_PX,
-  Skeleton,
-  cn,
-  stabilizeMeasuredBox,
-} from "@production-ready/ui";
+} from "../../lib/preview-viewer";
+import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
+import { Skeleton } from "../ui/skeleton";
+import { DEFAULT_DOCUMENT_PREVIEW_LABELS, type DocumentPreviewLabels } from "./labels";
 
 export type PreviewViewerPage = {
   pageNumber: number;
@@ -94,6 +91,7 @@ const PAGE_SIZED_VIEWPORT_CLASS =
 
 /**
  * 文書のプレビュー（ページ画像）に、回転・拡大縮小・フィット・パン・ページ送りと bbox の強調を付ける（#349）。
+ * RAG の文書の詳細・根拠のパネルと Agent の根拠のパネルで同じ部品（#2389）。ページの画像の URL は製品が渡す。
  *
  * - 画像と強調を同じ層に置いて一緒に回転・拡大するので、強調は常に対応する位置に重なる。
  * - 高さは `sizing` で決める（`fill` は親に合わせ、`page` は 1 ページ全体が入る高さ。#559）。
@@ -108,6 +106,7 @@ export function PreviewViewer({
   kind,
   sizing = "fill",
   className,
+  labels = DEFAULT_DOCUMENT_PREVIEW_LABELS,
 }: {
   pages: PreviewViewerPage[];
   fileName: string;
@@ -117,6 +116,7 @@ export function PreviewViewer({
   kind: "image" | "pdf";
   sizing?: PreviewSizing;
   className?: string;
+  labels?: DocumentPreviewLabels;
 }) {
   const hintId = useId();
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -437,7 +437,7 @@ export function PreviewViewer({
     >
       <div
         role="toolbar"
-        aria-label={t("preview.viewer.toolbar")}
+        aria-label={labels.toolbar}
         aria-controls={`${hintId}-viewport`}
         // 狭い画面でも 1 行に保ち（ビューアの高さを削らない）、入り切らない分はツールバーの中で横にスクロールする。
         className="flex shrink-0 flex-nowrap items-center gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-1"
@@ -450,20 +450,17 @@ export function PreviewViewer({
               variant="ghost"
               iconOnly
               icon={ChevronLeft}
-              aria-label={t("preview.viewer.previousPage")}
-              tooltip={`${t("preview.viewer.previousPage")} (PageUp)`}
+              aria-label={labels.previousPage}
+              tooltip={`${labels.previousPage} (PageUp)`}
               disabled={pageIndex <= 0}
               onClick={() => goToPage(pageNumbers[pageIndex - 1] ?? pageNumber)}
             />
             <span
               className="tnum min-w-12 text-center text-xs text-fg-muted"
-              aria-label={t("preview.viewer.pageStatusLabel", {
-                page: pageNumber,
-                total: pageNumbers.length,
-              })}
+              aria-label={labels.pageStatusLabel(pageNumber, pageNumbers.length)}
               data-testid="preview-page-status"
             >
-              {t("preview.viewer.pageStatus", { page: pageNumber, total: pageNumbers.length })}
+              {labels.pageStatus(pageNumber, pageNumbers.length)}
             </span>
             <Button
               type="button"
@@ -471,8 +468,8 @@ export function PreviewViewer({
               variant="ghost"
               iconOnly
               icon={ChevronRight}
-              aria-label={t("preview.viewer.nextPage")}
-              tooltip={`${t("preview.viewer.nextPage")} (PageDown)`}
+              aria-label={labels.nextPage}
+              tooltip={`${labels.nextPage} (PageDown)`}
               disabled={pageIndex >= pageNumbers.length - 1}
               onClick={() => goToPage(pageNumbers[pageIndex + 1] ?? pageNumber)}
             />
@@ -486,17 +483,17 @@ export function PreviewViewer({
             variant="ghost"
             iconOnly
             icon={ZoomOut}
-            aria-label={t("preview.viewer.zoomOut")}
-            tooltip={`${t("preview.viewer.zoomOut")} (-)`}
+            aria-label={labels.zoomOut}
+            tooltip={`${labels.zoomOut} (-)`}
             disabled={!canZoomOut}
             onClick={() => zoomStep("out")}
           />
           <output
             className="tnum min-w-12 text-center text-xs text-fg-muted"
-            aria-label={t("preview.viewer.zoomStatusLabel", { percent: zoomLabel })}
+            aria-label={labels.zoomStatusLabel(zoomLabel)}
             data-testid="preview-zoom-status"
           >
-            {t("preview.viewer.zoomStatus", { percent: zoomLabel })}
+            {labels.zoomStatus(zoomLabel)}
           </output>
           <Button
             type="button"
@@ -504,8 +501,8 @@ export function PreviewViewer({
             variant="ghost"
             iconOnly
             icon={ZoomIn}
-            aria-label={t("preview.viewer.zoomIn")}
-            tooltip={`${t("preview.viewer.zoomIn")} (+)`}
+            aria-label={labels.zoomIn}
+            tooltip={`${labels.zoomIn} (+)`}
             disabled={!canZoomIn}
             onClick={() => zoomStep("in")}
           />
@@ -518,8 +515,8 @@ export function PreviewViewer({
             variant="ghost"
             iconOnly
             icon={MoveHorizontal}
-            aria-label={t("preview.viewer.fitWidth")}
-            tooltip={`${t("preview.viewer.fitWidth")} (W)`}
+            aria-label={labels.fitWidth}
+            tooltip={`${labels.fitWidth} (W)`}
             pressed={mode === "fit-width"}
             onClick={() => fit("fit-width")}
           />
@@ -529,8 +526,8 @@ export function PreviewViewer({
             variant="ghost"
             iconOnly
             icon={Maximize}
-            aria-label={t("preview.viewer.fitPage")}
-            tooltip={`${t("preview.viewer.fitPage")} (0)`}
+            aria-label={labels.fitPage}
+            tooltip={`${labels.fitPage} (0)`}
             pressed={mode === "fit-page"}
             onClick={() => fit("fit-page")}
           />
@@ -540,8 +537,8 @@ export function PreviewViewer({
             variant="ghost"
             iconOnly
             icon={RotateCcw}
-            aria-label={t("preview.viewer.rotateLeft")}
-            tooltip={`${t("preview.viewer.rotateLeft")} (Shift+R)`}
+            aria-label={labels.rotateLeft}
+            tooltip={`${labels.rotateLeft} (Shift+R)`}
             onClick={() => rotate(-90)}
           />
           <Button
@@ -550,8 +547,8 @@ export function PreviewViewer({
             variant="ghost"
             iconOnly
             icon={RotateCw}
-            aria-label={t("preview.viewer.rotateRight")}
-            tooltip={`${t("preview.viewer.rotateRight")} (R)`}
+            aria-label={labels.rotateRight}
+            tooltip={`${labels.rotateRight} (R)`}
             onClick={() => rotate(90)}
           />
           {highlights.length > 0 ? (
@@ -561,8 +558,8 @@ export function PreviewViewer({
               variant="ghost"
               iconOnly
               icon={LocateFixed}
-              aria-label={t("preview.viewer.focusHighlight")}
-              tooltip={`${t("preview.viewer.focusHighlight")} (H)`}
+              aria-label={labels.focusHighlight}
+              tooltip={`${labels.focusHighlight} (H)`}
               disabled={rects.length === 0}
               onClick={() => scrollToHighlight({ revealInPage: true })}
             />
@@ -582,11 +579,11 @@ export function PreviewViewer({
             className="inline-flex min-h-[var(--button-height-sm)] items-center"
           >
             {rects.length > 0
-              ? t("preview.viewer.highlightStatus", { page: pageNumber, count: rects.length })
-              : t("preview.viewer.highlightElsewhere")}
+              ? labels.highlightStatus(pageNumber, rects.length)
+              : labels.highlightElsewhere}
           </span>
           {otherHighlightPages.length > 1 || (otherHighlightPages.length === 1 && rects.length === 0) ? (
-            <span className="flex flex-wrap items-center gap-1" aria-label={t("preview.viewer.highlightPages")}>
+            <span className="flex flex-wrap items-center gap-1" aria-label={labels.highlightPages}>
               {otherHighlightPages.map((item) => (
                 <Button
                   key={item}
@@ -594,10 +591,10 @@ export function PreviewViewer({
                   size="sm"
                   variant="ghost"
                   pressed={item === pageNumber}
-                  aria-label={t("preview.viewer.highlightPageLabel", { page: item })}
+                  aria-label={labels.highlightPageLabel(item)}
                   onClick={() => goToPage(item)}
                 >
-                  {t("preview.viewer.highlightPage", { page: item })}
+                  {labels.highlightPage(item)}
                 </Button>
               ))}
             </span>
@@ -609,7 +606,7 @@ export function PreviewViewer({
         id={`${hintId}-viewport`}
         role="region"
         tabIndex={0}
-        aria-label={t("preview.viewer.region", { file: fileName })}
+        aria-label={labels.region(fileName)}
         aria-describedby={hintId}
         aria-keyshortcuts="+ - 0 W R Shift+R PageUp PageDown Home End H"
         data-testid="preview-viewport"
@@ -651,13 +648,15 @@ export function PreviewViewer({
               >
                 {failed ? (
                   <p className="absolute inset-0 flex items-center justify-center p-4 text-center text-sm text-fg-muted">
-                    {t("preview.viewer.pageError")}
+                    {labels.pageError}
                   </p>
                 ) : (
                   <img
                     src={src}
                     alt={`${fileName} p.${pageNumber}`}
                     draggable={false}
+                    // 署名つきの URL（Agent の根拠のパネル。#2389）でも、Referer で画面の URL を渡さない。
+                    referrerPolicy="no-referrer"
                     className="absolute inset-0 h-full w-full select-none object-contain"
                     onLoad={(event) => {
                       const image = event.currentTarget;
@@ -703,7 +702,7 @@ export function PreviewViewer({
         </div>
       </div>
       <p id={hintId} className="sr-only">
-        {t("preview.viewer.keyboardHint")}
+        {labels.keyboardHint}
       </p>
     </div>
   );

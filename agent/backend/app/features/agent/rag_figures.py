@@ -1,9 +1,9 @@
-"""Run の RAG の図の根拠を画面で開く、短命の URL（#1311）。
+"""Run の RAG の根拠を画面で開く、短命の URL（図 #1311・原文のプレビュー #2389）。
 
-Agent の画面（ブラウザ）は RAG の Cookie を持たないため、図の根拠を開くときは Agent の backend が
-RAG の MCP の ``rag_read_source``（``include_image_url``）を呼び、RAG が作る短命・対象（利用者・
-chunk・版）に縛った署名つきの URL を受け取る。画面はその URL で図を開く（RAG が読むたびに今の
-権限・版を確かめ直す）。
+Agent の画面（ブラウザ）は RAG の Cookie を持たないため、図の根拠・根拠の原文を開くときは Agent の
+backend が RAG の MCP の ``rag_read_source``（``include_image_url`` / ``include_preview``）を呼び、
+RAG が作る短命・対象（利用者・chunk・版）に縛った署名つきの URL を受け取る。画面はその URL で図・
+原文のページを開く（RAG が読むたびに今の権限・版を確かめ直す）。
 
 - 呼ぶのは組み込みの接続 ``rag``（サービストークン）だけ。``sub`` は **画面を見ている利用者**
   （Run の利用者ではない。Run を見られる管理者が、Run の利用者の権限を借りて図を開けないように
@@ -11,13 +11,14 @@ chunk・版）に縛った署名つきの URL を受け取る。画面はその 
   URL を作らない（URL を Run の記録・モデルの文脈に残さない）。
 - 画面の操作で、Run のツール呼び出しではないので ``tool_registry.invoke`` を通さない（承認・
   ガードレール・成果物の対象ではない。URL は保存しない）。
-- 開けるのは、その Run の RAG の根拠（``rag_evidence`` の成果物）に ``image_ref`` がある図だけ。
+- 開けるのは、その Run の RAG の根拠（``rag_evidence`` の成果物）にある根拠だけ（図は ``image_ref``
+  がある根拠だけ）。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -38,10 +39,13 @@ logger = logging.getLogger(__name__)
 RAG_CONNECTION_ID = "rag"
 RAG_EVIDENCE_KIND = "rag_evidence"
 READ_SOURCE_TOOL = "rag_read_source"
-# RAG が URL を作ってよい呼び出し（画面の操作）の印（RAG の `FIGURE_URL_PURPOSE` と同じ値）。
+# RAG が URL を作ってよい呼び出し（画面の操作）の印（RAG の `FIGURE_URL_PURPOSE` /
+# `SOURCE_PREVIEW_PURPOSE` と同じ値）。
 FIGURE_URL_PURPOSE = "figure_url"
-# RAG の図の読み取りの path（`GET /api/figures/{token}`）。公開の起点に付け替えるときに確かめる。
+SOURCE_PREVIEW_PURPOSE = "source_preview"
+# RAG の図・原文のプレビューの読み取りの path。公開の起点に付け替えるときに確かめる。
 FIGURE_PATH_PREFIX = "/api/figures/"
+SOURCE_PREVIEW_PATH_PREFIX = "/api/source-previews/"
 
 NOT_IN_RUN_MESSAGE = "この実行の根拠に、その図はありません。"
 NOT_SUPPORTED_MESSAGE = "この接続の根拠の図は開けません。"
@@ -50,6 +54,21 @@ NOT_FOUND_MESSAGE = "図が見つからないか、この図を見る権限が�
 NOT_AVAILABLE_MESSAGE = "この根拠には開ける図がありません。"
 UNAVAILABLE_MESSAGE = "RAG の設定が足りないため、図を開けません。管理者に連絡してください。"
 FAILED_MESSAGE = "RAG から図を開く URL を取得できませんでした。時間をおいて再度お試しください。"
+PREVIEW_NOT_IN_RUN_MESSAGE = "この実行の根拠に、その資料はありません。"
+PREVIEW_NOT_SUPPORTED_MESSAGE = "この接続の根拠の原文は表示できません。"
+PREVIEW_NOT_FOUND_MESSAGE = "資料が見つからないか、この資料を見る権限がありません。"
+PREVIEW_STALE_MESSAGE = (
+    "資料が更新されたため、この根拠の原文は表示できません。もう一度質問してください。"
+)
+PREVIEW_FILE_MISSING_MESSAGE = (
+    "原文のファイルが保存先にありません。RAG の管理者に連絡してください。"
+)
+PREVIEW_UNAVAILABLE_MESSAGE = (
+    "RAG の設定が足りないため、原文を表示できません。管理者に連絡してください。"
+)
+PREVIEW_FAILED_MESSAGE = (
+    "RAG から原文のプレビューを取得できませんでした。時間をおいて再度お試しください。"
+)
 
 # RAG の MCP のエラー（`rag_read_source`）→ 画面へ返す status と文言。
 _TOOL_ERRORS: dict[str, tuple[int, str]] = {
@@ -59,6 +78,13 @@ _TOOL_ERRORS: dict[str, tuple[int, str]] = {
     "image_url_unavailable": (503, UNAVAILABLE_MESSAGE),
     "MCP_TOOL_FORBIDDEN": (403, NOT_FOUND_MESSAGE),
 }
+_PREVIEW_TOOL_ERRORS: dict[str, tuple[int, str]] = {
+    "source_stale": (409, PREVIEW_STALE_MESSAGE),
+    "source_not_found": (404, PREVIEW_NOT_FOUND_MESSAGE),
+    "preview_file_missing": (404, PREVIEW_FILE_MISSING_MESSAGE),
+    "preview_unavailable": (503, PREVIEW_UNAVAILABLE_MESSAGE),
+    "MCP_TOOL_FORBIDDEN": (403, PREVIEW_NOT_FOUND_MESSAGE),
+}
 
 
 class RunFigureUrlData(BaseModel):
@@ -66,6 +92,36 @@ class RunFigureUrlData(BaseModel):
 
     url: str = Field(description="図の画像の URL（RAG。期限つき）。")
     expires_at: str = Field(description="URL の期限（ISO 8601、UTC）。")
+
+
+class RunSourcePreviewPage(BaseModel):
+    """プレビューの 1 ページの表示寸法（pt）。"""
+
+    page_number: int
+    width: float
+    height: float
+
+
+class RunSourcePreviewData(BaseModel):
+    """根拠の原文のプレビュー（画面は保存しない。期限が切れる前に取り直す）。"""
+
+    kind: Literal["pdf", "image", "text", "unsupported"] = Field(
+        description="pdf=ページの画像 / image=画像 / text=本文 / unsupported=表示できない形式。"
+    )
+    file_name: str
+    pages: list[RunSourcePreviewPage] = Field(default_factory=list)
+    page_url_template: str | None = Field(
+        default=None,
+        description=(
+            "ページの画像の URL（RAG。{page} をページ番号に置き換え、query の dpi で解像度）。"
+        ),
+    )
+    content_url: str = Field(description="原文のファイルの URL（RAG。期限つき）。")
+    highlight_metadata: dict[str, Any] = Field(
+        default_factory=dict, description="強調する位置を決める根拠の metadata（頁・bbox など）。"
+    )
+    expires_at: str = Field(description="URL の期限（ISO 8601、UTC）。")
+    expires_in_seconds: int = Field(description="発行からの有効な秒数。")
 
 
 class RunFigureUrlError(Exception):
@@ -84,59 +140,169 @@ def _is_rag_evidence(artifact: Artifact) -> bool:
     )
 
 
-def run_has_figure_evidence(artifacts: list[Artifact], *, document_id: str, chunk_id: str) -> bool:
-    """Run の RAG の根拠に、その図（``image_ref`` がある根拠）があるか。"""
+def _run_evidence_items(artifacts: list[Artifact]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
     for artifact in artifacts:
         if not _is_rag_evidence(artifact):
             continue
         evidence = artifact.content.get("evidence")
-        for item in evidence if isinstance(evidence, list) else []:
-            if (
-                isinstance(item, dict)
-                and item.get("document_id") == document_id
-                and item.get("chunk_id") == chunk_id
-                and isinstance(item.get("image_ref"), dict)
-            ):
-                return True
-    return False
+        if isinstance(evidence, list):
+            items.extend(item for item in evidence if isinstance(item, dict))
+    return items
 
 
-def _browser_url(image_url: dict[str, Any]) -> str:
-    """画面が開く URL。公開の起点（AGENT_EXTERNAL_RAG_PUBLIC_URL）があれば path をそこに付ける。"""
-    path = image_url.get("path")
-    url = image_url.get("url")
+def run_has_figure_evidence(artifacts: list[Artifact], *, document_id: str, chunk_id: str) -> bool:
+    """Run の RAG の根拠に、その図（``image_ref`` がある根拠）があるか。"""
+    return any(
+        item.get("document_id") == document_id
+        and item.get("chunk_id") == chunk_id
+        and isinstance(item.get("image_ref"), dict)
+        for item in _run_evidence_items(artifacts)
+    )
+
+
+def run_has_rag_evidence(artifacts: list[Artifact], *, document_id: str, chunk_id: str) -> bool:
+    """Run の RAG の根拠に、その根拠があるか。"""
+    return any(
+        item.get("document_id") == document_id and item.get("chunk_id") == chunk_id
+        for item in _run_evidence_items(artifacts)
+    )
+
+
+def _browser_url(
+    url_info: dict[str, Any],
+    *,
+    prefix: str = FIGURE_PATH_PREFIX,
+    url_key: str = "url",
+    path_key: str = "path",
+    failed_message: str = FAILED_MESSAGE,
+) -> str:
+    """画面が開く URL。公開の起点（AGENT_EXTERNAL_RAG_PUBLIC_URL）があれば path をそこに付ける。
+
+    RAG の図・原文のプレビューの path（``prefix``）だけを許し、ほかの URL は返さない（502）。
+    """
+    path = url_info.get(path_key)
+    url = url_info.get(url_key)
     public_base = (get_settings().agent_external_rag_public_url or "").strip()
-    if public_base and isinstance(path, str) and path.startswith(FIGURE_PATH_PREFIX):
+    if public_base and isinstance(path, str) and path.startswith(prefix):
         candidate = f"{public_base.rstrip('/')}{path}"
     elif isinstance(url, str):
         candidate = url
     else:
-        raise RunFigureUrlError(502, FAILED_MESSAGE)
+        raise RunFigureUrlError(502, failed_message)
     parts = urlsplit(candidate)
     if _is_same_origin_prefix(public_base) and candidate.startswith(public_base.rstrip("/") + "/"):
         # 1 台の Compute（#1316）: 起点は同じ origin の path（例 `/rag`）。ブラウザが Agent の
-        # 画面と同じ origin で解決するので host を持たない。起点の後ろは図の path だけを許す。
-        figure_path = candidate[len(public_base.rstrip("/")) :]
+        # 画面と同じ origin で解決するので host を持たない。起点の後ろは RAG の path だけを許す。
+        rag_path = candidate[len(public_base.rstrip("/")) :]
         if (
-            not figure_path.startswith(FIGURE_PATH_PREFIX)
+            not rag_path.startswith(prefix)
             or parts.query
             or parts.fragment
             or parts.scheme
             or parts.netloc
-            or "/../" in figure_path
+            or "/../" in rag_path
         ):
-            raise RunFigureUrlError(502, FAILED_MESSAGE)
+            raise RunFigureUrlError(502, failed_message)
         return candidate
     if parts.scheme not in {"http", "https"} or not parts.netloc:
-        raise RunFigureUrlError(502, FAILED_MESSAGE)
-    if not parts.path.startswith(FIGURE_PATH_PREFIX) or parts.query or parts.fragment:
-        raise RunFigureUrlError(502, FAILED_MESSAGE)
+        raise RunFigureUrlError(502, failed_message)
+    if not parts.path.startswith(prefix) or parts.query or parts.fragment or "/../" in parts.path:
+        raise RunFigureUrlError(502, failed_message)
     return candidate
 
 
 def _is_same_origin_prefix(public_base: str) -> bool:
     """公開の起点が同じ origin の path（`/rag` など。`//host` ではない）か。"""
     return public_base.startswith("/") and not public_base.startswith("//")
+
+
+def _rag_service_client(
+    run: RunState, viewer_user_uuid: str, purpose: str
+) -> tuple[McpConnectionClient, str]:
+    """RAG の接続（画面を見ている利用者を ``sub``、画面の操作の印 ``purpose`` を入れる）。"""
+    try:
+        config = runtime_config_store.get_mcp(RAG_CONNECTION_ID)
+    except KeyError:
+        raise RunFigureUrlError(409, NOT_SUPPORTED_MESSAGE) from None
+    if config.effective_auth_mode() != "service_token":
+        raise RunFigureUrlError(409, NOT_SUPPORTED_MESSAGE)
+    trace_id = f"{purpose}_{uuid4().hex}"
+    client = McpConnectionClient(
+        config,
+        context=ToolInvocationContext(
+            trace_id=trace_id,
+            agent_id=run.agent_id,
+            run_id=run.id,
+            user_uuid=viewer_user_uuid,
+        ),
+        extra_claims={"purpose": purpose},
+    )
+    return client, trace_id
+
+
+def issue_run_source_preview(
+    run: RunState,
+    artifacts: list[Artifact],
+    *,
+    document_id: str,
+    chunk_id: str,
+    viewer_user_uuid: str,
+) -> RunSourcePreviewData:
+    """画面を見ている利用者として RAG に根拠の原文のプレビューを作らせる（同期。thread で呼ぶ）。"""
+    if not run_has_rag_evidence(artifacts, document_id=document_id, chunk_id=chunk_id):
+        raise RunFigureUrlError(404, PREVIEW_NOT_IN_RUN_MESSAGE)
+    try:
+        client, trace_id = _rag_service_client(run, viewer_user_uuid, SOURCE_PREVIEW_PURPOSE)
+    except RunFigureUrlError as exc:
+        raise RunFigureUrlError(exc.status_code, PREVIEW_NOT_SUPPORTED_MESSAGE) from None
+    try:
+        output = client.call_tool(
+            READ_SOURCE_TOOL,
+            {
+                "document_id": document_id,
+                "chunk_id": chunk_id,
+                "include_preview": True,
+                "max_chars": 1,
+            },
+            idempotent=True,
+            trace_id=trace_id,
+        )
+    except ExternalToolError as exc:
+        error_code = exc.details.get("error_code")
+        status, message = _PREVIEW_TOOL_ERRORS.get(str(error_code), (502, PREVIEW_FAILED_MESSAGE))
+        logger.warning(
+            "agent_run_source_preview_failed",
+            extra={"run_id": run.id, "error_code": error_code or exc.code},
+        )
+        raise RunFigureUrlError(status, message) from None
+    preview = output.get("preview")
+    if not isinstance(preview, dict):
+        raise RunFigureUrlError(502, PREVIEW_FAILED_MESSAGE)
+    url_options = {"prefix": SOURCE_PREVIEW_PATH_PREFIX, "failed_message": PREVIEW_FAILED_MESSAGE}
+    content_url = _browser_url(
+        preview, url_key="content_url", path_key="content_path", **url_options
+    )
+    page_url_template = (
+        _browser_url(
+            preview, url_key="page_url_template", path_key="page_path_template", **url_options
+        )
+        if preview.get("page_url_template") or preview.get("page_path_template")
+        else None
+    )
+    try:
+        data = RunSourcePreviewData.model_validate(
+            {
+                **preview,
+                "page_url_template": page_url_template,
+                "content_url": content_url,
+            }
+        )
+    except ValueError:
+        raise RunFigureUrlError(502, PREVIEW_FAILED_MESSAGE) from None
+    # URL（トークン）はログに残さない。
+    logger.info("agent_run_source_preview_issued", extra={"run_id": run.id})
+    return data
 
 
 def issue_run_figure_url(
@@ -150,23 +316,7 @@ def issue_run_figure_url(
     """画面を見ている利用者として RAG に図の URL を作らせる（同期。thread で呼ぶ）。"""
     if not run_has_figure_evidence(artifacts, document_id=document_id, chunk_id=chunk_id):
         raise RunFigureUrlError(404, NOT_IN_RUN_MESSAGE)
-    try:
-        config = runtime_config_store.get_mcp(RAG_CONNECTION_ID)
-    except KeyError:
-        raise RunFigureUrlError(409, NOT_SUPPORTED_MESSAGE) from None
-    if config.effective_auth_mode() != "service_token":
-        raise RunFigureUrlError(409, NOT_SUPPORTED_MESSAGE)
-    trace_id = f"figure_{uuid4().hex}"
-    client = McpConnectionClient(
-        config,
-        context=ToolInvocationContext(
-            trace_id=trace_id,
-            agent_id=run.agent_id,
-            run_id=run.id,
-            user_uuid=viewer_user_uuid,
-        ),
-        extra_claims={"purpose": FIGURE_URL_PURPOSE},
-    )
+    client, trace_id = _rag_service_client(run, viewer_user_uuid, FIGURE_URL_PURPOSE)
     try:
         output = client.call_tool(
             READ_SOURCE_TOOL,

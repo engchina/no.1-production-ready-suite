@@ -1491,7 +1491,7 @@ async def document_recipe_content(
         if row.get("preprocess_artifact")
         else None
     )
-    return await _document_content_response(
+    return await document_content_response(
         detail,
         variant=variant,
         disposition=disposition,
@@ -5369,7 +5369,7 @@ async def document_content(
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    return await _document_content_response(
+    return await document_content_response(
         detail,
         variant=variant,
         disposition=disposition,
@@ -5417,7 +5417,7 @@ async def _document_preview_pages_response(
     variant: Literal["original", "prepared"],
     preprocess_artifact: DocumentPreprocessArtifact | None,
 ) -> ApiResponse[DocumentPreviewPages]:
-    data, _file_name, _content_type = await _load_document_content(
+    data, _file_name, _content_type = await load_document_content(
         detail, variant=variant, preprocess_artifact=preprocess_artifact
     )
     try:
@@ -5443,7 +5443,7 @@ async def _document_preview_page_image_response(
     dpi: int,
     preprocess_artifact: DocumentPreprocessArtifact | None,
 ) -> Response:
-    data, _file_name, _content_type = await _load_document_content(
+    data, _file_name, _content_type = await load_document_content(
         detail, variant=variant, preprocess_artifact=preprocess_artifact
     )
     try:
@@ -5495,14 +5495,14 @@ async def document_crop(
     )
 
 
-async def _document_content_response(
+async def document_content_response(
     detail: DocumentDetail,
     *,
     variant: Literal["original", "prepared"],
     disposition: Literal["inline", "attachment"],
     preprocess_artifact: DocumentPreprocessArtifact | None,
 ) -> Response:
-    data, file_name, content_type = await _load_document_content(
+    data, file_name, content_type = await load_document_content(
         detail, variant=variant, preprocess_artifact=preprocess_artifact
     )
     media_type = _content_type_header(content_type, data)
@@ -5520,7 +5520,7 @@ async def _document_content_response(
     return Response(content=data, media_type=media_type, headers=headers)
 
 
-async def _load_document_content(
+async def load_document_content(
     detail: DocumentDetail,
     *,
     variant: Literal["original", "prepared"],
