@@ -1084,27 +1084,39 @@ class DbAdminChatGenerateRequest(BaseModel):
 
 
 class DbAdminChatStatementPlan(BaseModel):
-    """実行の前の 1 文の分類。"""
+    """実行の前の 1 文の分類（文ごとに実行できる。#2333）。"""
 
     index: int
     statement_type: str
     sql: str
+    # 読み取り専用の SELECT / WITH…SELECT（確認語なしで実行できる）。
     select_only: bool = False
     implicit_commit: bool = False
+    # 方針で止める文・製品の object など、実行できない理由（実行できるなら空）。
     blocked_reason: str = ""
-
-
-class DbAdminChatPlan(BaseModel):
-    """実行の前の分類（生成エンジンに関係なく、サーバーで分類する）。"""
-
-    sql: str = ""
-    statements: list[DbAdminChatStatementPlan] = Field(default_factory=list)
-    # 1 つの SELECT / WITH…SELECT（読み取り専用）だけなら確認語は要らない。
-    read_only: bool = False
+    # データ・構造を変える文（読み取り専用の SELECT 以外で、止めない文）は確認語が要る。
     requires_confirmation: bool = False
     # 確認語（`ADMIN_EXECUTE`、1 つの対象を消す DROP / TRUNCATE は対象の名前）。不要なら空。
     confirmation_target: str = ""
+
+
+class DbAdminChatPlan(BaseModel):
+    """実行の前の分類（生成エンジンに関係なく、サーバーで分類する）。
+
+    文ごとの分類は `statements`。ここの値は「すべて実行」（上から順に・最初のエラーで止める）
+    の判定。
+    """
+
+    sql: str = ""
+    statements: list[DbAdminChatStatementPlan] = Field(default_factory=list)
+    # すべての文が読み取り専用の SELECT（「すべて実行」に確認語は要らない）。
+    read_only: bool = False
+    # 「すべて実行」に確認語が要る（変える文を含む）。
+    requires_confirmation: bool = False
+    # 「すべて実行」の確認語（変える文が 1 つならその文の確認語、2 つ以上なら `ADMIN_EXECUTE`）。
+    confirmation_target: str = ""
     implicit_commit: bool = False
+    # 止める文を含む（「すべて実行」はできない。ほかの文は 1 文ずつ実行できる）。
     blocked: bool = False
     blocked_reasons: list[str] = Field(default_factory=list)
 
@@ -1121,27 +1133,19 @@ class DbAdminChatGenerateData(BaseModel):
     timing: TimingEnvelope
 
 
-class DbAdminChatExecuteRequest(AdminExecutionConfirmation):
-    """DB 管理チャットの SQL の実行。SELECT 以外は確認語が要る。"""
-
-    sql: str = Field(min_length=1, max_length=200000)
-    row_limit: int = 100
-
-    @field_validator("row_limit")
-    @classmethod
-    def validate_row_limit(cls, value: int) -> int:
-        _validate_sql_row_limit(value)
-        return value
-
-
 class DbAdminChatTurnExecuteRequest(AdminExecutionConfirmation):
-    """DB 管理チャットのターンの SQL の実行（#2319）。
+    """DB 管理チャットのターンの SQL の実行（#2319・#2333）。
 
     SQL は画面から受け取らず、ターンに保存した SQL（AI のエラー分析で直したら直した SQL）を使う。
+    `mode="statement"` は `statement_index`（1 始まり）の 1 文、`mode="all"`
+    はすべての文を上から順に
+    実行する（最初のエラーで止める）。
     """
 
     conversation_id: str = Field(min_length=1, max_length=64)
     turn_id: str = Field(min_length=1, max_length=64)
+    mode: Literal["statement", "all"] = "statement"
+    statement_index: int | None = Field(default=None, ge=1)
     row_limit: int = 100
 
     @field_validator("row_limit")
@@ -1150,11 +1154,27 @@ class DbAdminChatTurnExecuteRequest(AdminExecutionConfirmation):
         _validate_sql_row_limit(value)
         return value
 
+    @model_validator(mode="after")
+    def validate_target(self) -> DbAdminChatTurnExecuteRequest:
+        if self.mode == "statement" and self.statement_index is None:
+            raise ValueError(
+                'mode="statement" には statement_index'
+                "（実行する文の 1 始まりの番号）を渡してください。"
+            )
+        if self.mode == "all" and self.statement_index is not None:
+            raise ValueError('mode="all" には statement_index を渡さないでください。')
+        return self
+
 
 class DbAdminChatPlanUpdateRequest(BaseModel):
-    """ターンの SQL を、AI のエラー分析で直した SQL に置き換える（サーバーが分類し直す。#2319）。"""
+    """ターンの SQL を、AI のエラー分析で直した SQL に置き換える（サーバーが分類し直す。#2319）。
+
+    `statement_index`（1 始まり）を渡すとその文だけを置き換える（#2333）。無ければターンの SQL
+    の全体。
+    """
 
     sql: str = Field(min_length=1, max_length=200000)
+    statement_index: int | None = Field(default=None, ge=1)
 
 
 class DbAdminChatAnalyzeRequest(BaseModel):
@@ -1175,24 +1195,81 @@ class DbAdminChatAnalyzeData(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class DbAdminChatLastExecution(BaseModel):
-    """ターンの今の SQL の最後の実行の要約（#2319）。
+DbAdminChatStatementStatus = Literal[
+    "succeeded", "failed", "blocked", "not_run", "confirmation_required"
+]
+
+
+class DbAdminChatStatementOutcome(BaseModel):
+    """1 文の実行の結果（#2333）。
+
+    `result` はその文だけの実行の結果（`statements` は 1 件、SELECT は `select_result`）。
+    「すべて実行」で
+    実行しなかった文（`not_run`）と確認語の待ちは空。
+    """
+
+    index: int
+    status: DbAdminChatStatementStatus
+    result: DbAdminExecuteData | None = None
+
+
+class DbAdminChatExecuteData(BaseModel):
+    """DB 管理チャットの実行の結果（1 文か「すべて実行」。#2333）。
+
+    `committed` / `rolled_back` は実行の単位（1 文、または「すべて実行」の 1 つのトランザクション）
+    の値。
+    """
+
+    mode: Literal["statement", "all"]
+    # 監査の行を結び付ける実行の ID（「すべて実行」は文ごとの監査の行に同じ ID が入る）。
+    batch_id: str
+    executed: bool = False
+    committed: bool = False
+    rolled_back: bool = False
+    # 「すべて実行」で止まった文（最初のエラー）の番号。
+    stopped_at: int | None = None
+    statements: list[DbAdminChatStatementOutcome] = Field(default_factory=list)
+    schema_refresh_job_id: str = ""
+    schema_refresh_required: bool = False
+    schema_refresh_reason_code: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class DbAdminChatStatementLastExecution(BaseModel):
+    """ターンの 1 文の最後の実行の要約（#2319・#2333）。
 
     結果の行はチャットと同じく保存しない（`result.select_result` は空。行数・列数・打ち切りだけ）。
     会話を開き直したら要約と「もう一度実行」を出す。確認語は保存しない（実行は 1 回ごとに確認）。
     """
 
+    index: int
     executed_at: str
-    # 実行した SQL の版（AI のエラー分析で直すと版が進み、前の版の実行の要約は消える）。
-    revision: int = 0
+    mode: Literal["statement", "all"] = "statement"
+    batch_id: str = ""
     confirmation_given: bool = False
-    succeeded: bool = False
+    status: Literal["succeeded", "failed", "blocked", "not_run"]
     row_count: int | None = None
     column_count: int | None = None
     has_more: bool = False
     # 続きの質問の文脈に渡す短い要約（成功・行数・失敗のメッセージ）。
     outcome: str = ""
-    result: DbAdminExecuteData
+    result: DbAdminExecuteData | None = None
+
+
+class DbAdminChatRunAllSummary(BaseModel):
+    """ターンの最後の「すべて実行」の要約（#2333）。"""
+
+    executed_at: str
+    batch_id: str
+    confirmation_given: bool = False
+    succeeded: bool = False
+    statement_count: int = 0
+    succeeded_count: int = 0
+    stopped_at: int | None = None
+    committed: bool = False
+    rolled_back: bool = False
+    warnings: list[str] = Field(default_factory=list)
 
 
 class DbAdminChatTurn(BaseModel):
@@ -1210,7 +1287,9 @@ class DbAdminChatTurn(BaseModel):
     # AI のエラー分析で直した SQL に置き換えると進む（画面の実行の状態を版ごとに分ける）。
     revision: int = 0
     corrected: bool = False
-    last_execution: DbAdminChatLastExecution | None = None
+    # 文ごとの最後の実行の要約（今の SQL の文のもの。文の番号の順。#2333）。
+    statement_executions: list[DbAdminChatStatementLastExecution] = Field(default_factory=list)
+    last_run_all: DbAdminChatRunAllSummary | None = None
     # 会話の持ち主以外（system_admin）が送ったターンだけに付く送り手（#1928 と同じ）。
     sender_user_uuid: str | None = None
     sender_display_name: str | None = None

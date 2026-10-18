@@ -102,6 +102,7 @@ from .models import (
     DbAdminChatAnalyzeData,
     DbAdminChatAnalyzeRequest,
     DbAdminChatData,
+    DbAdminChatExecuteData,
     DbAdminChatGenerateRequest,
     DbAdminChatPage,
     DbAdminChatPlanUpdateRequest,
@@ -3172,12 +3173,19 @@ def replace_db_admin_chat_turn_sql(
     actor, all_users = _db_admin_chat_actor(request)
     try:
         turn = nl2sql_service.replace_db_admin_chat_turn_sql(
-            conversation_id, turn_id, req.sql, actor=actor, all_users=all_users
+            conversation_id,
+            turn_id,
+            req.sql,
+            actor=actor,
+            all_users=all_users,
+            statement_index=req.statement_index,
         )
     except (PermissionError, LookupError) as exc:
         raise HTTPException(
             status_code=OWNER_NOT_FOUND_STATUS, detail=_CHAT_TURN_NOT_FOUND_DETAIL
         ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     [named] = _with_db_admin_chat_senders([turn])
     return ApiResponse(data=named)
 
@@ -3222,12 +3230,15 @@ def db_admin_chat_generate(
     )
 
 
-@router.post("/db-admin-chat/execute", response_model=ApiResponse[DbAdminExecuteData])
+@router.post("/db-admin-chat/execute", response_model=ApiResponse[DbAdminChatExecuteData])
 def db_admin_chat_execute(
     req: DbAdminChatTurnExecuteRequest, request: Request
-) -> ApiResponse[DbAdminExecuteData]:
-    """ターンに保存した SQL を実行する。SELECT は押せば実行、それ以外は確認語があるときだけ
-    （監査の表に残し、ターンに最後の実行の要約を残す）。"""
+) -> ApiResponse[DbAdminChatExecuteData]:
+    """ターンに保存した SQL の 1 文（`mode="statement"`）か、すべての文（`mode="all"`。
+    最初のエラーで
+    止める）を実行する。SELECT は押せば実行、
+    変える文は確認語があるときだけ（実行した文ごとに監査の表に
+    残し、ターンに文ごとの最後の実行の要約を残す）。"""
     actor, all_users = _db_admin_chat_actor(request)
     try:
         data = nl2sql_service.execute_db_admin_chat_turn(req, actor=actor, all_users=all_users)

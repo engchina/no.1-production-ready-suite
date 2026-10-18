@@ -6,7 +6,8 @@ LLM（OCI Enterprise AI）と Oracle は決定論のスタブで置き換える�
 from __future__ import annotations
 
 import json
-from typing import Any
+import uuid
+from typing import Any, Literal
 
 import pytest
 
@@ -17,8 +18,11 @@ from app.features.nl2sql.db_admin_chat import (
 )
 from app.features.nl2sql.models import (
     DbAdminChatAnalyzeRequest,
-    DbAdminChatExecuteRequest,
+    DbAdminChatExecuteData,
+    DbAdminChatGenerateRequest,
     DbAdminChatHistoryTurn,
+    DbAdminChatTurn,
+    DbAdminChatTurnExecuteRequest,
     QueryResults,
     SchemaCatalog,
     SchemaColumn,
@@ -28,8 +32,10 @@ from app.features.nl2sql.service import (
     DbAdminChatGenerationError,
     Nl2SqlService,
     SchemaRefreshMutationSync,
+    _db_admin_chat_join_statements,
     _mask_sql_literals_and_comments,
     _similarity_tokens,
+    _split_sql_statements,
 )
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.security.request_actor import actor_scope
@@ -38,10 +44,50 @@ from app.security.request_actor import actor_scope
 class _FakeAdapter:
     """管理の実行（更新系）と SELECT の呼び出しを記録する。"""
 
-    def __init__(self, statement_results: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        statement_results: list[dict[str, Any]] | None = None,
+        *,
+        script_fail_at: int | None = None,
+    ) -> None:
         self.statement_results = statement_results or []
         self.statement_calls: list[tuple[list[str], bool]] = []
         self.select_calls: list[tuple[str, int | None, bool]] = []
+        self.script_fail_at = script_fail_at
+        self.script_calls: list[tuple[list[str], frozenset[int], int | None]] = []
+
+    def execute_admin_script(
+        self, statements: list[str], *, query_indexes: frozenset[int], max_rows: int | None
+    ) -> list[dict[str, Any]]:
+        """「すべて実行」: `script_fail_at` の文で失敗して止める（後ろの文は返さない）。"""
+        self.script_calls.append((statements, query_indexes, max_rows))
+        results: list[dict[str, Any]] = []
+        for index, sql in enumerate(statements, start=1):
+            kind = sql.split()[0].upper()
+            if index == self.script_fail_at:
+                results.append(
+                    {
+                        "index": index,
+                        "statement_type": kind,
+                        "status": "error",
+                        "sql": sql,
+                        "error_message": "ORA-01722: invalid number",
+                    }
+                )
+                break
+            item: dict[str, Any] = {
+                "index": index,
+                "statement_type": kind,
+                "status": "success",
+                "sql": sql,
+                "row_count": 1,
+            }
+            if index in query_indexes:
+                item["select_result"] = QueryResults(
+                    columns=["N"], rows=[{"N": index}], total=1, returned_count=1
+                )
+            results.append(item)
+        return results
 
     def execute_admin_statements(
         self,
@@ -190,7 +236,7 @@ def test_context_tables_rank_names_over_columns() -> None:
     assert select_context_tables(tables, set(), _similarity_tokens) == []
 
 
-# ---- 分類 ----
+# ---- 分類（文ごと。#2333）----
 
 
 def test_plan_select_is_read_only_and_allows_dynamic_performance_views() -> None:
@@ -220,74 +266,197 @@ def test_plan_blocks_product_objects_internal_objects_and_policy(sql: str) -> No
     plan = _Service(_FakeAdapter())._db_admin_chat_plan(sql)
     assert plan.blocked is True
     assert plan.blocked_reasons
+    assert plan.statements[0].blocked_reason
+    assert plan.statements[0].requires_confirmation is False
 
 
-def test_plan_for_mutation_requires_confirmation_and_marks_implicit_commit() -> None:
+def test_plan_classifies_each_statement_by_risk() -> None:
     service = _Service(_FakeAdapter())
+    selects = service._db_admin_chat_plan(
+        "SELECT BANNER_FULL FROM V$VERSION;\nSELECT TABLESPACE_NAME FROM DBA_TABLESPACES;"
+    )
+    # 複数の SELECT も止めない（文ごとに確認語なしで実行でき、「すべて実行」も確認語なし）。
+    assert selects.blocked is False
+    assert selects.read_only is True
+    assert selects.requires_confirmation is False
+    assert [item.index for item in selects.statements] == [1, 2]
+    assert all(item.select_only and not item.requires_confirmation for item in selects.statements)
+
+    mixed = service._db_admin_chat_plan("SELECT 1 FROM DUAL; DELETE FROM T1; SELECT 2 FROM DUAL")
+    assert mixed.blocked is False
+    assert [item.requires_confirmation for item in mixed.statements] == [False, True, False]
+    assert mixed.statements[1].confirmation_target == "ADMIN_EXECUTE"
+    assert mixed.read_only is False
+    assert mixed.requires_confirmation is True
+    assert mixed.confirmation_target == "ADMIN_EXECUTE"
+
+    # 「すべて実行」の確認語: 変える文が 1 つならその文の確認語、2 つ以上なら ADMIN_EXECUTE。
+    drop = service._db_admin_chat_plan("SELECT 1 FROM DUAL; DROP TABLE T1 PURGE")
+    assert drop.statements[1].confirmation_target == "T1"
+    assert drop.confirmation_target == "T1"
+    assert drop.implicit_commit is True
     script = service._db_admin_chat_plan("CREATE TABLE T1 (ID NUMBER);\nINSERT INTO T1 VALUES (1);")
     assert [item.statement_type for item in script.statements] == ["CREATE", "INSERT"]
-    assert script.requires_confirmation is True
     assert script.confirmation_target == "ADMIN_EXECUTE"
     assert script.implicit_commit is True
-    drop = service._db_admin_chat_plan("DROP TABLE T1 PURGE")
-    assert drop.confirmation_target == "T1"
-    mixed = service._db_admin_chat_plan("SELECT 1 FROM DUAL; DELETE FROM T1")
-    assert mixed.blocked is True
 
 
-# ---- 実行と監査 ----
+def test_plan_keeps_a_plsql_block_as_one_statement() -> None:
+    plan = _Service(_FakeAdapter())._db_admin_chat_plan(
+        "BEGIN\n  UPDATE T1 SET C1 = 0;\n  DELETE FROM T2;\nEND;\n/\nSELECT 1 FROM DUAL"
+    )
+    assert [item.statement_type for item in plan.statements] == ["PLSQL", "SELECT"]
+    assert plan.statements[0].requires_confirmation is True
 
 
-def test_select_executes_on_admin_connection_without_confirmation_and_is_audited() -> None:
+def test_plan_isolates_a_forbidden_statement() -> None:
+    plan = _Service(_FakeAdapter())._db_admin_chat_plan(
+        "SELECT 1 FROM DUAL; ALTER SYSTEM SET OPEN_CURSORS = 300; SELECT 2 FROM DUAL"
+    )
+    # 止めるのはその文だけ。ほかの文は実行できる。「すべて実行」はできない。
+    assert [bool(item.blocked_reason) for item in plan.statements] == [False, True, False]
+    assert plan.statements[0].select_only and plan.statements[2].select_only
+    assert plan.blocked is True
+    assert plan.requires_confirmation is False
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1 FROM DUAL; SELECT 2 FROM DUAL",
+        "BEGIN NULL; END;\n/\nSELECT 1 FROM DUAL -- 注\n;\nDELETE FROM T1",
+        "CREATE OR REPLACE PROCEDURE P1 AS BEGIN NULL; END;\n/\nINSERT INTO T1 VALUES ('a;b')",
+    ],
+    ids=["selects", "plsql-and-comment", "procedure"],
+)
+def test_joined_statements_split_back_to_the_same_statements(sql: str) -> None:
+    statements = _split_sql_statements(sql)
+    assert _split_sql_statements(_db_admin_chat_join_statements(statements)) == statements
+
+
+# ---- 実行（文ごと・すべて実行）と監査 ----
+
+_TURN_CREATED_AT = "2026-10-18T00:00:00+00:00"
+
+
+def _store_turn(service: _Service, sql: str, *, owner: str = "chat-user") -> tuple[str, str]:
+    """会話とターン（サーバーの分類つき）を memory の保存先に置き、会話とターンの ID を返す。"""
+
+    conversation_id = str(uuid.uuid4())
+    store = service._db_admin_chat_store
+    store.create_conversation(conversation_id, owner_user_uuid=owner, title="質問")
+    store.append_turn(
+        conversation_id,
+        DbAdminChatTurn(
+            turn_id=conversation_id,
+            question="質問",
+            created_at=_TURN_CREATED_AT,
+            generated_at=_TURN_CREATED_AT,
+            plan=service._db_admin_chat_plan(sql),
+        ),
+    )
+    return conversation_id, conversation_id
+
+
+def _execute(
+    service: _Service,
+    ids: tuple[str, str],
+    *,
+    index: int | None = 1,
+    mode: Literal["statement", "all"] = "statement",
+    confirmation: str = "",
+    actor: str = "chat-user",
+) -> DbAdminChatExecuteData:
+    with actor_scope(actor, is_system_admin=False):
+        return service.execute_db_admin_chat_turn(
+            DbAdminChatTurnExecuteRequest(
+                conversation_id=ids[0],
+                turn_id=ids[1],
+                mode=mode,
+                statement_index=index if mode == "statement" else None,
+                confirmation=confirmation,
+                row_limit=50,
+            ),
+            actor=actor,
+            all_users=False,
+        )
+
+
+def _saved(service: _Service, ids: tuple[str, str]) -> DbAdminChatTurn:
+    turn = service._db_admin_chat_store.get_turn(*ids)
+    assert turn is not None
+    return turn
+
+
+def test_execute_request_requires_a_target_for_each_mode() -> None:
+    with pytest.raises(ValueError, match="statement_index"):
+        DbAdminChatTurnExecuteRequest(conversation_id="c", turn_id="t")
+    with pytest.raises(ValueError, match="statement_index"):
+        DbAdminChatTurnExecuteRequest(
+            conversation_id="c", turn_id="t", mode="all", statement_index=1
+        )
+
+
+def test_select_statement_executes_on_admin_connection_without_confirmation() -> None:
     adapter = _FakeAdapter()
     service = _Service(adapter)
-    with actor_scope("chat-user", is_system_admin=False):
-        result = service.execute_db_admin_chat_sql(
-            DbAdminChatExecuteRequest(sql="SELECT 1 AS N FROM DUAL", row_limit=50)
-        )
-    assert result.executed is True
-    assert result.execution_context == "admin_control_plane"
-    assert adapter.select_calls == [("SELECT 1 AS N FROM DUAL", 50, True)]
+    ids = _store_turn(service, "SELECT 1 AS N FROM DUAL; SELECT 2 AS N FROM DUAL")
+    data = _execute(service, ids, index=2)
+    assert data.mode == "statement"
+    [outcome] = data.statements
+    assert (outcome.index, outcome.status) == (2, "succeeded")
+    assert outcome.result is not None
+    assert outcome.result.execution_context == "admin_control_plane"
+    assert outcome.result.select_result is not None
+    # 結果の文の番号はターンの中の番号。
+    assert outcome.result.statements[0].index == 2
+    assert adapter.select_calls == [("SELECT 2 AS N FROM DUAL", 50, True)]
     [audit] = service._admin_audit_store.list_recent()
     assert audit.source == "db_admin_chat"
     assert audit.operation == "db_admin_chat_execute"
     assert audit.outcome == "success"
     assert audit.statement_types == ["SELECT"]
     assert audit.confirmation_given is False
-    assert audit.committed is False
     assert audit.actor_user_uuid == "chat-user"
-    assert audit.sql_text == "SELECT 1 AS N FROM DUAL"
+    assert audit.sql_text == "SELECT 2 AS N FROM DUAL"
     assert audit.detail["returned_rows"] == 1
-
-
-def test_mutation_requires_confirmation_phrase_before_executing() -> None:
-    adapter = _FakeAdapter(
-        [
-            {"index": 1, "statement_type": "INSERT", "status": "success", "row_count": 2},
-            {"index": 2, "statement_type": "UPDATE", "status": "success", "row_count": 3},
-        ]
+    assert audit.detail["batch_id"] == data.batch_id
+    assert audit.detail["batch_mode"] == "statement"
+    assert audit.detail["statement_index"] == 2
+    assert audit.detail["turn_id"] == ids[1]
+    # 文ごとの最後の実行の要約（行は残さない）。
+    [saved] = _saved(service, ids).statement_executions
+    assert (saved.index, saved.status, saved.row_count, saved.outcome) == (
+        2,
+        "succeeded",
+        1,
+        "成功（1 行）",
     )
+    assert saved.result is not None and saved.result.select_result is None
+
+
+def test_changing_statement_requires_its_confirmation_phrase() -> None:
+    adapter = _FakeAdapter([{"index": 1, "statement_type": "DELETE", "status": "success"}])
     service = _Service(adapter)
-    sql = "INSERT INTO T1 SELECT * FROM T2; UPDATE T1 SET C1 = 0"
-    pending = service.execute_db_admin_chat_sql(DbAdminChatExecuteRequest(sql=sql))
+    ids = _store_turn(service, "SELECT 1 FROM DUAL; DELETE FROM T1 WHERE C1 = 0")
+    pending = _execute(service, ids, index=2)
+    assert [item.status for item in pending.statements] == ["confirmation_required"]
     assert pending.executed is False
-    assert {item.status for item in pending.statements} == {"confirmation_required"}
+    assert "confirmation=ADMIN_EXECUTE" in pending.warnings[0]
     assert adapter.statement_calls == []
+    # 確認語の待ちは監査にも要約にも残さない。
     assert service._admin_audit_store.list_recent() == []
+    assert _saved(service, ids).statement_executions == []
 
-    result = service.execute_db_admin_chat_sql(
-        DbAdminChatExecuteRequest(sql=sql, confirmation="ADMIN_EXECUTE")
-    )
-    assert result.committed is True
-    # DML だけの複数の文も、全部成功したときだけ commit する（部分の commit の経路へ渡さない）。
-    assert adapter.statement_calls == [
-        (["INSERT INTO T1 SELECT * FROM T2", "UPDATE T1 SET C1 = 0"], True)
-    ]
+    done = _execute(service, ids, index=2, confirmation="ADMIN_EXECUTE")
+    assert done.committed is True
+    assert done.statements[0].status == "succeeded"
+    assert adapter.statement_calls == [(["DELETE FROM T1 WHERE C1 = 0"], True)]
     [audit] = service._admin_audit_store.list_recent()
-    assert audit.outcome == "success"
     assert audit.confirmation_given is True
-    assert audit.affected_rows == 5
-    assert audit.statement_types == ["INSERT", "UPDATE"]
+    assert audit.statement_types == ["DELETE"]
+    [saved] = _saved(service, ids).statement_executions
+    assert saved.confirmation_given is True and saved.status == "succeeded"
 
 
 def test_single_object_drop_requires_the_object_name(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -298,15 +467,12 @@ def test_single_object_drop_requires_the_object_name(monkeypatch: pytest.MonkeyP
         "_submit_schema_refresh_after_admin_mutation",
         lambda **_kwargs: SchemaRefreshMutationSync(job_id="refresh-1"),
     )
-    rejected = service.execute_db_admin_chat_sql(
-        DbAdminChatExecuteRequest(sql="DROP TABLE T1 PURGE", confirmation="ADMIN_EXECUTE")
-    )
+    ids = _store_turn(service, "DROP TABLE T1 PURGE")
+    rejected = _execute(service, ids, confirmation="ADMIN_EXECUTE")
     assert rejected.executed is False
     assert "confirmation=T1" in rejected.warnings[0]
     assert adapter.statement_calls == []
-    accepted = service.execute_db_admin_chat_sql(
-        DbAdminChatExecuteRequest(sql="DROP TABLE T1 PURGE", confirmation="T1")
-    )
+    accepted = _execute(service, ids, confirmation="T1")
     assert accepted.committed is True
     assert accepted.schema_refresh_job_id == "refresh-1"
 
@@ -315,19 +481,264 @@ def test_single_object_drop_requires_the_object_name(monkeypatch: pytest.MonkeyP
     "sql",
     ["ALTER SYSTEM SET OPEN_CURSORS = 300", "SELECT * FROM NL2SQL_PROFILES", "DROP USER U1"],
 )
-def test_blocked_statements_are_not_executed_and_are_audited(sql: str) -> None:
+def test_blocked_statement_is_not_executed_and_is_audited(sql: str) -> None:
     adapter = _FakeAdapter([{"index": 1, "statement_type": "ALTER", "status": "success"}])
     service = _Service(adapter)
-    result = service.execute_db_admin_chat_sql(
-        DbAdminChatExecuteRequest(sql=sql, confirmation="ADMIN_EXECUTE")
-    )
-    assert result.executed is False
-    assert {item.status for item in result.statements} == {"blocked"}
-    assert adapter.statement_calls == []
-    assert adapter.select_calls == []
+    ids = _store_turn(service, sql)
+    data = _execute(service, ids, confirmation="ADMIN_EXECUTE")
+    assert data.executed is False
+    assert [item.status for item in data.statements] == ["blocked"]
+    assert adapter.statement_calls == [] and adapter.select_calls == []
     [audit] = service._admin_audit_store.list_recent()
     assert audit.outcome == "blocked"
     assert audit.executed is False
+
+
+def test_forbidden_statement_does_not_stop_the_other_statements() -> None:
+    adapter = _FakeAdapter()
+    service = _Service(adapter)
+    ids = _store_turn(
+        service, "SELECT 1 AS N FROM DUAL; ALTER SYSTEM SET OPEN_CURSORS = 300; SELECT 2 FROM DUAL"
+    )
+    assert _execute(service, ids, index=1).statements[0].status == "succeeded"
+    assert _execute(service, ids, index=3).statements[0].status == "succeeded"
+    assert _execute(service, ids, index=2).statements[0].status == "blocked"
+    # 「すべて実行」は止める文を黙って飛ばさず、始めない。
+    with pytest.raises(ValueError, match="#2"):
+        _execute(service, ids, mode="all")
+    assert adapter.script_calls == []
+    assert [item.status for item in _saved(service, ids).statement_executions] == [
+        "succeeded",
+        "blocked",
+        "succeeded",
+    ]
+
+
+def test_statement_index_out_of_range_is_rejected() -> None:
+    service = _Service(_FakeAdapter())
+    ids = _store_turn(service, "SELECT 1 FROM DUAL")
+    with pytest.raises(ValueError, match="文 2 はありません"):
+        _execute(service, ids, index=2)
+
+
+def test_run_all_selects_without_confirmation_in_one_script() -> None:
+    adapter = _FakeAdapter()
+    service = _Service(adapter)
+    ids = _store_turn(service, "SELECT 1 AS N FROM DUAL;\nSELECT 2 AS N FROM DUAL;")
+    data = _execute(service, ids, mode="all")
+    assert data.mode == "all"
+    assert [item.status for item in data.statements] == ["succeeded", "succeeded"]
+    assert all(item.result and item.result.select_result for item in data.statements)
+    assert data.committed is False and data.rolled_back is False
+    assert data.stopped_at is None
+    # 1 つの接続で上から順に（SELECT は同じ cursor から読む）。
+    assert adapter.script_calls == [
+        (["SELECT 1 AS N FROM DUAL", "SELECT 2 AS N FROM DUAL"], frozenset({1, 2}), 50)
+    ]
+    audits = service._admin_audit_store.list_recent()
+    assert len(audits) == 2
+    assert {audit.detail["batch_id"] for audit in audits} == {data.batch_id}
+    assert sorted(audit.detail["statement_index"] for audit in audits) == [1, 2]
+    assert all(audit.confirmation_given is False for audit in audits)
+    turn = _saved(service, ids)
+    assert [item.status for item in turn.statement_executions] == ["succeeded", "succeeded"]
+    assert turn.last_run_all is not None
+    assert turn.last_run_all.succeeded is True
+    assert (turn.last_run_all.statement_count, turn.last_run_all.succeeded_count) == (2, 2)
+
+
+def test_run_all_with_a_change_needs_the_confirmation_once() -> None:
+    adapter = _FakeAdapter()
+    service = _Service(adapter)
+    ids = _store_turn(
+        service, "SELECT 1 FROM DUAL; INSERT INTO T1 VALUES (1); SELECT COUNT(*) FROM T1"
+    )
+    pending = _execute(service, ids, mode="all")
+    assert {item.status for item in pending.statements} == {"confirmation_required"}
+    assert adapter.script_calls == []
+    assert _saved(service, ids).last_run_all is None
+
+    data = _execute(service, ids, mode="all", confirmation="ADMIN_EXECUTE")
+    assert [item.status for item in data.statements] == ["succeeded"] * 3
+    assert data.committed is True and data.rolled_back is False
+    assert [item.result.committed for item in data.statements if item.result] == [
+        False,
+        True,
+        False,
+    ]
+    audits = sorted(
+        service._admin_audit_store.list_recent(), key=lambda audit: audit.detail["statement_index"]
+    )
+    assert [audit.statement_types for audit in audits] == [["SELECT"], ["INSERT"], ["SELECT"]]
+    assert [audit.confirmation_given for audit in audits] == [False, True, False]
+    assert all(audit.detail["batch_committed"] is True for audit in audits)
+
+
+def test_run_all_stops_at_the_first_error_and_rolls_back() -> None:
+    adapter = _FakeAdapter(script_fail_at=2)
+    service = _Service(adapter)
+    ids = _store_turn(
+        service, "INSERT INTO T1 VALUES (1); INSERT INTO T1 VALUES ('x'); SELECT COUNT(*) FROM T1"
+    )
+    data = _execute(service, ids, mode="all", confirmation="ADMIN_EXECUTE")
+    assert [item.status for item in data.statements] == ["succeeded", "failed", "not_run"]
+    assert data.stopped_at == 2
+    assert data.committed is False and data.rolled_back is True
+    assert data.statements[0].result is not None
+    assert data.statements[0].result.rolled_back is True
+    assert data.statements[2].result is None
+    # 実行しなかった文は監査に残さない。
+    audits = service._admin_audit_store.list_recent()
+    assert sorted(audit.outcome for audit in audits) == ["failure", "success"]
+    turn = _saved(service, ids)
+    assert [item.status for item in turn.statement_executions] == [
+        "succeeded",
+        "failed",
+        "not_run",
+    ]
+    assert turn.statement_executions[1].outcome.startswith("失敗: INSERT: ORA-01722")
+    assert turn.last_run_all is not None
+    assert turn.last_run_all.stopped_at == 2 and turn.last_run_all.rolled_back is True
+
+
+def test_run_all_marks_ddl_before_the_failure_as_committed(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _FakeAdapter(script_fail_at=3)
+    service = _Service(adapter)
+    monkeypatch.setattr(
+        service,
+        "_submit_schema_refresh_after_admin_mutation",
+        lambda **_kwargs: SchemaRefreshMutationSync(job_id="refresh-2"),
+    )
+    ids = _store_turn(
+        service, "INSERT INTO T0 VALUES (1); CREATE TABLE T1 (ID NUMBER); INSERT INTO T1 VALUES (1)"
+    )
+    data = _execute(service, ids, mode="all", confirmation="ADMIN_EXECUTE")
+    # DDL の暗黙の commit は、その前の成功した DML も commit する。
+    assert [item.result.committed for item in data.statements if item.result] == [
+        True,
+        True,
+        False,
+    ]
+    assert data.committed is True and data.rolled_back is False
+    assert any("暗黙 commit" in warning for warning in data.warnings)
+    assert data.schema_refresh_job_id == "refresh-2"
+
+
+def test_run_all_selects_without_oracle_uses_the_deterministic_runtime() -> None:
+    adapter = _FakeAdapter()
+    service = _Service(adapter, oracle=False)
+    ids = _store_turn(service, "SELECT 1 FROM DUAL; SELECT 2 FROM DUAL")
+    data = _execute(service, ids, mode="all")
+    assert [item.status for item in data.statements] == ["succeeded", "succeeded"]
+    assert adapter.script_calls == []
+
+
+def test_corrected_statement_replaces_only_that_statement() -> None:
+    adapter = _FakeAdapter(script_fail_at=2)
+    service = _Service(adapter)
+    ids = _store_turn(service, "SELECT 1 FROM DUAL; SELECT * FROM T9; SELECT 3 FROM DUAL")
+    _execute(service, ids, mode="all")
+    turn = service.replace_db_admin_chat_turn_sql(
+        ids[0], ids[1], "SELECT * FROM T8", actor="chat-user", all_users=False, statement_index=2
+    )
+    assert [item.sql for item in turn.plan.statements] == [
+        "SELECT 1 FROM DUAL",
+        "SELECT * FROM T8",
+        "SELECT 3 FROM DUAL",
+    ]
+    assert turn.revision == 1 and turn.corrected is True
+    # 変わらない文の要約は残し、変わった文と「すべて実行」の要約は消す。
+    assert [(item.index, item.status) for item in turn.statement_executions] == [
+        (1, "succeeded"),
+        (3, "not_run"),
+    ]
+    assert turn.last_run_all is None
+    with pytest.raises(ValueError, match="文 4 はありません"):
+        service.replace_db_admin_chat_turn_sql(
+            ids[0],
+            ids[1],
+            "SELECT 4 FROM DUAL",
+            actor="chat-user",
+            all_users=False,
+            statement_index=4,
+        )
+
+
+# ---- 実行の部品（1 つの接続で SELECT を含む文を順に実行）----
+
+
+class _ScriptCursor:
+    def __init__(self, fail_on: str = "") -> None:
+        self.fail_on = fail_on
+        self.executed: list[str] = []
+        self.description: list[tuple[str]] = []
+        self.rowcount = 0
+
+    def __enter__(self) -> _ScriptCursor:
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        return None
+
+    def callproc(self, *_: Any) -> None:
+        return None
+
+    def execute(self, sql: str) -> None:
+        if self.fail_on and self.fail_on in sql:
+            raise RuntimeError("ORA-00942: table or view does not exist")
+        self.executed.append(sql)
+        self.description = [("N",)] if sql.startswith("SELECT") else []
+        self.rowcount = 1
+
+
+class _ScriptConnection:
+    def __init__(self, cursor: _ScriptCursor) -> None:
+        self._cursor = cursor
+        self.commits = 0
+        self.rollbacks = 0
+
+    def cursor(self) -> _ScriptCursor:
+        return self._cursor
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+
+def test_statement_executor_reads_queries_and_stops_at_the_first_error() -> None:
+    from app.clients.oracle_statement_executor import OracleStatementExecutor
+
+    reads: list[str] = []
+
+    def reader(cursor: Any) -> tuple[int, str]:
+        reads.append(cursor.executed[-1])
+        return 1, "rows"
+
+    ok_connection = _ScriptConnection(_ScriptCursor())
+    results = OracleStatementExecutor().execute(
+        ok_connection,
+        ["INSERT INTO T1 VALUES (1)", "SELECT N FROM T1"],
+        stop_on_error=True,
+        query_indexes=frozenset({2}),
+        query_reader=reader,
+    )
+    assert [item["status"] for item in results] == ["success", "success"]
+    assert results[1]["select_result"] == "rows" and results[1]["row_count"] == 1
+    assert reads == ["SELECT N FROM T1"]
+    assert (ok_connection.commits, ok_connection.rollbacks) == (1, 0)
+
+    failing = _ScriptConnection(_ScriptCursor(fail_on="T9"))
+    results = OracleStatementExecutor().execute(
+        failing,
+        ["INSERT INTO T1 VALUES (1)", "SELECT N FROM T9", "SELECT N FROM T1"],
+        stop_on_error=True,
+        query_indexes=frozenset({2, 3}),
+        query_reader=reader,
+    )
+    assert [item["status"] for item in results] == ["success", "error"]
+    assert (failing.commits, failing.rollbacks) == (0, 1)
 
 
 # ---- 生成と分析 ----
@@ -383,12 +794,63 @@ def test_generate_requires_enterprise_ai() -> None:
     assert error.value.status_code == 409
 
 
-def test_generate_with_empty_sql_keeps_the_explanation() -> None:
-    ai = _FakeEnterpriseAi([{"sql": "", "explanation": "方針で実行できません"}])
+def test_prose_only_answer_is_regenerated_as_sql() -> None:
+    """SQL の無い応答（文章だけの答え）は、理由を添えて 1 回だけ作り直させる。"""
+    ai = _FakeEnterpriseAi(
+        [
+            {"sql": "", "explanation": "**ITEM_STOCK** は在庫の表です。"},
+            {"sql": "SELECT TABLE_NAME, COMMENTS FROM ALL_TAB_COMMENTS", "explanation": "表の説明"},
+        ]
+    )
     service = _catalog_service(_FakeAdapter(), ai)
-    data = service.generate_db_admin_chat_sql("インスタンスを停止して")
-    assert data.plan.statements == []
-    assert data.explanation == "方針で実行できません"
+    data = service.generate_db_admin_chat_sql("これらの表は何？")
+    assert [item.sql for item in data.plan.statements] == [
+        "SELECT TABLE_NAME, COMMENTS FROM ALL_TAB_COMMENTS"
+    ]
+    assert data.explanation == "表の説明"
+    assert len(ai.calls) == 2
+    assert ai.calls[0]["prompt"] == "これらの表は何？"
+    # 作り直しの依頼は、何が違反でどう直すかを書く（質問はそのまま渡す）。
+    assert ai.calls[1]["prompt"].startswith("これらの表は何？")
+    assert "SQL がありませんでした" in ai.calls[1]["prompt"]
+    assert "必ず SQL で答えます" in ai.calls[0]["system_prompt"]
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        {"sql": "", "explanation": "表の一覧です。"},
+        # 文章を sql に入れた応答も SQL ではない（文の種類が分からない文だけ）。
+        {"sql": "ITEM_STOCK は在庫の表、OTHER_TABLE は補助の表です。", "explanation": ""},
+    ],
+    ids=["empty", "prose-in-sql"],
+)
+def test_answer_without_sql_twice_is_a_generation_failure(second: dict[str, Any]) -> None:
+    ai = _FakeEnterpriseAi([{"sql": "", "explanation": "表の一覧です。"}, second])
+    service = _catalog_service(_FakeAdapter(), ai)
+    with pytest.raises(DbAdminChatGenerationError) as error:
+        service.generate_db_admin_chat_sql("これらの表は何？")
+    # 文章を回答として出さず、生成の失敗（画面は質問を残して「再送信」）。
+    assert error.value.status_code == 502
+    assert str(error.value).startswith("SQL を生成できませんでした")
+    assert len(ai.calls) == 2
+
+
+def test_prose_only_answer_is_not_saved_as_a_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    ai = _FakeEnterpriseAi(
+        [{"sql": "", "explanation": "表の一覧です。"}, {"sql": "", "explanation": "表の一覧です。"}]
+    )
+    service = _catalog_service(_FakeAdapter(), ai)
+    with pytest.raises(DbAdminChatGenerationError):
+        service.send_db_admin_chat_question(
+            DbAdminChatGenerateRequest(question="これらの表は何？", client_turn_id=uuid.uuid4()),
+            actor="chat-user",
+            all_users=False,
+        )
+    items, total = service._db_admin_chat_store.list_conversations(
+        owner_user_uuid=None, offset=0, limit=10
+    )
+    assert (items, total) == ([], 0)
 
 
 def test_analyze_returns_corrected_plan() -> None:
