@@ -25,6 +25,7 @@ WITH / サブクエリ・そのほか）ごとの項目を構造化出力で返�
 from __future__ import annotations
 
 import calendar
+import inspect
 import json
 import logging
 import re
@@ -1125,6 +1126,15 @@ def correction_texts(draft: SqlRequirementDraft) -> list[str]:
     ]
 
 
+def _accepts_keyword(function: Callable[..., Any], name: str) -> bool:
+    """`function` が引数 `name` を名前で受けるか（受けない client には渡さない）。"""
+    try:
+        parameters = inspect.signature(function).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in parameters
+
+
 def call_requirement_llm(
     client: Any,
     *,
@@ -1139,8 +1149,8 @@ def call_requirement_llm(
     """要件の下書き（draft）・検査（review）を LLM 1 回で作る。
 
     `timeout_seconds` / `max_output_tokens` / `max_retries` は回答前の確認の設定
-    （`nl2sql_requirement_*`。#1715）。共通の LLM の出力の上限（既定 1200）は推論の token で
-    使い切られることがあるため、回答前の確認は自分の上限で呼ぶ。
+    （`nl2sql_requirement_*`。#1715）。出力の上限は回答前の確認の自分の上限（既定 16384。
+    #2310）で、client が受けるなら `strict_max_output_tokens` で上限を固定して呼ぶ。
     """
     configured = getattr(client, "is_configured", None)
     generate = getattr(client, "generate", None)
@@ -1185,6 +1195,10 @@ def call_requirement_llm(
         )
         if value is not None
     }
+    if max_output_tokens is not None and _accepts_keyword(generate, "strict_max_output_tokens"):
+        # 回答前の確認の上限はそのまま送る（既定 32768 へ引き上げず、未完了でも上限を広げない。
+        # 止まらない出力を早く切り、推論を下げた送り直しに任せる。#2310）。
+        options["strict_max_output_tokens"] = True
     started = time.perf_counter()
     try:
         raw = generate(

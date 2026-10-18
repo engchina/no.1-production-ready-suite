@@ -293,7 +293,7 @@ class AgentProfile(BaseModel):
     # （Run の利用者が使えるすべてのプロファイルから、モデルが選ぶ）。
     data_scopes: AgentDataScopes = Field(default_factory=dict)
     # 回答前の確認（#1839）。曖昧な質問の扱い（`confirm` = 確認してから回答する、`assume` = 前提を
-    # 示して回答する）と、確認の上限（往復。最初の確認を 1 回目に数える。0 は既定の 2 回、2〜6。
+    # 示して回答する）と、確認の上限（往復。最初の確認を 1 回目に数える。0 は既定の 3 回、2〜6。
     # NL2SQL の業務プロファイルと同じ名前・意味）。
     clarification_policy: ClarificationPolicy = POLICY_CONFIRM
     clarification_max_rounds: int = Field(default=0, ge=0, le=MAX_ROUNDS_LIMIT)

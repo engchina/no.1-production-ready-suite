@@ -72,7 +72,7 @@ interface AgentDraft {
 }
 
 /**
- * 確認の上限（往復）の選択肢。0 は既定（2 回）。NL2SQL の業務プロファイルと同じく 0 か 2〜6（1 回は選べない）。
+ * 確認の上限（往復）の選択肢。0 は既定（3 回）。NL2SQL の業務プロファイルと同じく 0 か 2〜6（1 回は選べない）。
  * backend の `confirmation.DEFAULT_MAX_ROUNDS` / `MAX_ROUNDS_LIMIT`。
  */
 const DEFAULT_CLARIFICATION_MAX_ROUNDS = 0;
