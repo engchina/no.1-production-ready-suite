@@ -1318,7 +1318,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_article_catalog_call_timeout_seconds: float = Field(
-        default=45.0,
+        default=90.0,
         ge=0.0,
         le=600.0,
         description=(
