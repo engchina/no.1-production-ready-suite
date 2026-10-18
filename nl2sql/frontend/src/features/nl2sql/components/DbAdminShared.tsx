@@ -527,7 +527,8 @@ export function dbAdminStatementFailure(statement: Pick<DbAdminStatementResult, 
   const error = parseDbAdminError(statement.error_message ?? "", undefined, statement.error_code ?? undefined);
   return {
     summary: t("dbAdmin.result.error.statementFailed"),
-    cause: [error.summary, error.genericCause ? null : error.cause].filter(Boolean).join("\n"),
+    cause: error.summary,
+    explanation: error.genericCause ? null : error.cause,
     nextAction: error.actions.join(""),
     errorCode: error.code,
     extraDetails: error.helpUrl ? [{ label: t("dbAdmin.result.error.help"), value: error.helpUrl }] : [],

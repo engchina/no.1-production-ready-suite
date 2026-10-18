@@ -2222,7 +2222,8 @@ messaging.md §9.1）。製品は自分の失敗の情報を `ProcessFailure` �
 <ProcessFailureNotice
   failure={{
     summary: "「文書の検索」で処理が止まりました。",   // 何が起きたか（止まった段を含む 1 文目）
-    cause: "検索処理中にエラーが発生しました。",       // 原因（backend の利用者向けの文）
+    cause: "検索処理中にエラーが発生しました。",       // 原因（backend の利用者向けの文・DB の原文）
+    explanation: undefined,                            // コードから引ける平易な説明（ORA-00904 → 列名が存在しない）
     nextAction: "もう一度送信してください。続くときは、詳細のトレース ID を添えて管理者に連絡してください。",
     failedStep: "文書の検索",                          // 「詳細」: 止まった段
     errorType: "DatabaseError", errorCode: "ORA-03146", traceId, occurredAt,

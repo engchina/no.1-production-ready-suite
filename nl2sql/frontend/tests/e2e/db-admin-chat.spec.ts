@@ -726,7 +726,7 @@ test("SELECT 以外は実行確認語を入れたときだけ実行し、失敗�
   await expect(failure.getByRole("alert")).toContainText("この文の実行に失敗しました。");
   await expect(failure).toContainText("参照先のテーブルまたはビューが存在しない");
   await expect(failure.locator("details")).toContainText("ORA-00942");
-  await expect(turn.getByText("ORA-00942: table or view does not exist")).toHaveCount(1);
+  await expect(turn.getByText("ORA-00942: table or view does not exist", { exact: true })).toHaveCount(1);
   await expect(turn.getByText("エラー概要", { exact: true })).toHaveCount(0);
   // 実行の確認は 1 回ごと。
   await expect(confirmation).toHaveValue("");

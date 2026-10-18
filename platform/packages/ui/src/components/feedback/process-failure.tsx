@@ -26,6 +26,11 @@ export interface ProcessFailure {
   summary: string;
   /** 原因（利用者の言葉。backend の利用者向けの文）。`summary` と同じなら渡さない。 */
   cause?: string | null;
+  /**
+   * 原因の平易な説明（コードから引ける具体的な説明。例 ORA-00904 →「列名・識別子が存在しません」）。`cause` が DB・
+   * 外部の原文のとき、その下に別の段落で出す。汎用の説明（「エラーが発生しました」）は渡さない。
+   */
+  explanation?: string | null;
   /** 次の操作（例「もう一度送信してください。続くときは、トレース ID を添えて管理者に連絡してください。」）。 */
   nextAction?: string | null;
   /** 止まった段の名前（処理の経過の段と同じ名前）。 */
@@ -175,17 +180,19 @@ export function ProcessFailureNotice({
   const resolved = resolveLabels(labels);
   const details = processFailureDetails(failure, resolved);
   const cause = present(failure.cause) && failure.cause.trim() !== failure.summary.trim() ? failure.cause : null;
+  const explanation = present(failure.explanation) ? failure.explanation : null;
   const next = present(failure.nextAction) ? failure.nextAction : null;
   return (
     <div className={cn("min-w-0", className)} data-testid={testId} data-process-failure={severity}>
       <Banner severity={severity} title={failure.summary} action={action}>
-        {cause || next || details.length ? (
+        {cause || explanation || next || details.length ? (
           <div className="min-w-0 space-y-2">
             {cause ? (
               <p className="whitespace-pre-line break-words [overflow-wrap:anywhere]" data-process-failure-cause="">
                 {cause}
               </p>
             ) : null}
+            {explanation ? <p data-process-failure-explanation="">{explanation}</p> : null}
             {next ? <p data-process-failure-next="">{next}</p> : null}
             <ApiErrorDetailList
               details={details}

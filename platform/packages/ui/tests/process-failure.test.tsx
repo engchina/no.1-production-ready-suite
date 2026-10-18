@@ -65,6 +65,19 @@ describe("ProcessFailureNotice（#2342）", () => {
     expect(notice?.querySelector("details")?.open).toBe(false);
   });
 
+  it("DB の原文（原因）とコードから引ける平易な説明を別の段落で出す", () => {
+    act(() =>
+      root.render(
+        <ProcessFailureNotice
+          failure={{ summary: "この文の実行に失敗しました。", cause: "ORA-00904: invalid identifier", explanation: "列名が存在しません。" }}
+          testId="failure"
+        />
+      )
+    );
+    expect(host.querySelector("[data-process-failure-cause]")?.textContent).toBe("ORA-00904: invalid identifier");
+    expect(host.querySelector("[data-process-failure-explanation]")?.textContent).toBe("列名が存在しません。");
+  });
+
   it("原因が 1 文目と同じなら重ねて出さない", () => {
     const html = renderToStaticMarkup(
       <ProcessFailureNotice failure={{ summary: "回答できませんでした。", cause: "回答できませんでした。" }} />
