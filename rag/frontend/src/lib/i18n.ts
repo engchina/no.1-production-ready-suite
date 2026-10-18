@@ -1331,6 +1331,8 @@ export const ja = {
   "settings.language.field.kanji_digits.help": "「字=数」の形で 1 行に 1 つ（例: 一=1、〇=0）。",
   "settings.language.field.kanji_multipliers": "漢数字の位取りの字と倍率",
   "settings.language.field.kanji_multipliers.help": "「字=倍率」の形で 1 行に 1 つ。直前の数（無ければ 1）に掛けます（例: 十=10、百=100、千=1000）。",
+  "settings.language.field.roman_digits": "ローマ数字の字と値",
+  "settings.language.field.roman_digits.help": "「字=数」の形で 1 行に 1 つ。英字の大小は区別しません（例: i=1、v=5、x=10）。前付きの頁番号（i、ii、…）を読むときに使います。",
   "settings.language.field.branch_stop_chars": "枝番にしない後ろの字",
   "settings.language.field.branch_stop_chars.help": "「第3条の2」の後にこの字が続くと、枝番ではなく「の」+ 名詞とみなします（例: 「第三条の一部」の「部」）。",
   "settings.language.field.coordination_particles": "並列を見分ける助詞",

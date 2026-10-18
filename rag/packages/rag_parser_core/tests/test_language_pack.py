@@ -115,6 +115,22 @@ def test_parse_and_format_numbers_follow_the_pack() -> None:
         assert format_kanji_number(30) == "三十"
 
 
+def test_roman_numerals_follow_the_pack() -> None:
+    """ローマ数字の字と値は言語資源(#2289)。標準の書き方だけを読む。"""
+    from rag_parser_core.language.text import format_roman, parse_roman
+
+    cases = {"i": 1, "iv": 4, "ix": 9, "xiv": 14, "XL": 40, "mcmxciv": 1994, "Ⅻ": None}
+    assert {text: parse_roman(text) for text in cases} == cases
+    for invalid in ("iiii", "vx", "ic", "", "page"):
+        assert parse_roman(invalid) is None
+    assert [format_roman(n) for n in (3, 4, 49, 1994, 0)] == ["iii", "iv", "xlix", "mcmxciv", ""]
+    custom = resolve(builtin_pack(), {"numbers": {"roman_digits": ["i=1", "v=5"]}})
+    with bind_pack(custom):
+        assert parse_roman("iv") == 4
+        assert parse_roman("x") is None
+        assert format_roman(6) == "vi"
+
+
 def test_headings_citations_and_number_phrases_follow_the_pack() -> None:
     """番号の見出し・質問の引用・本文の数の書き方は言語資源から作る(#2181 段 1b)。"""
     from rag_parser_core.extraction import heading_level_from_prefix, numbered_heading

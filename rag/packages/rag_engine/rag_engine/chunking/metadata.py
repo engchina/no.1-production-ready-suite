@@ -46,7 +46,7 @@ def _chunk_metadata(
     retrieval_text: str,
     source_run_id: str,
     source_file_name: str,
-    logical_page_labels: dict[str, int] | None = None,
+    logical_page_labels: dict[str, int | str] | None = None,
     classification: DocumentClassification | None = None,
     section_path_sources: Sequence[str] = (),
     compute_retrieval_profile: bool = True,

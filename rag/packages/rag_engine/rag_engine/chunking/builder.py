@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import time
 from collections.abc import Iterable, Sequence
 from typing import Any
@@ -25,6 +24,7 @@ from rag_engine.chunking.constants import (
     DocumentChunk,
     _boilerplate_text_key,
     _clean_search_text,
+    _compact_page_text,
     _int_value,
     _page_number_footer_pattern,
     _required_string,
@@ -58,6 +58,7 @@ from rag_engine.chunking.layout import (
     _visual_groups,
 )
 from rag_engine.chunking.metadata import _chunk_metadata, _project_chunk_metadata, _validate_chunk_metadata_v4
+from rag_engine.chunking.page_numbers import PageNumber, read_page_number, select_logical_pages
 from rag_engine.chunking.records import (
     _buffer_has_body,
     _form_record_text,
@@ -219,7 +220,7 @@ def _build_child_chunks_for_engine(
     classification: DocumentClassification,
 ) -> list[DocumentChunk]:
     records = _annotate_layout_records(_promote_headings(records))
-    metadata_by_page = _metadata_by_page(records)
+    metadata_by_page = _metadata_by_page(records, config)
     visual_group_by_key = _visual_groups(records)
     inline_icons_by_target = _inline_icons_by_merge_target(records)
     attached_annotations_by_target = _attached_layout_annotations_by_target(records)
@@ -767,9 +768,11 @@ def _engine_labels(raw_engines: Any) -> dict[str, str]:
     return labels
 
 
-def _metadata_by_page(records: Sequence[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+def _metadata_by_page(records: Sequence[dict[str, Any]], config: ChunkingConfig | None = None) -> dict[int, dict[str, Any]]:
+    config = config or ChunkingConfig()
     metadata: dict[int, dict[str, Any]] = {}
     boilerplate_counts: dict[tuple[str, str], int] = {}
+    page_numbers: list[PageNumber] = []
     for record in records:
         page = _int_value(record.get("page"))
         if page is None:
@@ -777,10 +780,11 @@ def _metadata_by_page(records: Sequence[dict[str, Any]]) -> dict[int, dict[str, 
         page_metadata = metadata.setdefault(page, {})
         category = str(record.get("category") or "")
         record_text = _record_text(record)
-        compact_text = re.sub(r"\s+", "", record_text)
-        page_number = _page_number_footer_pattern().fullmatch(compact_text) if category == "Page-footer" else None
-        if page_number:
-            page_metadata["logical_page"] = int(page_number.group(1))
+        # 頁番号の形のフッターは頁の定型として本文から外す。論理頁は文書全体の並びで確かめてから決める（#2289）。
+        page_number = bool(_page_number_footer_pattern().fullmatch(_compact_page_text(record_text))) if category == "Page-footer" else False
+        candidate = read_page_number(record_text, page) if page_number else None
+        if candidate is not None:
+            page_numbers.append(candidate)
         if category not in METADATA_ONLY_CATEGORIES or not record_text:
             continue
         normalized_text = _boilerplate_text_key(record_text)
@@ -796,6 +800,14 @@ def _metadata_by_page(records: Sequence[dict[str, Any]]) -> dict[int, dict[str, 
                 "normalized_text": normalized_text,
             }
         )
+    logical_pages = select_logical_pages(
+        page_numbers,
+        page_count=len(metadata),
+        min_run_pages=config.page_number_min_run_pages,
+        offset_tolerance=config.page_number_offset_tolerance,
+    )
+    for page, logical_page in logical_pages.items():
+        metadata[page]["logical_page"] = logical_page
     for page_metadata in metadata.values():
         candidates = page_metadata.get("_page_layout_candidates") if isinstance(page_metadata.get("_page_layout_candidates"), list) else []
         excluded_layout = []
