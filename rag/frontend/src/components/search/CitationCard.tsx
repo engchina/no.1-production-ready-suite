@@ -1,5 +1,4 @@
-import { LocateFixed } from "lucide-react";
-import { Button, EvidenceCard, useEvidenceSource } from "@production-ready/ui";
+import { EvidenceCard, EvidenceSourceButton, useEvidenceSource } from "@production-ready/ui";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import type {
@@ -8,7 +7,6 @@ import type {
   RetrievedChunk,
 } from "@/lib/api";
 import { citationModelUsed } from "@/lib/chunk-metadata";
-import { t } from "@/lib/i18n";
 
 import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
 import { CitationSourceSheet } from "./CitationSourceSheet";
@@ -43,12 +41,20 @@ export interface CitationCardOptions {
 export function CitationCard({ chunk, index, ...options }: CitationCardOptions & { chunk: RetrievedChunk; index: number }) {
   const source = useEvidenceSource<RetrievedChunk>();
   const preview = options.preview ?? true;
+  const item = citationEvidenceItem(chunk);
   return (
     <EvidenceCard
-      item={citationEvidenceItem(chunk)}
+      item={item}
       index={index}
       labels={EVIDENCE_LABELS}
-      actions={<CitationActions chunk={chunk} {...options} onPreview={() => source.open(chunk)} />}
+      actions={
+        <>
+          {preview ? (
+            <EvidenceSourceButton fileName={item.fileName} onOpen={() => source.open(chunk)} labels={EVIDENCE_LABELS} />
+          ) : null}
+          <CitationActions chunk={chunk} {...options} />
+        </>
+      }
     >
       {preview && source.mounted ? (
         <CitationSourceSheet
@@ -64,7 +70,10 @@ export function CitationCard({ chunk, index, ...options }: CitationCardOptions &
   );
 }
 
-/** 根拠のカードの操作の行（引用箇所の表示・根拠の評価）。 */
+/**
+ * 根拠のカードの、開くボタンの後ろの操作（根拠の評価）。開くボタン「根拠を表示」は共通の部品が描く（#2388）。
+ * 根拠は画面を移動せず右のサイドパネルで見せる（#2360）。文書の詳細はパネルの中から別タブで開く（#442）。
+ */
 export function CitationActions({
   chunk,
   traceId,
@@ -72,41 +81,20 @@ export function CitationActions({
   sourceSurface = "search",
   messageId = null,
   contentSnapshot = null,
-  preview = true,
-  onPreview,
-}: CitationCardOptions & { chunk: RetrievedChunk; onPreview: () => void }) {
-  const previewFileName = chunk.file_name ?? chunk.document_id;
+}: CitationCardOptions & { chunk: RetrievedChunk }) {
+  if (!traceId || !searchAnswerProfileId) return null;
   return (
-    <>
-      {/* 引用箇所は画面を移動せず右のサイドパネルで見せる（#2360）。文書の詳細はパネルの中から別タブで開く（#442）。 */}
-      {preview ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            icon={LocateFixed}
-            onClick={onPreview}
-            aria-haspopup="dialog"
-            aria-label={t("search.citation.previewOpenLabel", { file: previewFileName })}
-          >
-            {t("search.citation.previewOpen")}
-          </Button>
-        </div>
-      ) : null}
-      {traceId && searchAnswerProfileId ? (
-        <FeedbackControls
-          traceId={traceId}
-          searchAnswerProfileId={searchAnswerProfileId}
-          targetType="citation"
-          sourceSurface={sourceSurface}
-          documentId={chunk.document_id}
-          chunkId={chunk.chunk_id}
-          messageId={messageId}
-          contentSnapshot={contentSnapshot}
-          compact
-        />
-      ) : null}
-    </>
+    <FeedbackControls
+      traceId={traceId}
+      searchAnswerProfileId={searchAnswerProfileId}
+      targetType="citation"
+      sourceSurface={sourceSurface}
+      documentId={chunk.document_id}
+      chunkId={chunk.chunk_id}
+      messageId={messageId}
+      contentSnapshot={contentSnapshot}
+      compact
+    />
   );
 }
 

@@ -51,7 +51,6 @@ import {
 import { streamSearch } from "@/lib/search-stream";
 import { answerProcessStepsFromStages, type AnswerStageRecord } from "@/lib/answer-process";
 import { isSubmitEnter } from "@/lib/keyboard";
-import { evidenceGroups } from "@/lib/evidence-groups";
 import { t } from "@/lib/i18n";
 import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { APP_ROUTES } from "@/lib/routes";
@@ -436,8 +435,6 @@ export function SearchClient() {
         executionSteps: parseAnswerDiagnostics(meta?.diagnostics?.answer)?.steps ?? [],
       })
     : [];
-  // 回答を作らない検索の結果のまとまり（#2097）。回答の根拠は AnswerCitations が作る。
-  const evidence = phase === "done" && !answerMode ? evidenceGroups(citations, meta?.diagnostics?.answer) : null;
   // 処理の経過（#2096。チャットと同じ AnswerProcess）。実行中も終わった後も回答・検索結果の上の同じ場所に 1 つ出す
   // （作成中の「N ステップ完了」が終わると「処理の経過」になり、完了したら一覧を閉じる。末尾に出し直さない。
   // #2115 / #2118）。「処理の詳細」（処理の経過の中の末尾。#2325）は回答の記録の詳細（回答を作ったときは標準回答による評価も）でチャットと同じ。
@@ -848,7 +845,6 @@ export function SearchClient() {
                     {meta && phase === "done" ? <AnswerNotices diagnostics={meta.diagnostics?.answer} /> : null}
                     <AnswerCitations
                       citations={citations}
-                      diagnostics={phase === "done" ? meta?.diagnostics?.answer : null}
                       idPrefix="search"
                       cardProps={{
                         traceId: meta?.trace_id,
@@ -907,7 +903,6 @@ export function SearchClient() {
                   <p className="mb-3 text-xs leading-relaxed text-fg-muted">{t("search.results.hint")}</p>
                   <CitationList
                     citations={citations}
-                    groups={evidence}
                     idPrefix="search-results"
                     cardProps={{
                       traceId: meta?.trace_id,

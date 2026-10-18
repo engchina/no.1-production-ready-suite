@@ -199,7 +199,7 @@ for (const viewport of VIEWPORTS) {
     await expect(cards.nth(2)).not.toContainText("回答で引用");
     await expect(cards.nth(2)).toContainText("Rerank 未実行");
     await expect(cards.nth(0).getByTestId("evidence-chips")).toContainText("p.3");
-    // カードの「根拠を表示」も、根拠の行と同じ右のサイドパネルを開く（RAG の「引用箇所を表示」と同じ。#2360）。
+    // カードの「根拠を表示」も、根拠の行と同じ右のサイドパネルを開く（RAG と同じ共通の部品のボタン。#2360・#2388）。
     const cardOpen = cards.nth(0).getByRole("button", { name: "文書 0.pdf の根拠を表示" });
     await cardOpen.click();
     await expect(sheet.getByTestId("evidence-source-summary").getByTestId("citation-text")).toHaveText(
@@ -308,11 +308,9 @@ test("実行の詳細の回答も同じ節・根拠の塊で出す", async ({ pa
   await expect(section.getByTestId("answer-citations").locator("summary")).toHaveText(
     "AI に渡した 3 件 ／ 回答で引用 2 件 ／ うち該当確認済み 1 件"
   );
-  // 成果物の一覧に回答の根拠を重ねない。
+  // 回答の根拠・資料との照合は「成果物」に重ねない（内部の記録は監査ログで見る。#2403）。
   await expect(page.getByTestId("run-artifact-artifact-evidence")).toHaveCount(0);
-  // 資料との照合の成果物も、本文の節に書いた項目を出し直さない（件数のバッジだけ）。
-  await expect(page.getByTestId("run-review-artifact-validation").getByTestId("answer-review-unverified")).toHaveCount(0);
-  await expect(page.getByTestId("run-review-validation-artifact-validation")).toHaveText("一部を確かめられず省略 1 件");
+  await expect(page.getByTestId("run-artifacts-section")).toHaveCount(0);
 });
 
 // #2361: 除いた内容が多い回答も、本文の節に全件を同じ書式で出し（「ほか N 件」で切らない）、件数のバッジと一致させる。

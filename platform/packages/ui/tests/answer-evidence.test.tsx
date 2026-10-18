@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
-import { Layers, Search } from "lucide-react";
+import { Layers } from "lucide-react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
   AnswerEvidence,
   EvidenceCard,
-  EvidenceViews,
+  EvidenceList,
   evidenceCountLabel,
   evidenceLabels,
   evidenceScoreMeterPercent,
@@ -44,7 +44,6 @@ describe("evidenceCountLabel", () => {
       item(),
     ];
     expect(evidenceCountLabel(items)).toBe("AI に渡した 4 件 ／ 回答で引用 3 件 ／ うち該当確認済み 1 件 ／ 参考 1 件");
-    expect(evidenceCountLabel([item({ usedInAnswer: true })], 2)).toBe("AI に渡した 1 件（2 のまとまり） ／ 回答で引用 1 件");
   });
 
   it("引用したかが分からない（検索だけ）なら件数だけ、引用が 0 件なら内訳を出さない", () => {
@@ -53,7 +52,7 @@ describe("evidenceCountLabel", () => {
   });
 
   it("文言は上書きできる", () => {
-    expect(evidenceCountLabel([item()], null, evidenceLabels({ count: (n) => `${n} items` }))).toBe("1 items");
+    expect(evidenceCountLabel([item()], evidenceLabels({ count: (n) => `${n} items` }))).toBe("1 items");
   });
 });
 
@@ -76,7 +75,7 @@ describe("EvidenceCard", () => {
             ],
             sourceUrl: "https://example.com/a",
           })}
-          actions={<button type="button">引用箇所を表示</button>}
+          actions={<button type="button">根拠を表示</button>}
         />
       </ul>,
     );
@@ -93,7 +92,7 @@ describe("EvidenceCard", () => {
     expect(host.querySelector('[data-surface-tint="info"]')?.textContent).toBe("分類 A");
     expect(host.querySelector("a")?.getAttribute("href")).toBe("https://example.com/a");
     expect(host.querySelector('[role="meter"]')?.getAttribute("aria-valuetext")).toBe("0.420");
-    expect(host.querySelector("button")?.textContent).toBe("引用箇所を表示");
+    expect(host.querySelector("button")?.textContent).toBe("根拠を表示");
   });
 
   it("参考の記載は「参考」、引用していなければバッジを出さず、Rerank が無ければ未実行と出す", () => {
@@ -128,43 +127,33 @@ describe("AnswerEvidence", () => {
   });
 });
 
-describe("EvidenceViews", () => {
-  it("まとまりがあれば「順に表示 / まとまりごと」のタブ（件数つき）、無ければ一覧だけ。一覧は一定の高さでスクロールする", () => {
-    const items = [item(), item({ key: "b" })];
-    const plain = html(<EvidenceViews items={items} idPrefix="t" />);
-    expect(plain.querySelector('[role="tablist"]')).toBeNull();
-    expect(plain.querySelector("ul")?.className).toContain("bounded-scroll-area-lg");
-    const grouped = html(
-      <EvidenceViews
-        items={items}
+describe("EvidenceList", () => {
+  it("見方の切り替え（タブ）を持たず、一覧は一定の高さでスクロールする（#2388）", () => {
+    const host = html(<EvidenceList items={[item(), item({ key: "b" })]} />);
+    expect(host.querySelector('[role="tablist"]')).toBeNull();
+    expect(host.querySelector("ul")?.className).toContain("bounded-scroll-area-lg");
+    expect(host.querySelectorAll('[data-testid="evidence-card"]')).toHaveLength(2);
+  });
+
+  it("onOpenSource を渡すと、各カードの操作の行の先頭に同じ名前の「根拠を表示」を出す（3 製品で同じ）", () => {
+    const host = html(
+      <EvidenceList
+        items={[item(), item({ key: "b", fileName: "文書 B.pdf" })]}
         idPrefix="t"
-        groups={[
-          {
-            key: "g1",
-            fileName: "文書 A.pdf",
-            section: "第 1 節",
-            pages: "p.3",
-            entries: [
-              {
-                key: "e1",
-                index: 0,
-                roleLabel: "検索で見つかった箇所",
-                roleIcon: Search,
-                roleKind: "retrieved",
-                location: "p.3",
-                excerpt: "抜粋",
-                usedInAnswer: true,
-                answerUse: null,
-                chunkId: "doc-a:set:1",
-              },
-            ],
-          },
-        ]}
+        onOpenSource={() => undefined}
+        renderActions={() => <span data-testid="extra">評価</span>}
       />,
     );
-    expect(Array.from(grouped.querySelectorAll('[role="tab"]')).map((tab) => tab.textContent)).toEqual([
-      "順に表示2",
-      "まとまりごと1",
-    ]);
+    const buttons = Array.from(host.querySelectorAll("button"));
+    expect(buttons.map((button) => button.textContent)).toEqual(["根拠を表示", "根拠を表示"]);
+    expect(buttons[1].getAttribute("aria-label")).toBe("文書 B.pdf の根拠を表示");
+    expect(buttons[1].getAttribute("aria-haspopup")).toBe("dialog");
+    expect(buttons[0].getAttribute("data-testid")).toBe("t-source-0");
+    expect(host.querySelectorAll('[data-testid="extra"]')).toHaveLength(2);
+  });
+
+  it("開けない画面（onOpenSource なし）ではボタンを出さない", () => {
+    const host = html(<EvidenceList items={[item()]} />);
+    expect(host.querySelector("button")).toBeNull();
   });
 });

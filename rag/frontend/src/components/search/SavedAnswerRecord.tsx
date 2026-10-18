@@ -68,10 +68,9 @@ export function SavedAnswerRecord({
         </p>
       ) : null}
       {showCitations && record.citations.length > 0 ? (
-        // 回答の根拠はチャット・RAG 検索と同じ部品（折りたたみ・まとまりごと。#2097）。
+        // 回答の根拠はチャット・RAG 検索と同じ部品（折りたたみ・カード。#2097・#2388）。
         <AnswerCitations
           citations={record.citations}
-          diagnostics={record.answer_diagnostics}
           idPrefix={`answer-record-${record.trace_id}`}
           cardProps={{
             traceId: record.trace_id,
