@@ -637,6 +637,7 @@ def test_retrieve_evidence_skips_answer_generation(
     async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         captured["generate_answer"] = request.generate_answer
         captured["profile"] = request.search_answer_profile_id
+        captured["original_question"] = request.original_question
         return SearchResponse(
             answer="",
             citations=[_chunk(f"c{index}", used=False) for index in range(4)],
@@ -649,10 +650,20 @@ def test_retrieve_evidence_skips_answer_generation(
     user = auth.user_with_permissions("searcher", ["menu.search"])
     body = _call(
         "rag_retrieve_evidence",
-        {"query": "規程", "search_answer_profile_id": "bv-1", "evidence_limit": 3},
+        {
+            "query": "規程",
+            "search_answer_profile_id": "bv-1",
+            "evidence_limit": 3,
+            "original_question": "規程の期限はいつか",
+        },
         _token(user.user_uuid),
     )["structuredContent"]
-    assert captured == {"generate_answer": False, "profile": "bv-1"}
+    # 元の質問（#2261）は検索の要求に渡す（条の選択だけが使う）。
+    assert captured == {
+        "generate_answer": False,
+        "profile": "bv-1",
+        "original_question": "規程の期限はいつか",
+    }
     assert [item["chunk_id"] for item in body["evidence"]] == ["c0", "c1", "c2"]
     assert body["evidence_omitted"] == 1
     assert (body["trace_id"], body["guardrail_warnings"]) == ("trace-r", ["注意"])

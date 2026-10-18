@@ -792,6 +792,8 @@ class AnswerEngine:
             article_documents=lambda **kwargs: run_async(
                 lambda: self._article_documents(request, state)
             ),
+            # 呼び出し元が検索文を短く言い換えたときの元の質問(#2261)。条の選択だけが使う。
+            article_question=lambda: request.original_question,
         )
 
         def notify_step(name: str, outcome: str, elapsed: float) -> None:

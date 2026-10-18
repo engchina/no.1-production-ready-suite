@@ -332,6 +332,14 @@ class SearchInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str = Field(..., min_length=1, max_length=8000, description="質問文。")
+    original_question: OptionalText = Field(
+        default=None,
+        max_length=8000,
+        description=(
+            "利用者の元の質問。query を検索用に短く言い換えたときに渡す。条で構成された文書の"
+            "根拠の条を選ぶときに query と合わせて使う（検索は query で行う）。"
+        ),
+    )
     search_answer_profile_id: OptionalText = Field(
         default=None,
         max_length=128,
@@ -2826,6 +2834,8 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
         "knowledge_base_ids": arguments.knowledge_base_ids,
         "filters": arguments.filters,
     }
+    if arguments.original_question is not None:
+        payload["original_question"] = arguments.original_question
     if arguments.include_superseded:
         # 検索の要求の中では旧版の扱いは filters の 1 つ（画面の検索と同じ。#1248）。
         payload["filters"] = {**arguments.filters, INCLUDE_SUPERSEDED_FILTER_KEY: "true"}

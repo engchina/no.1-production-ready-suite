@@ -213,6 +213,8 @@ from app.features.agent.tools import (
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
+# RAG に渡す利用者の元の質問の文字数の上限（RAG の入力の上限と同じ。#2261）。
+_ORIGINAL_QUESTION_MAX_CHARS = 8000
 
 BUILTIN_RUNTIME_ID = "builtin"
 SDK_PACKAGE = "openai-agents"
@@ -908,6 +910,24 @@ class _ToolRecorder:
         # 確認を持たない RAG（引数の無い版）には送らない（未定義の引数は拒否される）。
         return isinstance(properties, dict) and "skip_clarification" in properties
 
+    def _original_question(self, name: str, definition: ToolDefinition | None) -> str | None:
+        """RAG の根拠を集めるツールに渡す利用者の元の質問（Run の目標。#2261。渡さなければ None）。
+
+        モデルは検索文を短いキーワードに言い換えることがあり、RAG が条で構成された文書の根拠の
+        条を選ぶ手がかり（事例の論点）が落ちる。モデルに任せず決定的に付ける。引数を持たない
+        RAG（古い版）には送らない。
+        """
+        if (
+            definition is None
+            or mcp_base_tool_name(name) not in {RAG_SEARCH, RAG_RETRIEVE_EVIDENCE}
+            or not self.goal.strip()
+        ):
+            return None
+        properties = (definition.input_schema or {}).get("properties")
+        if not isinstance(properties, dict) or "original_question" not in properties:
+            return None
+        return self.goal.strip()[:_ORIGINAL_QUESTION_MAX_CHARS]
+
     def _without_asking(self, next_step: dict[str, Any] | None) -> dict[str, Any] | None:
         if self.confirmation is None or self.confirmation.asks:
             return next_step
@@ -975,6 +995,9 @@ class _ToolRecorder:
             # 利用者に確認しない Run は、RAG にルールの回答前の確認を出させない（#2117。モデルに
             # 任せず決定的に付ける）。
             call_arguments = {**call_arguments, "skip_clarification": True}
+        original_question = self._original_question(name, definition)
+        if original_question is not None and not call_arguments.get("original_question"):
+            call_arguments = {**call_arguments, "original_question": original_question}
         call = ToolCall(
             name=name,
             arguments=call_arguments,
