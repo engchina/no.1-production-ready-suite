@@ -329,6 +329,8 @@ class StoredMessage:
     heartbeat_at: datetime | None = None
     # 回答前に確認した内容（USER のメッセージだけ。``ChatClarificationRecord`` の JSON。#1839）。
     clarification: dict[str, Any] | None = None
+    # 回答に付けた注意書き（ASSISTANT の回答だけ。#2405）。会話の履歴の本文（content）とは分ける。
+    answer_notice: str | None = None
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
@@ -3390,6 +3392,8 @@ class OracleClient:
             "citations_json": _json_bind(record.get("citations") or []),
             "diagnostics_json": _json_bind(record.get("diagnostics") or {}),
             "evaluation_input_json": _json_bind(record.get("evaluation_input")),
+            # 回答に付けた注意書き（#2405）。
+            "answer_notice": record.get("answer_notice") or None,
             # 持ち主（回答を生成した利用者）。一覧・詳細・評価・削除を持ち主へ絞る（#304）。
             "user_id_hash": current_audit_request_context().user_id_hash,
         }
@@ -3411,15 +3415,16 @@ class OracleClient:
                     target.citations_json = :citations_json,
                     target.diagnostics_json = :diagnostics_json,
                     target.evaluation_input_json = :evaluation_input_json,
+                    target.answer_notice = :answer_notice,
                     target.evaluation_json = NULL
                 WHEN NOT MATCHED THEN INSERT (
                     trace_id, search_answer_profile_id, surface, answer_engine, question,
                     rewritten_question, answer, citations_json, diagnostics_json,
-                    evaluation_input_json, user_id_hash
+                    evaluation_input_json, answer_notice, user_id_hash
                 ) VALUES (
                     :trace_id, :search_answer_profile_id, :surface, :answer_engine, :question,
                     :rewritten_question, :answer, :citations_json, :diagnostics_json,
-                    :evaluation_input_json, :user_id_hash
+                    :evaluation_input_json, :answer_notice, :user_id_hash
                 )
                 """,
                 binds,
@@ -3485,7 +3490,7 @@ class OracleClient:
                 """
             SELECT trace_id, search_answer_profile_id, surface, answer_engine, question,
                    rewritten_question, answer, citations_json, diagnostics_json,
-                   evaluation_input_json, evaluation_json, created_at
+                   evaluation_input_json, evaluation_json, answer_notice, created_at
             FROM rag_answer_records
             WHERE trace_id = :trace_id
               AND {scope_sql}
@@ -4105,6 +4110,7 @@ class OracleClient:
             # 回答前に確認した内容（#1839）。渡し忘れると clarification_json が
             # 常に NULL になる（#1877）。
             clarification=message.clarification,
+            answer_notice=message.answer_notice,
         )
 
         def operation(connection: OracleConnectionProtocol) -> StoredMessage:
@@ -4131,6 +4137,7 @@ class OracleClient:
                     lease_owner,
                     heartbeat_at,
                     clarification_json,
+                    answer_notice,
                     created_at
                 ) VALUES (
                     :message_id,
@@ -4150,6 +4157,7 @@ class OracleClient:
                     :lease_owner,
                     CASE WHEN :lease_owner IS NULL THEN NULL ELSE SYSTIMESTAMP END,
                     :clarification_json,
+                    :answer_notice,
                     :created_at
                 )
                 """,
@@ -4232,6 +4240,7 @@ class OracleClient:
                 m.lease_owner,
                 m.heartbeat_at,
                 m.clarification_json,
+                m.answer_notice,
                 m.created_at
             FROM rag_messages m
             JOIN rag_conversations c
@@ -4323,6 +4332,7 @@ class OracleClient:
                     status = :status,
                     elapsed_ms = :elapsed_ms,
                     progress_json = :progress_json,
+                    answer_notice = :answer_notice,
                     heartbeat_at = SYSTIMESTAMP
                 WHERE message_id = :message_id
                   AND status = 'STREAMING'
@@ -13330,6 +13340,7 @@ def _message_binds(message: StoredMessage) -> dict[str, object]:
         "clarification_json": (
             None if message.clarification is None else _json_dumps(message.clarification)
         ),
+        "answer_notice": message.answer_notice,
         "created_at": message.created_at,
     }
 
@@ -13514,6 +13525,7 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
         ),
         lease_owner=_optional_str(row.get("lease_owner")),
         clarification=_json_object_or_none(row.get("clarification_json")),
+        answer_notice=_optional_str(row.get("answer_notice")),
         heartbeat_at=(
             _datetime_value(row.get("heartbeat_at"))
             if row.get("heartbeat_at") is not None
@@ -14424,6 +14436,7 @@ CREATE TABLE {table_name} (
     diagnostics_json    JSON NOT NULL,
     evaluation_input_json JSON,
     evaluation_json     JSON,
+    answer_notice       CLOB,
     user_id_hash        CHAR(64),
     created_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_surface_ck CHECK (surface IN ('search', 'chat'))
@@ -14673,6 +14686,7 @@ CREATE TABLE {table_name} (
     lease_owner          VARCHAR2(128),
     heartbeat_at         TIMESTAMP WITH TIME ZONE,
     clarification_json   CLOB,
+    answer_notice        CLOB,
     created_at           TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_role_ck
         CHECK (role IN ('USER', 'ASSISTANT', 'SYSTEM')),

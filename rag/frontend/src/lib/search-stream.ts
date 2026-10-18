@@ -34,6 +34,8 @@ export interface SearchStreamHandlers {
     elapsed_ms: number;
     guardrail_warnings: string[];
     diagnostics: SearchDiagnostics;
+    /** 回答の注意書き（回答の本文と根拠の後に出す。無いときは null / 未指定。#2405）。 */
+    notice?: string | null;
   }) => void;
   onDelta?: (text: string) => void;
   /** realtime stream 後にガードレールがマスク/差し替えした本文で累積回答を置換する。 */

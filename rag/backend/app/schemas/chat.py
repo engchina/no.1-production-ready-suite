@@ -78,6 +78,9 @@ class ChatMessage(BaseModel):
     # 回答の処理の段階のイベント（3 製品共通の契約 `pr_backend_core.chat_progress`。#1359）。
     # 作成中（STREAMING）は記録の途中、終わった後は終端まで。段階を保存していないメッセージは None。
     progress: list[ChatProgressEvent] | None = None
+    # 回答に付けた注意書き（ASSISTANT の回答だけ。#2405）。確認の質問・失敗・停止・この機能より前の
+    # 回答は None。会話の履歴としてモデルに渡す本文（content）には含めない。
+    notice: str | None = None
     # 回答前に確認した内容（USER のメッセージだけ。確認しなかった質問は None。#1839）。
     clarification: ChatClarificationRecord | None = None
     # 会話の持ち主が送った質問か。system_admin が他の利用者の会話で送った質問は false（#1928）。

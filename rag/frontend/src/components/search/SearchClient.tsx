@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AnswerNotice,
   DisclosureChevron,
   PageBody,
   PageHeader,
@@ -87,6 +88,8 @@ interface Meta {
   elapsed_ms: number;
   guardrail_warnings: string[];
   diagnostics: Partial<SearchDiagnostics> | null;
+  /** 回答の注意書き（#2405。無いときは null）。 */
+  notice?: string | null;
 }
 
 interface SearchRun {
@@ -343,6 +346,7 @@ export function SearchClient() {
               elapsed_ms: m.elapsed_ms,
               guardrail_warnings: m.guardrail_warnings,
               diagnostics: m.diagnostics ?? null,
+              notice: m.notice ?? null,
             });
             setRun((current) =>
               current
@@ -854,6 +858,10 @@ export function SearchClient() {
                       }}
                       className="border-t border-border pt-1"
                     />
+                    {/* 回答の注意書きは回答の本文と根拠の後（3 製品共通の AnswerNotice。#2405）。 */}
+                    {meta && phase === "done" ? (
+                      <AnswerNotice notice={meta.notice} label={t("answer.notice.label")} />
+                    ) : null}
                     {/* 評価は回答の枠の最後。根拠を確かめてから評価できるよう、その後に置く（チャットと同じ。
                         #1202 / #1420。page-archetypes.md §6.1）。 */}
                     {meta && phase === "done" ? (

@@ -1,4 +1,5 @@
 import {
+  AnswerNotice,
   ChatComposer,
   ChatComposerOption,
   ChatAnswer,
@@ -182,6 +183,8 @@ interface LiveColumn {
   guardrailWarnings: string[];
   /** 回答の根拠・実行記録(無い回答では null)。 */
   answerDiagnostics: unknown;
+  /** 回答の注意書き（#2405。届くまで・無いときは null）。 */
+  notice?: string | null;
   /** 作成中の回答のメッセージ（段階のイベントの対象）。`start` が届くまでは null。 */
   messageId: string | null;
   /** 処理の段階のイベント（3 製品共通の契約。#1359）。最初の `chat_progress` が届くまでは空。 */
@@ -257,6 +260,7 @@ function AssistantColumn({
   storageFailures,
   guardrailWarnings,
   answerDiagnostics = null,
+  notice = null,
   savedAnswer = false,
   progress = null,
   stoppedMessage = null,
@@ -277,6 +281,8 @@ function AssistantColumn({
   storageFailures?: StorageFailure[];
   guardrailWarnings: string[];
   answerDiagnostics?: unknown;
+  /** 回答の注意書き（回答の本文と根拠の後に出す。#2405）。 */
+  notice?: string | null;
   /** 保存された回答がある(trace_id から回答の実行記録を開ける)。 */
   savedAnswer?: boolean;
   /**
@@ -395,7 +401,7 @@ function AssistantColumn({
           {guardrailWarnings.join(" / ")}
         </Banner>
       ) : null}
-      {citations.length > 0 || (finished && (traceId || answerDiagnostics || progress)) ? (
+      {citations.length > 0 || (finished && (traceId || answerDiagnostics || progress || notice)) ? (
         // 回答の下は 回答の本文 → 根拠の一覧（AI に渡した N 件）→ 評価 の順（#1202 / #1417。処理の経過は回答の上。
         // #2115。RAG 検索と同じ）。比較の列の高さをそろえるため、回答の枠の下端にそろえる。
         <div className="mt-auto flex flex-col gap-3">
@@ -406,6 +412,8 @@ function AssistantColumn({
             cardProps={{ traceId, searchAnswerProfileId, sourceSurface: "chat", messageId }}
             className="border-t border-border px-2 pt-1"
           />
+          {/* 回答の注意書きは回答の本文と根拠の後（3 製品共通の AnswerNotice。#2405）。 */}
+          {finished ? <AnswerNotice notice={notice} label={t("answer.notice.label")} /> : null}
           {finished ? (
             <FeedbackControls
               traceId={traceId}
@@ -457,6 +465,7 @@ function MessageTurn({
     storageFailures?: StorageFailure[];
     guardrailWarnings: string[];
     answerDiagnostics?: unknown;
+    notice?: string | null;
     savedAnswer?: boolean;
     progress?: { steps: ChatProgressStep[]; startedAtMs: number; reconnecting?: boolean } | null;
     stoppedMessage?: string | null;
@@ -530,6 +539,7 @@ function MessageTurn({
               storageFailures={column.storageFailures}
               guardrailWarnings={column.guardrailWarnings}
               answerDiagnostics={column.answerDiagnostics}
+              notice={column.notice}
               savedAnswer={column.savedAnswer}
               progress={column.progress}
               stoppedMessage={column.stoppedMessage}
@@ -1238,12 +1248,13 @@ export function ChatClient() {
           };
         });
       },
-      onMetadata: ({ model_id, message_id, trace_id, guardrail_warnings, answer_diagnostics, storage_failures }) => {
+      onMetadata: ({ model_id, message_id, trace_id, guardrail_warnings, answer_diagnostics, storage_failures, notice }) => {
         updateColumn(model_id, {
           traceId: trace_id,
           guardrailWarnings: guardrail_warnings,
           answerDiagnostics: answer_diagnostics ?? null,
           storageFailures: storage_failures ?? [],
+          notice: notice ?? null,
         });
         if (message_id && storage_failures?.length) {
           setAnswerOutcomes((current) => ({ ...current, [message_id]: { storageFailures: storage_failures } }));
@@ -1434,6 +1445,7 @@ export function ChatClient() {
         stoppedMessage: column.status === "stopped" ? column.errorMessage : null,
         guardrailWarnings: column.guardrailWarnings,
         answerDiagnostics: column.answerDiagnostics,
+        notice: column.status === "done" ? (column.notice ?? null) : null,
         progress: {
           steps: columnProgressSteps(column.messageId, column.progressEvents),
           startedAtMs: column.startedAtMs,
@@ -1760,6 +1772,7 @@ export function ChatClient() {
                         storageFailures: answerOutcomes[reply.message_id]?.storageFailures,
                         stoppedMessage: reply.status === "CANCELLED" ? reply.content : null,
                         guardrailWarnings: reply.guardrail_warnings,
+                        notice: reply.status === "COMPLETE" ? (reply.notice ?? null) : null,
                         savedAnswer: Boolean(
                           reply.trace_id && answerTraceIds.has(reply.trace_id)
                         ),
