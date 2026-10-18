@@ -13,7 +13,11 @@ export const ANSWER_NOTICE_MESSAGES = {
   enabledHint: "無効にすると、3 製品のどの回答にも注意書きを出しません。本文は残ります。",
   fieldText: "本文",
   helperText:
-    "プレーンテキストで書きます。改行はそのまま出し、URL は自動でリンクにします。HTML・Markdown の書式は使えません。ヘルプデスクの連絡先（電話・URL など）を書き足せます。",
+    "プレーンテキストで書きます。改行はそのまま出し、URL は自動でリンクにします。HTML・Markdown の書式は使えません。連絡先は下の「窓口」に書きます。",
+  fieldContact: "窓口",
+  helperContact:
+    "本文の後に「{line}」と出します。窓口の名前と連絡の方法（電話・URL など）を 1 行で書きます。検索・回答プロファイルで窓口を上書きできます（RAG）。",
+  validationContactTooLong: "窓口は {max} 字以内で入力してください。",
   usingDefault: "既定の文を使っています。",
   usingCustom: "管理者が変えた文を使っています。",
   resetToDefault: "既定の文に戻す",

@@ -25,6 +25,8 @@ export { APPEARANCE_MESSAGES, type AppearanceMessages } from "./appearance/messa
 export {
   AnswerNoticeSettingsPage,
   answerNoticePayload,
+  composeAnswerNotice,
+  normalizeAnswerNoticeContact,
   normalizeAnswerNoticeText,
   type AnswerNoticeSettingsPageProps,
 } from "./answer-notice/AnswerNoticeSettingsPage";

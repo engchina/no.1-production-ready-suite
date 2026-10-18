@@ -1148,6 +1148,12 @@ export interface SearchAnswerProfileConfig {
    * 言語資源の上書き（#2181。全体の言語資源に重ねる。検索・回答の項目だけ）。古い保存には無い（上書き無し）。
    */
   language_pack?: LanguagePackSections;
+  /**
+   * 回答の注意書きの窓口の上書き（#2400。窓口の名前・連絡の方法の 1 行）。空・古い保存に無いときはシステム設定の窓口。
+   */
+  contact_override?: string;
+  /** 資料で答えた回答の窓口の案内を「資料から分かる仕様を示し、当てはまらなければ窓口へ」の形にするか（#2400。既定 false）。 */
+  spec_then_contact?: boolean;
   // system prompt・既定言語は #595 で削除した（回答は回答プロンプトのテンプレートで作る）。
   // 配信モード（serving_mode）は #1331 で削除した（文書の全 active レシピを常に融合する）。
 }

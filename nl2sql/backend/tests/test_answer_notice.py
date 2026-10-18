@@ -52,7 +52,11 @@ def test_chat_uses_saved_text_and_omits_when_disabled(chat: ChatFixture) -> None
     notice = get_security_service().answer_notice
     notice.save(AnswerNoticeRecord(enabled=True, text="独自の注意書き"))
     job = run(service, request())
-    assert job.result is not None and job.result.notice == "独自の注意書き"
+    assert job.result is not None
+    assert (
+        job.result.notice
+        == "独自の注意書き\n解決しない場合は、ヘルプデスクへお問い合わせください。"
+    )
 
     notice.save(AnswerNoticeRecord(enabled=False, text="独自の注意書き"))
     job = run(service, request("顧客の一覧"))
