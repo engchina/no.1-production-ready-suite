@@ -297,9 +297,12 @@ class Settings:
     request_coverage_max_queries: int = 2
     request_coverage_max_chunks: int = 4
     request_coverage_deadline_seconds: float = 10.0
-    # 主の検索の後に足す検索（業務ガイドの手順ごとの検索・根拠の無い要求の再検索）の回数の合計の枠 (#2395)。
-    # 種類ごとの上限はこの枠の中で数える（`retrieval.extra_retrieval`）。
-    extra_retrieval_max_queries: int = 6
+    # 丸数字・(1) などで並べた小問ごとの検索をする小問の数と、小問ごとに確保する根拠の数 (#2399)。
+    request_coverage_max_subquestions: int = 5
+    request_coverage_chunks_per_subquestion: int = 2
+    # 主の検索の後に足す検索（業務ガイドの手順ごとの検索・小問ごとの検索・根拠の無い要求の再検索）の回数の
+    # 合計の枠 (#2395)。種類ごとの上限はこの枠の中で数える（`retrieval.extra_retrieval`）。
+    extra_retrieval_max_queries: int = 8
     # 業務ガイドの手順ごとに検索し、手順が参照する資料の頁の根拠を回答の材料に入れる (#2395)。LLM は呼ばない。
     # 手順ごとの検索の回数の上限・1 手順に確保する根拠の数・参照の頁から入れる根拠の数・期限で抑える。
     guide_step_retrieval_enabled: bool = True
@@ -564,7 +567,9 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         request_coverage_max_queries=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES", 2)),
         request_coverage_max_chunks=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS", 4)),
         request_coverage_deadline_seconds=max(0.0, _env_float(env, "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS", 10.0)),
-        extra_retrieval_max_queries=max(0, _env_int(env, "RAG_ENGINE_EXTRA_RETRIEVAL_MAX_QUERIES", 6)),
+        request_coverage_max_subquestions=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_SUBQUESTIONS", 5)),
+        request_coverage_chunks_per_subquestion=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_CHUNKS_PER_SUBQUESTION", 2)),
+        extra_retrieval_max_queries=max(0, _env_int(env, "RAG_ENGINE_EXTRA_RETRIEVAL_MAX_QUERIES", 8)),
         guide_step_retrieval_enabled=_env_bool(env, "RAG_ENGINE_GUIDE_STEP_RETRIEVAL", True),
         guide_step_max_queries=max(0, _env_int(env, "RAG_ENGINE_GUIDE_STEP_MAX_QUERIES", 4)),
         guide_step_chunks_per_step=max(1, _env_int(env, "RAG_ENGINE_GUIDE_STEP_CHUNKS_PER_STEP", 2)),

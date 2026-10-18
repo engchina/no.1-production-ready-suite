@@ -1,20 +1,18 @@
 import { ExternalLink } from "lucide-react";
 import { Link } from "react-router-dom";
-import { EvidenceSourceSheet } from "@production-ready/ui";
-
-import { DocumentPreview } from "@/components/documents/DocumentPreview";
-import { useAuth } from "@/components/security/AuthProvider";
-import type { RetrievedChunk } from "@/lib/api";
 import {
   bboxCoordinateModeFromMetadata,
   bboxFromMetadata,
   bboxPageRotationFromMetadata,
   bboxPageSizeFromMetadata,
   bboxUnitFromMetadata,
-  buildPreviewHighlights,
-  displayRegionsFromMetadata,
-  withBboxPageRotation,
-} from "@/lib/bbox";
+  EvidenceSourceSheet,
+  evidencePreviewFocus,
+} from "@production-ready/ui";
+
+import { DocumentPreview } from "@/components/documents/DocumentPreview";
+import { useAuth } from "@/components/security/AuthProvider";
+import type { RetrievedChunk } from "@/lib/api";
 import { firstCitationElementId } from "@/lib/chunk-metadata";
 import { t } from "@/lib/i18n";
 import { useDocument, useDocumentRecipes } from "@/lib/queries";
@@ -74,7 +72,10 @@ export function CitationSourceSheet({
   );
 }
 
-/** 原文のプレビュー（Office 原本は変換済みの PDF。要素の表示領域を要素ごとに強調する。#349）。 */
+/**
+ * 原文のプレビュー（Office 原本は変換済みの PDF。要素の表示領域を要素ごとに強調する。#349）。強調の計算は Agent の
+ * 根拠のパネルと同じ共通の `evidencePreviewFocus`（#2389）。
+ */
 function CitationSourcePreview({ chunk, open }: { chunk: RetrievedChunk; open: boolean }) {
   const previewFileName = chunk.file_name ?? chunk.document_id;
   const recipeId = firstMetadataToken(chunk.metadata.recipe_id);
@@ -82,23 +83,7 @@ function CitationSourcePreview({ chunk, open }: { chunk: RetrievedChunk; open: b
   const previewDoc = useDocument(open ? chunk.document_id : null);
   const previewRecipes = useDocumentRecipes(open ? chunk.document_id : null);
   const previewRecipe = previewRecipes.data?.find((recipe) => recipe.recipe_id === recipeId);
-  const focusPage = firstIntegerMetadata(chunk.metadata, ["page_start", "page"]);
-  const focusBbox = bboxFromMetadata(chunk.metadata);
-  const focusBboxMode = bboxCoordinateModeFromMetadata(chunk.metadata);
-  const focusBboxUnit = bboxUnitFromMetadata(chunk.metadata);
-  const focusPageSize = withBboxPageRotation(
-    bboxPageSizeFromMetadata(chunk.metadata),
-    bboxPageRotationFromMetadata(chunk.metadata)
-  );
-  // 回答の根拠でも、要素の表示領域（要素ごとの bbox）を要素ごとに強調する（#349）。
-  const previewHighlights = buildPreviewHighlights({
-    focusPage,
-    focusBbox,
-    focusBboxMode,
-    focusBboxUnit,
-    focusPageSize,
-    regions: displayRegionsFromMetadata(chunk.metadata),
-  });
+  const focus = evidencePreviewFocus(chunk.metadata);
   return (
     <DocumentPreview
       documentId={chunk.document_id}
@@ -109,12 +94,12 @@ function CitationSourcePreview({ chunk, open }: { chunk: RetrievedChunk; open: b
           ? (previewRecipe?.preprocess_artifact ?? null)
           : (previewDoc.data?.preprocess_artifact ?? null)
       }
-      focusPage={focusPage}
-      focusBbox={focusBbox}
-      focusBboxMode={focusBboxMode}
-      focusBboxUnit={focusBboxUnit}
-      focusPageSize={focusPageSize}
-      highlights={previewHighlights}
+      focusPage={focus.focusPage}
+      focusBbox={focus.focusBbox}
+      focusBboxMode={focus.focusBboxMode}
+      focusBboxUnit={focus.focusBboxUnit}
+      focusPageSize={focus.focusPageSize}
+      highlights={focus.highlights}
       className="min-h-0 flex-1"
     />
   );

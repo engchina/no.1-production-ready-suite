@@ -451,6 +451,14 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   縛った 5 分の HMAC 署名の URL（`GET /api/figures/{token}`）を返し、読むたびに権限・版を確かめ直す。ブラウザから
   開く起点は `AGENT_EXTERNAL_RAG_PUBLIC_URL`（空なら RAG が返す URL。MCP の URL の host）で、画面は開くたびに
   URL を取り直し、画像を読めなければ（期限切れ・資料の更新・権限）取り直しの操作を出す。
+- **RAG の根拠の原文のプレビュー（#2389）**: 根拠の右のサイドパネル（共通の `EvidenceSourceSheet`）の下部に、RAG と
+  同じ共通の `DocumentPreview`（ページの画像・ツールバー・bbox の強調）を出す。`GET /api/runs/{run_id}/source-preview`
+  （実行の詳細と同じ権限・対象範囲）が、Run の `rag_evidence` の成果物にその根拠があることを確かめてから、`rag` の
+  `rag_read_source` を `include_preview=true`・`purpose=source_preview`（`sub` は画面を見ている利用者）で呼ぶ。RAG は
+  プレビューの種類・ページの一覧・ページの画像と原文の URL（利用者・chunk・版・ファイルに縛った 5 分の HMAC 署名。
+  `GET /api/source-previews/{token}/pages/{page}`・`…/content`）・強調に要る根拠の metadata を返し、読むたびに権限・版を
+  確かめ直す。画面は期限の前に取り直し、出せない根拠（権限が無い・ファイルが無い・資料の更新）は理由と再試行を出す。
+  図を開く（#1311）とは署名・検証の仕組み（RAG の `app/rag/signed_url.py`）を共有し、用途の印で鍵を分ける。
 
 ### 4.2 外部の MCP クライアントに業務 Agent を公開する（#1874）
 

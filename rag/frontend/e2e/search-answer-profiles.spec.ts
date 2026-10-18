@@ -77,6 +77,7 @@ for (const viewport of [
       "根拠の前後から加える数",
       "1 つの文書から採る根拠の上限",
       "回答の検索のオプション",
+      "業務ガイドの照合",
       "手順ごとの検索の上限",
       "実体でつながる根拠",
       "章節で広げる根拠",
@@ -91,9 +92,10 @@ for (const viewport of [
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
     // 継承 chip: セレクト6行(回答の 4 行(1 つの文書から採る根拠の上限。#2167) + 手順ごとの検索の上限(#2395)
-    // + 安全チェック) + 三値トグル6行(回答の Rerank・画面目録・根拠の無い要求を探し直す(#1279)・業務ガイドの
-    // 手順ごとに探す(#2395)・質問から項目の条件を読み取る(#652)・関係情報で根拠を広げる(#2055))。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(12);
+    // + 安全チェック) + 三値トグル8行(回答の Rerank・画面目録・根拠の無い要求を探し直す(#1279)・業務ガイドの
+    // 手順ごとに探す(#2395)・質問から項目の条件を読み取る(#652)・関係情報で根拠を広げる(#2055)・業務ガイドの
+    // 意味の照合と近いガイドの確認(#2398))。
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(14);
     await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(6);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
     await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
@@ -229,6 +231,16 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   ).toHaveAttribute("aria-pressed", "true");
   await expect(graphExpansion).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
   await graphExpansion.getByRole("button", { name: "ON" }).click();
+  // 業務ガイドの照合（#2398）。意味の照合は埋め込みの呼び出しが増えることを説明に出す。どちらも既定 無効(継承)。
+  const guideSemantic = page.getByRole("group", { name: "意味の近さで業務ガイドを選ぶ" });
+  await expect(
+    guideSemantic.getByRole("button", { name: "グローバル既定を継承" })
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(guideSemantic).toHaveAccessibleDescription(/埋め込みの呼び出しが 1 回増えます/);
+  await guideSemantic.getByRole("button", { name: "ON" }).click();
+  const guideCloseMatch = page.getByRole("group", { name: "近い業務ガイドを確かめる" });
+  await expect(guideCloseMatch).toHaveAccessibleDescription(/選択肢は業務ガイドの題名/);
+  await guideCloseMatch.getByRole("button", { name: "ON" }).click();
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
 
   await expect.poll(() => createBody?.name).toBe("手順ビュー");
@@ -244,6 +256,8 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   expect(query.guide_step_retrieval_enabled).toBe(false);
   expect(query.guide_step_max_queries ?? null).toBeNull();
   expect(query.graph_expansion_enabled).toBe(true);
+  expect(query.support_guide_semantic_match_enabled).toBe(true);
+  expect(query.support_guide_close_match_clarification_enabled).toBe(true);
   expect(query.answer_flow ?? null).toBeNull();
 });
 

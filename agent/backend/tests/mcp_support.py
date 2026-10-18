@@ -76,6 +76,8 @@ class RagReadSourceIn(_ContractInput):
     # 図の根拠の元の画像（#1282）と、画面で開く短命の URL（#1311）。
     include_image: bool = False
     include_image_url: bool = False
+    # 根拠の原文のプレビュー（#2389。画面の操作だけ）。
+    include_preview: bool = False
 
 
 class RagOutlineIn(_ContractInput):
@@ -384,6 +386,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "image_ref": None,
         "image": None,
         "image_url": None,
+        "preview": None,
         "locator": _LOCATOR,
         "text": "契約条項の全文",
         "offset": 0,

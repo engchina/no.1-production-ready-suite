@@ -728,6 +728,10 @@ function createState() {
     } as Record<string, string>,
     // 発行した図の URL の数（`GET /api/runs/{id}/figure-url`）。実際の署名つき URL と同じく、発行ごとに URL を変える（#1667）。
     figureUrlsIssued: 0,
+    // 根拠の原文のプレビュー（`GET /api/runs/{id}/source-preview`。#2389）。chunk_id ごとに上書きできる
+    // （`{ error: { status, message } }` で失敗、ほかの項目はプレビューの値の上書き）。発行ごとに URL を変える。
+    sourcePreviews: {} as Record<string, Json>,
+    sourcePreviewsIssued: 0,
     agents: d.agents as unknown as Json[],
     skills: d.skills as unknown as Json[],
     tools: d.tools as unknown as Json[],
@@ -1842,6 +1846,35 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return {
         url: `http://rag.e2e.test/api/figures/f1.${chunkId}.${state.figureUrlsIssued}.sig`,
         expires_at: "2026-06-28T00:05:00+00:00",
+      };
+    }
+    // RAG の根拠の原文のプレビュー（#2389）。spec は `http://rag.e2e.test/**` を page.route で応答する。
+    if (method === "GET" && at("runs", "*", "source-preview")) {
+      const chunkId = query.get("chunk_id") ?? "";
+      const override = (state.sourcePreviews[chunkId] ?? {}) as Json;
+      const error = override.error as { status: number; message: string } | undefined;
+      if (error) throw new HttpError(error.status, error.message);
+      state.sourcePreviewsIssued += 1;
+      const base = `http://rag.e2e.test/api/source-previews/p1.${encodeURIComponent(chunkId)}.${state.sourcePreviewsIssued}.sig`;
+      return {
+        kind: "pdf",
+        file_name: "合成の文書.pdf",
+        pages: [
+          { page_number: 1, width: 600, height: 800 },
+          { page_number: 2, width: 600, height: 800 },
+        ],
+        page_url_template: `${base}/pages/{page}`,
+        content_url: `${base}/content`,
+        highlight_metadata: {
+          page_start: 1,
+          page_width: 600,
+          page_height: 800,
+          bbox: "[60, 80, 300, 200]",
+          bbox_unit: "absolute",
+        },
+        expires_at: "2026-06-28T00:05:00+00:00",
+        expires_in_seconds: 300,
+        ...override,
       };
     }
     // Run から評価ケースの下書きを作る（#810）。

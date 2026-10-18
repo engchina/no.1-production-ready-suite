@@ -78,6 +78,19 @@ def _write(path: Path, payload: Any) -> Path:
     return path
 
 
+def test_split_sections_skips_subquestion_headings() -> None:
+    """小問の見出し(#2399。質問の写し)は前の節の本文に入れない。"""
+    answer = (
+        "要約。\n\n質問①：登録の方法は？\n\n資料により確認できた事項\n\n・登録画面で登録します。\n\n"
+        "質問②：削除の方法は？\n\n資料から確認できなかった事項\n\n・『②削除の方法は？』については、取得した資料で確認できませんでした。"
+    )
+
+    sections = split_sections(answer)
+
+    assert sections["資料により確認できた事項"].strip() == "・登録画面で登録します。"
+    assert "質問②" not in "".join(sections.values())
+
+
 def test_split_sections_and_judge_follow_rag_poc_rules() -> None:
     sections = split_sections(ANSWER)
 

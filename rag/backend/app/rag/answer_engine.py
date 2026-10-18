@@ -476,6 +476,13 @@ def build_engine_settings(
         "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": str(
             settings.rag_request_coverage_deadline_seconds
         ),
+        # 小問ごとの検索の上限(#2399。期限は再検索と共通)。
+        "RAG_ENGINE_REQUEST_COVERAGE_MAX_SUBQUESTIONS": str(
+            settings.rag_request_coverage_max_subquestions
+        ),
+        "RAG_ENGINE_REQUEST_COVERAGE_CHUNKS_PER_SUBQUESTION": str(
+            settings.rag_request_coverage_chunks_per_subquestion
+        ),
         # 追加の検索の枠と、業務ガイドの手順ごとの検索(#2395)。
         "RAG_ENGINE_EXTRA_RETRIEVAL_MAX_QUERIES": str(settings.rag_extra_retrieval_max_queries),
         "RAG_ENGINE_GUIDE_STEP_RETRIEVAL": "1"

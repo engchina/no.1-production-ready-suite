@@ -45,6 +45,7 @@ from app.clients.oracle import (
 from app.clients.oracle_run_history import oracle_run_history_schema_sql
 from app.clients.section_map_store import oracle_section_map_schema_sql
 from app.clients.support_guide_store import (
+    oracle_support_guide_embedding_schema_sql,
     oracle_support_guide_revision_schema_sql,
     oracle_support_guide_schema_sql,
 )
@@ -228,6 +229,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="support_guide_revisions",
             table_name="rag_support_guide_revisions",
             sql=oracle_support_guide_revision_schema_sql(),
+        ),
+        # 業務ガイドの公開の版の質問の例の埋め込み（意味の照合。#2398）。
+        OracleSchemaSection(
+            name="support_guide_embeddings",
+            table_name="rag_support_guide_embeddings",
+            sql=oracle_support_guide_embedding_schema_sql(),
         ),
         OracleSchemaSection(
             name="document_sections",
@@ -432,12 +439,30 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
     )
     sections.append(
         OracleSchemaSection(
-            name="20261018_001_support_guide_schema_v2",
+            name="20261018_001_support_guide_embeddings",
+            table_name="rag_support_guide_embeddings",
+            sql=support_guide_embeddings_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261018_002_support_guide_schema_v2",
             table_name="rag_support_guides",
             sql=support_guide_schema_v2_migration_sql(),
         )
     )
     return sections
+
+
+def support_guide_embeddings_migration_sql() -> str:
+    """業務ガイドの質問の例の埋め込みの表（rag_support_guide_embeddings）を無ければ作る（#2398）。
+
+    表を足すだけでデータは変えない。DDL は正本（``oracle_support_guide_embedding_schema_sql``）から
+    作る。埋め込みは意味の照合を使うときに作るので、既存の公開の版の行は足さない。
+    """
+    return _create_missing_objects_sql(
+        oracle_support_guide_embedding_schema_sql(), "業務ガイドの埋め込み"
+    )
 
 
 def support_guide_schema_v2_migration_sql() -> str:

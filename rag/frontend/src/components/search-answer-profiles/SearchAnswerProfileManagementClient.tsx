@@ -1059,6 +1059,37 @@ function SearchAnswerProfileEditor({
                       />
                     </div>
                   </div>
+                  {/* 業務ガイドの照合（#2398）。用語の別名の展開は常に行い、ここでは任意の照合だけを選ぶ。 */}
+                  <div
+                    className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]"
+                    data-testid="search-answer-profile-guide-matching"
+                  >
+                    <h3 className="text-sm font-medium text-fg">
+                      {t("searchAnswerProfiles.field.guideMatching")}
+                    </h3>
+                    <div className="min-w-0 space-y-2">
+                      <QueryToggleRow
+                        label={t("searchAnswerProfiles.field.guideSemanticMatch")}
+                        description={t("searchAnswerProfiles.field.guideSemanticMatchHelper")}
+                        descriptionId="search-answer-profile-guide-semantic-match-helper"
+                        value={config.query.support_guide_semantic_match_enabled ?? null}
+                        disabled={locked}
+                        onChange={(value) =>
+                          updateQuery({ support_guide_semantic_match_enabled: value })
+                        }
+                      />
+                      <QueryToggleRow
+                        label={t("searchAnswerProfiles.field.guideCloseMatch")}
+                        description={t("searchAnswerProfiles.field.guideCloseMatchHelper")}
+                        descriptionId="search-answer-profile-guide-close-match-helper"
+                        value={config.query.support_guide_close_match_clarification_enabled ?? null}
+                        disabled={locked}
+                        onChange={(value) =>
+                          updateQuery({ support_guide_close_match_clarification_enabled: value })
+                        }
+                      />
+                    </div>
+                  </div>
                   <QuerySelectRow
                     id="search-answer-profile-guide-step-max-queries"
                     label={t("searchAnswerProfiles.field.guideStepMaxQueries")}

@@ -1042,6 +1042,13 @@ export interface KnowledgeBaseQueryConfig {
    * null は既定(5)。
    */
   max_anchors_per_document?: number | null;
+  /**
+   * 業務ガイドの照合で、質問と質問の例の埋め込みの近さを点に足す(#2398。質問ごとに埋め込みの呼び出しが 1 回増える)。
+   * null / 未指定は全体の既定(使わない)。
+   */
+  support_guide_semantic_match_enabled?: boolean | null;
+  /** 上位の 2 つの業務ガイドの点が近いとき、どれに沿うかを確かめる(#2398)。null / 未指定は全体の既定(確かめない)。 */
+  support_guide_close_match_clarification_enabled?: boolean | null;
 }
 
 /** 参照するナレッジベースで実体の索引を持つ文書の数(#1388)。 */

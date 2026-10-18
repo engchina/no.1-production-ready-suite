@@ -1391,13 +1391,30 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=60,
         description=("根拠の無い要求の再検索の期限(秒)。過ぎたら次の要求の検索を始めない(#1279)。"),
     )
-    rag_extra_retrieval_max_queries: int = Field(
-        default=6,
+    rag_request_coverage_max_subquestions: int = Field(
+        default=5,
         ge=0,
-        le=15,
+        le=10,
         description=(
-            "1 回の回答で、主の検索の後に足す検索(業務ガイドの手順ごとの検索・"
-            "根拠の無い要求の再検索)の回数の合計の上限(#2395)。種類ごとの上限はこの枠の中で数える。"
+            "丸数字・(1) などで並べた小問のうち、根拠が無いか一部だけの小問ごとに"
+            "検索する小問の数の上限(1 小問 1 回。0 で小問ごとの検索をしない。#2399)。"
+            "期限は再検索と共通。"
+        ),
+    )
+    rag_request_coverage_chunks_per_subquestion: int = Field(
+        default=2,
+        ge=0,
+        le=6,
+        description="小問ごとの検索で、小問ごとに回答の材料に確保する根拠(親 chunk)の数(#2399)。",
+    )
+    rag_extra_retrieval_max_queries: int = Field(
+        default=8,
+        ge=0,
+        le=20,
+        description=(
+            "1 回の回答で、主の検索の後に足す検索(業務ガイドの手順ごとの検索・小問ごとの検索・"
+            "根拠の無い要求の再検索)の回数の合計の上限(#2395)。種類ごとの上限はこの枠の中で数え、"
+            "手順ごとの検索・小問ごとの検索・再検索の順に枠の残りから取る。"
         ),
     )
     rag_guide_step_retrieval_enabled: bool = Field(
@@ -1630,6 +1647,35 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "業務ガイドの公開の履歴に残す版の数（#2356）。公開・前の版に戻すときに、公開日時の"
             "新しい順に超えた版を消す（公開中の版は残す。版の番号は振り直さない）。"
         ),
+    )
+    rag_support_guide_semantic_match_enabled: bool = Field(
+        default=False,
+        description=(
+            "業務ガイドの照合で、質問と質問の例（intent_examples）の埋め込み（OCI Generative AI）"
+            "の近さを点に足す（#2398）。質問ごとに埋め込みの呼び出しが 1 回増える。質問の例の"
+            "埋め込みは公開のときに作って持つ。検索・回答プロファイルで上書きできる。"
+        ),
+    )
+    rag_support_guide_semantic_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "意味の照合で、質問と質問の例の cosine の近さがこの値以上なら点を足す（#2398）。"
+        ),
+    )
+    rag_support_guide_close_match_clarification_enabled: bool = Field(
+        default=False,
+        description=(
+            "業務ガイドの照合で上位の 2 つの点が近いとき、どのガイドに沿うかを確認の問い（選択肢は"
+            "ガイドの題名）で確かめる（#2398）。検索・回答プロファイルで上書きできる。"
+        ),
+    )
+    rag_support_guide_close_match_margin: int = Field(
+        default=1,
+        ge=0,
+        le=10,
+        description="上位の 2 つの業務ガイドの点の差がこの値以下なら「近い」とみなす（#2398）。",
     )
     rag_query_history_blocklist: list[str] = Field(
         default_factory=list,

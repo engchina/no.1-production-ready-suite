@@ -228,12 +228,12 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 回答では、照合した業務ガイドの手順（分岐で残った手順）ごとに「質問 + 手順の検索の手がかり」で検索し、手順の参照の頁に絞った
 検索の根拠を順位に関係なく回答の材料に入れる。
 
-1. システムテーブルを更新する（migration `20261018_001_support_guide_schema_v2`）。保存済みの下書きと公開の版の
+1. システムテーブルを更新する（migration `20261018_002_support_guide_schema_v2`）。保存済みの下書きと公開の版の
    `schema_version` を 1 から 2 に書き換える（ほかの値は変えない。データは消えない。承認は要らない）。
 2. 設定（`rag/backend/.env`。どれも任意で既定のままでよい）: `RAG_GUIDE_STEP_RETRIEVAL_ENABLED`（既定 true）・
    `RAG_GUIDE_STEP_MAX_QUERIES`（4）・`RAG_GUIDE_STEP_CHUNKS_PER_STEP`（2）・`RAG_GUIDE_REFERENCE_MAX_CHUNKS`（4）・
-   `RAG_GUIDE_STEP_DEADLINE_SECONDS`（10）と、追加の検索（手順ごとの検索・根拠の無い要求の再検索）の回数の合計の枠
-   `RAG_EXTRA_RETRIEVAL_MAX_QUERIES`（6）。手順ごとの検索の ON / OFF と上限は検索・回答プロファイルでも上書きできる。
+   `RAG_GUIDE_STEP_DEADLINE_SECONDS`（10）と、追加の検索（手順ごとの検索・小問ごとの検索・根拠の無い要求の再検索）の回数の合計の枠
+   `RAG_EXTRA_RETRIEVAL_MAX_QUERIES`（8）。手順ごとの検索の ON / OFF と上限は検索・回答プロファイルでも上書きできる。
 3. backend を再起動する。
 
 ## 既存環境の更新手順（#2277 見出しの階層の推定（AI））

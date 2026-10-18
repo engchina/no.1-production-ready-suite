@@ -93,7 +93,8 @@ _PREVIEW_KEYS = (
     "table_cell_col",
     "cell_col",
     "col",
-    # 強調する領域の bbox と座標の解釈（frontend/src/lib/bbox.ts の各 key の一覧と同じ）。
+    # 強調する領域の bbox と座標の解釈（platform/packages/ui/src/lib/bbox.ts の各 key の一覧と
+    # 同じ）。原文のプレビュー（rag_read_source の include_preview。#2389）の強調にも使う。
     "bbox",
     "bbox_json",
     "bbox_xyxy",

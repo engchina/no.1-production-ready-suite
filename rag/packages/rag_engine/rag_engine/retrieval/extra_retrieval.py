@@ -4,7 +4,7 @@
 （`Settings.extra_retrieval_max_queries`）から回数を取る。
 
 - 業務ガイドの手順ごとの検索（`guide_steps`。#2395）
-- 根拠の無い要求の再検索（`request_coverage`。#1279）
+- 小問ごとの検索と根拠の無い要求の再検索（`request_coverage`。#2399・#1279）
 
 種類ごとの上限（手順ごとの検索の上限・再検索の上限）は、その種類が取れる回数の上限で、枠の残りを超えない。
 回数を数えるのはこの module の `ExtraRetrievalBudget` だけにし、種類を足すときも同じ枠から取る。

@@ -56,16 +56,19 @@ from app.rag.search_answer_profile_config import resolve_search_answer_profile_s
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_citation_metadata
+from app.rag.support_guide_query import build_guide_query
 from app.rag.support_guide_runtime import (
     GUIDE_LOAD_FAILED_KEY,
     GUIDE_PREVIEW_TRACE_PREFIX,
+    GuideChoice,
     GuideContext,
     GuidePreview,
     build_guide_context,
     clarification_questions,
     guide_step_plan,
     is_guide_preview_record,
-    match_guide,
+    query_summary,
+    select_guide,
     short_circuit_answer,
     with_draft,
     with_guide_rule,
@@ -303,26 +306,61 @@ async def _resolve_query_context(
             guides = with_draft(guides, guide_preview)
             settings = settings.model_copy(update={"rag_guide_preview": guide_preview.marker()})
         guide_text = "\n".join([*guide_context, request.query])
-        match = match_guide(
+        # 照合の前に用語の別名で展開し、ON なら意味の照合の埋め込みを作る（#2398）。
+        query = await build_guide_query(
+            oracle,
+            settings,
+            view.id,
             guides,
             guide_text,
+            runtime_knowledge,
+            unsaved=frozenset({guide_preview.guide_id})
+            if guide_preview is not None
+            else frozenset(),
+        )
+        # 上位のガイドが近いときに確かめるのは、回答を作る検索・MCP だけ（チャットは送信の前の
+        # 確認の判定で確かめる）。
+        close_margin = (
+            settings.rag_support_guide_close_match_margin
+            if settings.rag_support_guide_close_match_clarification_enabled
+            and request.generate_answer
+            and not interactive
+            else None
+        )
+        selected = select_guide(
+            guides,
+            query,
             request.conditions,
             interactive=interactive,
             context=await support_guide_context(
                 oracle, guides, guide_text, effective_request.filters
             ),
+            close_margin=close_margin,
         )
         if guides_failed:
             # 読めなかったことを回答の診断に残す（ガイドを使わずに答える。#1278）。
             settings = settings.model_copy(
                 update={"rag_support_guide": {GUIDE_LOAD_FAILED_KEY: True}}
             )
-        if match is not None:
+        if isinstance(selected, GuideChoice):
+            settings = settings.model_copy(
+                update={
+                    "rag_support_guide": {
+                        **selected.summary(),
+                        **query_summary(query),
+                        "clarifications": selected.clarifications(),
+                        "short_answer": selected.short_answer(),
+                    }
+                }
+            )
+        elif selected is not None:
+            match = selected
             runtime_knowledge = with_guide_rule(runtime_knowledge, match)
             settings = settings.model_copy(
                 update={
                     "rag_support_guide": {
                         **match.summary(),
+                        **query_summary(query),
                         **(
                             {"draft": True}
                             if guide_preview is not None

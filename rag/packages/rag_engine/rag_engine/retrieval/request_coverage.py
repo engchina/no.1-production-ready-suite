@@ -4,13 +4,16 @@
 要求の語をどれだけ含むかを決定的に判定する（覆域の行列）。モデル（LLM）は呼ばない。
 
 - supported: 1 つの根拠が要求の語の `SUPPORTED_RATIO` 以上を含む。
-- weak: 最良の根拠が `WEAK_RATIO` 以上・`SUPPORTED_RATIO` 未満を含む（再検索しない）。
+- weak: 最良の根拠が `WEAK_RATIO` 以上・`SUPPORTED_RATIO` 未満を含む（小問のほかは再検索しない）。
 - missing: どの根拠も `WEAK_RATIO` 未満しか含まない。
 - unassessed: 要求から語を取り出せない（判定しない。再検索もしない）。
 
 再検索は corrective / adaptive RAG の「欠けた所だけを狙って取り直す」に当たる。判定した要求が 2 つ以上あり、
 missing の要求があるときだけ、missing の要求ごとに 1 回だけ、要求の文（＋用語の別名・業務ガイドの検索の
 手がかり）で検索する。1 要求の質問は、最初の検索がすでにその要求の文で検索しているので再検索しない。
+丸数字・(1) などで並べた小問（要求単位の `subquestion`。#2399）は、根拠が無いか一部だけの小問ごとに、前置き＋
+小問の文で 1 回ずつ検索し、小問ごとに上位の根拠を `chunks_per_subquestion` 件まで確保する。
+どの要求をどの順で何件まで検索するか（追加の検索の枠）は `plan_targeted_retrievals` の 1 か所で数え、
 回数・足す根拠の数・時間は `CoverageBudget` で抑える。検索と並べ替え（rerank）は既存の hybrid 検索を使い、
 足す根拠は既存の根拠を追い出さない（呼び出し側が併合する）。
 
@@ -23,7 +26,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import monotonic
 from typing import Any, Literal
 
@@ -80,6 +83,9 @@ class CoverageBudget:
     max_chunks: int = 4
     # 再検索の全体の期限（秒）。期限を過ぎたら次の要求の検索を始めない（実行中の 1 回は中断しない）。
     deadline_seconds: float = 10.0
+    # 小問ごとの検索をする小問の数（1 小問 1 回）と、小問ごとに回答の材料に足す根拠（親）の数 (#2399)。
+    max_subquestions: int = 5
+    chunks_per_subquestion: int = 2
 
 
 @dataclass(frozen=True)
@@ -90,6 +96,9 @@ class RequestTarget:
     kind: str
     text: str
     terms: tuple[str, ...]
+    # 小問の印（小問でなければ空）と、検索に使う文（空なら text。小問は前置き＋小問の文）。
+    subquestion: str = ""
+    query: str = ""
 
 
 def _normalize(text: Any) -> str:
@@ -135,8 +144,11 @@ def coverage_targets(question: str, tokenize: Callable[[str], Sequence[str]]) ->
         focus = _focus_text(unit)
         if not focus:
             continue
+        # 小問は印を除いた文で判定し、前置き（対象・状況）を付けた文で検索する（#2399）。
+        label = str(unit.get("subquestion") or "")
+        body = focus.removeprefix(label).strip() if label else focus
         try:
-            raw_terms = tokenize(focus)
+            raw_terms = tokenize(body)
         except Exception:  # noqa: BLE001 - 分かち書きの失敗は判定しない（unassessed）にする。
             raw_terms = ()
         terms = _content_terms(raw_terms)
@@ -144,7 +156,16 @@ def coverage_targets(question: str, tokenize: Callable[[str], Sequence[str]]) ->
         if terms and key in seen:
             continue
         seen.add(key)
-        targets.append(RequestTarget(id=str(unit.get("id") or ""), kind=str(unit.get("kind") or "definition"), text=focus, terms=terms))
+        targets.append(
+            RequestTarget(
+                id=str(unit.get("id") or ""),
+                kind=str(unit.get("kind") or "definition"),
+                text=focus,
+                terms=terms,
+                subquestion=label,
+                query=" ".join(part for part in (str(unit.get("preamble") or ""), body) if part) if label else "",
+            )
+        )
     return targets
 
 
@@ -211,6 +232,9 @@ def assess_targets(targets: Sequence[RequestTarget], evidence: Sequence[tuple[st
                 "evidence_ids": [key for ratio, _, key, _ in scored if ratio >= WEAK_RATIO and key][:MAX_EVIDENCE_PER_REQUEST],
             }
         )
+    for row, target in zip(rows, targets, strict=True):
+        if target.subquestion:
+            row["subquestion"] = target.subquestion
     return rows
 
 
@@ -221,18 +245,33 @@ def coverage_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     return counts
 
 
+def _needs_search(row: Mapping[str, Any]) -> bool:
+    """再検索の対象か。小問は根拠が一部（weak）でも小問ごとの根拠を確保するために検索する (#2399)。"""
+    return row["status"] == "missing" or (bool(row.get("subquestion")) and row["status"] == "weak")
+
+
+def within_extra_budget(rows: Sequence[Mapping[str, Any]], budget: CoverageBudget, remaining: int) -> CoverageBudget:
+    """小問ごとの検索と再検索の回数を、追加の検索の枠の残り `remaining`（#2395）の中に収めた予算（小問が先）。"""
+    wanted = sum(1 for row in rows if row.get("subquestion") and _needs_search(row))
+    subquestions = max(0, min(budget.max_subquestions, wanted, remaining))
+    return replace(budget, max_subquestions=subquestions, max_queries=max(0, min(budget.max_queries, remaining - subquestions)))
+
+
 def re_retrieval_skip_reason(rows: Sequence[Mapping[str, Any]], budget: CoverageBudget) -> str:
-    """再検索しない理由。空なら missing の要求を再検索する。"""
+    """再検索しない理由。空なら再検索する（根拠の無い要求と、根拠が無いか一部だけの小問）。"""
     if not budget.enabled:
         return "disabled"
-    if budget.max_queries <= 0 or budget.max_chunks <= 0:
-        return "no_budget"
     assessed = [row for row in rows if row["status"] != "unassessed"]
     if len(assessed) < 2:
         # 1 要求の質問は、最初の検索がその要求の文で検索している。同じ文での再検索は新しい根拠をほぼ返さない。
         return "single_request"
-    if not any(row["status"] == "missing" for row in assessed):
+    wanted = [row for row in assessed if _needs_search(row)]
+    if not wanted:
         return "all_covered"
+    subquestion_budget = budget.max_subquestions > 0 and budget.chunks_per_subquestion > 0
+    request_budget = budget.max_queries > 0 and budget.max_chunks > 0
+    if not any(subquestion_budget if row.get("subquestion") else request_budget for row in wanted):
+        return "no_budget"
     return ""
 
 
@@ -262,8 +301,43 @@ def request_hints(target: RequestTarget, runtime_knowledge: Any, tokenize: Calla
 
 
 def targeted_queries(target: RequestTarget, hints: Sequence[str]) -> tuple[str, ...]:
-    """欠けた要求 1 件の検索文。要求の文を主軸にし、手がかりがあれば手がかり付きの文を足す。"""
-    return tuple(dict.fromkeys(q for q in (target.text, " ".join([target.text, *hints]) if hints else "") if q))
+    """欠けた要求 1 件の検索文。要求の文（小問は前置き＋小問の文）を主軸にし、手がかりがあれば手がかり付きの文を足す。"""
+    text = target.query or target.text
+    return tuple(dict.fromkeys(q for q in (text, " ".join([text, *hints]) if hints else "") if q))
+
+
+@dataclass(frozen=True)
+class PlannedRetrieval:
+    """追加の検索 1 回の計画。chunk_cap はこの検索で確保する根拠の数（None は欠けた要求の共有の枠）。"""
+
+    target: RequestTarget
+    chunk_cap: int | None = None
+
+
+def plan_targeted_retrievals(
+    rows: Sequence[Mapping[str, Any]], targets: Sequence[RequestTarget], budget: CoverageBudget
+) -> tuple[list[PlannedRetrieval], str]:
+    """追加の検索の枠を 1 か所で数える。戻り値は (検索する順の計画, 枠で打ち切った理由)。
+
+    小問（根拠が無いか一部）を質問の順に `max_subquestions` 件まで、それぞれ `chunks_per_subquestion` 件を確保して
+    先に検索し、次に根拠の無い要求を `max_queries` 件まで検索する（足す根拠は合計 `max_chunks` 件を交互に）。
+    要求単位ごとの別の検索を足すときも、この計画に足して同じ期限と根拠の選び方（`select_new_parents`）で数える。
+    """
+    by_id = {target.id: target for target in targets}
+    wanted = [by_id[row["id"]] for row in rows if row["id"] in by_id and _needs_search(row)]
+    subquestions = [target for target in wanted if target.subquestion]
+    requests = [target for target in wanted if not target.subquestion]
+    plan: list[PlannedRetrieval] = []
+    stop = ""
+    if budget.chunks_per_subquestion > 0:
+        plan.extend(PlannedRetrieval(target, budget.chunks_per_subquestion) for target in subquestions[: budget.max_subquestions])
+        if len(subquestions) > budget.max_subquestions:
+            stop = "max_subquestions"
+    if budget.max_chunks > 0:
+        plan.extend(PlannedRetrieval(target) for target in requests[: budget.max_queries])
+        if len(requests) > budget.max_queries:
+            stop = stop or "max_queries"
+    return plan, stop
 
 
 @dataclass(frozen=True)
@@ -276,6 +350,8 @@ class TargetedRetrieval:
     expansion_records: tuple[Any, ...] = ()
     elapsed_ms: int = 0
     error: str = ""
+    # この要求に確保する根拠の数（小問）。None は欠けた要求の共有の枠（max_chunks）から取る。
+    chunk_cap: int | None = None
 
 
 def run_targeted_retrievals(
@@ -288,30 +364,34 @@ def run_targeted_retrievals(
     tokenize: Callable[[str], Sequence[str]],
     clock: Callable[[], float] = monotonic,
 ) -> tuple[list[TargetedRetrieval], str]:
-    """missing の要求ごとに 1 回だけ検索する。戻り値は (結果, 打ち切りの理由)。
+    """計画（`plan_targeted_retrievals`）の要求ごとに 1 回だけ検索する。戻り値は (結果, 打ち切りの理由)。
 
     retrieve(request_text, queries) は AnswerContext（evidence_tree と expansion_records を持つ）を返す。
     検索の失敗は要求ごとに記録し、回答は既存の根拠で続ける（失敗と「根拠が無い」を区別する。handoff §9 の 5）。
     """
-    by_id = {target.id: target for target in targets}
-    missing = [by_id[row["id"]] for row in rows if row["status"] == "missing" and row["id"] in by_id]
+    plan, stop = plan_targeted_retrievals(rows, targets, budget)
     results: list[TargetedRetrieval] = []
-    stop = ""
     start = clock()
-    for index, target in enumerate(missing):
-        if index >= budget.max_queries:
-            stop = "max_queries"
-            break
+    for planned in plan:
+        target = planned.target
         if clock() - start >= budget.deadline_seconds:
             stop = "deadline"
             break
         queries = targeted_queries(target, request_hints(target, runtime_knowledge, tokenize))
         began = clock()
         try:
-            context = retrieve(target.text, queries)
+            context = retrieve(target.query or target.text, queries)
         except Exception as exc:  # noqa: BLE001 - 再検索は補助。失敗しても既存の根拠で回答する。
             results.append(
-                TargetedRetrieval(target.id, queries, (), (), int((clock() - began) * 1000), f"{type(exc).__name__}: {str(exc)[:200]}")
+                TargetedRetrieval(
+                    target.id,
+                    queries,
+                    (),
+                    (),
+                    int((clock() - began) * 1000),
+                    f"{type(exc).__name__}: {str(exc)[:200]}",
+                    planned.chunk_cap,
+                )
             )
             continue
         results.append(
@@ -321,21 +401,35 @@ def run_targeted_retrievals(
                 tuple(getattr(context, "evidence_tree", ()) or ()),
                 tuple(getattr(context, "expansion_records", ()) or ()),
                 int((clock() - began) * 1000),
+                chunk_cap=planned.chunk_cap,
             )
         )
     return results, stop
 
 
 def select_new_parents(results: Sequence[TargetedRetrieval], existing_keys: Iterable[str], max_chunks: int) -> list[tuple[str, Any]]:
-    """再検索の結果から、回答の材料に無い根拠（親）を要求ごとに順番に 1 件ずつ選ぶ（合計 max_chunks まで）。
+    """再検索の結果から、回答の材料に無い根拠（親）を要求ごとに順番に 1 件ずつ選ぶ。戻り値は (request_id, parent)。
 
-    1 つの要求の結果が予算を使い切らないよう、各要求の最上位から交互に取る。戻り値は (request_id, parent)。
+    1 つの要求の結果が予算を使い切らないよう、各要求の最上位から交互に取る。`chunk_cap` のある要求（小問）は
+    その件数まで確保し、無い要求（欠けた要求）は合わせて max_chunks 件までにする。
     """
     seen = set(existing_keys)
     queues = [[(result.request_id, parent) for parent in result.parents] for result in results]
+    caps = [result.chunk_cap for result in results]
+    taken = [0] * len(results)
+    shared = 0
     selected: list[tuple[str, Any]] = []
-    while len(selected) < max_chunks and any(queues):
-        for queue in queues:
+
+    def open_(index: int) -> bool:
+        cap = caps[index]
+        return taken[index] < cap if cap is not None else shared < max_chunks
+
+    progress = True
+    while progress:
+        progress = False
+        for index, queue in enumerate(queues):
+            if not open_(index):
+                continue
             while queue:
                 request_id, parent = queue.pop(0)
                 key = _record_key(parent.record)
@@ -343,21 +437,26 @@ def select_new_parents(results: Sequence[TargetedRetrieval], existing_keys: Iter
                     continue
                 seen.add(key)
                 selected.append((request_id, parent))
-                break
-            if len(selected) >= max_chunks:
+                taken[index] += 1
+                if caps[index] is None:
+                    shared += 1
+                progress = True
                 break
     return selected
 
 
 __all__ = [
     "COVERAGE_SCHEMA_VERSION",
+    "within_extra_budget",
     "CoverageBudget",
+    "PlannedRetrieval",
     "RequestTarget",
     "TargetedRetrieval",
     "assess_targets",
     "coverage_counts",
     "coverage_targets",
     "evidence_texts",
+    "plan_targeted_retrievals",
     "re_retrieval_skip_reason",
     "request_hints",
     "run_targeted_retrievals",

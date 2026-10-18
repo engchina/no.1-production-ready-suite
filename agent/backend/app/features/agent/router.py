@@ -193,7 +193,9 @@ from app.features.agent.rag_figures import (
     RAG_EVIDENCE_KIND,
     RunFigureUrlData,
     RunFigureUrlError,
+    RunSourcePreviewData,
     issue_run_figure_url,
+    issue_run_source_preview,
 )
 from app.features.agent.run_facts import RUN_SOURCE_MCP, fact_from_run, run_source
 from app.features.agent.run_signals import (
@@ -2959,6 +2961,50 @@ async def get_run_figure_url(
         data = await run_in_threadpool(
             partial(
                 issue_run_figure_url,
+                run,
+                artifacts,
+                document_id=document_id,
+                chunk_id=chunk_id,
+                viewer_user_uuid=viewer,
+            )
+        )
+    except RunFigureUrlError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from None
+    # URL はトークンを含むので、ブラウザ・中継の cache に残さない。
+    response.headers["Cache-Control"] = "private, no-store"
+    return ApiResponse(data=data)
+
+
+@router.get("/runs/{run_id}/source-preview", response_model=ApiResponse[RunSourcePreviewData])
+async def get_run_source_preview(
+    run_id: str,
+    request: Request,
+    response: Response,
+    document_id: Annotated[str, Query(min_length=1, max_length=128)],
+    chunk_id: Annotated[str, Query(min_length=1, max_length=512)],
+    _: None = Depends(require_viewer),
+) -> ApiResponse[RunSourcePreviewData]:
+    """Run の RAG の根拠の原文のプレビュー（#2389。ページの一覧と短命の URL）。
+
+    図の URL（#1311）と同じく、画面を見ている利用者として RAG に作らせる（Run の利用者の権限は
+    借りない。その文書を読めない利用者には RAG が作らない）。URL は保存せず、期限（5 分）が切れる
+    前に画面が取り直す。Run は実行した利用者・会話の持ち主と system_admin だけ（#1889・#1954）。
+    """
+    run = _readable_run(request, run_id)
+    viewer = _run_creator_user_uuid(request)
+    if not viewer:
+        raise HTTPException(status_code=401, detail="ログインしてください。")
+    artifacts = [
+        await run_in_threadpool(runtime_repository.get_artifact, run_id, artifact.id)
+        if artifact.content_ref is not None
+        else artifact
+        for artifact in run.artifacts
+        if artifact.kind == RAG_EVIDENCE_KIND
+    ]
+    try:
+        data = await run_in_threadpool(
+            partial(
+                issue_run_source_preview,
                 run,
                 artifacts,
                 document_id=document_id,

@@ -316,6 +316,30 @@ def test_cover_missing_requests_no_new_evidence_keeps_context(monkeypatch: pytes
     assert "counts_after" not in trace
 
 
+def test_cover_missing_requests_searches_each_subquestion_with_preamble(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 丸数字の小問ごとに、前置き＋小問の文で検索し、小問ごとに上位の根拠を確保する（#2399）。
+    question = "業務の件です。\n①受注の登録方法は？\n②請求書の再発行方法は？\n③承認の担当は？"
+    calls = _patch_search(
+        monkeypatch,
+        {
+            "業務の件です。 請求書の再発行方法は？": context(*(parent(f"inv{i}", "請求書の再発行") for i in range(3))),
+            "業務の件です。 承認の担当は？": context(parent("apr", "承認の担当は課長")),
+        },
+    )
+    ctx = context(parent("p1", "受注番号を入力し、登録ボタンを押します。"))
+
+    merged, trace = _cover(ctx, _settings(request_coverage_chunks_per_subquestion=2), question)
+
+    assert [c[0] for c in calls] == ["業務の件です。 請求書の再発行方法は？", "業務の件です。 承認の担当は？"]
+    assert [r.chunk_uid for r in merged.records] == ["run:p1", "run:inv0", "run:apr", "run:inv1"]
+    assert {row["id"]: (row["status"], row["status_after"]) for row in trace["requests"]} == {
+        "Q2": ("supported", "supported"),
+        "Q3": ("missing", "supported"),
+        "Q4": ("missing", "supported"),
+    }
+    assert trace["budget"]["max_subquestions"] == 5
+
+
 def test_engine_settings_default_and_env() -> None:
     default = get_settings(environ={}, dotenv_path=None)
     custom = get_settings(
@@ -324,6 +348,8 @@ def test_engine_settings_default_and_env() -> None:
             "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES": "1",
             "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS": "3",
             "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": "2.5",
+            "RAG_ENGINE_REQUEST_COVERAGE_MAX_SUBQUESTIONS": "3",
+            "RAG_ENGINE_REQUEST_COVERAGE_CHUNKS_PER_SUBQUESTION": "1",
         },
         dotenv_path=None,
     )
@@ -334,3 +360,39 @@ def test_engine_settings_default_and_env() -> None:
     assert custom.request_coverage_retrieval_enabled is False
     assert (custom.request_coverage_max_queries, custom.request_coverage_max_chunks) == (1, 3)
     assert custom.request_coverage_deadline_seconds == 2.5
+    assert (default.request_coverage_max_subquestions, default.request_coverage_chunks_per_subquestion) == (5, 2)
+    assert (custom.request_coverage_max_subquestions, custom.request_coverage_chunks_per_subquestion) == (3, 1)
+
+
+def test_cover_missing_requests_counts_in_the_shared_extra_retrieval_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """再検索の回数は追加の検索の枠（#2395）から取り、枠の残りが無ければ再検索しない。"""
+    from rag_engine.retrieval.extra_retrieval import ExtraRetrievalBudget
+
+    calls = _patch_search(
+        monkeypatch, {"請求書の再発行方法は？": context(parent("inv", "請求書の再発行は、請求一覧で再発行ボタンを押します。"))}
+    )
+    ctx = context(parent("p1", "受注番号を入力し、登録ボタンを押します。"))
+
+    def cover(budget: ExtraRetrievalBudget) -> dict[str, Any]:
+        return a._cover_missing_requests(
+            QUESTION,
+            ctx,
+            _settings(),
+            run_id="run",
+            preferred_engines=["docling"],
+            top_k=8,
+            neighbor_child_count=0,
+            rerank_enabled=False,
+            inquiry_conditions=None,
+            retrieval_scope="knowledge_base",
+            classification_filter=None,
+            runtime_knowledge=None,
+            extra_budget=budget,
+        )[1]
+
+    used = ExtraRetrievalBudget(max_queries=2, used={"guide_steps": 2})
+    assert cover(used)["re_retrieval"] == {"applied": False, "skipped": "no_budget"}
+    assert calls == []
+    left = ExtraRetrievalBudget(max_queries=3, used={"guide_steps": 2})
+    assert cover(left)["re_retrieval"]["applied"] is True
+    assert left.used == {"guide_steps": 2, "request_coverage": 1} and left.remaining == 0

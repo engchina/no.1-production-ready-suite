@@ -5,7 +5,7 @@ KB・文書レシピには持たせず、検索時は検索・回答プロファ
 """
 
 import asyncio
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from rag_engine.knowledge.approved_faq import ApprovedFaqImportRow, ApprovedFaqRecord
@@ -19,6 +19,7 @@ from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.rag.query_history import query_history_suggestions
+from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
     APPROVED_FAQ_PREVIEW_ROWS,
     ApprovedFaqMutation,
@@ -40,7 +41,13 @@ from app.rag.search_answer_profile_knowledge import (
     suggest_clarification,
     suggest_domain_keywords,
 )
-from app.rag.support_guide_runtime import guide_clarification, match_guide
+from app.rag.support_guide_query import build_guide_query
+from app.rag.support_guide_runtime import (
+    GuideChoice,
+    guide_choice_clarification,
+    guide_clarification,
+    select_guide,
+)
 from app.schemas.common import ApiResponse
 from app.schemas.search_answer_profile import SearchAnswerProfileDetail
 from app.schemas.search_answer_profile_knowledge import (
@@ -517,15 +524,29 @@ async def post_clarification_suggest(
         # 業務ガイドの不明・矛盾の条件（選択肢付き）を、ルールの確認と同じ形で聞く（#1238）。
         # 適用範囲は検索と同じ手がかりで確かめる（#1278）。
         guides = await _published_guides(oracle, search_answer_profile_id)
-        match = match_guide(
+        settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
+        # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
+        query = await build_guide_query(
+            oracle, settings, search_answer_profile_id, guides, request.query, payload
+        )
+        selected = select_guide(
             guides,
-            request.query,
+            query,
             {},
             context=await support_guide_context(
                 oracle, guides, request.query, profile_scope_filters(view)
             ),
+            close_margin=(
+                settings.rag_support_guide_close_match_margin
+                if settings.rag_support_guide_close_match_clarification_enabled
+                else None
+            ),
         )
-        guide = guide_clarification(match) if match is not None else None
+        guide: tuple[str, str, Any] | None = None
+        if isinstance(selected, GuideChoice):
+            guide = guide_choice_clarification(selected)
+        elif selected is not None:
+            guide = guide_clarification(selected)
         if guide is None:
             return ApiResponse(data=ClarificationSuggestionsData())
         rule_id, title, guide_question = guide

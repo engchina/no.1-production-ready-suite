@@ -799,3 +799,25 @@ export {
 } from "./store/toast-store";
 
 export { diagnosticTimestamp, logBrowserDiagnostic, type BrowserDiagnostic } from "./lib/diagnostic-log";
+
+// 原文のプレビュー（ページの画像のビューア・bbox の強調。RAG と Agent の根拠のパネル・RAG の文書の詳細。#2389）
+export * from "./lib/bbox";
+export * from "./lib/preview-viewer";
+export {
+  DEFAULT_DOCUMENT_PREVIEW_LABELS,
+  documentPreviewLabels,
+  type DocumentPreviewLabels,
+} from "./components/document-preview/labels";
+export {
+  PreviewViewer,
+  bboxOverlayStyle,
+  type PreviewSizing,
+  type PreviewViewerPage,
+} from "./components/document-preview/preview-viewer";
+export {
+  DocumentPreview,
+  type DocumentPreviewFocus,
+  type DocumentPreviewKind,
+  type DocumentPreviewPagesState,
+  type DocumentPreviewProps,
+} from "./components/document-preview/document-preview";
