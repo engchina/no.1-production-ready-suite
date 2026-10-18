@@ -141,9 +141,20 @@ class _FakeObjectEntry:
 
 
 class _FakeStorageClient:
-    def __init__(self, output_objects: dict[str, bytes]) -> None:
+    def __init__(self, output_objects: dict[str, bytes], *, fail_delete: bool = False) -> None:
         self._output_objects = output_objects
         self.put_calls: list[tuple[str, str, str]] = []
+        self.deleted: list[tuple[str, str]] = []
+        self._fail_delete = fail_delete
+
+    def delete_object(
+        self, namespace_name: str, bucket_name: str, object_name: str, **kwargs: Any
+    ) -> _FakeResponse:
+        if self._fail_delete:
+            raise RuntimeError("delete failed")
+        self.deleted.append((bucket_name, object_name))
+        self._output_objects.pop(object_name, None)
+        return _FakeResponse(None)
 
     def put_object(
         self,
@@ -315,6 +326,62 @@ def test_du_client_uses_du_region_for_object_storage_by_default(
     assert captured["profile"] == "DEFAULT"
     assert captured["region"] == "us-chicago-1"
     assert captured["client_config"] == {"region": "us-chicago-1"}
+
+
+async def test_du_client_analyze_deletes_job_input_and_output_objects() -> None:
+    """解析の後に、job の入力と出力（folder の object も）を bucket から消す（#2440）。"""
+    folder_key = "document-understanding/output/job-1/"
+    output_key = "document-understanding/output/job-1/ns_in-bucket/results/doc.pdf.json"
+    other_job_key = "document-understanding/output/job-10/ns_in-bucket/results/other.pdf.json"
+    storage_client = _FakeStorageClient(
+        {
+            folder_key: b"",
+            output_key: json.dumps(_du_result_json()).encode("utf-8"),
+            other_job_key: b"{}",
+        }
+    )
+    client = OciDocumentUnderstandingClient(
+        _du_settings(),
+        document_client=_FakeDocumentClient(["ACCEPTED", "SUCCEEDED"]),
+        object_storage_client=storage_client,
+    )
+    payload = await client.analyze(b"%PDF fake", content_type="application/pdf", document_id="doc")
+    assert payload is not None
+    assert storage_client.deleted == [
+        ("in-bucket", "document-understanding/input/doc.pdf"),
+        ("out-bucket", folder_key),
+        ("out-bucket", output_key),
+    ]
+    # 別の job（id の前方が同じ）の出力は消さない。
+    assert other_job_key in storage_client._output_objects
+
+
+async def test_du_client_analyze_deletes_input_when_job_fails() -> None:
+    """job が失敗しても、入力の object を消す。"""
+    storage_client = _FakeStorageClient({})
+    client = OciDocumentUnderstandingClient(
+        _du_settings(),
+        document_client=_FakeDocumentClient(["ACCEPTED", "FAILED"]),
+        object_storage_client=storage_client,
+    )
+    payload = await client.analyze(b"x", content_type="application/pdf", document_id="doc")
+    assert payload is None
+    assert storage_client.deleted == [("in-bucket", "document-understanding/input/doc.pdf")]
+
+
+async def test_du_client_analyze_keeps_result_when_cleanup_fails() -> None:
+    """入出力を消せなくても、解析の結果は返す。"""
+    output_key = "document-understanding/output/job-1/ns_in-bucket_doc.json"
+    storage_client = _FakeStorageClient(
+        {output_key: json.dumps(_du_result_json()).encode("utf-8")}, fail_delete=True
+    )
+    client = OciDocumentUnderstandingClient(
+        _du_settings(),
+        document_client=_FakeDocumentClient(["SUCCEEDED"]),
+        object_storage_client=storage_client,
+    )
+    payload = await client.analyze(b"%PDF fake", content_type="application/pdf", document_id="doc")
+    assert payload is not None
 
 
 async def test_du_client_analyze_returns_none_when_unconfigured() -> None:

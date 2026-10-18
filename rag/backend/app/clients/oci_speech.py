@@ -91,20 +91,28 @@ class OciSpeechClient:
             logger.info("OCI AI Speech 未設定のため縮退します。")
             return None
         object_name = self._input_object_name(document_id, content_type)
+        job_id: str | None = None
         try:
-            job_id = await asyncio.to_thread(self._submit_job, source_bytes, object_name)
-        except Exception as exc:  # noqa: BLE001 - 失敗時は安全に縮退する
-            logger.warning("Speech job 投入に失敗しました。", extra={**safe_exception_fields(exc)})
-            return None
-        try:
-            await self._await_job(job_id)
-            result = await asyncio.to_thread(self._read_result, job_id, object_name)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Speech job の完了待ち/結果取得に失敗しました。",
-                extra={**safe_exception_fields(exc), "job_id": job_id},
-            )
-            return None
+            try:
+                job_id = await asyncio.to_thread(self._submit_job, source_bytes, object_name)
+            except Exception as exc:  # noqa: BLE001 - 失敗時は安全に縮退する
+                logger.warning(
+                    "Speech job 投入に失敗しました。", extra={**safe_exception_fields(exc)}
+                )
+                return None
+            try:
+                await self._await_job(job_id)
+                result = await asyncio.to_thread(self._read_result, job_id, object_name)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Speech job の完了待ち/結果取得に失敗しました。",
+                    extra={**safe_exception_fields(exc), "job_id": job_id},
+                )
+                return None
+        finally:
+            # job の入力（原本の写し）と結果は文字起こしの後に使わない。失敗でも消し、文書を
+            # 削除した後に bucket に残さない（#2440）。
+            await asyncio.to_thread(self._delete_job_objects, object_name, job_id)
         if result is None:
             return None
         extraction = speech_result_to_extraction(result, language=self._language())
@@ -202,8 +210,9 @@ class OciSpeechClient:
         _ = job_id
         namespace = self._namespace()
         bucket = self._output_bucket()
-        result_object = f"{self._output_prefix()}/{namespace}_{bucket}_{object_name}.json"
-        response = self._storage().get_object(namespace, bucket, result_object)
+        response = self._storage().get_object(
+            namespace, bucket, self._result_object_name(object_name)
+        )
         data = getattr(getattr(response, "data", None), "content", None)
         if data is None:
             return None
@@ -213,6 +222,28 @@ class OciSpeechClient:
         except json.JSONDecodeError:
             return None
         return parsed if isinstance(parsed, Mapping) else None
+
+    def _result_object_name(self, object_name: str) -> str:
+        """入力の object に対応する transcription JSON の object 名。"""
+        stem = f"{self._namespace()}_{self._output_bucket()}_{object_name}"
+        return f"{self._output_prefix()}/{stem}.json"
+
+    def _delete_job_objects(self, object_name: str, job_id: str | None) -> None:
+        """job の入力と結果の JSON を消す(同期・best effort。無い object の 404 は無視)。"""
+        namespace = self._namespace()
+        targets = [(self._input_bucket(), object_name)]
+        if job_id:
+            targets.append((self._output_bucket(), self._result_object_name(object_name)))
+        for bucket, name in targets:
+            try:
+                self._storage().delete_object(namespace, bucket, name)
+            except Exception as exc:  # noqa: BLE001 - 後始末の失敗で結果を変えない
+                if getattr(exc, "status", None) == 404:
+                    continue
+                logger.warning(
+                    "Speech job の入出力の object を消せませんでした。",
+                    extra={**safe_exception_fields(exc), "job_id": job_id},
+                )
 
 
 # 入力 object の拡張子(OCI Speech のデコード判定用)。
