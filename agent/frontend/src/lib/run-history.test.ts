@@ -182,7 +182,7 @@ describe("チャットの処理の経過のツールの段の詳細", () => {
   });
 });
 
-describe("runConversationHref（会話を開く。#2343）", () => {
+describe("runConversationHref（会話を開く。Issue 2343）", () => {
   const canOpen = { seesAllUsers: false, canOpenChat: true };
 
   it("チャットの画面から送った Run は、その会話をチャットで開く", () => {
