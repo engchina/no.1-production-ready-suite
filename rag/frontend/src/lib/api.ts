@@ -1008,6 +1008,9 @@ export interface KnowledgeBaseQueryConfig {
   screen_linking_enabled?: boolean | null;
   // 根拠の無い要求だけを探し直す(LLM は呼ばない。検索が要求ごとに 1 回増える。#1279)。
   request_coverage_retrieval_enabled?: boolean | null;
+  // 業務ガイドの手順ごとに探し、手順の参照の頁の根拠を入れる(LLM は呼ばない。#2395)。上限は 0〜10。
+  guide_step_retrieval_enabled?: boolean | null;
+  guide_step_max_queries?: number | null;
   // 質問から抽出項目の条件を読み取る(LLM の呼び出しが 1 回増える。#652)。
   auto_field_filter_enabled?: boolean | null;
   /**
@@ -4205,6 +4208,8 @@ export interface SupportGuideStep {
   evidence_requirements: string[];
   allowed_tools: string[];
   done_when: string;
+  /** この手順が参照する資料と頁（#2395。ガイドの references は全手順の共通）。 */
+  references: SupportGuideReference[];
 }
 
 export interface SupportGuideBranch {
@@ -4214,11 +4219,19 @@ export interface SupportGuideBranch {
   note: string;
 }
 
+/** 参照する資料の頁の範囲（両端を含む。#2395）。 */
+export interface SupportGuidePageRange {
+  page_start: number;
+  page_end: number;
+}
+
 export interface SupportGuideReference {
   document_id: string;
   title: string;
   section_path: string[];
   version: string;
+  /** 根拠にする頁の範囲（空なら文書の全体。#2395）。 */
+  page_ranges: SupportGuidePageRange[];
 }
 
 export interface SupportGuideCompletion {
@@ -4229,7 +4242,7 @@ export interface SupportGuideCompletion {
 
 /** 業務ガイドの内容（下書き・公開の版で同じ形）。 */
 export interface SupportGuideContent {
-  schema_version: 1;
+  schema_version: 2;
   title: string;
   description: string;
   goal: { expected_result: string; intent_examples: string[]; match_terms: string[] };
@@ -4387,7 +4400,7 @@ export interface SupportGuideImportData {
 }
 
 export interface SupportGuideExportData {
-  schema_version: 1;
+  schema_version: 2;
   guides: SupportGuideContent[];
 }
 

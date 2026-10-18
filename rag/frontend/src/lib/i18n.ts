@@ -2059,6 +2059,12 @@ export const ja = {
   "searchAnswerProfiles.field.requestCoverage": "根拠の無い要求を探し直す",
   "searchAnswerProfiles.field.requestCoverageHelper":
     "質問に複数の要求があるとき、要求ごとに根拠があるかを確かめ、根拠の無い要求だけをその要求の文で 1 回ずつ探し直して回答の材料に加えます。AI の呼び出しは増えませんが、探し直すたびに数秒かかります。全体の既定は有効です。",
+  "searchAnswerProfiles.field.guideStepRetrieval": "業務ガイドの手順ごとに探す",
+  "searchAnswerProfiles.field.guideStepRetrievalHelper":
+    "質問に業務ガイドが当たったとき、ガイドの手順ごとに検索の手がかりで探し、手順が参照する資料の頁の根拠を回答の材料に加えます。AI の呼び出しは増えませんが、手順ごとに数秒かかります。全体の既定は有効です。",
+  "searchAnswerProfiles.field.guideStepMaxQueries": "手順ごとの検索の上限",
+  "searchAnswerProfiles.field.guideStepMaxQueriesHelper":
+    "1 回の回答で手順ごとに探す回数の上限です（参照の頁に絞った検索を含む）。主の検索の後に足す検索の合計の枠も超えません。全体の既定は 4 回です。",
   "searchAnswerProfiles.entityExpansion.title": "実体でつながる根拠",
   "searchAnswerProfiles.entityExpansion.enabled": "実体でつながる根拠を 1 段広げる",
   "searchAnswerProfiles.entityExpansion.helper":
@@ -4385,6 +4391,12 @@ export const ja = {
   "supportGuides.field.referenceTitle": "表示名",
   "supportGuides.field.sectionPath": "節（上の階層から 1 行に 1 つ）",
   "supportGuides.field.version": "版",
+  "supportGuides.field.pageRanges": "根拠の頁",
+  "supportGuides.view.pages": "p.{pages}",
+  "supportGuides.field.pageRangesHelp": "例: 3-5, 8。空なら文書の全体です。",
+  "supportGuides.field.stepReferences": "この手順が参照する資料",
+  "supportGuides.field.stepReferencesHelp":
+    "この手順の根拠がある資料と頁です。回答では、手順ごとにこの頁に絞って根拠を探し、見つかった根拠を検索の順位に関係なく回答の材料に入れます。全手順に共通の資料は「参照する資料」に入れます。",
   "supportGuides.field.completionDescription": "内容",
   "supportGuides.field.checkMethod": "確かめ方",
   "supportGuides.field.impactScope": "影響の範囲",
@@ -4428,6 +4440,9 @@ export const ja = {
   "supportGuides.add.step": "手順を足す",
   "supportGuides.add.branch": "分岐を足す",
   "supportGuides.add.reference": "資料を足す",
+  "supportGuides.add.stepReference": "この手順の資料を足す",
+  "supportGuides.stepReference.row": "手順 {step} の資料 {n}",
+  "supportGuides.stepReference.remove": "手順 {step} の資料 {n} を外す",
   "supportGuides.add.completion": "完了の条件を足す",
   "supportGuides.missingOption": "{id}（見つかりません）",
   // 操作
@@ -4479,6 +4494,8 @@ export const ja = {
   "supportGuides.check.inValues": "「いずれかに一致する」の値を 1 つ以上入れてください。",
   "supportGuides.check.period": "有効期間の終わりは始まりより後の日付にしてください。",
   "supportGuides.check.date": "日付は 2026-10-01 の形で入れてください。",
+  "supportGuides.check.pageRanges":
+    "頁は「3-5, 8」の形で入れてください（始まりは 1 以上、終わりは始まり以上、範囲は 10 個まで）。",
   // 項目の名前（検証の結果の位置の表示）
   "supportGuides.path.separator": "・",
   "supportGuides.path.goal": "目的",

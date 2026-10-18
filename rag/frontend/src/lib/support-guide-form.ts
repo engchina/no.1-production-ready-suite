@@ -19,6 +19,8 @@ import type {
   SupportGuideDiffSection,
   SupportGuideImpactScope,
   SupportGuideIssue,
+  SupportGuidePageRange,
+  SupportGuideReference,
   SupportGuideSummary,
   SupportGuideTool,
   SupportGuideUnknownHandling,
@@ -33,6 +35,10 @@ export const SUPPORT_GUIDE_TOOLS: readonly SupportGuideTool[] = [
 ];
 export const SUPPORT_GUIDE_ID_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+/** 1 つの資料の頁の範囲・1 つの手順の参照の上限（backend の MAX_REFERENCE_PAGE_RANGES / MAX_STEP_REFERENCES）。 */
+export const MAX_PAGE_RANGES = 10;
+export const MAX_STEP_REFERENCES = 10;
+const MAX_PAGE = 100_000;
 
 export type ConditionForm = {
   key: string;
@@ -58,6 +64,8 @@ export type StepForm = {
   evidenceRequirements: string;
   allowedTools: string[];
   doneWhen: string;
+  /** この手順が参照する資料と頁（#2395）。 */
+  references: ReferenceForm[];
 };
 
 export type BranchForm = {
@@ -77,6 +85,8 @@ export type ReferenceForm = {
   title: string;
   sectionPath: string;
   version: string;
+  /** 根拠の頁（「3-5, 8」の形。空なら文書の全体。#2395）。 */
+  pageRanges: string;
 };
 
 export type CompletionForm = {
@@ -190,6 +200,7 @@ export function guideFormFromContent(content: SupportGuideContent): GuideForm {
       evidenceRequirements: joinLines(step.evidence_requirements),
       allowedTools: [...step.allowed_tools],
       doneWhen: step.done_when,
+      references: (step.references ?? []).map(referenceFormFromContent),
     })),
     branches: content.branches.map((branch) => ({
       key: newRowKey("branch"),
@@ -200,13 +211,7 @@ export function guideFormFromContent(content: SupportGuideContent): GuideForm {
       gotoStep: branch.goto_step,
       note: branch.note,
     })),
-    references: content.references.map((reference) => ({
-      key: newRowKey("reference"),
-      documentId: reference.document_id,
-      title: reference.title,
-      sectionPath: joinLines(reference.section_path),
-      version: reference.version,
-    })),
+    references: content.references.map(referenceFormFromContent),
     completion: content.completion.map((item) => ({
       key: newRowKey("completion"),
       id: item.id,
@@ -224,7 +229,7 @@ export function guideFormFromContent(content: SupportGuideContent): GuideForm {
 
 export function guideContentFromForm(form: GuideForm): SupportGuideContent {
   return {
-    schema_version: 1,
+    schema_version: 2,
     title: form.title.trim(),
     description: form.description.trim(),
     goal: {
@@ -265,6 +270,7 @@ export function guideContentFromForm(form: GuideForm): SupportGuideContent {
         ) as SupportGuideTool[],
       ),
       done_when: step.doneWhen.trim(),
+      references: step.references.map(referenceContentFromForm),
     })),
     branches: form.branches.map((branch) => ({
       id: branch.id.trim(),
@@ -277,12 +283,7 @@ export function guideContentFromForm(form: GuideForm): SupportGuideContent {
       goto_step: branch.gotoStep.trim(),
       note: branch.note.trim(),
     })),
-    references: form.references.map((reference) => ({
-      document_id: reference.documentId.trim(),
-      title: reference.title.trim(),
-      section_path: splitLines(reference.sectionPath),
-      version: reference.version.trim(),
-    })),
+    references: form.references.map(referenceContentFromForm),
     completion: form.completion.map((item) => ({
       id: item.id.trim(),
       description: item.description.trim(),
@@ -299,6 +300,57 @@ export function guideContentFromForm(form: GuideForm): SupportGuideContent {
       contact: form.handoffContact.trim(),
     },
   };
+}
+
+function referenceFormFromContent(reference: SupportGuideReference): ReferenceForm {
+  return {
+    key: newRowKey("reference"),
+    documentId: reference.document_id,
+    title: reference.title,
+    sectionPath: joinLines(reference.section_path),
+    version: reference.version,
+    pageRanges: formatPageRanges(reference.page_ranges ?? []),
+  };
+}
+
+function referenceContentFromForm(reference: ReferenceForm): SupportGuideReference {
+  return {
+    document_id: reference.documentId.trim(),
+    title: reference.title.trim(),
+    section_path: splitLines(reference.sectionPath),
+    version: reference.version.trim(),
+    // 形の違う入力は保存の前の確かめ（guideFormIssues）で止める。ここでは読めた範囲だけを送る。
+    page_ranges: parsePageRanges(reference.pageRanges) ?? [],
+  };
+}
+
+/** 頁の範囲を「3-5, 8」の文字にする。 */
+export function formatPageRanges(ranges: readonly SupportGuidePageRange[]): string {
+  return ranges
+    .map((range) => (range.page_start === range.page_end ? `${range.page_start}` : `${range.page_start}-${range.page_end}`))
+    .join(", ");
+}
+
+/**
+ * 「3-5, 8」の文字を頁の範囲にする（区切りは「,」「、」・空白、範囲は「-」「〜」「~」）。空なら空の一覧。
+ * 形が違う・始まりが終わりより後・頁が 1 未満・範囲が多すぎるときは null。
+ */
+export function parsePageRanges(text: string): SupportGuidePageRange[] | null {
+  const tokens = text
+    .normalize("NFKC")
+    .split(/[,、\s]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  const ranges: SupportGuidePageRange[] = [];
+  for (const token of tokens) {
+    const match = /^(\d+)(?:\s*[-~〜–]\s*(\d+))?$/.exec(token);
+    if (!match) return null;
+    const start = Number(match[1]);
+    const end = match[2] === undefined ? start : Number(match[2]);
+    if (start < 1 || end < start || end > MAX_PAGE) return null;
+    ranges.push({ page_start: start, page_end: end });
+  }
+  return ranges.length > MAX_PAGE_RANGES ? null : ranges;
 }
 
 /** 未保存の変更の判定に使う（行の key と、行へ分ける前の空行の違いは変更にしない）。 */
@@ -340,6 +392,7 @@ export function newStepRow(form: GuideForm): StepForm {
     evidenceRequirements: "",
     allowedTools: ["rag_search"],
     doneWhen: "",
+    references: [],
   };
 }
 
@@ -356,7 +409,7 @@ export function newBranchRow(form: GuideForm): BranchForm {
 }
 
 export function newReferenceRow(): ReferenceForm {
-  return { key: newRowKey("reference"), documentId: "", title: "", sectionPath: "", version: "" };
+  return { key: newRowKey("reference"), documentId: "", title: "", sectionPath: "", version: "", pageRanges: "" };
 }
 
 export function newCompletionRow(form: GuideForm): CompletionForm {
@@ -493,6 +546,7 @@ export function guideFormIssues(form: GuideForm): SupportGuideIssue[] {
     const base = `steps[${index}]`;
     issues.push(idIssue(`${base}.id`, step.id));
     issues.push(requiredIssue(`${base}.title`, step.title, "supportGuides.field.stepTitle"));
+    issues.push(...referenceIssues(`${base}.references`, step.references));
   });
   form.branches.forEach((branch, index) => {
     const base = `branches[${index}]`;
@@ -521,17 +575,26 @@ export function guideFormIssues(form: GuideForm): SupportGuideIssue[] {
       );
     }
   });
-  form.references.forEach((reference, index) => {
-    issues.push(
-      requiredIssue(`references[${index}].document_id`, reference.documentId, "supportGuides.field.documentId"),
-    );
-  });
+  issues.push(...referenceIssues("references", form.references));
   form.completion.forEach((item, index) => {
     const base = `completion[${index}]`;
     issues.push(idIssue(`${base}.id`, item.id));
     issues.push(
       requiredIssue(`${base}.description`, item.description, "supportGuides.field.completionDescription"),
     );
+  });
+  return issues.filter((issue): issue is SupportGuideIssue => issue !== null);
+}
+
+function referenceIssues(base: string, references: readonly ReferenceForm[]): SupportGuideIssue[] {
+  const issues: (SupportGuideIssue | null)[] = [];
+  references.forEach((reference, index) => {
+    issues.push(
+      requiredIssue(`${base}[${index}].document_id`, reference.documentId, "supportGuides.field.documentId"),
+    );
+    if (parsePageRanges(reference.pageRanges) === null) {
+      issues.push(clientIssue(`${base}[${index}].page_ranges`, t("supportGuides.check.pageRanges")));
+    }
   });
   return issues.filter((issue): issue is SupportGuideIssue => issue !== null);
 }
@@ -603,6 +666,10 @@ const FIELD_LABEL: Record<string, I18nKey> = {
   "steps.evidence_requirements": "supportGuides.field.evidenceRequirements",
   "steps.allowed_tools": "supportGuides.field.allowedTools",
   "steps.done_when": "supportGuides.field.doneWhen",
+  "steps.references": "supportGuides.field.stepReferences",
+  "steps.references.document_id": "supportGuides.field.documentId",
+  "steps.references.title": "supportGuides.field.referenceTitle",
+  "steps.references.page_ranges": "supportGuides.field.pageRanges",
   "branches.id": "supportGuides.field.id",
   "branches.when": "supportGuides.field.branchCondition",
   "branches.when.condition_id": "supportGuides.field.branchCondition",
@@ -614,6 +681,7 @@ const FIELD_LABEL: Record<string, I18nKey> = {
   "references.title": "supportGuides.field.referenceTitle",
   "references.section_path": "supportGuides.field.sectionPath",
   "references.version": "supportGuides.field.version",
+  "references.page_ranges": "supportGuides.field.pageRanges",
   "completion.id": "supportGuides.field.id",
   "completion.description": "supportGuides.field.completionDescription",
   "completion.check_method": "supportGuides.field.checkMethod",
