@@ -34,6 +34,14 @@ export {
   type TabularData,
 } from "./lib/tabular-data";
 export {
+  excerptHasTable,
+  excerptPlainText,
+  parseExcerpt,
+  type ExcerptBlock,
+  type ExcerptTableCell,
+} from "./lib/excerpt-text";
+export { ExcerptContent, type ExcerptContentProps } from "./components/data/excerpt-content";
+export {
   parseMarkdownBlocks,
   parseMarkdownInline,
   safeMarkdownHref,

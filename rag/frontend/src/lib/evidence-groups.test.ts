@@ -111,5 +111,9 @@ describe("evidenceLocation / evidenceExcerpt", () => {
   it("本文の空白をつめ、長ければ省く", () => {
     expect(evidenceExcerpt("一行目\n\n  二行目")).toBe("一行目 二行目");
     expect(evidenceExcerpt("あ".repeat(130))).toBe(`${"あ".repeat(120)}…`);
+    // 表の HTML はタグの文字を出さず「セル | セル」にする（#2387）。
+    expect(evidenceExcerpt("<table><tr><td>項目</td><td>値</td></tr><tr><td>A</td><td>B</td></tr></table>")).toBe(
+      "項目 | 値 A | B"
+    );
   });
 });

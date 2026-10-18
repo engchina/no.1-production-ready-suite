@@ -1,7 +1,9 @@
 import { BookOpen, ExternalLink, FileText, History, LocateFixed, type LucideIcon } from "lucide-react";
-import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 
+import { excerptPlainText } from "../../lib/excerpt-text";
 import { cn } from "../../lib/utils";
+import { ExcerptContent } from "../data/excerpt-content";
 import { StatusBadge } from "../data/status-badge";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
@@ -119,6 +121,8 @@ export interface EvidenceLabels {
   sourcePreview: string;
   excerptExpand: string;
   excerptCollapse: string;
+  /** 抜粋の中の表の読み上げの名前。 */
+  excerptTable: string;
 }
 
 /** 3 製品で同じ根拠の文言。 */
@@ -161,6 +165,7 @@ export function evidenceLabels(overrides: Partial<EvidenceLabels> = {}): Evidenc
     sourcePreview: "原文のプレビュー",
     excerptExpand: "抜粋をすべて表示",
     excerptCollapse: "抜粋を折りたたむ",
+    excerptTable: "抜粋の表",
     ...overrides,
   };
 }
@@ -295,7 +300,7 @@ function EvidenceSummaryBody({
             data-testid="citation-text"
             className="mt-2.5 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-fg/90"
           >
-            {item.text}
+            {excerptPlainText(item.text)}
           </p>
         ) : (
           <EvidenceExcerpt text={item.text} collapsible={excerpt === "clamp"} labels={labels} />
@@ -358,28 +363,37 @@ function EvidenceSummaryBody({
 
 /**
  * パネルの抜粋。`collapsible` は 3 行までに畳み、収まらないときだけ「抜粋をすべて表示 / 抜粋を折りたたむ」を出す
- * （原文のプレビューに場所を空けるため）。畳まないときは全文。
+ * （原文のプレビューに場所を空けるため）。畳まないときは全文。抜粋に入る文書の表（HTML の `<table>`）は、
+ * 畳んだ表示では「セル | セル」の行、全文の表示では表にする（HTML として注入しない。#2387）。
  */
 function EvidenceExcerpt({ text, collapsible, labels }: { text: string; collapsible: boolean; labels: EvidenceLabels }) {
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
   const ref = useRef<HTMLParagraphElement>(null);
   const clamped = collapsible && !expanded;
+  const plain = useMemo(() => excerptPlainText(text), [text]);
   useLayoutEffect(() => {
     const node = ref.current;
     if (!node || !clamped) return;
     setOverflowing(node.scrollHeight > node.clientHeight + 1);
-  }, [text, clamped]);
+  }, [plain, clamped]);
+  const textClass = "text-sm leading-relaxed text-fg/90";
   return (
     <div className="mt-2.5 space-y-1">
-      <p
-        ref={ref}
-        data-testid="citation-text"
-        data-expanded={clamped ? "false" : "true"}
-        className={cn("whitespace-pre-wrap break-words text-sm leading-relaxed text-fg/90", clamped && "line-clamp-3")}
-      >
-        {text}
-      </p>
+      {clamped ? (
+        <p
+          ref={ref}
+          data-testid="citation-text"
+          data-expanded="false"
+          className={cn("line-clamp-3 whitespace-pre-wrap break-words", textClass)}
+        >
+          {plain}
+        </p>
+      ) : (
+        <div data-testid="citation-text" data-expanded="true">
+          <ExcerptContent text={text} className={textClass} tableLabel={labels.excerptTable} />
+        </div>
+      )}
       {collapsible && (overflowing || expanded) ? (
         <Button
           type="button"
