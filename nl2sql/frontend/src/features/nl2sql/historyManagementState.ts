@@ -15,6 +15,7 @@ import {
 } from "@production-ready/ui";
 
 import { t } from "../../lib/i18n";
+import { APP_ROUTES } from "../../lib/routes";
 import { chatStageLabel } from "./chatProgress";
 import type { EngineTiming, HistoryItem } from "./types";
 
@@ -276,4 +277,18 @@ export function historyTimelineSteps(item: HistoryItem): HistoryTimelineStep[] {
 /** 詳細の URL（`?id=<run_id>`。新しいタブでも開ける）。 */
 export function historyDetailPath(basePath: string, id: string) {
   return `${basePath}?${new URLSearchParams({ id }).toString()}`;
+}
+
+/**
+ * 実行の詳細の「会話を開く」の URL（3 製品で同じ規則。#2343）。チャットの往復（`kind` が chat）で会話の ID があり、
+ * 会話を見られる人（system_admin か会話の持ち主）がチャットを開けるときだけ。SQL 生成・MCP・品質評価の実行は
+ * 開く元の会話が無いので null（操作を出さない）。開いた会話は backend が見え方を確かめる（見えなければ 404）。
+ */
+export function historyConversationHref(
+  item: HistoryItem,
+  { seesAllUsers, canOpenChat }: { seesAllUsers: boolean; canOpenChat: boolean }
+): string | null {
+  if (!canOpenChat || historyKind(item) !== "chat" || !item.session_id) return null;
+  if (!seesAllUsers && item.owned_by_me !== true) return null;
+  return `${APP_ROUTES.chat}?${new URLSearchParams({ profile_id: item.profile_id, conversation_id: item.session_id }).toString()}`;
 }

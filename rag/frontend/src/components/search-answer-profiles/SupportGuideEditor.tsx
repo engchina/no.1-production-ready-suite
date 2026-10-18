@@ -40,6 +40,7 @@ import {
   ListToolbar,
   PagedDataTable,
   PAGE_SIZE_OPTIONS,
+  publishedVersionColumns,
 } from "@production-ready/ui";
 
 import { listCountProps, useClientListPaging } from "@/lib/list-paging";
@@ -1479,7 +1480,13 @@ function SupportGuideHistory({
         <h5 id="support-guide-history" className="text-sm font-semibold text-fg">
           {t("supportGuides.history.title")}
         </h5>
-        <p className="text-xs leading-relaxed text-fg-muted">{t("supportGuides.history.hint")}</p>
+        <p className="text-xs leading-relaxed text-fg-muted">
+          {t("supportGuides.history.hint")}
+          {/* 公開の履歴は直近 N 版（RAG_SUPPORT_GUIDE_MAX_PUBLISHED_REVISIONS。公開中の版は常に残る。#2356）。 */}
+          {detail.max_published_revisions
+            ? t("supportGuides.history.retention", { count: detail.max_published_revisions })
+            : null}
+        </p>
       </div>
       {/* 件数は一覧の上の右に 1 か所（ListCount。#1891）。 */}
       <ListToolbar
@@ -1491,77 +1498,59 @@ function SupportGuideHistory({
         {...paging}
         pageSizeOptions={PAGE_SIZE_OPTIONS}
         paginationAriaLabel={t("supportGuides.history.paginationLabel")}
-        columns={[
-          {
-            key: "revision",
-            header: t("supportGuides.history.revision"),
-            rowHeader: true,
-            render: (row) => (
-              <span className="flex flex-wrap items-center gap-2">
-                <span className="tnum">{t("supportGuides.revisionLabel", { revision: row.revision })}</span>
-                {row.revision === detail.published_revision ? (
-                  <StatusBadge variant="success" label={t("supportGuides.history.current")} />
-                ) : null}
-              </span>
-            ),
+        // 列の並びとバッジは Agent の業務 Agent の版の履歴と同じ共通の列（#2356）。
+        columns={publishedVersionColumns<SupportGuideRevisionSummary>({
+          getVersion: (row) => row.revision,
+          currentVersion: detail.published_revision,
+          formatVersion: (revision) => t("supportGuides.revisionLabel", { revision }),
+          labels: {
+            version: t("supportGuides.history.revision"),
+            current: t("supportGuides.history.current"),
+            publishedAt: t("supportGuides.history.publishedAt"),
+            publishedBy: t("supportGuides.history.publishedBy"),
+            note: t("supportGuides.history.note"),
+            actions: t("supportGuides.history.actions"),
           },
-          {
-            key: "title",
-            header: t("supportGuides.column.title"),
-            render: (row) => <span className="break-words">{row.title}</span>,
-          },
-          {
-            key: "publishedAt",
-            header: t("supportGuides.history.publishedAt"),
-            render: (row) => (
-              <span className="tnum text-xs">
-                {formatDateTime(row.published_at)}
-                {row.published_by ? `・${row.published_by}` : ""}
-              </span>
-            ),
-          },
-          {
-            key: "note",
-            header: t("supportGuides.history.note"),
-            render: (row) =>
-              row.rollback_from != null ? (
-                <span className="text-xs text-fg-muted">
-                  {t("supportGuides.history.rollbackFrom", { revision: row.rollback_from })}
-                </span>
-              ) : null,
-          },
-          {
-            key: "actions",
-            header: t("supportGuides.history.actions"),
-            align: "right",
-            render: (row) => (
-              <RowActionMenu
-                actions={[
-                  {
-                    id: "view",
-                    label: t("supportGuides.history.view"),
-                    icon: Eye,
-                    onSelect: () => onView(row.revision),
-                  },
-                  {
-                    id: "rollback",
-                    label: t("supportGuides.history.rollback"),
-                    icon: RotateCcw,
-                    visible: row.revision !== detail.published_revision,
-                    disabled,
-                    loading: rollbackPending === row.revision,
-                    onSelect: () => onRollback(row.revision),
-                  },
-                ]}
-                ariaLabel={t("common.objectActions.aria", {
-                  name: t("supportGuides.revisionLabel", { revision: row.revision }),
-                })}
-                loading={rollbackPending === row.revision}
-                testId={`support-guide-revision-actions-${row.revision}`}
-              />
-            ),
-          },
-        ]}
+          renderPublishedAt: (row) => <span className="text-xs">{formatDateTime(row.published_at)}</span>,
+          renderPublishedBy: (row) => <span className="text-xs">{row.published_by || "-"}</span>,
+          extraColumns: [
+            {
+              key: "title",
+              header: t("supportGuides.column.title"),
+              render: (row) => <span className="break-words">{row.title}</span>,
+            },
+          ],
+          renderNote: (row) =>
+            row.rollback_from != null ? (
+              <span className="text-xs">{t("supportGuides.history.rollbackFrom", { revision: row.rollback_from })}</span>
+            ) : null,
+          renderActions: (row) => (
+            <RowActionMenu
+              actions={[
+                {
+                  id: "view",
+                  label: t("supportGuides.history.view"),
+                  icon: Eye,
+                  onSelect: () => onView(row.revision),
+                },
+                {
+                  id: "rollback",
+                  label: t("supportGuides.history.rollback"),
+                  icon: RotateCcw,
+                  visible: row.revision !== detail.published_revision,
+                  disabled,
+                  loading: rollbackPending === row.revision,
+                  onSelect: () => onRollback(row.revision),
+                },
+              ]}
+              ariaLabel={t("common.objectActions.aria", {
+                name: t("supportGuides.revisionLabel", { revision: row.revision }),
+              })}
+              loading={rollbackPending === row.revision}
+              testId={`support-guide-revision-actions-${row.revision}`}
+            />
+          ),
+        })}
         rows={detail.revisions}
         getRowKey={(row) => String(row.revision)}
         selectedRowKey={viewRevision == null ? null : String(viewRevision)}

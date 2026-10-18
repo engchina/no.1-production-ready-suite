@@ -15,6 +15,7 @@ from pr_system_settings.model import EnterpriseAiConfiguredModel
 
 from app.features.agent import builtin_runtime
 from app.features.agent.builtin_runtime import BuiltinRuntimeError, ModelTarget
+from app.observability import MODEL_INCOMPLETE_RETRIES_TOTAL
 from app.settings import Settings
 
 ENDPOINT = "https://primary.example/openai/v1"
@@ -222,6 +223,117 @@ def test_bounded_call_model_leaves_the_resend_to_the_caller() -> None:
     async def call() -> None:
         await responses.create(
             model="m", input=[], max_output_tokens=1200, reasoning={"effort": "medium"}
+        )
+
+    with pytest.raises(BuiltinRuntimeError):
+        anyio.run(call)
+    assert len(inner.requests) == 1
+
+
+def _tiny_incomplete() -> _Response:
+    """上限よりはるかに少ない出力の未完了（呼び先の一時的な不具合。#2355）。"""
+    return _Response(
+        {
+            "status": "incomplete",
+            "model": "openai.gpt-oss-120b",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {"output_tokens": 61, "output_tokens_details": {"reasoning_tokens": 5}},
+        }
+    )
+
+
+def _settings(monkeypatch: pytest.MonkeyPatch, **values: Any) -> None:
+    settings = Settings(_env_file=None, **values)
+    monkeypatch.setattr(builtin_runtime, "get_settings", lambda: settings)
+
+
+def _retries(model: str) -> float:
+    value: float = MODEL_INCOMPLETE_RETRIES_TOTAL.labels(model=model)._value.get()
+    return value
+
+
+def test_tiny_incomplete_is_resent_once_with_the_same_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """使った出力が上限の割合未満の未完了は、同じ要求（推論の量も同じ）で 1 回だけ送り直す。"""
+    _settings(monkeypatch)
+    completed = _Response({"status": "completed"})
+    inner = _Sequence(_tiny_incomplete(), completed)
+    responses = builtin_runtime._OciResponses(inner)
+    model = "model-tiny-retry-ok"
+    before = _retries(model)
+
+    async def call() -> Any:
+        return await responses.create(
+            model=model, input=[], max_output_tokens=32768, reasoning={"effort": "low"}
+        )
+
+    assert anyio.run(call) is completed
+    assert len(inner.requests) == 2
+    assert inner.requests[1] == inner.requests[0]
+    assert _retries(model) == before + 1
+
+
+def test_tiny_incomplete_twice_keeps_the_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """送り直しも未完了なら、今までどおり失敗にする（推論の量 low は下げられない）。"""
+    _settings(monkeypatch)
+    inner = _Sequence(_tiny_incomplete(), _tiny_incomplete())
+    responses = builtin_runtime._OciResponses(inner)
+
+    async def call() -> None:
+        await responses.create(
+            model="openai.gpt-oss-120b",
+            input=[],
+            max_output_tokens=32768,
+            reasoning={"effort": "low"},
+        )
+
+    with pytest.raises(BuiltinRuntimeError) as raised:
+        anyio.run(call)
+    assert raised.value.code == "runtime.model_output_incomplete"
+    assert "使った出力=61 tokens（うち推論 5）" in raised.value.message
+    assert len(inner.requests) == 2
+
+
+def test_tiny_incomplete_then_lowering_effort_is_still_tried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """送り直しも未完了なら、下げられる推論の量は今までどおり 1 段下げて送り直す。"""
+    _settings(monkeypatch)
+    completed = _Response({"status": "completed"})
+    inner = _Sequence(_tiny_incomplete(), _tiny_incomplete(), completed)
+    responses = builtin_runtime._OciResponses(inner)
+
+    async def call() -> Any:
+        return await responses.create(
+            model="m", input=[], max_output_tokens=32768, reasoning={"effort": "medium"}
+        )
+
+    assert anyio.run(call) is completed
+    assert [request["reasoning"] for request in inner.requests] == [
+        {"effort": "medium"},
+        {"effort": "medium"},
+        {"effort": "low"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("ratio", "lower_effort_on_incomplete"),
+    [(0.0, True), (0.1, False)],
+    ids=["disabled-by-setting", "bounded-call"],
+)
+def test_tiny_incomplete_is_not_resent_when_disabled(
+    monkeypatch: pytest.MonkeyPatch, ratio: float, lower_effort_on_incomplete: bool
+) -> None:
+    _settings(monkeypatch, agent_model_incomplete_retry_output_ratio=ratio)
+    inner = _Inner(_tiny_incomplete())
+    responses = builtin_runtime._OciResponses(
+        inner, lower_effort_on_incomplete=lower_effort_on_incomplete
+    )
+
+    async def call() -> None:
+        await responses.create(
+            model="m", input=[], max_output_tokens=32768, reasoning={"effort": "low"}
         )
 
     with pytest.raises(BuiltinRuntimeError):

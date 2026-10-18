@@ -2699,7 +2699,8 @@ const nl2sqlJa = {
   "learning.error.classifier": "Classifier 操作に失敗しました。",
 
   "history.subtitle": "SQL の生成と実行の記録を、状態・SQL・処理の経過で確かめます。",
-  "history.action.rerun": "この質問で再実行",
+  "history.action.openChat": "会話を開く",
+  "history.action.openChatLabel": "この実行の会話をチャットで開く",
   "history.action.clearFilters": "条件をクリア",
   "history.action.copySql": "SQL をコピー",
   "history.copied": "SQL をコピーしました。",

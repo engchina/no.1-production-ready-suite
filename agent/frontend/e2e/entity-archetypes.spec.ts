@@ -267,28 +267,30 @@ for (const viewport of VIEWPORTS) {
       }
     });
 
-    test("Run の行を選ぶと詳細が変わり、行メニューと詳細の操作は同じ定義を使う", async ({ page, mockApi }) => {
+    test("Run の行を選ぶと詳細が変わり、チャットの Run の詳細は「会話を開く」を出して再実行を出さない（#2343）", async ({ page, mockApi }) => {
       seedRun(mockApi, "run-e2e-1", "一つ目の目標");
       seedRun(mockApi, "run-e2e-2", "二つ目の目標");
+      // チャットの画面から送った Run（会話あり）。
+      Object.assign(mockApi.state.runs[1] as Record<string, unknown>, { thread_id: "thread-e2e-2", owned_by_me: true });
       await page.goto("/runs");
       const detail = page.getByRole("region", { name: "実行の詳細" });
       await page.locator('a[data-run-id="run-e2e-1"]').click();
       await expect(detail.getByText("run-e2e-1", { exact: true }).first()).toBeVisible();
+      // 会話の無い Run は開く元の会話が無いので出さない。
+      await expect(page.getByTestId("run-open-chat")).toHaveCount(0);
       await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
 
       await page.getByRole("link", { name: "二つ目の目標（詳細を開く）", exact: true }).click();
       await expect(detail.getByText("run-e2e-2", { exact: true }).first()).toBeVisible();
-      await expect(page.getByTestId("run-object-actions").getByRole("button", { name: "再実行" })).toBeVisible();
+      const openChat = page.getByTestId("run-open-chat");
+      await expect(openChat).toHaveText("会話を開く");
+      await expect(openChat).toHaveAttribute("href", /\/chat\?agent_id=default&thread_id=thread-e2e-2$/);
+      // 再実行は実行の詳細・一覧の行に置かない（3 製品の実行の詳細を RAG と同じ「会話を開く」にそろえる）。
+      await expect(page.getByRole("button", { name: "再実行" })).toHaveCount(0);
 
       await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
       await expect(page.getByTestId("run-row-run-e2e-2")).toHaveAttribute("aria-current", "true");
-      // 行の操作の読み上げ名は題名（質問）から作る（共通の RunHistoryTable。#1955）。
-      await page.getByRole("button", { name: "一つ目の目標 の操作", exact: true }).click();
-      await expect(page.getByRole("menuitem", { name: "再実行" })).toBeVisible();
-      await expect(page.getByRole("menuitem", { name: "キャンセル" })).toHaveCount(0);
-      await page.getByRole("menuitem", { name: "再実行" }).click();
-      await expect(page.getByText("実行を作成しました", { exact: true })).toBeVisible();
-      expect(mockApi.lastRequest("POST", "/api/runs/run-e2e-1/replay")).toBeDefined();
+      await expect(page.getByRole("menuitem", { name: "再実行" })).toHaveCount(0);
     });
 
     test("行の題名のリンク（共有 RowTitleButton）はキーボードで選べ、選んだ行と題名を aria-current で伝える", async ({ page, mockApi }, testInfo) => {

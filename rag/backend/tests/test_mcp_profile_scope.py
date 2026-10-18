@@ -174,16 +174,28 @@ def test_including_superseded_keeps_the_claim_scope(auth: ProductionAuth, tool: 
     assert captured.filters == {"include_superseded": "true", "knowledge_base_id": "kb-1,kb-2"}
 
 
-def test_claim_does_not_widen_user_permissions(auth: ProductionAuth) -> None:
-    """claim にあっても利用者が使えない検索・回答プロファイルは、今までどおり 404。"""
+def test_claim_does_not_widen_user_permissions(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """claim にあっても利用者が使えない検索・回答プロファイルは使わない。
+
+    見つからない id として、利用者の権限 ∩ claim の中から選び直す（#2355。ここでは bv-1 だけ）。
+    """
+    fake = ScopedFakeOracle()
+    monkeypatch.setattr(search_answer_profiles_route, "OracleClient", lambda *_a, **_k: fake)
     user = auth.user_with_permissions(
-        "searcher", ["menu.search"], search_answer_profile_ids=["bv-1"]
+        "searcher",
+        ["menu.search"],
+        search_answer_profile_ids=["bv-1"],
+        knowledge_base_ids=["kb-1", "kb-3"],
     )
     scoped = _headers(user.user_uuid, ["bv-1", "bv-2"])
 
-    missing = _call("rag_search", {"query": "規程", "search_answer_profile_id": "bv-2"}, scoped)
-    assert (missing["isError"], missing["structuredContent"]["status"]) == (True, 404)
-    assert RecordingPipeline.captured_request is None
+    result = _call("rag_search", {"query": "規程", "search_answer_profile_id": "bv-2"}, scoped)
+    assert result["isError"] is False, result
+    selected = result["structuredContent"]["auto_selected_search_answer_profile"]
+    assert (selected["id"], selected["requested_id"]) == ("bv-1", "bv-2")
+    assert _captured_knowledge_base_ids() == ["kb-1"]  # bv-2 の参照先（kb-3）は検索しない
 
 
 def test_claim_limits_profile_list(auth: ProductionAuth, monkeypatch: MonkeyPatch) -> None:

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { Check, FileText, GitBranch, PlayCircle, RefreshCw, Server, ShieldAlert } from "lucide-react";
 import {
   Banner,
@@ -10,6 +11,7 @@ import {
   FormStatus,
   ListSkeleton,
   ObjectActionBar,
+  OpenConversationAction,
   ProcessFailureNotice,
   ProcessingIndicator,
   RunDetailLayout,
@@ -50,7 +52,7 @@ import { dataScopeNotes } from "@/lib/data-scope";
 import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
-import { type AgentCapabilities } from "@/lib/permissions";
+import { MENU_PERMISSIONS, type AgentCapabilities } from "@/lib/permissions";
 import { ANSWER_EVIDENCE_KIND, ragArtifactEvidence, runAnswerEvidence } from "@/lib/answer-evidence";
 import { noticeHeading, structureAnswer } from "@/lib/answer-structure";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
@@ -58,6 +60,7 @@ import {
   agentRunDetailLabels,
   commonRunStatus,
   runDurationMs,
+  runConversationHref,
   runFinishedAt,
   runStatusLabel,
   runTimelineSteps,
@@ -119,7 +122,11 @@ export function RunDetail({
   const structured = structuredFallback(run);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
   const canAddCase = useCanEditEvaluationSets();
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
+  const conversationHref = runConversationHref(run, {
+    seesAllUsers: user?.is_system_admin === true,
+    canOpenChat: hasPermission(MENU_PERMISSIONS.chat),
+  });
   const labels = agentRunDetailLabels();
   // 実行者と会話の持ち主（#1954）。引けない利用者は「削除済みのユーザー」、自分は自分の表示名で補う。
   const executedByMe = run.executed_by_me !== false;
@@ -192,12 +199,21 @@ export function RunDetail({
             runId={run.id}
             labels={labels}
             actions={
-              <ObjectActionBar
-                actions={actions}
-                ariaLabel={t("run.actions")}
-                moreLabel={t("common.moreActions")}
-                testId="run-object-actions"
-              />
+              // 「会話を開く」（3 製品共通の部品。チャットから送った Run だけ。#2343）と Run の操作（承認・再開・取消）。
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <OpenConversationAction
+                  href={conversationHref}
+                  linkComponent={Link}
+                  labels={{ label: t("run.openChat"), ariaLabel: t("run.openChatLabel") }}
+                  testId="run-open-chat"
+                />
+                <ObjectActionBar
+                  actions={actions}
+                  ariaLabel={t("run.actions")}
+                  moreLabel={t("common.moreActions")}
+                  testId="run-object-actions"
+                />
+              </div>
             }
             alert={
               <>

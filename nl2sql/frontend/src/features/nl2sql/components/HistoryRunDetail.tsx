@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { RefreshCw, RotateCcw } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { RefreshCw } from "lucide-react";
+import { Link } from "react-router-dom";
 
 import {
   CopyButton,
@@ -9,7 +9,7 @@ import {
   Button,
   ContentActionBar,
   EmptyState,
-  ObjectActionBar,
+  OpenConversationAction,
   PageBody,
   PageHeader,
   RunDetailLayout,
@@ -22,7 +22,6 @@ import {
   StatusBadge,
   TimedLoadingState,
   toast,
-  type EntityAction,
   type RunFact,
   type RunTimelineStep,
 } from "@production-ready/ui";
@@ -35,6 +34,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { feedbackRatingLabel, userFeedbackRatingBadgeLabel } from "../feedbackLabels";
 import {
+  historyConversationHref,
   historyExecutor,
   historyKindDisplay,
   historyOwner,
@@ -43,7 +43,6 @@ import {
 } from "../historyManagementState";
 import { engineLabel } from "../labels";
 import { profileRecordDisplayLabel } from "../profileDisplay";
-import { historyRerunUrl } from "../queryPrefillState";
 import type { HistoryItem } from "../types";
 
 /*
@@ -85,24 +84,17 @@ function timelineSteps(item: HistoryItem): RunTimelineStep[] {
 }
 
 function HistoryRunView({ item }: { item: HistoryItem }) {
-  const navigate = useNavigate();
-  const { hasPermission } = useAuth();
-  const canRerun = canOpenRoute(APP_ROUTES.query, hasPermission);
+  const { hasPermission, user } = useAuth();
+  // 「会話を開く」（3 製品共通。チャットの往復だけ。会話を見られる人〔system_admin か持ち主〕で、チャットを開ける
+  // 権限があるとき。SQL 生成・MCP・品質評価の実行は開く元の会話が無いので出さない。再実行は置かない。#2343）。
+  const chatHref = historyConversationHref(item, {
+    seesAllUsers: user?.is_system_admin === true,
+    canOpenChat: canOpenRoute(APP_ROUTES.chat, hasPermission),
+  });
   const status = historyRunStatus(item);
   const sql = item.executable_sql || item.generated_sql;
   const steps = timelineSteps(item);
   const executed = !item.generation_only && item.safety_is_safe;
-
-  const actions: EntityAction[] = [
-    {
-      id: "rerun",
-      label: t("history.action.rerun"),
-      icon: RotateCcw,
-      onSelect: () => navigate(historyRerunUrl(item, APP_ROUTES.query)),
-      visible: canRerun,
-      testId: "history-detail-rerun",
-    },
-  ];
 
   const extraFacts: RunFact[] = [
     { id: "engine", label: t("history.detail.engine"), value: engineLabel(item.engine) },
@@ -191,9 +183,12 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
             runId={item.id}
             extraFacts={extraFacts}
             actions={
-              canRerun ? (
-                <ObjectActionBar actions={actions} ariaLabel={t("history.detail.actions")} testId="history-detail-actions" />
-              ) : null
+              <OpenConversationAction
+                href={chatHref}
+                linkComponent={Link}
+                labels={{ label: t("history.action.openChat"), ariaLabel: t("history.action.openChatLabel") }}
+                testId="history-detail-open-chat"
+              />
             }
             alert={
               status === "blocked" ? (

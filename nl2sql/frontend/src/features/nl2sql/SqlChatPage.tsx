@@ -56,6 +56,7 @@ import {
   apiPost,
   isTransportError,
 } from "@/lib/api";
+import { useSearchParams } from "react-router-dom";
 import { appPath } from "@/lib/base-path";
 import { t } from "@/lib/i18n";
 import { randomUuid } from "@/lib/randomUuid";
@@ -254,6 +255,26 @@ export function SqlChatPage() {
     "conversationId",
     "",
   );
+  // 実行の詳細の「会話を開く」（`?profile_id=&conversation_id=`。#2343）から開いた会話。URL の会話を一度だけ選び
+  // （作業状態に残す）、URL からは外す（読み込み直しや戻るで、選び直した会話を URL の会話に戻さない）。
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedConversationId = searchParams.get("conversation_id");
+  const linkedProfileId = searchParams.get("profile_id");
+  const [appliedLink, setAppliedLink] = useState<string | null>(null);
+  if (linkedConversationId && linkedConversationId !== appliedLink) {
+    setAppliedLink(linkedConversationId);
+    if (linkedProfileId) setProfileId(linkedProfileId);
+    setConversationId(linkedConversationId);
+  } else if (!linkedConversationId && appliedLink) {
+    setAppliedLink(null);
+  }
+  useEffect(() => {
+    if (!linkedConversationId) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("conversation_id");
+    next.delete("profile_id");
+    setSearchParams(next, { replace: true });
+  }, [linkedConversationId, searchParams, setSearchParams]);
   const [draft, setDraft] = useWorkspaceState(
     `draft:${profileId}:${conversationId}`,
     "",

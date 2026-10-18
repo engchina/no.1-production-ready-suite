@@ -536,6 +536,11 @@ export {
 } from "./components/data/page-size-select";
 export { PagedDataTable, type PagedDataTableProps } from "./components/data/paged-data-table";
 export {
+  publishedVersionColumns,
+  type PublishedVersionColumnLabels,
+  type PublishedVersionColumnsOptions,
+} from "./components/data/published-version-columns";
+export {
   ResultTable,
   ResultCell,
   RESULT_PAGE_SIZES,
@@ -657,6 +662,12 @@ export {
   type RunTimelineProps,
   type RunDetailLayoutProps,
 } from "./components/data/run-detail";
+export {
+  DEFAULT_OPEN_CONVERSATION_LABELS,
+  OpenConversationAction,
+  type OpenConversationActionLabels,
+  type OpenConversationActionProps,
+} from "./components/data/open-conversation-action";
 export {
   RunStepDetailsView,
   hasRunStepDetails,

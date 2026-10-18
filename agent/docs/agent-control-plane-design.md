@@ -58,9 +58,10 @@ flowchart TD
   サービストークンに、その接続の範囲の ID を claim `profile_ids` として入れる（`ToolInvocationContext.profile_scopes`。
   範囲の無い接続・外部の MCP には付けない。`tools/list` には付けない）。RAG / NL2SQL は「利用者の権限 ∩ claim」で判定し、
   範囲外は 403（`PROFILE_SCOPE_FORBIDDEN`）にする（platform の `docs/backend-standard.md`「製品間の連携」）。
-- `nl2sql_query` の `profile_id` は MCP の契約で必須（#1379）。範囲の無い Agent でモデルが渡さないときは、呼び先へ送らずに
-  ツールのエラー（`agent_profile_required`。`next_tools` に `nl2sql_recommend_profile` / `nl2sql_list_profiles` の
-  モデルに渡す名前）で選ぶツールを案内する。
+- 範囲の無い Agent でモデルが `nl2sql_query` の `profile_id` を渡さない・使えない ID を渡したとき、`rag_search` /
+  `rag_retrieve_evidence` に見つからない `search_answer_profile_id` を渡したときは、呼び先が選ぶ（使えるものが 1 つなら
+  それ、そうでなければ質問の推薦。結果の `auto_selected_profile` / `auto_selected_search_answer_profile`。決まらなければ
+  候補つきのエラー。NL2SQL は `"default"` には切り替えない。#1379・#2355）。
 
 版（#770）: 名前・説明・指示・Skill・モデルは「下書き」で、`POST /agents/{id}/publish` で版（`AgentVersion`: 版の番号・
 内容・公開日時・公開者・メモ）を作り、`published_version` にする。通常の Run は公開中の版の内容で実行し

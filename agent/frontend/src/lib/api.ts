@@ -1928,7 +1928,11 @@ export const agentApi = {
     }),
   listTools: () => request<{ tools: ToolDefinition[] }>("/api/tools"),
   // `user_display_names` は版の公開者（ログイン ID）→ 表示名（#1696）。
-  listAgents: () => request<{ agents: AgentProfile[]; user_display_names?: Record<string, string> }>("/api/agents"),
+  // `max_published_versions` は版の履歴に残す版の数（AGENT_MAX_PUBLISHED_VERSIONS。#2356）。
+  listAgents: () =>
+    request<{ agents: AgentProfile[]; user_display_names?: Record<string, string>; max_published_versions?: number }>(
+      "/api/agents",
+    ),
   createAgent: (payload: AgentProfileWritePayload) =>
     request<AgentProfile>("/api/agents", {
       method: "POST",
