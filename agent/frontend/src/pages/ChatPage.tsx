@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import {
   Check,
   RefreshCw,
@@ -143,6 +144,27 @@ export function ChatPage() {
     isNullableString
   );
   const [draft, setDraft] = useWorkspaceState("chat", "draft", "", isString);
+  // 実行の詳細の「会話を開く」（`?agent_id=&thread_id=`。#2343）から開いた会話。URL の会話を一度だけ選び（作業状態に
+  // 残す）、URL からは外す（読み込み直しや戻るで、選び直した会話を URL の会話に戻さない）。
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedThreadId = searchParams.get("thread_id");
+  const linkedAgentId = searchParams.get("agent_id");
+  const [appliedLink, setAppliedLink] = useState<string | null>(null);
+  if (linkedThreadId && linkedThreadId !== appliedLink) {
+    setAppliedLink(linkedThreadId);
+    if (linkedAgentId) setAgentId(linkedAgentId);
+    setThreadId(linkedThreadId);
+  } else if (!linkedThreadId && appliedLink) {
+    // URL から外した後は、次に同じ会話を開いたときにも選び直す。
+    setAppliedLink(null);
+  }
+  useEffect(() => {
+    if (!linkedThreadId) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("thread_id");
+    next.delete("agent_id");
+    setSearchParams(next, { replace: true });
+  }, [linkedThreadId, searchParams, setSearchParams]);
   // 送った質問（#907）。Run の作成の応答を待たずに会話の欄の末尾へ出し、作られた Run に置き換える。
   // 作れなかったときは残して「再送信」を出す（入力を失わない）。
   const [pending, setPending] = useState<OptimisticChatMessage | null>(null);

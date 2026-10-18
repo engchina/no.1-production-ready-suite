@@ -2177,3 +2177,26 @@ test("Select AI Credential が無いと Select AI の送信を止めて入力欄
   await expect.poll(() => state.requests.length).toBe(1);
   expect(state.requests[0]).toMatchObject({ engine: "select_ai", chat: true });
 });
+
+test("実行の詳細の「会話を開く」の URL で、その会話をチャットで開く (#2343)", { tag: "@responsive" }, async ({ page }) => {
+  const state = await setup(page);
+  state.turns.push({
+    job_id: "chat-1",
+    question: "カテゴリ別売上",
+    status: "done",
+    created_at: now,
+    steps: [],
+    result: {
+      generated_sql: "SELECT CATEGORY, SUM(AMOUNT) FROM APP.SALES GROUP BY CATEGORY",
+      original_question: "カテゴリ別売上",
+      explanation: "カテゴリごとの売上合計です。",
+      safety: { is_safe: true },
+    },
+  });
+  await page.goto("/chat?profile_id=sales&conversation_id=chat-1");
+  // URL の会話を選んで開き、URL からは会話の指定を外す（作業状態に残る）。
+  await expect(page.getByTestId("sql-chat-turn").first()).toContainText("カテゴリ別売上");
+  await expect(page).toHaveURL(/\/chat$/);
+  await page.reload();
+  await expect(page.getByTestId("sql-chat-turn").first()).toContainText("カテゴリ別売上");
+});

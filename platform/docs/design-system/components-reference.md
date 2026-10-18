@@ -2213,6 +2213,25 @@ toast.error(apiErrorMessage(error, t("…failed")));
 
 ---
 
+## OpenConversationAction — **新規**（#2343）
+
+実行の詳細の概要の見出しの右に置く「会話を開く」（UX 契約 run-history.md「詳細」）。3 製品で同じ部品・同じ文言にする。
+
+```tsx
+<OpenConversationAction
+  href={conversationHref}            // 無ければ描かない（チャットでない実行・会話を見られない人）
+  linkComponent={Link}
+  labels={{ label: t("…openChat"), ariaLabel: t("…openChatLabel") }}
+  testId="…-open-chat"
+/>
+```
+
+- 見た目は `ButtonLink`（secondary）+ `MessagesSquare`。既定の文言は「会話を開く」「この実行の会話をチャットで開く」。
+- 出すかどうか（URL）は製品が決める: RAG `RunHistoryClient`・NL2SQL `historyConversationHref`・Agent `runConversationHref`。
+- 単体テストは `packages/ui/tests/open-conversation-action.test.tsx`。
+
+---
+
 ## PreconditionBanner — **新規**（#1688）
 
 **操作の前提（設定・資源）が足りないので、その操作ができない**ことを、操作の区画の先頭に常設で示す warning の Banner。UX 契約 messaging.md §3.4.2 の実装。ページ全体が使えないときは `BlockedPageNotice`（§3.4）、DB の不通は `DatabaseGate` / `DatabaseUnavailableNotice` を使う。

@@ -824,3 +824,20 @@ test("送信の要求中に新しい会話へ移っても、作成の応答で�
   await expect(composer).toHaveValue("次の質問の下書き");
   expect(mockApi.lastRequest("POST", "/api/runs/run-chat-1/cancel")).toBeUndefined();
 });
+
+for (const viewport of VIEWPORTS) {
+  test(`実行の詳細の「会話を開く」から、その会話をチャットで開く（#2343） (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }) => {
+    seedThread(mockApi, { owned_by_me: true });
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/runs?id=run-chat-seed");
+    const openChat = page.getByTestId("run-open-chat");
+    await expect(openChat).toHaveText("会話を開く");
+    await openChat.click();
+
+    // URL の会話を選んで開き、URL からは会話の指定を外す。
+    await expect(page).toHaveURL(/\/chat$/);
+    await expect(page.getByTestId("chat-turn-run-chat-seed")).toBeVisible();
+    await expect(page.getByTestId("chat-turn-run-chat-seed")).toContainText("契約の更新条件は？");
+    await expectNoHorizontalOverflow(page);
+  });
+}

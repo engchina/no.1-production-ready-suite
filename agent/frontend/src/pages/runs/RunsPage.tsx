@@ -210,14 +210,6 @@ export function RunsPage() {
     onSuccess: refreshRunQueries,
     onError: (error) => toast.error(t("run.resumeFailed"), { description: error.message }),
   });
-  const replayRun = useMutation({
-    mutationFn: agentApi.replayRun,
-    onSuccess: () => {
-      toast.success(t("run.createdToast"));
-      refreshRunQueries();
-    },
-    onError: (error) => toast.error(t("run.replayFailed"), { description: error.message }),
-  });
   const decideApproval = useMutation({
     mutationFn: ({ approvalId, approved }: { runId: string; approvalId: string; approved: boolean }) =>
       // 決定者はログイン中の利用者から server が決める（#215）。
@@ -396,17 +388,15 @@ export function RunsPage() {
   }
 
   // 操作ごとに pending を分け、押した操作だけを loading、他は disabled にする（messaging.md §3.7）。
-  const pendingAction: RunCommandKind | "replay" | null = cancelRun.isPending
+  const pendingAction: RunCommandKind | null = cancelRun.isPending
     ? "cancel"
     : resumeRun.isPending
       ? "resume"
-      : replayRun.isPending
-        ? "replay"
-        : decideApproval.isPending
-          ? decideApproval.variables?.approved
-            ? "approve"
-            : "reject"
-          : null;
+      : decideApproval.isPending
+        ? decideApproval.variables?.approved
+          ? "approve"
+          : "reject"
+        : null;
   // 一覧の行と詳細で同じ定義を使う（UX 契約 buttons.md §5.1）。取消・却下は確認してから送る。
   const runActions = (run: RunRow): EntityAction[] => {
     const { canCancel, canResume, pendingApproval } = runRowFacts(run);
@@ -419,12 +409,10 @@ export function RunsPage() {
       ? cancelRun.variables
       : resumeRun.isPending
         ? resumeRun.variables
-        : replayRun.isPending
-          ? replayRun.variables
-          : decideApproval.isPending
-            ? decideApproval.variables?.runId
-            : undefined;
-    const isPendingFor = (kind: RunCommandKind | "replay") =>
+        : decideApproval.isPending
+          ? decideApproval.variables?.runId
+          : undefined;
+    const isPendingFor = (kind: RunCommandKind) =>
       pendingAction === kind && pendingRunId === run.id;
     const busy = pendingAction !== null;
     return [
@@ -442,20 +430,12 @@ export function RunsPage() {
         id: "resume",
         label: t("run.resume"),
         icon: PlayCircle,
-        // 取消・再開・再実行は Run の実行・操作の権限（operator）が必要（#215）。
+        // 取消・再開は Run の実行・操作の権限（operator）が必要（#215）。再実行は実行の詳細・一覧に置かない
+        // （3 製品の実行の詳細は「会話を開く」にそろえる。#2343）。
         visible: capabilities.operateRuns && decidable && canResume,
         disabled: busy,
         loading: isPendingFor("resume"),
         onSelect: () => resumeLatestRun(run),
-      },
-      {
-        id: "replay",
-        label: t("run.replay"),
-        icon: RefreshCw,
-        visible: capabilities.operateRuns,
-        disabled: busy,
-        loading: isPendingFor("replay"),
-        onSelect: () => replayRun.mutate(run.id),
       },
       {
         id: "reject",
