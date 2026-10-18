@@ -220,6 +220,8 @@ const SecurityDeepSecPage = lazy(() =>
  */
 const KEEP_ALIVE_PAGES = [
   { path: APP_ROUTES.chat, element: <SqlChatPage /> },
+  // DB 管理チャット（#2319）も会話の履歴を持つので、チャットと同じく常時マウントする。
+  { path: APP_ROUTES.dbAdminChat, element: <DbAdminChatPage /> },
   { path: APP_ROUTES.query, element: <Nl2SqlWorkbench /> },
   { path: APP_ROUTES.sqlToQuestion, element: <SqlToQuestionPage /> },
   { path: APP_ROUTES.directSql, element: <DirectSqlPage /> },
@@ -324,8 +326,6 @@ function AuthorizedApplication() {
             {KEEP_ALIVE_PAGES.map((page) => (
               <Route key={page.path} path={page.path} element={null} />
             ))}
-            {/* DB 管理チャット（#2264）は会話を保存しないので常時マウントしない（画面を離れると消える）。 */}
-            <Route path={APP_ROUTES.dbAdminChat} element={<DbAdminChatPage />} />
             <Route path={APP_ROUTES.profiles} element={<ProfileManagementPage />} />
             <Route path={APP_ROUTES.ontologyBuild} element={<OntologyBuildPage />} />
             <Route path={APP_ROUTES.glossaryRules} element={<GlossaryRulesPage />} />

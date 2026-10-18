@@ -395,8 +395,8 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     （利用者の質問のままツールで調べる指示）を返し、2 回目からはモデルが作った選択肢を外した自由入力の確認にする（選択肢を
     ツールの結果から作れないため。`ConfirmationBudget.tools_consulted`）。期間など NL2SQL・RAG が確かめる観点を Agent が先に
     聞き、NL2SQL の確認と重なるのを防ぐ。拒答のガード（`AGENT_TOOL_GROUNDING_REQUIRED`）と同じ設定で切れる。
-  - **やめる**: 確認を出した Run と、同じ質問の確認の往復の Run に metadata `clarification_withdrawn` を付けて会話・履歴・支援タスクの
-    状態から外し、最初の質問を返す（画面が入力欄に戻す）。Agent 自身の確認で待っている Run は取り消し、NL2SQL の session は
+  - **やめる**（API の `action: "cancel"`。画面は #2311 から出さず、確認を終えるのは「確認せずに回答」だけ。質問を取り消すのは入力欄の「停止」）: 確認を出した Run と、同じ質問の確認の往復の Run に metadata `clarification_withdrawn` を付けて会話・履歴・支援タスクの
+    状態から外し、最初の質問を返す。Agent 自身の確認で待っている Run は取り消し、NL2SQL の session は
     `nl2sql_cancel_requirement` で閉じる。
   - **業務 Agent の方針**（`clarification_policy`: `confirm` = 確認してから回答する（既定）/ `assume` = 前提を示して回答する、
     `clarification_max_rounds`: 確認の上限（往復。0 は既定の 3 回、2〜6。NL2SQL の業務プロファイルと同じ））: 確認できる Run にだけ `ask_user_confirmation` を渡す。前提を示す

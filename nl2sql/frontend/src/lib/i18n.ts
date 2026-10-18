@@ -152,7 +152,7 @@ const nl2sqlJa = {
     "データベースに質問し、生成した SQL と実行の結果を確かめながら会話を続ける",
   "dbAdminChat.conversation": "DB 管理の会話",
   "dbAdminChat.emptyHint":
-    "同じ会話の中では、前の質問と SQL を踏まえて SQL を生成します（例: 「表領域の使用状況」の後に「使用率の高い順にして」）。生成した SQL は自動では実行しません。SELECT は「実行」で、それ以外は実行確認語を入力して実行します。会話は保存しないので、画面を離れると消えます。",
+    "同じ会話の中では、前の質問と SQL を踏まえて SQL を生成します（例: 「表領域の使用状況」の後に「使用率の高い順にして」）。生成した SQL は自動では実行しません。SELECT は「実行」で、それ以外は実行確認語を入力して実行します。",
   "dbAdminChat.sendFailed": "SQL を生成できませんでした。",
   "dbAdminChat.noSql": "SQL は生成しませんでした。",
   "dbAdminChat.badge.readOnly": "読み取り専用・未実行",
@@ -182,12 +182,10 @@ const nl2sqlJa = {
   "dbAdminChat.analyze.title": "AI のエラー分析",
   "dbAdminChat.analyze.corrected": "修正した SQL",
   "dbAdminChat.analyze.useCorrected": "修正した SQL を使う",
+  "dbAdminChat.analyze.useCorrectedFailed": "修正した SQL に置き換えられませんでした。",
   "dbAdminChat.analyze.correctedHint":
     "修正した SQL を使うと、実行の前に分類し直し、確認語からやり直します。",
   "dbAdminChat.correctedApplied": "AI のエラー分析で修正した SQL です。",
-  "dbAdminChat.outcome.success": "成功",
-  "dbAdminChat.outcome.rows": "成功（{count} 行）",
-  "dbAdminChat.outcome.failed": "失敗: {message}",
   "security.deepsec.entitlements.expression.group": "条件グループ",
   "security.deepsec.entitlements.expression.match": "条件の組み合わせ",
   "security.deepsec.entitlements.expression.and": "すべて満たす（AND）",
@@ -1353,12 +1351,12 @@ const nl2sqlJa = {
   "nl2sql.clarification.title": CONFIRM_FEATURE,
   "nl2sql.clarification.description":
     "質問と、データベースの Schema・業務プロファイル・用語集・オントロジーを合わせて、SQL を作るのに足りない情報・明確でない情報を 1 つずつ確認します。表のデータは読みません。",
-  "nl2sql.clarification.close": "確認をやめる",
   "nl2sql.clarification.loading.recommendProfile": "質問に合う業務プロファイルを確認しています",
   "nl2sql.clarification.loading.confirmProfile": "利用する業務プロファイルを確定しています",
   "nl2sql.clarification.loading.prepareQuestions": "SQL の要件の下書きを作っています",
   "nl2sql.clarification.loading.answer":
     "回答を反映しています。すべて答えると、AI が要件のまとめを検査し直します",
+  "nl2sql.clarification.loading.apply": "確かめた要件を反映しています",
   "nl2sql.clarification.profileQuestion": "どの業務プロファイルで確認しますか？",
   "nl2sql.clarification.profileReason": "業務定義と参照できるデータを固定してから確認を始めます。",
   "nl2sql.clarification.recommended": "おすすめ",

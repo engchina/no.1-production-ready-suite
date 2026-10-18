@@ -937,11 +937,10 @@ async function expectNoPageOverflow(page: Page) {
     await expect(panel.getByRole("button", { name: "この内容で SQL を生成して実行" })).toHaveCount(0);
     const answerButton = question.getByRole("button", { name: "この内容で回答" });
     await expect(answerButton).toBeDisabled();
-    // 回答前の確認のカード（#1839）: 確定・スキップ（確認せずに SQL を生成）・確認をやめる。
+    // 回答前の確認のカード（#1839）: 確定・スキップ（確認せずに SQL を生成）。「確認をやめる」は無い（#2311）。
     await expect(answerButton.locator("..").getByRole("button")).toHaveText([
       "この内容で回答",
       "確認せずに SQL を生成",
-      "確認をやめる",
     ]);
     await page.screenshot({ path: testInfo.outputPath(`requirement-question-${viewport.name}.png`), fullPage: true });
     await panel.screenshot({ path: testInfo.outputPath(`requirement-panel-question-${viewport.name}.png`) });
@@ -961,14 +960,14 @@ async function expectNoPageOverflow(page: Page) {
     await expect(skeleton).toContainText("WHERE ORDERS.ORDER_DATE >= DATE '2026-04-01'");
     await expect(summary).toContainText("実行はせず、生成する SQL そのものでもありません");
     await expect(panel.getByTestId("nl2sql-clarification-question")).toHaveCount(0);
-    // 確認のカード（チャットと同じ部品・同じ文言。#1761）: その他（自由入力）と、確定・中止の操作。
+    // 確認のカード（チャットと同じ部品・同じ文言。#1761）: その他（自由入力）と、確定・スキップの操作。
     const confirm = panel.getByTestId("nl2sql-clarification-confirm");
     await expect(confirm.getByRole("textbox", { name: "その他（自由入力）" })).toBeVisible();
     await expect(confirm.getByRole("button", { name: "直しを伝える" })).toBeDisabled();
     await expect(confirm.getByRole("button")).toHaveText([
       "この内容で SQL を生成して実行",
       "直しを伝える",
-      "確認をやめる",
+      "確認せずに SQL を生成",
     ]);
     await page.screenshot({ path: testInfo.outputPath(`requirement-summary-${viewport.name}.png`), fullPage: true });
     await panel.screenshot({ path: testInfo.outputPath(`requirement-panel-summary-${viewport.name}.png`) });
@@ -1052,24 +1051,28 @@ test("回答前の確認の開始中は実処理に合わせて案内を切り�
   await expectNoPageOverflow(page);
 });
 
-test("回答前の確認は開始処理の途中でも中止して閉じられる", async ({ page }, testInfo) => {
+test("回答前の確認は開始処理の途中でも、経過の行の「確認せずに SQL を生成」で待たずに生成へ進む", async ({ page }, testInfo) => {
   const payloads = await mockApi(page, { guidedStartDelayMs: 1_500 });
   await page.goto("/query");
 
   const questionInput = page.locator("#nl2sql-question-input");
   const panel = await startRequirementCheck(page);
-  await expect(panel.getByTestId("nl2sql-guided-start-progress")).toBeVisible();
-  const closeButton = panel.getByRole("button", { name: "確認をやめる" });
-  await expect(closeButton).toBeEnabled();
+  const progress = panel.getByTestId("nl2sql-guided-start-progress");
+  await expect(progress).toBeVisible();
+  // 確認を終える操作は「確認せずに SQL を生成」だけ（「確認をやめる」は無い。#2311）。
+  await expect(panel.getByRole("button", { name: "確認をやめる" })).toHaveCount(0);
+  const skipButton = progress.getByRole("button", { name: "確認せずに SQL を生成" });
+  await expect(skipButton).toBeEnabled();
   await page.screenshot({
     path: testInfo.outputPath("guided-clarification-interruptible-start.png"),
     fullPage: true,
   });
-  await closeButton.click();
+  await skipButton.click();
 
   await expect(panel).toHaveCount(0);
   await expect(questionInput).toHaveValue(REQUIREMENT_QUESTION);
-  expect(payloads.create).toBeUndefined();
+  await expect.poll(() => payloads.job).toMatchObject({ question: REQUIREMENT_QUESTION });
+  expect(payloads.job).not.toHaveProperty("requirement_session_id");
   expect(payloads.clarificationAnswer).toBeUndefined();
 });
 
@@ -1380,14 +1383,14 @@ test("回答前の確認は別の画面へ移って戻ると同じ確認を続�
   expect(payloads.cancel).toBeUndefined();
 });
 
-test("回答前の確認は作成の途中で閉じても、作成された確認をサーバーで中止する", async ({ page }) => {
+test("回答前の確認は作成の途中で確認せずに進んでも、作成された確認をサーバーで中止する", async ({ page }) => {
   const payloads = await mockApi(page, { guidedStartDelayMs: 1_000 });
   await page.goto("/query");
 
   const panel = await startRequirementCheck(page);
-  // 作成の request がサーバーへ届いた後（応答の前）に閉じる。
+  // 作成の request がサーバーへ届いた後（応答の前）に「確認せずに SQL を生成」で進む。
   await expect.poll(() => payloads.create, { timeout: 10_000 }).toBeDefined();
-  await panel.getByRole("button", { name: "確認をやめる" }).click();
+  await panel.getByRole("button", { name: "確認せずに SQL を生成" }).click();
   await expect(panel).toHaveCount(0);
   await expect.poll(() => payloads.cancel, { timeout: 10_000 }).toBe(true);
 });
@@ -1463,9 +1466,11 @@ test("回答前の確認は期限切れで終わった確認の質問を出さ�
   await expect(panel.getByRole("button", { name: "この内容で SQL を生成して実行" })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("guided-clarification-expired.png"), fullPage: true });
 
-  // 終了済みの確認は、中止を送らずに閉じる。
-  await panel.getByRole("button", { name: "確認をやめる" }).click();
+  // 終了済みの確認は、中止を送らずに「確認せずに SQL を生成」で質問のまま生成へ進む。
+  await expect(panel.getByRole("button", { name: "確認をやめる" })).toHaveCount(0);
+  await panel.getByRole("button", { name: "確認せずに SQL を生成" }).click();
   await expect(panel).toHaveCount(0);
+  await expect.poll(() => payloads.job).toMatchObject({ question: REQUIREMENT_QUESTION });
   expect(payloads.cancel).toBeUndefined();
 });
 
@@ -1503,7 +1508,7 @@ const REQUIREMENT_LLM_FAILURE = {
 };
 
 // #1761: 確認の質問が 0 件でも自動では反映せず、確認のカード（対象の選び直し・その他（自由入力）・
-// 「この内容で SQL を生成して実行」・「確認を中止して閉じる」）で利用者が確かめてから SQL を生成する。チャットと
+// 「この内容で SQL を生成して実行」・「確認せずに SQL を生成」）で利用者が確かめてから SQL を生成する。チャットと
 // 同じ部品・同じ文言。質問の欄はどの操作でも書き換えない（#1727）。
 test.describe("回答前の確認の確認のカード (#1761)", { tag: "@responsive" }, () => {
   test("質問 0 件でも確認のカードを出し、押すまで要件を渡さず、押すと SQL を生成して実行する", async ({ page }, testInfo) => {
@@ -1521,7 +1526,7 @@ test.describe("回答前の確認の確認のカード (#1761)", { tag: "@respon
     await expect(confirm.getByRole("button")).toHaveText([
       "この内容で SQL を生成して実行",
       "直しを伝える",
-      "確認をやめる",
+      "確認せずに SQL を生成",
     ]);
     await expect(confirm.getByRole("button", { name: "直しを伝える" })).toBeDisabled();
     await expect(panel.getByTestId("nl2sql-clarification-skeleton")).toContainText("FROM ADMIN.V_EMP_DEPT");
@@ -1544,16 +1549,17 @@ test.describe("回答前の確認の確認のカード (#1761)", { tag: "@respon
     expect(payloads.clarificationAnswer).toBeUndefined();
   });
 
-  test("「確認をやめる」は要件を渡さず、質問の欄を変えない", async ({ page }) => {
+  test("「確認せずに SQL を生成」は要件を渡さず、質問の欄を変えずに質問のまま生成する", async ({ page }) => {
     const payloads = await mockApi(page, { createStage: "target_choice" });
     await page.goto("/query");
     const panel = await startRequirementCheck(page, TARGET_QUESTION);
     const confirm = panel.getByTestId("nl2sql-clarification-confirm");
-    await confirm.getByRole("button", { name: "確認をやめる" }).click();
+    await confirm.getByRole("button", { name: "確認せずに SQL を生成" }).click();
     await expect(panel).toHaveCount(0);
-    expect(payloads.cancel).toBe(true);
+    await expect.poll(() => payloads.cancel).toBe(true);
     expect(payloads.apply).toBeUndefined();
-    expect(payloads.job).toBeUndefined();
+    await expect.poll(() => payloads.job).toMatchObject({ question: TARGET_QUESTION });
+    expect(payloads.job).not.toHaveProperty("requirement_session_id");
     await expect(page.getByTestId("nl2sql-requirement-active")).toHaveCount(0);
     await expect(page.locator("#nl2sql-question-input")).toHaveValue(TARGET_QUESTION);
   });
@@ -1630,7 +1636,7 @@ test.describe("回答前の確認の確認のカード (#1761)", { tag: "@respon
     await expect(confirm.getByRole("button")).toHaveText([
       "この内容で SQL を生成して実行",
       "直しを伝える",
-      "確認をやめる",
+      "確認せずに SQL を生成",
     ]);
     const hintBox = await hint.boundingBox();
     const textBox = await freeText.boundingBox();
@@ -1686,7 +1692,7 @@ test.describe("回答前の確認の確認のカード (#1761)", { tag: "@respon
     await expect(confirm.getByRole("button")).toHaveText([
       "この内容で SQL を生成して実行",
       "直しを伝える",
-      "確認をやめる",
+      "確認せずに SQL を生成",
     ]);
     // 説明は #1772 と同じ位置（入力欄の直下・ボタンの行より上）。
     const hintBox = await hint.boundingBox();
@@ -1772,20 +1778,20 @@ test("回答前の確認の検査の失敗は理由と詳細を出し、確認�
   expect(payloads.job).not.toHaveProperty("requirement_session_id");
 });
 
-test("回答前の確認の中止は主操作の右側から元の質問を保って閉じる", async ({ page }) => {
+test("回答前の確認のカードは「確認をやめる」を持たず、「確認せずに SQL を生成」で元の質問のまま生成する", async ({ page }) => {
   const payloads = await mockApi(page);
   await page.goto("/query");
 
   const questionInput = page.locator("#nl2sql-question-input");
   const panel = await startRequirementCheck(page);
-  const closeButton = panel
-    .getByTestId("nl2sql-clarification-question")
-    .getByRole("button", { name: "確認をやめる" });
-  await closeButton.click();
+  const question = panel.getByTestId("nl2sql-clarification-question");
+  await expect(question.getByRole("button", { name: "確認をやめる" })).toHaveCount(0);
+  await question.getByRole("button", { name: "確認せずに SQL を生成" }).click();
 
   await expect(panel).toHaveCount(0);
   await expect(questionInput).toHaveValue(REQUIREMENT_QUESTION);
-  expect(payloads.cancel).toBe(true);
+  await expect.poll(() => payloads.cancel).toBe(true);
+  await expect.poll(() => payloads.job).toMatchObject({ question: REQUIREMENT_QUESTION });
   expect(payloads.clarificationAnswer).toBeUndefined();
 });
 

@@ -321,9 +321,9 @@ export function ChatPage() {
   });
 
   /**
-   * 回答前の確認（#1839）に答える・確認せずに回答する・確認をやめる。Agent 自身の確認は同じ回答の続きが動き、
-   * ツールの結果の確認は答えで次の回答ができる（会話の末尾に足す）。やめると質問を入力欄に戻し、確認の往復を
-   * 会話から外す（backend が外した Run を会話に返さない）。
+   * 回答前の確認（#1839）に答える・確認せずに回答する。Agent 自身の確認は同じ回答の続きが動き、ツールの結果の
+   * 確認は答えで次の回答ができる（会話の末尾に足す）。確認を終えるのは「確認せずに回答」だけで、質問を取り消すのは
+   * 入力欄の「停止」（#2311）。
    */
   const decideConfirmation = useMutation({
     mutationFn: ({
@@ -338,25 +338,11 @@ export function ChatPage() {
       answers?: ConfirmationAnswer[];
       generation: number;
     }) => agentApi.decideConfirmation(run.id, confirmation.id, { action, ...(answers ? { answers } : {}) }),
-    onSuccess: async (outcome, { action, generation }) => {
+    onSuccess: (outcome, { generation }) => {
       const outcomeThreadId = outcome.run.thread_id ?? threadId;
       if (generation !== viewGenerationRef.current) {
         void queryClient.invalidateQueries({ queryKey: ["thread", outcomeThreadId] });
         void queryClient.invalidateQueries({ queryKey: ["threads"] });
-        return;
-      }
-      if (action === "cancel") {
-        // 質問を入力欄に戻す（書きかけの文があれば、その前に置く）。会話には何も残さない。
-        const question = outcome.question ?? "";
-        setDraft((current) => (current.trim() ? `${question}\n\n${current}` : question));
-        requestAnimationFrame(() => composerRef.current?.focus());
-        void queryClient.invalidateQueries({ queryKey: ["threads"] });
-        const refreshed = await queryClient.fetchQuery({
-          queryKey: ["thread", outcomeThreadId],
-          queryFn: () => agentApi.getThread(outcomeThreadId ?? ""),
-        });
-        // 会話のすべての往復を外したら、新しい会話として質問を送り直せるようにする。
-        if (refreshed.runs.length === 0) setThreadId(null);
         return;
       }
       queryClient.setQueryData<ThreadData>(["thread", outcomeThreadId], (current) =>

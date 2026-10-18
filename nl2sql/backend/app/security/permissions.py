@@ -852,6 +852,15 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/nl2sql/db-admin-chat/analyze-error"): _DB_ADMIN_CHAT,
     ("POST", "/nl2sql/db-admin-chat/execute"): _DB_ADMIN_CHAT,
     ("POST", "/nl2sql/db-admin-chat/generate"): _DB_ADMIN_CHAT,
+    # DB 管理チャットの会話の履歴（#2319）。見え方はサービスが本人（system_admin は全員）に絞る。
+    ("GET", "/nl2sql/db-admin-chat/conversations"): _DB_ADMIN_CHAT,
+    ("GET", "/nl2sql/db-admin-chat/conversations/{conversation_id}"): _DB_ADMIN_CHAT,
+    ("PATCH", "/nl2sql/db-admin-chat/conversations/{conversation_id}"): _DB_ADMIN_CHAT,
+    ("DELETE", "/nl2sql/db-admin-chat/conversations/{conversation_id}"): _DB_ADMIN_CHAT,
+    (
+        "PUT",
+        "/nl2sql/db-admin-chat/conversations/{conversation_id}/turns/{turn_id}/plan",
+    ): _DB_ADMIN_CHAT,
     ("POST", "/nl2sql/db-admin/analyze-error"): _ADMIN_SQL,
     ("POST", "/nl2sql/db-admin/drop-table"): _allowed("menu.table_management"),
     ("POST", "/nl2sql/db-admin/drop-view"): _allowed("menu.view_management"),
