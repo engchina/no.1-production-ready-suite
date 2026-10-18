@@ -220,6 +220,12 @@ for (const colorScheme of ["light", "dark"] as const) {
       state.hangChats = 2;
       const reconnecting = turn.getByTestId("sql-chat-progress-reconnecting");
       await expect(reconnecting).toHaveText("接続を確認しています。", { timeout: 20_000 });
+      // 案内は見出しの経過時間の直下（右の列の 2 行目）に出す。今の段階の行の下には出さない（#2375）。
+      const timerBox = await turn.getByTestId("sql-chat-progress-timer").boundingBox();
+      const noticeBox = await reconnecting.boundingBox();
+      expect(timerBox && noticeBox && noticeBox.y >= timerBox.y + timerBox.height - 1).toBeTruthy();
+      expect(timerBox && noticeBox && Math.abs(noticeBox.x + noticeBox.width - (timerBox.x + timerBox.width)) <= 1).toBeTruthy();
+      await expect(turn.getByTestId("sql-chat-progress-current").getByTestId("sql-chat-progress-reconnecting")).toHaveCount(0);
       // 今の段階の行は残したまま、遅延の案内の代わりに出す（行を動かさない）。
       await expect(turn.getByTestId("sql-chat-progress-current")).toContainText("質問と対象の表を準備しています");
       await expect(turn.getByTestId("sql-chat-progress-current")).toHaveAttribute("data-reconnecting", "true");

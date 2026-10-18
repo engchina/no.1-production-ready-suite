@@ -107,6 +107,12 @@ for (const theme of ["light", "dark"] as const) {
     control.hang = 3;
     const reconnecting = turn.getByTestId("chat-progress-reconnecting");
     await expect(reconnecting).toHaveText("接続を確認しています。", { timeout: 30_000 });
+    // 案内は見出しの経過時間の直下（右の列の 2 行目）に出す。今の段階の行の下には出さない（#2375）。
+    const timerBox = await turn.getByTestId("chat-progress-timer").boundingBox();
+    const noticeBox = await reconnecting.boundingBox();
+    expect(timerBox && noticeBox && noticeBox.y >= timerBox.y + timerBox.height - 1).toBeTruthy();
+    expect(timerBox && noticeBox && Math.abs(noticeBox.x + noticeBox.width - (timerBox.x + timerBox.width)) <= 1).toBeTruthy();
+    await expect(turn.getByTestId("chat-progress-current").getByTestId("chat-progress-reconnecting")).toHaveCount(0);
     await expect(current).toHaveAttribute("data-reconnecting", "true");
     await expect(turn.getByTestId("chat-progress-timer")).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`progress-reconnecting-${theme}.png`) });

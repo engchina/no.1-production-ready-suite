@@ -1083,9 +1083,11 @@ for (const width of [1280, 375]) {
     });
     await expect(current).toHaveAttribute("data-step-id", "generate_sql");
     await expect(current).toContainText("SQL を生成しています（Select AI）");
+    // 遅延の案内は見出しの経過時間の直下に、今の段階の名前つきで出す（#2375）。
     await expect(progress.getByTestId("sql-chat-progress-slow")).toHaveText(
-      "通常より時間がかかっています。",
+      "通常より時間がかかっています（SQL を生成しています）",
     );
+    await expect(progress.getByTestId("sql-chat-progress-header-status").getByTestId("sql-chat-progress-slow")).toHaveCount(1);
     await expect(progress.getByRole("status")).toHaveText("SQL を生成しています");
     const completed = progress.getByTestId("sql-chat-progress-running");
     await expect(completed).toContainText("処理中（2 ステップ完了）");

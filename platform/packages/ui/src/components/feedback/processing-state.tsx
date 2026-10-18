@@ -176,9 +176,10 @@ export function ProcessingIndicator({
           {label}
         </span>
       ) : null}
-      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        {/* 印は折り返した文字の 1 行目の中心にそろえる（#2371）。 */}
-        <span className="flex min-w-0 items-start gap-2 text-sm font-medium text-fg">
+      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        {/* 印は折り返した文字の 1 行目の中心にそろえる（#2371）。広い幅では 1 行目を右の経過時間（高さ 1.75rem）の
+            中央の高さに置く（右の列は 2 行目に遅延の案内を持つので、行は上から並べる。#2375）。 */}
+        <span className="flex min-w-0 items-start gap-2 text-sm font-medium text-fg sm:py-[calc((1.75rem-1lh)/2)]">
           {timing.active && showActivityIcon ? (
             <span className="pr-icon-line">
               <Spinner size={16} className="text-accent-fg" />
@@ -190,57 +191,60 @@ export function ProcessingIndicator({
           ) : null}
           <span className="min-w-0 break-words">{displayLabel}</span>
         </span>
-        <span className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
-          <span
-            className="inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-fg-muted"
-            role="timer"
-            aria-live="off"
-            aria-label={`${timing.active ? labels.elapsed : labels.duration} ${timing.elapsedClock}`}
-            data-testid={testId ? `${testId}-timer` : undefined}
-          >
-            <Clock3 size={TEXT_ICON_SIZE.xs} aria-hidden="true" />
-            <span>{timing.active ? labels.elapsed : labels.duration}</span>
-            <span className="min-w-[3.25rem] text-right font-sans tabular-nums text-fg">
-              {timing.elapsedClock}
-            </span>
-          </span>
-          {timing.active && onCancel ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={onCancel}
+        {/*
+          右の列: 1 行目は経過時間（と取り消し）、2 行目は遅延の案内（経過時間の直下。#2375）。
+          遅延の案内の行は最初から置き、遅延するまでは同じ文言を見えない状態で高さだけ予約する（#902）。
+          後から行を足すと領域が 1 行高くなり、中央寄せの置き場所（DB ゲート）ではスピナーごと上へ動き、
+          流れの中では下の内容を押し下げる。role="status" は遅延してから付ける（予約の行を status に
+          しない。処理中の見出しの status と 2 つにならないよう、従来どおり遅延の案内だけを status にする）。
+        */}
+        <span className="flex min-w-0 shrink-0 flex-col items-start gap-1 sm:items-end">
+          <span className="flex flex-wrap items-center gap-2 sm:justify-end">
+            <span
+              className="inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-fg-muted"
+              role="timer"
+              aria-live="off"
+              aria-label={`${timing.active ? labels.elapsed : labels.duration} ${timing.elapsedClock}`}
+              data-testid={testId ? `${testId}-timer` : undefined}
             >
-              {labels.cancel}
-            </Button>
+              <Clock3 size={TEXT_ICON_SIZE.xs} aria-hidden="true" />
+              <span>{timing.active ? labels.elapsed : labels.duration}</span>
+              <span className="min-w-[3.25rem] text-right font-sans tabular-nums text-fg">
+                {timing.elapsedClock}
+              </span>
+            </span>
+            {timing.active && onCancel ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onCancel}
+              >
+                {labels.cancel}
+              </Button>
+            ) : null}
+          </span>
+          {showSlowMessage && timing.active ? (
+            <span
+              className="text-xs leading-5 text-fg-muted sm:text-right"
+              role={announceSlow && timing.slow ? "status" : undefined}
+              data-testid={testId && timing.slow ? `${testId}-slow` : undefined}
+              data-processing-slow={timing.slow ? "true" : "false"}
+            >
+              {timing.slow ? (
+                labels.slow
+              ) : (
+                // 予約用の文言は ::before の content で描く（textContent・読み上げに入れない。折り返しは同じ）。
+                <span
+                  className="invisible before:content-[attr(data-placeholder)]"
+                  aria-hidden="true"
+                  data-placeholder={labels.slow}
+                />
+              )}
+            </span>
           ) : null}
         </span>
       </div>
-      {/*
-        遅延の案内の行は最初から置き、遅延するまでは同じ文言を見えない状態で高さだけ予約する（#902）。
-        後から行を足すと領域が 1 行高くなり、中央寄せの置き場所（DB ゲート）ではスピナーごと上へ動き、
-        流れの中では下の内容を押し下げる。role="status" は遅延してから付ける（予約の行を status に
-        しない。処理中の見出しの status と 2 つにならないよう、従来どおり遅延の案内だけを status にする）。
-      */}
-      {showSlowMessage && timing.active ? (
-        <p
-          className="text-xs leading-5 text-fg-muted"
-          role={announceSlow && timing.slow ? "status" : undefined}
-          data-testid={testId && timing.slow ? `${testId}-slow` : undefined}
-          data-processing-slow={timing.slow ? "true" : "false"}
-        >
-          {timing.slow ? (
-            labels.slow
-          ) : (
-            // 予約用の文言は ::before の content で描く（textContent・読み上げに入れない。折り返しは同じ）。
-            <span
-              className="invisible before:content-[attr(data-placeholder)]"
-              aria-hidden="true"
-              data-placeholder={labels.slow}
-            />
-          )}
-        </p>
-      ) : null}
     </div>
   );
 }
