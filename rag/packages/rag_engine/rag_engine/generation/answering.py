@@ -2930,13 +2930,17 @@ _ARTICLE_SELECTION_CACHE: dict[tuple[object, ...], list[tuple[str, str]]] = {}
 
 
 def _catalog_document_ids(records: Sequence[AnswerRecord]) -> list[str]:
-    """候補の文書の id（順位の順・重複なし）。"""
-    seen: list[str] = []
-    for record in records:
+    """候補の文書の id を、文書の候補の順位の逆数の合計（RRF と同じ k=60）の大きい順に返す（#2261）。
+
+    最初に出た順位だけで並べると、1 つの chunk が上位に当たった周辺の文書が先に来て、多くの chunk が中位に当たる
+    根拠の文書が後ろになる（短い検索文で目立つ）。文書ごとに候補全体の当たり方を合計して並べる。
+    """
+    scores: dict[str, float] = {}
+    for position, record in enumerate(records, start=1):
         document_id = str(record.metadata.get("document_id") or "") if isinstance(record.metadata, dict) else ""
-        if document_id and document_id not in seen:
-            seen.append(document_id)
-    return seen
+        if document_id:
+            scores[document_id] = scores.get(document_id, 0.0) + 1.0 / (60 + position)
+    return sorted(scores, key=lambda document_id: -scores[document_id])
 
 
 def _select_catalog_articles(question: str, catalogs: Sequence[Any], settings: Settings) -> list[Any]:
@@ -2968,10 +2972,12 @@ def _select_catalog_articles(question: str, catalogs: Sequence[Any], settings: S
 _ARTICLE_DOCUMENT_CACHE: dict[tuple[object, ...], list[str]] = {}
 
 
-def _scope_catalog_documents(question: str, settings: Settings) -> list[str]:
+def _scope_catalog_documents(question: str, settings: Settings, exclude: set[str]) -> list[str]:
     """検索の範囲の条で構成された文書の一覧から、根拠の条がありそうな文書を LLM で選ぶ（#2254）。
 
-    一覧の注入が無い・`article_catalog_scope_documents` が 0・一覧が空なら選ばない（LLM を呼ばない）。
+    `exclude`（目録を読む候補の文書）と重なる分だけ多く選ばせ、重なりを除いて `article_catalog_scope_documents`
+    件まで返す（選んだ文書が候補の文書と重なっても枠を使い切る。#2261）。一覧の注入が無い・件数が 0・一覧が空なら
+    選ばない（LLM を呼ばない）。
     """
     from rag_engine.dependencies import injected_article_documents
     from rag_engine.retrieval.article_catalog import select_documents
@@ -2983,13 +2989,15 @@ def _scope_catalog_documents(question: str, settings: Settings) -> list[str]:
     documents = [(str(document_id), str(name)) for document_id, name in load(settings=settings)]
     if not documents:
         return []
+    overlap = sum(1 for document_id, _ in documents if document_id in exclude)
+    ask = limit + overlap
     digest = hashlib.sha256(json.dumps(documents, ensure_ascii=False).encode("utf-8")).hexdigest()
-    key = (question, digest, limit, str(getattr(settings, "default_answer_llm", "") or ""))
+    key = (question, digest, ask, str(getattr(settings, "default_answer_llm", "") or ""))
     if key not in _ARTICLE_DOCUMENT_CACHE:
         if len(_ARTICLE_DOCUMENT_CACHE) >= 256:
             _ARTICLE_DOCUMENT_CACHE.clear()
-        _ARTICLE_DOCUMENT_CACHE[key] = select_documents(question, documents, parse_text_response, settings, limit=limit)
-    return list(_ARTICLE_DOCUMENT_CACHE[key])
+        _ARTICLE_DOCUMENT_CACHE[key] = select_documents(question, documents, parse_text_response, settings, limit=ask)
+    return [document_id for document_id in _ARTICLE_DOCUMENT_CACHE[key] if document_id not in exclude][:limit]
 
 
 def _catalog_article_children(
@@ -3018,7 +3026,7 @@ def _catalog_article_children(
         return list(ranked_children), []
     # 検索の候補に出ない文書（手続の一般的な規則の文書など）は、範囲の文書の一覧から LLM が選んで足す。
     known = {catalog.document_id for catalog in catalogs}
-    extra = [document_id for document_id in _scope_catalog_documents(question, settings) if document_id not in known]
+    extra = _scope_catalog_documents(question, settings, known)
     if extra:
         catalogs += list(load_catalogs(document_ids=extra, limit=len(extra), settings=settings))
     with _execution_step("条の選択", "候補の文書の条の目録から、質問の根拠になる条を選び、その条の根拠を候補に加えます。") as step:

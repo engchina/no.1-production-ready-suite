@@ -81,7 +81,7 @@ def test_catalog_articles_are_not_deferred_by_document_selection():
 def test_engine_settings_default_and_env():
     defaults = get_settings(environ={}, dotenv_path=None)
     assert defaults.article_catalog_enabled is True
-    assert (defaults.article_catalog_max_documents, defaults.article_catalog_max_articles) == (3, 8)
+    assert (defaults.article_catalog_max_documents, defaults.article_catalog_max_articles) == (5, 8)
     assert defaults.article_catalog_context_records == 6
     environ = {"RAG_ENGINE_ARTICLE_CATALOG": "0", "RAG_ENGINE_ARTICLE_CATALOG_CONTEXT_RECORDS": "2"}
     configured = get_settings(environ=environ, dotenv_path=None)
@@ -164,7 +164,7 @@ def test_catalog_article_children_reads_catalogs_and_chunks_from_injected_depend
     # 候補にあった条は印だけ（検索の根拠として扱う）、加えた条は added。
     assert [r.metadata.get(ARTICLE_CATALOG_KEY, {}).get("added") for r in children] == [None, None, True]
     assert [r.chunk_uid for r in expansion] == ["hit", "new", "new:p"]
-    assert calls[0] == ("catalogs", ["doc-m", "doc-a"], 3)
+    assert calls[0] == ("catalogs", ["doc-m", "doc-a"], 5)
     assert calls[1] == ("chunks", ["s2", "s3"])
     assert [c[0] for c in calls].count("catalogs") == 2  # 目録は呼び出し元が回答ごとに持つ
 
@@ -277,9 +277,14 @@ def test_catalog_article_children_adds_documents_chosen_from_the_scope_list():
         calls.append(("catalogs", list(document_ids), limit))
         return [CATALOG] if "doc-a" in document_ids else [general]
 
+    asked = []
+
     def parse(system, prompt, settings, schema, **kwargs):
         body = json.loads(prompt)
-        return Selection(lines=[1, 0]) if "documents" in body else Selection(lines=[2])
+        if "documents" in body:
+            asked.append(body["max_lines"])
+            return Selection(lines=[1, 0])
+        return Selection(lines=[2])
 
     def unused(*args, **kwargs):
         raise AssertionError("呼ばない")
@@ -303,8 +308,10 @@ def test_catalog_article_children_adds_documents_chosen_from_the_scope_list():
         answering._catalog_article_children("届出の補正は", ranked, settings)
 
     # 一覧から選んだ doc-g・doc-a のうち、候補の文書（doc-a）に無い doc-g だけを足して読む。
-    assert calls[0] == ("catalogs", ["doc-a"], 3)
+    assert calls[0] == ("catalogs", ["doc-a"], 5)
     assert calls[1] == ("catalogs", ["doc-g"], 1)
+    # 候補の文書と重なる分（doc-a の 1 つ）だけ多く頼む（既定の 2 + 1）。
+    assert asked == [3]
     assert calls[2] == ("chunks", [("doc-a", "s2"), ("doc-g", "s2")])
 
 
@@ -344,3 +351,15 @@ def test_catalog_article_already_in_the_candidates_stays_a_hit_anchor():
     plain = _bundle([_context_record("art1", "child"), *children[1:]], top_k=2, max_records=2, catalog_records=0)
 
     assert [r.id for r in bundle.records] == [r.id for r in plain.records] == ["art1-p", "m0-p"]
+
+
+def test_catalog_documents_are_ordered_by_the_sum_of_reciprocal_ranks():
+    """1 つの chunk が上位に当たった文書より、多くの chunk が当たった文書を先にする（#2261）。"""
+
+    def record(uid, document_id):
+        stored = _stored(uid, f"{document_id}.json", document_id=document_id)
+        return answering._stored_chunk_answer_record(stored)
+
+    ranked = [record("a1", "doc-a"), *[record(f"b{i}", "doc-b") for i in range(4)], record("c1", "doc-c")]
+
+    assert answering._catalog_document_ids(ranked) == ["doc-b", "doc-a", "doc-c"]

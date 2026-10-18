@@ -194,7 +194,7 @@ def test_engine_settings_pass_the_article_catalog_options(tmp_path: Any) -> None
 
     assert engine_settings.article_catalog_enabled is False
     assert engine_settings.article_catalog_context_records == 4
-    assert json.loads(json.dumps(engine_settings.article_catalog_max_documents)) == 3
+    assert json.loads(json.dumps(engine_settings.article_catalog_max_documents)) == 5
 
 
 async def test_article_documents_are_read_once_per_scope_and_index_state(

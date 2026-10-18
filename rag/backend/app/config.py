@@ -1220,10 +1220,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_article_catalog_max_documents: int = Field(
-        default=3,
+        default=5,
         ge=0,
-        le=5,
-        description="条の目録を読む文書の上限(検索の候補の上位から。#2254)。0 は選ばない。",
+        le=10,
+        description=(
+            "条の目録を読む文書の上限(検索の候補の文書の、候補の順位の逆数の合計の大きい順。"
+            "#2254・#2261)。0 は選ばない。"
+        ),
     )
     rag_article_catalog_max_articles: int = Field(
         default=8,
