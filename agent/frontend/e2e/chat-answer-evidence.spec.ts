@@ -203,7 +203,9 @@ for (const viewport of VIEWPORTS) {
 
 test("段落に根拠を結び付けられない回答は今までの Markdown のまま出す", async ({ page, mockApi }) => {
   seedRun(mockApi);
-  const run = mockApi.state.runs.find((item) => item.id === RUN_ID)!;
+  const run = mockApi.state.runs.find((item) => item.id === RUN_ID) as {
+    artifacts: { kind: string; content: Record<string, unknown> }[];
+  };
   run.artifacts = run.artifacts.map((artifact) =>
     artifact.kind === "answer_evidence"
       ? { ...artifact, content: { ...artifact.content, markers: [], passages: [] } }
