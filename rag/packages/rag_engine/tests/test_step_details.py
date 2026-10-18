@@ -24,9 +24,9 @@ from rag_engine.generation import step_details
 from rag_engine.generation.answer_models import AnswerRecord
 from rag_engine.generation.answering import (
     CRAG_ANSWER_FLOW_LABEL,
-    CragRetrievalGradeOutput,
     SIMPLE_RETRIEVAL_LABEL,
     STANDARD_ANSWER_FLOW_LABEL,
+    CragRetrievalGradeOutput,
     answer_question_result,
 )
 
@@ -56,7 +56,9 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
 
     def run_flow(self):
         search_result = _hybrid_result(
-            _stored_child("chunk-docling-c000001", 1, "合成の手順 A の本文", metadata=_hybrid_metadata(["text", "vector"], "1.1 申請の手順")),
+            _stored_child(
+                "chunk-docling-c000001", 1, "合成の手順 A の本文", metadata=_hybrid_metadata(["text", "vector"], "1.1 申請の手順")
+            ),
             _stored_child("chunk-docling-c000002", 2, "合成の手順 B の本文", metadata=_hybrid_metadata(["vector"], "1.2 申請の期限")),
         )
         with (
