@@ -4,7 +4,7 @@
 互換呼び出しの既定実装は composition root で遅延構築する。
 """
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -40,7 +40,10 @@ class AnswerDependencies:
     その親の StoredChunk を返す。省略時は条を選ばない。article_documents は settings を受け取り、検索の範囲の
     条で構成された文書の (document_id, 文書名) の列を返す（候補に出ない文書も目録で読むため）。省略時は候補の
     文書だけを読む。article_question は利用者の元の質問（呼び出し元が検索文を短く言い換えたとき。無ければ None）を
-    返す。条の目録から文書・条を選ぶ段だけが検索文と合わせて使う（#2261）。
+    返す。条の目録から文書・条を選ぶ段だけが検索文と合わせて使う（#2261）。article_leads は document_id・chunk_set_id・
+    sections（{section_id: 章節の名前}）・settings を受け取り、その章節の本文の書き出し（名前を除く。
+    {section_id: 文}）を返す。条の選択の 2 段目（選んだ条と同じ章の条を書き出しつきで見せて足させる）が使う。
+    省略時は 2 段目を行わない。
     """
 
     search: Callable[..., Any]
@@ -58,6 +61,7 @@ class AnswerDependencies:
     article_chunks: Callable[..., Sequence[Any]] | None = None
     article_documents: Callable[..., Sequence[tuple[str, str]]] | None = None
     article_question: Callable[[], str | None] | None = None
+    article_leads: Callable[..., Mapping[str, str]] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -134,6 +138,12 @@ def injected_article_documents() -> Callable[..., Sequence[tuple[str, str]]] | N
     """注入された検索の範囲の条で構成された文書の一覧（#2254）。注入が無ければ None（候補の文書だけを読む）。"""
     current = _active.get()
     return None if current is None else current.article_documents
+
+
+def injected_article_leads() -> Callable[..., Mapping[str, str]] | None:
+    """注入された章節の本文の書き出しの読み込み。注入が無ければ None（条の選択の 2 段目を行わない）。"""
+    current = _active.get()
+    return None if current is None else current.article_leads
 
 
 def injected_article_question() -> str | None:

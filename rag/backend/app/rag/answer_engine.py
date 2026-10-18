@@ -178,6 +178,8 @@ CATALOG_ARTICLE_ROLE = "catalog_article"
 # 検索の範囲の条で構成された文書の一覧の cache((条件, 索引の状態) → 一覧。#2254)。
 _ARTICLE_DOCUMENTS_CACHE: dict[tuple[str, str], list[tuple[str, str]]] = {}
 _ARTICLE_CATALOG_LEAD_CHARS = 60
+# 条の選択の 2 段目で見せる本文の書き出しの文字数(条の名前が質問の語から遠い条を本文で判断させる)。
+_ARTICLE_REFINE_LEAD_CHARS = 120
 # 診断に出す、関係情報で使った entity の数の上限。
 _GRAPH_DIAGNOSTICS_ENTITIES = 10
 
@@ -394,6 +396,12 @@ def build_engine_settings(
         ),
         "RAG_ENGINE_ARTICLE_CATALOG_ORIGINAL_QUESTION_SEARCH": (
             "1" if settings.rag_article_catalog_original_question_search else "0"
+        ),
+        "RAG_ENGINE_ARTICLE_CATALOG_REFINE_ARTICLES": str(
+            settings.rag_article_catalog_refine_articles
+        ),
+        "RAG_ENGINE_ARTICLE_CATALOG_REFINE_CANDIDATES": str(
+            settings.rag_article_catalog_refine_candidates
         ),
         "RAG_ENGINE_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP": str(
             settings.rag_article_catalog_output_token_cap
@@ -809,6 +817,10 @@ class AnswerEngine:
             ),
             article_documents=lambda **kwargs: run_async(
                 lambda: self._article_documents(request, state)
+            ),
+            # 条の選択の 2 段目で見せる、同じ章の条の本文の書き出し。
+            article_leads=lambda *, document_id, chunk_set_id, sections, **kwargs: run_async(
+                lambda: self._article_leads(document_id, chunk_set_id, sections)
             ),
             # 呼び出し元が検索文を短く言い換えたときの元の質問(#2261)。条の選択だけが使う。
             article_question=lambda: request.original_question,
@@ -2041,6 +2053,35 @@ class AnswerEngine:
             if state.article_catalogs[document_id] is not None:
                 catalogs.append(state.article_catalogs[document_id])
         return catalogs
+
+    async def _article_leads(
+        self, document_id: str, chunk_set_id: str, sections: Mapping[str, str]
+    ) -> dict[str, str]:
+        """章節の本文の書き出し(条の選択の 2 段目)。
+
+        章節の最初の chunk から、名前と見出しの括弧を除く。
+        読めないときは空(条の名前だけで選ばせる)。
+        """
+        from app.clients.section_map_store import SectionMapStore
+        from app.rag.section_catalog import section_lead
+
+        if not sections:
+            return {}
+        try:
+            chunks = await SectionMapStore(self._oracle).section_first_chunks(
+                document_id, chunk_set_id=chunk_set_id, section_ids=list(sections)
+            )
+        except Exception:  # noqa: BLE001 - 2 段目は補助。書き出し無しで続ける。
+            logger.warning("article lead load failed", exc_info=True)
+            return {}
+        leads: dict[str, str] = {}
+        for section_id, chunk in chunks.items():
+            text = section_lead(
+                sections.get(section_id, ""), chunk.text, _ARTICLE_REFINE_LEAD_CHARS
+            )
+            if text:
+                leads[section_id] = text
+        return leads
 
     async def _article_documents(
         self, request: SearchRequest, state: _SearchState

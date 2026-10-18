@@ -1306,6 +1306,23 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "短い検索文で事例の論点の文書が候補に出ないことへの対策。"
         ),
     )
+    rag_article_catalog_refine_articles: int = Field(
+        default=6,
+        ge=0,
+        le=20,
+        description=(
+            "条の選択の 2 段目で、1 段目で選んだ条と同じ章の条を本文の書き出しつきで見せ、"
+            "文書ごとに足させる条の数の上限。0 は 2 段目を行わない。"
+        ),
+    )
+    rag_article_catalog_refine_candidates: int = Field(
+        default=60,
+        ge=0,
+        le=200,
+        description=(
+            "条の選択の 2 段目で見せる同じ章の条の数の上限(書き出しつき)。0 は 2 段目を行わない。"
+        ),
+    )
     rag_article_catalog_output_token_cap: int = Field(
         default=4096,
         ge=0,

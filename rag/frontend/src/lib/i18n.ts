@@ -3760,6 +3760,7 @@ export const ja = {
   "settings.answerPrompts.part.compactRule": "通った判定の理由を省く規則（設定で有効なときだけ足す）",
   "settings.answerPrompts.part.auditSystem": "監査の system プロンプト",
   "settings.answerPrompts.part.documentSystem": "文書を選ぶ system プロンプト",
+  "settings.answerPrompts.part.refineSystem": "同じ章の条を足す system プロンプト",
   "settings.queryHistory.title": "質問履歴",
   "settings.queryHistory.description":
     "回答に成功した質問を検索・回答プロファイルごとに保存し、よく聞かれている質問を RAG 検索の入力欄の下に候補として出します。質問の本文を保存するため、既定では無効です。",
