@@ -67,7 +67,7 @@ DEFAULT_IMAGE_RETRIEVAL_PROMPT = """あなたはあらゆる文書・画像を�
   "table_headers": ["列見出し"],
   "table_rows": [["同じ行のセルの配列"]],
   "table_summary": "表の主題、比較軸、主要な条件と結果。対象外なら空文字",
-  "form_fields": [{"name": "項目名", "value": "表示値。空欄なら空文字", "state": "selected / unselected / enabled / disabled / required / optional / unknown"}],
+  "form_fields": [{"name": "項目名", "value": "表示値。空欄なら空文字", "state": "selected / unselected / enabled / disabled / required / optional / unknown", "kind": "select / text / checkbox / radio / date / button / unknown"}],
   "form_layout": "Form 名、セクション、列、グループ、配置関係。対象外なら空文字",
   "menu_route": "ナビゲーション経路、メニュー階層、パンくず、ページ遷移。なければ空文字",
   "visible_screen_names": ["画面名、ページ名、ダイアログ名、フォーム名、帳票名"],

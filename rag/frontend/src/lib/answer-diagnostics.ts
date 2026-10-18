@@ -39,8 +39,11 @@ export type AnswerGuide = {
   title: string;
   /** 公開の版。 */
   revision: number;
-  /** 分かっていた条件（値と出所）。source は user=確認の質問への答え / question=質問の文から読んだ。 */
-  known: { id: string; label: string; value: string; source: "user" | "question" | null }[];
+  /**
+   * 分かっていた条件（値と出所）。source は user=確認の質問への答え / question=質問の文から読んだ /
+   * document=回答の根拠（画面の図の項目の種類。#2404）で決めた。
+   */
+  known: { id: string; label: string; value: string; source: "user" | "question" | "document" | null }[];
   /**
    * 分からなかった条件。state=conflicting は質問から複数の値（candidates）が読み取れて決められなかった
    * 条件。handling は分からないときの扱い（古い記録など、無ければ null）。
@@ -264,7 +267,7 @@ function parseGuide(value: unknown): AnswerGuide | null {
     const entry = record(item);
     const label = String(entry.label ?? "");
     if (!label) return [];
-    const source = oneOf(entry.source, ["user", "question"] as const);
+    const source = oneOf(entry.source, ["user", "question", "document"] as const);
     return [{ id: String(entry.id ?? label), label, value: String(entry.value ?? ""), source }];
   });
   const unresolved = list(raw.unknown_conditions).flatMap((item): AnswerGuide["unresolved"] => {

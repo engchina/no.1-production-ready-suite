@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 @dataclass(frozen=True)
@@ -44,12 +44,31 @@ class ChartSeriesOutput(_StrictModel):
     trend: str
 
 
+# 画面の項目の種類（#2404）。見た目の手がかりで決まる固定の値で、言語資源にはしない（表示の語は言語資源の
+# content_labels.form_field_kinds）。判断できなければ unknown。
+FORM_FIELD_KINDS = ("select", "text", "checkbox", "radio", "date", "button", "unknown")
+FormFieldKind = Literal["select", "text", "checkbox", "radio", "date", "button", "unknown"]
+
+
+def form_field_kind(value: object) -> str:
+    """項目の種類を決まった値にする（大文字・空白の揺れはそろえ、決まった値の外と欠けは unknown）。"""
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in FORM_FIELD_KINDS else "unknown"
+
+
 class FormFieldOutput(_StrictModel):
-    """Form の項目名、表示値、選択状態を保持します。"""
+    """Form の項目名、表示値、選択状態、項目の種類を保持します。"""
 
     name: str
     value: str
     state: str
+    kind: FormFieldKind
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _known_kind(cls, value: object) -> str:
+        """構造化出力を強制しない接続先の値の揺れ（大文字・空白・決まった値の外）は unknown に倒す。"""
+        return form_field_kind(value)
 
 
 class PictureDescriptionOutput(_StrictModel):

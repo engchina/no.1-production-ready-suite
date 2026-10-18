@@ -39,7 +39,7 @@ from app.rag.request_context import current_audit_request_context
 from app.schemas.search import RetrievedChunk
 from app.security.domain import RoleRecord
 from app.security.permissions import PUBLIC_API_PATHS, permission_for_route
-from tests.security_support import ProductionAuth, enable_production_auth
+from tests.security_support import ProductionAuth, enable_production_auth, login
 from tests.support import AsgiTestClient
 from tests.test_mcp_api import (
     _FIGURE_PAGE,
@@ -466,3 +466,55 @@ def test_access_log_masks_figure_token() -> None:
     assert _FigureTokenAccessFilter().filter(record) is True
     assert record.getMessage() == '127.0.0.1:1 - "GET /api/figures/{token} HTTP/1.1" 200'
     assert "f1.abc.def" not in record.getMessage()
+
+
+# ---------------------------------------------------------------------------
+# 画面の図（GET /api/figures?document_id=&chunk_id=。#2428）
+# ---------------------------------------------------------------------------
+
+
+def _screen_url(chunk_id: str = "c-fig", document_id: str = "d1") -> str:
+    return f"/api/figures?document_id={document_id}&chunk_id={chunk_id}"
+
+
+def test_screen_figure_route_needs_document_view_permission() -> None:
+    assert "/figures" not in PUBLIC_API_PATHS
+    allowed = permission_for_route("GET", "/figures")
+    assert allowed == permission_for_route("GET", "/documents/{document_id}/preview-pages")
+
+
+def test_screen_figure_returns_png_in_the_session_users_scope(
+    auth: ProductionAuth, figures: type[_ScopedFigureOracle], monkeypatch: MonkeyPatch
+) -> None:
+    scopes: list[str] = []
+    monkeypatch.setattr(
+        figures_route, "enforce_rate_limit", lambda scope, _request: scopes.append(scope)
+    )
+    auth.user_with_permissions("chat-user", ["menu.chat"], knowledge_base_ids=["kb-1"])
+    headers = login(client, "chat-user")
+    response = client.get(_screen_url(), headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "_p2_figure.png" in response.headers["content-disposition"]
+    assert max(_png_size(response.content)) <= mcp_tools.IMAGE_MAX_EDGE_PX
+    # 保存した metadata の領域で、セッションの利用者の範囲で chunk を読み直す。
+    assert figures.contexts[-1].allowed_knowledge_base_ids == frozenset({"kb-1"})
+    assert scopes == ["search"]
+
+    # 図でない根拠・見えない根拠は 404、古い版は 409。
+    assert client.get(_screen_url("c-text"), headers=headers).status_code == 404
+    assert client.get(_screen_url("other"), headers=headers).status_code == 404
+    figures.visible = {}
+    figures.stale = {("d1", "c-fig")}
+    assert client.get(_screen_url(), headers=headers).status_code == 409
+    figures.stale = set()
+    figures.visible = {("d1", "c-fig"): _figure_chunk()}
+    # ナレッジベースの範囲の外の利用者には見えない（404）。
+    auth.user_with_permissions("outsider", ["menu.chat"], knowledge_base_ids=["kb-2"])
+    assert client.get(_screen_url(), headers=login(client, "outsider")).status_code == 404
+    # 文書を見る画面の権限が無い利用者は経路で 403、未ログインは 401。
+    auth.user_with_permissions("evaluator", ["menu.evaluation"], knowledge_base_ids=["kb-1"])
+    assert client.get(_screen_url(), headers=login(client, "evaluator")).status_code == 403
+    assert client.get(_screen_url()).status_code == 401

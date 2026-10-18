@@ -52,6 +52,7 @@ from app.rag.step_details import (
     history_rewrite_details,
 )
 from app.rag.stored_answer import stored_citations, warn_if_large_answer_record
+from app.rag.support_guide_evidence import with_evidence_conditions
 from app.rag.support_guide_runtime import (
     GUIDE_PREVIEW_KEY,
     apply_guide_to_diagnostics,
@@ -407,6 +408,9 @@ class RagPipeline:
                 progress_callback=stage_callback,
             )
             if guide and request.generate_answer:
+                # 回答の根拠（画面の図の項目の種類）で決まった条件を、分かっている条件にする
+                # （#2404）。
+                guide = with_evidence_conditions(guide, outcome.diagnostics)
                 apply_guide_to_diagnostics(outcome.diagnostics, guide)
         profile_revision = self._settings.rag_search_answer_profile_revision
         if profile_revision:

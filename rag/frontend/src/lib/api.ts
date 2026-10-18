@@ -2966,9 +2966,13 @@ function requestUpload<T>(
  * ファイルを取得する（Excel のテンプレートなど。#2065）。失敗は JSON の envelope を ApiError にする。
  * 認証の通知・CSRF・配信の base は requestEnvelope と同じ。ファイル名は Content-Disposition から取る。
  */
-async function requestFile(path: string, fallbackName: string): Promise<DownloadedFile> {
+async function requestFile(
+  path: string,
+  fallbackName: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<DownloadedFile> {
   const headers = withCsrfHeaders("GET");
-  const res = await fetch(appPath(path), { credentials: "same-origin", headers });
+  const res = await fetch(appPath(path), { credentials: "same-origin", headers, signal: options.signal });
   if (!res.ok) {
     const envelope = await parseEnvelope<null>(res);
     const error = apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
@@ -3049,6 +3053,13 @@ export const api = {
   },
   getDocument: (id: string) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
+  /** 根拠の図の画像（PNG。#2428）。保存した図の領域を、今の権限・版で確かめて切り出す。 */
+  getChunkFigure: (documentId: string, chunkId: string, options: { signal?: AbortSignal } = {}) =>
+    requestFile(
+      `/api/figures?${new URLSearchParams({ document_id: documentId, chunk_id: chunkId }).toString()}`,
+      "figure.png",
+      options,
+    ),
   listDocumentChunkSets: (id: string) =>
     request<DocumentChunkSet[]>(
       `/api/documents/${encodeURIComponent(id)}/chunk-sets`,

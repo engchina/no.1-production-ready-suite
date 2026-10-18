@@ -183,7 +183,7 @@ for (const viewport of VIEWPORTS) {
       const image = sheet.getByRole("img", { name: "申請手順.pdf の図（p.2 · 申請手順）" });
       await expect(image).toBeVisible();
       await expect(image).toHaveAttribute("referrerpolicy", "no-referrer");
-      await expect(sheet.getByTestId("rag-figure-loading")).toHaveCount(0);
+      await expect(sheet.getByTestId("evidence-figure-loading")).toHaveCount(0);
       // 画面を見ている利用者として、その Run の根拠の図の URL を取る。RAG の URL へは Referer を送らない。
       const request = mockApi.lastRequest("GET", `/api/runs/${RUN_ID}/figure-url`);
       expect(request?.searchParams.get("document_id")).toBe("doc-1");
@@ -224,12 +224,12 @@ test("図の画像を読めない（期限切れなど）ときは理由を出�
   await turn.getByRole("button", { name: "図を開く: 申請手順.pdf" }).click();
 
   const sheet = page.getByRole("dialog", { name: "図の根拠: 申請手順.pdf" });
-  const error = sheet.getByTestId("rag-figure-error");
+  const error = sheet.getByTestId("evidence-figure-error");
   await expect(error).toContainText("図を開けませんでした");
-  await expect(error).toContainText("URL の期限が切れたか、資料が更新された可能性があります。");
+  await expect(error).toContainText("開く期限が切れたか、資料が更新された可能性があります。");
   await error.getByRole("button", { name: "もう一度読み込む" }).click();
   await expect(sheet.getByRole("img", { name: /申請手順.pdf の図/ })).toBeVisible();
-  await expect(sheet.getByTestId("rag-figure-error")).toHaveCount(0);
+  await expect(sheet.getByTestId("evidence-figure-error")).toHaveCount(0);
   expect(figures).toHaveLength(2);
 });
 
@@ -252,7 +252,7 @@ test("URL を取得できないときは backend の理由を出す", async ({ p
   const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
   await turn.getByTestId("answer-citations").locator("summary").click();
   await turn.getByRole("button", { name: "図を開く: 申請手順.pdf" }).click();
-  const error = page.getByRole("dialog", { name: "図の根拠: 申請手順.pdf" }).getByTestId("rag-figure-error");
+  const error = page.getByRole("dialog", { name: "図の根拠: 申請手順.pdf" }).getByTestId("evidence-figure-error");
   await expect(error).toContainText("資料が更新されたため、この図は開けません。");
   await expect(error.getByRole("button", { name: "もう一度読み込む" })).toBeVisible();
 });

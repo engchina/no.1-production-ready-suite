@@ -60,8 +60,11 @@ _COPIED_FIELDS = (
 )
 
 
-def _passed_evidence(steps: Sequence[RunStep]) -> list[JsonObject]:
+def passed_evidence(steps: Sequence[RunStep]) -> list[JsonObject]:
     """その Run でモデルに渡した根拠（chunk で重複を除き、出てきた順）。
+
+    画面の根拠の一覧（`items`）と、画面から根拠の原文・図を開くときの確かめ（`rag_figures`）が
+    同じこの関数を使う（2 つの集合をずらさない。#2427）。
 
     同じ chunk を後の呼び出しが返し、RAG がそこで回答での使われ方（`answer_use`）を付けていれば、
     その値を足す。
@@ -167,7 +170,7 @@ def answer_evidence(
     `answer` は利用者に見せる回答（最終の検証の後の本文）、`validation` は最終の検証の成果物の内容
     （無ければ None）。
     """
-    passed = _passed_evidence(steps)
+    passed = passed_evidence(steps)
     chunk_ids = [str(item["chunk_id"]) for item in passed]
     supported = _supported_claims(validation)
     cited = cited_chunk_ids(answer, chunk_ids) | {chunk_id for _quote, chunk_id in supported}

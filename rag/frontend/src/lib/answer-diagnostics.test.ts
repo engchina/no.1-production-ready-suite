@@ -226,6 +226,7 @@ describe("回答の対応と業務ガイド（issue 1252）", () => {
         known_conditions: [
           { id: "role", label: "ロール", value: "管理者", source: "question", state: "known" },
           { id: "tenant", label: "テナント", value: "本社", source: "user", state: "known" },
+          { id: "kind", label: "項目の種類", value: "選択", source: "document", state: "known" },
           { id: "", label: "", value: "x" },
         ],
         unknown_conditions: [
@@ -251,6 +252,7 @@ describe("回答の対応と業務ガイド（issue 1252）", () => {
       known: [
         { id: "role", label: "ロール", value: "管理者", source: "question" },
         { id: "tenant", label: "テナント", value: "本社", source: "user" },
+        { id: "kind", label: "項目の種類", value: "選択", source: "document" },
       ],
       unresolved: [
         { id: "plan", label: "契約プラン", state: "unknown", candidates: [], handling: "branch" },
