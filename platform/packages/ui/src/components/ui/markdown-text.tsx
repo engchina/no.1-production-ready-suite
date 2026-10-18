@@ -65,6 +65,15 @@ export function MarkdownText({ text, headingLevel = 3, labels, className, testId
   );
 }
 
+/**
+ * 1 つの段落・箇条書きの項目の中の Markdown（太字・斜体・インラインコード・リンク）だけを描く（#2328）。
+ * 段落の要素（`<p>` / `<li>`）の中に置く。改行は `<br>` にする。ブロック（見出し・箇条書き・表）は扱わない。
+ */
+export function MarkdownInlineText({ text, labels }: { text: string; labels?: Partial<MarkdownTextLabels> }) {
+  const context: RenderContext = { topLevel: 1, headingLevel: 3, labels: { ...DEFAULT_LABELS, ...labels } };
+  return <Lines lines={text.split("\n")} context={context} />;
+}
+
 interface RenderContext {
   topLevel: number;
   headingLevel: number;

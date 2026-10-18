@@ -184,7 +184,12 @@ export {
   type ApiTransportRequest,
 } from "./lib/api-error";
 export { MessageText, type MessageTextProps } from "./components/ui/message-text";
-export { MarkdownText, type MarkdownTextLabels, type MarkdownTextProps } from "./components/ui/markdown-text";
+export {
+  MarkdownInlineText,
+  MarkdownText,
+  type MarkdownTextLabels,
+  type MarkdownTextProps,
+} from "./components/ui/markdown-text";
 export {
   ChatUserMessage,
   type ChatUserMessageProps,

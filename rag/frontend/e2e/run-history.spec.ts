@@ -445,7 +445,13 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       /\/chat\?search_answer_profile_id=bv-1&conversation_id=conv-21$/
     );
     await expect(page.getByTestId("run-history-answer")).toContainText("受注番号を入力して登録します。");
+    // 根拠はチャットと同じ部品（「AI に渡した N 件 …」の折りたたみ。既定は閉じる。#2328）。
+    const evidence = page.getByTestId("run-history-evidence").getByTestId("answer-citations");
+    await expect(evidence.locator("summary")).toContainText("AI に渡した");
+    await expect(evidence).not.toHaveAttribute("open", "");
+    await evidence.locator("summary").click();
     await expect(page.getByTestId("run-history-citations")).toContainText("受注マニュアル.pdf");
+    await expect(page.getByTestId("run-history-citations")).toHaveClass(/bounded-scroll-area-lg/);
 
     // 処理の経過: 段と、回答フローの工程（字下げ）。所要時間は文字でも出す。
     const timeline = page.getByTestId("run-history-timeline");

@@ -40,6 +40,13 @@ export type AnswerSectionsBlock =
       citations?: readonly AnswerCitationRef[];
     }
   | {
+      /** 段落にできない本文（表・コード・見出しなど。製品が描いたもの）と、その下の根拠の行。 */
+      kind: "content";
+      key: string;
+      content: ReactNode;
+      citations?: readonly AnswerCitationRef[];
+    }
+  | {
       kind: "section";
       key: string;
       /** 節の見出し。無ければ見出しなしの箇条書き。 */
@@ -103,7 +110,12 @@ export function AnswerSections({ blocks, live = false, children, className, test
       data-testid={testId}
     >
       {blocks.map((block) =>
-        block.kind === "paragraph" ? (
+        block.kind === "content" ? (
+          <div key={block.key} className="min-w-0">
+            {block.content}
+            {block.citations?.length ? <AnswerCitationLinks citations={block.citations} /> : null}
+          </div>
+        ) : block.kind === "paragraph" ? (
           block.citations?.length ? (
             <div key={block.key}>
               <p className="whitespace-pre-wrap">{block.content}</p>

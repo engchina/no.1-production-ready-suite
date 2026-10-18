@@ -4664,6 +4664,7 @@ export const ja = {
   "history.detail.needsReview.no": "要らない",
   "history.feedback.count": "{count} 件",
   "history.result.noCitations": "AI に渡した箇所はありません。",
+  "history.result.evidence": "回答の根拠",
   "history.process.empty": "記録された段はありません。",
   "history.process.outcome.cancelled": "停止",
   "history.process.diagnostics": "回答の詳細",

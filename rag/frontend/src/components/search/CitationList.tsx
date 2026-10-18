@@ -52,6 +52,7 @@ export function AnswerCitations({
   idPrefix,
   cardProps,
   className,
+  listTestId,
 }: {
   citations: RetrievedChunk[];
   /** 回答の診断（`diagnostics.answer`）。根拠の木からまとまりを作る。生成中は null。 */
@@ -59,6 +60,7 @@ export function AnswerCitations({
   idPrefix: string;
   cardProps?: CitationCardOptions;
   className?: string;
+  listTestId?: string;
 }) {
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   if (!citations.length) return null;
@@ -72,6 +74,7 @@ export function AnswerCitations({
         idPrefix={idPrefix}
         labels={EVIDENCE_LABELS}
         className={className}
+        listTestId={listTestId}
         renderActions={(_item, index) => (
           <CitationActions chunk={citations[index]} {...cardProps} onPreview={() => setPreviewIndex(index)} />
         )}

@@ -3727,3 +3727,46 @@ import {
 
 - 書式: `formatRunDateTime(iso, { seconds })`・`formatRunDuration(ms)`・`formatRunTokens(n)`。期間: `RUN_PERIODS`・`runPeriodSince(period)`。実行者: `RUN_EXECUTOR_FILTERS`。
 - 単体テストは `packages/ui/tests/run-history.test.tsx`。
+
+---
+
+## 回答の根拠と本文の節: AnswerEvidence / EvidenceViews / EvidenceCard / AnswerSections — **新規**（#2328。RAG の `AnswerCitations` / `CitationCard` / `AnswerText` から移した）
+
+3 製品のチャット・RAG 検索・実行の詳細で、回答の根拠と回答の本文の節を**同じ部品**で出す（見た目が似た製品ごとの写しを作らない）。製品は自分の根拠の形を下のデータの契約に写して渡すだけで、文言は `evidenceLabels()`（3 製品で同じ書き方。上書きは `evidenceLabels({ … })`）。
+
+```tsx
+import { AnswerEvidence, AnswerSections, evidenceLabels, type EvidenceListItem } from "@production-ready/ui";
+
+// 回答の本文の下・回答の評価の前（チャット・実行の詳細で同じ位置）
+<AnswerEvidence
+  items={items}                       // EvidenceListItem[]
+  groups={groups}                     // 任意。渡すと「順に表示 / まとまりごと」のタブ
+  idPrefix={`message-${id}`}
+  labels={evidenceLabels()}
+  renderActions={(item, index) => …}  // カードの下の操作（引用箇所を表示・根拠の評価・図を開く）
+/>
+
+// 回答の本文: 要約の段落 →「資料により確認できた事項」（各項目の下に「根拠：文書 p.N」）→「資料から確認できなかった事項」
+<AnswerSections blocks={[
+  { kind: "paragraph", key: "p", content: "…" },
+  { kind: "section", key: "s", title: "資料により確認できた事項",
+    entries: [{ key: "e", content: "…", citations: [{ key: "c", label: "根拠：文書 A.pdf p.3", ariaLabel: "…", onOpen }] }] },
+  { kind: "content", key: "t", content: <表など>, citations: [...] },
+]} />
+```
+
+| 部品 | 主な props | 説明 |
+|---|---|---|
+| `AnswerEvidence` | `items`・`groups?`・`groupCount?`・`idPrefix?`・`labels?`・`renderActions?`・`renderExtra?`・`listTestId?`・`open?` / `onOpenChange?`・`className?`・`testId?`（既定 `answer-citations`） | 見出し「AI に渡した N 件（K のまとまり）／ 回答で引用 M 件 ／ うち該当確認済み X 件 ／ 参考 Y 件」の plain の `Disclosure`（**既定は閉じる**）。中身は `EvidenceViews`。根拠が 0 件なら何も出さない |
+| `EvidenceViews` | `items`・`groups?`・`idPrefix`・`labels?`・`renderActions?`・`renderExtra?`・`listTestId?` | `groups` があれば `Tabs`（「順に表示 N」「まとまりごと K」）。どちらの見方も一覧は `bounded-scroll-area-lg`（**一定の高さの中で縦にスクロール**し、回答の評価を押し下げない） |
+| `EvidenceList` / `EvidenceCard` | `item`・`index`・`labels?`・`actions?`・`children?` | カード: 番号・文書名・旧版・引用の印（`EvidenceAnswerUseBadge`）・経路のバッジ・本文 3 行・場所のチップ（`dl`）・補足のタグ・原典のリンク・スコアの面（取得スコアと Rerank のメーター）・操作の行（無ければ区切り線の行を出さない） |
+| `EvidenceAnswerUseBadge` | `use`・`labels?` | 該当確認済み =「回答で引用」（success）、参考 =「参考」（neutral・`BookOpen`）、使われ方が不明 =「回答で引用」（info） |
+| `evidenceCountLabel` | `(items, groupCount?, labels?)` | 見出しの文。引用したかが分からない（`usedInAnswer: null`。検索だけ）なら件数だけ、0 件の項目は出さない |
+| `AnswerSections` / `AnswerCitationLinks` | `blocks`・`live?`・`children?`（シート・ダイアログ）・`testId?`（既定 `answer-text`） | 段落（`paragraph`）・段落にできない塊（`content`。表など）・見出しつきの箇条書き（`section`。`muted` の項目は印なしの補足）と、各段落・項目の下の根拠の行（`onOpen` があれば強調色の押せる行、無ければ文字だけ） |
+| `MarkdownInlineText` | `text`・`labels?` | 段落・項目の中の太字・斜体・コード・リンクだけを描く（`<p>` / `<li>` の中に置く） |
+
+**データの契約（`EvidenceListItem`）**: `key`・`fileName`・`text`・`usedInAnswer: boolean | null`・`answerUse: "confirmed" | "reference" | null`・`superseded?`・`routeBadges?`（翻訳済み）・`score: number | null`・`rerankScore: number | null`・`chips?: { id, label, value }[]`（`label` は読み上げ）・`tags?: { id, value, icon?, tone? }[]`・`sourceUrl?`（https）。まとまりは `EvidenceGroup`（`key`・`fileName`・`section`・`pages`・`entries: EvidenceGroupEntry[]`〔`index`・`roleLabel`・`roleIcon`・`roleKind`・`location`・`excerpt`・`usedInAnswer`・`answerUse`・`chunkId`・`onOpen?`〕）。
+
+- RAG: `RetrievedChunk` → `citationEvidenceItem`（`rag/frontend/src/components/search/CitationCard.tsx`）。まとまりは回答の診断の根拠の木（#2097）。
+- Agent: 成果物 `answer_evidence`（backend の `answer_evidence.py`）→ `answerEvidenceData`（`agent/frontend/src/lib/answer-evidence.ts`）。本文の節は `structureAnswer`（`answer-structure.ts`。本文の文は書き換えず、段落ごとの根拠・根拠の ID の印・最終の検証の節から組み立てる。結び付けられなければ Markdown のまま）。
+- 単体テストは `packages/ui/tests/answer-evidence.test.tsx`・`answer-sections.test.tsx`。

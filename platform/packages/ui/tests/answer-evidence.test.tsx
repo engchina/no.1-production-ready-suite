@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
-import { Layers } from "lucide-react";
+import { Layers, Search } from "lucide-react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
   AnswerEvidence,
   EvidenceCard,
+  EvidenceViews,
   evidenceCountLabel,
   evidenceLabels,
   evidenceScoreMeterPercent,
@@ -124,5 +125,46 @@ describe("AnswerEvidence", () => {
     expect(evidenceScoreMeterPercent(0.5)).toBe(50);
     expect(evidenceScoreMeterPercent(2)).toBe(100);
     expect(evidenceScoreMeterPercent(-1)).toBe(0);
+  });
+});
+
+describe("EvidenceViews", () => {
+  it("まとまりがあれば「順に表示 / まとまりごと」のタブ（件数つき）、無ければ一覧だけ。一覧は一定の高さでスクロールする", () => {
+    const items = [item(), item({ key: "b" })];
+    const plain = html(<EvidenceViews items={items} idPrefix="t" />);
+    expect(plain.querySelector('[role="tablist"]')).toBeNull();
+    expect(plain.querySelector("ul")?.className).toContain("bounded-scroll-area-lg");
+    const grouped = html(
+      <EvidenceViews
+        items={items}
+        idPrefix="t"
+        groups={[
+          {
+            key: "g1",
+            fileName: "文書 A.pdf",
+            section: "第 1 節",
+            pages: "p.3",
+            entries: [
+              {
+                key: "e1",
+                index: 0,
+                roleLabel: "検索で見つかった箇所",
+                roleIcon: Search,
+                roleKind: "retrieved",
+                location: "p.3",
+                excerpt: "抜粋",
+                usedInAnswer: true,
+                answerUse: null,
+                chunkId: "doc-a:set:1",
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(Array.from(grouped.querySelectorAll('[role="tab"]')).map((tab) => tab.textContent)).toEqual([
+      "順に表示2",
+      "まとまりごと1",
+    ]);
   });
 });

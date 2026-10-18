@@ -144,7 +144,7 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
-test("回答の出典と使ったツールを畳んで出し、承認待ちはその場で判断できる", async ({ page, mockApi }) => {
+test("使ったツールを畳んで出し、承認待ちはその場で判断できる（根拠の塊は回答ができてから）", async ({ page, mockApi }) => {
   seedThread(mockApi, {
     status: "waiting_approval",
     steps: [
@@ -182,7 +182,7 @@ test("回答の出典と使ったツールを畳んで出し、承認待ちは�
         kind: "rag_evidence",
         content: {
           answer: "第 5 条",
-          // rag_search の根拠（#1219）。回答に使った根拠だけを出典に出し、場所（頁・節）を添える。
+          // rag_search の根拠（#1219）。回答の根拠の塊（#2328）は回答を確定するときの成果物から出す。
           evidence: [
             {
               evidence_id: "chunk-used",
@@ -223,14 +223,8 @@ test("回答の出典と使ったツールを畳んで出し、承認待ちは�
   await expect(page.getByTestId("chat-send")).toHaveAccessibleName("停止");
   await expect(page.getByTestId("chat-send")).toHaveAttribute("data-state", "running");
 
-  await turn.getByText("出典（2）").click();
-  await expect(turn.getByText("1. 契約書.pdf")).toBeVisible();
-  // 表計算の根拠はシート・行・セル範囲で場所を出す（#1221）。
-  await expect(turn.getByTestId("chat-source-location")).toHaveText([
-    "p.3 · 契約書 > 第5条（更新）",
-    "コード表 · 3–6 行（A3:C6）",
-  ]);
-  await expect(turn.getByText("別紙.pdf")).toHaveCount(0);
+  // 回答を確定する前（承認待ち）は、回答の根拠の塊（成果物 answer_evidence）をまだ出さない。
+  await expect(turn.getByTestId("answer-citations")).toHaveCount(0);
   await turn.getByText("使ったツール（2）").click();
   await expect(turn.getByText("rag__rag_search", { exact: true })).toBeVisible();
 
