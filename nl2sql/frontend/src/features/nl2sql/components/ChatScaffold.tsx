@@ -182,7 +182,7 @@ export function Nl2SqlChatLayout({
   composer,
   children,
 }: {
-  history?: Nl2SqlChatHistory;
+  history: Nl2SqlChatHistory;
   /** 会話の領域の名前（翻訳済み）。 */
   label: string;
   conversationTitle?: string | null;
@@ -194,18 +194,13 @@ export function Nl2SqlChatLayout({
   composer: ReactNode;
   children: ReactNode;
 }) {
-  const historyProps = history
-    ? {
-        history: history.panel,
-        historyTitle: t("chat.history"),
-        historyCloseLabel: t("chat.closeHistory"),
-        historyContent: history.content,
-        historyToggleDisabled: history.toggleDisabled,
-      }
-    : {};
   return (
     <ChatLayout
-      {...historyProps}
+      history={history.panel}
+      historyTitle={t("chat.history")}
+      historyCloseLabel={t("chat.closeHistory")}
+      historyContent={history.content}
+      historyToggleDisabled={history.toggleDisabled}
       label={label}
       conversationTitle={conversationTitle}
       conversationTitleLoading={conversationTitleLoading}
