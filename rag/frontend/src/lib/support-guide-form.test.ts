@@ -22,6 +22,8 @@ import {
   newStepRow,
   nextRowId,
   normalizeIssuePath,
+  formatPageRanges,
+  parsePageRanges,
   parseSupportGuideImport,
   removeStep,
   renameConditionId,
@@ -32,7 +34,7 @@ import {
 } from "./support-guide-form";
 
 const content: SupportGuideContent = {
-  schema_version: 1,
+  schema_version: 2,
   title: "パスワードの再設定",
   description: "社内システムのパスワードを戻す",
   goal: {
@@ -70,6 +72,7 @@ const content: SupportGuideContent = {
       evidence_requirements: [],
       allowed_tools: ["rag_search"],
       done_when: "",
+      references: [],
     },
     {
       id: "reset",
@@ -80,6 +83,18 @@ const content: SupportGuideContent = {
       evidence_requirements: ["手順書の節"],
       allowed_tools: ["rag_read_source", "rag_search"],
       done_when: "新しいパスワードで入れる",
+      references: [
+        {
+          document_id: "doc-2",
+          title: "画面の説明",
+          section_path: [],
+          version: "",
+          page_ranges: [
+            { page_start: 4, page_end: 6 },
+            { page_start: 9, page_end: 9 },
+          ],
+        },
+      ],
     },
   ],
   branches: [
@@ -90,11 +105,48 @@ const content: SupportGuideContent = {
       note: "",
     },
   ],
-  references: [{ document_id: "doc-1", title: "運用手順書", section_path: ["3 章"], version: "" }],
+  references: [
+    { document_id: "doc-1", title: "運用手順書", section_path: ["3 章"], version: "", page_ranges: [] },
+  ],
   completion: [{ id: "done", description: "入れたことを確かめた", check_method: "" }],
   impact: { scope: "individual", approval_required: true, approval_note: "", steps: ["reset"] },
   handoff: { conditions: ["本人を確かめられない"], contact: "ヘルプデスク" },
 };
+
+describe("資料の頁の範囲", () => {
+  it("「3-5, 8」の形を読み、同じ形に戻す", () => {
+    expect(parsePageRanges(" 3-5、8 ")).toEqual([
+      { page_start: 3, page_end: 5 },
+      { page_start: 8, page_end: 8 },
+    ]);
+    expect(parsePageRanges("１０〜１２")).toEqual([{ page_start: 10, page_end: 12 }]);
+    expect(parsePageRanges("")).toEqual([]);
+    expect(formatPageRanges([{ page_start: 3, page_end: 5 }, { page_start: 8, page_end: 8 }])).toBe("3-5, 8");
+  });
+
+  it("形の違う入力・逆の範囲・0 頁・多すぎる範囲は読まない", () => {
+    expect(parsePageRanges("p3")).toBeNull();
+    expect(parsePageRanges("5-2")).toBeNull();
+    expect(parsePageRanges("0")).toBeNull();
+    expect(parsePageRanges(Array.from({ length: 11 }, (_, i) => String(i + 1)).join(","))).toBeNull();
+  });
+
+  it("手順の資料の頁と文書 ID を保存の前に確かめ、位置を利用者の言葉で出す", () => {
+    const form = guideFormFromContent(content);
+    form.steps[1].references[0] = { ...form.steps[1].references[0], documentId: " ", pageRanges: "9-1" };
+    form.references[0] = { ...form.references[0], pageRanges: "x" };
+    const paths = guideFormIssues(form).map((issue) => issue.path);
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        "steps[1].references[0].document_id",
+        "steps[1].references[0].page_ranges",
+        "references[0].page_ranges",
+      ]),
+    );
+    expect(issuePathLabel("steps[1].references[0].page_ranges")).toBe("手順 2・根拠の頁");
+    expect(issuePathLabel("references[0].page_ranges")).toBe("資料 1・根拠の頁");
+  });
+});
 
 describe("splitLines", () => {
   it("前後の空白・空行・重複を除く", () => {
@@ -242,7 +294,7 @@ describe("状態と表示", () => {
 
 describe("parseSupportGuideImport", () => {
   it("書き出しの形・配列・1 件を受け付ける", () => {
-    expect(parseSupportGuideImport(JSON.stringify({ schema_version: 1, guides: [content] }))).toEqual({
+    expect(parseSupportGuideImport(JSON.stringify({ schema_version: 2, guides: [content] }))).toEqual({
       guides: [content],
     });
     expect(parseSupportGuideImport(JSON.stringify([content, content]))).toEqual({

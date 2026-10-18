@@ -45,6 +45,7 @@ from app.features.agent.clarification_cancel import (
     kind_label,
 )
 from app.features.agent.confirmation import CONFIRMATION_TOOL as AGENT_CONFIRMATION_TOOL
+from app.features.agent.guide_steps import guide_plan, guide_step_states, guide_steps_next_step
 from app.features.agent.tools import MCP_TOOL_SEPARATOR, mcp_base_tool_name
 
 if TYPE_CHECKING:
@@ -109,6 +110,12 @@ _REFERENCE_PATTERN = re.compile(
     r"|付録\s*[0-9A-Za-z一二三四五六七八九十]*)\s*(?:を|も)?\s*(?:ご)?参照"
 )
 MAX_REFERENCES = 5
+# 根拠の本文が別の文書を参照するとき（取込時に抜き出した evidence の references の document_title。
+# #2396）。参照先の文書は検索の範囲から探す。
+DOCUMENT_REFERENCE_READ_HINT = (
+    "参照先の文書名（document_title）と参照の表記（reference）を query に入れて "
+    "rag_retrieve_evidence を呼び、参照先の文書の該当の箇所を根拠として確かめる。"
+)
 REFERENCE_READ_HINT = (
     "rag_outline でこの文書の章節の構成を確かめ、"
     "当たる章節の section_id を rag_read_section に渡して読む。"
@@ -673,7 +680,38 @@ def text_references(tool: str, output: JsonObject) -> list[JsonObject]:
             )
             if len(references) >= MAX_REFERENCES:
                 return references
-    return references
+    return [*references, *_document_references(tool, output, seen)][:MAX_REFERENCES]
+
+
+def _document_references(
+    tool: str, output: JsonObject, seen: set[tuple[str, str]]
+) -> list[JsonObject]:
+    """根拠が別の文書を参照する箇所（evidence の references のうち document_title のあるもの）。"""
+    if tool not in _EVIDENCE_TOOLS:
+        return []
+    found: list[JsonObject] = []
+    for item in _records(output.get("evidence")):
+        document_id = item.get("document_id")
+        if not isinstance(document_id, str) or not document_id:
+            continue
+        for reference in _records(item.get("references")):
+            title = _text(reference.get("document_title"), 200)
+            label = _text(reference.get("label"), 100)
+            key = (document_id, f"{title}:{''.join(label.split())}")
+            if not title or key in seen:
+                continue
+            seen.add(key)
+            file_name = item.get("file_name")
+            found.append(
+                {
+                    "document_id": document_id,
+                    "file_name": file_name if isinstance(file_name, str) else None,
+                    "reference": label,
+                    "document_title": title,
+                    "how_to_read": DOCUMENT_REFERENCE_READ_HINT,
+                }
+            )
+    return found
 
 
 # 台帳・一覧の行（表計算の 1 行 = 1 chunk の記録。RAG の根拠の content_kind=record。#1349）の値の
@@ -1404,7 +1442,10 @@ GUIDE_IS_NOT_EVIDENCE = (
 
 
 def guide_check_note(
-    output: JsonObject | None, *, evidence_gathered: bool = True
+    output: JsonObject | None,
+    *,
+    evidence_gathered: bool = True,
+    rag_calls_remaining: int | None = None,
 ) -> JsonObject | None:
     """業務ガイドの照合（`rag_lookup_guides`）の結果を、モデルへの短い案内にする（#1322）。
 
@@ -1413,6 +1454,10 @@ def guide_check_note(
     結果に足す。モデルが自分で業務ガイドを引いたときも、次の手をその結果に足す（`evidence_gathered`
     が False。答える判断なら、業務ガイドだけで答えず資料の根拠を集めるよう添える）。最上位の業務
     ガイドの判断（decision）で次の手を決める（決定的）。当たる業務ガイドが無ければ None。
+
+    答える判断（answer / branch）で手順があれば、手順を段として引く次の手（手順ごとの検索の語と
+    参照の資料・頁。`guide_steps.guide_steps_next_step`。#2396）を足す。`rag_calls_remaining` は
+    この実行で残る検索の回数（手順の数より少なければ、手順の語をまとめて引く案内にする）。
     """
     guides = _records(output.get("guides")) if isinstance(output, dict) else []
     if not guides:
@@ -1485,6 +1530,14 @@ def guide_check_note(
             "tools": [],
             "instruction": "".join(parts),
         }
+    if decision in {"answer", "branch"}:
+        plan = guide_steps_next_step(output, rag_calls_remaining)
+        if plan is not None:
+            next_step = {
+                **next_step,
+                "steps": plan["steps"],
+                "instruction": next_step["instruction"] + plan["instruction"],
+            }
     return {"guide": summary, "next_step": next_step}
 
 
@@ -2021,6 +2074,15 @@ def build_support_task(
         ):
             # Control Plane の業務ガイドの照合（#1322）はモデルが選んだプロファイルではない。
             builder.apply_profile(call.name, call.arguments)
+    if builder.guide is not None:
+        # 業務ガイドの手順ごとの根拠の有無（#2396。この Run で照合した同じガイドの手順だけ）。
+        plan = guide_plan(steps)
+        same = plan is not None and plan["guide_id"] == builder.guide.get("guide_id")
+        states = guide_step_states(steps) if same else []
+        if states:
+            builder.guide = {**builder.guide, "steps": states}
+        else:
+            builder.guide.pop("steps", None)
     if not ask_rag:
         builder.set_rag_pending([])
     if not ask_nl2sql:

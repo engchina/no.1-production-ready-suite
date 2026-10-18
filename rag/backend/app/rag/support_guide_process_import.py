@@ -39,6 +39,9 @@ from rag_parser_core.language import LanguagePack
 from app.rag.cross_references import document_name_match, title_key
 from app.rag.support_guide import has_errors, validate_content
 from app.schemas.support_guide import (
+    MAX_PAGE_NUMBER,
+    MAX_REFERENCE_PAGE_RANGES,
+    MAX_STEP_REFERENCES,
     PROCESS_IMPORT_QUESTION_MAX_CHARS,
     PROCESS_IMPORT_TEXT_MAX_CHARS,
     SupportGuideContent,
@@ -325,6 +328,10 @@ class DraftReference(_Out):
     document_name: str = Field(description="資料の名前（回答の過程に書いたまま）。")
     pages: str = Field(default="", description="頁（書いたまま。例: 12-14）。")
     section: str = Field(default="", description="章節（書いたまま）。")
+    step_ids: list[str] = Field(
+        default_factory=list,
+        description="この資料を根拠にする手順の id（全手順に共通の資料なら空）。",
+    )
 
 
 class DraftRule(_Out):
@@ -367,7 +374,8 @@ GUIDE_DRAFT_PROMPT = """\
   handoff_conditions にその場合を入れる。利用者に聞けば決まる事項は handling=ask と question を
   入れる。
 - references（検索する資料と根拠の頁）: 資料の名前は書いたまま document_name に、頁は pages、章節は
-  section に入れる。
+  section に入れる。どの手順の根拠の資料かが書いてあれば、step_ids にその手順の id を入れる
+  （全手順に共通の資料なら空）。
 - search_terms（検索の語）: match_terms と、関係する手順の retrieval_hints に入れる。
 - notes（補足）: 1 つの手順に係る注意はその手順の note に入れる。この質問に限らず回答の仕方を決める
   規則（「この種類の質問はこの画面を案内する」「言い切らず可能性にとどめる」「Aと Bを区別する」
@@ -482,6 +490,23 @@ def resolve_document_name(
 # ---- 下書きにする ---------------------------------------------------------------------------
 
 
+# 頁の書き方（「12-14」「p.12〜14、20」）から頁の範囲を読む（数字と範囲の記号だけを見る。#2395）。
+_PAGE_RANGE = re.compile(r"(\d+)\s*[-~〜–—]\s*(\d+)|(\d+)")
+
+
+def page_ranges_from_text(text: str) -> list[dict[str, int]]:
+    """回答の過程に書いた頁を、業務ガイドの資料の頁の範囲にする（読めない・逆の範囲は除く）。"""
+    ranges: list[dict[str, int]] = []
+    for match in _PAGE_RANGE.finditer(unicodedata.normalize("NFKC", text)):
+        start = int(match.group(1) or match.group(3))
+        end = int(match.group(2) or start)
+        if 1 <= start <= end <= MAX_PAGE_NUMBER:
+            item = {"page_start": start, "page_end": end}
+            if item not in ranges:
+                ranges.append(item)
+    return ranges[:MAX_REFERENCE_PAGE_RANGES]
+
+
 def _clean(values: Sequence[str], limit: int, max_chars: int = 200) -> list[str]:
     return list(dict.fromkeys(value.strip()[:max_chars] for value in values if value.strip()))[
         :limit
@@ -504,6 +529,7 @@ def _references(
                     name=name,
                     pages=item.pages[:64],
                     section=item.section[:200],
+                    step_ids=_clean(item.step_ids, 20, 64),
                     status="resolved",
                     document_id=found.document_id,
                     file_name=found.file_name,
@@ -516,6 +542,7 @@ def _references(
                 name=name,
                 pages=item.pages[:64],
                 section=item.section[:200],
+                step_ids=_clean(item.step_ids, 20, 64),
                 status=status,
                 candidates=[candidate.file_name for candidate in candidates[:10]],
             )
@@ -545,6 +572,23 @@ def _content_payload(
     references: Sequence[SupportGuideProcessReference],
 ) -> dict[str, Any]:
     step_ids = {step.id for step in output.steps}
+    # 解決できた資料を、手順の資料（step_ids が手順を指す）と全手順に共通の資料に分ける（#2395）。
+    step_references: dict[str, list[dict[str, Any]]] = {}
+    common_references: list[dict[str, Any]] = []
+    for item in references:
+        if not item.document_id:
+            continue
+        reference = {
+            "document_id": item.document_id,
+            "title": (item.file_name or item.name)[:200],
+            "section_path": [item.section[:200]] if item.section else [],
+            "page_ranges": page_ranges_from_text(item.pages),
+        }
+        owners = [step_id for step_id in item.step_ids if step_id in step_ids]
+        for step_id in owners:
+            step_references.setdefault(step_id, []).append(reference)
+        if not owners:
+            common_references.append(reference)
     steps = []
     for step in output.steps[:50]:
         purpose = step.purpose.strip()
@@ -557,6 +601,7 @@ def _content_payload(
                 "purpose": purpose[:2000],
                 "depends_on": [item for item in step.depends_on if item in step_ids][:20],
                 "retrieval_hints": _clean(step.retrieval_hints, 10),
+                "references": step_references.get(step.id, [])[:MAX_STEP_REFERENCES],
             }
         )
     conditions = []
@@ -605,15 +650,7 @@ def _content_payload(
         "conditions": conditions,
         "steps": steps,
         "branches": branches,
-        "references": [
-            {
-                "document_id": item.document_id,
-                "title": (item.file_name or item.name)[:200],
-                "section_path": [item.section[:200]] if item.section else [],
-            }
-            for item in references
-            if item.document_id
-        ],
+        "references": common_references[:30],
         "handoff": {
             "contact": output.handoff_contact[:200],
             "conditions": _clean(output.handoff_conditions, 20),

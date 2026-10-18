@@ -75,6 +75,7 @@ import {
   guideFormFromContent,
   guideFormIssues,
   guideFormSnapshot,
+  MAX_STEP_REFERENCES,
   moveItem,
   newBranchRow,
   newCompletionRow,
@@ -881,6 +882,86 @@ function SupportGuideForm({
                     updateRow("steps", index, { evidenceRequirements: event.target.value })
                   }
                 />
+                <Fieldset
+                  className="col-span-full"
+                  legend={t("supportGuides.field.stepReferences")}
+                  helper={t("supportGuides.field.stepReferencesHelp")}
+                >
+                  {row.references.length > 0 ? (
+                    <ol className="space-y-2" data-testid={`support-guide-step-references-${index}`}>
+                      {row.references.map((reference, refIndex) => {
+                        const refPath = (field: string) => path(`references[${refIndex}].${field}`);
+                        const updateReference = (patch: Partial<ReferenceForm>) =>
+                          updateRow("steps", index, {
+                            references: row.references.map((item, i) => (i === refIndex ? { ...item, ...patch } : item)),
+                          });
+                        const label = t("supportGuides.stepReference.row", { step: index + 1, n: refIndex + 1 });
+                        return (
+                          <li
+                            key={reference.key}
+                            aria-label={label}
+                            className="min-w-0 rounded-md border border-border bg-surface p-3"
+                          >
+                            <div className="flex min-w-0 items-start gap-2">
+                              <FormGrid className="min-w-0 flex-1">
+                                <TextField
+                                  id={domId(refPath("document_id"))}
+                                  width="md"
+                                  label={t("supportGuides.field.documentId")}
+                                  value={reference.documentId}
+                                  maxLength={64}
+                                  required
+                                  error={errorAt(refPath("document_id"))}
+                                  onChange={(event) => updateReference({ documentId: event.target.value })}
+                                />
+                                <TextField
+                                  id={domId(refPath("title"))}
+                                  width="lg"
+                                  label={t("supportGuides.field.referenceTitle")}
+                                  value={reference.title}
+                                  maxLength={200}
+                                  onChange={(event) => updateReference({ title: event.target.value })}
+                                />
+                                <TextField
+                                  id={domId(refPath("page_ranges"))}
+                                  width="sm"
+                                  label={t("supportGuides.field.pageRanges")}
+                                  helper={t("supportGuides.field.pageRangesHelp")}
+                                  value={reference.pageRanges}
+                                  inputMode="numeric"
+                                  error={errorAt(refPath("page_ranges"))}
+                                  onChange={(event) => updateReference({ pageRanges: event.target.value })}
+                                />
+                              </FormGrid>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                tone="danger"
+                                iconOnly
+                                icon={Trash2}
+                                aria-label={t("supportGuides.stepReference.remove", { step: index + 1, n: refIndex + 1 })}
+                                onClick={() =>
+                                  updateRow("steps", index, {
+                                    references: row.references.filter((_, i) => i !== refIndex),
+                                  })
+                                }
+                              />
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={Plus}
+                    disabled={row.references.length >= MAX_STEP_REFERENCES}
+                    onClick={() => updateRow("steps", index, { references: [...row.references, newReferenceRow()] })}
+                  >
+                    {t("supportGuides.add.stepReference")}
+                  </Button>
+                </Fieldset>
                 <div className="col-span-full">
                   <TextareaField
                     id={domId(path("done_when"))}
@@ -1061,6 +1142,16 @@ function SupportGuideForm({
                   value={row.version}
                   maxLength={64}
                   onChange={(event) => updateRow("references", index, { version: event.target.value })}
+                />
+                <TextField
+                  id={domId(path("page_ranges"))}
+                  width="sm"
+                  label={t("supportGuides.field.pageRanges")}
+                  helper={t("supportGuides.field.pageRangesHelp")}
+                  value={row.pageRanges}
+                  inputMode="numeric"
+                  error={errorAt(path("page_ranges"))}
+                  onChange={(event) => updateRow("references", index, { pageRanges: event.target.value })}
                 />
               </FormGrid>
             );

@@ -454,7 +454,12 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
         assert f"'ALTER TABLE {table} ADD (answer_notice CLOB)'" in notice_migration
         assert "column_name = 'ANSWER_NOTICE'" in notice_migration
         assert "DROP" not in notice_migration
-    assert len(statements) == 99
+    # 業務ガイドの内容の形の版を 2 にする（#2395）。schema_version だけを書き換える。
+    guide_migration = sql.split("-- migration: 20261018_004_support_guide_schema_v2", 1)[1]
+    assert "JSON_TRANSFORM(draft_json, SET '$.schema_version' = 2)" in guide_migration
+    assert "JSON_TRANSFORM(content_json, SET '$.schema_version' = 2)" in guide_migration
+    assert "DELETE" not in guide_migration and "DROP" not in guide_migration
+    assert len(statements) == 100
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -542,6 +547,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261018_001_support_guide_embeddings",
         "20261018_002_message_answer_notice",
         "20261018_003_answer_record_notice",
+        "20261018_004_support_guide_schema_v2",
     ]
 
 
