@@ -247,10 +247,21 @@ def grants_all_knowledge_bases(codes: Iterable[str]) -> bool:
 
 # ---- API の権限 manifest ----
 
-# `/figures/{token}`（#1311）は Cookie を使わず、path の署名つきのトークンで route が認証し、
-# トークンの利用者の今の権限・対象範囲で確かめ直す（`app.api.routes.figures`）。
+# `/figures/{token}`（#1311）と `/source-previews/{token}/…`（#2389）は Cookie を使わず、
+# path の署名つきのトークンで route が認証し、トークンの利用者の今の権限・対象範囲で確かめ直す
+# （`app.api.routes.figures`・`app.api.routes.source_previews`）。
+SOURCE_PREVIEW_PAGE_PATH = "/source-previews/{token}/pages/{page_number}"
+SOURCE_PREVIEW_CONTENT_PATH = "/source-previews/{token}/content"
 PUBLIC_API_PATHS = frozenset(
-    {"/health", "/ready", "/ready/database", "/auth/login", "/figures/{token}"}
+    {
+        "/health",
+        "/ready",
+        "/ready/database",
+        "/auth/login",
+        "/figures/{token}",
+        SOURCE_PREVIEW_PAGE_PATH,
+        SOURCE_PREVIEW_CONTENT_PATH,
+    }
 )
 AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth/password/change"})
 # サービストークン（Agent から利用者として呼ぶ。#230 / #232）で認証する path。認証済みなら通し、
@@ -277,6 +288,8 @@ OPEN_API_OPERATIONS = frozenset(
         ("POST", "/auth/password/change"),
         ("POST", "/mcp"),
         ("GET", "/figures/{token}"),
+        ("GET", SOURCE_PREVIEW_PAGE_PATH),
+        ("GET", SOURCE_PREVIEW_CONTENT_PATH),
         ("GET", "/account/api-keys"),
         ("POST", "/account/api-keys"),
         ("DELETE", "/account/api-keys/{key_id}"),

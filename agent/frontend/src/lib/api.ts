@@ -757,6 +757,20 @@ export interface RunFigureUrl {
   expires_at: string;
 }
 
+/** Run の RAG の根拠の原文のプレビュー（#2389。URL は RAG が利用者・根拠・版に縛って署名した短命の URL）。 */
+export interface RunSourcePreview {
+  kind: "pdf" | "image" | "text" | "unsupported";
+  file_name: string;
+  pages: { page_number: number; width: number; height: number }[];
+  /** ページの画像の URL のひな形（`{page}` をページ番号に置き換え、query の `dpi` で解像度）。 */
+  page_url_template: string | null;
+  content_url: string;
+  /** 強調する位置を決める根拠の metadata（頁・bbox・要素の表示領域）。 */
+  highlight_metadata: Record<string, unknown>;
+  expires_at: string;
+  expires_in_seconds: number;
+}
+
 export interface Artifact {
   id: string;
   name: string;
@@ -1812,6 +1826,14 @@ export const agentApi = {
   getRunFigureUrl: (runId: string, documentId: string, chunkId: string) =>
     request<RunFigureUrl>(
       `/api/runs/${encodeURIComponent(runId)}/figure-url?${new URLSearchParams({
+        document_id: documentId,
+        chunk_id: chunkId,
+      }).toString()}`
+    ),
+  /** Run の RAG の根拠の原文のプレビュー（#2389。画面を見ている利用者として RAG が作る）。 */
+  getRunSourcePreview: (runId: string, documentId: string, chunkId: string) =>
+    request<RunSourcePreview>(
+      `/api/runs/${encodeURIComponent(runId)}/source-preview?${new URLSearchParams({
         document_id: documentId,
         chunk_id: chunkId,
       }).toString()}`

@@ -6,7 +6,7 @@ import {
   highlightPages,
   highlightRectsForPage,
   resolveRegionPageSize,
-} from "./bbox";
+} from "../src/lib/bbox";
 
 // rag_poc の viewer（getImageBoxStyle）と同じく、解析時のページ画像 px（左上原点・[x1, y1, x2, y2]）を
 // ページに対する % に直す。実データ（Docling・A4 を 300dpi で描いた 2480x3509 px）の形で確かめる。

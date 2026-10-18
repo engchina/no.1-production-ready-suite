@@ -412,6 +412,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_RUN}/artifacts/{{artifact_id}}"): _RUN_DETAIL,
     # RAG の図の根拠を開く短命の URL（#1311。閲覧者として RAG に作らせる）。
     ("GET", f"{_RUN}/figure-url"): _RUN_DETAIL,
+    # RAG の根拠の原文のプレビュー（#2389。閲覧者として RAG に作らせる）。
+    ("GET", f"{_RUN}/source-preview"): _RUN_DETAIL,
     ("GET", f"{_RUN}/events"): _any(MENU_RUNS, MENU_APPROVALS),
     # チャットの処理の段階（#1359）。チャットと、Run を見る画面が読む（handler が対象範囲で絞る）。
     ("GET", f"{_RUN}/progress"): _RUN_PROGRESS,

@@ -706,3 +706,56 @@ export function highlightPages(highlights: readonly PreviewHighlight[]): number[
     ),
   ].sort((a, b) => a - b);
 }
+
+// ---- 根拠 1 件のプレビューの強調（#2389） ----
+
+/** 根拠（chunk）の metadata から決めた、プレビューの最初のページと強調。 */
+export type EvidencePreviewFocus = {
+  focusPage: number | null;
+  focusBbox: number[] | null;
+  focusBboxMode: BboxCoordinateMode | null;
+  focusBboxUnit: BboxOverlayUnit | null;
+  focusPageSize: BboxPageSize | null;
+  highlights: PreviewHighlight[];
+};
+
+/**
+ * 根拠 1 件の metadata から、プレビューの最初のページと強調する領域を決める（RAG の根拠のパネルと Agent の根拠の
+ * パネルで同じ計算。#349・#2389）。要素の表示領域（要素ごとの bbox）があれば要素ごとに、無ければ包含 bbox 1 つを強調する。
+ */
+export function evidencePreviewFocus(metadata?: Record<string, unknown> | null): EvidencePreviewFocus {
+  const focusPage = firstIntegerValue(metadata, ["page_start", "page"]);
+  const focusBbox = bboxFromMetadata(metadata);
+  const focusBboxMode = bboxCoordinateModeFromMetadata(metadata);
+  const focusBboxUnit = bboxUnitFromMetadata(metadata);
+  const focusPageSize = withBboxPageRotation(
+    bboxPageSizeFromMetadata(metadata),
+    bboxPageRotationFromMetadata(metadata)
+  );
+  const highlights = buildPreviewHighlights({
+    focusPage,
+    focusBbox,
+    focusBboxMode,
+    focusBboxUnit,
+    focusPageSize,
+    regions: displayRegionsFromMetadata(metadata),
+  });
+  return { focusPage, focusBbox, focusBboxMode, focusBboxUnit, focusPageSize, highlights };
+}
+
+/** 最初に整数として読める値（数値か数字の文字列。小数は切り捨て）。 */
+function firstIntegerValue(
+  metadata: Record<string, unknown> | null | undefined,
+  keys: readonly string[]
+): number | null {
+  if (!metadata) return null;
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value.trim());
+      if (Number.isFinite(parsed)) return Math.trunc(parsed);
+    }
+  }
+  return null;
+}
