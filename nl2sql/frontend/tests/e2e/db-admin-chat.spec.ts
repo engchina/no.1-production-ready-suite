@@ -120,7 +120,8 @@ function mutationResult(sql: string, ok = true, index = 1) {
     ],
     committed: ok,
     rolled_back: !ok,
-    warnings: [],
+    // backend は DB のエラーの文を警告にも入れる。画面は失敗のカードに重ねて出さない（#2342）。
+    warnings: ok ? [] : ["ORA-00942: table or view does not exist Help: https://docs.oracle.com/error-help/db/ora-00942/"],
     timing,
   };
 }
@@ -719,6 +720,14 @@ test("SELECT 以外は実行確認語を入れたときだけ実行し、失敗�
   expect(mock.executeBodies[0]).toMatchObject({ confirmation: "ADMIN_EXECUTE" });
   expect(mock.executeBodies[0]).not.toHaveProperty("sql");
   await expect(turn.getByText("ORA-00942: table or view does not exist").first()).toBeVisible();
+  // 実行した後の失敗は結果の位置に 1 つの失敗のカード（何が起きたか・DB の文 1 回・具体的な原因・「詳細」。#2342）。
+  const failure = turn.getByTestId("db-admin-statement-failure");
+  await expect(failure).toHaveCount(1);
+  await expect(failure.getByRole("alert")).toContainText("この文の実行に失敗しました。");
+  await expect(failure).toContainText("参照先のテーブルまたはビューが存在しない");
+  await expect(failure.locator("details")).toContainText("ORA-00942");
+  await expect(turn.getByText("ORA-00942: table or view does not exist")).toHaveCount(1);
+  await expect(turn.getByText("エラー概要", { exact: true })).toHaveCount(0);
   // 実行の確認は 1 回ごと。
   await expect(confirmation).toHaveValue("");
 
