@@ -221,6 +221,28 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#2273 ページの境目の段落の続きの判定に行の位置を足す）
+
+ページの境目で切れた段落の続きの判定（文書全体の整理。#2001。Docling と MinerU の段の境目）を次のように変えた。表の続きの
+判定・API・表の変更は無い。
+
+- 前のページの末尾・次のページの先頭の図・表・caption・脚注・ページの定型を読み飛ばして、段落の続きの元・続きを探す
+  （ページ下端の図・表の後ろに続く段落もつなぐ）。見出し・数式などほかの record で探すのをやめる。
+- 文の終わりの規則（言語資源）に加えて、PDF の文字の層の行の位置で確かめる（MinerU の段落の続きの規則と同じ考え方）。
+  - 前の段落が 2 行以上なら、最後の行の右端が段落の右端まで届く（差が行の高さ × `RAG_PAGE_CONTINUATION_RIGHT_EDGE_TOLERANCE`
+    未満。既定 1.0）。
+  - 次の段落が 2 行以上なら、最初の行に字下げが無い（差が行の高さ × `RAG_PAGE_CONTINUATION_INDENT_TOLERANCE` 未満。既定 0.5）。
+  - 両方が 2 行以上なら、幅が近い（差が狭いほうの幅 × `RAG_PAGE_CONTINUATION_WIDTH_DIFFERENCE_RATIO` 未満。既定 1.0）。
+  - 文字の層の無いページ（スキャン）・縦書き・回転したページ・行の取れない record は、今までどおり文の終わりの規則だけで
+    判定する。`RAG_PAGE_CONTINUATION_GEOMETRY_ENABLED=false` で行の位置の確認を切れる。
+  - 行の位置で続きにしなかった数は、抽出結果の `parser_artifacts.document_consolidation.continuations_rejected_by_geometry`。
+- 同じページの中の段・図をまたぐ続き（段組みの段の境目）は扱わない（Docling の読み順への依存が強く、誤りの影響が大きいため）。
+- 既に取り込んだ文書の抽出結果・chunk は変わらない（再取込して解析し直したときに変わる）。設定の値は抽出結果の使い回しの鍵に
+  含めないため、値を変えたら対象の文書を解析し直す。
+
+1. 必要なら `rag/backend/.env` に `RAG_PAGE_CONTINUATION_*`（雛形 `rag/backend/.env.example`）を設定し、backend・取込 worker を
+   再起動する（既定のままなら設定は要らない）。
+
 ## 既存環境の更新手順（#2266 MinerU の解析結果のページの境目の続き）
 
 外部の解析エンジン MinerU（任意）で取り込んだ PDF も、文書全体の整理（#2001。下の節）の対象にした。設定・API・表の変更は無い。
@@ -921,7 +943,8 @@ PDF（2 段以上。既定 11 ページ以上）を段（既定 10 ページ）�
   - ページの境目で切れた段落・リスト（前のページの本文が文の終わりで終わらず、次のページの本文が項目の記号・番号で
     始まらない）は、次のページの record に前の record の ID を付け、親子階層（small-to-big）の分割で同じ子 chunk に入れる。
     表の続き（列の数が同じで、続きに列見出しが無い）は、続きの表に前の表の列見出しの行を付ける（続きの行だけの chunk でも
-    列の意味が分かる）。record はページごとに残すため、ページ番号・プレビューの位置は変わらない。
+    列の意味が分かる）。record はページごとに残すため、ページ番号・プレビューの位置は変わらない。段落の続きの図・表の読み
+    飛ばしと行の位置の確認は #2273 の節。
 - 既に取り込んだ文書の抽出結果・chunk は変わらない（再取込したときに段ごとの解析・整理になる）。
 
 1. backend・取込 worker を再起動する（parser のサービスは変えていない）。
@@ -1493,6 +1516,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE`: Enterprise AI VLM への入力搬送方式。`auto` は画像を inline data URL、PDF など非画像を `/files` 経由にする。`files_api` は画像も含めて VLM 入力を明示的に `/files` へアップロードし、`file_id` を `/responses` payload へ渡す。`inline_image` は画像だけ inline で送り、PDF/Office fallback など非画像は設定変更を促して停止する。`API パス` は通常 `/responses` のままにし、`/files` は endpoint から自動生成する。
 - 出力の上限（Responses payload の `max_output_tokens`。#1719）: 共通の LLM / VLM の出力の上限の環境変数は持たず、「システム設定 › モデル」の登録モデルごとの「出力の上限（tokens）」（`max_output_tokens`。既定 32768。入力の上限以下）を使う。送る値は platform の `enterprise_ai_output_token_budget`（モデルの出力の上限と入力の上限の小さい方）で、テキストの呼び出し（回答・要約など）はテキストのモデル、VLM 抽出・図の読み取りは Vision のモデルの値。回答フロー（rag_engine）は回答の上限（`ANSWER_MAX_TOKENS`。既定 32768）とモデルの値の小さい方を送り、出力の上限で未完了なら 2 倍（モデルの値まで）にして 1 回、それでも未完了（広げられないときを含む）なら推論の量を 1 段下げて（high → medium → low。low は下げない）1 回だけ送り直す（#2023。未完了のたびに log の `llm_incomplete_response` に理由・上限・推論の量・使った token を WARNING で残す）。送り直しても未完了なら、画面（RAG 検索・チャット）・MCP・品質評価に「回答が長くなり出力の上限に達して途中で止まりました」の種類の文と直し方（出力の上限を大きくする・推論の量を下げる・質問を分ける）を返し、trace_id・エラー種別・工程・理由・出力の状況は「詳細」に出す。`status=incomplete` / `reason=max_output_tokens` は、理由・出力の上限・使った出力（うち推論）の token を添えた取込エラー / 回答の失敗として利用者に返す。推論のあるモデルは推論の token も出力の上限に数える。
 - `RAG_PDF_SEGMENTATION_ENABLED` / `RAG_PDF_MAX_PAGES_PER_SEGMENT` / `RAG_PDF_MAX_SEGMENTS` / `RAG_PDF_SEGMENT_PARSE_CONCURRENCY`: PDF をページの段（既定 10 ページ。最大 300 段）に分け、段ごとに解析サービス（Docling・Unstructured・外部の解析 API）を呼ぶ（#2001。2 段以上の PDF だけ。OCI の解析サービス〔Document Understanding・Vision〕と PDF 以外は原本全体を 1 回で解析する）。段ごとに 待機中 → 処理中 → 完了 / 失敗 と抽出結果（段の artifact。`<RAG_EXTRACTION_ARTIFACT_PREFIX>/<文書>/segments/<段>.json`）を残し、失敗・中断・再起動の後の再実行は、成功した段の artifact（段の PDF と解析・前処理の設定の鍵が同じもの）を使って残りの段だけを解析する。段が失敗したら、始めていない段は「取消済み」にして止める。すべての段が終わったら、ページの順に 1 つの抽出結果にまとめ（ページ番号・ID・`layout_records` を原本のページにそろえ、Docling の見出しの階層は原本全体の record から作り直す）、文書全体を整える（PDF のしおりに当たる見出しの深さ・ページの境目で切れた段落・リスト・表の続き。下の #2001 の節）。段を同時に解析する数は `RAG_PDF_SEGMENT_PARSE_CONCURRENCY`（1〜4。既定 1 = 順番）。上げるときは解析サービスの CPU・メモリを確かめる。
+- `RAG_PAGE_CONTINUATION_GEOMETRY_ENABLED` / `RAG_PAGE_CONTINUATION_RIGHT_EDGE_TOLERANCE` / `RAG_PAGE_CONTINUATION_INDENT_TOLERANCE` / `RAG_PAGE_CONTINUATION_WIDTH_DIFFERENCE_RATIO`: ページの境目の段落の続きの判定で、PDF の文字の層の行の位置（前の段落の最後の行が右端まで届く・次の段落の最初の行に字下げが無い・幅が近い）も確かめる（#2273。既定 true / 1.0 / 0.5 / 1.0。右端と字下げは行の高さの倍数、幅の差は狭いほうの幅の倍数）。文字の層の無いページ・縦書き・回転したページは文の終わりの規則だけで判定する。
 - `RAG_PARSER_ADAPTER_BACKEND`: 任意の外部 parser adapter 選択。`local` は本プロジェクト標準 parser のみ、`auto` は有効化済み adapter を source-aware に選ぶ。PDF は `docling` → `unstructured` → `mineru`、画像は `unstructured` → `docling` → `dots_ocr` → `mineru`、Office/HTML は `docling` → `unstructured`、email は `unstructured`、単純 text/markdown/csv/json は local parser を優先する。`docling` / `unstructured` / `mineru` / `dots_ocr` を明示するとその adapter を優先するが、現行 adapter 実装が扱えない source では `*_adapter_source_unsupported` warning を残して標準 parser / Enterprise AI fallback へ戻す。adapter 出力は必ず `StructuredExtraction` / `DocumentElement` / citation metadata へ再マップし、Oracle AI Database、OCI Enterprise AI、OCI Generative AI Cohere の確定スタックは変更しない。
 - `RAG_PARSER_DOCLING_ENABLED` / `RAG_PARSER_UNSTRUCTURED_ENABLED`: Docling / Unstructured adapter の feature flag。**外部 parser は services/parsers/<name> の独立サービスへ切り出した**ため、backend の venv と `scripts/start-backend.sh` は parser 依存を同期しない(`uv sync` は lean)。各 parser のバージョンは各サービスの pyproject(`docling==2.103.0` / `unstructured[all-docs]==0.23.1`)で固定する。parser ごとに依存が大きく異なり独立して upgrade したいことが、サービス分離の理由。backend は取込時に各サービスへ HTTP 委譲し、サービス未達なら標準 parser / Enterprise AI fallback へ戻して `*_adapter_service_unreachable` を warning に出す。`RAG_PARSER_<name>_SERVICE_URL` で URL、`RAG_PARSER_SERVICE_TIMEOUT_SECONDS` で timeout、`RAG_PARSER_READINESS_PROBE_ENABLED` で readiness の /health 問い合わせを制御する。設定と導入状態は `GET /api/settings/parser-adapters` と `rag-file-processing-staging --preflight-only` の `parser_adapters` で確認する。schema remap smoke の実行証跡は必要時に `python -m app.rag.parser_adapter_contract_cli` で確認し（画面と API からは #492 で削除）、通常の readiness 取得では重い fixture parse を走らせない。両方の出力には `parser_adapter_scorecard` も含まれ、readiness と file-processing golden/staging 指標から推奨 backend を機械可読に返す。外部 adapter を staging metrics で推奨するには retrieval recall、table QA、page hit、element lineage、fallback rate の中核証拠が必要で、不足時は `adapter_metric_evidence_incomplete` を warning として返し local fallback を優先する。file-processing staging では selected adapter が未導入の場合、`parser_adapter_preflight` を失敗させ、実 OCI / Oracle client 作成前に停止する。明示 adapter が staging 指標で local fallback 未満の場合も `parser_adapter_scorecard_mismatch` を promotion blocker として返す。staging payload の `parser_adapter_source_routes` は `source_kind` ごとの `candidate_order`、`attempted_order`、`active_order`、`selected_backend`、warning を返し、PDF / image / Office / HTML / email / audio / text の routing が CI artifact として監査できる。audio は現時点では転写サービスを有効化していないため `candidate_order=[]`、`selected_backend=local`、`unsupported_audio` / `audio_transcription_not_configured` として明示し、外部 adapter へ誤って流さない。legacy ingestion で `SourceProfile` が欠落していても、parser registry は `audio/*` content-type を同じ unsupported path に固定する。
   - Unstructured adapter は対応する runtime では `include_page_breaks=true`、PDF/画像では `strategy=auto` と `infer_table_structure=true` を要求する。adapter 関数の signature を見て未対応 kwargs は渡さないため、古い Unstructured API でも不要な fallback を増やさない。

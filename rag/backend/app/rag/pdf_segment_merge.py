@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from io import BytesIO
 from typing import Any, cast
@@ -395,6 +396,10 @@ def _dedupe(values: Sequence[str]) -> list[str]:
 #    (ページ・段・図をまたぐ本文・リスト、ページをまたぐ表)。この印を raw.continues_record_id に
 #    写す。段ごとの解析の段の境目は MinerU が両方のページを見ていないため、2. の規則で判定する。
 #    MinerU の要素は作り方が違うため、しおりの深さ・要素の section_path の作り直しは当てない。
+# 4. 段落の続きの元・続きは、図・表・caption・脚注・ページの定型を読み飛ばして探し(ページ下端の
+#    図の後ろの続き。#2273)、文の終わりの規則に加えて PDF の文字の層の行の位置(前の段落の最後の行が
+#    右端まで届く・次の段落の最初の行に字下げが無い・幅が近い)で確かめる(MinerU の段落の続きの規則と
+#    同じ考え方。閾値は設定。行の取れないページは文の終わりの規則だけで判定する)。
 
 CONSOLIDATION_ARTIFACT = "document_consolidation"
 OUTLINE_HEADING_SOURCE = "pdf_outline"
@@ -402,6 +407,10 @@ _SECTION_CATEGORIES = frozenset({"Title", "Section-header"})
 _PARAGRAPH_CATEGORIES = frozenset({"Text", "List-item"})
 # ページの境目の判定で読み飛ばす record(ページの上下の定型・脚注)。
 _BOUNDARY_SKIP_CATEGORIES = frozenset({"Page-header", "Page-footer", "Footnote"})
+# 段落の続きの元・続きを探すときに読み飛ばす record(図・表・caption と、表の外の文字の補い)。
+# 見出し・数式などほかの record では探すのをやめる(#2273)。
+_TEXT_TRANSPARENT_CATEGORIES = _BOUNDARY_SKIP_CATEGORIES | {"Picture", "Table", "Caption"}
+_TEXT_TRANSPARENT_RAW_TYPES = frozenset({"table_unassigned_text", "picture_ocr_text"})
 # 文・項目の終わり(前のページの本文がこれで終わっていれば、次のページは続きではない)と、章・条の
 # 書き方は言語資源(#2181)。
 _item_starts: dict[str, re.Pattern[str]] = {}
@@ -439,15 +448,58 @@ _OUTLINE_MIN_CONTAINED_CHARS = 4
 _OUTLINE_MIN_COVERAGE = 0.6
 
 
+@dataclass(frozen=True)
+class ContinuationGeometry:
+    """ページの境目の段落の続きの幾何の条件(#2273)。
+
+    ``right_edge_tolerance`` / ``indent_tolerance`` は行の高さの倍数、``width_difference_ratio`` は
+    2 つの段落の狭いほうの幅の倍数。値は設定(``RAG_PAGE_CONTINUATION_*``)から作る。
+    """
+
+    enabled: bool = True
+    right_edge_tolerance: float = 1.0
+    indent_tolerance: float = 0.5
+    width_difference_ratio: float = 1.0
+
+    @classmethod
+    def from_settings(cls, settings: object) -> ContinuationGeometry:
+        default = cls()
+        return cls(
+            enabled=bool(
+                getattr(settings, "rag_page_continuation_geometry_enabled", default.enabled)
+            ),
+            right_edge_tolerance=float(
+                getattr(
+                    settings,
+                    "rag_page_continuation_right_edge_tolerance",
+                    default.right_edge_tolerance,
+                )
+            ),
+            indent_tolerance=float(
+                getattr(
+                    settings, "rag_page_continuation_indent_tolerance", default.indent_tolerance
+                )
+            ),
+            width_difference_ratio=float(
+                getattr(
+                    settings,
+                    "rag_page_continuation_width_difference_ratio",
+                    default.width_difference_ratio,
+                )
+            ),
+        )
+
+
 def consolidate_document_extraction(
     extraction: StructuredExtraction,
     *,
     source_bytes: bytes,
+    geometry: ContinuationGeometry | None = None,
 ) -> StructuredExtraction:
     """Docling・MinerU の解析結果を文書全体で整える(しおりの見出しの深さ・ページの境目の続き)。
 
     record の解析エンジンが Docling か MinerU にそろった layout_records が無い解析結果は変えない。
-    何度当てても同じ結果になる。
+    ``geometry`` は段落の続きの幾何の条件(省略は既定値)。何度当てても同じ結果になる。
     """
     layout = extraction.parser_artifacts.get(LAYOUT_ARTIFACT)
     if not isinstance(layout, Mapping):
@@ -467,9 +519,17 @@ def consolidate_document_extraction(
     else:
         mineru_paragraphs, mineru_tables, mineru_headers = _link_mineru_continuations(records)
         boundary_pages = _mineru_unseen_boundary_pages(records)
-    continued_paragraphs, continued_tables, carried_headers = _link_page_continuations(
-        records, boundary_pages=boundary_pages
-    )
+    resolved_geometry = geometry or ContinuationGeometry()
+    lines = _PdfTextLines(source_bytes) if resolved_geometry.enabled else None
+    try:
+        continuations = _link_page_continuations(
+            records, boundary_pages=boundary_pages, geometry=resolved_geometry, lines=lines
+        )
+    finally:
+        if lines is not None:
+            lines.close()
+    continued_paragraphs, continued_tables, carried_headers = continuations[:3]
+    geometry_rejected = continuations[3]
     continued_paragraphs += mineru_paragraphs
     continued_tables += mineru_tables
     carried_headers += mineru_headers
@@ -528,6 +588,7 @@ def consolidate_document_extraction(
             "continued_paragraphs": continued_paragraphs,
             "continued_tables": continued_tables,
             "table_headers_carried": carried_headers,
+            "continuations_rejected_by_geometry": geometry_rejected,
         },
     }
     return extraction.model_copy(
@@ -637,59 +698,79 @@ def _outline_title_score(text_key: str, title_key: str, *, exact: bool) -> float
 
 
 def _link_page_continuations(
-    records: list[dict[str, Any]], *, boundary_pages: Collection[int] | None = None
-) -> tuple[int, int, int]:
+    records: list[dict[str, Any]],
+    *,
+    boundary_pages: Collection[int] | None = None,
+    geometry: ContinuationGeometry | None = None,
+    lines: _PdfTextLines | None = None,
+) -> tuple[int, int, int, int]:
     """ページの境目で切れた段落・リスト・表の続きに印を付ける。
 
     ``boundary_pages`` があれば、そのページと次のページの境目だけを判定する(MinerU の段の境目)。
-    返り値は (つないだ段落, つないだ表, 列見出しの行を付けた表) の数。
+    表の続きはページの端の表どうし、段落の続きは図・表・定型を読み飛ばした端の本文どうしで判定する。
+    ``lines`` があれば段落の続きを行の位置(``geometry``)でも確かめる。
+    返り値は (つないだ段落, つないだ表, 列見出しの行を付けた表, 行の位置で続きにしなかった段落)
+    の数。
     """
     by_page: dict[int, list[dict[str, Any]]] = {}
     for record in sorted(records, key=_record_order):
         page = int(record.get("page") or 0)
         if page >= 1:
             by_page.setdefault(page, []).append(record)
-    paragraphs = tables = headers = 0
+    resolved_geometry = geometry or ContinuationGeometry()
+    paragraphs = tables = headers = rejected = 0
     for page in sorted(by_page):
         if boundary_pages is not None and page not in boundary_pages:
             continue
         following = by_page.get(page + 1)
         if not following:
             continue
-        previous = _boundary_record(list(reversed(by_page[page])))
+        ending = list(reversed(by_page[page]))
+        previous = _boundary_record(ending)
         current = _boundary_record(following)
-        if previous is None or current is None:
-            continue
-        previous_id = str(previous.get("id") or "")
-        if not previous_id:
-            continue
-        if _raw(current).get("continues_record_id"):
-            # 前に当てた整理(cache から再開した抽出など)。数だけ数え、印は変えない。
-            if str(current.get("category") or "") == "Table":
+        if (
+            previous is not None
+            and current is not None
+            and str(previous.get("category") or "") == "Table"
+            and str(current.get("category") or "") == "Table"
+            and str(previous.get("id") or "")
+        ):
+            if _raw(current).get("continues_record_id"):
+                # 前に当てた整理(cache から再開した抽出など)。数だけ数え、印は変えない。
                 tables += 1
                 headers += int(bool(_raw(current).get("table_header_carried")))
-            else:
-                paragraphs += 1
-            continue
-        previous_category = str(previous.get("category") or "")
-        current_category = str(current.get("category") or "")
-        if previous_category == "Table" and current_category == "Table":
-            carried = _table_continuation(previous, current)
-            if carried is None:
                 continue
-            tables += 1
-            headers += int(carried)
+            carried = _table_continuation(previous, current)
+            if carried is not None:
+                tables += 1
+                headers += int(carried)
+            continue
+        previous_text = _boundary_text_record(ending)
+        current_text = _boundary_text_record(following)
+        if previous_text is None or current_text is None:
+            continue
+        previous_id = str(previous_text.get("id") or "")
+        if not previous_id:
+            continue
+        if _raw(current_text).get("continues_record_id"):
+            paragraphs += 1
+            continue
+        if not _paragraph_continues(
+            str(previous_text.get("text") or ""), str(current_text.get("text") or "")
+        ):
             continue
         if (
-            previous_category in _PARAGRAPH_CATEGORIES
-            and current_category in _PARAGRAPH_CATEGORIES
-            and _paragraph_continues(
-                str(previous.get("text") or ""), str(current.get("text") or "")
+            lines is not None
+            and resolved_geometry.enabled
+            and not _geometry_allows_continuation(
+                lines.lines_in(previous_text), lines.lines_in(current_text), resolved_geometry
             )
         ):
-            current["raw"] = {**_raw(current), "continues_record_id": previous_id}
-            paragraphs += 1
-    return paragraphs, tables, headers
+            rejected += 1
+            continue
+        current_text["raw"] = {**_raw(current_text), "continues_record_id": previous_id}
+        paragraphs += 1
+    return paragraphs, tables, headers, rejected
 
 
 def _boundary_record(records: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
@@ -702,6 +783,182 @@ def _boundary_record(records: Sequence[dict[str, Any]]) -> dict[str, Any] | None
             continue
         return record
     return None
+
+
+def _boundary_text_record(records: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
+    """ページの端の段落の record(図・表・caption・定型・脚注・空の record は読み飛ばす)。
+
+    見出し・数式など段落でない record に当たったら、続きの元・続きは無い(None)。
+    """
+    for record in records:
+        category = str(record.get("category") or "")
+        if category in _TEXT_TRANSPARENT_CATEGORIES:
+            continue
+        if str(record.get("raw_type") or "") in _TEXT_TRANSPARENT_RAW_TYPES:
+            continue
+        if not str(record.get("text") or "").strip():
+            continue
+        return record if category in _PARAGRAPH_CATEGORIES else None
+    return None
+
+
+# 行の bbox(PDF の pt。左上原点)。
+_LineBox = tuple[float, float, float, float]
+# 同じ行とみなす縦の重なり(低いほうの行の高さに対する割合)と、record の bbox に行を含めるときの
+# 余白(pt)。PDF の文字の層の行の切れ方の揺れを吸収する値で、文書の内容には依らない。
+_SAME_ROW_OVERLAP = 0.5
+_RECORD_BBOX_MARGIN_PT = 2.0
+
+
+def _geometry_allows_continuation(
+    previous: Sequence[_LineBox] | None,
+    current: Sequence[_LineBox] | None,
+    geometry: ContinuationGeometry,
+) -> bool:
+    """行の位置が段落の続きと矛盾しないか(行が取れない・1 行だけの側の条件は判定しない)。
+
+    - 前の段落が 2 行以上: 最後の行の右端が段落の右端まで届く。
+    - 次の段落が 2 行以上: 最初の行に字下げが無い。
+    - 両方が 2 行以上: 2 つの段落の幅が近い。
+    """
+    if previous and len(previous) >= 2:
+        last = previous[-1]
+        right = max(line[2] for line in previous)
+        if right - last[2] >= (last[3] - last[1]) * geometry.right_edge_tolerance:
+            return False
+    if current and len(current) >= 2:
+        first = current[0]
+        left = min(line[0] for line in current)
+        if first[0] - left >= (first[3] - first[1]) * geometry.indent_tolerance:
+            return False
+    if previous and current and len(previous) >= 2 and len(current) >= 2:
+        previous_width = max(line[2] for line in previous) - min(line[0] for line in previous)
+        current_width = max(line[2] for line in current) - min(line[0] for line in current)
+        narrower = min(previous_width, current_width)
+        if narrower <= 0:
+            return True
+        if abs(previous_width - current_width) >= narrower * geometry.width_difference_ratio:
+            return False
+    return True
+
+
+class _PdfTextLines:
+    """PDF の文字の層の横書きの行(record の bbox の中の行)を読む。
+
+    文字の層の無いページ(スキャン)・回転したページ・縦書きの行は返さない(None)。PDF でない・
+    開けない原本も None。
+    """
+
+    def __init__(self, source_bytes: bytes) -> None:
+        self._source = source_bytes
+        self._document: Any = None
+        self._opened = False
+        self._pages: dict[int, list[_LineBox] | None] = {}
+
+    def close(self) -> None:
+        if self._document is not None:
+            self._document.close()
+            self._document = None
+
+    def lines_in(self, record: Mapping[str, Any]) -> list[_LineBox] | None:
+        """record の bbox の中の行(上から順。同じ高さの行はまとめる)。取れなければ None。"""
+        page_number = int(record.get("page") or 0)
+        bbox = record.get("bbox")
+        if (
+            str(record.get("coord_system") or "") != "image_top_left"
+            or not isinstance(bbox, list | tuple)
+            or len(bbox) < 4
+        ):
+            return None
+        page = self._page(page_number)
+        if page is None:
+            return None
+        page_lines, page_width, page_height = page
+        try:
+            scale_x = page_width / float(record.get("page_width") or 0)
+            scale_y = page_height / float(record.get("page_height") or 0)
+            x0, y0, x1, y1 = (float(value) for value in bbox[:4])
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+        margin = _RECORD_BBOX_MARGIN_PT
+        left, top = x0 * scale_x - margin, y0 * scale_y - margin
+        right, bottom = x1 * scale_x + margin, y1 * scale_y + margin
+        inside = [
+            line
+            for line in page_lines
+            if left <= (line[0] + line[2]) / 2 <= right and top <= (line[1] + line[3]) / 2 <= bottom
+        ]
+        rows = _merge_rows(inside)
+        return rows or None
+
+    def _page(self, page_number: int) -> tuple[list[_LineBox], float, float] | None:
+        if page_number < 1:
+            return None
+        if page_number not in self._pages:
+            self._pages[page_number] = self._read_page(page_number)
+        lines = self._pages[page_number]
+        if lines is None or self._document is None:
+            return None
+        rect = self._document[page_number - 1].rect
+        return lines, float(rect.width), float(rect.height)
+
+    def _read_page(self, page_number: int) -> list[_LineBox] | None:
+        document = self._open()
+        if document is None or page_number > len(document):
+            return None
+        try:
+            page = document[page_number - 1]
+            if page.rotation:
+                return None
+            payload = page.get_text("dict")
+        except Exception:  # noqa: BLE001 - 行の位置は補助。読めないページは文の終わりの規則だけ。
+            return None
+        lines: list[_LineBox] = []
+        for block in payload.get("blocks", []):
+            for line in block.get("lines", []) if isinstance(block, Mapping) else []:
+                direction = line.get("dir") or (1.0, 0.0)
+                text = "".join(str(span.get("text") or "") for span in line.get("spans", []))
+                box = line.get("bbox")
+                if not text.strip() or not isinstance(box, list | tuple) or len(box) < 4:
+                    continue
+                if abs(float(direction[1])) > 0.1 or float(direction[0]) <= 0:
+                    continue  # 縦書き・回転した行。
+                x0, y0, x1, y1 = (float(value) for value in box[:4])
+                if x1 > x0 and y1 > y0:
+                    lines.append((x0, y0, x1, y1))
+        return lines
+
+    def _open(self) -> Any:
+        if not self._opened:
+            self._opened = True
+            if self._source.startswith(b"%PDF"):
+                try:
+                    import fitz  # type: ignore[import-untyped]
+
+                    self._document = fitz.open(stream=self._source, filetype="pdf")
+                except Exception:  # noqa: BLE001 - 開けない PDF は文の終わりの規則だけ。
+                    self._document = None
+        return self._document
+
+
+def _merge_rows(lines: Sequence[_LineBox]) -> list[_LineBox]:
+    """縦に重なる行(同じ行が文字の層で分かれたもの)を 1 行にまとめ、上から順に並べる。"""
+    rows: list[_LineBox] = []
+    for line in sorted(lines, key=lambda item: (item[1], item[0])):
+        if rows:
+            last = rows[-1]
+            overlap = min(last[3], line[3]) - max(last[1], line[1])
+            height = min(last[3] - last[1], line[3] - line[1])
+            if height > 0 and overlap >= height * _SAME_ROW_OVERLAP:
+                rows[-1] = (
+                    min(last[0], line[0]),
+                    min(last[1], line[1]),
+                    max(last[2], line[2]),
+                    max(last[3], line[3]),
+                )
+                continue
+        rows.append(line)
+    return rows
 
 
 def _paragraph_continues(previous: str, current: str) -> bool:
