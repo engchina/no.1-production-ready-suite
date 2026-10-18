@@ -211,7 +211,7 @@ prepare_case() {
   grep -qxF "restorecon -R -e ${SUITE_REPO_DIR}/.claude/worktrees -e ${SUITE_REPO_DIR}/tmp ${SUITE_REPO_DIR}" "${calls}" \
     || fail "tmp を restorecon から外さない"
   : > "${calls}"
-  SUITE_SELINUX_EXCLUDE_DIRS="" configure_selinux >/dev/null
+  SUITE_REPO_EXCLUDE_DIRS="" configure_selinux >/dev/null
   grep -qxF "restorecon -R ${SUITE_REPO_DIR}" "${calls}" || fail "除外を空にしても repository 全体を辿らない"
   rm -rf "${SUITE_REPO_DIR}/.claude" "${SUITE_REPO_DIR}/tmp"
   grep -qx 'setsebool -P httpd_can_network_connect 1' "${calls}" || fail "Nginx から backend へ proxy できない"
@@ -531,6 +531,32 @@ done
   dnf() { printf 'dnf %s\n' "$*" >> "${calls}"; }
   suite_dnf install nginx > /dev/null 2>&1 || fail "成功したのに失敗した"
   [ "$(wc -l < "${calls}")" -eq 1 ] || fail "成功の後も試した"
+)
+
+# suite_chown_repo（suite-repo.sh。#2307）: 開発の worktree と一時ファイルを辿らずに所有者を変え、除外を空にすれば全体を変える。
+(
+  # shellcheck source=../suite-repo.sh
+  source "${repo}/platform/deploy/suite-repo.sh"
+  case_dir="$(mktemp -d "${task_dir}/chown.XXXXXX")"
+  repo_dir="${case_dir}/suite"
+  mkdir -p "${repo_dir}/.claude/worktrees/agent/frontend" "${repo_dir}/tmp/work" "${repo_dir}/rag/backend"
+  touch "${repo_dir}/.claude/worktrees/agent/frontend/a.jpeg" "${repo_dir}/tmp/work/b.md" "${repo_dir}/rag/backend/c.py"
+  ln -s rag "${repo_dir}/link"
+  calls="${case_dir}/chown.log"
+  # find -exec は関数を呼ばないので、PATH の先頭に chown の stub を置く（引数の -h と所有者を除いて path を記録する）。
+  mkdir -p "${case_dir}/bin"
+  printf '#!/usr/bin/env bash\nshift 2\nprintf "%%s\\n" "$@" >> "%s"\n' "${calls}" > "${case_dir}/bin/chown"
+  chmod +x "${case_dir}/bin/chown"
+  PATH="${case_dir}/bin:${PATH}"
+  suite_chown_repo "app:app" "${repo_dir}"
+  grep -qxF "${repo_dir}/rag/backend/c.py" "${calls}" || fail "repository のファイルの所有者を変えない"
+  grep -qxF "${repo_dir}/link" "${calls}" || fail "symlink の所有者を変えない"
+  if grep -qF -e "${repo_dir}/.claude/worktrees" -e "${repo_dir}/tmp" "${calls}"; then
+    fail "worktree・一時ファイルを辿った: $(cat "${calls}")"
+  fi
+  : > "${calls}"
+  SUITE_REPO_EXCLUDE_DIRS="" suite_chown_repo "app:app" "${repo_dir}"
+  grep -qxF "${repo_dir}/.claude/worktrees/agent/frontend/a.jpeg" "${calls}" || fail "除外を空にしても全体を辿らない"
 )
 
 echo "suite-init: pass"

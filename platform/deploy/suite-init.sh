@@ -43,6 +43,8 @@ SUITE_DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SUITE_DEPLOY_DIR}/suite-nginx.sh"
 # shellcheck source=suite-tls.sh
 source "${SUITE_DEPLOY_DIR}/suite-tls.sh"
+# shellcheck source=suite-repo.sh
+source "${SUITE_DEPLOY_DIR}/suite-repo.sh"
 # shellcheck source=suite-health.sh
 source "${SUITE_DEPLOY_DIR}/suite-health.sh"
 
@@ -230,19 +232,14 @@ selinux_enabled() {
   command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled
 }
 
-# repository の中で配備に使わないディレクトリ（repository からの相対。空白区切り）。開発用の worktree（#2032。
-# .venv・node_modules で大きい）と repository の中の一時ファイル（#1616）。systemd の service も Nginx も読まないので、
-# restorecon で辿らない（辿る間に消えると restorecon が失敗して配備が止まる。#2258）。
-SUITE_SELINUX_EXCLUDE_DIRS="${SUITE_SELINUX_EXCLUDE_DIRS-.claude/worktrees tmp}"
-
-# restorecon -R に渡す、存在する除外のディレクトリの -e（1 行に 1 つずつ。-e と path の 2 行）。
+# restorecon -R に渡す、repository の中で配備に使わないディレクトリ（suite-repo.sh の SUITE_REPO_EXCLUDE_DIRS。開発用の
+# worktree〔#2032〕と一時ファイル〔#1616〕）の -e（1 行に 1 つずつ。-e と path の 2 行）。systemd の service も Nginx も
+# 読まないので辿らない（辿る間に消えると restorecon が失敗して配備が止まる。#2258）。
 selinux_exclude_args() {
-  local dir
-  for dir in ${SUITE_SELINUX_EXCLUDE_DIRS}; do
-    if [ -d "${SUITE_REPO_DIR}/${dir}" ]; then
-      printf '%s\n%s\n' -e "${SUITE_REPO_DIR}/${dir}"
-    fi
-  done
+  local path
+  while IFS= read -r path; do
+    printf '%s\n%s\n' -e "${path}"
+  done < <(suite_repo_exclude_paths "${SUITE_REPO_DIR}")
 }
 
 # 製品の配備（venv・systemd の unit）の前に行う SELinux の設定。file context の規則は、同じ規則があれば

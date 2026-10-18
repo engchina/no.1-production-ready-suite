@@ -16,6 +16,8 @@ INIT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # backend の起動の待ち方（suite_wait_for_service_health。#1642）は platform の配備の共通の helper（製品は単独では配備しない）。
 # shellcheck source-path=SCRIPTDIR source=../platform/deploy/suite-health.sh
 source "${INIT_SCRIPT_DIR}/../platform/deploy/suite-health.sh"
+# shellcheck source-path=SCRIPTDIR source=../platform/deploy/suite-repo.sh
+source "${INIT_SCRIPT_DIR}/../platform/deploy/suite-repo.sh"
 
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
 APP_USER="${APP_USER:-opc}"
@@ -308,7 +310,9 @@ prepare_filesystem() {
   install -d -m 0755 -o "${APP_USER}" -g "${APP_GROUP}" \
     "${DATA_DIR}" "${DATA_DIR}/bindings" "${DATA_DIR}/artifacts"
   install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"
-  chown -R "${APP_USER}:${APP_GROUP}" "${SUITE_REPO_DIR}" "${DATA_DIR}" "${WALLET_DIR}"
+  # 開発の worktree・一時ファイルは辿らない（配備の途中で消えると chown が失敗する。#2307）。
+  suite_chown_repo "${APP_USER}:${APP_GROUP}" "${SUITE_REPO_DIR}"
+  chown -R "${APP_USER}:${APP_GROUP}" "${DATA_DIR}" "${WALLET_DIR}"
 }
 
 install_runtime_env() {
