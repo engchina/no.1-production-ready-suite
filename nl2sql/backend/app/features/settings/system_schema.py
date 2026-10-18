@@ -139,6 +139,7 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
     MigrationArtifact(
         22, "022_ontology_capability_transaction.sql", "atomic capability execution audit"
     ),
+    MigrationArtifact(23, "023_admin_audit_log.sql", "durable DB admin execution audit"),
 )
 
 # DROP 対象は必ずこの manifest に明記する。NL2SQL_* の prefix scan は使用しない。
@@ -172,6 +173,7 @@ MANAGED_TABLES: tuple[str, ...] = (
     "NL2SQL_EVALUATION_RESULTS",
     "NL2SQL_SYNTHETIC_LOCKS",
     "NL2SQL_SYNTHETIC_RUNS",
+    "NL2SQL_ADMIN_AUDIT_LOG",
 )
 
 MANAGED_INDEXES: tuple[str, ...] = (
@@ -200,6 +202,8 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "IX_NL2SQL_EVAL_JOB_LEASE",
     "UX_NL2SQL_PROFILES_NAME",
     "IX_NL2SQL_SYNTHETIC_STATE",
+    "IX_NL2SQL_ADMIN_AUDIT_TIME",
+    "IX_NL2SQL_ADMIN_AUDIT_ACTOR",
 )
 
 MANAGED_SEQUENCES: tuple[str, ...] = ("NL2SQL_MIGRATION_SNAPSHOT_SEQ",)

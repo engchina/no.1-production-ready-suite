@@ -171,6 +171,9 @@ _GRAPH_SCORE_DECAY = 0.5
 # 条の目録(#2254)の文字数の上限と、見出しの語の無い条に添える本文の書き出しの文字数
 # (MCP の rag_outline の compact の既定と同じ)。
 _ARTICLE_CATALOG_MAX_CHARS = 40000
+# 条の目録で選んだ条の context の理由(rag_engine の context_builder)と、根拠の役割(#2261)。
+CATALOG_ARTICLE_REASON = "catalog_article"
+CATALOG_ARTICLE_ROLE = "catalog_article"
 # 検索の範囲の条で構成された文書の一覧の cache((条件, 索引の状態) → 一覧。#2254)。
 _ARTICLE_DOCUMENTS_CACHE: dict[tuple[str, str], list[tuple[str, str]]] = {}
 _ARTICLE_CATALOG_LEAD_CHARS = 60
@@ -194,6 +197,24 @@ type StepCallback = Callable[[str, str, float], Awaitable[None]]
 # (「質問の理解」「文書検索（1回目）」など、利用者向けの日本語)を付け、
 # 画面と時間切れの文言はその工程名を出す(#593)。
 ANSWER_STEP_STAGE_PREFIX = "answer_step:"
+
+
+# 工程の詳細の行の上限（rag_engine の記録も上限で切る。保存と画面の大きさを抑える。#2294）。
+_STEP_DETAILS_MAX_LINES = 20
+_STEP_DETAILS_LINE_MAX = 300
+
+
+def _step_details_lines(value: object) -> dict[str, list[str]]:
+    """工程の記録の詳細の行（文字列の list）を上限で切る。無ければ空の dict。"""
+
+    if not isinstance(value, list | tuple):
+        return {}
+    lines = [
+        text if len(text) <= _STEP_DETAILS_LINE_MAX else f"{text[:_STEP_DETAILS_LINE_MAX]}…"
+        for text in (str(item).strip() for item in value if isinstance(item, str))
+        if text
+    ][:_STEP_DETAILS_MAX_LINES]
+    return {"details": lines} if lines else {}
 
 
 def answer_step_stage(name: str) -> str:
@@ -386,6 +407,10 @@ def build_engine_settings(
         ),
         "RAG_ENGINE_ARTICLE_CATALOG_SCOPE_DOCUMENTS": str(
             settings.rag_article_catalog_scope_documents
+        ),
+        # 回答の最終の検証の入力の上限。
+        "RAG_ENGINE_ANSWER_VALIDATION_MAX_INPUT_BYTES": str(
+            settings.rag_answer_validation_max_input_bytes
         ),
         # 根拠の無い要求だけの再検索と予算(#1279)。
         "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL": (
@@ -2792,6 +2817,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
                     "chunk_id": chunk_id,
                     "role": str(child.get("retrieval_role") or ""),
                     "reason": str(child.get("context_reason") or ""),
+                    # 条の目録で選んだ条と、そのために足した親の chunk(#2261)。
+                    "catalog": CATALOG_ARTICLE_REASON
+                    in {child.get("context_reason"), parent.get("context_reason")},
                     "is_model_used": used,
                     # 回答での使われ方（confirmed=確かめた説明 / reference=参考。#2040）。
                     "answer_use": _answer_use(child) if used else None,
@@ -2835,7 +2863,13 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         if evidence.get("answer_use"):
             # 回答に使った箇所の使われ方（画面の件数・バッジと MCP の answer_use。#2040）。
             metadata["evidence_answer_use"] = evidence["answer_use"]
-        if ENTITY_EXPANSION_KEY in chunk.metadata and evidence["role"] in {"retrieved_anchor", ""}:
+        if evidence.get("catalog"):
+            # 条の目録で選んだ条(#2261)。MCP は検索の根拠の上限に数えず、後ろに足す。
+            metadata["evidence_role"] = CATALOG_ARTICLE_ROLE
+        elif ENTITY_EXPANSION_KEY in chunk.metadata and evidence["role"] in {
+            "retrieved_anchor",
+            "",
+        }:
             # 実体の 1 段の拡張で足した chunk は、検索で当たった chunk と分ける(#1362)。
             metadata["evidence_role"] = ENTITY_EXPANSION_ROLE
         if retrieval_rank > 0:
@@ -2881,6 +2915,8 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
                 if isinstance(step.get("llm_usage"), Mapping)
                 else {}
             ),
+            # この工程だけの詳細の行（選んだ条・検索文・件数など。段を開いて見る。#2294）。
+            **_step_details_lines(step.get("details")),
         }
         for step in result.execution_steps or ()
         if isinstance(step, Mapping)

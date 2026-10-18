@@ -96,6 +96,14 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         implies=(PROFILE_READ_PERMISSION, SCHEMA_READ_PERMISSION),
     ),
     _menu_permission("menu.history", "AI 活用", "実行履歴"),
+    # DB 管理チャット（#2264）。全種類の SQL を生成・実行できるので、既定はどのロールにも付けない
+    # （system_admin だけが使える）。付与は「自分の持つ権限だけを付与できる」規則で越権を防ぐ。
+    _menu_permission(
+        "menu.db_admin_chat",
+        "データ準備",
+        "DB 管理チャット",
+        implies=(SCHEMA_READ_PERMISSION, SCHEMA_REFRESH_PERMISSION),
+    ),
     _menu_permission(
         "menu.admin_sql",
         "データ準備",
@@ -415,6 +423,7 @@ SCHEMA_READ_MENUS = frozenset(
     {
         "menu.query",
         "menu.direct_sql",
+        "menu.db_admin_chat",
         "menu.admin_sql",
         "menu.table_management",
         "menu.view_management",
@@ -642,6 +651,7 @@ SECURITY_USER_ROLE_ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
 
 # ---- ROUTE_PERMISSIONS で使う権限の組（いずれかを持てば通す） ----
 _ADMIN_SQL = _allowed("menu.admin_sql")
+_DB_ADMIN_CHAT = _allowed("menu.db_admin_chat")
 _ANNOTATION_MANAGEMENT = _allowed("menu.annotation_management")
 _COMMENT_MANAGEMENT = _allowed("menu.comment_management")
 _EVALUATION = _allowed("menu.evaluation")
@@ -838,6 +848,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/nl2sql/feedback/admin-review"): _FEEDBACK_MANAGE,
     ("DELETE", "/nl2sql/feedback/{history_id}"): _FEEDBACK_WRITE,
     # ---- データ準備: DB 管理（表・ビュー・データ・管理 SQL） ----
+    # DB 管理チャット（#2264）。管理 SQL を実行の権限では代わりにしない。
+    ("POST", "/nl2sql/db-admin-chat/analyze-error"): _DB_ADMIN_CHAT,
+    ("POST", "/nl2sql/db-admin-chat/execute"): _DB_ADMIN_CHAT,
+    ("POST", "/nl2sql/db-admin-chat/generate"): _DB_ADMIN_CHAT,
     ("POST", "/nl2sql/db-admin/analyze-error"): _ADMIN_SQL,
     ("POST", "/nl2sql/db-admin/drop-table"): _allowed("menu.table_management"),
     ("POST", "/nl2sql/db-admin/drop-view"): _allowed("menu.view_management"),

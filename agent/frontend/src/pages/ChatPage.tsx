@@ -76,6 +76,7 @@ import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { answerSources, type RagEvidenceView } from "@/lib/rag-evidence";
+import { withToolStepDetails } from "@/lib/run-history";
 import { runToolResultTables } from "@/lib/run-tables";
 import { runStatusView, stepStatusView } from "@/lib/status-labels";
 import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-state";
@@ -913,6 +914,11 @@ function RunChatTurn({
       if (stoppable) onProgressTerminal();
     },
   });
+  // ツールの段に、Run の step の引数・結果・エラーを段を開いて見る詳細として結ぶ（実行の詳細と同じ対応。#2294）。
+  // 結果は会話の取り直し（実行中は 1.5 秒ごと・終わったとき）で届く。
+  const progressSteps = progress.progressProps.steps;
+  const runSteps = run.steps;
+  const stepsWithDetails = useMemo(() => withToolStepDetails(progressSteps, runSteps), [progressSteps, runSteps]);
 
   return (
     // 1 往復の入れ物（質問の吹き出し・回答の枠）は 3 製品共通の ChatTurn / ChatAnswer（#1161）。
@@ -939,6 +945,7 @@ function RunChatTurn({
         {/* 承認・回答前の確認の答えは人の操作を待つので、遅延の案内を出さない（実行の詳細と同じ。#1839）。 */}
         <ChatProgress
           {...progress.progressProps}
+          steps={stepsWithDetails}
           startedAt={run.created_at}
           slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}
           testId="chat-progress"

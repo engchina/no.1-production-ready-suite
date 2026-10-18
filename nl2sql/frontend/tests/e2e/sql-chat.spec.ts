@@ -1350,13 +1350,34 @@ for (const width of [1280, 375]) {
     // SSE は受け取った記録の続き（`since`）から開く。
     expect(streams.length).toBeGreaterThan(0);
     // 完了は会話の取り直しで届く（記録に終端が入る）。
+    const generatedSql = "SELECT CATEGORY, SUM(AMOUNT) FROM APP.SALES GROUP BY CATEGORY";
     Object.assign(state.turns[0], {
       status: "done",
       finished_at: iso(0),
-      progress_events: undefined,
+      // 終わった段階には backend が段を開いて見る詳細を付ける（#2294。生成した SQL・安全性の確認の結果）。
+      progress_events: jobProgressEvents("chat-1", {
+        at: createdAt,
+        terminal: "done",
+        steps: {
+          queue: "done",
+          prepare_context: "done",
+          generate_sql: {
+            status: "done",
+            params: { engine: "select_ai" },
+            details: { code: [{ label: "生成した SQL", language: "sql", text: generatedSql }] },
+          },
+          safety_check: {
+            status: "done",
+            params: { tables: "APP.SALES", table_count: 1 },
+            details: { fields: [{ label: "結果", value: "安全" }, { label: "参照した表", value: "APP.SALES", mono: true }] },
+          },
+          execute_sql: { status: "done", params: { rows: 3 } },
+          format_results: "done",
+        },
+      }),
       steps: [],
       result: {
-        generated_sql: "SELECT CATEGORY, SUM(AMOUNT) FROM APP.SALES GROUP BY CATEGORY",
+        generated_sql: generatedSql,
         original_question: "カテゴリ別売上",
         explanation: "",
         safety: { is_safe: true, referenced_tables: ["APP.SALES"] },
@@ -1365,6 +1386,19 @@ for (const width of [1280, 375]) {
     const progress = page.getByTestId("sql-chat-turn").getByTestId("sql-chat-progress");
     await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
     await expect(progress.getByTestId("sql-chat-progress-summary")).toHaveText(/^処理の経過（6 ステップ・/);
+    // 詳細のある段だけに開閉のボタンが付き、既定で閉じる（#2294）。
+    await progress.getByTestId("sql-chat-progress-summary").click();
+    await expect(progress.getByTestId("sql-chat-progress-step-queue-toggle")).toHaveCount(0);
+    const toggle = progress.getByTestId("sql-chat-progress-step-generate_sql-toggle");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(progress.getByTestId("sql-chat-progress-step-generate_sql-details").getByLabel("生成した SQL")).toHaveText(
+      generatedSql,
+    );
+    await progress.getByTestId("sql-chat-progress-step-safety_check-toggle").click();
+    await expect(progress.getByTestId("sql-chat-progress-step-safety_check-details")).toContainText("安全");
+    expect(await noHorizontalOverflow(page)).toBeLessThanOrEqual(0);
   });
 }
 

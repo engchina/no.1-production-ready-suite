@@ -10,6 +10,7 @@ import { DisclosureChevron } from "../ui/disclosure-chevron";
 import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
 import { formatRunDateTime, formatRunDuration, formatRunTokens } from "./run-history";
+import { hasRunStepDetails, RunStepDetailsView, type RunStepDetails } from "./run-step-details";
 import { DEFAULT_RUN_STATUS_LABELS, RunStatusBadge, type RunStatus, type RunStatusLabels } from "./run-status";
 
 /*
@@ -48,6 +49,8 @@ export interface RunDetailLabels {
   timelineSummary: (count: number, duration: string) => string;
   /** 段の状態（アイコンに添える読み上げ・失敗とスキップは画面にも出す）。 */
   stepStatus: Record<RunTimelineStepStatus, string>;
+  /** 段の詳細（`RunTimelineStep.details`）の長さを切ったときの印。 */
+  stepDetailsTruncated: string;
   status: RunStatusLabels;
 }
 
@@ -80,6 +83,7 @@ export const DEFAULT_RUN_DETAIL_LABELS: RunDetailLabels = {
     failed: "失敗",
     skipped: "スキップ",
   },
+  stepDetailsTruncated: "長い内容は先頭だけを表示しています。",
   status: DEFAULT_RUN_STATUS_LABELS,
 };
 
@@ -338,7 +342,12 @@ export interface RunTimelineStep {
   detail?: string;
   /** 段の右に並べるバッジ（token・試行の回数など）。 */
   meta?: ReactNode;
-  /** 開いて見る中身（ツールの引数と結果・SQL・エラー）。渡すと行に開閉のボタンが付く。 */
+  /**
+   * 開いて見る詳細（見出しと値・行・SQL や JSON の箱・省略の印。#2294）。中身があれば行に開閉のボタンが付く。
+   * 製品は記録をこの形に写すだけにし、描き方は部品が持つ（チャットの処理の経過と実行の詳細で同じ形）。
+   */
+  details?: RunStepDetails;
+  /** 開いて見る自由な中身（結果の表など。`details` の下に出す）。渡すと行に開閉のボタンが付く。 */
   children?: ReactNode;
   /**
    * 入れ子の深さ（0 = 段、1 以上 = 段の中のツールの呼び出し・工程）。字下げは 3 段で止める（375px で名前の幅を残す）。
@@ -454,7 +463,10 @@ export interface RunTimelineProps {
   size?: "sm" | "md";
   /** 段の所要時間の表記。既定は `formatRunDuration`（「0.4 秒」「1 分 5 秒」）。 */
   formatDuration?: (ms: number) => string;
-  /** 行に `data-testid="<stepTestIdPrefix>-step-<id>"` を付ける（`ChatProgress` は自分の testId を渡す）。 */
+  /**
+   * 行に `data-testid="<stepTestIdPrefix>-step-<id>"` を付ける（`ChatProgress` は自分の testId を渡す）。開閉の
+   * ボタンは `<…>-step-<id>-toggle`、開いた詳細は `<…>-step-<id>-details`。
+   */
   stepTestIdPrefix?: string;
   labels?: RunDetailLabelsInput;
   testId?: string;
@@ -488,7 +500,9 @@ export function RunTimeline({
   const idPrefix = useId();
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(
-      steps.filter((step) => step.children != null).map((step) => [step.id, defaultExpanded || step.status === "failed"])
+      steps
+        .filter((step) => step.children != null || hasRunStepDetails(step.details))
+        .map((step) => [step.id, defaultExpanded || step.status === "failed"])
     )
   );
   const summedMs = steps.reduce((sum, step) => sum + (step.level ? 0 : stepDurationMs(step) ?? 0), 0);
@@ -512,7 +526,9 @@ export function RunTimeline({
         {steps.map((step, index) => {
           const duration = stepDurationMs(step);
           const bar = showBars ? bars[index] : null;
-          const hasDetails = step.children != null;
+          const details = hasRunStepDetails(step.details) ? step.details : undefined;
+          const hasDetails = step.children != null || details !== undefined;
+          const stepTestId = stepTestIdPrefix ? `${stepTestIdPrefix}-step-${step.id}` : undefined;
           const open = hasDetails && Boolean(expanded[step.id]);
           const regionId = `${idPrefix}-step-${index}`;
           const visibleStatus = step.status === "failed" || step.status === "skipped" || step.status === "waiting";
@@ -531,7 +547,7 @@ export function RunTimeline({
               data-status={step.status}
               data-level={level > 0 ? String(level) : undefined}
               data-run-timeline-step={step.id}
-              data-testid={stepTestIdPrefix ? `${stepTestIdPrefix}-step-${step.id}` : undefined}
+              data-testid={stepTestId}
             >
               {/* 線の列と時間の列の幅を全行で同じにし、線の始まりをそろえる（字下げは名前の列の中だけ）。 */}
               <div
@@ -550,6 +566,8 @@ export function RunTimeline({
                       className="pr-touch-target relative inline-flex min-w-0 max-w-full cursor-pointer items-start gap-1 rounded-sm text-left hover:underline hover:underline-offset-2"
                       aria-expanded={open}
                       aria-controls={regionId}
+                      data-run-timeline-toggle=""
+                      data-testid={stepTestId ? `${stepTestId}-toggle` : undefined}
                       onClick={() => setExpanded((current) => ({ ...current, [step.id]: !current[step.id] }))}
                     >
                       {name}
@@ -592,8 +610,16 @@ export function RunTimeline({
                   hidden={!open}
                   className="mt-2 mb-1 ml-6 grid min-w-0 gap-2 rounded-md border border-border bg-surface-sunken p-3 text-sm"
                   data-run-timeline-details=""
+                  data-testid={stepTestId ? `${stepTestId}-details` : undefined}
                 >
-                  {open ? step.children : null}
+                  {open ? (
+                    <>
+                      {details ? (
+                        <RunStepDetailsView details={details} labels={{ truncated: labels.stepDetailsTruncated }} />
+                      ) : null}
+                      {step.children}
+                    </>
+                  ) : null}
                 </div>
               ) : null}
             </li>

@@ -68,6 +68,19 @@ describe("answerProcessStepsFromStages（RAG 検索）", () => {
     expect(byLabel("検索結果の並べ替え").meta).toBe("該当なし");
   });
 
+  it("回答の記録の工程の詳細の行を、段を開いて見る詳細にする", () => {
+    const rows = answerProcessStepsFromStages(
+      [stage("answer_step:質問の理解", "started"), stage("answer_step:質問の理解", "success", 120)],
+      {
+        terminal: "done",
+        executionSteps: [
+          { name: "質問の理解", status: "complete", elapsedSeconds: 0.1, llmCalls: 1, details: ["結果: 条件 2 件"] },
+        ],
+      }
+    );
+    expect(rows[0].details).toEqual({ lines: ["結果: 条件 2 件"] });
+  });
+
   it("停止した検索の実行中の工程はスキップにする", () => {
     const rows = answerProcessStepsFromStages(
       [stage("answer_step:文書検索", "started"), stage("answer_step:文書検索", "cancelled")],

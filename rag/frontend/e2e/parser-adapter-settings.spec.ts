@@ -139,7 +139,7 @@ async function mockParserAdaptersWithPostParse(
   initial: { vision_enabled: boolean; field_extraction_enabled: boolean; navigation_summary_enabled: boolean }
 ) {
   const patches: Record<string, unknown>[] = [];
-  let current = { ...initial };
+  let current = { heading_level_inference_enabled: false, ...initial };
   const envelope = () =>
     parserAdapterEnvelope({
       ...current,
@@ -215,7 +215,7 @@ async function mockStandardExtractionFields(page: Page) {
 }
 
 for (const scheme of ["light", "dark"] as const) {
-  test(`解析後の処理は Vision・項目抽出・章節木を処理順に並べ、全体の既定を保存する (${scheme})`, async ({
+  test(`解析後の処理は Vision・見出しの階層・項目抽出・章節木を処理順に並べ、全体の既定を保存する (${scheme})`, async ({
     page,
   }, testInfo) => {
     // #528: Vision は解析エンジンに関係なく使えるので、全体の既定の入口をこの画面に置く。
@@ -233,9 +233,15 @@ for (const scheme of ["light", "dark"] as const) {
     const card = page.getByRole("heading", { name: "解析後の処理", exact: true }).locator("xpath=ancestor::*[.//ol][1]");
     await expect(card.getByRole("heading", { level: 3 })).toHaveText([
       "1. 図・画像を AI で読み取る",
-      "2. メタデータ/項目抽出",
-      "3. ナビゲーション要約(章節木)",
+      "2. 見出しの階層の推定（AI）",
+      "3. メタデータ/項目抽出",
+      "4. ナビゲーション要約(章節木)",
     ]);
+    // 見出しの階層の推定は既定で無効（#2277）。
+    await expect(page.getByRole("switch", { name: "見出しの階層の推定（AI）" })).toHaveAttribute(
+      "aria-checked",
+      "false"
+    );
     await expect(card).toContainText("解析エンジンに関係なく");
     await expect(card).toContainText("既定の画像対応モデル");
     await expect(card.getByRole("link", { name: "モデル設定を開く" })).toHaveAttribute("href", "/settings/model");
@@ -261,6 +267,7 @@ for (const scheme of ["light", "dark"] as const) {
     expect(patches).toEqual([
       {
         vision_enabled: true,
+        heading_level_inference_enabled: false,
         field_extraction_enabled: true,
         navigation_summary_enabled: false,
         vision_concurrency: 4,
@@ -301,6 +308,7 @@ test("図・表の説明を同時に呼ぶ数を検証して保存する（#2002
   expect(patches).toEqual([
     {
       vision_enabled: true,
+      heading_level_inference_enabled: false,
       field_extraction_enabled: false,
       navigation_summary_enabled: false,
       vision_concurrency: 6,

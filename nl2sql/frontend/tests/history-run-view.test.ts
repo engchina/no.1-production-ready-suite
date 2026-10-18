@@ -149,9 +149,40 @@ test("timeline steps follow the recorded stages with engine attempts under SQL g
       ["safety_check-3", "failed", 0, 15, 211],
     ]
   );
-  assert.equal(steps[2].error, "team execution failed");
+  // 段を開いて見る詳細（#2294）: 試行の失敗の文・安全性の確認の結果。書き換えの無い準備は詳細を付けない。
+  assert.deepEqual(steps[2].details, { fields: [{ label: "エラー", value: "team execution failed" }] });
+  assert.equal(steps[3].details, undefined);
+  assert.equal(steps[0].details, undefined);
+  assert.deepEqual(steps[4].details, { fields: [{ label: "結果", value: "遮断" }] });
   assert.ok(steps.every((step) => !step.label.includes("_")));
   assert.deepEqual(historyTimelineSteps(base), []);
+});
+
+test("timeline step details come from the recorded rewritten question, safety and rows", () => {
+  const steps = historyTimelineSteps({
+    ...base,
+    rewritten_question: "書き換えた質問 A",
+    result_row_count: 1234,
+    result_columns: ["COL_A", "COL_B"],
+    stage_timings: [
+      { stage: "prepare_context", elapsed_ms: 20 },
+      { stage: "safety_check", elapsed_ms: 15 },
+      { stage: "execute_sql", elapsed_ms: 40 },
+    ],
+  });
+  assert.deepEqual(
+    steps.map((step) => step.details),
+    [
+      { fields: [{ label: "生成に使った質問", value: "書き換えた質問 A" }] },
+      { fields: [{ label: "結果", value: "安全" }] },
+      {
+        fields: [
+          { label: "取得した行数", value: "1,234 行" },
+          { label: "列", value: "COL_A, COL_B", mono: true },
+        ],
+      },
+    ]
+  );
 });
 
 test("detail path opens the run by id", () => {

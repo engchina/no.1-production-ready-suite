@@ -697,7 +697,11 @@ def test_retrieve_evidence_appends_catalog_articles_outside_the_limit(
         ]
         return SearchResponse(
             answer="",
-            citations=[_chunk(f"c{index}", used=False) for index in range(3)],
+            # context に足した選んだ条（role=catalog_article）は上限に数えない（#2261）。
+            citations=[
+                _chunk("ctx-art", used=False, evidence_role="catalog_article"),
+                *[_chunk(f"c{index}", used=False) for index in range(3)],
+            ],
             trace_id="trace-a",
             elapsed_ms=1.0,
             diagnostics=SearchDiagnostics(answer={"article_catalog": {"articles": articles}}),
@@ -712,8 +716,8 @@ def test_retrieve_evidence_appends_catalog_articles_outside_the_limit(
         _token(user.user_uuid),
     )["structuredContent"]
 
-    assert [item["chunk_id"] for item in body["evidence"]] == ["c0", "c1", "art-2"]
-    assert body["evidence"][-1]["role"] == "catalog_article"
+    assert [item["chunk_id"] for item in body["evidence"]] == ["c0", "c1", "ctx-art", "art-2"]
+    assert [item["role"] for item in body["evidence"][2:]] == ["catalog_article"] * 2
     assert body["evidence_omitted"] == 1
     assert loaded == [("doc-law", "art-gone"), ("doc-law", "art-2")]
 

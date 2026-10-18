@@ -121,6 +121,7 @@ jobs:
           set +a
           uv run pytest -rs --junitxml="${RUNNER_TEMP}/junit.xml" \
             tests/test_domain_management_oracle_live.py \
+            tests/test_nl2sql_admin_audit_oracle_live.py \
             tests/test_nl2sql_history_sort_oracle_live.py \
             tests/test_nl2sql_profile_delete_oracle_live.py \
             tests/test_nl2sql_synthetic_preview_oracle_live.py

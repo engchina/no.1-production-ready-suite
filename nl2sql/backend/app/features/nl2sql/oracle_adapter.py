@@ -1735,9 +1735,18 @@ class OracleNl2SqlAdapter:
             raise OracleAdapterError(f"生成用サンプルの取得に失敗しました: {exc}") from exc
         return samples, warnings
 
-    def execute_select(self, sql: str, max_rows: int | None) -> QueryResults:
+    def execute_select(
+        self, sql: str, max_rows: int | None, *, admin_control_plane: bool = False
+    ) -> QueryResults:
+        """SELECT を実行する。`admin_control_plane=True` は DB 管理チャット（#2264）の SELECT で、
+        利用者に関係なくアプリのユーザーの管理の接続（`connection()`。管理 SQL の更新系と同じ、
+        pool を使わない単発の接続）で読む。DeepSec の DATA USER・業務の実行の pool は使わない。
+        """
+        connection_cm = (
+            self.connection() if admin_control_plane else self.user_data_connection(read_only=True)
+        )
         try:
-            with self.user_data_connection(read_only=True) as conn, conn.cursor() as cursor:
+            with connection_cm as conn, conn.cursor() as cursor:
                 cursor.execute(sql)
                 column_names = [description[0] for description in cursor.description or []]
                 # 既存の一意な名前を予約してから重名列へキーを割り当てる。
@@ -1782,7 +1791,8 @@ class OracleNl2SqlAdapter:
 
             actor = current_actor_context()
             vpd_context_enforced = (
-                self.settings.oracle_deepsec_enabled
+                not admin_control_plane
+                and self.settings.oracle_deepsec_enabled
                 and bool(actor.user_uuid)
                 and not actor.is_system_admin
             )
@@ -1794,7 +1804,11 @@ class OracleNl2SqlAdapter:
                 has_more=has_more,
                 truncated=has_more,
                 execution_context=(
-                    "deepsec_data_plane" if vpd_context_enforced else "oracle_data_plane"
+                    "admin_control_plane"
+                    if admin_control_plane
+                    else "deepsec_data_plane"
+                    if vpd_context_enforced
+                    else "oracle_data_plane"
                 ),
                 vpd_context_enforced=vpd_context_enforced,
             )

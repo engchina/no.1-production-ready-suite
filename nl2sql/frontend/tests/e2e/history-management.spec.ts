@@ -562,6 +562,17 @@ test("詳細は概要 → 処理の経過 → SQL と結果 → フィードバ�
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await page.keyboard.press("Enter");
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  // 段の詳細（#2294）: 記録の値（書き換えた質問・安全性の確認・行数と列）がある段だけを開ける。既定で閉じる。
+  await expect(timeline.locator('[data-run-timeline-step="generate_sql-1"] [data-run-timeline-toggle]')).toHaveCount(0);
+  const prepare = timeline.locator('[data-run-timeline-step="prepare_context-0"]');
+  const prepareToggle = prepare.locator("[data-run-timeline-toggle]");
+  await expect(prepareToggle).toHaveAttribute("aria-expanded", "false");
+  await prepareToggle.click();
+  await expect(prepare.locator("[data-run-timeline-details]")).toContainText("生成に使った質問");
+  const execute = timeline.locator('[data-run-timeline-step="execute_sql-3"]');
+  await execute.locator("[data-run-timeline-toggle]").click();
+  await expect(execute.locator("[data-run-timeline-details]")).toContainText("2 行");
+  await expect(execute.locator("[data-run-timeline-details]")).toContainText("CUSTOMER_NAME");
 
   // SQL と結果: 実行した SQL とコピー、結果の要約（行数・列）。
   const sql = page.getByTestId("history-detail-sql");

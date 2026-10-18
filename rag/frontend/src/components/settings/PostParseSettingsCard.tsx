@@ -29,7 +29,11 @@ import { AnswerPromptPanel } from "./AnswerPromptEditor";
 import { ExtractionFieldsEditor } from "./ExtractionFieldsEditor";
 import { SectionRulesEditor } from "./SectionRulesEditor";
 
-type PostParseField = "vision_enabled" | "field_extraction_enabled" | "navigation_summary_enabled";
+type PostParseField =
+  | "vision_enabled"
+  | "heading_level_inference_enabled"
+  | "field_extraction_enabled"
+  | "navigation_summary_enabled";
 type PostParseForm = Record<PostParseField, boolean> & {
   /** 図・表の説明（Vision）を同時に呼ぶ数の上限（入力中の文字列。#2002）。 */
   vision_concurrency: string;
@@ -48,7 +52,10 @@ export function parseVisionConcurrency(value: string): number | null {
   return parsed >= VISION_CONCURRENCY_MIN && parsed <= VISION_CONCURRENCY_MAX ? parsed : null;
 }
 
-/** 解析の後の処理の順（取込の `_attach_vision` → `_attach_extraction_fields` → `_attach_navigation_tree`）。 */
+/**
+ * 解析の後の処理の順（取込の `_attach_vision` → `_attach_heading_levels` → `_attach_extraction_fields`
+ * → `_attach_navigation_tree`）。
+ */
 const POST_PARSE_STEPS: readonly {
   field: PostParseField;
   label: I18nKey;
@@ -60,6 +67,12 @@ const POST_PARSE_STEPS: readonly {
     label: "knowledgeBases.adapter.field.vision",
     hint: "settings.parserAdapters.postParse.vision.hint",
     anchor: SETTINGS_ANCHORS.vision,
+  },
+  {
+    field: "heading_level_inference_enabled",
+    label: "knowledgeBases.adapter.field.headingLevels",
+    hint: "settings.parserAdapters.postParse.headingLevels.hint",
+    anchor: SETTINGS_ANCHORS.headingLevels,
   },
   {
     field: "field_extraction_enabled",
@@ -78,6 +91,7 @@ const POST_PARSE_STEPS: readonly {
 function formFromSettings(settings: ParserAdapterSettingsData): PostParseForm {
   return {
     vision_enabled: settings.vision_enabled,
+    heading_level_inference_enabled: settings.heading_level_inference_enabled ?? false,
     field_extraction_enabled: settings.field_extraction_enabled,
     navigation_summary_enabled: settings.navigation_summary_enabled,
     vision_concurrency: String(settings.vision_concurrency ?? VISION_CONCURRENCY_DEFAULT),
@@ -136,6 +150,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
     }
     const payload = {
       vision_enabled: form.vision_enabled,
+      heading_level_inference_enabled: form.heading_level_inference_enabled,
       field_extraction_enabled: form.field_extraction_enabled,
       navigation_summary_enabled: form.navigation_summary_enabled,
       vision_concurrency: concurrency,
@@ -184,6 +199,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
         <VisionExtras />
       </>
     ),
+    heading_level_inference_enabled: null,
     field_extraction_enabled: (
       <>
         {form.field_extraction_enabled && fieldCount === 0 ? (

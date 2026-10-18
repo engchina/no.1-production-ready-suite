@@ -144,7 +144,7 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
 - **承認・再開・Agent 自身の確認への回答は、Run を実行した人と system_admin だけ**（#1928・#1954）: Run の利用者の権限で実行し直すため、低い権限の人（会話の持ち主を含む）に高い権限の実行を進めさせない。持ち主の画面には「システム管理者（〈名前〉）の承認・回答を待っています」と「自分で質問し直す」（持ち主の権限で新しい Run）を出し、system_admin の「承認」の一覧には自分が他の利用者の会話で始めた Run の待ちも出す。
 - **送る前の案内**（#1954）: system_admin が他の利用者の会話で入力するとき、入力欄の直上に「この会話の持ち主にも、回答と途中の結果が見えます」（`ChatComposer` の `notice`）を出す。
 - system_admin の一覧には「利用者」の列（共通の表示名。`AuthService.display_identities`。#1696）を出し、自分だけを見る利用者には出さない。
-- 「AI 活用」の外（改善・運用の監査・利用状況・フィードバック管理・品質評価など）は、この規則の対象外で、それぞれの画面の権限のまま。製品ごとの割り当て（例外を含む）は各製品の権限の文書（RAG `AGENTS.md`、NL2SQL `docs/security-rbac-deepsec.md`、Agent `docs/security-rbac.md`）に書く。
+- 「AI 活用」の外（改善・運用の監査・利用状況・フィードバック管理・品質評価など）は、この規則の対象外で、それぞれの画面の権限のまま。製品ごとの割り当て（例外を含む）は各製品の権限の文書（RAG `docs/agents/ui.md`、NL2SQL `docs/security-rbac-deepsec.md`、Agent `docs/security-rbac.md`）に書く。
 
 ## チャットの処理の段階の配信（#1359）
 
@@ -221,7 +221,7 @@ in-process へ縮退せず、MCP の `rag_search` が止まった）。
 - Oracle の `OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY` は `offset_fetch_clause()`（bind 名は `offset_bind` / `limit_bind` で変えられる）と `offset_fetch_binds()`。
 - 画面の一覧の既定の `limit` は共通の `DEFAULT_PAGE_LIMIT`（25 件。frontend の `DEFAULT_PAGE_SIZE` と同じ。#1952）。画面の一覧の endpoint は `offset_params(default=DEFAULT_PAGE_LIMIT, …)` にし、製品で 10 などの数を書かない。
 - 権限管理の「利用できる対象」の一覧の上限は共通の `ACCESS_TARGET_PAGE_LIMIT_MAX`（100）。
-- frontend は共通の `OffsetPagination` / `CursorPagination`（ルートの AGENTS.md「読み込み中・一覧・ページング」）。
+- frontend は共通の `OffsetPagination` / `CursorPagination`（ルートの `docs/agents/ui.md`「読み込み中・一覧・ページング」）。
 
 ### 入力の検証エラー（422）の文（#1065）
 
@@ -253,7 +253,7 @@ API・worker・RAG の独立微サービス・browser の共通 schema、JST 時
 
 ## 設定（`.env`）の変数名（#211）
 
-規則の要点（共通の `platform/.env` と製品の `backend/.env` の分け方）はルートの `AGENTS.md`「設定（`.env`）とデータベース object の命名」。
+規則の要点（共通の `platform/.env` と製品の `backend/.env` の分け方）はルートの `docs/agents/naming.md`（設定（`.env`）とデータベース object の命名）。
 
 - 環境変数名は Settings の属性名から `pr_backend_core.config.product_settings_config` が決める。共通の属性（`PLATFORM_SETTING_FIELDS`）は `PLATFORM_` + 属性名（先頭の `app_` は除く）、それ以外は製品の接頭辞（`RAG_` / `NL2SQL_` / `AGENT_`）+ 属性名（接頭辞で始まる属性には重ねない）。
 - 3 製品共通の設定を足すときは、`PLATFORM_SETTING_FIELDS` と `platform/.env.example` に加える。

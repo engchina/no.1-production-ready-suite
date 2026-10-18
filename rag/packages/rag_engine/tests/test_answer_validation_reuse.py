@@ -99,7 +99,7 @@ def test_only_unmatched_passages_go_to_the_model() -> None:
                         "answer_quote": "段落",
                         "answer_passage_id": item["id"],
                         "status": "supported",
-                        "evidence_id": payload["evidence_items"][0]["evidence_id"],
+                        "evidence_id": [i for i in payload["evidence_items"] if i.get("id") != "question:1"][0]["evidence_id"],
                         "source_id": "",
                         "evidence_quote": "",
                         "reason": "根拠に記載",

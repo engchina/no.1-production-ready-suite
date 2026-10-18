@@ -46,7 +46,14 @@ from rag_engine.generation.operation_audit import is_non_claim_passage, list_hea
 #    当てはめた結論を裏付けられるようにした（前提は資料の内容の裏付けには使わない。#1898）。
 # 9: 業務データの照会の結果（data_results）を資料ではない根拠として並べ、結果の値をそのまま述べた段落と、資料の規則を
 #    結果の値に当てはめた結論を裏付けられるようにした（照会の結果は資料の内容の裏付けには使わない。#1950）。
-VALIDATION_RUBRIC_VERSION = 9
+# 10: 質問の文を資料ではない根拠として並べ、質問の事実をそのまま述べた段落と、資料の規則を質問の事実に当てはめた結論・
+#     計算を裏付けられるようにした（質問は資料の内容の裏付けには使わない）。根拠の予算を設定にした。
+VALIDATION_RUBRIC_VERSION = 10
+
+# 質問の文（資料ではない根拠）の id と出典の名前。資料の chunk の id とは重ならない。
+QUESTION_ID = "question:1"
+QUESTION_SOURCE = "質問の記載（資料ではない）"
+_MAX_QUESTION_FACT_CHARS = 8000
 
 # 利用者の前提（#1898）を根拠と並べるときの id の接頭辞と出典の名前。資料の chunk の id とは重ならない。
 PREMISE_ID_PREFIX = "premise:"
@@ -80,8 +87,16 @@ VALIDATION_SYSTEM_PROMPT = (
 - answer_passages は回答を原文のまま分けた ID 付きの段落。全ての ID を各 1 回以上含め、answer_passage_id に ID を指定する（answer_quote は空でよい）。
 - 段落に複数の主張があれば同じ ID で個別に確認してよい。1 つの段落の判定が分かれるときは最も厳しいものを記録する。
 - supported: evidence_items がその主張を明確に裏付ける。矛盾がないだけでは supported にしない。evidence_id に evidence_items の evidence_id を指定する。
+- evidence_items の先頭の、source が「"""
+    + QUESTION_SOURCE
+    + """」の項目（id が """
+    + QUESTION_ID
+    + """）は質問の文で、資料ではない。質問が述べる状況（人物・金額・日付・期間・経緯など）は確かめた事実として扱い、「質問の情報なので根拠に無い」を unsupported の理由にしない。
+- 段落が質問の事実をそのまま述べるなら、質問の項目の evidence_id で supported にする。
+- 資料の規則・条件・算式を質問の事実に当てはめた結論・計算（「年収 120 万円は 130 万円未満なので収入の要件を満たす」など）は、規則の根拠と質問の項目の evidence_id を「,」で区切って書き、規則が資料の根拠で裏付けられ、結論・計算がその規則と質問の事実から直接に従う（計算・期間・日付の数え方が正しい）ときだけ supported にする。質問にも資料にも無い事実・値を使った結論は unsupported にする。
+- 質問の文は、資料・規程・条文・手順・数値の基準の内容の裏付けには使わない。
 - 2 つ以上の根拠を合わせて裏付ける主張（ある根拠で対象の区分・担当を確かめ、別の根拠でその区分・担当の規則を確かめる多段の結論など）は、使った根拠の evidence_id をすべて「,」で区切って evidence_id に書く。
-- evidence_id は evidence_items の evidence_id の値を省かず・短くせずにそのまま書く。
+- evidence_id は evidence_items の evidence_id の値（E で始まる値）を省かず・短くせずにそのまま書く。id（chunk の id）や回答に書かれた ID を evidence_id に書かない。
 - 回答に書かれた根拠の ID（【証拠 ID …】など）は evidence_items の id に当たる。ID の照合はシステムが行うので、ID の書き方ではなく裏付けの有無で判定する。
 - 段落に根拠の ID が無い（結論・まとめの段落など）ときは、その主張を裏付ける evidence_items を選び、その evidence_id を evidence_id に書く。
 - citation_error は、段落が書いた根拠の ID が evidence_items に無いときだけに使う。段落に ID が無いことを citation_error にしない。
@@ -210,7 +225,7 @@ class ClaimAuditOutput(BaseModel):
     claim_checks: list[ClaimCheck] = Field(default_factory=list, max_length=128)
 
 
-def _fit_evidence(fixed: dict[str, Any], fragments: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+def _fit_evidence(fixed: dict[str, Any], fragments: list[dict[str, Any]], max_input_bytes: int) -> tuple[list[dict[str, Any]], bool]:
     """予算に収まるだけの根拠（先頭から）と、切り詰めたかどうか。"""
     schema = _json(ClaimAuditOutput.model_json_schema())
     chosen: list[dict[str, Any]] = []
@@ -218,10 +233,16 @@ def _fit_evidence(fixed: dict[str, Any], fragments: list[dict[str, Any]]) -> tup
         candidate = {**fixed, "evidence_items": [*chosen, fragment]}
         # 予算はモデルに渡す形（根拠の本文の文字の形をそろえた後。#1350）で測る。
         size = len((VALIDATION_SYSTEM_PROMPT + _json(model_request(candidate)) + schema).encode("utf-8")) + 1024
-        if size > MAX_EVALUATION_INPUT_BYTES:
+        if size > max_input_bytes:
             return chosen, True
         chosen.append(fragment)
     return chosen, False
+
+
+def _max_input_bytes(settings: Any) -> int:
+    """検証の入力の上限（設定 ``answer_validation_max_input_bytes``。無い設定は品質評価の予算）。"""
+    value = getattr(settings, "answer_validation_max_input_bytes", None)
+    return int(value) if isinstance(value, int) and value > 0 else MAX_EVALUATION_INPUT_BYTES
 
 
 def _passage_check(passages: Sequence[Mapping[str, str]], answer_text: str):
@@ -303,6 +324,8 @@ def _recheck_unreferenced_passages(
     candidates = [item for item in evidence if str(item.get("id") or "") in chunk_ids]
     if not candidates:
         return claims, []
+    # 質問の文・利用者の前提・照会の結果（資料ではない根拠）も、当てはめた結論を確かめ直すために渡す。
+    candidates = [*(item for item in evidence if is_premise_id(item.get("id"))), *candidates]
     inputs = {**fixed, "answer_passages": list(targets), "evidence_items": candidates}
     try:
         output = _parse_checked(
@@ -312,6 +335,7 @@ def _recheck_unreferenced_passages(
             ClaimAuditOutput,
             provider_id,
             _passage_check(targets, str(fixed.get("answer_text") or "")),
+            max_input_bytes=_max_input_bytes(settings),
         )
     except Exception:
         # 確かめ直しは最初の判定を補うだけなので、失敗しても最初の判定を返す。
@@ -373,9 +397,15 @@ def data_result_items(data_results: Sequence[Mapping[str, Any]]) -> list[dict[st
     return items
 
 
+def question_items(question: str) -> list[dict[str, Any]]:
+    """質問の文を、根拠と並べて渡す項目にする（id は ``QUESTION_ID``、出典は ``QUESTION_SOURCE``）。空なら渡さない。"""
+    text = str(question or "").strip()[:_MAX_QUESTION_FACT_CHARS]
+    return [{"id": QUESTION_ID, "source": QUESTION_SOURCE, "text": text}] if text else []
+
+
 def is_premise_id(value: object) -> bool:
-    """資料ではない根拠（利用者の前提 #1898・業務データの照会の結果 #1950）の id か（資料の chunk の id ではない）。"""
-    return isinstance(value, str) and value.startswith((PREMISE_ID_PREFIX, DATA_RESULT_ID_PREFIX))
+    """資料ではない根拠（質問の文・利用者の前提 #1898・業務データの照会の結果 #1950）の id か（資料の chunk の id ではない）。"""
+    return isinstance(value, str) and (value == QUESTION_ID or value.startswith((PREMISE_ID_PREFIX, DATA_RESULT_ID_PREFIX)))
 
 
 def _prefer_document_source(claim: ClaimCheck, catalog: Mapping[str, Mapping[str, Any]]) -> ClaimCheck:
@@ -456,11 +486,19 @@ def validate_answer_claims(
         "answer_text": answer_text,
         "answer_passages": remaining,
     }
-    # 利用者の前提（#1898）と業務データの照会の結果（#1950）は根拠の前に置き、予算で切り詰めない。
+    # 質問の文・利用者の前提（#1898）・業務データの照会の結果（#1950）は根拠の前に置き、予算で切り詰めない。
     fragments = list(
-        _evidence_fragments([*premise_items(premises), *data_result_items(data_results), *(dict(item) for item in evidence_items)])
+        _evidence_fragments(
+            [
+                *question_items(question),
+                *premise_items(premises),
+                *data_result_items(data_results),
+                *(dict(item) for item in evidence_items),
+            ]
+        )
     )
-    evidence, truncated = _fit_evidence(fixed, fragments)
+    max_input_bytes = _max_input_bytes(settings)
+    evidence, truncated = _fit_evidence(fixed, fragments, max_input_bytes)
     if not evidence and fragments:
         return {**base, "status": "input_too_large"}
     bound_claims: list[ClaimCheck] = []
@@ -475,6 +513,7 @@ def validate_answer_claims(
                 ClaimAuditOutput,
                 provider_id,
                 _passage_check(remaining, answer_text),
+                max_input_bytes=max_input_bytes,
             )
         except EvaluationInputTooLarge:
             return {**base, "status": "input_too_large"}

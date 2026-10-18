@@ -91,6 +91,11 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         ),
     ),
     PromptStage(
+        "heading_levels",
+        "ingestion",
+        (("instruction", "app.rag.ingestion_prompts:HEADING_LEVEL_PROMPT"),),
+    ),
+    PromptStage(
         "field_extraction",
         "ingestion",
         (("instruction", "app.rag.ingestion_prompts:FIELD_EXTRACTION_PROMPT"),),

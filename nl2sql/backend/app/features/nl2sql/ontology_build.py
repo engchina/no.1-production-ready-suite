@@ -3996,6 +3996,9 @@ class OntologyBuildService:
         def mutate(job: OntologyBuildJob) -> None:
             if event.phase is None:
                 event.phase = _running_event_phase(job.definition_phases)
+            # 時刻は lock の中で追記の直前に付ける。並行の工程（#2004）が作った順と追記の順は
+            # 入れ替わることがあり、作った時刻のままだとタイムラインが時系列にならない（#2286）。
+            event.at = utc_now()
             job.events.append(event)
             if len(job.events) > _MAX_JOB_EVENTS:
                 del job.events[: len(job.events) - _MAX_JOB_EVENTS]

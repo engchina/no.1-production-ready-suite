@@ -1093,6 +1093,43 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=200,
         description="navigation node 要約を生成する node 数の上限（LLM 呼び出し回数の bound）。",
     )
+    # 見出しの階層の推定（#2277）。しおりの深さを当てられず、番号の体系でも多くの見出しの深さを
+    # 決められない文書（Docling の結果）だけ、見出しの文字列を OCI Enterprise AI に渡して階層を
+    # 受け取る。
+    rag_heading_level_inference_enabled: bool = Field(
+        default=False,
+        description=(
+            "しおりも番号も無い文書の見出しの階層を OCI Enterprise AI で推定する"
+            "（#2277。既定 OFF）。"
+            "見出しの文字列だけを渡し、応答の形が合わない・失敗のときは今の階層のまま。"
+        ),
+    )
+    rag_heading_level_inference_min_headings: int = Field(
+        default=3,
+        ge=1,
+        le=1000,
+        description="見出しの階層を推定する文書の見出しの数の下限（これ未満は推定しない）。",
+    )
+    rag_heading_level_inference_max_headings: int = Field(
+        default=300,
+        ge=1,
+        le=2000,
+        description="見出しの階層を推定する文書の見出しの数の上限（これを超える文書は推定しない）。",
+    )
+    rag_heading_level_inference_unresolved_ratio: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "番号の体系で深さを決められない見出しの割合がこれ以上の文書だけ推定する（0〜1）。"
+        ),
+    )
+    rag_heading_level_inference_max_title_chars: int = Field(
+        default=120,
+        ge=10,
+        le=1000,
+        description="見出しの階層の推定で LLM に渡す 1 つの見出しの文字数の上限。",
+    )
     rag_field_extraction_enabled: bool = Field(
         default=True,
         description=(
@@ -1250,6 +1287,17 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description=(
             "検索の範囲の条で構成された文書の一覧から、LLM が選んで目録を読む文書の数"
             "(検索の候補に出ない文書。手続の一般的な規則の文書など。#2254)。0 は候補の文書だけ。"
+        ),
+    )
+    rag_answer_validation_max_input_bytes: int = Field(
+        default=96_000,
+        ge=16_000,
+        le=1_000_000,
+        description=(
+            "回答の最終の検証(rag_validate_answer)でモデルに渡す入力の上限"
+            "(UTF-8 の bytes。指示・質問・回答・根拠を含む)。根拠は渡された順に収まるだけ使い、"
+            "収まらない根拠は検証に使わない(evidence_truncated)。"
+            "検証のモデルの入力の上限より小さくする。"
         ),
     )
     rag_request_coverage_retrieval_enabled: bool = Field(

@@ -221,6 +221,43 @@ def test_finish_adds_llm_calls_and_note_from_execution_steps() -> None:
     assert tracker.terminal == "done"
 
 
+def test_finish_attaches_detail_lines_of_each_step_as_details() -> None:
+    """回答の記録の工程の詳細の行を、段を開いて見る詳細（lines）にする（#2294。同じ名前は記録の順）。"""
+    tracker = _tracker()
+    _feed(
+        tracker,
+        [
+            ("answer_step:文書検索", "started"),
+            ("answer_step:文書検索", "success"),
+            ("answer_step:文書検索", "started"),
+            ("answer_step:文書検索", "success"),
+            ("answer_step:質問の理解", "started"),
+            ("answer_step:質問の理解", "success"),
+        ],
+    )
+    tracker.finish(
+        execution_steps=[
+            {
+                "name": "文書検索",
+                "status": "complete",
+                "details": ["検索文: 2 本", "結果: 根拠 3 件"],
+            },
+            {"name": "文書検索", "status": "complete", "details": ["token=abc"]},
+            {"name": "質問の理解", "status": "complete", "details": "壊れた値"},
+        ]
+    )
+    first = _step(tracker, "s1").details
+    assert first is not None and first.lines == ["検索文: 2 本", "結果: 根拠 3 件"]
+    second = _step(tracker, "s2").details
+    assert second is not None and second.lines == ["token=***"]
+    assert _step(tracker, "s3").details is None
+    dumped = tracker.dump()
+    assert any(
+        event.get("details") == {"lines": ["検索文: 2 本", "結果: 根拠 3 件"]} for event in dumped
+    )
+    assert tracker.terminal == "done"
+
+
 def test_inner_step_error_marks_only_that_step_failed() -> None:
     """工程の失敗はその段階だけを失敗にする（回答フローは続けることがある）。"""
     tracker = _tracker()

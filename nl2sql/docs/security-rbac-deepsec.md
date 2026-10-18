@@ -752,6 +752,14 @@ context へ設定した data pool で実行する。
 `ADMIN_EXECUTE` 確認語、RBAC、監査を通した上で application DB user の control pool から実行する。
 この経路は業務データ参照用の DeepSec data plane ではないため、通常の SELECT 実行と混同しない。
 確認不要の判定には通常の SELECT-only guard を再利用し、WITH で始まる更新文も管理 SQL として扱う。
+管理 SQL の実行（SELECT を含む）と止めた文は、表 `NL2SQL_ADMIN_AUDIT_LOG` に件数の上限なく残す（#2264）。
+
+データ準備の `/db-admin-chat`（DB 管理チャット。#2264）は `menu.db_admin_chat` を持つ利用者（既定は
+system_admin だけ）の画面で、OCI Enterprise AI Direct で生成した SQL を、SELECT を含めて application DB
+user の管理の接続（DeepSec の data plane ではない）で実行する。SELECT 以外は `ADMIN_EXECUTE`（1 つの対象の
+DROP / TRUNCATE は対象の名前）の確認語を要し、方針で止める文（`ALTER SYSTEM`・`DROP USER`・動的 SQL・
+外部への通信のパッケージなど）はコードの規則で止める。API は画面だけで、MCP・API キーからは使えない。
+詳細は [db-admin-chat.md](./db-admin-chat.md)。
 
 Select AI `DBMS_CLOUD_AI.GENERATE` と Select AI Agent の
 `DBMS_CLOUD_AI_AGENT.RUN_TEAM` / `RUN_TOOL` と会話の `DBMS_CLOUD_AI.CREATE_CONVERSATION` は、非

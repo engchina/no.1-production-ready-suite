@@ -24,6 +24,8 @@ export interface JobProgressStepSpec {
   startedAt?: string;
   finishedAt?: string;
   params?: Params;
+  /** 終わった段階に付ける、段を開いて見る詳細（#2294。backend の `ChatProgressStepDetails` と同じ形）。 */
+  details?: Record<string, unknown>;
 }
 
 export interface JobProgressSpec {
@@ -69,6 +71,7 @@ export function jobProgressEvents(jobId: string, spec: JobProgressSpec): Record<
       started_at: startedAt,
       finished_at: state.finishedAt ?? spec.at,
       ...params,
+      ...(state.details ? { details: state.details } : {}),
     });
   }
   if (spec.terminal) push({ type: "terminal", status: spec.terminal });
