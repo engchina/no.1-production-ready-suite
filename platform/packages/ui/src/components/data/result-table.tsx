@@ -3,7 +3,7 @@ import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
-import { formatChatProgressDuration } from "../feedback/chat-progress";
+import { formatChatProgressDuration } from "../feedback/chat-progress-format";
 import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
 import { ButtonLink, type ButtonLinkComponent } from "../ui/button-link";

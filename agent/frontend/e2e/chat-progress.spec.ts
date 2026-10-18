@@ -194,6 +194,11 @@ for (const viewport of VIEWPORTS) {
       expect(toolsBox!.y).toBeLessThan(answerBox!.y);
       await summary.click();
       await expect(turn.getByTestId("chat-progress-step-respond#2")).toBeVisible();
+      // 開いた一覧は実行の詳細と同じ RunTimeline（時間の線つき。狭い置き場所は線を隠し、所要時間の文字だけ。#2265）。
+      const bars = progress.locator("[data-run-timeline-bar]");
+      await expect(bars).toHaveCount(6);
+      if (viewport.width >= 1280) await expect(bars.first()).toBeVisible();
+      else await expect(bars.first()).toBeHidden();
       await expect(turn.getByTestId("chat-progress-step-tool:nl2sql__execute")).toContainText("ツール nl2sql__execute を呼びました");
       await expect(turn.getByTestId("chat-progress-step-respond#2")).toHaveAttribute("data-status", "done");
       // 回答の作成の後にツールを呼んだ段階は、進め方の検討の完了として残る（#1358）。

@@ -335,6 +335,7 @@ export {
 } from "./components/feedback/processing-state";
 export {
   ChatProgress,
+  chatProgressTimelineStep,
   DEFAULT_CHAT_PROGRESS_LABELS,
   formatChatProgressDuration,
   isChatProgressActive,
