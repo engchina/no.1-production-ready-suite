@@ -1908,7 +1908,7 @@ export const agentApi = {
     requestRun(`/api/runs/${runId}/resume`, { method: "POST" }),
   replayRun: (runId: string) =>
     requestRun(`/api/runs/${runId}/replay`, { method: "POST" }),
-  /** 回答前の確認（#1839）に答える・確認せずに回答する・確認をやめる。 */
+  /** 回答前の確認（#1839）に答える・確認せずに回答する。 */
   decideConfirmation: (runId: string, confirmationId: string, payload: ConfirmationDecisionPayload) =>
     request<ConfirmationOutcome>(`/api/runs/${runId}/confirmations/${confirmationId}`, {
       method: "POST",
