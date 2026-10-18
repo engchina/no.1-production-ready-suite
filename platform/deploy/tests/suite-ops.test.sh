@@ -46,6 +46,17 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
   [ "$(cat "${SUITE_REPO_DIR}/app.txt")" = "v2" ] || fail "取得したファイルになっていない"
   [ -f "${SUITE_REPO_DIR}/untracked.txt" ] || fail "未追跡のファイルを消した"
   suite_pull | grep -q "すでに最新です" || fail "最新のときの表示"
+  [ "$(git -C "${SUITE_REPO_DIR}" rev-parse --is-shallow-repository)" = "true" ] || fail "depth 1 の clone の深さを変えた"
+
+  # 履歴をすべて持つ clone（開発機を配備にも使う場合）は shallow にしない（worktree の merge-base が誤るため）。
+  export SUITE_REPO_DIR="${task_dir}/full"
+  git clone -q --branch main "file://${origin}" "${SUITE_REPO_DIR}"
+  printf 'v3\n' > "${work}/app.txt"
+  git -C "${work}" commit -q -am v3
+  git -C "${work}" push -q origin main
+  suite_pull >/dev/null || fail "履歴をすべて持つ clone で取得に失敗した"
+  [ "$(git -C "${SUITE_REPO_DIR}" rev-parse HEAD)" = "$(git -C "${work}" rev-parse HEAD)" ] || fail "履歴をすべて持つ clone が最新になっていない"
+  [ "$(git -C "${SUITE_REPO_DIR}" rev-parse --is-shallow-repository)" = "false" ] || fail "履歴をすべて持つ clone を shallow にした"
 )
 
 # 2. suite-restart.sh --no-build: 有効な production-ready-* の service（証明書の更新の oneshot を除く）と Nginx を
