@@ -344,6 +344,10 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assertIn("状態: 根拠不足で終了", result.question_display)
         self.assertNotIn("回答文の生成（", result.question_display)
         self.parse.assert_not_called()
+        # どの段で 0 件になったかを工程の詳細と回答の記録に残す（#2401）。
+        self.assertIn("根拠が 0 件になった段: 文書検索（検索の候補が 0 件）", result.question_display)
+        zero = result.generation_trace["zero_evidence"]
+        self.assertEqual((zero["stage"], zero["candidate_count"], zero["rejected_count"]), ("retrieval", 0, 0))
 
     def test_retrieval_without_answer_skips_crag_and_generation(self):
         # CRAG を指定していても、検索だけのときは評価も回答の生成もしない（LLM を呼ばない）。

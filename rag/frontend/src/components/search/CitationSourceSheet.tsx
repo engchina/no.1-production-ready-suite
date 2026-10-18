@@ -27,7 +27,7 @@ import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
 /**
  * 根拠 1 件を右のサイドパネルで開く（#2360。Agent のチャットと同じ共通の `EvidenceSourceSheet`）。上部に根拠の
  * 要約（番号・文書名・引用の印・経路・スコア・抜粋・頁と章節）、その下に原文のプレビュー（該当箇所を強調する。
- * #349 / #442）を出す。引用カードの「引用箇所を表示」・まとまりの箇所・回答本文の根拠の行（#657）から開く。
+ * #349 / #442）を出す。根拠のカードの「根拠を表示」・回答本文の根拠の行（#657）から開く。
  * `chunk` は閉じる間も前の根拠を渡す（`useEvidenceSource` の `shown`）。
  */
 export function CitationSourceSheet({

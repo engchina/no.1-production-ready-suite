@@ -67,6 +67,8 @@ const ARTIFACT_KIND: Record<string, StatusEntry> = {
   support_task: { label: "status.artifact.support_task", variant: "neutral" },
   // 回答の最終の検証（rag_validate_answer の結果。#1246）。
   answer_validation: { label: "status.artifact.answer_validation", variant: "neutral" },
+  // 回答の根拠（回答の確定のときに段落ごとの根拠を残す。#2328）。
+  answer_evidence: { label: "status.artifact.answer_evidence", variant: "neutral" },
   runtime_artifact: { label: "status.artifact.runtime_artifact", variant: "neutral" },
 };
 

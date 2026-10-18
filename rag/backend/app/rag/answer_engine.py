@@ -256,11 +256,16 @@ class _SearchState:
     loaded_classification_ids: set[str] = field(default_factory=set)
     # 画面目録(#554)。CRAG の各回で同じなので、1 回の回答で 1 回だけ作る。
     screen_catalog: dict[str, list[str]] | None = None
-    # 質問から読み取った抽出項目の条件のうち検索に足したもの(#652)と、それを外した検索条件。
-    # 読み取った条件で 0 件なら、外した条件で 1 回だけ検索し直す(auto_field_relaxed)。
+    # 質問から読み取った抽出項目の条件のうち検索に足したもの(#652)。
     auto_field_conditions: list[ExtractionFieldCondition] = field(default_factory=list)
-    filters_without_auto: dict[str, str] | None = None
-    auto_field_relaxed: bool = False
+    # 自動で足した検索条件を外す段(#652・#2401)。(段の名前, その段まで外した検索条件) を
+    # 外す順に持つ。候補が 0 件なら、前から順に外して検索し直す(段ごとに 1 回。以降の検索も
+    # 外したまま)。
+    relaxations: list[tuple[str, dict[str, str]]] = field(default_factory=list)
+    # 外した段の名前(外した順)。
+    relaxed: list[str] = field(default_factory=list)
+    # 検索ごとの検索文の数・候補の件数・効いていた自動の条件・外した段(#2401。根拠 0 件の診断)。
+    search_log: list[dict[str, object]] = field(default_factory=list)
     # 文書の 1 ページ目の本文(rag_chunk_sets.first_page_context)を chunk_set_id ごとに持つ(#557)。
     first_page_contexts: dict[str, dict[str, object]] = field(default_factory=dict)
     loaded_first_page_chunk_set_ids: set[str] = field(default_factory=set)
@@ -306,6 +311,50 @@ class _SearchState:
     article_documents: list[tuple[str, str]] | None = None
     # 目録で選んだ条(#2254。chunk_id か section_id ごと。診断の article_catalog に残す)。
     article_selections: dict[str, dict[str, object]] = field(default_factory=dict)
+
+    @property
+    def auto_field_relaxed(self) -> bool:
+        """読み取った抽出項目の条件を、候補 0 件で外したか(#652)。"""
+        return RELAX_AUTO_FIELD in self.relaxed
+
+    def active_relaxations(self) -> list[str]:
+        """まだ外していない(今の検索条件に効いている)自動の条件の段の名前。"""
+        return [name for name, _ in self.relaxations[len(self.relaxed) :]]
+
+
+# 自動で足した検索条件の段(#2401)。外す順(質問から推測した度合いの強い順)に並ぶ。
+RELAX_AUTO_FIELD = "auto_field"
+RELAX_QUESTION_PAGE = "question_page"
+RELAX_QUESTION_FILE = "question_file"
+_QUESTION_PAGE_KEYS = ("page_number_min", "page_number_max")
+# 根拠 0 件の診断に残す検索の記録の上限(CRAG の各回・要求ごとの再検索で増える)。
+_ZERO_EVIDENCE_SEARCH_LOG_LIMIT = 12
+
+
+def _relaxation_steps(
+    base: Mapping[str, str], question: Mapping[str, str], full: Mapping[str, str]
+) -> list[tuple[str, dict[str, str]]]:
+    """自動で足した検索条件を外す段を、外す順に返す(#2401)。
+
+    ``base`` は利用者が指定した条件(画面・検索・回答プロファイル)、``question`` は質問が名指しした
+    文書名・ページを足した条件、``full`` はさらに質問から読み取った抽出項目の条件を足した条件。
+    各段の検索条件は、その段までの自動の条件を外したもの。``base`` の条件は外さない。
+    """
+    steps: list[tuple[str, dict[str, str]]] = []
+    if dict(full) != dict(question):
+        steps.append((RELAX_AUTO_FIELD, dict(question)))
+    # 質問が足した条件(``_question_filters`` は利用者が指定した項目には足さない)。
+    added = {key for key, value in question.items() if base.get(key) != value}
+    if pages := added & set(_QUESTION_PAGE_KEYS):
+        steps.append(
+            (
+                RELAX_QUESTION_PAGE,
+                {key: value for key, value in question.items() if key not in pages},
+            )
+        )
+    if "file_name" in added:
+        steps.append((RELAX_QUESTION_FILE, dict(base)))
+    return steps
 
 
 def answer_images_enabled(settings: Settings) -> bool:
@@ -671,6 +720,16 @@ class AnswerEngine:
                 "conditions": [condition.model_dump() for condition in state.auto_field_conditions],
                 "relaxed": state.auto_field_relaxed,
             }
+        if state.relaxed:
+            # 候補 0 件で外した自動の条件の段(#2401)。
+            outcome.diagnostics["filter_relaxation"] = {
+                "relaxed": list(state.relaxed),
+                "max_steps": self._settings.rag_filter_relaxation_max_steps,
+            }
+        if not outcome.citations and (
+            zero_evidence := _zero_evidence_diagnostics(result, state, request)
+        ):
+            outcome.diagnostics["zero_evidence"] = zero_evidence
         return outcome
 
     async def _answer_from_approved_faq(self, request: SearchRequest) -> AnswerOutcome:
@@ -921,6 +980,7 @@ class AnswerEngine:
         vector_only_count = sum(1 for query in queries[1:] if query in vector_only)
         derived_weight = 1.0 / max(1, len(queries) - 1 - vector_only_count)
         vector_only_weight = 1.0 / max(1, vector_only_count)
+        relaxed_before = len(state.relaxed)
         while True:
             fused: dict[str, float] = {}
             rankings: list[list[str]] = []
@@ -955,12 +1015,21 @@ class AnswerEngine:
                 for rank, hit in enumerate(hits, start=1):
                     state.chunks.setdefault(hit.chunk_id, hit)
                     fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + weight / (k + rank)
-            # 質問から読み取った条件(#652)で 0 件なら、その条件を外して 1 回だけ検索し直す
-            # (以降の検索(CRAG の補正検索など)も外したまま)。
-            if fused or state.filters_without_auto is None or state.auto_field_relaxed:
+            # 自動で足した条件(質問から読み取った抽出項目の条件 #652・質問が名指しした文書のページと
+            # 文書名 #546)で 0 件なら、その条件を段ごとに外して検索し直す(#2401。以降の検索(CRAG の
+            # 補正検索など)も外したまま)。
+            # 参照の頁に絞った検索(#2395)の 0 件では外さない(ほかの検索の条件を変えない)。
+            if fused or page_ranges or not self._relax_filters(state):
                 break
-            state.filters = state.filters_without_auto
-            state.auto_field_relaxed = True
+        if len(state.search_log) < _ZERO_EVIDENCE_SEARCH_LOG_LIMIT:
+            state.search_log.append(
+                {
+                    "queries": len(queries),
+                    "candidates": len(fused),
+                    "automatic_filters": state.active_relaxations(),
+                    "relaxed": state.relaxed[relaxed_before:],
+                }
+            )
         await self._load_classifications([state.chunks[chunk_id] for chunk_id in fused], state)
         if inquiry_conditions is not None:
             pool = [
@@ -1134,12 +1203,25 @@ class AnswerEngine:
         """
         if state.filters is not None:
             return
-        filters = await self._question_filters(dict(request.filters), inquiry_conditions)
+        base = dict(request.filters)
+        filters = await self._question_filters(dict(base), inquiry_conditions)
         state.filters, state.auto_field_conditions = merge_field_conditions(
             filters, self._auto_field_conditions
         )
-        if state.auto_field_conditions:
-            state.filters_without_auto = filters
+        state.relaxations = _relaxation_steps(base, filters, state.filters)
+
+    def _relax_filters(self, state: _SearchState) -> bool:
+        """候補 0 件のとき、自動で足した検索条件の次の段を外す(#2401)。外せなければ False。
+
+        外す段の数は ``rag_filter_relaxation_max_steps`` まで(0 は外さない)。
+        """
+        done = len(state.relaxed)
+        if done >= len(state.relaxations) or done >= self._settings.rag_filter_relaxation_max_steps:
+            return False
+        name, filters = state.relaxations[done]
+        state.filters = dict(filters)
+        state.relaxed.append(name)
+        return True
 
     async def _prefetch_query_hits(
         self,
@@ -3080,6 +3162,40 @@ def _page_overlap(left: PageRange, right: PageRange) -> PageRange | None:
     if start is not None and end is not None and start > end:
         return None
     return PageRange(document_id=left.document_id, page_start=start, page_end=end)
+
+
+def _zero_evidence_diagnostics(
+    result: Any, state: _SearchState, request: SearchRequest
+) -> dict[str, Any]:
+    """根拠 0 件で回答を作らずに終えたときの、0 件になった段と検索の記録(#2401)。
+
+    段は rag_engine が決め(検索の候補が無い・根拠確認で全部外した・根拠の組み立て)、検索の候補が
+    無く、自動で足した検索条件が効いたままだった(外す段の上限・設定で外さなかった)ときは ``filter``
+    にする。検索の条件は値を出さず、項目の名前だけを残す(値は質問・文書の内容を含みうる)。
+    """
+    from rag_engine.generation.zero_evidence import ZERO_EVIDENCE_STAGE_LABELS
+
+    trace = getattr(result, "generation_trace", None)
+    engine = trace.get("zero_evidence") if isinstance(trace, Mapping) else None
+    if not isinstance(engine, Mapping):
+        return {}
+    active = state.active_relaxations()
+    stage = str(engine.get("stage") or "")
+    if stage == "retrieval" and active:
+        stage = "filter"
+    return {
+        **dict(engine),
+        "stage": stage,
+        "label": ZERO_EVIDENCE_STAGE_LABELS.get(stage, str(engine.get("label") or "")),
+        # 利用者が指定した検索条件の項目(範囲。外さない)。
+        "request_filter_keys": sorted(
+            key for key, value in request.filters.items() if value.strip()
+        ),
+        # 最後の検索で効いていた自動の条件と、候補 0 件で外した自動の条件。
+        "automatic_filters": active,
+        "relaxed": list(state.relaxed),
+        "searches": list(state.search_log),
+    }
 
 
 def _graph_expansion_diagnostics(

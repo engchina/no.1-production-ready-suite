@@ -120,16 +120,12 @@ export function citationAnswerUse(chunk: Pick<RetrievedChunk, "metadata">): Cita
 }
 
 /**
- * AI に渡した件数と内訳（#1208・#2040）。「AI に渡した 45 件（12 のまとまり）／ 回答で引用 13 件 ／ うち該当確認済み
- * 10 件 ／ 参考 3 件」。書き方は 3 製品で共通の `evidenceCountLabel`（#2328）。まとまり（同じ節ごとにまとめて渡した
- * 単位。#2097）は数が分かるときだけ、回答で引用したかが分からない（検索だけ）なら件数だけ、0 件の項目は出さない。
+ * AI に渡した件数と内訳（#1208・#2040）。「AI に渡した 45 件 ／ 回答で引用 13 件 ／ うち該当確認済み
+ * 10 件 ／ 参考 3 件」。書き方は 3 製品で共通の `evidenceCountLabel`（#2328・#2388）。回答で引用したかが分からない
+ * （検索だけ）なら件数だけ、0 件の項目は出さない。
  */
-export function citationCountLabel(
-  citations: readonly Pick<RetrievedChunk, "metadata">[],
-  groupCount: number | null = null,
-): string {
+export function citationCountLabel(citations: readonly Pick<RetrievedChunk, "metadata">[]): string {
   return evidenceCountLabel(
     citations.map((chunk) => ({ usedInAnswer: citationModelUsed(chunk), answerUse: citationAnswerUse(chunk) })),
-    groupCount,
   );
 }

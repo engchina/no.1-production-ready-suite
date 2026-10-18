@@ -21,7 +21,7 @@ from tests.test_answer_engine import FakeGenAi, FakeOracle, _doc_chunk, _evidenc
 
 
 class GuideStepOracle(FakeOracle):
-    """質問の文では手順 A の資料だけを返し、手順 B の手がかり・参照の頁でだけ手順 B の資料を返す。"""
+    """質問の文では手順 A の資料だけを、手順 B の手がかり・参照の頁でだけ手順 B の資料を返す。"""
 
     def __init__(self) -> None:
         super().__init__()
