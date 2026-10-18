@@ -54,8 +54,9 @@ describe("実行履歴の表示の対応表", () => {
     ).toEqual({ variant: "danger", label: "根拠不足" });
   });
 
-  it("回答の検証は 3 段階で、回答が無ければ出さない", () => {
-    expect(runVerificationView("verified")?.label).toBe("検証済み");
+  it("資料との照合は 3 段階で、回答が無ければ出さない", () => {
+    expect(runVerificationView("verified")?.label).toBe("照合済み");
+    expect(runVerificationView("unverified")?.label).toBe("未照合");
     expect(runVerificationView("partial")?.variant).toBe("warning");
     expect(runVerificationView("unverified")?.variant).toBe("neutral");
     expect(runVerificationView(null)).toBeNull();

@@ -7,8 +7,9 @@ import type { AnswerEvidenceData } from "@/lib/answer-evidence";
  * - 本文の文は書き換えない（AI で直さない）。並べ方と、根拠の ID の印（「【証拠 ID: …】」）を根拠の行にする
  *   ことだけをする。根拠の行は backend の成果物「回答の根拠」の段落ごとの根拠（`passages`。最終の検証が段落を
  *   裏付けた根拠と、段落が書いた ID の印を最終の検証と同じ照合で引き当てた根拠）から決める。
- * - 「資料から確認できなかった事項」は、最終の検証が回答の末尾に足した節（見出しは成果物の `notice.heading`）。
- *   画面では回答の確かめに同じ項目を出し直さない。
+ * - 「資料から確認できなかった事項」は、資料との照合が回答の末尾に足した節（見出しは成果物の `notice.heading`）。
+ *   除いた内容の一覧はこの節の 1 か所だけに全件を同じ書式で出し（項目が多ければ共通の「すべて表示」で畳む）、
+ *   回答の下の「資料との照合」には件数のバッジだけを出す（#2361）。
  * - 段落に根拠を 1 つも結び付けられないときは null（呼び出し側は今までの Markdown の描き方にする）。
  */
 
@@ -24,13 +25,21 @@ export type StructuredBlock =
   | { kind: "paragraph"; key: string; text: string; chunkIds: string[] }
   /** 表・コード・見出しの続きなど、段落にできない Markdown の塊。 */
   | { kind: "markdown"; key: string; text: string; chunkIds: string[] }
-  | { kind: "section"; key: string; title: string | null; ordered: boolean; entries: StructuredEntry[] };
+  | {
+      kind: "section";
+      key: string;
+      title: string | null;
+      ordered: boolean;
+      entries: StructuredEntry[];
+      /** 項目が多いとき畳む（「資料から確認できなかった事項」の節）。 */
+      collapsible?: boolean;
+    };
 
 const BULLET = /^\s*(?:[-*+・•]|(\d{1,3})[.)．）])\s+/;
 const HEADING = /^\s*(?:#{1,6}\s+(.+?)\s*#*|\*\*([^*\n]{1,60})\*\*\s*[:：]?|【([^】\n]{1,30})】\s*[:：]?)\s*$/;
 const MARKDOWN_BLOCK = /^\s*(?:\||```|~~~|>|\s{2,}[-*+]\s)/;
 
-/** 回答の節（`notice.heading`）。最終の検証の成果物の内容から読む。 */
+/** 回答の節（`notice.heading`）。資料との照合の成果物の内容から読む。 */
 export function noticeHeading(validation: Record<string, unknown> | null): string | null {
   const notice = validation?.notice;
   if (!notice || typeof notice !== "object" || Array.isArray(notice)) return null;
@@ -179,6 +188,7 @@ export function structureAnswer(
       key: "notice",
       title: titles.unconfirmed,
       ordered: false,
+      collapsible: true,
       entries: notice.map((item, position) =>
         BULLET.test(item)
           ? { key: `n${position}`, text: item.replace(BULLET, ""), chunkIds: [] }

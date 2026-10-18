@@ -8,13 +8,13 @@
 |---|---|
 | 権限 | メニュー権限 `menu.db_admin_chat`（「DB 管理チャット」。含む権限は DB 構造の参照・再取得）。既定はどのロールにも付けない（system_admin だけが使える）。ほかのロールへの付与は「自分の持つ権限だけを付与できる」規則（[agents/security-contracts.md](./agents/security-contracts.md)「role の権限昇格の防止」）で越権を防ぐ。「管理 SQL を実行」の権限（`menu.admin_sql`）では代わりにしない |
 | 生成 | OCI Enterprise AI Direct だけ（システム設定 › モデルの既定のテキストモデル）。業務プロファイルで限らず DB 全体が対象。**質問には必ず SQL で答える**（#2333）: 構造化出力（`DbAdminChatSqlOutput`）の `sql` に 1 文以上、`explanation` は SQL が何をするかの短い説明。SQL の無い応答（文章だけの答え・文の種類が分からない文だけ）は、理由を添えて 1 回だけ作り直させ、それでも無ければ生成の失敗（502「SQL を生成できませんでした…」。ターンは保存せず、画面は質問を残して「再送信」）にする。文章を回答として出さない。方針で止める作業を頼まれたときも、今の設定・状態を読む SELECT を作る |
-| 生成の文脈 | DB 構造の cache から質問（と画面の中の前の質問）に関係する表を最大 12 件選び、列（1 表 40 列まで）を渡す。ほかの表は名前だけ（80 件まで）。Oracle のシステムの schema と製品の表は cache の段階で外れている。DB の管理の質問（版・表領域・セッション・ロック・権限・無効な object など）は、LLM への指示（`backend/app/features/nl2sql/prompts/db_admin_chat/system.txt`）にデータ辞書と動的性能ビュー（`V$VERSION`・`PRODUCT_COMPONENT_VERSION`・`DBA_TABLESPACE_USAGE_METRICS`・`DBA_DATA_FILES`・`DBA_FREE_SPACE`・`V$SESSION`・`V$LOCKED_OBJECT`・`DBA_OBJECTS`・`DBA_ROLE_PRIVS` など）の使い方を書いて答えられるようにする。Autonomous AI Database で見えないビュー（`ORA-00942` / `ORA-01031`）は、エラーの分析で `USER_` / `ALL_` ビューの代わりを示す |
+| 生成の文脈 | DB 構造の cache から質問（と画面の中の前の質問）に関係する表を最大 12 件選び、列（1 表 40 列まで）を渡す。ほかの表は名前だけ（80 件まで）。Oracle のシステムの schema と製品の表は cache の段階で外れている。DB の管理の質問（版・表領域・セッション・ロック・権限・無効な object など）は、LLM への指示（`backend/app/features/nl2sql/prompts/db_admin_chat/system.txt`）にデータ辞書と動的性能ビュー（`V$VERSION`・`PRODUCT_COMPONENT_VERSION`・`DBA_TABLESPACE_USAGE_METRICS`・`DBA_DATA_FILES`・`DBA_FREE_SPACE`・`V$SESSION`・`V$LOCKED_OBJECT`・`DBA_OBJECTS`・`DBA_ROLE_PRIVS` など）の使い方を書いて答えられるようにする。Autonomous AI Database で見えないビュー（`ORA-00942` / `ORA-01031`）は、エラーの分析で `USER_` / `ALL_` ビューの代わりを示す。生成した文の列は、生成の後に参照する object の実際の列で確かめる（下の「列の検査」） |
 | 接続 | system_admin と同じく、アプリ用の DB ユーザーのネイティブの接続だけ（SELECT も `OracleNl2SqlAdapter.execute_select(admin_control_plane=True)` で `connection()` を使い、DeepSec の DATA USER の pool・業務の実行の pool を使わない） |
 | 実行 | 生成した SQL を必ず表示し、自動では実行しない。サーバーが文に分け（PL/SQL のブロックは 1 文）、文ごとに分類・実行する（#2333。下の「複数の文」）。読み取り専用の SELECT / WITH…SELECT の文は「実行」で実行する（確認語は要らない）。データ・構造を変える文は実行確認語 `ADMIN_EXECUTE`（1 つの対象を消す `DROP` / `TRUNCATE` の文は対象の名前。例 `APP.T1`）を入力したときだけ実行する。確認は 1 回ごと（実行したら消える）で、SQL が変わる（AI のエラー分析で直した SQL を使う）と確認からやり直す |
 | 分類 | 生成エンジンに関係なく、実行の前にサーバーで必ず分類する（`_split_sql_statements`・`_admin_statement_type`・`is_select_only`）。生成の応答（`plan`）も実行の前に作り直す（画面の値を信じない） |
 | 実行の実装 | 1 文の実行は「管理 SQL を実行」の `_execute_db_admin_sql` にその文だけを `chat=True` で渡す（PL/SQL・暗黙の commit の警告・DB 構造の再取得は同じ。DML も部分の commit の経路（`data_dml`）へ渡さない）。「すべて実行」は `OracleNl2SqlAdapter.execute_admin_script` が 1 つの管理の接続とトランザクションで上から順に実行し（SELECT は同じ cursor から読むので、前の文の commit 前の変更が見える）、最初のエラーで止め、**全部成功したときだけ commit**、失敗したら rollback する（DDL は Oracle の暗黙の commit で戻らない。その前の成功した DML も commit される） |
 | 止める文 | 製品の object（`NL2SQL_` / `PLATFORM_` / `RAG_` / `AGENT_` で始まる名前、`$` / `#` を含む名前）と動的 SQL は「管理 SQL を実行」と同じく止める。例外は読み取り専用の SELECT の動的性能ビュー（`V$` / `GV$`。所有者は無指定・SYS・PUBLIC）だけで、セッション・ロック・版の質問に要るので読ませる（`SYS.OBJ$` などほかの `$` の object は止める）。加えて、方針で止める文を技術の規則としてコードに書く（下の表） |
-| 失敗 | 失敗した文の区画の「AI でエラーを分析」で原因と直した SQL を示す（`POST /api/nl2sql/db-admin-chat/analyze-error` にその文だけを渡す。OCI Enterprise AI が無いときは ORA のコードからの分析）。直した SQL はその文だけを置き換え、サーバーが分類し直し、確認語からやり直す |
+| 失敗 | 失敗した文の区画の「AI でエラーを分析」で原因と直した SQL を示す（`POST /api/nl2sql/db-admin-chat/analyze-error` にその文だけと、その文が参照する object の実際の列を渡す（#2352）。OCI Enterprise AI が無いときは ORA のコードからの分析）。直した SQL はその文だけを置き換え、サーバーが分類し直し、確認語からやり直す |
 | 会話 | 「チャット」と同じく利用者ごとに保存し、左の「会話の履歴」から開き直せる（#2319。下の「会話の履歴」）。続きの質問の文脈（前の 6 往復の質問・SQL・最後の実行の結果の要約）は、サーバーが保存した会話から作る（画面から受け取らない） |
 | 監査 | 表 `NL2SQL_ADMIN_AUDIT_LOG`（migration 023）に、実行した人・SQL の全文・文の種類・確認語の有無・結果（success / partial / failure / blocked）・commit / rollback・影響行数・時間・経路（`db_admin_chat` / `admin_sql` / `data_preparation`）を件数の上限なく残す。DB 管理チャットは**実行した文ごとに 1 行**で、`detail` の `batch_id`・`batch_mode`（`statement` / `all`）・`statement_index`・`statement_total`・`conversation_id`・`turn_id`（「すべて実行」は `batch_committed`・`batch_rolled_back` も）で同じ実行の行を結び付ける。SELECT の実行と止めた文も残す。確認語の待ちだけの応答と、「すべて実行」で実行しなかった文は残さない。「AI 活用 › 実行履歴」には出さない（実行履歴はチャット・SQL 生成・MCP の実行だけ） |
 | 公開 | 画面だけの API（Cookie / CSRF）。外部の MCP・Agent・API キーからは使えない。四眼原則（別の人の承認）は持たない |
@@ -29,6 +29,18 @@
 - **止めるのは許されない文だけ**: 止める文はその文だけを「実行できない」にし、同じターンのほかの文は 1 文ずつ実行できる。**「すべて実行」は止める文が 1 つでもあれば始めない**（画面は押せず理由を出し、API は 400）。黙って飛ばすと、利用者が並べた順の前提（作ってから入れる・確かめてから消す）が崩れるため。
 - **「すべて実行」の停止と結果**: 上から順に実行し、最初のエラーで止める。失敗した文と実行しなかった文（`not_run`）を文ごとに示す。
 - **生成の指示**: 読むことが複数あるときは 1 つの SELECT に 1 つのことを読ませ、文を並べる（UNION で 1 つにまとめない）。結果を文ごとに並べて読めるようにするため。
+
+## 列の検査（#2352）
+
+モデルはデータ辞書・動的性能ビューの列を記憶から書き、無い列で `ORA-00904` になる（例: `DBA_ROLE_PRIVS` の `USERNAME`、`V$LOCK` の `LOCK_TYPE`・`MODE_HELD`）。生成の文脈には業務の表の列しか無いので、**生成の後に、参照する object の実際の列で確かめる**。列の一覧はコードにもプロンプトにも書かない。実装は `backend/app/features/nl2sql/db_admin_chat_columns.py`（純粋な処理）と `OracleNl2SqlAdapter.admin_sql_describer`（調べる実装）。
+
+- **対象**: 方針で止めない SELECT と DML（INSERT・UPDATE・DELETE・MERGE）の文。方針で止める文（製品の object など）は調べない。同じターンの前の文（SELECT・DML 以外。DDL・GRANT など）に名前が出る object を参照する文は、実行の前は object が無い・列が違うので確かめない。Oracle の実行環境（`NL2SQL_RUNTIME_MODE=oracle`）だけで確かめる。
+- **取り出し**: sqlglot（Oracle の方言）で参照する object と列を取り出す（別名・`*`・関数・副問い合わせ / CTE・引用識別子・`SERIAL#` のような名前。相関副問い合わせは外側の参照先、ORDER BY の別名・疑似列（`ROWNUM`・`SYSDATE` など）は列にしない）。表関数・`JSON_TABLE`・DB link・`*` の副問い合わせ・PIVOT など、列を確かめられない参照は確かめない。
+- **調べ方**: 実行と同じ管理の接続（アプリ用の DB ユーザー）で、`SELECT * FROM <object> WHERE 1 = 0` を `cursor.parse`（実行しない解析）して `cursor.description` の列を読む。データは読まない。調べた列は process ごとに cache する（10 分。調べられない object は 1 分。DDL・権限の変更を実行したら捨てる）。
+- **止めるかどうか**: 文そのものを `cursor.parse`（実行しない）し、Oracle が `ORA-00904` を返したときだけ止める。sqlglot の静的な検査は、存在しない列の一覧とどの object の列かの説明に使う（静的な検査が誤る文を止めないため）。
+- **直させる**: 存在しない列（`ORA-00904`）か、Oracle の解析で見つからない object（`ORA-00942` など）を参照する文は、文の番号・SQL・エラー・参照する object の実際の列を渡して、**1 回だけ**モデルに直させる（指示は `prompts/db_admin_chat/repair.txt`、構造化出力は `DbAdminChatRepairOutput`）。直した文だけを置き換えて分類し直す。
+- **直らなかったら**: 文は残し、`blocked_reason` に「列が存在しません: X（<object> の列: …）」、`unknown_columns` に列を入れ、その文の実行と「すべて実行」を止める（API の実行も止めて、止めた文として監査に残す）。画面はその文の区画に理由と「AI でエラーを分析」を出し、直した SQL に置き換えると分類し直す（`PUT …/plan` も同じ検査をする）。
+- **調べられない object**（存在しない・読む権限が無い）は止めず、文の `warnings` とターンの警告に「<object> の列を確かめられませんでした（存在しないか、読む権限がありません）。」を出す。
 
 ## 方針で止める文
 
@@ -55,7 +67,7 @@
 |---|---|---|
 | `POST /api/nl2sql/db-admin-chat/generate` | `menu.db_admin_chat` | `{question, conversation_id, client_turn_id}` → `{conversation, turn}`。SQL を作ってターンとして保存し、実行はしない。`conversation_id` が空なら新しい会話（会話の ID は最初のターンの ID）。同じ `client_turn_id` の送り直しは保存済みのターンを返す（二重に生成しない）。画面が停止した（接続が切れた）生成は保存しない。モデルが無いと 409、生成の失敗は 502、往復の上限（50）は 409、他人・無い会話は 404 |
 | `POST /api/nl2sql/db-admin-chat/execute` | `menu.db_admin_chat` | `{conversation_id, turn_id, mode, statement_index, confirmation, row_limit}` → `DbAdminChatExecuteData`（`mode`・`batch_id`・`committed` / `rolled_back`・`stopped_at`・文ごとの `statements[]`（`index`・`status`: succeeded / failed / blocked / not_run / confirmation_required・その文だけの `result`（管理 SQL を実行と同じ `DbAdminExecuteData`））・DB 構造の再取得・警告）。`mode="statement"` は `statement_index`（1 始まり）の 1 文、`mode="all"` はすべての文（止める文を含むと 400）。SQL は画面から受け取らず、ターンに保存した SQL を実行し、ターンに文ごとの最後の実行の要約を残す。確認語が合わなければ `confirmation_required` を返し実行しない（要約にも残さない） |
-| `PUT /api/nl2sql/db-admin-chat/conversations/{id}/turns/{turn_id}/plan` | `menu.db_admin_chat` | `{sql, statement_index}` → ターン。AI のエラー分析で直した SQL に置き換え（`statement_index` があればその文だけ。無い番号は 400）、サーバーが分類し直す（版を進め、変わった文の実行の要約と「すべて実行」の要約は消す。番号と SQL が同じ文の要約は残す） |
+| `PUT /api/nl2sql/db-admin-chat/conversations/{id}/turns/{turn_id}/plan` | `menu.db_admin_chat` | `{sql, statement_index}` → ターン。AI のエラー分析で直した SQL に置き換え（`statement_index` があればその文だけ。無い番号は 400）、サーバーが分類し直す（列の検査もし直す。版を進め、変わった文の実行の要約と「すべて実行」の要約は消す。番号と SQL が同じ文の要約は残す） |
 | `GET /api/nl2sql/db-admin-chat/conversations` | `menu.db_admin_chat` | 会話の履歴（新しい順・offset 型。既定 25 件）。system_admin は全員の会話（利用者の表示名つき） |
 | `GET` / `PATCH` / `DELETE /api/nl2sql/db-admin-chat/conversations/{id}` | `menu.db_admin_chat` | 会話の内容（ターン）・名前の変更（1〜80 文字）・削除（ターンも消える。監査の表は残す） |
 | `POST /api/nl2sql/db-admin-chat/analyze-error` | `menu.db_admin_chat` | `{question, sql, result_text}` → `{analysis, corrected_plan}`（保存しない） |

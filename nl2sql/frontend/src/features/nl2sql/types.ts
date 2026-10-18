@@ -399,6 +399,11 @@ export interface OffsetPage<T> {
   has_next: boolean;
 }
 
+/** 会話の履歴の 1 ページ。`history_days` は一覧を絞った期間（最後の更新が直近 N 日。0 は絞らない。#2340）。 */
+export interface ChatHistoryOffsetPage<T> extends OffsetPage<T> {
+  history_days?: number;
+}
+
 export interface ClassifierTrainingCandidatesData extends OffsetPage<ClassifierTrainingCandidate> {
   /** 絞り込み（状態・業務プロファイル・検索語）の前の全件（「N 件（全 M 件）」。#1891）。 */
   unfiltered_total: number;
@@ -780,6 +785,8 @@ export interface HistoryItem {
   agent_run_id?: string;
   /** 種類（チャットの往復 / SQL 生成 / MCP / 品質評価。きっかけと会話の持ち主で backend が決める。#1955・#1986）。 */
   kind?: "chat" | "query" | "mcp" | "evaluation" | null;
+  /** チャットの往復の会話の ID（実行の詳細の「会話を開く」に使う。チャットでない実行は意味を持たない。#2343）。 */
+  session_id?: string;
 }
 
 export interface HistoryData extends OffsetPage<HistoryItem> {
@@ -1306,6 +1313,10 @@ export interface DbAdminChatStatementPlan {
   requires_confirmation: boolean;
   /** 確認語（ADMIN_EXECUTE、1 つの対象を消す DROP / TRUNCATE は対象の名前）。不要なら空。 */
   confirmation_target: string;
+  /** 参照する object に無い列（#2352）。空でなければ実行できない（AI のエラー分析で直せる）。 */
+  unknown_columns: string[];
+  /** 列を確かめられなかった object など、止めない注意（#2352）。 */
+  warnings: string[];
 }
 
 /**

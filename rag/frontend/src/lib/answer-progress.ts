@@ -22,6 +22,9 @@ export const ANSWER_STAGE_LABEL: Record<string, I18nKey> = {
   answer: "search.stage.answer",
   // 回答側の安全チェック（#1146）
   answer_guardrail: "search.stage.answerGuardrail",
+  // 回答の記録・会話の回答の保存（#2342）
+  answer_record_save: "search.stage.answerRecordSave",
+  chat_message_save: "search.stage.chatMessageSave",
 };
 
 /** 回答フローの中の各工程の工程名の接頭辞（#593。定義は `lib/answer-process.ts`）。 */

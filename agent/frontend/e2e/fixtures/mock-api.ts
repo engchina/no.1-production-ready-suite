@@ -666,6 +666,23 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+/** 版の履歴に残す版の数（backend の AGENT_MAX_PUBLISHED_VERSIONS の既定。#2356）。 */
+const MAX_PUBLISHED_VERSIONS = 5;
+
+/**
+ * 公開のときに古い版を消す（backend の versions_to_prune と同じ規則。#2356）。`keep`（公開中の版など）は古くても
+ * 残し、残りの枠を新しい版から埋める。番号は振り直さない。
+ */
+function pruneVersions(versions: Json[], ...keep: number[]): Json[] {
+  const numbers = versions.map((item) => Number(item.version)).sort((a, b) => b - a);
+  const kept = new Set(keep.filter((version) => numbers.includes(version)));
+  for (const version of numbers) {
+    if (kept.size >= MAX_PUBLISHED_VERSIONS) break;
+    kept.add(version);
+  }
+  return versions.filter((item) => kept.has(Number(item.version)));
+}
+
 /** データの範囲の候補の既定（#1378）。NL2SQL は 3 件、RAG は 2 件。 */
 const DATA_SCOPE_CANDIDATES: Record<string, Json[]> = {
   nl2sql: [
@@ -693,6 +710,8 @@ function createState() {
     // 保存先（`GET /api/runtime/storage`。#839）。既定は Oracle に保存している状態。
     runtimeStorage: clone(RUNTIME_STORAGE_PERSISTENT) as Json,
     runs: [] as Json[],
+    // 会話の一覧（`GET /api/threads`）の期間の日数（`history_days`。#2340）。null は応答に付けない（期間の表示なし）。
+    chatHistoryDays: null as number | null,
     // 承認の判断者・版の公開者（ログイン ID）→ 表示名（`GET /api/approvals/{id}` / `GET /api/agents` の `user_display_names`。#1696）。
     // ここに無いログイン ID は削除済みの利用者として扱う。
     userDisplayNames: {
@@ -1728,7 +1747,10 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         ? { actor_display_name: state.creatorDisplayNames[String(runs[0].created_by_user_uuid ?? "")] ?? "" }
         : {}),
     })).reverse();
-    return pageOfItems(threads, { offset, limit });
+    return {
+      ...pageOfItems(threads, { offset, limit }),
+      ...(state.chatHistoryDays == null ? {} : { history_days: state.chatHistoryDays }),
+    };
   }
   // 会話の名前の変更・削除（#1817）。削除は Run を残し、会話からの参照（thread_id）だけを外す。
   if ((method === "PATCH" || method === "DELETE") && at("threads", "*")) {
@@ -2355,6 +2377,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return {
         agents: state.agents.filter((agent) => agentAllowed(state, agent.id)),
         user_display_names: state.userDisplayNames,
+        max_published_versions: MAX_PUBLISHED_VERSIONS,
       };
     if (method === "POST" && at("agents")) {
       // backend の create_agent と同じく、送られた ID は URL に置ける形だけを受け付ける（#1033）。
@@ -2469,7 +2492,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         const skill = state.skills.find((item) => item.id === id) ?? {};
         return { id, name: skill.name ?? id, description: skill.description ?? "", content_hash: `hash-${id}` };
       });
-      agent.versions = [...versions, snapshot];
+      agent.versions = pruneVersions([...versions, snapshot], version);
       agent.published_version = version;
       agent.unpublished_changes = false;
       agent.draft_changed = false;
@@ -2502,10 +2525,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       }
       const previous = Number(published.version);
       const version = Math.max(0, ...versions.map((item) => Number(item.version))) + 1;
-      agent.versions = [
-        ...versions,
-        { ...clone(published), version, note: `スキルの更新を取り込む（v${previous} から）`, published_at: MOCK_NOW, published_by: "local" },
-      ];
+      agent.versions = pruneVersions(
+        [
+          ...versions,
+          { ...clone(published), version, note: `スキルの更新を取り込む（v${previous} から）`, published_at: MOCK_NOW, published_by: "local" },
+        ],
+        version,
+        previous,
+      );
       agent.published_version = version;
       // 取り消し（rollback）で前の版に戻したときの更新の印（mock は前の値を覚えておく）。
       agent._skill_updates_before = clone(agent.skill_updates);

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { Check, FileText, GitBranch, PlayCircle, RefreshCw, Server, ShieldAlert } from "lucide-react";
 import {
   Banner,
@@ -10,6 +11,8 @@ import {
   FormStatus,
   ListSkeleton,
   ObjectActionBar,
+  OpenConversationAction,
+  ProcessFailureNotice,
   ProcessingIndicator,
   RunDetailLayout,
   RunDetailSection,
@@ -35,7 +38,7 @@ import {
 import { QueryState } from "@/components/ListViews";
 import { useAuth } from "@/components/security/AuthProvider";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
-import { AnswerReviewSections, LimitNote, OutcomeBadge } from "@/components/chat/AnswerReview";
+import { AnswerReviewSections, LimitNote, OutcomeBadge, ValidationBadge } from "@/components/chat/AnswerReview";
 import { AnswerBody, ResultTable } from "@/components/chat/ResultTables";
 import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
 import {
@@ -48,7 +51,8 @@ import {
 import { dataScopeNotes } from "@/lib/data-scope";
 import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
-import { type AgentCapabilities } from "@/lib/permissions";
+import { processFailureLabels, runFailure } from "@/lib/process-failure";
+import { MENU_PERMISSIONS, type AgentCapabilities } from "@/lib/permissions";
 import { ANSWER_EVIDENCE_KIND, ragArtifactEvidence, runAnswerEvidence } from "@/lib/answer-evidence";
 import { noticeHeading, structureAnswer } from "@/lib/answer-structure";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
@@ -56,7 +60,7 @@ import {
   agentRunDetailLabels,
   commonRunStatus,
   runDurationMs,
-  runFailureMessage,
+  runConversationHref,
   runFinishedAt,
   runStatusLabel,
   runTimelineSteps,
@@ -118,7 +122,11 @@ export function RunDetail({
   const structured = structuredFallback(run);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
   const canAddCase = useCanEditEvaluationSets();
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
+  const conversationHref = runConversationHref(run, {
+    seesAllUsers: user?.is_system_admin === true,
+    canOpenChat: hasPermission(MENU_PERMISSIONS.chat),
+  });
   const labels = agentRunDetailLabels();
   // 実行者と会話の持ち主（#1954）。引けない利用者は「削除済みのユーザー」、自分は自分の表示名で補う。
   const executedByMe = run.executed_by_me !== false;
@@ -135,7 +143,6 @@ export function RunDetail({
   // 自分では操作できない待ち（system_admin が自分の会話で実行した Run の承認・確認。#1928・#1954）。
   const waitingForExecutor =
     run.can_decide === false && (run.status === "waiting_approval" || run.status === "waiting_confirmation");
-  const failure = runFailureMessage(run);
   // 最終の回答は「回答」の節、それ以外の成果物（根拠・確かめ・構造化データ・ツールの結果）は「成果物」の節。
   const answers = run.artifacts.filter(isAnswerArtifact);
   // 回答の根拠（#2328）は回答の下にチャットと同じ部品で出す（成果物の一覧には重ねない）。
@@ -148,6 +155,7 @@ export function RunDetail({
   const latestAnswer = answers.at(-1);
   const outcome = latestAnswer ? answerOutcome(latestAnswer.content) : null;
   const timelineSteps = runTimelineSteps(run, (step) => stepDetails(step));
+  const failure = runFailure(run, timelineSteps, "detail");
   const usage = run.usage;
 
   return (
@@ -191,12 +199,21 @@ export function RunDetail({
             runId={run.id}
             labels={labels}
             actions={
-              <ObjectActionBar
-                actions={actions}
-                ariaLabel={t("run.actions")}
-                moreLabel={t("common.moreActions")}
-                testId="run-object-actions"
-              />
+              // 「会話を開く」（3 製品共通の部品。チャットから送った Run だけ。#2343）と Run の操作（承認・再開・取消）。
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <OpenConversationAction
+                  href={conversationHref}
+                  linkComponent={Link}
+                  labels={{ label: t("run.openChat"), ariaLabel: t("run.openChatLabel") }}
+                  testId="run-open-chat"
+                />
+                <ObjectActionBar
+                  actions={actions}
+                  ariaLabel={t("run.actions")}
+                  moreLabel={t("common.moreActions")}
+                  testId="run-object-actions"
+                />
+              </div>
             }
             alert={
               <>
@@ -214,9 +231,8 @@ export function RunDetail({
                   </Banner>
                 ) : null}
                 {failure ? (
-                  <Banner severity="danger" title={t("run.failedTitle")}>
-                    <span className="break-words [overflow-wrap:anywhere]">{failure}</span>
-                  </Banner>
+                  // 失敗は 3 製品共通の失敗のカード（チャットと同じ 1 文目・「詳細」。#2342）。
+                  <ProcessFailureNotice failure={failure} labels={processFailureLabels()} testId="run-failure" />
                 ) : null}
               </>
             }
@@ -776,7 +792,7 @@ function ArtifactsSection({
 }: {
   run: RunState;
   artifacts: Artifact[];
-  /** 支援タスクの状態・回答の検証の元の JSON を出すか（管理者だけ。#1286）。 */
+  /** 支援タスクの状態・資料との照合の元の JSON を出すか（管理者だけ。#1286）。 */
   showRawReview: boolean;
 }) {
   return (
@@ -811,14 +827,20 @@ function ArtifactsSection({
 }
 
 /**
- * 支援タスクの状態・回答の検証（#1286）。業務の利用者にはチャットと同じ業務の言葉で出し、内部の語を含む
- * 元の JSON は管理者だけに畳んで出す（handoff §13）。
+ * 支援タスクの状態・資料との照合（#1286・#2361）。業務の利用者にはチャットと同じ業務の言葉で出し、内部の語を含む
+ * 元の JSON は管理者だけに畳んで出す（handoff §13）。照合の結果はチャットの行と同じバッジで出す（除いた内容の一覧は
+ * 回答の本文の節にある）。
  */
 function ReviewArtifact({ artifact, showRaw }: { artifact: Artifact; showRaw: boolean }) {
   const review = answerReview([artifact]);
   return (
     <div className="mt-3 min-w-0 space-y-2" data-testid={`run-review-${artifact.id}`}>
       {review?.limitReached ? <LimitNote testId={`run-review-limit-${artifact.id}`} /> : null}
+      {review?.validation ? (
+        <div className="flex" data-testid={`run-review-validation-${artifact.id}`}>
+          <ValidationBadge validation={review.validation} />
+        </div>
+      ) : null}
       {review ? (
         <AnswerReviewSections review={review} />
       ) : (

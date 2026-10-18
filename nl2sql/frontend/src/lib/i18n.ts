@@ -126,6 +126,16 @@ const nl2sqlJa = {
   "chat.safe": "安全検査済み・未実行",
   "chat.blocked": "安全検査でブロック",
   "chat.cancelled": "SQL の生成を停止しました。もう一度送ると、新しく SQL を生成します。",
+  // 処理の失敗のカード（3 製品共通の ProcessFailureNotice。#2342）。
+  "failure.details": "詳細",
+  "failure.failedStep": "止まった段",
+  "failure.errorType": "エラーの種類",
+  "failure.errorCode": "エラーコード",
+  "failure.jobId": "ジョブ ID",
+  "failure.occurredAt": "時刻",
+  "failure.summary": "SQL の生成と実行ができませんでした。",
+  "failure.summaryAt": "「{step}」で処理が止まりました。",
+  "failure.next": "続くときは、詳細のジョブ ID を添えて管理者に連絡してください。",
   "chat.limit": "会話が長くなりました。新しい会話を始めてください。",
   // チャットのターンの SQL の実行（#1154）。結果の表の文言は共通の ChatResultTable の既定。
   "chat.safeExecuted": "安全検査済み・実行済み",
@@ -167,6 +177,8 @@ const nl2sqlJa = {
   "dbAdminChat.blocked.title": "この文は実行できません",
   "dbAdminChat.blocked.hint":
     "データベースの停止・ユーザーの作成と削除・システムの設定の変更・動的 SQL・アプリのシステムの表への操作は、DB 管理チャットでは実行できません。",
+  "dbAdminChat.blocked.unknownColumnHint":
+    "「AI でエラーを分析」で、参照するオブジェクトの実際の列を使った SQL に直せます。",
   "dbAdminChat.warning.mutation":
     "この文はデータベースを変更します。内容を確かめ、実行確認語を入力してから実行してください。",
   "dbAdminChat.warning.implicitCommit":
@@ -2687,7 +2699,8 @@ const nl2sqlJa = {
   "learning.error.classifier": "Classifier 操作に失敗しました。",
 
   "history.subtitle": "SQL の生成と実行の記録を、状態・SQL・処理の経過で確かめます。",
-  "history.action.rerun": "この質問で再実行",
+  "history.action.openChat": "会話を開く",
+  "history.action.openChatLabel": "この実行の会話をチャットで開く",
   "history.action.clearFilters": "条件をクリア",
   "history.action.copySql": "SQL をコピー",
   "history.copied": "SQL をコピーしました。",
@@ -3363,6 +3376,10 @@ const nl2sqlJa = {
   "dbAdmin.result.error.ora11548.action.regenerate": "アノテーション管理の入力確認画面へ戻り、SQL を再生成してください。",
   "dbAdmin.result.error.ora01031.cause": "この操作を実行する Oracle 権限がありません。",
   "dbAdmin.result.error.ora01031.action.privilege": "実行ユーザーの権限を管理者に確認してください。",
+  "dbAdmin.result.error.statementFailed": "この文の実行に失敗しました。",
+  "dbAdmin.result.error.statementBlocked": "この文は実行できません。",
+  "dbAdmin.result.error.ora00904.cause": "SQL に書いた列名・識別子が対象の表に存在しません（綴り・二重引用符の大文字と小文字の違いを含む）。",
+  "dbAdmin.result.error.ora00904.action.column": "対象の表の列名を確かめ、SQL の列名を直してください。",
   "dbAdmin.result.error.dataType.cause": "取込データまたは SQL の値が対象列のデータ型・長さに一致していません。",
   "dbAdmin.result.error.dataType.action.check": "対象列の型、日付形式、数値形式、文字数を確認してください。",
   "dbAdmin.result.error.constraint.cause": "表の制約条件を満たしていません。",

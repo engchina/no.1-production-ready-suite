@@ -1252,8 +1252,11 @@ export interface ThreadSummary {
   actor_display_name?: string;
 }
 
-/** 会話の一覧の 1 ページ（新しい順。共通の Page。#1265 / #1266）。 */
-export type ThreadsData = Page<ThreadSummary>;
+/**
+ * 会話の一覧の 1 ページ（新しい順。共通の Page。#1265 / #1266）。`history_days` は一覧を絞った期間
+ * （最後の更新が直近 N 日。0 は絞らない。#2340）。
+ */
+export type ThreadsData = Page<ThreadSummary> & { history_days?: number };
 
 /** 実行履歴の一覧の 1 行（step・Event・成果物は持たない。詳細は `getRun`。#1897）。 */
 export interface RunSummary {
@@ -1925,7 +1928,11 @@ export const agentApi = {
     }),
   listTools: () => request<{ tools: ToolDefinition[] }>("/api/tools"),
   // `user_display_names` は版の公開者（ログイン ID）→ 表示名（#1696）。
-  listAgents: () => request<{ agents: AgentProfile[]; user_display_names?: Record<string, string> }>("/api/agents"),
+  // `max_published_versions` は版の履歴に残す版の数（AGENT_MAX_PUBLISHED_VERSIONS。#2356）。
+  listAgents: () =>
+    request<{ agents: AgentProfile[]; user_display_names?: Record<string, string>; max_published_versions?: number }>(
+      "/api/agents",
+    ),
   createAgent: (payload: AgentProfileWritePayload) =>
     request<AgentProfile>("/api/agents", {
       method: "POST",

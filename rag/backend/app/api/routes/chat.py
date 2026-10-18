@@ -20,6 +20,11 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
+from pr_backend_core.chat_history_window import (
+    ChatHistoryPage,
+    chat_history_cutoff,
+    chat_history_days,
+)
 from pr_backend_core.chat_progress import (
     ChatProgressEvent,
     ChatProgressPage,
@@ -27,6 +32,7 @@ from pr_backend_core.chat_progress import (
     chat_progress_sse_response,
     parse_chat_progress_events,
 )
+from pr_backend_core.logging import safe_exception_fields
 from starlette.concurrency import run_in_threadpool
 
 from app.api.routes.search import (
@@ -65,7 +71,7 @@ from app.rag.chat_progress import ChatProgressTracker
 from app.rag.document_sections_service import current_section_pages
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import elapsed_ms, new_trace_id
-from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress
+from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress, storage_failure
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import (
     current_audit_request_context,
@@ -117,6 +123,11 @@ ANSWER_STREAM_NOT_FOUND_MESSAGE = (
     "回答の配信を再開できません。保存済みの会話から回答を取り直してください。"
 )
 DUPLICATE_MESSAGE_ID_MESSAGE = "同じ質問を既に送信しています。会話を読み込み直してください。"
+# 回答は作ったが会話に保存できなかった回答（読み込み直したときに出す文。#2342）。
+CHAT_ANSWER_NOT_SAVED_MESSAGE = (
+    "回答は作成しましたが、会話に保存できなかったため表示できません。"
+    "もう一度質問してください。続くときは、トレース ID を添えて管理者に連絡してください。"
+)
 ANSWER_NOT_FOUND_MESSAGE = "回答が見つかりません。会話を読み込み直してください。"
 
 
@@ -264,26 +275,33 @@ async def list_compare_models() -> ApiResponse[list[dict[str, str]]]:
     )
 
 
-@router.get("/conversations", response_model=ApiResponse[Page[ConversationSummary]])
+@router.get("/conversations", response_model=ApiResponse[ChatHistoryPage[ConversationSummary]])
 async def list_conversations(
     paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))],
     search_answer_profile_id: str | None = Query(default=None, max_length=128),
-) -> ApiResponse[Page[ConversationSummary]]:
+) -> ApiResponse[ChatHistoryPage[ConversationSummary]]:
     """会話一覧を返す。DB 停止時は空一覧 + warning で縮退する。
 
     system_admin は全員の会話（利用者の表示名つき）、それ以外は自分の会話だけ（#1889）。
+    最後の更新が会話の履歴の期間（共通の設定 `PLATFORM_CHAT_HISTORY_DAYS`）の中の会話だけを、
+    件数と 1 ページの両方で返す（期間の外の会話も `GET /conversations/{id}` では開ける。#2340）。
     """
     settings = get_settings()
     _require_chat_enabled(settings)
     oracle = OracleClient()
+    history_days = chat_history_days(settings)
+    updated_since = chat_history_cutoff(history_days)
 
     async def _load() -> Page[ConversationSummary]:
         items = await oracle.list_conversations(
             search_answer_profile_id=search_answer_profile_id,
+            updated_since=updated_since,
             limit=paging.limit,
             offset=paging.offset,
         )
-        total = await oracle.count_conversations(search_answer_profile_id=search_answer_profile_id)
+        total = await oracle.count_conversations(
+            search_answer_profile_id=search_answer_profile_id, updated_since=updated_since
+        )
         names = await _owner_names(items)
         return paginate(
             [_to_conversation_summary(item, names) for item in items],
@@ -299,7 +317,10 @@ async def list_conversations(
         fallback=fallback,
         log_label="conversations_list",
     )
-    return ApiResponse(data=page, warning_messages=[degraded.message] if degraded else [])
+    return ApiResponse(
+        data=ChatHistoryPage[ConversationSummary].from_page(page, history_days=history_days),
+        warning_messages=[degraded.message] if degraded else [],
+    )
 
 
 @router.post("/conversations", response_model=ApiResponse[ConversationDetail])
@@ -753,7 +774,6 @@ async def _generate_chat_answer(
             created_at=datetime.now(UTC),
             progress=tracker.dump() if tracker is not None else None,
         )
-        await oracle.finish_chat_message(assistant, lease_owner=lease_owner)
     except Exception as exc:
         if tracker is not None:
             tracker.fail()
@@ -784,6 +804,38 @@ async def _generate_chat_answer(
                 lease_owner=lease_owner,
             )
         raise
+    try:
+        await oracle.finish_chat_message(assistant, lease_owner=lease_owner)
+    except Exception as exc:
+        # 回答は作った。保存できなくても利用者には回答を届け、保存できなかったことを示す（#2342）。
+        # 以前は回答の生成の失敗として扱い、作った回答を捨てて定型の失敗の文にしていた。
+        failure = storage_failure("chat_message_save", exc)
+        logger.warning(
+            "chat_answer_save_failed",
+            extra={"trace_id": result.trace_id, **safe_exception_fields(exc)},
+        )
+        await run_recorder.add_storage_failure(failure)
+        # 読み込み直したときに「作成中」のまま・定型の失敗の文にならないよう、理由の文で閉じる。
+        with suppress(Exception):
+            await oracle.finish_chat_message(
+                StoredMessage(
+                    id=message_id,
+                    conversation_id=turn.conversation_id,
+                    reply_to_message_id=turn.user_message.id,
+                    role="ASSISTANT",
+                    model=model_id or None,
+                    content=CHAT_ANSWER_NOT_SAVED_MESSAGE,
+                    trace_id=result.trace_id,
+                    status="ERROR",
+                    elapsed_ms=result.elapsed_ms,
+                    created_at=datetime.now(UTC),
+                    progress=tracker.dump() if tracker is not None else None,
+                ),
+                lease_owner=lease_owner,
+            )
+        result = result.model_copy(
+            update={"storage_failures": [*result.storage_failures, failure]}
+        ).with_evaluation_input(result.evaluation_input)
     return assistant, result
 
 
@@ -969,6 +1021,9 @@ async def _answer_turn(
                     **({"reason": failure.reason} if failure.reason else {}),
                     "message": _chat_error_message(exc),
                     "error_type": failure.error_type if failure.incomplete else type(exc).__name__,
+                    # 画面の「詳細」のエラーコード（ORA-03146 など。例外の本文は送らない。#2342）。
+                    **({"error_code": failure.error_code} if failure.error_code else {}),
+                    "occurred_at": datetime.now(UTC).isoformat(),
                     # 時間切れになった工程（#375）。画面は文言をそのまま出し、工程は記録に使う。
                     "stage": exc.stage if isinstance(exc, AnswerTimeoutError) else failure.stage,
                 },
@@ -985,6 +1040,8 @@ async def _answer_turn(
                 "guardrail_warnings": result.guardrail_warnings,
                 # 回答エンジンの根拠・実行記録(無いときは None)。
                 "answer_diagnostics": result.diagnostics.answer,
+                # 作ったが保存できなかった記録（回答の記録・会話の回答。#2342）。
+                "storage_failures": [item.model_dump() for item in result.storage_failures],
             },
         )
         for chunk in _answer_chunks(result.answer):

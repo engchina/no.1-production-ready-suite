@@ -69,6 +69,7 @@ import {
 } from "./dbAdminChat";
 import { nl2sqlIncrementalKeys } from "./incrementalQueries";
 import type {
+  ChatHistoryOffsetPage,
   DbAdminChatAnalyzeData,
   DbAdminChatConversation,
   DbAdminChatData,
@@ -77,7 +78,6 @@ import type {
   DbAdminChatSendData,
   DbAdminChatStatementPlan,
   DbAdminChatTurn as DbAdminChatTurnData,
-  OffsetPage,
 } from "./types";
 import { useMutationSchemaSync } from "./useMutationSchemaSync";
 
@@ -134,7 +134,7 @@ export function DbAdminChatPage() {
         limit: String(DEFAULT_PAGE_SIZE),
         offset: String(historyPageOffset),
       });
-      return apiGet<OffsetPage<DbAdminChatConversation>>(
+      return apiGet<ChatHistoryOffsetPage<DbAdminChatConversation>>(
         `/api/nl2sql/db-admin-chat/conversations?${params.toString()}`,
         { signal, timeoutMs: API_TIMEOUT_MS.interactiveList },
       );
@@ -293,6 +293,7 @@ export function DbAdminChatPage() {
       <Nl2SqlChatLayout
         history={{
           panel: historyPanel,
+          historyDays: history.data?.history_days,
           // 一覧の行・読み込み中・失敗・0 件・ページングはチャットと共通の Nl2SqlChatHistoryList（#2319）。
           content: (
             <Nl2SqlChatHistoryList
@@ -796,6 +797,8 @@ function DbAdminChatStatement({
   const failed = Boolean(execution && execution.status === "failed" && (executeError || (result && !executed)));
   const canRun = dbAdminChatCanRunStatement(statement, confirmation) && !busy;
   const blocked = Boolean(statement.blocked_reason);
+  // 参照する object に無い列で止めた文（#2352）は、AI のエラー分析で直せる。
+  const unknownColumns = statement.unknown_columns.length > 0;
 
   const run = () => {
     if (!canRun) return;
@@ -812,7 +815,9 @@ function DbAdminChatStatement({
       ? dbAdminFailureText(result)
       : executeError instanceof ApiError
         ? executeError.message
-        : String(executeError ?? "");
+        : executeError
+          ? String(executeError)
+          : statement.blocked_reason;
     try {
       // 失敗した文だけを分析に渡す（直した SQL はこの文だけを置き換える。#2333）。
       const data = await apiPost<DbAdminChatAnalyzeData>(
@@ -869,7 +874,9 @@ function DbAdminChatStatement({
       {blocked ? (
         <Banner severity="danger" title={t("dbAdminChat.blocked.title")}>
           <p className="break-words">{statement.blocked_reason}</p>
-          <p className="mt-2 text-xs">{t("dbAdminChat.blocked.hint")}</p>
+          <p className="mt-2 text-xs">
+            {t(unknownColumns ? "dbAdminChat.blocked.unknownColumnHint" : "dbAdminChat.blocked.hint")}
+          </p>
         </Banner>
       ) : null}
       {statement.requires_confirmation ? (
@@ -950,7 +957,7 @@ function DbAdminChatStatement({
           ) : null}
         </section>
       ) : null}
-      {failed && !running ? (
+      {(failed || unknownColumns) && !running ? (
         <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"

@@ -216,6 +216,7 @@ from app.features.agent.tools import (
     mcp_tool_handler,
     tool_registry,
 )
+from app.observability import MODEL_INCOMPLETE_RETRIES_TOTAL
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -431,6 +432,25 @@ def _with_lower_reasoning_effort(request: dict[str, Any]) -> dict[str, Any] | No
     return {**request, "reasoning": {**_request_reasoning(request), "effort": lower}}
 
 
+def _transient_incomplete(incomplete: EnterpriseAiIncomplete) -> bool:
+    """出力の上限で未完了でも、使った出力が上限よりはるかに少ない（上限に達したはずがない）か。
+
+    実環境（2026-10-18）で、上限 32768 tokens に対して 61 tokens の出力で `max_output_tokens` の
+    未完了が返った（#2355）。呼び先の一時的な不具合として、同じ要求で送り直す。割合は
+    `agent_model_incomplete_retry_output_ratio`（0 以下は送り直さない）。
+    """
+    ratio = float(get_settings().agent_model_incomplete_retry_output_ratio)
+    limit, used = incomplete.max_output_tokens, incomplete.output_tokens
+    return (
+        incomplete.output_limit_reached
+        and ratio > 0
+        and isinstance(limit, int)
+        and limit > 0
+        and isinstance(used, int)
+        and used < limit * ratio
+    )
+
+
 def _raise_for_incomplete(
     incomplete: EnterpriseAiIncomplete, request: Mapping[str, Any], *, lowered_effort: bool = False
 ) -> None:
@@ -466,9 +486,10 @@ class _OciStreamingResponses:
 class _OciResponses:
     """`responses.create` を OCI 向けに直し、未完了の応答を扱う。
 
-    ``lower_effort_on_incomplete`` が偽なら、出力の上限で未完了でも推論の量を下げて送り直さない
-    （上限つきの並行の実行器 `pr_backend_core.bounded_calls` を通す呼び出し。送り直しは実行器の
-    ``adaptive`` の再試行に任せ、再試行の主体を二重にしない。#2023）。
+    ``lower_effort_on_incomplete`` が偽なら、出力の上限で未完了でも送り直さない（推論の量を下げる
+    送り直しも、わずかな出力の未完了の送り直し〔#2355〕も。上限つきの並行の実行器
+    `pr_backend_core.bounded_calls` を通す呼び出し。送り直しは実行器の ``adaptive`` の再試行に任せ、
+    再試行の主体を二重にしない。#2023）。
     """
 
     def __init__(self, inner: Any, *, lower_effort_on_incomplete: bool = True) -> None:
@@ -479,6 +500,7 @@ class _OciResponses:
         request = _oci_request(kwargs)
         attempt = 0
         lowered_effort = False
+        transient_retried = False
         while True:
             try:
                 response = await self._inner.create(**request)
@@ -487,6 +509,27 @@ class _OciResponses:
                 )
                 if incomplete is None:
                     return response
+                if (
+                    self._lower_effort_on_incomplete
+                    and not transient_retried
+                    and _transient_incomplete(incomplete)
+                ):
+                    # わずかな出力の未完了は呼び先の一時的な不具合として、同じ要求で 1 回だけ
+                    # 送り直す（#2355）。送り直しも未完了なら下の扱い（推論の量を下げる / 失敗）。
+                    transient_retried = True
+                    model_name = str(request.get("model") or "")
+                    MODEL_INCOMPLETE_RETRIES_TOTAL.labels(model=model_name).inc()
+                    logger.warning(
+                        "builtin_runtime_model_output_incomplete_retry",
+                        extra={
+                            "model": model_name,
+                            "incomplete_reason": incomplete.reason,
+                            "max_output_tokens": incomplete.max_output_tokens,
+                            "output_tokens": incomplete.output_tokens,
+                            "reasoning_tokens": incomplete.reasoning_tokens,
+                        },
+                    )
+                    continue
                 # 出力の上限で未完了なら、推論の量を 1 段下げて 1 回だけ送り直す（#2023。上限は
                 # もうモデルの出力の上限なので広げない）。ほかの理由（content_filter など）は
                 # 送り直さない。
@@ -1016,14 +1059,6 @@ class _ToolRecorder:
         if scoped is not None and scoped.error is not None:
             # 範囲外は呼び先へ送らない（予算にも数えない）。step には拒否を残す。
             return self.reject_out_of_scope(call, scoped)
-        missing = (
-            data_scope.missing_profile_error(name, call_arguments)
-            if definition is not None
-            else None
-        )
-        if missing is not None:
-            # 必須のプロファイルが無い（#1379）: 呼び先へ送らずに、選ぶツールを案内する。
-            return self.reject_call(call, missing)
         # 予算は await の前に数える（同じ応答の並列の呼び出しでも上限を超えない）。
         exceeded = self.budget.reserve(name) if self.budget is not None else None
         step_id, context = runtime_repository.start_builtin_tool_step(self.run_id, call)
@@ -2370,7 +2405,7 @@ async def _finish(
             validation = validation_content(
                 STATUS_UNVALIDATED,
                 reason=REASON_VALIDATION_ERROR,
-                message="回答の検証の途中で予期しない失敗が起きました。",
+                message="資料との照合の途中で予期しない失敗が起きました。",
             )
             runtime_repository.save_builtin_artifact(
                 run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=validation
@@ -2745,7 +2780,7 @@ async def _validate_with_connection(
     if tool is None:
         return unvalidated(
             REASON_VALIDATOR_UNAVAILABLE,
-            f"MCP 接続「{config.label or config.server_id}」は回答の検証を提供していません。",
+            f"MCP 接続「{config.label or config.server_id}」は資料との照合を提供していません。",
             **connection,
         )
     definition = mcp_tool_definition(config, tool)

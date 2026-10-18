@@ -64,6 +64,7 @@ const historyItems: HistoryRecord[] = [
     conversation_owner_display_name: "システム管理者",
     owned_by_me: true,
     kind: "chat",
+    session_id: "conversation-finance-1",
   },
   {
     id: "history-middle",
@@ -313,7 +314,7 @@ test("管理者と、自分の会話で他の人が実行した行を持つ利�
   await expect(page.getByTestId("history-detail-summary").locator('[data-run-fact="owner"]')).toHaveCount(0);
 });
 
-test("SQL 生成を開けない利用者には再実行を出さず、開ける利用者は詳細から質問を引き継いで再実行できる (#912)", async ({ page }) => {
+test("実行の詳細はチャットの往復だけ「会話を開く」を出し、再実行は出さない (#2343)", { tag: "@responsive" }, async ({ page }) => {
   let permissions = ["menu.history"];
   await page.route("**/api/auth/me", (route) => fulfillJson(route, {
     ...systemAdminMe, is_system_admin: false, role_codes: ["ANALYST"], permissions,
@@ -321,16 +322,26 @@ test("SQL 生成を開けない利用者には再実行を出さず、開ける�
   await mockHistory(page);
   await page.goto("/history");
   await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  // 一覧の行にも再実行を置かない（RAG の実行履歴と同じ）。
   await expect(page.getByTestId("history-table-row-actions-history-new")).toHaveCount(0);
   await titleLink(page, "未入金の顧客を確認").click();
   await expect(page.getByTestId("history-detail-summary")).toBeVisible();
   await expect(page.getByRole("button", { name: "この質問で再実行" })).toHaveCount(0);
+  // チャットを開けない利用者には「会話を開く」も出さない。
+  await expect(page.getByTestId("history-detail-open-chat")).toHaveCount(0);
 
-  permissions = ["menu.history", "menu.query"];
+  permissions = ["menu.history", "menu.chat", "menu.query"];
   await page.reload();
-  await page.getByRole("button", { name: "この質問で再実行" }).click();
-  await expect(page).toHaveURL(/\/query\?question=/);
-  expect(new URL(page.url()).searchParams.get("question")).toBe(historyItems[0].question);
+  const openChat = page.getByTestId("history-detail-open-chat");
+  await expect(openChat).toHaveText("会話を開く");
+  await expect(openChat).toHaveAttribute("href", /\/chat\?profile_id=finance&conversation_id=conversation-finance-1$/);
+  await expect(page.getByRole("button", { name: "この質問で再実行" })).toHaveCount(0);
+
+  // SQL 生成の画面の実行は、開く元の会話が無いので出さない。
+  await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();
+  await titleLink(page, "請求金額を確認").click();
+  await expect(page.getByTestId("history-detail-summary")).toBeVisible();
+  await expect(page.getByTestId("history-detail-open-chat")).toHaveCount(0);
 });
 
 test("検索・状態・種類・期間の絞り込みはサーバーへ渡し、0 件なら条件のクリアを案内する", { tag: "@responsive" }, async ({ page }, testInfo) => {

@@ -15,6 +15,10 @@ from pr_backend_core.chat_history import (
     CHAT_HISTORY_MIN_CHARS,
     CHAT_HISTORY_MIN_CHARS_PER_TURN,
 )
+from pr_backend_core.chat_history_window import (
+    CHAT_HISTORY_DAYS_LIMIT,
+    CHAT_HISTORY_DEFAULT_DAYS,
+)
 from pr_backend_core.config import (
     PLATFORM_SETTING_FIELDS,
     BaseServiceSettings,
@@ -140,6 +144,11 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
         ge=CHAT_HISTORY_MIN_CHARS,
         le=CHAT_HISTORY_MAX_CHARS_LIMIT,
     )
+    # チャットの「会話の履歴」に出す期間（日。共通の設定。#2340）。0 は期間で絞らない。
+    # 解釈は pr_backend_core.chat_history_window（最後の更新が直近 N 日の会話だけを一覧に出す）。
+    chat_history_days: int = Field(
+        default=CHAT_HISTORY_DEFAULT_DAYS, ge=0, le=CHAT_HISTORY_DAYS_LIMIT
+    )
     oci_genai_embedding_model: str = "cohere.embed-v4.0"
     oci_genai_embedding_dim: int = 1536
     oci_genai_rerank_model: str = "cohere.rerank-v4.0-fast"
@@ -214,6 +223,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_runtime_projection_retention_days: int = 0
     agent_runtime_projection_write_mode: str = "replace"
     agent_max_tool_calls_per_run: int = 20
+    # モデルの応答が出力の上限で未完了（max_output_tokens）でも、使った出力が上限のこの割合未満なら
+    # 上限に達したはずがない呼び先の一時的な不具合として、同じ要求を 1 回だけ送り直す（#2355）。
+    # 0 以下は送り直さない。
+    agent_model_incomplete_retry_output_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
     # 支援タスクの予算（#1243）。超える呼び出しは実行せず、ツールの結果（budget_exceeded）でモデルに
     # 知らせる（Run は失敗にしない）。0 以下は上限なし。
     # Run ごとの RAG の呼び出し（rag_search・rag_retrieve_evidence。1 回が重い検索と回答の生成）。
@@ -232,6 +245,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 上限つきの並行の実行器（pr_backend_core.bounded_calls）を共有し、429 を受けたら全体で待って
     # 並行の数を下げる（最小 1）。結果はケースの順のまま。1 は 1 件ずつ（#2004 より前と同じ）。
     agent_evaluation_concurrency: int = Field(default=2, ge=1, le=8)
+    # 業務 Agent の版の履歴に残す版の数（#2356）。新しい版を公開したとき、公開日時の新しい順に
+    # 超えた版を消す（公開中の版は古くても残す。版の番号は振り直さない）。
+    agent_max_published_versions: int = Field(default=5, ge=1, le=100)
     # 回答の最終の検証（#1246。#1277 で既定 on）。on のとき、RAG の根拠を使った Run の回答を、
     # 保存する前に Control Plane が根拠を返した RAG の接続ごとに MCP rag_validate_answer で検証する
     # （RAG がモデルを 1 回呼ぶため、接続ごとに 10〜20 秒増える）。根拠で確かめられない段落は回答に

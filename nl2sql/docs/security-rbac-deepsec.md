@@ -202,7 +202,7 @@ platform の `docs/backend-standard.md`「製品間の連携（MCP とサービ�
 |---|---|---|
 | `nl2sql_list_profiles` | `nl2sql.profiles.read` | `GET /api/nl2sql/profiles/search` と同じ業務プロファイルの範囲（claim があれば claim との積） |
 | `nl2sql_recommend_profile` | `nl2sql.query.generate` | `POST /api/nl2sql/recommend-profile`。任意の `profile_ids`（候補の一覧）を渡すとその中からだけ推薦する（候補は利用者の範囲・claim との積。積が空なら推薦なし）。範囲外・しきい値未満の推薦は `null` |
-| `nl2sql_query` | `nl2sql.query.generate` と `nl2sql.sql.execute` の両方 | `POST /api/nl2sql/jobs`。**`profile_id` は必須**（省略・空白は `MCP_TOOL_ARGUMENTS_INVALID`。画面の API と違い `"default"` に切り替えない。#1379）。claim の範囲外は 403（`PROFILE_SCOPE_FORBIDDEN`）、利用者の範囲外の業務プロファイルは 403。`row_limit`（既定 100、上限 1000）を必ずジョブに渡す。`wait_seconds`（既定 40、上限 45）まで待ち、終わらなければ `pending` / `running` と `job_id` を返す |
+| `nl2sql_query` | `nl2sql.query.generate` と `nl2sql.sql.execute` の両方 | `POST /api/nl2sql/jobs`。**`profile_id` を省略・空白・使えない ID にしても `"default"` に切り替えない**（#1379）。利用者の権限 ∩ claim の中の業務プロファイルが 1 つならそれ、そうでなければ質問の推薦で選び、結果の `auto_selected_profile` に示す（決まらなければ 404 `NL2SQL_PROFILE_NOT_SELECTED` と候補。#2355）。明示した ID が claim の範囲外なら 403（`PROFILE_SCOPE_FORBIDDEN`）。`row_limit`（既定 100、上限 1000）を必ずジョブに渡す。`wait_seconds`（既定 40、上限 45）まで待ち、終わらなければ `pending` / `running` と `job_id` を返す |
 | `nl2sql_get_job` | `nl2sql.query.generate` | `GET /api/nl2sql/jobs/{job_id}`。ただし管理権限があっても本人のジョブだけ（他人・不明は 404） |
 | `nl2sql_cancel_requirement` | `nl2sql.query.generate` | `POST /api/nl2sql/query-sessions/{session_id}/cancel`。本人の回答前の確認の session だけ（管理権限があっても他人・不明は 404）。claim の範囲外の業務プロファイルの session は 403 |
 

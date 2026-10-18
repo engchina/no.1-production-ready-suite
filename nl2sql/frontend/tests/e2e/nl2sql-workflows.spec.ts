@@ -9530,8 +9530,8 @@ test("AI 活用の 4 画面はナビ切替で入力を保持し、リセット�
   await page.screenshot({ path: testInfo.outputPath("contextual-new-query.png") });
 });
 
-test("history rerun deep-links back to query with question, engine, and profile", async ({ page }) => {
-  const api = await mockNl2SqlApi(page);
+test("history detail shows the SQL without a rerun action (#2343)", async ({ page }) => {
+  await mockNl2SqlApi(page);
 
   await page.goto("/history");
   // 一覧の題名のリンクで ?id= の全幅の詳細を開く（#1955）。
@@ -9540,26 +9540,9 @@ test("history rerun deep-links back to query with question, engine, and profile"
   await expect(sqlBlock).toContainText("CUSTOMER_PAYMENT_RECONCILIATION_STATUS");
   await expect(sqlBlock).toHaveCSS("overflow-x", "auto");
   await expectNoHorizontalScroll(page);
-  await page.getByRole("button", { name: "この質問で再実行" }).click();
-
-  await expect(page).toHaveURL(/\/query$/);
-  await expect(nl2sqlQuestionInput(page)).toHaveValue("履歴から再実行したい請求金額");
-  await expect(page.getByRole("button", { name: /Select AI Agent/ })).toHaveAttribute("aria-pressed", "true");
-  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル" }), "default");
-  await expectNoHorizontalScroll(page);
-  await nl2sqlQuestionInput(page).fill("再利用後に編集したクエリ");
-  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
-  await page.reload();
-  await expect(nl2sqlQuestionInput(page)).toHaveValue("再利用後に編集したクエリ");
-  await expect(page.getByRole("button", { name: /Enterprise AI Direct/ })).toHaveAttribute("aria-pressed", "true");
-  expect(api.jobPayload).toBeNull();
-  expect(api.executePayload).toBeNull();
-  await (await openSidebarNav(page)).getByRole("link", { name: "実行履歴", exact: true }).click();
-  // 一覧の行の操作（RowActionMenu）からも再実行できる（#1955）。
-  await page.getByRole("button", { name: "履歴から再実行したい請求金額の操作" }).click();
-  await page.getByRole("menuitem", { name: "この質問で再実行" }).click();
-  await expect(nl2sqlQuestionInput(page)).toHaveValue("履歴から再実行したい請求金額");
-  expect(api.jobPayload).toBeNull();
+  // 再実行は実行の詳細・一覧の行に置かない（3 製品の実行の詳細を RAG と同じ「会話を開く」にそろえる。#2343）。
+  await expect(page.getByRole("button", { name: "この質問で再実行" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "履歴から再実行したい請求金額の操作" })).toHaveCount(0);
 });
 
 test("root route opens SQL generation and sidebar exposes feature surfaces", async ({ page }) => {
@@ -14267,9 +14250,11 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await page.getByRole("button", { name: "取り込み実行" }).last().click();
   await expect(page.getByText("実行エラー").first()).toBeVisible();
-  await expect(page.getByText("エラー概要")).toBeVisible();
-  await expect(page.getByText("原因候補")).toBeVisible();
-  await expect(page.getByText("次の対応")).toBeVisible();
+  // 文の失敗は 3 製品共通の失敗のカード 1 枚（何が起きたか・DB の文・原因の説明・次の対応・「詳細」。#2342）。
+  const statementFailure = page.getByTestId("db-admin-statement-failure").first();
+  await expect(statementFailure.getByRole("alert")).toContainText("この文の実行に失敗しました。");
+  await expect(statementFailure.locator("[data-process-failure-explanation]")).toBeVisible();
+  await expect(statementFailure.locator("[data-process-failure-next]")).toBeVisible();
   await expect(page.getByText("ORA-00922: missing or invalid option", { exact: true })).toBeVisible();
   api.sampleImportError = false;
 
@@ -16598,9 +16583,17 @@ test("annotation management explains ORA-11548 before Oracle execution", async (
     .toBeVisible();
   await expect(executePanel.getByText(/"COMMENT" のように二重引用符/)).toBeVisible();
 
-  const details = executePanel.locator("details");
+  // 実行の前に止めた文は「この文は実行できません。」のカード。技術的な詳細は「詳細」に畳む（#2342）。
+  await expect(executePanel.getByTestId("db-admin-statement-failure").getByRole("alert")).toContainText(
+    "この文は実行できません。"
+  );
+  const details = executePanel.getByTestId("db-admin-statement-failure").locator("details");
   const summary = details.locator("summary");
-  await expect(summary).toContainText("詳細ログ");
+  await expect(summary).toContainText("詳細");
+  // 失敗のカードの「詳細」は開いて出す（messaging.md §10.3）。閉じてから開き直せる。
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(details).not.toHaveAttribute("open", "");
   await summary.focus();
   await page.keyboard.press("Enter");
   await expect(details).toHaveAttribute("open", "");

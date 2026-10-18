@@ -32,6 +32,16 @@ class DbAdminChatSqlOutput(BaseModel):
     explanation: str = Field(default="", description="SQL が何をするかの短い説明。")
 
 
+# DB 管理チャットの、存在しない列・object を参照する文の作り直し（#2352）。
+class DbAdminChatRepairedStatement(BaseModel):
+    index: int = Field(description="直した文の番号（context の文の番号）。")
+    sql: str = Field(description="直した 1 文。")
+
+
+class DbAdminChatRepairOutput(BaseModel):
+    statements: list[DbAdminChatRepairedStatement] = Field(default_factory=list)
+
+
 class DbAdminChatAnalysisOutput(BaseModel):
     """DB 管理チャットの失敗の分析（#2264）。直せないときは corrected_sql が空。"""
 

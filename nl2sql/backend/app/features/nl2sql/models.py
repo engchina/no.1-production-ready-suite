@@ -14,6 +14,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pr_backend_core import CursorPage, Page
+from pr_backend_core.chat_history_window import ChatHistoryPage
 from pr_backend_core.chat_progress import ChatProgressEvent
 from pr_system_settings.model import (
     DEFAULT_ENTERPRISE_AI_SEED,
@@ -1098,6 +1099,11 @@ class DbAdminChatStatementPlan(BaseModel):
     requires_confirmation: bool = False
     # 確認語（`ADMIN_EXECUTE`、1 つの対象を消す DROP / TRUNCATE は対象の名前）。不要なら空。
     confirmation_target: str = ""
+    # 参照する object に無い列（#2352）。空でなければ `blocked_reason` に実際の列を添えて実行を
+    # 止める（AI のエラー分析で直した SQL に置き換えると分類し直す）。
+    unknown_columns: list[str] = Field(default_factory=list)
+    # 列を確かめられなかった object など、止めない注意（#2352）。
+    warnings: list[str] = Field(default_factory=list)
 
 
 class DbAdminChatPlan(BaseModel):
@@ -1309,8 +1315,11 @@ class DbAdminChatSummary(BaseModel):
     actor_display_name: str = ""
 
 
-class DbAdminChatPage(Page[DbAdminChatSummary]):
-    """DB 管理チャットの会話の履歴の 1 ページ（新しい順。offset 型）。"""
+class DbAdminChatPage(ChatHistoryPage[DbAdminChatSummary]):
+    """DB 管理チャットの会話の履歴の 1 ページ（新しい順。offset 型）。
+
+    期間（最後の更新が直近 N 日）は `history_days`（#2340）。
+    """
 
 
 class DbAdminChatData(BaseModel):
@@ -1965,8 +1974,11 @@ class SqlChatSummary(BaseModel):
     actor_display_name: str = ""
 
 
-class SqlChatPage(Page[SqlChatSummary]):
-    """会話の履歴の 1 ページ（新しい順。任意のページへ移る offset 型。#1265・#1891）。"""
+class SqlChatPage(ChatHistoryPage[SqlChatSummary]):
+    """会話の履歴の 1 ページ（最後の更新の新しい順。任意のページへ移る offset 型。#1265・#1891）。
+
+    期間（最後の更新が直近 N 日）は `history_days`（#2340）。
+    """
 
 
 class SqlChatData(BaseModel):

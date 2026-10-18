@@ -127,7 +127,13 @@ async function mockChat(
   page: Page,
   conversationListMode: ConversationListMode = "ready",
   initialMessages: object[] = [],
-  options: { initialTitle?: string | null; renameFails?: boolean; streamBody?: string } = {}
+  options: {
+    initialTitle?: string | null;
+    renameFails?: boolean;
+    streamBody?: string;
+    /** 送信の後に会話が返すメッセージ（既定は質問と完了した回答）。 */
+    sentMessages?: object[];
+  } = {}
 ): Promise<() => void> {
   let sent = false;
   let created = initialMessages.length > 0;
@@ -214,7 +220,7 @@ async function mockChat(
         return;
       }
       await conversationListReady;
-      const messages = sent ? [userMessage, assistantMessage] : initialMessages;
+      const messages = sent ? (options.sentMessages ?? [userMessage, assistantMessage]) : initialMessages;
       const summaries = created
         ? [{ ...conversationDetail(messages, conversationTitle), messages: undefined }]
         : [];
@@ -252,7 +258,7 @@ async function mockChat(
       return;
     }
     // GET /api/chat/conversations/{id}
-    const messages = sent ? [userMessage, assistantMessage] : initialMessages;
+    const messages = sent ? (options.sentMessages ?? [userMessage, assistantMessage]) : initialMessages;
     await route.fulfill({
       json: {
         data: conversationDetail(messages, conversationTitle),
@@ -800,6 +806,57 @@ for (const viewport of [
       await expectNoPageOverflow(page);
     }
   );
+}
+
+// #2361: 「資料から確認できなかった事項」は Agent の除いた内容の節と同じ規則（共通の AnswerSections）。項目が多ければ
+// 先頭の 10 件だけを出し、「すべて表示（全 N 件）」で残りを同じ書式で開く（「ほか N 件」で切らない）。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`資料から確認できなかった事項が多い回答は先頭だけを出し、すべて表示で全件を開く (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const gaps = Array.from({ length: 12 }, (_, index) => `合成の条件 ${index + 1} は資料に記載がありません。`);
+    const text = [
+      "点検は月に 1 回行います。",
+      "",
+      "資料により確認できた事項",
+      "",
+      "・点検は月に 1 回行います。",
+      "根拠：点検要領.pdf p.2",
+      "",
+      "資料から確認できなかった事項",
+      "",
+      ...gaps.map((gap) => `・${gap}`),
+    ].join("\n");
+    const streamBody = [
+      sseStart,
+      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text })}\n\n`,
+      `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [] })}\n\n`,
+      `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+    ].join("");
+    await mockChat(page, "ready", [], { streamBody });
+
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    await page.getByRole("button", { name: "新しい会話" }).click();
+    await page.getByRole("textbox").fill(userMessage.content);
+    await page.getByRole("button", { name: "送信" }).click();
+
+    const answer = page.getByTestId("answer-text");
+    const sections = answer.getByTestId("answer-section");
+    await expect(sections.locator("h4")).toHaveText(["資料により確認できた事項", "資料から確認できなかった事項"]);
+    // 確認できた事項の節は畳まない。
+    await expect(sections.nth(0).getByTestId("answer-section-toggle")).toHaveCount(0);
+    const items = sections.nth(1).getByRole("listitem");
+    await expect(items).toHaveCount(10);
+    const toggle = sections.nth(1).getByTestId("answer-section-toggle");
+    await expect(toggle).toHaveText(`すべて表示（全 ${gaps.length} 件）`);
+    await toggle.click();
+    await expect(items).toHaveText(gaps);
+    await expect(toggle).toHaveText("折りたたむ");
+    await expectNoPageOverflow(page);
+  });
 }
 
 // #2096: 回答の処理の経過は、回答の工程ごとの段階（answer_step。工程名・入れ子の深さ・LLM の回数）を 1 か所に
@@ -1930,3 +1987,119 @@ test("生成中に新しい会話を作ると、前の会話の生成を止め�
   await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("送信");
   await expect.poll(() => streamAborted).toBe(true);
 });
+
+
+// 失敗の表示（3 製品共通の失敗のカード。#2342）。
+function progressEvent(seq: number, extra: Record<string, unknown>) {
+  return `event: chat_progress\ndata: ${JSON.stringify({
+    model_id: "m1",
+    message_id: "a1",
+    event: { seq, target_id: "a1", at: `2026-01-01T00:00:0${seq}Z`, ...extra },
+  })}\n\n`;
+}
+
+const failedStreamBody = [
+  sseStart,
+  progressEvent(1, { type: "step", step_id: "s1", kind: "answer_step", status: "running", params: { name: "文書検索", depth: 0 } }),
+  progressEvent(2, { type: "step", step_id: "s1", kind: "answer_step", status: "failed", params: { name: "文書検索", depth: 0 } }),
+  progressEvent(3, { type: "terminal", status: "failed" }),
+  `event: error\ndata: ${JSON.stringify({
+    model_id: "m1",
+    message_id: "a1",
+    trace_id: "trace-failed",
+    message: "検索処理中にエラーが発生しました。",
+    error_type: "DatabaseError",
+    error_code: "ORA-03146",
+    stage: "文書検索",
+    occurred_at: "2026-01-01T00:00:04Z",
+  })}\n\n`,
+  `event: all_done\ndata: ${JSON.stringify({ conversation_id: "conv-1" })}\n\n`,
+].join("");
+
+const unsavedStreamBody = [
+  sseStart,
+  `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "経費の上限は 10 万円です。" })}\n\n`,
+  `event: metadata\ndata: ${JSON.stringify({
+    model_id: "m1",
+    message_id: "a1",
+    trace_id: "t1",
+    elapsed_ms: 5,
+    guardrail_warnings: [],
+    storage_failures: [
+      { step: "answer_record_save", error_type: "DatabaseError", error_code: "ORA-03146" },
+      { step: "chat_message_save", error_type: "DatabaseError", error_code: "ORA-40441" },
+    ],
+  })}\n\n`,
+  `event: citations\ndata: ${JSON.stringify({ model_id: "m1", citations: [citationChunk] })}\n\n`,
+  `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+  `event: all_done\ndata: ${JSON.stringify({ conversation_id: "conv-1" })}\n\n`,
+].join("");
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`回答の失敗は、止まった段・原因・次の操作・「詳細」を共通の失敗のカードで出す（#2342） (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockChat(page, "ready", [], {
+      streamBody: failedStreamBody,
+      sentMessages: [
+        userMessage,
+        { ...assistantMessage, content: "検索処理中にエラーが発生しました。", citations: [], trace_id: "trace-failed", status: "ERROR" },
+      ],
+    });
+
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    const composer = chatComposer(page);
+    await composer.fill("経費の上限は？");
+    await composer.press("Enter");
+
+    const failure = page.getByTestId("chat-answer-failure");
+    await expect(failure.getByRole("alert")).toContainText("「文書の検索」で処理が止まりました。");
+    await expect(failure).toContainText("検索処理中にエラーが発生しました。");
+    await expect(failure).toContainText("もう一度送信してください。");
+    // 技術的な詳細は「詳細」（失敗では開いて出す）。取り直した会話の回答にも引き継ぐ。
+    const details = failure.locator("details");
+    await expect(details).toHaveAttribute("open", "");
+    for (const value of ["止まった段", "DatabaseError", "ORA-03146", "trace-failed"]) {
+      await expect(details).toContainText(value);
+    }
+    await expect(failure.getByRole("button", { name: "もう一度送信" })).toBeVisible();
+    // 処理の経過は失敗した段を ✗ で残す。
+    await expect(page.getByTestId("chat-answer-progress").locator('[data-status="failed"]').first()).toBeVisible();
+    await expectNoPageOverflow(page);
+  });
+
+  test(`作った回答を保存できなかったときは、回答を出したまま warning で理由を出す（#2342） (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockChat(page, "ready", [], {
+      streamBody: unsavedStreamBody,
+      // 会話の回答は保存できず、読み込み直すと保存できなかった理由の文になる。
+      sentMessages: [
+        userMessage,
+        { ...assistantMessage, content: "回答は作成しましたが、会話に保存できなかったため表示できません。", citations: [], status: "ERROR" },
+      ],
+    });
+
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    const composer = chatComposer(page);
+    await composer.fill("経費の上限は？");
+    await composer.press("Enter");
+
+    const live = page.getByTestId("chat-live-turn");
+    await expect(live.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+    const storage = live.getByTestId("chat-answer-storage-failure");
+    await expect(storage).toContainText("回答は表示していますが、一部を保存できませんでした。");
+    await expect(storage).toContainText("会話に保存できなかったため");
+    await expect(storage.getByRole("alert")).toHaveCount(0);
+    await storage.getByText("詳細", { exact: true }).click();
+    await expect(storage).toContainText("ORA-40441");
+    // 取り直した後も作った回答を出したまま（保存できなかった理由の文に置き換えない）。
+    await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("送信");
+    await expect(live.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+    await expect(page.getByTestId("chat-answer-failure")).toHaveCount(0);
+    await expectNoPageOverflow(page);
+  });
+}

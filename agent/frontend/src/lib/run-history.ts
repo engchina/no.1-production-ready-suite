@@ -19,6 +19,8 @@ import type { RunExecutorFilter, RunListKind, RunListKindQuery, RunListStatus, R
 import { AGENT_CHAT_PROGRESS_STEPS } from "@/lib/chat-progress";
 import { dataScopeNotes } from "@/lib/data-scope";
 import { t } from "@/lib/i18n";
+import { runSourceOf } from "@/lib/run-source";
+import { APP_ROUTES } from "@/lib/routes";
 import { runStatusView } from "@/lib/status-labels";
 
 /*
@@ -167,13 +169,6 @@ export function runDurationMs(run: RunState): number | null {
   if (!finished) return null;
   const ms = Date.parse(finished) - Date.parse(run.created_at);
   return Number.isFinite(ms) ? Math.max(0, ms) : null;
-}
-
-/** 失敗・取消の理由（最後の失敗の Event の文）。 */
-export function runFailureMessage(run: RunState): string | null {
-  if (run.status !== "failed") return null;
-  const failed = [...run.events].reverse().find((event) => event.type.endsWith("failed"));
-  return failed?.message || null;
 }
 
 function stepTimelineStatus(step: RunStep): RunTimelineStepStatus {
@@ -325,4 +320,18 @@ export function runTimelineSteps(
     });
   }
   return steps;
+}
+
+/**
+ * 実行の詳細の「会話を開く」の URL（#2343。3 製品で同じ規則）。チャットの画面から送った Run（きっかけが画面）で、
+ * 会話（thread）があり、会話を見られる人（system_admin か会話の持ち主）がチャットを開ける権限を持つときだけ。
+ * MCP・品質評価・自動実行・再実行の Run は、開く元のチャットの会話が無いので null（操作を出さない）。
+ */
+export function runConversationHref(
+  run: Pick<RunState, "agent_id" | "thread_id" | "metadata" | "owned_by_me">,
+  { seesAllUsers, canOpenChat }: { seesAllUsers: boolean; canOpenChat: boolean }
+): string | null {
+  if (!canOpenChat || !run.thread_id || runSourceOf(run.metadata) !== "user") return null;
+  if (!seesAllUsers && run.owned_by_me === false) return null;
+  return `${APP_ROUTES.chat}?${new URLSearchParams({ agent_id: run.agent_id, thread_id: run.thread_id }).toString()}`;
 }

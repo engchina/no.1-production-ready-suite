@@ -262,6 +262,11 @@ export interface Page<T> {
   has_next: boolean;
 }
 
+/** 会話の履歴の 1 ページ。`history_days` は一覧を絞った期間（最後の更新が直近 N 日。0 は絞らない。#2340）。 */
+export interface ChatHistoryPage<T> extends Page<T> {
+  history_days?: number;
+}
+
 // --- 認証（platform の共通認証。#214） ---
 
 /**
@@ -3585,7 +3590,7 @@ export const api = {
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
-    return requestDegradable<Page<ConversationSummary>>(
+    return requestDegradable<ChatHistoryPage<ConversationSummary>>(
       `/api/chat/conversations${qs ? `?${qs}` : ""}`,
     );
   },
@@ -4236,6 +4241,8 @@ export interface SupportGuideDetail extends SupportGuideSummary {
   draft: SupportGuideContent;
   published: SupportGuideContent | null;
   revisions: SupportGuideRevisionSummary[];
+  /** 公開の履歴に残す版の数（RAG_SUPPORT_GUIDE_MAX_PUBLISHED_REVISIONS。#2356）。 */
+  max_published_revisions: number;
   issues: SupportGuideIssue[];
 }
 
@@ -4334,7 +4341,7 @@ export interface SupportGuideExportData {
 // --- 実行履歴（チャット・RAG 検索の実行。#1890） ---
 export type RunSurface = "search" | "chat";
 export type RunStatus = "success" | "blocked" | "error";
-/** 回答の検証（回答の監査で、質問の要求ごとに根拠で答えられたか）。 */
+/** 資料との照合（回答の監査で、質問の要求ごとに根拠で答えられたか）。 */
 export type RunVerification = "verified" | "partial" | "unverified";
 
 /** 実行履歴の「実行者」の絞り込み（すべて / 自分が実行 / 他の人が実行。#1954）。 */
@@ -4406,8 +4413,21 @@ export interface RunFeedback {
   created_at: string;
 }
 
+/** 作った回答を保存できなかった記録（回答は返す。#2342）。 */
+export interface StorageFailure {
+  /** 保存できなかったもの（回答の記録 / 会話の回答）。 */
+  step: "answer_record_save" | "chat_message_save";
+  error_type: string;
+  /** ORA-03146 などのコード（例外の本文は持たない）。 */
+  error_code: string | null;
+}
+
 export interface RunDetail extends RunSummary {
   error_type: string | null;
+  /** 失敗のエラーコード（ORA-03146 など。#2342）。古い記録には無い。 */
+  error_code?: string | null;
+  /** 回答を作ったが保存できなかった記録（#2342）。古い記録には無い。 */
+  storage_failures?: StorageFailure[];
   /** 会話の持ち主の表示名（会話の無い・削除された会話の実行は null、引けない利用者は空文字。#1954）。 */
   conversation_owner_display_name: string | null;
   /** 見ている利用者が会話の持ち主か（会話の無い実行は null。#1954）。 */

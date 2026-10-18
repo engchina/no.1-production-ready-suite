@@ -394,6 +394,12 @@ def build_engine_settings(
         "RAG_ENGINE_ARTICLE_CATALOG_ORIGINAL_QUESTION_SEARCH": (
             "1" if settings.rag_article_catalog_original_question_search else "0"
         ),
+        "RAG_ENGINE_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP": str(
+            settings.rag_article_catalog_output_token_cap
+        ),
+        "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS": str(
+            settings.rag_article_catalog_call_timeout_seconds
+        ),
         # 回答の最終の検証の入力の上限。
         "RAG_ENGINE_ANSWER_VALIDATION_MAX_INPUT_BYTES": str(
             settings.rag_answer_validation_max_input_bytes

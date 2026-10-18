@@ -100,7 +100,7 @@ export function runOutcomeView(run: Pick<RunSummary, "answer_generated" | "statu
   return { variant: "success", label: t("history.outcome.answered") };
 }
 
-/** 回答の検証のバッジ。回答を作らなかった・止めた・失敗した実行は null（「—」）。 */
+/** 資料との照合のバッジ。回答を作らなかった・止めた・失敗した実行は null（「—」）。 */
 export function runVerificationView(verification: RunVerification | null): BadgeView | null {
   switch (verification) {
     case "verified":

@@ -46,6 +46,11 @@ from pr_backend_core.api import (
     paginate,
     paginate_slice,
 )
+from pr_backend_core.chat_history_window import (
+    chat_history_cutoff,
+    chat_history_days,
+    within_chat_history,
+)
 from pr_backend_core.chat_progress import (
     CHAT_PROGRESS_SSE_HEADERS,
     ChatProgressPage,
@@ -239,6 +244,7 @@ from app.features.agent.runtime import (
     ThreadView,
     agent_unavailable_reason,
     builtin_resume_pending,
+    max_published_versions,
     reserved_run_metadata_keys,
     run_summary,
     run_thread_owner,
@@ -1890,11 +1896,15 @@ async def list_threads(
 
     system_admin は全員の会話（利用者の表示名つき）、それ以外はログイン中の利用者の会話だけ
     （#1889）。会話の履歴は 3 製品と同じく、サーバー側でページングする
-    （新しい順、共通の `offset_params` / `Page`。#1265 / #1266）。
+    （新しい順、共通の `offset_params` / `Page`。#1265 / #1266）。最後の更新が会話の履歴の期間
+    （共通の設定 `PLATFORM_CHAT_HISTORY_DAYS`）の中の会話だけを、件数と 1 ページの両方で返す
+    （期間の外の会話も `GET /threads/{thread_id}`・実行の詳細の「会話を開く」では開ける。#2340）。
     """
     policy = _actor_policy(request)
     viewer = _run_creator_user_uuid(request)
     all_users = _sees_all_users(request)
+    history_days = chat_history_days(get_settings())
+    updated_since = chat_history_cutoff(history_days)
     threads = [
         thread
         for thread in await run_in_threadpool(
@@ -1904,6 +1914,7 @@ async def list_threads(
             all_users=all_users,
         )
         if _policy_allows_agent(policy, thread.agent_id)
+        and within_chat_history(thread.updated_at, updated_since)
     ]
     page = paginate_slice(threads, paging)
     owners = sorted({item.owner_user_uuid for item in page.items if item.owner_user_uuid})
@@ -1923,6 +1934,7 @@ async def list_threads(
             limit=page.limit,
             offset=page.offset,
             has_next=page.has_next,
+            history_days=history_days,
         )
     )
 
@@ -3321,7 +3333,11 @@ async def _agents_data(agents: list[AgentProfile]) -> AgentsData:
         }
     )
     names = await run_in_threadpool(login_display_names, publishers) if publishers else {}
-    return AgentsData(agents=agents, user_display_names=names)
+    return AgentsData(
+        agents=agents,
+        user_display_names=names,
+        max_published_versions=max_published_versions(),
+    )
 
 
 # 画面・API で作る業務 Agent の ID（URL の path に置くため `/`・空白などを断る。#1033）。

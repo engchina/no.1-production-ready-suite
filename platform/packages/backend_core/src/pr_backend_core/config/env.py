@@ -126,6 +126,8 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "chat_history_max_turns",
         "chat_history_max_chars_per_turn",
         "chat_history_max_chars",
+        # チャットの「会話の履歴」に出す期間（日。3 製品で同じ値。#2340）
+        "chat_history_days",
     }
 )
 

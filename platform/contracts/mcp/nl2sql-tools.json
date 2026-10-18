@@ -78,6 +78,48 @@
       },
       "outputSchema": {
         "$defs": {
+          "AutoSelectedProfile": {
+            "description": "profile_id を省略・誤ったときに自動で選んだ業務プロファイル（#2355）。",
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "requested_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "渡した profile_id（省略したときは null）",
+                "title": "Requested Id"
+              },
+              "method": {
+                "description": "only_usable=使えるのが 1 つだけ / recommended=質問から推薦した",
+                "enum": [
+                  "only_usable",
+                  "recommended"
+                ],
+                "title": "Method",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "method"
+            ],
+            "title": "AutoSelectedProfile",
+            "type": "object"
+          },
           "QueryStatus": {
             "description": "`nl2sql_query` / `nl2sql_get_job` の状態（ジョブの状態か、生成前の確認で止めた状態）。",
             "enum": [
@@ -441,6 +483,18 @@
               }
             ],
             "default": null
+          },
+          "auto_selected_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AutoSelectedProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "nl2sql_query の profile_id を省略したか、使えない ID を渡したときに自動で選んだ業務プロファイル（それ以外は null）"
           }
         },
         "required": [
@@ -584,11 +638,18 @@
             "type": "string"
           },
           "profile_id": {
-            "description": "使う業務プロファイルの ID（必須）。分からないときは nl2sql_list_profiles / nl2sql_recommend_profile で選ぶ",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Profile Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "使う業務プロファイルの ID。ID を推測で作らない。省略したとき・使えない ID のときは、使える業務プロファイルが 1 つならそれを、そうでなければ質問から推薦したものを使い、auto_selected_profile に示す（決まらなければ候補つきのエラー）。requirement_session_id を渡すときは省略してよい（その確認の業務プロファイル）",
+            "title": "Profile Id"
           },
           "row_limit": {
             "default": 100,
@@ -641,8 +702,7 @@
           }
         },
         "required": [
-          "question",
-          "profile_id"
+          "question"
         ],
         "title": "QueryInput",
         "type": "object"
@@ -652,6 +712,48 @@
       },
       "outputSchema": {
         "$defs": {
+          "AutoSelectedProfile": {
+            "description": "profile_id を省略・誤ったときに自動で選んだ業務プロファイル（#2355）。",
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "requested_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "渡した profile_id（省略したときは null）",
+                "title": "Requested Id"
+              },
+              "method": {
+                "description": "only_usable=使えるのが 1 つだけ / recommended=質問から推薦した",
+                "enum": [
+                  "only_usable",
+                  "recommended"
+                ],
+                "title": "Method",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "method"
+            ],
+            "title": "AutoSelectedProfile",
+            "type": "object"
+          },
           "QueryStatus": {
             "description": "`nl2sql_query` / `nl2sql_get_job` の状態（ジョブの状態か、生成前の確認で止めた状態）。",
             "enum": [
@@ -1015,6 +1117,18 @@
               }
             ],
             "default": null
+          },
+          "auto_selected_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AutoSelectedProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "nl2sql_query の profile_id を省略したか、使えない ID を渡したときに自動で選んだ業務プロファイル（それ以外は null）"
           }
         },
         "required": [

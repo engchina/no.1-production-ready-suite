@@ -48,6 +48,10 @@ interface RunRow {
   /** 詳細だけの項目（会話の持ち主。既定は会話のある実行なら自分）。 */
   conversation_owner_display_name?: string | null;
   owned_by_me?: boolean | null;
+  /** 詳細だけの項目（失敗の種類・コードと保存できなかった記録。#2342）。 */
+  error_type?: string | null;
+  error_code?: string | null;
+  storage_failures?: { step: string; error_type: string; error_code: string | null }[];
 }
 
 function run(index: number, overrides: Partial<RunRow> = {}): RunRow {
@@ -96,7 +100,7 @@ function detail(row: RunRow) {
           ? "ローカル利用者"
           : null,
     owned_by_me: row.owned_by_me !== undefined ? row.owned_by_me : row.conversation_id ? true : null,
-    error_type: row.status === "error" ? "TimeoutError" : null,
+    error_type: row.error_type !== undefined ? row.error_type : row.status === "error" ? "TimeoutError" : null,
     answer: row.answer_generated ? "受注番号を入力して登録します。" : null,
     answer_available: row.answer_generated,
     citations: [CITATION],
@@ -286,7 +290,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       await expect(page.getByTestId("run-history-row-run-1")).toContainText("自分");
       await expect(page.getByTestId("run-history-row-run-2")).toContainText("利用者 2");
       await expect(page.getByTestId("run-history-row-run-3")).toContainText("（削除済みのユーザー）");
-      await expect(page.getByTestId("run-history-row-run-1")).toContainText("検証済み");
+      await expect(page.getByTestId("run-history-row-run-1")).toContainText("照合済み");
       await expect(page.getByTestId("run-history-row-run-2")).toContainText("回答なし（検索のみ）");
     }
     await expectScrollsInsideTable(page, page.getByRole("region", { name: "実行履歴" }));
@@ -457,7 +461,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     const summary = page.getByTestId("run-history-summary");
     await expect(summary.locator('[data-run-status="succeeded"]')).toBeVisible();
     await expect(summary).toContainText("受注の登録方法 21");
-    await expect(summary).toContainText("検証済み");
+    await expect(summary).toContainText("照合済み");
     await expect(summary.locator('[data-run-fact="target"]')).toContainText("受注業務");
     await expect(summary.locator('[data-run-fact="executor"] dd')).toHaveText("自分");
     // 自分が実行した自分の会話は「会話の持ち主」を出さない。
@@ -538,7 +542,14 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 
   test("詳細: 回答を作らない RAG 検索は根拠だけ、失敗は理由の Banner、見えない実行は理由を出す", async ({ page }) => {
     await mockLocalAuth(page);
-    await mockRuns(page, [run(2), run(4, { status: "error", error_stage: "retrieval" })]);
+    await mockRuns(page, [
+      run(2),
+      run(4, { status: "error", error_stage: "retrieval", error_type: "DatabaseError", error_code: "ORA-03146" }),
+      // 回答は作ったが会話に保存できなかった実行（#2342）。
+      run(6, {
+        storage_failures: [{ step: "chat_message_save", error_type: "DatabaseError", error_code: "ORA-40441" }],
+      }),
+    ]);
 
     await page.goto("/history/run-2");
     await expect(page.getByTestId("run-history-summary")).toContainText("回答なし（検索のみ）");
@@ -550,10 +561,23 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await page.goto("/history/run-4");
     const summary = page.getByTestId("run-history-summary");
     await expect(summary.locator('[data-run-status="failed"]')).toBeVisible();
-    await expect(summary.getByRole("alert")).toContainText("この実行は途中で失敗しました");
+    // 失敗は共通の失敗のカード: 止まった段を含む 1 文目・次の操作・開いた「詳細」（#2342）。
+    const failure = summary.getByTestId("run-history-failure");
+    await expect(failure.getByRole("alert")).toContainText("「検索」で処理が止まりました。");
+    await expect(failure).toContainText("実行 ID を添えて管理者に連絡してください");
+    await expect(failure).toContainText("ORA-03146");
     await expect(summary.locator('[data-run-fact="errorStage"]')).toContainText("検索");
+    // 技術的な詳細（処理の詳細に畳む）にも同じ名前でエラーコードを出す。
+    await page.getByTestId("run-history-process-details").click();
+    await expect(page.locator('[data-run-fact="failure-errorCode"]')).toContainText("ORA-03146");
     await expect(page.getByTestId("run-history-timeline").locator('[data-status="failed"]')).toContainText("失敗");
     await expect(page.getByTestId("run-history-evidence")).toHaveCount(0);
+
+    await page.goto("/history/run-6");
+    const storage = page.getByTestId("run-history-storage-failure");
+    await expect(storage).toContainText("回答は表示していますが、一部を保存できませんでした。");
+    await expect(storage).toContainText("会話に保存できなかったため");
+    await expect(storage.getByRole("alert")).toHaveCount(0);
 
     await page.goto("/history/run-missing");
     await expect(page.getByText("実行が見つかりません。")).toBeVisible();

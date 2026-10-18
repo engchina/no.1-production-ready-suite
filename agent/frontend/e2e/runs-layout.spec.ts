@@ -368,6 +368,8 @@ test("回答を中間成果物より先に出し、失敗した実行は理由�
     "failed"
   );
   await expect(page.getByTestId("run-summary").getByRole("alert")).toContainText("モデルに接続できませんでした");
+  // 3 製品共通の失敗のカード: チャットでもう一度質問する案内（#2342）。
+  await expect(page.getByTestId("run-failure")).toContainText("チャットでもう一度質問してください");
   await expect(page.getByTestId("run-timeline-section").getByText(TOOL_STEP)).toBeVisible();
 });
 

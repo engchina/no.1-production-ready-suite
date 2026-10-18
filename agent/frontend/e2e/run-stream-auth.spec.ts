@@ -70,9 +70,9 @@ for (const viewport of VIEWPORTS) {
       const resume = bar.getByRole("button", { name: "再開", exact: true });
       await resume.click();
 
-      // 押した「再開」だけが処理中、他の操作は押せない（messaging.md §3.7）。
+      // 押した「再開」だけが処理中（messaging.md §3.7）。再実行は実行の詳細に置かない（#2343）。
       await expect(resume).toHaveAttribute("aria-busy", "true");
-      await expect(bar.getByRole("button", { name: "再実行", exact: true })).toBeDisabled();
+      await expect(bar.getByRole("button", { name: "再実行", exact: true })).toHaveCount(0);
       release();
       await expect.poll(() => mockApi.lastRequest("POST", "/api/runs/run-stream/resume")).toBeTruthy();
       await expect(resume).not.toHaveAttribute("aria-busy", "true");

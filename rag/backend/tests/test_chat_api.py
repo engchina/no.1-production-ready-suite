@@ -7,7 +7,7 @@ SSE は pipeline を stub して event 列と永続化を検証する。実 SQL 
 import asyncio
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -40,7 +40,7 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
-from app.schemas.search import RetrievedChunk, SearchResponse
+from app.schemas.search import RetrievedChunk, SearchResponse, StorageFailure
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -108,7 +108,8 @@ class FakeChatOracle:
     async def create_conversation(
         self, *, search_answer_profile_id: str, title: str | None = None
     ) -> StoredConversation:
-        now = datetime(2026, 1, 1, tzinfo=UTC)
+        # 会話の履歴の期間（直近 N 日。#2340）の中に入るよう、作った時刻は今にする。
+        now = datetime.now(UTC)
         conversation = StoredConversation(
             id=f"conv-{uuid4().hex[:8]}",
             search_answer_profile_id=search_answer_profile_id,
@@ -126,19 +127,32 @@ class FakeChatOracle:
         self,
         *,
         search_answer_profile_id: str | None = None,
+        updated_since: datetime | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[StoredConversation]:
         items = [
             c
             for c in self.conversations.values()
-            if search_answer_profile_id is None
-            or c.search_answer_profile_id == search_answer_profile_id
+            if (
+                search_answer_profile_id is None
+                or c.search_answer_profile_id == search_answer_profile_id
+            )
+            and (updated_since is None or c.updated_at >= updated_since)
         ]
         return items[offset : (offset + limit) if limit is not None else None]
 
-    async def count_conversations(self, *, search_answer_profile_id: str | None = None) -> int:
-        return len(await self.list_conversations(search_answer_profile_id=search_answer_profile_id))
+    async def count_conversations(
+        self,
+        *,
+        search_answer_profile_id: str | None = None,
+        updated_since: datetime | None = None,
+    ) -> int:
+        return len(
+            await self.list_conversations(
+                search_answer_profile_id=search_answer_profile_id, updated_since=updated_since
+            )
+        )
 
     async def get_conversation(self, conversation_id: str) -> StoredConversation | None:
         return self.conversations.get(conversation_id)
@@ -153,7 +167,7 @@ class FakeChatOracle:
         if existing is None:
             raise KeyError(conversation_id)
         existing.title = title
-        existing.updated_at = datetime(2026, 1, 2, tzinfo=UTC)
+        existing.updated_at = datetime.now(UTC)
         return existing
 
     async def append_message(self, message: StoredMessage) -> StoredMessage:
@@ -322,6 +336,43 @@ def test_list_conversations(fake_oracle: FakeChatOracle) -> None:
     client.post("/api/chat/conversations", json={"search_answer_profile_id": "bv-1"})
     page = client.get("/api/chat/conversations?search_answer_profile_id=bv-1").json()["data"]
     assert page["total"] == 1
+
+
+def test_list_conversations_only_within_history_days(
+    fake_oracle: FakeChatOracle, monkeypatch: MonkeyPatch
+) -> None:
+    """会話の履歴は最後の更新が直近 N 日の会話だけ。期間の外の会話も ID では開ける（#2340）。"""
+    monkeypatch.setattr(get_settings(), "chat_history_days", 90)
+    recent = client.post(
+        "/api/chat/conversations", json={"search_answer_profile_id": "bv-1"}
+    ).json()["data"]
+    old = client.post("/api/chat/conversations", json={"search_answer_profile_id": "bv-1"}).json()[
+        "data"
+    ]
+    fake_oracle.conversations[old["id"]].updated_at = datetime.now(UTC) - timedelta(days=91)
+
+    page = client.get("/api/chat/conversations").json()["data"]
+    assert [item["id"] for item in page["items"]] == [recent["id"]]
+    assert page["total"] == 1
+    assert page["history_days"] == 90
+    assert client.get(f"/api/chat/conversations/{old['id']}").status_code == 200
+
+    # 0 は期間で絞らない。
+    monkeypatch.setattr(get_settings(), "chat_history_days", 0)
+    page = client.get("/api/chat/conversations").json()["data"]
+    assert page["total"] == 2
+    assert page["history_days"] == 0
+
+
+def test_conversation_where_filters_by_updated_since() -> None:
+    """SQL の条件は件数と 1 ページで同じ（最後の更新の下限を bind で渡す。#2340）。"""
+    cutoff = datetime(2026, 7, 1, tzinfo=UTC)
+    where_sql, binds = _oracle_conversation_where(updated_since=cutoff)
+    assert "c.updated_at >= :updated_since" in where_sql
+    assert binds["updated_since"] == cutoff
+    where_sql, binds = _oracle_conversation_where()
+    assert "updated_since" not in where_sql
+    assert "updated_since" not in binds
 
 
 def test_delete_conversation_removes_it_from_list(fake_oracle: FakeChatOracle) -> None:
@@ -1297,3 +1348,116 @@ def test_stream_message_resolves_the_clarification_answer_into_scope_and_page_ra
     )
     assert bad.status_code == 422
     assert len(fake.messages["conv-x"]) == saved
+
+
+class _DatabaseError(Exception):
+    """python-oracledb の例外の形（args[0] が `full_code` を持つ object）。"""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(type("DriverError", (), {"full_code": code})())
+
+
+class _RecordSaveFailedPipeline(_FakePipeline):
+    """回答の記録の保存が失敗した回答（工程の失敗と保存の失敗の記録を持つ。#2342）。"""
+
+    async def run(  # type: ignore[no-untyped-def]
+        self,
+        request,
+        trace_id=None,
+        progress_callback=None,
+        token_callback=None,
+        *,
+        history=None,
+        query_guardrail_result=None,
+    ):
+        assert progress_callback is not None
+        for outcome, attributes in (
+            ("started", {}),
+            ("error", {"error_type": "DatabaseError", "error_code": "ORA-03146"}),
+        ):
+            await progress_callback(
+                SearchStageProgress(
+                    trace_id=trace_id or "trace",
+                    stage="answer_record_save",
+                    outcome=outcome,
+                    elapsed_ms=0.0,
+                    attributes=attributes,
+                )
+            )
+        result = await super().run(  # type: ignore[no-untyped-call]
+            request, trace_id, progress_callback, token_callback, history=history
+        )
+        failure = StorageFailure(
+            step="answer_record_save", error_type="DatabaseError", error_code="ORA-03146"
+        )
+        return result.model_copy(update={"storage_failures": [failure]})
+
+
+def test_stream_message_marks_failed_record_save_step_and_still_answers(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """回答の記録を保存できなくても回答を返し、工程「回答の記録の保存」を失敗にする（#2342）。"""
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-record")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(chat_route, "RagPipeline", _RecordSaveFailedPipeline)
+
+    resp = client.post(
+        "/api/chat/conversations/conv-record/messages/stream", json={"content": "経費の上限は?"}
+    )
+
+    assert resp.status_code == 200
+    assert "event: error" not in resp.text
+    assert "event: done" in resp.text
+    (metadata,) = _sse_events(resp.text, "metadata")
+    assert metadata["storage_failures"] == [
+        {"step": "answer_record_save", "error_type": "DatabaseError", "error_code": "ORA-03146"}
+    ]
+    events = _progress_events(resp.text)
+    failed = [event for event in events if event.get("status") == "failed"]
+    assert {event.get("kind") for event in failed} == {"answer_record_save"}
+    assert failed[-1]["details"]["lines"] == [
+        "回答の記録をデータベースに保存できませんでした。回答は表示しています。",
+        "エラーの種類: DatabaseError",
+        "エラーコード: ORA-03146",
+    ]
+    assistant = fake.messages["conv-record"][1]
+    assert (assistant.status, assistant.content) == ("COMPLETE", "回答")
+
+
+def test_stream_message_delivers_answer_when_chat_message_save_fails(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """会話の回答を保存できなくても、作った回答は配信で届け、保存できなかったことを示す（#2342）。
+
+    以前は回答の生成の失敗として扱い、作った回答を捨てて定型の失敗の文を返していた。
+    読み込み直したときは、保存できなかった理由の文（定型の失敗の文ではない）を出す。
+    """
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-unsaved")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    original = fake.finish_chat_message
+
+    async def failing_finish(message: StoredMessage, *, lease_owner: str) -> bool:
+        if message.status == "COMPLETE":
+            raise _DatabaseError("ORA-40441")
+        return await original(message, lease_owner=lease_owner)
+
+    monkeypatch.setattr(fake, "finish_chat_message", failing_finish)
+
+    resp = client.post(
+        "/api/chat/conversations/conv-unsaved/messages/stream", json={"content": "経費の上限は?"}
+    )
+
+    assert resp.status_code == 200
+    assert "event: error" not in resp.text
+    assert "event: done" in resp.text
+    assert "".join(str(event["text"]) for event in _sse_events(resp.text, "delta")) == "回答"
+    (metadata,) = _sse_events(resp.text, "metadata")
+    assert metadata["storage_failures"] == [
+        {"step": "chat_message_save", "error_type": "_DatabaseError", "error_code": "ORA-40441"}
+    ]
+    assistant = fake.messages["conv-unsaved"][1]
+    assert assistant.status == "ERROR"
+    assert assistant.content == chat_route.CHAT_ANSWER_NOT_SAVED_MESSAGE
+    assert assistant.trace_id == metadata["trace_id"]

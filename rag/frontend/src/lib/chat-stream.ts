@@ -25,6 +25,7 @@ import {
   type ChatMessage,
   type ChatMessageRequestBody,
   type RetrievedChunk,
+  type StorageFailure,
 } from "./api";
 
 export interface ChatColumn {
@@ -54,16 +55,25 @@ export interface ChatStreamHandlers {
     guardrail_warnings: string[];
     /** 回答の根拠・実行記録(無い回答では null / 未指定)。 */
     answer_diagnostics?: unknown;
+    /** 作ったが保存できなかった記録（回答の記録・会話の回答。#2342）。 */
+    storage_failures?: StorageFailure[];
   }) => void;
   onCitations?: (modelId: string, citations: RetrievedChunk[]) => void;
   onModelDone?: (payload: { model_id: string; message_id: string }) => void;
   /** 回答の失敗。`cancelled` は利用者の停止（#1175）。 */
   onModelError?: (payload: {
     model_id: string;
+    /** 失敗した回答のメッセージ（#2342。取り直した会話の同じ回答に「詳細」を引き継ぐ）。 */
+    message_id?: string;
     message: string;
     cancelled: boolean;
     /** 失敗した回答の trace_id（「詳細」に出す。#2023）。 */
     trace_id?: string;
+    /** 失敗の「詳細」（エラーの種類・コード・止まった工程・時刻。#2342）。 */
+    error_type?: string;
+    error_code?: string;
+    stage?: string;
+    occurred_at?: string;
   }) => void;
   onAllDone?: () => void;
   /**
@@ -311,6 +321,7 @@ function dispatchEvent(block: string, handlers: ChatStreamHandlers): string | nu
         ...(typeof payload.trace_id === "string" && payload.trace_id
           ? { trace_id: payload.trace_id }
           : {}),
+        ...optionalText(payload, ["message_id", "error_type", "error_code", "stage", "occurred_at"]),
       });
       break;
     case "all_done":
@@ -320,4 +331,14 @@ function dispatchEvent(block: string, handlers: ChatStreamHandlers): string | nu
   // 処理した後に連番を進める（処理の途中で切れたら、同じ event から購読し直す）。
   if (id !== null) handlers.onEventId?.(id);
   return event;
+}
+
+/** 値のある文字列の項目だけを取り出す（無い項目は渡さない）。 */
+function optionalText<K extends string>(payload: Record<string, unknown>, keys: readonly K[]): Partial<Record<K, string>> {
+  const result: Partial<Record<K, string>> = {};
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === "string" && value) result[key] = value;
+  }
+  return result;
 }

@@ -354,3 +354,83 @@ test("版の公開者は表示名で出し、ログイン ID・削除済みの�
   await expect(versions).not.toContainText("gone.user");
   await versions.screenshot({ path: testInfo.outputPath("agent-versions-published-by.png") });
 });
+
+function seedAgentWithVersions(mockApi: MockApi, count: number, publishedVersion: number) {
+  const versions = Array.from({ length: count }, (_, index) => ({
+    version: index + 1,
+    name: "Agent A",
+    description: "",
+    instructions: `v${index + 1}`,
+    skill_ids: [],
+    model_id: "",
+    data_scopes: {},
+    note: `メモ ${index + 1}`,
+    published_at: MOCK_NOW,
+    published_by: "local",
+    skills: [],
+  }));
+  mockApi.state.agents.push({
+    id: "agent-2356",
+    name: "Agent A",
+    description: "",
+    instructions: "下書き",
+    skill_ids: [],
+    model_id: "",
+    migration_required: false,
+    tool_names: [],
+    enabled: true,
+    source: "runtime",
+    versioned: true,
+    versions,
+    published_version: publishedVersion,
+    unpublished_changes: true,
+    draft_changed: true,
+    created_at: MOCK_NOW,
+    updated_at: MOCK_NOW,
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile-375", width: 375, height: 812 },
+]) {
+  test(`版の履歴は直近 5 版を残し、公開すると古い版から消える（#2356） (${viewport.name})`, async ({
+    page,
+    mockApi,
+  }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    seedAgentWithVersions(mockApi, 5, 5);
+    await page.goto("/agents?id=agent-2356");
+    await expect(page.getByRole("heading", { name: "Agent A", level: 1 })).toBeVisible();
+
+    // 上限は API の値（max_published_versions）で案内する。件数は表の上の 1 か所。
+    await expect(page.getByText("直近 5 版を保存します（公開中の版は常に残ります）。", { exact: false })).toBeVisible();
+    const toolbar = page.getByTestId("agent-version-toolbar");
+    await expect(toolbar).toContainText("全 5 件");
+    const versions = page.getByRole("table", { name: "版の履歴" });
+    await expect(versions.getByRole("rowheader", { name: /^v1/ })).toBeAttached();
+
+    const actions = page.getByTestId("agent-object-actions");
+    const publish = actions.getByRole("button", { name: "公開" });
+    if (await publish.count()) {
+      await publish.click();
+    } else {
+      await page.getByTestId("agent-object-actions-more").click();
+      await page.getByRole("menuitem", { name: "公開" }).click();
+    }
+    const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
+    await dialog.getByRole("button", { name: "公開", exact: true }).click();
+    await expect(page.getByText("v6 として公開しました")).toBeVisible();
+
+    // v1 は消え、番号は振り直さない（v2〜v6）。公開中のバッジは v6 の行。
+    await expect(versions.getByRole("rowheader", { name: /^v1/ })).toHaveCount(0);
+    for (const number of [2, 3, 4, 5, 6]) {
+      await expect(versions.getByRole("rowheader", { name: new RegExp(`^v${number}`) })).toBeAttached();
+    }
+    await expect(versions.getByRole("row").filter({ hasText: "v6" })).toContainText("公開中");
+    await expect(toolbar).toContainText("全 5 件");
+    await expectNoHorizontalOverflow(page);
+    await toolbar.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`agent-versions-retention-${viewport.name}.png`) });
+  });
+}

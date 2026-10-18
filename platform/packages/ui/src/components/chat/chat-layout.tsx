@@ -49,6 +49,11 @@ export interface ChatLayoutProps {
   historyTitle: string;
   /** シートを閉じるボタンの名前（翻訳済み。例:「会話の履歴を閉じる」）。 */
   historyCloseLabel: string;
+  /**
+   * 見出しの横の補足（例:「最近 90 日」。`chatHistoryWindowLabels` の `caption`。#2340）。一覧を絞った期間を示す。
+   * lg 以上は見出しの行の右端、lg 未満はシートの本文の先頭に出す。省略・null なら出さない。
+   */
+  historyCaption?: string | null;
   /** 履歴の中身（一覧・読み込み中・失敗・空・ページング）。 */
   historyContent: ReactNode;
   /** 会話の領域（`<section>`）の名前（翻訳済み）。 */
@@ -89,6 +94,7 @@ export function ChatLayout({
   history,
   historyTitle,
   historyCloseLabel,
+  historyCaption,
   historyContent,
   label,
   conversationTitle,
@@ -112,6 +118,9 @@ export function ChatLayout({
     composer: testIds?.composer ?? `${testIdPrefix}-composer-region`,
     latest: testIds?.latest ?? `${testIdPrefix}-latest`,
   };
+  // 期間の補足（#2340）。testid は履歴のパネル・シートの testid + `-caption`。
+  const captionTestId = `${ids.history}-caption`;
+  const captionId = `${history.id}-caption`;
   // md 以上の通知（右下）を、下端に固定された入力欄の上に出す（#2103）。
   const composerRef = useRef<HTMLDivElement>(null);
   useToastClearance(composerRef);
@@ -127,14 +136,22 @@ export function ChatLayout({
         <aside
           id={history.id}
           aria-label={historyTitle}
+          aria-describedby={historyCaption ? captionId : undefined}
           data-testid={ids.history}
           className={cn(
             "min-h-0 min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface px-3 pb-3 pt-2 shadow-sm",
             history.inlineOpen ? "flex" : "hidden"
           )}
         >
-          {/* 見出しの行は会話の領域の上端の行と高さをそろえる。 */}
-          <h2 className="flex min-h-8 items-center px-1 text-sm font-medium text-fg">{historyTitle}</h2>
+          {/* 見出しの行は会話の領域の上端の行と高さをそろえる。期間の補足は行の右端（#2340）。 */}
+          <div className="flex min-h-8 items-center justify-between gap-2 px-1">
+            <h2 className="text-sm font-medium text-fg">{historyTitle}</h2>
+            {historyCaption ? (
+              <p id={captionId} className="shrink-0 text-xs text-fg-muted" data-testid={captionTestId}>
+                {historyCaption}
+              </p>
+            ) : null}
+          </div>
           {historyContent}
         </aside>
       ) : (
@@ -148,6 +165,11 @@ export function ChatLayout({
           bodyClassName="gap-3"
           data-testid={ids.history}
         >
+          {historyCaption ? (
+            <p id={captionId} className="px-1 text-xs text-fg-muted" data-testid={captionTestId}>
+              {historyCaption}
+            </p>
+          ) : null}
           {historyContent}
         </SideSheet>
       )}

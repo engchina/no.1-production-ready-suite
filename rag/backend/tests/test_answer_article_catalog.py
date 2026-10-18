@@ -187,12 +187,19 @@ async def test_article_chunks_mark_the_first_child_of_each_selected_article(
 def test_engine_settings_pass_the_article_catalog_options(tmp_path: Any) -> None:
     from app.rag.answer_engine import build_engine_settings
 
-    settings = Settings(rag_article_catalog_enabled=False, rag_article_catalog_context_records=4)
+    settings = Settings(
+        rag_article_catalog_enabled=False,
+        rag_article_catalog_context_records=4,
+        rag_article_catalog_output_token_cap=1024,
+        rag_article_catalog_call_timeout_seconds=20,
+    )
     engine_settings = build_engine_settings(
         settings, output_dir=tmp_path, runtime_knowledge_path=None
     )
 
     assert engine_settings.article_catalog_enabled is False
+    assert engine_settings.article_catalog_output_token_cap == 1024
+    assert engine_settings.article_catalog_call_timeout_seconds == 20.0
     assert engine_settings.article_catalog_context_records == 4
     assert json.loads(json.dumps(engine_settings.article_catalog_max_documents)) == 8
 

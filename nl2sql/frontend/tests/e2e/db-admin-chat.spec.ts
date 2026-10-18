@@ -23,10 +23,12 @@ interface StatementPlan extends Json {
   blocked_reason: string;
   requires_confirmation: boolean;
   confirmation_target: string;
+  unknown_columns: string[];
+  warnings: string[];
 }
 
 /** サーバーと同じ規則の、文ごとの分類（SELECT は確認語なし、それ以外は ADMIN_EXECUTE、止める文は実行できない）。 */
-function statementPlan(index: number, sql: string, blockedReason = ""): StatementPlan {
+function statementPlan(index: number, sql: string, blockedReason = "", unknownColumns: string[] = []): StatementPlan {
   const select = /^\s*(select|with)\b/i.test(sql);
   const changes = !select && !blockedReason;
   return {
@@ -38,13 +40,15 @@ function statementPlan(index: number, sql: string, blockedReason = ""): Statemen
     blocked_reason: blockedReason,
     requires_confirmation: changes,
     confirmation_target: changes ? "ADMIN_EXECUTE" : "",
+    unknown_columns: unknownColumns,
+    warnings: [],
   };
 }
 
-/** 1 文（文字列）か、文の並び（文字列か [SQL, 止める理由]）の分類。 */
-function plan(sqls: string | (string | [string, string])[], overrides: Record<string, unknown> = {}) {
+/** 1 文（文字列）か、文の並び（文字列か [SQL, 止める理由, 存在しない列]）の分類。 */
+function plan(sqls: string | (string | [string, string] | [string, string, string[]])[], overrides: Record<string, unknown> = {}) {
   const items = (Array.isArray(sqls) ? sqls : [sqls]).map((item, index) =>
-    Array.isArray(item) ? statementPlan(index + 1, item[0], item[1]) : statementPlan(index + 1, item),
+    Array.isArray(item) ? statementPlan(index + 1, item[0], item[1], item[2]) : statementPlan(index + 1, item),
   );
   const changing = items.filter((item) => !item.select_only);
   const blockedReasons = items.map((item) => item.blocked_reason).filter(Boolean);
@@ -120,7 +124,8 @@ function mutationResult(sql: string, ok = true, index = 1) {
     ],
     committed: ok,
     rolled_back: !ok,
-    warnings: [],
+    // backend は DB のエラーの文を警告にも入れる。画面は失敗のカードに重ねて出さない（#2342）。
+    warnings: ok ? [] : ["ORA-00942: table or view does not exist Help: https://docs.oracle.com/error-help/db/ora-00942/"],
     timing,
   };
 }
@@ -719,6 +724,14 @@ test("SELECT 以外は実行確認語を入れたときだけ実行し、失敗�
   expect(mock.executeBodies[0]).toMatchObject({ confirmation: "ADMIN_EXECUTE" });
   expect(mock.executeBodies[0]).not.toHaveProperty("sql");
   await expect(turn.getByText("ORA-00942: table or view does not exist").first()).toBeVisible();
+  // 実行した後の失敗は結果の位置に 1 つの失敗のカード（何が起きたか・DB の文 1 回・具体的な原因・「詳細」。#2342）。
+  const failure = turn.getByTestId("db-admin-statement-failure");
+  await expect(failure).toHaveCount(1);
+  await expect(failure.getByRole("alert")).toContainText("この文の実行に失敗しました。");
+  await expect(failure).toContainText("参照先のテーブルまたはビューが存在しない");
+  await expect(failure.locator("details")).toContainText("ORA-00942");
+  await expect(turn.getByText("ORA-00942: table or view does not exist", { exact: true })).toHaveCount(1);
+  await expect(turn.getByText("エラー概要", { exact: true })).toHaveCount(0);
   // 実行の確認は 1 回ごと。
   await expect(confirmation).toHaveValue("");
 
@@ -758,6 +771,39 @@ test("実行できない SQL は理由を出し、実行の操作を出さない
   await expect(turn.getByText("ALTER SYSTEM（インスタンスの設定・セッションの強制終了など）は実行できません。")).toBeVisible();
   await expect(turn.getByTestId("db-admin-chat-execute")).toHaveCount(0);
   await expect(turn.getByRole("textbox", { name: "実行確認語" })).toHaveCount(0);
+});
+
+test("参照するオブジェクトに無い列の文は実際の列を添えた理由を出し、AI のエラー分析で直せる", { tag: "@responsive" }, async ({ page }) => {
+  const sql = "SELECT SID, LOCK_TYPE FROM V$LOCK";
+  const reason = "列が存在しません: LOCK_TYPE（V$LOCK の列: ADDR, SID, TYPE, LMODE, REQUEST）";
+  const corrected = "SELECT SID, TYPE FROM V$LOCK";
+  const mock = await setup(page, {
+    responses: [generated(plan([[sql, reason, ["LOCK_TYPE"]]]))],
+    analyze: {
+      analysis: "1) エラーの原因: V$LOCK に LOCK_TYPE はありません 2) 直し方: TYPE を使う 3) 結論: 直した SQL を実行してください",
+      corrected_plan: plan(corrected),
+      source: "oci_enterprise_ai",
+      model: "test-text-model",
+      warnings: [],
+    },
+  });
+  await page.goto("/db-admin-chat");
+  await ask(page, "ロックの状況を見たい");
+  const turn = page.getByTestId("db-admin-chat-turn").first();
+  await expect(turn.getByText("この文は実行できません")).toBeVisible();
+  await expect(turn.getByText(reason)).toBeVisible();
+  await expect(turn.getByText("「AI でエラーを分析」で、参照するオブジェクトの実際の列を使った SQL に直せます。")).toBeVisible();
+  await expect(turn.getByTestId("db-admin-chat-execute")).toHaveCount(0);
+  // 実行の前に止めた文も、止めた理由を渡して AI のエラー分析で直せる。
+  await turn.getByTestId("db-admin-chat-analyze").click();
+  await expect(turn.getByTestId("db-admin-chat-corrected-sql")).toHaveText(corrected);
+  expect(mock.analyzeBodies[0]).toMatchObject({ sql, result_text: reason });
+  await turn.getByTestId("db-admin-chat-use-corrected").click();
+  await expect.poll(() => mock.planBodies).toEqual([{ sql: corrected, statement_index: 1 }]);
+  const updated = page.getByTestId("db-admin-chat-turn").first();
+  await expect(updated.getByTestId("db-admin-chat-sql")).toHaveText(corrected);
+  await expect(updated.getByTestId("db-admin-chat-execute")).toBeEnabled();
+  await expectNoHorizontalOverflow(page);
 });
 
 test("生成に失敗した質問は残して、同じターンの ID で「再送信」する", { tag: "@responsive" }, async ({ page }) => {

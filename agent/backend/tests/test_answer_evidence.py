@@ -173,7 +173,7 @@ def test_lookup_notes_are_removed_without_emptying_the_answer() -> None:
     assert without_lookup_notes("期限は 30 日です。") == "期限は 30 日です。"
 
 
-def test_the_notice_listing_counts_what_the_answer_section_shows() -> None:
+def test_the_notice_section_lists_every_item_and_records_the_count() -> None:
     quotes = [f"段落 {index} は 30 日です。" for index in range(7)]
     answer = "\n".join(quotes)
     result = {
@@ -190,14 +190,13 @@ def test_the_notice_listing_counts_what_the_answer_section_shows() -> None:
         answer, [validation_content("completed", connection="rag", result=result)]
     )
     assert f"**{UNVERIFIED_HEADING}**" in published
-    assert "- ほか 2 件の主張" in published
-    # 節に書いたのは先頭の 5 件。画面の「回答の確かめ」は残りだけを出す。
-    assert content["notice"] == {
-        "claims": 5,
-        "findings": 0,
-        "evidence": True,
-        "heading": UNVERIFIED_HEADING,
-    }
+    # 節には 7 件すべてを同じ書式で書き、「ほか N 件」で切らない（#2361）。
+    section = published.split(f"**{UNVERIFIED_HEADING}**", 1)[1]
+    items = [line for line in section.splitlines() if line.startswith("- ")]
+    assert items == [f"- 根拠で確かめられない: 「{quote}」" for quote in quotes]
+    assert "ほか" not in section
+    # 画面の「資料との照合」の件数のバッジは、節の項目の数を使う。
+    assert content["notice"] == {"items": 7, "heading": UNVERIFIED_HEADING}
     assert content["withheld"] == {"claims": 7, "findings": 0, "all": True}
 
 

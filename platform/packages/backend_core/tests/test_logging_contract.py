@@ -14,6 +14,7 @@ from pr_backend_core import configure_logging
 from pr_backend_core.logging import (
     DEPENDENCY_LOGGER_LEVELS,
     StructuredFormatter,
+    safe_error_code,
     safe_exception_fields,
 )
 from pr_backend_core.observability.metrics import MetricsMiddleware
@@ -134,6 +135,32 @@ def test_bounded_record_cycles_and_malformed_format_keep_logging_alive() -> None
     assert fields["truncated"] is True
     assert fields["level"] == "WARNING"
     assert safe_exception_fields(ValueError("PRIVATE")) == {"exception_type": "ValueError"}
+
+
+def test_safe_exception_fields_reads_oracle_driver_error_code_without_message() -> None:
+    """python-oracledb の例外（args[0] が `_Error`）からも ORA のコードだけを残す（#2342）。"""
+
+    class DriverError:
+        full_code = "ORA-03146"
+        message = "ORA-03146: invalid buffer length for TTC field 業務の値"
+
+        def __str__(self) -> str:
+            return self.message
+
+    class DatabaseError(Exception):
+        pass
+
+    error = DatabaseError(DriverError())
+    fields = safe_exception_fields(error)
+    assert fields["exception_type"] == "DatabaseError"
+    assert fields["error_code"] == "ORA-03146"
+    assert "業務の値" not in json.dumps(fields, ensure_ascii=False)
+    closed = DatabaseError("DPY-4011: the database closed the connection")
+    assert safe_error_code(closed) == "DPY-4011"
+    # コードの形でない値（本文の混ざった値）は返さない。
+    DriverError.full_code = "ORA-03146 業務の値"
+    assert safe_error_code(DatabaseError(DriverError())) is None
+    assert safe_error_code(ValueError("PRIVATE")) is None
 
 
 def test_idempotent_configuration_preserves_collectors_and_server_level(capsys: Any) -> None:

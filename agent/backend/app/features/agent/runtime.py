@@ -29,6 +29,7 @@ from uuid import uuid4
 from pr_backend_core import Page
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause, paginate
 from pr_backend_core.chat_history import ChatHistoryTurn
+from pr_backend_core.chat_history_window import ChatHistoryPage
 from pr_backend_core.chat_progress import (
     ChatProgressEvent,
     ChatProgressStepEvent,
@@ -37,6 +38,7 @@ from pr_backend_core.chat_progress import (
     parse_chat_progress_events,
 )
 from pr_backend_core.oracle_errors import is_oracle_connection_error, oracle_error_codes
+from pr_backend_core.version_retention import DEFAULT_MAX_PUBLISHED_VERSIONS, versions_to_prune
 from pydantic import (
     BaseModel,
     Field,
@@ -744,10 +746,11 @@ class ThreadSummary(BaseModel):
     actor_display_name: str = ""
 
 
-class ThreadsData(Page[ThreadSummary]):
+class ThreadsData(ChatHistoryPage[ThreadSummary]):
     """会話の一覧の 1 ページ（新しい順。共通の Page。#1265 / #1266）。
 
-    `total` は利用者が見られる会話の全件数。
+    `total` は利用者が見られる会話のうち、最後の更新が会話の履歴の期間（`history_days`。#2340）の
+    中の会話の件数。
     """
 
 
@@ -1039,6 +1042,8 @@ class AgentsData(BaseModel):
     agents: list[AgentProfile]
     # 版の公開者（ログイン ID）→ 表示名。画面は公開者を表示名で出す（保存しない。#1696）。
     user_display_names: dict[str, str] = Field(default_factory=dict)
+    # 版の履歴に残す版の数（`AGENT_MAX_PUBLISHED_VERSIONS`。画面の版の履歴の案内に出す。#2356）。
+    max_published_versions: int = DEFAULT_MAX_PUBLISHED_VERSIONS
 
 
 class ArtifactsData(BaseModel):
@@ -2983,6 +2988,7 @@ class AgentRuntimeRepository:
             )
             agent.published_version = version
             agent.versioned = True
+            _prune_agent_versions(agent)
             agent.updated_at = _now()
             self._mark_agent_changed(agent.id)
             self._persist_locked()
@@ -3022,6 +3028,8 @@ class AgentRuntimeRepository:
                 )
             )
             agent.published_version = version
+            # 前の公開中の版も残す（Toast の「取り消す」で戻す。#1867）。
+            _prune_agent_versions(agent, keep=(previous,))
             agent.updated_at = _now()
             self._mark_agent_changed(agent.id)
             self._persist_locked()
@@ -5287,13 +5295,41 @@ def _ensure_versioned(agent: AgentProfile) -> AgentProfile:
     )
 
 
+def max_published_versions() -> int:
+    """業務 Agent の版の履歴に残す版の数（``AGENT_MAX_PUBLISHED_VERSIONS``。#2356）。"""
+    return max(1, int(get_settings().agent_max_published_versions))
+
+
+def _prune_agent_versions(agent: AgentProfile, *, keep: tuple[int, ...] = ()) -> None:
+    """上限を超えた古い版を消す（公開中の版と ``keep`` は残す。番号は振り直さない。#2356）。
+
+    版を参照する記録（Run の ``metadata.agent_version``・品質評価の ``agent_version``）は番号だけを
+    持つので、版を消しても消えない。
+    """
+    pruned = set(
+        versions_to_prune(
+            (item.version for item in agent.versions),
+            keep=(agent.published_version, *keep),
+            limit=max_published_versions(),
+        )
+    )
+    if pruned:
+        agent.versions = [item for item in agent.versions if item.version not in pruned]
+
+
 def _agent_for_run(agent: AgentProfile, run: RunState) -> AgentProfile:
-    """Run が使う版の内容を重ねた Agent（下書きの Run・版の無い古い Run は現在の内容）。"""
+    """Run が使う版の内容を重ねた Agent（下書きの Run・版の無い古い Run は現在の内容）。
+
+    版の履歴の上限で消えた版を使う Run（承認を待つ間に公開が続いたときなど。#2356）は、下書きでは
+    なく公開中の版で続ける（利用者の Run に公開していない下書きを使わない）。
+    """
     version = run.metadata.get("agent_version")
     target = next(
         (item for item in agent.versions if isinstance(version, int) and item.version == version),
         None,
     )
+    if target is None and isinstance(version, int):
+        target = agent.published()
     if target is None:
         return agent.model_copy(deep=True)
     return agent.model_copy(

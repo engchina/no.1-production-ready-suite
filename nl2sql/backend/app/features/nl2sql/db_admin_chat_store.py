@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from pr_backend_core.chat_history_window import chat_history_cutoff, within_chat_history
+
 from .models import DbAdminChatSummary, DbAdminChatTurn
 
 # 会話の名前の列の長さ（migration 024 の VARCHAR2(400 CHAR)）。
@@ -122,18 +124,31 @@ class DbAdminChatStore:
         return self._decode_summary(row) if row else None
 
     def list_conversations(
-        self, *, owner_user_uuid: str | None, offset: int, limit: int
+        self,
+        *,
+        owner_user_uuid: str | None,
+        offset: int,
+        limit: int,
+        updated_within_days: int = 0,
     ) -> tuple[list[DbAdminChatSummary], int]:
-        """新しい順（始めた時刻）の 1 ページと総数。`owner_user_uuid` が None なら全員の会話。"""
+        """新しい順（始めた時刻）の 1 ページと総数。`owner_user_uuid` が None なら全員の会話。
+
+        `updated_within_days` は会話の履歴の期間（最後の更新〔ターンを足す・名前を変えると進む〕が
+        直近 N 日の会話だけを、総数と 1 ページの両方で返す。0 は絞らない。#2340）。
+        """
 
         if self.connection is None:
+            updated_since = chat_history_cutoff(updated_within_days)
             with self._lock:
                 matched = sorted(
                     (
                         item.summary
                         for item in self._conversations.values()
-                        if owner_user_uuid is None
-                        or item.summary.actor_user_uuid == owner_user_uuid
+                        if (
+                            owner_user_uuid is None
+                            or item.summary.actor_user_uuid == owner_user_uuid
+                        )
+                        and within_chat_history(item.summary.updated_at, updated_since)
                     ),
                     key=lambda summary: (summary.created_at, summary.id),
                     reverse=True,
@@ -142,8 +157,16 @@ class DbAdminChatStore:
                     [item.model_copy(deep=True) for item in matched[offset : offset + limit]],
                     len(matched),
                 )
-        where = "" if owner_user_uuid is None else " WHERE OWNER_USER_UUID = :owner"
-        binds: dict[str, Any] = {} if owner_user_uuid is None else {"owner": owner_user_uuid}
+        clauses: list[str] = []
+        binds: dict[str, Any] = {}
+        if owner_user_uuid is not None:
+            clauses.append("OWNER_USER_UUID = :owner")
+            binds["owner"] = owner_user_uuid
+        if updated_within_days > 0:
+            # 時刻は DB の時刻で比べる（UPDATED_AT は SYSTIMESTAMP で書く）。
+            clauses.append("UPDATED_AT >= SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')")
+            binds["days"] = updated_within_days
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(f"SELECT COUNT(*) FROM NL2SQL_DB_ADMIN_CHATS{where}", binds)  # nosec B608
             total_row = cursor.fetchone()
