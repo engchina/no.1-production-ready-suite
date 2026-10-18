@@ -1041,10 +1041,15 @@ test("回答の根拠はまとまりごとに役割・位置・抜粋で出し�
   await expect(preview.getByTestId("evidence-source-summary")).toContainText("1 回の申請の上限は 10 万円です。");
   await expect(preview.getByTestId("evidence-source-preview")).toBeVisible();
   // 右端に付き、375px は全画面のシート。
+  // 右から滑り出し切るのを待つ。
   const viewport = page.viewportSize()!;
-  const previewBox = await preview.boundingBox();
-  expect(Math.round(previewBox!.x + previewBox!.width)).toBe(viewport.width);
-  if (viewport.width < 640) expect(Math.round(previewBox!.x)).toBe(0);
+  await expect
+    .poll(async () => {
+      const box = await preview.boundingBox();
+      return box ? Math.round(box.x + box.width) : -1;
+    })
+    .toBe(viewport.width);
+  if (viewport.width < 640) expect(Math.round((await preview.boundingBox())!.x)).toBe(0);
   await page.screenshot({ path: testInfo.outputPath(`chat-citation-source-sheet-${testInfo.project.name}.png`) });
   await preview.getByRole("button", { name: "閉じる" }).click();
   await expect(preview).toBeHidden();

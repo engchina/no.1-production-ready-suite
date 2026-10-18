@@ -245,6 +245,7 @@ export function KnowledgeBaseSearchTestPanel({
                           chunk={chunk}
                           index={i}
                           traceId={meta?.trace_id}
+                          sourceKind={answer ? "answer" : "search"}
                         />
                       ))}
                     </ul>

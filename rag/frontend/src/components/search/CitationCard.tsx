@@ -28,6 +28,11 @@ export interface CitationCardOptions {
    * （実行履歴だけの利用者。#1890）では false にする（押すと 403 で権限なしの画面へ移るため）。
    */
   preview?: boolean;
+  /**
+   * 引用箇所のパネルの見出し（#2360）。`answer` は「回答の根拠」、`search` は回答を作らない検索の「検索で見つかった
+   * 箇所」。省略時は回答で引用したかが分かる箇所を回答の根拠、分からない箇所を検索の結果として開く。
+   */
+  sourceKind?: "answer" | "search";
 }
 
 /**
@@ -51,8 +56,8 @@ export function CitationCard({ chunk, index, ...options }: CitationCardOptions &
           index={index}
           open={source.selected !== null}
           onClose={source.close}
-          // 回答で引用したかが分からない箇所（検索テスト・比較の検索結果）は検索の結果として開く。
-          kind={citationModelUsed(chunk) === null ? "search" : "answer"}
+          // 指定が無ければ、回答で引用したかが分からない箇所（比較の検索結果など）は検索の結果として開く。
+          kind={options.sourceKind ?? (citationModelUsed(chunk) === null ? "search" : "answer")}
         />
       ) : null}
     </EvidenceCard>

@@ -140,10 +140,10 @@ test("KB 詳細の検索テストで検索・回答プロファイル無しに�
   await expect(page.getByRole("link", { name: /引用位置/ })).toHaveCount(0);
 
   // 引用箇所は画面に留まったまま右のサイドパネルで確認し、文書の詳細は別タブで開く（#442 / #2360）。
-  // 回答を作らない検索の箇所なので、見出しは「検索で見つかった箇所」。
+  // 回答の根拠なので、見出しは「回答の根拠」。
   const opener = page.getByRole("button", { name: "policy.pdf の引用箇所を表示" });
   await opener.click();
-  const dialog = page.getByRole("dialog", { name: "検索で見つかった箇所" });
+  const dialog = page.getByRole("dialog", { name: "回答の根拠" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByTestId("evidence-source-summary").getByTestId("evidence-file-name")).toHaveText("policy.pdf");
   const detailLink = dialog.getByRole("link", { name: "文書の詳細を別タブで開く" });
@@ -198,6 +198,12 @@ for (const viewport of [
       // 回答の欄は出さない（空の回答の枠を残さない）。
       await expect(page.getByRole("heading", { name: "回答", exact: true })).toHaveCount(0);
       await expectNoPageOverflow(page);
+      // 検索だけの結果の箇所は、パネルの見出しを「検索で見つかった箇所」にする（#2360）。
+      await page.getByRole("button", { name: /の引用箇所を表示$/ }).first().click();
+      const sheet = page.getByRole("dialog", { name: "検索で見つかった箇所" });
+      await expect(sheet).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(sheet).toBeHidden();
     });
   }
 }
@@ -267,6 +273,13 @@ test("引用プレビューは PDF のページ画像に根拠の要素を強調
   // 右のサイドパネル（#2360）は画面の高さいっぱいで右端に付く。広い画面では本文が左に残り、狭い画面
   // （sm 未満）は全画面のシート。プレビューは要約の下にある。
   const viewport = page.viewportSize()!;
+  // 右から滑り出し切るのを待つ。
+  await expect
+    .poll(async () => {
+      const box = await dialog.boundingBox();
+      return box ? Math.round(box.x + box.width) : -1;
+    })
+    .toBe(viewport.width);
   const dialogBox = await dialog.boundingBox();
   expect(dialogBox!.height).toBeCloseTo(viewport.height, 0);
   expect(dialogBox!.x + dialogBox!.width).toBeCloseTo(viewport.width, 0);

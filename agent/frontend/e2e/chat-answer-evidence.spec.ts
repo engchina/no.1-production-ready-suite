@@ -175,9 +175,13 @@ for (const viewport of VIEWPORTS) {
     await expect(summary.getByTestId("citation-text")).toHaveAttribute("data-expanded", "true");
     await expect(sheet.getByTestId("evidence-source-preview")).toHaveCount(0);
     // 右端に付き、375px は全画面のシート。
-    const sheetBox = await sheet.boundingBox();
-    expect(Math.round(sheetBox!.x + sheetBox!.width)).toBe(viewport.width);
-    if (viewport.width < 640) expect(Math.round(sheetBox!.x)).toBe(0);
+    await expect
+      .poll(async () => {
+        const box = await sheet.boundingBox();
+        return box ? Math.round(box.x + box.width) : -1;
+      })
+      .toBe(viewport.width);
+    if (viewport.width < 640) expect(Math.round((await sheet.boundingBox())!.x)).toBe(0);
     await page.screenshot({ path: testInfo.outputPath(`answer-evidence-sheet-${viewport.name}.png`) });
     await page.keyboard.press("Escape");
     await expect(sheet).toBeHidden();
