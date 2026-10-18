@@ -4,6 +4,7 @@ import type { RetrievedChunk } from "@/lib/api";
 
 import { CitationActions, type CitationCardOptions } from "./CitationCard";
 import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
+import { CitationFigureAction } from "./CitationFigure";
 import { CitationSourceSheet } from "./CitationSourceSheet";
 
 /**
@@ -37,6 +38,12 @@ export function AnswerCitations({
         className={className}
         listTestId={listTestId}
         onOpenSource={preview ? source.open : undefined}
+        // 図の根拠の「図を開く」（Agent と同じ共通の部品・位置。#2428）。文書を読む権限がある画面（preview）だけ。
+        renderFigure={
+          preview
+            ? (_item, index) => <CitationFigureAction chunk={citations[index]} testId={`${idPrefix}-figure-${index}`} />
+            : undefined
+        }
         renderActions={(_item, index) => <CitationActions chunk={citations[index]} {...cardProps} />}
       />
       {preview ? <Preview citations={citations} source={source} kind="answer" /> : null}
@@ -70,6 +77,12 @@ export function CitationList({
         labels={EVIDENCE_LABELS}
         testId={listTestId}
         onOpenSource={preview ? source.open : undefined}
+        // 図の根拠の「図を開く」（Agent と同じ共通の部品・位置。#2428）。文書を読む権限がある画面（preview）だけ。
+        renderFigure={
+          preview
+            ? (_item, index) => <CitationFigureAction chunk={citations[index]} testId={`${idPrefix}-figure-${index}`} />
+            : undefined
+        }
         renderActions={(_item, index) => <CitationActions chunk={citations[index]} {...cardProps} />}
       />
       {preview ? <Preview citations={citations} source={source} kind="search" /> : null}

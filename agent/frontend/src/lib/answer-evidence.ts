@@ -1,4 +1,9 @@
-import { evidenceLabels, type EvidenceChip, type EvidenceListItem } from "@production-ready/ui";
+import {
+  evidenceFigureLabels,
+  evidenceLabels,
+  type EvidenceChip,
+  type EvidenceListItem,
+} from "@production-ready/ui";
 
 import type { Artifact } from "@/lib/api";
 import { evidenceLocation, type RagFigureRef } from "@/lib/rag-evidence";
@@ -14,6 +19,9 @@ export const ANSWER_EVIDENCE_KIND = "answer_evidence";
 
 /** 根拠の文言（3 製品で共通）。 */
 export const EVIDENCE_LABELS = evidenceLabels();
+
+/** 「図を開く」の文言（RAG と同じ共通の部品の既定）。 */
+export const EVIDENCE_FIGURE_LABELS = evidenceFigureLabels();
 
 export interface AnswerEvidenceEntry {
   item: EvidenceListItem;

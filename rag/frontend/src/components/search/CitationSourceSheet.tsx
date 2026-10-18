@@ -21,6 +21,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { firstMetadataToken, integerMetadataValue } from "@/lib/table-cell-focus";
 
 import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
+import { CitationFigureAction } from "./CitationFigure";
 
 /**
  * 根拠 1 件を右のサイドパネルで開く（#2360。Agent のチャットと同じ共通の `EvidenceSourceSheet`）。上部に根拠の
@@ -53,6 +54,8 @@ export function CitationSourceSheet({
       index={index}
       labels={EVIDENCE_LABELS}
       kind={kind}
+      // 図の根拠は「図を開く」（Agent と同じ共通の部品・位置。#2428）。
+      figure={chunk ? <CitationFigureAction chunk={chunk} testId="citation-source-figure" /> : null}
       actions={
         chunk && canOpenDetail ? (
           <Link
