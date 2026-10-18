@@ -1315,22 +1315,65 @@ export interface DbAdminChatPlan {
   blocked_reasons: string[];
 }
 
-/** DB 管理チャットの SQL の生成の結果（実行はしない）。 */
-export interface DbAdminChatGenerateData {
-  question: string;
-  explanation: string;
-  plan: DbAdminChatPlan;
-  context_tables: string[];
-  model: string;
-  warnings: string[];
-  timing: TimingEnvelope;
+/**
+ * DB 管理チャットのターンの今の SQL の最後の実行の要約（#2319）。結果の行はチャットと同じく保存しない
+ * （`result.select_result` は空。行数・列数・打ち切りだけ）。確認語は保存しない。
+ */
+export interface DbAdminChatLastExecution {
+  executed_at: string;
+  /** 実行した SQL の版（ターンの `revision` と違えば前の版の実行）。 */
+  revision: number;
+  confirmation_given: boolean;
+  succeeded: boolean;
+  row_count: number | null;
+  column_count: number | null;
+  has_more: boolean;
+  outcome: string;
+  result: DbAdminExecuteData;
 }
 
-/** DB 管理チャットの同じ画面の前の往復（保存しない。続きの質問の文脈）。 */
-export interface DbAdminChatHistoryTurn {
+/** DB 管理チャットの保存したターン（#2319）。 */
+export interface DbAdminChatTurn {
+  turn_id: string;
   question: string;
-  sql: string;
-  outcome: string;
+  created_at: string;
+  generated_at: string;
+  explanation: string;
+  warnings: string[];
+  context_tables: string[];
+  model: string;
+  plan: DbAdminChatPlan;
+  /** AI のエラー分析で直した SQL に置き換えると進む。 */
+  revision: number;
+  corrected: boolean;
+  last_execution: DbAdminChatLastExecution | null;
+  sender_user_uuid?: string | null;
+  /** 会話の持ち主以外（system_admin）が送ったターンだけに付く送り手の表示名（引けなければ空）。 */
+  sender_display_name?: string | null;
+}
+
+/** DB 管理チャットの会話（#2319。チャットの会話と同じ見え方の項目）。 */
+export interface DbAdminChatConversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at?: string;
+  /** 見ている利用者の会話か（system_admin が他の利用者の会話を見るときは false）。 */
+  owned?: boolean;
+  /** system_admin の一覧だけに付く利用者の表示名。 */
+  actor_display_name?: string;
+}
+
+/** DB 管理チャットの会話の内容。 */
+export interface DbAdminChatData {
+  conversation: DbAdminChatConversation;
+  turns: DbAdminChatTurn[];
+}
+
+/** 質問を送った結果（保存したターンと、その会話）。SQL は実行しない。 */
+export interface DbAdminChatSendData {
+  conversation: DbAdminChatConversation;
+  turn: DbAdminChatTurn;
 }
 
 /** DB 管理チャットの失敗の分析と直した SQL。 */

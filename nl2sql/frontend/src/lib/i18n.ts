@@ -183,12 +183,10 @@ const nl2sqlJa = {
   "dbAdminChat.analyze.title": "AI のエラー分析",
   "dbAdminChat.analyze.corrected": "修正した SQL",
   "dbAdminChat.analyze.useCorrected": "修正した SQL を使う",
+  "dbAdminChat.analyze.useCorrectedFailed": "修正した SQL に置き換えられませんでした。",
   "dbAdminChat.analyze.correctedHint":
     "修正した SQL を使うと、実行の前に分類し直し、確認語からやり直します。",
   "dbAdminChat.correctedApplied": "AI のエラー分析で修正した SQL です。",
-  "dbAdminChat.outcome.success": "成功",
-  "dbAdminChat.outcome.rows": "成功（{count} 行）",
-  "dbAdminChat.outcome.failed": "失敗: {message}",
   "security.deepsec.entitlements.expression.group": "条件グループ",
   "security.deepsec.entitlements.expression.match": "条件の組み合わせ",
   "security.deepsec.entitlements.expression.and": "すべて満たす（AND）",
