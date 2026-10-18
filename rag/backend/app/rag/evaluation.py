@@ -25,6 +25,12 @@ golden set の各ケースを回答エンジン(根拠付き回答。全体の�
 多段の質問の評価（#1335）: 必要な根拠をすべて取れたケースの割合（`evidence_chain_complete_rate`。
 参考の集計）と、ケースの種類（`reasoning_type`）別・段の数（`hops`）別の内訳（必要な根拠の再現率・
 根拠の連鎖の完全率・期待する語の一致率）を持つ。
+
+案内した画面と目的外（#2402）: 案内すべき画面（`expected_screens`）のあるケースは、最後の回答が
+案内した画面を比べ（`evaluation_screens`。決定的に決め、決められないときだけ判定器）、案内すべき画面を
+すべて案内したケースの割合（`screen_match_rate`）とほかの画面を案内したケースの割合
+（`wrong_screen_rate`）を出す。回答の監査の目的との合い方（`goal_alignment`）が目的外
+（off_target）のケースの割合（`off_target_rate`）も出す。どれも参考の集計（閾値の判定に使わない）。
 """
 
 import asyncio
@@ -43,6 +49,7 @@ from pr_backend_core.bounded_calls import (
     BoundedCaller,
     BoundedCallFailed,
 )
+from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 
 from app.clients.ai_calls import make_ai_caller
 from app.clients.oracle import OracleClient
@@ -72,6 +79,16 @@ from app.rag.evaluation_handling import (
     contains_normalized,
     forbidden_hits,
     observed_outcome,
+)
+from app.rag.evaluation_screens import (
+    ScreenJudge,
+    ScreenScore,
+    cited_screen_names,
+    llm_screen_judge,
+    score_from_judgement,
+    score_screens,
+    screen_name_labels,
+    unresolved_score,
 )
 from app.rag.file_processing_evaluation import citation_traceability_coverage
 from app.rag.guardrails import evaluate_groundedness
@@ -311,6 +328,7 @@ class EvaluationRunner:
         settings: Settings | None = None,
         answer_judge: AnswerJudge | None = None,
         profile_resolver: ProfileResolver | None = None,
+        screen_judge: ScreenJudge | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._pipeline = pipeline
@@ -320,6 +338,10 @@ class EvaluationRunner:
         self._answer_judge: AnswerJudge | None = answer_judge
         if answer_judge is None and pipeline is None:
             self._answer_judge = _settings_judge(self._settings)
+        # 案内した画面を決められないときの判定器（#2402）。judge と同じく、既定の pipeline だけ
+        # LLM を使い、テストで pipeline を注入したときは明示した判定器だけを使う。
+        self._screen_judge: ScreenJudge | None = screen_judge
+        self._default_screen_judge = screen_judge is None and pipeline is None
 
     async def run(
         self,
@@ -564,7 +586,48 @@ class EvaluationRunner:
         )
         final_response = turn_runs[-1].response
         judgement = await self._judge(case, final_response, deadline, caller)
-        return _case_result(case, final_response, judgement, turn_runs=turn_runs)
+        screen_score = await self._screens(case, final_response, caller)
+        return _case_result(
+            case, final_response, judgement, turn_runs=turn_runs, screen_score=screen_score
+        )
+
+    async def _screens(
+        self, case: EvaluationCase, response: SearchResponse, caller: BoundedCaller
+    ) -> ScreenScore | None:
+        """案内した画面の採点（#2402）。決定的に決め、決められないときだけ判定器を呼ぶ。
+
+        案内すべき画面の無いケース・測れない回答（拒答・検索をしない回答）と、判定器が無い・失敗した
+        ときは None（`_case_result` が測れない / 未判定にする）。
+        """
+        if not _screens_measurable(case, response) or is_abstained(response):
+            return None
+        cited = cited_screen_names(
+            (chunk.text for chunk in response.citations), screen_name_labels()
+        )
+        score = score_screens(response.answer, case.expected_screens, cited)
+        if score is None and self._screen_judge is None and self._default_screen_judge:
+            from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
+
+            self._screen_judge = llm_screen_judge(OciEnterpriseAiClient(settings=self._settings))
+        if score is not None or self._screen_judge is None:
+            return score
+        judge = self._screen_judge
+
+        async def judge_once(_attempt: Attempt) -> ScreenScore:
+            # 流量の制限の送り直しは共通の実行器が行う（SDK の送り直しと重ねない。#2004）。
+            with sdk_retries_disabled():
+                judgement = await judge(
+                    answer=response.answer, expected=case.expected_screens, candidates=cited
+                )
+            return score_from_judgement(case.expected_screens, judgement)
+
+        try:
+            return await _call_unwrapped(caller, judge_once, label=case.id)
+        except BoundedCallAborted:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 判定できなければ未判定としてケースを続ける。
+            logger.info("evaluation_screen_judge_failed", extra={"error_type": type(exc).__name__})
+            return None
 
     async def _judge(
         self,
@@ -841,11 +904,13 @@ def _case_result(
     judgement: EvaluationAnswerJudgement | None,
     *,
     turn_runs: Sequence[_TurnRun] | None = None,
+    screen_score: ScreenScore | None = None,
 ) -> EvaluationCaseResult:
     """1 ケースの回答から、測れる指標と失敗理由を求める。
 
     `response` は最後の回答。`turn_runs`（#1284）は最初の質問からの全部の回答で、省略したときは
-    `response` だけの 1 往復とみなす。
+    `response` だけの 1 往復とみなす。`screen_score`（#2402）は判定器も使った案内した画面の採点で、
+    省略したときは決定的な判定だけで採点する（決められなければ未判定）。
     """
     runs = list(turn_runs) if turn_runs else [_TurnRun(response, dict(case.conditions))]
     # 同じ文書とみなす文書（同じ名前の文書。#2086）は、正解の文書の ID にそろえて数える。
@@ -903,6 +968,15 @@ def _case_result(
     ) + _handling_failure_reasons(handling)
     if missing_evidence:
         failure_reasons.append("evidence_miss")
+    screens = _case_screen_score(case, response, abstained, screen_score)
+    if screens is not None:
+        if not screens.screen_match:
+            failure_reasons.append("screen_missing")
+        if screens.wrong_screen:
+            failure_reasons.append("wrong_screen")
+    goal_alignment = _goal_alignment(response)
+    if goal_alignment == "off_target":
+        failure_reasons.append("off_target")
     return EvaluationCaseResult(
         case_id=case.id,
         trace_id=response.trace_id,
@@ -926,6 +1000,8 @@ def _case_result(
         evidence_recall=_round(evidence_recall),
         missing_evidence=missing_evidence,
         evidence_chain_complete=None if evidence_recall is None else not missing_evidence,
+        **_screen_fields(screens),
+        goal_alignment=goal_alignment,
         turn_results=turn_results if case.turns else [],
         answer_evaluation=judgement,
         guardrail_warnings=response.guardrail_warnings,
@@ -933,6 +1009,61 @@ def _case_result(
         diagnostics=response.diagnostics,
         elapsed_ms=round(sum(run.response.elapsed_ms for run in runs), 3),
     )
+
+
+def _screens_measurable(case: EvaluationCase, response: SearchResponse) -> bool:
+    """案内した画面を測るか（案内すべき画面があり、検索をしない回答でない。#2402）。"""
+    return bool(case.expected_screens) and not _skips_retrieval(response)
+
+
+def _case_screen_score(
+    case: EvaluationCase,
+    response: SearchResponse,
+    abstained: bool,
+    screen_score: ScreenScore | None,
+) -> ScreenScore | None:
+    """案内した画面の採点（#2402）。測れないケースは None。
+
+    拒答（資料から答えられない）は画面を案内していないため、案内すべき画面は不一致にする。
+    """
+    if not _screens_measurable(case, response):
+        return None
+    if abstained:
+        return ScreenScore(
+            screen_match=False,
+            wrong_screen=False,
+            missing=[screen.name for screen in case.expected_screens],
+        )
+    if screen_score is not None:
+        return screen_score
+    cited = cited_screen_names((chunk.text for chunk in response.citations), screen_name_labels())
+    return score_screens(response.answer, case.expected_screens, cited) or unresolved_score(
+        case.expected_screens
+    )
+
+
+def _screen_fields(score: ScreenScore | None) -> dict[str, Any]:
+    if score is None:
+        return {}
+    return {
+        "screen_match": score.screen_match,
+        "wrong_screen": score.wrong_screen,
+        "guided_screens": list(score.guided),
+        "matched_screens": list(score.matched),
+        "missing_screens": list(score.missing),
+        "wrong_screens": list(score.wrong),
+        "screen_judged_by": score.judged_by,
+    }
+
+
+# 回答の監査の目的との合い方（rag_engine の GroundedAudit.goal_alignment）。
+_GOAL_ALIGNMENTS = frozenset({"aligned", "partial", "off_target"})
+
+
+def _goal_alignment(response: SearchResponse) -> str | None:
+    """回答の記録の、採用した草稿の監査の目的との合い方（#2402。記録が無ければ None）。"""
+    value = (response.diagnostics.answer or {}).get("goal_alignment")
+    return value if isinstance(value, str) and value in _GOAL_ALIGNMENTS else None
 
 
 def _turn_result(
@@ -1167,6 +1298,10 @@ def _accumulate_case_metrics(aggregate: _Aggregate, result: EvaluationCaseResult
     aggregate.add("condition_coverage", result.condition_coverage)
     aggregate.add("required_evidence_recall", result.evidence_recall)
     aggregate.add("evidence_chain_complete_rate", _bool_value(result.evidence_chain_complete))
+    aggregate.add("screen_match_rate", _bool_value(result.screen_match))
+    aggregate.add("wrong_screen_rate", _bool_value(result.wrong_screen))
+    if result.goal_alignment is not None:
+        aggregate.add("off_target_rate", 1.0 if result.goal_alignment == "off_target" else 0.0)
 
 
 def _deadline(time_budget_seconds: float | None) -> float | None:

@@ -3,7 +3,8 @@
 import asyncio
 import hashlib
 import logging
-from collections.abc import Sequence
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from pathlib import PurePath
 from typing import Annotated, Any
@@ -19,9 +20,14 @@ from fastapi import (
     UploadFile,
     status,
 )
+from pr_backend_core.bounded_calls import Attempt, BoundedCallAborted
+from rag_parser_core.language import current_pack
+from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 
+from app.clients.ai_calls import make_ai_caller
+from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oracle import OracleClient
-from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, get_settings
+from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
 from app.rag.evaluation import EvaluationProgressCallback, EvaluationRunner
 from app.rag.evaluation_adapter import normalize_evaluation_suite, resolve_evaluation_suite
 from app.rag.evaluation_excel import (
@@ -47,19 +53,30 @@ from app.rag.evaluation_jobs import (
     evaluation_job_time_limit_seconds,
     get_evaluation_job_service,
 )
+from app.rag.evaluation_process import guide_process_row, process_draft
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.support_guide_process_import import (
+    GuideDraftLlm,
+    KnowledgeDocument,
+    draft_guides,
+    process_headings,
+)
 from app.schemas.common import ApiResponse
 from app.schemas.evaluation import (
     EvaluationCase,
+    EvaluationComparison,
     EvaluationImportIssue,
     EvaluationImportResult,
     EvaluationImportRow,
     EvaluationJob,
     EvaluationJobKind,
     EvaluationMetrics,
+    EvaluationProcessDraftData,
+    EvaluationProcessDraftRequest,
     EvaluationRunRequest,
 )
 from app.schemas.search import normalize_search_id_list
+from app.schemas.support_guide import SupportGuideProcessRow
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -116,8 +133,10 @@ async def submit_run_evaluation_job(
 ) -> ApiResponse[EvaluationJob]:
     """golden set の評価を job として投入する（#390）。進捗は `GET /jobs/{job_id}` で取得する。"""
     enforce_rate_limit("evaluation", http_request)
+    # 比べる検索・回答プロファイルがあれば、同じケースを 2 回流す（#2402）。
+    passes = 2 if request.compare_search_answer_profile_id else 1
     time_limit = evaluation_job_time_limit_seconds(
-        get_settings(), answer_runs=evaluation_answer_runs(request.cases)
+        get_settings(), answer_runs=evaluation_answer_runs(request.cases) * passes
     )
 
     async def execute(progress: EvaluationProgressCallback) -> EvaluationJobOutcome:
@@ -129,7 +148,10 @@ async def submit_run_evaluation_job(
         )
 
     job = await _submit_job(
-        kind="run", total_cases=len(request.cases), time_limit=time_limit, executor=execute
+        kind="run",
+        total_cases=len(request.cases) * passes,
+        time_limit=time_limit,
+        executor=execute,
     )
     return ApiResponse(data=job)
 
@@ -218,6 +240,69 @@ async def import_evaluation_cases(
     return ApiResponse(data=result)
 
 
+def evaluation_process_llm(settings: Settings) -> GuideDraftLlm:
+    """回答の過程を構造化する LLM（業務ガイドの取り込みと同じ呼び出し。テストで差し替える）。"""
+    return OciEnterpriseAiClient(settings=settings)
+
+
+@router.post("/cases/process-drafts", response_model=ApiResponse[EvaluationProcessDraftData])
+async def draft_evaluation_process_expectations(
+    http_request: Request,
+    body: EvaluationProcessDraftRequest,
+) -> ApiResponse[EvaluationProcessDraftData]:
+    """評価のケースの回答の過程から、期待（手順・条件・根拠・対応）の下書きを作る（#2402。保存しない）。
+
+    構造化は業務ガイドの取り込み（#2397）と同じ部品で、1 行で OCI Enterprise AI を 1 回呼ぶ（上限
+    つき並行。``RAG_SUPPORT_GUIDE_IMPORT_CONCURRENCY``）。見出しの語は言語資源
+    （``guide_import_cues.process_headings``）、資料の名前は選んだナレッジベースの文書で解決する。
+    画面は行を ``EVALUATION_PROCESS_MAX_REQUEST_ROWS`` 行ずつに分けて送る。
+    """
+    enforce_rate_limit("evaluation", http_request)
+    settings = get_settings()
+    documents = [
+        KnowledgeDocument(document.document_id, document.file_name)
+        for document in await _knowledge_base_documents(body.knowledge_base_ids)
+        if not document.superseded
+    ]
+    llm = evaluation_process_llm(settings)
+    caller = make_ai_caller(settings, "guide_import")
+    rows = [guide_process_row(row) for row in body.rows]
+
+    async def run(
+        targets: Sequence[SupportGuideProcessRow],
+        fn: Callable[[SupportGuideProcessRow, Attempt], Awaitable[str]],
+    ) -> list[tuple[str | None, str | None]]:
+        async def call(row: SupportGuideProcessRow, attempt: Attempt) -> str:
+            with sdk_retries_disabled():
+                return await fn(row, attempt)
+
+        outcomes = await caller.map(targets, call, labels=[f"row-{row.row}" for row in targets])
+        return [
+            (outcome.value, None)
+            if outcome.ok
+            else (None, f"下書きを作れませんでした（{outcome.error}）。")
+            for outcome in outcomes
+        ]
+
+    try:
+        items = await draft_guides(
+            rows,
+            documents,
+            llm=llm,
+            headings=process_headings(current_pack()),
+            run=run,
+        )
+    except BoundedCallAborted as exc:
+        raise HTTPException(
+            status_code=503, detail=f"回答の過程から期待の下書きを作れませんでした。{exc}"
+        ) from exc
+    return ApiResponse(
+        data=EvaluationProcessDraftData(
+            drafts=[process_draft(row, item) for row, item in zip(body.rows, items, strict=True)]
+        )
+    )
+
+
 def _with_issues(
     result: EvaluationImportResult, issues: Sequence[EvaluationImportIssue]
 ) -> EvaluationImportResult:
@@ -249,6 +334,8 @@ def _preview_row(row: EvaluationExcelRow) -> EvaluationImportRow:
         ),
         has_standard_answer=answer is not None,
         expects_answer=bool(row.evidence or answer),
+        screens=list(row.screen_lines),
+        answer_process=row.answer_process,
     )
 
 
@@ -356,6 +443,7 @@ async def _execute_run(
         if request.thresholds is not None
         else resolve_evaluation_suite(suite_name)
     )
+    started = time.monotonic()
     metrics = await EvaluationRunner().run(
         cases=request.cases,
         top_k=request.top_k,
@@ -365,9 +453,35 @@ async def _execute_run(
         rag_overrides=request.rag_overrides,
         search_answer_profile_id=request.search_answer_profile_id,
         time_budget_seconds=time_budget_seconds,
-        progress=progress,
+        progress=_offset_progress(progress, offset=0, final=False)
+        if request.compare_search_answer_profile_id
+        else progress,
     )
     metrics = metrics.model_copy(update={"evaluation_suite": suite_name})
+    if request.compare_search_answer_profile_id:
+        # 同じケースを検索・回答プロファイルの範囲（参照 KB・業務ガイド・ルール）でも流す（#2402）。
+        # 範囲はプロファイルが決めるため、ナレッジベースの指定は渡さない。
+        compared = await EvaluationRunner().run(
+            cases=request.cases,
+            top_k=request.top_k,
+            filters={
+                key: value for key, value in request.filters.items() if key != "knowledge_base_id"
+            },
+            knowledge_base_ids=[],
+            thresholds=effective_thresholds,
+            rag_overrides=request.rag_overrides,
+            search_answer_profile_id=request.compare_search_answer_profile_id,
+            time_budget_seconds=max(0.0, time_budget_seconds - (time.monotonic() - started)),
+            progress=_offset_progress(progress, offset=len(request.cases), final=True),
+        )
+        metrics = metrics.model_copy(
+            update={
+                "comparison": EvaluationComparison(
+                    search_answer_profile_id=request.compare_search_answer_profile_id,
+                    metrics=compared.model_copy(update={"evaluation_suite": suite_name}),
+                )
+            }
+        )
     evaluation_run_id = await _save_evaluation_artifact(
         request_summary=_run_request_summary(request),
         result_summary=metrics.model_dump(mode="json"),
@@ -375,6 +489,24 @@ async def _execute_run(
         passed=_metrics_passed(metrics),
     )
     return metrics, evaluation_run_id
+
+
+def _offset_progress(
+    progress: EvaluationProgressCallback | None, *, offset: int, final: bool
+) -> EvaluationProgressCallback | None:
+    """2 回流す評価（#2402）の進捗を、job 全体（ケース × 2）の数にする。
+
+    1 回目の最後の通知（今のケース無し）は、2 回目が始まる前なので job へ渡さない（`final=False`）。
+    """
+    if progress is None:
+        return None
+
+    async def report(*, completed_cases: int, current_case_id: str | None) -> None:
+        if current_case_id is None and not final:
+            return
+        await progress(completed_cases=offset + completed_cases, current_case_id=current_case_id)
+
+    return report
 
 
 async def _save_evaluation_artifact(
@@ -412,6 +544,7 @@ def _run_request_summary(request: EvaluationRunRequest) -> dict[str, Any]:
         "filter_keys": sorted(request.filters),
         "knowledge_base_ids": request.knowledge_base_ids,
         "search_answer_profile_id": request.search_answer_profile_id,
+        "compare_search_answer_profile_id": request.compare_search_answer_profile_id,
         "thresholds": (
             request.thresholds.model_dump(mode="json", exclude_none=True)
             if request.thresholds is not None
@@ -444,6 +577,8 @@ def _case_summary(case: EvaluationCase) -> dict[str, Any]:
         "turn_count": len(case.turns),
         "condition_ids": sorted(case.all_condition_ids()),
         "required_evidence_ids": [evidence.id for evidence in case.required_evidence],
+        # 案内すべき画面の数（#2402。画面の名前は残さない）。
+        "expected_screen_count": len(case.expected_screens),
     }
 
 
