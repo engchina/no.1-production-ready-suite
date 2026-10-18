@@ -31,6 +31,9 @@ import {
   type EntityAction,
   type EntityActionTone,
   FixedSplitPane,
+  ListDetailLayout,
+  ListDetailPager,
+  adjacentListItems,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   ExecutionConfirmationField,
@@ -50,7 +53,7 @@ import {
   type DbObjectToolbarFilterProps,
 } from "@/components/DbObjectFilterFields";
 import { listCountLabels, listToolbarLabels } from "@/lib/pagination-labels";
-import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
+import { FIXED_SPLIT_STORAGE_PREFIX, LIST_DETAIL_STORAGE_PREFIX } from "@/lib/ui-store";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
 import { formatDateTime, formatNumber } from "@/lib/format";
@@ -279,6 +282,7 @@ export function DbObjectManagementPanelShell({
   minLeftPaneWidthPx,
   minRightPaneWidthPx,
   role = "tabpanel",
+  framed = true,
   processing,
   topContent,
   children,
@@ -294,6 +298,11 @@ export function DbObjectManagementPanelShell({
   minRightPaneWidthPx?: number;
   /** タブ配下は "tabpanel"(既定)、タブ非連携の独立領域は "region"。 */
   role?: "tabpanel" | "region";
+  /**
+   * 枠（カード）を付けるか。一覧 + 詳細（`DbObjectListDetail` / `ListDetailLayout`）は一覧と詳細の列がそれぞれ枠を持つので、
+   * 外側の枠を付けない（カードの入れ子を 1 段減らす。#2281）。
+   */
+  framed?: boolean;
   /** 既存内容を保持する明示的な再取得など、作業領域に属する処理状態。 */
   processing?: ReactNode;
   /** 左右分割の外側に置く、画面全幅の補助コンテンツ。 */
@@ -310,7 +319,7 @@ export function DbObjectManagementPanelShell({
       aria-labelledby={labelledBy}
       aria-label={ariaLabel}
       aria-busy={processing ? true : undefined}
-      className={`grid gap-4 rounded-md border border-border bg-surface p-4 shadow-sm ${className}`}
+      className={cn("grid gap-4", framed && "rounded-md border border-border bg-surface p-4 shadow-sm", className)}
       data-testid="management-panel-shell"
       data-management-id={idPrefix}
     >
@@ -463,6 +472,7 @@ export function DbObjectSelectorFooter({
   loadMoreError = "",
   loadMoreLabel = t("objectSelector.loadMore"),
   dataTestId,
+  className = "min-h-10 rounded-md border border-border bg-surface px-3 py-2",
   onLoadMore,
   onRetryLoadMore,
 }: {
@@ -474,6 +484,8 @@ export function DbObjectSelectorFooter({
   loadMoreError?: string;
   loadMoreLabel?: string;
   dataTestId?: string;
+  /** 外枠の class（一覧 + 詳細の列の下では枠を付けない）。 */
+  className?: string;
   onLoadMore?: () => void;
   onRetryLoadMore?: () => void;
 }) {
@@ -496,7 +508,7 @@ export function DbObjectSelectorFooter({
       loadMoreLabel={loadMoreLabel}
       retryLabel={t("common.retry")}
       announce
-      className="min-h-10 rounded-md border border-border bg-surface px-3 py-2"
+      className={className}
       testId={dataTestId}
     />
   );
@@ -962,10 +974,15 @@ export function dbObjectListCount({
   return { total: Math.max(unfilteredTotal, matched), matched };
 }
 
-export function DbObjectGrid({
+/**
+ * テーブル・ビューの管理の一覧 + 詳細（B 型。#2281）。共有の `ListDetailLayout` に、DB オブジェクトの一覧
+ * （左の狭い列: 検索・所有者・件数 → 名前とコメントの 2 段 + 行数の表 → 「さらに読み込む」）と、選んだ対象の詳細
+ * （右の広い列。`DbObjectDetailPanel`）を渡す。選択は URL（`useWorkspaceUrlSelection`）が持ち、先頭の行を自動で選ばない。
+ */
+export function DbObjectListDetail({
   idPrefix,
   headingId,
-  icon,
+  icon: Icon,
   items,
   selectedName,
   loading,
@@ -981,6 +998,8 @@ export function DbObjectGrid({
   loadMoreError = "",
   error = "",
   loadingActivityIcon,
+  detail,
+  detailLabel,
   onSearchChange,
   onOwnerPrefixChange,
   onSortChange,
@@ -993,6 +1012,7 @@ export function DbObjectGrid({
   headingId: string;
   icon: LucideIcon;
   items: DbAdminObjectSummary[];
+  /** 選んでいる対象（`OWNER.NAME`）。未選択は空文字。 */
   selectedName: string;
   loading: boolean;
   search: string;
@@ -1016,6 +1036,10 @@ export function DbObjectGrid({
    * "none" にする（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
    */
   loadingActivityIcon?: ProcessingActivityIcon;
+  /** 選んだ対象の詳細（`DbObjectDetailPanel`）。 */
+  detail: ReactNode;
+  /** 詳細の列の名前（翻訳済み。例:「テーブルの詳細」）。 */
+  detailLabel: string;
   onSearchChange: (value: string) => void;
   onOwnerPrefixChange: (value: DbObjectOwnerPrefix) => void;
   onSortChange: (key: DbObjectSortKey) => void;
@@ -1031,120 +1055,139 @@ export function DbObjectGrid({
     filtered: hasActiveFilter,
     ready: !loading && !error,
   });
+  const { previous, next } = adjacentListItems(items, selectedName || null, (item) => formatDbObjectName(item));
+
   return (
-    <section className="grid min-w-0 content-start gap-3" aria-labelledby={headingId}>
-      <DbObjectPanelHeader
-        headingId={headingId}
-        icon={icon}
-        title={labels.title}
-        description={labels.hint}
-      />
-
-      {/* 件数は見出しのバッジではなく、ツールバーの右の ListCount 1 か所に出す（#1891）。 */}
-      <div className="rounded-md border border-border bg-surface-sunken p-3">
-        <DbObjectSearchOwnerFields
-          searchLabel={t("dbAdmin.search.label")}
-          searchPlaceholder={t("dbAdmin.search.placeholder")}
-          searchValue={search}
-          onSearchChange={onSearchChange}
-          ownerLabel={t("dbAdmin.owner.label")}
-          ownerPlaceholder={t("dbAdmin.ownerPrefix.placeholder")}
-          ownerValue={ownerPrefix}
-          onOwnerChange={onOwnerPrefixChange}
-          count={count}
-          testId={`${idPrefix}-toolbar`}
-          onClearFilters={() => {
-            onSearchChange("");
-            onOwnerPrefixChange("");
-          }}
-        />
-      </div>
-
-      {loading ? (
-        <DbManagementLoadingSkeleton
-          idPrefix={idPrefix}
-          ariaLabel={labels.loading}
-          variant="list"
-          activityIcon={loadingActivityIcon}
-        />
-      ) : error ? (
-        <ErrorState message={error} onRetry={onRetry} />
-      ) : items.length === 0 ? (
-        <EmptyState
-          title={hasActiveFilter ? labels.noResultsTitle : labels.emptyTitle}
-          hint={hasActiveFilter ? labels.noResultsHint : labels.emptyHint}
-        />
-      ) : (
-        <DataTable
-          columns={[
-            {
-              key: "name",
-              header: labels.objectName,
-              sortable: true,
-              headerClassName: "w-[55%]",
-              className: "align-top",
-              render: (item, index) => {
-                const qualifiedName = formatDbObjectName(item);
-                const commentId = `${idPrefix}-comment-${index}`;
-                return (
-                  <RowTitleButton
-                    title={<DbObjectName value={qualifiedName} size="xs" />}
-                    subtitle={showComments ? <DbObjectCommentText id={commentId} comment={item.comment} /> : undefined}
-                    current={qualifiedName === selectedName}
-                    aria-label={labels.showObject(qualifiedName)}
-                    aria-describedby={showComments ? commentId : undefined}
-                    onClick={() => onSelect(qualifiedName)}
-                  />
-                );
+    <ListDetailLayout
+      id={idPrefix}
+      listLabel={labels.title}
+      detailLabel={detailLabel}
+      storagePrefix={LIST_DETAIL_STORAGE_PREFIX}
+      listHeader={
+        <div className="grid gap-3">
+          <h2 id={headingId} className="flex items-center gap-2 text-sm font-semibold text-fg">
+            <Icon size={16} aria-hidden="true" />
+            {labels.title}
+          </h2>
+          {/* 件数は見出しのバッジではなく、ツールバーの右の ListCount 1 か所に出す（#1891）。狭い列なので縦に積む。 */}
+          <DbObjectSearchOwnerFields
+            searchLabel={t("dbAdmin.search.label")}
+            searchPlaceholder={t("dbAdmin.search.placeholder")}
+            searchValue={search}
+            onSearchChange={onSearchChange}
+            ownerLabel={t("dbAdmin.owner.label")}
+            ownerPlaceholder={t("dbAdmin.ownerPrefix.placeholder")}
+            ownerValue={ownerPrefix}
+            onOwnerChange={onOwnerPrefixChange}
+            count={count}
+            testId={`${idPrefix}-toolbar`}
+            onClearFilters={() => {
+              onSearchChange("");
+              onOwnerPrefixChange("");
+            }}
+          />
+        </div>
+      }
+      list={
+        loading ? (
+          <div className="p-3">
+            <DbManagementLoadingSkeleton
+              idPrefix={idPrefix}
+              ariaLabel={labels.loading}
+              variant="list"
+              activityIcon={loadingActivityIcon}
+            />
+          </div>
+        ) : error ? (
+          <div className="p-3">
+            <ErrorState message={error} onRetry={onRetry} />
+          </div>
+        ) : items.length === 0 ? (
+          <div className="p-3">
+            <EmptyState
+              title={hasActiveFilter ? labels.noResultsTitle : labels.emptyTitle}
+              hint={hasActiveFilter ? labels.noResultsHint : labels.emptyHint}
+            />
+          </div>
+        ) : (
+          <DataTable
+            columns={[
+              {
+                key: "name",
+                header: labels.objectName,
+                sortable: true,
+                className: "align-top",
+                render: (item, index) => {
+                  const qualifiedName = formatDbObjectName(item);
+                  const commentId = `${idPrefix}-comment-${index}`;
+                  return (
+                    <RowTitleButton
+                      title={<DbObjectName value={qualifiedName} size="xs" />}
+                      subtitle={showComments ? <DbObjectCommentText id={commentId} comment={item.comment} /> : undefined}
+                      current={qualifiedName === selectedName}
+                      aria-label={labels.showObject(qualifiedName)}
+                      aria-describedby={showComments ? commentId : undefined}
+                      onClick={() => onSelect(qualifiedName)}
+                    />
+                  );
+                },
               },
-            },
-            {
-              key: "row_count",
-              header: labels.rows,
-              sortable: true,
-              headerClassName: "w-[7.5rem]",
-              className: "whitespace-nowrap align-top font-sans",
-              render: (item) => rowCountLabel(item.row_count),
-            },
-            {
-              // 所有者列は lg 未満で非表示にする（375px で空の列が幅を取り、横スクロールが出るのを防ぐ）。
-              key: "owner",
-              header: labels.owner,
-              sortable: true,
-              headerClassName: "hidden w-[7.5rem] lg:table-cell",
-              className: "hidden whitespace-nowrap align-top font-mono text-fg-muted lg:table-cell",
-              render: (item) => item.owner || "-",
-            },
-          ]}
-          rows={items}
-          getRowKey={(item) => formatDbObjectName(item)}
-          sort={sort}
-          onSortChange={(next) => onSortChange(next.key as DbObjectSortKey)}
-          selectedRowKey={selectedName}
-          onRowClick={(item) => onSelect(formatDbObjectName(item))}
-          rowProps={() => ({ className: DB_OBJECT_GRID_ROW_CLASS })}
-          testId={`${idPrefix}-grid`}
-          scrollTestId="db-admin-object-list"
-          // lg 以上の最小幅は、1280px の一覧枠の内幅（scrollbar-gutter: stable の分を除いた 325px。#867）に
-          // 収まる 22rem にする。24rem では内幅を 11px 超え、一覧の中に横スクロールが出る（#883）。
-          tableClassName="w-full min-w-[16rem] table-fixed lg:min-w-[22rem]"
-          stickyHeader
-          visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
-        />
-      )}
-      {!loading && !error && (
-        <DbObjectSelectorFooter
-          visibleCount={items.length}
-          totalCount={totalCount ?? items.length}
-          hasNextPage={hasNextPage}
-          loadingNextPage={loadingNextPage}
-          loadMoreError={loadMoreError}
-          dataTestId={`${idPrefix}-footer`}
-          onLoadMore={onLoadMore}
-          onRetryLoadMore={onRetryLoadMore}
-        />
-      )}
-    </section>
+              {
+                key: "row_count",
+                header: labels.rows,
+                sortable: true,
+                align: "right",
+                headerClassName: "w-[6.5rem]",
+                className: "whitespace-nowrap align-top font-sans tabular-nums",
+                render: (item) => rowCountLabel(item.row_count),
+              },
+            ]}
+            rows={items}
+            getRowKey={(item) => formatDbObjectName(item)}
+            sort={sort}
+            onSortChange={(nextSort) => onSortChange(nextSort.key as DbObjectSortKey)}
+            selectedRowKey={selectedName || null}
+            onRowClick={(item) => onSelect(formatDbObjectName(item))}
+            rowProps={() => ({ className: DB_OBJECT_GRID_ROW_CLASS })}
+            testId={`${idPrefix}-grid`}
+            scrollTestId="db-admin-object-list"
+            // 一覧の列（既定 20rem・16〜32rem）の高さの中で縦にスクロールし、表頭を固定する。列の枠と二重にしない。
+            className="min-h-0 rounded-none border-0"
+            tableClassName="w-full table-fixed"
+            stickyHeader
+          />
+        )
+      }
+      listFooter={
+        !loading && !error ? (
+          <DbObjectSelectorFooter
+            visibleCount={items.length}
+            totalCount={totalCount ?? items.length}
+            hasNextPage={hasNextPage}
+            loadingNextPage={loadingNextPage}
+            loadMoreError={loadMoreError}
+            dataTestId={`${idPrefix}-footer`}
+            className="min-h-10"
+            onLoadMore={onLoadMore}
+            onRetryLoadMore={onRetryLoadMore}
+          />
+        ) : undefined
+      }
+      hasSelection={Boolean(selectedName)}
+      detail={detail}
+      emptyDetail={<EmptyState title={t("dbAdmin.detail.emptyTitle")} hint={t("dbAdmin.detail.emptyHint")} />}
+      detailToolbar={
+        selectedName ? (
+          <ListDetailPager
+            onPrevious={previous ? () => onSelect(formatDbObjectName(previous)) : null}
+            onNext={next ? () => onSelect(formatDbObjectName(next)) : null}
+            labels={{ previous: t("listDetail.previous"), next: t("listDetail.next") }}
+            testId={`${idPrefix}-detail-pager`}
+          />
+        ) : undefined
+      }
+      labels={{ resize: t("listDetail.resize"), resizeHint: t("listDetail.resizeHint") }}
+    />
   );
 }
 
@@ -1210,21 +1253,14 @@ export function DbObjectDetailPanel({
 
   if (error) {
     return (
-      <section
-        className="grid min-w-0 content-start rounded-md border border-border bg-surface-sunken p-4"
-        data-testid={`${idPrefix}-detail-error`}
-      >
+      <section className="grid min-w-0 content-start" data-testid={`${idPrefix}-detail-error`}>
         <ErrorState message={error} onRetry={onRetry} />
       </section>
     );
   }
 
   if (!detail) {
-    return (
-      <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-4">
-        <EmptyState title={t("dbAdmin.detail.emptyTitle")} hint={t("dbAdmin.detail.emptyHint")} />
-      </section>
-    );
+    return <EmptyState title={t("dbAdmin.detail.emptyTitle")} hint={t("dbAdmin.detail.emptyHint")} />;
   }
 
   const detailTabs = [
@@ -1265,7 +1301,8 @@ export function DbObjectDetailPanel({
   const showRowCountBadge = detail.object_type === "table" || detail.row_count != null;
 
   return (
-    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-4" aria-labelledby={headingId}>
+    // 枠は一覧 + 詳細（ListDetailLayout）の詳細の列が持つ（カードの入れ子を 1 段減らす。#2281）。
+    <section className="grid min-w-0 content-start gap-3" aria-labelledby={headingId} data-testid={`${idPrefix}-detail`}>
       <div
         className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between"
         data-testid={`${idPrefix}-detail-header`}

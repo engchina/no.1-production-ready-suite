@@ -6,7 +6,7 @@ RAG / NL2SQL / Agent の3製品に共通する「画面の振る舞い」の規�
 |---|---|
 | [buttons.md](./buttons.md) | ボタンの役割・配置・命名、ページ / オブジェクト / 行 / 内容の操作の置き場所、一括選択、並べ替え列頭 |
 | [messaging.md](./messaging.md) | 通知の 6 チャネル（Toast / FieldError / FormStatus / Banner / ConfirmDialog / State views）と 4 トーン、必須の欄の示し方と未入力のエラー（§3.2.1）、処理中表示、i18n 文言、API problem 契約、失敗状態の情報設計 |
-| [page-archetypes.md](./page-archetypes.md) | ページの型（4 種）と共有プリミティブの使い方、分割ペイン、チャット（会話の画面）の骨格と共通の部品・製品の分担（§6） |
+| [page-archetypes.md](./page-archetypes.md) | ページの型（4 種）と共有プリミティブの使い方、詳細の出し方（一覧 + 詳細・シート・分割ペイン）、チャット（会話の画面）の骨格と共通の部品・製品の分担（§6） |
 | [confirm-before-answer.md](./confirm-before-answer.md) | 回答前の確認（曖昧な質問を回答・SQL の生成の前に確かめる）: いつ聞くか・用語・確認のカードの出し方と操作・往復の上限・会話に残す表示・状態の保持と a11y・3 製品の割り当てと業務の単位の設定（#1839） |
 | [run-history.md](./run-history.md) | 実行履歴（3 製品の「実行履歴」）の一覧の列・状態・絞り込み・件数と、一覧 → 全幅の詳細の構成（概要 → 処理の経過 → 回答 → 根拠 / SQL / 検証 → 技術的な詳細）、375px の形（#1955） |
 | [workspace-state.md](./workspace-state.md) | ページ遷移・再読込のときの作業状態の保持、未保存変更の離脱ガード |
@@ -24,4 +24,4 @@ RAG / NL2SQL / Agent の3製品に共通する「画面の振る舞い」の規�
 
 ## 実装の置き場所
 
-- 規約に出てくる部品のうち、`@production-ready/ui`（`packages/ui`）にあるもの（`Button` / `PageHeader` / `Banner` / `FormStatus` / `FieldError` / `DataTable` / `Pagination` / `MessageText` / `useConfirm` / `toast` / `ContentActionBar` / `FormActionBar` / `BulkSelectionActions` / `ClearActionButton` / `ActionResultRegion` / `ProcessingIndicator` / `TimedLoadingState` / `RowActionMenu` / `ObjectActionBar` / `FloatingActionMenu` / `Disclosure` / `DisclosureChevron` / `FixedSplitPane` / `ClarificationCard` / `ClarificationRecord` など）は、それを使う。処理中表示・分割ペインの文言は `labels`、`ObjectActionBar` / `FormActionBar` の「その他の操作」は `moreLabel`（いずれも既定は日本語）で製品の i18n から差し替える。分割ペインの比率の保存 key は `storagePrefix` で製品ごとに分けられる。並べ替えの列頭は `DataTable` の `sort` が持つ。
+- 規約に出てくる部品のうち、`@production-ready/ui`（`packages/ui`）にあるもの（`Button` / `PageHeader` / `Banner` / `FormStatus` / `FieldError` / `DataTable` / `Pagination` / `MessageText` / `useConfirm` / `toast` / `ContentActionBar` / `FormActionBar` / `BulkSelectionActions` / `ClearActionButton` / `ActionResultRegion` / `ProcessingIndicator` / `TimedLoadingState` / `RowActionMenu` / `ObjectActionBar` / `FloatingActionMenu` / `Disclosure` / `DisclosureChevron` / `ListDetailLayout` / `FixedSplitPane` / `ClarificationCard` / `ClarificationRecord` など）は、それを使う。処理中表示・分割ペインの文言は `labels`、`ObjectActionBar` / `FormActionBar` の「その他の操作」は `moreLabel`（いずれも既定は日本語）で製品の i18n から差し替える。分割ペインの比率・一覧 + 詳細の一覧の幅と開閉の保存 key は `storagePrefix` で製品ごとに分けられる。並べ替えの列頭は `DataTable` の `sort` が持つ。
