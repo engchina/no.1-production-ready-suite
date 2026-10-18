@@ -2950,7 +2950,7 @@
             "type": "array"
           },
           "evidence": {
-            "description": "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）と、実体からたどった根拠（role=entity_expansion。候補の中の位置の順）を先に、前後の文脈（neighbor_context など）をその後ろに並べる。実体からたどった根拠（前後の文脈の役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に入れる。条の目録で選んだ条（role=catalog_article。#2254）のうち上の根拠に無いものは、evidence_limit の外で末尾に足す。回答は作らないので used_in_answer は false。",
+            "description": "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）と、実体からたどった根拠（role=entity_expansion。候補の中の位置の順）を先に、前後の文脈（neighbor_context など）をその後ろに並べる。実体からたどった根拠（前後の文脈の役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に入れる。条の目録で選んだ条（role=catalog_article。#2254）は evidence_limit に数えず末尾に足す。回答は作らないので used_in_answer は false。",
             "items": {
               "$ref": "#/$defs/RagEvidence"
             },

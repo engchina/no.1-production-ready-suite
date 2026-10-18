@@ -231,6 +231,9 @@ def test_context_adds_catalog_articles_outside_the_anchor_and_parent_limits():
     bundle = _bundle(children, top_k=3, max_records=3, catalog_records=2)
     # 検索の根拠の親は目録の条が無いときと同じ 3 つ。選んだ条は関連度の順に 2 つまで後ろへ足す。
     assert [r.id for r in bundle.records] == ["m0-p", "m1-p", "m2-p", "art1-p", "art2-p"]
+    # 選んだ条のために足した親は理由で分かる（MCP は根拠の上限に数えない。#2261）。
+    assert [item.reason for item in bundle.evidence_tree][-2:] == ["catalog_article"] * 2
+    assert "catalog_article" not in [item.reason for item in bundle.evidence_tree][:3]
 
     plain = _bundle(children, top_k=3, max_records=3, catalog_records=0)
     assert [r.id for r in plain.records] == ["art1-p", "m0-p", "m1-p"]

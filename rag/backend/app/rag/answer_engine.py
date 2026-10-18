@@ -171,6 +171,9 @@ _GRAPH_SCORE_DECAY = 0.5
 # 条の目録(#2254)の文字数の上限と、見出しの語の無い条に添える本文の書き出しの文字数
 # (MCP の rag_outline の compact の既定と同じ)。
 _ARTICLE_CATALOG_MAX_CHARS = 40000
+# 条の目録で選んだ条の context の理由(rag_engine の context_builder)と、根拠の役割(#2261)。
+CATALOG_ARTICLE_REASON = "catalog_article"
+CATALOG_ARTICLE_ROLE = "catalog_article"
 # 検索の範囲の条で構成された文書の一覧の cache((条件, 索引の状態) → 一覧。#2254)。
 _ARTICLE_DOCUMENTS_CACHE: dict[tuple[str, str], list[tuple[str, str]]] = {}
 _ARTICLE_CATALOG_LEAD_CHARS = 60
@@ -2792,6 +2795,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
                     "chunk_id": chunk_id,
                     "role": str(child.get("retrieval_role") or ""),
                     "reason": str(child.get("context_reason") or ""),
+                    # 条の目録で選んだ条と、そのために足した親の chunk(#2261)。
+                    "catalog": CATALOG_ARTICLE_REASON
+                    in {child.get("context_reason"), parent.get("context_reason")},
                     "is_model_used": used,
                     # 回答での使われ方（confirmed=確かめた説明 / reference=参考。#2040）。
                     "answer_use": _answer_use(child) if used else None,
@@ -2835,7 +2841,13 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         if evidence.get("answer_use"):
             # 回答に使った箇所の使われ方（画面の件数・バッジと MCP の answer_use。#2040）。
             metadata["evidence_answer_use"] = evidence["answer_use"]
-        if ENTITY_EXPANSION_KEY in chunk.metadata and evidence["role"] in {"retrieved_anchor", ""}:
+        if evidence.get("catalog"):
+            # 条の目録で選んだ条(#2261)。MCP は検索の根拠の上限に数えず、後ろに足す。
+            metadata["evidence_role"] = CATALOG_ARTICLE_ROLE
+        elif ENTITY_EXPANSION_KEY in chunk.metadata and evidence["role"] in {
+            "retrieved_anchor",
+            "",
+        }:
             # 実体の 1 段の拡張で足した chunk は、検索で当たった chunk と分ける(#1362)。
             metadata["evidence_role"] = ENTITY_EXPANSION_ROLE
         if retrieval_rank > 0:

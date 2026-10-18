@@ -460,6 +460,8 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
             continue
         add_child(group, child, "retrieved_anchor", "catalog_article", retrieval_rank=retrieval_rank)
         if id(group) not in selected_groups:
+            # 選んだ条のために足した親（呼び出し元は検索の根拠と分けて扱う。MCP の根拠の上限に数えない）。
+            group.reason = "catalog_article"
             parent_key = _child_sibling_context_key(child)
             for neighbor in _chunk_neighbors(child, children_by_parent.get(parent_key, []), request.neighbor_child_count):
                 add_child(group, neighbor, "neighbor_context", "adjacent_child")

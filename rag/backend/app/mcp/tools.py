@@ -77,7 +77,7 @@ from app.mcp.profile_scope import (
     check_search,
     within_profile_scope,
 )
-from app.rag.answer_engine import AnswerScope
+from app.rag.answer_engine import CATALOG_ARTICLE_ROLE, AnswerScope
 from app.rag.answer_validation import (
     MAX_ANSWER_TRACE_IDS,
     MAX_DATA_RESULTS,
@@ -1348,9 +1348,8 @@ class RetrieveEvidenceOutput(VersionedOutput):
             "根拠（role=entity_expansion。候補の中の位置の順）を先に、前後の文脈"
             "（neighbor_context など）をその後ろに並べる。実体からたどった根拠（前後の文脈の"
             "役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで"
-            "上限の内に入れる。条の目録で選んだ条（role=catalog_article。#2254）のうち上の根拠に"
-            "無いものは、evidence_limit の外で末尾に足す。回答は作らないので used_in_answer は"
-            " false。"
+            "上限の内に入れる。条の目録で選んだ条（role=catalog_article。#2254）は"
+            " evidence_limit に数えず末尾に足す。回答は作らないので used_in_answer は false。"
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
@@ -1790,6 +1789,10 @@ def _evidence(
     )
 
 
+def _is_catalog_article(chunk: RetrievedChunk) -> bool:
+    return _metadata_str(chunk.metadata, "evidence_role") == CATALOG_ARTICLE_ROLE
+
+
 async def _catalog_article_evidence(
     result: SearchResponse, citations: Sequence[RetrievedChunk]
 ) -> list[RetrievedChunk]:
@@ -1832,8 +1835,6 @@ def _answer_diagnostics(result: SearchResponse) -> dict[str, Any]:
     return dict(answer) if isinstance(answer, dict) else {}
 
 
-# 条の目録で選んだ条の根拠の役割(#2254)。
-CATALOG_ARTICLE_ROLE = "catalog_article"
 # 検索で当たった chunk（関連度の順位を持つ）の役割。前後の文脈（neighbor_context など）と分ける。
 RETRIEVED_ANCHOR_ROLE = "retrieved_anchor"
 # 実体の 1 段の拡張で足した chunk の役割（#1362）。検索で当たった chunk と同じく順位を持つ。
@@ -3150,16 +3151,19 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         result = await search_route._run_search_with_timeout(request)
         limit = retrieve_evidence_limit(arguments)
         # 検索で当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。
-        ordered = mcp_evidence_order(result.citations, limit)
-        citations = await _with_extraction_recipe_ids(None, ordered[:limit])
-        # 条の目録で選んだ条(#2254)は、上限の外に足す(検索の根拠を減らさない)。
+        # 条の目録で選んだ条とそのために足した親の chunk(#2254・#2261)は、上限に数えず後ろに足す
+        # (検索の根拠を減らさない)。
+        hits = [chunk for chunk in result.citations if not _is_catalog_article(chunk)]
+        catalog = [chunk for chunk in result.citations if _is_catalog_article(chunk)]
+        ordered = mcp_evidence_order(hits, limit)
+        citations = await _with_extraction_recipe_ids(None, [*ordered[:limit], *catalog])
         citations = [*citations, *await _catalog_article_evidence(result, citations)]
         sections = await _chunk_sections(citations)
         return RetrieveEvidenceOutput(
             trace_id=result.trace_id,
             guardrail_warnings=list(result.guardrail_warnings),
             evidence=[_evidence(chunk, sections) for chunk in citations],
-            evidence_omitted=max(0, len(result.citations) - limit),
+            evidence_omitted=max(0, len(hits) - limit),
             older_versions=await _older_versions(arguments, request, result.citations),
         )
 
