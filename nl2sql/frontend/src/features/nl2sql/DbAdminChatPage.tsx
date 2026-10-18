@@ -8,7 +8,9 @@ import {
   ChatAnswer,
   ChatProgress,
   ChatSkeleton,
+  ChatSqlBlock,
   ChatTurn,
+  createOptimisticChatMessage,
   DEFAULT_PAGE_SIZE,
   EmptyState,
   ExecutionConfirmationField,
@@ -16,7 +18,6 @@ import {
   ProcessingIndicator,
   StatusBadge,
   TimedLoadingState,
-  createOptimisticChatMessage,
   useChatAutoScroll,
   useChatHistoryActions,
   useChatHistoryPanel,
@@ -37,13 +38,13 @@ import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 
 import { CHAT_PROGRESS_LABELS } from "./chatProgress";
 import {
-  ChatSqlBlock,
   Nl2SqlChatComposer,
   Nl2SqlChatHistoryList,
   Nl2SqlChatLayout,
   Nl2SqlChatPage,
   Nl2SqlPendingTurn,
   normalizeHistoryOffset,
+  SQL_BLOCK_LABELS,
 } from "./components/ChatScaffold";
 import { ChatLastExecutionText, ChatQueryResult } from "./components/ChatSqlExecution";
 import { DbAdminExecutionResult } from "./components/DbAdminShared";
@@ -590,6 +591,7 @@ function DbAdminChatTurn({
               <p className="text-xs text-fg-muted">{t("dbAdminChat.correctedApplied")}</p>
             ) : null}
             <ChatSqlBlock
+                labels={SQL_BLOCK_LABELS}
               sql={plan.sql}
               testId={`${TEST_ID}-sql`}
               onCopied={() => setCopyError("")}
@@ -777,6 +779,7 @@ function AnalysisPanel({
             <>
               <p className="text-sm font-medium text-fg">{t("dbAdminChat.analyze.corrected")}</p>
               <ChatSqlBlock
+                labels={SQL_BLOCK_LABELS}
                 sql={analysis.data.corrected_plan.sql}
                 testId={`${TEST_ID}-corrected-sql`}
                 badges={<PlanBadges plan={analysis.data.corrected_plan} executed={false} />}
