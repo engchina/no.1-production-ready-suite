@@ -19,6 +19,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.rag.figure_region import figure_region
 from app.schemas.classification import normalize_category_value
 from app.schemas.common import JsonValue
 
@@ -354,6 +355,16 @@ class RetrievedChunk(BaseModel):
     file_name: str | None = None
     category_name: str | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    # 元の図の画像を切り出せるか（図の根拠で、保存した図の領域がある。#2433）。画面はこれが
+    # 真のときだけ「図を開く」を出す（MCP の ``image_ref`` と同じ判定）。検索で作るときは chunk の
+    # metadata から決め、保存した引用（metadata を絞る）を読み直すときは保存した値を使う。
+    figure_image_available: bool = False
+
+    @model_validator(mode="after")
+    def _resolve_figure_image_available(self) -> Self:
+        if "figure_image_available" not in self.model_fields_set:
+            self.figure_image_available = figure_region(dict(self.metadata)) is not None
+        return self
 
 
 class SearchDiagnostics(BaseModel):

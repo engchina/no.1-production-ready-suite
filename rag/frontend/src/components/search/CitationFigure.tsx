@@ -10,10 +10,11 @@ const FIGURE_LABELS = evidenceFigureLabels();
 /**
  * 図の根拠の「図を開く」（#2428）。部品は Agent と同じ共通の `EvidenceFigureAction` で、RAG が持つのは画像の取り方
  * だけ: 画面用の API（Cookie のセッション）で、保存した図の領域を今の権限・版で確かめて切り出した画像を取り、
- * blob の URL で出す（閉じたら解放する）。内容の種類が図の根拠でなければ何も出さない。
+ * blob の URL で出す（閉じたら解放する）。backend が元の図の画像を切り出せると返した根拠（`figure_image_available`。
+ * Agent の `image_ref` と同じ判定。#2433）だけに出し、それ以外は何も出さない。
  */
 export function CitationFigureAction({ chunk, testId }: { chunk: RetrievedChunk; testId?: string }) {
-  const figure = citationFigure(chunk.metadata);
+  const figure = citationFigure(chunk);
   if (!figure) return null;
   const page = figure.page ? t("search.citation.page", { page: figure.page }) : "";
   const location = [page, figure.section].filter(Boolean).join(" · ") || null;

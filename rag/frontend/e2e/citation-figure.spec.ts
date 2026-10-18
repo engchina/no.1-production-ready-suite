@@ -5,6 +5,7 @@ import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAns
 
 // #2428: 図の根拠の「図を開く」（Agent と同じ共通の部品・文言・位置）。根拠のカードの操作の行と、根拠のサイドパネルの
 // 要約の操作の行に出し、図でない根拠には出さない。画像は RAG の画面用の API（`GET /api/figures?document_id=&chunk_id=`）。
+// #2433: backend が元の図の画像を切り出せると返した根拠（`figure_image_available`）だけに出す。
 // 内容はすべて合成のデータ。
 
 // 120×60 の単色の PNG（RAG が返す図の画像の代わり）。
@@ -24,7 +25,12 @@ const PROFILE = {
   archived_at: null,
 };
 
-function citation(chunkId: string, fileName: string, metadata: Record<string, unknown>) {
+function citation(
+  chunkId: string,
+  fileName: string,
+  metadata: Record<string, unknown>,
+  figureImageAvailable = false
+) {
   return {
     document_id: "doc-a",
     chunk_id: chunkId,
@@ -34,17 +40,20 @@ function citation(chunkId: string, fileName: string, metadata: Record<string, un
     file_name: fileName,
     category_name: null,
     metadata: { context_role: "evidence", vector_rank: 1, ...metadata },
+    figure_image_available: figureImageAvailable,
   };
 }
 
 const CITATIONS = [
-  citation("doc-a:cs-1:1", "文書 A.pdf", {
-    content_kind: "figure",
-    figure_text_source: "vision",
-    page_start: 2,
-    section_path: "第 1 章",
-  }),
+  citation(
+    "doc-a:cs-1:1",
+    "文書 A.pdf",
+    { content_kind: "figure", figure_text_source: "vision", page_start: 2, section_path: "第 1 章" },
+    true
+  ),
   citation("doc-a:cs-1:2", "文書 B.pdf", { content_kind: "text", page_start: 1 }),
+  // 図の領域を保存していない古い図の根拠（元の図の画像を切り出せない）。
+  citation("doc-a:cs-1:3", "文書 C.pdf", { content_kind: "figure", figure_text_source: "vision", page_start: 3 }),
 ];
 
 function searchStreamBody(): string {
@@ -103,16 +112,18 @@ async function search(page: Page) {
   await page.keyboard.press("Escape");
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
   await page.getByRole("button", { name: "検索", exact: true }).click();
-  await expect(page.getByTestId("evidence-card")).toHaveCount(2);
+  await expect(page.getByTestId("evidence-card")).toHaveCount(3);
 }
 
 test("図の根拠のカードとサイドパネルに「図を開く」を出し、元の図を開く", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const figures = await serveFigures(page);
   await search(page);
   const cards = page.getByTestId("evidence-card");
-  // 図の根拠だけに出し、AI が読んだ説明であることを添える（Agent と同じ文言）。
+  // 元の図の画像がある図の根拠だけに出し、AI が読んだ説明であることを添える（Agent と同じ文言）。
   await expect(page.getByRole("button", { name: /^図を開く/ })).toHaveCount(1);
   await expect(cards.nth(1).getByRole("button", { name: /^図を開く/ })).toHaveCount(0);
+  await expect(cards.nth(2).getByRole("button", { name: /^図を開く/ })).toHaveCount(0);
+  await expect(cards.nth(2).getByTestId("evidence-figure-description")).toHaveCount(0);
   await expect(cards.nth(0).getByTestId("evidence-figure-description")).toHaveText(
     "AI が図を読んだ説明です。元の図で確かめてください。"
   );

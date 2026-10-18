@@ -36,6 +36,7 @@ from app.api.signed_access import SIGNED_RESPONSE_HEADERS, enter_token_user, sig
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.mcp import tools as mcp_tools
+from app.rag.figure_region import figure_region
 from app.rag.figure_url import (
     FigureTokenError,
     FigureUrlUnavailableError,
@@ -98,7 +99,7 @@ async def read_chunk_figure(
     try:
         chunk = await mcp_tools.readable_chunk(oracle, document_id, chunk_id)
         metadata = dict(chunk.metadata)
-        region = mcp_tools.figure_region(metadata)
+        region = figure_region(metadata)
         crop = await mcp_tools.crop_figure(oracle, chunk, metadata, region)
     except McpToolError as exc:
         status = _TOOL_ERROR_STATUS.get(exc.code, exc.status or 400)
@@ -149,7 +150,7 @@ async def read_figure(token: str, request: Request) -> Response:
             current_chunk_set = stored.strip() or None if isinstance(stored, str) else None
             if current_chunk_set != claims.chunk_set_id:
                 raise _error(409, _STALE_MESSAGE)
-            region = mcp_tools.figure_region(metadata)
+            region = figure_region(metadata)
             crop = await mcp_tools.crop_figure(oracle, chunk, metadata, region)
         except McpToolError as exc:
             status = _TOOL_ERROR_STATUS.get(exc.code, exc.status or 400)

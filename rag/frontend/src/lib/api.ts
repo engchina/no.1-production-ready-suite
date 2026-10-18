@@ -1310,6 +1310,11 @@ export interface RetrievedChunk {
   file_name: string | null;
   category_name: string | null;
   metadata: Record<string, JsonValue>;
+  /**
+   * 元の図の画像を切り出せるか（図の根拠で、保存した図の領域がある。#2433）。真のときだけ「図を開く」を出す。
+   * backend は常に返す（無い値は false と同じ）。
+   */
+  figure_image_available?: boolean;
 }
 
 // --- チャット（会話 / マルチモデル比較）---
