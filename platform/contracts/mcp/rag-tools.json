@@ -450,7 +450,7 @@
       "description": "文書の章節の構成（文書の詳細の章節ナビゲーションの章節。section_id・階層・親・頁の範囲・chunk の数・文字数）を返します。長い文書のどこを読むかを決めるときに使います。format=compact は章節を 1 行ずつの目録（見出しの語の無い条は本文の書き出しつき）で返し、section_id でその章節の下だけに絞れます（条の多い文書から根拠の条を選ぶとき）。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "文書の章節の構成を読む条件（#1332 / #1438。compact・section_id は #2252）。",
+        "description": "文書の章節の構成を読む条件。",
         "properties": {
           "document_id": {
             "description": "文書の id。",
@@ -703,7 +703,7 @@
       "description": "文書の本文を、頁・章節・根拠の定位子・続きの cursor の位置から順に読みます（頁の区切り付き。章節の終わりで止まらない。続きは next_cursor）。検索で当たらなかった前後の章や、「第 3 章を参照」の先を確かめるときに使います。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "文書の本文を順に読む条件（#1332）。読み始めの位置はどれか 1 つ（無ければ文書の先頭）。",
+        "description": "文書の本文を順に読む条件。読み始めの位置はどれか 1 つ（無ければ文書の先頭）。",
         "properties": {
           "document_id": {
             "description": "文書の id。",
@@ -984,10 +984,10 @@
     },
     {
       "name": "rag_read_section",
-      "description": "章節（section_id、または根拠の chunk_id が属する章節。up で親の章節）の本文を、章節の始まりから終わりまで順に読みます（頁の区切り付き。続きは next_cursor、終わりまで読んだら section_complete=true）。根拠の抜粋より長い手順・一覧・条件のまとまりを読み切るときに使います。",
+      "description": "章節（section_id、または根拠の chunk_id が属する章節。up で親の章節）の本文を、章節の始まりから終わりまで順に読みます（頁の区切り付き。続きは next_cursor、終わりまで読んだら section_complete=true）。手順・一覧・条件のまとまりが根拠の抜粋より長い（根拠の section.chars が大きい）とき、読み切るのに使います。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "章節の本文を読む条件（#1438）。章節は section_id・根拠の chunk_id・cursor のどれか 1 つ。",
+        "description": "章節の本文を読む条件。章節は section_id・根拠の chunk_id・cursor のどれか 1 つ。",
         "properties": {
           "document_id": {
             "description": "文書の id。",
@@ -1382,7 +1382,7 @@
     },
     {
       "name": "rag_read_source",
-      "description": "rag_search の根拠（document_id と chunk_id）の本文の続きと親の本文を読みます。検索と同じ利用範囲の根拠だけを読めます。include_image=true で、図の根拠の元の画像の領域を画像（content の image）で返します。",
+      "description": "rag_search の根拠（document_id と chunk_id）の本文の続きと親の本文を読みます。根拠の excerpt が切り詰められている（truncated）とき・前後の文脈が要るときに使います。検索と同じ利用範囲の根拠だけを読めます。include_image=true で、図の根拠の元の画像の領域を画像（content の image）で返します。",
       "inputSchema": {
         "additionalProperties": false,
         "description": "根拠の本文を読む条件（evidence の document_id と、chunk_id か要素の定位子）。",
@@ -1421,7 +1421,7 @@
               }
             ],
             "default": null,
-            "description": "根拠の要素の定位子（evidence の locator.element_locator。#1330）。文書分割の設定を変えて chunk を作り直しても、同じ解析の結果の同じ要素を含む今の chunk を返す。解析をやり直した後の古い定位子は source_stale のエラー。chunk_id とどちらか一方を渡す。",
+            "description": "根拠の要素の定位子（evidence の locator.element_locator）。文書分割の設定を変えて chunk を作り直しても、同じ解析の結果の同じ要素を含む今の chunk を返す。解析をやり直した後の古い定位子は source_stale のエラー。chunk_id とどちらか一方を渡す。",
             "title": "Locator"
           },
           "offset": {
@@ -1441,7 +1441,7 @@
           },
           "include_image": {
             "default": false,
-            "description": "true のとき、図の根拠（image_ref がある根拠）の元の画像の領域を返す。画像は MCP の content の image（PNG。長い辺 1568 px 以下・1500000 バイト以下）で返し、structuredContent の image には大きさだけを入れる。図でない・場所が分からない根拠は image_not_available のエラー。",
+            "description": "true のとき、図の根拠（image_ref がある根拠）の元の画像の領域を返す。evidence_type が figure_description の根拠（図を AI が読んだ説明）を元の図で確かめるときに使う。画像は MCP の content の image（PNG。長い辺 1568 px 以下・1500000 バイト以下）で返し、structuredContent の image には大きさだけを入れる。図でない・場所が分からない根拠は image_not_available のエラー。",
             "title": "Include Image",
             "type": "boolean"
           },
@@ -2012,10 +2012,10 @@
     },
     {
       "name": "rag_recommend_search_answer_profile",
-      "description": "質問に合う検索・回答プロファイルを推薦します（使えるプロファイルの参照先を 1 回検索し、当たった資料と名前・説明で決めます。回答は作らず、LLM も呼びません）。候補が違う資料に割れたとき・当たりが無いときは recommended_profile_id が nullです。profile_ids を渡すと、その中からだけ推薦します。同じ会話の続きの質問では前のターンと同じプロファイルを使い、推薦し直すのは話題が変わったときだけです。question には、指示語・省略を前の質問で補った、それだけで意味の通る質問を渡します。",
+      "description": "質問に合う検索・回答プロファイルを推薦します（回答は作りません）。候補が違う資料に割れたとき・当たりが無いときは recommended_profile_id が nullです。profile_ids を渡すと、その中からだけ推薦します。同じ会話の続きの質問では前のターンと同じプロファイルを使い、推薦し直すのは話題が変わったときだけです。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "質問から検索・回答プロファイルを推薦する条件（#1850）。\n\nNL2SQL の nl2sql_recommend_profile と同じ形（question・profile_ids）。",
+        "description": "質問から検索・回答プロファイルを推薦する条件（question・profile_ids）。",
         "properties": {
           "question": {
             "description": "利用者の質問（指示語・省略は前の質問で補い、それだけで意味の通る文にする）。",
@@ -4178,7 +4178,7 @@
     },
     {
       "name": "rag_validate_answer",
-      "description": "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。公開する前の最終の検証に使います（モデルを 1 回呼びます。answer_trace_ids の回答の監査を通った説明と同じ段落はモデルに渡しません）。見出し・出典の行・利用者への質問の段落は主張ではないので監査せず、claims に含めません。requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順の順序と分岐・影響範囲も決定的に確かめます。",
+      "description": "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。公開する前の最終の検証に使います。見出し・出典の行・利用者への質問の段落は主張ではないので監査せず、claims に含めません。requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順の順序と分岐・影響範囲も決定的に確かめます。",
       "inputSchema": {
         "$defs": {
           "EvidenceRefInput": {
@@ -4206,7 +4206,7 @@
           },
           "ValidateDataResultInput": {
             "additionalProperties": false,
-            "description": "業務データの照会の結果 1 件（照会の質問・SQL・結果。#1950）。",
+            "description": "業務データの照会の結果 1 件（照会の質問・SQL・結果）。",
             "properties": {
               "source": {
                 "default": "",
@@ -4287,7 +4287,7 @@
           },
           "ValidatePremiseInput": {
             "additionalProperties": false,
-            "description": "利用者が回答の前の確認で答えた前提 1 件（確認の質問と答え。#1898）。",
+            "description": "利用者が回答の前の確認で答えた前提 1 件（確認の質問と答え）。",
             "properties": {
               "question": {
                 "default": "",
@@ -4349,7 +4349,7 @@
           }
         },
         "additionalProperties": false,
-        "description": "回答の最終の検証の条件（#1246）。\n\nrequests・guide は渡したときだけ決定的に確かめる（#1276）。",
+        "description": "回答の最終の検証の条件（requests・guide は渡したときだけ確かめる）。",
         "properties": {
           "query": {
             "description": "利用者の質問。",
@@ -4415,7 +4415,7 @@
             "description": "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順の順序・依存・分岐と影響範囲・承認の記載を確かめる。"
           },
           "answer_trace_ids": {
-            "description": "回答に使った rag_search の trace_id（#1527）。その回答の監査を通った説明と本文が同じ段落は、根拠を今の権限と版で読み直して本文が変わっていなければ、その判定を使ってモデルに渡さない（すべての段落が当たればモデルを呼ばない）。記録は呼び出した利用者が読めるものだけを使う。",
+            "description": "回答に使った rag_search の trace_id。渡すと、その回答で監査を通った段落の判定を使う（速くなる）。",
             "items": {
               "maxLength": 64,
               "minLength": 1,
@@ -4426,7 +4426,7 @@
             "type": "array"
           },
           "premises": {
-            "description": "利用者が回答の前の確認で答えた前提（確認の質問と答え。#1898）。資料ではなく利用者の状況の申告として根拠と並べ、答えをそのまま述べた段落と、資料の規則を答えに当てはめた結論を確かめる（資料・規程・手順の内容の裏付けには使わない）。前提だけで裏付けた段落のchunk_id は null。",
+            "description": "利用者が回答の前の確認で答えた前提（確認の質問と答え）。資料ではなく利用者の状況の申告として根拠と並べ、答えをそのまま述べた段落と、資料の規則を答えに当てはめた結論を確かめる（資料・規程・手順の内容の裏付けには使わない）。前提だけで裏付けた段落のchunk_id は null。",
             "items": {
               "$ref": "#/$defs/ValidatePremiseInput"
             },
@@ -4435,7 +4435,7 @@
             "type": "array"
           },
           "data_results": {
-            "description": "回答に使った業務データの照会の結果（照会の質問・SQL・結果。#1950）。資料ではない根拠として根拠と並べ、結果の値をそのまま述べた段落と、資料の規則を結果の値に当てはめた結論を確かめる（資料・規程・手順の内容の裏付けには使わない）。結果だけで裏付けた段落の chunk_id は null。",
+            "description": "回答に使った業務データの照会の結果（照会の質問・SQL・結果）。資料ではない根拠として根拠と並べ、結果の値をそのまま述べた段落と、資料の規則を結果の値に当てはめた結論を確かめる（資料・規程・手順の内容の裏付けには使わない）。結果だけで裏付けた段落の chunk_id は null。",
             "items": {
               "$ref": "#/$defs/ValidateDataResultInput"
             },
