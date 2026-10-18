@@ -190,7 +190,7 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
     expect(scorePanelBox!.width).toBeGreaterThan(citationBox!.width - 32);
     expect(scorePanelBox!.y).toBeGreaterThanOrEqual(citationMainBox!.y + citationMainBox!.height);
     for (const control of [
-      citation.getByRole("button", { name: "policy.txt の引用箇所を表示" }),
+      citation.getByRole("button", { name: "policy.txt の根拠を表示" }),
       citation.getByRole("button", { name: "この引用は役に立った" }),
       citation.getByRole("button", { name: "この引用は役に立たなかった" }),
     ]) {

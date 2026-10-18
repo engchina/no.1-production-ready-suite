@@ -100,6 +100,8 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。
         "max_anchors_per_document": resolved_settings.rag_max_anchors_per_document,
         "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,
+        # 自動で足した検索条件で 0 件のとき外して検索し直す段の上限(#2401)。
+        "filter_relaxation_max_steps": resolved_settings.rag_filter_relaxation_max_steps,
         # 回答の LLM の時間の短縮(#1499)。
         "strategy_reasoning_effort": resolved_settings.rag_strategy_reasoning_effort,
         "judge_reasoning_effort": resolved_settings.rag_judge_reasoning_effort,

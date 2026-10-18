@@ -371,7 +371,7 @@ for (const viewport of [
     await expect(page.getByText("経費規程.pdf")).toBeVisible();
     // 回答で引用した箇所には「回答で引用」を出す（#1208）。
     await expect(citationDetails.getByText("回答で引用", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /の引用箇所を表示$/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /の根拠を表示$/ })).toBeVisible();
     await expect(page.getByRole("meter", { name: /取得スコア/ })).toHaveCount(0);
     await expect(page.getByRole("meter", { name: "Rerank スコア: 0.820" })).toBeVisible();
 
@@ -985,7 +985,7 @@ for (const theme of ["light", "dark"] as const) {
     await expectNoPageOverflow(page);
   });
 }
-test("回答の根拠はまとまりごとに役割・位置・抜粋で出し、件数の合計を AI に渡した件数にそろえる（#2097）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("回答の根拠は Agent と同じ一覧（まとまりの表示・タブなし）で、カードの「根拠を表示」でパネルを開く（#2388）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   // chunk の ID は「文書 ID:chunk set の hash:番号」の長い文字列。既定では画面に出さない。
   const longId = (n: number) => `doc-1:${"a1b2c3d4".repeat(8)}:${n}`;
   const evidenceChunk = (n: number, text: string, metadata: Record<string, unknown>) => ({
@@ -1053,46 +1053,32 @@ test("回答の根拠はまとまりごとに役割・位置・抜粋で出し�
   await page.getByRole("textbox").fill(userMessage.content);
   await page.getByRole("button", { name: "送信" }).click();
 
-  // 件数の行は箇所の数とまとまりの数を 1 か所で出す（単位を「件」にそろえる）。
+  // 見出しは Agent と同じ書き方（まとまりの数を出さない。#2388）。
   const summary = page
     .locator("summary")
-    .filter({ hasText: "AI に渡した 3 件（2 のまとまり） ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" });
+    .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" });
   await expect(summary).toBeVisible();
+  await expect(page.getByText(/のまとまり/)).toHaveCount(0);
   await summary.click();
   const evidence = page.getByTestId("answer-citations");
   // 実行記録の側には根拠の構成を重ねて出さない。
   await expect(page.getByText(/^根拠の構成/)).toHaveCount(0);
-
-  await evidence.getByRole("tab", { name: /まとまりごと/ }).click();
-  const groups = evidence.getByTestId("evidence-group");
-  await expect(groups).toHaveCount(2);
-  const counts = await evidence.getByTestId("evidence-group-count").allTextContents();
-  expect(counts).toEqual(["2 件", "1 件"]);
-  // 役割は利用者の言葉（アイコンつき）。英語の値と chunk の ID は既定で出さない。
-  await expect(evidence.getByTestId("evidence-role")).toHaveText(["検索で見つかった箇所", "前後の文脈", "関連する手順"]);
-  await expect(evidence.getByTestId("evidence-role").first().locator("svg")).toHaveCount(1);
-  await expect(evidence).not.toContainText(/neighbor_context|operation_context|retrieved_anchor/);
-  await expect(evidence.getByText(longId(1))).toBeHidden();
-  const first = evidence.getByTestId("evidence-item").first();
-  await expect(first).toContainText("p.2 ・ 第 2 章 上限");
-  await expect(first).toContainText("1 回の申請の上限は 10 万円です。");
-  await expect(first.getByText("回答で引用", { exact: true })).toBeVisible();
-  // ID は「詳細」の中にコピーのボタンつきで置く。
-  await first.locator("summary").filter({ hasText: "詳細" }).click();
-  await expect(first.getByTestId("evidence-item-chunk-id")).toHaveText(longId(1));
-  await expect(first.getByRole("button", { name: "ID をコピー" })).toBeVisible();
-  // 箇所を押すと、本文の根拠の行と同じ右のサイドパネル（#2360）で根拠の要約と原文のプレビューを開く。
-  await first.getByTestId("evidence-item-open").click();
+  // まとまりの表示（見方の切り替え・まとまりの数・役割）は持たない。文書名と節はカードのチップにある。
+  await expect(evidence.getByRole("tab")).toHaveCount(0);
+  const cards = evidence.getByTestId("evidence-card");
+  await expect(cards).toHaveCount(3);
+  await expect(cards.nth(0).getByTestId("evidence-chips")).toContainText("第 2 章 上限");
+  await expect(evidence).not.toContainText(/neighbor_context|operation_context|retrieved_anchor|検索で見つかった箇所/);
+  await expect(evidence.getByText(longId(1))).toHaveCount(0);
+  await expect(cards.nth(0).getByText("回答で引用", { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath(`chat-evidence-list-${testInfo.project.name}.png`) });
+  // カードの「根拠を表示」（Agent と同じ名前）は、本文の根拠の行と同じ右のサイドパネル（#2360）を開く。
+  await expect(evidence.getByRole("button", { name: "根拠を表示" })).toHaveCount(3);
+  const cardOpen = evidence.getByRole("button", { name: "経費規程.pdf の根拠を表示" }).first();
+  await cardOpen.click();
   const preview = page.getByRole("dialog", { name: "回答の根拠" });
   await expect(preview).toBeVisible();
   await expect(preview.getByTestId("evidence-source-summary").getByTestId("evidence-file-name")).toHaveText("経費規程.pdf");
-  await expect(preview.getByTestId("evidence-source-preview")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(preview).toBeHidden();
-  // 「順に表示」のカードの「引用箇所を表示」も同じパネルを開く。
-  await evidence.getByRole("tab", { name: /順に表示/ }).click();
-  const cardOpen = evidence.getByRole("button", { name: "経費規程.pdf の引用箇所を表示" }).first();
-  await cardOpen.click();
   await expect(preview.getByTestId("evidence-source-summary")).toContainText("1 回の申請の上限は 10 万円です。");
   await expect(preview.getByTestId("evidence-source-preview")).toBeVisible();
   // 右端に付き、375px は全画面のシート。
@@ -1109,10 +1095,7 @@ test("回答の根拠はまとまりごとに役割・位置・抜粋で出し�
   await preview.getByRole("button", { name: "閉じる" }).click();
   await expect(preview).toBeHidden();
   await expect(cardOpen).toBeFocused();
-  await evidence.getByRole("tab", { name: /まとまりごと/ }).click();
   // 一覧は一定の高さを超えたら中で縦にスクロールする（共有の bounded-scroll-area-lg）。
-  await expect(evidence.getByTestId("evidence-groups")).toHaveCSS("overflow-y", "auto");
-  await evidence.getByRole("tab", { name: /順に表示/ }).click();
   await expect(evidence.locator("ul.bounded-scroll-area-lg")).toHaveCSS("overflow-y", "auto");
   await expectNoPageOverflow(page);
 });

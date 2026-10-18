@@ -83,7 +83,7 @@ export function AnswerText({
             }
       )}
     >
-      {/* 根拠の行から、根拠の一覧の「引用箇所を表示」と同じ右のサイドパネルを開く（#2360）。 */}
+      {/* 根拠の行から、根拠の一覧の「根拠を表示」と同じ右のサイドパネルを開く（#2360）。 */}
       {source.mounted && source.shown != null ? (
         <CitationSourceSheet
           chunk={citations[source.shown] ?? null}

@@ -402,7 +402,6 @@ function AssistantColumn({
           <AnswerCitations
             citations={citations}
             // まとまり（根拠の木）は回答が終わってから届く診断にある（#2097）。
-            diagnostics={finished ? answerDiagnostics : null}
             idPrefix={messageId ? `message-${messageId}` : listId}
             cardProps={{ traceId, searchAnswerProfileId, sourceSurface: "chat", messageId }}
             className="border-t border-border px-2 pt-1"

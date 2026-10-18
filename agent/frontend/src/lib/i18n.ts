@@ -658,8 +658,6 @@ const agentJa = {
   "chat.answer.confirmed": "資料により確認できた事項",
   "chat.answer.unconfirmed": "資料から確認できなかった事項",
   // 根拠の一覧のカードから、本文の根拠の行と同じ右のサイドパネルを開く（#2360）。
-  "chat.answer.citationOpen": "根拠を表示",
-  "chat.answer.citationOpenLabel": "{file} の根拠を表示",
   "evidence.row": "{row} 行",
   "evidence.rowRange": "{start}–{end} 行",
   // RAG の図の根拠を開く（#1311）。図の URL は短命なので、開くたびに取り直す。

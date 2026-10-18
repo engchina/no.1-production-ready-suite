@@ -190,8 +190,7 @@ export function AnswerDetailsPanel({
           {t("search.answerDetails.reasoning", { reason: data.reasoningSummary })}
         </p>
       ) : null}
-      {/* 根拠の構成（まとまりごとの表示）は、AI に渡した箇所の一覧（CitationList）の「まとまりごと」に出す。件数の単位を
-          1 か所にそろえるため、ここには出さない（#2097）。 */}
+      {/* 根拠の構成（まとまり）は出さない（文書名と節は根拠のカードのチップにある。#2097・#2388）。 */}
       {data.generatedQueries.length ? (
         <p className="break-words text-xs text-fg-muted">
           {t("search.answerDetails.queries")}: {data.generatedQueries.join(" / ")}

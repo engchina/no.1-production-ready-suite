@@ -1307,7 +1307,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_mcp_catalog_article_evidence_limit: int = Field(
-        default=24,
+        default=120,
         ge=0,
         le=200,
         description=(
@@ -1542,6 +1542,18 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "抽出項目の条件として LLM で読み取り、検索を絞り込む(self-query。LLM の呼び出しが"
             " 1 回増える。読み取った条件で 0 件なら条件を外して検索し直す。#652)。"
             "検索・回答プロファイルで上書きできる。"
+        ),
+    )
+    rag_filter_relaxation_max_steps: int = Field(
+        default=3,
+        ge=0,
+        le=3,
+        description=(
+            "回答の検索で、自動で足した検索条件(質問から読み取った抽出項目の条件・質問が名指しした"
+            "文書のページ・文書名)の候補が 0 件のとき、その条件を外して検索し直す段の数の上限"
+            "(#652・#2401)。外す順は 抽出項目の条件 → ページ → 文書名 で、段ごとに 1 回だけ"
+            "検索し直す。利用者が画面・検索・回答プロファイルで指定した条件は外さない。"
+            "0 で検索し直さない。"
         ),
     )
     rag_answer_record_retention_days: int = Field(
