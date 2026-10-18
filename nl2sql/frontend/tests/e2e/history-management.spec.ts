@@ -420,12 +420,11 @@ test("品質評価の実行は既定で隠し、種類で品質評価・すべ�
   await expect.poll(() => requests.at(-1)?.searchParams.has("kind")).toBe(false);
   await expect(table(page).locator("[data-run-id]")).toHaveCount(6);
 
-  // 品質評価の実行の詳細は種類「品質評価」と、技術的な詳細に Agent の実行 ID。
+  // 品質評価の実行の詳細は種類「品質評価」と、処理の経過の中の「処理の詳細」に Agent の実行 ID（#2325）。
   await titleLink(page, "品質評価のケース 1").click();
   const summary = page.getByTestId("history-detail-summary");
   await expect(summary.locator('[data-run-fact="kind"] dd')).toHaveText("品質評価");
-  const technical = page.getByTestId("history-detail-technical");
-  await technical.getByText("技術的な詳細").click();
+  await page.getByTestId("history-detail-process-details").click();
   await expect(page.getByTestId("history-detail-caller")).toContainText("run-eval-1");
   await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();
 
@@ -528,7 +527,7 @@ test("詳細は題名のリンクで ?id= の全幅の画面に開き、一覧�
   expect(requests.at(-1)?.searchParams.get("status")).toBe("succeeded");
 });
 
-test("詳細は概要 → 処理の経過 → SQL と結果 → フィードバック → 技術的な詳細を 1 枚に並べ、段は Enter で開閉できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("詳細は概要 → 処理の経過（処理の詳細を含む）→ SQL と結果 → フィードバックを 1 枚に並べ、段は Enter で開閉できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockHistory(page);
   await page.goto("/history?id=history-new");
   const detail = page.locator("[data-run-detail]");
@@ -541,7 +540,6 @@ test("詳細は概要 → 処理の経過 → SQL と結果 → フィードバ�
     "history-detail-timeline",
     "history-detail-sql",
     "history-detail-feedback",
-    "history-detail-technical",
   ]);
   const summary = page.getByTestId("history-detail-summary");
   await expect(summary.locator("[data-run-status]")).toHaveAttribute("data-run-status", "succeeded");
@@ -580,10 +578,17 @@ test("詳細は概要 → 処理の経過 → SQL と結果 → フィードバ�
   await expect(sql.getByRole("button", { name: "SQL をコピー" })).toBeVisible();
   await expect(sql.locator('[data-run-fact="columns"]')).toContainText("CUSTOMER_NAME");
   await expect(page.getByTestId("history-detail-feedback")).toContainText("期待通りです");
-  // 技術的な詳細は既定で閉じる。
-  const technical = page.getByTestId("history-detail-technical");
+  // 処理の詳細（呼び出し元・生成した SQL・エンジンの試行）は、処理の経過の節の中のタイムラインの後ろに既定で閉じて置く
+  // （チャットの処理の経過と同じ名前・部品・位置。ページの末尾に別の節として出さない。#2325）。
+  const technical = timeline.getByTestId("history-detail-technical");
+  const processDetails = page.getByTestId("history-detail-process-details");
+  await expect(processDetails).toHaveText("処理の詳細");
+  await expect(page.getByText("技術的な詳細", { exact: true })).toHaveCount(0);
+  const lastStepBox = await timeline.locator("[data-run-timeline-step]").last().boundingBox();
+  const detailsBox = await processDetails.boundingBox();
+  expect(lastStepBox && detailsBox && detailsBox.y > lastStepBox.y).toBeTruthy();
   await expect(technical.getByTestId("history-detail-generated-sql")).toBeHidden();
-  await technical.locator("summary").click();
+  await processDetails.click();
   await expect(technical.getByTestId("history-detail-generated-sql")).toContainText("PAID_AT IS NULL");
   expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
   await page.screenshot({ path: testInfo.outputPath("history-detail.png"), fullPage: true });

@@ -12,6 +12,7 @@ import {
   ProcessingIndicator,
   RunDetailLayout,
   RunDetailSection,
+  RunProcessDetails,
   RunFactList,
   RunSummary,
   RunTimeline,
@@ -234,6 +235,37 @@ export function RunDetail({
             ) : (
               <EmptyState title={t("run.timeline.noSteps")} />
             )}
+            {/*
+              処理の詳細（識別子・イベントの記録・ストリームの接続）は、処理の経過のタイムラインの後ろに既定で閉じて置く
+              （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置。#2325）。
+            */}
+            <RunProcessDetails
+              title={t("run.section.processDetails")}
+              description={t("run.section.processDetailsDescription")}
+              testId="run-technical-section"
+              summaryTestId="run-process-details"
+            >
+              <RunFactList
+                facts={[
+                  { id: "agentId", label: t("run.fact.agent"), value: run.agent_id, mono: true },
+                  ...(run.thread_id
+                    ? [{ id: "threadId", label: t("run.fact.thread"), value: run.thread_id, mono: true }]
+                    : []),
+                  {
+                    id: "runtime",
+                    label: t("run.runtime"),
+                    value: run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id,
+                  },
+                  { id: "updatedAt", label: t("common.updatedAt"), value: formatDate(run.updated_at) },
+                ]}
+              />
+              <div className="grid min-w-0 gap-2">
+                <h3 className="text-sm font-medium text-fg">{t("run.timeline")}</h3>
+                <p className="text-xs text-fg-muted">{t("run.timelineDescription")}</p>
+                <EventLog events={run.events} />
+              </div>
+              <RunStreamControls sseState={sseState} />
+            </RunProcessDetails>
           </RunDetailSection>
         }
         evidence={
@@ -266,47 +298,18 @@ export function RunDetail({
           ) : null
         }
         technical={
-          <>
+          capabilities.viewAudit ? (
             <RunDetailSection
-              title={t("run.section.technical")}
-              description={t("run.section.technicalDescription")}
+              title={t("run.audit")}
+              description={t("run.auditDescription")}
               collapsible
-              testId="run-technical-section"
+              open={auditOpen}
+              onOpenChange={setAuditOpen}
+              testId="run-audit-section"
             >
-              <RunFactList
-                facts={[
-                  { id: "agentId", label: t("run.fact.agent"), value: run.agent_id, mono: true },
-                  ...(run.thread_id
-                    ? [{ id: "threadId", label: t("run.fact.thread"), value: run.thread_id, mono: true }]
-                    : []),
-                  {
-                    id: "runtime",
-                    label: t("run.runtime"),
-                    value: run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id,
-                  },
-                  { id: "updatedAt", label: t("common.updatedAt"), value: formatDate(run.updated_at) },
-                ]}
-              />
-              <div className="grid min-w-0 gap-2">
-                <h3 className="text-sm font-medium text-fg">{t("run.timeline")}</h3>
-                <p className="text-xs text-fg-muted">{t("run.timelineDescription")}</p>
-                <EventLog events={run.events} />
-              </div>
-              <RunStreamControls sseState={sseState} />
+              {auditOpen ? <AuditPanel runId={run.id} /> : null}
             </RunDetailSection>
-            {capabilities.viewAudit ? (
-              <RunDetailSection
-                title={t("run.audit")}
-                description={t("run.auditDescription")}
-                collapsible
-                open={auditOpen}
-                onOpenChange={setAuditOpen}
-                testId="run-audit-section"
-              >
-                {auditOpen ? <AuditPanel runId={run.id} /> : null}
-              </RunDetailSection>
-            ) : null}
-          </>
+          ) : null
         }
       />
     </section>

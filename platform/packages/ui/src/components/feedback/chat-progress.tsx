@@ -134,6 +134,12 @@ export interface ChatProgressProps {
    */
   progressKey?: string | null;
   labels?: Partial<ChatProgressLabels>;
+  /**
+   * 開いた中身の末尾（タイムラインの後ろ）に出す内容（#2325。RAG の「処理の詳細」など、処理の経過に属する技術的な
+   * 詳細）。実行中・完了後のどちらでも一覧と一緒に開閉し、閉じているときは出ない。段階が 0 件のときは何も出さない
+   * （製品が単独で出す）。
+   */
+  footer?: ReactNode;
   className?: string;
   testId?: string;
 }
@@ -397,6 +403,8 @@ function CurrentStepRow({
  * - 完了後: 「処理の経過（N ステップ・M 秒）」の 1 行に閉じる（#2118 / #2265。3 製品で同じ。会話の履歴から開いた
  *   往復も閉じる）。押すと開き、実行の詳細と同じ `RunTimeline`（字下げ・時間の線・右の所要時間）で出す。失敗は
  *   開いたまま。
+ * - `footer` は開いた中身の末尾（タイムラインの後ろ）に出し、一覧と一緒に開閉する（#2325。処理の経過に属する
+ *   技術的な詳細を、回答の本文との間に独立して置かない）。
  * - 入れ子の工程は `level` で字下げし、親と子が同時に実行中なら最後に始まった段階を今の段階にする。計測値
  *   （`meta`。LLM の回数など）は名前の後ろの括弧、右の列は失敗とスキップの文字・所要時間。
  * - 段階の切り替わりは polite で読み上げる（経過時間の毎秒の更新は読み上げない）。状態はアイコンと文字で示す。
@@ -415,6 +423,7 @@ export function ChatProgress({
   reconnecting = false,
   progressKey = null,
   labels: labelOverrides,
+  footer,
   className,
   testId,
 }: ChatProgressProps) {
@@ -486,6 +495,7 @@ export function ChatProgress({
               labels={labels}
               testId={testId}
             />
+            {footer}
           </div>
         </Disclosure>
       ) : (
@@ -502,7 +512,14 @@ export function ChatProgress({
           summaryProps={{ "data-testid": testId ? `${testId}-summary` : undefined }}
           summaryClassName={failed ? "text-danger-fg" : "text-fg-muted"}
         >
-          <StepList steps={steps} bars labels={labels} testId={testId} />
+          {footer ? (
+            <div className="grid min-w-0 gap-1.5">
+              <StepList steps={steps} bars labels={labels} testId={testId} />
+              {footer}
+            </div>
+          ) : (
+            <StepList steps={steps} bars labels={labels} testId={testId} />
+          )}
         </Disclosure>
       )}
     </div>
