@@ -446,7 +446,7 @@ for (const colorScheme of ["light", "dark"] as const) {
         await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("並べ替えています", {
           timeout: 10_000,
         });
-        await expect(saved.getByTestId("chat-answer-progress-completed")).toHaveText("2 ステップ完了");
+        await expect(saved.getByTestId("chat-answer-progress-running")).toContainText("処理中（2 ステップ完了）");
         const conversationReads = state.conversationRequests;
         await expect.poll(() => state.conversationRequests, { timeout: 10_000 }).toBeGreaterThan(conversationReads);
         await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("並べ替えています");

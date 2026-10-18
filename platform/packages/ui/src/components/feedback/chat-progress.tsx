@@ -1,10 +1,10 @@
-import { CheckCircle2, Clock3, ListChecks, XCircle } from "lucide-react";
+import { Clock3, ListChecks, XCircle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { operationTimestampMs } from "../../lib/operation-timing";
 import { cn } from "../../lib/utils";
-import { RunTimeline, type RunTimelineStep } from "../data/run-detail";
+import { RunTimeline, runTimelineStepIndent, type RunTimelineStep } from "../data/run-detail";
 import { hasRunStepDetails, type RunStepDetails } from "../data/run-step-details";
 import { Disclosure } from "../ui/disclosure";
 import { Spinner } from "../ui/spinner";
@@ -52,15 +52,18 @@ export interface ChatProgressStep {
 
 /** 文言。製品の i18n で上書きできる。 */
 export interface ChatProgressLabels {
-  /** 実行中に、完了した段階を畳んだ見出し（例:「3 ステップ完了」）。 */
-  completedSteps: (count: number) => string;
+  /**
+   * 実行中の見出し（全体の状態。例:「処理中（3 ステップ完了）」）。`current` は一覧を閉じているときだけ渡す今の段階の
+   * 名前（開いているときは一覧の最後の行に出るので重ねない）。
+   */
+  running: (completed: number, current: string | null) => string;
   /** 完了後の 1 行（例:「処理の経過（4 ステップ・12 秒）」）。 */
   summary: (count: number, duration: string) => string;
   /** 段階の一覧の読み上げの名前。 */
   steps: string;
-  /** 処理全体の経過時間の見出し（今の段階の行の右に出す。#1176）。 */
+  /** 処理全体の経過時間の見出し（実行中の見出しの右に出す。#1176）。 */
   elapsed: string;
-  /** 今の段階の遅延の案内（今の段階の経過時間で判断する。#1176）。 */
+  /** 今の段階の遅延の案内（今の段階の経過時間で判断し、一覧の最後の行の下に出す。#1176）。 */
   slow: string;
   /**
    * 終端でないのに実行中・待機中の段階が無い（段階の外で処理が続いている）ときの今の行（#1176）。
@@ -80,7 +83,8 @@ export interface ChatProgressLabels {
 export { formatChatProgressDuration };
 
 export const DEFAULT_CHAT_PROGRESS_LABELS: ChatProgressLabels = {
-  completedSteps: (count) => `${count} ステップ完了`,
+  running: (completed, current) =>
+    `${completed > 0 ? `処理中（${completed} ステップ完了）` : "処理中"}${current ? `・${current}` : ""}`,
   summary: (count, duration) => `処理の経過（${count} ステップ・${duration}）`,
   steps: "処理の段階",
   elapsed: "経過時間",
@@ -269,15 +273,45 @@ function StepList({
   );
 }
 
-/**
- * 実行中の 1 行（スピナー・今の段階・処理全体の経過時間・遅延の案内）。
- *
- * 経過時間は処理全体（最初の段階の開始）から数え、段階が変わっても 0 に戻さない（#1176）。段階ごとの所要時間は
- * 完了した段階の行に出す。遅延の案内は今の段階の経過時間で判断する。
- */
-function CurrentStep({
-  step,
+/** 処理全体の経過時間（実行中の見出しの右。段階が変わっても 0 に戻さない。#1176）。 */
+function TotalTimer({
   startedAt,
+  labels,
+  testId,
+}: {
+  startedAt: number | null;
+  labels: ChatProgressLabels;
+  testId?: string;
+}) {
+  // key を固定し、段階が変わっても数え直さない（開始の時刻が無いときは表示の開始から数える）。
+  const total = useOperationTiming({
+    active: true,
+    operationKey: "chat-progress-total",
+    startedAt: startedAt ?? undefined,
+  });
+  return (
+    <span
+      className="ml-auto inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap pl-3 text-xs font-normal text-fg-muted"
+      role="timer"
+      aria-live="off"
+      aria-label={`${labels.elapsed} ${total.elapsedClock}`}
+      data-testid={testId ? `${testId}-timer` : undefined}
+    >
+      <Clock3 size={14} aria-hidden="true" />
+      <span>{labels.elapsed}</span>
+      <span className="min-w-[3.25rem] text-right tabular-nums text-fg">{total.elapsedClock}</span>
+    </span>
+  );
+}
+
+/**
+ * 実行中の段階の行（一覧の最後の行。スピナー・段階の名前・今の段階の経過時間・遅延 / 再接続の案内）。
+ *
+ * 完了した段階の行（`RunTimeline` の段）と同じ列・字下げで描き、段階が終わると同じ位置で完了の行に変わる
+ * （行が跳ばない）。今の段階の経過時間は秒の単位で数え、遅延の案内もこの経過時間で判断する（#1176）。
+ */
+function CurrentStepRow({
+  step,
   slowAfterMs,
   reconnecting,
   labels,
@@ -285,19 +319,11 @@ function CurrentStep({
 }: {
   /** 今の段階。終端でないのに実行中・待機中の段階が無いときは null（「処理を続けています」を出す）。 */
   step: ChatProgressStep | null;
-  startedAt: number | null;
   slowAfterMs: number;
   reconnecting: boolean;
   labels: ChatProgressLabels;
   testId?: string;
 }) {
-  // 処理全体の経過時間。key を固定し、段階が変わっても数え直さない（開始の時刻が無いときは表示の開始から数える）。
-  const total = useOperationTiming({
-    active: true,
-    operationKey: "chat-progress-total",
-    startedAt: startedAt ?? undefined,
-  });
-  // 今の段階の経過時間（遅延の案内の判断だけに使う。段階が変わったら数え直す）。
   const current = useOperationTiming({
     active: true,
     operationKey: step ? `step:${step.id}` : "step:working",
@@ -305,38 +331,36 @@ function CurrentStep({
     slowAfterMs,
   });
   const label = step ? step.label : labels.working;
+  const detail = step ? [step.detail, step.meta].filter(Boolean).join("・") : "";
   return (
     <div
-      className="grid min-w-0 gap-1"
+      className="grid min-w-0"
       data-testid={testId ? `${testId}-current` : undefined}
+      data-status="running"
       data-step-id={step?.id ?? ""}
       data-slow={current.slow ? "true" : "false"}
       data-reconnecting={reconnecting ? "true" : "false"}
     >
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-fg">
-          <Spinner size={16} className="text-accent-fg" />
-          <span className="min-w-0 break-words">
-            {label}
-            {step?.detail ? (
-              <span className="font-normal text-fg-muted">{`（${step.detail}）`}</span>
-            ) : null}
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3">
+        <div className={cn("flex min-w-0 items-start gap-2 text-xs leading-5", runTimelineStepIndent(step?.level))}>
+          <span className="flex h-5 shrink-0 items-center">
+            <Spinner size={14} className="text-accent-fg" />
           </span>
-        </span>
+          <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+            <span className="font-medium text-fg">{label}</span>
+            {detail ? <span className="text-fg-muted">{`（${detail}）`}</span> : null}
+            <span className="sr-only">{` ${labels.status.running}`}</span>
+          </span>
+        </div>
         <span
-          className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-fg-muted"
-          role="timer"
-          aria-live="off"
-          aria-label={`${labels.elapsed} ${total.elapsedClock}`}
-          data-testid={testId ? `${testId}-timer` : undefined}
+          className="whitespace-nowrap text-right text-xs leading-5 text-fg-muted tabular-nums"
+          data-testid={testId ? `${testId}-current-elapsed` : undefined}
         >
-          <Clock3 size={14} aria-hidden="true" />
-          <span>{labels.elapsed}</span>
-          <span className="min-w-[3.25rem] text-right tabular-nums text-fg">{total.elapsedClock}</span>
+          {labels.formatDuration(Math.floor(current.elapsedMs / 1000) * 1000)}
         </span>
       </div>
       {/*
-        遅延の案内の行は最初から高さを予約する（#902 と同じ。後から行を足してスピナーの行を動かさない）。
+        遅延の案内の行は最初から高さを予約する（#902 と同じ。後から行を足して一覧を動かさない）。
         案内は今の段階の行に付け、どの段階で時間がかかっているかを示す。
       */}
       <p
@@ -365,10 +389,11 @@ function CurrentStep({
 /**
  * チャットの回答の処理の段階（#1145）。アシスタントの吹き出しの中、回答の上に置く控えめな表示。
  *
- * - 実行中: 今の段階の 1 行（スピナー・段階の名前・処理全体の経過時間・今の段階の遅延の案内）。経過時間は
- *   段階が変わっても 0 に戻さない（#1176）。完了した段階は「✓ N ステップ完了」の一覧（開いて出す。#2096）に
- *   終わった順に増えていき、段階ごとの完了 / 失敗 / スキップと所要時間を出す。終端でないのに実行中・待機中の
- *   段階が無いときも、今の行（「処理を続けています」）を出し、「N ステップ完了」だけにしない。
+ * - 実行中: 見出しの行は全体の状態だけ（「処理中（N ステップ完了）」と処理全体の経過時間。経過時間は段階が
+ *   変わっても 0 に戻さない。#1176）。開いた中身は 1 本のタイムラインで、完了した段階を終わった順に並べ、その後ろの
+ *   最後の行に実行中の段階（スピナー・今の段階の経過時間・遅延 / 再接続の案内）を出す（#2309。時間の順に上から
+ *   下へ。段階が終わると同じ位置で完了の行に変わる）。閉じたときは見出しに今の段階の名前を添える。終端でないのに
+ *   実行中・待機中の段階が無いときも、最後の行に「処理を続けています」を出す。
  * - 完了後: 「処理の経過（N ステップ・M 秒）」の 1 行に閉じる（#2118 / #2265。3 製品で同じ。会話の履歴から開いた
  *   往復も閉じる）。押すと開き、実行の詳細と同じ `RunTimeline`（字下げ・時間の線・右の所要時間）で出す。失敗は
  *   開いたまま。
@@ -436,30 +461,33 @@ export function ChatProgress({
         {announcement}
       </span>
       {active ? (
-        <>
-          {/* 終端になるまで今の行を必ず出す（段階の外で処理が続くときは「処理を続けています」。#1176）。 */}
-          <CurrentStep
-            step={current ?? null}
-            startedAt={overallStartedAt}
-            slowAfterMs={slowAfterMs}
-            reconnecting={reconnecting}
-            labels={labels}
-            testId={testId}
-          />
-          {finished.length > 0 ? (
-            <Disclosure
-              variant="plain"
-              size="sm"
-              summary={<SummaryText icon={CheckCircle2}>{labels.completedSteps(finished.length)}</SummaryText>}
-              open={summaryIsOpen}
-              onOpenChange={setSummaryOpen}
-              summaryProps={{ "data-testid": testId ? `${testId}-completed` : undefined }}
-              summaryClassName="text-fg-muted"
-            >
-              <StepList steps={finished} bars={false} labels={labels} testId={testId} />
-            </Disclosure>
-          ) : null}
-        </>
+        <Disclosure
+          variant="plain"
+          size="sm"
+          summary={
+            <SummaryText icon={ListChecks}>
+              {labels.running(finished.length, summaryIsOpen ? null : currentLabel)}
+            </SummaryText>
+          }
+          meta={<TotalTimer startedAt={overallStartedAt} labels={labels} testId={testId} />}
+          open={summaryIsOpen}
+          onOpenChange={setSummaryOpen}
+          summaryProps={{ "data-testid": testId ? `${testId}-running` : undefined }}
+          summaryClassName="w-full text-fg-muted"
+        >
+          {/* 1 本のタイムライン: 完了した段階の後ろに、実行中の段階を最後の行として出す（#2309）。 */}
+          <div className="grid min-w-0 gap-1.5">
+            {finished.length > 0 ? <StepList steps={finished} bars={false} labels={labels} testId={testId} /> : null}
+            {/* 終端になるまで今の行を必ず出す（段階の外で処理が続くときは「処理を続けています」。#1176）。 */}
+            <CurrentStepRow
+              step={current ?? null}
+              slowAfterMs={slowAfterMs}
+              reconnecting={reconnecting}
+              labels={labels}
+              testId={testId}
+            />
+          </div>
+        </Disclosure>
       ) : (
         <Disclosure
           variant="plain"

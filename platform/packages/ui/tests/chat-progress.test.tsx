@@ -60,7 +60,7 @@ describe("ChatProgress", () => {
     expect(renderToStaticMarkup(<ChatProgress steps={[]} />)).toBe("");
   });
 
-  it("実行中は今の段階 1 行（スピナー・段階・補足・その段階の経過時間）と、完了した段階の一覧（既定で開く）を出す", () => {
+  it("実行中は見出しに全体の状態と経過時間、開いた 1 本のタイムラインの最後の行に今の段階を出す（#2309）", () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse(at(5)));
     render(<ChatProgress steps={runningSteps} testId="p" />);
@@ -76,9 +76,16 @@ describe("ChatProgress", () => {
     expect(q("p-timer")!.getAttribute("aria-live")).toBe("off");
     // 動くスピナーは今の段階の 1 つだけ。
     expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(1);
-    // 完了した段階の一覧は既定で開く（#2096。行が増えていく）。
-    expect(q("p-completed")!.textContent).toContain("2 ステップ完了");
+    // 一覧は既定で開く（#2096。行が増えていく）。見出しは全体の状態だけ（開いているときは今の段階を重ねない）。
+    expect(q("p-running")!.textContent).toContain("処理中（2 ステップ完了）");
+    expect(q("p-running")!.textContent).not.toContain("SQL を生成しています");
+    expect(q("p-running")!.contains(q("p-timer"))).toBe(true);
     expect(host.querySelector("details")!.open).toBe(true);
+    // 今の段階は完了した段階の後ろ（タイムラインの最後の行）。今の段階の経過時間は秒の単位で出す。
+    const order = [q("p-step-queue")!, q("p-step-schema")!, current];
+    expect(order[0].compareDocumentPosition(order[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(order[1].compareDocumentPosition(order[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(q("p-current-elapsed")!.textContent).toBe("3.0 秒");
     // 段階の切り替わりの読み上げは今の段階の名前だけ。
     const status = host.querySelector('[role="status"]')!;
     expect(status.textContent).toBe("SQL を生成しています");
@@ -94,12 +101,14 @@ describe("ChatProgress", () => {
     expect(schema.textContent).toContain("対象の表を調べました");
     expect(schema.textContent).toContain("完了");
     expect(schema.textContent).toContain("1.6 秒");
-    // 実行中の段階は完了の一覧に入れない（今の段階の行に出す）。
+    // 実行中の段階は完了の行ではなく、最後の今の段階の行に出す。
     expect(q("p-step-generate_sql")).toBeNull();
     act(() => {
-      q("p-completed")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      q("p-running")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     });
     expect(host.querySelector("details")!.open).toBe(false);
+    // 閉じたら、見出しに今の段階の名前を添える（閉じても何をしているかが分かる）。
+    expect(q("p-running")!.textContent).toContain("処理中（2 ステップ完了）・SQL を生成しています");
     // 閉じた状態は完了後も保つ（同じ表示の間）。
     render(
       <ChatProgress
@@ -183,7 +192,7 @@ describe("ChatProgress", () => {
     expect(current.textContent).toContain("処理を続けています");
     expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(1);
     expect(q("p-timer")!.getAttribute("aria-label")).toBe("経過時間 00:30");
-    expect(q("p-completed")!.textContent).toContain("2 ステップ完了");
+    expect(q("p-running")!.textContent).toContain("処理中（2 ステップ完了）");
     expect(host.querySelector('[role="status"]')!.textContent).toBe("処理を続けています");
   });
 
@@ -221,7 +230,9 @@ describe("ChatProgress", () => {
     );
     expect(q("p")!.dataset.chatProgressState).toBe("running");
     expect(q("p-current")!.dataset.stepId).toBe("queue");
-    expect(q("p-completed")).toBeNull();
+    // 完了した段階が無いうちは、見出しは「処理中」だけ（件数を出さない）。
+    expect(q("p-running")!.textContent).toContain("処理中");
+    expect(q("p-running")!.textContent).not.toContain("ステップ完了");
   });
 
   it("完了後は「処理の経過（N ステップ・M 秒）」の 1 行に閉じ、押すと時間の線つきの一覧を開く（#2265）", () => {
@@ -441,7 +452,7 @@ describe("ChatProgress の段階の一覧の安定（#1358）", () => {
     expect(q("p-current")!.dataset.stepId).toBe("submit");
     render(<ChatProgress steps={snapshot({ plan: "running" })} progressKey="run-1" testId="p" />);
     expect(q("p-current")!.dataset.stepId).toBe("plan");
-    expect(q("p-completed")).toBeNull();
+    expect(q("p-running")!.textContent).not.toContain("ステップ完了");
   });
 
   it("終端の一覧は渡されたとおりに確定する", () => {
