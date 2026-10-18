@@ -2,7 +2,7 @@
 
 /**
  * 実行履歴（`/history`・`/history/<run_id>`。#1890・#1955）。チャットと RAG 検索の実行を一覧し、全幅の詳細で
- * 回答・根拠・回答の検証・処理の経過を確かめる。
+ * 回答・根拠・資料との照合・処理の経過を確かめる。
  *
  * - 型は 3 製品で共通（UX 契約 run-history.md）。一覧は `RunHistoryToolbar`（検索 → 状態 → 種類 → 期間 → 実行者）
  *   → `RunHistoryTable` → `OffsetPagination`、詳細は `RunDetailLayout`（概要 → 処理の経過 → 回答 → 根拠 →
@@ -340,7 +340,7 @@ export function RunHistoryClient() {
   );
 }
 
-/** RAG の列（回答の対応・回答の検証）。所要時間の右に置き、狭い画面では出さない（詳細の概要で見る）。 */
+/** RAG の列（回答の対応・資料との照合）。所要時間の右に置き、狭い画面では出さない（詳細の概要で見る）。 */
 function runExtraColumns(): DataTableColumn<RunSummary>[] {
   return [
     {

@@ -36,7 +36,7 @@ import {
 import { QueryState } from "@/components/ListViews";
 import { useAuth } from "@/components/security/AuthProvider";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
-import { AnswerReviewSections, LimitNote, OutcomeBadge } from "@/components/chat/AnswerReview";
+import { AnswerReviewSections, LimitNote, OutcomeBadge, ValidationBadge } from "@/components/chat/AnswerReview";
 import { AnswerBody, ResultTable } from "@/components/chat/ResultTables";
 import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
 import {
@@ -772,7 +772,7 @@ function ArtifactsSection({
 }: {
   run: RunState;
   artifacts: Artifact[];
-  /** 支援タスクの状態・回答の検証の元の JSON を出すか（管理者だけ。#1286）。 */
+  /** 支援タスクの状態・資料との照合の元の JSON を出すか（管理者だけ。#1286）。 */
   showRawReview: boolean;
 }) {
   return (
@@ -807,14 +807,20 @@ function ArtifactsSection({
 }
 
 /**
- * 支援タスクの状態・回答の検証（#1286）。業務の利用者にはチャットと同じ業務の言葉で出し、内部の語を含む
- * 元の JSON は管理者だけに畳んで出す（handoff §13）。
+ * 支援タスクの状態・資料との照合（#1286・#2361）。業務の利用者にはチャットと同じ業務の言葉で出し、内部の語を含む
+ * 元の JSON は管理者だけに畳んで出す（handoff §13）。照合の結果はチャットの行と同じバッジで出す（除いた内容の一覧は
+ * 回答の本文の節にある）。
  */
 function ReviewArtifact({ artifact, showRaw }: { artifact: Artifact; showRaw: boolean }) {
   const review = answerReview([artifact]);
   return (
     <div className="mt-3 min-w-0 space-y-2" data-testid={`run-review-${artifact.id}`}>
       {review?.limitReached ? <LimitNote testId={`run-review-limit-${artifact.id}`} /> : null}
+      {review?.validation ? (
+        <div className="flex" data-testid={`run-review-validation-${artifact.id}`}>
+          <ValidationBadge validation={review.validation} />
+        </div>
+      ) : null}
       {review ? (
         <AnswerReviewSections review={review} />
       ) : (

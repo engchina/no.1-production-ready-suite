@@ -3310,7 +3310,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ),
             McpTool(
                 name="rag_validate_answer",
-                title="回答の検証",
+                title="資料との照合",
                 description=(
                     "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。"
                     "公開する前の最終の検証に使います。見出し・出典の行・"

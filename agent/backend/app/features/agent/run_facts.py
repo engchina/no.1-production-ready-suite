@@ -43,7 +43,7 @@ RUN_SOURCE_MCP = "mcp"
 RUN_SOURCE_REPLAY = "replay"
 RUN_SOURCE_USER = "user"
 
-# 最終の検証の結果（成果物「回答の検証」から決める。#1822）。列 `VALIDATION_RESULT` の値。
+# 最終の検証の結果（成果物「資料との照合」から決める。#1822）。列 `VALIDATION_RESULT` の値。
 VALIDATION_PASSED = "passed"
 # 根拠で確かめられない・矛盾する段落・決定的な検査の error・読めない根拠があり、回答から外すか
 # 「資料で確認できず除いた内容」を足した（利用者に見せる回答を検証が変えた）。
@@ -164,7 +164,7 @@ def _has_items(value: object) -> bool:
 
 
 def run_validation_result(run: RunState) -> str | None:
-    """最終の検証の結果（成果物「回答の検証」。#1246・#1277・#1822）。
+    """最終の検証の結果（成果物「資料との照合」。#1246・#1277・#1822）。
 
     判定が出た（`completed`）検証は、利用者に見せる回答を変えたか（段落を外した・決定的な検査の
     error・本文を載せなかった・確かめきれなかった点を足した・読めない根拠があった）で
