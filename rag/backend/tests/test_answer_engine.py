@@ -2575,6 +2575,202 @@ async def test_answer_engine_relaxes_auto_field_conditions_without_hits(
     assert "extraction_fields" not in oracle.filters[-1]
     assert outcome.citations
     assert outcome.diagnostics["auto_field_filter"]["relaxed"] is True
+    assert outcome.diagnostics["filter_relaxation"]["relaxed"] == ["auto_field"]
+
+
+class EmptyWithKeysOracle(FakeOracle):
+    """``blocked`` のどれかの項目が検索条件にあると 0 件、無ければ候補を返す(#2401)。
+
+    質問から推測した条件(ページ・文書名・抽出項目)が文書に無い値で、候補が 0 件になる形の
+    合成の代役。
+    """
+
+    def __init__(self, *blocked: str) -> None:
+        super().__init__()
+        self.blocked = set(blocked)
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        self.filters.append(dict(filters or {}))
+        if self.blocked & set(filters or {}):
+            return []
+        return self.chunks[:1]
+
+
+async def _search_once(
+    oracle: FakeOracle, question: str, *, settings: Settings | None = None, conditions: Any = ()
+) -> Any:
+    from app.rag.answer_engine import _SearchState
+
+    engine = AnswerEngine(
+        settings or Settings(),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        auto_field_conditions=list(conditions),
+    )
+    state = _SearchState()
+    await engine._search(
+        SearchRequest(query=question, filters={"knowledge_base_id": "kb-1"}),
+        state,
+        retrieval_queries=[question],
+        inquiry_conditions=_inquiry(question),
+    )
+    return state
+
+
+@pytest.mark.parametrize(
+    ("blocked", "relaxed", "last_filters"),
+    [
+        (
+            ("page_number_min",),
+            ["question_page"],
+            {"knowledge_base_id": "kb-1", "file_name": "manual.pdf"},
+        ),
+        (
+            ("page_number_min", "file_name"),
+            ["question_page", "question_file"],
+            {"knowledge_base_id": "kb-1"},
+        ),
+    ],
+    ids=["page", "page-and-file"],
+)
+async def test_question_filters_are_relaxed_in_order_without_hits(
+    blocked: tuple[str, ...], relaxed: list[str], last_filters: dict[str, str]
+) -> None:
+    """質問が名指ししたページ・文書名で 0 件なら、ページ → 文書名の順に外して検索し直す(#2401)。
+
+    利用者が指定した範囲(knowledge_base_id)は外さない。
+    """
+    oracle = EmptyWithKeysOracle(*blocked)
+
+    state = await _search_once(oracle, "manual.pdf の12ページの登録手順は？")
+
+    assert oracle.filters[0]["page_number_min"] == "12"
+    assert oracle.filters[-1] == last_filters
+    assert state.relaxed == relaxed
+    # 外さずに残った自動の条件(ページだけで 0 件なら、文書名は効いたまま)。
+    active = ["question_file"] if relaxed == ["question_page"] else []
+    assert state.active_relaxations() == active
+    assert state.search_log == [
+        {"queries": 1, "candidates": 1, "automatic_filters": active, "relaxed": relaxed}
+    ]
+
+
+async def test_filter_relaxation_order_starts_from_auto_field_conditions() -> None:
+    """抽出項目の条件 → ページ → 文書名の順に外す(#2401)。"""
+    from app.schemas.search import ExtractionFieldCondition
+
+    oracle = EmptyWithKeysOracle("extraction_fields", "page_number_min", "file_name")
+    state = await _search_once(
+        oracle,
+        "manual.pdf の12ページの登録手順は？",
+        conditions=[
+            ExtractionFieldCondition(name="金額", value_type="number", op="gte", value="1")
+        ],
+    )
+
+    assert state.relaxed == ["auto_field", "question_page", "question_file"]
+    assert [sorted(item) for item in oracle.filters] == [
+        [
+            "extraction_fields",
+            "file_name",
+            "knowledge_base_id",
+            "page_number_max",
+            "page_number_min",
+        ],
+        ["file_name", "knowledge_base_id", "page_number_max", "page_number_min"],
+        ["file_name", "knowledge_base_id"],
+        ["knowledge_base_id"],
+    ]
+
+
+async def test_filter_relaxation_respects_max_steps() -> None:
+    """外す段の数は設定の上限まで。0 なら外さずに 0 件のまま(#2401)。"""
+    oracle = EmptyWithKeysOracle("page_number_min", "file_name")
+
+    limited = await _search_once(
+        oracle,
+        "manual.pdf の12ページの登録手順は？",
+        settings=Settings(rag_filter_relaxation_max_steps=1),
+    )
+    assert limited.relaxed == ["question_page"]
+    assert limited.search_log[0]["candidates"] == 0
+    assert limited.active_relaxations() == ["question_file"]
+
+    oracle = EmptyWithKeysOracle("page_number_min")
+    disabled = await _search_once(
+        oracle,
+        "manual.pdf の12ページの登録手順は？",
+        settings=Settings(rag_filter_relaxation_max_steps=0),
+    )
+    assert disabled.relaxed == []
+    assert len(oracle.filters) == 1
+    assert disabled.search_log[0] == {
+        "queries": 1,
+        "candidates": 0,
+        "automatic_filters": ["question_page", "question_file"],
+        "relaxed": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("oracle", "settings", "stage", "automatic_filters"),
+    [
+        (EmptyWithKeysOracle("knowledge_base_id"), Settings(), "retrieval", []),
+        (
+            EmptyWithKeysOracle("page_number_min"),
+            Settings(rag_filter_relaxation_max_steps=0),
+            "filter",
+            ["question_page", "question_file"],
+        ),
+    ],
+    ids=["no-candidates-in-scope", "automatic-filter-kept"],
+)
+async def test_zero_evidence_diagnostics_record_the_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    oracle: FakeOracle,
+    settings: Settings,
+    stage: str,
+    automatic_filters: list[str],
+) -> None:
+    """根拠 0 件で終えたとき、0 件になった段と検索ごとの候補の件数を診断に残す(#2401)。
+
+    検索の条件は項目の名前だけを残し、値(質問・文書の内容を含みうる)は出さない。
+    """
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    engine = AnswerEngine(
+        settings,
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+    outcome = await engine.run(
+        SearchRequest(
+            query="manual.pdf の12ページの登録手順は？", filters={"knowledge_base_id": "kb-1"}
+        )
+    )
+
+    assert outcome.citations == []
+    zero = outcome.diagnostics["zero_evidence"]
+    assert zero["stage"] == stage
+    assert zero["candidate_count"] == 0
+    assert zero["automatic_filters"] == automatic_filters
+    assert zero["request_filter_keys"] == ["knowledge_base_id"]
+    assert zero["searches"]
+    assert all(search["candidates"] == 0 for search in zero["searches"])
+    assert "manual.pdf" not in json.dumps(zero, ensure_ascii=False)
+    # 工程の詳細(回答生成フロー)にも段を出す。
+    flow = next(
+        step for step in outcome.diagnostics["execution_steps"] if step["name"] == "回答生成フロー"
+    )
+    assert "根拠が 0 件になった段" in json.dumps(flow, ensure_ascii=False)
 
 
 async def test_pipeline_reads_field_conditions_only_when_enabled(
