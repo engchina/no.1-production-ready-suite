@@ -187,6 +187,15 @@ describe("ListDetailLayout（#2281）", () => {
     expect(document.activeElement).toBe(itemButton("beta"));
   });
 
+  it("1 ペインで URL から直接開いた詳細から戻っても、選んでいた行へフォーカスを戻す（#2283）", () => {
+    wide = false;
+    act(() => root.render(<Harness initial="gamma" />));
+    expect(layout().dataset.listDetailView).toBe("detail");
+    click($('[data-testid="back"]'));
+    expect(layout().dataset.listDetailView).toBe("list");
+    expect(document.activeElement).toBe(itemButton("gamma"));
+  });
+
   it("幅が xl をまたいでも選択は保ち、2 ペインに戻ると一覧と詳細を両方出す", () => {
     wide = false;
     act(() => root.render(<Harness initial="gamma" />));

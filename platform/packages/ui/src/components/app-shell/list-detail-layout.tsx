@@ -172,6 +172,14 @@ export function ListDetailLayout({
   const lastListFocusRef = useRef<HTMLElement | null>(null);
   const previousSelectionRef = useRef(hasSelection);
   const previousSplitRef = useRef(split);
+  // 選んでいる行（URL から直接開いた詳細から戻るときのフォーカスの戻り先。選択を外した描画では aria-current が消える）。
+  const selectedItemRef = useRef<HTMLElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!hasSelection) return;
+    const item = listRef.current?.querySelector<HTMLElement>(`${itemSelector}[aria-current="true"]`);
+    if (item) selectedItemRef.current = item;
+  });
 
   const collapsed = split && stored.collapsed;
   const maxWidthRem = maxListWidthForContainer(containerRem);
@@ -230,8 +238,9 @@ export function ListDetailLayout({
       returnRef.current = null;
       const scroller = scrollContainerOf(rootRef.current);
       if (saved && scroller) scroller.scrollTo({ top: saved.scrollTop });
-      const target =
-        (saved?.focus?.isConnected ? saved.focus : null) ?? listRef.current;
+      const lastSelected = selectedItemRef.current?.isConnected ? selectedItemRef.current : null;
+      // 前へ / 次へ で移った後も、最後に選んでいた行へ戻す。
+      const target = lastSelected ?? (saved?.focus?.isConnected ? saved.focus : null) ?? listRef.current;
       target?.focus({ preventScroll: true });
     }
   }, [hasSelection, itemSelector, split]);
