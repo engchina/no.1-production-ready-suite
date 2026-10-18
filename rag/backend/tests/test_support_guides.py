@@ -16,7 +16,10 @@ from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE
 from app.api.routes import search as search_route
 from app.api.routes import support_guides as route
 from app.clients.support_guide_store import SupportGuideConflictError, SupportGuideNotFoundError
+from app.config import get_settings
 from app.main import app
+from app.rag import support_guide_query
+from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.rag.support_guide import content_sha256, diff_contents, has_errors, validate_content
 from app.rag.support_guide_runtime import (
     GUIDE_PREVIEW_KEY,
@@ -304,7 +307,7 @@ class FakeOracle:
     async def get_search_answer_profile(self, profile_id: str) -> Any:
         if profile_id != "bv-1":
             return None
-        return SimpleNamespace(config=SimpleNamespace(knowledge_base_ids=["kb-1"]))
+        return SimpleNamespace(config=SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"]))
 
     async def get_document(self, document_id: str) -> Any:
         found = self.documents.get(document_id)
@@ -320,6 +323,47 @@ def fakes(monkeypatch: pytest.MonkeyPatch) -> tuple[FakeStore, FakeOracle]:
     monkeypatch.setattr(route, "OracleClient", lambda: oracle)
     monkeypatch.setattr(route, "SupportGuideStore", lambda _oracle=None: store)
     return store, oracle
+
+
+def test_publish_stores_intent_embeddings_only_when_semantic_match_is_on(
+    fakes: tuple[FakeStore, FakeOracle], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """意味の照合が ON なら、公開・戻すときに質問の例の埋め込みを作って版ごとに持つ（#2398）。"""
+    saved: list[tuple[str, int, int]] = []
+    embedded: list[list[str]] = []
+
+    class _Store:
+        async def save_intent_embeddings(
+            self, guide_id: str, revision: int, *, vectors: list[list[float]], **_: Any
+        ) -> None:
+            saved.append((guide_id, revision, len(vectors)))
+
+    class _Embedder:
+        async def embed(self, texts: list[str], **_: Any) -> list[list[float]]:
+            embedded.append(list(texts))
+            return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(support_guide_query, "SupportGuideStore", lambda _oracle: _Store())
+    monkeypatch.setattr(support_guide_query, "guide_embedder", lambda _settings: _Embedder())
+    guide_id = client.post(BASE, json={"draft": guide()}).json()["data"]["guide_id"]
+    assert client.post(f"{BASE}/{guide_id}/publish", json={"base_revision": 1}).status_code == 200
+    assert (saved, embedded) == ([], [])
+
+    settings = get_settings().model_copy(update={"rag_support_guide_semantic_match_enabled": True})
+    monkeypatch.setattr(route, "get_settings", lambda: settings)
+    assert client.post(f"{BASE}/{guide_id}/publish", json={"base_revision": 1}).status_code == 200
+    assert saved == [(guide_id, 2, 1)]
+    assert embedded == [["検証用アカウントに権限を付けたい"]]
+
+    # 埋め込みに失敗しても公開は取り消さない（照合のときに作り直す）。
+    class _Broken:
+        async def embed(self, texts: list[str], **_: Any) -> list[list[float]]:
+            raise RuntimeError("embedding unavailable")
+
+    monkeypatch.setattr(support_guide_query, "guide_embedder", lambda _settings: _Broken())
+    rolled = client.post(f"{BASE}/{guide_id}/rollback", json={"revision": 1, "base_revision": 1})
+    assert rolled.status_code == 200
+    assert rolled.json()["data"]["published_revision"] == 3
 
 
 def test_draft_publish_conflict_and_history(fakes: tuple[FakeStore, FakeOracle]) -> None:

@@ -1583,6 +1583,35 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "新しい順に超えた版を消す（公開中の版は残す。版の番号は振り直さない）。"
         ),
     )
+    rag_support_guide_semantic_match_enabled: bool = Field(
+        default=False,
+        description=(
+            "業務ガイドの照合で、質問と質問の例（intent_examples）の埋め込み（OCI Generative AI）"
+            "の近さを点に足す（#2398）。質問ごとに埋め込みの呼び出しが 1 回増える。質問の例の"
+            "埋め込みは公開のときに作って持つ。検索・回答プロファイルで上書きできる。"
+        ),
+    )
+    rag_support_guide_semantic_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "意味の照合で、質問と質問の例の cosine の近さがこの値以上なら点を足す（#2398）。"
+        ),
+    )
+    rag_support_guide_close_match_clarification_enabled: bool = Field(
+        default=False,
+        description=(
+            "業務ガイドの照合で上位の 2 つの点が近いとき、どのガイドに沿うかを確認の問い（選択肢は"
+            "ガイドの題名）で確かめる（#2398）。検索・回答プロファイルで上書きできる。"
+        ),
+    )
+    rag_support_guide_close_match_margin: int = Field(
+        default=1,
+        ge=0,
+        le=10,
+        description="上位の 2 つの業務ガイドの点の差がこの値以下なら「近い」とみなす（#2398）。",
+    )
     rag_query_history_blocklist: list[str] = Field(
         default_factory=list,
         description="質問履歴に記録・提示しない語(部分一致)。env は JSON 配列で指定する。",

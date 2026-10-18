@@ -331,6 +331,16 @@ def runtime_retrieval_queries(
     return tuple(_ordered_unique((original_question, expanded_question, *retrieval_queries)))
 
 
+def parse_runtime_terms(payload: Any) -> list[RuntimeTerm]:
+    """runtime knowledge の payload の用語（別名つき。上限 ``MAX_TERMS``）を返します。"""
+    return _parse_terms(payload)[:MAX_TERMS]
+
+
+def label_matches(text: str, label: str) -> bool:
+    """用語・別名が質問に出ているか（英数字の語は語の途中に当てない。検索文の拡張と同じ判定）。"""
+    return _matches(text, label)
+
+
 def _parse_terms(payload: Any) -> list[RuntimeTerm]:
     raw_terms = _items(payload, "terms", "glossary", "glossaries")
     terms: list[RuntimeTerm] = []

@@ -16,15 +16,23 @@
 業務ガイドの内容は、用語・ルールと同じ経路（runtime knowledge のルール。`pinned` で必ず使う）で
 回答の材料に渡す。手順の検索の手がかりは検索文に足す。分かっている条件で決まる分岐だけを残し、
 合わない分岐の行き先の手順は材料から外す（#1278）。
+
+照合の点（#2398）: 照合の語の一致（語 1 つで 2 点）は、質問の原文と、検索・回答プロファイルの用語の
+別名で展開した文（``GuideQuery``）で数える（別名で当たった語は内訳の ``alias_terms``）。質問の例に
+近ければ 3 点（文字の 2-gram）。意味の照合を ON にしたときだけ、質問と質問の例の埋め込みの近さが
+閾値以上で 3 点を足す。上位の 2 つの点が近ければ、どのガイドかを確かめる（``GuideChoice``）。
 """
 
 from __future__ import annotations
 
+import math
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Literal
+
+from rag_engine.knowledge.runtime_knowledge import label_matches, parse_runtime_terms
 
 from app.schemas.classification import category_label
 from app.schemas.support_guide import (
@@ -42,7 +50,16 @@ ApplicabilityStatus = Literal["matched", "unverified"]
 ApplicabilityDimension = Literal["business_domains", "object_types", "versions"]
 # 照合の点（照合の語 1 つで 2 点、質問の例に近ければ 3 点）。これ未満は使わない。
 MATCH_THRESHOLD = 2
+_TERM_POINTS = 2
+_EXAMPLE_POINTS = 3
 _EXAMPLE_SIMILARITY = 0.5
+# 意味の照合（#2398）で、質問の例と埋め込みが近いときに足す点（質問の例の文字の近さと同じ重み）。
+SEMANTIC_POINTS = 3
+# 上位の 2 つのガイドの点が近いとき、どのガイドかを確かめる確認の条件の id（#2398）。業務ガイドの
+# 条件の id（英字で始まる）と重ならない。MCP の conditions には、選んだガイドの題名か id を入れる。
+GUIDE_CHOICE_CONDITION_ID = "_guide"
+# 確かめるときに選択肢に並べるガイドの数の上限。
+_GUIDE_CHOICE_LIMIT = 4
 # 質問の中から名指しを探す値の最短の長さ（#553 の業務の名前と同じ）。
 _MIN_NAME_CHARS = 2
 _BOOLEAN_VALUES = {
@@ -223,6 +240,8 @@ class GuideMatch:
     unknown: tuple[SupportGuideCondition, ...] = field(default_factory=tuple)
     # 値のある適用範囲の項目ごとの状態（matched / unverified）。
     applicability: Mapping[str, ApplicabilityStatus] = field(default_factory=dict)
+    # 照合の点の内訳（#2398。回答の記録の診断に残す）。
+    breakdown: GuideScore | None = None
 
     def state_of(self, condition_id: str) -> ConditionState | None:
         return next((state for state in self.states if state.condition.id == condition_id), None)
@@ -259,18 +278,163 @@ class GuideMatch:
             ],
             "unknown_conditions": unknown_conditions,
             "applicability": dict(self.applicability),
+            **({"match_breakdown": self.breakdown.to_dict()} if self.breakdown else {}),
         }
 
 
-def guide_score(content: SupportGuideContent, text: str) -> int:
-    normalized = _normalized(text)
-    score = sum(2 for term in content.goal.match_terms if _normalized(term) in normalized)
-    if any(
-        _similarity(example, text) >= _EXAMPLE_SIMILARITY
-        for example in content.goal.intent_examples
-    ):
-        score += 3
-    return score
+Vector = Sequence[float]
+SemanticStatus = Literal["off", "on", "failed"]
+
+
+@dataclass(frozen=True)
+class GuideQuery:
+    """業務ガイドの照合に使う質問（#2398）。
+
+    ``text`` は質問（と会話）の原文で、条件の値・適用範囲の手がかりはこれから読む。``expanded`` は
+    用語の別名で展開した文で、照合の語の一致だけに使う。意味の照合を ON にしたときは、質問の
+    埋め込み（``vector``）と、ガイドごとの質問の例の埋め込み（``example_vectors``。guide_id →
+    ベクトルの列）を持つ。
+    """
+
+    text: str
+    expanded: str = ""
+    alias_terms: tuple[str, ...] = ()
+    vector: tuple[float, ...] | None = None
+    example_vectors: Mapping[str, Sequence[Vector]] = field(default_factory=dict)
+    semantic_threshold: float = 1.0
+    semantic: SemanticStatus = "off"
+
+    @property
+    def match_text(self) -> str:
+        return self.expanded or self.text
+
+
+def _as_query(query: GuideQuery | str) -> GuideQuery:
+    return query if isinstance(query, GuideQuery) else GuideQuery(text=query)
+
+
+def expand_guide_query(text: str, runtime_knowledge: Mapping[str, Any] | None) -> GuideQuery:
+    """質問を、検索・回答プロファイルの用語の別名で展開する（#2398。モデルは呼ばない）。
+
+    質問に出た用語（正式名か別名のどれか）の、ほかの名前（正式名と別名のすべて）を後ろに足す。
+    略称で書いた質問が正式名の照合の語に、正式名で書いた質問が略称の照合の語に当たる。検索・
+    チャットの確認・MCP の ``rag_lookup_guides`` が同じ関数を使う。
+    """
+    additions: list[str] = []
+    expanded_terms: list[str] = []
+    for term in parse_runtime_terms(dict(runtime_knowledge or {})):
+        if not term.active:
+            continue
+        labels = term.labels()
+        if not any(label_matches(text, label) for label in labels):
+            continue
+        missing = [label for label in labels if not label_matches(text, label)]
+        if missing:
+            additions.extend(missing)
+            expanded_terms.append(term.term)
+    if not additions:
+        return GuideQuery(text=text)
+    return GuideQuery(
+        text=text,
+        expanded=f"{text}\n" + " ".join(dict.fromkeys(additions)),
+        alias_terms=tuple(dict.fromkeys(expanded_terms)),
+    )
+
+
+def cosine(left: Vector, right: Vector) -> float:
+    """2 つのベクトルの cosine の近さ（長さが違う・0 のベクトルは 0）。"""
+    if len(left) != len(right) or not left:
+        return 0.0
+    dot = sum(a * b for a, b in zip(left, right, strict=True))
+    norm = math.sqrt(sum(a * a for a in left)) * math.sqrt(sum(b * b for b in right))
+    return dot / norm if norm else 0.0
+
+
+@dataclass(frozen=True)
+class GuideScore:
+    """照合の点の内訳（語・別名・質問の例・意味。#2398）。"""
+
+    terms: tuple[str, ...] = ()
+    alias_terms: tuple[str, ...] = ()
+    example_similarity: float = 0.0
+    # 意味の照合を使っていなければ None。
+    semantic_similarity: float | None = None
+    semantic_threshold: float = 1.0
+
+    @property
+    def example_points(self) -> int:
+        return _EXAMPLE_POINTS if self.example_similarity >= _EXAMPLE_SIMILARITY else 0
+
+    @property
+    def semantic_points(self) -> int:
+        similarity = self.semantic_similarity
+        return (
+            SEMANTIC_POINTS
+            if similarity is not None and (similarity >= self.semantic_threshold)
+            else 0
+        )
+
+    @property
+    def total(self) -> int:
+        return (
+            _TERM_POINTS * (len(self.terms) + len(self.alias_terms))
+            + self.example_points
+            + self.semantic_points
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "total": self.total,
+            "terms": list(self.terms),
+            "term_points": _TERM_POINTS * len(self.terms),
+            "alias_terms": list(self.alias_terms),
+            "alias_points": _TERM_POINTS * len(self.alias_terms),
+            "example_similarity": round(self.example_similarity, 3),
+            "example_points": self.example_points,
+            "semantic_similarity": (
+                round(self.semantic_similarity, 3) if self.semantic_similarity is not None else None
+            ),
+            "semantic_points": self.semantic_points,
+        }
+
+
+def score_guide(
+    content: SupportGuideContent, query: GuideQuery | str, guide_id: str = ""
+) -> GuideScore:
+    """照合の点の内訳。
+
+    照合の語は、原文で当たれば ``terms``、別名の展開でだけ当たれば ``alias_terms``。
+    """
+    query = _as_query(query)
+    original = _normalized(query.text)
+    expanded = _normalized(query.match_text)
+    terms: list[str] = []
+    aliases: list[str] = []
+    for term in content.goal.match_terms:
+        key = _normalized(term)
+        if key in original:
+            terms.append(term)
+        elif key in expanded:
+            aliases.append(term)
+    example = max(
+        (_similarity(example, query.text) for example in content.goal.intent_examples),
+        default=0.0,
+    )
+    semantic: float | None = None
+    vectors = query.example_vectors.get(guide_id) if query.vector is not None else None
+    if query.vector is not None and vectors:
+        semantic = max(cosine(query.vector, vector) for vector in vectors)
+    return GuideScore(
+        terms=tuple(terms),
+        alias_terms=tuple(aliases),
+        example_similarity=example,
+        semantic_similarity=semantic,
+        semantic_threshold=query.semantic_threshold,
+    )
+
+
+def guide_score(content: SupportGuideContent, text: GuideQuery | str, guide_id: str = "") -> int:
+    return score_guide(content, text, guide_id).total
 
 
 def _in_period(content: SupportGuideContent, today: date) -> bool:
@@ -370,35 +534,36 @@ def decide(
 
 
 GuideTriple = tuple[str, int, SupportGuideContent]
+_Candidate = tuple[GuideScore, str, int, SupportGuideContent, dict[str, ApplicabilityStatus]]
 
 
 def _candidates(
     guides: Iterable[GuideTriple],
-    text: str,
+    query: GuideQuery,
     today: date | None,
     context: GuideContext | None,
-) -> list[tuple[int, str, int, SupportGuideContent, dict[str, ApplicabilityStatus]]]:
+) -> list[_Candidate]:
     """期間・照合の点・適用範囲に通る候補（点の高い順、同点は guide_id の順。決定的）。"""
     items = list(guides)
     today = today or date.today()
-    context = context if context is not None else build_guide_context(text, items)
-    result: list[tuple[int, str, int, SupportGuideContent, dict[str, ApplicabilityStatus]]] = []
+    context = context if context is not None else build_guide_context(query.text, items)
+    result: list[_Candidate] = []
     for guide_id, revision, content in items:
         if not _in_period(content, today):
             continue
-        score = guide_score(content, text)
-        if score < MATCH_THRESHOLD:
+        score = score_guide(content, query, guide_id)
+        if score.total < MATCH_THRESHOLD:
             continue
         applicability = applicability_status(content, context)
         if applicability is None:
             continue
         result.append((score, guide_id, revision, content, applicability))
-    result.sort(key=lambda item: (-item[0], item[1]))
+    result.sort(key=lambda item: (-item[0].total, item[1]))
     return result
 
 
 def _match(
-    item: tuple[int, str, int, SupportGuideContent, dict[str, ApplicabilityStatus]],
+    item: _Candidate,
     text: str,
     provided: Mapping[str, str],
     *,
@@ -411,17 +576,113 @@ def _match(
         guide_id,
         revision,
         content,
-        score,
+        score.total,
         tuple(states),
         decision,
         tuple(unknown),
         applicability,
+        score,
     )
+
+
+def _chosen(candidates: Sequence[_Candidate], provided: Mapping[str, str]) -> _Candidate | None:
+    """確認で選んだガイド（``GUIDE_CHOICE_CONDITION_ID`` の値。題名か guide_id）の候補。"""
+    value = provided.get(GUIDE_CHOICE_CONDITION_ID, "").strip()
+    if not value:
+        return None
+    key = _normalized(value)
+    return next(
+        (item for item in candidates if value == item[1] or key == _normalized(item[3].title)),
+        None,
+    )
+
+
+@dataclass(frozen=True)
+class GuideChoice:
+    """上位の業務ガイドの点が近く、どれに沿うかを利用者に確かめる（#2398）。"""
+
+    candidates: tuple[GuideMatch, ...]
+
+    def options(self) -> list[str]:
+        return [match.content.title for match in self.candidates]
+
+    def question(self) -> str:
+        return "次のどれについての質問ですか？"
+
+    def clarifications(self) -> list[dict[str, Any]]:
+        """確認の問い（検索・MCP の needs_clarification。業務ガイドの条件の確認と同じ形）。"""
+        return [
+            {
+                "condition_id": GUIDE_CHOICE_CONDITION_ID,
+                "label": "業務ガイド",
+                "question": self.question(),
+                "options": self.options(),
+            }
+        ]
+
+    def short_answer(self) -> str:
+        lines = ["質問に合う業務ガイドが複数あるため、次を教えてください。", ""]
+        lines.append(f"・{self.question()}（{'／'.join(self.options())}）")
+        return "\n".join(lines)
+
+    def summary(self) -> dict[str, Any]:
+        """回答の記録・診断に残す要約（候補ごとの点の内訳）。"""
+        return {
+            "decision": "clarify",
+            "choice_candidates": [
+                {
+                    "guide_id": match.guide_id,
+                    "revision": match.revision,
+                    "title": match.content.title,
+                    "score": match.score,
+                    **({"match_breakdown": match.breakdown.to_dict()} if match.breakdown else {}),
+                }
+                for match in self.candidates
+            ],
+        }
+
+
+def select_guide(
+    guides: Iterable[GuideTriple],
+    query: GuideQuery | str,
+    provided: Mapping[str, str] | None = None,
+    *,
+    interactive: bool = False,
+    today: date | None = None,
+    context: GuideContext | None = None,
+    close_margin: int | None = None,
+) -> GuideMatch | GuideChoice | None:
+    """質問に沿う業務ガイドを選ぶ。上位の点が近ければ、どれかを確かめる ``GuideChoice``。
+
+    ``close_margin``（None なら確かめない）以下の点の差の候補を、1 位と合わせて選択肢にする。
+    確認で選んだガイド（``provided`` の ``GUIDE_CHOICE_CONDITION_ID``）があれば、それを使う。
+    """
+    query = _as_query(query)
+    provided = provided or {}
+    candidates = _candidates(guides, query, today, context)
+    if not candidates:
+        return None
+    chosen = _chosen(candidates, provided)
+    if chosen is not None:
+        return _match(chosen, query.text, provided, interactive=interactive)
+    if close_margin is not None and len(candidates) > 1:
+        top = candidates[0][0].total
+        close = [item for item in candidates if top - item[0].total <= close_margin]
+        titles = {_normalized(item[3].title) for item in close}
+        # 題名が同じガイドは選択肢で見分けられないので確かめない。
+        if len(close) > 1 and len(titles) == len(close):
+            return GuideChoice(
+                tuple(
+                    _match(item, query.text, provided, interactive=interactive)
+                    for item in close[:_GUIDE_CHOICE_LIMIT]
+                )
+            )
+    return _match(candidates[0], query.text, provided, interactive=interactive)
 
 
 def match_guide(
     guides: Iterable[GuideTriple],
-    text: str,
+    query: GuideQuery | str,
     provided: Mapping[str, str] | None = None,
     *,
     interactive: bool = False,
@@ -432,15 +693,15 @@ def match_guide(
 
     ``context`` を渡さなければ、質問の文と公開ガイドの語だけから手がかりを読む。
     """
-    candidates = _candidates(guides, text, today, context)
-    if not candidates:
-        return None
-    return _match(candidates[0], text, provided or {}, interactive=interactive)
+    selected = select_guide(
+        guides, query, provided, interactive=interactive, today=today, context=context
+    )
+    return selected if isinstance(selected, GuideMatch) else None
 
 
 def rank_guides(
     guides: Iterable[GuideTriple],
-    text: str,
+    query: GuideQuery | str,
     provided: Mapping[str, str] | None = None,
     *,
     limit: int = 3,
@@ -448,9 +709,10 @@ def rank_guides(
     context: GuideContext | None = None,
 ) -> list[GuideMatch]:
     """質問に当たる公開の業務ガイドを点の高い順に（MCP の rag_lookup_guides）。"""
+    query = _as_query(query)
     return [
-        _match(item, text, provided or {}, interactive=False)
-        for item in _candidates(guides, text, today, context)[:limit]
+        _match(item, query.text, provided or {}, interactive=False)
+        for item in _candidates(guides, query, today, context)[:limit]
     ]
 
 
@@ -699,11 +961,21 @@ _GUIDE_SUMMARY_KEYS = (
     "applicability",
     # 下書きで試した回答で、下書きの版を使ったとき True（#1288）。
     "draft",
+    # 照合の点の内訳と、上位が近くて確かめたときの候補（#2398）。
+    "match_breakdown",
+    "choice_candidates",
+    "alias_expansion",
+    "semantic",
 )
 
 
 def _guide_summary(guide: Mapping[str, Any]) -> dict[str, Any]:
     return {key: guide.get(key) for key in _GUIDE_SUMMARY_KEYS if key in guide}
+
+
+def query_summary(query: GuideQuery) -> dict[str, Any]:
+    """照合に使った質問の診断（別名で展開した用語・意味の照合の状態。#2398）。"""
+    return {"alias_expansion": list(query.alias_terms), "semantic": query.semantic}
 
 
 def guide_short_circuit_outcome(guide: Mapping[str, Any]) -> Any:
@@ -850,6 +1122,55 @@ def guide_clarification(match: GuideMatch) -> tuple[str, str, Any] | None:
     return None
 
 
+# 上位の業務ガイドが近いときの、どのガイドかの確認の id（#2398）。選択肢の id は guide_id。
+GUIDE_CHOICE_RULE_ID = f"{GUIDE_CLARIFICATION_PREFIX}{GUIDE_CHOICE_CONDITION_ID}"
+
+
+def guide_choice_clarification(choice: GuideChoice) -> tuple[str, str, Any]:
+    """どのガイドかを確かめるチャットの確認（ルールの確認と同じ形）。選択肢の id は guide_id。"""
+    from app.schemas.search_answer_profile_knowledge import (
+        ClarificationOption,
+        RuleClarification,
+    )
+
+    clarification = RuleClarification(
+        question=choice.question()[:200],
+        multiple=False,
+        allow_other=True,
+        options=[
+            ClarificationOption(
+                id=match.guide_id,
+                label=match.content.title[:80],
+                description=match.content.goal.expected_result[:200],
+                premise=f"質問は業務ガイド「{match.content.title}」についてのもの"[:300],
+            )
+            for match in choice.candidates
+        ],
+    )
+    return GUIDE_CHOICE_RULE_ID, "業務ガイド", clarification
+
+
+def _resolve_guide_choice(
+    guides: Iterable[tuple[str, int, SupportGuideContent]],
+    option_ids: Sequence[str],
+    other_text: str,
+) -> tuple[dict[str, str], str] | None:
+    titles = {guide_id: content.title for guide_id, _, content in guides}
+    other = other_text.strip()
+    if len(option_ids) > 1 or (not option_ids and not other):
+        return None
+    question = "確認の質問: 次のどれについての質問ですか？"
+    if not option_ids:
+        return {}, "\n".join([question, f"その他（利用者の入力）: {other}"])
+    title = titles.get(option_ids[0])
+    if title is None:
+        return None
+    lines = [question, f"選んだ答え: {title}", f"前提: 質問は業務ガイド「{title}」についてのもの"]
+    if other:
+        lines.append(f"その他（利用者の入力）: {other}")
+    return {GUIDE_CHOICE_CONDITION_ID: option_ids[0]}, "\n".join(lines)
+
+
 def _guide_condition(
     guides: Iterable[tuple[str, int, SupportGuideContent]], rule_id: str
 ) -> SupportGuideCondition | None:
@@ -880,7 +1201,12 @@ def resolve_guide_clarification(
     「その他（自由入力）」（#1839）は条件の値に当てはめない（業務ガイドの値で分かれる手順を、利用者の書いた
     文で決めない）。条件は分からないままにし、利用者の入力を前提の文で回答に渡す（回答は値ごとに分けるか、
     当てはまる値を確かめるよう案内する）。
+
+    どのガイドかの確認（``GUIDE_CHOICE_RULE_ID``。#2398）は、選んだガイドを
+    ``GUIDE_CHOICE_CONDITION_ID`` の値にする（照合はそのガイドを使う）。
     """
+    if rule_id == GUIDE_CHOICE_RULE_ID:
+        return _resolve_guide_choice(list(guides), option_ids, other_text)
     condition = _guide_condition(guides, rule_id)
     other = other_text.strip()
     if condition is None or len(option_ids) > 1 or (not option_ids and not other):
@@ -913,6 +1239,21 @@ def guide_clarification_record(
     other_text: str = "",
 ) -> dict[str, object] | None:
     """会話に残す「回答前に確認した内容」（#1839）。``option_ids`` が None なら飛ばした記録。"""
+    if rule_id == GUIDE_CHOICE_RULE_ID:
+        prompt = "次のどれについての質問ですか？"
+        if option_ids is None:
+            return {"outcome": "skipped", "entries": [{"prompt": prompt}]}
+        titles = {guide_id: content.title for guide_id, _, content in guides}
+        return {
+            "outcome": "answered",
+            "entries": [
+                {
+                    "prompt": prompt,
+                    "selected": [titles[item] for item in option_ids if item in titles],
+                    "other_text": other_text.strip(),
+                }
+            ],
+        }
     condition = _guide_condition(guides, rule_id)
     if condition is None:
         return None
@@ -929,21 +1270,30 @@ def guide_clarification_record(
 
 
 __all__ = [
+    "GUIDE_CHOICE_CONDITION_ID",
+    "GUIDE_CHOICE_RULE_ID",
     "GUIDE_CLARIFICATION_PREFIX",
     "GUIDE_LOAD_FAILED_KEY",
     "GUIDE_PREVIEW_KEY",
     "GUIDE_PREVIEW_TRACE_PREFIX",
     "MATCH_THRESHOLD",
+    "SEMANTIC_POINTS",
     "ConditionState",
+    "GuideChoice",
     "GuideContext",
     "GuideMatch",
     "GuidePreview",
+    "GuideQuery",
+    "GuideScore",
     "applicability_status",
     "apply_guide_to_diagnostics",
     "build_guide_context",
     "clarification_questions",
     "condition_states",
+    "cosine",
     "decide",
+    "expand_guide_query",
+    "guide_choice_clarification",
     "guide_clarification",
     "guide_clarification_record",
     "guide_rule",
@@ -952,8 +1302,11 @@ __all__ = [
     "is_guide_preview_record",
     "is_guide_preview_trace",
     "match_guide",
+    "query_summary",
     "rank_guides",
     "resolve_guide_clarification",
+    "score_guide",
+    "select_guide",
     "short_circuit_answer",
     "visible_plan",
     "with_draft",
