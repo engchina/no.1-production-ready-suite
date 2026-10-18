@@ -66,6 +66,7 @@ from app.rag.support_guide_runtime import (
     GuidePreview,
     build_guide_context,
     clarification_questions,
+    guide_step_plan,
     is_guide_preview_record,
     query_summary,
     select_guide,
@@ -368,6 +369,8 @@ async def _resolve_query_context(
                             else {}
                         ),
                         "clarifications": clarification_questions(match),
+                        # 手順ごとの検索（#2395）の手順。回答フローだけが使う（要約には出さない）。
+                        "step_plan": guide_step_plan(match),
                         "short_answer": (
                             short_circuit_answer(match)
                             if match.decision in {"clarify", "handoff"}

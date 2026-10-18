@@ -127,6 +127,8 @@ class RuntimeKnowledgeContext:
     expansion_decisions: tuple[dict[str, Any], ...] = ()
     # 利用者が確認の質問で選んだ条件と対象範囲(チャットの確認。#717)。
     scope_context: str = ""
+    # 業務ガイドの手順ごとの根拠(#2395)。(手順 id, 題名, 根拠の chunk_uid の列) の列。手順ごとの検索の後に入る。
+    guide_steps: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
 
     def with_scope(self, context: str, search_terms: Sequence[str] = ()) -> RuntimeKnowledgeContext:
         """利用者が選んだ条件を足す。検索に足す語は補助の検索文に加える。"""

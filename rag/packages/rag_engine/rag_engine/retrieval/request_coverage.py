@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import monotonic
 from typing import Any, Literal
 
@@ -250,6 +250,13 @@ def _needs_search(row: Mapping[str, Any]) -> bool:
     return row["status"] == "missing" or (bool(row.get("subquestion")) and row["status"] == "weak")
 
 
+def within_extra_budget(rows: Sequence[Mapping[str, Any]], budget: CoverageBudget, remaining: int) -> CoverageBudget:
+    """小問ごとの検索と再検索の回数を、追加の検索の枠の残り `remaining`（#2395）の中に収めた予算（小問が先）。"""
+    wanted = sum(1 for row in rows if row.get("subquestion") and _needs_search(row))
+    subquestions = max(0, min(budget.max_subquestions, wanted, remaining))
+    return replace(budget, max_subquestions=subquestions, max_queries=max(0, min(budget.max_queries, remaining - subquestions)))
+
+
 def re_retrieval_skip_reason(rows: Sequence[Mapping[str, Any]], budget: CoverageBudget) -> str:
     """再検索しない理由。空なら再検索する（根拠の無い要求と、根拠が無いか一部だけの小問）。"""
     if not budget.enabled:
@@ -440,6 +447,7 @@ def select_new_parents(results: Sequence[TargetedRetrieval], existing_keys: Iter
 
 __all__ = [
     "COVERAGE_SCHEMA_VERSION",
+    "within_extra_budget",
     "CoverageBudget",
     "PlannedRetrieval",
     "RequestTarget",
