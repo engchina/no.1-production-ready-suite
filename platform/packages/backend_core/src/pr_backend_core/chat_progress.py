@@ -167,14 +167,16 @@ DETAILS_CODE_MAX = 4000
 DETAILS_MAX_FIELDS = 20
 DETAILS_MAX_LINES = 20
 DETAILS_MAX_CODE_BLOCKS = 3
-_SECRET_MASK = "***"
+_MASKED = "***"
 
 # 伏せる値: `password=…` / `"api_key": "…"` などの代入、`Bearer …`、API キー（`prak_…`）、
 # URL の資格情報。
-_SECRET_KEY = r"[A-Za-z_\-]*(?:password|passwd|pwd|secret|token|api[_-]?key|credential)[A-Za-z_\-]*"
-_SECRET_JSON_RE = re.compile(rf'(?i)("{_SECRET_KEY}"\s*:\s*)"(?:[^"\\]|\\.)*"')
+_SENSITIVE_NAME = (
+    r"[A-Za-z_\-]*(?:password|passwd|pwd|secret|token|api[_-]?key|credential)[A-Za-z_\-]*"
+)
+_SECRET_JSON_RE = re.compile(rf'(?i)("{_SENSITIVE_NAME}"\s*:\s*)"(?:[^"\\]|\\.)*"')
 _SECRET_ASSIGNMENT_RE = re.compile(
-    rf"(?i)\b({_SECRET_KEY})(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;)\"'}}]+)"
+    rf"(?i)\b({_SENSITIVE_NAME})(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;)\"'}}]+)"
 )
 _BEARER_RE = re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]+")
 _API_KEY_RE = re.compile(r"\bprak_[A-Za-z0-9_-]+")
@@ -184,11 +186,11 @@ _URL_CREDENTIAL_RE = re.compile(r"(\b[a-z][a-z0-9+.-]*://)[^\s/@]+@", re.IGNOREC
 def redact_chat_progress_text(text: str) -> str:
     """段の詳細に入れる文から秘密らしい値を伏せる（3 製品共通）。"""
 
-    redacted = _SECRET_JSON_RE.sub(rf'\1"{_SECRET_MASK}"', text)
-    redacted = _SECRET_ASSIGNMENT_RE.sub(rf"\1\2{_SECRET_MASK}", redacted)
-    redacted = _BEARER_RE.sub(rf"\1 {_SECRET_MASK}", redacted)
-    redacted = _API_KEY_RE.sub(_SECRET_MASK, redacted)
-    return _URL_CREDENTIAL_RE.sub(rf"\1{_SECRET_MASK}@", redacted)
+    redacted = _SECRET_JSON_RE.sub(rf'\1"{_MASKED}"', text)
+    redacted = _SECRET_ASSIGNMENT_RE.sub(rf"\1\2{_MASKED}", redacted)
+    redacted = _BEARER_RE.sub(rf"\1 {_MASKED}", redacted)
+    redacted = _API_KEY_RE.sub(_MASKED, redacted)
+    return _URL_CREDENTIAL_RE.sub(rf"\1{_MASKED}@", redacted)
 
 
 def _clip(value: object, limit: int) -> tuple[str, bool]:
