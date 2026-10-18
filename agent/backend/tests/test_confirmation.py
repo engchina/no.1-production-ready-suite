@@ -607,10 +607,10 @@ def test_the_round_limit_answers_without_asking(
         _ask("call-2", question="もう 1 つ確認？"),
         [assistant_message("前提を示して答えます。")],
     )
-    # 前の往復で 1 回確認した（既定の上限 2 回の 2 回目）。
-    run = _run(metadata={ROUND_METADATA_KEY: 1})
+    # 前の往復で 2 回確認した（既定の上限 3 回の 3 回目）。
+    run = _run(metadata={ROUND_METADATA_KEY: 2})
     assert run.status == RunStatus.WAITING_CONFIRMATION
-    assert (run.confirmations[0].round, run.confirmations[0].max_rounds) == (2, 2)
+    assert (run.confirmations[0].round, run.confirmations[0].max_rounds) == (3, 3)
     runtime_repository.decide_confirmation(
         run.id,
         run.confirmations[0].id,
@@ -618,7 +618,7 @@ def test_the_round_limit_answers_without_asking(
         answers=[ConfirmationAnswer(item_id="item_1", other_text="先月")],
     )
     resumed = _resume(run.id)
-    # 上限（2 回）を超えた呼び出しは中断せず、上限に達したことを返す。
+    # 上限（3 回）を超えた呼び出しは中断せず、上限に達したことを返す。
     assert resumed.status == RunStatus.COMPLETED
     assert len(resumed.confirmations) == 1
     assert _tool_output(model, 1, "call-1")["other_text"] == "先月"

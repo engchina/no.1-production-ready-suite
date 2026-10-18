@@ -226,15 +226,15 @@ def test_incomplete_output_names_the_output_limit(monkeypatch: pytest.MonkeyPatc
             },
         ),
     )
-    error = _failure(_settings(), max_retries=0, max_output_tokens=8000)
+    error = _failure(_settings(), max_retries=0, max_output_tokens=16384)
 
-    # 機能の要る量（8000）は既定（32768）を下回らない形で送る（#1719）。モデルの上限も 32768 なので
-    # 広げて送り直せない。
-    assert "出力の上限（32768 token）に達して" in error.message_ja
+    # 回答前の確認の上限（16384）はそのまま送り、広げて送り直さない（#2310）。推論の量は既定の
+    # low で、下げて送り直せない。
+    assert "出力の上限（16384 token）に達して" in error.message_ja
     assert "NL2SQL_REQUIREMENT_MAX_OUTPUT_TOKENS" in error.message_ja
     assert "「出力の上限（tokens）」" in error.message_ja
     assert error.details["kind"] == "incomplete"
-    assert error.details["max_output_tokens"] == 32768
+    assert error.details["max_output_tokens"] == 16384
     assert error.details["upstream_request_id"] == "resp_incomplete_1"
 
 
@@ -266,13 +266,74 @@ def test_configuration_error_does_not_ask_to_retry(monkeypatch: pytest.MonkeyPat
 
 def test_requirement_uses_its_own_output_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _Transport(monkeypatch, _json(200, {"output_text": json.dumps(_valid_output())}))
-    output, model = _call(_settings(), max_output_tokens=8000, timeout_seconds=90.0, max_retries=1)
+    output, model = _call(_settings(), max_output_tokens=16384, timeout_seconds=90.0, max_retries=1)
 
     assert model == MODEL
     assert output.clarified_question_ja == QUESTION
-    # 32k 未満の要る量は、既定（32768）を下回らない形で送る（#1719）。
-    assert transport.payloads[0]["max_output_tokens"] == 32768
+    # 回答前の確認の上限は、ほかの呼び出しの既定（32768。#1719）へ引き上げずに送る（#2310）。
+    assert transport.payloads[0]["max_output_tokens"] == 16384
     assert transport.timeouts == [90.0]
+
+
+def test_requirement_output_limit_is_capped_by_the_model_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回答前の確認の上限より、モデルの出力の上限が小さければモデルの上限で送る。"""
+    transport = _Transport(monkeypatch, _json(200, {"output_text": json.dumps(_valid_output())}))
+    settings = _settings(
+        oci_enterprise_ai_models=[
+            EnterpriseAiConfiguredModel(model_id=MODEL, max_output_tokens=12_000)
+        ]
+    )
+    _call(settings, max_output_tokens=16384, max_retries=0)
+
+    assert transport.payloads[0]["max_output_tokens"] == 12_000
+
+
+def test_requirement_output_limit_retries_with_lower_effort_without_widening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """出力の上限で未完了なら、上限を広げずに推論を下げて 1 回だけ送り直す（#2310）。
+
+    推論以外の出力が止まらずに上限まで書き続けた回（検証環境の実測の形）を、広げた上限で
+    もう一度待たない。モデルの出力の上限（131072）まで広げられる構成でも広げない。
+    """
+    incomplete = _json(
+        200,
+        {
+            "id": "resp_incomplete_2",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [],
+            "usage": {
+                "output_tokens": 16384,
+                "output_tokens_details": {"reasoning_tokens": 1200},
+            },
+        },
+    )
+    transport = _Transport(
+        monkeypatch,
+        incomplete,
+        _json(200, {"output_text": json.dumps(_valid_output())}),
+    )
+    settings = _settings(
+        oci_enterprise_ai_models=[
+            EnterpriseAiConfiguredModel(
+                model_id=MODEL,
+                reasoning_effort="medium",
+                max_input_tokens=262_144,
+                max_output_tokens=131_072,
+            )
+        ]
+    )
+    output, _model = _call(settings, max_output_tokens=16384, max_retries=0)
+
+    assert output.clarified_question_ja == QUESTION
+    assert [payload["max_output_tokens"] for payload in transport.payloads] == [16384, 16384]
+    assert [payload["reasoning"] for payload in transport.payloads] == [
+        {"effort": "medium"},
+        {"effort": "low"},
+    ]
 
 
 def test_router_passes_requirement_settings() -> None:
@@ -286,8 +347,10 @@ def test_router_passes_requirement_settings() -> None:
         "max_retries": int(settings.nl2sql_requirement_max_retries),
         "max_output_tokens": int(settings.nl2sql_requirement_max_output_tokens),
     }
-    # 32k 未満の個別の上限は持たない（#1719。送る上限はモデルの出力の上限で抑える）。
-    assert settings.nl2sql_requirement_max_output_tokens >= 32768
+    # 回答前の確認の上限は 16384（#2310。ユーザーの判断。ほかの呼び出しの 32768 の例外）。
+    field = Settings.model_fields["nl2sql_requirement_max_output_tokens"]
+    assert field.default == 16384
+    assert settings.nl2sql_requirement_max_output_tokens >= 8192
     # 応答の遅い回（2026-10-17 の実測 208 秒）が収まり、試行の全部（最悪）が Agent の
     # AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS（600 秒）の内訳の 480 秒に収まる（#2240）。
     assert settings.nl2sql_requirement_timeout_seconds >= 210
@@ -295,6 +358,20 @@ def test_router_passes_requirement_settings() -> None:
         settings.nl2sql_requirement_timeout_seconds * (settings.nl2sql_requirement_max_retries + 1)
         <= 480
     )
+
+
+def test_requirement_output_limit_setting_bounds() -> None:
+    """上限は設定で変えられ、実測の要る量の約 2 倍（8192）より小さい値は受けない（#2310）。"""
+    from pydantic import ValidationError
+
+    assert (
+        Settings(
+            _env_file=None, nl2sql_requirement_max_output_tokens=32768
+        ).nl2sql_requirement_max_output_tokens
+        == 32768
+    )
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, nl2sql_requirement_max_output_tokens=4096)
 
 
 # --- 3. API の応答（problem と error_details） ----------------------------------------

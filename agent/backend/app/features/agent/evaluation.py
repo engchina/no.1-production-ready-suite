@@ -79,10 +79,10 @@ EVALUATION_QUESTION_MAX_CHARS = 4000
 EVALUATION_EXPECTED_MAX_CHARS = 8000
 EVALUATION_EXPECTED_TOOLS_MAX = 10
 # 評価ケースが持てる問い返しへの答えの数と、1 ケースで答える往復の上限（#1845。共通の
-# 「回答前の確認」の往復の上限の既定 2 回にそろえる。
+# 「回答前の確認」の往復の上限の既定 3 回にそろえる。
 # platform/docs/ux-contracts/confirm-before-answer.md）。
 EVALUATION_CLARIFICATION_ANSWERS_MAX = 10
-EVALUATION_CLARIFICATION_ROUNDS_MAX = 2
+EVALUATION_CLARIFICATION_ROUNDS_MAX = 3
 EVALUATION_CLARIFICATION_TEXT_MAX_CHARS = 2000
 # 終わった job を残す期間（日）。利用状況・フィードバックの最長の期間（365 日）と同じ（#794）。
 # 以前は件数（50 件）で消していたため、前回との比較・評価の履歴が 50 件より前を失っていた。

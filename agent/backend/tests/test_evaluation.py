@@ -1450,6 +1450,7 @@ def test_clarification_rounds_stop_at_the_limit(monkeypatch: MonkeyPatch, agent:
         [assistant_message("どの表ですか？")],
         [assistant_message("どの表ですか？（2 回目）")],
         [assistant_message("どの表ですか？（3 回目）")],
+        [assistant_message("どの表ですか？（4 回目）")],
         _judgement("incorrect", 0.0, "答えていません。"),
     )
 
@@ -1460,16 +1461,16 @@ def test_clarification_rounds_stop_at_the_limit(monkeypatch: MonkeyPatch, agent:
     case = EvaluationCase(
         question="今月の売上は？",
         expected="300 万円",
-        clarification_answers=[_answer(options=["cand-orders"]) for _ in range(3)],
+        clarification_answers=[_answer(options=["cand-orders"]) for _ in range(4)],
     )
     job = _job(case)
 
     anyio.run(run_evaluation_job, job.id)
 
     [result] = evaluation_store.get(job.id).results
-    assert len(result.clarification_rounds) == evaluation.EVALUATION_CLARIFICATION_ROUNDS_MAX == 2
+    assert len(result.clarification_rounds) == evaluation.EVALUATION_CLARIFICATION_ROUNDS_MAX == 3
     assert result.ended_with_clarification is True
-    assert result.answer == "どの表ですか？（3 回目）"
+    assert result.answer == "どの表ですか？（4 回目）"
 
 
 def test_clarification_answers_change_the_case_fingerprint() -> None:
