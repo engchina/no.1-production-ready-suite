@@ -1074,7 +1074,9 @@ function PrivateKeyDropzoneField({
           className="flex items-start gap-1.5 text-xs leading-relaxed text-warning-fg"
           role="status"
         >
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden />
+          <span className="pr-icon-line">
+            <AlertTriangle size={12} aria-hidden />
+          </span>
           <span>{warning}</span>
         </p>
       ) : null}

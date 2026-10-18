@@ -117,7 +117,10 @@ function ToastCard({
       onBlur={handleBlur}
       className="pr-message-text animate-toast-in pointer-events-auto flex items-start gap-2.5 rounded-lg border border-border bg-surface-raised px-3.5 py-3 shadow-[var(--shadow-toast)]"
     >
-      <Icon size={16} className={cn("mt-0.5 shrink-0", toneText[item.tone])} aria-hidden />
+      {/* 状態のアイコンは見出しの 1 行目の中心にそろえる（見出しと同じ文字の大きさと行の高さの箱。#2371）。 */}
+      <span className={cn("pr-icon-line text-sm leading-relaxed", toneText[item.tone])}>
+        <Icon size={16} aria-hidden />
+      </span>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium leading-relaxed text-fg">
           <MessageText text={item.message} />

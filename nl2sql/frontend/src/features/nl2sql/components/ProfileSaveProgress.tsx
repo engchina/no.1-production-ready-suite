@@ -94,7 +94,10 @@ function AgentAssetDetails({ result }: { result: AssetRefreshData }) {
     >
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2">
-          <Bot size={16} className="mt-0.5 shrink-0 text-accent-fg" aria-hidden="true" />
+          {/* 見出しの 1 行目の中心にそろえる（#2371）。 */}
+          <span className="pr-icon-line text-accent-fg">
+            <Bot size={16} aria-hidden="true" />
+          </span>
           <div className="min-w-0">
             <p className="break-words font-semibold text-fg">{engineLabel(result.engine)}</p>
             <p className="mt-1 break-words text-xs text-fg-muted">

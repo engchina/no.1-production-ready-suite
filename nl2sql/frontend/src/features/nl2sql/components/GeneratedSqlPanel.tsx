@@ -173,8 +173,11 @@ function SqlOntologyGroundingPanel({
       data-testid="nl2sql-sql-grounding-panel"
     >
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <Network size={16} className="shrink-0 text-fg" aria-hidden="true" />
+        {/* 見出しが折り返しても 1 行目の中心にそろえる（#2371）。 */}
+        <div className="flex min-w-0 items-start gap-2 text-sm">
+          <span className="pr-icon-line text-fg">
+            <Network size={16} aria-hidden="true" />
+          </span>
           <h4 id="nl2sql-sql-grounding-title" className="text-sm font-semibold text-fg">
             {t("nl2sql.interpretation.graphTitle")}
           </h4>

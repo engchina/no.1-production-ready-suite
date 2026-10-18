@@ -575,7 +575,10 @@ export function SystemTablesCard({
                 {/* 危険な操作区画は幅を止めず、広い画面では「影響の説明」と「確認語・実行」を左右に分けてカード幅を使う。 */}
                 <div className="grid gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] xl:items-start xl:gap-6">
                   <div className="flex items-start gap-2">
-                    <AlertTriangle className="mt-0.5 shrink-0 text-danger-fg" size={16} aria-hidden />
+                    {/* 見出しの 1 行目の中心にそろえる（見出しと同じ文字の大きさの行の高さの箱。#2371）。 */}
+                    <span className="pr-icon-line text-sm text-danger-fg">
+                      <AlertTriangle size={16} aria-hidden />
+                    </span>
                     <div>
                       <h3 id="recreate-system-tables-title" className="text-sm font-semibold text-fg">
                         {text("settings.database.systemTables.recreate.sectionTitle")}

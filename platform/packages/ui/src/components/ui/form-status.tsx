@@ -29,7 +29,9 @@ export function FormStatus({
         className
       )}
     >
-      <Icon size={16} className="mt-0.5 shrink-0" aria-hidden />
+      <span className="pr-icon-line">
+        <Icon size={16} aria-hidden />
+      </span>
       <MessageText text={message} />
     </p>
   );

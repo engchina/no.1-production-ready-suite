@@ -164,9 +164,12 @@ export function ManagementPanelHeader({
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 id={headingId} className="flex items-center gap-2 text-base font-semibold text-fg">
-          <Icon size={20} aria-hidden="true" />
-          {title}
+        {/* 見出しが折り返しても 1 行目の中心にそろえる（#2371）。 */}
+        <h2 id={headingId} className="flex items-start gap-2 text-base font-semibold text-fg">
+          <span className="pr-icon-line">
+            <Icon size={20} aria-hidden="true" />
+          </span>
+          <span className="min-w-0">{title}</span>
         </h2>
         {description && <p className="mt-1 text-sm text-fg-muted">{description}</p>}
       </div>

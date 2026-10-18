@@ -7,6 +7,7 @@ import { cn } from "../../lib/utils";
 import { RunTimeline, runTimelineStepIndent, type RunTimelineStep } from "../data/run-detail";
 import { hasRunStepDetails, type RunStepDetails } from "../data/run-step-details";
 import { Disclosure } from "../ui/disclosure";
+import { TEXT_ICON_SIZE } from "../ui/text-icon";
 import { Spinner } from "../ui/spinner";
 import { formatChatProgressDuration } from "./chat-progress-format";
 import { reduceChatProgressSteps, type ChatProgressStepsState } from "./chat-progress-steps";
@@ -227,11 +228,11 @@ function lastRunningStep(steps: readonly ChatProgressStep[]): ChatProgressStep |
 /** 畳んだ見出し（アイコンは文字と同じ色。失敗は danger の色とアイコンで示す）。 */
 function SummaryText({ icon: Icon, children }: { icon: LucideIcon; children: ReactNode }) {
   return (
-    <span className="inline-flex min-w-0 items-start gap-1.5">
-      <span className="flex h-5 shrink-0 items-center">
-        <Icon size={14} className="shrink-0" aria-hidden="true" />
+    <span className="inline-flex min-w-0 items-start gap-1.5 leading-5">
+      <span className="pr-icon-line">
+        <Icon size={TEXT_ICON_SIZE.xs} className="shrink-0" aria-hidden="true" />
       </span>
-      <span className="min-w-0 break-words leading-5">{children}</span>
+      <span className="min-w-0 break-words">{children}</span>
     </span>
   );
 }
@@ -312,7 +313,7 @@ function TotalTimer({
       aria-label={`${labels.elapsed} ${total.elapsedClock}`}
       data-testid={testId ? `${testId}-timer` : undefined}
     >
-      <Clock3 size={14} aria-hidden="true" />
+      <Clock3 size={TEXT_ICON_SIZE.xs} aria-hidden="true" />
       <span>{labels.elapsed}</span>
       <span className="min-w-[3.25rem] text-right tabular-nums text-fg">{total.elapsedClock}</span>
     </span>
@@ -358,8 +359,8 @@ function CurrentStepRow({
     >
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3">
         <div className={cn("flex min-w-0 items-start gap-2 text-xs leading-5", runTimelineStepIndent(step?.level))}>
-          <span className="flex h-5 shrink-0 items-center">
-            <Spinner size={14} className="text-accent-fg" />
+          <span className="pr-icon-line">
+            <Spinner size={TEXT_ICON_SIZE.xs} className="text-accent-fg" />
           </span>
           <span className="min-w-0 break-words [overflow-wrap:anywhere]">
             <span className="font-medium text-fg">{label}</span>

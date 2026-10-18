@@ -1,3 +1,5 @@
+import { findIconTextMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
+
 import { expect, type Locator, type Page, test } from "./fixtures/test";
 
 import {
@@ -944,6 +946,8 @@ for (const theme of ["light", "dark"] as const) {
     await nestedToggle.click();
     await expect(nestedToggle).toHaveAttribute("aria-expanded", "true");
     const nestedDetails = page.getByTestId("chat-answer-progress-step-s4-details");
+    // 文字の横のアイコン（状態・開閉の印）は、文字の 1 行目の中心にそろえる（#2371）。
+    expect(await findIconTextMisalignment(page, { root: '[data-testid="chat-answer-progress"]' })).toEqual([]);
     await expect(nestedDetails.locator("dt").first()).toHaveText("検索の候補");
     await expect(nestedDetails).toContainText("回答に渡す根拠 0 件");
     await expect(nestedDetails).toContainText("検索文: 2 本");

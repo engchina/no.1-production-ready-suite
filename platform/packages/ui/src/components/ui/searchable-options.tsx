@@ -180,40 +180,46 @@ export function SearchableOptionRow({
         active && "forced-colors:outline forced-colors:outline-1 forced-colors:-outline-offset-1"
       )}
     >
-      {multiple ? (
-        <span
-          aria-hidden
-          className={cn(
-            "flex size-4 shrink-0 items-center justify-center rounded-sm border",
-            selected
-              ? "border-accent-emphasis bg-accent-emphasis text-fg-on-accent"
-              : "border-border-control bg-surface"
+      {/* 選択の印は名前の 1 行目の中心にそろえる（折り返した名前・補足のある行でも 1 行目。#2371）。印と名前を 1 つの
+          items-start のまとまりにし、まとまりを行の縦の中央に置く。 */}
+      <span className="flex min-w-0 flex-1 items-start gap-2.5">
+        <span className="pr-icon-line">
+          {multiple ? (
+            <span
+              aria-hidden
+              className={cn(
+                "flex size-4 shrink-0 items-center justify-center rounded-sm border",
+                selected
+                  ? "border-accent-emphasis bg-accent-emphasis text-fg-on-accent"
+                  : "border-border-control bg-surface"
+              )}
+            >
+              {selected ? <Check size={14} strokeWidth={3} /> : null}
+            </span>
+          ) : (
+            <Check
+              size={16}
+              aria-hidden
+              className={cn("shrink-0 text-accent-fg-strong", selected ? "opacity-100" : "opacity-0")}
+            />
           )}
-        >
-          {selected ? <Check size={14} strokeWidth={3} /> : null}
         </span>
-      ) : (
-        <Check
-          size={16}
-          aria-hidden
-          className={cn("shrink-0 text-accent-fg-strong", selected ? "opacity-100" : "opacity-0")}
-        />
-      )}
-      <span className="min-w-0 flex-1">
-        <span className={cn("[overflow-wrap:anywhere]", selected && "font-medium text-accent-fg-strong")}>
-          {option.label}
-        </span>
-        {option.badge ? (
-          <span
-            data-surface-tint="info"
-            className="ml-1.5 inline-block rounded-sm bg-info-subtle px-1 align-middle text-xs font-medium text-accent-fg"
-          >
-            {option.badge}
+        <span className="min-w-0 flex-1">
+          <span className={cn("[overflow-wrap:anywhere]", selected && "font-medium text-accent-fg-strong")}>
+            {option.label}
           </span>
-        ) : null}
-        {option.description ? (
-          <span className="mt-0.5 block truncate text-xs text-fg-muted">{option.description}</span>
-        ) : null}
+          {option.badge ? (
+            <span
+              data-surface-tint="info"
+              className="ml-1.5 inline-block rounded-sm bg-info-subtle px-1 align-middle text-xs font-medium text-accent-fg"
+            >
+              {option.badge}
+            </span>
+          ) : null}
+          {option.description ? (
+            <span className="mt-0.5 block truncate text-xs text-fg-muted">{option.description}</span>
+          ) : null}
+        </span>
       </span>
       {option.meta ? <span className="tnum shrink-0 text-xs text-fg-muted">{option.meta}</span> : null}
     </li>

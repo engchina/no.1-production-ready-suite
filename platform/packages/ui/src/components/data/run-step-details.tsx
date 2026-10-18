@@ -1,6 +1,7 @@
 import { Info } from "lucide-react";
 
 import { cn } from "../../lib/utils";
+import { TEXT_ICON_SIZE } from "../ui/text-icon";
 
 /*
  * 処理の経過の段の中身（#2294）。実行の詳細とチャットの「処理の経過」（`RunTimeline`）で、段を開いて見る詳細の
@@ -150,8 +151,8 @@ export function RunStepDetailsView({ details, labels: labelsInput, className, te
       ))}
       {details.truncated ? (
         <p className="flex min-w-0 items-start gap-1.5 text-fg-muted" data-run-step-details-truncated="">
-          <span className="flex h-5 shrink-0 items-center">
-            <Info size={14} aria-hidden="true" />
+          <span className="pr-icon-line">
+            <Info size={TEXT_ICON_SIZE.xs} aria-hidden="true" />
           </span>
           <span className="min-w-0">{labels.truncated}</span>
         </p>

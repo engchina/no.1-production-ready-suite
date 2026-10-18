@@ -598,7 +598,11 @@ function BackendOption({
         onChange={() => onChange(value)}
         className="mt-1 h-4 w-4 cursor-pointer accent-[var(--color-accent-emphasis)]"
       />
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-surface-sunken text-accent-fg">
+      {/* 名前と説明の 2 行のまとまりの横の印の箱（文字の 1 行目にそろえる規則の例外。#2371）。 */}
+      <span
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-surface-sunken text-accent-fg"
+        data-icon-align-skip=""
+      >
         {icon}
       </span>
       <span>

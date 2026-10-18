@@ -6,6 +6,7 @@ import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
 import {
   findClippedPlaceholders,
+  findIconTextMisalignment,
   findToolbarMisalignment,
   jumpToPage,
   measureHorizontalOverflow,
@@ -584,6 +585,8 @@ test("詳細は概要 → 処理の経過（処理の詳細を含む）→ SQL �
   expect(chevron.size).toBe(chevron.font);
   await prepareToggle.click();
   await expect(prepare.locator("[data-run-timeline-details]")).toContainText("生成に使った質問");
+  // 文字の横のアイコン（状態・開閉の印・処理の詳細）は、文字の 1 行目の中心にそろえる（#2371）。
+  expect(await findIconTextMisalignment(page, { root: "[data-run-detail]" })).toEqual([]);
   const execute = timeline.locator('[data-run-timeline-step="execute_sql-3"]');
   await execute.locator("[data-run-timeline-toggle]").click();
   await expect(execute.locator("[data-run-timeline-details]")).toContainText("2 行");
