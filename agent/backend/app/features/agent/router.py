@@ -13,7 +13,6 @@ import logging
 import re
 import stat
 import unicodedata
-from asyncio import sleep, wait_for
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from csv import DictWriter
 from datetime import UTC, datetime
@@ -21,7 +20,6 @@ from functools import partial
 from importlib import import_module
 from io import StringIO
 from pathlib import Path
-from time import monotonic
 from types import SimpleNamespace
 from typing import Annotated, Any, Literal, cast
 
@@ -38,8 +36,6 @@ from fastapi import (
     Query,
     Request,
     UploadFile,
-    WebSocket,
-    WebSocketDisconnect,
 )
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse, Page
@@ -306,9 +302,7 @@ from app.oracle_connection import (
     platform_oracle_connection,
 )
 from app.security.dependencies import (
-    WebSocketAuthRejected,
     actor_roles_for_principal,
-    authenticate_websocket,
     permission_route_path,
 )
 from app.security.domain import Principal
@@ -332,9 +326,6 @@ RUN_NOT_FOUND_MESSAGE = "実行が見つかりません。"
 APPROVAL_NOT_FOUND_MESSAGE = "承認の依頼が見つかりません。"
 
 PASSPHRASE_CONFIG_KEYS = frozenset({"pass_phrase", "passphrase", "key_password"})
-_WEBSOCKET_COMMAND_DEDUPE_TTL_SECONDS = 300.0
-_WEBSOCKET_COMMAND_DEDUPE_MAX_ENTRIES = 2000
-_websocket_command_dedupe: dict[tuple[str, str], tuple[str, float]] = {}
 
 
 # 接続 `rag` の既定（630 秒。RAG の回答の上限 600 秒より長い。#1425）を画面でも保存し直せる上限。
@@ -3055,87 +3046,6 @@ async def stream_run_progress(
     return await chat_progress_sse_response(fetch, since=since, last_event_id=last_event_id)
 
 
-@router.websocket("/runs/{run_id}/events/ws")
-async def stream_run_events_websocket(
-    websocket: WebSocket,
-    run_id: str,
-    after_event_id: str | None = None,
-    heartbeat_interval_seconds: float = 15.0,
-    max_events_per_tick: int = 50,
-) -> None:
-    # production の Cookie セッション（Origin 必須）は accept 前に確認する（#215）。
-    # local はローカル利用者（全権限）を state.principal に入れる（#750）。
-    try:
-        await authenticate_websocket(websocket, "/runs/{run_id}/events/ws")
-    except WebSocketAuthRejected:
-        await websocket.close(code=1008)
-        return
-    await websocket.accept()
-    if not _websocket_has_roles(websocket, {"viewer", "operator", "approver", "auditor"}):
-        await websocket.send_json(
-            {
-                "type": "error",
-                "error_code": "rbac.forbidden",
-                "message": "この実行のイベントを購読する権限がありません。",
-            }
-        )
-        await websocket.close(code=1008)
-        return
-    try:
-        run = await run_in_threadpool(runtime_repository.get_run, run_id)
-        # ほかの利用者の Run は存在を漏らさない（system_admin は全員。#1889）。
-        if not _run_visible_to(websocket, run):
-            raise KeyError(run_id)
-    except KeyError:
-        await websocket.send_json(
-            {
-                "type": "error",
-                "error_code": "run.not_found",
-                "message": "実行が見つかりません。",
-            }
-        )
-        await websocket.close(code=1008)
-        return
-    if not _websocket_has_agent_access(websocket, run.agent_id):
-        await websocket.send_json(
-            {
-                "type": "error",
-                "error_code": "rbac.agent_forbidden",
-                "message": "この業務 Agent の実行を参照する権限がありません。",
-            }
-        )
-        await websocket.close(code=1008)
-        return
-
-    next_index = _event_index_after_ws(run.events, after_event_id)
-    last_heartbeat_at = monotonic()
-    event_batch_size = max(1, min(max_events_per_tick, 500))
-    try:
-        while True:
-            run = await run_in_threadpool(runtime_repository.get_run, run_id)
-            events_sent = 0
-            while next_index < len(run.events) and events_sent < event_batch_size:
-                event = run.events[next_index]
-                next_index += 1
-                events_sent += 1
-                await websocket.send_json(_websocket_event_payload(event))
-
-            has_backlog = next_index < len(run.events)
-            if run.status in {"completed", "failed", "cancelled"} and not has_backlog:
-                await websocket.close(code=1000)
-                return
-
-            now = monotonic()
-            if now - last_heartbeat_at >= max(0.0, heartbeat_interval_seconds):
-                await websocket.send_json(_websocket_heartbeat_payload(run))
-                last_heartbeat_at = now
-
-            await _handle_websocket_command(websocket, run_id)
-            await sleep(0.05 if has_backlog else 0.25)
-    except WebSocketDisconnect:
-        return
-
-
 @router.post("/runs/{run_id}/cancel", response_model=ApiResponse[RunState])
 async def cancel_run(
     run_id: str,
@@ -3930,332 +3840,6 @@ def _sse_events(events: Iterable[RunEvent | None]) -> Iterable[str]:
         yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _event_index_after_ws(events: list[RunEvent], event_id: str | None) -> int:
-    if event_id is None:
-        return 0
-    for index, event in enumerate(events):
-        if event.id == event_id:
-            return index + 1
-    return 0
-
-
-def _websocket_event_payload(event: RunEvent) -> dict[str, object]:
-    return {
-        "type": event.type.value,
-        "event": event.model_dump(mode="json"),
-    }
-
-
-def _websocket_heartbeat_payload(run: RunState) -> dict[str, object]:
-    return {
-        "type": "heartbeat",
-        "run_id": run.id,
-        "run_status": run.status.value,
-        "server_time": datetime.now(UTC).isoformat(),
-    }
-
-
-# WebSocket のコマンド・接続の拒否の `message` は、画面が Toast の説明にそのまま出す利用者向けの文
-# （`error_code` は画面・テストの判定に使うため変えない。#1031）。画面の状態が古いと起きる拒否には
-# 再読み込みを案内する。
-_WEBSOCKET_RELOAD_HINT = "画面を再読み込みしてから、もう一度操作してください。"
-
-
-async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
-    try:
-        message = await wait_for(websocket.receive_json(), timeout=0.01)
-    except TimeoutError:
-        return
-    if not isinstance(message, dict):
-        await websocket.send_json(
-            _websocket_error_payload(
-                "websocket.invalid_message",
-                "操作の内容を読み取れませんでした。" + _WEBSOCKET_RELOAD_HINT,
-            )
-        )
-        return
-    command = message.get("type")
-    command_id = message.get("command_id")
-    normalized_command_id = command_id if isinstance(command_id, str) and command_id else None
-    if command == "ping":
-        await websocket.send_json(
-            {
-                "type": "pong",
-                "ok": True,
-                "command": "ping",
-                "command_id": normalized_command_id,
-                "server_time": datetime.now(UTC).isoformat(),
-            }
-        )
-        return
-    if command == "cancel":
-        if not _websocket_has_roles(websocket, {"operator"}):
-            await websocket.send_json(
-                _websocket_error_payload(
-                    "rbac.forbidden",
-                    "実行を取り消す権限がありません。",
-                    command="cancel",
-                    command_id=normalized_command_id,
-                )
-            )
-            return
-        dedupe = _websocket_command_dedupe_state(run_id, "cancel", normalized_command_id)
-        if dedupe == "duplicate":
-            await websocket.send_json(
-                _websocket_command_accepted("cancel", normalized_command_id, duplicate=True)
-            )
-            return
-        if dedupe == "conflict":
-            await websocket.send_json(
-                _websocket_error_payload(
-                    "websocket.command_id_conflict",
-                    "同じ操作 ID で別の操作が送られています。" + _WEBSOCKET_RELOAD_HINT,
-                    command="cancel",
-                    command_id=normalized_command_id,
-                )
-            )
-            return
-        try:
-            await run_in_threadpool(
-                runtime_repository.cancel_run, run_id, cancelled_by=_actor_login_id(websocket)
-            )
-        except KeyError:
-            await websocket.send_json(
-                _websocket_error_payload(
-                    "run.not_found",
-                    "実行が見つかりません。",
-                    command="cancel",
-                    command_id=normalized_command_id,
-                )
-            )
-            return
-        await websocket.send_json(_websocket_command_accepted("cancel", normalized_command_id))
-        return
-    if command == "resume":
-        if not _websocket_has_roles(websocket, {"operator"}):
-            await websocket.send_json(
-                _websocket_error_payload(
-                    "rbac.forbidden",
-                    "実行を再開する権限がありません。",
-                    command="resume",
-                    command_id=normalized_command_id,
-                )
-            )
-            return
-        dedupe = _websocket_command_dedupe_state(run_id, "resume", normalized_command_id)
-        if dedupe == "duplicate":
-            await websocket.send_json(
-                _websocket_command_accepted("resume", normalized_command_id, duplicate=True)
-            )
-            return
-        if dedupe == "conflict":
-            await websocket.send_json(
-                _websocket_error_payload(
-                    "websocket.command_id_conflict",
-                    "同じ操作 ID で別の操作が送られています。" + _WEBSOCKET_RELOAD_HINT,
-                    command="resume",
-                    command_id=normalized_command_id,
-                )
-            )
-            return
-        try:
-            # 組み込み Runtime は、承認の決定の後に止まっている Run だけを再開する（#756）。
-            resumable = await run_in_threadpool(runtime_repository.get_run, run_id)
-            if builtin_resume_pending(resumable):
-                _schedule_builtin_run(resumable)
-        except KeyError:
-            await websocket.send_json(
-                _websocket_error_payload(
-                    "run.not_found",
-                    "実行が見つかりません。",
-                    command="resume",
-                    command_id=normalized_command_id,
-                )
-            )
-            return
-        await websocket.send_json(_websocket_command_accepted("resume", normalized_command_id))
-        return
-    if command == "approval_decision":
-        if not _websocket_has_roles(websocket, {"approver"}):
-            await websocket.send_json(
-                _websocket_error_payload(
-                    "rbac.forbidden",
-                    "承認・却下を決める権限がありません。",
-                    command="approval_decision",
-                    command_id=normalized_command_id,
-                )
-            )
-            return
-        approval_id = message.get("approval_id")
-        approved = message.get("approved")
-        if not isinstance(approval_id, str) or not approval_id:
-            await websocket.send_json(
-                _websocket_error_payload(
-                    "websocket.invalid_command",
-                    "承認の依頼が指定されていません。" + _WEBSOCKET_RELOAD_HINT,
-                    command="approval_decision",
-                    command_id=normalized_command_id,
-                )
-            )
-            return
-        if not isinstance(approved, bool):
-            await websocket.send_json(
-                _websocket_error_payload(
-                    "websocket.invalid_command",
-                    "承認か却下かが指定されていません。" + _WEBSOCKET_RELOAD_HINT,
-                    command="approval_decision",
-                    command_id=normalized_command_id,
-                )
-            )
-            return
-        try:
-            approval_run = _run_for_approval(approval_id)
-            # 接続の後に権限・範囲が変わっていても、承認ごとに持ち主と業務 Agent の範囲を
-            # 確かめ直す（HTTP の決定と同じ。#1889）。
-            if not _run_approvable_by(websocket, approval_run) or not _websocket_has_agent_access(
-                websocket, approval_run.agent_id
-            ):
-                raise KeyError(approval_id)
-        except KeyError:
-            await websocket.send_json(
-                _websocket_error_payload(
-                    "approval.not_found",
-                    "承認の依頼が見つかりません。",
-                    command="approval_decision",
-                    command_id=normalized_command_id,
-                )
-            )
-            return
-        if approval_run.id != run_id:
-            await websocket.send_json(
-                _websocket_error_payload(
-                    "approval.run_mismatch",
-                    "この承認の依頼は表示中の実行のものではありません。" + _WEBSOCKET_RELOAD_HINT,
-                    command="approval_decision",
-                    command_id=normalized_command_id,
-                )
-            )
-            return
-        dedupe = _websocket_command_dedupe_state(
-            run_id,
-            "approval_decision",
-            normalized_command_id,
-        )
-        if dedupe == "duplicate":
-            await websocket.send_json(
-                _websocket_command_accepted(
-                    "approval_decision",
-                    normalized_command_id,
-                    duplicate=True,
-                )
-            )
-            return
-        if dedupe == "conflict":
-            await websocket.send_json(
-                _websocket_error_payload(
-                    "websocket.command_id_conflict",
-                    "同じ操作 ID で別の操作が送られています。" + _WEBSOCKET_RELOAD_HINT,
-                    command="approval_decision",
-                    command_id=normalized_command_id,
-                )
-            )
-            return
-        decided_by = message.get("decided_by")
-        principal = _request_principal(websocket)
-        if principal is not None:
-            # 決定者はログイン中の利用者（message の decided_by は使わない。#215）。
-            decided_by = principal.login_user_id
-        comment = message.get("comment")
-        decided = await run_in_threadpool(
-            runtime_repository.decide_approval,
-            approval_id,
-            ApprovalDecisionRequest(
-                approved=approved,
-                decided_by=(
-                    decided_by if isinstance(decided_by, str) and decided_by else "websocket"
-                ),
-                comment=comment if isinstance(comment, str) and comment else None,
-            ),
-        )
-        _schedule_builtin_run(decided)
-        await websocket.send_json(
-            _websocket_command_accepted("approval_decision", normalized_command_id)
-        )
-        return
-    await websocket.send_json(
-        _websocket_error_payload(
-            "websocket.unknown_command",
-            f"この操作（{command}）には対応していません。",
-            command=str(command) if command is not None else None,
-            command_id=normalized_command_id,
-        )
-    )
-
-
-def _websocket_command_dedupe_state(
-    run_id: str,
-    command: str,
-    command_id: str | None,
-) -> str:
-    if command_id is None:
-        return "new"
-    now = monotonic()
-    expired_keys = [
-        key
-        for key, (_, recorded_at) in _websocket_command_dedupe.items()
-        if now - recorded_at > _WEBSOCKET_COMMAND_DEDUPE_TTL_SECONDS
-    ]
-    for key in expired_keys:
-        _websocket_command_dedupe.pop(key, None)
-
-    key = (run_id, command_id)
-    existing = _websocket_command_dedupe.get(key)
-    if existing is not None:
-        existing_command, _ = existing
-        return "duplicate" if existing_command == command else "conflict"
-
-    if len(_websocket_command_dedupe) >= _WEBSOCKET_COMMAND_DEDUPE_MAX_ENTRIES:
-        oldest_key = min(
-            _websocket_command_dedupe,
-            key=lambda item: _websocket_command_dedupe[item][1],
-        )
-        _websocket_command_dedupe.pop(oldest_key, None)
-    _websocket_command_dedupe[key] = (command, now)
-    return "new"
-
-
-def _websocket_command_accepted(
-    command: str,
-    command_id: str | None,
-    *,
-    duplicate: bool = False,
-) -> dict[str, object]:
-    return {
-        "type": "command.accepted",
-        "ok": True,
-        "command": command,
-        "command_id": command_id,
-        "duplicate": duplicate,
-    }
-
-
-def _websocket_error_payload(
-    error_code: str,
-    message: str,
-    *,
-    command: str | None = None,
-    command_id: str | None = None,
-) -> dict[str, object]:
-    return {
-        "type": "error",
-        "ok": False,
-        "error_code": error_code,
-        "message": message,
-        "command": command,
-        "command_id": command_id,
-    }
-
-
 def _configured_tool_policy() -> ToolPolicy:
     config = runtime_config_store.get_tool_policy()
     return ToolPolicy(
@@ -4269,8 +3853,8 @@ def _configured_tool_policy() -> ToolPolicy:
 def _request_principal(connection: object) -> Principal | None:
     """認証済みの利用者（Cookie のセッション、または local のローカル利用者）。
 
-    `/api` の HTTP は `app.security.dependencies.authorize_api_request`、WebSocket は
-    `authenticate_websocket` が `state.principal` に入れる。無ければ未認証。
+    `/api` の HTTP は `app.security.dependencies.authorize_api_request` が `state.principal` に
+    入れる。無ければ未認証。
     """
     state = getattr(connection, "state", None)
     principal = getattr(state, "principal", None) if state is not None else None
@@ -4428,14 +4012,6 @@ def _require_agent_access(request: Request, agent_id: str) -> None:
 
 def _agent_allowed(request: Request, agent_id: str) -> bool:
     return _policy_allows_agent(_actor_policy(request), agent_id)
-
-
-def _websocket_has_roles(websocket: WebSocket, allowed_roles: set[str]) -> bool:
-    return _policy_has_roles(_actor_policy(websocket), allowed_roles)
-
-
-def _websocket_has_agent_access(websocket: WebSocket, agent_id: str) -> bool:
-    return _policy_allows_agent(_actor_policy(websocket), agent_id)
 
 
 def _request_agent_ids(request: Request) -> set[str] | None:

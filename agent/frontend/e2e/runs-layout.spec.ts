@@ -244,7 +244,8 @@ test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査�
   await page.getByTestId("run-audit-section").locator("summary").click();
   await expect.poll(() => mockApi.lastRequest("GET", "/api/runs/run-layout/audit")).toBeTruthy();
   await page.getByTestId("run-technical-section").locator("summary").click();
-  await expect(page.getByRole("group", { name: "ストリーム方式" })).toBeVisible();
+  // 終わった実行はイベントを購読しない（SSE だけ。#2260）。
+  await expect(page.getByTestId("run-stream").getByText("受信していません", { exact: true })).toBeVisible();
 });
 
 test("作成は独立画面で入力を確認し、成功した実行の詳細へ移る", { tag: "@responsive" }, async ({ page, mockApi }) => {

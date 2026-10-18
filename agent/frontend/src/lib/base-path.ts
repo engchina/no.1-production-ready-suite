@@ -18,13 +18,3 @@ export const ROUTER_BASENAME = routerBasename(APP_BASE_PATH);
 export function appPath(path: string, base: string = APP_BASE_PATH): string {
   return withBasePath(path, base);
 }
-
-/** WebSocket の URL（`ws(s)://host/<base>api/...`）。ページが https なら wss にする。 */
-export function appWebSocketUrl(
-  path: string,
-  location: Pick<Location, "protocol" | "host"> = window.location,
-  base: string = APP_BASE_PATH
-): string {
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${location.host}${appPath(path, base)}`;
-}

@@ -90,7 +90,7 @@
 - 業務 Agent が使う Skill の削除は `409`。
 - RBAC は viewer / operator / approver / auditor / admin を維持する。
 - 画面のログインは共通認証（Cookie のセッション）。capability は 5 ロールに対応し、利用者（local はローカル利用者）から `ActorPolicy` を作って router の既存の判定に流す。local でもユーザー・ロールは Oracle の `PLATFORM_*`。Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）は持たない。対象範囲はエージェントだけで、検索・回答プロファイルの判定は RAG に任せる。
-- 新しい API は必ず権限 manifest（`app/security/permissions.py`）に登録する（登録外は 403。完全性テストがある）。WebSocket は handler の中で Cookie と `Origin` を検証する。
+- 新しい API は必ず権限 manifest（`app/security/permissions.py`）に登録する（登録外は 403。完全性テストがある）。API は HTTP だけで、push は SSE、操作は REST にする（WebSocket は持たない。#2260）。
 - 承認の決定者（`decided_by`）は Cookie の利用者から決め、request の値を使わない。
 
 ## 開発・検証

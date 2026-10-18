@@ -45,7 +45,6 @@ from app.security.permissions import (
     RETIRED_PERMISSION_CODES,
     ROUTE_PERMISSIONS,
     UNCLASSIFIED_PERMISSION,
-    WEBSOCKET_PERMISSIONS,
     expand_permissions,
     permission_for_route,
 )
@@ -121,15 +120,16 @@ def test_manifest_entries_match_existing_routes_and_known_permissions() -> None:
     """manifest の明示登録は実在する route だけで、権限コードはカタログにあるもの。"""
     operations = set(_api_operations())
     assert set(ROUTE_PERMISSIONS) - operations == set()
-    for permissions in [*ROUTE_PERMISSIONS.values(), *WEBSOCKET_PERMISSIONS.values()]:
+    for permissions in ROUTE_PERMISSIONS.values():
         assert permissions
         assert permissions <= ALL_PERMISSION_CODES
+    # `/api` は HTTP の route だけ（Run のイベントの push は SSE、操作は REST。#2260）。
     websocket_paths = {
         str(getattr(route, "path", ""))
         for route in agent_router.router.routes
         if type(route).__name__ == "APIWebSocketRoute"
     }
-    assert websocket_paths == set(WEBSOCKET_PERMISSIONS)
+    assert websocket_paths == set()
 
 
 _USER_ROLE_PREFIXES = ("/security/users", "/security/roles")
@@ -283,7 +283,7 @@ def test_retired_permission_codes_are_not_in_catalog_or_manifest() -> None:
     retired = set(RETIRED_PERMISSION_CODES)
     assert not retired & ALL_PERMISSION_CODES
     assert all(not retired & set(item.implies) for item in PERMISSION_CATALOG)
-    for permissions in [*ROUTE_PERMISSIONS.values(), *WEBSOCKET_PERMISSIONS.values()]:
+    for permissions in ROUTE_PERMISSIONS.values():
         assert not retired & permissions
     assert expand_permissions(retired) == set()
 

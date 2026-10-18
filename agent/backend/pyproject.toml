@@ -17,7 +17,6 @@ dependencies = [
   "oci>=2.168",
   "oracledb>=3.4",
   "pyyaml>=6.0",
-  "websockets>=15,<17",
   "production-ready-backend-core",
   "production-ready-system-settings-backend",
   "openai-agents==0.23.1",

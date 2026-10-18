@@ -71,11 +71,11 @@ export default defineConfig(() => {
     server: {
       host: "0.0.0.0",
       port: 3002,
-      // hermetic では proxy 自体を持たない（WebSocket の upgrade も実 backend へ流さない）。
+      // hermetic では proxy 自体を持たない（実 backend へ流さない）。
       proxy: hermeticApi
         ? undefined
         : {
-            "/api": { target: backendUrl, changeOrigin: true, ws: true },
+            "/api": { target: backendUrl, changeOrigin: true },
           },
     },
     preview: {

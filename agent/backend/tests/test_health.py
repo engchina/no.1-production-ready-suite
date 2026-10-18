@@ -33,7 +33,6 @@ from pr_system_settings.auth.domain import LOCAL_DEBUG_USER_UUID
 from pr_system_settings.model import ModelSettingsTestRequest
 from pr_system_settings.oci_database import AutonomousDatabaseInfo
 from pytest import MonkeyPatch
-from starlette.websockets import WebSocket
 
 import app.features.agent.router as agent_router
 import app.features.agent.runtime as runtime_module
@@ -41,7 +40,6 @@ import app.features.agent.tools as tools_module
 import app.settings as app_settings
 from app.features.agent.builtin_runtime import build_function_tools
 from app.features.agent.config import runtime_config_store
-from app.features.agent.router import stream_run_events_websocket
 from app.features.agent.runtime import (
     AgentRuntimeOracleCheckpointRepository,
     AgentRuntimeOracleNormalizedRepository,
@@ -171,45 +169,6 @@ class _FakeStreamResponse:
 
     def json(self) -> dict[str, Any]:
         raise ValueError("stream response")
-
-
-class _FakeWebSocket:
-    def __init__(self, headers: dict[str, str] | None = None) -> None:
-        self.headers = headers or {}
-        self.state = SimpleNamespace()
-        self.accepted = False
-        self.sent_json: list[dict[str, Any]] = []
-        self.close_code: int | None = None
-
-    async def accept(self) -> None:
-        self.accepted = True
-
-    async def send_json(self, data: Any) -> None:
-        if not isinstance(data, dict):
-            raise AssertionError("WebSocket JSON payload must be an object")
-        self.sent_json.append(data)
-
-    async def close(self, code: int = 1000) -> None:
-        self.close_code = code
-
-    async def receive_json(self) -> dict[str, Any]:
-        raise AssertionError("receive_json should not be called in this test")
-
-
-class _CommandWebSocket(_FakeWebSocket):
-    def __init__(
-        self,
-        messages: list[dict[str, Any]],
-        headers: dict[str, str] | None = None,
-    ) -> None:
-        super().__init__(headers=headers)
-        self._messages = list(messages)
-
-    async def receive_json(self) -> dict[str, Any]:
-        if self._messages:
-            return self._messages.pop(0)
-        await anyio.sleep(1)
-        return {}
 
 
 class _FakeOracleStore:
@@ -3098,7 +3057,7 @@ def test_cancel_finished_run_keeps_result_and_returns_conflict() -> None:
     after = client.get(f"/api/runs/{run['id']}").json()["data"]
     assert after["status"] == "completed"
     assert after["events"] == run["events"]
-    # 品質評価の取消・WebSocket の取消が通る repository も、終了した Run を変えない。
+    # 品質評価の取消が通る repository も、終了した Run を変えない。
     kept = runtime_module.runtime_repository.cancel_run(run["id"])
     assert kept.status == "completed"
     assert len(kept.events) == len(run["events"])
@@ -3143,233 +3102,6 @@ def test_sse_events_after_cursor_returns_later_events() -> None:
     assert resp.status_code == 200
     assert "event: run.created" not in resp.text
     assert "event: run.completed" in resp.text
-
-
-def test_websocket_events_stream_recorded_events() -> None:
-    run_id = _seed_api_run("WebSocket events を確認する")["id"]
-    websocket = _FakeWebSocket()
-
-    async def run_websocket() -> None:
-        await stream_run_events_websocket(cast(WebSocket, websocket), run_id)
-
-    anyio.run(run_websocket)
-    event_types = [str(message["type"]) for message in websocket.sent_json]
-
-    assert websocket.accepted is True
-    assert websocket.close_code == 1000
-    assert "run.created" in event_types
-    assert "run.completed" in event_types
-
-
-def test_websocket_events_backpressure_allows_commands_between_event_batches() -> None:
-    run_id = _seed_api_run("WebSocket backpressure を確認する")["id"]
-    websocket = _CommandWebSocket([{"type": "ping", "command_id": "cmd-ping-backpressure"}])
-
-    async def run_websocket() -> None:
-        await stream_run_events_websocket(
-            cast(WebSocket, websocket),
-            run_id,
-            heartbeat_interval_seconds=999,
-            max_events_per_tick=1,
-        )
-
-    anyio.run(run_websocket)
-    event_indices = [
-        index
-        for index, message in enumerate(websocket.sent_json)
-        if str(message["type"]).startswith("run.")
-    ]
-    pong_index = next(
-        index for index, message in enumerate(websocket.sent_json) if message["type"] == "pong"
-    )
-
-    assert websocket.close_code == 1000
-    assert len(event_indices) > 1
-    assert event_indices[0] < pong_index < event_indices[-1]
-
-
-def test_websocket_events_send_heartbeat_and_command_ack() -> None:
-    _reset_tool_policy()
-    run = _seed_api_run(
-        "WebSocket heartbeat を確認する",
-        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "承認待ちにする"})],
-        approval=True,
-    )
-    websocket = _CommandWebSocket([{"type": "cancel", "command_id": "cmd-cancel-1"}])
-
-    async def run_websocket() -> None:
-        await stream_run_events_websocket(
-            cast(WebSocket, websocket),
-            run["id"],
-            heartbeat_interval_seconds=0,
-        )
-
-    anyio.run(run_websocket)
-    heartbeat = next(message for message in websocket.sent_json if message["type"] == "heartbeat")
-    accepted = next(
-        message for message in websocket.sent_json if message["type"] == "command.accepted"
-    )
-
-    assert run["status"] == "waiting_approval"
-    assert heartbeat["run_id"] == run["id"]
-    assert heartbeat["run_status"] == "waiting_approval"
-    assert heartbeat["server_time"]
-    assert accepted["ok"] is True
-    assert accepted["command"] == "cancel"
-    assert accepted["command_id"] == "cmd-cancel-1"
-    assert websocket.close_code == 1000
-
-
-def test_websocket_events_accept_resume_command() -> None:
-    _reset_tool_policy()
-    run = _seed_api_run(
-        "WebSocket resume を確認する",
-        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "承認待ち resume"})],
-        approval=True,
-    )
-    websocket = _CommandWebSocket(
-        [
-            {"type": "resume", "command_id": "cmd-resume-1"},
-            {"type": "cancel", "command_id": "cmd-cancel-after-resume"},
-        ]
-    )
-
-    async def run_websocket() -> None:
-        await stream_run_events_websocket(
-            cast(WebSocket, websocket),
-            run["id"],
-            heartbeat_interval_seconds=999,
-        )
-
-    anyio.run(run_websocket)
-    accepted = [message for message in websocket.sent_json if message["type"] == "command.accepted"]
-    refreshed = client.get(f"/api/runs/{run['id']}").json()["data"]
-
-    assert run["status"] == "waiting_approval"
-    assert accepted[0]["command"] == "resume"
-    assert accepted[0]["command_id"] == "cmd-resume-1"
-    assert accepted[1]["command"] == "cancel"
-    assert refreshed["status"] == "cancelled"
-    assert any(event["type"] == "run.status_changed" for event in refreshed["events"])
-    assert websocket.close_code == 1000
-
-
-def test_websocket_events_deduplicates_command_id() -> None:
-    _reset_tool_policy()
-    run = _seed_api_run(
-        "WebSocket command idempotency を確認する",
-        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "重複 resume を防ぐ"})],
-        approval=True,
-    )
-    websocket = _CommandWebSocket(
-        [
-            {"type": "resume", "command_id": "cmd-resume-dedupe-1"},
-            {"type": "resume", "command_id": "cmd-resume-dedupe-1"},
-            {"type": "cancel", "command_id": "cmd-cancel-after-dedupe"},
-        ]
-    )
-
-    async def run_websocket() -> None:
-        await stream_run_events_websocket(
-            cast(WebSocket, websocket),
-            run["id"],
-            heartbeat_interval_seconds=999,
-        )
-
-    anyio.run(run_websocket)
-    accepted = [message for message in websocket.sent_json if message["type"] == "command.accepted"]
-    refreshed = client.get(f"/api/runs/{run['id']}").json()["data"]
-
-    assert accepted[0]["command"] == "resume"
-    assert accepted[0]["duplicate"] is False
-    assert accepted[1]["command"] == "resume"
-    assert accepted[1]["duplicate"] is True
-    assert accepted[2]["command"] == "cancel"
-    assert refreshed["status"] == "cancelled"
-
-
-def test_websocket_events_accept_approval_decision_command(monkeypatch: MonkeyPatch) -> None:
-    _reset_tool_policy()
-    scheduled: list[str] = []
-
-    def finish(run: RunState) -> None:
-        # 再開の代わりに回答で終える（終わらないと WebSocket の配信が閉じない）。
-        scheduled.append(run.id)
-        runtime_module.runtime_repository.complete_builtin_run(run.id, "承認後に回答しました。")
-
-    monkeypatch.setattr(agent_router, "_schedule_builtin_run", finish)
-    run = _seed_api_run(
-        "WebSocket approval を確認する",
-        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "WS で承認する"})],
-        approval=True,
-    )
-    approval_id = run["approvals"][0]["id"]
-    websocket = _CommandWebSocket(
-        [
-            {
-                "type": "approval_decision",
-                "approval_id": approval_id,
-                "approved": True,
-                "decided_by": "ws-tester",
-                "command_id": "cmd-approval-1",
-            }
-        ]
-    )
-
-    async def run_websocket() -> None:
-        await stream_run_events_websocket(
-            cast(WebSocket, websocket),
-            run["id"],
-            heartbeat_interval_seconds=999,
-        )
-
-    anyio.run(run_websocket)
-    accepted = next(
-        message for message in websocket.sent_json if message["type"] == "command.accepted"
-    )
-    refreshed = client.get(f"/api/runs/{run['id']}").json()["data"]
-
-    assert accepted["command"] == "approval_decision"
-    assert accepted["command_id"] == "cmd-approval-1"
-    # 承認を受けて組み込み Runtime の再開を予約する（ツールは再開で Run の利用者として呼ぶ）。
-    assert refreshed["status"] == "completed"
-    assert refreshed["approvals"][0]["status"] == "approved"
-    assert scheduled == [run["id"]]
-    assert websocket.close_code == 1000
-
-
-def test_websocket_events_return_structured_command_errors() -> None:
-    _reset_tool_policy()
-    run = _seed_api_run(
-        "WebSocket command error を確認する",
-        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "承認待ちにする"})],
-        approval=True,
-    )
-    websocket = _CommandWebSocket(
-        [
-            {"type": "dance", "command_id": "cmd-unknown-1"},
-            {"type": "cancel", "command_id": "cmd-cancel-2"},
-        ]
-    )
-
-    async def run_websocket() -> None:
-        await stream_run_events_websocket(
-            cast(WebSocket, websocket),
-            run["id"],
-            heartbeat_interval_seconds=999,
-        )
-
-    anyio.run(run_websocket)
-    error = next(
-        message
-        for message in websocket.sent_json
-        if message["type"] == "error" and message["error_code"] == "websocket.unknown_command"
-    )
-
-    assert error["ok"] is False
-    assert error["command"] == "dance"
-    assert error["command_id"] == "cmd-unknown-1"
-    assert websocket.close_code == 1000
 
 
 def test_mcp_servers_from_json_parses_declarations() -> None:

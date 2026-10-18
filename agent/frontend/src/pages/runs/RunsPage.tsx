@@ -68,12 +68,7 @@ import {
 import { useEditorLeaveGuard } from "@/lib/leave-guard";
 import { isNullableString, isOneOf, isString, useWorkspaceState } from "@/lib/workspace-state";
 import { RunDetail, runCapabilities, runSummaryCapabilities } from "@/pages/runs/RunDetail";
-import {
-  type RunCommandKind,
-  type RunStreamMode,
-  useRunEventSource,
-  useRunEventWebSocket,
-} from "@/pages/runs/run-event-stream";
+import { type RunCommandKind, useRunEventSource } from "@/pages/runs/run-event-stream";
 import { focusField } from "@/pages/shared/page-helpers";
 import { isOwnDecision } from "@/pages/shared/approval-decision";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -265,12 +260,6 @@ export function RunsPage() {
     null as string | null,
     isNullableString
   );
-  const [streamMode, setStreamMode] = useWorkspaceState(
-    "runs",
-    "streamMode",
-    "sse" as RunStreamMode,
-    isOneOf<RunStreamMode>(["sse", "websocket"])
-  );
   // 一時保存に失敗した下書きは、離脱の前に破棄を確認する。
   const { confirmClose } = useEditorLeaveGuard(
     editor.target.kind === "new" && !goalSaved && goal !== DEFAULT_RUN_GOAL,
@@ -337,19 +326,8 @@ export function RunsPage() {
   const refreshRuntimeEvents = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["runs"] });
   }, [queryClient]);
-  // WebSocket のコマンドの拒否も、REST の操作の失敗と同じく danger の Toast で返す（messaging.md §1）。
-  const onWebSocketCommandError = useCallback(
-    (reason: string) => toast.error(t("run.stream.commandFailed"), { description: reason }),
-    []
-  );
-  const websocketState = useRunEventWebSocket(
-    selectedRun,
-    streamMode === "websocket",
-    refreshRuntimeEvents,
-    onWebSocketCommandError
-  );
-
-  const sseState = useRunEventSource(selectedRun, streamMode === "sse", refreshRuntimeEvents);
+  // イベントの push は SSE、操作は REST（#2260）。
+  const sseState = useRunEventSource(selectedRun, true, refreshRuntimeEvents);
 
   function onAgentChange(value: string) {
     setAgentId(value);
@@ -370,13 +348,6 @@ export function RunsPage() {
     });
   }
 
-  /**
-   * 送る経路は handler の中で選ぶ（buttons.md §5.1。操作のボタンは ObjectActionBar / RowActionMenu の 1 か所）。
-   * 詳細で WebSocket の購読が接続済みのときはその接続でコマンドを送り、それ以外は REST を呼ぶ。
-   */
-  const viaWebSocket = (run: RunRow) =>
-    streamMode === "websocket" && websocketState.status === "open" && run.id === selectedRun?.id;
-
   async function cancelLatestRun(run: RunRow) {
     const confirmed = await confirm({
       title: t("run.cancelTitle"),
@@ -386,19 +357,11 @@ export function RunsPage() {
       tone: "danger",
     });
     if (!confirmed) return;
-    if (viaWebSocket(run)) {
-      websocketState.sendCancel();
-    } else {
-      cancelRun.mutate(run.id);
-    }
+    cancelRun.mutate(run.id);
   }
 
   function resumeLatestRun(run: RunRow) {
-    if (viaWebSocket(run)) {
-      websocketState.sendResume();
-    } else {
-      resumeRun.mutate(run.id);
-    }
+    resumeRun.mutate(run.id);
   }
 
   async function decideRunApproval(run: RunRow, approval: { id: string; toolName: string }, approved: boolean) {
@@ -429,15 +392,10 @@ export function RunsPage() {
       void queryClient.invalidateQueries({ queryKey: ["runs", "list"] });
       return;
     }
-    if (viaWebSocket(run)) {
-      websocketState.sendApprovalDecision(latest.id, approved);
-    } else {
-      decideApproval.mutate({ runId: run.id, approvalId: latest.id, approved });
-    }
+    decideApproval.mutate({ runId: run.id, approvalId: latest.id, approved });
   }
 
   // 操作ごとに pending を分け、押した操作だけを loading、他は disabled にする（messaging.md §3.7）。
-  const wsCommand = streamMode === "websocket" ? websocketState.pendingCommand : null;
   const pendingAction: RunCommandKind | "replay" | null = cancelRun.isPending
     ? "cancel"
     : resumeRun.isPending
@@ -448,7 +406,7 @@ export function RunsPage() {
           ? decideApproval.variables?.approved
             ? "approve"
             : "reject"
-          : wsCommand;
+          : null;
   // 一覧の行と詳細で同じ定義を使う（UX 契約 buttons.md §5.1）。取消・却下は確認してから送る。
   const runActions = (run: RunRow): EntityAction[] => {
     const { canCancel, canResume, pendingApproval } = runRowFacts(run);
@@ -467,7 +425,7 @@ export function RunsPage() {
             ? decideApproval.variables?.runId
             : undefined;
     const isPendingFor = (kind: RunCommandKind | "replay") =>
-      pendingAction === kind && (wsCommand === kind ? run.id === selectedRun?.id : pendingRunId === run.id);
+      pendingAction === kind && pendingRunId === run.id;
     const busy = pendingAction !== null;
     return [
       {
@@ -805,9 +763,6 @@ export function RunsPage() {
                 run={selectedRun}
                 agentName={agentNameOf(selectedRun.agent_id)}
                 actions={runActions(selectedRun)}
-                streamMode={streamMode}
-                onStreamModeChange={setStreamMode}
-                websocketState={websocketState}
                 sseState={sseState}
                 capabilities={capabilities}
               />
