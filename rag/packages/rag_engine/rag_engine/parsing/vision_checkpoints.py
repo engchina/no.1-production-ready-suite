@@ -9,10 +9,12 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from rag_engine.models.llm import FORM_FIELD_KINDS
 from rag_engine.parsing.checkpoints import atomic_json, digest_json, file_digest
 
 # prompt以外の後処理・画像入力契約を変更した場合も版を上げて再利用を無効化する。
-VISION_CHECKPOINT_VERSION = 1
+# 2: Form の項目に種類（kind）を足した応答の契約（#2404）。
+VISION_CHECKPOINT_VERSION = 2
 
 _LOG = logging.getLogger(__name__)
 
@@ -115,6 +117,7 @@ class VisionCheckpoints:
                 and saved.get("reusable")
                 and isinstance(response, dict)
                 and saved["response_sha256"] == digest_json(response)
+                and _has_current_contract(response)
             ):
                 return response
         except (OSError, ValueError, KeyError, TypeError):
@@ -136,3 +139,15 @@ class VisionCheckpoints:
                 "updated_at": datetime.now(UTC).isoformat(),
             },
         )
+
+
+def _has_current_contract(response: dict) -> bool:
+    """今の応答の契約の field を持つ応答か。
+
+    台帳の key は版・prompt を含むが、key が一致しても（台帳の artifact を別の版から戻したなど）Form の項目に
+    種類（kind）の無い応答は使い回さず、Vision を呼び直す（#2404）。
+    """
+    fields = response.get("form_fields")
+    if fields is None:
+        return True
+    return isinstance(fields, list) and all(isinstance(item, dict) and item.get("kind") in FORM_FIELD_KINDS for item in fields)

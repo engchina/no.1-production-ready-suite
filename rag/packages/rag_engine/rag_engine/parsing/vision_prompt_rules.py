@@ -123,7 +123,8 @@ def vision_extraction_rules() -> str:
 - diagram_* は図のタイトル・読めるノード・可視の接続・経路要約（開始点、分岐条件、順序、戻り先、完了条件）。edges の source / target は nodes の名称と一致させ、方向や条件 label が不明なら接続を創作しない。
 - chart_* はグラフのタイトル・種別・軸と単位・凡例・系列・傾向。series の values は確実に読める category=value だけで、目測値を確定値にしない。
 - table_headers / table_rows / table_summary は列見出し・同じ行のセル配列・表の要約。Q&A、仕様表、変更履歴、比較表では質問と回答、変更前後、条件と結果、対象と対象外の対応関係を崩さない。対象が表全体なら表内画像も含め、独立した小画像なら周囲の表全体を転記しない。
-- form_fields は name / value / state（項目名・表示値・選択/有効状態）、form_layout は配置とグループ。対象外の構造は空文字または空配列にする。項目の説明例を抽出結果としてコピーしない。
+- form_fields は name / value / state / kind（項目名・表示値・選択/有効状態・項目の種類）、form_layout は配置とグループ。対象外の構造は空文字または空配列にする。項目の説明例を抽出結果としてコピーしない。
+- form_fields の kind は画像で見える部品の形だけで決める: ▼ などの開くボタンが付いた欄は select、文字を入れる枠は text、四角いチェックの枠は checkbox、丸い選択の印は radio、カレンダーのアイコンが付いた日付の欄は date、押す部品は button。形が読めない・どれにも当たらない場合は unknown にし、項目名や値から推測しない。
 
 3. 文脈の帰属
 3.1 対象の特定
@@ -175,6 +176,8 @@ def refine_image_retrieval_prompt(template: str) -> str:
         # 例示値を除く処理と表記が揃わず、生成説明ごとにラベルが混ざる。
         "- 入力欄、検索条件欄、ダイアログ入力欄、ファイル選択欄に既に入っている値は、原則として文書上の入力例・表示例です。実運用システムの値、現在の顧客データ、顧客固有の設定、既定値、推奨の固定値のいずれとしても扱わない。検索に必要なら `input example: field=value` または `display example: field=value` の形で項目名とセットにする。": "- 入力欄、検索条件欄、ダイアログ入力欄、ファイル選択欄に既に入っている値の扱いは共通規則 3 に従う。",
         '"visible_values": ["読める選択値、状態、日付、件数、設定値、コード、単位付き数値。項目名と値をセットで書く。事前入力済みUI値は input example: field=value または display example: field=value と明示する"],': '"visible_values": ["読める選択値、状態、日付、件数、設定値、コード、単位付き数値。項目名と値をセットで書く"],',
+        # 項目の種類（kind。#2404）の無い JSON 例。保存済みテンプレートの例も今の出力契約にそろえる。
+        '"form_fields": [{"name": "項目名", "value": "表示値。空欄なら空文字", "state": "selected / unselected / enabled / disabled / required / optional / unknown"}],': '"form_fields": [{"name": "項目名", "value": "表示値。空欄なら空文字", "state": "selected / unselected / enabled / disabled / required / optional / unknown", "kind": "select / text / checkbox / radio / date / button / unknown"}],',
     }
     result = template
     for old, new in replacements.items():

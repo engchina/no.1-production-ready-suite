@@ -1313,7 +1313,11 @@ class GuideCondition(BaseModel):
     )
     value: str | None = None
     source: str | None = Field(
-        default=None, description="user=利用者が答えた / question=質問の文から読んだ。"
+        default=None,
+        description=(
+            "user=利用者が答えた / question=質問の文から読んだ / document=回答の根拠の画面の図から"
+            "決めた。"
+        ),
     )
     handling: str | None = Field(
         default=None, description="不明のときの扱い（ask=確かめる / branch=分岐 / handoff=人へ）。"
