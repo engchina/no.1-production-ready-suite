@@ -1,6 +1,7 @@
 """図の根拠の元の画像を、短命・対象に縛った署名つきの URL で返す（#1311）。
 
-`GET /api/figures/{token}`。
+`GET /api/figures/{token}`。RAG の画面の「図を開く」（#2428）は、Cookie のセッションで同じ図を
+読む `GET /api/figures?document_id=&chunk_id=`（下の ``read_chunk_figure``）を使う。
 
 URL は Agent の backend が MCP の ``rag_read_source``（``include_image_url``）で受け取り、Agent の
 画面（RAG の Cookie を持たないブラウザ）が開く。Cookie もサービストークンも使わず、path の
@@ -24,9 +25,10 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from pr_backend_core.mcp import McpToolError
 
@@ -77,6 +79,49 @@ def _content_disposition(file_name: str | None, page: int | None) -> str:
     if not ascii_name.endswith(".png"):
         ascii_name = "figure.png"
     return f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name, safe='')}"
+
+
+@router.get("", name="read_chunk_figure", response_class=Response)
+async def read_chunk_figure(
+    request: Request,
+    document_id: Annotated[str, Query(min_length=1, max_length=128)],
+    chunk_id: Annotated[str, Query(min_length=1, max_length=512)],
+) -> Response:
+    """画面の根拠の図の画像（PNG。#2428）。Cookie のセッションの利用者の今の範囲で読む。
+
+    RAG の根拠のカード・サイドパネルの「図を開く」が読む（Agent の画面は署名つきの URL）。
+    ``rag_read_source`` と同じ見え方の条件で chunk を読み直し、保存した metadata の図の領域を
+    切り出す（利用者が渡す座標は使わない）。見えない根拠・図でない根拠は 404、古い版は 409。
+    """
+    enforce_rate_limit("search", request)
+    oracle = OracleClient()
+    try:
+        chunk = await mcp_tools.readable_chunk(oracle, document_id, chunk_id)
+        metadata = dict(chunk.metadata)
+        region = mcp_tools.figure_region(metadata)
+        crop = await mcp_tools.crop_figure(oracle, chunk, metadata, region)
+    except McpToolError as exc:
+        status = _TOOL_ERROR_STATUS.get(exc.code, exc.status or 400)
+        raise _error(status, _STALE_MESSAGE if status == 409 else exc.message) from None
+    logger.info(
+        "rag_chunk_figure_read",
+        extra={
+            "event": "rag_chunk_figure_read",
+            "document_id": document_id,
+            "chunk_id": chunk_id,
+            "byte_size": len(crop.png),
+        },
+    )
+    return Response(
+        content=crop.png,
+        media_type=mcp_tools.IMAGE_MIME_TYPE,
+        headers={
+            **FIGURE_RESPONSE_HEADERS,
+            "Content-Disposition": _content_disposition(
+                chunk.file_name, region.page if region is not None else None
+            ),
+        },
+    )
 
 
 @router.get("/{token}", name="read_figure", response_class=Response)

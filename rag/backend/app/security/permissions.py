@@ -383,6 +383,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PUT", f"{_D}/superseded-by"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/content"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/crop"): _DOCUMENT_VIEW,
+    # 根拠の図の画像（RAG の根拠のカード・サイドパネルの「図を開く」。#2428）。
+    ("GET", "/figures"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/preview-pages"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/preview-pages/{{page_number}}"): _DOCUMENT_VIEW,
     # ---- ナレッジ構築: ナレッジベース ----

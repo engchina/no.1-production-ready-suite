@@ -46,6 +46,24 @@ export function citationSourceUrl(metadata: RetrievedChunk["metadata"]): string 
   return url.startsWith("https://") ? url : null;
 }
 
+/** 図の根拠（#2428）。`page` は頁（「3」「3-5」。無ければ空）、`section` は章節（無ければ空）。 */
+export interface CitationFigure {
+  /** AI（VLM）が図を読んだ説明か（OCR の文字なら false）。RAG の MCP の `evidence_type` と同じ判定。 */
+  aiDescription: boolean;
+  page: string;
+  section: string;
+}
+
+/** 内容の種類が図の根拠なら、その図の情報（図でなければ null）。 */
+export function citationFigure(metadata: RetrievedChunk["metadata"]): CitationFigure | null {
+  if (stringMetadata(metadata, "content_kind") !== "figure") return null;
+  return {
+    aiDescription: stringMetadata(metadata, "figure_text_source") !== "ocr",
+    page: pageRange(metadata),
+    section: stringMetadata(metadata, "section_path") || stringMetadata(metadata, "section_title"),
+  };
+}
+
 /** citation preview link に渡す先頭 element id を安全に取り出す。 */
 export function firstCitationElementId(value: unknown): string | null {
   if (typeof value === "string" || typeof value === "number") {

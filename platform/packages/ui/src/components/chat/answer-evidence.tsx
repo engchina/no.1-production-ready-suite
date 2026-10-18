@@ -210,10 +210,25 @@ export function EvidenceCard({ item, index, labels = DEFAULT_EVIDENCE_LABELS, ac
   );
 }
 
-/** 操作の行（区切り線の下）。操作が 1 つも無いとき（閲覧だけ）は、区切り線の行を出さない。 */
+/**
+ * 操作の行（区切り線の下）。操作が 1 つも無いとき（閲覧だけ・図でない根拠で「図を開く」が何も描かないとき）は、
+ * 区切り線の行を出さない（中身のある要素が無ければ隠す）。
+ */
 function EvidenceActionRow({ children }: { children?: ReactNode }) {
   return (
-    <div className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5 empty:hidden sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+    <div className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5 not-has-[:not(:empty)]:hidden sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * 操作の行の左の組（「根拠を表示」と「図を開く」。#2428）。右の組（根拠の評価・文書の詳細など）とは行の両端に分かれる。
+ * 中身が無ければ出さない。
+ */
+function EvidenceLeadingActions({ children }: { children?: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2 not-has-[:not(:empty)]:hidden sm:flex-row sm:flex-wrap sm:items-center">
       {children}
     </div>
   );
@@ -460,7 +475,12 @@ export interface EvidenceListProps {
    * 「根拠を表示」（{@link EvidenceSourceButton}）を出す。開けない画面（文書を読む権限が無い等）では渡さない。
    */
   onOpenSource?: (index: number) => void;
-  /** 根拠ごとの、開くボタンの後ろの操作（根拠の評価・図を開くなど。{@link EvidenceCardProps.actions}）。 */
+  /**
+   * 図の根拠の「図を開く」（{@link EvidenceFigureAction}。#2428）。「根拠を表示」のすぐ後ろ（操作の行の左の組）に
+   * 置く。図の根拠でなければ null を返す。
+   */
+  renderFigure?: (item: EvidenceListItem, index: number) => ReactNode;
+  /** 根拠ごとの、操作の行の右の組の操作（根拠の評価など。{@link EvidenceCardProps.actions}）。 */
   renderActions?: (item: EvidenceListItem, index: number) => ReactNode;
   /** 根拠ごとの、カードの最後に置くもの（ダイアログなど）。 */
   renderExtra?: (item: EvidenceListItem, index: number) => ReactNode;
@@ -509,6 +529,7 @@ export function EvidenceList({
   items,
   labels = DEFAULT_EVIDENCE_LABELS,
   onOpenSource,
+  renderFigure,
   renderActions,
   renderExtra,
   idPrefix = "evidence",
@@ -517,6 +538,7 @@ export function EvidenceList({
   return (
     <ul className={EVIDENCE_LIST_CLASS} data-testid={testId}>
       {items.map((item, index) => {
+        const figure = renderFigure?.(item, index);
         const extraActions = renderActions?.(item, index);
         return (
           <EvidenceCard
@@ -525,16 +547,19 @@ export function EvidenceList({
             index={index}
             labels={labels}
             actions={
-              onOpenSource || extraActions ? (
+              onOpenSource || figure || extraActions ? (
                 <>
-                  {onOpenSource ? (
-                    <EvidenceSourceButton
-                      fileName={item.fileName}
-                      onOpen={() => onOpenSource(index)}
-                      labels={labels}
-                      data-testid={`${idPrefix}-source-${index}`}
-                    />
-                  ) : null}
+                  <EvidenceLeadingActions>
+                    {onOpenSource ? (
+                      <EvidenceSourceButton
+                        fileName={item.fileName}
+                        onOpen={() => onOpenSource(index)}
+                        labels={labels}
+                        data-testid={`${idPrefix}-source-${index}`}
+                      />
+                    ) : null}
+                    {figure}
+                  </EvidenceLeadingActions>
                   {extraActions}
                 </>
               ) : undefined
@@ -567,6 +592,7 @@ export function AnswerEvidence({
   idPrefix = "answer",
   labels = DEFAULT_EVIDENCE_LABELS,
   onOpenSource,
+  renderFigure,
   renderActions,
   renderExtra,
   listTestId,
@@ -589,6 +615,7 @@ export function AnswerEvidence({
         items={items}
         labels={labels}
         onOpenSource={onOpenSource}
+        renderFigure={renderFigure}
         renderActions={renderActions}
         renderExtra={renderExtra}
         idPrefix={idPrefix}
@@ -612,7 +639,9 @@ export interface EvidenceSourceSheetProps {
    * （見出し「検索で見つかった箇所」）。
    */
   kind?: "answer" | "search";
-  /** 要約の下の操作の行（文書の詳細を別タブで開く・図を開くなど）。 */
+  /** 図の根拠の「図を開く」（{@link EvidenceFigureAction}。#2428）。要約の下の操作の行の左に置く（カードと同じ並び）。 */
+  figure?: ReactNode;
+  /** 要約の下の操作の行の右の組（文書の詳細を別タブで開くなど）。 */
   actions?: ReactNode;
   /**
    * 要約の下に置く、製品の原文のプレビュー（RAG のページ画像のビューアなど）。渡すと抜粋を 3 行に畳み、
@@ -638,6 +667,7 @@ export function EvidenceSourceSheet({
   index,
   labels = DEFAULT_EVIDENCE_LABELS,
   kind = "answer",
+  figure,
   actions,
   children,
   returnFocusRef,
@@ -667,7 +697,10 @@ export function EvidenceSourceSheet({
             data-testid="evidence-source-summary"
           >
             <EvidenceSummaryBody item={item} index={index} labels={labels} excerpt={hasPreview ? "clamp" : "full"} />
-            <EvidenceActionRow>{actions}</EvidenceActionRow>
+            <EvidenceActionRow>
+              <EvidenceLeadingActions>{figure}</EvidenceLeadingActions>
+              {actions}
+            </EvidenceActionRow>
           </section>
           {hasPreview ? (
             <section
