@@ -1087,8 +1087,8 @@ for (const width of [1280, 375]) {
       "通常より時間がかかっています。",
     );
     await expect(progress.getByRole("status")).toHaveText("SQL を生成しています");
-    const completed = progress.getByTestId("sql-chat-progress-completed");
-    await expect(completed).toHaveText("2 ステップ完了");
+    const completed = progress.getByTestId("sql-chat-progress-running");
+    await expect(completed).toContainText("処理中（2 ステップ完了）");
     // 動くスピナーは今の段階の 1 つだけ（messaging.md §3.7）。
     await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
     // 完了した段階の一覧は既定で開く（#2096。行が増えていく）。
@@ -1132,7 +1132,7 @@ for (const width of [1280, 375]) {
     });
     await expect(current).toHaveAttribute("data-step-id", "format_results");
     await expect(current).toContainText("結果をまとめています");
-    await expect(completed).toHaveText("5 ステップ完了");
+    await expect(completed).toContainText("処理中（5 ステップ完了）");
     expect(await seconds()).toBeGreaterThanOrEqual(before);
     await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
     // 送信・開始待ち・生成・結果の整形の段階を通る間、経過時間は減らない。記録（100ms ごと）が

@@ -48,6 +48,7 @@ RAG が文書と質問を読むときの「言語の書き方」（数・単位�
   - **検証と hash**（`build_pack`）: 種類ごとに形を確かめ、内容の hash を付ける。正規表現の組み立ては使う側が hash ごとに cache する（例: `reference_grammar.current_grammar`）。
   - **今の言語資源**（`current_pack()` / `bind_pack(pack)`。`contextvars`）: 取込の job・回答の要求の間だけ束ねる。束ねていなければ組み込みのパック。
 - 数の読み方（漢数字・位取り）、単位の正規表現、文末の判定などの**関数**は `rag_parser_core.language` に 1 つだけ置き、各モジュールの重複を消す（段 1b）。
+  - ローマ数字（`numbers.roman_digits`。`parse_roman` / `format_roman`。標準の書き方だけを読む）も同じ場所に置き、頁番号のフッターの論理頁と柱の繰り返しの判定が漢数字と一緒に使う（#2289。[rag-engine.md](./rag-engine.md)「頁番号のフッターの論理頁」）。
 
 ### 3.2 保存と重ね合わせ
 

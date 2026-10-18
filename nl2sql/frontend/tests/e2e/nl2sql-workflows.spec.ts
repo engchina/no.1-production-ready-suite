@@ -12292,6 +12292,40 @@ for (const pageId of ["comment-management", "annotation-management", "domain-man
     await expect(page.getByText("選択対象は未確認です")).toHaveCount(0);
     await expect(inputPanel.getByRole("button", { name: "SQL 生成", exact: true })).toBeEnabled();
   });
+
+  test(`${pageId} はヘッダーの直下に選択対象の状態の Banner を出さず、未取得の間は実行の理由をボタンの直上に出す (#2314)`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await mockNl2SqlApi(page);
+    await page.goto(`/${pageId}`);
+    const expectNoTargetBanner = async () => {
+      await expect(page.getByText("選択対象は未確認です")).toHaveCount(0);
+      await expect(page.getByText("参照情報は取得時点の内容です")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "選択対象の最新情報を取得" })).toHaveCount(0);
+    };
+
+    // 対象を選んだだけ（詳細は未取得）で「SQL実行」へ移っても Banner は出さない。実行は押せず、理由は確認語の欄の説明に出す。
+    await page.getByRole("option", { name: /INVOICES/ }).check();
+    await page.getByRole("tab", { name: "SQL実行", exact: true }).click();
+    const executePanel = page.locator(`#${pageId}-panel-execute`);
+    await expectNoTargetBanner();
+    await executePanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)").fill("COMMENT ON TABLE APP.INVOICES IS 'x'");
+    await executePanel.getByPlaceholder("ADMIN_EXECUTE").fill("ADMIN_EXECUTE");
+    await expect(executePanel.getByText("対象情報を取得し、ADMIN_EXECUTE を入力すると実行できます。")).toBeVisible();
+    await expect(executePanel.getByRole("button", { name: "SQL 実行", exact: true })).toBeDisabled();
+    await page.screenshot({ path: testInfo.outputPath(`${pageId}-unverified-no-banner.png`) });
+
+    // 詳細を取得した後も Banner と取得時刻の表示は出さない。説明は確認語の案内に戻る。
+    await page.getByRole("tab", { name: "対象選択", exact: true }).click();
+    await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+    const inputPanel = page.locator(`#${pageId}-panel-input`);
+    await expect(inputPanel.getByLabel("構造情報")).toHaveValue(/APP\.INVOICES/);
+    await expectNoTargetBanner();
+    await page.getByRole("tab", { name: "SQL実行", exact: true }).click();
+    await expectNoTargetBanner();
+    await expect(executePanel.getByText("ADMIN_EXECUTE を入力すると実行できます。", { exact: true })).toBeVisible();
+    await expect(executePanel.getByText("対象情報を取得し、ADMIN_EXECUTE を入力すると実行できます。")).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`${pageId}-fetched-no-banner.png`) });
+    await expectNoHorizontalScroll(page);
+  });
 }
 
 test("JOIN WHERE and metadata read result branches replace their result areas with shared skeletons", { tag: "@responsive" }, async ({ page }) => {

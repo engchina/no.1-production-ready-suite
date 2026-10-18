@@ -57,6 +57,9 @@ class TextPatterns:
     # 漢数字の字 → 値、位取りの字 → 倍率、元年の字 → 値。
     kanji_digits: dict[str, int]
     kanji_multipliers: dict[str, int]
+    # ローマ数字の字の集合（英字の大小を区別しない正規表現で使う）と、字（小文字）→ 値。
+    roman: str
+    roman_digits: dict[str, int]
     first_year_words: tuple[str, ...]
     # 番号の前置き（第）と、編・章・節・款・目・条・項・号の単位。
     prefix: str
@@ -107,6 +110,7 @@ def text_patterns(pack: LanguagePack | None = None) -> TextPatterns:
         return cached
     digits = _values(pack, "kanji_digits")
     multipliers = _values(pack, "kanji_multipliers")
+    roman_digits = {char.casefold(): value for char, value in _values(pack, "roman_digits").items()}
     first_year = pack.words("numbers", "first_year_words")
     kanji_chars = "".join(dict.fromkeys([*digits, *multipliers]))
     kanji = f"[{re.escape(kanji_chars)}]" if kanji_chars else NEVER
@@ -128,6 +132,8 @@ def text_patterns(pack: LanguagePack | None = None) -> TextPatterns:
         kanji=kanji,
         kanji_digits=digits,
         kanji_multipliers=multipliers,
+        roman=f"[{re.escape(''.join(roman_digits))}]" if roman_digits else NEVER,
+        roman_digits=roman_digits,
         first_year_words=first_year,
         prefix=alternation(pack.words("numbers", "number_prefixes")),
         era=alternation(pack.words("numbers", "era_names")),
@@ -185,6 +191,52 @@ def parse_number(text: str, pack: LanguagePack | None = None) -> int | None:
     return total + section + current
 
 
+def _roman_tokens(digits: dict[str, int]) -> list[tuple[str, int]]:
+    """ローマ数字を書く字と減算の組（「iv」= 4）を、値の大きい順に並べる。
+
+    減算の組は、10 の冪の字をその 5 倍・10 倍の字の前に置くもの（i → v・x、x → l・c）。
+    """
+    chars = sorted(digits.items(), key=lambda item: item[1])
+    tokens = [(char, value) for char, value in chars]
+    for small, small_value in chars:
+        if str(small_value).strip("0") != "1":
+            continue
+        for large, large_value in chars:
+            if large_value in (small_value * 5, small_value * 10):
+                tokens.append((small + large, large_value - small_value))
+    return sorted(tokens, key=lambda item: item[1], reverse=True)
+
+
+def format_roman(value: int, pack: LanguagePack | None = None) -> str:
+    """数をローマ数字（小文字）にする。書けない数（0 以下・字が無い）は空文字。"""
+    tokens = _roman_tokens(text_patterns(pack).roman_digits)
+    if value <= 0 or not tokens:
+        return ""
+    parts: list[str] = []
+    for token, number in tokens:
+        count, value = divmod(value, number)
+        parts.append(token * count)
+    return "".join(parts) if value == 0 else ""
+
+
+def parse_roman(text: str, pack: LanguagePack | None = None) -> int | None:
+    """ローマ数字を数にする（英字の大小は区別しない）。
+
+    標準の書き方（「iv」「xiv」。「iiii」「vx」は読まない）だけを読み、英語の語を数と取り違えにくくする。
+    読めなければ None。
+    """
+    cleaned = text.strip().casefold()
+    digits = text_patterns(pack).roman_digits
+    if not cleaned or any(char not in digits for char in cleaned):
+        return None
+    total = 0
+    for index, char in enumerate(cleaned):
+        value = digits[char]
+        following = digits[cleaned[index + 1]] if index + 1 < len(cleaned) else 0
+        total += -value if value < following else value
+    return total if total > 0 and format_roman(total, pack) == cleaned else None
+
+
 def format_kanji_number(value: int, pack: LanguagePack | None = None) -> str:
     """数を位取りの漢数字にする（「二十八」「百四」「千二百」「三万五千」）。字は言語資源の値の最初の字。"""
     patterns = text_patterns(pack)
@@ -223,11 +275,13 @@ def format_kanji_number(value: int, pack: LanguagePack | None = None) -> str:
 __all__ = [
     "NEVER",
     "format_kanji_number",
+    "format_roman",
     "TextPatterns",
     "alternation",
     "char_class",
     "numbered",
     "parse_number",
+    "parse_roman",
     "range_class",
     "text_patterns",
 ]

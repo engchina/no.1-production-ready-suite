@@ -155,7 +155,7 @@ for (const viewport of VIEWPORTS) {
       log.step("plan", "done").step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search" } });
       await expect(current).toHaveAttribute("data-step-id", "tool:rag__rag_search");
       await expect(current).toContainText("ツール rag__rag_search を呼んでいます");
-      await expect(turn.getByTestId("chat-progress-completed")).toHaveText("1 ステップ完了");
+      await expect(turn.getByTestId("chat-progress-running")).toContainText("処理中（1 ステップ完了）");
       await page.screenshot({ path: testInfo.outputPath(`progress-tool-${viewport.name}-${theme}.png`) });
 
       // 3. 承認待ち。段階は承認待ちで、承認の Banner も出る。

@@ -552,8 +552,8 @@ def _merge_section_path_sources(children: Sequence[DocumentChunk]) -> list[str]:
     return [sources.get(item, SECTION_HEADER_HEADING_SOURCE) for item in merged]
 
 
-def _merge_logical_page_labels(children: Sequence[DocumentChunk]) -> dict[str, int]:
-    labels: dict[str, int] = {}
+def _merge_logical_page_labels(children: Sequence[DocumentChunk]) -> dict[str, int | str]:
+    labels: dict[str, int | str] = {}
     for child in children:
         for page, label in ((child.metadata.get("layout") or {}).get("logical_page_labels") or {}).items():
             labels[str(page)] = label

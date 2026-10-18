@@ -269,7 +269,7 @@ for (const viewport of [
     await expect(current).toContainText("文書の検索", { timeout: 4_000 });
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
     // 終わった工程は一覧に増えていく（既定で開く）。
-    await expect(page.getByTestId("search-run-progress-completed")).toHaveText("1 ステップ完了");
+    await expect(page.getByTestId("search-run-progress-running")).toContainText("処理中（1 ステップ完了）");
     await expect(progress.locator("li").filter({ hasText: "質問の条件の読み取り" })).toContainText("1.5 秒");
     // 検索のボタンは実行中に「停止」になりスピナーを出さないため、動くスピナーは今の工程の 1 つだけ（#413）。
     await expect(progress.locator("svg.animate-spin")).toHaveCount(1);
@@ -637,7 +637,7 @@ for (const viewport of [
     await expect(current).toContainText("関係する文書を探しています", {
       timeout: 4_000,
     });
-    await expect(page.getByTestId("chat-answer-progress-completed")).toHaveText("1 ステップ完了");
+    await expect(page.getByTestId("chat-answer-progress-running")).toContainText("処理中（1 ステップ完了）");
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
     await progress.scrollIntoViewIfNeeded();
     await page.screenshot({
