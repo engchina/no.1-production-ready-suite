@@ -1119,7 +1119,7 @@ function SqlChatTurn({
         />
       ) : null}
       <ChatAnswer>
-          {/* 処理の段階（#1145）。実行中は今の段階、完了後は回答の上に「処理の経過」の一覧（既定で開く。#2096）。 */}
+          {/* 処理の段階（#1145）。実行中は今の段階と開いた一覧、完了後は回答の上に「処理の経過」の 1 行（押すと開く。3 製品で同じ。#2265）。 */}
           <ChatProgress
             {...progress.progressProps}
             startedAt={sentAtMs}
