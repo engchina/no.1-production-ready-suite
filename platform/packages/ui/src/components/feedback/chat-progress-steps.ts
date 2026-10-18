@@ -1,3 +1,4 @@
+import { sameRunStepDetails } from "../data/run-step-details";
 import type { ChatProgressStep, ChatProgressStepStatus } from "./chat-progress";
 
 /**
@@ -51,7 +52,8 @@ function sameStep(a: ChatProgressStep, b: ChatProgressStep): boolean {
     a.detail === b.detail &&
     a.durationMs === b.durationMs &&
     a.meta === b.meta &&
-    a.level === b.level
+    a.level === b.level &&
+    sameRunStepDetails(a.details, b.details)
   );
 }
 

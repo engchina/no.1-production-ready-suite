@@ -79,7 +79,12 @@ def answer_verification(diagnostics: Mapping[str, Any] | None) -> RunVerificatio
 
 
 def _answer_steps(diagnostics: Mapping[str, Any] | None) -> list[dict[str, object]]:
-    """回答フローの各工程（名前・状態・秒・LLM の呼び出し回数）。既存の記録（execution_steps）。"""
+    """回答フローの各工程（名前・状態・秒・LLM の回数・詳細の行）。既存の記録（execution_steps）。
+
+    詳細の行（``details``。選んだ条・検索文・件数など）は回答の記録で上限まで切った値を残す（実行の
+    詳細の処理の経過で段を開いて見る。回答の記録の保存期間が過ぎても見えるよう、実行の記録にも持つ。
+    #2294）。
+    """
     steps = diagnostics.get("execution_steps") if diagnostics else None
     result: list[dict[str, object]] = []
     for step in steps if isinstance(steps, list) else []:
@@ -91,6 +96,11 @@ def _answer_steps(diagnostics: Mapping[str, Any] | None) -> list[dict[str, objec
                 "status": str(step.get("status") or ""),
                 "elapsed_seconds": step.get("elapsed_seconds"),
                 "llm_calls": step.get("llm_calls"),
+                **(
+                    {"details": [line for line in details if isinstance(line, str)]}
+                    if isinstance(details := step.get("details"), list) and details
+                    else {}
+                ),
             }
         )
     return result

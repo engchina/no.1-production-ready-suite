@@ -29,6 +29,90 @@
   "absent_fields": "omitted",
   "event": {
     "$defs": {
+      "ChatProgressDetailCode": {
+        "additionalProperties": false,
+        "description": "詳細の長い値（SQL・ツールの引数と結果の JSON）。画面は箱の中でスクロールして出す。",
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 81,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Label"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "enum": [
+                  "json",
+                  "sql",
+                  "text"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Language"
+          },
+          "text": {
+            "maxLength": 4001,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "ChatProgressDetailCode",
+        "type": "object"
+      },
+      "ChatProgressDetailField": {
+        "additionalProperties": false,
+        "description": "詳細の見出しと値（エンジン・行数・選んだ条件など）。",
+        "properties": {
+          "label": {
+            "maxLength": 81,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 1001,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          },
+          "mono": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "識別子・SQL の断片などを等幅で出す。",
+            "title": "Mono"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "title": "ChatProgressDetailField",
+        "type": "object"
+      },
       "ChatProgressParamValue": {
         "anyOf": [
           {
@@ -44,6 +128,51 @@
             "type": "boolean"
           }
         ]
+      },
+      "ChatProgressStepDetails": {
+        "additionalProperties": false,
+        "description": "段を開いて見る詳細（3 製品共通。画面の `RunStepDetails` と同じ形。#2294）。\n\n検証の前に、上限を超えた値・要素を切り（`truncated` を付ける）、秘密らしい値を伏せる。保存済みの\n記録も同じ規則で読み直すので、長すぎる記録でイベントが捨てられることはない。",
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/$defs/ChatProgressDetailField"
+            },
+            "maxItems": 20,
+            "title": "Fields",
+            "type": "array"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Lines",
+            "type": "array"
+          },
+          "code": {
+            "items": {
+              "$ref": "#/$defs/ChatProgressDetailCode"
+            },
+            "maxItems": 3,
+            "title": "Code",
+            "type": "array"
+          },
+          "truncated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "送る側で長さを切った。",
+            "title": "Truncated"
+          }
+        },
+        "title": "ChatProgressStepDetails",
+        "type": "object"
       },
       "ChatProgressStepEvent": {
         "additionalProperties": false,
@@ -167,6 +296,18 @@
             "default": null,
             "description": "画面が名前・補足を組み立てる値（ツール名・件数など）。",
             "title": "Params"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ChatProgressStepDetails"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "段を開いて見る詳細（見出しと値・行・SQL や JSON。上限で切り、秘密を伏せる）。"
           }
         },
         "required": [
@@ -272,6 +413,90 @@
   },
   "page": {
     "$defs": {
+      "ChatProgressDetailCode": {
+        "additionalProperties": false,
+        "description": "詳細の長い値（SQL・ツールの引数と結果の JSON）。画面は箱の中でスクロールして出す。",
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 81,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Label"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "enum": [
+                  "json",
+                  "sql",
+                  "text"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Language"
+          },
+          "text": {
+            "maxLength": 4001,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "ChatProgressDetailCode",
+        "type": "object"
+      },
+      "ChatProgressDetailField": {
+        "additionalProperties": false,
+        "description": "詳細の見出しと値（エンジン・行数・選んだ条件など）。",
+        "properties": {
+          "label": {
+            "maxLength": 81,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 1001,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          },
+          "mono": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "識別子・SQL の断片などを等幅で出す。",
+            "title": "Mono"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "title": "ChatProgressDetailField",
+        "type": "object"
+      },
       "ChatProgressParamValue": {
         "anyOf": [
           {
@@ -287,6 +512,51 @@
             "type": "boolean"
           }
         ]
+      },
+      "ChatProgressStepDetails": {
+        "additionalProperties": false,
+        "description": "段を開いて見る詳細（3 製品共通。画面の `RunStepDetails` と同じ形。#2294）。\n\n検証の前に、上限を超えた値・要素を切り（`truncated` を付ける）、秘密らしい値を伏せる。保存済みの\n記録も同じ規則で読み直すので、長すぎる記録でイベントが捨てられることはない。",
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/$defs/ChatProgressDetailField"
+            },
+            "maxItems": 20,
+            "title": "Fields",
+            "type": "array"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Lines",
+            "type": "array"
+          },
+          "code": {
+            "items": {
+              "$ref": "#/$defs/ChatProgressDetailCode"
+            },
+            "maxItems": 3,
+            "title": "Code",
+            "type": "array"
+          },
+          "truncated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "送る側で長さを切った。",
+            "title": "Truncated"
+          }
+        },
+        "title": "ChatProgressStepDetails",
+        "type": "object"
       },
       "ChatProgressStepEvent": {
         "additionalProperties": false,
@@ -410,6 +680,18 @@
             "default": null,
             "description": "画面が名前・補足を組み立てる値（ツール名・件数など）。",
             "title": "Params"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ChatProgressStepDetails"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "段を開いて見る詳細（見出しと値・行・SQL や JSON。上限で切り、秘密を伏せる）。"
           }
         },
         "required": [

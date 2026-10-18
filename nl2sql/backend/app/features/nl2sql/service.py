@@ -52,8 +52,10 @@ from pr_backend_core.chat_progress import (
     ChatProgressPage,
     ChatProgressParamValue,
     ChatProgressRecorder,
+    ChatProgressStepDetails,
     ChatProgressStepEvent,
     ChatProgressTerminalEvent,
+    chat_progress_details,
     chat_progress_page,
     dump_chat_progress_events,
     parse_chat_progress_events,
@@ -4041,16 +4043,20 @@ def _record_job_progress_transition(
     completed_params: JobProgressParams | None,
     running_stage: str | None,
     running_params: JobProgressParams | None,
+    completed_details: ChatProgressStepDetails | None = None,
 ) -> None:
-    """段階の終了（完了・失敗・未実行）と次の段階の開始。補足の値は `params`。"""
+    """段階の終了（完了・失敗・未実行）と次の段階の開始。補足の値は `params`、段を開いて見る詳細は
+    `completed_details`（#2294）。"""
 
     def record(recorder: ChatProgressRecorder) -> None:
         if completed_stage is not None:
             status = _JOB_PROGRESS_FINISH_STATUS.get(completed_status, "done")
-            if completed_params is None:
-                recorder.finish(completed_stage, status)
-            else:
-                recorder.finish(completed_stage, status, params=completed_params)
+            extra: dict[str, Any] = {}
+            if completed_params is not None:
+                extra["params"] = completed_params
+            if completed_details is not None:
+                extra["details"] = completed_details
+            recorder.finish(completed_stage, status, **extra)
         if running_stage is not None:
             if running_params is None:
                 recorder.start(running_stage)
@@ -4108,6 +4114,71 @@ def _job_progress_tables_params(tables: Sequence[str]) -> JobProgressParams | No
         "tables": ", ".join(names[:_JOB_PROGRESS_TABLES_SHOWN]),
         "table_count": len(names),
     }
+
+
+# 段を開いて見る詳細（#2294）。利用者がチャットで見られる値（書き換えた質問・SQL・安全性の
+# 確認の結果・行数）だけを入れる（接続・資格情報・Oracle のエラーの全文は入れない。失敗の原因は
+# 回答の場所の Banner が出す）。長さは `ChatProgressStepDetails` が上限で切り、秘密を伏せる。
+
+
+def _job_progress_prepare_details(
+    question: str, rewritten: str, row_limit: int | None
+) -> ChatProgressStepDetails | None:
+    """準備の段階の詳細: 書き換えた質問（元と違うときだけ）と行数の上限。"""
+
+    changed = rewritten.strip() and rewritten.strip() != question.strip()
+    return chat_progress_details(
+        fields=[
+            ("生成に使った質問", rewritten.strip() if changed else None),
+            ("取得する行数の上限", row_limit),
+        ]
+    )
+
+
+def _job_progress_generate_details(generated: GeneratedSql) -> ChatProgressStepDetails | None:
+    """SQL の生成の段階の詳細: 生成した SQL と、別の方法に切り替えた理由。"""
+
+    return chat_progress_details(
+        fields=[("切り替えた理由", generated.fallback_reason or None)],
+        code=[("生成した SQL", generated.generated_sql, "sql")],
+    )
+
+
+def _job_progress_safety_details(safety: SafetyReport) -> ChatProgressStepDetails | None:
+    """安全性の確認の段階の詳細: 結果・遮断の理由・参照した表と列・警告。"""
+
+    if not safety.safety_checked:
+        result = "確認を省略"
+    elif safety.is_safe:
+        result = "安全"
+    else:
+        result = "遮断"
+    tables = [name for name in safety.referenced_tables if name]
+    columns = [name for name in safety.referenced_columns if name]
+    return chat_progress_details(
+        fields=[
+            ("結果", result),
+            ("遮断の理由", safety.blocked_reason or None),
+            ("省略の理由", safety.safety_check_skip_reason or None),
+            ("参照した表", ", ".join(tables) or None, True),
+            ("参照した列", ", ".join(columns) or None, True),
+            ("適用した行数の上限", safety.row_limit_applied or None),
+        ],
+        lines=[warning for warning in safety.warnings if warning],
+    )
+
+
+def _job_progress_execute_details(results: QueryResults) -> ChatProgressStepDetails | None:
+    """SQL の実行の段階の詳細: 取得した行数・列数と、上限で打ち切ったか。"""
+
+    columns = len(results.columns)
+    return chat_progress_details(
+        fields=[
+            ("取得した行数", f"{results.total:,} 行"),
+            ("列数", f"{columns:,} 列" if columns else None),
+            ("続きの行", "あり（上限で打ち切り）" if results.has_more else None),
+        ]
+    )
 
 
 def _job_safety_check_status(safety: SafetyReport) -> JobStepStatus:
@@ -8336,6 +8407,7 @@ class Nl2SqlService:
         running_stage: str | None = None,
         completed_params: JobProgressParams | None = None,
         running_params: JobProgressParams | None = None,
+        completed_details: ChatProgressStepDetails | None = None,
     ) -> None:
         """実処理と UI の段階表示を同じ job snapshot 上で進める。
 
@@ -8386,6 +8458,7 @@ class Nl2SqlService:
                 completed_params=completed_params,
                 running_stage=running_stage,
                 running_params=running_params,
+                completed_details=completed_details,
             )
             if job.timing is not None:
                 job.timing = job.timing.model_copy(
@@ -22187,6 +22260,9 @@ class Nl2SqlService:
             running_stage="generate_sql",
             # 生成の段階の補足は生成方法（画面が名前に変える）。
             running_params={"engine": request.engine.value},
+            completed_details=_job_progress_prepare_details(
+                request.generation_question, rewritten, row_limit
+            ),
         )
 
         self._raise_if_job_cancelled(job_id)
@@ -22215,6 +22291,7 @@ class Nl2SqlService:
             completed_stage="generate_sql",
             elapsed_ms=stage_elapsed,
             running_stage="safety_check",
+            completed_details=_job_progress_generate_details(generated),
         )
 
         self._raise_if_job_cancelled(job_id)
@@ -22241,6 +22318,7 @@ class Nl2SqlService:
             completed_params=_job_progress_safety_params(analysis.safety)
             if analysis.safety.is_safe
             else None,
+            completed_details=_job_progress_safety_details(analysis.safety),
         )
 
         self._raise_if_job_cancelled(job_id)
@@ -22318,6 +22396,11 @@ class Nl2SqlService:
                     chat_execution.results.total if chat_execution is not None else results.total
                 )
             }
+            if execute_status == JobStepStatus.DONE
+            else None,
+            completed_details=_job_progress_execute_details(
+                chat_execution.results if chat_execution is not None else results
+            )
             if execute_status == JobStepStatus.DONE
             else None,
         )

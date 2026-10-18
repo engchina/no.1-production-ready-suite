@@ -122,6 +122,26 @@ test("完了したジョブは参照した表と取得した行数を補足す�
   assert.equal(few[4].detail, undefined);
 });
 
+test("backend の段の詳細（生成した SQL・安全性の確認の結果）をそのまま段を開いて見る詳細にする（#2294）", () => {
+  const list = events({ queue: { status: "done" }, generate_sql: { status: "done", params: { engine: "enterprise_ai_direct" } } });
+  const details = { code: [{ label: "生成した SQL", language: "sql" as const, text: "SELECT 1 FROM DUAL" }] };
+  list.push({
+    schema_version: 1,
+    seq: list.length + 1,
+    target_id: "j1",
+    attempt: 0,
+    emitted_at: created,
+    type: "step",
+    step_id: "generate_sql",
+    status: "done",
+    params: { engine: "enterprise_ai_direct" },
+    details,
+  });
+  const steps = view(list);
+  assert.deepEqual(steps[2].details, details);
+  assert.equal(steps[1].details, undefined);
+});
+
 test("失敗した段階は「〜できませんでした」、未実行の段階は名詞", () => {
   const steps = view(
     events(

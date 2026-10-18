@@ -22,6 +22,8 @@ import {
   runStatusIcon,
   runStatusVariant,
   runTimelineBars,
+  runStepDetailsJson,
+  hasRunStepDetails,
   type RunHistoryItem,
   type RunTimelineStep,
 } from "../src";
@@ -395,6 +397,95 @@ describe("RunTimeline", () => {
     expect(container.textContent).toContain("引数と結果");
     const region = document.getElementById(buttons[0].getAttribute("aria-controls") ?? "");
     expect(region?.hidden).toBe(false);
+  });
+});
+
+describe("RunTimeline の段の詳細（#2294）", () => {
+  const sql = "SELECT A, B FROM T1 WHERE C = 1";
+
+  it("詳細のある段だけに開閉のボタンを付け、既定で閉じ、開くと見出しと値・行・コードの箱・省略の印を出す", () => {
+    render(
+      <RunTimeline
+        steps={[
+          { id: "plain", label: "準備", status: "done", durationMs: 100 },
+          { id: "empty", label: "空の詳細", status: "done", durationMs: 100, details: { fields: [], lines: [""] } },
+          {
+            id: "gen",
+            label: "SQL を生成しました",
+            status: "done",
+            durationMs: 900,
+            details: {
+              fields: [{ label: "参照した表", value: "T1", mono: true }],
+              lines: ["警告の行"],
+              code: [{ label: "生成した SQL", language: "sql", text: sql }],
+              truncated: true,
+            },
+          },
+        ]}
+        stepTestIdPrefix="tl"
+        testId="timeline"
+      />
+    );
+    expect(container.querySelector("[data-testid='tl-step-plain-toggle']")).toBeNull();
+    expect(container.querySelector("[data-testid='tl-step-empty-toggle']")).toBeNull();
+    const toggle = container.querySelector<HTMLButtonElement>("[data-testid='tl-step-gen-toggle']");
+    expect(toggle).not.toBeNull();
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    const region = container.querySelector<HTMLElement>("[data-testid='tl-step-gen-details']");
+    expect(region?.id).toBe(toggle?.getAttribute("aria-controls"));
+    expect(region?.hidden).toBe(true);
+    expect(region?.textContent).toBe("");
+
+    act(() => toggle?.click());
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(region?.hidden).toBe(false);
+    expect(region?.querySelector("dt")?.textContent).toBe("参照した表");
+    expect(region?.querySelector("dd")?.className).toContain("font-mono");
+    expect(region?.querySelector("li")?.textContent).toBe("警告の行");
+    const pre = region?.querySelector("pre");
+    expect(pre?.textContent).toBe(sql);
+    expect(pre?.getAttribute("tabindex")).toBe("0");
+    expect(pre?.getAttribute("aria-label")).toBe("生成した SQL");
+    expect(pre?.getAttribute("data-language")).toBe("sql");
+    expect(pre?.className).toContain("overflow-auto");
+    expect(region?.querySelector("[data-run-step-details-truncated]")?.textContent).toContain("先頭だけ");
+
+    act(() => toggle?.click());
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(region?.hidden).toBe(true);
+  });
+
+  it("失敗した段の詳細は最初から開き、詳細と自由な中身を両方出す。印の文言は labels で変えられる", () => {
+    render(
+      <RunTimeline
+        steps={[
+          {
+            id: "tool",
+            label: "ツール",
+            status: "failed",
+            details: { fields: [{ label: "エラー", value: "失敗しました" }], truncated: true },
+            children: <p>結果の表</p>,
+          },
+        ]}
+        labels={{ stepDetailsTruncated: "一部だけ" }}
+        stepTestIdPrefix="tl"
+      />
+    );
+    expect(container.querySelector("[data-testid='tl-step-tool-toggle']")?.getAttribute("aria-expanded")).toBe("true");
+    const region = container.querySelector("[data-testid='tl-step-tool-details']");
+    expect(region?.textContent).toContain("失敗しました");
+    expect(region?.textContent).toContain("結果の表");
+    expect(region?.textContent).toContain("一部だけ");
+  });
+
+  it("JSON の整形は上限で切り、印を返す。中身の判定は空の値を数えない", () => {
+    expect(runStepDetailsJson({ a: 1 })).toEqual({ text: '{\n  "a": 1\n}', truncated: false });
+    const long = runStepDetailsJson({ text: "x".repeat(50) }, 10);
+    expect(long.truncated).toBe(true);
+    expect(long.text).toHaveLength(11);
+    expect(hasRunStepDetails(undefined)).toBe(false);
+    expect(hasRunStepDetails({ code: [{ text: "" }] })).toBe(false);
+    expect(hasRunStepDetails({ lines: ["a"] })).toBe(true);
   });
 });
 

@@ -193,6 +193,8 @@ export function answerProcessStepsFromStages(
     const meta = answerStepMeta({ llmCalls: record.llmCalls, note: record.status });
     if (meta) row.meta = meta;
     if (FAILED_STEP_STATUSES.has(record.status.trim())) row.status = "failed";
+    // 工程の詳細の行（段を開いて見る。#2294）。
+    if (record.details?.length) row.details = { lines: record.details };
   }
   return rows.map((row) => {
     const step: ChatProgressStep = { id: row.id, label: row.label, status: row.status };
@@ -200,6 +202,7 @@ export function answerProcessStepsFromStages(
     if (row.durationMs != null) step.durationMs = row.durationMs;
     if (row.meta) step.meta = row.meta;
     if (row.level) step.level = row.level;
+    if (row.details) step.details = row.details;
     return step;
   });
 }

@@ -64,6 +64,8 @@ class RunStep(BaseModel):
     status: str = ""
     elapsed_seconds: float | None = None
     llm_calls: int | None = None
+    # この工程だけの詳細の行（選んだ条・検索文・件数など。段を開いて見る。#2294）。
+    details: list[str] = Field(default_factory=list)
 
 
 class RunFeedback(BaseModel):

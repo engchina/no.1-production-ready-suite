@@ -34,6 +34,7 @@ from pr_backend_core.chat_progress import (
     ChatProgressStepEvent,
     ChatProgressTerminalEvent,
     ChatProgressTerminalStatus,
+    chat_progress_details,
     dump_chat_progress_events,
 )
 from pr_backend_core.observability import request_id_var
@@ -178,8 +179,9 @@ class ChatProgressTracker:
         """回答ができた。回答の記録の工程の値を段階に足してから、終端（完了）にする。
 
         `execution_steps` は回答の記録（`diagnostics.answer.execution_steps`）。工程名の順に段階と
-        対応させ、LLM の呼び出し回数（``llm_calls``）と結果の説明（``note``）を値に足す。実行中の
-        段階は完了になる（`complete("done")`）。
+        対応させ、LLM の呼び出し回数（``llm_calls``）と結果の説明（``note``）を値に足し、
+        工程の詳細の行（``details``。選んだ条・検索文・件数など）を段を開いて見る詳細にする
+        （#2294）。実行中の段階は完了になる（`complete("done")`）。
         """
         records: list[Mapping[str, Any]] = (
             [step for step in execution_steps if isinstance(step, Mapping)]
@@ -205,8 +207,14 @@ class ChatProgressTracker:
             note = str(record.get("status") or "").strip()
             if note not in _PLAIN_STEP_STATUSES:
                 params["note"] = note
-            if params != step.params:
-                self._recorder.update(step.step_id, params=params)
+            raw_lines = record.get("details")
+            details = chat_progress_details(
+                lines=[line for line in raw_lines if isinstance(line, str)]
+                if isinstance(raw_lines, list | tuple)
+                else ()
+            )
+            if params != step.params or details != step.details:
+                self._recorder.update(step.step_id, params=params, details=details)
         self._recorder.complete("done")
 
     def fail(self) -> None:

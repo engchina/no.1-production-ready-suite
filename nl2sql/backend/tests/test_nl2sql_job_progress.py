@@ -146,6 +146,19 @@ def test_done_chat_turn_records_every_step_and_params(jobs: Fixture) -> None:
     assert params(events, "safety_check") == {"tables": "APP.ORDERS", "table_count": 1}
     assert job.last_execution is not None
     assert params(events, "execute_sql") == {"rows": job.last_execution.row_count}
+    # 段を開いて見る詳細（#2294）: 生成した SQL・安全性の確認の結果と参照した表・取得した行数。
+    generate = fold.steps["generate_sql"].details
+    assert generate is not None and generate.code[0].language == "sql"
+    assert job.result is not None
+    assert generate.code[0].text == job.result.generated_sql
+    safety = fold.steps["safety_check"].details
+    assert safety is not None
+    assert {field.label: field.value for field in safety.fields}["結果"] == "安全"
+    assert {field.label: field.value for field in safety.fields}["参照した表"] == "APP.ORDERS"
+    execute = fold.steps["execute_sql"].details
+    assert execute is not None
+    assert execute.fields[0].label == "取得した行数"
+    assert fold.steps["queue"].details is None
     # 開始待ちは worker の開始で終わり、各段階は開始と終了の時刻を持つ。
     queue = fold.steps["queue"]
     assert queue.finished_at == datetime.fromisoformat(job.started_at or "")

@@ -370,6 +370,7 @@ export {
   parseChatProgressEvent,
   parseChatProgressEvents,
   parseChatProgressPage,
+  parseChatProgressStepDetails,
   reduceChatProgressEvents,
   type ChatProgressEvent,
   type ChatProgressEventStep,
@@ -598,6 +599,19 @@ export {
   type RunTimelineProps,
   type RunDetailLayoutProps,
 } from "./components/data/run-detail";
+export {
+  RunStepDetailsView,
+  hasRunStepDetails,
+  sameRunStepDetails,
+  runStepDetailsJson,
+  RUN_STEP_DETAILS_CODE_MAX_CHARS,
+  DEFAULT_RUN_STEP_DETAILS_LABELS,
+  type RunStepDetails,
+  type RunStepDetailField,
+  type RunStepDetailCode,
+  type RunStepDetailsLabels,
+  type RunStepDetailsViewProps,
+} from "./components/data/run-step-details";
 export {
   ListCount,
   listCountText,

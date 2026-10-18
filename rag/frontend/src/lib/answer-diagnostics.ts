@@ -101,6 +101,8 @@ export type AnswerDiagnostics = {
     status: string;
     elapsedSeconds: number | null;
     llmCalls: number;
+    /** この工程だけの詳細の行（選んだ条・検索文・件数など。#2294）。 */
+    details?: string[];
   }[];
   tree: {
     parentId: string;
@@ -168,11 +170,14 @@ export function parseAnswerDiagnostics(
     models: parseModels(raw.models),
     steps: list(raw.execution_steps).map((step) => {
       const item = record(step);
+      const details = list(item.details).filter((line): line is string => typeof line === "string" && line.length > 0);
       return {
         name: String(item.name ?? ""),
         status: String(item.status ?? ""),
         elapsedSeconds: num(item.elapsed_seconds),
         llmCalls: num(item.llm_calls) ?? 0,
+        // 工程の詳細の行（段を開いて見る。#2294）。古い記録には無い。
+        ...(details.length ? { details } : {}),
       };
     }),
     tree: list(raw.evidence_tree).map((parent) => {

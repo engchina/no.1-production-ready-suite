@@ -4395,6 +4395,8 @@ export interface RunStep {
   status: string;
   elapsed_seconds: number | null;
   llm_calls: number | null;
+  /** この工程だけの詳細の行（選んだ条・検索文・件数など。段を開いて見る。#2294）。古い記録には無い。 */
+  details?: string[];
 }
 
 export interface RunFeedback {

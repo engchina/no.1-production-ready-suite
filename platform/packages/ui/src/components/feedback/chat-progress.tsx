@@ -5,6 +5,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { operationTimestampMs } from "../../lib/operation-timing";
 import { cn } from "../../lib/utils";
 import { RunTimeline, type RunTimelineStep } from "../data/run-detail";
+import { hasRunStepDetails, type RunStepDetails } from "../data/run-step-details";
 import { Disclosure } from "../ui/disclosure";
 import { Spinner } from "../ui/spinner";
 import { formatChatProgressDuration } from "./chat-progress-format";
@@ -42,6 +43,11 @@ export interface ChatProgressStep {
   meta?: string;
   /** 入れ子の深さ（0 が最上位。1 以上は字下げする。親の工程の中の工程。最大 3 段まで字下げ）。 */
   level?: number;
+  /**
+   * 段を開いて見る詳細（見出しと値・行・SQL や JSON の箱。#2294）。中身があれば一覧の行に開閉のボタンが付き、
+   * 既定で閉じる。実行の詳細の `RunTimelineStep.details` と同じ形。
+   */
+  details?: RunStepDetails;
 }
 
 /** 文言。製品の i18n で上書きできる。 */
@@ -67,6 +73,8 @@ export interface ChatProgressLabels {
   status: Record<ChatProgressStepStatus, string>;
   /** 所要時間の表記。 */
   formatDuration: (ms: number) => string;
+  /** 段の詳細の長さを切ったときの印（#2294）。 */
+  detailsTruncated: string;
 }
 
 export { formatChatProgressDuration };
@@ -87,6 +95,7 @@ export const DEFAULT_CHAT_PROGRESS_LABELS: ChatProgressLabels = {
     skipped: "スキップ",
   },
   formatDuration: formatChatProgressDuration,
+  detailsTruncated: "長い内容は先頭だけを表示しています。",
 };
 
 export interface ChatProgressProps {
@@ -221,6 +230,7 @@ export function chatProgressTimelineStep(step: ChatProgressStep): RunTimelineSte
   if (typeof step.durationMs === "number" && Number.isFinite(step.durationMs)) result.durationMs = Math.max(0, step.durationMs);
   if (detail) result.detail = detail;
   if (step.level) result.level = step.level;
+  if (hasRunStepDetails(step.details)) result.details = step.details;
   return result;
 }
 
@@ -252,6 +262,7 @@ function StepList({
         // 時刻の無い段は所要時間を空にする（チャットの控えめな表示で「—」を並べない）。
         notRecorded: "",
         stepStatus: { ...labels.status, waiting: labels.status.running },
+        stepDetailsTruncated: labels.detailsTruncated,
       }}
       testId={testId ? `${testId}-timeline` : undefined}
     />

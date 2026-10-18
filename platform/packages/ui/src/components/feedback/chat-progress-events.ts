@@ -1,3 +1,4 @@
+import type { RunStepDetailCode, RunStepDetailField, RunStepDetails } from "../data/run-step-details";
 import type { ChatProgressStep, ChatProgressStepStatus } from "./chat-progress";
 import { CHAT_PROGRESS_STATUS_RANK } from "./chat-progress-steps";
 
@@ -56,6 +57,8 @@ export interface ChatProgressStepEvent extends ChatProgressEventBase {
   finished_at?: string;
   detail?: string;
   params?: ChatProgressParams;
+  /** 段を開いて見る詳細（見出しと値・行・SQL や JSON。backend が長さを切り、秘密らしい値を伏せる。#2294）。 */
+  details?: RunStepDetails;
 }
 
 export interface ChatProgressTerminalEvent extends ChatProgressEventBase {
@@ -102,6 +105,42 @@ function params(value: unknown): ChatProgressParams | undefined {
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
+const CODE_LANGUAGES = ["json", "sql", "text"] as const;
+
+/** 段の詳細を検証する（形の違う要素は捨てる。中身が無ければ undefined）。 */
+export function parseChatProgressStepDetails(value: unknown): RunStepDetails | undefined {
+  const source = record(value);
+  if (!source) return undefined;
+  const fields: RunStepDetailField[] = (Array.isArray(source.fields) ? source.fields : []).flatMap((item) => {
+    const field = record(item);
+    const label = text(field?.label);
+    const fieldValue = text(field?.value);
+    if (!label || !fieldValue) return [];
+    return [field?.mono === true ? { label, value: fieldValue, mono: true } : { label, value: fieldValue }];
+  });
+  const lines = (Array.isArray(source.lines) ? source.lines : []).filter(
+    (line): line is string => typeof line === "string" && line.length > 0
+  );
+  const code: RunStepDetailCode[] = (Array.isArray(source.code) ? source.code : []).flatMap((item) => {
+    const block = record(item);
+    const body = text(block?.text);
+    if (!body) return [];
+    const result: RunStepDetailCode = { text: body };
+    const label = text(block?.label);
+    if (label) result.label = label;
+    const language = CODE_LANGUAGES.find((candidate) => candidate === block?.language);
+    if (language) result.language = language;
+    return [result];
+  });
+  if (!fields.length && !lines.length && !code.length) return undefined;
+  const details: RunStepDetails = {};
+  if (fields.length) details.fields = fields;
+  if (lines.length) details.lines = lines;
+  if (code.length) details.code = code;
+  if (source.truncated === true) details.truncated = true;
+  return details;
+}
+
 /** 1 件のイベントを検証する。形の違うものは null。 */
 export function parseChatProgressEvent(value: unknown): ChatProgressEvent | null {
   const source = record(value);
@@ -136,6 +175,8 @@ export function parseChatProgressEvent(value: unknown): ChatProgressEvent | null
   if (detail) event.detail = detail;
   const values = params(source.params);
   if (values) event.params = values;
+  const details = parseChatProgressStepDetails(source.details);
+  if (details) event.details = details;
   return event;
 }
 
@@ -175,6 +216,7 @@ export interface ChatProgressEventStep {
   finishedAt?: string;
   detail?: string;
   params?: ChatProgressParams;
+  details?: RunStepDetails;
 }
 
 export interface ChatProgressEventsState {
@@ -230,6 +272,7 @@ function applyEvent(state: ChatProgressEventsState, event: ChatProgressEvent): C
   if (event.finished_at) step.finishedAt = event.finished_at;
   if (event.detail) step.detail = event.detail;
   if (event.params) step.params = event.params;
+  if (event.details) step.details = event.details;
   const steps = [...next.steps];
   if (index >= 0) steps[index] = step;
   else steps.push(step);
@@ -297,6 +340,15 @@ export interface ChatProgressStepDefinition {
   meta?: (status: ChatProgressStepStatus, params: ChatProgressParams) => string | undefined;
   /** 値から入れ子の深さ（`ChatProgressStep.level`）を作る。 */
   level?: (params: ChatProgressParams) => number | undefined;
+  /**
+   * 段の詳細（`ChatProgressStep.details`）を作る。省略時はイベントの `details` をそのまま使う（#2294）。
+   * 見出しを製品の i18n で付け直すときなどに使う。
+   */
+  details?: (
+    status: ChatProgressStepStatus,
+    params: ChatProgressParams,
+    details: RunStepDetails | undefined
+  ) => RunStepDetails | undefined;
 }
 
 /** 製品の段階の定義（`kind` → 定義）。並びは backend の記録の順（最初に出た順）。 */
@@ -325,6 +377,8 @@ export function labelChatProgressSteps(
     if (meta) result.meta = meta;
     const level = definition?.level?.(values);
     if (level) result.level = level;
+    const details = definition?.details ? definition.details(step.status, values, step.details) : step.details;
+    if (details) result.details = details;
     return result;
   });
 }
