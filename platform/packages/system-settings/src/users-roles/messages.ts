@@ -54,6 +54,8 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.archive": "アーカイブ",
   "security.roles.archiveConfirm":
     "このロールをアーカイブすると、このロール由来の権限は利用者に反映されなくなります。ユーザー自体は無効化されません。",
+  // 一覧の列（狭い）の状態のバッジ（#2282）。詳細は archivedDisabled（権限が無効なことまで）を出す。
+  "security.roles.archived": "アーカイブ済み",
   "security.roles.archivedDisabled": "アーカイブ済み・権限無効",
   "security.roles.archivedPermissionNotice":
     "このロールはアーカイブ済みです。保存済みの権限は利用者の実アクセス権には反映されません。",

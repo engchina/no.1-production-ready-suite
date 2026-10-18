@@ -746,7 +746,7 @@ export function UserManagementPage({
       key: "status",
       header: t("security.common.status"),
       sortable: true,
-      headerClassName: "w-[6.5rem]",
+      headerClassName: "w-[8rem]",
       className: "align-top",
       render: (user) => <UserStatusBadges user={user} />,
     },

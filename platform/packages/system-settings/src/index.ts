@@ -251,6 +251,7 @@ export {
 export { UserManagementPage, type UserManagementPageProps } from "./users-roles/UserManagementPage";
 export {
   RoleManagementPage,
+  RoleListStatusBadge,
   RoleStatusBadges,
   type RoleManagementPageProps,
   type RolePermissionSummary,

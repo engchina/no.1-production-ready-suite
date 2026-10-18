@@ -90,7 +90,9 @@
 
 ## 4. 分割ペイン
 
-一覧と詳細を常に並べる画面はフィードバックだけ。`src/components/layout/EntityLayout.tsx` の `RagSplitPane` が `@production-ready/ui` の `FixedSplitPane` を `storagePrefix="production-ready-rag.fixedSplitPane"` と RAG の文言（`split.*`）で包む。`splitId` は `<feature>-<view>`。分割線の初期位置は、共有部品の既定のとおり 50%（#1572）。
+共通のユーザー管理・ロール管理・権限管理（`@production-ready/system-settings` の `UserManagementPage` / `RoleManagementPage` / `RolePermissionsPage`）は共有の `ListDetailLayout` の一覧 + 詳細（#2282）。選択は URL の `?user=` / `?role=`（ロール管理の詳細の「権限管理で設定」は `?role=` を付けて権限管理を開く）、先頭の行を自動で選ばない。作成・編集は今までどおり一覧に代わる 1 枚のフォーム。製品のラッパー（`src/components/security/Security*Page.tsx`）は `listDetailStoragePrefix={RAG_LIST_DETAIL_STORAGE_PREFIX}`（`production-ready-rag.listDetail`。`EntityLayout.tsx`）を渡す。
+
+`FixedSplitPane` で一覧と詳細を常に並べる画面はフィードバックだけ。`src/components/layout/EntityLayout.tsx` の `RagSplitPane` が `@production-ready/ui` の `FixedSplitPane` を `storagePrefix="production-ready-rag.fixedSplitPane"` と RAG の文言（`split.*`）で包む。`splitId` は `<feature>-<view>`。分割線の初期位置は、共有部品の既定のとおり 50%（#1572）。
 
 | 画面 | `splitId` | 補足 |
 |---|---|---|

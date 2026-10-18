@@ -657,6 +657,7 @@ export function Pagination({ page = 1, totalPages = 1, onPageChange, summary, pa
 >   IME の変換を確定する Enter では移らない。
 > - 読み上げ: `nav`（`aria-label`）。今のページ（「2 / 5 ページ」）と範囲の外の理由は、1 つの `role="status"` で読む。
 > - 置き場所の幅（container query）が 28rem 未満では最初へ・最後へを隠す（375px・会話の履歴のパネル）。
+> - 20rem 未満（`ListDetailLayout` の一覧の列の下端）では前へ・次への文字を `sr-only` にしてアイコンだけで出す（#2282）。
 > - 1 ページ以下はページ送りを出さない。表示件数の選択があり、件数が最も少ない段より多いときだけ範囲と選択を出す
 >   （`shouldShowPageSize`）。件数そのものは `ListToolbar` の `count`（`ListCount`）が出す。
 > - `PAGE_SIZE_OPTIONS` は 10 / 25 / 50 / 100（以前は 10 / 50 / 100）。既定の表示件数 `DEFAULT_PAGE_SIZE` は 25（#1952）。`PageSizeSelect` の既定のラベルは「表示件数」、
@@ -2829,6 +2830,7 @@ const { previous, next } = adjacentListItems(items, selection.selectedId, (item)
 - 状態は `data-list-detail-layout="split" \| "single"`・`data-list-detail-view="both" \| "list" \| "detail"`・`data-list-collapsed`。
 - `useUrlSelection({ param, searchParams, setSearchParams, singlePane })` は `{ selectedId, select, clear, replace }`。`select` は 1 ペインで未選択から選ぶときだけ push、それ以外は replace。`clear` はこの画面で push して入ったなら `history.back()`、URL から直接開いたなら検索パラメータを消して replace。`replace(null)` は削除の後に選択を外す。`packages/ui` は router に依存しないので、`searchParams` / `setSearchParams` は製品が `useSearchParams()` から渡す。
 - `ListDetailPager`（`onPrevious` / `onNext` は無ければ `null`、`testId` で `-previous` / `-next`）と `adjacentListItems(items, selectedKey, getKey)` は、詳細の上端の行と `SideSheet` の `pager` で共有する。
+- 共通のユーザー・ロール・権限管理（`@production-ready/system-settings`）は `SecurityListDetail`（`users-roles/shared.tsx`）がこの部品に一覧の列（見出し・`ListToolbar`・`DataTable`・`Pagination`）と詳細を渡し、選択は `useSecurityUrlSelection`（`?user=` / `?role=`。「一覧へ戻る」の履歴の戻りは router の `navigate(-1)`）。製品は `listDetailStoragePrefix` を渡す（#2282）。
 - 単体テストは `packages/ui/tests/list-detail-layout.test.tsx`・`url-selection.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/table-management-list-detail.spec.ts`（2 ペイン・幅・開閉・↑ / ↓・1 ペインの戻るとフォーカス・1920px）。
 
 ---

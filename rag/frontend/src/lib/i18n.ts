@@ -77,8 +77,8 @@ export const ja = {
     "ロールごとに、使える画面（機能権限）と利用できる検索・回答プロファイル・ナレッジベースを設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",
   "security.permissions.listHint":
     "ロールを選ぶと、付与している機能権限の件数と利用できる検索・回答プロファイル・ナレッジベースを確認できます。",
-  // 検索欄（lg）に収まる長さ（#1891）。検索の対象の説明は listHint にある。共通の既定と同じ文言。
-  "security.permissions.searchPlaceholder": "ロール・機能権限・対象で絞り込み",
+  // 一覧の列（既定 20rem）の検索欄に収まる長さ（#1891 / #2282）。検索の対象の説明は listHint にある。共通の既定と同じ文言。
+  "security.permissions.searchPlaceholder": "ロール・権限・対象で絞り込み",
   "security.permissions.formHint":
     "機能権限と、利用できる検索・回答プロファイル・ナレッジベースを設定します。保存すると、このロールのユーザーへ次回リクエストから反映されます。",
   "security.permissions.permissionsHint":

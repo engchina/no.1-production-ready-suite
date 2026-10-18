@@ -839,8 +839,8 @@ const agentJa = {
     "ロールごとに、使える画面（機能権限）と利用できるエージェントを設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",
   "security.permissions.listHint":
     "ロールを選ぶと、付与している機能権限の件数と利用できるエージェントを確認できます。",
-  // 検索欄（lg 28rem）に収まる長さ（#1891）。
-  "security.permissions.searchPlaceholder": "ロール・権限・エージェントで絞り込み",
+  // 一覧の列（既定 20rem）の検索欄に収まる長さ（#1891 / #2282）。
+  "security.permissions.searchPlaceholder": "ロール・権限・対象で絞り込み",
   "security.permissions.formHint":
     "機能権限と、利用できるエージェントを設定します。保存すると、このロールのユーザーへ次回リクエストから反映されます。",
   "security.permissions.permissionsHint":

@@ -572,9 +572,9 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
       key: "status",
       header: t("security.common.status"),
       sortable: true,
-      headerClassName: "w-[7.5rem]",
+      headerClassName: "w-[8rem]",
       className: "align-top",
-      render: (role) => <RoleStatusBadges role={role} />,
+      render: (role) => <RoleListStatusBadge role={role} />,
     },
   ];
 
@@ -875,6 +875,21 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
         )}
       </PageBody>
     </>
+  );
+}
+
+/**
+ * 一覧の列（既定 20rem）のロールの状態（#2282）。1 つのバッジにまとめる（アーカイブ済み > 組み込み > カスタム）。
+ * 権限が無効なことは詳細の `RoleStatusBadges` と注意の Banner で示す。
+ */
+export function RoleListStatusBadge({ role }: { role: SecurityRole }) {
+  if (role.archived) return <StatusBadge variant="neutral" label={t("security.roles.archived")} />;
+  return (
+    <StatusBadge
+      icon={false}
+      variant={role.is_built_in ? "info" : "neutral"}
+      label={role.is_built_in ? t("security.roles.builtIn") : t("security.roles.custom")}
+    />
   );
 }
 

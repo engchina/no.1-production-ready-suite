@@ -69,6 +69,8 @@
 
 ### 1.2 B 型（一覧 + 詳細）
 
+共通のユーザー管理・ロール管理・権限管理（`@production-ready/system-settings` の `UserManagementPage` / `RoleManagementPage` / `RolePermissionsPage`）は共有の `ListDetailLayout` の一覧 + 詳細（#2282）。選択は URL の `?user=` / `?role=`（ロール管理の詳細の「権限管理で設定」は `?role=` を付けて権限管理を開く）、先頭の行を自動で選ばない。作成・編集は今までどおり一覧に代わる 1 枚のフォーム。製品のラッパー（`frontend/src/components/security/Security*Page.tsx`）は `listDetailStoragePrefix={AGENT_LIST_DETAIL_STORAGE_PREFIX}`（`production-ready-agent.listDetail`。`EntityLayout.tsx`）を渡す。
+
 `frontend/src/components/EntityLayout.tsx` の `AgentSplitPane` が共有 `FixedSplitPane` に `storagePrefix="production-ready-agent.fixedSplitPane"` と Agent の i18n 文言を渡す。分割線の初期位置は 50%（共有部品の既定。#1572）で、xl 未満は縦積み。
 
 | 画面 | `splitId` | 左（一覧） | 右（詳細） | 対象の操作 |

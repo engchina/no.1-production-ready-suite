@@ -43,7 +43,7 @@ import { formatMessage } from "../auth/messages";
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
 import { fieldActionRowWidthClasses } from "../oci/InputActionField";
 import { useRequestScope } from "../oci/useRequestScope";
-import { RoleStatusBadges } from "../users-roles/RoleManagementPage";
+import { RoleListStatusBadge, RoleStatusBadges } from "../users-roles/RoleManagementPage";
 import { RoleNameRowTitleButton, roleDisplayName } from "../users-roles/RoleNameBadges";
 import {
   SecurityDetailField,
@@ -593,7 +593,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
       render: (role) => (
         <RoleNameRowTitleButton
           securityRole={role}
-          subtitle={<RoleStatusBadges role={role} />}
+          subtitle={<RoleListStatusBadge role={role} />}
           current={selectedRoleId === role.role_id}
           aria-label={formatMessage(m.showRole, { name: roleDisplayName(role) })}
           onClick={(event) => {
@@ -610,7 +610,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
       sortable: true,
       align: "right",
       headerClassName: "w-[7.5rem]",
-      className: "whitespace-nowrap align-top tabular-nums",
+      className: "align-top tabular-nums",
       render: (role) =>
         role.role_code === SYSTEM_ADMIN_ROLE_CODE
           ? m.allPermissions
