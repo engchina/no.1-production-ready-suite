@@ -34,11 +34,13 @@ function Harness({
   title,
   titleLoading,
   testIdPrefix,
+  caption,
 }: {
   onNew?: () => void;
   title?: string | null;
   titleLoading?: boolean;
   testIdPrefix?: string;
+  caption?: string | null;
 }) {
   const [inlineOpen, setInlineOpen] = useState(false);
   const history = useChatHistoryPanel({ inlineOpen, onInlineOpenChange: setInlineOpen });
@@ -47,6 +49,7 @@ function Harness({
       history={history}
       historyTitle="会話の履歴"
       historyCloseLabel="会話の履歴を閉じる"
+      historyCaption={caption}
       historyContent={
         <button type="button" data-testid="item" onClick={history.closeSheet}>
           会話 1
@@ -97,6 +100,27 @@ describe("ChatLayout", () => {
     expect(section.querySelector('[data-testid="chat-composer-region"] textarea')).not.toBeNull();
     // lg 未満は高さを制限して、長い会話でページを伸ばさない。
     expect(section.className).toContain("h-[70dvh]");
+  });
+
+  it("期間の補足: lg 以上は見出しの行、lg 未満はシートの本文の先頭に出し、パネルの説明にする（#2340）", () => {
+    act(() => root.render(<Harness caption="最近 90 日" />));
+    click(toggle());
+    const aside = $('aside[aria-label="会話の履歴"]')!;
+    const caption = $('[data-testid="chat-history-caption"]')!;
+    expect(caption.textContent).toBe("最近 90 日");
+    expect(caption.className).toContain("text-fg-muted");
+    expect(aside.querySelector("h2")!.parentElement!.contains(caption)).toBe(true);
+    expect(aside.getAttribute("aria-describedby")).toBe(caption.id);
+
+    act(() => root.render(<Harness caption={null} />));
+    expect($('[data-testid="chat-history-caption"]')).toBeNull();
+    expect($('aside[aria-label="会話の履歴"]')!.hasAttribute("aria-describedby")).toBe(false);
+
+    setWide(false);
+    act(() => root.render(<Harness caption="最近 30 日" />));
+    click(toggle());
+    const dialog = $('[role="dialog"]')!;
+    expect(dialog.querySelector('[data-testid="chat-history-caption"]')!.textContent).toBe("最近 30 日");
   });
 
   it("testid の接頭辞で既存の spec の testid を残す", () => {

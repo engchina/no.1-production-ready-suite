@@ -3351,6 +3351,7 @@ const history = useChatHistoryPanel({ inlineOpen: historyOpen, onInlineOpenChang
 |---|---|---|---|
 | `history` | `ChatHistoryPanel` | — | `useChatHistoryPanel` の戻り値 |
 | `historyTitle` / `historyCloseLabel` | `string` | — | 履歴の見出し・名前（開閉ボタンの名前にも使う）と、シートを閉じるボタンの名前 |
+| `historyCaption` | `string \| null` | — | 一覧を絞った期間の補足（「最近 90 日」。lg 以上は見出しの行の右端、lg 未満はシートの本文の先頭。パネルの `aria-describedby`）。一覧の応答の `history_days` から `chatHistoryWindowLabels(days)?.caption` で作り、0 件の文は同じ関数の `empty`（#2340） |
 | `historyContent` | `ReactNode` | — | 履歴の中身（一覧・読み込み中・失敗・空・ページング） |
 | `label` | `string` | — | 会話の領域（`<section>`）の名前 |
 | `conversationTitle` / `conversationTitleLoading` | `string \| null` / `boolean` | — / `false` | 上端の行の会話の名前。名前が無く読み込み中なら `Skeleton`、どちらでもなければ何も出さない |

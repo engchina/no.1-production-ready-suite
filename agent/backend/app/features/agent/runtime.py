@@ -29,6 +29,7 @@ from uuid import uuid4
 from pr_backend_core import Page
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause, paginate
 from pr_backend_core.chat_history import ChatHistoryTurn
+from pr_backend_core.chat_history_window import ChatHistoryPage
 from pr_backend_core.chat_progress import (
     ChatProgressEvent,
     ChatProgressStepEvent,
@@ -744,10 +745,11 @@ class ThreadSummary(BaseModel):
     actor_display_name: str = ""
 
 
-class ThreadsData(Page[ThreadSummary]):
+class ThreadsData(ChatHistoryPage[ThreadSummary]):
     """会話の一覧の 1 ページ（新しい順。共通の Page。#1265 / #1266）。
 
-    `total` は利用者が見られる会話の全件数。
+    `total` は利用者が見られる会話のうち、最後の更新が会話の履歴の期間（`history_days`。#2340）の
+    中の会話の件数。
     """
 
 

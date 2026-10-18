@@ -32,6 +32,7 @@ from pr_backend_core.api import (
     empty_page,
     offset_params,
 )
+from pr_backend_core.chat_history_window import chat_history_days
 from pr_backend_core.chat_progress import ChatProgressPage, chat_progress_sse_response
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
 from pr_system_settings.auth.visibility import (
@@ -830,6 +831,8 @@ def list_sql_chats(
 
     system_admin は全員の会話（利用者の表示名つき）、それ以外は本人の会話だけ（#1889）。
     会話の履歴は 1 ページずつ返す（新しい順。任意のページへ移る offset 型。#1265・#1891）。
+    最後の更新が会話の履歴の期間（共通の設定 `PLATFORM_CHAT_HISTORY_DAYS`）の中の会話だけを返す
+    （期間の外の会話も `GET /chats/{conversation_id}` では開ける。#2340）。
     """
     principal = getattr(request.state, "principal", None)
     actor = str(getattr(principal, "user_uuid", ""))
@@ -841,6 +844,7 @@ def list_sql_chats(
             offset=paging.offset,
             limit=paging.limit,
             all_users=all_users,
+            history_days=chat_history_days(get_settings()),
         )
         return ApiResponse(data=_with_chat_owners(page, actor=actor, all_users=all_users))
     except PermissionError as exc:
@@ -3100,11 +3104,18 @@ def list_db_admin_chats(
         OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
     ],
 ) -> ApiResponse[DbAdminChatPage]:
-    """DB 管理チャットの会話の履歴（新しい順。offset 型）。"""
+    """DB 管理チャットの会話の履歴（新しい順。offset 型）。
+
+    最後の更新が会話の履歴の期間（共通の設定 `PLATFORM_CHAT_HISTORY_DAYS`）の中の会話だけ（#2340）。
+    """
     actor, all_users = _db_admin_chat_actor(request)
     try:
         page = nl2sql_service.list_db_admin_chats(
-            actor=actor, all_users=all_users, offset=paging.offset, limit=paging.limit
+            actor=actor,
+            all_users=all_users,
+            offset=paging.offset,
+            limit=paging.limit,
+            history_days=chat_history_days(get_settings()),
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

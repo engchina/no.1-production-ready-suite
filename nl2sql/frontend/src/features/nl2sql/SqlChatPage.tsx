@@ -98,7 +98,7 @@ import {
   CHAT_PROGRESS_STEP_DEFINITIONS,
   chatJobElapsedMs,
 } from "./chatProgress";
-import type { JobCreateData, JobData, Nl2SqlEngine, OffsetPage } from "./types";
+import type { ChatHistoryOffsetPage, JobCreateData, JobData, Nl2SqlEngine } from "./types";
 import { useProfileEngine } from "./useProfileEngine";
 import { SelectAiCredentialPrecondition } from "./components/SelectAiCredentialPrecondition";
 import { engineUsesSelectAiCredential } from "./selectAiCredentialReadiness";
@@ -118,7 +118,7 @@ interface Conversation {
   actor_display_name?: string;
 }
 /** 会話の履歴の 1 ページ（新しい順。offset 型。#1265 / #1891）。 */
-type ConversationPage = OffsetPage<Conversation>;
+type ConversationPage = ChatHistoryOffsetPage<Conversation>;
 interface ConversationData {
   conversation: Conversation;
   turns: JobData[];
@@ -745,6 +745,7 @@ export function SqlChatPage() {
             panel: historyPanel,
             content: historyContent,
             toggleDisabled: profilesLoading,
+            historyDays: history.data?.history_days,
           }}
           label={t("chat.conversation")}
           // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。

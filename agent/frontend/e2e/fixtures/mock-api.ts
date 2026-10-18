@@ -693,6 +693,8 @@ function createState() {
     // 保存先（`GET /api/runtime/storage`。#839）。既定は Oracle に保存している状態。
     runtimeStorage: clone(RUNTIME_STORAGE_PERSISTENT) as Json,
     runs: [] as Json[],
+    // 会話の一覧（`GET /api/threads`）の期間の日数（`history_days`。#2340）。null は応答に付けない（期間の表示なし）。
+    chatHistoryDays: null as number | null,
     // 承認の判断者・版の公開者（ログイン ID）→ 表示名（`GET /api/approvals/{id}` / `GET /api/agents` の `user_display_names`。#1696）。
     // ここに無いログイン ID は削除済みの利用者として扱う。
     userDisplayNames: {
@@ -1728,7 +1730,10 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         ? { actor_display_name: state.creatorDisplayNames[String(runs[0].created_by_user_uuid ?? "")] ?? "" }
         : {}),
     })).reverse();
-    return pageOfItems(threads, { offset, limit });
+    return {
+      ...pageOfItems(threads, { offset, limit }),
+      ...(state.chatHistoryDays == null ? {} : { history_days: state.chatHistoryDays }),
+    };
   }
   // 会話の名前の変更・削除（#1817）。削除は Run を残し、会話からの参照（thread_id）だけを外す。
   if ((method === "PATCH" || method === "DELETE") && at("threads", "*")) {
