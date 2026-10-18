@@ -849,6 +849,8 @@ def test_query_passes_row_limit_and_actor_and_returns_result(
             "message": "",
         },
         "auto_selected_profile": None,
+        # API キーではない呼び出し（local）には回答の注意書きを返さない（#2405）。
+        "notice": None,
     }
 
     _run(

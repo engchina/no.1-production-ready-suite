@@ -17,6 +17,7 @@ import {
   CardContent,
   ChatAnswer,
   ChatComposerOption,
+  AnswerNotice,
   ChatProgress,
   ChatSkeleton,
   ChatSqlBlock,
@@ -1111,6 +1112,10 @@ function SqlChatTurn({
                   execution={execution}
                   canOpenDirectSql={canOpenDirectSql}
                 />
+              ) : null}
+              {/* 回答の注意書きは SQL と結果の後（3 製品共通の AnswerNotice。#2405）。 */}
+              {turn.status === "done" ? (
+                <AnswerNotice notice={result.notice} label={t("answer.notice.label")} />
               ) : null}
             </>
           ) : null}
