@@ -10,7 +10,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useRef, type ReactNode, type Ref } from "react";
 
-import { Banner, CopyButton, Disclosure } from "@production-ready/ui";
+import { Banner, CopyButton, Disclosure, excerptHasTable, excerptPlainText } from "@production-ready/ui";
 import type {
   DocumentElement,
   DocumentNavigationNode,
@@ -27,7 +27,6 @@ import {
   layoutVisionDetails,
   elementCropUrl,
   elementVision,
-  tableHtmlToText,
 } from "@/lib/layout-element";
 import { extractionWarningView } from "@/lib/excel-warnings";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
@@ -37,6 +36,14 @@ import { tableCellKey, tableCellRef } from "@/lib/table-cell-focus";
 
 import { DocumentSectionsPanel } from "./DocumentSectionsPanel";
 import { ExtractedText, InfoChip } from "./extraction-bits";
+
+/**
+ * 要素の本文の表示。表の HTML を含むときだけ、根拠の抜粋と同じ共通の関数で「セル | セル」の行にする（#2387）。
+ * 表でない本文はそのまま渡す（埋め込みの画像の data URI を `ExtractedText` がサムネイルにするため）。
+ */
+function elementDisplayText(text: string): string {
+  return excerptHasTable(text) ? excerptPlainText(text) : text;
+}
 
 const KIND_LABELS: Record<string, Parameters<typeof t>[0]> = {
   title: "flow.extraction.kind.title",
@@ -484,7 +491,7 @@ function ElementItem({
           ) : null}
         </div>
         <div className="mt-2">
-          <ExtractedText text={tableHtmlToText(element.text)} clamp />
+          <ExtractedText text={elementDisplayText(element.text)} clamp />
         </div>
         {vision?.retrievalText ? (
           <p className="mt-2 line-clamp-3 border-l-2 border-accent-emphasis pl-2 text-xs leading-relaxed text-fg-muted">

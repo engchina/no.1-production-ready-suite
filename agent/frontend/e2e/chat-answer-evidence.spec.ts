@@ -51,7 +51,7 @@ function evidenceItem(chunkId: string, overrides: Record<string, unknown> = {}) 
   };
 }
 
-function seedRun(mockApi: MockApi) {
+function seedRun(mockApi: MockApi, excerptA?: string) {
   mockApi.state.runs.push({
     id: RUN_ID,
     goal: GOAL,
@@ -104,7 +104,7 @@ function seedRun(mockApi: MockApi) {
         created_at: MOCK_NOW,
         content: {
           items: [
-            evidenceItem(CHUNK_A, { cited: true, answer_use: "confirmed" }),
+            evidenceItem(CHUNK_A, { cited: true, answer_use: "confirmed", ...(excerptA ? { excerpt: excerptA } : {}) }),
             evidenceItem(CHUNK_B, { cited: true, locator: { page_start: 5, page_end: 5, section_path: [] } }),
             evidenceItem(CHUNK_C, { file_name: "文書 C.pdf", rerank_score: null }),
           ],
@@ -227,6 +227,54 @@ for (const viewport of VIEWPORTS) {
 
     await expectNoHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`answer-evidence-${viewport.name}.png`), fullPage: true });
+  });
+}
+
+// #2387: 文書の表を解析した chunk の抜粋（HTML の表）は、タグの文字を出さず、全文の表示では表、畳んだ表示では「セル | セル」の行。
+const TABLE_EXCERPT =
+  "見出し A<br><table><tbody><tr><td>項目</td><td>記録内容</td><td>備考</td></tr>" +
+  "<tr><td>区分 X</td><td>合成の記録の本文。長い文の折り返しを確かめるための合成の文です。</td><td>なし</td></tr>" +
+  "<tr><td>区分 Y</td><td>A&amp;B<br>二行目</td><td>合成</td></tr></tbody></table>" +
+  "<script>window.__xss = 1</script><img src=x onerror=\"window.__xss = 2\">";
+
+for (const viewport of VIEWPORTS) {
+  test(`根拠の抜粋の表の HTML をサイドパネルでは表、カードでは行の文字で出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    seedRun(mockApi, TABLE_EXCERPT);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await openThread(page);
+    const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+    const body = turn.getByTestId(`chat-answer-${RUN_ID}`);
+    await body.getByTestId("answer-section").nth(0).getByTestId("answer-citation-link").first().click();
+    const sheet = page.getByRole("dialog", { name: "回答の根拠" });
+    const excerpt = sheet.getByTestId("evidence-source-summary").getByTestId("citation-text");
+    await expect(excerpt).toHaveAttribute("data-expanded", "true");
+    await expect(excerpt.locator("p").first()).toHaveText("見出し A");
+    const table = excerpt.getByRole("table", { name: "抜粋の表" });
+    await expect(table.getByRole("columnheader")).toHaveText(["項目", "記録内容", "備考"]);
+    await expect(table.getByRole("row")).toHaveCount(3);
+    await expect(table.getByRole("row").nth(2).getByRole("cell").nth(1)).toHaveText("A&B\n二行目");
+    await expect(excerpt).not.toContainText("<");
+    expect(await page.evaluate(() => (window as { __xss?: number }).__xss)).toBeUndefined();
+    // 表はサイドパネルの幅に収め、収まらない分は表の中の横スクロールにする（パネルと画面は横にはみ出さない）。
+    const sheetBox = (await sheet.boundingBox())!;
+    const tableScroller = (await table.locator("xpath=..").boundingBox())!;
+    expect(tableScroller.x + tableScroller.width).toBeLessThanOrEqual(sheetBox.x + sheetBox.width + 1);
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`evidence-table-sheet-${viewport.name}.png`) });
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+
+    // 根拠のカードの 3 行の抜粋は「セル | セル」の行の文字。
+    const evidence = turn.getByTestId("answer-citations");
+    await evidence.locator("summary").click();
+    const card = evidence.getByTestId("evidence-card").nth(0);
+    await expect(card.getByTestId("citation-text")).toHaveText(
+      "見出し A\n項目 | 記録内容 | 備考\n区分 X | 合成の記録の本文。長い文の折り返しを確かめるための合成の文です。 | なし\n区分 Y | A&B 二行目 | 合成"
+    );
+    await expect(card.getByRole("table")).toHaveCount(0);
+    await card.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`evidence-table-card-${viewport.name}.png`) });
   });
 }
 

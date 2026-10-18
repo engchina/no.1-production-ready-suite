@@ -8,6 +8,7 @@ import {
   ChatSqlBlock,
   Disclosure,
   EmptyState,
+  excerptPlainText,
   FormStatus,
   ListSkeleton,
   ObjectActionBar,
@@ -983,7 +984,10 @@ function EvidenceItem({
       <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">{title}</p>
       {subtitle ? <p className="mt-1 break-all text-xs text-fg-muted">{subtitle}</p> : null}
       {detail ? (
-        <p className="mt-2 line-clamp-4 break-words text-xs leading-5 text-fg [overflow-wrap:anywhere]">{detail}</p>
+        // 抜粋の表の HTML は根拠の部品と同じ共通の関数で「セル | セル」の行にする（#2387）。
+        <p className="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-xs leading-5 text-fg [overflow-wrap:anywhere]">
+          {excerptPlainText(detail)}
+        </p>
       ) : null}
       {action ? <div className="mt-2">{action}</div> : null}
     </div>
