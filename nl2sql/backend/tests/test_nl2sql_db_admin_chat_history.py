@@ -127,7 +127,7 @@ def test_first_question_starts_a_conversation_and_is_reopened(
     assert turn.question == "ITEM_STOCK の QTY を見る"
     assert turn.plan.sql == "SELECT QTY FROM APP.ITEM_STOCK"
     assert turn.explanation == "在庫の数量です"
-    assert turn.last_execution is None
+    assert turn.statement_executions == [] and turn.last_run_all is None
     assert turn.sender_user_uuid is None
 
 
@@ -154,7 +154,9 @@ def test_follow_up_uses_saved_turns_and_execution_outcome_as_context(
     first = _send(ALICE, "ITEM_STOCK の数量")
     conversation_id = first.conversation.id
     executed = router.db_admin_chat_execute(
-        DbAdminChatTurnExecuteRequest(conversation_id=conversation_id, turn_id=first.turn.turn_id),
+        DbAdminChatTurnExecuteRequest(
+            conversation_id=conversation_id, turn_id=first.turn.turn_id, statement_index=1
+        ),
         _http(ALICE),
     ).data
     assert executed is not None and executed.executed is True
@@ -223,20 +225,22 @@ def test_execution_summary_keeps_counts_but_not_rows(
     sent = _send(ALICE, "数量")
     router.db_admin_chat_execute(
         DbAdminChatTurnExecuteRequest(
-            conversation_id=sent.conversation.id, turn_id=sent.turn.turn_id, row_limit=50
+            conversation_id=sent.conversation.id,
+            turn_id=sent.turn.turn_id,
+            statement_index=1,
+            row_limit=50,
         ),
         _http(ALICE),
     )
     reopened = router.get_db_admin_chat(sent.conversation.id, _http(ALICE)).data
     assert reopened is not None
-    last = reopened.turns[0].last_execution
-    assert last is not None
-    assert last.succeeded is True
+    [last] = reopened.turns[0].statement_executions
+    assert last.status == "succeeded"
     assert (last.row_count, last.column_count, last.has_more) == (1, 1, False)
     assert last.confirmation_given is False
     assert last.outcome == "成功（1 行）"
     # 結果の行はチャットと同じく会話に残さない。
-    assert last.result.select_result is None
+    assert last.result is not None and last.result.select_result is None
 
 
 def test_mutation_waiting_for_confirmation_is_not_recorded_and_confirmed_is(
@@ -246,13 +250,13 @@ def test_mutation_waiting_for_confirmation_is_not_recorded_and_confirmed_is(
     ai.responses.append(_answer("DELETE FROM APP.ITEM_STOCK WHERE QTY = 0"))
     sent = _send(ALICE, "0 の行を消す")
     request = DbAdminChatTurnExecuteRequest(
-        conversation_id=sent.conversation.id, turn_id=sent.turn.turn_id
+        conversation_id=sent.conversation.id, turn_id=sent.turn.turn_id, statement_index=1
     )
     pending = router.db_admin_chat_execute(request, _http(ALICE)).data
     assert pending is not None and pending.executed is False
     assert adapter.statement_calls == []
     reopened = router.get_db_admin_chat(sent.conversation.id, _http(ALICE)).data
-    assert reopened is not None and reopened.turns[0].last_execution is None
+    assert reopened is not None and reopened.turns[0].statement_executions == []
 
     confirmed = router.db_admin_chat_execute(
         request.model_copy(update={"confirmation": "ADMIN_EXECUTE"}), _http(ALICE)
@@ -260,9 +264,9 @@ def test_mutation_waiting_for_confirmation_is_not_recorded_and_confirmed_is(
     assert confirmed is not None and confirmed.committed is True
     reopened = router.get_db_admin_chat(sent.conversation.id, _http(ALICE)).data
     assert reopened is not None
-    last = reopened.turns[0].last_execution
-    assert last is not None and last.confirmation_given is True and last.succeeded is True
-    assert last.result.committed is True
+    [last] = reopened.turns[0].statement_executions
+    assert last.confirmation_given is True and last.status == "succeeded"
+    assert last.result is not None and last.result.committed is True
 
 
 def test_corrected_sql_is_reclassified_and_resets_the_execution(
@@ -273,7 +277,7 @@ def test_corrected_sql_is_reclassified_and_resets_the_execution(
     sent = _send(ALICE, "数量")
     router.db_admin_chat_execute(
         DbAdminChatTurnExecuteRequest(
-            conversation_id=sent.conversation.id, turn_id=sent.turn.turn_id
+            conversation_id=sent.conversation.id, turn_id=sent.turn.turn_id, statement_index=1
         ),
         _http(ALICE),
     )
@@ -285,7 +289,7 @@ def test_corrected_sql_is_reclassified_and_resets_the_execution(
     ).data
     assert corrected is not None
     assert corrected.revision == 1 and corrected.corrected is True
-    assert corrected.last_execution is None
+    assert corrected.statement_executions == []
     # サーバーが分類し直す（1 つの対象を消す DROP の確認語は対象の名前）。
     assert corrected.plan.requires_confirmation is True
     assert corrected.plan.confirmation_target == "APP.ITEM_STOCK"
@@ -312,7 +316,10 @@ def test_other_users_conversations_are_404_and_system_admin_sees_all(
         lambda: router.rename_db_admin_chat(other, SqlChatUpdateRequest(title="x"), _http(ALICE)),
         lambda: router.delete_db_admin_chat(other, _http(ALICE)),
         lambda: router.db_admin_chat_execute(
-            DbAdminChatTurnExecuteRequest(conversation_id=other, turn_id=turn_id), _http(ALICE)
+            DbAdminChatTurnExecuteRequest(
+                conversation_id=other, turn_id=turn_id, statement_index=1
+            ),
+            _http(ALICE),
         ),
         lambda: router.replace_db_admin_chat_turn_sql(
             other, turn_id, DbAdminChatPlanUpdateRequest(sql="SELECT 3 FROM DUAL"), _http(ALICE)
@@ -353,7 +360,9 @@ def test_system_admin_continues_other_users_conversation_as_admin(
     assert owner_view.conversation.owned is True
     assert [turn.sender_display_name for turn in owner_view.turns] == [None, "admin さん"]
     executed = router.db_admin_chat_execute(
-        DbAdminChatTurnExecuteRequest(conversation_id=conversation_id, turn_id=sent.turn.turn_id),
+        DbAdminChatTurnExecuteRequest(
+            conversation_id=conversation_id, turn_id=sent.turn.turn_id, statement_index=1
+        ),
         _http(ADMIN),
     ).data
     assert executed is not None and executed.executed is True
@@ -412,3 +421,111 @@ def test_history_pages_are_newest_first(
     assert [item.id for item in first.items] == [ids[2], ids[1]]
     assert [item.id for item in second.items] == [ids[0]]
     assert first.total == second.total == 3
+
+
+def test_multiple_statements_are_saved_per_statement_and_reopened(
+    setup: tuple[Nl2SqlService, _FakeAdapter, _FakeEnterpriseAi],
+) -> None:
+    _service, adapter, ai = setup
+    ai.responses.append(_answer("SELECT 1 AS N FROM DUAL;\nSELECT 2 AS N FROM DUAL;"))
+    sent = _send(ALICE, "版と表領域")
+    # 複数の SELECT も実行できる（文ごとの分類。#2333）。
+    assert sent.turn.plan.blocked is False
+    assert [item.index for item in sent.turn.plan.statements] == [1, 2]
+    executed = router.db_admin_chat_execute(
+        DbAdminChatTurnExecuteRequest(
+            conversation_id=sent.conversation.id, turn_id=sent.turn.turn_id, mode="all"
+        ),
+        _http(ALICE),
+    ).data
+    assert executed is not None
+    assert [item.status for item in executed.statements] == ["succeeded", "succeeded"]
+    assert len(adapter.script_calls) == 1
+    reopened = router.get_db_admin_chat(sent.conversation.id, _http(ALICE)).data
+    assert reopened is not None
+    [turn] = reopened.turns
+    assert [(item.index, item.status, item.mode) for item in turn.statement_executions] == [
+        (1, "succeeded", "all"),
+        (2, "succeeded", "all"),
+    ]
+    assert all(item.batch_id == executed.batch_id for item in turn.statement_executions)
+    assert turn.last_run_all is not None and turn.last_run_all.succeeded is True
+
+    # 続きの質問の文脈に、文ごとの結果を渡す。
+    ai.responses.append(_answer("SELECT 3 FROM DUAL"))
+    _send(ALICE, "続き", conversation_id=sent.conversation.id)
+    context = ai.calls[-1]["context"]
+    assert "#1: 成功（1 行）" in context and "#2: 成功（1 行）" in context
+
+
+def test_run_all_with_a_forbidden_statement_and_bad_index_are_400(
+    setup: tuple[Nl2SqlService, _FakeAdapter, _FakeEnterpriseAi],
+) -> None:
+    _service, adapter, ai = setup
+    ai.responses.append(_answer("SELECT 1 FROM DUAL; ALTER SYSTEM SET OPEN_CURSORS = 300"))
+    sent = _send(ALICE, "設定")
+    with pytest.raises(HTTPException) as refused:
+        router.db_admin_chat_execute(
+            DbAdminChatTurnExecuteRequest(
+                conversation_id=sent.conversation.id, turn_id=sent.turn.turn_id, mode="all"
+            ),
+            _http(ALICE),
+        )
+    assert refused.value.status_code == 400
+    assert "すべて実行できません" in str(refused.value.detail)
+    assert adapter.script_calls == []
+    with pytest.raises(HTTPException) as missing:
+        router.replace_db_admin_chat_turn_sql(
+            sent.conversation.id,
+            sent.turn.turn_id,
+            DbAdminChatPlanUpdateRequest(sql="SELECT 2 FROM DUAL", statement_index=5),
+            _http(ALICE),
+        )
+    assert missing.value.status_code == 400
+    replaced = router.replace_db_admin_chat_turn_sql(
+        sent.conversation.id,
+        sent.turn.turn_id,
+        DbAdminChatPlanUpdateRequest(sql="SELECT 2 FROM DUAL", statement_index=2),
+        _http(ALICE),
+    ).data
+    assert replaced is not None and replaced.plan.blocked is False
+    assert [item.sql for item in replaced.plan.statements] == [
+        "SELECT 1 FROM DUAL",
+        "SELECT 2 FROM DUAL",
+    ]
+
+
+def test_db_admin_chat_never_appears_in_the_run_history(
+    setup: tuple[Nl2SqlService, _FakeAdapter, _FakeEnterpriseAi],
+) -> None:
+    """DB 管理チャットの生成・実行は「実行履歴」に行を作らない（会話と監査にだけ残す）。"""
+    service, _adapter, ai = setup
+    ai.responses.append(
+        _answer("SELECT 1 AS N FROM DUAL; DELETE FROM APP.ITEM_STOCK WHERE QTY = 0")
+    )
+    sent = _send(ALICE, "数量と削除")
+    conversation_id, turn_id = sent.conversation.id, sent.turn.turn_id
+    router.db_admin_chat_execute(
+        DbAdminChatTurnExecuteRequest(
+            conversation_id=conversation_id, turn_id=turn_id, statement_index=1
+        ),
+        _http(ALICE),
+    )
+    router.db_admin_chat_execute(
+        DbAdminChatTurnExecuteRequest(
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            mode="all",
+            confirmation="ADMIN_EXECUTE",
+        ),
+        _http(ALICE),
+    )
+    for kind in ("all", "not_evaluation", "chat", "query"):
+        listed = service.list_history(all_users=True, kind=kind)
+        assert (listed.total, listed.unfiltered_total, listed.items) == (0, 0, [])
+    page = router.history(_http(ADMIN), PAGE, kind="all").data
+    assert page is not None and page.total == 0 and page.items == []
+    # 会話と監査には残る。
+    assert service._admin_audit_store.list_recent()
+    reopened = router.get_db_admin_chat(conversation_id, _http(ALICE)).data
+    assert reopened is not None and reopened.turns[0].statement_executions

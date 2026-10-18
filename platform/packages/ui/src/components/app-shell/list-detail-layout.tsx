@@ -17,10 +17,13 @@ import {
   LIST_DETAIL_KEYBOARD_FAST_STEP_REM,
   LIST_DETAIL_KEYBOARD_STEP_REM,
   LIST_DETAIL_MAX_LIST_WIDTH_REM,
+  LIST_DETAIL_MIN_LIST_HEIGHT_REM,
   LIST_DETAIL_MIN_LIST_WIDTH_REM,
   LIST_DETAIL_SPLIT_QUERY,
+  LIST_DETAIL_STICKY_GAP_REM,
   LIST_DETAIL_STORAGE_PREFIX,
   clampListWidthRem,
+  fitListColumn,
   listDetailStorageKey,
   maxListWidthForContainer,
   nextListItemIndex,
@@ -82,6 +85,87 @@ function scrollContainerOf(element: HTMLElement | null): HTMLElement | null {
   return (document.scrollingElement as HTMLElement | null) ?? null;
 }
 
+/** 本文のスクロール領域（overflow-y が auto / scroll の最も近い祖先。`AppShell` の main）。無ければ null（文書のスクロール）。 */
+function scrollportOf(element: HTMLElement): HTMLElement | null {
+  let node = element.parentElement;
+  while (node && node !== document.body && node !== document.documentElement) {
+    const overflowY = window.getComputedStyle(node).overflowY;
+    if (overflowY === "auto" || overflowY === "scroll") return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
+function cssPx(value: string) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** 測った一覧の列の高さと貼り付く位置（rem）。 */
+interface ListColumnFit {
+  heightRem: number;
+  topRem: number;
+}
+
+/**
+ * 2 ペインの一覧の列の高さと貼り付く位置を測る（#2330）。列の上端（本文の中の位置。スクロールに依らない）・
+ * 置き場所の下の余白・上端に貼り付く `PageHeader` の高さから、初めの表示で列の下端が画面の中に収まる高さを決める。
+ */
+function measureListColumn(root: HTMLElement): ListColumnFit | null {
+  const fontSize = rootFontSizePx();
+  const scroller = scrollportOf(root);
+  const rootRect = root.getBoundingClientRect();
+  let viewportHeight: number;
+  let columnTop: number;
+  if (scroller) {
+    viewportHeight = scroller.clientHeight;
+    columnTop = rootRect.top - scroller.getBoundingClientRect().top - scroller.clientTop + scroller.scrollTop;
+  } else {
+    viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+    columnTop = rootRect.top + window.scrollY;
+  }
+  // 置き場所の下の余白（PageBody の下の padding など）。スクロール領域の外の枠は含めない。
+  let bottomInset = cssPx(window.getComputedStyle(root).marginBottom);
+  for (let node = root.parentElement; node; node = node.parentElement) {
+    const style = window.getComputedStyle(node);
+    bottomInset += cssPx(style.paddingBottom);
+    if (node === scroller || node === document.documentElement) break;
+    bottomInset += cssPx(style.borderBottomWidth);
+  }
+  // 上端に貼り付く見出し（lg 以上の PageHeader）の下に貼り付く。
+  const headers = Array.from((scroller ?? document).querySelectorAll<HTMLElement>("[data-page-header]"));
+  const stickyHeader = headers.find((header) => window.getComputedStyle(header).position === "sticky");
+  const headerBottom = stickyHeader
+    ? stickyHeader.getBoundingClientRect().height + cssPx(window.getComputedStyle(stickyHeader).top)
+    : 0;
+  const fit = fitListColumn({
+    viewportHeight,
+    columnTop,
+    stickyTop: headerBottom + LIST_DETAIL_STICKY_GAP_REM * fontSize,
+    bottomInset,
+    minHeight: LIST_DETAIL_MIN_LIST_HEIGHT_REM * fontSize,
+  });
+  if (!fit) return null;
+  // rem に直す（高さは切り捨て・位置は切り上げ。丸めで列の下端が画面の外へ 1px 出ないようにする）。
+  return {
+    heightRem: Math.floor((fit.height / fontSize) * 1000) / 1000,
+    topRem: Math.ceil((fit.top / fontSize) * 1000) / 1000,
+  };
+}
+
+/** 置き場所・見出し・本文の大きさが変わったときに測る要素（列の上端の位置と見える高さを動かすもの）。 */
+function fitObservedElements(root: HTMLElement) {
+  const scroller = scrollportOf(root);
+  const elements: Element[] = [];
+  for (let node = root.parentElement; node; node = node.parentElement) {
+    elements.push(node);
+    if (node === scroller || node === document.documentElement) break;
+  }
+  const header = (scroller ?? document).querySelector("[data-page-header]");
+  if (header) elements.push(header);
+  return elements;
+}
+
 function visibleItems(container: HTMLElement | null, selector: string) {
   if (!container) return [];
   return Array.from(container.querySelectorAll<HTMLElement>(selector)).filter(
@@ -126,6 +210,8 @@ export interface ListDetailLayoutProps {
  *
  * - xl 以上（2 ペイン）: 狭い一覧の列（既定 20rem・16〜32rem で幅を変えられ id ごとに保存）+ 広い詳細の列。
  *   一覧の列は sticky で画面の高さの中をスクロールし、詳細はページと一緒にスクロールする（入れ子のスクロールを作らない）。
+ *   列の高さは「本文の見える高さ − 列の上端 − 置き場所の下の余白」で、詳細が短ければ本文に縦のスクロールを作らない。
+ *   本文をスクロールしても高さは変えず、上端に貼り付く `PageHeader` の下に貼り付く（#2330）。置き場所の末尾に置く。
  *   詳細の上端の行の開閉ボタン（チャットの会話の履歴と同じ `PanelLeftClose` / `PanelLeftOpen`）で一覧を畳むと、詳細が全幅になる。
  * - xl 未満（1 ペイン）: 一覧だけを出し、選ぶと詳細だけを出す。戻る操作は画面の `PageHeader` の `back`
  *   （「一覧へ戻る」。`useUrlSelection` の `clear`）。一覧は描いたまま隠すので、検索・ページ・一覧の中のスクロールが残り、
@@ -165,6 +251,7 @@ export function ListDetailLayout({
   const listId = `${generatedId}-list`;
   const hintId = `${generatedId}-resize-hint`;
   const [containerRem, setContainerRem] = useState(0);
+  const [fit, setFit] = useState<ListColumnFit | null>(null);
   const [dragging, setDragging] = useState(false);
   const cleanupDragRef = useRef<(() => void) | null>(null);
   // 1 ペインで詳細へ入るときの、本文のスクロールの位置と一覧の中のフォーカス（戻ると戻す）。
@@ -212,6 +299,32 @@ export function ListDetailLayout({
     observer.observe(root);
     return () => observer.disconnect();
   }, []);
+
+  const showList = split ? !collapsed : !hasSelection;
+
+  // 2 ペインの一覧の列の高さ（#2330）: 見える高さ − 列の上端 − 下の余白。最初の描画の前に測り（跳ねを出さない）、
+  // 置き場所・見出し・本文の大きさが変わったときだけ測り直す（本文のスクロールでは変えない）。
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!split || !showList || !root) return undefined;
+    const update = () => {
+      const next = measureListColumn(root);
+      setFit((current) =>
+        current && next && current.heightRem === next.heightRem && current.topRem === next.topRem ? current : next
+      );
+    };
+    update();
+    window.addEventListener("resize", update);
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(update);
+      fitObservedElements(root).forEach((element) => observer?.observe(element));
+    }
+    return () => {
+      window.removeEventListener("resize", update);
+      observer?.disconnect();
+    };
+  }, [split, showList]);
 
   // 1 ペインの行き来: 詳細へ入るときは本文の先頭へ移って詳細へフォーカス、戻るときはスクロールと行へのフォーカスを戻す。
   useLayoutEffect(() => {
@@ -315,9 +428,13 @@ export function ListDetailLayout({
     cleanupDragRef.current = () => finish(false);
   }
 
-  const showList = split ? !collapsed : !hasSelection;
   const showDetail = split || hasSelection;
-  const style = { "--list-detail-list-width": `${listWidthRem}rem` } as CSSProperties;
+  const style = {
+    "--list-detail-list-width": `${listWidthRem}rem`,
+    ...(split && fit
+      ? { "--list-detail-list-height": `${fit.heightRem}rem`, "--list-detail-list-top": `${fit.topRem}rem` }
+      : {}),
+  } as CSSProperties;
   const toolbar = split || detailToolbar;
 
   return (
@@ -341,8 +458,12 @@ export function ListDetailLayout({
         tabIndex={-1}
         className={cn(
           // 一覧の列: 画面の高さの中でスクロールし（sticky）、詳細はページと一緒にスクロールする。
-          // md 未満はナビの上端のバー（3.5rem）の分だけ低くする。
-          "sticky top-4 flex max-h-[calc(100dvh-5.5rem)] min-h-0 min-w-0 flex-col self-start overflow-hidden rounded-lg border border-border bg-surface shadow-sm outline-none md:max-h-[calc(100dvh-2rem)]",
+          "sticky flex min-h-0 min-w-0 flex-col self-start overflow-hidden rounded-lg border border-border bg-surface shadow-sm outline-none",
+          // 2 ペイン: 測った高さ（見える高さ − 列の上端 − 下の余白）と、貼り付く見出しの下の位置（#2330）。
+          // 1 ペイン: 画面の高さ − 2rem（md 未満はナビの上端のバー 3.5rem の分だけ低くする）。
+          split
+            ? "top-[var(--list-detail-list-top,1rem)] max-h-[var(--list-detail-list-height,calc(100dvh-2rem))]"
+            : "top-4 max-h-[calc(100dvh-5.5rem)] md:max-h-[calc(100dvh-2rem)]",
           !showList && "hidden"
         )}
         data-testid={`list-detail-${id}-list`}
@@ -351,12 +472,20 @@ export function ListDetailLayout({
         }}
         onKeyDown={onListKeyDown}
       >
-        {listHeader ? <div className="shrink-0 border-b border-border p-3">{listHeader}</div> : null}
+        {listHeader ? (
+          <div className="shrink-0 border-b border-border p-3" data-list-detail-header="">
+            {listHeader}
+          </div>
+        ) : null}
         {/* 溝（scrollbar-gutter）は取らない: 行の表（DataTable）は自分のスクロール領域に溝を持つので、ここでも取ると
             表の右に 2 本分の空白が残る（#2282）。 */}
         <div className="flex min-h-0 shrink flex-col overflow-y-auto" data-list-detail-body="">{list}</div>
         {/* 中身が何も描かない（1 ページの Pagination など）ときは、列の下の帯を出さない（empty:hidden。#2283）。 */}
-        {listFooter ? <div className="shrink-0 border-t border-border px-3 py-2 empty:hidden">{listFooter}</div> : null}
+        {listFooter ? (
+          <div className="shrink-0 border-t border-border px-3 py-2 empty:hidden" data-list-detail-footer="">
+            {listFooter}
+          </div>
+        ) : null}
       </section>
       {split && !collapsed ? (
         <div

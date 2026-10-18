@@ -511,9 +511,12 @@ function DbAdminStatementError({ statement }: { statement: DbAdminStatementResul
 export function DbAdminExecutionResult({
   result,
   rowLimit,
+  hideStatementSql = false,
 }: {
   result: DbAdminExecuteData;
   rowLimit?: number | null;
+  /** SQL をすぐ上に出している（DB 管理チャットの文ごとの結果。#2333）ときは、文の SQL を繰り返さない。 */
+  hideStatementSql?: boolean;
 }) {
   const summary = resultSummary(result);
   const showStatementDetails = !result.select_result;
@@ -552,7 +555,9 @@ export function DbAdminExecutionResult({
                     )}
                 </div>
               </div>
-              <code className="mt-2 block break-words text-xs text-fg">{statement.sql}</code>
+              {hideStatementSql ? null : (
+                <code className="mt-2 block break-words text-xs text-fg">{statement.sql}</code>
+              )}
               {statement.error_message && <DbAdminStatementError statement={statement} />}
             </div>
           ))}

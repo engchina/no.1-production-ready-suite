@@ -13,7 +13,7 @@ import {
 /**
  * RAG 検索・回答の不足の回帰テスト（#304）。
  * 参照 KB が 0 件の検索・回答プロファイルでは検索・チャットしない、
- * チャットは会話の回答の trace_id で保存済みの回答を引き当て、開き直し・削除できる。
+ * チャットは会話の回答の trace_id で保存済みの回答を引き当て、開き直せる。
  */
 
 const envelope = (data: unknown) => ({ json: { data, error_messages: [], warning_messages: [] } });

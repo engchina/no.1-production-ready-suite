@@ -89,3 +89,38 @@ export function nextListItemIndex(key: string, currentIndex: number, count: numb
   if (key === "End") return count - 1;
   return null;
 }
+
+/**
+ * 2 ペインの一覧の列の最小の高さ（rem）。画面が低く、列の上の内容が多くても、行を数行は読める高さを残す
+ * （これより低い画面では本文がスクロールする）。
+ */
+export const LIST_DETAIL_MIN_LIST_HEIGHT_REM = 20;
+/** 一覧の列が貼り付く位置の、上端に貼り付く見出し（`PageHeader`）の下の間隔（rem）。 */
+export const LIST_DETAIL_STICKY_GAP_REM = 1;
+
+/** 一覧の列の高さを決める寸法（すべて px。本文のスクロール領域の中の値）。 */
+export interface ListColumnFitInput {
+  /** 本文のスクロール領域の見える高さ。 */
+  viewportHeight: number;
+  /** 一覧 + 詳細の上端の位置（スクロール領域の内容の先頭から。スクロールの量に依らない）。 */
+  columnTop: number;
+  /** 一覧の列が貼り付く位置（スクロール領域の上端から。上端に貼り付く見出しの高さ + 間隔）。 */
+  stickyTop: number;
+  /** 一覧 + 詳細の下に続く余白（置き場所の下の padding・border の合計）。 */
+  bottomInset: number;
+  /** 最小の高さ。 */
+  minHeight: number;
+}
+
+/**
+ * 2 ペインの一覧の列の高さ（px、整数に切り捨て）と貼り付く位置（px）。高さは「見える高さ − 列の上端 − 下の余白」で、
+ * 初めの表示で列の下端（ページ送り・「さらに読み込む」）が画面の中に収まり、本文に縦のスクロールを作らない（#2330）。
+ * 本文をスクロールしても高さは変えない（貼り付いた後も伸びない）。貼り付いた位置から画面の下端を越えないよう上限を掛け、
+ * `minHeight` より低くはしない。寸法が取れない（見える高さが 0・数でない）ときは null（既定の CSS のまま）。
+ */
+export function fitListColumn({ viewportHeight, columnTop, stickyTop, bottomInset, minHeight }: ListColumnFitInput) {
+  const values = [viewportHeight, columnTop, stickyTop, bottomInset, minHeight];
+  if (!values.every(Number.isFinite) || viewportHeight <= 0) return null;
+  const available = viewportHeight - Math.max(columnTop, stickyTop) - Math.max(0, bottomInset);
+  return { height: Math.max(Math.floor(minHeight), Math.floor(available)), top: Math.max(0, stickyTop) };
+}

@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { expectListColumnFitsViewport } from "./_helpers/list-detail-fit";
 import { findClippedPlaceholders, measureHorizontalOverflow } from "../../../../platform/packages/ui/e2e/layout-checks";
 
 // 共通のユーザー・ロール・権限管理の一覧 + 詳細（共有 ListDetailLayout。#2282）。
@@ -72,6 +73,8 @@ test.describe("ユーザー・ロール・権限管理の一覧 + 詳細（ListD
     await expect(detail).toContainText("ユーザーを選択してください");
     await expect(page).not.toHaveURL(/user=/u);
     await expect(page.getByTestId("security-users-back")).toHaveCount(0);
+    // 一覧の列は画面の高さに収まり、詳細が短ければ本文は縦にスクロールしない（#2330）。
+    await expectListColumnFitsViewport(page, "security-users", { requireFooter: false });
 
     const [listBox, detailBox] = await Promise.all([list.boundingBox(), detail.boundingBox()]);
     // 一覧は既定 20rem（14px ルートで 280px）、詳細はその 2 倍より広い。
