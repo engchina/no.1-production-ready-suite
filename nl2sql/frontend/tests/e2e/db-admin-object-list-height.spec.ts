@@ -2540,15 +2540,22 @@ test("テーブル詳細は経過時間、遅延案内、切替リセット、�
 
 test("テーブル詳細の30秒 timeout は選択を保持して再試行できる", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === "mobile-375", "一覧と詳細を並べて選び直す流れは 2 ペイン（xl 以上）で確かめる（#2281）");
+  // 30 秒の timeout は、再試行の前だけ 150ms に縮める（再試行の取得が遅い環境で timeout にならないように）。
   await page.addInitScript(() => {
+    const flags = window as unknown as { __e2eShortDetailTimeout?: boolean };
+    flags.__e2eShortDetailTimeout = true;
     const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
     Object.defineProperty(AbortSignal, "timeout", {
       configurable: true,
-      value: (delay: number) => nativeTimeout(delay === 30_000 ? 150 : delay),
+      value: (delay: number) =>
+        nativeTimeout(delay === 30_000 && flags.__e2eShortDetailTimeout ? 150 : delay),
     });
   });
   const timeoutGate = createRequestGate();
   let attempts = 0;
+  // 初回の表示の取得は timeout まで止める。開発の server（nightly）は StrictMode で effect を 2 回実行し、
+  // 最初の取得を取り消して取り直すため、「1 回目の request」ではなく「再試行の前の request」をすべて止める。
+  let holdDetail = true;
   const objectName = "TABLE_TIMEOUT";
   const items = [
     { name: objectName, owner: "APP", object_type: "table", row_count: 1, comment: "" },
@@ -2570,7 +2577,7 @@ test("テーブル詳細の30秒 timeout は選択を保持して再試行でき
   );
   await page.route("**/api/nl2sql/db-admin/tables/*", async (route) => {
     attempts += 1;
-    if (attempts === 1) await timeoutGate.promise;
+    if (holdDetail) await timeoutGate.promise;
     try {
       await fulfillJson(route, {
         name: objectName,
@@ -2596,12 +2603,18 @@ test("テーブル詳細の30秒 timeout は選択を保持して再試行でき
     "true",
   );
 
+  holdDetail = false;
+  await page.evaluate(() => {
+    (window as unknown as { __e2eShortDetailTimeout?: boolean }).__e2eShortDetailTimeout = false;
+  });
+  const attemptsBeforeRetry = attempts;
   timeoutGate.release();
   const retry = page.getByRole("button", { name: "再試行" });
   await retry.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { name: objectName })).toBeVisible();
-  expect(attempts).toBe(2);
+  // 再試行は 1 回だけ取り直す。
+  expect(attempts).toBe(attemptsBeforeRetry + 1);
 });
 
 for (const scenario of scenarios) {
@@ -2610,6 +2623,8 @@ for (const scenario of scenarios) {
   }) => {
     const objectName = `${scenario.prefix}_RETRY`;
     let detailAttempts = 0;
+    // 再試行の前の取得はすべて失敗させる（開発の server の StrictMode は初回の取得を取り消して取り直す）。
+    let failDetail = true;
     // 一覧は増分 API(/db-admin/objects)から取得する。
     await page.route("**/api/nl2sql/db-admin/objects?*", (route) =>
       fulfillJson(route, {
@@ -2651,7 +2666,7 @@ for (const scenario of scenarios) {
     );
     await page.route(`${scenario.apiPath}/*`, async (route) => {
       detailAttempts += 1;
-      if (detailAttempts === 1) {
+      if (failDetail) {
         await route.fulfill({
           status: 500,
           contentType: "application/json",
@@ -2685,6 +2700,8 @@ for (const scenario of scenarios) {
     const errorRegion = page.getByTestId(`${scenario.path.slice(1)}-detail-error`);
     await expect(errorRegion.getByRole("alert")).toContainText("詳細の取得に失敗しました");
     await expect(page.locator("main").getByRole("alert")).toHaveCount(1);
+    failDetail = false;
+    const attemptsBeforeRetry = detailAttempts;
     const retry = errorRegion.getByRole("button", { name: "再試行" });
     await retry.focus();
     await expect(retry).toBeFocused();
@@ -2692,7 +2709,8 @@ for (const scenario of scenarios) {
 
     await expect(page.getByRole("heading", { name: objectName })).toBeVisible();
     await expect(page.getByTestId("db-admin-detail-columns")).toContainText("識別子");
-    expect(detailAttempts).toBe(2);
+    // 再試行は 1 回だけ取り直す。
+    expect(detailAttempts).toBe(attemptsBeforeRetry + 1);
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
