@@ -1388,8 +1388,7 @@ def test_thread_list_only_within_history_days(monkeypatch: MonkeyPatch) -> None:
     """会話の履歴は最後の更新が直近 N 日の会話だけ（件数も同じ条件。#2340）。0 は絞らない。"""
     from security_support import client
 
-    from app.features.agent import router as agent_router
-    from app.features.agent.runtime import RunStatus, ThreadSummary
+    from app.features.agent.runtime import RunStatus, ThreadSummary, runtime_repository
     from app.settings import get_settings
 
     now = datetime.now(UTC)
@@ -1406,9 +1405,7 @@ def test_thread_list_only_within_history_days(monkeypatch: MonkeyPatch) -> None:
         )
 
     threads = [thread("thread-recent", now), thread("thread-old", now - timedelta(days=91))]
-    monkeypatch.setattr(
-        agent_router.runtime_repository, "list_threads", lambda **_kwargs: list(threads)
-    )
+    monkeypatch.setattr(runtime_repository, "list_threads", lambda **_kwargs: list(threads))
     monkeypatch.setattr(get_settings(), "chat_history_days", 90)
 
     listed = client.get(f"/api/threads?agent_id={AGENT_ID}").json()["data"]
