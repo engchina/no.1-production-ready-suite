@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from rag_engine.generation import form_field_kinds
 from rag_engine.generation.answer_models import AnswerContext
@@ -96,7 +96,8 @@ def _context(kind: str) -> AnswerContext:
             ]
         },
     )
-    return AnswerContext(records=[record], text="")
+    # 照合が読むのは chunk_uid・id・metadata だけなので、AnswerRecord の代わりに軽い値で渡す。
+    return AnswerContext(records=[cast(Any, record)], text="")
 
 
 def _diagnostics(guide: dict[str, Any], kind: str) -> dict[str, Any]:
