@@ -1378,6 +1378,7 @@ QA に事前共有してください。**96点あります。**
 | `PageHeader`（#823） | `actions` の型を `PageHeaderAction[] \| ReactNode` から `PageHeaderAction[]` にした（JSX の `<Button>` 等を渡す後方互換を**削除**。3 製品は #800 で配列に移した）。空の配列は操作の群れを描かない |
 | `@production-ready/system-settings` の `RoleManagementPage`（#823） | `renderRoleDetailExtra` を**削除。** ロールの詳細の末尾は `permissionSummary`（機能権限の件数と権限管理への導線。#800）だけにする |
 | `AnswerEvidence` / `EvidenceViews` / `EvidenceCard` / `AnswerSections` / `MarkdownInlineText`（#2328） | **新規 export**（RAG の `AnswerCitations` / `CitationCard` / `AnswerText` の見た目を移した。RAG の見た目は変えない）。Agent のチャット・実行の詳細の根拠は「出典（N）」の一覧から、RAG のチャットと同じ「AI に渡した N 件 ／ 回答で引用 M 件」の折りたたみ（既定は閉じる。カードは一定の高さの中でスクロール）に変わり、回答の本文は根拠を結び付けられるとき RAG と同じ節（要約・「資料により確認できた事項」と「根拠：文書 p.N」・「資料から確認できなかった事項」）で出す。RAG の実行履歴の詳細の根拠も、節の見出しの件数からチャットと同じ折りたたみに変わる（節の見出しは「回答の根拠」）。e2e は `answer-citations` の `summary` を押してからカードを探す |
+| `ChatSqlBlock` / `SqlSafetyBadge` / `sqlBlockLabels`（#2346） | **新規 export**（NL2SQL の `ChatSqlBlock` を移した。NL2SQL の見た目は変えない）。Agent のチャットの業務データの照会の結果は「ツール 〈内部名〉 の結果」の見出しの表から、NL2SQL のチャットと同じ SQL の塊（状態のバッジ・コピー）→ 結果の表（CSV つき）に変わる。実行の詳細の SQL も JSON の枠から同じ SQL の塊に変わる |
 | `PageHeader` / `ObjectActionBar` / `FormActionBar`（#582） | 「その他の操作」のボタンとメニューの読み上げ名が「その他の操作（<操作のグループの名前>）」になる（見た目の文言は同じ）。`getByRole("button", { name: "その他の操作", exact: true })` の E2E は一致しなくなるので、`exact` を外すか `data-testid`（`page-actions-more` / `<testId>-more` / `form-actions-more`）で探す。`PageHeader` の lg 未満は、メニューに入るのが 1 つだけなら畳まない |
 
 ---

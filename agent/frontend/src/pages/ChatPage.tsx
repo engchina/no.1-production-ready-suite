@@ -972,6 +972,7 @@ function RunChatTurn({
             key={table.stepId}
             data={table.data}
             toolName={table.toolName}
+            sql={table.sql}
             testId={`chat-tool-table-${table.stepId}`}
           />
         ))}
