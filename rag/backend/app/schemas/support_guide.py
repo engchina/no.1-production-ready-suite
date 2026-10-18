@@ -450,3 +450,98 @@ class SupportGuideDraftTryData(BaseModel):
 class SupportGuideExportData(BaseModel):
     schema_version: Literal[2] = SUPPORT_GUIDE_SCHEMA_VERSION
     guides: list[SupportGuideContent]
+
+
+# ---- 回答の過程の表からの下書き（#2397）----------------------------------------------------
+
+PROCESS_IMPORT_QUESTION_MAX_CHARS = 2000
+PROCESS_IMPORT_TEXT_MAX_CHARS = 8000
+PROCESS_IMPORT_MAX_REQUEST_ROWS = 100
+
+
+class SupportGuideProcessRow(BaseModel):
+    """回答の過程の表の 1 行（Excel の行か、貼り付けたテキスト）。"""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    row: int = Field(ge=1, description="表の行の番号（貼り付けたテキストは 1）。")
+    question: str = Field(min_length=1, max_length=PROCESS_IMPORT_QUESTION_MAX_CHARS)
+    process: str = Field(
+        min_length=1, max_length=PROCESS_IMPORT_TEXT_MAX_CHARS, description="回答の過程。"
+    )
+    standard_answer: str = Field(default="", max_length=PROCESS_IMPORT_TEXT_MAX_CHARS)
+
+
+class SupportGuideProcessColumn(BaseModel):
+    index: int = Field(description="列の位置（0 始まり）。")
+    letter: str = Field(description="Excel の列の記号（A・B…）。")
+    header: str = Field(description="1 行目の見出し（空なら空）。")
+
+
+class SupportGuideProcessSheet(BaseModel):
+    name: str
+    columns: list[SupportGuideProcessColumn]
+    row_count: int = Field(description="2 行目からの、空でない行の数。")
+
+
+class SupportGuideProcessWorkbookData(BaseModel):
+    """Excel のシートと列（列を選ぶ前）と、選んだ列で読んだ行（列を選んだとき）。"""
+
+    file_name: str
+    sheets: list[SupportGuideProcessSheet]
+    sheet: str | None = None
+    rows: list[SupportGuideProcessRow] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list, description="読めなかった行と理由。")
+    max_rows: int = Field(description="1 回で下書きにする行の数の上限。")
+    # 上限より多い行があり、開始の行から上限の数だけ読んだ。
+    truncated: bool = False
+    next_start_row: int | None = Field(
+        default=None, description="truncated のとき、続きを読む開始の行。"
+    )
+
+
+class SupportGuideProcessPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rows: list[SupportGuideProcessRow] = Field(
+        min_length=1, max_length=PROCESS_IMPORT_MAX_REQUEST_ROWS
+    )
+
+
+class SupportGuideProcessReference(BaseModel):
+    """回答の過程に書いた資料と、ナレッジベースの文書との対応。"""
+
+    name: str = Field(description="回答の過程に書いた資料の名前。")
+    pages: str = Field(default="", description="回答の過程に書いた頁（書いたまま）。")
+    section: str = Field(default="", description="回答の過程に書いた章節（書いたまま）。")
+    status: Literal["resolved", "unresolved", "ambiguous"]
+    document_id: str | None = None
+    file_name: str | None = None
+    candidates: list[str] = Field(
+        default_factory=list, description="ambiguous のとき、当たった文書の名前。"
+    )
+
+
+class SupportGuideRuleCandidate(BaseModel):
+    """補足から作ったルールの下書きの候補（質問の種類 → 案内・言い切らない・区別の規則）。"""
+
+    title: str = Field(max_length=_SHORT)
+    triggers: list[str] = Field(default_factory=list, description="ルールに当てる語。")
+    content: str = Field(max_length=_TEXT)
+
+
+class SupportGuideProcessItem(BaseModel):
+    """1 行から作った業務ガイドの下書き（取り込めるか・資料の対応・ルールの候補）。"""
+
+    row: int
+    question: str
+    valid: bool
+    content: SupportGuideContent | None = None
+    issues: list[SupportGuideIssue] = Field(default_factory=list)
+    references: list[SupportGuideProcessReference] = Field(default_factory=list)
+    rule_candidates: list[SupportGuideRuleCandidate] = Field(default_factory=list)
+
+
+class SupportGuideProcessPreviewData(BaseModel):
+    items: list[SupportGuideProcessItem]
+    importable_count: int

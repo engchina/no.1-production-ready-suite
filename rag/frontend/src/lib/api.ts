@@ -3576,6 +3576,35 @@ export const api = {
     ),
   importSupportGuides: (id: string, guides: unknown[]) =>
     request<SupportGuideImportData>(`${supportGuidesPath(id)}/import`, jsonBody({ guides })),
+  /** 回答の過程の Excel のシートと列。列を選べば、その列で行を読む（#2397）。 */
+  readSupportGuideProcessWorkbook: (
+    id: string,
+    file: File,
+    selection?: SupportGuideProcessWorkbookSelection,
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (selection) {
+      form.append("sheet", selection.sheet);
+      form.append("question_column", String(selection.question_column));
+      form.append("process_column", String(selection.process_column));
+      if (selection.answer_column !== null) {
+        form.append("answer_column", String(selection.answer_column));
+      }
+      form.append("start_row", String(selection.start_row));
+    }
+    return request<SupportGuideProcessWorkbookData>(
+      `${supportGuidesPath(id)}/import/process/workbook`,
+      { method: "POST", body: form },
+    );
+  },
+  /** 行ごとに AI で業務ガイドの下書きを作る（保存しない。1 行で AI を 1 回呼ぶので回答生成の timeout）。 */
+  previewSupportGuideProcessImport: (id: string, rows: SupportGuideProcessRow[]) =>
+    request<SupportGuideProcessPreviewData>(
+      `${supportGuidesPath(id)}/import/process/preview`,
+      jsonBody({ rows }),
+      { timeoutMs: ANSWER_GENERATION_TIMEOUT_MS },
+    ),
   /** 保存した下書きで試しに答える（#1288）。回答を作るので回答生成の timeout を使う。 */
   trySupportGuideDraft: (
     id: string,
@@ -4369,6 +4398,71 @@ export interface SupportGuideImportData {
 export interface SupportGuideExportData {
   schema_version: 2;
   guides: SupportGuideContent[];
+}
+
+/** 回答の過程の表の 1 行（Excel の行か、貼り付けたテキスト。#2397）。 */
+export interface SupportGuideProcessRow {
+  row: number;
+  question: string;
+  process: string;
+  standard_answer?: string;
+}
+
+export interface SupportGuideProcessSheet {
+  name: string;
+  columns: { index: number; letter: string; header: string }[];
+  row_count: number;
+}
+
+/** Excel のシートと列と、選んだ列で読んだ行。 */
+export interface SupportGuideProcessWorkbookData {
+  file_name: string;
+  sheets: SupportGuideProcessSheet[];
+  sheet: string | null;
+  rows: SupportGuideProcessRow[];
+  issues: string[];
+  max_rows: number;
+  truncated: boolean;
+  next_start_row: number | null;
+}
+
+export interface SupportGuideProcessWorkbookSelection {
+  sheet: string;
+  question_column: number;
+  process_column: number;
+  answer_column: number | null;
+  start_row: number;
+}
+
+export interface SupportGuideProcessReference {
+  name: string;
+  pages: string;
+  section: string;
+  status: "resolved" | "unresolved" | "ambiguous";
+  document_id: string | null;
+  file_name: string | null;
+  candidates: string[];
+}
+
+export interface SupportGuideRuleCandidate {
+  title: string;
+  triggers: string[];
+  content: string;
+}
+
+export interface SupportGuideProcessItem {
+  row: number;
+  question: string;
+  valid: boolean;
+  content: SupportGuideContent | null;
+  issues: SupportGuideIssue[];
+  references: SupportGuideProcessReference[];
+  rule_candidates: SupportGuideRuleCandidate[];
+}
+
+export interface SupportGuideProcessPreviewData {
+  items: SupportGuideProcessItem[];
+  importable_count: number;
 }
 
 // --- 実行履歴（チャット・RAG 検索の実行。#1890） ---

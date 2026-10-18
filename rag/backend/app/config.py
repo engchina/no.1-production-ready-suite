@@ -1871,6 +1871,23 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "下げ（最小 1）、送り直す。1 は 1 件ずつ（#2004 より前と同じ）。"
         ),
     )
+    rag_support_guide_import_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=8,
+        description=(
+            "回答の過程の表から業務ガイドの下書きを作るとき、同時に送る LLM の呼び出しの数の上限"
+            "（#2397。1 行で 1 回）。"
+        ),
+    )
+    rag_support_guide_import_max_rows: int = Field(
+        default=30,
+        ge=1,
+        le=100,
+        description=(
+            "回答の過程の表から 1 回で下書きにする行の数の上限（#2397。1 行で LLM を 1 回呼ぶ）。"
+        ),
+    )
     rag_ai_call_backoff_max_seconds: float = Field(
         default=60.0,
         ge=1.0,

@@ -176,8 +176,13 @@ class SupportGuideApi {
     const request = route.request();
     const method = request.method();
     const path = new URL(request.url()).pathname;
-    const body = request.postData() ? JSON.parse(request.postData() as string) : null;
+    const json = (request.headers()["content-type"] ?? "").includes("application/json");
+    const body = json && request.postData() ? JSON.parse(request.postData() as string) : null;
     const base = "/api/search-answer-profiles/bv-1/support-guides";
+    if (path.endsWith("/runtime-knowledge/edit")) {
+      this.requests.push({ method, path, body });
+      return route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", terms: [], rules: [] }) });
+    }
     if (!path.startsWith(base)) return this.handleOther(route, path);
     this.requests.push({ method, path, body });
     const rest = path.slice(base.length);
@@ -202,6 +207,96 @@ class SupportGuideApi {
       };
       this.guides.push(guide);
       return route.fulfill({ status: 201, json: envelope(this.detail(guide)) });
+    }
+    if (rest === "/import/process/workbook") {
+      // 回答の過程の Excel（#2397）。列を選んでいれば選んだ列で読んだ行を返す。
+      const form = request.postData() ?? "";
+      this.requests.push({ method, path, body: { chosen: form.includes('name="question_column"') } });
+      const sheets = [
+        {
+          name: "問い合わせ",
+          columns: [
+            { index: 0, letter: "A", header: "番号" },
+            { index: 1, letter: "B", header: "質問" },
+            { index: 2, letter: "C", header: "回答の過程" },
+          ],
+          row_count: 2,
+        },
+      ];
+      const rows = form.includes('name="question_column"')
+        ? [
+            { row: 2, question: "画面Aで通知が出ない", process: "【回答の手順】設定画面Aを開く", standard_answer: "" },
+            { row: 3, question: "画面Bの出力", process: "【検索する資料】資料B", standard_answer: "" },
+          ]
+        : [];
+      return route.fulfill({
+        json: envelope({
+          file_name: "process.xlsx",
+          sheets,
+          sheet: rows.length ? "問い合わせ" : null,
+          rows,
+          issues: [],
+          max_rows: 30,
+          truncated: false,
+          next_start_row: null,
+        }),
+      });
+    }
+    if (rest === "/import/process/preview") {
+      this.requests.push({ method, path, body });
+      const items = (body.rows as { row: number; question: string }[]).map((row, index) =>
+        index === 0
+          ? {
+              row: row.row,
+              question: row.question,
+              valid: true,
+              content: content("画面Aの通知を表示する"),
+              issues: [],
+              references: [
+                {
+                  name: "01_操作手順書A.pdf",
+                  pages: "12-14",
+                  section: "",
+                  status: "resolved",
+                  document_id: "doc-a",
+                  file_name: "操作手順書A.pdf",
+                  candidates: [],
+                },
+              ],
+              rule_candidates: [
+                { title: "通知の質問は設定画面Aを案内する", triggers: ["通知"], content: "原因は言い切らない。" },
+              ],
+            }
+          : {
+              row: row.row,
+              question: row.question,
+              valid: false,
+              content: content("画面Bを出力する"),
+              issues: [
+                {
+                  severity: "error",
+                  code: "reference_unresolved",
+                  path: "references[0]",
+                  message: "資料「資料B」は、このプロファイルのナレッジベースの文書にありません。",
+                },
+              ],
+              references: [
+                {
+                  name: "資料B",
+                  pages: "",
+                  section: "",
+                  status: "unresolved",
+                  document_id: null,
+                  file_name: null,
+                  candidates: [],
+                },
+              ],
+              rule_candidates: [],
+            },
+      );
+      return route.fulfill({
+        json: envelope({ items, importable_count: items.filter((item) => item.valid).length }),
+      });
     }
     if (rest === "/import/preview") {
       const items = (body.guides as Content[]).map((item, index) => {
@@ -786,6 +881,86 @@ test("JSON の取り込みは確認で各ガイドの可否を示し、すべて
 });
 
 /** アプリの外観の設定（localStorage）でテーマを切り替える（`emulateMedia` では切り替わらない）。 */
+test(
+  "回答の過程の Excel から列を選んで AI で下書きを作り、選んだ行とルールの候補だけを下書きにする（#2397）",
+  { tag: "@responsive" },
+  async ({ page }, testInfo) => {
+    const api = await openSupportGuides(page);
+    await page.getByRole("button", { name: "取り込み" }).click();
+    const panel = page.getByTestId("support-guide-import");
+    await panel.getByRole("tab", { name: "回答の過程（Excel・テキスト）" }).click();
+    const process = panel.getByTestId("support-guide-process-import");
+    // 列を選ぶ前に「AI で下書きを作る」を押すと、ファイルの必須を示す。
+    await process.getByRole("button", { name: "AI で下書きを作る" }).click();
+    await expect(process.getByText("Excel ファイルを選んでください。")).toBeVisible();
+
+    await process.locator("#support-guide-process-file").setInputFiles({
+      name: "process.xlsx",
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      buffer: Buffer.from("xlsx"),
+    });
+    await process.getByRole("combobox", { name: "質問の列" }).click();
+    await page.getByRole("option", { name: "B: 質問" }).click();
+    await process.getByRole("combobox", { name: "回答の過程の列" }).click();
+    await page.getByRole("option", { name: "C: 回答の過程" }).click();
+    await process.getByRole("button", { name: "AI で下書きを作る" }).click();
+
+    const result = process.getByTestId("support-guide-process-result");
+    await expect(result.getByText("2 行のうち 1 件を下書きにできます。")).toBeVisible();
+    const valid = result.getByTestId("support-guide-process-item-2");
+    await expect(valid).toContainText("2 行目: 画面Aの通知を表示する");
+    await expect(valid).toContainText("文書に対応");
+    await expect(valid).toContainText("→ 操作手順書A.pdf");
+    await expect(valid.getByRole("checkbox", { name: /2 行目/ })).toBeChecked();
+    const invalid = result.getByTestId("support-guide-process-item-3");
+    await expect(invalid).toContainText("文書が無い");
+    await expect(invalid).toContainText("ナレッジベースの文書にありません");
+    await expect(invalid.getByRole("checkbox", { name: /3 行目/ })).toBeDisabled();
+    // ルールの候補は既定で選ばない。選んだものだけを無効のルールとして足す。
+    const rule = result.getByRole("checkbox", { name: "通知の質問は設定画面Aを案内する" });
+    await expect(rule).not.toBeChecked();
+    await rule.check();
+    await expectNoPageOverflow(page);
+    await panel.screenshot({ path: testInfo.outputPath("support-guide-process-preview.png") });
+
+    await result.getByRole("button", { name: "選んだものを下書きにする" }).click();
+    await expect(page.getByText("業務ガイド 1 件を下書きにし、ルール 1 件を無効のまま足しました。")).toBeVisible();
+    const preview = api.requests.find((item) => item.path.endsWith("/import/process/preview"));
+    expect((preview?.body as { rows: { row: number }[] }).rows.map((row) => row.row)).toEqual([2, 3]);
+    expect(api.requests.find((item) => item.path.endsWith("/support-guides/import"))?.body).toMatchObject({
+      guides: [{ title: "画面Aの通知を表示する" }],
+    });
+    expect(api.requests.find((item) => item.path.endsWith("/runtime-knowledge/edit"))?.body).toMatchObject({
+      kind: "rules",
+      selected: null,
+      title: "通知の質問は設定画面Aを案内する",
+      labels: "通知",
+      enabled: false,
+    });
+    await expect(page.getByRole("rowheader", { name: "画面Aの通知を表示する" })).toBeVisible();
+    await expect(page.getByTestId("support-guide-import")).toHaveCount(0);
+  },
+);
+
+test("貼り付けた回答の過程のテキストからも下書きを作れる（#2397）", async ({ page }) => {
+  const api = await openSupportGuides(page);
+  await page.getByRole("button", { name: "取り込み" }).click();
+  const panel = page.getByTestId("support-guide-import");
+  await panel.getByRole("tab", { name: "回答の過程（Excel・テキスト）" }).click();
+  const process = panel.getByTestId("support-guide-process-import");
+  await process.getByRole("button", { name: "テキストを貼り付ける" }).click();
+  await process.getByRole("button", { name: "AI で下書きを作る" }).click();
+  await expect(process.getByText("質問を入れてください。")).toBeVisible();
+  await process.getByRole("textbox", { name: "質問" }).fill("画面Aで通知が出ない");
+  await process.getByRole("textbox", { name: "回答の過程" }).fill("【回答の手順】\n設定画面Aを開く");
+  await process.getByRole("button", { name: "AI で下書きを作る" }).click();
+  await expect(process.getByText("1 行のうち 1 件を下書きにできます。")).toBeVisible();
+  const preview = api.requests.find((item) => item.path.endsWith("/import/process/preview"));
+  expect(preview?.body).toMatchObject({
+    rows: [{ row: 1, question: "画面Aで通知が出ない", process: "【回答の手順】\n設定画面Aを開く" }],
+  });
+});
+
 async function useTheme(page: Page, theme: "light" | "dark") {
   await page.addInitScript((value) => {
     window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));

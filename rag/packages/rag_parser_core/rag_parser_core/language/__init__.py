@@ -755,6 +755,15 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         ingest=False,
     ),
     FieldSpec("guide_check_cues", "boolean_aliases", FieldKind.WORD_MAP, ingest=False),
+    # 回答の過程を書いた表から業務ガイドの下書きを作るときの、節の見出しの語と業務ガイドの項目
+    # （「見出し=項目」。項目は手順・確認事項・資料と頁・検索の語・補足）。
+    FieldSpec(
+        "guide_import_cues",
+        "process_headings",
+        FieldKind.ENUM_MAP,
+        choices=("steps", "conditions", "references", "search_terms", "notes"),
+        ingest=False,
+    ),
     # 項目抽出の値の書き方（はい / いいえの語）。取込で抽出した値をそろえる
     # （変えたら分割し直しが要る）。
     *_fields("field_value_cues", _W, "true_values", "false_values"),
