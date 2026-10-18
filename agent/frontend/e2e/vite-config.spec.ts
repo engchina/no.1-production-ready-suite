@@ -52,7 +52,7 @@ test.describe("vite.config /api proxy", () => {
 
   test("BACKEND_URL を明示したときだけその URL へ proxy する", () => {
     const config = resolveConfig({ BACKEND_URL: "http://127.0.0.1:18999" });
-    expect(config.server?.proxy).toEqual({ "/api": { target: "http://127.0.0.1:18999", changeOrigin: true, ws: true } });
+    expect(config.server?.proxy).toEqual({ "/api": { target: "http://127.0.0.1:18999", changeOrigin: true } });
     expect(startDevServer(config).middlewarePaths).toEqual([]);
   });
 
