@@ -1572,6 +1572,42 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "描画して解析するため、上げるときは解析サービスの CPU・メモリと worker の数を確かめる。"
         ),
     )
+    # ページの境目で切れた段落の判定の幾何の条件（#2273）。PDF の文字の層の行の位置で見る（文字の
+    # 層の無いページ・縦書き・回転したページは文の終わりの規則だけで判定する）。値は行の高さの倍数。
+    rag_page_continuation_geometry_enabled: bool = Field(
+        default=True,
+        description=(
+            "ページの境目の段落の続きの判定に、行の位置（前の段落の最後の行が右端まで届く・"
+            "次の段落の最初の行に字下げが無い・段落の幅が近い）を使う（#2273）。"
+        ),
+    )
+    rag_page_continuation_right_edge_tolerance: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=10.0,
+        description=(
+            "前の段落の最後の行の右端と段落の右端の差がこの値（行の高さの倍数）未満なら、"
+            "最後の行が右端まで届いているとみなす。"
+        ),
+    )
+    rag_page_continuation_indent_tolerance: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=10.0,
+        description=(
+            "次の段落の最初の行の左端と段落の左端の差がこの値（行の高さの倍数）未満なら、"
+            "字下げが無いとみなす。"
+        ),
+    )
+    rag_page_continuation_width_difference_ratio: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=10.0,
+        description=(
+            "2 つの段落の幅の差が狭いほうの幅のこの倍数未満なら、幅が近いとみなす"
+            "（既定 1.0 は MinerU の段落の続きの規則と同じ）。"
+        ),
+    )
     # 取込の AI の呼び出しの並行と再試行（#2002。共通の部品 pr_backend_core.bounded_calls）。
     rag_vision_concurrency: int = Field(
         default=4,
