@@ -759,6 +759,9 @@ system_admin だけ）の画面で、OCI Enterprise AI Direct で生成した SQ
 user の管理の接続（DeepSec の data plane ではない）で実行する。SELECT 以外は `ADMIN_EXECUTE`（1 つの対象の
 DROP / TRUNCATE は対象の名前）の確認語を要し、方針で止める文（`ALTER SYSTEM`・`DROP USER`・動的 SQL・
 外部への通信のパッケージなど）はコードの規則で止める。API は画面だけで、MCP・API キーからは使えない。
+会話の履歴（#2319。表 `NL2SQL_DB_ADMIN_CHATS` / `NL2SQL_DB_ADMIN_CHAT_TURNS`）は「AI 活用」と同じ見え方で、
+system_admin は全員の会話、それ以外は自分の会話だけ（他人の会話は 404）。実行は操作した人の権限で行い、
+会話の持ち主は変えない。
 詳細は [db-admin-chat.md](./db-admin-chat.md)。
 
 Select AI `DBMS_CLOUD_AI.GENERATE` と Select AI Agent の

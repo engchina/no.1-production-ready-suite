@@ -1,4 +1,5 @@
-// DB 管理チャット（#2264）の画面のロジック。会話は保存せず、画面の中だけに持つ。
+// DB 管理チャット（#2264）の画面のロジック。会話とターンはサーバーが保存し（#2319）、続きの質問の
+// 文脈もサーバーが保存した会話から作る。結果の行は保存しない（開き直したら要約と「もう一度実行」）。
 //
 // 処理の経過は NL2SQL のチャットと同じ段階の名前（`CHAT_PROGRESS_STEP_DEFINITIONS`）と共通の
 // `ChatProgress` で出す（生成 → SQL の確認（サーバーの分類）→ 実行）。
@@ -7,15 +8,9 @@ import type { ChatProgressStep, ChatProgressStepStatus } from "@production-ready
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
 import { t } from "../../lib/i18n";
 import { CHAT_PROGRESS_STEP_DEFINITIONS } from "./chatProgress";
-import type {
-  DbAdminChatHistoryTurn,
-  DbAdminChatPlan,
-  DbAdminExecuteData,
-} from "./types";
+import type { DbAdminChatPlan, DbAdminChatTurn, DbAdminExecuteData } from "./types";
 
-/** 続きの質問の文脈に渡す前の往復の数（backend の HISTORY_TURN_LIMIT と同じ）。 */
-export const DB_ADMIN_CHAT_HISTORY_LIMIT = 6;
-/** 会話の往復の上限（画面の中だけ。超えたら新しい会話を勧める）。 */
+/** 会話の往復の上限（backend の DB_ADMIN_CHAT_TURN_LIMIT と同じ。超えたら新しい会話を勧める）。 */
 export const DB_ADMIN_CHAT_TURN_LIMIT = 50;
 
 /** 実行の状態（1 往復の今の SQL について）。 */
@@ -24,6 +19,28 @@ export interface DbAdminChatExecution {
   startedAtMs: number;
   finishedAtMs?: number;
   result?: DbAdminExecuteData | null;
+  /** 結果の行を持たない（開き直した）ときの行数。 */
+  rowCount?: number | null;
+  /** 実行の要求そのものの失敗（権限・通信・timeout）。SQL の失敗は `result` の文ごとの状態。 */
+  requestError?: unknown;
+}
+
+/**
+ * 保存したターンの最後の実行（今の SQL の版のもの）を、画面の実行の状態にする。行は保存していないので
+ * `result.select_result` は空で、行数は `rowCount`。前の版（AI のエラー分析で直す前）の実行は無視する。
+ */
+export function dbAdminChatSavedExecution(turn: DbAdminChatTurn): DbAdminChatExecution | null {
+  const last = turn.last_execution;
+  if (!last || last.revision !== turn.revision) return null;
+  const finishedAtMs = Date.parse(last.executed_at);
+  const elapsed = last.result.timing?.elapsed_ms ?? 0;
+  return {
+    status: last.succeeded ? "done" : "failed",
+    startedAtMs: Number.isFinite(finishedAtMs) ? finishedAtMs - elapsed : Date.now(),
+    finishedAtMs: Number.isFinite(finishedAtMs) ? finishedAtMs : undefined,
+    result: last.result,
+    rowCount: last.row_count,
+  };
 }
 
 function iso(ms: number): string {
@@ -85,7 +102,7 @@ export function dbAdminChatProgressSteps({
   if (execution) {
     const status: ChatProgressStepStatus =
       execution.status === "running" ? "running" : execution.status === "failed" ? "failed" : "done";
-    const rows = execution.result?.select_result?.returned_count;
+    const rows = execution.result?.select_result?.returned_count ?? execution.rowCount;
     steps.push({
       id: "execute_sql",
       label: stepLabel("execute_sql", status),
@@ -115,27 +132,6 @@ export function dbAdminFailureText(result: DbAdminExecuteData): string {
     .filter((item) => item.error_message)
     .map((item) => `#${item.index} ${item.statement_type}: ${item.error_message}`);
   return [...lines, ...result.warnings].join("\n");
-}
-
-/** 続きの質問の文脈に渡す、実行の結果の短い要約。 */
-export function dbAdminOutcomeSummary(result: DbAdminExecuteData | null | undefined): string {
-  if (!result) return "";
-  if (dbAdminExecutionSucceeded(result)) {
-    const rows = result.select_result?.returned_count;
-    return typeof rows === "number"
-      ? t("dbAdminChat.outcome.rows", { count: rows })
-      : t("dbAdminChat.outcome.success");
-  }
-  return t("dbAdminChat.outcome.failed", { message: dbAdminFailureText(result).slice(0, 300) });
-}
-
-/** 画面の中の前の往復（新しいものほど後ろ）を、続きの質問の文脈の形にする。 */
-export function dbAdminChatHistory(
-  turns: ReadonlyArray<{ question: string; sql: string; outcome: string }>,
-): DbAdminChatHistoryTurn[] {
-  return turns
-    .slice(-DB_ADMIN_CHAT_HISTORY_LIMIT)
-    .map((turn) => ({ question: turn.question, sql: turn.sql, outcome: turn.outcome }));
 }
 
 /** 確認語が一致したか（前後の空白は無視。確認語が要らない SQL は常に true）。 */

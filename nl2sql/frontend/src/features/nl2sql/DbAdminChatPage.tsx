@@ -1,13 +1,15 @@
-import { useCallback, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { Play, Sparkles } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, Play, RefreshCw, Sparkles } from "lucide-react";
 import {
   ApiErrorBanner,
   Banner,
   Button,
   ChatAnswer,
   ChatProgress,
+  ChatSkeleton,
   ChatTurn,
+  DEFAULT_PAGE_SIZE,
   EmptyState,
   ExecutionConfirmationField,
   MessageText,
@@ -15,25 +17,36 @@ import {
   PageHeader,
   ProcessingIndicator,
   StatusBadge,
+  TimedLoadingState,
   createOptimisticChatMessage,
   useChatAutoScroll,
+  useChatHistoryActions,
+  useChatHistoryPanel,
   withOptimisticChatStatus,
   type OptimisticChatMessage,
 } from "@production-ready/ui";
 
-import { useWorkspaceState } from "@/components/WorkspaceState";
-import { ApiError, apiPost } from "@/lib/api";
+import {
+  useWorkspaceActive,
+  useWorkspaceIdentity,
+  useWorkspaceState,
+} from "@/components/WorkspaceState";
+import { useAuth } from "@/features/security/AuthProvider";
+import { ApiError, apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 
 import { CHAT_PROGRESS_LABELS } from "./chatProgress";
 import {
   ChatSqlBlock,
   Nl2SqlChatComposer,
+  Nl2SqlChatHistoryList,
   Nl2SqlChatLayout,
   Nl2SqlPendingTurn,
+  normalizeHistoryOffset,
 } from "./components/ChatScaffold";
-import { ChatQueryResult } from "./components/ChatSqlExecution";
+import { ChatLastExecutionText, ChatQueryResult } from "./components/ChatSqlExecution";
 import { DbAdminExecutionResult } from "./components/DbAdminShared";
 import { SchemaSyncNotice } from "./components/SchemaRefreshFeedback";
 import { DEFAULT_SQL_ROW_LIMIT } from "./components/SqlRowLimitControls";
@@ -42,160 +55,252 @@ import {
   dbAdminChatCanExecute,
   dbAdminChatConfirmed,
   dbAdminChatGenerateStep,
-  dbAdminChatHistory,
   dbAdminChatProgressSteps,
+  dbAdminChatSavedExecution,
   dbAdminExecutionSucceeded,
   dbAdminFailureText,
-  dbAdminOutcomeSummary,
   type DbAdminChatExecution,
 } from "./dbAdminChat";
 import { nl2sqlIncrementalKeys } from "./incrementalQueries";
 import type {
   DbAdminChatAnalyzeData,
-  DbAdminChatGenerateData,
+  DbAdminChatConversation,
+  DbAdminChatData,
   DbAdminChatPlan,
+  DbAdminChatSendData,
+  DbAdminChatTurn as DbAdminChatTurnData,
   DbAdminExecuteData,
+  OffsetPage,
 } from "./types";
 import { useMutationSchemaSync } from "./useMutationSchemaSync";
 
-/** 画面の中だけの 1 往復（保存しない。画面を離れると消える。#2264）。 */
-interface DbAdminChatTurnData {
-  id: string;
-  question: string;
-  sentAtMs: number;
-  generatedAtMs: number;
-  explanation: string;
-  warnings: string[];
-  contextTables: string[];
-  /** 今の SQL の分類（AI のエラー分析で直した SQL に置き換えると revision を進める）。 */
-  plan: DbAdminChatPlan;
-  revision: number;
-  corrected: boolean;
-  /** 続きの質問の文脈に渡す、実行の結果の短い要約。 */
-  outcome: string;
-}
-
+/** 送った質問（生成の応答の前・送れなかったとき）。ターンの ID は送信の前に決め、送り直しも同じ ID。 */
 interface PendingGenerate {
   message: OptimisticChatMessage;
+  turnId: string;
   error: unknown;
 }
 
 const TEST_ID = "db-admin-chat";
+const conversationPath = (id: string) =>
+  `/api/nl2sql/db-admin-chat/conversations/${encodeURIComponent(id)}`;
 
 /**
  * DB 管理チャット（#2264）。質問から Oracle の SQL（SELECT・DML・DDL・DCL・PL/SQL）を Enterprise AI Direct で
  * 作り、生成した SQL を必ず見せる。SELECT は「実行」で、それ以外は実行確認語を入力して実行する（自動では
- * 実行しない）。画面の骨格・入力欄・送信中の往復・SQL の表示・結果の表・処理の経過は「チャット」と同じ部品
- * （ChatScaffold・ChatQueryResult・共通の ChatProgress）で描く。会話は保存しない。
+ * 実行しない）。会話とターンはサーバーが保存し、「チャット」と同じ会話の履歴のパネル（開き直し・名前の
+ * 変更・削除・新しい会話）を持つ（#2319）。画面の骨格・会話の履歴・入力欄・送信中の往復・SQL の表示・
+ * 結果の表・処理の経過は「チャット」と同じ部品（ChatScaffold・ChatQueryResult・共通の ChatProgress）で描く。
  */
 export function DbAdminChatPage() {
-  const [draft, setDraft] = useWorkspaceState("draft", "");
-  const [turns, setTurns] = useState<DbAdminChatTurnData[]>([]);
+  const active = useWorkspaceActive();
+  const { user } = useAuth();
+  // 「AI 活用」と同じ見え方（#1889）: system_admin は全員の会話を見られ、履歴に利用者を出す。
+  const seesAllUsers = Boolean(user?.is_system_admin);
+  const identity = useWorkspaceIdentity();
+  const queryClient = useQueryClient();
+  const [conversationId, setConversationId] = useWorkspaceState("conversationId", "");
+  const [draft, setDraft] = useWorkspaceState(`draft:${conversationId}`, "");
+  const [historyPanelOpen, setHistoryPanelOpen] = useWorkspaceState("historyOpen", false);
+  // 開閉の判定・シートの開閉は共通の useChatHistoryPanel（3 製品共通。#1161）。
+  const historyPanel = useChatHistoryPanel({
+    inlineOpen: historyPanelOpen,
+    onInlineOpenChange: setHistoryPanelOpen,
+    id: "db-admin-chat-history",
+  });
+  const [historyOffset, setHistoryOffset] = useWorkspaceState<number>("historyOffset", 0);
+  const historyPageOffset = normalizeHistoryOffset(historyOffset);
   const [pending, setPending] = useState<PendingGenerate | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const generating = pending?.message.status === "sending";
+  const chatKey = useMemo(
+    () => ["nl2sql", "db-admin-chats", identity.owner, identity.context] as const,
+    [identity.owner, identity.context],
+  );
+  const history = useQuery({
+    // 会話の key（[...chatKey, 会話の ID]）と重ならないよう、一覧は object の要素で分ける。
+    queryKey: [...chatKey, { list: historyPageOffset }],
+    enabled: active,
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams({
+        limit: String(DEFAULT_PAGE_SIZE),
+        offset: String(historyPageOffset),
+      });
+      return apiGet<OffsetPage<DbAdminChatConversation>>(
+        `/api/nl2sql/db-admin-chat/conversations?${params.toString()}`,
+        { signal, timeoutMs: API_TIMEOUT_MS.interactiveList },
+      );
+    },
+    placeholderData: keepPreviousData,
+  });
+  const conversation = useQuery({
+    queryKey: [...chatKey, conversationId],
+    enabled: active && Boolean(conversationId),
+    queryFn: ({ signal }) =>
+      apiGet<DbAdminChatData>(conversationPath(conversationId), {
+        signal,
+        timeoutMs: API_TIMEOUT_MS.interactiveDetail,
+      }),
+  });
+  const turns = useMemo(() => conversation.data?.turns ?? [], [conversation.data]);
+  // 開いている会話が他の利用者の物か（system_admin だけが開ける。#1928・#1954）。
+  const ownerSeesNotice =
+    seesAllUsers && Boolean(conversationId) && conversation.data?.conversation.owned === false;
+  const conversationLoading = Boolean(conversationId) && conversation.isPending && !pending;
+  const atLimit = turns.length >= DB_ADMIN_CHAT_TURN_LIMIT;
+  const blocked =
+    generating ||
+    atLimit ||
+    (Boolean(conversationId) && (conversation.isPending || conversation.isError));
 
   const autoScroll = useChatAutoScroll({
     contentKey: [
       turns.length,
-      turns.map((turn) => `${turn.revision}:${turn.outcome}`).join(","),
+      turns.map((turn) => `${turn.revision}:${turn.last_execution?.executed_at ?? ""}`).join(","),
       pending?.message.localId ?? "",
       pending?.message.status ?? "",
     ].join(":"),
+    resetKey: conversationId,
+    enabled: active,
   });
 
   const generate = useCallback(
-    async (question: string, message: OptimisticChatMessage) => {
+    async (question: string, message: OptimisticChatMessage, turnId: string) => {
       const controller = new AbortController();
       abortRef.current = controller;
-      setPending({ message, error: null });
+      setPending({ message, turnId, error: null });
       try {
-        const data = await apiPost<DbAdminChatGenerateData>(
+        // 前の往復は送らない（サーバーが保存した会話から復元する。#2319）。
+        const data = await apiPost<DbAdminChatSendData>(
           "/api/nl2sql/db-admin-chat/generate",
-          {
-            question,
-            history: dbAdminChatHistory(
-              turns.map((turn) => ({ question: turn.question, sql: turn.plan.sql, outcome: turn.outcome })),
-            ),
-          },
+          { question, conversation_id: conversationId, client_turn_id: turnId },
           { signal: controller.signal, timeoutMs: API_TIMEOUT_MS.longRunningJob },
         );
-        setTurns((previous) => [
-          ...previous,
-          {
-            id: message.localId,
-            question,
-            sentAtMs: message.sentAtMs,
-            generatedAtMs: Date.now(),
-            explanation: data.explanation,
-            warnings: data.warnings,
-            contextTables: data.context_tables,
-            plan: data.plan,
-            revision: 0,
-            corrected: false,
-            outcome: "",
-          },
-        ]);
+        const id = data.conversation.id;
+        queryClient.setQueryData<DbAdminChatData>([...chatKey, id], (previous) => ({
+          conversation: data.conversation,
+          turns: [
+            ...(previous?.turns ?? []).filter((turn) => turn.turn_id !== data.turn.turn_id),
+            data.turn,
+          ],
+        }));
+        setConversationId(id);
         setPending(null);
+        void queryClient.invalidateQueries({ queryKey: chatKey, exact: false });
       } catch (error) {
         if (controller.signal.aborted) {
-          // 停止した質問は入力欄に戻す（生成は副作用が無いので、送り直せる）。
+          // 停止した質問は入力欄に戻す（停止した生成はサーバーも保存しない。生成は副作用が無いので送り直せる）。
           setPending(null);
           setDraft(question);
           return;
         }
-        setPending({ message: withOptimisticChatStatus(message, "failed"), error });
+        setPending({ message: withOptimisticChatStatus(message, "failed"), turnId, error });
       } finally {
         if (abortRef.current === controller) abortRef.current = null;
       }
     },
-    [turns, setDraft],
+    [chatKey, conversationId, queryClient, setConversationId, setDraft],
   );
 
   const submit = () => {
     const question = draft.trim();
-    if (!question || generating || turns.length >= DB_ADMIN_CHAT_TURN_LIMIT) return;
+    if (!question || blocked) return;
     setDraft("");
-    void generate(question, createOptimisticChatMessage(question));
+    autoScroll.scrollToLatest();
+    void generate(question, createOptimisticChatMessage(question), randomUuid());
   };
 
   const resend = () => {
     if (!pending || generating) return;
-    void generate(pending.message.content, withOptimisticChatStatus(pending.message, "sending"));
+    // 同じターンの ID で送るので、応答が届かなかっただけならサーバーは保存したターンを返す（二重に生成しない）。
+    void generate(
+      pending.message.content,
+      withOptimisticChatStatus(pending.message, "sending"),
+      pending.turnId,
+    );
   };
 
-  const reset = () => {
-    abortRef.current?.abort();
-    setTurns([]);
+  const resetConversation = () => {
+    if (generating) return;
+    setConversationId("");
     setPending(null);
     composerRef.current?.focus();
   };
 
-  const replacePlan = useCallback((turnId: string, plan: DbAdminChatPlan) => {
-    setTurns((previous) =>
-      previous.map((turn) =>
-        turn.id === turnId
-          ? { ...turn, plan, revision: turn.revision + 1, corrected: true, outcome: "" }
-          : turn,
-      ),
-    );
-  }, []);
+  const openConversation = (item: DbAdminChatConversation) => {
+    if (generating) return;
+    setConversationId(item.id);
+    setPending(null);
+    historyPanel.closeSheet();
+  };
 
-  const recordOutcome = useCallback((turnId: string, outcome: string) => {
-    setTurns((previous) =>
-      previous.map((turn) => (turn.id === turnId ? { ...turn, outcome } : turn)),
-    );
-  }, []);
+  // 会話の名前の変更・削除（3 製品共通の useChatHistoryActions。#1817）。消せた後に開いている会話なら
+  // 新しい会話に戻す。
+  const historyActions = useChatHistoryActions({
+    onRename: async (id, title) => {
+      await apiPatch(conversationPath(id), { title });
+      await queryClient.invalidateQueries({ queryKey: chatKey });
+    },
+    onDelete: (id) => apiDelete(conversationPath(id)),
+    onDeleted: (item) => {
+      if (item.id === conversationId) resetConversation();
+      queryClient.removeQueries({ queryKey: [...chatKey, item.id] });
+      void queryClient.invalidateQueries({ queryKey: chatKey });
+    },
+    disabled: generating,
+    idPrefix: "db-admin-chat-history-title",
+  });
+
+  const replaceTurn = useCallback(
+    (turn: DbAdminChatTurnData) => {
+      queryClient.setQueryData<DbAdminChatData>([...chatKey, conversationId], (previous) =>
+        previous
+          ? {
+              ...previous,
+              turns: previous.turns.map((item) => (item.turn_id === turn.turn_id ? turn : item)),
+            }
+          : previous,
+      );
+    },
+    [chatKey, conversationId, queryClient],
+  );
+  const refreshConversation = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: [...chatKey, conversationId] });
+  }, [chatKey, conversationId, queryClient]);
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
       <PageHeader wide title={t("nav.dbAdminChat")} subtitle={t("dbAdminChat.subtitle")} />
       <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4" data-testid="nl2sql-db-admin-chat">
         <Nl2SqlChatLayout
+          history={{
+            panel: historyPanel,
+            // 一覧の行・読み込み中・失敗・0 件・ページングはチャットと共通の Nl2SqlChatHistoryList（#2319）。
+            content: (
+              <Nl2SqlChatHistoryList
+                page={history.data}
+                loading={history.isPending}
+                error={history.isError ? history.error : null}
+                onRetry={() => void history.refetch()}
+                retrying={history.isFetching}
+                currentId={conversationId || null}
+                onSelect={openConversation}
+                disabled={generating}
+                seesAllUsers={seesAllUsers}
+                offset={historyPageOffset}
+                onOffsetChange={setHistoryOffset}
+                actions={historyActions}
+                testIdPrefix={TEST_ID}
+              />
+            ),
+          }}
           label={t("dbAdminChat.conversation")}
-          onNewConversation={reset}
-          newConversationDisabled={turns.length === 0 && !pending}
+          // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。
+          conversationTitle={conversationId ? conversation.data?.conversation.title : null}
+          conversationTitleLoading={Boolean(conversationId) && conversation.isPending}
+          onNewConversation={resetConversation}
+          newConversationDisabled={generating || (!conversationId && !pending)}
           autoScroll={autoScroll}
           testIdPrefix={TEST_ID}
           composer={
@@ -207,25 +312,52 @@ export function DbAdminChatPage() {
               onStop={() => abortRef.current?.abort()}
               running={generating}
               textareaRef={composerRef}
-              submitBlocked={turns.length >= DB_ADMIN_CHAT_TURN_LIMIT}
+              submitBlocked={blocked}
               sendTestId={`${TEST_ID}-send`}
-              footer={
-                turns.length >= DB_ADMIN_CHAT_TURN_LIMIT ? (
-                  <Banner severity="info">{t("chat.limit")}</Banner>
-                ) : null
-              }
+              // system_admin が他の利用者の会話で入力するとき、持ち主にも見えることを送る前に示す（#1954）。
+              notice={ownerSeesNotice ? t("chat.composer.ownerSeesNotice") : undefined}
+              footer={atLimit ? <Banner severity="info">{t("chat.limit")}</Banner> : null}
             />
           }
         >
-          {turns.length === 0 && !pending ? (
+          {conversationLoading ? (
+            // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する（チャットと同じ）。
+            <TimedLoadingState
+              label={t("chat.loading")}
+              operationKey="db-admin-chat-conversation-load"
+              framed={false}
+              testId={`${TEST_ID}-conversation-loading`}
+            >
+              <ChatSkeleton />
+            </TimedLoadingState>
+          ) : null}
+          {conversationId && conversation.isError ? (
+            <ApiErrorBanner
+              error={conversation.error}
+              fallback={t("chat.loadFailed")}
+              action={
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  icon={RefreshCw}
+                  onClick={() => void conversation.refetch()}
+                >
+                  {t("chat.retry")}
+                </Button>
+              }
+            />
+          ) : null}
+          {!conversationId && !pending ? (
             <EmptyState title={t("chat.empty")} hint={t("dbAdminChat.emptyHint")} />
           ) : null}
           {turns.map((turn) => (
             <DbAdminChatTurn
-              key={`${turn.id}:${turn.revision}`}
+              key={`${turn.turn_id}:${turn.revision}`}
+              conversationId={conversationId}
               turn={turn}
-              onReplacePlan={replacePlan}
-              onOutcome={recordOutcome}
+              onReplaceTurn={replaceTurn}
+              onExecuted={refreshConversation}
             />
           ))}
           {pending ? (
@@ -277,21 +409,58 @@ type AnalysisState =
   | { status: "done"; data: DbAdminChatAnalyzeData }
   | { status: "failed"; error: unknown };
 
+/**
+ * 1 往復の実行の状態。この画面で受け取った結果（行を持つ）は TanStack Query のキャッシュ（メモリ）に置き、
+ * 会話を切り替えて戻っても同じ画面の中では出し直す（チャットと同じ。sessionStorage などには保存しない）。
+ * 受け取っていないとき（開き直した会話）はサーバーが保存した最後の実行の要約（行は無い）。
+ */
+function useDbAdminChatExecution(turn: DbAdminChatTurnData) {
+  const identity = useWorkspaceIdentity();
+  const queryClient = useQueryClient();
+  const key = useMemo(
+    () =>
+      [
+        "nl2sql",
+        "db-admin-chat-execution",
+        identity.owner,
+        identity.context,
+        turn.turn_id,
+        turn.revision,
+      ] as const,
+    [identity.owner, identity.context, turn.turn_id, turn.revision],
+  );
+  const cached = useQuery<DbAdminChatExecution | null>({
+    queryKey: key,
+    queryFn: () => null,
+    enabled: false,
+    staleTime: Infinity,
+    gcTime: 30 * 60_000,
+  });
+  const set = useCallback(
+    (value: DbAdminChatExecution) => queryClient.setQueryData(key, value),
+    [key, queryClient],
+  );
+  return { execution: cached.data ?? dbAdminChatSavedExecution(turn), set };
+}
+
 /** 1 往復の回答（生成した SQL・確認語・実行の結果・失敗の分析）。 */
 function DbAdminChatTurn({
+  conversationId,
   turn,
-  onReplacePlan,
-  onOutcome,
+  onReplaceTurn,
+  onExecuted,
 }: {
+  conversationId: string;
   turn: DbAdminChatTurnData;
-  onReplacePlan: (turnId: string, plan: DbAdminChatPlan) => void;
-  onOutcome: (turnId: string, outcome: string) => void;
+  onReplaceTurn: (turn: DbAdminChatTurnData) => void;
+  onExecuted: () => void;
 }) {
   const queryClient = useQueryClient();
   const { plan } = turn;
+  const sentAtMs = Date.parse(turn.created_at);
+  const generatedAtMs = Date.parse(turn.generated_at);
   const [confirmation, setConfirmation] = useState("");
-  const [execution, setExecution] = useState<DbAdminChatExecution | null>(null);
-  const [executeError, setExecuteError] = useState<unknown>(null);
+  const { execution, set: setExecution } = useDbAdminChatExecution(turn);
   const [analysis, setAnalysis] = useState<AnalysisState | null>(null);
   const [copyError, setCopyError] = useState("");
   const refreshSchemaReadModels = useCallback(() => {
@@ -301,14 +470,20 @@ function DbAdminChatTurn({
   }, [queryClient]);
   // DDL の後の DB 構造の同期の案内と進行は、実行の結果の直下に出す（管理 SQL を実行と同じ。#2031）。
   const schemaSync = useMutationSchemaSync({
-    noticeOrigin: `db-admin-chat-notice-${turn.id}`,
+    noticeOrigin: `db-admin-chat-notice-${turn.turn_id}`,
     onDone: refreshSchemaReadModels,
   });
   const running = execution?.status === "running";
   const result = execution?.result ?? null;
+  const executeError = execution?.requestError ?? null;
   const executed = Boolean(result && dbAdminExecutionSucceeded(result));
+  // 開き直した SELECT の成功は行を持たない（要約だけ）。
+  const savedSelect =
+    !result?.select_result && executed && typeof execution?.rowCount === "number"
+      ? turn.last_execution
+      : null;
   const failed = Boolean(
-    execution && execution.status === "failed" && (executeError || (result && !dbAdminExecutionSucceeded(result))),
+    execution && execution.status === "failed" && (executeError || (result && !executed)),
   );
   const canExecute = dbAdminChatCanExecute(plan, confirmation) && !running;
 
@@ -316,33 +491,33 @@ function DbAdminChatTurn({
     if (!canExecute) return;
     const startedAtMs = Date.now();
     setExecution({ status: "running", startedAtMs });
-    setExecuteError(null);
     setAnalysis(null);
     schemaSync.reset();
     try {
+      // SQL は送らない（サーバーがターンに保存した SQL を実行する。#2319）。
       const data = await apiPost<DbAdminExecuteData>("/api/nl2sql/db-admin-chat/execute", {
-        sql: plan.sql,
+        conversation_id: conversationId,
+        turn_id: turn.turn_id,
         confirmation: plan.requires_confirmation ? confirmation.trim() : "",
         row_limit: DEFAULT_SQL_ROW_LIMIT,
       });
       const ok = dbAdminExecutionSucceeded(data);
       setExecution({ status: ok ? "done" : "failed", startedAtMs, finishedAtMs: Date.now(), result: data });
-      onOutcome(turn.id, dbAdminOutcomeSummary(data));
       // 実行の確認は 1 回ごと（もう一度実行するときは入力し直す）。
       setConfirmation("");
+      onExecuted();
       const tracked = schemaSync.track(data);
       if (data.committed && !tracked) {
         void queryClient.invalidateQueries({ queryKey: ["nl2sql", "db-admin", "objects"] });
       }
     } catch (error) {
-      setExecution({ status: "failed", startedAtMs, finishedAtMs: Date.now(), result: null });
-      setExecuteError(error);
-      onOutcome(
-        turn.id,
-        t("dbAdminChat.outcome.failed", {
-          message: error instanceof Error ? error.message : t("dbAdminChat.execute.failed"),
-        }),
-      );
+      setExecution({
+        status: "failed",
+        startedAtMs,
+        finishedAtMs: Date.now(),
+        result: null,
+        requestError: error,
+      });
     }
   };
 
@@ -365,6 +540,15 @@ function DbAdminChatTurn({
     }
   };
 
+  const applyCorrected = async (corrected: DbAdminChatPlan) => {
+    // サーバーがターンの SQL を置き換えて分類し直す（版が進み、確認語からやり直す）。
+    const updated = await apiPut<DbAdminChatTurnData>(
+      `${conversationPath(conversationId)}/turns/${encodeURIComponent(turn.turn_id)}/plan`,
+      { sql: corrected.sql },
+    );
+    onReplaceTurn(updated);
+  };
+
   const executeButton = (
     <Button
       type="button"
@@ -382,16 +566,20 @@ function DbAdminChatTurn({
   const hasSql = plan.statements.length > 0;
 
   return (
-    <ChatTurn question={turn.question} testId={`${TEST_ID}-turn`}>
+    <ChatTurn
+      question={turn.question}
+      // 会話の持ち主以外（system_admin）が送った質問は、送った人を添える（チャットと同じ。#1928）。
+      questionSender={
+        turn.sender_display_name == null
+          ? undefined
+          : t("chat.sentBy", { name: turn.sender_display_name || t("chat.historyOwnerMissing") })
+      }
+      testId={`${TEST_ID}-turn`}
+    >
       <ChatAnswer>
         <ChatProgress
-          steps={dbAdminChatProgressSteps({
-            sentAtMs: turn.sentAtMs,
-            generatedAtMs: turn.generatedAtMs,
-            plan,
-            execution,
-          })}
-          startedAt={turn.sentAtMs}
+          steps={dbAdminChatProgressSteps({ sentAtMs, generatedAtMs, plan, execution })}
+          startedAt={sentAtMs}
           labels={CHAT_PROGRESS_LABELS}
           testId={`${TEST_ID}-progress`}
         />
@@ -416,9 +604,9 @@ function DbAdminChatTurn({
         ) : !hasSql ? (
           <p className="text-sm text-fg-muted">{t("dbAdminChat.noSql")}</p>
         ) : null}
-        {turn.contextTables.length > 0 ? (
+        {turn.context_tables.length > 0 ? (
           <p className="break-words text-xs text-fg-muted" data-testid={`${TEST_ID}-context-tables`}>
-            {t("dbAdminChat.contextTables", { tables: turn.contextTables.join(", ") })}
+            {t("dbAdminChat.contextTables", { tables: turn.context_tables.join(", ") })}
           </p>
         ) : null}
         {plan.blocked ? (
@@ -440,7 +628,7 @@ function DbAdminChatTurn({
               {plan.implicit_commit ? <p className="mt-1">{t("dbAdminChat.warning.implicitCommit")}</p> : null}
             </Banner>
             <ExecutionConfirmationField
-              id={`${TEST_ID}-confirmation-${turn.id}`}
+              id={`${TEST_ID}-confirmation-${turn.turn_id}`}
               value={confirmation}
               onChange={setConfirmation}
               confirmed={dbAdminChatConfirmed(plan, confirmation)}
@@ -463,7 +651,7 @@ function DbAdminChatTurn({
               <ProcessingIndicator
                 active
                 label={t("chat.execute.running")}
-                operationKey={`db-admin-chat-execute-${turn.id}`}
+                operationKey={`db-admin-chat-execute-${turn.turn_id}`}
                 placement="result"
                 activityIcon="none"
                 testId={`${TEST_ID}-execution-running`}
@@ -486,7 +674,20 @@ function DbAdminChatTurn({
                 testId={`${TEST_ID}-result`}
               />
             ) : null}
-            {!running && result && !(result.select_result && executed) ? (
+            {!running && savedSelect ? (
+              // 開き直した会話の SELECT は、前回の実行の要約と「もう一度実行」（行は保存しない。チャットと同じ）。
+              <ChatLastExecutionText
+                summary={{
+                  status: "done",
+                  executed_at: savedSelect.executed_at,
+                  row_count: savedSelect.row_count ?? 0,
+                  column_count: savedSelect.column_count ?? 0,
+                  has_more: savedSelect.has_more,
+                }}
+                testId={`${TEST_ID}-last-execution`}
+              />
+            ) : null}
+            {!running && result && !(result.select_result && executed) && !savedSelect ? (
               // 更新系の結果・失敗は管理 SQL を実行と同じ表示（文ごとの状態・影響行数・commit / rollback）。
               <DbAdminExecutionResult result={result} />
             ) : null}
@@ -513,11 +714,7 @@ function DbAdminChatTurn({
           </div>
         ) : null}
         {analysis ? (
-          <AnalysisPanel
-            analysis={analysis}
-            turnId={turn.id}
-            onUseCorrected={(corrected) => onReplacePlan(turn.id, corrected)}
-          />
+          <AnalysisPanel analysis={analysis} turnId={turn.turn_id} onUseCorrected={applyCorrected} />
         ) : null}
         {turn.warnings.map((warning) => (
           <Banner key={warning} severity="warning">
@@ -537,8 +734,21 @@ function AnalysisPanel({
 }: {
   analysis: AnalysisState;
   turnId: string;
-  onUseCorrected: (plan: DbAdminChatPlan) => void;
+  onUseCorrected: (plan: DbAdminChatPlan) => Promise<void>;
 }) {
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState<unknown>(null);
+  const apply = async (plan: DbAdminChatPlan) => {
+    setApplying(true);
+    setApplyError(null);
+    try {
+      await onUseCorrected(plan);
+    } catch (error) {
+      setApplyError(error);
+    } finally {
+      setApplying(false);
+    }
+  };
   return (
     <section
       aria-label={t("dbAdminChat.analyze.title")}
@@ -574,8 +784,10 @@ function AnalysisPanel({
                     type="button"
                     variant="secondary"
                     size="sm"
+                    icon={Check}
+                    loading={applying}
                     onClick={() => {
-                      if (analysis.data.corrected_plan) onUseCorrected(analysis.data.corrected_plan);
+                      if (analysis.data.corrected_plan) void apply(analysis.data.corrected_plan);
                     }}
                     data-testid={`${TEST_ID}-use-corrected`}
                   >
@@ -584,6 +796,9 @@ function AnalysisPanel({
                 }
               />
               <p className="text-xs text-fg-muted">{t("dbAdminChat.analyze.correctedHint")}</p>
+              {applyError ? (
+                <ApiErrorBanner error={applyError} fallback={t("dbAdminChat.analyze.useCorrectedFailed")} />
+              ) : null}
             </>
           ) : null}
           {analysis.data.warnings.map((warning) => (

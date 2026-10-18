@@ -2,16 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  DB_ADMIN_CHAT_HISTORY_LIMIT,
   dbAdminChatCanExecute,
   dbAdminChatConfirmed,
-  dbAdminChatHistory,
   dbAdminChatProgressSteps,
+  dbAdminChatSavedExecution,
   dbAdminExecutionSucceeded,
   dbAdminFailureText,
-  dbAdminOutcomeSummary,
 } from "../src/features/nl2sql/dbAdminChat.ts";
-import type { DbAdminChatPlan, DbAdminExecuteData } from "../src/features/nl2sql/types.ts";
+import type {
+  DbAdminChatPlan,
+  DbAdminChatTurn,
+  DbAdminExecuteData,
+} from "../src/features/nl2sql/types.ts";
 
 function plan(overrides: Partial<DbAdminChatPlan> = {}): DbAdminChatPlan {
   return {
@@ -105,7 +107,7 @@ test("処理の経過は生成・SQL の確認・実行の段階をチャット�
   assert.equal(empty.length, 1);
 });
 
-test("失敗の内容と続きの質問の文脈を作る", () => {
+test("失敗の内容を AI のエラー分析に渡す形にする", () => {
   const failed = result({
     executed: false,
     statements: [
@@ -123,14 +125,51 @@ test("失敗の内容と続きの質問の文脈を作る", () => {
   });
   assert.equal(dbAdminExecutionSucceeded(failed), false);
   assert.match(dbAdminFailureText(failed), /#1 DROP: ORA-00942/);
-  assert.match(dbAdminOutcomeSummary(failed), /^失敗: /);
-  assert.equal(dbAdminOutcomeSummary(result()), "成功");
-  const turns = Array.from({ length: DB_ADMIN_CHAT_HISTORY_LIMIT + 2 }, (_, index) => ({
-    question: `質問 ${index}`,
-    sql: "SELECT 1 FROM DUAL",
-    outcome: "",
-  }));
-  const history = dbAdminChatHistory(turns);
-  assert.equal(history.length, DB_ADMIN_CHAT_HISTORY_LIMIT);
-  assert.equal(history.at(-1)?.question, `質問 ${DB_ADMIN_CHAT_HISTORY_LIMIT + 1}`);
+  assert.match(dbAdminFailureText(failed), /rollback しました/);
+});
+
+function savedTurn(overrides: Partial<DbAdminChatTurn> = {}): DbAdminChatTurn {
+  return {
+    turn_id: "turn-1",
+    question: "数量",
+    created_at: "2026-10-18T00:00:00Z",
+    generated_at: "2026-10-18T00:00:02Z",
+    explanation: "",
+    warnings: [],
+    context_tables: [],
+    model: "test-text-model",
+    plan: plan(),
+    revision: 0,
+    corrected: false,
+    last_execution: {
+      executed_at: "2026-10-18T00:00:10Z",
+      revision: 0,
+      confirmation_given: false,
+      succeeded: true,
+      row_count: 12,
+      column_count: 3,
+      has_more: false,
+      outcome: "成功（12 行）",
+      result: result({ timing: { created_at: "2026-10-18T00:00:09Z", elapsed_ms: 400 } as DbAdminExecuteData["timing"] }),
+    },
+    ...overrides,
+  };
+}
+
+test("開き直したターンは、保存した最後の実行の要約から実行の状態を作る（行は持たない）", () => {
+  const execution = dbAdminChatSavedExecution(savedTurn());
+  assert.ok(execution);
+  assert.equal(execution.status, "done");
+  assert.equal(execution.rowCount, 12);
+  assert.equal(execution.finishedAtMs, Date.parse("2026-10-18T00:00:10Z"));
+  assert.equal(execution.startedAtMs, Date.parse("2026-10-18T00:00:10Z") - 400);
+  const steps = dbAdminChatProgressSteps({ sentAtMs: 0, generatedAtMs: 2_000, plan: plan(), execution });
+  // 行は保存していないので、行数は要約から出す。
+  assert.equal(steps[2]?.detail, "12 行");
+  // AI のエラー分析で直した（版が進んだ）ターンの前の版の実行は使わない。
+  assert.equal(dbAdminChatSavedExecution(savedTurn({ revision: 1 })), null);
+  assert.equal(dbAdminChatSavedExecution(savedTurn({ last_execution: null })), null);
+  const failed = savedTurn();
+  if (failed.last_execution) failed.last_execution.succeeded = false;
+  assert.equal(dbAdminChatSavedExecution(failed)?.status, "failed");
 });

@@ -152,7 +152,7 @@ const nl2sqlJa = {
     "データベースに質問し、生成した SQL と実行の結果を確かめながら会話を続ける",
   "dbAdminChat.conversation": "DB 管理の会話",
   "dbAdminChat.emptyHint":
-    "同じ会話の中では、前の質問と SQL を踏まえて SQL を生成します（例: 「表領域の使用状況」の後に「使用率の高い順にして」）。生成した SQL は自動では実行しません。SELECT は「実行」で、それ以外は実行確認語を入力して実行します。会話は保存しないので、画面を離れると消えます。",
+    "同じ会話の中では、前の質問と SQL を踏まえて SQL を生成します（例: 「表領域の使用状況」の後に「使用率の高い順にして」）。生成した SQL は自動では実行しません。SELECT は「実行」で、それ以外は実行確認語を入力して実行します。",
   "dbAdminChat.sendFailed": "SQL を生成できませんでした。",
   "dbAdminChat.noSql": "SQL は生成しませんでした。",
   "dbAdminChat.badge.readOnly": "読み取り専用・未実行",
@@ -182,12 +182,10 @@ const nl2sqlJa = {
   "dbAdminChat.analyze.title": "AI のエラー分析",
   "dbAdminChat.analyze.corrected": "修正した SQL",
   "dbAdminChat.analyze.useCorrected": "修正した SQL を使う",
+  "dbAdminChat.analyze.useCorrectedFailed": "修正した SQL に置き換えられませんでした。",
   "dbAdminChat.analyze.correctedHint":
     "修正した SQL を使うと、実行の前に分類し直し、確認語からやり直します。",
   "dbAdminChat.correctedApplied": "AI のエラー分析で修正した SQL です。",
-  "dbAdminChat.outcome.success": "成功",
-  "dbAdminChat.outcome.rows": "成功（{count} 行）",
-  "dbAdminChat.outcome.failed": "失敗: {message}",
   "security.deepsec.entitlements.expression.group": "条件グループ",
   "security.deepsec.entitlements.expression.match": "条件の組み合わせ",
   "security.deepsec.entitlements.expression.and": "すべて満たす（AND）",
