@@ -211,6 +211,7 @@ export {
   type ChatHistoryListProps,
   type ChatHistoryListTestIds,
 } from "./components/chat/chat-history-list";
+export { chatHistoryWindowLabels, type ChatHistoryWindowLabels } from "./components/chat/chat-history-window";
 export {
   CHAT_HISTORY_TITLE_MAX_LENGTH,
   DEFAULT_CHAT_HISTORY_ACTION_LABELS,

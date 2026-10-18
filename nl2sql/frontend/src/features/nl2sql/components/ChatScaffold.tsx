@@ -10,6 +10,7 @@ import {
   ChatComposer,
   ChatHistoryList,
   ChatLayout,
+  chatHistoryWindowLabels,
   ChatPendingTurn,
   ChatProgress,
   CopyButton,
@@ -29,7 +30,7 @@ import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
 
 import { CHAT_PROGRESS_LABELS, chatSubmitProgressSteps } from "../chatProgress";
-import type { OffsetPage } from "../types";
+import type { ChatHistoryOffsetPage } from "../types";
 
 /** 送信の応答が届かなかったときは、ジョブが作られている可能性と確かめ方を出す。 */
 export function sendFailureText(error: unknown) {
@@ -45,6 +46,8 @@ export interface Nl2SqlChatHistory {
   panel: ChatHistoryPanel;
   content: ReactNode;
   toggleDisabled?: boolean;
+  /** 一覧を絞った期間の日数（一覧の応答の `history_days`。見出しの横に「最近 N 日」を出す。#2340）。 */
+  historyDays?: number;
 }
 
 const historyDateFormatter = new Intl.DateTimeFormat("ja-JP", {
@@ -86,7 +89,7 @@ export function Nl2SqlChatHistoryList<T extends Nl2SqlConversationItem>({
   testIdPrefix,
 }: {
   /** 表示中のページ（新しい順）。 */
-  page: OffsetPage<T> | undefined;
+  page: ChatHistoryOffsetPage<T> | undefined;
   loading: boolean;
   error: unknown;
   onRetry: () => void;
@@ -132,7 +135,8 @@ export function Nl2SqlChatHistoryList<T extends Nl2SqlConversationItem>({
         loading: t("chat.historyLoading"),
         error: t("chat.historyLoadFailed"),
         retry: t("chat.retry"),
-        empty: t("chat.historyEmpty"),
+        // 期間で絞った一覧の 0 件は期間を含めた文（3 製品共通。#2340）。
+        empty: chatHistoryWindowLabels(page?.history_days)?.empty ?? t("chat.historyEmpty"),
       }}
       renderActions={actions.renderActions}
       renderEditor={actions.renderEditor}
@@ -227,6 +231,7 @@ export function Nl2SqlChatLayout({
       history={history.panel}
       historyTitle={t("chat.history")}
       historyCloseLabel={t("chat.closeHistory")}
+      historyCaption={chatHistoryWindowLabels(history.historyDays)?.caption}
       historyContent={history.content}
       historyToggleDisabled={history.toggleDisabled}
       label={label}

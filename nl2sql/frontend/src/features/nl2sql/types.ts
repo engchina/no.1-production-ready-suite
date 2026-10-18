@@ -399,6 +399,11 @@ export interface OffsetPage<T> {
   has_next: boolean;
 }
 
+/** 会話の履歴の 1 ページ。`history_days` は一覧を絞った期間（最後の更新が直近 N 日。0 は絞らない。#2340）。 */
+export interface ChatHistoryOffsetPage<T> extends OffsetPage<T> {
+  history_days?: number;
+}
+
 export interface ClassifierTrainingCandidatesData extends OffsetPage<ClassifierTrainingCandidate> {
   /** 絞り込み（状態・業務プロファイル・検索語）の前の全件（「N 件（全 M 件）」。#1891）。 */
   unfiltered_total: number;

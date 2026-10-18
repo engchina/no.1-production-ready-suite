@@ -3,6 +3,7 @@ import {
   ChatComposerOption,
   ChatAnswer,
   ChatHistoryList,
+  chatHistoryWindowLabels,
   ChatLayout,
   ChatTurn,
   ClarificationRecord,
@@ -1384,6 +1385,8 @@ export function ChatClient() {
     : [];
   const lastTurnId = turns.length ? turns[turns.length - 1].user.message_id : null;
 
+  // 会話の履歴に出す期間（最後の更新が直近 N 日。3 製品共通の文言。#2340）。
+  const historyWindow = chatHistoryWindowLabels(conversationsData?.history_days);
   // 会話の履歴の中身（読み込み中・失敗・0 件・一覧・ページ送り）。lg 以上はインラインのパネル、
   // lg 未満はモーダルの side sheet に入れる（どちらか一方だけを描く）。
   const historyContent = (
@@ -1420,7 +1423,8 @@ export function ChatClient() {
         loading: t("chat.sessions.loading"),
         error: t("chat.sessions.error"),
         retry: t("common.retry"),
-        empty: t("chat.sessions.empty"),
+        // 期間で絞った一覧の 0 件は期間を含めた文（3 製品共通。#2340）。
+        empty: historyWindow?.empty ?? t("chat.sessions.empty"),
       }}
       operationKey="chat-conversations-load"
       testIds={{
@@ -1537,6 +1541,7 @@ export function ChatClient() {
             history={history}
             historyTitle={t("chat.sessions.title")}
             historyCloseLabel={t("chat.sessions.close")}
+            historyCaption={historyWindow?.caption}
             historyContent={historyContent}
             historyToggleDisabled={searchAnswerProfileLoading}
             label={t("chat.title")}

@@ -62,6 +62,7 @@ import {
 } from "./dbAdminChat";
 import { nl2sqlIncrementalKeys } from "./incrementalQueries";
 import type {
+  ChatHistoryOffsetPage,
   DbAdminChatAnalyzeData,
   DbAdminChatConversation,
   DbAdminChatData,
@@ -69,7 +70,6 @@ import type {
   DbAdminChatSendData,
   DbAdminChatTurn as DbAdminChatTurnData,
   DbAdminExecuteData,
-  OffsetPage,
 } from "./types";
 import { useMutationSchemaSync } from "./useMutationSchemaSync";
 
@@ -126,7 +126,7 @@ export function DbAdminChatPage() {
         limit: String(DEFAULT_PAGE_SIZE),
         offset: String(historyPageOffset),
       });
-      return apiGet<OffsetPage<DbAdminChatConversation>>(
+      return apiGet<ChatHistoryOffsetPage<DbAdminChatConversation>>(
         `/api/nl2sql/db-admin-chat/conversations?${params.toString()}`,
         { signal, timeoutMs: API_TIMEOUT_MS.interactiveList },
       );
@@ -278,6 +278,7 @@ export function DbAdminChatPage() {
       <Nl2SqlChatLayout
         history={{
           panel: historyPanel,
+          historyDays: history.data?.history_days,
           // 一覧の行・読み込み中・失敗・0 件・ページングはチャットと共通の Nl2SqlChatHistoryList（#2319）。
           content: (
             <Nl2SqlChatHistoryList

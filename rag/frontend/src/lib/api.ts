@@ -262,6 +262,11 @@ export interface Page<T> {
   has_next: boolean;
 }
 
+/** 会話の履歴の 1 ページ。`history_days` は一覧を絞った期間（最後の更新が直近 N 日。0 は絞らない。#2340）。 */
+export interface ChatHistoryPage<T> extends Page<T> {
+  history_days?: number;
+}
+
 // --- 認証（platform の共通認証。#214） ---
 
 /**
@@ -3592,7 +3597,7 @@ export const api = {
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
-    return requestDegradable<Page<ConversationSummary>>(
+    return requestDegradable<ChatHistoryPage<ConversationSummary>>(
       `/api/chat/conversations${qs ? `?${qs}` : ""}`,
     );
   },

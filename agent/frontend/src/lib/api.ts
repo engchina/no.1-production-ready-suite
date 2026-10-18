@@ -1252,8 +1252,11 @@ export interface ThreadSummary {
   actor_display_name?: string;
 }
 
-/** 会話の一覧の 1 ページ（新しい順。共通の Page。#1265 / #1266）。 */
-export type ThreadsData = Page<ThreadSummary>;
+/**
+ * 会話の一覧の 1 ページ（新しい順。共通の Page。#1265 / #1266）。`history_days` は一覧を絞った期間
+ * （最後の更新が直近 N 日。0 は絞らない。#2340）。
+ */
+export type ThreadsData = Page<ThreadSummary> & { history_days?: number };
 
 /** 実行履歴の一覧の 1 行（step・Event・成果物は持たない。詳細は `getRun`。#1897）。 */
 export interface RunSummary {

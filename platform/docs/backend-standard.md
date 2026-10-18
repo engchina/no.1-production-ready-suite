@@ -176,6 +176,17 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
 - **compaction（要約）はしない**: 古い往復の要約（OpenAI の `SummarizingSession`、OCI の会話の compaction）は、1 回ごとに LLM の呼び出しが増え、要約の誤りが後に残るため今回は入れない（残課題）。
 - テストは `platform/packages/backend_core/tests/test_chat_history.py`（予算・切り詰め・0 で無効・タグの無害化）と、各製品のチャットのテスト。
 
+## チャットの「会話の履歴」の期間（#2340）
+
+4 つのチャット（RAG チャット・NL2SQL チャット・NL2SQL DB 管理チャット・Agent チャット）の左の「会話の履歴」は、最後の更新が直近 N 日の会話だけを出す。期間の計算は `pr_backend_core.chat_history_window` に 1 つだけ置く。
+
+- **値（共通の設定。`platform/.env`）**: `PLATFORM_CHAT_HISTORY_DAYS`（属性 `chat_history_days`。既定 **90** 日、0〜3,650。**0 は期間で絞らない**）。3 製品が同じ値を読む。
+- **表示の絞り込みで、会話は消さない**: 一覧の API（RAG `GET /api/chat/conversations`、NL2SQL `GET /api/nl2sql/chats`・`GET /api/nl2sql/db-admin-chat/conversations`、Agent `GET /api/threads`）だけが絞る。期間の外の会話も、ID で開く API（会話の詳細・実行の詳細の「会話を開く」・直接のリンク）では今のまま開け、続けて質問すると最後の更新が進んで一覧に戻る。データの見え方（system_admin は全員・それ以外は本人。backend-standard「「AI 活用」の下の機能のデータの見え方」）は変えない。
+- **件数とページを同じ条件で**: 期間の条件は件数（`total`）と 1 ページの両方に掛ける（ページ送りの件数がずれない）。応答は共通の `ChatHistoryPage`（`Page` に `history_days` を足したもの。0 は絞っていない）。
+- **最後の更新**: RAG は会話の `updated_at`（質問・名前の変更で進む）、NL2SQL のチャットは会話の最初のジョブの記録の更新時刻（続きのターンを送ると `chat_activity_at` を書いて進める。一覧もこの順）、DB 管理チャットは会話の `UPDATED_AT`（ターンを足す・名前を変えると進む）、Agent は会話の `updated_at`（最後の Run）。Oracle の `SYSTIMESTAMP` で書く列は `SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')` と DB の時刻で比べ、アプリが UTC の時刻を書く列（RAG）とメモリの一覧は `chat_history_cutoff` の時刻で比べる。
+- **画面**: 一覧の応答の `history_days` から `@production-ready/ui` の `chatHistoryWindowLabels` が「最近 N 日」（`ChatLayout` の `historyCaption`）と 0 件の文「最近 N 日の会話はありません」を作る（4 つのチャットで同じ文言）。
+- テストは `platform/packages/backend_core/tests/test_chat_history_window.py` と、各製品の一覧の API のテスト（RAG `tests/test_chat_api.py`、NL2SQL `tests/test_chat_history_days.py`、Agent `tests/test_builtin_runtime.py`）。
+
 ## 内部の HTTP と環境のプロキシ（#852）
 
 OCI に届くために `HTTP_PROXY` / `HTTPS_PROXY`（社内プロキシ）を設定した環境でも、同じマシン・private network の

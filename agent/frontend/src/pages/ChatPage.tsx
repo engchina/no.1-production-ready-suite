@@ -16,6 +16,7 @@ import {
   CardContent,
   ChatComposer,
   ChatHistoryList,
+  chatHistoryWindowLabels,
   ChatLayout,
   ChatProgress,
   ChatSkeleton,
@@ -500,6 +501,8 @@ export function ChatPage() {
     },
   });
 
+  // 会話の履歴に出す期間（最後の更新が直近 N 日。3 製品共通の文言。#2340）。
+  const historyWindow = chatHistoryWindowLabels(threads.data?.history_days);
   // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。
   const historyContent = (
     <ChatHistoryList
@@ -534,7 +537,8 @@ export function ChatPage() {
         loading: t("chat.threads.loading"),
         error: t("chat.threads.loadFailed"),
         retry: t("common.retry"),
-        empty: t("chat.threads.empty"),
+        // 期間で絞った一覧の 0 件は期間を含めた文（3 製品共通。#2340）。
+        empty: historyWindow?.empty ?? t("chat.threads.empty"),
       }}
       testIds={{
         skeleton: "chat-threads-skeleton",
@@ -635,6 +639,7 @@ export function ChatPage() {
             history={history}
             historyTitle={t("chat.threads.title")}
             historyCloseLabel={t("chat.threads.close")}
+            historyCaption={historyWindow?.caption}
             historyContent={historyContent}
             historyToggleDisabled={agentsLoading}
             label={t("chat.conversation")}
