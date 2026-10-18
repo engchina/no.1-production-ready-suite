@@ -307,6 +307,31 @@ describe("ChatProgress", () => {
     expect(host.querySelector("details")!.open).toBe(true);
   });
 
+  it("footer は開いた中身の末尾（タイムラインの後ろ）に出し、一覧と一緒に開閉する（#2325）", () => {
+    const footer = <p data-testid="p-footer">処理の詳細</p>;
+    // 実行中: 今の段階の行（最後の行）の後ろ。
+    render(<ChatProgress steps={runningSteps} footer={footer} testId="p" />);
+    const runningDetails = host.querySelector("details")!;
+    expect(runningDetails.open).toBe(true);
+    expect(runningDetails.contains(q("p-footer"))).toBe(true);
+    expect(q("p-current")!.compareDocumentPosition(q("p-footer")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // 完了後: 閉じた 1 行の中（開くと一覧の後ろに出る）。開閉の見出しの外には出さない。
+    act(() => root.unmount());
+    root = createRoot(host);
+    const doneSteps: ChatProgressStep[] = [
+      { id: "a", label: "受け付けました", status: "done", startedAt: at(0), finishedAt: at(1) },
+    ];
+    render(<ChatProgress steps={doneSteps} footer={footer} testId="p" />);
+    const details = host.querySelector("details")!;
+    expect(details.open).toBe(false);
+    expect(details.contains(q("p-footer"))).toBe(true);
+    act(() => q("p-summary")!.click());
+    expect(details.open).toBe(true);
+    expect(q("p-timeline")!.compareDocumentPosition(q("p-footer")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // 段階が無いときは footer も出さない（製品が単独で出す）。
+    expect(renderToStaticMarkup(<ChatProgress steps={[]} footer={footer} />)).toBe("");
+  });
+
   it("詳細のある段階だけに開閉のボタンを付け、完了後に一覧を開いても詳細は閉じたまま（#2294）", () => {
     render(
       <ChatProgress

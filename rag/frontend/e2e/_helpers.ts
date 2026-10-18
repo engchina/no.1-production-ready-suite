@@ -403,6 +403,21 @@ export async function enableSearchAnswer(page: Page) {
 }
 
 /**
+ * 回答（チャット・RAG 検索）の「処理の詳細」を開き、その領域を返す（#2325）。「処理の詳細」は処理の経過の中の末尾に
+ * あり、完了後は閉じた処理の経過を開いてから押す。段階の記録の無い回答は処理の経過の行が無く、単独で出る。
+ * `testIdPrefix` は `AnswerProcess` の testId（チャットは `chat-answer-progress`、RAG 検索は `search-run-progress`）。
+ */
+export async function openAnswerProcessDetails(page: Page, testIdPrefix: string) {
+  const summary = page.getByTestId(`${testIdPrefix}-summary`);
+  const details = page.getByTestId(`${testIdPrefix}-details`);
+  // 完了の 1 行（処理の経過）か、単独の「処理の詳細」が出るまで待つ（実行中はどちらも無い）。
+  await expect(summary.or(details).first()).toBeVisible();
+  if ((await summary.count()) > 0 && !(await details.isVisible())) await summary.click();
+  await details.click();
+  return page.getByRole("region", { name: "処理の経過" }).getByRole("region", { name: "処理の詳細" });
+}
+
+/**
  * チャットの会話の履歴を開き、その領域を返す（#664）。履歴は既定で閉じている。
  * lg 以上はチャットの左のパネル（`complementary`）、lg 未満はモーダルの side sheet（`dialog`）。
  */

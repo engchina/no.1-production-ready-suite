@@ -3115,6 +3115,7 @@ import { ChatProgress } from "@production-ready/ui";
 | `slowAfterMs` | `number` | `10000` | 今の段階がこの時間を超えたら、今の段階の行に遅延の案内を付ける（全体の経過時間では判断しない。#1176） |
 | `reconnecting` | `boolean` | `false` | 更新が途絶え、状態を取り直している（#1160）。今の段階の行の予約した行に、遅延の案内の代わりに「接続を確認しています。」を出す。`useChatProgressStream` の `progressProps` で渡す |
 | `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`running(completed, current)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `working` / `reconnecting` / `status` / `formatDuration(ms)`） |
+| `footer` | `ReactNode` | — | 開いた中身の末尾（タイムラインの後ろ。実行中は今の段階の行の後ろ）に出す内容（#2325）。一覧と一緒に開閉し、閉じているときは出ない。段階が 0 件のときは出さない（製品が単独で出す）。処理の経過に属する技術的な詳細（RAG の「処理の詳細」）に使う |
 | `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id`（段階の外で処理が続くときは空）/ `data-slow` / `data-reconnecting`）・`-timer`・`-slow`・`-reconnecting`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-timeline`（一覧の `RunTimeline`。`data-run-timeline-bars`）・`-step-<id>`（一覧の行。`data-status` / `data-level`）を付ける・`-step-<id>-toggle`（詳細のある段の開閉のボタン）・`-step-<id>-details`（開いた詳細。#2294） |
 
 根の要素は `data-chat-progress-state`（`running` / `done` / `failed`）と `aria-busy` を持つ。
@@ -3135,6 +3136,7 @@ import { ChatProgress } from "@production-ready/ui";
 | 段階の切り替わりだけを `role="status"` で読み上げる。経過時間は `role="timer"` + `aria-live="off"` | 毎秒の更新を読み上げない。完了後は読み上げの文を空にする（回答は会話の欄の `role="log"` が知らせる） |
 | 動くスピナーは今の段階の 1 つだけ。スピナーは reduced-motion でも回す（#440） | 同じ処理のスピナーは 1 つ（messaging.md §3.7）。開閉の Chevron は `Disclosure` が reduced-motion で回転を止める |
 | 所要時間の表記は「0.4 秒」（10 秒未満は 0.1 秒単位。0.1 秒に満たなければ「0.1 秒未満」）・「12 秒」・「1 分 5 秒」（`formatChatProgressDuration`） | 1 秒未満の段階が多く、「0 秒」「0.0 秒」と出すと情報が無い。ms と秒を混ぜない |
+| 処理の経過に属する技術的な詳細（回答の記録の詳細など）は `footer` で開いた中身の末尾に置き、処理の経過の外（回答の本文との間）に独立して置かない（#2325） | 処理の経過と回答の本文の間に別の開閉を置くと、回答の補足と読み違える（ユーザーの指摘）。処理の経過を閉じれば一緒に隠れ、回答の本文を主にする |
 | `ProcessingIndicator` / `WorkflowProgressStrip` を拡張せず、新しい部品にした | `ProcessingIndicator` は 1 つの処理の 1 行（段階を持たない）で、設定・一覧の読み込みなど多くの所で使う。`WorkflowProgressStrip` は NL2SQL の SQL 生成の画面だけの工程の帯（工程ごとの説明・結果の中身・中止を持つ）。チャットの段階は両者の間の密度で、3 製品が使うため `packages/ui` に置く。経過時間の計算は `useOperationTiming`、開閉は `Disclosure`、スピナーは `Spinner` を使い回す |
 
 - 単体テストは `packages/ui/tests/chat-progress.test.tsx`。

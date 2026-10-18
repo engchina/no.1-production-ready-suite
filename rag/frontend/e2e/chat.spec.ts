@@ -4,6 +4,7 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
+  openAnswerProcessDetails,
   openChatHistory,
   selectSearchAnswerProfile,
 } from "./_helpers";
@@ -1071,12 +1072,11 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await page.getByRole("button", { name: "送信" }).click();
 
   // 処理の経過は回答の上（作成中の「N ステップ完了」の場所のまま。#2115）、回答の下は AI に渡した箇所 → 評価 の順
-  // （#1417）。回答の記録の詳細は処理の経過の「詳細」に畳む（名前は「処理の経過」1 つ。旧「回答の実行記録」）。
+  // （#1417）。回答の記録の詳細は処理の経過の中の「処理の詳細」に畳む（名前は「処理の経過」1 つ。旧「回答の実行記録」。#2325）。
   const process = page.getByRole("region", { name: "処理の経過" });
   await expect(process).toBeVisible();
   await expect(page.getByText(/実行記録/)).toHaveCount(0);
-  await page.getByTestId("chat-answer-progress-details").click();
-  const panel = process.getByRole("region", { name: "詳細" });
+  const panel = await openAnswerProcessDetails(page, "chat-answer-progress");
   await expect(panel).toBeVisible();
   const citationSummary = page.locator("summary").filter({ hasText: "AI に渡した 1 件" });
   const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
@@ -1112,6 +1112,15 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await expect(panel.getByRole("status").filter({ hasText: "業務システムで確かめる値" })).toHaveCount(0);
   const answerText = page.getByTestId("answer-text");
   await expect(answerText.getByRole("heading", { name: "資料により確認できた事項" })).toBeVisible();
+  // 節の見出しの前は段落の間（0.75rem）より広い 1.25rem（17.5px）を空け、要約の段落と節を見分けられる（#2325）。
+  const headingGap = await answerText.evaluate((element) => {
+    const paragraph = element.querySelector(":scope > p");
+    const heading = element.querySelector(":scope > section h4");
+    if (!paragraph || !heading) return null;
+    return heading.getBoundingClientRect().top - paragraph.getBoundingClientRect().bottom;
+  });
+  expect(headingGap).not.toBeNull();
+  expect(headingGap!).toBeCloseTo(17.5, 0);
   await expect(answerText.getByRole("listitem")).toContainText("1 回の申請の上限は 10 万円です。");
   await expect(answerText.getByText("根拠：経費規程.pdf p.2")).toBeVisible();
   // 根拠の行から、当たる引用の原文のプレビューを開ける（#657）。Esc で閉じるとフォーカスは根拠の行へ戻る。
@@ -1417,8 +1426,7 @@ for (const viewport of [
     await page.getByRole("textbox").fill(userMessage.content);
     await page.getByRole("button", { name: "送信" }).click();
 
-    await page.getByTestId("chat-answer-progress-details").click();
-    const panel = page.getByRole("region", { name: "処理の経過" }).getByRole("region", { name: "詳細" });
+    const panel = await openAnswerProcessDetails(page, "chat-answer-progress");
     await expect(panel.getByText("承認済み FAQ から回答")).toBeVisible();
     const source = panel.getByRole("region", { name: "回答の出典: 承認済み FAQ" });
     await expect(source).toContainText("経費精算の上限はいくらですか？");
