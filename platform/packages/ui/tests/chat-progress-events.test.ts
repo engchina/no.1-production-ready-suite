@@ -16,6 +16,7 @@ import {
   parseChatProgressEvent,
   parseChatProgressEvents,
   parseChatProgressPage,
+  parseChatProgressStepDetails,
   reduceChatProgressEvents,
   type ChatProgressEvent,
   type ChatProgressEventsState,
@@ -104,8 +105,13 @@ describe("契約（platform/contracts/chat-progress）", () => {
       "finished_at",
       "detail",
       "params",
+      "details",
     ];
     expect(Object.keys(defs.ChatProgressStepEvent.properties).sort()).toEqual([...stepFields].sort());
+    // 段の詳細（#2294）の形は共有 UI の `RunStepDetails` と同じ。
+    expect(Object.keys(defs.ChatProgressStepDetails.properties).sort()).toEqual(["code", "fields", "lines", "truncated"]);
+    expect(Object.keys(defs.ChatProgressDetailField.properties).sort()).toEqual(["label", "mono", "value"]);
+    expect(Object.keys(defs.ChatProgressDetailCode.properties).sort()).toEqual(["label", "language", "text"]);
     const terminalFields: (keyof ChatProgressTerminalEvent)[] = [
       "schema_version",
       "seq",
@@ -237,5 +243,45 @@ describe("段階の名前", () => {
     ]);
     expect(chatProgressTerminalOf(events)).toBe("failed");
     expect(chatProgressTerminalOf([])).toBeNull();
+  });
+});
+
+describe("段の詳細（#2294）", () => {
+  it("検証で形の違う要素を捨て、中身が無ければ details を付けない", () => {
+    expect(
+      parseChatProgressStepDetails({
+        fields: [{ label: "結果", value: "安全" }, { label: "", value: "x" }, { label: "表", value: "T1", mono: true }, "x"],
+        lines: ["行", 3, ""],
+        code: [{ label: "SQL", language: "sql", text: "SELECT 1" }, { language: "bash", text: "ls" }, { text: "" }],
+        truncated: true,
+      })
+    ).toEqual({
+      fields: [
+        { label: "結果", value: "安全" },
+        { label: "表", value: "T1", mono: true },
+      ],
+      lines: ["行"],
+      code: [{ label: "SQL", language: "sql", text: "SELECT 1" }, { text: "ls" }],
+      truncated: true,
+    });
+    expect(parseChatProgressStepDetails({ fields: [], truncated: true })).toBeUndefined();
+    expect(parseChatProgressStepDetails("x")).toBeUndefined();
+    const event = parseChatProgressEvent({ ...step(1, "a", "done"), details: { lines: [] } });
+    expect(event && "details" in event).toBe(false);
+  });
+
+  it("イベントの詳細を段に積み、定義の details で作り直せる", () => {
+    const details = { lines: ["選んだ条: 第 1 条"] };
+    const events = [
+      step(1, "s1", "running", { kind: "tool", params: { tool: "a" } }),
+      step(2, "s1", "done", { kind: "tool", params: { tool: "a" }, details }),
+    ];
+    expect(reduce(events).steps[0].details).toEqual(details);
+    const plain: ChatProgressStepDefinitions = { tool: { label: () => "ツール" } };
+    expect(chatProgressStepsFromEvents(events, plain)[0].details).toEqual(details);
+    const relabeled: ChatProgressStepDefinitions = {
+      tool: { label: () => "ツール", details: (_status, _params, value) => (value ? { lines: [...(value.lines ?? []), "追加"] } : undefined) },
+    };
+    expect(chatProgressStepsFromEvents(events, relabeled)[0].details).toEqual({ lines: ["選んだ条: 第 1 条", "追加"] });
   });
 });

@@ -82,6 +82,50 @@ function toolStep(id: string, name: string, status: string, extra: Record<string
 }
 
 for (const viewport of VIEWPORTS) {
+  test(`処理の経過のツールの段を開くと、引数と結果の JSON を出す（詳細の無い段は開かない。#2294） (${viewport.name})`, async ({ page, mockApi }) => {
+    const { run, progress: log } = seedRunningRun(mockApi);
+    run.status = "completed";
+    run.steps = [
+      toolStep("step-search", "rag__rag_search", "completed", {
+        tool_result: {
+          name: "rag__rag_search",
+          success: true,
+          output: { answer: "合成の回答 A", sources: [{ title: "文書 A" }] },
+          duration_ms: 800,
+        },
+      }),
+    ];
+    log
+      .step("plan", "done")
+      .step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search" } })
+      .step("tool:rag__rag_search", "done")
+      .step("respond", "running")
+      .step("respond", "done")
+      .terminal("done");
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await openThread(page);
+
+    const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+    await expect(turn.getByTestId("chat-progress")).toHaveAttribute("data-chat-progress-state", "done");
+    await turn.getByTestId("chat-progress-summary").click();
+    // 詳細のある段（ツール）だけに開閉のボタン。既定で閉じる。
+    await expect(turn.getByTestId("chat-progress-step-plan-toggle")).toHaveCount(0);
+    const toggle = turn.getByTestId("chat-progress-step-tool:rag__rag_search-toggle");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(turn.getByTestId("chat-progress-step-tool:rag__rag_search-details")).toBeHidden();
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const details = turn.getByTestId("chat-progress-step-tool:rag__rag_search-details");
+    await expect(details).toBeVisible();
+    await expect(details.getByLabel("引数")).toContainText('"query": "契約"');
+    await expect(details.getByLabel("結果")).toContainText("合成の回答 A");
+    await expectNoHorizontalOverflow(page);
+    await toggle.click();
+    await expect(details).toBeHidden();
+  });
+
   for (const theme of ["light", "dark"] as const) {
     test(`回答の作成中は今の段階を 1 行で出し、ツール・承認待ち・完了へ進む (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
       const { run, progress: log } = seedRunningRun(mockApi);

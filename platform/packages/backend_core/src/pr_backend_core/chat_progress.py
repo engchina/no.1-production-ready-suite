@@ -23,6 +23,10 @@ SSE の `id:` と `Last-Event-ID`、OpenAI の background mode の `starting_aft
 段階の名前（利用者向けの文言）は契約に入れない。画面が製品の段階の定義（`kind` →
 i18n の名前）で付ける。`detail` は短い補足だけ（件数・回数など）。SQL・ORA コード・
 例外の種類などの技術的な詳細は入れない。
+
+段を開いて見る詳細（`details`。#2294）は `ChatProgressStepDetails`（見出しと値・行・SQL や
+JSON の箱）で送る。上限を超えた分は切って `truncated` を付け、秘密らしい値（password・token・
+API キー・Bearer・URL の資格情報）は伏せる（`ChatProgressStepDetails` の検証で必ず通る）。
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -44,6 +49,7 @@ from pydantic import (
     SerializerFunctionWrapHandler,
     TypeAdapter,
     model_serializer,
+    model_validator,
 )
 from starlette.responses import Response, StreamingResponse
 
@@ -148,6 +154,190 @@ class _EventBase(BaseModel):
     emitted_at: datetime = Field(description="記録した時刻（ISO 8601）。")
 
 
+# ---------------------------------------------------------------------------
+# 段の詳細（#2294）
+# ---------------------------------------------------------------------------
+
+# 詳細の上限（超えた分は切って `truncated` を付ける。イベントは段の状態が変わるたびに
+# 全体を送るので小さく保つ）。
+DETAILS_LABEL_MAX = 80
+DETAILS_VALUE_MAX = 1000
+DETAILS_LINE_MAX = 500
+DETAILS_CODE_MAX = 4000
+DETAILS_MAX_FIELDS = 20
+DETAILS_MAX_LINES = 20
+DETAILS_MAX_CODE_BLOCKS = 3
+_SECRET_MASK = "***"
+
+# 伏せる値: `password=…` / `"api_key": "…"` などの代入、`Bearer …`、API キー（`prak_…`）、
+# URL の資格情報。
+_SECRET_KEY = r"[A-Za-z_\-]*(?:password|passwd|pwd|secret|token|api[_-]?key|credential)[A-Za-z_\-]*"
+_SECRET_JSON_RE = re.compile(rf'(?i)("{_SECRET_KEY}"\s*:\s*)"(?:[^"\\]|\\.)*"')
+_SECRET_ASSIGNMENT_RE = re.compile(
+    rf"(?i)\b({_SECRET_KEY})(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;)\"'}}]+)"
+)
+_BEARER_RE = re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]+")
+_API_KEY_RE = re.compile(r"\bprak_[A-Za-z0-9_-]+")
+_URL_CREDENTIAL_RE = re.compile(r"(\b[a-z][a-z0-9+.-]*://)[^\s/@]+@", re.IGNORECASE)
+
+
+def redact_chat_progress_text(text: str) -> str:
+    """段の詳細に入れる文から秘密らしい値を伏せる（3 製品共通）。"""
+
+    redacted = _SECRET_JSON_RE.sub(rf'\1"{_SECRET_MASK}"', text)
+    redacted = _SECRET_ASSIGNMENT_RE.sub(rf"\1\2{_SECRET_MASK}", redacted)
+    redacted = _BEARER_RE.sub(rf"\1 {_SECRET_MASK}", redacted)
+    redacted = _API_KEY_RE.sub(_SECRET_MASK, redacted)
+    return _URL_CREDENTIAL_RE.sub(rf"\1{_SECRET_MASK}@", redacted)
+
+
+def _clip(value: object, limit: int) -> tuple[str, bool]:
+    text = redact_chat_progress_text(value if isinstance(value, str) else str(value))
+    if len(text) <= limit:
+        return text, False
+    return f"{text[:limit]}…", True
+
+
+class _DetailsBase(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """値の無い任意の項目（None・空の list）は出さない（イベントと同じ契約: 省く）。"""
+        data: dict[str, Any] = handler(self)
+        return {key: value for key, value in data.items() if value is not None and value != []}
+
+
+class ChatProgressDetailField(_DetailsBase):
+    """詳細の見出しと値（エンジン・行数・選んだ条件など）。"""
+
+    label: str = Field(min_length=1, max_length=DETAILS_LABEL_MAX + 1)
+    value: str = Field(min_length=1, max_length=DETAILS_VALUE_MAX + 1)
+    mono: bool | None = Field(default=None, description="識別子・SQL の断片などを等幅で出す。")
+
+
+class ChatProgressDetailCode(_DetailsBase):
+    """詳細の長い値（SQL・ツールの引数と結果の JSON）。画面は箱の中でスクロールして出す。"""
+
+    label: str | None = Field(default=None, max_length=DETAILS_LABEL_MAX + 1)
+    language: Literal["json", "sql", "text"] | None = None
+    text: str = Field(min_length=1, max_length=DETAILS_CODE_MAX + 1)
+
+
+class ChatProgressStepDetails(_DetailsBase):
+    """段を開いて見る詳細（3 製品共通。画面の `RunStepDetails` と同じ形。#2294）。
+
+    検証の前に、上限を超えた値・要素を切り（`truncated` を付ける）、秘密らしい値を伏せる。保存済みの
+    記録も同じ規則で読み直すので、長すぎる記録でイベントが捨てられることはない。
+    """
+
+    fields: list[ChatProgressDetailField] = Field(
+        default_factory=list, max_length=DETAILS_MAX_FIELDS
+    )
+    lines: list[str] = Field(default_factory=list, max_length=DETAILS_MAX_LINES)
+    code: list[ChatProgressDetailCode] = Field(
+        default_factory=list, max_length=DETAILS_MAX_CODE_BLOCKS
+    )
+    truncated: bool | None = Field(default=None, description="送る側で長さを切った。")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bound(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        truncated = data.get("truncated") is True
+        fields: list[dict[str, Any]] = []
+        for item in _as_items(data.get("fields")):
+            raw = item.model_dump() if isinstance(item, BaseModel) else item
+            if not isinstance(raw, dict) or not raw.get("label") or raw.get("value") in (None, ""):
+                continue
+            label, cut_label = _clip(raw["label"], DETAILS_LABEL_MAX)
+            value, cut_value = _clip(raw["value"], DETAILS_VALUE_MAX)
+            truncated = truncated or cut_label or cut_value
+            field_data: dict[str, Any] = {"label": label, "value": value}
+            if raw.get("mono") is True:
+                field_data["mono"] = True
+            fields.append(field_data)
+        lines: list[str] = []
+        for line in _as_items(data.get("lines")):
+            if not isinstance(line, str) or not line:
+                continue
+            clipped, cut = _clip(line, DETAILS_LINE_MAX)
+            truncated = truncated or cut
+            lines.append(clipped)
+        code: list[dict[str, Any]] = []
+        for item in _as_items(data.get("code")):
+            raw = item.model_dump() if isinstance(item, BaseModel) else item
+            if not isinstance(raw, dict) or not raw.get("text"):
+                continue
+            text, cut = _clip(raw["text"], DETAILS_CODE_MAX)
+            truncated = truncated or cut
+            block: dict[str, Any] = {"text": text}
+            if raw.get("label"):
+                block["label"], cut_label = _clip(raw["label"], DETAILS_LABEL_MAX)
+                truncated = truncated or cut_label
+            if raw.get("language") in ("json", "sql", "text"):
+                block["language"] = raw["language"]
+            code.append(block)
+        if (
+            len(fields) > DETAILS_MAX_FIELDS
+            or len(lines) > DETAILS_MAX_LINES
+            or len(code) > DETAILS_MAX_CODE_BLOCKS
+        ):
+            truncated = True
+        return {
+            "fields": fields[:DETAILS_MAX_FIELDS],
+            "lines": lines[:DETAILS_MAX_LINES],
+            "code": code[:DETAILS_MAX_CODE_BLOCKS],
+            "truncated": True if truncated else None,
+        }
+
+    def is_empty(self) -> bool:
+        return not (self.fields or self.lines or self.code)
+
+
+def _as_items(value: object) -> list[Any]:
+    return list(value) if isinstance(value, list | tuple) else []
+
+
+def chat_progress_details(
+    *,
+    fields: Iterable[tuple[str, object] | tuple[str, object, bool]] = (),
+    lines: Iterable[str] = (),
+    code: Iterable[tuple[str | None, str, Literal["json", "sql", "text"] | None]] = (),
+    truncated: bool = False,
+) -> ChatProgressStepDetails | None:
+    """段の詳細を作る（値の無い見出しは捨てる。中身が無ければ None）。
+
+    `fields` は `(見出し, 値)` か `(見出し, 値, 等幅)`、`code` は `(見出し, 本文, 種類)`。
+    値は文字列にし、上限で切り、秘密らしい値を伏せる。
+    """
+
+    field_items: list[dict[str, Any]] = []
+    for item in fields:
+        label, value = item[0], item[1]
+        if value is None or value == "":
+            continue
+        field_data: dict[str, Any] = {"label": label, "value": str(value)}
+        if len(item) > 2 and item[2]:
+            field_data["mono"] = True
+        field_items.append(field_data)
+    code_items = [
+        {"label": label, "text": text, "language": language}
+        for label, text, language in code
+        if text
+    ]
+    details = ChatProgressStepDetails.model_validate(
+        {
+            "fields": field_items,
+            "lines": [line for line in lines if line],
+            "code": code_items,
+            "truncated": truncated or None,
+        }
+    )
+    return None if details.is_empty() else details
+
+
 class ChatProgressStepEvent(_EventBase):
     """1 つの段階の今の状態（状態・時刻・補足の全体）。"""
 
@@ -168,6 +358,10 @@ class ChatProgressStepEvent(_EventBase):
     )
     params: dict[str, ChatProgressParamValue] | None = Field(
         default=None, description="画面が名前・補足を組み立てる値（ツール名・件数など）。"
+    )
+    details: ChatProgressStepDetails | None = Field(
+        default=None,
+        description="段を開いて見る詳細（見出しと値・行・SQL や JSON。上限で切り、秘密を伏せる）。",
     )
 
 
@@ -244,6 +438,7 @@ class ChatProgressStepState:
     finished_at: datetime | None = None
     detail: str | None = None
     params: dict[str, ChatProgressParamValue] | None = None
+    details: ChatProgressStepDetails | None = None
 
 
 @dataclass
@@ -311,6 +506,7 @@ def apply_chat_progress_event(
         finished_at=event.finished_at,
         detail=event.detail,
         params=event.params,
+        details=event.details,
     )
     return True
 
@@ -435,6 +631,7 @@ class ChatProgressRecorder:
         kind: str | None = None,
         detail: str | None | Unchanged = UNCHANGED,
         params: dict[str, ChatProgressParamValue] | None | Unchanged = UNCHANGED,
+        details: ChatProgressStepDetails | None | Unchanged = UNCHANGED,
         exclusive: bool = False,
         at: datetime | None = None,
     ) -> ChatProgressStepEvent | None:
@@ -449,7 +646,7 @@ class ChatProgressRecorder:
                 if other.step_id != step_id and other.status == "running":
                     self.finish(other.step_id, at=at)
         if before is not None and before.status == "running":
-            return self.update(step_id, kind=kind, detail=detail, params=params)
+            return self.update(step_id, kind=kind, detail=detail, params=params, details=details)
         return self._record_step(
             step_id,
             status="running",
@@ -458,6 +655,7 @@ class ChatProgressRecorder:
             finished_at=None,
             detail=detail,
             params=params,
+            details=details,
         )
 
     def finish(
@@ -468,6 +666,7 @@ class ChatProgressRecorder:
         kind: str | None = None,
         detail: str | None | Unchanged = UNCHANGED,
         params: dict[str, ChatProgressParamValue] | None | Unchanged = UNCHANGED,
+        details: ChatProgressStepDetails | None | Unchanged = UNCHANGED,
         at: datetime | None = None,
     ) -> ChatProgressStepEvent | None:
         """段階を終える（完了・失敗・スキップ）。同じ状態で変わりが無ければ記録しない。"""
@@ -490,6 +689,7 @@ class ChatProgressRecorder:
             finished_at=finished_at,
             detail=detail,
             params=params,
+            details=details,
         )
 
     def update(
@@ -499,6 +699,7 @@ class ChatProgressRecorder:
         kind: str | None = None,
         detail: str | None | Unchanged = UNCHANGED,
         params: dict[str, ChatProgressParamValue] | None | Unchanged = UNCHANGED,
+        details: ChatProgressStepDetails | None | Unchanged = UNCHANGED,
     ) -> ChatProgressStepEvent | None:
         """状態を変えずに補足・種類を変える（出ていない段階は何もしない）。"""
         before = self._fold.steps.get(step_id)
@@ -512,6 +713,7 @@ class ChatProgressRecorder:
             finished_at=before.finished_at,
             detail=detail,
             params=params,
+            details=details,
         )
 
     def complete(
@@ -549,6 +751,7 @@ class ChatProgressRecorder:
         finished_at: datetime | None | Unchanged = UNCHANGED,
         detail: str | None | Unchanged = UNCHANGED,
         params: dict[str, ChatProgressParamValue] | None | Unchanged = UNCHANGED,
+        details: ChatProgressStepDetails | None | Unchanged = UNCHANGED,
     ) -> ChatProgressStepEvent | None:
         before = self._fold.steps.get(step_id)
         if before is not None and STATUS_RANK[status] < STATUS_RANK[before.status]:
@@ -570,6 +773,7 @@ class ChatProgressRecorder:
             else finished_at,
             detail=(before.detail if before else None) if detail is UNCHANGED else detail,
             params=(before.params if before else None) if params is UNCHANGED else params,
+            details=(before.details if before else None) if details is UNCHANGED else details,
         )
         if before is not None and _same_step(before, event):
             return None
@@ -592,6 +796,7 @@ def _same_step(before: ChatProgressStepState, event: ChatProgressStepEvent) -> b
         and before.finished_at == event.finished_at
         and before.detail == event.detail
         and before.params == event.params
+        and before.details == event.details
     )
 
 
@@ -784,6 +989,9 @@ __all__ = [
     "Unchanged",
     "ChatProgressRecorder",
     "ChatProgressSink",
+    "ChatProgressDetailCode",
+    "ChatProgressDetailField",
+    "ChatProgressStepDetails",
     "ChatProgressStepEvent",
     "ChatProgressStepState",
     "ChatProgressStepStatus",
@@ -792,11 +1000,13 @@ __all__ = [
     "apply_chat_progress_event",
     "chat_progress_contract",
     "chat_progress_cursor",
+    "chat_progress_details",
     "chat_progress_page",
     "chat_progress_sse_response",
     "chat_progress_sse_stream",
     "chat_progress_sse_timing",
     "configure_chat_progress_sse",
+    "redact_chat_progress_text",
     "restore_chat_progress_sse",
     "dump_chat_progress_events",
     "fold_chat_progress_events",

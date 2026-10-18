@@ -158,7 +158,15 @@ async def test_recorder_saves_summary_stages_and_purges_once() -> None:
             "needs_human_review": False,
             "envelope": {"requests": [{"status": "addressed"}]},
             "execution_steps": [
-                {"name": "文書検索", "status": "ok", "elapsed_seconds": 0.4, "llm_calls": 0}
+                {"name": "文書検索", "status": "ok", "elapsed_seconds": 0.4, "llm_calls": 0},
+                # 工程の詳細の行は実行の記録にも残す（#2294）。
+                {
+                    "name": "Rerank",
+                    "status": "complete",
+                    "elapsed_seconds": 0.1,
+                    "llm_calls": 0,
+                    "details": ["関連度で並べ替える根拠: 3 件"],
+                },
             ],
         },
     )
@@ -183,7 +191,16 @@ async def test_recorder_saves_summary_stages_and_purges_once() -> None:
     assert first["citations"] is None
     assert first["stages"] == {
         "stages": [{"stage": "answer", "outcome": "success", "elapsed_ms": 1200.0}],
-        "steps": [{"name": "文書検索", "status": "ok", "elapsed_seconds": 0.4, "llm_calls": 0}],
+        "steps": [
+            {"name": "文書検索", "status": "ok", "elapsed_seconds": 0.4, "llm_calls": 0},
+            {
+                "name": "Rerank",
+                "status": "complete",
+                "elapsed_seconds": 0.1,
+                "llm_calls": 0,
+                "details": ["関連度で並べ替える根拠: 3 件"],
+            },
+        ],
     }
     assert blocked["status"] == "blocked"
     assert blocked["question"] is None

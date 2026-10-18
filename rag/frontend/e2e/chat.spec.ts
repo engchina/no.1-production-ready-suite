@@ -807,7 +807,14 @@ for (const theme of ["light", "dark"] as const) {
   }) => {
     const at = (seconds: number) => new Date(Date.parse("2026-01-01T00:00:01Z") + seconds * 1000).toISOString();
     let seq = 0;
-    const step = (stepId: string, kind: string, start: number, end: number, params?: Record<string, string | number>) => ({
+    const step = (
+      stepId: string,
+      kind: string,
+      start: number,
+      end: number,
+      params?: Record<string, string | number>,
+      details?: Record<string, unknown>
+    ) => ({
       schema_version: 1,
       seq: ++seq,
       target_id: "a1",
@@ -820,12 +827,14 @@ for (const theme of ["light", "dark"] as const) {
       started_at: at(start),
       finished_at: at(end),
       ...(params ? { params } : {}),
+      ...(details ? { details } : {}),
     });
     const progress = [
       step("s1", "history_rewrite", 0, 0.4),
       step("s2", "answer_step", 0.4, 1.2, { name: "質問の理解", depth: 0, llm_calls: 1 }),
       step("s3", "answer_step", 1.2, 9, { name: "回答生成フロー", depth: 0, llm_calls: 2 }),
-      step("s4", "answer_step", 1.3, 1.34, { name: "文書検索", depth: 1, note: "該当なし" }),
+      // 工程の詳細の行（#2294。backend が回答の記録の工程の行を段の詳細にする）。
+      step("s4", "answer_step", 1.3, 1.34, { name: "文書検索", depth: 1, note: "該当なし" }, { lines: ["検索文: 2 本", "結果: 根拠 0 件"] }),
       step("s5", "answer_step", 2, 9, { name: "回答文の生成と根拠確認（1回目）", depth: 1, llm_calls: 2 }),
       { schema_version: 1, seq: ++seq, target_id: "a1", attempt: 0, emitted_at: at(9), type: "terminal", status: "done" },
     ];
@@ -857,6 +866,15 @@ for (const theme of ["light", "dark"] as const) {
     const understood = page.getByTestId("chat-answer-progress-step-s2");
     await expect(understood).toContainText("（LLM 1 回）");
     await expect(understood).toContainText("0.8 秒");
+    // 詳細のある工程だけを開ける（既定で閉じる。#2294）。
+    await expect(page.getByTestId("chat-answer-progress-step-s2-toggle")).toHaveCount(0);
+    const nestedToggle = page.getByTestId("chat-answer-progress-step-s4-toggle");
+    await expect(nestedToggle).toHaveAttribute("aria-expanded", "false");
+    await nestedToggle.click();
+    await expect(nestedToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("chat-answer-progress-step-s4-details")).toContainText("検索文: 2 本");
+    await nestedToggle.click();
+    await expect(page.getByTestId("chat-answer-progress-step-s4-details")).toBeHidden();
     // 完了した一覧は時間の線つき（375px は線を隠し、所要時間の文字だけ）。
     const bars = process.locator("[data-run-timeline-bar]");
     await expect(bars).toHaveCount(5);

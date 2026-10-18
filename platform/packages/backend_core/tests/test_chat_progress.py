@@ -437,3 +437,81 @@ async def test_sse_stream_uses_configured_timing() -> None:
         restore_chat_progress_sse(previous)
     assert slept and set(slept) == {2}
     assert len([c for c in chunks if c.startswith("id: ")]) == 1
+
+
+# ---------------------------------------------------------------------------
+# 段の詳細（#2294）
+# ---------------------------------------------------------------------------
+
+
+def test_step_details_are_recorded_folded_and_round_trip() -> None:
+    from pr_backend_core.chat_progress import chat_progress_details
+
+    recorder = ChatProgressRecorder("job-d", clock=_clock())
+    recorder.start("generate_sql")
+    details = chat_progress_details(
+        fields=[("結果", "安全"), ("参照した表", "T1, T2", True), ("無い値", None)],
+        lines=["警告の行"],
+        code=[("生成した SQL", "SELECT 1 FROM DUAL", "sql")],
+    )
+    assert details is not None
+    event = recorder.finish("generate_sql", details=details)
+    assert event is not None
+    dumped = dump_chat_progress_events(recorder.events)
+    assert dumped[-1]["details"] == {
+        "fields": [
+            {"label": "結果", "value": "安全"},
+            {"label": "参照した表", "value": "T1, T2", "mono": True},
+        ],
+        "lines": ["警告の行"],
+        "code": [{"label": "生成した SQL", "language": "sql", "text": "SELECT 1 FROM DUAL"}],
+    }
+    restored = parse_chat_progress_events(dumped)
+    assert fold_chat_progress_events(restored).steps["generate_sql"].details == details
+    # 同じ詳細の更新は記録しない。詳細だけの変化は記録する（状態は変えない）。
+    assert recorder.update("generate_sql", details=details) is None
+    changed = recorder.update("generate_sql", details=chat_progress_details(lines=["別の行"]))
+    assert changed is not None and changed.status == "done"
+
+
+def test_step_details_are_bounded_and_secrets_are_masked() -> None:
+    from pr_backend_core.chat_progress import (
+        DETAILS_CODE_MAX,
+        DETAILS_MAX_LINES,
+        ChatProgressStepDetails,
+        chat_progress_details,
+    )
+
+    details = chat_progress_details(
+        lines=[f"行 {index}" for index in range(DETAILS_MAX_LINES + 5)],
+        code=[("JSON", '{"api_key": "abc", "password": "p@ss", "n": 1}', "json")],
+    )
+    assert details is not None
+    assert len(details.lines) == DETAILS_MAX_LINES
+    assert details.truncated is True
+    assert details.code[0].text == '{"api_key": "***", "password": "***", "n": 1}'
+
+    masked = chat_progress_details(
+        lines=[
+            "token=abc123",
+            "Authorization: Bearer xyz.abc",
+            "key prak_ABC_def",
+            "https://u:p@h/x",
+        ]
+    )
+    assert masked is not None
+    assert masked.lines == [
+        "token=***",
+        "Authorization: Bearer ***",
+        "key ***",
+        "https://***@h/x",
+    ]
+    assert masked.truncated is None
+
+    # 保存済みの長すぎる記録も捨てずに切って読む（イベントが壊れて段が消えない）。
+    long_code = ChatProgressStepDetails.model_validate(
+        {"code": [{"text": "x" * (DETAILS_CODE_MAX + 100)}]}
+    )
+    assert len(long_code.code[0].text) == DETAILS_CODE_MAX + 1
+    assert long_code.truncated is True
+    assert chat_progress_details() is None

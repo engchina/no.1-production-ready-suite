@@ -131,6 +131,45 @@ class AnswerExecutionTests(unittest.TestCase):
         self.run_answer()
         self.assertGreaterEqual(llm_call_count.get(), 2)
 
+    def test_structured_steps_keep_only_their_own_detail_lines_with_limits(self):
+        """工程の記録（execution_steps）に、その工程だけの詳細の行を上限まで残す（#2294）。"""
+        from rag_engine.generation.execution_record import (
+            STEP_DETAILS_LINE_MAX,
+            STEP_DETAILS_MAX_LINES,
+            STEP_DETAILS_OMITTED,
+            _structured_steps,
+        )
+
+        steps = []
+        token = _structured_steps.set(steps)
+        try:
+            with generation._execution_step("親", "親の目的") as parent:
+                parent.add("親の行")
+                with generation._execution_step("子") as child:
+                    child.result("子の結果", "子の続き")
+                    child.impact("子の影響")
+                parent.result("親の結果")
+            with generation._execution_step("省く") as hidden:
+                hidden.add("見せない行")
+                hidden.hide()
+            with generation._execution_step("長い") as long:
+                long.add("x" * (STEP_DETAILS_LINE_MAX + 10))
+                for index in range(STEP_DETAILS_MAX_LINES + 5):
+                    long.add(f"行 {index}")
+            with generation._execution_step("詳細なし"):
+                pass
+        finally:
+            _structured_steps.reset(token)
+        by_name = {step["name"]: step for step in steps}
+        self.assertEqual(by_name["親"]["details"], ["目的: 親の目的", "親の行", "結果: 親の結果"])
+        self.assertEqual(by_name["子"]["details"], ["結果: 子の結果", "子の続き", "影響: 子の影響"])
+        self.assertNotIn("details", by_name["省く"])
+        self.assertNotIn("details", by_name["詳細なし"])
+        long_lines = by_name["長い"]["details"]
+        self.assertEqual(len(long_lines), STEP_DETAILS_MAX_LINES + 1)
+        self.assertEqual(long_lines[0], "x" * STEP_DETAILS_LINE_MAX + "…")
+        self.assertEqual(long_lines[-1], STEP_DETAILS_OMITTED)
+
     def test_all_strategy_and_flow_names_match_options(self):
         for strategy, label in generation.QUERY_STRATEGIES:
             for flow, flow_label in generation.ANSWER_FLOWS:

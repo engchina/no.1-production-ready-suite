@@ -10,6 +10,7 @@ import {
   type RunPeriod,
   type RunStatus,
   type RunStatusFilter,
+  type RunStepDetails,
   type RunTimelineStepStatus,
 } from "@production-ready/ui";
 
@@ -186,8 +187,44 @@ export interface HistoryTimelineStep {
    */
   offsetMs: number;
   level: 0 | 1;
-  /** 生成の方式の試行の失敗の文（開いて読む）。 */
-  error?: string;
+  /**
+   * 段を開いて見る詳細（#2294）。実行履歴に残した値（書き換えた質問・安全性の確認の結果・行数と列・生成の方式の
+   * 試行の失敗の文）から作る。SQL は「SQL と結果」の節に出すので重ねない。
+   */
+  details?: RunStepDetails;
+}
+
+function stageDetails(item: HistoryItem, stage: string, failed: boolean): RunStepDetails | undefined {
+  switch (stage) {
+    case "prepare_context": {
+      const rewritten = item.rewritten_question?.trim();
+      if (!rewritten || rewritten === item.question.trim()) return undefined;
+      return { fields: [{ label: t("history.timeline.details.rewritten"), value: rewritten }] };
+    }
+    case "safety_check":
+      return {
+        fields: [
+          {
+            label: t("history.timeline.details.safety"),
+            value: t(failed ? "history.timeline.details.blocked" : "history.timeline.details.safe"),
+          },
+        ],
+      };
+    case "execute_sql": {
+      const fields: NonNullable<RunStepDetails["fields"]> = [
+        {
+          label: t("history.timeline.details.rows"),
+          value: t("history.timeline.details.rowsValue", { count: item.result_row_count.toLocaleString("ja-JP") }),
+        },
+      ];
+      const columns = (item.result_columns ?? []).filter(Boolean);
+      return columns.length
+        ? { fields: [...fields, { label: t("history.timeline.details.columns"), value: columns.join(", "), mono: true }] }
+        : { fields };
+    }
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -206,6 +243,7 @@ export function historyTimelineSteps(item: HistoryItem): HistoryTimelineStep[] {
     const failed = blocked && timing.stage === "safety_check";
     const label = chatStageLabel(timing.stage, failed);
     if (!label) continue;
+    const details = stageDetails(item, timing.stage, failed);
     steps.push({
       id: `${timing.stage}-${index}`,
       label,
@@ -213,10 +251,12 @@ export function historyTimelineSteps(item: HistoryItem): HistoryTimelineStep[] {
       durationMs: timing.elapsed_ms,
       offsetMs: start,
       level: 0,
+      ...(details ? { details } : {}),
     });
     if (timing.stage === "generate_sql") {
       let attemptStart = start;
       for (const [engineIndex, attempt] of engines.entries()) {
+        const error = attempt.error?.trim();
         steps.push({
           id: `engine-${engineIndex}`,
           label: t("history.timeline.engineAttempt", { engine: engineTimingLabel(attempt.engine) }),
@@ -224,7 +264,7 @@ export function historyTimelineSteps(item: HistoryItem): HistoryTimelineStep[] {
           durationMs: attempt.elapsed_ms,
           offsetMs: attemptStart,
           level: 1,
-          error: attempt.error?.trim() || undefined,
+          ...(error ? { details: { fields: [{ label: t("history.timeline.details.error"), value: error }] } } : {}),
         });
         attemptStart += Math.max(0, attempt.elapsed_ms);
       }
