@@ -12,6 +12,7 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pr_backend_core.logging import safe_exception_fields
+from pr_system_settings.answer_notice import build_answer_notice_router
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
 from pr_system_settings.database import build_database_router
 from pr_system_settings.model import build_model_router
@@ -172,6 +173,7 @@ from app.schemas.settings import (
     VectorIndexSettingsUpdate,
 )
 from app.security.permissions import ANSWER_PROMPT_EDIT_PERMISSIONS
+from app.security.service import get_security_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -212,6 +214,13 @@ router.include_router(
         env_file=lambda: app_config.PLATFORM_ENV_FILE,
         test_connection=lambda candidate: test_oracle_connection(candidate),
         on_saved=lambda _settings: close_oracle_pool(),
+    )
+)
+# 回答の注意書きも3製品共通の実装（pr_system_settings.answer_notice。#2405）。保存先は共通の表。
+router.include_router(
+    build_answer_notice_router(
+        load=lambda: get_security_service().load_answer_notice(),
+        save=lambda record: get_security_service().save_answer_notice(record),
     )
 )
 ENV_FILE_MODE = 0o600

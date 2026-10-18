@@ -311,6 +311,13 @@ export {
   type EvidenceListProps,
   type EvidenceTag,
 } from "./components/chat/answer-evidence";
+// 回答の注意書き（3 製品共通。#2405）
+export {
+  AnswerNotice,
+  answerNoticeSegments,
+  type AnswerNoticeProps,
+  type AnswerNoticeSegment,
+} from "./components/chat/answer-notice";
 export {
   ChatAnswer,
   ChatPendingTurn,

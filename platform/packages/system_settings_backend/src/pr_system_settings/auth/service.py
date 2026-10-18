@@ -26,6 +26,7 @@ from uuid import uuid4
 
 from dotenv import dotenv_values
 
+from ..answer_notice import AnswerNoticeProvider, AnswerNoticeRecord, InMemoryAnswerNoticeStore
 from ..env_file import write_env_values
 from ..users_roles import PasswordPolicyError, generate_temporary_password, validate_password
 from .api_keys import (
@@ -206,6 +207,13 @@ class AuthService:
         # （3 製品で共有）、それ以外（テスト）はプロセスの中。
         self.api_key_store: ApiKeyStore = (
             store.api_key_store() if isinstance(store, OracleAuthStore) else InMemoryApiKeyStore()
+        )
+        # 回答の注意書き（#2405）。DB の store なら `PLATFORM_ANSWER_NOTICE`（3 製品で共有）、
+        # それ以外（テスト）はプロセスの中。製品のチャットは `answer_notice.current_text()` で読む。
+        self.answer_notice = AnswerNoticeProvider(
+            store.answer_notice_store()
+            if isinstance(store, OracleAuthStore)
+            else InMemoryAnswerNoticeStore()
         )
 
     # ---- bootstrap ----
@@ -941,6 +949,16 @@ class AuthService:
                 403, "呼び出し元の利用者は無効か、初回パスワード変更が済んでいません。"
             ) from None
         return principal, claims
+
+    # ---- 回答の注意書き（#2405） ----
+
+    def load_answer_notice(self) -> AnswerNoticeRecord:
+        """設定の画面に出す回答の注意書き（表が未作成なら 409 の migration が必要）。"""
+        return self._api_key_call(self.answer_notice.load)
+
+    def save_answer_notice(self, record: AnswerNoticeRecord) -> AnswerNoticeRecord:
+        """回答の注意書きを保存する（このプロセスの cache は捨て、次の回答から効く）。"""
+        return self._api_key_call(lambda: self.answer_notice.save(record))
 
     # ---- API keys（#1805） ----
 

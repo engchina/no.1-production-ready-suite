@@ -8,6 +8,8 @@ import {
   FormGrid,
   FormStatus,
   StatusBadge,
+  TabPanel,
+  Tabs,
   TextareaField,
   toast,
 } from "@production-ready/ui";
@@ -31,14 +33,17 @@ import {
 } from "@/lib/support-guide-form";
 
 import { SupportGuideIssueList } from "./SupportGuideIssueList";
+import { SupportGuideProcessImport } from "./SupportGuideProcessImport";
+
+type ImportTab = "json" | "process";
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
 }
 
 /**
- * JSON からの取り込み。「確認」で各ガイドを検証して示し、全件が取り込めるときだけ「取り込む」を押せる
- * （backend は 1 件でも不正なら何も作らない）。取り込んだガイドは下書きになる。
+ * 業務ガイドの取り込み。JSON（書き出した形）と、回答の過程を書いた表（Excel・テキスト。#2397）のタブを持つ。
+ * どちらも取り込んだガイドは下書きになる（公開は検証してから行う）。
  */
 export function SupportGuideImportPanel({
   searchAnswerProfileId,
@@ -46,6 +51,53 @@ export function SupportGuideImportPanel({
 }: {
   searchAnswerProfileId: string;
   onClose: () => void;
+}) {
+  const [tab, setTab] = useState<ImportTab>("json");
+  return (
+    <section
+      className="min-w-0 space-y-3 rounded-md border border-border p-3"
+      aria-labelledby="support-guide-import-title"
+      data-testid="support-guide-import"
+    >
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <h4 id="support-guide-import-title" className="flex items-center gap-1.5 text-sm font-semibold text-fg">
+          <FileJson size={16} aria-hidden />
+          {t("supportGuides.importPanel.title")}
+        </h4>
+        <Button size="sm" variant="ghost" icon={X} className="ml-auto" onClick={onClose}>
+          {t("supportGuides.importPanel.close")}
+        </Button>
+      </div>
+      <Tabs
+        idPrefix="support-guide-import"
+        ariaLabel={t("supportGuides.importPanel.tabsLabel")}
+        value={tab}
+        onChange={(value) => setTab(value as ImportTab)}
+        items={(["json", "process"] as const).map((value) => ({
+          id: value,
+          label: t(`supportGuides.importPanel.tab.${value}`),
+        }))}
+      />
+      <TabPanel idPrefix="support-guide-import" id="json" value={tab}>
+        <SupportGuideJsonImport searchAnswerProfileId={searchAnswerProfileId} onDone={onClose} />
+      </TabPanel>
+      <TabPanel idPrefix="support-guide-import" id="process" value={tab}>
+        <SupportGuideProcessImport searchAnswerProfileId={searchAnswerProfileId} onDone={onClose} />
+      </TabPanel>
+    </section>
+  );
+}
+
+/**
+ * JSON からの取り込み。「確認」で各ガイドを検証して示し、全件が取り込めるときだけ「取り込む」を押せる
+ * （backend は 1 件でも不正なら何も作らない）。取り込んだガイドは下書きになる。
+ */
+function SupportGuideJsonImport({
+  searchAnswerProfileId,
+  onDone,
+}: {
+  searchAnswerProfileId: string;
+  onDone: () => void;
 }) {
   const [text, setText] = useState("");
   const [inputError, setInputError] = useState<string | null>(null);
@@ -91,7 +143,7 @@ export function SupportGuideImportPanel({
         setText("");
         setPreview(null);
         setPreviewedText(null);
-        onClose();
+        onDone();
       },
       onError: (error) => setRequestError(errorMessage(error, t("supportGuides.importPanel.importError"))),
     });
@@ -109,15 +161,7 @@ export function SupportGuideImportPanel({
   };
 
   return (
-    <section
-      className="min-w-0 space-y-3 rounded-md border border-border p-3"
-      aria-labelledby="support-guide-import-title"
-      data-testid="support-guide-import"
-    >
-      <h4 id="support-guide-import-title" className="flex items-center gap-1.5 text-sm font-semibold text-fg">
-        <FileJson size={16} aria-hidden />
-        {t("supportGuides.importPanel.title")}
-      </h4>
+    <div className="min-w-0 space-y-3" data-testid="support-guide-json-import">
       <p className="text-xs leading-relaxed text-fg-muted">{t("supportGuides.importPanel.hint")}</p>
       {/* ファイルと JSON の欄はフォームの最大幅まで（JSON は長い値なので full。#1891）。 */}
       <FormGrid columns={1}>
@@ -171,16 +215,6 @@ export function SupportGuideImportPanel({
         >
           {t("supportGuides.importPanel.run")}
         </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          icon={X}
-          className="w-full sm:ml-auto sm:w-auto"
-          disabled={importGuides.isPending}
-          onClick={onClose}
-        >
-          {t("supportGuides.importPanel.close")}
-        </Button>
       </div>
       <div aria-live="polite" className="space-y-3" data-testid="support-guide-import-result">
         {requestError ? <FormStatus tone="danger" message={requestError} /> : null}
@@ -231,7 +265,7 @@ export function SupportGuideImportPanel({
           </div>
         ) : null}
       </div>
-    </section>
+    </div>
   );
 }
 

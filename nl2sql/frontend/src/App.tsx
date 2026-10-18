@@ -173,6 +173,11 @@ const SelectAiCredentialCard = lazy(() =>
     default: module.SelectAiCredentialCard,
   }))
 );
+const AnswerNoticeSettingsClient = lazy(() =>
+  import("@/components/settings/AnswerNoticeSettingsClient").then((module) => ({
+    default: module.AnswerNoticeSettingsClient,
+  }))
+);
 const AppearanceSettings = lazy(() =>
   import("@/components/settings/AppearanceSettings").then((module) => ({
     default: module.AppearanceSettings,
@@ -355,6 +360,7 @@ function AuthorizedApplication() {
               element={<SettingsSelectAiCredentialRoute />}
             />
             <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
+            <Route path={APP_ROUTES.settingsAnswerNotice} element={<SettingsAnswerNoticeRoute />} />
             <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
             <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
             <Route path={APP_ROUTES.securityApiKeys} element={<SecurityApiKeysPage />} />
@@ -515,6 +521,15 @@ function SettingsOciRoute() {
     <>
       <PageHeader wide title={t("nav.settingsOci")} subtitle={t("settings.oci.subtitle")} />
       <OciSettingsClient />
+    </>
+  );
+}
+
+function SettingsAnswerNoticeRoute() {
+  return (
+    <>
+      <PageHeader wide title={t("nav.settingsAnswerNotice")} subtitle={t("settings.answerNotice.subtitle")} />
+      <AnswerNoticeSettingsClient />
     </>
   );
 }

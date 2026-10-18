@@ -113,6 +113,15 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
             ("instruction", "app.rag.ingestion_prompts:RAPTOR_SUMMARY_PROMPT"),
         ),
     ),
+    # 回答の過程の表から業務ガイドの下書きを作る(#2397。検索・回答プロファイルの知識の作成)。
+    PromptStage(
+        "support_guide_draft",
+        "ingestion",
+        (
+            ("system", "app.rag.support_guide_process_import:GUIDE_DRAFT_SYSTEM_PROMPT"),
+            ("instruction", "app.rag.support_guide_process_import:GUIDE_DRAFT_PROMPT"),
+        ),
+    ),
     PromptStage(
         "history_rewrite",
         "question",
