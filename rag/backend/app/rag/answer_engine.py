@@ -102,6 +102,7 @@ from app.rag.graph_expansion import (
 )
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_evaluation_input
+from app.rag.support_guide_evidence import guide_evidence_conditions
 from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.search import (
     ExtractionFieldCondition,
@@ -533,6 +534,7 @@ def build_engine_settings(
         engine_settings,
         domain_keywords_override=tuple(settings.rag_domain_keywords),
         known_conditions=guide_known_conditions(settings.rag_support_guide),
+        evidence_conditions=guide_evidence_conditions(settings.rag_support_guide),
     )
 
 
@@ -3068,6 +3070,8 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "grounded_draft": dict((result.generation_trace or {}).get("grounded_draft") or {}),
         # 生成と監査の是正の round の時間の配分(#1516。各組の秒・見積もり・時間で打ち切った理由)。
         "round_budget": dict((result.generation_trace or {}).get("round_budget") or {}),
+        # 質問に名前が出た根拠の画面の図の項目の種類と、それで決まった業務ガイドの条件(#2404)。
+        "form_field_kinds": dict((result.generation_trace or {}).get("form_field_kinds") or {}),
         "execution_steps": steps,
         "evidence_tree": tree,
     }

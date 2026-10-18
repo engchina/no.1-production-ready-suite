@@ -73,6 +73,10 @@ VISION_FIELDS = (
     "answerable_questions",
 )
 
+# 画面の図の項目の種類のうち、表示の語を持つ値
+# （rag_engine の FORM_FIELD_KINDS から unknown を除いたもの）。
+FORM_FIELD_KIND_CHOICES = ("select", "text", "checkbox", "radio", "date", "button")
+
 
 class FieldKind(StrEnum):
     """項目の値の種類（画面の欄と検証が使う）。"""
@@ -309,6 +313,14 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "vision_fields",
         FieldKind.ENUM_MAP,
         choices=VISION_FIELDS,
+    ),
+    # 画面の図の項目の種類（Vision の form_fields の kind。#2404）の表示の語。最初の語を chunk の
+    # 本文に出し、どの語も業務ガイドの条件の選択肢との照合に使う。unknown は表示しない。
+    FieldSpec(
+        "content_labels",
+        "form_field_kinds",
+        FieldKind.ENUM_MAP,
+        choices=FORM_FIELD_KIND_CHOICES,
     ),
     # 検索の文（全文検索と埋め込みに入る）の行の見出し。変えたら文書の分割し直しが要る。
     *_fields(

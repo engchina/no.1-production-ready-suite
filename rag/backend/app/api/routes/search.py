@@ -56,6 +56,10 @@ from app.rag.search_answer_profile_config import resolve_search_answer_profile_s
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_citation_metadata
+from app.rag.support_guide_evidence import (
+    EVIDENCE_CONDITIONS_KEY,
+    evidence_condition_candidates,
+)
 from app.rag.support_guide_runtime import (
     GUIDE_LOAD_FAILED_KEY,
     GUIDE_PREVIEW_TRACE_PREFIX,
@@ -329,6 +333,8 @@ async def _resolve_query_context(
                             else {}
                         ),
                         "clarifications": clarification_questions(match),
+                        # 回答の根拠で決められる条件の候補（#2404。画面の図の項目の種類）。
+                        EVIDENCE_CONDITIONS_KEY: evidence_condition_candidates(match),
                         "short_answer": (
                             short_circuit_answer(match)
                             if match.decision in {"clarify", "handoff"}

@@ -941,6 +941,15 @@
       "検索語=search_keywords",
       "言い換え=query_rewrites",
       "想定質問=answerable_questions"
+    ],
+    "form_field_kinds": [
+      "選択=select",
+      "プルダウン=select",
+      "自由入力=text",
+      "チェックボックス=checkbox",
+      "ラジオボタン=radio",
+      "日付=date",
+      "ボタン=button"
     ]
   },
   "search_labels": {

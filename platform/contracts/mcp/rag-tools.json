@@ -256,7 +256,7 @@
                   }
                 ],
                 "default": null,
-                "description": "user=利用者が答えた / question=質問の文から読んだ。",
+                "description": "user=利用者が答えた / question=質問の文から読んだ / document=回答の根拠の画面の図から決めた。",
                 "title": "Source"
               },
               "handling": {
@@ -3904,7 +3904,7 @@
                   }
                 ],
                 "default": null,
-                "description": "user=利用者が答えた / question=質問の文から読んだ。",
+                "description": "user=利用者が答えた / question=質問の文から読んだ / document=回答の根拠の画面の図から決めた。",
                 "title": "Source"
               },
               "handling": {

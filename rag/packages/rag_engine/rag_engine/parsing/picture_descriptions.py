@@ -17,6 +17,7 @@ from typing import Any, Protocol
 from rag_engine.adapters.oci import VISION_SYSTEM_PROMPT, _image_retrieval_template, _render_prompt, describe_picture
 from rag_engine.config import Settings, get_llm_provider, llm_output_token_limit
 from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.models.llm import form_field_kind
 from rag_engine.parsing.checkpoints import CheckpointError, checkpoint_lock, digest_json, file_digest
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.decorative_pictures import classify_picture_record, mark_picture_record_role
@@ -225,13 +226,17 @@ def _series_line(value: Any) -> str:
 
 
 def _form_field_line(value: Any) -> str:
-    """Form の項目を `項目名 = 表示値 [状態]` にし、項目と値の対応を残します。"""
+    """Form の項目を `項目名 = 表示値 [状態] (種類)` にし、項目と値・種類の対応を残します。
+
+    種類（kind。#2404）の語は言語資源（content_labels.form_field_kinds）。unknown は付けません。
+    """
     if not isinstance(value, dict):
         return _join_vision_values(value)
     name, field_value = _join_vision_values(value.get("name")), _join_vision_values(value.get("value"))
     state = _join_vision_values(value.get("state"))
+    kind = content_labels().form_field_kind(form_field_kind(value.get("kind")))
     line = " = ".join(part for part in (name, field_value) if part)
-    return line + (f" [{state}]" if state else "")
+    return line + (f" [{state}]" if state else "") + (f" ({kind})" if kind else "")
 
 
 def _condition_result_line(value: Any) -> str:
@@ -346,6 +351,14 @@ def _bounded_vision_description(payload: dict[str, Any]) -> dict[str, Any]:
             if isinstance(row, list) and len(row) > MAX_TABLE_COLUMNS:
                 omissions.append(f"table_rows[{index}]: {len(row)}セルのうち先頭{MAX_TABLE_COLUMNS}セルを保持")
         description["table_rows"] = [row[:MAX_TABLE_COLUMNS] if isinstance(row, list) else row for row in rows]
+
+    fields = description.get("form_fields")
+    if isinstance(fields, list):
+        # 項目の種類は決まった値だけを metadata（visual_structure）に残す（#2404）。検証しない呼び出し先の
+        # 値の揺れと欠けは unknown にする。
+        description["form_fields"] = [
+            {**item, "kind": form_field_kind(item.get("kind"))} if isinstance(item, dict) else item for item in fields
+        ]
 
     series = description.get("chart_series")
     if isinstance(series, list):

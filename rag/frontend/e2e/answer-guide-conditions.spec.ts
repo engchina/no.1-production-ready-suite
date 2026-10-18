@@ -35,6 +35,8 @@ const GUIDE = {
   known_conditions: [
     { id: "order_type", label: "受注の種類", value: "通常受注", source: "question", state: "known" },
     { id: "shipped", label: "出荷済みか", value: "いいえ", source: "user", state: "known" },
+    // 回答の根拠の画面の図の項目の種類で決めた条件（#2404）。
+    { id: "field_kind", label: "項目の種類", value: "選択", source: "document", state: "known" },
   ],
   unknown_conditions: [
     {
@@ -162,10 +164,11 @@ for (const theme of ["light", "dark"] as const) {
     await expect(conditions).not.toContainText("受注の取消（版 4）");
 
     const known = conditions.getByTestId("guide-conditions-known");
-    await expect(known.getByText("確かめた条件（2）")).toBeVisible();
+    await expect(known.getByText("確かめた条件（3）")).toBeVisible();
     await expect(known.getByRole("listitem")).toHaveText([
       "受注の種類: 通常受注（質問の文から読み取り）",
       "出荷済みか: いいえ（回答前の確認の答え）",
+      "項目の種類: 選択（回答の根拠の画面の図から）",
     ]);
     const conflicting = conditions.getByTestId("guide-conditions-conflicting");
     await expect(conflicting.getByText("質問から複数の候補が読み取れた条件（1）")).toBeVisible();

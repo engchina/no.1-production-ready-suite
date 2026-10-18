@@ -43,6 +43,7 @@ from rag_engine.dependencies import (
     search_adb_hybrid_chunks,
 )
 from rag_engine.generation import applications as answer_applications
+from rag_engine.generation import form_field_kinds
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     build_envelope,
@@ -1639,11 +1640,13 @@ def _grounded_prompt(
     *,
     template: str | None = None,
     known_gaps: Sequence[str] = (),
+    field_kind_note: str = "",
 ) -> str:
     """編集可能テンプレートへ、質問・画像の対応・機能別の根拠と補助情報を差し込む。
 
     template 未指定では保存済みテンプレートを読む。是正ループは1回答で同じ内容を使うため明示する。
     known_gaps は CRAG 評価器の missing_aspects（#983）で、context block に既知の欠落として載せる。
+    field_kind_note は根拠の画面の図の項目の種類の注記（#2404。``form_field_kinds.prompt_note``）。
     """
     from rag_engine.generation.grounded import build_context_block
 
@@ -1658,6 +1661,7 @@ def _grounded_prompt(
             )
             if query_expansion is not None and query_expansion.routing_data_items
             else "",
+            field_kind_note,
         )
         if section
     )
@@ -1913,6 +1917,9 @@ def synthesize_grounded_answer(
             budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
             whole_records=evidence_budget_chars is not None,
         )
+        # 質問に名前が出た画面の図の項目の種類と、それで決まる業務ガイドの条件（#2404）。
+        field_kinds = form_field_kinds.question_field_kinds(question, context)
+        resolved_conditions = form_field_kinds.resolve_conditions(field_kinds, settings.evidence_conditions)
         prompt = _grounded_prompt(
             question,
             spans,
@@ -1925,6 +1932,7 @@ def synthesize_grounded_answer(
             query_expansion,
             template=template,
             known_gaps=known_gaps,
+            field_kind_note=form_field_kinds.prompt_note(field_kinds, resolved_conditions, spans),
         )
         with (
             budget.round(),
@@ -2081,6 +2089,9 @@ def synthesize_grounded_answer(
                 remedy_step.field("添付する画像", f"{len(images)} 件")
 
     current, context, spans, images, mode = best
+    # 採用した回の根拠で決まる項目の種類と業務ガイドの条件（#2404）。
+    field_kinds = form_field_kinds.question_field_kinds(question, context)
+    resolved_conditions = form_field_kinds.resolve_conditions(field_kinds, settings.evidence_conditions)
     # 同じ質問・同じ根拠に対する summary が 1 度でも不支持と監査されたら、採用 round の summary も公開しない。
     # 初回の監査が見逃した保証（「〜により対象者を確認できる」）が、後続 round の指摘に関係なく残っていた (#621)。
     # 引き継ぐのは、採用 round の summary が不支持の summary の文を繰り返すときだけ（別の結論に書き直した summary は
@@ -2166,7 +2177,7 @@ def synthesize_grounded_answer(
     # 確認は数えない。
     settled = grounded.settle_confirmations(
         current.draft,
-        known_conditions=settings.known_conditions,
+        known_conditions=(*settings.known_conditions, *((item.label, item.value) for item in resolved_conditions)),
         version_settled=bool(superseded) and any(str(span.get("evidence_id")) not in superseded for span in spans),
     )
     # 回答の確定に必要な実データ・別の資料の確認。どの分岐でも本文の最後の節に出す (#688)。
@@ -2263,6 +2274,8 @@ def synthesize_grounded_answer(
         "llm_calls": sum(1 + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds),
         "image_fallback": image_decision,
         "final_fact_count": len(published),
+        # 質問に名前が出た根拠の画面の図の項目の種類と、それで決まった業務ガイドの条件（#2404）。
+        **({"form_field_kinds": form_field_kinds.trace_payload(field_kinds, resolved_conditions)} if field_kinds else {}),
         # 採用した草稿の構造（#1492）。確認の項目の事実と規則の分け方、説明の種類・適用を残し、LLM を呼ばずに
         # 対応の決定を replay できるようにする（本文・引用は envelope の items にある）。
         "grounded_draft": draft_structure(current.draft, settled, superseded=superseded, withheld=superseded_withheld),
