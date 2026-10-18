@@ -1396,8 +1396,9 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ge=0,
         le=10,
         description=(
-            "丸数字・(1) などで並べた小問のうち、根拠が無いか一部だけの小問ごとに検索する小問の数の上限"
-            "(1 小問 1 回。0 で小問ごとの検索をしない。#2399)。期限は再検索と共通。"
+            "丸数字・(1) などで並べた小問のうち、根拠が無いか一部だけの小問ごとに"
+            "検索する小問の数の上限(1 小問 1 回。0 で小問ごとの検索をしない。#2399)。"
+            "期限は再検索と共通。"
         ),
     )
     rag_request_coverage_chunks_per_subquestion: int = Field(
