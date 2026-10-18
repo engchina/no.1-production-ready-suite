@@ -27,6 +27,7 @@ const RECIPE_DEFAULTS = {
   entity_index_enabled: true,
   entity_name_columns: [],
   entity_attribute_columns: [],
+  heading_level_inference_enabled: false,
   field_extraction_enabled: false,
   navigation_summary_enabled: false,
 };
@@ -147,12 +148,13 @@ test("サイドバーの取込・回答設定の名前と順番は設定の概�
   expect(sidebarNames).toEqual(cardNames);
 });
 
-// #528: レシピ 13 項目を、選択中レシピの設定と同じ処理順で出す（実体の索引は #1388）。
+// #528: レシピ 14 項目を、選択中レシピの設定と同じ処理順で出す（実体の索引は #1388）。
 const PROCESSING_ORDER = [
   "preprocess_profile",
   "auto_parse_after_preprocess_enabled",
   "parser_adapter_backend",
   "vision_enabled",
+  "heading_level_inference_enabled",
   "field_extraction_enabled",
   "navigation_summary_enabled",
   "section_rules_mode",
@@ -165,7 +167,7 @@ const PROCESSING_ORDER = [
 ];
 
 for (const scheme of ["light", "dark"] as const) {
-  test(`取込の流れは 13 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
+  test(`取込の流れは 14 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
     page,
   }, testInfo) => {
     await page.addInitScript((theme) => {

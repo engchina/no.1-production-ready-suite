@@ -221,6 +221,29 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#2277 見出しの階層の推定（AI））
+
+任意の取込の段「見出しの階層の推定（AI）」を足した。既定は無効で、既定のままなら取込・抽出結果・抽出の使い回しの鍵は
+変わらない。API の項目（文書解析の設定の `heading_level_inference_enabled`・文書レシピの同じ名前の項目）が増えた。表の変更は無い。
+
+- 対象: しおりの深さを当てた見出しが無く、見出しが `RAG_HEADING_LEVEL_INFERENCE_MIN_HEADINGS`（既定 3）以上
+  `RAG_HEADING_LEVEL_INFERENCE_MAX_HEADINGS`（既定 300）以下で、番号の体系（「1.」「1.2」「第 1 章」など）で深さを
+  決められない見出しの割合が `RAG_HEADING_LEVEL_INFERENCE_UNRESOLVED_RATIO`（既定 0.5）以上の、Docling の解析結果
+  （要素の `section_path` を `layout_records` から作る結果）。MinerU など、ほかの解析エンジンの結果には当てない。
+- 段ごとの解析をまとめ、文書全体の整理（#2001）を当てた後の原本全体に 1 回だけ当てる（章節の木・項目抽出・chunk より前）。
+- OCI Enterprise AI には見出しの文字列だけ（読み順。1 つ `RAG_HEADING_LEVEL_INFERENCE_MAX_TITLE_CHARS` 文字まで）を
+  JSON で渡し、構造化出力の `{"levels":[{"i":番号,"level":1〜6}]}` を受け取る。応答は Pydantic で厳密に確かめ（余分な
+  key・欠け・重複・範囲外は不可）、合わない・呼び出しの失敗のときは今の階層のまま取込を続ける。
+- 受け取った階層は見出しの record の `raw.heading_level`（`raw.heading_source=llm_heading_level`）に入れ、要素の
+  `section_path` を作り直す（章節の木と chunk の `section_path` が同じ階層になる）。結果は抽出結果の
+  `parser_artifacts.heading_level_inference`（`status`: `applied` / `skipped` / `invalid_response` / `failed` と理由）。
+- プロンプトは回答プロンプトの画面の「各段のプロンプト」の「見出しの階層を推定する」で見られる。
+- 有効にすると抽出の使い回しの鍵が変わるため、対象の文書は解析し直す（取込を再実行する）。
+
+1. 使うときは、文書解析の画面の「解析後の処理」で「見出しの階層の推定（AI）」を有効にして保存する（`backend/.env` の
+   `RAG_HEADING_LEVEL_INFERENCE_ENABLED`）か、文書のレシピで上書きする。閾値を変えるときは `backend/.env` に
+   `RAG_HEADING_LEVEL_INFERENCE_*`（雛形 `rag/backend/.env.example`）を書き、backend・取込 worker を再起動する。
+
 ## 既存環境の更新手順（#2273 ページの境目の段落の続きの判定に行の位置を足す）
 
 ページの境目で切れた段落の続きの判定（文書全体の整理。#2001。Docling と MinerU の段の境目）を次のように変えた。表の続きの
