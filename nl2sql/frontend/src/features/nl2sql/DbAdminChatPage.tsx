@@ -12,7 +12,7 @@ import {
   DEFAULT_PAGE_SIZE,
   EmptyState,
   ExecutionConfirmationField,
-  MessageText,
+  MarkdownText,
   ProcessingIndicator,
   StatusBadge,
   TimedLoadingState,
@@ -57,7 +57,6 @@ import {
   dbAdminChatConfirmed,
   dbAdminChatExecutionFromOutcome,
   dbAdminChatGenerateStep,
-  dbAdminChatLatestExecution,
   dbAdminChatProgressSteps,
   dbAdminChatSavedExecutions,
   dbAdminChatStatementKind,
@@ -606,18 +605,15 @@ function DbAdminChatTurn({
     >
       <ChatAnswer>
         <ChatProgress
-          steps={dbAdminChatProgressSteps({
-            sentAtMs,
-            generatedAtMs,
-            plan,
-            execution: dbAdminChatLatestExecution(executions),
-          })}
+          // 実行は経過に足さない（生成したときの経過のまま。実行の表示は文の区画）。
+          steps={dbAdminChatProgressSteps({ sentAtMs, generatedAtMs, plan })}
           startedAt={sentAtMs}
           labels={CHAT_PROGRESS_LABELS}
           testId={`${TEST_ID}-progress`}
         />
         {turn.explanation ? (
-          <MessageText text={turn.explanation} />
+          // 説明は Markdown を含みうるので、共通の Markdown の表示で描く（記号を生で出さない）。
+          <MarkdownText text={turn.explanation} />
         ) : !hasSql ? (
           <p className="text-sm text-fg-muted">{t("dbAdminChat.noSql")}</p>
         ) : null}
@@ -1023,7 +1019,7 @@ function AnalysisPanel({
       {analysis.status === "done" ? (
         <>
           <p className="text-sm font-medium text-fg">{t("dbAdminChat.analyze.title")}</p>
-          <MessageText text={analysis.data.analysis} />
+          <MarkdownText text={analysis.data.analysis} />
           {analysis.data.corrected_plan && analysis.data.corrected_plan.statements.length > 0 ? (
             <>
               <p className="text-sm font-medium text-fg">{t("dbAdminChat.analyze.corrected")}</p>

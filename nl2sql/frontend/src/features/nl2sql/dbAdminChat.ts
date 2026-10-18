@@ -5,7 +5,7 @@
 // SQL Developer などのワークシートと同じ）。「すべて実行」は上から順に実行し、最初のエラーで止める。
 //
 // 処理の経過は NL2SQL のチャットと同じ段階の名前（`CHAT_PROGRESS_STEP_DEFINITIONS`）と共通の
-// `ChatProgress` で出す（生成 → SQL の確認（サーバーの分類）→ 実行）。
+// `ChatProgress` で出す（生成 → SQL の確認（サーバーの分類））。実行は経過に足さない（文の区画に出す）。
 import type { ChatProgressStep, ChatProgressStepStatus } from "@production-ready/ui";
 
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
@@ -123,34 +123,12 @@ export function dbAdminChatExecutionFromOutcome(
   };
 }
 
-/** 処理の経過の「実行」の段に出す、いちばん新しい実行（1 文か「すべて実行」）。 */
-export function dbAdminChatLatestExecution(executions: DbAdminChatTurnExecutions): DbAdminChatExecution | null {
-  const candidates: DbAdminChatExecution[] = Object.values(executions.statements).filter(
-    (item) => item.status !== "not_run",
-  );
-  let latest: DbAdminChatExecution | null = null;
-  for (const item of candidates) {
-    if (!latest || item.startedAtMs >= latest.startedAtMs) latest = item;
-  }
-  const runAll = executions.runAll;
-  if (runAll && (!latest || runAll.startedAtMs >= latest.startedAtMs)) {
-    // 「すべて実行」の行数は文ごとの結果に出すので、経過の段には出さない。
-    return {
-      status: runAll.status,
-      startedAtMs: runAll.startedAtMs,
-      finishedAtMs: runAll.finishedAtMs,
-      result: null,
-    };
-  }
-  return latest;
-}
-
 function iso(ms: number): string {
   return new Date(ms).toISOString();
 }
 
 /** 段階の名前はチャットと同じ定義から作る（文言を 2 つの画面で分けない）。 */
-function stepLabel(stage: "generate_sql" | "safety_check" | "execute_sql", status: ChatProgressStepStatus) {
+function stepLabel(stage: "generate_sql" | "safety_check", status: ChatProgressStepStatus) {
   return CHAT_PROGRESS_STEP_DEFINITIONS[stage]?.label(status, {}) ?? stage;
 }
 
@@ -188,17 +166,19 @@ export function dbAdminChatGenerateStep(
   };
 }
 
-/** 1 往復の処理の経過（生成 → SQL の確認 → 実行）。 */
+/**
+ * 1 往復の処理の経過（生成 → SQL の確認）。実行（「実行」「もう一度実行」「すべて実行」）は利用者が後から押す
+ * 操作なので経過に足さず、その文の区画の実行の表示（実行中の経過時間・結果の要約）に出す。経過は生成した
+ * ときのまま変わらない。
+ */
 export function dbAdminChatProgressSteps({
   sentAtMs,
   generatedAtMs,
   plan,
-  execution,
 }: {
   sentAtMs: number;
   generatedAtMs: number;
   plan: DbAdminChatPlan;
-  execution?: DbAdminChatExecution | null;
 }): ChatProgressStep[] {
   const steps: ChatProgressStep[] = [dbAdminChatGenerateStep("done", sentAtMs, generatedAtMs)];
   if (plan.statements.length === 0) return steps;
@@ -212,22 +192,6 @@ export function dbAdminChatProgressSteps({
     startedAt: iso(generatedAtMs),
     finishedAt: iso(generatedAtMs),
   });
-  if (execution && execution.status !== "not_run") {
-    const status: ChatProgressStepStatus =
-      execution.status === "running" ? "running" : execution.status === "failed" ? "failed" : "done";
-    const rows = execution.result?.select_result?.returned_count ?? execution.saved?.row_count;
-    steps.push({
-      id: "execute_sql",
-      label: stepLabel("execute_sql", status),
-      status,
-      detail:
-        status === "done" && typeof rows === "number"
-          ? t("chat.progress.rows", { count: rows.toLocaleString("ja-JP") })
-          : undefined,
-      startedAt: iso(execution.startedAtMs),
-      finishedAt: execution.finishedAtMs === undefined ? undefined : iso(execution.finishedAtMs),
-    });
-  }
   return steps;
 }
 

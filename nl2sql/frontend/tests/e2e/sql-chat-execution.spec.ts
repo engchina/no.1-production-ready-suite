@@ -310,6 +310,9 @@ test("送信のジョブが実行まで行い、結果の行を 1 回だけ受�
   }
 
   // 「もう一度実行」は明示の操作。実行中はラベルを変えず、アイコンがスピナーになる（スピナーは 1 つ）。
+  // 処理の経過（送信のジョブの段）は変えない（段の数・合計時間。実行は SQL の下の実行結果に出す）。
+  const progress = turn.getByTestId("sql-chat-progress-summary");
+  const progressBefore = (await progress.textContent()) ?? "";
   let release!: () => void;
   state.gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -319,10 +322,12 @@ test("送信のジョブが実行まで行い、結果の行を 1 回だけ受�
   await expect(run).toHaveAccessibleName("もう一度実行");
   await expect(run).toHaveAttribute("aria-disabled", "true");
   await expectSingleSpinner(page, run);
+  await expect(progress).toHaveText(progressBefore);
   release();
   await expect(turn.getByTestId("sql-chat-execution-running")).toHaveCount(0);
   expect(state.executeRequests).toEqual(["/api/nl2sql/jobs/chat-1/execute"]);
   expect(state.receiveRequests).toHaveLength(1);
+  await expect(progress).toHaveText(progressBefore);
 });
 
 test("「すべての行を見る」は広いシートでページを送り、CSV は取得した行を書き出す", { tag: "@responsive" }, async ({
@@ -544,8 +549,13 @@ test("会話を開き直したときは前回の実行の要約と「もう一�
   await expect(turn.getByTestId("sql-chat-last-execution")).toBeVisible();
   const run = turn.getByTestId("sql-chat-execute");
   await expect(run).toHaveAccessibleName("もう一度実行");
+  // 開き直した会話でも、「もう一度実行」は処理の経過を変えない（前回の実行の要約は経過と別に出す）。
+  const progressCount = await turn.getByTestId("sql-chat-progress-summary").count();
+  const progressBefore = progressCount ? await turn.getByTestId("sql-chat-progress-summary").textContent() : null;
   await run.click();
   await expect(turn.getByTestId("sql-chat-result-summary")).toHaveText("60 行・8 列・0.8 秒");
   await expect(turn.getByTestId("sql-chat-last-execution")).toHaveCount(0);
+  await expect(turn.getByTestId("sql-chat-progress-summary")).toHaveCount(progressCount);
+  if (progressBefore !== null) await expect(turn.getByTestId("sql-chat-progress-summary")).toHaveText(progressBefore);
   expect(state.executeRequests).toEqual(["/api/nl2sql/jobs/chat-1/execute"]);
 });

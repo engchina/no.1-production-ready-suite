@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from jsonschema import Draft202012Validator
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TextOutput(BaseModel):
@@ -22,6 +22,16 @@ class SqlOutput(BaseModel):
 
 class AnalysisOutput(BaseModel):
     analysis: str
+
+
+class DbAdminChatSqlOutput(BaseModel):
+    """DB 管理チャットの SQL の生成（#2264）。
+
+    質問には SQL で答える（SQL の無い応答は作り直させる。#2333）。
+    """
+
+    sql: str = Field(description="質問に答える・作業を行う Oracle の SQL（1 文以上）。")
+    explanation: str = Field(default="", description="SQL が何をするかの短い説明。")
 
 
 class DbAdminChatAnalysisOutput(BaseModel):

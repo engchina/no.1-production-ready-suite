@@ -429,6 +429,7 @@ from .structured_outputs import (
     AnalysisOutput,
     CommentsOutput,
     DbAdminChatAnalysisOutput,
+    DbAdminChatSqlOutput,
     SqlOutput,
     StructureOutput,
     response_format,
@@ -4542,6 +4543,29 @@ _DB_ADMIN_CHAT_MODEL_UNAVAILABLE = (
     "OCI Enterprise AI のモデルの接続が設定されていないため、SQL を生成できません。"
     "システム設定 › モデルで既定のテキストモデルを設定してください。"
 )
+# SQL の無い応答（文章だけの答え）の作り直しの回数と、作り直させる理由・最後の失敗（#2333）。
+_DB_ADMIN_CHAT_GENERATION_ATTEMPTS = 2
+_DB_ADMIN_CHAT_NO_SQL_RETRY = (
+    "前の応答の sql に実行できる SQL がありませんでした。説明の文章だけで答えず、"
+    "質問に答えるための Oracle の SQL を sql に入れてください。"
+)
+_DB_ADMIN_CHAT_NO_SQL = (
+    "SQL を生成できませんでした。AI が SQL ではなく文章で答えたため、回答として出しません。"
+    "質問を言い換えて送り直してください。"
+)
+
+
+def _db_admin_chat_has_sql(sql: str) -> bool:
+    """実行できる SQL の文が 1 つ以上あるか。
+
+    文の種類が分からない文だけなら、SQL ではない文章とみなす。
+    """
+
+    return any(
+        _admin_statement_type(statement) != "UNKNOWN" for statement in _split_sql_statements(sql)
+    )
+
+
 # DDL を含む複数の文の途中の失敗の警告（DDL は暗黙の commit で戻らない）。
 # 「管理 SQL を実行」と DB 管理チャットが使う。
 _DB_ADMIN_IMPLICIT_COMMIT_PARTIAL_WARNING = (
@@ -17563,25 +17587,40 @@ class Nl2SqlService:
             ),
             history=history,
         )
-        try:
-            raw = self._enterprise_ai_client.generate(
-                prompt=question,
-                context=context,
-                system_prompt=_DB_ADMIN_CHAT_SYSTEM_PROMPT,
-                response_format=response_format(SqlOutput, name="DbAdminChatSql"),
-            )
-            output = SqlOutput.model_validate_json(raw)
-        except EnterpriseAiDirectError as exc:
-            raise DbAdminChatGenerationError(f"SQL の生成に失敗しました: {exc}") from exc
-        except ValueError as exc:
-            raise DbAdminChatGenerationError(
-                "SQL の生成に失敗しました: AI の応答を読み取れませんでした。"
-            ) from exc
-        sql = _strip_sql_code_fence(output.sql)
+        # 質問には SQL で答える（事実は SQL の実行の結果から利用者が確かめる）。
+        # SQL の無い応答（文章だけの答え）は、理由を添えて 1 回だけ作り直させ、
+        # それでも無ければ生成の失敗にする（文章を回答として出さない）。
+        prompt = question
+        sql = ""
+        output: DbAdminChatSqlOutput | None = None
+        for _attempt in range(_DB_ADMIN_CHAT_GENERATION_ATTEMPTS):
+            try:
+                raw = self._enterprise_ai_client.generate(
+                    prompt=prompt,
+                    context=context,
+                    system_prompt=_DB_ADMIN_CHAT_SYSTEM_PROMPT,
+                    response_format=response_format(DbAdminChatSqlOutput, name="DbAdminChatSql"),
+                )
+                output = DbAdminChatSqlOutput.model_validate_json(raw)
+            except EnterpriseAiDirectError as exc:
+                raise DbAdminChatGenerationError(f"SQL の生成に失敗しました: {exc}") from exc
+            except ValueError as exc:
+                raise DbAdminChatGenerationError(
+                    "SQL の生成に失敗しました: AI の応答を読み取れませんでした。"
+                ) from exc
+            sql = _strip_sql_code_fence(output.sql)
+            if _db_admin_chat_has_sql(sql):
+                break
+            logger.info("nl2sql_db_admin_chat_generation_without_sql")
+            prompt = f"{question}\n\n{_DB_ADMIN_CHAT_NO_SQL_RETRY}"
+        else:
+            raise DbAdminChatGenerationError(_DB_ADMIN_CHAT_NO_SQL)
+        if output is None:  # pragma: no cover - 上のループは SQL を受け取るか例外で抜ける
+            raise DbAdminChatGenerationError(_DB_ADMIN_CHAT_NO_SQL)
         return DbAdminChatGenerateData(
             question=question,
             explanation=output.explanation.strip(),
-            plan=self._db_admin_chat_plan(sql) if sql else DbAdminChatPlan(),
+            plan=self._db_admin_chat_plan(sql),
             context_tables=[table.qualified_name for table in context_tables],
             model=self._enterprise_ai_client.model_id(),
             warnings=warnings,

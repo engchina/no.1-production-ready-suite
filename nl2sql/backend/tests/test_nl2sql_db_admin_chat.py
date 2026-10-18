@@ -19,6 +19,7 @@ from app.features.nl2sql.db_admin_chat import (
 from app.features.nl2sql.models import (
     DbAdminChatAnalyzeRequest,
     DbAdminChatExecuteData,
+    DbAdminChatGenerateRequest,
     DbAdminChatHistoryTurn,
     DbAdminChatTurn,
     DbAdminChatTurnExecuteRequest,
@@ -793,12 +794,63 @@ def test_generate_requires_enterprise_ai() -> None:
     assert error.value.status_code == 409
 
 
-def test_generate_with_empty_sql_keeps_the_explanation() -> None:
-    ai = _FakeEnterpriseAi([{"sql": "", "explanation": "方針で実行できません"}])
+def test_prose_only_answer_is_regenerated_as_sql() -> None:
+    """SQL の無い応答（文章だけの答え）は、理由を添えて 1 回だけ作り直させる。"""
+    ai = _FakeEnterpriseAi(
+        [
+            {"sql": "", "explanation": "**ITEM_STOCK** は在庫の表です。"},
+            {"sql": "SELECT TABLE_NAME, COMMENTS FROM ALL_TAB_COMMENTS", "explanation": "表の説明"},
+        ]
+    )
     service = _catalog_service(_FakeAdapter(), ai)
-    data = service.generate_db_admin_chat_sql("インスタンスを停止して")
-    assert data.plan.statements == []
-    assert data.explanation == "方針で実行できません"
+    data = service.generate_db_admin_chat_sql("これらの表は何？")
+    assert [item.sql for item in data.plan.statements] == [
+        "SELECT TABLE_NAME, COMMENTS FROM ALL_TAB_COMMENTS"
+    ]
+    assert data.explanation == "表の説明"
+    assert len(ai.calls) == 2
+    assert ai.calls[0]["prompt"] == "これらの表は何？"
+    # 作り直しの依頼は、何が違反でどう直すかを書く（質問はそのまま渡す）。
+    assert ai.calls[1]["prompt"].startswith("これらの表は何？")
+    assert "SQL がありませんでした" in ai.calls[1]["prompt"]
+    assert "必ず SQL で答えます" in ai.calls[0]["system_prompt"]
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        {"sql": "", "explanation": "表の一覧です。"},
+        # 文章を sql に入れた応答も SQL ではない（文の種類が分からない文だけ）。
+        {"sql": "ITEM_STOCK は在庫の表、OTHER_TABLE は補助の表です。", "explanation": ""},
+    ],
+    ids=["empty", "prose-in-sql"],
+)
+def test_answer_without_sql_twice_is_a_generation_failure(second: dict[str, Any]) -> None:
+    ai = _FakeEnterpriseAi([{"sql": "", "explanation": "表の一覧です。"}, second])
+    service = _catalog_service(_FakeAdapter(), ai)
+    with pytest.raises(DbAdminChatGenerationError) as error:
+        service.generate_db_admin_chat_sql("これらの表は何？")
+    # 文章を回答として出さず、生成の失敗（画面は質問を残して「再送信」）。
+    assert error.value.status_code == 502
+    assert str(error.value).startswith("SQL を生成できませんでした")
+    assert len(ai.calls) == 2
+
+
+def test_prose_only_answer_is_not_saved_as_a_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    ai = _FakeEnterpriseAi(
+        [{"sql": "", "explanation": "表の一覧です。"}, {"sql": "", "explanation": "表の一覧です。"}]
+    )
+    service = _catalog_service(_FakeAdapter(), ai)
+    with pytest.raises(DbAdminChatGenerationError):
+        service.send_db_admin_chat_question(
+            DbAdminChatGenerateRequest(question="これらの表は何？", client_turn_id=uuid.uuid4()),
+            actor="chat-user",
+            all_users=False,
+        )
+    items, total = service._db_admin_chat_store.list_conversations(
+        owner_user_uuid=None, offset=0, limit=10
+    )
+    assert (items, total) == ([], 0)
 
 
 def test_analyze_returns_corrected_plan() -> None:

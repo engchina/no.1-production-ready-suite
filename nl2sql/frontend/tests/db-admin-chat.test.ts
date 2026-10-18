@@ -7,7 +7,6 @@ import {
   dbAdminChatCanRunStatement,
   dbAdminChatConfirmed,
   dbAdminChatExecutionFromOutcome,
-  dbAdminChatLatestExecution,
   dbAdminChatProgressSteps,
   dbAdminChatSavedExecutions,
   dbAdminChatStatementKind,
@@ -132,30 +131,19 @@ test("SQL の確認の段は文の分類ごとの数を出し、止める文が�
   assert.equal(empty.length, 1);
 });
 
-test("処理の経過は生成・SQL の確認・実行の段階をチャットと同じ名前で出す", () => {
-  const steps = dbAdminChatProgressSteps({
-    sentAtMs: 1_000,
-    generatedAtMs: 4_000,
-    plan: SELECTS,
-    execution: {
-      status: "done",
-      startedAtMs: 5_000,
-      finishedAtMs: 6_000,
-      result: result({
-        select_result: { columns: ["N"], rows: [{ N: 1 }], total: 1, returned_count: 1 },
-      }),
-    },
-  });
+test("処理の経過は生成・SQL の確認の段階をチャットと同じ名前で出し、実行の段を足さない", () => {
+  const steps = dbAdminChatProgressSteps({ sentAtMs: 1_000, generatedAtMs: 4_000, plan: SELECTS });
   assert.deepEqual(
     steps.map((step) => [step.id, step.status]),
     [
       ["generate_sql", "done"],
       ["safety_check", "done"],
-      ["execute_sql", "done"],
     ],
   );
   assert.equal(steps[0]?.label, "SQL を生成しました");
-  assert.equal(steps[2]?.detail, "1 行");
+  // 実行（「実行」「もう一度実行」「すべて実行」）は文の区画に出し、生成したときの経過は変えない。
+  assert.equal(steps.some((step) => step.id === "execute_sql"), false);
+  assert.equal(steps.at(-1)?.finishedAt, new Date(4_000).toISOString());
 });
 
 test("失敗の内容を AI のエラー分析に渡す形にする", () => {
@@ -212,19 +200,6 @@ test("「すべて実行」の文ごとの結果を、成功・失敗・実行�
   );
   assert.equal(pending.status, "failed");
   assert.match(String((pending.requestError as Error).message), /確認語が違います/);
-});
-
-test("処理の経過の実行の段は、いちばん新しい実行（1 文か「すべて実行」）を出す", () => {
-  const latest = dbAdminChatLatestExecution({
-    statements: {
-      1: { status: "done", startedAtMs: 1_000, finishedAtMs: 1_500, result: result() },
-      2: { status: "not_run", startedAtMs: 9_000 },
-    },
-    runAll: { status: "failed", startedAtMs: 3_000, finishedAtMs: 4_000 },
-  });
-  assert.equal(latest?.status, "failed");
-  assert.equal(latest?.startedAtMs, 3_000);
-  assert.equal(dbAdminChatLatestExecution({ statements: {}, runAll: null }), null);
 });
 
 function savedTurn(overrides: Partial<DbAdminChatTurn> = {}): DbAdminChatTurn {
@@ -295,9 +270,6 @@ test("開き直したターンは、保存した文ごとの最後の実行と�
   assert.equal(executions.statements[2]?.status, "not_run");
   assert.equal(executions.runAll?.status, "failed");
   assert.equal(executions.runAll?.saved?.stopped_at, 2);
-  // 行は保存していないので、経過の段の行数は要約から出す。
-  const steps = dbAdminChatProgressSteps({ sentAtMs: 0, generatedAtMs: 2_000, plan: SELECTS, execution: first });
-  assert.equal(steps[2]?.detail, "12 行");
   const empty = dbAdminChatSavedExecutions(savedTurn({ statement_executions: [], last_run_all: null }));
   assert.deepEqual(empty, { statements: {}, runAll: null });
 });

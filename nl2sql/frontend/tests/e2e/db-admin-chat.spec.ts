@@ -446,10 +446,19 @@ test("SELECT は「実行」を押すと実行し、結果を表で出す。続�
   expect(mock.executeBodies).toHaveLength(0);
   // SELECT は確認語の欄を出さない。
   await expect(turn.getByRole("textbox", { name: "実行確認語" })).toHaveCount(0);
+  // 処理の経過は生成と SQL の確認まで。実行は経過に足さず（段の数・合計時間を変えない）、SQL の区画に出す。
+  const progress = turn.getByTestId("db-admin-chat-progress-summary");
+  await expect(progress).toHaveText(/^処理の経過（2 ステップ・/);
+  const progressBefore = (await progress.textContent()) ?? "";
   await turn.getByTestId("db-admin-chat-execute").click();
   await expect(turn.getByTestId("db-admin-chat-result")).toBeVisible();
   await expect(turn.getByText("Oracle AI Database Release 1.0")).toBeVisible();
   await expect(turn.getByTestId("db-admin-chat-execute")).toHaveText("もう一度実行");
+  await expect(progress).toHaveText(progressBefore);
+  await turn.getByTestId("db-admin-chat-execute").click();
+  await expect.poll(() => mock.executeBodies.length).toBe(2);
+  await expect(turn.getByTestId("db-admin-chat-result")).toBeVisible();
+  await expect(progress).toHaveText(progressBefore);
   // SQL は送らず、ターンに保存した SQL を実行する（#2319）。
   const conversationId = String(mock.generateBodies[0]!.client_turn_id);
   expect(mock.generateBodies[0]).toMatchObject({ question: "データベースの版", conversation_id: "" });
@@ -799,6 +808,7 @@ test("複数の SELECT は文ごとに確認語なしで実行でき、結果は
     responses: [
       generated(
         plan(["SELECT BANNER_FULL FROM V$VERSION", "SELECT TABLESPACE_NAME, USED_PERCENT FROM DBA_TABLESPACE_USAGE_METRICS"]),
+        "**版**と**表領域の使用率**を、文ごとに読みます。",
       ),
     ],
   });
@@ -806,6 +816,10 @@ test("複数の SELECT は文ごとに確認語なしで実行でき、結果は
   await ask(page, "版と表領域");
   const blocks = statements(page);
   await expect(blocks).toHaveCount(2);
+  // 説明は共通の Markdown の表示で描き、記号を生で出さない。
+  const answer = page.getByTestId("db-admin-chat-turn").first();
+  await expect(answer.locator("strong", { hasText: "表領域の使用率" })).toBeVisible();
+  await expect(answer).not.toContainText("**");
   await expect(blocks.nth(0).getByText("文 1", { exact: true })).toBeVisible();
   await expect(blocks.nth(1).getByText("文 2", { exact: true })).toBeVisible();
   await expect(blocks.nth(1).getByTestId("db-admin-chat-sql")).toHaveText(
@@ -821,8 +835,12 @@ test("複数の SELECT は文ごとに確認語なしで実行でき、結果は
   await expect(blocks.nth(0).getByTestId("db-admin-chat-result")).toHaveCount(0);
   expect(mock.executeBodies[0]).toMatchObject({ mode: "statement", statement_index: 2, confirmation: "" });
 
+  const progress = page.getByTestId("db-admin-chat-progress-summary");
+  const progressBefore = (await progress.textContent()) ?? "";
   await page.getByTestId("db-admin-chat-run-all").click();
   await expect(blocks.nth(0).getByTestId("db-admin-chat-result")).toBeVisible();
+  // 「すべて実行」も処理の経過を変えない。
+  await expect(progress).toHaveText(progressBefore);
   await expect(blocks.nth(1).getByTestId("db-admin-chat-result")).toBeVisible();
   expect(mock.executeBodies[1]).toMatchObject({ mode: "all", confirmation: "" });
   expect(mock.executeBodies[1]).not.toHaveProperty("statement_index");
