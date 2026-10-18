@@ -12,6 +12,7 @@ import {
   runFinishedAt,
   runStatusLabel,
   pairToolProgressSteps,
+  runConversationHref,
   runTimelineSteps,
   runToolTitles,
   toolStepDetails,
@@ -178,5 +179,28 @@ describe("チャットの処理の経過のツールの段の詳細", () => {
       fields: [{ label: "ツール", value: "a", mono: true }],
     });
     expect(toolStepDetails(toolStep("s3", "a", { tool_call: undefined }))).toBeUndefined();
+  });
+});
+
+describe("runConversationHref（会話を開く。Issue 2343）", () => {
+  const canOpen = { seesAllUsers: false, canOpenChat: true };
+
+  it("チャットの画面から送った Run は、その会話をチャットで開く", () => {
+    expect(runConversationHref(run({ thread_id: "t1", owned_by_me: true }), canOpen)).toBe(
+      "/chat?agent_id=default&thread_id=t1"
+    );
+  });
+
+  it("会話の無い Run・チャットでない Run・開けない人には出さない", () => {
+    expect(runConversationHref(run({ thread_id: null }), canOpen)).toBeNull();
+    expect(runConversationHref(run({ thread_id: "t1", metadata: { source: "mcp" } }), canOpen)).toBeNull();
+    expect(runConversationHref(run({ thread_id: "t1", metadata: { evaluation_job_id: "j" } }), canOpen)).toBeNull();
+    expect(runConversationHref(run({ thread_id: "t1", metadata: { automation_id: "a" } }), canOpen)).toBeNull();
+    expect(runConversationHref(run({ thread_id: "t1", owned_by_me: false }), canOpen)).toBeNull();
+    expect(runConversationHref(run({ thread_id: "t1" }), { seesAllUsers: false, canOpenChat: false })).toBeNull();
+    // system_admin は他の利用者の会話も開ける。
+    expect(runConversationHref(run({ thread_id: "t1", owned_by_me: false }), { seesAllUsers: true, canOpenChat: true })).toBe(
+      "/chat?agent_id=default&thread_id=t1"
+    );
   });
 });

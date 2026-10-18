@@ -785,6 +785,8 @@ export interface HistoryItem {
   agent_run_id?: string;
   /** 種類（チャットの往復 / SQL 生成 / MCP / 品質評価。きっかけと会話の持ち主で backend が決める。#1955・#1986）。 */
   kind?: "chat" | "query" | "mcp" | "evaluation" | null;
+  /** チャットの往復の会話の ID（実行の詳細の「会話を開く」に使う。チャットでない実行は意味を持たない。#2343）。 */
+  session_id?: string;
 }
 
 export interface HistoryData extends OffsetPage<HistoryItem> {

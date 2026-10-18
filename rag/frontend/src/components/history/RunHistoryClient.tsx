@@ -18,6 +18,7 @@ import {
   ProcessFailureNotice,
   processFailureFacts,
   ButtonLink,
+  OpenConversationAction,
   type DataTableColumn,
   DEFAULT_PAGE_SIZE,
   DataTable,
@@ -50,7 +51,7 @@ import {
   formatRunDateTime,
   useActionPending,
 } from "@production-ready/ui";
-import { ExternalLink, MessagesSquare, RefreshCw } from "lucide-react";
+import { ExternalLink, RefreshCw } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/components/security/AuthProvider";
@@ -537,17 +538,13 @@ function RunDetailView({ run }: { run: RunDetail }) {
             ) : null
           }
           actions={
-            chatHref ? (
-              <ButtonLink
-                to={chatHref}
-                linkComponent={Link}
-                icon={MessagesSquare}
-                aria-label={t("history.detail.openChatLabel")}
-                testId="run-history-open-chat"
-              >
-                {t("history.detail.openChat")}
-              </ButtonLink>
-            ) : null
+            // 「会話を開く」は 3 製品共通の部品（チャットでない実行は出さない。#2343）。
+            <OpenConversationAction
+              href={chatHref}
+              linkComponent={Link}
+              labels={{ label: t("history.detail.openChat"), ariaLabel: t("history.detail.openChatLabel") }}
+              testId="run-history-open-chat"
+            />
           }
         />
       }

@@ -655,6 +655,12 @@ export {
   type RunDetailLayoutProps,
 } from "./components/data/run-detail";
 export {
+  DEFAULT_OPEN_CONVERSATION_LABELS,
+  OpenConversationAction,
+  type OpenConversationActionLabels,
+  type OpenConversationActionProps,
+} from "./components/data/open-conversation-action";
+export {
   RunStepDetailsView,
   hasRunStepDetails,
   sameRunStepDetails,
