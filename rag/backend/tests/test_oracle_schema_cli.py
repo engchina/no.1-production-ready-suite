@@ -119,6 +119,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "search_answer_profile_knowledge",
         "support_guides",
         "support_guide_revisions",
+        "support_guide_embeddings",
         "document_sections",
         "conversations",
         "messages",
@@ -439,7 +440,12 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "'ALTER TABLE rag_evaluation_runs DROP COLUMN best_experiment_id'" in compare_migration
     # 評価の結果の行は消さない。
     assert "DELETE FROM rag_evaluation_runs" not in compare_migration
-    assert len(statements) == 96
+    # 業務ガイドの質問の例の埋め込みの表を無いときだけ作る（#2398）。
+    embeddings_migration = sql.split("-- migration: 20261018_001_support_guide_embeddings", 1)[1]
+    assert "CREATE TABLE rag_support_guide_embeddings" in embeddings_migration
+    assert "table_name = 'RAG_SUPPORT_GUIDE_EMBEDDINGS'" in embeddings_migration
+    assert "DROP" not in embeddings_migration
+    assert len(statements) == 97
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -524,6 +530,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261015_004_ingestion_job_progress",
         "20261016_001_retire_evaluation_compare",
         "20261016_003_document_categories",
+        "20261018_001_support_guide_embeddings",
     ]
 
 
