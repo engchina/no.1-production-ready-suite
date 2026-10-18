@@ -235,11 +235,10 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   // effect を二重実行するため、cleanup で sequence が進むと再活性化時の唯一の応答が「古い」と判定されて破棄され、
   // loading が解除されない(#675)。画面は keep-alive で実 unmount はアプリ終了時だけなので不要。
   const [validated, setValidated] = useState(false);
-  const [checkedAt, setCheckedAt] = useState("");
   const [loading, setLoading] = useState("");
   // 情報の取得をどこから始めたか。スピナーは押したボタンだけが出し、実行の後・画面へ戻ったときの取り直し
   // （"auto"）は入力の領域の読込表示が出す（#819）。
-  const [detailsOrigin, setDetailsOrigin] = useState<"fetch" | "banner" | "auto">("auto");
+  const [detailsOrigin, setDetailsOrigin] = useState<"fetch" | "auto">("auto");
   // ヘッダーの「最新情報を取得」を押した取り直しの間だけ true（検索・絞り込み・他の操作の後の取り直しでは回さない。#819）。
   const manualRefresh = useActionPending();
   // 失敗の案内の「再試行」。案内を残したまま押したボタンだけを回し、進行は案内の中に出す（#2034）。
@@ -407,7 +406,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
 
   const fetchDetails = async (
     preserveWork = false,
-    origin: "fetch" | "banner" | "auto" = "fetch"
+    origin: "fetch" | "auto" = "fetch"
   ) => {
     generationSequence.current += 1;
     if (selectedTargets.length === 0) {
@@ -462,7 +461,6 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       setDetails(nextDetails);
       setDomainInventory(nextInventory);
       setValidated(true);
-      setCheckedAt(new Date().toISOString());
       if (!preserveWork) { setRefreshedSampleText(null); setGenerated(null); }
       if (!preserveWork) toast.success(t("metadataSql.toast.detailsLoaded", { count: nextDetails.length }));
     } catch (err) {
@@ -577,26 +575,6 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           },
         ]}
       />
-      {selectedTargets.length > 0 && (checkedAt || activePanel !== "targets") ? (
-        <PageBody wide className="pb-0">
-          <Banner severity={validated ? "info" : "warning"} action={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              icon={RefreshCw}
-              // 押した「再取得」の間だけ回す。「情報を取得」・実行の後の取り直しでは無効にするだけ（#819）。
-              loading={loading === "details" && detailsOrigin === "banner"}
-              disabled={Boolean(loading) && !(loading === "details" && detailsOrigin === "banner")}
-              onClick={() => void fetchDetails(true, "banner")}
-            >
-              {t("workspace.refresh")}
-            </Button>
-          }>
-            {t(checkedAt ? "workspace.snapshot" : "workspace.unverified")}{checkedAt ? ` (${formatDateTime(checkedAt)})` : ""}
-          </Banner>
-        </PageBody>
-      ) : null}
       <PageBody wide className="grid gap-4">
         <RetryPageNotice
           notice={
@@ -697,7 +675,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             inputTexts={inputTexts}
             detailsReady={validated && details.length > 0}
             detailsLoading={loading === "details"}
-            // 押したボタン（「情報を取得」「最新情報を取得」）が回るときは、領域はスピナーを出さない（同じ処理の
+            // 押した「情報を取得」が回るときは、領域はスピナーを出さない（同じ処理の
             // スピナーは 1 つ。SQL 生成と同じ）。実行の後・画面へ戻ったときの取り直しは領域が出す（#819）。
             detailsButtonSpinning={detailsOrigin !== "auto"}
             selectedCount={selectedTargets.length}
@@ -992,7 +970,7 @@ function MetadataInputPanel({
   inputTexts: ReturnType<typeof buildMetadataInputTexts>;
   detailsReady: boolean;
   detailsLoading: boolean;
-  /** 情報の取得を始めたボタン（「情報を取得」「最新情報を取得」）が回っているか。 */
+  /** 情報の取得を始めた「情報を取得」のボタンが回っているか。 */
   detailsButtonSpinning: boolean;
   selectedCount: number;
   sampleLimit: number;
@@ -1181,6 +1159,8 @@ function MetadataExecutePanel({
           <StatementRunnerCard
             policy={policy}
             executionBlocked={executionBlocked}
+            // 対象情報を取得するまで実行のボタンは押せない。理由はボタンの直上の説明に出す（#2314）。
+            executionBlockedHint={t("metadataSql.execute.blockedHint")}
             draftScope={draftScope}
             title={t(MODE_CONFIG[mode].runnerKey)}
             placeholder={t(MODE_CONFIG[mode].placeholderKey)}
