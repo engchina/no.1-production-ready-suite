@@ -195,7 +195,6 @@ class EnterpriseAiDirectClient(Protocol):
         max_output_tokens: int | None = None,
         max_retries: int | None = None,
         response_format: Mapping[str, Any] | None = None,
-        strict_max_output_tokens: bool = False,
     ) -> str:
         """Return raw generated text from Enterprise AI."""
         ...
