@@ -205,7 +205,7 @@ for (const viewport of [
 // #349: 回答の引用のプレビューでも、要素の表示領域（要素ごとの bbox）を強調し、1 画面分の高さで表示する。
 test("引用プレビューは PDF のページ画像に根拠の要素を強調し、1 画面分の高さで表示する", { tag: "@responsive" }, async ({
   page,
-}) => {
+}, testInfo) => {
   await mockKbPage(page, 1);
   await page.route(/\/api\/documents\/doc-1\/preview-pages(?:\?|$)/, (route) =>
     route.fulfill({
@@ -275,6 +275,7 @@ test("引用プレビューは PDF のページ画像に根拠の要素を強調
   const summaryBox = await dialog.getByTestId("evidence-source-summary").boundingBox();
   const previewBox = await dialog.getByTestId("evidence-source-preview").boundingBox();
   expect(previewBox!.y).toBeGreaterThan(summaryBox!.y + summaryBox!.height - 1);
+  await page.screenshot({ path: testInfo.outputPath(`citation-source-sheet-${testInfo.project.name}.png`) });
   // Escape で閉じる。
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);

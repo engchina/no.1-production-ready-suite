@@ -930,7 +930,7 @@ for (const theme of ["light", "dark"] as const) {
     await expectNoPageOverflow(page);
   });
 }
-test("回答の根拠はまとまりごとに役割・位置・抜粋で出し、件数の合計を AI に渡した件数にそろえる（#2097）", { tag: "@responsive" }, async ({ page }) => {
+test("回答の根拠はまとまりごとに役割・位置・抜粋で出し、件数の合計を AI に渡した件数にそろえる（#2097）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   // chunk の ID は「文書 ID:chunk set の hash:番号」の長い文字列。既定では画面に出さない。
   const longId = (n: number) => `doc-1:${"a1b2c3d4".repeat(8)}:${n}`;
   const evidenceChunk = (n: number, text: string, metadata: Record<string, unknown>) => ({
@@ -1040,6 +1040,12 @@ test("回答の根拠はまとまりごとに役割・位置・抜粋で出し�
   await cardOpen.click();
   await expect(preview.getByTestId("evidence-source-summary")).toContainText("1 回の申請の上限は 10 万円です。");
   await expect(preview.getByTestId("evidence-source-preview")).toBeVisible();
+  // 右端に付き、375px は全画面のシート。
+  const viewport = page.viewportSize()!;
+  const previewBox = await preview.boundingBox();
+  expect(Math.round(previewBox!.x + previewBox!.width)).toBe(viewport.width);
+  if (viewport.width < 640) expect(Math.round(previewBox!.x)).toBe(0);
+  await page.screenshot({ path: testInfo.outputPath(`chat-citation-source-sheet-${testInfo.project.name}.png`) });
   await preview.getByRole("button", { name: "閉じる" }).click();
   await expect(preview).toBeHidden();
   await expect(cardOpen).toBeFocused();
