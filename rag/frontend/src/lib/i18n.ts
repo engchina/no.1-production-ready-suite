@@ -123,6 +123,7 @@ export const ja = {
   "nav.section.settings": "システム設定",
   // 「外観と証明書」は配色テーマと HTTPS の証明書を扱う（#1316）。副題・カードの文言は platform の既定を使う。
   "nav.settingsAppearance": "外観と証明書",
+  "nav.settingsAnswerNotice": "回答の注意書き",
   "appearance.theme.label": "配色テーマ",
   "appearance.theme.hint": "画面全体の配色を切り替えます。「自動」は OS の設定に追従します。",
   "appearance.theme.light": "ライト",
@@ -1805,6 +1806,8 @@ export const ja = {
     "変更は次に取り込む文書から使われます。取込済みの文書に反映するには、文書の詳細で処理レシピを「再処理」してください。処理レシピで「関係情報の構築」を上書きした文書は、その選択のままです。",
   "settings.graph.loadError": "関係情報の構築設定を取得できませんでした。",
   "settings.graph.saveError": "関係情報の構築設定を保存できませんでした。",
+  "settings.answerNotice.subtitle":
+    "AI の回答の末尾に毎回出す注意書き（誤りの可能性・確かめ方・連絡先）を設定します。3 製品で同じ文を使います。",
   "settings.uploadStorage.subtitle":
     "ドキュメントアップロード時の原本保存先を local または OCI Object Storage から選択します。",
   "settings.uploadStorage.backend.local": "ローカルディレクトリ",

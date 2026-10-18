@@ -300,6 +300,9 @@ const nl2sqlJa = {
   "nav.settingsModel": "モデル",
   "nav.settingsDatabase": "データベース",
   "nav.settingsAppearance": "外観と証明書",
+  "nav.settingsAnswerNotice": "回答の注意書き",
+  "settings.answerNotice.subtitle":
+    "AI の回答の末尾に毎回出す注意書き（誤りの可能性・確かめ方・連絡先）を設定します。3 製品で同じ文を使います。",
   "nav.securityUsers": "ユーザー管理",
   "nav.securityRoles": "ロール管理",
   "nav.securityApiKeys": "API キー",

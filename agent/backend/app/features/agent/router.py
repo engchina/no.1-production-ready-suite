@@ -58,6 +58,7 @@ from pr_backend_core.chat_progress import (
     chat_progress_sse_response,
 )
 from pr_backend_core.logging import safe_exception_fields
+from pr_system_settings.answer_notice import build_answer_notice_router
 from pr_system_settings.auth.visibility import (
     DEFAULT_RUN_EXECUTOR_FILTER,
     OWNER_NOT_FOUND_STATUS,
@@ -631,6 +632,15 @@ router.include_router(
         on_saved=lambda _settings: close_platform_oracle_pool(),
         write_dependencies=[Depends(require_system_settings_write)],
         action_dependencies=[Depends(require_system_settings_write)],
+    ),
+    prefix="/settings",
+)
+# 回答の注意書きも3製品共通の実装（pr_system_settings.answer_notice。#2405）。保存先は共通の表。
+router.include_router(
+    build_answer_notice_router(
+        load=lambda: get_security_service().load_answer_notice(),
+        save=lambda record: get_security_service().save_answer_notice(record),
+        write_dependencies=[Depends(require_system_settings_write)],
     ),
     prefix="/settings",
 )
