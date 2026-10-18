@@ -37,7 +37,7 @@
 全文は [docs/agents/mcp.md](./docs/agents/mcp.md)。特に次を守る。
 
 - 外部の MCP クライアントには業務 Agent へのチャット（`POST /api/mcp`）を共通の API キーだけで公開し、キーを発行した利用者の権限・対象範囲で判定する。MCP から作った Run は承認の要るツールを呼ばない。RAG は Agent を呼ばない。
-- RAG / NL2SQL / 外部 MCP は「MCP 接続」1 つの仕組みで管理し、ツールは組み込み Runtime から `tool_registry.invoke` を通してだけ呼ぶ（例外は画面の操作の「RAG の図の根拠を開く」だけ）。外部 API key・token を snapshot、API、ログ、Artifact に出さない。
+- RAG / NL2SQL / 外部 MCP は「MCP 接続」1 つの仕組みで管理し、ツールは組み込み Runtime から `tool_registry.invoke` を通してだけ呼ぶ（例外は画面の操作の「RAG の図の根拠・根拠の原文を開く」だけ）。外部 API key・token を snapshot、API、ログ、Artifact に出さない。
 - 呼び先へのサービストークンの `sub` は Run の利用者（承認後の実行も承認者ではない）。書き込みのツールは、呼び先に届いた後の失敗では再送しない。
 
 ## 技術スタック（Agent 固有の分）

@@ -3829,7 +3829,7 @@ import { AnswerEvidence, AnswerSections, evidenceLabels, type EvidenceListItem }
 | `EvidenceList` | `items`・`labels?`・`onOpenSource?`・`renderActions?`・`renderExtra?`・`idPrefix?`・`testId?` | カードの一覧。`bounded-scroll-area-lg`（**一定の高さの中で縦にスクロール**し、回答の評価を押し下げない）。`onOpenSource` があれば各カードの操作の行の先頭に `EvidenceSourceButton`。回答を作らない検索の結果（RAG 検索・実行の詳細）は、画面の見出し「検索結果（N）」の下にこれだけを置く |
 | `EvidenceSourceButton` | `fileName`・`onOpen`・`labels?`・`data-testid?` | 根拠を右のサイドパネルで開くボタン「根拠を表示」（`secondary`・`LocateFixed`・`aria-haspopup="dialog"`・読み上げ「〈文書名〉の根拠を表示」。3 製品で同じ。#2388）。一覧の外の 1 件のカード（RAG の `CitationCard`）で使う |
 | `EvidenceCard` | `item`・`index`・`labels?`・`actions?`・`children?` | カード: 番号・文書名・旧版・引用の印（`EvidenceAnswerUseBadge`）・経路のバッジ・本文 3 行・場所のチップ（`dl`）・補足のタグ・原典のリンク・スコアの面（取得スコアと Rerank のメーター）・操作の行（無ければ区切り線の行を出さない） |
-| `EvidenceSourceSheet` | `open`・`onClose`・`item: EvidenceListItem \| null`・`index`・`labels?`・`kind?`（`answer` 既定 / `search`）・`actions?`・`children?`（原文のプレビュー）・`returnFocusRef?`・`data-testid?`（既定 `evidence-source-sheet`） | 根拠 1 件を**右のサイドパネル**で開く（#2360）。枠は `SideSheet`（右・`wide`。sm 未満は全画面。×・Escape・scrim で閉じ、開いた操作へフォーカスを戻す）。見出しは「回答の根拠」（`kind="search"`。回答を作らない検索の結果の箇所は「検索で見つかった箇所」）。上部の要約（`evidence-source-summary`）はカードと同じ描画（番号・文書名・引用の印・経路・抜粋・チップ・スコア）と `actions`、下に `children`（`evidence-source-preview`。パネルの残りの高さ、最小 24rem / sm 以上 32rem）。`children` があれば抜粋は 3 行に畳み「抜粋をすべて表示」で広げ、無ければ全文。本文の根拠の行と、一覧の「根拠を表示」は、どちらもこのパネルを開く（RAG は原文のプレビュー、Agent は要約と図を開く操作） |
+| `EvidenceSourceSheet` | `open`・`onClose`・`item: EvidenceListItem \| null`・`index`・`labels?`・`kind?`（`answer` 既定 / `search`）・`actions?`・`children?`（原文のプレビュー）・`returnFocusRef?`・`data-testid?`（既定 `evidence-source-sheet`） | 根拠 1 件を**右のサイドパネル**で開く（#2360）。枠は `SideSheet`（右・`wide`。sm 未満は全画面。×・Escape・scrim で閉じ、開いた操作へフォーカスを戻す）。見出しは「回答の根拠」（`kind="search"`。回答を作らない検索の結果の箇所は「検索で見つかった箇所」）。上部の要約（`evidence-source-summary`）はカードと同じ描画（番号・文書名・引用の印・経路・抜粋・チップ・スコア）と `actions`、下に `children`（`evidence-source-preview`。パネルの残りの高さ、最小 24rem / sm 以上 32rem）。`children` があれば抜粋は 3 行に畳み「抜粋をすべて表示」で広げ、無ければ全文。本文の根拠の行と、一覧の「根拠を表示」は、どちらもこのパネルを開く（`children` は RAG・Agent とも共通の `DocumentPreview`。#2389） |
 | `useEvidenceSource<T>()` | — | パネルで開く根拠の状態（`selected`・`shown`・`mounted`・`open(value)`・`close()`）。`shown` は閉じた後も前の根拠を覚え（滑って消える間も中身を出す）、`mounted` は一度開くまで false（閉じた後もパネルを描いたままにし、フォーカスを戻す） |
 | `EvidenceAnswerUseBadge` | `use`・`labels?` | 該当確認済み =「回答で引用」（success）、参考 =「参考」（neutral・`BookOpen`）、使われ方が不明 =「回答で引用」（info） |
 | `evidenceCountLabel` | `(items, labels?)` | 見出しの文。引用したかが分からない（`usedInAnswer: null`。検索だけ）なら件数だけ、0 件の項目は出さない |
@@ -3839,8 +3839,46 @@ import { AnswerEvidence, AnswerSections, evidenceLabels, type EvidenceListItem }
 **データの契約（`EvidenceListItem`）**: `key`・`fileName`・`text`・`usedInAnswer: boolean | null`・`answerUse: "confirmed" | "reference" | null`・`superseded?`・`routeBadges?`（翻訳済み）・`score: number | null`・`rerankScore: number | null`・`chips?: { id, label, value }[]`（`label` は読み上げ）・`tags?: { id, value, icon?, tone? }[]`・`sourceUrl?`（https）。
 
 - RAG: `RetrievedChunk` → `citationEvidenceItem`（`rag/frontend/src/components/search/citation-evidence.ts`）。根拠のパネルは `CitationSourceSheet`（`EvidenceSourceSheet` に原文のプレビュー `DocumentPreview` と「文書の詳細を別タブで開く」を渡す）。
-- Agent: 成果物 `answer_evidence`（backend の `answer_evidence.py`）→ `answerEvidenceData`（`agent/frontend/src/lib/answer-evidence.ts`）。根拠のパネルは `EvidenceSourceSheet` に要約と「図を開く」だけを渡し、原文のプレビューは出さない（RAG の原文の API は RAG の画面用の Cookie の API で、他の製品の画面から呼ばない。#2360）。本文の節は `structureAnswer`（`answer-structure.ts`。本文の文は書き換えず、段落ごとの根拠・根拠の ID の印・最終の検証の節から組み立てる。結び付けられなければ Markdown のまま）。
+- Agent: 成果物 `answer_evidence`（backend の `answer_evidence.py`）→ `answerEvidenceData`（`agent/frontend/src/lib/answer-evidence.ts`）。根拠のパネルは `EvidenceSourceSheet` に「図を開く」と、RAG と同じ `DocumentPreview`（`RagSourcePreview`）を渡す。原文は RAG の画面用の Cookie の API ではなく、Agent の backend（`GET /api/runs/{run_id}/source-preview`）が閲覧者として RAG に作らせた短命の署名つきの URL で読む（#2389）。本文の節は `structureAnswer`（`answer-structure.ts`。本文の文は書き換えず、段落ごとの根拠・根拠の ID の印・最終の検証の節から組み立てる。結び付けられなければ Markdown のまま）。
 - 単体テストは `packages/ui/tests/answer-evidence.test.tsx`・`answer-sections.test.tsx`。
+
+---
+
+## 原文のプレビュー: DocumentPreview / PreviewViewer / evidencePreviewFocus — **新規**（#2389。RAG の `DocumentPreview` / `PreviewViewer` / `lib/bbox.ts` / `lib/preview-viewer.ts` から移した）
+
+RAG の文書の詳細・根拠のパネルと、Agent の根拠のパネルで、原文のプレビュー（ページの画像・ページ送り・拡大縮小・幅に合わせる・全体表示・回転・強調の位置へ移動・「p.N の M か所を強調しています」・bbox の強調）を**同じ部品**で出す。部品は製品の API を知らず、データの取り方は props で渡す。
+
+```tsx
+import { DocumentPreview, documentPreviewLabels, evidencePreviewFocus } from "@production-ready/ui";
+
+const focus = evidencePreviewFocus(chunkMetadata);   // 最初のページ・bbox・要素ごとの強調（RAG と Agent で同じ計算）
+<DocumentPreview
+  kind="pdf"                                          // pdf | image | text | unsupported（製品が決める）
+  fileName={fileName}
+  pages={{ status: "ready", pages: [{ pageNumber: 1, points: { width, height }, imageUrl: (dpi) => url }] }}
+  iframeUrl={pdfUrl}                                  // ページの画像を描けないとき（pages の status が fallback）
+  imageUrl={imageUrl}                                 // kind=image
+  loadText={(signal) => fetchText(url, signal)}       // kind=text（失敗は throw → 理由と再試行）
+  textKey={url}
+  downloadUrl={downloadUrl}                           // kind=unsupported のダウンロード（無ければボタンなし）
+  unsupportedMessage={message}                        // 製品だけの案内（RAG の Office の再処理など）
+  {...focus}
+  labels={documentPreviewLabels({ retry: t("common.retry") })}
+  sizing="fill"                                       // fill（根拠のパネル）/ page（文書の詳細。1 ページ全体が入る高さ）
+/>
+```
+
+| 部品 | 主な props | 説明 |
+|---|---|---|
+| `DocumentPreview` | `kind`・`fileName`・`pages?`（`loading` / `ready` / `fallback` / `error`〔`error`・`onRetry`〕）・`iframeUrl?`・`imageUrl?`・`loadText?` / `textKey?`・`downloadUrl?`・`unsupportedMessage?`・`focus*`・`highlights?`・`sizing?`・`labels?` | 読み込み中は `TimedLoadingState` と内容の形の `Skeleton`（`preview-loading`）、理由のある失敗は `ApiErrorState`（理由・詳細・再試行）、PDF・画像は `PreviewViewer`、本文は中でスクロールする `pre`、表示できない形式は案内とダウンロード |
+| `PreviewViewer` | `pages`・`fileName`・`kind`（`pdf` / `image`）・`focusPage?`・`highlights?`・`sizing?`・`labels?` | ツールバー（ページ送り・縮小 / 拡大・横幅に合わせる・全体を表示・回転・強調した位置へ移動）、強調の状態の行、Ctrl + ホイール・キーボード・ドラッグのパン。ページの画像は `referrerPolicy="no-referrer"` で読む（署名つきの URL） |
+| `evidencePreviewFocus` | `(metadata)` | 根拠の metadata（頁・bbox・座標の解釈・要素の表示領域）から `focusPage` / `focusBbox` / `focusBboxMode` / `focusBboxUnit` / `focusPageSize` / `highlights` を作る |
+| `documentPreviewLabels` | `(overrides?)` | 文言の既定（3 製品で同じ書き方） |
+| bbox の計算（`bboxFromMetadata` ほか）・`previewLayout` ほか | — | 旧 RAG の `lib/bbox.ts` / `lib/preview-viewer.ts`（RAG の文書の詳細の強調の計算も使う） |
+
+- RAG: `rag/frontend/src/components/documents/DocumentPreview.tsx` が RAG の文書の API（原本・処理後のファイル・preview-pages・ページの画像・本文の文字コードの判定）をつなぐ。根拠のパネル（`CitationSourceSheet`）と文書の詳細（`DocumentWorkspace`）が使う。
+- Agent: `agent/frontend/src/components/evidence/RagSourcePreview.tsx` が `GET /api/runs/{run_id}/source-preview`（RAG の `rag_read_source` の `include_preview` で、閲覧者に縛った 5 分の署名つきの URL）をつなぎ、開いている間は期限の前に取り直す。
+- 単体テストは `packages/ui/tests/document-preview.test.tsx`・`bbox.test.ts`・`bbox-highlights.test.ts`・`preview-viewer.test.ts`。
 
 ---
 

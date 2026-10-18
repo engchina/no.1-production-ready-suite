@@ -176,7 +176,7 @@ import {
   buildPreviewHighlights,
   displayRegionsFromMetadata,
   withBboxPageRotation,
-} from "@/lib/bbox";
+} from "@production-ready/ui";
 import {
   isSameParserBackend,
   parserBackendLabel,

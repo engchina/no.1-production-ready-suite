@@ -45,21 +45,25 @@ class _ServiceStatusAccessFilter(logging.Filter):
         )
 
 
-# 図を開く署名つきの URL（`/api/figures/{token}`。#1311）のトークン。access log には残さない。
-_FIGURE_TOKEN_PATH = re.compile(r"(/api/figures/)[^/?#\s\"]+")
+# 図・原文のプレビューを開く署名つきの URL（`/api/figures/{token}`・
+# `/api/source-previews/{token}/…`。#1311・#2389）のトークン。access log には残さない。
+_FIGURE_TOKEN_PATH = re.compile(r"(/api/(?:figures|source-previews)/)[^/?#\s\"]+")
+_SIGNED_URL_PREFIXES = ("/api/figures/", "/api/source-previews/")
 FIGURE_TOKEN_MASK = "{token}"  # nosec B105 - ログで伏せた後の表記で秘密ではない
 
 
 class _FigureTokenAccessFilter(logging.Filter):
-    """図の URL のトークンを access log で伏せる（行は落とさない）。"""
+    """図・原文のプレビューの URL のトークンを access log で伏せる（行は落とさない）。"""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.args, tuple) and len(record.args) == 5:
             client, method, path, version, status = record.args
-            if isinstance(path, str) and "/api/figures/" in path:
+            if isinstance(path, str) and any(prefix in path for prefix in _SIGNED_URL_PREFIXES):
                 masked = _FIGURE_TOKEN_PATH.sub(rf"\g<1>{FIGURE_TOKEN_MASK}", path)
                 record.args = (client, method, masked, version, status)
-        elif isinstance(record.msg, str) and "/api/figures/" in record.msg:
+        elif isinstance(record.msg, str) and any(
+            prefix in record.msg for prefix in _SIGNED_URL_PREFIXES
+        ):
             record.msg = _FIGURE_TOKEN_PATH.sub(rf"\g<1>{FIGURE_TOKEN_MASK}", record.msg)
         return True
 

@@ -11,6 +11,7 @@ import {
 
 import { AnswerBody } from "@/components/chat/ResultTables";
 import { RagFigureButton } from "@/components/evidence/RagFigure";
+import { RagSourcePreview } from "@/components/evidence/RagSourcePreview";
 import {
   EVIDENCE_LABELS,
   citationLabel,
@@ -61,9 +62,9 @@ export function AnswerEvidenceBlock({
 }
 
 /**
- * 根拠 1 件の右のサイドパネル（RAG のチャットと同じ共通の `EvidenceSourceSheet`。#2360）。上部に根拠の要約と
- * 抜粋の全文、図の根拠は「図を開く」。Agent には原文のプレビューを出さない（RAG の原文の API は RAG の画面用の
- * Cookie の API で、Agent の画面から呼ぶと製品の境界を破る。プレビューの部品も RAG の frontend にある）。
+ * 根拠 1 件の右のサイドパネル（RAG のチャットと同じ共通の `EvidenceSourceSheet`。#2360）。上部に根拠の要約と、
+ * 図の根拠は「図を開く」。その下に RAG と同じ共通の原文のプレビュー（ページの画像・強調。#2389）を出す。原文は
+ * RAG の画面用の Cookie の API ではなく、Agent の backend が閲覧者として RAG に作らせる短命の署名つきの URL で読む。
  */
 function EvidenceSource({
   runId,
@@ -78,16 +79,29 @@ function EvidenceSource({
 }) {
   if (!source.mounted || source.shown == null) return null;
   const entry = evidence.entries[source.shown];
+  const open = source.selected !== null;
   return (
     <EvidenceSourceSheet
-      open={source.selected !== null}
+      open={open}
       onClose={source.close}
       item={entry?.item ?? null}
       index={source.shown}
       labels={EVIDENCE_LABELS}
       actions={entry ? <FigureAction runId={runId} entry={entry} testId={`${testId}-figure`} /> : null}
       data-testid={testId}
-    />
+    >
+      {entry ? (
+        <RagSourcePreview
+          // 根拠を切り替えたら、倍率・回転・ページを初期化する。
+          key={`${entry.documentId}:${entry.chunkId}`}
+          runId={runId}
+          documentId={entry.documentId}
+          chunkId={entry.chunkId}
+          fileName={entry.item.fileName}
+          open={open}
+        />
+      ) : null}
+    </EvidenceSourceSheet>
   );
 }
 

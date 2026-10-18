@@ -12,7 +12,7 @@ import {
   bboxUnitFromMetadata,
   buildPreviewHighlights,
   displayRegionsFromMetadata,
-} from "./bbox";
+} from "@production-ready/ui";
 import { citationCountLabel, citationMetadataChips, citationModelUsed } from "./chunk-metadata";
 import fixture from "./stored-citations.fixture.json" with { type: "json" };
 

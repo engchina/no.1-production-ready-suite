@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
@@ -8,6 +8,8 @@ import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 // - 根拠の塊: 「AI に渡した N 件 ／ 回答で引用 M 件 …」の折りたたみ（既定は閉じる）、カード、一定の高さの中のスクロール。
 // - 外した内容は本文の節に 1 回だけ全件を出し、「資料との照合」は件数のバッジだけ（節の項目の数と一致。#2361）。
 //   項目が多い節は共通の「すべて表示」で畳む（「ほか N 件」で切らない）。
+// - 根拠のパネルの下に、RAG と同じ共通の原文のプレビュー（ページの画像・強調・ツールバー）を出す（#2389）。
+//   原文は Agent の backend が閲覧者として RAG に作らせた短命の署名つきの URL（`http://rag.e2e.test/**`）で読む。
 // 内容はすべて合成のデータ。
 
 const VIEWPORTS = [
@@ -32,6 +34,37 @@ const ANSWER = [
   "根拠で確かめられなかった次の内容は、回答に載せていません。",
   `- 根拠で確かめられない: 「${WITHHELD_QUOTE}」`,
 ].join("\n");
+
+// 120×60 の単色の PNG（RAG が返すページの画像の代わり）。
+const PAGE_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAHgAAAA8CAIAAAAiz+n/AAAAaklEQVR42u3QQQ0AAAgEoEtiMBMbyxbOBxsJSPVwIApEi0a0aNEWRItGtGjRFkSLRrRo0YgWjWjRohEtGtGiRSNaNKJFi0a0aESLFo1o0YgWLRrRohEtWjSiRSNatGhEi0a0aNGIFo3oXxYAgSoOxqX2IQAAAABJRU5ErkJggg==",
+  "base64"
+);
+
+/** RAG の原文のプレビューの URL（ページの画像・本文）への応答。読んだ URL と Referer を返す。 */
+async function serveSourcePreviews(page: Page, text = "") {
+  const seen: { url: string; referer: string | undefined }[] = [];
+  await page.route("http://rag.e2e.test/**", async (route: Route) => {
+    const url = route.request().url();
+    seen.push({ url, referer: route.request().headers().referer });
+    if (url.includes("/content")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json; charset=utf-8",
+        headers: { "Access-Control-Allow-Origin": "*", "Cache-Control": "private, no-store" },
+        body: text,
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "image/png",
+      headers: { "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" },
+      body: PAGE_PNG,
+    });
+  });
+  return seen;
+}
 
 function evidenceItem(chunkId: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -140,6 +173,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 for (const viewport of VIEWPORTS) {
   test(`回答を RAG と同じ節・根拠の行・根拠の塊で出し、外した内容は 1 回だけ出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
     seedRun(mockApi);
+    await serveSourcePreviews(page);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/chat");
     await openThread(page);
@@ -163,7 +197,7 @@ for (const viewport of VIEWPORTS) {
     await expect(turn.getByText(WITHHELD_QUOTE, { exact: false })).toHaveCount(1);
 
     // 根拠の行を押すと、その根拠を右のサイドパネル（RAG と同じ共通の部品。#2360）で開く。上部は根拠の要約
-    // （番号・文書名・引用の印・Evidence・スコア・頁）と抜粋の全文。Agent は原文のプレビューを出さない。
+    // （番号・文書名・引用の印・Evidence・スコア・頁）と抜粋、その下に RAG と同じ原文のプレビュー（#2389）。
     const citationLink = confirmed.nth(0).getByTestId("answer-citation-link");
     await citationLink.click();
     const sheet = page.getByRole("dialog", { name: "回答の根拠" });
@@ -173,8 +207,9 @@ for (const viewport of VIEWPORTS) {
     await expect(summary.getByTestId("evidence-route-badges")).toContainText("Evidence");
     await expect(summary.getByTestId("evidence-chips")).toContainText("p.3");
     await expect(summary.getByTestId("citation-text")).toHaveText(`合成の本文（${CHUNK_A}）。`);
-    await expect(summary.getByTestId("citation-text")).toHaveAttribute("data-expanded", "true");
-    await expect(sheet.getByTestId("evidence-source-preview")).toHaveCount(0);
+    // プレビューに場所を空けるため、抜粋は 3 行に畳む（RAG と同じ）。
+    await expect(summary.getByTestId("citation-text")).toHaveAttribute("data-expanded", "false");
+    await expect(sheet.getByTestId("evidence-source-preview").getByTestId("preview-viewer")).toBeVisible();
     // 右端に付き、375px は全画面のシート。
     await expect
       .poll(async () => {
@@ -323,3 +358,95 @@ for (const viewport of VIEWPORTS) {
     await page.screenshot({ path: testInfo.outputPath(`answer-withheld-expanded-${viewport.name}.png`), fullPage: true });
   });
 }
+
+for (const viewport of VIEWPORTS) {
+  test(`根拠のパネルに RAG と同じ原文のプレビュー（ページの画像・強調・ツールバー）を出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    seedRun(mockApi);
+    const seen = await serveSourcePreviews(page);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await openThread(page);
+    const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+    const citationLink = turn.getByTestId("answer-citation-link").first();
+    await citationLink.click();
+    const sheet = page.getByRole("dialog", { name: "回答の根拠" });
+    const preview = sheet.getByTestId("evidence-source-preview");
+    const viewer = preview.getByTestId("preview-viewer");
+    await expect(viewer).toBeVisible();
+    // RAG と同じツールバー（ページ送り・拡大縮小・幅に合わせる・全体表示・回転・強調の位置へ移動）。
+    const toolbar = viewer.getByRole("toolbar", { name: "プレビューの操作" });
+    for (const name of ["前のページ", "次のページ", "縮小", "拡大", "横幅に合わせる", "全体を表示", "左に回転", "右に回転", "強調した位置へ移動"]) {
+      await expect(toolbar.getByRole("button", { name })).toBeVisible();
+    }
+    await expect(viewer.getByTestId("preview-page-status")).toHaveText("1 / 2");
+    // 根拠の bbox を強調し、「p.N の M か所を強調しています」。
+    await expect(viewer.getByTestId("preview-highlight-status")).toContainText("p.1 の 1 か所を強調しています");
+    const overlay = viewer.getByTestId("bbox-content-overlay");
+    await expect(overlay).toHaveCount(1);
+    await expect(overlay).toHaveAttribute("data-highlight-tone", "primary");
+    await expect(viewer.getByRole("img", { name: "合成の文書.pdf p.1" })).toBeVisible();
+    // ページの画像は RAG の署名つきの URL で読み、Referer を送らない。Agent の API は Cookie の画面の API だけ。
+    await expect.poll(() => seen.filter((item) => item.url.includes("/pages/1?dpi=")).length).toBeGreaterThan(0);
+    expect(seen.every((item) => item.referer === undefined)).toBe(true);
+    // ページを送ると、強調は別のページにある案内に変わる。
+    await toolbar.getByRole("button", { name: "次のページ" }).click();
+    await expect(viewer.getByTestId("preview-page-status")).toHaveText("2 / 2");
+    await expect(viewer.getByTestId("preview-highlight-status")).toContainText("強調した位置は別のページにあります");
+    await viewer.getByRole("button", { name: "強調のある 1 ページ目を表示" }).click();
+    await expect(viewer.getByTestId("preview-page-status")).toHaveText("1 / 2");
+    // 拡大縮小。
+    await toolbar.getByRole("button", { name: "拡大" }).click();
+    await expect(viewer.getByTestId("preview-zoom-status")).not.toHaveText("100%");
+    await toolbar.getByRole("button", { name: "横幅に合わせる" }).click();
+    await expect(viewer.getByTestId("preview-zoom-status")).toHaveText("100%");
+    // 右端に付き、375px は全画面のシート。プレビューはパネルの幅に収まる（横にあふれない）。
+    await expect
+      .poll(async () => {
+        const box = await sheet.boundingBox();
+        return box ? Math.round(box.x + box.width) : -1;
+      })
+      .toBe(viewport.width);
+    if (viewport.width < 640) expect(Math.round((await sheet.boundingBox())!.x)).toBe(0);
+    const sheetBox = (await sheet.boundingBox())!;
+    const viewerBox = (await viewer.boundingBox())!;
+    expect(viewerBox.x + viewerBox.width).toBeLessThanOrEqual(sheetBox.x + sheetBox.width + 1);
+    await page.screenshot({ path: testInfo.outputPath(`agent-source-preview-${viewport.name}.png`) });
+    // 閉じると、開いた操作へフォーカスを戻す。
+    await sheet.getByRole("button", { name: "閉じる" }).click();
+    await expect(sheet).toBeHidden();
+    await expect(citationLink).toBeFocused();
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
+test("原文を出せない根拠は理由と再試行を出し、本文の資料は本文を出す", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  seedRun(mockApi);
+  await serveSourcePreviews(page, '{"合成": "本文"}');
+  mockApi.state.sourcePreviews[CHUNK_A] = {
+    error: { status: 404, message: "資料が見つからないか、この資料を見る権限がありません。" },
+  };
+  mockApi.state.sourcePreviews[CHUNK_B] = {
+    kind: "text",
+    file_name: "合成の文書.json",
+    pages: [],
+    page_url_template: null,
+    highlight_metadata: {},
+  };
+  await page.goto("/chat");
+  await openThread(page);
+  const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+  const links = turn.getByTestId("answer-citation-link");
+  await links.nth(0).click();
+  const sheet = page.getByRole("dialog", { name: "回答の根拠" });
+  const preview = sheet.getByTestId("evidence-source-preview");
+  // 理由を短く出し、要約はそのまま読める。
+  await expect(preview).toContainText("資料が見つからないか、この資料を見る権限がありません。");
+  await expect(preview.getByRole("button", { name: "再試行" })).toBeVisible();
+  await expect(sheet.getByTestId("evidence-source-summary")).toContainText(`合成の本文（${CHUNK_A}）。`);
+  await page.screenshot({ path: testInfo.outputPath(`agent-source-preview-error-${testInfo.project.name}.png`) });
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  // 本文の資料（JSON など）は本文をそのまま出す。
+  await links.nth(1).click();
+  await expect(preview.locator("pre")).toHaveText('{"合成": "本文"}');
+});

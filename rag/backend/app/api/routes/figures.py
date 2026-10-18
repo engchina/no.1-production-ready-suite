@@ -24,43 +24,29 @@ from __future__ import annotations
 
 import logging
 import re
-from contextvars import Token
-from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pr_backend_core.mcp import McpToolError
-from pr_system_settings.auth.errors import SecurityApiError
-from starlette.concurrency import run_in_threadpool
 
+from app.api.signed_access import SIGNED_RESPONSE_HEADERS, enter_token_user, signed_error
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.mcp import tools as mcp_tools
 from app.rag.figure_url import (
-    FigureClaims,
     FigureTokenError,
     FigureUrlUnavailableError,
     verify_figure_token,
 )
 from app.rag.rate_limit import enforce_rate_limit
-from app.rag.request_context import (
-    AuditRequestContext,
-    reset_audit_request_context,
-    set_audit_request_context,
-)
-from app.security.dependencies import audit_context_for_request, local_debug_principal
-from app.security.service import get_security_service
+from app.rag.request_context import reset_audit_request_context
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # 画像の応答とエラーの応答の両方に付ける（URL を共有の cache・Referer に残さない）。
-FIGURE_RESPONSE_HEADERS = {
-    "Cache-Control": "private, no-store",
-    "Referrer-Policy": "no-referrer",
-    "X-Content-Type-Options": "nosniff",
-}
+FIGURE_RESPONSE_HEADERS = SIGNED_RESPONSE_HEADERS
 # ファイル名に使わない文字（path の区切り・制御文字・引用符など）。
 _UNSAFE_FILENAME = re.compile(r'[\x00-\x1f\x7f"\\/:*?<>|;]+')
 _FILENAME_STEM_MAX = 80
@@ -78,7 +64,7 @@ _TOOL_ERROR_STATUS = {
 
 
 def _error(status_code: int, message: str) -> HTTPException:
-    return HTTPException(status_code=status_code, detail=message, headers=FIGURE_RESPONSE_HEADERS)
+    return signed_error(status_code, message)
 
 
 def _content_disposition(file_name: str | None, page: int | None) -> str:
@@ -93,28 +79,6 @@ def _content_disposition(file_name: str | None, page: int | None) -> str:
     return f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name, safe='')}"
 
 
-async def _enter_token_user(request: Request, claims: FigureClaims) -> Token[Any] | None:
-    """トークンの利用者の今の権限で、監査・対象範囲の context を作る（local は依存関係が作る）。"""
-    settings = get_settings()
-    if settings.local_debug_enabled:
-        if claims.subject != local_debug_principal().user_uuid:
-            raise _error(403, _FORBIDDEN_MESSAGE)
-        return None
-    try:
-        principal = await run_in_threadpool(
-            get_security_service().principal_for_worker, claims.subject
-        )
-    except SecurityApiError as exc:
-        if exc.status_code >= 500:
-            raise
-        raise _error(403, _FORBIDDEN_MESSAGE) from None
-    if not principal.has_any_permission(set(mcp_tools.SEARCH_PERMISSIONS)):
-        raise _error(403, _FORBIDDEN_MESSAGE)
-    request.state.principal = principal
-    context: AuditRequestContext = audit_context_for_request(request, principal)
-    return set_audit_request_context(context)
-
-
 @router.get("/{token}", name="read_figure", response_class=Response)
 async def read_figure(token: str, request: Request) -> Response:
     """署名つきのトークンの図の画像（PNG）を返す。読むたびに今の権限・版を確かめる。"""
@@ -126,7 +90,9 @@ async def read_figure(token: str, request: Request) -> Response:
         if exc.expired:
             raise _error(410, _EXPIRED_MESSAGE) from None
         raise _error(403, _INVALID_MESSAGE) from None
-    context_token = await _enter_token_user(request, claims)
+    context_token = await enter_token_user(
+        request, claims.subject, forbidden_message=_FORBIDDEN_MESSAGE
+    )
     try:
         # 切り出しは元のファイルを読んで描くので、検索と同じ上限で守る（include_image と同じ）。
         enforce_rate_limit("search", request)
