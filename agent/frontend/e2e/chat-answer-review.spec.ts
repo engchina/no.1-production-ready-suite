@@ -443,7 +443,7 @@ for (const viewport of VIEWPORTS) {
         const second = await badges.nth(1).boundingBox();
         expect(second!.y).toBeGreaterThan(first!.y);
       }
-      // 回答の確かめは回答の本文の下（処理の経過 → 使ったツール → 回答 → 回答の確かめ。#2123）。
+      // 回答の確かめは回答の本文の下（処理の経過 → 回答 → 回答の確かめ。#2123 / #2324）。
       const bodyBox = await turn.getByTestId("chat-answer-run-outcome-1").boundingBox();
       expect(bodyBox!.y).toBeLessThan(answerBox!.y);
       await expectNoOutcomeInternalWords(turn);

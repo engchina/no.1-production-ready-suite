@@ -82,7 +82,7 @@ function toolStep(id: string, name: string, status: string, extra: Record<string
 }
 
 for (const viewport of VIEWPORTS) {
-  test(`処理の経過のツールの段を開くと、引数と結果の JSON を出す（詳細の無い段は開かない。#2294） (${viewport.name})`, async ({ page, mockApi }) => {
+  test(`処理の経過のツールの段は表示名で出し、開くと内部名と引数・結果の JSON を出す（詳細の無い段は開かない。#2294 / #2324） (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
     const { run, progress: log } = seedRunningRun(mockApi);
     run.status = "completed";
     run.steps = [
@@ -95,9 +95,10 @@ for (const viewport of VIEWPORTS) {
         },
       }),
     ];
+    // ツールの表示名（MCP の title）は backend が params の title に入れる（#2324）。
     log
       .step("plan", "done")
-      .step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search" } })
+      .step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search", title: "ナレッジベースの検索" } })
       .step("tool:rag__rag_search", "done")
       .step("respond", "running")
       .step("respond", "done")
@@ -108,7 +109,12 @@ for (const viewport of VIEWPORTS) {
 
     const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
     await expect(turn.getByTestId("chat-progress")).toHaveAttribute("data-chat-progress-state", "done");
+    // 使ったツールは処理の経過のツールの段で見る（「使ったツール」の一覧は出さない。#2324）。
+    await expect(turn.getByText(/使ったツール/)).toHaveCount(0);
     await turn.getByTestId("chat-progress-summary").click();
+    await expect(turn.getByTestId("chat-progress-step-tool:rag__rag_search")).toContainText(
+      "「ナレッジベースの検索」を実行しました"
+    );
     // 詳細のある段（ツール）だけに開閉のボタン。既定で閉じる。
     await expect(turn.getByTestId("chat-progress-step-plan-toggle")).toHaveCount(0);
     const toggle = turn.getByTestId("chat-progress-step-tool:rag__rag_search-toggle");
@@ -119,9 +125,13 @@ for (const viewport of VIEWPORTS) {
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
     const details = turn.getByTestId("chat-progress-step-tool:rag__rag_search-details");
     await expect(details).toBeVisible();
+    // 段の名前は表示名なので、調べる用の内部名を詳細の先頭に出す。
+    await expect(details.locator("dt").first()).toHaveText("ツール");
+    await expect(details.locator("dd").first()).toHaveText("rag__rag_search");
     await expect(details.getByLabel("引数")).toContainText('"query": "契約"');
     await expect(details.getByLabel("結果")).toContainText("合成の回答 A");
     await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`progress-tool-details-${viewport.name}.png`) });
     await toggle.click();
     await expect(details).toBeHidden();
   });
@@ -227,15 +237,13 @@ for (const viewport of VIEWPORTS) {
       // 完了したら一覧を閉じ（#2121。RAG と同じ）、押すと開く。
       await expect(turn.getByTestId("chat-progress-step-respond#2")).toBeHidden();
       await expect(turn.getByText("契約は 1 年ごとに更新します。")).toBeVisible();
-      // 使ったツールは実行中と同じく処理の経過の直下（回答の本文より上。#2121）。
-      const tools = turn.getByText("使ったツール（2）");
-      const [summaryBox, toolsBox, answerBox] = await Promise.all([
+      // 処理の経過は回答の本文より上。使ったツールは処理の経過のツールの段で見る（一覧を重ねて出さない。#2324）。
+      await expect(turn.getByText(/使ったツール/)).toHaveCount(0);
+      const [summaryBox, answerBox] = await Promise.all([
         summary.boundingBox(),
-        tools.boundingBox(),
         turn.getByText("契約は 1 年ごとに更新します。").boundingBox(),
       ]);
-      expect(summaryBox!.y).toBeLessThan(toolsBox!.y);
-      expect(toolsBox!.y).toBeLessThan(answerBox!.y);
+      expect(summaryBox!.y).toBeLessThan(answerBox!.y);
       await summary.click();
       await expect(turn.getByTestId("chat-progress-step-respond#2")).toBeVisible();
       // 開いた一覧は実行の詳細と同じ RunTimeline（時間の線つき。狭い置き場所は線を隠し、所要時間の文字だけ。#2265）。

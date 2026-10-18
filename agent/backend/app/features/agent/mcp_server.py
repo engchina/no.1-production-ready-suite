@@ -729,6 +729,7 @@ def build_agent_mcp_server(request: Request) -> McpServer:
         tools=[
             McpTool(
                 name="agent_list",
+                title="業務 Agent の一覧",
                 description=(
                     "使える業務 Agent（ID・名前・説明・使うスキル）の一覧を返す。"
                     "質問の内容に合う業務 Agent を選ぶのに使う。"
@@ -740,6 +741,7 @@ def build_agent_mcp_server(request: Request) -> McpServer:
             ),
             McpTool(
                 name="agent_chat",
+                title="業務 Agent への質問",
                 description=(
                     "業務 Agent に質問し、回答（根拠つき）を返す。業務 Agent は社内の資料（RAG）・"
                     "業務データ（NL2SQL）などを調べて答える。thread_id を渡すと同じ会話の続きとして"
@@ -755,6 +757,7 @@ def build_agent_mcp_server(request: Request) -> McpServer:
             ),
             McpTool(
                 name="agent_get_run",
+                title="実行の結果の取得",
                 description=(
                     "agent_chat の run_id で、状態・回答・根拠・回答前の確認を返す。"
                     "まだ終わっていなければ wait_seconds まで待つ。"
@@ -766,6 +769,7 @@ def build_agent_mcp_server(request: Request) -> McpServer:
             ),
             McpTool(
                 name="agent_answer_confirmation",
+                title="回答前の確認への回答",
                 description=(
                     "回答前の確認（agent_chat / agent_get_run の confirmation）に答える。"
                     "action=answer はすべての確認事項に、選択肢の ID（option_ids）か自由入力"
@@ -780,6 +784,7 @@ def build_agent_mcp_server(request: Request) -> McpServer:
             ),
             McpTool(
                 name="agent_skill_export",
+                title="スキルの書き出し",
                 description=(
                     "業務 Agent が使うスキルを Agent Skills の形（SKILL.md と references/ の"
                     "ファイル）で返す。name のフォルダにファイルを置くと、外部の Agent でも"

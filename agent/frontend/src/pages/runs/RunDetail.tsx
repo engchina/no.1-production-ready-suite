@@ -322,9 +322,16 @@ function stepDetails(step: RunStep): ReactNode {
   const notes = dataScopeNotes(step.tool_call?.data_scope);
   const error = step.tool_result?.error;
   const output = step.tool_result?.output;
-  if (!notes.length && !error && !output) return undefined;
+  const name = step.tool_call?.name;
+  if (!name && !notes.length && !error && !output) return undefined;
   return (
     <>
+      {/* 段の名前は表示名（MCP の title）のことがあるので、調べる用にツールの内部名を出す（#2324）。 */}
+      {name ? (
+        <p className="text-xs text-fg-muted" data-testid={`run-step-tool-${step.id}`}>
+          {t("chat.progress.details.tool")}: <span className="break-all font-mono text-fg">{name}</span>
+        </p>
+      ) : null}
       {/* データの範囲を当てた記録（使ったプロファイルと補完・上書き・拒否・絞り込み。#1378）。 */}
       {notes.map((note) => (
         <p key={note} className="text-xs text-fg-muted" data-testid={`run-step-data-scope-${step.id}`}>

@@ -226,6 +226,38 @@ def test_approval_waits_then_runs_the_tool(monkeypatch: MonkeyPatch) -> None:
     _assert_contiguous(run)
 
 
+def test_tool_titles_are_in_tool_and_approval_params(monkeypatch: MonkeyPatch) -> None:
+    """ツールの表示名（MCP の `title`。Run の metadata）があれば、ツールの段の params に `title`、
+    承認待ちの補足に表示名を出す（内部名の `tool` は残す）。"""
+    _script(
+        monkeypatch,
+        [function_call(WRITE, {"query": "登録"}, call_id="call-t")],
+        [assistant_message("登録しました。")],
+    )
+    run_id = _create_run("登録して")
+    runtime_repository.note_builtin_tool_titles(run_id, {WRITE: "記録の登録"})
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    waiting = runtime_repository.get_run(run_id)
+    assert _steps(waiting)[1:] == [
+        ("approval_wait", "approval", "running", {"tools": "記録の登録"}),
+        (f"tool:{WRITE}", "tool", "pending", {"tool": WRITE, "title": "記録の登録"}),
+    ]
+    _approve(run_id)
+    anyio.run(builtin_runtime.resume_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert _steps(run)[2] == (
+        f"tool:{WRITE}",
+        "tool",
+        "done",
+        {"tool": WRITE, "title": "記録の登録"},
+    )
+    # 表示名は足すだけ（空は記録しない）。
+    runtime_repository.note_builtin_tool_titles(run_id, {})
+    assert runtime_repository.get_run(run_id).metadata["tool_titles"] == {WRITE: "記録の登録"}
+
+
 def test_rejected_tool_is_skipped(monkeypatch: MonkeyPatch) -> None:
     _script(
         monkeypatch,
