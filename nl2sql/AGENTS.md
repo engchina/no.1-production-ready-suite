@@ -1,7 +1,17 @@
 # AGENTS.md — Production Ready NL2SQL
 
-> NL2SQL（`nl2sql/`）固有のルール。GitHub 運用・Issue / PR 規約・CI・デザインシステム・共通の技術方針（言語・AI / DB の分担・シークレット・LLM 出力の検証・ローカルの検証の範囲・UI 変更の検証）は、root の [../AGENTS.md](../AGENTS.md) を先に適用する。ルールを変えるときはこのファイル（共通ルールは root）を編集する。
+> NL2SQL（`nl2sql/`）固有のルール。GitHub 運用・Issue / PR 規約・CI・デザインシステム・共通の技術方針（言語・AI / DB の分担・シークレット・LLM 出力の検証・ローカルの検証の範囲・UI 変更の検証）は、root の [../AGENTS.md](../AGENTS.md) と、そこから案内する root の `docs/agents/` を先に適用する。ルールを変えるときはこのファイル（共通ルールは root）を編集し、詳細は下の表の文書に書く。
 > Issue の label は `product:nl2sql`、PR title の scope は `nl2sql`。NL2SQL の docs・コメントの `#N` のうち、2026-09-25 の monorepo 統合より前のものは旧 repo `engchina/no.1-production-ready-nl2sql` の番号。
+
+## 作業ごとに読む文書
+
+| 作業 | 読む文書 |
+|---|---|
+| 機能の全体（チャット・SQL 生成・データ準備・改善・運用）とコードの置き場所 | [docs/agents/structure.md](./docs/agents/structure.md) |
+| 画面・ナビ・lint・NL2SQL 固有の部品、「質問」「検索」の用語の細則 | [docs/agents/ui.md](./docs/agents/ui.md) |
+| 「AI 活用」のデータの見え方・role の権限昇格の防止・状態保持 | [docs/agents/security-contracts.md](./docs/agents/security-contracts.md) |
+| オントロジー（生成・検証・Markdown・画面） | [docs/agents/ontology-standard.md](./docs/agents/ontology-standard.md) |
+| 新機能の設計・比較検討 | [docs/reference-rag-projects.md](./docs/reference-rag-projects.md) の該当カテゴリ |
 
 ## プロジェクト概要
 
@@ -9,21 +19,18 @@
 > 新規 DB object、cookie、storage key、context、UI の製品ラベルへ汎用 `RAG` prefix を使用しない。
 > `GraphRAG`、`RAGAS`、`RAGFlow` など技術・製品の固有名詞はこの置換対象外とする。
 
-Oracle AI Database の業務データに、自然言語で SQL を生成・検証・実行する SQL 専用の NL2SQL の参照実装。特定の業務ドメインに固定しない。
+Oracle AI Database の業務データに、自然言語で SQL を生成・検証・実行する SQL 専用の NL2SQL の参照実装。特定の業務ドメインに固定しない。機能（AI 活用 / データ準備 / 改善・運用）は [docs/agents/structure.md](./docs/agents/structure.md)。
 
-- **AI 活用**: チャット（自然言語による SQL の多輪の生成と実行。SQL 生成の画面と同じく送信のジョブが実行まで行う。送ると SQL を作る前に回答前の確認を自動で行い、SQL を 1 つに決められないときは会話の中で 1 問ずつ聞く。確認の質問が無くても、確認のカードで要件を確かめて「この内容で SQL を生成して実行」を押すまで SQL を作らない。回答前の確認は SQL 生成の画面と同じ部品・同じ文言で、確認事項とカードは 3 製品共通の回答前の確認のカード（`ClarificationCard`）。#1442 / #1715 / #1761 / #1839）、自然言語の質問から SQL を生成して実行する（SQL 生成）、SELECT SQL の直接実行、SQL から質問の生成、実行履歴。
-- **データ準備**: 管理 SQL の実行、テーブル・ビュー・データ・コメント・アノテーション・ドメインの管理、用語・同義語、共通ルール、サンプルデータ。
-- **改善・運用**: 業務プロファイル（SQL 生成の対象範囲）、オントロジー構築、フィードバック、質問分類モデル、SQL 生成評価。
-
-新機能の設計・比較検討の前に、外部 OSS / 研究プロジェクトの一覧 [docs/reference-rag-projects.md](./docs/reference-rag-projects.md) の該当カテゴリを参照する。優れた点は取り込むが、確定スタック（下記）へ必ず再マッピングし、外部ベクトル DB・別 LLM プロバイダをそのまま導入しない（逸脱するなら理由を添えてユーザーに確認する）。
+- チャットは SQL を作る前に回答前の確認を自動で行い、確認のカード（3 製品共通の `ClarificationCard`。SQL 生成の画面と同じ部品・文言）で「この内容で SQL を生成して実行」を押すまで SQL を作らない。
+- 外部 OSS の優れた点は取り込むが、確定スタック（下記）へ必ず再マッピングし、外部ベクトル DB・別 LLM プロバイダをそのまま導入しない（逸脱するなら理由を添えてユーザーに確認する）。
 
 ## 用語
 
-- 利用者が入力する自然言語（SQL 生成・チャット・AI 要件確認の入力など）は **`質問`**（root「言語」）。`クエリ` は SQL・技術の概念（サブクエリなど）にだけ使い、旧称の「検索クエリ」も使わない。`frontend/tests/i18n-key-contract.test.ts` が辞書の文言を検査する。
-- 利用者の自然言語の入力とその実行を **「検索」と呼ばない**（#1189）。入力は「質問」、それによる SQL の生成と実行は「SQL を生成して実行」（ボタン）・「SQL の生成と実行」（説明の文）、その結果は「実行結果」と呼ぶ（旧称「NL2SQL 検索」「検索実行」「検索結果」「検索画面」は使わない）。
-  - 「検索」のままでよいもの: 一覧の絞り込みの検索欄（`SearchField`・「検索語をクリア」）、選択欄の候補の検索、類似検索・ベクトル検索・埋め込み検索・オントロジーのサーバ検索などの技術の概念、利用者の入力の解析で受け付ける語（`検索条件` のラベルなど）。
-  - オントロジーの Markdown の関係の行の `検索利用: 利用可 / 利用不可`（`ontology_build.py`）は変えない。生成した Markdown の hash（`markdown_hash`）で変更を判定するため、文言を変えると既存のすべての業務プロファイルが「変更あり」になり再公開が要る（#1197）。
-  - 同じ i18n-key-contract のテストが、SQL 生成の画面の主な文言・旧称の言い回し・AI 要件確認（`sql_requirement.py`）の文言を検査する。
+細則（「検索」のままでよいもの・変えない文言）は [docs/agents/ui.md](./docs/agents/ui.md)「用語」。
+
+- 利用者が入力する自然言語は **`質問`**（root「言語」）。`クエリ` は SQL・技術の概念にだけ使い、旧称の「検索クエリ」も使わない。
+- 利用者の自然言語の入力とその実行を **「検索」と呼ばない**（#1189）。SQL の生成と実行は「SQL を生成して実行」（ボタン）・「SQL の生成と実行」（説明の文）、その結果は「実行結果」。
+- `frontend/tests/i18n-key-contract.test.ts` が辞書の文言を検査する。
 
 ## 技術スタック（確定。NL2SQL 固有の分）
 
@@ -39,66 +46,15 @@ Oracle AI Database の業務データに、自然言語で SQL を生成・検�
 - Backend: SDK は `oci` / `python-oracledb`、SQL の解析は **sqlglot**、オントロジーは **rdflib** / **pyshacl**、サーバは Uvicorn（本番は + Gunicorn）。
 - Frontend: Tailwind CSS v4 と共有 UI、関係グラフは `@xyflow/react`、通信は REST（時間のかかる処理は永続 job のポーリング）。
 - 観測は構造化ログ + Prometheus（`prometheus-client`）。品質は pytest / pytest-cov / ruff / mypy / bandit / pip-audit / `node --test`（ロジックテスト）/ Playwright。
-- 配備は root の「配備」（1 台の Compute。NL2SQL の手順は `init_script.sh`）。
+- 配備は root の [docs/agents/deploy.md](../docs/agents/deploy.md)（1 台の Compute。NL2SQL の手順は `init_script.sh`）。
 
 ## UI/UX
 
-- 日本語 UI のレイアウト（行高・禁則・フォント）を検証する。
-- UI/UX の機能追加・修正では、Playwright のテスト（e2e / interaction / 必要に応じた visual check）を追加・更新し、完了前に実行する。主要導線・レスポンシブ・キーボード操作・アクセシビリティの破綻が無いことを確かめる。
-- 情報設計・画面構成・ナビ導線・状態遷移・文言設計は、`frontend/src` と `src/lib/i18n` / `src/lib/routes` を正本として整備する（見た目と共有部品は platform の `docs/design-system/`）。
-- サイドナビ（折りたたみ可）の構成の正本は `frontend/src/components/layout/nav-config.ts`:
-  - **AI 活用** / **データ準備** / **改善・運用**: NL2SQL の業務機能。
-  - **セキュリティ設定**: 権限管理（ロールごとの機能権限・業務プロファイル利用権限）/ Deep Data Security。
-  - **ユーザーとロール** / **システム設定**（OCI 認証 / アップロード保存先 / モデル / データベース / 外観と証明書）: 3 製品で共通（platform の共有パッケージ）。
-  - **運用設定**: システムテーブル管理 / Select AI Credential（データベース設定から分けた）。
-- サイドナビのラベルは日本語第一。正式名が長い項目だけ短縮形（`sidebarLabelKey`）で表示し（例: `システムテーブル管理` → `システムテーブル`）、**ページタイトル / `aria-label` は正式名を維持**する（`nav.*` と `nav.*.sidebar` の二段管理）。
-- ページネーション・確認ダイアログ・トースト・一括選択（全選択 / 選択件数）は共通の部品を使い、データ取得・通知・ページングは hooks に集約する。
-- NL2SQL 固有の画面の差分は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md) / [docs/frontend-button-spec.md](./docs/frontend-button-spec.md) / [docs/frontend-page-archetypes-spec.md](./docs/frontend-page-archetypes-spec.md) に書く。メッセージは UX 契約の 6 チャネル / 4 トーン / i18n 規約に従う。アクションは共通の `Button` で、類似機能は同じ size・variant にする。
+詳細（サイドナビの構成・ラベルの二段管理・lint・固有の部品・画面の差分 spec）は [docs/agents/ui.md](./docs/agents/ui.md)。
 
-### lint
-
-- `frontend/.oxlintrc.json` は platform の adherence 設定を `extends` で相対パス参照する（`../../platform/…`。ルールとプラグインはコピーしない）。CI の `NL2SQL / Frontend` は `npm run lint`（`oxlint --deny-warnings`）を実行する。
-- アプリ固有のセレクタは、platform のプラグインを別名で再公開した `frontend/lint/app-design-system-plugin.mjs` の `nl2sql-design-system/restricted-syntax` に書く（今は無い）。`design-system/restricted-syntax` / `no-restricted-imports` を同じ名前で上書きしない。
-- グラフ座標など px が正しい幾何値は `// oxlint-disable-next-line <rule>` と理由で局所的に除外する。
-
-### NL2SQL 固有の部品
-
-- ドメイン固有として残すもの: `WorkflowProgressStrip`、オントロジー / 関係グラフ（配色は `--color-graph-*`。種別 = 塗り、状態 = 線）。
-- `--font-mono`（Google Sans Code）は共有の tokens が定義し、書体ファイルは `@fontsource/google-sans-code` で自前ホストする。
-
-## ディレクトリ構成
-
-```
-backend/                  FastAPI アプリ（uv の venv。pyproject.toml に ruff / mypy / pytest の設定）
-  app/
-    main.py               エントリ（pr_backend_core の create_app、ルーター、lifespan）
-    settings.py           設定（PLATFORM_* は platform/.env、NL2SQL_* は backend/.env）
-    api/                  ルーターの集約・health / readiness・problem 応答・run_sync_io（concurrency.py）
-    features/nl2sql/      NL2SQL の業務機能（SQL 生成・DB 管理・業務プロファイル・オントロジー・
-                          フィードバック・評価・合成データ・job と worker）
-    features/schema/      DB 構造の API
-    features/settings/    システム設定の API（platform の pr_system_settings の共通 API ＋
-                          Select AI の資格情報・システムテーブル管理）
-    features/mcp/         他製品（Agent）から呼ぶ MCP（POST /api/mcp）
-    security/             権限管理・Deep Data Security・認可の判定
-    clients/              oci_enterprise_ai（LLM/VLM）/ oci_genai（embed・rerank）/ oracle
-    cli/                  migration・system schema・各 worker のエントリ
-    schemas/              設定 API のスキーマ
-  migrations/             Oracle の DDL（番号順）
-  scripts/                実 Oracle / Select AI への手動の接続確認
-  tests/                  pytest
-frontend/                 Vite + React Router + Tailwind v4 + 共有 UI
-  src/App.tsx             ルート定義
-  src/features/nl2sql/    NL2SQL の画面・状態・ロジック（ontology/ はオントロジーの画面）
-  src/features/security/  ログイン・権限管理・Deep Data Security の画面
-  src/components/         layout（AppSidebar・nav-config.ts）/ settings / system（DatabaseGate）
-  src/lib/                api / routes / i18n / 作業状態・未保存変更のガード
-  lint/                   NL2SQL 固有の oxlint プラグイン
-  tests/                  ロジックテスト（*.test.ts、node --test）/ e2e（Playwright）
-docs/                     NL2SQL 固有の設計・運用・テスト計画・UI の差分 spec
-scripts/                  開発・Compute 上の起動 / 更新 / ログのスクリプトと、そのテスト
-init_script.sh            NL2SQL の配備の手順（systemd の backend・worker。platform/deploy/suite-init.sh が呼ぶ）
-```
+- 日本語 UI のレイアウト（行高・禁則・フォント）を検証する。UI/UX の機能追加・修正では Playwright のテストを追加・更新し、完了前に実行する。
+- サイドナビの構成の正本は `frontend/src/components/layout/nav-config.ts`。ページタイトル / `aria-label` は正式名を維持し、短縮形はサイドナビだけ（`sidebarLabelKey`）。
+- lint は `frontend/.oxlintrc.json` が platform の adherence 設定を相対パスで `extends` する。アプリ固有のセレクタは別名（`nl2sql-design-system/restricted-syntax`）に書く。
 
 ## 開発コマンド
 
@@ -122,37 +78,14 @@ npx playwright test tests/e2e/<対象>.spec.ts               # e2e（関係す�
 
 ## 横断的な保守・セキュリティ契約
 
-3 製品共通の契約（更新 API とデータの所有範囲、認可と状態遷移のサーバー側強制、i18n の変更と E2E の locator、状態保持、未保存変更の離脱ガード）は platform の [UX 契約](../platform/docs/ux-contracts/README.md)（[cross-cutting.md](../platform/docs/ux-contracts/cross-cutting.md) / [workspace-state.md](../platform/docs/ux-contracts/workspace-state.md)）が正本。ここには NL2SQL 固有の規則だけを書く（旧 repo の Issue #168〜#185 の再発防止策）。
+3 製品共通の契約は platform の [UX 契約](../platform/docs/ux-contracts/README.md) が正本。NL2SQL 固有の規則は [docs/agents/security-contracts.md](./docs/agents/security-contracts.md) にあり、権限・会話・実行履歴・状態保持に触る前に読む。特に次を守る。
 
-### 「AI 活用」の下の機能のデータの見え方（#1889・#1928・#1954）
-
-- **system_admin は全員のデータ、それ以外は自分のデータだけ**（3 製品共通。判定は `pr_system_settings.auth.visibility`）。一覧は backend の条件で絞り、他人のデータの詳細・操作は 404。`nl2sql.feedback.manage` などの管理権限は「AI 活用」で全員を見る理由にしない。
-- **system_admin は他の利用者のデータに、本人と同じすべての操作ができる**（見る・名前の変更・削除・チャットの続きの質問・SQL の実行・回答前の確認・停止・回答の評価。外部の MCP もキーの持ち主が system_admin なら同じ。#1928）。実行するのは操作した system_admin 自身で、ジョブの actor・権限・業務プロファイル・SQL の実行の接続（#904 の分け方は崩さない）・実行履歴・評価した人（`feedback_actor_user_uuid`）は操作した人。会話の持ち主（最初のターンの actor）は変えず、持ち主以外が送ったターンには送り手の表示名（`sender_display_name`）を添える。system_admin が他の利用者の会話を開いているときは、入力欄の上に「この会話の持ち主にも、回答と途中の結果が見えます」を出す（#1954）。
-- **実行履歴の行は、実行した人と会話の持ち主の両方に見える**（system_admin は全員。#1954）。行に会話の持ち主（`conversation_owner_user_uuid`）を書くときに残し、一覧は「実行した人か会話の持ち主」の条件で絞る（SQL 生成・SQL 直接実行など会話の無い実行は実行した人だけ）。画面は「実行者」・実行した人が自分でない行の「〈名前〉が実行」・絞り込み（すべて / 自分が実行 / 他の人が実行。`executor`）・詳細の「会話の持ち主」。利用量・API キーの上限・監査は実行した人に数える。API ごとの割り当ては [docs/security-rbac-deepsec.md](./docs/security-rbac-deepsec.md)「「AI 活用」の下の機能のデータの見え方」。
-
-### role の権限昇格の防止
-
-- `SYSTEM_ADMIN` 以外が role を更新するとき、追加される実効権限 `expand_permissions(new) - expand_permissions(current)` は actor 自身の実効権限の部分集合でなければならず、違反は `403` で拒否する。暗黙 permission と `grants_all_profile_access` 相当の profile 管理権限も展開後に評価し、自分・他人いずれの role 経由でも権限昇格を許可しない。未保持の既存権限を削除する操作は妨げない。
-- role 作成は未割当のため現行どおり許可できるが、user への role 割当では既存の実効権限部分集合 check を必須とする。role/assignment 変更が次 request から再計算される前提で、変更直後の許可・拒否まで API 回帰テストに含める。
-
-### 状態保持の実装範囲
-
-- 保存の namespace・期限・対象画面・検証の spec は [docs/frontend-workspace-state-spec.md](./docs/frontend-workspace-state-spec.md) に書く。SQL・生成 SQL・`ADMIN_EXECUTE` などの確認語は共通契約の「入力」「生成した結果」「確認語」として扱う。
+- 「AI 活用」は system_admin は全員、それ以外は自分のデータだけ（他人のデータは 404）。system_admin が他の利用者のデータを操作するときも、実行は操作した本人（actor・権限・SQL の実行の接続。#904 の分け方を崩さない）で、会話の持ち主は変えない。
+- `SYSTEM_ADMIN` 以外の role の更新・割当では、追加される実効権限が actor 自身の実効権限の部分集合でなければ `403` にする（権限昇格を許可しない）。
 
 ## オントロジーの標準（#1729）
 
-詳細・対応表は [docs/profile-ontology-capabilities.md](./docs/profile-ontology-capabilities.md)「オントロジーの標準」。生成・検証・Markdown・画面はこの規則と食い違わせない。
-
-- **中身は業界の標準に沿い、専門性を保つ。** 基準は Palantir Foundry の Ontology（オブジェクト型（Object Type）・プロパティ（Property）・共有プロパティ（Shared Property）・リンク型（Link Type）・値型（Value Type）など）。
-  - オブジェクト型: 表示名・API 名（snake_case）・説明・主キー（Primary Key）・タイトルのプロパティ（Title Property）・対応する表。
-  - プロパティ: 業務の型（Base Type）と精度・桁を含む物理の型（Physical Type）・必須・単位・説明・所属のオブジェクト型。複数のオブジェクト型で同じ意味のものは共有プロパティ。
-  - リンク型: 両端のオブジェクト型・多重度（Cardinality）・結合のキー（外部キー）・それぞれの向きの名前。
-  - 用語は SKOS の考え方（優先ラベル（prefLabel）＝表示名・別ラベル（altLabel）＝別名・定義（definition）＝説明）。
-  - 指標（Metric）は semantic layer の書き方（測定値・集計方法・ディメンション・粒度・時間のディメンション・絞り込みの条件）。
-- **記述は日本語が主。** 専門用語は「日本語（英語）」で併記し、訳は `backend/app/features/nl2sql/ontology_terms.json` の 1 つの対応表に置く（Markdown の生成と画面の i18n の `ontologyResults.kind.*` / `ontologyResults.field.*` が同じ訳を使い、`backend/tests/test_nl2sql_ontology_unify_links.py` の `test_terms_are_shared_with_the_frontend_i18n` が一致を確かめる）。物理の名前（表・列・API 名・SQL）は英語のまま。
-- **画面の説明・診断は平易な日本語**にし、各診断は「何が問題か（業務の名前）」と「どうすればよいか」の 2 文にする。内部の ID・項目名・診断コードは「技術的な詳細」に畳む。平易さのためにオントロジーの中身の構造・専門性は崩さない。
-- **生成は best effort**（無い項目は空でよい。推測で埋めない）。統合の根拠は物理の表・列（リンク型は両端と結合のキー）で、名前・種類の名前の ID では併合しない。
-- **LLM に渡す Markdown（`render_llm_context`）は業務の知識だけ**（#1720）。
+規則の全文は [docs/agents/ontology-standard.md](./docs/agents/ontology-standard.md)、対応表は [docs/profile-ontology-capabilities.md](./docs/profile-ontology-capabilities.md)「オントロジーの標準」。中身は Palantir Foundry の Ontology を基準に専門性を保ち、記述は日本語が主（訳は `ontology_terms.json` の 1 つの対応表）、画面の説明・診断は平易な日本語、生成は best effort（推測で埋めない）、LLM に渡す Markdown は業務の知識だけにする。
 
 ## コーディング規約
 

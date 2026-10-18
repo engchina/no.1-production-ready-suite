@@ -98,7 +98,7 @@ def test_skill_mcp_tools_exist_in_the_mcp_contracts(skill_dir: Path) -> None:
 
 
 # 組み込み Runtime だけがツールの結果に足すフィールド（外部の Agent には返らない）。スキルの本文では
-# 「組み込みの Agent」の行にだけ書く（読み手を分ける。AGENTS.md「プロンプトの書き方」）。
+# 「組み込みの Agent」の行にだけ書く（読み手を分ける。docs/agents/prompts.md）。
 RUNTIME_ONLY_FIELDS = frozenset({"next_step", "rag_calls_remaining"})
 BUILTIN_AGENT_MARK = "組み込みの Agent"
 _CODE_SPAN = re.compile(r"`([^`]+)`")
