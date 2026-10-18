@@ -1,5 +1,10 @@
-import { Button } from "@production-ready/ui";
-import { ExternalLink, FileText } from "lucide-react";
+import {
+  AnswerSections,
+  type AnswerCitationRef,
+  type AnswerSectionEntry,
+  type AnswerSectionsBlock,
+} from "@production-ready/ui";
+import { ExternalLink } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useState, type ReactNode } from "react";
 
@@ -58,65 +63,39 @@ export function AnswerText({
       </p>
     );
   }
+  // 節・段落・根拠の行の見た目は 3 製品で共通の AnswerSections（#2328）。
   return (
-    <div
-      className="space-y-3 text-sm leading-relaxed text-fg"
-      aria-live={live ? "polite" : undefined}
-      data-testid="answer-text"
-    >
-      {blocks.map((block, index) =>
-        block.kind === "paragraph" ? (
-          <p key={index} className="whitespace-pre-wrap">
-            {block.text}
-          </p>
-        ) : (
-          <section key={index} className="space-y-1.5">
-            <h4 className="text-sm font-semibold text-fg">{block.title}</h4>
-            {block.ordered ? (
-              <ol className="list-decimal space-y-1.5 pl-5">
-                {block.entries.map((entry, entryIndex) => renderEntry(entry, entryIndex, block.title))}
-              </ol>
-            ) : (
-              <ul className="list-disc space-y-1.5 pl-5">
-                {block.entries.map((entry, entryIndex) => renderEntry(entry, entryIndex, block.title))}
-              </ul>
-            )}
-          </section>
-        )
+    <AnswerSections
+      live={live}
+      blocks={blocks.map((block, index): AnswerSectionsBlock =>
+        block.kind === "paragraph"
+          ? { kind: "paragraph", key: String(index), content: block.text }
+          : {
+              kind: "section",
+              key: String(index),
+              title: block.title,
+              ordered: block.ordered,
+              entries: block.entries.map((entry, entryIndex) => toEntry(entry, entryIndex, block.title)),
+            }
       )}
+    >
       {previewChunk ? (
         <CitationPreviewDialog chunk={previewChunk} open onClose={() => setPreviewIndex(null)} />
       ) : null}
-    </div>
+    </AnswerSections>
   );
 
-  function renderCitation(citation: string, ordinal: number | undefined) {
+  function toCitation(citation: string, ordinal: number | undefined): AnswerCitationRef {
     const ref = parseCitationLine(citation);
     const index = matchCitationLine(ordinal, ref, citations);
-    if (index < 0) {
-      return (
-        <span key={citation} className="mt-0.5 flex items-center gap-1 text-xs text-fg-muted">
-          <FileText size={14} aria-hidden className="shrink-0" />
-          {citation}
-        </span>
-      );
-    }
-    return (
-      <span key={citation} className="mt-0.5 flex">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          icon={FileText}
-          // 押せる根拠の行は強調色にし、当たらない根拠の行（文字だけ）と見分ける。
-          className="text-accent-fg"
-          aria-label={t("search.answerText.openCitation", { citation })}
-          onClick={() => setPreviewIndex(index)}
-        >
-          {citation}
-        </Button>
-      </span>
-    );
+    return index < 0
+      ? { key: citation, label: citation }
+      : {
+          key: citation,
+          label: citation,
+          ariaLabel: t("search.answerText.openCitation", { citation }),
+          onOpen: () => setPreviewIndex(index),
+        };
   }
 
   function renderSectionLink(text: string, title: string) {
@@ -140,20 +119,15 @@ export function AnswerText({
     );
   }
 
-  function renderEntry(entry: AnswerTextEntry, index: number, title: string) {
+  function toEntry(entry: AnswerTextEntry, index: number, title: string): AnswerSectionEntry {
     if (entry.kind === "text") {
-      return (
-        <li key={index} className="list-none whitespace-pre-wrap text-fg-muted">
-          {entry.text}
-        </li>
-      );
+      return { key: String(index), content: entry.text, muted: true };
     }
-    return (
-      <li key={index} className="whitespace-pre-wrap">
-        {entry.text}
-        {entry.citations.map((citation, position) => renderCitation(citation, entry.citationLines[position]))}
-        {renderSectionLink(entry.text, title)}
-      </li>
-    );
+    return {
+      key: String(index),
+      content: entry.text,
+      citations: entry.citations.map((citation, position) => toCitation(citation, entry.citationLines[position])),
+      extra: renderSectionLink(entry.text, title),
+    };
   }
 }

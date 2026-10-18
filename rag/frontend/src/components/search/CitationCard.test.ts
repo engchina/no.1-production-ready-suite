@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { RetrievedChunk } from "@/lib/api";
 import {
+  citationEvidenceItem,
   citationPreviewUrl,
-  scoreMeterPercent,
   variantIdFromChunkId,
 } from "./CitationCard";
 
@@ -17,17 +17,44 @@ describe("variantIdFromChunkId", () => {
   });
 });
 
-describe("scoreMeterPercent", () => {
-  it("0–1 の絶対値を bar 幅へ変換する", () => {
-    expect(scoreMeterPercent(0.869)).toBeCloseTo(86.9);
-  });
-
-  it("null / 0 / 負値 / 非有限値 / 1 超過を安全に丸める", () => {
-    expect(scoreMeterPercent(null)).toBe(0);
-    expect(scoreMeterPercent(0)).toBe(0);
-    expect(scoreMeterPercent(-0.1)).toBe(0);
-    expect(scoreMeterPercent(Number.NaN)).toBe(0);
-    expect(scoreMeterPercent(1.5)).toBe(100);
+describe("citationEvidenceItem", () => {
+  // 共通の根拠のカード（#2328）に渡すデータの契約。見た目は platform の EvidenceCard のテストで確かめる。
+  it("引用の印・経路・頁のチップ・レシピ・分類・原典を写す", () => {
+    const item = citationEvidenceItem({
+      document_id: "doc-1",
+      chunk_id: "doc-1:cs_a:3",
+      text: "根拠",
+      score: 0.91,
+      rerank_score: 0.42,
+      file_name: null,
+      category_name: "分類 A",
+      metadata: {
+        evidence_model_used: true,
+        evidence_answer_use: "reference",
+        vector_rank: 1,
+        keyword_rank: 2,
+        page_start: 3,
+        recipe_slot_no: 2,
+        document_superseded: true,
+        xml_tree_source_url: "https://example.com/a",
+      },
+    } satisfies RetrievedChunk);
+    expect(item).toMatchObject({
+      key: "doc-1:cs_a:3",
+      fileName: "doc-1",
+      usedInAnswer: true,
+      answerUse: "reference",
+      superseded: true,
+      score: 0.91,
+      rerankScore: 0.42,
+      sourceUrl: "https://example.com/a",
+    });
+    expect(item.routeBadges).toEqual(["Both", "Vector #1", "Keyword #2", "Evidence"]);
+    expect(item.chips).toEqual([{ id: "page", label: "ページ", value: "p.3" }]);
+    expect(item.tags?.map((tag) => [tag.id, tag.tone ?? "neutral"])).toEqual([
+      ["recipe", "neutral"],
+      ["category", "info"],
+    ]);
   });
 });
 

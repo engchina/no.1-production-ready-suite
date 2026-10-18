@@ -247,6 +247,38 @@ export {
   type ClarificationNouns,
 } from "./components/chat/clarification-labels";
 export {
+  AnswerCitationLinks,
+  AnswerSections,
+  type AnswerCitationRef,
+  type AnswerSectionEntry,
+  type AnswerSectionsBlock,
+  type AnswerSectionsProps,
+} from "./components/chat/answer-sections";
+export {
+  AnswerEvidence,
+  DEFAULT_EVIDENCE_LABELS,
+  EVIDENCE_LIST_CLASS,
+  EvidenceAnswerUseBadge,
+  EvidenceCard,
+  EvidenceList,
+  EvidenceViews,
+  evidenceCountLabel,
+  evidenceLabels,
+  evidenceScoreMeterPercent,
+  formatEvidenceScore,
+  type AnswerEvidenceProps,
+  type EvidenceAnswerUse,
+  type EvidenceCardProps,
+  type EvidenceChip,
+  type EvidenceGroup,
+  type EvidenceGroupEntry,
+  type EvidenceViewsProps,
+  type EvidenceLabels,
+  type EvidenceListItem,
+  type EvidenceListProps,
+  type EvidenceTag,
+} from "./components/chat/answer-evidence";
+export {
   ChatAnswer,
   ChatPendingTurn,
   ChatTurn,

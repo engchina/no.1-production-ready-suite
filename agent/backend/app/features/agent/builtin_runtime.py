@@ -73,6 +73,11 @@ from pr_system_settings.model import (
 )
 
 from app.features.agent import data_scope, tool_grounding
+from app.features.agent.answer_evidence import (
+    ANSWER_EVIDENCE_KIND,
+    ANSWER_EVIDENCE_NAME,
+    answer_evidence,
+)
 from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.answer_passages import is_absence_only, is_clarification_only
 from app.features.agent.answer_validation import (
@@ -106,6 +111,7 @@ from app.features.agent.answer_validation import (
     validation_data_results,
     with_no_evidence_notice,
     with_unverified_notice,
+    without_lookup_notes,
 )
 from app.features.agent.clarification_cancel import (
     CANCEL_METADATA_KEY,
@@ -751,6 +757,9 @@ def compose_instructions(
         "ツールで確かめられないとき・業務の範囲外の質問のときは、一般的な知識で答えず、"
         "確かめられないため答えられないと答えてください。"
         "質問が曖昧で対象が分からないときは、確認の質問をしてください。"
+        # 使ったツール・根拠は回答とは別に示す（チャットの根拠の塊・MCP の sources。#2328）。
+        "どのプロファイルで調べたか（名前・ID）は回答に書かないでください。"
+        "使ったツールと根拠は回答とは別に示します。"
     ]
     if agent_instructions.strip():
         agent_names = instruction_tool_names(skill_ids, exposed)
@@ -2327,6 +2336,9 @@ async def _finish(
     if tool_confirmations and is_confirmation_payload(answer):
         # 確認のツールの引数の JSON を本文に書いた（#2236）。カードの問いの文にする。
         answer = card_answer(tool_confirmations)
+    # 調べるのに使ったツール・プロファイル・内部の ID だけを述べる行は、資料の主張ではないので
+    # 検証の前に外す（#2328。使ったツールと根拠は画面と MCP の sources が別に示す）。
+    answer = without_lookup_notes(answer)
     # モデルの最終の回答（最終の検証で段落を外す前。対応を決めるのに使う。#1305）。
     model_answer = answer
     validation: dict[str, Any] | None = None
@@ -2355,12 +2367,27 @@ async def _finish(
                 run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=validation
             )
             answer = with_unverified_notice(answer)
+    _save_answer_evidence(run_id, answer, validation)
     runtime_repository.complete_builtin_run(
         run_id,
         answer,
         outcome=_answer_outcome(run_id, model_answer, validation),
         confirmations=tool_confirmations,
     )
+
+
+def _save_answer_evidence(run_id: str, answer: str, validation: Mapping[str, Any] | None) -> None:
+    """回答の根拠（AI に渡した根拠と回答で引用した根拠。#2328）を成果物に残す。
+
+    根拠を返すツールを呼ばなかった Run には残さない。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    content = answer_evidence(runtime_repository.get_run(run_id).steps, answer, validation)
+    if content["items"]:
+        runtime_repository.save_builtin_artifact(
+            run_id, kind=ANSWER_EVIDENCE_KIND, name=ANSWER_EVIDENCE_NAME, content=content
+        )
 
 
 def _withheld_rank(validation: Mapping[str, Any] | None) -> tuple[int, int] | None:
@@ -2400,6 +2427,7 @@ async def _answer_before_hop_retry(
     if after is None or after == (0, 0):
         return None
     original = tool_grounding.hop_original_answer(runtime_repository.get_run(run_id).events)
+    original = without_lookup_notes(original) if original else original
     if not original or original.strip() == answer.strip() or is_clarification_only(original):
         return None
     published, before = await _validate_final_answer(

@@ -35,6 +35,7 @@ from pr_backend_core.mcp import McpServer, McpTool, McpToolError, mcp_http_respo
 from pydantic import BaseModel, Field
 
 from app.features.agent import router as agent_api
+from app.features.agent.answer_evidence import ANSWER_EVIDENCE_KIND, answer_evidence
 from app.features.agent.answer_validation import ANSWER_VALIDATION_KIND
 from app.features.agent.confirmation import (
     MAX_ITEMS,
@@ -43,7 +44,6 @@ from app.features.agent.confirmation import (
     ConfirmationAnswerError,
     ConfirmationRequest,
 )
-from app.features.agent.rag_figures import RAG_EVIDENCE_KIND
 from app.features.agent.runtime import (
     AGENT_UNPUBLISHED_MESSAGE,
     MCP_API_KEY_ID_KEY,
@@ -82,8 +82,6 @@ wait_poll_seconds = 0.5
 # 根拠の抜き出しの長さと件数（呼び出し側のモデルの文脈を膨らませない）。
 _SOURCE_EXCERPT_CHARS = 400
 _MAX_SOURCES = 10
-# RAG の MCP 接続のツール（`rag__rag_search`・`rag__rag_retrieve_evidence` など）。
-_RAG_TOOL_PREFIX = "rag__"
 
 _READ = frozenset({RUNS_VIEW, RUNS_OPERATE, ADMIN})
 _OPERATE = frozenset({RUNS_OPERATE, ADMIN})
@@ -442,63 +440,31 @@ def _location(locator: object) -> str:
     return " · ".join(parts)
 
 
-def _evidence_items(run: RunState) -> list[Mapping[str, Any]]:
-    """Run の RAG の根拠（`rag_evidence` の成果物と、RAG のツールの結果の `evidence`）。"""
-    items: list[Mapping[str, Any]] = []
-    contents: list[object] = [
-        artifact.content for artifact in run.artifacts if artifact.kind == RAG_EVIDENCE_KIND
-    ]
-    contents.extend(
-        step.tool_result.output
-        for step in run.steps
-        if step.tool_result is not None
-        and step.tool_call is not None
-        and step.tool_call.name.startswith(_RAG_TOOL_PREFIX)
+def _answer_evidence(run: RunState) -> Mapping[str, Any]:
+    """Run の回答の根拠（成果物 `answer_evidence`。#2328）。無ければ同じ判定で作る。"""
+    for artifact in reversed(run.artifacts):
+        if artifact.kind == ANSWER_EVIDENCE_KIND and isinstance(artifact.content, dict):
+            return artifact.content
+    validation = next(
+        (
+            artifact.content
+            for artifact in reversed(run.artifacts)
+            if artifact.kind == ANSWER_VALIDATION_KIND and isinstance(artifact.content, dict)
+        ),
+        None,
     )
-    for content in contents:
-        evidence = content.get("evidence") if isinstance(content, Mapping) else None
-        if isinstance(evidence, list):
-            items.extend(item for item in evidence if isinstance(item, Mapping))
-    return items
-
-
-def _validated_chunk_ids(run: RunState) -> set[str]:
-    """最終の検証（`answer_validation`）が回答の根拠として確かめた chunk。"""
-    ids: set[str] = set()
-    for artifact in run.artifacts:
-        if artifact.kind != ANSWER_VALIDATION_KIND or not isinstance(artifact.content, dict):
-            continue
-        evidence = artifact.content.get("evidence")
-        if isinstance(evidence, list):
-            ids.update(
-                str(item["chunk_id"])
-                for item in evidence
-                if isinstance(item, Mapping) and item.get("chunk_id")
-            )
-    return ids
+    return answer_evidence(run.steps, run_answer_text(run) or "", validation)
 
 
 def _sources(run: RunState) -> list[SourceOutput]:
-    """回答の根拠（RAG の資料）。回答に使った根拠（`used_in_answer`・最終の検証で確かめた chunk）を
-    選び、印が 1 件も無ければ全件。画面のチャットの出典（`answerSources`）と同じ考え方。
+    """回答の根拠（RAG の資料）。回答で引用した根拠（画面のチャットの「回答で引用」と同じ判定。
+    #2328）を選び、1 件も無ければ AI に渡した根拠の全件。
     """
-    items = _evidence_items(run)
-    validated = _validated_chunk_ids(run)
-    used = [
-        item
-        for item in items
-        if item.get("used_in_answer") is True or str(item.get("chunk_id") or "") in validated
-    ]
+    items = [item for item in _answer_evidence(run).get("items") or [] if isinstance(item, Mapping)]
+    cited = [item for item in items if item.get("cited") is True]
     sources: list[SourceOutput] = []
-    seen: set[str] = set()
-    for item in used or items:
+    for item in cited or items:
         title = str(item.get("file_name") or item.get("document_id") or "名前の無い資料")
-        key = str(
-            item.get("evidence_id") or item.get("chunk_id") or f"{title}:{item.get('locator')}"
-        )
-        if key in seen:
-            continue
-        seen.add(key)
         excerpt = item.get("excerpt")
         sources.append(
             SourceOutput(
