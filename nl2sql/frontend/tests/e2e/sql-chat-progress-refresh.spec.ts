@@ -188,7 +188,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       const turn = await openSecondQuestion(page);
       state.phase = "generate";
       await expect(turn.getByTestId("sql-chat-progress-current")).toContainText("SQL を生成しています");
-      await expect(turn.getByTestId("sql-chat-progress-completed")).toContainText("2 ステップ完了");
+      await expect(turn.getByTestId("sql-chat-progress-running")).toContainText("処理中（2 ステップ完了）");
       state.phase = "done";
       await expect(turn.locator("pre")).toContainText("ORDER BY 2 DESC");
       await expect(turn.getByTestId("sql-chat-progress-summary")).toContainText("処理の経過");

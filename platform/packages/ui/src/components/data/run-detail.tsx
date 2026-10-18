@@ -384,6 +384,9 @@ function stepIndent(level: number | undefined): string {
   return STEP_INDENT[Math.min(STEP_INDENT.length - 1, stepLevel(level))];
 }
 
+/** 段の行の字下げ（`level`。3 段で止める）。`RunTimeline` の外で同じ形の行を描く部品（チャットの実行中の段）が使う。 */
+export const runTimelineStepIndent = stepIndent;
+
 function StepIcon({ status }: { status: RunTimelineStepStatus }) {
   if (status === "running") return <Spinner size={14} className="text-accent-fg" />;
   const { icon: Icon, className } = STEP_ICON[status];
