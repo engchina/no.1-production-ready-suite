@@ -1,7 +1,7 @@
 import { WarningsBanner } from "@/components/WarningsBanner";
 import { DbProfileListSyncNotice } from "../components/DbProfileListSyncNotice";
 import { useDbProfileListSync, type DbProfileListSync } from "../useDbProfileListSync";
-import { useWorkspaceActive, useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
+import { useWorkspaceActive, useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard, useWorkspaceUrlSelection } from "@/components/WorkspaceState";
 import { syntheticRunPollingInterval } from "../syntheticRunPolling";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -67,6 +67,7 @@ import {
 import {
   DbManagementLoadingSkeleton,
   DropDbObjectDialog,
+  DbObjectListDetail,
   DbObjectManagementPanelShell,
   DbObjectManagementTabs,
   DbObjectPanelHeader,
@@ -77,12 +78,15 @@ import {
   DbObjectStepIndicator,
   DbSingleObjectPickerList,
   dbAdminExecuteFailureMessage,
+  dbObjectSortValue,
   formatDbObjectName,
   parseDbAdminObjectTarget,
   rowCountLabel,
   sortDbObjectPickerItems,
   type DbObjectPickerSortKey,
   type DbObjectPickerSortState,
+  type DbObjectSortKey,
+  type DbObjectSortState,
   type DbObjectTab,
   type DbObjectPickerItem,
 } from "../components/DbObjectManagementShared";
@@ -99,7 +103,7 @@ import { useMutationSchemaSync } from "../useMutationSchemaSync";
 import {
   useDbAdminObjects,
 } from "../incrementalQueries";
-import { dbAdminObjectCountsFromPage, type DbAdminObjectCounts } from "../dbAdminObjectCounts";
+import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
 import { useNumberDraft } from "../useNumberDraft";
 import type {
   DbAdminCsvUploadData,
@@ -128,19 +132,22 @@ const DATA_SCHEMA_REFRESH_NOTICE = "data-management-notice";
 const DEFAULT_DATA_PREVIEW_ROW_LIMIT = DEFAULT_SQL_ROW_LIMIT;
 const DEFAULT_SYNTHETIC_RESULT_LIMIT = DEFAULT_SQL_ROW_LIMIT;
 const DEFAULT_OBJECT_PICKER_SORT: DbObjectPickerSortState = { key: "name", direction: "asc" };
-
-interface PreviewObject {
-  name: string;
-  qualifiedName: string;
-  kind: PreviewObjectKind;
-  owner: string;
-  rowCount?: number | null;
-  comment: string;
-}
+const DEFAULT_PREVIEW_OBJECT_SORT: DbObjectSortState = { key: "name", direction: "asc" };
+/**
+ * データの表示で選んだ対象（`OWNER.NAME`）の URL の検索パラメータ（一覧 + 詳細。#2315）。
+ * タブの 1 つだけが一覧 + 詳細なので、ほかのタブへ移るときに URL から外す（タブへ戻ると最後の選択を戻す）。
+ */
+const PREVIEW_OBJECT_PARAM = "object";
 
 function resolveBusinessSelectAiProfileName(current: string, profiles: SelectAiDbProfile[]) {
   if (current && profiles.some((profile) => profile.name === current)) return current;
   return profiles[0]?.name ?? "";
+}
+
+function nextPreviewObjectSort(current: DbObjectSortState, key: DbObjectSortKey): DbObjectSortState {
+  // 一覧の並べ替えは名前・行数の列見出し（狭い列で種類・所有者の列は持たない）。
+  if (current.key === key) return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+  return { key, direction: "asc" };
 }
 
 function nextObjectPickerSort(
@@ -161,11 +168,10 @@ export function DataManagementPage() {
   useWorkspaceRevalidation();
   const workspaceActive = useWorkspaceActive();
   const [activeView, setActiveView] = useWorkspaceState<ActiveView>("activeView", "preview");
-  const [previewObject, setPreviewObject] = useWorkspaceState("previewObject", "");
   const [previewObjectSearch, setPreviewObjectSearch] = useWorkspaceState("previewObjectSearch", "");
   const [previewObjectOwnerPrefix, setPreviewObjectOwnerPrefix] = useWorkspaceState("previewObjectOwnerPrefix", "");
   const [previewObjectKindFilter, setPreviewObjectKindFilter] = useWorkspaceState<PreviewObjectKindFilter>("previewObjectKindFilter", "all");
-  const [previewObjectSort, setPreviewObjectSort] = useWorkspaceState<DbObjectPickerSortState>("previewObjectSort", DEFAULT_OBJECT_PICKER_SORT);
+  const [previewObjectSort, setPreviewObjectSort] = useWorkspaceState<DbObjectSortState>("previewObjectListSort", DEFAULT_PREVIEW_OBJECT_SORT);
   const [previewRowLimitInput, setPreviewRowLimitInput] = useWorkspaceState("previewRowLimitInput", String(DEFAULT_DATA_PREVIEW_ROW_LIMIT));
   const [preview, setPreview] = useState<DbAdminDataPreviewData | null>(null);
   const [executedPreviewRowLimit, setExecutedPreviewRowLimit] = useState<number | null>(null);
@@ -182,6 +188,24 @@ export function DataManagementPage() {
   useTransientDraftGuard(Boolean(csvBase64) && !csvUploadResult?.executed);
   const syntheticRuns = useSyntheticRuns({ enabled: workspaceActive });
   const [searchParams, setSearchParams] = useSearchParams();
+  // データの表示で選んだ対象は URL の `?object=` が唯一の情報源（一覧 + 詳細。#2315）。先頭の行を自動で選ばない。
+  const previewSelection = useWorkspaceUrlSelection(PREVIEW_OBJECT_PARAM, { enabled: activeView === "preview" });
+  const previewObject = previewSelection.selectedId ?? "";
+  // 対象を付けたリンク（`?object=`）で開いたときは、ほかのタブを開いていてもデータの表示を開く。
+  const linkedPreviewObject = useRef(Boolean(searchParams.get(PREVIEW_OBJECT_PARAM)));
+  useEffect(() => {
+    if (!linkedPreviewObject.current) return;
+    linkedPreviewObject.current = false;
+    setActiveView("preview");
+  }, [setActiveView]);
+  const changeActiveView = (view: ActiveView) => {
+    if (view === activeView) return;
+    if (activeView === "preview" && searchParams.has(PREVIEW_OBJECT_PARAM)) {
+      // 選択は作業状態に残したまま URL から外す（ほかのタブの URL に対象を残さない。戻ると URL に戻る）。
+      setSearchParams((params) => { params.delete(PREVIEW_OBJECT_PARAM); return params; }, { replace: true });
+    }
+    setActiveView(view);
+  };
   const [syntheticRunId, setSyntheticRunId] = useWorkspaceState("syntheticRunId", "");
   const [submissionKey, setSubmissionKey] = useWorkspaceState("syntheticSubmission", { signature: "", key: "" });
   const requestedRunId = searchParams.get("synthetic_run") || syntheticRunId;
@@ -238,7 +262,6 @@ export function DataManagementPage() {
   const [syntheticError, setSyntheticError] = useState("");
   const [syntheticErrorOperation, setSyntheticErrorOperation] = useState<SyntheticLoading>("");
   const previewRequestSequence = useRef(0);
-  const previewObjectManualSelection = useRef(false);
   const csvTableManualSelection = useRef(false);
   // 検索語・所有者の接頭辞は SearchField が確定した値（入力が止まって 300ms・Enter・消去。IME の変換中は
   // 確定しない）なので、ここでは遅延させずにそのまま問い合わせに使う（#535）。
@@ -312,48 +335,25 @@ export function DataManagementPage() {
       )
     : undefined;
 
-  const previewObjects = useMemo<PreviewObject[]>(() => {
-    return previewObjectItems.map((item) => ({
-      name: item.name,
-      qualifiedName: formatDbObjectName(item),
-      kind: item.object_type === "view" ? ("view" as const) : ("table" as const),
-      owner: item.owner,
-      rowCount: item.row_count,
-      comment: item.comment,
-    }));
-  }, [previewObjectItems]);
-
-  const filteredPreviewObjects = useMemo(
-    () =>
-      filterPreviewObjects(
-        previewObjects,
-        previewObjectSearch,
-        previewObjectOwnerPrefix,
-        previewObjectKindFilter
-      ),
-    [previewObjects, previewObjectKindFilter, previewObjectOwnerPrefix, previewObjectSearch]
-  );
-  const previewObjectPickerItems = useMemo(
-    () =>
-      sortDbObjectPickerItems(
-        filteredPreviewObjects.map<DbObjectPickerItem>((item) => ({
-          key: item.qualifiedName,
-          name: item.qualifiedName,
-          kind: item.kind,
-          owner: item.owner,
-          comment: item.comment,
-          kindLabel: previewObjectKindLabel(item.kind),
-          kindVariant: item.kind === "view" ? "info" : "neutral",
-          rowCount: item.rowCount,
-          rowCountLabel: previewObjectRowCountLabel(item.rowCount),
-        })),
-        previewObjectSort
-      ),
-    [filteredPreviewObjects, previewObjectSort]
-  );
+  // 一覧の行（名前とコメントの 2 段 + 行数・種類）。並べ替えは名前・行数の列見出し（#2315）。
+  const sortedPreviewObjects = useMemo(() => {
+    const filtered = filterPreviewObjects(
+      previewObjectItems,
+      previewObjectSearch,
+      previewObjectOwnerPrefix,
+      previewObjectKindFilter
+    );
+    const sortKey: DbObjectSortKey = previewObjectSort.key === "row_count" ? "row_count" : "name";
+    return [...filtered].sort((left, right) => {
+      const a = dbObjectSortValue(left, sortKey);
+      const b = dbObjectSortValue(right, sortKey);
+      const result = a < b ? -1 : a > b ? 1 : 0;
+      return previewObjectSort.direction === "asc" ? result : -result;
+    });
+  }, [previewObjectItems, previewObjectKindFilter, previewObjectOwnerPrefix, previewObjectSearch, previewObjectSort]);
   const selectedPreviewObjectItem = useMemo(
-    () => previewObjectPickerItems.find((item) => item.key === previewObject),
-    [previewObject, previewObjectPickerItems]
+    () => previewObjectItems.find((item) => formatDbObjectName(item) === previewObject),
+    [previewObject, previewObjectItems]
   );
   const parsedPreviewRowLimit = parseSqlRowLimit(previewRowLimitInput);
   const previewRowLimitError =
@@ -496,21 +496,6 @@ export function DataManagementPage() {
   }
 
   useEffect(() => {
-    const nextObject = selectedVisibleStringKey(previewObjectPickerItems, previewObject, (item) => item.key, {
-      preserveSelected: previewObjectManualSelection.current,
-    });
-    if (nextObject === previewObject) return;
-    previewObjectManualSelection.current = false;
-    previewRequestSequence.current += 1;
-    setPreviewObject(nextObject);
-    setPreview(null);
-    setExecutedPreviewRowLimit(null);
-    setPreviewLoadingObject("");
-    setPreviewError("");
-    setExportError("");
-  }, [previewObject, previewObjectPickerItems, setPreviewObject]);
-
-  useEffect(() => {
     const nextTable = selectedVisibleStringKey(csvTablePickerItems, csvTable, (item) => item.key, {
       preserveSelected: csvTableManualSelection.current,
     });
@@ -548,12 +533,8 @@ export function DataManagementPage() {
     }
   };
 
-  const selectPreviewObject = (objectName: string, options: { manualSelection?: boolean } = {}) => {
-    const target = parseDbAdminObjectTarget(objectName);
-    if (options.manualSelection) previewObjectManualSelection.current = true;
-    if (target.qualifiedName === previewObject && !previewLoadingObject) return;
+  const resetPreviewResult = () => {
     previewRequestSequence.current += 1;
-    setPreviewObject(target.qualifiedName);
     setPreview(null);
     setExecutedPreviewRowLimit(null);
     setPreviewLoadingObject("");
@@ -561,17 +542,14 @@ export function DataManagementPage() {
     setExportError("");
   };
 
-  const showPreview = async (
-    objectName: string,
-    options: { manualSelection?: boolean; fromButton?: boolean } = {}
-  ) => {
+  // 選んだ対象のデータを今の取得件数上限で取得する。別の対象を選び直したときは前の取得の応答を捨てる（sequence）。
+  const showPreview = async (objectName: string, options: { fromButton?: boolean } = {}) => {
     const rowLimit = parsedPreviewRowLimit;
-    if (!objectName || previewLoadingObject || rowLimit === null) return;
+    if (!objectName || rowLimit === null) return;
     const target = parseDbAdminObjectTarget(objectName);
+    if (previewLoadingObject === target.qualifiedName) return;
     const sequence = previewRequestSequence.current + 1;
     previewRequestSequence.current = sequence;
-    if (options.manualSelection) previewObjectManualSelection.current = true;
-    setPreviewObject(target.qualifiedName);
     setPreview(null);
     setExecutedPreviewRowLimit(null);
     setPreviewLoadingObject(target.qualifiedName);
@@ -599,6 +577,24 @@ export function DataManagementPage() {
       if (sequence === previewRequestSequence.current) setPreviewLoadingObject("");
     }
   };
+
+  // 選択（URL）が変わったら、その対象のデータを表示する（行を選ぶ・前へ / 次へ・再読込・リンク）。外れたら結果を消す。
+  // 同じ対象のまま画面・タブへ戻ったときは取り直さない。最新の関数は ref から呼ぶ（条件の変わらないレンダーで判定し直さない）。
+  const showPreviewRef = useRef(showPreview);
+  useLayoutEffect(() => { showPreviewRef.current = showPreview; });
+  const resetPreviewResultRef = useRef(resetPreviewResult);
+  useLayoutEffect(() => { resetPreviewResultRef.current = resetPreviewResult; });
+  const previewShownFor = useRef("");
+  useEffect(() => {
+    if (!workspaceActive || activeView !== "preview") return;
+    if (previewShownFor.current === previewObject) return;
+    previewShownFor.current = previewObject;
+    if (!previewObject) {
+      resetPreviewResultRef.current();
+      return;
+    }
+    void showPreviewRef.current(previewObject);
+  }, [workspaceActive, activeView, previewObject]);
 
   const openTruncateDialog = (objectName: string) => {
     setTruncateTargetName(objectName);
@@ -1011,6 +1007,12 @@ export function DataManagementPage() {
             : undefined
         }
         status={<SchemaRefreshHeaderStatus testId="data-management-schema-refresh-status" />}
+        // 1 ペイン（xl 未満）のデータの表示の詳細の「一覧へ戻る」はページの左上（#2281・#2315）。
+        back={
+          activeView === "preview" && !previewSelection.split && previewObject
+            ? { label: t("dataMgmt.preview.backToList"), onClick: previewSelection.clear, testId: "data-management-detail-back" }
+            : undefined
+        }
         actions={[
           {
             id: "refresh-data",
@@ -1066,7 +1068,7 @@ export function DataManagementPage() {
           ] satisfies Array<DbObjectTab<ActiveView>>}
           idPrefix={DATA_MANAGEMENT_ID}
           ariaLabel={t("dataMgmt.tabs.label")}
-          onViewChange={setActiveView}
+          onViewChange={changeActiveView}
         />
 
         {activeView === "preview" && (
@@ -1075,68 +1077,93 @@ export function DataManagementPage() {
             labelledBy="data-management-tab-preview"
             idPrefix={DATA_MANAGEMENT_ID}
             ariaLabel={t("dataMgmt.workspace.preview")}
-            splitId="data-management-preview"
-            minLeftPaneWidthPx={520}
-            minRightPaneWidthPx={560}
-            topContent={
-              <DbObjectStepIndicator
-                steps={[t("dataMgmt.preview.stepTarget"), t("dataMgmt.preview.stepResults")]}
-                activeIndex={previewObject ? 1 : 0}
-                ariaLabel={t("dataMgmt.preview.steps")}
-                dataTestId="data-preview-steps"
-              />
-            }
+            framed={false}
           >
-            <PreviewControlsPanel
-              previewObjectCounts={previewObjectCounts}
-              previewObjectUnfilteredTotalCount={baseObjectCounts?.totalCount}
-              previewObjectPickerItems={previewObjectPickerItems}
-              previewObject={previewObject}
-              previewObjectSearch={previewObjectSearch}
-              previewObjectOwnerPrefix={previewObjectOwnerPrefix}
-              previewObjectKindFilter={previewObjectKindFilter}
-              previewObjectSort={previewObjectSort}
-              initialLoading={previewObjectsQuery.isPending && !previewObjectsQuery.data}
+            <DbObjectListDetail
+              showComments
+              idPrefix="data-management-preview"
+              headingId="data-preview-list-heading"
+              icon={Table2}
+              items={sortedPreviewObjects}
+              selectedName={previewObject}
+              loading={previewObjectsQuery.isPending && !previewObjectsQuery.data}
               error={previewObjectErrorMessage}
+              search={previewObjectSearch}
+              ownerPrefix={previewObjectOwnerPrefix}
+              sort={previewObjectSort}
+              totalCount={previewObjectCounts.totalCount}
+              unfilteredTotalCount={baseObjectCounts?.totalCount}
               hasNextPage={Boolean(previewObjectsQuery.hasNextPage)}
               loadingNextPage={previewObjectsQuery.isFetchingNextPage}
               loadMoreError={previewObjectLoadMoreError}
-              onPreviewObjectSearchChange={setPreviewObjectSearch}
-              onPreviewObjectOwnerPrefixChange={setPreviewObjectOwnerPrefix}
-              onPreviewObjectKindFilterChange={setPreviewObjectKindFilter}
-              onPreviewObjectSortChange={(key) =>
-                setPreviewObjectSort((current) => nextObjectPickerSort(current, key))
+              labels={{
+                title: t("dataMgmt.preview.object"),
+                hint: t("dataMgmt.preview.controlsHint"),
+                loading: t("dataMgmt.objectList.loading"),
+                emptyTitle: t("dataMgmt.preview.emptyObjectsTitle"),
+                emptyHint: t("dataMgmt.preview.emptyObjectsHint"),
+                noResultsTitle: t("dataMgmt.preview.noObjectsTitle"),
+                noResultsHint: t("dataMgmt.preview.noObjectsHint"),
+                objectName: t("dataMgmt.preview.objectName"),
+                rows: t("dataMgmt.preview.objectRows"),
+                owner: t("dataMgmt.preview.objectOwner"),
+                showObject: (name) => t("dataMgmt.preview.selectObject", { name }),
+              }}
+              kindLabel={(item) => previewObjectKindLabel(item.object_type === "view" ? "view" : "table")}
+              formatRowCount={previewObjectRowCountLabel}
+              // 検索・所有者・種別の 3 つ。狭い列（28rem 未満）では「絞り込み（N）」のシートにまとめる（#1933）。
+              filtersLayout="sheet"
+              filters={
+                <FilterSelect
+                  id="data-preview-object-kind-filter"
+                  label={t("dataMgmt.preview.kindFilter")}
+                  value={previewObjectKindFilter}
+                  options={[
+                    { value: "all", label: t("dataMgmt.preview.kindFilterAll") },
+                    { value: "table", label: t("dataMgmt.preview.kindFilterTable") },
+                    { value: "view", label: t("dataMgmt.preview.kindFilterView") },
+                  ]}
+                  onValueChange={setPreviewObjectKindFilter}
+                />
               }
-              onSelectPreviewObject={(objectName) => selectPreviewObject(objectName, { manualSelection: true })}
-              onRetry={() => void refreshObjects()}
+              activeFilterCount={isFilterActive(previewObjectKindFilter, "all") ? 1 : 0}
+              onClearFilters={() => setPreviewObjectKindFilter("all")}
+              onSearchChange={setPreviewObjectSearch}
+              onOwnerPrefixChange={setPreviewObjectOwnerPrefix}
+              onSortChange={(key) => setPreviewObjectSort((current) => nextPreviewObjectSort(current, key))}
+              // 選んでいる行をもう一度押すとデータを取り直す（取消・失敗の後の読み直し）。
+              onSelect={(name) => (name === previewObject ? void showPreview(name) : previewSelection.select(name))}
               onLoadMore={() => void previewObjectsQuery.fetchNextPage()}
-            />
-            <PreviewResultsPanel
-              preview={preview}
-              loading={Boolean(previewLoadingObject)}
-              showButtonLoading={previewFromButton}
-              exporting={exportLoading}
-              previewError={previewError}
-              exportError={exportError}
-              rowLimitInput={previewRowLimitInput}
-              rowLimitError={previewRowLimitError}
-              executedRowLimit={executedPreviewRowLimit}
-              canShowPreview={canShowPreview}
-              canClearPreview={canClearPreview}
-              selectedObjectName={previewObject}
-              selectedObjectKind={
-                selectedPreviewObjectItem?.kind === "table" ||
-                selectedPreviewObjectItem?.kind === "view"
-                  ? selectedPreviewObjectItem.kind
-                  : undefined
+              onRetryLoadMore={() => void previewObjectsQuery.fetchNextPage()}
+              onRetry={() => void refreshObjects()}
+              detailLabel={t("dataMgmt.preview.resultsTitle")}
+              emptyDetail={
+                <EmptyState title={t("dataMgmt.preview.emptyDetailTitle")} hint={t("dataMgmt.preview.emptyDetailHint")} />
               }
-              truncateDisabled={Boolean(previewLoadingObject) || truncateLoading}
-              onRowLimitChange={updatePreviewRowLimitInput}
-              onShowPreview={() => void showPreview(previewObject, { fromButton: true })}
-              onClearPreview={clearPreview}
-              onRetryPreview={() => void showPreview(previewObject)}
-              onDownload={() => void downloadPreviewXlsx()}
-              onTruncateTable={openTruncateDialog}
+              detail={
+                <PreviewResultsPanel
+                  preview={preview}
+                  loading={Boolean(previewLoadingObject)}
+                  showButtonLoading={previewFromButton}
+                  exporting={exportLoading}
+                  previewError={previewError}
+                  exportError={exportError}
+                  rowLimitInput={previewRowLimitInput}
+                  rowLimitError={previewRowLimitError}
+                  executedRowLimit={executedPreviewRowLimit}
+                  canShowPreview={canShowPreview}
+                  canClearPreview={canClearPreview}
+                  selectedObjectName={previewObject}
+                  selectedObject={selectedPreviewObjectItem}
+                  truncateDisabled={Boolean(previewLoadingObject) || truncateLoading}
+                  onRowLimitChange={updatePreviewRowLimitInput}
+                  onShowPreview={() => void showPreview(previewObject, { fromButton: true })}
+                  onClearPreview={clearPreview}
+                  onRetryPreview={() => void showPreview(previewObject)}
+                  onDownload={() => void downloadPreviewXlsx()}
+                  onTruncateTable={openTruncateDialog}
+                />
+              }
             />
           </DbObjectManagementPanelShell>
         )}
@@ -1350,153 +1377,8 @@ export function DataManagementPage() {
   );
 }
 
-function PreviewControlsPanel({
-  previewObjectCounts,
-  previewObjectUnfilteredTotalCount,
-  previewObjectPickerItems,
-  previewObject,
-  previewObjectSearch,
-  previewObjectOwnerPrefix,
-  previewObjectKindFilter,
-  previewObjectSort,
-  initialLoading,
-  error,
-  hasNextPage,
-  loadingNextPage,
-  loadMoreError,
-  onPreviewObjectSearchChange,
-  onPreviewObjectOwnerPrefixChange,
-  onPreviewObjectKindFilterChange,
-  onPreviewObjectSortChange,
-  onSelectPreviewObject,
-  onRetry,
-  onLoadMore,
-}: {
-  previewObjectCounts: DbAdminObjectCounts;
-  /** 絞り込む前の全件（「N 件（全 M 件）」の M。まだ分からないときは undefined）。 */
-  previewObjectUnfilteredTotalCount?: number;
-  previewObjectPickerItems: DbObjectPickerItem[];
-  previewObject: string;
-  previewObjectSearch: string;
-  previewObjectOwnerPrefix: string;
-  previewObjectKindFilter: PreviewObjectKindFilter;
-  previewObjectSort: DbObjectPickerSortState;
-  initialLoading: boolean;
-  error: string;
-  hasNextPage: boolean;
-  loadingNextPage: boolean;
-  loadMoreError: string;
-  onPreviewObjectSearchChange: (value: string) => void;
-  onPreviewObjectOwnerPrefixChange: (value: string) => void;
-  onPreviewObjectKindFilterChange: (value: PreviewObjectKindFilter) => void;
-  onPreviewObjectSortChange: (key: DbObjectPickerSortKey) => void;
-  onSelectPreviewObject: (objectName: string) => void;
-  onRetry: () => void;
-  onLoadMore: () => void;
-}) {
-  const hasActiveFilter =
-    Boolean(previewObjectSearch.trim()) ||
-    Boolean(previewObjectOwnerPrefix.trim()) ||
-    previewObjectKindFilter !== "all";
-
-  return (
-    <section className="grid min-w-0 content-start gap-3" aria-labelledby="data-preview-controls-heading">
-      <DbObjectPanelHeader
-        headingId="data-preview-controls-heading"
-        icon={Table2}
-        title={t("dataMgmt.preview.title")}
-        description={t("dataMgmt.preview.controlsHint")}
-      />
-
-      <div className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
-        <div className="grid gap-2">
-          <DbObjectSelectorToolbar
-            searchLabel={t("dbAdmin.search.label")}
-            searchPlaceholder={t("dbAdmin.search.placeholder")}
-            searchValue={previewObjectSearch}
-            onSearchChange={onPreviewObjectSearchChange}
-            dataTestId="data-preview-object-toolbar"
-            // 件数は見出しのバッジではなく、ツールバーの右の ListCount 1 か所に出す（#1891）。
-            count={dbObjectListCount({
-              matched: previewObjectCounts.totalCount,
-              unfilteredTotal: previewObjectUnfilteredTotalCount,
-              filtered: hasActiveFilter,
-              ready: !initialLoading && !error,
-            })}
-            ownerPrefixField={{
-              label: t("dbAdmin.owner.label"),
-              placeholder: t("dbAdmin.ownerPrefix.placeholder"),
-              value: previewObjectOwnerPrefix,
-              onChange: onPreviewObjectOwnerPrefixChange,
-            }}
-            activeFilterCount={isFilterActive(previewObjectKindFilter, "all") ? 1 : 0}
-            onClearFilters={() => {
-              onPreviewObjectSearchChange("");
-              onPreviewObjectOwnerPrefixChange("");
-              onPreviewObjectKindFilterChange("all");
-            }}
-            // 検索・所有者・種別の 3 つ。狭い置き場所では「絞り込み（N）」のシートにまとめる（#1933）。
-            filtersLayout="sheet"
-          >
-            <FilterSelect
-              id="data-preview-object-kind-filter"
-              label={t("dataMgmt.preview.kindFilter")}
-              value={previewObjectKindFilter}
-              options={[
-                { value: "all", label: t("dataMgmt.preview.kindFilterAll") },
-                { value: "table", label: t("dataMgmt.preview.kindFilterTable") },
-                { value: "view", label: t("dataMgmt.preview.kindFilterView") },
-              ]}
-              onValueChange={onPreviewObjectKindFilterChange}
-            />
-          </DbObjectSelectorToolbar>
-          {initialLoading ? (
-            <DbManagementLoadingSkeleton
-              idPrefix="data-preview-object"
-              ariaLabel={t("dataMgmt.objectList.loading")}
-              variant="list"
-              rows={6}
-            />
-          ) : error ? (
-            <ErrorState message={error} onRetry={onRetry} />
-          ) : (
-            <>
-              <DbSingleObjectPickerList
-                items={previewObjectPickerItems}
-                selectedKey={previewObject}
-                hasActiveFilter={hasActiveFilter}
-                listLabel={t("dataMgmt.preview.object")}
-                emptyTitle={t("dataMgmt.preview.emptyObjectsTitle")}
-                emptyHint={t("dataMgmt.preview.emptyObjectsHint")}
-                noResultsTitle={t("dataMgmt.preview.noObjectsTitle")}
-                noResultsHint={t("dataMgmt.preview.noObjectsHint")}
-                dataTestId="data-preview-object-list"
-                sort={previewObjectSort}
-                onSortChange={onPreviewObjectSortChange}
-                onSelect={(item) => onSelectPreviewObject(item.key)}
-                selectAriaLabel={(item) => t("dataMgmt.preview.selectObject", { name: item.name })}
-              />
-              <DbObjectSelectorFooter
-                visibleCount={previewObjectPickerItems.length}
-                totalCount={previewObjectCounts.totalCount}
-                hasNextPage={hasNextPage}
-                loadingNextPage={loadingNextPage}
-                loadMoreError={loadMoreError}
-                loadMoreLabel={t("dataMgmt.objectList.loadMore")}
-                dataTestId="data-preview-object-footer"
-                onLoadMore={onLoadMore}
-                onRetryLoadMore={onLoadMore}
-              />
-            </>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function filterPreviewObjects(
-  objects: PreviewObject[],
+  objects: DbAdminObjectSummary[],
   search: string,
   ownerPrefix: string,
   kindFilter: PreviewObjectKindFilter
@@ -1504,8 +1386,9 @@ function filterPreviewObjects(
   const q = search.trim().toLowerCase();
   const ownerPrefixKey = ownerPrefix.trim().toUpperCase();
   return objects.filter((item) => {
+    const kind: PreviewObjectKind = item.object_type === "view" ? "view" : "table";
     if (ownerPrefixKey && !item.owner.toUpperCase().startsWith(ownerPrefixKey)) return false;
-    if (kindFilter !== "all" && item.kind !== kindFilter) return false;
+    if (kindFilter !== "all" && kind !== kindFilter) return false;
     if (!q) return true;
     return [item.name, item.comment].join(" ").toLowerCase().includes(q);
   });
@@ -1546,6 +1429,10 @@ function previewObjectRowCountLabel(rowCount?: number | null) {
   return t("dbAdmin.list.rows", { count: rowCount });
 }
 
+/**
+ * データの表示の詳細の列（一覧 + 詳細の右の広い列。#2315）。上端に選んだ対象の見出しと対象の操作（XLSX・データを空にする）、
+ * その下に取得件数上限と「データを表示」、データの結果は詳細の列の全幅に出す。枠は `ListDetailLayout` の詳細の列が持つ。
+ */
 function PreviewResultsPanel({
   preview,
   loading,
@@ -1559,7 +1446,7 @@ function PreviewResultsPanel({
   canShowPreview,
   canClearPreview,
   selectedObjectName,
-  selectedObjectKind,
+  selectedObject,
   truncateDisabled,
   onRowLimitChange,
   onShowPreview,
@@ -1581,7 +1468,8 @@ function PreviewResultsPanel({
   canShowPreview: boolean;
   canClearPreview: boolean;
   selectedObjectName: string;
-  selectedObjectKind?: PreviewObjectKind;
+  /** 一覧に読み込まれている選んだ対象（種類・行数・コメント）。一覧の外の対象（絞り込み・未読込）は undefined。 */
+  selectedObject?: DbAdminObjectSummary;
   truncateDisabled?: boolean;
   onRowLimitChange: (value: string) => void;
   onShowPreview: () => void;
@@ -1590,6 +1478,11 @@ function PreviewResultsPanel({
   onDownload: () => void;
   onTruncateTable: (objectName: string) => void;
 }) {
+  const selectedObjectKind: PreviewObjectKind | undefined = selectedObject
+    ? selectedObject.object_type === "view"
+      ? "view"
+      : "table"
+    : undefined;
   const showTruncateAction = Boolean(selectedObjectName) && selectedObjectKind === "table";
   const hasRowLimitError = Boolean(rowLimitError);
   const previewActions: EntityAction[] = [
@@ -1618,22 +1511,41 @@ function PreviewResultsPanel({
   ];
 
   return (
-    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-4" aria-labelledby="data-preview-results-heading">
-      <DbObjectPanelHeader
-        headingId="data-preview-results-heading"
-        icon={FileSpreadsheet}
-        title={t("dataMgmt.preview.resultsTitle")}
-        description={t("dataMgmt.preview.resultsHint")}
-        action={
-          <ObjectActionBar
-            actions={previewActions}
-            ariaLabel={t("dataMgmt.preview.actions")}
-            testId="data-preview-results-actions"
-          />
-        }
-      />
+    <section
+      className="grid min-w-0 content-start gap-4"
+      aria-labelledby="data-preview-detail-heading"
+      data-testid="data-preview-detail"
+    >
+      <div
+        className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between"
+        data-testid="data-preview-detail-header"
+      >
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 id="data-preview-detail-heading" className="min-w-0">
+              <DbObjectName value={selectedObjectName} size="base" />
+            </h2>
+            {selectedObjectKind && (
+              <StatusBadge
+                icon={false}
+                variant={selectedObjectKind === "view" ? "info" : "neutral"}
+                label={previewObjectKindLabel(selectedObjectKind)}
+              />
+            )}
+            {selectedObject && (
+              <StatusBadge icon={false} variant="neutral" label={previewObjectRowCountLabel(selectedObject.row_count)} />
+            )}
+          </div>
+          {selectedObject?.comment && <p className="mt-2 text-sm leading-6 text-fg">{selectedObject.comment}</p>}
+        </div>
+        <ObjectActionBar
+          actions={previewActions}
+          ariaLabel={t("dataMgmt.preview.actions")}
+          testId="data-preview-results-actions"
+        />
+      </div>
       {/* 取得件数上限は短い数値の幅（xs。#613）。操作ボタンはヘルパーテキストの下の行に置く。 */}
-      <div className="grid grid-cols-1 gap-3 border-t border-border pt-3">
+      <div className="grid grid-cols-1 gap-3 border-t border-border pt-3" data-testid="data-preview-controls">
         <RowLimitField
           value={rowLimitInput}
           onChange={onRowLimitChange}
@@ -1662,38 +1574,43 @@ function PreviewResultsPanel({
           </Button>
         </div>
       </div>
-      {loading ? (
-        <DbManagementLoadingSkeleton
-          idPrefix="data-preview-results"
-          ariaLabel={t("dataMgmt.preview.loading")}
-          variant="detail"
-          // 「表示」を押したときは直上のボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。
-          // messaging §3.7、#416）。切り詰めの後の自動の表示・「再試行」はこの表示が出す（#819）。
-          activityIcon={showButtonLoading ? "none" : "spinner"}
-        />
-      ) : previewError ? (
-        <ErrorState message={previewError} onRetry={onRetryPreview} />
-      ) : preview ? (
-        <div className="grid gap-2">
-          {exportError && <ErrorState message={exportError} onRetry={onDownload} />}
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <StatusBadge icon={false} variant="neutral" label={runtimeLabel(preview.runtime)} />
-            <span className="break-all font-mono text-xs text-fg-muted">{preview.sql}</span>
-          </div>
-          <WarningsBanner warnings={preview.warnings} />
-          <QueryResultTable
-            results={preview.results}
-            rowLimit={executedRowLimit}
-            name={t("queryResults.name.preview")}
-            csvFilePrefix="nl2sql-data-preview"
+      <section className="grid min-w-0 gap-2" aria-labelledby="data-preview-results-heading">
+        <h3 id="data-preview-results-heading" className="text-sm font-semibold text-fg">
+          {t("dataMgmt.preview.resultsTitle")}
+        </h3>
+        {loading ? (
+          <DbManagementLoadingSkeleton
+            idPrefix="data-preview-results"
+            ariaLabel={t("dataMgmt.preview.loading")}
+            variant="detail"
+            // 「表示」を押したときは直上のボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。
+            // messaging §3.7、#416）。行の選択・切り詰めの後の自動の表示・「再試行」はこの表示が出す（#819）。
+            activityIcon={showButtonLoading ? "none" : "spinner"}
           />
-        </div>
-      ) : (
-        <>
-          {exportError && <ErrorState message={exportError} onRetry={onDownload} />}
-          <EmptyState title={t("dataMgmt.preview.emptyTitle")} hint={t("dataMgmt.preview.emptyHint")} />
-        </>
-      )}
+        ) : previewError ? (
+          <ErrorState message={previewError} onRetry={onRetryPreview} />
+        ) : preview ? (
+          <div className="grid min-w-0 gap-2">
+            {exportError && <ErrorState message={exportError} onRetry={onDownload} />}
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <StatusBadge icon={false} variant="neutral" label={runtimeLabel(preview.runtime)} />
+              <span className="break-all font-mono text-xs text-fg-muted">{preview.sql}</span>
+            </div>
+            <WarningsBanner warnings={preview.warnings} />
+            <QueryResultTable
+              results={preview.results}
+              rowLimit={executedRowLimit}
+              name={t("queryResults.name.preview")}
+              csvFilePrefix="nl2sql-data-preview"
+            />
+          </div>
+        ) : (
+          <>
+            {exportError && <ErrorState message={exportError} onRetry={onDownload} />}
+            <EmptyState title={t("dataMgmt.preview.emptyTitle")} hint={t("dataMgmt.preview.emptyHint")} />
+          </>
+        )}
+      </section>
     </section>
   );
 }

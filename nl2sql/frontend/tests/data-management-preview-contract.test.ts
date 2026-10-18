@@ -42,10 +42,12 @@ test("データ管理プレビューは未取得行数を統計未取得とし�
 });
 
 test("データ管理プレビューは所有者前方一致入力と種別フィルタを表示し、行数フィルタを出さない", () => {
-  assert.match(dataManagementSource, /ownerPrefixField=\{\{/u);
-  assert.match(dataManagementSource, /t\("dbAdmin\.owner\.label"\)/u);
-  assert.match(dataManagementSource, /t\("dbAdmin\.search\.label"\)/u);
-  assert.match(dataManagementSource, /t\("dbAdmin\.search\.placeholder"\)/u);
+  // 一覧 + 詳細の一覧の列（DbObjectListDetail → DbObjectSearchOwnerFields）が検索・所有者を持ち、種別は filters に渡す（#2315）。
+  assert.match(dataManagementSource, /<DbObjectListDetail[\s\S]{0,4000}filters=\{\s*<FilterSelect/u);
+  assert.match(dbObjectSharedSource, /<DbObjectSearchOwnerFields[\s\S]{0,600}filters=\{filters\}/u);
+  assert.match(dbObjectSharedSource, /t\("dbAdmin\.owner\.label"\)/u);
+  assert.match(dbObjectSharedSource, /t\("dbAdmin\.search\.label"\)/u);
+  assert.match(dbObjectSharedSource, /t\("dbAdmin\.search\.placeholder"\)/u);
   assert.match(dataManagementSource, /t\("dataMgmt\.preview\.kindFilter"\)/u);
   assert.doesNotMatch(dataManagementSource, /t\("dataMgmt\.preview\.rowFilter"\)/u);
 });
@@ -162,7 +164,8 @@ test("データ管理プレビューは取得件数上限を指定でき、詳�
   assert.match(dataManagementSource, /icon=\{X\}/u);
   assert.match(dataManagementSource, /size="lg"[\s\S]*?\{t\("dataMgmt\.preview\.show"\)\}/u);
   assert.match(dataManagementSource, /size="lg"[\s\S]*?\{t\("dataMgmt\.preview\.clear"\)\}/u);
-  assert.match(dataManagementSource, /onSelectPreviewObject=\{\(objectName\) => selectPreviewObject\(objectName, \{ manualSelection: true \}\)\}/u);
+  // 行を選ぶと URL の選択を変え、選んでいる行をもう一度押すとデータを取り直す（#2315）。
+  assert.match(dataManagementSource, /onSelect=\{\(name\) => \(name === previewObject \? void showPreview\(name\) : previewSelection\.select\(name\)\)\}/u);
   assert.match(dataManagementSource, /setPreviewRowLimitInput\(String\(DEFAULT_DATA_PREVIEW_ROW_LIMIT\)\)/u);
   // 表示結果は共通の結果の表（要約・プレビュー・すべての行のシート・CSV。#1178）。
   assert.match(dataManagementSource, /<QueryResultTable\s+results=\{preview\.results\}\s+rowLimit=\{executedRowLimit\}/u);
@@ -178,17 +181,23 @@ test("データ管理プレビューは取得件数上限を指定でき、詳�
   assert.doesNotMatch(dataManagementSource, /t\("dataMgmt\.preview\.wherePlaceholder"\)/u);
 });
 
-test("データ管理プレビューは対象選択から結果確認へのステップを表示する", () => {
-  assert.equal(t("dataMgmt.preview.steps"), "テーブル・ビューデータ表示ステップ");
-  assert.equal(t("dataMgmt.preview.stepTarget"), "対象選択");
-  assert.equal(t("dataMgmt.preview.stepResults"), "結果確認");
-  assert.match(dbObjectSharedSource, /topContent\?: ReactNode/u);
-  assert.match(dbObjectSharedSource, /\{topContent\}[\s\S]{0,120}\{splitPaneId \?/u);
-  assert.match(
-    dataManagementSource,
-    /topContent=\{\s*<DbObjectStepIndicator[\s\S]{0,260}dataTestId="data-preview-steps"/u
-  );
-  assert.match(dataManagementSource, /activeIndex=\{previewObject \? 1 : 0\}/u);
+test("データ管理プレビューは一覧 + 詳細（ListDetailLayout）で、選択を URL に持ちステップを出さない", () => {
+  // 左右 1:1 の FixedSplitPane（C 型）ではなく、テーブル / ビューの管理と同じ一覧 + 詳細（B 型。#2281・#2315）。
+  assert.doesNotMatch(dataManagementSource, /splitId="data-management-preview"/u);
+  assert.match(dataManagementSource, /<DbObjectListDetail[\s\S]{0,200}idPrefix="data-management-preview"/u);
+  assert.match(dataManagementSource, /id="data-management-panel-preview"[\s\S]{0,300}framed=\{false\}/u);
+  // 一覧 + 詳細の構成が段階（左で選ぶ → 右で結果）を示すので、ステップの表示は持たない。
+  assert.doesNotMatch(dataManagementSource, /data-preview-steps/u);
+  assert.doesNotMatch(dataManagementSource, /dataMgmt\.preview\.step/u);
+  // 選択は URL の ?object=（keep-alive の画面の useWorkspaceUrlSelection。タブが開いている間だけ有効）。
+  assert.match(dataManagementSource, /const PREVIEW_OBJECT_PARAM = "object"/u);
+  assert.match(dataManagementSource, /useWorkspaceUrlSelection\(PREVIEW_OBJECT_PARAM, \{ enabled: activeView === "preview" \}\)/u);
+  // 先頭の行を自動で選ばない（一覧の変化で選択を置き換える selectedVisibleStringKey を使わない）。
+  assert.doesNotMatch(dataManagementSource, /selectedVisibleStringKey\(previewObject/u);
+  assert.doesNotMatch(dataManagementSource, /useWorkspaceState\("previewObject"/u);
+  // 1 ペインの「一覧へ戻る」は PageHeader の back。
+  assert.match(dataManagementSource, /!previewSelection\.split && previewObject[\s\S]{0,200}onClick: previewSelection\.clear/u);
+  assert.equal(t("dataMgmt.preview.backToList"), "一覧へ戻る");
 });
 
 test("データ管理の対象ピッカーはヘッダーソート契約を持つ", () => {

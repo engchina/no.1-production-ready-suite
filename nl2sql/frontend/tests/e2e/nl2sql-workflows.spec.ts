@@ -8946,7 +8946,7 @@ test("管理 SQL のコミット後はデータ管理のオブジェクト一覧
   });
   await mockNl2SqlApi(page);
   await page.goto("/data-management");
-  await expect(page.getByTestId("data-preview-object-list")).toBeVisible();
+  await expect(page.getByTestId("data-management-preview-grid")).toBeVisible();
   await page.waitForLoadState("networkidle");
   expect(objectRequestCount).toBeGreaterThan(0);
   const initialObjectRequestCount = objectRequestCount;
@@ -11032,7 +11032,7 @@ test("shared split panes reserve their divider track across NL2SQL management pa
 
   const scenarios: Array<{ path: string; splitIds: string[] }> = [
     // テーブル・ビューの管理は ListDetailLayout に移した（#2281。table-management-list-detail.spec.ts）。
-    { path: "/data-management", splitIds: ["data-management-preview"] },
+    // データの管理のデータの表示も ListDetailLayout に移した（#2315。data-management-list-detail.spec.ts）。
     { path: "/sample-data", splitIds: ["sample-data-import"] },
     { path: "/sql-to-question", splitIds: ["sql-to-question-input"] },
     { path: "/feedback-management?tab=entries", splitIds: ["feedback-management-entries-split"] },
@@ -12113,26 +12113,25 @@ test("data preparation read results use the shared detail skeleton without stale
   });
 
   await page.goto("/data-management");
-  await expect(page.getByTestId("data-preview-object-list-skeleton")).toBeVisible();
-  await expect(page.getByTestId("data-preview-object-list")).toHaveCount(0);
+  await expect(page.getByTestId("data-management-preview-list-skeleton")).toBeVisible();
+  await expect(page.getByTestId("data-management-preview-grid")).toHaveCount(0);
   await expect(page.getByText("対象テーブル/ビューがありません")).toHaveCount(0);
   objectsGate.release();
-  await expect(page.getByTestId("data-preview-object-list")).toBeVisible();
+  await expect(page.getByTestId("data-management-preview-grid")).toBeVisible();
 
-  const resultsPanel = page.locator("#data-management-panel-preview").locator("section").filter({
-    has: page.getByRole("heading", { name: "表示結果" }),
-  });
+  // データの表示は一覧 + 詳細（#2315）。詳細の列に対象の見出し・取得件数上限・表示結果を出す。
+  const resultsPanel = page.getByTestId("data-preview-detail");
   const invoicesSelectButton = page.getByRole("button", { name: "APP.INVOICES を選択" });
   const viewSelectButton = page.getByRole("button", { name: "APP.V_EMP_DEPT を選択" });
   const showPreviewButton = resultsPanel.getByRole("button", { name: "データを表示", exact: true });
   const resultsActions = resultsPanel.getByTestId("data-preview-results-actions");
+  // 行を選ぶと、その対象のデータを今の取得件数上限で表示する。
   await invoicesSelectButton.click();
-  await showPreviewButton.click();
   const dataSkeleton = page.getByTestId("data-preview-results-detail-skeleton");
   await expect(dataSkeleton).toBeVisible();
   await expect(showPreviewButton).toBeDisabled();
-  // プレビューのスピナーは押した「データを表示」の 1 つだけ（直下の Skeleton は経過時間だけ。#416）。
-  await expectSingleSpinner(page, showPreviewButton);
+  // 行の選択で始めた表示のスピナーは結果の領域の 1 つだけ（ボタンは回さない。#416・#819）。
+  await expectSingleSpinner(page, dataSkeleton);
   await expect(invoicesSelectButton).toBeEnabled();
   await expect(viewSelectButton).toBeEnabled();
   await expect(resultsActions.getByRole("button", { name: "XLSX ダウンロード" })).toBeDisabled();
@@ -12140,7 +12139,7 @@ test("data preparation read results use the shared detail skeleton without stale
   await resultsActions.getByRole("button", { name: "その他の操作" }).click();
   await expect(page.getByRole("menuitem", { name: "APP.INVOICES のデータを空にする" })).toBeDisabled();
   await resultsActions.getByRole("button", { name: "その他の操作" }).click();
-  await expect(page.getByTestId("data-preview-object-list").getByRole("button", { name: /^操作: / })).toHaveCount(0);
+  await expect(page.getByTestId("data-management-preview-grid").getByRole("button", { name: /^操作: / })).toHaveCount(0);
   await expect(resultsPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを空にする" })).toHaveCount(0);
   await expect(resultsPanel.getByText("データ未表示")).toHaveCount(0);
   await expect(resultsPanel.getByText("スケルトン確認顧客")).toHaveCount(0);
@@ -14309,7 +14308,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expect(dataCsvTab).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("ArrowLeft");
   await expect(dataPreviewTab).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("heading", { name: "テーブル・ビューデータの表示" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "対象テーブル/ビュー" })).toBeVisible();
   const dataPreviewPanel = page.locator("#data-management-panel-preview");
   await expect(page.getByText("Excel/CSV 取込(新規テーブル)", { exact: true })).toHaveCount(0);
   await expect(dataPreviewPanel.getByText("サンプルデータ管理", { exact: true })).toHaveCount(0);
@@ -14319,7 +14318,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   const previewSearch = dataPreviewPanel.getByRole("searchbox", { name: "検索" });
   await expect(previewSearch).toHaveAttribute("placeholder", "名前・コメントを入力");
   // 375px は検索・所有者・種別の 3 つをシート（「絞り込み」）にまとめる（#1933）。広い画面ではツールバーの中。
-  const previewToolbar = page.getByTestId("data-preview-object-toolbar");
+  const previewToolbar = page.getByTestId("data-management-preview-toolbar");
   await withListToolbarFilters(previewToolbar, async (filters) => {
     const previewOwnerFilter = filters.getByRole("searchbox", { name: "所有者" });
     await expect(previewOwnerFilter).toBeVisible();
@@ -14345,9 +14344,10 @@ test("sample data and data management run imported workflows", { tag: "@responsi
     await expect(filters.getByRole("combobox", { name: "種別", exact: true })).toBeVisible();
   });
   await expect(dataPreviewPanel.getByLabel("行数フィルタ")).toHaveCount(0);
+  // 一覧 + 詳細（#2315）: 対象を選ぶまで詳細（取得件数上限・表示結果）を出さず、ステップの表示も持たない。
+  await expect(dataPreviewPanel.getByTestId("data-preview-steps")).toHaveCount(0);
+  await expect(dataPreviewPanel.getByLabel("取得件数上限")).toHaveCount(0);
   const previewRowLimitInput = dataPreviewPanel.getByLabel("取得件数上限");
-  await expect(previewRowLimitInput).toHaveValue("100");
-  await expect(dataPreviewPanel.getByText("1〜100000 の整数。取得上限を明示してください。")).toBeVisible();
   await expect(dataPreviewPanel.getByLabel(/WHERE 条件/)).toHaveCount(0);
   await expect(dataPreviewPanel.getByText("選択中", { exact: true })).toHaveCount(0);
   await expect(dataPreviewPanel.getByText("統計未取得").filter({ visible: true })).toBeVisible();
@@ -14359,19 +14359,21 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   const previewResultsActions = dataPreviewPanel.getByTestId("data-preview-results-actions");
   const previewExportButton = previewResultsActions.getByRole("button", { name: "XLSX ダウンロード" });
   const previewMoreButton = previewResultsActions.getByRole("button", { name: "その他の操作" });
-  const previewSteps = dataPreviewPanel.getByTestId("data-preview-steps");
-  const previewResultsStep = previewSteps.getByRole("listitem").filter({ hasText: "結果確認" });
-  await expect(previewSteps).toHaveAttribute("aria-label", "テーブル・ビューデータ表示ステップ");
-  await expect(previewSteps).toContainText("対象選択");
-  await expect(previewSteps).toContainText("結果確認");
-  await expect(previewShowButton).toBeEnabled();
-  await expect(previewResultsStep).toHaveAttribute("aria-current", "step");
-  await expect(previewClearButton).toBeDisabled();
+  // xl 未満（375px）は 1 ペイン。一覧を操作する前に、詳細から「一覧へ戻る」で戻る。
+  const backToPreviewList = async () => {
+    const back = page.getByTestId("data-management-detail-back");
+    if (await back.isVisible()) await back.click();
+  };
   api.previewDataPayload = null;
   await dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" }).click();
+  await expect(page).toHaveURL(/[?&]object=APP\.INVOICES/);
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveAttribute("aria-current", "true");
-  await expect(previewResultsStep).toHaveAttribute("aria-current", "step");
-  expect(api.previewDataPayload).toBeNull();
+  // 行を選ぶと今の取得件数上限（既定 100）でデータを表示する。
+  await expect.poll(() => currentPreviewDataPayload()?.object_name).toBe("INVOICES");
+  await expect(previewRowLimitInput).toHaveValue("100");
+  await expect(dataPreviewPanel.getByText("1〜100000 の整数。取得上限を明示してください。")).toBeVisible();
+  await expect(dataPreviewPanel.getByTestId("query-results-summary")).toContainText("100 行・");
+  await expect(previewClearButton).toBeEnabled();
   await previewRowLimitInput.fill("-1");
   await expect(dataPreviewPanel.getByText("取得件数上限は 1 以上 100000 以下の整数を入力してください。")).toBeVisible();
   await expect(previewShowButton).toBeDisabled();
@@ -14453,6 +14455,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   expect(api.truncateTablePayload?.reason).toBe("ui-data-management-truncate");
   await expect(page.getByRole("dialog", { name: "TRUNCATE TABLE の確認" })).toHaveCount(0);
 
+  await backToPreviewList();
   await previewSearch.fill("EMP");
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT を選択" })).toBeVisible();
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveCount(0);
@@ -14474,16 +14477,18 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   });
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT を選択" })).toBeVisible();
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveCount(0);
-  await previewRowLimitInput.fill("25");
-  await expect(dataPreviewPanel.getByText("データ未表示")).toBeVisible();
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを空にする" })).toHaveCount(0);
-  await expect(dataPreviewPanel.getByRole("button", { name: "データを空にする", exact: true })).toHaveCount(0);
-  await expect(previewResultsActions.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
   const viewSelectTarget = dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT を選択" });
   await expect(viewSelectTarget).toBeEnabled();
   await viewSelectTarget.focus();
   await page.keyboard.press("Enter");
   await expect(viewSelectTarget).toHaveAttribute("aria-current", "true");
+  await expect.poll(() => currentPreviewDataPayload()?.object_name).toBe("V_EMP_DEPT");
+  // ビューにはデータを空にする操作を出さない。
+  await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを空にする" })).toHaveCount(0);
+  await expect(dataPreviewPanel.getByRole("button", { name: "データを空にする", exact: true })).toHaveCount(0);
+  await expect(previewResultsActions.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
+  await previewRowLimitInput.fill("25");
+  await expect(dataPreviewPanel.getByText("データ未表示")).toBeVisible();
   await expect(previewShowButton).toBeEnabled();
 
   api.previewDataPayload = null;
@@ -15167,7 +15172,7 @@ test("data management avoids full catalog and tracks schema refresh jobs", async
   );
 
   await page.goto("/data-management");
-  await expect(page.getByTestId("data-preview-object-list")).toBeVisible();
+  await expect(page.getByTestId("data-management-preview-grid")).toBeVisible();
   expect(catalogRequests).toBe(0);
   expect(profileRequests).toBe(0);
 
@@ -15177,7 +15182,7 @@ test("data management avoids full catalog and tracks schema refresh jobs", async
     "最新情報を取得"
   );
   await expect(page.getByText("最新の状態に更新しました。")).toBeVisible();
-  await expect(page.getByTestId("data-preview-object-list")).toBeVisible();
+  await expect(page.getByTestId("data-management-preview-grid")).toBeVisible();
   expect(catalogRequests).toBe(0);
 
   await clickPageHeaderAction(
@@ -15190,6 +15195,10 @@ test("data management avoids full catalog and tracks schema refresh jobs", async
   expect(catalogRequests).toBe(0);
 
   submitErrorJob = true;
+  // 375px では重なった通知がページ上部の操作に掛かり、ポインターが通知の上にあると消えるのを止める。
+  // ポインターを通知の外へ動かし、最初の通知が消えてから押す（通知の表示時間に依存しない）。
+  await page.mouse.move(1, page.viewportSize()!.height - 1);
+  await expect(page.getByText("最新の状態に更新しました。")).toHaveCount(0);
   await clickPageHeaderAction(
     page,
     "data-management-actions",
@@ -15271,12 +15280,12 @@ test("data management keeps loaded object rows when load more times out and retr
   await page.goto("/data-management");
   await expect(page.getByRole("button", { name: "APP.INVOICES を選択" })).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new Event("test-enable-short-timeout")));
-  await page.getByTestId("data-preview-object-footer").getByRole("button", { name: "さらに読み込む" }).click();
+  await page.getByTestId("data-management-preview-footer").getByRole("button", { name: "さらに読み込む" }).click();
   await expect(page.getByRole("button", { name: "APP.INVOICES を選択" })).toBeVisible();
   await expect(page.getByText(/追加読み込みが60秒以内に完了しませんでした/)).toBeVisible();
   allowSuccess = true;
   timeoutGate.release();
-  const retry = page.getByTestId("data-preview-object-footer").getByRole("button", { name: "再試行" });
+  const retry = page.getByTestId("data-management-preview-footer").getByRole("button", { name: "再試行" });
   await retry.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("button", { name: "APP.PAYMENTS を選択" })).toBeVisible();
@@ -15308,7 +15317,7 @@ test("system objects stay hidden across database object management pages", async
   });
   const hiddenNames = ["DBTOOLS$EXECUTION_HISTORY", "SYS#AUDIT_VIEW"];
   const pages = [
-    { path: "/data-management", ready: "data-preview-object-list" },
+    { path: "/data-management", ready: "data-management-preview-grid" },
     { path: "/table-management", ready: "table-management-grid" },
     { path: "/view-management", ready: "view-management-grid" },
     { path: "/comment-management", ready: "comment-management-steps" },
@@ -15326,7 +15335,7 @@ test("system objects stay hidden across database object management pages", async
 
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/data-management");
-  await expect(page.getByTestId("data-preview-object-list")).toBeVisible();
+  await expect(page.getByTestId("data-management-preview-grid")).toBeVisible();
   for (const hiddenName of hiddenNames) {
     await expect(page.getByText(hiddenName, { exact: true })).toHaveCount(0);
   }
@@ -18362,7 +18371,9 @@ test("データの管理は切り詰めの Oracle のエラーの原因をダイ
   await page.goto("/data-management");
   const preview = page.locator("#data-management-panel-preview");
   await preview.getByRole("button", { name: "APP.INVOICES を選択" }).click();
-  await expect(preview.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveAttribute("aria-current", "true");
+  // 選択は URL が持つ（375px の 1 ペインでは一覧が隠れるので、行の aria-current ではなく URL と詳細の見出しで確かめる。#2315）。
+  await expect(page).toHaveURL(/[?&]object=APP\.INVOICES/);
+  await expect(page.getByTestId("data-preview-detail-header")).toContainText("APP.INVOICES");
   await clickObjectDetailAction(page, "data-preview-results-actions", "APP.INVOICES のデータを空にする");
   const dialog = page.getByRole("dialog", { name: "TRUNCATE TABLE の確認" });
   await dialog.getByLabel("実行確認語").fill("APP.INVOICES");
