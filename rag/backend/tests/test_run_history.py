@@ -141,7 +141,11 @@ async def test_recorder_saves_summary_stages_and_purges_once() -> None:
 
     class Progress:
         def __init__(
-            self, stage: str, outcome: str, elapsed_ms: float, details: dict | None = None
+            self,
+            stage: str,
+            outcome: str,
+            elapsed_ms: float,
+            details: dict[str, object] | None = None,
         ) -> None:
             self.stage, self.outcome, self.elapsed_ms = stage, outcome, elapsed_ms
             self.details = details

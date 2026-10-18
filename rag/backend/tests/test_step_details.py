@@ -113,7 +113,9 @@ def test_field_filter_details() -> None:
     ],
     ids=["clean", "warning-sanitized-degraded", "blocked"],
 )
-def test_answer_guardrail_details(result, expected_fields, expected_lines) -> None:
+def test_answer_guardrail_details(
+    result: SimpleNamespace, expected_fields: list[tuple[str, str]], expected_lines: list[str]
+) -> None:
     details = answer_guardrail_details(result, "回答")
     assert details is not None
     assert [(item["label"], item["value"]) for item in details["fields"]] == expected_fields
