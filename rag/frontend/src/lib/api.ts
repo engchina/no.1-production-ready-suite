@@ -1011,6 +1011,9 @@ export interface KnowledgeBaseQueryConfig {
   screen_linking_enabled?: boolean | null;
   // 根拠の無い要求だけを探し直す(LLM は呼ばない。検索が要求ごとに 1 回増える。#1279)。
   request_coverage_retrieval_enabled?: boolean | null;
+  // 業務ガイドの手順ごとに探し、手順の参照の頁の根拠を入れる(LLM は呼ばない。#2395)。上限は 0〜10。
+  guide_step_retrieval_enabled?: boolean | null;
+  guide_step_max_queries?: number | null;
   // 質問から抽出項目の条件を読み取る(LLM の呼び出しが 1 回増える。#652)。
   auto_field_filter_enabled?: boolean | null;
   /**
@@ -1331,6 +1334,8 @@ export interface ChatMessage {
   progress?: unknown[] | null;
   /** 回答前に確認した内容（USER のメッセージだけ。確認しなかった質問は null / 未指定。#1839）。 */
   clarification?: ChatClarificationRecord | null;
+  /** 回答の注意書き（システム設定の文。backend が回答の確定の後に付ける。確認の質問・無効のときは null / 未指定。#2405）。 */
+  notice?: string | null;
   /** 会話の持ち主が送った質問か。system_admin が他の利用者の会話で送った質問は false（#1928）。 */
   sent_by_owner?: boolean;
   /** 持ち主以外が送った質問の、送った人の表示名（引けない利用者は空。#1928）。 */
@@ -1455,6 +1460,8 @@ export interface SearchResponse {
   guardrail_warnings: string[];
   elapsed_ms: number;
   diagnostics: SearchDiagnostics;
+  /** 回答の注意書き（システム設定の文。backend が回答の確定の後に付ける。確認の質問・無効のときは null / 未指定。#2405）。 */
+  notice?: string | null;
 }
 
 export interface FeedbackRequestBody {
@@ -4286,6 +4293,8 @@ export interface SupportGuideStep {
   evidence_requirements: string[];
   allowed_tools: string[];
   done_when: string;
+  /** この手順が参照する資料と頁（#2395。ガイドの references は全手順の共通）。 */
+  references: SupportGuideReference[];
 }
 
 export interface SupportGuideBranch {
@@ -4295,11 +4304,19 @@ export interface SupportGuideBranch {
   note: string;
 }
 
+/** 参照する資料の頁の範囲（両端を含む。#2395）。 */
+export interface SupportGuidePageRange {
+  page_start: number;
+  page_end: number;
+}
+
 export interface SupportGuideReference {
   document_id: string;
   title: string;
   section_path: string[];
   version: string;
+  /** 根拠にする頁の範囲（空なら文書の全体。#2395）。 */
+  page_ranges: SupportGuidePageRange[];
 }
 
 export interface SupportGuideCompletion {
@@ -4310,7 +4327,7 @@ export interface SupportGuideCompletion {
 
 /** 業務ガイドの内容（下書き・公開の版で同じ形）。 */
 export interface SupportGuideContent {
-  schema_version: 1;
+  schema_version: 2;
   title: string;
   description: string;
   goal: { expected_result: string; intent_examples: string[]; match_terms: string[] };
@@ -4468,7 +4485,7 @@ export interface SupportGuideImportData {
 }
 
 export interface SupportGuideExportData {
-  schema_version: 1;
+  schema_version: 2;
   guides: SupportGuideContent[];
 }
 
@@ -4510,6 +4527,8 @@ export interface SupportGuideProcessReference {
   name: string;
   pages: string;
   section: string;
+  /** この資料を根拠にする手順の id（空なら全手順に共通の資料。#2395）。 */
+  step_ids: string[];
   status: "resolved" | "unresolved" | "ambiguous";
   document_id: string | null;
   file_name: string | null;
@@ -4634,6 +4653,8 @@ export interface RunDetail extends RunSummary {
   answer: string | null;
   /** 回答の記録が保持期間で消えた・読めないとき false。 */
   answer_available: boolean;
+  /** 回答に付けた注意書き（回答の記録から。この機能より前の回答は null / 未指定。#2405）。 */
+  answer_notice?: string | null;
   citations: RetrievedChunk[];
   answer_diagnostics: Record<string, JsonValue> | null;
   stages: RunStage[];
@@ -4657,6 +4678,8 @@ export interface AnswerRecordDetail extends AnswerRecordSummary {
   answer: string;
   citations: RetrievedChunk[];
   answer_diagnostics: Record<string, JsonValue>;
+  /** 回答に付けた注意書き（この機能より前の回答・確認の質問は null / 未指定。#2405）。 */
+  notice?: string | null;
   /** 標準回答で評価できるか(この機能より前の回答は評価の入力を持たない)。 */
   evaluation_available?: boolean;
   /** 標準回答による評価の結果(未評価は null)。 */

@@ -444,6 +444,27 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=support_guide_embeddings_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261018_002_message_answer_notice",
+            table_name="rag_messages",
+            sql=answer_notice_column_migration_sql("RAG_MESSAGES"),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261018_003_answer_record_notice",
+            table_name="rag_answer_records",
+            sql=answer_notice_column_migration_sql("RAG_ANSWER_RECORDS"),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261018_004_support_guide_schema_v2",
+            table_name="rag_support_guides",
+            sql=support_guide_schema_v2_migration_sql(),
+        )
+    )
     return sections
 
 
@@ -456,6 +477,54 @@ def support_guide_embeddings_migration_sql() -> str:
     return _create_missing_objects_sql(
         oracle_support_guide_embedding_schema_sql(), "業務ガイドの埋め込み"
     )
+
+
+def answer_notice_column_migration_sql(table_name: str) -> str:
+    """回答に付けた注意書きの列（answer_notice）を無ければ足す（#2405）。
+
+    列を足すだけでデータは変えない。この機能より前の回答は NULL（注意書きを出していない）。
+    """
+    return f"""DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = '{table_name}' AND column_name = 'ANSWER_NOTICE';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE {table_name.lower()} ADD (answer_notice CLOB)';
+    END IF;
+END;
+/"""
+
+
+def support_guide_schema_v2_migration_sql() -> str:
+    """業務ガイドの内容の形の版を 1 から 2 にする（#2395）。
+
+    版 2 は資料の頁の範囲（``references[].page_ranges``）と手順の参照（``steps[].references``）
+    を足しただけで、版 1 の内容はそのまま版 2 として読める。下書きと公開の版の
+    ``schema_version`` だけを書き換え、ほかの値・内容の指紋の列は変えない（冪等。表が無ければ
+    何もしない）。
+    """
+    updates = (
+        ("RAG_SUPPORT_GUIDES", "rag_support_guides", "draft_json"),
+        ("RAG_SUPPORT_GUIDE_REVISIONS", "rag_support_guide_revisions", "content_json"),
+    )
+    blocks = "\n".join(
+        f"""    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = '{table}';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE q'[UPDATE {name} SET {column} = JSON_TRANSFORM({column}, """
+        f"""SET '$.schema_version' = 2) WHERE JSON_VALUE({column}, '$.schema_version' """
+        f"""RETURNING NUMBER) = 1]';
+    END IF;"""
+        for table, name, column in updates
+    )
+    return f"""DECLARE
+    v_count NUMBER;
+BEGIN
+{blocks}
+    COMMIT;
+END;
+/"""
 
 
 def document_categories_migration_sql() -> str:

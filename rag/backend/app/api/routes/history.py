@@ -119,6 +119,7 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
         if record is not None:
             detail["answer"] = record.get("answer")
             detail["answer_available"] = True
+            detail["answer_notice"] = record.get("answer_notice") or None
             detail["citations"] = _citations(_stored_citation_rows(record.get("citations_json")))
             diagnostics = record.get("diagnostics_json")
             detail["answer_diagnostics"] = diagnostics if isinstance(diagnostics, dict) else None

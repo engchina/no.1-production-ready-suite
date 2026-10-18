@@ -38,7 +38,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.deadline import check_deadline, current_deadline
@@ -104,10 +104,15 @@ from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_evaluation_input
 from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.search import (
+    MAX_PAGE_RANGES,
+    PAGE_RANGES_FILTER_KEY,
     ExtractionFieldCondition,
+    PageRange,
     RetrievedChunk,
     SearchMode,
     SearchRequest,
+    format_page_ranges,
+    parse_page_ranges,
 )
 
 T = TypeVar("T")
@@ -478,6 +483,15 @@ def build_engine_settings(
         "RAG_ENGINE_REQUEST_COVERAGE_CHUNKS_PER_SUBQUESTION": str(
             settings.rag_request_coverage_chunks_per_subquestion
         ),
+        # 追加の検索の枠と、業務ガイドの手順ごとの検索(#2395)。
+        "RAG_ENGINE_EXTRA_RETRIEVAL_MAX_QUERIES": str(settings.rag_extra_retrieval_max_queries),
+        "RAG_ENGINE_GUIDE_STEP_RETRIEVAL": "1"
+        if settings.rag_guide_step_retrieval_enabled
+        else "0",
+        "RAG_ENGINE_GUIDE_STEP_MAX_QUERIES": str(settings.rag_guide_step_max_queries),
+        "RAG_ENGINE_GUIDE_STEP_CHUNKS_PER_STEP": str(settings.rag_guide_step_chunks_per_step),
+        "RAG_ENGINE_GUIDE_REFERENCE_MAX_CHUNKS": str(settings.rag_guide_reference_max_chunks),
+        "RAG_ENGINE_GUIDE_STEP_DEADLINE_SECONDS": str(settings.rag_guide_step_deadline_seconds),
         # 当たった chunk の章節から親の章節へ段階的に広げる(#1436。検索・回答プロファイルで選ぶ)。
         "RAG_ENGINE_SECTION_EXPANSION": "1" if settings.rag_section_expansion_enabled else "0",
         "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS": str(settings.rag_section_expansion_max_levels),
@@ -933,6 +947,7 @@ class AnswerEngine:
                     if self._scope is not None
                     else None
                 ),
+                guide_plan=guide_step_plan(self._settings.rag_support_guide),
             )
 
     async def _search(
@@ -946,8 +961,14 @@ class AnswerEngine:
         inquiry_conditions: Any = None,
         settings: Any = None,
         expand_references: bool = True,
+        page_ranges: Sequence[Mapping[str, Any]] = (),
         **_: object,
     ) -> Any:
+        """回答の検索。``page_ranges``(業務ガイドの手順の参照の頁。#2395)は、その頁に絞って検索する。
+
+        頁に絞った検索は、参照の頁の外の chunk(交差参照・実体の拡張)を足さない。利用者の確認で
+        検索の範囲がすでに頁に絞られていれば、その範囲と重なる頁だけを検索する(範囲を広げない)。
+        """
         from rag_engine.models.storage import HybridSearchResult
 
         queries = [query for query in dict.fromkeys(q.strip() for q in retrieval_queries) if query]
@@ -955,6 +976,10 @@ class AnswerEngine:
             return HybridSearchResult(child_chunks=[], all_chunks=[])
         await self._ensure_search_filters(request, state, inquiry_conditions)
         assert state.filters is not None
+        if page_ranges:
+            expand_references = False
+            if not _with_page_ranges(state.filters, page_ranges):
+                return HybridSearchResult(child_chunks=[], all_chunks=[])
         vector_only = {query.strip() for query in vector_only_queries}
         depth = self._read_depth(candidate_limit)
         embeddings = await self._genai.embed(queries, input_type="SEARCH_QUERY")
@@ -978,7 +1003,9 @@ class AnswerEngine:
                     for query, embedding in zip(queries, embeddings, strict=False)
                 ],
                 candidate_limit=depth,
-                filters=dict(state.filters),
+                filters=_with_page_ranges(state.filters, page_ranges) or {}
+                if page_ranges
+                else dict(state.filters),
             )
             for index, hits in enumerate(all_hits):
                 rankings.append([hit.chunk_id for hit in hits])
@@ -998,7 +1025,8 @@ class AnswerEngine:
             # 自動で足した条件(質問から読み取った抽出項目の条件 #652・質問が名指しした文書のページと
             # 文書名 #546)で 0 件なら、その条件を段ごとに外して検索し直す(#2401。以降の検索(CRAG の
             # 補正検索など)も外したまま)。
-            if fused or not self._relax_filters(state):
+            # 参照の頁に絞った検索(#2395)の 0 件では外さない(ほかの検索の条件を変えない)。
+            if fused or page_ranges or not self._relax_filters(state):
                 break
         if len(state.search_log) < _ZERO_EVIDENCE_SEARCH_LOG_LIMIT:
             state.search_log.append(
@@ -3067,6 +3095,12 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "crag_attempt_count": len(result.crag_attempts or ()),
         # 要求ごとの根拠の覆域と、根拠の無い要求の再検索(#1279)。
         "request_coverage": dict((result.generation_trace or {}).get("request_coverage") or {}),
+        # 業務ガイドの手順ごとの検索(#2395)。業務ガイドの記録(diagnostics.guide)に移す。
+        **(
+            {"guide_step_retrieval": dict(trace)}
+            if isinstance(trace := (result.generation_trace or {}).get("guide_steps"), Mapping)
+            else {}
+        ),
         # 当たった chunk の章節から親の章節へ広げた記録(#1436。段・読んだ章節・止めた理由・
         # 読めなかった章節)。
         "section_expansion": _section_expansion_diagnostics(result.generation_trace),
@@ -3105,6 +3139,54 @@ def adopted_goal_alignment(generation_trace: object) -> str | None:
     audit = adopted.get("audit") if adopted is not None else None
     value = audit.get("goal_alignment") if isinstance(audit, Mapping) else None
     return value if isinstance(value, str) and value else None
+
+
+def guide_step_plan(guide: Mapping[str, Any] | None) -> Any:
+    """回答に使う業務ガイドの手順(#2395。手順ごとの検索の材料)。答えるときだけ。無ければ None。"""
+    from rag_engine.retrieval.guide_steps import GuidePlan
+
+    guide = guide or {}
+    if guide.get("decision") not in {"answer", "branch"} or not guide.get("step_plan"):
+        return None
+    steps = guide.get("step_plan")
+    return GuidePlan.from_payload(
+        str(guide.get("guide_id") or ""),
+        int(cast(Any, guide.get("revision") or 0)),
+        steps if isinstance(steps, list) else [],
+    )
+
+
+def _with_page_ranges(
+    filters: Mapping[str, str], page_ranges: Sequence[Mapping[str, Any]]
+) -> dict[str, str] | None:
+    """検索の絞り込みに頁の範囲(#2395)を足した写し。重なる範囲が無ければ None(検索しない)。
+
+    絞り込みにすでに頁の範囲(利用者の確認の範囲)があれば、両方に重なる頁だけにする。
+    """
+    wanted = [PageRange.model_validate(dict(item)) for item in page_ranges]
+    current = filters.get(PAGE_RANGES_FILTER_KEY)
+    if current:
+        wanted = [
+            overlap
+            for item in wanted
+            for scope in parse_page_ranges(current)
+            if (overlap := _page_overlap(item, scope)) is not None
+        ][:MAX_PAGE_RANGES]
+    if not wanted:
+        return None
+    return {**filters, PAGE_RANGES_FILTER_KEY: format_page_ranges(wanted[:MAX_PAGE_RANGES])}
+
+
+def _page_overlap(left: PageRange, right: PageRange) -> PageRange | None:
+    if left.document_id != right.document_id:
+        return None
+    starts = [value for value in (left.page_start, right.page_start) if value is not None]
+    ends = [value for value in (left.page_end, right.page_end) if value is not None]
+    start = max(starts) if starts else None
+    end = min(ends) if ends else None
+    if start is not None and end is not None and start > end:
+        return None
+    return PageRange(document_id=left.document_id, page_start=start, page_end=end)
 
 
 def _zero_evidence_diagnostics(

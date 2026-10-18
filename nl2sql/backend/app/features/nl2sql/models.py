@@ -1299,6 +1299,8 @@ class DbAdminChatTurn(BaseModel):
     # 会話の持ち主以外（system_admin）が送ったターンだけに付く送り手（#1928 と同じ）。
     sender_user_uuid: str | None = None
     sender_display_name: str | None = None
+    # 回答の注意書き（システム設定の文。#2405）。モデルに渡す会話の履歴には入れない。
+    notice: str | None = None
 
 
 class DbAdminChatSummary(BaseModel):
@@ -1368,6 +1370,9 @@ class Nl2SqlResult(BaseModel):
     timing: TimingEnvelope
     interpretation: Nl2SqlInterpretationArtifact | None = None
     show_prompt: Nl2SqlShowPromptArtifact | None = None
+    # 回答の注意書き（システム設定の文。#2405）。SQL を実行して答えた job（DONE）だけに付ける。
+    # モデルに渡す会話の履歴（前の質問と SQL）には入れない。
+    notice: str | None = None
 
 
 class Nl2SqlQuestionInterpretation(BaseModel):

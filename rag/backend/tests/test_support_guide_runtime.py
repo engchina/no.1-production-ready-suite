@@ -189,7 +189,7 @@ def test_guide_becomes_a_pinned_rule_with_steps_and_hints() -> None:
     assert rule["triggers"] == ["権限タブ"]
     assert "分かっている条件: 付与先=グループ" in rule["content"]
     assert "付与先が「グループ」以外の場合の手順は答えに含めない" in rule["content"]
-    assert "手順 2. 権限を選んで付与する（open の後）" in rule["content"]
+    assert "手順 2（grant）. 権限を選んで付与する（open の後）" in rule["content"]
     assert "実施の前に承認が要る" in rule["content"]
     payload = with_guide_rule({"terms": [{"term": "x"}], "rules": [{"id": "r1"}]}, match)
     assert [item["id"] for item in payload["rules"]] == ["guide-g-grant", "r1"]
@@ -721,6 +721,70 @@ class _FakeOracle:
 
 
 @pytest.mark.usefixtures("auth")
+def test_mcp_lookup_guides_returns_step_contents(auth: Any, monkeypatch: MonkeyPatch) -> None:  # noqa: F811
+    """手順の中身（目的・手がかり・参照の資料と頁・必要な根拠・終わりの条件）と共通の資料・完了の
+    条件を返す（#2396）。"""
+    content = grant_guide(
+        steps=[
+            {
+                "id": "open",
+                "title": "詳細画面の権限タブを開く",
+                "purpose": "権限の画面に入る",
+                "retrieval_hints": ["権限タブ"],
+                "evidence_requirements": ["画面の入口"],
+                "done_when": "権限タブが開いた",
+                "references": [
+                    {
+                        "document_id": "doc-b",
+                        "title": "画面の説明",
+                        "page_ranges": [{"page_start": 4, "page_end": 6}],
+                    }
+                ],
+            },
+            {"id": "grant", "title": "権限を選んで付与する", "depends_on": ["open"]},
+        ],
+        references=[{"document_id": "doc-a", "title": "運用手順書", "section_path": ["3 章"]}],
+        completion=[{"id": "done", "description": "付与した権限が表示される"}],
+    )
+
+    async def published(_oracle: object, _profile: str) -> tuple[list[Any], bool]:
+        return [("g-grant", 3, content)], False
+
+    monkeypatch.setattr(mcp_tools, "OracleClient", _FakeOracle)
+    monkeypatch.setattr(search_route, "load_published_guides", published)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    guide = _call(
+        "rag_lookup_guides",
+        {
+            "query": "アクセス権限を付与したい",
+            "search_answer_profile_id": "bv-1",
+            "conditions": {"target": "グループ"},
+        },
+        _token(user.user_uuid),
+    )["structuredContent"]["guides"][0]
+
+    first = guide["steps"][0]
+    assert first["purpose"] == "権限の画面に入る"
+    assert first["retrieval_hints"] == ["権限タブ"]
+    assert first["evidence_requirements"] == ["画面の入口"]
+    assert first["done_when"] == "権限タブが開いた"
+    assert first["references"] == [
+        {
+            "document_id": "doc-b",
+            "title": "画面の説明",
+            "section_path": [],
+            "page_ranges": [{"page_start": 4, "page_end": 6}],
+        }
+    ]
+    assert guide["references"] == [
+        {"document_id": "doc-a", "title": "運用手順書", "section_path": ["3 章"], "page_ranges": []}
+    ]
+    assert guide["completion"] == [
+        {"id": "done", "description": "付与した権限が表示される", "check_method": ""}
+    ]
+
+
+@pytest.mark.usefixtures("auth")
 def test_mcp_lookup_guides_and_search_clarifications(auth: Any, monkeypatch: MonkeyPatch) -> None:  # noqa: F811
     async def published(_oracle: object, _profile: str) -> tuple[list[Any], bool]:
         return GUIDES, False
@@ -750,6 +814,31 @@ def test_mcp_lookup_guides_and_search_clarifications(auth: Any, monkeypatch: Mon
     )["structuredContent"]["guides"][0]
     assert known["decision"] == "answer"
     assert known["known_conditions"][0]["value"] == "個別"
+    # 分かっている条件で外れた分岐（グループ → grant）の手順と分岐は返さない（#2396）。
+    assert [step["id"] for step in known["steps"]] == ["open"]
+    assert known["branches"] == []
+    assert known["steps"][0]["retrieval_hints"] == ["権限タブ"]
+    group = _call(
+        "rag_lookup_guides",
+        {
+            "query": "アクセス権限を付与したい",
+            "search_answer_profile_id": "bv-1",
+            "conditions": {"target": "グループ"},
+        },
+        _token(user.user_uuid),
+    )["structuredContent"]["guides"][0]
+    assert [step["id"] for step in group["steps"]] == ["open", "grant"]
+    assert group["branches"] == [
+        {
+            "id": "b1",
+            "condition_id": "target",
+            "operator": "equals",
+            "values": ["グループ"],
+            "goto_step": "grant",
+            "applies": True,
+            "note": "承認を得てから",
+        }
+    ]
     missing = _call(
         "rag_lookup_guides",
         {"query": "x", "search_answer_profile_id": "other"},

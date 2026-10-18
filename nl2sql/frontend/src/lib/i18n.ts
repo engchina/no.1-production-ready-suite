@@ -9,6 +9,8 @@ const nl2sqlJa = {
   "nav.chat": "チャット",
   "chat.subtitle": "業務プロファイルのデータに質問し、生成・実行した SQL と結果を確かめながら会話を続ける",
   "chat.profile": "業務プロファイル",
+  // 回答の注意書き（3 製品で共通の文。#2405）
+  "answer.notice.label": "回答の注意書き",
   "chat.profile.loading": "業務プロファイルを読み込んでいます",
   "chat.profile.loadFailed": "業務プロファイルを読み込めませんでした。",
   "chat.profile.placeholder": "業務プロファイルを検索して選択…",

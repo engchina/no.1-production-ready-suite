@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.schemas.search import RetrievedChunk
 
-SUPPORT_GUIDE_SCHEMA_VERSION: Literal[1] = 1
+SUPPORT_GUIDE_SCHEMA_VERSION: Literal[2] = 2
 # 使ってよい道具（handoff §10。手順の allowed_tools はこの中から選ぶ）。
 SUPPORT_GUIDE_TOOLS: tuple[str, ...] = (
     "rag_search",
@@ -23,6 +23,10 @@ SUPPORT_GUIDE_TOOLS: tuple[str, ...] = (
     "rag_retrieve_evidence",
     "nl2sql_query",
 )
+# 1 つの資料の頁の範囲・1 つの手順の参照の数の上限（#2395）。
+MAX_REFERENCE_PAGE_RANGES = 10
+MAX_STEP_REFERENCES = 10
+MAX_PAGE_NUMBER = 100_000
 _ID_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]{0,63}$"
 _SHORT = 200
 _TEXT = 2000
@@ -151,6 +155,38 @@ class SupportGuideBranch(_Strict):
     note: str = Field(default="", max_length=_SHORT)
 
 
+class SupportGuidePageRange(_Strict):
+    """参照する資料の頁の範囲（両端を含む）。``page_end`` を省けば 1 頁。"""
+
+    page_start: int = Field(ge=1, le=MAX_PAGE_NUMBER)
+    page_end: int | None = Field(default=None, ge=1, le=MAX_PAGE_NUMBER)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> SupportGuidePageRange:
+        if self.page_end is None:
+            self.page_end = self.page_start
+        if self.page_start > self.page_end:
+            raise ValueError("頁の範囲の終わりは始まり以降の頁にしてください。")
+        return self
+
+
+class SupportGuideReference(_Strict):
+    document_id: str = Field(min_length=1, max_length=64)
+    title: str = Field(
+        default="", max_length=_SHORT, description="表示名（参照の正本は document_id）。"
+    )
+    section_path: list[str] = Field(default_factory=list, max_length=10)
+    version: str = Field(default="", max_length=64)
+    page_ranges: list[SupportGuidePageRange] = Field(
+        default_factory=list,
+        max_length=MAX_REFERENCE_PAGE_RANGES,
+        description=(
+            "根拠にする頁の範囲（#2395）。空なら文書の全体。回答では手順ごとの検索をこの頁に絞り、"
+            "当たった頁の根拠を順位に関係なく回答の材料に入れる。"
+        ),
+    )
+
+
 class SupportGuideStep(_Strict):
     id: str = Field(pattern=_ID_PATTERN)
     title: str = Field(min_length=1, max_length=_SHORT)
@@ -162,19 +198,18 @@ class SupportGuideStep(_Strict):
     )
     allowed_tools: list[str] = Field(default_factory=list, max_length=len(SUPPORT_GUIDE_TOOLS))
     done_when: str = Field(default="", max_length=_TEXT, description="この手順の終わりの条件。")
+    references: list[SupportGuideReference] = Field(
+        default_factory=list,
+        max_length=MAX_STEP_REFERENCES,
+        description=(
+            "この手順が参照する資料と頁（#2395）。ガイドの references は全手順の共通の資料で、"
+            "ここには手順だけの資料を書く。"
+        ),
+    )
 
     _clean = field_validator(
         "depends_on", "retrieval_hints", "evidence_requirements", "allowed_tools"
     )(_clean_list)
-
-
-class SupportGuideReference(_Strict):
-    document_id: str = Field(min_length=1, max_length=64)
-    title: str = Field(
-        default="", max_length=_SHORT, description="表示名（参照の正本は document_id）。"
-    )
-    section_path: list[str] = Field(default_factory=list, max_length=10)
-    version: str = Field(default="", max_length=64)
 
 
 class SupportGuideCompletion(_Strict):
@@ -212,7 +247,7 @@ class SupportGuideHandoff(_Strict):
 class SupportGuideContent(_Strict):
     """業務ガイドの内容（下書き・公開の版で同じ形）。"""
 
-    schema_version: Literal[1] = SUPPORT_GUIDE_SCHEMA_VERSION
+    schema_version: Literal[2] = SUPPORT_GUIDE_SCHEMA_VERSION
     title: str = Field(min_length=1, max_length=_SHORT)
     description: str = Field(default="", max_length=_TEXT)
     goal: SupportGuideGoal
@@ -414,7 +449,7 @@ class SupportGuideDraftTryData(BaseModel):
 
 
 class SupportGuideExportData(BaseModel):
-    schema_version: Literal[1] = SUPPORT_GUIDE_SCHEMA_VERSION
+    schema_version: Literal[2] = SUPPORT_GUIDE_SCHEMA_VERSION
     guides: list[SupportGuideContent]
 
 
@@ -480,6 +515,10 @@ class SupportGuideProcessReference(BaseModel):
     name: str = Field(description="回答の過程に書いた資料の名前。")
     pages: str = Field(default="", description="回答の過程に書いた頁（書いたまま）。")
     section: str = Field(default="", description="回答の過程に書いた章節（書いたまま）。")
+    step_ids: list[str] = Field(
+        default_factory=list,
+        description="この資料を根拠にする手順の id（空なら全手順に共通の資料。#2395）。",
+    )
     status: Literal["resolved", "unresolved", "ambiguous"]
     document_id: str | None = None
     file_name: str | None = None

@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 18,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -124,7 +124,7 @@
     {
       "name": "rag_lookup_guides",
       "title": "業務ガイドの照会",
-      "description": "質問に当たる公開の業務ガイド（目的・確かめる条件と状態・手順の順・影響範囲・引き継ぎ先）を返します。回答は作りません。",
+      "description": "質問に当たる公開の業務ガイド（目的・確かめる条件と状態・手順の順と各手順の検索の手がかり・参照の資料と頁・分岐・完了の条件・影響範囲・引き継ぎ先）を返します。回答は作りません。",
       "inputSchema": {
         "additionalProperties": false,
         "description": "質問に当たる業務ガイドを引く条件。",
@@ -173,6 +173,65 @@
       },
       "outputSchema": {
         "$defs": {
+          "GuideBranchItem": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "condition_id": {
+                "title": "Condition Id",
+                "type": "string"
+              },
+              "operator": {
+                "enum": [
+                  "equals",
+                  "in",
+                  "unknown"
+                ],
+                "title": "Operator",
+                "type": "string"
+              },
+              "values": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Values",
+                "type": "array"
+              },
+              "goto_step": {
+                "description": "条件に当たるときに進む手順の id。",
+                "title": "Goto Step",
+                "type": "string"
+              },
+              "applies": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "分かっている条件に当たるか（true=当たる / null=条件が分からず決まらない）。当たらない分岐は返さない。",
+                "title": "Applies"
+              },
+              "note": {
+                "default": "",
+                "title": "Note",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "condition_id",
+              "operator",
+              "goto_step",
+              "applies"
+            ],
+            "title": "GuideBranchItem",
+            "type": "object"
+          },
           "GuideClarification": {
             "properties": {
               "condition_id": {
@@ -211,6 +270,29 @@
               "question"
             ],
             "title": "GuideClarification",
+            "type": "object"
+          },
+          "GuideCompletionItem": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "description": {
+                "title": "Description",
+                "type": "string"
+              },
+              "check_method": {
+                "default": "",
+                "title": "Check Method",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "description"
+            ],
+            "title": "GuideCompletionItem",
             "type": "object"
           },
           "GuideCondition": {
@@ -288,6 +370,59 @@
             "title": "GuideCondition",
             "type": "object"
           },
+          "GuidePageRangeItem": {
+            "properties": {
+              "page_start": {
+                "title": "Page Start",
+                "type": "integer"
+              },
+              "page_end": {
+                "title": "Page End",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "page_start",
+              "page_end"
+            ],
+            "title": "GuidePageRangeItem",
+            "type": "object"
+          },
+          "GuideReferenceItem": {
+            "properties": {
+              "document_id": {
+                "title": "Document Id",
+                "type": "string"
+              },
+              "title": {
+                "default": "",
+                "description": "表示名（参照の正本は document_id）。",
+                "title": "Title",
+                "type": "string"
+              },
+              "section_path": {
+                "description": "節の見出しの列。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Section Path",
+                "type": "array"
+              },
+              "page_ranges": {
+                "description": "根拠の頁の範囲（両端を含む。空なら文書の全体）。rag_read_document に document_id と page（page_start）を渡すと、その頁から読める。",
+                "items": {
+                  "$ref": "#/$defs/GuidePageRangeItem"
+                },
+                "title": "Page Ranges",
+                "type": "array"
+              }
+            },
+            "required": [
+              "document_id"
+            ],
+            "title": "GuideReferenceItem",
+            "type": "object"
+          },
           "GuideStepItem": {
             "properties": {
               "id": {
@@ -296,6 +431,11 @@
               },
               "title": {
                 "title": "Title",
+                "type": "string"
+              },
+              "purpose": {
+                "default": "",
+                "title": "Purpose",
                 "type": "string"
               },
               "depends_on": {
@@ -311,6 +451,36 @@
                 },
                 "title": "Allowed Tools",
                 "type": "array"
+              },
+              "retrieval_hints": {
+                "description": "この手順の根拠を引く検索の手がかり（語・画面名など）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Retrieval Hints",
+                "type": "array"
+              },
+              "references": {
+                "description": "この手順の根拠がある資料と頁。",
+                "items": {
+                  "$ref": "#/$defs/GuideReferenceItem"
+                },
+                "title": "References",
+                "type": "array"
+              },
+              "evidence_requirements": {
+                "description": "この手順で示すべき根拠。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Evidence Requirements",
+                "type": "array"
+              },
+              "done_when": {
+                "default": "",
+                "description": "この手順の終わりの条件。",
+                "title": "Done When",
+                "type": "string"
               }
             },
             "required": [
@@ -390,10 +560,35 @@
                 "type": "array"
               },
               "steps": {
+                "description": "手順（確かめる順。分かっている条件で外れた分岐の手順は含めない）。",
                 "items": {
                   "$ref": "#/$defs/GuideStepItem"
                 },
                 "title": "Steps",
+                "type": "array"
+              },
+              "branches": {
+                "description": "当たる・決まらない分岐（当たらない分岐は含めない）。",
+                "items": {
+                  "$ref": "#/$defs/GuideBranchItem"
+                },
+                "title": "Branches",
+                "type": "array"
+              },
+              "references": {
+                "description": "全手順に共通の資料と頁。",
+                "items": {
+                  "$ref": "#/$defs/GuideReferenceItem"
+                },
+                "title": "References",
+                "type": "array"
+              },
+              "completion": {
+                "description": "回答を終えてよい条件。",
+                "items": {
+                  "$ref": "#/$defs/GuideCompletionItem"
+                },
+                "title": "Completion",
                 "type": "array"
               },
               "impact_scope": {
@@ -445,7 +640,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 18,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -615,7 +810,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 18,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -938,7 +1133,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 18,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1318,7 +1513,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 18,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1964,7 +2159,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 18,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2281,7 +2476,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 18,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3135,7 +3330,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 18,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4283,7 +4478,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 18,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4431,6 +4626,19 @@
             ],
             "default": null,
             "description": "見つからない search_answer_profile_id を渡したときに自動で選んだ検索・回答プロファイル（それ以外は null）。"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "利用者に回答を示すときは、末尾にこの文をそのまま添える。",
+            "title": "Notice"
           }
         },
         "required": [
@@ -4869,7 +5077,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 16,
+            "default": 18,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

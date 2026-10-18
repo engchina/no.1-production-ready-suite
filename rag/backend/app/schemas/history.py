@@ -120,6 +120,8 @@ class RunDetail(RunSummary):
     answer: str | None = None
     # 回答の記録が保持期間で消えた・読めないとき False（回答を作った実行だけ意味がある）。
     answer_available: bool = False
+    # 回答に付けた注意書き（回答の記録から読む。#2405）。
+    answer_notice: str | None = None
     citations: list[RetrievedChunk] = Field(default_factory=list)
     answer_diagnostics: dict[str, JsonValue] | None = None
     stages: list[RunStage] = Field(default_factory=list)

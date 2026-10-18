@@ -158,6 +158,7 @@ from app.rag.support_guide_runtime import (
     clarification_questions,
     impact_applies,
     rank_guides,
+    visible_plan,
 )
 from app.schemas.document import DocumentPreprocessArtifact
 from app.schemas.search import (
@@ -171,6 +172,7 @@ from app.schemas.search_answer_profile import (
     SearchAnswerProfileStatus,
     SearchAnswerProfileSummary,
 )
+from app.schemas.support_guide import SupportGuideReference
 from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
 
 logger = logging.getLogger(__name__)
@@ -195,7 +197,12 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     足した（当たらなければ使える全件を返す）。rag_search / rag_retrieve_evidence に、id を
 #     誤ったときに自動で選んだ検索・回答プロファイル（auto_selected_search_answer_profile）を
 #     足した（#2355）。
-MCP_OUTPUT_SCHEMA_VERSION = 16
+# 17: rag_search に回答の注意書き（notice。API キーで呼んだ外部のクライアントだけ）を足した
+#     （#2405）。
+# 18: rag_lookup_guides の手順に目的・検索の手がかり・参照の資料と頁・必要な根拠・終わりの条件を、
+#     ガイドに分岐（branches）・共通の資料（references）・完了の条件（completion）を足し、
+#     分かっている条件で外れた分岐の手順を返さないようにした（#2396）。
+MCP_OUTPUT_SCHEMA_VERSION = 18
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -1434,20 +1441,87 @@ class SearchOutput(VersionedOutput):
     auto_selected_search_answer_profile: AutoSelectedProfile | None = Field(
         default=None, description=AUTO_SELECTED_PROFILE_DESCRIPTION
     )
+    # 回答の注意書き（#2405）。API キーで呼んだ外部のクライアントにだけ返す（Agent がサービス
+    # トークンで呼んだときは返さず、Agent の回答の末尾には Agent が付ける 1 つだけを出す）。
+    notice: str | None = Field(
+        default=None, description="利用者に回答を示すときは、末尾にこの文をそのまま添える。"
+    )
+
+
+class GuidePageRangeItem(BaseModel):
+    page_start: int
+    page_end: int
+
+
+class GuideReferenceItem(BaseModel):
+    document_id: str
+    title: str = Field(default="", description="表示名（参照の正本は document_id）。")
+    section_path: list[str] = Field(default_factory=list, description="節の見出しの列。")
+    page_ranges: list[GuidePageRangeItem] = Field(
+        default_factory=list,
+        description=(
+            "根拠の頁の範囲（両端を含む。空なら文書の全体）。rag_read_document に document_id と "
+            "page（page_start）を渡すと、その頁から読める。"
+        ),
+    )
 
 
 class GuideStepItem(BaseModel):
     id: str
     title: str
+    purpose: str = ""
     depends_on: list[str] = Field(default_factory=list)
     allowed_tools: list[str] = Field(default_factory=list)
+    retrieval_hints: list[str] = Field(
+        default_factory=list, description="この手順の根拠を引く検索の手がかり（語・画面名など）。"
+    )
+    references: list[GuideReferenceItem] = Field(
+        default_factory=list, description="この手順の根拠がある資料と頁。"
+    )
+    evidence_requirements: list[str] = Field(
+        default_factory=list, description="この手順で示すべき根拠。"
+    )
+    done_when: str = Field(default="", description="この手順の終わりの条件。")
+
+
+class GuideBranchItem(BaseModel):
+    id: str
+    condition_id: str
+    operator: Literal["equals", "in", "unknown"]
+    values: list[str] = Field(default_factory=list)
+    goto_step: str = Field(description="条件に当たるときに進む手順の id。")
+    applies: bool | None = Field(
+        description=(
+            "分かっている条件に当たるか（true=当たる / null=条件が分からず決まらない）。"
+            "当たらない分岐は返さない。"
+        )
+    )
+    note: str = ""
+
+
+class GuideCompletionItem(BaseModel):
+    id: str
+    description: str
+    check_method: str = ""
 
 
 class LookupGuideItem(GuideRef):
     expected_result: str
     score: int = Field(description="質問との照合の点（大きいほど合う）。")
     clarifications: list[GuideClarification] = Field(default_factory=list)
-    steps: list[GuideStepItem] = Field(default_factory=list)
+    steps: list[GuideStepItem] = Field(
+        default_factory=list,
+        description="手順（確かめる順。分かっている条件で外れた分岐の手順は含めない）。",
+    )
+    branches: list[GuideBranchItem] = Field(
+        default_factory=list, description="当たる・決まらない分岐（当たらない分岐は含めない）。"
+    )
+    references: list[GuideReferenceItem] = Field(
+        default_factory=list, description="全手順に共通の資料と頁。"
+    )
+    completion: list[GuideCompletionItem] = Field(
+        default_factory=list, description="回答を終えてよい条件。"
+    )
     impact_scope: Literal["individual", "group", "all"]
     approval_required: bool
     impact_steps: list[str] = Field(
@@ -3223,9 +3297,25 @@ async def _older_versions(
     ]
 
 
+def _guide_reference(reference: SupportGuideReference) -> GuideReferenceItem:
+    return GuideReferenceItem(
+        document_id=reference.document_id,
+        title=reference.title,
+        section_path=list(reference.section_path),
+        page_ranges=[
+            GuidePageRangeItem(
+                page_start=item.page_start, page_end=item.page_end or item.page_start
+            )
+            for item in reference.page_ranges
+        ],
+    )
+
+
 def _lookup_item(match: GuideMatch) -> LookupGuideItem:
     summary = match.summary()
     content = match.content
+    # 分かっている条件で外れた分岐の手順は返さない（回答の材料と同じ。#2396）。
+    steps, branches = visible_plan(match)
     return LookupGuideItem(
         **summary,
         expected_result=content.goal.expected_result,
@@ -3235,10 +3325,34 @@ def _lookup_item(match: GuideMatch) -> LookupGuideItem:
             GuideStepItem(
                 id=step.id,
                 title=step.title,
+                purpose=step.purpose,
                 depends_on=list(step.depends_on),
                 allowed_tools=list(step.allowed_tools),
+                retrieval_hints=list(step.retrieval_hints),
+                references=[_guide_reference(item) for item in step.references],
+                evidence_requirements=list(step.evidence_requirements),
+                done_when=step.done_when,
             )
-            for step in content.steps
+            for step in steps
+        ],
+        branches=[
+            GuideBranchItem(
+                id=branch.id,
+                condition_id=branch.when.condition_id,
+                operator=branch.when.operator,
+                values=list(branch.when.values),
+                goto_step=branch.goto_step,
+                applies=applies,
+                note=branch.note,
+            )
+            for branch, applies in branches
+        ],
+        references=[_guide_reference(item) for item in content.references],
+        completion=[
+            GuideCompletionItem(
+                id=item.id, description=item.description, check_method=item.check_method
+            )
+            for item in content.completion
         ],
         impact_scope=content.impact.scope,
         approval_required=content.impact.approval_required,
@@ -3246,6 +3360,14 @@ def _lookup_item(match: GuideMatch) -> LookupGuideItem:
         impact_applies=impact_applies(match),
         handoff_contact=content.handoff.contact,
     )
+
+
+def called_with_api_key(http_request: Request) -> bool:
+    """利用者の API キー（`prak_…`）で呼んだ外部の MCP クライアントか（#2405）。
+
+    Agent のサービストークン・local（認証なし）の呼び出しは False。
+    """
+    return getattr(http_request.state, "api_key", None) is not None
 
 
 def _figure_url_request(http_request: Request) -> FigureUrlRequest | None:
@@ -3555,6 +3677,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         return SearchOutput(
             **_answer_fields(result, arguments.evidence_limit, sections),
             older_versions=await _older_versions(arguments, request, citations),
+            notice=result.notice if called_with_api_key(http_request) else None,
         )
 
     async def lookup_guides(arguments: LookupGuidesInput) -> LookupGuidesOutput:
@@ -3747,8 +3870,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 name="rag_lookup_guides",
                 title="業務ガイドの照会",
                 description=(
-                    "質問に当たる公開の業務ガイド（目的・確かめる条件と状態・手順の順・影響範囲・"
-                    "引き継ぎ先）を返します。回答は作りません。"
+                    "質問に当たる公開の業務ガイド（目的・確かめる条件と状態・手順の順と各手順の"
+                    "検索の手がかり・参照の資料と頁・分岐・完了の条件・影響範囲・引き継ぎ先）を"
+                    "返します。回答は作りません。"
                 ),
                 input_model=LookupGuidesInput,
                 handler=scoped(lookup_guides, _check_guides_scope),

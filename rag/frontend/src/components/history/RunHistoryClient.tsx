@@ -14,6 +14,7 @@
  */
 
 import {
+  AnswerNotice,
   Banner,
   ProcessFailureNotice,
   processFailureFacts,
@@ -549,7 +550,11 @@ function RunDetailView({ run }: { run: RunDetail }) {
         run.answer_generated && succeeded ? (
           <RunDetailSection title={t("history.result.answer")} testId="run-history-answer">
             {run.answer_available && run.answer ? (
-              <AnswerText text={run.answer} citations={canPreview ? run.citations : []} />
+              <div className="space-y-3">
+                <AnswerText text={run.answer} citations={canPreview ? run.citations : []} />
+                {/* 回答に付けた注意書き（そのときの文。#2405）。 */}
+                <AnswerNotice notice={run.answer_notice} label={t("answer.notice.label")} />
+              </div>
             ) : (
               <p className="text-sm text-fg-muted" data-testid="run-history-answer-missing">
                 {t("history.result.answerMissing")}

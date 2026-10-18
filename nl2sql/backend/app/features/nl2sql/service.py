@@ -78,6 +78,7 @@ from app.settings import connection_label, enterprise_ai_connection_for_model, g
 
 from .admin_audit_store import AdminAuditRecord, AdminAuditStore
 from .ai_calls import BoundedEnterpriseAiClient, stage_concurrency, sync_ai_caller
+from .answer_notice import current_answer_notice
 from .db_admin_chat import (
     ANALYSIS_SYSTEM_PROMPT as _DB_ADMIN_CHAT_ANALYSIS_SYSTEM_PROMPT,
 )
@@ -18040,6 +18041,8 @@ class Nl2SqlService:
             model=generated.model,
             plan=generated.plan,
             sender_user_uuid=None if owner == actor else actor,
+            # 回答の注意書き（#2405）。SQL を作った後に、回答とは別の項目として付ける。
+            notice=current_answer_notice(),
         )
         if conversation is None:
             store.create_conversation(
@@ -23710,6 +23713,9 @@ class Nl2SqlService:
         # terminal 状態を公開する前に job snapshot と履歴を永続化する。先に公開すると、
         # ポーリングが DONE を見た直後の履歴取得(UI の履歴更新 / 他 worker)に新しい履歴が
         # まだ無い取りこぼしが起きる。永続化失敗は結果を捨てず warning として公開する。
+        if final_status == JobStatus.DONE:
+            # 回答の注意書き（#2405）。SQL を実行して答えた後に、回答とは別の項目として付ける。
+            result = result.model_copy(update={"notice": current_answer_notice()})
         published = replace(
             job,
             steps=final_steps,

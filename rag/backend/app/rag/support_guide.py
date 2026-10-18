@@ -216,21 +216,29 @@ DocumentLookup = Callable[[str], Awaitable[str | None]]
 async def reference_issues(
     content: SupportGuideContent, lookup: DocumentLookup
 ) -> list[SupportGuideIssue]:
-    """参照する文書が使えるか（公開の前だけ）。
+    """参照する文書が使えるか（公開の前だけ。ガイドの資料と手順の資料）。
 
     ``lookup`` は文書 ID から問題（見つからない・プロファイルの対象外・索引前など）の説明を返し、
     使えれば None を返す。
     """
     issues: list[SupportGuideIssue] = []
-    for index, reference in enumerate(content.references):
-        problem = await lookup(reference.document_id)
+    located = [
+        (f"references[{index}]", reference) for index, reference in enumerate(content.references)
+    ]
+    # 手順の参照（#2395）も同じく確かめる。
+    for step_index, step in enumerate(content.steps):
+        located.extend(
+            (f"steps[{step_index}].references[{index}]", reference)
+            for index, reference in enumerate(step.references)
+        )
+    problems: dict[str, str | None] = {}
+    for path, reference in located:
+        if reference.document_id not in problems:
+            problems[reference.document_id] = await lookup(reference.document_id)
+        problem = problems[reference.document_id]
         if problem:
             name = reference.title or reference.document_id
-            issues.append(
-                _error(
-                    "reference_unavailable", f"references[{index}]", f"資料「{name}」: {problem}"
-                )
-            )
+            issues.append(_error("reference_unavailable", path, f"資料「{name}」: {problem}"))
     return issues
 
 
