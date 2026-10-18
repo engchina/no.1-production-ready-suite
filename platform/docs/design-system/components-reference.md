@@ -2743,14 +2743,19 @@ export interface SideSheetProps {
   closeLabel: string;
   /** 出す側（既定は左）。 */
   side?: "left" | "right";
-  /** 幅（#1154）。default は 22rem、wide は sm 以上 64rem（画面幅 − 3.5rem まで）・sm 未満は全画面。 */
-  size?: "default" | "wide";
+  /**
+   * 幅（#1154 / #2281）。default は 22rem（短い一覧・絞り込み）、md は 40rem（一覧の 1 件の詳細。文章を読む内容）、
+   * wide は sm 以上 64rem（表）・sm 未満は全画面。いずれも画面幅 − 3.5rem まで。
+   */
+  size?: "default" | "md" | "wide";
   /** シートの要素の id（開くボタンの aria-controls に渡す）。 */
   id?: string;
   /** 閉じたときにフォーカスを戻す先。省略時は開く前にフォーカスがあった要素。 */
   returnFocusRef?: React.RefObject<HTMLElement | null>;
   /** 見出しの行の右（閉じるボタンの左）に置く操作。 */
   headerActions?: React.ReactNode;
+  /** 見出しの行の「前へ / 次へ」（ListDetailPager の props。#2281）。headerActions の左に置く。 */
+  pager?: ListDetailPagerProps;
   children: React.ReactNode;
   className?: string;
   /** 本文（flex の縦並び・中でスクロール・p-3）への追加のクラス。 */
@@ -2763,6 +2768,68 @@ export interface SideSheetProps {
 - 閉じている間も描いたまま（`inert`・`data-state="closed"`）。開いている間は `data-state="open"`。
 - キー操作はナビのドロワーと同じ helper（`focusableIn` / `navDrawerKeyAction`）。閉じるボタンの Tooltip が出ている間の 1 回目の Escape は吹き出しだけを閉じる（README §4「`Tooltip`」）。
 - 単体テストは `packages/ui/tests/side-sheet.test.tsx`、実ブラウザは RAG の `e2e/chat.spec.ts`（375px の開閉・Esc・外側・フォーカスの戻り）。
+
+---
+
+## ListDetailLayout / useUrlSelection / ListDetailPager — **新規**（#2281）
+
+B 型（マスタ詳細の閲覧）の一覧 + 詳細。規則は UX 契約 [page-archetypes.md §1 B](../ux-contracts/page-archetypes.md)、見た目と振る舞いの表は README §4「`ListDetailLayout`」。
+
+```tsx
+import { useSearchParams } from "react-router-dom";
+import {
+  EmptyState, ListDetailLayout, ListDetailPager, PageHeader, adjacentListItems,
+  useListDetailSplit, useUrlSelection,
+} from "@production-ready/ui";
+
+const [searchParams, setSearchParams] = useSearchParams();
+const split = useListDetailSplit(); // xl（1280px）以上か
+const selection = useUrlSelection({ param: "table", searchParams, setSearchParams, singlePane: !split });
+const { previous, next } = adjacentListItems(items, selection.selectedId, (item) => item.id);
+
+<PageHeader
+  title={t("tables.title")}
+  // 1 ペインで詳細を出している間だけ「一覧へ戻る」
+  back={!split && selection.selectedId ? { label: t("common.backToList"), onClick: selection.clear } : undefined}
+/>
+<ListDetailLayout
+  id="table-management"                 // 幅・開閉の保存 key と data-testid（list-detail-<id>…）
+  storagePrefix="production-ready-nl2sql.listDetail"
+  listLabel={t("tables.list")}          // 一覧の列の名前・開閉ボタンの名前
+  detailLabel={t("tables.detail")}
+  listHeader={<ListToolbar … />}        // スクロールしない
+  list={<DataTable className="min-h-0 rounded-none border-0" stickyHeader … />}  // 列の中でスクロール
+  listFooter={<LoadMoreFooter … />}
+  hasSelection={selection.selectedId !== null}
+  detail={<TableDetail id={selection.selectedId} />}
+  emptyDetail={<EmptyState title={t("tables.emptyTitle")} hint={t("tables.emptyHint")} />}
+  detailToolbar={
+    <ListDetailPager
+      onPrevious={previous ? () => selection.select(previous.id) : null}
+      onNext={next ? () => selection.select(next.id) : null}
+    />
+  }
+/>
+```
+
+### props
+
+| prop | 型 | 説明 |
+|---|---|---|
+| `id` | `string` | `<feature>-<view>`。保存 key（`storagePrefix` + `.` + `id`。値は `{ listWidthRem, collapsed }`）と `data-testid`（`list-detail-<id>`・`-list`・`-detail`・`-resizer`・`-toggle`） |
+| `listLabel` / `detailLabel` | `string` | 列の読み上げ名（翻訳済み）。`listLabel` は開閉ボタンの名前・Tooltip にも使う |
+| `listHeader` / `list` / `listFooter` | `ReactNode` | 一覧の列の上（固定）・本体（列の中でスクロール。`data-list-detail-body`）・下（固定） |
+| `hasSelection` | `boolean` | 選んでいるか。1 ペインでは一覧と詳細のどちらを出すかを決める |
+| `detail` / `emptyDetail` | `ReactNode` | 選んだ対象の詳細 / 2 ペインで未選択のときの空の状態 |
+| `detailToolbar` | `ReactNode` | 詳細の上端の行の右（`ListDetailPager`）。2 ペインでは行の左に開閉ボタンが出る |
+| `itemSelector` | `string` | ↑ / ↓ でフォーカスを移す項目（既定 `[data-row-title-button]` = `RowTitleButton`） |
+| `storagePrefix` | `string` | 既定 `production-ready.listDetail`。製品ごとに分ける |
+| `labels` | `Partial<ListDetailLayoutLabels>` | 分割線の名前・案内・値の読み上げ（既定は日本語） |
+
+- 状態は `data-list-detail-layout="split" \| "single"`・`data-list-detail-view="both" \| "list" \| "detail"`・`data-list-collapsed`。
+- `useUrlSelection({ param, searchParams, setSearchParams, singlePane })` は `{ selectedId, select, clear, replace }`。`select` は 1 ペインで未選択から選ぶときだけ push、それ以外は replace。`clear` はこの画面で push して入ったなら `history.back()`、URL から直接開いたなら検索パラメータを消して replace。`replace(null)` は削除の後に選択を外す。`packages/ui` は router に依存しないので、`searchParams` / `setSearchParams` は製品が `useSearchParams()` から渡す。
+- `ListDetailPager`（`onPrevious` / `onNext` は無ければ `null`、`testId` で `-previous` / `-next`）と `adjacentListItems(items, selectedKey, getKey)` は、詳細の上端の行と `SideSheet` の `pager` で共有する。
+- 単体テストは `packages/ui/tests/list-detail-layout.test.tsx`・`url-selection.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/table-management-list-detail.spec.ts`（2 ペイン・幅・開閉・↑ / ↓・1 ペインの戻るとフォーカス・1920px）。
 
 ---
 

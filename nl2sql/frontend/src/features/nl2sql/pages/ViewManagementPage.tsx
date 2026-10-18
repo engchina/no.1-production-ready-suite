@@ -3,6 +3,7 @@ import {
   useWorkspaceState,
   useWorkspaceRevalidation,
   useResetExecutionConsent,
+  useWorkspaceActive,
   useWorkspaceUrlSelection,
 } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -477,17 +478,24 @@ export function ViewManagementPage() {
       });
   }, [viewItems, viewOwnerPrefix, viewSearch, viewSort]);
 
-  // 選択（URL）が変わったら詳細を取り直す。外れたら詳細を消す。fetchDetail は毎レンダー作り直すので、最新のものを ref から呼ぶ。
+  // 選択（URL）が変わったら詳細を取り直し（抽出の結果も消す）、外れたら詳細を消す。画面が表に戻ったとき（keep-alive）は
+  // 詳細だけを取り直す。fetchDetail は毎レンダー作り直すので、最新のものを ref から呼ぶ。
   const fetchDetailRef = useRef(fetchDetail);
   useLayoutEffect(() => { fetchDetailRef.current = fetchDetail; });
+  const workspaceActive = useWorkspaceActive();
+  const lastSelectedRef = useRef("");
+  const { load: loadDetail } = detailRequest;
   useEffect(() => {
+    if (!workspaceActive) return;
+    const changed = lastSelectedRef.current !== selectedViewName;
+    lastSelectedRef.current = selectedViewName;
     if (!selectedViewName) {
-      if (detailRequest.selectedName) clearDetail();
+      clearDetail();
       return;
     }
-    if (selectedViewName === detailRequest.selectedName) return;
-    void fetchDetailRef.current(selectedViewName);
-  }, [selectedViewName, detailRequest.selectedName, clearDetail]);
+    if (changed) void fetchDetailRef.current(selectedViewName);
+    else void loadDetail(selectedViewName);
+  }, [workspaceActive, selectedViewName, clearDetail, loadDetail]);
 
   const toggleSort = (key: DbObjectSortKey) => {
     setViewSort((current) => ({
@@ -775,7 +783,8 @@ export function ViewManagementPage() {
               onSearchChange={setViewSearch}
               onOwnerPrefixChange={setViewOwnerPrefix}
               onSortChange={toggleSort}
-              onSelect={selection.select}
+              // 選んでいる行をもう一度押すと詳細を取り直す（取消・失敗の後の読み直し）。
+              onSelect={(name) => (name === selectedViewName ? void fetchDetail(name) : selection.select(name))}
               onLoadMore={() => void viewObjectsQuery.fetchNextPage()}
               onRetryLoadMore={() => void viewObjectsQuery.fetchNextPage()}
               onRetry={() => void refreshObjects()}

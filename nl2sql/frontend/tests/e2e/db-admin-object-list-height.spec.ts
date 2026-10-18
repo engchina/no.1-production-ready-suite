@@ -823,6 +823,18 @@ async function expectNoStatusIcon(badge: Locator) {
   await expect(badge.locator("svg")).toHaveCount(0);
 }
 
+/**
+ * 1 ペイン（xl 未満。ListDetailLayout の詳細だけの表示。#2281）なら「一覧へ戻る」で一覧へ戻る。2 ペインでは何もしない。
+ * 詳細を出したまま一覧の行・検索欄を操作する前に呼ぶ。
+ */
+async function returnToListIfSinglePane(page: Page, idPrefix: string) {
+  const back = page.getByTestId(`${idPrefix}-detail-back`);
+  if (await back.isVisible()) {
+    await back.click();
+    await expect(page.getByTestId(`list-detail-${idPrefix}-list`)).toBeVisible();
+  }
+}
+
 function expectedObjectListRows(testInfo: TestInfo) {
   return testInfo.project.name === "mobile-375" ? 5 : 8;
 }
@@ -978,10 +990,13 @@ for (const scenario of scenarios) {
     await expect(page.getByTestId(`${idPrefix}-toolbar`).locator("[data-list-count]")).toHaveText("全 4 件");
     await grid.getByText(shortComment, { exact: true }).click();
     await expect(page.getByTestId(`${idPrefix}-detail-header`)).toContainText("INVOICES");
+    await returnToListIfSinglePane(page, idPrefix);
     const longButton = grid.getByRole("button", { name: "APP.LONG_COMMENT を表示", exact: true });
     await longButton.focus();
     await page.keyboard.press("Enter");
-    await expect(longButton).toHaveAttribute("aria-current", "true");
+    await expect(page.getByTestId(`${idPrefix}-detail-header`)).toContainText("LONG_COMMENT");
+    await returnToListIfSinglePane(page, idPrefix);
+    if (testInfo.project.name !== "mobile-375") await expect(longButton).toHaveAttribute("aria-current", "true");
     const gridScroll = await page.getByTestId("db-admin-object-list").evaluate((node) => node.scrollWidth - node.clientWidth);
     expect(gridScroll).toBeLessThanOrEqual(1);
     await grid.screenshot({ path: testInfo.outputPath(`${scenario.objectType}-name-comments.png`) });
@@ -1075,7 +1090,7 @@ test("データ管理の対象一覧はコメントを名前の下に表示し�
 
 for (const scenario of scenarios) {
   test(
-    `${scenario.title}はデスクトップ8行・モバイル5行の高さに収める`, { tag: "@responsive" },
+    `${scenario.title}は一覧の列の高さ（画面の高さ）に収めて中をスクロールし、先頭を自動で選ばない`, { tag: "@responsive" },
     async ({ page }, testInfo) => {
       await mockObjectManagementApi(page, scenario);
       await page.goto(scenario.path);
@@ -1084,47 +1099,51 @@ for (const scenario of scenarios) {
       const grid = page.getByTestId(`${scenario.objectType}-management-grid`);
       const detailHeader = page.getByTestId(`${scenario.objectType}-management-detail-header`);
       await expect(grid.locator("tbody tr")).toHaveCount(30);
-      await expect(grid.locator("tbody tr").first()).toHaveAttribute("data-selected", "true");
-      await expect(detailHeader).toContainText(`${scenario.prefix}_01`);
+      // 一覧 + 詳細（ListDetailLayout。#2281）は先頭の行を自動で選ばない。
+      await expect(grid.locator('tbody tr[data-selected="true"]')).toHaveCount(0);
+      await expect(detailHeader).toHaveCount(0);
       await expectCompactSortHeaders(grid);
 
-      await expectObjectListRowLimit(list, "tbody tr", expectedObjectListRows(testInfo));
+      // 一覧の列は画面の高さの中に収まり、行は列の中でスクロールする（8 行の固定の高さではない）。
+      const fit = await list.evaluate((node) => {
+        const column = node.closest<HTMLElement>('[data-testid^="list-detail-"][data-testid$="-list"]')!;
+        return {
+          scrolls: node.scrollHeight > node.clientHeight,
+          columnHeight: column.getBoundingClientRect().height,
+          viewport: window.innerHeight,
+          position: getComputedStyle(column).position,
+        };
+      });
+      expect(fit.scrolls).toBe(true);
+      expect(fit.columnHeight).toBeLessThanOrEqual(fit.viewport);
+      expect(fit.position).toBe("sticky");
 
+      await grid.getByRole("button", { name: `APP.${scenario.prefix}_01 を表示`, exact: true }).click();
+      await expect(detailHeader).toContainText(`${scenario.prefix}_01`);
+      await returnToListIfSinglePane(page, `${scenario.objectType}-management`);
       await page.getByRole("searchbox", { name: "検索" }).fill(`${scenario.prefix}_02`);
       await expect(grid.locator("tbody tr")).toHaveCount(1);
-      await expect(grid.locator("tbody tr").first()).toHaveAttribute("data-selected", "true");
-      await expect(detailHeader).toContainText(`${scenario.prefix}_02`);
+      // 絞り込みで選択を別の行へ置き換えない（2 ペインでは URL の選択が正本のまま残る）。
+      await expect(grid.locator('tbody tr[data-selected="true"]')).toHaveCount(0);
+      if (testInfo.project.name !== "mobile-375") {
+        await expect(page).toHaveURL(new RegExp(`${scenario.objectType}=APP\\.${scenario.prefix}_01`));
+      }
     }
   );
 
   test(
-    `${scenario.title}の列情報はデスクトップ8行・モバイル5行の高さで内部スクロールする`, { tag: "@responsive" },
-    async ({ page }, testInfo) => {
+    `${scenario.title}の列情報は詳細と一緒にページでスクロールし、入れ子の縦スクロールを持たない`, { tag: "@responsive" },
+    async ({ page }) => {
       await mockObjectManagementApi(page, scenario, { columnCount: 30 });
-      await page.goto(scenario.path);
+      await page.goto(`${scenario.path}?${scenario.objectType}=APP.${scenario.prefix}_01`);
 
       const detailColumns = page.getByTestId("db-admin-detail-columns");
       await expect(detailColumns.locator("tbody tr")).toHaveCount(30);
-      await expectObjectListRowLimit(detailColumns, "tbody tr", expectedObjectListRows(testInfo));
-
-      const scrollState = await detailColumns.evaluate((node) => {
-        node.scrollTop = node.scrollHeight;
-        const regionRect = node.getBoundingClientRect();
-        const header = node.querySelector("thead");
-        if (!header) throw new Error("column detail header is missing");
-        const headerRect = header.getBoundingClientRect();
-        return {
-          headerOffset: Math.abs(headerRect.top - regionRect.top),
-          headerPosition: window.getComputedStyle(header).position,
-          scrollTop: node.scrollTop,
-          scrollHeight: node.scrollHeight,
-          clientHeight: node.clientHeight,
-        };
-      });
-      expect(scrollState.scrollHeight).toBeGreaterThan(scrollState.clientHeight);
-      expect(scrollState.scrollTop).toBeGreaterThan(0);
-      expect(scrollState.headerOffset).toBeLessThanOrEqual(1);
-      expect(scrollState.headerPosition).toBe("sticky");
+      const scrollState = await detailColumns.evaluate((node) => ({
+        scrollHeight: node.scrollHeight,
+        clientHeight: node.clientHeight,
+      }));
+      expect(scrollState.scrollHeight).toBeLessThanOrEqual(scrollState.clientHeight + 1);
       await expectNoHorizontalScroll(page);
     }
   );
@@ -1302,7 +1321,7 @@ for (const scenario of metadataScenarios) {
     const filters = await openListToolbarFilters(toolbar);
     const ownerFilter = filters.getByRole("searchbox", { name: "所有者" });
     await expect(ownerFilter).toBeVisible();
-    await expect(ownerFilter).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
+    await expect(ownerFilter).toHaveAttribute("placeholder", "所有者の先頭（例：ADM）");
     await expect(filters.getByRole("combobox", { name: "所有者" })).toHaveCount(0);
     const typeFilter = filters.getByRole("combobox", { name: "種類", exact: true });
     await expect(typeFilter).toBeVisible();
@@ -1835,13 +1854,14 @@ test("テーブル管理・ビュー管理の一覧件数 badge は API 総数�
   await mockPagedDbAdminObjectsApi(page);
   await page.goto("/table-management");
 
-  const tableGrid = page.locator("section[aria-labelledby='table-grid-heading']");
+  // 一覧 + 詳細（ListDetailLayout。#2281）の一覧の列。
+  const tableGrid = page.getByTestId("list-detail-table-management-list");
   await expect(page.getByTestId("table-management-toolbar").locator("[data-list-count]")).toHaveText("全 149 件");
   await expect(tableGrid.locator("[data-status-variant]")).toHaveCount(0);
   await expect(page.getByTestId("table-management-footer")).toContainText("100 / 149 件を表示");
 
   await page.goto("/view-management");
-  const viewGrid = page.locator("section[aria-labelledby='view-grid-heading']");
+  const viewGrid = page.getByTestId("list-detail-view-management-list");
   await expect(page.getByTestId("view-management-toolbar").locator("[data-list-count]")).toHaveText("全 2 件");
   await expect(viewGrid.locator("[data-status-variant]")).toHaveCount(0);
   await expect(page.getByTestId("view-management-footer")).toContainText("2 / 2 件を表示");
@@ -1876,13 +1896,14 @@ test("テーブル管理・ビュー管理は共通検索と所有者入力で�
   });
 
   await page.goto("/table-management");
-  const tableGrid = page.locator("section[aria-labelledby='table-grid-heading']");
+  // 一覧 + 詳細（ListDetailLayout。#2281）の一覧の列。
+  const tableGrid = page.getByTestId("list-detail-table-management-list");
   const tableSearch = tableGrid.getByRole("searchbox", { name: "検索" });
   const tableOwnerFilter = tableGrid.getByRole("searchbox", { name: "所有者" });
   await expect(tableSearch).toHaveAttribute("placeholder", "名前・コメントを入力");
-  await expect(tableOwnerFilter).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
+  await expect(tableOwnerFilter).toHaveAttribute("placeholder", "所有者の先頭（例：ADM）");
   await expectDbObjectToolbarLayout(tableSearch, tableOwnerFilter);
-  // 狭い分割のペイン（1280px の左）でも検索欄と所有者の幅がそろい、欄の上にラベルを置かず中心がそろう（#1891 段 3・#1933）。
+  // 狭い一覧の列（既定 20rem）でも検索欄と所有者の幅がそろい、欄の上にラベルを置かず中心がそろう（#1891 段 3・#1933・#2281）。
   expect(await findToolbarFieldWidthMismatch(page)).toEqual([]);
   expect(await findToolbarMisalignment(page)).toEqual([]);
   await expect(tableOwnerFilter).toBeVisible();
@@ -1914,7 +1935,7 @@ test("テーブル管理・ビュー管理は共通検索と所有者入力で�
   await expectNoHorizontalScroll(page);
 
   await page.goto("/view-management");
-  const viewGrid = page.locator("section[aria-labelledby='view-grid-heading']");
+  const viewGrid = page.getByTestId("list-detail-view-management-list");
   const viewSearch = viewGrid.getByRole("searchbox", { name: "検索" });
   const viewOwnerFilter = viewGrid.getByRole("searchbox", { name: "所有者" });
   await expect(viewOwnerFilter).toBeVisible();
@@ -1932,7 +1953,8 @@ test("テーブル管理・ビュー管理は共通検索と所有者入力で�
 test("テーブル管理は 150% zoom 相当でもタブ・列名・ヘッダー操作を折り返さず、一覧操作列を持たない", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1365, height: 900 });
   await mockObjectManagementApi(page, scenarios[0]);
-  await page.goto("/table-management");
+  // 詳細のタブを確かめるため、対象を選んだ URL で開く（先頭を自動で選ばない。#2281）。
+  await page.goto("/table-management?table=APP.TABLE_01");
 
   // 一覧が既定。作成/取込はタブではなくツールバーのアクションボタン。
   const actions = page.getByTestId("table-management-actions");
@@ -1966,7 +1988,8 @@ test("テーブル管理は 150% zoom 相当でもタブ・列名・ヘッダー
   const grid = page.getByTestId("table-management-grid");
   await expect(grid.locator("tbody tr")).toHaveCount(30);
   await expect(grid.getByRole("columnheader", { name: /コメント/ })).toHaveCount(0);
-  await expectSingleLine(grid.getByRole("columnheader", { name: /所有者/ }).locator("span").first());
+  // 狭い一覧の列では所有者の列を持たない（所有者は名前の OWNER. に出る。#2281）。
+  await expect(grid.getByRole("columnheader", { name: /所有者/ })).toHaveCount(0);
   await expect(grid.getByRole("columnheader", { name: "操作" })).toHaveCount(0);
   await expect(grid.getByRole("button", { name: /操作: APP\.TABLE_01/ })).toHaveCount(0);
   await expect(grid.getByRole("button", { name: "詳細" })).toHaveCount(0);
@@ -2089,7 +2112,7 @@ test("テーブル詳細は列タブでは DDL を取得せず、DDL タブ初�
     });
   });
 
-  await page.goto("/table-management");
+  await page.goto("/table-management?table=APP.TABLE_01");
 
   // 列タブ(既定)の初期表示は DDL 抜きで取得し、サンプル値は詳細応答由来で表示される。
   await expect(page.getByRole("heading", { name: "TABLE_01" })).toBeVisible();
@@ -2213,7 +2236,7 @@ for (const scenario of scenarios) {
       });
     });
 
-    await page.goto(scenario.path);
+    await page.goto(`${scenario.path}?${scenario.objectType}=APP.${objectName}`);
     await expect(page.getByRole("heading", { name: objectName })).toBeVisible();
     await page.getByRole("tab", { name: "DDL" }).click();
     await ddlStarted;
@@ -2334,7 +2357,7 @@ test("明示的な一覧再取得はヘッダーではなくテーブル作業�
     }),
   );
 
-  await page.goto("/table-management");
+  await page.goto("/table-management?table=APP.TABLE_REFRESH");
   await expect(page.getByRole("heading", { name: "TABLE_REFRESH" })).toBeVisible();
   holdNextRefresh = true;
   await clickPageHeaderAction(page, "table-management-actions", "最新情報を取得");
@@ -2349,12 +2372,12 @@ test("明示的な一覧再取得はヘッダーではなくテーブル作業�
 
   const shell = page
     .getByTestId("management-panel-shell")
-    .filter({ has: page.getByTestId("fixed-split-pane-table-management-list") });
+    .filter({ has: page.getByTestId("list-detail-table-management") });
   await expect(shell.getByTestId("table-management-workspace-processing")).toBeVisible();
   expect(
     await processing.evaluate((element) => {
       const split = document.querySelector(
-        '[data-testid="fixed-split-pane-table-management-list"]',
+        '[data-testid="list-detail-table-management"]',
       );
       return Boolean(
         split &&
@@ -2372,7 +2395,8 @@ test("明示的な一覧再取得はヘッダーではなくテーブル作業�
   await expect(processing).toHaveCount(0);
 });
 
-test("DDL の遅延応答中に別テーブルを選ぶと旧 DDL を破棄する", async ({ page }) => {
+test("DDL の遅延応答中に別テーブルを選ぶと旧 DDL を破棄する", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "mobile-375", "一覧と詳細を並べて選び直す流れは 2 ペイン（xl 以上）で確かめる（#2281）");
   const ddlGate = createRequestGate();
   let markDdlStarted: () => void = () => undefined;
   const ddlStarted = new Promise<void>((resolve) => {
@@ -2442,7 +2466,7 @@ test("DDL の遅延応答中に別テーブルを選ぶと旧 DDL を破棄す�
     }
   });
 
-  await page.goto("/table-management");
+  await page.goto("/table-management?table=APP.TABLE_A");
   await expect(page.getByRole("heading", { name: "TABLE_A" })).toBeVisible();
   await page.getByRole("tab", { name: "DDL" }).click();
   await ddlStarted;
@@ -2460,7 +2484,8 @@ test("DDL の遅延応答中に別テーブルを選ぶと旧 DDL を破棄す�
 
 test("テーブル詳細は経過時間、遅延案内、切替リセット、取消、成功を同じ領域で扱う", async ({
   page,
-}) => {
+}, testInfo) => {
+  test.skip(testInfo.project.name === "mobile-375", "一覧と詳細を並べて選び直す流れは 2 ペイン（xl 以上）で確かめる（#2281）");
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.clock.install({ time: new Date("2026-07-29T00:00:00.000Z") });
   const firstSlowGate = createRequestGate();
@@ -2522,8 +2547,8 @@ test("テーブル詳細は経過時間、遅延案内、切替リセット、�
     }
   });
 
-  await page.goto("/table-management");
-  // 一覧は名前順に整列され、先頭(TABLE_FAST)が自動選択される。遅い詳細は明示的に選択する。
+  // 先頭を自動で選ばない（#2281）ので、速い詳細（TABLE_FAST）を選んだ URL で開き、遅い詳細は明示的に選択する。
+  await page.goto("/table-management?table=APP.TABLE_FAST");
   await expect(page.getByRole("heading", { name: "TABLE_FAST" })).toBeVisible();
   await page.getByRole("button", { name: "TABLE_SLOW を表示" }).click();
   const skeleton = page.getByTestId("table-management-detail-skeleton");
@@ -2545,6 +2570,8 @@ test("テーブル詳細は経過時間、遅延案内、切替リセット、�
         document.body.scrollWidth > document.body.clientWidth + 1,
     ),
   ).toBe(false);
+  // xl 未満は 1 ペイン（詳細だけ）なので、一覧から選び直すために 2 ペインの幅へ戻す（#2281）。
+  await page.setViewportSize({ width: 1280, height: 900 });
 
   // 処理中に別テーブルへ切り替えると旧 request を無効化し、新しい timer は 00:00 から始まる。
   await page.getByRole("button", { name: "TABLE_FAST を表示" }).click();
@@ -2572,7 +2599,8 @@ test("テーブル詳細は経過時間、遅延案内、切替リセット、�
   await expect(page.getByRole("timer")).toHaveCount(0);
 });
 
-test("テーブル詳細の30秒 timeout は選択を保持して再試行できる", async ({ page }) => {
+test("テーブル詳細の30秒 timeout は選択を保持して再試行できる", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "mobile-375", "一覧と詳細を並べて選び直す流れは 2 ペイン（xl 以上）で確かめる（#2281）");
   await page.addInitScript(() => {
     const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
     Object.defineProperty(AbortSignal, "timeout", {
@@ -2620,7 +2648,7 @@ test("テーブル詳細の30秒 timeout は選択を保持して再試行でき
     }
   });
 
-  await page.goto("/table-management");
+  await page.goto(`/table-management?table=APP.${objectName}`);
   await expect(page.getByTestId("table-management-detail-error")).toContainText(
     "30秒以内に完了しませんでした",
   );
@@ -2713,7 +2741,7 @@ for (const scenario of scenarios) {
       });
     });
 
-    await page.goto(scenario.path);
+    await page.goto(`${scenario.path}?${scenario.objectType}=APP.${objectName}`);
 
     const errorRegion = page.getByTestId(`${scenario.path.slice(1)}-detail-error`);
     await expect(errorRegion.getByRole("alert")).toContainText("詳細の取得に失敗しました");
@@ -2736,7 +2764,8 @@ for (const scenario of scenarios) {
 
 test("テーブル詳細は A→B→A の遅延応答でも最後に選んだ A だけを表示する", async ({
   page,
-}) => {
+}, testInfo) => {
+  test.skip(testInfo.project.name === "mobile-375", "一覧と詳細を並べて選び直す流れは 2 ペイン（xl 以上）で確かめる（#2281）");
   const tableNames = ["TABLE_A", "TABLE_B"];
   let releaseTableB: (() => void) | undefined;
   let markTableBStarted: (() => void) | undefined;
@@ -2811,7 +2840,7 @@ test("テーブル詳細は A→B→A の遅延応答でも最後に選んだ A 
     }
   });
 
-  await page.goto("/table-management");
+  await page.goto("/table-management?table=APP.TABLE_A");
   await expect(page.getByRole("heading", { name: "TABLE_A" })).toBeVisible();
   await page.getByRole("button", { name: "TABLE_B を表示" }).click();
   await tableBStarted;
@@ -2879,10 +2908,18 @@ test("テーブル管理は一覧と作成・取込パネルを同じ外枠で�
   await mockObjectManagementApi(page, scenarios[0]);
   await page.goto("/table-management");
 
-  const listStyle = await topLevelPanelStyle(page, "list");
-  expect(listStyle.backgroundColor).toBe("rgb(255, 255, 255)");
-  expect(listStyle.borderTopWidth).toBe("1px");
-  expect(Number.parseFloat(listStyle.paddingTop)).toBeGreaterThan(0);
+  // 一覧 + 詳細（ListDetailLayout。#2281）は一覧と詳細の列がそれぞれ枠（カード）を持ち、外側の枠を付けない。
+  const listShellStyle = await topLevelPanelStyle(page, "list");
+  expect(listShellStyle.borderTopWidth).toBe("0px");
+  expect(Number.parseFloat(listShellStyle.paddingTop)).toBe(0);
+  for (const column of ["list", "detail"]) {
+    const columnStyle = await page.getByTestId(`list-detail-table-management-${column}`).evaluate((node) => {
+      const computed = window.getComputedStyle(node);
+      return { backgroundColor: computed.backgroundColor, borderTopWidth: computed.borderTopWidth };
+    });
+    expect(columnStyle).toEqual({ backgroundColor: "rgb(255, 255, 255)", borderTopWidth: "1px" });
+  }
+  let listStyle: Awaited<ReturnType<typeof topLevelPanelStyle>> | null = null;
 
   // トップレベルはタブではなくツールバーのアクション。一覧が既定で、作成/取込は往復。
   for (const target of [
@@ -2892,7 +2929,13 @@ test("テーブル管理は一覧と作成・取込パネルを同じ外枠で�
     await clickPageHeaderAction(page, "table-management-actions", target.buttonName);
     const panel = page.locator(`#table-management-panel-${target.id}`);
     await expect(panel).toBeVisible();
-    expect(await topLevelPanelStyle(page, target.id)).toEqual(listStyle);
+    // 作業（作成・取込）のパネルは同じ外枠（カード）。
+    const taskStyle = await topLevelPanelStyle(page, target.id);
+    expect(taskStyle.backgroundColor).toBe("rgb(255, 255, 255)");
+    expect(taskStyle.borderTopWidth).toBe("1px");
+    expect(Number.parseFloat(taskStyle.paddingTop)).toBeGreaterThan(0);
+    if (listStyle) expect(taskStyle).toEqual(listStyle);
+    listStyle = taskStyle;
 
     const hasPageHorizontalScroll = await page.evaluate(
       () =>
@@ -3157,10 +3200,18 @@ test("ビュー管理は一覧と作成・JOIN/WHERE パネルを同じ外枠で
   await mockObjectManagementApi(page, scenarios[1]);
   await page.goto("/view-management");
 
-  const listStyle = await topLevelPanelStyle(page, "list", "view-management");
-  expect(listStyle.backgroundColor).toBe("rgb(255, 255, 255)");
-  expect(listStyle.borderTopWidth).toBe("1px");
-  expect(Number.parseFloat(listStyle.paddingTop)).toBeGreaterThan(0);
+  // 一覧 + 詳細（ListDetailLayout。#2281）は一覧と詳細の列がそれぞれ枠（カード）を持ち、外側の枠を付けない。
+  const listShellStyle = await topLevelPanelStyle(page, "list", "view-management");
+  expect(listShellStyle.borderTopWidth).toBe("0px");
+  expect(Number.parseFloat(listShellStyle.paddingTop)).toBe(0);
+  for (const column of ["list", "detail"]) {
+    const columnStyle = await page.getByTestId(`list-detail-view-management-${column}`).evaluate((node) => {
+      const computed = window.getComputedStyle(node);
+      return { backgroundColor: computed.backgroundColor, borderTopWidth: computed.borderTopWidth };
+    });
+    expect(columnStyle).toEqual({ backgroundColor: "rgb(255, 255, 255)", borderTopWidth: "1px" });
+  }
+  let listStyle: Awaited<ReturnType<typeof topLevelPanelStyle>> | null = null;
 
   for (const target of [
     { id: "create", buttonName: "ビュー作成" },
@@ -3169,7 +3220,11 @@ test("ビュー管理は一覧と作成・JOIN/WHERE パネルを同じ外枠で
     await clickPageHeaderAction(page, "view-management-actions", target.buttonName);
     const panel = page.locator(`#view-management-panel-${target.id}`);
     await expect(panel).toBeVisible();
-    expect(await topLevelPanelStyle(page, target.id, "view-management")).toEqual(listStyle);
+    const taskStyle = await topLevelPanelStyle(page, target.id, "view-management");
+    expect(taskStyle.backgroundColor).toBe("rgb(255, 255, 255)");
+    expect(taskStyle.borderTopWidth).toBe("1px");
+    if (listStyle) expect(taskStyle).toEqual(listStyle);
+    listStyle = taskStyle;
     await page.getByRole("button", { name: "一覧へ戻る" }).click();
   }
 

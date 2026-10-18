@@ -3196,7 +3196,7 @@ const nl2sqlJa = {
   "dbAdmin.search.placeholder": "名前・コメントを入力",
   "dbAdmin.search.resultCount": "{filtered} / {total} 件を表示",
   "dbAdmin.owner.label": "所有者",
-  "dbAdmin.ownerPrefix.placeholder": "所有者の先頭を入力（例：ADM）",
+  "dbAdmin.ownerPrefix.placeholder": "所有者の先頭（例：ADM）",
   "dbAdmin.list.rows": "{count} 行",
   "objectSelector.search": "検索",
   "objectSelector.selected": "選択中",

@@ -14281,7 +14281,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await withListToolbarFilters(previewToolbar, async (filters) => {
     const previewOwnerFilter = filters.getByRole("searchbox", { name: "所有者" });
     await expect(previewOwnerFilter).toBeVisible();
-    await expect(previewOwnerFilter).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
+    await expect(previewOwnerFilter).toHaveAttribute("placeholder", "所有者の先頭（例：ADM）");
     // 検索欄は lg、所有者は md の幅で並ぶ（#1891）。
     await expectDbObjectToolbarLayout(previewSearch, previewOwnerFilter);
     await expect(filters.getByRole("combobox", { name: "所有者" })).toHaveCount(0);

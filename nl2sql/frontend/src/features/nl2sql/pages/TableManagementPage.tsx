@@ -4,6 +4,7 @@ import {
   useWorkspaceRevalidation,
   useResetExecutionConsent,
   useTransientDraftGuard,
+  useWorkspaceActive,
   useWorkspaceUrlSelection,
 } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -394,16 +395,20 @@ export function TableManagementPage() {
     await loadDetail(name);
   };
 
-  // 選択（URL）が変わったら詳細を取り直す。外れたら詳細を消す。
+  // 選択（URL）が変わったら詳細を取り直し、外れたら詳細を消す。画面が表に戻ったとき（keep-alive）も取り直す。
+  const workspaceActive = useWorkspaceActive();
+  const lastSelectedRef = useRef("");
   useEffect(() => {
+    if (!workspaceActive) return;
+    const changed = lastSelectedRef.current !== selectedTableName;
+    lastSelectedRef.current = selectedTableName;
     if (!selectedTableName) {
-      if (detailRequest.selectedName) clearDetail();
+      clearDetail();
       return;
     }
-    if (selectedTableName === detailRequest.selectedName) return;
-    setDetailTab("columns");
+    if (changed) setDetailTab("columns");
     void loadDetail(selectedTableName);
-  }, [selectedTableName, detailRequest.selectedName, clearDetail, loadDetail, setDetailTab]);
+  }, [workspaceActive, selectedTableName, clearDetail, loadDetail, setDetailTab]);
 
   // DDL は重い GET_DDL を伴うため列タブでは取得せず、DDL タブ初回表示時に後追いで取得する。
   const handleDetailTabChange = (nextTab: DbObjectDetailTab) => {
@@ -877,7 +882,8 @@ export function TableManagementPage() {
               onSearchChange={setTableSearch}
               onOwnerPrefixChange={setTableOwnerPrefix}
               onSortChange={toggleSort}
-              onSelect={selection.select}
+              // 選んでいる行をもう一度押すと詳細を取り直す（取消・失敗の後の読み直し）。
+              onSelect={(name) => (name === selectedTableName ? void fetchDetail(name) : selection.select(name))}
               onLoadMore={() => void tableObjectsQuery.fetchNextPage()}
               onRetryLoadMore={() => void tableObjectsQuery.fetchNextPage()}
               onRetry={() => void refreshObjects()}
