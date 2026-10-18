@@ -345,6 +345,8 @@ def test_draft_publish_conflict_and_history(fakes: tuple[FakeStore, FakeOracle])
     assert published["published_revision"] == 1
     assert published["published"]["title"] == "改訂"
     assert published["has_unpublished_changes"] is False
+    # 公開の履歴に残す版の数（RAG_SUPPORT_GUIDE_MAX_PUBLISHED_REVISIONS。画面の案内に出す。#2356）。
+    assert published["max_published_revisions"] == 5
 
     client.put(f"{BASE}/{guide_id}", json={"draft": guide(title="三訂"), "base_revision": 2})
     second = client.post(f"{BASE}/{guide_id}/publish", json={"base_revision": 3}).json()["data"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,7 +21,9 @@ from app.features.agent.runtime import (
     AgentProfile,
     AgentRuntimeRepository,
     AgentRuntimeSnapshot,
+    AgentVersion,
     RunCreateRequest,
+    _prune_agent_versions,
     runtime_repository,
 )
 from app.security.permissions import MENU_RUNS, RUNS_OPERATE
@@ -174,3 +177,118 @@ def test_replay_refuses_unavailable_agent_with_reason(scheduled: list[str]) -> N
     assert disabled.json()["error_messages"][0] == "この業務 Agent は実行できない状態です。"
     # 断った再実行は Run を作らない。
     assert scheduled == [source_id]
+
+
+def _publish() -> dict[str, Any]:
+    response = client.post(f"/api/agents/{AGENT_ID}/publish", json={})
+    assert response.status_code == 200, response.text
+    data: dict[str, Any] = response.json()["data"]
+    return data
+
+
+def _publish_with_instructions(instructions: str) -> dict[str, Any]:
+    patched = client.patch(f"/api/agents/{AGENT_ID}", json={"instructions": instructions})
+    assert patched.status_code == 200, patched.text
+    return _publish()
+
+
+def _versions(data: dict[str, Any]) -> list[int]:
+    return [item["version"] for item in data["versions"]]
+
+
+def test_publishing_keeps_only_latest_versions(scheduled: list[str]) -> None:
+    """版の履歴は直近 5 版（AGENT_MAX_PUBLISHED_VERSIONS）。古い版を消し、番号は振り直さない。
+
+    #2356。
+    """
+    client.post("/api/agents", json={"id": AGENT_ID, "name": "Agent A", "instructions": "v1"})
+    data = _publish()
+    for index in range(2, 6):
+        data = _publish_with_instructions(f"v{index}")
+    assert _versions(data) == [1, 2, 3, 4, 5]
+
+    data = _publish_with_instructions("v6")
+    assert data["published_version"] == 6
+    assert _versions(data) == [2, 3, 4, 5, 6]
+    data = _publish_with_instructions("v7")
+    assert _versions(data) == [3, 4, 5, 6, 7]
+
+    listed = client.get("/api/agents").json()["data"]
+    assert listed["max_published_versions"] == 5
+    stored = next(item for item in listed["agents"] if item["id"] == AGENT_ID)
+    assert _versions(stored) == [3, 4, 5, 6, 7]
+
+
+def test_version_limit_comes_from_settings(scheduled: list[str], monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.features.agent.runtime.get_settings",
+        lambda: SimpleNamespace(agent_max_published_versions=2),
+    )
+    client.post("/api/agents", json={"id": AGENT_ID, "name": "Agent A", "instructions": "v1"})
+    _publish()
+    _publish_with_instructions("v2")
+    assert _versions(_publish_with_instructions("v3")) == [2, 3]
+
+
+def test_restoring_old_version_does_not_prune_and_next_publish_counts_from_latest(
+    scheduled: list[str],
+) -> None:
+    """前の版に戻すのは版を足さない（消さない）。次の公開で直近の 5 版に整理する（#2356）。"""
+    client.post("/api/agents", json={"id": AGENT_ID, "name": "Agent A", "instructions": "v1"})
+    _publish()
+    for index in range(2, 7):
+        _publish_with_instructions(f"v{index}")
+    restored = client.post(f"/api/agents/{AGENT_ID}/versions/2/restore").json()["data"]
+    assert restored["published_version"] == 2
+    assert _versions(restored) == [2, 3, 4, 5, 6]
+
+    data = _publish_with_instructions("v7")
+    assert data["published_version"] == 7
+    assert _versions(data) == [3, 4, 5, 6, 7]
+
+
+def test_prune_keeps_old_published_version() -> None:
+    """公開中の版は古くても消さず、公開中 + 直近の版で計 5 版にする（#2356）。"""
+    agent = AgentProfile(
+        id="agent-prune-2356",
+        name="Agent A",
+        versioned=True,
+        versions=[AgentVersion(version=number, name="Agent A") for number in range(1, 8)],
+        published_version=2,
+    )
+    _prune_agent_versions(agent)
+    assert [item.version for item in agent.versions] == [2, 4, 5, 6, 7]
+
+    # スキルの更新の取り込みは、前の公開中の版も残す（「取り消す」で戻す。#1867）。
+    agent = AgentProfile(
+        id="agent-prune-2356",
+        name="Agent A",
+        versioned=True,
+        versions=[AgentVersion(version=number, name="Agent A") for number in range(1, 9)],
+        published_version=8,
+    )
+    _prune_agent_versions(agent, keep=(2,))
+    assert [item.version for item in agent.versions] == [2, 5, 6, 7, 8]
+
+
+def test_runs_of_pruned_versions_stay_readable_and_never_use_draft(
+    scheduled: list[str],
+) -> None:
+    """消した版の Run は残って開ける。消えた版で続ける Run は下書きでなく公開中の版で動く。
+
+    #2356。
+    """
+    client.post("/api/agents", json={"id": AGENT_ID, "name": "Agent A", "instructions": "v1"})
+    _publish()
+    run = client.post("/api/runs", json={"goal": "質問", "agent_id": AGENT_ID}).json()["data"]
+    assert run["metadata"]["agent_version"] == 1
+    for index in range(2, 7):
+        _publish_with_instructions(f"v{index}")
+    client.patch(f"/api/agents/{AGENT_ID}", json={"instructions": "下書き（未公開）"})
+    agents = client.get("/api/agents").json()["data"]["agents"]
+    assert 1 not in _versions(next(item for item in agents if item["id"] == AGENT_ID))
+
+    detail = client.get(f"/api/runs/{run['id']}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["data"]["metadata"]["agent_version"] == 1
+    assert _instructions_used(run["id"]) == "v6"

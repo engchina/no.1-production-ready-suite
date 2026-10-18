@@ -100,6 +100,9 @@ const referenceError: Issue = {
   message: "資料「運用手順書」: 索引が済んでいません。",
 };
 
+/** 公開の履歴に残す版の数（backend の RAG_SUPPORT_GUIDE_MAX_PUBLISHED_REVISIONS の既定。#2356）。 */
+const MAX_PUBLISHED_REVISIONS = 5;
+
 /** 業務ガイドの API の状態を持つ mock（ほかの知識の API と検索・回答プロファイルも返す）。 */
 class SupportGuideApi {
   guides: Guide[] = [];
@@ -131,6 +134,7 @@ class SupportGuideApi {
       revisions: [...guide.revisions]
         .sort((a, b) => b.revision - a.revision)
         .map(({ content: _content, ...rest }) => rest),
+      max_published_revisions: MAX_PUBLISHED_REVISIONS,
       issues: this.contentIssues(guide.draft),
     };
   }
@@ -140,8 +144,14 @@ class SupportGuideApi {
   }
 
   summary(guide: Guide) {
-    const { draft: _draft, published: _published, revisions: _revisions, issues: _issues, ...rest } =
-      this.detail(guide);
+    const {
+      draft: _draft,
+      published: _published,
+      revisions: _revisions,
+      max_published_revisions: _max,
+      issues: _issues,
+      ...rest
+    } = this.detail(guide);
     return rest;
   }
 
@@ -157,6 +167,8 @@ class SupportGuideApi {
       content: guide.draft,
     });
     guide.published_revision = revision;
+    // backend と同じく、公開した版を残して直近の版だけを保存する（番号は振り直さない。#2356）。
+    guide.revisions = guide.revisions.slice(-MAX_PUBLISHED_REVISIONS);
   }
 
   async handle(route: Route) {
@@ -609,6 +621,40 @@ test("公開の履歴から前の版を見て、その版に戻せる", async ({
   await expect(page.getByText("版 1 に戻した")).toBeVisible();
   await expect(editor.getByLabel("タイトル")).toHaveValue("パスワードの再設定");
   await expectNoPageOverflow(page);
+});
+
+test("公開の履歴は直近 5 版を残し、前の版に戻すと古い版から消える（#2356）", async ({ page }, testInfo) => {
+  const base = publishedGuide();
+  const revisions = Array.from({ length: 5 }, (_, index) => ({
+    ...base.revisions[0],
+    revision: index + 1,
+    title: `ガイド A の版 ${index + 1}`,
+    content_sha256: `sha-${index + 1}`,
+    published_at: `2026-10-0${index + 1}T02:00:00Z`,
+    content: content(`ガイド A の版 ${index + 1}`),
+  }));
+  await openSupportGuides(page, [
+    { ...base, draft: revisions[4].content, draft_revision: 1, published_revision: 5, revisions },
+  ]);
+  await page.getByRole("button", { name: "ガイド A の版 5 を編集" }).click();
+  const editor = page.getByTestId("support-guide-editor");
+  // 上限は API の値（max_published_revisions）で案内する。
+  await expect(editor).toContainText("直近 5 版を保存します（公開中の版は常に残ります）。");
+  await expect(page.getByTestId("support-guide-history-toolbar")).toContainText("全 5 件");
+  await expect(page.getByRole("rowheader", { name: "版 1" })).toBeVisible();
+
+  await page.getByRole("button", { name: "版 2 の操作" }).click();
+  await page.getByRole("menuitem", { name: "この版に戻す" }).click();
+  await page.getByRole("alertdialog", { name: "版 2 に戻しますか？" }).getByRole("button", { name: "この版に戻す" }).click();
+  await expect(page.getByText("版 2 の内容を版 6 として公開しました。")).toBeVisible();
+
+  // 版 1 が消え、番号は振り直さない（版 2〜6）。
+  await expect(page.getByRole("rowheader", { name: "版 6 公開中" })).toBeVisible();
+  await expect(page.getByRole("rowheader", { name: "版 1", exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("support-guide-history-toolbar")).toContainText("全 5 件");
+  await expectNoPageOverflow(page);
+  await page.getByTestId("support-guide-history-toolbar").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("support-guide-history-retention.png") });
 });
 
 test("ほかの人が先に下書きを保存していたら、前の版に戻さずに読み込み直しを案内する", async ({ page }) => {
