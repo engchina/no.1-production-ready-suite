@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 import { INFORMATION_TABLE_VISIBLE_ROWS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
-import { formatChatProgressDuration } from "../feedback/chat-progress";
+import { formatChatProgressDuration } from "../feedback/chat-progress-format";
 import { DataTable, type DataTableColumn } from "./data-table";
 import { FilterSelect, isFilterActive } from "./list-filters";
 import type { ListCountProps } from "./list-count";

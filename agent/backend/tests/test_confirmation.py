@@ -1541,3 +1541,36 @@ def test_plain_answer_with_a_card_is_kept(monkeypatch: MonkeyPatch, mcp: FakePro
     run = _run()
     answer = next(item for item in run.artifacts if item.kind == "answer").content["text"]
     assert answer == "どの日付の列で期間を絞りますか？"
+
+
+def test_rag_evidence_tools_get_the_run_goal_as_original_question(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """Control Plane が RAG の根拠を集めるツールに利用者の元の質問を付ける（#2261）。
+
+    モデルが検索文を短く言い換えても、RAG が条で構成された文書の根拠の条を選ぶ手がかりを失わない。
+    モデルが付けた値はそのまま送る。
+    """
+    _script(
+        monkeypatch,
+        [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-1")],
+        [assistant_message("画面ごとに示します。")],
+    )
+    _run("受注を取り消す手順は？")
+    assert (
+        mcp.calls_of("rag_search")[-1]["arguments"]["original_question"] == "受注を取り消す手順は？"
+    )
+
+    _script(
+        monkeypatch,
+        [
+            function_call(
+                "rag__rag_search",
+                {"query": "取り消し", "original_question": "モデルが付けた質問"},
+                call_id="call-2",
+            )
+        ],
+        [assistant_message("画面ごとに示します。")],
+    )
+    _run("受注を取り消す手順は？")
+    assert mcp.calls_of("rag_search")[-1]["arguments"]["original_question"] == "モデルが付けた質問"

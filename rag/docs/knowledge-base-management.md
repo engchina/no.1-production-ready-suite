@@ -200,7 +200,7 @@ migration `20260930_001_default_descriptions` も説明が空の DEFAULT に同�
 - アーカイブ済みの KB は変更しない。`PATCH`・文書の追加（`POST .../documents`）・外す（`DELETE .../documents/{document_id}`）・項目抽出の定義の保存は 409 を返す（画面の読み取り専用と同じ。#961）。
 - **API の互換の変更（#302）**：`POST` / `PATCH` の `adapter_config` は受け付けない。指定すると（`null` や `{}` でも）422
   「adapter_config は指定できません。…」を返し、何も保存しない。以前は `retrieval_config` カラムへ正規化して保存していたが、
-  3 層モデルでは取込・検索のどちらでも使わない（`rag/AGENTS.md`「KB の legacy adapter/query config は読み取りのみ許容」）。
+  3 層モデルでは取込・検索のどちらでも使わない（`rag/docs/agents/settings-responsibility.md`「KB の legacy adapter/query config は読み取りのみ許容」）。
   応答の `adapter_config`（保存値の読み取り互換）はこれまでどおり返す（表示専用の `effective_adapter_config` はパイプライン図とともに削除した。#2113）。
   旧クライアントは `adapter_config` を送らないように直す（名前・説明・既定検索モードは従来どおり更新できる）。
   なお free-form の `retrieval_config` の書き込みは互換のため残している（未整理。読み取り互換の保存値と同じカラム）。

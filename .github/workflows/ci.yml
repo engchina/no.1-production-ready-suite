@@ -287,10 +287,14 @@ jobs:
               - "nl2sql/scripts/update-after-pull.sh"
             # root の scripts/（monorepo の開発の補助。setup-worktree.sh・pr-merge-check.sh）と .github/
             # （workflow の actionlint、.github/scripts の shellcheck。#1525。以前は ci.yml 以外の workflow の変更で
-            # 何も検査しなかった）。
+            # 何も検査しなかった）。AGENTS.md と docs/agents/ の変更でも動かし、AGENTS.md の大きさを確かめる（#2276）。
             scripts:
               - "scripts/**"
               - ".github/**"
+              - "AGENTS.md"
+              - "**/AGENTS.md"
+              - "docs/agents/**"
+              - "*/docs/agents/**"
             platform_backend_core_deps:
               - "platform/packages/backend_core/uv.lock"
               - "platform/packages/backend_core/pyproject.toml"
@@ -1673,7 +1677,7 @@ jobs:
 
   # ---------------------------------------------------------------- root の scripts/
 
-  # monorepo の開発の補助のスクリプト（setup-worktree.sh・pr-merge-check.sh。#1328）を shellcheck と、
+  # monorepo の開発の補助のスクリプト（setup-worktree.sh・pr-merge-check.sh・check-agents-md-size.sh。#1328・#2276）を shellcheck と、
   # 偽の gh・一時的な git リポジトリのテスト（scripts/tests/）で検査する。テストは GitHub に接続しない。
   # .github/ の workflow（actionlint。run の script は shellcheck も通す）と .github/scripts も検査する（#1525）。
   # workflow の安全の検査（zizmor。設定は .github/zizmor.yml。#1594）も行う。
@@ -1699,6 +1703,14 @@ jobs:
       # 実 Oracle の結合テストの skip の監視（oracle-integration.yml。#1595）。runner の python3 で動く。
       - name: Test pytest-skip-gate
         run: bash scripts/tests/pytest-skip-gate.test.sh
+
+      # AGENTS.md の大きさ（直下は 20 KiB、直下と各ディレクトリの AGENTS.md の合計は 32 KiB まで。#2276）。
+      # Codex は合計が project_doc_max_bytes（既定 32 KiB）を超えた分を読まない。
+      - name: Check AGENTS.md size
+        run: bash scripts/check-agents-md-size.sh
+
+      - name: Test check-agents-md-size
+        run: bash scripts/tests/check-agents-md-size.test.sh
 
       # 版を固定し、release の checksum で確かめてから使う。shellcheck は runner のものを使う。
       - name: Actionlint

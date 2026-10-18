@@ -339,6 +339,32 @@ describe("RunTimeline", () => {
     expect(runTimelineBars([{ id: "x", label: "X", status: "pending" }])).toEqual([null]);
   });
 
+  it("時刻の無い入れ子の段は、親の段の始まりから積む（3 段まで字下げ。#2265）", () => {
+    const nested: RunTimelineStep[] = [
+      { id: "a", label: "A", status: "done", durationMs: 1000 },
+      { id: "b", label: "B", status: "done", durationMs: 3000 },
+      { id: "b1", label: "B1", status: "done", durationMs: 1000, level: 1 },
+      { id: "b2", label: "B2", status: "done", durationMs: 2000, level: 1 },
+      { id: "b2a", label: "B2a", status: "done", durationMs: 1000, level: 2 },
+      { id: "c", label: "C", status: "done", durationMs: 0 },
+    ];
+    expect(runTimelineBars(nested)).toEqual([
+      { offset: 0, width: 25 },
+      { offset: 25, width: 75 },
+      { offset: 25, width: 25 },
+      { offset: 50, width: 50 },
+      { offset: 50, width: 25 },
+      { offset: 100, width: 0.5 },
+    ]);
+    render(<RunTimeline steps={nested} showSummary={false} size="sm" stepTestIdPrefix="t" testId="timeline" />);
+    expect(container.textContent).not.toContain("合計");
+    expect(container.querySelector("[data-testid='t-step-b2a']")?.getAttribute("data-level")).toBe("2");
+    expect(container.querySelector("[data-testid='t-step-b2a'] .pl-12")).not.toBeNull();
+    expect(container.querySelector("[data-testid='t-step-a'] .text-xs")).not.toBeNull();
+    render(<RunTimeline steps={nested} showBars={false} testId="timeline" />);
+    expect(container.querySelector("[data-run-timeline-bar]")).toBeNull();
+  });
+
   it("段は名前・所要時間を文字で出し、失敗した段は最初から開き、開閉は aria-expanded で伝える", () => {
     render(
       <RunTimeline

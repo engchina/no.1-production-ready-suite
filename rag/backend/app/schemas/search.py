@@ -222,6 +222,9 @@ class SearchRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     query: str = Field(..., min_length=1)
+    # 利用者の元の質問(#2261)。呼び出し元(業務 Agent)が検索文 query を短く言い換えたときに渡す。
+    # 条の目録から文書・条を選ぶ段だけが query と合わせて使う(検索そのものは query で行う)。
+    original_question: str | None = Field(default=None, max_length=8000)
     top_k: int = Field(default=20, ge=1, le=100)
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)

@@ -224,7 +224,7 @@ describe("ChatProgress", () => {
     expect(q("p-completed")).toBeNull();
   });
 
-  it("完了後は「処理の経過（N ステップ・M 秒）」の一覧を既定で開いて出す（#2096）", () => {
+  it("完了後は「処理の経過（N ステップ・M 秒）」の 1 行に閉じ、押すと時間の線つきの一覧を開く（#2265）", () => {
     render(
       <ChatProgress
         steps={[
@@ -238,7 +238,20 @@ describe("ChatProgress", () => {
     expect(q("p")!.dataset.chatProgressState).toBe("done");
     expect(q("p")!.getAttribute("aria-busy")).toBe("false");
     expect(q("p-summary")!.textContent).toBe("処理の経過（3 ステップ・12 秒）");
+    expect(host.querySelector("details")!.open).toBe(false);
+    act(() => q("p-summary")!.click());
     expect(host.querySelector("details")!.open).toBe(true);
+    // 開いた一覧は実行の詳細と同じ RunTimeline（時間の線は飾りで aria-hidden。位置は全体に対する %）。
+    const timeline = q("p-timeline")!;
+    expect(timeline.dataset.runTimelineBars).toBe("true");
+    const bars = host.querySelectorAll<HTMLElement>("[data-run-timeline-bar]");
+    expect(bars).toHaveLength(3);
+    expect(bars[0]!.getAttribute("aria-hidden")).toBe("true");
+    expect(bars[1]!.querySelector("span")!.style.left).toMatch(/^8(\.\d+)?%$/);
+    // 時刻の無い段（スキップ）は線を描かない。
+    expect(bars[2]!.querySelector("span")).toBeNull();
+    // 見出しの行は開閉の見出しが持つので、一覧の中に重ねない。
+    expect(timeline.textContent).not.toContain("合計");
     expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(0);
     expect(q("p-current")).toBeNull();
     // スキップは文字でも出す（色だけに頼らない）。
@@ -247,33 +260,36 @@ describe("ChatProgress", () => {
     expect(host.querySelector('[role="status"]')!.textContent).toBe("");
   });
 
-  it("collapseWhenDone は実行中に開き、完了したら閉じ、利用者が開いたら保ち、次の実行で開き直す（#2118）", () => {
+  it("実行中は開き、完了したら閉じ、利用者が開いたら保ち、次の実行で開き直す（3 製品で同じ。#2118 / #2265）", () => {
     const doneSteps: ChatProgressStep[] = runningSteps.map((step) => ({
       ...step,
       status: "done",
       startedAt: step.startedAt ?? at(2),
       finishedAt: at(5),
     }));
-    render(<ChatProgress steps={runningSteps} collapseWhenDone testId="p" />);
+    render(<ChatProgress steps={runningSteps} testId="p" />);
     expect(host.querySelector("details")!.open).toBe(true);
-    render(<ChatProgress steps={doneSteps} collapseWhenDone testId="p" />);
+    // 実行中の完了した段の一覧には時間の線を出さない（全体の長さが伸び続ける）。
+    expect(q("p-timeline")!.dataset.runTimelineBars).toBe("false");
+    expect(host.querySelector("[data-run-timeline-bar]")).toBeNull();
+    render(<ChatProgress steps={doneSteps} testId="p" />);
     expect(q("p")!.dataset.chatProgressState).toBe("done");
     expect(host.querySelector("details")!.open).toBe(false);
     act(() => q("p-summary")!.click());
     expect(host.querySelector("details")!.open).toBe(true);
-    render(<ChatProgress steps={doneSteps} collapseWhenDone elapsedMs={5000} testId="p" />);
+    expect(host.querySelectorAll("[data-run-timeline-bar] span")).toHaveLength(4);
+    render(<ChatProgress steps={doneSteps} elapsedMs={5000} testId="p" />);
     expect(host.querySelector("details")!.open).toBe(true);
-    render(<ChatProgress steps={runningSteps} collapseWhenDone testId="p" />);
+    render(<ChatProgress steps={runningSteps} testId="p" />);
     expect(host.querySelector("details")!.open).toBe(true);
-    // 完了した状態で出したとき（保存済みの回答）は閉じて出し、失敗は開いたまま出す。
+    // 完了した状態で出したとき（会話の履歴から開いた往復）は閉じて出し、失敗は開いたまま出す。
     act(() => root.unmount());
     root = createRoot(host);
-    render(<ChatProgress steps={doneSteps} collapseWhenDone testId="p" />);
+    render(<ChatProgress steps={doneSteps} testId="p" />);
     expect(host.querySelector("details")!.open).toBe(false);
     render(
       <ChatProgress
         steps={[...doneSteps, { id: "x", label: "失敗", status: "failed", startedAt: at(5), finishedAt: at(6) }]}
-        collapseWhenDone
         testId="p"
       />
     );
@@ -300,7 +316,7 @@ describe("ChatProgress", () => {
     expect(q("p-summary")!.textContent).toBe("処理の経過（2 ステップ・4.0 秒）");
   });
 
-  it("入れ子の工程は字下げし、右の列に計測値・所要時間（durationMs）を出す。今の段階はいちばん内側（#2096）", () => {
+  it("入れ子の工程は字下げし、計測値は名前の後ろの括弧、右の列に所要時間（durationMs）を出す。今の段階はいちばん内側（#2096 / #2265）", () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse(at(5)));
     const nested: ChatProgressStep[] = [
@@ -314,9 +330,10 @@ describe("ChatProgress", () => {
     expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(1);
     const search = q("p-step-search")!;
     expect(search.dataset.level).toBe("1");
-    expect(search.className).toContain("pl-5");
+    expect(search.querySelector(".pl-6")).not.toBeNull();
     expect(search.textContent).toContain("1.6 秒");
-    expect(q("p-step-understand")!.textContent).toContain("LLM 1 回 · 0.1 秒");
+    expect(q("p-step-understand")!.textContent).toContain("質問の理解（LLM 1 回）");
+    expect(q("p-step-understand")!.textContent).toContain("0.1 秒");
     expect(q("p-step-understand")!.dataset.level).toBeUndefined();
     // 時刻の無い記録の全体の所要時間は、最上位の段階の和。
     render(
@@ -331,6 +348,10 @@ describe("ChatProgress", () => {
       />
     );
     expect(q("p-summary")!.textContent).toBe("処理の経過（3 ステップ・3.0 秒）");
+    // 時刻の無い記録の線は所要時間を積み、入れ子の段は親の段の始まりから積む（子の線が親の線の中に入る）。
+    act(() => q("p-summary")!.click());
+    const lefts = [...host.querySelectorAll<HTMLElement>("[data-run-timeline-bar] span")].map((bar) => bar.style.left);
+    expect(lefts).toEqual(["0%", `${(1000 / 3000) * 100}%`, `${(1000 / 3000) * 100}%`]);
   });
 
   it("active と elapsedMs と labels で上書きできる", () => {

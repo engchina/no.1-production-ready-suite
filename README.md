@@ -202,8 +202,9 @@ claude plugin list   # production-ready-skills@production-ready-suite が ✔ en
 
 ## 開発ルール
 
-- 共通ルール（GitHub 運用・Issue / PR 規約・CI・デザインシステム）: [AGENTS.md](./AGENTS.md)
-- 製品固有ルール: 各ディレクトリの `AGENTS.md`
+- 共通ルール（GitHub 運用・Issue / PR 規約・CI・デザインシステム）: [AGENTS.md](./AGENTS.md)。詳細は作業ごとに [docs/agents/](./docs/agents/) の文書を読む
+- 製品固有ルール: 各ディレクトリの `AGENTS.md`（詳細は各製品の `docs/agents/`）
+- `AGENTS.md` の大きさの上限（root は 20 KB、root と製品の合計は 32 KB。Codex の `project_doc_max_bytes` の既定 32 KiB に収める）は `scripts/check-agents-md-size.sh` が CI で確かめる
 - Claude Code（2.1.277 以降）と Codex は `AGENTS.md` を直接読み込みます。`CLAUDE.md` は置いていません。
 
 ## CI

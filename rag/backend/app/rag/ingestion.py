@@ -127,6 +127,7 @@ from app.rag.page_labels import (
     pdf_page_labels,
 )
 from app.rag.pdf_segment_merge import (
+    ContinuationGeometry,
     consolidate_document_extraction,
     extraction_with_page_offset,
     merge_segment_extractions,
@@ -1495,7 +1496,10 @@ class IngestionPipeline:
             # 書き戻し(表の拡張 HTML)の後に当て、Vision が表の続きの印を消さないようにする。
             if _observability_content_type(parse_content_type) == "application/pdf":
                 extraction = await asyncio.to_thread(
-                    consolidate_document_extraction, extraction, source_bytes=parse_bytes
+                    consolidate_document_extraction,
+                    extraction,
+                    source_bytes=parse_bytes,
+                    geometry=ContinuationGeometry.from_settings(self._settings),
                 )
             quality_report = build_ingestion_quality_report(
                 extraction,

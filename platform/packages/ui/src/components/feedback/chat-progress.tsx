@@ -1,11 +1,13 @@
-import { CheckCircle2, Circle, Clock3, ListChecks, MinusCircle, XCircle } from "lucide-react";
+import { CheckCircle2, Clock3, ListChecks, XCircle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { operationTimestampMs } from "../../lib/operation-timing";
 import { cn } from "../../lib/utils";
+import { RunTimeline, type RunTimelineStep } from "../data/run-detail";
 import { Disclosure } from "../ui/disclosure";
 import { Spinner } from "../ui/spinner";
+import { formatChatProgressDuration } from "./chat-progress-format";
 import { reduceChatProgressSteps, type ChatProgressStepsState } from "./chat-progress-steps";
 import { useOperationTiming } from "./processing-state";
 
@@ -36,7 +38,7 @@ export interface ChatProgressStep {
    * より優先する。
    */
   durationMs?: number | null;
-  /** 右の列（所要時間の左）に出す短い計測値（例:「LLM 1 回」）。名前の後ろの補足（`detail`）とは別。 */
+  /** 短い計測値（例:「LLM 1 回」）。一覧では名前の後ろの括弧に `detail` と並べて出す（#2265。実行の詳細と同じ）。 */
   meta?: string;
   /** 入れ子の深さ（0 が最上位。1 以上は字下げする。親の工程の中の工程。最大 3 段まで字下げ）。 */
   level?: number;
@@ -67,20 +69,7 @@ export interface ChatProgressLabels {
   formatDuration: (ms: number) => string;
 }
 
-/**
- * 所要時間の既定の表記（1 秒未満も 0.1 秒単位で出す。0.1 秒に満たない時間は「0.1 秒未満」（「0.0 秒」と出すと
- * 情報が無い。#2096）。1 分以上は「1 分 5 秒」）。
- */
-export function formatChatProgressDuration(ms: number): string {
-  const value = Math.max(0, ms);
-  if (value > 0 && value < 100) return "0.1 秒未満";
-  if (value < 10_000) return `${(Math.floor(value / 100) / 10).toFixed(1)} 秒`;
-  const totalSeconds = Math.floor(value / 1000);
-  if (totalSeconds < 60) return `${totalSeconds} 秒`;
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes < 60) return `${totalMinutes} 分 ${totalSeconds % 60} 秒`;
-  return `${Math.floor(totalMinutes / 60)} 時間 ${totalMinutes % 60} 分`;
-}
+export { formatChatProgressDuration };
 
 export const DEFAULT_CHAT_PROGRESS_LABELS: ChatProgressLabels = {
   completedSteps: (count) => `${count} ステップ完了`,
@@ -120,14 +109,6 @@ export interface ChatProgressProps {
    * 10 秒を超えるのが普通で、全体で判断すると毎回出る。#1176）。
    */
   slowAfterMs?: number;
-  /** 段階の一覧（実行中の完了した段階・完了後の全体）を最初から開くか。既定は開く（#2096）。 */
-  defaultOpen?: boolean;
-  /**
-   * 完了したら段階の一覧を閉じる（#2118）。実行中は `defaultOpen` のまま開き、終端に移った時点と、完了した状態で
-   * 出したとき（保存済みの回答）は閉じる（失敗は開いたまま）。完了後に利用者が開いたらその状態を保ち、次の実行で
-   * 開き直す。
-   */
-  collapseWhenDone?: boolean;
   /**
    * 更新が途絶え、状態を取り直している（#1160）。今の段階の行に「接続を確認しています」を出す。
    * 製品は `useChatProgressTracker` の結果（`progressProps`）をそのまま渡す。
@@ -216,19 +197,6 @@ function lastRunningStep(steps: readonly ChatProgressStep[]): ChatProgressStep |
   return undefined;
 }
 
-const STATUS_ICON: Record<Exclude<ChatProgressStepStatus, "running">, { icon: LucideIcon; className: string }> = {
-  done: { icon: CheckCircle2, className: "text-success-fg" },
-  failed: { icon: XCircle, className: "text-danger-fg" },
-  skipped: { icon: MinusCircle, className: "text-fg-muted" },
-  pending: { icon: Circle, className: "text-fg-subtle" },
-};
-
-function StepStatusIcon({ status }: { status: ChatProgressStepStatus }) {
-  if (status === "running") return <Spinner size={14} className="text-accent-fg" />;
-  const { icon: Icon, className } = STATUS_ICON[status];
-  return <Icon size={14} className={cn("shrink-0", className)} aria-hidden="true" />;
-}
-
 /** 畳んだ見出し（アイコンは文字と同じ色。失敗は danger の色とアイコンで示す）。 */
 function SummaryText({ icon: Icon, children }: { icon: LucideIcon; children: ReactNode }) {
   return (
@@ -241,61 +209,52 @@ function SummaryText({ icon: Icon, children }: { icon: LucideIcon; children: Rea
   );
 }
 
-/** 入れ子の字下げ（1 段 = 1.25rem。深い入れ子も 3 段で止め、375px で名前の幅を残す）。 */
-const LEVEL_INDENT = ["", "pl-5", "pl-10", "pl-14"] as const;
-
-function levelIndent(level: number | undefined): string {
-  const value = Math.max(0, Math.min(LEVEL_INDENT.length - 1, Math.floor(level ?? 0)));
-  return LEVEL_INDENT[value];
+/**
+ * チャットの段階を処理の経過の行（`RunTimeline` の段）にする（#2265）。実行の詳細の写し（Agent など）も同じ関数を
+ * 使い、補足（`detail`）と計測値（`meta`。LLM の回数など）を名前の後ろの括弧に並べ、入れ子の深さ（`level`）を落とさない。
+ */
+export function chatProgressTimelineStep(step: ChatProgressStep): RunTimelineStep {
+  const detail = [step.detail, step.meta].filter(Boolean).join("・");
+  const result: RunTimelineStep = { id: step.id, label: step.label, status: step.status };
+  if (step.startedAt) result.startedAt = step.startedAt;
+  if (step.finishedAt) result.finishedAt = step.finishedAt;
+  if (typeof step.durationMs === "number" && Number.isFinite(step.durationMs)) result.durationMs = Math.max(0, step.durationMs);
+  if (detail) result.detail = detail;
+  if (step.level) result.level = step.level;
+  return result;
 }
 
-/** 段階の一覧（開いたときの中身）。 */
+/**
+ * 段階の一覧（開いたときの中身）。実行の詳細と同じ `RunTimeline` で描く（#2265。3 製品のチャットと実行の詳細で
+ * 行の形をそろえる）。完了後は時間の線を出し、実行中は出さない（全体の長さが伸び続け、線が毎回伸び縮みする）。
+ */
 function StepList({
   steps,
+  bars,
   labels,
   testId,
 }: {
   steps: ChatProgressStep[];
+  bars: boolean;
   labels: ChatProgressLabels;
   testId?: string;
 }) {
   return (
-    <ol className="grid min-w-0 gap-1.5" aria-label={labels.steps}>
-      {steps.map((step) => {
-        const duration = stepDurationMs(step);
-        // 完了は所要時間だけを見せ（アイコンで完了と分かる）、状態の語は読み上げに渡す。失敗・スキップは文字でも出す。
-        const visibleStatus = step.status === "failed" || step.status === "skipped";
-        return (
-          <li
-            key={step.id}
-            className={cn("flex min-w-0 items-start gap-2 text-xs leading-5", levelIndent(step.level))}
-            data-status={step.status}
-            data-level={step.level ? String(step.level) : undefined}
-            data-testid={testId ? `${testId}-step-${step.id}` : undefined}
-          >
-            <span className="flex h-5 shrink-0 items-center">
-              <StepStatusIcon status={step.status} />
-            </span>
-            <span className="min-w-0 flex-1 break-words">
-              <span className={step.status === "failed" ? "text-danger-fg" : "text-fg"}>{step.label}</span>
-              {step.detail ? <span className="text-fg-muted">{`（${step.detail}）`}</span> : null}
-              {visibleStatus ? null : <span className="sr-only">{` ${labels.status[step.status]}`}</span>}
-            </span>
-            {visibleStatus || duration !== null || step.meta ? (
-              <span className="shrink-0 whitespace-nowrap text-fg-muted tabular-nums">
-                {[
-                  step.meta,
-                  visibleStatus ? labels.status[step.status] : undefined,
-                  duration !== null ? labels.formatDuration(duration) : undefined,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </span>
-            ) : null}
-          </li>
-        );
-      })}
-    </ol>
+    <RunTimeline
+      steps={steps.map(chatProgressTimelineStep)}
+      showSummary={false}
+      showBars={bars}
+      size="sm"
+      formatDuration={labels.formatDuration}
+      stepTestIdPrefix={testId}
+      labels={{
+        timeline: labels.steps,
+        // 時刻の無い段は所要時間を空にする（チャットの控えめな表示で「—」を並べない）。
+        notRecorded: "",
+        stepStatus: { ...labels.status, waiting: labels.status.running },
+      }}
+      testId={testId ? `${testId}-timeline` : undefined}
+    />
   );
 }
 
@@ -396,12 +355,14 @@ function CurrentStep({
  * チャットの回答の処理の段階（#1145）。アシスタントの吹き出しの中、回答の上に置く控えめな表示。
  *
  * - 実行中: 今の段階の 1 行（スピナー・段階の名前・処理全体の経過時間・今の段階の遅延の案内）。経過時間は
- *   段階が変わっても 0 に戻さない（#1176）。完了した段階は「✓ N ステップ完了」の一覧（既定で開く。#2096）に
+ *   段階が変わっても 0 に戻さない（#1176）。完了した段階は「✓ N ステップ完了」の一覧（開いて出す。#2096）に
  *   終わった順に増えていき、段階ごとの完了 / 失敗 / スキップと所要時間を出す。終端でないのに実行中・待機中の
  *   段階が無いときも、今の行（「処理を続けています」）を出し、「N ステップ完了」だけにしない。
- * - 完了後: 「処理の経過（N ステップ・M 秒）」の一覧（既定で開く。#2096）。利用者が閉じたら閉じたままにする。
- * - 入れ子の工程は `level` で字下げし、親と子が同時に実行中なら最後に始まった段階を今の段階にする。右の列に
- *   計測値（`meta`。LLM の回数など）・失敗とスキップの文字・所要時間を出す。
+ * - 完了後: 「処理の経過（N ステップ・M 秒）」の 1 行に閉じる（#2118 / #2265。3 製品で同じ。会話の履歴から開いた
+ *   往復も閉じる）。押すと開き、実行の詳細と同じ `RunTimeline`（字下げ・時間の線・右の所要時間）で出す。失敗は
+ *   開いたまま。
+ * - 入れ子の工程は `level` で字下げし、親と子が同時に実行中なら最後に始まった段階を今の段階にする。計測値
+ *   （`meta`。LLM の回数など）は名前の後ろの括弧、右の列は失敗とスキップの文字・所要時間。
  * - 段階の切り替わりは polite で読み上げる（経過時間の毎秒の更新は読み上げない）。状態はアイコンと文字で示す。
  * - 動くスピナーは今の段階の 1 つだけ（同じ処理のスピナーは 1 つ。messaging.md §3.7）。
  * - 処理中は一度出した段階を消さず、状態を戻さない（古い snapshot・段階が実行中に戻る組み立てでも、
@@ -415,8 +376,6 @@ export function ChatProgress({
   elapsedMs,
   startedAt,
   slowAfterMs = DEFAULT_SLOW_AFTER_MS,
-  defaultOpen,
-  collapseWhenDone = false,
   reconnecting = false,
   progressKey = null,
   labels: labelOverrides,
@@ -435,17 +394,17 @@ export function ChatProgress({
     ? lastRunningStep(steps) ?? steps.find((step) => step.status === "pending")
     : undefined;
   const finished = steps.filter((step) => step.status === "done" || step.status === "failed" || step.status === "skipped");
-  // 一覧の開閉。既定で開く（#2096。何をしたかを最初から見せる）。利用者が閉じたら、実行中から完了まで
-  // その状態を保つ（同じ表示の間）。
+  // 一覧の開閉（3 製品で同じ。製品は選ばない。#2265）。実行中は開き（何をしているかを見せる。#2096）、完了したら
+  // 閉じる（回答の本文を主にする。#2118）。完了した状態で出したとき（会話の履歴から開いた往復）も閉じる。失敗は
+  // どこで止まったかを見せるため開いたまま。利用者が開閉したら同じ表示の間はその状態を保ち、実行中と終端が
+  // 切り替わったら既定に戻す（次の実行で開き直す）。
   const [summaryOpen, setSummaryOpen] = useState<boolean | null>(null);
-  // 完了したら閉じる指定（#2118）では、実行中と終端が切り替わったら利用者の開閉を既定に戻す。
   const [wasActive, setWasActive] = useState(active);
   if (wasActive !== active) {
     setWasActive(active);
-    if (collapseWhenDone) setSummaryOpen(null);
+    setSummaryOpen(null);
   }
-  // 失敗した処理はどこで止まったかを見せるため、閉じずに出す。
-  const summaryIsOpen = summaryOpen ?? (collapseWhenDone && !active && !failed ? false : (defaultOpen ?? true));
+  const summaryIsOpen = summaryOpen ?? (active || failed);
   const total = elapsedMs ?? totalDurationMs(steps);
   const overallStartedAt = operationTimestampMs(startedAt) ?? firstStartedAtMs(steps);
   // 段階の切り替わりと、取り直しの開始を読み上げる。
@@ -486,7 +445,7 @@ export function ChatProgress({
               summaryProps={{ "data-testid": testId ? `${testId}-completed` : undefined }}
               summaryClassName="text-fg-muted"
             >
-              <StepList steps={finished} labels={labels} testId={testId} />
+              <StepList steps={finished} bars={false} labels={labels} testId={testId} />
             </Disclosure>
           ) : null}
         </>
@@ -504,7 +463,7 @@ export function ChatProgress({
           summaryProps={{ "data-testid": testId ? `${testId}-summary` : undefined }}
           summaryClassName={failed ? "text-danger-fg" : "text-fg-muted"}
         >
-          <StepList steps={steps} labels={labels} testId={testId} />
+          <StepList steps={steps} bars labels={labels} testId={testId} />
         </Disclosure>
       )}
     </div>

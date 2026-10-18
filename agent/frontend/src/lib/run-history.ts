@@ -1,5 +1,6 @@
 import {
   chatProgressStepsFromEvents,
+  chatProgressTimelineStep,
   type RunExecutorFilter as CommonRunExecutorFilter,
   type RunDetailLabelsInput,
   type RunHistoryLabelsInput,
@@ -220,14 +221,13 @@ export function runTimelineSteps(
     const status: RunTimelineStepStatus = waiting ? "waiting" : item.status;
     const tool = item.id.startsWith("tool:") ? item.id.slice("tool:".length).replace(/#\d+$/, "") : null;
     const runStep = tool ? stepFor(tool) : undefined;
+    // 段の写しはチャットの処理の経過と同じ共通の変換（補足・計測値・入れ子。#2265）に、Run の step の時刻と中身を足す。
     return {
-      id: item.id,
-      label: item.label,
+      ...chatProgressTimelineStep(item),
       status,
       startedAt: item.startedAt ?? runStep?.started_at ?? null,
       finishedAt: item.finishedAt ?? runStep?.completed_at ?? null,
       durationMs: runStep?.tool_result?.duration_ms ?? null,
-      detail: item.detail,
       children: runStep ? detailsOf(runStep) : undefined,
     };
   });

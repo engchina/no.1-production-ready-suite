@@ -669,7 +669,7 @@ for (const viewport of [
 
     await error.getByRole("button", { name: "もう一度送信" }).click();
     await expect(page.getByText(okReply.content).first()).toBeVisible({ timeout: 5_000 });
-    // 完了した回答の上（作成中の「N ステップ完了」の場所のまま）に「処理の経過」を既定で開いて残す（#1146 / #2096 / #2115）。
+    // 完了した回答の上（作成中の「N ステップ完了」の場所のまま）に「処理の経過」を閉じて残す（#1146 / #2115 / #2118）。
     const summary = page.getByTestId("chat-answer-progress-summary");
     await expect(summary).toContainText("処理の経過（5 ステップ・");
     await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toContainText(

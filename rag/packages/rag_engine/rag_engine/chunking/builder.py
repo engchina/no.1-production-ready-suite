@@ -227,6 +227,10 @@ def _build_child_chunks_for_engine(
     consumed_visual_ids: set[str] = set()
     supplements_by_table = _table_supplements_by_table(records)
     consumed_supplement_ids: set[str] = set()
+    # ページの境目・図・表をまたいで続く段落（`raw.continues_record_id`。#2001・#2266）の
+    # 続きの元 → 続きの record。続きがまだ来ていない段落は、間の図・表で buffer を閉じない。
+    continued_by = _continued_by(records)
+    seen_record_ids: set[str] = set()
     children: list[DocumentChunk] = []
     text_buffer: list[dict[str, Any]] = []
     section_path: list[str] = []
@@ -265,9 +269,32 @@ def _build_child_chunks_for_engine(
             return
         text_buffer.extend(inline_icons_by_target.get(record_id, []))
 
+    def buffer_awaits_continuation() -> bool:
+        """buffer の段落に、まだ読んでいない続きの record があるか。"""
+        pending = (continued_by.get(str(item.get("id") or "")) for item in text_buffer)
+        return any(record_id and record_id not in seen_record_ids for record_id in pending)
+
+    def release_text_buffer_for_atomic() -> list[dict[str, Any]]:
+        """図・表の前で buffer を閉じ、図・表の子 chunk に付ける見出しの record を返す。
+
+        本文のある buffer は閉じる（見出しは付けない）。見出しだけの buffer は図・表に付ける。
+        続きを待つ段落の buffer は閉じず、図・表を単独の子 chunk にする（段落は続きと同じ子 chunk）。
+        """
+        nonlocal text_buffer
+        if not text_buffer:
+            return []
+        if _buffer_has_body(text_buffer):
+            if not buffer_awaits_continuation():
+                flush_text_buffer()
+            return []
+        heading_records = text_buffer
+        text_buffer = []
+        return heading_records
+
     for record in sorted(records, key=lambda item: (int(item.get("page") or 0), int(item.get("seq_no") or 0))):
         category = str(record.get("category") or "")
         record_id = str(record.get("id") or "")
+        seen_record_ids.add(record_id)
         text = _record_text(record)
         visual_role = _record_visual_role(record)
         if category == "Picture" and record_id in table_contained_visual_ids:
@@ -295,12 +322,7 @@ def _build_child_chunks_for_engine(
             record,
         )
         if category == "Table":
-            heading_records = []
-            if text_buffer and _buffer_has_body(text_buffer):
-                flush_text_buffer()
-            elif text_buffer:
-                heading_records = text_buffer
-                text_buffer = []
+            heading_records = release_text_buffer_for_atomic()
             annotation_records = _attached_layout_annotations(record_id, attached_annotations_by_target)
             # text layer から補った表の原文（#564）は、表と同じ child に入れて表から切り離さない。
             supplement_records = [item for item in supplements_by_table.get(record_id, [])]
@@ -364,12 +386,7 @@ def _build_child_chunks_for_engine(
                     # ページの帯画像（節見出しの再掲 + 著作権表示）。child にせず、buffer もそのまま次へ持ち越す。
                     consumed_visual_ids.update(group_ids or {record_id})
                     continue
-            heading_records = []
-            if text_buffer and _buffer_has_body(text_buffer):
-                flush_text_buffer()
-            elif text_buffer:
-                heading_records = text_buffer
-                text_buffer = []
+            heading_records = release_text_buffer_for_atomic()
             if group:
                 consumed_visual_ids.update(group_ids)
                 annotation_records = _attached_layout_annotations_for_targets(group_ids, attached_annotations_by_target)
@@ -424,14 +441,30 @@ def _build_child_chunks_for_engine(
 def _continues_buffer(piece: dict[str, Any], buffer: Sequence[dict[str, Any]], config: ChunkingConfig) -> bool:
     """ページの境目で切れた段落の続き（`raw.continues_record_id`）を、前の段落と同じ child に入れるか。
 
-    取込の文書全体の整理（backend の `pdf_segment_merge`。#2001）が、前のページの最後の段落の続きに
-    印を付ける。続きの先頭は child の目標の文字数を超えても前の段落と分けない（目標の 2 倍まで）。
+    取込の文書全体の整理（backend の `pdf_segment_merge`。#2001・#2266）が、前のページの最後の段落の
+    続きに印を付ける。続きの元は buffer の末尾でなくてよい（間のページ下端の脚注が buffer に入る）。
+    続きの先頭は child の目標の文字数を超えても前の段落と分けない（目標の 2 倍まで）。
     """
-    raw = piece.get("raw") if isinstance(piece.get("raw"), dict) else {}
-    previous_id = str(raw.get("continues_record_id") or "")
-    if not previous_id or str(buffer[-1].get("id") or "") != previous_id:
+    previous_id = _continues_record_id(piece)
+    if not previous_id or all(str(item.get("id") or "") != previous_id for item in buffer):
         return False
     return _records_char_count(buffer) + len(_record_text(piece)) <= config.child_target_chars * 2
+
+
+def _continues_record_id(record: dict[str, Any]) -> str:
+    raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+    return str(raw.get("continues_record_id") or "")
+
+
+def _continued_by(records: Sequence[dict[str, Any]]) -> dict[str, str]:
+    """続きの元の record の id → 続きの record の id（`raw.continues_record_id` の逆引き）。"""
+    continued: dict[str, str] = {}
+    for record in records:
+        previous_id = _continues_record_id(record)
+        record_id = str(record.get("id") or "")
+        if previous_id and record_id:
+            continued.setdefault(previous_id, record_id)
+    return continued
 
 
 def _split_long_text_record(record: dict[str, Any], target_chars: int) -> list[dict[str, Any]]:

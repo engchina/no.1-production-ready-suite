@@ -39,7 +39,8 @@ class AnswerDependencies:
     articles（選んだ条の `article_catalog.SelectedArticle` の列）・settings を受け取り、選んだ条の章節の最初の child と
     その親の StoredChunk を返す。省略時は条を選ばない。article_documents は settings を受け取り、検索の範囲の
     条で構成された文書の (document_id, 文書名) の列を返す（候補に出ない文書も目録で読むため）。省略時は候補の
-    文書だけを読む。
+    文書だけを読む。article_question は利用者の元の質問（呼び出し元が検索文を短く言い換えたとき。無ければ None）を
+    返す。条の目録から文書・条を選ぶ段だけが検索文と合わせて使う（#2261）。
     """
 
     search: Callable[..., Any]
@@ -56,6 +57,7 @@ class AnswerDependencies:
     article_catalogs: Callable[..., Sequence[Any]] | None = None
     article_chunks: Callable[..., Sequence[Any]] | None = None
     article_documents: Callable[..., Sequence[tuple[str, str]]] | None = None
+    article_question: Callable[[], str | None] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -132,6 +134,15 @@ def injected_article_documents() -> Callable[..., Sequence[tuple[str, str]]] | N
     """注入された検索の範囲の条で構成された文書の一覧（#2254）。注入が無ければ None（候補の文書だけを読む）。"""
     current = _active.get()
     return None if current is None else current.article_documents
+
+
+def injected_article_question() -> str | None:
+    """注入された利用者の元の質問（#2261）。注入が無い・空なら None。"""
+    current = _active.get()
+    if current is None or current.article_question is None:
+        return None
+    value = current.article_question()
+    return value.strip() or None if isinstance(value, str) else None
 
 
 def injected_prefetch_search() -> Callable[..., Any] | None:

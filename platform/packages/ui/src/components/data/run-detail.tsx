@@ -334,14 +334,17 @@ export interface RunTimelineStep {
   finishedAt?: string | null;
   /** 所要時間（ミリ秒）。無ければ開始と終了から求める。開始が無い段は前の段の後ろに続けて描く。 */
   durationMs?: number | null;
-  /** 短い補足（対象の表・ツール名・件数）。SQL 全文・エラーの全文は `children` に入れる。 */
+  /** 短い補足（対象の表・ツール名・件数・LLM の回数）。名前の後ろの括弧に出す。SQL 全文・エラーの全文は `children` に入れる。 */
   detail?: string;
   /** 段の右に並べるバッジ（token・試行の回数など）。 */
   meta?: ReactNode;
   /** 開いて見る中身（ツールの引数と結果・SQL・エラー）。渡すと行に開閉のボタンが付く。 */
   children?: ReactNode;
-  /** 入れ子の深さ（0 = 段、1 = 段の中のツールの呼び出し）。 */
-  level?: 0 | 1;
+  /**
+   * 入れ子の深さ（0 = 段、1 以上 = 段の中のツールの呼び出し・工程）。字下げは 3 段で止める（375px で名前の幅を残す）。
+   * 時刻の無い入れ子の段の線は、親（1 つ浅い直前の段）の始まりから積む。
+   */
+  level?: number;
 }
 
 const STEP_ICON: Record<Exclude<RunTimelineStepStatus, "running">, { icon: LucideIcon; className: string }> = {
@@ -361,6 +364,17 @@ const STEP_BAR: Record<RunTimelineStepStatus, string> = {
   pending: "bg-fg-subtle",
 };
 
+/** 入れ子の字下げ（1 段 = 1.5rem。3 段で止める）。 */
+const STEP_INDENT = ["", "pl-6", "pl-12", "pl-16"] as const;
+
+function stepLevel(level: number | undefined): number {
+  return typeof level === "number" && Number.isFinite(level) ? Math.max(0, Math.floor(level)) : 0;
+}
+
+function stepIndent(level: number | undefined): string {
+  return STEP_INDENT[Math.min(STEP_INDENT.length - 1, stepLevel(level))];
+}
+
 function StepIcon({ status }: { status: RunTimelineStepStatus }) {
   if (status === "running") return <Spinner size={14} className="text-accent-fg" />;
   const { icon: Icon, className } = STEP_ICON[status];
@@ -375,7 +389,8 @@ export interface RunTimelineBar {
 }
 
 /**
- * 段ごとの時間の線の位置（%）を求める。開始・終了の時刻がある段はその位置、無い段は所要時間を前の段の後ろに積む。
+ * 段ごとの時間の線の位置（%）を求める。開始・終了の時刻がある段はその位置、無い段は所要時間を前の段の後ろに積む
+ * （入れ子の段は親の段の始まりから積む。時刻を持たない記録でも、子の線が親の線の中に入る）。
  * 全体の長さが分からない（どの段にも所要時間が無い）ときは null（線を描かない）。
  */
 export function runTimelineBars(steps: readonly RunTimelineStep[]): (RunTimelineBar | null)[] {
@@ -383,15 +398,24 @@ export function runTimelineBars(steps: readonly RunTimelineStep[]): (RunTimeline
     const start = operationTimestampMs(step.startedAt ?? undefined);
     const end = operationTimestampMs(step.finishedAt ?? undefined);
     const duration = step.durationMs ?? (start !== null && end !== null ? Math.max(0, end - start) : null);
-    return { start, duration };
+    return { start, duration, level: stepLevel(step.level) };
   });
   const starts = spans.map((span) => span.start).filter((value): value is number => value !== null);
   const origin = starts.length ? Math.min(...starts) : null;
-  let cursor = 0;
+  // 深さごとの、直前の段の始まり（子の起点）と、同じ親の中で次の段を置く位置。
+  const levelStart: (number | undefined)[] = [];
+  const levelCursor: (number | undefined)[] = [];
   const placed = spans.map((span) => {
+    const { level } = span;
+    const parentStart = level > 0 ? (levelStart[level - 1] ?? 0) : 0;
+    const offset =
+      span.start !== null && origin !== null ? span.start - origin : (levelCursor[level] ?? parentStart);
+    // 新しい段を置いたら、より深い段の起点を作り直す（次の子はこの段の始まりから積む）。
+    levelStart.length = level;
+    levelCursor.length = level + 1;
+    levelStart[level] = offset;
     if (span.duration === null) return null;
-    const offset = span.start !== null && origin !== null ? span.start - origin : cursor;
-    cursor = Math.max(cursor, offset + span.duration);
+    levelCursor[level] = Math.max(levelCursor[level] ?? 0, offset + span.duration);
     return { offset, duration: span.duration };
   });
   const total = Math.max(0, ...placed.map((item) => (item ? item.offset + item.duration : 0)));
@@ -417,6 +441,21 @@ export interface RunTimelineProps {
   totalDurationMs?: number | null;
   /** 中身のある段を最初から開く（失敗した段は既定で開く）。 */
   defaultExpanded?: boolean;
+  /**
+   * 要約の行（「N ステップ・合計 M 秒」）を出すか。既定 true。チャットの処理の経過（`ChatProgress`）は、開閉の見出し
+   * （「処理の経過（N ステップ・M 秒）」）が同じ情報を持つので出さない。
+   */
+  showSummary?: boolean;
+  /**
+   * 時間の線を出すか。既定 true。実行中の一覧（全体の長さが伸び続け、線が毎回伸び縮みする）は出さない。
+   */
+  showBars?: boolean;
+  /** 文字の大きさ。`md`（既定。実行の詳細）/ `sm`（チャットの回答の中の控えめな表示）。 */
+  size?: "sm" | "md";
+  /** 段の所要時間の表記。既定は `formatRunDuration`（「0.4 秒」「1 分 5 秒」）。 */
+  formatDuration?: (ms: number) => string;
+  /** 行に `data-testid="<stepTestIdPrefix>-step-<id>"` を付ける（`ChatProgress` は自分の testId を渡す）。 */
+  stepTestIdPrefix?: string;
   labels?: RunDetailLabelsInput;
   testId?: string;
 }
@@ -424,13 +463,26 @@ export interface RunTimelineProps {
 /**
  * 処理の経過（#1955）。段とツールの呼び出しを時間の順に 1 行ずつ並べ、状態のアイコン・名前・所要時間（文字）と、
  * 全体の中の位置と長さの線（ウォーターフォール）を出す。線は飾りで、時間は必ず文字でも出す。
+ * 実行の詳細の「処理の経過」と、チャットの回答の「処理の経過」（`ChatProgress` の一覧）の 1 つの部品（#2265）。
  *
  * - 行の中身（ツールの引数と結果・SQL・エラー）は、行の開閉のボタン（`aria-expanded` + `DisclosureChevron`）で開く。
  *   失敗した段は最初から開く。
- * - 狭い置き場所（40rem 未満）では線を隠し、名前と所要時間だけにする（container query）。
+ * - 入れ子の段は `level` で字下げする（3 段まで）。補足（LLM の回数など）は名前の後ろの括弧に出す。
+ * - 狭い置き場所（36rem 未満）では線を隠し、名前と所要時間だけにする（container query）。
  * - 状態はアイコンの形と読み上げの文言で伝え、失敗・スキップ・応答待ちは画面にも文字で出す（色だけにしない）。
  */
-export function RunTimeline({ steps, totalDurationMs, defaultExpanded = false, labels: labelsInput, testId }: RunTimelineProps) {
+export function RunTimeline({
+  steps,
+  totalDurationMs,
+  defaultExpanded = false,
+  showSummary = true,
+  showBars = true,
+  size = "md",
+  formatDuration = formatRunDuration,
+  stepTestIdPrefix,
+  labels: labelsInput,
+  testId,
+}: RunTimelineProps) {
   const labels = resolveRunDetailLabels(labelsInput);
   const bars = runTimelineBars(steps);
   const idPrefix = useId();
@@ -442,20 +494,29 @@ export function RunTimeline({ steps, totalDurationMs, defaultExpanded = false, l
   const summedMs = steps.reduce((sum, step) => sum + (step.level ? 0 : stepDurationMs(step) ?? 0), 0);
   const total = totalDurationMs ?? (summedMs > 0 ? summedMs : null);
   const topLevelCount = steps.filter((step) => !step.level).length;
+  const nameText = size === "sm" ? "text-xs" : "text-sm";
 
   return (
-    <div className="@container grid min-w-0 gap-2" data-run-timeline="" data-testid={testId}>
-      <p className="text-xs text-fg-muted tnum">
-        {labels.timelineSummary(topLevelCount, formatRunDuration(total, labels.notRecorded))}
-      </p>
-      <ol className="grid min-w-0 gap-1" aria-label={labels.timeline}>
+    <div
+      className="@container grid min-w-0 gap-2"
+      data-run-timeline=""
+      data-run-timeline-bars={showBars ? "true" : "false"}
+      data-testid={testId}
+    >
+      {showSummary ? (
+        <p className="text-xs text-fg-muted tnum">
+          {labels.timelineSummary(topLevelCount, formatRunDuration(total, labels.notRecorded))}
+        </p>
+      ) : null}
+      <ol className={cn("grid min-w-0", size === "sm" ? "gap-1.5" : "gap-1")} aria-label={labels.timeline}>
         {steps.map((step, index) => {
           const duration = stepDurationMs(step);
-          const bar = bars[index];
+          const bar = showBars ? bars[index] : null;
           const hasDetails = step.children != null;
           const open = hasDetails && Boolean(expanded[step.id]);
           const regionId = `${idPrefix}-step-${index}`;
           const visibleStatus = step.status === "failed" || step.status === "skipped" || step.status === "waiting";
+          const level = stepLevel(step.level);
           const name = (
             <span className={cn("min-w-0 break-words [overflow-wrap:anywhere]", !hasDetails && "flex-1")}>
               <span className={step.status === "failed" ? "text-danger-fg" : "text-fg"}>{step.label}</span>
@@ -468,11 +529,18 @@ export function RunTimeline({ steps, totalDurationMs, defaultExpanded = false, l
               key={step.id}
               className="min-w-0 rounded-md"
               data-status={step.status}
+              data-level={level > 0 ? String(level) : undefined}
               data-run-timeline-step={step.id}
+              data-testid={stepTestIdPrefix ? `${stepTestIdPrefix}-step-${step.id}` : undefined}
             >
               {/* 線の列と時間の列の幅を全行で同じにし、線の始まりをそろえる（字下げは名前の列の中だけ）。 */}
-              <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 @xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_7rem] @xl:items-center">
-                <div className={cn("flex min-w-0 items-start gap-2 text-sm leading-5", step.level === 1 && "pl-6")}>
+              <div
+                className={cn(
+                  "grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3",
+                  showBars && "@xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_7rem] @xl:items-center"
+                )}
+              >
+                <div className={cn("flex min-w-0 items-start gap-2 leading-5", nameText, stepIndent(level))}>
                   <span className="flex h-5 shrink-0 items-center">
                     <StepIcon status={step.status} />
                   </span>
@@ -495,25 +563,27 @@ export function RunTimeline({ steps, totalDurationMs, defaultExpanded = false, l
                   {step.meta ? <span className="flex shrink-0 flex-wrap items-center gap-1">{step.meta}</span> : null}
                 </div>
                 {/* 時間の線（飾り）。広い置き場所だけ。 */}
-                <div
-                  className="relative hidden h-2 min-w-0 overflow-hidden rounded-full bg-surface-sunken @xl:block"
-                  aria-hidden="true"
-                  data-run-timeline-bar=""
-                >
-                  {bar ? (
-                    <span
-                      className={cn(
-                        "absolute inset-y-0 rounded-full forced-colors:bg-[CanvasText]",
-                        STEP_BAR[step.status]
-                      )}
-                      style={{ left: `${bar.offset}%`, width: `${bar.width}%` }}
-                    />
-                  ) : null}
-                </div>
+                {showBars ? (
+                  <div
+                    className="relative hidden h-2 min-w-0 overflow-hidden rounded-full bg-surface-sunken @xl:block"
+                    aria-hidden="true"
+                    data-run-timeline-bar=""
+                  >
+                    {bar ? (
+                      <span
+                        className={cn(
+                          "absolute inset-y-0 rounded-full forced-colors:bg-[CanvasText]",
+                          STEP_BAR[step.status]
+                        )}
+                        style={{ left: `${bar.offset}%`, width: `${bar.width}%` }}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
                 <span className="whitespace-nowrap text-right text-xs leading-5 text-fg-muted tnum">
                   {visibleStatus ? labels.stepStatus[step.status] : null}
                   {visibleStatus && duration !== null ? " · " : null}
-                  {duration !== null ? formatRunDuration(duration) : visibleStatus ? null : labels.notRecorded}
+                  {duration !== null ? formatDuration(duration) : visibleStatus ? null : labels.notRecorded}
                 </span>
               </div>
               {hasDetails ? (

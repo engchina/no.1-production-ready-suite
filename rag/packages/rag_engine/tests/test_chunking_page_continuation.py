@@ -64,3 +64,54 @@ def test_paragraph_without_continuation_mark_splits_at_target_size() -> None:
 
     first = next(child for child in children if _FIRST in child.text)
     assert _SECOND not in first.text
+
+
+_TABLE = "<table><tbody><tr><th>項目</th><th>値</th></tr><tr><td>A</td><td>1</td></tr></tbody></table>"
+
+
+def test_continued_paragraph_skips_table_between_halves() -> None:
+    """続きの間に表がある段落(MinerU の continues_prev は図・表をまたぐ。#2266)も同じ子に入れ、表は別の子にする。"""
+    children = _children(
+        [
+            _record(1, 1, "Section-header", _HEAD),
+            _record(1, 2, "Text", _FIRST),
+            _record(1, 3, "Table", _TABLE),
+            _record(2, 1, "Text", _SECOND, raw={"continues_record_id": "docling-p1-2"}),
+        ]
+    )
+
+    joined = [child for child in children if _FIRST in child.text]
+    assert len(joined) == 1
+    assert _SECOND in joined[0].text
+    assert "項目" not in joined[0].text
+    assert any("項目" in child.text and _FIRST not in child.text for child in children)
+
+
+def test_paragraph_without_continuation_is_closed_before_table() -> None:
+    children = _children(
+        [
+            _record(1, 1, "Section-header", _HEAD),
+            _record(1, 2, "Text", _FIRST),
+            _record(1, 3, "Table", _TABLE),
+            _record(2, 1, "Text", "別の段落です。"),
+        ]
+    )
+
+    first = next(child for child in children if _FIRST in child.text)
+    assert "別の段落です。" not in first.text
+
+
+def test_continued_paragraph_after_footnote_in_buffer() -> None:
+    """前のページの下端の脚注が buffer の末尾にあっても、続きの段落を同じ子に入れる。"""
+    children = _children(
+        [
+            _record(1, 1, "Section-header", _HEAD),
+            _record(1, 2, "Text", _FIRST),
+            _record(1, 3, "Footnote", "注 1"),
+            _record(2, 1, "Text", _SECOND, raw={"continues_record_id": "docling-p1-2"}),
+        ]
+    )
+
+    joined = [child for child in children if _FIRST in child.text]
+    assert len(joined) == 1
+    assert _SECOND in joined[0].text

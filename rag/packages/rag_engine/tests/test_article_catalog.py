@@ -231,6 +231,9 @@ def test_context_adds_catalog_articles_outside_the_anchor_and_parent_limits():
     bundle = _bundle(children, top_k=3, max_records=3, catalog_records=2)
     # 検索の根拠の親は目録の条が無いときと同じ 3 つ。選んだ条は関連度の順に 2 つまで後ろへ足す。
     assert [r.id for r in bundle.records] == ["m0-p", "m1-p", "m2-p", "art1-p", "art2-p"]
+    # 選んだ条のために足した親は理由で分かる（MCP は根拠の上限に数えない。#2261）。
+    assert [item.reason for item in bundle.evidence_tree][-2:] == ["catalog_article"] * 2
+    assert "catalog_article" not in [item.reason for item in bundle.evidence_tree][:3]
 
     plain = _bundle(children, top_k=3, max_records=3, catalog_records=0)
     assert [r.id for r in plain.records] == ["art1-p", "m0-p", "m1-p"]
@@ -363,3 +366,41 @@ def test_catalog_documents_are_ordered_by_the_sum_of_reciprocal_ranks():
     ranked = [record("a1", "doc-a"), *[record(f"b{i}", "doc-b") for i in range(4)], record("c1", "doc-c")]
 
     assert answering._catalog_document_ids(ranked) == ["doc-b", "doc-a", "doc-c"]
+
+
+def test_catalog_selection_uses_the_original_question_with_the_query():
+    """呼び出し元が元の質問を渡したら、条の選択には元の質問と検索文を渡す（検索は検索文のまま。#2261）。"""
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+
+    prompts = []
+
+    def unused(*args, **kwargs):
+        raise AssertionError("呼ばない")
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        prompts.append(json.loads(prompt)["question"])
+        return ArticleSelection(lines=[])
+
+    def dependencies(original):
+        return AnswerDependencies(
+            search=unused,
+            check_ready=unused,
+            rerank=unused,
+            parse_images=unused,
+            parse_text=parse,
+            article_catalogs=lambda *, document_ids, limit, settings: [CATALOG],
+            article_chunks=lambda *, articles, settings: [],
+            article_question=lambda: original,
+        )
+
+    ranked = [answering._stored_chunk_answer_record(_stored("hit", "架空規程.json"))]
+    settings = get_settings(environ={}, dotenv_path=None)
+    answering._ARTICLE_SELECTION_CACHE.clear()
+
+    with bind_dependencies(dependencies("取引先から届いた書類の補正を求めるべきか")):
+        answering._catalog_article_children("書類 表記", ranked, settings)
+    with bind_dependencies(dependencies(None)):
+        answering._catalog_article_children("書類 表記", ranked, settings)
+
+    assert prompts[0] == "取引先から届いた書類の補正を求めるべきか\n\n（検索文: 書類 表記）"
+    assert prompts[-1] == "書類 表記"

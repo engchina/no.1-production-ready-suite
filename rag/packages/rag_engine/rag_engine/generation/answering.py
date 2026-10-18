@@ -2972,6 +2972,20 @@ def _select_catalog_articles(question: str, catalogs: Sequence[Any], settings: S
 _ARTICLE_DOCUMENT_CACHE: dict[tuple[object, ...], list[str]] = {}
 
 
+def _catalog_question(query: str) -> str:
+    """条の選択に渡す質問: 元の質問が注入されていれば、元の質問と検索文（#2261）。
+
+    業務 Agent は検索文を短いキーワードに言い換えることがあり、検索文だけでは事例の論点（請求の種類・手続など）が
+    落ちて、根拠の文書・条を選べない。検索そのものは検索文で行う。
+    """
+    from rag_engine.dependencies import injected_article_question
+
+    original = injected_article_question()
+    if not original or original == query.strip():
+        return query
+    return f"{original}\n\n（検索文: {query}）"
+
+
 def _scope_catalog_documents(question: str, settings: Settings, exclude: set[str]) -> list[str]:
     """検索の範囲の条で構成された文書の一覧から、根拠の条がありそうな文書を LLM で選ぶ（#2254）。
 
@@ -3020,6 +3034,7 @@ def _catalog_article_children(
     if injected is None or max_documents <= 0 or int(getattr(settings, "article_catalog_max_articles", 0) or 0) <= 0:
         return list(ranked_children), []
     load_catalogs, load_chunks = injected
+    question = _catalog_question(question)
     catalogs = list(load_catalogs(document_ids=_catalog_document_ids(ranked_children), limit=max_documents, settings=settings))
     if not catalogs:
         # 候補に条で構成された文書が無い質問は、範囲の文書の一覧も読まない（LLM・DB を呼ばない）。

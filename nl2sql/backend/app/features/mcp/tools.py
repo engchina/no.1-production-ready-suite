@@ -143,20 +143,15 @@ _CLOSED_SESSION_STATUSES = frozenset(
 
 _INSTRUCTIONS = (
     "Production Ready NL2SQL のツールです。利用者が使える業務プロファイルの範囲で、"
-    "自然言語の質問から SQL を生成・実行します。nl2sql_query には業務プロファイルの ID"
-    "（profile_id）が必須です。分からないときは "
+    "自然言語の質問から SQL を生成・実行します。業務プロファイルが分からないときは "
     "nl2sql_list_profiles / nl2sql_recommend_profile で選び、nl2sql_query に渡してください。"
-    "同じ会話の続きの質問では、前のターンで使った業務プロファイルをそのまま使い、推薦し直すのは"
-    "話題が変わったときだけにしてください。推薦し直すときは、nl2sql_recommend_profile の "
-    "question に、指示語・省略を前の質問で補った、それだけで意味の通る質問を渡してください。"
-    "nl2sql_query が pending / running を返したら、"
-    "job_id と wait_seconds（最大 45 秒）を nl2sql_get_job に渡し、"
+    # 待つ秒数の上限は wait_seconds の schema（MAX_WAIT_SECONDS）にある。
+    "nl2sql_query が pending / running を返したら、job_id を nl2sql_get_job に渡し、"
     "done / error になるまで続きを取得します。"
+    # 呼び直しの引数の組み立ては requirement_session_id・answer・skip_clarification の説明にある。
     "nl2sql_query が needs_clarification を返したら SQL はまだ作っていません。"
-    "requirement.question の問いを利用者に 1 つだけ確かめ、答えを answer に入れ、"
-    "requirement.session_id を requirement_session_id に渡して nl2sql_query を呼び直します。"
-    "利用者が確認せずに進めると選んだら、requirement_session_id と skip_clarification: true で"
-    "呼び直します（前提を示して SQL を生成し、requirement.status は skipped）。"
+    "requirement.question の問いを利用者に 1 つだけ確かめてから、答えを付けて nl2sql_query を"
+    "呼び直します（利用者が確認せずに進めると選んだら skip_clarification）。"
 )
 
 
@@ -213,7 +208,9 @@ class RecommendProfileInput(_Input):
 
 
 class RequirementAnswerInput(_Input):
-    """SQL の生成前の確認の項目への利用者の答え（#1441）。"""
+    """SQL の生成前の確認の項目への利用者の答え。"""
+
+    # SQL の生成前の確認（#1441）。
 
     item_id: str = Field(
         min_length=1,
@@ -284,7 +281,8 @@ class QueryInput(_Input):
     skip_clarification: bool = Field(
         default=False,
         description=(
-            "利用者が確認せずに SQL を生成するよう選んだとき true（#1839）。確認事項を聞かず、"
+            # 確認せずに SQL を生成する（#1839）。
+            "利用者が確認せずに SQL を生成するよう選んだとき true。確認事項を聞かず、"
             "要件を反映できれば反映し、できなければ確認を使わずに作る（requirement.status は"
             " skipped）。利用者が選んでいないのに true にしない。answer と一緒には指定しない"
         ),
@@ -979,9 +977,10 @@ def build_mcp_server(request: Request) -> McpServer:
                 "質問に合う業務プロファイルを推薦します。推薦できないときは null で、candidates に "
                 "score の高い順の候補（説明・表の名前と質問の語が重なるもの）を返します。"
                 "profile_ids を渡すと、その中からだけ推薦します。"
+                # 会話の続きは前のターンの業務プロファイルを使う（#1880。question の書き方は
+                # question の説明にある）。
                 "同じ会話の続きの質問では前のターンと同じ業務プロファイルを使い、推薦し直すのは"
-                "話題が変わったときだけです。question には、指示語・省略を前の質問で補った、"
-                "それだけで意味の通る質問を渡します。"
+                "話題が変わったときだけです。"
             ),
             input_model=RecommendProfileInput,
             handler=recommend_profile,
@@ -992,7 +991,6 @@ def build_mcp_server(request: Request) -> McpServer:
             name="nl2sql_query",
             description=(
                 "質問から SELECT SQL を生成して実行し、結果の行を返します。"
-                "SQL の生成の方式は、業務プロファイルの既定の生成方式です。"
                 "SQL を作る前に、足りない情報・明確でない情報を確かめます（SQL の生成前の確認）。"
                 "確かめる項目があれば SQL を作らずに status=needs_clarification と "
                 "requirement.question（質問・候補・理由。表・列は物理名）を 1 つだけ返すので、"

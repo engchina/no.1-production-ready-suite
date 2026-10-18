@@ -3007,7 +3007,7 @@ type ChatProgressStep = {
   finishedAt?: string;        // ISO 8601
   detail?: string;            // 任意の短い補足（対象の表・ツール名・件数）。SQL 全文・ORA コード等の技術的な詳細は入れない
   durationMs?: number | null; // 所要時間（時刻を持たない記録。渡すと startedAt / finishedAt より優先。#2096）
-  meta?: string;              // 右の列（所要時間の左）の短い計測値（例:「LLM 1 回」。#2096）
+  meta?: string;              // 短い計測値（例:「LLM 1 回」。#2096）。一覧では名前の後ろの括弧に detail と並べる（#2265）
   level?: number;             // 入れ子の深さ（0 が最上位。1〜3 段を字下げ。#2096）
 };
 ```
@@ -3044,25 +3044,23 @@ import { ChatProgress } from "@production-ready/ui";
 | `elapsedMs` | `number \| null` | 段階の時刻から | 完了後の全体の所要時間（時刻の無い記録は最上位の段階の `durationMs` の和） |
 | `startedAt` | `string \| number \| null` | 段階の最初の開始 | 実行中の経過時間の起点（処理全体の開始。#1176）。どちらも無いときは表示が処理中になった時刻から数える |
 | `slowAfterMs` | `number` | `10000` | 今の段階がこの時間を超えたら、今の段階の行に遅延の案内を付ける（全体の経過時間では判断しない。#1176） |
-| `defaultOpen` | `boolean` | `true` | 段階の一覧（実行中の完了した段階・完了後の全体）を最初から開くか（#2096）。利用者が閉じたら、実行中から完了まで同じ表示の間は閉じたまま |
-| `collapseWhenDone` | `boolean` | `false` | 完了したら段階の一覧を閉じる（#2118）。実行中は `defaultOpen` のまま開き、終端に移った時点と、完了した状態で出したとき（保存済みの回答）は閉じる（失敗は開いたまま）。完了後に利用者が開いたらその状態を保ち、次の実行で開き直す。RAG の `AnswerProcess`（チャット・RAG 検索）と Agent のチャット（#2121）が使う |
 | `reconnecting` | `boolean` | `false` | 更新が途絶え、状態を取り直している（#1160）。今の段階の行の予約した行に、遅延の案内の代わりに「接続を確認しています。」を出す。`useChatProgressStream` の `progressProps` で渡す |
 | `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`completedSteps(count)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `working` / `reconnecting` / `status` / `formatDuration(ms)`） |
-| `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id`（段階の外で処理が続くときは空）/ `data-slow` / `data-reconnecting`）・`-timer`・`-slow`・`-reconnecting`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-step-<id>`（一覧の行。`data-status`）を付ける |
+| `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id`（段階の外で処理が続くときは空）/ `data-slow` / `data-reconnecting`）・`-timer`・`-slow`・`-reconnecting`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-timeline`（一覧の `RunTimeline`。`data-run-timeline-bars`）・`-step-<id>`（一覧の行。`data-status` / `data-level`）を付ける |
 
 根の要素は `data-chat-progress-state`（`running` / `done` / `failed`）と `aria-busy` を持つ。
 
 | 決めたこと | 理由 |
 |---|---|
 | 実行中は今の段階の 1 行と、完了した段階の「✓ N ステップ完了」の一覧（既定で開く。#2096）を出す。一覧は終わった順に行が増える | 何をしたか・どこで時間がかかったかを最初から見せる（ユーザーの指示。Perplexity の検索の過程・GitHub Actions の steps と同じく、終わった工程が順に積み上がる）。閉じれば今の 1 行だけになる |
-| 入れ子の段階は `level` で字下げし、親と子が同時に実行中なら最後に始まった段階を今の段階にする。右の列に `meta`（LLM の回数など）・失敗とスキップの文字・所要時間を「 · 」で並べる（#2096） | RAG の回答フローの工程は入れ子（根拠の検索と回答の作成の中の文書の検索など）。名前の後ろに括弧の補足を重ねず、計測値は右の列にそろえる |
+| 入れ子の段階は `level` で字下げし、親と子が同時に実行中なら最後に始まった段階を今の段階にする。`meta`（LLM の回数など）は `detail` と並べて名前の後ろの括弧、右の列は失敗とスキップの文字・所要時間（#2096 / #2265） | RAG の回答フローの工程は入れ子（根拠の検索と回答の作成の中の文書の検索など）。計測値の置き場所を実行の詳細（`RunTimeline`）にそろえ、右の列を所要時間の 1 列にして時間の線と並べる |
 | 実行中の経過時間は**処理全体**（`startedAt`、省略時は最初の段階の開始）から数え、今の段階の行の右の 1 か所に出し続ける。段階が変わっても 0 に戻さない。段階ごとの所要時間は完了した段階の行に出す（#1176） | 段階ごとに 0 から数え直すと、利用者には待った時間がリセットされたように見える（#1176 の指摘）。待った時間は全体の 1 つ、段階の内訳は一覧、と役割を分ける |
 | 遅延の案内は**今の段階**の経過時間（`slowAfterMs`、既定 10 秒）で判断し、今の段階の行に付ける（#1176） | どの段階で時間がかかっているか（送信・開始待ち・生成など）が分かる。LLM を使う処理は全体が 10 秒を超えるのが普通で、全体で判断すると毎回出て意味を失う |
 | 終端でない（`active`）のに実行中・待機中の段階が無いときも、今の行（スピナー・「処理を続けています」・全体の経過時間）を出す（#1176） | 「N ステップ完了」だけが出て、止まったのか続いているのか分からない状態を作らない。製品は backend の段階を写し漏らさない（NL2SQL はジョブの全段階を写す）。これは写し漏れの最後の備え |
 | 遅延の案内の行は最初から高さを予約する（`ProcessingIndicator` の #902 と同じ） | 10 秒後に行が足されてスピナーの行が動かない |
 | 今の段階の行を上に、完了した段階の畳んだ見出しを下に置く | 段階が完了して見出しが現れても、スピナーの行の位置が変わらない |
-| 完了後も「処理の経過（N ステップ・M 秒）」の一覧を既定で開く（#2096。以前は 1 行に畳み、失敗のときだけ開いた） | 何をしたかを 1 か所で確かめられるようにし、同じ工程を別の「実行記録」に重ねて出さない（ユーザーの指示）。置き場所は 3 製品とも回答の上（作成中の「N ステップ完了」の場所のまま。#2115） |
-| `collapseWhenDone` で、実行中は開き完了したら閉じる（#2118。RAG のチャットと RAG 検索。Agent のチャットも #2121） | 実行中は何をしているかを見せ、回答ができた後は回答の本文を主にする（16〜17 行の工程の一覧が回答の上を占めない。ユーザーの指示）。失敗はどこで止まったかを見せるため開いたまま。NL2SQL は既定（開く）のまま |
+| 実行中は開き、完了したら「処理の経過（N ステップ・M 秒）」の 1 行に閉じる（会話の履歴から開いた往復も閉じる。#2118 / #2121 / #2265）。製品は開閉を選べない（`collapseWhenDone` / `defaultOpen` は削除） | 実行中は何をしているかを見せ、回答ができた後は回答の本文を主にする（16〜17 行の工程の一覧が回答の上を占めない。ユーザーの指示）。失敗はどこで止まったかを見せるため開いたまま。置き場所は 3 製品とも回答の上（作成中の「N ステップ完了」の場所のまま。#2115）。開閉を prop にすると製品ごとにずれる（NL2SQL だけ開いたままだった） |
+| 一覧は実行の詳細と同じ `RunTimeline`（`chatProgressTimelineStep` で写す）で描く。完了後は時間の線つき（置き場所が 36rem 以上）、実行中の完了した段の一覧は線なし。一覧の中に「N ステップ・合計 M 秒」の行は出さない（#2265） | 同じ工程をチャットと実行の詳細で 1 つの形にする（3 製品で同じ部品）。実行中は全体の長さが伸び続け、線が毎回伸び縮みするので出さない。件数と合計は開閉の見出しが持つ |
 | 状態はアイコン（`CheckCircle2` / `XCircle` / `MinusCircle` / `Circle` / `Spinner`）と文字（失敗・スキップは見える文字、完了は読み上げの文字）で示す | 色だけに頼らない |
 | 段階の切り替わりだけを `role="status"` で読み上げる。経過時間は `role="timer"` + `aria-live="off"` | 毎秒の更新を読み上げない。完了後は読み上げの文を空にする（回答は会話の欄の `role="log"` が知らせる） |
 | 動くスピナーは今の段階の 1 つだけ。スピナーは reduced-motion でも回す（#440） | 同じ処理のスピナーは 1 つ（messaging.md §3.7）。開閉の Chevron は `Disclosure` が reduced-motion で回転を止める |
@@ -3653,7 +3651,7 @@ import {
 | `RunHistoryToolbar` | `search`・`searchActive`・`status`（`options` は製品が写せる状態）・`kind`・`period`・`executor`・`onClearFilters`・`count`・`labels`・`idPrefix` | 無い絞り込みは飛ばす。3 つ以上で 375px はシート |
 | `RunSummary` | `status`・`question`・`startedAt`・`finishedAt?`・`durationMs?`・`kind?`・`executor?`・`owner?`・`target?`・`model?`・`usage?`・`runId`・`extraFacts?`・`badges?`・`actions?`・`alert?` | 概要のカード（`data-run-summary`） |
 | `RunDetailSection` | `title`・`description?`・`meta?`・`actions?`・`collapsible?`・`open?` / `onOpenChange?` | 節のカード。`collapsible` は既定で閉じた `Disclosure`（開いたときだけ中身を読む節は `open` / `onOpenChange` で受控にする。Agent の監査ログ） |
-| `RunTimeline` | `steps: RunTimelineStep[]`・`totalDurationMs?`・`defaultExpanded?` | 段は `id`・`label`・`status`・`startedAt?`・`finishedAt?`・`durationMs?`・`detail?`・`meta?`・`children?`・`level?`（0 / 1）。線の位置は `runTimelineBars` |
+| `RunTimeline` | `steps: RunTimelineStep[]`・`totalDurationMs?`・`defaultExpanded?`・`showSummary?`（既定 true）・`showBars?`（既定 true）・`size?`（`sm` / `md`）・`formatDuration?`・`stepTestIdPrefix?` | 段は `id`・`label`・`status`・`startedAt?`・`finishedAt?`・`durationMs?`・`detail?`（名前の後ろの括弧）・`meta?`・`children?`・`level?`（0 以上。字下げは 3 段まで）。線の位置は `runTimelineBars`（時刻の無い段は所要時間を積み、入れ子の段は親の段の始まりから積む）。チャットの `ChatProgress` も一覧をこの部品で描く（#2265） |
 | `RunDetailLayout` | `summary`・`answer?`・`timeline?`・`evidence?`・`feedback?`・`technical?` | 節の順を固定（`data-run-detail`）。読み込み中は `RunDetailSkeleton` |
 
 - 書式: `formatRunDateTime(iso, { seconds })`・`formatRunDuration(ms)`・`formatRunTokens(n)`。期間: `RUN_PERIODS`・`runPeriodSince(period)`。実行者: `RUN_EXECUTOR_FILTERS`。

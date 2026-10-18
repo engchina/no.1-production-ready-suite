@@ -851,8 +851,17 @@ for (const theme of ["light", "dark"] as const) {
     const nested = page.getByTestId("chat-answer-progress-step-s4");
     await expect(nested).toHaveAttribute("data-level", "1");
     await expect(nested).toContainText("文書の検索");
-    await expect(nested).toContainText("該当なし · 0.1 秒未満");
-    await expect(page.getByTestId("chat-answer-progress-step-s2")).toContainText("LLM 1 回 · 0.8 秒");
+    // 計測値（工程の結果・LLM の回数）は名前の後ろの括弧、所要時間は右の列（実行の詳細と同じ RunTimeline。#2265）。
+    await expect(nested).toContainText("（該当なし）");
+    await expect(nested).toContainText("0.1 秒未満");
+    const understood = page.getByTestId("chat-answer-progress-step-s2");
+    await expect(understood).toContainText("（LLM 1 回）");
+    await expect(understood).toContainText("0.8 秒");
+    // 完了した一覧は時間の線つき（375px は線を隠し、所要時間の文字だけ）。
+    const bars = process.locator("[data-run-timeline-bar]");
+    await expect(bars).toHaveCount(5);
+    if ((page.viewportSize()?.width ?? 1280) >= 1280) await expect(bars.first()).toBeVisible();
+    else await expect(bars.first()).toBeHidden();
     await expect(page.getByTestId("chat-answer-progress-step-s1")).toContainText("会話を踏まえた質問の書き換え");
     // 状態は英語の生の値ではなくアイコンと読み上げの文言で示す。「実行記録」の表示は無い。
     await expect(process.getByText(/complete/)).toHaveCount(0);

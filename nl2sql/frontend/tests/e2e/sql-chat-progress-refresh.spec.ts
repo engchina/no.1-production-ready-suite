@@ -192,6 +192,8 @@ for (const colorScheme of ["light", "dark"] as const) {
       state.phase = "done";
       await expect(turn.locator("pre")).toContainText("ORDER BY 2 DESC");
       await expect(turn.getByTestId("sql-chat-progress-summary")).toContainText("処理の経過");
+      // 実行中は開いていた一覧を、完了したら閉じる（3 製品で同じ。#2265）。
+      await expect(turn.getByTestId("sql-chat-progress").locator("details")).not.toHaveAttribute("open", "");
       await expect(page.getByTestId("sql-chat-send")).toHaveAccessibleName("送信");
     });
 

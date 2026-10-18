@@ -77,7 +77,7 @@ from app.mcp.profile_scope import (
     check_search,
     within_profile_scope,
 )
-from app.rag.answer_engine import AnswerScope
+from app.rag.answer_engine import CATALOG_ARTICLE_ROLE, AnswerScope
 from app.rag.answer_validation import (
     MAX_ANSWER_TRACE_IDS,
     MAX_DATA_RESULTS,
@@ -233,27 +233,15 @@ INSTRUCTIONS = (
     "質問を渡して選び（recommended_profile_id が null で候補が複数なら、候補の名前を示して利用者に"
     "確かめる）、その id を rag_search に渡してください。名前で探すときは"
     " rag_list_search_answer_profiles を使います。"
-    # 会話の続きは前のターンのプロファイルを使う（#1880。指示語のままの質問で推薦し直さない）。
-    "同じ会話の続きの質問では、前のターンで使った検索・回答プロファイルをそのまま使い、"
-    "推薦し直すのは話題が変わったときだけにしてください。推薦し直すときは、"
-    "rag_recommend_search_answer_profile の question に、指示語・省略を前の質問で補った、"
-    "それだけで意味の通る質問を渡してください。"
     # 回答前の確認（業務ガイドの条件・検索・回答プロファイルのルールの確認。#2117）。
+    # 引数の組み立ては conditions・skip_clarification の説明にある。
     "rag_search が outcome=needs_clarification を返したら、clarifications の問いと選択肢を"
-    "利用者に確かめ、答え（選択肢の表示名・自由入力）を condition_id ごとに conditions に入れて"
-    "呼び直してください。利用者に確かめないときは skip_clarification に true を渡します。"
+    "利用者に確かめてから、答えを conditions に入れて呼び直してください。"
     # evidence は回答で引用した箇所だけではない（AI に渡した箇所の全体。#2040）。
     "evidence は AI に渡した資料の箇所です。used_in_answer は回答で引用した箇所、"
     "answer_use はその使われ方（confirmed=質問の条件への該当確認済みの記載 / "
     "reference=該当が確認できていない参考の記載）です。"
-    "根拠の excerpt が切り詰められている（truncated）ときや、前後の文脈が要るときは、"
-    "rag_read_source に document_id と chunk_id を渡して本文と親の本文を読んでください。"
-    "根拠の section は所属の章節（章節ナビゲーションの章節。ページの範囲と文字数）です。手順・"
-    "一覧・条件のまとまりが章節の抜粋より長いときは、rag_read_section に document_id と chunk_id"
-    "（または section_id）を渡すと章節の終わりまで読めます（up で親の章節）。"
-    "文書の章節の構成は rag_outline で確かめます。"
-    "evidence_type が figure_description の根拠は図を AI が読んだ説明です。元の図で確かめるときは"
-    " rag_read_source に include_image=true を渡すと、図の領域の画像を返します。"
+    # 根拠の続き・章節・図の読み方は rag_read_source・rag_read_section・rag_outline の説明にある。
 )
 
 
@@ -281,10 +269,9 @@ class ListSearchAnswerProfilesInput(BaseModel):
 
 
 class RecommendSearchAnswerProfileInput(BaseModel):
-    """質問から検索・回答プロファイルを推薦する条件（#1850）。
+    """質問から検索・回答プロファイルを推薦する条件（question・profile_ids）。"""
 
-    NL2SQL の nl2sql_recommend_profile と同じ形（question・profile_ids）。
-    """
+    # NL2SQL の nl2sql_recommend_profile と同じ形（#1850）。
 
     model_config = ConfigDict(extra="forbid")
 
@@ -332,6 +319,14 @@ class SearchInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str = Field(..., min_length=1, max_length=8000, description="質問文。")
+    original_question: OptionalText = Field(
+        default=None,
+        max_length=8000,
+        description=(
+            "利用者の元の質問。query を検索用に短く言い換えたときに渡す。条で構成された文書の"
+            "根拠の条を選ぶときに query と合わせて使う（検索は query で行う）。"
+        ),
+    )
     search_answer_profile_id: OptionalText = Field(
         default=None,
         max_length=128,
@@ -475,7 +470,9 @@ class ValidateGuideInput(BaseModel):
 
 
 class ValidatePremiseInput(BaseModel):
-    """利用者が回答の前の確認で答えた前提 1 件（確認の質問と答え。#1898）。"""
+    """利用者が回答の前の確認で答えた前提 1 件（確認の質問と答え）。"""
+
+    # 前提を根拠と並べて確かめる（#1898）。
 
     model_config = ConfigDict(extra="forbid")
 
@@ -489,7 +486,9 @@ class ValidatePremiseInput(BaseModel):
 
 
 class ValidateDataResultInput(BaseModel):
-    """業務データの照会の結果 1 件（照会の質問・SQL・結果。#1950）。"""
+    """業務データの照会の結果 1 件（照会の質問・SQL・結果）。"""
+
+    # 業務データの結果を根拠と並べて確かめる（#1950）。
 
     model_config = ConfigDict(extra="forbid")
 
@@ -509,10 +508,9 @@ class ValidateDataResultInput(BaseModel):
 
 
 class ValidateAnswerInput(BaseModel):
-    """回答の最終の検証の条件（#1246）。
+    """回答の最終の検証の条件（requests・guide は渡したときだけ確かめる）。"""
 
-    requests・guide は渡したときだけ決定的に確かめる（#1276）。
-    """
+    # #1246。requests・guide の決定的な確認は #1276。
 
     model_config = ConfigDict(extra="forbid")
 
@@ -551,17 +549,17 @@ class ValidateAnswerInput(BaseModel):
         default_factory=list,
         max_length=MAX_ANSWER_TRACE_IDS,
         description=(
-            "回答に使った rag_search の trace_id（#1527）。その回答の監査を通った説明と本文が"
-            "同じ段落は、根拠を今の権限と版で読み直して本文が変わっていなければ、その判定を使って"
-            "モデルに渡さない（すべての段落が当たればモデルを呼ばない）。記録は呼び出した利用者が"
-            "読めるものだけを使う。"
+            # その回答の監査を通った段落は、根拠を今の権限と版で読み直して本文が変わっていなければ
+            # 判定を使い、モデルに渡さない。記録は呼び出した利用者が読めるものだけ（#1527）。
+            "回答に使った rag_search の trace_id。渡すと、その回答で監査を通った段落の判定を"
+            "使う（速くなる）。"
         ),
     )
     premises: list[ValidatePremiseInput] = Field(
         default_factory=list,
         max_length=MAX_PREMISES,
         description=(
-            "利用者が回答の前の確認で答えた前提（確認の質問と答え。#1898）。資料ではなく利用者の"
+            "利用者が回答の前の確認で答えた前提（確認の質問と答え）。資料ではなく利用者の"
             "状況の申告として根拠と並べ、答えをそのまま述べた段落と、資料の規則を答えに当てはめた"
             "結論を確かめる（資料・規程・手順の内容の裏付けには使わない）。前提だけで裏付けた段落の"
             "chunk_id は null。"
@@ -571,7 +569,7 @@ class ValidateAnswerInput(BaseModel):
         default_factory=list,
         max_length=MAX_DATA_RESULTS,
         description=(
-            "回答に使った業務データの照会の結果（照会の質問・SQL・結果。#1950）。資料ではない根拠として"
+            "回答に使った業務データの照会の結果（照会の質問・SQL・結果）。資料ではない根拠として"
             "根拠と並べ、結果の値をそのまま述べた段落と、資料の規則を結果の値に当てはめた結論を確かめる"
             "（資料・規程・手順の内容の裏付けには使わない）。結果だけで裏付けた段落の chunk_id は"
             " null。"
@@ -596,7 +594,7 @@ class ReadSourceInput(BaseModel):
         min_length=1,
         max_length=LOCATOR_MAX_LENGTH,
         description=(
-            "根拠の要素の定位子（evidence の locator.element_locator。#1330）。文書分割の設定を"
+            "根拠の要素の定位子（evidence の locator.element_locator）。文書分割の設定を"
             "変えて chunk を作り直しても、同じ解析の結果の同じ要素を含む今の chunk を返す。"
             "解析をやり直した後の古い定位子は source_stale のエラー。"
             "chunk_id とどちらか一方を渡す。"
@@ -612,7 +610,9 @@ class ReadSourceInput(BaseModel):
     include_image: bool = Field(
         default=False,
         description=(
-            "true のとき、図の根拠（image_ref がある根拠）の元の画像の領域を返す。画像は MCP の"
+            "true のとき、図の根拠（image_ref がある根拠）の元の画像の領域を返す。"
+            "evidence_type が figure_description の根拠（図を AI が読んだ説明）を元の図で確かめる"
+            "ときに使う。画像は MCP の"
             f" content の image（PNG。長い辺 {IMAGE_MAX_EDGE_PX} px 以下・{IMAGE_MAX_BYTES} バイト"
             "以下）で返し、structuredContent の image には大きさだけを入れる。図でない・場所が"
             "分からない根拠は image_not_available のエラー。"
@@ -643,7 +643,9 @@ class ReadSourceInput(BaseModel):
 
 
 class OutlineInput(BaseModel):
-    """文書の章節の構成を読む条件（#1332 / #1438。compact・section_id は #2252）。"""
+    """文書の章節の構成を読む条件。"""
+
+    # 章節の構成（#1332 / #1438）。compact・section_id は #2252。
 
     model_config = ConfigDict(extra="forbid")
 
@@ -674,7 +676,9 @@ class OutlineInput(BaseModel):
 
 
 class ReadDocumentInput(BaseModel):
-    """文書の本文を順に読む条件（#1332）。読み始めの位置はどれか 1 つ（無ければ文書の先頭）。"""
+    """文書の本文を順に読む条件。読み始めの位置はどれか 1 つ（無ければ文書の先頭）。"""
+
+    # 文書を順に読む（#1332）。
 
     model_config = ConfigDict(extra="forbid")
 
@@ -725,7 +729,9 @@ class ReadDocumentInput(BaseModel):
 
 
 class ReadSectionInput(BaseModel):
-    """章節の本文を読む条件（#1438）。章節は section_id・根拠の chunk_id・cursor のどれか 1 つ。"""
+    """章節の本文を読む条件。章節は section_id・根拠の chunk_id・cursor のどれか 1 つ。"""
+
+    # 章節を読み切る（#1438）。
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1342,9 +1348,8 @@ class RetrieveEvidenceOutput(VersionedOutput):
             "根拠（role=entity_expansion。候補の中の位置の順）を先に、前後の文脈"
             "（neighbor_context など）をその後ろに並べる。実体からたどった根拠（前後の文脈の"
             "役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで"
-            "上限の内に入れる。条の目録で選んだ条（role=catalog_article。#2254）のうち上の根拠に"
-            "無いものは、evidence_limit の外で末尾に足す。回答は作らないので used_in_answer は"
-            " false。"
+            "上限の内に入れる。条の目録で選んだ条（role=catalog_article。#2254）は"
+            " evidence_limit に数えず末尾に足す。回答は作らないので used_in_answer は false。"
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
@@ -1784,6 +1789,10 @@ def _evidence(
     )
 
 
+def _is_catalog_article(chunk: RetrievedChunk) -> bool:
+    return _metadata_str(chunk.metadata, "evidence_role") == CATALOG_ARTICLE_ROLE
+
+
 async def _catalog_article_evidence(
     result: SearchResponse, citations: Sequence[RetrievedChunk]
 ) -> list[RetrievedChunk]:
@@ -1826,8 +1835,6 @@ def _answer_diagnostics(result: SearchResponse) -> dict[str, Any]:
     return dict(answer) if isinstance(answer, dict) else {}
 
 
-# 条の目録で選んだ条の根拠の役割(#2254)。
-CATALOG_ARTICLE_ROLE = "catalog_article"
 # 検索で当たった chunk（関連度の順位を持つ）の役割。前後の文脈（neighbor_context など）と分ける。
 RETRIEVED_ANCHOR_ROLE = "retrieved_anchor"
 # 実体の 1 段の拡張で足した chunk の役割（#1362）。検索で当たった chunk と同じく順位を持つ。
@@ -2826,6 +2833,8 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
         "knowledge_base_ids": arguments.knowledge_base_ids,
         "filters": arguments.filters,
     }
+    if arguments.original_question is not None:
+        payload["original_question"] = arguments.original_question
     if arguments.include_superseded:
         # 検索の要求の中では旧版の扱いは filters の 1 つ（画面の検索と同じ。#1248）。
         payload["filters"] = {**arguments.filters, INCLUDE_SUPERSEDED_FILTER_KEY: "true"}
@@ -3142,16 +3151,19 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         result = await search_route._run_search_with_timeout(request)
         limit = retrieve_evidence_limit(arguments)
         # 検索で当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。
-        ordered = mcp_evidence_order(result.citations, limit)
-        citations = await _with_extraction_recipe_ids(None, ordered[:limit])
-        # 条の目録で選んだ条(#2254)は、上限の外に足す(検索の根拠を減らさない)。
+        # 条の目録で選んだ条とそのために足した親の chunk(#2254・#2261)は、上限に数えず後ろに足す
+        # (検索の根拠を減らさない)。
+        hits = [chunk for chunk in result.citations if not _is_catalog_article(chunk)]
+        catalog = [chunk for chunk in result.citations if _is_catalog_article(chunk)]
+        ordered = mcp_evidence_order(hits, limit)
+        citations = await _with_extraction_recipe_ids(None, [*ordered[:limit], *catalog])
         citations = [*citations, *await _catalog_article_evidence(result, citations)]
         sections = await _chunk_sections(citations)
         return RetrieveEvidenceOutput(
             trace_id=result.trace_id,
             guardrail_warnings=list(result.guardrail_warnings),
             evidence=[_evidence(chunk, sections) for chunk in citations],
-            evidence_omitted=max(0, len(result.citations) - limit),
+            evidence_omitted=max(0, len(hits) - limit),
             older_versions=await _older_versions(arguments, request, result.citations),
         )
 
@@ -3243,14 +3255,15 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             McpTool(
                 name="rag_recommend_search_answer_profile",
                 description=(
-                    "質問に合う検索・回答プロファイルを推薦します（使えるプロファイルの参照先を"
-                    " 1 回検索し、当たった資料と名前・説明で決めます。回答は作らず、LLM も"
-                    "呼びません）。"
+                    # 使えるプロファイルの参照先を 1 回検索し、当たった資料と名前・説明で決める
+                    # （回答は作らず、LLM も呼ばない）。
+                    "質問に合う検索・回答プロファイルを推薦します（回答は作りません）。"
                     "候補が違う資料に割れたとき・当たりが無いときは recommended_profile_id が null"
                     "です。profile_ids を渡すと、その中からだけ推薦します。"
+                    # 会話の続きは前のターンのプロファイルを使う（#1880。指示語のままの質問で
+                    # 推薦し直さない。question の書き方は question の説明にある）。
                     "同じ会話の続きの質問では前のターンと同じプロファイルを使い、推薦し直すのは"
-                    "話題が変わったときだけです。question には、指示語・省略を前の質問で補った、"
-                    "それだけで意味の通る質問を渡します。"
+                    "話題が変わったときだけです。"
                 ),
                 input_model=RecommendSearchAnswerProfileInput,
                 handler=scoped(recommend_search_answer_profile),
@@ -3294,8 +3307,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 name="rag_validate_answer",
                 description=(
                     "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。"
-                    "公開する前の最終の検証に使います（モデルを 1 回呼びます。answer_trace_ids の"
-                    "回答の監査を通った説明と同じ段落はモデルに渡しません）。見出し・出典の行・"
+                    "公開する前の最終の検証に使います。見出し・出典の行・"
                     "利用者への質問の段落は主張ではないので監査せず、claims に含めません。"
                     "requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順の順序と"
                     "分岐・影響範囲も"
@@ -3310,6 +3322,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 name="rag_read_source",
                 description=(
                     "rag_search の根拠（document_id と chunk_id）の本文の続きと親の本文を読みます。"
+                    "根拠の excerpt が切り詰められている（truncated）とき・前後の文脈が要るときに"
+                    "使います。"
                     "検索と同じ利用範囲の根拠だけを読めます。include_image=true で、図の根拠の"
                     "元の画像の領域を画像（content の image）で返します。"
                 ),
@@ -3349,8 +3363,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 description=(
                     "章節（section_id、または根拠の chunk_id が属する章節。up で親の章節）の"
                     "本文を、章節の始まりから終わりまで順に読みます（頁の区切り付き。続きは"
-                    " next_cursor、終わりまで読んだら section_complete=true）。根拠の抜粋より"
-                    "長い手順・一覧・条件のまとまりを読み切るときに使います。"
+                    " next_cursor、終わりまで読んだら section_complete=true）。手順・一覧・条件の"
+                    "まとまりが根拠の抜粋より長い（根拠の section.chars が大きい）とき、"
+                    "読み切るのに使います。"
                 ),
                 input_model=ReadSectionInput,
                 handler=scoped(read_section_tool),

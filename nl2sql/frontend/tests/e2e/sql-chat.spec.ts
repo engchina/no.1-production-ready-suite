@@ -1170,11 +1170,29 @@ for (const width of [1280, 375]) {
     const summary = progress.getByTestId("sql-chat-progress-summary");
     await expect(summary).toHaveText(/^処理の経過（6 ステップ・2\d 秒）$/);
     await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
-    await expect(progress.locator("details")).toHaveAttribute("open", "");
+    // 完了したら閉じ（3 製品で同じ。#2118 / #2265）、押すと実行の詳細と同じ一覧（時間の線つき）を開く。
+    await expect(progress.locator("details")).not.toHaveAttribute("open", "");
+    await expect(progress.getByTestId("sql-chat-progress-step-safety_check")).toBeHidden();
     await expect(page.locator("svg.animate-spin:visible")).toHaveCount(0);
+    await summary.click();
+    await expect(progress.locator("details")).toHaveAttribute("open", "");
     await expect(progress.getByTestId("sql-chat-progress-step-safety_check")).toContainText(
       "SQL の安全性を確認しました（APP.EMPLOYEE）",
     );
+    const bars = progress.locator("[data-run-timeline-bar]");
+    await expect(bars).toHaveCount(6);
+    if (width >= 1280) {
+      // 時間の線は全体の中の位置と長さ（広い置き場所だけ。375px は隠して所要時間の文字だけ）。
+      await expect(bars.first()).toBeVisible();
+    } else {
+      await expect(bars.first()).toBeHidden();
+    }
+    await expect(progress.getByTestId("sql-chat-progress-step-safety_check")).toContainText(/\d(\.\d)? 秒/);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      ),
+    ).toBeLessThanOrEqual(0);
     for (const colorScheme of ["light", "dark"] as const) {
       await applyColorScheme(page, colorScheme);
       await turn.screenshot({

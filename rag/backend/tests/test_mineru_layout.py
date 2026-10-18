@@ -601,6 +601,48 @@ def test_mineru_vision_reads_asset_only_figure_once(monkeypatch: pytest.MonkeyPa
     assert asset.summary == "受注画面の登録ボタン1"
 
 
+def test_mineru_page_continuation_joins_child_chunk_after_consolidation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MinerU の ``continues_prev`` は文書全体の整理で続きの元に写り、同じ子に入る(#2266)。"""
+    from app.rag.chunking_strategy import SmallToBigParams
+    from app.rag.pdf_segment_merge import consolidate_document_extraction
+
+    middle = _middle_json()
+    pages: Any = middle["pages"]
+    # 印が無ければ頁の境目で子が分かれる長さにする(子の目標は 300 文字)。
+    first = next(block for block in pages[0]["blocks"] if block.get("index") == 6)
+    first["content"] = _spans("前の頁の本文" * 30)
+    second = next(block for block in pages[1]["blocks"] if block.get("index") == 0)
+    second["content"] = _spans("続きの本文" * 30 + "。")
+    parsed = _parse(monkeypatch, middle, _pdf())
+    extraction = consolidate_document_extraction(parsed, source_bytes=_pdf())
+
+    by_id = {record["id"]: record for record in _records(extraction)}
+    assert by_id["mineru-p2-b0"]["raw"]["continues_record_id"] == "mineru-p1-b6"
+    params = SmallToBigParams(child_target_chars=300)
+
+    def child_with_continuation(source: StructuredExtraction) -> Chunk:
+        chunks = build_parent_child_chunks(source, source_name="manual.pdf", params=params)
+        return next(chunk for chunk in chunks if "続きの本文続きの本文" in chunk.text)
+
+    assert "前の頁の本文" not in child_with_continuation(parsed).text
+    assert "前の頁の本文" in child_with_continuation(extraction).text
+
+
+def test_mineru_table_cell_merge_is_kept_in_raw() -> None:
+    middle = _middle_json()
+    pages: Any = middle["pages"]
+    table = next(block for block in pages[0]["blocks"] if block["type"] == "table")
+    table["cell_merge"] = [0, 1]
+
+    layout = mineru_layout_records(middle, source_bytes=_pdf(), content_type="application/pdf")
+
+    assert layout is not None
+    record = next(r for r in layout["records"] if r["id"] == f"mineru-p1-b{table['index']}")
+    assert record["raw"]["cell_merge"] == [0, 1]
+
+
 def test_layout_source_parser_names_the_engine() -> None:
     assert layout_source_parser("docling") == "docling_layout"
     assert layout_source_parser("") == "docling_layout"

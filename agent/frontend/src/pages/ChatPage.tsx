@@ -932,7 +932,7 @@ function RunChatTurn({
       <ChatAnswer live>
         {/*
           処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成。#1147）。共通のイベントの配信で更新し（#1359）、
-          完了後は回答の上に「処理の経過（N ステップ・M 秒）」を閉じて出す（実行中は開く。#2096 / #2121。共有の ChatProgress。
+          完了後は回答の上に「処理の経過（N ステップ・M 秒）」を閉じて出す（実行中は開く。#2096 / #2121 / #2265。共有の ChatProgress。
           3 製品で同じ。#1145）。
         */}
         {/* 経過時間は Run の作成（送信の受付）から数え続ける（段階ごとに 0 に戻さない。#1176）。 */}
@@ -941,7 +941,6 @@ function RunChatTurn({
           {...progress.progressProps}
           startedAt={run.created_at}
           slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}
-          collapseWhenDone
           testId="chat-progress"
         />
         {/* 使ったツールは処理の経過の直下（実行中も完了後も同じ位置。#2121）。 */}

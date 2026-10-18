@@ -41,6 +41,11 @@ AGENT_ID = "test1378-agent"
 USER_UUID = "13781378-2222-3333-4444-555555555555"
 
 
+def _scope_arguments(call: dict[str, Any]) -> dict[str, Any]:
+    """範囲の確認に関係する引数（Control Plane が付ける利用者の元の質問は除く。#2261）。"""
+    return {key: value for key, value in call["arguments"].items() if key != "original_question"}
+
+
 def _scope(*ids: str, default: str = "") -> AgentDataScope:
     return AgentDataScope(profile_ids=list(ids), default_profile_id=default)
 
@@ -391,7 +396,7 @@ def test_rag_scope_ignores_knowledge_base_ids(
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
     [call] = mcp.calls_of("rag_search")
     # プロファイルの範囲を、ナレッジベースの直接の指定で迂回させない。
-    assert call["arguments"] == {"query": "契約の更新", "search_answer_profile_id": "bv-sales"}
+    assert _scope_arguments(call) == {"query": "契約の更新", "search_answer_profile_id": "bv-sales"}
     params = _tools(model)["rag__rag_search"].params_json_schema
     assert "knowledge_base_ids" not in params["properties"]
     assert "search_answer_profile_id" not in params["properties"]
@@ -423,7 +428,7 @@ def test_single_rag_profile_raises_small_top_k_to_the_default(
     run = runtime_repository.get_run(run_id)
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
     [call] = mcp.calls_of("rag_retrieve_evidence")
-    assert call["arguments"] == {
+    assert _scope_arguments(call) == {
         "query": "システム台帳 販売管理システム 担当部署",
         "top_k": 20,
         "search_answer_profile_id": "bv-sales",
@@ -492,7 +497,7 @@ def test_agent_without_scope_keeps_the_model_choice(
     run_id = _run()
 
     [call] = mcp.calls_of("rag_search")
-    assert call["arguments"] == {"query": "契約", "knowledge_base_ids": ["kb-1"]}
+    assert _scope_arguments(call) == {"query": "契約", "knowledge_base_ids": ["kb-1"]}
     # 範囲の無い Agent はサービストークンに範囲の claim を付けない（#1379）。
     assert "profile_ids" not in call["claims"]
     assert "# データの範囲" not in str(model.calls[0].system_instructions)

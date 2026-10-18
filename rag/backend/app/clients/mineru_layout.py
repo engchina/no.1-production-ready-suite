@@ -21,8 +21,12 @@
   record にする。要素（本文）には入れない（``mineru_middle_json_blocks`` のまま）。分割はこれを
   頁の定型（柱・著作権・頁番号）として本文から外し、頁番号を論理頁に使う。record に無いと、
   柱の繰り返しを見出しと区別できない。
-- 頁をまたいで続く本文・表（``continues_prev``）は、Docling と同じく頁ごとの別の record のままにし、
-  印だけを ``raw`` に残す（親の chunk は頁をまたいでまとまる）。
+- 頁・段・図をまたいで続く本文・リスト・表（``continues_prev``）は、Docling と同じく頁ごとの別の
+  record のままにし、印を ``raw.continues_prev`` に残す。文書全体の整理（``pdf_segment_merge``
+  の ``consolidate_document_extraction``。#2266）が続きの元の record の ID
+  （``raw.continues_record_id``）に写し、親子階層の分割が同じ子 chunk に入れる。表の
+  ``cell_merge``（MinerU のサーバー側の LLM の後処理が付けるセルの続き。使っていないため通常は
+  無い）は ``raw.cell_merge`` に残すだけにする。
 """
 
 from __future__ import annotations
@@ -170,6 +174,11 @@ class _PageRecords:
             raw["mineru_level"] = level
         if block.get("continues_prev") is True:
             raw["continues_prev"] = True
+        cell_merge = block.get("cell_merge")
+        if isinstance(cell_merge, list) and all(
+            type(flag) is int and flag in (0, 1) for flag in cell_merge
+        ):
+            raw["cell_merge"] = list(cell_merge)
         for key in ("sub_type", "guess_lang"):
             value = block.get(key)
             if isinstance(value, str) and value:

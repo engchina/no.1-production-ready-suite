@@ -8,25 +8,12 @@ metadata:
   production-ready-mcp-tools: "rag:rag_search rag:rag_recommend_search_answer_profile rag:rag_list_search_answer_profiles nl2sql:nl2sql_query nl2sql:nl2sql_get_job nl2sql:nl2sql_list_profiles nl2sql:nl2sql_recommend_profile"
   production-ready-tags: "rag nl2sql business-data"
 ---
-業務 RAG（資料）と NL2SQL（業務データ）のどちらを使うかをその都度判断し、順序を決めずに繰り返し使って調べる。
-
-## 使う MCP ツール
-
-- MCP サーバー `rag`: `rag_search`・`rag_recommend_search_answer_profile`・`rag_list_search_answer_profiles`
-- MCP サーバー `nl2sql`: `nl2sql_query`・`nl2sql_get_job`・`nl2sql_list_profiles`・`nl2sql_recommend_profile`
-
-ツールは MCP の素の名前で書く。使う Agent によって名前に接続の前置きが付く（例: `rag__rag_search`・`mcp__rag__rag_search`）。
+業務 RAG（資料。MCP サーバー `rag`）と NL2SQL（業務データ。MCP サーバー `nl2sql`）のどちらを使うかをその都度判断し、順序を決めずに繰り返し使って調べる。ツールは MCP の素の名前で書く（Agent によって `mcp__rag__` などの前置きが付く）。
 
 ## 入力の種類を分ける
 
-手順に入る前に、利用者の入力を次のどれかに分ける。
-
-- 質問（知りたいこと・調べてほしいことがある。業務の範囲外の質問を含む）: 「手順」に進む。
-- あいさつ（「こんにちは」「よろしく」など）・お礼（「ありがとう」）・その他の質問でない入力（雑談・意味の取れない短い入力・「テスト」のような試し）: ツールを呼ばずに、用件を聞いて返す。
-  - 「こんにちは。」「どういたしまして。」のように短く応じる（入力をなぞったり説明したりしない）。
-  - 続けて、社内の資料と業務データについて何を知りたいかを聞く（例: 「こんにちは。社内の資料や業務データについて、知りたいことをお知らせください。」）。
-  - 資料の内容も業務データの値も一般的な知識も答えない。
-- あいさつ・お礼と質問が混ざる入力（「こんにちは、休暇の申請方法は？」）: 質問として「手順」に進む。
+- 質問（業務の範囲外を含む）と、あいさつ・お礼に質問が混ざる入力（「こんにちは、休暇の申請方法は？」）: 「手順」に進む。
+- あいさつ・お礼・その他の質問でない入力（雑談・意味の取れない短い入力・「テスト」のような試し）: ツールを呼ばず、短く応じてから、社内の資料と業務データについて何を知りたいかを聞く（例: 「こんにちは。社内の資料や業務データについて、知りたいことをお知らせください。」）。入力をなぞらず、資料の内容も業務データの値も一般的な知識も答えない。
 
 ## 手順
 
@@ -53,7 +40,7 @@ metadata:
   - 業務の対象の値が資料の結果に無いときは、「資料からは確認できない」と答える前に `nl2sql_query` で引く。
   - `nl2sql_query` の `question` には、資料で分かった基準を値の条件に置き換えて書く（例: 「単価が 10,000 円以上の商品」「金額が 100,000 円未満の注文」）。規程の言葉（承認者・領収書・手当の名前）のまま渡すと、業務データの列に当てはめられずに確認を返される。
   - `nl2sql_query` が対象の表が無い・答えられないと返したら、そこで終えずに資料（`rag_search`）を引く。
-  - `nl2sql_query` には業務プロファイルの ID（`profile_id`）が必須。分からなければ `nl2sql_recommend_profile` か `nl2sql_list_profiles` で選ぶ（業務 Agent にデータの範囲があれば、その範囲の中から選ぶ）。
+  - 業務プロファイル（`profile_id`）が分からなければ `nl2sql_recommend_profile` か `nl2sql_list_profiles` で選ぶ（業務 Agent にデータの範囲があれば、その範囲の中から選ぶ）。
 - 一方の結果で分かった事実・条件・識別子（コード・名前・期間・区分・状態）を使って、もう一方や同じツールを何度でも呼んでよい。
   - 例: 規程で分かった基準・期限で業務データを絞る。
   - 例: 業務データで見つかった区分・ID の意味や扱いを資料で確かめる。
@@ -65,12 +52,13 @@ metadata:
 
 ## 結果ごとの対応
 
-- `rag_search` の `outcome` が `needs_environment_data`（資料だけでは確定できない）: 結果の `next_step` に従い、`confirmations` の点を `nl2sql_query` で確かめてから答える。
+- `rag_search` の `outcome` が `needs_environment_data`（資料だけでは確定できない）: `confirmations` の点を `nl2sql_query` で確かめてから答える。
 - `nl2sql_query` が `pending` / `running` を返した: `nl2sql_get_job` で続きを取る。
 - `nl2sql_query` が `needs_clarification` を返した: SQL はまだ作っていない。
-  - 利用者がこの質問の中で既に答えている内容（前の確認への答え・質問の言葉。`next_step` の `user_answers`）で問いに答えられるなら、利用者に聞き直さず、その答えを `answer`（候補に無い答えは `free_text` に利用者の言葉のまま）、`requirement.session_id` を `requirement_session_id` に入れて呼び直す。例: 利用者が「その列が無ければ、無いと伝えて残りだけ出して」と答えていて、問いがその列を尋ねている → `free_text` に「該当の列は無い。その条件を外して集計する」と入れて呼び直す。
-  - 答えられないときだけ、`next_step` の `questions` の問いを 1 つだけ利用者に聞き、答えを `answer` に入れて同じく呼び直す。問いを回答の本文だけにして終えない（確認として聞く）。
+  - 利用者がこの質問の中で既に答えている内容（前の確認への答え・質問の言葉）で `requirement.question` に答えられるなら、利用者に聞き直さず、その答えを `answer`（候補に無い答えは `free_text` に利用者の言葉のまま）、`requirement.session_id` を `requirement_session_id` に入れて呼び直す。例: 利用者が「その列が無ければ、無いと伝えて残りだけ出して」と答えていて、問いがその列を尋ねている → `free_text` に「該当の列は無い。その条件を外して集計する」と入れて呼び直す。
+  - 答えられないときだけ、`requirement.question` の問いを 1 つだけ利用者に聞き、答えを `answer` に入れて同じく呼び直す。問いを回答の本文だけにして終えない（確認として聞く）。利用者が確認せずに進めると選んだら、`answer` の代わりに `skip_clarification: true` を渡す。
   - 確認の答えを待たずに、別の業務プロファイルや言い換えた `question` で `nl2sql_query` を呼び直して問いを避けない。
+- 組み込みの Agent では、ツールの結果に `next_step`（次にすること）が付くことがある。付いたらそれに従う。
 
 ## 回答の書き方
 
@@ -78,6 +66,6 @@ metadata:
 
 ## してはいけないこと
 
-- 業務データの表名・列名を利用者に聞かない。表・列は `nl2sql_query` が業務プロファイルの schema で確かめ、決まらなければ `nl2sql_query` が `needs_clarification` で問いを返す。利用者の質問のまま（資料で分かった基準は値の条件に置き換えて）`nl2sql_query` を呼ぶ。
+- 業務データの表名・列名を利用者に聞かない。表・列は `nl2sql_query` が業務プロファイルの schema で確かめ、決まらなければ `needs_clarification` で問いを返す。
 - 業務データのツールを呼ばずに、業務の対象の値（商品の単価・受注の金額・日付など）を「資料からは確認できない」「業務データで確認する必要がある」と答えない。
 - 資料の根拠のツールも業務データのツールも呼ばずに、一般的な知識や推測で業務の事実を答えない。資料・業務データで確かめられないとき・業務の範囲外の質問のときは、確かめられないため答えられないと答える（質問が曖昧で対象が分からないときは、確認の質問をする）。
