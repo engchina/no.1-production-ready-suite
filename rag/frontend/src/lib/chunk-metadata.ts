@@ -46,43 +46,6 @@ export function citationSourceUrl(metadata: RetrievedChunk["metadata"]): string 
   return url.startsWith("https://") ? url : null;
 }
 
-/** 図の根拠（#2428）。`page` は頁（「3」「3-5」。無ければ空）、`section` は章節（無ければ空）。 */
-export interface CitationFigure {
-  /** AI（VLM）が図を読んだ説明か（OCR の文字なら false）。RAG の MCP の `evidence_type` と同じ判定。 */
-  aiDescription: boolean;
-  page: string;
-  section: string;
-}
-
-/**
- * 元の図の画像を開ける図の根拠なら、その図の情報（それ以外は null）。backend が図の画像を切り出せると返した根拠
- * （`figure_image_available`。Agent の `image_ref` と同じ判定。#2433）で、内容の種類が図のものに限る。
- */
-export function citationFigure(chunk: Pick<RetrievedChunk, "metadata" | "figure_image_available">): CitationFigure | null {
-  const { metadata } = chunk;
-  if (!chunk.figure_image_available || stringMetadata(metadata, "content_kind") !== "figure") return null;
-  return {
-    aiDescription: stringMetadata(metadata, "figure_text_source") !== "ocr",
-    page: pageRange(metadata),
-    section: stringMetadata(metadata, "section_path") || stringMetadata(metadata, "section_title"),
-  };
-}
-
-/** citation preview link に渡す先頭 element id を安全に取り出す。 */
-export function firstCitationElementId(value: unknown): string | null {
-  if (typeof value === "string" || typeof value === "number") {
-    return firstNonEmptyToken(String(value).split(","));
-  }
-  if (Array.isArray(value)) {
-    return firstNonEmptyToken(
-      value.flatMap((item) =>
-        typeof item === "string" || typeof item === "number" ? [String(item)] : []
-      )
-    );
-  }
-  return null;
-}
-
 function pageRange(metadata: RetrievedChunk["metadata"]): string {
   const start = integerMetadata(metadata, "page_start");
   const end = integerMetadata(metadata, "page_end") ?? start;
@@ -112,11 +75,6 @@ function integerMetadata(metadata: RetrievedChunk["metadata"], key: string): num
 function stringMetadata(metadata: RetrievedChunk["metadata"], key: string): string {
   const value = metadata[key];
   return typeof value === "string" ? value.trim() : "";
-}
-
-function firstNonEmptyToken(values: string[]): string | null {
-  const first = values.map((item) => item.trim()).find(Boolean);
-  return first ?? null;
 }
 
 /**

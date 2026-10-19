@@ -3883,7 +3883,6 @@ export const ja = {
   "search.citation.profileValue": "{profile}",
   "search.citation.openPreview": "{file} の引用箇所",
   "search.citation.previewClose": "閉じる",
-  "search.citation.openDetail": "文書の詳細を別タブで開く",
   "search.citation.feedback.helpful": "この引用は役に立った",
   "search.citation.feedback.notHelpful": "この引用は役に立たなかった",
 

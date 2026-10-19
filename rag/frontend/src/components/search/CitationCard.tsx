@@ -9,11 +9,9 @@ import type {
 import { citationModelUsed } from "@/lib/chunk-metadata";
 
 import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
-import { CitationFigureAction } from "./CitationFigure";
 import { CitationSourceSheet } from "./CitationSourceSheet";
 
 export { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
-export { citationPreviewUrl } from "./CitationSourceSheet";
 
 /** 根拠のカードの操作の設定（チャット・RAG 検索・回答の記録・実行履歴で渡す）。 */
 export interface CitationCardOptions {
@@ -37,7 +35,7 @@ export interface CitationCardOptions {
 /**
  * 引用チャンク1件の表示。retrieval 由来の score/metadata を併記する。見た目は 3 製品で共通の `EvidenceCard`
  * （#2328）で、ここは RAG の根拠（`RetrievedChunk`）をデータの契約に写し、引用箇所のプレビュー（右のサイドパネル。
- * #2360）、そのすぐ後ろの「図を開く」（一覧のカードと同じ共通の部品・位置。#2433）と根拠の評価を足す。
+ * #2360）と根拠の評価を足す。
  */
 export function CitationCard({ chunk, index, ...options }: CitationCardOptions & { chunk: RetrievedChunk; index: number }) {
   const source = useEvidenceSource<RetrievedChunk>();
@@ -48,13 +46,10 @@ export function CitationCard({ chunk, index, ...options }: CitationCardOptions &
       item={item}
       index={index}
       labels={EVIDENCE_LABELS}
-      // 「根拠を表示」と「図を開く」は文書を読む権限がある画面（preview）だけ。
+      // 「根拠を表示」は文書を読む権限がある画面（preview）だけ。
       leadingActions={
         preview ? (
-          <>
-            <EvidenceSourceButton fileName={item.fileName} onOpen={() => source.open(chunk)} labels={EVIDENCE_LABELS} />
-            <CitationFigureAction chunk={chunk} testId={`citation-card-figure-${index}`} />
-          </>
+          <EvidenceSourceButton fileName={item.fileName} onOpen={() => source.open(chunk)} labels={EVIDENCE_LABELS} />
         ) : undefined
       }
       actions={<CitationActions chunk={chunk} {...options} />}
@@ -74,8 +69,8 @@ export function CitationCard({ chunk, index, ...options }: CitationCardOptions &
 }
 
 /**
- * 根拠のカードの操作の行の右の組（根拠の評価）。左の組の「根拠を表示」と「図を開く」は共通の部品が並べる（#2388・
- * #2428）。根拠は画面を移動せず右のサイドパネルで見せる（#2360）。文書の詳細はパネルの中から別タブで開く（#442）。
+ * 根拠のカードの操作の行の右の組（根拠の評価）。左の組の「根拠を表示」は共通の部品が並べる（#2388）。根拠は画面を
+ * 移動せず右のサイドパネルで見せる（#2360）。
  */
 export function CitationActions({
   chunk,

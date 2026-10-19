@@ -10,7 +10,6 @@ import {
 } from "@production-ready/ui";
 
 import { AnswerBody } from "@/components/chat/ResultTables";
-import { RagFigureAction } from "@/components/evidence/RagFigure";
 import { RagSourcePreview } from "@/components/evidence/RagSourcePreview";
 import {
   EVIDENCE_LABELS,
@@ -45,9 +44,6 @@ export function AnswerEvidenceBlock({
         idPrefix={idPrefix}
         className={className}
         onOpenSource={source.open}
-        renderFigure={(_item, index) => (
-          <RagFigureAction runId={runId} entry={evidence.entries[index]} testId={`${idPrefix}-figure-${index}`} />
-        )}
       />
       <EvidenceSource
         runId={runId}
@@ -60,9 +56,9 @@ export function AnswerEvidenceBlock({
 }
 
 /**
- * 根拠 1 件の右のサイドパネル（RAG のチャットと同じ共通の `EvidenceSourceSheet`。#2360）。上部に根拠の要約と、
- * 図の根拠は「図を開く」（RAG と同じ共通の `EvidenceFigureAction`。#2428）。その下に RAG と同じ共通の原文のプレビュー（ページの画像・強調。#2389）を出す。原文は
- * RAG の画面用の Cookie の API ではなく、Agent の backend が閲覧者として RAG に作らせる短命の署名つきの URL で読む。
+ * 根拠 1 件の右のサイドパネル（RAG のチャットと同じ共通の `EvidenceSourceSheet`。#2360）。上部に根拠の要約、その下に
+ * RAG と同じ共通の原文のプレビュー（ページの画像・強調。#2389）を出す。原文は RAG の画面用の Cookie の API ではなく、
+ * Agent の backend が閲覧者として RAG に作らせる短命の署名つきの URL で読む。
  */
 function EvidenceSource({
   runId,
@@ -85,7 +81,6 @@ function EvidenceSource({
       item={entry?.item ?? null}
       index={source.shown}
       labels={EVIDENCE_LABELS}
-      figure={entry ? <RagFigureAction runId={runId} entry={entry} testId={`${testId}-figure`} /> : null}
       data-testid={testId}
     >
       {entry ? (

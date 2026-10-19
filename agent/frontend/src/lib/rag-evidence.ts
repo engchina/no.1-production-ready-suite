@@ -1,11 +1,5 @@
 import { t } from "@/lib/i18n";
 
-/** 図を開くときに RAG へ渡す根拠（場所は RAG が保存した記録から決める）。 */
-export interface RagFigureRef {
-  documentId: string;
-  chunkId: string;
-}
-
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }

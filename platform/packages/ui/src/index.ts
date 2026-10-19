@@ -311,15 +311,6 @@ export {
   type EvidenceListProps,
   type EvidenceTag,
 } from "./components/chat/answer-evidence";
-// 図の根拠の「図を開く」（3 製品共通。#2428）
-export {
-  DEFAULT_EVIDENCE_FIGURE_LABELS,
-  EvidenceFigureAction,
-  evidenceFigureLabels,
-  type EvidenceFigureActionProps,
-  type EvidenceFigureImage,
-  type EvidenceFigureLabels,
-} from "./components/chat/evidence-figure";
 // 回答の注意書き（3 製品共通。#2405）
 export {
   AnswerNotice,

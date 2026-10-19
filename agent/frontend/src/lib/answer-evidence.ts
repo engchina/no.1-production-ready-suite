@@ -1,12 +1,7 @@
-import {
-  evidenceFigureLabels,
-  evidenceLabels,
-  type EvidenceChip,
-  type EvidenceListItem,
-} from "@production-ready/ui";
+import { evidenceLabels, type EvidenceChip, type EvidenceListItem } from "@production-ready/ui";
 
 import type { Artifact } from "@/lib/api";
-import { evidenceLocation, type RagFigureRef } from "@/lib/rag-evidence";
+import { evidenceLocation } from "@/lib/rag-evidence";
 import { t } from "@/lib/i18n";
 
 /**
@@ -20,19 +15,12 @@ export const ANSWER_EVIDENCE_KIND = "answer_evidence";
 /** 根拠の文言（3 製品で共通）。 */
 export const EVIDENCE_LABELS = evidenceLabels();
 
-/** 「図を開く」の文言（RAG と同じ共通の部品の既定）。 */
-export const EVIDENCE_FIGURE_LABELS = evidenceFigureLabels();
-
 export interface AnswerEvidenceEntry {
   item: EvidenceListItem;
   documentId: string;
   chunkId: string;
-  /** 根拠の場所（頁・節）。根拠の行と図の代替テキストに使う。 */
-  location: string | null;
   /** 根拠の行の場所（頁があれば頁、無ければ節）。 */
   citationLocation: string;
-  figure: RagFigureRef | null;
-  aiFigureDescription: boolean;
 }
 
 export interface AnswerEvidenceMarker {
@@ -99,13 +87,6 @@ function chips(item: Record<string, unknown>): EvidenceChip[] {
   return result;
 }
 
-function figureRef(value: unknown): RagFigureRef | null {
-  const ref = record(value);
-  const documentId = text(ref?.document_id);
-  const chunkId = text(ref?.chunk_id);
-  return documentId && chunkId ? { documentId, chunkId } : null;
-}
-
 /** 成果物「回答の根拠」の内容を、共有の部品に渡す形にする。 */
 export function answerEvidenceData(content: Record<string, unknown> | null | undefined): AnswerEvidenceData {
   const entries = records(content?.items).flatMap((item): AnswerEvidenceEntry[] => {
@@ -121,10 +102,7 @@ export function answerEvidenceData(content: Record<string, unknown> | null | und
       {
         documentId,
         chunkId,
-        location: evidenceLocation(locator),
         citationLocation: page || text(item.section_title).trim() || strings(locator?.section_path).join(" > "),
-        figure: figureRef(item.image_ref),
-        aiFigureDescription: item.evidence_type === "figure_description",
         item: {
           key: chunkId,
           fileName,
