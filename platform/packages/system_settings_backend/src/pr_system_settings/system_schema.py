@@ -15,6 +15,8 @@ RAG と NL2SQL が別々に持っていた schema manager の共通部分を置�
 - 外部キーの差分（正本の `CREATE TABLE` にあるが既存の表に無い FK の検出・追加と、参照先の無い
   既存の行の件数。#505。削除規則の違い・無効化（DISABLED）の検出と修正、利用者の明示操作による
   参照先の無い行の削除と VALIDATE。#511）
+- 列の欠落（正本の DDL から求めた列と USER_TAB_COLUMNS の比較。台帳が適用済みでも欠けた列を状態に
+  出し、作成・更新の後も欠けていれば止める。#2450・#2458）
 - データを消す（破壊的な）未適用の migration の確認。状態に出し、作成・更新は明示の承認
   （`allow_destructive`）が無ければ DB に触る前に止める（#619）
 
@@ -69,6 +71,8 @@ RECREATE_CONFIRMATION_REQUIRED = "SCHEMA_RECREATE_CONFIRMATION_REQUIRED"
 # データを消す未適用の migration があるのに、作成・更新の承認（`allow_destructive`）が無い（#619）。
 DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED = "SCHEMA_DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED"
 SCHEMA_OPERATION_FAILED = "SCHEMA_OPERATION_FAILED"
+# 作成・更新の後の状態が ready でない（必須の object・列が揃わない）。
+SCHEMA_POSTCONDITION_FAILED = "SCHEMA_POSTCONDITION_FAILED"
 # 状態を読めない（DB に接続できない・ORA でない失敗）。配備の確認の要約
 # （`deployment_check_error_summary`）の先頭の機械が読める印でもある（#1768。配備の通しの
 # .github/scripts/deploy-run-through.sh が、この印と接続の失敗のコードで「DB に繋がらない
@@ -625,28 +629,111 @@ def foreign_keys_from_create_table(statement: str) -> list[ForeignKeySpec]:
 
 # 表制約の行（列ではない）の先頭の語。
 _TABLE_CONSTRAINT_KEYWORDS = frozenset({"CONSTRAINT", "PRIMARY", "UNIQUE", "FOREIGN", "CHECK"})
+_ALTER_TABLE_PATTERN = re.compile(
+    rf"^\s*ALTER\s+TABLE\s+({_IDENTIFIER})\s+(ADD|DROP|RENAME)\b",
+    flags=re.IGNORECASE,
+)
+_DROP_TABLE_PATTERN = re.compile(rf"^\s*DROP\s+TABLE\s+({_IDENTIFIER})\b", flags=re.IGNORECASE)
+_DROP_COLUMN_PATTERN = re.compile(rf"^\s*COLUMN\s+({_IDENTIFIER})\b", flags=re.IGNORECASE)
+_RENAME_COLUMN_PATTERN = re.compile(
+    rf"^\s*COLUMN\s+({_IDENTIFIER})\s+TO\s+({_IDENTIFIER})\b",
+    flags=re.IGNORECASE,
+)
+_PLSQL_BLOCK_PATTERN = re.compile(r"^\s*(?:BEGIN|DECLARE)\b", flags=re.IGNORECASE)
+_EXECUTE_IMMEDIATE_PATTERN = re.compile(r"\bEXECUTE\s+IMMEDIATE\s+", flags=re.IGNORECASE)
+_Q_QUOTE_CLOSERS = {"[": "]", "(": ")", "{": "}", "<": ">"}
 
 
-def columns_from_create_table(statement: str) -> tuple[str, tuple[str, ...]] | None:
-    """`CREATE TABLE` 文の表名と列名（大文字。定義の順）を取り出す（#2450）。
+def _strip_sql_comments(sql: str) -> str:
+    """`--` と `/* */` の注釈を除く（文字列リテラルの中の `--` は残す）。"""
 
-    表は「無ければ作る」ので、既存の表に正本の列が揃っているかは台帳では分からない（取り消した
-    migration が列を改名・削除した表など）。状態の確認で USER_TAB_COLUMNS と比べるために使う。
-    表制約（CONSTRAINT・PRIMARY KEY・CHECK など）の行と `--` の注釈は飛ばす。`CREATE TABLE`
-    以外の文は None を返す。
+    result: list[str] = []
+    index = 0
+    while index < len(sql):
+        char = sql[index]
+        if char == "'":
+            end = _quoted_literal_end(sql, index)
+            result.append(sql[index:end])
+            index = end
+        elif sql.startswith("--", index):
+            newline = sql.find("\n", index)
+            index = len(sql) if newline < 0 else newline
+        elif sql.startswith("/*", index):
+            close = sql.find("*/", index + 2)
+            index = len(sql) if close < 0 else close + 2
+            result.append(" ")
+        else:
+            result.append(char)
+            index += 1
+    return "".join(result)
+
+
+def _quoted_literal_end(sql: str, start: int) -> int:
+    """`'...'`（`''` は引用符 1 つ）の終わりの次の位置。閉じていなければ末尾。"""
+
+    index = start + 1
+    while index < len(sql):
+        if sql[index] == "'":
+            if sql.startswith("''", index):
+                index += 2
+                continue
+            return index + 1
+        index += 1
+    return len(sql)
+
+
+def _string_literal_at(sql: str, start: int) -> tuple[str, int] | None:
+    """`start` から始まる文字列リテラル（`'...'` と `q'[...]'`）の値と、終わりの次の位置。"""
+
+    if sql[start : start + 2].upper() == "Q'" and start + 2 < len(sql):
+        opener = sql[start + 2]
+        closer = _Q_QUOTE_CLOSERS.get(opener, opener) + "'"
+        close = sql.find(closer, start + 3)
+        if close < 0:
+            return None
+        return sql[start + 3 : close], close + 2
+    if sql[start : start + 1] != "'":
+        return None
+    end = _quoted_literal_end(sql, start)
+    return sql[start + 1 : end - 1].replace("''", "'"), end
+
+
+def _execute_immediate_statements(block: str) -> list[str]:
+    """PL/SQL の block の `EXECUTE IMMEDIATE` に渡す文字列リテラルの文（`||` の連結を含む）。
+
+    変数・関数で組み立てる文は読めないので飛ばす。
     """
 
-    table_match = _CREATE_TABLE_NAME_PATTERN.match(statement)
-    if table_match is None:
-        return None
-    body = "\n".join(line.split("--", 1)[0] for line in statement.splitlines())
-    start = body.find("(", table_match.end())
-    if start < 0:
-        return None
+    statements: list[str] = []
+    for match in _EXECUTE_IMMEDIATE_PATTERN.finditer(block):
+        parts: list[str] = []
+        position = match.end()
+        while (literal := _string_literal_at(block, position)) is not None:
+            parts.append(literal[0])
+            rest = block[literal[1] :]
+            concat = re.match(r"\s*\|\|\s*", rest)
+            if concat is None:
+                break
+            position = literal[1] + concat.end()
+        if parts:
+            statements.append("".join(parts))
+    return statements
+
+
+def _parenthesized_items(sql: str, start: int) -> list[str]:
+    """`sql[start]` の `(` から対応する `)` までを、最上位の `,` で分けた項目。"""
+
     items: list[str] = []
     depth = 0
     current: list[str] = []
-    for char in body[start + 1 :]:
+    index = start + 1
+    while index < len(sql):
+        char = sql[index]
+        if char == "'":
+            end = _quoted_literal_end(sql, index)
+            current.append(sql[index:end])
+            index = end
+            continue
         if char == "(":
             depth += 1
         elif char == ")":
@@ -656,16 +743,106 @@ def columns_from_create_table(statement: str) -> tuple[str, tuple[str, ...]] | N
         elif char == "," and depth == 0:
             items.append("".join(current))
             current = []
+            index += 1
             continue
         current.append(char)
+        index += 1
     items.append("".join(current))
+    return items
+
+
+def _column_names(items: Iterable[str]) -> list[str]:
+    """列の定義の項目から列名（表制約の項目は飛ばす）。"""
+
     columns: list[str] = []
     for item in items:
         words = item.split()
         if not words or words[0].upper() in _TABLE_CONSTRAINT_KEYWORDS:
             continue
         columns.append(_identifier(words[0]))
+    return columns
+
+
+def columns_from_create_table(statement: str) -> tuple[str, tuple[str, ...]] | None:
+    """`CREATE TABLE` 文の表名と列名（大文字。定義の順）を取り出す（#2450）。
+
+    表は「無ければ作る」ので、既存の表に正本の列が揃っているかは台帳では分からない（取り消した
+    migration が列を改名・削除した表など）。状態の確認で USER_TAB_COLUMNS と比べるために使う。
+    表制約（CONSTRAINT・PRIMARY KEY・CHECK など）の行と注釈は飛ばす。`CREATE TABLE`
+    以外の文は None を返す。
+    """
+
+    body = _strip_sql_comments(statement)
+    table_match = _CREATE_TABLE_NAME_PATTERN.match(body)
+    if table_match is None:
+        return None
+    start = body.find("(", table_match.end())
+    if start < 0:
+        return None
+    columns = _column_names(_parenthesized_items(body, start))
     return _identifier(table_match.group(1)), tuple(columns)
+
+
+def columns_from_statements(statements: Iterable[str]) -> dict[str, tuple[str, ...]]:
+    """DDL の文を順に当てたときの、表の列（表名 → 列名。定義の順。#2450）。
+
+    正本が「最新の形の CREATE TABLE」でなく、版ごとの migration（後の版の `ALTER TABLE` で列を
+    足す）のときに、全部を当てた後の列を求める。
+
+    - `CREATE TABLE`: まだ無い表だけを作る（既にあれば ORA-00955 で読み飛ばされる）
+    - `ALTER TABLE <表> ADD (<列> ..., ...)` / `ADD <列> ...`: 列を足す（表制約の追加は飛ばす）
+    - `ALTER TABLE <表> DROP COLUMN <列>` / `DROP (<列>, ...)`: 列を除く
+    - `ALTER TABLE <表> RENAME COLUMN <旧> TO <新>`: 列名を変える
+    - `DROP TABLE <表>`: 表を除く
+    - PL/SQL の block（`BEGIN` / `DECLARE`）: `EXECUTE IMMEDIATE` の文字列リテラルの文に同じ規則を
+      当てる
+
+    正本で作っていない表への `ALTER TABLE` は追わない。
+    """
+
+    columns: dict[str, list[str]] = {}
+    for statement in statements:
+        _apply_column_ddl(columns, statement)
+    return {table: tuple(names) for table, names in columns.items()}
+
+
+def _apply_column_ddl(columns: dict[str, list[str]], statement: str) -> None:
+    sql = _strip_sql_comments(statement)
+    if _PLSQL_BLOCK_PATTERN.match(sql):
+        for nested in _execute_immediate_statements(sql):
+            _apply_column_ddl(columns, nested)
+        return
+    created = columns_from_create_table(sql)
+    if created is not None:
+        columns.setdefault(created[0], list(created[1]))
+        return
+    if (dropped := _DROP_TABLE_PATTERN.match(sql)) is not None:
+        columns.pop(_identifier(dropped.group(1)), None)
+        return
+    altered = _ALTER_TABLE_PATTERN.match(sql)
+    if altered is None:
+        return
+    current = columns.get(_identifier(altered.group(1)))
+    if current is None:
+        return
+    action = altered.group(2).upper()
+    rest = sql[altered.end() :]
+    if action == "ADD":
+        stripped = rest.lstrip()
+        items = _parenthesized_items(stripped, 0) if stripped.startswith("(") else [stripped]
+        current.extend(name for name in _column_names(items) if name not in current)
+    elif action == "DROP":
+        stripped = rest.lstrip()
+        if (single := _DROP_COLUMN_PATTERN.match(stripped)) is not None:
+            names = [_identifier(single.group(1))]
+        elif stripped.startswith("("):
+            names = [_identifier(item) for item in _parenthesized_items(stripped, 0)]
+        else:
+            return
+        current[:] = [name for name in current if name not in names]
+    elif (renamed := _RENAME_COLUMN_PATTERN.match(rest)) is not None:
+        old, new = _identifier(renamed.group(1)), _identifier(renamed.group(2))
+        current[:] = [new if name == old else name for name in current]
 
 
 def load_existing_columns(connection: Any, table_names: Iterable[str]) -> dict[str, set[str]]:
@@ -995,6 +1172,9 @@ class SystemSchemaManagerBase(ABC):
     ignored_drop_codes: ClassVar[frozenset[str]] = IGNORED_DROP_CODES
     # 正本の外部キー（既存の表に無いものを状態に出し、更新で足す。#505）。空なら比べない。
     managed_foreign_keys: ClassVar[tuple[ForeignKeySpec, ...]] = ()
+    # 正本の表の列（表名 → 列名。`columns_from_statements` で DDL の正本から作る）。台帳が適用済み
+    # でも既存の表に欠けた列を状態の `missing_columns` に出す（#2450）。空なら比べない。
+    managed_columns: ClassVar[Mapping[str, tuple[str, ...]]] = {}
     # 状態に `pending_destructive_migrations`（データを消す未適用の migration）を出す製品は True に
     # する。作成・更新の前に状態を読み、承認が無ければ止める（#619）。False なら確かめない。
     guards_destructive_migrations: ClassVar[bool] = False
@@ -1419,6 +1599,39 @@ class SystemSchemaManagerBase(ABC):
                     raise
             connection.commit()
 
+    # ---- 列の欠落（#2450） ---------------------------------------------------
+
+    def _missing_columns(
+        self, connection: Any, objects: Collection[tuple[str, str]]
+    ) -> list[dict[str, str]]:
+        """`managed_columns` のうち既存の表に無い列（DDL は実行しない）。
+
+        表は「無ければ作る」ので、台帳が適用済みでも既存の表に列が欠けることがある（取り消した
+        migration が列を改名・削除した表など）。表そのものが無いときは object の不足で出す。
+        """
+
+        if not self.managed_columns:
+            return []
+        present = [name for name in self.managed_columns if (name, "TABLE") in objects]
+        return missing_columns(self.managed_columns, load_existing_columns(connection, present))
+
+    @staticmethod
+    def _require_columns_present(status: Mapping[str, Any]) -> None:
+        """作成・更新の後も列が欠けていれば、欠けた列の名前を出して止める（#2450）。
+
+        列を足す migration が台帳で適用済みなので、更新を再試行しても直らない。
+        """
+
+        absent = status.get("missing_columns") or []
+        if not absent:
+            return
+        columns = ", ".join(f"{item['table_name']}.{item['column_name']}" for item in absent)
+        raise SystemSchemaError(
+            SCHEMA_POSTCONDITION_FAILED,
+            f"システムテーブル操作後も必須の列が不足しています（{columns}）。"
+            "更新を再試行しても直りません。配備の手順の既存環境の更新手順を確認してください。",
+        )
+
     # ---- 外部キーの差分（#505） ---------------------------------------------
 
     def _foreign_key_drift(self, connection: Any) -> ForeignKeyDrift:
@@ -1736,6 +1949,7 @@ __all__ = [
     "ORPHAN_ROWS_CHANGED",
     "RECREATE_CONFIRMATION_REQUIRED",
     "SCHEMA_OPERATION_FAILED",
+    "SCHEMA_POSTCONDITION_FAILED",
     "SCHEMA_STATUS_UNAVAILABLE",
     "ConnectionFactory",
     "ExistingForeignKey",
@@ -1763,6 +1977,7 @@ __all__ = [
     "clamp_ddl_lock_timeout",
     "classify_system_schema_status",
     "columns_from_create_table",
+    "columns_from_statements",
     "connect_failure_diagnosis",
     "count_orphan_rows",
     "delete_orphan_rows_sql",

@@ -48,6 +48,7 @@ import type {
   DatabaseSettingsData,
   DatabaseSettingsUpdate,
   DatabaseWalletDownloadData,
+  SystemTableColumnRef,
 } from "@production-ready/system-settings";
 export type {
   EnterpriseAiConfiguredModel,
@@ -640,6 +641,8 @@ export interface SystemTablesStatusData {
   expected_table_count: number;
   existing_table_count: number;
   missing_objects: SystemTableMissingObject[];
+  /** 既存の表に無い正本の列（台帳が適用済みでも欠けた列。#2458）。 */
+  missing_columns?: SystemTableColumnRef[];
   tables: SystemTableMetadata[];
   objects?: SystemObjectMetadata[];
   operation_state: SystemTableOperationState;

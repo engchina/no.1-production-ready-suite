@@ -17,6 +17,7 @@ from app.features.settings import router as settings_router
 from app.features.settings import system_schema_runtime
 from app.features.settings.system_schema import (
     CONTROL_TABLE,
+    MANAGED_COLUMNS,
     MANAGED_FOREIGN_KEYS,
     MANAGED_INDEXES,
     MANAGED_OBJECTS,
@@ -32,7 +33,7 @@ from app.features.settings.system_schema import (
     classify_system_schema_status,
     split_migration_sql,
 )
-from app.schemas.settings import SystemTablesInitializeRequest
+from app.schemas.settings import SystemTablesInitializeRequest, SystemTablesStatusData
 from app.security import dependencies as security_dependencies
 from app.security.domain import Principal
 from app.security.permissions import permission_for_route
@@ -1272,3 +1273,125 @@ def test_control_pool_strips_descriptor_retry_only_in_cli(
         assert kwargs["dsn"] == descriptor
         assert "retry_count" not in kwargs
         assert kwargs["tcp_connect_timeout"] == 10
+
+
+# ---- 台帳が適用済みでも欠けた列（#2458） ---------------------------------------------
+
+
+class _ColumnsCursor:
+    """状態の取得に要る dictionary・台帳だけを返す fake（表は `removed` の列だけを欠く）。"""
+
+    def __init__(self, removed: dict[str, set[str]], executed: list[str]) -> None:
+        self._removed = removed
+        self._executed = executed
+        self._rows: list[tuple[Any, ...]] = []
+        self._row: tuple[Any, ...] | None = None
+        self.rowcount = 0
+
+    def __enter__(self) -> _ColumnsCursor:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, sql: str, binds: dict[str, Any] | None = None) -> None:
+        upper = " ".join(sql.split()).upper()
+        self._executed.append(upper)
+        self._rows, self._row, self.rowcount = [], None, 0
+        if upper.startswith("SELECT OBJECT_NAME, OBJECT_TYPE, CREATED FROM USER_OBJECTS"):
+            self._rows = [(name, object_type, None) for name, object_type in MANAGED_OBJECTS]
+        elif upper.startswith("SELECT VERSION_NO, CHECKSUM FROM NL2SQL_SCHEMA_MIGRATIONS"):
+            self._rows = [(migration.version, migration.checksum) for migration in MIGRATIONS]
+        elif upper.startswith("SELECT TABLE_NAME, COLUMN_NAME FROM USER_TAB_COLUMNS"):
+            names = sorted(str(value).upper() for value in (binds or {}).values())
+            self._rows = [
+                (name, column)
+                for name in names
+                for column in MANAGED_COLUMNS.get(name, ())
+                if column not in self._removed.get(name, set())
+            ]
+        elif upper.startswith("SELECT USER FROM DUAL"):
+            self._row = ("APP_USER",)
+        elif upper.startswith("SELECT STATUS, OPERATION_KIND"):
+            self._row = ("IDLE", None, None, None, 1, None)
+        elif upper.startswith(f"UPDATE {CONTROL_TABLE}"):
+            self.rowcount = 1
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self._rows
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._row
+
+
+class _ColumnsConnection:
+    def __init__(self, removed: dict[str, set[str]] | None = None) -> None:
+        self.removed = removed or {}
+        self.executed: list[str] = []
+
+    def cursor(self) -> _ColumnsCursor:
+        return _ColumnsCursor(self.removed, self.executed)
+
+    def commit(self) -> None:
+        return None
+
+
+def _columns_manager() -> SystemSchemaManager:
+    return SystemSchemaManager(lambda: cast(Any, None), ddl_lock_timeout_seconds=0)
+
+
+def test_managed_columns_include_columns_added_by_later_migrations() -> None:
+    """版ごとの migration を順に当てた後の列（後の版の ALTER TABLE ADD を含む）。"""
+
+    assert set(MANAGED_COLUMNS) == set(MANAGED_TABLES)
+    # 021 が PL/SQL の EXECUTE IMMEDIATE で足す列と、006 が ALTER TABLE ADD (...) で足す列。
+    assert "PROFILE_ID" in MANAGED_COLUMNS["NL2SQL_ONTOLOGY_REVISIONS"]
+    assert {"WORKER_ID", "HEARTBEAT_AT", "LEASE_EXPIRES_AT", "ATTEMPT_NO"} <= set(
+        MANAGED_COLUMNS["NL2SQL_SCHEMA_REFRESH_JOBS"]
+    )
+    assert not any(
+        column in {"CONSTRAINT", "PRIMARY", "UNIQUE", "FOREIGN", "CHECK"}
+        for columns in MANAGED_COLUMNS.values()
+        for column in columns
+    )
+
+
+def test_status_is_ready_when_every_managed_column_exists() -> None:
+    status = _columns_manager()._status_on(_ColumnsConnection())
+
+    assert status["status"] == "ready"
+    assert status["missing_columns"] == []
+    assert SystemTablesStatusData.model_validate(status).missing_columns == []
+
+
+def test_status_detects_missing_columns_even_when_ledger_is_current() -> None:
+    """台帳がすべて適用済みでも、正本の列が欠けた表があれば ready にしない（#2458）。"""
+
+    connection = _ColumnsConnection({"NL2SQL_ONTOLOGY_REVISIONS": {"PROFILE_ID"}})
+
+    status = _columns_manager()._status_on(connection)
+
+    assert status["status"] == "outdated"
+    assert status["pending_versions"] == []
+    assert status["missing_objects"] == []
+    assert status["missing_columns"] == [
+        {"table_name": "NL2SQL_ONTOLOGY_REVISIONS", "column_name": "PROFILE_ID"}
+    ]
+    payload = SystemTablesStatusData.model_validate(status).model_dump()
+    assert payload["missing_columns"] == status["missing_columns"]
+
+
+def test_initialize_stops_with_column_names_when_columns_stay_missing() -> None:
+    """列を足す migration が台帳で適用済みなら更新では直らない。列の名前を出して止める。"""
+
+    connection = _ColumnsConnection({"NL2SQL_SCHEMA_REFRESH_JOBS": {"WORKER_ID"}})
+
+    with pytest.raises(SystemSchemaError) as raised:
+        _columns_manager()._initialize_on(connection, "owner-1", recreate=False)
+
+    assert raised.value.code == "SCHEMA_POSTCONDITION_FAILED"
+    assert "NL2SQL_SCHEMA_REFRESH_JOBS.WORKER_ID" in raised.value.public_message
+    # 適用する migration は無い（DDL を流していない）。
+    assert not any(
+        statement.startswith(("CREATE ", "ALTER TABLE")) for statement in connection.executed
+    )

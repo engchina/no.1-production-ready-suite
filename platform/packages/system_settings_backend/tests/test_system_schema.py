@@ -29,6 +29,7 @@ from pr_system_settings.system_schema import (
     clamp_ddl_lock_timeout,
     classify_system_schema_status,
     columns_from_create_table,
+    columns_from_statements,
     delete_orphan_rows_sql,
     deployment_check_error_summary,
     deployment_check_summary,
@@ -719,6 +720,68 @@ def test_columns_from_create_table_skips_constraints_and_comments() -> None:
     )
     assert columns_from_create_table("CREATE INDEX demo_items_idx ON demo_items (owner_id)") is None
     assert columns_from_create_table("ALTER TABLE demo_items ADD (memo CLOB)") is None
+
+
+def test_columns_from_create_table_keeps_comment_markers_inside_literals() -> None:
+    statement = """CREATE TABLE demo_items (
+    item_id VARCHAR2(64) DEFAULT 'a--b, (c' NOT NULL, /* 注釈, の中 */
+    memo    CLOB
+)"""
+    assert columns_from_create_table(statement) == ("DEMO_ITEMS", ("ITEM_ID", "MEMO"))
+
+
+def test_columns_from_statements_folds_versioned_ddl() -> None:
+    """版ごとの migration を順に当てた後の列（#2458）。"""
+
+    statements = [
+        "CREATE TABLE demo_items (item_id VARCHAR2(64) PRIMARY KEY, legacy_flag CHAR(1))",
+        # 既にある表の CREATE TABLE は作られない（ORA-00955）ので、列を変えない。
+        "CREATE TABLE demo_items (item_id VARCHAR2(64), other_col NUMBER)",
+        "ALTER TABLE demo_items ADD (\n    worker_id VARCHAR2(256),\n    attempt_no NUMBER(10)\n)",
+        "ALTER TABLE demo_items ADD note VARCHAR2(10) DEFAULT 'x,y'",
+        "ALTER TABLE demo_items ADD CONSTRAINT demo_items_ck CHECK (attempt_no >= 0)",
+        "ALTER TABLE demo_items MODIFY (attempt_no DEFAULT 0 NOT NULL)",
+        "ALTER TABLE demo_items DROP COLUMN legacy_flag",
+        "ALTER TABLE demo_items RENAME COLUMN note TO memo",
+        "CREATE TABLE demo_logs (log_id NUMBER, a NUMBER, b NUMBER)",
+        "ALTER TABLE demo_logs DROP (a, b)",
+        "CREATE TABLE demo_retired (retired_id NUMBER)",
+        "DROP TABLE demo_retired CASCADE CONSTRAINTS PURGE",
+        # 正本で作っていない表は追わない。
+        "ALTER TABLE other_items ADD (extra NUMBER)",
+        "CREATE INDEX demo_items_idx ON demo_items (worker_id)",
+    ]
+    assert columns_from_statements(statements) == {
+        "DEMO_ITEMS": ("ITEM_ID", "WORKER_ID", "ATTEMPT_NO", "MEMO"),
+        "DEMO_LOGS": ("LOG_ID",),
+    }
+
+
+def test_columns_from_statements_reads_execute_immediate_literals() -> None:
+    """PL/SQL の block は、EXECUTE IMMEDIATE の文字列リテラルの DDL を当てる。"""
+
+    statements = [
+        "CREATE TABLE demo_items (item_id VARCHAR2(64))",
+        """BEGIN
+    EXECUTE IMMEDIATE 'ALTER TABLE demo_items ADD (profile_id VARCHAR2(128))';
+EXCEPTION
+    WHEN OTHERS THEN
+        IF SQLCODE != -1430 THEN RAISE; END IF;
+END;""",
+        """DECLARE
+    v_count NUMBER;
+BEGIN
+    -- 'ALTER TABLE demo_items ADD (commented_out NUMBER)' は注釈なので当てない
+    EXECUTE IMMEDIATE q'[ALTER TABLE demo_items ADD (status VARCHAR2(16) DEFAULT 'new')]';
+    EXECUTE IMMEDIATE 'ALTER TABLE demo_items ADD (label VARCHAR2(8) '
+        || 'DEFAULT ''a'')';
+    EXECUTE IMMEDIATE v_sql;
+END;""",
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE missing_table'; END;",
+    ]
+    assert columns_from_statements(statements) == {
+        "DEMO_ITEMS": ("ITEM_ID", "PROFILE_ID", "STATUS", "LABEL"),
+    }
 
 
 def test_missing_columns_ignores_absent_tables() -> None:
@@ -1467,3 +1530,58 @@ def test_operation_failure_fields_keep_ora_code_and_hint_for_other_failures() ->
         "code": "SCHEMA_OPERATION_FAILED",
         "hint": "ValueError: password=***",
     }
+
+
+class _ColumnsManager(_DemoManager):
+    managed_columns = {"DEMO_ITEMS": ("ITEM_ID", "PAYLOAD"), "DEMO_LOGS": ("LOG_ID",)}
+
+
+def test_manager_missing_columns_reads_only_existing_tables() -> None:
+    """骨格の列の比較（#2458）: 無い表は比べず、欠けた列だけを返す。製品は class 属性で渡す。"""
+
+    executed: list[dict[str, Any]] = []
+
+    class _Cursor:
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, _sql: str, binds: dict[str, Any]) -> None:
+            executed.append(binds)
+
+        def fetchall(self) -> list[tuple[str, str]]:
+            return [("DEMO_ITEMS", "ITEM_ID")]
+
+    class _Connection:
+        def cursor(self) -> _Cursor:
+            return _Cursor()
+
+    manager = _ColumnsManager(_FakeDatabase())
+    objects = {("DEMO_ITEMS", "TABLE"), ("DEMO_ITEMS_IDX", "INDEX")}
+
+    assert manager._missing_columns(_Connection(), objects) == [
+        {"table_name": "DEMO_ITEMS", "column_name": "PAYLOAD"}
+    ]
+    assert [list(binds.values()) for binds in executed] == [["DEMO_ITEMS"]]
+    # 正本の列を渡さない製品は比べない（DB に問い合わせない）。
+    assert _DemoManager(_FakeDatabase())._missing_columns(_Connection(), objects) == []
+    assert len(executed) == 1
+
+
+def test_require_columns_present_stops_with_column_names() -> None:
+    SystemSchemaManagerBase._require_columns_present({"missing_columns": []})
+
+    with pytest.raises(SystemSchemaError) as raised:
+        SystemSchemaManagerBase._require_columns_present(
+            {
+                "missing_columns": [
+                    {"table_name": "DEMO_ITEMS", "column_name": "PAYLOAD"},
+                    {"table_name": "DEMO_ITEMS", "column_name": "MEMO"},
+                ]
+            }
+        )
+
+    assert raised.value.code == "SCHEMA_POSTCONDITION_FAILED"
+    assert "DEMO_ITEMS.PAYLOAD, DEMO_ITEMS.MEMO" in raised.value.public_message

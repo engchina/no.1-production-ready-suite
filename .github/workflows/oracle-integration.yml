@@ -125,7 +125,8 @@ jobs:
             tests/test_nl2sql_db_admin_chat_history_oracle_live.py \
             tests/test_nl2sql_history_sort_oracle_live.py \
             tests/test_nl2sql_profile_delete_oracle_live.py \
-            tests/test_nl2sql_synthetic_preview_oracle_live.py
+            tests/test_nl2sql_synthetic_preview_oracle_live.py \
+            tests/test_system_schema_columns_oracle_live.py
           python3 ../../.github/scripts/pytest-skip-gate.py "${RUNNER_TEMP}/junit.xml" \
             --allow "test_nl2sql_synthetic_preview_oracle_live::test_select_ai_generates_into_staging_only"
 
@@ -153,7 +154,8 @@ jobs:
           set +a
           uv run pytest -rs --junitxml="${RUNNER_TEMP}/junit.xml" \
             tests/test_run_facts_oracle_live.py \
-            tests/test_runtime_checkpoint_oracle_live.py
+            tests/test_runtime_checkpoint_oracle_live.py \
+            tests/test_system_schema_columns_oracle_live.py
           python3 ../../.github/scripts/pytest-skip-gate.py "${RUNNER_TEMP}/junit.xml"
 
       - name: Stop Oracle

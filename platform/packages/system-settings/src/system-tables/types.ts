@@ -17,7 +17,7 @@ export interface SystemTableObjectRef {
   object_type: SystemObjectType;
 }
 
-/** 既存の表に無い正本の列の 1 件（#2450。RAG だけが返す）。 */
+/** 既存の表に無い正本の列の 1 件（#2450 / #2458。3 製品が返す）。 */
 export interface SystemTableColumnRef {
   table_name: string;
   column_name: string;
@@ -84,7 +84,7 @@ export interface SystemTablesStatusData {
   missing_objects: SystemTableObjectRef[];
   /** 廃止したが残っている object（RAG）。 */
   retired_objects?: SystemTableObjectRef[];
-  /** 既存の表に無い正本の列（台帳が適用済みでも欠けた列。RAG。#2450）。 */
+  /** 既存の表に無い正本の列（台帳が適用済みでも欠けた列。3 製品。#2450 / #2458）。 */
   missing_columns?: SystemTableColumnRef[];
   /** 既存の表に無い正本の外部キー（「作成・更新」で追加する。RAG。#505）。 */
   missing_foreign_keys?: SystemTableForeignKey[];
