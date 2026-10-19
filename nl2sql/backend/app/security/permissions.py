@@ -258,6 +258,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     ),
     # 回答の注意書き（設定は製品ごと。運用設定のシステムテーブルの下。#2405・#2449）。
     _menu_permission("menu.settings_answer_notice", "運用設定", "回答の注意書き"),
+    # チャットの添付を使うか（設定は製品ごと。運用設定の回答の注意書きの下。#2517）。
+    _menu_permission("menu.settings_chat_attachments", "運用設定", "チャットの添付"),
     # データベース設定から分けた運用の操作（#658）。
     _menu_permission("menu.settings_select_ai_credential", "運用設定", "Select AI Credential"),
     _menu_permission("menu.settings_oci", "システム設定", "OCI 認証"),
@@ -783,6 +785,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- 運用設定: 回答の注意書き（設定は製品ごと。#2449） ----
     ("GET", "/settings/answer-notice"): _allowed("menu.settings_answer_notice"),
     ("PUT", "/settings/answer-notice"): _allowed("menu.settings_answer_notice"),
+    # ---- 運用設定: チャットの添付（設定は製品ごと。#2517） ----
+    ("GET", "/settings/chat-attachments"): _allowed("menu.settings_chat_attachments"),
+    ("PUT", "/settings/chat-attachments"): _allowed("menu.settings_chat_attachments"),
     ("POST", "/settings/database/password/reveal"): _SETTINGS_DATABASE,
     # Select AI Credential は運用設定の専用の画面（#658）。
     ("GET", "/settings/database/select-ai-credential"): _SETTINGS_SELECT_AI_CREDENTIAL,
@@ -808,6 +813,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # この環境で使える生成の方式（業務プロファイルの既定の生成方式の選択肢。#1524）。
     ("GET", "/nl2sql/engines"): _allowed(PROFILE_MANAGE_PERMISSION, QUERY_GENERATE_PERMISSION),
     ("GET", "/nl2sql/chats"): _QUERY_GENERATE,
+    # チャットの添付（#2517）。会話の権限（持ち主・system_admin）は API が判定する。
+    ("POST", "/chat-attachments"): _QUERY_GENERATE,
+    ("GET", "/chat-attachments"): _QUERY_GENERATE,
+    ("DELETE", "/chat-attachments/{attachment_id}"): _QUERY_GENERATE,
     ("GET", "/nl2sql/chats/{conversation_id}"): _QUERY_GENERATE,
     # 会話の名前の変更・削除（#1817）。本人の会話だけ（handler が利用者で絞る）。
     ("PATCH", "/nl2sql/chats/{conversation_id}"): _QUERY_GENERATE,

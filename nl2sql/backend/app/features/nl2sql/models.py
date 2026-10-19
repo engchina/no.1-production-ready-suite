@@ -16,6 +16,7 @@ from uuid import UUID
 from pr_backend_core import CursorPage, Page
 from pr_backend_core.chat_history_window import ChatHistoryPage
 from pr_backend_core.chat_progress import ChatProgressEvent
+from pr_system_settings.chat_attachments import ChatAttachmentReference
 from pr_system_settings.model import (
     DEFAULT_ENTERPRISE_AI_SEED,
     ENTERPRISE_AI_SEED_MAX,
@@ -1761,6 +1762,12 @@ class JobCreateRequest(BaseModel):
     # 回答前の確認を「確認せずに SQL を生成」で飛ばしたチャットのターン（#1839）。
     # 会話の利用者の側に「確認せずに SQL を生成しました」を残すためだけに使い、生成は変えない。
     requirement_skipped: bool = False
+    # チャットの質問に添付するファイル（#2517。`POST /api/chat-attachments` の `attachment_id`）。
+    # 送信で会話に結び付け、会話の続きの SQL の生成も添付の表・文書を使う。
+    attachment_ids: list[str] = Field(default_factory=list, max_length=50)
+    # 結び付けた添付の名前と種類（ジョブの作成が `attachment_ids` から作る。画面が送った値は
+    # 使わない）。
+    attachments: list[ChatAttachmentReference] = Field(default_factory=list)
 
     @field_validator("question")
     @classmethod
@@ -1901,6 +1908,8 @@ class JobData(BaseModel):
     """非同期 job status response."""
 
     business_release_id: str = ""
+    # チャットの質問に添付したファイル（#2517。名前・種類・大きさ）。
+    attachments: list[ChatAttachmentReference] = Field(default_factory=list)
     job_id: str
     status: JobStatus
     # 実行に使った業務プロファイル（未指定のジョブは "default"）。MCP の結果に載せる（#231）。

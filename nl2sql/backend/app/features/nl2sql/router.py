@@ -903,6 +903,18 @@ def rename_sql_chat(
     return ApiResponse(data=_with_chat_owner(data, actor=actor, all_users=all_users))
 
 
+def _delete_chat_attachments(conversation_id: str) -> None:
+    from app.features.nl2sql.chat_attachments import chat_attachment_service
+
+    try:
+        chat_attachment_service().delete_conversation(conversation_id)
+    except Exception as exc:  # noqa: BLE001 - 会話の削除は止めない
+        logger.warning(
+            "nl2sql_chat_attachments_delete_failed",
+            extra={"conversation_id": conversation_id, "error_type": type(exc).__name__},
+        )
+
+
 @router.delete("/chats/{conversation_id}", response_model=ApiResponse[None])
 def delete_sql_chat(conversation_id: str, request: Request) -> ApiResponse[None]:
     """会話を消す（#1817）。system_admin は全員の会話、それ以外は本人の会話だけ（#1889）。
@@ -919,6 +931,8 @@ def delete_sql_chat(conversation_id: str, request: Request) -> ApiResponse[None]
             raise LookupError(conversation_id)
         _assert_profile_access(request, current.conversation.profile_id)
         nl2sql_service.delete_sql_chat(conversation_id, actor=actor, all_users=all_users)
+        # 会話の添付も消す（#2517。消せなくても期限で消える）。
+        _delete_chat_attachments(conversation_id)
     except PermissionError as exc:
         raise _chat_not_found() from exc
     except LookupError as exc:

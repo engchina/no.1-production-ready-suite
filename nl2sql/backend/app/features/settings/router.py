@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from fastapi import APIRouter, HTTPException, Request
 from pr_backend_core import ApiResponse
 from pr_system_settings.answer_notice import build_answer_notice_router
+from pr_system_settings.chat_attachments import build_chat_attachment_settings_router
 from pr_system_settings.database import build_database_router
 from pr_system_settings.model import build_model_router
 from pr_system_settings.model_test_input import (
@@ -124,6 +125,14 @@ router.include_router(
     build_answer_notice_router(
         load=lambda: get_security_service().load_answer_notice(),
         save=lambda record: get_security_service().save_answer_notice(record),
+    )
+)
+# チャットの添付を使うか（運用設定 › チャットの添付。設定は製品ごと。既定は無効。#2517）。
+router.include_router(
+    build_chat_attachment_settings_router(
+        load=lambda: get_security_service().chat_attachment_settings.load(),
+        save=lambda record: get_security_service().chat_attachment_settings.save(record),
+        get_settings=lambda: get_settings(),
     )
 )
 logger = logging.getLogger(__name__)
