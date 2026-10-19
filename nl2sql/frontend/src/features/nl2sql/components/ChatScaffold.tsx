@@ -22,6 +22,7 @@ import {
   type ChatHistoryActions,
   type ChatHistoryPanel,
   type ChatProgressStep,
+  type ChatAttachmentItem,
   type OptimisticChatMessage,
 } from "@production-ready/ui";
 
@@ -288,8 +289,11 @@ export function Nl2SqlPendingTurn({
   resendDisabled,
   steps,
   testIdPrefix,
+  attachments,
 }: {
   message: OptimisticChatMessage;
+  /** 質問に添付したファイル（#2517）。 */
+  attachments?: ChatAttachmentItem[];
   /** 送れなかったときの原因（送信中・送れたときは null）。 */
   error: unknown;
   /** 原因の文が無いときの文（翻訳済み）。 */
@@ -303,6 +307,8 @@ export function Nl2SqlPendingTurn({
   return (
     <ChatPendingTurn
       message={message}
+      attachments={attachments}
+      attachmentsLabel={t("chat.attachments.list")}
       failedLabel={t("chat.sendFailedStatus")}
       testId={`${testIdPrefix}-pending-turn`}
       progress={

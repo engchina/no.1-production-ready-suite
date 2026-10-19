@@ -21,6 +21,8 @@ export interface ChatJobRequest {
   requirement_session_id?: string;
   /** 回答前の確認を「確認せずに SQL を生成」で飛ばした（#1839。会話に残すだけで生成は変えない）。 */
   requirement_skipped?: boolean;
+  /** 質問に添付するファイル（`uploadChatAttachment` の `attachment_id`。#2517）。 */
+  attachment_ids?: string[];
 }
 
 /** 送った質問の要件の検査・確認（作業状態に残す。生成のジョブを投入するまで）。 */
@@ -61,6 +63,11 @@ export function parseChatRequirementCheck(value: unknown): ChatRequirementCheck 
       engine: request.engine as Nl2SqlEngine,
       previous_job_id: request.previous_job_id,
       client_job_id: request.client_job_id,
+      // 質問に添付したファイル（#2517）。確認の後に SQL の生成へ渡す。
+      ...(Array.isArray(request.attachment_ids) &&
+      request.attachment_ids.every((item) => typeof item === "string")
+        ? { attachment_ids: request.attachment_ids as string[] }
+        : {}),
     },
     sentAtMs: value.sentAtMs,
     sessionId: value.sessionId,

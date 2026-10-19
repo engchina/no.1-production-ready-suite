@@ -1,4 +1,5 @@
 import type { ChatProgressEvent } from "@production-ready/ui";
+import type { ChatAttachmentApiReference } from "@production-ready/ui";
 
 import type { OntologyGraph } from "./ontology/types";
 
@@ -654,6 +655,8 @@ export interface JobCreateData {
 
 export interface JobData {
   job_id: string;
+  /** チャットの質問に添付したファイル（#2517）。 */
+  attachments?: ChatAttachmentApiReference[];
   question?: string;
   /** 回答前の確認で確かめた質問の文（反映したジョブだけ。チャットの回答に出す。#1442）。 */
   requirement_question?: string;

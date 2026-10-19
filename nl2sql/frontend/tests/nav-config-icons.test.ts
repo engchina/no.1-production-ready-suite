@@ -73,6 +73,7 @@ const EXPECTED_ICON_NAMES_BY_LABEL_KEY = new Map<string, string>([
   // 運用設定（#81。Select AI Credential はデータベース設定から分けた。#658。回答の注意書きは #2449）
   ["nav.settingsSystemTables", "TableProperties"],
   ["nav.settingsAnswerNotice", "MessageSquareWarning"],
+  ["nav.settingsChatAttachments", "Paperclip"],
   ["nav.settingsSelectAiCredential", "FileKey"],
   // システム設定（3製品共通）
   ["nav.settingsOci", "KeyRound"],

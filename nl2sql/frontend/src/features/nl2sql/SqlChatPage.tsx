@@ -41,6 +41,8 @@ import {
   useChatHistoryPanel,
   useChatProgressStream,
   withOptimisticChatStatus,
+  chatAttachmentItems,
+  type ChatAttachmentItem,
   type ChatProgressPage,
   type OptimisticChatMessage,
 } from "@production-ready/ui";
@@ -91,6 +93,7 @@ import {
   type ChatJobRequest,
   type ChatRequirementCheck,
 } from "./chatRequirement";
+import { useNl2SqlChatAttachments } from "./useNl2SqlChatAttachments";
 import { chatJobFailure, processFailureLabels } from "./processFailure";
 import {
   useProfileUsageContext,
@@ -175,6 +178,8 @@ const errorMessage = (error: unknown, fallback: string) =>
 interface PendingSend {
   message: OptimisticChatMessage;
   request: ChatJobRequest;
+  /** 質問に添付したファイル（#2517。送った質問の下に出す）。 */
+  attachments: ChatAttachmentItem[];
 }
 
 /**
@@ -298,6 +303,10 @@ export function SqlChatPage() {
   // ジョブの作成の時刻から数え直さない）。画面を開き直したときはジョブの作成の時刻から数える。
   const [sentAtByJob, setSentAtByJob] = useState<Record<string, number>>({});
   const pending = pendingSend?.message ?? null;
+  // 会話の添付（#2517。運用設定で有効なときだけ入力欄に出す）。添付の表は生成方法「Enterprise AI」だけが使う。
+  const chatAttachments = useNl2SqlChatAttachments();
+  // 送信の確認（回答前の確認）の間も、送った質問の添付を持つ（client_job_id ごと）。
+  const [attachmentsByJob, setAttachmentsByJob] = useState<Record<string, ChatAttachmentItem[]>>({});
   // 送った質問の要件の検査・確認（#1442）。SQL を作る前に自動で行い、確認が要るときは会話の中で 1 問ずつ聞く。
   // 送った質問と session の ID は作業状態に残し、再読込・画面の移動の後も同じ確認を続ける。
   // 作業状態は既定値と同じ型の値だけを戻すので、JSON の文字列で持つ（空は確認なし）。
@@ -492,7 +501,7 @@ export function SqlChatPage() {
     // 生成の経過は投入の時刻から数える（確認に答えていた時間を生成の時間に含めない）。
     const message = createOptimisticChatMessage(request.question);
     setSentAtByJob((current) => ({ ...current, [request.client_job_id]: message.sentAtMs }));
-    setPendingSend({ message, request });
+    setPendingSend({ message, request, attachments: attachmentsByJob[request.client_job_id] ?? [] });
     autoScroll.scrollToLatest();
     send.mutate(request);
     // 確認のカードの「この内容で SQL を生成して実行」で投入したときは、押したボタンが消えてフォーカスが
@@ -536,6 +545,8 @@ export function SqlChatPage() {
   // 会話の形の Skeleton で覆い、送信を止める（`blocked`。#1153）。入力欄・生成方法・新しい会話・履歴の開閉を
   // 無効にするのは業務プロファイルの一覧の読み込み中だけ。会話の内容の読み込み中は入力欄に書ける
   // （書いている途中で無効にしてフォーカスと入力を失わせない。messaging.md §11.7、#1188）。
+  const attachmentsReady = Boolean(chatAttachments.composer?.items.some((item) => item.status === "ready"));
+  const attachmentEngineMismatch = attachmentsReady && engine !== "enterprise_ai_direct";
   const blocked =
     busy ||
     generating ||
@@ -547,18 +558,26 @@ export function SqlChatPage() {
     // 要件の確認の間は次の質問を送らない（確認に答えるか、中止してから送る。#1442）。
     Boolean(requirementCheck) ||
     turns.length >= 50 ||
-    selectAiCredentialBlocked;
+    selectAiCredentialBlocked ||
+    attachmentEngineMismatch ||
+    chatAttachments.uploading;
   function submit() {
     const question = draft.trim();
     if (!question || blocked || sendingRef.current) return;
     sendingRef.current = true;
+    // 添付は入力欄から外し、送った質問の下に出す（#2517）。
+    const sentAttachments = chatAttachments.take();
     const request: ChatJobRequest = {
       question,
       profile_id: selectedProfileId,
       engine,
       previous_job_id: latest?.job_id ?? null,
       client_job_id: randomUuid(),
+      ...(sentAttachments.ids.length ? { attachment_ids: sentAttachments.ids } : {}),
     };
+    if (sentAttachments.items.length) {
+      setAttachmentsByJob((current) => ({ ...current, [request.client_job_id]: sentAttachments.items }));
+    }
     // 送った質問はすぐ会話の欄に出し、入力欄を空にする（#907）。SQL を作る前に、要件の検査を自動で行う
     // （#1442。確認が要らなければそのまま SQL を作り、要れば会話の中で 1 問ずつ聞く）。
     sendingRef.current = false;
@@ -841,8 +860,15 @@ export function SqlChatPage() {
                     />
                   </ChatComposerOption>
                 }
+                // 会話の添付（#2517。運用設定で有効なときだけ）。
+                attachments={chatAttachments.composer}
                 footer={
                   <>
+                    {attachmentEngineMismatch ? (
+                      <p className="text-sm text-fg-muted" data-testid="sql-chat-attachment-engine">
+                        {t("chat.attachments.engineNotice")}
+                      </p>
+                    ) : null}
                     {selectAiCredentialBlocked ? (
                       <SelectAiCredentialPrecondition
                         id="sql-chat-credential-precondition"
@@ -931,6 +957,7 @@ export function SqlChatPage() {
             // 1 往復の入れ物・送信中の回答の場所・失敗の出し方は 3 製品共通の ChatPendingTurn（#1161）。
             <Nl2SqlPendingTurn
               message={pending}
+              attachments={pendingSend?.attachments}
               error={send.isError ? send.error : null}
               fallback={t("chat.sendFailed")}
               onResend={resend}
@@ -1020,6 +1047,8 @@ function SqlChatTurn({
               name: turn.sender_display_name || t("chat.historyOwnerMissing"),
             })
       }
+      questionAttachments={chatAttachmentItems(turn.attachments)}
+      attachmentsLabel={t("chat.attachments.list")}
       testId="sql-chat-turn"
     >
       {/* 回答前の確認で答えた内容・飛ばしたことは、利用者の発言として質問の下に残す（#1839）。 */}

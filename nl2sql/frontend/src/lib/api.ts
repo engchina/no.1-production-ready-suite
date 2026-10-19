@@ -98,7 +98,13 @@ import type {
 } from "@production-ready/system-settings";
 
 // 回答の注意書き API の型は platform の共有パッケージが正本（#2405）。
-import type { AnswerNoticeSettingsData, AnswerNoticeSettingsUpdate } from "@production-ready/system-settings";
+import type {
+  AnswerNoticeSettingsData,
+  AnswerNoticeSettingsUpdate,
+  ChatAttachmentSettingsData,
+  ChatAttachmentSettingsUpdate,
+} from "@production-ready/system-settings";
+import type { ChatAttachmentApiItem, ChatAttachmentApiLimits } from "@production-ready/ui";
 
 // アップロード保存先 API の型は platform の共有パッケージが正本（#97）。
 export type {
@@ -976,6 +982,27 @@ export const api = {
     }),
 
   // 回答の注意書き（設定は製品ごと。#2405・#2449）
+  // チャットの添付（#2517）
+  uploadChatAttachment: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return settingsRequest<ChatAttachmentApiItem>("/api/chat-attachments", { method: "POST", body });
+  },
+  listChatAttachments: () =>
+    settingsRequest<{ items: ChatAttachmentApiItem[]; limits: ChatAttachmentApiLimits }>("/api/chat-attachments"),
+  deleteChatAttachment: (attachmentId: string) =>
+    settingsRequest<{ deleted: boolean }>(`/api/chat-attachments/${encodeURIComponent(attachmentId)}`, {
+      method: "DELETE",
+    }),
+  // 運用設定: チャットの添付（設定は製品ごと。#2517）
+  getChatAttachmentSettings: (options: ApiRequestOptions = {}) =>
+    settingsRequest<ChatAttachmentSettingsData>("/api/settings/chat-attachments", { signal: options.signal }),
+  updateChatAttachmentSettings: (body: ChatAttachmentSettingsUpdate) =>
+    settingsRequest<ChatAttachmentSettingsData>("/api/settings/chat-attachments", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   getAnswerNoticeSettings: (options: ApiRequestOptions = {}) =>
     settingsRequest<AnswerNoticeSettingsData>("/api/settings/answer-notice", { signal: options.signal }),
   updateAnswerNoticeSettings: (body: AnswerNoticeSettingsUpdate) =>
