@@ -1439,6 +1439,11 @@ GUIDE_IS_NOT_EVIDENCE = (
     "手順・値は rag_retrieve_evidence（または rag_search）で資料の根拠を集めて確かめてから"
     "答えてください。"
 )
+# 質問に当たる業務ガイドが無いとき（#2504）。業務ガイドが無いことは、資料が無いことではない。
+NO_GUIDE_HINT = (
+    "質問に当たる業務ガイドはありませんが、資料が無いという意味ではありません。"
+    "rag_retrieve_evidence（または rag_search）で資料の根拠を集めてから答えてください。"
+)
 
 
 def guide_check_note(
@@ -1453,7 +1458,9 @@ def guide_check_note(
     見ないので、モデルが業務ガイドを引かずに根拠を集めたとき、Control Plane の照合の結果をその根拠の
     結果に足す。モデルが自分で業務ガイドを引いたときも、次の手をその結果に足す（`evidence_gathered`
     が False。答える判断なら、業務ガイドだけで答えず資料の根拠を集めるよう添える）。最上位の業務
-    ガイドの判断（decision）で次の手を決める（決定的）。当たる業務ガイドが無ければ None。
+    ガイドの判断（decision）で次の手を決める（決定的）。当たる業務ガイドが無ければ None。ただし
+    モデルが自分で引いて（`evidence_gathered` が False）当たる業務ガイドが無ければ、資料の根拠を
+    集める次の手（`NO_GUIDE_HINT`。#2504）を返す。
 
     答える判断（answer / branch）で手順があれば、手順を段として引く次の手（手順ごとの検索の語と
     参照の資料・頁。`guide_steps.guide_steps_next_step`。#2396）を足す。`rag_calls_remaining` は
@@ -1461,7 +1468,16 @@ def guide_check_note(
     """
     guides = _records(output.get("guides")) if isinstance(output, dict) else []
     if not guides:
-        return None
+        if evidence_gathered or not isinstance(output, dict):
+            return None
+        return {
+            "next_step": {
+                "action": NEXT_STEP_CONTINUE_WITH_TOOLS,
+                "reason": "no_guide",
+                "tools": [],
+                "instruction": NO_GUIDE_HINT,
+            }
+        }
     guide = guides[0]
     title = _text(guide.get("title"), 200)
     decision = _text(guide.get("decision"), 20)

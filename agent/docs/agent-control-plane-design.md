@@ -885,7 +885,9 @@ Agent ごとに変わり、申告と本文の食い違いの扱いも要るた�
 根拠・データのツールを呼ばずに作った回答の拒答（#1835）: `AGENT_TOOL_GROUNDING_REQUIRED`（既定 true）が true のとき、
 その Run でモデルに根拠・データのツール（MCP 接続のツール。一覧・推薦の `rag_list_search_answer_profiles` /
 `nl2sql_list_profiles` / `nl2sql_recommend_profile` と Control Plane が呼ぶ `rag_validate_answer` /
-`nl2sql_cancel_requirement` を除く。Control Plane のツールは数えない）を渡した Run で、モデルがどれも呼ばずに最終の回答を
+`nl2sql_cancel_requirement` を除く。Control Plane のツールは数えない。業務ガイドの照合 `rag_lookup_guides` は当たる業務
+ガイドを返したときだけ数える〔業務ガイドが無いことは資料が無いことではない。0 件の結果には資料の根拠を集める次の手
+`NO_GUIDE_HINT` を足す。#2504〕）を渡した Run で、モデルがどれも呼ばずに最終の回答を
 作ったら、回答を確定する前に（最終の検証の前に）1 回だけ「業務の事実はツールで確かめてから答える。曖昧なら確認の質問だけを
 返してよい。確かめられない・範囲外なら答えられないと答える」を利用者のメッセージとしてモデルへ返して Run を続ける（同じ
 SDK の Agent・ツール・予算。利用量は前の分に積む。差し戻しの回数は Run の metadata `tool_grounding` に残し、承認待ちから
