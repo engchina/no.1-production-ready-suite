@@ -76,10 +76,10 @@ MENU_SETTINGS_UPLOAD_STORAGE = "menu.settings_upload_storage"
 MENU_SETTINGS_MODEL = "menu.settings_model"
 MENU_SETTINGS_DATABASE = "menu.settings_database"
 MENU_SETTINGS_APPEARANCE = "menu.settings_appearance"
-# 回答の注意書き（設定は製品ごと。運用設定のシステムテーブルの下。#2405・#2449）。
-MENU_SETTINGS_ANSWER_NOTICE = "menu.settings_answer_notice"
-# チャットの添付を使うか（設定は製品ごと。運用設定の回答の注意書きの下。#2517）。
+# チャットの添付を使うか（設定は製品ごと。運用設定のシステムテーブルの下。#2517・#2546）。
 MENU_SETTINGS_CHAT_ATTACHMENTS = "menu.settings_chat_attachments"
+# 回答の注意書き（設定は製品ごと。運用設定のチャットの添付の下。#2405・#2449・#2546）。
+MENU_SETTINGS_ANSWER_NOTICE = "menu.settings_answer_notice"
 
 # ---- capability（従来の 5 ロールに対応） ----
 
@@ -137,8 +137,8 @@ _ADMIN_MENUS = (
     MENU_USAGE,
     MENU_AUDIT,
     MENU_SETTINGS_SYSTEM_TABLES,
-    MENU_SETTINGS_ANSWER_NOTICE,
     MENU_SETTINGS_CHAT_ATTACHMENTS,
+    MENU_SETTINGS_ANSWER_NOTICE,
     MENU_RUNTIMES,
     MENU_SETTINGS_EXTERNAL_MCP,
     *_SYSTEM_SETTINGS_MENUS,
@@ -172,8 +172,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SECURITY_ROLES, _GROUP_USERS_ROLES, "ロール管理"),
     # 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ。#658 / #751）。
     _menu_permission(MENU_SETTINGS_SYSTEM_TABLES, _GROUP_OPERATIONS, "システムテーブル"),
-    _menu_permission(MENU_SETTINGS_ANSWER_NOTICE, _GROUP_OPERATIONS, "回答の注意書き"),
     _menu_permission(MENU_SETTINGS_CHAT_ATTACHMENTS, _GROUP_OPERATIONS, "チャットの添付"),
+    _menu_permission(MENU_SETTINGS_ANSWER_NOTICE, _GROUP_OPERATIONS, "回答の注意書き"),
     # 組み込み Runtime の状態とモデルの確認（#754 / #791）。
     _menu_permission(MENU_RUNTIMES, _GROUP_OPERATIONS, "実行環境"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_MCP, _GROUP_OPERATIONS, "MCP 接続"),
