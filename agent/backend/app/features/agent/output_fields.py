@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.features.agent.tools import (
     ExternalToolError,
@@ -34,6 +34,8 @@ MAX_VALUE_CHARS = 2000
 OUTPUT_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 
 OutputFieldType = Literal["text", "number", "date", "boolean"]
+# 品質評価での比べ方（#2562）。exact は型ごとの一致、meaning は意味が同じか（文字の項目だけ）。
+OutputFieldMatch = Literal["exact", "meaning"]
 
 _JSON_TYPES: dict[str, str] = {
     "text": "string",
@@ -59,6 +61,7 @@ class AgentOutputField(BaseModel):
     type: OutputFieldType = "text"
     required: bool = False
     description: str = Field(default="", max_length=200)
+    match: OutputFieldMatch = "exact"
 
     @field_validator("key")
     @classmethod
@@ -74,6 +77,13 @@ class AgentOutputField(BaseModel):
     @classmethod
     def _strip(cls, value: str) -> str:
         return value.strip()
+
+    @model_validator(mode="after")
+    def _match_only_for_text(self) -> AgentOutputField:
+        # 意味で比べるのは文字の項目だけ（数値・日付・真偽は型ごとの一致で比べる）。
+        if self.type != "text":
+            self.match = "exact"
+        return self
 
 
 def validate_output_fields(fields: Sequence[AgentOutputField]) -> list[AgentOutputField]:
@@ -189,10 +199,11 @@ def validate_rows(
 def output_content(
     fields: Sequence[AgentOutputField], rows: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """成果物の内容（画面の表の形）。"""
+    """成果物の内容（画面の表の形）。`match` は品質評価の比べ方（#2562。画面の表は使わない）。"""
     return {
         "columns": [
-            {"name": field.key, "label": field.label, "type": field.type} for field in fields
+            {"name": field.key, "label": field.label, "type": field.type, "match": field.match}
+            for field in fields
         ],
         "rows": rows,
     }
@@ -261,7 +272,10 @@ _FALSE_TEXTS = frozenset({"false", "いいえ", "no", "×", "0"})
 
 
 class OutputFieldResult(BaseModel):
-    """期待する出力の 1 つの項目の判定（期待の行・項目・期待・記録・正誤）。"""
+    """期待する出力の 1 つの項目の判定（期待の行・項目・期待・記録・正誤・比べ方）。
+
+    `note` は比べ方どおりに判定できなかった理由（意味の判定の失敗など。無ければ空）。
+    """
 
     row: int
     field: str
@@ -269,6 +283,8 @@ class OutputFieldResult(BaseModel):
     expected: OutputValue = None
     actual: OutputValue = None
     correct: bool
+    method: OutputFieldMatch = "exact"
+    note: str = ""
 
 
 def validate_expected_output(rows: list[dict[str, Any]]) -> list[dict[str, OutputValue]]:
@@ -398,6 +414,11 @@ def compare_output(
         [item for item in columns if isinstance(item, dict)] if isinstance(columns, list) else []
     )
     types = {str(item.get("name")): str(item.get("type") or "text") for item in column_list}
+    methods: dict[str, OutputFieldMatch] = {
+        str(item.get("name")): "meaning"
+        for item in column_list
+        if item.get("match") == "meaning" and (item.get("type") or "text") == "text"
+    }
     labels = {str(item.get("name")): str(item.get("label") or "") for item in column_list}
     actual_rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
     key = str(column_list[0].get("name")) if column_list else None
@@ -416,6 +437,19 @@ def compare_output(
                     actual=actual,
                     correct=got is not None
                     and output_value_matches(value, actual, types.get(field, "text")),
+                    method=methods.get(field, "exact"),
                 )
             )
     return results, all(item.correct for item in results)
+
+
+def meaning_candidates(results: Sequence[OutputFieldResult]) -> list[int]:
+    """意味で比べる項目のうち、文字が一致せず、期待・記録の両方に値がある判定の位置。"""
+    return [
+        index
+        for index, item in enumerate(results)
+        if item.method == "meaning"
+        and not item.correct
+        and not _empty(item.expected)
+        and not _empty(item.actual)
+    ]

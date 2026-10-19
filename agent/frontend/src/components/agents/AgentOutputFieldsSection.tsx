@@ -1,7 +1,7 @@
 import { Plus, Trash2 } from "lucide-react";
 import { Button, Card, CardContent, EmptyState, Section, SelectField, Switch, TextField } from "@production-ready/ui";
 
-import type { AgentOutputField, AgentOutputFieldType } from "@/lib/api";
+import type { AgentOutputField, AgentOutputFieldMatch, AgentOutputFieldType } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 /** 出力の項目の上限と key の形（backend の `output_fields.MAX_OUTPUT_FIELDS` / `OUTPUT_KEY_PATTERN`）。 */
@@ -9,6 +9,7 @@ export const MAX_OUTPUT_FIELDS = 30;
 const OUTPUT_KEY_PATTERN = /^[a-z][a-z0-9_]{0,39}$/;
 
 const TYPES: AgentOutputFieldType[] = ["text", "number", "date", "boolean"];
+const MATCHES: AgentOutputFieldMatch[] = ["exact", "meaning"];
 
 /** 保存の前の確かめ（key の形・重なり・表示名の空）。項目の位置 → 欄 → 文。 */
 export type OutputFieldErrors = Record<number, Partial<Record<"key" | "label", string>>>;
@@ -28,7 +29,7 @@ export function outputFieldErrors(fields: AgentOutputField[]): OutputFieldErrors
   return errors;
 }
 
-/** 保存する形（前後の空白を除く）。 */
+/** 保存する形（前後の空白を除く。意味で比べるのは文字の項目だけ）。 */
 export function normalizeOutputFields(fields: AgentOutputField[]): AgentOutputField[] {
   return fields.map((field) => ({
     key: field.key.trim(),
@@ -36,6 +37,7 @@ export function normalizeOutputFields(fields: AgentOutputField[]): AgentOutputFi
     type: field.type,
     required: field.required,
     description: field.description.trim(),
+    match: field.type === "text" && field.match === "meaning" ? "meaning" : "exact",
   }));
 }
 
@@ -59,7 +61,10 @@ export function AgentOutputFieldsSection({
   const update = (index: number, patch: Partial<AgentOutputField>) =>
     onChange(value.map((field, position) => (position === index ? { ...field, ...patch } : field)));
   const add = () =>
-    onChange([...value, { key: `field_${value.length + 1}`, label: "", type: "text", required: false, description: "" }]);
+    onChange([
+      ...value,
+      { key: `field_${value.length + 1}`, label: "", type: "text", required: false, description: "", match: "exact" },
+    ]);
   const remove = (index: number) => onChange(value.filter((_, position) => position !== index));
 
   return (
@@ -101,7 +106,7 @@ export function AgentOutputFieldsSection({
                     width="full"
                     value={field.type}
                     options={TYPES.map((type) => ({ value: type, label: t(`agent.output.type.${type}`) }))}
-                    onValueChange={(type) => update(index, { type })}
+                    onValueChange={(type) => update(index, type === "text" ? { type } : { type, match: "exact" })}
                   />
                   <div className="flex items-end gap-3">
                     <label className="flex min-h-9 items-center gap-2 text-sm text-fg">
@@ -125,12 +130,23 @@ export function AgentOutputFieldsSection({
                       />
                     ) : null}
                   </div>
+                  {field.type === "text" ? (
+                    <SelectField<AgentOutputFieldMatch>
+                      id={`${fieldId}-output-${index}-match`}
+                      label={t("agent.output.match")}
+                      helper={t("agent.output.matchHelper")}
+                      width="full"
+                      value={field.match === "meaning" ? "meaning" : "exact"}
+                      options={MATCHES.map((match) => ({ value: match, label: t(`agent.output.match.${match}`) }))}
+                      onValueChange={(match) => update(index, { match })}
+                    />
+                  ) : null}
                   <TextField
                     id={`${fieldId}-output-${index}-description`}
                     label={t("agent.output.fieldDescription")}
                     helper={t("agent.output.fieldDescriptionHelper")}
                     width="full"
-                    className="md:col-span-2 xl:col-span-4"
+                    className={field.type === "text" ? "xl:col-span-3" : "md:col-span-2 xl:col-span-4"}
                     value={field.description}
                     onValueChange={(description) => update(index, { description })}
                   />

@@ -27,6 +27,9 @@ job・進み具合・取り消し・概要・ケース別結果）にそろえ�
   答えを持てる。
   Run が問い返しで止まったら、答えを同じ会話（`thread_id`）の次の Run として送り、最後の Run の
   回答を判定する（往復は `EVALUATION_CLARIFICATION_ROUNDS_MAX` 回まで。#1845）。
+- 評価ケースは期待する出力（出力の項目の値）を持てる。項目ごとの判定はコードで行い（#2558）、
+  比べ方が「意味が同じ」の文字の項目で文字が一致しなかったものだけを、ケースごとに 1 回の
+  LLM の呼び出しでまとめて判定する（#2562）。
 """
 
 from __future__ import annotations
@@ -67,6 +70,7 @@ from app.features.agent.output_fields import (
     OutputFieldResult,
     OutputValue,
     compare_output,
+    meaning_candidates,
     validate_expected_output,
 )
 from app.features.agent.runtime import (
@@ -1313,6 +1317,90 @@ async def judge_answer(
     return judgement, attempts
 
 
+MEANING_INSTRUCTIONS = """あなたは業務 Agent が記録した項目の値を採点する評価者です。
+項目ごとに、期待する値と記録した値が同じ内容を表しているかを判定します。
+- same: 同じ内容なら true。表現・語順・言い換え・文体の違いは同じとみなす。
+  数値・日付・固有名詞・否定・結論の違い、内容の欠落・追加は異なるとみなす。
+- number: 入力の項目の番号をそのまま返す。"""
+
+
+class _MeaningItem(BaseModel):
+    number: int
+    same: bool
+
+
+class _MeaningJudgement(BaseModel):
+    items: list[_MeaningItem]
+
+
+MEANING_FAILED_NOTE = "意味の判定に失敗したため、文字の一致で判定しました。"
+
+
+def _meaning_input(results: Sequence[OutputFieldResult], indexes: Sequence[int]) -> str:
+    return "\n\n".join(
+        f"## 項目 {number}（{results[index].label or results[index].field}）\n"
+        f"期待する値: {results[index].expected}\n記録した値: {results[index].actual}"
+        for number, index in enumerate(indexes, start=1)
+    )
+
+
+async def _judge_meaning_once(text: str, target: builtin_runtime.ModelTarget) -> _MeaningJudgement:
+    judge = Agent(
+        name="output_meaning_evaluator",
+        instructions=MEANING_INSTRUCTIONS,
+        model=builtin_runtime.model_factory(target),
+        model_settings=builtin_runtime.model_settings_for(target),
+        output_type=_MeaningJudgement,
+    )
+    result = await Runner.run(judge, text, max_turns=1)
+    output = result.final_output
+    if isinstance(output, _MeaningJudgement):
+        return output
+    return _MeaningJudgement.model_validate(output)
+
+
+async def judge_output_meaning(
+    results: list[OutputFieldResult], *, caller: BoundedCaller | None = None
+) -> list[OutputFieldResult]:
+    """比べ方が「意味が同じ」で文字が一致しなかった項目を、意味で判定し直す（#2562）。
+
+    対象の項目をまとめて 1 回だけモデルに渡す（回答の判定と同じ実行器・モデル・出力の上限の
+    再試行）。判定に失敗したら文字の一致の結果のまま残し、`note` に理由を書く（回答の判定が
+    同じ失敗を job に記録するので、ここでは止めない）。
+    """
+    indexes = meaning_candidates(results)
+    if not indexes:
+        return results
+    caller = caller or make_ai_caller("evaluation_judge", max_concurrency=1)
+    text = _meaning_input(results, indexes)
+
+    async def once(attempt: Attempt) -> _MeaningJudgement:
+        target = replace(builtin_runtime.resolve_model_target(""), sdk_max_retries=0)
+        for _ in range(min(attempt.adaptation, JUDGE_MAX_ATTEMPTS - 1)):
+            target = retry_model_target(target)
+        return await _judge_meaning_once(text, target)
+
+    updated = list(results)
+    try:
+        judgement = await caller.call(once, label="output_meaning", adaptive=True)
+    except Exception as exc:  # noqa: BLE001 - 意味の判定の失敗は項目の判定に残して続ける
+        logger.warning(
+            "agent_evaluation_meaning_failed",
+            extra={
+                "warning_code": "AGENT_EVALUATION_MEANING_FAILED",
+                "error_type": type(exc).__name__,
+            },
+        )
+        for index in indexes:
+            updated[index] = updated[index].model_copy(update={"note": MEANING_FAILED_NOTE})
+        return updated
+    same = {item.number for item in judgement.items if item.same}
+    for number, index in enumerate(indexes, start=1):
+        if number in same:
+            updated[index] = updated[index].model_copy(update={"correct": True})
+    return updated
+
+
 def tool_matches(called: str, expected: str) -> bool:
     """呼んだツールが期待するツールか（MCP 接続の名前を省いた指定も受け付ける）。"""
     return called == expected or called.endswith(f"{_MCP_SEPARATOR}{expected}")
@@ -1707,6 +1795,9 @@ async def _run_case(
         store.update_result(job.id, index, run_id=run.id, clarification_rounds=list(rounds))
     tool_calls = _tool_calls(*runs)
     field_results, field_correct = compare_output(case.expected_output, _recorded_output(runs))
+    if field_results:
+        field_results = await judge_output_meaning(field_results, caller=judge_caller)
+        field_correct = all(item.correct for item in field_results)
     tools = {
         "tool_calls": tool_calls,
         "tool_selection_correct": tool_selection_correct(case, tool_calls),
