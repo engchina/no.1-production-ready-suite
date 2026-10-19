@@ -10,6 +10,7 @@ import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 //   項目が多い節は共通の「すべて表示」で畳む（「ほか N 件」で切らない）。
 // - 根拠のパネルの下に、RAG と同じ共通の原文のプレビュー（ページの画像・強調・ツールバー）を出す（#2389）。
 //   原文は Agent の backend が閲覧者として RAG に作らせた短命の署名つきの URL（`http://rag.e2e.test/**`）で読む。
+// - 図の根拠（AI が図を読んだ説明・`image_ref` あり）にも、注記・「図を開く」・文書の詳細へのリンクの帯は出さない（#2462）。
 // 内容はすべて合成のデータ。
 
 const VIEWPORTS = [
@@ -137,7 +138,14 @@ function seedRun(mockApi: MockApi, excerptA?: string) {
         created_at: MOCK_NOW,
         content: {
           items: [
-            evidenceItem(CHUNK_A, { cited: true, answer_use: "confirmed", ...(excerptA ? { excerpt: excerptA } : {}) }),
+            evidenceItem(CHUNK_A, {
+              cited: true,
+              answer_use: "confirmed",
+              // 図の根拠（AI が図を読んだ説明）。帯を出さないことを確かめる（#2462）。
+              evidence_type: "figure_description",
+              image_ref: { document_id: "0f3a9c2e7b1d4e5f", chunk_id: CHUNK_A, page: 3, bbox: [60, 80, 300, 200], bbox_unit: "absolute" },
+              ...(excerptA ? { excerpt: excerptA } : {}),
+            }),
             evidenceItem(CHUNK_B, { cited: true, locator: { page_start: 5, page_end: 5, section_path: [] } }),
             evidenceItem(CHUNK_C, { file_name: "文書 C.pdf", rerank_score: null }),
           ],
@@ -210,6 +218,10 @@ for (const viewport of VIEWPORTS) {
     // プレビューに場所を空けるため、抜粋は 3 行に畳む（RAG と同じ）。
     await expect(summary.getByTestId("citation-text")).toHaveAttribute("data-expanded", "false");
     await expect(sheet.getByTestId("evidence-source-preview").getByTestId("preview-viewer")).toBeVisible();
+    // 図の根拠でも、要約の下に注記・「図を開く」・文書の詳細へのリンクの帯を出さない（#2462）。
+    await expect(summary.getByRole("button", { name: /図を開く/ })).toHaveCount(0);
+    await expect(summary.getByRole("link")).toHaveCount(0);
+    await expect(sheet).not.toContainText("AI が図を読んだ説明です");
     // 右端に付き、375px は全画面のシート。
     await expect
       .poll(async () => {
@@ -234,6 +246,9 @@ for (const viewport of VIEWPORTS) {
     await expect(cards.nth(2)).not.toContainText("回答で引用");
     await expect(cards.nth(2)).toContainText("Rerank 未実行");
     await expect(cards.nth(0).getByTestId("evidence-chips")).toContainText("p.3");
+    // 図の根拠のカードも、操作は「根拠を表示」だけ（注記・「図を開く」は出さない。#2462）。
+    await expect(cards.nth(0).getByRole("button", { name: /図を開く/ })).toHaveCount(0);
+    await expect(cards.nth(0)).not.toContainText("AI が図を読んだ説明です");
     // カードの「根拠を表示」も、根拠の行と同じ右のサイドパネルを開く（RAG と同じ共通の部品のボタン。#2360・#2388）。
     const cardOpen = cards.nth(0).getByRole("button", { name: "文書 0.pdf の根拠を表示" });
     await cardOpen.click();

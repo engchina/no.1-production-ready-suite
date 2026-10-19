@@ -1310,11 +1310,6 @@ export interface RetrievedChunk {
   file_name: string | null;
   category_name: string | null;
   metadata: Record<string, JsonValue>;
-  /**
-   * 元の図の画像を切り出せるか（図の根拠で、保存した図の領域がある。#2433）。真のときだけ「図を開く」を出す。
-   * backend は常に返す（無い値は false と同じ）。
-   */
-  figure_image_available?: boolean;
 }
 
 // --- チャット（会話 / マルチモデル比較）---
@@ -3058,13 +3053,6 @@ export const api = {
   },
   getDocument: (id: string) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
-  /** 根拠の図の画像（PNG。#2428）。保存した図の領域を、今の権限・版で確かめて切り出す。 */
-  getChunkFigure: (documentId: string, chunkId: string, options: { signal?: AbortSignal } = {}) =>
-    requestFile(
-      `/api/figures?${new URLSearchParams({ document_id: documentId, chunk_id: chunkId }).toString()}`,
-      "figure.png",
-      options,
-    ),
   listDocumentChunkSets: (id: string) =>
     request<DocumentChunkSet[]>(
       `/api/documents/${encodeURIComponent(id)}/chunk-sets`,

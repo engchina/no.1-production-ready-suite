@@ -754,12 +754,6 @@ export interface ToolCallAuditFilters {
   limit?: number;
 }
 
-/** RAG の図の根拠を開く短命の URL（#1311。期限が切れたら取り直す。保存しない）。 */
-export interface RunFigureUrl {
-  url: string;
-  expires_at: string;
-}
-
 /** Run の RAG の根拠の原文のプレビュー（#2389。URL は RAG が利用者・根拠・版に縛って署名した短命の URL）。 */
 export interface RunSourcePreview {
   kind: "pdf" | "image" | "text" | "unsupported";
@@ -1825,15 +1819,6 @@ export const agentApi = {
     request<unknown>(`/api/runs/${encodeURIComponent(runId)}/progress?since=${since}`, {
       signal: options.signal,
     }).then(parseChatProgressPage),
-  /** Run の RAG の図の根拠を開く短命の URL（#1311。画面を見ている利用者として RAG が作る）。 */
-  getRunFigureUrl: (runId: string, documentId: string, chunkId: string, options: { signal?: AbortSignal } = {}) =>
-    request<RunFigureUrl>(
-      `/api/runs/${encodeURIComponent(runId)}/figure-url?${new URLSearchParams({
-        document_id: documentId,
-        chunk_id: chunkId,
-      }).toString()}`,
-      { signal: options.signal }
-    ),
   /** Run の RAG の根拠の原文のプレビュー（#2389。画面を見ている利用者として RAG が作る）。 */
   getRunSourcePreview: (runId: string, documentId: string, chunkId: string) =>
     request<RunSourcePreview>(

@@ -3,11 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   citationAnswerUse,
   citationCountLabel,
-  citationFigure,
   citationMetadataChips,
   citationModelUsed,
   citationSourceUrl,
-  firstCitationElementId,
 } from "./chunk-metadata";
 
 describe("citationMetadataChips", () => {
@@ -76,14 +74,6 @@ describe("citationMetadataChips", () => {
       })
     ).toEqual([]);
   });
-
-  it("citation preview 用の先頭 element id を複数 metadata 形態から取り出す", () => {
-    expect(firstCitationElementId(" tbl-1, el-2 ")).toBe("tbl-1");
-    expect(firstCitationElementId(["", " el-3 ", "el-4"])).toBe("el-3");
-    expect(firstCitationElementId(42)).toBe("42");
-    expect(firstCitationElementId([null, false, ""])).toBeNull();
-    expect(firstCitationElementId(null)).toBeNull();
-  });
 });
 
 // AI に渡した件数と内訳の表示（#1208・#2040）。
@@ -133,24 +123,5 @@ describe("citationSourceUrl", () => {
     expect(citationSourceUrl({ xml_tree_source_url: "javascript:alert(1)" })).toBeNull();
     expect(citationSourceUrl({ xml_tree_source_url: "http://example.test/doc/1" })).toBeNull();
     expect(citationSourceUrl({})).toBeNull();
-  });
-});
-
-describe("citationFigure", () => {
-  const figure = { content_kind: "figure", figure_text_source: "vision", page_start: 2, page_end: 3, section_path: "第 1 章" };
-
-  it("元の図の画像を開ける図の根拠だけに図の情報を返す（issue 2433）", () => {
-    expect(citationFigure({ metadata: figure, figure_image_available: true })).toEqual({
-      aiDescription: true,
-      page: "2-3",
-      section: "第 1 章",
-    });
-    expect(
-      citationFigure({ metadata: { ...figure, figure_text_source: "ocr" }, figure_image_available: true })?.aiDescription
-    ).toBe(false);
-    // 図の領域を保存していない古い根拠（偽・値なし）と、図でない根拠は null。
-    expect(citationFigure({ metadata: figure, figure_image_available: false })).toBeNull();
-    expect(citationFigure({ metadata: figure })).toBeNull();
-    expect(citationFigure({ metadata: { content_kind: "text" }, figure_image_available: true })).toBeNull();
   });
 });

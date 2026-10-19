@@ -139,89 +139,20 @@ test("KB 詳細の検索テストで検索・回答プロファイル無しに�
   // 引用カードは画面を移動するリンクを持たない（#442）。
   await expect(page.getByRole("link", { name: /引用位置/ })).toHaveCount(0);
 
-  // 引用箇所は画面に留まったまま右のサイドパネルで確認し、文書の詳細は別タブで開く（#442 / #2360）。
+  // 引用箇所は画面に留まったまま右のサイドパネルで確認する（#442 / #2360）。文書の詳細へのリンクは出さない（#2462）。
   // 回答の根拠なので、見出しは「回答の根拠」。
   const opener = page.getByRole("button", { name: "policy.pdf の根拠を表示" });
   await opener.click();
   const dialog = page.getByRole("dialog", { name: "回答の根拠" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByTestId("evidence-source-summary").getByTestId("evidence-file-name")).toHaveText("policy.pdf");
-  const detailLink = dialog.getByRole("link", { name: "文書の詳細を別タブで開く" });
-  await expect(detailLink).toHaveAttribute("href", /\/documents\/doc-1/);
-  await expect(detailLink).toHaveAttribute("target", "_blank");
+  await expect(dialog.getByRole("link", { name: "文書の詳細を別タブで開く" })).toHaveCount(0);
   await dialog.getByRole("button", { name: "閉じる" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   // 閉じたら開いた操作へフォーカスを戻す。
   await expect(opener).toBeFocused();
 
   await expectNoPageOverflow(page);
-});
-
-// 1 件の根拠のカード（CitationCard）の「図を開く」（#2433）。一覧のカードと同じ共通の部品・文言で「根拠を表示」の
-// すぐ後ろに置き、backend が元の図の画像を切り出せると返した根拠（figure_image_available）だけに出す。合成のデータ。
-test("検索テストの図の根拠のカードに「図を開く」を出し、元の図を開く", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockKbPage(page, 1);
-  const figure = (index: number, available: boolean) => ({
-    document_id: "doc-1",
-    chunk_id: `doc-1:cs_1:${index}`,
-    text: `合成の図の説明 ${index}`,
-    score: 0.9,
-    rerank_score: 0.8,
-    file_name: `figure-${index}.pdf`,
-    category_name: null,
-    metadata: { content_kind: "figure", figure_text_source: "vision", page_start: 2 },
-    figure_image_available: available,
-  });
-  const body = searchStreamBody("policy.pdf", 0).replace(
-    "event: citations\ndata: []",
-    `event: citations\ndata: ${JSON.stringify([figure(1, true), figure(2, false)])}`
-  );
-  await page.route("**/api/search/stream", (route) =>
-    route.fulfill({ status: 200, contentType: "text/event-stream", body })
-  );
-  const figures: string[] = [];
-  await page.route("**/api/figures?**", (route) => {
-    figures.push(route.request().url());
-    return route.fulfill({
-      status: 200,
-      contentType: "image/png",
-      body: Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
-        "base64"
-      ),
-    });
-  });
-
-  await page.goto("/knowledge-bases/kb-1");
-  await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("合成の質問");
-  await page.getByRole("button", { name: "検索テスト" }).click();
-
-  const cards = page.getByTestId("evidence-card");
-  await expect(cards).toHaveCount(2);
-  await expect(page.getByRole("button", { name: /^図を開く/ })).toHaveCount(1);
-  await expect(cards.nth(1).getByRole("button", { name: /^図を開く/ })).toHaveCount(0);
-  const source = cards.nth(0).getByRole("button", { name: "figure-1.pdf の根拠を表示" });
-  const open = cards.nth(0).getByRole("button", { name: "図を開く: figure-1.pdf" });
-  await expect(open).toHaveText("図を開く");
-  await expect(cards.nth(0).getByTestId("evidence-figure-description")).toBeVisible();
-  // 「根拠を表示」のすぐ後ろ（desktop は右隣、375px は下）。
-  const [sourceBox, openBox] = await Promise.all([source.boundingBox(), open.boundingBox()]);
-  if (testInfo.project.name === "mobile") expect(openBox!.y).toBeGreaterThan(sourceBox!.y);
-  else {
-    expect(openBox!.x).toBeGreaterThan(sourceBox!.x);
-    expect(Math.abs(openBox!.y - sourceBox!.y)).toBeLessThan(4);
-  }
-  await expectNoPageOverflow(page);
-  await cards.nth(0).screenshot({ path: testInfo.outputPath(`kb-search-figure-card-${testInfo.project.name}.png`) });
-
-  await open.click();
-  const sheet = page.getByRole("dialog", { name: "図の根拠: figure-1.pdf" });
-  await expect(sheet.getByRole("img", { name: /figure-1\.pdf の図/ })).toBeVisible();
-  expect(new URL(figures[0]).searchParams.get("chunk_id")).toBe("doc-1:cs_1:1");
-  await expectNoPageOverflow(page);
-  await page.keyboard.press("Escape");
-  await expect(sheet).toBeHidden();
-  await expect(open).toBeFocused();
 });
 
 for (const viewport of [

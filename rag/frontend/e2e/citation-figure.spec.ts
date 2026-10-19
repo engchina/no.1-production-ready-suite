@@ -1,18 +1,11 @@
-import type { Page, Route } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
 
-// #2428: 図の根拠の「図を開く」（Agent と同じ共通の部品・文言・位置）。根拠のカードの操作の行と、根拠のサイドパネルの
-// 要約の操作の行に出し、図でない根拠には出さない。画像は RAG の画面用の API（`GET /api/figures?document_id=&chunk_id=`）。
-// #2433: backend が元の図の画像を切り出せると返した根拠（`figure_image_available`）だけに出す。
+// #2462: 図の根拠（AI が図を読んだ説明）のカードと根拠のサイドパネルに、注記「AI が図を読んだ説明です。…」・
+// 「図を開く」・「文書の詳細を別タブで開く」の帯を出さない（Agent と同じ）。サイドパネルは要約と原文のプレビューだけ。
 // 内容はすべて合成のデータ。
-
-// 120×60 の単色の PNG（RAG が返す図の画像の代わり）。
-const FIGURE_PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAHgAAAA8CAIAAAAiz+n/AAAAaklEQVR42u3QQQ0AAAgEoEtiMBMbyxbOBxsJSPVwIApEi0a0aNEWRItGtGjRFkSLRrRo0YgWjWjRohEtGtGiRSNaNKJFi0a0aESLFo1o0YgWLRrRohEtWjSiRSNatGhEi0a0aNGIFo3oXxYAgSoOxqX2IQAAAABJRU5ErkJggg==",
-  "base64"
-);
 
 const PROFILE = {
   id: "profile-a",
@@ -25,12 +18,7 @@ const PROFILE = {
   archived_at: null,
 };
 
-function citation(
-  chunkId: string,
-  fileName: string,
-  metadata: Record<string, unknown>,
-  figureImageAvailable = false
-) {
+function citation(chunkId: string, fileName: string, metadata: Record<string, unknown>) {
   return {
     document_id: "doc-a",
     chunk_id: chunkId,
@@ -40,20 +28,17 @@ function citation(
     file_name: fileName,
     category_name: null,
     metadata: { context_role: "evidence", vector_rank: 1, ...metadata },
-    figure_image_available: figureImageAvailable,
   };
 }
 
 const CITATIONS = [
-  citation(
-    "doc-a:cs-1:1",
-    "文書 A.pdf",
-    { content_kind: "figure", figure_text_source: "vision", page_start: 2, section_path: "第 1 章" },
-    true
-  ),
+  citation("doc-a:cs-1:1", "文書 A.pdf", {
+    content_kind: "figure",
+    figure_text_source: "vision",
+    page_start: 2,
+    section_path: "第 1 章",
+  }),
   citation("doc-a:cs-1:2", "文書 B.pdf", { content_kind: "text", page_start: 1 }),
-  // 図の領域を保存していない古い図の根拠（元の図の画像を切り出せない）。
-  citation("doc-a:cs-1:3", "文書 C.pdf", { content_kind: "figure", figure_text_source: "vision", page_start: 3 }),
 ];
 
 function searchStreamBody(): string {
@@ -67,41 +52,6 @@ function searchStreamBody(): string {
     `event: citations\ndata: ${JSON.stringify(CITATIONS)}\n\n`,
     `event: done\ndata: ${JSON.stringify({ trace_id: "trace-figure" })}\n\n`,
   ].join("");
-}
-
-/**
- * 図の画像の API への応答。
- * - `failure` を渡すと、`recover()` を呼ぶまで、その status と理由を返し続ける（「もう一度読み込む」の前の取得はすべて失敗）。
- * - `seen` は応答まで終わった取得の URL（取り消された取得は数えない）。開発の server（nightly）の StrictMode は effect を
- *   2 回実行し、最初の取得を取り消して取り直すので、route に届いた数ではなく終わった数で「1 回開くと 1 回取る」を確かめる。
- */
-async function serveFigures(page: Page, failure?: { status: number; message: string }) {
-  const seen: string[] = [];
-  let failing = failure;
-  page.on("requestfinished", (request) => {
-    if (new URL(request.url()).pathname === "/api/figures") seen.push(request.url());
-  });
-  await page.route("**/api/figures?**", async (route: Route) => {
-    if (failing) {
-      await route.fulfill({
-        status: failing.status,
-        json: { data: null, error_messages: [failing.message], warning_messages: [] },
-      });
-      return;
-    }
-    await route.fulfill({
-      status: 200,
-      contentType: "image/png",
-      headers: { "Cache-Control": "private, no-store" },
-      body: FIGURE_PNG,
-    });
-  });
-  return {
-    seen,
-    recover: () => {
-      failing = undefined;
-    },
-  };
 }
 
 async function search(page: Page) {
@@ -124,78 +74,33 @@ async function search(page: Page) {
   await page.keyboard.press("Escape");
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
   await page.getByRole("button", { name: "検索", exact: true }).click();
-  await expect(page.getByTestId("evidence-card")).toHaveCount(3);
+  await expect(page.getByTestId("evidence-card")).toHaveCount(2);
 }
 
-test("図の根拠のカードとサイドパネルに「図を開く」を出し、元の図を開く", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const { seen: figures } = await serveFigures(page);
+test("図の根拠のカードとサイドパネルに、図を開く・文書の詳細へのリンクの帯を出さない", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await search(page);
-  const cards = page.getByTestId("evidence-card");
-  // 元の図の画像がある図の根拠だけに出し、AI が読んだ説明であることを添える（Agent と同じ文言）。
-  await expect(page.getByRole("button", { name: /^図を開く/ })).toHaveCount(1);
-  await expect(cards.nth(1).getByRole("button", { name: /^図を開く/ })).toHaveCount(0);
-  await expect(cards.nth(2).getByRole("button", { name: /^図を開く/ })).toHaveCount(0);
-  await expect(cards.nth(2).getByTestId("evidence-figure-description")).toHaveCount(0);
-  await expect(cards.nth(0).getByTestId("evidence-figure-description")).toHaveText(
-    "AI が図を読んだ説明です。元の図で確かめてください。"
-  );
-  const open = cards.nth(0).getByRole("button", { name: "図を開く: 文書 A.pdf" });
-  // 「根拠を表示」の後ろ（同じ操作の行）。
-  const sourceButton = cards.nth(0).getByRole("button", { name: "文書 A.pdf の根拠を表示" });
-  const [sourceBox, openBox] = await Promise.all([sourceButton.boundingBox(), open.boundingBox()]);
-  if (testInfo.project.name === "mobile") expect(openBox!.y).toBeGreaterThan(sourceBox!.y);
-  else expect(openBox!.x).toBeGreaterThan(sourceBox!.x);
-  await cards.nth(0).screenshot({ path: testInfo.outputPath(`rag-figure-card-${testInfo.project.name}.png`) });
-  await open.click();
+  const card = page.getByTestId("evidence-card").nth(0);
+  // カードの操作は「根拠を表示」だけ（注記・「図を開く」は出さない）。
+  await expect(card.getByRole("button", { name: /図を開く/ })).toHaveCount(0);
+  await expect(page.getByText("AI が図を読んだ説明です", { exact: false })).toHaveCount(0);
+  const sourceButton = card.getByRole("button", { name: "文書 A.pdf の根拠を表示" });
+  await expect(sourceButton).toBeVisible();
+  await card.screenshot({ path: testInfo.outputPath(`rag-figure-card-${testInfo.project.name}.png`) });
 
-  const sheet = page.getByRole("dialog", { name: "図の根拠: 文書 A.pdf" });
-  const image = sheet.getByRole("img", { name: "文書 A.pdf の図（p.2 · 第 1 章）" });
-  await expect(image).toBeVisible();
-  await expect(sheet.getByTestId("evidence-figure-loading")).toHaveCount(0);
-  await expect.poll(() => figures.length).toBe(1);
-  const url = new URL(figures[0]);
-  expect(url.searchParams.get("document_id")).toBe("doc-a");
-  expect(url.searchParams.get("chunk_id")).toBe("doc-a:cs-1:1");
-  // 右端に付き、375px は全画面のシート。画像はパネルに収まる。
-  await expect
-    .poll(async () => {
-      const box = await sheet.boundingBox();
-      return box ? Math.round(box.x + box.width) : -1;
-    })
-    .toBe(page.viewportSize()!.width);
-  expect((await image.boundingBox())!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await sourceButton.click();
+  const sheet = page.getByRole("dialog", { name: "検索で見つかった箇所" });
+  const summary = sheet.getByTestId("evidence-source-summary");
+  await expect(summary.getByTestId("evidence-file-name")).toHaveText("文書 A.pdf");
+  // 要約は本文・タグ・スコアまでで、その下の操作の行（図を開く・文書の詳細へのリンク）は無い。
+  await expect(summary.getByTestId("evidence-chips")).toContainText("p.2");
+  await expect(summary.getByRole("button", { name: /図を開く/ })).toHaveCount(0);
+  await expect(sheet.getByRole("link", { name: "文書の詳細を別タブで開く" })).toHaveCount(0);
+  await expect(sheet).not.toContainText("AI が図を読んだ説明です");
+  // 要約の下は原文のプレビュー。
+  await expect(sheet.getByTestId("evidence-source-preview")).toBeVisible();
   await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath(`rag-figure-${testInfo.project.name}.png`) });
+  await page.screenshot({ path: testInfo.outputPath(`rag-figure-sheet-${testInfo.project.name}.png`) });
   await page.keyboard.press("Escape");
   await expect(sheet).toBeHidden();
-  await expect(open).toBeFocused();
-
-  // 根拠のサイドパネルの要約の操作の行にも同じ「図を開く」を出す。図でない根拠には出さない。
-  await sourceButton.click();
-  const sourceSheet = page.getByRole("dialog", { name: "検索で見つかった箇所" });
-  const summary = sourceSheet.getByTestId("evidence-source-summary");
-  await expect(summary.getByRole("button", { name: "図を開く: 文書 A.pdf" })).toBeVisible();
-  await summary.getByRole("button", { name: "図を開く: 文書 A.pdf" }).click();
-  await expect(page.getByRole("dialog", { name: "図の根拠: 文書 A.pdf" }).getByRole("img")).toBeVisible();
-  // 開き直すと画像を取り直す。
-  await expect.poll(() => figures.length).toBe(2);
-});
-
-test("図を取れないときは理由を出し、もう一度読み込める", async ({ page }) => {
-  const { seen: figures, recover } = await serveFigures(page, {
-    status: 409,
-    message: "この図は文書の古い版のものです。もう一度検索してください。",
-  });
-  await search(page);
-  await page.getByRole("button", { name: "図を開く: 文書 A.pdf" }).click();
-  const sheet = page.getByRole("dialog", { name: "図の根拠: 文書 A.pdf" });
-  const error = sheet.getByTestId("evidence-figure-error");
-  await expect(error).toContainText("図を開けませんでした");
-  await expect(error).toContainText("この図は文書の古い版のものです。もう一度検索してください。");
-  await expect.poll(() => figures.length).toBe(1);
-  recover();
-  await error.getByRole("button", { name: "もう一度読み込む" }).click();
-  await expect(sheet.getByRole("img", { name: /文書 A.pdf の図/ })).toBeVisible();
-  await expect(sheet.getByTestId("evidence-figure-error")).toHaveCount(0);
-  await expect.poll(() => figures.length).toBe(2);
+  await expect(sourceButton).toBeFocused();
 });
