@@ -25,8 +25,6 @@ import zipfile
 from dataclasses import dataclass
 from typing import Any
 
-from openpyxl.xml.functions import fromstring
-
 _MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 _PKG_REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
@@ -83,6 +81,9 @@ def _read_xml(package: zipfile.ZipFile, name: str) -> Any | None:
         return None
     if info.file_size > _MAX_XML_BYTES:
         return None
+    # openpyxl の XML の読み方（defusedxml があれば使う）にそろえる。使う側が openpyxl を入れる。
+    from openpyxl.xml.functions import fromstring
+
     return fromstring(package.read(info))
 
 
