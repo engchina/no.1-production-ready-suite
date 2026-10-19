@@ -677,6 +677,8 @@ async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpo
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
         settings=Settings(
+            # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
+            rag_field_extraction_enabled=False,
             rag_parser_adapter_backend="local",
             rag_review_gate_enabled=False,
             rag_auto_parse_after_preprocess_enabled=True,
@@ -742,6 +744,8 @@ async def test_low_confidence_excel_header_stops_at_review_even_when_gate_is_off
         oracle=cast(Any, oracle),
         object_storage=cast(Any, FakeObjectStorage()),
         settings=Settings(
+            # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
+            rag_field_extraction_enabled=False,
             rag_parser_adapter_backend="local",
             rag_review_gate_enabled=False,
             rag_auto_parse_after_preprocess_enabled=True,
@@ -808,6 +812,8 @@ async def test_ingestion_pipeline_sanitizes_extraction_artifact_keys() -> None:
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
         settings=Settings(
+            # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
+            rag_field_extraction_enabled=False,
             rag_parser_adapter_backend="local",
             rag_extraction_artifact_prefix=("../unsafe//prefix with space\\nested/./../final"),
             rag_auto_parse_after_preprocess_enabled=True,
@@ -845,6 +851,8 @@ async def test_ingestion_pipeline_reports_extraction_artifact_cache_failure() ->
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
         settings=Settings(
+            # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
+            rag_field_extraction_enabled=False,
             rag_parser_adapter_backend="local",
             rag_review_gate_enabled=False,
             rag_auto_parse_after_preprocess_enabled=True,
@@ -1016,6 +1024,8 @@ async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embeddin
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
         settings=Settings(
+            # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
+            rag_field_extraction_enabled=False,
             rag_parser_adapter_backend="local",
             rag_review_gate_enabled=False,
             rag_auto_parse_after_preprocess_enabled=True,
@@ -1049,6 +1059,8 @@ async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embeddin
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
         settings=Settings(
+            # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
+            rag_field_extraction_enabled=False,
             rag_parser_adapter_backend="local",
             rag_review_gate_enabled=False,
             rag_auto_parse_after_preprocess_enabled=True,
@@ -1078,6 +1090,8 @@ async def test_ingestion_pipeline_does_not_reuse_full_extraction_for_other_parse
     oracle = FakeOracle()
     storage = FakeObjectStorage()
     settings = Settings(
+        # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
+        rag_field_extraction_enabled=False,
         rag_parser_adapter_backend="local",
         rag_review_gate_enabled=False,
         rag_auto_parse_after_preprocess_enabled=True,
@@ -1132,6 +1146,8 @@ def test_ingestion_selected_external_parser_fallback_stops_ingestion() -> None:
     """明示選択 parser が fallback 結果なら Enterprise AI へ進めず止める。"""
     pipeline = object.__new__(IngestionPipeline)
     pipeline._settings = Settings(
+        # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
+        rag_field_extraction_enabled=False,
         rag_parser_adapter_backend="mineru",
         rag_parser_mineru_enabled=True,
     )
@@ -1240,6 +1256,8 @@ async def test_ingestion_pipeline_cancel_before_review_does_not_write_review(
         oracle=cast(Any, oracle),
         object_storage=cast(Any, FakeObjectStorage()),
         settings=Settings(
+            # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
+            rag_field_extraction_enabled=False,
             rag_parser_adapter_backend="local",
             rag_review_gate_enabled=True,
             rag_auto_parse_after_preprocess_enabled=True,
@@ -1283,6 +1301,8 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
     """関係情報を構築する設定(entities)のときは、取込結果から関係情報を保存する。"""
     oracle = FakeOracle()
     settings = Settings.model_construct(
+        # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
+        rag_field_extraction_enabled=False,
         rag_parser_adapter_backend="local",
         rag_review_gate_enabled=False,
         rag_auto_parse_after_preprocess_enabled=True,
