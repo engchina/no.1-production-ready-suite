@@ -72,18 +72,19 @@ test("サイドバーのセクション再編とラベルを確認", { tag: "@re
     await expect(userRolesSection.getByText(label, { exact: true })).toBeVisible();
   }
 
-  // 運用設定は RAG 固有の項目だけを持ち、NL2SQL と同じくシステムテーブルが先頭（#658）。
+  // 運用設定は NL2SQL と同じくシステムテーブルが先頭で、その下に回答の注意書き（#658・#2449）。
   const operationsSection = sidebar.locator("#nav-section-nav-section-operations");
   await expect(sidebar.getByText("運用設定", { exact: true })).toBeVisible();
-  await expect(operationsSection.getByRole("link")).toHaveCount(3);
+  await expect(operationsSection.getByRole("link")).toHaveCount(4);
   await expect(operationsSection.getByRole("link").first()).toHaveAccessibleName(/システムテーブル/);
+  await expect(operationsSection.getByRole("link").nth(1)).toHaveAccessibleName("回答の注意書き");
   await expect(operationsSection.getByRole("link", { name: /HuggingFace/ })).toBeVisible();
   await expect(operationsSection.getByRole("link", { name: /サービス管理/ })).toBeVisible();
 
-  // システム設定は3製品で共通の6項目だけを持つ（回答の注意書きは #2405）。
+  // システム設定は3製品で共通の5項目だけを持つ（回答の注意書きは運用設定。#2449）。
   const settingsSection = sidebar.locator("#nav-section-nav-section-settings");
-  await expect(settingsSection.getByRole("link")).toHaveCount(6);
-  for (const label of ["OCI 認証", "アップロード保存先", "モデル", "データベース", "外観と証明書", "回答の注意書き"]) {
+  await expect(settingsSection.getByRole("link")).toHaveCount(5);
+  for (const label of ["OCI 認証", "アップロード保存先", "モデル", "データベース", "外観と証明書"]) {
     await expect(settingsSection.getByText(label, { exact: true })).toBeVisible();
   }
 

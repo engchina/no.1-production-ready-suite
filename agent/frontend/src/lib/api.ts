@@ -2112,7 +2112,7 @@ export const api = {
   stopAdb: () =>
     request<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
 
-  // 回答の注意書き（3 製品で共通の文。#2405）
+  // 回答の注意書き（設定は製品ごと。#2405・#2449）
   getAnswerNoticeSettings: (options: SettingsRequestOptions = {}) =>
     request<AnswerNoticeSettingsData>("/api/settings/answer-notice", { signal: options.signal }),
   updateAnswerNoticeSettings: (body: AnswerNoticeSettingsUpdate) =>

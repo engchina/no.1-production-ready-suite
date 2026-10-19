@@ -38,7 +38,7 @@ export interface AnswerNoticeProps {
 
 /**
  * 回答の注意書き（3 製品共通。#2405）。回答の本文と根拠の後に、本文と区別できる控えめの見た目で出す。
- * 文はシステム設定の「回答の注意書き」で決まり、backend が回答の確定の後に付ける（モデルは書かない）。
+ * 文は製品ごとの運用設定の「回答の注意書き」で決まり、backend が回答の確定の後に付ける（モデルは書かない）。
  */
 export function AnswerNotice({ notice, label = "回答の注意書き", className, testId = "answer-notice" }: AnswerNoticeProps) {
   const text = notice?.trim();

@@ -6,7 +6,7 @@
 
 - **Agent は外部の MCP クライアントに業務 Agent へのチャットを公開する**（`POST /api/mcp`。`features/agent/mcp_server.py`。#1874）。認証は共通の API キー（使える製品に `agent`）だけで、キーを発行した利用者の権限・対象範囲で判定し、キーに業務 Agent の範囲があればさらに絞る（範囲の外は 403）。ツールは `agent_list` / `agent_chat` / `agent_get_run` / `agent_answer_confirmation` / `agent_skill_export`（契約は `platform/contracts/mcp/agent-tools.json`）。
   - MCP から作った Run（`metadata.source=mcp`・キーの ID と名前）は、無人の実行と同じく承認の要るツールを呼ばない（`mcp.approval_required`。#1813 と同じ流れ）。回答前の確認（#1839）は構造化して返し、`agent_answer_confirmation` で答える。
-  - 完了した回答には回答の注意書き（3 製品で共通の文。#2405）を `notice` で返す（API キーの呼び出しだけ）。RAG / NL2SQL をサービストークンで呼んだ結果には注意書きが無い（呼び先が API キーの呼び出しにだけ返す）ので、Agent の回答の末尾には Agent が最終の検証の後に付ける 1 つだけが出る（回答の成果物の `notice`。本文の `text` とは別で、会話の履歴・最終の検証には入れない）。
+  - 完了した回答には回答の注意書き（設定は製品ごと。#2405・#2449）を `notice` で返す（API キーの呼び出しだけ）。RAG / NL2SQL をサービストークンで呼んだ結果には注意書きが無い（呼び先が API キーの呼び出しにだけ返す）ので、Agent の回答の末尾には Agent が最終の検証の後に付ける 1 つだけが出る（回答の成果物の `notice`。本文の `text` とは別で、会話の履歴・最終の検証には入れない）。
   - Run・会話の見え方は画面と同じ（キーの持ち主が system_admin なら他の利用者の Run を読み、会話を続けられる。Run はキーの持ち主として実行する。#1928）。
   - キーごとの直近 24 時間の Run の数の上限（`PLATFORM_API_KEY_RUNS_PER_DAY`。超えたら 429 相当のツールのエラー）。1 分あたりの呼び出しの回数は共通の認証が数える。
   - RAG は Agent を呼ばない（Agent の MCP を呼ぶのは外部のクライアントだけ）。サービストークンでの Agent の MCP の呼び出しは持たない。

@@ -127,7 +127,7 @@ PLATFORM_AUTH_DDL: tuple[str, ...] = (
     # 製品ごとの対象の範囲（#1874。JSON `{"agent": ["<業務 Agent の ID>", …]}`。NULL は範囲なし）。
     # #1805 で作った表に足す（作り直したばかりの表では ORA-01430 で読み飛ばす）。
     "ALTER TABLE PLATFORM_API_KEYS ADD (RESOURCE_SCOPES CLOB)",
-    # 回答の注意書き（3 製品で 1 つ。#2405。`pr_system_settings.answer_notice`）。1 行だけを持つ。
+    # 回答の注意書き（#2405。`pr_system_settings.answer_notice`）。製品ごとに 1 行（#2449）。
     # NOTICE_TEXT が NULL なら既定の文を使う（既定の文は DB に書き込まない）。
     """
     CREATE TABLE PLATFORM_ANSWER_NOTICE (

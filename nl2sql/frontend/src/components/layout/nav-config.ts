@@ -30,6 +30,7 @@ import {
 import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import type { I18nKey } from "@/lib/i18n";
 import {
+  ANSWER_NOTICE_NAV_ITEM,
   SYSTEM_SETTINGS_NAV_ITEMS,
   API_KEY_ADMIN_NAV_ITEM,
   USER_ROLE_NAV_ITEMS,
@@ -65,7 +66,6 @@ const SYSTEM_SETTINGS_MENU_PERMISSIONS = {
   model: MENU_PERMISSIONS.settingsModel,
   database: MENU_PERMISSIONS.settingsDatabase,
   appearance: MENU_PERMISSIONS.settingsAppearance,
-  answerNotice: MENU_PERMISSIONS.settingsAnswerNotice,
 } satisfies Record<SystemSettingsKey, string>;
 
 /** 共通2項目（ユーザー管理・ロール管理）に付ける NL2SQL の menu 権限（#206）。 */
@@ -172,6 +172,13 @@ export const NAV_SECTIONS: NavSection[] = [
         sidebarLabelKey: "nav.settingsSystemTables.sidebar",
         icon: TableProperties,
         permission: MENU_PERMISSIONS.settingsSystemTables,
+      },
+      // 回答の注意書き（設定は製品ごと。3 製品で同じ位置。#2449）。
+      {
+        href: ANSWER_NOTICE_NAV_ITEM.href,
+        labelKey: "nav.settingsAnswerNotice",
+        icon: ANSWER_NOTICE_NAV_ITEM.icon,
+        permission: MENU_PERMISSIONS.settingsAnswerNotice,
       },
       // Select AI Credential はデータベース設定から分けた運用の操作（#658）。
       {

@@ -1,4 +1,4 @@
-import { ACCOUNT_PATH, SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@production-ready/system-settings";
+import { ACCOUNT_PATH, ANSWER_NOTICE_PATH, SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@production-ready/system-settings";
 
 /** Agent コンソールのルート定義。 */
 export const APP_ROUTES = {
@@ -7,8 +7,8 @@ export const APP_ROUTES = {
   passwordChange: "/password/change",
   forbidden: "/forbidden",
   settingsAppearance: SYSTEM_SETTINGS_PATHS.appearance,
-  // 回答の注意書き（3 製品で共通の文。#2405）
-  settingsAnswerNotice: SYSTEM_SETTINGS_PATHS.answerNotice,
+  // 回答の注意書き（設定は製品ごと。#2405・#2449）
+  settingsAnswerNotice: ANSWER_NOTICE_PATH,
   // `/` は画面を持たない入口（ナビの並び順で最初に開ける画面へ移す。ダッシュボードは廃止。#262）。
   home: "/",
   // 業務利用者のチャット（#768）。

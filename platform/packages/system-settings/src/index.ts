@@ -2,6 +2,8 @@
 export {
   ACCOUNT_PATH,
   ACCOUNT_TABS,
+  ANSWER_NOTICE_NAV_ITEM,
+  ANSWER_NOTICE_PATH,
   API_KEY_ADMIN_NAV_ITEM,
   API_KEY_PATHS,
   accountTabPath,
@@ -21,7 +23,7 @@ export { AppearanceSettingsPage, type AppearanceSettingsPageProps } from "./appe
 export { CA_CERTIFICATE_PATH, probeCaCertificate } from "./appearance/CaCertificateCard";
 export { APPEARANCE_MESSAGES, type AppearanceMessages } from "./appearance/messages";
 
-// 回答の注意書き（3 製品で共通の文。#2405）
+// 回答の注意書き（設定は製品ごと。#2405・#2449）
 export {
   AnswerNoticeSettingsPage,
   answerNoticePayload,

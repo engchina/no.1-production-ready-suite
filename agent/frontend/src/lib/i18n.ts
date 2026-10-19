@@ -577,7 +577,9 @@ const agentJa = {
   "nav.settingsAppearance": "外観と証明書",
   "nav.settingsAnswerNotice": "回答の注意書き",
   "settings.answerNotice.subtitle":
-    "AI の回答の末尾に毎回出す注意書き（誤りの可能性・確かめ方・連絡先）を設定します。3 製品で同じ文を使います。",
+    "AI の回答の末尾に毎回出す注意書き（誤りの可能性・確かめ方・連絡先）を設定します。Agent の回答だけに使い、RAG・NL2SQL はそれぞれの画面で設定します。",
+  "settings.answerNotice.description":
+    "業務 Agent のチャットの回答の末尾に、毎回同じ文を出します。確認の質問・エラー・停止には出しません。",
   "appearance.theme.label": "配色テーマ",
   "appearance.theme.hint": "画面全体の配色を切り替えます。「自動」は OS の設定に追従します。",
   "appearance.theme.light": "ライト",
@@ -658,7 +660,7 @@ const agentJa = {
   "evidence.chip.section": "見出し名",
   "evidence.chip.sectionPath": "見出しの階層",
   // 回答の本文の節（RAG のチャットの回答と同じ見出し。#2328）。
-  // 回答の注意書き（3 製品で共通の文。#2405）
+  // 回答の注意書き（設定は製品ごと。#2405・#2449）
   "answer.notice.label": "回答の注意書き",
   "chat.answer.confirmed": "資料により確認できた事項",
   "chat.answer.unconfirmed": "資料から確認できなかった事項",
