@@ -20,7 +20,7 @@ export const DEFAULT_EXCEL_OPTIONS: ExcelOptions = {
   split_tables: true,
   table_gap_rows: 1,
   table_gap_columns: 1,
-  form_detection_threshold: 0.6,
+  form_detection_threshold: 0.5,
   column_role_detection: "auto",
   column_roles: {},
 };

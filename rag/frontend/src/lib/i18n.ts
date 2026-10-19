@@ -3107,7 +3107,7 @@ export const ja = {
   "documents.excelOptions.summary.columnRoles": "列の役割の指定: {roles}",
   "documents.excelOptions.formThreshold": "帳票と判定する下限",
   "documents.excelOptions.formThreshold.hint":
-    "自動の読み方で、列の狭さ・結合セル・ラベルと値の並びから計算した点数（0〜1）がこの値以上のシートを帳票として読みます。既定は 0.6。",
+    "自動の読み方で、結合セル・ラベルのすぐ右の値・行ごとの位置の不揃い・列の狭さから計算した点数（0〜1）がこの値以上のシートを帳票として読みます。既定は 0.5。",
   "documents.excelOptions.formThreshold.invalid": "0 から 1 までの数を入力してください。",
   "documents.excelOptions.splitTables": "1 つのシートの複数の表",
   "documents.excelOptions.splitTables.hint":

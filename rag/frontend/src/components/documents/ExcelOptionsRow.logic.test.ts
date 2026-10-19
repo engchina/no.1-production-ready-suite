@@ -51,7 +51,7 @@ describe("Excel の読み方の追加の項目", () => {
       split_tables: true,
       table_gap_rows: 1,
       table_gap_columns: 1,
-      form_detection_threshold: 0.6,
+      form_detection_threshold: 0.5,
     });
   });
 

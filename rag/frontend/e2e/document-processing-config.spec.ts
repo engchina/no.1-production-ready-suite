@@ -376,7 +376,7 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
   await excel.getByText("上書き", { exact: true }).click();
   // 帳票の判定の下限（#2516）: 自動の読み方のときだけ出し、0〜1 の外の値は保存しない。
   const threshold = excel.getByRole("spinbutton", { name: "帳票と判定する下限" });
-  await expect(threshold).toHaveValue("0.6");
+  await expect(threshold).toHaveValue("0.5");
   await threshold.fill("1.5");
   await expect(excel.getByText("0 から 1 までの数を入力してください。")).toBeVisible();
   await threshold.fill("0.7");
