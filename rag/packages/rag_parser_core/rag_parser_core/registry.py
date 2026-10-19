@@ -938,8 +938,9 @@ def _external_adapter_result(
         # （契約に合わない入力は診断で止める。任意の JSONL を構造化レコードとみなさない）。
         return _structured_records_jsonl_result(source_bytes)
     if is_structured_records_content_type(content_type):
-        # 前処理（csv_to_jsonl / excel_to_jsonl）が作った構造化レコードの JSONL は、構造化レコード
-        # JSONL の解析エンジンだけが読む。ほかの adapter は黙って変換せず診断で止める（#2457）。
+        # 前処理（csv_to_jsonl / excel_to_jsonl / word_to_jsonl）が作った構造化レコードの JSONL は、
+        # 構造化レコード JSONL の解析エンジンだけが読む。ほかの adapter は黙って変換せず診断で
+        # 止める（#2457）。
         return _adapter_fallback_result(backend, STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING)
     if not _external_adapter_package_available(backend):
         return _adapter_fallback_result(backend, f"{backend}_adapter_package_missing")

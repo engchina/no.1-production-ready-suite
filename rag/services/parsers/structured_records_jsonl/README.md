@@ -1,6 +1,6 @@
 # parser-structured-records-jsonl
 
-前処理（`csv_to_jsonl` / `excel_to_jsonl`）が作った構造化レコードの JSON Lines
+前処理（`csv_to_jsonl` / `excel_to_jsonl` / `word_to_jsonl`）が作った構造化レコードの JSON Lines
 （`application/vnd.production-ready.structured-records+jsonl`）を、記録の単位で解析する parser マイクロサービス（#2457）。
 
 - 出力契約: `rag_parser_core` の `StructuredExtraction`（`POST /parse`）。解析の実体は `rag_parser_core.structured_records`

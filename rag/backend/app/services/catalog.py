@@ -128,6 +128,15 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         port=18013,
     ),
     ServiceCatalogEntry(
+        service_id="preprocess-word-to-jsonl",
+        category="preprocess",
+        profile="cpu",
+        url_field="rag_preprocess_word_to_jsonl_service_url",
+        label_key="settings.services.item.preprocessWordToJsonl",
+        working_dir="services/preprocess/word_to_jsonl",
+        port=18017,
+    ),
+    ServiceCatalogEntry(
         service_id="preprocess-pii-redact",
         category="preprocess",
         profile="cpu",

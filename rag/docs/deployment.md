@@ -79,6 +79,7 @@ health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロ
 | サービス | ディレクトリ | port |
 |---|---|---|
 | preprocess-office-to-pdf / pdf-to-page-images / csv-to-jsonl / excel-to-jsonl / pii-redact | `services/preprocess/<name>` | 18010〜18013・18016 |
+| preprocess-word-to-jsonl（Word→JSONL。既定で配備・起動。#2457） | `services/preprocess/word_to_jsonl` | 18017 |
 | parser-docling（既定の解析エンジン） | `services/parsers/docling` | 18020 |
 | parser-unstructured（既定では配備しない。Docling が扱えない形式を取り込む場合） | `services/parsers/unstructured` | 18022 |
 | parser-structured-records-jsonl（構造化レコード JSONL の解析エンジン。既定で配備・起動。#2457） | `services/parsers/structured_records_jsonl` | 18023 |
@@ -142,7 +143,7 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
 | PDF（`.pdf`）・画像（`.png` / `.jpg` / `.jpeg` / `.webp` / `.bmp` / `.gif`） | 解析できる | そのまま「処理を開始」 |
 | Word・PowerPoint（`.docx` / `.pptx`） | 解析できない | 処理レシピの「ファイル準備」で **Office→PDF** を選ぶ（PDF にしてから Docling で解析）か、「文書解析」で **Unstructured** を選ぶ |
 | Excel（`.xlsx`） | 解析できない | 処理レシピの「ファイル準備」で **Excel→JSONL** を選ぶ（文書解析は構造化レコード JSONL）か、「文書解析」で **Unstructured** を選ぶ。**Office→PDF は Excel を変換しない**（#2470） |
-| 旧形式・マクロ付きの Office（`.doc` / `.ppt` / `.xls`・`.docm` / `.pptm` / `.xlsm`） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で変換を選ぶ（Word・PowerPoint は **Office→PDF**、Excel は **Excel→JSONL**）。マクロは実行しない（LibreOffice は変換ごとのプロファイルでマクロを無効にし、Excel→JSONL は VBA を読まない）。変換を選ばずに始めると、ファイル準備を飛ばして案内を出す（#2470） |
+| 旧形式・マクロ付きの Office（`.doc` / `.ppt` / `.xls`・`.docm` / `.pptm` / `.xlsm`） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で変換を選ぶ（Word・PowerPoint は **Office→PDF**、Word は **Word→JSONL** も可、Excel は **Excel→JSONL**）。マクロは実行しない（LibreOffice は変換ごとのプロファイルでマクロを無効にし、Excel→JSONL は VBA を読まない）。変換を選ばずに始めると、ファイル準備を飛ばして案内を出す（#2470） |
 | テキスト・Markdown・CSV / TSV・JSON / JSONL・XML・HTML（`.txt` / `.md` / `.csv` / `.tsv` / `.json` / `.jsonl` / `.xml` / `.html` など） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ |
 | メール（`.eml`） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ |
 | TIFF・Outlook（`.msg`）・音声・不明な形式 | どの解析エンジンでも取り込めない（以前から「非対応形式」として止まる） | PDF などに変換してからアップロードする |
@@ -232,6 +233,17 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 2. OCI コンソールで対象の Autonomous AI Database を開き、「クローンの作成」で「バックアップからのクローン」→「特定の時点」を選び、1. の時刻の少し前を指定する（自動バックアップの保持期間の中の時点だけ選べる）。クローンは別の料金がかかる。
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
+
+## 既存環境の更新手順（#2457 ファイル準備 Word→JSONL の追加）
+
+ファイル準備に Word→JSONL（`word_to_jsonl`。サービス `preprocess-word-to-jsonl`、unit `production-ready-rag-preprocess-word-to-jsonl.service`、
+port 18017、URL の設定 `RAG_PREPROCESS_WORD_TO_JSONL_SERVICE_URL`）を足した。DB の表・列・migration は増えない（保存値の移行も無い）。
+
+1. 本番（OCI Compute）: `sudo platform/deploy/suite-update.sh` で再配備する。`init_script.sh` が、以前の stack の `rag_services.txt` に
+   無くても必ず配備するサービスとして足し、`libreoffice-core`・`libreoffice-writer` を入れて unit を作って起動する。
+2. 開発（このマシンの worktree・主の checkout）: `scripts/rag-services.sh install preprocess-word-to-jsonl`（LibreOffice が無ければ
+   注意を出す。.docx・.docm は LibreOffice なしで読める）。backend の `.env` は既定（`127.0.0.1:18017`）なら書かなくてよい。
+3. backend・取込 worker を再起動する。「運用設定 › サービス管理」に Word→JSONL が出て、起動していることを確かめる。
 
 ## 既存環境の更新手順（#2457 ファイル準備 CSV→JSONL・Excel→JSONL への改名と保存値の移行）
 

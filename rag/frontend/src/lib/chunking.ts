@@ -125,7 +125,7 @@ export const SMALL_TO_BIG_PARAMS: readonly SmallToBigParamSpec[] = [
 export const JSONL_RECORD_BOUNDARY = "<<<JSONL_RECORD_BOUNDARY>>>";
 
 /** 構造化レコードの JSONL を作るファイル準備（解析エンジンは構造化レコード JSONL だけ）。 */
-export const STRUCTURED_RECORDS_PREPROCESS_PROFILES = ["csv_to_jsonl", "excel_to_jsonl"] as const;
+export const STRUCTURED_RECORDS_PREPROCESS_PROFILES = ["csv_to_jsonl", "excel_to_jsonl", "word_to_jsonl"] as const;
 
 export const DEFAULT_SMALL_TO_BIG_PARAMS: SmallToBigParams = Object.fromEntries(
   SMALL_TO_BIG_PARAMS.map((spec) => [spec.field, spec.defaultValue])

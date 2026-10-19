@@ -94,10 +94,11 @@ describe("グローバル設定を開くリンク", () => {
 describe("CSV→JSONL・Excel→JSONL の選択", () => {
   const empty = {} as DocumentProcessingConfig;
 
-  it("ファイル準備の並びは CSV→JSONL・Excel→JSONL の順", () => {
+  it("ファイル準備の並びは CSV→JSONL・Excel→JSONL・Word→JSONL の順", () => {
     const labels = PREPROCESS_OPTIONS.map((option) => option.label);
     expect(labels.indexOf("CSV→JSONL")).toBeGreaterThan(-1);
     expect(labels.indexOf("Excel→JSONL")).toBe(labels.indexOf("CSV→JSONL") + 1);
+    expect(labels.indexOf("Word→JSONL")).toBe(labels.indexOf("Excel→JSONL") + 1);
   });
 
   it("構造化レコード JSONL は XML ツリー JSON の直前に並ぶ", () => {
@@ -107,7 +108,7 @@ describe("CSV→JSONL・Excel→JSONL の選択", () => {
   });
 
   it("新しいレシピで選ぶと、解析エンジンと固定分割・境界のマーカーを明示の上書きにする", () => {
-    for (const profile of ["csv_to_jsonl", "excel_to_jsonl"] as const) {
+    for (const profile of ["csv_to_jsonl", "excel_to_jsonl", "word_to_jsonl"] as const) {
       expect(preprocessSelectionPatch(empty, profile)).toEqual({
         preprocess_profile: profile,
         parser_adapter_backend: "structured_records_jsonl",

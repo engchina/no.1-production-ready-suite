@@ -1529,6 +1529,9 @@ export const ja = {
   "settings.preprocess.profile.excel_to_jsonl": "Excel→JSONL",
   "settings.preprocess.profile.excel_to_jsonl.description":
     "Excel ファイル(.xls・.xlsx・マクロ付きの .xlsm)の表の 1 行(手順は 1 手順)を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。マクロは実行しません。シート・行・セル範囲を保ちます。文書解析は「構造化レコード JSONL」を使います。",
+  "settings.preprocess.profile.word_to_jsonl": "Word→JSONL",
+  "settings.preprocess.profile.word_to_jsonl.description":
+    "Word ファイル(.doc・.docx・マクロ付きの .docm)を、見出しの下の段落・リスト・表のまとまりを 1 件の記録(JSONL)にしてから解析します。見出しの階層と本文の位置を保ちます。.doc は .docx にしてから読み、マクロは実行しません。文書解析は「構造化レコード JSONL」を使います。",
   "settings.preprocess.profile.pii_redact": "PIIマスク",
   "settings.preprocess.profile.pii_redact.description":
     "テキストの氏名・メールアドレス・電話番号などの個人情報(PII)をマスクしてから解析します。",
@@ -1653,6 +1656,7 @@ export const ja = {
   "settings.services.item.preprocessPdfToPageImages": "PDF を画像として読み直す",
   "settings.services.item.preprocessCsvToJsonl": "CSV→JSONL",
   "settings.services.item.preprocessExcelToJsonl": "Excel→JSONL",
+  "settings.services.item.preprocessWordToJsonl": "Word→JSONL",
   "settings.services.item.preprocessPiiRedact": "PIIマスク",
   "settings.services.item.parserDocling": "Docling",
   "settings.services.item.parserUnstructured": "Unstructured",
@@ -2674,9 +2678,9 @@ export const ja = {
   "sourceProfile.warning.unsupportedTiffImage":
     "TIFF 画像は現在の取込対象外です。PNG/JPEG/WEBP へ変換してください。",
   "sourceProfile.warning.unsupportedLegacyOffice":
-    "旧形式の Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Excel は「Excel→JSONL」。マクロは実行しません)。",
+    "旧形式の Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Word は「Word→JSONL」も可、Excel は「Excel→JSONL」。マクロは実行しません)。",
   "sourceProfile.warning.unsupportedMacroOffice":
-    "マクロ付きの Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Excel は「Excel→JSONL」。マクロは実行しません)。",
+    "マクロ付きの Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Word は「Word→JSONL」も可、Excel は「Excel→JSONL」。マクロは実行しません)。",
   "sourceProfile.warning.parserFallback": "一部の解析で fallback が使われました。",
   "sourceProfile.warning.officeFallback": "Office のローカル解析に失敗したため fallback します。",
   "sourceProfile.warning.officeSegmentFailed": "Office の一部 segment 解析に失敗しました。",
@@ -2691,9 +2695,9 @@ export const ja = {
   "sourceProfile.unsupported.tiffImageNotSupported":
     "TIFF 画像は現在未対応です。PNG/JPEG/WEBP へ変換してください。",
   "sourceProfile.unsupported.legacyOfficeNotSupported":
-    "旧形式の Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Excel は「Excel→JSONL」。マクロは実行しません)。",
+    "旧形式の Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Word は「Word→JSONL」も可、Excel は「Excel→JSONL」。マクロは実行しません)。",
   "sourceProfile.unsupported.macroOfficeNotSupported":
-    "マクロ付きの Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Excel は「Excel→JSONL」。マクロは実行しません)。",
+    "マクロ付きの Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Word は「Word→JSONL」も可、Excel は「Excel→JSONL」。マクロは実行しません)。",
   "sourceProfile.unsupported.unknownFileType": "対応する parser を判定できないファイル形式です。",
 
   "flow.jobs.title": "工程ごとの実行状況",

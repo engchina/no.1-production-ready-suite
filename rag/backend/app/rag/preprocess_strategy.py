@@ -24,6 +24,7 @@ PREPROCESS_PROFILE_ORDER: tuple[PreprocessProfileName, ...] = (
     "pdf_to_page_images",
     "csv_to_jsonl",
     "excel_to_jsonl",
+    "word_to_jsonl",
     "pii_redact",
 )
 
@@ -74,6 +75,12 @@ PREPROCESS_PROFILE_SPECS: dict[PreprocessProfileName, PreprocessProfileSpec] = {
         recommended_for=("excel", "xls", "xlsx", "table"),
         requires_service=True,
     ),
+    "word_to_jsonl": PreprocessProfileSpec(
+        name="word_to_jsonl",
+        origin="libreoffice_python_docx_records",
+        recommended_for=("word", "doc", "docx"),
+        requires_service=True,
+    ),
     "pii_redact": PreprocessProfileSpec(
         name="pii_redact",
         origin="presidio_ja_ner",
@@ -114,6 +121,7 @@ PREPROCESS_SERVICE_URL_ATTRS: dict[PreprocessProfileName, str] = {
     "pdf_to_page_images": "rag_preprocess_pdf_to_page_images_service_url",
     "csv_to_jsonl": "rag_preprocess_csv_to_jsonl_service_url",
     "excel_to_jsonl": "rag_preprocess_excel_to_jsonl_service_url",
+    "word_to_jsonl": "rag_preprocess_word_to_jsonl_service_url",
     "pii_redact": "rag_preprocess_pii_redact_service_url",
 }
 

@@ -3847,7 +3847,8 @@ def _unsupported_parser_message(result: ParserRegistryResult) -> str:
         return (
             "旧形式の Office・マクロ付きの Office は原本のままでは解析できません。"
             "文書レシピのファイル準備で変換(Word・PowerPoint は「Office→PDF」、"
-            "Excel は「Excel→JSONL」)を選んでから取り込んでください(マクロは実行しません)。"
+            "Word は「Word→JSONL」も可、Excel は「Excel→JSONL」)を選んでから取り込んでください"
+            "(マクロは実行しません)。"
         )
     return "このファイル形式は取込に対応していません。"
 
@@ -4258,7 +4259,7 @@ def _canonical_artifact_extension(content_type: str) -> str:
     mapping = {
         "application/pdf": ".pdf",
         "application/json": ".json",
-        # 前処理（csv_to_jsonl / excel_to_jsonl）の構造化レコードの JSONL（#2457）。
+        # 前処理（csv_to_jsonl / excel_to_jsonl / word_to_jsonl）の構造化レコードの JSONL（#2457）。
         STRUCTURED_RECORDS_CONTENT_TYPE: STRUCTURED_RECORDS_FILE_EXTENSION,
         "application/csv": ".csv",
         "text/plain": ".txt",

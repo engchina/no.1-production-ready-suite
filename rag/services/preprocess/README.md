@@ -10,6 +10,7 @@ parse の **前** に原本を一度だけ canonical な中間物へ変換する
 | [pdf_to_page_images](./pdf_to_page_images) | `pdf_to_page_images` | PDF を画像として読み直す | PDF → ページを画像にした PDF(文字は後段で OCR / Vision が読み直す) | PyMuPDF | `http://127.0.0.1:18011` |
 | [csv_to_jsonl](./csv_to_jsonl) | `csv_to_jsonl` | CSV→JSONL | CSV → 構造化レコード JSONL | (純 Python) | `http://127.0.0.1:18012` |
 | [excel_to_jsonl](./excel_to_jsonl) | `excel_to_jsonl` | Excel→JSONL | Excel(.xls/.xlsx/.xlsm) → 構造化レコード JSONL | openpyxl + xlrd | `http://127.0.0.1:18013` |
+| [word_to_jsonl](./word_to_jsonl) | `word_to_jsonl` | Word→JSONL | Word(.doc/.docx/.docm) → 構造化レコード JSONL(見出しの下の段落・リスト・表のまとまり) | LibreOffice(.doc だけ)+ python-docx | `http://127.0.0.1:18017` |
 | [pii_redact](./pii_redact) | `pii_redact` | PIIマスク | テキスト → PII マスク済みテキスト | Presidio + 日本語 NER | `http://127.0.0.1:18016` |
 
 画面の名前と説明は `rag/frontend/src/lib/i18n.ts` の `settings.preprocess.profile.*` が正本。
@@ -17,7 +18,7 @@ parse の **前** に原本を一度だけ canonical な中間物へ変換する
 `passthrough` / `text_normalize` は backend in-process で処理するため、サービスは呼ばれない。
 
 - 出力契約は共有 package `rag_parser_core` の `ConvertResponse`(`POST /convert`)で統一。
-- CSV / Excel の派生物は構造化レコードの JSON Lines(`rag_parser_core.structured_records`。#2457)。
+- CSV / Excel / Word の派生物は構造化レコードの JSON Lines(`rag_parser_core.structured_records`。#2457)。
   UTF-8・BOM なし・1 物理行 1 オブジェクト・LF。すべての行が `schema`・`schema_version`・`record_id`・
   `source_type`・`record_type` を持ち、parser は未知の schema・未対応の版・不正な行を行番号つきで拒否する。
 - backend は `app.clients.preprocess_service.PreprocessServiceClient` が profile ごとに
@@ -32,6 +33,6 @@ parse の **前** に原本を一度だけ canonical な中間物へ変換する
 - **開発**: 触る変換のサービスだけ起動する(`rag/scripts/rag-services.sh run preprocess-<name>`、または install で unit を登録)。
   in-process(passthrough / text_normalize)は何も起動不要。
 - **本番 / 開発**: 各サービスをサービスごとの uv の venv と systemd の unit
-  (`production-ready-rag-preprocess-<name>.service`、`127.0.0.1:18010〜18013・18016`)で動かす(#286。Docker は使わない)。
+  (`production-ready-rag-preprocess-<name>.service`、`127.0.0.1:18010〜18013・18016・18017`)で動かす(#286。Docker は使わない)。
   本番は `rag/init_script.sh`、開発は `rag/scripts/rag-services.sh install` が venv と unit を作る。
-  office_to_pdf は LibreOffice、pdf_to_page_images は CJK フォント(fonts-noto-cjk)を OS に入れる。
+  office_to_pdf は LibreOffice、word_to_jsonl は LibreOffice(Writer。.doc の変換)、pdf_to_page_images は CJK フォント(fonts-noto-cjk)を OS に入れる。

@@ -177,6 +177,7 @@ updates:
       - /rag/services/pipeline/vector_index
       - /rag/services/preprocess/csv_to_jsonl
       - /rag/services/preprocess/excel_to_jsonl
+      - /rag/services/preprocess/word_to_jsonl
       - /rag/services/preprocess/office_to_pdf
       - /rag/services/preprocess/pdf_to_page_images
       - /rag/services/preprocess/pii_redact

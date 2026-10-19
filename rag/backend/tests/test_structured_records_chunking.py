@@ -144,6 +144,106 @@ def test_fixed_delimiter_keeps_excel_record_metadata() -> None:
     assert metadata["section_path"] == "表 1"
 
 
+def _word_extraction() -> StructuredExtraction:
+    """Word の JSONL(見出し・表を含むまとまり・大きい節を分けた 2 部分。合成)の解析の抽出。"""
+    from rag_parser_core.structured_records import (
+        PassageLine,
+        RecordPart,
+        SectionLine,
+        WordLocation,
+        WordParagraph,
+        WordTable,
+    )
+
+    def location(start: int, end: int | None = None) -> WordLocation:
+        return WordLocation(body_start=start, body_end=end or start)
+
+    lines: list[Any] = [
+        DocumentLine(
+            record_id="document",
+            source_type="docx",
+            converter="word_to_jsonl",
+            converter_version="v1",
+            location_basis="original",
+        ),
+        SectionLine(
+            record_id="s0001",
+            source_type="docx",
+            heading="1 概要",
+            level=1,
+            heading_path=["1 概要"],
+            location=location(1),
+        ),
+        PassageLine(
+            record_id="p0001",
+            source_type="docx",
+            parent_id="s0001",
+            section_path=["1 概要"],
+            location=WordLocation(body_start=2, body_end=4, table_indices=[1]),
+            blocks=[
+                WordParagraph(
+                    text="値は次のとおり。\n\n改行を含む。", body_index=2, paragraph_index=2
+                ),
+                WordTable(
+                    body_index=3,
+                    table_index=1,
+                    header_rows=1,
+                    rows=[["名前", "値"], ["A", "1"]],
+                    row_end=2,
+                ),
+                WordParagraph(text="注: 再起動の後に有効。", body_index=4, paragraph_index=3),
+            ],
+        ),
+        *[
+            PassageLine(
+                record_id=f"p000{index + 1}",
+                source_type="docx",
+                parent_id="s0001",
+                section_path=["1 概要"],
+                location=location(5 + index),
+                blocks=[
+                    WordParagraph(
+                        text=f"部分 {index}", body_index=5 + index, paragraph_index=4 + index
+                    )
+                ],
+                part=RecordPart(
+                    group_id="s0001-content", index=index, count=2, group_location=location(5, 6)
+                ),
+            )
+            for index in (1, 2)
+        ],
+    ]
+    result = run_external_adapter(BACKEND, dump_structured_records(lines), None, "")
+    assert result.extraction is not None
+    return StructuredExtraction.model_validate(result.extraction.model_dump())
+
+
+def test_fixed_delimiter_keeps_word_records_and_heading_path() -> None:
+    """Word の記録(前処理 word_to_jsonl)も 1 記録 1 chunk にし、見出しの階層と位置を引き継ぐ。"""
+    chunks = _fixed(_word_extraction())
+    assert [chunk.text.splitlines()[0] for chunk in chunks] == ["1 概要", "1 概要", "1 概要"]
+    # 段落の中の \n\n(分割符の以前の既定値)では切らない。表と注記は同じ chunk。
+    assert "値は次のとおり。\n\n改行を含む。" in chunks[0].text
+    assert "| 名前 | 値 |" in chunks[0].text and chunks[0].text.endswith("注: 再起動の後に有効。")
+    first = chunks[0].metadata
+    assert first["section_path"] == "1 概要"
+    assert first["record_kind"] == "passage"
+    assert (first["word_body_start"], first["word_body_end"]) == (2, 4)
+    assert first["word_table_indices"] == "1"
+    assert first["word_location_basis"] == "original"
+    assert first["parent_element_ids"] == "s0001"
+    second = chunks[1].metadata
+    assert (second["word_part_group"], second["word_part_index"], second["word_part_count"]) == (
+        "s0001-content",
+        1,
+        2,
+    )
+    assert (second["word_part_body_start"], second["word_part_body_end"]) == (5, 6)
+    for chunk in chunks:
+        assert JSONL_RECORD_BOUNDARY not in chunk.text
+        assert "page_start" not in chunk.metadata
+
+
 def test_single_record_without_boundary_is_one_chunk() -> None:
     chunks = _fixed(_csv_extraction("一件"))
     assert [chunk.text for chunk in chunks] == ["項目: 値 1 / 備考: 一件"]

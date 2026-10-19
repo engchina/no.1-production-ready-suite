@@ -46,7 +46,7 @@ PREPROCESS_SOURCE_UNSUPPORTED_CODE = "preprocess_source_unsupported"
 # 形式を変えないファイル準備(原本と同じ形式が解析エンジンに渡る)。
 _FORMAT_PRESERVING_PREPROCESS = frozenset({"passthrough", "pii_redact"})
 # 構造化レコードの JSONL を作るファイル準備(解析エンジンは構造化レコード JSONL だけ。#2457)。
-STRUCTURED_RECORDS_PREPROCESS = frozenset({"csv_to_jsonl", "excel_to_jsonl"})
+STRUCTURED_RECORDS_PREPROCESS = frozenset({"csv_to_jsonl", "excel_to_jsonl", "word_to_jsonl"})
 # PIIマスクが扱う原本の種類(サービスの判定 `services/preprocess/pii_redact` と同じ)。
 _PII_REDACT_MODALITIES = frozenset({SourceModality.TEXT, SourceModality.HTML})
 # 原本のままでは解析しない Office(旧形式のバイナリ・マクロ付き。source_profile の
@@ -62,6 +62,7 @@ _CONVERSION_REQUIRED_WARNINGS = frozenset(
 _OFFICE_CONVERSION_FORMATS: dict[str, frozenset[str]] = {
     "office_to_pdf": frozenset({".doc", ".docm", ".ppt", ".pptm"}),
     "excel_to_jsonl": frozenset({".xls", ".xlsm"}),
+    "word_to_jsonl": frozenset({".doc", ".docm"}),
 }
 # Office→PDF は Word・PowerPoint だけを変換する。表計算は Excel→JSONL で読む(#2470)。
 OFFICE_TO_PDF_SPREADSHEET_CODE = "office_to_pdf_spreadsheet_not_supported"
@@ -73,7 +74,11 @@ _SPREADSHEET_CONTENT_TYPES = frozenset(
         "application/vnd.ms-excel.sheet.macroenabled.12",
     }
 )
-_PREPROCESS_LABELS = {"office_to_pdf": "Office→PDF", "excel_to_jsonl": "Excel→JSONL"}
+_PREPROCESS_LABELS = {
+    "office_to_pdf": "Office→PDF",
+    "excel_to_jsonl": "Excel→JSONL",
+    "word_to_jsonl": "Word→JSONL",
+}
 # 拡張子の無い原本は content type で形式を決める。
 _OFFICE_FORMAT_BY_CONTENT_TYPE = {
     "application/msword": ".doc",

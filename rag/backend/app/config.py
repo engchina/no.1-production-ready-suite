@@ -136,6 +136,7 @@ PreprocessProfile = Literal[
     "pdf_to_page_images",
     "csv_to_jsonl",
     "excel_to_jsonl",
+    "word_to_jsonl",
     "pii_redact",
 ]
 # 削除したファイル準備の変換方式(text_normalize、#2042: スキャン画像の補正・URL→Markdown)。
@@ -2060,6 +2061,12 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_preprocess_excel_to_jsonl_service_url: str = Field(
         default="http://127.0.0.1:18013",
         description="Excel(.xls/.xlsx)→行の記録 JSON 前処理マイクロサービスの base URL。",
+    )
+    rag_preprocess_word_to_jsonl_service_url: str = Field(
+        default="http://127.0.0.1:18017",
+        description=(
+            "Word(.doc/.docx/.docm)→構造化レコード JSONL 前処理マイクロサービスの base URL(#2457)。"
+        ),
     )
     rag_preprocess_pii_redact_service_url: str = Field(
         default="http://127.0.0.1:18016",

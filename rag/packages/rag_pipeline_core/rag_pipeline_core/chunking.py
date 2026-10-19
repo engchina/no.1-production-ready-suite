@@ -490,7 +490,9 @@ def _chunk_fixed_delimiter(
     return [_with_chunk_metadata(chunk) for chunk in chunks]
 
 
-# 記録の要素の metadata のうち、chunk に引き継ぐもの(場所・列の役割・記録の ID。#2457)。
+# 記録の要素の metadata のうち、chunk に引き継ぐもの(場所・列の役割・見出しの位置・記録の ID。
+# #2457)。
+# 見出しの階層は要素の section_path から chunk の section_path / section_title に入る。
 _STRUCTURED_RECORD_METADATA_KEYS: tuple[str, ...] = (
     STRUCTURED_RECORD_ID_KEY,
     "sheet_name",
@@ -502,6 +504,19 @@ _STRUCTURED_RECORD_METADATA_KEYS: tuple[str, ...] = (
     "sheet_block_kind",
     "sheet_column_roles",
     "record_kind",
+    # Word の記録(前処理 word_to_jsonl): 本文の順の位置・表の番号・大きい節を分けた部分。
+    "word_location_basis",
+    "word_body_start",
+    "word_body_end",
+    "word_paragraph_start",
+    "word_paragraph_end",
+    "word_table_indices",
+    "word_block_kinds",
+    "word_part_group",
+    "word_part_index",
+    "word_part_count",
+    "word_part_body_start",
+    "word_part_body_end",
 )
 
 
