@@ -14,8 +14,13 @@ export const DEFAULT_EXCEL_OPTIONS: ExcelOptions = {
   sheets: [],
   exclude_sheets: [],
   include_hidden_sheets: false,
+  include_hidden_cells: false,
   exclude_columns: [],
   ranges: [],
+  split_tables: true,
+  table_gap_rows: 1,
+  table_gap_columns: 1,
+  form_detection_threshold: 0.5,
   column_role_detection: "auto",
   column_roles: {},
 };
@@ -81,6 +86,16 @@ const HEADER_ROW_COUNT_OPTIONS: SelectFieldOption<string>[] = [1, 2, 3, 4, 5].ma
   label: t("documents.excelOptions.headerRowCountValue", { count }),
 }));
 
+/** 表を分ける空の行・列の数（backend の 1〜20）。 */
+const TABLE_GAP_COUNTS = Array.from({ length: 20 }, (_, index) => index + 1);
+
+/** 帳票と判定する下限の入力を数にする（0〜1 の外・数でない値は null）。 */
+export function parseFormThreshold(text: string): number | null {
+  if (!text.trim()) return null;
+  const value = Number(text);
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
+}
+
 /** 「、」「,」・改行で区切った名前の一覧（空は除く）。 */
 export function parseNameList(text: string): string[] {
   return text
@@ -91,7 +106,7 @@ export function parseNameList(text: string): string[] {
 
 /** 選択肢の要約（継承の値の表示）。 */
 export function excelOptionsSummary(options: ExcelOptions | null | undefined): string {
-  const value = options ?? DEFAULT_EXCEL_OPTIONS;
+  const value = { ...DEFAULT_EXCEL_OPTIONS, ...options };
   const parts = [
     MODE_OPTIONS.find((option) => option.value === value.mode)?.label ?? value.mode,
     value.header_row
@@ -105,6 +120,20 @@ export function excelOptionsSummary(options: ExcelOptions | null | undefined): s
   if (value.ranges?.length) {
     parts.push(t("documents.excelOptions.summary.ranges", { ranges: value.ranges.join("、") }));
   }
+  if (!value.split_tables) {
+    parts.push(t("documents.excelOptions.summary.tablesWhole"));
+  } else if (
+    value.table_gap_rows !== DEFAULT_EXCEL_OPTIONS.table_gap_rows ||
+    value.table_gap_columns !== DEFAULT_EXCEL_OPTIONS.table_gap_columns
+  ) {
+    parts.push(
+      t("documents.excelOptions.summary.tableGap", { rows: value.table_gap_rows, columns: value.table_gap_columns }),
+    );
+  }
+  if (value.mode === "auto" && value.form_detection_threshold !== DEFAULT_EXCEL_OPTIONS.form_detection_threshold) {
+    parts.push(t("documents.excelOptions.summary.formThreshold", { value: value.form_detection_threshold }));
+  }
+  if (value.include_hidden_cells) parts.push(t("documents.excelOptions.summary.hiddenCells"));
   if (value.column_role_detection === "off") parts.push(t("documents.excelOptions.summary.columnRolesOff"));
   if (Object.keys(value.column_roles ?? {}).length) {
     parts.push(t("documents.excelOptions.summary.columnRoles", { roles: formatColumnRoles(value.column_roles) }));
@@ -130,7 +159,8 @@ export function ExcelOptionsRow({
   onChange: (value: ExcelOptions | null) => void;
 }) {
   const overriding = value !== null;
-  const current = value ?? effectiveValue ?? DEFAULT_EXCEL_OPTIONS;
+  // 既定で埋める（項目が足りない値も、backend と同じ既定で表示・保存する）。
+  const current: ExcelOptions = { ...DEFAULT_EXCEL_OPTIONS, ...(value ?? effectiveValue) };
   // 名前の一覧は入力の途中（末尾の「、」など）を保つため、文字列のまま持つ。
   const [lists, setLists] = useState(() => ({
     sheets: current.sheets.join("、"),
@@ -141,7 +171,17 @@ export function ExcelOptionsRow({
   const [columnRolesText, setColumnRolesText] = useState(() => formatColumnRoles(current.column_roles));
   const columnRolesInvalid = parseColumnRoles(columnRolesText).invalid;
   const [headerRowText, setHeaderRowText] = useState(current.header_row ? String(current.header_row) : "");
+  const [formThresholdText, setFormThresholdText] = useState(String(current.form_detection_threshold));
+  const formThresholdInvalid = parseFormThreshold(formThresholdText) === null;
   const labelId = `document-excel-options-${documentId}`;
+  const tableGapRowsOptions: SelectFieldOption<string>[] = TABLE_GAP_COUNTS.map((count) => ({
+    value: String(count),
+    label: t("documents.excelOptions.tableGapRowsValue", { count }),
+  }));
+  const tableGapColumnsOptions: SelectFieldOption<string>[] = TABLE_GAP_COUNTS.map((count) => ({
+    value: String(count),
+    label: t("documents.excelOptions.tableGapColumnsValue", { count }),
+  }));
   const update = (patch: Partial<ExcelOptions>) => onChange({ ...current, ...patch });
   const updateList = (key: "sheets" | "exclude_sheets" | "exclude_columns" | "ranges", text: string) => {
     setLists((previous) => ({ ...previous, [key]: text }));
@@ -172,7 +212,8 @@ export function ExcelOptionsRow({
         </div>
       </div>
       {overriding ? (
-        // 読み方は 1 行、表頭の 2 つの数・読む / 読まないシート（シート名の並び。md）は同じ行、長い値は全幅（#1891）。
+        // 読み方は 1 行、表頭の 2 つの数・読む / 読まないシート（シート名の並び。md）・表を分ける空の行と列・
+        // 非表示のシートと行・列は同じ行、長い値は全幅（#1891）。
         <FormGrid>
           <SelectField
             id={`${labelId}-mode`}
@@ -185,6 +226,31 @@ export function ExcelOptionsRow({
             disabled={disabled}
             onValueChange={(mode) => update({ mode })}
           />
+          {current.mode === "auto" ? (
+            // 帳票の判定の下限は自動の読み方だけで使う（#2516）。
+            <TextField
+              id={`${labelId}-form-threshold`}
+              className="col-span-full"
+              width="xs"
+              label={t("documents.excelOptions.formThreshold")}
+              helper={t("documents.excelOptions.formThreshold.hint")}
+              error={formThresholdInvalid ? t("documents.excelOptions.formThreshold.invalid") : undefined}
+              type="number"
+              inputMode="decimal"
+              min={0}
+              max={1}
+              step={0.05}
+              value={formThresholdText}
+              disabled={disabled}
+              onChange={(event) => {
+                const text = event.target.value;
+                setFormThresholdText(text);
+                // 範囲の外の値は保存しない（欄の下に示す）。
+                const threshold = parseFormThreshold(text);
+                if (threshold !== null) update({ form_detection_threshold: threshold });
+              }}
+            />
+          ) : null}
           <TextField
             id={`${labelId}-header-row`}
             width="xs"
@@ -253,6 +319,50 @@ export function ExcelOptionsRow({
             />
           </div>
           <div className="space-y-1 col-span-full">
+            <span id={`${labelId}-split-tables`} className="text-sm font-medium text-fg">
+              {t("documents.excelOptions.splitTables")}
+            </span>
+            <div className="flex flex-wrap gap-1" role="group" aria-labelledby={`${labelId}-split-tables`}>
+              <ToggleChip
+                selected={current.split_tables}
+                disabled={disabled}
+                onClick={() => update({ split_tables: true })}
+              >
+                {t("documents.excelOptions.splitTables.split")}
+              </ToggleChip>
+              <ToggleChip
+                selected={!current.split_tables}
+                disabled={disabled}
+                onClick={() => update({ split_tables: false })}
+              >
+                {t("documents.excelOptions.splitTables.whole")}
+              </ToggleChip>
+            </div>
+            <p className="text-xs text-fg-muted">{t("documents.excelOptions.splitTables.hint")}</p>
+          </div>
+          {current.split_tables ? (
+            <>
+              <SelectField
+                id={`${labelId}-table-gap-rows`}
+                width="xs"
+                label={t("documents.excelOptions.tableGapRows")}
+                value={String(current.table_gap_rows)}
+                options={tableGapRowsOptions}
+                disabled={disabled}
+                onValueChange={(count) => update({ table_gap_rows: Number(count) })}
+              />
+              <SelectField
+                id={`${labelId}-table-gap-columns`}
+                width="xs"
+                label={t("documents.excelOptions.tableGapColumns")}
+                value={String(current.table_gap_columns)}
+                options={tableGapColumnsOptions}
+                disabled={disabled}
+                onValueChange={(count) => update({ table_gap_columns: Number(count) })}
+              />
+            </>
+          ) : null}
+          <div className="space-y-1 col-span-full">
             <span id={`${labelId}-role-detection`} className="text-sm font-medium text-fg">
               {t("documents.excelOptions.columnRoleDetection")}
             </span>
@@ -296,7 +406,7 @@ export function ExcelOptionsRow({
               }}
             />
           </div>
-          <div className="space-y-1 col-span-full">
+          <div className="space-y-1">
             <span id={`${labelId}-hidden`} className="text-sm font-medium text-fg">
               {t("documents.excelOptions.hiddenSheets")}
             </span>
@@ -316,6 +426,28 @@ export function ExcelOptionsRow({
                 {t("documents.excelOptions.hiddenSheets.read")}
               </ToggleChip>
             </div>
+          </div>
+          <div className="space-y-1">
+            <span id={`${labelId}-hidden-cells`} className="text-sm font-medium text-fg">
+              {t("documents.excelOptions.hiddenCells")}
+            </span>
+            <div className="flex flex-wrap gap-1" role="group" aria-labelledby={`${labelId}-hidden-cells`}>
+              <ToggleChip
+                selected={!current.include_hidden_cells}
+                disabled={disabled}
+                onClick={() => update({ include_hidden_cells: false })}
+              >
+                {t("documents.excelOptions.hiddenSheets.skip")}
+              </ToggleChip>
+              <ToggleChip
+                selected={current.include_hidden_cells}
+                disabled={disabled}
+                onClick={() => update({ include_hidden_cells: true })}
+              >
+                {t("documents.excelOptions.hiddenSheets.read")}
+              </ToggleChip>
+            </div>
+            <p className="text-xs text-fg-muted">{t("documents.excelOptions.hiddenCells.hint")}</p>
           </div>
         </FormGrid>
       ) : (

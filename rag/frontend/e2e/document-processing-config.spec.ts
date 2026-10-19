@@ -374,6 +374,30 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
   await expect(excel.getByTestId("document-excel-options-inherited")).toContainText("自動");
 
   await excel.getByText("上書き", { exact: true }).click();
+  // 帳票の判定の下限（#2516）: 自動の読み方のときだけ出し、0〜1 の外の値は保存しない。
+  const threshold = excel.getByRole("spinbutton", { name: "帳票と判定する下限" });
+  await expect(threshold).toHaveValue("0.5");
+  await threshold.fill("1.5");
+  await expect(excel.getByText("0 から 1 までの数を入力してください。")).toBeVisible();
+  await threshold.fill("0.7");
+  await expect(excel.getByText("0 から 1 までの数を入力してください。")).toHaveCount(0);
+  // 表の分割（#2516）: 分けないときは空の行・列の数を出さない。
+  await expect(excel.getByRole("combobox", { name: "表を分ける空の行" })).toContainText("1 行以上");
+  await excel.getByRole("group", { name: "1 つのシートの複数の表" }).getByText("分けない").click();
+  await expect(excel.getByRole("combobox", { name: "表を分ける空の行" })).toHaveCount(0);
+  await excel.getByRole("group", { name: "1 つのシートの複数の表" }).getByText("分けて読む").click();
+  await excel.getByRole("combobox", { name: "表を分ける空の行" }).click();
+  await page.getByRole("option", { name: "2 行以上", exact: true }).click();
+  await excel.getByRole("combobox", { name: "表を分ける空の列" }).click();
+  await page.getByRole("option", { name: "3 列以上", exact: true }).click();
+  // 非表示の行・列（#2526）: 既定は読まない。
+  const hiddenCells = excel.getByRole("group", { name: "非表示の行・列" });
+  await expect(hiddenCells.getByRole("button", { name: "読まない", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
+  await hiddenCells.getByText("読む", { exact: true }).click();
+
   await excel.getByRole("combobox", { name: "読み方" }).click();
   // 帳票（方眼紙）の読み方も選べる（#2516）。
   await expect(page.getByRole("option", { name: "帳票（項目ごと）" })).toBeVisible();
@@ -383,6 +407,7 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
     });
   }
   await page.getByRole("option", { name: "表（1 行ずつ）" }).click();
+  await expect(threshold).toHaveCount(0);
   await excel.getByRole("spinbutton", { name: "表頭の行" }).fill("2");
   await excel.getByRole("textbox", { name: "読まない列" }).fill("備考、F");
   await excel.getByRole("textbox", { name: "読む範囲" }).fill("費目!A2:D200、A1:F50");
@@ -409,7 +434,12 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
       header_row_count: 1,
       exclude_columns: ["備考", "F"],
       include_hidden_sheets: true,
+      include_hidden_cells: true,
       ranges: ["費目!A2:D200", "A1:F50"],
+      split_tables: true,
+      table_gap_rows: 2,
+      table_gap_columns: 3,
+      form_detection_threshold: 0.7,
       column_role_detection: "off",
       column_roles: { D: "example", 設定値: "current" },
     },

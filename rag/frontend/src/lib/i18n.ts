@@ -3128,6 +3128,25 @@ export const ja = {
   "documents.excelOptions.columnRoles.invalid": "読めない指定があります: {items}",
   "documents.excelOptions.summary.columnRolesOff": "列の役割は判定しない",
   "documents.excelOptions.summary.columnRoles": "列の役割の指定: {roles}",
+  "documents.excelOptions.formThreshold": "帳票と判定する下限",
+  "documents.excelOptions.formThreshold.hint":
+    "自動の読み方で、結合セル・ラベルのすぐ右の値・行ごとの位置の不揃い・列の狭さから計算した点数（0〜1）がこの値以上のシートを帳票として読みます。既定は 0.5。",
+  "documents.excelOptions.formThreshold.invalid": "0 から 1 までの数を入力してください。",
+  "documents.excelOptions.splitTables": "1 つのシートの複数の表",
+  "documents.excelOptions.splitTables.hint":
+    "空の行・列で分かれた表を別々に読み、表ごとに表頭を推定します。分けないときはシート全体を 1 つの表として読みます。",
+  "documents.excelOptions.splitTables.split": "分けて読む",
+  "documents.excelOptions.splitTables.whole": "分けない",
+  "documents.excelOptions.tableGapRows": "表を分ける空の行",
+  "documents.excelOptions.tableGapColumns": "表を分ける空の列",
+  "documents.excelOptions.tableGapRowsValue": "{count} 行以上",
+  "documents.excelOptions.tableGapColumnsValue": "{count} 列以上",
+  "documents.excelOptions.hiddenCells": "非表示の行・列",
+  "documents.excelOptions.hiddenCells.hint": "オートフィルターで隠れた行は、読まない設定でも読みます。",
+  "documents.excelOptions.summary.hiddenCells": "非表示の行・列も読む",
+  "documents.excelOptions.summary.tablesWhole": "表を分けない",
+  "documents.excelOptions.summary.tableGap": "表の区切り: 空の行 {rows}・空の列 {columns}",
+  "documents.excelOptions.summary.formThreshold": "帳票の判定の下限: {value}",
   "documents.excelWarning.headerLowConfidence":
     "シート「{sheet}」の表頭を推定できませんでした（信頼度が低い）。",
   "documents.excelWarning.formulaWithoutValue":
