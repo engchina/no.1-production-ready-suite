@@ -16,6 +16,12 @@ engchina/no.1-rag の前処理（`utils/office_preprocess_util.py`）に合わ�
   版式を判定して表頭を推定し、別々の表（`table_index`・`region`・`title`）として出す。表頭の行を
   指定したとき（`header_row`）は分けない。
 - 変換の本体（`read_excel`）は前処理のサービスに依存せず、原本の bytes と選択肢だけで呼べる。
+- 図形・テキストボックスの文字（#2526）: `.xlsx` は drawing の XML を直接読み（`app.shapes`）、
+  アンカーの範囲を 1 つの単位（結合セル）にしてセルの格子に置く。表・手順書・帳票の読み方は
+  そのまま使い、記録の `shape_cells` に置いた範囲を残す。`.xls` は読まず、図形の文字があれば
+  診断を残す。
+- 非表示の行・列（#2526）: 既定は読まない（`include_hidden_cells`）。オートフィルターで隠れた行は
+  利用者が隠した行ではないので読む。読まなかった行・列は診断に残す。
 
 - `.xlsx` は openpyxl で読む（結合セルと表示の書式を読むため read_only にしない）。数式は
   キャッシュ値を読み、キャッシュの無い数式のセルは空にせず数式の文字列にして診断を残す。マクロは
@@ -64,6 +70,7 @@ from rag_parser_core.sheet_records import (
     SheetRecordsDocument,
     SkippedSheet,
     column_display_name,
+    parse_excel_range,
 )
 from rag_parser_core.source import SourceProfile
 from rag_parser_core.structured_records import (
@@ -72,11 +79,12 @@ from rag_parser_core.structured_records import (
     sheet_records_to_lines,
 )
 
-from .grid import Grid, column_letter, is_textual
+from .grid import Grid, cell_ref, column_letter, is_textual
 from .layout import detect_form_layout, form_blocks, split_regions
+from .shapes import SheetShapes, xls_shape_text_counts, xlsx_sheet_shapes
 
 CONVERTER_NAME = "excel_to_jsonl"
-CONVERTER_VERSION = "v5"
+CONVERTER_VERSION = "v6"
 # xlsx は ZIP(PK\x03\x04)、xls は OLE2 複合ドキュメント(D0CF11E0...)。
 _XLSX_MAGIC = b"PK\x03\x04"
 _XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
@@ -291,7 +299,12 @@ def read_excel(
     if not source_bytes:
         return ExcelReadResult(None, failure="excel_empty")
     is_xlsx = _is_xlsx(source_bytes, extension)
-    grids, failure = _read_xlsx(source_bytes) if is_xlsx else _read_xls(source_bytes)
+    include_hidden = options.include_hidden_cells
+    grids, failure = (
+        _read_xlsx(source_bytes, include_hidden=include_hidden)
+        if is_xlsx
+        else _read_xls(source_bytes, include_hidden=include_hidden)
+    )
     if grids is None:
         return ExcelReadResult(None, failure=failure or "excel_parse_failed")
     warnings: list[str] = []
@@ -348,7 +361,9 @@ def read_excel(
 # ---- 読み取り ------------------------------------------------------------------------
 
 
-def _read_xlsx(source_bytes: bytes) -> tuple[list[Grid] | None, str | None]:
+def _read_xlsx(
+    source_bytes: bytes, *, include_hidden: bool = False
+) -> tuple[list[Grid] | None, str | None]:
     try:
         import openpyxl
     except Exception:
@@ -364,8 +379,15 @@ def _read_xlsx(source_bytes: bytes) -> tuple[list[Grid] | None, str | None]:
             formulas = formula_book[worksheet.title]
             grid = Grid(name=worksheet.title, hidden=worksheet.sheet_state != "visible")
             _read_xlsx_column_widths(worksheet, grid)
+            _read_xlsx_hidden(worksheet, grid)
+            skip = set() if include_hidden else grid.hidden_rows - grid.filter_rows
+            skip_columns = set() if include_hidden else grid.hidden_columns
             for row in worksheet.iter_rows():
                 for cell in row:
+                    if cell.row in skip or cell.column in skip_columns:
+                        if cell.value is not None and str(cell.value).strip():
+                            grid.hidden_cells.add((cell.row, cell.column))
+                        continue
                     formula = formulas.cell(row=cell.row, column=cell.column).value
                     is_formula = isinstance(formula, str) and formula.startswith("=")
                     if cell.value is None:
@@ -389,7 +411,51 @@ def _read_xlsx(source_bytes: bytes) -> tuple[list[Grid] | None, str | None]:
     finally:
         values_book.close()
         formula_book.close()
+    shapes = xlsx_sheet_shapes(source_bytes)
+    for grid in grids:
+        _place_shapes(grid, shapes.get(grid.name), include_hidden=include_hidden)
     return grids, None
+
+
+def _read_xlsx_hidden(worksheet: Any, grid: Grid) -> None:
+    """非表示の行・列と、オートフィルターの範囲のデータの行（隠れていても読む行）。"""
+    grid.hidden_rows = {
+        index for index, dimension in worksheet.row_dimensions.items() if dimension.hidden
+    }
+    for dimension in worksheet.column_dimensions.values():
+        if dimension.hidden and dimension.min and dimension.max:
+            # 使っていない列をまとめて隠す指定（G:XFD）は、値のある最後の列までにする。
+            end = min(dimension.max, worksheet.max_column)
+            grid.hidden_columns.update(range(dimension.min, end + 1))
+    ref = getattr(worksheet.auto_filter, "ref", None)
+    if ref and grid.hidden_rows:
+        try:
+            parsed = parse_excel_range(ref if ":" in ref else f"{ref}:{ref}")
+        except ValueError:
+            return
+        # 表頭（範囲の先頭の行）の下で隠れた行は、フィルターの条件で隠れた行とみなす。
+        grid.filter_rows = {
+            row for row in grid.hidden_rows if parsed.min_row < row <= parsed.max_row
+        }
+
+
+def _place_shapes(grid: Grid, shapes: SheetShapes | None, *, include_hidden: bool) -> None:
+    """図形の文字をセルの格子に置く（非表示の行・列だけにかかる図形は読まない）。"""
+    if shapes is None:
+        return
+    hidden_rows = set() if include_hidden else grid.hidden_rows - grid.filter_rows
+    hidden_columns = set() if include_hidden else grid.hidden_columns
+    for shape in shapes.shapes:
+        rows = set(range(shape.top, shape.bottom + 1))
+        columns = set(range(shape.left, shape.right + 1))
+        if rows <= hidden_rows or columns <= hidden_columns:
+            continue
+        box = (shape.top, shape.left, shape.bottom, shape.right)
+        if grid.place_shape_text(box, shape.text) is None:
+            # 範囲のすべてのセルに値がある: 置き場所が無い。文字は診断に残す。
+            grid.notes.append(("shape_text_not_placed", cell_ref(*box), shape.text[:200]))
+    if shapes.absolute:
+        grid.notes.append(("shape_text_absolute_anchor_skipped", None, str(shapes.absolute)))
 
 
 def _read_xlsx_column_widths(worksheet: Any, grid: Grid) -> None:
@@ -418,7 +484,9 @@ def _xlsx_label_hint(cell: Any) -> bool:
         return False
 
 
-def _read_xls(source_bytes: bytes) -> tuple[list[Grid] | None, str | None]:
+def _read_xls(
+    source_bytes: bytes, *, include_hidden: bool = False
+) -> tuple[list[Grid] | None, str | None]:
     try:
         import xlrd
     except Exception:
@@ -431,13 +499,22 @@ def _read_xls(source_bytes: bytes) -> tuple[list[Grid] | None, str | None]:
         except Exception:
             return None, "excel_open_failed"
     grids: list[Grid] = []
+    shape_counts = xls_shape_text_counts(source_bytes) or []
     try:
-        for sheet in book.sheets():
+        for index, sheet in enumerate(book.sheets()):
             grid = Grid(name=sheet.name, hidden=getattr(sheet, "visibility", 0) != 0)
             _read_xls_column_widths(sheet, grid)
+            _read_xls_hidden(sheet, grid)
             for row in range(sheet.nrows):
                 for col in range(sheet.ncols):
                     text = _xls_cell_text(book, sheet, row, col, xlrd)
+                    if (
+                        text
+                        and not include_hidden
+                        and (row + 1 in grid.hidden_rows or col + 1 in grid.hidden_columns)
+                    ):
+                        grid.hidden_cells.add((row + 1, col + 1))
+                        continue
                     if text:
                         grid.cells[(row + 1, col + 1)] = text
                         if _xls_label_hint(book, sheet, row, col):
@@ -445,6 +522,9 @@ def _read_xls(source_bytes: bytes) -> tuple[list[Grid] | None, str | None]:
             grid.merges = [
                 (rlo + 1, clo + 1, rhi, chi) for rlo, rhi, clo, chi in sheet.merged_cells
             ]
+            if index < len(shape_counts) and shape_counts[index]:
+                # xlrd は図形を読まない。図形の文字があることだけを残す。
+                grid.notes.append(("shape_text_not_supported_xls", None, str(shape_counts[index])))
             grids.append(grid)
     except Exception:
         return None, "excel_read_failed"
@@ -461,6 +541,19 @@ def _read_xls_column_widths(sheet: Any, grid: Grid) -> None:
         for col, info in sheet.colinfo_map.items():
             if info.width:
                 grid.column_widths[col + 1] = float(info.width) / 256
+    except Exception:
+        return
+
+
+def _read_xls_hidden(sheet: Any, grid: Grid) -> None:
+    """.xls の非表示の行・列（formatting_info で開いたときだけ読める）。"""
+    try:
+        grid.hidden_rows = {
+            row + 1 for row, info in sheet.rowinfo_map.items() if getattr(info, "hidden", 0)
+        }
+        grid.hidden_columns = {
+            col + 1 for col, info in sheet.colinfo_map.items() if getattr(info, "hidden", 0)
+        }
     except Exception:
         return
 
@@ -586,6 +679,12 @@ def _crop(grid: Grid, ranges: list[ExcelRange]) -> Grid:
         column_widths=dict(grid.column_widths),
         default_column_width=grid.default_column_width,
         label_hints={key for key in grid.label_hints if inside(*key)},
+        shape_boxes={key: box for key, box in grid.shape_boxes.items() if inside(*key)},
+        hidden_cells={key for key in grid.hidden_cells if inside(*key)},
+        hidden_rows=set(grid.hidden_rows),
+        hidden_columns=set(grid.hidden_columns),
+        filter_rows=set(grid.filter_rows),
+        notes=[note for note in grid.notes if note[1] is None or _note_inside(note[1], inside)],
     )
     for min_row, min_col, max_row, max_col in grid.merges:
         value = grid.cells.get((min_row, min_col), "")
@@ -598,6 +697,12 @@ def _crop(grid: Grid, ranges: list[ExcelRange]) -> Grid:
             if value:
                 cropped.cells.setdefault((top, left), value)
     return cropped
+
+
+def _note_inside(ref: str, inside: Any) -> bool:
+    """セルの範囲の左上が範囲の中にあるか。"""
+    start = parse_excel_range(f"{ref}:{ref}" if ":" not in ref else ref)
+    return bool(inside(start.min_row, start.min_col))
 
 
 def _apply_merges(grid: Grid, header_rows: range) -> None:
@@ -733,6 +838,7 @@ def _table_blocks(
                     row_end=row,
                     cell_range=_row_range(columns, row, row),
                     values=values,
+                    shape_cells=grid.shape_refs(row, columns[0], row, columns[-1]),
                 )
             )
     return blocks
@@ -789,6 +895,7 @@ def _procedure_blocks(
                 cell_range=_row_range(all_columns, row_start, last_row),
                 section_path=[value for value in (section_title, title) if value],
                 lines=lines,
+                shape_cells=grid.shape_refs(row_start, all_columns[0], last_row, all_columns[-1]),
             )
         )
     return blocks
@@ -903,10 +1010,7 @@ def _sheet_records(grid: Grid, options: ExcelOptions) -> SheetRecords | None:
     nonempty_rows = sorted({row for (row, _), value in grid.cells.items() if value.strip()})
     if not nonempty_rows:
         return None
-    diagnostics: list[SheetDiagnostic] = [
-        SheetDiagnostic(code="formula_without_cached_value", cell=f"{column_letter(col)}{row}")
-        for row, col in sorted(grid.missing_formula_cells)
-    ]
+    diagnostics = _grid_diagnostics(grid)
     header_count = options.header_row_count
     if options.header_row is not None:
         header_row = options.header_row
@@ -973,7 +1077,12 @@ def _sheet_records(grid: Grid, options: ExcelOptions) -> SheetRecords | None:
                 texts.append(value)
         text = " ".join(texts)
         preamble.append(
-            SheetPreambleRow(row_number=row, cell_range=_row_range(cols, row, row), text=text)
+            SheetPreambleRow(
+                row_number=row,
+                cell_range=_row_range(cols, row, row),
+                text=text,
+                shape_cells=grid.shape_refs(row, cols[0], row, cols[-1]),
+            )
         )
 
     data_rows = [
@@ -1017,11 +1126,34 @@ def _sheet_records(grid: Grid, options: ExcelOptions) -> SheetRecords | None:
 # ---- 版式（帳票・1 シートの複数の表。#2516）------------------------------------------------
 
 
-def _formula_diagnostics(grid: Grid) -> list[SheetDiagnostic]:
-    return [
+def _grid_diagnostics(grid: Grid) -> list[SheetDiagnostic]:
+    """読み取りの診断（キャッシュの無い数式・読まなかった非表示の行と列・図形の文字）。"""
+    diagnostics = [
         SheetDiagnostic(code="formula_without_cached_value", cell=f"{column_letter(col)}{row}")
         for row, col in sorted(grid.missing_formula_cells)
     ]
+    hidden_rows = grid.hidden_rows - grid.filter_rows
+    rows = sorted({row for row, _ in grid.hidden_cells if row in hidden_rows})
+    columns = sorted({col for _, col in grid.hidden_cells if col in grid.hidden_columns})
+    if rows:
+        diagnostics.append(
+            SheetDiagnostic(code="hidden_rows_skipped", detail=",".join(map(str, rows)))
+        )
+    if columns:
+        diagnostics.append(
+            SheetDiagnostic(
+                code="hidden_columns_skipped", detail=",".join(map(column_letter, columns))
+            )
+        )
+    filtered = sorted(grid.filter_rows & {row for row, _ in grid.cells})
+    if filtered:
+        diagnostics.append(
+            SheetDiagnostic(code="hidden_filter_rows_read", detail=",".join(map(str, filtered)))
+        )
+    diagnostics.extend(
+        SheetDiagnostic(code=code, cell=cell, detail=detail) for code, cell, detail in grid.notes
+    )
+    return diagnostics
 
 
 def _form_records(grid: Grid, detection: LayoutDetection) -> SheetRecords | None:
@@ -1035,7 +1167,7 @@ def _form_records(grid: Grid, detection: LayoutDetection) -> SheetRecords | None
         mode="form",
         layout_detection=detection,
         blocks=blocks,
-        diagnostics=[*_formula_diagnostics(grid), *_layout_diagnostics(detection), *diagnostics],
+        diagnostics=[*_grid_diagnostics(grid), *_layout_diagnostics(detection), *diagnostics],
     )
 
 
@@ -1097,7 +1229,19 @@ def _region_records(
         return _form_records(grid, detection) or _table_records(
             grid, options, (score, features, reason)
         )
-    return _table_records(grid, options, (score, features, reason))
+    sheet = _table_records(grid, options, (score, features, reason))
+    if sheet is not None and not sheet.blocks and not sheet.preamble:
+        # 表頭の行だけの領域（表の外の文・図形の文字）: 表頭にすると文字が記録に残らないので、
+        # 帳票の項目として読む（#2526）。
+        detection = LayoutDetection(
+            layout="form",
+            method="detected",
+            confidence=score,
+            reason=f"データの行が無い（表頭の行だけの）領域を項目として読む（{reason}）",
+            features=features,
+        )
+        return _form_records(grid, detection) or sheet
+    return sheet
 
 
 def sheet_tables(grid: Grid, options: ExcelOptions) -> list[SheetRecords]:
@@ -1121,7 +1265,11 @@ def sheet_tables(grid: Grid, options: ExcelOptions) -> list[SheetRecords]:
     tables: list[SheetRecords] = []
     for top, left, bottom, right in regions:
         region = ExcelRange(sheet=None, min_row=top, min_col=left, max_row=bottom, max_col=right)
-        sheet = _region_records(_crop(grid, [region]), options)
+        cropped = _crop(grid, [region])
+        if tables:
+            # セルの位置の無いシートの診断は、最初の表にだけ残す。
+            cropped.notes = [note for note in cropped.notes if note[1] is not None]
+        sheet = _region_records(cropped, options)
         if sheet is None:
             continue
         title = sheet.preamble[0].text if sheet.preamble else None

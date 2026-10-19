@@ -60,12 +60,16 @@ def _loaded(derived: bytes) -> dict[str, Any]:
     payload: dict[str, Any] = structured_records_to_sheet_records(_records(derived)).model_dump(
         mode="json"
     )
-    # 表・手順書の記録には帳票の項目の欄（#2516）を比べない。
+    # 表・手順書の記録には帳票の項目の欄（#2516・#2526）を比べない。図形の文字の無い記録には
+    # 図形のセル範囲（#2526）を比べない。
     for sheet in payload["sheets"]:
         for block in sheet["blocks"]:
             if block["kind"] != "form_field":
-                for key in ("label", "value", "label_cell", "value_cell"):
+                for key in ("label", "value", "label_cell", "value_cell", "value_original"):
                     block.pop(key)
+        for item in [*sheet["blocks"], *sheet["preamble"]]:
+            if not item["shape_cells"]:
+                item.pop("shape_cells")
     return payload
 
 
@@ -74,7 +78,7 @@ def _payload(source: bytes, **options: Any) -> dict[str, Any]:
     assert outcome.converted is True, outcome.warnings
     assert outcome.derived_bytes is not None
     assert outcome.derived_content_type == STRUCTURED_RECORDS_CONTENT_TYPE
-    assert outcome.converter_version == "v5"
+    assert outcome.converter_version == "v6"
     return _loaded(outcome.derived_bytes)
 
 

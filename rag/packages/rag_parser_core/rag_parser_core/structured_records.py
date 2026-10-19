@@ -20,6 +20,7 @@ CSV・Excel・Word の前処理は、原本を 1 行 1 オブジェクトの JSO
   - ``row``: 表の 1 行。``fields`` は列名・列の位置・役割・値の順序付きの配列。
   - ``procedure_step``: 手順書の 1 手順（``lines``）。
   - ``form_field``: 帳票（方眼紙）の 1 項目（``label``・``value``・ラベルと値のセル。#2516）。
+    選択の記号を読んで値を選ばれた選択肢にしたときは、原文を ``value_original`` に持つ（#2526）。
   - ``preamble``: 表頭より上の行（``text``）。
   - ``section``: Word の見出し（見出しの階層 ``heading_path``・段落の位置）。``parent_id`` は上位の
     見出し。
@@ -27,7 +28,8 @@ CSV・Excel・Word の前処理は、原本を 1 行 1 オブジェクトの JSO
     ごとには分けない。大きい節を複数の記録に分けたときは ``part``（まとまりの ID・順番・全体の位置）
     を持つ。位置（``WordLocation``）は本文の順の番号で、原本に無いページ番号は持たない。
   CSV・Excel の記録は ``parent_id`` で文脈の行（Excel は ``sheet``）を指し、``location``
-  （元の行番号・セル範囲）と ``section_path`` を持つ。CSV の行番号は原本の物理行（引用符の中の
+  （元の行番号・セル範囲）と ``section_path`` を持つ。Excel の記録のうち図形・テキストボックスの
+  文字を置いたセル範囲は ``shape_cells`` に持つ（#2526）。CSV の行番号は原本の物理行（引用符の中の
   改行を含む記録は複数行）。
 - 読み取り（`parse_structured_records`）は厳格にし、不正な JSON・オブジェクトでない行・空行・BOM・
   未知の schema・未対応の版・record_id の重複・document の行の欠落・存在しない parent_id を、行番号
@@ -214,6 +216,10 @@ class _RecordLine(_Line):
     parent_id: str | None = None
     location: RecordLocation
     section_path: list[str] = Field(default_factory=list)
+    shape_cells: list[str] | None = Field(
+        default=None,
+        description="Excel の図形・テキストボックスの文字を置いたセル範囲（無ければ省く。#2526）。",
+    )
 
 
 class RowLine(_RecordLine):
@@ -234,6 +240,7 @@ class FormFieldLine(_RecordLine):
     value: str
     label_cell: str | None = None
     value_cell: str | None = None
+    value_original: str | None = None
 
 
 class PreambleLine(_RecordLine):
@@ -608,6 +615,7 @@ def sheet_records_to_lines(
                         row_end=preamble.row_number,
                         cell_range=preamble.cell_range,
                     ),
+                    shape_cells=preamble.shape_cells or None,
                     text=preamble.text,
                 )
             )
@@ -625,10 +633,12 @@ def sheet_records_to_lines(
                         parent_id=sheet_id,
                         location=location,
                         section_path=block.section_path,
+                        shape_cells=block.shape_cells or None,
                         label=block.label,
                         value=block.value,
                         label_cell=block.label_cell,
                         value_cell=block.value_cell,
+                        value_original=block.value_original,
                     )
                 )
                 continue
@@ -640,6 +650,7 @@ def sheet_records_to_lines(
                         parent_id=sheet_id,
                         location=location,
                         section_path=block.section_path,
+                        shape_cells=block.shape_cells or None,
                         lines=block.lines,
                     )
                 )
@@ -664,6 +675,7 @@ def sheet_records_to_lines(
                     parent_id=sheet_id,
                     location=location,
                     section_path=block.section_path,
+                    shape_cells=block.shape_cells or None,
                     fields=fields,
                 )
             )
@@ -681,6 +693,8 @@ def _form_field_block(line: FormFieldLine) -> SheetBlock:
         value=line.value,
         label_cell=line.label_cell,
         value_cell=line.value_cell,
+        value_original=line.value_original,
+        shape_cells=line.shape_cells or [],
     )
 
 
@@ -720,6 +734,7 @@ def structured_records_to_sheet_records(
                     row_number=line.location.row_start,
                     cell_range=line.location.cell_range or "",
                     text=line.text,
+                    shape_cells=line.shape_cells or [],
                 )
             )
         elif isinstance(line, FormFieldLine):
@@ -733,6 +748,7 @@ def structured_records_to_sheet_records(
                     cell_range=line.location.cell_range or "",
                     section_path=line.section_path,
                     lines=line.lines,
+                    shape_cells=line.shape_cells or [],
                 )
             )
         else:
@@ -744,6 +760,7 @@ def structured_records_to_sheet_records(
                     cell_range=line.location.cell_range or "",
                     section_path=line.section_path,
                     values={item.name: item.value for item in line.fields},
+                    shape_cells=line.shape_cells or [],
                 )
             )
     source_format: Literal["xlsx", "xls"] = "xls" if document.source_type == "xls" else "xlsx"
