@@ -8,7 +8,7 @@
 # アプリのプロセスは専用のユーザー（SERVICE_USER）で動かし、backend にはサービス管理画面から操作する
 # unit の systemctl / journalctl だけを sudoers で許可する。
 # 前処理 / parser の起動 / 停止は利用者が最後に操作した状態（systemd の enable / disable）を保ち、
-# 再配備・再起動でもその状態に戻す。初めて配備する unit は起動する。
+# 再配備・再起動でもその状態に戻す。初めて配備する unit は起動する（既定は停止のサービスを除く）。
 # ADB の DDL は持たない。RAG の system schema はアプリの CLI（app.rag.system_schema_cli）で適用する。
 # 3 製品は 1 台の Compute にセットで配備する（#1316。単独では配備しない）。platform/deploy/suite-init.sh が呼び、
 # Nginx の site は suite が 1 つだけ書く（ここでは書かない）。frontend は FRONTEND_BASE_PATH（/rag/）を base に build し、
@@ -96,7 +96,8 @@ ALLOWED_RAG_SERVICES=(
   parser-oci-document-understanding
 )
 # 必ず配備する parser（既定の解析エンジンの Docling と、使用エンジンに選べる XML ツリー JSON）。
-# rag_services.txt に無ければ足す（以前の stack が書いた一覧でも、再配備で unit が入り起動する）。
+# rag_services.txt に無ければ足す（以前の stack が書いた一覧でも、再配備で unit が入る。XML ツリー JSON は
+# 既定は停止のサービスで、初回は起動しない。#2453）。
 REQUIRED_RAG_SERVICES=(parser-docling parser-xml-tree-json)
 RAG_SERVICES=()
 
@@ -702,7 +703,8 @@ EOF
 }
 
 # 前処理 / parser の unit の起動 / 停止は、利用者が最後に操作した状態（systemd の enable / disable）を保つ。
-#   - 初めて配備する unit（unit ファイルが無かった）: enable --now（既定のサービスを起動する）
+#   - 初めて配備する unit（unit ファイルが無かった）: enable --now（既定のサービスを起動する）。
+#     既定は停止のサービス（rag-systemd.sh の RAG_DEFAULT_STOPPED_SERVICES）は enable も起動もしない
 #   - 以前から有る unit で enable（最後に「起動」した）: 新しいコードで restart
 #   - 以前から有る unit で disable（最後に「停止」した）: 停止のまま
 # reboot では enable の unit だけが起動する（WantedBy=multi-user.target）。
@@ -764,8 +766,11 @@ RestartSec=5
   systemctl enable "${BACKEND_UNIT}" "${WORKER_UNIT}"
   systemctl restart "${BACKEND_UNIT}" "${WORKER_UNIT}"
 
-  for unit in "${controllable_units[@]}"; do
-    if contains_value "${unit}" "${new_units[@]}"; then
+  for service in "${RAG_SERVICES[@]}"; do
+    unit="$(rag_unit_name "${service}")"
+    if contains_value "${unit}" "${new_units[@]}" && rag_service_default_stopped "${service}"; then
+      log "Leaving ${unit} stopped (first deployment; stopped by default)."
+    elif contains_value "${unit}" "${new_units[@]}"; then
       log "Starting ${unit} (first deployment)."
       systemctl enable --now "${unit}"
     elif systemctl is-enabled --quiet "${unit}"; then

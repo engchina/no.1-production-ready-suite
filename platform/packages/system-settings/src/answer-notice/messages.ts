@@ -1,4 +1,7 @@
-/** 回答の注意書きの画面の既定の文言（3 製品で同じ。#2405）。製品側は `messages` prop で上書きできる。 */
+/**
+ * 回答の注意書きの画面の既定の文言（#2405）。設定は製品ごと（#2449）で、どの回答に出すかの説明は
+ * 製品側が `messages` prop（`settingsDescription` など）で上書きする。
+ */
 export const ANSWER_NOTICE_MESSAGES = {
   loading: "回答の注意書きを読み込んでいます。",
   loadError: "回答の注意書きの取得に失敗しました。",
@@ -8,15 +11,15 @@ export const ANSWER_NOTICE_MESSAGES = {
   retry: "再試行",
   settingsTitle: "注意書き",
   settingsDescription:
-    "RAG・NL2SQL・DB 管理・Agent のチャットと RAG 検索の回答の末尾に、毎回同じ文を出します。確認の質問・エラー・停止には出しません。",
+    "この製品の回答の末尾に、毎回同じ文を出します。確認の質問・エラー・停止には出しません。",
   enabledLabel: "回答の末尾に注意書きを出す",
-  enabledHint: "無効にすると、3 製品のどの回答にも注意書きを出しません。本文は残ります。",
+  enabledHint: "無効にすると、この製品の回答には注意書きを出しません。本文は残ります。",
   fieldText: "本文",
   helperText:
     "プレーンテキストで書きます。改行はそのまま出し、URL は自動でリンクにします。HTML・Markdown の書式は使えません。連絡先は下の「窓口」に書きます。",
   fieldContact: "窓口",
   helperContact:
-    "本文の後に「{line}」と出します。窓口の名前と連絡の方法（電話・URL など）を 1 行で書きます。検索・回答プロファイルで窓口を上書きできます（RAG）。",
+    "本文の後に「{line}」と出します。窓口の名前と連絡の方法（電話・URL など）を 1 行で書きます。",
   validationContactTooLong: "窓口は {max} 字以内で入力してください。",
   usingDefault: "既定の文を使っています。",
   usingCustom: "管理者が変えた文を使っています。",

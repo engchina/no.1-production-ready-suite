@@ -1,17 +1,18 @@
-"""回答の注意書き（3 製品共通。#2405）。
+"""回答の注意書き（製品ごと。#2405・#2449）。
 
-AI の回答の末尾に毎回同じ位置で出す固定の文（誤りの可能性・確かめ方・連絡先）。文は 3 製品で
-1 つで、システム設定の「回答の注意書き」で管理者が変えられる。
+AI の回答の末尾に毎回同じ位置で出す固定の文（誤りの可能性・確かめ方・連絡先）。文と出す / 出さないは
+製品ごとに持ち、各製品の運用設定の「回答の注意書き」で管理者が変えられる。
 
-- 保存先は共通の表 `PLATFORM_ANSWER_NOTICE`（1 行。DDL は `auth.migrations` の共通の DDL）。
-  複数行の文で、保存の後に再起動しないで効かせるため `.env` には置かない。
+- 保存先は共通の表 `PLATFORM_ANSWER_NOTICE`（製品ごとに 1 行。キーは `answer_notice_setting_key`。
+  DDL は `auth.migrations` の共通の DDL）。複数行の文で、保存の後に再起動しないで効かせるため
+  `.env` には置かない。
 - 文は「本文」と「窓口」（連絡先の名前・連絡の方法）の 2 つで、回答に付ける文は本文の後に
   窓口の案内の 1 行（`ANSWER_NOTICE_CONTACT_TEMPLATE`）を続ける。窓口を分けて持つのは、RAG の
   検索・回答プロファイルが窓口だけを上書きできるようにするため（#2400）。
-- 未設定（行が無い・本文 / 窓口が NULL）のときは既定（`DEFAULT_ANSWER_NOTICE_BODY` /
+- 未設定（行が無い・本文 / 窓口が NULL）のときは既定（有効・`DEFAULT_ANSWER_NOTICE_BODY` /
   `DEFAULT_ANSWER_NOTICE_CONTACT`）を使う。既定は DB に書き込まない（後から直せるようにする）。
 - 回答に付ける文は `AnswerNoticeProvider.current_text()` で読む。短い cache（`CACHE_SECONDS`）を
-  持ち、同じプロセスで保存したら次の回答から効く（ほかのプロセス・製品は cache の期限の後）。
+  持ち、同じプロセスで保存したら次の回答から効く（同じ製品のほかのプロセスは cache の期限の後）。
   読めないとき（表が未作成・DB の停止中）は既定の文を返し、回答を失敗させない。
 - 文はモデルに書かせない。製品の backend が回答の確定の後に、回答とは別の項目（`notice`）として
   付け、モデルへの指示・会話の履歴・回答の検証の対象には入れない。
@@ -38,8 +39,8 @@ from .auth.errors import SecurityMigrationRequired, missing_security_migration_o
 logger = logging.getLogger(__name__)
 
 ANSWER_NOTICE_TABLE = "PLATFORM_ANSWER_NOTICE"
-# 表の 1 行のキー（将来、別の注意書きを足すときに行を分けられるようにする）。
-ANSWER_NOTICE_SETTING_KEY = "answer_notice"
+# 表の行のキーの接頭辞。行は製品ごと（`answer_notice:rag` など）。
+ANSWER_NOTICE_SETTING_KEY_PREFIX = "answer_notice"
 ANSWER_NOTICE_MAX_CHARS = 500
 ANSWER_NOTICE_CONTACT_MAX_CHARS = 200
 # 既定の文。短く（3 行まで）、AI が生成したこと・誤りの可能性・確かめ方・連絡先を示す。
@@ -51,6 +52,11 @@ DEFAULT_ANSWER_NOTICE_BODY = (
 DEFAULT_ANSWER_NOTICE_CONTACT = "ヘルプデスク"
 # 本文の後に続ける窓口の案内の 1 行（`{contact}` に窓口が入る）。
 ANSWER_NOTICE_CONTACT_TEMPLATE = "解決しない場合は、{contact}へお問い合わせください。"
+
+
+def answer_notice_setting_key(product_key: str) -> str:
+    """製品の注意書きの行のキー（`AuthService.product_key` から決める）。"""
+    return f"{ANSWER_NOTICE_SETTING_KEY_PREFIX}:{product_key}"
 
 
 def answer_notice_contact_line(contact: str, template: str = ANSWER_NOTICE_CONTACT_TEMPLATE) -> str:
@@ -154,10 +160,11 @@ class InMemoryAnswerNoticeStore:
 
 
 class OracleAnswerNoticeStore:
-    """`PLATFORM_ANSWER_NOTICE`（3 製品で共有）の保存。接続は共通認証の store と同じものを使う。"""
+    """`PLATFORM_ANSWER_NOTICE` の 1 製品の行の保存。接続は共通認証の store と同じものを使う。"""
 
-    def __init__(self, connection_factory: Any) -> None:
+    def __init__(self, connection_factory: Any, setting_key: str) -> None:
         self._connection_factory = connection_factory
+        self._setting_key = setting_key
 
     @contextmanager
     def _connection(self) -> Iterator[Any]:
@@ -184,7 +191,7 @@ class OracleAnswerNoticeStore:
             cursor.execute(
                 "SELECT ENABLED, NOTICE_TEXT, UPDATED_AT, CONTACT_TEXT FROM PLATFORM_ANSWER_NOTICE "
                 "WHERE SETTING_KEY = :setting_key",
-                {"setting_key": ANSWER_NOTICE_SETTING_KEY},
+                {"setting_key": self._setting_key},
             )
             row = cursor.fetchone()
         if row is None:
@@ -217,7 +224,7 @@ class OracleAnswerNoticeStore:
                       VALUES (:setting_key, :enabled, :notice_text, :contact_text, :updated_at)
                 """,
                 {
-                    "setting_key": ANSWER_NOTICE_SETTING_KEY,
+                    "setting_key": self._setting_key,
                     "enabled": 1 if record.enabled else 0,
                     "notice_text": record.text,
                     "contact_text": record.contact,

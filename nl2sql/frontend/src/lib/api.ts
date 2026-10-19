@@ -972,7 +972,7 @@ export const api = {
       method: "POST",
     }),
 
-  // 回答の注意書き（3 製品で共通の文。#2405）
+  // 回答の注意書き（設定は製品ごと。#2405・#2449）
   getAnswerNoticeSettings: (options: ApiRequestOptions = {}) =>
     settingsRequest<AnswerNoticeSettingsData>("/api/settings/answer-notice", { signal: options.signal }),
   updateAnswerNoticeSettings: (body: AnswerNoticeSettingsUpdate) =>

@@ -216,7 +216,8 @@ router.include_router(
         on_saved=lambda _settings: close_oracle_pool(),
     )
 )
-# 回答の注意書きも3製品共通の実装（pr_system_settings.answer_notice。#2405）。保存先は共通の表。
+# 回答の注意書きも3製品共通の実装（pr_system_settings.answer_notice。#2405）。
+# 保存先は共通の表のこの製品の行（#2449）。
 router.include_router(
     build_answer_notice_router(
         load=lambda: get_security_service().load_answer_notice(),

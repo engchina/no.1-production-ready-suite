@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
-from ..answer_notice import ANSWER_NOTICE_TABLE, OracleAnswerNoticeStore
+from ..answer_notice import ANSWER_NOTICE_TABLE, OracleAnswerNoticeStore, answer_notice_setting_key
 from .api_keys import API_KEYS_TABLE, OracleApiKeyStore
 from .domain import (
     SYSTEM_ADMIN_ROLE_CODE,
@@ -526,9 +526,11 @@ class OracleAuthStore:
         """API キー（`PLATFORM_API_KEYS`。3 製品で共有。#1805）。"""
         return OracleApiKeyStore(self._connection_factory)
 
-    def answer_notice_store(self) -> OracleAnswerNoticeStore:
-        """回答の注意書き（`PLATFORM_ANSWER_NOTICE`。3 製品で共有。#2405）。"""
-        return OracleAnswerNoticeStore(self._connection_factory)
+    def answer_notice_store(self, product_key: str) -> OracleAnswerNoticeStore:
+        """製品の回答の注意書き（`PLATFORM_ANSWER_NOTICE` の製品の行。#2405・#2449）。"""
+        return OracleAnswerNoticeStore(
+            self._connection_factory, answer_notice_setting_key(product_key)
+        )
 
     @contextmanager
     def connection(self, migration_object: str | None = None) -> Iterator[Any]:

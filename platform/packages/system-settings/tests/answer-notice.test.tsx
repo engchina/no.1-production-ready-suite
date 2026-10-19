@@ -16,7 +16,7 @@ import {
   type AnswerNoticeSettingsUpdate,
 } from "../src";
 
-// #2405: 回答の注意書きの設定（3 製品で共通の文）。
+// #2405: 回答の注意書きの設定（画面は 3 製品で共通、設定は製品ごと。#2449）。
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

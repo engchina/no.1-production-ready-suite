@@ -648,7 +648,7 @@ def test_preserved_platform_tables_are_not_managed() -> None:
         "PLATFORM_LOGIN_ATTEMPTS",
         # 外部の MCP クライアント向けの API キー（RAG / NL2SQL。#1805）。
         "PLATFORM_API_KEYS",
-        # 回答の注意書き（3 製品で共通の文。#2405）。
+        # 回答の注意書き（設定は製品ごと。#2405・#2449）。
         "PLATFORM_ANSWER_NOTICE",
     }
     assert set(PRESERVED_TABLES).isdisjoint(MANAGED_TABLES)

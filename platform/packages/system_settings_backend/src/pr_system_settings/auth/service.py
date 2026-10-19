@@ -208,10 +208,11 @@ class AuthService:
         self.api_key_store: ApiKeyStore = (
             store.api_key_store() if isinstance(store, OracleAuthStore) else InMemoryApiKeyStore()
         )
-        # 回答の注意書き（#2405）。DB の store なら `PLATFORM_ANSWER_NOTICE`（3 製品で共有）、
-        # それ以外（テスト）はプロセスの中。製品のチャットは `answer_notice.current_text()` で読む。
+        # 回答の注意書き（製品ごと。#2405・#2449）。DB の store なら `PLATFORM_ANSWER_NOTICE` の
+        # この製品の行、それ以外（テスト）はプロセスの中。製品のチャットは
+        # `answer_notice.current_text()` で読む。
         self.answer_notice = AnswerNoticeProvider(
-            store.answer_notice_store()
+            store.answer_notice_store(self.product_key)
             if isinstance(store, OracleAuthStore)
             else InMemoryAnswerNoticeStore()
         )

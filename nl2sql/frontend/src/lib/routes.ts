@@ -1,4 +1,4 @@
-import { ACCOUNT_PATH, API_KEY_PATHS, SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@production-ready/system-settings";
+import { ACCOUNT_PATH, ANSWER_NOTICE_PATH, API_KEY_PATHS, SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@production-ready/system-settings";
 
 /** NL2SQL コンソールのルート定義。 */
 export const APP_ROUTES = {
@@ -36,8 +36,8 @@ export const APP_ROUTES = {
   settingsSystemTables: "/settings/system-tables",
   settingsSelectAiCredential: "/settings/select-ai-credential",
   settingsAppearance: SYSTEM_SETTINGS_PATHS.appearance,
-  // 回答の注意書き（3 製品で共通の文。#2405）
-  settingsAnswerNotice: SYSTEM_SETTINGS_PATHS.answerNotice,
+  // 回答の注意書き（設定は製品ごと。#2405・#2449）
+  settingsAnswerNotice: ANSWER_NOTICE_PATH,
   // ユーザー管理・ロール管理は3製品共通（platform の共有パッケージ。#206）。
   securityUsers: USER_ROLE_PATHS.users,
   securityRoles: USER_ROLE_PATHS.roles,

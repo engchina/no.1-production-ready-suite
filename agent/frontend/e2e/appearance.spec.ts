@@ -163,14 +163,16 @@ for (const viewport of [
     const settings = sidebar.locator("#nav-section-nav-section-settings");
     await expect(security.getByRole("link")).toHaveCount(1);
     await expect(security.locator('a[href="/settings/security/permissions"]')).toHaveCount(1);
-    await expect(operations.getByRole("link")).toHaveCount(3);
-    // 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ）。
+    await expect(operations.getByRole("link")).toHaveCount(4);
+    // 運用設定の先頭はシステムテーブル、その下に回答の注意書き（RAG / NL2SQL と同じ。#2449）。
     await expect(operations.getByRole("link").first()).toHaveAttribute("href", "/settings/system-tables");
+    await expect(operations.getByRole("link").nth(1)).toHaveAttribute("href", "/settings/answer-notice");
     await expect(userRoles.getByRole("link")).toHaveCount(2);
-    // システム設定は 3 製品で共通の 6 項目（回答の注意書きは #2405）。
-    await expect(settings.getByRole("link")).toHaveCount(6);
+    // システム設定は 3 製品で共通の 5 項目（回答の注意書きは運用設定。#2449）。
+    await expect(settings.getByRole("link")).toHaveCount(5);
     for (const href of [
       "/settings/system-tables",
+      "/settings/answer-notice",
       "/runtimes",
       "/settings/mcp-connections",
     ]) {

@@ -1,10 +1,10 @@
-import { ACCOUNT_PATH, API_KEY_PATHS, SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@production-ready/system-settings";
+import { ACCOUNT_PATH, ANSWER_NOTICE_PATH, API_KEY_PATHS, SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@production-ready/system-settings";
 
 /** RAG コンソールの画面ルート定義。 */
 export const APP_ROUTES = {
   settingsAppearance: SYSTEM_SETTINGS_PATHS.appearance,
-  // 回答の注意書き（3 製品で共通の文。#2405）
-  settingsAnswerNotice: SYSTEM_SETTINGS_PATHS.answerNotice,
+  // 回答の注意書き（設定は製品ごと。#2405・#2449）
+  settingsAnswerNotice: ANSWER_NOTICE_PATH,
   // 認証画面（NL2SQL と同じ URL。#214）
   login: "/login",
   passwordChange: "/password/change",

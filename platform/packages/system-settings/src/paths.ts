@@ -21,7 +21,6 @@ export const SYSTEM_SETTINGS_PATHS = {
   model: "/settings/model",
   database: "/settings/database",
   appearance: "/settings/appearance",
-  answerNotice: "/settings/answer-notice",
 } as const;
 
 export type SystemSettingsKey = keyof typeof SYSTEM_SETTINGS_PATHS;
@@ -36,7 +35,7 @@ export interface SystemSettingsNavItem {
 }
 
 /**
- * サイドナビ「システム設定」の共通6項目（#116。回答の注意書きは #2405）。項目・並び順・アイコンは共有パッケージが決め、
+ * サイドナビ「システム設定」の共通5項目（#116）。項目・並び順・アイコンは共有パッケージが決め、
  * 各製品の nav config はこれをそのまま使う（NL2SQL は各項目に menu 権限を付ける）。
  */
 export const SYSTEM_SETTINGS_NAV_ITEMS = [
@@ -73,13 +72,21 @@ export const SYSTEM_SETTINGS_NAV_ITEMS = [
     labelKey: "nav.settingsAppearance",
     icon: Palette,
   },
-  {
-    key: "answerNotice",
-    href: SYSTEM_SETTINGS_PATHS.answerNotice,
-    labelKey: "nav.settingsAnswerNotice",
-    icon: MessageSquareWarning,
-  },
 ] as const satisfies readonly SystemSettingsNavItem[];
+
+/** 回答の注意書きの画面のパス（画面は共有パッケージ。設定は製品ごと。#2405・#2449）。 */
+export const ANSWER_NOTICE_PATH = "/settings/answer-notice";
+
+/**
+ * サイドナビ「運用設定」の「システムテーブル」の下に置く「回答の注意書き」（3 製品で同じ位置とアイコン。#2449）。
+ * 設定は製品ごとで、各製品の画面はその製品の回答に付ける注意書きだけを扱う。
+ */
+export const ANSWER_NOTICE_NAV_ITEM = {
+  key: "answerNotice",
+  href: ANSWER_NOTICE_PATH,
+  labelKey: "nav.settingsAnswerNotice",
+  icon: MessageSquareWarning,
+} as const;
 
 /**
  * 共有のユーザー管理・ロール管理画面のパス（#206）。NL2SQL の既存 URL をそのまま使う。
