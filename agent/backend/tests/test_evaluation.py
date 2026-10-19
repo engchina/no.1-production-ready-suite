@@ -35,11 +35,18 @@ from app.features.agent.evaluation import (
     EvaluationJob,
     JobStatus,
     JudgeVerdict,
+    cases_fingerprint,
     evaluation_set_store,
     evaluation_store,
     run_evaluation_job,
 )
 from app.features.agent.evaluation_excel import parse_cases_xlsx
+from app.features.agent.output_fields import (
+    RECORD_OUTPUT_TOOL,
+    AgentOutputField,
+    compare_output,
+    output_value_matches,
+)
 from app.features.agent.runtime import (
     EVALUATION_DRY_RUN_MESSAGE,
     AgentProfile,
@@ -1691,3 +1698,175 @@ def test_judge_retry_lowers_reasoning_effort_when_the_limit_cannot_widen(
 
     assert retry_model_target(target("medium")).reasoning_effort == "low"  # noqa: SLF001
     assert retry_model_target(target("low")).reasoning_effort == "low"  # noqa: SLF001
+
+
+# ---- 出力の項目の判定（#2558） ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("expected", "actual", "field_type", "matches"),
+    [
+        ("Ａ－１", "a-1", "text", True),
+        ("品目  甲", "品目 甲", "text", True),
+        ("品目甲", "品目乙", "text", False),
+        (1200, "1,200", "number", True),
+        (1200, 1200.0, "number", True),
+        (1200, "1,201", "number", False),
+        ("2026-10-01", "2026-10-01", "date", True),
+        ("2026-10-01", "2026-10-02", "date", False),
+        (True, "はい", "boolean", True),
+        (False, True, "boolean", False),
+        (None, None, "text", True),
+        (None, "値", "text", False),
+        ("値", None, "text", False),
+    ],
+    ids=[
+        "text-width-case",
+        "text-space",
+        "text-diff",
+        "number-separator",
+        "number-float",
+        "number-diff",
+        "date-same",
+        "date-diff",
+        "bool-japanese",
+        "bool-diff",
+        "null-null",
+        "null-expected",
+        "missing-actual",
+    ],
+)
+def test_output_value_matches(expected: Any, actual: Any, field_type: str, matches: bool) -> None:
+    assert output_value_matches(expected, actual, field_type) is matches
+
+
+OUTPUT_CONTENT = {
+    "columns": [
+        {"name": "item", "label": "項目", "type": "text"},
+        {"name": "amount", "label": "金額", "type": "number"},
+        {"name": "matched", "label": "一致", "type": "boolean"},
+    ],
+    "rows": [
+        {"item": "B", "amount": 800, "matched": False},
+        {"item": "A", "amount": 1200, "matched": True},
+    ],
+}
+
+
+def test_compare_output_pairs_rows_by_first_column() -> None:
+    results, correct = compare_output(
+        [{"item": "A", "amount": 1200}, {"item": "B", "matched": True}], OUTPUT_CONTENT
+    )
+
+    assert correct is False
+    assert [(item.row, item.field, item.actual, item.correct) for item in results] == [
+        (1, "item", "A", True),
+        (1, "amount", 1200, True),
+        (2, "item", "B", True),
+        (2, "matched", False, False),
+    ]
+    assert results[1].label == "金額"
+    # 期待する出力が無ければ判定しない。記録が無ければすべて誤り。
+    assert compare_output([], OUTPUT_CONTENT) == ([], None)
+    missing, missing_correct = compare_output([{"item": "A"}], None)
+    assert missing_correct is False and missing[0].actual is None
+
+
+def test_output_fields_are_judged_in_a_job(monkeypatch: MonkeyPatch, agent: None) -> None:
+    del agent
+    runtime_repository.patch_agent(
+        AGENT_ID,
+        AgentProfilePatch(
+            output_fields=[
+                AgentOutputField(key="item", label="項目", required=True),
+                AgentOutputField(key="amount", label="金額", type="number"),
+            ]
+        ),
+    )
+    _script(
+        monkeypatch,
+        [
+            function_call(
+                RECORD_OUTPUT_TOOL,
+                {"rows": [{"item": "A", "amount": 1200}, {"item": "B", "amount": 900}]},
+                call_id="call-out",
+            )
+        ],
+        [assistant_message("A は 1200、B は 900 です。")],
+        _judgement("correct", 1.0, "要点を満たしています。"),
+    )
+    case = EvaluationCase(
+        id="c1",
+        question="書類の値を読んで",
+        expected="A と B の金額",
+        expected_output=[{"item": "A", "amount": "1,200"}, {"item": "B", "amount": 800}],
+    )
+    job = evaluation_store.create(
+        EvaluationJob(
+            agent_id=AGENT_ID,
+            agent_name="経理の Agent",
+            set_id="evset_output",
+            set_name="出力の評価",
+            agent_version="draft",
+            created_by_user_uuid=USER_UUID,
+            results=[EvaluationCaseResult(case=case)],
+        )
+    )
+
+    anyio.run(run_evaluation_job, job.id)
+
+    finished = evaluation_store.get(job.id)
+    [result] = finished.results
+    assert result.status == CaseStatus.JUDGED
+    assert result.field_correct is False
+    assert [(item.row, item.field, item.correct) for item in result.field_results] == [
+        (1, "item", True),
+        (1, "amount", True),
+        (2, "item", True),
+        (2, "amount", False),
+    ]
+    summary = finished.summary
+    assert (summary.field_cases, summary.field_correct, summary.field_accuracy) == (1, 0, 0.0)
+    assert (summary.field_items, summary.field_items_correct) == (4, 3)
+    assert summary.field_item_accuracy == pytest.approx(0.75)
+    # 合格率は回答の文の判定だけで決める。
+    assert summary.pass_rate == 1.0
+
+
+def test_expected_output_changes_the_case_fingerprint() -> None:
+    base = EvaluationCase(id="c1", question="質問", expected="要点")
+    with_output = base.model_copy(update={"expected_output": [{"item": "A"}]})
+    first = EvaluationJob(
+        agent_id=AGENT_ID,
+        agent_name="a",
+        set_id="s",
+        set_name="s",
+        results=[EvaluationCaseResult(case=base)],
+    )
+    second = first.model_copy(update={"results": [EvaluationCaseResult(case=with_output)]})
+    assert cases_fingerprint(first) != cases_fingerprint(second)
+
+
+def test_expected_output_is_validated() -> None:
+    with pytest.raises(ValueError, match="key"):
+        EvaluationCase(id="c", question="q", expected="e", expected_output=[{"Item": "A"}])
+    with pytest.raises(ValueError):
+        EvaluationCase(id="c", question="q", expected="e", expected_output=[{"item": ["A"]}])
+
+
+def test_expected_output_round_trips_through_excel(agent: None) -> None:
+    del agent
+    body = {
+        **SET_BODY,
+        "cases": [
+            {
+                "question": "書類の値は？",
+                "expected": "金額",
+                "expected_output": [{"item": "A", "amount": 1200, "matched": True}],
+            }
+        ],
+    }
+    set_id = client.post("/api/evaluation-sets", json=body).json()["data"]["id"]
+    exported = client.get(f"/api/evaluation-sets/{set_id}/cases.xlsx")
+    [case] = parse_cases_xlsx(exported.content)
+    assert case.expected_output == [{"item": "A", "amount": 1200, "matched": True}]

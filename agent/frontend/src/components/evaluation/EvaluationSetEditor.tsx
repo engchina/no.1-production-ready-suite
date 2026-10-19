@@ -40,7 +40,14 @@ import {
   useCanEvaluateDraft,
 } from "@/components/evaluation/EvaluationVersionField";
 import {
+  ExpectedOutputField,
+  expectedOutputDrafts,
+  toExpectedOutput,
+  type ExpectedOutputRowDraft,
+} from "@/components/evaluation/ExpectedOutputField";
+import {
   agentApi,
+  type AgentOutputField,
   type AgentProfile,
   type EvaluationCase,
   type EvaluationSet,
@@ -67,6 +74,8 @@ interface CaseDraft {
   answers: ClarificationAnswerDraft[];
   /** フィードバック・Run の詳細から追加したケースの元の Run（保存し直しても保つ。#810）。 */
   sourceRunId: string | null;
+  /** 期待する出力の項目（#2558）。 */
+  output: ExpectedOutputRowDraft[];
 }
 
 interface SetDraft {
@@ -92,6 +101,7 @@ function caseDraft(item?: EvaluationCase): CaseDraft {
     toolsInOrder: item?.expected_tools_in_order ?? false,
     answers: (item?.clarification_answers ?? []).map((answer) => clarificationAnswerDraft(answer)),
     sourceRunId: item?.source_run_id ?? null,
+    output: expectedOutputDrafts(item?.expected_output),
   };
 }
 
@@ -143,14 +153,20 @@ function caseInvalid(item: CaseDraft, duplicates: Set<string>): boolean {
 function comparable(draft: SetDraft) {
   return {
     ...draft,
-    cases: draft.cases.map(({ key: _key, answers, ...rest }) => ({
+    cases: draft.cases.map(({ key: _key, answers, output, ...rest }) => ({
       ...rest,
       answers: answers.map(({ key: _answerKey, ...answer }) => answer),
+      output: output.map(({ key: _outputKey, ...row }) => row),
     })),
   };
 }
 
-function toPayload(draft: SetDraft): EvaluationSetInput {
+/** 評価する業務 Agent の出力の項目（#2558。見つからなければ空）。 */
+function outputFieldsOf(agents: AgentProfile[], agentId: string): AgentOutputField[] {
+  return agents.find((agent) => agent.id === agentId)?.output_fields ?? [];
+}
+
+function toPayload(draft: SetDraft, fields: AgentOutputField[]): EvaluationSetInput {
   return {
     agent_id: draft.agentId,
     name: draft.name.trim(),
@@ -166,6 +182,8 @@ function toPayload(draft: SetDraft): EvaluationSetInput {
       expected_tools_in_order: item.toolsInOrder,
       clarification_answers: toClarificationAnswers(item.answers),
       source_run_id: item.sourceRunId,
+      // 期待する出力は書いたときだけ送る（#2558）。
+      ...((output) => (output.length ? { expected_output: output } : {}))(toExpectedOutput(item.output, fields)),
     })),
   };
 }
@@ -288,7 +306,7 @@ export function EvaluationSetEditor({
     if (firstInvalid >= 0) pagination.setPage(Math.floor(firstInvalid / CASES_PAGE_SIZE) + 1);
     const invalid = !draft.name.trim() || draft.cases.length === 0 || tooMany || firstInvalid >= 0;
     if (invalid) return;
-    save.mutate(toPayload(draft));
+    save.mutate(toPayload(draft, outputFieldsOf(agents, evaluatedAgentId ?? draft.agentId)));
   }
 
   async function onFile(file: File | undefined) {
@@ -367,6 +385,8 @@ export function EvaluationSetEditor({
   const evaluatedAgent = agents.find((agent) => agent.id === (evaluatedAgentId ?? draft.agentId)) ?? setAgent;
   const canEvaluateDraft = useCanEvaluateDraft(evaluatedAgent);
   const version = usableEvaluationTarget(evaluatedAgent, versionChoice, canEvaluateDraft);
+  // 期待する出力の欄に出す項目（評価する業務 Agent の出力の項目。#2558）。
+  const outputFields = outputFieldsOf(agents, evaluatedAgentId ?? draft.agentId);
 
   return (
     <>
@@ -592,6 +612,13 @@ export function EvaluationSetEditor({
                         answers={item.answers}
                         submitted={submitted}
                         onChange={(answers) => updateCase(item.key, { answers })}
+                      />
+                      <ExpectedOutputField
+                        idPrefix={item.key}
+                        caseNumber={number}
+                        fields={outputFields}
+                        rows={item.output}
+                        onChange={(output) => updateCase(item.key, { output })}
                       />
                     </CardContent>
                   </Card>

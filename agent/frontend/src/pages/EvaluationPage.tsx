@@ -58,6 +58,8 @@ import {
   agentApi,
   type AgentProfile,
   type EvaluationCaseResult,
+  type EvaluationFieldResult,
+  type EvaluationOutputValue,
   type EvaluationClarificationRound,
   type EvaluationJob,
   type EvaluationJobItem,
@@ -746,8 +748,12 @@ function JobView({
 function SummaryMetrics({ summary, previous }: { summary: EvaluationSummary; previous: EvaluationSummary | null }) {
   const ofTotal = t("evaluation.summary.ofTotal", { total: formatNumber(summary.total) });
   return (
-    // 統計のタイルはカードの幅を等分する（6 個なので 2 / 3 列。design-system README §4「wide 画面の 100% 充填」）。
-    <div className="grid grid-cols-2 gap-x-5 gap-y-4 xl:grid-cols-3" data-testid="evaluation-summary">
+    // 統計のタイルはカードの幅を等分する（6 個なので 2 / 3 列、出力の項目を判定したら 8 個なので 2 / 4 列。
+    // design-system README §4「wide 画面の 100% 充填」）。
+    <div
+      className={`grid grid-cols-2 gap-x-5 gap-y-4 ${summary.field_cases ? "xl:grid-cols-4" : "xl:grid-cols-3"}`}
+      data-testid="evaluation-summary"
+    >
       <Metric
         label={t("evaluation.summary.passRate")}
         value={formatRate(summary.pass_rate)}
@@ -767,6 +773,27 @@ function SummaryMetrics({ summary, previous }: { summary: EvaluationSummary; pre
             : t("evaluation.summary.noToolCases")
         }
       />
+      {summary.field_cases ? (
+        // 出力の項目の正しさ（#2558。合格率には含めない）。
+        <>
+          <Metric
+            label={t("evaluation.summary.fieldItemAccuracy")}
+            value={formatRate(summary.field_item_accuracy ?? null)}
+            detail={t("evaluation.summary.fieldItems", {
+              correct: summary.field_items_correct ?? 0,
+              total: summary.field_items ?? 0,
+            })}
+          />
+          <Metric
+            label={t("evaluation.summary.fieldAccuracy")}
+            value={formatRate(summary.field_accuracy ?? null)}
+            detail={t("evaluation.summary.fieldCases", {
+              correct: summary.field_correct ?? 0,
+              total: summary.field_cases,
+            })}
+          />
+        </>
+      ) : null}
       <Metric label={t("evaluation.summary.correct")} value={formatNumber(summary.correct)} detail={ofTotal} />
       <Metric
         label={t("evaluation.summary.incorrect")}
@@ -843,6 +870,17 @@ function ResultsTable({
       className: "max-w-64 text-xs",
       render: (result) => <ToolSelection result={result} />,
     },
+    // 出力の項目（#2558）。期待する出力のあるケースがあるときだけ出す。
+    ...(results.some((result) => result.field_correct !== null && result.field_correct !== undefined)
+      ? [
+          {
+            key: "output",
+            header: t("evaluation.column.output"),
+            className: "whitespace-nowrap text-xs",
+            render: (result: EvaluationCaseResult) => <OutputBadge result={result} />,
+          },
+        ]
+      : []),
     {
       key: "duration",
       header: t("evaluation.column.duration"),
@@ -864,6 +902,55 @@ function ResultsTable({
         resetKey={jobId}
       />
     </div>
+  );
+}
+
+/** 出力の項目の正誤（#2558。正しい項目の数 / 判定した項目の数）。期待する出力の無いケースは「—」。 */
+function OutputBadge({ result }: { result: EvaluationCaseResult }) {
+  if (result.field_correct === null || result.field_correct === undefined) return <span className="text-fg-muted">—</span>;
+  const items = result.field_results ?? [];
+  const correct = items.filter((item) => item.correct).length;
+  return (
+    <StatusBadge
+      variant={result.field_correct ? "success" : "danger"}
+      label={t("evaluation.output.badge", { correct, total: items.length })}
+    />
+  );
+}
+
+function outputValue(value: EvaluationOutputValue): string {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "boolean") return value ? t("chat.output.yes") : t("chat.output.no");
+  return String(value);
+}
+
+/** ケースの詳細の、出力の項目ごとの判定の表（#2558）。 */
+function OutputFieldTable({ items }: { items: EvaluationFieldResult[] }) {
+  const columns: DataTableColumn<EvaluationFieldResult>[] = [
+    { key: "row", header: t("evaluation.output.row"), align: "right", className: "tabular-nums", render: (item) => item.row },
+    { key: "field", header: t("evaluation.output.field"), render: (item) => item.label || item.field },
+    { key: "expected", header: t("evaluation.output.expected"), className: "break-words", render: (item) => outputValue(item.expected) },
+    { key: "actual", header: t("evaluation.output.actual"), className: "break-words", render: (item) => outputValue(item.actual) },
+    {
+      key: "correct",
+      header: t("evaluation.output.result"),
+      render: (item) => (
+        <StatusBadge
+          variant={item.correct ? "success" : "danger"}
+          label={item.correct ? t("evaluation.output.correct") : t("evaluation.output.incorrect")}
+        />
+      ),
+    },
+  ];
+  return (
+    <DataTable<EvaluationFieldResult>
+      rows={items}
+      columns={columns}
+      getRowKey={(item) => `${item.row}-${item.field}`}
+      ariaLabel={t("evaluation.detail.output")}
+      scrollAriaLabel={listScrollLabel(t("evaluation.detail.output"))}
+      tableClassName="w-full min-w-[32rem] text-xs"
+    />
   );
 }
 
@@ -1023,6 +1110,13 @@ function CaseDetail({ result }: { result: EvaluationCaseResult }) {
             </DetailSection>
           ) : null}
         </>
+      ) : null}
+      {result.field_results?.length ? (
+        <DetailSection title={t("evaluation.detail.output")}>
+          <div data-testid="evaluation-output-fields">
+            <OutputFieldTable items={result.field_results} />
+          </div>
+        </DetailSection>
       ) : null}
       <DetailSection title={t("evaluation.detail.tools")}>
         <div className="space-y-1 text-xs">

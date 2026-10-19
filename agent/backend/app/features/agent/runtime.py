@@ -3268,6 +3268,9 @@ class AgentRuntimeRepository:
             if isinstance(skill_ids, list):
                 self._validate_agent_skills(skill_ids)
                 data["migration_required"] = False
+            if "output_fields" in data:
+                # 出力の項目は検証済みのモデルのまま入れる（dump した dict にしない。#2559）。
+                data["output_fields"] = list(patch.output_fields or [])
             before = {field: getattr(agent, field) for field in AGENT_VERSIONED_FIELDS}
             for key, value in data.items():
                 setattr(agent, key, value)

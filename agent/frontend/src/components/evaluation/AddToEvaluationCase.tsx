@@ -135,6 +135,8 @@ function CaseForm({
         expected: expected.trim(),
         expected_tools: parseTools(tools),
         source_run_id: draft.source_run_id,
+        // Run が記録した出力の項目を期待する出力にする（#2558。評価セットで直せる）。
+        ...(draft.expected_output?.length ? { expected_output: draft.expected_output } : {}),
       };
       if (setId === NEW_SET) {
         return agentApi.createEvaluationSet({ agent_id: draft.agent_id, name: newName.trim(), description: "", cases: [item] });
@@ -261,6 +263,11 @@ function CaseForm({
           width="full"
           className="col-span-full"
         />
+        {draft.expected_output?.length ? (
+          <p className="col-span-full text-xs text-fg-muted" data-testid={`${testId}-output`}>
+            {t("evaluation.add.outputFromRun", { count: draft.expected_output.length })}
+          </p>
+        ) : null}
       </FormGrid>
       <FormActionBar
         ariaLabel={t("evaluation.add.actions")}

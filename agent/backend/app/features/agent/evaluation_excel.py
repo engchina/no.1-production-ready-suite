@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 from io import BytesIO
 from typing import Any
 
@@ -32,6 +33,7 @@ HEADERS = (
     "期待するツール",
     "ツールの順",
     "問い返しへの答え",
+    "期待する出力（JSON）",
 )
 # 「ツールの順」の列の値（#1845）。書き出しは IN_ORDER_LABEL、読み込みは IN_ORDER_VALUES のどれか。
 IN_ORDER_LABEL = "順どおり"
@@ -44,6 +46,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "expected_tools": ("期待するツール", "expected_tools", "tools"),
     "expected_tools_in_order": ("ツールの順", "期待するツールの順", "expected_tools_in_order"),
     "clarification_answers": ("問い返しへの答え", "clarification_answers"),
+    "expected_output": ("期待する出力（json）", "期待する出力", "expected_output"),
 }
 # 問い返しへの答えの「その他（自由入力）」の印（#1845）。
 OTHER_PREFIXES = ("その他:", "その他：")
@@ -77,9 +80,13 @@ def _workbook(cases: list[EvaluationCase]) -> bytes:
                 ", ".join(case.expected_tools),
                 IN_ORDER_LABEL if case.expected_tools_in_order and case.expected_tools else "",
                 format_answers(case.clarification_answers),
+                # 期待する出力の項目（#2558）。行の配列の JSON（無ければ空）。
+                json.dumps(case.expected_output, ensure_ascii=False)
+                if case.expected_output
+                else "",
             ]
         )
-    for column, width in zip("ABCDEF", (18, 48, 56, 28, 12, 40), strict=True):
+    for column, width in zip("ABCDEFG", (18, 48, 56, 28, 12, 40, 48), strict=True):
         sheet.column_dimensions[column].width = width
     for row in sheet.iter_rows(min_row=2):
         for cell in row:
@@ -181,7 +188,11 @@ def parse_cases_xlsx(data: bytes) -> list[EvaluationCase]:
         tools = _text(values, columns.get("expected_tools"))
         in_order = _text(values, columns.get("expected_tools_in_order")).lower() in IN_ORDER_VALUES
         answers_text = _text(values, columns.get("clarification_answers"))
+        output_text = _text(values, columns.get("expected_output"))
         try:
+            expected_output = json.loads(output_text) if output_text else []
+            if not isinstance(expected_output, list):
+                expected_output = [expected_output]
             cases.append(
                 EvaluationCase(
                     id=_text(values, columns.get("id")),
@@ -190,12 +201,14 @@ def parse_cases_xlsx(data: bytes) -> list[EvaluationCase]:
                     expected_tools=[item for item in tools.replace("、", ",").split(",")],
                     expected_tools_in_order=in_order,
                     clarification_answers=parse_answers(answers_text),
+                    expected_output=expected_output,
                 )
             )
-        except ValidationError as exc:
+        except (ValidationError, json.JSONDecodeError) as exc:
             raise EvaluationExcelError(
                 f"{number} 行目を読めません（質問と期待する回答の要点は必須です。"
-                "問い返しへの答えは 1 行に 1 件で、候補か「その他:」の自由入力を書きます）。"
+                "問い返しへの答えは 1 行に 1 件で、候補か「その他:」の自由入力を書きます。"
+                '期待する出力は [{"項目の key": 値}] の形の JSON で書きます）。'
             ) from exc
     if not cases:
         raise EvaluationExcelError("評価ケースが 1 件もありません。")
