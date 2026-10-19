@@ -17,7 +17,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from pr_backend_core.api import encode_cursor
 from pr_system_settings.auth.service_token import issue_service_token
 from pytest import MonkeyPatch
 
@@ -1552,6 +1551,9 @@ class _SectionStore:
             root_title="規程.pdf",
         )
 
+    async def chunk_set_ids_with_prefix(self, document_id: str, prefix: str) -> list[str]:
+        return ["cs-1"] if document_id == "d1" and "cs-1".startswith(prefix) else []
+
     async def readable_chunk_set(
         self, document_id: str, chunk_set_id: str | None = None
     ) -> ReadableChunkSet | None:
@@ -1811,7 +1813,7 @@ def test_read_document_errors(auth: ProductionAuth, document_oracle: type[_Docum
         assert body["isError"] is True, body
         return str(body["structuredContent"]["error_code"])
 
-    stale_cursor = encode_cursor({"cs": "cs-old", "i": 0, "o": 0})
+    stale_cursor = "cs-old:0:0"
     assert error({"document_id": "d1", "cursor": stale_cursor}) == mcp_tools.SOURCE_STALE_CODE
     assert error({"document_id": "d1", "cursor": "not-a-cursor"}) == mcp_tools.CURSOR_INVALID_CODE
     assert error({"document_id": "d9"}) == mcp_tools.SOURCE_NOT_FOUND_CODE
@@ -1964,7 +1966,7 @@ def test_read_section_errors(auth: ProductionAuth, document_oracle: type[_Docume
     assert error({"document_id": "d9", "section_id": "s1"}) == mcp_tools.SOURCE_NOT_FOUND_CODE
     assert error({"document_id": "d1", "chunk_id": "d1:cs-9:0"}) == mcp_tools.SOURCE_NOT_FOUND_CODE
     assert error({"document_id": "d1", "chunk_id": "d1:cs-old:0"}) == mcp_tools.SOURCE_STALE_CODE
-    stale = encode_cursor({"cs": "cs-old", "s": "s2", "i": 0, "o": 0})
+    stale = "cs-old:s2:0:0"
     assert error({"document_id": "d1", "cursor": stale}) == mcp_tools.SOURCE_STALE_CODE
     assert error({"document_id": "d1", "cursor": "bad"}) == mcp_tools.CURSOR_INVALID_CODE
     for arguments in (
@@ -1974,6 +1976,43 @@ def test_read_section_errors(auth: ProductionAuth, document_oracle: type[_Docume
         {"document_id": "d1", "section_id": "s1", "up": 7},
     ):
         assert error(arguments) == "MCP_TOOL_ARGUMENTS_INVALID", arguments
+
+
+def test_cursor_is_short_and_errors_say_how_to_fix(
+    auth: ProductionAuth, document_oracle: type[_DocumentOracle]
+) -> None:
+    """続きの位置は書き写しやすい短い平文で、形の誤り・道具の取り違えは直し方を返す（#2499）。"""
+    del document_oracle
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+    first = _read_section({"document_id": "d1", "section_id": "s2", "max_chars": 10}, headers)
+    cursor = first["next_cursor"]
+    assert cursor == "cs-1:s2:0:10"
+    document_cursor = _call("rag_read_document", {"document_id": "d1", "max_chars": 5}, headers)[
+        "structuredContent"
+    ]["next_cursor"]
+    assert document_cursor == "cs-1:0:5"
+
+    def message(tool: str, arguments: dict[str, Any]) -> str:
+        body = _call(tool, arguments, headers)
+        assert body["isError"] is True, body
+        assert body["structuredContent"]["error_code"] == mcp_tools.CURSOR_INVALID_CODE
+        return str(body["structuredContent"]["message"])
+
+    # 章節の cursor を rag_read_document に、文書の cursor を rag_read_section に渡した。
+    assert "rag_read_section" in message(
+        "rag_read_document", {"document_id": "d1", "cursor": cursor}
+    )
+    assert "rag_read_document" in message(
+        "rag_read_section", {"document_id": "d1", "cursor": document_cursor}
+    )
+    # 崩れた cursor（数の位置に字が入った・区切りが欠けた）。
+    for broken in ("cs-1:s2:O:10", "cs-1s2010", ":s2:0:10", "cs-1::0:10"):
+        text = message("rag_read_section", {"document_id": "d1", "cursor": broken})
+        assert "next_cursor" in text and "section_id" in text, broken
+    # 同じ位置から続きを読める（先頭の字で chunk_set を引き直す）。
+    second = _read_section({"document_id": "d1", "cursor": cursor, "max_chars": 10}, headers)
+    assert second["section"]["section_id"] == "s2"
 
 
 def test_evidence_shows_the_section_of_the_chunk(
