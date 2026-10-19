@@ -222,3 +222,36 @@ def test_tool_errors_use_user_location_and_japanese() -> None:
             "raw_message": "Field required",
         }
     ]
+
+
+class _ToolInput(BaseModel):
+    """MCP のツールの入力（引数の名前が要求の出どころと同じ語）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1)
+    body: int = 1
+    path: list[str] = Field(default_factory=list)
+
+
+def test_tool_errors_keep_arguments_named_like_request_sources() -> None:
+    """ツールの入力の loc の先頭は引数の名前で、`query` などを出どころとして除かない（#2505）。"""
+    with pytest.raises(Exception) as caught:
+        _ToolInput.model_validate({"body": "x", "path": "y", "Query": "z"})
+    errors = validation_tool_errors(caught.value.errors())  # type: ignore[attr-defined]
+
+    assert {(item["loc"], item["type"]) for item in errors} == {
+        ("query", "missing"),
+        ("body", "int_parsing"),
+        ("path", "list_type"),
+        ("Query", "extra_forbidden"),
+    }
+    # HTTP の 422（要求の出どころを持つ loc）は従来どおり出どころを除く。
+    assert (
+        validation_field_errors([{"type": "missing", "loc": ("query", "limit")}])[0]["location"]
+        == "limit"
+    )
+    assert (
+        validation_field_errors([{"type": "missing", "loc": ("body", "query")}])[0]["location"]
+        == "query"
+    )

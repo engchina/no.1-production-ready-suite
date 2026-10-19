@@ -190,16 +190,17 @@ def validation_tool_errors(errors: Sequence[Mapping[str, Any]]) -> list[dict[str
     """MCP のツールの引数の誤り（`details.errors`）の形にする。
 
     `loc` は利用者に見せる位置（`cases[0].query`）、`message` は日本語の文、`type` と
-    `raw_message` は技術的な原文。
+    `raw_message` は技術的な原文。ツールの入力の loc には要求の出どころが無く、先頭は引数の
+    名前なので、`query` などの名前の引数を出どころとして取り除かない（#2505）。
     """
     return [
         {
-            "loc": item["location"],
-            "message": item["message"],
-            "type": item["code"],
-            "raw_message": item["raw_message"],
+            "loc": item.location,
+            "message": item.message,
+            "type": item.code,
+            "raw_message": item.raw_message,
         }
-        for item in validation_field_errors(errors)
+        for item in (_field_problem(error, strip_source=False) for error in errors)
     ]
 
 
@@ -241,14 +242,19 @@ def validation_error_response(
     )
 
 
-def _field_problem(error: Mapping[str, Any]) -> _FieldProblem:
+def _field_problem(error: Mapping[str, Any], *, strip_source: bool = True) -> _FieldProblem:
+    """1 件の検証エラー。``strip_source`` は loc の先頭の要求の出どころ（`body` など）を除くか。"""
     error_type = str(error.get("type") or "")
     raw_message = str(error.get("msg") or "").strip()
     loc = error.get("loc", ())
     parts = list(loc) if isinstance(loc, list | tuple) else []
     custom = _custom_message(error_type, raw_message)
     # JSON の構文の誤りの loc は本文の中の文字の位置（数）で、欄の位置ではない。
-    location_parts = [] if error_type in {"json_invalid", "json_type"} else _user_parts(parts)
+    location_parts = (
+        []
+        if error_type in {"json_invalid", "json_type"}
+        else _user_parts(parts, strip_source=strip_source)
+    )
     return _FieldProblem(
         pointer=_json_pointer(location_parts),
         code=error_type or "invalid",
@@ -287,9 +293,12 @@ def _japanese_message(error_type: str, ctx: object) -> str:
         return FALLBACK_FIELD_MESSAGE
 
 
-def _user_parts(parts: list[Any]) -> list[str | int]:
-    """loc から出どころ（`body` など）と schema の名前（union の候補の型）を除く。"""
-    if parts and parts[0] in _LOCATION_SOURCES:
+def _user_parts(parts: list[Any], *, strip_source: bool = True) -> list[str | int]:
+    """loc から出どころ（`body` など。``strip_source`` のとき）と schema の名前を除く。
+
+    schema の名前は union の候補の型など、Pydantic が loc に足す名前。
+    """
+    if strip_source and parts and parts[0] in _LOCATION_SOURCES:
         parts = parts[1:]
     user_parts: list[str | int] = []
     for part in parts:
