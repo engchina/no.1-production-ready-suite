@@ -31,7 +31,8 @@ function isAtBottom(element: HTMLElement, threshold: number) {
 /**
  * チャットの会話の欄の自動スクロール（3 製品共通。UX 契約 page-archetypes.md §6、#1161）。
  *
- * - 末尾を見ている間は、新しい内容（回答の受信・処理の段階）に合わせて末尾へ追う。
+ * - 末尾を見ている間は、新しい内容（回答の受信・処理の段階）に合わせて末尾へ追う。末尾へ動かした後、利用者が
+ *   会話の欄を操作するまでは、描いた後の高さの変化（フォント・画像の読み込み）にも追う。
  * - 上を読んでいる間は引き戻さず、「最新へ」（`showLatest`）を出す。末尾まで戻ると消す。
  * - 会話を開いた・変えたとき（`resetKey`）は末尾から読み始める。送信の瞬間は製品が `scrollToLatest` を呼ぶ
  *   （messaging.md §11.1）。
@@ -46,6 +47,8 @@ export function useChatAutoScroll({
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const logElementRef = useRef<HTMLDivElement | null>(null);
   const atBottomRef = useRef(true);
+  // 末尾へ動かした後、利用者が会話の欄を操作するまでは、描いた後の高さの変化にも末尾を追う。
+  const followResizeRef = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
 
   const logRef = useCallback((next: HTMLDivElement | null) => {
@@ -56,6 +59,7 @@ export function useChatAutoScroll({
   const scrollToLatest = useCallback((behavior: ScrollBehavior = "auto") => {
     const target = logElementRef.current;
     atBottomRef.current = true;
+    followResizeRef.current = true;
     setShowLatest(false);
     target?.scrollTo({ top: target.scrollHeight, behavior });
   }, []);
@@ -71,6 +75,34 @@ export function useChatAutoScroll({
     element.addEventListener("scroll", onScroll, { passive: true });
     return () => element.removeEventListener("scroll", onScroll);
   }, [element, threshold]);
+
+  // 描いた後の高さの変化（フォント・画像の読み込み）でも、末尾を見ていれば末尾に留める（#2479）。
+  // 利用者が会話の欄を操作した後（折りたたみを開くなど）は、高さが変わっても引き戻さない。
+  useLayoutEffect(() => {
+    if (!enabled || !element || typeof ResizeObserver === "undefined") return;
+    const resizeObserver = new ResizeObserver(() => {
+      if (followResizeRef.current && atBottomRef.current) {
+        element.scrollTo({ top: element.scrollHeight });
+      }
+    });
+    const observeChildren = () => {
+      for (const child of Array.from(element.children)) resizeObserver.observe(child);
+    };
+    resizeObserver.observe(element);
+    observeChildren();
+    const mutationObserver = new MutationObserver(observeChildren);
+    mutationObserver.observe(element, { childList: true });
+    const onInteract = () => {
+      followResizeRef.current = false;
+    };
+    const interactions = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+    for (const type of interactions) element.addEventListener(type, onInteract, { passive: true });
+    return () => {
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+      for (const type of interactions) element.removeEventListener(type, onInteract);
+    };
+  }, [enabled, element]);
 
   // 会話を開いた・変えた・画面に戻った・会話の欄が描かれたときは末尾から。
   useLayoutEffect(() => {
