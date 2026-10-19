@@ -43,6 +43,7 @@ from app.features.agent.evaluation_excel import parse_cases_xlsx
 from app.features.agent.runtime import (
     EVALUATION_DRY_RUN_MESSAGE,
     AgentProfile,
+    AgentProfilePatch,
     Artifact,
     RunCreateRequest,
     RunStatus,
@@ -50,7 +51,7 @@ from app.features.agent.runtime import (
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.tools import ToolDefinition, ToolPermissionLevel, tool_registry
-from app.security.permissions import MENU_EVALUATION, MENU_RUNS
+from app.security.permissions import ADMIN, MENU_EVALUATION, MENU_RUNS
 from app.security.service import set_security_service
 
 AGENT_ID = "eval-776-agent"
@@ -566,6 +567,39 @@ def test_evaluation_permissions(
     assert client.get("/api/evaluations", headers=other).json()["data"]["items"] == []
     assert client.get(f"/api/evaluations/{job_id}", headers=other).status_code == 404
     assert client.get(f"/api/evaluation-sets/{set_id}", headers=other).status_code == 404
+
+
+def test_draft_evaluation_needs_agent_admin(
+    auth: ProductionAuth, agent: None, no_background: list[str]
+) -> None:
+    """下書きの評価は下書きの実行と同じく Agent 管理だけ（#2522）。既定は公開中の版。"""
+    del agent
+    runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(instructions="作業中の指示"))
+    auth.user_with_permissions("eval-2522", [MENU_EVALUATION], agent_ids=[AGENT_ID])
+    headers = login("eval-2522")
+    set_id = client.post("/api/evaluation-sets", json=SET_BODY, headers=headers).json()["data"][
+        "id"
+    ]
+
+    draft = client.post(
+        "/api/evaluations", json={"set_id": set_id, "agent_version": "draft"}, headers=headers
+    )
+    assert draft.status_code == 403, draft.text
+    assert "Agent 管理" in draft.json()["error_messages"][0]
+
+    # 公開していない変更があっても、Agent 管理でなければ既定は公開中の版。
+    default = client.post("/api/evaluations", json={"set_id": set_id}, headers=headers)
+    assert default.status_code == 202, default.text
+    assert default.json()["data"]["agent_version"] == 1
+
+    # Agent 管理は、公開していない変更があれば既定で下書きを評価する（同時に動く評価は 1 つ）。
+    evaluation_store.clear()
+    auth.user_with_permissions("admin-2522", [ADMIN])
+    admin = login("admin-2522")
+    other_set = client.post("/api/evaluation-sets", json=SET_BODY, headers=admin).json()["data"]
+    admin_default = client.post("/api/evaluations", json={"set_id": other_set["id"]}, headers=admin)
+    assert admin_default.status_code == 202, admin_default.text
+    assert admin_default.json()["data"]["agent_version"] == "draft"
 
 
 def test_settle_waits_for_the_dispatcher(monkeypatch: MonkeyPatch, agent: None) -> None:
