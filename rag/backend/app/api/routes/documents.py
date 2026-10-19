@@ -72,7 +72,7 @@ from app.rag.document_crop import (
 )
 from app.rag.document_sections import removed_source_ids, section_errors
 from app.rag.document_sections_service import document_sections, sections_extraction
-from app.rag.extraction_field_adapter import load_field_schema
+from app.rag.extraction_field_adapter import field_extraction_outcome, load_field_schema
 from app.rag.ingestion import (
     IngestionCancelledError,
     IngestionPipeline,
@@ -3551,6 +3551,16 @@ def _metadata_layer_state(
     field_enabled = bool(getattr(settings, "rag_field_extraction_enabled", False))
     reasons: list[str] = []
     if field_enabled and not _fields_materialized(extraction):
+        # 取込が刻んだ実行結果(#2481)。抽出の失敗は取込を止めるため、ここには来ない。
+        outcome = field_extraction_outcome(extraction)
+        if outcome is not None and outcome[0] == "completed":
+            return (
+                DocumentLayerStatusName.MATERIALIZED,
+                (
+                    f"{user_label}は実行済みですが、項目の定義に当てはまる値は"
+                    "見つかりませんでした(0 件)。"
+                ),
+            )
         if not field_definitions_configured:
             reasons.append(
                 # 未保存の環境は標準の項目を使うため(#556)、ここに来るのは定義を 0 件で
@@ -3559,6 +3569,13 @@ def _metadata_layer_state(
                 "ナレッジベースの「抽出する項目」か、文書解析の設定の項目の定義"
                 "(「標準の項目に戻す」も使えます)で項目を登録してから再取込してください"
             )
+        elif outcome is not None and outcome[0] == "no_definitions":
+            reasons.append(
+                "取込の時点では、この文書に使う項目の定義が 0 件だったため項目抽出を"
+                "実行していません。再取込すると今の項目の定義で抽出します"
+            )
+        elif outcome is not None and outcome[0] == "no_text":
+            reasons.append("抽出した本文が無いため、項目抽出を実行していません")
         else:
             reasons.append("項目抽出の成果物がまだありません")
     if reasons:

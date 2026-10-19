@@ -128,6 +128,38 @@ def test_metadata_layer_uses_standard_fields_until_saved() -> None:
 
 
 @pytest.mark.usefixtures("_isolated_field_schema")
+def test_metadata_layer_distinguishes_field_extraction_outcomes() -> None:
+    """取込が刻んだ実行結果で、正常な 0 件・定義なし・本文なしを区別する(#2481)。"""
+    from app.rag import extraction_field_adapter as fields_mod
+
+    fields_mod.save_field_schema([fields_mod.FieldDefinition(name="請求書番号")])
+
+    def outcome(status: str, count: int = 0) -> dict[str, object]:
+        return {
+            "parser_artifacts": {
+                fields_mod.FIELD_EXTRACTION_OUTCOME_ARTIFACT_KEY: {
+                    "status": status,
+                    "field_count": count,
+                }
+            }
+        }
+
+    status, reason = _metadata_state(outcome("completed"), field=True)
+    assert status == "materialized"
+    assert "0 件" in reason
+    status, reason = _metadata_state(outcome("no_definitions"), field=True)
+    assert status == "planned_only"
+    assert "取込の時点では" in reason
+    status, reason = _metadata_state(outcome("no_text"), field=True)
+    assert status == "planned_only"
+    assert "本文が無い" in reason
+    # 刻みの無い抽出結果(未実行・旧い取込)は従来どおり。
+    status, reason = _metadata_state({"raw_text": "本文"}, field=True)
+    assert status == "planned_only"
+    assert reason == "項目抽出の成果物がまだありません。"
+
+
+@pytest.mark.usefixtures("_isolated_field_schema")
 def test_metadata_layer_ignores_asset_summaries() -> None:
     """図の要約(Vision の解析結果。#497)は派生情報のレイヤーの成果物として数えない。"""
     from app.rag import extraction_field_adapter as fields_mod

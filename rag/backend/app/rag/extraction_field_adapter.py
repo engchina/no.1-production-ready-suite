@@ -20,13 +20,12 @@ import json
 import os
 import re
 import unicodedata
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Literal
 
-from pr_backend_core.bounded_calls import BoundedCallAborted
 from pydantic import BaseModel, Field, field_validator
 from rag_parser_core.language import current_pack
 from rag_parser_core.structured_records import record_boundary_plain_text
@@ -40,8 +39,17 @@ MAX_FIELD_DEFINITIONS = 50
 
 FieldValueType = Literal["string", "number", "date", "bool"]
 
+# 項目抽出の実行結果(#2481)。抽出結果の parser_artifacts に刻み、「定義なしで未実行」
+# 「本文なしで未実行」「正常に終わって 0 件」を区別する。抽出の失敗は取込を止めるため刻まない。
+FIELD_EXTRACTION_OUTCOME_ARTIFACT_KEY = "field_extraction_outcome"
+FieldExtractionStatus = Literal["completed", "no_definitions", "no_text"]
+
 # 抽出器: 文書 text と field 定義から ExtractionField のリストを返す。
 FieldExtractor = Callable[[str, "list[FieldDefinition]"], Awaitable[list[ExtractionField]]]
+
+
+class FieldExtractionResponseError(ValueError):
+    """抽出器の応答が JSON の配列として読めない(正常な 0 件と区別する。#2481)。"""
 
 
 class FieldDefinition(BaseModel):
@@ -253,8 +261,8 @@ def normalize_field_value(value_type: FieldValueType, raw: str) -> str:
     return raw
 
 
-def extract_json_array(raw: str) -> str:
-    """LLM 出力から JSON 配列部分だけを取り出す(code fence・前後説明文に強い)。"""
+def find_json_array(raw: str) -> str | None:
+    """LLM 出力から JSON 配列部分だけを取り出す(code fence・前後説明文に強い)。無ければ None。"""
     text = raw.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[-1]
@@ -263,8 +271,13 @@ def extract_json_array(raw: str) -> str:
     start = text.find("[")
     end = text.rfind("]")
     if start == -1 or end == -1 or end < start:
-        return "[]"
+        return None
     return text[start : end + 1]
+
+
+def extract_json_array(raw: str) -> str:
+    """`find_json_array` の結果。配列が無ければ空の配列(補助の読み取り用)。"""
+    return find_json_array(raw) or "[]"
 
 
 def _safe_confidence(value: object) -> float | None:
@@ -284,14 +297,19 @@ def parse_extraction_fields(raw: str, field_defs: list[FieldDefinition]) -> list
     """LLM の JSON 出力を、許可された field 定義に照らして ExtractionField へ正規化する。
 
     定義外 name・重複・空 value は捨て、value_type は定義側を正とする(LLM の自己申告を信用しない)。
+    応答が JSON の配列として読めなければ `FieldExtractionResponseError`(正常な 0 件と区別する。
+    #2481)。
     """
     allowed = {definition.name.casefold(): definition for definition in field_defs}
+    array = find_json_array(raw)
+    if array is None:
+        raise FieldExtractionResponseError("項目抽出の応答に JSON の配列がありません。")
     try:
-        data = json.loads(extract_json_array(raw))
-    except (ValueError, TypeError):
-        return []
+        data = json.loads(array)
+    except (ValueError, TypeError) as exc:
+        raise FieldExtractionResponseError("項目抽出の応答を JSON として読めません。") from exc
     if not isinstance(data, list):
-        return []
+        raise FieldExtractionResponseError("項目抽出の応答が JSON の配列ではありません。")
     fields: list[ExtractionField] = []
     seen: set[str] = set()
     for item in data:
@@ -352,6 +370,47 @@ def _field_element(field: ExtractionField, order: int) -> DocumentElement:
     )
 
 
+def with_field_extraction_outcome(
+    extraction: StructuredExtraction,
+    status: FieldExtractionStatus,
+    field_count: int = 0,
+) -> StructuredExtraction:
+    """項目抽出の実行結果を parser_artifacts に刻む(#2481)。"""
+    return extraction.model_copy(
+        update={
+            "parser_artifacts": {
+                **extraction.parser_artifacts,
+                FIELD_EXTRACTION_OUTCOME_ARTIFACT_KEY: {
+                    "status": status,
+                    "field_count": field_count,
+                },
+            }
+        }
+    )
+
+
+def field_extraction_outcome(extraction: object) -> tuple[FieldExtractionStatus, int] | None:
+    """保存した抽出結果(model か JSON の dict)から項目抽出の実行結果を読む。刻みが無ければ None。"""
+    if isinstance(extraction, StructuredExtraction):
+        artifacts: object = extraction.parser_artifacts
+    elif isinstance(extraction, Mapping):
+        artifacts = extraction.get("parser_artifacts")
+    else:
+        return None
+    if not isinstance(artifacts, Mapping):
+        return None
+    outcome = artifacts.get(FIELD_EXTRACTION_OUTCOME_ARTIFACT_KEY)
+    if not isinstance(outcome, Mapping):
+        return None
+    status = outcome.get("status")
+    count = outcome.get("field_count")
+    if status not in ("completed", "no_definitions", "no_text"):
+        return None
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        count = 0
+    return status, count
+
+
 async def extract_fields_from_extraction(
     extraction: StructuredExtraction,
     field_defs: list[FieldDefinition],
@@ -360,29 +419,27 @@ async def extract_fields_from_extraction(
     """field schema があれば注入された抽出器で named field を抽出して付与する。
 
     抽出結果は `StructuredExtraction.fields` へ保存し、検索可能な合成 element
-    (content_kind=field)も追加する。抽出器の失敗・空は best-effort で据え置く。
-    呼び出しの実行器が止めると決めた失敗(権限・設定の誤り・割り当ての使い切り。#2002)は
-    据え置かずに出す。
+    (content_kind=field)も追加する。実行結果(完了と件数・定義なし・本文なし)を
+    parser_artifacts に刻む。抽出器の失敗(不正な応答を含む)は据え置かずに出し、
+    取込の停止は呼び出し側が決める(#2481。正常な 0 件・未実行と区別する)。
     """
+    if not field_defs:
+        return with_field_extraction_outcome(extraction, "no_definitions")
     # 構造化レコード JSONL の記録の境界のマーカー(#2457)は LLM に渡さない。
     text = record_boundary_plain_text(extraction).strip()
-    if not field_defs or not text:
-        return extraction
-    try:
-        fields = await extract(text, field_defs)
-    except BoundedCallAborted:
-        raise
-    except Exception:
-        return extraction
+    if not text:
+        return with_field_extraction_outcome(extraction, "no_text")
+    fields = await extract(text, field_defs)
     fields = [field for field in fields if field.name and field.value]
     if not fields:
-        return extraction
+        return with_field_extraction_outcome(extraction, "completed")
 
     next_order = max((element.order for element in extraction.elements), default=0) + 1
     new_elements = [_field_element(field, next_order + index) for index, field in enumerate(fields)]
-    return extraction.model_copy(
+    extracted = extraction.model_copy(
         update={
             "fields": [*extraction.fields, *fields],
             "elements": [*extraction.elements, *new_elements],
         }
     )
+    return with_field_extraction_outcome(extracted, "completed", len(fields))

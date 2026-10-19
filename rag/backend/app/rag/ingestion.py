@@ -88,11 +88,13 @@ from app.rag.cross_references import annotate_cross_references, apply_reference_
 from app.rag.entity_index import EntityIndex, EntityIndexOptions, build_entity_index
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
+    FieldExtractionResponseError,
     extract_fields_from_extraction,
     field_definitions_prompt,
     load_field_schema,
     parse_extraction_fields,
     resolve_field_definitions,
+    with_field_extraction_outcome,
 )
 from app.rag.graph_adapter import resolve_graph_adapter
 from app.rag.graph_index import GraphIndex, build_graph_index
@@ -2690,7 +2692,8 @@ class IngestionPipeline:
 
         定義済み field を OCI Enterprise AI の structured output で抽出し、`ExtractionField`
         へ Pydantic 検証して保存する（既定 OFF）。項目は文書が属する KB の定義（無ければ全体の
-        既定。複数の KB に属するときは和集合）を使う（#548）。
+        既定。複数の KB に属するときは和集合）を使う（#548）。実行結果(完了と件数・定義なし)を
+        刻み、抽出の失敗(不正な応答を含む)は 0 件にせず取込を止める（#2481）。
         """
         if not getattr(self._settings, "rag_field_extraction_enabled", False):
             return extraction
@@ -2699,7 +2702,7 @@ class IngestionPipeline:
             load_field_schema().fields,
         )
         if not field_defs:
-            return extraction
+            return with_field_extraction_outcome(extraction, "no_definitions")
 
         async def _extract(text: str, field_defs: list[FieldDefinition]) -> list[ExtractionField]:
             prompt = (
@@ -2723,8 +2726,20 @@ class IngestionPipeline:
             raise IngestionUserError(
                 f"項目抽出を止めました。{exc} 別経路には切り替えずに取込を停止しました。"
             ) from exc
+        except FieldExtractionResponseError as exc:
+            logger.warning(
+                "field_extraction_invalid_response",
+                extra={"trace_id": trace_id, **safe_exception_fields(exc)},
+            )
+            raise IngestionUserError(
+                "項目抽出の応答を項目の一覧として読めませんでした。別経路には切り替えずに"
+                "取込を停止しました。Enterprise AI の応答形式を確認してから再実行してください。"
+            ) from exc
         except Exception as exc:
-            logger.warning("field_extraction_failed", extra={"trace_id": trace_id})
+            logger.warning(
+                "field_extraction_failed",
+                extra={"trace_id": trace_id, **safe_exception_fields(exc)},
+            )
             raise IngestionUserError(
                 "項目抽出に失敗しました。別経路には切り替えずに取込を停止しました。"
                 "項目抽出設定、field schema、Enterprise AI の応答形式を確認してから"

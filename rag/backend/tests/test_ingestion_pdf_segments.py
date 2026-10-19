@@ -190,6 +190,8 @@ def _settings(**overrides: object) -> Settings:
         "rag_review_gate_enabled": False,
         "rag_auto_parse_after_preprocess_enabled": True,
         "rag_vision_enabled": False,
+        # 項目抽出は対象外(VLM の stub が無いため、有効なら取込が止まる。#2481)。
+        "rag_field_extraction_enabled": False,
         "rag_pdf_max_pages_per_segment": 10,
         **overrides,
     }

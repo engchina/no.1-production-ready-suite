@@ -6,21 +6,24 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from pr_backend_core.bounded_calls import BoundedCallAborted, ErrorKind
 
 from app.config import Settings
 from app.main import app
 from app.rag import extraction_field_adapter as fields_mod
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
+    FieldExtractionResponseError,
     FieldSchemaStore,
     extract_fields_from_extraction,
+    field_extraction_outcome,
     field_schema_from_json,
     normalize_field_value,
     parse_extraction_fields,
     resolve_field_definitions,
     validate_field_schema,
 )
-from app.rag.ingestion import IngestionPipeline
+from app.rag.ingestion import IngestionPipeline, IngestionUserError
 from app.schemas.extraction import DocumentElement, ExtractionField, StructuredExtraction
 from tests.support import AsgiTestClient
 
@@ -63,9 +66,17 @@ def test_parse_drops_duplicates_and_empty_values() -> None:
     assert [(f.name, f.value) for f in parsed] == [("請求書番号", "A")]
 
 
-def test_parse_returns_empty_on_garbage() -> None:
-    assert parse_extraction_fields("not json at all", _DEFS) == []
-    assert parse_extraction_fields('{"name":"x"}', _DEFS) == []
+def test_parse_rejects_invalid_response() -> None:
+    """JSON の配列として読めない応答は、正常な 0 件にせずエラーにする(#2481)。"""
+    for raw in ("not json at all", '{"name":"x"}', "[not json]", ""):
+        with pytest.raises(FieldExtractionResponseError):
+            parse_extraction_fields(raw, _DEFS)
+
+
+def test_parse_returns_empty_for_valid_empty_array() -> None:
+    """配列として読める応答の 0 件(空の配列・定義外だけ)は正常な 0 件。"""
+    assert parse_extraction_fields("[]", _DEFS) == []
+    assert parse_extraction_fields('[{"name":"定義外","value":"x"}]', _DEFS) == []
 
 
 def test_parse_clamps_out_of_range_confidence() -> None:
@@ -99,8 +110,55 @@ async def test_extract_fields_noop_without_schema_or_text() -> None:
     async def _extract(text: str, defs: list[FieldDefinition]) -> list[ExtractionField]:
         return [ExtractionField(name="x", value="y")]
 
-    # field 定義が空なら抽出器を呼ばず no-op。
-    assert await extract_fields_from_extraction(extraction, [], _extract) is extraction
+    # field 定義が空・本文が空なら抽出器を呼ばず、未実行の理由を刻む(#2481)。
+    no_defs = await extract_fields_from_extraction(extraction, [], _extract)
+    assert no_defs.fields == []
+    assert field_extraction_outcome(no_defs) == ("no_definitions", 0)
+    no_text = await extract_fields_from_extraction(
+        StructuredExtraction(raw_text=" "), _DEFS, _extract
+    )
+    assert no_text.fields == []
+    assert field_extraction_outcome(no_text) == ("no_text", 0)
+
+
+@pytest.mark.anyio
+async def test_extract_fields_records_outcome_of_completed_runs() -> None:
+    """抽出の成功は件数を、正常な 0 件は 0 件の完了を刻む(#2481)。"""
+    extraction = StructuredExtraction(raw_text="請求書 INV-1")
+
+    async def _one(text: str, defs: list[FieldDefinition]) -> list[ExtractionField]:
+        return [ExtractionField(name="請求書番号", value="INV-1")]
+
+    async def _none(text: str, defs: list[FieldDefinition]) -> list[ExtractionField]:
+        return []
+
+    one = await extract_fields_from_extraction(extraction, _DEFS, _one)
+    assert field_extraction_outcome(one) == ("completed", 1)
+    none = await extract_fields_from_extraction(extraction, _DEFS, _none)
+    assert none.fields == []
+    assert field_extraction_outcome(none) == ("completed", 0)
+    # 保存した JSON(dict)からも読める。刻みの無い旧い抽出結果は None。
+    assert field_extraction_outcome(none.model_dump(mode="json")) == ("completed", 0)
+    assert field_extraction_outcome(extraction.model_dump(mode="json")) is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("synthetic"),
+        FieldExtractionResponseError("synthetic"),
+        BoundedCallAborted("synthetic", kind=ErrorKind.PERMISSION),
+    ],
+)
+async def test_extract_fields_propagates_extractor_errors(error: Exception) -> None:
+    """抽出器の失敗(不正な応答・通常の例外・実行器の停止)は元の結果に化けずに出る(#2481)。"""
+
+    async def _fail(text: str, defs: list[FieldDefinition]) -> list[ExtractionField]:
+        raise error
+
+    with pytest.raises(type(error)):
+        await extract_fields_from_extraction(StructuredExtraction(raw_text="本文"), _DEFS, _fail)
 
 
 def test_field_schema_store_save_load_round_trip() -> None:
@@ -390,8 +448,57 @@ async def test_ingestion_skips_extraction_when_empty_default_was_saved() -> None
     result = await _pipeline(_FieldSetOracle([None]), vlm)._attach_extraction_fields(
         "trace", extraction, document_id="doc-1"
     )
-    assert result is extraction
+    assert result.fields == []
+    assert field_extraction_outcome(result) == ("no_definitions", 0)
     assert vlm.prompts == []
+
+
+class _FixedResponder(_PromptRecorder):
+    def __init__(self, response: str) -> None:
+        super().__init__()
+        self.response = response
+
+    async def generate(self, prompt: str, text: str) -> str:
+        self.prompts.append(prompt)
+        return self.response
+
+
+@pytest.mark.anyio
+async def test_ingestion_records_completed_run_without_values() -> None:
+    """応答が正常な空の配列なら 0 件の完了を刻み、取込を続ける(#2481)。"""
+    fields_mod.save_field_schema(_DEFS)
+    result = await _pipeline(
+        _FieldSetOracle([None]), _FixedResponder("[]")
+    )._attach_extraction_fields("trace", StructuredExtraction(raw_text="本文"), document_id="doc-1")
+    assert result.fields == []
+    assert field_extraction_outcome(result) == ("completed", 0)
+
+
+@pytest.mark.anyio
+async def test_ingestion_stops_on_invalid_response() -> None:
+    """JSON の配列でない応答は 0 件にせず取込を止める(#2481)。"""
+    fields_mod.save_field_schema(_DEFS)
+    pipeline = _pipeline(_FieldSetOracle([None]), _FixedResponder("抽出できませんでした"))
+    with pytest.raises(IngestionUserError, match="応答を項目の一覧として読めません"):
+        await pipeline._attach_extraction_fields(
+            "trace", StructuredExtraction(raw_text="本文"), document_id="doc-1"
+        )
+
+
+class _FailingVlm(_PromptRecorder):
+    async def generate(self, prompt: str, text: str) -> str:
+        raise ValueError("synthetic failure")
+
+
+@pytest.mark.anyio
+async def test_ingestion_stops_on_extractor_exception() -> None:
+    """抽出の通常の例外は元の結果に化けず、取込を止める(#2481)。"""
+    fields_mod.save_field_schema(_DEFS)
+    pipeline = _pipeline(_FieldSetOracle([None]), _FailingVlm())
+    with pytest.raises(IngestionUserError, match="項目抽出に失敗しました"):
+        await pipeline._attach_extraction_fields(
+            "trace", StructuredExtraction(raw_text="本文"), document_id="doc-1"
+        )
 
 
 @pytest.mark.anyio
@@ -402,5 +509,6 @@ async def test_ingestion_skips_extraction_when_no_definitions_apply() -> None:
     result = await _pipeline(_FieldSetOracle([[]]), vlm)._attach_extraction_fields(
         "trace", extraction, document_id="doc-1"
     )
-    assert result is extraction
+    assert result.fields == []
+    assert field_extraction_outcome(result) == ("no_definitions", 0)
     assert vlm.prompts == []
