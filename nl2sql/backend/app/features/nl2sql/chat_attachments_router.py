@@ -18,7 +18,7 @@ from app.security.dependencies import current_principal
 
 def _conversation_owner(principal: Any, conversation_id: str) -> str:
     """会話（SQL チャット）の持ち主。見えない会話は 404（「AI 活用」の見え方。#1889）。"""
-    from app.features.nl2sql.router import nl2sql_service
+    from app.features.nl2sql.service import nl2sql_service
 
     actor = str(getattr(principal, "user_uuid", ""))
     try:

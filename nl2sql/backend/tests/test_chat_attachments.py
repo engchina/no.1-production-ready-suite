@@ -242,7 +242,7 @@ def test_execute_select_binds_rows_as_clob() -> None:
 
     adapter = OracleNl2SqlAdapter.__new__(OracleNl2SqlAdapter)
     adapter.settings = get_settings()
-    adapter.user_data_connection = lambda read_only=True: _Connection()  # type: ignore[method-assign]
+    adapter.user_data_connection = lambda read_only=True: _Connection()  # type: ignore[method-assign,assignment,misc]
     adapter._load_oracledb = lambda: SimpleNamespace(DB_TYPE_CLOB="CLOB")  # type: ignore[method-assign]
     adapter.execute_select("WITH ATTACHMENT_1 ... SELECT 1", 10, binds={"attachment_1": "[]"})
     assert calls[0] == ("sizes", ["attachment_1"])
