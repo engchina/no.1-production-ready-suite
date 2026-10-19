@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { citationPreviewUrl } from "@/components/search/CitationCard";
-
 import { matchCitationLine } from "./answer-text";
 import type { RetrievedChunk } from "./api";
 import {
@@ -54,7 +52,6 @@ function displayed(chunk: RetrievedChunk) {
     rerankScore: chunk.rerank_score,
     chips: citationMetadataChips(metadata),
     modelUsed: citationModelUsed(chunk),
-    previewUrl: citationPreviewUrl(chunk),
     highlights: buildPreviewHighlights({
       focusPage,
       focusBbox: bboxFromMetadata(metadata),

@@ -523,7 +523,7 @@ export const SIGNAL_KINDS = [
 
 /** 業務データの道具（RAG 以外の MCP 接続のツール）の成功した呼び出しの数（backend の `environment_tool_calls`）。 */
 /**
- * 画面から根拠の原文・図を開いてよい、その Run の RAG の根拠（backend の `rag_figures.run_evidence_items`。#2427）。
+ * 画面から根拠の原文を開いてよい、その Run の RAG の根拠（backend の `rag_figures.run_evidence_items`。#2427）。
  * 画面の根拠の一覧と同じ集合: 根拠のツール（`rag_search` / `rag_retrieve_evidence`）の step の出力、
  * 成果物「回答の根拠」の `items`、成果物「検索の根拠」（`rag__rag_search:*`）の `evidence`。
  */
@@ -759,8 +759,6 @@ function createState() {
       local: "ローカル利用者",
       "00000000-0000-0000-0000-000000000000": "ローカル利用者",
     } as Record<string, string>,
-    // 発行した図の URL の数（`GET /api/runs/{id}/figure-url`）。実際の署名つき URL と同じく、発行ごとに URL を変える（#1667）。
-    figureUrlsIssued: 0,
     // 根拠の原文のプレビュー（`GET /api/runs/{id}/source-preview`。#2389）。chunk_id ごとに上書きできる
     // （`{ error: { status, message } }` で失敗、ほかの項目はプレビューの値の上書き）。発行ごとに URL を変える。
     sourcePreviews: {} as Record<string, Json>,
@@ -1875,21 +1873,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     // チャットの処理の段階のイベント（polling。`since` より後。#1359）。
     if (method === "GET" && at("runs", "*", "progress")) {
       return progressPage(run, Number(query.get("since") ?? 0));
-    }
-    // RAG の図の根拠を開く短命の URL（#1311）。spec は `http://rag.e2e.test/**` を page.route で応答する。
-    if (method === "GET" && at("runs", "*", "figure-url")) {
-      const evidence = runEvidenceOf(run, query);
-      if (!evidence || !evidence.image_ref || typeof evidence.image_ref !== "object") {
-        throw new HttpError(404, "この実行の根拠に、その図はありません。");
-      }
-      // 同じ URL を返すと、Chromium（Playwright 1.64 以降）は同じ文書の中で読み込んだ画像を
-      // no-store でも使い回し、開き直したときに RAG へ取りに行かない（#1667）。
-      state.figureUrlsIssued += 1;
-      const chunkId = encodeURIComponent(query.get("chunk_id") ?? "");
-      return {
-        url: `http://rag.e2e.test/api/figures/f1.${chunkId}.${state.figureUrlsIssued}.sig`,
-        expires_at: "2026-06-28T00:05:00+00:00",
-      };
     }
     // RAG の根拠の原文のプレビュー（#2389）。spec は `http://rag.e2e.test/**` を page.route で応答する。
     if (method === "GET" && at("runs", "*", "source-preview")) {

@@ -1,27 +1,11 @@
-import { ExternalLink } from "lucide-react";
-import { Link } from "react-router-dom";
-import {
-  bboxCoordinateModeFromMetadata,
-  bboxFromMetadata,
-  bboxPageRotationFromMetadata,
-  bboxPageSizeFromMetadata,
-  bboxUnitFromMetadata,
-  EvidenceSourceSheet,
-  evidencePreviewFocus,
-} from "@production-ready/ui";
+import { EvidenceSourceSheet, evidencePreviewFocus } from "@production-ready/ui";
 
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
-import { useAuth } from "@/components/security/AuthProvider";
 import type { RetrievedChunk } from "@/lib/api";
-import { firstCitationElementId } from "@/lib/chunk-metadata";
-import { t } from "@/lib/i18n";
 import { useDocument, useDocumentRecipes } from "@/lib/queries";
-import { canOpenDocumentDetail } from "@/lib/route-permissions";
-import { APP_ROUTES } from "@/lib/routes";
-import { firstMetadataToken, integerMetadataValue } from "@/lib/table-cell-focus";
+import { firstMetadataToken } from "@/lib/table-cell-focus";
 
 import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
-import { CitationFigureAction } from "./CitationFigure";
 
 /**
  * 根拠 1 件を右のサイドパネルで開く（#2360。Agent のチャットと同じ共通の `EvidenceSourceSheet`）。上部に根拠の
@@ -44,8 +28,6 @@ export function CitationSourceSheet({
   /** 回答の根拠（既定）か、回答を作らない検索の結果の箇所か（見出しが変わる）。 */
   kind?: "answer" | "search";
 }) {
-  // 文書の詳細を開けない利用者（検索・チャット・KB だけ）には詳細へのリンクを出さない（#303）。
-  const canOpenDetail = canOpenDocumentDetail(useAuth().hasPermission);
   return (
     <EvidenceSourceSheet
       open={open}
@@ -54,21 +36,6 @@ export function CitationSourceSheet({
       index={index}
       labels={EVIDENCE_LABELS}
       kind={kind}
-      // 図の根拠は「図を開く」（Agent と同じ共通の部品・位置。#2428）。
-      figure={chunk ? <CitationFigureAction chunk={chunk} testId="citation-source-figure" /> : null}
-      actions={
-        chunk && canOpenDetail ? (
-          <Link
-            to={citationPreviewUrl(chunk)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          >
-            {t("search.citation.openDetail")}
-            <ExternalLink size={14} aria-hidden />
-          </Link>
-        ) : null
-      }
     >
       {chunk ? <CitationSourcePreview chunk={chunk} open={open} /> : null}
     </EvidenceSourceSheet>
@@ -106,76 +73,4 @@ function CitationSourcePreview({ chunk, open }: { chunk: RetrievedChunk; open: b
       className="min-h-0 flex-1"
     />
   );
-}
-
-export function citationPreviewUrl(chunk: RetrievedChunk): string {
-  const params = new URLSearchParams({ chunk_id: chunk.chunk_id });
-  const recipeId = firstMetadataToken(chunk.metadata.recipe_id);
-  if (recipeId) params.set("recipe", recipeId);
-  const page = firstIntegerMetadata(chunk.metadata, ["page_start", "page"]);
-  if (page != null) params.set("page", String(page));
-  const bbox = bboxFromMetadata(chunk.metadata);
-  if (bbox) params.set("bbox", bbox.map(compactNumber).join(","));
-  const bboxMode = bboxCoordinateModeFromMetadata(chunk.metadata);
-  if (bboxMode) params.set("bbox_mode", bboxMode);
-  const bboxUnit = bboxUnitFromMetadata(chunk.metadata);
-  if (bboxUnit) params.set("bbox_unit", bboxUnit);
-  const pageSize = bboxPageSizeFromMetadata(chunk.metadata);
-  if (pageSize?.width && pageSize?.height) {
-    params.set("page_width", compactNumber(pageSize.width));
-    params.set("page_height", compactNumber(pageSize.height));
-  }
-  const pageRotation = pageSize?.rotation ?? bboxPageRotationFromMetadata(chunk.metadata);
-  if (pageRotation != null) params.set("page_rotation", String(pageRotation));
-  const elementId = firstCitationElementId(chunk.metadata.element_ids);
-  if (elementId) params.set("element_id", elementId);
-  const tableId = firstTableId(chunk.metadata);
-  const formulaCellRef = firstFormulaCellRef(chunk.metadata);
-  const cellRef = firstCellRef(chunk.metadata);
-  const row = firstIntegerMetadata(chunk.metadata, ["table_cell_row", "cell_row", "row"]);
-  const col = firstIntegerMetadata(chunk.metadata, ["table_cell_col", "cell_col", "col"]);
-  if (cellRef || row != null || col != null) {
-    if (tableId) params.set("table_id", tableId);
-    if (cellRef) params.set("cell_ref", cellRef);
-    if (formulaCellRef) params.set("formula_cell_ref", formulaCellRef);
-    if (row != null) params.set("cell_row", String(row));
-    if (col != null) params.set("cell_col", String(col));
-  }
-  return `${APP_ROUTES.documents}/${encodeURIComponent(chunk.document_id)}?${params.toString()}`;
-}
-
-function compactNumber(value: number): string {
-  return String(Number(value.toFixed(6)));
-}
-
-function firstTableId(metadata: RetrievedChunk["metadata"]): string | null {
-  return firstMetadataToken(metadata.table_id ?? metadata.parent_table_id, {
-    preferTableId: true,
-  });
-}
-
-function firstFormulaCellRef(metadata: RetrievedChunk["metadata"]): string | null {
-  return firstMetadataToken(metadata.formula_cell_refs ?? metadata.formula_cell_ref);
-}
-
-function firstCellRef(metadata: RetrievedChunk["metadata"]): string | null {
-  return firstMetadataToken(
-    metadata.formula_cell_refs ??
-      metadata.formula_cell_ref ??
-      metadata.table_cell_refs ??
-      metadata.cell_refs ??
-      metadata.table_cell_ref ??
-      metadata.cell_ref
-  );
-}
-
-export function firstIntegerMetadata(
-  metadata: RetrievedChunk["metadata"],
-  keys: string[]
-): number | null {
-  for (const key of keys) {
-    const value = integerMetadataValue(metadata[key]);
-    if (value != null) return value;
-  }
-  return null;
 }

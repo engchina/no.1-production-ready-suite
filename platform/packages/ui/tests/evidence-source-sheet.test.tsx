@@ -51,7 +51,6 @@ function Harness({ preview = false, kind }: { preview?: boolean; kind?: "answer"
           item={ITEMS[source.shown]}
           index={source.shown}
           kind={kind}
-          actions={<a href="#detail">詳細</a>}
         >
           {preview ? <div data-testid="preview">原文</div> : null}
         </EvidenceSourceSheet>
@@ -86,7 +85,7 @@ afterEach(() => {
 });
 
 describe("EvidenceSourceSheet", () => {
-  it("一度開くまでは描かず、開くと右の wide のパネルに要約（番号・文書名・引用の印・経路・チップ・スコア）と操作を出す", () => {
+  it("一度開くまでは描かず、開くと右の wide のパネルに要約（番号・文書名・引用の印・経路・チップ・スコア）を出す（操作の行は持たない。#2462）", () => {
     act(() => root.render(<Harness />));
     expect(sheet()).toBeNull();
     click($('[data-testid="open-0"]')!);
@@ -107,7 +106,7 @@ describe("EvidenceSourceSheet", () => {
     expect(summary.textContent).toContain("Evidence");
     expect(summary.textContent).toContain("p.3");
     expect(summary.textContent).toContain("0.810");
-    expect(summary.querySelector('a[href="#detail"]')).not.toBeNull();
+    expect(summary.querySelector("button, a")).toBeNull();
     // プレビューが無ければ抜粋は全文で、畳む操作を出さない。
     expect(summary.querySelector('[data-testid="citation-text"]')?.getAttribute("data-expanded")).toBe("true");
     expect(panel.querySelector('[data-testid="evidence-source-preview"]')).toBeNull();
