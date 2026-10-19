@@ -1321,12 +1321,14 @@ MEANING_INSTRUCTIONS = """あなたは業務 Agent が記録した項目の値�
 項目ごとに、期待する値と記録した値が同じ内容を表しているかを判定します。
 - same: 同じ内容なら true。表現・語順・言い換え・文体の違いは同じとみなす。
   数値・日付・固有名詞・否定・結論の違い、内容の欠落・追加は異なるとみなす。
+- reason: 判定の理由を日本語で 1 文。
 - number: 入力の項目の番号をそのまま返す。"""
 
 
 class _MeaningItem(BaseModel):
     number: int
     same: bool
+    reason: str
 
 
 class _MeaningJudgement(BaseModel):
@@ -1394,10 +1396,14 @@ async def judge_output_meaning(
         for index in indexes:
             updated[index] = updated[index].model_copy(update={"note": MEANING_FAILED_NOTE})
         return updated
-    same = {item.number for item in judgement.items if item.same}
+    verdicts = {item.number: item for item in judgement.items}
     for number, index in enumerate(indexes, start=1):
-        if number in same:
-            updated[index] = updated[index].model_copy(update={"correct": True})
+        verdict = verdicts.get(number)
+        if verdict is None:
+            continue
+        updated[index] = updated[index].model_copy(
+            update={"correct": verdict.same, "reason": verdict.reason.strip()[:500]}
+        )
     return updated
 
 

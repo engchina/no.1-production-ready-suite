@@ -64,7 +64,16 @@ function seedJob(mockApi: MockApi) {
       tool_selection_correct: null,
       field_results: [
         // #2562: 意味で比べる項目は「意味で判定」と出す。
-        { row: 1, field: "item", label: "項目", expected: "A", actual: "A", correct: true, method: "meaning" },
+        {
+          row: 1,
+          field: "item",
+          label: "項目",
+          expected: "A",
+          actual: "A",
+          correct: true,
+          method: "meaning",
+          reason: "同じ品目を指している",
+        },
         { row: 1, field: "amount", label: "金額", expected: 1200, actual: 1200, correct: true },
         { row: 2, field: "item", label: "項目", expected: "B", actual: "B", correct: true },
         { row: 2, field: "amount", label: "金額", expected: 800, actual: 900, correct: false },
@@ -148,6 +157,8 @@ for (const viewport of VIEWPORTS) {
     await expect(table).toContainText("900");
     await expect(table).toContainText("違う");
     await expect(table.getByRole("row", { name: /^1 項目/ })).toContainText("意味で判定");
+    // #2568: 意味の判定の理由も出す。
+    await expect(table.getByRole("row", { name: /^1 項目/ })).toContainText("同じ品目を指している");
   });
 }
 
