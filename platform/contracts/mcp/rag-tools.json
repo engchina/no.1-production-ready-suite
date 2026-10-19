@@ -933,7 +933,7 @@
           "cursor": {
             "anyOf": [
               {
-                "maxLength": 2048,
+                "maxLength": 256,
                 "minLength": 1,
                 "type": "string"
               },
@@ -1271,7 +1271,7 @@
           "cursor": {
             "anyOf": [
               {
-                "maxLength": 2048,
+                "maxLength": 256,
                 "minLength": 1,
                 "type": "string"
               },

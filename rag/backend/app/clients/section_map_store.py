@@ -365,6 +365,25 @@ class SectionMapStore:
 
     # ---- 読み取り（利用者の見え方の条件で確かめる） ----
 
+    async def chunk_set_ids_with_prefix(self, document_id: str, prefix: str) -> list[str]:
+        """文書の chunk_set のうち、id が ``prefix`` で始まるもの（多くて 2 件。#2499）。
+
+        続きの位置（next_cursor）は chunk_set の id の先頭だけを持つ。読めるかは
+        ``readable_chunk_set`` が決める。
+        """
+        rows = await self._oracle._fetch_all(
+            """
+            SELECT chunk_set_id
+            FROM rag_chunk_sets
+            WHERE document_id = :document_id
+              AND SUBSTR(chunk_set_id, 1, :prefix_chars) = :prefix
+            ORDER BY chunk_set_id
+            FETCH FIRST 2 ROWS ONLY
+            """,
+            {"document_id": document_id, "prefix": prefix, "prefix_chars": len(prefix)},
+        )
+        return [str(row["chunk_set_id"]) for row in rows]
+
     async def readable_chunk_set(
         self, document_id: str, chunk_set_id: str | None = None
     ) -> ReadableChunkSet | None:

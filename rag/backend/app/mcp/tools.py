@@ -43,7 +43,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, cast, get_args
 
 from fastapi import HTTPException, Request
-from pr_backend_core.api import InvalidCursorError, OffsetParams, decode_cursor, encode_cursor
+from pr_backend_core.api import OffsetParams
 from pr_backend_core.api.validation import validation_tool_errors
 from pr_backend_core.mcp import (
     TOOL_ARGUMENTS_INVALID_CODE,
@@ -228,6 +228,12 @@ OUTLINE_LEAD_CHARS_MAX = 200
 READ_SECTION_MAX_CHILDREN = 50
 READ_SECTION_MAX_UP = 6
 CURSOR_INVALID_CODE = "cursor_invalid"
+# 続きの位置（next_cursor）。モデルが書き写して次の呼び出しに渡す文字列なので、短い平文にする
+# （#2499）: rag_read_section は「<chunk_set の先頭>:<章節の id>:<章節の中の順>:<文字の位置>」、
+# rag_read_document は「<chunk_set の先頭>:<chunk の順>:<文字の位置>」。chunk_set は先頭の字から
+# 文書の chunk_set を引き直し、作り直された後（引けない）は source_stale にする。
+CURSOR_CHUNK_SET_CHARS = 12
+CURSOR_MAX_LENGTH = 256
 SECTION_NOT_FOUND_CODE = "section_not_found"
 SOURCE_NOT_FOUND_CODE = "source_not_found"
 SOURCE_STALE_CODE = "source_stale"
@@ -743,7 +749,7 @@ class ReadDocumentInput(BaseModel):
     cursor: str | None = Field(
         default=None,
         min_length=1,
-        max_length=2048,
+        max_length=CURSOR_MAX_LENGTH,
         description="続きの位置（前の rag_read_document の next_cursor）。",
     )
     locator: str | None = Field(
@@ -828,7 +834,7 @@ class ReadSectionInput(BaseModel):
     cursor: str | None = Field(
         default=None,
         min_length=1,
-        max_length=2048,
+        max_length=CURSOR_MAX_LENGTH,
         description="続きの位置（前の rag_read_section の next_cursor）。",
     )
     max_chars: int = Field(
@@ -2455,7 +2461,58 @@ async def readable_element_chunk(
 
 
 def _read_cursor(chunk_set_id: str, chunk_index: int, offset: int = 0) -> str:
-    return encode_cursor({"cs": chunk_set_id, "i": chunk_index, "o": offset})
+    return f"{chunk_set_id[:CURSOR_CHUNK_SET_CHARS]}:{chunk_index}:{offset}"
+
+
+@dataclass(frozen=True)
+class _Cursor:
+    """続きの位置を分けたもの（#2499）。section_id は rag_read_section の cursor だけが持つ。"""
+
+    chunk_set_prefix: str
+    section_id: str | None
+    order: int
+    offset: int
+
+
+def _parse_cursor(cursor: str, *, section: bool) -> _Cursor:
+    """next_cursor を分ける。形が違えば、どう直せばよいかを書いた cursor_invalid にする。"""
+    parts = cursor.strip().split(":")
+    numbers = parts[-2:]
+    valid = len(parts) >= 3 and all(part.isdigit() for part in numbers) and bool(parts[0])
+    if valid and section and len(parts) == 3:
+        raise McpToolError(
+            CURSOR_INVALID_CODE,
+            "この cursor は rag_read_document の続きの位置です。rag_read_document に渡すか、"
+            "section_id を渡して章節の最初から読み直してください。",
+        )
+    if valid and not section and len(parts) > 3:
+        raise McpToolError(
+            CURSOR_INVALID_CODE,
+            "この cursor は rag_read_section の続きの位置です。rag_read_section に"
+            "（document_id と一緒に）渡してください。",
+        )
+    if not valid or (section and not ":".join(parts[1:-2])):
+        tool = "rag_read_section" if section else "rag_read_document"
+        raise McpToolError(
+            CURSOR_INVALID_CODE,
+            f"cursor の形が違います。直前の {tool} が返した next_cursor を、1 字も変えずにそのまま"
+            "渡してください。分からなければ section_id を渡して章節の最初から読み直してください。",
+        )
+    return _Cursor(
+        chunk_set_prefix=parts[0],
+        section_id=":".join(parts[1:-2]) if section else None,
+        order=int(numbers[0]),
+        offset=int(numbers[1]),
+    )
+
+
+async def _cursor_chunk_set(oracle: OracleClient, document_id: str, prefix: str) -> str | None:
+    """cursor の chunk_set の先頭の字から、文書の chunk_set を引き直す。
+
+    1 つに決まらなければ None。
+    """
+    found = await SectionMapStore(oracle).chunk_set_ids_with_prefix(document_id, prefix)
+    return found[0] if len(found) == 1 else None
 
 
 async def _first_chunk_or_missing(
@@ -2539,7 +2596,7 @@ async def outline_document(arguments: OutlineInput) -> OutlineOutput:
 
 
 def _section_cursor(chunk_set_id: str, section_id: str, order: int, offset: int = 0) -> str:
-    return encode_cursor({"cs": chunk_set_id, "s": section_id, "i": order, "o": offset})
+    return f"{chunk_set_id[:CURSOR_CHUNK_SET_CHARS]}:{section_id}:{order}:{offset}"
 
 
 async def _section_start(
@@ -2547,18 +2604,19 @@ async def _section_start(
 ) -> tuple[SectionOutline, SectionNode, int, int]:
     """読む章節と、読み始めの (章節の中の順, 文字の位置)。"""
     if arguments.cursor is not None:
-        try:
-            payload = decode_cursor(arguments.cursor, required=("cs", "s", "i", "o"))
-        except InvalidCursorError as exc:
-            raise McpToolError(CURSOR_INVALID_CODE, "cursor の形が違います。") from exc
-        assert payload is not None
-        outline = await section_outline(
-            arguments.document_id, chunk_set_id=str(payload["cs"]), oracle=oracle
+        cursor = _parse_cursor(arguments.cursor, section=True)
+        chunk_set_id = await _cursor_chunk_set(
+            oracle, arguments.document_id, cursor.chunk_set_prefix
         )
-        node = outline.get(str(payload["s"])) if outline is not None else None
+        outline = (
+            await section_outline(arguments.document_id, chunk_set_id=chunk_set_id, oracle=oracle)
+            if chunk_set_id is not None
+            else None
+        )
+        node = outline.get(cursor.section_id or "") if outline is not None else None
         if outline is None or node is None:
             raise await _first_chunk_or_missing(oracle, arguments.document_id, stale=True)
-        return outline, node, max(0, int(payload["i"])), max(0, int(payload["o"]))
+        return outline, node, cursor.order, cursor.offset
     if arguments.citation is not None:
         # 引用ラベル(#2024)を、その段落の chunk にしてから chunk_id と同じ道で読む。
         cited_chunk = await oracle.retrievable_citation_chunk(
@@ -2707,12 +2765,13 @@ async def _read_start(
 ) -> tuple[str, int, int, bool]:
     """読み始めの (chunk_set_id, chunk_index, 文字の位置, 古い位置を指せるか)。"""
     if arguments.cursor is not None:
-        try:
-            payload = decode_cursor(arguments.cursor, required=("cs", "i", "o"))
-        except InvalidCursorError as exc:
-            raise McpToolError(CURSOR_INVALID_CODE, "cursor の形が違います。") from exc
-        assert payload is not None
-        return str(payload["cs"]), int(payload["i"]), max(0, int(payload["o"])), True
+        cursor = _parse_cursor(arguments.cursor, section=False)
+        chunk_set_id = await _cursor_chunk_set(
+            oracle, arguments.document_id, cursor.chunk_set_prefix
+        )
+        if chunk_set_id is None:
+            raise await _first_chunk_or_missing(oracle, arguments.document_id, stale=True)
+        return chunk_set_id, cursor.order, cursor.offset, True
     if arguments.locator is not None:
         chunk = await readable_element_chunk(oracle, arguments.document_id, arguments.locator)
         chunk_set_id = _metadata_str(dict(chunk.metadata), "chunk_set_id") or ""
