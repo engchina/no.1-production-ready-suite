@@ -333,13 +333,14 @@ def _cte(table: AttachmentTable, *, stub: bool) -> str:
             else "CAST(NULL AS VARCHAR2(4000))"
             for column in table.columns
         )
-        return f"{table.name} ({names}) AS (SELECT {values} FROM DUAL)"
+        # 表の名前は固定の ATTACHMENT_<n>、列の名前は `"` を除いた引用付きの識別子（_column_name）。
+        return f"{table.name} ({names}) AS (SELECT {values} FROM DUAL)"  # nosec B608
     columns = ", ".join(
         f"\"{column.name}\" {column.sql_type} PATH '$[{index}]'"
         for index, column in enumerate(table.columns)
     )
-    return (
-        f"{table.name} ({names}) AS (SELECT * FROM JSON_TABLE(:{table.bind_name}, '$[*]' "
+    return (  # 行の値は bind で渡す。
+        f"{table.name} ({names}) AS (SELECT * FROM JSON_TABLE(:{table.bind_name}, '$[*]' "  # nosec B608
         f"COLUMNS ({columns})))"
     )
 
