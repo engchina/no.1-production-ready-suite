@@ -64,12 +64,12 @@ def test_source_derivation_serializes_to_json_dict() -> None:
 
 
 def test_normalize_and_supported_profiles() -> None:
-    assert normalize_preprocess_profile("CSV_TO_JSON") == "csv_to_json"
+    assert normalize_preprocess_profile("CSV_TO_JSONL") == "csv_to_jsonl"
     assert normalize_preprocess_profile("auto") == "passthrough"  # 廃止 → 既定へ寄せる
     assert normalize_preprocess_profile("???") == "passthrough"
-    assert supported_profiles_from(["passthrough", "passthrough", "csv_to_json"]) == [
+    assert supported_profiles_from(["passthrough", "passthrough", "csv_to_jsonl"]) == [
         "passthrough",
-        "csv_to_json",
+        "csv_to_jsonl",
     ]
 
 
@@ -133,7 +133,7 @@ def test_convert_runs_converter_in_worker(monkeypatch: pytest.MonkeyPatch) -> No
         )
 
     def _health() -> ConvertHealth:
-        return ConvertHealth(status="ok", supported_profiles=["csv_to_json"])
+        return ConvertHealth(status="ok", supported_profiles=["csv_to_jsonl"])
 
     monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
     app = create_preprocess_app(converter=_converter, health_probe=_health)
@@ -141,7 +141,7 @@ def test_convert_runs_converter_in_worker(monkeypatch: pytest.MonkeyPatch) -> No
     response = TestClient(app).post(
         "/convert",
         files={"file": ("a.csv", b"a,b", "text/csv")},
-        data={"content_type": "text/csv", "preprocess_profile": "csv_to_json"},
+        data={"content_type": "text/csv", "preprocess_profile": "csv_to_jsonl"},
     )
 
     assert response.status_code == 200

@@ -22,8 +22,8 @@ const PREPROCESS_VALUES = [
   "passthrough",
   "office_to_pdf",
   "pdf_to_page_images",
-  "csv_to_json",
-  "excel_to_json",
+  "csv_to_jsonl",
+  "excel_to_jsonl",
   "pii_redact",
 ] as const;
 export const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = PREPROCESS_VALUES.map(

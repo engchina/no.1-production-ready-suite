@@ -101,8 +101,8 @@ describe("サービス管理のサービス名", () => {
     const sameAs: Record<string, I18nKey> = {
       "settings.services.item.preprocessOfficeToPdf": "settings.preprocess.profile.office_to_pdf",
       "settings.services.item.preprocessPdfToPageImages": "settings.preprocess.profile.pdf_to_page_images",
-      "settings.services.item.preprocessCsvToJson": "settings.preprocess.profile.csv_to_json",
-      "settings.services.item.preprocessExcelToJson": "settings.preprocess.profile.excel_to_json",
+      "settings.services.item.preprocessCsvToJsonl": "settings.preprocess.profile.csv_to_jsonl",
+      "settings.services.item.preprocessExcelToJsonl": "settings.preprocess.profile.excel_to_jsonl",
       "settings.services.item.preprocessPiiRedact": "settings.preprocess.profile.pii_redact",
       "settings.services.item.parserStructuredRecordsJsonl":
         "settings.parserAdapters.backend.structured_records_jsonl",

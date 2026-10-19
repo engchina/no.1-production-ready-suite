@@ -29,7 +29,7 @@ def test_chunking_strategy_defaults_to_small_to_big() -> None:
     settings = Settings()
     assert settings.rag_chunking_strategy == "small_to_big"
     assert settings.rag_chunk_min_chars == 120
-    assert settings.rag_chunk_delimiter == "\\n\\n"
+    assert settings.rag_chunk_delimiter == "<<<JSONL_RECORD_BOUNDARY>>>"
 
 
 def test_chunk_min_chars_must_be_smaller_than_chunk_size() -> None:

@@ -273,12 +273,12 @@ def test_client_pii_redact_no_findings_is_converted(monkeypatch: pytest.MonkeyPa
     assert result.warnings == ("pii_no_findings",)
 
 
-def test_csv_to_json_profile_routes_to_dedicated_service() -> None:
-    # csv_to_json は専用サービス URL へルーティングされ、未達時は取込停止用エラー。
+def test_csv_to_jsonl_profile_routes_to_dedicated_service() -> None:
+    # csv_to_jsonl は専用サービス URL へルーティングされ、未達時は取込停止用エラー。
     client = PreprocessServiceClient(
         Settings(
             rag_preprocess_enabled=True,
-            rag_preprocess_csv_to_json_service_url="http://127.0.0.1:9/",
+            rag_preprocess_csv_to_jsonl_service_url="http://127.0.0.1:9/",
             rag_preprocess_service_timeout_seconds=0.2,
             rag_http_service_retry_attempts=1,
         )
@@ -288,30 +288,30 @@ def test_csv_to_json_profile_routes_to_dedicated_service() -> None:
             b"a,b\n1,2\n",
             content_type="text/csv",
             source_profile=None,
-            profile="csv_to_json",
+            profile="csv_to_jsonl",
         )
 
 
-def test_csv_to_json_profile_unconfigured_raises() -> None:
+def test_csv_to_jsonl_profile_unconfigured_raises() -> None:
     # サービス URL が空 → 未設定として取込停止用エラー。
     client = PreprocessServiceClient(
-        Settings(rag_preprocess_enabled=True, rag_preprocess_csv_to_json_service_url="")
+        Settings(rag_preprocess_enabled=True, rag_preprocess_csv_to_jsonl_service_url="")
     )
     with pytest.raises(PreprocessServiceError, match="接続先 URL が未設定"):
         client.convert(
             b"a,b\n1,2\n",
             content_type="text/csv",
             source_profile=None,
-            profile="csv_to_json",
+            profile="csv_to_jsonl",
         )
 
 
-def test_excel_to_json_profile_routes_to_dedicated_service() -> None:
-    # excel_to_json は専用サービス URL へルーティングされ、未達時は取込停止用エラー。
+def test_excel_to_jsonl_profile_routes_to_dedicated_service() -> None:
+    # excel_to_jsonl は専用サービス URL へルーティングされ、未達時は取込停止用エラー。
     client = PreprocessServiceClient(
         Settings(
             rag_preprocess_enabled=True,
-            rag_preprocess_excel_to_json_service_url="http://127.0.0.1:9/",
+            rag_preprocess_excel_to_jsonl_service_url="http://127.0.0.1:9/",
             rag_preprocess_service_timeout_seconds=0.2,
             rag_http_service_retry_attempts=1,
         )
@@ -321,7 +321,7 @@ def test_excel_to_json_profile_routes_to_dedicated_service() -> None:
             b"PK\x03\x04",
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             source_profile=None,
-            profile="excel_to_json",
+            profile="excel_to_jsonl",
         )
 
 

@@ -208,7 +208,7 @@ export const ja = {
     "GPU 解析エンジンは外部 API を直接呼びます。この画面から解析エンジンのサーバーの構築や起動は行いません。",
   "settings.parserAdapters.backend.structured_records_jsonl": "構造化レコード JSONL",
   "settings.parserAdapters.backend.structured_records_jsonl.description":
-    "ファイル準備の CSV→JSON・Excel→JSON が作る構造化レコードの JSONL を、記録の単位で解析。固定分割で 1 記録 1 チャンクにする。選んだ場合だけ使用",
+    "ファイル準備の CSV→JSONL・Excel→JSONL が作る構造化レコードの JSONL を、記録の単位で解析。固定分割で 1 記録 1 チャンクにする。選んだ場合だけ使用",
   "settings.parserAdapters.backend.xml_tree_json": "XML ツリー JSON",
   "settings.parserAdapters.backend.xml_tree_json.description":
     "XML の要素の木（tag / attr / children）を JSON にした文書を、要素の階層のまま解析。選んだ場合だけ使用",
@@ -1446,7 +1446,7 @@ export const ja = {
   "settings.chunking.params.active": "有効パラメータ",
   "settings.chunking.params.delimiter": "固定分割符文字列",
   "settings.chunking.params.delimiterHint":
-    "\\n, \\t, \\\\ の escape 表現を使用できます。分割符は chunk には残しません。",
+    "\\n, \\t, \\\\ の escape 表現を使用できます。分割符は chunk には残しません。既定の <<<JSONL_RECORD_BOUNDARY>>> は、構造化レコード JSONL の記録の境界です。",
   "settings.chunking.params.chunkSize": "chunk サイズ(文字)",
   "settings.chunking.params.overlap": "overlap(文字)",
   "settings.chunking.params.headingSplitLimit": "見出し内の再分割上限(文字)",
@@ -1523,12 +1523,12 @@ export const ja = {
   "settings.preprocess.profile.pdf_to_page_images": "PDF を画像として読み直す",
   "settings.preprocess.profile.pdf_to_page_images.description":
     "PDF の各ページを画像にして、画像から文字を読み取り直します。文字化けする PDF や、文字を選択・コピーできない PDF に使います。",
-  "settings.preprocess.profile.csv_to_json": "CSV→JSON",
-  "settings.preprocess.profile.csv_to_json.description":
-    "CSV の各行を、見出しの列名と値の組(JSON)にしてから解析します。行と列の対応を保ったまま読み取れます。",
-  "settings.preprocess.profile.excel_to_json": "Excel→JSON",
-  "settings.preprocess.profile.excel_to_json.description":
-    "Excel ファイル(.xls・.xlsx)の各シートの行を、見出しの列名と値の組(JSON)にしてから解析します。",
+  "settings.preprocess.profile.csv_to_jsonl": "CSV→JSONL",
+  "settings.preprocess.profile.csv_to_jsonl.description":
+    "CSV の 1 行を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。元の行の位置を保ちます。文書解析は「構造化レコード JSONL」を使います。",
+  "settings.preprocess.profile.excel_to_jsonl": "Excel→JSONL",
+  "settings.preprocess.profile.excel_to_jsonl.description":
+    "Excel ファイル(.xls・.xlsx)の表の 1 行(手順は 1 手順)を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。シート・行・セル範囲を保ちます。文書解析は「構造化レコード JSONL」を使います。",
   "settings.preprocess.profile.pii_redact": "PIIマスク",
   "settings.preprocess.profile.pii_redact.description":
     "テキストの氏名・メールアドレス・電話番号などの個人情報(PII)をマスクしてから解析します。",
@@ -1651,8 +1651,8 @@ export const ja = {
     "サービスのログと状態を確認してから、もう一度実行してください。",
   "settings.services.item.preprocessOfficeToPdf": "Office→PDF",
   "settings.services.item.preprocessPdfToPageImages": "PDF を画像として読み直す",
-  "settings.services.item.preprocessCsvToJson": "CSV→JSON",
-  "settings.services.item.preprocessExcelToJson": "Excel→JSON",
+  "settings.services.item.preprocessCsvToJsonl": "CSV→JSONL",
+  "settings.services.item.preprocessExcelToJsonl": "Excel→JSONL",
   "settings.services.item.preprocessPiiRedact": "PIIマスク",
   "settings.services.item.parserDocling": "Docling",
   "settings.services.item.parserUnstructured": "Unstructured",
@@ -3113,6 +3113,8 @@ export const ja = {
   "documents.processingConfig.error.save":
     "処理設定を保存できませんでした。値と文書状態を確認して再試行してください。",
   "documents.processingConfig.parserFormats": "対応形式: {formats}",
+  "documents.processingConfig.structuredRecordsHint":
+    "構造化レコードの JSONL は「構造化レコード JSONL」だけが解析できます。文書解析と分割（固定分割符・記録の境界）を合わせて上書きしました。",
   "documents.processingConfig.parserUnsupported":
     "この解析エンジンは {modality} 形式の文書に対応していません（対応: {formats}）。取込は開始前に失敗します。",
   "documents.processingConfig.parserRemoved": "解析エンジンは削除されました（{engine}）",

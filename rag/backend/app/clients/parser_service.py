@@ -24,6 +24,7 @@ from pr_backend_core.observability.request_context import outbound_correlation_h
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
 from rag_parser_core.language import overrides_payload
 from rag_parser_core.result import ParseResponse, ParserRegistryResult
+from rag_parser_core.structured_records import STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING
 
 from app.clients.external_parser import (
     ENGINE_SPECS,
@@ -39,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 # 解析中のページの進捗を読む timeout(秒)。進捗は補助なので短くし、再試行しない(#1999)。
 _PROGRESS_TIMEOUT_SECONDS = 3.0
+# 構造化レコードの JSONL を構造化レコード JSONL 以外の解析エンジンに渡したときの理由(#2457)。
+STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_REASON = "structured_records_requires_jsonl_backend"
 # 解析サービスへ送る進捗の id(#1999)。``asyncio.to_thread`` の thread も context を引き継ぐ。
 _PARSE_PROGRESS_ID: ContextVar[str | None] = ContextVar("rag_parse_progress_id", default=None)
 
@@ -527,6 +530,8 @@ def split_parser_warning(warning: str) -> tuple[str, str | None]:
 def _parser_result_failure_reason(result: ParserRegistryResult) -> str:
     """HTTP 200 でも parser が extraction を返せない理由を user-facing reason へ寄せる。"""
     warnings = tuple(split_parser_warning(warning)[0] for warning in result.warnings)
+    if STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING in warnings:
+        return STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_REASON
     if any(warning.endswith("_adapter_package_missing") for warning in warnings):
         return "adapter_package_missing"
     if any(warning.endswith("_adapter_source_unsupported") for warning in warnings):
@@ -549,6 +554,16 @@ def _parser_result_failure_reason(result: ParserRegistryResult) -> str:
     if result.unsupported_reason:
         return "adapter_source_unsupported"
     return "adapter_empty_result"
+
+
+def structured_records_requires_jsonl_backend_message(label: str) -> str:
+    """構造化レコードの JSONL を、構造化レコード JSONL 以外の解析エンジンに渡したときの案内。"""
+    return (
+        "ファイル準備の「CSV→JSONL」「Excel→JSONL」が作る構造化レコードの JSONL は、"
+        f"文書解析の「構造化レコード JSONL」だけが解析できます。選択中の解析エンジン（{label}）では"
+        "変換せずに取込を停止しました。この文書の「処理レシピ」で「文書解析」を"
+        "「構造化レコード JSONL」に変えてから再実行してください。"
+    )
 
 
 def _service_unavailable_message(
@@ -574,6 +589,8 @@ def _service_unavailable_message(
             "旧結果は保持されていますが、新しい処理は開始できません。"
             "文書レシピで利用可能な解析エンジンを選び直してください。"
         )
+    if reason == STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_REASON:
+        return structured_records_requires_jsonl_backend_message(label) + warning_suffix
     if reason == "unconfigured":
         return (
             f"選択した文書解析エンジン（{label}）の接続先 URL が未設定です。"

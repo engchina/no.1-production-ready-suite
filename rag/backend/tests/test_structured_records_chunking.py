@@ -38,7 +38,7 @@ def _csv_extraction(*values: str) -> StructuredExtraction:
         DocumentLine(
             record_id="document",
             source_type="csv",
-            converter="csv_to_json",
+            converter="csv_to_jsonl",
             converter_version="v2",
             header_row=1,
         )
@@ -86,7 +86,7 @@ def _excel_extraction() -> StructuredExtraction:
         ],
     )
     data = dump_structured_records(
-        sheet_records_to_lines(document, converter="excel_to_json", converter_version="v4")
+        sheet_records_to_lines(document, converter="excel_to_jsonl", converter_version="v4")
     )
     extraction = run_external_adapter(BACKEND, data, None, "").extraction
     assert extraction is not None
@@ -199,7 +199,7 @@ def _settings(**updates: object) -> Any:
         update={
             "rag_parser_adapter_backend": "docling",
             "rag_parser_docling_enabled": True,
-            "rag_preprocess_profile": "csv_to_json",
+            "rag_preprocess_profile": "csv_to_jsonl",
         }
     )
     return base.model_copy(update=updates)
@@ -240,7 +240,10 @@ def _patch_runner(monkeypatch: pytest.MonkeyPatch, called: list[str]) -> None:
 def _jsonl(*values: str) -> bytes:
     lines: list[DocumentLine | RowLine] = [
         DocumentLine(
-            record_id="document", source_type="csv", converter="csv_to_json", converter_version="v2"
+            record_id="document",
+            source_type="csv",
+            converter="csv_to_jsonl",
+            converter_version="v2",
         )
     ]
     lines.extend(

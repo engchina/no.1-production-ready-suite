@@ -101,7 +101,7 @@ ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
         ),
     ),
     # 構造化レコード JSONL(#2457)。使用エンジンで選んだときだけ使う(形式で自動には回さない)。
-    # 前処理(csv_to_json / excel_to_json)の成果物と、契約どおりの .jsonl を受ける。契約に合わない
+    # 前処理(csv_to_jsonl / excel_to_jsonl)の成果物と、契約どおりの .jsonl を受ける。契約に合わない
     # 入力は、解析のサービスが ``structured_records_invalid:<理由>@line<n>`` を返して取込を止める。
     "structured_records_jsonl": ParserBackendCapability(
         modalities=frozenset(),
@@ -160,8 +160,9 @@ def is_audio_source(source_profile: SourceProfile | None, content_type: str) -> 
     )
 
 
-# 前処理の構造化レコードの JSONL を受け付ける parser のサービス（#1221・#2457）。
-STRUCTURED_RECORDS_BACKENDS = frozenset({"docling", "unstructured", "structured_records_jsonl"})
+# 前処理の構造化レコードの JSONL を受け付ける解析エンジン（#2457）。Docling / Unstructured は
+# 受けない（黙って変換せず、構造化レコード JSONL を選ぶよう診断で止める）。
+STRUCTURED_RECORDS_BACKENDS = frozenset({"structured_records_jsonl"})
 
 
 def adapter_supports_source(
@@ -180,9 +181,8 @@ def adapter_supports_source(
     if is_audio_source(source_profile, normalized):
         return False
     if normalized == STRUCTURED_RECORDS_CONTENT_TYPE:
-        # 前処理（csv_to_json / excel_to_json）の構造化レコードの JSONL は、
-        # Docling / Unstructured の parser のサービスが rag_parser_core で要素にする
-        # （外部の parser に渡さない。#1221・#2457）。
+        # 前処理（csv_to_jsonl / excel_to_jsonl）の構造化レコードの JSONL は、構造化レコード JSONL
+        # の解析エンジンだけが読む（#2457）。
         return backend in STRUCTURED_RECORDS_BACKENDS
     modality = source_profile.modality if source_profile is not None else SourceModality.UNKNOWN
     return (

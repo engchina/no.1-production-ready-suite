@@ -48,8 +48,8 @@ locals {
     [
       "preprocess-office-to-pdf",
       "preprocess-pdf-to-page-images",
-      "preprocess-csv-to-json",
-      "preprocess-excel-to-json",
+      "preprocess-csv-to-jsonl",
+      "preprocess-excel-to-jsonl",
       "preprocess-pii-redact",
       "parser-docling",
     ],

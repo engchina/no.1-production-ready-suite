@@ -1,4 +1,4 @@
-# preprocess-csv-to-json
+# preprocess-csv-to-jsonl
 
 parse の **前** に CSV 原本を決定論で構造化レコードの JSON Lines(1 データ行 = 1 記録)へ
 変換する前処理マイクロサービス(#2457)。
@@ -25,17 +25,17 @@ parse の **前** に CSV 原本を決定論で構造化レコードの JSON Lin
 
 ```bash
 # repo root から(共有 package の path source を解決するため)
-uv run --directory services/preprocess/csv_to_json \
+uv run --directory services/preprocess/csv_to_jsonl \
   uvicorn app.main:app --host 127.0.0.1 --port 18012
 ```
 
 ## 起動(uv の venv + systemd。#286)
 
 サービスごとの uv の venv(`uv sync --locked --no-dev --python 3.12`)で動き、本番・開発とも systemd の unit
-(`production-ready-rag-preprocess-csv-to-json.service`)で起動 / 停止する。Docker は使わない(Dockerfile は #356 で削除した)。
+(`production-ready-rag-preprocess-csv-to-jsonl.service`)で起動 / 停止する。Docker は使わない(Dockerfile は #356 で削除した)。
 
 ```bash
 # rag/ で実行する
-scripts/rag-services.sh install preprocess-csv-to-json   # venv を作り unit と sudoers を登録して起動
-scripts/rag-services.sh run preprocess-csv-to-json       # systemd の無い環境で前面に起動
+scripts/rag-services.sh install preprocess-csv-to-jsonl   # venv を作り unit と sudoers を登録して起動
+scripts/rag-services.sh run preprocess-csv-to-jsonl       # systemd の無い環境で前面に起動
 ```

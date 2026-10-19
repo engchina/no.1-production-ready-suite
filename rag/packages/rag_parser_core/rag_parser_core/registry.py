@@ -72,6 +72,7 @@ from rag_parser_core.source import (
 from rag_parser_core.structured_records import (
     STRUCTURED_RECORDS_JSONL_BACKEND,
     STRUCTURED_RECORDS_JSONL_PARSER_VERSION,
+    STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING,
     StructuredRecordsError,
     is_structured_records_content_type,
     oversized_record_line,
@@ -86,9 +87,6 @@ from rag_parser_core.structured_records import (
 TABLE_PRESERVE_ROWS_TEMPLATE = "table_preserve_rows"
 
 logger = logging.getLogger(__name__)
-# 前処理の構造化レコードの JSONL（csv_to_json / excel_to_json）を要素にする処理の名前と版（#2457）。
-STRUCTURED_RECORDS_SOURCE_PARSER = "structured_records"
-STRUCTURED_RECORDS_PARSER_VERSION = "structured_records_v1"
 
 
 @dataclass(frozen=True)
@@ -940,10 +938,9 @@ def _external_adapter_result(
         # （契約に合わない入力は診断で止める。任意の JSONL を構造化レコードとみなさない）。
         return _structured_records_jsonl_result(source_bytes)
     if is_structured_records_content_type(content_type):
-        # 前処理（csv_to_json / excel_to_json）が作った構造化レコードの JSONL は、どの adapter
-        # でも外部の parser に渡さず、1 記録 1 要素にする（行・セルの場所を chunk まで残す。
-        # #1221・#2457）。
-        return _structured_records_result(backend, source_bytes, source_profile=source_profile)
+        # 前処理（csv_to_jsonl / excel_to_jsonl）が作った構造化レコードの JSONL は、構造化レコード
+        # JSONL の解析エンジンだけが読む。ほかの adapter は黙って変換せず診断で止める（#2457）。
+        return _adapter_fallback_result(backend, STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING)
     if not _external_adapter_package_available(backend):
         return _adapter_fallback_result(backend, f"{backend}_adapter_package_missing")
     try:
@@ -1125,46 +1122,10 @@ def _docling_adapter_result(
     )
 
 
-def _structured_records_result(
-    backend: str,
-    source_bytes: bytes,
-    *,
-    source_profile: SourceProfile | None,
-) -> ParserRegistryResult:
-    """前処理の構造化レコードの JSONL を抽出にする。
-
-    契約に合わなければ fallback の warning（`structured_records_invalid:<理由>@line<n>`）を返す。
-    """
-    document = parse_structured_records(source_bytes)
-    if isinstance(document, StructuredRecordsError):
-        return _adapter_fallback_result(backend, document.warning())
-    template = template_for_source_profile(source_profile)
-    extraction = structured_records_extraction(
-        document,
-        source_parser=STRUCTURED_RECORDS_SOURCE_PARSER,
-        parser_backend=backend,
-        parser_version=STRUCTURED_RECORDS_PARSER_VERSION,
-    )
-    extraction = _adapter_extraction_with_source_lineage(
-        extraction,
-        source_profile=source_profile,
-        source_parser=STRUCTURED_RECORDS_SOURCE_PARSER,
-        parser_backend=backend,
-        parser_version=STRUCTURED_RECORDS_PARSER_VERSION,
-        template=template,
-    )
-    return ParserRegistryResult(
-        extraction=extraction,
-        parser_backend=backend,
-        parser_version=STRUCTURED_RECORDS_PARSER_VERSION,
-        template=template,
-    )
-
-
 def _structured_records_jsonl_result(source_bytes: bytes) -> ParserRegistryResult:
     """構造化レコード JSONL を、記録を 1 要素にし境界で区切った抽出にする（#2457）。
 
-    要素は Docling / Unstructured の記録の経路と同じ（`structured_records_extraction`）。raw_text は
+    要素は記録ごとの共通の形（`structured_records_extraction`）。raw_text は
     記録の本文を境界のマーカーで区切った検索用テキストにする（`with_record_boundaries`）。
     契約に合わない・本文が 1 要素の上限を超える記録があれば、黙って切らずに
     ``structured_records_invalid:<理由>@line<n>`` の fallback を返す（backend は取込を止める）。

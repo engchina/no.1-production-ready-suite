@@ -472,11 +472,26 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "RENAME" not in restore_migration
     assert "DROP" not in restore_migration and "DELETE" not in restore_migration
     # 文書の削除の後始末の記録の表と索引を無いときだけ作る（#2452）。
-    cleanups_migration = sql.split("-- migration: 20261019_002_document_cleanups", 1)[1]
+    cleanups_migration = sql.split("-- migration: 20261019_002_document_cleanups", 1)[1].split(
+        "-- migration: 20261019_003_structured_records_jsonl_profiles", 1
+    )[0]
     assert "CREATE TABLE rag_document_cleanups" in cleanups_migration
     assert "index_name = 'RAG_DOCUMENT_CLEANUPS_UPDATED_IDX'" in cleanups_migration
     assert "DROP" not in cleanups_migration
-    assert len(statements) == 102
+    # ファイル準備の改名と、文書レシピの解析エンジン・分割符の移行(#2457)。値の書き換えだけ。
+    jsonl_migration = sql.split("-- migration: 20261019_003_structured_records_jsonl_profiles", 1)[
+        1
+    ]
+    assert "''\"csv_to_json\"'', ''\"csv_to_jsonl\"''" in jsonl_migration
+    assert "''\"excel_to_json\"'', ''\"excel_to_jsonl\"''" in jsonl_migration
+    assert "'RAG_DOCUMENT_RECIPES.PROCESSING_CONFIG'" in jsonl_migration
+    assert "'RAG_INGESTION_JOBS.SETTINGS_OVERRIDES'" in jsonl_migration
+    assert "SET ''$.parser_adapter_backend'' = ''structured_records_jsonl''" in jsonl_migration
+    assert "IN (''docling'', ''unstructured'')" in jsonl_migration
+    assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
+    assert "= ''fixed_delimiter''" in jsonl_migration
+    assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
+    assert len(statements) == 103
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -567,6 +582,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261018_004_support_guide_schema_v2",
         "20261019_001_restore_document_classification",
         "20261019_002_document_cleanups",
+        "20261019_003_structured_records_jsonl_profiles",
     ]
 
 

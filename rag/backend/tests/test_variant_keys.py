@@ -245,7 +245,8 @@ def test_chunk_set_id_keeps_ids_after_parent_child_removal() -> None:
         "rag_chunk_overlap": settings.rag_chunk_overlap,
         "rag_chunk_child_size": 320,
         "rag_chunk_min_chars": settings.rag_chunk_min_chars,
-        "rag_chunk_delimiter": settings.rag_chunk_delimiter,
+        # #2457 の前の固定分割符の既定(分割符を使わない方式の hash は旧い既定のまま)。
+        "rag_chunk_delimiter": "\\n\\n",
         "rag_chunk_context_header_enabled": settings.rag_chunk_context_header_enabled,
     }
     canonical = json.dumps(
@@ -254,6 +255,19 @@ def test_chunk_set_id_keeps_ids_after_parent_child_removal() -> None:
     legacy_id = "cs_" + hashlib.sha1(canonical.encode(), usedforsecurity=False).hexdigest()[:16]
 
     assert compute_chunk_set_id(SRC, settings) == legacy_id
+
+
+def test_chunk_set_id_keeps_ids_after_delimiter_default_change() -> None:
+    """固定分割符の既定の変更(#2457)で、分割符を使わない方式の chunk_set_id は変わらない。"""
+    base = get_settings().model_copy(update={"rag_chunking_strategy": "structure_aware"})
+    new_default = base.model_copy(update={"rag_chunk_delimiter": "<<<JSONL_RECORD_BOUNDARY>>>"})
+    old_default = base.model_copy(update={"rag_chunk_delimiter": "\\n\\n"})
+    assert compute_chunk_set_id(SRC, new_default) == compute_chunk_set_id(SRC, old_default)
+
+    fixed_new = new_default.model_copy(update={"rag_chunking_strategy": "fixed_delimiter"})
+    fixed_old = old_default.model_copy(update={"rag_chunking_strategy": "fixed_delimiter"})
+    # 固定分割では分割符が分割の結果を変えるので、ID も変わる。
+    assert compute_chunk_set_id(SRC, fixed_new) != compute_chunk_set_id(SRC, fixed_old)
 
 
 def test_chunk_set_id_is_unchanged_by_the_599_rename() -> None:

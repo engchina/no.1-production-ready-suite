@@ -3,7 +3,7 @@
 parse の **前** に原本を一度だけ canonical な中間物へ変換する(`先变换、再 parse`)。
 
 - `passthrough`(既定)は変換せず原本のまま parse する(no-op)。
-- サービス必須の変換(`office_to_pdf` / `pdf_to_page_images` / `csv_to_json` / `excel_to_json` /
+- サービス必須の変換(`office_to_pdf` / `pdf_to_page_images` / `csv_to_jsonl` / `excel_to_jsonl` /
   `pii_redact`)は **各々独立した**前処理マイクロサービスへ
   HTTP 委譲する(profile ごとに専用 base URL)。in-process 変換・local fallback は持たない。
   サービス無効・未達・timeout・5xx 時は、選択した前処理を別経路へ黙って縮退せず、
@@ -52,7 +52,7 @@ class PreprocessServiceClient:
     ) -> ConvertOutcome:
         """選択プリセットで原本を変換する。選択したサービス処理の失敗は例外にする。
 
-        ``options`` は選択肢を持つプリセット(excel_to_json。#1221)の値で、JSON で送る。
+        ``options`` は選択肢を持つプリセット(excel_to_jsonl。#1221)の値で、JSON で送る。
         """
         resolved = normalize_preprocess_profile(
             profile
@@ -62,7 +62,7 @@ class PreprocessServiceClient:
         if resolved == "passthrough":
             # 削除した変換方式(#2042 など)は normalize_preprocess_profile で passthrough へ寄る。
             return ConvertOutcome.passthrough()
-        # office_to_pdf / pdf_to_page_images / csv_to_json / excel_to_json / pii_redact:
+        # office_to_pdf / pdf_to_page_images / csv_to_jsonl / excel_to_jsonl / pii_redact:
         # 各専用サービスへ委譲。
         return self._convert_via_service(
             resolved,

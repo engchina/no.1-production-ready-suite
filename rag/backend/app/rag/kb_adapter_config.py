@@ -24,7 +24,14 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 from rag_parser_core.sheet_records import ExcelOptions
 
 from app.config import (
@@ -70,7 +77,7 @@ AdapterConfigScope = Literal["ingestion", "query"]
 # ここに載っていない Settings フィールドは KB 単位で上書きできない。
 _INGESTION_FIELD_MAP: dict[str, str] = {
     "preprocess_profile": "rag_preprocess_profile",
-    # 前処理 excel_to_json の選択肢(#1221。前処理が excel_to_json のときだけ効く)。
+    # 前処理 excel_to_jsonl の選択肢(#1221。前処理が excel_to_jsonl のときだけ効く)。
     "excel_options": "rag_preprocess_excel_options",
     "parser_adapter_backend": "rag_parser_adapter_backend",
     "parser_docling_enabled": "rag_parser_docling_enabled",
@@ -87,6 +94,8 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "chunk_size": "rag_chunk_size",
     "chunk_overlap": "rag_chunk_overlap",
     "chunk_min_chars": "rag_chunk_min_chars",
+    # 固定分割の分割符(分割方式が fixed_delimiter のときだけ効く。#2457)。
+    "chunk_delimiter": "rag_chunk_delimiter",
     # 親子階層（small-to-big）の分割パラメータ(分割方式が small_to_big のときだけ効く)。
     "chunk_child_target_chars": "rag_chunk_child_target_chars",
     "chunk_table_child_target_chars": "rag_chunk_table_child_target_chars",
@@ -222,7 +231,7 @@ class KnowledgeBaseIngestionConfig(BaseModel):
         return cleaned
 
     preprocess_profile: PreprocessProfile | None = None
-    # 前処理 excel_to_json の選択肢(#1221)。None はグローバル継承。
+    # 前処理 excel_to_jsonl の選択肢(#1221)。None はグローバル継承。
     excel_options: ExcelOptions | None = None
     parser_adapter_backend: ParserAdapterBackend | None = None
     parser_docling_enabled: bool | None = None
@@ -240,6 +249,8 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     )
     chunk_overlap: int | None = Field(default=None, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
+    # 固定分割の分割符(escape 表現。#2457)。None はグローバル継承。
+    chunk_delimiter: str | None = Field(default=None, min_length=1, max_length=256)
     chunk_child_target_chars: int | None = Field(
         default=None, ge=CHUNK_CHILD_TARGET_CHARS_MIN, le=CHUNK_CHILD_TARGET_CHARS_MAX
     )
@@ -269,6 +280,17 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     auto_parse_after_preprocess_enabled: bool | None = None
     auto_chunk_after_extract_enabled: bool | None = None
     auto_index_after_chunk_enabled: bool | None = None
+
+    @field_validator("chunk_delimiter")
+    @classmethod
+    def _strip_chunk_delimiter(cls, value: str | None) -> str | None:
+        """global の ``RAG_CHUNK_DELIMITER`` と同じく前後の空白を除き、空は受け付けない。"""
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("chunk_delimiter を入力してください。")
+        return stripped
 
     @model_validator(mode="before")
     @classmethod

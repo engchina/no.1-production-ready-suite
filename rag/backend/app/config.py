@@ -60,6 +60,7 @@ from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from rag_parser_core.sheet_records import ExcelOptions
+from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
 from rag_pipeline_core.chunking import (
     CHUNK_OVERLAP_MAX_CHARS as CHUNK_OVERLAP_MAX_CHARS,
 )
@@ -123,12 +124,18 @@ def normalize_parser_adapter_backend_value(value: object) -> object:
     return value
 
 
+# 固定分割の方式と、#2457 の前の固定分割符の既定(escape 表現)。既定は記録の境界のマーカーに変えた。
+# 既存の chunk_set_id と分割の結果を保つ比較・移行だけに使う。
+FIXED_DELIMITER_STRATEGY: Literal["fixed_delimiter"] = "fixed_delimiter"
+PREVIOUS_DEFAULT_CHUNK_DELIMITER = "\\n\\n"
+
+
 PreprocessProfile = Literal[
     "passthrough",
     "office_to_pdf",
     "pdf_to_page_images",
-    "csv_to_json",
-    "excel_to_json",
+    "csv_to_jsonl",
+    "excel_to_jsonl",
     "pii_redact",
 ]
 # 削除したファイル準備の変換方式(text_normalize、#2042: スキャン画像の補正・URL→Markdown)。
@@ -891,7 +898,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_chunk_delimiter: str = Field(
-        default="\\n\\n",
+        # 既定は構造化レコード JSONL の記録の境界のマーカー(#2457)。
+        default=JSONL_RECORD_BOUNDARY,
         min_length=1,
         max_length=256,
         description="fixed_delimiter 戦略で使う分割符。\\n / \\t / \\\\ の escape 表現を許可する。",
@@ -2008,8 +2016,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description=(
             "parse の前に原本を一度だけ canonical な中間物へ変換する前処理プリセット。"
             "passthrough(既定)は変換せず現行挙動と一致。office_to_pdf は Office→PDF、"
-            "pdf_to_page_images は PDF→ページ画像、csv_to_json は CSV→構造化 JSON、"
-            "excel_to_json は Excel(.xls/.xlsx)→構造化 JSON、pii_redact は取込時の PII マスク"
+            "pdf_to_page_images は PDF→ページ画像、csv_to_jsonl は CSV→構造化 JSON、"
+            "excel_to_jsonl は Excel(.xls/.xlsx)→構造化 JSON、pii_redact は取込時の PII マスク"
             "(Presidio + 日本語 NER、外部 SaaS 非使用)"
             "(いずれも各々独立した前処理マイクロサービス)。"
         ),
@@ -2030,20 +2038,20 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default="http://127.0.0.1:18011",
         description="PDF→ページ画像PDF 前処理マイクロサービスの base URL。",
     )
-    rag_preprocess_csv_to_json_service_url: str = Field(
+    rag_preprocess_csv_to_jsonl_service_url: str = Field(
         default="http://127.0.0.1:18012",
         description="CSV→構造化 JSON 前処理マイクロサービスの base URL。",
     )
     rag_preprocess_excel_options: ExcelOptions = Field(
         default_factory=ExcelOptions,
         description=(
-            "前処理 excel_to_json の選択肢(#1221。読み方 auto/table/procedure・表頭の行と行数・"
+            "前処理 excel_to_jsonl の選択肢(#1221。読み方 auto/table/procedure・表頭の行と行数・"
             "読むシート・読まないシート・非表示のシート・読まない列・列の役割の判定と指定(#1281))。"
             "文書レシピの excel_options で"
             '上書きできる。環境変数は JSON(例: {"mode": "table", "header_row": 2})。'
         ),
     )
-    rag_preprocess_excel_to_json_service_url: str = Field(
+    rag_preprocess_excel_to_jsonl_service_url: str = Field(
         default="http://127.0.0.1:18013",
         description="Excel(.xls/.xlsx)→行の記録 JSON 前処理マイクロサービスの base URL。",
     )

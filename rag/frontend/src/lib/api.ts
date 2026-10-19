@@ -931,7 +931,7 @@ export interface KnowledgeBaseSummary extends KnowledgeBaseRef {
 }
 
 /** KB 単位の取込上書き(Parser/Chunking)。null はグローバル継承。 */
-/** 前処理 excel_to_json の選択肢（#1221）。 */
+/** 前処理 excel_to_jsonl の選択肢（#1221）。 */
 export interface ExcelOptions {
   /** auto は手順書なら procedure、密な表なら table。 */
   mode: "auto" | "table" | "procedure";
@@ -962,7 +962,7 @@ export type ExcelColumnRoleSetting =
 
 export interface KnowledgeBaseIngestionConfig {
   preprocess_profile: PreprocessProfileName | null;
-  /** 前処理 excel_to_json の選択肢（#1221）。null は全体の既定に従う。 */
+  /** 前処理 excel_to_jsonl の選択肢（#1221）。null は全体の既定に従う。 */
   excel_options?: ExcelOptions | null;
   parser_adapter_backend: ParserAdapterBackend | null;
   parser_docling_enabled: boolean | null;
@@ -979,6 +979,8 @@ export interface KnowledgeBaseIngestionConfig {
   chunk_size: number | null;
   chunk_overlap: number | null;
   chunk_min_chars: number | null;
+  /** 固定分割の分割符（escape 表現。#2457）。null は全体の既定に従う。 */
+  chunk_delimiter?: string | null;
   /** 親子階層（small-to-big）の分割パラメータ(分割方式が small_to_big のときだけ効く)。 */
   chunk_child_target_chars?: number | null;
   chunk_table_child_target_chars?: number | null;
@@ -2259,8 +2261,8 @@ export type PreprocessProfileName =
   | "passthrough"
   | "office_to_pdf"
   | "pdf_to_page_images"
-  | "csv_to_json"
-  | "excel_to_json"
+  | "csv_to_jsonl"
+  | "excel_to_jsonl"
   | "pii_redact";
 
 export interface PreprocessProfileStatusData {
