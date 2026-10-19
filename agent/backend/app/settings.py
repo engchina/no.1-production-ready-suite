@@ -283,6 +283,13 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 公開には、下書きを最後に変えた後に始めた下書きの評価（完了したもの）の最新の合格率がこの値
     # 以上であることを求める。前の版に戻す・スキルの更新だけの公開は対象にしない。
     agent_publish_min_pass_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    # 公開前の回帰の門（#2569。0〜1、未設定は使わない）。公開中の版がある業務 Agent の公開には、
+    # 下書きの評価と同じ評価セット・同じ評価ケースで公開中の版を評価した最新の評価を基準にし、
+    # 下書きの合格率が「基準 − この値」以上であることを求める（基準の評価が無ければ断る）。
+    agent_publish_max_pass_rate_drop: float | None = Field(default=None, ge=0.0, le=1.0)
+    # 公開前の評価の門で求める、下書きの評価のケースの数の下限（#2569。0 は求めない）。合格率の
+    # 分母になったケース（判定できなかったケース・取り消しを除く）を数える。門を使うときだけ見る。
+    agent_publish_min_cases: int = Field(default=0, ge=0, le=1000)
     # 業務 Agent の版の履歴に残す版の数（#2356）。新しい版を公開したとき、公開日時の新しい順に
     # 超えた版を消す（公開中の版は古くても残す。版の番号は振り直さない）。
     agent_max_published_versions: int = Field(default=5, ge=1, le=100)

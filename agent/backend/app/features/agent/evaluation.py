@@ -475,6 +475,8 @@ class EvaluationSummary(BaseModel):
     # 合格率 = 正しいと判定したケース / 終わったケース（業務 Agent の実行の失敗・時間切れは不合格に
     # 数え、判定のモデルが判定できなかったケースは分母から除く。#1845）。
     pass_rate: float | None = None
+    # 合格率の分母になったケースの数（#2569。公開前の評価の門のケースの数の下限が見る）。
+    judged_cases: int = 0
     # 判定したケースのスコアの平均。
     average_score: float | None = None
     # ツールの選択の正しさ（期待するツールを指定したケースのうち、すべて呼んだ割合）。
@@ -523,6 +525,7 @@ def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
         else:
             summary.uncertain += 1
     finished = summary.completed - cancelled - summary.unjudged
+    summary.judged_cases = max(0, finished)
     if finished > 0:
         summary.pass_rate = summary.correct / finished
     if scores:

@@ -23,7 +23,7 @@ from app.features.agent.data_scope import (
     DataScopeCandidatesError,
 )
 from app.features.agent.drafting import MAX_EVALUATION_CASES
-from app.features.agent.evaluation import JobStatus
+from app.features.agent.evaluation import EvaluationCase, JobStatus
 from app.features.agent.runtime import runtime_repository
 from app.features.agent.skills import skill_registry
 from app.security.permissions import MENU_AGENTS, RUNS_OPERATE
@@ -336,11 +336,22 @@ def _job(*, pass_rate: float | None, offset_seconds: float, **overrides: Any) ->
         "agent_version": "draft",
         "status": JobStatus.COMPLETED,
         "created_at": agent.draft_updated_at + timedelta(seconds=offset_seconds),
+        "set_id": "evset_a",
         "set_name": "評価セット A",
-        "summary": SimpleNamespace(pass_rate=pass_rate),
+        "results": _cases("質問 1", "質問 2"),
+        "summary": SimpleNamespace(
+            pass_rate=pass_rate, judged_cases=overrides.pop("judged_cases", 10)
+        ),
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def _cases(*questions: str) -> list[SimpleNamespace]:
+    return [
+        SimpleNamespace(case=EvaluationCase(id=f"c{index}", question=question, expected="要点"))
+        for index, question in enumerate(questions)
+    ]
 
 
 def _publish() -> Any:
@@ -398,3 +409,70 @@ def test_draft_time_moves_only_when_versioned_fields_change(agent: None) -> None
     assert draft_time() == created
     assert client.patch(f"/api/agents/{AGENT_ID}", json={"instructions": "v2"}).status_code == 200
     assert draft_time() > created
+
+
+# ---- 公開中の版との回帰の門・ケースの数の下限（#2569） ---------------------------------------
+
+
+def _gate(
+    monkeypatch: MonkeyPatch,
+    *,
+    min_pass_rate: float = 0.0,
+    max_drop: float | None = None,
+    min_cases: int = 0,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "agent_publish_min_pass_rate", min_pass_rate)
+    monkeypatch.setattr(settings, "agent_publish_max_pass_rate_drop", max_drop)
+    monkeypatch.setattr(settings, "agent_publish_min_cases", min_cases)
+
+
+def test_publish_gate_needs_enough_cases(agent: None, monkeypatch: MonkeyPatch) -> None:
+    _gate(monkeypatch, min_pass_rate=0.8, min_cases=5)
+
+    _jobs(monkeypatch, _job(pass_rate=1.0, offset_seconds=10, judged_cases=3))
+    few = _publish()
+    assert few.status_code == 409, few.text
+    assert "判定できたケースが 3 件" in few.json()["error_messages"][0]
+    assert "必要な 5 件" in few.json()["error_messages"][0]
+
+    _jobs(monkeypatch, _job(pass_rate=1.0, offset_seconds=10, judged_cases=5))
+    assert _publish().status_code == 200
+
+
+def test_publish_gate_compares_with_the_published_version(
+    agent: None, monkeypatch: MonkeyPatch
+) -> None:
+    _gate(monkeypatch, max_drop=0.05)
+
+    # 初めての公開は、下書きの評価だけを求める（比べる公開中の版が無い）。
+    _jobs(monkeypatch)
+    first = _publish()
+    assert first.status_code == 409, first.text
+    assert "品質評価で確かめてください" in first.json()["error_messages"][0]
+    _jobs(monkeypatch, _job(pass_rate=0.5, offset_seconds=10))
+    assert _publish().json()["data"]["published_version"] == 1
+
+    assert client.patch(f"/api/agents/{AGENT_ID}", json={"instructions": "v2"}).status_code == 200
+    draft = _job(pass_rate=0.8, offset_seconds=10)
+
+    # 同じ評価セット・同じ評価ケースで公開中の版を評価していなければ断る
+    # （ケース・評価セットが違う評価は基準にしない）。
+    other_cases = _job(pass_rate=0.9, offset_seconds=5, agent_version=1, results=_cases("別の質問"))
+    other_set = _job(pass_rate=0.9, offset_seconds=5, agent_version=1, set_id="evset_b")
+    _jobs(monkeypatch, draft, other_cases, other_set)
+    missing = _publish()
+    assert missing.status_code == 409, missing.text
+    assert "公開中の版（v1）も同じ評価セット" in missing.json()["error_messages"][0]
+
+    # 基準 90% から許す下げ幅 5% を超えて下がったら断る。
+    baseline = _job(pass_rate=0.9, offset_seconds=5, agent_version=1)
+    _jobs(monkeypatch, draft, baseline)
+    dropped = _publish()
+    assert dropped.status_code == 409, dropped.text
+    message = dropped.json()["error_messages"][0]
+    assert "合格率 80%" in message and "合格率 90%" in message and "5%" in message
+
+    # 許す下げ幅の中なら公開できる（絶対の閾値は使わない設定）。
+    _jobs(monkeypatch, _job(pass_rate=0.85, offset_seconds=10), baseline)
+    assert _publish().json()["data"]["published_version"] == 2
