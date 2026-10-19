@@ -1,7 +1,7 @@
 """Optional parser adapter runtime readiness.
 
-Docling / Unstructured / XML ツリー JSON は任意依存として扱うため、flag と実際の
-package installation 状態を分けて非機密に表示する。
+Docling / Unstructured / 構造化レコード JSONL / XML ツリー JSON は任意依存として扱うため、
+flag と実際の package installation 状態を分けて非機密に表示する。
 """
 
 from __future__ import annotations
@@ -28,12 +28,14 @@ logger = logging.getLogger(__name__)
 _SERVICE_URL_FIELDS: dict[str, str] = {
     "docling": "rag_parser_docling_service_url",
     "unstructured": "rag_parser_unstructured_service_url",
+    "structured_records_jsonl": "rag_parser_structured_records_jsonl_service_url",
     "xml_tree_json": "rag_parser_xml_tree_json_service_url",
 }
 
 ParserAdapterName = Literal[
     "docling",
     "unstructured",
+    "structured_records_jsonl",
     "xml_tree_json",
     "mineru",
     "dots_ocr",
@@ -61,6 +63,12 @@ ADAPTER_PACKAGES: dict[ParserAdapterName, ParserAdapterPackageSpec] = {
         distribution_names=("unstructured",),
         install_package="unstructured[all-docs]==0.23.1",
     ),
+    # rag_parser_core だけで動く解析(rag_parser_core.structured_records。#2457)。
+    "structured_records_jsonl": ParserAdapterPackageSpec(
+        import_name="rag_parser_core",
+        distribution_names=("rag-parser-core",),
+        install_package="rag-parser-core",
+    ),
     # 標準ライブラリだけで動く解析(rag_parser_core.xml_tree_json。#2024)。
     "xml_tree_json": ParserAdapterPackageSpec(
         import_name="rag_parser_core",
@@ -83,6 +91,7 @@ ADAPTER_PACKAGES: dict[ParserAdapterName, ParserAdapterPackageSpec] = {
 ADAPTER_ORDER: tuple[ParserAdapterName, ...] = (
     "docling",
     "unstructured",
+    "structured_records_jsonl",
     "xml_tree_json",
     "mineru",
     "dots_ocr",
@@ -91,6 +100,7 @@ ADAPTER_BACKENDS: tuple[ParserAdapterBackend, ...] = (
     "local",
     "docling",
     "unstructured",
+    "structured_records_jsonl",
     "xml_tree_json",
     "mineru",
     "dots_ocr",

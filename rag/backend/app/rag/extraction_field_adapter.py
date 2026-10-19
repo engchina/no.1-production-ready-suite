@@ -29,6 +29,7 @@ from typing import Literal
 from pr_backend_core.bounded_calls import BoundedCallAborted
 from pydantic import BaseModel, Field, field_validator
 from rag_parser_core.language import current_pack
+from rag_parser_core.structured_records import record_boundary_plain_text
 
 from app.config import BACKEND_ROOT
 from app.schemas.extraction import DocumentElement, ExtractionField, StructuredExtraction
@@ -363,7 +364,8 @@ async def extract_fields_from_extraction(
     呼び出しの実行器が止めると決めた失敗(権限・設定の誤り・割り当ての使い切り。#2002)は
     据え置かずに出す。
     """
-    text = extraction.raw_text.strip()
+    # 構造化レコード JSONL の記録の境界のマーカー(#2457)は LLM に渡さない。
+    text = record_boundary_plain_text(extraction).strip()
     if not field_defs or not text:
         return extraction
     try:

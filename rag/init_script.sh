@@ -92,13 +92,14 @@ ALLOWED_RAG_SERVICES=(
   preprocess-pii-redact
   parser-docling
   parser-unstructured
+  parser-structured-records-jsonl
   parser-xml-tree-json
   parser-oci-document-understanding
 )
-# 必ず配備する parser（既定の解析エンジンの Docling と、使用エンジンに選べる XML ツリー JSON）。
-# rag_services.txt に無ければ足す（以前の stack が書いた一覧でも、再配備で unit が入る。XML ツリー JSON は
-# 既定は停止のサービスで、初回は起動しない。#2453）。
-REQUIRED_RAG_SERVICES=(parser-docling parser-xml-tree-json)
+# 必ず配備する parser（既定の解析エンジンの Docling と、使用エンジンに選べる構造化レコード JSONL・XML ツリー JSON）。
+# rag_services.txt に無ければ足す（以前の stack が書いた一覧でも、再配備で unit が入る。構造化レコード JSONL は
+# CSV / Excel の前処理と同じく起動する（#2457）。XML ツリー JSON は既定は停止のサービスで、初回は起動しない。#2453）。
+REQUIRED_RAG_SERVICES=(parser-docling parser-structured-records-jsonl parser-xml-tree-json)
 RAG_SERVICES=()
 
 PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"

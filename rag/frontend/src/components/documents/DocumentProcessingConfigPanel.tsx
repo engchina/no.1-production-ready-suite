@@ -69,6 +69,7 @@ function emptyConfig(): DocumentProcessingConfig {
     parser_unstructured_enabled: null,
     parser_mineru_enabled: null,
     parser_dots_ocr_enabled: null,
+    parser_structured_records_jsonl_enabled: null,
     parser_xml_tree_json_enabled: null,
     vision_enabled: null,
     heading_level_inference_enabled: null,

@@ -70,10 +70,14 @@ from rag_parser_core.source import (
     template_for_source_profile,
 )
 from rag_parser_core.structured_records import (
+    STRUCTURED_RECORDS_JSONL_BACKEND,
+    STRUCTURED_RECORDS_JSONL_PARSER_VERSION,
     StructuredRecordsError,
     is_structured_records_content_type,
+    oversized_record_line,
     parse_structured_records,
     structured_records_extraction,
+    with_record_boundaries,
 )
 
 # 共有 contract 型・定数は result.py(軽量)へ移設済み。registry は実装専用とし、backend が
@@ -931,6 +935,10 @@ def _external_adapter_result(
     content_type: str,
 ) -> ParserRegistryResult:
     """任意 parser adapter を呼び出し、失敗時は fallback 用 warning だけ返す。"""
+    if backend == STRUCTURED_RECORDS_JSONL_BACKEND:
+        # 構造化レコード JSONL の解析（#2457）。content type に関係なく JSONL の契約で読む
+        # （契約に合わない入力は診断で止める。任意の JSONL を構造化レコードとみなさない）。
+        return _structured_records_jsonl_result(source_bytes)
     if is_structured_records_content_type(content_type):
         # 前処理（csv_to_json / excel_to_json）が作った構造化レコードの JSONL は、どの adapter
         # でも外部の parser に渡さず、1 記録 1 要素にする（行・セルの場所を chunk まで残す。
@@ -1150,6 +1158,39 @@ def _structured_records_result(
         parser_backend=backend,
         parser_version=STRUCTURED_RECORDS_PARSER_VERSION,
         template=template,
+    )
+
+
+def _structured_records_jsonl_result(source_bytes: bytes) -> ParserRegistryResult:
+    """構造化レコード JSONL を、記録を 1 要素にし境界で区切った抽出にする（#2457）。
+
+    要素は Docling / Unstructured の記録の経路と同じ（`structured_records_extraction`）。raw_text は
+    記録の本文を境界のマーカーで区切った検索用テキストにする（`with_record_boundaries`）。
+    契約に合わない・本文が 1 要素の上限を超える記録があれば、黙って切らずに
+    ``structured_records_invalid:<理由>@line<n>`` の fallback を返す（backend は取込を止める）。
+    """
+    backend = STRUCTURED_RECORDS_JSONL_BACKEND
+    document = parse_structured_records(source_bytes)
+    if isinstance(document, StructuredRecordsError):
+        return _adapter_fallback_result(backend, document.warning())
+    oversized = oversized_record_line(document)
+    if oversized is not None:
+        return _adapter_fallback_result(
+            backend, StructuredRecordsError("record_too_large", oversized).warning()
+        )
+    extraction = with_record_boundaries(
+        structured_records_extraction(
+            document,
+            source_parser=backend,
+            parser_backend=backend,
+            parser_version=STRUCTURED_RECORDS_JSONL_PARSER_VERSION,
+        )
+    )
+    return ParserRegistryResult(
+        extraction=extraction,
+        parser_backend=backend,
+        parser_version=STRUCTURED_RECORDS_JSONL_PARSER_VERSION,
+        template=backend,
     )
 
 

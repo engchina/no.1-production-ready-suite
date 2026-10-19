@@ -207,6 +207,9 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(items.locator('[data-config-field="field_extraction_enabled"]')).toContainText("無効");
     // XML ツリー JSON は使用エンジンの 1 つで、別の項目を持たない（#2042）。
     await expect(items.locator('[data-config-field="parser_xml_tree_json_enabled"]')).toHaveCount(0);
+    await expect(
+      items.locator('[data-config-field="parser_structured_records_jsonl_enabled"]')
+    ).toHaveCount(0);
 
     // 各項目から、その全体の既定を変える画面へ移動できる。
     await expect(

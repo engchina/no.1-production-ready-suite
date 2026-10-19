@@ -42,13 +42,22 @@ def _pdf_profile() -> SourceProfile:
 def test_gpu_ocr_engines_are_registered_candidates() -> None:
     assert "mineru" in ADAPTER_PACKAGES
     assert "dots_ocr" in ADAPTER_PACKAGES
-    assert ADAPTER_ORDER == ("docling", "unstructured", "xml_tree_json", "mineru", "dots_ocr")
-    # xml_tree_json は Docling・Unstructured と同じ使用エンジン(#2042)。
+    # 構造化レコード JSONL は Unstructured の後、XML ツリー JSON の前(#2457)。
+    assert ADAPTER_ORDER == (
+        "docling",
+        "unstructured",
+        "structured_records_jsonl",
+        "xml_tree_json",
+        "mineru",
+        "dots_ocr",
+    )
+    # xml_tree_json・structured_records_jsonl は Docling・Unstructured と同じ使用エンジン(#2042)。
     assert set(EXTERNAL_ADAPTER_PACKAGES) == {
         "docling",
         "unstructured",
         "mineru",
         "dots_ocr",
+        "structured_records_jsonl",
         "xml_tree_json",
     }
 

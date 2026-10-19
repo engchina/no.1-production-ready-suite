@@ -100,6 +100,14 @@ ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
             | _OPENXML_EXTENSIONS
         ),
     ),
+    # 構造化レコード JSONL(#2457)。使用エンジンで選んだときだけ使う(形式で自動には回さない)。
+    # 前処理(csv_to_json / excel_to_json)の成果物と、契約どおりの .jsonl を受ける。契約に合わない
+    # 入力は、解析のサービスが ``structured_records_invalid:<理由>@line<n>`` を返して取込を止める。
+    "structured_records_jsonl": ParserBackendCapability(
+        modalities=frozenset(),
+        extensions=frozenset({".jsonl"}),
+        content_types=frozenset({STRUCTURED_RECORDS_CONTENT_TYPE}),
+    ),
     # XML ツリー JSON(#2024・#2042)。使用エンジンで選んだときだけ使う(形式で自動には回さない)。
     # modality を持たない(source kind の経路の候補に入らない)。対応しない形の JSON は、解析の
     # サービスが ``xml_tree_json_unsupported_tree`` を返して取込を止める。
@@ -153,7 +161,7 @@ def is_audio_source(source_profile: SourceProfile | None, content_type: str) -> 
 
 
 # 前処理の構造化レコードの JSONL を受け付ける parser のサービス（#1221・#2457）。
-STRUCTURED_RECORDS_BACKENDS = frozenset({"docling", "unstructured"})
+STRUCTURED_RECORDS_BACKENDS = frozenset({"docling", "unstructured", "structured_records_jsonl"})
 
 
 def adapter_supports_source(

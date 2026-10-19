@@ -74,6 +74,7 @@ type ParserAdapterForm = {
   unstructured_enabled: boolean;
   mineru_enabled: boolean;
   dots_ocr_enabled: boolean;
+  structured_records_jsonl_enabled: boolean;
   xml_tree_json_enabled: boolean;
   connections: Record<ExternalParserBackendName, ExternalParserConnectionForm>;
 };
@@ -97,6 +98,7 @@ const EXTERNAL_CONNECTION_MAX_LENGTH = { endpoint: 2048, model: 512, apiKey: 409
 const ADAPTER_FLAG_FIELDS: Record<ParserAdapterBackendName, ParserAdapterFlagField> = {
   docling: "docling_enabled",
   unstructured: "unstructured_enabled",
+  structured_records_jsonl: "structured_records_jsonl_enabled",
   xml_tree_json: "xml_tree_json_enabled",
   mineru: "mineru_enabled",
   dots_ocr: "dots_ocr_enabled",
@@ -109,6 +111,7 @@ const PARSER_BACKEND_SERVICE_IDS: Partial<
 > = {
   docling: "parser-docling",
   unstructured: "parser-unstructured",
+  structured_records_jsonl: "parser-structured-records-jsonl",
   xml_tree_json: "parser-xml-tree-json",
   oci_document_understanding: "parser-oci-document-understanding",
 };
@@ -292,8 +295,8 @@ function OverviewCard({
     [settings]
   );
   // CPU → OCI → GPU の順（サービス管理の節と同じ。#2042）。1 つの 2 列の grid に並べ、
-  // 375px の 1 列でも同じ順にする（Docling・Unstructured / XML ツリー JSON・OCI Document
-  // Understanding / MinerU・Dots.OCR）。
+  // 375px の 1 列でも同じ順にする（Docling・Unstructured / 構造化レコード JSONL・XML ツリー JSON /
+  // OCI Document Understanding / MinerU・Dots.OCR。#2457）。
   const orderedBackends = useMemo(
     () =>
       SERVICE_PROFILE_ORDER.flatMap((profile) =>
@@ -799,6 +802,8 @@ function RuntimeFact({ label, value }: { label: string; value: string }) {
 function adapterLabel(adapter: ParserAdapterBackendName) {
   if (adapter === "docling") return "Docling";
   if (adapter === "unstructured") return "Unstructured";
+  if (adapter === "structured_records_jsonl")
+    return t("settings.parserAdapters.backend.structured_records_jsonl");
   if (adapter === "xml_tree_json") return t("settings.parserAdapters.backend.xml_tree_json");
   if (adapter === "mineru") return "MinerU";
   return "Dots.OCR";
@@ -861,6 +866,7 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
     unstructured_enabled: enabledByBackend.get("unstructured") ?? false,
     mineru_enabled: enabledByBackend.get("mineru") ?? false,
     dots_ocr_enabled: enabledByBackend.get("dots_ocr") ?? false,
+    structured_records_jsonl_enabled: enabledByBackend.get("structured_records_jsonl") ?? false,
     xml_tree_json_enabled: enabledByBackend.get("xml_tree_json") ?? false,
     connections: Object.fromEntries(
       EXTERNAL_BACKENDS.map((backend) => {
@@ -903,6 +909,7 @@ function serializeForm(form: ParserAdapterForm) {
     unstructured_enabled: form.unstructured_enabled,
     mineru_enabled: form.mineru_enabled,
     dots_ocr_enabled: form.dots_ocr_enabled,
+    structured_records_jsonl_enabled: form.structured_records_jsonl_enabled,
     xml_tree_json_enabled: form.xml_tree_json_enabled,
     connections: form.connections,
   });
@@ -915,6 +922,7 @@ function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpd
     unstructured_enabled: form.unstructured_enabled,
     mineru_enabled: form.mineru_enabled,
     dots_ocr_enabled: form.dots_ocr_enabled,
+    structured_records_jsonl_enabled: form.structured_records_jsonl_enabled,
     xml_tree_json_enabled: form.xml_tree_json_enabled,
     connections: EXTERNAL_BACKENDS.map((backend) => {
       const connection = form.connections[backend];

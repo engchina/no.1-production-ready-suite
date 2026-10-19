@@ -113,6 +113,7 @@ from app.schemas.document import DocumentProcessingConfig
 ParserAdapterBackendName = Literal[
     "docling",
     "unstructured",
+    "structured_records_jsonl",
     "xml_tree_json",
     "mineru",
     "dots_ocr",
@@ -440,6 +441,7 @@ class ParserAdapterSettingsUpdate(BaseModel):
     unstructured_enabled: bool | None = None
     mineru_enabled: bool | None = None
     dots_ocr_enabled: bool | None = None
+    structured_records_jsonl_enabled: bool | None = None
     xml_tree_json_enabled: bool | None = None
     connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=2)
     vision_enabled: bool | None = None

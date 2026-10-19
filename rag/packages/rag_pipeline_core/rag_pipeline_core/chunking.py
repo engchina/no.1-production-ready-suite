@@ -13,6 +13,13 @@ from rag_parser_core.extraction import (
     numbered_heading,
 )
 from rag_parser_core.language.text import text_patterns
+from rag_parser_core.structured_records import (
+    STRUCTURED_RECORD_ID_KEY,
+    RecordBoundaryError,
+    has_record_boundaries,
+    record_boundary_plain_text,
+    split_record_boundary_text,
+)
 from rag_parser_core.xml_tree_json import (
     XML_TREE_LOOKUP_KEYS_KEY,
     XML_TREE_METADATA_PREFIX,
@@ -442,7 +449,13 @@ def _chunk_fixed_delimiter(
     *,
     delimiter: str,
 ) -> list[Chunk]:
-    """指定された固定分割符で全文を機械的に分割する。分割符自体は chunk に残さない。"""
+    """指定された固定分割符で全文を機械的に分割する。分割符自体は chunk に残さない。
+
+    構造化レコード JSONL の解析の抽出(raw_text が記録の境界で区切られている。#2457)は、
+    分割符の設定に関係なく記録の境界で 1 記録 1 chunk にする(`_chunk_structured_records`)。
+    """
+    if has_record_boundaries(extraction):
+        return _chunk_structured_records(extraction)
     source = _raw_text_with_table_vision(extraction).replace("\r\n", "\n").replace("\r", "\n")
     resolved_delimiter = (
         decode_fixed_delimiter(delimiter or _DEFAULT_FIXED_DELIMITER)
@@ -472,6 +485,79 @@ def _chunk_fixed_delimiter(
                 )
             )
         cursor += len(part) + len(resolved_delimiter)
+    return [_with_chunk_metadata(chunk) for chunk in chunks]
+
+
+# 記録の要素の metadata のうち、chunk に引き継ぐもの(場所・列の役割・記録の ID。#2457)。
+_STRUCTURED_RECORD_METADATA_KEYS: tuple[str, ...] = (
+    STRUCTURED_RECORD_ID_KEY,
+    "sheet_name",
+    "row_start",
+    "row_end",
+    "cell_range",
+    "header_row",
+    "csv_header_row",
+    "sheet_block_kind",
+    "sheet_column_roles",
+    "record_kind",
+)
+
+
+def _chunk_structured_records(extraction: StructuredExtraction) -> list[Chunk]:
+    """記録の境界で区切った検索用テキストを、1 記録 1 chunk にする(#2457)。
+
+    chunk の本文はエスケープを戻した原文で、境界のマーカーと境界の改行を含まない。記録の要素
+    (``structured_record_id`` を持つ要素。順番どおり)の metadata(シート・行・セル範囲・列の役割・
+    記録の ID)を chunk に引き継ぐ。chunk size / overlap で再分割・結合しない。境界の数が記録の数
+    − 1 と合わない・境界が壊れている・本文が chunk の上限を超えるときは `RecordBoundaryError` で
+    止める(黙って結合・切り捨てをしない)。一記録で境界が無いのは正常。
+    """
+    records = [
+        element
+        for element in extraction.elements
+        if element.metadata.get(STRUCTURED_RECORD_ID_KEY) and element.text.strip()
+    ]
+    if not records:
+        return []
+    parts = split_record_boundary_text(extraction.raw_text)
+    if len(parts) != len(records):
+        raise RecordBoundaryError(
+            "boundary_count_mismatch",
+            f"boundaries={len(parts) - 1} records={len(records)}",
+        )
+    chunks: list[Chunk] = []
+    for part, element in zip(parts, records, strict=True):
+        if len(part.text) > CHUNK_SIZE_MAX_CHARS:
+            raise RecordBoundaryError(
+                "record_too_large",
+                f"record={element.metadata[STRUCTURED_RECORD_ID_KEY]} chars={len(part.text)}",
+            )
+        span = _element_spans([element])[0]
+        metadata: ChunkMetadata = {
+            **_span_group_metadata([span]),
+            **{
+                key: value
+                for key in _STRUCTURED_RECORD_METADATA_KEYS
+                if isinstance(value := element.metadata.get(key), str | int | float | bool)
+            },
+            "chunk_fixed_delimiter": True,
+            "chunk_record_boundary": True,
+        }
+        chunks.extend(
+            _with_chunk_group_metadata(
+                [
+                    Chunk(
+                        text=part.text,
+                        index=len(chunks),
+                        start_offset=part.start_offset,
+                        end_offset=part.end_offset,
+                        metadata=metadata,
+                    )
+                ],
+                group_kind=SHEET_RECORD_GROUP_KIND,
+                group_text=part.text,
+            )
+        )
     return [_with_chunk_metadata(chunk) for chunk in chunks]
 
 
@@ -907,7 +993,9 @@ def _raw_text_with_table_vision(extraction: StructuredExtraction) -> str:
     要素の直前の要素の後ろに補足だけを入れる。Docling 以外は Vision の段が表の本文と raw_text へ
     補足を足しているので、raw_text に説明文がある表は入れない。保存する抽出結果は変えない。
     """
-    raw_text = extraction.raw_text
+    # 構造化レコード JSONL の解析の境界のマーカー(#2457)は、raw_text を分割する方法の chunk に
+    # 残さない(エスケープを戻した原文を記録ごとに改行でつなぐ)。
+    raw_text = record_boundary_plain_text(extraction)
     if not any(_pending_table_vision_supplement(element) for element in extraction.elements):
         return raw_text
     cursor = 0

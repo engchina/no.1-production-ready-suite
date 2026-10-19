@@ -226,6 +226,7 @@ export type ParserAdapterBackend =
   | "local"
   | "docling"
   | "unstructured"
+  | "structured_records_jsonl"
   | "xml_tree_json"
   | "mineru"
   | "dots_ocr"
@@ -234,6 +235,7 @@ export type ParserServiceBackendName = "oci_document_understanding";
 export type ParserAdapterBackendName =
   | "docling"
   | "unstructured"
+  | "structured_records_jsonl"
   | "xml_tree_json"
   | "mineru"
   | "dots_ocr";
@@ -967,6 +969,7 @@ export interface KnowledgeBaseIngestionConfig {
   parser_unstructured_enabled: boolean | null;
   parser_mineru_enabled: boolean | null;
   parser_dots_ocr_enabled: boolean | null;
+  parser_structured_records_jsonl_enabled?: boolean | null;
   parser_xml_tree_json_enabled?: boolean | null;
   /** 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく使える(#497)。 */
   vision_enabled: boolean | null;
@@ -2219,6 +2222,7 @@ export interface ParserAdapterSettingsUpdate {
   unstructured_enabled?: boolean;
   mineru_enabled?: boolean;
   dots_ocr_enabled?: boolean;
+  structured_records_jsonl_enabled?: boolean;
   xml_tree_json_enabled?: boolean;
   connections?: ExternalParserConnectionUpdate[];
   vision_enabled?: boolean;

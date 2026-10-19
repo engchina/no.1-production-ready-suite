@@ -277,7 +277,13 @@ class SheetRecordsDocument(BaseModel):
     skipped_sheets: list[SkippedSheet] = Field(default_factory=list)
 
 
-def _block_text(block: SheetBlock, roles: Mapping[str, str] | None = None) -> str:
+def _block_text(
+    block: SheetBlock,
+    roles: Mapping[str, str] | None = None,
+    *,
+    max_chars: int | None = _BLOCK_TEXT_MAX_CHARS,
+) -> str:
+    """記録の本文（``max_chars`` が None なら切らない。大きさの判定に使う）。"""
     if block.kind == "procedure_step":
         # 手順の行は前処理が役割の表示を付けた列名で作る。
         text = "\n".join(line for line in block.lines if line.strip())
@@ -288,7 +294,7 @@ def _block_text(block: SheetBlock, roles: Mapping[str, str] | None = None) -> st
             for name, value in block.values.items()
             if value.strip()
         )
-    return text[:_BLOCK_TEXT_MAX_CHARS]
+    return text if max_chars is None else text[:max_chars]
 
 
 def _column_roles_metadata(roles: Mapping[str, str]) -> str | None:

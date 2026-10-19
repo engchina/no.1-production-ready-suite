@@ -128,8 +128,17 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert by_backend["dots_ocr"]["status"] == "disabled"
     # XML ツリー JSON は Docling・Unstructured と同じ使用エンジン(#2042)。
     assert by_backend["xml_tree_json"]["status"] == "disabled"
-    # 削除したエンジン(#270・#2042)は画面の選択肢・接続・対応形式に出さない。
-    assert list(by_backend) == ["docling", "unstructured", "xml_tree_json", "mineru", "dots_ocr"]
+    assert by_backend["structured_records_jsonl"]["status"] == "disabled"
+    # 削除したエンジン(#270・#2042)は画面の選択肢・接続・対応形式に出さない。構造化レコード JSONL は
+    # Unstructured の後、XML ツリー JSON の前(#2457)。
+    assert list(by_backend) == [
+        "docling",
+        "unstructured",
+        "structured_records_jsonl",
+        "xml_tree_json",
+        "mineru",
+        "dots_ocr",
+    ]
     assert "source_format_parsers" not in body
     assert body["scorecard"]["selected_backend"] == "local"
     assert body["scorecard"]["recommended_backend"] == "local"
@@ -156,6 +165,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     for removed in ("marker", "unlimited_ocr", "glm_ocr", "oci_genai_vision", "enterprise_ai_vlm"):
         assert removed not in capability_by_backend
     assert capability_by_backend["xml_tree_json"]["extensions"] == [".json"]
+    assert capability_by_backend["structured_records_jsonl"]["extensions"] == [".jsonl"]
     assert capability_by_backend["oci_document_understanding"]["modalities"] == [
         "pdf",
         "image",
