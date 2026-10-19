@@ -45,6 +45,7 @@ import {
   steppedZoom,
 } from "../../lib/preview-viewer";
 import { cn } from "../../lib/utils";
+import { ProcessingIndicator } from "../feedback/processing-state";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
 import { DEFAULT_DOCUMENT_PREVIEW_LABELS, type DocumentPreviewLabels } from "./labels";
@@ -657,7 +658,11 @@ export function PreviewViewer({
                     draggable={false}
                     // 署名つきの URL（Agent の根拠のパネル。#2389）でも、Referer で画面の URL を渡さない。
                     referrerPolicy="no-referrer"
-                    className="absolute inset-0 h-full w-full select-none object-contain"
+                    // 読み込みが終わるまで描きかけの画像を見せない（点滅する灰色の面から透けてちらつく。#2474）。
+                    className={cn(
+                      "absolute inset-0 h-full w-full select-none object-contain transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                      loaded ? "opacity-100" : "opacity-0"
+                    )}
                     onLoad={(event) => {
                       const image = event.currentTarget;
                       setLoadedSources((current) =>
@@ -674,7 +679,7 @@ export function PreviewViewer({
                   />
                 )}
                 {!loaded && !failed ? (
-                  <Skeleton className="absolute inset-0 h-full w-full" aria-hidden />
+                  <Skeleton className="absolute inset-0 h-full w-full" testId="preview-page-skeleton" />
                 ) : null}
                 {rects.map((item) => (
                   <span
@@ -695,6 +700,20 @@ export function PreviewViewer({
                   />
                 ))}
               </div>
+              {/* 読み込み中の表示はほかの読み込み中と同じ部品（Spinner・文言・経過時間）。回したページの外に置き、
+                  文字は回さない（#2474）。 */}
+              {!loaded && !failed ? (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-3">
+                  <div className="max-w-full rounded-md border border-border bg-surface px-3 py-2 shadow-sm">
+                    <ProcessingIndicator
+                      active
+                      label={labels.pageLoading}
+                      operationKey={`page:${pageNumber}`}
+                      testId="preview-page-loading"
+                    />
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : (
             <Skeleton className="m-auto h-full min-h-40 w-full" aria-hidden />
