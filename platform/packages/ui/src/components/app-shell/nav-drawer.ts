@@ -62,11 +62,29 @@ export function useNavDrawerMode(): boolean {
 }
 
 const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), details > summary:first-of-type, [tabindex]:not([tabindex="-1"])';
 
-/** ドロワーの中で Tab が止まる要素（畳んだナビのセクションは `inert` なので除く）。 */
+/**
+ * 閉じた `<details>` の中身か（見出しの `<summary>` の外。描かれないので Tab が止まらない）。入れ子の `<details>` も
+ * 外側まで確かめる。
+ */
+function hiddenInClosedDetails(element: HTMLElement): boolean {
+  for (let details = element.closest("details"); details; details = details.parentElement?.closest("details") ?? null) {
+    if (details.open) continue;
+    const summary = details.querySelector(":scope > summary");
+    if (!summary?.contains(element)) return true;
+  }
+  return false;
+}
+
+/**
+ * ドロワー・シートの中で Tab が止まる要素（畳んだナビのセクションは `inert` なので除く）。開閉の見出し（`<summary>`）を
+ * 含め、閉じた開閉の中身は除く（無いと、見出しから Tab で次へ移れず先頭へ戻る。#2512）。
+ */
 export function focusableIn(root: HTMLElement): HTMLElement[] {
-  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((element) => !element.closest("[inert]"));
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+    (element) => !element.closest("[inert]") && !hiddenInClosedDetails(element)
+  );
 }
 
 export type NavDrawerKeyAction = { type: "close" } | { type: "focus"; index: number } | null;

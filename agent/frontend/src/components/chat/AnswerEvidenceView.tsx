@@ -91,6 +91,7 @@ function EvidenceSource({
           documentId={entry.documentId}
           chunkId={entry.chunkId}
           fileName={entry.item.fileName}
+          quote={entry.item.text}
           open={open}
         />
       ) : null}

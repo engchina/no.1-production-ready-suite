@@ -1,7 +1,8 @@
 import { BookOpen, ExternalLink, FileText, History, LocateFixed, type LucideIcon } from "lucide-react";
-import { useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { excerptPlainText } from "../../lib/excerpt-text";
+import { INFORMATION_TABLE_FOCUS_CLASS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
 import { ExcerptContent } from "../data/excerpt-content";
 import { StatusBadge } from "../data/status-badge";
@@ -312,8 +313,10 @@ function EvidenceSummaryBody({
             data-testid="evidence-excerpt-details"
             summaryProps={{ "data-testid": "evidence-excerpt-toggle" }}
           >
-            <EvidenceExcerpt text={item.text} labels={labels} />
-            <EvidenceMetadata item={item} labels={labels} />
+            <EvidenceExcerptScroll label={labels.excerptDetails}>
+              <EvidenceExcerpt text={item.text} labels={labels} />
+              <EvidenceMetadata item={item} labels={labels} />
+            </EvidenceExcerptScroll>
           </Disclosure>
         ) : (
           <>
@@ -323,6 +326,58 @@ function EvidenceSummaryBody({
         )}
       </div>
       <EvidenceScores score={item.score} rerankScore={item.rerankScore} labels={labels} />
+    </div>
+  );
+}
+
+/**
+ * パネルの「抜粋と頁・章節」の中身の入れ物（#2512）。開いたときだけ描かれ、高さの上限（sm 以上はパネルの約 3 割・
+ * sm 未満は約 2 割。要約の全体でパネルの 4 割ほど）を超えた分はこの中でスクロールする（下の原文のプレビューを
+ * 押し出さない）。あふれている間は、Tab で届き（矢印キーで動かせる）、下端のフェードで続きがあることを示す。
+ */
+function EvidenceExcerptScroll({ label, children }: { label: string; children: ReactNode }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [overflowing, setOverflowing] = useState(false);
+  const [atEnd, setAtEnd] = useState(true);
+  const measure = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    setOverflowing(element.scrollHeight > element.clientHeight + 1);
+    setAtEnd(element.scrollTop + element.clientHeight >= element.scrollHeight - 1);
+  }, []);
+  useEffect(() => {
+    measure();
+    const element = scrollRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(element);
+    if (element.firstElementChild) observer.observe(element.firstElementChild);
+    return () => observer.disconnect();
+  }, [measure]);
+  return (
+    <div
+      ref={scrollRef}
+      role="region"
+      aria-label={label}
+      tabIndex={overflowing ? 0 : undefined}
+      onScroll={measure}
+      className={cn(
+        "relative max-h-[18dvh] overflow-y-auto pr-1 [scrollbar-gutter:stable] sm:max-h-[min(20rem,28dvh)]",
+        INFORMATION_TABLE_FOCUS_CLASS
+      )}
+      data-overflowing={overflowing ? "true" : "false"}
+      data-testid="evidence-excerpt-scroll"
+    >
+      <div>{children}</div>
+      {/* 続きがあるときだけ、下端を面の色へ溶かす（読み上げには出さない）。 */}
+      <div
+        aria-hidden
+        className={cn(
+          "pointer-events-none sticky bottom-0 -mt-8 h-8 bg-gradient-to-t from-surface to-transparent transition-opacity",
+          overflowing && !atEnd ? "opacity-100" : "opacity-0"
+        )}
+        data-testid="evidence-excerpt-fade"
+      />
     </div>
   );
 }
@@ -689,7 +744,8 @@ export function EvidenceSourceSheet({
           {hasPreview ? (
             <section
               aria-label={labels.sourcePreview}
-              className="flex min-h-[24rem] flex-1 flex-col sm:min-h-[32rem]"
+              // 抜粋を開いても押し出されないよう、下限は画面の高さに合わせて小さくする（残りの高さはすべて使う。#2512）。
+              className="flex min-h-[min(24rem,45dvh)] flex-1 flex-col sm:min-h-[min(32rem,55dvh)]"
               data-testid="evidence-source-preview"
             >
               {children}

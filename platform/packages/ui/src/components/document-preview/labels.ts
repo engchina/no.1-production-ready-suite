@@ -31,6 +31,8 @@ export interface DocumentPreviewLabels {
   pageLoading: string;
   pageError: string;
   textLoading: string;
+  /** テキストのプレビューで、引用した箇所を見つけて強調したときの案内（#2512）。 */
+  textHighlightStatus: string;
   fetchError: string;
   retry: string;
   /** ページの画像を描けないとき（iframe・テキスト）の位置の案内。値は % の文字列。 */
@@ -70,6 +72,7 @@ export function documentPreviewLabels(overrides: Partial<DocumentPreviewLabels> 
     pageLoading: "ページを読み込んでいます",
     pageError: "このページの画像を表示できませんでした。",
     textLoading: "テキストを読み込んでいます",
+    textHighlightStatus: "引用した箇所を強調しています",
     fetchError: "プレビューを取得できませんでした。",
     retry: "再試行",
     bboxFocus: ({ page, x, y, width, height }) => `位置: p.${page} / bbox x=${x}% y=${y}% w=${width}% h=${height}%`,
