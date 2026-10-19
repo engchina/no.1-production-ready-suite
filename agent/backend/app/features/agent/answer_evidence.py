@@ -13,16 +13,29 @@
   （`supported`）根拠。
 - 回答での使われ方（`answer_use`。該当確認済み / 参考）は、回答で引用した根拠に、
   RAG が同じ根拠に付けた値があれば残す。
+- 会話の添付の根拠（#2554）: 添付を読むツール（`chat_attachment_read_section` /
+  `chat_attachment_read_rows` / `chat_attachment_find`）が返した節・行・一致した箇所。
+  `document_id` は `attachment:<添付の ID>`（RAG の文書ではないので、根拠の原文・図を
+  開く確かめ（`passed_evidence`）には入れない）。添付は最終の検証の対象外で根拠の ID の
+  印も無いため、回答で引用は回答がその添付のファイル名を書いたときに付ける。
 
 内容は画面と MCP が読む形（RAG の MCP の根拠の項目の一部と `cited`）。本文の抜粋は
-RAG が返した長さのまま。
+RAG が返した長さのまま（添付は `ATTACHMENT_EXCERPT_CHARACTERS` まで）。
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
+
+from pr_system_settings.chat_attachments.tools import (
+    FIND_TOOL_NAME,
+    LIST_TOOL_NAME,
+    READ_ROWS_TOOL_NAME,
+    READ_SECTION_TOOL_NAME,
+)
 
 from app.features.agent.answer_passages import passage_spans
 from app.features.agent.answer_validation import STATUS_COMPLETED, cited_chunk_ids
@@ -41,6 +54,11 @@ ANSWER_EVIDENCE_NAME = "回答の根拠"
 EVIDENCE_LIST_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 # 1 つの Run の根拠の上限（画面の一覧と成果物の大きさ）。
 MAX_ANSWER_EVIDENCE = 200
+# 会話の添付の根拠（#2554）。
+ATTACHMENT_DOCUMENT_PREFIX = "attachment:"
+ATTACHMENT_EVIDENCE_TYPE = "chat_attachment"
+# 添付の根拠の抜粋の上限（節は 1 回に 8000 文字まで読めるので、画面と成果物では縮める）。
+ATTACHMENT_EXCERPT_CHARACTERS = 2_000
 _ANSWER_USES = frozenset({"confirmed", "reference"})
 # RAG の根拠の項目のうち、そのまま写すもの。
 _COPIED_FIELDS = (
@@ -57,6 +75,7 @@ _COPIED_FIELDS = (
     "score",
     "rerank_score",
     "superseded",
+    "chat_attachment_id",
 )
 
 
@@ -94,6 +113,194 @@ def passed_evidence(steps: Sequence[RunStep]) -> list[JsonObject]:
             if len(items) < MAX_ANSWER_EVIDENCE:
                 items[(document_id, chunk_id)] = dict(item)
     return list(items.values())
+
+
+def _completed_outputs(steps: Sequence[RunStep], names: frozenset[str]) -> list[tuple[str, Any]]:
+    outputs: list[tuple[str, Any]] = []
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or not result.success or step.status != "completed":
+            continue
+        if call.name in names:
+            outputs.append((call.name, result.output))
+    return outputs
+
+
+def _excerpt(text: str) -> tuple[str, bool]:
+    if len(text) <= ATTACHMENT_EXCERPT_CHARACTERS:
+        return text, False
+    return text[:ATTACHMENT_EXCERPT_CHARACTERS], True
+
+
+def _row_line(values: Any) -> str:
+    if not isinstance(values, Mapping):
+        return ""
+    return " / ".join(f"{column}: {value}" for column, value in values.items() if value is not None)
+
+
+def _attachment_item(
+    attachment_id: str,
+    file_name: str,
+    chunk_id: str,
+    text: str,
+    *,
+    locator: JsonObject,
+    section_title: str | None = None,
+    content_kind: str,
+) -> JsonObject:
+    excerpt, truncated = _excerpt(text)
+    item: JsonObject = {
+        "document_id": f"{ATTACHMENT_DOCUMENT_PREFIX}{attachment_id}",
+        "chunk_id": chunk_id,
+        "file_name": file_name,
+        "excerpt": excerpt,
+        "truncated": truncated,
+        "locator": locator,
+        "content_kind": content_kind,
+        "evidence_type": ATTACHMENT_EVIDENCE_TYPE,
+        "chat_attachment_id": attachment_id,
+    }
+    # PDF の節の見出しは「p.N」（頁と同じ）なので、頁があれば見出しに重ねない。
+    if section_title and section_title != f"p.{locator.get('page_start')}":
+        item["section"] = {"title": section_title}
+    return item
+
+
+def _section_locator(page: Any) -> JsonObject:
+    if isinstance(page, int) and not isinstance(page, bool) and page > 0:
+        return {"page_start": page, "page_end": page}
+    return {}
+
+
+def _rows_locator(sheet: str, start: int, end: int) -> JsonObject:
+    return {"sheet_name": sheet, "row_start": start, "row_end": end}
+
+
+def attachment_evidence(steps: Sequence[RunStep]) -> list[JsonObject]:
+    """その Run で添付を読むツールが返した根拠（#2554。節・行の範囲で重複なし、出てきた順）。
+
+    `chat_attachment_find` の結果は頁・見出しを返さないので、同じ Run の
+    `chat_attachment_list` の節から引く。
+    """
+    sections: dict[tuple[str, str], tuple[str | None, Any]] = {}
+    for _name, output in _completed_outputs(steps, frozenset({LIST_TOOL_NAME})):
+        attachments = output.get("attachments") if isinstance(output, Mapping) else None
+        for attachment in attachments if isinstance(attachments, list) else []:
+            if not isinstance(attachment, Mapping):
+                continue
+            for section in attachment.get("sections") or []:
+                if isinstance(section, Mapping):
+                    sections[
+                        (str(attachment.get("attachment_id")), str(section.get("section_id")))
+                    ] = (
+                        section.get("title") if isinstance(section.get("title"), str) else None,
+                        section.get("page"),
+                    )
+    items: dict[str, JsonObject] = {}
+
+    def add(item: JsonObject) -> None:
+        if item["chunk_id"] not in items and len(items) < MAX_ANSWER_EVIDENCE:
+            items[item["chunk_id"]] = item
+
+    read_tools = frozenset({READ_SECTION_TOOL_NAME, READ_ROWS_TOOL_NAME, FIND_TOOL_NAME})
+    for name, output in _completed_outputs(steps, read_tools):
+        if not isinstance(output, Mapping):
+            continue
+        if name == READ_SECTION_TOOL_NAME:
+            attachment_id, section_id = output.get("attachment_id"), output.get("section_id")
+            content = output.get("content")
+            if not isinstance(attachment_id, str) or not isinstance(section_id, str):
+                continue
+            if not isinstance(content, str) or not content.strip():
+                continue
+            add(
+                _attachment_item(
+                    attachment_id,
+                    str(output.get("file_name") or attachment_id),
+                    f"{ATTACHMENT_DOCUMENT_PREFIX}{attachment_id}:{section_id}",
+                    content,
+                    locator=_section_locator(output.get("page")),
+                    section_title=output.get("title")
+                    if isinstance(output.get("title"), str)
+                    else None,
+                    content_kind="text",
+                )
+            )
+        elif name == READ_ROWS_TOOL_NAME:
+            attachment_id, sheet = output.get("attachment_id"), output.get("sheet")
+            rows = [row for row in output.get("rows") or [] if isinstance(row, Mapping)]
+            numbers: list[int] = [
+                number for row in rows if isinstance(number := row.get("row_number"), int)
+            ]
+            if not isinstance(attachment_id, str) or not isinstance(sheet, str) or not numbers:
+                continue
+            start, end = min(numbers), max(numbers)
+            add(
+                _attachment_item(
+                    attachment_id,
+                    str(output.get("file_name") or attachment_id),
+                    f"{ATTACHMENT_DOCUMENT_PREFIX}{attachment_id}:{sheet}:{start}-{end}",
+                    "\n".join(_row_line(row.get("values")) for row in rows),
+                    locator=_rows_locator(sheet, start, end),
+                    content_kind="sheet",
+                )
+            )
+        else:
+            for match in output.get("matches") or []:
+                if not isinstance(match, Mapping):
+                    continue
+                attachment_id, snippet = match.get("attachment_id"), match.get("snippet")
+                if not isinstance(attachment_id, str) or not isinstance(snippet, str):
+                    continue
+                file_name = str(match.get("file_name") or attachment_id)
+                section_id, sheet, row = (
+                    match.get("section_id"),
+                    match.get("sheet"),
+                    match.get("row_number"),
+                )
+                if isinstance(section_id, str):
+                    title, page = sections.get((attachment_id, section_id), (None, None))
+                    add(
+                        _attachment_item(
+                            attachment_id,
+                            file_name,
+                            f"{ATTACHMENT_DOCUMENT_PREFIX}{attachment_id}:{section_id}",
+                            snippet,
+                            locator=_section_locator(page),
+                            section_title=title,
+                            content_kind="text",
+                        )
+                    )
+                elif isinstance(sheet, str) and isinstance(row, int):
+                    add(
+                        _attachment_item(
+                            attachment_id,
+                            file_name,
+                            f"{ATTACHMENT_DOCUMENT_PREFIX}{attachment_id}:{sheet}:{row}-{row}",
+                            snippet,
+                            locator=_rows_locator(sheet, row, row),
+                            content_kind="sheet",
+                        )
+                    )
+    return list(items.values())
+
+
+# ファイル名の照合で同じとみなすダッシュ（モデルは「-」を「‑」などに書き換えることがある）。
+_DASHES = str.maketrans(dict.fromkeys("‐‑‒–—―−－", "-"))
+
+
+def _comparable(text: str) -> str:
+    return unicodedata.normalize("NFKC", text).translate(_DASHES).casefold()
+
+
+def _attachment_cited(answer: str, file_name: str) -> bool:
+    """回答が添付のファイル名（拡張子つき、または拡張子なし）を書いたか。"""
+    name = _comparable(file_name).strip()
+    if not name:
+        return False
+    text = _comparable(answer)
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return name in text or (len(stem) >= 3 and stem in text)
 
 
 def _supported_claims(validation: Mapping[str, Any] | None) -> list[tuple[str, str]]:
@@ -185,6 +392,14 @@ def answer_evidence(
         view["cited"] = used
         answer_use = item.get("answer_use")
         view["answer_use"] = answer_use if used and answer_use in _ANSWER_USES else None
+        items.append(view)
+    for item in attachment_evidence(steps)[: max(MAX_ANSWER_EVIDENCE - len(items), 0)]:
+        view = {key: item.get(key) for key in _COPIED_FIELDS if key in item}
+        section = item.get("section")
+        if isinstance(section, Mapping) and isinstance(section.get("title"), str):
+            view["section_title"] = section["title"]
+        view["cited"] = _attachment_cited(answer, str(item.get("file_name") or ""))
+        view["answer_use"] = None
         items.append(view)
     return {
         "items": items,
