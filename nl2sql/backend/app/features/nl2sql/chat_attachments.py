@@ -86,6 +86,7 @@ def chat_attachment_service() -> ChatAttachmentService:
                     image_reader=_image_reader,
                     # 運用設定 › チャットの添付（製品ごと。既定は無効）。
                     enabled=security.chat_attachment_settings.enabled,
+                    settings_failure=security.chat_attachment_settings.failure,
                 )
     return _SERVICE
 

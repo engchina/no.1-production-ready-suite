@@ -8,7 +8,8 @@
   `chat_attachment_setting_key`。DDL は `auth.migrations` の共通の DDL）。保存の後に再起動しないで
   効かせるため `.env` には置かない。
 - 読むときは短い cache（`CACHE_SECONDS`）を持つ。読めないとき（表が未作成・DB の停止中）は無効として
-  扱う（添付を受け付けない側に倒す）。
+  扱う（添付を受け付けない側に倒す）。読めなかった理由は `failure` で返し、添付の受け付け・送信は
+  「管理者が無効にしている」ではなくその理由のエラーにする（#2555）。
 """
 
 from __future__ import annotations
@@ -25,7 +26,12 @@ from fastapi import APIRouter, params
 from pr_backend_core.schemas import ApiResponse
 from pydantic import BaseModel
 
-from .errors import schema_required
+from .errors import (
+    CHAT_ATTACHMENT_SCHEMA_REQUIRED_CODE,
+    ChatAttachmentError,
+    schema_required,
+    settings_unavailable,
+)
 from .limits import chat_attachment_limits
 
 logger = logging.getLogger(__name__)
@@ -143,12 +149,15 @@ class ChatAttachmentSettingsProvider:
         self._clock = clock
         self._lock = threading.Lock()
         self._cached: tuple[float, bool] | None = None
+        # 最後に読めなかった理由（読めたら None）。エラーは呼ぶたびに作る。
+        self._failure: Callable[[], ChatAttachmentError] | None = None
 
     def enabled(self) -> bool:
         now = self._clock()
         with self._lock:
             if self._cached is not None and now - self._cached[0] < CACHE_SECONDS:
                 return self._cached[1]
+        failure: Callable[[], ChatAttachmentError] | None = None
         try:
             record = self.store.load()
             value = bool(record.enabled) if record is not None else False
@@ -157,9 +166,21 @@ class ChatAttachmentSettingsProvider:
                 "chat_attachment_settings_unavailable", extra={"error_type": type(exc).__name__}
             )
             value = False
+            schema_missing = (
+                isinstance(exc, ChatAttachmentError)
+                and exc.code == CHAT_ATTACHMENT_SCHEMA_REQUIRED_CODE
+            )
+            failure = schema_required if schema_missing else settings_unavailable
         with self._lock:
             self._cached = (now, value)
+            self._failure = failure
         return value
+
+    def failure(self) -> ChatAttachmentError | None:
+        """最後に読んだときに設定を読めなかった理由（読めたら None）。`enabled` の後に呼ぶ。"""
+        with self._lock:
+            failure = self._failure
+        return failure() if failure is not None else None
 
     def load(self) -> ChatAttachmentSettingsRecord:
         return self.store.load() or ChatAttachmentSettingsRecord()
@@ -168,6 +189,7 @@ class ChatAttachmentSettingsProvider:
         saved = self.store.save(record)
         with self._lock:
             self._cached = (self._clock(), saved.enabled)
+            self._failure = None
         return saved
 
 

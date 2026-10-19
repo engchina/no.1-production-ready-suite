@@ -84,11 +84,14 @@ class ChatAttachmentService:
         settings: Callable[[], object],
         image_reader: Callable[[], ImageReader | None] = lambda: None,
         enabled: Callable[[], bool] = lambda: True,
+        settings_failure: Callable[[], ChatAttachmentError | None] = lambda: None,
         clock: Callable[[], datetime] = _now,
     ) -> None:
         self.store = store
         # 製品の「運用設定 › チャットの添付」で有効か（`settings.ChatAttachmentSettingsProvider`）。
         self.enabled = enabled
+        # 設定を読めなかった理由（`ChatAttachmentSettingsProvider.failure`。#2555）。
+        self._settings_failure = settings_failure
         self.product: ChatAttachmentProduct = product
         self._settings = settings
         self._image_reader = image_reader
@@ -113,6 +116,10 @@ class ChatAttachmentService:
 
     def _require_enabled(self) -> None:
         if not self.enabled():
+            # 設定を読めないときは、管理者が無効にしたとは案内しない（#2555）。
+            failure = self._settings_failure()
+            if failure is not None:
+                raise failure
             raise ChatAttachmentError(
                 403,
                 "この製品ではチャットの添付を使えません。管理者が「運用設定 › チャットの添付」で"
