@@ -9,6 +9,7 @@ import {
   SelectField,
   Skeleton,
   useConfirm,
+  TimedLoadingState,
 } from "@production-ready/ui";
 import { Archive, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
@@ -71,7 +72,17 @@ export function AnswerRecordRetentionCard() {
         <CardDescription>{t("settings.answerRecords.description")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {query.isPending ? <Skeleton className="h-10 w-full max-w-md" /> : null}
+        {/* ほかの読み込み中と同じく、先頭に文言と経過時間の行、その下に内容の形の Skeleton（#2510）。 */}
+        {query.isPending ? (
+          <TimedLoadingState
+            label={t("settings.answerRecords.loading")}
+            operationKey="answer-records-settings-load"
+            framed={false}
+            testId="answer-records-settings-loading"
+          >
+            <Skeleton className="h-10 w-full" />
+          </TimedLoadingState>
+        ) : null}
         {query.isError ? (
           <ApiErrorState
             error={query.error}

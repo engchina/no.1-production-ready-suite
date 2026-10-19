@@ -482,6 +482,19 @@ describe("SearchableSelectField", () => {
     click(button);
     expect(onLoadMore).not.toHaveBeenCalled();
   });
+
+  it("選択肢が無いまま取得中は、一覧の先頭に左寄せの読み込み中の行と選択肢の形の Skeleton を出す（#2510）", () => {
+    const button = mountSingle({
+      options: [],
+      remote: { total: 0, hasMore: false, loadingMore: false, searching: true, onLoadMore: vi.fn() },
+    });
+    click(button);
+    const loading = document.querySelector('[data-testid="select-list-loading"]')!;
+    expect(loading).not.toBeNull();
+    expect(loading.querySelector(".pr-spinner")).not.toBeNull();
+    expect(loading.querySelector('[data-skeleton="list"]')).not.toBeNull();
+    expect(loading.className).not.toContain("text-center");
+  });
 });
 
 /** happy-dom はレイアウトしないので、一覧の高さを決めて「あふれているか」を再現する。 */

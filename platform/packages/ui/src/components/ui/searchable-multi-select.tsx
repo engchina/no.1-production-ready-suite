@@ -31,6 +31,7 @@ import {
   type SearchableSelectRemote,
 } from "./searchable-options";
 import { nearestScrollTop } from "./select-field";
+import { SelectListEmpty } from "./select-list-empty";
 
 /**
  * 開いた一覧（パネル）の読みやすい最小の幅（rem）。候補の名前（全角 24 字ほど）と右端の文書数などが 1 行に入り、
@@ -578,9 +579,9 @@ export function SearchableMultiSelect({
               ))}
             </ul>
           ) : (
-            <p className="px-3 py-6 text-center text-xs text-fg-muted">
-              {searching ? labels.searching : query ? labels.noMatch(query) : labels.empty}
-            </p>
+            <SelectListEmpty searching={searching} searchingLabel={labels.searching}>
+              {query ? labels.noMatch(query) : labels.empty}
+            </SelectListEmpty>
           )}
 
           {remote?.hasMore ? (

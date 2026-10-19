@@ -1,7 +1,7 @@
 import { useEffect, type ComponentType, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
-import { TimedLoadingState } from "@production-ready/ui";
+import { PageLoadingState } from "@production-ready/ui";
 
 import { SYSTEM_SETTINGS_PATHS } from "../paths";
 import { DatabaseUnavailableNotice } from "./DatabaseUnavailableNotice";
@@ -220,13 +220,7 @@ export function DatabaseGate({
 /** 状態の確認中（ページ全体が使えない初期処理なので placement は page）。 */
 export function DatabaseGateChecking({ label, operationKey }: { label: string; operationKey: string }) {
   return (
-    <div className="grid min-h-dvh place-items-center p-6">
-      <TimedLoadingState
-        label={label}
-        operationKey={operationKey}
-        placement="page"
-        testId={DATABASE_GATE_LOADING_TEST_ID}
-      />
-    </div>
+    // 画面の中央に浮かせず、本文の先頭に本文と同じ幅で出す（ほかの読み込み中と同じ。#2510）。
+    <PageLoadingState label={label} operationKey={operationKey} testId={DATABASE_GATE_LOADING_TEST_ID} />
   );
 }

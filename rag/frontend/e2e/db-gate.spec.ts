@@ -165,6 +165,11 @@ test("状態の確認中は経過時間付きの読み込み表示を出す", as
   const loading = page.getByTestId("database-gate-loading");
   await expect(loading).toBeVisible();
   await expect(loading).toContainText("データベースの状態を確認しています");
+  // ほかの読み込み中と同じく、本文の先頭に本文と同じ幅で出す（画面の中央に浮かせない。#2510）。
+  const main = await page.locator("main").first().boundingBox();
+  const box = await loading.boundingBox();
+  expect(box!.y - main!.y).toBeLessThanOrEqual(48);
+  expect(box!.width).toBeGreaterThanOrEqual(main!.width - 80);
   release();
   await expect(loading).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "データベースに接続できません" })).toBeVisible();
@@ -188,7 +193,7 @@ test("確認が 10 秒を超えて遅延の案内が出ても、読み込みの�
     return { x: box.x + box.width / 2, y: box.y + box.height / 2, top: card.y, height: card.height };
   };
   // フォント（自己ホストの Noto Sans JP）とレイアウトが確定してから測る。確定の前に測ると、後から当たった
-  // フォントで行の高さが変わり、中央寄せのカードが動いたように見える（遅延の案内とは無関係のずれ）。
+  // フォントで行の高さが変わり、カードが動いたように見える（遅延の案内とは無関係のずれ）。
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
   let before = await geometry();
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -205,7 +210,7 @@ test("確認が 10 秒を超えて遅延の案内が出ても、読み込みの�
   await page.clock.fastForward(11_000);
   await expect(loading).toContainText("通常より時間がかかっています");
   const after = await geometry();
-  // 遅延の案内の行は最初から高さを予約しているので、中央寄せのカードもスピナーも動かない。
+  // 遅延の案内の行は最初から高さを予約しているので、カードもスピナーも動かない。
   expect(Math.abs(after.x - before.x)).toBeLessThan(0.5);
   expect(Math.abs(after.y - before.y)).toBeLessThan(0.5);
   expect(Math.abs(after.top - before.top)).toBeLessThan(0.5);

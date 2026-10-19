@@ -409,6 +409,7 @@ export {
   type UseOperationTimingOptions,
   type OperationTiming,
 } from "./components/feedback/processing-state";
+export { PageLoadingState, type PageLoadingStateProps } from "./components/feedback/page-loading-state";
 export {
   ChatProgress,
   chatProgressTimelineStep,

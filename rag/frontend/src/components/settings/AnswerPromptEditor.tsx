@@ -12,6 +12,7 @@ import {
   StatusBadge,
   TextareaField,
   useConfirm,
+  TimedLoadingState,
 } from "@production-ready/ui";
 import { History, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
@@ -66,7 +67,19 @@ export function AnswerPromptPanel({
 }) {
   const query = useAnswerPrompts();
   const prompt = query.data?.prompts.find((item) => item.key === promptKey);
-  if (query.isPending) return <Skeleton className="h-40 w-full" />;
+  if (query.isPending) {
+    // ほかの読み込み中と同じく、先頭に文言と経過時間の行、その下に内容の形の Skeleton（#2510）。
+    return (
+      <TimedLoadingState
+        label={t("settings.answerPrompts.loading")}
+        operationKey={`answer-prompt-load:${promptKey}`}
+        framed={false}
+        testId="answer-prompt-loading"
+      >
+        <Skeleton className="h-40 w-full" />
+      </TimedLoadingState>
+    );
+  }
   if (query.isError || !prompt) {
     return (
       <ErrorState message={t("settings.answerPrompts.loadError")} onRetry={() => void query.refetch()} />

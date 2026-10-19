@@ -1520,7 +1520,7 @@ const nl2sqlJa = {
   "nl2sql.sample.importSuccess": "サンプルデータを投入しました。",
   "nl2sql.sample.importFailed": "サンプルデータの投入に失敗しました。",
   "nl2sql.sample.importing": "サンプルデータを取り込んでいます",
-  "nl2sql.similar.loading": "参考履歴を検索中",
+  "nl2sql.similar.loading": "参考履歴を検索しています",
   "nl2sql.similar.title": "参考履歴",
   "nl2sql.similar.goodOnly": "管理者レビュー結果: 良いのみ",
   "nl2sql.similar.notUsedBadge": "few-shot 不使用",

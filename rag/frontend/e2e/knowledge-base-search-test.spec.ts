@@ -266,6 +266,12 @@ test("引用プレビューは PDF のページ画像に根拠の要素を強調
   // 読み込みが終わるまでは描きかけの画像を隠し、灰色の面と読み込み中の表示を出す（#2474）。
   await expect(dialog.getByTestId("preview-page-loading")).toContainText("ページを読み込んでいます");
   await expect(dialog.getByTestId("preview-page-skeleton")).toBeVisible();
+  // 読み込み中はほかの領域と同じく、領域（ビューポート）の先頭に全幅の行で出す（ページの上に浮かせない。#2510）。
+  const viewportBox = await dialog.getByTestId("preview-viewport").boundingBox();
+  const loadingRowBox = await dialog.getByTestId("preview-page-loading").locator("xpath=..").boundingBox();
+  expect(Math.abs(loadingRowBox!.y - viewportBox!.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(loadingRowBox!.x - viewportBox!.x)).toBeLessThanOrEqual(1);
+  expect(loadingRowBox!.width).toBeGreaterThanOrEqual(viewportBox!.width - 20);
   await expect(dialog.getByTestId("preview-image-surface").locator("img")).toHaveCSS("opacity", "0");
   await expect(dialog.getByTestId("bbox-content-overlay")).toHaveCount(0);
   releaseImage();

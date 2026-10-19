@@ -1,7 +1,7 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 
-import { AppShell, PageBody, PageHeader, TimedLoadingState } from "@production-ready/ui";
+import { AppShell, PageBody, PageHeader, PageLoadingState } from "@production-ready/ui";
 import { RequireAuth, useForbiddenRedirect } from "@production-ready/system-settings";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
@@ -244,14 +244,7 @@ function AuthorizedLayout() {
 /** 画面のコードを読んでいる間（UX 契約 messaging.md §3.7 の placement="page"。白い画面にしない）。 */
 function RouteLoadingFallback() {
   return (
-    <PageBody wide>
-      <TimedLoadingState
-        label={t("app.route.loading")}
-        operationKey="route-loading"
-        placement="page"
-        testId="route-loading"
-      />
-    </PageBody>
+    <PageLoadingState wide label={t("app.route.loading")} operationKey="route-loading" testId="route-loading" />
   );
 }
 

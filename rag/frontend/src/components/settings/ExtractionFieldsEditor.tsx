@@ -6,6 +6,7 @@ import {
   SelectField,
   type SelectFieldOption,
   TextField,
+  TimedLoadingState,
 } from "@production-ready/ui";
 import type { UseMutationResult } from "@tanstack/react-query";
 import { Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
@@ -78,7 +79,19 @@ export function ExtractionFieldsEditor() {
     });
   };
 
-  if (query.isPending) return <FormSkeleton fields={2} />;
+  if (query.isPending) {
+    // ほかの読み込み中と同じく、先頭に文言と経過時間の行、その下に内容の形の Skeleton（#2510）。
+    return (
+      <TimedLoadingState
+        label={t("settings.extractionFields.loading")}
+        operationKey="extraction-fields-load"
+        framed={false}
+        testId="extraction-fields-loading"
+      >
+        <FormSkeleton fields={2} />
+      </TimedLoadingState>
+    );
+  }
   if (query.isError || !query.data) {
     return (
       <ApiErrorState

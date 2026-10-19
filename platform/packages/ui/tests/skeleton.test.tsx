@@ -56,8 +56,11 @@ describe("Skeleton の見た目の統一（#265）", () => {
   });
 
   it("LoadingState と DataTable の loading 行も同じ見た目を使う", () => {
-    const loading = renderToStaticMarkup(<LoadingState rows={2} />);
+    const loading = renderToStaticMarkup(<LoadingState label="読み込んでいます" rows={2} />);
     expect(count(loading, /bg-surface-hover motion-reduce:animate-none/g)).toBe(2);
+    // 文言と経過時間の行を領域の先頭に出す（Skeleton だけにしない。#2510）。
+    expect(loading).toContain("読み込んでいます");
+    expect(loading.indexOf("読み込んでいます")).toBeLessThan(loading.indexOf("bg-surface-hover"));
     const table = renderToStaticMarkup(
       <DataTable columns={[{ key: "a", header: "A" }]} rows={[]} getRowKey={(_, index) => index} loading loadingRows={2} />
     );

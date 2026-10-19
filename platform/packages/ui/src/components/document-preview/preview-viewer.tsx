@@ -630,6 +630,20 @@ export function PreviewViewer({
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
       >
+        {/* 読み込み中は、ほかの領域と同じく領域（ビューポート）の先頭に全幅の行で出す（#2510）。回したページの外に置いて
+            文字を回さず（#2474）、高さ 0 の sticky の中に置いて、スクロールしても先頭に残し、ページの位置と高さを動かさない。 */}
+        {page && !loaded && !failed ? (
+          <div className="pointer-events-none sticky left-0 top-0 z-10 h-0 w-full">
+            <div className="border-b border-border bg-surface-sunken p-3">
+              <ProcessingIndicator
+                active
+                label={labels.pageLoading}
+                operationKey={`page:${pageNumber}`}
+                testId="preview-page-loading"
+              />
+            </div>
+          </div>
+        ) : null}
         {/* 余白 p-3 は PAGE_SIZED_VIEWPORT_CLASS の 1.5rem（上下・左右の合計）と合わせる。 */}
         <div ref={stageRef} className="flex min-h-full w-max min-w-full p-3">
           {layout && page ? (
@@ -701,21 +715,6 @@ export function PreviewViewer({
                   />
                 ))}
               </div>
-              {/* 読み込み中の表示はほかの読み込み中と同じ部品（Spinner・文言・経過時間）。回したページの外に置き、
-                  文字は回さない（#2474）。 */}
-              {!loaded && !failed ? (
-                // ページの上端の近くに置く（縦に長いページでも最初に見える位置。#2474）。
-                <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center p-3 pt-6">
-                  <div className="max-w-full rounded-md border border-border bg-surface px-3 py-2 shadow-sm">
-                    <ProcessingIndicator
-                      active
-                      label={labels.pageLoading}
-                      operationKey={`page:${pageNumber}`}
-                      testId="preview-page-loading"
-                    />
-                  </div>
-                </div>
-              ) : null}
             </div>
           ) : (
             <Skeleton className="m-auto h-full min-h-40 w-full" aria-hidden />

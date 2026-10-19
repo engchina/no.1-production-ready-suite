@@ -174,6 +174,13 @@ describe("evidencePreviewFocus", () => {
       expect(loading.textContent).toContain("ページを読み込んでいます");
       // 読み込み中の表示は回すページの面の外に置く（文字を回さない）。
       expect(host.querySelector('[data-testid="preview-image-surface"] [data-testid="preview-page-loading"]')).toBeNull();
+      // ほかの領域と同じく、領域（ビューポート）の先頭に全幅の行で出す。ページの上に浮かせない（#2510）。
+      expect(loading.closest('[data-testid="preview-page-frame"]')).toBeNull();
+      const band = loading.parentElement!.parentElement!;
+      expect(band.parentElement?.getAttribute("data-testid")).toBe("preview-viewport");
+      expect(band.parentElement?.firstElementChild).toBe(band);
+      expect(band.className).toContain("w-full");
+      expect(band.className).toContain("sticky");
 
       await act(async () => {
         image.dispatchEvent(new Event("load"));

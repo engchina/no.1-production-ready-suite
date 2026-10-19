@@ -761,7 +761,15 @@ function CompareOption({
       </div>
       {enabled ? (
         query.isPending ? (
-          <SearchAnswerProfileSelectSkeleton />
+          // RAG 検索・チャットと同じく、先頭に文言と経過時間の行、その下に欄の形の Skeleton（#2510）。
+          <TimedLoadingState
+            label={t("searchAnswerProfiles.loading")}
+            operationKey="evaluation-compare-profiles-load"
+            framed={false}
+            testId="evaluation-compare-profiles-loading"
+          >
+            <SearchAnswerProfileSelectSkeleton />
+          </TimedLoadingState>
         ) : query.isError ? (
           <Banner severity="warning">{t("evaluation.compare.profilesLoadError")}</Banner>
         ) : (

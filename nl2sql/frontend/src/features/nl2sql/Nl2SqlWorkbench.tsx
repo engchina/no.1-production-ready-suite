@@ -1737,17 +1737,16 @@ function ExecutableNl2SqlWorkbench() {
                         <span className="flex min-w-0 flex-wrap items-center gap-2">
                           <span className="flex min-w-0 items-center gap-2">
                             <BookOpenText size={16} className="shrink-0 text-fg" aria-hidden="true" />
-                            <span className="truncate">
-                              {similarHistoryLoading
-                                ? t("nl2sql.similar.loading")
-                                : t("nl2sql.similar.title")}
-                            </span>
+                            <span className="truncate">{t("nl2sql.similar.title")}</span>
                           </span>
-                          <StatusBadge
-                            icon={false}
-                            variant={similarHistory.length > 0 ? "info" : "neutral"}
-                            label={t("nl2sql.similar.count", { count: similarHistory.length })}
-                          />
+                          {/* 検索中は件数がまだ無いので出さない（0 件と読み違えないように）。 */}
+                          {similarHistoryLoading ? null : (
+                            <StatusBadge
+                              icon={false}
+                              variant={similarHistory.length > 0 ? "info" : "neutral"}
+                              label={t("nl2sql.similar.count", { count: similarHistory.length })}
+                            />
+                          )}
                           <StatusBadge icon={false} variant="success" label={t("nl2sql.similar.goodOnly")} />
                           {!similarHistoryUsedForGeneration && (
                             <StatusBadge variant="warning" label={t("nl2sql.similar.notUsedBadge")} />
@@ -1758,6 +1757,18 @@ function ExecutableNl2SqlWorkbench() {
                           size={16}
                         />
                       </Button>
+                      {/* 検索中は見出しの文言を差し替えず、ほかの読み込み中と同じく見出しの直下に全幅の行で出す（#2510）。 */}
+                      {similarHistoryLoading ? (
+                        <div className="border-t border-border px-3 py-2">
+                          <ProcessingIndicator
+                            active
+                            label={t("nl2sql.similar.loading")}
+                            operationKey="similar-history"
+                            placement="panel"
+                            testId="nl2sql-similar-history-loading"
+                          />
+                        </div>
+                      ) : null}
                       {/* aria-controls の参照先を常時レンダし、閉時は hidden にする。 */}
                       <div
                         id="nl2sql-similar-history"

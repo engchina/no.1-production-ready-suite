@@ -1051,13 +1051,15 @@ function AdbManagementCard({
         {infoQuery.isPending ? (
           // ADB の状態（見出しの StatusBadge）と起動・停止の可否は OCI から取得する。取得の間は
           // 経過時間付きで示す（起動・停止が押せない理由を空白にしない。AGENTS.md「読み込み中」）。
-          <ProcessingIndicator
-            active
+          // 下を情報のパネルの形の Skeleton で覆い、届いたときに下の内容を押し下げない（#2510）。
+          <TimedLoadingState
             label={t("settings.adb.loading")}
             operationKey="settings-adb-info"
-            placement="panel"
+            framed={false}
             testId="settings-adb-loading"
-          />
+          >
+            <Skeleton className="h-24 w-full" />
+          </TimedLoadingState>
         ) : null}
 
         {infoError ? (

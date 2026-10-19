@@ -15,6 +15,7 @@ import {
   useConfirm,
   ContentActionBar,
   TimedLoadingState,
+  ProcessingIndicator,
   ListSkeleton,
   TextareaField,
   FormGrid,
@@ -479,10 +480,17 @@ function SavedSourceDocumentsList({
               : t("profiles.ontologyBuild.savedFilesHint")}
           </p>
         </div>
-        {loading ? (
-          <StatusBadge variant="info" label={t("common.loading")} />
-        ) : null}
       </div>
+      {/* 読み直しは一覧を残したまま、ほかの読み込み中と同じく一覧の先頭に全幅の行で出す（見出しの右のバッジにしない。#2510）。 */}
+      {loading && documents.length > 0 ? (
+        <ProcessingIndicator
+          active
+          label={t("profiles.ontologyBuild.savedFilesLoading")}
+          operationKey="ontology-build-saved-files"
+          placement="panel"
+          testId="ontology-build-saved-files-refreshing"
+        />
+      ) : null}
       {documents.length > 0 ? (
         <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.savedFilesList")}>
           {documents.map((source) => (
