@@ -1,6 +1,11 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { ChatAttachmentItem, ChatAttachmentKind } from "./chat-attachments";
+import {
+  formatAttachmentSize,
+  type ChatAttachmentItem,
+  type ChatAttachmentKind,
+  type ChatComposerAttachments,
+} from "./chat-attachments";
 
 /** 添付の API の結果（製品の API の応答を詰め替えて返す）。 */
 export interface ChatAttachmentUploadResult {
@@ -225,4 +230,111 @@ export function chatAttachmentItems(references: readonly ChatAttachmentApiRefere
     sizeBytes: reference.size_bytes ?? 0,
     kind: reference.kind,
   }));
+}
+
+/** 製品の添付の API（3 製品で同じ `/api/chat-attachments`。fetch の作法は製品ごと）。 */
+export interface ChatComposerAttachmentsApi {
+  /** 送る前の添付と上限（`GET /api/chat-attachments`）。 */
+  list: () => Promise<{ items: ChatAttachmentApiItem[]; limits: ChatAttachmentApiLimits }>;
+  upload: (file: File) => Promise<ChatAttachmentApiItem>;
+  remove: (attachmentId: string) => Promise<unknown>;
+}
+
+/** 入力欄の添付の文言（製品の i18n。3 製品で同じ文）。 */
+export interface ChatComposerAttachmentTexts {
+  add: string;
+  drop: string;
+  list: string;
+  remove: (fileName: string) => string;
+  uploading: string;
+  hint: (limits: { size: string; count: number; hours: number }) => string;
+  tooLarge: (size: string) => string;
+  tooMany: (count: number) => string;
+  unsupported: string;
+  uploadFailed: (error: unknown) => string;
+  /** 読み取りの注意の code（`macros_not_executed` など）の文。無ければ出さない。 */
+  warning: (code: string) => string | undefined;
+}
+
+/**
+ * チャットの入力欄の添付（3 製品共通。#2517）。開いたときに送る前の添付と上限を読み（製品の「運用設定 ›
+ * チャットの添付」で無効なら `composer` は undefined で、入力欄に添付の操作を出さない）、`ChatComposer` の
+ * `attachments` と、送信に使う添付（`take`）を返す。設定の変更は画面を開き直すと反映される。
+ */
+export function useChatComposerAttachments(api: ChatComposerAttachmentsApi, texts: ChatComposerAttachmentTexts) {
+  const [limits, setLimits] = useState<ChatAttachmentApiLimits | null>(null);
+  const apiRef = useRef(api);
+  apiRef.current = api;
+  const textsRef = useRef(texts);
+  textsRef.current = texts;
+  const attachments = useChatAttachments({
+    upload: async (file) => chatAttachmentUploadResult(await apiRef.current.upload(file), textsRef.current.warning),
+    remove: (attachmentId) => apiRef.current.remove(attachmentId),
+    maxBytes: limits?.max_bytes,
+    maxFiles: limits?.max_files,
+    accept: limits?.accept,
+    formatSize: formatAttachmentSize,
+    messages: {
+      tooLarge: (size) => textsRef.current.tooLarge(size),
+      tooMany: (count) => textsRef.current.tooMany(count),
+      unsupported: texts.unsupported,
+      uploadFailed: (error) => textsRef.current.uploadFailed(error),
+    },
+  });
+  const { restore } = attachments;
+  useEffect(() => {
+    let active = true;
+    apiRef.current
+      .list()
+      .then((data) => {
+        if (!active) return;
+        setLimits(data.limits);
+        // 開き直したときは、送る前の添付を戻す。
+        if (data.items.length) {
+          restore(data.items.map((item) => chatAttachmentUploadResult(item, textsRef.current.warning)));
+        }
+      })
+      // 読めない（権限が無い・無効・未作成の表）ときは添付の操作を出さない。
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [restore]);
+
+  const enabled = Boolean(limits?.enabled);
+  const composer = useMemo<ChatComposerAttachments | undefined>(
+    () =>
+      enabled && limits
+        ? {
+            items: attachments.items,
+            onAddFiles: attachments.add,
+            onRemove: attachments.remove,
+            accept: limits.accept.join(","),
+            hint: textsRef.current.hint({
+              size: formatAttachmentSize(limits.max_bytes),
+              count: limits.max_files,
+              hours: limits.ttl_hours,
+            }),
+            labels: {
+              add: textsRef.current.add,
+              drop: textsRef.current.drop,
+              list: textsRef.current.list,
+              remove: (name) => textsRef.current.remove(name),
+              uploading: textsRef.current.uploading,
+            },
+          }
+        : undefined,
+    [enabled, limits, attachments.items, attachments.add, attachments.remove]
+  );
+
+  /** 送信に使う添付を取り出し、入力欄から外す（送った質問の下に出す）。 */
+  const take = useCallback((): { ids: string[]; items: ChatAttachmentItem[] } => {
+    if (!enabled) return { ids: [], items: [] };
+    const items = attachments.readyItems.map((item) => ({ ...item }));
+    const ids = attachments.readyIds;
+    if (ids.length) attachments.clear();
+    return { ids, items };
+  }, [enabled, attachments]);
+
+  return { composer, take, uploading: attachments.uploading, enabled };
 }

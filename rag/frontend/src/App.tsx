@@ -36,6 +36,7 @@ import { RememberedSearchParams } from "@/components/RememberedSearchParams";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
 import { HuggingFaceSettingsClient } from "@/components/settings/HuggingFaceSettingsClient";
 import { AnswerNoticeSettingsClient } from "@/components/settings/AnswerNoticeSettingsClient";
+import { ChatAttachmentSettingsClient } from "@/components/settings/ChatAttachmentSettingsClient";
 import { AppearanceSettings } from "@/components/settings/AppearanceSettings";
 import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
 import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
@@ -152,6 +153,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsServices} element={<SettingsServicesRoute />} />
         <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
         <Route path={APP_ROUTES.settingsAnswerNotice} element={<SettingsAnswerNoticeRoute />} />
+        <Route path={APP_ROUTES.settingsChatAttachments} element={<SettingsChatAttachmentsRoute />} />
         <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
         <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
         <Route path={APP_ROUTES.securityApiKeys} element={<SecurityApiKeysPage />} />
@@ -388,6 +390,15 @@ function SettingsAnswerNoticeRoute() {
     <div>
       <PageHeader wide title={t("nav.settingsAnswerNotice")} subtitle={t("settings.answerNotice.subtitle")} />
       <AnswerNoticeSettingsClient />
+    </div>
+  );
+}
+
+function SettingsChatAttachmentsRoute() {
+  return (
+    <div>
+      <PageHeader wide title={t("nav.settingsChatAttachments")} subtitle={t("settings.chatAttachments.subtitle")} />
+      <ChatAttachmentSettingsClient />
     </div>
   );
 }

@@ -38,6 +38,7 @@ export const MENU_PERMISSIONS = {
   settingsDatabase: "menu.settings_database",
   settingsAppearance: "menu.settings_appearance",
   settingsAnswerNotice: "menu.settings_answer_notice",
+  settingsChatAttachments: "menu.settings_chat_attachments",
   securityUsers: "menu.security_users",
   securityRoles: "menu.security_roles",
   // 全員の API キー（管理の画面）。自分のキーはメニュー権限なしで使える（#1805）。

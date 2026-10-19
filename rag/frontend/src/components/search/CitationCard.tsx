@@ -8,7 +8,7 @@ import type {
 } from "@/lib/api";
 import { citationModelUsed } from "@/lib/chunk-metadata";
 
-import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
+import { citationEvidenceItem, EVIDENCE_LABELS, isAttachmentCitation } from "./citation-evidence";
 import { CitationSourceSheet } from "./CitationSourceSheet";
 
 export { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
@@ -48,7 +48,7 @@ export function CitationCard({ chunk, index, ...options }: CitationCardOptions &
       labels={EVIDENCE_LABELS}
       // 「根拠を表示」は文書を読む権限がある画面（preview）だけ。
       leadingActions={
-        preview ? (
+        preview && !item.sourceUnavailable ? (
           <EvidenceSourceButton fileName={item.fileName} onOpen={() => source.open(chunk)} labels={EVIDENCE_LABELS} />
         ) : undefined
       }
@@ -80,7 +80,8 @@ export function CitationActions({
   messageId = null,
   contentSnapshot = null,
 }: CitationCardOptions & { chunk: RetrievedChunk }) {
-  if (!traceId || !searchAnswerProfileId) return null;
+  // チャットの添付の根拠（#2517）は文書の根拠のフィードバックの対象にしない（文書の表に無い）。
+  if (!traceId || !searchAnswerProfileId || isAttachmentCitation(chunk)) return null;
   return (
     <FeedbackControls
       traceId={traceId}

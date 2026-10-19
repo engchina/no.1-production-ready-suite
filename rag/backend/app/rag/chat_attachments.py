@@ -239,7 +239,6 @@ def attachment_chunk(unit: AttachmentUnit, score: float) -> RetrievedChunk:
     metadata: dict[str, str | int | None] = {
         ATTACHMENT_METADATA_KEY: record.attachment_id,
         "file_name": record.file_name,
-        "content_kind": "chat_attachment",
     }
     if unit.section_title:
         metadata["section_title"] = unit.section_title

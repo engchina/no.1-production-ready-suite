@@ -29,6 +29,7 @@ import {
 
 import {
   ANSWER_NOTICE_NAV_ITEM,
+  CHAT_ATTACHMENT_SETTINGS_NAV_ITEM,
   SYSTEM_SETTINGS_NAV_ITEMS,
   API_KEY_ADMIN_NAV_ITEM,
   USER_ROLE_NAV_ITEMS,
@@ -280,6 +281,13 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.settingsAnswerNotice",
         icon: ANSWER_NOTICE_NAV_ITEM.icon as LucideIcon,
         permission: MENU_PERMISSIONS.settingsAnswerNotice,
+      },
+      // チャットの添付（設定は製品ごと。3 製品で同じ位置。#2517）。
+      {
+        href: CHAT_ATTACHMENT_SETTINGS_NAV_ITEM.href,
+        labelKey: "nav.settingsChatAttachments",
+        icon: CHAT_ATTACHMENT_SETTINGS_NAV_ITEM.icon as LucideIcon,
+        permission: MENU_PERMISSIONS.settingsChatAttachments,
       },
       {
         href: APP_ROUTES.settingsHuggingface,

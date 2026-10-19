@@ -34,6 +34,8 @@ import {
   type ChatProgressStep,
   useChatAutoScroll,
   useChatHistoryPanel,
+  chatAttachmentItems,
+  type ChatAttachmentItem,
 } from "@production-ready/ui";
 import {
   RotateCcw,
@@ -78,6 +80,7 @@ import {
 } from "@/lib/process-failure";
 import { ApprovedFaqSuggestions } from "@/components/search/ApprovedFaqSuggestions";
 import { ClarificationChoice } from "./ClarificationChoice";
+import { useRagChatAttachments } from "./useRagChatAttachments";
 import { CHAT_PROGRESS_DEFINITIONS, chatSubmitProgressSteps } from "@/lib/chat-progress";
 import {
   chatAnswerProgressStreamUrl,
@@ -224,6 +227,8 @@ interface LiveTurn {
   /** 送信できなかった理由（`pending.status` が `failed` のとき）。 */
   failureMessage: string | null;
   request: DeliverRequest;
+  /** 質問に添付したファイル（#2517）。`start` の前も送った質問の下に出す。 */
+  attachments: ChatAttachmentItem[];
 }
 
 interface Turn {
@@ -438,10 +443,13 @@ function MessageTurn({
   onRetry,
   onAskUnscoped,
   footer,
+  liveAttachments,
   testId,
 }: {
   user: Pick<ChatMessage, "content" | "guardrail_warnings" | "clarification"> &
-    Partial<Pick<ChatMessage, "sent_by_owner" | "sender_display_name">>;
+    Partial<Pick<ChatMessage, "sent_by_owner" | "sender_display_name" | "attachments">>;
+  /** 送る前（`start` の前）の質問の添付（#2517）。保存した質問は `user.attachments`。 */
+  liveAttachments?: ChatAttachmentItem[];
   /** 質問の状態（送信中・失敗・停止。#907）。保存済みの質問は `sent`。 */
   userStatus?: ChatUserMessageStatus;
   /** 回答の後に出す送信の失敗・停止の表示（#907）。 */
@@ -492,6 +500,8 @@ function MessageTurn({
             })
           : undefined
       }
+      questionAttachments={user.attachments?.length ? chatAttachmentItems(user.attachments) : liveAttachments}
+      attachmentsLabel={t("chat.attachments.list")}
       testId={testId}
     >
       {/* 回答前に確認した内容（#1839）。利用者の答え・飛ばしたことを、利用者の発言として質問の下に残す。 */}
@@ -709,6 +719,9 @@ export function ChatClient() {
     [storedModelIds, compareModels]
   );
   const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
+  // 会話の添付（#2517。運用設定で有効なときだけ入力欄に出す）。送った質問の添付は送信まで持つ。
+  const chatAttachments = useRagChatAttachments();
+  const outgoingAttachmentsRef = useRef<{ ids: string[]; items: ChatAttachmentItem[] }>({ ids: [], items: [] });
   // この画面で送って保存された回答の処理の段階のイベント（message_id → イベント。#1146 / #1359）。保存済みの
   // 回答の段階（`progress`）が無いとき（保存に失敗した・取り直しが間に合わない）も、この画面の間は「処理の経過」を残す。
   const [finishedProgress, setFinishedProgress] = useState<Record<string, ChatProgressEvent[]>>({});
@@ -1022,6 +1035,7 @@ export function ChatClient() {
       columns: placeholderColumns(pending.sentAtMs),
       failureMessage: null,
       request,
+      attachments: outgoingAttachmentsRef.current.items,
     };
   }
 
@@ -1058,7 +1072,8 @@ export function ChatClient() {
       pendingChoice ||
       searchAnswerProfileWithoutKnowledgeBases ||
       prerequisitesLoading ||
-      conversationFailed
+      conversationFailed ||
+      chatAttachments.uploading
     ) {
       return;
     }
@@ -1066,6 +1081,9 @@ export function ChatClient() {
     abortRef.current = controller;
     setSending(true);
     setErrorText("");
+    // 添付は入力欄から外し、送った質問の下に出す（#2517）。同じ質問の送り直しは添付を付けない。
+    outgoingAttachmentsRef.current =
+      retryContent === undefined ? chatAttachments.take() : { ids: [], items: [] };
     if (retryContent === undefined) setComposer("");
     setLiveTurn(newLiveTurn({ content }));
     // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
@@ -1321,10 +1339,13 @@ export function ChatClient() {
         setActiveId(created.id);
         if (controller.signal.aborted) return;
       }
+      const attachmentIds = outgoingAttachmentsRef.current.ids;
+      outgoingAttachmentsRef.current = { ids: [], items: [] };
       const body = {
         content,
         model_ids: selectedModelIds,
         client_message_id: clientMessageId,
+        ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
         ...(approvedFaqId ? { approved_faq_id: approvedFaqId } : {}),
         ...(clarification ? { clarification } : {}),
         ...(clarificationSkippedRuleId
@@ -1668,6 +1689,8 @@ export function ChatClient() {
                   sendLabel={t("chat.composer.send")}
                   stopLabel={t("chat.composer.stop")}
                   sendTestId="chat-run-stop"
+                  // 会話の添付（#2517。運用設定で有効なときだけ）。
+                  attachments={chatAttachments.composer}
                   options={
                     compareModels.length > 0 ? (
                       // 候補は既定のテキストモデル（先頭。未選択のときに答える）と既定の画像対応モデル（#675）。
@@ -1801,6 +1824,7 @@ export function ChatClient() {
                         : liveTurn.pending.status
                     }
                     columns={liveColumns}
+                    liveAttachments={liveTurn.attachments}
                     searchAnswerProfileId={searchAnswerProfileId ?? ""}
                     testId="chat-live-turn"
                     footer={

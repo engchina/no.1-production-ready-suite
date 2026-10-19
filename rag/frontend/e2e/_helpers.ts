@@ -32,6 +32,7 @@ export const MENU_PERMISSION_CODES = [
   "menu.security_api_keys",
   "menu.settings_system_tables",
   "menu.settings_answer_notice",
+  "menu.settings_chat_attachments",
   "menu.settings_huggingface",
   "menu.settings_services",
   "menu.settings_oci",

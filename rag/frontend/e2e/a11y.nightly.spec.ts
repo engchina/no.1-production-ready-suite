@@ -370,6 +370,7 @@ const SCREENS: Screen[] = [
   { path: "/settings/database" },
   { path: "/settings/appearance" },
   { path: "/settings/answer-notice" },
+  { path: "/settings/chat-attachments" },
 ];
 
 /**
