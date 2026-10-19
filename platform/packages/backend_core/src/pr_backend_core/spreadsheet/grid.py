@@ -4,9 +4,23 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 # 列幅を指定していないシートの既定の列幅（Excel の標準。文字数の単位）。
 DEFAULT_COLUMN_WIDTH = 8.43
+# 行の高さを指定していないシートの既定の高さ（ポイント）。
+DEFAULT_ROW_HEIGHT = 15.0
+# 図形の大きさ（EMU）の換算: 1 ピクセル = 9525 EMU、1 ポイント = 12700 EMU。標準の列幅は
+# 64 ピクセル、列幅（文字数）のピクセルは標準のフォントの数字の幅（7 ピクセル）で換算する
+# （Office Open XML の式）。
+_EMU_PER_PIXEL = 9525
+_EMU_PER_POINT = 12700
+_DEFAULT_COLUMN_PIXELS = 64
+_DIGIT_PIXELS = 7
+# 図形の範囲を探すときの上限（壊れた大きさで時間をかけない）。
+_MAX_ANCHOR_STEPS = 10000
+_MAX_ROW = 1048576
+_MAX_COLUMN = 16384
 _NUMERIC_TEXT = re.compile(r"^[+-]?[\d,]+(\.\d+)?%?$|^\d{4}-\d{2}-\d{2}([ T][\d:.]+)?$")
 
 
@@ -29,22 +43,71 @@ class Grid:
     column_widths: dict[int, float] = field(default_factory=dict)
     default_column_width: float = DEFAULT_COLUMN_WIDTH
     label_hints: set[tuple[int, int]] = field(default_factory=set)
+    row_heights: dict[int, float] = field(default_factory=dict)
+    default_row_height: float = DEFAULT_ROW_HEIGHT
     shape_boxes: dict[tuple[int, int], tuple[int, int, int, int]] = field(default_factory=dict)
     hidden_cells: set[tuple[int, int]] = field(default_factory=set)
     hidden_rows: set[int] = field(default_factory=set)
     hidden_columns: set[int] = field(default_factory=set)
     filter_rows: set[int] = field(default_factory=set)
     notes: list[tuple[str, str | None, str | None]] = field(default_factory=list)
+    # データの行で、横の結合の範囲を左上の値で埋めたセル（判定には使い、記録には入れない。#2531）。
+    merge_filled: set[tuple[int, int]] = field(default_factory=set)
+    # 行 → 値のある列（`row_columns` の索引。セルの数が変わるか `invalidate_rows` で
+    # 作り直す。#2527）。
+    _columns_by_row: dict[int, list[int]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _indexed_cells: int = field(default=-1, init=False, repr=False, compare=False)
 
     @property
     def max_row(self) -> int:
         return max((row for row, _ in self.cells), default=0)
 
     def row_columns(self, row: int) -> list[int]:
-        return sorted(col for (r, col), value in self.cells.items() if r == row and value.strip())
+        """行の値のある列（昇順）。行ごとに全セルを走査しないよう、索引を 1 回だけ作る。"""
+        if self._columns_by_row is None or self._indexed_cells != len(self.cells):
+            index: dict[int, list[int]] = {}
+            for (r, col), value in self.cells.items():
+                if value.strip():
+                    index.setdefault(r, []).append(col)
+            for cols in index.values():
+                cols.sort()
+            self._columns_by_row = index
+            self._indexed_cells = len(self.cells)
+        return list(self._columns_by_row.get(row, ()))
+
+    def invalidate_rows(self) -> None:
+        """セルの値を書き換えたあとに呼ぶ（`row_columns` の索引を作り直す）。"""
+        self._columns_by_row = None
 
     def column_width(self, col: int) -> float:
         return self.column_widths.get(col, self.default_column_width)
+
+    def column_emu(self, col: int) -> int:
+        """列の幅（EMU。非表示の列は 0）。"""
+        if col in self.hidden_columns:
+            return 0
+        width = self.column_widths.get(col)
+        if width is None and self.default_column_width == DEFAULT_COLUMN_WIDTH:
+            return _DEFAULT_COLUMN_PIXELS * _EMU_PER_PIXEL
+        chars = width if width is not None else self.default_column_width
+        pixels = int((256 * chars + int(128 / _DIGIT_PIXELS)) / 256 * _DIGIT_PIXELS)
+        return pixels * _EMU_PER_PIXEL
+
+    def row_emu(self, row: int) -> int:
+        """行の高さ（EMU。非表示の行は 0）。"""
+        if row in self.hidden_rows:
+            return 0
+        return int(self.row_heights.get(row, self.default_row_height) * _EMU_PER_POINT)
+
+    def anchor_box(
+        self, top: int, left: int, row_offset: int, column_offset: int, height: int, width: int
+    ) -> tuple[int, int, int, int]:
+        """セル（``top``, ``left``）の中の位置と大きさ（EMU）の図形がかかるセルの範囲。"""
+        first_row, last_row = _span(top, row_offset, height, self.row_emu, _MAX_ROW)
+        first_col, last_col = _span(left, column_offset, width, self.column_emu, _MAX_COLUMN)
+        return first_row, first_col, last_row, last_col
 
     def shape_refs(self, top: int, left: int, bottom: int, right: int) -> list[str]:
         """範囲の中に左上がある、図形の文字を置いた単位のセル範囲（左上の順）。"""
@@ -85,8 +148,28 @@ class Grid:
 
     def _put_shape(self, box: tuple[int, int, int, int], text: str) -> str:
         self.cells[(box[0], box[1])] = text
+        self.invalidate_rows()
         self.shape_boxes[(box[0], box[1])] = box
         return cell_ref(*box)
+
+
+def _span(start: int, offset: int, size: int, measure: Any, limit: int) -> tuple[int, int]:
+    """``start`` の行・列から ``offset`` 進んだ位置から ``size`` の長さがかかる、最初と最後の番号。
+
+    長さが 0 の行・列（非表示）は飛ばす。図形の端がちょうど境目なら、次の行・列は入れない。
+    """
+    index, position, steps = start, max(offset, 0), 0
+    while index < limit and steps < _MAX_ANCHOR_STEPS and position >= measure(index):
+        position -= measure(index)
+        index += 1
+        steps += 1
+    first = index
+    end = position + max(size, 0)
+    while index < limit and steps < _MAX_ANCHOR_STEPS and end > measure(index):
+        end -= measure(index)
+        index += 1
+        steps += 1
+    return first, index
 
 
 def _overlaps(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:

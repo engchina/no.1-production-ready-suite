@@ -482,6 +482,8 @@ const agentJa = {
   "evaluation.version.draftSame": "下書き（公開中の版と同じ内容）",
   "evaluation.version.helper": "既定は、公開していない変更があれば下書き、なければ公開中の版です。",
   "evaluation.version.noPublished": "公開した版が無いため、下書きで評価します。",
+  "evaluation.version.publishedOnly": "公開中の版を評価します（下書きの評価は Agent 管理だけ）。",
+  "evaluation.version.noPublishedNoDraft": "公開した版が無いため評価できません。下書きの評価は Agent 管理だけです。",
   "evaluation.version.column": "版",
   "evaluation.version.number": "v{version}",
   "evaluation.version.draftShort": "下書き",
