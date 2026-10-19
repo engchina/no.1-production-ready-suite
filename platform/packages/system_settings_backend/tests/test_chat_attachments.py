@@ -792,7 +792,79 @@ def test_settings_unreadable_store_is_disabled() -> None:
         def save(self, record: Any) -> Any:
             raise AssertionError
 
-    assert ChatAttachmentSettingsProvider(_Broken()).enabled() is False
+    provider = ChatAttachmentSettingsProvider(_Broken())
+    assert provider.enabled() is False
+    # 読めなかった理由を返す（#2555）。表が無いときと DB に接続できないときを分ける。
+    failure = provider.failure()
+    assert failure is not None
+    assert (failure.status_code, failure.code) == (503, "CHAT_ATTACHMENT_SETTINGS_UNAVAILABLE")
+    assert provider.failure() is not failure  # 呼ぶたびに作る
+
+
+def test_settings_missing_table_reports_schema_required() -> None:
+    from pr_system_settings.chat_attachments import ChatAttachmentSettingsProvider
+    from pr_system_settings.chat_attachments.settings import OracleChatAttachmentSettingsStore
+
+    class _Connection:
+        def __enter__(self) -> Any:
+            raise RuntimeError("ORA-00942: table or view does not exist")
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+    provider = ChatAttachmentSettingsProvider(
+        OracleChatAttachmentSettingsStore(_Connection, "chat_attachments:agent")
+    )
+    assert provider.enabled() is False
+    failure = provider.failure()
+    assert failure is not None
+    assert (failure.status_code, failure.code) == (409, "CHAT_ATTACHMENT_SCHEMA_REQUIRED")
+
+
+def test_unreadable_settings_reject_with_the_reason_not_as_disabled() -> None:
+    """設定を読めない間は「管理者が無効にしている」の 403 にしない（#2555）。読めたら戻る。"""
+    from pr_system_settings.chat_attachments import (
+        ChatAttachmentSettingsProvider,
+        ChatAttachmentSettingsRecord,
+        InMemoryChatAttachmentSettingsStore,
+    )
+
+    class _Flaky(InMemoryChatAttachmentSettingsStore):
+        down = False
+
+        def load(self) -> Any:
+            if self.down:
+                raise RuntimeError("DPY-6005")
+            return super().load()
+
+    ticks = iter(float(tick) for tick in range(0, 1000, 20))
+    settings_store = _Flaky(ChatAttachmentSettingsRecord(enabled=True))
+    provider = ChatAttachmentSettingsProvider(settings_store, clock=lambda: next(ticks))
+    service = ChatAttachmentService(
+        InMemoryChatAttachmentStore(),
+        product="agent",
+        settings=lambda: SimpleNamespace(),
+        enabled=provider.enabled,
+        settings_failure=provider.failure,
+    )
+    item = _upload(service, ALICE, "a.txt", b"x")
+    settings_store.down = True
+    with pytest.raises(ChatAttachmentError) as caught:
+        _upload(service, ALICE, "b.txt", b"x")
+    assert (caught.value.status_code, caught.value.code) == (
+        503,
+        "CHAT_ATTACHMENT_SETTINGS_UNAVAILABLE",
+    )
+    with pytest.raises(ChatAttachmentError) as caught:
+        service.prepare_attachments(ALICE, [item.attachment_id], conversation_id=None)
+    assert caught.value.status_code == 503
+    assert service.list_items(ALICE).limits.enabled is False
+    settings_store.down = False
+    assert _upload(service, ALICE, "c.txt", b"x").file_name == "c.txt"
+    settings_store.save(ChatAttachmentSettingsRecord(enabled=False))
+    with pytest.raises(ChatAttachmentError) as caught:
+        _upload(service, ALICE, "d.txt", b"x")
+    assert (caught.value.status_code, caught.value.code) == (403, "CHAT_ATTACHMENT_DISABLED")
 
 
 def test_disabled_product_rejects_upload_and_send_and_hides_tools() -> None:
