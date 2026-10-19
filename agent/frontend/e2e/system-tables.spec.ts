@@ -83,3 +83,63 @@ test("サイドナビの運用設定は、システムテーブルから始ま�
   await expect(operations).toBeVisible();
   await expect(operations).toHaveAttribute("aria-current", "page");
 });
+
+test(
+  "台帳が最新でも既存の表に無い列を更新必要として並べ、更新で直らなければ列の名前で止める（#2458）",
+  { tag: "@responsive" },
+  async ({ page, mockApi }, testInfo) => {
+    const missingColumns = [
+      { table_name: "AGENT_RUN_FACTS", column_name: "DATA_TOOL_CALLS" },
+      { table_name: "AGENT_RUNTIME_CHECKPOINTS", column_name: "WRITER_ID" },
+    ];
+    // 既定の旧版の DB の応答から、object がそろい台帳も最新の状態を作る。
+    const legacy = mockApi.state.systemTables as Record<string, unknown>;
+    const present = (rows: unknown) =>
+      (rows as Array<Record<string, unknown>>).map((row) => ({ ...row, exists: true }));
+    mockApi.state.systemTables = {
+      ...legacy,
+      status: "outdated",
+      applied_versions: legacy.pending_versions,
+      pending_versions: [],
+      existing_object_count: legacy.expected_object_count,
+      existing_table_count: legacy.expected_table_count,
+      tables: present(legacy.tables),
+      objects: present(legacy.objects),
+      pending_destructive_migrations: [],
+      missing_objects: [],
+      retired_objects: [],
+      missing_columns: missingColumns,
+    };
+    mockApi.state.systemTablesInitializeError = {
+      status: 500,
+      message:
+        "システムテーブル操作後も必須の列が不足しています（AGENT_RUN_FACTS.DATA_TOOL_CALLS, " +
+        "AGENT_RUNTIME_CHECKPOINTS.WRITER_ID）。更新を再試行しても直りません。" +
+        "配備の手順の既存環境の更新手順を確認してください。",
+      errorCode: "SCHEMA_POSTCONDITION_FAILED",
+    };
+
+    await page.goto("/settings/system-tables");
+    const card = page.locator("#system-tables");
+    await expect(card.getByText("更新必要", { exact: true }).first()).toBeVisible();
+    const missing = card.getByTestId("system-tables-missing-columns");
+    await expect(missing).toContainText("既存のテーブルに必須の列が 2 件ありません");
+    await expect(missing.getByRole("listitem")).toHaveText([
+      "AGENT_RUN_FACTS.DATA_TOOL_CALLS",
+      "AGENT_RUNTIME_CHECKPOINTS.WRITER_ID",
+    ]);
+    await expectNoPageOverflow(page);
+    await missing.screenshot({
+      path: testInfo.outputPath(`system-tables-missing-columns-${testInfo.project.name}.png`),
+    });
+
+    await card.getByRole("button", { name: "作成・更新" }).click();
+    const operationAlert = card.getByRole("alert");
+    await expect(operationAlert).toHaveCount(1);
+    await expect(operationAlert).toContainText("AGENT_RUN_FACTS.DATA_TOOL_CALLS");
+    await expect(operationAlert).toContainText("更新を再試行しても直りません");
+    // 列は戻っていないので、一覧は残す。
+    await expect(missing).toBeVisible();
+    await expectNoPageOverflow(page);
+  },
+);

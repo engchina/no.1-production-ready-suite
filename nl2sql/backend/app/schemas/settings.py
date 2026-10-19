@@ -48,6 +48,7 @@ from pr_system_settings.oci import OciPrivateKeyUploadData as OciPrivateKeyUploa
 from pr_system_settings.oci import OciSettingsData as OciSettingsData
 from pr_system_settings.oci import OciSettingsUpdate as OciSettingsUpdate
 from pr_system_settings.system_schema import SystemSchemaOperation, SystemSchemaStatus
+from pr_system_settings.system_schema import SystemTableColumnData as SystemTableColumnData
 from pr_system_settings.system_schema import SystemTableOperationState as SystemTableOperationState
 from pr_system_settings.system_schema import (
     SystemTablesInitializeRequest as SystemTablesInitializeRequest,
@@ -143,6 +144,8 @@ class SystemTablesStatusData(BaseModel):
     expected_table_count: int
     existing_table_count: int
     missing_objects: list[SystemTableMissingObject]
+    # 既存の表に無い正本の列（台帳が適用済みでも欠けた列。状態は outdated。#2458）。
+    missing_columns: list[SystemTableColumnData] = Field(default_factory=list)
     tables: list[SystemTableMetadata]
     objects: list[SystemObjectMetadata]
     operation_state: SystemTableOperationState

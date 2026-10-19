@@ -19,6 +19,7 @@ from pr_system_settings.auth.store import PLATFORM_AUTH_TABLES
 from pr_system_settings.system_schema import (
     DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
     ForeignKeySpec,
+    columns_from_statements,
     foreign_keys_from_create_table,
 )
 from pytest import MonkeyPatch
@@ -31,8 +32,10 @@ from app.security.service import set_security_service
 from app.system_schema import (
     _RENAMED_SKILL_IDS_013,
     CONTROL_PLANE_STATEMENTS,
+    CONTROL_STATEMENTS,
     CONTROL_TABLE,
     DOMAIN_TABLES,
+    MANAGED_COLUMNS,
     MANAGED_FOREIGN_KEYS,
     MANAGED_OBJECTS,
     MANAGED_TABLES,
@@ -66,6 +69,8 @@ class _FakeDatabase:
         self.control_plane_items: set[tuple[str, str]] = set()
         # kind `automation` の行の ITEM_JSON（ITEM_ID → 定義。#1799 の migration 009 が読む）。
         self.automation_documents: dict[str, dict[str, Any]] = {}
+        # 表 → 正本にあるが欠けている列（取り消した migration が改名・削除した列など。#2458）。
+        self.removed_columns: dict[str, set[str]] = {}
 
     def table(self, name: str) -> None:
         self.objects[(name, "TABLE")] = datetime.now(UTC)
@@ -123,6 +128,15 @@ class _FakeCursor:
             self.rows = [(n, 0, None) for n in sorted(names) if (n, "TABLE") in db.objects]
         elif upper.startswith("SELECT TABLE_NAME FROM USER_TABLES"):
             self.rows = [(n,) for n in sorted(names) if (n, "TABLE") in db.objects]
+        elif upper.startswith("SELECT TABLE_NAME, COLUMN_NAME FROM USER_TAB_COLUMNS"):
+            # 表は正本の列を持つ（`removed_columns` の列だけを欠く）。
+            self.rows = [
+                (n, column)
+                for n in sorted(names)
+                if (n, "TABLE") in db.objects
+                for column in MANAGED_COLUMNS.get(n, ())
+                if column not in db.removed_columns.get(n, set())
+            ]
         elif upper.startswith("SELECT STATUS, OPERATION_KIND"):
             op = db.operation
             if op is not None:
@@ -627,6 +641,47 @@ def test_recreate_requires_confirmation_and_keeps_shared_auth_tables() -> None:
     assert not set(dropped) & set(PLATFORM_AUTH_TABLES)
 
 
+def test_managed_columns_match_the_migration_path() -> None:
+    """正本の最新の形の列は、migration を順に当てた後の列と同じ（#2458）。
+
+    既存の DB は migration で、未初期化の DB は正本の DDL で作るので、どちらの経路でも状態の
+    列の比較が同じ結果になる。
+    """
+
+    assert set(MANAGED_COLUMNS) == set(MANAGED_TABLES)
+    assert "DATA_TOOL_CALLS" in MANAGED_COLUMNS["AGENT_RUN_FACTS"]
+    assert {"VERSION_NO", "WRITER_ID"} <= set(MANAGED_COLUMNS["AGENT_RUNTIME_CHECKPOINTS"])
+    migrated = columns_from_statements(
+        (*CONTROL_STATEMENTS, *(statement for item in MIGRATIONS for statement in item.statements))
+    )
+    assert {name: set(columns) for name, columns in migrated.items()} == {
+        name: set(columns) for name, columns in MANAGED_COLUMNS.items()
+    }
+
+
+def test_status_detects_missing_columns_even_when_ledger_is_current() -> None:
+    """台帳がすべて適用済みでも、正本の列が欠けた表があれば ready にしない（#2458）。"""
+
+    database = _FakeDatabase()
+    manager = _manager(database)
+    manager.initialize()
+    assert manager.status()["missing_columns"] == []
+    database.removed_columns = {"AGENT_RUN_FACTS": {"DATA_TOOL_CALLS"}}
+
+    status = manager.status()
+
+    assert status["status"] == "outdated"
+    assert status["pending_versions"] == []
+    assert status["missing_columns"] == [
+        {"table_name": "AGENT_RUN_FACTS", "column_name": "DATA_TOOL_CALLS"}
+    ]
+    # 列を足す migration は台帳で適用済みなので、更新では直らない。列の名前を出して止める。
+    with pytest.raises(SystemSchemaError) as raised:
+        manager.initialize()
+    assert raised.value.code == "SCHEMA_POSTCONDITION_FAILED"
+    assert "AGENT_RUN_FACTS.DATA_TOOL_CALLS" in raised.value.public_message
+
+
 # ---- API・DB ゲート・CLI --------------------------------------------------------
 
 
@@ -665,6 +720,23 @@ def test_system_tables_api_status_and_initialize(fake_manager: SystemSchemaManag
     assert done.status_code == 200, done.text
     assert done.json()["data"]["status"] == "ready"
     assert done.json()["data"]["operation"] == "migrated"
+
+
+def test_system_tables_api_returns_missing_columns(monkeypatch: MonkeyPatch) -> None:
+    database = _FakeDatabase()
+    manager = _manager(database)
+    manager.initialize()
+    database.removed_columns = {"AGENT_RUNTIME_CHECKPOINTS": {"WRITER_ID"}}
+    monkeypatch.setattr(system_tables_api, "system_schema_manager", manager)
+
+    status = client.get("/api/settings/database/system-tables")
+
+    assert status.status_code == 200, status.text
+    data = status.json()["data"]
+    assert data["status"] == "outdated"
+    assert data["missing_columns"] == [
+        {"table_name": "AGENT_RUNTIME_CHECKPOINTS", "column_name": "WRITER_ID"}
+    ]
 
 
 def test_system_tables_api_is_denied_without_permission(
