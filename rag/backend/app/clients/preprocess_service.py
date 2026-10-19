@@ -4,6 +4,7 @@ parse の **前** に原本を一度だけ canonical な中間物へ変換する
 
 - `passthrough`(既定)は変換せず原本のまま parse する(no-op)。
 - サービス必須の変換(`office_to_pdf` / `pdf_to_page_images` / `csv_to_jsonl` / `excel_to_jsonl` /
+  `word_to_jsonl` /
   `pii_redact`)は **各々独立した**前処理マイクロサービスへ
   HTTP 委譲する(profile ごとに専用 base URL)。in-process 変換・local fallback は持たない。
   サービス無効・未達・timeout・5xx 時は、選択した前処理を別経路へ黙って縮退せず、
@@ -62,7 +63,8 @@ class PreprocessServiceClient:
         if resolved == "passthrough":
             # 削除した変換方式(#2042 など)は normalize_preprocess_profile で passthrough へ寄る。
             return ConvertOutcome.passthrough()
-        # office_to_pdf / pdf_to_page_images / csv_to_jsonl / excel_to_jsonl / pii_redact:
+        # office_to_pdf / pdf_to_page_images / csv_to_jsonl / excel_to_jsonl / word_to_jsonl /
+        # pii_redact:
         # 各専用サービスへ委譲。
         return self._convert_via_service(
             resolved,
@@ -175,6 +177,45 @@ _SOURCE_REASON_MESSAGES: dict[str, str] = {
     "pii_empty": (
         "ファイル準備の「PIIマスク」で本文を読み取れませんでした（空の文書）。"
         "文書の内容を確認してから再実行してください。"
+    ),
+    # ファイル準備「Word→JSONL」(word_to_jsonl。#2457)が変換しなかった理由。
+    "word_encrypted": (
+        "ファイル準備の「Word→JSONL」: パスワードで保護(暗号化)された Word 文書は読めないため、"
+        "取込を停止しました。保護を外した文書をアップロードし直してください。"
+    ),
+    "word_corrupt": (
+        "ファイル準備の「Word→JSONL」: Word 文書が壊れているか読み取れないため、"
+        "取込を停止しました。"
+        "Word で開けることを確かめてからアップロードし直してください。"
+    ),
+    "word_not_word_document": (
+        "ファイル準備の「Word→JSONL」: Word(.doc / .docx / .docm)の文書ではないため、"
+        "取込を停止しました。この文書の「処理レシピ」で「ファイル準備」を別の方式に変えてから"
+        "再実行してください。"
+    ),
+    "word_unsupported_format": (
+        "ファイル準備の「Word→JSONL」: Word(.doc / .docx / .docm)の文書ではないため、"
+        "取込を停止しました。この文書の「処理レシピ」で「ファイル準備」を別の方式に変えてから"
+        "再実行してください。"
+    ),
+    "word_no_content": (
+        "ファイル準備の「Word→JSONL」で本文を読み取れませんでした(空の文書)。"
+        "文書の内容を確認してから再実行してください。"
+    ),
+    "word_input_too_large": (
+        "ファイル準備の「Word→JSONL」が扱える大きさ(64 MB・展開後 512 MB)を超えているため、"
+        "取込を停止しました。文書を分けてから再実行してください。"
+    ),
+    "word_conversion_timeout": (
+        "ファイル準備の「Word→JSONL」: 旧形式(.doc)の変換が時間の上限(120 秒)内に"
+        "終わらなかったため、"
+        "取込を停止しました。時間をおいて再実行するか、文書を分けてから再実行してください。"
+    ),
+    "word_libreoffice_unavailable": (
+        "ファイル準備の「Word→JSONL」: 旧形式(.doc)を変換する LibreOffice が前処理のサービス"
+        "(preprocess-word-to-jsonl)の環境に無いため、取込を停止しました。"
+        "管理者に LibreOffice の導入を確認してもらってください"
+        "(.docx・.docm は LibreOffice なしで読めます)。"
     ),
 }
 

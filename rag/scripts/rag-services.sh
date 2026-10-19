@@ -58,6 +58,7 @@ CPU_SERVICES=(
   preprocess-pdf-to-page-images
   preprocess-csv-to-jsonl
   preprocess-excel-to-jsonl
+  preprocess-word-to-jsonl
   preprocess-pii-redact
   parser-docling
   parser-structured-records-jsonl
@@ -118,7 +119,7 @@ warn_missing_os_tools() {
   local service
   for service in "${SELECTED[@]}"; do
     case "${service}" in
-      preprocess-office-to-pdf)
+      preprocess-office-to-pdf | preprocess-word-to-jsonl)
         command -v soffice >/dev/null 2>&1 || log "注意: ${service} は LibreOffice（soffice）を使います。"
         ;;
       parser-unstructured)

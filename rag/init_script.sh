@@ -89,6 +89,7 @@ ALLOWED_RAG_SERVICES=(
   preprocess-pdf-to-page-images
   preprocess-csv-to-jsonl
   preprocess-excel-to-jsonl
+  preprocess-word-to-jsonl
   preprocess-pii-redact
   parser-docling
   parser-unstructured
@@ -96,10 +97,11 @@ ALLOWED_RAG_SERVICES=(
   parser-xml-tree-json
   parser-oci-document-understanding
 )
-# 必ず配備する parser（既定の解析エンジンの Docling と、使用エンジンに選べる構造化レコード JSONL・XML ツリー JSON）。
-# rag_services.txt に無ければ足す（以前の stack が書いた一覧でも、再配備で unit が入る。構造化レコード JSONL は
+# 必ず配備する parser（既定の解析エンジンの Docling と、使用エンジンに選べる構造化レコード JSONL・XML ツリー JSON）と、
+# 後から足した前処理 Word→JSONL（#2457 の ④。以前の stack の一覧には無い）。
+# rag_services.txt に無ければ足す（以前の stack が書いた一覧でも、再配備で unit が入る。構造化レコード JSONL と Word→JSONL は
 # CSV / Excel の前処理と同じく起動する（#2457）。XML ツリー JSON は既定は停止のサービスで、初回は起動しない。#2453）。
-REQUIRED_RAG_SERVICES=(parser-docling parser-structured-records-jsonl parser-xml-tree-json)
+REQUIRED_RAG_SERVICES=(parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl)
 RAG_SERVICES=()
 
 PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"
@@ -238,6 +240,10 @@ service_os_packages() {
     preprocess-office-to-pdf)
       printf '%s\n' libreoffice-core libreoffice-writer libreoffice-impress libreoffice-calc \
         google-noto-sans-cjk-ttc-fonts google-noto-serif-cjk-ttc-fonts
+      ;;
+    preprocess-word-to-jsonl)
+      # .doc を .docx にするだけなので Writer だけでよい（#2457）。
+      printf '%s\n' libreoffice-core libreoffice-writer
       ;;
     preprocess-pdf-to-page-images)
       printf '%s\n' google-noto-sans-cjk-ttc-fonts google-noto-serif-cjk-ttc-fonts

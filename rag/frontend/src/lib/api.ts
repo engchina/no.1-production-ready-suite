@@ -2265,6 +2265,7 @@ export type PreprocessProfileName =
   | "pdf_to_page_images"
   | "csv_to_jsonl"
   | "excel_to_jsonl"
+  | "word_to_jsonl"
   | "pii_redact";
 
 export interface PreprocessProfileStatusData {

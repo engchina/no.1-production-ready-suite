@@ -9,7 +9,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapseSidebar: false },
   { name: "mobile", width: 375, height: 812, collapseSidebar: true },
 ]) {
-  test(`前処理設定はファイル準備方式を表示する (${viewport.name})`, async ({ page }) => {
+  test(`前処理設定はファイル準備方式を表示する (${viewport.name})`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapseSidebar) {
       await page.addInitScript(() => {
@@ -34,13 +34,23 @@ for (const viewport of [
       page.getByRole("radio", { name: /Excel→JSONL.*Excel ファイル\(\.xls・\.xlsx・マクロ付きの \.xlsm\)/ })
     ).toBeVisible();
     await expect(page.getByRole("radio", { name: /CSV→JSONL.*構造化レコード JSONL/ })).toBeVisible();
+    // Word→JSONL は Excel→JSONL の直後（#2457）。
+    await expect(
+      page.getByRole("radio", { name: /Word→JSONL.*見出しの下の段落・リスト・表のまとまり/ })
+    ).toBeVisible();
+    const values = await page
+      .getByRole("radio")
+      .evaluateAll((items) => items.map((item) => (item as HTMLInputElement).value));
+    expect(values.indexOf("word_to_jsonl")).toBe(values.indexOf("excel_to_jsonl") + 1);
+    await page.getByRole("radio", { name: /Word→JSONL/ }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("preprocess-word-to-jsonl.png") });
     // 名前と説明で、どの文書に使うかが分かる(#563)。実装の言葉(ラスタライズ・canonical な中間物 等)は出さない(保存先の値 artifacts/canonical は除く)。
     await expect(
       page.getByRole("radio", { name: /PDF を画像として読み直す.*文字化けする PDF/ })
     ).toBeVisible();
     // スキャン画像の補正と URL→Markdown は削除した（#2042）。
     await expect(page.getByRole("radio", { name: /スキャン画像の補正|URL→Markdown/ })).toHaveCount(0);
-    await expect(page.getByRole("radio")).toHaveCount(6);
+    await expect(page.getByRole("radio")).toHaveCount(7);
     const main = page.getByRole("main");
     for (const jargon of ["ラスタライズ", "VLM/OCR 経路", "canonical な", "派生系譜", "溯源", "in-process"]) {
       await expect(main).not.toContainText(jargon);
@@ -139,6 +149,7 @@ function preprocessEnvelope(overrides: PreprocessOverrides = {}) {
     { name: "pdf_to_page_images", origin: "no1_pdfparser_page_images", recommended_for: ["pdf"], in_process: false, requires_service: true },
     { name: "csv_to_jsonl", origin: "no1_csv2json_records", recommended_for: ["csv"], in_process: false, requires_service: true },
     { name: "excel_to_jsonl", origin: "no1_excel2json_records", recommended_for: ["excel"], in_process: false, requires_service: true },
+    { name: "word_to_jsonl", origin: "libreoffice_python_docx_records", recommended_for: ["word"], in_process: false, requires_service: true },
     { name: "pii_redact", origin: "presidio_ja_ner", recommended_for: ["text"], in_process: false, requires_service: true },
   ];
   return {

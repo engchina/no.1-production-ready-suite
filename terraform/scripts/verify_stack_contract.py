@@ -137,6 +137,7 @@ RAG_BASE_SERVICES = [
     "preprocess-pdf-to-page-images",
     "preprocess-csv-to-jsonl",
     "preprocess-excel-to-jsonl",
+    "preprocess-word-to-jsonl",
     "preprocess-pii-redact",
     "parser-docling",
     # 構造化レコード JSONL・XML ツリー JSON は使用エンジンに選べる解析エンジン。常に配備する
@@ -244,8 +245,9 @@ INIT_SCRIPT_CONTRACTS = {
         'WALLET_DIR="${APP_ROOT}/wallet"',
         'BACKEND_HOST="127.0.0.1"',
         'BACKEND_PORT="8000"',
-        # 必ず配備する parser（stack の RAG_BASE_SERVICES にもある）。以前の stack の一覧に無くても足す（#2042）。
-        "REQUIRED_RAG_SERVICES=(parser-docling parser-structured-records-jsonl parser-xml-tree-json)",
+        # 必ず配備する parser と前処理 Word→JSONL（stack の RAG_BASE_SERVICES にもある）。以前の stack の一覧に
+        # 無くても足す（#2042・#2457）。
+        "REQUIRED_RAG_SERVICES=(parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl)",
         'source "${INIT_SCRIPT_DIR}/scripts/rag-systemd.sh"',
         'find "${WALLET_DIR}" -type f -exec chmod 0600 {} \\;',
         "python -m app.rag.system_schema_cli initialize",

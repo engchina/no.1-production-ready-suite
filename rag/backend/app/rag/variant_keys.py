@@ -34,7 +34,7 @@ from app.rag.preprocess_strategy import preprocess_options
 # キー算法の版。算法やフィールド構成を変えるときに上げて、旧キーと衝突させない。
 KEY_VERSION = "v5"
 
-# 前処理 csv_to_jsonl / excel_to_jsonl の成果物の形式(抽出の ID に入れる。#2457)。
+# 前処理 csv_to_jsonl / excel_to_jsonl / word_to_jsonl の成果物の形式(抽出の ID に入れる。#2457)。
 STRUCTURED_RECORDS_FORMAT_ID = "structured_records_jsonl_v1"
 # 1 文書あたりの抽出(preprocess x parser 組合せ)上限。組合せ暴発の安全弁。
 MAX_EXTRACTIONS_PER_DOCUMENT = 8
@@ -154,6 +154,8 @@ def extraction_recipe_subset(settings: Settings) -> dict[str, object]:
         subset["excel_to_jsonl_format"] = STRUCTURED_RECORDS_FORMAT_ID
     if profile == "csv_to_jsonl":
         subset["csv_to_jsonl_format"] = STRUCTURED_RECORDS_FORMAT_ID
+    if profile == "word_to_jsonl":
+        subset["word_to_jsonl_format"] = STRUCTURED_RECORDS_FORMAT_ID
     return subset
 
 
