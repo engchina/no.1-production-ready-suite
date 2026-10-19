@@ -599,6 +599,28 @@ const agentJa = {
     "AI の回答の末尾に毎回出す注意書き（誤りの可能性・確かめ方・連絡先）を設定します。Agent の回答だけに使い、RAG・NL2SQL はそれぞれの画面で設定します。",
   "settings.answerNotice.description":
     "業務 Agent のチャットの回答の末尾に、毎回同じ文を出します。確認の質問・エラー・停止には出しません。",
+  "nav.settingsChatAttachments": "チャットの添付",
+  "settings.chatAttachments.subtitle":
+    "チャットで利用者がファイルを添付して質問できるかを設定します。Agent のチャットだけに使い、RAG・NL2SQL はそれぞれの画面で設定します。",
+  "settings.chatAttachments.description":
+    "業務 Agent のチャットで、利用者が手元のファイルを会話に添付し、業務 Agent に読ませて質問できるようにします。添付は会話の期間だけ保存し、期限を過ぎると自動で消します。",
+  // チャットの添付（#2517）。
+  "chat.attachments.add": "ファイルを添付",
+  "chat.attachments.drop": "ここにドロップして添付",
+  "chat.attachments.list": "添付ファイル",
+  "chat.attachments.remove": "{name} を外す",
+  "chat.attachments.uploading": "読み取り中",
+  "chat.attachments.hint": "1 つ {size}・{count} 件まで。最後に使ってから {hours} 時間で消えます",
+  "chat.attachments.tooLarge": "{size} を超えるファイルは添付できません。",
+  "chat.attachments.tooMany": "添付できるのは {count} 件までです。",
+  "chat.attachments.unsupported": "この種類のファイルは添付できません。",
+  "chat.attachments.failed": "添付できませんでした。",
+  "chat.attachments.warning.macros_not_executed": "マクロは実行していません。",
+  "chat.attachments.warning.pdf_page_without_text": "文字の無いページは読み取っていません。",
+  "chat.attachments.warning.text_truncated": "長いため途中までを読み取りました。",
+  "chat.attachments.warning.rows_truncated": "行が多いため途中までを読み取りました。",
+  "chat.attachments.warning.columns_truncated": "列が多いため一部の列を読み取りました。",
+  "chat.attachments.warning.pages_truncated": "ページが多いため途中までを読み取りました。",
   "appearance.theme.label": "配色テーマ",
   "appearance.theme.hint": "画面全体の配色を切り替えます。「自動」は OS の設定に追従します。",
   "appearance.theme.light": "ライト",

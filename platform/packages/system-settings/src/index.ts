@@ -4,6 +4,8 @@ export {
   ACCOUNT_TABS,
   ANSWER_NOTICE_NAV_ITEM,
   ANSWER_NOTICE_PATH,
+  CHAT_ATTACHMENT_SETTINGS_NAV_ITEM,
+  CHAT_ATTACHMENT_SETTINGS_PATH,
   API_KEY_ADMIN_NAV_ITEM,
   API_KEY_PATHS,
   accountTabPath,
@@ -39,6 +41,22 @@ export {
   type AnswerNoticeSettingsData,
   type AnswerNoticeSettingsUpdate,
 } from "./answer-notice/types";
+
+// チャットの添付（設定は製品ごと。#2517）
+export {
+  ChatAttachmentSettingsPage,
+  type ChatAttachmentSettingsPageProps,
+} from "./chat-attachments/ChatAttachmentSettingsPage";
+export {
+  CHAT_ATTACHMENT_SETTINGS_MESSAGES,
+  type ChatAttachmentSettingsMessages,
+} from "./chat-attachments/messages";
+export {
+  CHAT_ATTACHMENT_SETTINGS_QUERY_KEY,
+  type ChatAttachmentSettingsApi,
+  type ChatAttachmentSettingsData,
+  type ChatAttachmentSettingsUpdate,
+} from "./chat-attachments/types";
 
 // 未保存変更の離脱ガード（NL2SQL から移設。#97）。戻る / 進むの blocker はアプリで 1 つ（#586）。
 export {

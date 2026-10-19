@@ -17,6 +17,11 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from ..answer_notice import ANSWER_NOTICE_TABLE, OracleAnswerNoticeStore, answer_notice_setting_key
+from ..chat_attachments.settings import (
+    OracleChatAttachmentSettingsStore,
+    chat_attachment_setting_key,
+)
+from ..chat_attachments.store import OracleChatAttachmentStore
 from .api_keys import API_KEYS_TABLE, OracleApiKeyStore
 from .domain import (
     SYSTEM_ADMIN_ROLE_CODE,
@@ -525,6 +530,19 @@ class OracleAuthStore:
     def api_key_store(self) -> OracleApiKeyStore:
         """API キー（`PLATFORM_API_KEYS`。3 製品で共有。#1805）。"""
         return OracleApiKeyStore(self._connection_factory)
+
+    def chat_attachment_store(self) -> OracleChatAttachmentStore:
+        """会話の添付（`PLATFORM_CHAT_ATTACHMENTS`。3 製品で共有。#2517）。"""
+        return OracleChatAttachmentStore(self._connection_factory)
+
+    def chat_attachment_settings_store(self, product_key: str) -> OracleChatAttachmentSettingsStore:
+        """製品のチャットの添付を使うか（#2517）。
+
+        `PLATFORM_CHAT_ATTACHMENT_SETTINGS` の製品の行。
+        """
+        return OracleChatAttachmentSettingsStore(
+            self._connection_factory, chat_attachment_setting_key(product_key)
+        )
 
     def answer_notice_store(self, product_key: str) -> OracleAnswerNoticeStore:
         """製品の回答の注意書き（`PLATFORM_ANSWER_NOTICE` の製品の行。#2405・#2449）。"""

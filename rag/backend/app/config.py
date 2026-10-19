@@ -36,6 +36,17 @@ from pr_backend_core.config import (
     settings_env_name,
 )
 from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
+from pr_system_settings.chat_attachments.limits import (
+    CHAT_ATTACHMENT_DEFAULT_MAX_BYTES,
+    CHAT_ATTACHMENT_DEFAULT_MAX_FILES,
+    CHAT_ATTACHMENT_DEFAULT_TTL_HOURS,
+    CHAT_ATTACHMENT_MAX_BYTES_MAX,
+    CHAT_ATTACHMENT_MAX_BYTES_MIN,
+    CHAT_ATTACHMENT_MAX_FILES_MAX,
+    CHAT_ATTACHMENT_MAX_FILES_MIN,
+    CHAT_ATTACHMENT_TTL_HOURS_MAX,
+    CHAT_ATTACHMENT_TTL_HOURS_MIN,
+)
 from pr_system_settings.model import EnterpriseAiConfiguredModel as EnterpriseAiConfiguredModel
 from pr_system_settings.model import EnterpriseAiConnection as EnterpriseAiConnection
 from pr_system_settings.model import ModelSecretStateMixin, ModelSettingsStore
@@ -605,6 +616,22 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     # 解釈は pr_backend_core.chat_history_window（最後の更新が直近 N 日の会話だけを一覧に出す）。
     chat_history_days: int = Field(
         default=CHAT_HISTORY_DEFAULT_DAYS, ge=0, le=CHAT_HISTORY_DAYS_LIMIT
+    )
+    # 会話の添付（共通の設定。#2517）。解釈は pr_system_settings.chat_attachments.limits。
+    chat_attachment_ttl_hours: int = Field(
+        default=CHAT_ATTACHMENT_DEFAULT_TTL_HOURS,
+        ge=CHAT_ATTACHMENT_TTL_HOURS_MIN,
+        le=CHAT_ATTACHMENT_TTL_HOURS_MAX,
+    )
+    chat_attachment_max_bytes: int = Field(
+        default=CHAT_ATTACHMENT_DEFAULT_MAX_BYTES,
+        ge=CHAT_ATTACHMENT_MAX_BYTES_MIN,
+        le=CHAT_ATTACHMENT_MAX_BYTES_MAX,
+    )
+    chat_attachment_max_files: int = Field(
+        default=CHAT_ATTACHMENT_DEFAULT_MAX_FILES,
+        ge=CHAT_ATTACHMENT_MAX_FILES_MIN,
+        le=CHAT_ATTACHMENT_MAX_FILES_MAX,
     )
 
     # --- OCI Generative AI（埋め込み / リランク）---

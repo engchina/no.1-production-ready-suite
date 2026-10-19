@@ -6,6 +6,7 @@ import {
   KeySquare,
   MessageSquareWarning,
   Palette,
+  Paperclip,
   Shield,
   Users,
   type LucideIcon,
@@ -86,6 +87,20 @@ export const ANSWER_NOTICE_NAV_ITEM = {
   href: ANSWER_NOTICE_PATH,
   labelKey: "nav.settingsAnswerNotice",
   icon: MessageSquareWarning,
+} as const;
+
+/** チャットの添付の設定の画面のパス（画面は共有パッケージ。設定は製品ごと。#2517）。 */
+export const CHAT_ATTACHMENT_SETTINGS_PATH = "/settings/chat-attachments";
+
+/**
+ * サイドナビ「運用設定」の「回答の注意書き」の下に置く「チャットの添付」（3 製品で同じ位置とアイコン。#2517）。
+ * 設定は製品ごとで、各製品の画面はその製品のチャットの添付を使うかだけを扱う。
+ */
+export const CHAT_ATTACHMENT_SETTINGS_NAV_ITEM = {
+  key: "chatAttachments",
+  href: CHAT_ATTACHMENT_SETTINGS_PATH,
+  labelKey: "nav.settingsChatAttachments",
+  icon: Paperclip,
 } as const;
 
 /**

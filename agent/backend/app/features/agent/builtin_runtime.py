@@ -97,6 +97,7 @@ from app.features.agent.answer_validation import (
     NO_EVIDENCE_NOTICE,
     REASON_ABSENCE_ONLY,
     REASON_ANSWER_TOO_LONG,
+    REASON_ATTACHMENT_EVIDENCE,
     REASON_CLARIFICATION_ONLY,
     REASON_CONNECTION_NOT_FOUND,
     REASON_EMPTY_ANSWER,
@@ -1463,6 +1464,7 @@ def build_function_tools(
     data_scopes: data_scope.AgentDataScopes | None = None,
     declined: Collection[str] = (),
     confirmation: ConfirmationBudget | None = None,
+    attachment_entries: list[tuple[ToolDefinition, ToolHandler]] | None = None,
 ) -> list[FunctionTool]:
     """ツールを function tool にする。
 
@@ -1484,6 +1486,8 @@ def build_function_tools(
         from app.features.agent.skill_references import reference_tool
 
         entries.append(reference_tool(reference_keys))
+    # 会話の添付を読むツール（#2517。添付のある会話の Run だけ）。
+    entries.extend(attachment_entries or [])
     if confirmation is not None and (confirmation.asks or confirmation.known_calls):
         # 答えた確認の再開では、上限に達していてもツールを渡す（SDK が同じ呼び出しを実行する）。
         entries.append(confirmation_tool(confirmation))
@@ -1591,6 +1595,7 @@ def build_sdk_agent(
     cancellations: list[dict[str, Any]] | None = None,
     confirmation: ConfirmationBudget | None = None,
     confirmation_response: Mapping[str, Any] | None = None,
+    thread_id: str | None = None,
 ) -> Agent[Any]:
     """SDK の Agent を作る（MCP 接続のツール一覧を HTTP で取るので、イベントループの外で呼ぶ）。
 
@@ -1598,13 +1603,20 @@ def build_sdk_agent(
     ツールの結果の確認（metadata `clarification_response`）。方針と答えを指示に足す。
 
     `support_task` は前の Run から引き継いだ支援タスクの状態（指示の末尾に足す。#1243）。
+    `thread_id` の会話に添付があれば、添付を読むツールと添付の索引を足す（#2517）。
     `cancellations` はこの Run で利用者が取り消した確認（#1441・#1445）。その種類のツールを渡さず、
     ほかの手段で続けるか意図を聞き直す指示を足す。
     """
+    from app.features.agent.chat_attachments import (
+        attachment_instructions,
+        attachment_tools,
+        thread_attachment_toolset,
+    )
     from app.features.agent.runtime import runtime_repository
     from app.features.agent.skill_references import skill_reference_keys
 
     target = resolve_model_target(model_id)
+    attachments = thread_attachment_toolset(thread_id)
     mcp_tools, warnings = discover_mcp_tools(
         skill_ids,
         context=ToolInvocationContext(run_id=run_id, agent_id=agent_id, user_uuid=user_uuid),
@@ -1631,6 +1643,7 @@ def build_sdk_agent(
         data_scopes=data_scopes,
         declined=declined_kinds({CANCEL_METADATA_KEY: cancellations or []}),
         confirmation=confirmation,
+        attachment_entries=attachment_tools(attachments) if attachments else None,
     )
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
     exposed = [tool.name for tool in tools]
@@ -1646,6 +1659,8 @@ def build_sdk_agent(
     cancel_text = cancel_instructions(list(cancellations or []))
     if cancel_text:
         composed = f"{composed}\n\n{cancel_text}"
+    if attachments:
+        composed = f"{composed}\n\n{attachment_instructions(attachments)}"
     if confirmation is not None:
         # 回答前の確認の方針と、カードで答えた内容（#1839）。ツールの名前はモデルに渡す名前にする。
         confirmation_names = instruction_tool_names(skill_ids, exposed)
@@ -2120,6 +2135,7 @@ async def execute_run(run_id: str) -> None:
                 cancellations=cancellations,
                 confirmation=task.confirmation,
                 confirmation_response=task.response,
+                thread_id=run.thread_id,
             )
             result = await _run_sdk(run_id, sdk_agent, conversation_input(run_id, run.goal))
             result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
@@ -2176,6 +2192,7 @@ async def resume_run(run_id: str) -> None:
                 cancellations=cancellations,
                 confirmation=task.confirmation,
                 confirmation_response=task.response,
+                thread_id=run.thread_id,
             )
             state = await RunState.from_string(sdk_agent, state_text)
             for item in state.get_interruptions():
@@ -3150,6 +3167,19 @@ def has_rag_evidence_tools(
     )
 
 
+def _read_attachments(steps: list[Any]) -> bool:
+    """この Run でモデルが添付を読むツールを呼んで結果を得たか（#2517）。"""
+    from app.features.agent.chat_attachments import ATTACHMENT_READ_TOOLS
+
+    return any(
+        step.tool_call is not None
+        and step.tool_call.name in ATTACHMENT_READ_TOOLS
+        and step.tool_result is not None
+        and step.tool_result.success
+        for step in steps
+    )
+
+
 async def _validate_final_answer(
     run_id: str,
     answer: str,
@@ -3203,6 +3233,9 @@ async def _validate_final_answer(
         if carried and not tool_grounding.grounding_used(run.steps):
             # 前の回答の整形・言い換え（#1879）は、前のターンで裏付けた根拠で確かめる。
             groups = carried_evidence_groups(carried, answer)
+    if not groups and _read_attachments(run.steps):
+        # 利用者が添付したファイルを読んで答えた（#2517）。資料と照らし合わせない（注記しない）。
+        return answer, save(validation_content(STATUS_SKIPPED, reason=REASON_ATTACHMENT_EVIDENCE))
     if not groups:
         if rag_tools and answer.strip():
             content = validation_content(

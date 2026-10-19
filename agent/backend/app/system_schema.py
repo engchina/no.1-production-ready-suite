@@ -32,6 +32,7 @@ from typing import Any, Protocol
 
 from pr_system_settings.auth.migrations import apply_platform_auth_schema
 from pr_system_settings.auth.store import PLATFORM_AUTH_TABLES, OracleAuthStore
+from pr_system_settings.chat_attachments import CHAT_ATTACHMENT_TABLES
 from pr_system_settings.system_schema import (
     IGNORED_APPLY_CODES,
     IGNORED_DROP_CODES,
@@ -739,8 +740,9 @@ RETIRED_MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE"),
 )
 DOMAIN_TABLES = frozenset(MANAGED_TABLES) - {CONTROL_TABLE, MIGRATION_TABLE}
-# 3 製品共通の認証テーブル。先に作るが管理対象ではないため、全再作成でも削除しない。
-PRESERVED_TABLES: tuple[str, ...] = tuple(PLATFORM_AUTH_TABLES)
+# 3 製品共通の認証テーブルと会話の添付の表（#2517）。先に作るが管理対象ではないため、
+# 全再作成でも削除しない。
+PRESERVED_TABLES: tuple[str, ...] = (*PLATFORM_AUTH_TABLES, *CHAT_ATTACHMENT_TABLES)
 
 MANAGED_FOREIGN_KEYS: tuple[ForeignKeySpec, ...] = tuple(
     foreign_key

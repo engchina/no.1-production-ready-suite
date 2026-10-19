@@ -60,6 +60,7 @@ from app.features.agent.answer_passages import (
     is_clarification_only,
     is_greeting_only,
 )
+from app.features.agent.chat_attachments import ATTACHMENT_READ_TOOLS
 from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
 from app.features.agent.confirmation import CONFIRMATION_TOOL
 from app.features.agent.support_task import (
@@ -168,8 +169,11 @@ def is_grounding_tool(name: str) -> bool:
     """根拠・データのツールか（MCP 接続のツール。一覧・推薦・Control Plane が呼ぶものを除く）。
 
     Control Plane のツール（`agent_skill_list`・`skill_reference_read` など。名前に接続の
-    区切りが無い）は数えない。
+    区切りが無い）は数えない。例外は添付を読むツール（`ATTACHMENT_READ_TOOLS`。#2517）。
     """
+    if name in ATTACHMENT_READ_TOOLS:
+        # 利用者が添付したファイルを読むツール（#2517）は、その内容の根拠を調べたものに数える。
+        return True
     if MCP_TOOL_SEPARATOR not in name:
         return False
     base = mcp_base_tool_name(name)

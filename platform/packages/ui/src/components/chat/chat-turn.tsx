@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { OptimisticChatMessage } from "../../lib/chat-optimistic";
 import { cn } from "../../lib/utils";
 import { ChatSenderLabel, ChatUserMessage, type ChatUserMessageStatus } from "../ui/chat-message";
+import type { ChatAttachmentItem } from "./chat-attachments";
 
 export interface ChatTurnProps {
   /** 送った質問（改行はそのまま出す）。 */
@@ -21,6 +22,10 @@ export interface ChatTurnProps {
    * `userContent` を渡したときは、その上に出す。
    */
   questionSender?: string;
+  /** 質問に添付したファイル（`ChatUserMessage` の `attachments`。#2517）。 */
+  questionAttachments?: ChatAttachmentItem[];
+  /** 添付の一覧の名前（翻訳済み。読み上げだけ）。 */
+  attachmentsLabel?: string;
   /** 質問の下（回答の入れ物 `ChatAnswer`・失敗の Banner・回答の後の操作）。 */
   children?: ReactNode;
   className?: string;
@@ -37,6 +42,8 @@ export function ChatTurn({
   questionStatus = "sent",
   failedLabel,
   questionSender,
+  questionAttachments,
+  attachmentsLabel,
   children,
   className,
   testId,
@@ -49,7 +56,13 @@ export function ChatTurn({
           {userContent}
         </>
       ) : (
-        <ChatUserMessage status={questionStatus} failedLabel={failedLabel} senderLabel={questionSender}>
+        <ChatUserMessage
+          status={questionStatus}
+          failedLabel={failedLabel}
+          senderLabel={questionSender}
+          attachments={questionAttachments}
+          attachmentsLabel={attachmentsLabel}
+        >
           {question}
         </ChatUserMessage>
       )}
@@ -95,6 +108,10 @@ export interface ChatPendingTurnProps {
   progress: ReactNode;
   /** 送信できなかったときの原因と「再送信」（danger の `Banner` / `ApiErrorBanner`）。 */
   failure?: ReactNode;
+  /** 質問に添付したファイル（#2517。`ChatTurn` の `questionAttachments`）。 */
+  attachments?: ChatAttachmentItem[];
+  /** 添付の一覧の名前（翻訳済み。読み上げだけ）。 */
+  attachmentsLabel?: string;
   testId?: string;
 }
 
@@ -103,9 +120,24 @@ export interface ChatPendingTurnProps {
  * 送れなかったら質問を残したまま原因と「再送信」を出す（入力欄には戻さない）。確定したら製品が同じ位置の
  * `ChatTurn` に置き換える。
  */
-export function ChatPendingTurn({ message, failedLabel, progress, failure, testId }: ChatPendingTurnProps) {
+export function ChatPendingTurn({
+  message,
+  failedLabel,
+  progress,
+  failure,
+  attachments,
+  attachmentsLabel,
+  testId,
+}: ChatPendingTurnProps) {
   return (
-    <ChatTurn question={message.content} questionStatus={message.status} failedLabel={failedLabel} testId={testId}>
+    <ChatTurn
+      question={message.content}
+      questionStatus={message.status}
+      failedLabel={failedLabel}
+      questionAttachments={attachments}
+      attachmentsLabel={attachmentsLabel}
+      testId={testId}
+    >
       {message.status === "failed" ? failure : message.status === "sending" ? <ChatAnswer>{progress}</ChatAnswer> : null}
     </ChatTurn>
   );

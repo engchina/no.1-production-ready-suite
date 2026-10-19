@@ -819,6 +819,8 @@ function createState() {
     uploadStorage: d.uploadStorage as Json,
     // 回答の注意書き（設定は製品ごと。#2405・#2449）。既定は未設定（既定の文）。
     answerNotice: { enabled: true, text: null } as { enabled: boolean; text: string | null },
+    // チャットの添付を使うか（#2517。既定は無効）。
+    chatAttachmentsEnabled: false,
     ociSettings: d.ociSettings as Json,
     // システムテーブルの状態（#751）。既定は旧版の DB（検索・回答プロファイルの表の削除を承認する前）。
     systemTables: clone(SYSTEM_TABLES_LEGACY) as Json,
@@ -1734,6 +1736,15 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       created_by_user_uuid: ownThread ? "local" : (currentUser?.user_uuid ?? "local"),
       thread_id: threadId ?? `thread_${String(state.runs.length + 1).padStart(32, "0")}`,
       thread_owner_user_uuid: threadId ? threadOwner : "local",
+      // 質問に添付したファイル（#2517）。backend と同じく名前と種類を Run に残す（添付の API は spec が mock する）。
+      attachments: Array.isArray(body.attachment_ids)
+        ? (body.attachment_ids as string[]).map((attachmentId) => ({
+            attachment_id: attachmentId,
+            file_name: `${attachmentId}.csv`,
+            kind: "csv",
+            size_bytes: 24,
+          }))
+        : [],
       created_at: MOCK_NOW,
       updated_at: MOCK_NOW,
     };
@@ -2727,6 +2738,20 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
 
   // --- 設定 ---
+  // チャットの添付（#2517）。添付の操作は spec が page.route で mock する。ここは入力欄が読む一覧と上限だけ。
+  if (method === "GET" && at("chat-attachments")) {
+    return {
+      items: [],
+      limits: {
+        max_bytes: 20 * 1024 * 1024,
+        max_files: 10,
+        ttl_hours: 24,
+        accept: [".pdf", ".docx", ".pptx", ".xlsx", ".csv", ".txt"],
+        image_enabled: false,
+        enabled: state.chatAttachmentsEnabled,
+      },
+    };
+  }
   if (head === "settings") {
     // ツール権限の画面のツール（組み込みと MCP 接続のツール。#1814）。判定は backend の ToolPolicy.decide と同じ。
     if (method === "GET" && at("settings", "tool-policy", "tools")) return toolPolicyTools(state);
@@ -2883,6 +2908,16 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         effective_text: state.answerNotice.text ?? defaultText,
         max_chars: 500,
         updated_at: null,
+      };
+    }
+    if (at("settings", "chat-attachments")) {
+      if (method === "PUT") state.chatAttachmentsEnabled = Boolean(body.enabled);
+      return {
+        enabled: state.chatAttachmentsEnabled,
+        updated_at: null,
+        max_bytes: 20 * 1024 * 1024,
+        max_files: 10,
+        ttl_hours: 24,
       };
     }
     if (at("settings", "upload-storage")) {
