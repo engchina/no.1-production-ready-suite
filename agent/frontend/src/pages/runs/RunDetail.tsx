@@ -21,7 +21,7 @@ import {
   RunProcessDetails,
   RunFactList,
   RunSummary,
-  RunTimeline,
+  RunTimelineSection,
   SqlSafetyBadge,
   StatusBadge,
   formatRunDateTime,
@@ -281,44 +281,46 @@ export function RunDetail({
           ) : null
         }
         timeline={
-          <RunDetailSection title={t("run.section.timeline")} testId="run-timeline-section">
-            {timelineSteps.length ? (
-              <RunTimeline key={run.id} steps={timelineSteps} totalDurationMs={runDurationMs(run)} labels={labels} />
-            ) : (
-              <EmptyState title={t("run.timeline.noSteps")} />
-            )}
-            {/*
-              処理の詳細（識別子・イベントの記録・ストリームの接続）は、処理の経過のタイムラインの後ろに既定で閉じて置く
-              （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置。#2325）。
-            */}
-            <RunProcessDetails
-              title={t("run.section.processDetails")}
-              description={t("run.section.processDetailsDescription")}
-              testId="run-technical-section"
-              summaryTestId="run-process-details"
-            >
-              <RunFactList
-                facts={[
-                  { id: "agentId", label: t("run.fact.agent"), value: run.agent_id, mono: true },
-                  ...(run.thread_id
-                    ? [{ id: "threadId", label: t("run.fact.thread"), value: run.thread_id, mono: true }]
-                    : []),
-                  {
-                    id: "runtime",
-                    label: t("run.runtime"),
-                    value: run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id,
-                  },
-                  { id: "updatedAt", label: t("common.updatedAt"), value: formatDate(run.updated_at) },
-                ]}
-              />
-              <div className="grid min-w-0 gap-2">
-                <h3 className="text-sm font-medium text-fg">{t("run.timeline")}</h3>
-                <p className="text-xs text-fg-muted">{t("run.timelineDescription")}</p>
-                <EventLog events={run.events} />
-              </div>
-              <RunStreamControls sseState={sseState} />
-            </RunProcessDetails>
-          </RunDetailSection>
+          <RunTimelineSection
+            key={run.id}
+            title={t("run.section.timeline")}
+            steps={timelineSteps}
+            totalDurationMs={runDurationMs(run)}
+            labels={labels}
+            empty={<EmptyState title={t("run.timeline.noSteps")} />}
+            testId="run-timeline-section"
+            // 処理の詳細（識別子・イベントの記録・ストリームの接続）は、処理の経過のタイムラインの後ろに既定で閉じて置く
+            // （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置。#2325）。
+            processDetails={
+              <RunProcessDetails
+                title={t("run.section.processDetails")}
+                description={t("run.section.processDetailsDescription")}
+                testId="run-technical-section"
+                summaryTestId="run-process-details"
+              >
+                <RunFactList
+                  facts={[
+                    { id: "agentId", label: t("run.fact.agent"), value: run.agent_id, mono: true },
+                    ...(run.thread_id
+                      ? [{ id: "threadId", label: t("run.fact.thread"), value: run.thread_id, mono: true }]
+                      : []),
+                    {
+                      id: "runtime",
+                      label: t("run.runtime"),
+                      value: run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id,
+                    },
+                    { id: "updatedAt", label: t("common.updatedAt"), value: formatDate(run.updated_at) },
+                  ]}
+                />
+                <div className="grid min-w-0 gap-2">
+                  <h3 className="text-sm font-medium text-fg">{t("run.timeline")}</h3>
+                  <p className="text-xs text-fg-muted">{t("run.timelineDescription")}</p>
+                  <EventLog events={run.events} />
+                </div>
+                <RunStreamControls sseState={sseState} />
+              </RunProcessDetails>
+            }
+          />
         }
         evidence={
           <>

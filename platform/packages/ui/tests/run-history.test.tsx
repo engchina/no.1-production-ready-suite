@@ -379,7 +379,7 @@ describe("RunTimeline", () => {
         testId="timeline"
       />
     );
-    expect(container.textContent).toContain("2 ステップ・合計 1.5 秒");
+    expect(container.textContent).toContain("3 ステップ・合計 1.5 秒");
     const buttons = container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]");
     expect(buttons).toHaveLength(2);
     expect(buttons[0].getAttribute("aria-expanded")).toBe("false");

@@ -42,7 +42,7 @@ import {
   RunHistoryTable,
   RunHistoryToolbar,
   RunSummary as RunSummaryCard,
-  RunTimeline,
+  RunTimelineSection,
   SearchField,
   StatusBadge,
   TableSkeleton,
@@ -564,18 +564,15 @@ function RunDetailView({ run }: { run: RunDetail }) {
         ) : null
       }
       timeline={
-        <RunDetailSection title={t("history.process.title")} testId="run-history-timeline">
-          {timelineSteps.length ? (
-            <RunTimeline
-              steps={timelineSteps}
-              totalDurationMs={run.elapsed_ms}
-              labels={{ stepStatus: runTimelineStepLabels() }}
-            />
-          ) : (
-            <p className="text-sm text-fg-muted">{t("history.process.empty")}</p>
-          )}
-          {processDetails}
-        </RunDetailSection>
+        <RunTimelineSection
+          title={t("history.process.title")}
+          steps={timelineSteps}
+          totalDurationMs={run.elapsed_ms}
+          labels={{ stepStatus: runTimelineStepLabels() }}
+          empty={<p className="text-sm text-fg-muted">{t("history.process.empty")}</p>}
+          processDetails={processDetails}
+          testId="run-history-timeline"
+        />
       }
       evidence={
         succeeded ? (
