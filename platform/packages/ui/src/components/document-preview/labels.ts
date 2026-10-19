@@ -27,6 +27,8 @@ export interface DocumentPreviewLabels {
   highlightPageLabel: (page: number) => string;
   /** ページの一覧を読み込んでいる間。 */
   loading: string;
+  /** ページの画像を読み込んでいる間（#2474）。 */
+  pageLoading: string;
   pageError: string;
   textLoading: string;
   fetchError: string;
@@ -65,6 +67,7 @@ export function documentPreviewLabels(overrides: Partial<DocumentPreviewLabels> 
     highlightPage: (page) => `p.${page}`,
     highlightPageLabel: (page) => `強調のある ${page} ページ目を表示`,
     loading: "プレビューを読み込んでいます",
+    pageLoading: "ページを読み込んでいます",
     pageError: "このページの画像を表示できませんでした。",
     textLoading: "テキストを読み込んでいます",
     fetchError: "プレビューを取得できませんでした。",

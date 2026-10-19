@@ -216,13 +216,19 @@ test("引用プレビューは PDF のページ画像に根拠の要素を強調
       json: ok({ page_count: 1, pages: [{ page_number: 1, width: 612, height: 792 }] }),
     })
   );
-  await page.route(/\/api\/documents\/doc-1\/preview-pages\/1(?:\?|$)/, (route) =>
-    route.fulfill({
+  // ページの画像は読み込み中の表示を確かめるまで返さない（#2474）。
+  let releaseImage = () => {};
+  const imageHeld = new Promise<void>((resolve) => {
+    releaseImage = resolve;
+  });
+  await page.route(/\/api\/documents\/doc-1\/preview-pages\/1(?:\?|$)/, async (route) => {
+    await imageHeld;
+    await route.fulfill({
       status: 200,
       headers: { "content-type": "image/svg+xml" },
       body: '<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792"><rect width="612" height="792" fill="white"/></svg>',
-    })
-  );
+    });
+  });
   const body = searchStreamBody("policy.pdf").replace(
     '"metadata":{}',
     `"metadata":${JSON.stringify({
@@ -257,6 +263,15 @@ test("引用プレビューは PDF のページ画像に根拠の要素を強調
 
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByTestId("preview-viewer")).toBeVisible();
+  // 読み込みが終わるまでは描きかけの画像を隠し、灰色の面と読み込み中の表示を出す（#2474）。
+  await expect(dialog.getByTestId("preview-page-loading")).toContainText("ページを読み込んでいます");
+  await expect(dialog.getByTestId("preview-page-skeleton")).toBeVisible();
+  await expect(dialog.getByTestId("preview-image-surface").locator("img")).toHaveCSS("opacity", "0");
+  await expect(dialog.getByTestId("bbox-content-overlay")).toHaveCount(0);
+  releaseImage();
+  await expect(dialog.getByTestId("preview-page-loading")).toHaveCount(0);
+  await expect(dialog.getByTestId("preview-page-skeleton")).toHaveCount(0);
+  await expect(dialog.getByTestId("preview-image-surface").locator("img")).toHaveCSS("opacity", "1");
   const overlays = dialog.getByTestId("bbox-content-overlay");
   await expect(overlays).toHaveCount(2);
   await expect(dialog.getByText("p.1 の 2 か所を強調しています")).toBeVisible();

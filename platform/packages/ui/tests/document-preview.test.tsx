@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DocumentPreview, documentPreviewLabels, evidencePreviewFocus, type PreviewViewerPage } from "../src";
 
@@ -17,6 +19,8 @@ const PAGES: PreviewViewerPage[] = [
   { pageNumber: 1, points: { width: 600, height: 800 }, imageUrl: (dpi) => `/p/1?dpi=${dpi}` },
   { pageNumber: 2, points: { width: 600, height: 800 }, imageUrl: (dpi) => `/p/2?dpi=${dpi}` },
 ];
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("DocumentPreview", () => {
   it("PDF はページの一覧を読み込む間は Skeleton と経過、届いたらページの画像のビューアとツールバー", () => {
@@ -139,5 +143,46 @@ describe("evidencePreviewFocus", () => {
     });
     expect(focus.highlights.map((highlight) => highlight.page)).toEqual([1, 1]);
     expect(evidencePreviewFocus(null)).toMatchObject({ focusPage: null, focusBbox: null, highlights: [] });
+  });
+
+  describe("ページの画像の読み込み中（#2474）", () => {
+    let restore: (() => void) | null = null;
+    beforeEach(() => {
+      // happy-dom は寸法を持たないので、ビューポートの実寸を与えてページの枠を描かせる。
+      const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+      const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 800 });
+      Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 600 });
+      restore = () => {
+        if (width) Object.defineProperty(HTMLElement.prototype, "clientWidth", width);
+        if (height) Object.defineProperty(HTMLElement.prototype, "clientHeight", height);
+      };
+    });
+    afterEach(() => restore?.());
+
+    it("読み込みが終わるまで画像を透明にして灰色の面と読み込み中の表示を出し、終わったら画像だけにする", async () => {
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      await act(async () => {
+        root.render(<DocumentPreview kind="pdf" fileName="a.pdf" pages={{ status: "ready", pages: PAGES }} focusPage={1} />);
+      });
+      const image = host.querySelector<HTMLImageElement>('[data-testid="preview-image-surface"] img')!;
+      expect(image.className).toContain("opacity-0");
+      expect(host.querySelector('[data-testid="preview-page-skeleton"]')).not.toBeNull();
+      const loading = host.querySelector('[data-testid="preview-page-loading"]')!;
+      expect(loading.textContent).toContain("ページを読み込んでいます");
+      // 読み込み中の表示は回すページの面の外に置く（文字を回さない）。
+      expect(host.querySelector('[data-testid="preview-image-surface"] [data-testid="preview-page-loading"]')).toBeNull();
+
+      await act(async () => {
+        image.dispatchEvent(new Event("load"));
+      });
+      expect(image.className).toContain("opacity-100");
+      expect(host.querySelector('[data-testid="preview-page-skeleton"]')).toBeNull();
+      expect(host.querySelector('[data-testid="preview-page-loading"]')).toBeNull();
+      await act(async () => root.unmount());
+      host.remove();
+    });
   });
 });
