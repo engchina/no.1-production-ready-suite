@@ -2215,6 +2215,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (!evaluatedAgent.enabled || evaluatedAgent.migration_required) {
       throw new HttpError(409, "この業務 Agent は実行できない状態です。");
     }
+    // 下書きの評価は Agent 管理だけ（backend と同じ。#2522）。
+    const evaluator = state.auth.currentUser;
+    const canRunDraft = !evaluator || evaluator.is_system_admin || evaluator.permissions.includes("agent.admin");
+    // 省略時の既定も、Agent 管理でなければ公開中の版。
+    const evaluatedVersion = evaluationVersion(state, evaluatedAgentId, body.agent_version ?? (canRunDraft ? undefined : "published"));
+    if (!canRunDraft && evaluatedVersion === "draft") {
+      throw new HttpError(403, "下書きを評価できるのは Agent 管理の権限がある利用者だけです。");
+    }
     const cases = evaluationSet.cases as Json[];
     const job: Json = {
       id: `eval-${state.evaluations.length + 1}`,
@@ -2222,7 +2230,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       agent_name: evaluatedAgentId === "default" ? DEFAULT_AGENT_NAME : String(evaluatedAgent.name ?? evaluatedAgentId),
       set_id: evaluationSet.id,
       set_name: evaluationSet.name,
-      agent_version: evaluationVersion(state, evaluatedAgentId, body.agent_version),
+      agent_version: evaluatedVersion,
       status: "running",
       created_by_user_uuid: "local",
       results: cases.map((item) => ({
