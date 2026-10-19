@@ -2008,3 +2008,19 @@ def test_meaning_failure_keeps_the_text_result(monkeypatch: MonkeyPatch) -> None
 
     assert item.correct is False
     assert item.note == evaluation.MEANING_FAILED_NOTE
+
+
+def test_summary_counts_the_cases_behind_the_pass_rate() -> None:
+    """合格率の分母になったケースの数（#2569）。判定できなかったケースは数えない。"""
+    case = EvaluationCase(id="c", question="q", expected="e")
+    results = [
+        _judged(case, JudgeVerdict.CORRECT, 1.0),
+        _judged(case, JudgeVerdict.INCORRECT, 0.0),
+        EvaluationCaseResult(case=case, status=CaseStatus.RUN_FAILED),
+        EvaluationCaseResult(case=case, status=CaseStatus.JUDGE_FAILED),
+    ]
+
+    summary = evaluation.summarize(results)
+
+    assert summary.judged_cases == 3
+    assert summary.pass_rate == pytest.approx(1 / 3)
