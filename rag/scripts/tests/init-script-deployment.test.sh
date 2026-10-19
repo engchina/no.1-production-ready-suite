@@ -162,8 +162,8 @@ EOF
 
 # configure_systemd を 2 回（初回の配備・再配備）実行する。初回の前に、以前の配備が置いた
 # 提供しなくなったサービス（parser-asr・parser-oci-genai-vision。#2042）の unit を置く。再配備の前に、
-# 利用者が画面で parser-unstructured を停止した（disable --now）状態にし、stack から
-# parser-oci-document-understanding を外す。
+# 利用者が画面で parser-unstructured を停止し（disable --now）、既定は停止の parser-xml-tree-json を起動した
+# （enable --now。#2453）状態にし、stack から parser-oci-document-understanding を外す。
 run_systemd_case() (
   local case_dir="${TEST_TMP_DIR}/systemd"
   prepare_case "${case_dir}"
@@ -186,8 +186,9 @@ run_systemd_case() (
   cp "${case_dir}/systemctl.log" "${case_dir}/first-systemctl.log"
   cp "${SUDOERS_DIR}/production-ready-rag-services" "${case_dir}/first-sudoers"
 
-  # 画面で parser-unstructured を停止した（app.services.systemd の disable --now）。
+  # 画面で parser-unstructured を停止し、parser-xml-tree-json を起動した（app.services.systemd の disable / enable --now）。
   systemctl disable --now production-ready-rag-parser-unstructured.service
+  systemctl enable --now production-ready-rag-parser-xml-tree-json.service
   : > "${case_dir}/systemctl.log"
   RAG_SERVICES=(preprocess-office-to-pdf parser-docling parser-unstructured parser-xml-tree-json)
   configure_systemd > "${case_dir}/second.log" 2>&1
@@ -386,15 +387,24 @@ fi
 if grep -Eiq 'docker|compose' "${backend_unit}" "${worker_unit}" "${docling_unit}"; then
   fail "systemd の unit が docker を使っている"
 fi
-# 初回の配備: 既定のサービスを起動し、backend / worker を enable + restart する。
+# 初回の配備: 既定のサービスを起動し（既定は停止の parser-xml-tree-json は起動しない）、backend / worker を enable + restart する。
 grep -qx 'enable production-ready-rag-backend.service production-ready-rag-ingestion-worker.service' "${first_log}" \
   || fail "backend / ingestion-worker を enable していない"
 grep -qx 'restart production-ready-rag-backend.service production-ready-rag-ingestion-worker.service' "${first_log}" \
   || fail "backend / ingestion-worker を restart していない"
-for unit in preprocess-office-to-pdf parser-docling parser-unstructured parser-xml-tree-json parser-oci-document-understanding; do
+for unit in preprocess-office-to-pdf parser-docling parser-unstructured parser-oci-document-understanding; do
   grep -qx "enable --now production-ready-rag-${unit}.service" "${first_log}" \
     || fail "初回の配備で ${unit} を起動していない"
 done
+# parser-xml-tree-json は既定は停止（#2453）: unit は書くが、enable も起動もしない。
+if grep -Eq '^(enable|start|restart)( --now)? production-ready-rag-parser-xml-tree-json.service$' "${first_log}"; then
+  fail "初回の配備で既定は停止の parser-xml-tree-json を enable / 起動した"
+fi
+test -f "${xml_unit}" || fail "初回の配備で parser-xml-tree-json の unit を書いていない"
+grep -Fq '/usr/bin/systemctl enable --now production-ready-rag-parser-xml-tree-json.service' "${TEST_TMP_DIR}/systemd/first-sudoers" \
+  || fail "sudoers が parser-xml-tree-json の起動（enable --now。サービス管理画面の「起動」）を許可していない"
+grep -Fq 'Leaving production-ready-rag-parser-xml-tree-json.service stopped (first deployment; stopped by default).' \
+  "${TEST_TMP_DIR}/systemd/first.log" || fail "既定は停止の parser-xml-tree-json を起動しないことを log に出していない"
 grep -Fqx "ExecStart=${rag_dir}/services/parsers/xml_tree_json/.venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind 127.0.0.1:18021 --workers 1 --timeout 300 --graceful-timeout 30 --error-logfile -" "${xml_unit}" \
   || fail "parser-xml-tree-json が自分の venv で 127.0.0.1:18021 に bind していない"
 # 以前の配備が置いた、提供しなくなったサービスの unit は止めて消す（#2042）。
@@ -409,6 +419,8 @@ done
 # 再配備: 最後に「起動」した unit は restart、最後に「停止」した unit は停止のまま。
 grep -qx 'restart production-ready-rag-parser-docling.service' "${second_log}" \
   || fail "再配備で起動中の parser-docling を restart していない"
+grep -qx 'restart production-ready-rag-parser-xml-tree-json.service' "${second_log}" \
+  || fail "画面で起動した parser-xml-tree-json を再配備で restart していない"
 if grep -Eq '^(enable --now|restart) production-ready-rag-parser-unstructured.service$' "${second_log}"; then
   fail "利用者が停止した parser-unstructured を再配備で起動した"
 fi
@@ -468,8 +480,9 @@ grep -Fq 'Adding required RAG service missing from' "${redeploy_dir}/load.log" \
   || fail "必ず配備する parser-xml-tree-json を足したことを log に出していない"
 test -f "${redeploy_dir}/units/production-ready-rag-parser-xml-tree-json.service" \
   || fail "再配備で parser-xml-tree-json の unit を書いていない"
-grep -qx 'enable --now production-ready-rag-parser-xml-tree-json.service' "${redeploy_log}" \
-  || fail "再配備で初めて入る parser-xml-tree-json を起動（enable --now）していない"
+if grep -Eq '^(enable|start|restart)( --now)? production-ready-rag-parser-xml-tree-json.service$' "${redeploy_log}"; then
+  fail "再配備で初めて入れた parser-xml-tree-json を enable / 起動した（既定は停止。#2453）"
+fi
 grep -qx 'restart production-ready-rag-parser-docling.service' "${redeploy_log}" \
   || fail "再配備で起動中の parser-docling を restart していない"
 for removed in preprocess-url-to-markdown preprocess-image-enhance parser-oci-genai-vision parser-asr; do
@@ -577,6 +590,12 @@ grep -Fq 'RAG_DEFAULT_MAX_UPLOAD_BYTES=209715200' "${REPO_DIR}/../platform/deplo
   || fail "RAG_MAX_UPLOAD_BYTES の既定値が変わった"
 grep -Fq 'max_upload_bytes: int = Field(default=200 * 1024 * 1024' "${REPO_DIR}/backend/app/config.py" \
   || fail "backend の RAG_MAX_UPLOAD_BYTES の既定値が suite-init.sh と合っていない"
+
+# --- 既定は停止のサービス（#2453）: XML ツリー JSON だけ。開発の install も初回は起動しない ---
+bash -c 'source "$1/scripts/rag-systemd.sh"; rag_service_default_stopped parser-xml-tree-json && ! rag_service_default_stopped parser-docling' _ "${REPO_DIR}" \
+  || fail "既定は停止のサービスが parser-xml-tree-json だけになっていない"
+grep -Fq '[[ " ${new_units[*]} " == *" ${unit} "* ]] && rag_service_default_stopped "${service}"; then' "${REPO_DIR}/scripts/rag-services.sh" \
+  || fail "scripts/rag-services.sh install が既定は停止のサービスを初回に起動する"
 
 # --- 開発環境（scripts/rag-services.sh）も本番と同じ unit と sudoers を作る ---
 dev_dir="${TEST_TMP_DIR}/dev-render"
