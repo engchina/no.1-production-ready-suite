@@ -1,7 +1,7 @@
 """文書プレビュー（原本配信）と抽出本文表示用 API のテスト。"""
 
 import hashlib
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
@@ -11,9 +11,12 @@ import anyio
 import pytest
 
 from app.api.routes import documents as documents_route
+from app.clients.document_cleanup_store import DocumentCleanupTargets, DocumentCleanupTask
 from app.clients.object_storage import ObjectStorageClient
 from app.config import Settings, get_settings
 from app.main import app
+from app.rag.document_cleanup import retry_due_document_cleanups
+from app.rag.request_context import current_audit_request_context
 from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
@@ -98,6 +101,8 @@ class FakeWorkspaceOracle:
         self.recipes: dict[str, dict[str, object]] = {}
         self.extraction_artifacts: dict[str, dict[str, object]] = {}
         self.chunk_set_chunks: dict[str, list[DocumentChunkView]] = {}
+        # 文書の削除の後始末の記録（#2452）。
+        self.cleanup_store = FakeDocumentCleanupStore(self)
 
     async def find_document_by_content_hash(self, content_sha256: str) -> DocumentSummary | None:
         for detail in self.documents.values():
@@ -590,10 +595,85 @@ class FakeWorkspaceIngestionPipeline:
         return await self._oracle.update_document_status(document_id, FileStatus.INDEXED)
 
 
+class FakeDocumentCleanupStore:
+    """文書の削除の後始末の記録（#2452）の fake。文書の行の削除と記録を 1 回で行う。"""
+
+    def __init__(self, oracle: FakeWorkspaceOracle) -> None:
+        self.oracle = oracle
+        self.tasks: dict[str, DocumentCleanupTask] = {}
+        self.owners: dict[str, str | None] = {}
+
+    def pending_for(self, document_id: str) -> list[DocumentCleanupTask]:
+        return [task for task in self.tasks.values() if task.document_id == document_id]
+
+    async def delete_document_with_cleanup(
+        self, document_id: str, file_name: str, targets: DocumentCleanupTargets
+    ) -> DocumentCleanupTask | None:
+        if not await self.oracle.delete_document(document_id):
+            return None
+        task = DocumentCleanupTask(
+            cleanup_id=uuid4().hex, document_id=document_id, file_name=file_name, targets=targets
+        )
+        if not targets.is_empty:
+            self.tasks[task.cleanup_id] = task
+            self.owners[task.cleanup_id] = current_audit_request_context().user_id_hash
+        return task
+
+    async def find_for_document(self, document_id: str) -> DocumentCleanupTask | None:
+        context = current_audit_request_context()
+        for task in self.pending_for(document_id):
+            if context.all_users_visible or self.owners[task.cleanup_id] == context.user_id_hash:
+                return task
+        return None
+
+    async def list_due(self, *, limit: int, min_age_seconds: float) -> list[DocumentCleanupTask]:
+        _ = min_age_seconds
+        return list(self.tasks.values())[:limit]
+
+    async def save_progress(
+        self, cleanup_id: str, remaining: DocumentCleanupTargets, *, error_type: str | None
+    ) -> None:
+        _ = error_type
+        task = self.tasks.get(cleanup_id)
+        if task is None:
+            return
+        if remaining.is_empty:
+            del self.tasks[cleanup_id]
+            return
+        self.tasks[cleanup_id] = DocumentCleanupTask(
+            cleanup_id=cleanup_id,
+            document_id=task.document_id,
+            file_name=task.file_name,
+            targets=remaining,
+            attempt_count=task.attempt_count + 1,
+        )
+
+    async def referenced_uris(self, uris: Sequence[str]) -> set[str]:
+        referenced: set[str] = set()
+        for detail in self.oracle.documents.values():
+            referenced.add(detail.object_storage_path or "")
+            if detail.preprocess_artifact is not None:
+                referenced.add(detail.preprocess_artifact.object_storage_path or "")
+        for segments in self.oracle.ingestion_segments.values():
+            referenced.update(segment.artifact_path or "" for segment in segments)
+        return {uri for uri in uris if uri in referenced}
+
+    async def document_exists(self, document_id: str) -> bool:
+        return document_id in self.oracle.documents
+
+
+@pytest.fixture
+def fake_cleanup_store(fake_document_dependencies: FakeWorkspaceOracle) -> FakeDocumentCleanupStore:
+    return fake_document_dependencies.cleanup_store
+
+
 @pytest.fixture(autouse=True)
 def fake_document_dependencies(monkeypatch: pytest.MonkeyPatch) -> FakeWorkspaceOracle:
     fake_oracle = FakeWorkspaceOracle()
     monkeypatch.setattr(documents_route, "OracleClient", lambda: fake_oracle)
+    monkeypatch.setattr(
+        documents_route, "DocumentCleanupStore", lambda oracle: fake_oracle.cleanup_store
+    )
     monkeypatch.setattr(documents_route, "IngestionPipeline", FakeWorkspaceIngestionPipeline)
     FakeWorkspaceIngestionPipeline.last_settings = None
     return fake_oracle
@@ -3049,6 +3129,272 @@ def test_delete_document_keeps_deleting_when_prefix_cleanup_fails(
     assert body["data"]["artifact_delete_failed_count"] == 2
     assert any("artifact" in message for message in body["warning_messages"])
     assert document_id not in fake_document_dependencies.documents
+
+
+def _fail_storage_delete_for(
+    monkeypatch: pytest.MonkeyPatch, failing: set[str], calls: list[str]
+) -> None:
+    """``failing`` の URI の削除だけを一時的な保存先の障害（OSError）にする。"""
+    original_delete = ObjectStorageClient.delete
+
+    async def flaky_delete(self: ObjectStorageClient, key: str) -> bool:
+        calls.append(key)
+        if key in failing:
+            raise OSError("temporary storage failure")
+        return await original_delete(self, key)
+
+    monkeypatch.setattr(ObjectStorageClient, "delete", flaky_delete)
+
+
+def test_delete_document_retries_source_cleanup_after_storage_recovers(
+    fake_cleanup_store: FakeDocumentCleanupStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """原本の削除に失敗しても、保存先の復旧後に同じ文書の削除で原本を消し直せる（#2452）。"""
+    document_id = _upload("policy.txt", b"sample policy", "text/plain")
+    other_id = _upload("other.txt", b"other policy", "text/plain")
+    storage = ObjectStorageClient()
+    source_path = str(fake_cleanup_store.oracle.documents[document_id].object_storage_path)
+    other_path = str(fake_cleanup_store.oracle.documents[other_id].object_storage_path)
+    failing = {source_path}
+    calls: list[str] = []
+    _fail_storage_delete_for(monkeypatch, failing, calls)
+
+    first = client.delete(f"/api/documents/{document_id}")
+
+    assert first.status_code == 200
+    body = first.json()
+    assert body["data"]["object_deleted"] is False
+    assert any("原本ファイルの削除に失敗しました" in m for m in body["warning_messages"])
+    assert any("やり直します" in m for m in body["warning_messages"])
+    assert anyio.run(storage.get, source_path) == b"sample policy"
+    [pending] = fake_cleanup_store.pending_for(document_id)
+    assert pending.targets.source_uri == source_path
+    assert pending.targets.prefixes == ()
+
+    failing.clear()
+    retried = client.delete(f"/api/documents/{document_id}")
+
+    assert retried.status_code == 200
+    data = retried.json()["data"]
+    assert data["id"] == document_id
+    assert data["file_name"] == "policy.txt"
+    assert data["object_deleted"] is True
+    assert retried.json()["warning_messages"] == []
+    with pytest.raises(FileNotFoundError):
+        anyio.run(storage.get, source_path)
+    assert calls.count(source_path) == 2
+    assert fake_cleanup_store.pending_for(document_id) == []
+    # 後始末が済んだ後の再試行は、これまでどおり 404。別の文書の原本は消さない。
+    assert client.delete(f"/api/documents/{document_id}").status_code == 404
+    assert anyio.run(storage.get, other_path) == b"other policy"
+    assert other_path not in calls
+
+
+def test_delete_document_retries_artifact_and_prefix_cleanup_in_worker_sweep(
+    fake_cleanup_store: FakeDocumentCleanupStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """成果物・prefix の削除の失敗も記録に残り、取込ワーカーの定期の後始末で消える（#2452）。"""
+    document_id = _upload("policy.txt", b"sample policy", "text/plain")
+    other_id = _upload("other.txt", b"other policy", "text/plain")
+    storage = ObjectStorageClient()
+    artifact_path = anyio.run(
+        storage.put,
+        f"legacy-artifacts/{document_id}/full.json",
+        b'{"raw_text":"redacted"}',
+        "application/json",
+    )
+    past_path = anyio.run(
+        storage.put,
+        f"artifacts/extractions/{document_id}/old-trace.json",
+        b'{"raw_text":"old"}',
+        "application/json",
+    )
+    other_artifact = anyio.run(
+        storage.put,
+        f"artifacts/extractions/{other_id}/trace.json",
+        b'{"raw_text":"other"}',
+        "application/json",
+    )
+    documents = fake_cleanup_store.oracle.documents
+    documents[document_id] = documents[document_id].model_copy(
+        update={"extraction": {"parser_artifacts": {"extraction_artifact_path": artifact_path}}}
+    )
+    failing = {artifact_path}
+    calls: list[str] = []
+    _fail_storage_delete_for(monkeypatch, failing, calls)
+    original_delete_prefix = ObjectStorageClient.delete_prefix
+    prefix_failing = [True]
+
+    async def flaky_delete_prefix(self: ObjectStorageClient, prefix: str, **kwargs: bool) -> object:
+        if prefix_failing[0]:
+            raise OSError(f"list failed: {prefix}")
+        return await original_delete_prefix(self, prefix, **kwargs)
+
+    monkeypatch.setattr(ObjectStorageClient, "delete_prefix", flaky_delete_prefix)
+
+    resp = client.delete(f"/api/documents/{document_id}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["object_deleted"] is True
+    assert body["data"]["artifact_delete_failed_count"] == 3
+    assert any("artifact" in message for message in body["warning_messages"])
+    [pending] = fake_cleanup_store.pending_for(document_id)
+    assert pending.targets.source_uri is None
+    assert pending.targets.artifact_uris == (artifact_path,)
+    assert len(pending.targets.prefixes) == 2
+    assert anyio.run(storage.get, past_path) == b'{"raw_text":"old"}'
+
+    failing.clear()
+    prefix_failing[0] = False
+    completed = anyio.run(
+        lambda: retry_due_document_cleanups(
+            limit=10, min_age_seconds=0, store=fake_cleanup_store, storage=storage
+        )
+    )
+
+    assert completed == 1
+    assert fake_cleanup_store.pending_for(document_id) == []
+    for path in (artifact_path, past_path):
+        with pytest.raises(FileNotFoundError):
+            anyio.run(storage.get, path)
+    assert anyio.run(storage.get, other_artifact) == b'{"raw_text":"other"}'
+    assert other_id in documents
+
+
+def test_document_cleanup_record_survives_interruption_after_db_delete(
+    fake_cleanup_store: FakeDocumentCleanupStore,
+) -> None:
+    """文書の行を消した直後に止まっても、記録から原本・成果物を消せる。繰り返しても成功する。"""
+    document_id = _upload("policy.txt", b"sample policy", "text/plain")
+    storage = ObjectStorageClient()
+    source_path = str(fake_cleanup_store.oracle.documents[document_id].object_storage_path)
+    past_path = anyio.run(
+        storage.put,
+        f"artifacts/canonical/{document_id}/old-trace/canonical.pdf",
+        b"%PDF-1.7\nold",
+        "application/pdf",
+    )
+    targets = DocumentCleanupTargets(
+        source_uri=source_path,
+        prefixes=(f"artifacts/canonical/{document_id}/", f"artifacts/extractions/{document_id}/"),
+    )
+
+    # DB の削除（と記録）だけが済み、保存先の後始末の前にプロセスが止まった状態。
+    task = anyio.run(
+        fake_cleanup_store.delete_document_with_cleanup, document_id, "policy.txt", targets
+    )
+
+    assert task is not None
+    assert document_id not in fake_cleanup_store.oracle.documents
+    [pending] = fake_cleanup_store.pending_for(document_id)
+    assert pending.targets == targets
+    # 原本が既に無くても（別の経路で消えた）、後始末は正常に終わる。
+    anyio.run(storage.delete, source_path)
+
+    def sweep() -> int:
+        return anyio.run(
+            lambda: retry_due_document_cleanups(
+                limit=10, min_age_seconds=0, store=fake_cleanup_store, storage=storage
+            )
+        )
+
+    assert sweep() == 1
+    assert fake_cleanup_store.pending_for(document_id) == []
+    with pytest.raises(FileNotFoundError):
+        anyio.run(storage.get, past_path)
+    assert sweep() == 0
+    # 同じ記録をもう一度実行しても（消せたものは無いものとして）成功する。
+    fake_cleanup_store.tasks[task.cleanup_id] = task
+    fake_cleanup_store.owners[task.cleanup_id] = None
+    assert sweep() == 1
+
+
+def test_document_cleanup_does_not_delete_files_of_remaining_documents(
+    fake_cleanup_store: FakeDocumentCleanupStore,
+) -> None:
+    """記録の URI を別の文書が参照していれば、その URI と同じ ID の文書の prefix は消さない。"""
+    remaining_id = _upload("remaining.txt", b"remaining policy", "text/plain")
+    storage = ObjectStorageClient()
+    remaining_source = str(fake_cleanup_store.oracle.documents[remaining_id].object_storage_path)
+    remaining_artifact = anyio.run(
+        storage.put,
+        f"artifacts/extractions/{remaining_id}/trace.json",
+        b'{"raw_text":"remaining"}',
+        "application/json",
+    )
+    fake_cleanup_store.oracle.ingestion_segments[remaining_id] = [
+        IngestionSegment(
+            segment_id=f"{remaining_id}:p1",
+            document_id=remaining_id,
+            status="SUCCEEDED",
+            artifact_path=remaining_artifact,
+        )
+    ]
+    task = DocumentCleanupTask(
+        cleanup_id="cleanup-collision",
+        document_id=remaining_id,
+        file_name="deleted.txt",
+        targets=DocumentCleanupTargets(
+            source_uri=remaining_source,
+            artifact_uris=(remaining_artifact,),
+            prefixes=(f"artifacts/extractions/{remaining_id}/",),
+        ),
+    )
+    fake_cleanup_store.tasks[task.cleanup_id] = task
+    fake_cleanup_store.owners[task.cleanup_id] = None
+
+    completed = anyio.run(
+        lambda: retry_due_document_cleanups(
+            limit=10, min_age_seconds=0, store=fake_cleanup_store, storage=storage
+        )
+    )
+
+    assert completed == 1
+    assert fake_cleanup_store.tasks == {}
+    assert anyio.run(storage.get, remaining_source) == b"remaining policy"
+    assert anyio.run(storage.get, remaining_artifact) == b'{"raw_text":"remaining"}'
+
+
+def test_bulk_delete_keeps_partial_failures_independent(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    fake_cleanup_store: FakeDocumentCleanupStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """一括削除（文書ごとの DELETE）は、実行中の job の文書だけ 409 にする。
+
+    文書ごとの結果は互いに影響しない（部分失敗の扱いは変えない）。
+    """
+    deleted_id = _upload("a.txt", b"body a", "text/plain")
+    running_id = _upload("b.txt", b"body b", "text/plain")
+    flaky_id = _upload("c.txt", b"body c", "text/plain")
+    fake_document_dependencies.ingestion_jobs["job-running"] = IngestionJob(
+        id="job-running",
+        document_id=running_id,
+        status=IngestionJobStatus.RUNNING,
+        parser_profile="enterprise_ai_generic",
+        queued_at=datetime.now(UTC),
+        started_at=datetime.now(UTC),
+    )
+    flaky_source = str(fake_cleanup_store.oracle.documents[flaky_id].object_storage_path)
+    _fail_storage_delete_for(monkeypatch, {flaky_source}, [])
+
+    statuses = [
+        client.delete(f"/api/documents/{document_id}").status_code
+        for document_id in (deleted_id, running_id, flaky_id)
+    ]
+
+    assert statuses == [200, 409, 200]
+    assert running_id in fake_document_dependencies.documents
+    assert deleted_id not in fake_document_dependencies.documents
+    assert flaky_id not in fake_document_dependencies.documents
+    assert fake_cleanup_store.pending_for(deleted_id) == []
+    assert fake_cleanup_store.pending_for(running_id) == []
+    assert [task.targets.source_uri for task in fake_cleanup_store.pending_for(flaky_id)] == [
+        flaky_source
+    ]
 
 
 def test_delete_impact_counts_duplicates_that_rely_on_the_source(
