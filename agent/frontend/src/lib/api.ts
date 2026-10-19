@@ -430,6 +430,21 @@ export interface EvaluationCase {
   clarification_answers?: EvaluationClarificationAnswer[];
   /** ケースの出どころ（フィードバック・Run の詳細から追加したときの Run の ID。#810）。 */
   source_run_id?: string | null;
+  /** 期待する出力の項目（任意。#2558）。行ごとに「項目の key → 期待する値」。 */
+  expected_output?: Record<string, EvaluationOutputValue>[];
+}
+
+/** 出力の項目の値（文字・数値・真偽・null。#2558）。 */
+export type EvaluationOutputValue = string | number | boolean | null;
+
+/** 出力の項目の 1 つの判定（#2558）。 */
+export interface EvaluationFieldResult {
+  row: number;
+  field: string;
+  label: string;
+  expected: EvaluationOutputValue;
+  actual: EvaluationOutputValue;
+  correct: boolean;
 }
 
 /** Run から作る評価ケースの下書き（保存しない。#810）。 */
@@ -442,6 +457,8 @@ export interface EvaluationCaseDraft {
   expected: string;
   /** Run が呼んだ（呼ぼうとした）ツール。 */
   expected_tools: string[];
+  /** Run が記録した出力の項目（#2558。期待する出力の下書き）。 */
+  expected_output?: Record<string, EvaluationOutputValue>[];
   /** 同じ質問のケースを既に持つ評価セット。 */
   existing_set_ids: string[];
 }
@@ -516,7 +533,7 @@ export interface EvaluationClarificationRound {
 }
 
 export interface EvaluationCaseResult {
-  case: Required<EvaluationCase>;
+  case: Required<Omit<EvaluationCase, "expected_output">> & Pick<EvaluationCase, "expected_output">;
   status: EvaluationCaseStatus;
   run_id: string | null;
   answer: string;
@@ -533,6 +550,9 @@ export interface EvaluationCaseResult {
   clarification_rounds?: EvaluationClarificationRound[];
   /** 最後の実行も問い返しで終わった（答えが評価ケースに無い・往復の上限）。 */
   ended_with_clarification?: boolean;
+  /** 出力の項目の判定（#2558。期待する出力の無いケースは空と null）。 */
+  field_results?: EvaluationFieldResult[];
+  field_correct?: boolean | null;
   error: string | null;
   duration_ms: number | null;
 }
@@ -553,6 +573,13 @@ export interface EvaluationSummary {
   tool_cases: number;
   tool_correct: number;
   tool_accuracy: number | null;
+  /** 出力の項目の正しさ（#2558）。すべての項目が正しいケースの割合と、項目ごとの正答率。合格率には含めない。 */
+  field_cases?: number;
+  field_correct?: number;
+  field_accuracy?: number | null;
+  field_items?: number;
+  field_items_correct?: number;
+  field_item_accuracy?: number | null;
 }
 
 export interface EvaluationJob {
@@ -603,6 +630,8 @@ export interface EvaluationComparisonOutcome {
   score: number | null;
   tool_calls: string[];
   tool_selection_correct: boolean | null;
+  /** 出力の項目がすべて正しいか（#2558。期待する出力の無いケースは null）。 */
+  field_correct?: boolean | null;
   run_id: string | null;
 }
 

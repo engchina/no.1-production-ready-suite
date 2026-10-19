@@ -184,6 +184,7 @@ from app.features.agent.evaluation import (
     compare_jobs,
     evaluation_set_store,
     evaluation_store,
+    recorded_output_rows,
     run_evaluation_job,
     set_item,
 )
@@ -2660,6 +2661,7 @@ async def get_run_evaluation_case(
                 :EVALUATION_EXPECTED_MAX_CHARS
             ],
             expected_tools=_run_tool_names(run),
+            expected_output=recorded_output_rows(run),
             existing_set_ids=list(evaluation_set_store.sets_with_question(agent.id, run.goal)),
         )
     )

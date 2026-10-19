@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Sequence
 from datetime import date
 from typing import Any, Literal
@@ -201,7 +202,8 @@ def record_output_tool(
     run_id: str, fields: Sequence[AgentOutputField]
 ) -> tuple[ToolDefinition, ToolHandler]:
     """Run に渡す `record_output`（その業務 Agent の項目の schema と、検証して残す handler）。"""
-    columns = list(fields)
+    # 保存先の形に依らず、dict の項目もモデルとして読む（#2559）。
+    columns = [AgentOutputField.model_validate(field) for field in fields]
 
     def handler(arguments: dict[str, Any], _: ToolInvocationContext) -> dict[str, Any]:
         from app.features.agent.runtime import runtime_repository
@@ -247,3 +249,173 @@ def output_retried(metadata: object) -> bool:
 def output_recorded(artifacts: Sequence[Any]) -> bool:
     """Run が出力の項目を記録したか。"""
     return any(getattr(item, "kind", None) == OUTPUT_KIND for item in artifacts)
+
+
+# ---- 品質評価の出力の項目の判定（#2558） ----------------------------------------------------
+
+# 評価ケースに書ける期待する出力の行の数。
+EVALUATION_EXPECTED_OUTPUT_ROWS_MAX = 50
+OutputValue = str | int | float | bool | None
+_TRUE_TEXTS = frozenset({"true", "はい", "yes", "○", "◯", "1"})
+_FALSE_TEXTS = frozenset({"false", "いいえ", "no", "×", "0"})
+
+
+class OutputFieldResult(BaseModel):
+    """期待する出力の 1 つの項目の判定（期待の行・項目・期待・記録・正誤）。"""
+
+    row: int
+    field: str
+    label: str = ""
+    expected: OutputValue = None
+    actual: OutputValue = None
+    correct: bool
+
+
+def validate_expected_output(rows: list[dict[str, Any]]) -> list[dict[str, OutputValue]]:
+    """評価ケースの期待する出力の検証（行の数・key の形・値は文字 / 数値 / 真偽 / null）。"""
+    if len(rows) > EVALUATION_EXPECTED_OUTPUT_ROWS_MAX:
+        raise ValueError(f"期待する出力は {EVALUATION_EXPECTED_OUTPUT_ROWS_MAX} 行までです。")
+    cleaned: list[dict[str, OutputValue]] = []
+    for row in rows:
+        values: dict[str, OutputValue] = {}
+        for key, value in row.items():
+            if not isinstance(key, str) or not OUTPUT_KEY_PATTERN.fullmatch(key):
+                raise ValueError(
+                    "期待する出力の key は、出力の項目の key（英小文字で始まる）にしてください。"
+                )
+            if isinstance(value, str):
+                value = value.strip()[:MAX_VALUE_CHARS]
+            elif value is not None and not isinstance(value, bool | int | float):
+                raise ValueError("期待する出力の値は、文字・数値・真偽・null にしてください。")
+            values[key] = value
+        if values:
+            cleaned.append(values)
+    return cleaned
+
+
+def _text(value: OutputValue) -> str:
+    return " ".join(unicodedata.normalize("NFKC", str(value)).casefold().split())
+
+
+def _as_number(value: OutputValue) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        text = unicodedata.normalize("NFKC", value).strip().replace(",", "")
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _as_bool(value: OutputValue) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    text = _text(value) if value is not None else ""
+    if text in _TRUE_TEXTS:
+        return True
+    if text in _FALSE_TEXTS:
+        return False
+    return None
+
+
+def _as_date(value: OutputValue) -> date | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(unicodedata.normalize("NFKC", value).strip()[:10])
+    except ValueError:
+        return None
+
+
+def _empty(value: OutputValue) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def output_value_matches(expected: OutputValue, actual: OutputValue, field_type: str) -> bool:
+    """期待と記録の値が同じか（型ごとの比べ方。null は記録していないことを期待する）。"""
+    if _empty(expected) or _empty(actual):
+        return _empty(expected) and _empty(actual)
+    if field_type == "number":
+        left, right = _as_number(expected), _as_number(actual)
+        if left is not None and right is not None:
+            return abs(left - right) <= 1e-9 * max(1.0, abs(left), abs(right))
+    elif field_type == "boolean":
+        left_bool, right_bool = _as_bool(expected), _as_bool(actual)
+        if left_bool is not None and right_bool is not None:
+            return left_bool == right_bool
+    elif field_type == "date":
+        left_date, right_date = _as_date(expected), _as_date(actual)
+        if left_date is not None and right_date is not None:
+            return left_date == right_date
+    return _text(expected) == _text(actual)
+
+
+def _pair_rows(
+    expected: list[dict[str, OutputValue]], actual: list[dict[str, Any]], key: str | None
+) -> list[dict[str, Any] | None]:
+    """期待の行ごとに組む記録の行（1 列目の値で組み、組めない行は残った記録の行を順に使う）。"""
+    remaining = list(range(len(actual)))
+    paired: list[int | None] = [None] * len(expected)
+    if key is not None:
+        for index, row in enumerate(expected):
+            if key not in row or _empty(row[key]):
+                continue
+            match = next(
+                (
+                    candidate
+                    for candidate in remaining
+                    if not _empty(actual[candidate].get(key))
+                    and _text(actual[candidate].get(key)) == _text(row[key])
+                ),
+                None,
+            )
+            if match is not None:
+                paired[index] = match
+                remaining.remove(match)
+    for index in range(len(expected)):
+        if paired[index] is None and remaining:
+            paired[index] = remaining.pop(0)
+    return [actual[item] if item is not None else None for item in paired]
+
+
+def compare_output(
+    expected: list[dict[str, OutputValue]], content: dict[str, Any] | None
+) -> tuple[list[OutputFieldResult], bool | None]:
+    """期待する出力と記録した出力（成果物 `structured_output` の内容）を項目ごとに比べる。
+
+    期待する出力が無ければ判定しない（`[]`, None）。記録が無ければ、期待したすべての項目を
+    誤りにする。期待の行に書いた項目だけを判定する。
+    """
+    if not expected:
+        return [], None
+    columns = content.get("columns") if isinstance(content, dict) else None
+    rows = content.get("rows") if isinstance(content, dict) else None
+    column_list = (
+        [item for item in columns if isinstance(item, dict)] if isinstance(columns, list) else []
+    )
+    types = {str(item.get("name")): str(item.get("type") or "text") for item in column_list}
+    labels = {str(item.get("name")): str(item.get("label") or "") for item in column_list}
+    actual_rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    key = str(column_list[0].get("name")) if column_list else None
+    results: list[OutputFieldResult] = []
+    for number, (want, got) in enumerate(
+        zip(expected, _pair_rows(expected, actual_rows, key), strict=True), start=1
+    ):
+        for field, value in want.items():
+            actual = got.get(field) if got is not None else None
+            results.append(
+                OutputFieldResult(
+                    row=number,
+                    field=field,
+                    label=labels.get(field, ""),
+                    expected=value,
+                    actual=actual,
+                    correct=got is not None
+                    and output_value_matches(value, actual, types.get(field, "text")),
+                )
+            )
+    return results, all(item.correct for item in results)

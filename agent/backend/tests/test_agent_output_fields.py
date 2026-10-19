@@ -276,3 +276,30 @@ def test_send_back_happens_only_once(monkeypatch: MonkeyPatch, agents: None) -> 
     assert output_retried(run.metadata)
     assert not [item for item in run.artifacts if item.kind == OUTPUT_KIND]
     assert len(model.calls) == 3
+
+
+def test_fields_saved_by_patch_work_in_draft_runs(monkeypatch: MonkeyPatch, agents: None) -> None:
+    """PATCH で保存した出力の項目でも、下書きの Run に record_output を渡せる（#2559）。"""
+    patched = client.patch(
+        f"/api/agents/{PLAIN_AGENT_ID}",
+        json={"output_fields": [{"key": "item", "label": "項目", "required": True}]},
+    )
+    assert patched.status_code == 200, patched.text
+    agent = next(item for item in runtime_repository.list_agents() if item.id == PLAIN_AGENT_ID)
+    assert isinstance(agent.output_fields[0], AgentOutputField)
+    model = _script(
+        monkeypatch,
+        [function_call(LOOKUP, {"query": "A"}, call_id="call-l")],
+        [function_call(RECORD_OUTPUT_TOOL, {"rows": [{"item": "A"}]}, call_id="call-r")],
+        [assistant_message("A を記録しました。")],
+    )
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="記録して", agent_id=PLAIN_AGENT_ID, draft=True),
+        created_by_user_uuid=USER_UUID,
+    )
+    anyio.run(builtin_runtime.execute_run, run.id)
+
+    done = runtime_repository.get_run(run.id)
+    assert done.status == RunStatus.COMPLETED
+    assert RECORD_OUTPUT_TOOL in _tool_names(model)
+    assert [item for item in done.artifacts if item.kind == OUTPUT_KIND]

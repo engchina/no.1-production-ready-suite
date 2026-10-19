@@ -61,6 +61,14 @@ from app.features.agent.ai_calls import (
     make_ai_caller,
     retry_model_target,
 )
+from app.features.agent.output_fields import (
+    EVALUATION_EXPECTED_OUTPUT_ROWS_MAX,
+    OUTPUT_KIND,
+    OutputFieldResult,
+    OutputValue,
+    compare_output,
+    validate_expected_output,
+)
 from app.features.agent.runtime import (
     EVALUATION_DRY_RUN_KEY,
     Artifact,
@@ -191,6 +199,14 @@ class EvaluationCase(BaseModel):
     )
     # ケースの出どころ（フィードバック・Run の詳細から追加したときの Run の ID。#810）。
     source_run_id: str | None = Field(default=None, max_length=100)
+    # 期待する出力の項目（任意。#2558）。行ごとに「項目の key → 期待する値」。書いた項目だけを、
+    # 業務 Agent が記録した出力（成果物 `structured_output`）とコードで比べる。
+    expected_output: list[dict[str, OutputValue]] = Field(default_factory=list)
+
+    @field_validator("expected_output")
+    @classmethod
+    def _expected_output(cls, value: list[dict[str, Any]]) -> list[dict[str, OutputValue]]:
+        return validate_expected_output(value)
 
     @field_validator("question", "expected")
     @classmethod
@@ -300,6 +316,8 @@ class EvaluationCaseDraft(BaseModel):
     expected: str = ""
     # Run が呼んだ（呼ぼうとした）ツール。
     expected_tools: list[str] = Field(default_factory=list)
+    # Run が記録した出力の項目（#2558。期待する出力の下書き。記録が無ければ空）。
+    expected_output: list[dict[str, OutputValue]] = Field(default_factory=list)
     # 同じ質問のケースを既に持つ評価セットの ID（重複して足さないため）。
     existing_set_ids: list[str] = Field(default_factory=list)
 
@@ -415,6 +433,9 @@ class EvaluationCaseResult(BaseModel):
     tool_selection_correct: bool | None = None
     # 期待するツールを順どおりに呼んだか（順を指定しないケースは None。#1845）。
     tool_order_correct: bool | None = None
+    # 出力の項目の判定（#2558。期待する出力が無いケースは空と None）。
+    field_results: list[OutputFieldResult] = Field(default_factory=list)
+    field_correct: bool | None = None
     # 判定のモデルを呼んだ回数（出力の上限で止まったら広げて 1 回再試行する。#1845）。
     judge_attempts: int = 0
     # 問い返しへの往復（#1845。`run_id` は最後の Run）。
@@ -456,6 +477,14 @@ class EvaluationSummary(BaseModel):
     tool_cases: int = 0
     tool_correct: int = 0
     tool_accuracy: float | None = None
+    # 出力の項目の正しさ（#2558）。期待する出力を書いたケースのうち、すべての項目が正しい割合と、
+    # 判定した項目のうち正しい項目の割合。合格率には含めない（ツールの選択と同じ扱い）。
+    field_cases: int = 0
+    field_correct: int = 0
+    field_accuracy: float | None = None
+    field_items: int = 0
+    field_items_correct: int = 0
+    field_item_accuracy: float | None = None
 
 
 def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
@@ -474,6 +503,11 @@ def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
         if result.tool_selection_correct is not None:
             summary.tool_cases += 1
             summary.tool_correct += int(result.tool_selection_correct)
+        if result.field_correct is not None:
+            summary.field_cases += 1
+            summary.field_correct += int(result.field_correct)
+            summary.field_items += len(result.field_results)
+            summary.field_items_correct += sum(1 for item in result.field_results if item.correct)
         judgement = result.judgement
         if result.status != CaseStatus.JUDGED or judgement is None:
             continue
@@ -491,6 +525,10 @@ def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
         summary.average_score = sum(scores) / len(scores)
     if summary.tool_cases:
         summary.tool_accuracy = summary.tool_correct / summary.tool_cases
+    if summary.field_cases:
+        summary.field_accuracy = summary.field_correct / summary.field_cases
+    if summary.field_items:
+        summary.field_item_accuracy = summary.field_items_correct / summary.field_items
     return summary
 
 
@@ -746,6 +784,8 @@ def cases_fingerprint(job: EvaluationJob) -> tuple[tuple[Any, ...], ...]:
                     (item.item_id, tuple(item.option_ids), item.other_text)
                     for item in result.case.clarification_answers
                 ),
+                # 期待する出力を変えたら別のケースにする（#2558）。
+                tuple(tuple(sorted(row.items())) for row in result.case.expected_output),
             )
             for result in job.results
         )
@@ -1045,6 +1085,8 @@ class ComparisonOutcome(BaseModel):
     score: float | None = None
     tool_calls: list[str] = Field(default_factory=list)
     tool_selection_correct: bool | None = None
+    # 出力の項目がすべて正しいか（#2558。期待する出力の無いケースは None）。
+    field_correct: bool | None = None
     run_id: str | None = None
 
 
@@ -1080,6 +1122,7 @@ def _outcome(result: EvaluationCaseResult) -> ComparisonOutcome:
         score=result.judgement.score if judged and result.judgement else None,
         tool_calls=list(result.tool_calls),
         tool_selection_correct=result.tool_selection_correct,
+        field_correct=result.field_correct,
         run_id=result.run_id,
     )
 
@@ -1426,6 +1469,30 @@ def answer_clarifications(
     )
 
 
+def _recorded_output(runs: Sequence[RunState]) -> dict[str, Any] | None:
+    """会話の Run（問い返しの往復を含む）のうち、最後に記録した出力の項目（#2558）。"""
+    for run in reversed(runs):
+        for artifact in reversed(run.artifacts):
+            if artifact.kind == OUTPUT_KIND and isinstance(artifact.content, dict):
+                return artifact.content
+    return None
+
+
+def recorded_output_rows(run: RunState) -> list[dict[str, OutputValue]]:
+    """Run が記録した出力の行（評価ケースの期待する出力の下書き。#2558）。"""
+    content = _recorded_output([run])
+    rows = content.get("rows") if content is not None else None
+    if not isinstance(rows, list):
+        return []
+    return validate_expected_output(
+        [
+            {key: value for key, value in row.items() if value is not None}
+            for row in rows[:EVALUATION_EXPECTED_OUTPUT_ROWS_MAX]
+            if isinstance(row, dict)
+        ]
+    )
+
+
 def _answer_text(artifacts: list[Artifact]) -> str:
     for artifact in reversed(artifacts):
         if artifact.kind == "answer" and isinstance(artifact.content, dict):
@@ -1639,10 +1706,13 @@ async def _run_case(
         run = create_run(answered.message, thread_id=settled.thread_id, round_number=len(rounds))
         store.update_result(job.id, index, run_id=run.id, clarification_rounds=list(rounds))
     tool_calls = _tool_calls(*runs)
+    field_results, field_correct = compare_output(case.expected_output, _recorded_output(runs))
     tools = {
         "tool_calls": tool_calls,
         "tool_selection_correct": tool_selection_correct(case, tool_calls),
         "tool_order_correct": tool_order_correct(case, tool_calls),
+        "field_results": field_results,
+        "field_correct": field_correct,
         "clarification_rounds": rounds,
         "ended_with_clarification": settled.status == RunStatus.COMPLETED
         and bool(_pending_items(settled)),

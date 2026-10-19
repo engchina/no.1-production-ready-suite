@@ -308,6 +308,23 @@ export function evaluationSummary(results: Json[]): Json {
     tool_cases: toolResults.length,
     tool_correct: toolCorrect,
     tool_accuracy: toolResults.length ? toolCorrect / toolResults.length : null,
+    // 出力の項目の判定（#2558。backend の summarize と同じ数え方）。
+    ...fieldSummary(results),
+  };
+}
+
+function fieldSummary(results: Json[]): Json {
+  const judged = results.filter((item) => item.field_correct !== null && item.field_correct !== undefined);
+  const items = judged.flatMap((item) => (item.field_results as Json[] | undefined) ?? []);
+  const itemsCorrect = items.filter((item) => item.correct === true).length;
+  const casesCorrect = judged.filter((item) => item.field_correct === true).length;
+  return {
+    field_cases: judged.length,
+    field_correct: casesCorrect,
+    field_accuracy: judged.length ? casesCorrect / judged.length : null,
+    field_items: items.length,
+    field_items_correct: itemsCorrect,
+    field_item_accuracy: items.length ? itemsCorrect / items.length : null,
   };
 }
 
