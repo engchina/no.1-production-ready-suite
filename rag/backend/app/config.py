@@ -85,6 +85,9 @@ ParserAdapterBackend = Literal[
     "local",
     "docling",
     "unstructured",
+    # 前処理の構造化レコードの JSONL を記録の単位で解析し、検索用テキストを記録の境界で区切る
+    # (#2457)。使用エンジンで選んだときだけ使う。
+    "structured_records_jsonl",
     # XML ツリー JSON(tag / attr / children の木の JSON)を要素の階層のまま解析する(#2024)。
     # Docling・Unstructured と同じく、使用エンジンで選んだときだけ使う(#2042)。
     "xml_tree_json",
@@ -327,6 +330,7 @@ class _PersistedParserAdapterSettings(BaseModel):
     unstructured_enabled: bool = False
     mineru_enabled: bool = False
     dots_ocr_enabled: bool = False
+    structured_records_jsonl_enabled: bool = False
     xml_tree_json_enabled: bool = False
     mineru_api_host: str = Field(default="", max_length=2048)
     dots_ocr_api_host: str = Field(default="", max_length=2048)
@@ -2064,8 +2068,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default=DEFAULT_PARSER_ADAPTER_BACKEND,
         description=(
             "文書解析 backend の明示選択。既定は Docling(#286)。Unstructured は明示選択で使う。"
-            "Docling/Unstructured/XML ツリー JSON/各 OCR/Document Understanding は対応 parser "
-            "マイクロサービスまたは API へ HTTP 委譲する。"
+            "Docling/Unstructured/構造化レコード JSONL/XML ツリー JSON/各 OCR/"
+            "Document Understanding は対応 parser マイクロサービスまたは API へ HTTP 委譲する。"
             "in-process 解析・local fallback は持たない。"
         ),
     )
@@ -2101,6 +2105,14 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default=False,
         description="外部 Dots.OCR OpenAI 互換 API adapter を feature flag で有効化する。",
     )
+    rag_parser_structured_records_jsonl_enabled: bool = Field(
+        default=False,
+        description=(
+            "構造化レコード JSONL adapter を有効化する(#2457)。既定 backend ではないため既定で"
+            " False(画面で構造化レコード JSONL を選ぶと有効になる)。選択時は"
+            " parser-structured-records-jsonl の起動が前提。"
+        ),
+    )
     rag_parser_xml_tree_json_enabled: bool = Field(
         default=False,
         description=(
@@ -2120,6 +2132,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "置き換え、引用カードの「原典を開く」と根拠の metadata(xml_tree_source_url)に使う。"
             "空なら原典の URL を付けない。"
         ),
+    )
+    rag_parser_structured_records_jsonl_service_url: str = Field(
+        default="http://127.0.0.1:18023",
+        description="構造化レコード JSONL の parser マイクロサービスの base URL(#2457)。",
     )
     rag_parser_xml_tree_json_service_url: str = Field(
         default="http://127.0.0.1:18021",

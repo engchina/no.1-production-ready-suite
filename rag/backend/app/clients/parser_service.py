@@ -57,6 +57,8 @@ def parse_progress_id(progress_id: str | None) -> Iterator[None]:
 _SERVICE_URL_FIELDS: dict[str, str] = {
     "docling": "rag_parser_docling_service_url",
     "unstructured": "rag_parser_unstructured_service_url",
+    # 構造化レコード JSONL(#2457)。前処理の構造化レコードの JSONL だけを解析する。
+    "structured_records_jsonl": "rag_parser_structured_records_jsonl_service_url",
     # XML ツリー JSON(#2024)。tag / attr / children の木の JSON だけを解析する。
     "xml_tree_json": "rag_parser_xml_tree_json_service_url",
     # OCI クラウド service 系 backend(薄いプロキシ microservice)。
@@ -67,6 +69,7 @@ _SERVICE_URL_FIELDS: dict[str, str] = {
 _SERVICE_LABELS: dict[str, str] = {
     "docling": "Docling",
     "unstructured": "Unstructured",
+    "structured_records_jsonl": "構造化レコード JSONL",
     "xml_tree_json": "XML ツリー JSON",
     "mineru": "MinerU",
     "dots_ocr": "Dots.OCR",

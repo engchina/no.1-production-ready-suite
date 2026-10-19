@@ -155,11 +155,13 @@ def test_model_cache_path_set_only_for_model_downloading_parsers() -> None:
 
 
 def test_parser_catalog_order_lists_cpu_then_oci() -> None:
-    """サービス管理の文書解析の並び(#2042): CPU(Docling → Unstructured → XML ツリー JSON)→ OCI。"""
+    """サービス管理の文書解析の並び(#2042・#2457): CPU(Docling → Unstructured → 構造化レコード JSONL
+    → XML ツリー JSON)→ OCI。"""
     parsers = [entry.service_id for entry in SERVICE_CATALOG if entry.category == "parser"]
     assert parsers == [
         "parser-docling",
         "parser-unstructured",
+        "parser-structured-records-jsonl",
         "parser-xml-tree-json",
         "parser-oci-document-understanding",
     ]

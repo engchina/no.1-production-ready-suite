@@ -29,6 +29,7 @@ from fastapi import (
     UploadFile,
 )
 from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
+from rag_parser_core.structured_records import RecordBoundaryError
 
 from app.api.errors import DocumentFileMissingError
 from app.clients.document_cleanup_store import DocumentCleanupStore, DocumentCleanupTargets
@@ -77,6 +78,7 @@ from app.rag.ingestion import (
     IngestionTimeoutError,
     IngestionUserError,
     document_artifact_prefixes,
+    record_boundary_failure_message,
 )
 from app.rag.ingestion_progress import track_ingestion_progress
 from app.rag.ingestion_worker import request_ingestion_worker_wakeup
@@ -229,6 +231,7 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "parser_unstructured_enabled",
         "parser_mineru_enabled",
         "parser_dots_ocr_enabled",
+        "parser_structured_records_jsonl_enabled",
         "parser_xml_tree_json_enabled",
         # Vision は解析の後の共通の段で、解析結果(図の要素の本文)を変える(#497)。
         "vision_enabled",
@@ -1370,6 +1373,8 @@ async def preview_document_recipe_chunks(
             )
             if small_to_big_fallback:
                 chunks = mark_small_to_big_fallback(chunks)
+    except RecordBoundaryError as exc:
+        raise HTTPException(status_code=422, detail=record_boundary_failure_message(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

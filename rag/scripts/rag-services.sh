@@ -13,9 +13,10 @@
 #   scripts/rag-services.sh run <service>     # systemd を使わず前面で起動する（systemd の無い環境向け。Ctrl+C で停止）
 #
 # 対象（省略時は --cpu）:
-#   --cpu   前処理 5 つと既定の CPU parser（parser-docling。PDF と画像）と parser-xml-tree-json
-#           （XML ツリー JSON の .json。文書解析の使用エンジンに XML ツリー JSON を選んだときに使う。
-#           install は登録だけして起動しない）
+#   --cpu   前処理 5 つと既定の CPU parser（parser-docling。PDF と画像）と parser-structured-records-jsonl
+#           （前処理の構造化レコードの JSONL。文書解析の使用エンジンに構造化レコード JSONL を選んだときに使う）と
+#           parser-xml-tree-json（XML ツリー JSON の .json。文書解析の使用エンジンに XML ツリー JSON を選んだときに
+#           使う。install は登録だけして起動しない）
 #   --unstructured  parser-unstructured（Docling が扱えないテキスト・Office・メール などを取り込む場合）
 #   --oci   OCI parser（parser-oci-document-understanding）
 #   --all   すべて
@@ -59,6 +60,7 @@ CPU_SERVICES=(
   preprocess-excel-to-json
   preprocess-pii-redact
   parser-docling
+  parser-structured-records-jsonl
   parser-xml-tree-json
 )
 UNSTRUCTURED_SERVICES=(parser-unstructured)

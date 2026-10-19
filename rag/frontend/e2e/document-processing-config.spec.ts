@@ -313,9 +313,11 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
   await panel.getByRole("combobox", { name: "文書解析" }).click();
   // 解析エンジンの選択肢は文書解析の画面のカードと同じ並び（XML ツリー JSON を含む。#2042）。
+  // 構造化レコード JSONL は Unstructured の後、XML ツリー JSON の前（#2457）。
   await expect(page.getByRole("option")).toHaveText([
     "Docling",
     "Unstructured",
+    "構造化レコード JSONL",
     "XML ツリー JSON",
     "OCI Document Understanding",
     "MinerU",

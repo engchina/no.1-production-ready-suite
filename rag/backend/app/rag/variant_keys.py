@@ -44,6 +44,7 @@ _COMMON_EXTRACTION_RECIPE_FIELDS: tuple[str, ...] = (
 _BACKEND_EXTRACTION_RECIPE_FIELDS: dict[str, tuple[str, ...]] = {
     "docling": ("rag_parser_docling_enabled",),
     "unstructured": ("rag_parser_unstructured_enabled",),
+    "structured_records_jsonl": ("rag_parser_structured_records_jsonl_enabled",),
     "xml_tree_json": ("rag_parser_xml_tree_json_enabled",),
     "mineru": (
         "rag_parser_mineru_enabled",

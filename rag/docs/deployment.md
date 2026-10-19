@@ -81,6 +81,7 @@ health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロ
 | preprocess-office-to-pdf / pdf-to-page-images / csv-to-json / excel-to-json / pii-redact | `services/preprocess/<name>` | 18010〜18013・18016 |
 | parser-docling（既定の解析エンジン） | `services/parsers/docling` | 18020 |
 | parser-unstructured（既定では配備しない。Docling が扱えない形式を取り込む場合） | `services/parsers/unstructured` | 18022 |
+| parser-structured-records-jsonl（構造化レコード JSONL の解析エンジン。既定で配備・起動。#2457） | `services/parsers/structured_records_jsonl` | 18023 |
 | parser-xml-tree-json（XML ツリー JSON の解析エンジン。既定で配備し、既定は停止。#2024・#2042・#2453） | `services/parsers/xml_tree_json` | 18021 |
 | parser-oci-document-understanding（OCI Document Understanding） | `services/parsers/oci_document_understanding` | 18028 |
 
@@ -107,7 +108,7 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
    登録だけして起動しない。使うときはサービス管理画面で起動する。#2453）。
 
    ```bash
-   scripts/rag-services.sh install            # 前処理 5 つと既定の CPU parser（docling・xml-tree-json）
+   scripts/rag-services.sh install            # 前処理 5 つと既定の CPU parser（docling・structured-records-jsonl・xml-tree-json）
    scripts/rag-services.sh install --unstructured  # Unstructured（Docling が扱えない形式を取り込む場合）
    scripts/rag-services.sh install --oci      # OCI Document Understanding の parser も足す
    scripts/rag-services.sh status             # unit の状態
@@ -158,6 +159,14 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
   `RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`。対応形式は `.json`）。「取込・回答設定 › 文書解析」の既定か、文書の処理レシピの
   使用エンジンで XML ツリー JSON を選んだときだけ使い、形式を見て自動では回さない（#2042）。Docling のまま `.json` を取り込むと
   上の表のとおり取込前に止まる。XML ツリー JSON を選んで対応しない形の JSON を渡すと、扱えない旨のエラーで止まる。
+- **構造化レコード JSONL**（ファイル準備の「CSV→JSON」「Excel→JSON」が作る構造化レコードの JSON Lines。
+  `rag_parser_core.structured_records`）も同じ使用エンジンの 1 つ（`parser-structured-records-jsonl`。
+  `RAG_PARSER_ADAPTER_BACKEND=structured_records_jsonl`）。選んだときだけ使い、形式を見て自動では回さない（#2457）。
+  記録を 1 要素にし、検索用テキストの記録と記録の間に独立した行の `<<<JSONL_RECORD_BOUNDARY>>>` を置く（原文の同じ文字列は
+  `<<<` + k 個の `\` + `JSONL_RECORD_BOUNDARY>>>` を k+1 個にする可逆のエスケープで区別する）。分割方式「固定分割」
+  （`fixed_delimiter`）は、分割符の設定に関係なくこの境界で 1 記録 1 chunk にし（chunk size / overlap で再分割・結合しない）、
+  シート・行・セル範囲・列の役割・記録の ID を chunk に残す。chunk の本文・索引・引用にマーカーは残らない。契約に合わない JSONL・
+  1 要素の上限（8,000 字）を超える記録・境界の数が記録の数と合わない抽出は、黙って切らずに取込を止める。
 
 自前のコードの `docker-compose.yml` / `docker-compose.dev.yml` と Dockerfile は #356 で削除した。以前の Docker の環境からの移行は
 「[既存環境の更新手順（#286）](#既存環境の更新手順286-docker-compose-からネイティブ配備への移行)」を参照する。
@@ -240,6 +249,21 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 2. backend・取込 worker を再起動する。
 3. 残っている記録は `SELECT document_id, attempt_count, last_error_type, updated_at FROM rag_document_cleanups` で確かめる
    （`last_error_type` は最後の失敗の例外の型。`attempt_count` が増え続けるときは保存先の権限・到達性を確かめる）。
+
+## 既存環境の更新手順（#2457 構造化レコード JSONL の解析エンジン）
+
+parser のサービス `parser-structured-records-jsonl`（`services/parsers/structured_records_jsonl`、`127.0.0.1:18023`）を足した。
+`rag_parser_core` だけで動く軽いサービスで、CSV / Excel の前処理と同じく既定で配備・起動する。DB の migration は無い。
+新しい設定は `RAG_PARSER_STRUCTURED_RECORDS_JSONL_ENABLED`（既定 `false`。画面で選ぶと有効になる）と
+`RAG_PARSER_STRUCTURED_RECORDS_JSONL_SERVICE_URL`（既定 `http://127.0.0.1:18023`）で、既定のままなら `.env` に書かなくてよい。
+
+1. 本番（OCI Compute）: `sudo platform/deploy/suite-update.sh` で再配備する。`init_script.sh` が必ず配備する parser として
+   `/u01/aipoc/props/rag_services.txt` に足し、venv と unit を作って起動する（`enable --now`）。
+2. 開発: `scripts/rag-services.sh install parser-structured-records-jsonl`（`--cpu` にも含まれる）で登録して起動する。
+3. backend・取込 worker を再起動する。
+4. 使うときは「取込・回答設定 › 文書解析」の既定か、文書の処理レシピの使用エンジンで「構造化レコード JSONL」を選び、ファイル準備を
+   「CSV→JSON」「Excel→JSON」、分割方式を「固定分割」にする。既存の文書・レシピの設定は変わらない（Docling / Unstructured で
+   JSONL を受けたときの今の経路も残る）。
 
 ## 既存環境の更新手順（#2453 XML ツリー JSON の解析サービスを既定で停止にする）
 
@@ -1451,7 +1475,7 @@ ADB（Oracle Autonomous AI Database）と Wallet も stack が用意し（NL2SQL
 | Python | `uv python install 3.12`（`/opt/uv/python`。`ragsvc` も読める）。各サービスの venv は `uv sync --locked --no-dev --python 3.12` |
 | backend | `production-ready-rag-backend.service`（gunicorn + UvicornWorker、`127.0.0.1:8000`、workers 2、`RAG_ENVIRONMENT=prod`、in-process の取込 worker は無効） |
 | 取込 worker | `production-ready-rag-ingestion-worker.service`（`python -m app.rag.ingestion_worker`、`KillMode=mixed`、`RAG_INGESTION_QUEUE_SHUTDOWN_GRACE_SECONDS=60`、`TimeoutStopSec=90`。停止は下の「取込 worker の lease と停止」） |
-| 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 5 つ・parser-docling・parser-xml-tree-json と、選べば parser-unstructured・parser-oci-document-understanding）。parser-xml-tree-json は既定は停止で、初めて配備しても起動しない（#2453）。GPU の parser は配備しない |
+| 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 5 つ・parser-docling・parser-structured-records-jsonl・parser-xml-tree-json と、選べば parser-unstructured・parser-oci-document-understanding）。parser-xml-tree-json は既定は停止で、初めて配備しても起動しない（#2453）。GPU の parser は配備しない |
 | frontend | host の Node.js 24 で `platform` と `rag/frontend` を build し、Nginx が `rag/frontend/dist` を配信して `/api/` を backend へ proxy する |
 | upload の上限 | Nginx の `client_max_body_size` は backend の `RAG_MAX_UPLOAD_BYTES`（`backend/.env`。既定 200 MiB）+ 10 MiB（MiB で切り上げ。Refs #306） |
 | 設定 | `platform/.env`（`PLATFORM_*`）と `rag/backend/.env`（`RAG_*`）。どちらも `ragsvc` だけが読める 0600。OCI parser の unit は両方を EnvironmentFile で読む |

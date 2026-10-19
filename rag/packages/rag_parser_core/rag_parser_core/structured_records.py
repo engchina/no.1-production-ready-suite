@@ -24,11 +24,21 @@ CSV・Excel の前処理は、原本を 1 行 1 オブジェクトの JSON Lines
 
 Excel の記録は `rag_parser_core.sheet_records` の行の記録（`SheetRecordsDocument`）と相互に変換し、
 要素化は `sheet_records_extraction` を使う（要素の ID・metadata・分割の挙動を変えない）。
+
+解析エンジン「構造化レコード JSONL」（`STRUCTURED_RECORDS_JSONL_BACKEND`）は、要素の本文を記録の
+境界のマーカー（`JSONL_RECORD_BOUNDARY`）で区切った検索用テキストを ``raw_text`` にする
+（`with_record_boundaries`）。マーカーは記録と記録の間に独立した行で置き、先頭・末尾には置かない。
+JSONL のファイルには置かない。原文の同じ文字列は ``<<<`` + k 個の ``\\`` +
+``JSONL_RECORD_BOUNDARY>>>`` を k+1 個にする可逆のエスケープで区別する
+（`escape_record_boundary` / `unescape_record_boundary`）。固定分割（``fixed_delimiter``）は記録の
+境界で 1 記録 1 chunk にし、本文はエスケープを戻した原文にする（`split_record_boundary_text`。
+マーカーと境界の改行は chunk に残さない）。
 """
 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
@@ -37,6 +47,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 from rag_parser_core.sheet_records import (
+    _BLOCK_TEXT_MAX_CHARS,
     SHEET_RECORD_CONTENT_KIND,
     HeaderDetection,
     SheetBlock,
@@ -46,6 +57,7 @@ from rag_parser_core.sheet_records import (
     SheetRecords,
     SheetRecordsDocument,
     SkippedSheet,
+    _block_text,
     sheet_records_extraction,
 )
 
@@ -58,7 +70,19 @@ STRUCTURED_RECORDS_ARTIFACT_KEY = "structured_records_schema_version"
 STRUCTURED_RECORD_ID_KEY = "structured_record_id"
 STRUCTURED_RECORDS_FILE_EXTENSION = ".jsonl"
 # 1 つの要素の本文の上限（`sheet_records` と同じ。極端に長い行で chunk を壊さない）。
-_RECORD_TEXT_MAX_CHARS = 8000
+_RECORD_TEXT_MAX_CHARS = _BLOCK_TEXT_MAX_CHARS
+# 解析エンジン「構造化レコード JSONL」（parser-structured-records-jsonl のサービス。#2457）。
+STRUCTURED_RECORDS_JSONL_BACKEND = "structured_records_jsonl"
+STRUCTURED_RECORDS_JSONL_PARSER_VERSION = "structured_records_jsonl_v1"
+# 検索用テキスト（raw_text）の記録と記録の間に、独立した行で置く境界のマーカー（ASCII の完全一致）。
+JSONL_RECORD_BOUNDARY = "<<<JSONL_RECORD_BOUNDARY>>>"
+# 抽出の parser_artifacts に刻む、raw_text の境界のマーカーと境界の数（記録数 − 1）。
+STRUCTURED_RECORDS_BOUNDARY_ARTIFACT_KEY = "structured_records_record_boundary"
+STRUCTURED_RECORDS_BOUNDARY_COUNT_ARTIFACT_KEY = "structured_records_record_boundary_count"
+_BOUNDARY_SEPARATOR = f"\n{JSONL_RECORD_BOUNDARY}\n"
+# ``<<<`` + k 個の ``\`` + ``JSONL_RECORD_BOUNDARY>>>``（k = 0 がマーカーそのもの）。
+_BOUNDARY_FAMILY = re.compile(r"<<<(\\*)JSONL_RECORD_BOUNDARY>>>")
+_ESCAPED_BOUNDARY_FAMILY = re.compile(r"<<<\\(\\*)JSONL_RECORD_BOUNDARY>>>")
 
 SourceType = Literal["csv", "xlsx", "xls"]
 _SPREADSHEET_SOURCE_TYPES = frozenset({"xlsx", "xls"})
@@ -471,9 +495,9 @@ def structured_records_to_sheet_records(
 # ---- 要素化 -----------------------------------------------------------------------------
 
 
-def _csv_row_text(line: RowLine) -> str:
+def _csv_row_text(line: RowLine, *, max_chars: int | None = _RECORD_TEXT_MAX_CHARS) -> str:
     text = " / ".join(f"{item.name}: {item.value}" for item in line.fields if item.value.strip())
-    return text[:_RECORD_TEXT_MAX_CHARS]
+    return text if max_chars is None else text[:max_chars]
 
 
 def _csv_extraction(
@@ -583,8 +607,163 @@ def structured_records_extraction(
     )
 
 
+# ---- 記録の境界（解析エンジン「構造化レコード JSONL」の検索用テキスト）-----------------------
+
+
+class RecordBoundaryError(ValueError):
+    """検索用テキストの記録の境界が契約に合わない（`code` は診断の理由）。"""
+
+    def __init__(self, code: str, detail: str = "") -> None:
+        self.code = code
+        self.detail = detail
+        super().__init__(
+            f"structured_records_boundary_invalid:{code}" + (f" {detail}" if detail else "")
+        )
+
+
+def escape_record_boundary(text: str) -> str:
+    """原文の ``<<<`` + k 個の ``\\`` + ``JSONL_RECORD_BOUNDARY>>>`` を k+1 個にする（可逆）。"""
+    return _BOUNDARY_FAMILY.sub(
+        lambda match: f"<<<\\{match.group(1)}JSONL_RECORD_BOUNDARY>>>", text
+    )
+
+
+def unescape_record_boundary(text: str) -> str:
+    """`escape_record_boundary` を戻す（k+1 個の ``\\`` を k 個にする）。"""
+    return _ESCAPED_BOUNDARY_FAMILY.sub(
+        lambda match: f"<<<{match.group(1)}JSONL_RECORD_BOUNDARY>>>", text
+    )
+
+
+def join_record_boundary_text(texts: Iterable[str]) -> str:
+    """記録の本文をエスケープし、独立した行のマーカーで区切る（先頭・末尾には置かない）。"""
+    return _BOUNDARY_SEPARATOR.join(escape_record_boundary(text) for text in texts)
+
+
+def has_record_boundaries(extraction: StructuredExtraction) -> bool:
+    """raw_text が記録の境界のマーカーで区切られた抽出か（構造化レコード JSONL の解析）。"""
+    return extraction.parser_artifacts.get(STRUCTURED_RECORDS_BOUNDARY_ARTIFACT_KEY) == (
+        JSONL_RECORD_BOUNDARY
+    )
+
+
+@dataclass(frozen=True)
+class RecordBoundaryPart:
+    """境界で分けた 1 記録（``text`` はエスケープを戻した原文。offset は raw_text の位置）。"""
+
+    text: str
+    start_offset: int
+    end_offset: int
+
+
+def split_record_boundary_text(raw_text: str) -> list[RecordBoundaryPart]:
+    """検索用テキストを記録の境界で分け、エスケープを戻す（マーカーと境界の改行は含めない）。
+
+    マーカーが独立した行でない・空の記録があるときは `RecordBoundaryError` を出す
+    （黙って結合・分割しない）。
+    """
+    text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    parts: list[RecordBoundaryPart] = []
+    cursor = 0
+    for index, piece in enumerate(text.split(_BOUNDARY_SEPARATOR)):
+        if JSONL_RECORD_BOUNDARY in piece:
+            raise RecordBoundaryError("boundary_not_on_own_line", f"record={index + 1}")
+        leading = len(piece) - len(piece.lstrip())
+        body = piece.strip()
+        if not body:
+            raise RecordBoundaryError("empty_record", f"record={index + 1}")
+        parts.append(
+            RecordBoundaryPart(
+                text=unescape_record_boundary(body),
+                start_offset=cursor + leading,
+                end_offset=cursor + leading + len(body),
+            )
+        )
+        cursor += len(piece) + len(_BOUNDARY_SEPARATOR)
+    return parts
+
+
+def record_boundary_plain_text(extraction: StructuredExtraction) -> str:
+    """raw_text からマーカーを除き、エスケープを戻した原文（記録を改行でつなぐ）。
+
+    境界の無い抽出はそのまま返す。境界が契約に合わなければ、raw_text からマーカーの行だけを
+    除く（LLM の入力・表示にマーカーを渡さない。分割の診断は固定分割が行う）。
+    """
+    if not has_record_boundaries(extraction):
+        return extraction.raw_text
+    try:
+        return "\n".join(part.text for part in split_record_boundary_text(extraction.raw_text))
+    except RecordBoundaryError:
+        lines = extraction.raw_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        return unescape_record_boundary(
+            "\n".join(line for line in lines if line.strip() != JSONL_RECORD_BOUNDARY)
+        )
+
+
+def oversized_record_line(document: StructuredRecordsDocument) -> int | None:
+    """本文が 1 要素の上限を超える記録の JSONL の行番号（無ければ None）。
+
+    既存の要素化は上限で本文を切る。構造化レコード JSONL の解析は黙って切らずに診断で止める。
+    行番号は document の行（1 行目）を含めた 1 始まり。
+    """
+    roles_by_sheet: dict[str, dict[str, str]] = {}
+    for index, line in enumerate(document.lines):
+        number = index + 2
+        if isinstance(line, SheetLine):
+            roles_by_sheet[line.record_id] = {
+                column.name: column.role for column in line.columns if column.role
+            }
+            continue
+        if isinstance(line, PreambleLine):
+            text = line.text
+        elif document.source_type not in _SPREADSHEET_SOURCE_TYPES:
+            text = _csv_row_text(line, max_chars=None) if isinstance(line, RowLine) else ""
+        else:
+            block = SheetBlock(
+                kind="procedure_step" if isinstance(line, ProcedureStepLine) else "row",
+                row_start=line.location.row_start,
+                row_end=line.location.row_end,
+                cell_range=line.location.cell_range or "",
+                section_path=line.section_path,
+                lines=line.lines if isinstance(line, ProcedureStepLine) else [],
+                values=(
+                    {item.name: item.value for item in line.fields}
+                    if isinstance(line, RowLine)
+                    else {}
+                ),
+            )
+            text = _block_text(block, roles_by_sheet.get(str(line.parent_id)), max_chars=None)
+        if len(text) > _RECORD_TEXT_MAX_CHARS:
+            return number
+    return None
+
+
+def with_record_boundaries(extraction: StructuredExtraction) -> StructuredExtraction:
+    """記録の要素の本文を境界のマーカーで区切り、検索用テキスト（raw_text）にする。"""
+    texts = [
+        element.text
+        for element in extraction.elements
+        if element.metadata.get(STRUCTURED_RECORD_ID_KEY) and element.text.strip()
+    ]
+    return extraction.model_copy(
+        update={
+            "raw_text": join_record_boundary_text(texts),
+            "parser_artifacts": {
+                **extraction.parser_artifacts,
+                STRUCTURED_RECORDS_BOUNDARY_ARTIFACT_KEY: JSONL_RECORD_BOUNDARY,
+                STRUCTURED_RECORDS_BOUNDARY_COUNT_ARTIFACT_KEY: max(0, len(texts) - 1),
+            },
+        }
+    )
+
+
 __all__ = [
+    "JSONL_RECORD_BOUNDARY",
     "STRUCTURED_RECORDS_ARTIFACT_KEY",
+    "STRUCTURED_RECORDS_BOUNDARY_ARTIFACT_KEY",
+    "STRUCTURED_RECORDS_BOUNDARY_COUNT_ARTIFACT_KEY",
+    "STRUCTURED_RECORDS_JSONL_BACKEND",
+    "STRUCTURED_RECORDS_JSONL_PARSER_VERSION",
     "STRUCTURED_RECORDS_CONTENT_TYPE",
     "STRUCTURED_RECORDS_FILE_EXTENSION",
     "STRUCTURED_RECORDS_SCHEMA",
@@ -594,6 +773,8 @@ __all__ = [
     "DocumentLine",
     "PreambleLine",
     "ProcedureStepLine",
+    "RecordBoundaryError",
+    "RecordBoundaryPart",
     "RecordDiagnostic",
     "RecordField",
     "RecordLocation",
@@ -604,9 +785,17 @@ __all__ = [
     "StructuredRecordsDocument",
     "StructuredRecordsError",
     "dump_structured_records",
+    "escape_record_boundary",
+    "has_record_boundaries",
     "is_structured_records_content_type",
+    "join_record_boundary_text",
+    "oversized_record_line",
     "parse_structured_records",
+    "record_boundary_plain_text",
+    "split_record_boundary_text",
     "sheet_records_to_lines",
     "structured_records_extraction",
     "structured_records_to_sheet_records",
+    "unescape_record_boundary",
+    "with_record_boundaries",
 ]

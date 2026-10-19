@@ -77,6 +77,7 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "parser_unstructured_enabled": "rag_parser_unstructured_enabled",
     "parser_mineru_enabled": "rag_parser_mineru_enabled",
     "parser_dots_ocr_enabled": "rag_parser_dots_ocr_enabled",
+    "parser_structured_records_jsonl_enabled": "rag_parser_structured_records_jsonl_enabled",
     "parser_xml_tree_json_enabled": "rag_parser_xml_tree_json_enabled",
     # 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく効く(#497)。
     "vision_enabled": "rag_vision_enabled",
@@ -147,6 +148,7 @@ _QUERY_FIELD_MAP: dict[str, str] = {
 _EXTERNAL_PARSER_BACKEND_FLAGS: dict[str, str] = {
     "docling": "rag_parser_docling_enabled",
     "unstructured": "rag_parser_unstructured_enabled",
+    "structured_records_jsonl": "rag_parser_structured_records_jsonl_enabled",
     "xml_tree_json": "rag_parser_xml_tree_json_enabled",
     "mineru": "rag_parser_mineru_enabled",
     "dots_ocr": "rag_parser_dots_ocr_enabled",
@@ -227,6 +229,7 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     parser_unstructured_enabled: bool | None = None
     parser_mineru_enabled: bool | None = None
     parser_dots_ocr_enabled: bool | None = None
+    parser_structured_records_jsonl_enabled: bool | None = None
     parser_xml_tree_json_enabled: bool | None = None
     vision_enabled: bool | None = None
     chunking_strategy: ChunkingStrategy | None = None

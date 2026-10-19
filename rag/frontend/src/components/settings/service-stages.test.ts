@@ -104,6 +104,8 @@ describe("サービス管理のサービス名", () => {
       "settings.services.item.preprocessCsvToJson": "settings.preprocess.profile.csv_to_json",
       "settings.services.item.preprocessExcelToJson": "settings.preprocess.profile.excel_to_json",
       "settings.services.item.preprocessPiiRedact": "settings.preprocess.profile.pii_redact",
+      "settings.services.item.parserStructuredRecordsJsonl":
+        "settings.parserAdapters.backend.structured_records_jsonl",
       "settings.services.item.parserXmlTreeJson": "settings.parserAdapters.backend.xml_tree_json",
       "settings.services.item.parserOciDocumentUnderstanding":
         "settings.parserAdapters.backend.oci_document_understanding",

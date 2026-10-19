@@ -60,6 +60,15 @@ function defaultServices(): ServiceRow[] {
       configured: true,
     },
     {
+      service_id: "parser-structured-records-jsonl",
+      category: "parser",
+      profile: "cpu",
+      label_key: "settings.services.item.parserStructuredRecordsJsonl",
+      execution_policy: "selected_adapter",
+      status: "running",
+      configured: true,
+    },
+    {
       service_id: "parser-xml-tree-json",
       category: "parser",
       profile: "cpu",
@@ -520,6 +529,7 @@ for (const viewport of [
       "preprocess-office-to-pdf": "停止",
       "parser-docling": "起動",
       "parser-unstructured": "停止",
+      "parser-structured-records-jsonl": "停止",
       "parser-xml-tree-json": "起動",
       "parser-oci-document-understanding": "起動",
       // backend 内処理の段は操作を出さない。
@@ -562,7 +572,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`文書解析の節は CPU → OCI の順で、CPU は Docling → Unstructured → XML ツリー JSON（#2042, ${viewport.name}）`, async ({
+  test(`文書解析の節は CPU → OCI の順で、CPU は Docling → Unstructured → 構造化レコード JSONL → XML ツリー JSON（#2042・#2457, ${viewport.name}）`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -582,9 +592,13 @@ for (const viewport of [
     expect(parserRows.map((row) => row.id)).toEqual([
       "service-row-parser-docling",
       "service-row-parser-unstructured",
+      "service-row-parser-structured-records-jsonl",
       "service-row-parser-xml-tree-json",
       "service-row-parser-oci-document-understanding",
     ]);
+    await expect(
+      page.getByTestId("service-row-parser-structured-records-jsonl")
+    ).toContainText("構造化レコード JSONL");
     for (let index = 1; index < parserRows.length; index += 1) {
       expect(parserRows[index].top).toBeGreaterThan(parserRows[index - 1].top);
     }

@@ -37,6 +37,7 @@ export const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = PR
 export const PARSER_VALUES = [
   "docling",
   "unstructured",
+  "structured_records_jsonl",
   "xml_tree_json",
   "oci_document_understanding",
   "mineru",

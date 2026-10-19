@@ -41,6 +41,7 @@ UNSTRUCTURED_SERVICE_ID = "parser-unstructured"
 _BACKEND_LABELS = {
     "docling": "Docling",
     "unstructured": "Unstructured",
+    "structured_records_jsonl": "構造化レコード JSONL",
     "xml_tree_json": "XML ツリー JSON",
     "mineru": "MinerU",
     "dots_ocr": "Dots.OCR",

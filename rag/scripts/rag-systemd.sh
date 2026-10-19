@@ -19,6 +19,7 @@ RAG_MICROSERVICES=(
   "preprocess-pii-redact|services/preprocess/pii_redact|18016|300"
   "parser-docling|services/parsers/docling|18020|300"
   "parser-unstructured|services/parsers/unstructured|18022|300"
+  "parser-structured-records-jsonl|services/parsers/structured_records_jsonl|18023|300"
   "parser-xml-tree-json|services/parsers/xml_tree_json|18021|300"
   "parser-oci-document-understanding|services/parsers/oci_document_understanding|18028|300"
 )

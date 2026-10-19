@@ -11,6 +11,7 @@ from collections.abc import Callable
 from fastapi import FastAPI, HTTPException
 from pr_backend_core.logging import configure_http_logging
 from rag_parser_core.language import bind_pack, pack_from_payload
+from rag_parser_core.structured_records import RecordBoundaryError
 
 from rag_pipeline_core.chunking import Chunk, chunk_extraction_with_strategy
 from rag_pipeline_core.evaluation import resolve_evaluation
@@ -168,14 +169,18 @@ def create_chunking_app(
             raise HTTPException(status_code=422, detail=f"language_pack: {exc}") from exc
         # 言語資源の上書き(#2181)は、この要求の間だけ束ねる。
         with bind_pack(pack):
-            chunks: list[Chunk] = chunk_extraction_with_strategy(
-                request.extraction,
-                strategy=request.strategy,
-                chunk_size=request.chunk_size,
-                overlap=request.overlap,
-                min_chars=request.min_chars,
-                delimiter=request.delimiter,
-            )
+            try:
+                chunks: list[Chunk] = chunk_extraction_with_strategy(
+                    request.extraction,
+                    strategy=request.strategy,
+                    chunk_size=request.chunk_size,
+                    overlap=request.overlap,
+                    min_chars=request.min_chars,
+                    delimiter=request.delimiter,
+                )
+            except RecordBoundaryError as exc:
+                # 構造化レコード JSONL の記録の境界の診断(#2457)。黙って結合・切り捨てをしない。
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         return ChunkingStageResponse.from_chunks(list(chunks))
 
     return app

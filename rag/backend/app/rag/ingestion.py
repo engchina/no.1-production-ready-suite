@@ -40,6 +40,8 @@ from rag_parser_core.source import SourceModality, template_for_source_profile
 from rag_parser_core.structured_records import (
     STRUCTURED_RECORDS_CONTENT_TYPE,
     STRUCTURED_RECORDS_FILE_EXTENSION,
+    RecordBoundaryError,
+    record_boundary_plain_text,
 )
 from rag_pipeline_core.raptor import build_raptor_summaries
 from rag_pipeline_core.stage import ChunkingStageRequest
@@ -2093,14 +2095,17 @@ class IngestionPipeline:
             remote_chunks = self._pipeline_stage.run_chunking(request)
             if remote_chunks is not None:
                 return remote_chunks
-            return chunk_extraction_with_strategy(
-                extraction,
-                strategy=effective_strategy,
-                chunk_size=chunking_params.chunk_size,
-                overlap=chunking_params.overlap,
-                min_chars=chunking_params.min_chars,
-                delimiter=chunking_params.delimiter,
-            )
+            try:
+                return chunk_extraction_with_strategy(
+                    extraction,
+                    strategy=effective_strategy,
+                    chunk_size=chunking_params.chunk_size,
+                    overlap=chunking_params.overlap,
+                    min_chars=chunking_params.min_chars,
+                    delimiter=chunking_params.delimiter,
+                )
+            except RecordBoundaryError as exc:
+                raise IngestionUserError(record_boundary_failure_message(exc)) from exc
 
         def _run_chunking() -> list[Chunk]:
             if small_to_big_fallback:
@@ -3836,6 +3841,14 @@ def _selected_parser_failure_message(
             "切り替えずに取込を停止しました。この文書の「処理レシピ」で「文書解析」を"
             f"Unstructured などに変えてから再実行してください。{warning_suffix}"
         )
+    if warning and warning.startswith("structured_records_invalid:"):
+        return (
+            f"選択した文書解析エンジン（{label}）は、ファイル準備の「CSV→JSON」「Excel→JSON」が"
+            "作る構造化レコードの JSONL だけを解析できます。このファイルはその形式に合わないか、"
+            "1 件の記録が大きすぎるため、別の解析エンジンには切り替えずに取込を停止しました。"
+            "この文書の「処理レシピ」でファイル準備と文書解析の組み合わせを確認してから"
+            f"再実行してください。{warning_suffix}"
+        )
     if warning and warning.endswith("_adapter_package_missing"):
         return (
             f"選択した文書解析エンジン（{label}）の実行に必要なパッケージが"
@@ -3891,10 +3904,27 @@ def _selected_parser_failure_message(
     )
 
 
+def record_boundary_failure_message(error: RecordBoundaryError) -> str:
+    """構造化レコード JSONL の記録の境界で分割できなかった理由を利用者向け文言へ寄せる(#2457)。"""
+    if error.code == "record_too_large":
+        reason = "1 件の記録が chunk の上限を超えています"
+    elif error.code == "boundary_count_mismatch":
+        reason = "検索用テキストの記録の境界の数が記録の数と合いません"
+    else:
+        reason = "検索用テキストの記録の境界が壊れています"
+    return (
+        f"構造化レコード JSONL の抽出を記録の単位で分割できませんでした（{reason}）。"
+        "記録を結合・切り捨てずに取込を停止しました。抽出結果の確認で本文を編集した場合は、"
+        "記録の境界の行を消さずに保存し直すか、文書を再処理してください。"
+        f" エラーコード: structured_records_boundary_invalid:{error.code}"
+    )
+
+
 def _parser_backend_label(backend: str) -> str:
     labels = {
         "docling": "Docling",
         "unstructured": "Unstructured",
+        "structured_records_jsonl": "構造化レコード JSONL",
         "xml_tree_json": "XML ツリー JSON",
         "mineru": "MinerU",
         "dots_ocr": "Dots.OCR",
@@ -3986,6 +4016,7 @@ def _is_external_adapter_backend(parser_backend: str) -> bool:
     return parser_backend in {
         "docling",
         "unstructured",
+        "structured_records_jsonl",
         "xml_tree_json",
         "mineru",
         "dots_ocr",
@@ -4259,8 +4290,8 @@ def _source_parser_name(
 
 
 def _text_for_chunking(extraction: StructuredExtraction) -> str:
-    """抽出結果から索引用テキストを作る。"""
-    return extraction.raw_text.strip()
+    """抽出結果から索引用テキストを作る(構造化レコード JSONL の境界のマーカーは除く。#2457)。"""
+    return record_boundary_plain_text(extraction).strip()
 
 
 def _pdf_segments_for_ingestion(

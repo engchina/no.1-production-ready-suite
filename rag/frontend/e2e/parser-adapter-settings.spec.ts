@@ -48,6 +48,15 @@ for (const viewport of [
     await expect(xmlTreeJsonCard).toContainText("要素の階層のまま解析");
     await expect(xmlTreeJsonCard).toContainText("対応形式: JSON");
     await expect(xmlTreeJsonCard).toContainText(".json");
+    // 構造化レコード JSONL も同じ形のカード（Unstructured の後・XML ツリー JSON の前。#2457）。
+    await expect(
+      page.getByRole("radio", { name: /構造化レコード JSONL.*CPU.*稼働中/ })
+    ).toBeVisible();
+    const structuredRecordsCard = page.locator(
+      'label[for="settings-parser-backend-structured_records_jsonl"]'
+    );
+    await expect(structuredRecordsCard).toContainText("記録の単位で解析");
+    await expect(structuredRecordsCard).toContainText("対応形式: JSONL");
     // 「形式で自動に回す解析エンジン」の節とスイッチは無い。
     await expect(page.getByText("形式で自動に回す解析エンジン")).toHaveCount(0);
     await expect(page.getByRole("switch", { name: "XML ツリー JSON" })).toHaveCount(0);
@@ -59,16 +68,18 @@ for (const viewport of [
           elements.map((element) => (element as HTMLInputElement).labels?.[0]?.textContent ?? "")
         )
     ).map((text) => text.replace(/\s+/g, " ").trim());
-    // 並びは CPU → OCI → GPU（#2042）。
-    expect(engineNames).toHaveLength(6);
+    // 並びは CPU → OCI → GPU（#2042）。CPU は Docling → Unstructured → 構造化レコード JSONL →
+    // XML ツリー JSON（#2457）。
+    expect(engineNames).toHaveLength(7);
     expect(engineNames[0]).toContain("Docling");
     expect(engineNames[1]).toContain("Unstructured");
-    expect(engineNames[2]).toContain("XML ツリー JSON");
-    expect(engineNames[3]).toContain("OCI Document Understanding");
-    expect(engineNames[4]).toContain("MinerU");
-    expect(engineNames[5]).toContain("Dots.OCR");
-    // desktop は 2 列（1 行目 Docling・Unstructured / 2 行目 XML ツリー JSON・OCI Document
-    // Understanding / 3 行目 MinerU・Dots.OCR）、375px は 1 列で同じ順。
+    expect(engineNames[2]).toContain("構造化レコード JSONL");
+    expect(engineNames[3]).toContain("XML ツリー JSON");
+    expect(engineNames[4]).toContain("OCI Document Understanding");
+    expect(engineNames[5]).toContain("MinerU");
+    expect(engineNames[6]).toContain("Dots.OCR");
+    // desktop は 2 列（1 行目 Docling・Unstructured / 2 行目 構造化レコード JSONL・XML ツリー JSON /
+    // 3 行目 OCI Document Understanding・MinerU / 4 行目 Dots.OCR）、375px は 1 列で同じ順。
     const cardBoxes = await page
       .locator('label[for^="settings-parser-backend-"]')
       .evaluateAll((elements) =>
@@ -77,7 +88,7 @@ for (const viewport of [
           return { x: Math.round(box.left), y: Math.round(box.top) };
         })
       );
-    expect(cardBoxes).toHaveLength(6);
+    expect(cardBoxes).toHaveLength(7);
     if (viewport.name === "desktop") {
       for (const row of [0, 2, 4]) {
         expect(cardBoxes[row].y).toBe(cardBoxes[row + 1].y);
@@ -85,6 +96,8 @@ for (const viewport of [
       }
       expect(cardBoxes[0].y).toBeLessThan(cardBoxes[2].y);
       expect(cardBoxes[2].y).toBeLessThan(cardBoxes[4].y);
+      expect(cardBoxes[4].y).toBeLessThan(cardBoxes[6].y);
+      expect(cardBoxes[6].x).toBe(cardBoxes[0].x);
     } else {
       for (let index = 1; index < cardBoxes.length; index += 1) {
         expect(cardBoxes[index].x).toBe(cardBoxes[0].x);
@@ -688,6 +701,7 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
     unstructured_enabled: false,
     mineru_enabled: true,
     dots_ocr_enabled: false,
+    structured_records_jsonl_enabled: false,
     xml_tree_json_enabled: false,
     connections: defaultConnections().map((connection) => ({
       backend: connection.backend,
@@ -748,6 +762,68 @@ test("XML ツリー JSON は使用エンジンとして選んで保存する（i
   await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
   expect(savedPayload).toMatchObject({ adapter_backend: "xml_tree_json", xml_tree_json_enabled: true });
   await expect(xmlTreeJson).toBeChecked();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("構造化レコード JSONL は使用エンジンとして選んで保存する（issue 2457）", async ({ page }) => {
+  let savedPayload: Record<string, unknown> | null = null;
+  const adapters = (selected: "docling" | "structured_records_jsonl") => [
+    {
+      ...disabledAdapter("docling"),
+      enabled: true,
+      selected: selected === "docling",
+      status: selected === "docling" ? "active" : "ignored",
+    },
+    disabledAdapter("unstructured"),
+    selected === "structured_records_jsonl"
+      ? {
+          ...disabledAdapter("structured_records_jsonl"),
+          enabled: true,
+          selected: true,
+          status: "active",
+        }
+      : disabledAdapter("structured_records_jsonl"),
+    disabledAdapter("xml_tree_json"),
+    disabledAdapter("mineru"),
+    disabledAdapter("dots_ocr"),
+  ];
+  await page.route("**/api/settings/parser-adapters", async (route) => {
+    if (route.request().method() === "PATCH") {
+      savedPayload = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({
+        json: parserAdapterEnvelope({
+          adapter_backend: "structured_records_jsonl",
+          effective_order: ["structured_records_jsonl"],
+          config_source: "runtime",
+          adapters: adapters("structured_records_jsonl"),
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      json: parserAdapterEnvelope({
+        adapter_backend: "docling",
+        effective_order: ["docling"],
+        config_source: "runtime",
+        adapters: adapters("docling"),
+      }),
+    });
+  });
+
+  await page.goto("/settings/parser-adapters");
+
+  const structuredRecords = page.getByRole("radio", { name: /構造化レコード JSONL/ });
+  await expect(structuredRecords).not.toBeChecked();
+  await structuredRecords.check();
+  await expect(structuredRecords).toBeChecked();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
+  expect(savedPayload).toMatchObject({
+    adapter_backend: "structured_records_jsonl",
+    structured_records_jsonl_enabled: true,
+  });
+  await expect(structuredRecords).toBeChecked();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -929,6 +1005,19 @@ async function mockParserAdapters(page: Page, extra: object = {}) {
               warning_code: "adapter_flag_ignored_by_backend",
             },
             {
+              backend: "structured_records_jsonl",
+              package_name: "rag_parser_core",
+              import_name: "rag_parser_core",
+              distribution_name: "rag-parser-core",
+              install_package: "rag-parser-core",
+              enabled: false,
+              selected: false,
+              installed: true,
+              status: "available",
+              version: null,
+              warning_code: null,
+            },
+            {
               backend: "xml_tree_json",
               package_name: "rag_parser_core",
               import_name: "rag_parser_core",
@@ -989,6 +1078,7 @@ function parserAdapterEnvelope(data: object) {
       ],
       capabilities: [
         { backend: "docling", modalities: ["pdf", "image"], extensions: [".pdf", ".png"] },
+        { backend: "structured_records_jsonl", modalities: [], extensions: [".jsonl"] },
         { backend: "xml_tree_json", modalities: [], extensions: [".json"] },
       ],
       backend_source_kind_matrix: {
@@ -1064,6 +1154,7 @@ async function mockParserServiceStatuses(page: Page) {
   const statuses: Record<string, string> = {
     "parser-docling": "running",
     "parser-unstructured": "degraded",
+    "parser-structured-records-jsonl": "running",
     "parser-xml-tree-json": "running",
     "parser-oci-document-understanding": "unconfigured",
   };
@@ -1140,7 +1231,13 @@ function serviceProfileForId(serviceId: string) {
 }
 
 function disabledAdapter(
-  backend: "docling" | "unstructured" | "xml_tree_json" | "mineru" | "dots_ocr"
+  backend:
+    | "docling"
+    | "unstructured"
+    | "structured_records_jsonl"
+    | "xml_tree_json"
+    | "mineru"
+    | "dots_ocr"
 ) {
   const external = backend === "mineru" || backend === "dots_ocr";
   return {
@@ -1151,7 +1248,7 @@ function disabledAdapter(
     install_package:
       backend === "unstructured"
         ? "unstructured[all-docs]==0.18.32"
-        : backend === "xml_tree_json"
+        : backend === "xml_tree_json" || backend === "structured_records_jsonl"
           ? "rag-parser-core"
           : backend === "mineru"
           ? "外部 MinerU API"
