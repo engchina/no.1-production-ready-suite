@@ -754,8 +754,10 @@ export function RunTimelineSection({
         <Disclosure
           variant="plain"
           summary={<span className="tnum">{labels.timelineSummary(steps.length, formatRunDuration(total, labels.notRecorded))}</span>}
+          // 失敗した段がある実行は、色だけでなく失敗のアイコンでも伝える（チャットの処理の経過と同じ）。
+          icon={failed ? XCircle : undefined}
           defaultOpen={defaultOpen}
-          summaryClassName={failed ? "text-danger-fg" : undefined}
+          summaryClassName={failed ? "text-danger-fg [&>span:first-child]:text-danger-fg" : undefined}
           summaryProps={{ "data-testid": testId ? `${testId}-summary` : undefined }}
           contentClassName="grid min-w-0 gap-3 pt-2"
           data-run-timeline-section=""

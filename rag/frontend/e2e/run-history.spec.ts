@@ -479,8 +479,14 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(page.getByTestId("run-history-citations")).toContainText("受注マニュアル.pdf");
     await expect(page.getByTestId("run-history-citations")).toHaveClass(/bounded-scroll-area-lg/);
 
-    // 処理の経過: 段と、回答フローの工程（字下げ）。所要時間は文字でも出す。
+    // 処理の経過: 既定は「N ステップ・合計 M 秒」の 1 行に閉じる（回答の根拠・チャットの処理の経過と同じ開閉。#2473）。
+    // 段の数は入れ子の工程も数える。開くと段と、回答フローの工程（字下げ）。所要時間は文字でも出す。
     const timeline = page.getByTestId("run-history-timeline");
+    const timelineSummary = page.getByTestId("run-history-timeline-summary");
+    await expect(timelineSummary).toHaveText("4 ステップ・合計 1.2 秒");
+    await expect(timeline.locator("details[data-run-timeline-section]")).not.toHaveAttribute("open", "");
+    await expect(timeline.locator("[data-run-timeline-step]").first()).toBeHidden();
+    await timelineSummary.click();
     await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(4);
     await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("根拠の検索と回答の生成");
     await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("1.1 秒");
@@ -567,7 +573,8 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(failure).toContainText("実行 ID を添えて管理者に連絡してください");
     await expect(failure).toContainText("ORA-03146");
     await expect(summary.locator('[data-run-fact="errorStage"]')).toContainText("検索");
-    // 技術的な詳細（処理の詳細に畳む）にも同じ名前でエラーコードを出す。
+    // 技術的な詳細（処理の経過の中の処理の詳細に畳む）にも同じ名前でエラーコードを出す。
+    await page.getByTestId("run-history-timeline-summary").click();
     await page.getByTestId("run-history-process-details").click();
     await expect(page.locator('[data-run-fact="failure-errorCode"]')).toContainText("ORA-03146");
     await expect(page.getByTestId("run-history-timeline").locator('[data-status="failed"]')).toContainText("失敗");

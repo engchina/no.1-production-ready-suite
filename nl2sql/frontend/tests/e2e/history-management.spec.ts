@@ -436,6 +436,8 @@ test("品質評価の実行は既定で隠し、種類で品質評価・すべ�
   await titleLink(page, "品質評価のケース 1").click();
   const summary = page.getByTestId("history-detail-summary");
   await expect(summary.locator('[data-run-fact="kind"] dd')).toHaveText("品質評価");
+  // 段の記録の無い実行は開閉の見出しを出さず、処理の詳細を節の中に直接置く（#2473）。
+  await expect(page.getByTestId("history-detail-timeline-summary")).toHaveCount(0);
   await page.getByTestId("history-detail-process-details").click();
   await expect(page.getByTestId("history-detail-caller")).toContainText("run-eval-1");
   await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();
@@ -559,8 +561,14 @@ test("詳細は概要 → 処理の経過（処理の詳細を含む）→ SQL �
   await expect(summary.locator('[data-run-fact="target"] dd')).toHaveText("経理プロファイル");
   await expect(summary.locator('[data-run-fact="startedAt"] time')).toHaveAttribute("datetime", "2026-06-22T10:00:00.000Z");
 
-  // 処理の経過: チャットの処理の経過と同じ段の名前。失敗した生成の方式の試行は最初から開く。
+  // 処理の経過: 既定は「N ステップ・合計 M 秒」の 1 行に閉じる（回答の根拠・チャットの処理の経過と同じ開閉。#2473）。
+  // 開くとチャットの処理の経過と同じ段の名前。失敗した生成の方式の試行は最初から開く。
   const timeline = page.getByTestId("history-detail-timeline");
+  const timelineSummary = page.getByTestId("history-detail-timeline-summary");
+  await expect(timelineSummary).toContainText("6 ステップ・合計");
+  await expect(timeline.locator("details[data-run-timeline-section]")).not.toHaveAttribute("open", "");
+  await expect(timeline.locator("[data-run-timeline-step]").first()).toBeHidden();
+  await timelineSummary.click();
   await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(6);
   const failed = timeline.locator('[data-run-timeline-step="engine-0"]');
   await expect(failed).toHaveAttribute("data-status", "failed");
