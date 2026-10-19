@@ -43,6 +43,7 @@ export function isSystemTablesStatusData(value: unknown): value is SystemTablesS
     typeof operationState.status === "string" &&
     Array.isArray(data.missing_objects) &&
     (data.retired_objects === undefined || Array.isArray(data.retired_objects)) &&
+    (data.missing_columns === undefined || Array.isArray(data.missing_columns)) &&
     (data.missing_foreign_keys === undefined || Array.isArray(data.missing_foreign_keys)) &&
     (data.orphaned_foreign_keys === undefined || Array.isArray(data.orphaned_foreign_keys)) &&
     (data.mismatched_foreign_keys === undefined || Array.isArray(data.mismatched_foreign_keys)) &&

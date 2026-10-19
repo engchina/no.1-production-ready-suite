@@ -21,6 +21,7 @@ from app.rag.oracle_schema import oracle_schema_migration_sections, split_sql_st
 from app.rag.system_schema import (
     DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
     DOMAIN_TABLES,
+    MANAGED_COLUMNS,
     MANAGED_FOREIGN_KEYS,
     MANAGED_INDEXES,
     MANAGED_OBJECTS,
@@ -62,6 +63,16 @@ class _FakeCursor:
         self.rowcount = 0
         self.database.executed.append(upper)
 
+        if upper.startswith("DECLARE"):
+            # 列を無ければ足す migration（`ALTER TABLE <表> ADD (<列> ...)`）を fake で適用する。
+            for table, columns in self.database.removed_columns.items():
+                columns.difference_update(
+                    {
+                        column
+                        for column in columns
+                        if f"'ALTER TABLE {table} ADD ({column} " in upper
+                    }
+                )
         if "PROCEDURE RENAME_TABLE" in upper:
             # dictionary 検査付きの migration 呼び出しを fake Oracle で適用する。
             for kind, old, new in re.findall(
@@ -159,6 +170,17 @@ class _FakeCursor:
             names = {str(value).upper() for value in params.values()}
             self.rows = [
                 (name,) for name in sorted(names) if (name, "TABLE") in self.database.objects
+            ]
+            return
+        if upper.startswith("SELECT TABLE_NAME, COLUMN_NAME FROM USER_TAB_COLUMNS"):
+            # 表は正本の列を持つ（`removed_columns` の列だけを欠く）。
+            names = {str(value).upper() for value in params.values()}
+            self.rows = [
+                (name, column)
+                for name in sorted(names)
+                if (name, "TABLE") in self.database.objects
+                for column in MANAGED_COLUMNS.get(name, ())
+                if column not in self.database.removed_columns.get(name, set())
             ]
             return
         if upper.startswith("SELECT CHILD.CONSTRAINT_NAME"):
@@ -397,6 +419,8 @@ class _FakeDatabase:
         self.claimed_operation_kinds: list[str] = []
         self.foreign_key_ddl: list[str] = []
         self.executed: list[str] = []
+        # 表 → 正本にあるが欠けている列（取り消した migration が改名・削除した列など。#2450）。
+        self.removed_columns: dict[str, set[str]] = {}
 
     @staticmethod
     def idle_operation() -> dict[str, Any]:
@@ -483,6 +507,70 @@ def test_initialize_is_idempotent_and_repairs_missing_index() -> None:
     assert repaired["status"] == "ready"
     assert repaired["operation"] == "migrated"
     assert (MANAGED_INDEXES[-1], "INDEX") in database.objects
+
+
+_RESTORE_CLASSIFICATION_MIGRATION = "20261019_001_restore_document_classification"
+
+
+def test_status_detects_missing_columns_even_when_ledger_is_current() -> None:
+    """台帳がすべて適用済みでも、正本の列が欠けた表があれば ready にしない（#2450）。
+
+    取り消した migration（20261016_002）が分類の列を改名・削除した DB は、台帳だけを見ると最新に
+    見える。列の欠落を状態に出し、更新で直せないときは列の名前を出して止める。
+    """
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    assert manager.status()["missing_columns"] == []
+    database.removed_columns = {"RAG_DOCUMENTS": {"CLASSIFICATION"}}
+
+    status = manager.status()
+
+    assert status["status"] == "outdated"
+    assert status["pending_versions"] == []
+    assert status["missing_columns"] == [
+        {"table_name": "RAG_DOCUMENTS", "column_name": "CLASSIFICATION"}
+    ]
+    with pytest.raises(SystemSchemaError) as raised:
+        manager.initialize()
+    assert raised.value.code == "SCHEMA_POSTCONDITION_FAILED"
+    assert "RAG_DOCUMENTS.CLASSIFICATION" in raised.value.public_message
+
+
+def test_update_restores_columns_removed_by_retracted_migration() -> None:
+    """取り消した migration を当てた DB は、追加の migration で分類の列が戻る（#2450）。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    database.removed_columns = {
+        "RAG_DOCUMENTS": {"CLASSIFICATION"},
+        "RAG_QUERY_HISTORY": {"CLASSIFICATION_FILTER"},
+    }
+    database.migrations.pop(_RESTORE_CLASSIFICATION_MIGRATION)
+
+    before = manager.status()
+    assert before["status"] == "outdated"
+    assert before["pending_versions"] == [_RESTORE_CLASSIFICATION_MIGRATION]
+    # データを消す migration ではないので、承認は要らない。
+    assert before["pending_destructive_migrations"] == []
+
+    result = manager.initialize()
+
+    assert result["status"] == "ready"
+    assert result["missing_columns"] == []
+    assert database.removed_columns == {"RAG_DOCUMENTS": set(), "RAG_QUERY_HISTORY": set()}
+
+
+def test_managed_columns_cover_every_managed_table() -> None:
+    assert set(MANAGED_COLUMNS) == set(MANAGED_TABLES)
+    assert "CLASSIFICATION" in MANAGED_COLUMNS["RAG_DOCUMENTS"]
+    assert "CLASSIFICATION_FILTER" in MANAGED_COLUMNS["RAG_QUERY_HISTORY"]
+    # 表制約の行は列に数えない。
+    assert not any(
+        column in {"CONSTRAINT", "PRIMARY", "UNIQUE", "FOREIGN", "CHECK"}
+        for columns in MANAGED_COLUMNS.values()
+        for column in columns
+    )
 
 
 def test_initialize_replaces_only_explicit_retired_index() -> None:

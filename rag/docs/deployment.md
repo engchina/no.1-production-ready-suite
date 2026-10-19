@@ -234,6 +234,45 @@ XML ツリー JSON の解析サービス（`parser-xml-tree-json`）は、文書
 2. 既存の環境: 再配備は今の状態（最後に操作した enable / disable）を保つため、既に起動しているサービスは止めない。使わないなら
    サービス管理画面で「停止」する（`disable --now`。以後の再配備でも停止のまま）。
 
+## 既存環境の更新手順（#2450 取り消した migration を当てた DB の文書の分類の列を戻す）
+
+#2127（PR #2130）の migration `20261016_002_document_effective_period` は #2131 で取り消したが、取り消す前に当てた
+環境がある。その DB は `rag_documents.classification` が `effective_period` に改名され（有効期間以外の key は消えた）、
+`rag_query_history.classification_filter` が無い。台帳には適用済みで残るため、今のコードの「文書の分類」の一覧
+（`GET /api/document-categories`）・文書の分類の保存・検索の分類の条件・検索の履歴が `ORA-00904` で失敗する。
+
+- 追加の migration `20261019_001_restore_document_classification` が、無い列（`rag_documents.classification`・
+  `rag_query_history.classification_filter`。どちらも JSON）を足す。`effective_period` があれば、`classification` が
+  NULL の行にだけ有効期間（`effective_from` / `effective_to`）を写す。写すのは YYYY-MM-DD の日付で開始日 < 終了日の
+  値だけで、形の合わない値は写さない（`effective_period` に残る）。列の改名・削除・行の削除はしないので、承認は要らない。
+  新しい DB・この migration を当てていない DB では何もしない（何度当てても同じ）。
+- **戻らないもの**: 取り消した migration が消した分類（大分類・中分類・小分類・推定元など）と、検索の履歴の分類の
+  条件は DB に残っていない。要るなら、その migration の適用より前の書き出しか、ADB のバックアップから取り出す
+  （上の「書き出す前に消えたデータを、DB のバックアップから取り出す」。適用の時刻は台帳の `applied_at`）。
+- `effective_period` の列は消さずに残す（今のコードは読まない）。写した値を確かめた後に消すかは、利用者が決める。
+- システムテーブルの状態（`system_schema_cli status`・画面の「RAG システムテーブル」）は、台帳が適用済みでも
+  正本の列が欠けた表があれば「更新必要」（`outdated`）にし、欠けた列を `missing_columns` に出す。
+
+1. 当てた環境か確かめる（どれも読むだけ）。
+
+   ```sql
+   SELECT migration_name, applied_at FROM rag_schema_migrations
+   WHERE migration_name = '20261016_002_document_effective_period';
+   SELECT table_name, column_name FROM user_tab_columns
+   WHERE (table_name = 'RAG_DOCUMENTS' AND column_name IN ('CLASSIFICATION', 'EFFECTIVE_PERIOD'))
+      OR (table_name = 'RAG_QUERY_HISTORY' AND column_name = 'CLASSIFICATION_FILTER');
+   ```
+
+2. 更新の前に、対象の値を書き出す（データは消えないが、写した結果と比べるため）。例:
+   `SELECT document_id, effective_period FROM rag_documents WHERE effective_period IS NOT NULL` の結果を保存する。
+   ADB の自動バックアップが保持期間の中にあることも確かめる。
+3. backend を更新し、システムテーブルを更新する（`system_schema_cli initialize`・画面の「作成・更新」・
+   `init_script.sh` の再実行のどれか）。
+4. 結果を確かめる。`system_schema_cli status` が `ready` で `missing_columns` が空になり、「ナレッジ構築 > 文書の分類」
+   が開ける。写さなかった値は
+   `SELECT document_id, effective_period FROM rag_documents WHERE effective_period IS NOT NULL AND classification IS NULL`
+   で分かるので、要るなら文書の詳細で有効期間を入れ直す。
+
 ## 既存環境の更新手順（#2395 業務ガイドの手順ごとの検索と参照の頁）
 
 業務ガイドの資料に頁の範囲（`references[].page_ranges`）を、手順に参照（`steps[].references`）を足し、内容の形の版
@@ -318,8 +357,9 @@ XML ツリー JSON の解析サービス（`parser-xml-tree-json`）は、文書
 
 #2127（PR #2130）で削除した文書の分類（大分類・中分類・小分類）を戻し、分類の一覧（大分類 → 中分類 → 小分類）を
 管理する画面「ナレッジ構築 > 文書の分類」を足した。文書の詳細と RAG 検索の分類の欄は、この一覧から選ぶ（どれも任意）。
-#2130 のデータを削除する migration（`20261016_002_document_effective_period`）は取り消した（どの環境にも未適用。
-当てる必要は無い）。
+#2130 のデータを削除する migration（`20261016_002_document_effective_period`）は取り消した（今のコードは当てない）。
+**取り消す前にこの migration を当てた環境がある。** 台帳（`rag_schema_migrations`）に記録があれば、下の
+「#2450 取り消した migration を当てた DB の文書の分類の列を戻す」の手順で列を戻す。
 
 1. システムテーブルを更新する（migration `20261016_003_document_categories`）。表 `rag_document_categories` と索引を
    無いときだけ作る（データは変えない。承認は要らない）。

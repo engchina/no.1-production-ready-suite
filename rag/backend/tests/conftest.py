@@ -14,6 +14,7 @@ import gc
 import os
 import warnings
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -84,6 +85,28 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.xdist_group("oracle"))
 
 
+@contextmanager
+def _oracle_schema_lock(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """xdist の worker の間で共有するスキーマの準備のロック（basetemp の親は worker で共通）。"""
+    lock_path = tmp_path_factory.getbasetemp().parent / "rag-oracle-schema.lock"
+    with lock_path.open("w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        yield
+
+
+@pytest.fixture
+def oracle_schema_locked(
+    oracle_db: None, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[None]:
+    """テストの間、別の worker の開始時のスキーマの準備（`ensure_schema`）を待たせる（#2450）。
+
+    表の形や台帳を一時的に戻すテストが使う。実 Oracle のテストどうしは 1 つの worker で直列に
+    動くが、別の worker が遅れて開始すると、途中の形を見て「作成・更新」を当ててしまう。
+    """
+    with _oracle_schema_lock(tmp_path_factory):
+        yield
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _oracle_db_session(tmp_path_factory: pytest.TempPathFactory) -> None:
     """実 Oracle が使えるならスキーマを保証し baseline を記録する。"""
@@ -94,9 +117,7 @@ def _oracle_db_session(tmp_path_factory: pytest.TempPathFactory) -> None:
         return
     _oracle_test_db.apply_real_oracle_settings(get_settings())
     # xdist の worker は同時に起動するため、スキーマの作成（DDL）は 1 つずつにする（#344）。
-    lock_path = tmp_path_factory.getbasetemp().parent / "rag-oracle-schema.lock"
-    with lock_path.open("w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
+    with _oracle_schema_lock(tmp_path_factory):
         skip_reason = _oracle_test_db.ensure_schema()
     if skip_reason is not None:
         # データを消す未適用の migration は当てない。実 Oracle のテストは `oracle_db` で

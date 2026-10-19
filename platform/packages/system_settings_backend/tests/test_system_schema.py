@@ -28,6 +28,7 @@ from pr_system_settings.system_schema import (
     bind_list,
     clamp_ddl_lock_timeout,
     classify_system_schema_status,
+    columns_from_create_table,
     delete_orphan_rows_sql,
     deployment_check_error_summary,
     deployment_check_summary,
@@ -37,6 +38,8 @@ from pr_system_settings.system_schema import (
     idle_operation_state,
     inspect_foreign_keys,
     iso_timestamp,
+    load_existing_columns,
+    missing_columns,
     operation_failure_fields,
     operation_failure_hint,
     oracle_error_code,
@@ -171,6 +174,17 @@ def test_deployment_check_summary_is_ok_only_when_ready_and_idle() -> None:
     assert "不足 7 件（DEMO_0, DEMO_1, DEMO_2, DEMO_3, DEMO_4, …）" in summary
     assert "未適用の migration 2 件" in summary
     assert "承認が要る削除 1 件（003_drop。書き出してから --allow-destructive で初期化）" in summary
+
+    # 台帳が最新でも列が欠けている（#2450）。
+    ok, summary = deployment_check_summary(
+        {
+            "status": "outdated",
+            "missing_columns": [{"table_name": "DEMO_ITEMS", "column_name": "PAYLOAD"}],
+            "operation_state": idle_operation_state(),
+        }
+    )
+    assert not ok
+    assert summary == "status=outdated・不足の列 1 件（DEMO_ITEMS.PAYLOAD）"
 
 
 def test_deployment_check_error_summary_exposes_only_codes_or_safe_hint() -> None:
@@ -672,6 +686,77 @@ def test_classify_treats_missing_foreign_keys_as_outdated() -> None:
         )
         == "partial"
     )
+
+
+def test_classify_treats_missing_columns_as_outdated() -> None:
+    """台帳が最新でも、既存の表に正本の列が無ければ outdated（#2450）。"""
+    assert (
+        classify_system_schema_status(
+            set(MANAGED),
+            domain_tables=DOMAIN,
+            managed_objects=MANAGED,
+            migrations_current=True,
+            columns_current=False,
+        )
+        == "outdated"
+    )
+
+
+def test_columns_from_create_table_skips_constraints_and_comments() -> None:
+    statement = """CREATE TABLE demo_items (
+    item_id    VARCHAR2(64) PRIMARY KEY,
+    -- 注釈の行（列, ではない）
+    amount     NUMBER(19, 2) DEFAULT 0 NOT NULL,
+    payload    JSON,
+    owner_id   VARCHAR2(64),
+    CONSTRAINT demo_items_amount_ck CHECK (amount >= 0),
+    CONSTRAINT demo_items_owner_fk
+        FOREIGN KEY (owner_id) REFERENCES demo_owners (owner_id)
+)"""
+    assert columns_from_create_table(statement) == (
+        "DEMO_ITEMS",
+        ("ITEM_ID", "AMOUNT", "PAYLOAD", "OWNER_ID"),
+    )
+    assert columns_from_create_table("CREATE INDEX demo_items_idx ON demo_items (owner_id)") is None
+    assert columns_from_create_table("ALTER TABLE demo_items ADD (memo CLOB)") is None
+
+
+def test_missing_columns_ignores_absent_tables() -> None:
+    expected = {"DEMO_ITEMS": ("ITEM_ID", "PAYLOAD"), "DEMO_LOGS": ("LOG_ID",)}
+    # 表そのものが無い（DEMO_LOGS）ときは object の不足で出すので、列には出さない。
+    assert missing_columns(expected, {"DEMO_ITEMS": {"ITEM_ID"}}) == [
+        {"table_name": "DEMO_ITEMS", "column_name": "PAYLOAD"}
+    ]
+    assert missing_columns(expected, {"DEMO_ITEMS": {"ITEM_ID", "PAYLOAD"}}) == []
+
+
+def test_load_existing_columns_reads_user_tab_columns() -> None:
+    executed: list[tuple[str, dict[str, Any]]] = []
+
+    class _Cursor:
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, binds: dict[str, Any]) -> None:
+            executed.append((sql, binds))
+
+        def fetchall(self) -> list[tuple[str, str]]:
+            return [("DEMO_ITEMS", "item_id"), ("DEMO_ITEMS", "PAYLOAD")]
+
+    class _Connection:
+        def cursor(self) -> _Cursor:
+            return _Cursor()
+
+    assert load_existing_columns(_Connection(), ["DEMO_ITEMS", "DEMO_ITEMS"]) == {
+        "DEMO_ITEMS": {"ITEM_ID", "PAYLOAD"}
+    }
+    assert executed[0][0].startswith("SELECT TABLE_NAME, COLUMN_NAME FROM USER_TAB_COLUMNS")
+    assert list(executed[0][1].values()) == ["DEMO_ITEMS"]
+    assert load_existing_columns(_Connection(), []) == {}
+    assert len(executed) == 1
 
 
 class _ForeignKeyDatabase:

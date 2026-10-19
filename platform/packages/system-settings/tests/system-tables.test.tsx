@@ -192,6 +192,22 @@ describe("SystemTablesCard の状態ごとの表示", () => {
     expect(html).not.toContain('data-testid="system-tables-orphaned-foreign-keys"');
   });
 
+  it("台帳が最新でも既存の表に無い列を一覧で出す（#2450）", () => {
+    const html = renderCard(
+      clientWith(
+        statusData("outdated", {
+          pending_versions: [],
+          missing_columns: [{ table_name: "DEMO_ITEMS", column_name: "PAYLOAD" }],
+        }),
+      ),
+    );
+    expect(html).toContain("更新必要");
+    expect(html).toContain('data-testid="system-tables-missing-columns"');
+    expect(html).toContain("既存のテーブルに必須の列が 1 件ありません");
+    expect(html).toContain("DEMO_ITEMS.PAYLOAD");
+    expect(isSystemTablesStatusData({ ...statusData("ready"), missing_columns: {} })).toBe(false);
+  });
+
   it("参照先のない既存の行が残る外部キーは ready でも警告を出す（#505）", () => {
     const html = renderCard(
       clientWith(

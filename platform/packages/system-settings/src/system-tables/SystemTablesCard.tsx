@@ -178,6 +178,8 @@ export function SystemTablesCard({
   const data = isSystemTablesStatusData(statusQuery.data) ? statusQuery.data : undefined;
   const statusUnavailable = statusQuery.isError || (statusQuery.data !== undefined && !data);
   const schemaOperationRunning = data?.operation_state.status === "running";
+  // 既存の表に無い正本の列（#2450。RAG だけが返す。無ければ出さない）。
+  const missingColumns = data?.missing_columns ?? [];
   // 外部キーの差分（#505。RAG だけが返す。無ければ出さない）。
   const missingForeignKeys = data?.missing_foreign_keys ?? [];
   const orphanedForeignKeys = data?.orphaned_foreign_keys ?? [];
@@ -190,7 +192,11 @@ export function SystemTablesCard({
   const statusBannerRedundant =
     data?.status === "outdated" &&
     destructiveMigrations.length > 0 &&
-    missingForeignKeys.length + mismatchedForeignKeys.length + disabledForeignKeys.length === 0;
+    missingColumns.length +
+      missingForeignKeys.length +
+      mismatchedForeignKeys.length +
+      disabledForeignKeys.length ===
+      0;
   const schemaHead = data ? schemaHeadDisplay(data) : null;
   // 参照先のない行の削除は、権限・API・確認ダイアログがそろったときだけ出す（#511）。
   const canDeleteOrphans =
@@ -392,6 +398,25 @@ export function SystemTablesCard({
                   : text(`settings.database.systemTables.statusHint.${data.status}`, {
                       count: data.missing_objects.length,
                     })}
+                {missingColumns.length > 0 ? (
+                  <div className="mt-2" data-testid="system-tables-missing-columns">
+                    <p>
+                      {text("settings.database.systemTables.columns.missing", {
+                        count: missingColumns.length,
+                      })}
+                    </p>
+                    <ul className="mt-1.5 space-y-1">
+                      {missingColumns.map((column) => (
+                        <li
+                          key={`${column.table_name}.${column.column_name}`}
+                          className="min-w-0 font-mono text-xs [overflow-wrap:anywhere]"
+                        >
+                          {column.table_name}.{column.column_name}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 {missingForeignKeys.length > 0 ? (
                   <div className="mt-2" data-testid="system-tables-missing-foreign-keys">
                     <p>
