@@ -1,9 +1,10 @@
-"""Excel(.xls/.xlsx)→行の記録 JSON 前処理マイクロサービスの変換実装（#1221）。
+"""Excel(.xls/.xlsx)→構造化レコード JSONL 前処理マイクロサービスの変換実装（#1221・#2457）。
 
-シートごとに「表頭・元の行番号・セル範囲・表示の値」を持つ JSON（`rag_parser_core.sheet_records`）
-を作る。parser のサービスはこの JSON の記録の単位（block）を 1 つずつ要素にし、検索の根拠に
-シートと行の場所が残る。読み方は engchina/no.1-rag の前処理（`utils/office_preprocess_util.py`）
-に合わせる。
+シートごとに「表頭・元の行番号・セル範囲・表示の値」を持つ行の記録
+（`rag_parser_core.sheet_records`）を作り、構造化レコードの JSONL
+（`rag_parser_core.structured_records`）にする。parser のサービスはこの JSONL の記録（表の 1 行・
+手順書の 1 手順）を 1 つずつ要素にし、検索の根拠にシートと行の場所が残る。読み方は
+engchina/no.1-rag の前処理（`utils/office_preprocess_util.py`）に合わせる。
 
 - シートの読み方（`mode`）: `table` は 1 行 1 block。`procedure` は手順書（番号の列と題名の列）
   を、番号と題名のある行から次の手順までの複数行で 1 block にし、詳細の無い題名の行は章にする。
@@ -44,7 +45,6 @@ from pydantic import ValidationError
 from rag_parser_core.preprocess import ConvertOutcome
 from rag_parser_core.sheet_records import (
     COLUMN_ROLE_NONE,
-    SHEET_RECORDS_CONTENT_TYPE,
     ColumnRole,
     ExcelOptions,
     ExcelRange,
@@ -59,9 +59,14 @@ from rag_parser_core.sheet_records import (
     column_display_name,
 )
 from rag_parser_core.source import SourceProfile
+from rag_parser_core.structured_records import (
+    STRUCTURED_RECORDS_CONTENT_TYPE,
+    dump_structured_records,
+    sheet_records_to_lines,
+)
 
 CONVERTER_NAME = "excel_to_json"
-CONVERTER_VERSION = "v3"
+CONVERTER_VERSION = "v4"
 # xlsx は ZIP(PK\x03\x04)、xls は OLE2 複合ドキュメント(D0CF11E0...)。
 _XLSX_MAGIC = b"PK\x03\x04"
 _XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
@@ -319,8 +324,12 @@ def _excel_to_records(
         converted=True,
         converter_name=CONVERTER_NAME,
         converter_version=CONVERTER_VERSION,
-        derived_bytes=document.to_json_bytes(),
-        derived_content_type=SHEET_RECORDS_CONTENT_TYPE,
+        derived_bytes=dump_structured_records(
+            sheet_records_to_lines(
+                document, converter=CONVERTER_NAME, converter_version=CONVERTER_VERSION
+            )
+        ),
+        derived_content_type=STRUCTURED_RECORDS_CONTENT_TYPE,
         warnings=tuple(warnings),
     )
 

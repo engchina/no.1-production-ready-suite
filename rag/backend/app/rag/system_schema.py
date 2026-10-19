@@ -24,11 +24,9 @@ from pr_system_settings.system_schema import (
     SystemSchemaManagerBase,
     SystemSchemaStatus,
     bind_list,
-    columns_from_create_table,
+    columns_from_statements,
     foreign_keys_from_create_table,
     iso_timestamp,
-    load_existing_columns,
-    missing_columns,
     oracle_error_code,
 )
 from pr_system_settings.system_schema import (
@@ -347,13 +345,11 @@ def managed_columns_from_schema(
     列があれば ready にしない。
     """
 
-    columns: dict[str, tuple[str, ...]] = {}
-    for section in sections or oracle_schema_sections():
-        for statement in split_sql_statements(section.sql):
-            parsed = columns_from_create_table(statement)
-            if parsed is not None:
-                columns[parsed[0]] = parsed[1]
-    return columns
+    return columns_from_statements(
+        statement
+        for section in sections or oracle_schema_sections()
+        for statement in split_sql_statements(section.sql)
+    )
 
 
 MANAGED_COLUMNS: dict[str, tuple[str, ...]] = managed_columns_from_schema()
@@ -455,6 +451,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
     migration_key_column = "MIGRATION_NAME"
     managed_tables = MANAGED_TABLES
     managed_foreign_keys = MANAGED_FOREIGN_KEYS
+    managed_columns = MANAGED_COLUMNS
     # データを消す未適用の migration は、承認が無ければ作成・更新で当てない（#619）。
     guards_destructive_migrations = True
     recreate_confirmation = RECREATE_CONFIRMATION
@@ -571,16 +568,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         foreign_keys = self._repair_foreign_keys(connection, owner)
         self._heartbeat(connection, owner)
         interim = self._status_on(connection)
-        if interim["missing_columns"]:
-            # 列の欠落は更新の再試行では直らない（足す migration が台帳で適用済み。#2450）。
-            columns = ", ".join(
-                f"{item['table_name']}.{item['column_name']}" for item in interim["missing_columns"]
-            )
-            raise SystemSchemaError(
-                "SCHEMA_POSTCONDITION_FAILED",
-                f"システムテーブル操作後も必須の列が不足しています（{columns}）。"
-                "配備の手順の既存環境の更新手順を確認してください。",
-            )
+        self._require_columns_present(interim)
         if interim["status"] != "ready":
             raise SystemSchemaError(
                 "SCHEMA_POSTCONDITION_FAILED",
@@ -637,13 +625,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         foreign_keys = self._foreign_key_drift(connection)
         table_metadata = self._load_table_metadata(connection, objects)
         # 台帳が適用済みでも、既存の表に正本の列が欠けていれば ready にしない（#2450）。
-        absent_columns = missing_columns(
-            MANAGED_COLUMNS,
-            load_existing_columns(
-                connection,
-                [name for name in MANAGED_COLUMNS if (name, "TABLE") in objects],
-            ),
-        )
+        absent_columns = self._missing_columns(connection, objects)
         status = classify_system_schema_status(
             set(objects),
             applied,

@@ -843,3 +843,57 @@ test("再作成確認は再取得・失敗時に解除し、取得失敗中は�
   await expect(recreate).toBeDisabled();
   await expect(card.getByRole("button", { name: "作成・更新" })).toBeDisabled();
 });
+
+// ---- 台帳が最新でも欠けた列（#2458） --------------------------------------------------
+
+test(
+  "台帳が最新でも既存の表に無い列を更新必要として並べ、更新で直らなければ列の名前で止める（#2458）",
+  { tag: "@responsive" },
+  async ({ page }, testInfo) => {
+    const missingColumns = [
+      { table_name: "NL2SQL_SCHEMA_REFRESH_JOBS", column_name: "WORKER_ID" },
+      { table_name: "NL2SQL_ONTOLOGY_REVISIONS", column_name: "PROFILE_ID" },
+    ];
+    const postconditionMessage =
+      "システムテーブル操作後も必須の列が不足しています" +
+      "（NL2SQL_SCHEMA_REFRESH_JOBS.WORKER_ID, NL2SQL_ONTOLOGY_REVISIONS.PROFILE_ID）。" +
+      "更新を再試行しても直りません。配備の手順の既存環境の更新手順を確認してください。";
+    let initializeCalls = 0;
+    await page.route("**/api/settings/database/system-tables", (route) =>
+      fulfill(route, {
+        ...systemTables("outdated"),
+        applied_versions: [...APPLIED_VERSIONS],
+        pending_versions: [],
+        missing_columns: missingColumns,
+      })
+    );
+    await page.route("**/api/settings/database/system-tables/initialize", (route) => {
+      initializeCalls += 1;
+      return fulfill(route, null, 500, [postconditionMessage], "SCHEMA_POSTCONDITION_FAILED");
+    });
+
+    await page.goto("/settings/system-tables");
+    const card = page.locator("#system-tables");
+    await expect(card.getByText("更新必要", { exact: true }).first()).toBeVisible();
+    const missing = card.getByTestId("system-tables-missing-columns");
+    await expect(missing).toContainText("既存のテーブルに必須の列が 2 件ありません");
+    await expect(missing.getByRole("listitem")).toHaveText([
+      "NL2SQL_SCHEMA_REFRESH_JOBS.WORKER_ID",
+      "NL2SQL_ONTOLOGY_REVISIONS.PROFILE_ID",
+    ]);
+    await expectNoPageOverflow(page);
+    await missing.screenshot({
+      path: testInfo.outputPath(`system-tables-missing-columns-${testInfo.project.name}.png`),
+    });
+
+    await card.getByRole("button", { name: "作成・更新" }).click();
+    const operationAlert = card.getByRole("alert");
+    await expect(operationAlert).toHaveCount(1);
+    await expect(operationAlert).toContainText("NL2SQL_SCHEMA_REFRESH_JOBS.WORKER_ID");
+    await expect(operationAlert).toContainText("更新を再試行しても直りません");
+    expect(initializeCalls).toBe(1);
+    // 列は戻っていないので、一覧は残す。
+    await expect(missing).toBeVisible();
+    await expectNoPageOverflow(page);
+  }
+);

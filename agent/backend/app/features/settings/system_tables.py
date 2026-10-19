@@ -17,6 +17,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pr_backend_core import ApiResponse
 from pr_system_settings.system_schema import (
+    SystemTableColumnData,
     SystemTableForeignKeyData,
     SystemTableOperationState,
     SystemTablesInitializeRequest,
@@ -65,6 +66,8 @@ class SystemTablesStatusData(BaseModel):
     existing_table_count: int
     missing_objects: list[SystemObjectRef]
     retired_objects: list[SystemObjectRef] = Field(default_factory=list)
+    # 既存の表に無い正本の列（台帳が適用済みでも欠けた列。状態は outdated。#2458）。
+    missing_columns: list[SystemTableColumnData] = Field(default_factory=list)
     missing_foreign_keys: list[SystemTableForeignKeyData] = Field(default_factory=list)
     orphaned_foreign_keys: list[SystemTableForeignKeyData] = Field(default_factory=list)
     mismatched_foreign_keys: list[SystemTableForeignKeyData] = Field(default_factory=list)

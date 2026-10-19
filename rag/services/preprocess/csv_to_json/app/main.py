@@ -1,7 +1,7 @@
-"""CSV→構造化 JSON 前処理マイクロサービス。
+"""CSV→構造化レコード JSONL 前処理マイクロサービス(#2457)。
 
-共有 contract(rag_parser_core)の app factory を使い、CSV を決定論でレコード配列の
-JSON へ再マップして `ConvertResponse` を返す。純 Python のみで完結する軽量サービスで、
+共有 contract(rag_parser_core)の app factory を使い、CSV を決定論で構造化レコードの
+JSONL へ再マップして `ConvertResponse` を返す。純 Python のみで完結する軽量サービスで、
 他 parser / backend に非干渉。
 """
 
@@ -12,12 +12,12 @@ from app.converters import convert
 
 
 def _health() -> ConvertHealth:
-    """CSV→JSON は外部依存なしで常時 ready。"""
+    """CSV→JSONL は外部依存なしで常時 ready。"""
     return ConvertHealth(
         status="ok",
         backend="preprocess-csv-to-json",
         package_name="csv2json",
-        package_version="v1",
+        package_version="v2",
         supported_profiles=supported_profiles_from(["csv_to_json"]),
     )
 

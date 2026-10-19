@@ -19,6 +19,7 @@ from pr_system_settings.system_schema import (
     SystemSchemaManagerBase,
     SystemSchemaStatus,
     bind_list,
+    columns_from_statements,
     iso_timestamp,
     oracle_error_code,
 )
@@ -395,9 +396,30 @@ def _object_owner_fields(owner: str, name: str) -> dict[str, str]:
     return {"owner": owner, "qualified_name": qualified_object_name(owner, name)}
 
 
+def managed_columns_from_migrations() -> dict[str, tuple[str, ...]]:
+    """migration を順に当てた後の管理対象の表の列（表名 → 列名。#2458）。
+
+    NL2SQL の DDL の正本は版ごとの SQL で、後の版が `ALTER TABLE … ADD` で列を足す。表の作成は
+    「無ければ作る」ので、台帳が適用済みでも既存の表に列が欠けることがある。状態の確認でこの一覧と
+    USER_TAB_COLUMNS を比べ、欠けた列があれば ready にしない。
+    """
+
+    columns = columns_from_statements(
+        statement
+        for migration in MIGRATIONS
+        for statement in split_migration_sql(migration.path.read_text(encoding="utf-8"))
+    )
+    return {name: columns[name] for name in MANAGED_TABLES if name in columns}
+
+
+MANAGED_COLUMNS: dict[str, tuple[str, ...]] = managed_columns_from_migrations()
+
+
 def classify_system_schema_status(
     objects: set[tuple[str, str]],
     applied_checksums: dict[int, str],
+    *,
+    columns_current: bool = True,
 ) -> SystemSchemaStatus:
     """Dictionary / ledger snapshot を四つの公開状態へ決定論的に分類する（規則は platform）。"""
 
@@ -409,6 +431,7 @@ def classify_system_schema_status(
             applied_checksums.get(migration.version) == migration.checksum
             for migration in MIGRATIONS
         ),
+        columns_current=columns_current,
     )
 
 
@@ -419,6 +442,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
     migration_table = MIGRATION_TABLE
     migration_key_column = "VERSION_NO"
     managed_tables = MANAGED_TABLES
+    managed_columns = MANAGED_COLUMNS
     recreate_confirmation = RECREATE_CONFIRMATION
     log_prefix = "nl2sql"
     lock_timeout_guidance = (
@@ -488,6 +512,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             self._heartbeat(connection, owner)
         self._finish_operation(connection, owner, increment_epoch=True)
         after = self._status_on(connection)
+        self._require_columns_present(after)
         if after["status"] != "ready":
             raise SystemSchemaError(
                 "SCHEMA_POSTCONDITION_FAILED",
@@ -591,7 +616,11 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         pending_versions = [
             item.version for item in MIGRATIONS if applied.get(item.version) != item.checksum
         ]
-        status = classify_system_schema_status(set(objects), applied)
+        # 台帳が適用済みでも、既存の表に正本の列が欠けていれば ready にしない（#2458）。
+        absent_columns = self._missing_columns(connection, objects)
+        status = classify_system_schema_status(
+            set(objects), applied, columns_current=not absent_columns
+        )
         owner = self._load_schema_owner(connection)
         table_metadata = self._load_table_metadata(connection, objects, owner=owner)
         object_metadata = self._build_object_metadata(objects, table_metadata, owner=owner)
@@ -605,6 +634,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             "expected_table_count": len(MANAGED_TABLES),
             "existing_table_count": sum((name, "TABLE") in objects for name in MANAGED_TABLES),
             "missing_objects": missing,
+            "missing_columns": absent_columns,
             "tables": table_metadata,
             "objects": object_metadata,
             "operation_state": self._operation_payload(connection, objects),

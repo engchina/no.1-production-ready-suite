@@ -125,6 +125,7 @@ function systemTablesStatus(ready: boolean): Record<string, unknown> {
     existing_table_count: objects.filter((item) => item.exists && item.object_type === "TABLE").length,
     missing_objects: objects.filter((item) => !item.exists).map(({ name, object_type }) => ({ name, object_type })),
     retired_objects: ready ? [] : [{ name: "AGENT_ROLE_BUSINESS_VIEWS", object_type: "TABLE" }],
+    missing_columns: [],
     missing_foreign_keys: [],
     orphaned_foreign_keys: [],
     mismatched_foreign_keys: [],
@@ -816,6 +817,8 @@ function createState() {
     systemTables: clone(SYSTEM_TABLES_LEGACY) as Json,
     // 作成・更新の結果の、再起動が要るプロセス（#1844。spec が設定する）。
     systemTablesRestartRequired: null as Json | null,
+    // 作成・更新の失敗（更新しても列が欠けたまま、など。#2458）。null なら成功する。
+    systemTablesInitializeError: null as { status: number; message: string; errorCode: string } | null,
     // DB の状態（`GET /api/ready/database`。DB ゲートが使う。#325）。既定は使える状態。
     databaseStatus: {
       status: "ok",
@@ -1557,6 +1560,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   if (method === "GET" && at("settings", "database", "system-tables")) return state.systemTables;
   if (method === "POST" && at("settings", "database", "system-tables", "initialize")) {
     const current = state.systemTables as Json;
+    const failure = state.systemTablesInitializeError;
+    if (failure) throw new HttpError(failure.status, failure.message, failure.errorCode);
     const destructive = (current.pending_destructive_migrations as Json[] | undefined) ?? [];
     if (!body.recreate && destructive.length > 0 && body.allow_destructive !== true) {
       throw new HttpError(409, "データを削除する未適用の migration があります。内容を確認して承認してください。");

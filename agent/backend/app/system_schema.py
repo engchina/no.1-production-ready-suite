@@ -40,6 +40,7 @@ from pr_system_settings.system_schema import (
     SystemSchemaManagerBase,
     SystemSchemaStatus,
     bind_list,
+    columns_from_statements,
     foreign_keys_from_create_table,
     iso_timestamp,
 )
@@ -747,6 +748,13 @@ MANAGED_FOREIGN_KEYS: tuple[ForeignKeySpec, ...] = tuple(
     for foreign_key in foreign_keys_from_create_table(statement)
 )
 
+# 正本の表の列（表名 → 列名。#2458）。CONTROL_STATEMENTS と DOMAIN_STATEMENTS は最新の形なので、
+# 状態の確認でこの一覧と USER_TAB_COLUMNS を比べ、台帳が適用済みでも欠けた列があれば
+# ready にしない。
+MANAGED_COLUMNS: dict[str, tuple[str, ...]] = columns_from_statements(
+    (*CONTROL_STATEMENTS, *DOMAIN_STATEMENTS)
+)
+
 if set(PRESERVED_TABLES) & set(MANAGED_TABLES):  # pragma: no cover - 定義の誤りを起動時に検出
     raise RuntimeError("共通認証のテーブルを Agent の管理対象に含めないでください。")
 
@@ -768,6 +776,7 @@ def classify_system_schema_status(
     applied_checksums: dict[str, str],
     *,
     foreign_keys_current: bool = True,
+    columns_current: bool = True,
 ) -> SystemSchemaStatus:
     """Dictionary / 台帳の snapshot を四つの公開状態へ分類する（規則は platform）。"""
 
@@ -780,6 +789,7 @@ def classify_system_schema_status(
             applied_checksums.get(migration.name) == migration.checksum for migration in MIGRATIONS
         ),
         foreign_keys_current=foreign_keys_current,
+        columns_current=columns_current,
     )
 
 
@@ -886,6 +896,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
     migration_key_column = "MIGRATION_NAME"
     managed_tables = MANAGED_TABLES
     managed_foreign_keys = MANAGED_FOREIGN_KEYS
+    managed_columns = MANAGED_COLUMNS
     # データを消す未適用の migration は、承認が無ければ作成・更新で当てない（#619）。
     guards_destructive_migrations = True
     recreate_confirmation = RECREATE_CONFIRMATION
@@ -923,8 +934,13 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         pending = [m.name for m in MIGRATIONS if applied.get(m.name) != m.checksum]
         foreign_keys = self._foreign_key_drift(connection)
         table_metadata = self._load_table_metadata(connection, objects)
+        # 台帳が適用済みでも、既存の表に正本の列が欠けていれば ready にしない（#2458）。
+        absent_columns = self._missing_columns(connection, objects)
         status = classify_system_schema_status(
-            set(objects), applied, foreign_keys_current=foreign_keys.current
+            set(objects),
+            applied,
+            foreign_keys_current=foreign_keys.current,
+            columns_current=not absent_columns,
         )
         return {
             "status": status,
@@ -949,6 +965,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
                 for name, object_type in RETIRED_MANAGED_OBJECTS
                 if (name, object_type) in objects
             ],
+            "missing_columns": absent_columns,
             **foreign_keys.status_fields(),
             "tables": table_metadata,
             # 全管理 object（テーブル・索引）。詳細の一覧を概要の件数とそろえる
@@ -1043,6 +1060,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         foreign_keys = self._repair_foreign_keys(connection, owner)
         self._heartbeat(connection, owner)
         interim = self._status_on(connection)
+        self._require_columns_present(interim)
         if interim["status"] != "ready":
             raise SystemSchemaError(
                 "SCHEMA_POSTCONDITION_FAILED",

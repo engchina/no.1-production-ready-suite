@@ -1,8 +1,10 @@
-"""表計算ファイルの行の記録（前処理 `excel_to_json` の出力）と、その要素化（#1221）。
+"""表計算ファイルの行の記録（前処理 `excel_to_json` の中間の形）と、その要素化（#1221）。
 
 前処理のサービスは Excel（.xlsx / .xls）を、シートごとの「表頭・元の行番号・セル範囲・表示の値」を
-持つ JSON（`SHEET_RECORDS_CONTENT_TYPE`）にする。parser のサービス（どの adapter でも）は、この JSON
-を外部の parser に渡さず、`sheet_records_extraction` で記録の単位（block）を 1 つずつ要素にする。
+持つ行の記録（`SheetRecordsDocument`）にし、構造化レコードの JSONL
+（`rag_parser_core.structured_records`。#2457）で parser に渡す。parser のサービス（どの adapter
+でも）は、この JSONL を外部の parser に渡さず、`sheet_records_extraction` で記録の単位（block）を
+1 つずつ要素にする。
 
 - block は 2 種類（engchina/no.1-rag の前処理に合わせる）。
   - `row`: 表の 1 行（「列名: 値」）。
@@ -27,17 +29,15 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 
-SHEET_RECORDS_CONTENT_TYPE = "application/vnd.production-ready.sheet-records+json"
 SHEET_RECORDS_FORMAT = "sheet_records"
 SHEET_RECORDS_FORMAT_VERSION = 1
 SHEET_RECORD_CONTENT_KIND = "record"
@@ -276,26 +276,6 @@ class SheetRecordsDocument(BaseModel):
     sheets: list[SheetRecords] = Field(default_factory=list)
     skipped_sheets: list[SkippedSheet] = Field(default_factory=list)
 
-    def to_json_bytes(self) -> bytes:
-        return self.model_dump_json(indent=2).encode("utf-8")
-
-
-def is_sheet_records_content_type(content_type: str | None) -> bool:
-    """前処理の行の記録の JSON か（parameter の charset などは無視する）。"""
-    return (content_type or "").split(";", 1)[0].strip().casefold() == SHEET_RECORDS_CONTENT_TYPE
-
-
-def parse_sheet_records(source_bytes: bytes) -> SheetRecordsDocument | None:
-    """行の記録の JSON を読む（形式・版が違えば None）。"""
-    try:
-        payload = json.loads(source_bytes.decode("utf-8"))
-        document = SheetRecordsDocument.model_validate(payload)
-    except (UnicodeDecodeError, ValueError, ValidationError):
-        return None
-    if document.format_version != SHEET_RECORDS_FORMAT_VERSION:
-        return None
-    return document
-
 
 def _block_text(block: SheetBlock, roles: Mapping[str, str] | None = None) -> str:
     if block.kind == "procedure_step":
@@ -437,7 +417,6 @@ __all__ = [
     "COLUMN_ROLE_NONE",
     "COLUMN_ROLE_TEXT_LABELS",
     "EXCEL_HEADER_LOW_CONFIDENCE_WARNING",
-    "SHEET_RECORDS_CONTENT_TYPE",
     "SHEET_RECORDS_FORMAT",
     "SHEET_RECORDS_FORMAT_VERSION",
     "SHEET_RECORD_CONTENT_KIND",
@@ -454,8 +433,6 @@ __all__ = [
     "SheetBlock",
     "SkippedSheet",
     "column_display_name",
-    "is_sheet_records_content_type",
     "parse_excel_range",
-    "parse_sheet_records",
     "sheet_records_extraction",
 ]

@@ -37,6 +37,10 @@ from rag_parser_core.result import (
     ParserRegistryResult,
 )
 from rag_parser_core.source import SourceModality, template_for_source_profile
+from rag_parser_core.structured_records import (
+    STRUCTURED_RECORDS_CONTENT_TYPE,
+    STRUCTURED_RECORDS_FILE_EXTENSION,
+)
 from rag_pipeline_core.raptor import build_raptor_summaries
 from rag_pipeline_core.stage import ChunkingStageRequest
 
@@ -4195,6 +4199,8 @@ def _canonical_artifact_extension(content_type: str) -> str:
     mapping = {
         "application/pdf": ".pdf",
         "application/json": ".json",
+        # 前処理（csv_to_json / excel_to_json）の構造化レコードの JSONL（#2457）。
+        STRUCTURED_RECORDS_CONTENT_TYPE: STRUCTURED_RECORDS_FILE_EXTENSION,
         "application/csv": ".csv",
         "text/plain": ".txt",
         "text/csv": ".csv",

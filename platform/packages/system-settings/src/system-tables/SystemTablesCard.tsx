@@ -178,7 +178,7 @@ export function SystemTablesCard({
   const data = isSystemTablesStatusData(statusQuery.data) ? statusQuery.data : undefined;
   const statusUnavailable = statusQuery.isError || (statusQuery.data !== undefined && !data);
   const schemaOperationRunning = data?.operation_state.status === "running";
-  // 既存の表に無い正本の列（#2450。RAG だけが返す。無ければ出さない）。
+  // 既存の表に無い正本の列（#2450 / #2458。3 製品が返す。無ければ出さない）。
   const missingColumns = data?.missing_columns ?? [];
   // 外部キーの差分（#505。RAG だけが返す。無ければ出さない）。
   const missingForeignKeys = data?.missing_foreign_keys ?? [];
