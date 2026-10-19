@@ -35,13 +35,35 @@ class Grid:
     hidden_columns: set[int] = field(default_factory=set)
     filter_rows: set[int] = field(default_factory=set)
     notes: list[tuple[str, str | None, str | None]] = field(default_factory=list)
+    # データの行で、横の結合の範囲を左上の値で埋めたセル（判定には使い、記録には入れない。#2531）。
+    merge_filled: set[tuple[int, int]] = field(default_factory=set)
+    # 行 → 値のある列（`row_columns` の索引。セルの数が変わるか `invalidate_rows` で
+    # 作り直す。#2527）。
+    _columns_by_row: dict[int, list[int]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _indexed_cells: int = field(default=-1, init=False, repr=False, compare=False)
 
     @property
     def max_row(self) -> int:
         return max((row for row, _ in self.cells), default=0)
 
     def row_columns(self, row: int) -> list[int]:
-        return sorted(col for (r, col), value in self.cells.items() if r == row and value.strip())
+        """行の値のある列（昇順）。行ごとに全セルを走査しないよう、索引を 1 回だけ作る。"""
+        if self._columns_by_row is None or self._indexed_cells != len(self.cells):
+            index: dict[int, list[int]] = {}
+            for (r, col), value in self.cells.items():
+                if value.strip():
+                    index.setdefault(r, []).append(col)
+            for cols in index.values():
+                cols.sort()
+            self._columns_by_row = index
+            self._indexed_cells = len(self.cells)
+        return list(self._columns_by_row.get(row, ()))
+
+    def invalidate_rows(self) -> None:
+        """セルの値を書き換えたあとに呼ぶ（`row_columns` の索引を作り直す）。"""
+        self._columns_by_row = None
 
     def column_width(self, col: int) -> float:
         return self.column_widths.get(col, self.default_column_width)
@@ -85,6 +107,7 @@ class Grid:
 
     def _put_shape(self, box: tuple[int, int, int, int], text: str) -> str:
         self.cells[(box[0], box[1])] = text
+        self.invalidate_rows()
         self.shape_boxes[(box[0], box[1])] = box
         return cell_ref(*box)
 

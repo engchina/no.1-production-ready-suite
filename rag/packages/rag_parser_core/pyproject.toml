@@ -5,6 +5,8 @@ description = "Shared parser contract (schemas + remap) for backend and parser m
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    # Excel の記録のモデルと読み方（pr_backend_core.spreadsheet。#2525）。
+    "production-ready-backend-core",
     "pydantic>=2.11",
     "charset-normalizer>=3.4,<4",
     # oci_enterprise_ai(共有 VLM/LLM core)は openai SDK で OCI OpenAI 互換 API を呼ぶ。
@@ -19,7 +21,6 @@ dependencies = [
 # parser マイクロサービスが共通 FastAPI app factory(service.py)を使うための extra。
 # core 本体の依存は軽量に保ち、HTTP サーバ依存はこの extra に隔離する。
 service = [
-    "production-ready-backend-core",
     "fastapi>=0.121,<1.0",
     "uvicorn[standard]>=0.37",
     "gunicorn>=23,<24",
