@@ -220,6 +220,55 @@ run_redeploy_case() (
   configure_systemd > "${case_dir}/configure.log" 2>&1
 )
 
+# 改名したサービス（#2457 の CSV→JSONL・Excel→JSONL。#2484）の再配備。以前の stack が書いた rag_services.txt（旧名）と
+# 旧名の unit（CSV は起動中、Excel は利用者が停止した）がある状態から、main と同じ順に load_rag_services → configure_systemd を
+# 2 回（更新・同じ配備の繰り返し）実行する。あわせて、最新の stack（新名の一覧・旧名の unit なし）の新規配備も実行する。
+run_renamed_redeploy_case() (
+  local case_dir="${TEST_TMP_DIR}/renamed"
+  local service
+  prepare_case "${case_dir}"
+  # shellcheck source=/dev/null
+  source "${REPO_DIR}/init_script.sh"
+  install_fake_systemctl "${case_dir}"
+  if ! command -v visudo >/dev/null 2>&1; then
+    visudo() { :; }
+  fi
+
+  printf '%s\n' 'preprocess-csv-to-json preprocess-excel-to-json preprocess-office-to-pdf parser-docling' \
+    > "${APP_ROOT}/props/rag_services.txt"
+  for service in preprocess-csv-to-json preprocess-excel-to-json preprocess-office-to-pdf parser-docling; do
+    printf '[Unit]\nDescription=previous %s\n' "${service}" > "${SYSTEMD_UNIT_DIR}/production-ready-rag-${service}.service"
+    touch "${case_dir}/enabled/production-ready-rag-${service}.service"
+  done
+  systemctl disable --now production-ready-rag-preprocess-excel-to-json.service
+  : > "${case_dir}/systemctl.log"
+  load_rag_services > "${case_dir}/first-load.log" 2>&1
+  configure_systemd > "${case_dir}/first-configure.log" 2>&1
+  cp "${case_dir}/systemctl.log" "${case_dir}/first-systemctl.log"
+  cp "${APP_ROOT}/props/rag_services.txt" "${case_dir}/first-rag_services.txt"
+  cp "${SUDOERS_DIR}/production-ready-rag-services" "${case_dir}/first-sudoers"
+
+  : > "${case_dir}/systemctl.log"
+  load_rag_services > "${case_dir}/second-load.log" 2>&1
+  configure_systemd > "${case_dir}/second-configure.log" 2>&1
+  cp "${case_dir}/systemctl.log" "${case_dir}/second-systemctl.log"
+)
+
+run_renamed_fresh_case() (
+  local case_dir="${TEST_TMP_DIR}/renamed-fresh"
+  prepare_case "${case_dir}"
+  # shellcheck source=/dev/null
+  source "${REPO_DIR}/init_script.sh"
+  install_fake_systemctl "${case_dir}"
+  if ! command -v visudo >/dev/null 2>&1; then
+    visudo() { :; }
+  fi
+
+  printf '%s\n' 'preprocess-csv-to-jsonl preprocess-excel-to-jsonl parser-docling' > "${APP_ROOT}/props/rag_services.txt"
+  load_rag_services > "${case_dir}/load.log" 2>&1
+  configure_systemd > "${case_dir}/configure.log" 2>&1
+)
+
 run_migration_case() (
   local case_dir="${TEST_TMP_DIR}/migration"
   prepare_case "${case_dir}"
@@ -534,6 +583,69 @@ grep -Fq '/usr/bin/systemctl enable --now production-ready-rag-parser-xml-tree-j
 if grep -Fq 'Updated ' "${redeploy_dir}/load-again.log" || grep -Fq 'Adding required' "${redeploy_dir}/load-again.log"; then
   fail "書き戻した rag_services.txt を再配備でまた直した"
 fi
+
+# --- 改名したサービス（CSV→JSONL・Excel→JSONL。#2457・#2484）: 旧名を新名で配備し、旧名の unit の状態を引き継ぐ ---
+run_services_case services-renamed "preprocess-csv-to-json preprocess-excel-to-json preprocess-office-to-pdf parser-docling"
+test "$(cat "${TEST_TMP_DIR}/services-renamed/result")" = "ok" || fail "改名したサービスの旧名で再配備が失敗した"
+test "$(cat "${TEST_TMP_DIR}/services-renamed/services")" = \
+  "preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-office-to-pdf parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl" \
+  || fail "改名したサービスの旧名を新名として配備の対象にしていない: $(cat "${TEST_TMP_DIR}/services-renamed/services")"
+grep -Fqx '[rag-init] Reading renamed RAG service as its new name: preprocess-csv-to-json -> preprocess-csv-to-jsonl' \
+  "${TEST_TMP_DIR}/services-renamed/load.log" || fail "旧名を新名として読んだことを log に出していない"
+if grep -Fq 'no longer provided: preprocess-' "${TEST_TMP_DIR}/services-renamed/load.log"; then
+  fail "改名したサービスを提供しなくなったサービスとして読み飛ばした"
+fi
+# 旧名と新名が両方あっても、新名を 1 つだけ配備する。
+run_services_case services-renamed-duplicate "preprocess-csv-to-jsonl preprocess-csv-to-json parser-docling"
+test "$(cat "${TEST_TMP_DIR}/services-renamed-duplicate/services")" = \
+  "preprocess-csv-to-jsonl parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl" \
+  || fail "旧名と新名の両方があると新名を重ねて配備する"
+run_renamed_redeploy_case
+renamed_dir="${TEST_TMP_DIR}/renamed"
+renamed_first_log="${renamed_dir}/first-systemctl.log"
+renamed_second_log="${renamed_dir}/second-systemctl.log"
+test "$(cat "${renamed_dir}/first-rag_services.txt")" = \
+  "preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-office-to-pdf parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl" \
+  || fail "旧名の rag_services.txt を新名で書き戻していない: $(cat "${renamed_dir}/first-rag_services.txt")"
+for service in preprocess-csv-to-jsonl preprocess-excel-to-jsonl; do
+  test -f "${renamed_dir}/units/production-ready-rag-${service}.service" || fail "旧名からの更新で ${service} の unit を書いていない"
+  grep -Fq "/usr/bin/systemctl enable --now production-ready-rag-${service}.service" "${renamed_dir}/first-sudoers" \
+    || fail "旧名からの更新の sudoers が ${service} の操作を許可していない"
+done
+for service in preprocess-csv-to-json preprocess-excel-to-json; do
+  grep -qx "disable --now production-ready-rag-${service}.service" "${renamed_first_log}" || fail "旧名の ${service} の unit を止めていない"
+  test ! -e "${renamed_dir}/units/production-ready-rag-${service}.service" || fail "旧名の ${service} の unit が残っている"
+  if grep -Fq "production-ready-rag-${service}.service" "${renamed_dir}/first-sudoers"; then
+    fail "sudoers が旧名の ${service} を許可している"
+  fi
+done
+# 起動していた旧名の CSV は新名で起動し、利用者が停止した旧名の Excel は新名でも停止のまま。
+grep -qx 'enable --now production-ready-rag-preprocess-csv-to-jsonl.service' "${renamed_first_log}" \
+  || fail "起動していた旧名の CSV の前処理を新名で起動していない"
+if grep -Eq '^(enable|start|restart)( --now)? production-ready-rag-preprocess-excel-to-jsonl.service$' "${renamed_first_log}"; then
+  fail "利用者が停止した旧名の Excel の前処理を新名で起動した"
+fi
+test ! -e "${renamed_dir}/enabled/production-ready-rag-preprocess-excel-to-jsonl.service" \
+  || fail "利用者が停止した旧名の Excel の前処理が新名で enable になった"
+grep -Fq 'Leaving production-ready-rag-preprocess-excel-to-jsonl.service stopped (renamed; last operation on the old unit: stop).' \
+  "${renamed_dir}/first-configure.log" || fail "旧名の停止を引き継いだことを log に出していない"
+# 同じ配備の繰り返し: 一覧を変えず、新名の CSV は restart、Excel は停止のまま。
+if grep -Fq 'Updated ' "${renamed_dir}/second-load.log" || grep -Fq 'Reading renamed' "${renamed_dir}/second-load.log"; then
+  fail "書き戻した rag_services.txt を繰り返しの再配備でまた直した"
+fi
+grep -qx 'restart production-ready-rag-preprocess-csv-to-jsonl.service' "${renamed_second_log}" \
+  || fail "繰り返しの再配備で新名の CSV の前処理を restart していない"
+grep -qx 'stop production-ready-rag-preprocess-excel-to-jsonl.service' "${renamed_second_log}" \
+  || fail "繰り返しの再配備で停止の Excel の前処理を停止のままにしていない"
+if grep -Eq '^disable --now production-ready-rag-preprocess-(csv|excel)-to-jsonl.service$' "${renamed_second_log}"; then
+  fail "繰り返しの再配備で新名の前処理の unit を消した"
+fi
+# 最新の stack（新名の一覧・旧名の unit なし）の新規配備: 既定どおり起動する。
+run_renamed_fresh_case
+for service in preprocess-csv-to-jsonl preprocess-excel-to-jsonl; do
+  grep -qx "enable --now production-ready-rag-${service}.service" "${TEST_TMP_DIR}/renamed-fresh/systemctl.log" \
+    || fail "新規配備で ${service} を起動していない"
+done
 
 # --- 以前の Docker Compose の配備からの移行 ---
 run_migration_case
