@@ -231,6 +231,10 @@ Agent はプラグインを持たず、スキルだけを持つ（#1798 でマ�
   `tool_not_found_behavior="return_error_to_model"`）。モデルへは「呼ぶときの名前は `<接続>__<ツール>`」
   （候補が複数なら候補の一覧）を返して呼び直させる。Control Plane が素の名前を別のツールへ読み替えて実行することは
   しない（呼び出し・承認・監査はモデルが呼んだ名前のまま。#1303）。
+- 失敗したツールの結果: モデルへは `error`・`error_code` に加えて、MCP の呼び先の誤りの code（`tool_error_code`。
+  `cursor_invalid`・`MCP_TOOL_ARGUMENTS_INVALID` など）と、引数の検証の違反（`argument_errors`。呼び先が返した
+  場所と文だけ、最大 5 件・文字数に上限）を返し、引数を直して呼び直せるようにする（`tool_failure_payload`。#2498）。
+  型の名前・元の文・入力の値・接続の情報は渡さない（step には呼び先の詳細をそのまま残す）。
 - ツール: Skill の requirement が要求するツールを `FunctionTool` にする。`control-plane` は `tool_registry` の
   ツール、それ以外は MCP 接続の `tools/list`（Run の利用者として取得。名前は `<接続>__<ツール>`、英数字・`_`・`-`
   で 64 文字以内）。取得できない接続は飛ばして Run に `runtime.event`（warning）を残す（#757）。

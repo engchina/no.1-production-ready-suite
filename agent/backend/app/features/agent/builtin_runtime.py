@@ -966,6 +966,54 @@ def _run_tool_context(run: Any) -> ToolInvocationContext:
     )
 
 
+# 呼び先の誤りの code として返す形（英数字と `_` `.` `-`。#2498）。
+_CALLEE_ERROR_CODE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+# モデルへ返す引数の違反の件数と、違反の場所・文の文字数の上限（#2498）。
+MAX_ARGUMENT_VIOLATIONS = 5
+_MAX_VIOLATION_LOCATION_CHARS = 100
+_MAX_VIOLATION_MESSAGE_CHARS = 300
+
+
+def tool_failure_payload(result: ToolResult) -> dict[str, Any]:
+    """失敗したツールの結果としてモデルへ返す内容（#2498）。
+
+    `error`・`error_code` に加えて、MCP の呼び先が返した誤りの code（`tool_error_code`）と、
+    引数の検証の違反（`argument_errors`。場所 `argument` と文 `message`。最大
+    `MAX_ARGUMENT_VIOLATIONS` 件、文字数に上限）を足す。モデルが違反の内容を読んで引数を直して
+    呼び直せるようにする（一般の文だけでは同じ誤った呼び出しを繰り返す）。違反は呼び先が返した
+    場所と文だけを使い、型の名前・元の文・入力の値・接続の情報は渡さない。
+    """
+    payload: dict[str, Any] = {
+        "error": result.error or "tool failed",
+        "error_code": result.error_code,
+    }
+    details = result.error_details if isinstance(result.error_details, dict) else {}
+    callee_code = details.get("error_code")
+    if isinstance(callee_code, str) and _CALLEE_ERROR_CODE.fullmatch(callee_code):
+        payload["tool_error_code"] = callee_code
+    inner = details.get("details")
+    errors = inner.get("errors") if isinstance(inner, dict) else None
+    violations: list[dict[str, str]] = []
+    for item in errors if isinstance(errors, list) else []:
+        if not isinstance(item, dict) or not isinstance(item.get("message"), str):
+            continue
+        message = " ".join(item["message"].split())[:_MAX_VIOLATION_MESSAGE_CHARS]
+        if not message:
+            continue
+        location = item.get("loc")
+        if isinstance(location, list | tuple):
+            location = ".".join(str(part) for part in location)
+        location = " ".join(location.split()) if isinstance(location, str) else ""
+        violations.append(
+            {"argument": location[:_MAX_VIOLATION_LOCATION_CHARS], "message": message}
+        )
+        if len(violations) >= MAX_ARGUMENT_VIOLATIONS:
+            break
+    if violations:
+        payload["argument_errors"] = violations
+    return payload
+
+
 class _ToolRecorder:
     """function tool の実行を Run の step・イベント・成果物に記録する。
 
@@ -1184,10 +1232,7 @@ class _ToolRecorder:
                     call, output, step_id=step_id, adjusted_limits=adjusted_limits
                 )
             return json.dumps(output, ensure_ascii=False, default=str)
-        return json.dumps(
-            {"error": result.error or "tool failed", "error_code": result.error_code},
-            ensure_ascii=False,
-        )
+        return json.dumps(tool_failure_payload(result), ensure_ascii=False)
 
     def reject_out_of_scope(self, call: ToolCall, scoped: data_scope.ScopeEnforcement) -> str:
         """範囲の外のプロファイルの呼び出しを、呼び先へ送らずにツールのエラーにする（#1378）。"""
