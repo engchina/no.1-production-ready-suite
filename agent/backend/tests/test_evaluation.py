@@ -38,13 +38,16 @@ from app.features.agent.evaluation import (
     cases_fingerprint,
     evaluation_set_store,
     evaluation_store,
+    judge_output_meaning,
     run_evaluation_job,
 )
 from app.features.agent.evaluation_excel import parse_cases_xlsx
 from app.features.agent.output_fields import (
     RECORD_OUTPUT_TOOL,
     AgentOutputField,
+    OutputFieldResult,
     compare_output,
+    output_content,
     output_value_matches,
 )
 from app.features.agent.runtime import (
@@ -1870,3 +1873,126 @@ def test_expected_output_round_trips_through_excel(agent: None) -> None:
     exported = client.get(f"/api/evaluation-sets/{set_id}/cases.xlsx")
     [case] = parse_cases_xlsx(exported.content)
     assert case.expected_output == [{"item": "A", "amount": 1200, "matched": True}]
+
+
+# ---- 意味で比べる文字の項目（#2562） -------------------------------------------------------
+
+
+def _meaning(*items: tuple[int, bool]) -> Any:
+    return [
+        assistant_message(
+            json.dumps({"items": [{"number": number, "same": same} for number, same in items]})
+        )
+    ]
+
+
+def test_match_meaning_is_only_for_text_fields() -> None:
+    assert AgentOutputField(key="note", label="メモ", match="meaning").match == "meaning"
+    number = AgentOutputField(key="amount", label="金額", type="number", match="meaning")
+    assert number.match == "exact"
+    content = output_content([number], [{"amount": 1}])
+    assert content["columns"][0]["match"] == "exact"
+
+
+def test_text_fields_are_judged_by_meaning_in_a_job(monkeypatch: MonkeyPatch, agent: None) -> None:
+    del agent
+    runtime_repository.patch_agent(
+        AGENT_ID,
+        AgentProfilePatch(
+            output_fields=[
+                AgentOutputField(key="item", label="項目", required=True),
+                AgentOutputField(key="code", label="記号"),
+                AgentOutputField(key="reason", label="確かめたこと", match="meaning"),
+            ]
+        ),
+    )
+    model = _script(
+        monkeypatch,
+        [
+            function_call(
+                RECORD_OUTPUT_TOOL,
+                {
+                    "rows": [
+                        {"item": "A", "code": "X-1", "reason": "台帳と書類の金額が同じ"},
+                        {"item": "B", "code": "Y-2", "reason": "期日は同じ"},
+                        {"item": "C", "code": "Z-3", "reason": "一致"},
+                    ]
+                },
+                call_id="call-out",
+            )
+        ],
+        [assistant_message("A・B・C を確かめました。")],
+        _meaning((1, True), (2, False)),
+        _judgement("correct", 1.0, "要点を満たしています。"),
+    )
+    case = EvaluationCase(
+        id="c1",
+        question="書類の値を確かめて",
+        expected="A・B・C の結果",
+        expected_output=[
+            {"item": "A", "code": "X-1", "reason": "書類と台帳で金額が一致した"},
+            {"item": "B", "code": "Y-9", "reason": "期日が違う"},
+            {"item": "C", "reason": "一致"},
+        ],
+    )
+    job = evaluation_store.create(
+        EvaluationJob(
+            agent_id=AGENT_ID,
+            agent_name="Agent A",
+            set_id="evset_meaning",
+            set_name="意味の評価",
+            agent_version="draft",
+            created_by_user_uuid=USER_UUID,
+            results=[EvaluationCaseResult(case=case)],
+        )
+    )
+
+    anyio.run(run_evaluation_job, job.id)
+
+    [result] = evaluation_store.get(job.id).results
+    assert result.status == CaseStatus.JUDGED
+    judged = {(item.row, item.field): item for item in result.field_results}
+    # 言い換えは意味で正しく、違う内容は誤り。文字が一致した項目は意味の判定に渡さない。
+    assert judged[(1, "reason")].correct is True
+    assert judged[(1, "reason")].method == "meaning"
+    assert judged[(2, "reason")].correct is False
+    assert judged[(3, "reason")].correct is True
+    # 完全に一致で比べる項目は、似ていても誤り。
+    assert judged[(2, "code")].correct is False
+    assert judged[(2, "code")].method == "exact"
+    assert result.field_correct is False
+    meaning_input = json.dumps(model.calls[2].input, ensure_ascii=False)
+    assert "書類と台帳で金額が一致した" in meaning_input and "期日は同じ" in meaning_input
+    assert "Y-9" not in meaning_input and "## 項目 3" not in meaning_input
+    assert len(model.calls) == 4
+
+
+def test_exact_fields_do_not_call_the_model(monkeypatch: MonkeyPatch) -> None:
+    model = _script(monkeypatch)
+    results = [
+        OutputFieldResult(row=1, field="code", expected="X-1", actual="X-2", correct=False),
+        OutputFieldResult(
+            row=1, field="reason", expected="値", actual=None, correct=False, method="meaning"
+        ),
+    ]
+
+    assert anyio.run(judge_output_meaning, results) == results
+    assert not model.calls
+
+
+def test_meaning_failure_keeps_the_text_result(monkeypatch: MonkeyPatch) -> None:
+    async def fail(*_args: Any) -> Any:
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr(evaluation, "_judge_meaning_once", fail)
+    _script(monkeypatch)
+    results = [
+        OutputFieldResult(
+            row=1, field="reason", expected="甲", actual="乙", correct=False, method="meaning"
+        )
+    ]
+
+    [item] = anyio.run(judge_output_meaning, results)
+
+    assert item.correct is False
+    assert item.note == evaluation.MEANING_FAILED_NOTE

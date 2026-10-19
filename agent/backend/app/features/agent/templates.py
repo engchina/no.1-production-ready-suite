@@ -296,7 +296,10 @@ AGENT_TEMPLATES: tuple[AgentTemplate, ...] = (
             ),
             AgentOutputField(key="matched", label="一致", type="boolean", required=True),
             AgentOutputField(
-                key="note", label="確かめたこと", description="照合に使った記録・条件"
+                key="note",
+                label="確かめたこと",
+                description="照合に使った記録・条件",
+                match="meaning",
             ),
         ],
     ),

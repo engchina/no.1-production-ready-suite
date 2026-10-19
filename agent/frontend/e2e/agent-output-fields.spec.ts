@@ -59,16 +59,26 @@ for (const viewport of [
     expect(mockApi.lastRequest("POST", "/api/agents")).toBeUndefined();
 
     await row.getByRole("textbox", { name: "key" }).fill("amount");
+    // #2562: 評価の比べ方は文字の項目だけに出す。
+    await expect(row.getByLabel("評価の比べ方")).toBeVisible();
     await row.getByLabel("型").click();
     await page.getByRole("option", { name: "数値" }).click();
+    await expect(row.getByLabel("評価の比べ方")).toHaveCount(0);
     await row.getByRole("switch", { name: "「金額」を必須にする" }).click();
+    await page.getByTestId("agent-output-add").click();
+    const note = page.getByTestId("agent-output-field-1");
+    await note.getByRole("textbox", { name: "表示名" }).fill("確かめたこと");
+    await note.getByRole("textbox", { name: "key" }).fill("note");
+    await note.getByLabel("評価の比べ方").click();
+    await page.getByRole("option", { name: "意味が同じ" }).click();
     await expectNoHorizontalOverflow(page);
     await section.screenshot({ path: testInfo.outputPath(`agent-output-fields-${viewport.name}.png`) });
 
     await page.getByRole("button", { name: "作成", exact: true }).click();
     await expect(page.getByText("Agent を作成しました")).toBeVisible();
     expect((mockApi.lastRequest("POST", "/api/agents")?.body as { output_fields: unknown }).output_fields).toEqual([
-      { key: "amount", label: "金額", type: "number", required: true, description: "" },
+      { key: "amount", label: "金額", type: "number", required: true, description: "", match: "exact" },
+      { key: "note", label: "確かめたこと", type: "text", required: false, description: "", match: "meaning" },
     ]);
   });
 }

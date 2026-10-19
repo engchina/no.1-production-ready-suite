@@ -935,10 +935,14 @@ function OutputFieldTable({ items }: { items: EvaluationFieldResult[] }) {
       key: "correct",
       header: t("evaluation.output.result"),
       render: (item) => (
-        <StatusBadge
-          variant={item.correct ? "success" : "danger"}
-          label={item.correct ? t("evaluation.output.correct") : t("evaluation.output.incorrect")}
-        />
+        <span className="flex flex-col items-start gap-1">
+          <StatusBadge
+            variant={item.correct ? "success" : "danger"}
+            label={item.correct ? t("evaluation.output.correct") : t("evaluation.output.incorrect")}
+          />
+          {item.method === "meaning" ? <span className="text-fg-muted">{t("evaluation.output.byMeaning")}</span> : null}
+          {item.note ? <span className="text-fg-muted">{item.note}</span> : null}
+        </span>
       ),
     },
   ];

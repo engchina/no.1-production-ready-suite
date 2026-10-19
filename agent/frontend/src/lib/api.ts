@@ -382,6 +382,8 @@ export interface AgentTemplate {
 
 /** 出力の項目の型（#2549）。 */
 export type AgentOutputFieldType = "text" | "number" | "date" | "boolean";
+/** 品質評価での比べ方（#2562）。meaning は文字の項目だけ（ほかの型は backend が exact にする）。 */
+export type AgentOutputFieldMatch = "exact" | "meaning";
 
 /** 業務 Agent の出力の項目（#2549。Run に record_output を渡し、記録した値を表で返す）。 */
 export interface AgentOutputField {
@@ -390,6 +392,7 @@ export interface AgentOutputField {
   type: AgentOutputFieldType;
   required: boolean;
   description: string;
+  match?: AgentOutputFieldMatch;
 }
 
 /** 業務の説明から作った業務 Agent の下書きの提案（#2519。保存はしない）。 */
@@ -447,6 +450,9 @@ export interface EvaluationFieldResult {
   expected: EvaluationOutputValue;
   actual: EvaluationOutputValue;
   correct: boolean;
+  /** 比べ方（#2562）と、比べ方どおりに判定できなかった理由（意味の判定の失敗など）。 */
+  method?: AgentOutputFieldMatch;
+  note?: string;
 }
 
 /** Run から作る評価ケースの下書き（保存しない。#810）。 */

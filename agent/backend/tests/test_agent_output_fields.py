@@ -215,10 +215,10 @@ def test_record_output_is_validated_and_saved(monkeypatch: MonkeyPatch, agents: 
     [output] = [item for item in run.artifacts if item.kind == OUTPUT_KIND]
     assert output.content == {
         "columns": [
-            {"name": "item", "label": "項目", "type": "text"},
-            {"name": "amount", "label": "金額", "type": "number"},
-            {"name": "due", "label": "期日", "type": "date"},
-            {"name": "matched", "label": "一致", "type": "boolean"},
+            {"name": "item", "label": "項目", "type": "text", "match": "exact"},
+            {"name": "amount", "label": "金額", "type": "number", "match": "exact"},
+            {"name": "due", "label": "期日", "type": "date", "match": "exact"},
+            {"name": "matched", "label": "一致", "type": "boolean", "match": "exact"},
         ],
         "rows": [ROW],
     }
