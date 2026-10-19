@@ -28,7 +28,7 @@ from app.features.agent.runtime import runtime_repository
 from app.features.agent.skills import skill_registry
 from app.security.permissions import MENU_AGENTS, RUNS_OPERATE
 from app.security.service import set_security_service
-from app.settings import get_settings
+from app.settings import Settings, get_settings
 
 AGENT_ID = "agent-drafting-2519"
 
@@ -476,3 +476,12 @@ def test_publish_gate_compares_with_the_published_version(
     # 許す下げ幅の中なら公開できる（絶対の閾値は使わない設定）。
     _jobs(monkeypatch, _job(pass_rate=0.85, offset_seconds=10), baseline)
     assert _publish().json()["data"]["published_version"] == 2
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("", None), ("0.05", 0.05)])
+def test_max_pass_rate_drop_reads_empty_as_unset(
+    monkeypatch: MonkeyPatch, raw: str, expected: float | None
+) -> None:
+    """`AGENT_PUBLISH_MAX_PASS_RATE_DROP=` の空の値は、未設定（門を使わない）と同じにする。"""
+    monkeypatch.setenv("AGENT_PUBLISH_MAX_PASS_RATE_DROP", raw)
+    assert Settings().agent_publish_max_pass_rate_drop == expected
