@@ -132,7 +132,7 @@ def test_settings_migration_renames_env_and_switches_global_parser(tmp_path: Pat
         "structured_records_jsonl_enabled": True,
     }
     # 移した値で起動できる（旧い値・旧い変数名は読まない）。
-    settings = Settings(_env_file=env_file)  # type: ignore[call-arg]
+    settings = Settings(_env_file=env_file)
     assert settings.rag_preprocess_profile == "csv_to_jsonl"
     assert settings.rag_chunk_delimiter == "\\n\\n"
     assert settings.rag_preprocess_csv_to_jsonl_service_url == "http://127.0.0.1:28012"
