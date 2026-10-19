@@ -580,6 +580,28 @@ test("評価セットのエディタでも評価する版を選べる", async ({
   expect(mockApi.lastRequest("POST", "/api/evaluations")?.body).toEqual({ set_id: "evset-seeded", agent_version: "draft" });
 });
 
+test("評価セットを URL で開いて評価を始めると、一覧の業務 Agent は評価した業務 Agent になる", async ({ page, mockApi }) => {
+  // #2589: 業務 Agent の選択が既定（先頭）のまま、評価概要だけが別の業務 Agent の評価にならないこと。
+  const base = mockApi.state.agents.find((item) => item.id === "default");
+  if (!base) throw new Error("default agent missing");
+  mockApi.state.agents.push({ ...structuredClone(base), id: "agent-2589", name: "Agent Z" });
+  mockApi.state.evaluationSets.push({ ...structuredClone(SET), id: "evset-2589", agent_id: "agent-2589", name: "評価セット Z" });
+  await page.goto("/evaluation?id=evset-2589");
+  await expect(page.getByTestId("evaluation-set-version")).toBeVisible();
+  const actions = page.getByTestId("evaluation-set-actions");
+  const startButton = actions.getByRole("button", { name: "評価を開始" });
+  if (await startButton.count()) {
+    await startButton.click();
+  } else {
+    await page.getByTestId("evaluation-set-actions-more").click();
+    await page.getByRole("menuitem", { name: "評価を開始" }).click();
+  }
+  await expect(page.getByText("評価を開始しました")).toBeVisible();
+  // 評価セットの欄の業務 Agent の選択（評価概要にも業務 Agent の名前が出るので、選択の欄で確かめる）。
+  await expect(page.locator("#evaluation-agent")).toContainText("Agent Z");
+  await expect(page.getByText("評価セット Z").first()).toBeVisible();
+});
+
 test("公開した版の無い業務 Agent は下書きだけを選べる", async ({ page, mockApi }) => {
   seedSet(mockApi);
   const agent = draftAgent(mockApi);

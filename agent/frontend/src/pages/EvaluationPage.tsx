@@ -127,6 +127,9 @@ export function EvaluationPage() {
     mutationFn: ({ setId, version, agentId: evaluated }: { setId: string; version: EvaluationTarget; agentId?: string }) =>
       agentApi.createEvaluation({ set_id: setId, agent_version: version, ...(evaluated ? { agent_id: evaluated } : {}) }),
     onSuccess: (created) => {
+      // 一覧に戻ったとき、評価セットの欄も評価した業務 Agent のものにする（#2589。評価セットを URL で開いたとき、
+      // 業務 Agent の選択は既定のままなので、評価概要と対象が食い違わないように）。
+      setAgentId(created.agent_id);
       setJobId(created.id);
       queryClient.setQueryData(["evaluation", created.id], created);
       void queryClient.invalidateQueries({ queryKey: ["evaluations"] });
