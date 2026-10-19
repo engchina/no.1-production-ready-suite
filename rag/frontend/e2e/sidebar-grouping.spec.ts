@@ -75,9 +75,11 @@ test("サイドバーのセクション再編とラベルを確認", { tag: "@re
   // 運用設定は NL2SQL と同じくシステムテーブルが先頭で、その下に回答の注意書き（#658・#2449）。
   const operationsSection = sidebar.locator("#nav-section-nav-section-operations");
   await expect(sidebar.getByText("運用設定", { exact: true })).toBeVisible();
-  await expect(operationsSection.getByRole("link")).toHaveCount(4);
+  await expect(operationsSection.getByRole("link")).toHaveCount(5);
   await expect(operationsSection.getByRole("link").first()).toHaveAccessibleName(/システムテーブル/);
   await expect(operationsSection.getByRole("link").nth(1)).toHaveAccessibleName("回答の注意書き");
+  // その下にチャットの添付（設定は製品ごと。3 製品で同じ位置。#2517）。
+  await expect(operationsSection.getByRole("link").nth(2)).toHaveAccessibleName("チャットの添付");
   await expect(operationsSection.getByRole("link", { name: /HuggingFace/ })).toBeVisible();
   await expect(operationsSection.getByRole("link", { name: /サービス管理/ })).toBeVisible();
 
