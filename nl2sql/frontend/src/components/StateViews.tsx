@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import {
   Button,
@@ -19,8 +20,11 @@ export function LoadingState({
   onCancel,
   placement = "panel",
   activityIcon,
+  children,
 }: {
   label: string;
+  /** 行の下に置く内容の形の Skeleton（#2510）。 */
+  children?: ReactNode;
   operationKey?: string | number | null;
   onCancel?: () => void;
   placement?: ProcessingPlacement;
@@ -34,7 +38,9 @@ export function LoadingState({
       placement={placement}
       activityIcon={activityIcon}
       framed={false}
-    />
+    >
+      {children}
+    </TimedLoadingState>
   );
 }
 

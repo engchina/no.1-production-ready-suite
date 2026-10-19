@@ -20,7 +20,7 @@ import { WorkspaceBoundary, WorkspaceDraftWarning, WorkspacePage } from "@/compo
 import { useDatabaseStatus } from "@/lib/queries";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
-import { PageHeader, AppShell, PageBody, TimedLoadingState } from "@production-ready/ui";
+import { PageHeader, AppShell, PageBody, PageLoadingState } from "@production-ready/ui";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { SyntheticRunNotifications } from "@/features/nl2sql/syntheticRuns";
 import { SchemaRefreshCoordinator } from "@/features/nl2sql/SchemaRefreshCoordinator";
@@ -273,27 +273,16 @@ function PublicRoute({ element }: { element: ReactNode }) {
 
 function FullPageRouteLoadingFallback() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-canvas p-4">
-      <TimedLoadingState
-        label={t("app.route.loading")}
-        operationKey="route-loading-full"
-        placement="page"
-        testId="route-loading"
-      />
+    // 画面の中央に浮かせず、本文の先頭に本文と同じ幅で出す（ほかの読み込み中と同じ。#2510）。
+    <main className="min-h-screen bg-canvas">
+      <PageLoadingState label={t("app.route.loading")} operationKey="route-loading-full" testId="route-loading" />
     </main>
   );
 }
 
 function RouteLoadingFallback() {
   return (
-    <PageBody wide>
-      <TimedLoadingState
-        label={t("app.route.loading")}
-        operationKey="route-loading"
-        placement="page"
-        testId="route-loading"
-      />
-    </PageBody>
+    <PageLoadingState wide label={t("app.route.loading")} operationKey="route-loading" testId="route-loading" />
   );
 }
 

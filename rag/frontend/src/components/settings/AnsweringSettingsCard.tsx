@@ -11,6 +11,7 @@ import {
   type SelectFieldOption,
   Skeleton,
   Switch,
+  TimedLoadingState,
 } from "@production-ready/ui";
 import { MessageSquareText, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
@@ -79,7 +80,17 @@ export function AnsweringSettingsCard() {
         <CardDescription>{t("settings.answering.description")}</CardDescription>
       </CardHeader>
       <CardContent>
-        {query.isPending ? <Skeleton className="h-48 w-full" /> : null}
+        {/* ほかの読み込み中と同じく、先頭に文言と経過時間の行、その下に内容の形の Skeleton（#2510）。 */}
+        {query.isPending ? (
+          <TimedLoadingState
+            label={t("settings.answering.loading")}
+            operationKey="answering-settings-load"
+            framed={false}
+            testId="answering-settings-loading"
+          >
+            <Skeleton className="h-48 w-full" />
+          </TimedLoadingState>
+        ) : null}
         {query.isError ? (
           <ApiErrorState
             error={query.error}

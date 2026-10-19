@@ -749,7 +749,10 @@ export function EvaluationPage() {
                   hint={t("qualityEvaluation.progress.emptyHint")}
                 />
               ) : currentJobQuery.isLoading ? (
-                <LoadingState label={t("common.loading")} placement="job" />
+                <LoadingState label={t("common.loading")} placement="job">
+                  {/* 文言と経過時間の行の下を、進行の表示の形の Skeleton で覆う（#2510）。 */}
+                  <ListSkeleton rows={2} />
+                </LoadingState>
               ) : currentJobQuery.isError || !currentJob ? (
                 <ErrorState
                   message={t("qualityEvaluation.error.load")}

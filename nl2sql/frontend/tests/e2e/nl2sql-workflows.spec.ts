@@ -5592,7 +5592,7 @@ for (const { engine, name } of [
     await page.clock.runFor(900);
     await expect.poll(() => requestCount).toBe(1);
     const header = page.getByRole("button", { name: /参考履歴/ });
-    await expect(header).toContainText("参考履歴を検索中");
+    await expect(page.getByTestId("nl2sql-similar-history-loading")).toContainText("参考履歴を検索しています");
     const failedRequest = page.waitForEvent("requestfailed", {
       predicate: (request) => request.url().endsWith("/api/nl2sql/similar-history"),
     });
@@ -5603,7 +5603,7 @@ for (const { engine, name } of [
     await page.clock.runFor(900);
     expect(requestCount).toBe(1);
     await expect(page.getByTestId("nl2sql-similar-history")).toHaveCount(0);
-    await expect(page.getByText("参考履歴を検索中")).toHaveCount(0);
+    await expect(page.getByTestId("nl2sql-similar-history-loading")).toHaveCount(0);
   });
 }
 
@@ -5679,12 +5679,12 @@ test("参考履歴の「検索中」は SQL 生成の実行中に固まって残
 
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
   const header = page.getByRole("button", { name: /参考履歴/ });
-  await expect(header).toContainText("参考履歴を検索中");
+  await expect(page.getByTestId("nl2sql-similar-history-loading")).toContainText("参考履歴を検索しています");
 
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   // 実行中は入力系が無効化される。参考履歴は「検索中」のまま残らず、非活性で表示を維持する。
   await expect(nl2sqlQuestionInput(page)).toBeDisabled();
-  await expect(page.getByText("参考履歴を検索中")).toHaveCount(0);
+  await expect(page.getByTestId("nl2sql-similar-history-loading")).toHaveCount(0);
   await expect(header).toBeVisible();
   await expect(header).toBeDisabled();
   await expect(header).toHaveAttribute("aria-expanded", "false");

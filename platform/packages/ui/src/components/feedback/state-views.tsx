@@ -4,18 +4,32 @@ import type { ReactNode } from "react";
 import { Button } from "../ui/button";
 import { MessageText } from "../ui/message-text";
 import { Skeleton } from "../ui/skeleton";
+import { TimedLoadingState } from "./processing-state";
 
 /**
- * 読込状態（汎用 Skeleton）。1 秒超の取得はブロッキングスピナーでなくこれを使う
+ * 読込状態。ほかの読み込み中と同じく、領域の先頭に処理の名前と経過時間の行（`TimedLoadingState`）を出し、
+ * その下を行の形の Skeleton で覆う（#2510）。1 秒超の取得はブロッキングスピナーでなくこれを使う
  * （progressive-loading）。領域寸法を予約して CLS を防ぐため、行数を rows で指定する。
  */
-export function LoadingState({ rows = 3, label }: { rows?: number; label?: string }) {
+export function LoadingState({
+  label,
+  rows = 3,
+  operationKey,
+  testId,
+}: {
+  label: string;
+  rows?: number;
+  operationKey?: string | number | null;
+  testId?: string;
+}) {
   return (
-    <div role="status" aria-busy="true" aria-label={label} className="flex flex-col gap-2 py-2">
-      {Array.from({ length: rows }).map((_, index) => (
-        <Skeleton key={index} className="h-5 w-full" />
-      ))}
-    </div>
+    <TimedLoadingState label={label} operationKey={operationKey} framed={false} testId={testId}>
+      <div className="flex flex-col gap-2" aria-hidden="true">
+        {Array.from({ length: rows }).map((_, index) => (
+          <Skeleton key={index} className="h-5 w-full" />
+        ))}
+      </div>
+    </TimedLoadingState>
   );
 }
 

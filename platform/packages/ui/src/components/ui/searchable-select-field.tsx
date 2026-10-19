@@ -32,6 +32,7 @@ import {
 } from "./searchable-options";
 import { Spinner } from "./spinner";
 import { isInsideAny, nearestScrollTop, selectPortalContainer } from "./select-field";
+import { SelectListEmpty } from "./select-list-empty";
 
 /** 一覧の下端からこの距離（px）まで来たら続きを読む。 */
 const LOAD_MORE_THRESHOLD_PX = 48;
@@ -400,9 +401,9 @@ export function SearchableSelectField({
                 ))}
               </ul>
             ) : (
-              <p className="px-3 py-6 text-center text-xs text-fg-muted">
-                {searching ? labels.searching : query ? labels.noMatch(query) : labels.empty}
-              </p>
+              <SelectListEmpty searching={searching} searchingLabel={labels.searching}>
+                {query ? labels.noMatch(query) : labels.empty}
+              </SelectListEmpty>
             )}
             <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-1.5 text-xs text-fg-muted">
               <span className="tnum">{searching ? labels.searching : countText}</span>

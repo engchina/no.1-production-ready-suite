@@ -8,6 +8,8 @@ import {
   Disclosure,
   StatusBadge,
   ContentActionBar,
+  Skeleton,
+  TimedLoadingState,
 } from "@production-ready/ui";
 
 import { LogicalStepsList } from "./LogicalStepsList";
@@ -230,9 +232,15 @@ function SqlOntologyGroundingPanel({
               <div className="order-2 min-w-0 overflow-hidden @4xl:order-1" data-testid="nl2sql-sql-grounding-graph">
                 <Suspense
                   fallback={
-                    <div className="grid h-80 place-items-center rounded-md border border-border bg-surface-sunken text-sm text-fg-muted">
-                      {t("nl2sql.interpretation.graphLoading")}
-                    </div>
+                    // 中央寄せの文字だけにせず、ほかの読み込み中と同じく先頭の全幅の行とグラフの形の Skeleton（#2510）。
+                    <TimedLoadingState
+                      label={t("nl2sql.interpretation.graphLoading")}
+                      operationKey="sql-grounding-graph"
+                      className="h-80 grid-rows-[auto_minmax(0,1fr)]"
+                      testId="nl2sql-sql-grounding-graph-loading"
+                    >
+                      <Skeleton className="h-full w-full" />
+                    </TimedLoadingState>
                   }
                 >
                   <LazyOntologyGraphCanvas

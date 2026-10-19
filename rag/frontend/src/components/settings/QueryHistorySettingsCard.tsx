@@ -13,6 +13,7 @@ import {
   TextareaField,
   TextField,
   useConfirm,
+  TimedLoadingState,
 } from "@production-ready/ui";
 import { History, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
@@ -48,7 +49,17 @@ export function QueryHistorySettingsCard() {
         <CardDescription>{t("settings.queryHistory.description")}</CardDescription>
       </CardHeader>
       <CardContent>
-        {query.isPending ? <Skeleton className="h-24 w-full" /> : null}
+        {/* ほかの読み込み中と同じく、先頭に文言と経過時間の行、その下に内容の形の Skeleton（#2510）。 */}
+        {query.isPending ? (
+          <TimedLoadingState
+            label={t("settings.queryHistory.loading")}
+            operationKey="query-history-settings-load"
+            framed={false}
+            testId="query-history-settings-loading"
+          >
+            <Skeleton className="h-24 w-full" />
+          </TimedLoadingState>
+        ) : null}
         {query.isError ? (
           <ApiErrorState
             error={query.error}

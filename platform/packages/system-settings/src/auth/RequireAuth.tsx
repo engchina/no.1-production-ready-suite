@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Navigate, useHref, useLocation, useNavigate } from "react-router-dom";
-import { ApiErrorState, TimedLoadingState, type SidebarAccountLink } from "@production-ready/ui";
+import { ApiErrorState, PageLoadingState, type SidebarAccountLink } from "@production-ready/ui";
 
 import { ACCOUNT_PATH } from "../paths";
 
@@ -28,13 +28,9 @@ export function RequireAuth({ routes, requiredPermission, messages, children }: 
 
   if (auth.status === "loading") {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-canvas p-4">
-        <TimedLoadingState
-          label={m.loading}
-          operationKey="auth-session"
-          placement="page"
-          testId="auth-session-loading"
-        />
+      // 画面の中央に浮かせず、本文の先頭に本文と同じ幅で出す（ほかの読み込み中と同じ。#2510）。
+      <main className="min-h-screen bg-canvas">
+        <PageLoadingState label={m.loading} operationKey="auth-session" testId="auth-session-loading" />
       </main>
     );
   }
