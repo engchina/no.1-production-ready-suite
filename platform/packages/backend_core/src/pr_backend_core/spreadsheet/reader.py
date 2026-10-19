@@ -333,6 +333,7 @@ def _read_xlsx(
             formulas = formula_book[worksheet.title]
             grid = Grid(name=worksheet.title, hidden=worksheet.sheet_state != "visible")
             _read_xlsx_column_widths(worksheet, grid)
+            _read_xlsx_row_heights(worksheet, grid)
             _read_xlsx_hidden(worksheet, grid)
             skip = set() if include_hidden else grid.hidden_rows - grid.filter_rows
             skip_columns = set() if include_hidden else grid.hidden_columns
@@ -400,16 +401,27 @@ def _place_shapes(grid: Grid, shapes: SheetShapes | None, *, include_hidden: boo
     hidden_rows = set() if include_hidden else grid.hidden_rows - grid.filter_rows
     hidden_columns = set() if include_hidden else grid.hidden_columns
     for shape in shapes.shapes:
-        rows = set(range(shape.top, shape.bottom + 1))
-        columns = set(range(shape.left, shape.right + 1))
+        box = (shape.top, shape.left, shape.bottom, shape.right)
+        if shape.size is not None:
+            # 大きさで置く図形（oneCellAnchor / absoluteAnchor）は、列幅・行の高さで範囲にする。
+            box = grid.anchor_box(shape.top, shape.left, *shape.size)
+        rows = set(range(box[0], box[2] + 1))
+        columns = set(range(box[1], box[3] + 1))
         if rows <= hidden_rows or columns <= hidden_columns:
             continue
-        box = (shape.top, shape.left, shape.bottom, shape.right)
         if grid.place_shape_text(box, shape.text) is None:
             # 範囲のすべてのセルに値がある: 置き場所が無い。文字は診断に残す。
             grid.notes.append(("shape_text_not_placed", cell_ref(*box), shape.text[:200]))
-    if shapes.absolute:
-        grid.notes.append(("shape_text_absolute_anchor_skipped", None, str(shapes.absolute)))
+
+
+def _read_xlsx_row_heights(worksheet: Any, grid: Grid) -> None:
+    """指定された行の高さ（ポイント）と、シートの既定の行の高さ（図形の大きさの換算に使う）。"""
+    default = getattr(worksheet.sheet_format, "defaultRowHeight", None)
+    if default:
+        grid.default_row_height = float(default)
+    for index, dimension in worksheet.row_dimensions.items():
+        if dimension.ht:
+            grid.row_heights[index] = float(dimension.ht)
 
 
 def _read_xlsx_column_widths(worksheet: Any, grid: Grid) -> None:
