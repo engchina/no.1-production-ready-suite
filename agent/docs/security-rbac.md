@@ -94,7 +94,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 |---|---|---|
 | `GET /runs` | `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る・system_admin 以外は自分の Run と自分の会話の Run だけ（§4.1）。要約のページ（#1897） |
 | `GET /approvals`・`GET /approvals/{id}`（#1897） | `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る・system_admin 以外は自分の Run の承認だけ（§4.1。範囲外・ほかの利用者・無い承認の詳細は 404） |
-| `POST /agents/draft-suggestion`（#2519。業務の説明から下書きを提案。保存しない） | `agent.admin` / `agent.agents.build` | 候補は有効なスキルと、編集者が使えるプロファイル（データの範囲の候補と同じく編集者のサービストークンで取得）。候補に無い ID はコードで外す |
+| `POST /agents/draft-suggestion`（#2519。業務の説明から下書きを提案。保存しない） | `agent.admin` / `agent.agents.build` | 候補は有効なスキルと、編集者が使えるプロファイル（データの範囲の候補と同じく編集者のサービストークンで取得）。候補に無い ID・形の正しくない出力の項目はコードで外す |
 | `POST /agents`・`PATCH`・`DELETE /agents/{id}`・`POST /agents/{id}/publish`・`POST /agents/{id}/versions/{version}/restore`（#770・#2523） | `agent.admin` / `agent.agents.build` | `agent.agents.build` だけの利用者は自分の個人の業務 Agent だけ（ほかは 403、見えない Agent は 404）。作った Agent の持ち主は作った人（Agent 管理が作れば組織の業務 Agent）。下書きで実行（`POST /runs` の `draft=true`）と下書きの評価、下書きの会話の一覧（`GET /threads?draft=true`。編集画面の「試す」。#2515）も Agent 管理と持ち主だけ。会話は始めた Run の種類（下書き / 公開中の版）に固定し、種類をまたぐ続きは 409 |
 | `POST /agents/{id}/share-request`（#2523） | `agent.admin` / `agent.agents.build` | 持ち主だけ。公開した個人の業務 Agent の共有を申請する |
 | `POST /agents/{id}/share-request/approve`・`reject`（#2523） | `agent.admin` | 承認で組織の業務 Agent（持ち主なし）になる。却下は理由（必須）を持ち主に返す。承認前の個人の Agent はロールに割り当てられない（`PUT /security/roles/{id}/access` が 409） |

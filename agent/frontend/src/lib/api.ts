@@ -399,6 +399,8 @@ export interface AgentDraftSuggestion {
   instructions: string;
   skill_ids: string[];
   data_scopes: AgentDataScopes;
+  /** 出力の項目（#2561。決まった項目で結果を返す業務のときだけ。無ければ空）。 */
+  output_fields: AgentOutputField[];
   evaluation_cases: { question: string; expected: string }[];
   /** 提案に使えなかった候補（取得できなかった接続など）。 */
   notices: string[];

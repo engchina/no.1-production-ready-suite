@@ -1,20 +1,23 @@
 """業務の説明から業務 Agent の下書きを提案する（#2519）。
 
 編集画面の「説明から下書きを作る」が呼ぶ。モデル（既定のテキストモデル）に、業務の説明と、
-選べるスキル・プロファイルの候補を渡し、名前・説明・指示・スキル・データの範囲・評価の問いを
-構造化出力で受ける。候補に無い ID・上限を超える件数と文字数は、ここ（コード）で外す。提案は
-フォームに入れるだけで、業務 Agent は作らない（保存は利用者がいつもの「作成」で行う）。
+選べるスキル・プロファイルの候補を渡し、名前・説明・指示・スキル・データの範囲・出力の項目
+（#2561）・評価の問いを構造化出力で受ける。候補に無い ID・形の正しくない出力の項目・上限を
+超える件数と文字数は、ここ（コード）で外す。提案はフォームに入れるだけで、業務 Agent は作らない
+（保存は利用者がいつもの「作成」で行う）。
 """
 
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from agents import Agent, Runner
 from pr_backend_core.bounded_calls import Attempt, BoundedCallFailed, ErrorKind
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.features.agent import builtin_runtime
 from app.features.agent.ai_calls import make_ai_caller, retry_model_target
@@ -23,6 +26,12 @@ from app.features.agent.data_scope import (
     AgentDataScope,
     AgentDataScopes,
     DataScopeCandidate,
+)
+from app.features.agent.output_fields import (
+    MAX_OUTPUT_FIELDS,
+    OUTPUT_KEY_PATTERN,
+    AgentOutputField,
+    OutputFieldType,
 )
 from app.features.agent.skills import AgentSkillDefinition
 from app.features.agent.templates import TemplateEvaluationCase
@@ -72,6 +81,14 @@ class _ProposedCase(BaseModel):
     )
 
 
+class _ProposedOutputField(BaseModel):
+    key: str
+    label: str
+    type: OutputFieldType
+    required: bool
+    description: str = Field(description="値の書き方（無ければ空）")
+
+
 class _ModelProposal(BaseModel):
     """モデルの出力（structured output。範囲の制約は schema に入れず、読んだ後にコードで外す）。"""
 
@@ -80,6 +97,7 @@ class _ModelProposal(BaseModel):
     instructions: str = Field(description=f"業務 Agent への指示。{_NO_INVENTED_FACTS}。")
     skill_ids: list[str]
     data_scopes: list[_ProposedScope]
+    output_fields: list[_ProposedOutputField]
     evaluation_cases: list[_ProposedCase]
 
 
@@ -91,6 +109,7 @@ class AgentDraftSuggestion(BaseModel):
     instructions: str = ""
     skill_ids: list[str] = Field(default_factory=list)
     data_scopes: AgentDataScopes = Field(default_factory=dict)
+    output_fields: list[AgentOutputField] = Field(default_factory=list)
     evaluation_cases: list[TemplateEvaluationCase] = Field(default_factory=list)
     # 候補を取得できなかった接続など、提案に使えなかったもの（画面が知らせる）。
     notices: list[str] = Field(default_factory=list)
@@ -111,6 +130,9 @@ DRAFT_INSTRUCTIONS = f"""あなたは業務 Agent の設計を手伝う担当者
 - skill_ids: 「使えるスキル」から、この業務に要るものの id を選ぶ。
 - data_scopes: 「使えるプロファイル」から、この業務に関係するものだけを接続ごとに選ぶ。関係する
   ものが無い接続は入れない。
+- output_fields: 業務の説明に、結果として返す項目（書類から抜き出す項目・照合の結果・一覧の列）が
+  書かれているときだけ、その項目を提案する。質問に文で答える業務では空にする。1 つ目は行を見分ける
+  項目にする。label は日本語の短い表示名、key はその意味の英語の識別子（半角英小文字と _）。
 - evaluation_cases: 公開の前に確かめる質問を {MIN_EVALUATION_CASES}〜{MAX_EVALUATION_CASES} 件。
   question は利用者が実際に聞きそうな質問、expected は回答が満たすべき要点。
 
@@ -152,12 +174,58 @@ def _clip(value: str, limit: int) -> str:
     return value.strip()[:limit]
 
 
+def _output_key(raw: str, number: int) -> str:
+    """提案の key を key の形にする（英小文字・数字・_ 以外は _。英字で始まらなければ field_N）。"""
+    text = re.sub(r"[^a-z0-9_]+", "_", unicodedata.normalize("NFKC", raw).lower())
+    text = re.sub(r"_+", "_", text).strip("_")[:40].rstrip("_")
+    return text if OUTPUT_KEY_PATTERN.fullmatch(text) else f"field_{number}"
+
+
+def _sanitize_output_fields(
+    proposed: Sequence[_ProposedOutputField],
+) -> tuple[list[AgentOutputField], int, int]:
+    """形の正しくない項目・重なる項目を外し、上限で切る（残した項目・外した数・key を付けた数）。
+
+    key の形だけが違う項目は外さず、key を形に合わせて付ける（表示名が項目の中身。モデルは key を
+    日本語で書くことがある）。
+    """
+    fields: list[AgentOutputField] = []
+    dropped = 0
+    renamed = 0
+    for number, item in enumerate(proposed, start=1):
+        key = item.key.strip()
+        if not OUTPUT_KEY_PATTERN.fullmatch(key):
+            key = _output_key(key, number)
+            if any(existing.key == key for existing in fields):
+                key = f"field_{number}"
+            renamed += 1
+        try:
+            field = AgentOutputField.model_validate(
+                {
+                    "key": key,
+                    "label": _clip(item.label, 40),
+                    "type": item.type,
+                    "required": item.required,
+                    "description": _clip(item.description, 200),
+                }
+            )
+        except ValidationError:
+            dropped += 1
+            continue
+        if any(existing.key == field.key for existing in fields):
+            dropped += 1
+            continue
+        fields.append(field)
+    dropped += max(0, len(fields) - MAX_OUTPUT_FIELDS)
+    return fields[:MAX_OUTPUT_FIELDS], dropped, renamed
+
+
 def sanitize_proposal(
     proposal: _ModelProposal,
     skills: Sequence[AgentSkillDefinition],
     candidates: Mapping[str, tuple[str, Sequence[DataScopeCandidate]]],
 ) -> AgentDraftSuggestion:
-    """候補に無い ID を外し、件数と文字数を上限に収める。"""
+    """候補に無い ID・形の正しくない出力の項目を外し、件数と文字数を上限に収める。"""
     known_skills = {skill.id for skill in skills}
     skill_ids = list(dict.fromkeys(item for item in proposal.skill_ids if item in known_skills))
     scopes: AgentDataScopes = {}
@@ -184,10 +252,24 @@ def sanitize_proposal(
         for case in proposal.evaluation_cases
         if case.question.strip() and case.expected.strip()
     ][:MAX_EVALUATION_CASES]
+    output_fields, dropped_fields, renamed_fields = _sanitize_output_fields(proposal.output_fields)
     name = _clip(proposal.name, MAX_NAME_CHARS)
     if not name:
         raise AgentDraftError(
             "業務 Agent の名前を提案できませんでした。説明を詳しくしてやり直してください。"
+        )
+    notices: list[str] = []
+    if output_fields:
+        # 項目を返さない業務にも提案することがあるので、入れたことを必ず知らせる。
+        notices.append(
+            f"出力の項目を {len(output_fields)} 件入れました。回答を文だけで返す業務なら、"
+            "「出力の項目」から外してください。"
+        )
+    if dropped_fields:
+        notices.append(f"形の正しくない出力の項目を {dropped_fields} 件外しました。")
+    if renamed_fields:
+        notices.append(
+            f"出力の項目 {renamed_fields} 件の key を付けました。key を確かめてください。"
         )
     return AgentDraftSuggestion(
         name=name,
@@ -195,7 +277,9 @@ def sanitize_proposal(
         instructions=_clip(proposal.instructions, MAX_INSTRUCTIONS_CHARS),
         skill_ids=skill_ids[:MAX_SUGGESTED_SKILLS],
         data_scopes=scopes,
+        output_fields=output_fields,
         evaluation_cases=cases,
+        notices=notices,
     )
 
 
@@ -293,4 +377,4 @@ async def suggest_agent_draft(
             f"資料から確かめていない数値・箇所を含む評価の問いを {len(remaining)} 件外しました。"
         )
     suggestion = sanitize_proposal(proposal, skills, candidates)
-    return suggestion.model_copy(update={"notices": result_notices})
+    return suggestion.model_copy(update={"notices": [*result_notices, *suggestion.notices]})

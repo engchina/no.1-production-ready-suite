@@ -2555,6 +2555,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
           instructions: "根拠の箇所を示して答える。",
           skill_ids: [],
           data_scopes: {},
+          output_fields: [],
           evaluation_cases: [],
           notices: [],
         }

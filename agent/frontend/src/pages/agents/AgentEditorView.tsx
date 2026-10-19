@@ -221,9 +221,11 @@ export function AgentEditorView({
     });
   }
 
-  /** 説明から作った下書きをフォームに入れる（#2519。入力済みなら確認してから置き換える。保存はしない）。 */
+  /** 説明から作った下書きをフォームに入れる（#2519・#2561。入力済みなら確認してから置き換える。保存はしない）。 */
   async function applyDraftSuggestion(suggestion: AgentDraftSuggestion) {
-    const touched = Boolean(name.trim() || agentDescription.trim() || instructions.trim() || skillIds.length);
+    const touched = Boolean(
+      name.trim() || agentDescription.trim() || instructions.trim() || skillIds.length || outputFields.length,
+    );
     if (touched) {
       const ok = await confirmTemplate({
         title: t("agent.draftAssistant.replaceTitle"),
@@ -240,6 +242,7 @@ export function AgentEditorView({
     setInstructions(suggestion.instructions);
     setSkillIds(suggestion.skill_ids.filter((skillId) => known.has(skillId)).sort());
     setDataScopes(normalizeDataScopes(suggestion.data_scopes));
+    setOutputFields(normalizeOutputFields(suggestion.output_fields ?? []));
     setTemplateId(null);
     setDraftCases(suggestion.evaluation_cases);
     toast.success(t("agent.draftAssistant.applied"));
