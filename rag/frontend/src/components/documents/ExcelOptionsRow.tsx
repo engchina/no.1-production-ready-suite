@@ -86,16 +86,8 @@ const HEADER_ROW_COUNT_OPTIONS: SelectFieldOption<string>[] = [1, 2, 3, 4, 5].ma
   label: t("documents.excelOptions.headerRowCountValue", { count }),
 }));
 
-/** 表を分ける空の行・列の数の選択肢（backend の 1〜20）。 */
+/** 表を分ける空の行・列の数（backend の 1〜20）。 */
 const TABLE_GAP_COUNTS = Array.from({ length: 20 }, (_, index) => index + 1);
-const TABLE_GAP_ROWS_OPTIONS: SelectFieldOption<string>[] = TABLE_GAP_COUNTS.map((count) => ({
-  value: String(count),
-  label: t("documents.excelOptions.tableGapRowsValue", { count }),
-}));
-const TABLE_GAP_COLUMNS_OPTIONS: SelectFieldOption<string>[] = TABLE_GAP_COUNTS.map((count) => ({
-  value: String(count),
-  label: t("documents.excelOptions.tableGapColumnsValue", { count }),
-}));
 
 /** 帳票と判定する下限の入力を数にする（0〜1 の外・数でない値は null）。 */
 export function parseFormThreshold(text: string): number | null {
@@ -182,6 +174,14 @@ export function ExcelOptionsRow({
   const [formThresholdText, setFormThresholdText] = useState(String(current.form_detection_threshold));
   const formThresholdInvalid = parseFormThreshold(formThresholdText) === null;
   const labelId = `document-excel-options-${documentId}`;
+  const tableGapRowsOptions: SelectFieldOption<string>[] = TABLE_GAP_COUNTS.map((count) => ({
+    value: String(count),
+    label: t("documents.excelOptions.tableGapRowsValue", { count }),
+  }));
+  const tableGapColumnsOptions: SelectFieldOption<string>[] = TABLE_GAP_COUNTS.map((count) => ({
+    value: String(count),
+    label: t("documents.excelOptions.tableGapColumnsValue", { count }),
+  }));
   const update = (patch: Partial<ExcelOptions>) => onChange({ ...current, ...patch });
   const updateList = (key: "sheets" | "exclude_sheets" | "exclude_columns" | "ranges", text: string) => {
     setLists((previous) => ({ ...previous, [key]: text }));
@@ -347,7 +347,7 @@ export function ExcelOptionsRow({
                 width="xs"
                 label={t("documents.excelOptions.tableGapRows")}
                 value={String(current.table_gap_rows)}
-                options={TABLE_GAP_ROWS_OPTIONS}
+                options={tableGapRowsOptions}
                 disabled={disabled}
                 onValueChange={(count) => update({ table_gap_rows: Number(count) })}
               />
@@ -356,7 +356,7 @@ export function ExcelOptionsRow({
                 width="xs"
                 label={t("documents.excelOptions.tableGapColumns")}
                 value={String(current.table_gap_columns)}
-                options={TABLE_GAP_COLUMNS_OPTIONS}
+                options={tableGapColumnsOptions}
                 disabled={disabled}
                 onValueChange={(count) => update({ table_gap_columns: Number(count) })}
               />
