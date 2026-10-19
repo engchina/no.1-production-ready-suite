@@ -3951,8 +3951,10 @@ async def reject_agent_share(
 ) -> ApiResponse[AgentProfile]:
     """共有の申請を却下する（Agent 管理。理由を持ち主に返す。#2523）。"""
     agent = await _requested_share(request, agent_id)
-    assert agent.share_request is not None
-    rejected = agent.share_request.model_copy(
+    share_request = agent.share_request
+    if share_request is None:  # _requested_share が確かめた（型のため）
+        raise HTTPException(status_code=409, detail="この業務 Agent は共有を申請していません。")
+    rejected = share_request.model_copy(
         update={
             "status": "rejected",
             "reason": payload.reason.strip(),
