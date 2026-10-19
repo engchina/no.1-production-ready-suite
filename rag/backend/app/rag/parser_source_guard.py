@@ -12,8 +12,9 @@ worker が parser サービスを呼んだ後で失敗する。アップロー�
 
 判定しない(取込時の判定に任せる)もの:
 - 形式を変えるファイル準備(passthrough・pii_redact 以外): 変換後の形式が解析エンジンに渡る
-  (例: Office→PDF)。ただし構造化レコードの JSONL を作るファイル準備(CSV→JSONL・Excel→JSONL)は、
-  構造化レコード JSONL 以外の解析エンジンでは読めないため、ここで止める(#2457)。
+  (例: Office→PDF)。ただし構造化レコードの JSONL を作るファイル準備
+  (CSV→JSONL・Excel→JSONL・Word→JSONL)は、構造化レコード JSONL 以外の解析エンジンでは読めないため、
+  ここで止める(#2457)。
 - ``source_profile.unsupported_reason`` がある形式(TIFF・Outlook .msg・音声など): 既存の
   「非対応形式」として別に止まる。ただし旧形式の Office(.doc / .xls / .ppt)とマクロ付きの Office
   (.docm / .xlsm / .pptm)は、原本のままでは解析しないが、ファイル準備で変換できる(#2470)。

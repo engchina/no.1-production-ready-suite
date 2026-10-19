@@ -672,8 +672,9 @@ class IngestionPipeline:
                 "engine_removed",
                 warning_code="parser_engine_removed",
             )
-        # 構造化レコードの JSONL(CSV→JSONL・Excel→JSONL)は構造化レコード JSONL の解析エンジンだけが
-        # 読む。ほかのエンジンでは黙って変換せず、選び直すよう案内して止める(#2457)。
+        # 構造化レコードの JSONL(CSV→JSONL・Excel→JSONL・Word→JSONL)は構造化レコード JSONL の
+        # 解析エンジンだけが読む。ほかのエンジンでは黙って変換せず、選び直すよう案内して
+        # 止める(#2457)。
         if (
             is_structured_records_content_type(content_type)
             and backend != STRUCTURED_RECORDS_JSONL_BACKEND
@@ -3872,7 +3873,7 @@ def _selected_parser_failure_message(
         return structured_records_requires_jsonl_backend_message(label) + warning_suffix
     if warning and warning.startswith("structured_records_invalid:"):
         return (
-            f"選択した文書解析エンジン（{label}）は、ファイル準備の「CSV→JSONL」「Excel→JSONL」が"
+            f"選択した文書解析エンジン（{label}）は、ファイル準備の「CSV→JSONL」「Excel→JSONL」「Word→JSONL」が"
             "作る構造化レコードの JSONL だけを解析できます。このファイルはその形式に合わないか、"
             "1 件の記録が大きすぎるため、別の解析エンジンには切り替えずに取込を停止しました。"
             "この文書の「処理レシピ」でファイル準備と文書解析の組み合わせを確認してから"

@@ -40,7 +40,7 @@ scripts/rag-services.sh install            # 前処理と既定の parser(doclin
 
 CPU の parser(docling / unstructured / structured_records_jsonl / xml_tree_json)は **独立した FastAPI マイクロサービス**(`services/parsers/<name>`)で
 動き、backend は取込時に HTTP 委譲する。各 parser は独自依存で個別に upgrade できる。
-構造化レコードの JSONL(前処理 CSV→JSONL・Excel→JSONL の成果物)は、使用エンジンで選んだときだけ `structured_records_jsonl` で
+構造化レコードの JSONL(前処理 CSV→JSONL・Excel→JSONL・Word→JSONL の成果物)は、使用エンジンで選んだときだけ `structured_records_jsonl` で
 記録の単位に解析し、固定分割で 1 記録 1 chunk にする(#2457)。
 XML ツリー JSON(`.json`)は、文書解析の既定か処理レシピの使用エンジンで選んだときだけ `xml_tree_json` で解析する(#2042)。
 音声の文字起こしは backend が OCI AI Speech で行う(parser のサービスは使わない)。
