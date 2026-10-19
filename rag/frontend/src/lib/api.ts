@@ -941,15 +941,18 @@ export interface ExcelOptions {
   sheets: string[];
   exclude_sheets: string[];
   include_hidden_sheets: boolean;
+  /** 非表示の行・列のセルも読むか（#2526。オートフィルターで隠れた行は読む）。 */
+  include_hidden_cells: boolean;
   exclude_columns: string[];
   /** 読む範囲（`A3:F200` か `シート名!A3:F200`。空はシート全体。#1229）。 */
   ranges: string[];
-  /** 1 シートの空の行・列で分かれた表を別々に読むか（#2516。画面では指定しない）。 */
-  split_tables?: boolean;
-  table_gap_rows?: number;
-  table_gap_columns?: number;
-  /** auto で帳票と判定する点数の下限（#2516。画面では指定しない）。 */
-  form_detection_threshold?: number;
+  /** 1 シートの空の行・列で分かれた表を別々に読むか（#2516）。 */
+  split_tables: boolean;
+  /** 表を分ける空の行・列の数（1〜20。これ以上続いたら別の表）。 */
+  table_gap_rows: number;
+  table_gap_columns: number;
+  /** auto で帳票と判定する点数の下限（0〜1。#2516）。 */
+  form_detection_threshold: number;
   /** 列の役割（既定値・例示など）を表頭の語から決めるか（#1281）。 */
   column_role_detection?: "auto" | "off";
   /** 列の役割の指定（列名か列の記号 → 役割。none は付けない。#1281）。 */
