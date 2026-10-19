@@ -362,6 +362,9 @@ const SCREENS: Screen[] = [
   { path: "/settings/security/roles" },
   { path: "/settings/security/api-keys" },
   { path: "/settings/system-tables" },
+  // 運用設定のシステムテーブルの下（#2449・#2517。3 製品の共通のサイドナビの順）。
+  { path: "/settings/chat-attachments" },
+  { path: "/settings/answer-notice" },
   { path: "/settings/huggingface" },
   { path: "/settings/services" },
   { path: "/settings/oci" },
@@ -369,8 +372,6 @@ const SCREENS: Screen[] = [
   { path: "/settings/model" },
   { path: "/settings/database" },
   { path: "/settings/appearance" },
-  { path: "/settings/answer-notice" },
-  { path: "/settings/chat-attachments" },
 ];
 
 /**
