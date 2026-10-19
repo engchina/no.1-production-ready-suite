@@ -3423,6 +3423,7 @@ const history = useChatHistoryPanel({ inlineOpen: historyOpen, onInlineOpenChang
 | `logLabel` / `logRef` | `string` / `Ref<HTMLDivElement>` | — | 会話の欄（`role="log"`）の名前と要素 |
 | `children` | `ReactNode` | — | 会話の欄の中身 |
 | `composer` | `ReactNode` | — | 入力欄の領域の中身（設定の行・入力欄と送信・通知） |
+| `embedded` | `boolean` | `false` | スクロールするページの中に置く（業務 Agent の編集画面の「試す」。#2515）。どの幅でも全体の高さを 70dvh（最小 28rem）に固定し、残りの高さに伸ばさない |
 | `testIdPrefix` / `testIds` | `string` / `ChatLayoutTestIds` | `"chat"` | testid。既定は `<prefix>-history`・`-history-toggle`・`-panel`・`-conversation-title`・`-conversation`・`-composer-region`。シートの scrim は `<history>-scrim` |
 
 ### useChatHistoryPanel

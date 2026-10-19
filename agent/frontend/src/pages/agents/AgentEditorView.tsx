@@ -24,6 +24,8 @@ import {
   type EntityAction,
   PageBody,
   SelectField,
+  TabPanel,
+  Tabs,
   TextareaField,
   TextField,
   type ListPickerItem,
@@ -53,6 +55,7 @@ import { t } from "@/lib/i18n";
 import { useValuesChanged } from "@/lib/render-sync";
 import { sameDraft, useDirtySources, useEditorLeaveGuard } from "@/lib/leave-guard";
 import { AgentVersionBadges, AgentVersionsSection } from "@/pages/agents/AgentsPage";
+import { AgentChat } from "@/pages/ChatPage";
 import { focusField, formatDate } from "@/pages/shared/page-helpers";
 import { skillSourceLabel, skillSourceVariant } from "@/pages/skills/skill-labels";
 
@@ -92,6 +95,9 @@ function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
     skill_policy: agent?.skill_policy === "latest" ? "latest" : "pinned",
   };
 }
+
+/** 編集画面のタブ（#2515）。「試す」は保存済みの下書きで会話する。 */
+type EditorTab = "settings" | "try";
 
 /** エディタの dirty を親へ知らせる。unmount 時は false を知らせる。 */
 function useReportDirty(dirty: boolean, onDirtyChange: (dirty: boolean) => void) {
@@ -163,6 +169,8 @@ export function AgentEditorView({
   const canCreateEvaluationSet = useCanEditEvaluationSets();
   const [templateEvaluationSet, setTemplateEvaluationSet] = useState(true);
   const confirmTemplate = useConfirm();
+  // 「設定」と「試す」（#2515）。タブを移ってもフォームの入力はこの画面が持つので残る。
+  const [tab, setTab] = useState<EditorTab>("settings");
 
   async function applyTemplate(template: AgentTemplate) {
     const touched = Boolean(name.trim() || agentDescription.trim() || instructions.trim() || skillIds.length);
@@ -369,6 +377,19 @@ export function AgentEditorView({
 
   const fieldId = agent?.id ?? "new";
   const title = agent ? agent.name : t("agent.create");
+  // 試せるのは保存済みの業務 Agent を変更できる利用者（下書きの実行は Agent 管理だけ。#770）。
+  const canTry = Boolean(agent) && !readOnly;
+  const activeTab: EditorTab = canTry ? tab : "settings";
+  // 試すのは保存した下書き。画面の入力と違う内容で試さないよう、未保存の変更があるあいだは送らない（公開と同じ）。
+  const tryBlockedReason = !agent
+    ? null
+    : agent.migration_required
+      ? t("agent.try.migrationRequired")
+      : !agent.enabled
+        ? t("agent.try.disabled")
+        : formDirty
+          ? t("agent.try.unsaved")
+          : null;
   const error = createAgent.error ?? patchAgent.error;
   const saveAttemptKey = Math.max(createAgent.submittedAt, patchAgent.submittedAt);
 
@@ -380,8 +401,51 @@ export function AgentEditorView({
         subtitle={agent ? agent.id : t("page.agents.subtitle")}
         // 一覧へ戻るは左上（#618）。確定（作成・保存と変更を破棄）はフォームの末尾の FormActionBar（#1786）。
         back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("nav.agents") }), onClick: () => void back(), testId: "editor-back" }}
+        tabs={
+          canTry ? (
+            <Tabs
+              idPrefix="agent-editor"
+              ariaLabel={t("agent.editor.tabs")}
+              value={activeTab}
+              onChange={(id) => setTab(id === "try" ? "try" : "settings")}
+              items={[
+                { id: "settings", label: t("agent.editor.tab.settings") },
+                { id: "try", label: t("agent.editor.tab.try") },
+              ]}
+            />
+          ) : undefined
+        }
       />
       <PageBody wide className="space-y-6">
+        {agent && canTry ? (
+          <TabPanel idPrefix="agent-editor" id="try" value={activeTab} className="space-y-4">
+            <Section title={t("agent.try.title")} description={t("agent.try.description")}>
+              {tryBlockedReason ? (
+                <div data-testid="agent-try-blocked">
+                  <Banner
+                    severity="warning"
+                    action={
+                      formDirty && agent.enabled && !agent.migration_required ? (
+                        <Button size="sm" icon={Save} loading={pending} onClick={saveAgent} data-testid="agent-try-save">
+                          {t("common.save")}
+                        </Button>
+                      ) : undefined
+                    }
+                  >
+                    {tryBlockedReason}
+                  </Banner>
+                </div>
+              ) : null}
+              <SaveErrorBanner
+                message={error ? apiErrorMessage(error, t("common.error.save")) : null}
+                attemptKey={saveAttemptKey}
+                testId="agent-try-save-error"
+              />
+              <AgentChat tryTarget={{ agent, blocked: Boolean(tryBlockedReason) }} />
+            </Section>
+          </TabPanel>
+        ) : null}
+        <TabPanel idPrefix="agent-editor" id="settings" value={activeTab} className="space-y-6">
         {!agent && !readOnly ? (
           <AgentTemplatePicker
             selectedId={templateId}
@@ -683,6 +747,7 @@ export function AgentEditorView({
           ) : null}
         </div>
         {agent ? <AgentVersionsSection agent={agent} readOnly={readOnly} /> : null}
+        </TabPanel>
       </PageBody>
     </>
   );

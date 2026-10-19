@@ -262,6 +262,11 @@ function normalizedQuestion(question: unknown): string {
 }
 
 /** 評価の版（#810）。省略時は公開していない変更があれば下書き、なければ公開中の版。 */
+/** 下書きで実行した Run か（backend の `metadata.agent_version == "draft"`。#2515）。 */
+function isDraftRun(run: Json | undefined): boolean {
+  return (run?.metadata as Json | undefined)?.agent_version === "draft";
+}
+
 function evaluationVersion(state: MockApiState, agentId: unknown, target: unknown): number | "draft" {
   const agent = state.agents.find((item) => item.id === agentId);
   const published = (agent?.published_version as number | null | undefined) ?? null;
@@ -1694,6 +1699,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (threadId && !ownThread && !currentUser?.is_system_admin) {
       throw new HttpError(404, "会話が見つかりません。");
     }
+    // 会話は始めた Run の種類（下書き / 公開中の版）に固定する（backend と同じ。#2515）。
+    if (threadId && isDraftRun(threadRuns[0]) !== Boolean(body.draft)) {
+      throw new HttpError(
+        409,
+        "下書きで試した会話は公開中の版で、公開中の版の会話は下書きで続けられません。新しい会話で質問してください。",
+        "thread_kind_mismatch"
+      );
+    }
     const id = `run-chat-${state.runs.length + 1}`;
     const run: Json = {
       id,
@@ -1707,10 +1720,13 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       artifacts: [{ id: `${id}-answer`, name: "回答", kind: "answer", created_at: MOCK_NOW, content: { text: `「${String(body.goal ?? "")}」への回答です。` } }],
       pending_tool_calls: [],
       // 確認の取り消しの操作（#1441・#1445）は、backend と同じく Run の記録に残す。
-      metadata:
-        body.clarification_cancel === "nl2sql" || body.clarification_cancel === "rag"
+      metadata: {
+        ...(body.clarification_cancel === "nl2sql" || body.clarification_cancel === "rag"
           ? { clarification_cancel: [{ kind: body.clarification_cancel, trigger: "button" }] }
-          : {},
+          : {}),
+        // 使った版（backend の metadata.agent_version。下書きは "draft"）。
+        ...(body.draft ? { agent_version: "draft" } : {}),
+      },
       created_by_user_uuid: ownThread ? "local" : (currentUser?.user_uuid ?? "local"),
       thread_id: threadId ?? `thread_${String(state.runs.length + 1).padStart(32, "0")}`,
       thread_owner_user_uuid: threadId ? threadOwner : "local",
@@ -1758,6 +1774,12 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
   if (method === "GET" && at("threads")) {
     const agentId = query.get("agent_id");
+    // `draft=true` は編集画面で下書きを試した会話（Agent 管理だけ）、既定は公開中の版の会話（#2515）。
+    const draft = query.get("draft") === "true";
+    const viewer = state.auth.currentUser;
+    if (draft && viewer && !viewer.is_system_admin && !viewer.permissions.includes("agent.admin")) {
+      throw new HttpError(403, "下書きの会話を見られるのは Agent 管理の権限がある利用者だけです。");
+    }
     const grouped = new Map<string, Json[]>();
     for (const run of state.runs) {
       if (typeof run.thread_id !== "string") continue;
@@ -1770,7 +1792,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     // 会話の履歴のページング（limit / offset と全件数。#1265）。
     const limit = Number(query.get("limit") ?? 25);
     const offset = Number(query.get("offset") ?? 0);
-    const threads = [...grouped.entries()].map(([threadId, runs]) => ({
+    const threads = [...grouped.entries()]
+      .filter(([, runs]) => isDraftRun(runs[0]) === draft)
+      .map(([threadId, runs]) => ({
       thread_id: threadId,
       agent_id: runs[0].agent_id,
       // 利用者が変えた名前（#1817。backend は最初の Run の metadata.thread_title）。

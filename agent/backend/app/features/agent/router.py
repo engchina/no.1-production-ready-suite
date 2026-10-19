@@ -240,6 +240,7 @@ from app.features.agent.runtime import (
     RunView,
     RunViewer,
     ThreadBusyError,
+    ThreadKindMismatchError,
     ThreadNotFoundError,
     ThreadsData,
     ThreadSummary,
@@ -1876,6 +1877,18 @@ async def create_run(
                 ),
             },
         ) from exc
+    except ThreadKindMismatchError as exc:
+        # 会話は始めた Run の種類（下書き / 公開中の版）に固定する（#2515）。
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "thread_kind_mismatch",
+                "message": (
+                    "下書きで試した会話は公開中の版で、公開中の版の会話は下書きで続けられません。"
+                    "新しい会話で質問してください。"
+                ),
+            },
+        ) from exc
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     except KeyError as exc:
@@ -1904,8 +1917,12 @@ async def list_threads(
     request: Request,
     paging: Annotated[OffsetParams, Depends(_threads_paging)],
     agent_id: str | None = None,
+    draft: bool = False,
 ) -> ApiResponse[ThreadsData]:
     """会話の一覧（チャット。#768）。使えなくなった Agent の会話は出さない。
+
+    既定は公開中の版の会話、`draft=true` は業務 Agent の編集画面で下書きを試した会話（#2515。
+    下書きで実行できる Agent 管理だけ）。
 
     system_admin は全員の会話（利用者の表示名つき）、それ以外はログイン中の利用者の会話だけ
     （#1889）。会話の履歴は 3 製品と同じく、サーバー側でページングする
@@ -1914,6 +1931,11 @@ async def list_threads(
     （期間の外の会話も `GET /threads/{thread_id}`・実行の詳細の「会話を開く」では開ける。#2340）。
     """
     policy = _actor_policy(request)
+    if draft and not _policy_has_roles(policy, {"admin"}):
+        raise HTTPException(
+            status_code=403,
+            detail="下書きの会話を見られるのは Agent 管理の権限がある利用者だけです。",
+        )
     viewer = _run_creator_user_uuid(request)
     all_users = _sees_all_users(request)
     history_days = chat_history_days(get_settings())
@@ -1925,6 +1947,7 @@ async def list_threads(
             user_uuid=viewer,
             agent_id=agent_id,
             all_users=all_users,
+            draft=draft,
         )
         if _policy_allows_agent(policy, thread.agent_id)
         and within_chat_history(thread.updated_at, updated_since)
