@@ -2738,6 +2738,20 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
 
   // --- 設定 ---
+  // チャットの添付（#2517）。添付の操作は spec が page.route で mock する。ここは入力欄が読む一覧と上限だけ。
+  if (method === "GET" && at("chat-attachments")) {
+    return {
+      items: [],
+      limits: {
+        max_bytes: 20 * 1024 * 1024,
+        max_files: 10,
+        ttl_hours: 24,
+        accept: [".pdf", ".docx", ".pptx", ".xlsx", ".csv", ".txt"],
+        image_enabled: false,
+        enabled: state.chatAttachmentsEnabled,
+      },
+    };
+  }
   if (head === "settings") {
     // ツール権限の画面のツール（組み込みと MCP 接続のツール。#1814）。判定は backend の ToolPolicy.decide と同じ。
     if (method === "GET" && at("settings", "tool-policy", "tools")) return toolPolicyTools(state);

@@ -650,6 +650,9 @@ def test_preserved_platform_tables_are_not_managed() -> None:
         "PLATFORM_API_KEYS",
         # 回答の注意書き（設定は製品ごと。#2405・#2449）。
         "PLATFORM_ANSWER_NOTICE",
+        # チャットの添付と、製品ごとの使うか（#2517）。
+        "PLATFORM_CHAT_ATTACHMENTS",
+        "PLATFORM_CHAT_ATTACHMENT_SETTINGS",
     }
     assert set(PRESERVED_TABLES).isdisjoint(MANAGED_TABLES)
     assert {
