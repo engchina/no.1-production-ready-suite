@@ -76,6 +76,25 @@ describe("toTabularData", () => {
     ]);
   });
 
+  it("出どころの位置つきの行（値を values に入れた行）は values から読む", () => {
+    // #2591: Agent の添付の表を読むツールの結果（行ごとに行番号・セルの範囲と、列名 → 値の values）。
+    const data = toTabularData({
+      columns: ["品目", "数量"],
+      rows: [
+        { row_number: 1, row_start: 5, row_end: 5, cell_range: "A5:B5", values: { 品目: "品目 D", 数量: "5" } },
+        { row_number: 2, row_start: 6, row_end: 6, cell_range: "A6:B6", values: { 品目: "品目 E", 数量: null } },
+      ],
+      row_count: 2,
+    });
+    expect(data?.rows).toEqual([
+      ["品目 D", "5"],
+      ["品目 E", null],
+    ]);
+    // 直下に列の key がある行（`values` という名前の列を含む）は、今までどおり直下から読む。
+    const direct = toTabularData({ columns: ["values"], rows: [{ values: "値" }] });
+    expect(direct?.rows).toEqual([["値"]]);
+  });
+
   it("同じ名前の列は位置で読む", () => {
     const data = toTabularData({ columns: ["ID", "ID"], rows: [[1, 2]] });
     expect(data?.columns).toEqual([{ name: "ID" }, { name: "ID" }]);

@@ -83,6 +83,15 @@ function columnsFromRecords(rows: Record<string, unknown>[]): SourceColumn[] {
 }
 
 /**
+ * 行の値を読むオブジェクト。出どころの位置つきの行（`{ row_number, cell_range, values: { 列名: 値 } }`。
+ * Agent の添付の表を読むツール。#2591）は、直下に列の key が無く `values` に入っているので `values` から読む。
+ */
+function rowCells(raw: Record<string, unknown>, columns: SourceColumn[]): Record<string, unknown> {
+  if (isPlainObject(raw.values) && !columns.some(({ key }) => Object.hasOwn(raw, key))) return raw.values;
+  return raw;
+}
+
+/**
  * 行を列の順の値の配列にする。セルが入れ子のオブジェクト・配列なら表にしない（null）。
  * 行に無い列（オブジェクトに key が無い・配列が短い）は null（値が無い）にする。
  */
@@ -93,7 +102,8 @@ function buildRows(rawRows: unknown[], columns: SourceColumn[]): TabularCellValu
     if (Array.isArray(raw)) {
       values = columns.map((_, index) => (index < raw.length ? raw[index] : null));
     } else if (isPlainObject(raw)) {
-      values = columns.map(({ key }) => (Object.hasOwn(raw, key) ? raw[key] : null));
+      const cells = rowCells(raw, columns);
+      values = columns.map(({ key }) => (Object.hasOwn(cells, key) ? cells[key] : null));
     } else {
       return null;
     }
@@ -136,7 +146,7 @@ function tabularFromRows(
 /**
  * JSON の値が表の形なら列と行にする。表とみなす形:
  * - `{ columns, rows }`（`columns` は列名の文字列か `{ name, label?, type? }` の配列、`rows` はオブジェクトか
- *   配列の配列。列の指定があれば 0 行も表）
+ *   配列の配列。列の指定があれば 0 行も表。値を `values` に入れた出どころの位置つきの行も読む）
  * - `{ rows }`（オブジェクトの配列。1 行以上）
  * - オブジェクトの配列（1 行以上）
  * セルは文字列・数値・真偽値・null だけ。入れ子のオブジェクト・配列を持つ値は表にしない（null）。
