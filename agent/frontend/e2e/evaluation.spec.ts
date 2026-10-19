@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 
+import { dbUser } from "./fixtures/auth";
 import { MOCK_NOW, evaluationSummary, expect, test, type MockApi } from "./fixtures/mock-api";
 
 // #776: 業務 Agent の品質評価（評価セットで実行し、LLM で判定して合格率とツールの選択を出す）。
@@ -590,6 +591,28 @@ test("公開した版の無い業務 Agent は下書きだけを選べる", asyn
   await expect(page.getByText("公開した版が無いため、下書きで評価します。")).toBeVisible();
   await version.click();
   await expect(page.getByRole("option")).toHaveCount(1);
+});
+
+test("Agent 管理でない利用者は下書きを選べず、公開中の版を評価する", async ({ page, mockApi }) => {
+  // 下書きの評価は下書きの実行と同じく Agent 管理だけ（#2522）。
+  seedSet(mockApi);
+  draftAgent(mockApi);
+  mockApi.setCurrentUser(dbUser({ permissions: ["menu.evaluation"], allowed_agent_ids: ["default"] }));
+  await page.goto("/evaluation");
+  const version = page.getByTestId("evaluation-version");
+  await expect(version).toContainText("公開中の版（v1）");
+  await expect(page.getByText("公開中の版を評価します（下書きの評価は Agent 管理だけ）。")).toBeVisible();
+  await version.click();
+  await expect(page.getByRole("option")).toHaveCount(1);
+  await page.keyboard.press("Escape");
+
+  await page.getByTestId("evaluation-set-row-actions-evset-seeded").click();
+  await page.getByRole("menuitem", { name: "評価を開始" }).click();
+  await expect(page.getByText("評価を開始しました")).toBeVisible();
+  expect(mockApi.lastRequest("POST", "/api/evaluations")?.body).toEqual({
+    set_id: "evset-seeded",
+    agent_version: "published",
+  });
 });
 
 for (const viewport of VIEWPORTS) {
