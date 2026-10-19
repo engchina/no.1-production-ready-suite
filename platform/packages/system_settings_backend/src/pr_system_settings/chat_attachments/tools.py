@@ -16,7 +16,13 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
-from .models import TABULAR_KINDS, ChatAttachmentRecord, ParsedAttachment, ParsedSheet
+from .models import (
+    TABULAR_KINDS,
+    ChatAttachmentRecord,
+    ParsedAttachment,
+    ParsedSheet,
+    SourceLocation,
+)
 
 LIST_TOOL_NAME: Final = "chat_attachment_list"
 READ_SECTION_TOOL_NAME: Final = "chat_attachment_read_section"
@@ -142,6 +148,28 @@ class ChatAttachmentToolError(ValueError):
     """モデルが読んで呼び直せる、引数の誤り。"""
 
 
+# Excel だけの索引の項目（#2544）。値の無い添付（Excel 以外・古い索引）では一覧に出さない。
+_EXCEL_SECTION_KEYS: Final = ("sheet",)
+_EXCEL_SHEET_KEYS: Final = ("layout", "source_sheet", "region")
+
+
+def _without_empty(item: dict[str, Any], keys: Sequence[str]) -> dict[str, Any]:
+    return {key: value for key, value in item.items() if key not in keys or value is not None}
+
+
+def _location_fields(location: SourceLocation | None) -> dict[str, Any]:
+    """Excel の元の場所（#2544。行番号・セル範囲、帳票はラベルと値のセル）。無ければ空。"""
+    if location is None:
+        return {}
+    return location.model_dump(mode="json", exclude_none=True)
+
+
+def _row_location(sheet: ParsedSheet, index: int) -> SourceLocation | None:
+    """シートの `index` 番目（0 始まり）の行の元の場所。"""
+    locations = sheet.locations or []
+    return locations[index] if index < len(locations) else None
+
+
 def _normalized(text: str) -> str:
     return unicodedata.normalize("NFKC", text).casefold()
 
@@ -236,9 +264,13 @@ class ChatAttachmentToolset:
                     "size_bytes": record.size_bytes,
                     "warnings": list(record.outline.warnings),
                     "sections": [
-                        section.model_dump(mode="json") for section in record.outline.sections
+                        _without_empty(section.model_dump(mode="json"), _EXCEL_SECTION_KEYS)
+                        for section in record.outline.sections
                     ],
-                    "sheets": [sheet.model_dump(mode="json") for sheet in record.outline.sheets],
+                    "sheets": [
+                        _without_empty(sheet.model_dump(mode="json"), _EXCEL_SHEET_KEYS)
+                        for sheet in record.outline.sheets
+                    ],
                 }
                 for record in self.records
             ]
@@ -260,6 +292,8 @@ class ChatAttachmentToolset:
             "section_id": section.section_id,
             "title": section.title,
             "page": section.page,
+            **({"sheet": section.sheet} if section.sheet else {}),
+            **_location_fields(section.location),
             "content": content,
             "next_offset": end if end < len(section.text) else None,
         }
@@ -293,6 +327,7 @@ class ChatAttachmentToolset:
             "rows": [
                 {
                     "row_number": start + index + 1,
+                    **_location_fields(_row_location(sheet, start + index)),
                     "values": dict(zip(sheet.columns, row, strict=False)),
                 }
                 for index, row in enumerate(rows)
@@ -321,8 +356,9 @@ class ChatAttachmentToolset:
                             "attachment_id": target,
                             "file_name": file_name,
                             "section_id": section.section_id,
-                            "sheet": None,
+                            "sheet": section.sheet,
                             "row_number": None,
+                            **_location_fields(section.location),
                             "snippet": _snippet(section.text, position, len(text)),
                         }
                     )
@@ -349,6 +385,7 @@ class ChatAttachmentToolset:
                             "section_id": None,
                             "sheet": sheet.sheet,
                             "row_number": index,
+                            **_location_fields(_row_location(sheet, index - 1)),
                             "snippet": _snippet(line, position, len(text)),
                         }
                     )

@@ -15,6 +15,21 @@ TABULAR_KINDS: frozenset[str] = frozenset({"excel", "csv"})
 # 1 つのセルの値。数値・真偽は保ち、日付・時刻は ISO 8601 の文字列にする。
 CellValue = str | int | float | bool | None
 
+# Excel の読み方の版（#2544）。解析の結果（`PARSED_JSON` / `OUTLINE_JSON`）の中に置き、古い版で
+# 解析した Excel の添付は、使うときに原本から解析し直す（DB の列は足さない）。
+EXCEL_PARSER_VERSION = 2
+
+
+class SourceLocation(BaseModel):
+    """Excel の元の場所（#2544。シートの元の行番号・セル範囲。空の行を除いても振り直さない）。"""
+
+    row_start: int
+    row_end: int
+    cell_range: str
+    # 帳票の項目のラベルと値のセル（帳票だけ）。
+    label_cell: str | None = None
+    value_cell: str | None = None
+
 
 class ParsedSection(BaseModel):
     """文書の 1 つの節（PDF は 1 頁、PowerPoint は 1 スライド、Word・テキストは見出しの区切り）。"""
@@ -24,6 +39,9 @@ class ParsedSection(BaseModel):
     level: int = 1
     page: int | None = None
     text: str
+    # Excel の節（手順書の手順・表頭より上の行）の、シートと元の場所（#2544）。
+    sheet: str | None = None
+    location: SourceLocation | None = None
 
 
 class ParsedSheet(BaseModel):
@@ -32,6 +50,12 @@ class ParsedSheet(BaseModel):
     sheet: str
     columns: list[str]
     rows: list[list[CellValue]]
+    # Excel の行ごとの元の場所（`rows` と同じ並び。#2544。CSV と古い解析の結果は None）。
+    locations: list[SourceLocation] | None = None
+    # Excel の読み方（table = 表 / form = 帳票の「項目・値」）と、元のシート名・範囲（#2544）。
+    layout: str | None = None
+    source_sheet: str | None = None
+    region: str | None = None
 
 
 class ParsedAttachment(BaseModel):
@@ -40,6 +64,8 @@ class ParsedAttachment(BaseModel):
     sections: list[ParsedSection] = Field(default_factory=list)
     sheets: list[ParsedSheet] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    # 読み方の版（Excel だけ。#2544。None は版を持たない古い結果か Excel 以外）。
+    parser_version: int | None = None
 
     def outline(self) -> AttachmentOutline:
         return AttachmentOutline(
@@ -50,14 +76,23 @@ class ParsedAttachment(BaseModel):
                     level=section.level,
                     page=section.page,
                     characters=len(section.text),
+                    sheet=section.sheet,
                 )
                 for section in self.sections
             ],
             sheets=[
-                SheetOutline(sheet=sheet.sheet, columns=sheet.columns, row_count=len(sheet.rows))
+                SheetOutline(
+                    sheet=sheet.sheet,
+                    columns=sheet.columns,
+                    row_count=len(sheet.rows),
+                    layout=sheet.layout,
+                    source_sheet=sheet.source_sheet,
+                    region=sheet.region,
+                )
                 for sheet in self.sheets
             ],
             warnings=list(self.warnings),
+            parser_version=self.parser_version,
         )
 
 
@@ -67,12 +102,18 @@ class SectionOutline(BaseModel):
     level: int = 1
     page: int | None = None
     characters: int
+    # Excel の節のシート（#2544）。
+    sheet: str | None = None
 
 
 class SheetOutline(BaseModel):
     sheet: str
     columns: list[str]
     row_count: int
+    # Excel の読み方・元のシート名・範囲（#2544。CSV と古い索引は None）。
+    layout: str | None = None
+    source_sheet: str | None = None
+    region: str | None = None
 
 
 class AttachmentOutline(BaseModel):
@@ -81,6 +122,7 @@ class AttachmentOutline(BaseModel):
     sections: list[SectionOutline] = Field(default_factory=list)
     sheets: list[SheetOutline] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    parser_version: int | None = None
 
 
 class ChatAttachmentRecord(BaseModel):
