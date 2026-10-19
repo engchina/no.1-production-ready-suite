@@ -1,4 +1,4 @@
-import { Table2 } from "lucide-react";
+import { ListChecks, Table2 } from "lucide-react";
 import {
   ChatSqlBlock,
   cn,
@@ -97,10 +97,32 @@ export function ToolResultTable({
 }
 
 /** CSV のファイル名（例: agent-sql-result-20261018-140312.csv。時刻は利用者の地域の時刻）。 */
-function toolResultCsvFilename(at: Date = new Date()): string {
+function toolResultCsvFilename(at: Date = new Date(), prefix = "agent-sql-result"): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   const stamp = `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`;
-  return `agent-sql-result-${stamp}.csv`;
+  return `${prefix}-${stamp}.csv`;
+}
+
+/**
+ * 業務 Agent が記録した出力の項目（#2549。成果物 `structured_output`）。回答の下に、見出し「出力の項目」・結果の表・
+ * CSV のダウンロードで出す。
+ */
+export function OutputResultTable({ data, testId }: { data: TabularData; testId?: string }) {
+  const name = t("chat.output.title");
+  return (
+    <section className="min-w-0 space-y-2" aria-label={name} data-testid={testId}>
+      <p className="flex min-w-0 items-center gap-1.5 text-xs text-fg-muted">
+        <ListChecks size={14} aria-hidden="true" className="shrink-0" />
+        <span className="min-w-0">{name}</span>
+      </p>
+      <ResultTable
+        data={data}
+        name={name}
+        csvFilename={toolResultCsvFilename(new Date(), "agent-output")}
+        testId={testId ? `${testId}-result` : undefined}
+      />
+    </section>
+  );
 }
 
 /**

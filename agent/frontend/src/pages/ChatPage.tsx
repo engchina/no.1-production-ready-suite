@@ -82,14 +82,14 @@ import { ClarificationCancelActions, ClarificationCancelNote } from "@/component
 import { ConfirmationRecordBubble, PendingConfirmationCard } from "@/components/chat/RunConfirmation";
 import { agentConfirmationRecords, pendingConfirmation, responseRecord } from "@/lib/confirmation";
 import { agentPaginationLabels } from "@/components/ListViews";
-import { AnswerBody, ToolResultTable } from "@/components/chat/ResultTables";
+import { AnswerBody, OutputResultTable, ToolResultTable } from "@/components/chat/ResultTables";
 import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { useCapabilities } from "@/lib/permissions";
 import { answerNoticeText } from "@/lib/run-artifacts";
 import { withToolStepDetails } from "@/lib/run-history";
-import { runToolResultTables } from "@/lib/run-tables";
+import { outputMissing, runOutputTable, runToolResultTables } from "@/lib/run-tables";
 import { runStatusView } from "@/lib/status-labels";
 import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-state";
 import { isOwnDecision } from "@/pages/shared/approval-decision";
@@ -960,6 +960,8 @@ function RunChatTurn({
   // 回答の根拠（AI に渡した根拠・回答で引用した根拠。RAG のチャットと同じ塊。#2328）。
   const evidence = useMemo(() => runAnswerEvidence(run.artifacts), [run.artifacts]);
   const toolTables = runToolResultTables(run);
+  // 業務 Agent が記録した出力の項目（#2549）。
+  const outputTable = useMemo(() => runOutputTable(run), [run]);
   const pendingApprovals = run.approvals.filter((approval) => approval.status === "pending");
   // 資料との照合（照合の結果のバッジと、確かめた条件・確認待ちの質問・業務ガイド。#1286・#2361）。作成中は出さない。
   const review = ACTIVE_STATUSES.has(run.status) ? null : answerReview(run.artifacts);
@@ -1073,6 +1075,13 @@ function RunChatTurn({
           ) : (
             <AnswerBody text={answer} headingLevel={2} testId={`chat-answer-${run.id}`} />
           )
+        ) : null}
+        {outputTable ? (
+          <OutputResultTable data={outputTable} testId={`chat-output-${run.id}`} />
+        ) : outputMissing(run) ? (
+          <div data-testid={`chat-output-missing-${run.id}`}>
+            <Banner severity="warning">{t("chat.output.missing")}</Banner>
+          </div>
         ) : null}
         {toolTables.map((table) => (
           <ToolResultTable

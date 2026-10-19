@@ -1,0 +1,278 @@
+"""業務 Agent の出力の項目と `record_output`（#2549）。
+
+モデルは SDK の `ScriptedModel` に差し替え、OCI へは接続しない。
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+from collections.abc import Iterator
+from typing import Any
+
+import anyio
+import pytest
+from agents.testing import ScriptedModel, assistant_message, function_call
+from pytest import MonkeyPatch
+from security_support import client
+
+from app.features.agent import builtin_runtime
+from app.features.agent.builtin_runtime import ModelTarget
+from app.features.agent.output_fields import (
+    OUTPUT_KIND,
+    RECORD_OUTPUT_TOOL,
+    AgentOutputField,
+    output_input_schema,
+    output_retried,
+    validate_rows,
+)
+from app.features.agent.runtime import (
+    AgentProfile,
+    RunCreateRequest,
+    RunStatus,
+    runtime_repository,
+)
+from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
+from app.features.agent.tools import ExternalToolError, ToolDefinition, tool_registry
+
+LOOKUP = "test2549_lookup"
+SKILL_ID = "test2549-skill"
+AGENT_ID = "test2549-agent"
+PLAIN_AGENT_ID = "test2549-plain"
+USER_UUID = "00000000-0000-0000-0000-000000002549"
+
+FIELDS = [
+    AgentOutputField(key="item", label="項目", required=True),
+    AgentOutputField(key="amount", label="金額", type="number"),
+    AgentOutputField(key="due", label="期日", type="date"),
+    AgentOutputField(key="matched", label="一致", type="boolean", required=True),
+]
+
+
+def test_validate_rows_reports_each_field_error() -> None:
+    with pytest.raises(ExternalToolError) as raised:
+        validate_rows(
+            FIELDS,
+            {
+                "rows": [
+                    {"item": "A", "amount": "十", "due": "2026/10/01", "matched": "yes"},
+                    {"amount": 3, "extra": 1},
+                ]
+            },
+        )
+    errors = {
+        ".".join(str(part) for part in item["loc"]): item["message"]
+        for item in raised.value.details["details"]["errors"]
+    }
+    assert errors == {
+        "rows.0.amount": "数値で書いてください。",
+        "rows.0.due": "日付は YYYY-MM-DD の形で書いてください。",
+        "rows.0.matched": "true か false で書いてください。",
+        "rows.1.extra": "出力の項目に無い key です。",
+        "rows.1.item": "必須の項目です。",
+        "rows.1.matched": "必須の項目です。",
+    }
+    rows = validate_rows(
+        FIELDS, {"rows": [{"item": " A ", "amount": 10, "due": "2026-10-01", "matched": True}]}
+    )
+    assert rows == [{"item": "A", "amount": 10, "due": "2026-10-01", "matched": True}]
+    with pytest.raises(ExternalToolError):
+        validate_rows(FIELDS, {"rows": []})
+
+
+def test_input_schema_follows_fields() -> None:
+    schema = output_input_schema(FIELDS)
+    items = schema["properties"]["rows"]["items"]
+    assert items["required"] == ["item", "matched"]
+    assert items["properties"]["amount"]["type"] == ["number", "null"]
+    assert items["properties"]["matched"]["type"] == "boolean"
+    assert "YYYY-MM-DD" in items["properties"]["due"]["description"]
+
+
+def test_fields_are_validated_on_save() -> None:
+    duplicated = client.post(
+        "/api/agents",
+        json={
+            "id": "test2549-dup",
+            "name": "Agent D",
+            "output_fields": [{"key": "a", "label": "A"}, {"key": "a", "label": "B"}],
+        },
+    )
+    bad_key = client.post(
+        "/api/agents",
+        json={
+            "id": "test2549-bad",
+            "name": "Agent E",
+            "output_fields": [{"key": "A-1", "label": "A"}],
+        },
+    )
+    assert duplicated.status_code == 422
+    assert bad_key.status_code == 422
+
+
+@pytest.fixture
+def agents() -> Iterator[None]:
+    tool_registry.register(
+        ToolDefinition(
+            name=LOOKUP,
+            description="照合のテスト用ツール",
+            input_schema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object"},
+        ),
+        lambda _arguments, _context: {"value": 10},
+    )
+    skill_registry.upsert_custom(
+        AgentSkillDefinition(
+            id=SKILL_ID,
+            name="照合のテストの Skill",
+            instructions="値は test2549_lookup で調べる。",
+            mcp_requirements=[SkillMcpRequirement(server_id="control-plane", tool_names=[LOOKUP])],
+        )
+    )
+    runtime_repository.create_agent(
+        AgentProfile(
+            id=AGENT_ID,
+            name="照合の業務 Agent",
+            instructions="書類を照合する。",
+            skill_ids=[SKILL_ID],
+            output_fields=FIELDS,
+        )
+    )
+    runtime_repository.create_agent(
+        AgentProfile(id=PLAIN_AGENT_ID, name="項目の無い業務 Agent", skill_ids=[SKILL_ID])
+    )
+    try:
+        yield
+    finally:
+        repository: Any = runtime_repository
+        with repository._lock:  # noqa: SLF001 - テストの後始末
+            for run_id in [
+                run_id
+                for run_id, run in repository._runs.items()
+                if run.agent_id in {AGENT_ID, PLAIN_AGENT_ID}
+            ]:
+                repository._runs.pop(run_id)
+        for agent_id in (AGENT_ID, PLAIN_AGENT_ID):
+            with contextlib.suppress(KeyError, ValueError):
+                runtime_repository.delete_agent(agent_id)
+        with contextlib.suppress(KeyError, ValueError):
+            skill_registry.remove(SKILL_ID)
+        tool_registry._definitions.pop(LOOKUP, None)  # noqa: SLF001 - テスト用の登録を戻す
+        tool_registry._handlers.pop(LOOKUP, None)  # noqa: SLF001
+
+
+def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
+    model = ScriptedModel(list(steps))
+    monkeypatch.setattr(
+        builtin_runtime,
+        "resolve_model_target",
+        lambda model_id="": ModelTarget(
+            model_id=model_id or "test-model",
+            endpoint="https://oci.example",
+            project_ocid="",
+            api_key="k",
+        ),
+    )
+    monkeypatch.setattr(builtin_runtime, "model_factory", lambda _target: model)
+    return model
+
+
+def _run(agent_id: str) -> str:
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="書類を照合して", agent_id=agent_id), created_by_user_uuid=USER_UUID
+    )
+    anyio.run(builtin_runtime.execute_run, run.id)
+    return run.id
+
+
+def _tool_names(model: ScriptedModel) -> set[str]:
+    return {tool.name for tool in model.calls[0].tools}
+
+
+ROW = {"item": "A", "amount": 10, "due": "2026-10-01", "matched": True}
+
+
+def test_record_output_is_validated_and_saved(monkeypatch: MonkeyPatch, agents: None) -> None:
+    model = _script(
+        monkeypatch,
+        [function_call(LOOKUP, {"query": "A"}, call_id="call-l")],
+        # 1 回目は必須の項目が欠けている（誤りがモデルに返り、直して呼び直す）。
+        [function_call(RECORD_OUTPUT_TOOL, {"rows": [{"item": "A"}]}, call_id="call-r1")],
+        [function_call(RECORD_OUTPUT_TOOL, {"rows": [ROW]}, call_id="call-r2")],
+        [assistant_message("A は業務データと一致しました。")],
+    )
+
+    run_id = _run(AGENT_ID)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED
+    assert RECORD_OUTPUT_TOOL in _tool_names(model)
+    [output] = [item for item in run.artifacts if item.kind == OUTPUT_KIND]
+    assert output.content == {
+        "columns": [
+            {"name": "item", "label": "項目", "type": "text"},
+            {"name": "amount", "label": "金額", "type": "number"},
+            {"name": "due", "label": "期日", "type": "date"},
+            {"name": "matched", "label": "一致", "type": "boolean"},
+        ],
+        "rows": [ROW],
+    }
+    # 1 回目の誤りは、項目ごとの違反としてモデルに返している。
+    retry_input = json.dumps(model.calls[2].input, ensure_ascii=False)
+    assert "argument_errors" in retry_input and "rows.0.matched" in retry_input
+    assert not output_retried(run.metadata)
+
+
+def test_agents_without_fields_get_no_record_tool(monkeypatch: MonkeyPatch, agents: None) -> None:
+    model = _script(
+        monkeypatch,
+        [function_call(LOOKUP, {"query": "A"}, call_id="call-l")],
+        [assistant_message("A は 10 です。")],
+    )
+
+    run_id = _run(PLAIN_AGENT_ID)
+
+    assert runtime_repository.get_run(run_id).status == RunStatus.COMPLETED
+    assert RECORD_OUTPUT_TOOL not in _tool_names(model)
+
+
+def test_answer_without_record_is_sent_back_once(monkeypatch: MonkeyPatch, agents: None) -> None:
+    model = _script(
+        monkeypatch,
+        [function_call(LOOKUP, {"query": "A"}, call_id="call-l")],
+        [assistant_message("A は一致しました。")],
+        # 差し戻しの後に記録して答え直す。
+        [function_call(RECORD_OUTPUT_TOOL, {"rows": [ROW]}, call_id="call-r")],
+        [assistant_message("A は業務データと一致しました。")],
+    )
+
+    run_id = _run(AGENT_ID)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED
+    assert output_retried(run.metadata)
+    assert [item for item in run.artifacts if item.kind == OUTPUT_KIND]
+    resent = json.dumps(model.calls[2].input, ensure_ascii=False)
+    assert RECORD_OUTPUT_TOOL in resent and "出力の項目" in resent
+
+
+def test_send_back_happens_only_once(monkeypatch: MonkeyPatch, agents: None) -> None:
+    model = _script(
+        monkeypatch,
+        [function_call(LOOKUP, {"query": "A"}, call_id="call-l")],
+        [assistant_message("A は一致しました。")],
+        [assistant_message("A は一致しました（記録しない）。")],
+    )
+
+    run_id = _run(AGENT_ID)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED
+    assert output_retried(run.metadata)
+    assert not [item for item in run.artifacts if item.kind == OUTPUT_KIND]
+    assert len(model.calls) == 3

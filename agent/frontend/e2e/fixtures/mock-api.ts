@@ -777,6 +777,8 @@ function createState() {
     agentTemplates: clone(AGENT_TEMPLATES) as Json[],
     // 説明から作る下書きの提案（`POST /api/agents/draft-suggestion`。#2519）。null は既定の提案（説明を名前に使う）。
     draftSuggestion: null as Json | null,
+    // チャットの Run が記録する出力の項目（成果物 `structured_output`。#2549）。null は記録しない。
+    runOutputContent: null as Json | null,
     // 公開前の評価の門で断る文（`POST /api/agents/{id}/publish` の 409。#2519）。null は門なし。
     publishEvaluationRefusal: null as string | null,
     // データの範囲に選べるプロファイル（`GET /api/agent-data-scopes/{接続}/candidates`。#1378）。
@@ -1747,7 +1749,12 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       steps: [],
       events: [],
       approvals: [],
-      artifacts: [{ id: `${id}-answer`, name: "回答", kind: "answer", created_at: MOCK_NOW, content: { text: `「${String(body.goal ?? "")}」への回答です。` } }],
+      artifacts: [
+        { id: `${id}-answer`, name: "回答", kind: "answer", created_at: MOCK_NOW, content: { text: `「${String(body.goal ?? "")}」への回答です。` } },
+        ...(state.runOutputContent
+          ? [{ id: `${id}-output`, name: "出力の項目", kind: "structured_output", created_at: MOCK_NOW, content: clone(state.runOutputContent) }]
+          : []),
+      ],
       pending_tool_calls: [],
       // 確認の取り消しの操作（#1441・#1445）は、backend と同じく Run の記録に残す。
       metadata: {
@@ -2466,6 +2473,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       "clarification_policy",
       "clarification_max_rounds",
       "skill_policy",
+      "output_fields",
     ] as const;
     // 範囲に新しく加えるプロファイルは、編集者が使える（候補にある）ものだけ（backend の `_verify_data_scopes`。#1378）。
     const requireUsableScopes = (requested: unknown, current: unknown) => {
@@ -2496,7 +2504,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       // データの範囲は、無い・空（{}）を同じとみなす（backend は空の範囲を {} で持つ）。
       // 回答前の確認（#1839）の項目の無い版は既定（確認してから回答する・上限 3 回）と同じ（backend の既定値）。
       const comparable = (field: string, value: unknown) =>
-        field === "data_scopes" && (!value || Object.keys(value as Json).length === 0)
+        (field === "data_scopes" && (!value || Object.keys(value as Json).length === 0)) ||
+        (field === "output_fields" && (!value || (value as unknown[]).length === 0))
           ? null
           : field === "clarification_policy"
             ? (value ?? "confirm")
@@ -2675,7 +2684,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       const version = Math.max(0, ...versions.map((item) => Number(item.version))) + 1;
       const snapshot: Json = { version, note: body.note ?? "", published_at: MOCK_NOW, published_by: "local" };
       for (const field of VERSIONED) {
-        snapshot[field] = clone(agent[field] ?? (field === "skill_ids" ? [] : field === "data_scopes" ? {} : ""));
+        snapshot[field] = clone(agent[field] ?? (field === "skill_ids" || field === "output_fields" ? [] : field === "data_scopes" ? {} : ""));
       }
       // 使うスキルの今の中身を版に固定する（backend の publish_agent。#1855）。
       snapshot.skills = ((agent.skill_ids as string[] | undefined) ?? []).map((id) => {
