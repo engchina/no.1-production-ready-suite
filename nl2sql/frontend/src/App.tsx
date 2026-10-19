@@ -173,6 +173,11 @@ const SelectAiCredentialCard = lazy(() =>
     default: module.SelectAiCredentialCard,
   }))
 );
+const ChatAttachmentSettingsClient = lazy(() =>
+  import("@/components/settings/ChatAttachmentSettingsClient").then((module) => ({
+    default: module.ChatAttachmentSettingsClient,
+  }))
+);
 const AnswerNoticeSettingsClient = lazy(() =>
   import("@/components/settings/AnswerNoticeSettingsClient").then((module) => ({
     default: module.AnswerNoticeSettingsClient,
@@ -350,6 +355,7 @@ function AuthorizedApplication() {
             />
             <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
             <Route path={APP_ROUTES.settingsAnswerNotice} element={<SettingsAnswerNoticeRoute />} />
+            <Route path={APP_ROUTES.settingsChatAttachments} element={<SettingsChatAttachmentsRoute />} />
             <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
             <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
             <Route path={APP_ROUTES.securityApiKeys} element={<SecurityApiKeysPage />} />
@@ -510,6 +516,15 @@ function SettingsOciRoute() {
     <>
       <PageHeader wide title={t("nav.settingsOci")} subtitle={t("settings.oci.subtitle")} />
       <OciSettingsClient />
+    </>
+  );
+}
+
+function SettingsChatAttachmentsRoute() {
+  return (
+    <>
+      <PageHeader wide title={t("nav.settingsChatAttachments")} subtitle={t("settings.chatAttachments.subtitle")} />
+      <ChatAttachmentSettingsClient />
     </>
   );
 }

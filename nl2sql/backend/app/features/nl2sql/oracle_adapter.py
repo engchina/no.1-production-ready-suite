@@ -13,7 +13,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1805,18 +1805,30 @@ class OracleNl2SqlAdapter:
         return samples, warnings
 
     def execute_select(
-        self, sql: str, max_rows: int | None, *, admin_control_plane: bool = False
+        self,
+        sql: str,
+        max_rows: int | None,
+        *,
+        admin_control_plane: bool = False,
+        binds: Mapping[str, str] | None = None,
     ) -> QueryResults:
         """SELECT を実行する。`admin_control_plane=True` は DB 管理チャット（#2264）の SELECT で、
         利用者に関係なくアプリのユーザーの管理の接続（`connection()`。管理 SQL の更新系と同じ、
         pool を使わない単発の接続）で読む。DeepSec の DATA USER・業務の実行の pool は使わない。
+        `binds` はチャットの添付の表（#2517）の行の JSON（CLOB で渡す。SQL は呼ぶ側が WITH 句を
+        付けたもの）。
         """
         connection_cm = (
             self.connection() if admin_control_plane else self.user_data_connection(read_only=True)
         )
         try:
             with connection_cm as conn, conn.cursor() as cursor:
-                cursor.execute(sql)
+                if binds:
+                    clob = self._load_oracledb().DB_TYPE_CLOB
+                    cursor.setinputsizes(**{name: clob for name in binds})
+                    cursor.execute(sql, dict(binds))
+                else:
+                    cursor.execute(sql)
                 columns, rows, has_more = self._fetch_query_rows(cursor, max_rows)
             from app.security.request_actor import current_actor_context
 

@@ -31,6 +31,7 @@ import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import type { I18nKey } from "@/lib/i18n";
 import {
   ANSWER_NOTICE_NAV_ITEM,
+  CHAT_ATTACHMENT_SETTINGS_NAV_ITEM,
   SYSTEM_SETTINGS_NAV_ITEMS,
   API_KEY_ADMIN_NAV_ITEM,
   USER_ROLE_NAV_ITEMS,
@@ -179,6 +180,13 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.settingsAnswerNotice",
         icon: ANSWER_NOTICE_NAV_ITEM.icon,
         permission: MENU_PERMISSIONS.settingsAnswerNotice,
+      },
+      // チャットの添付（設定は製品ごと。3 製品で同じ位置。#2517）。
+      {
+        href: CHAT_ATTACHMENT_SETTINGS_NAV_ITEM.href,
+        labelKey: "nav.settingsChatAttachments",
+        icon: CHAT_ATTACHMENT_SETTINGS_NAV_ITEM.icon,
+        permission: MENU_PERMISSIONS.settingsChatAttachments,
       },
       // Select AI Credential はデータベース設定から分けた運用の操作（#658）。
       {

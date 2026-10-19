@@ -37,6 +37,7 @@ export const MENU_PERMISSIONS = {
   settingsSelectAiCredential: "menu.settings_select_ai_credential",
   settingsAppearance: "menu.settings_appearance",
   settingsAnswerNotice: "menu.settings_answer_notice",
+  settingsChatAttachments: "menu.settings_chat_attachments",
 } as const;
 
 export const CAPABILITY_PERMISSIONS = {

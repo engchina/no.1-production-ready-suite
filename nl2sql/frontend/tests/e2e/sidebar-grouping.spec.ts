@@ -117,8 +117,8 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
     icons.map((icon) => icon.innerHTML.replace(/\s+/g, " ").trim())
   );
   // AI 活用の先頭にチャットを足した（#871）。ユーザーとロールの末尾の API キー（#1805）、データ準備の
-  // DB 管理チャット（#2264）、運用設定の回答の注意書き（#2405・#2449）を足して 34 項目。
-  expect(menuIconSignatures).toHaveLength(34);
+  // DB 管理チャット（#2264）、運用設定の回答の注意書き（#2405・#2449）とチャットの添付（#2517）を足して 35 項目。
+  expect(menuIconSignatures).toHaveLength(35);
   expect(new Set(menuIconSignatures).size).toBe(menuIconSignatures.length);
 
   for (const section of ["データ準備", "AI 活用", "改善・運用", "セキュリティ設定", "ユーザーとロール", "運用設定", "システム設定"]) {
@@ -197,15 +197,17 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   for (const label of ["OCI 認証", "アップロード保存先", "モデル", "データベース"]) {
     await expect(sidebar.getByText(label, { exact: true })).toBeVisible();
   }
-  // 運用設定は「システムテーブル → 回答の注意書き → Select AI Credential」（#658・#2449）。
+  // 運用設定は「システムテーブル → 回答の注意書き → チャットの添付 → Select AI Credential」（#658・#2449・#2517）。
   const systemTablesBox = await sidebar.getByText("システムテーブル", { exact: true }).boundingBox();
   const answerNoticeBox = await sidebar.getByText("回答の注意書き", { exact: true }).boundingBox();
+  const attachmentsBox = await sidebar.getByText("チャットの添付", { exact: true }).boundingBox();
   const credentialBox = await sidebar.getByText("Select AI Credential", { exact: true }).boundingBox();
-  if (!systemTablesBox || !answerNoticeBox || !credentialBox) {
+  if (!systemTablesBox || !answerNoticeBox || !attachmentsBox || !credentialBox) {
     throw new Error("運用設定のメニュー位置を取得できませんでした。");
   }
   expect(systemTablesBox.y).toBeLessThan(answerNoticeBox.y);
-  expect(answerNoticeBox.y).toBeLessThan(credentialBox.y);
+  expect(answerNoticeBox.y).toBeLessThan(attachmentsBox.y);
+  expect(attachmentsBox.y).toBeLessThan(credentialBox.y);
 
   // 「API キー」（全員のキーの管理。RAG / NL2SQL だけ。#1805）はユーザーとロールの末尾。アカウント欄の
   // 「API キー」（自分のキー。ボタン）と区別するため、ナビのリンクで探す。

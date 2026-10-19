@@ -79,6 +79,16 @@ from app.settings import connection_label, enterprise_ai_connection_for_model, g
 from .admin_audit_store import AdminAuditRecord, AdminAuditStore
 from .ai_calls import BoundedEnterpriseAiClient, stage_concurrency, sync_ai_caller
 from .answer_notice import current_answer_notice
+from .chat_attachments import (
+    AttachmentContext,
+    active_attachment_context,
+    attachment_context,
+    executable_with_attachments,
+    referenced_tables,
+    use_attachment_context,
+    validation_sql,
+)
+from .chat_attachments import prompt_block as attachment_prompt_block
 from .db_admin_chat import (
     ANALYSIS_SYSTEM_PROMPT as _DB_ADMIN_CHAT_ANALYSIS_SYSTEM_PROMPT,
 )
@@ -8731,6 +8741,15 @@ class Nl2SqlService:
                 if parent
                 else actor_user_uuid
             )
+            request = self._with_chat_attachments(
+                request,
+                conversation_id=conversation_id,
+                owner_user_uuid=conversation_owner,
+                actor_user_uuid=actor_user_uuid,
+                actor_is_system_admin=actor_is_system_admin,
+            )
+        elif request.attachments or request.attachment_ids:
+            raise ValueError("添付ファイルはチャットの質問にだけ付けられます。")
         if self._deepsec_enabled and not actor_user_uuid:
             raise ValueError("DeepSec 有効時のジョブには認証済み actor が必要です。")
         # オントロジーの公開版（business_release_id）は worker の prepare_context で確定する。
@@ -8778,6 +8797,41 @@ class Nl2SqlService:
             },
         )
         return response
+
+    def _with_chat_attachments(
+        self,
+        request: JobCreateRequest,
+        *,
+        conversation_id: str,
+        owner_user_uuid: str,
+        actor_user_uuid: str,
+        actor_is_system_admin: bool,
+    ) -> JobCreateRequest:
+        """チャットの質問の添付を会話に結び付け、ジョブに添付の名前を残す（#2517）。
+
+        画面が送った `attachments` は使わない。添付の表・文書は SQL を直接作る方式（Enterprise AI
+        Direct）だけが読めるので、ほかの方式で添付を付けた質問は止める。見えない・期限の切れた添付は
+        404、別の会話の添付・件数の上限は 409（共通の添付のサービスの例外）。
+        """
+        if not request.attachment_ids:
+            return request.model_copy(update={"attachments": []})
+        if request.engine != Nl2SqlEngine.ENTERPRISE_AI_DIRECT:
+            raise ValueError(
+                "添付ファイルを使う SQL は、生成方法「Enterprise AI」で作れます。"
+                "生成方法を切り替えてから送ってください。"
+            )
+        from app.features.nl2sql.chat_attachments import (
+            attachment_owner_principal,
+            chat_attachment_service,
+        )
+
+        references = chat_attachment_service().attach_to_conversation(
+            attachment_owner_principal(actor_user_uuid, actor_is_system_admin),
+            request.attachment_ids,
+            conversation_id=conversation_id,
+            owner_user_uuid=owner_user_uuid or actor_user_uuid,
+        )
+        return request.model_copy(update={"attachments": references})
 
     def _replay_client_job(
         self, request: JobCreateRequest, *, actor_user_uuid: str
@@ -9185,6 +9239,7 @@ class Nl2SqlService:
             return JobData(
                 job_id=job.job_id,
                 business_release_id=job.business_release_id,
+                attachments=list(job.request.attachments),
                 status=job.status,
                 profile_id=job.request.profile_id or "default",
                 question=job.request.question,
@@ -9703,7 +9758,11 @@ class Nl2SqlService:
             raise ValueError("SQL の生成が完了していないため実行できません。")
         profile = self.get_profile(job.request.profile_id)
         allowed = self._resolve_allowed_objects(job.request.profile_id, job.request.allowed_objects)
-        with actor_scope(actor_user_uuid, is_system_admin=actor_is_system_admin):
+        with (
+            actor_scope(actor_user_uuid, is_system_admin=actor_is_system_admin),
+            # 会話の添付の表（#2517）を参照する SQL も、生成のときと同じ表で実行する。
+            use_attachment_context(attachment_context(job.conversation_id, job.request.question)),
+        ):
             data = self._run_chat_sql(
                 job_id=job.job_id,
                 conversation_id=job.conversation_id,
@@ -10049,7 +10108,11 @@ class Nl2SqlService:
         (job は safety_check 段階で同じ SQL を解析済みなので、sqlglot の再パースを避ける)。
         """
         executable = normalize_executable_sql(sql)
-        if not self._use_oracle_runtime() and not self._catalog.tables:
+        if (
+            not self._use_oracle_runtime()
+            and not self._catalog.tables
+            and not referenced_tables(executable, active_attachment_context())
+        ):
             return (
                 SafetyReport(
                     is_safe=False,
@@ -10065,10 +10128,14 @@ class Nl2SqlService:
         if not analysis.safety.is_safe:
             return analysis.safety, executable, QueryResults(columns=[], rows=[], total=0)
         if self._use_oracle_runtime():
+            # 会話の添付の表（#2517）を参照する SQL は、その表の WITH 句を前に付けて実行する。
+            composed, binds = executable_with_attachments(executable)
             return (
                 analysis.safety,
                 executable,
-                self._oracle_adapter.execute_select(executable, row_limit),
+                self._oracle_adapter.execute_select(composed, row_limit, binds=binds or None)
+                if binds
+                else self._oracle_adapter.execute_select(executable, row_limit),
             )
         return analysis.safety, executable, self._mock_execute(executable, row_limit)
 
@@ -10109,6 +10176,9 @@ class Nl2SqlService:
         すべてを確かめる。
         """
         skip_safety_check = engine_skips_safety_check(engine)
+        # 会話の添付の表（#2517。WITH 句で用意する表）は、列の形だけの CTE を前に付けて検証する
+        # （業務の表の範囲・列の制限は今までどおり）。
+        sql = validation_sql(sql)
         semantic = parse_oracle_sql(sql)
         graph = semantic.graph
         current_owner = self._current_schema_owner()
@@ -22887,9 +22957,19 @@ class Nl2SqlService:
                         return
                     actor_user_uuid = pending.actor_user_uuid
                     actor_is_system_admin = pending.actor_is_system_admin
+                    chat_turn = pending.request.is_chat_turn
+                    conversation_id = pending.conversation_id
+                    question = pending.request.question
+                # 会話の添付の表と文書（#2517）。SQL の生成・検証・実行が読む（lock の外で読む）。
+                attachments = (
+                    attachment_context(conversation_id, question)
+                    if chat_turn
+                    else AttachmentContext()
+                )
                 with (
                     self._keep_job_lease_alive(job_id),
                     actor_scope(actor_user_uuid, is_system_admin=actor_is_system_admin),
+                    use_attachment_context(attachments),
                 ):
                     self._run_job(job_id)
             except JobExecutionLost:
@@ -24330,6 +24410,10 @@ class Nl2SqlService:
         if sql_requirement is not None:
             # 直接の LLM: 回答前の確認の要件を、必ず守る条件として prompt に入れる（#1439）。
             context = "\n".join([context, sql_requirement.prompt_block()])
+        attachments = active_attachment_context()
+        if attachments:
+            # 会話の添付の表と文書の参考（#2517）。表は名前・列・型・先頭の数行だけを渡す。
+            context = "\n".join([context, attachment_prompt_block(attachments)])
         system_prompt = self._enterprise_ai_sql_system_prompt()
         generate_kwargs: dict[str, Any] = {
             "prompt": question,
