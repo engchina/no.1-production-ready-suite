@@ -64,7 +64,8 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 `rag_lookup_guides`（モデルか Control Plane の照合。#1322）の最上位の業務ガイドの判断が、条件を
 確かめる（clarify）・条件ごとに答える（branch）なのに、確認の質問だけで答えなかった。回答の前提が
 利用者の分かっていない条件に拠るので、条件付きの回答（conditional）にする。`rag_search` が確認を
-求めたのに答えたときと同じ扱い。#1321・#1322）。
+求めたのに答えたときと同じ扱い。#1321・#1322）・回答に使った章節を終わりまで読めず、
+「読み切れていない章節」を示した印（`unread_sections`。#2492）。
 
 ここは決め方だけを持つ（呼び出しと保存は `builtin_runtime`）。
 """
@@ -148,6 +149,8 @@ SIGNAL_DATA_CONFIRMATION = "data_confirmation"
 SIGNAL_ENVIRONMENT_TOOLS = "environment_tools"
 SIGNAL_BRANCHES = "branches"
 SIGNAL_GUIDE_CONDITIONS = "guide_conditions"
+# 回答に使った章節を終わりまで読めず、回答に「読み切れていない章節」を示した（#2492）。
+SIGNAL_UNREAD_SECTIONS = "unread_sections"
 # 結論の段落で答えた後の、補足の段落だけの不足の文（不足の印にしない記録。#1475）。
 SIGNAL_SUPPLEMENT_ABSENCE = "supplement_absence"
 # 結論の段落で答えた後の、補足の段落だけを最終の検証が外した（不足の印にしない記録。#1491）。
@@ -157,6 +160,7 @@ _GAP_SIGNALS = frozenset(
     {
         SIGNAL_BRANCHES,
         SIGNAL_GUIDE_CONDITIONS,
+        SIGNAL_UNREAD_SECTIONS,
         SIGNAL_ABSENCE,
         SIGNAL_QUESTION,
         SIGNAL_UNVERIFIED_SECTION,
@@ -398,14 +402,19 @@ def _content(outcome: str, basis: str, *, rag_outcome: str | None, signals: set[
 
 
 def answer_outcome(
-    answer: str, *, steps: list[RunStep], validation: JsonObject | None = None
+    answer: str,
+    *,
+    steps: list[RunStep],
+    validation: JsonObject | None = None,
+    coverage: JsonObject | None = None,
 ) -> JsonObject:
     """最終の回答の対応（成果物 `answer` の `outcome`）。
 
     `answer` はモデルの最終の回答（最終の検証で段落を外す前の本文）、`validation` は最終の
     検証の成果物の内容（検証しなかった Run は None）。返す内容は `value`（対応）・`basis`
     （決めた手がかり）・`rag_outcome`（最後の `rag_search` の対応。呼んでいなければ None）・
-    `signals`（不足の印）。
+    `signals`（不足の印）。`coverage` は回答に使った章節を終わりまで読んだか
+    （`section_coverage`。#2492）で、読めていなければ不足の印 `unread_sections` にする。
     """
     last_search = _last_rag_search(steps)
     rag_outcome = last_search[1] if last_search else None
@@ -469,6 +478,8 @@ def answer_outcome(
         signals.add(SIGNAL_UNVERIFIED_SECTION)
     if confirmations:
         signals.add(SIGNAL_DATA_CONFIRMATION)
+    if isinstance(coverage, dict) and coverage.get("status") == "incomplete":
+        signals.add(SIGNAL_UNREAD_SECTIONS)
     gaps = bool(signals & _GAP_SIGNALS)
 
     if last_search is not None and not _retrieved_after(steps, last_search[0]):

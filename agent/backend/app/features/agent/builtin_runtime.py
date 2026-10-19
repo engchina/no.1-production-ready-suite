@@ -177,6 +177,13 @@ from app.features.agent.context_window import (
     tools_text,
 )
 from app.features.agent.guide_steps import unresolved_guide_steps, unresolved_guide_steps_message
+from app.features.agent.section_coverage import (
+    COVERAGE_INCOMPLETE,
+    RETRYABLE_REASONS,
+    section_coverage,
+    unread_sections_message,
+    with_unread_sections_notice,
+)
 from app.features.agent.skills import (
     reset_pinned_skills,
     resolve_skill,
@@ -2076,7 +2083,7 @@ async def execute_run(run_id: str) -> None:
             )
             if not refused:
                 _raise_on_grounding_failure(run.id, result)
-                result = await _require_hops(run, sdk_agent, result, agent.data_scopes)
+                result = await _require_hops(run, sdk_agent, result, agent.data_scopes, task=task)
             _record_usage(run_id, result, agent.model_id)
             await _finish(
                 run_id,
@@ -2139,7 +2146,7 @@ async def resume_run(run_id: str) -> None:
             )
             if not refused:
                 _raise_on_grounding_failure(run.id, result)
-                result = await _require_hops(run, sdk_agent, result, agent.data_scopes)
+                result = await _require_hops(run, sdk_agent, result, agent.data_scopes, task=task)
             _record_usage(run_id, result, agent.model_id)
             await _finish(
                 run_id,
@@ -2507,6 +2514,8 @@ async def _require_hops(
     sdk_agent: Agent[Any],
     result: Any,
     data_scopes: data_scope.AgentDataScopes | None = None,
+    *,
+    task: _SupportTaskRun | None = None,
 ) -> Any:
     """根拠の台帳・一覧の行の略号・別名を引かずに確定した回答を、1 回だけ差し戻す（#1958）。
 
@@ -2522,13 +2531,17 @@ async def _require_hops(
     同じ枠で、照合した業務ガイドの手順のうち根拠を集めていない手順
     （`guide_steps.unresolved_guide_steps`。#2396。経過には `guide_step_retry`）も差し戻す
     （略号・別名と両方なら 1 つの差し戻しにまとめる）。
+    同じ枠で、手順・一覧・条件のまとまりを求める質問で、回答に使った章節の続きを読んでいない
+    （`section_coverage`。#2492。経過には `section_retry`）回答も差し戻す（ほかの差し戻しと両方なら
+    1 つにまとめる）。この実行のツールの呼び出しが上限に達していれば差し戻さない（読めないので、
+    `_finish` が読み切れていない章節を回答に示す）。取り消した Run は差し戻さない。
     """
-    from app.features.agent.runtime import runtime_repository
+    from app.features.agent.runtime import RunStatus, runtime_repository
 
     if list(getattr(result, "interruptions", []) or []):
         return result
     current = runtime_repository.get_run(run.id)
-    if tool_grounding.hops_retried(current.metadata):
+    if current.status == RunStatus.CANCELLED or tool_grounding.hops_retried(current.metadata):
         return result
     answer = _answer_text(result.final_output)
     if is_clarification_only(answer):
@@ -2537,10 +2550,18 @@ async def _require_hops(
     # 業務ガイドの手順のうち根拠を集めていない手順（#2396）。略号・別名と同じ 1 回の枠で、両方あれば
     # 1 つの差し戻しにまとめる。
     guide_pending = unresolved_guide_steps(current.steps)
+    # 回答に使った章節の未読の続き（#2492）。予算が残っていて、読み直せるものだけ。
+    sections = [
+        item
+        for item in _unread_sections(current, answer, task)
+        if item["reason"] in RETRYABLE_REASONS
+    ]
     if pending:
         head = unresolved_hops_message(pending)
         if guide_pending:
             head += "\n\n" + unresolved_guide_steps_message(guide_pending)
+        if sections:
+            head += "\n\n" + unread_sections_message(sections)
         runtime_repository.record_tool_grounding(run.id, "hop_retry", answer)
         logger.info(
             "builtin_runtime_unresolved_hops_retry",
@@ -2548,10 +2569,23 @@ async def _require_hops(
         )
     elif guide_pending:
         head = unresolved_guide_steps_message(guide_pending)
+        if sections:
+            head += "\n\n" + unread_sections_message(sections)
         runtime_repository.record_tool_grounding(run.id, "guide_step_retry", answer)
         logger.info(
             "builtin_runtime_unresolved_guide_steps_retry",
             extra={"run_id": run.id, "steps": [item["id"] for item in guide_pending]},
+        )
+    elif sections:
+        head = unread_sections_message(sections)
+        runtime_repository.record_tool_grounding(run.id, "section_retry", answer)
+        logger.info(
+            "builtin_runtime_unread_sections_retry",
+            extra={
+                "run_id": run.id,
+                "sections": [item["section_id"] for item in sections],
+                "reasons": [item["reason"] for item in sections],
+            },
         )
     elif KIND_NL2SQL not in declined_kinds(current.metadata) and missing_data_lookup(
         current.steps, answer, [str(getattr(tool, "name", "")) for tool in sdk_agent.tools]
@@ -2571,6 +2605,44 @@ async def _require_hops(
         context=context,
     )
     return await _unattended_approvals(run, sdk_agent, result, data_scopes)
+
+
+def _tool_budget_exhausted(budget: SupportTaskBudget | None) -> bool:
+    """この実行（支援タスク）のツールの呼び出しが上限に達したか（上限が無ければ False）。"""
+    return (
+        budget is not None
+        and budget.max_tool_calls_per_task > 0
+        and budget.task_tool_calls >= budget.max_tool_calls_per_task
+    )
+
+
+def _coverage(run: Any, answer: str, task: _SupportTaskRun | None) -> dict[str, Any] | None:
+    """回答に使った章節を終わりまで読んだか（#2492。`section_coverage`。判定しなければ None）。
+
+    確認の質問だけの回答と、利用者が資料の検索を取り消した Run は判定しない。判定は補助なので、
+    判定できなくても回答は止めない（None）。
+    """
+    if is_clarification_only(answer) or KIND_RAG in declined_kinds(run.metadata):
+        return None
+    try:
+        return section_coverage(
+            run.steps,
+            answer,
+            [run.goal, task.goal if task is not None else None],
+            budget_exhausted=_tool_budget_exhausted(task.budget if task is not None else None),
+        )
+    except Exception as exc:  # noqa: BLE001 - 判定は補助。判定できなくても回答は返す
+        logger.warning(
+            "builtin_runtime_section_coverage_failed",
+            extra={"run_id": run.id, "exception_type": type(exc).__name__},
+        )
+        return None
+
+
+def _unread_sections(run: Any, answer: str, task: _SupportTaskRun | None) -> list[dict[str, Any]]:
+    """回答に使ったのに終わりまで読めていない章節（#2492。無ければ空）。"""
+    coverage = _coverage(run, answer, task)
+    return list(coverage["sections"]) if coverage is not None else []
 
 
 def _raise_on_grounding_failure(run_id: str, result: Any) -> None:
@@ -2748,8 +2820,27 @@ async def _finish(
                 run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=validation
             )
             answer = with_unverified_notice(answer)
+    # 主張の照合（最終の検証）とは別に、回答に使った章節を終わりまで読んだかを残し、読めていない
+    # 章節は回答に示す（#2492。続きを読まずに確定した手順の不足を、照合は見つけられない）。
+    coverage = _coverage(runtime_repository.get_run(run_id), model_answer, task)
+    if coverage is not None:
+        if validation is not None:
+            validation = {**validation, "coverage": coverage}
+            runtime_repository.save_builtin_artifact(
+                run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=validation
+            )
+        if coverage["status"] == COVERAGE_INCOMPLETE:
+            answer = with_unread_sections_notice(answer, coverage["sections"])
+            logger.info(
+                "builtin_runtime_unread_sections_noticed",
+                extra={
+                    "run_id": run_id,
+                    "sections": [item["section_id"] for item in coverage["sections"]],
+                    "reasons": [item["reason"] for item in coverage["sections"]],
+                },
+            )
     _save_answer_evidence(run_id, answer, validation)
-    outcome = _answer_outcome(run_id, model_answer, validation)
+    outcome = _answer_outcome(run_id, model_answer, validation, coverage)
     runtime_repository.complete_builtin_run(
         run_id,
         answer,
@@ -2964,14 +3055,17 @@ def _tool_confirmations(
 
 
 def _answer_outcome(
-    run_id: str, answer: str, validation: dict[str, Any] | None
+    run_id: str,
+    answer: str,
+    validation: dict[str, Any] | None,
+    coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """回答の対応（#1305。`answer_outcome`）。決められなくても回答は保存する（対応は付けない）。"""
     from app.features.agent.runtime import runtime_repository
 
     try:
         steps = runtime_repository.get_run(run_id).steps
-        return answer_outcome(answer, steps=steps, validation=validation)
+        return answer_outcome(answer, steps=steps, validation=validation, coverage=coverage)
     except Exception as exc:  # noqa: BLE001 - 対応は補助。決められなくても回答は返す
         logger.warning(
             "builtin_runtime_answer_outcome_failed",
