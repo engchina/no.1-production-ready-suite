@@ -333,7 +333,7 @@ async def test_embedding_rejection_reports_safe_diagnostics(
         "model": "cohere.embed-v4.0",
     }
     records = [record for record in caplog.records if record.message == "embedding_request_failed"]
-    assert len(records) == 1 and records[0].batch_index == 2
+    assert len(records) == 1 and records[0].__dict__["batch_index"] == 2
     # 入力の本文とサービスの応答の文は、例外の文・ログに残さない。
     logged = " ".join(f"{record.getMessage()} {record.__dict__}" for record in records)
     assert all(text not in logged and text not in str(error) for text in texts)
