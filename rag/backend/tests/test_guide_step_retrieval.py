@@ -9,6 +9,7 @@ import pytest
 
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine
+from app.rag.answer_engine import guide_step_plan as engine_guide_step_plan
 from app.rag.support_guide import reference_issues
 from app.rag.support_guide_runtime import (
     apply_guide_to_diagnostics,
@@ -249,6 +250,35 @@ def test_guide_step_plan_excludes_steps_of_branches_that_do_not_apply() -> None:
     applies = match_guide([("g", 1, _content())], "設定 A を変えたい", {"kind": "乙"})
     assert applies is not None
     assert [step["id"] for step in guide_step_plan(applies)] == ["s1", "s2", "s3"]
+
+
+def test_guide_step_plan_marks_steps_of_undecided_branches_optional() -> None:
+    """条件が決まらない分岐の行き先とその後続は、回答の充足で必須の手順に数えない(#2491)。"""
+    content = _content(
+        steps=[
+            *_content().model_dump()["steps"],
+            {"id": "s4", "title": "乙の後の確認", "depends_on": ["s3"]},
+        ]
+    )
+    undecided = match_guide([("g", 1, content)], "設定 A を変えたい", {})
+    assert undecided is not None
+
+    plan = guide_step_plan(undecided)
+
+    assert [(step["id"], step["required"]) for step in plan] == [
+        ("s1", True),
+        ("s2", True),
+        ("s3", False),
+        ("s4", False),
+    ]
+    decided = match_guide([("g", 1, content)], "設定 A を変えたい", {"kind": "乙"})
+    assert decided is not None
+    assert all(step["required"] for step in guide_step_plan(decided))
+    plan_object = engine_guide_step_plan(
+        {"decision": "branch", "guide_id": "g", "revision": 1, "step_plan": plan}
+    )
+    assert plan_object is not None
+    assert plan_object.optional_step_ids == ("s3", "s4")
 
 
 async def test_reference_issues_check_step_references() -> None:

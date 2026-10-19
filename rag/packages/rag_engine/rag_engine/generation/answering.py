@@ -1859,6 +1859,22 @@ def _record_round_audit(step: _ExecutionStep, current: Any, *, accepted: bool, f
         step.field("監査で撤回した説明", f"{current.withdrawn} 件")
     if current.applications:
         step.field("規則の当てはめ", f"{sum(1 for item in current.applications if item.published)} / {len(current.applications)} 件を公開")
+    if current.guide_steps:
+        # 業務ガイドの手順ごとの充足（#2491）。
+        counts = {
+            status: sum(1 for item in current.guide_steps if item["status"] == status)
+            for status in (
+                grounded.GUIDE_STEP_EXPLAINED,
+                grounded.GUIDE_STEP_REFERENCE_ONLY,
+                grounded.GUIDE_STEP_UNUSED,
+                grounded.GUIDE_STEP_NO_EVIDENCE,
+            )
+        }
+        step.field(
+            "業務ガイドの手順",
+            f"説明 {counts[grounded.GUIDE_STEP_EXPLAINED]}・参考情報のみ {counts[grounded.GUIDE_STEP_REFERENCE_ONLY]}"
+            f"・根拠を未使用 {counts[grounded.GUIDE_STEP_UNUSED]}・根拠なし {counts[grounded.GUIDE_STEP_NO_EVIDENCE]}",
+        )
     step.field("残った指摘", join_values(grounded.pending_feedback_labels(current.feedback())))
     if not first:
         step.field("採否", "この回の回答を採用" if accepted else "前の回の回答を残す（良くならなかった）")
@@ -1928,6 +1944,9 @@ def synthesize_grounded_answer(
     # 是正の組の回数の上限（#1912。`answer_max_correction_rounds`、0〜2。既定 2 は従来の MAX_ROUNDS と同じ）。
     max_rounds = 1 + max(0, min(grounded.MAX_ROUNDS - 1, int(getattr(settings, "answer_max_correction_rounds", grounded.MAX_ROUNDS - 1))))
     compact_audit_reasons = bool(getattr(settings, "answer_audit_compact_reasons", False))
+    # 業務ガイドの手順ごとの根拠と、充足で必須に数えない手順（#2491）。監査・是正・回答の構造で同じ単位を使う。
+    guide_steps = runtime_knowledge.guide_steps if runtime_knowledge is not None else ()
+    guide_optional_steps = runtime_knowledge.guide_optional_steps if runtime_knowledge is not None else ()
     for number in range(max_rounds):
         spans = _grounded_spans(
             question,
@@ -1977,6 +1996,8 @@ def synthesize_grounded_answer(
                     previous=best[0].checked if best is not None else (),
                     known_gaps=known_gaps,
                     compact_audit_reasons=compact_audit_reasons,
+                    guide_steps=guide_steps,
+                    guide_optional_steps=guide_optional_steps,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                 )
                 if number == 0:
@@ -2188,6 +2209,14 @@ def synthesize_grounded_answer(
         if entry["reviewed"] and entry["status"] == "missing"
     ]
     unanswered = [entry["reason"] for entry in current.unanswered]
+    # 業務ガイドの必須の手順を、利用者が行う説明として公開できたか（#2491）。採用した round の確定（旧版の原文のみ
+    # 提示など）の後の説明で決め直す。参考情報としてだけ示した手順・根拠の無い手順は本文の不足に出し、回答の構造の
+    # 要求にも載せて、充足済みとして確定しない。
+    guide_coverage = (
+        grounded.guide_step_coverage(guide_steps, current.checked, spans, guide_optional_steps) if guide_steps and not off_goal else []
+    )
+    guide_gaps = [grounded.guide_step_gap_line(step) for step in grounded.unexplained_guide_steps(guide_coverage)]
+    unanswered += guide_gaps
     # 監査が「回答に必要なのに使われていない」と挙げた根拠。言い換えや適用の断定は加えず、原文のみ提示で示す (#1098)。
     needed = [] if off_goal else grounded.audit_needed_quotes(current, spans, question=question)
     actionable = [entry for entry in published if not entry.quote_only]
@@ -2223,7 +2252,7 @@ def synthesize_grounded_answer(
         answer_text, citation_lines = grounded.render_with_citations(
             current.summary,
             [*current.checked, *extra],
-            reviewed_unanswered,
+            [*reviewed_unanswered, *guide_gaps],
             confirmation_section,
             unverified=unread_lines,
             deadline=deadline_lines,
@@ -2247,7 +2276,7 @@ def synthesize_grounded_answer(
         answer_text, citation_lines = grounded.render_with_citations(
             current.summary,
             current.checked,
-            reviewed_unanswered,
+            [*reviewed_unanswered, *guide_gaps],
             confirmation_section,
             unverified=unread_lines,
             deadline=deadline_lines,
@@ -2308,6 +2337,12 @@ def synthesize_grounded_answer(
         "application_step": application_step,
         # 本文の出典行（「根拠：」）ごとの根拠を本文の順に。画面が出典行を根拠に結ぶ（#1330）。
         "citation_lines": citation_lines,
+        # 業務ガイドの手順ごとの充足（#2491）。
+        **(
+            {"guide_step_coverage": [{k: v for k, v in step.items() if k != "evidence_refs"} for step in guide_coverage]}
+            if guide_coverage
+            else {}
+        ),
         # 参照欄は公開した引用だけに同期する。
         "finalization": {
             "filtered": bool(problems),
@@ -2330,6 +2365,7 @@ def synthesize_grounded_answer(
         # 別の資料で確かめる確認の項目（who_can_answer=document。#1492）は資料の不足として条件付きにする。
         # 本文に出した行（資料名を創作していない行）だけを載せ、本文と食い違わないようにする。
         document_items=[text for text in settled.document if f"{REFERENCE_CONFIRMATION_PREFIX}{text}" in confirmations],
+        guide_steps=guide_coverage,
     )
     # 回答に使った箇所ごとの使われ方（確かめた説明か参考か。#2040）。画面の件数・バッジと MCP の evidence が使う。
     shown_uses: dict[str, str] = {}
@@ -4025,7 +4061,9 @@ def answer_question_result(
                     runtime_knowledge=runtime_knowledge,
                 )
                 if step_sources:
-                    runtime_knowledge = replace(runtime_knowledge, guide_steps=step_sources)
+                    runtime_knowledge = replace(
+                        runtime_knowledge, guide_steps=step_sources, guide_optional_steps=guide_plan.optional_step_ids
+                    )
                 skipped = str(guide_step_trace.get("skipped") or "")
                 if skipped:
                     guide_step.hide()

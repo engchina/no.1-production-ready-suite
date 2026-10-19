@@ -895,17 +895,42 @@ def guide_rule(match: GuideMatch) -> dict[str, Any]:
     }
 
 
+def conditional_step_ids(
+    steps: Sequence[SupportGuideStep], branches: Sequence[tuple[SupportGuideBranch, bool | None]]
+) -> set[str]:
+    """条件が決まらない分岐の行き先の手順と、それだけに依存する後続の手順の id（#2491）。
+
+    `visible_plan` の手順と分岐から求める。分岐の前の共通の手順（行き先の依存先）は含めない。
+    どの場合に当たるかで要否が変わる手順なので、回答の充足では必須の手順に数えない。
+    """
+    decided = {branch.goto_step for branch, applies in branches if applies}
+    conditional = {branch.goto_step for branch, applies in branches if applies is None} - decided
+    changed = True
+    while changed:
+        changed = False
+        for step in steps:
+            if step.id in conditional or step.id in decided or not step.depends_on:
+                continue
+            if all(dependency in conditional for dependency in step.depends_on):
+                conditional.add(step.id)
+                changed = True
+    return conditional
+
+
 def guide_step_plan(match: GuideMatch) -> list[dict[str, Any]]:
     """手順ごとの検索（#2395）に渡す手順（分かっている条件で外れた手順を除く）。
 
     手順の id・題名・検索の手がかりと、手順の参照の資料と頁の範囲。ガイドの共通の資料は手順ごとの
-    検索を絞らない（全手順に同じ絞り込みを重ねない）。
+    検索を絞らない（全手順に同じ絞り込みを重ねない）。`required` は回答の充足で必須の手順か
+    （条件が決まらない分岐の行き先とその後続は false。#2491）。
     """
-    steps, _ = visible_plan(match)
+    steps, branches = visible_plan(match)
+    conditional = conditional_step_ids(steps, branches)
     return [
         {
             "id": step.id,
             "title": step.title,
+            "required": step.id not in conditional,
             "retrieval_hints": list(step.retrieval_hints),
             "references": [
                 {

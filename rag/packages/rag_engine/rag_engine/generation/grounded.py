@@ -249,6 +249,7 @@ AUDIT_SYSTEM_PROMPT = (
     "- applications: 規則を質問の事実に当てはめた結果。index、premises（質問の事実）、item_indexes（当てはめた規則の items の index）、reasoning、result。前提が質問にあることと算式の計算はシステムが確かめ済み。\n"
     "- unused_evidence: items で使われていない根拠の evidence_id、function、先頭の抜粋（全文ではない）。\n"
     "- known_gaps: 検索評価の段階で根拠が無いと分かっている観点。草稿がその観点を gap にしているのは正しい対応。\n"
+    "- guide_steps: 回答が沿う業務ガイドの手順（step_id、title）と、手順ごとの根拠の evidence_id（evidence_ids）。\n"
     "\n"
     "3. 判定規則\n"
     "3.1 support（quote が text を支持するか）\n"
@@ -267,6 +268,8 @@ AUDIT_SYSTEM_PROMPT = (
     "- unknown は quote の対象の種類が質問と同じか判断できない場合だけ。質問固有の値が quote に無いことを unknown や conditional の理由にしない（unknown と、原文の条件を書けない conditional は「参考情報」の節で公開される）。\n"
     # 途中の段を「承認者を述べていない」として not_applicable にし、結論が未確認に回っていた (#1383)。
     "- 多段の質問（対象から答えまでを複数の根拠でつなぐ）では、item が途中の段（対象の台帳の行・略号と部署の対応・部署の承認者・役職ごとの期限など）を示していれば、その item だけで最終の答えにならないこと（承認者・期限を述べていない等）を not_applicable・conditional・unknown の理由にしない。質問の対象、または他の item がつなぐ段の値（略号・部署・役職）について述べた quote は matched（例: 「A システムの変更の承認の期限は？」に対する「A システムの担当部署: 経」「略号「経」: 経理部」「経理部の承認者は管理本部長」は、どれも期限を述べていないが途中の段なので matched）。\n"
+    # 業務ガイドの後続の手順を、質問の文に無いことで not_applicable にしていた (#2491)。
+    "- guide_steps の evidence_ids を引いた item は、その手順を質問の目的を果たす手順に含めて判定する。質問の文がその手順（前提・後続の手順）に触れていないことは not_applicable・unknown の理由にならない。手順の根拠でも、quote の対象（画面・機能・業務）が質問の対象と別なら not_applicable。\n"
     "- applicability の「質問の対象」は質問が尋ねている物（システム・部署・画面・帳票・業務）で、尋ねている項目（期限・承認者・時間帯・保管期間）ではない。尋ねている項目を quote が述べていないことは not_applicable の理由にならない。\n"
     "3.3 heading と function_context の扱い\n"
     "- heading は quote が属する文書の見出し（〔マスタ管理⇒マスタ管理2タブ⇒基本設定〕のような画面経路を含む）。文書の見出し分類と番号表記から推定した参考情報で、誤り得る。"
@@ -2676,6 +2679,8 @@ class Round:
     timing: dict[str, Any] = field(default_factory=dict)
     # 規則を質問の事実に当てはめた結果（検査・監査の結果つき。#2155）。
     applications: list[CheckedApplication] = field(default_factory=list)
+    # 業務ガイドの手順ごとの充足（`guide_step_coverage`。#2491）。業務ガイドに沿わない回答では空。
+    guide_steps: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def addressed(self) -> set[str]:
@@ -2746,6 +2751,19 @@ class Round:
             "unanswered_requests": [{k: v for k, v in entry.items() if k not in {"reviewed", "text"}} for entry in self.unanswered],
             "unused_evidence_ids": self.unused,  # 表示IDへの変換は build_context_block が現在の根拠で行う
             "goal_alignment": audit.goal_alignment if audit and audit.goal_alignment != "aligned" else "",
+            # 根拠が回答の材料にあるのに、利用者が行う説明として公開できていない業務ガイドの必須の手順（#2491）。
+            # 根拠が材料に無い手順は作り直しでは直らないので、ここには入れず本文の不足に出す。
+            "guide_steps_unexplained": [
+                {
+                    "step_id": step["step_id"],
+                    "title": step["title"],
+                    "status": step["status"],
+                    "evidence_refs": step["evidence_refs"],
+                    "hint": _GUIDE_STEP_HINT,
+                }
+                for step in unexplained_guide_steps(self.guide_steps)
+                if step["status"] in GUIDE_STEP_REGENERABLE
+            ],
             # 根拠があるのに全て gap で答えた草稿は、モデル自身の過剰な拒答であることがある。1回だけ見直させる。
             "no_cited_evidence": ""
             if any(e.span for e in self.checked)
@@ -2799,6 +2817,11 @@ class Round:
             "summary_reason": self.summary_reason,
             "audit_cut": self.audit_cut,
             "timing": self.timing,
+            **(
+                {"guide_steps": [{k: v for k, v in step.items() if k != "evidence_refs"} for step in self.guide_steps]}
+                if self.guide_steps
+                else {}
+            ),
             "score": {
                 "addressed": sorted(self.addressed),
                 "verified": self.verified,
@@ -2820,6 +2843,11 @@ _SPLIT_HINT = (
     "この item は引用が支持する範囲より広い。引用がそのまま裏付ける 1 操作だけを残し、"
     "残りの操作は別の item にして、それぞれを支持する連続した原文を quote にする。"
     "1 item = 1 操作（1 回の押下・入力・選択）。段階を落とすのではなく item を増やす。"
+)
+
+_GUIDE_STEP_HINT = (
+    "回答が沿う業務ガイドの必須の手順。evidence_ids の原文を quote にして、利用者が行う操作・確認として説明する item を出す。"
+    "原文が質問の対象・条件に当たらないと確かめたときは、その手順を kind=gap にして理由を書く。"
 )
 
 _VERBATIM_HINT = (
@@ -2896,6 +2924,16 @@ def _relabeled_feedback(feedback: dict, spans: Sequence[dict]) -> dict:
     for key in ("dropped_items", "supported_items"):
         if key in result:
             result[key] = [_relabeled_item(item, spans) for item in result[key]]
+    if "guide_steps_unexplained" in result:
+        result["guide_steps_unexplained"] = [
+            {
+                **{k: v for k, v in step.items() if k != "evidence_refs"},
+                "evidence_ids": [
+                    label for label in dict.fromkeys(_current_label(ref, spans) for ref in step.get("evidence_refs") or ()) if label
+                ],
+            }
+            for step in result["guide_steps_unexplained"]
+        ]
     return result
 
 
@@ -2933,6 +2971,86 @@ def guide_step_evidence_lines(guide_steps: Sequence[tuple[str, str, Sequence[str
         found = list(dict.fromkeys(label for source in sources for label in labels.get(str(source), ())))
         lines.append(f"- {step_id}「{title}」: {', '.join(found) if found else '根拠なし'}")
     return lines
+
+
+# 業務ガイドの手順の充足（#2491）。生成・監査・是正・回答の構造で同じ単位を使う。
+GUIDE_STEP_EXPLAINED = "explained"  # 手順の根拠を引いた説明を公開した
+GUIDE_STEP_REFERENCE_ONLY = "reference_only"  # 手順の根拠を原文のまま（「参考情報」の節に）示しただけ
+GUIDE_STEP_UNUSED = "unused"  # 手順の根拠は回答の材料にあるが、説明に引いていない
+GUIDE_STEP_NO_EVIDENCE = "no_evidence"  # 手順の根拠が回答の材料に無い
+# 同じ根拠のまま作り直せば直せる手順の状態（根拠が材料にある）。
+GUIDE_STEP_REGENERABLE = frozenset({GUIDE_STEP_REFERENCE_ONLY, GUIDE_STEP_UNUSED})
+# 手順の根拠と同じ原文を別の根拠から引いた説明を数える、引用の最短の長さ（短い語句はどの本文にも当たる）。
+_GUIDE_STEP_QUOTE_MIN_CHARS = 12
+
+
+def guide_step_coverage(
+    guide_steps: Sequence[tuple[str, str, Sequence[str]]],
+    checked: Sequence[CheckedItem],
+    spans: Sequence[dict],
+    optional: Sequence[str] = (),
+) -> list[dict[str, Any]]:
+    """業務ガイドの手順ごとの充足（#2491）。
+
+    手順の根拠（手順ごとの検索で取った chunk）を引いた説明を公開していれば explained。同じ本文が別の chunk にも
+    あるので、手順の根拠の本文と照合できる引用（``_GUIDE_STEP_QUOTE_MIN_CHARS`` 以上）も手順の根拠を引いたと数える。
+    引いた説明が原文のみ提示（検査・監査で降格）か適用未確認（unverified。「参考情報」の節に出る）だけなら
+    reference_only、根拠は回答の材料にあるが引いていなければ unused、材料に無ければ no_evidence。
+    required は回答の充足で必須の手順か（``optional`` は条件が決まらない分岐の行き先とその後続）。
+    """
+    by_source: dict[str, list[dict]] = {}
+    for span in spans:
+        by_source.setdefault(str(span.get("source_id") or ""), []).append(span)
+    optional_ids = set(optional)
+    coverage: list[dict[str, Any]] = []
+    for step_id, title, sources in guide_steps:
+        source_ids = {str(source) for source in sources}
+        step_spans = [span for source in dict.fromkeys(source_ids) for span in by_source.get(source, ())]
+        cited = [
+            entry
+            for entry in checked
+            if entry.span
+            and entry.item.kind != "gap"
+            and (
+                str(entry.span.get("source_id") or "") in source_ids
+                or (
+                    len(_compact(entry.item.quote)) >= _GUIDE_STEP_QUOTE_MIN_CHARS
+                    and any(quote_in_text(entry.item.quote, str(span.get("text") or "")) for span in step_spans)
+                )
+            )
+        ]
+        if any(not entry.quote_only and entry.item.applies != "unverified" for entry in cited):
+            status = GUIDE_STEP_EXPLAINED
+        elif cited:
+            status = GUIDE_STEP_REFERENCE_ONLY
+        elif step_spans:
+            status = GUIDE_STEP_UNUSED
+        else:
+            status = GUIDE_STEP_NO_EVIDENCE
+        coverage.append(
+            {
+                "step_id": step_id,
+                "title": title,
+                "required": step_id not in optional_ids,
+                "status": status,
+                "evidence_refs": [{"evidence_id": span["evidence_id"], "text": str(span.get("text") or "")[:80]} for span in step_spans],
+            }
+        )
+    return coverage
+
+
+def unexplained_guide_steps(coverage: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """必須の手順のうち、利用者が行う説明として公開できていないもの（#2491）。"""
+    return [step for step in coverage if step.get("required") and step.get("status") != GUIDE_STEP_EXPLAINED]
+
+
+def guide_step_gap_line(step: dict[str, Any]) -> str:
+    """説明できていない必須の手順を、本文の不足の行にする（#2491）。"""
+    if step.get("status") == GUIDE_STEP_REFERENCE_ONLY:
+        return (
+            f"業務ガイドの手順「{step['title']}」は、資料の記載を参考情報として示しただけで、行う操作として確かめた説明になっていません。"
+        )
+    return f"業務ガイドの手順「{step['title']}」は、取得した資料で説明を確かめられませんでした。"
 
 
 def build_context_block(
@@ -3034,6 +3152,8 @@ def run_round(
     image_provider_id: str | None = None,
     audit_settings: Any = None,
     compact_audit_reasons: bool = False,
+    guide_steps: Sequence[tuple[str, str, Sequence[str]]] = (),
+    guide_optional_steps: Sequence[str] = (),
 ) -> Round:
     """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -3045,6 +3165,8 @@ def run_round(
     画像を添付する生成は ``image_provider_id``（既定の Vision モデル）、それ以外は ``provider_id`` で呼ぶ (#649)。
     監査は ``audit_settings``（監査の推論の量を反映した設定。#1528）で呼ぶ。None は生成と同じ ``settings``。
     ``compact_audit_reasons`` は監査に通った判定の reason を空にさせる（#1912。`audit_system_prompt`）。
+    ``guide_steps`` は業務ガイドの手順ごとの根拠（#2395）。監査に手順と根拠の対応を渡し、手順ごとの充足
+    （`guide_step_coverage`。#2491）を round に持つ。``guide_optional_steps`` は充足で必須に数えない手順の id。
     """
     audit_settings = settings if audit_settings is None else audit_settings
     audit_system = audit_system_prompt(compact_reasons=compact_audit_reasons)
@@ -3133,6 +3255,20 @@ def run_round(
             "known_gaps": known_gap_labels(known_gaps),
             "unused_evidence": _unused_evidence(question, spans, used),
         }
+        if guide_steps:
+            # 回答が沿う業務ガイドの手順と、手順ごとの根拠の表示 ID（#2491）。質問の文が後続の手順に触れていなくても、
+            # 手順の根拠を引いた説明を質問の対象の手順として判定させる。
+            labels: dict[str, list[str]] = {}
+            for span in spans:
+                labels.setdefault(str(span.get("source_id") or ""), []).append(span["label"])
+            inputs["guide_steps"] = [
+                {
+                    "step_id": step_id,
+                    "title": title,
+                    "evidence_ids": list(dict.fromkeys(label for source in sources for label in labels.get(str(source), ()))),
+                }
+                for step_id, title, sources in guide_steps
+            ]
         # 生成と同じく、根拠・引用・説明を文字の形をそろえて渡す。原文の引用（全角の ``ＨＲＭ``）と説明の
         # 半角の ``HRM`` を、監査が別の語として「根拠にない」と判定しないため (#1350)。
         audit_prompt = json.dumps(fold_model_view(inputs), ensure_ascii=False)
@@ -3232,6 +3368,7 @@ def run_round(
         audit_cut=audit_cut,
         timing=timing,
         applications=applications,
+        guide_steps=guide_step_coverage(guide_steps, checked, spans, guide_optional_steps) if guide_steps else [],
     )
 
 
@@ -3319,7 +3456,8 @@ NO_IMPROVEMENT_REASONS = frozenset(
 # 同じ根拠のまま指摘を渡して作り直す（是正の「指摘の反映」）ことで直せる指摘（#1527）: 原文と一致せず除いた
 # 説明（写し誤り）・裏付けを確かめられず原文のまま示した説明（降格）・根拠を引用した説明が無いこと。
 # 答えていない要求・使われていない根拠・質問の目的とのずれは、根拠を足す是正（取得済みの資料・原画像）で直す。
-REGENERATION_FEEDBACK_KEYS = ("dropped_items", "downgraded_items", "no_cited_evidence")
+# 業務ガイドの必須の手順を説明していないこと（#2491。手順の根拠は材料にある）も同じ。
+REGENERATION_FEEDBACK_KEYS = ("dropped_items", "downgraded_items", "no_cited_evidence", "guide_steps_unexplained")
 
 
 def feedback_signature(feedback: dict[str, Any] | None) -> dict[str, Any]:
@@ -3340,6 +3478,9 @@ def feedback_signature(feedback: dict[str, Any] | None) -> dict[str, Any]:
         "downgraded": len(feedback.get("downgraded_items") or ()),
         "goal_alignment": str(feedback.get("goal_alignment") or ""),
         "no_cited_evidence": bool(feedback.get("no_cited_evidence")),
+        "guide_steps": sorted(
+            (str(step.get("step_id")), str(step.get("status"))) for step in feedback.get("guide_steps_unexplained") or ()
+        ),
     }
 
 
@@ -3368,7 +3509,15 @@ def downgraded_only(feedback: dict[str, Any] | None) -> bool:
     """
     feedback = feedback or {}
     return bool(feedback.get("downgraded_items")) and not any(
-        feedback.get(key) for key in ("dropped_items", "unanswered_requests", "unused_evidence_ids", "goal_alignment", "no_cited_evidence")
+        feedback.get(key)
+        for key in (
+            "dropped_items",
+            "unanswered_requests",
+            "unused_evidence_ids",
+            "goal_alignment",
+            "no_cited_evidence",
+            "guide_steps_unexplained",
+        )
     )
 
 
@@ -3571,6 +3720,8 @@ def pending_feedback_labels(feedback: dict[str, Any]) -> list[str]:
         labels.append("質問の目的とのずれ")
     if feedback.get("no_cited_evidence"):
         labels.append("根拠を引用した説明が無いこと")
+    if count := len(feedback.get("guide_steps_unexplained") or ()):
+        labels.append(f"説明していない業務ガイドの手順 {count} 件")
     return labels
 
 

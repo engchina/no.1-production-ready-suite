@@ -1285,8 +1285,10 @@ AnswerOutcome = Literal[
 
 
 class AnswerRequest(BaseModel):
-    id: str = Field(description="質問の要求単位の ID（Q1 など）。")
-    text: str = Field(description="要求の原文。")
+    id: str = Field(
+        description="質問の要求単位の ID（Q1 など）。業務ガイドの手順は guide:<手順の id>。"
+    )
+    text: str = Field(description="要求の原文（業務ガイドの手順は手順の名前）。")
     status: Literal["addressed", "partial", "missing", "unknown"] = Field(
         description=(
             "充足（addressed=答えた / partial=一部 / missing=答えていない / unknown=未確認）。"

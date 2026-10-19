@@ -129,6 +129,8 @@ class RuntimeKnowledgeContext:
     scope_context: str = ""
     # 業務ガイドの手順ごとの根拠(#2395)。(手順 id, 題名, 根拠の chunk_uid の列) の列。手順ごとの検索の後に入る。
     guide_steps: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
+    # 業務ガイドの手順のうち、回答の充足で必須に数えない手順の id(条件が決まらない分岐の行き先とその後続。#2491)。
+    guide_optional_steps: tuple[str, ...] = ()
 
     def with_scope(self, context: str, search_terms: Sequence[str] = ()) -> RuntimeKnowledgeContext:
         """利用者が選んだ条件を足す。検索に足す語は補助の検索文に加える。"""

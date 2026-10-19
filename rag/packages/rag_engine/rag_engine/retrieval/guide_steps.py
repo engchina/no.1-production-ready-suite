@@ -63,6 +63,8 @@ class GuideStep:
     title: str
     retrieval_hints: tuple[str, ...] = ()
     references: tuple[GuideStepReference, ...] = ()
+    # 回答の充足で必須の手順か（条件が決まらない分岐の行き先とその後続は False。#2491）。
+    required: bool = True
 
     def hints(self) -> tuple[str, ...]:
         return self.retrieval_hints[:MAX_STEP_HINTS] or ((self.title,) if self.title else ())
@@ -79,9 +81,14 @@ class GuidePlan:
     revision: int
     steps: tuple[GuideStep, ...] = ()
 
+    @property
+    def optional_step_ids(self) -> tuple[str, ...]:
+        """回答の充足で必須に数えない手順の id（#2491）。"""
+        return tuple(step.step_id for step in self.steps if not step.required)
+
     @classmethod
     def from_payload(cls, guide_id: str, revision: int, steps: Iterable[Mapping[str, Any]]) -> GuidePlan | None:
-        """呼び出し側の手順の一覧（id・title・retrieval_hints・references）から作る。手順が無ければ None。"""
+        """呼び出し側の手順の一覧（id・title・required・retrieval_hints・references）から作る。手順が無ければ None。"""
         parsed: list[GuideStep] = []
         for raw in steps:
             if not isinstance(raw, Mapping) or not str(raw.get("id") or "").strip():
@@ -105,6 +112,7 @@ class GuidePlan:
                     title=str(raw.get("title") or "").strip(),
                     retrieval_hints=tuple(str(h).strip() for h in raw.get("retrieval_hints") or () if str(h).strip()),
                     references=references,
+                    required=raw.get("required") is not False,
                 )
             )
         return cls(guide_id=guide_id, revision=int(revision), steps=tuple(parsed)) if parsed else None
