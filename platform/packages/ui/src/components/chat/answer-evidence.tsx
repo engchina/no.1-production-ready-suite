@@ -1,5 +1,5 @@
 import { BookOpen, ExternalLink, FileText, History, LocateFixed, type LucideIcon } from "lucide-react";
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useState, type ReactNode, type RefObject } from "react";
 
 import { excerptPlainText } from "../../lib/excerpt-text";
 import { cn } from "../../lib/utils";
@@ -106,8 +106,8 @@ export interface EvidenceLabels {
   sourceSummary: string;
   /** パネルの原文のプレビューの領域の名前（読み上げ）。 */
   sourcePreview: string;
-  excerptExpand: string;
-  excerptCollapse: string;
+  /** パネルの要約の、抜粋と頁・章節のチップの開閉の見出し（既定で閉じる。#2502）。 */
+  excerptDetails: string;
   /** 抜粋の中の表の読み上げの名前。 */
   excerptTable: string;
 }
@@ -138,8 +138,7 @@ export function evidenceLabels(overrides: Partial<EvidenceLabels> = {}): Evidenc
     sourceClose: "閉じる",
     sourceSummary: "根拠の要約",
     sourcePreview: "原文のプレビュー",
-    excerptExpand: "抜粋をすべて表示",
-    excerptCollapse: "抜粋を折りたたむ",
+    excerptDetails: "抜粋と頁・章節",
     excerptTable: "抜粋の表",
     ...overrides,
   };
@@ -247,7 +246,8 @@ function EvidenceLeadingActions({ children }: { children?: ReactNode }) {
 
 /**
  * 根拠 1 件の中身（カードとサイドパネルの要約で同じ描画。#2360）。`excerpt` は抜粋の出し方:
- * `card` は 3 行まで、`clamp` は 3 行までで「抜粋をすべて表示」で広げられる、`full` は全文。
+ * `card` は 3 行まで、`collapsed` は抜粋の全文と頁・章節のチップを「抜粋と頁・章節」の開閉に入れて既定で閉じる
+ * （原文のプレビューに場所を空ける。#2502）、`full` は全文。
  */
 function EvidenceSummaryBody({
   item,
@@ -258,12 +258,9 @@ function EvidenceSummaryBody({
   item: EvidenceListItem;
   index: number;
   labels: EvidenceLabels;
-  excerpt: "card" | "clamp" | "full";
+  excerpt: "card" | "collapsed" | "full";
 }) {
-  const chips = item.chips ?? [];
-  const tags = item.tags ?? [];
   const badges = item.routeBadges ?? [];
-  const hasMetadata = chips.length > 0 || tags.length > 0 || Boolean(item.sourceUrl);
   return (
     <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_176px] sm:items-start">
       <div data-testid="citation-main" className="min-w-0">
@@ -296,116 +293,104 @@ function EvidenceSummaryBody({
           ) : null}
         </div>
         {excerpt === "card" ? (
-          <p
-            data-testid="citation-text"
-            className="mt-2.5 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-fg/90"
+          <>
+            <p
+              data-testid="citation-text"
+              className="mt-2.5 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-fg/90"
+            >
+              {excerptPlainText(item.text)}
+            </p>
+            <EvidenceMetadata item={item} labels={labels} />
+          </>
+        ) : excerpt === "collapsed" ? (
+          <Disclosure
+            variant="plain"
+            size="sm"
+            summary={labels.excerptDetails}
+            className="mt-2"
+            contentClassName="pt-0"
+            data-testid="evidence-excerpt-details"
+            summaryProps={{ "data-testid": "evidence-excerpt-toggle" }}
           >
-            {excerptPlainText(item.text)}
-          </p>
+            <EvidenceExcerpt text={item.text} labels={labels} />
+            <EvidenceMetadata item={item} labels={labels} />
+          </Disclosure>
         ) : (
-          <EvidenceExcerpt text={item.text} collapsible={excerpt === "clamp"} labels={labels} />
+          <>
+            <EvidenceExcerpt text={item.text} labels={labels} />
+            <EvidenceMetadata item={item} labels={labels} />
+          </>
         )}
-        {hasMetadata ? (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {chips.length > 0 ? (
-              <dl className="flex flex-wrap gap-1.5" data-testid="evidence-chips">
-                {chips.map((chip) => (
-                  <div
-                    key={chip.id}
-                    className="min-w-0 max-w-full rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted sm:max-w-80"
-                  >
-                    <dt className="sr-only">{chip.label}</dt>
-                    <dd className="truncate" title={chip.value}>
-                      {chip.value}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            ) : null}
-            {tags.map((tag) => {
-              const Icon = tag.icon;
-              return tag.tone === "info" ? (
-                <span
-                  key={tag.id}
-                  data-surface-tint="info"
-                  className="inline-flex rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg"
-                >
-                  {tag.value}
-                </span>
-              ) : (
-                <span
-                  key={tag.id}
-                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted"
-                >
-                  {Icon ? <Icon size={14} aria-hidden /> : null}
-                  {tag.value}
-                </span>
-              );
-            })}
-            {item.sourceUrl ? (
-              <a
-                href={item.sourceUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-              >
-                {labels.openSource}
-                <ExternalLink size={14} aria-hidden />
-              </a>
-            ) : null}
-          </div>
-        ) : null}
       </div>
       <EvidenceScores score={item.score} rerankScore={item.rerankScore} labels={labels} />
     </div>
   );
 }
 
-/**
- * パネルの抜粋。`collapsible` は 3 行までに畳み、収まらないときだけ「抜粋をすべて表示 / 抜粋を折りたたむ」を出す
- * （原文のプレビューに場所を空けるため）。畳まないときは全文。抜粋に入る文書の表（HTML の `<table>`）は、
- * 畳んだ表示では「セル | セル」の行、全文の表示では表にする（HTML として注入しない。#2387）。
- */
-function EvidenceExcerpt({ text, collapsible, labels }: { text: string; collapsible: boolean; labels: EvidenceLabels }) {
-  const [expanded, setExpanded] = useState(false);
-  const [overflowing, setOverflowing] = useState(false);
-  const ref = useRef<HTMLParagraphElement>(null);
-  const clamped = collapsible && !expanded;
-  const plain = useMemo(() => excerptPlainText(text), [text]);
-  useLayoutEffect(() => {
-    const node = ref.current;
-    if (!node || !clamped) return;
-    setOverflowing(node.scrollHeight > node.clientHeight + 1);
-  }, [plain, clamped]);
-  const textClass = "text-sm leading-relaxed text-fg/90";
+/** 根拠の頁・章節などのチップ・タグ・原典へのリンクの行。どれも無ければ出さない。 */
+function EvidenceMetadata({ item, labels }: { item: EvidenceListItem; labels: EvidenceLabels }) {
+  const chips = item.chips ?? [];
+  const tags = item.tags ?? [];
+  if (chips.length === 0 && tags.length === 0 && !item.sourceUrl) return null;
   return (
-    <div className="mt-2.5 space-y-1">
-      {clamped ? (
-        <p
-          ref={ref}
-          data-testid="citation-text"
-          data-expanded="false"
-          className={cn("line-clamp-3 whitespace-pre-wrap break-words", textClass)}
-        >
-          {plain}
-        </p>
-      ) : (
-        <div data-testid="citation-text" data-expanded="true">
-          <ExcerptContent text={text} className={textClass} tableLabel={labels.excerptTable} />
-        </div>
-      )}
-      {collapsible && (overflowing || expanded) ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
-          data-testid="evidence-excerpt-toggle"
-        >
-          {expanded ? labels.excerptCollapse : labels.excerptExpand}
-        </Button>
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {chips.length > 0 ? (
+        <dl className="flex flex-wrap gap-1.5" data-testid="evidence-chips">
+          {chips.map((chip) => (
+            <div
+              key={chip.id}
+              className="min-w-0 max-w-full rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted sm:max-w-80"
+            >
+              <dt className="sr-only">{chip.label}</dt>
+              <dd className="truncate" title={chip.value}>
+                {chip.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
       ) : null}
+      {tags.map((tag) => {
+        const Icon = tag.icon;
+        return tag.tone === "info" ? (
+          <span
+            key={tag.id}
+            data-surface-tint="info"
+            className="inline-flex rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg"
+          >
+            {tag.value}
+          </span>
+        ) : (
+          <span
+            key={tag.id}
+            className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted"
+          >
+            {Icon ? <Icon size={14} aria-hidden /> : null}
+            {tag.value}
+          </span>
+        );
+      })}
+      {item.sourceUrl ? (
+        <a
+          href={item.sourceUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+        >
+          {labels.openSource}
+          <ExternalLink size={14} aria-hidden />
+        </a>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * パネルの抜粋の全文。抜粋に入る文書の表（HTML の `<table>`）は表にする（HTML として注入しない。#2387）。
+ */
+function EvidenceExcerpt({ text, labels }: { text: string; labels: EvidenceLabels }) {
+  return (
+    <div data-testid="citation-text" className="mt-2.5">
+      <ExcerptContent text={text} className="text-sm leading-relaxed text-fg/90" tableLabel={labels.excerptTable} />
     </div>
   );
 }
@@ -635,8 +620,9 @@ export interface EvidenceSourceSheetProps {
    */
   kind?: "answer" | "search";
   /**
-   * 要約の下に置く、製品の原文のプレビュー（RAG のページ画像のビューアなど）。渡すと抜粋を 3 行に畳み、
-   * プレビューにパネルの残りの高さを渡す。無ければ抜粋の全文を出す。
+   * 要約の下に置く、製品の原文のプレビュー（RAG のページ画像のビューアなど）。渡すと抜粋と頁・章節のチップを
+   * 「抜粋と頁・章節」の開閉に入れて既定で閉じ（開くたびに閉じた状態から。#2502）、プレビューにパネルの残りの高さを
+   * 渡す。無ければ抜粋の全文を出す。
    */
   children?: ReactNode;
   returnFocusRef?: RefObject<HTMLElement | null>;
@@ -663,6 +649,13 @@ export function EvidenceSourceSheet({
   "data-testid": testId = "evidence-source-sheet",
 }: EvidenceSourceSheetProps) {
   const hasPreview = children != null && children !== false;
+  // 開くたびに抜粋の開閉を閉じた状態へ戻す（同じ根拠を開き直したときも。#2502）。
+  const [openCount, setOpenCount] = useState(open ? 1 : 0);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setOpenCount((count) => count + 1);
+  }
   const heading = kind === "search" ? labels.sourceTitleSearch : labels.sourceTitle;
   return (
     <SideSheet
@@ -685,7 +678,13 @@ export function EvidenceSourceSheet({
             className="shrink-0 rounded-lg border border-border bg-surface p-3"
             data-testid="evidence-source-summary"
           >
-            <EvidenceSummaryBody item={item} index={index} labels={labels} excerpt={hasPreview ? "clamp" : "full"} />
+            <EvidenceSummaryBody
+              key={`${openCount}:${item.key}`}
+              item={item}
+              index={index}
+              labels={labels}
+              excerpt={hasPreview ? "collapsed" : "full"}
+            />
           </section>
           {hasPreview ? (
             <section
