@@ -110,9 +110,9 @@ def test_loader_uploads_sets_excel_recipe_and_approves_gates(tmp_path: Path) -> 
 
     assert documents == {"manual.pdf": "doc-manual.pdf", "params.xlsx": "doc-params.xlsx"}
     puts = [call for call in api.calls if call[0] == "PUT"]
-    # Excel だけ前処理 excel_to_json のレシピにする。
+    # Excel だけ前処理 excel_to_jsonl のレシピにする。
     assert puts == [
-        ("PUT", "/documents/doc-params.xlsx/recipes/r1", {"preprocess_profile": "excel_to_json"})
+        ("PUT", "/documents/doc-params.xlsx/recipes/r1", {"preprocess_profile": "excel_to_jsonl"})
     ]
     jobs = [call[1] for call in api.calls if call[1].endswith("/ingestion-jobs")]
     assert len(jobs) == 2
@@ -291,7 +291,7 @@ def test_loader_selects_entity_index_recipe_for_every_document(tmp_path: Path) -
         (
             "PUT",
             "/documents/doc-params.xlsx/recipes/r1",
-            {"preprocess_profile": "excel_to_json", "entity_index_enabled": True},
+            {"preprocess_profile": "excel_to_jsonl", "entity_index_enabled": True},
         ),
     ]
 
@@ -329,7 +329,7 @@ def test_entity_index_selects_expansion_in_the_golden_set_and_the_profile() -> N
 @pytest.mark.parametrize(
     ("entity_index", "expected"),
     [
-        (None, {".pdf": None, ".xlsx": {"preprocess_profile": "excel_to_json"}}),
+        (None, {".pdf": None, ".xlsx": {"preprocess_profile": "excel_to_jsonl"}}),
         (False, {".pdf": {"entity_index_enabled": False}, ".xlsx": None}),
     ],
     ids=["default", "no-entity-index"],
@@ -349,7 +349,7 @@ def test_recipe_follows_the_global_default_or_disables_entity_index(
     assert xlsx == (
         expected[".xlsx"]
         if expected[".xlsx"] is not None
-        else {"preprocess_profile": "excel_to_json", "entity_index_enabled": False}
+        else {"preprocess_profile": "excel_to_jsonl", "entity_index_enabled": False}
     )
 
 

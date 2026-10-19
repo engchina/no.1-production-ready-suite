@@ -74,6 +74,10 @@ _RECORD_TEXT_MAX_CHARS = _BLOCK_TEXT_MAX_CHARS
 # 解析エンジン「構造化レコード JSONL」（parser-structured-records-jsonl のサービス。#2457）。
 STRUCTURED_RECORDS_JSONL_BACKEND = "structured_records_jsonl"
 STRUCTURED_RECORDS_JSONL_PARSER_VERSION = "structured_records_jsonl_v1"
+# 構造化レコードの JSONL を、構造化レコード JSONL 以外の解析エンジンが受けたときの診断。
+STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING = (
+    "structured_records_requires_structured_records_jsonl"
+)
 # 検索用テキスト（raw_text）の記録と記録の間に、独立した行で置く境界のマーカー（ASCII の完全一致）。
 JSONL_RECORD_BOUNDARY = "<<<JSONL_RECORD_BOUNDARY>>>"
 # 抽出の parser_artifacts に刻む、raw_text の境界のマーカーと境界の数（記録数 − 1）。
@@ -763,6 +767,7 @@ __all__ = [
     "STRUCTURED_RECORDS_BOUNDARY_ARTIFACT_KEY",
     "STRUCTURED_RECORDS_BOUNDARY_COUNT_ARTIFACT_KEY",
     "STRUCTURED_RECORDS_JSONL_BACKEND",
+    "STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING",
     "STRUCTURED_RECORDS_JSONL_PARSER_VERSION",
     "STRUCTURED_RECORDS_CONTENT_TYPE",
     "STRUCTURED_RECORDS_FILE_EXTENSION",

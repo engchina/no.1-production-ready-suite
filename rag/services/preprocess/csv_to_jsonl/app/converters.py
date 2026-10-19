@@ -32,7 +32,7 @@ from rag_parser_core.structured_records import (
     dump_structured_records,
 )
 
-CONVERTER_NAME = "csv_to_json"
+CONVERTER_NAME = "csv_to_jsonl"
 CONVERTER_VERSION = "v2"
 # CSV として扱える上限デリミタ候補(Sniffer 失敗時の決定論フォールバックはカンマ)。
 _DELIMITER_CANDIDATES = ",\t;|"
@@ -44,8 +44,8 @@ def convert(
     preprocess_profile: str,
     source_profile: SourceProfile | None,
 ) -> ConvertOutcome:
-    """選択プリセットで変換する。csv_to_json 以外・失敗・空は passthrough へ縮退する。"""
-    if preprocess_profile != "csv_to_json":
+    """選択プリセットで変換する。csv_to_jsonl 以外・失敗・空は passthrough へ縮退する。"""
+    if preprocess_profile != "csv_to_jsonl":
         return ConvertOutcome.passthrough(
             reason=f"preprocess_unsupported_profile:{preprocess_profile}"
         )

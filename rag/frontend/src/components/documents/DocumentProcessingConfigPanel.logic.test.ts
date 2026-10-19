@@ -4,8 +4,11 @@ import {
   RECIPE_CONFIG_FIELDS,
   RECIPE_CONFIG_ITEMS,
   globalSettingsHref,
+  preprocessSelectionPatch,
   recipeConfigGroups,
 } from "./DocumentProcessingConfigPanel.logic";
+import { PARSER_VALUES, PREPROCESS_OPTIONS } from "./DocumentProcessingConfigPanel.values";
+import type { DocumentProcessingConfig } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 // #523: 要約と上書きの一覧は同じ項目を同じ処理順で出す。
@@ -84,5 +87,55 @@ describe("グローバル設定を開くリンク", () => {
       entity_index_enabled: null,
       graph_profile: "/settings/graph",
     });
+  });
+});
+
+// #2457: 構造化レコードの JSONL を作るファイル準備と、その解析・分割の初期値。
+describe("CSV→JSONL・Excel→JSONL の選択", () => {
+  const empty = {} as DocumentProcessingConfig;
+
+  it("ファイル準備の並びは CSV→JSONL・Excel→JSONL の順", () => {
+    const labels = PREPROCESS_OPTIONS.map((option) => option.label);
+    expect(labels.indexOf("CSV→JSONL")).toBeGreaterThan(-1);
+    expect(labels.indexOf("Excel→JSONL")).toBe(labels.indexOf("CSV→JSONL") + 1);
+  });
+
+  it("構造化レコード JSONL は XML ツリー JSON の直前に並ぶ", () => {
+    expect(PARSER_VALUES.indexOf("structured_records_jsonl")).toBe(
+      PARSER_VALUES.indexOf("xml_tree_json") - 1
+    );
+  });
+
+  it("新しいレシピで選ぶと、解析エンジンと固定分割・境界のマーカーを明示の上書きにする", () => {
+    for (const profile of ["csv_to_jsonl", "excel_to_jsonl"] as const) {
+      expect(preprocessSelectionPatch(empty, profile)).toEqual({
+        preprocess_profile: profile,
+        parser_adapter_backend: "structured_records_jsonl",
+        chunking_strategy: "fixed_delimiter",
+        chunk_delimiter: "<<<JSONL_RECORD_BOUNDARY>>>",
+      });
+    }
+  });
+
+  it("利用者が選んだ分割方式・分割符は書き換えない（解析エンジンだけを合わせる）", () => {
+    expect(
+      preprocessSelectionPatch(
+        { chunking_strategy: "structure_aware", parser_adapter_backend: "docling" } as DocumentProcessingConfig,
+        "csv_to_jsonl"
+      )
+    ).toEqual({ preprocess_profile: "csv_to_jsonl", parser_adapter_backend: "structured_records_jsonl" });
+    expect(
+      preprocessSelectionPatch(
+        { chunking_strategy: "fixed_delimiter", chunk_delimiter: "---" } as DocumentProcessingConfig,
+        "excel_to_jsonl"
+      )
+    ).toEqual({ preprocess_profile: "excel_to_jsonl", parser_adapter_backend: "structured_records_jsonl" });
+  });
+
+  it("ほかのファイル準備は値だけを変える", () => {
+    expect(preprocessSelectionPatch(empty, "office_to_pdf")).toEqual({
+      preprocess_profile: "office_to_pdf",
+    });
+    expect(preprocessSelectionPatch(empty, null)).toEqual({ preprocess_profile: null });
   });
 });

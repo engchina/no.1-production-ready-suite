@@ -395,10 +395,10 @@ function mockDocument(status: "REVIEW" | "INDEXED") {
 }
 
 async function mockDocumentWith(page: Page, status: "REVIEW" | "INDEXED") {
-  const processing = { ...PROCESSING_NULLS, preprocess_profile: "excel_to_json" };
+  const processing = { ...PROCESSING_NULLS, preprocess_profile: "excel_to_jsonl" };
   const effective = {
     ...PROCESSING_NULLS,
-    preprocess_profile: "excel_to_json",
+    preprocess_profile: "excel_to_jsonl",
     parser_adapter_backend: "docling",
     chunking_strategy: "page_level",
     graph_profile: "off",

@@ -7,8 +7,8 @@
 |---|---|---|
 | `document.docx` | `preprocess-office-to-pdf` | Office → PDF |
 | `pages.pdf` | `preprocess-pdf-to-page-images` | PDF → 画像PDF |
-| `table.csv` | `preprocess-csv-to-json` | CSV → 構造化レコード JSONL |
-| `table.xlsx` | `preprocess-excel-to-json` | Excel → 構造化レコード JSONL |
+| `table.csv` | `preprocess-csv-to-jsonl` | CSV → 構造化レコード JSONL |
+| `table.xlsx` | `preprocess-excel-to-jsonl` | Excel → 構造化レコード JSONL |
 | `pii.txt` | `preprocess-pii-redact` | PII マスク(EMAIL / PHONE / URL / カード番号) |
 
 ## 実行方法
@@ -18,18 +18,18 @@
 
 ```bash
 # 例: Excel → 構造化レコード JSONL
-cd services/preprocess/excel_to_json
+cd services/preprocess/excel_to_jsonl
 EX=../../../examples/test-preprocess uv run python - <<'PY'
 import os, app.converters as c
 data = open(f"{os.environ['EX']}/table.xlsx","rb").read()
-o = c.convert(data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "excel_to_json", None)
+o = c.convert(data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "excel_to_jsonl", None)
 print(o.converted, o.derived_content_type, o.warnings)
 print((o.derived_bytes or b"").decode("utf-8","replace"))
 PY
 ```
 
 `preprocess_profile`(第3引数)は各サービスの slug 末尾と一致させる:
-`office_to_pdf` / `pdf_to_page_images` / `csv_to_json` / `excel_to_json` / `pii_redact`。
+`office_to_pdf` / `pdf_to_page_images` / `csv_to_jsonl` / `excel_to_jsonl` / `pii_redact`。
 プロファイルが一致しない・依存欠如・変換失敗時は `ConvertOutcome.passthrough`(`converted=False`)へ縮退する。
 
 ### 注意

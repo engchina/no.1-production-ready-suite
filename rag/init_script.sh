@@ -87,8 +87,8 @@ DATABASE_INITIALIZATION_READY=false
 ALLOWED_RAG_SERVICES=(
   preprocess-office-to-pdf
   preprocess-pdf-to-page-images
-  preprocess-csv-to-json
-  preprocess-excel-to-json
+  preprocess-csv-to-jsonl
+  preprocess-excel-to-jsonl
   preprocess-pii-redact
   parser-docling
   parser-unstructured
@@ -633,6 +633,17 @@ install_service_venvs() {
   done
 }
 
+# 画面から保存した global の設定（backend/.env・parser-settings.json）の旧い名前・値を移す（冪等）。
+# ファイル準備 csv_to_json / excel_to_json の改名と、固定分割符の既定の変更（#2457）。DB の保存値は
+# system schema の migration が移す。
+migrate_saved_settings() {
+  log "Migrating saved RAG settings (idempotent)."
+  if ! run_as_service_user_in_dir "${BACKEND_DIR}" \
+    ".venv/bin/python -m app.rag.structured_records_settings_migration --apply"; then
+    log "WARNING: The saved RAG settings could not be migrated. See docs/deployment.md (#2457)."
+  fi
+}
+
 # RAG の system schema（table / vector index / Oracle Text）はアプリの CLI が冪等に作成・更新する。
 # 失敗しても backend は起動でき、画面（システム設定 > データベース > RAG システムテーブル）からも初期化できる。
 initialize_database_schema() {
@@ -838,6 +849,7 @@ main() {
   install_runtime_env
   install_wallet
   install_service_venvs
+  migrate_saved_settings
   initialize_database_schema
   build_frontend
   configure_systemd

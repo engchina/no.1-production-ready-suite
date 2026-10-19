@@ -17,15 +17,15 @@ def _health() -> ConvertHealth:
     xls_ready = xlrd_available()
     return ConvertHealth(
         status="ok" if (xlsx_ready or xls_ready) else "degraded",
-        backend="preprocess-excel-to-json",
+        backend="preprocess-excel-to-jsonl",
         package_name="openpyxl+xlrd",
         package_version=None,
         supported_profiles=supported_profiles_from(
-            ["excel_to_json"] if (xlsx_ready or xls_ready) else ["passthrough"]
+            ["excel_to_jsonl"] if (xlsx_ready or xls_ready) else ["passthrough"]
         ),
     )
 
 
 app = create_preprocess_app(
-    converter=convert, health_probe=_health, title="preprocess-excel-to-json"
+    converter=convert, health_probe=_health, title="preprocess-excel-to-jsonl"
 )

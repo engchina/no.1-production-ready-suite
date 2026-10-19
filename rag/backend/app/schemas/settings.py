@@ -77,6 +77,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
 
 from app.config import (
     CHUNK_CHILD_TARGET_CHARS_DEFAULT,
@@ -614,7 +615,7 @@ class ChunkingSettingsUpdate(BaseModel):
     )
     overlap: int = Field(default=120, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     min_chars: int = Field(default=120, ge=0, le=2000)
-    delimiter: str = Field(default="\\n\\n", min_length=1, max_length=256)
+    delimiter: str = Field(default=JSONL_RECORD_BOUNDARY, min_length=1, max_length=256)
     context_header_enabled: bool = True
     chunk_child_target_chars: int = Field(
         default=CHUNK_CHILD_TARGET_CHARS_DEFAULT,

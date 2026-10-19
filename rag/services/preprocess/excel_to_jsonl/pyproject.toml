@@ -1,5 +1,5 @@
 [project]
-name = "preprocess-excel-to-json-service"
+name = "preprocess-excel-to-jsonl-service"
 version = "0.1.0"
 description = "前処理(Preprocess)microservice: Excel(.xls/.xlsx)→構造化 JSON"
 requires-python = ">=3.12,<3.13"

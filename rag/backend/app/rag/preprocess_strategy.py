@@ -22,8 +22,8 @@ PREPROCESS_PROFILE_ORDER: tuple[PreprocessProfileName, ...] = (
     "passthrough",
     "office_to_pdf",
     "pdf_to_page_images",
-    "csv_to_json",
-    "excel_to_json",
+    "csv_to_jsonl",
+    "excel_to_jsonl",
     "pii_redact",
 )
 
@@ -62,14 +62,14 @@ PREPROCESS_PROFILE_SPECS: dict[PreprocessProfileName, PreprocessProfileSpec] = {
         recommended_for=("pdf", "scan"),
         requires_service=True,
     ),
-    "csv_to_json": PreprocessProfileSpec(
-        name="csv_to_json",
+    "csv_to_jsonl": PreprocessProfileSpec(
+        name="csv_to_jsonl",
         origin="no1_csv2json_records",
         recommended_for=("csv", "table"),
         requires_service=True,
     ),
-    "excel_to_json": PreprocessProfileSpec(
-        name="excel_to_json",
+    "excel_to_jsonl": PreprocessProfileSpec(
+        name="excel_to_jsonl",
         origin="no1_excel2json_records",
         recommended_for=("excel", "xls", "xlsx", "table"),
         requires_service=True,
@@ -112,8 +112,8 @@ class PreprocessRuntimeSettings:
 PREPROCESS_SERVICE_URL_ATTRS: dict[PreprocessProfileName, str] = {
     "office_to_pdf": "rag_preprocess_office_to_pdf_service_url",
     "pdf_to_page_images": "rag_preprocess_pdf_to_page_images_service_url",
-    "csv_to_json": "rag_preprocess_csv_to_json_service_url",
-    "excel_to_json": "rag_preprocess_excel_to_json_service_url",
+    "csv_to_jsonl": "rag_preprocess_csv_to_jsonl_service_url",
+    "excel_to_jsonl": "rag_preprocess_excel_to_jsonl_service_url",
     "pii_redact": "rag_preprocess_pii_redact_service_url",
 }
 
@@ -191,10 +191,11 @@ def preprocess_runtime_settings(settings: Settings) -> PreprocessRuntimeSettings
 def preprocess_options(settings: object, profile: str) -> dict[str, object] | None:
     """前処理のサービスへ渡す選択肢(選択肢を持つプリセットだけ。#1221)。
 
-    excel_to_json は ``rag_preprocess_excel_options``(global 既定を文書レシピの ``excel_options`` で
+    excel_to_jsonl は ``rag_preprocess_excel_options``(global 既定を文書レシピの
+    ``excel_options`` で
     上書きした値。上書きは dict のこともある)を検証して渡す。
     """
-    if profile != "excel_to_json":
+    if profile != "excel_to_jsonl":
         return None
     raw = getattr(settings, "rag_preprocess_excel_options", None)
     return ExcelOptions.model_validate(raw or {}).model_dump(mode="json")

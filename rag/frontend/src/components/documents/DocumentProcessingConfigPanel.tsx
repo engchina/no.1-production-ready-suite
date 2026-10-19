@@ -12,6 +12,7 @@ import {
   SelectField,
   type SelectFieldOption,
   Skeleton,
+  TextField,
   ToggleChip,
   TimedLoadingState,
 } from "@production-ready/ui";
@@ -41,6 +42,8 @@ import { cn } from "@/lib/utils";
 import {
   RECIPE_CONFIG_FIELDS,
   globalSettingsHref,
+  isStructuredRecordsPreprocess,
+  preprocessSelectionPatch,
   recipeConfigGroups,
   type RecipeConfigField,
   type RecipeConfigGroup,
@@ -77,6 +80,7 @@ function emptyConfig(): DocumentProcessingConfig {
     chunk_size: null,
     chunk_overlap: null,
     chunk_min_chars: null,
+    chunk_delimiter: null,
     chunk_context_header_enabled: null,
     graph_profile: null,
     entity_index_enabled: null,
@@ -197,9 +201,14 @@ export function DocumentProcessingConfigPanel({
   // 実体の索引が実効 ON のときだけ「実体の索引の列」を出す（#1388）。
   const entityIndexSelected =
     form.entity_index_enabled ?? configs?.effective.entity_index_enabled ?? false;
-  // 前処理が excel_to_json のときだけ「Excel の読み方」を出す（#1221）。
+  // 前処理が excel_to_jsonl のときだけ「Excel の読み方」を出す（#1221）。
   const excelSelected =
-    (form.preprocess_profile ?? configs?.effective.preprocess_profile ?? null) === "excel_to_json";
+    (form.preprocess_profile ?? configs?.effective.preprocess_profile ?? null) === "excel_to_jsonl";
+  // 構造化レコードの JSONL を作るファイル準備を選んでいるとき、解析・分割の組み合わせを案内する（#2457）。
+  const structuredRecordsSelected = isStructuredRecordsPreprocess(effectivePreprocessProfile);
+  // 分割方式が固定分割のときだけ「固定分割符」を出す（#2457）。
+  const fixedDelimiterSelected =
+    (form.chunking_strategy ?? configs?.effective.chunking_strategy ?? null) === "fixed_delimiter";
 
   const renderEditorRow = (item: RecipeConfigItem) => {
     if (!configs) return null;
@@ -224,7 +233,14 @@ export function DocumentProcessingConfigPanel({
             options={PREPROCESS_OPTIONS}
             defaultValue="passthrough"
             disabled={disabled}
-            onChange={(value) => update({ preprocess_profile: value })}
+            onChange={(value) =>
+              setForm((current) => ({ ...current, ...preprocessSelectionPatch(current, value) }))
+            }
+            hint={
+              structuredRecordsSelected
+                ? t("documents.processingConfig.structuredRecordsHint")
+                : null
+            }
           />
         );
       case "parser_adapter_backend":
@@ -465,6 +481,16 @@ export function DocumentProcessingConfigPanel({
                               onChange={(value) => update({ excel_options: value })}
                             />
                           ) : null}
+                          {item.field === "chunking_strategy" && configs && fixedDelimiterSelected ? (
+                            <ChunkDelimiterRow
+                              key={`chunk-delimiter-${recipeId}`}
+                              id={`document-chunk-delimiter-${documentId}`}
+                              value={form.chunk_delimiter ?? null}
+                              effectiveValue={configs.effective.chunk_delimiter ?? null}
+                              disabled={disabled}
+                              onChange={(value) => update({ chunk_delimiter: value })}
+                            />
+                          ) : null}
                           {item.field === "entity_index_enabled" && configs && entityIndexSelected ? (
                             <EntityIndexColumnsRow
                               key={`entity-columns-${recipeId}`}
@@ -695,6 +721,65 @@ function BooleanRow({
 }
 
 /** 「グローバル設定に従う: 値」と、その全体の既定を変える画面へのリンク（#528）。 */
+/** 固定分割の分割符（グローバルを継承 / 上書き）。分割方式が固定分割のときだけ出す（#2457）。 */
+function ChunkDelimiterRow({
+  id,
+  value,
+  effectiveValue,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  value: string | null;
+  effectiveValue: string | null;
+  disabled: boolean;
+  onChange: (value: string | null) => void;
+}) {
+  const label = t("settings.chunking.params.delimiter");
+  const overriding = value !== null;
+  const lastOverride = useRef<string>(value ?? effectiveValue ?? "");
+  useEffect(() => {
+    if (value !== null) lastOverride.current = value;
+  }, [value]);
+  return (
+    <div
+      data-config-field="chunk_delimiter"
+      className="space-y-2 rounded-lg border border-border bg-surface p-3"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm font-medium text-fg">{label}</span>
+        <div className="flex flex-wrap gap-1" role="group" aria-label={label}>
+          <ToggleChip selected={!overriding} disabled={disabled} onClick={() => onChange(null)}>
+            {t("knowledgeBases.adapter.inherit")}
+          </ToggleChip>
+          <ToggleChip
+            selected={overriding}
+            disabled={disabled}
+            onClick={() => !overriding && onChange(lastOverride.current)}
+          >
+            {t("knowledgeBases.adapter.override")}
+          </ToggleChip>
+        </div>
+      </div>
+      {overriding ? (
+        <TextField
+          id={id}
+          label={label}
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+          className="[&>label]:sr-only"
+          // 分割符の文字列（短い記号から境界のマーカーまで。#1891）。
+          width="md"
+        />
+      ) : (
+        <InheritResolved value={effectiveValue ?? "—"} label={label} globalHref={null} />
+      )}
+      <p className="text-xs text-fg-muted">{t("settings.chunking.params.delimiterHint")}</p>
+    </div>
+  );
+}
+
 function InheritResolved({
   value,
   label,

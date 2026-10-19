@@ -11,7 +11,7 @@ from app.converters import _office_suffix, convert
 
 
 def test_non_office_profile_passes_through() -> None:
-    outcome = convert(b"\x00data", "application/octet-stream", "csv_to_json", None)
+    outcome = convert(b"\x00data", "application/octet-stream", "csv_to_jsonl", None)
     assert outcome.converted is False
     assert any("preprocess_unsupported_profile" in w for w in outcome.warnings)
 

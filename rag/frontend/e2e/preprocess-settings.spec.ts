@@ -28,8 +28,12 @@ for (const viewport of [
     // text_normalize は廃止(in-process 正規化撤去)。radio として出ないことを確認する。
     await expect(page.getByRole("radio", { name: /文字コード→UTF-8/ })).toHaveCount(0);
     await expect(page.getByRole("radio", { name: /Office 文書を PDF にしてから解析/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /CSV の各行を/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /Excel ファイル\(\.xls・\.xlsx\)/ })).toBeVisible();
+    // CSV→JSONL・Excel→JSONL の順で、使う解析エンジンも説明に出す（#2457）。
+    await expect(page.getByRole("radio", { name: /CSV→JSONL.*CSV の 1 行を/ })).toBeVisible();
+    await expect(
+      page.getByRole("radio", { name: /Excel→JSONL.*Excel ファイル\(\.xls・\.xlsx\)/ })
+    ).toBeVisible();
+    await expect(page.getByRole("radio", { name: /CSV→JSONL.*構造化レコード JSONL/ })).toBeVisible();
     // 名前と説明で、どの文書に使うかが分かる(#563)。実装の言葉(ラスタライズ・canonical な中間物 等)は出さない(保存先の値 artifacts/canonical は除く)。
     await expect(
       page.getByRole("radio", { name: /PDF を画像として読み直す.*文字化けする PDF/ })
@@ -133,8 +137,8 @@ function preprocessEnvelope(overrides: PreprocessOverrides = {}) {
     { name: "passthrough", origin: "baseline_no_conversion", recommended_for: ["any"], in_process: true, requires_service: false },
     { name: "office_to_pdf", origin: "libreoffice_headless", recommended_for: ["office"], in_process: false, requires_service: true },
     { name: "pdf_to_page_images", origin: "no1_pdfparser_page_images", recommended_for: ["pdf"], in_process: false, requires_service: true },
-    { name: "csv_to_json", origin: "no1_csv2json_records", recommended_for: ["csv"], in_process: false, requires_service: true },
-    { name: "excel_to_json", origin: "no1_excel2json_records", recommended_for: ["excel"], in_process: false, requires_service: true },
+    { name: "csv_to_jsonl", origin: "no1_csv2json_records", recommended_for: ["csv"], in_process: false, requires_service: true },
+    { name: "excel_to_jsonl", origin: "no1_excel2json_records", recommended_for: ["excel"], in_process: false, requires_service: true },
     { name: "pii_redact", origin: "presidio_ja_ner", recommended_for: ["text"], in_process: false, requires_service: true },
   ];
   return {

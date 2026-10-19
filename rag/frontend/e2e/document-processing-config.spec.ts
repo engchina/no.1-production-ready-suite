@@ -346,7 +346,7 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   await expectNoPageOverflow(page);
 });
 
-// 前処理が excel_to_json のときだけ「Excel の読み方」を出し、選択肢を保存する(#1221)。
+// 前処理が excel_to_jsonl のときだけ「Excel の読み方」を出し、選択肢を保存する(#1221)。
 test("Excel の読み方を上書きして保存する", async ({ page }) => {
   const state = await mockWorkspace(page);
   await page.goto("/documents/doc-1");
@@ -357,7 +357,18 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
 
   await panel.getByRole("group", { name: "ファイル準備", exact: true }).getByText("上書き").click();
   await panel.getByRole("combobox", { name: "ファイル準備", exact: true }).click();
-  await page.getByRole("option", { name: "Excel→JSON" }).click();
+  await page.getByRole("option", { name: "Excel→JSONL" }).click();
+  // JSONL のファイル準備は、解析エンジン・分割（固定分割符・記録の境界）も見える上書きにする（#2457）。
+  await expect(panel.getByText(/文書解析と分割（固定分割符・記録の境界）を合わせて上書きしました/)).toBeVisible();
+  await expect(panel.getByRole("combobox", { name: "文書解析", exact: true })).toContainText(
+    "構造化レコード JSONL"
+  );
+  await expect(panel.getByRole("combobox", { name: "文書分割", exact: true })).toContainText(
+    "固定分割符"
+  );
+  await expect(panel.getByRole("textbox", { name: "固定分割符文字列" })).toHaveValue(
+    "<<<JSONL_RECORD_BOUNDARY>>>"
+  );
   const excel = panel.getByTestId("document-excel-options");
   await expect(excel).toBeVisible();
   await expect(excel.getByTestId("document-excel-options-inherited")).toContainText("自動");
@@ -381,7 +392,10 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
 
   await expect(page.getByText(/この文書の処理設定を保存しました/)).toBeVisible();
   expect(state.saved()).toMatchObject({
-    preprocess_profile: "excel_to_json",
+    preprocess_profile: "excel_to_jsonl",
+    parser_adapter_backend: "structured_records_jsonl",
+    chunking_strategy: "fixed_delimiter",
+    chunk_delimiter: "<<<JSONL_RECORD_BOUNDARY>>>",
     excel_options: {
       mode: "table",
       header_row: 2,

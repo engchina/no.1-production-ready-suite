@@ -21,13 +21,20 @@ from __future__ import annotations
 import hashlib
 import json
 
-from app.config import SMALL_TO_BIG_SETTING_FIELDS, Settings
+from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
+
+from app.config import (
+    FIXED_DELIMITER_STRATEGY,
+    PREVIOUS_DEFAULT_CHUNK_DELIMITER,
+    SMALL_TO_BIG_SETTING_FIELDS,
+    Settings,
+)
 from app.rag.preprocess_strategy import preprocess_options
 
 # キー算法の版。算法やフィールド構成を変えるときに上げて、旧キーと衝突させない。
 KEY_VERSION = "v5"
 
-# 前処理 csv_to_json / excel_to_json の成果物の形式(抽出の ID に入れる。#2457)。
+# 前処理 csv_to_jsonl / excel_to_jsonl の成果物の形式(抽出の ID に入れる。#2457)。
 STRUCTURED_RECORDS_FORMAT_ID = "structured_records_jsonl_v1"
 # 1 文書あたりの抽出(preprocess x parser 組合せ)上限。組合せ暴発の安全弁。
 MAX_EXTRACTIONS_PER_DOCUMENT = 8
@@ -83,6 +90,8 @@ _CHUNK_SET_HASH_NAMES: dict[str, str] = {
     "rag_chunk_parent_max_children": "rag_docrag_parent_max_children",
 }
 _CHUNK_SET_HASH_STRATEGY_VALUES: dict[str, str] = {_SMALL_TO_BIG_STRATEGY: "docrag_small_to_big"}
+# #2457 で固定分割符の既定を ``\\n\\n`` から記録の境界のマーカーに変えた。分割符を使わない方式の
+# hash の入力は、新しい既定のときだけ旧い既定のまま計算し、既存の chunk_set_id を保つ。
 
 # 各派生層が「追加で」依存する軸(chunk_set_id に重ねて hash する)。
 _METADATA_FIELDS: tuple[str, ...] = ("rag_field_extraction_enabled",)
@@ -132,19 +141,19 @@ def extraction_recipe_subset(settings: Settings) -> dict[str, object]:
         **_fields(settings, _COMMON_EXTRACTION_RECIPE_FIELDS),
         **_fields(settings, _BACKEND_EXTRACTION_RECIPE_FIELDS.get(backend, ())),
     }
-    # 前処理 excel_to_json の選択肢は抽出結果を変える(#1221)。excel_to_json のときだけ加え、
+    # 前処理 excel_to_jsonl の選択肢は抽出結果を変える(#1221)。excel_to_jsonl のときだけ加え、
     # 他の前処理の ID は変えない。成果物の形式(#2457 で構造化レコードの JSONL)を変えたときは
-    # csv_to_json / excel_to_json の形式の値を変え、その文書の抽出を作り直しにする。
+    # csv_to_jsonl / excel_to_jsonl の形式の値を変え、その文書の抽出を作り直しにする。
     # 見出しの階層の推定(#2277)は抽出結果の見出しの階層を変える。有効のときだけ加え、既定(無効)の
     # ID は変えない。
     if getattr(settings, "rag_heading_level_inference_enabled", False) is True:
         subset["rag_heading_level_inference_enabled"] = True
     profile = getattr(settings, "rag_preprocess_profile", None)
-    if profile == "excel_to_json":
+    if profile == "excel_to_jsonl":
         subset["rag_preprocess_excel_options"] = preprocess_options(settings, profile)
-        subset["excel_to_json_format"] = STRUCTURED_RECORDS_FORMAT_ID
-    if profile == "csv_to_json":
-        subset["csv_to_json_format"] = STRUCTURED_RECORDS_FORMAT_ID
+        subset["excel_to_jsonl_format"] = STRUCTURED_RECORDS_FORMAT_ID
+    if profile == "csv_to_jsonl":
+        subset["csv_to_jsonl_format"] = STRUCTURED_RECORDS_FORMAT_ID
     return subset
 
 
@@ -197,6 +206,11 @@ def _chunk_set_hash_input(subset: dict[str, object]) -> dict[str, object]:
     """chunk_set_id の hash の入力を、#599 の改名の前の名前にそろえる(既存の ID を保つ)。"""
     hashed = {_CHUNK_SET_HASH_NAMES.get(name, name): value for name, value in subset.items()}
     strategy = hashed.get("rag_chunking_strategy")
+    if (
+        strategy != FIXED_DELIMITER_STRATEGY
+        and hashed.get("rag_chunk_delimiter") == JSONL_RECORD_BOUNDARY
+    ):
+        hashed["rag_chunk_delimiter"] = PREVIOUS_DEFAULT_CHUNK_DELIMITER
     if isinstance(strategy, str):
         hashed["rag_chunking_strategy"] = _CHUNK_SET_HASH_STRATEGY_VALUES.get(strategy, strategy)
     return hashed

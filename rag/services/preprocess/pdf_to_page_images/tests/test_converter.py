@@ -10,7 +10,7 @@ from app.converters import convert
 
 
 def test_non_profile_passes_through() -> None:
-    outcome = convert(b"%PDF-1.4", "application/pdf", "csv_to_json", None)
+    outcome = convert(b"%PDF-1.4", "application/pdf", "csv_to_jsonl", None)
     assert outcome.converted is False
     assert any("preprocess_unsupported_profile" in w for w in outcome.warnings)
 

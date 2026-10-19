@@ -78,7 +78,7 @@ health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロ
 
 | サービス | ディレクトリ | port |
 |---|---|---|
-| preprocess-office-to-pdf / pdf-to-page-images / csv-to-json / excel-to-json / pii-redact | `services/preprocess/<name>` | 18010〜18013・18016 |
+| preprocess-office-to-pdf / pdf-to-page-images / csv-to-jsonl / excel-to-jsonl / pii-redact | `services/preprocess/<name>` | 18010〜18013・18016 |
 | parser-docling（既定の解析エンジン） | `services/parsers/docling` | 18020 |
 | parser-unstructured（既定では配備しない。Docling が扱えない形式を取り込む場合） | `services/parsers/unstructured` | 18022 |
 | parser-structured-records-jsonl（構造化レコード JSONL の解析エンジン。既定で配備・起動。#2457） | `services/parsers/structured_records_jsonl` | 18023 |
@@ -231,6 +231,60 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#2457 ファイル準備 CSV→JSONL・Excel→JSONL への改名と保存値の移行）
+
+ファイル準備の `csv_to_json` / `excel_to_json` を `csv_to_jsonl` / `excel_to_jsonl` に改名した（旧名は読まない）。サービス・systemd の
+unit・ディレクトリ・URL の設定も改名した: `preprocess-csv-to-json` → `preprocess-csv-to-jsonl`（`services/preprocess/csv_to_jsonl`）、
+`preprocess-excel-to-json` → `preprocess-excel-to-jsonl`（`services/preprocess/excel_to_jsonl`）、
+`RAG_PREPROCESS_CSV_TO_JSON_SERVICE_URL` → `RAG_PREPROCESS_CSV_TO_JSONL_SERVICE_URL`、
+`RAG_PREPROCESS_EXCEL_TO_JSON_SERVICE_URL` → `RAG_PREPROCESS_EXCEL_TO_JSONL_SERVICE_URL`（port は 18012・18013 のまま）。
+あわせて次を変えた。
+
+- Docling / Unstructured は構造化レコードの JSONL を受けない。CSV→JSONL・Excel→JSONL と組み合わせると、取込を始める前（と解析の
+  サービス）で「構造化レコード JSONL を選ぶ」診断を出して止める（黙って変換しない）。
+- 固定分割符の既定を `\n\n` から `<<<JSONL_RECORD_BOUNDARY>>>` にした（global の初期値・API・画面・プレビュー・実処理）。
+  文書レシピも分割符（`chunk_delimiter`）を持てるようになり、画面でファイル準備に CSV→JSONL・Excel→JSONL を選ぶと、解析エンジン
+  「構造化レコード JSONL」と分割「固定分割符」・境界のマーカーを見える上書きとして入れる。固定分割以外の方式の chunk_set の ID は変わらない。
+
+保存値は次のとおり移す（分割の方式は書き換えない）。
+
+| 保存の場所 | 対象 | 書き換え |
+|---|---|---|
+| DB（migration `20261019_003_structured_records_jsonl_profiles`） | `rag_document_recipes.processing_config`・`rag_documents.processing_config`・`rag_knowledge_bases.retrieval_config`・`rag_ingestion_jobs.settings_overrides`・`rag_chunk_sets.recipe_subset`・`rag_document_extractions.recipe_subset` | `"csv_to_json"` / `"excel_to_json"`（と抽出の ID の入力の `*_format` の key）を `*_jsonl` に |
+| DB（同じ migration。文書レシピの 2 列だけ） | ファイル準備が `*_jsonl` で解析エンジンが Docling / Unstructured / 未指定（global を継承）のレシピ | 解析エンジンを `structured_records_jsonl` に |
+| DB（同じ migration。文書レシピの 2 列だけ） | 分割方式が固定分割で分割符が未指定のレシピ | 分割符に旧い既定の `\n\n` を明示 |
+| `backend/.env`・`parser-settings.json`（`app.rag.structured_records_settings_migration`） | 上の 2 つの URL の変数・`RAG_PREPROCESS_PROFILE`・global の解析エンジン・`RAG_CHUNKING_STRATEGY=fixed_delimiter` で `RAG_CHUNK_DELIMITER` が無い設定 | 改名・`structured_records_jsonl` へ・`RAG_CHUNK_DELIMITER=\n\n` を明示 |
+
+migration は値の書き換えだけで、データを消さない（承認は要らない。何度当てても同じ結果）。改名の前のコードは移した値（`csv_to_jsonl`・
+レシピの `chunk_delimiter`）を読めないため、**同じ DB を使う環境は、このコードへの更新と migration を同時に行う**。
+抽出の ID が変わるので、CSV / Excel の文書は再処理で作り直しになる（再処理まで、それまでの active な chunk_set を検索に使う）。
+
+1. 本番（OCI Compute）: `sudo platform/deploy/suite-update.sh` で再配備する。`init_script.sh` が
+   - 旧い unit（`production-ready-rag-preprocess-csv-to-json.service`・`production-ready-rag-preprocess-excel-to-json.service`）を
+     「配備しなくなった unit」として止めて消し、新しい unit を作って起動する（`rag_services.txt` の旧名は読み飛ばし、必須のサービスとして
+     新しい名前を足す）。
+   - `app.rag.structured_records_settings_migration --apply` で `backend/.env`・`parser-settings.json` を移し、
+     `system_schema_cli initialize` で上の migration を当てる。
+   - 旧いディレクトリの venv（`rag/services/preprocess/csv_to_json/.venv` など。git の管理外）は残るので、要らなければ消す。
+2. 開発（このマシンの worktree・主の checkout）:
+   ```bash
+   sudo systemctl disable --now production-ready-rag-preprocess-csv-to-json.service production-ready-rag-preprocess-excel-to-json.service
+   sudo rm -f /etc/systemd/system/production-ready-rag-preprocess-csv-to-json.service /etc/systemd/system/production-ready-rag-preprocess-excel-to-json.service
+   sudo systemctl daemon-reload
+   rm -rf services/preprocess/csv_to_json services/preprocess/excel_to_json   # 旧いディレクトリに残った venv
+   scripts/rag-services.sh install preprocess-csv-to-jsonl preprocess-excel-to-jsonl
+   cd backend
+   uv run python -m app.rag.structured_records_settings_migration            # 書き換えの予定を出す
+   uv run python -m app.rag.structured_records_settings_migration --apply    # backend/.env・parser-settings.json を移す
+   uv run python -m app.rag.system_schema_cli initialize                       # migration を当てる
+   ```
+   `scripts/rag-services.sh install` は sudoers を作り直し、旧い unit の許可を消す。
+3. backend・取込 worker を再起動する。
+4. 確かめる: 文書レシピに旧名が残っていないこと（`SELECT COUNT(*) FROM rag_document_recipes WHERE JSON_SERIALIZE(processing_config)
+   LIKE '%_to_json"%'` が 0）と、CSV→JSONL・Excel→JSONL のレシピの解析エンジンが「構造化レコード JSONL」になっていること。
+   global の分割符を `\n\n` 以外の値で保存していて、固定分割を選んだレシピがその値を継承していた場合は、移行で `\n\n` が明示される。
+   そのレシピの「固定分割符文字列」を保存していた値に直してから再処理する。
+
 ## 既存環境の更新手順（#2452 文書の削除の後始末の再試行）
 
 文書の削除で保存先の原本・成果物を消せなかったとき（保存先の一時的な障害など）、消す対象（原本の URI・成果物の URI・
@@ -262,7 +316,7 @@ parser のサービス `parser-structured-records-jsonl`（`services/parsers/str
 2. 開発: `scripts/rag-services.sh install parser-structured-records-jsonl`（`--cpu` にも含まれる）で登録して起動する。
 3. backend・取込 worker を再起動する。
 4. 使うときは「取込・回答設定 › 文書解析」の既定か、文書の処理レシピの使用エンジンで「構造化レコード JSONL」を選び、ファイル準備を
-   「CSV→JSON」「Excel→JSON」、分割方式を「固定分割」にする。既存の文書・レシピの設定は変わらない（Docling / Unstructured で
+   「CSV→JSON」「Excel→JSON」（後の #2457 の段 ③ で「CSV→JSONL」「Excel→JSONL」に改名）、分割方式を「固定分割」にする。既存の文書・レシピの設定は変わらない（Docling / Unstructured で
    JSONL を受けたときの今の経路も残る）。
 
 ## 既存環境の更新手順（#2453 XML ツリー JSON の解析サービスを既定で停止にする）

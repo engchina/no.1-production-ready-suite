@@ -135,8 +135,8 @@ REMOVED_AGENT_BASIC_AUTH = (
 RAG_BASE_SERVICES = [
     "preprocess-office-to-pdf",
     "preprocess-pdf-to-page-images",
-    "preprocess-csv-to-json",
-    "preprocess-excel-to-json",
+    "preprocess-csv-to-jsonl",
+    "preprocess-excel-to-jsonl",
     "preprocess-pii-redact",
     "parser-docling",
     # 構造化レコード JSONL・XML ツリー JSON は使用エンジンに選べる解析エンジン。常に配備する

@@ -1,5 +1,5 @@
 [project]
-name = "preprocess-csv-to-json-service"
+name = "preprocess-csv-to-jsonl-service"
 version = "0.1.0"
 description = "前処理(Preprocess)microservice: CSV→構造化レコード JSONL"
 requires-python = ">=3.12,<3.13"

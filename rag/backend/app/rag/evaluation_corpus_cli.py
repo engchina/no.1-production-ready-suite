@@ -6,7 +6,7 @@
 
 1. ナレッジベースを作る（`--knowledge-base-id` を渡したときはそれを使う）。
 2. 評価セットが参照するファイルを、評価セットと同じフォルダ（`--corpus-dir` で変更可）から
-   アップロードし、取込を始める。Excel は前処理 `excel_to_json` で読む。前の評価で同じ内容の
+   アップロードし、取込を始める。Excel は前処理 `excel_to_jsonl` で読む。前の評価で同じ内容の
    ファイルを取り込んでいても（重複の文書。`duplicate_of_document_id`）、取込を進めてこの
    ナレッジベースの文書として索引を作る。自前の索引を持つ重複の検索は自分の chunk だけで、
    前の評価の文書（重複の元）は検索の範囲に入らない（#1381）。
@@ -58,8 +58,8 @@ DEFAULT_POLL_INTERVAL_SECONDS = 5.0
 REQUEST_TIMEOUT_SECONDS = 120.0
 # ファイルの拡張子ごとの文書レシピ（前処理）。無い拡張子は全体の既定のまま取り込む。
 RECIPE_BY_EXTENSION: Mapping[str, Mapping[str, Any]] = {
-    ".xlsx": {"preprocess_profile": "excel_to_json"},
-    ".xls": {"preprocess_profile": "excel_to_json"},
+    ".xlsx": {"preprocess_profile": "excel_to_jsonl"},
+    ".xls": {"preprocess_profile": "excel_to_jsonl"},
 }
 _CONTENT_TYPES = {
     ".pdf": "application/pdf",

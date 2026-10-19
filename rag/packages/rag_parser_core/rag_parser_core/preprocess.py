@@ -26,14 +26,14 @@ from pydantic import BaseModel, Field
 from rag_parser_core.source import SourceProfile
 
 # 変換プリセット。backend の `app.config.PreprocessProfile` と同期させる。
-# 重い変換(office_to_pdf / pdf_to_page_images / csv_to_json)は各々独立した
+# 重い変換(office_to_pdf / pdf_to_page_images / csv_to_jsonl)は各々独立した
 # 前処理マイクロサービス(`services/preprocess/<name>`)へ HTTP 委譲する。
 PREPROCESS_PROFILES: tuple[str, ...] = (
     "passthrough",
     "office_to_pdf",
     "pdf_to_page_images",
-    "csv_to_json",
-    "excel_to_json",
+    "csv_to_jsonl",
+    "excel_to_jsonl",
     "pii_redact",
 )
 DEFAULT_PREPROCESS_PROFILE = "passthrough"
@@ -147,7 +147,7 @@ class ConvertHealth(BaseModel):
 
 # converter シグネチャ:
 # (source_bytes, content_type, preprocess_profile, source_profile) -> ConvertOutcome
-# 選択肢を持つ前処理（excel_to_json。#1221）は keyword の `options`（Document Recipe の値の dict）も
+# 選択肢を持つ前処理（excel_to_jsonl。#1221）は keyword の `options`（Document Recipe の値）も
 # 受け取る。受け取らない converter には渡さない（`create_preprocess_app` が signature で判定する）。
 # app factory(create_preprocess_app)は fastapi 依存のため `preprocess_service` モジュールへ分離し、
 # 本モジュール(契約 schema)は core 依存(pydantic + charset-normalizer)のみに保つ。

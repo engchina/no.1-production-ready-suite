@@ -8,7 +8,7 @@ group sibling 展開と回答文脈で使う。Oracle Text と embedding には 
 文書の 1 ページ目の本文(回答の「文書の背景」)は先頭の chunk にだけ載せ、保存のときに chunk set
 へ 1 つだけ移す(#557。検索用 text には入れない)。
 
-Excel の前処理(``excel_to_json``)の行の記録(``rag_parser_core.sheet_records``)は、layout_records が
+Excel の前処理(``excel_to_jsonl``)の行の記録(``rag_parser_core.sheet_records``)は、layout_records が
 無くても親子で分割する(#1349): 子は 1 記録(表の 1 行・手順書の 1 手順)= 1 chunk、親は同じシート
 (手順書は同じ章)の続く記録を ``parent_target_chars`` / ``parent_max_children`` まで
 まとめた表の一部。

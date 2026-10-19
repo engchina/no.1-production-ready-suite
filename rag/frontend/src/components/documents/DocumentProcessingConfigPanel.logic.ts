@@ -1,4 +1,9 @@
-import type { IngestionJobPhase } from "@/lib/api";
+import type {
+  DocumentProcessingConfig,
+  IngestionJobPhase,
+  PreprocessProfileName,
+} from "@/lib/api";
+import { JSONL_RECORD_BOUNDARY, STRUCTURED_RECORDS_PREPROCESS_PROFILES } from "@/lib/chunking";
 import type { I18nKey } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
@@ -226,4 +231,31 @@ export function recipeConfigGroups(
     if (!phaseItems.length) return [];
     return [{ phase, index: position + 1, label: PHASE_LABELS[phase], items: phaseItems }];
   });
+}
+
+/** 構造化レコードの JSONL を作るファイル準備（CSV→JSONL・Excel→JSONL。#2457）か。 */
+export function isStructuredRecordsPreprocess(profile: PreprocessProfileName | null | undefined) {
+  return (STRUCTURED_RECORDS_PREPROCESS_PROFILES as readonly string[]).includes(profile ?? "");
+}
+
+/**
+ * ファイル準備を選んだときのレシピの上書き（#2457）。CSV→JSONL・Excel→JSONL を選んだら、解析エンジン
+ * 「構造化レコード JSONL」と分割「固定分割符」・記録の境界のマーカーを、画面に見える上書きとして入れる
+ * （実行時に隠れて切り替えない）。利用者が選んだ分割方式・分割符はそのまま残す。
+ */
+export function preprocessSelectionPatch(
+  current: DocumentProcessingConfig,
+  profile: PreprocessProfileName | null
+): Partial<DocumentProcessingConfig> {
+  if (!isStructuredRecordsPreprocess(profile)) return { preprocess_profile: profile };
+  const patch: Partial<DocumentProcessingConfig> = {
+    preprocess_profile: profile,
+    parser_adapter_backend: "structured_records_jsonl",
+  };
+  if (current.chunking_strategy == null) patch.chunking_strategy = "fixed_delimiter";
+  const strategy = patch.chunking_strategy ?? current.chunking_strategy;
+  if (strategy === "fixed_delimiter" && current.chunk_delimiter == null) {
+    patch.chunk_delimiter = JSONL_RECORD_BOUNDARY;
+  }
+  return patch;
 }
