@@ -933,8 +933,8 @@ export interface KnowledgeBaseSummary extends KnowledgeBaseRef {
 /** KB 単位の取込上書き(Parser/Chunking)。null はグローバル継承。 */
 /** 前処理 excel_to_jsonl の選択肢（#1221）。 */
 export interface ExcelOptions {
-  /** auto は手順書なら procedure、密な表なら table。 */
-  mode: "auto" | "table" | "procedure";
+  /** auto は帳票なら form、手順書なら procedure、密な表なら table（#2516）。 */
+  mode: "auto" | "table" | "procedure" | "form";
   /** 表頭の行（1 始まり）。null は先頭の行から推定する。 */
   header_row: number | null;
   header_row_count: number;
@@ -944,6 +944,12 @@ export interface ExcelOptions {
   exclude_columns: string[];
   /** 読む範囲（`A3:F200` か `シート名!A3:F200`。空はシート全体。#1229）。 */
   ranges: string[];
+  /** 1 シートの空の行・列で分かれた表を別々に読むか（#2516。画面では指定しない）。 */
+  split_tables?: boolean;
+  table_gap_rows?: number;
+  table_gap_columns?: number;
+  /** auto で帳票と判定する点数の下限（#2516。画面では指定しない）。 */
+  form_detection_threshold?: number;
   /** 列の役割（既定値・例示など）を表頭の語から決めるか（#1281）。 */
   column_role_detection?: "auto" | "off";
   /** 列の役割の指定（列名か列の記号 → 役割。none は付けない。#1281）。 */

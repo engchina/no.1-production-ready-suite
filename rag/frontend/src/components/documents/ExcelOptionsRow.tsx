@@ -73,6 +73,7 @@ const MODE_OPTIONS: SelectFieldOption<ExcelOptions["mode"]>[] = [
   { value: "auto", label: t("documents.excelOptions.mode.auto") },
   { value: "table", label: t("documents.excelOptions.mode.table") },
   { value: "procedure", label: t("documents.excelOptions.mode.procedure") },
+  { value: "form", label: t("documents.excelOptions.mode.form") },
 ];
 
 const HEADER_ROW_COUNT_OPTIONS: SelectFieldOption<string>[] = [1, 2, 3, 4, 5].map((count) => ({
