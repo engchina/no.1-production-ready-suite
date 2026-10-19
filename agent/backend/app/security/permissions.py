@@ -88,6 +88,8 @@ RUNS_OPERATE = "agent.runs.operate"
 APPROVALS_DECIDE = "agent.approvals.decide"
 AUDIT_VIEW = "agent.audit.view"
 ADMIN = "agent.admin"
+# 自分の業務 Agent の作成（#2523）。従来の 5 ロールには対応させない（持ち主の判定は router）。
+AGENTS_BUILD = "agent.agents.build"
 
 # capability → 従来のロール（router の `require_*` と `ActorPolicy.roles` が使う名前）。
 CAPABILITY_ROLES: dict[str, str] = {
@@ -213,6 +215,15 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         implies=(MENU_APPROVALS,),
     ),
     _permission(
+        AGENTS_BUILD,
+        _GROUP_MANAGE,
+        "自分の業務 Agent の作成",
+        "自分の業務 Agent を作り、試し、公開して自分で使えます。ほかの業務 Agent・スキル・設定は"
+        "変えられません。部署などに共有するには、Agent 管理の承認を申請します"
+        "（業務 Agent の実行と品質評価を含みます）。",
+        implies=(MENU_AGENTS, MENU_EVALUATION, RUNS_OPERATE),
+    ),
+    _permission(
         ADMIN,
         _GROUP_MANAGE,
         "Agent 管理",
@@ -329,6 +340,8 @@ def _any(*codes: str) -> frozenset[str]:
 # router の `require_*` が受け付ける capability（manifest の書込み・操作 API に使う）。
 _ADMIN_ONLY = _any(ADMIN)
 _OPERATE = _any(RUNS_OPERATE, ADMIN)
+# 業務 Agent の作成・管理（Agent 管理か、自分の業務 Agent の作成。持ち主の判定は router。#2523）。
+_BUILD = _any(AGENTS_BUILD, ADMIN)
 _DECIDE = _any(APPROVALS_DECIDE, ADMIN)
 # 画面の読み取り（メニュー権限。capability は関連メニューを暗黙に含む）。
 _RUN_LIST = _any(MENU_RUNS, MENU_APPROVALS)
@@ -376,17 +389,21 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/tools/invoke"): _OPERATE,
     # ---- Control Plane: 業務 Agent ----
     ("GET", "/agents"): _AGENT_READ,
-    ("POST", "/agents"): _ADMIN_ONLY,
-    ("POST", "/agents/draft-suggestion"): _ADMIN_ONLY,
-    ("PATCH", "/agents/{agent_id}"): _ADMIN_ONLY,
-    ("DELETE", "/agents/{agent_id}"): _ADMIN_ONLY,
+    ("POST", "/agents"): _BUILD,
+    ("POST", "/agents/draft-suggestion"): _BUILD,
+    ("PATCH", "/agents/{agent_id}"): _BUILD,
+    ("DELETE", "/agents/{agent_id}"): _BUILD,
     # 業種テンプレート（#780。業務 Agent の新規作成の画面が読む）。
     ("GET", "/agent-templates"): _any(MENU_AGENTS),
     # 業務 Agent の公開・前の版に戻す（#770）。
-    ("POST", "/agents/{agent_id}/publish"): _ADMIN_ONLY,
+    ("POST", "/agents/{agent_id}/publish"): _BUILD,
     # データの範囲に選べるプロファイル（#1378。編集者として RAG / NL2SQL の MCP に問い合わせる）。
-    ("GET", "/agent-data-scopes/{connection}/candidates"): _ADMIN_ONLY,
-    ("POST", "/agents/{agent_id}/versions/{version}/restore"): _ADMIN_ONLY,
+    ("GET", "/agent-data-scopes/{connection}/candidates"): _BUILD,
+    ("POST", "/agents/{agent_id}/versions/{version}/restore"): _BUILD,
+    # 個人の業務 Agent の共有の申請（持ち主）と承認・却下（Agent 管理。#2523）。
+    ("POST", "/agents/{agent_id}/share-request"): _BUILD,
+    ("POST", "/agents/{agent_id}/share-request/approve"): _ADMIN_ONLY,
+    ("POST", "/agents/{agent_id}/share-request/reject"): _ADMIN_ONLY,
     # スキルの更新の取り込み（#1867）。差分はAgent を読める人、取り込み・取り消しは公開と同じ。
     ("GET", "/agents/{agent_id}/skill-updates"): _AGENT_READ,
     ("POST", "/agent-skill-updates/publish"): _ADMIN_ONLY,

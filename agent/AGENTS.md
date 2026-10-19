@@ -28,7 +28,7 @@
 
 - 実行は Control Plane の**組み込み Runtime**（`features/agent/builtin_runtime.py`。OpenAI Agents SDK・OCI Enterprise AI の Responses API）。別の LLM provider は組み込まず、SDK の tracing は常に無効にする（業務データを外部へ送らない）。外部の Runtime・Binding・Docker の Runtime は持たない（#754）。
 - ツールの実行は `tool_registry.invoke`（ポリシー・ガードレール・監査・成果物）を必ず通す。「拒否」のツールはモデルに渡さず、「承認」のツールは SDK の `needs_approval` で中断して `waiting_approval` にし、却下したツールは実行しない。
-- 業務 Agent は版を持ち、「公開」した版だけが利用者の Run に使われる（公開の版は使うスキルの中身を固定する）。下書きで実行できるのは Agent 管理（admin）だけ。
+- 業務 Agent は版を持ち、「公開」した版だけが利用者の Run に使われる（公開の版は使うスキルの中身を固定する）。下書きで実行できるのは Agent 管理（admin）と、個人の業務 Agent の持ち主（`agent.agents.build`。#2523）だけ。
 - 保存先は `AGENT_RUNTIME_REPOSITORY_BACKEND` に従う（Oracle では `AGENT_RUNTIME_*` / `AGENT_CONTROL_PLANE_ITEMS`。テーブルはシステムテーブルが作り、アプリは DDL を実行しない）。MCP 接続の秘密は `app.secret_box` で暗号化し、テストは memory に固定する。
 - Agent はスキルだけを持つ（プラグイン・マーケットプレイス・独立 Workflow engine は作り直さない）。スキルの `references/` は読むが、同梱の `scripts/` などのコードは読まず・実行しない。
 
@@ -65,7 +65,7 @@
 
 - manifest ID を検証する。
 - 業務 Agent が使う Skill の削除は `409`。
-- RBAC は viewer / operator / approver / auditor / admin を維持する。
+- RBAC は viewer / operator / approver / auditor / admin を維持する。自分の業務 Agent の作成（`agent.agents.build`）はロールに対応させず、持ち主の判定は router の `_policy_manages_agent` で行う（#2523）。
 - 画面のログインは共通認証（Cookie のセッション）。capability は 5 ロールに対応し、利用者（local はローカル利用者）から `ActorPolicy` を作って router の既存の判定に流す。local でもユーザー・ロールは Oracle の `PLATFORM_*`。Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）は持たない。対象範囲はエージェントだけで、検索・回答プロファイルの判定は RAG に任せる。
 - 新しい API は必ず権限 manifest（`app/security/permissions.py`）に登録する（登録外は 403。完全性テストがある）。API は HTTP だけで、push は SSE、操作は REST にする（WebSocket は持たない。#2260）。
 - 承認の決定者（`decided_by`）は Cookie の利用者から決め、request の値を使わない。

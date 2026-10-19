@@ -231,6 +231,7 @@ from app.features.agent.runtime import (
     AgentProfilePatch,
     AgentPublishRequest,
     AgentsData,
+    AgentShareRequest,
     ApprovalDecisionRequest,
     ApprovalDetailData,
     ApprovalsData,
@@ -333,6 +334,7 @@ from app.security.dependencies import (
 )
 from app.security.domain import Principal
 from app.security.permissions import (
+    AGENTS_BUILD,
     CAPABILITY_ROLES,
     PERMISSION_CATALOG,
     UNCLASSIFIED_PERMISSION,
@@ -347,6 +349,9 @@ logger = logging.getLogger(__name__)
 
 # 画面（チャット・実行履歴・承認）がそのまま出す理由。英語・内部の ID を出さない。
 AGENT_NOT_FOUND_MESSAGE = "業務 Agent が見つかりません。"
+DRAFT_RUN_FORBIDDEN_MESSAGE = (
+    "下書きで実行できるのは、Agent 管理の権限がある利用者か、その業務 Agent の持ち主だけです。"
+)
 AGENT_FORBIDDEN_MESSAGE = "この業務 Agent を利用する権限がありません。"
 RUN_NOT_FOUND_MESSAGE = "実行が見つかりません。"
 APPROVAL_NOT_FOUND_MESSAGE = "承認の依頼が見つかりません。"
@@ -575,7 +580,12 @@ class ToolCallAuditData(Page[ToolCallAuditRecord]):
 
 class ActorPolicy(BaseModel):
     roles: set[str] = Field(default_factory=set)
+    # 使える業務 Agent（None は制限なし）。ロールに割り当てた Agent と、持ち主の個人の
+    # Agent（#2523）。
     agent_ids: set[str] | None = None
+    user_uuid: str | None = None
+    # 自分の業務 Agent を作れる（`agent.agents.build`。#2523）。
+    can_build: bool = False
 
 
 async def require_viewer(request: Request) -> None:
@@ -596,6 +606,21 @@ async def require_auditor(request: Request) -> None:
 
 async def require_admin(request: Request) -> None:
     _require_actor_roles(request, {"admin"})
+
+
+AGENT_BUILD_FORBIDDEN_MESSAGE = (
+    "業務 Agent を作れるのは、Agent 管理か、自分の業務 Agent の作成の権限がある利用者だけです。"
+)
+AGENT_MANAGE_FORBIDDEN_MESSAGE = "この業務 Agent を変更できるのは、Agent 管理か持ち主だけです。"
+
+
+async def require_agent_builder(request: Request) -> None:
+    """業務 Agent を作る・自分の業務 Agent を管理する（Agent 管理か `agent.agents.build`）。"""
+    if _request_principal(request) is None:
+        raise HTTPException(status_code=401, detail="ログインしてください。")
+    policy = _actor_policy(request)
+    if "admin" not in policy.roles and not policy.can_build:
+        raise HTTPException(status_code=403, detail=AGENT_BUILD_FORBIDDEN_MESSAGE)
 
 
 async def require_system_settings_write(request: Request) -> None:
@@ -1904,12 +1929,9 @@ async def create_run(
                 status_code=409,
                 detail={"code": "agent_disabled", "message": "無効な業務 Agent は実行できません。"},
             )
-        # 下書きで試すのは Agent 管理（admin）だけ（#770）。
-        if run_request.draft and not _policy_has_roles(_actor_policy(request), {"admin"}):
-            raise HTTPException(
-                status_code=403,
-                detail="下書きで実行できるのは Agent 管理の権限がある利用者だけです。",
-            )
+        # 下書きで試すのは Agent 管理か、個人の Agent の持ち主だけ（#770・#2523）。
+        if run_request.draft and not _policy_manages_agent(_actor_policy(request), agent):
+            raise HTTPException(status_code=403, detail=DRAFT_RUN_FORBIDDEN_MESSAGE)
         # 添付（#2517）は Run を作る前に確かめ（見えない添付は 404・別の会話の添付は 409）、会話が
         # 決まった後に会話へ結び付ける（新しい会話の ID は Run を作るときに決まる）。
         attachments: list[ChatAttachmentReference] = []
@@ -2004,10 +2026,13 @@ async def list_threads(
     （期間の外の会話も `GET /threads/{thread_id}`・実行の詳細の「会話を開く」では開ける。#2340）。
     """
     policy = _actor_policy(request)
-    if draft and not _policy_has_roles(policy, {"admin"}):
+    if draft and "admin" not in policy.roles and not policy.can_build:
         raise HTTPException(
             status_code=403,
-            detail="下書きの会話を見られるのは Agent 管理の権限がある利用者だけです。",
+            detail=(
+                "下書きの会話を見られるのは、Agent 管理か、自分の業務 Agent の作成の権限がある"
+                "利用者だけです。"
+            ),
         )
     viewer = _run_creator_user_uuid(request)
     all_users = _sees_all_users(request)
@@ -2796,18 +2821,15 @@ async def create_evaluation(
     agent = _require_evaluable_agent(request, evaluation.agent_id or item.agent_id)
     if not agent.enabled or agent.migration_required:
         raise HTTPException(status_code=409, detail="この業務 Agent は実行できない状態です。")
-    # 評価する版（#810）。下書きの評価は下書きの実行（`POST /runs` の `draft=true`）と同じく
-    # Agent 管理だけ（#2522）。省略時は、Agent 管理で公開していない変更があれば下書き、それ以外は
-    # 公開中の版。
-    can_run_draft = _policy_has_roles(_actor_policy(request), {"admin"})
+    # 評価する版（#810）。下書きの評価は下書きの実行と同じく、Agent 管理か個人の Agent の持ち主
+    # だけ（#2522・#2523）。省略時は、下書きを評価できて公開していない変更があれば下書き、
+    # それ以外は公開中の版。
+    manages = _policy_manages_agent(_actor_policy(request), agent)
     target = evaluation.agent_version or (
-        "draft" if can_run_draft and agent.has_unpublished_changes() else "published"
+        "draft" if manages and agent.has_unpublished_changes() else "published"
     )
-    if target == "draft" and not can_run_draft:
-        raise HTTPException(
-            status_code=403,
-            detail="下書きを評価できるのは Agent 管理の権限がある利用者だけです。",
-        )
+    if target == "draft" and not manages:
+        raise HTTPException(status_code=403, detail=DRAFT_RUN_FORBIDDEN_MESSAGE)
     if target == "published" and agent.published_version is None:
         raise HTTPException(
             status_code=409,
@@ -3506,10 +3528,13 @@ async def _agents_data(agents: list[AgentProfile]) -> AgentsData:
         }
     )
     names = await run_in_threadpool(login_display_names, publishers) if publishers else {}
+    owners = sorted({agent.owner_user_uuid for agent in agents if agent.owner_user_uuid})
+    owner_names = await run_in_threadpool(user_display_names, owners) if owners else {}
     return AgentsData(
         agents=agents,
         user_display_names=names,
         max_published_versions=max_published_versions(),
+        owner_display_names=owner_names,
     )
 
 
@@ -3531,7 +3556,7 @@ def _require_agent_name(name: str) -> None:
 async def list_agent_data_scope_candidates(
     connection: str,
     request: Request,
-    _: None = Depends(require_admin),
+    _: None = Depends(require_agent_builder),
 ) -> ApiResponse[DataScopeCandidatesData]:
     """業務 Agent のデータの範囲に選べるプロファイル（#1378）。
 
@@ -3581,7 +3606,7 @@ async def _verify_data_scopes(
 async def suggest_agent_draft_from_description(
     payload: AgentDraftRequest,
     request: Request,
-    _: None = Depends(require_admin),
+    _: None = Depends(require_agent_builder),
 ) -> ApiResponse[AgentDraftSuggestion]:
     """業務の説明から業務 Agent の下書きを提案する（#2519。保存はしない）。
 
@@ -3625,7 +3650,7 @@ async def suggest_agent_draft_from_description(
 async def create_agent(
     agent: AgentProfile,
     request: Request,
-    _: None = Depends(require_admin),
+    _: None = Depends(require_agent_builder),
 ) -> ApiResponse[AgentProfile]:
     _require_agent_name(agent.name)
     # ID を送らなければ backend が `agent_<uuid>` を作る（画面の作成）。送られた ID は、その後の
@@ -3640,6 +3665,7 @@ async def create_agent(
         )
     # 画面・API で作る Agent は下書きから始める（公開するまで利用者の Run には使えない。#770）。
     # 版の項目は送られても使わない。
+    policy = _actor_policy(request)
     draft = agent.model_copy(
         update={
             "id": agent_id,
@@ -3647,6 +3673,10 @@ async def create_agent(
             "versions": [],
             "published_version": None,
             "source": "runtime",
+            # Agent 管理が作れば組織の業務 Agent、自分の業務 Agent の作成の権限だけなら作った人の
+            # 個人の業務 Agent（#2523。送られた持ち主・申請は使わない）。
+            "owner_user_uuid": None if "admin" in policy.roles else policy.user_uuid,
+            "share_request": None,
         }
     )
     # 作成に使った業種テンプレート（#810）。知らないテンプレートは保存しない（400）。
@@ -3705,22 +3735,20 @@ async def publish_agent(
     agent_id: str,
     payload: AgentPublishRequest,
     request: Request,
-    _: None = Depends(require_admin),
+    _: None = Depends(require_agent_builder),
 ) -> ApiResponse[AgentProfile]:
     """下書きを新しい版として公開する（#770）。利用者の Run はこの版で実行する。
 
     `AGENT_PUBLISH_MIN_PASS_RATE` が 0 より大きいときは、今の下書きの品質評価の合格率を求める
     （#2519。満たさなければ 409）。
     """
-    agents = await run_in_threadpool(runtime_repository.list_agents)
-    current = next((item for item in agents if item.id == agent_id), None)
-    if current is not None:
-        refusal = _publish_evaluation_refusal(current)
-        if refusal is not None:
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "publish_evaluation_required", "message": refusal},
-            )
+    current = await _managed_agent(request, agent_id)
+    refusal = _publish_evaluation_refusal(current)
+    if refusal is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "publish_evaluation_required", "message": refusal},
+        )
     try:
         agent = await run_in_threadpool(
             runtime_repository.publish_agent,
@@ -3828,9 +3856,10 @@ async def restore_agent_version(
     agent_id: str,
     version: int,
     request: Request,
-    _: None = Depends(require_admin),
+    _: None = Depends(require_agent_builder),
 ) -> ApiResponse[AgentProfile]:
     """前の版を公開し直し、下書きもその内容にする（#770）。"""
+    await _managed_agent(request, agent_id)
     try:
         agent = await run_in_threadpool(
             runtime_repository.restore_agent_version,
@@ -3843,26 +3872,117 @@ async def restore_agent_version(
     return ApiResponse(data=agent)
 
 
+class AgentShareRequestInput(BaseModel):
+    """共有の申請に添える一言（#2523）。"""
+
+    note: str = Field(default="", max_length=500)
+
+
+class AgentShareRejectInput(BaseModel):
+    """共有の申請を却下する理由（#2523。持ち主に見せる）。"""
+
+    reason: str = Field(min_length=1, max_length=500)
+
+
+@router.post("/agents/{agent_id}/share-request", response_model=ApiResponse[AgentProfile])
+async def request_agent_share(
+    agent_id: str,
+    payload: AgentShareRequestInput,
+    request: Request,
+    _: None = Depends(require_agent_builder),
+) -> ApiResponse[AgentProfile]:
+    """個人の業務 Agent の共有を Agent 管理に申請する（持ち主。#2523）。"""
+    agent = await _managed_agent(request, agent_id)
+    if agent.owner_user_uuid is None:
+        raise HTTPException(
+            status_code=409, detail="組織の業務 Agent は、共有の申請をせずにロールで共有します。"
+        )
+    if agent.share_request is not None and agent.share_request.status == "requested":
+        raise HTTPException(status_code=409, detail="共有を申請しています。結果を待ってください。")
+    if agent.published_version is None:
+        raise HTTPException(status_code=409, detail="公開してから共有を申請してください。")
+    updated = await run_in_threadpool(
+        partial(
+            runtime_repository.update_agent_sharing,
+            agent_id,
+            owner_user_uuid=agent.owner_user_uuid,
+            share_request=AgentShareRequest(note=payload.note.strip()),
+        )
+    )
+    return ApiResponse(data=updated)
+
+
+async def _requested_share(request: Request, agent_id: str) -> AgentProfile:
+    agent = await _managed_agent(request, agent_id)
+    if agent.share_request is None or agent.share_request.status != "requested":
+        raise HTTPException(status_code=409, detail="この業務 Agent は共有を申請していません。")
+    return agent
+
+
+@router.post("/agents/{agent_id}/share-request/approve", response_model=ApiResponse[AgentProfile])
+async def approve_agent_share(
+    agent_id: str,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AgentProfile]:
+    """共有の申請を承認する（Agent 管理。#2523）。
+
+    組織の業務 Agent（持ち主なし）になり、権限管理でロールに割り当てて共有する。持ち主だった
+    利用者も、割り当てたロールを通して使う。
+    """
+    await _requested_share(request, agent_id)
+    updated = await run_in_threadpool(
+        partial(
+            runtime_repository.update_agent_sharing,
+            agent_id,
+            owner_user_uuid=None,
+            share_request=None,
+        )
+    )
+    return ApiResponse(data=updated)
+
+
+@router.post("/agents/{agent_id}/share-request/reject", response_model=ApiResponse[AgentProfile])
+async def reject_agent_share(
+    agent_id: str,
+    payload: AgentShareRejectInput,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AgentProfile]:
+    """共有の申請を却下する（Agent 管理。理由を持ち主に返す。#2523）。"""
+    agent = await _requested_share(request, agent_id)
+    share_request = agent.share_request
+    if share_request is None:  # _requested_share が確かめた（型のため）
+        raise HTTPException(status_code=409, detail="この業務 Agent は共有を申請していません。")
+    rejected = share_request.model_copy(
+        update={
+            "status": "rejected",
+            "reason": payload.reason.strip(),
+            "decided_at": datetime.now(UTC),
+        }
+    )
+    updated = await run_in_threadpool(
+        partial(
+            runtime_repository.update_agent_sharing,
+            agent_id,
+            owner_user_uuid=agent.owner_user_uuid,
+            share_request=rejected,
+        )
+    )
+    return ApiResponse(data=updated)
+
+
 @router.patch("/agents/{agent_id}", response_model=ApiResponse[AgentProfile])
 async def patch_agent(
     agent_id: str,
     patch: AgentProfilePatch,
     request: Request,
-    _: None = Depends(require_admin),
+    _: None = Depends(require_agent_builder),
 ) -> ApiResponse[AgentProfile]:
+    current = await _managed_agent(request, agent_id)
     if patch.name is not None:
         _require_agent_name(patch.name)
     if patch.data_scopes is not None:
-        current = next(
-            (
-                item
-                for item in await run_in_threadpool(runtime_repository.list_agents)
-                if item.id == agent_id
-            ),
-            None,
-        )
-        if current is None:
-            raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE)
         await _verify_data_scopes(request, current.data_scopes, patch.data_scopes)
     try:
         return ApiResponse(
@@ -3877,8 +3997,10 @@ async def patch_agent(
 @router.delete("/agents/{agent_id}", response_model=ApiResponse[AgentsData])
 async def delete_agent(
     agent_id: str,
-    _: None = Depends(require_admin),
+    request: Request,
+    _: None = Depends(require_agent_builder),
 ) -> ApiResponse[AgentsData]:
+    await _managed_agent(request, agent_id)
     try:
         await run_in_threadpool(runtime_repository.delete_agent, agent_id)
     except ValueError as exc:
@@ -3892,7 +4014,13 @@ async def delete_agent(
     except Exception:
         logger.warning("agent_role_assignment_cleanup_failed", extra={"agent_id": agent_id})
     return ApiResponse(
-        data=await _agents_data(await run_in_threadpool(runtime_repository.list_agents))
+        data=await _agents_data(
+            [
+                agent
+                for agent in await run_in_threadpool(runtime_repository.list_agents)
+                if _agent_allowed(request, agent.id)
+            ]
+        )
     )
 
 
@@ -4157,9 +4285,18 @@ def _actor_policy(connection: object) -> ActorPolicy:
     principal = _request_principal(connection)
     if principal is None:
         return ActorPolicy(roles=set(), agent_ids=set())
+    agent_ids = (
+        None
+        if principal.allowed_agent_ids is None
+        # 持ち主の個人の業務 Agent は、ロールに割り当てなくても使える（#2523）。
+        else set(principal.allowed_agent_ids)
+        | runtime_repository.owned_agent_ids(principal.user_uuid)
+    )
     return ActorPolicy(
         roles=actor_roles_for_principal(principal),
-        agent_ids=None if principal.allowed_agent_ids is None else set(principal.allowed_agent_ids),
+        agent_ids=agent_ids,
+        user_uuid=principal.user_uuid,
+        can_build=principal.has_permission(AGENTS_BUILD),
     )
 
 
@@ -4170,6 +4307,28 @@ def _policy_allows_agent(policy: ActorPolicy, agent_id: str) -> bool:
 
 def _policy_has_roles(policy: ActorPolicy, allowed_roles: set[str]) -> bool:
     return "admin" in policy.roles or bool(policy.roles.intersection(allowed_roles))
+
+
+def _policy_manages_agent(policy: ActorPolicy, agent: AgentProfile) -> bool:
+    """業務 Agent を変更・下書きで実行・公開できるか（Agent 管理か、個人の Agent の持ち主）。"""
+    if "admin" in policy.roles:
+        return True
+    return (
+        policy.can_build
+        and policy.user_uuid is not None
+        and agent.owner_user_uuid == policy.user_uuid
+    )
+
+
+async def _managed_agent(request: Request, agent_id: str) -> AgentProfile:
+    """変更する業務 Agent（使えなければ 404、変更できなければ 403。#2523）。"""
+    agents = await run_in_threadpool(runtime_repository.list_agents)
+    agent = next((item for item in agents if item.id == agent_id), None)
+    if agent is None or not _agent_allowed(request, agent_id):
+        raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE)
+    if not _policy_manages_agent(_actor_policy(request), agent):
+        raise HTTPException(status_code=403, detail=AGENT_MANAGE_FORBIDDEN_MESSAGE)
+    return agent
 
 
 def _actor_login_user_id(connection: object) -> str:

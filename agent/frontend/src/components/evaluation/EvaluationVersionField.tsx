@@ -2,11 +2,15 @@ import { SelectField } from "@production-ready/ui";
 
 import type { AgentProfile, EvaluatedAgentVersion, EvaluationTarget } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useAuth } from "@/components/security/AuthProvider";
 import { useCapabilities } from "@/lib/permissions";
 
-/** 下書きを評価できるか（下書きの実行と同じく Agent 管理だけ。#2522）。 */
-export function useCanEvaluateDraft(): boolean {
-  return useCapabilities().admin;
+/** 下書きを評価できるか（下書きの実行と同じく Agent 管理か、個人の業務 Agent の持ち主。#2522・#2523）。 */
+export function useCanEvaluateDraft(agent: AgentProfile | undefined): boolean {
+  const { admin, buildAgents } = useCapabilities();
+  const { user } = useAuth();
+  if (admin) return true;
+  return buildAgents && Boolean(agent?.owner_user_uuid) && agent?.owner_user_uuid === user?.user_uuid;
 }
 
 /**
@@ -54,7 +58,7 @@ export function EvaluationVersionField({
   onChange: (value: EvaluationTarget) => void;
   disabled?: boolean;
 }) {
-  const canDraft = useCanEvaluateDraft();
+  const canDraft = useCanEvaluateDraft(agent);
   const published = agent?.published_version ?? null;
   const options: { value: EvaluationTarget; label: string }[] = [
     ...(published !== null

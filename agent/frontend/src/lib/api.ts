@@ -841,6 +841,19 @@ export interface AgentProfile {
   enabled: boolean;
   created_at: string;
   updated_at: string;
+  /** 個人の業務 Agent の持ち主（#2523）。null は組織の業務 Agent。 */
+  owner_user_uuid?: string | null;
+  /** 共有の申請（#2523。承認すると消え、組織の業務 Agent になる）。 */
+  share_request?: AgentShareRequest | null;
+}
+
+export interface AgentShareRequest {
+  status: "requested" | "rejected";
+  note: string;
+  requested_at: string;
+  /** 却下の理由（status が rejected のとき）。 */
+  reason: string;
+  decided_at: string | null;
 }
 
 /** 曖昧な質問の扱い（#1839）。`confirm` = 確認してから回答する、`assume` = 前提を示して回答する。 */
@@ -1764,6 +1777,23 @@ export const agentApi = {
   /** 承認の一覧（サーバー側のページングと絞り込み。#1897）。 */
   listApprovals: (filters: ApprovalListFilters) => request<ApprovalsPage>(`/api/approvals${listQuery(filters)}`),
   getApproval: (approvalId: string) => request<ApprovalDetail>(`/api/approvals/${encodeURIComponent(approvalId)}`),
+  /** 個人の業務 Agent の共有を申請する（持ち主。#2523）。 */
+  requestAgentShare: (agentId: string, note: string) =>
+    request<AgentProfile>(`/api/agents/${encodeURIComponent(agentId)}/share-request`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  /** 共有の申請を承認する（Agent 管理。組織の業務 Agent になる。#2523）。 */
+  approveAgentShare: (agentId: string) =>
+    request<AgentProfile>(`/api/agents/${encodeURIComponent(agentId)}/share-request/approve`, {
+      method: "POST",
+    }),
+  /** 共有の申請を却下する（Agent 管理。理由を持ち主に返す。#2523）。 */
+  rejectAgentShare: (agentId: string, reason: string) =>
+    request<AgentProfile>(`/api/agents/${encodeURIComponent(agentId)}/share-request/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
   publishAgent: (agentId: string, note = "") =>
     request<AgentProfile>(`/api/agents/${encodeURIComponent(agentId)}/publish`, {
       method: "POST",
@@ -1998,10 +2028,14 @@ export const agentApi = {
   listTools: () => request<{ tools: ToolDefinition[] }>("/api/tools"),
   // `user_display_names` は版の公開者（ログイン ID）→ 表示名（#1696）。
   // `max_published_versions` は版の履歴に残す版の数（AGENT_MAX_PUBLISHED_VERSIONS。#2356）。
+  // `owner_display_names` は個人の業務 Agent の持ち主（user_uuid）→ 表示名（#2523）。
   listAgents: () =>
-    request<{ agents: AgentProfile[]; user_display_names?: Record<string, string>; max_published_versions?: number }>(
-      "/api/agents",
-    ),
+    request<{
+      agents: AgentProfile[];
+      user_display_names?: Record<string, string>;
+      max_published_versions?: number;
+      owner_display_names?: Record<string, string>;
+    }>("/api/agents"),
   createAgent: (payload: AgentProfileWritePayload) =>
     request<AgentProfile>("/api/agents", {
       method: "POST",
