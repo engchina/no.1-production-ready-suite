@@ -30,7 +30,7 @@ from rag_parser_core.structured_records import (
 )
 
 CONVERTER_NAME = "excel_to_jsonl"
-CONVERTER_VERSION = "v7"
+CONVERTER_VERSION = "v8"
 
 __all__ = [
     "CONVERTER_NAME",

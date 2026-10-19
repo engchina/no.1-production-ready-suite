@@ -78,7 +78,7 @@ def _payload(source: bytes, **options: Any) -> dict[str, Any]:
     assert outcome.converted is True, outcome.warnings
     assert outcome.derived_bytes is not None
     assert outcome.derived_content_type == STRUCTURED_RECORDS_CONTENT_TYPE
-    assert outcome.converter_version == "v7"
+    assert outcome.converter_version == "v8"
     return _loaded(outcome.derived_bytes)
 
 
