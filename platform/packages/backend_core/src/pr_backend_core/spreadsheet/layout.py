@@ -21,10 +21,9 @@ from collections import defaultdict
 from collections.abc import Set
 from dataclasses import dataclass
 
-from rag_parser_core.sheet_records import SheetBlock, SheetDiagnostic
-
 from .choices import is_choice_mark, read_choice
 from .grid import Grid, cell_ref, column_letter, is_textual
+from .models import SheetBlock, SheetDiagnostic
 
 # 列幅がこれ以下の列を「狭い列」（方眼紙の格子）とみなす（文字数の単位）。
 NARROW_COLUMN_WIDTH = 4.0
@@ -447,24 +446,24 @@ def form_blocks(grid: Grid) -> tuple[list[SheetBlock], list[SheetDiagnostic]]:
             continue
         consumed.update(band)
         if len(run) == 1:
-            for value in run[0]:
-                label = labels[(value.left, value.right)]
-                consumed.add(value)
-                pending_vertical.append((label, _field(label, [value], group_path(label))))
+            for cell in run[0]:
+                label = labels[(cell.left, cell.right)]
+                consumed.add(cell)
+                pending_vertical.append((label, _field(label, [cell], group_path(label))))
             continue
         for values in run:
             consumed.update(values)
             names: dict[str, str] = {}
-            for value in values:
-                name = labels[(value.left, value.right)].text
+            for cell in values:
+                name = labels[(cell.left, cell.right)].text
                 if name in names:
-                    name = f"{name}__{column_letter(value.left)}"
-                names[name] = value.text
+                    name = f"{name}__{column_letter(cell.left)}"
+                names[name] = cell.text
             blocks.append(
                 SheetBlock(
                     kind="row",
-                    row_start=min(value.top for value in values),
-                    row_end=max(value.bottom for value in values),
+                    row_start=min(cell.top for cell in values),
+                    row_end=max(cell.bottom for cell in values),
                     cell_range=_bounds(values),
                     section_path=group_path(values[0]),
                     values=names,

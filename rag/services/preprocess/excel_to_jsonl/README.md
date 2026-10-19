@@ -10,8 +10,10 @@ parse の **前** に Excel(`.xls` / `.xlsx`)原本を決定論で「行の記�
   JSONL は `document`(変換器・読まなかったシート)→ シート(複数の表に分けたときは表)ごとに `sheet`(表頭・
   推定の信頼度・読み方・版式の判定・表の番号と範囲・列と役割・診断)→ `preamble` / `row` / `procedure_step` /
   `form_field`(`parent_id` = シートの記録、`location` = 元の行番号とセル範囲。図形の文字を含む記録は `shape_cells`)の順。
-- 変換の本体 `app.converters.read_excel(bytes, extension=…, options=…)` は前処理のサービスに依存せず、原本の
-  bytes と選択肢だけで `SheetRecordsDocument` を返す(会話の添付などの別の経路でも同じ読み方にするため。#2516)。
+- 読み方の本体は platform の `pr_backend_core.spreadsheet.read_excel(bytes, extension=…, options=…)`(#2525)。
+  原本の bytes と選択肢だけで `SheetRecordsDocument` を返し、チャットの添付などの別の経路も同じ読み方を使う。
+  このサービスの `app.converters.convert` はそれを呼び、構造化レコードの JSONL にするだけ。読み方のテストは
+  `platform/packages/backend_core/tests/test_spreadsheet.py` と、このサービスの `tests/`(JSONL まで通す)。
 - 選択肢: `POST /convert` の form の `options`(JSON)。backend は文書レシピの `excel_options`(無ければ
   `RAG_PREPROCESS_EXCEL_OPTIONS`)を渡す。
 - readiness: `GET /health`(openpyxl / xlrd 導入状況)
