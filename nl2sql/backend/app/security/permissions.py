@@ -256,10 +256,10 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
             PERSISTENCE_RECOVER_PERMISSION,
         ),
     ),
-    # 回答の注意書き（設定は製品ごと。運用設定のシステムテーブルの下。#2405・#2449）。
-    _menu_permission("menu.settings_answer_notice", "運用設定", "回答の注意書き"),
-    # チャットの添付を使うか（設定は製品ごと。運用設定の回答の注意書きの下。#2517）。
+    # チャットの添付を使うか（設定は製品ごと。運用設定のシステムテーブルの下。#2517・#2546）。
     _menu_permission("menu.settings_chat_attachments", "運用設定", "チャットの添付"),
+    # 回答の注意書き（設定は製品ごと。運用設定のチャットの添付の下。#2405・#2449・#2546）。
+    _menu_permission("menu.settings_answer_notice", "運用設定", "回答の注意書き"),
     # データベース設定から分けた運用の操作（#658）。
     _menu_permission("menu.settings_select_ai_credential", "運用設定", "Select AI Credential"),
     _menu_permission("menu.settings_oci", "システム設定", "OCI 認証"),
