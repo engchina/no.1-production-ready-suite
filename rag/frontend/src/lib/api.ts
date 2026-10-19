@@ -1257,6 +1257,8 @@ export interface DocumentRecipeView {
   preprocess_artifact: DocumentPreprocessArtifact | null;
   active_extraction_recipe_id: string | null;
   active_chunk_set_id: string | null;
+  /** Embedding / 索引の前の保存済み chunk_set(最新の CHUNKED)。INDEX の再実行が使う(#2467)。 */
+  pending_chunk_set_id?: string | null;
   chunk_count: number;
   vector_count: number;
   config_revision: number;

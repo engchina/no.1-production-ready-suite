@@ -663,6 +663,8 @@ class DocumentRecipeView(BaseModel):
     preprocess_artifact: DocumentPreprocessArtifact | None = None
     active_extraction_recipe_id: str | None = None
     active_chunk_set_id: str | None = None
+    # Embedding / 索引の前の保存済み chunk_set(最新の CHUNKED。INDEX の再実行が使う。#2467)。
+    pending_chunk_set_id: str | None = None
     chunk_count: int = Field(default=0, ge=0)
     vector_count: int = Field(default=0, ge=0)
     config_revision: int = Field(default=1, ge=1)

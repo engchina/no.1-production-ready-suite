@@ -1121,6 +1121,9 @@ async def _document_recipe_view(
             else None
         ),
         active_chunk_set_id=active_chunk_set_id,
+        pending_chunk_set_id=(
+            str(row["pending_chunk_set_id"]) if row.get("pending_chunk_set_id") else None
+        ),
         chunk_count=int(str(row.get("chunk_count") or 0)),
         vector_count=int(str(row.get("vector_count") or 0)),
         config_revision=config_revision,

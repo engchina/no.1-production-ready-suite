@@ -1984,7 +1984,13 @@ class OracleClient:
                 cs.chunk_set_id AS active_chunk_set_id,
                 NVL(cs.chunk_count, 0) AS chunk_count,
                 NVL(cs.vector_count, 0) AS vector_count,
-                cs.status AS chunk_set_status
+                cs.status AS chunk_set_status,
+                (
+                    SELECT p.chunk_set_id FROM rag_chunk_sets p
+                    WHERE p.recipe_id = r.recipe_id AND p.status = 'CHUNKED' AND p.is_active = 0
+                    ORDER BY p.updated_at DESC, p.chunk_set_id DESC
+                    FETCH FIRST 1 ROWS ONLY
+                ) AS pending_chunk_set_id
             FROM rag_document_recipes r
             LEFT JOIN rag_chunk_sets cs
               ON cs.recipe_id = r.recipe_id AND cs.is_active = 1
@@ -2044,7 +2050,13 @@ class OracleClient:
                 cs.chunk_set_id AS active_chunk_set_id,
                 NVL(cs.chunk_count, 0) AS chunk_count,
                 NVL(cs.vector_count, 0) AS vector_count,
-                cs.status AS chunk_set_status
+                cs.status AS chunk_set_status,
+                (
+                    SELECT p.chunk_set_id FROM rag_chunk_sets p
+                    WHERE p.recipe_id = r.recipe_id AND p.status = 'CHUNKED' AND p.is_active = 0
+                    ORDER BY p.updated_at DESC, p.chunk_set_id DESC
+                    FETCH FIRST 1 ROWS ONLY
+                ) AS pending_chunk_set_id
             FROM rag_document_recipes r
             LEFT JOIN rag_chunk_sets cs
               ON cs.recipe_id = r.recipe_id AND cs.is_active = 1
@@ -13611,6 +13623,7 @@ def _document_recipe_row(row: Mapping[str, object]) -> dict[str, object]:
         "chunk_count": _int_value(normalized.get("chunk_count")),
         "vector_count": _int_value(normalized.get("vector_count")),
         "chunk_set_status": _optional_str(normalized.get("chunk_set_status")),
+        "pending_chunk_set_id": _optional_str(normalized.get("pending_chunk_set_id")),
         "config_revision": max(1, _int_value(normalized.get("config_revision")) or 1),
         "materialized_revision": _optional_int(normalized.get("materialized_revision")),
         "error_message": _optional_str(normalized.get("error_message")),

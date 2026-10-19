@@ -61,11 +61,44 @@ _INVALID_OUTPUT_MARKERS = (
 )
 
 
+# OCI Generative AI の Embedding が HTTP 400 で返す拒否の文の印(#2467。実 API の応答で確認)。
+# 高負荷は 400 で返るが一時的なため、再試行の対象にする(共通の分類では「要求の誤り」になる)。
+_EMBEDDING_REJECTION_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("service_overloaded", ("high load", "try again later")),
+    ("input_too_long", ("is too long", "max tokens per text")),
+    ("too_many_inputs", ("inputs array size",)),
+    ("input_empty", ("cannot be empty",)),
+)
+_EMBEDDING_REASON_KINDS: dict[str, ErrorKind] = {
+    "service_overloaded": ErrorKind.UNAVAILABLE,
+    "input_too_long": ErrorKind.TOO_LARGE,
+}
+
+
+def embedding_rejection_reason(exc: BaseException) -> str | None:
+    """OCI の HTTP 400 の拒否を理由に分ける(本文は返さない)。400 でなければ None。"""
+    if getattr(exc, "status", None) != 400:
+        return None
+    text = " ".join(
+        str(value)
+        for value in (getattr(exc, "message", None), exc)
+        if value is not None and not callable(value)
+    ).casefold()
+    for reason, markers in _EMBEDDING_REJECTION_MARKERS:
+        if any(marker in text for marker in markers):
+            return reason
+    return "invalid_request"
+
+
 def rag_error_kind(exc: BaseException) -> ErrorKind | None:
     """RAG の client の例外のうち、共通の分類では決まらないものの種類。"""
     name = type(exc).__name__
     if name in {"OciGenAiConfigError", "OciPrivateKeyPassPhraseRequiredError"}:
         return ErrorKind.AUTHENTICATION
+    if name == "ServiceError":
+        kind = _EMBEDDING_REASON_KINDS.get(embedding_rejection_reason(exc) or "")
+        if kind is not None:
+            return kind
     message = str(exc)
     if isinstance(exc, ValueError) and any(marker in message for marker in _INVALID_OUTPUT_MARKERS):
         return ErrorKind.INVALID_OUTPUT

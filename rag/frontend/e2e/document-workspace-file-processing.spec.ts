@@ -1979,6 +1979,45 @@ test("ERROR は失敗 phase と前段の再処理ボタンを表示する", asyn
   await expectNoPageOverflow(page);
 });
 
+// Chunk 作成から索引まで通す job が Embedding で失敗したとき（job の phase は CHUNK）、保存済みの
+// Chunk（CHUNKED の chunk_set）から Embedding / 索引を再実行する導線を主にし、原因を表示する（#2467）。
+test("Embedding / 索引の失敗は保存済みの Chunk から索引を再実行する導線と原因を表示する", { tag: "@responsive" }, async ({
+  page,
+}) => {
+  const cause =
+    "Embedding の要求が失敗しました（HTTP 400・サービスの高負荷）。バッチ 2/4（83 件・98,131 文字）。" +
+    "再試行しても回復しませんでした。時間をおいて、保存済みの Chunk から Embedding / 索引を再実行してください。";
+  const state = await mockDocumentWorkspace(page, {
+    documentStatus: "ERROR",
+    latestJobStatus: "FAILED",
+    latestJobPhase: "CHUNK",
+    recipeFailedPhase: "INDEX",
+    pendingChunkSet: true,
+    preparedArtifact: true,
+    sharedErrorMessage: cause,
+  });
+
+  await page.goto("/documents/doc-1");
+
+  const alert = page.getByRole("alert").filter({ hasText: "Embedding / 索引で失敗しました" });
+  await expect(alert).toContainText(cause);
+  await expect(page.getByRole("button", { name: "Embedding / 索引を再実行" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Chunk 作成を再実行" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Chunk から再処理" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "抽出から再処理" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ファイル準備から再処理" })).toBeVisible();
+  await expectNoPageOverflow(page);
+
+  await page.getByRole("button", { name: "Embedding / 索引を再実行" }).click();
+  const confirm = page.getByRole("alertdialog");
+  await expect(confirm).toContainText("保存済みの Chunk から Embedding / 索引を再実行します。");
+  await confirm.getByRole("button", { name: "再実行する" }).click();
+  await expect.poll(() => state.enqueueRequest).toMatchObject({
+    path: "/api/documents/doc-1/recipes/recipe-1/ingestion-jobs",
+    phase: "INDEX",
+  });
+});
+
 test("ERROR は前提 artifact が無ければファイル準備の再実行だけに戻す", async ({ page }) => {
   await mockDocumentWorkspace(page, {
     documentStatus: "ERROR",
@@ -2133,6 +2172,10 @@ async function mockDocumentWorkspace(
     brokenPreparedArtifact?: boolean;
     preprocessProfile?: "passthrough" | "text_normalize";
     sharedErrorMessage?: string;
+    /** レシピの失敗工程（通しジョブでは job の phase と違う。#2467）。無ければ latestJobPhase。 */
+    recipeFailedPhase?: "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX";
+    /** 索引の前の保存済み chunk_set（CHUNKED）を持つ（#2467）。 */
+    pendingChunkSet?: boolean;
   } = {}
 ) {
   const state: {
@@ -2196,12 +2239,16 @@ async function mockDocumentWorkspace(
             document_id: "doc-1",
             slot_no: 1,
             status,
-            failed_phase: status === "ERROR" ? (options.latestJobPhase ?? "PREPROCESS") : null,
+            failed_phase:
+              status === "ERROR"
+                ? (options.recipeFailedPhase ?? options.latestJobPhase ?? "PREPROCESS")
+                : null,
             processing_config: {},
             effective_processing_config: {},
             preprocess_artifact: detail.preprocess_artifact,
             active_extraction_recipe_id: hasExtraction ? "er-recipe-1-r1" : null,
             active_chunk_set_id: status === "INDEXED" ? "chunk-set-recipe-1" : null,
+            pending_chunk_set_id: options.pendingChunkSet ? "chunk-set-pending" : null,
             chunk_count: status === "INDEXED" ? 2 : 0,
             vector_count: status === "INDEXED" ? 2 : 0,
             config_revision: 1,
@@ -2213,7 +2260,7 @@ async function mockDocumentWorkspace(
                 ? (options.sharedErrorMessage ??
                   (options.segmentError ? segmentFailureMessage : "取込処理に失敗しました。"))
                 : null,
-            steps: recipeSteps(status, options.latestJobPhase),
+            steps: recipeSteps(status, options.recipeFailedPhase ?? options.latestJobPhase),
             created_at: "2026-06-15T00:00:00Z",
             updated_at: "2026-06-15T00:00:20Z",
             started_at: null,
