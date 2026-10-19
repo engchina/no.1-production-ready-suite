@@ -9,7 +9,7 @@ const nl2sqlJa = {
   "nav.chat": "チャット",
   "chat.subtitle": "業務プロファイルのデータに質問し、生成・実行した SQL と結果を確かめながら会話を続ける",
   "chat.profile": "業務プロファイル",
-  // 回答の注意書き（3 製品で共通の文。#2405）
+  // 回答の注意書き（設定は製品ごと。#2405・#2449）
   "answer.notice.label": "回答の注意書き",
   "chat.profile.loading": "業務プロファイルを読み込んでいます",
   "chat.profile.loadFailed": "業務プロファイルを読み込めませんでした。",
@@ -304,7 +304,9 @@ const nl2sqlJa = {
   "nav.settingsAppearance": "外観と証明書",
   "nav.settingsAnswerNotice": "回答の注意書き",
   "settings.answerNotice.subtitle":
-    "AI の回答の末尾に毎回出す注意書き（誤りの可能性・確かめ方・連絡先）を設定します。3 製品で同じ文を使います。",
+    "AI の回答の末尾に毎回出す注意書き（誤りの可能性・確かめ方・連絡先）を設定します。NL2SQL の回答だけに使い、RAG・Agent はそれぞれの画面で設定します。",
+  "settings.answerNotice.description":
+    "SQL チャットと DB 管理チャットの回答の末尾に、毎回同じ文を出します。確認の質問・エラー・停止には出しません。",
   "nav.securityUsers": "ユーザー管理",
   "nav.securityRoles": "ロール管理",
   "nav.securityApiKeys": "API キー",

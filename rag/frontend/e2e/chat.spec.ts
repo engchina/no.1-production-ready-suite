@@ -451,7 +451,7 @@ for (const viewport of [
   );
 }
 
-// 回答の注意書き（3 製品で共通の文。#2405）。回答の本文と根拠の後に出し、本文には混ぜない。
+// 回答の注意書き（設定は製品ごと。#2405・#2449）。回答の本文と根拠の後に出し、本文には混ぜない。
 const NOTICE = "この回答は AI が生成したものです。\n連絡先: https://example.com/help";
 
 for (const viewport of [

@@ -71,10 +71,11 @@ describe("権限コードの対応表", () => {
       "nav.section.operations",
       "nav.section.settings",
     ]);
-    // システムテーブルは NL2SQL と同じく運用設定の先頭（#658）。
+    // システムテーブルは NL2SQL と同じく運用設定の先頭で、その下に回答の注意書き（#658・#2449）。
     const operations = NAV_SECTIONS.find((section) => section.titleKey === "nav.section.operations");
     expect(operations?.items.map((item) => [item.href, item.permission])).toEqual([
       [APP_ROUTES.settingsSystemTables, MENU_PERMISSIONS.settingsSystemTables],
+      [APP_ROUTES.settingsAnswerNotice, MENU_PERMISSIONS.settingsAnswerNotice],
       [APP_ROUTES.settingsHuggingface, MENU_PERMISSIONS.settingsHuggingface],
       [APP_ROUTES.settingsServices, MENU_PERMISSIONS.settingsServices],
     ]);

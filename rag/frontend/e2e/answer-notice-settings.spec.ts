@@ -2,7 +2,7 @@ import { expect, test, type Page } from "./fixtures/test";
 
 import { apiEnvelope, expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
-// 回答の注意書きの設定（3 製品で共通の文。画面は platform の共有パッケージ。#2405）。
+// 回答の注意書きの設定（設定は製品ごと。画面は platform の共有パッケージ。#2405・#2449）。
 
 const DEFAULT_TEXT = "既定の 1 行目\n既定の 2 行目";
 const DEFAULT_CONTACT = "既定の窓口";
@@ -107,9 +107,15 @@ test("無効にすると表示の確認に注意書きを出さず、無効を�
   await expect.poll(() => saved.at(-1)).toEqual({ enabled: false, text: null, contact: null });
 });
 
-test("サイドナビのシステム設定に回答の注意書きがある", { tag: "@responsive" }, async ({ page }) => {
+test("サイドナビの運用設定のシステムテーブルの下に回答の注意書きがある", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await mockAnswerNotice(page);
   await page.goto("/settings/answer-notice");
-  await expect(page.getByRole("link", { name: "回答の注意書き" })).toHaveAttribute("href", "/settings/answer-notice");
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const operations = sidebar.locator("#nav-section-nav-section-operations");
+  await expect(operations.getByRole("link").nth(1)).toHaveAttribute("href", "/settings/answer-notice");
+  await expect(operations.getByRole("link").nth(1)).toHaveAccessibleName("回答の注意書き");
+  await expect(
+    sidebar.locator("#nav-section-nav-section-settings").locator('a[href="/settings/answer-notice"]')
+  ).toHaveCount(0);
 });

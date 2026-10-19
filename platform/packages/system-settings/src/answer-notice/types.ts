@@ -32,5 +32,5 @@ export interface AnswerNoticeApi {
   update: (payload: AnswerNoticeSettingsUpdate) => Promise<AnswerNoticeSettingsData>;
 }
 
-/** 3製品で共通の React Query key。 */
+/** React Query key（製品の画面はその製品の設定だけを読む）。 */
 export const ANSWER_NOTICE_QUERY_KEY = ["settings", "answer-notice"] as const;

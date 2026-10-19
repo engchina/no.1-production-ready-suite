@@ -70,8 +70,9 @@ const EXPECTED_ICON_NAMES_BY_LABEL_KEY = new Map<string, string>([
   ["nav.securityRoles", "Shield"],
   // 全員の API キー（RAG / NL2SQL だけ。#1805）
   ["nav.securityApiKeys", "KeySquare"],
-  // 運用設定（#81。Select AI Credential はデータベース設定から分けた。#658）
+  // 運用設定（#81。Select AI Credential はデータベース設定から分けた。#658。回答の注意書きは #2449）
   ["nav.settingsSystemTables", "TableProperties"],
+  ["nav.settingsAnswerNotice", "MessageSquareWarning"],
   ["nav.settingsSelectAiCredential", "FileKey"],
   // システム設定（3製品共通）
   ["nav.settingsOci", "KeyRound"],
@@ -79,7 +80,6 @@ const EXPECTED_ICON_NAMES_BY_LABEL_KEY = new Map<string, string>([
   ["nav.settingsModel", "BrainCog"],
   ["nav.settingsDatabase", "Database"],
   ["nav.settingsAppearance", "Palette"],
-  ["nav.settingsAnswerNotice", "MessageSquareWarning"],
 ]);
 
 test("サイドバーのメニュー icon は機能ごとに期待した Lucide icon を使う", () => {

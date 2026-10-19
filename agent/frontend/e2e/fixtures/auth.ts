@@ -24,6 +24,7 @@ export const MENU_PERMISSION_CODES = [
   "menu.security_users",
   "menu.security_roles",
   "menu.settings_system_tables",
+  "menu.settings_answer_notice",
   "menu.runtimes",
   "menu.settings_external_mcp",
   "menu.settings_oci",
@@ -31,7 +32,6 @@ export const MENU_PERMISSION_CODES = [
   "menu.settings_model",
   "menu.settings_database",
   "menu.settings_appearance",
-  "menu.settings_answer_notice",
 ] as const;
 
 export const CAPABILITY_PERMISSION_CODES = [
@@ -56,6 +56,7 @@ const ADMIN_MENUS = [
   "menu.usage",
   "menu.audit",
   "menu.settings_system_tables",
+  "menu.settings_answer_notice",
   "menu.runtimes",
   "menu.settings_external_mcp",
   "menu.settings_oci",
@@ -63,7 +64,6 @@ const ADMIN_MENUS = [
   "menu.settings_model",
   "menu.settings_database",
   "menu.settings_appearance",
-  "menu.settings_answer_notice",
 ];
 
 const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string, label: string]> = {
@@ -79,6 +79,7 @@ const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string
   "menu.audit": ["改善・運用", "監査ログ"],
   "menu.security_permissions": ["セキュリティ設定", "権限管理"],
   "menu.settings_system_tables": ["運用設定", "システムテーブル"],
+  "menu.settings_answer_notice": ["運用設定", "回答の注意書き"],
   "menu.runtimes": ["運用設定", "実行環境"],
   "menu.settings_external_mcp": ["運用設定", "MCP 接続"],
   "menu.security_users": ["ユーザーとロール", "ユーザー管理"],
@@ -88,7 +89,6 @@ const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string
   "menu.settings_model": ["システム設定", "モデル"],
   "menu.settings_database": ["システム設定", "データベース"],
   "menu.settings_appearance": ["システム設定", "外観と証明書"],
-  "menu.settings_answer_notice": ["システム設定", "回答の注意書き"],
 };
 
 // capability のグループは NL2SQL / RAG と同じ「参照権限 / 実行権限 / 管理権限」（#791）。

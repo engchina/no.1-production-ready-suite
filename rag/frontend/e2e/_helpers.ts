@@ -31,6 +31,7 @@ export const MENU_PERMISSION_CODES = [
   "menu.security_roles",
   "menu.security_api_keys",
   "menu.settings_system_tables",
+  "menu.settings_answer_notice",
   "menu.settings_huggingface",
   "menu.settings_services",
   "menu.settings_oci",
@@ -38,7 +39,6 @@ export const MENU_PERMISSION_CODES = [
   "menu.settings_model",
   "menu.settings_database",
   "menu.settings_appearance",
-  "menu.settings_answer_notice",
 ] as const;
 
 export const CAPABILITY_PERMISSION_CODES = [

@@ -641,7 +641,7 @@ test.describe("類似 FAQ の照会中も、検索を始めたことを示す（
   });
 });
 
-// 回答の注意書き（3 製品で共通の文。#2405）。回答の本文と根拠の後に出す。
+// 回答の注意書き（設定は製品ごと。#2405・#2449）。回答の本文と根拠の後に出す。
 for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },

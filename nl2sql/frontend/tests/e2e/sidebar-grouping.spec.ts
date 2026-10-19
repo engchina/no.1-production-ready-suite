@@ -117,7 +117,7 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
     icons.map((icon) => icon.innerHTML.replace(/\s+/g, " ").trim())
   );
   // AI 活用の先頭にチャットを足した（#871）。ユーザーとロールの末尾の API キー（#1805）、データ準備の
-  // DB 管理チャット（#2264）、システム設定の回答の注意書き（#2405）を足して 34 項目。
+  // DB 管理チャット（#2264）、運用設定の回答の注意書き（#2405・#2449）を足して 34 項目。
   expect(menuIconSignatures).toHaveLength(34);
   expect(new Set(menuIconSignatures).size).toBe(menuIconSignatures.length);
 
@@ -197,13 +197,15 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   for (const label of ["OCI 認証", "アップロード保存先", "モデル", "データベース"]) {
     await expect(sidebar.getByText(label, { exact: true })).toBeVisible();
   }
-  // 運用設定は「システムテーブル → Select AI Credential」（#658）。
+  // 運用設定は「システムテーブル → 回答の注意書き → Select AI Credential」（#658・#2449）。
   const systemTablesBox = await sidebar.getByText("システムテーブル", { exact: true }).boundingBox();
+  const answerNoticeBox = await sidebar.getByText("回答の注意書き", { exact: true }).boundingBox();
   const credentialBox = await sidebar.getByText("Select AI Credential", { exact: true }).boundingBox();
-  if (!systemTablesBox || !credentialBox) {
+  if (!systemTablesBox || !answerNoticeBox || !credentialBox) {
     throw new Error("運用設定のメニュー位置を取得できませんでした。");
   }
-  expect(systemTablesBox.y).toBeLessThan(credentialBox.y);
+  expect(systemTablesBox.y).toBeLessThan(answerNoticeBox.y);
+  expect(answerNoticeBox.y).toBeLessThan(credentialBox.y);
 
   // 「API キー」（全員のキーの管理。RAG / NL2SQL だけ。#1805）はユーザーとロールの末尾。アカウント欄の
   // 「API キー」（自分のキー。ボタン）と区別するため、ナビのリンクで探す。

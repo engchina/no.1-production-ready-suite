@@ -256,6 +256,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
             PERSISTENCE_RECOVER_PERMISSION,
         ),
     ),
+    # 回答の注意書き（設定は製品ごと。運用設定のシステムテーブルの下。#2405・#2449）。
+    _menu_permission("menu.settings_answer_notice", "運用設定", "回答の注意書き"),
     # データベース設定から分けた運用の操作（#658）。
     _menu_permission("menu.settings_select_ai_credential", "運用設定", "Select AI Credential"),
     _menu_permission("menu.settings_oci", "システム設定", "OCI 認証"),
@@ -273,8 +275,6 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         ),
     ),
     _menu_permission("menu.settings_appearance", "システム設定", "外観と証明書"),
-    # 回答の注意書き（3 製品で共通の文。#2405）。
-    _menu_permission("menu.settings_answer_notice", "システム設定", "回答の注意書き"),
     # ここから下はナビに無い権限（画面の中の操作を許可する capability）。
     _permission(
         "nl2sql.ontology.capabilities.manage",
@@ -780,7 +780,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/settings/database/adb/settings"): _SETTINGS_DATABASE,
     ("POST", "/settings/database/adb/start"): _SETTINGS_DATABASE,
     ("POST", "/settings/database/adb/stop"): _SETTINGS_DATABASE,
-    # ---- システム設定: 回答の注意書き（3 製品で共通の文。#2405） ----
+    # ---- 運用設定: 回答の注意書き（設定は製品ごと。#2449） ----
     ("GET", "/settings/answer-notice"): _allowed("menu.settings_answer_notice"),
     ("PUT", "/settings/answer-notice"): _allowed("menu.settings_answer_notice"),
     ("POST", "/settings/database/password/reveal"): _SETTINGS_DATABASE,

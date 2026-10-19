@@ -536,7 +536,7 @@ test("前の RAG のツールの呼び出しの根拠も、原文のプレビュ
   expect(request?.searchParams.get("chunk_id")).toBe(CHUNK_C);
 });
 
-// #2405: 回答の注意書き（3 製品で共通の文）。backend が回答の成果物の `notice` に付け、画面は回答の本文と根拠の後に出す。
+// #2405: 回答の注意書き（設定は製品ごと。#2449）。backend が回答の成果物の `notice` に付け、画面は回答の本文と根拠の後に出す。
 const NOTICE = "この回答は AI が生成したものです。\n連絡先: https://example.com/help";
 
 function withNotice(mockApi: MockApi) {

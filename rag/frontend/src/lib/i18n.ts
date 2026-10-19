@@ -1821,7 +1821,11 @@ export const ja = {
   "settings.graph.loadError": "関係情報の構築設定を取得できませんでした。",
   "settings.graph.saveError": "関係情報の構築設定を保存できませんでした。",
   "settings.answerNotice.subtitle":
-    "AI の回答の末尾に毎回出す注意書き（誤りの可能性・確かめ方・連絡先）を設定します。3 製品で同じ文を使います。",
+    "AI の回答の末尾に毎回出す注意書き（誤りの可能性・確かめ方・連絡先）を設定します。RAG の回答だけに使い、NL2SQL・Agent はそれぞれの画面で設定します。",
+  "settings.answerNotice.description":
+    "チャットと検索の回答の末尾に、毎回同じ文を出します。確認の質問・エラー・停止には出しません。",
+  "settings.answerNotice.helperContact":
+    "本文の後に「{line}」と出します。窓口の名前と連絡の方法（電話・URL など）を 1 行で書きます。検索・回答プロファイルで窓口を上書きできます。",
   "settings.uploadStorage.subtitle":
     "ドキュメントアップロード時の原本保存先を local または OCI Object Storage から選択します。",
   "settings.uploadStorage.backend.local": "ローカルディレクトリ",

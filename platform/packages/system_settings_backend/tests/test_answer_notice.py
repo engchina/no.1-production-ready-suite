@@ -1,4 +1,4 @@
-"""回答の注意書き（3 製品共通。#2405）。"""
+"""回答の注意書き（設定は製品ごと。#2405・#2449）。"""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from pr_system_settings.answer_notice import (
     AnswerNoticeSettingsUpdate,
     InMemoryAnswerNoticeStore,
     OracleAnswerNoticeStore,
+    answer_notice_setting_key,
     build_answer_notice_router,
 )
 from pr_system_settings.auth.errors import SecurityApiError, SecurityMigrationRequired
@@ -213,7 +214,7 @@ def _oracle_store(
     def factory() -> Any:
         yield _Connection()
 
-    return OracleAnswerNoticeStore(factory), log
+    return OracleAnswerNoticeStore(factory, answer_notice_setting_key("rag")), log
 
 
 def test_oracle_store_loads_row() -> None:
@@ -229,6 +230,7 @@ def test_oracle_store_loads_row() -> None:
     assert log[0][0].startswith(
         "SELECT ENABLED, NOTICE_TEXT, UPDATED_AT, CONTACT_TEXT FROM PLATFORM_ANSWER_NOTICE"
     )
+    assert log[0][1] == {"setting_key": "answer_notice:rag"}
 
 
 def test_oracle_store_returns_none_without_row() -> None:
@@ -236,17 +238,24 @@ def test_oracle_store_returns_none_without_row() -> None:
     assert store.load() is None
 
 
-def test_oracle_store_upserts_single_row() -> None:
+def test_oracle_store_upserts_the_product_row() -> None:
     store, log = _oracle_store()
     saved = store.save(AnswerNoticeRecord(enabled=True, text=None))
     sql, binds = log[0]
     assert sql.startswith("MERGE INTO PLATFORM_ANSWER_NOTICE")
-    assert binds["setting_key"] == "answer_notice"
+    assert binds["setting_key"] == "answer_notice:rag"
     assert binds["enabled"] == 1
     assert binds["notice_text"] is None
     assert binds["contact_text"] is None
     assert log[-1][0] == "COMMIT"
     assert saved.updated_at is not None
+
+
+def test_setting_key_is_per_product() -> None:
+    """注意書きは製品ごとの行に保存する（#2449）。製品の行のキーは互いに重ならない。"""
+    keys = {answer_notice_setting_key(product) for product in ("rag", "nl2sql", "agent")}
+    assert keys == {"answer_notice:rag", "answer_notice:nl2sql", "answer_notice:agent"}
+    assert all(len(key) <= 32 for key in keys)  # SETTING_KEY VARCHAR2(32)
 
 
 def test_oracle_store_reports_missing_table_as_migration_required() -> None:
