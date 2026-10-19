@@ -78,6 +78,8 @@ MENU_SETTINGS_DATABASE = "menu.settings_database"
 MENU_SETTINGS_APPEARANCE = "menu.settings_appearance"
 # 回答の注意書き（設定は製品ごと。運用設定のシステムテーブルの下。#2405・#2449）。
 MENU_SETTINGS_ANSWER_NOTICE = "menu.settings_answer_notice"
+# チャットの添付を使うか（設定は製品ごと。運用設定の回答の注意書きの下。#2517）。
+MENU_SETTINGS_CHAT_ATTACHMENTS = "menu.settings_chat_attachments"
 
 # ---- capability（従来の 5 ロールに対応） ----
 
@@ -134,6 +136,7 @@ _ADMIN_MENUS = (
     MENU_AUDIT,
     MENU_SETTINGS_SYSTEM_TABLES,
     MENU_SETTINGS_ANSWER_NOTICE,
+    MENU_SETTINGS_CHAT_ATTACHMENTS,
     MENU_RUNTIMES,
     MENU_SETTINGS_EXTERNAL_MCP,
     *_SYSTEM_SETTINGS_MENUS,
@@ -168,6 +171,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ。#658 / #751）。
     _menu_permission(MENU_SETTINGS_SYSTEM_TABLES, _GROUP_OPERATIONS, "システムテーブル"),
     _menu_permission(MENU_SETTINGS_ANSWER_NOTICE, _GROUP_OPERATIONS, "回答の注意書き"),
+    _menu_permission(MENU_SETTINGS_CHAT_ATTACHMENTS, _GROUP_OPERATIONS, "チャットの添付"),
     # 組み込み Runtime の状態とモデルの確認（#754 / #791）。
     _menu_permission(MENU_RUNTIMES, _GROUP_OPERATIONS, "実行環境"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_MCP, _GROUP_OPERATIONS, "MCP 接続"),
@@ -410,6 +414,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # 会話の名前の変更・削除（#1817）。作った利用者だけ（handler が利用者で絞る）。
     ("PATCH", "/threads/{thread_id}"): _any(MENU_CHAT),
     ("DELETE", "/threads/{thread_id}"): _any(MENU_CHAT),
+    # チャットの添付（#2517）。会話の権限（持ち主・system_admin）は API が判定する。
+    ("POST", "/chat-attachments"): _any(MENU_CHAT),
+    ("GET", "/chat-attachments"): _any(MENU_CHAT),
+    ("DELETE", "/chat-attachments/{attachment_id}"): _any(MENU_CHAT),
     ("GET", _RUN): _RUN_DETAIL,
     ("GET", f"{_RUN}/audit"): _RUN_DETAIL,
     ("GET", f"{_RUN}/artifacts"): _RUN_DETAIL,
@@ -518,6 +526,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # 回答の注意書き（設定は製品ごと。#2449）。
     ("GET", "/settings/answer-notice"): _any(MENU_SETTINGS_ANSWER_NOTICE),
     ("PUT", "/settings/answer-notice"): _any(MENU_SETTINGS_ANSWER_NOTICE),
+    # チャットの添付を使うか（設定は製品ごと。#2517）。
+    ("GET", "/settings/chat-attachments"): _any(MENU_SETTINGS_CHAT_ATTACHMENTS),
+    ("PUT", "/settings/chat-attachments"): _any(MENU_SETTINGS_CHAT_ATTACHMENTS),
     # ---- ユーザーとロール（platform の共通 router。RAG / NL2SQL と同じ割り当て）----
     # 前方一致で割り当てず、route ごとに登録する（新しい route は登録するまで拒否。#503）。
     ("GET", "/security/users"): _any(MENU_SECURITY_USERS),

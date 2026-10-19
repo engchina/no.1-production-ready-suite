@@ -94,7 +94,17 @@ import type {
 } from "@production-ready/system-settings";
 
 // 回答の注意書き API の型は platform の共有パッケージが正本（#2405）。
-import type { AnswerNoticeSettingsData, AnswerNoticeSettingsUpdate } from "@production-ready/system-settings";
+import type {
+  AnswerNoticeSettingsData,
+  AnswerNoticeSettingsUpdate,
+  ChatAttachmentSettingsData,
+  ChatAttachmentSettingsUpdate,
+} from "@production-ready/system-settings";
+import type {
+  ChatAttachmentApiItem,
+  ChatAttachmentApiLimits,
+  ChatAttachmentApiReference,
+} from "@production-ready/ui";
 
 // アップロード保存先 API の型は platform の共有パッケージが正本（#97）。
 export type {
@@ -327,6 +337,8 @@ export interface RunState {
   created_by_user_uuid?: string | null;
   /** 会話（スレッド。#768）。チャットの 1 往復が 1 Run。 */
   thread_id?: string | null;
+  /** 質問に添付したファイル（#2517）。 */
+  attachments?: ChatAttachmentApiReference[];
   // 以下は見ている利用者から見た事実（backend の `RunViewer`。#1954）。詳細（`GET /api/runs/{id}`）と会話の Run に
   // 付く。操作の応答の Run には無いことがある（無ければ自分の Run として扱う）。
   /** 見ている利用者が実行した Run か。 */
@@ -1084,6 +1096,14 @@ export interface CreateRunPayload {
    * この Run ではその種類のツールを使わずに続ける。
    */
   clarification_cancel?: ClarificationKind;
+  /** 質問に添付するファイル（`uploadChatAttachment` の `attachment_id`。#2517）。 */
+  attachment_ids?: string[];
+}
+
+/** 会話の添付の一覧と上限（#2517）。 */
+export interface ChatAttachmentListData {
+  items: ChatAttachmentApiItem[];
+  limits: ChatAttachmentApiLimits;
 }
 
 /** 確認の種類（NL2SQL の SQL の生成前の確認・RAG の確認。#1441・#1445）。 */
@@ -1808,6 +1828,20 @@ export const agentApi = {
       ...data,
       runs: data.runs.map(parseRunState),
     })),
+  /** チャットにファイルを添付する（会話があれば結び付ける。#2517）。 */
+  uploadChatAttachment: (file: File, threadId?: string | null) => {
+    const body = new FormData();
+    body.append("file", file);
+    if (threadId) body.append("conversation_id", threadId);
+    return request<ChatAttachmentApiItem>("/api/chat-attachments", { method: "POST", body });
+  },
+  /** 会話の添付（無ければ送る前の添付）と上限。 */
+  listChatAttachments: (threadId?: string | null) =>
+    request<ChatAttachmentListData>(
+      threadId ? `/api/chat-attachments?conversation_id=${encodeURIComponent(threadId)}` : "/api/chat-attachments"
+    ),
+  deleteChatAttachment: (attachmentId: string) =>
+    request<{ deleted: boolean }>(`/api/chat-attachments/${encodeURIComponent(attachmentId)}`, { method: "DELETE" }),
   createRun: (payload: CreateRunPayload) =>
     requestRun("/api/runs", {
       method: "POST",
@@ -2096,6 +2130,16 @@ export const api = {
     }),
   stopAdb: () =>
     request<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
+
+  // チャットの添付（設定は製品ごと。#2517）
+  getChatAttachmentSettings: (options: SettingsRequestOptions = {}) =>
+    request<ChatAttachmentSettingsData>("/api/settings/chat-attachments", { signal: options.signal }),
+  updateChatAttachmentSettings: (body: ChatAttachmentSettingsUpdate) =>
+    request<ChatAttachmentSettingsData>("/api/settings/chat-attachments", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
 
   // 回答の注意書き（設定は製品ごと。#2405・#2449）
   getAnswerNoticeSettings: (options: SettingsRequestOptions = {}) =>

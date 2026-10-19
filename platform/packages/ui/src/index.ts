@@ -227,6 +227,28 @@ export {
   type ChatComposerProps,
 } from "./components/chat/chat-composer";
 export {
+  ChatAttachmentList,
+  formatAttachmentSize,
+  type ChatAttachmentItem,
+  type ChatAttachmentKind,
+  type ChatAttachmentListLabels,
+  type ChatAttachmentListProps,
+  type ChatAttachmentStatus,
+  type ChatComposerAttachmentLabels,
+  type ChatComposerAttachments,
+} from "./components/chat/chat-attachments";
+export {
+  chatAttachmentItems,
+  chatAttachmentUploadResult,
+  useChatAttachments,
+  type ChatAttachmentApiItem,
+  type ChatAttachmentApiLimits,
+  type ChatAttachmentApiReference,
+  type ChatAttachmentMessages,
+  type ChatAttachmentUploadResult,
+  type UseChatAttachmentsOptions,
+} from "./components/chat/use-chat-attachments";
+export {
   ChatHistoryList,
   type ChatHistoryItem,
   type ChatHistoryListLabels,

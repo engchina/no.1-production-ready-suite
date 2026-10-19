@@ -42,6 +42,8 @@ import {
   useChatHistoryPanel,
   ApiErrorBanner,
   apiErrorMessage,
+  chatAttachmentItems,
+  type ChatAttachmentItem,
   DEFAULT_PAGE_SIZE,
   type ChatProgressEvent,
   type ClarificationBusyAction,
@@ -72,6 +74,7 @@ import { runAnswerEvidence } from "@/lib/answer-evidence";
 import { noticeHeading, structureAnswer } from "@/lib/answer-structure";
 import { AGENT_CHAT_PROGRESS_STEPS, chatSubmitProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { useAgentChatAttachments } from "@/components/chat/useAgentChatAttachments";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
 import { AnswerReviewPanel } from "@/components/chat/AnswerReview";
 import { ClarificationCancelActions, ClarificationCancelNote } from "@/components/chat/ClarificationCancel";
@@ -172,6 +175,12 @@ export function ChatPage() {
   // 送った質問（#907）。Run の作成の応答を待たずに会話の欄の末尾へ出し、作られた Run に置き換える。
   // 作れなかったときは残して「再送信」を出す（入力を失わない）。
   const [pending, setPending] = useState<OptimisticChatMessage | null>(null);
+  // 送った質問に添付したファイル（#2517）。再送信で同じ添付を送り、送った質問の下に出す。
+  const [pendingAttachments, setPendingAttachments] = useState<{ ids: string[]; items: ChatAttachmentItem[] }>({
+    ids: [],
+    items: [],
+  });
+  const attachments = useAgentChatAttachments();
   // この画面で送った（答えで作った）Run。回答前の確認のカードが送信の続きで出たら、確認事項の文へフォーカスを移す
   // （UX 契約 confirm-before-answer.md §7。履歴から開いた会話のカードでは移さない。#1839）。
   const [sentRunIds, setSentRunIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -294,12 +303,22 @@ export function ChatPage() {
   });
 
   const send = useMutation({
-    mutationFn: ({ goal, clarificationCancel }: { goal: string; generation: number; clarificationCancel?: ClarificationKind }) =>
+    mutationFn: ({
+      goal,
+      clarificationCancel,
+      attachmentIds,
+    }: {
+      goal: string;
+      generation: number;
+      clarificationCancel?: ClarificationKind;
+      attachmentIds?: string[];
+    }) =>
       agentApi.createRun({
         goal,
         agent_id: selectedAgentId,
         thread_id: threadId ?? undefined,
         ...(clarificationCancel ? { clarification_cancel: clarificationCancel } : {}),
+        ...(attachmentIds?.length ? { attachment_ids: attachmentIds } : {}),
       }),
     onSuccess: (run, { generation }) => {
       const stopRequested = stopAfterCreateRef.current === generation;
@@ -444,16 +463,20 @@ export function ChatPage() {
       waitingApproval ||
       send.isPending ||
       prerequisitesLoading ||
-      threadFailed
+      threadFailed ||
+      attachments.uploading
     )
       return;
     // 送った質問はすぐ会話の欄に出し、入力欄を空にする。回答の作成中も次の質問を書ける（#907）。
+    // 添付は入力欄から外し、送った質問の下に出す（#2517）。
+    const sentAttachments = attachments.take();
+    setPendingAttachments(sentAttachments);
     setPending(createOptimisticChatMessage(goal));
     setDraft("");
     // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
     autoScroll.scrollToLatest();
     cancel.reset();
-    send.mutate({ goal, generation: viewGenerationRef.current });
+    send.mutate({ goal, generation: viewGenerationRef.current, attachmentIds: sentAttachments.ids });
   }
 
   /**
@@ -474,7 +497,11 @@ export function ChatPage() {
     if (!pending || !selectedAgentId || running || waitingApproval || send.isPending) return;
     setPending(withOptimisticChatStatus(pending, "sending"));
     cancel.reset();
-    send.mutate({ goal: pending.content, generation: viewGenerationRef.current });
+    send.mutate({
+      goal: pending.content,
+      generation: viewGenerationRef.current,
+      attachmentIds: pendingAttachments.ids,
+    });
   }
 
   function stop() {
@@ -706,6 +733,8 @@ export function ChatPage() {
                   sendLabel={t("chat.send")}
                   stopLabel={t("chat.stop")}
                   sendTestId="chat-send"
+                  // 会話の添付（#2517。運用設定で有効な製品だけ）。
+                  attachments={attachments.composer}
                   // system_admin が他の利用者の会話を開いているときは、送る前に持ち主にも見えることを示す（#1954）。
                   // 新しい会話・自分の会話では出さない。
                   notice={
@@ -814,6 +843,7 @@ export function ChatPage() {
             {pending ? (
               <PendingTurn
                 message={pending}
+                attachments={pendingAttachments.items}
                 errorMessage={send.error ? apiErrorMessage(send.error, t("chat.failedUnknown")) : null}
                 resendDisabled={composerBlocked || send.isPending}
                 onResend={resend}
@@ -956,6 +986,8 @@ function RunChatTurn({
     <ChatTurn
       question={run.goal}
       questionSender={sender}
+      questionAttachments={chatAttachmentItems(run.attachments)}
+      attachmentsLabel={t("chat.attachments.list")}
       // カードで答えて作った往復は、質問の吹き出しの代わりに「回答前に確認した内容」を出す（#1839）。
       userContent={
         response ? <ConfirmationRecordBubble record={response} testId={`chat-confirmation-record-${run.id}`} /> : undefined
@@ -1159,11 +1191,13 @@ function RunChatTurn({
  */
 function PendingTurn({
   message,
+  attachments,
   errorMessage,
   resendDisabled,
   onResend,
 }: {
   message: OptimisticChatMessage;
+  attachments: ChatAttachmentItem[];
   errorMessage: string | null;
   resendDisabled: boolean;
   onResend: () => void;
@@ -1172,6 +1206,8 @@ function PendingTurn({
     // 1 往復の入れ物・送信中の回答の場所・失敗の出し方は 3 製品共通の ChatPendingTurn（#1161）。
     <ChatPendingTurn
       message={message}
+      attachments={attachments}
+      attachmentsLabel={t("chat.attachments.list")}
       failedLabel={t("chat.sendFailed")}
       testId="chat-pending-turn"
       // Run の作成の応答を待つ間も段階として出す（送信で待っていることが分かる。#1147）。

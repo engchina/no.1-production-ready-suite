@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.12.*"
 
 [[package]]
@@ -1196,23 +1196,31 @@ name = "production-ready-system-settings-backend"
 version = "0.1.0"
 source = { editable = "../../platform/packages/system_settings_backend" }
 dependencies = [
+    { name = "charset-normalizer" },
     { name = "cryptography" },
+    { name = "defusedxml" },
     { name = "fastapi" },
+    { name = "openpyxl" },
     { name = "production-ready-backend-core" },
     { name = "pwdlib", extra = ["argon2"] },
     { name = "pydantic" },
+    { name = "pypdf" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "charset-normalizer", specifier = ">=3.4" },
     { name = "cryptography", specifier = ">=50.0.0" },
+    { name = "defusedxml", specifier = ">=0.7" },
     { name = "fastapi", specifier = ">=0.121,<1.0" },
     { name = "oci", marker = "extra == 'oci'", specifier = ">=2.168" },
+    { name = "openpyxl", specifier = ">=3.1" },
     { name = "production-ready-backend-core", editable = "../../platform/packages/backend_core" },
     { name = "pwdlib", extras = ["argon2"], specifier = ">=0.3,<1.0" },
     { name = "pydantic", specifier = ">=2.11" },
+    { name = "pypdf", specifier = ">=6.4,<7" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "python-multipart", specifier = ">=0.0.20" },
 ]
@@ -1404,6 +1412,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f3/91/9c6ee907786a473bf81c5f53cf703ba0957b23ab84c264080fb5a450416f/pyparsing-3.3.2.tar.gz", hash = "sha256:c777f4d763f140633dcb6d8a3eda953bf7a214dc4eff598413c070bcdc117cbc", size = 6851574, upload-time = "2026-01-21T03:57:59.36Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/10/bd/c038d7cc38edc1aa5bf91ab8068b63d4308c66c4c8bb3cbba7dfbc049f9c/pyparsing-3.3.2-py3-none-any.whl", hash = "sha256:850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d", size = 122781, upload-time = "2026-01-21T03:57:55.912Z" },
+]
+
+[[package]]
+name = "pypdf"
+version = "6.21.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/51/e1/32a9c4dbd94618145f8bab5c623bdb0a528f23fc8719afd77ba0278fd377/pypdf-6.21.1.tar.gz", hash = "sha256:2d62c383acd6e0dff0a96322ba8b1135229343b084d73c6f6cfd947fd291afcb", size = 7088597, upload-time = "2026-10-17T10:29:52.801Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/85/e6/24c944e473c34e818cf1b98085796fcd780465ecfe17663f2bf8fee1958b/pypdf-6.21.1-py3-none-any.whl", hash = "sha256:553e2d42f5bb3bb2a785a7d3de8ef90bb7df74b5413eff5a7b4388007ea9254b", size = 405134, upload-time = "2026-10-17T10:29:50.687Z" },
 ]
 
 [[package]]

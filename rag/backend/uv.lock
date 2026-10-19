@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.12.*"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -2248,23 +2248,31 @@ name = "production-ready-system-settings-backend"
 version = "0.1.0"
 source = { editable = "../../platform/packages/system_settings_backend" }
 dependencies = [
+    { name = "charset-normalizer" },
     { name = "cryptography" },
+    { name = "defusedxml" },
     { name = "fastapi" },
+    { name = "openpyxl" },
     { name = "production-ready-backend-core" },
     { name = "pwdlib", extra = ["argon2"] },
     { name = "pydantic" },
+    { name = "pypdf" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "charset-normalizer", specifier = ">=3.4" },
     { name = "cryptography", specifier = ">=50.0.0" },
+    { name = "defusedxml", specifier = ">=0.7" },
     { name = "fastapi", specifier = ">=0.121,<1.0" },
     { name = "oci", marker = "extra == 'oci'", specifier = ">=2.168" },
+    { name = "openpyxl", specifier = ">=3.1" },
     { name = "production-ready-backend-core", editable = "../../platform/packages/backend_core" },
     { name = "pwdlib", extras = ["argon2"], specifier = ">=0.3,<1.0" },
     { name = "pydantic", specifier = ">=2.11" },
+    { name = "pypdf", specifier = ">=6.4,<7" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "python-multipart", specifier = ">=0.0.20" },
 ]

@@ -117,6 +117,9 @@ GUIDE_DECISIONS = frozenset({"answer", "branch"})
 WITHHOLDING_CHECKS = frozenset({"guide", "guide_steps", "impact"})
 
 REASON_NO_RAG_EVIDENCE = "no_rag_evidence"
+# 資料（RAG）の根拠ではなく、利用者が添付したファイルを読んで答えた（#2517）。資料と照らし合わせる
+# 対象が無いので注記しない。
+REASON_ATTACHMENT_EVIDENCE = "attachment_evidence"
 REASON_VALIDATOR_UNAVAILABLE = "validator_unavailable"
 REASON_EMPTY_ANSWER = "empty_answer"
 # 利用者への確認の質問だけの回答（資料の主張を含まないので、根拠が無くても注記しない。#1306）。

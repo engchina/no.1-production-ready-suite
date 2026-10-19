@@ -67,6 +67,11 @@ from pr_system_settings.auth.visibility import (
     can_view_all_users_data,
     run_executor_matches,
 )
+from pr_system_settings.chat_attachments import (
+    ChatAttachmentReference,
+    build_chat_attachment_router,
+    build_chat_attachment_settings_router,
+)
 from pr_system_settings.database import build_database_router
 from pr_system_settings.database_status import (
     DatabaseSchemaProbeResult,
@@ -124,6 +129,7 @@ from app.features.agent.automations import (
     with_last_run_status,
 )
 from app.features.agent.automations import fire as fire_automation
+from app.features.agent.chat_attachments import chat_attachment_service
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
 from app.features.agent.confirmation import (
     SOURCE_AGENT,
@@ -601,6 +607,35 @@ async def require_system_settings_write(request: Request) -> None:
         raise HTTPException(status_code=403, detail="この機能を利用する権限がありません。")
 
 
+def _attachment_principal(request: Request) -> Principal:
+    """添付の API の利用者（`/api` の認証が `state.principal` に入れる）。"""
+    principal = _request_principal(request)
+    if principal is None:
+        raise HTTPException(status_code=401, detail="ログインしてください。")
+    return principal
+
+
+def _thread_attachment_owner(principal: Principal, thread_id: str) -> str:
+    """添付する会話（thread）の持ち主。見えない会話は 404（「AI 活用」の見え方。#1889）。"""
+    try:
+        thread = runtime_repository.get_thread(
+            thread_id,
+            user_uuid=principal.user_uuid,
+            all_users=can_view_all_users_data(principal),
+        )
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
+    return thread.owner_user_uuid or principal.user_uuid
+
+
+# チャットの添付（会話の期間だけ使う作業ファイル。3 製品共通の実装。#2517）。
+router.include_router(
+    build_chat_attachment_router(
+        get_service=lambda: chat_attachment_service(),
+        current_principal=_attachment_principal,
+        conversation_owner=_thread_attachment_owner,
+    )
+)
 # アップロード保存先は3製品共通の実装（platform の pr_system_settings。#97）。
 # 保存先は3製品共通の `.env`（app.settings.PLATFORM_ENV_FILE。#211）。
 # テストで get_settings / PLATFORM_ENV_FILE を差し替えられるよう、呼出時に module の値を参照する。
@@ -643,6 +678,16 @@ router.include_router(
     build_answer_notice_router(
         load=lambda: get_security_service().load_answer_notice(),
         save=lambda record: get_security_service().save_answer_notice(record),
+        write_dependencies=[Depends(require_system_settings_write)],
+    ),
+    prefix="/settings",
+)
+# チャットの添付を使うか（運用設定 › チャットの添付。設定は製品ごと。既定は無効。#2517）。
+router.include_router(
+    build_chat_attachment_settings_router(
+        load=lambda: get_security_service().chat_attachment_settings.load(),
+        save=lambda record: get_security_service().chat_attachment_settings.save(record),
+        get_settings=lambda: get_settings(),
         write_dependencies=[Depends(require_system_settings_write)],
     ),
     prefix="/settings",
@@ -1854,6 +1899,16 @@ async def create_run(
                 status_code=403,
                 detail="下書きで実行できるのは Agent 管理の権限がある利用者だけです。",
             )
+        # 添付（#2517）は Run を作る前に確かめ（見えない添付は 404・別の会話の添付は 409）、会話が
+        # 決まった後に会話へ結び付ける（新しい会話の ID は Run を作るときに決まる）。
+        attachments: list[ChatAttachmentReference] = []
+        if run_request.attachment_ids:
+            attachments = await run_in_threadpool(
+                chat_attachment_service().prepare_attachments,
+                _attachment_principal(request),
+                run_request.attachment_ids,
+                conversation_id=run_request.thread_id,
+            )
         # 実行は組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI。#754）。Run は操作した
         # 利用者として実行する。system_admin は他の利用者の会話も続けられ、その Run も
         # system_admin の権限・範囲で実行する（会話の持ち主の権限は借りない。#1928）。
@@ -1862,7 +1917,15 @@ async def create_run(
             run_request,
             created_by_user_uuid=_run_creator_user_uuid(request),
             all_users=_sees_all_users(request),
+            attachments=attachments,
         )
+        if attachments and run.thread_id:
+            await run_in_threadpool(
+                chat_attachment_service().bind_references,
+                attachments,
+                conversation_id=run.thread_id,
+                owner_user_uuid=run.thread_owner_user_uuid or run.created_by_user_uuid or "",
+            )
         _schedule_builtin_run(run)
         return ApiResponse(data=run)
     except AgentNotPublishedError as exc:
@@ -2021,6 +2084,16 @@ async def rename_thread(
     )
 
 
+def _delete_thread_attachments(thread_id: str) -> None:
+    try:
+        chat_attachment_service().delete_conversation(thread_id)
+    except Exception as exc:  # noqa: BLE001 - 会話の削除は止めない
+        logger.warning(
+            "agent_thread_attachments_delete_failed",
+            extra={"thread_id": thread_id, "error_type": type(exc).__name__},
+        )
+
+
 @router.delete("/threads/{thread_id}", response_model=ApiResponse[None])
 async def delete_thread(thread_id: str, request: Request) -> ApiResponse[None]:
     """会話を消す（#1817）。作った利用者と system_admin だけ（ほかは 404。#1889）。
@@ -2044,6 +2117,8 @@ async def delete_thread(thread_id: str, request: Request) -> ApiResponse[None]:
             user_uuid=user_uuid,
             all_users=all_users,
         )
+        # 会話の添付も消す（#2517。消せなくても期限で消える）。
+        await run_in_threadpool(_delete_thread_attachments, thread_id)
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     except ThreadBusyError as exc:

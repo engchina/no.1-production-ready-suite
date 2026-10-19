@@ -39,6 +39,7 @@ from pr_backend_core.chat_progress import (
 )
 from pr_backend_core.oracle_errors import is_oracle_connection_error, oracle_error_codes
 from pr_backend_core.version_retention import DEFAULT_MAX_PUBLISHED_VERSIONS, versions_to_prune
+from pr_system_settings.chat_attachments import ChatAttachmentReference
 from pydantic import (
     BaseModel,
     Field,
@@ -448,6 +449,9 @@ class RunCreateRequest(BaseModel):
     # チャットの確認の取り消しの操作（#1441・#1445）。`nl2sql` は「データベースの検索は不要」、
     # `rag` は「資料の検索は不要」。この Run ではその種類のツールを使わずに続ける。
     clarification_cancel: Literal["nl2sql", "rag"] | None = None
+    # 質問に添付するファイル（#2517。`POST /api/chat-attachments` の `attachment_id`）。送信で会話に
+    # 結び付け、会話の続きの Run も読める。件数の上限は共通の設定（API が確かめる）。
+    attachment_ids: list[str] = Field(default_factory=list, max_length=50)
 
     @field_validator("goal")
     @classmethod
@@ -654,6 +658,8 @@ class RunState(BaseModel):
     # （actor）で、system_admin が他の利用者の会話を続けた Run では持ち主と異なる。新しい会話の
     # Run は `created_by_user_uuid` と同じ。この項目がない既存の Run は None（`run_thread_owner`）。
     thread_owner_user_uuid: str | None = None
+    # 質問に添付したファイル（#2517。名前と種類。添付が期限で消えても発話の表示に残す）。
+    attachments: list[ChatAttachmentReference] = Field(default_factory=list)
     # 回答への評価（#774）。評価していない Run は None。
     feedback: RunFeedback | None = None
     # 管理者の評価（Agent 管理の権限。だれの回答にも付けられ、本人の評価とは別に残す。#774）。
@@ -1170,6 +1176,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         agent_version: int | None = None,
         extra_metadata: JsonObject | None = None,
         all_users: bool = False,
+        attachments: list[ChatAttachmentReference] | None = None,
     ) -> RunState: ...
     def begin_builtin_run(self, run_id: str) -> tuple[RunState, AgentProfile] | None: ...
     def begin_builtin_resume(
@@ -2048,6 +2055,7 @@ class AgentRuntimeRepository:
         agent_version: int | None = None,
         extra_metadata: JsonObject | None = None,
         all_users: bool = False,
+        attachments: list[ChatAttachmentReference] | None = None,
     ) -> RunState:
         """組み込み Runtime の Run を投入する（実行は builtin_runtime.execute_run）。
 
@@ -2064,6 +2072,7 @@ class AgentRuntimeRepository:
                 agent_version=agent_version,
                 extra_metadata=extra_metadata,
                 all_users=all_users,
+                attachments=attachments,
             )
             self._persist_locked()
             self._record_fact_locked(run)
@@ -2077,6 +2086,7 @@ class AgentRuntimeRepository:
         agent_version: int | None,
         extra_metadata: JsonObject | None,
         all_users: bool = False,
+        attachments: list[ChatAttachmentReference] | None = None,
     ) -> RunState:
         agent = self._agents.get(request.agent_id)
         if agent is None:
@@ -2115,6 +2125,7 @@ class AgentRuntimeRepository:
             created_by_user_uuid=created_by_user_uuid,
             thread_id=request.thread_id or f"thread_{uuid4().hex}",
             thread_owner_user_uuid=thread_owner,
+            attachments=list(attachments or []),
             status=RunStatus.QUEUED,
             metadata={
                 **request.metadata,
