@@ -749,6 +749,17 @@ repository が Run のイベントを足すたびに（Run の lock の中で）
 結果に、抜粋より長い章節（最大 3 つ。回答に使った根拠を先に）と読み方（`section_reads`。`section_read_note`）を足す。
 `rag_read_section` の結果には、続きがあれば `next_cursor` で続きを読む案内を、読み切ったら（階層 2 以上の章節で、質問が
 まとまりを求めるとき）親の章節へ上がる案内を足す。章節を読むかはモデルが決める（読み替えて実行はしない）。
+章節の未読の続き（#2492）: 案内に従わずに続きを読まないまま答えると、最終の検証は主張が根拠に合うかだけを確かめるので、
+後半の手順・前提の不足を見つけられない。質問が手順・一覧・条件のまとまりを求めるとき、Control Plane は Run の step から
+章節ごとの読み取りの状態（`section_coverage`。同じ接続・文書・`section_id` の読み取りで `section_complete=true` に達したか、
+上の章節を読み切ったか。`cursor` の呼び出しは、その cursor を返した章節に対応付ける）を決定的に追跡し、回答に使った章節
+（回答が chunk の id を書いた・本文や題名と当たる。探索で読んだだけの章節は数えない）の続きが残っていれば、略号・別名と同じ
+1 回の枠で、章節と `next_cursor` を挙げて差し戻す（経過の `tool_grounding` の `section_retry`）。続きの位置が古い
+（`source_stale` / `cursor_invalid`）ときは `rag_outline` から読み直す案内にし、取り込み直した文書の同じ題名の章節を読み切れば
+読んだとみなす。この実行のツールの呼び出しが上限に達していれば差し戻さず、取り消した Run も差し戻さない。それでも残った
+章節は、回答の末尾の「読み切れていない章節」に理由（続きを読んでいない・文書が更新された・上限・失敗）と示し、最終の検証の
+成果物に主張の照合とは別の `coverage`（`complete` / `incomplete` と章節）として残し、回答の対応の不足の印
+（`unread_sections`。conditional）にする。
 段の検索の決定的な補助（#1351。#1335 の評価で、Agent が `evidence_limit=5` を選んで答えの chunk が上限で切れ、同じ話題の
 言い換えを繰り返して予算に達した）: (1) モデルが `rag_search`・`rag_retrieve_evidence` の `evidence_limit` を既定（ツールの
 入力 schema の `default`。RAG の契約の `rag_search` は 12、`rag_retrieve_evidence` は検索する件数と同じ 20〔#1365〕）より

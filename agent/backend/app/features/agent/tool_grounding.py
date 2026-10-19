@@ -428,7 +428,8 @@ def hop_original_answer(events: Sequence[Any]) -> str | None:
     """差し戻しの前の回答（経過に残したもの。無ければ None）。
 
     差し戻しは略号・別名（`hop_retry`。#1958）か業務データ（`data_retry`。#1979）か業務ガイドの
-    手順（`guide_step_retry`。#2396）の 1 回だけ。
+    手順（`guide_step_retry`。#2396）の 1 回だけ。章節の続きの差し戻し（`section_retry`。#2492）は
+    含めない（前の回答は手順・条件の後半を欠くと分かっているので、前の回答に戻さない）。
     """
     for event in reversed(list(events)):
         payload = getattr(event, "payload", None)
