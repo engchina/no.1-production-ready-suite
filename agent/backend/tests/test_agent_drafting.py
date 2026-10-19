@@ -160,6 +160,7 @@ def test_suggestion_keeps_only_candidates_and_limits(monkeypatch: MonkeyPatch) -
     }
     assert len(data["evaluation_cases"]) == MAX_EVALUATION_CASES
     assert data["evaluation_cases"][0] == {"question": "質問 0", "expected": "要点 あ"}
+    # 下書きは評価の比べ方を提案しない（既定の完全に一致のまま。#2566）。
     assert data["output_fields"] == [
         {
             "key": "item_name",
@@ -167,6 +168,7 @@ def test_suggestion_keeps_only_candidates_and_limits(monkeypatch: MonkeyPatch) -
             "type": "text",
             "required": True,
             "description": "",
+            "match": "exact",
         },
         {
             "key": "amount",
@@ -174,6 +176,7 @@ def test_suggestion_keeps_only_candidates_and_limits(monkeypatch: MonkeyPatch) -
             "type": "number",
             "required": False,
             "description": "円",
+            "match": "exact",
         },
         {
             "key": "field_3",
@@ -181,8 +184,16 @@ def test_suggestion_keeps_only_candidates_and_limits(monkeypatch: MonkeyPatch) -
             "type": "date",
             "required": False,
             "description": "",
+            "match": "exact",
         },
-        {"key": "sql", "label": "条件", "type": "text", "required": False, "description": ""},
+        {
+            "key": "sql",
+            "label": "条件",
+            "type": "text",
+            "required": False,
+            "description": "",
+            "match": "exact",
+        },
     ]
     assert data["notices"] == [
         "NL2SQL の候補を取得できません。",
