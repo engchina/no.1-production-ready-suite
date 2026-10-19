@@ -420,6 +420,8 @@ class IngestionQueueWorker:
         self._stop_event: asyncio.Event | None = None
         # 停止中に打ち切られた job がある(停止処理で自分の lease の job を QUEUED に戻す)。
         self._interrupted_on_stop = False
+        # 文書の削除の後始末の task(#2452)。
+        self._cleanup_task: asyncio.Task[None] | None = None
 
     async def run_forever(self, *, stop_event: asyncio.Event | None = None) -> None:
         """停止イベントが立つまでキューを消費し続ける。"""
@@ -567,7 +569,16 @@ class IngestionQueueWorker:
                 "ingestion_worker_recovered_stale_jobs",
                 extra={"job_count": len(recovered)},
             )
-        await self._sweep_document_cleanups_safely()
+        self._start_document_cleanup_sweep()
+
+    def _start_document_cleanup_sweep(self) -> None:
+        """文書の削除の後始末を別の task で始める(保存先の削除で取込の起動を待たせない)。
+
+        前の回がまだ動いていれば始めない。停止のときは取り消す(記録は残り、次の起動でやり直す)。
+        """
+        if self._cleanup_task is not None and not self._cleanup_task.done():
+            return
+        self._cleanup_task = asyncio.create_task(self._sweep_document_cleanups_safely())
 
     async def _sweep_document_cleanups_safely(self) -> None:
         """文書の削除で保存先から消せなかった原本・成果物を消し直す(#2452)。"""
@@ -701,7 +712,11 @@ class IngestionQueueWorker:
                 await asyncio.gather(*pending, return_exceptions=True)
         finally:
             heartbeat_task.cancel()
-            await asyncio.gather(heartbeat_task, return_exceptions=True)
+            background = [heartbeat_task]
+            if self._cleanup_task is not None:
+                self._cleanup_task.cancel()
+                background.append(self._cleanup_task)
+            await asyncio.gather(*background, return_exceptions=True)
             if had_inflight or self._interrupted_on_stop:
                 await self._requeue_leased_safely()
 

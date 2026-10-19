@@ -988,3 +988,54 @@ def test_worker_heavy_phase_concurrency_never_exceeds_total() -> None:
         heavy_phase_concurrency=5,
     )
     assert worker._heavy_phase_concurrency == 2
+
+
+async def test_worker_sweeps_document_cleanups_without_blocking_dispatch() -> None:
+    """文書の削除の後始末(#2452)は別の task で動き、遅くても失敗しても job を止めない。"""
+    starts: list[str] = []
+    sweeps: list[str] = []
+    sweep_release = asyncio.Event()
+    stop = asyncio.Event()
+    jobs = [_job("after-sweep")]
+
+    async def fetch(
+        limit: int, _exclude_phases: Collection[IngestionJobPhase] = ()
+    ) -> Sequence[IngestionJob]:
+        return jobs[:limit]
+
+    async def runner(job_id: str) -> None:
+        starts.append(job_id)
+        jobs.clear()
+
+    async def recover() -> Sequence[IngestionJob]:
+        return []
+
+    async def sweep() -> int:
+        sweeps.append("start")
+        await sweep_release.wait()
+        raise RuntimeError("storage unavailable")
+
+    worker = IngestionQueueWorker(
+        settings=get_settings(),
+        job_runner=runner,
+        fetch_queued=fetch,
+        recover_stale=recover,
+        schema_ready=_schema_ready,
+        poll_interval_seconds=0.01,
+        sweep_document_cleanups=sweep,
+    )
+    task = asyncio.create_task(worker.run_forever(stop_event=stop))
+    for _ in range(100):
+        if starts:
+            break
+        await asyncio.sleep(0.01)
+
+    # 後始末が終わる前に job が始まる。
+    assert starts == ["after-sweep"]
+    assert sweeps == ["start"]
+    sweep_release.set()
+    await asyncio.sleep(0.05)
+    assert not task.done()
+    stop.set()
+    ingestion_worker.request_ingestion_worker_wakeup()
+    await asyncio.wait_for(task, timeout=5)
