@@ -28,6 +28,8 @@ export const SYSTEM_TABLES_MESSAGES = {
   "settings.database.systemTables.destructive.confirmDescription":
     "データを削除する migration {count} 件（{names}）を適用します。削除したテーブルと行は元に戻せません。残すデータを書き出してから実行してください。",
   "settings.database.systemTables.destructive.confirmLabel": "削除して更新",
+  "settings.database.systemTables.columns.missing":
+    "既存のテーブルに必須の列が {count} 件ありません。「作成・更新」で、列を補う migration を適用します。適用した後も不足するときは、配備手順の既存環境の更新手順を確認してください。",
   "settings.database.systemTables.foreignKeys.missing":
     "既存のテーブルに外部キーが {count} 件ありません。「作成・更新」で追加します。参照先のない既存の行がある外部キーは、既存の行を検査せずに追加し（新しい行から適用）、既存の行は削除しません。",
   "settings.database.systemTables.foreignKeys.orphanedTitle": "参照先のない既存の行があります",

@@ -49,6 +49,7 @@ from pr_system_settings.system_schema import (
     SystemSchemaOrphanOperation,
     SystemSchemaStatus,
 )
+from pr_system_settings.system_schema import SystemTableColumnData as SystemTableColumnData
 from pr_system_settings.system_schema import (
     SystemTableDestructiveMigrationData as SystemTableDestructiveMigrationData,
 )
@@ -192,6 +193,8 @@ class SystemTablesStatusData(BaseModel):
     existing_table_count: int
     missing_objects: list[SystemTableObjectData]
     retired_objects: list[SystemTableObjectData]
+    # 既存の表に無い正本の列（台帳が適用済みでも欠けた列。状態は outdated。#2450）。
+    missing_columns: list[SystemTableColumnData] = Field(default_factory=list)
     # 既存の表に無い正本の外部キー（更新で足す）と、既存の行を検査していない外部キーに残る
     # 参照先の無い行（#505）。
     missing_foreign_keys: list[SystemTableForeignKeyData] = Field(default_factory=list)

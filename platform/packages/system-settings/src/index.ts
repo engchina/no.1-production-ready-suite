@@ -246,6 +246,7 @@ export {
   SYSTEM_TABLES_QUERY_KEY,
   type SystemObjectMetadata,
   type SystemObjectType,
+  type SystemTableColumnRef,
   type SystemTableDestructiveMigration,
   type SystemTableForeignKey,
   type SystemTableMetadata,

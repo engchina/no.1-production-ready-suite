@@ -24,8 +24,11 @@ from pr_system_settings.system_schema import (
     SystemSchemaManagerBase,
     SystemSchemaStatus,
     bind_list,
+    columns_from_create_table,
     foreign_keys_from_create_table,
     iso_timestamp,
+    load_existing_columns,
+    missing_columns,
     oracle_error_code,
 )
 from pr_system_settings.system_schema import (
@@ -330,11 +333,34 @@ def managed_foreign_keys_from_schema(
 MANAGED_FOREIGN_KEYS: tuple[ForeignKeySpec, ...] = managed_foreign_keys_from_schema()
 
 
+def managed_columns_from_schema(
+    sections: Sequence[OracleSchemaSection] | None = None,
+) -> dict[str, tuple[str, ...]]:
+    """DDL 正本の CREATE TABLE の列（表名 → 列名。#2450）。
+
+    表の作成は「無ければ作る」なので、台帳が適用済みでも既存の表に列が欠けることがある（取り消した
+    migration が列を改名・削除した表など）。状態の確認でこの一覧と USER_TAB_COLUMNS を比べ、欠けた
+    列があれば ready にしない。
+    """
+
+    columns: dict[str, tuple[str, ...]] = {}
+    for section in sections or oracle_schema_sections():
+        for statement in split_sql_statements(section.sql):
+            parsed = columns_from_create_table(statement)
+            if parsed is not None:
+                columns[parsed[0]] = parsed[1]
+    return columns
+
+
+MANAGED_COLUMNS: dict[str, tuple[str, ...]] = managed_columns_from_schema()
+
+
 def classify_system_schema_status(
     objects: set[tuple[str, str]],
     applied_checksums: dict[str, str],
     *,
     foreign_keys_current: bool = True,
+    columns_current: bool = True,
 ) -> SystemSchemaStatus:
     """Dictionary / ledger snapshot を四つの公開状態へ分類する（分類の規則は platform）。"""
 
@@ -347,6 +373,7 @@ def classify_system_schema_status(
             applied_checksums.get(migration.name) == migration.checksum for migration in MIGRATIONS
         ),
         foreign_keys_current=foreign_keys_current,
+        columns_current=columns_current,
     )
 
 
@@ -540,6 +567,16 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         foreign_keys = self._repair_foreign_keys(connection, owner)
         self._heartbeat(connection, owner)
         interim = self._status_on(connection)
+        if interim["missing_columns"]:
+            # 列の欠落は更新の再試行では直らない（足す migration が台帳で適用済み。#2450）。
+            columns = ", ".join(
+                f"{item['table_name']}.{item['column_name']}" for item in interim["missing_columns"]
+            )
+            raise SystemSchemaError(
+                "SCHEMA_POSTCONDITION_FAILED",
+                f"システムテーブル操作後も必須の列が不足しています（{columns}）。"
+                "配備の手順の既存環境の更新手順を確認してください。",
+            )
         if interim["status"] != "ready":
             raise SystemSchemaError(
                 "SCHEMA_POSTCONDITION_FAILED",
@@ -595,10 +632,19 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         ]
         foreign_keys = self._foreign_key_drift(connection)
         table_metadata = self._load_table_metadata(connection, objects)
+        # 台帳が適用済みでも、既存の表に正本の列が欠けていれば ready にしない（#2450）。
+        absent_columns = missing_columns(
+            MANAGED_COLUMNS,
+            load_existing_columns(
+                connection,
+                [name for name in MANAGED_COLUMNS if (name, "TABLE") in objects],
+            ),
+        )
         status = classify_system_schema_status(
             set(objects),
             applied,
             foreign_keys_current=foreign_keys.current,
+            columns_current=not absent_columns,
         )
         return {
             "status": status,
@@ -627,6 +673,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
                 for name, object_type in RETIRED_MANAGED_OBJECTS
                 if (name, object_type) in objects
             ],
+            "missing_columns": absent_columns,
             # 既存の表に無い FK（更新で足す）と、既存の行を検査していない FK の孤立した行（#505）。
             # 削除規則が正本と違う FK と、無効化された FK（更新で直す。#511）。
             **foreign_keys.status_fields(),
@@ -836,6 +883,7 @@ __all__ = [
     "CONTROL_TABLE",
     "DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED",
     "DOMAIN_TABLES",
+    "MANAGED_COLUMNS",
     "MANAGED_FOREIGN_KEYS",
     "MANAGED_INDEXES",
     "MANAGED_OBJECTS",
@@ -853,6 +901,7 @@ __all__ = [
     "SystemSchemaError",
     "SystemSchemaManager",
     "classify_system_schema_status",
+    "managed_columns_from_schema",
     "managed_foreign_keys_from_schema",
     "managed_manifest_from_schema",
     "oracle_error_code",

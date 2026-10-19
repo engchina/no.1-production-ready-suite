@@ -465,7 +465,92 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=support_guide_schema_v2_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261019_001_restore_document_classification",
+            table_name="rag_documents",
+            sql=restore_document_classification_migration_sql(),
+        )
+    )
     return sections
+
+
+def restore_document_classification_migration_sql() -> str:
+    """取り消した migration ``20261016_002_document_effective_period`` を当てた DB の列を戻す。
+
+    #2450。取り消した migration は ``rag_documents.classification`` を ``effective_period`` に
+    改名して有効期間以外の key を消し、``rag_query_history.classification_filter`` を削除した。
+    台帳には適用済みで残るので、ここで今の正本の形にそろえる（新しい DB・当てていない DB では
+    何もしない）。
+
+    - ``rag_documents.classification``・``rag_query_history.classification_filter`` が無ければ
+      JSON の列を足す。
+    - ``effective_period`` があれば、``classification`` が NULL の行にだけ、有効期間
+      （``effective_from`` / ``effective_to``。YYYY-MM-DD の日付で、開始日 < 終了日）を写す。
+      列の改名はしない。``effective_period`` の列と値は消さず、形の合わない値は写さない。
+      取り消した migration が消した分類（大分類・中分類・小分類）と検索の履歴の分類の条件は DB に
+      残っていないので戻らない（要るなら、そのときの書き出し・バックアップから戻す）。
+    どの文も、表・列があるときだけ実行し、何度当てても同じ結果になる（冪等）。
+    """
+    period_date = (
+        "TO_DATE(CASE WHEN REGEXP_LIKE(JSON_VALUE(effective_period, '$.{key}'), "
+        "'^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$') "
+        "THEN JSON_VALUE(effective_period, '$.{key}') END "
+        "DEFAULT NULL ON CONVERSION ERROR, 'YYYY-MM-DD')"
+    )
+    effective_from = period_date.format(key="effective_from")
+    effective_to = period_date.format(key="effective_to")
+    return f"""DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_DOCUMENTS';
+    IF v_count > 0 THEN
+        SELECT COUNT(*) INTO v_count
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'CLASSIFICATION';
+        IF v_count = 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (classification JSON)';
+        END IF;
+        SELECT COUNT(*) INTO v_count
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'EFFECTIVE_PERIOD';
+        IF v_count > 0 THEN
+            EXECUTE IMMEDIATE q'[MERGE INTO rag_documents target
+USING (
+    SELECT document_id, period_from, period_to
+    FROM (
+        SELECT document_id,
+            {effective_from} AS period_from,
+            {effective_to} AS period_to,
+            JSON_VALUE(effective_period, '$.effective_from') AS raw_from,
+            JSON_VALUE(effective_period, '$.effective_to') AS raw_to
+        FROM rag_documents
+        WHERE effective_period IS NOT NULL AND classification IS NULL
+    )
+    WHERE (period_from IS NOT NULL OR period_to IS NOT NULL)
+        AND (raw_from IS NULL OR period_from IS NOT NULL)
+        AND (raw_to IS NULL OR period_to IS NOT NULL)
+        AND (period_from IS NULL OR period_to IS NULL OR period_from < period_to)
+) source
+ON (target.document_id = source.document_id)
+WHEN MATCHED THEN UPDATE SET target.classification = JSON_OBJECT(
+    'effective_from' VALUE TO_CHAR(source.period_from, 'YYYY-MM-DD'),
+    'effective_to' VALUE TO_CHAR(source.period_to, 'YYYY-MM-DD')
+    ABSENT ON NULL RETURNING JSON)
+WHERE target.classification IS NULL]';
+        END IF;
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_QUERY_HISTORY';
+    IF v_count > 0 THEN
+        SELECT COUNT(*) INTO v_count
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_QUERY_HISTORY' AND column_name = 'CLASSIFICATION_FILTER';
+        IF v_count = 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_query_history ADD (classification_filter JSON)';
+        END IF;
+    END IF;
+END;
+/"""
 
 
 def support_guide_embeddings_migration_sql() -> str:

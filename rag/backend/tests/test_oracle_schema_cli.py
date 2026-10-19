@@ -459,7 +459,18 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "JSON_TRANSFORM(draft_json, SET '$.schema_version' = 2)" in guide_migration
     assert "JSON_TRANSFORM(content_json, SET '$.schema_version' = 2)" in guide_migration
     assert "DELETE" not in guide_migration and "DROP" not in guide_migration
-    assert len(statements) == 100
+    # 取り消した migration（20261016_002）を当てた DB の分類の列を戻す（#2450）。列を足し、
+    # effective_period の有効期間を classification が NULL の行にだけ写す。改名・削除はしない。
+    restore_migration = sql.split("-- migration: 20261019_001_restore_document_classification", 1)[
+        1
+    ]
+    assert "'ALTER TABLE rag_documents ADD (classification JSON)'" in restore_migration
+    assert "'ALTER TABLE rag_query_history ADD (classification_filter JSON)'" in restore_migration
+    assert "column_name = 'EFFECTIVE_PERIOD'" in restore_migration
+    assert "WHERE target.classification IS NULL" in restore_migration
+    assert "RENAME" not in restore_migration
+    assert "DROP" not in restore_migration and "DELETE" not in restore_migration
+    assert len(statements) == 101
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -548,6 +559,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261018_002_message_answer_notice",
         "20261018_003_answer_record_notice",
         "20261018_004_support_guide_schema_v2",
+        "20261019_001_restore_document_classification",
     ]
 
 

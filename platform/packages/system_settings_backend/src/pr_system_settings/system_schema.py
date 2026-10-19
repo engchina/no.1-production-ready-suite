@@ -167,6 +167,13 @@ class SystemTableOperationState(BaseModel):
     updated_at: str | None = None
 
 
+class SystemTableColumnData(BaseModel):
+    """既存の表に無い正本の列の 1 件（#2450）。"""
+
+    table_name: str
+    column_name: str
+
+
 class SystemTableForeignKeyData(BaseModel):
     """外部キーの差分の 1 件（不足している FK、または参照先の無い既存の行が残る FK）。"""
 
@@ -366,13 +373,15 @@ def classify_system_schema_status(
     migrations_current: bool,
     retired_objects: Iterable[tuple[str, str]] = (),
     foreign_keys_current: bool = True,
+    columns_current: bool = True,
 ) -> SystemSchemaStatus:
     """Dictionary / 台帳の snapshot を四つの公開状態へ決定論的に分類する。
 
     - `missing`: 業務テーブル（制御テーブル以外）が 1 つも無い
     - `partial`: 必須の object のどれかが無い
     - `outdated`: 廃止した object が残っている、未適用 / checksum 不一致の migration がある、
-      または既存の表に正本の外部キーが無い（`foreign_keys_current=False`）
+      既存の表に正本の外部キーが無い（`foreign_keys_current=False`）、
+      または既存の表に正本の列が無い（`columns_current=False`。台帳が適用済みでも。#2450）
     - `ready`: それ以外
     """
 
@@ -383,7 +392,7 @@ def classify_system_schema_status(
         return "partial"
     if set(retired_objects) & present:
         return "outdated"
-    if not migrations_current or not foreign_keys_current:
+    if not migrations_current or not foreign_keys_current or not columns_current:
         return "outdated"
     return "ready"
 
@@ -435,6 +444,12 @@ def deployment_check_summary(status: Mapping[str, Any]) -> tuple[bool, str]:
     missing = [str(item.get("name", "")) for item in status.get("missing_objects") or []]
     if missing and state != "missing":
         parts.append(f"不足 {len(missing)} 件（{_limited_names(missing)}）")
+    missing_columns = [
+        f"{item.get('table_name', '')}.{item.get('column_name', '')}"
+        for item in status.get("missing_columns") or []
+    ]
+    if missing_columns and state != "missing":
+        parts.append(f"不足の列 {len(missing_columns)} 件（{_limited_names(missing_columns)}）")
     pending = list(status.get("pending_versions") or [])
     if pending and state != "missing":
         parts.append(f"未適用の migration {len(pending)} 件")
@@ -606,6 +621,85 @@ def foreign_keys_from_create_table(statement: str) -> list[ForeignKeySpec]:
             )
         )
     return specs
+
+
+# 表制約の行（列ではない）の先頭の語。
+_TABLE_CONSTRAINT_KEYWORDS = frozenset({"CONSTRAINT", "PRIMARY", "UNIQUE", "FOREIGN", "CHECK"})
+
+
+def columns_from_create_table(statement: str) -> tuple[str, tuple[str, ...]] | None:
+    """`CREATE TABLE` 文の表名と列名（大文字。定義の順）を取り出す（#2450）。
+
+    表は「無ければ作る」ので、既存の表に正本の列が揃っているかは台帳では分からない（取り消した
+    migration が列を改名・削除した表など）。状態の確認で USER_TAB_COLUMNS と比べるために使う。
+    表制約（CONSTRAINT・PRIMARY KEY・CHECK など）の行と `--` の注釈は飛ばす。`CREATE TABLE`
+    以外の文は None を返す。
+    """
+
+    table_match = _CREATE_TABLE_NAME_PATTERN.match(statement)
+    if table_match is None:
+        return None
+    body = "\n".join(line.split("--", 1)[0] for line in statement.splitlines())
+    start = body.find("(", table_match.end())
+    if start < 0:
+        return None
+    items: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for char in body[start + 1 :]:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        elif char == "," and depth == 0:
+            items.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    items.append("".join(current))
+    columns: list[str] = []
+    for item in items:
+        words = item.split()
+        if not words or words[0].upper() in _TABLE_CONSTRAINT_KEYWORDS:
+            continue
+        columns.append(_identifier(words[0]))
+    return _identifier(table_match.group(1)), tuple(columns)
+
+
+def load_existing_columns(connection: Any, table_names: Iterable[str]) -> dict[str, set[str]]:
+    """指定した表の列名（接続ユーザーの schema の USER_TAB_COLUMNS。無い表は含めない）。"""
+
+    names = sorted(set(table_names))
+    if not names:
+        return {}
+    placeholders, binds = bind_list("column_table_", names)
+    columns: dict[str, set[str]] = {}
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT TABLE_NAME, COLUMN_NAME FROM USER_TAB_COLUMNS "
+            f"WHERE TABLE_NAME IN ({placeholders})",  # nosec B608 - 固定の bind
+            binds,
+        )
+        for table_name, column_name in cursor.fetchall():
+            columns.setdefault(str(table_name).upper(), set()).add(str(column_name).upper())
+    return columns
+
+
+def missing_columns(
+    expected: Mapping[str, Sequence[str]],
+    existing: Mapping[str, Collection[str]],
+) -> list[dict[str, str]]:
+    """正本の列のうち、既存の表に無いもの（表が無いときは object の不足で出すので含めない）。"""
+
+    return [
+        {"table_name": table_name, "column_name": column_name}
+        for table_name, columns in expected.items()
+        if table_name in existing
+        for column_name in columns
+        if column_name not in existing[table_name]
+    ]
 
 
 def add_foreign_key_sql(spec: ForeignKeySpec, *, validate: bool) -> str:
@@ -1658,6 +1752,7 @@ __all__ = [
     "SystemSchemaOrphanOperation",
     "SystemSchemaPreconditionError",
     "SystemSchemaStatus",
+    "SystemTableColumnData",
     "SystemTableDestructiveMigrationData",
     "SystemTableForeignKeyData",
     "SystemTableOperationState",
@@ -1667,6 +1762,7 @@ __all__ = [
     "bind_list",
     "clamp_ddl_lock_timeout",
     "classify_system_schema_status",
+    "columns_from_create_table",
     "connect_failure_diagnosis",
     "count_orphan_rows",
     "delete_orphan_rows_sql",
@@ -1678,8 +1774,10 @@ __all__ = [
     "idle_operation_state",
     "inspect_foreign_keys",
     "iso_timestamp",
+    "load_existing_columns",
     "load_existing_tables",
     "load_foreign_keys",
+    "missing_columns",
     "operation_failure_fields",
     "operation_failure_hint",
     "oracle_error_code",

@@ -679,3 +679,55 @@ for (const theme of ["light", "dark"] as const) {
     expect(mock.recreatePayload()).toEqual({ recreate: false, allow_destructive: true });
   });
 }
+
+// ---- 台帳が最新でも欠けた列（#2450） --------------------------------------------------
+
+for (const theme of ["light", "dark"] as const) {
+  test(`台帳が最新でも既存の表に無い列を更新必要として並べる（#2450・${theme}）`, { tag: "@responsive" }, async ({
+    page,
+  }, testInfo) => {
+    await useTheme(page, theme);
+    const mock = await mockSettings(page, {
+      initialStatus: "outdated",
+      statusExtra: {
+        pending_versions: [],
+        missing_columns: [
+          { table_name: "RAG_DOCUMENTS", column_name: "CLASSIFICATION" },
+          { table_name: "RAG_QUERY_HISTORY", column_name: "CLASSIFICATION_FILTER" },
+        ],
+      },
+    });
+    await page.goto("/settings/system-tables");
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+      .toBe(theme === "dark");
+    const card = page.locator("#system-tables");
+    await expect(card.getByText("更新必要", { exact: true }).first()).toBeVisible();
+    const missing = card.getByTestId("system-tables-missing-columns");
+    await expect(missing).toContainText("既存のテーブルに必須の列が 2 件ありません");
+    await expect(missing).toContainText("RAG_DOCUMENTS.CLASSIFICATION");
+    await expect(missing).toContainText("RAG_QUERY_HISTORY.CLASSIFICATION_FILTER");
+
+    const contrast = await minimumTextContrast(page, "#system-tables [role='status']");
+    expect(contrast.count).toBeGreaterThan(2);
+    expect(contrast.minimum.ratio, contrast.minimum.text).toBeGreaterThanOrEqual(4.5);
+    const pageOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+    expect(pageOverflow).toBeLessThanOrEqual(1);
+
+    if (screenshotDir) {
+      const width = testInfo.project.name === "mobile" ? 375 : 1280;
+      await page.setViewportSize({ width, height: 900 });
+      await card.locator("[role='status']").first().screenshot({
+        path: `${screenshotDir}/system-tables-columns-${theme}-${width}.png`,
+        animations: "disabled",
+      });
+    }
+
+    await card.getByRole("button", { name: "作成・更新" }).click();
+    await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
+    expect(mock.initializeCalls()).toBe(1);
+    await expect(missing).toHaveCount(0);
+  });
+}
