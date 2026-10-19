@@ -366,6 +366,18 @@ export interface AgentTemplate {
   evaluation_cases: { question: string; expected: string }[];
 }
 
+/** 業務の説明から作った業務 Agent の下書きの提案（#2519。保存はしない）。 */
+export interface AgentDraftSuggestion {
+  name: string;
+  description: string;
+  instructions: string;
+  skill_ids: string[];
+  data_scopes: AgentDataScopes;
+  evaluation_cases: { question: string; expected: string }[];
+  /** 提案に使えなかった候補（取得できなかった接続など）。 */
+  notices: string[];
+}
+
 /**
  * 問い返し（回答前の確認）の確認事項 1 件への答え（#1845）。共通の `ClarificationCard` の答え
  * （`{ itemId, optionIds, otherText }`）と同じ形を snake_case で持つ。
@@ -1836,6 +1848,12 @@ export const agentApi = {
   getRunAudit: (runId: string) =>
     request<RunAuditData>(`/api/runs/${runId}/audit`),
   listAgentTemplates: () => request<{ templates: AgentTemplate[] }>("/api/agent-templates"),
+  /** 業務の説明から下書きを提案する（#2519。Agent 管理だけ。保存はしない）。 */
+  suggestAgentDraft: (description: string) =>
+    request<AgentDraftSuggestion>("/api/agents/draft-suggestion", {
+      method: "POST",
+      body: JSON.stringify({ description }),
+    }),
   /** 自動実行（#784）。 */
   listAutomations: () => request<{ automations: Automation[]; persistent: boolean }>("/api/automations"),
   getAutomation: (automationId: string) =>

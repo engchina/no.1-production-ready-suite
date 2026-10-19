@@ -20,6 +20,7 @@
   - 縮めるのはモデルに渡す入力だけで、Run の step のツールの結果は全文のまま（回答の検証・引用の照合は step を使う）。縮めたことは Run のイベント（`context_compaction`）・metric `agent_context_compactions_total`・ログに残す。
   - 縮めても収まらなければ、モデルを呼ばずに `runtime.context_overflow`（対象を絞る・入力の上限の大きいモデルを選ぶ案内）で失敗させる。プロバイダが入力の超過の 400 を返したら、返った prompt の token 数で Run の残りの見積もりを補正して縮め、1 回だけ送り直す（2 回目も超過なら `runtime.context_overflow`）。
 - 業務 Agent は版を持つ。編集は下書きで、「公開」した版だけが利用者の Run に使われる。「この版に戻す」で前の版を公開し直す。下書きで実行できるのは Agent 管理（admin）だけ。会話は始めた Run の種類（下書き / 公開中の版）に固定し、下書きの会話はチャットの会話の履歴に出さない（編集画面の「試す」の履歴に出す。#2515）。
+  - 公開前の評価の門（#2519）: `AGENT_PUBLISH_MIN_PASS_RATE`（0〜1。既定 0 = 使わない）が 0 より大きいと、`POST /agents/{id}/publish` は、下書きを最後に変えた時刻（`draft_updated_at`。版の項目が変わったときだけ進む）の後に始めた下書きの評価（完了したもの）の最新の合格率を求め、足りなければ 409 `publish_evaluation_required`。変更の無い再公開・前の版に戻す・スキルの更新だけの公開は対象にしない。
   - 版の履歴は直近 `AGENT_MAX_PUBLISHED_VERSIONS`（既定 5）版だけを残す。公開のときに古い版から消し（公開中の版・スキルの更新の取り込みの前の公開中の版は残す。番号は振り直さない。規則は `pr_backend_core.version_retention`）、Run・評価の記録は版の番号だけを持つので消えない。消えた版で続ける Run は公開中の版で動く（#2356）。
   - 公開の版は使うスキルの中身（指示・説明・MCP のツール・中身の hash）を固定し、公開中の版の Run は固定した中身で動く（下書きは今のスキル。組み込みのスキルも固定する）。スキルが変わった業務 Agent は「スキルが更新されています」を出し、再公開で取り込む（#1855）。
 - Run は Agent を選ぶだけで作れる（Binding の選択は無い）。開発は API のプロセスで実行（`in_process`）し、本番は Oracle checkpoint の row lock と Run lease を使う runtime-dispatcher（`python -m app.features.agent.runtime_dispatcher`）。

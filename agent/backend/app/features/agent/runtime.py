@@ -322,6 +322,9 @@ class AgentProfile(BaseModel):
     published_version: int | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
+    # 下書き（版の項目）を最後に変えた時刻（#2519）。公開前の評価の門は、この時刻より後に始めた
+    # 下書きの評価だけを数える。None は #2519 より前の業務 Agent（`created_at` を使う）。
+    draft_updated_at: datetime | None = None
     # Run が使う版に固定したスキル（`_agent_for_run` が入れる。保存・応答には出さない。#1855）。
     pinned_skills: list[PinnedSkill] | None = Field(default=None, exclude=True)
 
@@ -3051,6 +3054,7 @@ class AgentRuntimeRepository:
             now = _now()
             agent.created_at = now
             agent.updated_at = now
+            agent.draft_updated_at = now
             self._agents[agent.id] = _ensure_versioned(agent)
             self._mark_agent_changed(agent.id)
             self._persist_locked()
@@ -3154,6 +3158,7 @@ class AgentRuntimeRepository:
                 setattr(agent, field, deepcopy(getattr(target, field)))
             agent.published_version = version
             agent.updated_at = _now()
+            agent.draft_updated_at = agent.updated_at
             self._mark_agent_changed(agent.id)
             self._persist_locked()
             return agent.model_copy(deep=True)
@@ -3171,9 +3176,13 @@ class AgentRuntimeRepository:
             if isinstance(skill_ids, list):
                 self._validate_agent_skills(skill_ids)
                 data["migration_required"] = False
+            before = {field: getattr(agent, field) for field in AGENT_VERSIONED_FIELDS}
             for key, value in data.items():
                 setattr(agent, key, value)
             agent.updated_at = _now()
+            # 有効 / 無効の切り替えなど、版の項目を変えない保存では下書きの時刻を進めない（#2519）。
+            if any(getattr(agent, field) != before[field] for field in AGENT_VERSIONED_FIELDS):
+                agent.draft_updated_at = agent.updated_at
             self._mark_agent_changed(agent.id)
             self._persist_locked()
             return agent.model_copy(deep=True)
