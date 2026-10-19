@@ -775,6 +775,10 @@ function createState() {
     auditRecords: [] as Json[],
     // 業種テンプレート（`GET /api/agent-templates`。#780）。
     agentTemplates: clone(AGENT_TEMPLATES) as Json[],
+    // 説明から作る下書きの提案（`POST /api/agents/draft-suggestion`。#2519）。null は既定の提案（説明を名前に使う）。
+    draftSuggestion: null as Json | null,
+    // 公開前の評価の門で断る文（`POST /api/agents/{id}/publish` の 409。#2519）。null は門なし。
+    publishEvaluationRefusal: null as string | null,
     // データの範囲に選べるプロファイル（`GET /api/agent-data-scopes/{接続}/candidates`。#1378）。
     // 編集者が使えるものだけ（backend は編集者として MCP に問い合わせる）。`dataScopeCandidateErrors` は接続ごとの失敗。
     dataScopeCandidates: clone(DATA_SCOPE_CANDIDATES) as Record<string, Json[]>,
@@ -2469,6 +2473,22 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         user_display_names: state.userDisplayNames,
         max_published_versions: MAX_PUBLISHED_VERSIONS,
       };
+    // 説明から下書きを提案する（#2519。保存しない）。
+    if (method === "POST" && at("agents", "draft-suggestion")) {
+      const description = String(body.description ?? "").trim();
+      if (!description) throw new HttpError(422, "業務の説明を入力してください。");
+      return (
+        state.draftSuggestion ?? {
+          name: `${description.slice(0, 20)} の Agent`,
+          description,
+          instructions: "根拠の箇所を示して答える。",
+          skill_ids: [],
+          data_scopes: {},
+          evaluation_cases: [],
+          notices: [],
+        }
+      );
+    }
     if (method === "POST" && at("agents")) {
       // backend の create_agent と同じく、送られた ID は URL に置ける形だけを受け付ける（#1033）。
       const id = String(body.id ?? `agent-${state.agents.length + 1}`).trim();
@@ -2570,6 +2590,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     // 下書きを版として公開する・前の版に戻す（#770）。
     if (method === "POST" && at("agents", "*", "publish")) {
       const agent = findOr404(state.agents, "id", second, "agent");
+      if (state.publishEvaluationRefusal) {
+        throw new HttpError(409, state.publishEvaluationRefusal, "publish_evaluation_required");
+      }
       requireKnownSkills(agent.skill_ids);
       const versions = (agent.versions as Json[] | undefined) ?? [];
       const version = Math.max(0, ...versions.map((item) => Number(item.version))) + 1;

@@ -37,6 +37,7 @@ import {
   agentApi,
   type ClarificationPolicy,
   type AgentDataScopes,
+  type AgentDraftSuggestion,
   type AgentProfile,
   type AgentTemplate,
   type AgentProfilePatchPayload,
@@ -46,6 +47,7 @@ import {
 } from "@/lib/api";
 import { matchesSearch } from "@/components/ListFilters";
 import { AgentDataScopeSection, normalizeDataScopes } from "@/components/agents/AgentDataScopeSection";
+import { AgentDraftAssistant } from "@/components/agents/AgentDraftAssistant";
 import { AgentTemplatePicker } from "@/components/agents/AgentTemplatePicker";
 import { SkillUpdateDiffDisclosure } from "@/components/agents/SkillUpdateDiff";
 import { evaluationHref, useSkillUpdatePublish } from "@/components/agents/SkillUpdatesPanel";
@@ -168,6 +170,9 @@ export function AgentEditorView({
   // テンプレートの評価ケースで評価セットを作るか（既定はオン。品質評価の権限を持つ利用者だけ。#810）。
   const canCreateEvaluationSet = useCanEditEvaluationSets();
   const [templateEvaluationSet, setTemplateEvaluationSet] = useState(true);
+  // 説明から作った下書きの評価の問い（#2519）。作成と同時に評価セットとして保存できる（既定はオン）。
+  const [draftCases, setDraftCases] = useState<AgentDraftSuggestion["evaluation_cases"]>([]);
+  const [saveDraftCases, setSaveDraftCases] = useState(true);
   const confirmTemplate = useConfirm();
   // 「設定」と「試す」（#2515）。タブを移ってもフォームの入力はこの画面が持つので残る。
   const [tab, setTab] = useState<EditorTab>("settings");
@@ -193,9 +198,34 @@ export function AgentEditorView({
     setInstructions(template.instructions);
     setSkillIds([...usable].sort());
     setTemplateId(template.id);
+    setDraftCases([]);
     toast.success(t("agent.template.applied", { name: template.name }), {
       description: missing.length ? t("agent.template.skillsMissing", { skills: missing.join("、") }) : undefined,
     });
+  }
+
+  /** 説明から作った下書きをフォームに入れる（#2519。入力済みなら確認してから置き換える。保存はしない）。 */
+  async function applyDraftSuggestion(suggestion: AgentDraftSuggestion) {
+    const touched = Boolean(name.trim() || agentDescription.trim() || instructions.trim() || skillIds.length);
+    if (touched) {
+      const ok = await confirmTemplate({
+        title: t("agent.draftAssistant.replaceTitle"),
+        description: t("agent.draftAssistant.replaceDescription"),
+        confirmLabel: t("agent.template.replace"),
+        tone: "warning",
+      });
+      if (!ok) return;
+    }
+    const known = new Set(availableSkills.map((skill) => skill.id));
+    setName(suggestion.name);
+    setNameError(null);
+    setAgentDescription(suggestion.description);
+    setInstructions(suggestion.instructions);
+    setSkillIds(suggestion.skill_ids.filter((skillId) => known.has(skillId)).sort());
+    setDataScopes(normalizeDataScopes(suggestion.data_scopes));
+    setTemplateId(null);
+    setDraftCases(suggestion.evaluation_cases);
+    toast.success(t("agent.draftAssistant.applied"));
   }
 
   const createAgent = useMutation({
@@ -207,6 +237,22 @@ export function AgentEditorView({
         // 評価セットの作成に失敗しても業務 Agent は作れている。品質評価の画面から作り直せる（#810）。
         try {
           const evaluationSet = await agentApi.createEvaluationSetFromTemplate(created.id);
+          void queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
+          toast.success(t("evaluation.sets.fromTemplateCreated", { name: evaluationSet.name }));
+        } catch (error) {
+          toast.error(t("agent.template.evaluationSetFailed"), {
+            description: apiErrorMessage(error, t("common.error.retryLater")),
+          });
+        }
+      } else if (!created.template_id && draftCases.length && canCreateEvaluationSet && saveDraftCases) {
+        // 説明から作った評価の問い（#2519）。失敗しても業務 Agent は作れている。品質評価の画面から作り直せる。
+        try {
+          const evaluationSet = await agentApi.createEvaluationSet({
+            agent_id: created.id,
+            name: t("agent.draftAssistant.setName", { name: created.name }),
+            description: t("agent.draftAssistant.setDescription"),
+            cases: draftCases,
+          });
           void queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
           toast.success(t("evaluation.sets.fromTemplateCreated", { name: evaluationSet.name }));
         } catch (error) {
@@ -302,6 +348,7 @@ export function AgentEditorView({
     setNewEnabled(true);
     setNameError(null);
     setTemplateId(null);
+    setDraftCases([]);
   }
 
   // スキルの選択は ListPicker（検索・表示中をすべて選択・選択中だけ表示・キーボード。page-archetypes.md「大量の候補から選ぶ」）。
@@ -447,7 +494,50 @@ export function AgentEditorView({
         ) : null}
         <TabPanel idPrefix="agent-editor" id="settings" value={activeTab} className="space-y-6">
         {!agent && !readOnly ? (
-          <AgentTemplatePicker
+          <>
+            <AgentDraftAssistant disabled={pending} onApply={(suggestion) => void applyDraftSuggestion(suggestion)} />
+            {draftCases.length ? (
+              <Section
+                title={t("agent.draftAssistant.casesTitle", { count: draftCases.length })}
+                description={t("agent.draftAssistant.casesDescription")}
+              >
+                <div className="space-y-3" data-testid="agent-draft-cases">
+                  <ol className="list-decimal space-y-2 pl-5 text-sm text-fg">
+                    {draftCases.map((item, index) => (
+                      <li key={`${index}-${item.question}`} className="break-words">
+                        <span className="block">{item.question}</span>
+                        <span className="block text-xs text-fg-muted">
+                          {t("agent.draftAssistant.expected", { expected: item.expected })}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                  {canCreateEvaluationSet ? (
+                    <label
+                      className="flex min-h-11 items-start gap-2 rounded-md border border-border px-3 py-2 text-sm text-fg"
+                      data-testid="agent-draft-evaluation-set"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={saveDraftCases}
+                        onChange={(event) => setSaveDraftCases(event.target.checked)}
+                        aria-describedby="agent-draft-evaluation-set-helper"
+                        className="mt-0.5 h-4 w-4 shrink-0"
+                      />
+                      <span className="min-w-0">
+                        <span className="block font-medium">
+                          {t("agent.draftAssistant.saveCases", { count: draftCases.length })}
+                        </span>
+                        <span id="agent-draft-evaluation-set-helper" className="mt-0.5 block text-xs text-fg-muted">
+                          {t("agent.draftAssistant.saveCasesHelper")}
+                        </span>
+                      </span>
+                    </label>
+                  ) : null}
+                </div>
+              </Section>
+            ) : null}
+            <AgentTemplatePicker
             selectedId={templateId}
             onApply={(template) => void applyTemplate(template)}
             evaluationSet={
@@ -456,6 +546,7 @@ export function AgentEditorView({
                 : undefined
             }
           />
+          </>
         ) : null}
         {agent ? (
           <Section

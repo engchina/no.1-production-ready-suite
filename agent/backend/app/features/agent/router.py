@@ -46,6 +46,7 @@ from pr_backend_core.api import (
     paginate,
     paginate_slice,
 )
+from pr_backend_core.bounded_calls import BoundedCallAborted
 from pr_backend_core.chat_history_window import (
     chat_history_cutoff,
     chat_history_days,
@@ -135,12 +136,20 @@ from app.features.agent.control_plane_store import (
     get_control_plane_store,
 )
 from app.features.agent.data_scope import (
+    DATA_SCOPE_CONNECTIONS,
     AgentDataScopes,
+    DataScopeCandidate,
     DataScopeCandidatesData,
     DataScopeCandidatesError,
     added_profile_ids,
     list_candidates,
     verify_editor_can_use,
+)
+from app.features.agent.drafting import (
+    AgentDraftError,
+    AgentDraftRequest,
+    AgentDraftSuggestion,
+    suggest_agent_draft,
 )
 from app.features.agent.evaluation import (
     EVALUATION_EXPECTED_MAX_CHARS,
@@ -165,6 +174,7 @@ from app.features.agent.evaluation import (
     EvaluationSetFullError,
     EvaluationSetInput,
     EvaluationSetsData,
+    JobStatus,
     compare_jobs,
     evaluation_set_store,
     evaluation_store,
@@ -3484,6 +3494,50 @@ async def _verify_data_scopes(
         ) from None
 
 
+@router.post("/agents/draft-suggestion", response_model=ApiResponse[AgentDraftSuggestion])
+async def suggest_agent_draft_from_description(
+    payload: AgentDraftRequest,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AgentDraftSuggestion]:
+    """業務の説明から業務 Agent の下書きを提案する（#2519。保存はしない）。
+
+    候補は有効なスキルと、**編集者**が使えるプロファイル（データの範囲の候補と同じ取得）。候補を
+    取得できない接続は使わずに提案し、その理由を `notices` に返す。
+    """
+    skills = [skill for skill in skill_registry.list() if skill.enabled]
+    user_uuid = _run_creator_user_uuid(request)
+    candidates: dict[str, tuple[str, list[DataScopeCandidate]]] = {}
+    notices: list[str] = []
+    for connection in DATA_SCOPE_CONNECTIONS:
+        try:
+            data = await run_in_threadpool(
+                partial(list_candidates, connection, user_uuid=user_uuid)
+            )
+        except DataScopeCandidatesError as exc:
+            notices.append(exc.message)
+            continue
+        candidates[connection] = (data.label, data.profiles)
+    try:
+        suggestion = await suggest_agent_draft(
+            payload.description, skills=skills, candidates=candidates, notices=notices
+        )
+    except AgentDraftError as exc:
+        raise HTTPException(
+            status_code=502, detail={"code": "agent_draft_failed", "message": str(exc)}
+        ) from exc
+    except BoundedCallAborted as exc:
+        # モデル・接続の設定の誤り・権限・割り当て（待っても直らない）。
+        raise HTTPException(
+            status_code=503, detail={"code": "agent_draft_unavailable", "message": str(exc)}
+        ) from exc
+    except builtin_runtime.BuiltinRuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail={"code": exc.code, "message": exc.message}
+        ) from exc
+    return ApiResponse(data=suggestion)
+
+
 @router.post("/agents", response_model=ApiResponse[AgentProfile])
 async def create_agent(
     agent: AgentProfile,
@@ -3522,6 +3576,47 @@ async def create_agent(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _format_rate(value: float) -> str:
+    return f"{round(value * 100)}%"
+
+
+def _publish_evaluation_refusal(agent: AgentProfile) -> str | None:
+    """公開前の評価の門（#2519）。満たさなければ理由の文、満たす・門が無ければ None。
+
+    数えるのは、下書きを最後に変えた後に始めた、この業務 Agent の下書きの評価（完了したもの）の
+    最新の 1 件。公開中の版と下書きが同じ（変更の無い再公開）なら求めない。
+    """
+    threshold = get_settings().agent_publish_min_pass_rate
+    if threshold <= 0 or not agent.draft_changed:
+        return None
+    since = agent.draft_updated_at or agent.created_at
+    latest = next(
+        (
+            job
+            for job in evaluation_store.list()
+            if job.agent_id == agent.id
+            and job.agent_version == "draft"
+            and job.status == JobStatus.COMPLETED
+            and job.created_at >= since
+        ),
+        None,
+    )
+    required = _format_rate(threshold)
+    if latest is None:
+        return (
+            f"公開するには、今の下書きを品質評価で確かめ、合格率 {required} 以上にしてください"
+            "（下書きを変えた後の評価がありません）。"
+        )
+    rate = latest.summary.pass_rate
+    if rate is None or rate < threshold:
+        actual = "判定できたケースがありません" if rate is None else f"合格率 {_format_rate(rate)}"
+        return (
+            f"今の下書きの品質評価（{latest.set_name}）が{actual}で、公開に必要な合格率 "
+            f"{required} に届いていません。指示やスキルを直して評価し直してください。"
+        )
+    return None
+
+
 @router.post("/agents/{agent_id}/publish", response_model=ApiResponse[AgentProfile])
 async def publish_agent(
     agent_id: str,
@@ -3529,7 +3624,20 @@ async def publish_agent(
     request: Request,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentProfile]:
-    """下書きを新しい版として公開する（#770）。利用者の Run はこの版で実行する。"""
+    """下書きを新しい版として公開する（#770）。利用者の Run はこの版で実行する。
+
+    `AGENT_PUBLISH_MIN_PASS_RATE` が 0 より大きいときは、今の下書きの品質評価の合格率を求める
+    （#2519。満たさなければ 409）。
+    """
+    agents = await run_in_threadpool(runtime_repository.list_agents)
+    current = next((item for item in agents if item.id == agent_id), None)
+    if current is not None:
+        refusal = _publish_evaluation_refusal(current)
+        if refusal is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "publish_evaluation_required", "message": refusal},
+            )
     try:
         agent = await run_in_threadpool(
             runtime_repository.publish_agent,
