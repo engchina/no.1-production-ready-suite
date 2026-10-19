@@ -258,7 +258,7 @@ RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv �
   |---|---|---|
   | `parser-docling` | 常に配備 | 既定の解析エンジン（`RAG_PARSER_ADAPTER_BACKEND=docling`。PDF と画像。#286） |
   | `parser-unstructured` | 配備する（#1559。文書解析の設定でも有効にする: `RAG_PARSER_UNSTRUCTURED_ENABLED`） | `rag_enable_parser_unstructured`（テキスト・HTML・Office・メールなど Docling が扱えない形式を、処理レシピで Unstructured を選んで取り込む場合） |
-  | `parser-xml-tree-json` | 常に配備 | XML ツリー JSON の解析エンジン（`RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`。対応する形の `.json`）。文書解析の既定か処理レシピの使用エンジンで選んだときだけ使います（#2042） |
+  | `parser-xml-tree-json` | 常に配備・既定は停止（#2453） | XML ツリー JSON の解析エンジン（`RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`。対応する形の `.json`）。文書解析の既定か処理レシピの使用エンジンで選んだときだけ使います（#2042）。初めて配備しても起動しないので、使うときは「運用設定 > サービス管理」で起動します |
   | `parser-oci-document-understanding` | 配備しない | `rag_enable_oci_cloud_parsers`（OCI Document Understanding） |
 
   Docling を配備するかを選ぶ入力（以前の `rag_enable_parser_docling`）は廃止しました（Docling は既定の解析エンジンのため常に配備します）。
@@ -266,13 +266,13 @@ RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv �
   OCI Generative AI（Vision）の parser（`parser-oci-genai-vision`）と GPU の ASR の parser（`parser-asr`）、前処理の
   スキャン画像の補正（`preprocess-image-enhance`）と URL→Markdown（`preprocess-url-to-markdown`）は削除しました（#2042）。
   `rag_enable_oci_cloud_parsers` は OCI Document Understanding の parser だけを配備します。既存の Compute は
-  `sudo platform/deploy/suite-update.sh` の再配備で `parser-xml-tree-json` の unit が入って起動し、削除したサービスの unit は止めて消されます
+  `sudo platform/deploy/suite-update.sh` の再配備で `parser-xml-tree-json` の unit が入り（起動はしません）、削除したサービスの unit は止めて消されます
   （以前の stack が書いた `/u01/aipoc/props/rag_services.txt` も今の一覧に書き戻します）。
 
 - 前処理 / parser の起動 / 停止は「運用設定 > サービス管理」画面から行えます（`RAG_SERVICE_CONTROL_ENABLED=true`）。backend の実行ユーザーには、
   配備した前処理 / parser の unit の `systemctl enable --now / disable --now / restart` と `journalctl -u <unit>` を
   sudoers（`/etc/sudoers.d/production-ready-rag-services`）で許可します。利用者が最後に操作した起動 / 停止の状態は、再起動・再配備でも保たれます
-  （初めて配備する unit は起動します）。
+  （初めて配備する unit は起動します。既定は停止の `parser-xml-tree-json` は起動しません）。
 - RAG も NL2SQL / Agent と同じユーザー `opc` で動きます（#1316・#1611）。
 
 | 項目 | 値 |

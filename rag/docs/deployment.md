@@ -81,7 +81,7 @@ health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロ
 | preprocess-office-to-pdf / pdf-to-page-images / csv-to-json / excel-to-json / pii-redact | `services/preprocess/<name>` | 18010〜18013・18016 |
 | parser-docling（既定の解析エンジン） | `services/parsers/docling` | 18020 |
 | parser-unstructured（既定では配備しない。Docling が扱えない形式を取り込む場合） | `services/parsers/unstructured` | 18022 |
-| parser-xml-tree-json（XML ツリー JSON の解析エンジン。既定で配備する。#2024・#2042） | `services/parsers/xml_tree_json` | 18021 |
+| parser-xml-tree-json（XML ツリー JSON の解析エンジン。既定で配備し、既定は停止。#2024・#2042・#2453） | `services/parsers/xml_tree_json` | 18021 |
 | parser-oci-document-understanding（OCI Document Understanding） | `services/parsers/oci_document_understanding` | 18028 |
 
 音声・動画の文字起こしは parser のサービスを使わず、backend が OCI AI Speech で行う（GPU の ASR の parser と、
@@ -103,7 +103,8 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
 2. systemd が PID 1 の環境（WSL2 は `/etc/wsl.conf` の `[boot] systemd=true`）では、unit と sudoers を登録する（`rag/` で実行）。
    venv を作り（docling のモデルと pii_redact の日本語 NER モデルも取得する）、unit を `/etc/systemd/system/` に、
    画面から操作する unit の `systemctl` / `journalctl` だけを現在のユーザーに許可する sudoers を
-   `/etc/sudoers.d/production-ready-rag-services` に置き、初めて登録した unit を起動する。
+   `/etc/sudoers.d/production-ready-rag-services` に置き、初めて登録した unit を起動する（既定は停止の parser-xml-tree-json は
+   登録だけして起動しない。使うときはサービス管理画面で起動する。#2453）。
 
    ```bash
    scripts/rag-services.sh install            # 前処理 5 つと既定の CPU parser（docling・xml-tree-json）
@@ -220,6 +221,18 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 2. OCI コンソールで対象の Autonomous AI Database を開き、「クローンの作成」で「バックアップからのクローン」→「特定の時点」を選び、1. の時刻の少し前を指定する（自動バックアップの保持期間の中の時点だけ選べる）。クローンは別の料金がかかる。
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
+
+## 既存環境の更新手順（#2453 XML ツリー JSON の解析サービスを既定で停止にする）
+
+XML ツリー JSON の解析サービス（`parser-xml-tree-json`）は、文書解析の使用エンジンに選んだときだけ使う（設定の既定
+`RAG_PARSER_XML_TREE_JSON_ENABLED=false`）。統合 stack の配備・`suite-update.sh`・`scripts/rag-services.sh install` は、
+このサービスの venv・unit・sudoers を今どおり作るが、初めて入れるときに `enable` も起動もしない（既定は停止のサービスの一覧は
+[`scripts/rag-systemd.sh`](../scripts/rag-systemd.sh) の `RAG_DEFAULT_STOPPED_SERVICES`）。DB の migration・設定の追加は無い。
+
+1. 新しい環境: 配備の後、「運用設定 › サービス管理 › 文書解析(CPU)」の XML ツリー JSON は「停止中」になる。XML ツリー JSON を
+   使用エンジンに選ぶときは、この画面で「起動」する（`enable --now`。以後の再起動・再配備でも起動のまま）。
+2. 既存の環境: 再配備は今の状態（最後に操作した enable / disable）を保つため、既に起動しているサービスは止めない。使わないなら
+   サービス管理画面で「停止」する（`disable --now`。以後の再配備でも停止のまま）。
 
 ## 既存環境の更新手順（#2395 業務ガイドの手順ごとの検索と参照の頁）
 
@@ -604,7 +617,7 @@ systemd の unit に移した。サービス管理画面は docker compose で�
 | OCI の設定 | named volume `production-ready-rag_oci-config` | `/var/lib/production-ready-rag/.oci/config` |
 | モデル（docling など） | image に焼き込み | `ragsvc` の `~/.cache`（配備時に取得） |
 | サービス管理の操作 | `docker compose up / stop / build / rm` | `systemctl enable --now / disable --now / restart`、`journalctl -u <unit>`（sudoers で許可した unit だけ） |
-| 起動 / 停止の状態 | 再配備で compose_services.txt の service を全部起動 | 最後に操作した状態（enable / disable）を再起動・再配備でも保つ。初めての unit は起動 |
+| 起動 / 停止の状態 | 再配備で compose_services.txt の service を全部起動 | 最後に操作した状態（enable / disable）を再起動・再配備でも保つ。初めての unit は起動（既定は停止の parser-xml-tree-json を除く。#2453） |
 | Terraform | `rag_compose_services` / `rag_enable_parser_docling` / `compose_services.txt` | `rag_services`（Docling は常に配備）/ `rag_services.txt` |
 | 既定の解析エンジン | Unstructured | Docling（`RAG_PARSER_ADAPTER_BACKEND=docling`） |
 
@@ -1379,7 +1392,7 @@ ADB（Oracle Autonomous AI Database）と Wallet も stack が用意し（NL2SQL
 | Python | `uv python install 3.12`（`/opt/uv/python`。`ragsvc` も読める）。各サービスの venv は `uv sync --locked --no-dev --python 3.12` |
 | backend | `production-ready-rag-backend.service`（gunicorn + UvicornWorker、`127.0.0.1:8000`、workers 2、`RAG_ENVIRONMENT=prod`、in-process の取込 worker は無効） |
 | 取込 worker | `production-ready-rag-ingestion-worker.service`（`python -m app.rag.ingestion_worker`、`KillMode=mixed`、`RAG_INGESTION_QUEUE_SHUTDOWN_GRACE_SECONDS=60`、`TimeoutStopSec=90`。停止は下の「取込 worker の lease と停止」） |
-| 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 5 つ・parser-docling・parser-xml-tree-json と、選べば parser-unstructured・parser-oci-document-understanding）。GPU の parser は配備しない |
+| 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 5 つ・parser-docling・parser-xml-tree-json と、選べば parser-unstructured・parser-oci-document-understanding）。parser-xml-tree-json は既定は停止で、初めて配備しても起動しない（#2453）。GPU の parser は配備しない |
 | frontend | host の Node.js 24 で `platform` と `rag/frontend` を build し、Nginx が `rag/frontend/dist` を配信して `/api/` を backend へ proxy する |
 | upload の上限 | Nginx の `client_max_body_size` は backend の `RAG_MAX_UPLOAD_BYTES`（`backend/.env`。既定 200 MiB）+ 10 MiB（MiB で切り上げ。Refs #306） |
 | 設定 | `platform/.env`（`PLATFORM_*`）と `rag/backend/.env`（`RAG_*`）。どちらも `ragsvc` だけが読める 0600。OCI parser の unit は両方を EnvironmentFile で読む |

@@ -35,7 +35,7 @@ npm ci
 BACKEND_URL=http://localhost:8000 npm run dev   # http://localhost:3000（BACKEND_URL 未指定なら /api は 404）
 
 # 前処理 / CPU parser(サービスごとの uv の venv + systemd の unit。rag/ で実行。#286)
-scripts/rag-services.sh install            # 前処理と既定の parser(docling・xml-tree-json)。--unstructured / --oci で足す
+scripts/rag-services.sh install            # 前処理と既定の parser(docling・xml-tree-json。xml-tree-json は登録だけで起動しない)。--unstructured / --oci で足す
 ```
 
 CPU の parser(docling / unstructured / xml_tree_json)は **独立した FastAPI マイクロサービス**(`services/parsers/<name>`)で
