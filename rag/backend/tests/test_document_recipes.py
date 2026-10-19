@@ -612,6 +612,50 @@ async def test_list_document_recipes_fetches_jobs_once_for_all_recipes(
     assert fake.job_list_calls == 1
 
 
+async def test_document_recipe_view_exposes_pending_chunk_set_after_index_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Embedding / 索引で失敗したレシピは、保存済みの CHUNKED の chunk_set を画面へ返す(#2467)。
+
+    画面はこれで「Embedding / 索引を再実行」(保存済みの Chunk から再開)を主の操作にする。
+    """
+    now = datetime.now(UTC)
+
+    class FakeOracle:
+        async def list_document_recipes(self, document_id: str) -> list[dict[str, object]]:
+            return [
+                {
+                    "document_id": document_id,
+                    "recipe_id": "recipe-1",
+                    "slot_no": 1,
+                    "status": FileStatus.ERROR.value,
+                    "failed_phase": IngestionJobPhase.INDEX.value,
+                    "active_extraction_recipe_id": "er-1",
+                    "active_chunk_set_id": None,
+                    "pending_chunk_set_id": "cs-pending",
+                    "processing_config": {},
+                    "config_revision": 1,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            ]
+
+        async def list_document_ingestion_jobs(
+            self, document_id: str, *, status: IngestionJobStatus | None = None
+        ) -> list[IngestionJob]:
+            return []
+
+    monkeypatch.setattr(documents_route, "OracleClient", lambda: FakeOracle())
+
+    result = await documents_route.list_document_recipes("doc-1")
+
+    assert result.data is not None
+    [recipe] = result.data
+    assert recipe.active_chunk_set_id is None
+    assert recipe.pending_chunk_set_id == "cs-pending"
+    assert recipe.failed_phase == IngestionJobPhase.INDEX
+
+
 class _FakeRecipeJobOracle:
     """EXTRACT job の materialize と job ライフサイクルを支える fake。
 

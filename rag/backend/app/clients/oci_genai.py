@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import importlib
 import json
+import logging
 import math
 import re
 from collections import OrderedDict
@@ -15,9 +16,9 @@ from collections.abc import Awaitable, Callable, Sequence
 from numbers import Real
 from typing import Any, Literal, Protocol
 
-from pr_backend_core.bounded_calls import Attempt, BoundedCallFailed
+from pr_backend_core.bounded_calls import KIND_LABELS, Attempt, BoundedCallFailed, ErrorKind
 
-from app.clients.ai_calls import ingestion_ai_calls
+from app.clients.ai_calls import embedding_rejection_reason, ingestion_ai_calls
 from app.clients.oci_auth import load_oci_config_without_prompt
 from app.config import Settings, get_settings
 
@@ -32,6 +33,10 @@ EMBEDDING_INPUT_MAX_CHARS = 100_000
 # OCI Embed 4 は 1 request 内の全入力で 128k token。tokenizer 依存を増やさず保守的に抑える。
 EMBEDDING_REQUEST_MAX_CHARS = 100_000
 EMBEDDING_REQUEST_MAX_INPUTS = 96
+# 1 件の入力の上限(Embed 4 が inputs[i] ごとに検証する。#2467 で実 API の応答から確認)。
+EMBEDDING_INPUT_MAX_TOKENS = 128_000
+# 再試行でバッチを分けるときの最大の分割数(1 回の呼び出しの中で順に送る)。
+EMBEDDING_RETRY_MAX_SPLITS = 8
 type SdkCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
 
 
@@ -45,10 +50,26 @@ class GenerativeAiInferenceClientProtocol(Protocol):
         """OCI Generative AI rerank_text を呼び出す。"""
 
 
+logger = logging.getLogger(__name__)
+
+
 class OciGenAiConfigError(ValueError):
     """利用者が OCI 認証設定を直せる Generative AI 設定エラー。"""
 
     safe_for_user = True
+
+
+class OciEmbeddingRequestError(RuntimeError):
+    """Embedding の要求の失敗を、理由とバッチの位置・大きさで示す(#2467)。
+
+    サービスの応答本文・入力の本文・認証情報は含めない。``diagnostics`` は構造化ログと同じ値。
+    """
+
+    safe_for_user = True
+
+    def __init__(self, message: str, *, diagnostics: dict[str, object]) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics
 
 
 class OciGenAiClient:
@@ -78,6 +99,7 @@ class OciGenAiClient:
         if not texts:
             return []
         _validate_embedding_input_lengths(texts)
+        _raise_if_empty_embedding_input(texts, model_id=self._settings.oci_genai_embedding_model)
         if self._embedding_cache_disabled():
             vectors = await self._embed_with_oci_batches(texts, input_type=input_type)
             _validate_embedding_batch(
@@ -160,8 +182,11 @@ class OciGenAiClient:
         if not batches:
             return []
 
-        async def embed_batch(batch: list[str], _: Attempt) -> list[list[float]]:
-            batch_vectors = await self._embed_with_oci(batch, input_type=input_type)
+        async def embed_batch(batch: list[str], attempt: Attempt) -> list[list[float]]:
+            # サービスの高負荷(HTTP 400 でも返る。#2467)のあとは、バッチを分けて小さい要求で送る。
+            batch_vectors: list[list[float]] = []
+            for part in _split_batch(batch, _retry_split_count(attempt, len(batch))):
+                batch_vectors.extend(await self._embed_with_oci(part, input_type=input_type))
             _validate_embedding_batch(
                 batch_vectors,
                 expected_count=len(batch),
@@ -172,9 +197,21 @@ class OciGenAiClient:
         with ingestion_ai_calls(self._settings, "embedding", total=len(batches)) as caller:
             outcomes = await _unwrapped_item_failure(caller.map(batches, embed_batch))
         vectors: list[list[float]] = []
-        for outcome in outcomes:
+        for index, outcome in enumerate(outcomes):
             if outcome.error is not None:
-                raise outcome.error.__cause__ or outcome.error
+                cause = outcome.error.__cause__
+                if outcome.error.status is None:
+                    # 応答の検証の失敗など、サービスの HTTP の拒否でないものは元の例外で出す。
+                    raise cause or outcome.error
+                raise _embedding_request_error(
+                    outcome.error,
+                    cause if isinstance(cause, BaseException) else None,
+                    batch=batches[index],
+                    batch_index=index,
+                    batch_total=len(batches),
+                    total_inputs=len(texts),
+                    model_id=self._settings.oci_genai_embedding_model,
+                ) from (cause or outcome.error)
             vectors.extend(outcome.value or [])
         return vectors
 
@@ -418,6 +455,124 @@ def _validate_embedding_input_lengths(texts: Sequence[str]) -> None:
                 "embedding input が長すぎます。"
                 f"index={index}, chars={chars}, max_chars={EMBEDDING_INPUT_MAX_CHARS}"
             )
+
+
+def _raise_if_empty_embedding_input(texts: Sequence[str], *, model_id: str) -> None:
+    """空の入力はサービスが HTTP 400 で拒否するため、送る前に止める(#2467)。"""
+    empty = [index for index, text in enumerate(texts) if text == ""]
+    if not empty:
+        return
+    diagnostics: dict[str, object] = {
+        "reason": "input_empty",
+        "total_inputs": len(texts),
+        "empty_inputs": len(empty),
+        "first_empty_index": empty[0],
+        "model": model_id,
+    }
+    logger.warning("embedding_request_failed", extra=diagnostics)
+    raise OciEmbeddingRequestError(
+        f"Embedding の入力に空の Chunk が {len(empty)} 件あります（最初は {empty[0] + 1} 件目）。"
+        "Chunk 作成から再実行してください。",
+        diagnostics=diagnostics,
+    )
+
+
+def _retry_split_count(attempt: Attempt, size: int) -> int:
+    """再試行のときにバッチを何個に分けて送るか(一時的な不可用・大きすぎるの後だけ分ける)。"""
+    if size <= 1:
+        return 1
+    if attempt.final:
+        return min(size, EMBEDDING_RETRY_MAX_SPLITS)
+    if attempt.last_error not in {ErrorKind.UNAVAILABLE, ErrorKind.TOO_LARGE}:
+        return 1
+    splits: int = 2 ** max(0, attempt.number - 1)
+    return min(size, EMBEDDING_RETRY_MAX_SPLITS, splits)
+
+
+def _split_batch(batch: list[str], parts: int) -> list[list[str]]:
+    """入力の順を保ったまま、件数がほぼ等しい ``parts`` 個に分ける。"""
+    if parts <= 1:
+        return [batch]
+    size, extra = divmod(len(batch), parts)
+    result: list[list[str]] = []
+    start = 0
+    for index in range(parts):
+        end = start + size + (1 if index < extra else 0)
+        if end > start:
+            result.append(batch[start:end])
+        start = end
+    return result
+
+
+_EMBEDDING_REASON_LABELS: dict[str, str] = {
+    "service_overloaded": "サービスの高負荷",
+    "input_too_long": "1 件の入力がトークンの上限を超えた",
+    "too_many_inputs": "入力の件数が上限を超えた",
+    "input_empty": "空の入力",
+    "invalid_request": "要求の誤り",
+}
+_EMBEDDING_REASON_HINTS: dict[str, str] = {
+    "service_overloaded": (
+        "再試行しても回復しませんでした。時間をおいて、保存済みの Chunk から "
+        "Embedding / 索引を再実行してください。"
+    ),
+    "input_too_long": (
+        f"1 件の Chunk が Embedding の上限（{EMBEDDING_INPUT_MAX_TOKENS:,} トークン）を"
+        "超えています。Chunk のサイズの設定を小さくして、Chunk 作成から再実行してください。"
+    ),
+    "too_many_inputs": "Embedding のバッチの件数の設定（96 件以下）を確かめてください。",
+    "input_empty": "Chunk 作成から再実行してください。",
+}
+_DEFAULT_EMBEDDING_HINT = (
+    "時間をおいて、保存済みの Chunk から Embedding / 索引を再実行してください。"
+)
+
+
+def _embedding_request_error(
+    failure: BoundedCallFailed,
+    cause: BaseException | None,
+    *,
+    batch: Sequence[str],
+    batch_index: int,
+    batch_total: int,
+    total_inputs: int,
+    model_id: str,
+) -> OciEmbeddingRequestError:
+    """失敗したバッチの診断(本文・入力を含めない)を構造化ログに出し、利用者向けの例外にする。"""
+    status = failure.status
+    service_code = getattr(cause, "code", None) if cause is not None else None
+    reason = (embedding_rejection_reason(cause) if cause is not None else None) or (
+        failure.kind.value
+    )
+    batch_chars = sum(len(text) for text in batch)
+    # byte 単位の BPE の token は 1 byte 以上なので、UTF-8 の byte 数は token 数の上限になる
+    # (tokenizer は持たない)。
+    batch_utf8_bytes = sum(len(text.encode("utf-8")) for text in batch)
+    diagnostics: dict[str, object] = {
+        "reason": reason,
+        "kind": failure.kind.value,
+        "status": status,
+        "service_code": str(service_code) if service_code is not None else None,
+        "opc_request_id": getattr(cause, "request_id", None) if cause is not None else None,
+        "attempts": failure.attempts,
+        "batch_index": batch_index + 1,
+        "batch_total": batch_total,
+        "batch_inputs": len(batch),
+        "batch_chars": batch_chars,
+        "batch_max_input_chars": max((len(text) for text in batch), default=0),
+        "batch_token_upper_bound": batch_utf8_bytes,
+        "total_inputs": total_inputs,
+        "model": model_id,
+    }
+    logger.warning("embedding_request_failed", extra=diagnostics)
+    label = _EMBEDDING_REASON_LABELS.get(reason) or KIND_LABELS.get(failure.kind, "失敗")
+    status_text = f"HTTP {status}・" if status is not None else ""
+    hint = _EMBEDDING_REASON_HINTS.get(reason, _DEFAULT_EMBEDDING_HINT)
+    return OciEmbeddingRequestError(
+        f"Embedding の要求が失敗しました（{status_text}{label}）。"
+        f"バッチ {batch_index + 1}/{batch_total}（{len(batch)} 件・{batch_chars:,} 文字）。{hint}",
+        diagnostics=diagnostics,
+    )
 
 
 def _embedding_request_batches(texts: Sequence[str], *, max_count: int) -> list[list[str]]:

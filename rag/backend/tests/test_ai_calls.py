@@ -24,7 +24,7 @@ from app.clients.ai_calls import (
     make_ai_caller,
     rag_error_kind,
 )
-from app.clients.oci_genai import OciGenAiClient
+from app.clients.oci_genai import OciEmbeddingRequestError, OciGenAiClient
 from app.config import Settings
 from app.rag.ingestion_progress import IngestionProgressReporter, track_ingestion_progress
 from app.rag.navigation import summarize_navigation_nodes
@@ -249,7 +249,8 @@ async def test_embedding_rate_limit_and_unavailable_are_retried() -> None:
     )
     vectors = await client.embed(_texts(3, 2))
     assert len(vectors) == 6
-    assert len(client.calls) == 5
+    # 429 は同じ要求を送り直し、一時的な不可用(503)のあとはバッチを分けて送る(#2467)。
+    assert sorted(len(call) for call in client.calls) == [1, 1, 2, 2, 2, 2]
 
 
 async def test_embedding_permission_error_stops_without_retry() -> None:
@@ -265,6 +266,95 @@ async def test_embedding_item_failure_raises_original_error_after_final_retry() 
     client = _EmbeddingClient(settings, {0: [ValueError("bad request body")] * 2})
     with pytest.raises(ValueError, match="bad request body"):
         await client.embed(_texts(2, 2))
+
+
+class ServiceError(Exception):
+    """OCI SDK の ``ServiceError`` と同じ属性(status / code / message / request_id)のスタブ。"""
+
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(f"{{'status': {status}, 'message': '{message}'}}")
+        self.status = status
+        self.code = str(status)
+        self.message = message
+        self.request_id = "opc-request-id-example"
+
+
+# OCI Generative AI の Embedding が実際に返した HTTP 400 の文(#2467。合成データで確認)。
+_OVERLOADED = "the requested model is currently experiencing high load, please try again later"
+_TOO_LONG = "invalid request: inputs[0] is too long. Max tokens per text must be at most 128000"
+_EMPTY = "Input text cannot be empty."
+
+
+def test_rag_error_kind_maps_oci_embedding_rejections() -> None:
+    # 高負荷は 400 で返るが一時的なため再試行する。1 件の入力の超過は同じ要求をくり返さない。
+    assert rag_error_kind(ServiceError(400, _OVERLOADED)) is ErrorKind.UNAVAILABLE
+    assert rag_error_kind(ServiceError(400, _TOO_LONG)) is ErrorKind.TOO_LARGE
+    assert rag_error_kind(ServiceError(400, _EMPTY)) is None
+    assert rag_error_kind(ServiceError(400, "other")) is None
+    assert rag_error_kind(ServiceError(500, _OVERLOADED)) is None
+
+
+async def test_embedding_overload_400_is_retried_with_split_batches() -> None:
+    settings = _settings(rag_embedding_batch_size=4, rag_embedding_concurrency=1)
+    client = _EmbeddingClient(settings, {0: [ServiceError(400, _OVERLOADED)]})
+    vectors = await client.embed(_texts(1, 4))
+    assert [vector[0] for vector in vectors] == [0.0, 1.0, 2.0, 3.0]
+    # 失敗した 4 件の要求を、再試行では 2 件ずつの 2 回に分けて送る。
+    assert [len(call) for call in client.calls] == [4, 2, 2]
+
+
+async def test_embedding_rejection_reports_safe_diagnostics(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = _settings(rag_embedding_batch_size=2, rag_embedding_concurrency=1)
+    client = _EmbeddingClient(settings, {1: [ServiceError(400, _OVERLOADED)] * 20})
+    texts = _texts(2, 2)
+    with caplog.at_level("WARNING"), pytest.raises(OciEmbeddingRequestError) as raised:
+        await client.embed(texts)
+    error = raised.value
+    assert error.safe_for_user is True
+    assert str(error).startswith(
+        "Embedding の要求が失敗しました（HTTP 400・サービスの高負荷）。バッチ 2/2（2 件・6 文字）。"
+    )
+    assert error.diagnostics == {
+        "reason": "service_overloaded",
+        "kind": "unavailable",
+        "status": 400,
+        "service_code": "400",
+        "opc_request_id": "opc-request-id-example",
+        "attempts": 1,
+        "batch_index": 2,
+        "batch_total": 2,
+        "batch_inputs": 2,
+        "batch_chars": 6,
+        "batch_max_input_chars": 3,
+        "batch_token_upper_bound": 6,
+        "total_inputs": 4,
+        "model": "cohere.embed-v4.0",
+    }
+    records = [record for record in caplog.records if record.message == "embedding_request_failed"]
+    assert len(records) == 1 and records[0].__dict__["batch_index"] == 2
+    # 入力の本文とサービスの応答の文は、例外の文・ログに残さない。
+    logged = " ".join(f"{record.getMessage()} {record.__dict__}" for record in records)
+    assert all(text not in logged and text not in str(error) for text in texts)
+    assert "high load" not in logged and "high load" not in str(error)
+
+
+async def test_embedding_too_long_input_is_not_retried_and_names_the_limit() -> None:
+    settings = _settings(rag_embedding_batch_size=2, rag_embedding_concurrency=1)
+    client = _EmbeddingClient(settings, {0: [ServiceError(400, _TOO_LONG)] * 5})
+    with pytest.raises(OciEmbeddingRequestError, match="上限（128,000 トークン）") as raised:
+        await client.embed(_texts(1, 2))
+    assert raised.value.diagnostics["reason"] == "input_too_long"
+    assert len(client.calls) == 1
+
+
+async def test_embedding_rejects_empty_input_before_calling_the_service() -> None:
+    client = _EmbeddingClient(_settings())
+    with pytest.raises(OciEmbeddingRequestError, match="空の Chunk が 1 件") as raised:
+        await client.embed(["0-0", "", "0-2"])
+    assert raised.value.diagnostics["first_empty_index"] == 1
+    assert client.calls == []
 
 
 # --- ナビゲーション要約 ----------------------------------------------------------------

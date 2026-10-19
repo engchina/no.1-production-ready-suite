@@ -1106,11 +1106,13 @@ export function DocumentWorkspace({
       segmentsQuery.isPending || (hasSelectedRecipeExtraction && extractionJsonQuery.isPending),
   });
   const hasExtraction = Boolean(selectedRecipe?.active_extraction_recipe_id);
-  const hasChunkSet = Boolean(latestChunkSet);
+  // 索引の前の保存済み chunk_set(CHUNKED)も、Embedding / 索引から再実行できる Chunk に数える(#2467)。
+  const hasChunkSet = Boolean(latestChunkSet || selectedRecipe?.pending_chunk_set_id);
   const actionPlan = resolveDocumentActionPlan({
     status,
     activeJob: activeSubmittedJob,
-    latestFailedPhase: failedDocumentJob?.phase,
+    // Chunk 作成から索引まで通す job の失敗では job の phase は CHUNK のため、レシピの失敗工程を優先する。
+    latestFailedPhase: failedRecipePhase ?? failedDocumentJob?.phase,
     hasPreparedArtifact,
     hasExtraction,
     hasChunkSet,
