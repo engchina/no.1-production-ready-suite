@@ -2,6 +2,7 @@ import { AlertCircle, UserRound } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
+import { ChatAttachmentList, type ChatAttachmentItem } from "../chat/chat-attachments";
 
 /** 利用者のメッセージの状態（#907）。`sending` は送信の応答を待つ仮のメッセージ。 */
 export type ChatUserMessageStatus = "sending" | "sent" | "failed" | "stopped";
@@ -18,6 +19,10 @@ export interface ChatUserMessageProps {
    * 吹き出しの上に `UserRound` 付きの小さな文で出す。持ち主が送った質問には渡さない。
    */
   senderLabel?: string;
+  /** 質問に添付したファイル（#2517）。吹き出しの下に右寄せで出す。 */
+  attachments?: ChatAttachmentItem[];
+  /** 添付の一覧の名前（翻訳済み。例:「添付ファイル」）。読み上げだけ。 */
+  attachmentsLabel?: string;
   className?: string;
   testId?: string;
 }
@@ -38,6 +43,8 @@ export function ChatUserMessage({
   status = "sent",
   failedLabel,
   senderLabel,
+  attachments,
+  attachmentsLabel,
   className,
   testId,
 }: ChatUserMessageProps) {
@@ -54,6 +61,14 @@ export function ChatUserMessage({
       >
         {children}
       </div>
+      {attachments?.length ? (
+        <ChatAttachmentList
+          items={attachments}
+          labels={{ list: attachmentsLabel ?? "" }}
+          align="end"
+          className="max-w-[85%]"
+        />
+      ) : null}
       {status === "failed" && failedLabel ? (
         <p className="flex items-center gap-1 text-xs text-danger-fg">
           <AlertCircle size={14} aria-hidden className="shrink-0" />

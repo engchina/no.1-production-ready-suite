@@ -14,9 +14,13 @@ CSV・Excel・Word の前処理は、原本を 1 行 1 オブジェクトの JSO
   - ``document``: 先頭の 1 行だけ。変換器・版・読まなかったシート・表頭の行（CSV）・診断。Word は
     位置の基準（``location_basis``）と、.doc を .docx にして読んだときの原本と派生物の対応
     （``conversion``）も持つ。
-  - ``sheet``: Excel のシートの文脈（表頭の行・推定の信頼度・読み方・列と役割・診断）。
+  - ``sheet``: Excel のシートの文脈（表頭の行・推定の信頼度・読み方・版式の判定・列と役割・診断。
+    1 シートを複数の表に分けたときは表ごとに 1 行で、``table_index``・``region``・``title``
+    を持つ）。
   - ``row``: 表の 1 行。``fields`` は列名・列の位置・役割・値の順序付きの配列。
   - ``procedure_step``: 手順書の 1 手順（``lines``）。
+  - ``form_field``: 帳票（方眼紙）の 1 項目（``label``・``value``・ラベルと値のセル。#2516）。
+    選択の記号を読んで値を選ばれた選択肢にしたときは、原文を ``value_original`` に持つ（#2526）。
   - ``preamble``: 表頭より上の行（``text``）。
   - ``section``: Word の見出し（見出しの階層 ``heading_path``・段落の位置）。``parent_id`` は上位の
     見出し。
@@ -24,7 +28,8 @@ CSV・Excel・Word の前処理は、原本を 1 行 1 オブジェクトの JSO
     ごとには分けない。大きい節を複数の記録に分けたときは ``part``（まとまりの ID・順番・全体の位置）
     を持つ。位置（``WordLocation``）は本文の順の番号で、原本に無いページ番号は持たない。
   CSV・Excel の記録は ``parent_id`` で文脈の行（Excel は ``sheet``）を指し、``location``
-  （元の行番号・セル範囲）と ``section_path`` を持つ。CSV の行番号は原本の物理行（引用符の中の
+  （元の行番号・セル範囲）と ``section_path`` を持つ。Excel の記録のうち図形・テキストボックスの
+  文字を置いたセル範囲は ``shape_cells`` に持つ（#2526）。CSV の行番号は原本の物理行（引用符の中の
   改行を含む記録は複数行）。
 - 読み取り（`parse_structured_records`）は厳格にし、不正な JSON・オブジェクトでない行・空行・BOM・
   未知の schema・未対応の版・record_id の重複・document の行の欠落・存在しない parent_id を、行番号
@@ -58,14 +63,17 @@ from rag_parser_core.sheet_records import (
     _BLOCK_TEXT_MAX_CHARS,
     SHEET_RECORD_CONTENT_KIND,
     HeaderDetection,
+    LayoutDetection,
     SheetBlock,
     SheetColumn,
     SheetDiagnostic,
+    SheetLayout,
     SheetPreambleRow,
     SheetRecords,
     SheetRecordsDocument,
     SkippedSheet,
     _block_text,
+    sheet_block_record_id,
     sheet_records_extraction,
 )
 
@@ -173,7 +181,11 @@ class SheetLine(_Line):
     header_row: int | None = Field(default=None, ge=1)
     header_row_count: int = Field(default=1, ge=1)
     header_detection: HeaderDetection | None = None
-    mode: Literal["table", "procedure"] = "table"
+    mode: SheetLayout = "table"
+    layout_detection: LayoutDetection | None = None
+    table_index: int | None = Field(default=None, ge=1)
+    region: str | None = None
+    title: str | None = None
     columns: list[SheetColumn] = Field(default_factory=list)
     diagnostics: list[RecordDiagnostic] = Field(default_factory=list)
 
@@ -204,6 +216,10 @@ class _RecordLine(_Line):
     parent_id: str | None = None
     location: RecordLocation
     section_path: list[str] = Field(default_factory=list)
+    shape_cells: list[str] | None = Field(
+        default=None,
+        description="Excel の図形・テキストボックスの文字を置いたセル範囲（無ければ省く。#2526）。",
+    )
 
 
 class RowLine(_RecordLine):
@@ -214,6 +230,17 @@ class RowLine(_RecordLine):
 class ProcedureStepLine(_RecordLine):
     record_type: Literal["procedure_step"] = "procedure_step"
     lines: list[str] = Field(default_factory=list)
+
+
+class FormFieldLine(_RecordLine):
+    """帳票の 1 項目（``label`` の無い行は、ラベルと組にならなかった文）。"""
+
+    record_type: Literal["form_field"] = "form_field"
+    label: str | None = None
+    value: str
+    label_cell: str | None = None
+    value_cell: str | None = None
+    value_original: str | None = None
 
 
 class PreambleLine(_RecordLine):
@@ -322,6 +349,7 @@ StructuredRecordLine = Annotated[
     | SheetLine
     | RowLine
     | ProcedureStepLine
+    | FormFieldLine
     | PreambleLine
     | SectionLine
     | PassageLine,
@@ -332,11 +360,12 @@ _LINE_ADAPTER: TypeAdapter[
     | SheetLine
     | RowLine
     | ProcedureStepLine
+    | FormFieldLine
     | PreambleLine
     | SectionLine
     | PassageLine
 ] = TypeAdapter(StructuredRecordLine)
-ContentLine = RowLine | ProcedureStepLine | PreambleLine | PassageLine
+ContentLine = RowLine | ProcedureStepLine | FormFieldLine | PreambleLine | PassageLine
 ContextLine = SheetLine | SectionLine
 
 
@@ -443,7 +472,7 @@ def parse_structured_records(
                 return StructuredRecordsError("unsupported_record_type", number)
             sheet_ids.add(line.record_id)
         else:
-            if isinstance(line, ProcedureStepLine) and (
+            if isinstance(line, ProcedureStepLine | FormFieldLine) and (
                 document.source_type not in _SPREADSHEET_SOURCE_TYPES
             ):
                 return StructuredRecordsError("unsupported_record_type", number)
@@ -567,6 +596,10 @@ def sheet_records_to_lines(
                 header_row_count=sheet.header_row_count,
                 header_detection=sheet.header_detection,
                 mode=sheet.mode,
+                layout_detection=sheet.layout_detection,
+                table_index=sheet.table_index,
+                region=sheet.region,
+                title=sheet.title,
                 columns=sheet.columns,
                 diagnostics=_diagnostics(sheet.diagnostics),
             )
@@ -582,6 +615,7 @@ def sheet_records_to_lines(
                         row_end=preamble.row_number,
                         cell_range=preamble.cell_range,
                     ),
+                    shape_cells=preamble.shape_cells or None,
                     text=preamble.text,
                 )
             )
@@ -590,7 +624,24 @@ def sheet_records_to_lines(
             location = RecordLocation(
                 row_start=block.row_start, row_end=block.row_end, cell_range=block.cell_range
             )
-            record_id = f"{sheet_id}-r{block.row_start}"
+            record_id = sheet_block_record_id(sheet_id, block, sheet.mode)
+            if block.kind == "form_field":
+                lines.append(
+                    FormFieldLine(
+                        record_id=record_id,
+                        source_type=source_type,
+                        parent_id=sheet_id,
+                        location=location,
+                        section_path=block.section_path,
+                        shape_cells=block.shape_cells or None,
+                        label=block.label,
+                        value=block.value,
+                        label_cell=block.label_cell,
+                        value_cell=block.value_cell,
+                        value_original=block.value_original,
+                    )
+                )
+                continue
             if block.kind == "procedure_step":
                 lines.append(
                     ProcedureStepLine(
@@ -599,6 +650,7 @@ def sheet_records_to_lines(
                         parent_id=sheet_id,
                         location=location,
                         section_path=block.section_path,
+                        shape_cells=block.shape_cells or None,
                         lines=block.lines,
                     )
                 )
@@ -623,10 +675,27 @@ def sheet_records_to_lines(
                     parent_id=sheet_id,
                     location=location,
                     section_path=block.section_path,
+                    shape_cells=block.shape_cells or None,
                     fields=fields,
                 )
             )
     return lines
+
+
+def _form_field_block(line: FormFieldLine) -> SheetBlock:
+    return SheetBlock(
+        kind="form_field",
+        row_start=line.location.row_start,
+        row_end=line.location.row_end,
+        cell_range=line.location.cell_range or "",
+        section_path=line.section_path,
+        label=line.label,
+        value=line.value,
+        label_cell=line.label_cell,
+        value_cell=line.value_cell,
+        value_original=line.value_original,
+        shape_cells=line.shape_cells or [],
+    )
 
 
 def structured_records_to_sheet_records(
@@ -645,6 +714,10 @@ def structured_records_to_sheet_records(
                 header_row_count=line.header_row_count,
                 header_detection=line.header_detection,
                 mode=line.mode,
+                layout_detection=line.layout_detection,
+                table_index=line.table_index,
+                region=line.region,
+                title=line.title,
                 columns=line.columns,
                 diagnostics=[
                     SheetDiagnostic(code=item.code, cell=item.cell, detail=item.detail)
@@ -661,8 +734,11 @@ def structured_records_to_sheet_records(
                     row_number=line.location.row_start,
                     cell_range=line.location.cell_range or "",
                     text=line.text,
+                    shape_cells=line.shape_cells or [],
                 )
             )
+        elif isinstance(line, FormFieldLine):
+            sheet.blocks.append(_form_field_block(line))
         elif isinstance(line, ProcedureStepLine):
             sheet.blocks.append(
                 SheetBlock(
@@ -672,6 +748,7 @@ def structured_records_to_sheet_records(
                     cell_range=line.location.cell_range or "",
                     section_path=line.section_path,
                     lines=line.lines,
+                    shape_cells=line.shape_cells or [],
                 )
             )
         else:
@@ -683,6 +760,7 @@ def structured_records_to_sheet_records(
                     cell_range=line.location.cell_range or "",
                     section_path=line.section_path,
                     values={item.name: item.value for item in line.fields},
+                    shape_cells=line.shape_cells or [],
                 )
             )
     source_format: Literal["xlsx", "xls"] = "xls" if document.source_type == "xls" else "xlsx"
@@ -1068,6 +1146,8 @@ def oversized_record_line(document: StructuredRecordsDocument) -> int | None:
             text = line.text
         elif document.source_type not in _SPREADSHEET_SOURCE_TYPES:
             text = _csv_row_text(line, max_chars=None) if isinstance(line, RowLine) else ""
+        elif isinstance(line, FormFieldLine):
+            text = _block_text(_form_field_block(line), max_chars=None)
         else:
             block = SheetBlock(
                 kind="procedure_step" if isinstance(line, ProcedureStepLine) else "row",
@@ -1134,6 +1214,7 @@ __all__ = [
     "RecordPart",
     "RowLine",
     "SectionLine",
+    "FormFieldLine",
     "SheetLine",
     "SkippedPart",
     "SourceConversion",

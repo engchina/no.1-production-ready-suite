@@ -27,6 +27,11 @@ from uuid import uuid4
 from dotenv import dotenv_values
 
 from ..answer_notice import AnswerNoticeProvider, AnswerNoticeRecord, InMemoryAnswerNoticeStore
+from ..chat_attachments.settings import (
+    ChatAttachmentSettingsProvider,
+    InMemoryChatAttachmentSettingsStore,
+)
+from ..chat_attachments.store import ChatAttachmentStore, InMemoryChatAttachmentStore
 from ..env_file import write_env_values
 from ..users_roles import PasswordPolicyError, generate_temporary_password, validate_password
 from .api_keys import (
@@ -215,6 +220,20 @@ class AuthService:
             store.answer_notice_store(self.product_key)
             if isinstance(store, OracleAuthStore)
             else InMemoryAnswerNoticeStore()
+        )
+        # 会話の添付（#2517）。DB の store なら `PLATFORM_CHAT_ATTACHMENTS`（3 製品で共有）、
+        # それ以外
+        # （テスト）はプロセスの中。製品は `ChatAttachmentService` に渡す。
+        self.chat_attachment_store: ChatAttachmentStore = (
+            store.chat_attachment_store()
+            if isinstance(store, OracleAuthStore)
+            else InMemoryChatAttachmentStore()
+        )
+        # チャットの添付を使うか（製品ごと。既定は無効。#2517）。
+        self.chat_attachment_settings = ChatAttachmentSettingsProvider(
+            store.chat_attachment_settings_store(self.product_key)
+            if isinstance(store, OracleAuthStore)
+            else InMemoryChatAttachmentSettingsStore()
         )
 
     # ---- bootstrap ----

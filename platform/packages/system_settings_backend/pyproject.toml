@@ -14,6 +14,11 @@ dependencies = [
   # 共通認証のパスワード hash（Argon2id。#212）
   "pwdlib[argon2]>=0.3,<1.0",
   "production-ready-backend-core",
+  # 会話の添付の解析（#2517）。PDF の文字・Excel の行・Office の XML（zip bomb・XXE を防ぐ）・文字コード。
+  "pypdf>=6.4,<7",
+  "openpyxl>=3.1",
+  "defusedxml>=0.7",
+  "charset-normalizer>=3.4",
 ]
 
 [project.optional-dependencies]

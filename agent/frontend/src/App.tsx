@@ -49,6 +49,11 @@ const OciSettingsClient = lazy(() =>
 const AnswerNoticeSettingsClient = lazy(() =>
   import("@/components/settings/AnswerNoticeSettingsClient").then((module) => ({ default: module.AnswerNoticeSettingsClient }))
 );
+const ChatAttachmentSettingsClient = lazy(() =>
+  import("@/components/settings/ChatAttachmentSettingsClient").then((module) => ({
+    default: module.ChatAttachmentSettingsClient,
+  }))
+);
 const UploadStorageSettingsClient = lazy(() =>
   import("@/components/settings/UploadStorageSettingsClient").then((module) => ({ default: module.UploadStorageSettingsClient }))
 );
@@ -175,6 +180,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsToolPolicy} element={<ToolPolicySettingsPage />} />
         <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
         <Route path={APP_ROUTES.settingsAnswerNotice} element={<SettingsAnswerNoticeRoute />} />
+        <Route path={APP_ROUTES.settingsChatAttachments} element={<SettingsChatAttachmentsRoute />} />
         <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
         <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
         <Route path={APP_ROUTES.securityPermissions} element={<SecurityPermissionsPage />} />
@@ -289,6 +295,15 @@ function SettingsAnswerNoticeRoute() {
     <div>
       <PageHeader wide title={t("nav.settingsAnswerNotice")} subtitle={t("settings.answerNotice.subtitle")} />
       <AnswerNoticeSettingsClient />
+    </div>
+  );
+}
+
+function SettingsChatAttachmentsRoute() {
+  return (
+    <div>
+      <PageHeader wide title={t("nav.settingsChatAttachments")} subtitle={t("settings.chatAttachments.subtitle")} />
+      <ChatAttachmentSettingsClient />
     </div>
   );
 }

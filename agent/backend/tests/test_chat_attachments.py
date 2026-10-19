@@ -1,0 +1,330 @@
+"""チャットの添付（会話の期間だけ使う作業ファイル。#2517）。
+
+- API: 添付して送ると、Run に添付の名前が残り、添付が会話に結び付く。ほかの利用者の添付・会話は
+  404。会話を消すと添付も消える。
+- Runtime: 会話に添付がある Run にだけ、添付を読むツールと添付の索引を渡す。モデルが添付を読んで
+  答えた回答は、資料の根拠が無くても「確かめていない」の注記を付けない。
+
+保存は platform のメモリの store（テストごとに作る）、モデルは SDK の `ScriptedModel`。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+from collections.abc import Iterator
+from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import Any
+from uuid import uuid4
+
+import anyio
+import pytest
+from agents.testing import ScriptedModel, assistant_message, function_call
+from pr_system_settings.chat_attachments import (
+    ChatAttachmentService,
+    InMemoryChatAttachmentStore,
+)
+from pytest import MonkeyPatch
+from security_support import client, enable_production_auth, login
+
+from app.features.agent import builtin_runtime, router
+from app.features.agent.builtin_runtime import ModelTarget
+from app.features.agent.chat_attachments import set_chat_attachment_service
+from app.features.agent.runtime import (
+    AgentProfile,
+    RunCreateRequest,
+    RunState,
+    RunStatus,
+    runtime_repository,
+)
+from app.security.permissions import MENU_CHAT, RUNS_OPERATE, RUNS_VIEW
+from app.security.service import set_security_service
+
+CSV = "コード,名前,金額\nA-1,品目甲,1200\nA-2,品目乙,3400\n".encode()
+
+
+@dataclass
+class Setup:
+    agent_id: str
+    alice: str
+    bob: str
+    alice_login: str
+    bob_login: str
+    service: ChatAttachmentService
+
+
+@dataclass(frozen=True)
+class _Principal:
+    user_uuid: str
+    is_system_admin: bool = False
+
+
+def _complete(run: RunState) -> None:
+    if runtime_repository.begin_builtin_run(run.id) is not None:
+        runtime_repository.complete_builtin_run(run.id, f"回答: {run.goal}")
+
+
+@pytest.fixture
+def setup(monkeypatch: MonkeyPatch) -> Iterator[Setup]:
+    auth = enable_production_auth(monkeypatch)
+    suffix = uuid4().hex[:8]
+    agent_id = f"agent2517-{suffix}"
+    runtime_repository.create_agent(
+        AgentProfile(id=agent_id, name="添付の Agent", instructions="答える。")
+    )
+    permissions = [MENU_CHAT, RUNS_VIEW, RUNS_OPERATE]
+    alice = auth.user_with_permissions(f"alice-{suffix}", permissions, agent_ids=[agent_id])
+    bob = auth.user_with_permissions(f"bob-{suffix}", permissions, agent_ids=[agent_id])
+    service = ChatAttachmentService(
+        InMemoryChatAttachmentStore(), product="agent", settings=lambda: SimpleNamespace()
+    )
+    set_chat_attachment_service(service)
+    monkeypatch.setattr(router, "_schedule_builtin_run", _complete)
+    try:
+        yield Setup(
+            agent_id=agent_id,
+            alice=alice.user_uuid,
+            bob=bob.user_uuid,
+            alice_login=alice.login_user_id,
+            bob_login=bob.login_user_id,
+            service=service,
+        )
+    finally:
+        set_chat_attachment_service(None)
+        set_security_service(None)
+        repository: Any = runtime_repository
+        with repository._lock:  # noqa: SLF001 - テストの後始末
+            for run_id in [
+                run_id for run_id, run in repository._runs.items() if run.agent_id == agent_id
+            ]:
+                repository._runs.pop(run_id)
+        with contextlib.suppress(KeyError, ValueError):
+            runtime_repository.delete_agent(agent_id)
+
+
+def _upload(headers: dict[str, str], name: str = "a.csv", data: bytes = CSV, **form: str) -> Any:
+    return client.post(
+        "/api/chat-attachments",
+        files={"file": (name, data, "text/csv")},
+        data=form,
+        headers=headers,
+    )
+
+
+def test_attach_and_send_binds_attachment_to_thread(setup: Setup) -> None:
+    alice = login(setup.alice_login)
+    uploaded = _upload(alice)
+    assert uploaded.status_code == 200, uploaded.text
+    item = uploaded.json()["data"]
+    assert (item["kind"], item["conversation_id"]) == ("csv", None)
+    pending = client.get("/api/chat-attachments", headers=alice).json()["data"]
+    assert [i["attachment_id"] for i in pending["items"]] == [item["attachment_id"]]
+
+    sent = client.post(
+        "/api/runs",
+        json={
+            "goal": "添付の金額の合計は？",
+            "agent_id": setup.agent_id,
+            "attachment_ids": [item["attachment_id"]],
+        },
+        headers=alice,
+    )
+    assert sent.status_code == 200, sent.text
+    run = sent.json()["data"]
+    assert run["attachments"] == [
+        {
+            "attachment_id": item["attachment_id"],
+            "file_name": "a.csv",
+            "kind": "csv",
+            "size_bytes": len(CSV),
+        }
+    ]
+    thread_id = run["thread_id"]
+    in_thread = client.get(
+        "/api/chat-attachments", params={"conversation_id": thread_id}, headers=alice
+    ).json()["data"]["items"]
+    assert [i["attachment_id"] for i in in_thread] == [item["attachment_id"]]
+    assert client.get("/api/chat-attachments", headers=alice).json()["data"]["items"] == []
+    # 会話の表示に添付が残る。
+    thread = client.get(f"/api/threads/{thread_id}", headers=alice).json()["data"]
+    assert thread["runs"][0]["attachments"][0]["file_name"] == "a.csv"
+    # 会話の続きの添付は、その会話に直接結び付く。
+    second = _upload(alice, "b.csv", conversation_id=thread_id).json()["data"]
+    assert second["conversation_id"] == thread_id
+
+
+def test_other_users_cannot_use_attachment_or_thread(setup: Setup) -> None:
+    alice, bob = login(setup.alice_login), login(setup.bob_login)
+    item = _upload(alice).json()["data"]
+    sent = client.post(
+        "/api/runs",
+        json={
+            "goal": "質問",
+            "agent_id": setup.agent_id,
+            "attachment_ids": [item["attachment_id"]],
+        },
+        headers=bob,
+    )
+    assert sent.status_code == 404
+    assert (
+        client.delete(f"/api/chat-attachments/{item['attachment_id']}", headers=bob).status_code
+        == 404
+    )
+    own = client.post(
+        "/api/runs", json={"goal": "質問", "agent_id": setup.agent_id}, headers=alice
+    ).json()["data"]
+    assert _upload(bob, conversation_id=own["thread_id"]).status_code == 404
+    assert (
+        client.get(
+            "/api/chat-attachments", params={"conversation_id": own["thread_id"]}, headers=bob
+        ).status_code
+        == 404
+    )
+
+
+def test_deleting_thread_deletes_its_attachments(setup: Setup) -> None:
+    alice = login(setup.alice_login)
+    item = _upload(alice).json()["data"]
+    run = client.post(
+        "/api/runs",
+        json={
+            "goal": "質問",
+            "agent_id": setup.agent_id,
+            "attachment_ids": [item["attachment_id"]],
+        },
+        headers=alice,
+    ).json()["data"]
+    assert client.delete(f"/api/threads/{run['thread_id']}", headers=alice).status_code == 200
+    assert setup.service.store.get(item["attachment_id"]) is None
+
+
+def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
+    model = ScriptedModel(list(steps))
+    monkeypatch.setattr(
+        builtin_runtime,
+        "resolve_model_target",
+        lambda model_id="": ModelTarget(
+            model_id=model_id or "test-model",
+            endpoint="https://oci.example",
+            project_ocid="",
+            api_key="k",
+        ),
+    )
+    monkeypatch.setattr(builtin_runtime, "model_factory", lambda _target: model)
+    return model
+
+
+def _run_with_attachment(setup: Setup) -> tuple[str, str]:
+    principal = _Principal(setup.alice)
+    item = asyncio.run(setup.service.upload(principal, file_name="a.csv", data=CSV))
+    references = setup.service.prepare_attachments(
+        principal, [item.attachment_id], conversation_id=None
+    )
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="品目乙の金額は？", agent_id=setup.agent_id),
+        created_by_user_uuid=setup.alice,
+        attachments=references,
+    )
+    assert run.thread_id is not None
+    setup.service.bind_references(
+        references, conversation_id=run.thread_id, owner_user_uuid=setup.alice
+    )
+    return run.id, item.attachment_id
+
+
+def test_run_reads_attachment_with_tools(setup: Setup, monkeypatch: MonkeyPatch) -> None:
+    run_id, attachment_id = _run_with_attachment(setup)
+    _script(
+        monkeypatch,
+        [
+            function_call(
+                "chat_attachment_read_rows",
+                {"attachment_id": attachment_id, "sheet": "a", "start_row": 1, "limit": 10},
+                call_id="call-1",
+            )
+        ],
+        [assistant_message("品目乙の金額は 3400 です。")],
+    )
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    [step] = run.steps
+    assert step.tool_call is not None and step.tool_call.name == "chat_attachment_read_rows"
+    assert step.tool_result is not None and step.tool_result.success
+    assert step.tool_result.output is not None
+    assert step.tool_result.output["rows"][1]["values"] == {
+        "コード": "A-2",
+        "名前": "品目乙",
+        "金額": "3400",
+    }
+    answer = next(item for item in run.artifacts if item.kind == "answer")
+    assert answer.content["text"] == "品目乙の金額は 3400 です。"
+    validation = next(item for item in run.artifacts if item.kind == "answer_validation")
+    assert validation.content["reason"] == "attachment_evidence"
+
+
+def test_tools_and_index_only_for_runs_with_attachments(
+    setup: Setup, monkeypatch: MonkeyPatch
+) -> None:
+    _script(monkeypatch)
+    run_id, attachment_id = _run_with_attachment(setup)
+    run = runtime_repository.get_run(run_id)
+    sdk_agent = builtin_runtime.build_sdk_agent(
+        run_id,
+        name="a",
+        instructions="答える。",
+        skill_ids=[],
+        model_id="",
+        thread_id=run.thread_id,
+    )
+    names = {tool.name for tool in sdk_agent.tools}
+    assert {
+        "chat_attachment_list",
+        "chat_attachment_read_section",
+        "chat_attachment_read_rows",
+        "chat_attachment_find",
+    } <= names
+    assert f"- a.csv（attachment_id={attachment_id}、種類=csv、シート「a」2 行）" in str(
+        sdk_agent.instructions
+    )
+    plain = builtin_runtime.build_sdk_agent(
+        run_id,
+        name="a",
+        instructions="答える。",
+        skill_ids=[],
+        model_id="",
+        thread_id="thread_" + "0" * 32,
+    )
+    assert not {tool.name for tool in plain.tools} & names
+    assert "利用者が添付したファイル" not in str(plain.instructions)
+
+
+def test_settings_default_disabled_and_admin_enables(monkeypatch: MonkeyPatch) -> None:
+    """運用設定 › チャットの添付（#2517）。既定は無効で、添付は 403。有効にすると添付できる。"""
+    from security_support import login_configured_admin
+
+    enable_production_auth(monkeypatch)
+    set_chat_attachment_service(None)
+    try:
+        admin = login_configured_admin()
+        settings = client.get("/api/settings/chat-attachments", headers=admin).json()["data"]
+        assert (settings["enabled"], settings["max_files"]) == (False, 10)
+        limits = client.get("/api/chat-attachments", headers=admin).json()["data"]["limits"]
+        assert limits["enabled"] is False
+        refused = _upload(admin)
+        assert refused.status_code == 403
+        assert (
+            refused.json()["error_code"] == "CHAT_ATTACHMENT_DISABLED"
+            or "チャットの添付" in refused.text
+        )
+
+        saved = client.put("/api/settings/chat-attachments", json={"enabled": True}, headers=admin)
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["data"]["enabled"] is True
+        assert _upload(admin).status_code == 200
+    finally:
+        set_chat_attachment_service(None)
+        set_security_service(None)

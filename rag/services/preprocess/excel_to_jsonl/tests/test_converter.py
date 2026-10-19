@@ -13,6 +13,7 @@ from typing import Any
 
 import openpyxl
 import pytest
+from pr_backend_core.spreadsheet import reader
 from rag_parser_core.sheet_records import (
     SheetRecordsDocument,
     sheet_records_extraction,
@@ -25,7 +26,6 @@ from rag_parser_core.structured_records import (
     structured_records_to_sheet_records,
 )
 
-from app import converters
 from app.converters import convert
 
 
@@ -60,6 +60,16 @@ def _loaded(derived: bytes) -> dict[str, Any]:
     payload: dict[str, Any] = structured_records_to_sheet_records(_records(derived)).model_dump(
         mode="json"
     )
+    # 表・手順書の記録には帳票の項目の欄（#2516・#2526）を比べない。図形の文字の無い記録には
+    # 図形のセル範囲（#2526）を比べない。
+    for sheet in payload["sheets"]:
+        for block in sheet["blocks"]:
+            if block["kind"] != "form_field":
+                for key in ("label", "value", "label_cell", "value_cell", "value_original"):
+                    block.pop(key)
+        for item in [*sheet["blocks"], *sheet["preamble"]]:
+            if not item["shape_cells"]:
+                item.pop("shape_cells")
     return payload
 
 
@@ -68,7 +78,7 @@ def _payload(source: bytes, **options: Any) -> dict[str, Any]:
     assert outcome.converted is True, outcome.warnings
     assert outcome.derived_bytes is not None
     assert outcome.derived_content_type == STRUCTURED_RECORDS_CONTENT_TYPE
-    assert outcome.converter_version == "v4"
+    assert outcome.converter_version == "v7"
     return _loaded(outcome.derived_bytes)
 
 
@@ -96,7 +106,7 @@ def test_description_row_before_header_is_detected_as_preamble() -> None:
     assert payload["source_format"] == "xlsx"
     assert sheet["header_row"] == 2
     assert sheet["header_detection"]["method"] == "detected"
-    assert sheet["header_detection"]["confidence"] >= converters.HEADER_LOW_CONFIDENCE
+    assert sheet["header_detection"]["confidence"] >= reader.HEADER_LOW_CONFIDENCE
     assert [column["name"] for column in sheet["columns"]] == ["コード", "名称", "区分"]
     assert [column["column"] for column in sheet["columns"]] == ["A", "B", "C"]
     assert sheet["preamble"] == [
@@ -201,12 +211,12 @@ def test_merged_header_and_merged_data_cells() -> None:
         "column_E",
     ]
     blocks = sheet["blocks"]
+    # データの横の結合の値は左上の列にだけ置き、結合した列に繰り返さない（#2531）。
     assert blocks[0]["values"] == {
         "部門": "営業",
         "期間 / 開始": "4月",
         "期間 / 終了": "6月",
         "区分": "通期",
-        "column_E": "通期",
     }
     # 縦の結合の値は後の行へ漏らさない（no.1-rag と同じ）。
     assert blocks[1]["values"] == {"期間 / 開始": "7月", "期間 / 終了": "9月"}
@@ -459,9 +469,9 @@ def test_parameter_table_columns_get_roles_and_labels_in_text() -> None:
     ],
 )
 def test_detect_column_role_from_header_vocabulary(header: str, role: str) -> None:
-    detected, confidence, _, reason = converters.detect_column_role(header)
+    detected, confidence, _, reason = reader.detect_column_role(header)
     assert (detected, reason) == (role, None)
-    assert confidence >= converters.COLUMN_ROLE_MIN_CONFIDENCE
+    assert confidence >= reader.COLUMN_ROLE_MIN_CONFIDENCE
 
 
 @pytest.mark.parametrize(
@@ -483,7 +493,7 @@ def test_detect_column_role_from_header_vocabulary(header: str, role: str) -> No
     ],
 )
 def test_detect_column_role_does_not_guess(header: str, reason: str | None) -> None:
-    detected, _, _, why = converters.detect_column_role(header)
+    detected, _, _, why = reader.detect_column_role(header)
     assert (detected, why) == (None, reason)
 
 
@@ -587,7 +597,7 @@ def test_invalid_column_role_option_is_rejected() -> None:
 
 def test_low_confidence_header_skips_role_detection(monkeypatch: pytest.MonkeyPatch) -> None:
     """表頭が確かでないシートでは、表頭の語で役割を決めない（指定の役割は使う）。"""
-    monkeypatch.setattr(converters, "_detect_header", lambda grid, rows: (3, 0.3, "低い"))
+    monkeypatch.setattr(reader, "_detect_header", lambda grid, rows: (3, 0.3, "低い"))
     sheet = _sheet(_payload(_xlsx_bytes(_PARAMETER_SHEET), column_roles={"B": "default"}))
     assert _roles(sheet)["既定値"] == ("default", "configured")
     assert _roles(sheet)["設定例"] == (None, None)
@@ -643,7 +653,7 @@ def _xls_text(ctype: int, value: Any, number_format: str = "General") -> str:
         xf_list=[SimpleNamespace(format_key=1)],
         format_map={1: SimpleNamespace(format_str=number_format)},
     )
-    return converters._xls_cell_text(book, sheet, 0, 0, _XLRD)
+    return reader._xls_cell_text(book, sheet, 0, 0, _XLRD)
 
 
 def test_xls_dates_booleans_numbers_and_errors() -> None:

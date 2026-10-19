@@ -190,6 +190,21 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
 - **画面**: 一覧の応答の `history_days` から `@production-ready/ui` の `chatHistoryWindowLabels` が「最近 N 日」（`ChatLayout` の `historyCaption`）と 0 件の文「最近 N 日の会話はありません」を作る（4 つのチャットで同じ文言）。
 - テストは `platform/packages/backend_core/tests/test_chat_history_window.py` と、各製品の一覧の API のテスト（RAG `tests/test_chat_api.py`、NL2SQL `tests/test_chat_history_days.py`、Agent `tests/test_builtin_runtime.py`）。
 
+## チャットの添付（会話の期間だけ使う作業ファイル。#2517）
+
+3 製品のチャットで、利用者は手元のファイル（PDF・Word・PowerPoint・Excel・CSV・テキスト・画像）を会話に添付して質問できる。保存・解析・見え方・期限・読むツールの中核は `pr_system_settings.chat_attachments` に 1 つだけ置き、製品は会話への結び付けと、添付の使い方（Agent はツール、RAG は根拠、NL2SQL は SQL の表）だけを持つ。
+
+- **使うか（製品ごと。既定は無効）**: 各製品の「運用設定 › チャットの添付」（メニュー権限 `menu.settings_chat_attachments`、API `GET` / `PUT /api/settings/chat-attachments`、画面は `@production-ready/system-settings` の `ChatAttachmentSettingsPage`）。保存先は共通の表 `PLATFORM_CHAT_ATTACHMENT_SETTINGS` の製品の行（`AuthService.chat_attachment_settings`。10 秒の cache、読めなければ無効）。無効の製品は添付の API が 403（`CHAT_ATTACHMENT_DISABLED`）、入力欄に添付の操作を出さず、会話に残る添付もツールに渡さない。
+- **上限（共通の設定。`platform/.env`）**: `PLATFORM_CHAT_ATTACHMENT_TTL_HOURS`（既定 24。1〜720。最後に添付・送信に使ってからの時間）・`PLATFORM_CHAT_ATTACHMENT_MAX_BYTES`（既定 20 MiB。1〜100 MiB。Nginx の `client_max_body_size` に収まる）・`PLATFORM_CHAT_ATTACHMENT_MAX_FILES`（既定 10。1〜50。1 つの会話と送る前の 1 回）。解析の上限（文字数・行数・列数・zip の展開）は `limits.py` の定数。
+- **保存**: Oracle AI Database の `PLATFORM_CHAT_ATTACHMENTS`（原本の BLOB、解析の本文 `PARSED_JSON`、索引 `OUTLINE_JSON`）。外部の保存先（アップロード保存先・Object Storage）は使わない。DDL は共通の DDL（`auth.migrations`）。認証の表（`PLATFORM_AUTH_TABLES`）には入れず、未作成でも添付の API だけが 409（`CHAT_ATTACHMENT_SCHEMA_REQUIRED`）。製品の全再作成で消さない（`CHAT_ATTACHMENT_TABLES` を保持する表に足す）。
+- **期限**: 期限の切れた行は添付の操作（添付・一覧・送信）のたびに上限の件数ずつ消す（スケジューラーを持たない）。会話の削除の API はその会話の添付も消す。
+- **見え方**: 「AI 活用」の規則（`auth.visibility`）。持ち主は会話の持ち主（会話の前は添付した人）、`UPLOADED_BY_USER_UUID` は添付した人。他人の添付は 404。
+- **API（3 製品で同じ。`build_chat_attachment_router`）**: `POST /api/chat-attachments`（multipart `file`・任意 `conversation_id`）・`GET /api/chat-attachments?conversation_id=`（無ければ送る前の添付。応答に上限と `enabled`）・`DELETE /api/chat-attachments/{id}`。チャットの送信は `attachment_ids` を受け、会話の ID が送信の後に決まる製品は `prepare_attachments`（確かめる）→ 会話を作る → `bind_references`（結び付ける）、先に決まる製品は `attach_to_conversation`。発話の記録には `ChatAttachmentReference`（名前・種類）を残す。
+- **解析**: 拡張子と先頭の bytes で種類を決める（合わなければ 415。旧形式の binary は受けない）。PDF は `pypdf` で 1 頁 = 1 節、Word は見出しで節、PowerPoint は 1 スライド = 1 節、Excel・CSV は「1 行 = 列名 + 値」、画像は製品が渡す読み取りの関数（既定の Vision モデル。指示は `IMAGE_READING_PROMPT`）。Office は zip と `defusedxml` で読み、マクロは読まず実行しない（警告 `macros_not_executed`）。RAG の取込の解析（`rag_parser_core`・前処理のサービス）は使わない（製品同士は依存しない）。
+- **読むツール（名前と結果の形は Issue #2517 の契約）**: `chat_attachment_list`・`chat_attachment_read_section`（8,000 文字ずつ）・`chat_attachment_read_rows`（200 行まで）・`chat_attachment_find`。`ChatAttachmentToolset` が会話の添付だけを読む。モデルにはファイル全体を渡さず、索引（`index_lines`）だけを指示に入れる。
+- **画面**: `@production-ready/ui` の `ChatComposer` の `attachments`（「ファイルを添付」・ドロップ・貼り付け・外す）と `useChatAttachments`、発話の下の `ChatTurn` の `questionAttachments`。
+- テストは `platform/packages/system_settings_backend/tests/test_chat_attachments.py`・`platform/packages/ui/tests/chat-attachments.test.tsx`・各製品のチャットの添付のテスト。
+
 ## 内部の HTTP と環境のプロキシ（#852）
 
 OCI に届くために `HTTP_PROXY` / `HTTPS_PROXY`（社内プロキシ）を設定した環境でも、同じマシン・private network の

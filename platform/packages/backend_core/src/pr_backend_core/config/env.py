@@ -128,6 +128,10 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "chat_history_max_chars",
         # チャットの「会話の履歴」に出す期間（日。3 製品で同じ値。#2340）
         "chat_history_days",
+        # 会話の添付の期限（時間）・1 つの大きさ・会話あたりの件数（3 製品で同じ値。#2517）
+        "chat_attachment_ttl_hours",
+        "chat_attachment_max_bytes",
+        "chat_attachment_max_files",
     }
 )
 

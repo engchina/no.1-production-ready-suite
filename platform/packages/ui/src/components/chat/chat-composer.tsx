@@ -7,6 +7,7 @@ import { FieldActionRow } from "../ui/field-action-row";
 import { InfoTip, type InfoTipProps } from "../ui/info-tip";
 import { RunStopButton } from "../ui/run-stop-button";
 import { TextareaField } from "../ui/textarea-field";
+import { ChatComposerAttachmentArea, type ChatComposerAttachments } from "./chat-attachments";
 
 export interface ChatComposerProps {
   /** 入力欄の id。 */
@@ -51,6 +52,12 @@ export interface ChatComposerProps {
   notice?: string;
   /** 入力欄の下の通知（停止の失敗・会話の件数の上限など）。 */
   footer?: ReactNode;
+  /**
+   * 会話の添付（#2517）。渡すと「ファイルを添付」の行と添付の一覧を入力欄の上に出し、入力欄の領域への
+   * ドロップと、入力欄への貼り付け（ファイル）で添付する。読み取り中の添付がある間は送れない。
+   * 状態は `useChatAttachments` が持つ。
+   */
+  attachments?: ChatComposerAttachments;
   /** 送信 / 停止のボタンの testid。 */
   sendTestId?: string;
 }
@@ -65,6 +72,7 @@ export interface ChatComposerProps {
  * - 入力欄は回答の作成中も書ける（次の質問を書ける。messaging.md §11.1）。
  * - 送れない間（入力が空・`submitBlocked`）のボタンは `aria-disabled`（フォーカスを受ける）。
  * - 送る前の案内（`notice`）は入力欄の直上に 1 行で出し、入力欄の説明として読み上げる（#1954）。
+ * - 添付（`attachments`）は「ファイルを添付」の行と一覧を入力欄の上に出す（#2517）。
  */
 export function ChatComposer({
   id,
@@ -86,11 +94,13 @@ export function ChatComposer({
   notice,
   footer,
   sendTestId,
+  attachments,
 }: ChatComposerProps) {
   const noticeId = `${id}-notice`;
-  return (
+  const attachmentsUploading = attachments?.items.some((item) => item.status === "uploading") ?? false;
+  const blocked = submitBlocked || attachmentsUploading;
+  const input = (
     <>
-      {options}
       {notice ? (
         <p id={noticeId} className="flex items-center gap-1 text-xs text-fg-muted" data-chat-composer-notice="">
           <Eye size={14} aria-hidden className="shrink-0" />
@@ -107,7 +117,7 @@ export function ChatComposer({
             runLabel={sendLabel}
             stopLabel={stopLabel}
             runIcon={SendHorizontal}
-            runDisabled={value.trim().length === 0 || submitBlocked || disabled}
+            runDisabled={value.trim().length === 0 || blocked || disabled}
             size="lg"
             testId={sendTestId}
           />
@@ -124,9 +134,20 @@ export function ChatComposer({
             if (isSubmitEnter(event) && !event.shiftKey) {
               event.preventDefault();
               // 実行中・送れない間の Enter は何もしない（停止もしない）。
-              if (!running && !submitBlocked && !disabled && value.trim().length > 0) onSubmit();
+              if (!running && !blocked && !disabled && value.trim().length > 0) onSubmit();
             }
           }}
+          onPaste={
+            attachments && !attachments.disabled
+              ? (event) => {
+                  // ファイル（画面のキャプチャなど）の貼り付けは添付にする。文字の貼り付けはそのまま。
+                  const files = Array.from(event.clipboardData?.files ?? []);
+                  if (files.length === 0) return;
+                  event.preventDefault();
+                  attachments.onAddFiles(files);
+                }
+              : undefined
+          }
           rows={rows}
           maxLength={maxLength}
           placeholder={placeholder}
@@ -136,6 +157,12 @@ export function ChatComposer({
           className="space-y-0"
         />
       </FieldActionRow>
+    </>
+  );
+  return (
+    <>
+      {options}
+      {attachments ? <ChatComposerAttachmentArea attachments={attachments}>{input}</ChatComposerAttachmentArea> : input}
       {footer}
     </>
   );

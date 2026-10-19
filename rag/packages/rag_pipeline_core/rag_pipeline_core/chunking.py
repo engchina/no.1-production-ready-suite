@@ -119,6 +119,8 @@ class _ElementSpan:
     sheet_row_end: int | None = None
     sheet_column_start: str | None = None
     sheet_column_end: str | None = None
+    # 1 シートを複数の表に分けたときの表の番号（#2516。親・chunk を表ごとに分ける）。
+    sheet_table_index: int | None = None
     # 図の本文を Vision（VLM）が書いたか（解析の OCR・キャプションのままなら False。#1282）。
     vision_described: bool = False
     # XML ツリー JSON の解析の要素の引用ラベルなどの metadata（``xml_tree_`` で始まる key。#2024）。
@@ -503,6 +505,15 @@ _STRUCTURED_RECORD_METADATA_KEYS: tuple[str, ...] = (
     "csv_header_row",
     "sheet_block_kind",
     "sheet_column_roles",
+    # Excel の版式・1 シートの複数の表・帳票の項目のセル(#2516)。
+    "sheet_layout",
+    "sheet_table_index",
+    "sheet_region",
+    "form_label_cell",
+    "form_value_cell",
+    # 選択の記号を読む前の帳票の値・図形の文字を置いたセル範囲(#2526)。
+    "form_value_original",
+    "sheet_shape_cells",
     "record_kind",
     # Word の記録(前処理 word_to_jsonl): 本文の順の位置・表の番号・大きい節を分けた部分。
     "word_location_basis",
@@ -943,6 +954,7 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
                 sheet_column_end=_metadata_label(
                     element.metadata.get("cell_column_end"), max_length=4
                 ),
+                sheet_table_index=_metadata_positive_int(element.metadata.get("sheet_table_index")),
                 vision_described=element.kind == "figure"
                 and str(element.metadata.get("vision_status") or "") == "succeeded",
                 xml_tree_metadata=tuple(
@@ -979,6 +991,9 @@ def _sheet_location_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
         "row_start": row_start,
         "row_end": row_end,
     }
+    tables = {span.sheet_table_index for span in group}
+    if len(tables) == 1 and (table_index := next(iter(tables))) is not None:
+        metadata["sheet_table_index"] = table_index
     column_starts = [span.sheet_column_start for span in group if span.sheet_column_start]
     column_ends = [span.sheet_column_end for span in group if span.sheet_column_end]
     if column_starts and column_ends:

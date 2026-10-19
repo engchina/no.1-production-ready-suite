@@ -52,6 +52,7 @@ import {
   EvaluationVersionField,
   evaluatedVersionLabel,
   usableEvaluationTarget,
+  useCanEvaluateDraft,
 } from "@/components/evaluation/EvaluationVersionField";
 import {
   agentApi,
@@ -113,9 +114,11 @@ export function EvaluationPage() {
   // 評価する版（#810）。選んだ業務 Agent ごとの選択で、業務 Agent を変えたら既定に戻す。
   // 実行の意思なので作業状態には残さない（workspace-state.md）。
   const [versionChoice, setVersionChoice] = useState<{ agentId: string; value: EvaluationTarget } | null>(null);
+  const canEvaluateDraft = useCanEvaluateDraft(selectedAgent);
   const target = usableEvaluationTarget(
     selectedAgent,
-    versionChoice?.agentId === selectedAgentId ? versionChoice.value : null
+    versionChoice?.agentId === selectedAgentId ? versionChoice.value : null,
+    canEvaluateDraft
   );
 
   const start = useMutation({

@@ -34,7 +34,11 @@ import {
   toClarificationAnswers,
   type ClarificationAnswerDraft,
 } from "@/components/evaluation/ClarificationAnswersField";
-import { EvaluationVersionField, usableEvaluationTarget } from "@/components/evaluation/EvaluationVersionField";
+import {
+  EvaluationVersionField,
+  usableEvaluationTarget,
+  useCanEvaluateDraft,
+} from "@/components/evaluation/EvaluationVersionField";
 import {
   agentApi,
   type AgentProfile,
@@ -361,7 +365,8 @@ export function EvaluationSetEditor({
   const setAgent = agents.find((agent) => agent.id === draft.agentId);
   const agentName = setAgent?.name ?? draft.agentId;
   const evaluatedAgent = agents.find((agent) => agent.id === (evaluatedAgentId ?? draft.agentId)) ?? setAgent;
-  const version = usableEvaluationTarget(evaluatedAgent, versionChoice);
+  const canEvaluateDraft = useCanEvaluateDraft(evaluatedAgent);
+  const version = usableEvaluationTarget(evaluatedAgent, versionChoice, canEvaluateDraft);
 
   return (
     <>
