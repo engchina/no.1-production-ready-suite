@@ -262,7 +262,7 @@ def test_job_api_does_not_show_validation_error_as_bad_request(
     import httpx
     from pydantic import BaseModel
 
-    from app.features.nl2sql import router
+    from app.features.nl2sql.service import nl2sql_service
     from app.main import app
 
     class _Stored(BaseModel):
@@ -271,7 +271,7 @@ def test_job_api_does_not_show_validation_error_as_bad_request(
     def broken(*_: object, **__: object) -> None:
         _Stored.model_validate({"value": "x"})
 
-    monkeypatch.setattr(router.nl2sql_service, "start_job", broken)
+    monkeypatch.setattr(nl2sql_service, "start_job", broken)
 
     async def post() -> httpx.Response:
         transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
