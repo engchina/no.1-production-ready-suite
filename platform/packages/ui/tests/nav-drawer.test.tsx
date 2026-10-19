@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "../src/components/app-shell/AppShell";
-import { closesNavDrawer, navDrawerKeyAction } from "../src/components/app-shell/nav-drawer";
+import { closesNavDrawer, focusableIn, navDrawerKeyAction } from "../src/components/app-shell/nav-drawer";
 import { Sidebar, SidebarAccountFooter } from "../src/components/app-shell/Sidebar";
 import type { NavLinkComponent, NavSection } from "../src/navigation/types";
 
@@ -240,6 +240,29 @@ describe("navDrawerKeyAction / closesNavDrawer", () => {
     expect(navDrawerKeyAction("Tab", false, 1, 5)).toBeNull();
     expect(navDrawerKeyAction("Enter", false, 1, 5)).toBeNull();
     expect(navDrawerKeyAction("Tab", false, -1, 0)).toBeNull();
+  });
+
+  it("Tab が止まる要素に開閉の見出し（summary）を含め、閉じた開閉の中身・inert の中は除く（#2512）", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `
+      <button data-id="close">閉じる</button>
+      <details open data-id="open">
+        <summary data-id="open-summary">開いた見出し</summary>
+        <div tabindex="0" data-id="open-region">中身</div>
+      </details>
+      <details data-id="closed">
+        <summary data-id="closed-summary">閉じた見出し</summary>
+        <button data-id="closed-button">中の操作</button>
+        <details open><summary data-id="nested-summary">入れ子</summary></details>
+      </details>
+      <div inert><button data-id="inert-button">inert</button></div>
+      <div tabindex="-1" data-id="skip">-1</div>`;
+    expect(focusableIn(root).map((element) => element.dataset.id)).toEqual([
+      "close",
+      "open-summary",
+      "open-region",
+      "closed-summary",
+    ]);
   });
 
   it("リンクの中のクリックだけが閉じる対象になる", () => {

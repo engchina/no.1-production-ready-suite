@@ -53,14 +53,14 @@ from pr_backend_core.bounded_calls import (
     BoundedCallFailed,
     ErrorKind,
 )
-from pr_system_settings.model import (
-    enterprise_ai_retry_output_token_budget,
-    lower_reasoning_effort,
-)
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from app.features.agent import builtin_runtime
-from app.features.agent.ai_calls import evaluation_concurrency, make_ai_caller
+from app.features.agent.ai_calls import (
+    evaluation_concurrency,
+    make_ai_caller,
+    retry_model_target,
+)
 from app.features.agent.runtime import (
     EVALUATION_DRY_RUN_KEY,
     Artifact,
@@ -1185,25 +1185,6 @@ def _output_incomplete(exc: BaseException) -> bool:
     )
 
 
-def _retry_target(target: builtin_runtime.ModelTarget) -> builtin_runtime.ModelTarget:
-    """出力の上限で止まった判定を送り直すときのモデル（#1845・#2023）。
-
-    広げられれば出力の上限を広げ、広げられなければ推論の量を 1 段下げる。
-
-    既定の上限はもうモデルの出力の上限のことが多く、そのときは同じ上限で送り直す（実環境では、
-    出力が上限よりずっと少ないのに `max_output_tokens` で止まる応答があり、送り直すと判定できた。
-    #1816 の評価の記録）。
-    """
-    widened = enterprise_ai_retry_output_token_budget(
-        get_settings(), target.model_id, current=target.max_output_tokens
-    )
-    if widened:
-        return replace(target, max_output_tokens=widened)
-    # 広げられなければ推論の量を 1 段下げる（#2023。high → medium → low。low・none は下げない）。
-    lower = lower_reasoning_effort(target.reasoning_effort)
-    return replace(target, reasoning_effort=lower) if lower else target
-
-
 async def _judge_once(
     case: EvaluationCase,
     answer: str,
@@ -1254,7 +1235,7 @@ async def judge_answer(
         attempts += 1
         target = replace(builtin_runtime.resolve_model_target(""), sdk_max_retries=0)
         for _ in range(min(attempt.adaptation, JUDGE_MAX_ATTEMPTS - 1)):
-            target = _retry_target(target)
+            target = retry_model_target(target)
         if attempt.adaptation:
             logger.warning(
                 "agent_evaluation_judge_retry",

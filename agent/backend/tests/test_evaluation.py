@@ -20,6 +20,7 @@ from pytest import MonkeyPatch
 from security_support import ProductionAuth, client, enable_production_auth, login
 
 from app.features.agent import ai_calls, builtin_runtime, evaluation
+from app.features.agent.ai_calls import retry_model_target
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.control_plane_store import (
     FileItemStore,
@@ -974,7 +975,7 @@ def test_judge_stopped_at_the_output_limit_is_retried_once(
         [assistant_message("第 3 日曜は MES です。")],
         [assistant_message("経費は 50 万円です。")],
     )
-    monkeypatch.setattr(evaluation, "enterprise_ai_retry_output_token_budget", lambda *_a, **_k: 0)
+    monkeypatch.setattr(ai_calls, "enterprise_ai_retry_output_token_budget", lambda *_a, **_k: 0)
     budgets: list[int] = []
     outcomes: list[Exception | evaluation.EvaluationJudgement] = [
         _incomplete(),
@@ -1026,12 +1027,12 @@ def test_judge_retry_widens_the_output_limit(monkeypatch: MonkeyPatch) -> None:
         max_output_tokens=8192,
     )
     monkeypatch.setattr(
-        evaluation,
+        ai_calls,
         "enterprise_ai_retry_output_token_budget",
         lambda _settings, _model, *, current: 32768 if current < 32768 else None,
     )
-    assert evaluation._retry_target(target).max_output_tokens == 32768  # noqa: SLF001
-    widest = evaluation._retry_target(  # noqa: SLF001
+    assert retry_model_target(target).max_output_tokens == 32768
+    widest = retry_model_target(
         ModelTarget(
             model_id="judge-model",
             endpoint="https://oci.example",
@@ -1643,9 +1644,7 @@ def test_judge_retry_lowers_reasoning_effort_when_the_limit_cannot_widen(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """広げられないときは、推論の量を 1 段下げて送り直す（#2023。low は下げない）。"""
-    monkeypatch.setattr(
-        evaluation, "enterprise_ai_retry_output_token_budget", lambda *_a, **_k: None
-    )
+    monkeypatch.setattr(ai_calls, "enterprise_ai_retry_output_token_budget", lambda *_a, **_k: None)
 
     def target(effort: str) -> ModelTarget:
         return ModelTarget(
@@ -1656,5 +1655,5 @@ def test_judge_retry_lowers_reasoning_effort_when_the_limit_cannot_widen(
             reasoning_effort=effort,
         )
 
-    assert evaluation._retry_target(target("medium")).reasoning_effort == "low"  # noqa: SLF001
-    assert evaluation._retry_target(target("low")).reasoning_effort == "low"  # noqa: SLF001
+    assert retry_model_target(target("medium")).reasoning_effort == "low"  # noqa: SLF001
+    assert retry_model_target(target("low")).reasoning_effort == "low"  # noqa: SLF001

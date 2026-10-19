@@ -8,8 +8,14 @@ engchina/no.1-rag の前処理（`utils/office_preprocess_util.py`）に合わ�
 
 - シートの読み方（`mode`）: `table` は 1 行 1 block。`procedure` は手順書（番号の列と題名の列）
   を、番号と題名のある行から次の手順までの複数行で 1 block にし、詳細の無い題名の行は章にする。
-  `auto` は番号と題名の列があれば procedure、無ければデータの行の埋まり方（中央値 60% 以上）で
-  table / procedure を決める。
+  `form` は帳票（方眼紙）を「ラベル: 値」の項目ごとに 1 block にする（`app.layout`。#2516）。
+  `auto` はまず構造の特徴の点数で帳票かを決め（`form_detection_threshold` 以上なら form）、
+  帳票でなければ、番号と題名の列があれば procedure、無ければデータの行の埋まり方（中央値 60%
+  以上）で table / procedure を決める。判定の根拠と信頼度はシートの `layout_detection` に残す。
+- 1 シートの複数の表（#2516）: 空の行・空の列で分かれた表を領域に分け（`split_tables`）、領域ごとに
+  版式を判定して表頭を推定し、別々の表（`table_index`・`region`・`title`）として出す。表頭の行を
+  指定したとき（`header_row`）は分けない。
+- 変換の本体（`read_excel`）は前処理のサービスに依存せず、原本の bytes と選択肢だけで呼べる。
 
 - `.xlsx` は openpyxl で読む（結合セルと表示の書式を読むため read_only にしない）。数式は
   キャッシュ値を読み、キャッシュの無い数式のセルは空にせず数式の文字列にして診断を残す。マクロは
@@ -38,7 +44,7 @@ import io
 import re
 import unicodedata
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, cast
 
 from pydantic import ValidationError
@@ -49,6 +55,7 @@ from rag_parser_core.sheet_records import (
     ExcelOptions,
     ExcelRange,
     HeaderDetection,
+    LayoutDetection,
     SheetBlock,
     SheetColumn,
     SheetDiagnostic,
@@ -65,8 +72,11 @@ from rag_parser_core.structured_records import (
     sheet_records_to_lines,
 )
 
+from .grid import Grid, column_letter, is_textual
+from .layout import detect_form_layout, form_blocks, split_regions
+
 CONVERTER_NAME = "excel_to_jsonl"
-CONVERTER_VERSION = "v4"
+CONVERTER_VERSION = "v5"
 # xlsx は ZIP(PK\x03\x04)、xls は OLE2 複合ドキュメント(D0CF11E0...)。
 _XLSX_MAGIC = b"PK\x03\x04"
 _XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
@@ -194,7 +204,6 @@ COLUMN_ROLE_MIN_CONFIDENCE = 0.75
 COLUMN_ROLE_MIN_DETECTED_COLUMNS = 2
 _HEADER_BRACKETS = re.compile(r"[（(［\[【〔<＜][^）)］\]】〕>＞]*[）)］\]】〕>＞]")
 _HEADER_NOISE = re.compile(r"[\s_\-・:：.。、,/／※*＊]+")
-_NUMERIC_TEXT = re.compile(r"^[+-]?[\d,]+(\.\d+)?%?$|^\d{4}-\d{2}-\d{2}([ T][\d:.]+)?$")
 
 
 def openpyxl_available() -> bool:
@@ -213,22 +222,13 @@ def xlrd_available() -> bool:
     return True
 
 
-@dataclass
-class _Grid:
-    """1 シートのセル（1 始まりの行・列 → 表示の文字列）。"""
+@dataclass(frozen=True)
+class ExcelReadResult:
+    """Excel を行の記録にした結果（``document`` が None なら ``failure`` が縮退の理由）。"""
 
-    name: str
-    hidden: bool
-    cells: dict[tuple[int, int], str] = field(default_factory=dict)
-    merges: list[tuple[int, int, int, int]] = field(default_factory=list)
-    missing_formula_cells: set[tuple[int, int]] = field(default_factory=set)
-
-    @property
-    def max_row(self) -> int:
-        return max((row for row, _ in self.cells), default=0)
-
-    def row_columns(self, row: int) -> list[int]:
-        return sorted(col for (r, col), value in self.cells.items() if r == row and value.strip())
+    document: SheetRecordsDocument | None
+    warnings: tuple[str, ...] = ()
+    failure: str | None = None
 
 
 def convert(
@@ -249,27 +249,51 @@ def convert(
         parsed = ExcelOptions.model_validate(dict(options or {}))
     except ValidationError:
         return ConvertOutcome.passthrough(reason="excel_options_invalid")
-    return _excel_to_records(source_bytes, source_profile, parsed)
+    extension = source_profile.extension if source_profile is not None else None
+    result = read_excel(source_bytes, extension=extension, options=parsed)
+    if result.document is None:
+        return ConvertOutcome.passthrough(reason=result.failure or "excel_parse_failed")
+    return ConvertOutcome(
+        converted=True,
+        converter_name=CONVERTER_NAME,
+        converter_version=CONVERTER_VERSION,
+        derived_bytes=dump_structured_records(
+            sheet_records_to_lines(
+                result.document, converter=CONVERTER_NAME, converter_version=CONVERTER_VERSION
+            )
+        ),
+        derived_content_type=STRUCTURED_RECORDS_CONTENT_TYPE,
+        warnings=result.warnings,
+    )
 
 
-def _is_xlsx(source_bytes: bytes, source_profile: SourceProfile | None) -> bool:
+def _is_xlsx(source_bytes: bytes, extension: str | None) -> bool:
     if source_bytes[:4] == _XLSX_MAGIC:
         return True
     if source_bytes[:8] == _XLS_MAGIC:
         return False
-    extension = (source_profile.extension if source_profile is not None else "") or ""
-    return extension.strip().lower().lstrip(".") == "xlsx"
+    return (extension or "").strip().lower().lstrip(".") == "xlsx"
 
 
-def _excel_to_records(
-    source_bytes: bytes, source_profile: SourceProfile | None, options: ExcelOptions
-) -> ConvertOutcome:
+def read_excel(
+    source_bytes: bytes,
+    *,
+    extension: str | None = None,
+    options: ExcelOptions | Mapping[str, Any] | None = None,
+) -> ExcelReadResult:
+    """Excel（.xlsx / .xlsm / .xls）の原本を行の記録（`SheetRecordsDocument`）にする。
+
+    前処理のサービスに依存しない（原本の bytes と選択肢だけで呼べる）。形式は magic bytes で決め、
+    分からなければ ``extension`` を使う。選択肢が不正なら ``ValidationError`` を送出する。
+    """
+    if not isinstance(options, ExcelOptions):
+        options = ExcelOptions.model_validate(dict(options or {}))
     if not source_bytes:
-        return ConvertOutcome.passthrough(reason="excel_empty")
-    is_xlsx = _is_xlsx(source_bytes, source_profile)
+        return ExcelReadResult(None, failure="excel_empty")
+    is_xlsx = _is_xlsx(source_bytes, extension)
     grids, failure = _read_xlsx(source_bytes) if is_xlsx else _read_xls(source_bytes)
     if grids is None:
-        return ConvertOutcome.passthrough(reason=failure or "excel_parse_failed")
+        return ExcelReadResult(None, failure=failure or "excel_parse_failed")
     warnings: list[str] = []
     sheets: list[SheetRecords] = []
     skipped: list[SkippedSheet] = []
@@ -294,19 +318,17 @@ def _excel_to_records(
             skipped.append(SkippedSheet(name=grid.name, reason="hidden"))
             continue
         sheet_ranges = _ranges_for(grid.name, ranges)
-        sheet = _sheet_records(_crop(grid, sheet_ranges) if sheet_ranges else grid, options)
-        if sheet is None:
+        tables = sheet_tables(_crop(grid, sheet_ranges) if sheet_ranges else grid, options)
+        if not tables:
             skipped.append(SkippedSheet(name=grid.name, reason="empty"))
             continue
-        for item in sheet.diagnostics:
-            if item.code == "header_low_confidence":
-                warnings.append(f"excel_header_low_confidence:{grid.name}")
-        missing = sum(
-            1 for item in sheet.diagnostics if item.code == "formula_without_cached_value"
-        )
+        diagnostics = [item for sheet in tables for item in sheet.diagnostics]
+        if any(item.code == "header_low_confidence" for item in diagnostics):
+            warnings.append(f"excel_header_low_confidence:{grid.name}")
+        missing = sum(1 for item in diagnostics if item.code == "formula_without_cached_value")
         if missing:
             warnings.append(f"excel_formula_without_cached_value:{grid.name}:{missing}")
-        sheets.append(sheet)
+        sheets.extend(tables)
     for key in options.column_roles:
         # 指定した列がどのシートにも無ければ警告する（列名の書き違いに気付けるように）。
         if not any(
@@ -316,28 +338,17 @@ def _excel_to_records(
         ):
             warnings.append(f"excel_column_role_target_not_found:{key}")
     if not any(sheet.blocks or sheet.preamble for sheet in sheets):
-        return ConvertOutcome.passthrough(reason="excel_no_rows")
+        return ExcelReadResult(None, failure="excel_no_rows")
     document = SheetRecordsDocument(
         source_format="xlsx" if is_xlsx else "xls", sheets=sheets, skipped_sheets=skipped
     )
-    return ConvertOutcome(
-        converted=True,
-        converter_name=CONVERTER_NAME,
-        converter_version=CONVERTER_VERSION,
-        derived_bytes=dump_structured_records(
-            sheet_records_to_lines(
-                document, converter=CONVERTER_NAME, converter_version=CONVERTER_VERSION
-            )
-        ),
-        derived_content_type=STRUCTURED_RECORDS_CONTENT_TYPE,
-        warnings=tuple(warnings),
-    )
+    return ExcelReadResult(document, warnings=tuple(warnings))
 
 
 # ---- 読み取り ------------------------------------------------------------------------
 
 
-def _read_xlsx(source_bytes: bytes) -> tuple[list[_Grid] | None, str | None]:
+def _read_xlsx(source_bytes: bytes) -> tuple[list[Grid] | None, str | None]:
     try:
         import openpyxl
     except Exception:
@@ -347,11 +358,12 @@ def _read_xlsx(source_bytes: bytes) -> tuple[list[_Grid] | None, str | None]:
         formula_book = openpyxl.load_workbook(io.BytesIO(source_bytes), data_only=False)
     except Exception:
         return None, "excel_open_failed"
-    grids: list[_Grid] = []
+    grids: list[Grid] = []
     try:
         for worksheet in values_book.worksheets:
             formulas = formula_book[worksheet.title]
-            grid = _Grid(name=worksheet.title, hidden=worksheet.sheet_state != "visible")
+            grid = Grid(name=worksheet.title, hidden=worksheet.sheet_state != "visible")
+            _read_xlsx_column_widths(worksheet, grid)
             for row in worksheet.iter_rows():
                 for cell in row:
                     formula = formulas.cell(row=cell.row, column=cell.column).value
@@ -365,6 +377,8 @@ def _read_xlsx(source_bytes: bytes) -> tuple[list[_Grid] | None, str | None]:
                     text = _format_value(cell.value, cell.number_format, is_date=cell.is_date)
                     if text:
                         grid.cells[(cell.row, cell.column)] = text
+                        if _xlsx_label_hint(cell):
+                            grid.label_hints.add((cell.row, cell.column))
             grid.merges = [
                 (rng.min_row, rng.min_col, rng.max_row, rng.max_col)
                 for rng in worksheet.merged_cells.ranges
@@ -378,7 +392,33 @@ def _read_xlsx(source_bytes: bytes) -> tuple[list[_Grid] | None, str | None]:
     return grids, None
 
 
-def _read_xls(source_bytes: bytes) -> tuple[list[_Grid] | None, str | None]:
+def _read_xlsx_column_widths(worksheet: Any, grid: Grid) -> None:
+    """指定された列幅（帳票の方眼紙の手がかり）と、シートの既定の列幅を読む。"""
+    default = getattr(worksheet.sheet_format, "defaultColWidth", None)
+    if default:
+        grid.default_column_width = float(default)
+    for dimension in worksheet.column_dimensions.values():
+        if not dimension.customWidth or not dimension.width:
+            continue
+        start = dimension.min or 0
+        end = dimension.max or start
+        # 全列の指定（A:XFD）で時間をかけない。値のある列の外は判定に使わない。
+        for col in range(start, min(end, 16384) + 1) if end - start < 1024 else ():
+            grid.column_widths[col] = float(dimension.width)
+
+
+def _xlsx_label_hint(cell: Any) -> bool:
+    """塗りつぶしか太字のセル（帳票のラベルの手がかり）。"""
+    try:
+        fill = cell.fill
+        if fill is not None and fill.fill_type not in (None, "none"):
+            return True
+        return bool(cell.font is not None and cell.font.b)
+    except Exception:
+        return False
+
+
+def _read_xls(source_bytes: bytes) -> tuple[list[Grid] | None, str | None]:
     try:
         import xlrd
     except Exception:
@@ -390,15 +430,18 @@ def _read_xls(source_bytes: bytes) -> tuple[list[_Grid] | None, str | None]:
             book = xlrd.open_workbook(file_contents=source_bytes)
         except Exception:
             return None, "excel_open_failed"
-    grids: list[_Grid] = []
+    grids: list[Grid] = []
     try:
         for sheet in book.sheets():
-            grid = _Grid(name=sheet.name, hidden=getattr(sheet, "visibility", 0) != 0)
+            grid = Grid(name=sheet.name, hidden=getattr(sheet, "visibility", 0) != 0)
+            _read_xls_column_widths(sheet, grid)
             for row in range(sheet.nrows):
                 for col in range(sheet.ncols):
                     text = _xls_cell_text(book, sheet, row, col, xlrd)
                     if text:
                         grid.cells[(row + 1, col + 1)] = text
+                        if _xls_label_hint(book, sheet, row, col):
+                            grid.label_hints.add((row + 1, col + 1))
             grid.merges = [
                 (rlo + 1, clo + 1, rhi, chi) for rlo, rhi, clo, chi in sheet.merged_cells
             ]
@@ -406,6 +449,31 @@ def _read_xls(source_bytes: bytes) -> tuple[list[_Grid] | None, str | None]:
     except Exception:
         return None, "excel_read_failed"
     return grids, None
+
+
+def _read_xls_column_widths(sheet: Any, grid: Grid) -> None:
+    """.xls の列幅（1/256 文字の単位）。formatting_info で開いたときだけ読める。"""
+    try:
+        if sheet.defcolwidth:
+            grid.default_column_width = float(sheet.defcolwidth)
+        elif sheet.standardwidth:
+            grid.default_column_width = float(sheet.standardwidth) / 256
+        for col, info in sheet.colinfo_map.items():
+            if info.width:
+                grid.column_widths[col + 1] = float(info.width) / 256
+    except Exception:
+        return
+
+
+def _xls_label_hint(book: Any, sheet: Any, row: int, col: int) -> bool:
+    """.xls の塗りつぶしか太字のセル。"""
+    try:
+        xf = book.xf_list[sheet.cell_xf_index(row, col)]
+        if xf.background.fill_pattern:
+            return True
+        return bool(book.font_list[xf.font_index].bold)
+    except Exception:
+        return False
 
 
 def _xls_cell_text(book: Any, sheet: Any, row: int, col: int, xlrd: Any) -> str:
@@ -495,21 +563,13 @@ def _format_number(value: int | float, number_format: str) -> str:
 # ---- 表頭・行 --------------------------------------------------------------------------
 
 
-def _column_letter(index: int) -> str:
-    letters = ""
-    while index > 0:
-        index, remainder = divmod(index - 1, 26)
-        letters = chr(65 + remainder) + letters
-    return letters
-
-
 def _ranges_for(sheet_name: str, ranges: list[ExcelRange]) -> list[ExcelRange]:
     """シートに当てる範囲（シート名を付けた範囲があればそれ、無ければシート名の無い範囲）。"""
     named = [item for item in ranges if item.sheet == sheet_name]
     return named or [item for item in ranges if item.sheet is None]
 
 
-def _crop(grid: _Grid, ranges: list[ExcelRange]) -> _Grid:
+def _crop(grid: Grid, ranges: list[ExcelRange]) -> Grid:
     """範囲の外のセルを除いたシート（#1229）。
 
     結合セルは範囲と重なる部分に切り詰め、左上が範囲の外でも値は切り詰めた左上へ移す。
@@ -518,11 +578,14 @@ def _crop(grid: _Grid, ranges: list[ExcelRange]) -> _Grid:
     def inside(row: int, col: int) -> bool:
         return any(item.contains(row, col) for item in ranges)
 
-    cropped = _Grid(
+    cropped = Grid(
         name=grid.name,
         hidden=grid.hidden,
         cells={key: value for key, value in grid.cells.items() if inside(*key)},
         missing_formula_cells={key for key in grid.missing_formula_cells if inside(*key)},
+        column_widths=dict(grid.column_widths),
+        default_column_width=grid.default_column_width,
+        label_hints={key for key in grid.label_hints if inside(*key)},
     )
     for min_row, min_col, max_row, max_col in grid.merges:
         value = grid.cells.get((min_row, min_col), "")
@@ -537,7 +600,7 @@ def _crop(grid: _Grid, ranges: list[ExcelRange]) -> _Grid:
     return cropped
 
 
-def _apply_merges(grid: _Grid, header_rows: range) -> None:
+def _apply_merges(grid: Grid, header_rows: range) -> None:
     """結合セルの値を埋める。
 
     表頭の行の中では結合の範囲（横・縦）を左上の値で埋める。データでは同じ行の横の結合だけを埋め、
@@ -555,11 +618,7 @@ def _apply_merges(grid: _Grid, header_rows: range) -> None:
                 grid.cells.setdefault((row, col), value)
 
 
-def _is_textual(value: str) -> bool:
-    return not _NUMERIC_TEXT.match(value.strip())
-
-
-def _detect_header(grid: _Grid, nonempty_rows: list[int]) -> tuple[int, float, str]:
+def _detect_header(grid: Grid, nonempty_rows: list[int]) -> tuple[int, float, str]:
     widest = max((len(grid.row_columns(row)) for row in nonempty_rows), default=1)
     best: tuple[float, int, str] | None = None
     for position, row in enumerate(nonempty_rows[:_HEADER_SCAN_ROWS]):
@@ -567,7 +626,7 @@ def _detect_header(grid: _Grid, nonempty_rows: list[int]) -> tuple[int, float, s
         values = [grid.cells[(row, col)] for col in columns]
         if not values:
             continue
-        textish = sum(1 for value in values if _is_textual(value)) / len(values)
+        textish = sum(1 for value in values if is_textual(value)) / len(values)
         unique = len(set(values)) / len(values)
         coverage = len(columns) / widest
         following = nonempty_rows[position + 1 : position + 1 + _HEADER_LOOKAHEAD_ROWS]
@@ -616,7 +675,7 @@ def _excluded(name: str, letter: str, excludes: set[str]) -> bool:
 
 
 def _procedure_columns(
-    grid: _Grid, header_row: int, data_rows: list[int], columns: list[int]
+    grid: Grid, header_row: int, data_rows: list[int], columns: list[int]
 ) -> tuple[int, int] | None:
     """手順書の番号の列と題名の列を探す（表頭のある最初の列が題名、その左で一緒に埋まる列が番号）。"""
     labeled = [col for col in columns if grid.cells.get((header_row, col), "").strip()]
@@ -638,7 +697,7 @@ def _procedure_columns(
     return max(candidates)[1], title_column
 
 
-def _density(grid: _Grid, data_rows: list[int], columns: list[int]) -> float:
+def _density(grid: Grid, data_rows: list[int], columns: list[int]) -> float:
     sample = data_rows[:_DENSITY_SAMPLE_ROWS]
     if not sample or not columns:
         return 0.0
@@ -653,11 +712,11 @@ def _density(grid: _Grid, data_rows: list[int], columns: list[int]) -> float:
 
 
 def _row_range(cols: list[int], row_start: int, row_end: int) -> str:
-    return f"{_column_letter(cols[0])}{row_start}:{_column_letter(cols[-1])}{row_end}"
+    return f"{column_letter(cols[0])}{row_start}:{column_letter(cols[-1])}{row_end}"
 
 
 def _table_blocks(
-    grid: _Grid, data_rows: list[int], columns: list[int], names: dict[int, str]
+    grid: Grid, data_rows: list[int], columns: list[int], names: dict[int, str]
 ) -> list[SheetBlock]:
     blocks: list[SheetBlock] = []
     for row in data_rows:
@@ -680,7 +739,7 @@ def _table_blocks(
 
 
 def _procedure_blocks(
-    grid: _Grid,
+    grid: Grid,
     data_rows: list[int],
     columns: list[int],
     names: dict[int, str],
@@ -715,7 +774,7 @@ def _procedure_blocks(
         last_row = row_start
         for row in rows:
             parts = [
-                f"{names.get(col, f'column_{_column_letter(col)}')}: {value}"
+                f"{names.get(col, f'column_{column_letter(col)}')}: {value}"
                 for col in all_columns
                 if (value := grid.cells.get((row, col), "").strip())
             ]
@@ -840,12 +899,12 @@ def _column_roles(
     return result, diagnostics
 
 
-def _sheet_records(grid: _Grid, options: ExcelOptions) -> SheetRecords | None:
+def _sheet_records(grid: Grid, options: ExcelOptions) -> SheetRecords | None:
     nonempty_rows = sorted({row for (row, _), value in grid.cells.items() if value.strip()})
     if not nonempty_rows:
         return None
     diagnostics: list[SheetDiagnostic] = [
-        SheetDiagnostic(code="formula_without_cached_value", cell=f"{_column_letter(col)}{row}")
+        SheetDiagnostic(code="formula_without_cached_value", cell=f"{column_letter(col)}{row}")
         for row, col in sorted(grid.missing_formula_cells)
     ]
     header_count = options.header_row_count
@@ -873,7 +932,7 @@ def _sheet_records(grid: _Grid, options: ExcelOptions) -> SheetRecords | None:
     excludes = {item.strip().casefold() for item in options.exclude_columns if item.strip()}
     raw_names: list[tuple[int, str, str]] = []
     for col in used_columns:
-        letter = _column_letter(col)
+        letter = column_letter(col)
         parts: list[str] = []
         for row in header_rows:
             value = grid.cells.get((row, col), "").strip()
@@ -894,7 +953,7 @@ def _sheet_records(grid: _Grid, options: ExcelOptions) -> SheetRecords | None:
         detect_roles = False
         diagnostics.append(SheetDiagnostic(code="column_roles_skipped_low_header_confidence"))
     sheet_columns, role_diagnostics = _column_roles(
-        [(col, _column_letter(col), names[col], header) for col, _, header in raw_names],
+        [(col, column_letter(col), names[col], header) for col, _, header in raw_names],
         options.column_roles,
         detect=detect_roles,
     )
@@ -953,3 +1012,126 @@ def _sheet_records(grid: _Grid, options: ExcelOptions) -> SheetRecords | None:
         blocks=blocks,
         diagnostics=diagnostics,
     )
+
+
+# ---- 版式（帳票・1 シートの複数の表。#2516）------------------------------------------------
+
+
+def _formula_diagnostics(grid: Grid) -> list[SheetDiagnostic]:
+    return [
+        SheetDiagnostic(code="formula_without_cached_value", cell=f"{column_letter(col)}{row}")
+        for row, col in sorted(grid.missing_formula_cells)
+    ]
+
+
+def _form_records(grid: Grid, detection: LayoutDetection) -> SheetRecords | None:
+    """帳票のシート（の領域）を「ラベル: 値」の項目の記録にする。"""
+    blocks, diagnostics = form_blocks(grid)
+    if not blocks:
+        return None
+    return SheetRecords(
+        name=grid.name,
+        header_row=None,
+        mode="form",
+        layout_detection=detection,
+        blocks=blocks,
+        diagnostics=[*_formula_diagnostics(grid), *_layout_diagnostics(detection), *diagnostics],
+    )
+
+
+def _layout_diagnostics(detection: LayoutDetection | None) -> list[SheetDiagnostic]:
+    """帳票と判定したときの診断（表・手順書の判定の根拠は ``layout_detection`` だけに残す）。"""
+    if detection is None or detection.method != "detected":
+        return []
+    return [
+        SheetDiagnostic(
+            code=f"layout_detected_{detection.layout}",
+            detail=f"{detection.confidence:.2f}: {detection.reason}",
+        )
+    ]
+
+
+def _detect(grid: Grid, options: ExcelOptions) -> tuple[bool, float, dict[str, float], str]:
+    """auto の帳票の判定（帳票か・点数・特徴・理由）。"""
+    score, features, reason = detect_form_layout(grid)
+    return score >= options.form_detection_threshold, score, features, reason
+
+
+def _table_records(
+    grid: Grid, options: ExcelOptions, form_score: tuple[float, dict[str, float], str] | None
+) -> SheetRecords | None:
+    """表・手順書として読む（auto のときは帳票でないと判定した根拠を残す）。"""
+    sheet = _sheet_records(grid, options)
+    if sheet is None or form_score is None:
+        return sheet
+    score, features, reason = form_score
+    detection = LayoutDetection(
+        layout=sheet.mode,
+        method="detected",
+        confidence=round(1 - score, 3),
+        reason=f"帳票の点数 {score:.2f} が閾値 {options.form_detection_threshold:.2f} 未満"
+        f"（{reason}）",
+        features=features,
+    )
+    return sheet.model_copy(update={"layout_detection": detection})
+
+
+def _region_records(
+    grid: Grid,
+    options: ExcelOptions,
+    detected: tuple[bool, float, dict[str, float], str] | None = None,
+) -> SheetRecords | None:
+    """1 つの領域（シート全体か、分けた表）を版式に合わせて読む（``detected`` は判定済み）。"""
+    if options.mode == "form":
+        detection = LayoutDetection(
+            layout="form", method="configured", confidence=1.0, reason="読み方に帳票を指定"
+        )
+        return _form_records(grid, detection)
+    if options.mode != "auto":
+        return _sheet_records(grid, options)
+    is_form, score, features, reason = detected or _detect(grid, options)
+    if is_form:
+        detection = LayoutDetection(
+            layout="form", method="detected", confidence=score, reason=reason, features=features
+        )
+        return _form_records(grid, detection) or _table_records(
+            grid, options, (score, features, reason)
+        )
+    return _table_records(grid, options, (score, features, reason))
+
+
+def sheet_tables(grid: Grid, options: ExcelOptions) -> list[SheetRecords]:
+    """1 シートを記録にする（複数の表に分けたときは表ごとに 1 つ。空なら空の一覧）。
+
+    シート全体が帳票なら分けない（帳票の空の行・列は表の区切りではない）。分けるのは、表頭の
+    行を指定していない（``header_row`` が無い）ときだけ。
+    """
+    if not any(value.strip() for value in grid.cells.values()):
+        return []
+    detected = _detect(grid, options) if options.mode == "auto" else None
+    whole_form = options.mode == "form" or (detected is not None and detected[0])
+    regions = (
+        split_regions(grid, gap_rows=options.table_gap_rows, gap_columns=options.table_gap_columns)
+        if options.split_tables and options.header_row is None and not whole_form
+        else []
+    )
+    if len(regions) <= 1:
+        sheet = _region_records(grid, options, detected)
+        return [sheet] if sheet is not None else []
+    tables: list[SheetRecords] = []
+    for top, left, bottom, right in regions:
+        region = ExcelRange(sheet=None, min_row=top, min_col=left, max_row=bottom, max_col=right)
+        sheet = _region_records(_crop(grid, [region]), options)
+        if sheet is None:
+            continue
+        title = sheet.preamble[0].text if sheet.preamble else None
+        tables.append(
+            sheet.model_copy(
+                update={
+                    "table_index": len(tables) + 1,
+                    "region": f"{column_letter(left)}{top}:{column_letter(right)}{bottom}",
+                    "title": title,
+                }
+            )
+        )
+    return tables

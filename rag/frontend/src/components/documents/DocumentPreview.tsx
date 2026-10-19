@@ -89,6 +89,7 @@ export function DocumentPreview({
   focusBboxUnit = null,
   focusPageSize = null,
   highlights = null,
+  focusText = null,
   sizing = "fill",
   className,
 }: {
@@ -106,6 +107,8 @@ export function DocumentPreview({
   focusPageSize?: BboxPageSize | null;
   /** 強調する領域（要素の表示領域など）。省略時は focusBbox 1 つを強調する。 */
   highlights?: PreviewHighlight[] | null;
+  /** テキストの原本で、引用した箇所（根拠の抜粋）へ移って強調する（#2512）。 */
+  focusText?: string | null;
   sizing?: PreviewSizing;
   className?: string;
 }) {
@@ -148,6 +151,7 @@ export function DocumentPreview({
       iframeUrl={pdfPreviewUrl(pdfUrl, focusPage)}
       loadText={loadText}
       textKey={url}
+      focusText={focusText}
       unsupportedMessage={kind === "office" ? t("preview.office") : undefined}
       downloadUrl={showFallbackDownload ? downloadUrl : null}
       focusPage={focusPage}

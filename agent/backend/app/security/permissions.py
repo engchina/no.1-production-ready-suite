@@ -377,6 +377,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- Control Plane: 業務 Agent ----
     ("GET", "/agents"): _AGENT_READ,
     ("POST", "/agents"): _ADMIN_ONLY,
+    ("POST", "/agents/draft-suggestion"): _ADMIN_ONLY,
     ("PATCH", "/agents/{agent_id}"): _ADMIN_ONLY,
     ("DELETE", "/agents/{agent_id}"): _ADMIN_ONLY,
     # 業種テンプレート（#780。業務 Agent の新規作成の画面が読む）。

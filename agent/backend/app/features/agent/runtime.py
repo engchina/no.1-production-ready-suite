@@ -323,6 +323,9 @@ class AgentProfile(BaseModel):
     published_version: int | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
+    # 下書き（版の項目）を最後に変えた時刻（#2519）。公開前の評価の門は、この時刻より後に始めた
+    # 下書きの評価だけを数える。None は #2519 より前の業務 Agent（`created_at` を使う）。
+    draft_updated_at: datetime | None = None
     # Run が使う版に固定したスキル（`_agent_for_run` が入れる。保存・応答には出さない。#1855）。
     pinned_skills: list[PinnedSkill] | None = Field(default=None, exclude=True)
 
@@ -711,6 +714,14 @@ class ThreadNotFoundError(LookupError):
     """会話が無い・別の利用者や別の Agent の会話（#768）。"""
 
 
+class ThreadKindMismatchError(ThreadNotFoundError):
+    """下書きの会話を公開中の版で続ける・公開中の版の会話に下書きの Run を足す（#2515）。
+
+    会話は始めた Run の種類に固定する。種類の違う会話は無い会話として扱い、画面の API だけが
+    理由を返す。
+    """
+
+
 class ThreadBusyError(ValueError):
     """回答の作成中・承認待ちの Run がある会話は削除しない（#1817）。"""
 
@@ -956,6 +967,16 @@ def run_thread_owner(run: RunState) -> str | None:
 def _thread_owner(runs: Sequence[RunState]) -> str | None:
     """会話（作成順の Run）の持ち主。会話を始めた Run の持ち主（#1928）。"""
     return run_thread_owner(runs[0]) if runs else None
+
+
+def _is_draft_run(run: RunState) -> bool:
+    """下書きで実行した Run か（`metadata.agent_version` が "draft"。#770）。"""
+    return run.metadata.get("agent_version") == "draft"
+
+
+def _is_draft_thread(runs: Sequence[RunState]) -> bool:
+    """下書きの会話か（会話を始めた Run の種類。#2515）。"""
+    return bool(runs) and _is_draft_run(runs[0])
 
 
 def _thread_summary(
@@ -1232,7 +1253,12 @@ class AgentRuntimeRepositoryContract(Protocol):
         self, run_id: str, *, kind: str, name: str, content: JsonObject
     ) -> None: ...
     def list_threads(
-        self, *, user_uuid: str | None, agent_id: str | None = None, all_users: bool = False
+        self,
+        *,
+        user_uuid: str | None,
+        agent_id: str | None = None,
+        all_users: bool = False,
+        draft: bool = False,
     ) -> list[ThreadSummary]: ...
     def get_thread(
         self, thread_id: str, *, user_uuid: str | None, all_users: bool = False
@@ -2117,6 +2143,10 @@ class AgentRuntimeRepository:
                 all_users=all_users,
             )
             thread_owner = _thread_owner(thread_runs)
+            # 会話は始めた Run の種類（下書き / 公開中の版）に固定する（#2515）。版の違う回答を
+            # 1 つの会話の履歴に混ぜない。
+            if _is_draft_thread(thread_runs) != request.draft:
+                raise ThreadKindMismatchError(request.thread_id)
         run = RunState(
             id=f"run_{uuid4().hex}",
             goal=request.goal,
@@ -2341,12 +2371,18 @@ class AgentRuntimeRepository:
             self._persist_locked()
 
     def list_threads(
-        self, *, user_uuid: str | None, agent_id: str | None = None, all_users: bool = False
+        self,
+        *,
+        user_uuid: str | None,
+        agent_id: str | None = None,
+        all_users: bool = False,
+        draft: bool = False,
     ) -> list[ThreadSummary]:
         """利用者の会話の一覧（新しい順）。
 
         会話は持ち主だけが見る（`all_users`〔system_admin。#1889〕なら全員の会話）。持ち主は
         会話を始めた利用者で、system_admin が続けた Run も持ち主の会話に入る（#1928）。
+        `draft` は下書きの会話だけ、既定は公開中の版の会話だけ（#2515）。
         """
         with self._lock:
             grouped: dict[str, list[RunState]] = {}
@@ -2359,6 +2395,8 @@ class AgentRuntimeRepository:
             summaries = []
             for thread_id, runs in grouped.items():
                 runs.sort(key=lambda item: item.created_at)
+                if _is_draft_thread(runs) != draft:
+                    continue
                 owner = _thread_owner(runs)
                 if not all_users and owner != user_uuid:
                     continue
@@ -3027,6 +3065,7 @@ class AgentRuntimeRepository:
             now = _now()
             agent.created_at = now
             agent.updated_at = now
+            agent.draft_updated_at = now
             self._agents[agent.id] = _ensure_versioned(agent)
             self._mark_agent_changed(agent.id)
             self._persist_locked()
@@ -3130,6 +3169,7 @@ class AgentRuntimeRepository:
                 setattr(agent, field, deepcopy(getattr(target, field)))
             agent.published_version = version
             agent.updated_at = _now()
+            agent.draft_updated_at = agent.updated_at
             self._mark_agent_changed(agent.id)
             self._persist_locked()
             return agent.model_copy(deep=True)
@@ -3147,9 +3187,13 @@ class AgentRuntimeRepository:
             if isinstance(skill_ids, list):
                 self._validate_agent_skills(skill_ids)
                 data["migration_required"] = False
+            before = {field: getattr(agent, field) for field in AGENT_VERSIONED_FIELDS}
             for key, value in data.items():
                 setattr(agent, key, value)
             agent.updated_at = _now()
+            # 有効 / 無効の切り替えなど、版の項目を変えない保存では下書きの時刻を進めない（#2519）。
+            if any(getattr(agent, field) != before[field] for field in AGENT_VERSIONED_FIELDS):
+                agent.draft_updated_at = agent.updated_at
             self._mark_agent_changed(agent.id)
             self._persist_locked()
             return agent.model_copy(deep=True)

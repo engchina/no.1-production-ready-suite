@@ -3068,10 +3068,12 @@ export const ja = {
   "documents.excelOptions.title": "Excel の読み方",
   "documents.excelOptions.inherited": "全体の既定に従う（{summary}）",
   "documents.excelOptions.mode": "読み方",
-  "documents.excelOptions.mode.hint": "自動は、番号と題名の列がある手順書なら手順ごと、項目の埋まった表なら 1 行ずつ読みます。",
+  "documents.excelOptions.mode.hint":
+    "自動は、狭い列と結合セルにラベルと値を並べた帳票なら項目ごと、番号と題名の列がある手順書なら手順ごと、項目の埋まった表なら 1 行ずつ読みます。空の行・列で分かれた表は表ごとに読みます。",
   "documents.excelOptions.mode.auto": "自動",
   "documents.excelOptions.mode.table": "表（1 行ずつ）",
   "documents.excelOptions.mode.procedure": "手順書（手順ごと）",
+  "documents.excelOptions.mode.form": "帳票（項目ごと）",
   "documents.excelOptions.headerRow": "表頭の行",
   "documents.excelOptions.headerRow.hint": "空欄なら先頭の行から推定します。説明の行が先にあるシートは行番号を指定してください。",
   "documents.excelOptions.headerRowCount": "表頭の行数",

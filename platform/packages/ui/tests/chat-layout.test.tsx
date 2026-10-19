@@ -35,12 +35,14 @@ function Harness({
   titleLoading,
   testIdPrefix,
   caption,
+  embedded,
 }: {
   onNew?: () => void;
   title?: string | null;
   titleLoading?: boolean;
   testIdPrefix?: string;
   caption?: string | null;
+  embedded?: boolean;
 }) {
   const [inlineOpen, setInlineOpen] = useState(false);
   const history = useChatHistoryPanel({ inlineOpen, onInlineOpenChange: setInlineOpen });
@@ -62,6 +64,7 @@ function Harness({
       logLabel="会話"
       composer={<textarea aria-label="質問" />}
       testIdPrefix={testIdPrefix}
+      embedded={embedded}
     >
       <p>質問と回答</p>
     </ChatLayout>
@@ -212,6 +215,17 @@ describe("ChatLayout", () => {
     expect($('[role="log"]')!.contains(button)).toBe(false);
     click(button);
     expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("embedded: スクロールするページの中では、どの幅でも全体の高さを 70dvh に固定する（#2515）", () => {
+    act(() => root.render(<Harness embedded />));
+    const layout = $("[data-chat-layout]")!;
+    expect(layout.hasAttribute("data-chat-layout-embedded")).toBe(true);
+    expect(layout.className).toContain("h-[70dvh]");
+    expect(layout.className).not.toContain("lg:flex-1");
+    // 会話の領域は全体の高さの中で伸び、lg 以上で高さを外さない。
+    const section = $('section[aria-label="チャット"]')!;
+    expect(section.className).not.toContain("lg:h-auto");
   });
 
   it("「新しい会話」は上端の行の右端の 1 か所", () => {

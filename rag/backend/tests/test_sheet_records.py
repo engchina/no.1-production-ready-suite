@@ -360,20 +360,65 @@ def test_small_to_big_groups_procedure_steps_by_chapter() -> None:
     assert chunks[2].metadata["chunk_group_id"] != chunks[1].metadata["chunk_group_id"]
 
 
+def test_small_to_big_does_not_join_split_tables_of_one_sheet() -> None:
+    """1 シートを複数の表に分けたとき、親は表をまたがない（#2516）。"""
+    from app.rag.chunking_small_to_big import build_parent_child_chunks
+
+    def row(number: int) -> SheetBlock:
+        return SheetBlock(
+            kind="row",
+            row_start=number,
+            row_end=number,
+            cell_range=f"A{number}:B{number}",
+            values={"列A": f"a{number}", "列B": str(number)},
+        )
+
+    document = SheetRecordsDocument(
+        source_format="xlsx",
+        sheets=[
+            SheetRecords(
+                name="表",
+                header_row=1,
+                table_index=1,
+                region="A1:B3",
+                blocks=[row(2), row(3)],
+            ),
+            SheetRecords(
+                name="表",
+                header_row=6,
+                table_index=2,
+                region="A6:B8",
+                blocks=[row(7), row(8)],
+            ),
+        ],
+    )
+    chunks = build_parent_child_chunks(_extraction(document))
+    assert [chunk.metadata["sheet_table_index"] for chunk in chunks] == [1, 1, 2, 2]
+    groups = [chunk.metadata["chunk_group_id"] for chunk in chunks]
+    assert groups[0] == groups[1]
+    assert groups[2] == groups[3]
+    assert groups[1] != groups[2]
+
+
 def _excel_to_jsonl_converter() -> ModuleType:
     """前処理のサービスの変換（別の venv で動く）を、ファイルの場所から読み込む。"""
     pytest.importorskip("openpyxl")
-    path = RAG_DIR / "services" / "preprocess" / "excel_to_jsonl" / "app" / "converters.py"
-    name = "excel_to_jsonl_converters_1349"
-    spec = importlib.util.spec_from_file_location(name, path)
+    package_dir = RAG_DIR / "services" / "preprocess" / "excel_to_jsonl" / "app"
+    # 変換は同じ package の module（grid・layout。#2516）を相対で読むので、package として読み込む。
+    name = "excel_to_jsonl_app_1349"
+    spec = importlib.util.spec_from_file_location(
+        name, package_dir / "__init__.py", submodule_search_locations=[str(package_dir)]
+    )
     assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
+    package = importlib.util.module_from_spec(spec)
     # dataclass の定義が module を引くため、読み込みの間だけ登録する。
-    sys.modules[name] = module
+    sys.modules[name] = package
     try:
-        spec.loader.exec_module(module)
+        spec.loader.exec_module(package)
+        module = importlib.import_module(f"{name}.converters")
     finally:
-        sys.modules.pop(name, None)
+        for key in [key for key in sys.modules if key == name or key.startswith(f"{name}.")]:
+            sys.modules.pop(key, None)
     return module
 
 

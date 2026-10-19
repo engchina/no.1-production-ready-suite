@@ -262,6 +262,11 @@ function normalizedQuestion(question: unknown): string {
 }
 
 /** 評価の版（#810）。省略時は公開していない変更があれば下書き、なければ公開中の版。 */
+/** 下書きで実行した Run か（backend の `metadata.agent_version == "draft"`。#2515）。 */
+function isDraftRun(run: Json | undefined): boolean {
+  return (run?.metadata as Json | undefined)?.agent_version === "draft";
+}
+
 function evaluationVersion(state: MockApiState, agentId: unknown, target: unknown): number | "draft" {
   const agent = state.agents.find((item) => item.id === agentId);
   const published = (agent?.published_version as number | null | undefined) ?? null;
@@ -770,6 +775,10 @@ function createState() {
     auditRecords: [] as Json[],
     // 業種テンプレート（`GET /api/agent-templates`。#780）。
     agentTemplates: clone(AGENT_TEMPLATES) as Json[],
+    // 説明から作る下書きの提案（`POST /api/agents/draft-suggestion`。#2519）。null は既定の提案（説明を名前に使う）。
+    draftSuggestion: null as Json | null,
+    // 公開前の評価の門で断る文（`POST /api/agents/{id}/publish` の 409。#2519）。null は門なし。
+    publishEvaluationRefusal: null as string | null,
     // データの範囲に選べるプロファイル（`GET /api/agent-data-scopes/{接続}/candidates`。#1378）。
     // 編集者が使えるものだけ（backend は編集者として MCP に問い合わせる）。`dataScopeCandidateErrors` は接続ごとの失敗。
     dataScopeCandidates: clone(DATA_SCOPE_CANDIDATES) as Record<string, Json[]>,
@@ -1696,6 +1705,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (threadId && !ownThread && !currentUser?.is_system_admin) {
       throw new HttpError(404, "会話が見つかりません。");
     }
+    // 会話は始めた Run の種類（下書き / 公開中の版）に固定する（backend と同じ。#2515）。
+    if (threadId && isDraftRun(threadRuns[0]) !== Boolean(body.draft)) {
+      throw new HttpError(
+        409,
+        "下書きで試した会話は公開中の版で、公開中の版の会話は下書きで続けられません。新しい会話で質問してください。",
+        "thread_kind_mismatch"
+      );
+    }
     const id = `run-chat-${state.runs.length + 1}`;
     const run: Json = {
       id,
@@ -1709,10 +1726,13 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       artifacts: [{ id: `${id}-answer`, name: "回答", kind: "answer", created_at: MOCK_NOW, content: { text: `「${String(body.goal ?? "")}」への回答です。` } }],
       pending_tool_calls: [],
       // 確認の取り消しの操作（#1441・#1445）は、backend と同じく Run の記録に残す。
-      metadata:
-        body.clarification_cancel === "nl2sql" || body.clarification_cancel === "rag"
+      metadata: {
+        ...(body.clarification_cancel === "nl2sql" || body.clarification_cancel === "rag"
           ? { clarification_cancel: [{ kind: body.clarification_cancel, trigger: "button" }] }
-          : {},
+          : {}),
+        // 使った版（backend の metadata.agent_version。下書きは "draft"）。
+        ...(body.draft ? { agent_version: "draft" } : {}),
+      },
       created_by_user_uuid: ownThread ? "local" : (currentUser?.user_uuid ?? "local"),
       thread_id: threadId ?? `thread_${String(state.runs.length + 1).padStart(32, "0")}`,
       thread_owner_user_uuid: threadId ? threadOwner : "local",
@@ -1769,6 +1789,12 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
   if (method === "GET" && at("threads")) {
     const agentId = query.get("agent_id");
+    // `draft=true` は編集画面で下書きを試した会話（Agent 管理だけ）、既定は公開中の版の会話（#2515）。
+    const draft = query.get("draft") === "true";
+    const viewer = state.auth.currentUser;
+    if (draft && viewer && !viewer.is_system_admin && !viewer.permissions.includes("agent.admin")) {
+      throw new HttpError(403, "下書きの会話を見られるのは Agent 管理の権限がある利用者だけです。");
+    }
     const grouped = new Map<string, Json[]>();
     for (const run of state.runs) {
       if (typeof run.thread_id !== "string") continue;
@@ -1781,7 +1807,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     // 会話の履歴のページング（limit / offset と全件数。#1265）。
     const limit = Number(query.get("limit") ?? 25);
     const offset = Number(query.get("offset") ?? 0);
-    const threads = [...grouped.entries()].map(([threadId, runs]) => ({
+    const threads = [...grouped.entries()]
+      .filter(([, runs]) => isDraftRun(runs[0]) === draft)
+      .map(([threadId, runs]) => ({
       thread_id: threadId,
       agent_id: runs[0].agent_id,
       // 利用者が変えた名前（#1817。backend は最初の Run の metadata.thread_title）。
@@ -2456,6 +2484,22 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         user_display_names: state.userDisplayNames,
         max_published_versions: MAX_PUBLISHED_VERSIONS,
       };
+    // 説明から下書きを提案する（#2519。保存しない）。
+    if (method === "POST" && at("agents", "draft-suggestion")) {
+      const description = String(body.description ?? "").trim();
+      if (!description) throw new HttpError(422, "業務の説明を入力してください。");
+      return (
+        state.draftSuggestion ?? {
+          name: `${description.slice(0, 20)} の Agent`,
+          description,
+          instructions: "根拠の箇所を示して答える。",
+          skill_ids: [],
+          data_scopes: {},
+          evaluation_cases: [],
+          notices: [],
+        }
+      );
+    }
     if (method === "POST" && at("agents")) {
       // backend の create_agent と同じく、送られた ID は URL に置ける形だけを受け付ける（#1033）。
       const id = String(body.id ?? `agent-${state.agents.length + 1}`).trim();
@@ -2557,6 +2601,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     // 下書きを版として公開する・前の版に戻す（#770）。
     if (method === "POST" && at("agents", "*", "publish")) {
       const agent = findOr404(state.agents, "id", second, "agent");
+      if (state.publishEvaluationRefusal) {
+        throw new HttpError(409, state.publishEvaluationRefusal, "publish_evaluation_required");
+      }
       requireKnownSkills(agent.skill_ids);
       const versions = (agent.versions as Json[] | undefined) ?? [];
       const version = Math.max(0, ...versions.map((item) => Number(item.version))) + 1;

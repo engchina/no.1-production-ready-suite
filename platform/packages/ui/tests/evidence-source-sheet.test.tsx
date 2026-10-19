@@ -134,6 +134,29 @@ describe("EvidenceSourceSheet", () => {
     expect(preview.querySelector('[data-testid="preview"]')).not.toBeNull();
   });
 
+  it("開いた抜粋は高さに上限のあるスクロールの領域に入れ、プレビューの下限は画面の高さに合わせる（#2512）", () => {
+    act(() => root.render(<Harness preview />));
+    click($('[data-testid="open-0"]')!);
+    const panel = sheet()!;
+    const details = panel.querySelector<HTMLDetailsElement>('[data-testid="evidence-excerpt-details"]')!;
+    click(details.querySelector('[data-testid="evidence-excerpt-toggle"]')!);
+    const scroll = details.querySelector<HTMLElement>('[data-testid="evidence-excerpt-scroll"]')!;
+    expect(scroll.getAttribute("role")).toBe("region");
+    expect(scroll.getAttribute("aria-label")).toBe("抜粋と頁・章節");
+    expect(scroll.className).toContain("max-h-[18dvh]");
+    expect(scroll.className).toContain("sm:max-h-[min(20rem,28dvh)]");
+    expect(scroll.className).toContain("overflow-y-auto");
+    expect(scroll.querySelector('[data-testid="citation-text"]')?.textContent).toBe("合成の抜粋 1");
+    expect(scroll.querySelector('[data-testid="evidence-chips"]')?.textContent).toContain("p.3");
+    // あふれていなければ Tab で止めず、フェードも出さない（あふれたときの動きは e2e で確かめる）。
+    expect(scroll.getAttribute("data-overflowing")).toBe("false");
+    expect(scroll.hasAttribute("tabindex")).toBe(false);
+    expect(scroll.querySelector('[data-testid="evidence-excerpt-fade"]')?.className).toContain("opacity-0");
+    const preview = panel.querySelector<HTMLElement>('[data-testid="evidence-source-preview"]')!;
+    expect(preview.className).toContain("min-h-[min(24rem,45dvh)]");
+    expect(preview.className).toContain("sm:min-h-[min(32rem,55dvh)]");
+  });
+
   it("抜粋を開いたまま閉じても、開き直す・別の根拠を開くと閉じた状態から出す（#2502）", () => {
     act(() => root.render(<Harness preview />));
     click($('[data-testid="open-0"]')!);

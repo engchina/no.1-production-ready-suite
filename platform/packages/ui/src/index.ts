@@ -835,6 +835,7 @@ export { diagnosticTimestamp, logBrowserDiagnostic, type BrowserDiagnostic } fro
 // 原文のプレビュー（ページの画像のビューア・bbox の強調。RAG と Agent の根拠のパネル・RAG の文書の詳細。#2389）
 export * from "./lib/bbox";
 export * from "./lib/preview-viewer";
+export * from "./lib/text-quote";
 export {
   DEFAULT_DOCUMENT_PREVIEW_LABELS,
   documentPreviewLabels,

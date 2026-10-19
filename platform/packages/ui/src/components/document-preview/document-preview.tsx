@@ -1,5 +1,5 @@
-import { Download, FileQuestion } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Download, FileQuestion, LocateFixed } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   type BboxCoordinateMode,
@@ -12,10 +12,13 @@ import {
   formatBboxPercent,
   normalizeBboxForPreview,
 } from "../../lib/bbox";
+import { excerptPlainText } from "../../lib/excerpt-text";
+import { findTextQuote } from "../../lib/text-quote";
+import { INFORMATION_TABLE_FOCUS_CLASS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
 import { ApiErrorState } from "../feedback/api-error-banner";
 import { TimedLoadingState } from "../feedback/processing-state";
-import { buttonVariants } from "../ui/button";
+import { Button, buttonVariants } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
 import { DEFAULT_DOCUMENT_PREVIEW_LABELS, type DocumentPreviewLabels } from "./labels";
 import { bboxOverlayStyle, PreviewViewer, type PreviewSizing, type PreviewViewerPage } from "./preview-viewer";
@@ -61,6 +64,11 @@ export interface DocumentPreviewProps extends DocumentPreviewFocus {
    */
   loadText?: (signal: AbortSignal) => Promise<string>;
   textKey?: string;
+  /**
+   * `text`: 引用した箇所（根拠の抜粋の本文）。本文の中で見つかれば、そこへスクロールして強調する（PDF の bbox の強調と
+   * 同じ考え方。#2512）。照合は文字と数字だけを比べる汎用の仕組みで、見つからなければ先頭のまま。
+   */
+  focusText?: string | null;
   /** `unsupported` の案内（既定は {@link DocumentPreviewLabels.unsupported}）。 */
   unsupportedMessage?: string;
   /** `unsupported` で出すダウンロードの URL。無ければボタンを出さない。 */
@@ -90,6 +98,7 @@ export function DocumentPreview({
   iframeUrl = null,
   loadText,
   textKey,
+  focusText = null,
   unsupportedMessage,
   downloadUrl = null,
   focusPage = null,
@@ -175,7 +184,7 @@ export function DocumentPreview({
   if (kind === "text" && loadText) {
     return (
       <PreviewFrame className={className} sizing={sizing} labels={labels} {...focus}>
-        <TextPreview key={textKey} loadText={loadText} labels={labels} />
+        <TextPreview key={textKey} loadText={loadText} fileName={fileName} focusText={focusText} labels={labels} />
       </PreviewFrame>
     );
   }
@@ -315,12 +324,19 @@ function BboxLocator({
   );
 }
 
-/** 本文の表示（読み込み・失敗と再試行・中でスクロール）。読み方は製品の `loadText`。 */
+/**
+ * 本文の表示（読み込み・失敗と再試行・中でスクロール）。読み方は製品の `loadText`。`focusText`（引用した箇所）が
+ * 本文の中で見つかれば強調し、本文の領域の中だけをその位置へスクロールする（パネル全体は動かさない。#2512）。
+ */
 function TextPreview({
   loadText,
+  fileName,
+  focusText,
   labels,
 }: {
   loadText: (signal: AbortSignal) => Promise<string>;
+  fileName: string;
+  focusText: string | null;
   labels: DocumentPreviewLabels;
 }) {
   // 取得結果は試行ごとに持つ（再試行の直後は前の結果を使わず、読込中として扱う）。
@@ -363,10 +379,77 @@ function TextPreview({
       </TimedLoadingState>
     );
   }
+  return <TextPreviewBody text={current.text} fileName={fileName} focusText={focusText} labels={labels} />;
+}
+
+function TextPreviewBody({
+  text,
+  fileName,
+  focusText,
+  labels,
+}: {
+  text: string;
+  fileName: string;
+  focusText: string | null;
+  labels: DocumentPreviewLabels;
+}) {
+  // 抜粋に入る文書の表（HTML の `<table>`）は、画面の抜粋と同じく文字にしてから照合する。
+  const range = useMemo(() => (focusText ? findTextQuote(text, excerptPlainText(focusText)) : null), [text, focusText]);
+  const scrollRef = useRef<HTMLPreElement>(null);
+  const markRef = useRef<HTMLElement>(null);
+  const scrollToQuote = useCallback(() => {
+    const region = scrollRef.current;
+    const mark = markRef.current;
+    if (!region || !mark) return;
+    // scrollIntoView はパネル全体も動かすので、本文の領域の中だけを動かす（強調の上に少し前の行を残す）。
+    region.scrollTop = Math.max(0, mark.offsetTop - region.clientHeight / 6);
+  }, []);
+  useLayoutEffect(() => {
+    if (range) scrollToQuote();
+  }, [range, scrollToQuote]);
+
   return (
-    <pre className="h-full max-h-full min-h-40 overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-relaxed whitespace-pre-wrap break-words text-fg">
-      {current.text}
-    </pre>
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      {range ? (
+        <div className="flex shrink-0 items-center justify-between gap-2" data-testid="preview-text-highlight">
+          <p role="status" className="min-w-0 text-xs text-fg-muted">
+            {labels.textHighlightStatus}
+          </p>
+          <Button type="button" variant="ghost" size="sm" icon={LocateFixed} onClick={scrollToQuote}>
+            {labels.focusHighlight}
+          </Button>
+        </div>
+      ) : null}
+      <pre
+        ref={scrollRef}
+        role="region"
+        aria-label={labels.region(fileName)}
+        // 本文は中でスクロールするので、Tab で届き矢印キーで動かせるようにする。
+        tabIndex={0}
+        className={cn(
+          "relative min-h-40 flex-1 overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-relaxed whitespace-pre-wrap break-words text-fg",
+          INFORMATION_TABLE_FOCUS_CLASS
+        )}
+        data-testid="preview-text"
+      >
+        {range ? (
+          <>
+            {text.slice(0, range.start)}
+            <mark
+              ref={markRef}
+              data-surface-tint="accent"
+              className="rounded-sm bg-accent-muted text-fg underline decoration-accent-emphasis decoration-2 underline-offset-2 box-decoration-clone"
+              data-testid="preview-text-quote"
+            >
+              {text.slice(range.start, range.end)}
+            </mark>
+            {text.slice(range.end)}
+          </>
+        ) : (
+          text
+        )}
+      </pre>
+    </div>
   );
 }
 

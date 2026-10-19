@@ -201,7 +201,7 @@ def test_incomplete_is_not_resent_when_effort_cannot_drop(
 def test_bounded_call_model_leaves_the_resend_to_the_caller() -> None:
     """上限つきの並行の実行器を通す呼び出し（SDK の再試行 0）は送り直しを実行器に任せる（#2023）。
 
-    推論の量を下げた送り直しは実行器の adaptive の再試行（`evaluation._retry_target`）が行い、
+    推論の量を下げた送り直しは実行器の adaptive の再試行（`ai_calls.retry_model_target`）が行い、
     再試行の主体を二重にしない。
     """
     run_model = builtin_runtime._default_model_factory(
