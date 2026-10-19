@@ -7,7 +7,7 @@
 |---|---|---|---|
 | `docling` | CPU | ✅ | 既定の解析エンジン。**PDF と画像だけ**(親子階層（small-to-big）の分割に使うレイアウト解析) |
 | `unstructured` | CPU | — | 多形式 partition(テキスト・HTML・Office・メール など)。stack の `rag_enable_parser_unstructured` / `rag-services.sh --unstructured` |
-| `structured_records_jsonl` | CPU | ✅ | 構造化レコード JSONL（前処理 CSV→JSONL・Excel→JSONL の成果物）。記録を 1 要素にし、検索用テキストを記録の境界で区切る。使用エンジン（`RAG_PARSER_ADAPTER_BACKEND=structured_records_jsonl`）に選んだときだけ使う（#2457） |
+| `structured_records_jsonl` | CPU | ✅ | 構造化レコード JSONL（前処理 CSV→JSONL・Excel→JSONL・Word→JSONL の成果物）。記録を 1 要素にし、検索用テキストを記録の境界で区切る。使用エンジン（`RAG_PARSER_ADAPTER_BACKEND=structured_records_jsonl`）に選んだときだけ使う（#2457） |
 | `xml_tree_json` | CPU | ✅ | XML ツリー JSON（XML の要素の木を tag / attr / children の JSON にした文書。対応する形の `.json`）。使用エンジン（`RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`）に選んだときだけ使う（#2042） |
 | `oci_document_understanding` | OCI | — | OCI Document Understanding を呼ぶ proxy。stack の `rag_enable_oci_cloud_parsers` / `rag-services.sh --oci` |
 

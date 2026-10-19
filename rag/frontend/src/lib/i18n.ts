@@ -208,7 +208,7 @@ export const ja = {
     "GPU 解析エンジンは外部 API を直接呼びます。この画面から解析エンジンのサーバーの構築や起動は行いません。",
   "settings.parserAdapters.backend.structured_records_jsonl": "構造化レコード JSONL",
   "settings.parserAdapters.backend.structured_records_jsonl.description":
-    "ファイル準備の CSV→JSONL・Excel→JSONL が作る構造化レコードの JSONL を、記録の単位で解析。固定分割で 1 記録 1 チャンクにする。選んだ場合だけ使用",
+    "ファイル準備の CSV→JSONL・Excel→JSONL・Word→JSONL が作る構造化レコードの JSONL を、記録の単位で解析。固定分割で 1 記録 1 チャンクにする。選んだ場合だけ使用",
   "settings.parserAdapters.backend.xml_tree_json": "XML ツリー JSON",
   "settings.parserAdapters.backend.xml_tree_json.description":
     "XML の要素の木（tag / attr / children）を JSON にした文書を、要素の階層のまま解析。選んだ場合だけ使用",

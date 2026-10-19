@@ -559,7 +559,7 @@ def _parser_result_failure_reason(result: ParserRegistryResult) -> str:
 def structured_records_requires_jsonl_backend_message(label: str) -> str:
     """構造化レコードの JSONL を、構造化レコード JSONL 以外の解析エンジンに渡したときの案内。"""
     return (
-        "ファイル準備の「CSV→JSONL」「Excel→JSONL」が作る構造化レコードの JSONL は、"
+        "ファイル準備の「CSV→JSONL」「Excel→JSONL」「Word→JSONL」が作る構造化レコードの JSONL は、"
         f"文書解析の「構造化レコード JSONL」だけが解析できます。選択中の解析エンジン（{label}）では"
         "変換せずに取込を停止しました。この文書の「処理レシピ」で「文書解析」を"
         "「構造化レコード JSONL」に変えてから再実行してください。"

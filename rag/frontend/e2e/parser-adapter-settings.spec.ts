@@ -56,6 +56,8 @@ for (const viewport of [
       'label[for="settings-parser-backend-structured_records_jsonl"]'
     );
     await expect(structuredRecordsCard).toContainText("記録の単位で解析");
+    // 構造化レコードの JSONL を作るファイル準備は 3 つとも挙げる（#2480）。
+    await expect(structuredRecordsCard).toContainText("CSV→JSONL・Excel→JSONL・Word→JSONL");
     await expect(structuredRecordsCard).toContainText("対応形式: JSONL");
     // 「形式で自動に回す解析エンジン」の節とスイッチは無い。
     await expect(page.getByText("形式で自動に回す解析エンジン")).toHaveCount(0);
