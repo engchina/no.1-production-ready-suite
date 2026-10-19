@@ -274,9 +274,11 @@ migration は値の書き換えだけで、データを消さない（承認は�
 抽出の ID が変わるので、CSV / Excel の文書は再処理で作り直しになる（再処理まで、それまでの active な chunk_set を検索に使う）。
 
 1. 本番（OCI Compute）: `sudo platform/deploy/suite-update.sh` で再配備する。`init_script.sh` が
-   - 旧い unit（`production-ready-rag-preprocess-csv-to-json.service`・`production-ready-rag-preprocess-excel-to-json.service`）を
-     「配備しなくなった unit」として止めて消し、新しい unit を作って起動する（`rag_services.txt` の旧名は読み飛ばし、必須のサービスとして
-     新しい名前を足す）。
+   - `rag_services.txt` の旧名（`preprocess-csv-to-json`・`preprocess-excel-to-json`）を新しい名前として読み、`rag_services.txt` を
+     新しい名前で書き戻す（#2484）。
+   - 新しい unit と sudoers を作り、旧い unit（`production-ready-rag-preprocess-csv-to-json.service`・
+     `production-ready-rag-preprocess-excel-to-json.service`）を「配備しなくなった unit」として止めて消す。新しい unit は旧い unit の
+     状態を引き継ぐ（旧い unit が enable なら起動し、利用者が停止して disable なら停止のまま。旧い unit が無ければ既定どおり起動する）。
    - `app.rag.structured_records_settings_migration --apply` で `backend/.env`・`parser-settings.json` を移し、
      `system_schema_cli initialize` で上の migration を当てる。
    - 旧いディレクトリの venv（`rag/services/preprocess/csv_to_json/.venv` など。git の管理外）は残るので、要らなければ消す。

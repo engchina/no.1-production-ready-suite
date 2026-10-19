@@ -102,6 +102,12 @@ ALLOWED_RAG_SERVICES=(
 # rag_services.txt に無ければ足す（以前の stack が書いた一覧でも、再配備で unit が入る。構造化レコード JSONL と Word→JSONL は
 # CSV / Excel の前処理と同じく起動する（#2457）。XML ツリー JSON は既定は停止のサービスで、初回は起動しない。#2453）。
 REQUIRED_RAG_SERVICES=(parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl)
+# 改名したサービス（旧名|新名。#2457 の CSV→JSONL・Excel→JSONL）。以前の stack が書いた rag_services.txt の旧名は新名として読み、
+# 旧名の unit の起動 / 停止の状態を新名の unit に引き継ぐ（configure_systemd。旧名の unit は配備しなくなった unit として消す）。
+RENAMED_RAG_SERVICES=(
+  "preprocess-csv-to-json|preprocess-csv-to-jsonl"
+  "preprocess-excel-to-json|preprocess-excel-to-jsonl"
+)
 RAG_SERVICES=()
 
 PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"
@@ -168,12 +174,36 @@ contains_value() {
   return 1
 }
 
+# 改名したサービスの新名（旧名でなければ失敗）。
+rag_service_new_name() {
+  local entry
+  for entry in "${RENAMED_RAG_SERVICES[@]}"; do
+    if [ "${entry%%|*}" = "$1" ]; then
+      printf '%s\n' "${entry#*|}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# 改名したサービスの旧名（新名でなければ失敗）。
+rag_service_old_name() {
+  local entry
+  for entry in "${RENAMED_RAG_SERVICES[@]}"; do
+    if [ "${entry#*|}" = "$1" ]; then
+      printf '%s\n' "${entry%%|*}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # 配備する前処理 / parser（Terraform の rag_services）。以前の stack の compose_services.txt も読む
 # （backend / ingestion-worker は常に配備するため、その名前は読み飛ばす）。
 load_rag_services() {
   local services_file="${PROPS_DIR}/rag_services.txt"
   local names=()
-  local name
+  local name new_name
 
   if [ ! -f "${services_file}" ] && [ -f "${PROPS_DIR}/compose_services.txt" ]; then
     log "Reading the service list written by an older stack: ${PROPS_DIR}/compose_services.txt"
@@ -187,6 +217,10 @@ load_rag_services() {
         continue
         ;;
     esac
+    if new_name="$(rag_service_new_name "${name}")"; then
+      log "Reading renamed RAG service as its new name: ${name} -> ${new_name}"
+      name="${new_name}"
+    fi
     if ! rag_service_definition "${name}" >/dev/null; then
       log "Skipping RAG service that is no longer provided: ${name}"
       continue
@@ -723,15 +757,18 @@ EOF
 # 前処理 / parser の unit の起動 / 停止は、利用者が最後に操作した状態（systemd の enable / disable）を保つ。
 #   - 初めて配備する unit（unit ファイルが無かった）: enable --now（既定のサービスを起動する）。
 #     既定は停止のサービス（rag-systemd.sh の RAG_DEFAULT_STOPPED_SERVICES）は enable も起動もしない
+#     改名したサービス（RENAMED_RAG_SERVICES）で旧名の unit が有れば、旧名の unit の enable / disable を引き継ぐ
 #   - 以前から有る unit で enable（最後に「起動」した）: 新しいコードで restart
 #   - 以前から有る unit で disable（最後に「停止」した）: 停止のまま
 # reboot では enable の unit だけが起動する（WantedBy=multi-user.target）。
 configure_systemd() {
   local service unit
   local new_units=()
+  local renamed_started_units=()
+  local renamed_stopped_units=()
   local keep_units=("${BACKEND_UNIT}" "${WORKER_UNIT}")
   local controllable_units=()
-  local path name
+  local path name old_name old_unit
 
   log "Writing systemd units."
   write_backend_unit \
@@ -761,6 +798,17 @@ RestartSec=5
     unit="$(rag_unit_name "${service}")"
     if [ ! -f "${SYSTEMD_UNIT_DIR}/${unit}" ]; then
       new_units+=("${unit}")
+      # 旧名の unit の状態は、下で旧名の unit を消す前に読む。
+      if old_name="$(rag_service_old_name "${service}")"; then
+        old_unit="$(rag_unit_name "${old_name}")"
+        if [ -f "${SYSTEMD_UNIT_DIR}/${old_unit}" ]; then
+          if systemctl is-enabled --quiet "${old_unit}"; then
+            renamed_started_units+=("${unit}")
+          else
+            renamed_stopped_units+=("${unit}")
+          fi
+        fi
+      fi
     fi
     rag_write_microservice_unit "${SYSTEMD_UNIT_DIR}/${unit}" "${service}" "${APP_REPO_DIR}" \
       "${SERVICE_USER}" "${SERVICE_GROUP}" "${SERVICE_HOME}" "${SERVICE_RUNTIME_ENV_FILE}" \
@@ -786,7 +834,12 @@ RestartSec=5
 
   for service in "${RAG_SERVICES[@]}"; do
     unit="$(rag_unit_name "${service}")"
-    if contains_value "${unit}" "${new_units[@]}" && rag_service_default_stopped "${service}"; then
+    if contains_value "${unit}" "${renamed_stopped_units[@]}"; then
+      log "Leaving ${unit} stopped (renamed; last operation on the old unit: stop)."
+    elif contains_value "${unit}" "${renamed_started_units[@]}"; then
+      log "Starting ${unit} (renamed; last operation on the old unit: start)."
+      systemctl enable --now "${unit}"
+    elif contains_value "${unit}" "${new_units[@]}" && rag_service_default_stopped "${service}"; then
       log "Leaving ${unit} stopped (first deployment; stopped by default)."
     elif contains_value "${unit}" "${new_units[@]}"; then
       log "Starting ${unit} (first deployment)."
