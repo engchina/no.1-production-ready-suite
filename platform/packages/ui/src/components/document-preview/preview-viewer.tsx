@@ -681,7 +681,8 @@ export function PreviewViewer({
                 {!loaded && !failed ? (
                   <Skeleton className="absolute inset-0 h-full w-full" testId="preview-page-skeleton" />
                 ) : null}
-                {rects.map((item) => (
+                {/* 強調の枠は画像が出てから重ねる（灰色の面の上に枠だけが浮かないように。#2474）。 */}
+                {(loaded ? rects : []).map((item) => (
                   <span
                     key={item.key}
                     aria-hidden
@@ -703,7 +704,8 @@ export function PreviewViewer({
               {/* 読み込み中の表示はほかの読み込み中と同じ部品（Spinner・文言・経過時間）。回したページの外に置き、
                   文字は回さない（#2474）。 */}
               {!loaded && !failed ? (
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-3">
+                // ページの上端の近くに置く（縦に長いページでも最初に見える位置。#2474）。
+                <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center p-3 pt-6">
                   <div className="max-w-full rounded-md border border-border bg-surface px-3 py-2 shadow-sm">
                     <ProcessingIndicator
                       active
