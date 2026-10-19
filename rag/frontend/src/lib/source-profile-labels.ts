@@ -14,6 +14,7 @@ const PARSER_PROFILE_KEYS: Record<string, I18nKey> = {
   unsupported_outlook_msg: "sourceProfile.parser.outlookMsg",
   unsupported_tiff_image: "sourceProfile.parser.tiffImage",
   unsupported_legacy_office_binary: "sourceProfile.parser.legacyOffice",
+  unsupported_macro_enabled_office: "sourceProfile.parser.macroOffice",
   enterprise_ai_generic: "sourceProfile.parser.generic",
   legacy: "evaluation.ingestionQuality.parser.legacy",
 };
@@ -48,6 +49,7 @@ const SOURCE_WARNING_KEYS: Record<string, I18nKey> = {
   unsupported_outlook_msg: "sourceProfile.warning.unsupportedOutlookMsg",
   unsupported_tiff_image: "sourceProfile.warning.unsupportedTiffImage",
   unsupported_legacy_office_binary: "sourceProfile.warning.unsupportedLegacyOffice",
+  unsupported_macro_enabled_office: "sourceProfile.warning.unsupportedMacroOffice",
   parser_fallback_used: "sourceProfile.warning.parserFallback",
   office_local_parse_failed: "sourceProfile.warning.officeFallback",
   office_segment_parse_failed: "sourceProfile.warning.officeSegmentFailed",
@@ -61,6 +63,7 @@ const UNSUPPORTED_REASON_KEYS: Record<string, I18nKey> = {
   outlook_msg_not_supported: "sourceProfile.unsupported.outlookMsgNotSupported",
   tiff_image_not_supported: "sourceProfile.unsupported.tiffImageNotSupported",
   legacy_office_binary_not_supported: "sourceProfile.unsupported.legacyOfficeNotSupported",
+  macro_enabled_office_not_supported: "sourceProfile.unsupported.macroOfficeNotSupported",
   unknown_file_type: "sourceProfile.unsupported.unknownFileType",
 };
 
@@ -83,6 +86,7 @@ const EVALUATION_WARNING_KEYS: Record<string, I18nKey> = {
   unsupported_outlook_msg: "evaluation.ingestionQuality.warning.unsupportedOutlookMsg",
   unsupported_tiff_image: "evaluation.ingestionQuality.warning.unsupportedTiffImage",
   unsupported_legacy_office_binary: "evaluation.ingestionQuality.warning.unsupportedLegacyOffice",
+  unsupported_macro_enabled_office: "evaluation.ingestionQuality.warning.unsupportedMacroOffice",
 };
 
 export function parserProfileKey(profile: string): I18nKey {

@@ -744,3 +744,39 @@ def test_jsonl_lines_carry_schema_ids_and_sheet_context() -> None:
     ]
     sheet = _records(outcome.derived_bytes).lines[0]
     assert isinstance(sheet, SheetLine) and sheet.header_row == 2
+
+
+def _as_macro_enabled(data: bytes) -> bytes:
+    """.xlsx をマクロ付きの .xlsm の形（本体の content type と vbaProject.bin）にする（合成）。"""
+    import zipfile
+
+    source = zipfile.ZipFile(io.BytesIO(data))
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            payload = source.read(info.filename)
+            if info.filename == "[Content_Types].xml":
+                payload = payload.replace(
+                    b"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
+                    b"application/vnd.ms-excel.sheet.macroEnabled.main+xml",
+                )
+                assert b"macroEnabled" in payload
+            target.writestr(info, payload)
+        target.writestr("xl/vbaProject.bin", b"synthetic-macro")
+    return buffer.getvalue()
+
+
+def test_macro_enabled_workbook_is_read_without_macros() -> None:
+    # .xlsm も .xlsx と同じく読み、マクロ（vbaProject.bin）は読まない・実行しない（#2470）。
+    data = _as_macro_enabled(_xlsx_bytes({"一覧": [["名前", "値"], ["行 A", 1]]}))
+    outcome = convert(
+        data,
+        "application/vnd.ms-excel.sheet.macroEnabled.12",
+        "excel_to_jsonl",
+        SimpleNamespace(extension=".xlsm"),  # type: ignore[arg-type]
+    )
+    assert outcome.converted is True
+    assert outcome.derived_content_type == STRUCTURED_RECORDS_CONTENT_TYPE
+    assert b"synthetic-macro" not in (outcome.derived_bytes or b"")
+    loaded = _loaded(outcome.derived_bytes)
+    assert loaded["sheets"][0]["blocks"][0]["values"] == {"名前": "行 A", "値": "1"}

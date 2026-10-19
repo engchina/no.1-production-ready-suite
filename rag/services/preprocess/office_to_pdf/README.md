@@ -1,7 +1,12 @@
 # preprocess-office-to-pdf
 
-parse の **前** に Office 文書(docx/pptx/xlsx/odt 等)を LibreOffice headless で PDF へ
-変換する前処理マイクロサービス。
+parse の **前** に Word・PowerPoint の文書(.doc/.docx/.docm/.ppt/.pptx/.pptm/.odt/.odp/.rtf)を
+LibreOffice headless で PDF へ変換する前処理マイクロサービス。
+
+- Excel(.xls/.xlsx/.xlsm/.ods)は変換しない(`office_to_pdf_spreadsheet_not_supported`)。Excel は前処理
+  `excel_to_jsonl` で読む(#2470)。
+- マクロは実行しない。変換ごとに一時ディレクトリに LibreOffice の利用者のプロファイルを作り、マクロの実行を
+  無効にする(`MacroSecurityLevel=3`・`DisableMacrosExecution=true`)。一時ディレクトリは変換の後に消す。
 
 - 出力契約: `rag_parser_core` の `ConvertResponse`(`POST /convert`)
 - readiness: `GET /health`(LibreOffice 導入状況)

@@ -6,10 +6,10 @@ parse の **前** に原本を一度だけ canonical な中間物へ変換する
 
 | サービス | profile | 画面の名前 | 変換 | 主依存 | 既定 URL |
 |---|---|---|---|---|---|
-| [office_to_pdf](./office_to_pdf) | `office_to_pdf` | Office→PDF | Office → PDF | LibreOffice | `http://127.0.0.1:18010` |
+| [office_to_pdf](./office_to_pdf) | `office_to_pdf` | Office→PDF | Word・PowerPoint(.doc/.docx/.docm/.ppt/.pptx/.pptm)→ PDF。Excel は対象外 | LibreOffice | `http://127.0.0.1:18010` |
 | [pdf_to_page_images](./pdf_to_page_images) | `pdf_to_page_images` | PDF を画像として読み直す | PDF → ページを画像にした PDF(文字は後段で OCR / Vision が読み直す) | PyMuPDF | `http://127.0.0.1:18011` |
 | [csv_to_jsonl](./csv_to_jsonl) | `csv_to_jsonl` | CSV→JSONL | CSV → 構造化レコード JSONL | (純 Python) | `http://127.0.0.1:18012` |
-| [excel_to_jsonl](./excel_to_jsonl) | `excel_to_jsonl` | Excel→JSONL | Excel(.xls/.xlsx) → 構造化レコード JSONL | openpyxl + xlrd | `http://127.0.0.1:18013` |
+| [excel_to_jsonl](./excel_to_jsonl) | `excel_to_jsonl` | Excel→JSONL | Excel(.xls/.xlsx/.xlsm) → 構造化レコード JSONL | openpyxl + xlrd | `http://127.0.0.1:18013` |
 | [pii_redact](./pii_redact) | `pii_redact` | PIIマスク | テキスト → PII マスク済みテキスト | Presidio + 日本語 NER | `http://127.0.0.1:18016` |
 
 画面の名前と説明は `rag/frontend/src/lib/i18n.ts` の `settings.preprocess.profile.*` が正本。

@@ -590,3 +590,47 @@ test("Docling で解析できない形式は、アップロードの結果で案
   await expect(page.getByRole("link", { name: "memo.txt の文書詳細を開く" })).toBeVisible();
   await expectNoPageOverflow(page);
 });
+
+// 旧形式・マクロ付きの Office は原本のままでは解析しない。アップロードはでき、結果で「ファイル準備で
+// 変換を選ぶ」ように案内する（#2470）。desktop / mobile（375px）は project で両方実行する。
+test("マクロ付きの Office はアップロードでき、ファイル準備の変換を案内する", async ({ page }, testInfo) => {
+  await mockLocalAuth(page);
+  await mockUploadPage(page);
+  await page.route("**/api/documents/batch-upload", async (route) => {
+    await route.fulfill({
+      json: apiEnvelope({
+        items: [
+          {
+            ...uploadResult("macro.docm"),
+            parser_notice: {
+              code: "office_conversion_required",
+              backend: "docling",
+              file_format: ".docm",
+              suggested_backend: null,
+              message: "変換を選んでから取り込んでください。",
+            },
+          },
+          uploadResult("policy.txt"),
+        ],
+        failed_items: [],
+        total_count: 2,
+        uploaded_count: 2,
+        failed_count: 0,
+        queued_count: 0,
+        skipped_count: 0,
+      }),
+    });
+  });
+
+  await page.goto("/upload");
+  await page.locator('input[type="file"]').setInputFiles([textFile("macro.docm", 6), textFile("policy.txt", 6)]);
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
+
+  await expect(page.getByRole("heading", { name: "アップロード結果" })).toBeVisible();
+  await expect(
+    page.getByText("原本のままでは解析できない形式です（処理レシピのファイル準備で変換を選択）")
+  ).toHaveCount(1);
+  await expect(page.getByText("既定の Docling では解析できない形式です", { exact: false })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("office-conversion-notice.png"), fullPage: true });
+  await expectNoPageOverflow(page);
+});

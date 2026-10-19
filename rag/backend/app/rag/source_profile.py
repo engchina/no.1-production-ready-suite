@@ -76,10 +76,13 @@ AUDIO_EXTENSIONS = {
 OFFICE_EXTENSIONS = {
     ".doc",
     ".docx",
+    ".docm",
     ".ppt",
     ".pptx",
+    ".pptm",
     ".xls",
     ".xlsx",
+    ".xlsm",
 }
 
 LEGACY_OFFICE_EXTENSIONS = {
@@ -92,6 +95,20 @@ LEGACY_OFFICE_MEDIA_TYPES = {
     "application/msword",
     "application/vnd.ms-powerpoint",
     "application/vnd.ms-excel",
+}
+
+# マクロ付きの OpenXML の Office。原本のままでは解析せず、ファイル準備で変換してから読む
+# （マクロは実行しない。旧形式のバイナリと同じ扱い。#2470）。
+MACRO_OFFICE_EXTENSIONS = {
+    ".docm",
+    ".pptm",
+    ".xlsm",
+}
+
+MACRO_OFFICE_MEDIA_TYPES = {
+    "application/vnd.ms-word.document.macroenabled.12",
+    "application/vnd.ms-powerpoint.presentation.macroenabled.12",
+    "application/vnd.ms-excel.sheet.macroenabled.12",
 }
 
 OPENXML_OFFICE_EXTENSIONS = {
@@ -225,6 +242,7 @@ def _source_modality(content_type: str, extension: str | None) -> SourceModality
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "application/vnd.ms-excel",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        *MACRO_OFFICE_MEDIA_TYPES,
     }:
         return SourceModality.OFFICE
     return SourceModality.UNKNOWN
@@ -251,6 +269,8 @@ def _parser_profile(
             return "unsupported_outlook_msg"
         return "local_email_thread"
     if modality == SourceModality.OFFICE:
+        if _is_macro_office(extension=extension, content_type=content_type):
+            return "unsupported_macro_enabled_office"
         if _is_openxml_office(extension=extension, content_type=content_type):
             return "local_office_structure"
         if _is_legacy_office_binary(extension=extension, content_type=content_type):
@@ -276,6 +296,11 @@ def _parser_backend(
             return "unsupported"
         return "local_partition"
     if modality == SourceModality.IMAGE and _is_unsupported_tiff_image(
+        extension=extension,
+        content_type=content_type,
+    ):
+        return "unsupported"
+    if modality == SourceModality.OFFICE and _is_macro_office(
         extension=extension,
         content_type=content_type,
     ):
@@ -317,7 +342,9 @@ def _preview_kind(
             return SourcePreviewKind.UNSUPPORTED
         return SourcePreviewKind.EMAIL
     if modality == SourceModality.OFFICE:
-        if _is_legacy_office_binary(extension=extension, content_type=content_type):
+        if _is_legacy_office_binary(
+            extension=extension, content_type=content_type
+        ) or _is_macro_office(extension=extension, content_type=content_type):
             return SourcePreviewKind.UNSUPPORTED
         return SourcePreviewKind.OFFICE
     return SourcePreviewKind.UNSUPPORTED
@@ -345,6 +372,11 @@ def _unsupported_reason(
         content_type=content_type,
     ):
         return "legacy_office_binary_not_supported"
+    if modality == SourceModality.OFFICE and _is_macro_office(
+        extension=extension,
+        content_type=content_type,
+    ):
+        return "macro_enabled_office_not_supported"
     if modality == SourceModality.AUDIO:
         return "audio_transcription_not_configured"
     if modality == SourceModality.UNKNOWN:
@@ -390,6 +422,11 @@ def _quality_warnings(
         content_type=content_type,
     ):
         warnings.append("unsupported_legacy_office_binary")
+    if modality == SourceModality.OFFICE and _is_macro_office(
+        extension=extension,
+        content_type=content_type,
+    ):
+        warnings.append("unsupported_macro_enabled_office")
     if modality == SourceModality.UNKNOWN:
         warnings.append("unknown_modality")
     return warnings
@@ -426,6 +463,11 @@ def _is_openxml_office(*, extension: str | None, content_type: str) -> bool:
 def _is_legacy_office_binary(*, extension: str | None, content_type: str) -> bool:
     """v1 local parser が扱えない旧バイナリ Office か判定する。"""
     return extension in LEGACY_OFFICE_EXTENSIONS or content_type in LEGACY_OFFICE_MEDIA_TYPES
+
+
+def _is_macro_office(*, extension: str | None, content_type: str) -> bool:
+    """マクロ付きの OpenXML の Office（.docm / .xlsm / .pptm）か判定する。"""
+    return extension in MACRO_OFFICE_EXTENSIONS or content_type in MACRO_OFFICE_MEDIA_TYPES
 
 
 def _is_outlook_msg(*, extension: str | None, content_type: str) -> bool:

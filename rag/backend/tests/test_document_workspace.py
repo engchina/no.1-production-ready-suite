@@ -1841,6 +1841,46 @@ def test_document_ingestion_job_endpoint_skips_unsupported_legacy_office() -> No
     assert detail.json()["data"]["status"] == "UPLOADED"
 
 
+def test_document_ingestion_job_endpoint_runs_legacy_office_with_office_to_pdf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """既定レシピのファイル準備が変換できる(Office→PDF)なら、旧形式を飛ばさない(#2470)。"""
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_preprocess_enabled", True)
+    monkeypatch.setattr(settings, "rag_preprocess_profile", "office_to_pdf")
+    document_id = _upload("legacy.doc", b"legacy office", "application/msword")
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs")
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["status"] != "SKIPPED"
+    assert job["skip_reason"] is None
+
+
+def test_document_upload_accepts_macro_enabled_office() -> None:
+    """マクロ付きの Office はアップロードでき、変換が要る形式として案内する(#2470)。"""
+    resp = client.post(
+        "/api/documents/upload",
+        files={
+            "file": (
+                "macro.docm",
+                b"PK\x03\x04macro",
+                "application/vnd.ms-word.document.macroEnabled.12",
+            )
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["ingestion_started"] is False
+    assert body["source_profile"]["modality"] == "office"
+    assert body["source_profile"]["unsupported_reason"] == "macro_enabled_office_not_supported"
+    assert body["parser_notice"]["code"] == "office_conversion_required"
+
+
 def test_drain_queued_ingestion_jobs_runs_persisted_jobs(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:

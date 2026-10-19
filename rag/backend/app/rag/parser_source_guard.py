@@ -14,8 +14,11 @@ worker が parser サービスを呼んだ後で失敗する。アップロー�
 - 形式を変えるファイル準備(passthrough・pii_redact 以外): 変換後の形式が解析エンジンに渡る
   (例: Office→PDF)。ただし構造化レコードの JSONL を作るファイル準備(CSV→JSONL・Excel→JSONL)は、
   構造化レコード JSONL 以外の解析エンジンでは読めないため、ここで止める(#2457)。
-- ``source_profile.unsupported_reason`` がある形式(TIFF・旧 Office・Outlook .msg・音声など): 既存の
-  「非対応形式」として別に止まる。
+- ``source_profile.unsupported_reason`` がある形式(TIFF・Outlook .msg・音声など): 既存の
+  「非対応形式」として別に止まる。ただし旧形式の Office(.doc / .xls / .ppt)とマクロ付きの Office
+  (.docm / .xlsm / .pptm)は、原本のままでは解析しないが、ファイル準備で変換できる(#2470)。
+  変換できるファイル準備を選んでいれば変換後の形式で判定を続け、選んでいなければ「ファイル準備で
+  変換を選ぶ」案内で止める(`office_conversion_formats`)。
 - 削除済み・未知の解析エンジン: 取込時に ``engine_removed`` として止まる。
 """
 
@@ -46,6 +49,40 @@ _FORMAT_PRESERVING_PREPROCESS = frozenset({"passthrough", "pii_redact"})
 STRUCTURED_RECORDS_PREPROCESS = frozenset({"csv_to_jsonl", "excel_to_jsonl"})
 # PIIマスクが扱う原本の種類(サービスの判定 `services/preprocess/pii_redact` と同じ)。
 _PII_REDACT_MODALITIES = frozenset({SourceModality.TEXT, SourceModality.HTML})
+# 原本のままでは解析しない Office(旧形式のバイナリ・マクロ付き。source_profile の
+# unsupported_reason)と、それを変換できるファイル準備の対応(#2470)。マクロは実行しない。
+CONVERSION_REQUIRED_OFFICE_REASONS = frozenset(
+    {"legacy_office_binary_not_supported", "macro_enabled_office_not_supported"}
+)
+PREPROCESS_REQUIRED_CODE = "office_conversion_required"
+# 変換が要る Office の品質の warning(変換した派生物の解析では確認事項にしない)。
+_CONVERSION_REQUIRED_WARNINGS = frozenset(
+    {"unsupported_legacy_office_binary", "unsupported_macro_enabled_office"}
+)
+_OFFICE_CONVERSION_FORMATS: dict[str, frozenset[str]] = {
+    "office_to_pdf": frozenset({".doc", ".docm", ".ppt", ".pptm"}),
+    "excel_to_jsonl": frozenset({".xls", ".xlsm"}),
+}
+# Office→PDF は Word・PowerPoint だけを変換する。表計算は Excel→JSONL で読む(#2470)。
+OFFICE_TO_PDF_SPREADSHEET_CODE = "office_to_pdf_spreadsheet_not_supported"
+_SPREADSHEET_FORMATS = frozenset({".xls", ".xlsx", ".xlsm", ".ods"})
+_SPREADSHEET_CONTENT_TYPES = frozenset(
+    {
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel.sheet.macroenabled.12",
+    }
+)
+_PREPROCESS_LABELS = {"office_to_pdf": "Office→PDF", "excel_to_jsonl": "Excel→JSONL"}
+# 拡張子の無い原本は content type で形式を決める。
+_OFFICE_FORMAT_BY_CONTENT_TYPE = {
+    "application/msword": ".doc",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.ms-word.document.macroenabled.12": ".docm",
+    "application/vnd.ms-excel.sheet.macroenabled.12": ".xlsm",
+    "application/vnd.ms-powerpoint.presentation.macroenabled.12": ".pptm",
+}
 UNSTRUCTURED_BACKEND = "unstructured"
 UNSTRUCTURED_SERVICE_ID = "parser-unstructured"
 _BACKEND_LABELS = {
@@ -101,6 +138,92 @@ def _supports(backend: str, source_profile: SourceProfile) -> bool:
     )
 
 
+def _office_format(source_profile: SourceProfile) -> str | None:
+    extension = (source_profile.extension or "").casefold()
+    if extension:
+        return extension
+    return _OFFICE_FORMAT_BY_CONTENT_TYPE.get((source_profile.content_type or "").casefold())
+
+
+def is_spreadsheet(source_profile: SourceProfile) -> bool:
+    """表計算(Excel)の原本か。"""
+    return (source_profile.extension or "").casefold() in _SPREADSHEET_FORMATS or (
+        (source_profile.content_type or "").casefold() in _SPREADSHEET_CONTENT_TYPES
+    )
+
+
+def office_to_pdf_spreadsheet_message(source_profile: SourceProfile) -> str:
+    """Office→PDF で表計算を取り込もうとしたときの理由と対処。"""
+    return (
+        f"ファイル準備の「Office→PDF」は Word・PowerPoint だけを変換します"
+        f"({_file_format(source_profile)} は対象外です)。"
+        "Excel は文書レシピのファイル準備で「Excel→JSONL」を選んでください。"
+    )
+
+
+def requires_office_conversion(source_profile: SourceProfile) -> bool:
+    """原本のままでは解析せず、ファイル準備で変換が要る Office か(#2470)。"""
+    return source_profile.unsupported_reason in CONVERSION_REQUIRED_OFFICE_REASONS
+
+
+def preprocess_converts_source(preprocess_profile: str, source_profile: SourceProfile) -> bool:
+    """選んだファイル準備が、変換の要る Office(旧形式・マクロ付き)を変換できるか(#2470)。"""
+    if not requires_office_conversion(source_profile):
+        return False
+    office_format = _office_format(source_profile)
+    return office_format in _OFFICE_CONVERSION_FORMATS.get(preprocess_profile, frozenset())
+
+
+def settings_convert_source(settings: Settings, source_profile: SourceProfile) -> bool:
+    """設定(文書レシピの実効設定)のファイル準備が、変換の要る Office を変換できるか。"""
+    return preprocess_converts_source(resolve_preprocess_profile(settings), source_profile)
+
+
+def office_conversion_preprocess_labels(source_profile: SourceProfile) -> list[str]:
+    """変換の要る Office を変換できるファイル準備の表示名(画面の並び)。"""
+    office_format = _office_format(source_profile)
+    return [
+        _PREPROCESS_LABELS[name]
+        for name, formats in _OFFICE_CONVERSION_FORMATS.items()
+        if office_format in formats
+    ]
+
+
+def office_conversion_required_message(source_profile: SourceProfile) -> str:
+    """変換の要る Office をそのまま取り込もうとしたときの理由と対処。"""
+    labels = office_conversion_preprocess_labels(source_profile) or ["Office→PDF"]
+    return (
+        f"{_file_format(source_profile)} は原本のままでは解析できません"
+        "(旧形式の Office・マクロ付きの Office)。"
+        f"文書レシピのファイル準備で「{'」か「'.join(labels)}」を選んでから取り込んでください"
+        "(マクロは実行しません)。"
+    )
+
+
+def converted_source_profile(
+    source_profile: SourceProfile | None, *, converted: bool
+) -> SourceProfile | None:
+    """ファイル準備で変換した派生物を解析するときの source profile(#2470)。
+
+    旧形式・マクロ付きの Office の ``unsupported_reason`` は原本の形式の理由なので、変換した
+    派生物(PDF・JSONL)の解析では止める理由にしない。変換しなかったときは原本のまま返す。
+    """
+    if source_profile is None or not converted or not requires_office_conversion(source_profile):
+        return source_profile
+    warnings = [
+        warning
+        for warning in source_profile.quality_warnings
+        if warning not in _CONVERSION_REQUIRED_WARNINGS
+    ]
+    return source_profile.model_copy(
+        update={
+            "unsupported_reason": None,
+            "quality_warnings": warnings,
+            "quality_status": "warning" if warnings else "ready",
+        }
+    )
+
+
 def parser_source_block(
     settings: Settings,
     source_profile: SourceProfile,
@@ -112,9 +235,26 @@ def parser_source_block(
     ``unstructured_service_status`` はサービス管理の状態(``app.services.status``)。
     渡すと、Unstructured の案内に「未配備」「停止中」を添える。
     """
-    if source_profile.unsupported_reason:
-        return None
     preprocess_profile = resolve_preprocess_profile(settings)
+    if preprocess_profile == "office_to_pdf" and is_spreadsheet(source_profile):
+        return ParserSourceBlock(
+            code=OFFICE_TO_PDF_SPREADSHEET_CODE,
+            backend=effective_parser_backend(settings),
+            file_format=_file_format(source_profile),
+            suggested_backend=None,
+            message=office_to_pdf_spreadsheet_message(source_profile),
+        )
+    if requires_office_conversion(source_profile):
+        if not preprocess_converts_source(preprocess_profile, source_profile):
+            return ParserSourceBlock(
+                code=PREPROCESS_REQUIRED_CODE,
+                backend=effective_parser_backend(settings),
+                file_format=_file_format(source_profile),
+                suggested_backend=None,
+                message=office_conversion_required_message(source_profile),
+            )
+    elif source_profile.unsupported_reason:
+        return None
     if preprocess_profile == "pii_redact" and source_profile.modality not in _PII_REDACT_MODALITIES:
         return ParserSourceBlock(
             code=PREPROCESS_SOURCE_UNSUPPORTED_CODE,
@@ -158,6 +298,7 @@ def parser_source_block(
             backend,
             file_format=file_format,
             office=source_profile.modality == SourceModality.OFFICE,
+            spreadsheet=is_spreadsheet(source_profile),
             suggested_backend=suggested,
             unstructured_service_status=unstructured_service_status,
         ),
@@ -169,6 +310,7 @@ def parser_source_block_message(
     *,
     file_format: str,
     office: bool,
+    spreadsheet: bool = False,
     suggested_backend: str | None,
     unstructured_service_status: str | None,
 ) -> str:
@@ -192,9 +334,15 @@ def parser_source_block_message(
         parts.append(
             "対応形式に変換するか、この文書の「処理レシピ」で別の文書解析エンジンを選んでください。"
         )
-    if office and backend == "docling":
+    if office and spreadsheet:
+        # Office→PDF は Excel を変換しない(#2470)。
         parts.append(
-            "Office 文書は「処理レシピ」の「ファイル準備」で Office→PDF を選ぶと、"
+            "Excel は「処理レシピ」の「ファイル準備」で Excel→JSONL を選ぶと、"
+            "表の行を記録にして構造化レコード JSONL で解析できます。"
+        )
+    elif office and backend == "docling":
+        parts.append(
+            "Word・PowerPoint の文書は「処理レシピ」の「ファイル準備」で Office→PDF を選ぶと、"
             "PDF に変換してから Docling で解析できます。"
         )
     return "".join(part for part in parts if part)

@@ -61,6 +61,7 @@ HIGH_RISK_WARNING_CODES = {
     "unsupported_outlook_msg",
     "unsupported_tiff_image",
     "unsupported_legacy_office_binary",
+    "unsupported_macro_enabled_office",
 }
 
 

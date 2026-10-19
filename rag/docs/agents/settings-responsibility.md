@@ -11,7 +11,7 @@
 
 文書は中身に加えて **1〜3 件の独立した処理レシピ（preprocess / parser / chunking）** を自身のプロパティとして持つ。各レシピは設定、ジョブ、成果物、エラー、工程状態を個別に保持する。
 
-- ファイル準備（preprocess）。
+- ファイル準備（preprocess）。旧形式・マクロ付きの Office（.doc / .ppt / .xls・.docm / .pptm / .xlsm）は原本のままでは解析せず、文書レシピで変換を選んだときだけ取り込む（Word・PowerPoint は Office→PDF、Excel は Excel→JSONL。Office→PDF は Excel を変換しない。マクロは実行しない。判定は `backend/app/rag/parser_source_guard.py`。#2470）。
 - 文書解析（parser / OCR engine）と、図・画像の読み取り（Vision。解析エンジンに関係なく解析の後に backend の共通の段で読み取る。切り替えはレシピだけ）。global の既定エンジンは Docling（PDF と画像だけ）。それ以外の形式は取込前に止めて処理レシピで Unstructured などを選ぶよう案内し、自動では振り分けない（判定は `backend/app/rag/parser_source_guard.py` の 1 か所。Unstructured のサービスは統合 stack の既定で配備する。#1559）。XML ツリー JSON（tag / attr / children の木の JSON。parser-xml-tree-json）も Docling・Unstructured と同じ使用エンジンの 1 つで、選んだときだけ使う（形式で自動には振り分けない。対応しない形の JSON は取込で扱えない旨のエラーにする。サービスは既定で配備し、既定は停止（使うときはサービス管理画面で起動する）。#2042・#2453）。構造化レコード JSONL（前処理 csv_to_jsonl / excel_to_jsonl の成果物。parser-structured-records-jsonl）も同じく選んだときだけ使う使用エンジンで、文書レシピの分割方式「固定分割」と組み合わせると記録の境界で 1 記録 1 chunk になる（解析と分割はどちらも文書レシピの層。#2457）。Docling / Unstructured はこの JSONL を受けず、取込の前に「構造化レコード JSONL を選ぶ」診断で止める（黙って変換しない）。画面でファイル準備に CSV→JSONL・Excel→JSONL を選ぶと、解析エンジンと分割（固定分割符・既定の分割符 `<<<JSONL_RECORD_BOUNDARY>>>`）を見える上書きとして入れて保存する（実行時に隠れて切り替えない）。
 - 文書分割（chunking strategy、chunk size、overlap、parent-child）。
 - 索引構築（vector index build、GraphRAG、navigation summary、field extraction）。

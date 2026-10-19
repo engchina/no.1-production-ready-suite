@@ -1519,7 +1519,7 @@ export const ja = {
     "原本をそのまま解析します。既定の方式です。",
   "settings.preprocess.profile.office_to_pdf": "Office→PDF",
   "settings.preprocess.profile.office_to_pdf.description":
-    "Word・Excel・PowerPoint などの Office 文書を PDF にしてから解析します。PDF にした文書はブラウザーでプレビューできます。",
+    "Word・PowerPoint の文書(旧形式の .doc・.ppt、マクロ付きの .docm・.pptm を含む)を PDF にしてから解析します。マクロは実行しません。PDF にした文書はブラウザーでプレビューできます。Excel は「Excel→JSONL」を使います。",
   "settings.preprocess.profile.pdf_to_page_images": "PDF を画像として読み直す",
   "settings.preprocess.profile.pdf_to_page_images.description":
     "PDF の各ページを画像にして、画像から文字を読み取り直します。文字化けする PDF や、文字を選択・コピーできない PDF に使います。",
@@ -1528,7 +1528,7 @@ export const ja = {
     "CSV の 1 行を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。元の行の位置を保ちます。文書解析は「構造化レコード JSONL」を使います。",
   "settings.preprocess.profile.excel_to_jsonl": "Excel→JSONL",
   "settings.preprocess.profile.excel_to_jsonl.description":
-    "Excel ファイル(.xls・.xlsx)の表の 1 行(手順は 1 手順)を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。シート・行・セル範囲を保ちます。文書解析は「構造化レコード JSONL」を使います。",
+    "Excel ファイル(.xls・.xlsx・マクロ付きの .xlsm)の表の 1 行(手順は 1 手順)を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。マクロは実行しません。シート・行・セル範囲を保ちます。文書解析は「構造化レコード JSONL」を使います。",
   "settings.preprocess.profile.pii_redact": "PIIマスク",
   "settings.preprocess.profile.pii_redact.description":
     "テキストの氏名・メールアドレス・電話番号などの個人情報(PII)をマスクしてから解析します。",
@@ -2590,6 +2590,8 @@ export const ja = {
   "upload.result.nextHint":
     "取込（ファイル準備・文書解析・文書分割・索引）は、文書インデックスか各文書の詳細から始めます。",
   "upload.parserNotice.short": "既定の Docling では解析できない形式です（処理レシピで Unstructured を選択）",
+  "upload.parserNotice.officeConversion":
+    "原本のままでは解析できない形式です（処理レシピのファイル準備で変換を選択）",
   "upload.job.status.QUEUED": "待機中",
   "upload.job.status.RUNNING": "実行中",
   "upload.job.status.SUCCEEDED": "完了",
@@ -2657,7 +2659,8 @@ export const ja = {
   "sourceProfile.parser.audio": "音声未対応",
   "sourceProfile.parser.outlookMsg": "Outlook MSG 未対応",
   "sourceProfile.parser.tiffImage": "TIFF 画像未対応",
-  "sourceProfile.parser.legacyOffice": "旧 Office 未対応",
+  "sourceProfile.parser.legacyOffice": "旧 Office(要変換)",
+  "sourceProfile.parser.macroOffice": "マクロ付き Office(要変換)",
   "sourceProfile.parser.generic": "汎用解析",
   "sourceProfile.warning.duplicate": "同一内容の文書が既に登録されています。",
   "sourceProfile.warning.contentTypeMissing": "MIME type が未確定です。拡張子と原本を確認してください。",
@@ -2671,7 +2674,9 @@ export const ja = {
   "sourceProfile.warning.unsupportedTiffImage":
     "TIFF 画像は現在の取込対象外です。PNG/JPEG/WEBP へ変換してください。",
   "sourceProfile.warning.unsupportedLegacyOffice":
-    "旧形式の Office バイナリ文書は現在の取込対象外です。DOCX/PPTX/XLSX へ変換してください。",
+    "旧形式の Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Excel は「Excel→JSONL」。マクロは実行しません)。",
+  "sourceProfile.warning.unsupportedMacroOffice":
+    "マクロ付きの Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Excel は「Excel→JSONL」。マクロは実行しません)。",
   "sourceProfile.warning.parserFallback": "一部の解析で fallback が使われました。",
   "sourceProfile.warning.officeFallback": "Office のローカル解析に失敗したため fallback します。",
   "sourceProfile.warning.officeSegmentFailed": "Office の一部 segment 解析に失敗しました。",
@@ -2686,7 +2691,9 @@ export const ja = {
   "sourceProfile.unsupported.tiffImageNotSupported":
     "TIFF 画像は現在未対応です。PNG/JPEG/WEBP へ変換してください。",
   "sourceProfile.unsupported.legacyOfficeNotSupported":
-    "旧形式の Office バイナリ文書は現在未対応です。DOCX/PPTX/XLSX へ変換してください。",
+    "旧形式の Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Excel は「Excel→JSONL」。マクロは実行しません)。",
+  "sourceProfile.unsupported.macroOfficeNotSupported":
+    "マクロ付きの Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Excel は「Excel→JSONL」。マクロは実行しません)。",
   "sourceProfile.unsupported.unknownFileType": "対応する parser を判定できないファイル形式です。",
 
   "flow.jobs.title": "工程ごとの実行状況",
@@ -4097,7 +4104,8 @@ export const ja = {
   "evaluation.ingestionQuality.warning.unsupportedAudio": "音声未対応",
   "evaluation.ingestionQuality.warning.unsupportedOutlookMsg": "Outlook MSG 未対応",
   "evaluation.ingestionQuality.warning.unsupportedTiffImage": "TIFF 画像未対応",
-  "evaluation.ingestionQuality.warning.unsupportedLegacyOffice": "旧 Office 未対応",
+  "evaluation.ingestionQuality.warning.unsupportedLegacyOffice": "旧 Office(要変換)",
+  "evaluation.ingestionQuality.warning.unsupportedMacroOffice": "マクロ付き Office(要変換)",
   "evaluation.ingestionQuality.parser.legacy": "旧形式",
   "evaluation.thresholdFailures": "閾値未達",
   "evaluation.cases": "ケース別結果",

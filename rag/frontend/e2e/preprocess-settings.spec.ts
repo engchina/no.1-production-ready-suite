@@ -27,11 +27,11 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /原本をそのまま解析/ })).toBeVisible();
     // text_normalize は廃止(in-process 正規化撤去)。radio として出ないことを確認する。
     await expect(page.getByRole("radio", { name: /文字コード→UTF-8/ })).toHaveCount(0);
-    await expect(page.getByRole("radio", { name: /Office 文書を PDF にしてから解析/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Word・PowerPoint の文書.*PDF にしてから解析/ })).toBeVisible();
     // CSV→JSONL・Excel→JSONL の順で、使う解析エンジンも説明に出す（#2457）。
     await expect(page.getByRole("radio", { name: /CSV→JSONL.*CSV の 1 行を/ })).toBeVisible();
     await expect(
-      page.getByRole("radio", { name: /Excel→JSONL.*Excel ファイル\(\.xls・\.xlsx\)/ })
+      page.getByRole("radio", { name: /Excel→JSONL.*Excel ファイル\(\.xls・\.xlsx・マクロ付きの \.xlsm\)/ })
     ).toBeVisible();
     await expect(page.getByRole("radio", { name: /CSV→JSONL.*構造化レコード JSONL/ })).toBeVisible();
     // 名前と説明で、どの文書に使うかが分かる(#563)。実装の言葉(ラスタライズ・canonical な中間物 等)は出さない(保存先の値 artifacts/canonical は除く)。
@@ -84,7 +84,7 @@ test("前処理設定はファイル準備方式を保存できる", async ({ pa
 
   await page.goto("/settings/preprocess");
 
-  const office = page.getByRole("radio", { name: /Office 文書を PDF にしてから解析/ });
+  const office = page.getByRole("radio", { name: /Word・PowerPoint の文書.*PDF にしてから解析/ });
   await office.click();
   await expect(office).toBeChecked();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
@@ -107,7 +107,7 @@ test("ファイル準備方式のカードは矢印キーで選択が移り、Ta
   await page.goto("/settings/preprocess");
 
   const passthrough = page.getByRole("radio", { name: /原本をそのまま解析/ });
-  const office = page.getByRole("radio", { name: /Office 文書を PDF にしてから解析/ });
+  const office = page.getByRole("radio", { name: /Word・PowerPoint の文書.*PDF にしてから解析/ });
   await expect(passthrough).toBeChecked();
   await passthrough.focus();
   await page.keyboard.press("ArrowRight");
@@ -199,7 +199,7 @@ for (const viewport of [
     });
     await page.goto("/settings/preprocess");
 
-    const office = page.getByRole("radio", { name: /Office 文書を PDF にしてから解析/ });
+    const office = page.getByRole("radio", { name: /Word・PowerPoint の文書.*PDF にしてから解析/ });
     await office.click();
     const actions = page.getByRole("group", { name: "ファイル準備の設定の操作" });
     const saveButton = actions.getByRole("button", { name: "保存" });

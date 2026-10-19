@@ -66,14 +66,14 @@ test("security create forms bind server field errors without parsing Japanese st
   assert.doesNotMatch(roles, /このロールコードは既に使用されています/u);
 });
 
-test("danger toast is durable through the shared default (messaging §3.1)", () => {
-  // danger の Toast は共有 UI の既定（duration: 0）で利用者が閉じるまで残る（#351）。
+test("danger toast uses the shared default duration (messaging §3.1)", () => {
+  // danger の Toast は共有 UI の既定（8 秒。ホバー・フォーカス中は止まる）で消える（#351・#2470）。
   // 製品側で自動消滅の時間を上書きしない。
   const storeSource = readFileSync(
     new URL("../../../platform/packages/ui/src/store/toast-store.ts", import.meta.url),
     "utf8"
   );
-  assert.match(storeSource, /danger: 0,/u);
+  assert.match(storeSource, /danger: 8000,/u);
   const timedDangerCalls = sources.flatMap(({ path, source }) =>
     /toast\.error\([^;]*duration\s*:/u.test(source) ? [path] : []
   );

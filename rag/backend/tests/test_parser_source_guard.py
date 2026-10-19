@@ -187,6 +187,106 @@ def test_office_message_mentions_office_to_pdf() -> None:
     assert "「ファイル準備」で Office→PDF" in block.message
 
 
+_WORD = "application/msword"
+_PPT = "application/vnd.ms-powerpoint"
+_XLS = "application/vnd.ms-excel"
+_DOCM = "application/vnd.ms-word.document.macroEnabled.12"
+_PPTM = "application/vnd.ms-powerpoint.presentation.macroEnabled.12"
+_XLSM = "application/vnd.ms-excel.sheet.macroEnabled.12"
+
+
+def _preprocess(profile: str, **update: Any) -> Settings:
+    return get_settings().model_copy(
+        update={"rag_preprocess_enabled": True, "rag_preprocess_profile": profile, **update}
+    )
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type", "reason"),
+    [
+        ("old.doc", _WORD, "legacy_office_binary_not_supported"),
+        ("old.ppt", _PPT, "legacy_office_binary_not_supported"),
+        ("old.xls", _XLS, "legacy_office_binary_not_supported"),
+        ("macro.docm", _DOCM, "macro_enabled_office_not_supported"),
+        ("macro.pptm", _PPTM, "macro_enabled_office_not_supported"),
+        ("macro.xlsm", _XLSM, "macro_enabled_office_not_supported"),
+    ],
+)
+def test_office_needing_conversion_is_blocked_without_converting_preprocess(
+    file_name: str, content_type: str, reason: str
+) -> None:
+    """旧形式・マクロ付きの Office は、変換を選ばなければ案内で止める(#2470)。"""
+    profile = _profile(file_name, content_type)
+    assert profile.modality == "office"
+    assert profile.unsupported_reason == reason
+    block = parser_source_block(get_settings(), profile)
+    assert block is not None
+    assert block.code == "office_conversion_required"
+    assert "原本のままでは解析できません" in block.message
+    assert "マクロは実行しません" in block.message
+    expected = "Excel→JSONL" if file_name.endswith(("xls", "xlsm")) else "Office→PDF"
+    assert f"「{expected}」" in block.message
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [("old.doc", _WORD), ("old.ppt", _PPT), ("macro.docm", _DOCM), ("macro.pptm", _PPTM)],
+)
+def test_office_to_pdf_converts_word_and_powerpoint(file_name: str, content_type: str) -> None:
+    profile = _profile(file_name, content_type)
+    assert parser_source_guard.settings_convert_source(_preprocess("office_to_pdf"), profile)
+    assert parser_source_block(_preprocess("office_to_pdf"), profile) is None
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [
+        ("old.xls", _XLS),
+        ("macro.xlsm", _XLSM),
+        ("sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    ],
+)
+def test_office_to_pdf_does_not_convert_excel(file_name: str, content_type: str) -> None:
+    """Office→PDF は Excel を変換しない。Excel→JSONL を選ぶよう案内する(#2470)。"""
+    profile = _profile(file_name, content_type)
+    block = parser_source_block(_preprocess("office_to_pdf"), profile)
+    assert block is not None
+    assert block.code == "office_to_pdf_spreadsheet_not_supported"
+    assert "Word・PowerPoint だけ" in block.message
+    assert "「Excel→JSONL」" in block.message
+    jsonl = _preprocess("excel_to_jsonl", rag_parser_adapter_backend="structured_records_jsonl")
+    assert parser_source_block(jsonl, profile) is None
+
+
+def test_excel_to_jsonl_does_not_convert_word() -> None:
+    profile = _profile("old.doc", _WORD)
+    jsonl = _preprocess("excel_to_jsonl", rag_parser_adapter_backend="structured_records_jsonl")
+    block = parser_source_block(jsonl, profile)
+    assert block is not None and block.code == "office_conversion_required"
+
+
+def test_converted_source_profile_drops_original_format_reason() -> None:
+    profile = _profile("old.doc", _WORD)
+    converted = parser_source_guard.converted_source_profile(profile, converted=True)
+    assert converted is not None
+    assert converted.unsupported_reason is None
+    assert "unsupported_legacy_office_binary" not in converted.quality_warnings
+    # 変換しなかったときは原本の理由のまま止める。
+    assert parser_source_guard.converted_source_profile(profile, converted=False) is profile
+    tiff = _profile("scan.tiff", "image/tiff")
+    assert parser_source_guard.converted_source_profile(tiff, converted=True) is tiff
+
+
+def test_xlsx_docling_message_suggests_excel_to_jsonl() -> None:
+    block = parser_source_block(
+        get_settings(),
+        _profile("sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    )
+    assert block is not None
+    assert "Excel→JSONL" in block.message
+    assert "Office→PDF" not in block.message
+
+
 def test_formats_already_marked_unsupported_are_left_to_existing_check() -> None:
     """Outlook .msg・TIFF などは既存の「非対応形式」として別に止まる。"""
     msg = _profile("mail.msg", "application/vnd.ms-outlook")

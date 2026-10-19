@@ -276,6 +276,41 @@ def test_partition_source_uses_structured_records_service_when_selected(
     pipeline._raise_if_selected_parser_was_not_used(result)
 
 
+def test_converted_legacy_excel_is_parsed_not_stopped_by_original_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """旧形式の .xls を Excel→JSONL で変換したら、派生物を原本の形式で止めない(#2470)。"""
+    from app.rag.parser_source_guard import converted_source_profile
+    from app.rag.source_profile import build_source_profile
+
+    called: list[str] = []
+    _patch_runner(monkeypatch, called)
+    pipeline = _pipeline(_settings(rag_parser_adapter_backend=BACKEND))
+    original = build_source_profile(
+        original_file_name="old.xls",
+        sanitized_file_name="old.xls",
+        content_type="application/vnd.ms-excel",
+        file_size_bytes=16,
+        content_sha256="a" * 64,
+    )
+    assert original.unsupported_reason == "legacy_office_binary_not_supported"
+    stopped = pipeline._partition_source(
+        parse_bytes=_jsonl("A"),
+        source_profile=original,
+        content_type=STRUCTURED_RECORDS_CONTENT_TYPE,
+    )
+    assert stopped.unsupported_reason == "legacy_office_binary_not_supported"
+    assert called == []
+    result = pipeline._partition_source(
+        parse_bytes=_jsonl("A", "B"),
+        source_profile=converted_source_profile(original, converted=True),
+        content_type=STRUCTURED_RECORDS_CONTENT_TYPE,
+    )
+    assert called == [BACKEND]
+    assert result.unsupported_reason is None
+    assert result.extraction is not None
+
+
 def test_invalid_jsonl_with_structured_records_engine_stops_with_clear_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

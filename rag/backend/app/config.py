@@ -734,6 +734,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             "application/vnd.ms-excel",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            # マクロ付きの Office(ファイル準備で変換してから読む。マクロは実行しない。#2470)。
+            "application/vnd.ms-word.document.macroEnabled.12",
+            "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
+            "application/vnd.ms-excel.sheet.macroEnabled.12",
             "audio/aac",
             "audio/flac",
             "audio/mp3",
@@ -2015,9 +2019,11 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default="passthrough",
         description=(
             "parse の前に原本を一度だけ canonical な中間物へ変換する前処理プリセット。"
-            "passthrough(既定)は変換せず現行挙動と一致。office_to_pdf は Office→PDF、"
+            "passthrough(既定)は変換せず現行挙動と一致。office_to_pdf は Word・PowerPoint→PDF"
+            "(.doc/.docm/.ppt/.pptm を含む。Excel は対象外)、"
             "pdf_to_page_images は PDF→ページ画像、csv_to_jsonl は CSV→構造化 JSON、"
-            "excel_to_jsonl は Excel(.xls/.xlsx)→構造化 JSON、pii_redact は取込時の PII マスク"
+            "excel_to_jsonl は Excel(.xls/.xlsx/.xlsm)→構造化 JSON、"
+            "pii_redact は取込時の PII マスク"
             "(Presidio + 日本語 NER、外部 SaaS 非使用)"
             "(いずれも各々独立した前処理マイクロサービス)。"
         ),
@@ -2032,7 +2038,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     )
     rag_preprocess_office_to_pdf_service_url: str = Field(
         default="http://127.0.0.1:18010",
-        description="Office→PDF 前処理マイクロサービスの base URL。",
+        description="Office→PDF(Word・PowerPoint)前処理マイクロサービスの base URL。",
     )
     rag_preprocess_pdf_to_page_images_service_url: str = Field(
         default="http://127.0.0.1:18011",

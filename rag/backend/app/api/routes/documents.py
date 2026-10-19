@@ -97,7 +97,7 @@ from app.rag.layer_fingerprint import (
     recorded_layer_fingerprint,
 )
 from app.rag.navigation import build_navigation_tree
-from app.rag.parser_source_guard import check_parser_source
+from app.rag.parser_source_guard import check_parser_source, settings_convert_source
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
 from app.rag.section_map_service import refresh_document_section_map
@@ -3876,7 +3876,14 @@ async def _enqueue_ingestion_job_for_document(
             skip_reason="duplicate_content",
             phase=phase,
         )
-    if source_profile.unsupported_reason and not force:
+    recipe_settings = await _default_recipe_settings(oracle, document_id)
+    # 旧形式・マクロ付きの Office は、既定レシピのファイル準備が変換できる(Office→PDF など)なら
+    # 原本の形式で飛ばさない(#2470)。
+    if (
+        source_profile.unsupported_reason
+        and not force
+        and not settings_convert_source(recipe_settings, source_profile)
+    ):
         return await _create_ingestion_job_record(
             oracle=oracle,
             document_id=document_id,
@@ -3891,11 +3898,7 @@ async def _enqueue_ingestion_job_for_document(
     if phase == IngestionJobPhase.INDEX:
         return await _enqueue_index_phase_job_for_document(document_id, force=force)
     # 既定レシピの解析エンジン(既定は Docling)で扱えない形式は、出力を初期化する前に止める(#286)。
-    await _raise_if_parser_source_blocked(
-        await _default_recipe_settings(oracle, document_id),
-        source_profile,
-        phase,
-    )
+    await _raise_if_parser_source_blocked(recipe_settings, source_profile, phase)
     if detail.status == FileStatus.INDEXED and not force:
         return await _create_ingestion_job_record(
             oracle=oracle,
