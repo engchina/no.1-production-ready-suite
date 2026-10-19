@@ -36,6 +36,7 @@ from pr_system_settings.chat_attachments.limits import (
     CHAT_ATTACHMENT_DEFAULT_MAX_BYTES,
     MAX_ZIP_UNCOMPRESSED_BYTES,
 )
+from pr_system_settings.chat_attachments.models import EXCEL_PARSER_VERSION
 from pr_system_settings.chat_attachments.parsing import (
     WARNING_MACROS_NOT_EXECUTED,
     WARNING_PDF_PAGE_WITHOUT_TEXT,
@@ -174,7 +175,14 @@ def test_parse_xlsx_rows_with_column_names() -> None:
     sheet = parsed.sheets[0]
     assert sheet.sheet == "一覧"
     assert sheet.columns == ["コード", "名前", "金額"]
-    assert sheet.rows == [["A-1", "品目甲", 1200], ["A-2", "品目乙", 3400.5]]
+    # 値は Excel の表示の文字列（RAG の取込と同じ読み方。#2544）。行には元の行番号・セル範囲。
+    assert sheet.rows == [["A-1", "品目甲", "1200"], ["A-2", "品目乙", "3400.5"]]
+    assert [(item.row_start, item.cell_range) for item in sheet.locations or []] == [
+        (3, "A3:C3"),
+        (5, "A5:C5"),
+    ]
+    assert (sheet.layout, sheet.source_sheet) == ("table", "一覧")
+    assert parsed.parser_version == EXCEL_PARSER_VERSION
 
 
 def test_parse_csv_names_blank_and_duplicate_columns() -> None:
@@ -414,7 +422,13 @@ def test_list_tool_returns_outline_without_bodies() -> None:
         "characters": len("第一の見出し\n見出しの下の本文 A\n項目: 甲 / 値: 10"),
     }
     assert by_id[sheet_id]["sheets"] == [
-        {"sheet": "一覧", "columns": ["コード", "名前", "金額"], "row_count": 2}
+        {
+            "sheet": "一覧",
+            "columns": ["コード", "名前", "金額"],
+            "row_count": 2,
+            "layout": "table",
+            "source_sheet": "一覧",
+        }
     ]
     assert "text" not in str(result)
     assert (
@@ -443,7 +457,13 @@ def test_read_rows_returns_column_value_pairs() -> None:
         {"attachment_id": sheet_id, "sheet": "一覧", "start_row": 2, "limit": 5},
     )
     assert result["rows"] == [
-        {"row_number": 2, "values": {"コード": "A-2", "名前": "品目乙", "金額": 3400.5}}
+        {
+            "row_number": 2,
+            "row_start": 5,
+            "row_end": 5,
+            "cell_range": "A5:C5",
+            "values": {"コード": "A-2", "名前": "品目乙", "金額": "3400.5"},
+        }
     ]
     assert (result["row_count"], result["next_start_row"]) == (2, None)
     first = toolset.call(
@@ -465,6 +485,9 @@ def test_find_matches_sections_and_rows_case_and_width_insensitive() -> None:
             "section_id": None,
             "sheet": "一覧",
             "row_number": 2,
+            "row_start": 5,
+            "row_end": 5,
+            "cell_range": "A5:C5",
             "snippet": "コード: A-2 / 名前: 品目乙 / 金額: 3400.5",
         }
     ]

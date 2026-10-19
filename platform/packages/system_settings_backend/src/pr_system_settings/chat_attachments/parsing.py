@@ -3,13 +3,16 @@
 - 種類は拡張子と先頭の bytes（magic）の両方で決め、合わなければ 415。旧形式の binary
   （`.doc` / `.xls` / `.ppt`）と、ここに無い形式は受けない。
 - PDF（`pypdf`）は 1 頁 = 1 節、Word は見出しの段落で節に分け、PowerPoint は 1 スライド = 1 節。
-- Excel・CSV は「1 行 = 列名 + 値」（最初の空でない行を列名にする）。
+- CSV は「1 行 = 列名 + 値」（最初の空でない行を列名にする）。
+- Excel は platform の共通の読み方（`pr_backend_core.spreadsheet.read_excel`。RAG の取込と同じ。
+  #2544）で読む。表は「1 行 = 列名 + 値」、帳票は「項目・値」の表、手順書と表頭より上の行は節にし、
+  1 シートの複数の表は表ごとのシートにする。行と節には元の行番号・セル範囲を持たせる。
 - Office は zip と XML（`defusedxml`）で読み、マクロ（`vbaProject.bin` など）は読まず実行しない
   （警告 `macros_not_executed`）。展開の合計・部分の大きさ・件数に上限を掛ける（zip bomb）。
 - 画像は製品が渡す読み取りの関数（既定の Vision モデル）で文にする。
 
-RAG の取込の解析（`rag_parser_core`・前処理のサービス）は使わない（製品同士は依存しない。
-Issue #2517「依存の向き」）。
+製品の解析（RAG の `rag_parser_core`・前処理のサービス）は使わない（製品同士は依存しない。
+Issue #2517「依存の向き」）。Excel は platform の共通の読み方を使う。
 """
 
 from __future__ import annotations
@@ -42,7 +45,15 @@ from .limits import (
     MAX_ZIP_UNCOMPRESSED_BYTES,
     TEXT_SECTION_CHARACTERS,
 )
-from .models import CellValue, ChatAttachmentKind, ParsedAttachment, ParsedSection, ParsedSheet
+from .models import (
+    EXCEL_PARSER_VERSION,
+    CellValue,
+    ChatAttachmentKind,
+    ParsedAttachment,
+    ParsedSection,
+    ParsedSheet,
+    SourceLocation,
+)
 
 # 画像を文にする関数（画像の bytes, MIME type → 読み取った文）。製品が既定の Vision モデルで
 # 実装する。
@@ -62,6 +73,10 @@ WARNING_TEXT_TRUNCATED: Final = "text_truncated"
 WARNING_ROWS_TRUNCATED: Final = "rows_truncated"
 WARNING_COLUMNS_TRUNCATED: Final = "columns_truncated"
 WARNING_PAGES_TRUNCATED: Final = "pages_truncated"
+# Excel の読み方の警告・診断（`pr_backend_core.spreadsheet` の code に付ける接頭辞。#2544）。
+WARNING_EXCEL_PREFIX: Final = "excel_"
+# 帳票の「項目・値」の表の列名。
+FORM_COLUMNS: Final = ("項目", "値")
 
 
 @dataclass(frozen=True)
@@ -432,27 +447,152 @@ def _parse_csv(file_name: str, data: bytes) -> ParsedAttachment:
     return ParsedAttachment(sheets=[sheet], warnings=_table_warnings(budget))
 
 
+def _excel_value(value: str | None) -> CellValue:
+    """Excel の表示の文字列を添付のセルの値にする（空は None、長すぎる値は切る）。"""
+    if value is None:
+        return None
+    text = _clean(value)
+    return text[:MAX_CELL_CHARACTERS] if text else None
+
+
+def _unique_sheet_name(name: str, used: set[str]) -> str:
+    candidate = name
+    number = 2
+    while candidate in used:
+        candidate = f"{name}_{number}"
+        number += 1
+    used.add(candidate)
+    return candidate
+
+
+def _excel_sheet_name(records: Any, counts: dict[str, int]) -> str:
+    """添付のシート名（1 シートの複数の表は「シート名（表 N）」）。"""
+    if counts.get(records.name, 0) > 1 and records.table_index is not None:
+        return f"{records.name}（表 {records.table_index}）"
+    return str(records.name)
+
+
+def _excel_warnings(result: Any) -> list[str]:
+    """`read_excel` の警告・診断を、添付の警告（技術の code）にする。重ねない。"""
+    codes: list[str] = []
+    for warning in result.warnings:
+        codes.append(f"{WARNING_EXCEL_PREFIX}{warning}")
+    document = result.document
+    for records in document.sheets if document is not None else []:
+        for diagnostic in records.diagnostics:
+            codes.append(f"{WARNING_EXCEL_PREFIX}{diagnostic.code}")
+    for _skipped in document.skipped_sheets if document is not None else []:
+        codes.append(f"{WARNING_EXCEL_PREFIX}sheet_skipped")
+    return list(dict.fromkeys(codes))
+
+
 def _parse_xlsx(file_name: str, data: bytes) -> ParsedAttachment:
-    from openpyxl import load_workbook  # type: ignore[import-untyped]
+    """Excel を platform の共通の読み方（RAG の取込と同じ）で読む（#2544）。"""
+    from pr_backend_core.spreadsheet import ExcelOptions, read_excel
 
     with _open_office_zip(file_name, data, "excel") as (_archive, warnings):
         pass
-    # keep_vba=False（既定）: マクロを読み込まない。data_only: 数式は保存された値を読む。
-    workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True, keep_vba=False)
+    extension = posixpath.splitext(file_name)[1].lstrip(".").lower() or "xlsx"
+    result = read_excel(data, extension=extension, options=ExcelOptions())
+    document = result.document
+    if document is None:
+        raise _unreadable(file_name, "Excel の表を読み取れませんでした。")
     budget = _TableBudget()
+    counts: dict[str, int] = {}
+    for records in document.sheets:
+        counts[records.name] = counts.get(records.name, 0) + 1
+    used: set[str] = set()
     sheets: list[ParsedSheet] = []
-    try:
-        for worksheet in workbook.worksheets:
-            sheet = _sheet_from_rows(
-                str(worksheet.title), worksheet.iter_rows(values_only=True), budget
+    # 節の（見出し, 本文, 元の場所, シート）。
+    section_items: list[tuple[str, str, SourceLocation, str]] = []
+    for records in document.sheets:
+        name = _unique_sheet_name(_excel_sheet_name(records, counts), used)
+        if records.preamble:
+            first, last = records.preamble[0], records.preamble[-1]
+            start_cell = first.cell_range.split(":")[0]
+            end_cell = last.cell_range.split(":")[-1]
+            section_items.append(
+                (
+                    f"{name} の説明",
+                    "\n".join(row.text for row in records.preamble),
+                    SourceLocation(
+                        row_start=first.row_number,
+                        row_end=last.row_number,
+                        cell_range=f"{start_cell}:{end_cell}",
+                    ),
+                    name,
+                )
             )
-            if sheet is not None:
-                sheets.append(sheet)
-    finally:
-        workbook.close()
-    if not sheets:
+        if records.mode == "procedure":
+            for index, block in enumerate(records.blocks, start=1):
+                title = " / ".join(block.section_path) or f"{name} 手順 {index}"
+                section_items.append(
+                    (
+                        title,
+                        "\n".join(block.lines),
+                        SourceLocation(
+                            row_start=block.row_start,
+                            row_end=block.row_end,
+                            cell_range=block.cell_range,
+                        ),
+                        name,
+                    )
+                )
+            continue
+        if records.mode == "form":
+            columns = list(FORM_COLUMNS)
+            raw_rows = [[block.label, block.value] for block in records.blocks]
+        else:
+            columns = [column.name for column in records.columns][:MAX_TABLE_COLUMNS]
+            if len(records.columns) > MAX_TABLE_COLUMNS:
+                budget.columns_truncated = True
+            raw_rows = [
+                [block.values.get(column) for column in columns] for block in records.blocks
+            ]
+        rows: list[list[CellValue]] = []
+        locations: list[SourceLocation] = []
+        for block, raw in zip(records.blocks, raw_rows, strict=True):
+            if budget.rows_left <= 0:
+                budget.rows_truncated = True
+                break
+            rows.append([_excel_value(value) for value in raw])
+            locations.append(
+                SourceLocation(
+                    row_start=block.row_start,
+                    row_end=block.row_end,
+                    cell_range=block.cell_range,
+                    label_cell=block.label_cell,
+                    value_cell=block.value_cell,
+                )
+            )
+            budget.rows_left -= 1
+        if not rows and not columns:
+            continue
+        sheets.append(
+            ParsedSheet(
+                sheet=name,
+                columns=_column_names([*columns]) if columns else [],
+                rows=rows,
+                locations=locations,
+                layout=records.mode,
+                source_sheet=records.name,
+                region=records.region,
+            )
+        )
+    sections = [
+        ParsedSection(
+            section_id=f"s{index}", title=title, text=text, sheet=sheet_name, location=location
+        )
+        for index, (title, text, location, sheet_name) in enumerate(section_items, start=1)
+    ]
+    if not sheets and not sections:
         raise _unreadable(file_name, "表の行があるシートがありません。")
-    return ParsedAttachment(sheets=sheets, warnings=warnings + _table_warnings(budget))
+    return ParsedAttachment(
+        sections=sections,
+        sheets=sheets,
+        warnings=warnings + _table_warnings(budget) + _excel_warnings(result),
+        parser_version=EXCEL_PARSER_VERSION,
+    )
 
 
 # ---- Office（zip） ----
