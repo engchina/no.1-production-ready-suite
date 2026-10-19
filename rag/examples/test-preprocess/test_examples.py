@@ -50,9 +50,10 @@ import os, json, app.converters as c
 d = open(os.environ["EX"] + "/table.csv", "rb").read()
 o = c.convert(d, "text/csv", "csv_to_json", None)
 assert o.converted, o.warnings
-data = json.loads(o.derived_bytes)
-assert data["row_count"] == 4 and "name" in data["columns"], data
-print("PASS:rows", data["row_count"])
+lines = [json.loads(line) for line in o.derived_bytes.decode().splitlines()]
+rows = [line for line in lines if line["record_type"] == "row"]
+assert len(rows) == 4 and "name" in [f["name"] for f in rows[0]["fields"]], lines
+print("PASS:rows", len(rows))
 """
 
 _XLSX = """
@@ -61,9 +62,10 @@ d = open(os.environ["EX"] + "/table.xlsx", "rb").read()
 o = c.convert(d, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
               "excel_to_json", None)
 assert o.converted, o.warnings
-data = json.loads(o.derived_bytes)
-assert len(data["sheets"]) == 2, data
-print("PASS:sheets", len(data["sheets"]))
+lines = [json.loads(line) for line in o.derived_bytes.decode().splitlines()]
+sheets = [line for line in lines if line["record_type"] == "sheet"]
+assert len(sheets) == 2, lines
+print("PASS:sheets", len(sheets))
 """
 
 _PII = """

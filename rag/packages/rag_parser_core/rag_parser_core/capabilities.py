@@ -14,8 +14,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePath
 
-from rag_parser_core.sheet_records import SHEET_RECORDS_CONTENT_TYPE
 from rag_parser_core.source import SourceModality, SourceProfile
+from rag_parser_core.structured_records import STRUCTURED_RECORDS_CONTENT_TYPE
 
 AUDIO_EXTENSIONS = frozenset({".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"})
 
@@ -152,8 +152,8 @@ def is_audio_source(source_profile: SourceProfile | None, content_type: str) -> 
     )
 
 
-# 前処理の行の記録（excel_to_json）を受け付ける parser のサービス（#1221）。
-SHEET_RECORDS_BACKENDS = frozenset({"docling", "unstructured"})
+# 前処理の構造化レコードの JSONL を受け付ける parser のサービス（#1221・#2457）。
+STRUCTURED_RECORDS_BACKENDS = frozenset({"docling", "unstructured"})
 
 
 def adapter_supports_source(
@@ -171,10 +171,11 @@ def adapter_supports_source(
     )
     if is_audio_source(source_profile, normalized):
         return False
-    if normalized == SHEET_RECORDS_CONTENT_TYPE:
-        # 前処理（excel_to_json）の行の記録は、Docling / Unstructured の parser のサービスが
-        # rag_parser_core で要素にする（外部の parser に渡さない。#1221）。
-        return backend in SHEET_RECORDS_BACKENDS
+    if normalized == STRUCTURED_RECORDS_CONTENT_TYPE:
+        # 前処理（csv_to_json / excel_to_json）の構造化レコードの JSONL は、
+        # Docling / Unstructured の parser のサービスが rag_parser_core で要素にする
+        # （外部の parser に渡さない。#1221・#2457）。
+        return backend in STRUCTURED_RECORDS_BACKENDS
     modality = source_profile.modality if source_profile is not None else SourceModality.UNKNOWN
     return (
         modality in capability.modalities

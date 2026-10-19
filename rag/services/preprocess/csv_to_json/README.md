@@ -1,11 +1,13 @@
 # preprocess-csv-to-json
 
-parse の **前** に CSV 原本を決定論で構造化 JSON(ヘッダ列をキーにしたレコード配列)へ
-変換する前処理マイクロサービス。engchina/No.1 系 `csv2json` の本プロジェクト再マップ。
+parse の **前** に CSV 原本を決定論で構造化レコードの JSON Lines(1 データ行 = 1 記録)へ
+変換する前処理マイクロサービス(#2457)。
 
-- 出力契約: `rag_parser_core` の `ConvertResponse`(`POST /convert`)
+- 出力契約: `rag_parser_core` の `ConvertResponse`(`POST /convert`)。派生物は構造化レコードの JSONL
+  (`application/vnd.production-ready.structured-records+jsonl`。schema は `rag_parser_core.structured_records`)で、
+  Docling / Unstructured の parser のサービスが外部の parser に渡さずに 1 記録 1 要素にする。
 - readiness: `GET /health`(外部依存なしで常時 ready)
-- 純 Python(`csv` + `json`)のみ。LibreOffice / PyMuPDF を含まない軽量な venv。
+- 純 Python(`csv` + pydantic)のみ。LibreOffice / PyMuPDF を含まない軽量な venv。
 
 ## 変換仕様
 
@@ -13,8 +15,11 @@ parse の **前** に CSV 原本を決定論で構造化 JSON(ヘッダ列をキ
 |---|---|
 | 文字コード | UTF-8(BOM 可)優先、失敗時 charset-normalizer で推定 |
 | デリミタ | `,` `\t` `;` `\|` を Sniffer で推定(失敗時はカンマ) |
-| 出力 | `{"columns": [...], "row_count": N, "rows": [{列: 値}, ...]}` の JSON |
-| 縮退 | 空・復号失敗・行 0 のときは `converted=false`(passthrough) |
+| 出力 | 1 行目が `document`(変換器・表頭の物理行・診断)、続く行が `row`(`fields` = 列名・列の位置・値、`location` = 原本の物理行の範囲)の JSONL。UTF-8・BOM なし・LF・末尾 LF。値の改行は JSON のエスケープのまま 1 行に収める |
+| 表頭・列名 | 最初の空でない行が表頭。空の列名は `col_<位置>`、重複は `<名前>_<n>` |
+| 行の位置 | 原本の物理行(1 始まり)。引用符の中の改行を含む記録は `row_start` < `row_end`。空の行は記録にせず、行番号は振り直さない |
+| 列の多い行 | 表頭より多い値は `col_<位置>` の列にして捨てない(警告 `csv_row_wider_than_header:<件数>`) |
+| 縮退 | 空・復号失敗・データ行 0・CSV として読めないときは `converted=false`(passthrough) |
 
 ## ローカル実行(開発)
 

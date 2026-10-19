@@ -1,12 +1,14 @@
 # preprocess-excel-to-json
 
-parse の **前** に Excel(`.xls` / `.xlsx`)原本を決定論で「行の記録」JSON(シートごとの表頭・元の行番号・
-セル範囲・表示の値)へ変換する前処理マイクロサービス(#1221)。読み方は engchina/no.1-rag の前処理
+parse の **前** に Excel(`.xls` / `.xlsx`)原本を決定論で「行の記録」(シートごとの表頭・元の行番号・
+セル範囲・表示の値)の構造化レコード JSONL へ変換する前処理マイクロサービス(#1221・#2457)。読み方は engchina/no.1-rag の前処理
 (`utils/office_preprocess_util.py`)に合わせる。
 
 - 出力契約: `rag_parser_core` の `ConvertResponse`(`POST /convert`)。派生物の content type は
-  `application/vnd.production-ready.sheet-records+json`(`rag_parser_core.sheet_records`)で、Docling /
-  Unstructured の parser のサービスが外部の parser に渡さずに 1 記録 1 要素にする。
+  `application/vnd.production-ready.structured-records+jsonl`(schema は `rag_parser_core.structured_records`)で、
+  Docling / Unstructured の parser のサービスが外部の parser に渡さずに 1 記録 1 要素にする。
+  JSONL は `document`(変換器・読まなかったシート)→ シートごとに `sheet`(表頭・推定の信頼度・読み方・列と役割・
+  診断)→ `preamble` / `row` / `procedure_step`(`parent_id` = シートの記録、`location` = 元の行番号とセル範囲)の順。
 - 選択肢: `POST /convert` の form の `options`(JSON)。backend は文書レシピの `excel_options`(無ければ
   `RAG_PREPROCESS_EXCEL_OPTIONS`)を渡す。
 - readiness: `GET /health`(openpyxl / xlrd 導入状況)
