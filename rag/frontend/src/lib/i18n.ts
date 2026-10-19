@@ -124,6 +124,7 @@ export const ja = {
   // 「外観と証明書」は配色テーマと HTTPS の証明書を扱う（#1316）。副題・カードの文言は platform の既定を使う。
   "nav.settingsAppearance": "外観と証明書",
   "nav.settingsAnswerNotice": "回答の注意書き",
+  "nav.settingsChatAttachments": "チャットの添付",
   "appearance.theme.label": "配色テーマ",
   "appearance.theme.hint": "画面全体の配色を切り替えます。「自動」は OS の設定に追従します。",
   "appearance.theme.light": "ライト",
@@ -1835,6 +1836,28 @@ export const ja = {
     "チャットと検索の回答の末尾に、毎回同じ文を出します。確認の質問・エラー・停止には出しません。",
   "settings.answerNotice.helperContact":
     "本文の後に「{line}」と出します。窓口の名前と連絡の方法（電話・URL など）を 1 行で書きます。検索・回答プロファイルで窓口を上書きできます。",
+  "settings.chatAttachments.subtitle":
+    "チャットで利用者がファイルを添付して質問できるかを設定します。RAG のチャットだけに使い、NL2SQL・Agent はそれぞれの画面で設定します。",
+  "settings.chatAttachments.description":
+    "RAG のチャットで、利用者が手元のファイルを会話に添付し、ナレッジベースの資料と合わせて根拠にして質問できるようにします。添付は会話の期間だけ保存し、期限を過ぎると自動で消します。",
+  // チャットの添付（#2517。3 製品で同じ文）。
+  "chat.attachments.add": "ファイルを添付",
+  "chat.attachments.drop": "ここにドロップして添付",
+  "chat.attachments.list": "添付ファイル",
+  "chat.attachments.remove": "{name} を外す",
+  "chat.attachments.uploading": "読み取り中",
+  "chat.attachments.hint": "1 つ {size}・{count} 件まで。最後に使ってから {hours} 時間で消えます",
+  "chat.attachments.tooLarge": "{size} を超えるファイルは添付できません。",
+  "chat.attachments.tooMany": "添付できるのは {count} 件までです。",
+  "chat.attachments.unsupported": "この種類のファイルは添付できません。",
+  "chat.attachments.failed": "添付できませんでした。",
+  "chat.attachments.warning.macros_not_executed": "マクロは実行していません。",
+  "chat.attachments.warning.pdf_page_without_text": "文字の無いページは読み取っていません。",
+  "chat.attachments.warning.text_truncated": "長いため途中までを読み取りました。",
+  "chat.attachments.warning.rows_truncated": "行が多いため途中までを読み取りました。",
+  "chat.attachments.warning.columns_truncated": "列が多いため一部の列を読み取りました。",
+  "chat.attachments.warning.pages_truncated": "ページが多いため途中までを読み取りました。",
+  "chat.attachments.evidenceSource": "添付ファイル",
   "settings.uploadStorage.subtitle":
     "ドキュメントアップロード時の原本保存先を local または OCI Object Storage から選択します。",
   "settings.uploadStorage.backend.local": "ローカルディレクトリ",

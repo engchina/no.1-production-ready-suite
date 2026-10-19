@@ -9,6 +9,7 @@ from enum import StrEnum
 from typing import Literal
 
 from pr_backend_core.chat_progress import ChatProgressEvent
+from pr_system_settings.chat_attachments import ChatAttachmentReference
 from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.search import RetrievedChunk
@@ -87,6 +88,8 @@ class ChatMessage(BaseModel):
     sent_by_owner: bool = True
     # 持ち主以外が送った質問の、送った人の表示名（#1928・#1696。引けない利用者は空）。
     sender_display_name: str = ""
+    # 質問に添付したファイル（#2517。名前・種類・大きさ）。添付の無い質問・回答は空。
+    attachments: list[ChatAttachmentReference] = Field(default_factory=list)
 
 
 class ChatAnswerCancelResult(BaseModel):
@@ -184,6 +187,9 @@ class ChatMessageRequest(BaseModel):
     # 画面が決めた質問（USER のメッセージ）の id（#1175）。送信の直後（`start` の前）の停止でも、
     # この id で回答の作成を取り消せる（NL2SQL の `client_job_id`（#900）と同じ考え方）。
     client_message_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    # 質問に添付するファイル（#2517。`POST /api/chat-attachments` の `attachment_id`）。送信で会話に
+    # 結び付け、会話の続きの質問も根拠に使う。件数の上限は共通の設定（API が確かめる）。
+    attachment_ids: list[str] = Field(default_factory=list, max_length=50)
 
     @field_validator("content")
     @classmethod

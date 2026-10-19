@@ -33,6 +33,7 @@ from pr_backend_core.chat_progress import (
     parse_chat_progress_events,
 )
 from pr_backend_core.logging import safe_exception_fields
+from pr_system_settings.chat_attachments import ChatAttachmentReference
 from starlette.concurrency import run_in_threadpool
 
 from app.api.routes.search import (
@@ -68,6 +69,7 @@ from app.rag.chat_answer_runs import (
     chat_progress_closer,
     get_chat_answer_run_service,
 )
+from app.rag.chat_attachments import attach_to_conversation, delete_conversation_attachments
 from app.rag.chat_progress import ChatProgressTracker
 from app.rag.document_sections_service import current_section_pages
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
@@ -108,6 +110,7 @@ from app.schemas.chat import (
 )
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
+from app.security.dependencies import current_principal
 from app.security.user_names import display_names_by_user_hash
 
 router = APIRouter()
@@ -222,7 +225,17 @@ def _to_chat_message(
         sender_display_name=(
             "" if sent_by_owner else (sender_names or {}).get(message.user_id_hash or "", "")
         ),
+        attachments=_saved_attachments(message),
     )
+
+
+def _saved_attachments(message: StoredMessage) -> list[ChatAttachmentReference]:
+    """質問に添付したファイル（#2517）。形の違う要素は捨てる（壊れた記録で会話を止めない）。"""
+    references: list[ChatAttachmentReference] = []
+    for raw in message.attachments or []:
+        with suppress(Exception):
+            references.append(ChatAttachmentReference.model_validate(raw))
+    return references
 
 
 def _sent_by_owner(message: StoredMessage, conversation: StoredConversation | None) -> bool:
@@ -399,6 +412,8 @@ async def delete_conversation(conversation_id: str) -> ApiResponse[None]:
         await OracleClient().delete_conversation(conversation_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE) from exc
+    # 会話の添付も消す（#2517。消せなくても期限で消える）。
+    await run_in_threadpool(delete_conversation_attachments, conversation_id)
     return ApiResponse(data=None)
 
 
@@ -428,11 +443,25 @@ async def stream_message(
         )
     except ChatAnswerLimitError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
+    # 質問の添付（#2517）を会話に結び付ける（見えない添付は 404・別の会話の添付と上限は 409）。
+    attachments: list[ChatAttachmentReference] = []
+    if request.attachment_ids:
+        attachments = await run_in_threadpool(
+            attach_to_conversation,
+            current_principal(http_request),
+            request.attachment_ids,
+            conversation,
+        )
     # 検索・回答プロファイルの解決・発話の検査・USER と作成中の ASSISTANT の保存は、応答を始める
     # 前に行う。応答を始めた後の HTTPException（409 / 404）や DB の例外は、利用者に理由を返せず
     # stream が途切れるため（#463）。
     turn = await _prepare_chat_turn(
-        oracle, conversation_id, conversation.search_answer_profile_id, request, settings
+        oracle,
+        conversation_id,
+        conversation.search_answer_profile_id,
+        request,
+        settings,
+        attachments=attachments,
     )
     columns = _resolve_compare_models(request, turn.settings)
     run = await _start_answer_run(oracle, turn, columns)
@@ -555,6 +584,8 @@ async def _prepare_chat_turn(
     search_answer_profile_id: str,
     request: ChatMessageRequest,
     settings: Settings,
+    *,
+    attachments: list[ChatAttachmentReference] | None = None,
 ) -> PreparedChatTurn:
     """検索・回答プロファイルの設定を解決し、発話を検査して USER メッセージを保存する。"""
     approved_faq: tuple[str, str] | None = None
@@ -680,6 +711,11 @@ async def _prepare_chat_turn(
             status="COMPLETE" if query_guardrail.allowed else "ERROR",
             created_at=now,
             clarification=clarification_log,
+            attachments=(
+                [reference.model_dump(mode="json") for reference in attachments]
+                if attachments
+                else None
+            ),
         )
     )
     return PreparedChatTurn(
@@ -747,6 +783,8 @@ async def _generate_chat_answer(
             scope=turn.scope,
             run_recorder=run_recorder,
             answer_notice=current_answer_notice,
+            # 会話の添付（#2517）の節・行を根拠の候補に足す。
+            attachment_conversation_id=turn.conversation_id,
         )
         result = await run_answer_with_timeout(
             lambda progress_tracker: pipeline.run(

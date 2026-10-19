@@ -455,6 +455,11 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
         assert f"'ALTER TABLE {table} ADD (answer_notice CLOB)'" in notice_migration
         assert "column_name = 'ANSWER_NOTICE'" in notice_migration
         assert "DROP" not in notice_migration
+    # 質問に添付したファイルの列を無いときだけ足す（#2517）。
+    attachments_migration = sql.split("-- migration: 20261019_010_message_attachments", 1)[1]
+    assert "'ALTER TABLE rag_messages ADD (attachments_json CLOB)'" in attachments_migration
+    assert "column_name = 'ATTACHMENTS_JSON'" in attachments_migration
+    assert "DROP" not in attachments_migration.split("-- migration:", 1)[0]
     # 業務ガイドの内容の形の版を 2 にする（#2395）。schema_version だけを書き換える。
     guide_migration = sql.split("-- migration: 20261018_004_support_guide_schema_v2", 1)[1]
     assert "JSON_TRANSFORM(draft_json, SET '$.schema_version' = 2)" in guide_migration
@@ -491,7 +496,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 103
+    assert len(statements) == 104
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -583,6 +588,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261019_001_restore_document_classification",
         "20261019_002_document_cleanups",
         "20261019_003_structured_records_jsonl_profiles",
+        "20261019_010_message_attachments",
     ]
 
 

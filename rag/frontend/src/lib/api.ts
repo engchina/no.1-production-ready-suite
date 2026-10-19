@@ -94,7 +94,17 @@ import type {
 } from "@production-ready/system-settings";
 
 // 回答の注意書き API の型は platform の共有パッケージが正本（#2405）。
-import type { AnswerNoticeSettingsData, AnswerNoticeSettingsUpdate } from "@production-ready/system-settings";
+import type {
+  AnswerNoticeSettingsData,
+  AnswerNoticeSettingsUpdate,
+  ChatAttachmentSettingsData,
+  ChatAttachmentSettingsUpdate,
+} from "@production-ready/system-settings";
+import type {
+  ChatAttachmentApiItem,
+  ChatAttachmentApiLimits,
+  ChatAttachmentApiReference,
+} from "@production-ready/ui";
 
 // アップロード保存先 API の型は platform の共有パッケージが正本（#97）。
 export type {
@@ -1362,6 +1372,8 @@ export interface ChatMessage {
   sent_by_owner?: boolean;
   /** 持ち主以外が送った質問の、送った人の表示名（引けない利用者は空。#1928）。 */
   sender_display_name?: string;
+  /** 質問に添付したファイル（#2517）。 */
+  attachments?: ChatAttachmentApiReference[];
 }
 
 export interface ConversationSummary {
@@ -1403,6 +1415,14 @@ export interface ChatMessageRequestBody {
   clarification_skipped_rule_id?: string;
   /** 画面が決めた質問の id（32 桁の 16 進。#1175）。送信の直後（`start` の前）の停止もこの id で取り消せる。 */
   client_message_id?: string;
+  /** 質問に添付するファイル（`uploadChatAttachment` の `attachment_id`。#2517）。 */
+  attachment_ids?: string[];
+}
+
+/** 会話の添付の一覧と上限（#2517）。 */
+export interface ChatAttachmentListData {
+  items: ChatAttachmentApiItem[];
+  limits: ChatAttachmentApiLimits;
 }
 
 /** ルールの確認の質問（チャットの確認。#717）。 */
@@ -3957,6 +3977,28 @@ export const api = {
   updateHuggingFaceSettings: (body: HuggingFaceSettingsUpdate) =>
     request<HuggingFaceSettingsData>("/api/settings/huggingface", {
       method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // チャットの添付（#2517）
+  uploadChatAttachment: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    // 画像の読み取り（Vision モデル）は時間がかかるため、待ち時間を長くする。
+    return request<ChatAttachmentApiItem>("/api/chat-attachments", { method: "POST", body }, { timeoutMs: 180_000 });
+  },
+  listChatAttachments: () => request<ChatAttachmentListData>("/api/chat-attachments"),
+  deleteChatAttachment: (attachmentId: string) =>
+    request<{ deleted: boolean }>(`/api/chat-attachments/${encodeURIComponent(attachmentId)}`, {
+      method: "DELETE",
+    }),
+  // 設定: チャットの添付（設定は製品ごと。#2517）
+  getChatAttachmentSettings: (options: SettingsRequestOptions = {}) =>
+    request<ChatAttachmentSettingsData>("/api/settings/chat-attachments", { signal: options.signal }),
+  updateChatAttachmentSettings: (body: ChatAttachmentSettingsUpdate) =>
+    request<ChatAttachmentSettingsData>("/api/settings/chat-attachments", {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),

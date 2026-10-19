@@ -65,6 +65,11 @@ export interface EvidenceListItem {
   tags?: readonly EvidenceTag[];
   /** 原典の URL（https のときだけ渡す）。 */
   sourceUrl?: string | null;
+  /**
+   * 「根拠を表示」で開く原文が無い根拠（チャットの添付など。#2517）。true なら開くボタンを出さない
+   * （本文はカードに出ている）。
+   */
+  sourceUnavailable?: boolean;
 }
 
 /** 文言（すべて翻訳済み）。既定は {@link evidenceLabels}。 */
@@ -591,7 +596,7 @@ export function EvidenceList({
             index={index}
             labels={labels}
             leadingActions={
-              onOpenSource ? (
+              onOpenSource && !item.sourceUnavailable ? (
                 <EvidenceSourceButton
                   fileName={item.fileName}
                   onOpen={() => onOpenSource(index)}

@@ -1,5 +1,5 @@
 import { evidenceLabels, type EvidenceListItem, type EvidenceTag } from "@production-ready/ui";
-import { Layers } from "lucide-react";
+import { Layers, Paperclip } from "lucide-react";
 
 import type { RetrievedChunk } from "@/lib/api";
 import {
@@ -21,6 +21,9 @@ export function citationEvidenceItem(chunk: RetrievedChunk): EvidenceListItem {
   const tags: EvidenceTag[] = [];
   if (recipeSlot) tags.push({ id: "recipe", value: t("documents.recipes.name", { slot: recipeSlot }), icon: Layers });
   if (chunk.category_name) tags.push({ id: "category", value: chunk.category_name, tone: "info" });
+  // チャットの添付の根拠（#2517）。文書の表に無いので、原文のプレビューは開かない。
+  const attachment = isAttachmentCitation(chunk);
+  if (attachment) tags.push({ id: "attachment", value: t("chat.attachments.evidenceSource"), icon: Paperclip });
   return {
     key: chunk.chunk_id,
     fileName: chunk.file_name ?? chunk.document_id,
@@ -41,7 +44,13 @@ export function citationEvidenceItem(chunk: RetrievedChunk): EvidenceListItem {
     tags,
     // 原典の URL（XML ツリー JSON の文書。#2024）。根拠を原典で確かめる。
     sourceUrl: citationSourceUrl(chunk.metadata),
+    sourceUnavailable: attachment,
   };
+}
+
+/** チャットの添付の根拠か（backend の `chat_attachment_id` の印。#2517）。 */
+export function isAttachmentCitation(chunk: RetrievedChunk): boolean {
+  return typeof chunk.metadata.chat_attachment_id === "string" && chunk.metadata.chat_attachment_id !== "";
 }
 
 function citationRetrievalBadges(chunk: RetrievedChunk): string[] {

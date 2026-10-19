@@ -178,6 +178,7 @@ class RagPipeline:
         scope: AnswerScope | None = None,
         run_recorder: RunRecorder | None = None,
         answer_notice: AnswerNoticeSource | None = None,
+        attachment_conversation_id: str | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._genai = genai or OciGenAiClient(settings=self._settings)
@@ -200,6 +201,8 @@ class RagPipeline:
         # 回答の注意書きの文（#2405）。チャットと RAG 検索（MCP を含む）の経路だけが渡す
         # （品質評価・確かめのスクリプトは渡さない）。
         self._answer_notice = answer_notice
+        # チャットの会話（#2517）。会話の添付の節・行を、質問の根拠の候補として検索の結果に足す。
+        self._attachment_conversation_id = attachment_conversation_id
 
     async def run(
         self,
@@ -364,6 +367,15 @@ class RagPipeline:
                 result_details=field_filter_details,
             )
         guide = dict(self._settings.rag_support_guide or {})
+        attachment_chunks = []
+        if self._attachment_conversation_id and self._approved_faq is None:
+            from app.rag.chat_attachments import attachment_evidence
+
+            attachment_chunks = await attachment_evidence(
+                request.query,
+                self._attachment_conversation_id,
+                rerank=self._genai.rerank if self._settings.rag_rerank_enabled else None,
+            )
         engine = AnswerEngine(
             self._settings,
             oracle=self._oracle,
@@ -373,6 +385,7 @@ class RagPipeline:
             auto_field_conditions=auto_field_conditions,
             approved_faq=self._approved_faq,
             scope=self._scope,
+            attachment_chunks=attachment_chunks,
         )
 
         async def emit_step(

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 from app.api.removed_fields import reject_removed_profile_fields
 from app.api.routes import (
     chat,
+    chat_attachments,
     document_categories,
     documents,
     evaluation,
@@ -65,6 +66,8 @@ api_router.include_router(
     tags=["search-answer-profiles"],
 )
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
+# チャットの添付（#2517。`/api/chat-attachments`）。
+api_router.include_router(chat_attachments.router)
 api_router.include_router(search.router, prefix="/search", tags=["search"])
 api_router.include_router(history.router, prefix="/history", tags=["history"])
 api_router.include_router(
