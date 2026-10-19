@@ -220,7 +220,9 @@ def _perm(method: str, path: str) -> set[str]:
 
 def test_manifest_key_assignments() -> None:
     """変更系は capability（従来のロール）、読み取りは画面のメニュー権限。"""
-    assert _perm("POST", "/agents") == {"agent.admin"}
+    # 業務 Agent の作成は、自分の業務 Agent の作成（持ち主の判定は router。#2523）でもできる。
+    assert _perm("POST", "/agents") == {"agent.admin", "agent.agents.build"}
+    assert _perm("POST", "/agents/{agent_id}/share-request/approve") == {"agent.admin"}
     assert _perm("PATCH", "/settings/oci") == {"menu.settings_oci"}
     assert _perm("POST", "/settings/oci/object-storage/namespace") == {
         "menu.settings_oci",

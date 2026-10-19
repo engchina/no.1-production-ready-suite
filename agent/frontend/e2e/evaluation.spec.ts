@@ -601,7 +601,7 @@ test("Agent 管理でない利用者は下書きを選べず、公開中の版�
   await page.goto("/evaluation");
   const version = page.getByTestId("evaluation-version");
   await expect(version).toContainText("公開中の版（v1）");
-  await expect(page.getByText("公開中の版を評価します（下書きの評価は Agent 管理だけ）。")).toBeVisible();
+  await expect(page.getByText("公開中の版を評価します（下書きの評価は Agent 管理か、その業務 Agent の持ち主だけ）。")).toBeVisible();
   await version.click();
   await expect(page.getByRole("option")).toHaveCount(1);
   await page.keyboard.press("Escape");

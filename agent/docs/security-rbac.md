@@ -58,6 +58,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 | 参照権限 | `agent.audit.view` | 監査ログの参照 | auditor | Run の監査・ツール呼出し履歴・trace event（閲覧を含む） | 監査ログ |
 | 実行権限 | `agent.runs.operate` | 業務 Agent の実行 | operator | チャットと、Run の作成・取消・再開・再実行（閲覧を含む） | 実行履歴・チャット |
 | 実行権限 | `agent.approvals.decide` | 承認の判断 | approver | 自分の Run の承認・却下（閲覧を含む。ほかの利用者の Run の承認は system_admin だけ。#1889・#1928） | 承認 |
+| 管理権限 | `agent.agents.build` | 自分の業務 Agent の作成 | （なし） | 自分の業務 Agent（個人の業務 Agent）の作成・編集・下書きで実行・評価・公開・削除と、共有の申請（#2523）。ほかの業務 Agent・スキル・設定は変えられない。持ち主の判定は router | 業務 Agent・品質評価（と、業務 Agent の実行） |
 | 管理権限 | `agent.admin` | Agent 管理 | admin | 業務 Agent・スキル・運用設定の変更とすべての操作（システム設定のメニューも暗黙に含む）。対象範囲の制限なし | ユーザーとロール・権限管理以外のすべてのメニュー |
 
 ### メニュー権限（`agent/frontend` のナビと同じ並び）
@@ -93,8 +94,10 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 |---|---|---|
 | `GET /runs` | `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る・system_admin 以外は自分の Run と自分の会話の Run だけ（§4.1）。要約のページ（#1897） |
 | `GET /approvals`・`GET /approvals/{id}`（#1897） | `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る・system_admin 以外は自分の Run の承認だけ（§4.1。範囲外・ほかの利用者・無い承認の詳細は 404） |
-| `POST /agents/draft-suggestion`（#2519。業務の説明から下書きを提案。保存しない） | `agent.admin` | 候補は有効なスキルと、編集者が使えるプロファイル（データの範囲の候補と同じく編集者のサービストークンで取得）。候補に無い ID はコードで外す |
-| `POST /agents/{id}/publish`・`POST /agents/{id}/versions/{version}/restore`（#770） | `agent.admin` | 下書きで実行（`POST /runs` の `draft=true`）と下書きの会話の一覧（`GET /threads?draft=true`。編集画面の「試す」。#2515）も `agent.admin` だけ。会話は始めた Run の種類（下書き / 公開中の版）に固定し、種類をまたぐ続きは 409 |
+| `POST /agents/draft-suggestion`（#2519。業務の説明から下書きを提案。保存しない） | `agent.admin` / `agent.agents.build` | 候補は有効なスキルと、編集者が使えるプロファイル（データの範囲の候補と同じく編集者のサービストークンで取得）。候補に無い ID はコードで外す |
+| `POST /agents`・`PATCH`・`DELETE /agents/{id}`・`POST /agents/{id}/publish`・`POST /agents/{id}/versions/{version}/restore`（#770・#2523） | `agent.admin` / `agent.agents.build` | `agent.agents.build` だけの利用者は自分の個人の業務 Agent だけ（ほかは 403、見えない Agent は 404）。作った Agent の持ち主は作った人（Agent 管理が作れば組織の業務 Agent）。下書きで実行（`POST /runs` の `draft=true`）と下書きの評価、下書きの会話の一覧（`GET /threads?draft=true`。編集画面の「試す」。#2515）も Agent 管理と持ち主だけ。会話は始めた Run の種類（下書き / 公開中の版）に固定し、種類をまたぐ続きは 409 |
+| `POST /agents/{id}/share-request`（#2523） | `agent.admin` / `agent.agents.build` | 持ち主だけ。公開した個人の業務 Agent の共有を申請する |
+| `POST /agents/{id}/share-request/approve`・`reject`（#2523） | `agent.admin` | 承認で組織の業務 Agent（持ち主なし）になる。却下は理由（必須）を持ち主に返す。承認前の個人の Agent はロールに割り当てられない（`PUT /security/roles/{id}/access` が 409） |
 | `GET /runs/{id}`・`/audit`・`/artifacts*`・`/figure-url` | `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上（監査は auditor）・ほかの利用者の Run は 404（§4.1。自分の会話の Run は読める）・範囲外は 403 |
 | `GET /runs/{id}/events`（SSE） | `menu.runs` / `menu.approvals` | viewer 以上・ほかの利用者の Run は 404・範囲外は 403 |
 | `GET /runs/{id}/progress`・`/progress/stream`（チャットの処理の段階の polling と SSE。#1359） | `menu.chat` / `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上・ほかの利用者の Run は 404・範囲外は 403 |

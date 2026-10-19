@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pr_backend_core import ApiResponse, Page
 from pr_backend_core.api import (
     ACCESS_TARGET_PAGE_LIMIT_MAX,
@@ -99,6 +99,8 @@ def list_agent_access_targets(
     - `q`: 名前・ID・説明の部分一致。
     - `ids`: その ID だけ（ロールに選択済みの対象の名前の解決に使う）。画面は 50 件ずつ読む。
     - 一覧は利用者の対象範囲で絞る（SYSTEM_ADMIN と `agent.admin` を持つ利用者は全件）。
+    - 個人の業務 Agent（持ち主あり）は、共有の申請を承認するまでロールに割り当てないので出さない
+      （#2523）。
     """
     principal = as_principal(current_principal(request))
     selected = set(ids) if ids is not None else None
@@ -111,6 +113,7 @@ def list_agent_access_targets(
         )
         for agent in runtime_repository.list_agents()
         if principal.can_use_agent(agent.id)
+        and agent.owner_user_uuid is None
         and (selected is None or agent.id in selected)
         and _matches_target_query(q, agent.name, agent.id, agent.description)
     ]
@@ -131,9 +134,22 @@ async def update_role_access(
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
     # エージェント ID の存在確認は利用者の範囲と無関係に行う（範囲外は 403、存在しない ID は 400）。
-    known_agent_ids = await run_in_threadpool(
-        lambda: {agent.id for agent in runtime_repository.list_agents()}
+    agents = await run_in_threadpool(runtime_repository.list_agents)
+    known_agent_ids = {agent.id for agent in agents}
+    # 個人の業務 Agent は、共有の申請を承認して組織の業務 Agent にしてから割り当てる（#2523）。
+    personal = sorted(
+        agent.name
+        for agent in agents
+        if agent.owner_user_uuid is not None and agent.id in set(payload.agent_ids)
     )
+    if personal:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"個人の業務 Agent（{'、'.join(personal)}）はロールに割り当てられません。"
+                "共有の申請を承認してから割り当ててください。"
+            ),
+        )
     role = await run_in_threadpool(
         lambda: get_security_service().update_role_access(
             role_id,
