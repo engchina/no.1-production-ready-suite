@@ -29,7 +29,7 @@ def _jsonl() -> bytes:
             DocumentLine(
                 record_id="document",
                 source_type="csv",
-                converter="csv_to_json",
+                converter="csv_to_jsonl",
                 converter_version="v2",
                 header_row=1,
             ),

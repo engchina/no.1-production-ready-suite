@@ -14,7 +14,7 @@ from rag_parser_core.structured_records import (
 from app.converters import convert
 
 
-def _document(source: bytes, profile: str = "csv_to_json") -> StructuredRecordsDocument:
+def _document(source: bytes, profile: str = "csv_to_jsonl") -> StructuredRecordsDocument:
     outcome = convert(source, "text/csv", profile, None)
     assert outcome.converted is True
     assert outcome.derived_bytes is not None
@@ -46,7 +46,7 @@ def test_csv_to_jsonl_records_with_header_and_lines() -> None:
 
 
 def test_csv_to_jsonl_is_valid_json_lines() -> None:
-    outcome = convert(b"a,b\n1,2\n3,4\n", "text/csv", "csv_to_json", None)
+    outcome = convert(b"a,b\n1,2\n3,4\n", "text/csv", "csv_to_jsonl", None)
     assert outcome.derived_bytes is not None
     text = outcome.derived_bytes.decode("utf-8")
     assert not text.startswith("﻿")
@@ -59,7 +59,7 @@ def test_csv_to_jsonl_is_valid_json_lines() -> None:
 
 def test_csv_to_jsonl_keeps_multiline_values_on_one_line() -> None:
     source = 'id,note\n1,"一行目\n二行目"\n2,単一\n'.encode()
-    outcome = convert(source, "text/csv", "csv_to_json", None)
+    outcome = convert(source, "text/csv", "csv_to_jsonl", None)
     assert outcome.derived_bytes is not None
     assert len(outcome.derived_bytes.decode("utf-8").split("\n")) == 4  # 3 行 + 末尾の LF
     rows = _rows(_document(source))
@@ -77,8 +77,8 @@ def test_csv_to_jsonl_skips_blank_rows_without_renumbering() -> None:
 
 def test_csv_to_jsonl_is_deterministic() -> None:
     source = b"a,b\n1,2\n3,4\n"
-    first = convert(source, "text/csv", "csv_to_json", None).derived_bytes
-    second = convert(source, "text/csv", "csv_to_json", None).derived_bytes
+    first = convert(source, "text/csv", "csv_to_jsonl", None).derived_bytes
+    second = convert(source, "text/csv", "csv_to_jsonl", None).derived_bytes
     assert first == second
 
 
@@ -89,7 +89,7 @@ def test_csv_to_jsonl_handles_short_rows_and_duplicate_headers() -> None:
 
 
 def test_csv_to_jsonl_keeps_cells_beyond_the_header() -> None:
-    outcome = convert(b"a,b\n1,2,3\n", "text/csv", "csv_to_json", None)
+    outcome = convert(b"a,b\n1,2,3\n", "text/csv", "csv_to_jsonl", None)
     assert "csv_row_wider_than_header:1" in outcome.warnings
     rows = _rows(_document(b"a,b\n1,2,3\n"))
     assert _values(rows[0]) == {"a": "1", "b": "2", "col_3": "3"}
@@ -106,7 +106,7 @@ def test_csv_to_jsonl_keeps_unicode() -> None:
 
 
 def test_header_only_passes_through() -> None:
-    outcome = convert(b"a,b\n", "text/csv", "csv_to_json", None)
+    outcome = convert(b"a,b\n", "text/csv", "csv_to_jsonl", None)
     assert outcome.converted is False
     assert "csv_no_rows" in outcome.warnings
 
@@ -117,6 +117,6 @@ def test_non_csv_profile_passes_through() -> None:
 
 
 def test_empty_input_passes_through() -> None:
-    outcome = convert(b"", "text/csv", "csv_to_json", None)
+    outcome = convert(b"", "text/csv", "csv_to_jsonl", None)
     assert outcome.converted is False
     assert "csv_empty" in outcome.warnings

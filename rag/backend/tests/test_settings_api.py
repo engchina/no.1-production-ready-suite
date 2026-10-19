@@ -572,8 +572,8 @@ def test_preprocess_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -
         "passthrough",
         "office_to_pdf",
         "pdf_to_page_images",
-        "csv_to_json",
-        "excel_to_json",
+        "csv_to_jsonl",
+        "excel_to_jsonl",
         "pii_redact",
     ]
     by_name = {item["name"]: item for item in body["profiles"]}

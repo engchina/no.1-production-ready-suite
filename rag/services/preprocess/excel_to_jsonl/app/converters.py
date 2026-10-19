@@ -65,7 +65,7 @@ from rag_parser_core.structured_records import (
     sheet_records_to_lines,
 )
 
-CONVERTER_NAME = "excel_to_json"
+CONVERTER_NAME = "excel_to_jsonl"
 CONVERTER_VERSION = "v4"
 # xlsx は ZIP(PK\x03\x04)、xls は OLE2 複合ドキュメント(D0CF11E0...)。
 _XLSX_MAGIC = b"PK\x03\x04"
@@ -241,7 +241,7 @@ def convert(
 ) -> ConvertOutcome:
     """選択プリセットで変換する。対象外・依存欠如・失敗は passthrough へ縮退する。"""
     del content_type
-    if preprocess_profile != "excel_to_json":
+    if preprocess_profile != "excel_to_jsonl":
         return ConvertOutcome.passthrough(
             reason=f"preprocess_unsupported_profile:{preprocess_profile}"
         )

@@ -6,7 +6,7 @@ import { FormGrid, SelectField, TextField, ToggleChip, type SelectFieldOption } 
 import type { ExcelColumnRoleSetting, ExcelOptions } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
-/** 前処理 excel_to_json の選択肢の既定（backend の `ExcelOptions` と同じ）。 */
+/** 前処理 excel_to_jsonl の選択肢の既定（backend の `ExcelOptions` と同じ）。 */
 export const DEFAULT_EXCEL_OPTIONS: ExcelOptions = {
   mode: "auto",
   header_row: null,
@@ -112,7 +112,7 @@ export function excelOptionsSummary(options: ExcelOptions | null | undefined): s
 }
 
 /**
- * 文書レシピの「Excel の読み方」（前処理が excel_to_json のときだけ出す。#1221）。
+ * 文書レシピの「Excel の読み方」（前処理が excel_to_jsonl のときだけ出す。#1221）。
  * 継承（全体の既定に従う）か上書きかを選び、上書きのときに読み方・表頭・シート・列を指定する。
  */
 export function ExcelOptionsRow({

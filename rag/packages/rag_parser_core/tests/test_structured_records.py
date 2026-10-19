@@ -43,7 +43,7 @@ def _csv_lines() -> list[DocumentLine | RowLine]:
         DocumentLine(
             record_id="document",
             source_type="csv",
-            converter="csv_to_json",
+            converter="csv_to_jsonl",
             converter_version="v2",
             header_row=1,
         ),
@@ -152,14 +152,14 @@ def test_round_trip_and_csv_extraction() -> None:
     assert (first.metadata["row_start"], first.metadata["row_end"]) == (2, 3)
     assert first.metadata["csv_header_row"] == 1
     assert extraction.parser_artifacts[STRUCTURED_RECORDS_ARTIFACT_KEY] == 1
-    assert extraction.parser_artifacts["structured_records_converter"] == "csv_to_json"
+    assert extraction.parser_artifacts["structured_records_converter"] == "csv_to_jsonl"
 
 
 def test_excel_round_trip_keeps_sheet_records_and_elements() -> None:
     """Excel は行の記録と相互に変換でき、要素は今の `sheet_records_extraction` と同じ。"""
     original = _sheet_document()
     data = dump_structured_records(
-        sheet_records_to_lines(original, converter="excel_to_json", converter_version="v4")
+        sheet_records_to_lines(original, converter="excel_to_jsonl", converter_version="v4")
     )
     raw = _raw(data)
     assert [item["record_type"] for item in raw] == [
@@ -204,7 +204,7 @@ def _base(**overrides: object) -> dict[str, object]:
         "record_id": "document",
         "source_type": "csv",
         "record_type": "document",
-        "converter": "csv_to_json",
+        "converter": "csv_to_jsonl",
         "converter_version": "v2",
     }
     line.update(overrides)
@@ -275,26 +275,20 @@ def test_content_type_detection_ignores_parameters() -> None:
     assert not is_structured_records_content_type(None)
 
 
-def test_parser_services_read_jsonl_without_external_parser() -> None:
-    """Docling / Unstructured の parser のサービスは JSONL を外部の parser に渡さず要素にする。"""
+def test_docling_and_unstructured_stop_on_jsonl_with_diagnostic() -> None:
+    """Docling / Unstructured は構造化レコードの JSONL を黙って変換せず、診断で止める（#2457）。"""
     data = dump_structured_records(_csv_lines())
-    for backend in ("docling", "unstructured"):
-        assert adapter_supports_source(
+    for backend in ("docling", "unstructured", "mineru", "xml_tree_json"):
+        assert not adapter_supports_source(
             backend, source_profile=None, content_type=STRUCTURED_RECORDS_CONTENT_TYPE
         )
-    assert not adapter_supports_source(
-        "mineru", source_profile=None, content_type=STRUCTURED_RECORDS_CONTENT_TYPE
+    assert adapter_supports_source(
+        "structured_records_jsonl",
+        source_profile=None,
+        content_type=STRUCTURED_RECORDS_CONTENT_TYPE,
     )
-    result = run_external_adapter("docling", data, None, STRUCTURED_RECORDS_CONTENT_TYPE)
-    assert result.extraction is not None
-    assert result.parser_version == "structured_records_v1"
-    assert [element.element_id for element in result.extraction.elements] == [
-        "row-000001",
-        "row-000002",
-    ]
-
-    broken = run_external_adapter(
-        "docling", _jsonl([_base(schema_version=9)]), None, STRUCTURED_RECORDS_CONTENT_TYPE
-    )
-    assert broken.extraction is None
-    assert "structured_records_invalid:unsupported_schema_version@line1" in broken.warnings
+    for backend in ("docling", "unstructured"):
+        result = run_external_adapter(backend, data, None, STRUCTURED_RECORDS_CONTENT_TYPE)
+        assert result.extraction is None
+        assert result.fallback_used is True
+        assert result.warnings == ("structured_records_requires_structured_records_jsonl",)

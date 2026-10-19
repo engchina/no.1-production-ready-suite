@@ -45,7 +45,7 @@ def _csv(*values: str) -> bytes:
         DocumentLine(
             record_id="document",
             source_type="csv",
-            converter="csv_to_json",
+            converter="csv_to_jsonl",
             converter_version="v2",
             header_row=1,
         )
@@ -97,7 +97,7 @@ def _sheet() -> bytes:
         ],
     )
     return dump_structured_records(
-        sheet_records_to_lines(document, converter="excel_to_json", converter_version="v4")
+        sheet_records_to_lines(document, converter="excel_to_jsonl", converter_version="v4")
     )
 
 

@@ -48,7 +48,7 @@ print("PASS:pages", o.page_map)
 _CSV = """
 import os, json, app.converters as c
 d = open(os.environ["EX"] + "/table.csv", "rb").read()
-o = c.convert(d, "text/csv", "csv_to_json", None)
+o = c.convert(d, "text/csv", "csv_to_jsonl", None)
 assert o.converted, o.warnings
 lines = [json.loads(line) for line in o.derived_bytes.decode().splitlines()]
 rows = [line for line in lines if line["record_type"] == "row"]
@@ -60,7 +60,7 @@ _XLSX = """
 import os, json, app.converters as c
 d = open(os.environ["EX"] + "/table.xlsx", "rb").read()
 o = c.convert(d, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-              "excel_to_json", None)
+              "excel_to_jsonl", None)
 assert o.converted, o.warnings
 lines = [json.loads(line) for line in o.derived_bytes.decode().splitlines()]
 sheets = [line for line in lines if line["record_type"] == "sheet"]
@@ -80,8 +80,8 @@ print("PASS:pii", sorted(kinds))
 CASES = {
     "office_to_pdf": _OFFICE,
     "pdf_to_page_images": _PDF,
-    "csv_to_json": _CSV,
-    "excel_to_json": _XLSX,
+    "csv_to_jsonl": _CSV,
+    "excel_to_jsonl": _XLSX,
     "pii_redact": _PII,
 }
 

@@ -1,4 +1,4 @@
-"""Excel の行の記録（前処理 excel_to_json）を要素・chunk にし、場所を残す（#1221・#1349・#2457）。
+"""Excel の行の記録（前処理 excel_to_jsonl）を要素・chunk にし、場所を残す（#1221・#1349・#2457）。
 
 前処理のサービス（openpyxl）は別の venv で動くため、ここでは前処理が作る行の記録
 （`SheetRecordsDocument`）を直接作って構造化レコードの JSONL にし、parser の側（rag_parser_core）と
@@ -54,7 +54,7 @@ def _xlsx_profile() -> SourceProfile:
 
 def _jsonl(document: SheetRecordsDocument) -> bytes:
     return dump_structured_records(
-        sheet_records_to_lines(document, converter="excel_to_json", converter_version="v4")
+        sheet_records_to_lines(document, converter="excel_to_jsonl", converter_version="v4")
     )
 
 
@@ -104,25 +104,30 @@ def _document() -> SheetRecordsDocument:
     )
 
 
-def test_every_adapter_accepts_sheet_records_without_external_parser() -> None:
-    """Docling（PDF と画像だけ）でも、前処理の行の記録は rag_parser_core が要素にする。"""
+def test_only_structured_records_jsonl_reads_sheet_records() -> None:
+    """行の記録は構造化レコード JSONL だけが要素にする（Docling・Unstructured は診断で止める）。"""
     profile = _xlsx_profile()
     assert adapter_supports_source("docling", source_profile=profile, content_type="") is False
-    # 行の記録を扱う parser のサービスは Docling と Unstructured だけ。
-    assert not adapter_supports_source(
-        "mineru", source_profile=profile, content_type=STRUCTURED_RECORDS_CONTENT_TYPE
-    )
-    for backend in ("docling", "unstructured"):
-        assert adapter_supports_source(
+    for backend in ("docling", "unstructured", "mineru"):
+        assert not adapter_supports_source(
             backend, source_profile=profile, content_type=f"{STRUCTURED_RECORDS_CONTENT_TYPE}; x=1"
         )
+        stopped = run_external_adapter(
+            backend, _jsonl(_document()), profile, STRUCTURED_RECORDS_CONTENT_TYPE
+        )
+        assert stopped.extraction is None
+    assert adapter_supports_source(
+        "structured_records_jsonl",
+        source_profile=profile,
+        content_type=f"{STRUCTURED_RECORDS_CONTENT_TYPE}; x=1",
+    )
 
     result = run_external_adapter(
-        "docling", _jsonl(_document()), profile, STRUCTURED_RECORDS_CONTENT_TYPE
+        "structured_records_jsonl", _jsonl(_document()), profile, STRUCTURED_RECORDS_CONTENT_TYPE
     )
 
     assert result.extraction is not None
-    assert result.parser_version == "structured_records_v1"
+    assert result.parser_version == "structured_records_jsonl_v1"
     elements = result.extraction.elements
     # シート名だけの見出しの要素は作らない（節と文脈の見出しに入る）。
     assert all(element.kind == "text" for element in elements)
@@ -142,14 +147,16 @@ def test_every_adapter_accepts_sheet_records_without_external_parser() -> None:
     assert step.text.splitlines()[0] == "セクション: 事前準備"
     assert (step.metadata["row_start"], step.metadata["row_end"]) == (3, 4)
 
-    broken = run_external_adapter("docling", b"{}", profile, STRUCTURED_RECORDS_CONTENT_TYPE)
+    broken = run_external_adapter(
+        "structured_records_jsonl", b"{}", profile, STRUCTURED_RECORDS_CONTENT_TYPE
+    )
     assert broken.extraction is None
     assert "structured_records_invalid:unknown_schema@line1" in broken.warnings
 
 
 def _extraction(document: SheetRecordsDocument | None = None) -> StructuredExtraction:
     result = run_external_adapter(
-        "docling",
+        "structured_records_jsonl",
         _jsonl(document or _document()),
         _xlsx_profile(),
         STRUCTURED_RECORDS_CONTENT_TYPE,
@@ -353,11 +360,11 @@ def test_small_to_big_groups_procedure_steps_by_chapter() -> None:
     assert chunks[2].metadata["chunk_group_id"] != chunks[1].metadata["chunk_group_id"]
 
 
-def _excel_to_json_converter() -> ModuleType:
+def _excel_to_jsonl_converter() -> ModuleType:
     """前処理のサービスの変換（別の venv で動く）を、ファイルの場所から読み込む。"""
     pytest.importorskip("openpyxl")
-    path = RAG_DIR / "services" / "preprocess" / "excel_to_json" / "app" / "converters.py"
-    name = "excel_to_json_converters_1349"
+    path = RAG_DIR / "services" / "preprocess" / "excel_to_jsonl" / "app" / "converters.py"
+    name = "excel_to_jsonl_converters_1349"
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -384,12 +391,12 @@ def test_system_ledger_becomes_row_chunks_and_preamble(strategy: str) -> None:
 
     from app.rag.chunking_small_to_big import build_parent_child_chunks
 
-    converter = _excel_to_json_converter()
+    converter = _excel_to_jsonl_converter()
     source = RAG_DIR / "evaluation" / "multi-hop" / "system-ledger.xlsx"
     outcome = converter.convert(
         source.read_bytes(),
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "excel_to_json",
+        "excel_to_jsonl",
         None,
     )
     assert outcome.converted is True
@@ -489,11 +496,11 @@ def test_preprocess_service_passes_options_only_to_converters_that_take_them() -
         return ConvertOutcome.passthrough(reason="stub")
 
     def health() -> ConvertHealth:
-        return ConvertHealth(status="ok", supported_profiles=["excel_to_json"])
+        return ConvertHealth(status="ok", supported_profiles=["excel_to_jsonl"])
 
     payload = {
         "content_type": "application/vnd.ms-excel",
-        "preprocess_profile": "excel_to_json",
+        "preprocess_profile": "excel_to_jsonl",
         "options": json.dumps({"header_row": 2, "mode": "table"}),
     }
     files = {"file": ("a.xlsx", b"PK", "application/octet-stream")}
@@ -520,19 +527,22 @@ def test_recipe_excel_options_reach_the_preprocess_service(monkeypatch: Any) -> 
     from app.schemas.document import DocumentProcessingConfig
 
     recipe = DocumentProcessingConfig.model_validate(
-        {"preprocess_profile": "excel_to_json", "excel_options": {"mode": "table", "header_row": 2}}
+        {
+            "preprocess_profile": "excel_to_jsonl",
+            "excel_options": {"mode": "table", "header_row": 2},
+        }
     )
     config = KnowledgeBaseAdapterConfig(ingestion=recipe)
     base = Settings(_env_file=None, rag_preprocess_enabled=True)
     settings = base.model_copy(update=config.settings_overrides("ingestion"))
-    options = preprocess_options(settings, "excel_to_json")
+    options = preprocess_options(settings, "excel_to_jsonl")
     assert options is not None
     assert (options["mode"], options["header_row"]) == ("table", 2)
     assert preprocess_options(settings, "office_to_pdf") is None
 
-    # excel_to_json のときだけ、選択肢が抽出の ID を変える。
+    # excel_to_jsonl のときだけ、選択肢が抽出の ID を変える。
     other = base.model_copy(
-        update={"rag_preprocess_profile": "excel_to_json", "rag_preprocess_excel_options": {}}
+        update={"rag_preprocess_profile": "excel_to_jsonl", "rag_preprocess_excel_options": {}}
     )
     assert compute_extraction_recipe_id("s" * 64, settings) != compute_extraction_recipe_id(
         "s" * 64, other
@@ -551,7 +561,7 @@ def test_recipe_excel_options_reach_the_preprocess_service(monkeypatch: Any) -> 
             200,
             json={
                 "converted": True,
-                "converter_name": "excel_to_json",
+                "converter_name": "excel_to_jsonl",
                 "converter_version": "v2",
                 "derived_content_base64": "e30=",
                 "derived_content_type": STRUCTURED_RECORDS_CONTENT_TYPE,
@@ -567,7 +577,7 @@ def test_recipe_excel_options_reach_the_preprocess_service(monkeypatch: Any) -> 
 
     monkeypatch.setattr(httpx.Client, "__init__", patched)
     PreprocessServiceClient(settings).convert(
-        b"PK", content_type="application/octet-stream", profile="excel_to_json", options=options
+        b"PK", content_type="application/octet-stream", profile="excel_to_jsonl", options=options
     )
     assert sent["has_options"] is True
 
@@ -666,7 +676,10 @@ def test_low_confidence_header_becomes_extraction_warning_and_ranges_are_validat
     )
     document.sheets[0].diagnostics = [SheetDiagnostic(code="header_low_confidence", detail="0.40")]
     result = run_external_adapter(
-        "docling", _jsonl(document), _xlsx_profile(), STRUCTURED_RECORDS_CONTENT_TYPE
+        "structured_records_jsonl",
+        _jsonl(document),
+        _xlsx_profile(),
+        STRUCTURED_RECORDS_CONTENT_TYPE,
     )
     assert result.extraction is not None
     assert result.extraction.warnings == ["excel_header_low_confidence:コード表"]
@@ -719,7 +732,10 @@ def test_column_roles_label_values_in_chunks_and_match_the_answer_prompt() -> No
         ],
     )
     result = run_external_adapter(
-        "docling", _jsonl(document), _xlsx_profile(), STRUCTURED_RECORDS_CONTENT_TYPE
+        "structured_records_jsonl",
+        _jsonl(document),
+        _xlsx_profile(),
+        STRUCTURED_RECORDS_CONTENT_TYPE,
     )
     assert result.extraction is not None
     chunks = chunk_extraction_with_strategy(

@@ -29,7 +29,7 @@ uv run --project rag/backend python rag/scripts/generate_evaluation_corpus.py ra
 
 評価セットの `file:` の参照は、配備先で取り込んだ文書の ID に置き換えてから実行します。`evaluation_corpus_cli` が
 ナレッジベースを作り、資料をアップロードして索引まで待ち（確認待ちのゲートは承認する。Excel は前処理
-`excel_to_json`）、置き換えた評価セットを書き出します。
+`excel_to_jsonl`）、置き換えた評価セットを書き出します。
 
 ```bash
 cd rag/backend

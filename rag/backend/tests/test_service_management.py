@@ -1149,6 +1149,6 @@ def test_preprocess_service_url_uses_resolved_setting(monkeypatch: MonkeyPatch) 
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "dev")
     monkeypatch.setattr(
-        settings, "rag_preprocess_csv_to_json_service_url", "http://127.0.0.1:18012/"
+        settings, "rag_preprocess_csv_to_jsonl_service_url", "http://127.0.0.1:18012/"
     )
-    assert preprocess_service_url(settings, "csv_to_json") == "http://127.0.0.1:18012"
+    assert preprocess_service_url(settings, "csv_to_jsonl") == "http://127.0.0.1:18012"

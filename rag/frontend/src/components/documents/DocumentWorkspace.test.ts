@@ -62,7 +62,8 @@ describe("分割プレビュー設定", () => {
       chunk_size: 800,
       chunk_overlap: 120,
       chunk_min_chars: 120,
-      chunk_delimiter: "\\n\\n",
+      // 固定分割符の既定は構造化レコード JSONL の記録の境界（#2457）。
+      chunk_delimiter: "<<<JSONL_RECORD_BOUNDARY>>>",
       chunk_context_header_enabled: true,
       chunk_child_target_chars: 1000,
       chunk_table_child_target_chars: 3000,

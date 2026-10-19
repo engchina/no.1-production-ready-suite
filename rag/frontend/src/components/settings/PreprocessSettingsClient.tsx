@@ -32,8 +32,8 @@ const PROFILE_ORDER: PreprocessProfileName[] = [
   "passthrough",
   "office_to_pdf",
   "pdf_to_page_images",
-  "csv_to_json",
-  "excel_to_json",
+  "csv_to_jsonl",
+  "excel_to_jsonl",
   "pii_redact",
 ];
 

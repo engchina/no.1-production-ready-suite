@@ -45,7 +45,9 @@ from app.clients.oracle import (
 )
 from app.config import (
     CHUNKING_STRATEGIES_WITH_MIN_CHARS,
+    FIXED_DELIMITER_STRATEGY,
     LEGACY_CHUNKING_STRATEGY_ALIASES,
+    PREVIOUS_DEFAULT_CHUNK_DELIMITER,
     IngestionQueueConcurrency,
     Settings,
     get_settings,
@@ -223,7 +225,7 @@ SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS: tuple[str, ...] = (
     "chunk_parent_max_children",
 )
 DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
-    # 前処理 excel_to_json の選択肢(#1221)も前処理の出力を変える。
+    # 前処理 excel_to_jsonl の選択肢(#1221)も前処理の出力を変える。
     "preprocess_profile": ("preprocess_profile", "excel_options"),
     "parser_adapter_backend": (
         "parser_adapter_backend",
@@ -244,6 +246,7 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "chunk_overlap",
         "chunk_min_chars",
         "chunk_context_header_enabled",
+        "chunk_delimiter",
         *SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS,
     ),
     "graph_profile": ("graph_profile",),
@@ -2419,18 +2422,23 @@ def _processing_config_drift_groups(
     値を持たないため、そのときは rag_poc の既定値(Settings の既定)で分割したものとして扱う。
     """
     small_to_big_in_use = effective.get("chunking_strategy") == SMALL_TO_BIG_STRATEGY
+    fixed_delimiter_in_use = effective.get("chunking_strategy") == FIXED_DELIMITER_STRATEGY
 
     def _observed_value(field: str) -> object:
         value = observed.get(field)
         if value is None and field in SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS:
             return Settings.model_fields[f"rag_{field}"].default
+        if value is None and field == "chunk_delimiter":
+            # 分割符をレシピに持つ前(#2457)の snapshot は、旧い既定の分割符で分割したものとする。
+            return PREVIOUS_DEFAULT_CHUNK_DELIMITER
         return value
 
     def _compared_fields(fields: tuple[str, ...]) -> tuple[str, ...]:
-        if small_to_big_in_use:
-            return fields
         return tuple(
-            field for field in fields if field not in SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS
+            field
+            for field in fields
+            if (small_to_big_in_use or field not in SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS)
+            and (fixed_delimiter_in_use or field != "chunk_delimiter")
         )
 
     return [

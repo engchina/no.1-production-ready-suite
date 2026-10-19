@@ -64,7 +64,7 @@ def _loaded(derived: bytes) -> dict[str, Any]:
 
 
 def _payload(source: bytes, **options: Any) -> dict[str, Any]:
-    outcome = convert(source, "", "excel_to_json", None, options=options)
+    outcome = convert(source, "", "excel_to_jsonl", None, options=options)
     assert outcome.converted is True, outcome.warnings
     assert outcome.derived_bytes is not None
     assert outcome.derived_content_type == STRUCTURED_RECORDS_CONTENT_TYPE
@@ -166,7 +166,7 @@ def test_formula_without_cached_value_is_diagnosed_not_blank() -> None:
     空にせず数式の文字列にし（no.1-rag と同じ）、セルの位置付きの診断を残す。
     """
     workbook = _workbook({"S": [["単価", "数量", "金額"], [100, 3, "=A2*B2"]]})
-    outcome = convert(_bytes(workbook), "", "excel_to_json", None)
+    outcome = convert(_bytes(workbook), "", "excel_to_jsonl", None)
     assert "excel_formula_without_cached_value:S:1" in outcome.warnings
     assert outcome.derived_bytes is not None
     sheet = _loaded(outcome.derived_bytes)["sheets"][0]
@@ -286,13 +286,13 @@ def test_hidden_sheets_selection_and_excluded_columns() -> None:
     assert [sheet["name"] for sheet in excluded["sheets"]] == ["表示"]
     assert {"name": "別", "reason": "excluded"} in excluded["skipped_sheets"]
 
-    outcome = convert(source, "", "excel_to_json", None, options={"sheets": ["無い"]})
+    outcome = convert(source, "", "excel_to_jsonl", None, options={"sheets": ["無い"]})
     assert outcome.converted is False
     assert "excel_no_rows" in outcome.warnings
 
 
 def test_low_confidence_header_is_warned() -> None:
-    outcome = convert(_xlsx_bytes({"数値": [[1, 2], [3, 4], [5]]}), "", "excel_to_json", None)
+    outcome = convert(_xlsx_bytes({"数値": [[1, 2], [3, 4], [5]]}), "", "excel_to_jsonl", None)
     assert "excel_header_low_confidence:数値" in outcome.warnings
     assert outcome.derived_bytes is not None
     sheet = _loaded(outcome.derived_bytes)["sheets"][0]
@@ -331,7 +331,7 @@ def test_ranges_limit_cells_used_for_header_and_records() -> None:
     merged = _sheet(_payload(source, sheets=["費目"], ranges=["B1:C4"], header_row=2))
     assert merged["preamble"][0]["text"] == "費目の一覧"
 
-    outcome = convert(source, "", "excel_to_json", None, options={"ranges": ["無い!A1:B2"]})
+    outcome = convert(source, "", "excel_to_jsonl", None, options={"ranges": ["無い!A1:B2"]})
     assert "excel_range_sheet_not_found:無い" in outcome.warnings
 
 
@@ -343,7 +343,7 @@ def test_invalid_ranges_are_rejected() -> None:
     for text in ("A1", "A0:B2", "1:3", "A1:B2:C3"):
         with pytest.raises(ValueError):
             ExcelOptions(ranges=[text])
-    outcome = convert(b"PK", "", "excel_to_json", None, options={"ranges": ["A1"]})
+    outcome = convert(b"PK", "", "excel_to_jsonl", None, options={"ranges": ["A1"]})
     assert outcome.converted is False
     assert "excel_options_invalid" in outcome.warnings
 
@@ -356,17 +356,17 @@ def test_duplicate_and_blank_header_names() -> None:
 
 def test_is_deterministic() -> None:
     source = _xlsx_bytes({"S": [["a", "b"], [1, 2]]})
-    first = convert(source, "", "excel_to_json", None).derived_bytes
-    second = convert(source, "", "excel_to_json", None).derived_bytes
+    first = convert(source, "", "excel_to_jsonl", None).derived_bytes
+    second = convert(source, "", "excel_to_jsonl", None).derived_bytes
     assert first == second
 
 
 def test_passthrough_cases() -> None:
-    assert convert(_xlsx_bytes({"S": [["a"], ["1"]]}), "", "csv_to_json", None).converted is False
-    empty = convert(b"", "", "excel_to_json", None)
+    assert convert(_xlsx_bytes({"S": [["a"], ["1"]]}), "", "csv_to_jsonl", None).converted is False
+    empty = convert(b"", "", "excel_to_jsonl", None)
     assert (empty.converted, empty.warnings) == (False, ("excel_empty",))
     invalid = convert(
-        _xlsx_bytes({"S": [["a"], ["1"]]}), "", "excel_to_json", None, options={"header_row": 0}
+        _xlsx_bytes({"S": [["a"], ["1"]]}), "", "excel_to_jsonl", None, options={"header_row": 0}
     )
     assert (invalid.converted, invalid.warnings) == (False, ("excel_options_invalid",))
 
@@ -566,7 +566,7 @@ def test_configured_column_role_for_missing_column_warns() -> None:
     outcome = convert(
         _xlsx_bytes(_PARAMETER_SHEET),
         "",
-        "excel_to_json",
+        "excel_to_jsonl",
         None,
         options={"column_roles": {"現在値": "current"}},
     )
@@ -578,7 +578,7 @@ def test_invalid_column_role_option_is_rejected() -> None:
     outcome = convert(
         _xlsx_bytes(_PARAMETER_SHEET),
         "",
-        "excel_to_json",
+        "excel_to_jsonl",
         None,
         options={"column_roles": {"B": "actual"}},
     )
@@ -718,7 +718,7 @@ def test_jsonl_lines_carry_schema_ids_and_sheet_context() -> None:
     outcome = convert(
         _xlsx_bytes({"S": [["説明の行"], ["名前", "値"], ["a", "1\n2"], ["b", "3"]]}),
         "",
-        "excel_to_json",
+        "excel_to_jsonl",
         None,
     )
     assert outcome.derived_bytes is not None
@@ -734,7 +734,7 @@ def test_jsonl_lines_carry_schema_ids_and_sheet_context() -> None:
         "sheet-000-r3",
         "sheet-000-r4",
     ]
-    assert raw[0]["converter"] == "excel_to_json"
+    assert raw[0]["converter"] == "excel_to_jsonl"
     row = raw[3]
     assert row["parent_id"] == "sheet-000"
     assert row["location"] == {"row_start": 3, "row_end": 3, "cell_range": "A3:B3"}

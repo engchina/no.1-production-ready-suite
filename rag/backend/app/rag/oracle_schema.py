@@ -486,7 +486,146 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=document_cleanups_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261019_003_structured_records_jsonl_profiles",
+            table_name="rag_document_recipes",
+            sql=structured_records_jsonl_profiles_migration_sql(),
+        )
+    )
     return sections
+
+
+# #2457 で改名したファイル準備の値(旧, 新)。JSON を文字列にして置き換える(値と、抽出の ID の入力の
+# key の両方。引用符まで含めて書き、ほかの名前の一部を置き換えない)。
+STORED_PREPROCESS_RENAMES_2457: tuple[tuple[str, str], ...] = (
+    ('"csv_to_json"', '"csv_to_jsonl"'),
+    ('"excel_to_json"', '"excel_to_jsonl"'),
+    ('"csv_to_json_format"', '"csv_to_jsonl_format"'),
+    ('"excel_to_json_format"', '"excel_to_jsonl_format"'),
+)
+# ファイル準備の値を持ちうる JSON の列(表, 列)。設定・レシピ・その記録だけで、抽出の本文は変えない。
+STORED_PREPROCESS_COLUMNS_2457: tuple[tuple[str, str], ...] = (
+    ("RAG_DOCUMENTS", "PROCESSING_CONFIG"),
+    ("RAG_DOCUMENT_RECIPES", "PROCESSING_CONFIG"),
+    ("RAG_KNOWLEDGE_BASES", "RETRIEVAL_CONFIG"),
+    ("RAG_INGESTION_JOBS", "SETTINGS_OVERRIDES"),
+    ("RAG_CHUNK_SETS", "RECIPE_SUBSET"),
+    ("RAG_DOCUMENT_EXTRACTIONS", "RECIPE_SUBSET"),
+)
+# 文書レシピの処理設定の列(解析エンジンと分割符も書き換える)。
+STORED_RECIPE_COLUMNS_2457: tuple[tuple[str, str], ...] = (
+    ("RAG_DOCUMENTS", "PROCESSING_CONFIG"),
+    ("RAG_DOCUMENT_RECIPES", "PROCESSING_CONFIG"),
+)
+# #2457 の前の固定分割符の既定(escape 表現)。
+PREVIOUS_DEFAULT_CHUNK_DELIMITER_2457 = "\\n\\n"
+
+
+def apply_stored_preprocess_renames_2457(text: str) -> str:
+    """``STORED_PREPROCESS_RENAMES_2457`` を migration の SQL と同じ順に当てる(テストで照合)。"""
+    for old, new in STORED_PREPROCESS_RENAMES_2457:
+        text = text.replace(old, new)
+    return text
+
+
+def structured_records_jsonl_profiles_migration_sql() -> str:
+    """ファイル準備 csv_to_json / excel_to_json の保存値を ``*_jsonl`` に移す(#2457)。
+
+    - 設定・レシピ・取込ジョブ・その記録の JSON の ``"csv_to_json"`` / ``"excel_to_json"`` を
+      ``*_jsonl`` に書き換える(抽出の ID の入力の key ``*_format`` も)。
+    - 文書レシピでファイル準備が ``*_jsonl`` で、解析エンジンが Docling / Unstructured か未指定
+      (global を継承)なら、解析エンジンを構造化レコード JSONL にする(Docling / Unstructured は
+      構造化レコードの JSONL を受けなくなった)。分割の方式は書き換えない。
+    - 文書レシピの分割方式が固定分割で分割符が未指定なら、旧い既定の ``\\n\\n`` を明示する
+      (既定の分割符を記録の境界のマーカーに変えても、分割の結果を変えない)。
+    表・列が無ければ何もしない。何度当てても同じ結果になる(冪等)。
+    """
+    targets = ", ".join(f"'{table}.{column}'" for table, column in STORED_PREPROCESS_COLUMNS_2457)
+    recipe_targets = ", ".join(
+        f"'{table}.{column}'" for table, column in STORED_RECIPE_COLUMNS_2457
+    )
+    replaces = "\n".join(
+        f"            v_expr := 'REPLACE(' || v_expr || ', ''{old}'', ''{new}'')';"
+        for old, new in STORED_PREPROCESS_RENAMES_2457
+    )
+    delimiter = PREVIOUS_DEFAULT_CHUNK_DELIMITER_2457
+    return f"""DECLARE
+    TYPE t_names IS TABLE OF VARCHAR2(261);
+    v_targets t_names := t_names({targets});
+    v_recipes t_names := t_names({recipe_targets});
+    v_table   VARCHAR2(128);
+    v_column  VARCHAR2(128);
+    v_type    VARCHAR2(128);
+    v_text    VARCHAR2(512);
+    v_json    VARCHAR2(512);
+    v_expr    VARCHAR2(32767);
+    FUNCTION stored(p_expr VARCHAR2) RETURN VARCHAR2 IS
+    BEGIN
+        IF v_type = 'JSON' THEN
+            RETURN p_expr;
+        END IF;
+        RETURN 'JSON_SERIALIZE(' || p_expr || ' RETURNING CLOB)';
+    END;
+BEGIN
+    FOR i IN 1 .. v_targets.COUNT LOOP
+        v_table := SUBSTR(v_targets(i), 1, INSTR(v_targets(i), '.') - 1);
+        v_column := SUBSTR(v_targets(i), INSTR(v_targets(i), '.') + 1);
+        SELECT MAX(data_type) INTO v_type
+        FROM user_tab_columns
+        WHERE table_name = v_table AND column_name = v_column;
+        IF v_type IS NOT NULL THEN
+            IF v_type = 'JSON' THEN
+                v_text := 'JSON_SERIALIZE(' || v_column || ' RETURNING CLOB)';
+            ELSE
+                v_text := v_column;
+            END IF;
+            v_expr := v_text;
+{replaces}
+            IF v_type = 'JSON' THEN
+                v_expr := 'JSON(' || v_expr || ')';
+            END IF;
+            EXECUTE IMMEDIATE
+                'UPDATE ' || v_table || ' SET ' || v_column || ' = ' || v_expr
+                || ' WHERE ' || v_text || ' LIKE ''%_to_json"%'''
+                || ' OR ' || v_text || ' LIKE ''%_to_json_format"%''';
+            COMMIT;
+        END IF;
+    END LOOP;
+    FOR i IN 1 .. v_recipes.COUNT LOOP
+        v_table := SUBSTR(v_recipes(i), 1, INSTR(v_recipes(i), '.') - 1);
+        v_column := SUBSTR(v_recipes(i), INSTR(v_recipes(i), '.') + 1);
+        SELECT MAX(data_type) INTO v_type
+        FROM user_tab_columns
+        WHERE table_name = v_table AND column_name = v_column;
+        IF v_type IS NOT NULL THEN
+            IF v_type = 'JSON' THEN
+                v_json := v_column;
+            ELSE
+                v_json := 'JSON(' || v_column || ')';
+            END IF;
+            EXECUTE IMMEDIATE
+                'UPDATE ' || v_table || ' SET ' || v_column || ' = '
+                || stored('JSON_TRANSFORM(' || v_json
+                || ', SET ''$.parser_adapter_backend'' = ''structured_records_jsonl'')')
+                || ' WHERE ' || v_column || ' IS NOT NULL'
+                || ' AND JSON_VALUE(' || v_json || ', ''$.preprocess_profile'')'
+                || ' IN (''csv_to_jsonl'', ''excel_to_jsonl'')'
+                || ' AND NVL(JSON_VALUE(' || v_json || ', ''$.parser_adapter_backend''),'
+                || ' ''docling'') IN (''docling'', ''unstructured'')';
+            EXECUTE IMMEDIATE
+                'UPDATE ' || v_table || ' SET ' || v_column || ' = '
+                || stored('JSON_TRANSFORM(' || v_json
+                || ', SET ''$.chunk_delimiter'' = ''{delimiter}'')')
+                || ' WHERE ' || v_column || ' IS NOT NULL'
+                || ' AND JSON_VALUE(' || v_json || ', ''$.chunking_strategy'')'
+                || ' = ''fixed_delimiter'''
+                || ' AND JSON_VALUE(' || v_json || ', ''$.chunk_delimiter'') IS NULL';
+            COMMIT;
+        END IF;
+    END LOOP;
+END;
+/"""
 
 
 def document_cleanups_migration_sql() -> str:

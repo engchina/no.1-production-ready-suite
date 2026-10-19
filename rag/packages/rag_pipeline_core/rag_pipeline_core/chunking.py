@@ -14,6 +14,7 @@ from rag_parser_core.extraction import (
 )
 from rag_parser_core.language.text import text_patterns
 from rag_parser_core.structured_records import (
+    JSONL_RECORD_BOUNDARY,
     STRUCTURED_RECORD_ID_KEY,
     RecordBoundaryError,
     has_record_boundaries,
@@ -112,7 +113,7 @@ class _ElementSpan:
     table_column_count: int | None
     asset_id: str | None
     asset_kind: str | None
-    # 表計算の行の場所（前処理 excel_to_json の行の記録。#1221）。
+    # 表計算の行の場所（前処理 excel_to_jsonl の行の記録。#1221）。
     sheet_name: str | None = None
     sheet_row_start: int | None = None
     sheet_row_end: int | None = None
@@ -146,7 +147,7 @@ TEXT_CHUNK_PROFILE = "text_v1"
 TABLE_PRESERVE_ROWS_TEMPLATE = "table_preserve_rows"
 NON_INDEXED_ELEMENT_KINDS = {"header", "footer"}
 FIGURE_ELEMENT_KINDS = {"figure", "figure_caption"}
-# 表計算の行の記録（前処理 excel_to_json。rag_parser_core.sheet_records の content_kind）。
+# 表計算の行の記録（前処理 excel_to_jsonl。rag_parser_core.sheet_records の content_kind）。
 # 1 記録（表の 1 行・手順書の 1 手順）を 1 chunk にし、他の記録・要素と結合せず、途中で切らない
 # （#1349。engchina/no.1-rag の「1 行 = 1 chunk」に合わせる）。
 SHEET_RECORD_CONTENT_KIND = "record"
@@ -316,7 +317,8 @@ CHUNKING_STRATEGIES: tuple[str, ...] = (
     "fixed_delimiter",
 )
 _DEFAULT_CHUNKING_STRATEGY = "structure_aware"
-_DEFAULT_FIXED_DELIMITER = "\\n\\n"
+# 固定分割符の既定は構造化レコード JSONL の記録の境界のマーカー(#2457)。
+_DEFAULT_FIXED_DELIMITER = JSONL_RECORD_BOUNDARY
 # 撤去済み戦略の既存設定を後継戦略へ読み替える(sentence_window は小 chunk 化のみで
 # recursive_character + 検索時 neighbor expansion で代替)
 _LEGACY_CHUNKING_STRATEGY_ALIASES: dict[str, str] = {

@@ -40,7 +40,10 @@ from rag_parser_core.source import SourceModality, template_for_source_profile
 from rag_parser_core.structured_records import (
     STRUCTURED_RECORDS_CONTENT_TYPE,
     STRUCTURED_RECORDS_FILE_EXTENSION,
+    STRUCTURED_RECORDS_JSONL_BACKEND,
+    STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING,
     RecordBoundaryError,
+    is_structured_records_content_type,
     record_boundary_plain_text,
 )
 from rag_pipeline_core.raptor import build_raptor_summaries
@@ -59,9 +62,11 @@ from app.clients.oci_genai import OciGenAiClient
 from app.clients.oci_speech import OciSpeechClient
 from app.clients.oracle import OracleClient
 from app.clients.parser_service import (
+    STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_REASON,
     ParserServiceClient,
     ParserServiceUnavailableError,
     parse_progress_id,
+    structured_records_requires_jsonl_backend_message,
     supported_formats_label,
 )
 from app.clients.pipeline_stage import PipelineStageClient
@@ -665,6 +670,17 @@ class IngestionPipeline:
                 backend,
                 "engine_removed",
                 warning_code="parser_engine_removed",
+            )
+        # 構造化レコードの JSONL(CSV→JSONL・Excel→JSONL)は構造化レコード JSONL の解析エンジンだけが
+        # 読む。ほかのエンジンでは黙って変換せず、選び直すよう案内して止める(#2457)。
+        if (
+            is_structured_records_content_type(content_type)
+            and backend != STRUCTURED_RECORDS_JSONL_BACKEND
+        ):
+            raise ParserServiceUnavailableError(
+                backend,
+                STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_REASON,
+                warning_code=STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING,
             )
         # pre-flight: 宣言 matrix で非対応形式なら microservice/OCI を呼ぶ前に停止する
         # (preprocess 変換後の content_type で判定するため、office_to_pdf 済み等は通る)。
@@ -3841,9 +3857,11 @@ def _selected_parser_failure_message(
             "切り替えずに取込を停止しました。この文書の「処理レシピ」で「文書解析」を"
             f"Unstructured などに変えてから再実行してください。{warning_suffix}"
         )
+    if warning == STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING:
+        return structured_records_requires_jsonl_backend_message(label) + warning_suffix
     if warning and warning.startswith("structured_records_invalid:"):
         return (
-            f"選択した文書解析エンジン（{label}）は、ファイル準備の「CSV→JSON」「Excel→JSON」が"
+            f"選択した文書解析エンジン（{label}）は、ファイル準備の「CSV→JSONL」「Excel→JSONL」が"
             "作る構造化レコードの JSONL だけを解析できます。このファイルはその形式に合わないか、"
             "1 件の記録が大きすぎるため、別の解析エンジンには切り替えずに取込を停止しました。"
             "この文書の「処理レシピ」でファイル準備と文書解析の組み合わせを確認してから"
@@ -4230,7 +4248,7 @@ def _canonical_artifact_extension(content_type: str) -> str:
     mapping = {
         "application/pdf": ".pdf",
         "application/json": ".json",
-        # 前処理（csv_to_json / excel_to_json）の構造化レコードの JSONL（#2457）。
+        # 前処理（csv_to_jsonl / excel_to_jsonl）の構造化レコードの JSONL（#2457）。
         STRUCTURED_RECORDS_CONTENT_TYPE: STRUCTURED_RECORDS_FILE_EXTENSION,
         "application/csv": ".csv",
         "text/plain": ".txt",

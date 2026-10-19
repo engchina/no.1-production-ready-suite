@@ -17,6 +17,7 @@ import {
   CHUNK_SIZE_MAX_CHARS,
   CHUNK_SIZE_MIN_CHARS,
   DEFAULT_SMALL_TO_BIG_PARAMS,
+  JSONL_RECORD_BOUNDARY,
   chunkSizeLabelKey,
   invalidSmallToBigParam,
   overlapLabelKey,
@@ -54,7 +55,7 @@ export function chunkPreviewForm(recipe: DocumentRecipeView | null): ChunkPrevie
     chunk_size: config?.chunk_size ?? 800,
     chunk_overlap: config?.chunk_overlap ?? 120,
     chunk_min_chars: config?.chunk_min_chars ?? 120,
-    chunk_delimiter: "\\n\\n",
+    chunk_delimiter: config?.chunk_delimiter ?? JSONL_RECORD_BOUNDARY,
     chunk_context_header_enabled: config?.chunk_context_header_enabled ?? true,
     chunk_child_target_chars:
       config?.chunk_child_target_chars ?? DEFAULT_SMALL_TO_BIG_PARAMS.chunk_child_target_chars,

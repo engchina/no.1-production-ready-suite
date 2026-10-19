@@ -15,11 +15,13 @@ def _health() -> ConvertHealth:
     """CSV→JSONL は外部依存なしで常時 ready。"""
     return ConvertHealth(
         status="ok",
-        backend="preprocess-csv-to-json",
+        backend="preprocess-csv-to-jsonl",
         package_name="csv2json",
         package_version="v2",
-        supported_profiles=supported_profiles_from(["csv_to_json"]),
+        supported_profiles=supported_profiles_from(["csv_to_jsonl"]),
     )
 
 
-app = create_preprocess_app(converter=convert, health_probe=_health, title="preprocess-csv-to-json")
+app = create_preprocess_app(
+    converter=convert, health_probe=_health, title="preprocess-csv-to-jsonl"
+)
