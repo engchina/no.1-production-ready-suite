@@ -31,6 +31,11 @@ def is_choice_mark(text: str) -> bool:
     return bool(_MARK.fullmatch(text.strip()))
 
 
+def starts_with_choice_mark(text: str) -> bool:
+    """セルの文字が選択の記号で始まるか（「☑ A」のチェックボックス・選択肢ごとのセル）。"""
+    return bool(_MARK.match(text.strip()))
+
+
 def read_choice(value: str) -> str | None:
     """選択の記号の付いた値を、選ばれた選択肢にする（記号の選択肢でなければ None）。"""
     parts = _MARK.split(value)

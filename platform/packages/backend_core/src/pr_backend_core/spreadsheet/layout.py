@@ -21,7 +21,7 @@ from collections import defaultdict
 from collections.abc import Set
 from dataclasses import dataclass
 
-from .choices import is_choice_mark, read_choice
+from .choices import is_choice_mark, read_choice, starts_with_choice_mark
 from .grid import Grid, cell_ref, column_letter, is_textual
 from .models import SheetBlock, SheetDiagnostic
 
@@ -531,12 +531,13 @@ def form_blocks(grid: Grid) -> tuple[list[SheetBlock], list[SheetDiagnostic]]:
             continue
         consumed.add(value)
         values = [value]
-        # 選択の記号と選択肢を別々のセルに置いた値（「□」「A」「☑」「B」）は 1 つの値にする。
+        # 選択の記号と選択肢を別々のセルに置いた値（「□」「A」「☑」「B」）と、選択肢ごとの
+        # チェックボックス（「☑ A」「☐ B」。#2537）は 1 つの値にする。
         while (
-            is_choice_mark(values[0].text)
+            starts_with_choice_mark(values[0].text)
             and (following := index.right_of(values[-1], values[-1].top, consumed)) is not None
             and not following.hinted
-            and (is_choice_mark(values[-1].text) or is_choice_mark(following.text))
+            and (is_choice_mark(values[-1].text) or starts_with_choice_mark(following.text))
         ):
             consumed.add(following)
             values.append(following)
