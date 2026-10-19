@@ -1,7 +1,7 @@
 [project]
 name = "preprocess-csv-to-json-service"
 version = "0.1.0"
-description = "前処理(Preprocess)microservice: CSV→構造化 JSON(csv2json 再マップ)"
+description = "前処理(Preprocess)microservice: CSV→構造化レコード JSONL"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "production-ready-backend-core",

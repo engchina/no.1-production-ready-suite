@@ -7,8 +7,8 @@
 |---|---|---|
 | `document.docx` | `preprocess-office-to-pdf` | Office → PDF |
 | `pages.pdf` | `preprocess-pdf-to-page-images` | PDF → 画像PDF |
-| `table.csv` | `preprocess-csv-to-json` | CSV → JSON |
-| `table.xlsx` | `preprocess-excel-to-json` | Excel → JSON |
+| `table.csv` | `preprocess-csv-to-json` | CSV → 構造化レコード JSONL |
+| `table.xlsx` | `preprocess-excel-to-json` | Excel → 構造化レコード JSONL |
 | `pii.txt` | `preprocess-pii-redact` | PII マスク(EMAIL / PHONE / URL / カード番号) |
 
 ## 実行方法
@@ -17,7 +17,7 @@
 `EX` は本フォルダの絶対パス(`examples/test-preprocess`)に読み替える。
 
 ```bash
-# 例: Excel → JSON
+# 例: Excel → 構造化レコード JSONL
 cd services/preprocess/excel_to_json
 EX=../../../examples/test-preprocess uv run python - <<'PY'
 import os, app.converters as c

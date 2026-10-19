@@ -1,4 +1,4 @@
-"""Excel→行の記録 JSON 変換の検証（#1221。.xlsx は openpyxl、.xls は xlrd）。
+"""Excel→構造化レコード JSONL 変換の検証（#1221・#2457。.xlsx は openpyxl、.xls は xlrd）。
 
 テストのデータはすべて合成（顧客の資料は使わない）。
 """
@@ -14,9 +14,15 @@ from typing import Any
 import openpyxl
 import pytest
 from rag_parser_core.sheet_records import (
-    SHEET_RECORDS_CONTENT_TYPE,
     SheetRecordsDocument,
     sheet_records_extraction,
+)
+from rag_parser_core.structured_records import (
+    STRUCTURED_RECORDS_CONTENT_TYPE,
+    SheetLine,
+    StructuredRecordsDocument,
+    parse_structured_records,
+    structured_records_to_sheet_records,
 )
 
 from app import converters
@@ -43,14 +49,27 @@ def _xlsx_bytes(sheets: dict[str, list[list[Any]]]) -> bytes:
     return _bytes(_workbook(sheets))
 
 
+def _records(derived: bytes) -> StructuredRecordsDocument:
+    document = parse_structured_records(derived)
+    assert isinstance(document, StructuredRecordsDocument), document
+    return document
+
+
+def _loaded(derived: bytes) -> dict[str, Any]:
+    """JSONL を行の記録の形（シートごとの表頭・記録）に戻して比べる。"""
+    payload: dict[str, Any] = structured_records_to_sheet_records(_records(derived)).model_dump(
+        mode="json"
+    )
+    return payload
+
+
 def _payload(source: bytes, **options: Any) -> dict[str, Any]:
     outcome = convert(source, "", "excel_to_json", None, options=options)
     assert outcome.converted is True, outcome.warnings
     assert outcome.derived_bytes is not None
-    assert outcome.derived_content_type == SHEET_RECORDS_CONTENT_TYPE
-    assert outcome.converter_version == "v3"
-    payload: dict[str, Any] = json.loads(outcome.derived_bytes.decode("utf-8"))
-    return payload
+    assert outcome.derived_content_type == STRUCTURED_RECORDS_CONTENT_TYPE
+    assert outcome.converter_version == "v4"
+    return _loaded(outcome.derived_bytes)
 
 
 def _sheet(payload: dict[str, Any], index: int = 0) -> dict[str, Any]:
@@ -150,7 +169,7 @@ def test_formula_without_cached_value_is_diagnosed_not_blank() -> None:
     outcome = convert(_bytes(workbook), "", "excel_to_json", None)
     assert "excel_formula_without_cached_value:S:1" in outcome.warnings
     assert outcome.derived_bytes is not None
-    sheet = json.loads(outcome.derived_bytes)["sheets"][0]
+    sheet = _loaded(outcome.derived_bytes)["sheets"][0]
     assert sheet["blocks"][0]["values"]["金額"] == "=A2*B2"
     assert sheet["diagnostics"] == [
         {"code": "formula_without_cached_value", "cell": "C2", "detail": None}
@@ -276,7 +295,7 @@ def test_low_confidence_header_is_warned() -> None:
     outcome = convert(_xlsx_bytes({"数値": [[1, 2], [3, 4], [5]]}), "", "excel_to_json", None)
     assert "excel_header_low_confidence:数値" in outcome.warnings
     assert outcome.derived_bytes is not None
-    sheet = json.loads(outcome.derived_bytes)["sheets"][0]
+    sheet = _loaded(outcome.derived_bytes)["sheets"][0]
     assert sheet["diagnostics"][0]["code"] == "header_low_confidence"
 
 
@@ -689,3 +708,39 @@ def test_system_ledger_of_the_evaluation_set_is_row_records() -> None:
         "重要度",
         "機密区分",
     ]
+
+
+def test_jsonl_lines_carry_schema_ids_and_sheet_context() -> None:
+    """1 物理行 1 オブジェクト。document・sheet・記録の順で、記録は sheet を親に持つ（#2457）。
+
+    データは合成。
+    """
+    outcome = convert(
+        _xlsx_bytes({"S": [["説明の行"], ["名前", "値"], ["a", "1\n2"], ["b", "3"]]}),
+        "",
+        "excel_to_json",
+        None,
+    )
+    assert outcome.derived_bytes is not None
+    text = outcome.derived_bytes.decode("utf-8")
+    assert text.endswith("\n") and "\n\n" not in text
+    raw = [json.loads(line) for line in text.split("\n")[:-1]]
+    assert [item["record_type"] for item in raw] == ["document", "sheet", "preamble", "row", "row"]
+    assert all(item["schema"] == "production-ready.structured-records" for item in raw)
+    assert all(item["schema_version"] == 1 and item["source_type"] == "xlsx" for item in raw)
+    assert [item["record_id"] for item in raw[1:]] == [
+        "sheet-000",
+        "sheet-000-r1",
+        "sheet-000-r3",
+        "sheet-000-r4",
+    ]
+    assert raw[0]["converter"] == "excel_to_json"
+    row = raw[3]
+    assert row["parent_id"] == "sheet-000"
+    assert row["location"] == {"row_start": 3, "row_end": 3, "cell_range": "A3:B3"}
+    assert row["fields"] == [
+        {"name": "名前", "position": 1, "column": "A", "value": "a"},
+        {"name": "値", "position": 2, "column": "B", "value": "1\n2"},
+    ]
+    sheet = _records(outcome.derived_bytes).lines[0]
+    assert isinstance(sheet, SheetLine) and sheet.header_row == 2

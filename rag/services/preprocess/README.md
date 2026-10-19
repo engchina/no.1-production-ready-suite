@@ -8,8 +8,8 @@ parse の **前** に原本を一度だけ canonical な中間物へ変換する
 |---|---|---|---|---|---|
 | [office_to_pdf](./office_to_pdf) | `office_to_pdf` | Office→PDF | Office → PDF | LibreOffice | `http://127.0.0.1:18010` |
 | [pdf_to_page_images](./pdf_to_page_images) | `pdf_to_page_images` | PDF を画像として読み直す | PDF → ページを画像にした PDF(文字は後段で OCR / Vision が読み直す) | PyMuPDF | `http://127.0.0.1:18011` |
-| [csv_to_json](./csv_to_json) | `csv_to_json` | CSV→JSON | CSV → 構造化 JSON | (純 Python) | `http://127.0.0.1:18012` |
-| [excel_to_json](./excel_to_json) | `excel_to_json` | Excel→JSON | Excel(.xls/.xlsx) → 構造化 JSON | openpyxl + xlrd | `http://127.0.0.1:18013` |
+| [csv_to_json](./csv_to_json) | `csv_to_json` | CSV→JSON | CSV → 構造化レコード JSONL | (純 Python) | `http://127.0.0.1:18012` |
+| [excel_to_json](./excel_to_json) | `excel_to_json` | Excel→JSON | Excel(.xls/.xlsx) → 構造化レコード JSONL | openpyxl + xlrd | `http://127.0.0.1:18013` |
 | [pii_redact](./pii_redact) | `pii_redact` | PIIマスク | テキスト → PII マスク済みテキスト | Presidio + 日本語 NER | `http://127.0.0.1:18016` |
 
 画面の名前と説明は `rag/frontend/src/lib/i18n.ts` の `settings.preprocess.profile.*` が正本。
@@ -17,6 +17,9 @@ parse の **前** に原本を一度だけ canonical な中間物へ変換する
 `passthrough` / `text_normalize` は backend in-process で処理するため、サービスは呼ばれない。
 
 - 出力契約は共有 package `rag_parser_core` の `ConvertResponse`(`POST /convert`)で統一。
+- CSV / Excel の派生物は構造化レコードの JSON Lines(`rag_parser_core.structured_records`。#2457)。
+  UTF-8・BOM なし・1 物理行 1 オブジェクト・LF。すべての行が `schema`・`schema_version`・`record_id`・
+  `source_type`・`record_type` を持ち、parser は未知の schema・未対応の版・不正な行を行番号つきで拒否する。
 - backend は `app.clients.preprocess_service.PreprocessServiceClient` が profile ごとに
   対応サービス URL(`RAG_PREPROCESS_<PROFILE>_SERVICE_URL`)へ HTTP 委譲する。
   サービス無効・未達・timeout 時は warning を付けて **passthrough(原本そのまま parse)** へ

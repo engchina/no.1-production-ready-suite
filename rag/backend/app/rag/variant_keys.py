@@ -27,6 +27,8 @@ from app.rag.preprocess_strategy import preprocess_options
 # キー算法の版。算法やフィールド構成を変えるときに上げて、旧キーと衝突させない。
 KEY_VERSION = "v5"
 
+# 前処理 csv_to_json / excel_to_json の成果物の形式(抽出の ID に入れる。#2457)。
+STRUCTURED_RECORDS_FORMAT_ID = "structured_records_jsonl_v1"
 # 1 文書あたりの抽出(preprocess x parser 組合せ)上限。組合せ暴発の安全弁。
 MAX_EXTRACTIONS_PER_DOCUMENT = 8
 
@@ -130,7 +132,8 @@ def extraction_recipe_subset(settings: Settings) -> dict[str, object]:
         **_fields(settings, _BACKEND_EXTRACTION_RECIPE_FIELDS.get(backend, ())),
     }
     # 前処理 excel_to_json の選択肢は抽出結果を変える(#1221)。excel_to_json のときだけ加え、
-    # 他の前処理の ID は変えない。v2(行の記録)にしたときに Excel の抽出も作り直しになる。
+    # 他の前処理の ID は変えない。成果物の形式(#2457 で構造化レコードの JSONL)を変えたときは
+    # csv_to_json / excel_to_json の形式の値を変え、その文書の抽出を作り直しにする。
     # 見出しの階層の推定(#2277)は抽出結果の見出しの階層を変える。有効のときだけ加え、既定(無効)の
     # ID は変えない。
     if getattr(settings, "rag_heading_level_inference_enabled", False) is True:
@@ -138,7 +141,9 @@ def extraction_recipe_subset(settings: Settings) -> dict[str, object]:
     profile = getattr(settings, "rag_preprocess_profile", None)
     if profile == "excel_to_json":
         subset["rag_preprocess_excel_options"] = preprocess_options(settings, profile)
-        subset["excel_to_json_format"] = "sheet_records_v1"
+        subset["excel_to_json_format"] = STRUCTURED_RECORDS_FORMAT_ID
+    if profile == "csv_to_json":
+        subset["csv_to_json_format"] = STRUCTURED_RECORDS_FORMAT_ID
     return subset
 
 

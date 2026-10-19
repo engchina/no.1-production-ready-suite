@@ -1,22 +1,39 @@
-"""CSV→構造化 JSON 前処理マイクロサービスの変換実装。
+"""CSV→構造化レコード JSONL 前処理マイクロサービスの変換実装（#2457）。
 
-engchina/No.1 系の csv2json 相当を本プロジェクトの前処理契約(`ConvertResponse`)へ
-再マップする。CSV を決定論で「ヘッダ列をキーにしたレコード配列の JSON」へ変換し、
-後段 parser が表構造として安定して扱えるようにする。純 Python(`csv` + `json`)のみで
-完結し、重い変換依存(LibreOffice / PyMuPDF)を持たない軽量サービス。
+CSV を決定論で構造化レコードの JSONL（`rag_parser_core.structured_records`）にする。1 データ行を
+1 記録にし、表頭の列名つきの値（`fields`）と原本の物理行の位置（`location.row_start` / `row_end`。
+引用符の中の改行を含む記録は複数行）を持つ。入力の列の区切り（`,`・タブ・`;`・`|`）と JSONL の行の
+区切り（LF）と chunk の境界は別のもので、入力の区切りは JSONL に残さない。純 Python（`csv` +
+pydantic）のみで完結し、重い変換依存（LibreOffice / PyMuPDF）を持たない軽量サービス。
 
-未対応・空・復号失敗・行数 0 のときは passthrough(変換せず原本を使う)へ縮退する。
+- 表頭は最初の空でない行。空・重複の列名は決定論で補う（`col_<位置>`・`<名前>_<n>`）。
+- 表頭より列の多い行は、余った値を `col_<位置>` の列にして捨てない
+  （診断 `csv_row_wider_than_header`）。
+- 空の行は記録にしない（元の行番号は振り直さない）。
+
+未対応・空・行数 0・CSV として読めないときは passthrough(変換せず原本を使う)へ縮退する。
 """
 
 from __future__ import annotations
 
 import csv
 import io
-import json
 
 from rag_parser_core.preprocess import ConvertOutcome
 from rag_parser_core.source import SourceProfile
+from rag_parser_core.structured_records import (
+    STRUCTURED_RECORDS_CONTENT_TYPE,
+    ContentLine,
+    DocumentLine,
+    RecordDiagnostic,
+    RecordField,
+    RecordLocation,
+    RowLine,
+    dump_structured_records,
+)
 
+CONVERTER_NAME = "csv_to_json"
+CONVERTER_VERSION = "v2"
 # CSV として扱える上限デリミタ候補(Sniffer 失敗時の決定論フォールバックはカンマ)。
 _DELIMITER_CANDIDATES = ",\t;|"
 
@@ -32,7 +49,7 @@ def convert(
         return ConvertOutcome.passthrough(
             reason=f"preprocess_unsupported_profile:{preprocess_profile}"
         )
-    return _csv_to_json(source_bytes)
+    return _csv_to_records(source_bytes)
 
 
 def _decode_csv(source_bytes: bytes) -> tuple[str | None, list[str]]:
@@ -63,7 +80,19 @@ def _sniff_delimiter(sample: str) -> str:
         return ","
 
 
-def _csv_to_json(source_bytes: bytes) -> ConvertOutcome:
+def _read_rows(text: str, delimiter: str) -> list[tuple[int, int, list[str]]]:
+    """CSV の行を、原本の物理行の範囲（1 始まり）と一緒に読む。"""
+    # newline="" で \r\n / \r / \n を行の区切りにし、引用符の中の改行は値に残す。
+    reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
+    rows: list[tuple[int, int, list[str]]] = []
+    previous = 0
+    for row in reader:
+        rows.append((previous + 1, reader.line_num, row))
+        previous = reader.line_num
+    return rows
+
+
+def _csv_to_records(source_bytes: bytes) -> ConvertOutcome:
     if not source_bytes:
         return ConvertOutcome.passthrough(reason="csv_empty")
     text, warnings = _decode_csv(source_bytes)
@@ -71,31 +100,59 @@ def _csv_to_json(source_bytes: bytes) -> ConvertOutcome:
         return ConvertOutcome.passthrough(reason="csv_empty")
     delimiter = _sniff_delimiter(text[:8192])
     try:
-        rows = list(csv.reader(io.StringIO(text), delimiter=delimiter))
+        rows = _read_rows(text, delimiter)
     except csv.Error:
         return ConvertOutcome.passthrough(reason="csv_parse_failed")
-    rows = [row for row in rows if any(cell.strip() for cell in row)]
+    rows = [item for item in rows if any(cell.strip() for cell in item[2])]
     if not rows:
         return ConvertOutcome.passthrough(reason="csv_no_rows")
 
-    header = [cell.strip() for cell in rows[0]]
+    header_start, _, header = rows[0]
     # ヘッダが空/重複のときは決定論で列名を補完(col_1, col_2, ...)。
-    columns = _resolve_columns(header)
-    records: list[dict[str, str]] = []
-    for row in rows[1:]:
-        record: dict[str, str] = {}
-        for index, column in enumerate(columns):
-            record[column] = row[index] if index < len(row) else ""
-        records.append(record)
-
-    payload = {"columns": columns, "row_count": len(records), "rows": records}
-    derived = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    columns = _resolve_columns([cell.strip() for cell in header])
+    wide_rows: list[int] = []
+    records: list[ContentLine] = []
+    for index, (row_start, row_end, row) in enumerate(rows[1:], start=1):
+        if len(row) > len(columns):
+            wide_rows.append(row_start)
+            columns = _resolve_columns([*columns, *("" for _ in range(len(row) - len(columns)))])
+        records.append(
+            RowLine(
+                record_id=f"row-{index:06d}",
+                source_type="csv",
+                location=RecordLocation(row_start=row_start, row_end=row_end),
+                fields=[
+                    RecordField(
+                        name=column,
+                        position=position,
+                        value=row[position - 1] if position <= len(row) else "",
+                    )
+                    for position, column in enumerate(columns, start=1)
+                ],
+            )
+        )
+    if not records:
+        return ConvertOutcome.passthrough(reason="csv_no_rows")
+    diagnostics = [
+        RecordDiagnostic(code="csv_row_wider_than_header", detail=f"row={row}")
+        for row in wide_rows[:100]
+    ]
+    if wide_rows:
+        warnings.append(f"csv_row_wider_than_header:{len(wide_rows)}")
+    document = DocumentLine(
+        record_id="document",
+        source_type="csv",
+        converter=CONVERTER_NAME,
+        converter_version=CONVERTER_VERSION,
+        header_row=header_start,
+        diagnostics=diagnostics,
+    )
     return ConvertOutcome(
         converted=True,
-        converter_name="csv_to_json",
-        converter_version="v1",
-        derived_bytes=derived,
-        derived_content_type="application/json; charset=utf-8",
+        converter_name=CONVERTER_NAME,
+        converter_version=CONVERTER_VERSION,
+        derived_bytes=dump_structured_records([document, *records]),
+        derived_content_type=STRUCTURED_RECORDS_CONTENT_TYPE,
         warnings=tuple(warnings),
     )
 
@@ -103,13 +160,14 @@ def _csv_to_json(source_bytes: bytes) -> ConvertOutcome:
 def _resolve_columns(header: list[str]) -> list[str]:
     """空・重複のないユニークな列名を決定論で確定する。"""
     columns: list[str] = []
-    seen: dict[str, int] = {}
+    used: set[str] = set()
     for index, name in enumerate(header):
         base = name or f"col_{index + 1}"
-        if base in seen:
-            seen[base] += 1
-            base = f"{base}_{seen[base]}"
-        else:
-            seen[base] = 0
-        columns.append(base)
+        candidate = base
+        suffix = 0
+        while candidate in used:
+            suffix += 1
+            candidate = f"{base}_{suffix}"
+        used.add(candidate)
+        columns.append(candidate)
     return columns
