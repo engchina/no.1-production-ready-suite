@@ -331,6 +331,9 @@ class StoredMessage:
     clarification: dict[str, Any] | None = None
     # 回答に付けた注意書き（ASSISTANT の回答だけ。#2405）。会話の履歴の本文（content）とは分ける。
     answer_notice: str | None = None
+    # 質問に添付したファイル（USER のメッセージだけ。名前・種類・大きさ。#2517）。添付が期限で
+    # 消えても発話の表示に残す。添付の無い質問は None。
+    attachments: list[dict[str, Any]] | None = None
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
@@ -4123,6 +4126,7 @@ class OracleClient:
             # 常に NULL になる（#1877）。
             clarification=message.clarification,
             answer_notice=message.answer_notice,
+            attachments=message.attachments,
         )
 
         def operation(connection: OracleConnectionProtocol) -> StoredMessage:
@@ -4150,6 +4154,7 @@ class OracleClient:
                     heartbeat_at,
                     clarification_json,
                     answer_notice,
+                    attachments_json,
                     created_at
                 ) VALUES (
                     :message_id,
@@ -4170,6 +4175,7 @@ class OracleClient:
                     CASE WHEN :lease_owner IS NULL THEN NULL ELSE SYSTIMESTAMP END,
                     :clarification_json,
                     :answer_notice,
+                    :attachments_json,
                     :created_at
                 )
                 """,
@@ -4253,6 +4259,7 @@ class OracleClient:
                 m.heartbeat_at,
                 m.clarification_json,
                 m.answer_notice,
+                m.attachments_json,
                 m.created_at
             FROM rag_messages m
             JOIN rag_conversations c
@@ -13363,6 +13370,9 @@ def _message_binds(message: StoredMessage) -> dict[str, object]:
             None if message.clarification is None else _json_dumps(message.clarification)
         ),
         "answer_notice": message.answer_notice,
+        "attachments_json": (
+            None if message.attachments is None else _json_dumps(message.attachments)
+        ),
         "created_at": message.created_at,
     }
 
@@ -13548,6 +13558,11 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
         lease_owner=_optional_str(row.get("lease_owner")),
         clarification=_json_object_or_none(row.get("clarification_json")),
         answer_notice=_optional_str(row.get("answer_notice")),
+        attachments=(
+            _json_object_list(row.get("attachments_json"))
+            if row.get("attachments_json") is not None
+            else None
+        ),
         heartbeat_at=(
             _datetime_value(row.get("heartbeat_at"))
             if row.get("heartbeat_at") is not None
@@ -14710,6 +14725,7 @@ CREATE TABLE {table_name} (
     heartbeat_at         TIMESTAMP WITH TIME ZONE,
     clarification_json   CLOB,
     answer_notice        CLOB,
+    attachments_json     CLOB,
     created_at           TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_role_ck
         CHECK (role IN ('USER', 'ASSISTANT', 'SYSTEM')),

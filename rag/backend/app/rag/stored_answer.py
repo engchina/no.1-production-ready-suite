@@ -75,6 +75,8 @@ _EVIDENCE_KEYS = (
     # どの版の chunk かが分かる）と、ベクトル検索と全文検索を統合した値。
     "chunk_set_id",
     "rrf_score",
+    # チャットの添付の根拠の印（添付の ID。#2517。画面は原文のプレビュー・文書を開かない）。
+    "chat_attachment_id",
 )
 _PREVIEW_KEYS = (
     # 根拠のプレビューで開く要素・表のセル。

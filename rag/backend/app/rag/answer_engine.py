@@ -607,9 +607,13 @@ class AnswerEngine:
         scope: AnswerScope | None = None,
         entity_store: EntityExpansionStore | None = None,
         graph_store: GraphExpansionStore | None = None,
+        attachment_chunks: Sequence[RetrievedChunk] = (),
     ) -> None:
         self._settings = settings
         self._oracle = oracle
+        # チャットの会話の添付から選んだ根拠の候補（#2517。`app.rag.chat_attachments`）。検索の
+        # 結果の先頭に足し、rerank・文脈・引用は検索の chunk と同じに扱う。
+        self._attachment_chunks = list(attachment_chunks)
         # 実体の表を読む SQL(#1362)。None は Oracle(``EntityStore``)。テストは同じ規則の表を渡す。
         self._entity_store = entity_store
         # 関係情報の表を読む SQL(#2055)。None は Oracle(``OracleGraphStore``)。
@@ -1198,6 +1202,18 @@ class AnswerEngine:
                     first_page_context=_first_page_context(sibling, state),
                 ),
             )
+        if self._attachment_chunks:
+            # 会話の添付の根拠の候補（#2517）を先頭に足す（何度検索しても同じ chunk を 1 回だけ）。
+            base_score = max(fused.values(), default=1.0)
+            attached = []
+            for chunk in self._attachment_chunks:
+                state.chunks.setdefault(chunk.chunk_id, chunk)
+                if chunk.chunk_id in all_children:
+                    continue
+                stored = _stored_child(chunk, rrf_score=base_score * max(chunk.score, 0.1))
+                all_children[stored.chunk_uid] = stored
+                attached.append(stored)
+            children = [*attached, *children]
         parents = _stored_parents(list(all_children.values()), state)
         return HybridSearchResult(
             child_chunks=children, all_chunks=[*all_children.values(), *parents]

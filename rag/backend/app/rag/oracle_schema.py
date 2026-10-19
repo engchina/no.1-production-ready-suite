@@ -493,6 +493,13 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=structured_records_jsonl_profiles_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261019_010_message_attachments",
+            table_name="rag_messages",
+            sql=message_attachments_migration_sql(),
+        )
+    )
     return sections
 
 
@@ -726,6 +733,25 @@ def support_guide_embeddings_migration_sql() -> str:
     return _create_missing_objects_sql(
         oracle_support_guide_embedding_schema_sql(), "業務ガイドの埋め込み"
     )
+
+
+def message_attachments_migration_sql() -> str:
+    """質問に添付したファイルの列（USER のメッセージの attachments_json）を無ければ足す（#2517）。
+
+    列を足すだけでデータは変えない。この機能より前の質問は NULL（添付なし）。JSON 型の列は既存の
+    index の隠し列と ORA-54015 になる（#1193）ため、JSON の文字列を CLOB で持つ。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_MESSAGES' AND column_name = 'ATTACHMENTS_JSON';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_messages ADD (attachments_json CLOB)';
+    END IF;
+END;
+/"""
 
 
 def answer_notice_column_migration_sql(table_name: str) -> str:
