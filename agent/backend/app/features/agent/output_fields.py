@@ -274,7 +274,8 @@ _FALSE_TEXTS = frozenset({"false", "いいえ", "no", "×", "0"})
 class OutputFieldResult(BaseModel):
     """期待する出力の 1 つの項目の判定（期待の行・項目・期待・記録・正誤・比べ方）。
 
-    `note` は比べ方どおりに判定できなかった理由（意味の判定の失敗など。無ければ空）。
+    `reason` は意味の判定の理由（#2568。意味で判定した項目だけ）、`note` は比べ方どおりに
+    判定できなかった理由（意味の判定の失敗など。無ければ空）。
     """
 
     row: int
@@ -284,6 +285,7 @@ class OutputFieldResult(BaseModel):
     actual: OutputValue = None
     correct: bool
     method: OutputFieldMatch = "exact"
+    reason: str = ""
     note: str = ""
 
 
