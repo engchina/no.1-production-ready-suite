@@ -98,10 +98,13 @@ ALLOWED_RAG_SERVICES=(
   parser-oci-document-understanding
 )
 # 必ず配備する parser（既定の解析エンジンの Docling と、使用エンジンに選べる構造化レコード JSONL・XML ツリー JSON）と、
-# 後から足した前処理 Word→JSONL（#2457 の ④。以前の stack の一覧には無い）。
-# rag_services.txt に無ければ足す（以前の stack が書いた一覧でも、再配備で unit が入る。構造化レコード JSONL と Word→JSONL は
-# CSV / Excel の前処理と同じく起動する（#2457）。XML ツリー JSON は既定は停止のサービスで、初回は起動しない。#2453）。
-REQUIRED_RAG_SERVICES=(parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl)
+# Terraform の stack が常に配備する前処理 CSV→JSONL・Excel→JSONL・Word→JSONL（#2457。terraform/stack/locals.tf の rag_services）。
+# rag_services.txt に無ければ足す（以前の stack が書いた一覧や、#2484 の前の再配備で CSV / Excel が消えた一覧でも、再配備で unit が入る。
+# #2486）。初めて配備したときは起動する。XML ツリー JSON は既定は停止のサービスで、初回は起動しない（#2453）。
+REQUIRED_RAG_SERVICES=(
+  parser-docling parser-structured-records-jsonl parser-xml-tree-json
+  preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl
+)
 # 改名したサービス（旧名|新名。#2457 の CSV→JSONL・Excel→JSONL）。以前の stack が書いた rag_services.txt の旧名は新名として読み、
 # 旧名の unit の起動 / 停止の状態を新名の unit に引き継ぐ（configure_systemd。旧名の unit は配備しなくなった unit として消す）。
 RENAMED_RAG_SERVICES=(

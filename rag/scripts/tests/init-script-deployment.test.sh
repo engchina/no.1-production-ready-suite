@@ -302,26 +302,26 @@ test "${allowed_order} " = "${provided_order}" \
 run_services_case services-default "preprocess-office-to-pdf parser-unstructured parser-docling parser-structured-records-jsonl parser-xml-tree-json"
 test "$(cat "${TEST_TMP_DIR}/services-default/result")" = "ok" || fail "既定の service が拒否された"
 test "$(cat "${TEST_TMP_DIR}/services-default/services")" = \
-  "preprocess-office-to-pdf parser-unstructured parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl" \
+  "preprocess-office-to-pdf parser-unstructured parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
   || fail "service の一覧が rag_services.txt と一致しない"
 run_services_case services-legacy-file "backend ingestion-worker parser-unstructured parser-docling" compose_services.txt
 test "$(cat "${TEST_TMP_DIR}/services-legacy-file/result")" = "ok" \
   || fail "以前の stack の compose_services.txt を読めない"
 test "$(cat "${TEST_TMP_DIR}/services-legacy-file/services")" = \
-  "parser-unstructured parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl" \
+  "parser-unstructured parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
   || fail "以前の stack の backend / ingestion-worker を前処理 / parser として扱った"
 # 以前の stack が書いた一覧に、提供しなくなったサービス（#270 の parser-marker・#2042 の parser-asr /
 # parser-oci-genai-vision・preprocess-url-to-markdown・preprocess-image-enhance）や未知の名前があっても、再配備を止めずに読み飛ばす。
 run_services_case services-removed "parser-docling parser-asr parser-oci-genai-vision preprocess-url-to-markdown preprocess-image-enhance parser-marker frontend"
 test "$(cat "${TEST_TMP_DIR}/services-removed/result")" = "ok" \
   || fail "提供しなくなったサービスが rag_services.txt にあると再配備が失敗する"
-test "$(cat "${TEST_TMP_DIR}/services-removed/services")" = "parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl" \
+test "$(cat "${TEST_TMP_DIR}/services-removed/services")" = "parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
   || fail "提供しなくなったサービスを配備の対象にした"
 grep -Fqx '[rag-init] Skipping RAG service that is no longer provided: parser-asr' "${TEST_TMP_DIR}/services-removed/load.log" \
   || fail "提供しなくなったサービスを読み飛ばしたことを log に出していない"
 run_services_case services-glob "parser-docling *"
 test "$(cat "${TEST_TMP_DIR}/services-glob/result")" = "ok" || fail "glob の名前で再配備が失敗した"
-test "$(cat "${TEST_TMP_DIR}/services-glob/services")" = "parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl" \
+test "$(cat "${TEST_TMP_DIR}/services-glob/services")" = "parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
   || fail "glob が展開された、または読み飛ばされていない"
 # 提供するが stack が許可しないサービスは拒否する。
 run_services_case services-not-allowed "parser-docling parser-unstructured" rag_services.txt \
@@ -334,7 +334,7 @@ run_services_case services-missing-required "parser-unstructured preprocess-offi
 test "$(cat "${TEST_TMP_DIR}/services-missing-required/result")" = "ok" \
   || fail "必ず配備する parser が無い一覧で再配備が失敗した"
 test "$(cat "${TEST_TMP_DIR}/services-missing-required/services")" = \
-  "parser-unstructured preprocess-office-to-pdf parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl" \
+  "parser-unstructured preprocess-office-to-pdf parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
   || fail "必ず配備する parser（parser-docling・parser-structured-records-jsonl・parser-xml-tree-json）を足していない"
 grep -Fq 'Adding required RAG service missing from' "${TEST_TMP_DIR}/services-missing-required/load.log" \
   || fail "必ず配備する parser を足したことを log に出していない"
@@ -526,7 +526,7 @@ run_redeploy_case
 redeploy_dir="${TEST_TMP_DIR}/redeploy"
 redeploy_log="${redeploy_dir}/systemctl.log"
 test "$(cat "${redeploy_dir}/app/props/rag_services.txt")" = \
-  "preprocess-office-to-pdf parser-docling parser-oci-document-understanding parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl" \
+  "preprocess-office-to-pdf parser-docling parser-oci-document-understanding parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
   || fail "再配備で rag_services.txt を今の一覧に書き戻していない: $(cat "${redeploy_dir}/app/props/rag_services.txt")"
 test "$(stat -c '%a' "${redeploy_dir}/app/props/rag_services.txt")" = "640" \
   || fail "rag_services.txt の書き戻しで mode が変わった"
@@ -543,6 +543,14 @@ grep -qx 'enable --now production-ready-rag-parser-structured-records-jsonl.serv
   || fail "再配備で初めて入れた parser-structured-records-jsonl を起動していない"
 grep -qx 'restart production-ready-rag-parser-docling.service' "${redeploy_log}" \
   || fail "再配備で起動中の parser-docling を restart していない"
+# #2484 の前の再配備で CSV / Excel の前処理が一覧から消えた環境も、再配備で unit・sudoers を入れて起動する（#2486）。
+for service in preprocess-csv-to-jsonl preprocess-excel-to-jsonl; do
+  grep -qx "enable --now production-ready-rag-${service}.service" "${redeploy_log}" \
+    || fail "一覧に無い ${service} を再配備で起動していない"
+  grep -Fq "/usr/bin/systemctl enable --now production-ready-rag-${service}.service" \
+    "${redeploy_dir}/sudoers.d/production-ready-rag-services" \
+    || fail "再配備の sudoers が ${service} の操作を許可していない"
+done
 for removed in preprocess-url-to-markdown preprocess-image-enhance parser-oci-genai-vision parser-asr; do
   grep -Fqx "[rag-init] Skipping RAG service that is no longer provided: ${removed}" "${redeploy_dir}/load.log" \
     || fail "提供しなくなった ${removed} を読み飛ばしたことを log に出していない"
@@ -568,7 +576,7 @@ grep -Fq '/usr/bin/systemctl enable --now production-ready-rag-parser-xml-tree-j
   printf '%s\n' 'parser-docling parser-asr' > "${APP_ROOT}/props/rag_services.txt"
   mktemp() { return 1; }
   load_rag_services > "${case_dir}/load.log" 2>&1 || fail "rag_services.txt を書けないと配備が止まる"
-  test "${RAG_SERVICES[*]}" = "parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl" \
+  test "${RAG_SERVICES[*]}" = "parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
     || fail "書けないときの一覧が違う: ${RAG_SERVICES[*]}"
   grep -Fq 'WARNING: Could not update' "${case_dir}/load.log" || fail "書けなかったことを log に出していない"
   test "$(cat "${APP_ROOT}/props/rag_services.txt")" = "parser-docling parser-asr" || fail "書けないはずの rag_services.txt が変わった"
@@ -598,7 +606,7 @@ fi
 # 旧名と新名が両方あっても、新名を 1 つだけ配備する。
 run_services_case services-renamed-duplicate "preprocess-csv-to-jsonl preprocess-csv-to-json parser-docling"
 test "$(cat "${TEST_TMP_DIR}/services-renamed-duplicate/services")" = \
-  "preprocess-csv-to-jsonl parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl" \
+  "preprocess-csv-to-jsonl parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-excel-to-jsonl preprocess-word-to-jsonl" \
   || fail "旧名と新名の両方があると新名を重ねて配備する"
 run_renamed_redeploy_case
 renamed_dir="${TEST_TMP_DIR}/renamed"
