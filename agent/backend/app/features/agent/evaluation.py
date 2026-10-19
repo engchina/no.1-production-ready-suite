@@ -58,7 +58,7 @@ from pr_backend_core.bounded_calls import (
 )
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
-from app.features.agent import builtin_runtime
+from app.features.agent import builtin_runtime, tool_grounding
 from app.features.agent.ai_calls import (
     evaluation_concurrency,
     make_ai_caller,
@@ -440,6 +440,13 @@ class EvaluationCaseResult(BaseModel):
     # 出力の項目の判定（#2558。期待する出力が無いケースは空と None）。
     field_results: list[OutputFieldResult] = Field(default_factory=list)
     field_correct: bool | None = None
+    # 最後の Run の回答の対応（成果物 `answer` の `outcome` の `value` と `basis`。#1305）と、
+    # 拒答（insufficient_evidence）が根拠・データのツールで調べる前か後か
+    # （`tool_grounding.refusal_stage`。調べずに範囲外と判断した拒答と、調べた結果として根拠が
+    # 無かった拒答を分ける。#2608）。
+    answer_outcome: str | None = None
+    answer_basis: str | None = None
+    refusal_stage: Literal["before_tools", "after_tools"] | None = None
     # 判定のモデルを呼んだ回数（出力の上限で止まったら広げて 1 回再試行する。#1845）。
     judge_attempts: int = 0
     # 問い返しへの往復（#1845。`run_id` は最後の Run）。
@@ -491,6 +498,10 @@ class EvaluationSummary(BaseModel):
     field_items: int = 0
     field_items_correct: int = 0
     field_item_accuracy: float | None = None
+    # 拒答したケース（回答の対応が insufficient_evidence）のうち、根拠・データのツールで調べる前に
+    # 拒答したケースと、調べた後に拒答したケース（#2608）。
+    refused_before_tools: int = 0
+    refused_after_tools: int = 0
 
 
 def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
@@ -509,6 +520,10 @@ def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
         if result.tool_selection_correct is not None:
             summary.tool_cases += 1
             summary.tool_correct += int(result.tool_selection_correct)
+        if result.refusal_stage == tool_grounding.REFUSAL_BEFORE_TOOLS:
+            summary.refused_before_tools += 1
+        elif result.refusal_stage == tool_grounding.REFUSAL_AFTER_TOOLS:
+            summary.refused_after_tools += 1
         if result.field_correct is not None:
             summary.field_cases += 1
             summary.field_correct += int(result.field_correct)
@@ -1590,6 +1605,21 @@ def recorded_output_rows(run: RunState) -> list[dict[str, OutputValue]]:
     )
 
 
+def _answer_outcome(artifacts: list[Artifact]) -> tuple[str | None, str | None]:
+    """回答の対応の `value` と `basis`（成果物 `answer` の `outcome`。無ければ None）。"""
+    for artifact in reversed(artifacts):
+        if artifact.kind == "answer" and isinstance(artifact.content, dict):
+            outcome = artifact.content.get("outcome")
+            if not isinstance(outcome, dict):
+                return None, None
+            value, basis = outcome.get("value"), outcome.get("basis")
+            return (
+                value if isinstance(value, str) else None,
+                basis if isinstance(basis, str) else None,
+            )
+    return None, None
+
+
 def _answer_text(artifacts: list[Artifact]) -> str:
     for artifact in reversed(artifacts):
         if artifact.kind == "answer" and isinstance(artifact.content, dict):
@@ -1807,8 +1837,16 @@ async def _run_case(
     if field_results:
         field_results = await judge_output_meaning(field_results, caller=judge_caller)
         field_correct = all(item.correct for item in field_results)
+    answer_outcome, answer_basis = (
+        _answer_outcome(settled.artifacts)
+        if settled.status == RunStatus.COMPLETED
+        else (None, None)
+    )
     tools = {
         "tool_calls": tool_calls,
+        "answer_outcome": answer_outcome,
+        "answer_basis": answer_basis,
+        "refusal_stage": tool_grounding.refusal_stage(answer_outcome, tool_calls),
         "tool_selection_correct": tool_selection_correct(case, tool_calls),
         "tool_order_correct": tool_order_correct(case, tool_calls),
         "field_results": field_results,

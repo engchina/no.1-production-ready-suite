@@ -2523,6 +2523,9 @@ async def _require_tool_grounding(
     ツールを呼ばずに本文の確認の質問だけを返した回答も 1 回差し戻す（あいさつへの返事は除く）。
     `assume` の差し戻しの文は「確認の質問はせず、ツールで調べ、決まらない点は前提を示して答える」。
     差し戻しの後も本文の聞き返しだけなら、拒答にはせず、Run の経過に残してそのまま出す。
+    回答の結論が範囲外・答えられないと述べる回答（調べずに判断した拒答。`tool_grounding.declined`。
+    #2608）は、範囲の内外と根拠の有無をツールの結果で判断させる文で差し戻し、経過に `declined` を
+    残す。
     """
     from app.features.agent.runtime import runtime_repository
 
@@ -2566,16 +2569,20 @@ async def _require_tool_grounding(
                 # 拒答にせず、経過に残してそのまま出す。
                 runtime_repository.record_tool_grounding(run.id, "text_clarification", answer)
                 return result, False
-            runtime_repository.record_tool_grounding(run.id, "refused", answer)
+            # 調べずに範囲外・答えられないと判断した拒答（#2608）は、ツールで確かめずに答えた回答の
+            # 拒答と分けて残す（回答の対応の basis は `_finish` が metadata から決める）。
+            declined = tool_grounding.declined(answer)
+            runtime_repository.record_tool_grounding(run.id, "refused", answer, declined=declined)
             logger.info(
                 "builtin_runtime_tool_grounding_refused",
-                extra={"run_id": run.id, "tool_names": tool_names},
+                extra={"run_id": run.id, "tool_names": tool_names, "declined": declined},
             )
             return result, True
-        runtime_repository.record_tool_grounding(run.id, "retry", answer)
+        declined = tool_grounding.declined(answer)
+        runtime_repository.record_tool_grounding(run.id, "retry", answer, declined=declined)
         logger.info(
             "builtin_runtime_tool_grounding_retry",
-            extra={"run_id": run.id, "tool_names": tool_names},
+            extra={"run_id": run.id, "tool_names": tool_names, "declined": declined},
         )
         # 利用量は新しい Run の文脈に前の分を足して続ける（承認待ちで保存する状態にも入る）。
         context: RunContextWrapper[Any] = RunContextWrapper(context=result.context_wrapper.context)
@@ -2584,7 +2591,11 @@ async def _require_tool_grounding(
             run.id,
             sdk_agent,
             tool_grounding.retry_input(
-                result.to_input_list(), answer, confirmable=confirmable, assume=assume
+                result.to_input_list(),
+                answer,
+                confirmable=confirmable,
+                assume=assume,
+                declined=declined,
             ),
             context=context,
         )
@@ -2834,6 +2845,15 @@ def _grounded_in_thread(run_id: str) -> bool:
     return tool_grounding.grounded_in_thread(list(item.steps) for item in previous)
 
 
+def _refusal_declined(run_id: str) -> bool:
+    """拒答にした Run が、ツールで調べずに範囲外・答えられないと判断した拒答か（#2608）。"""
+    from app.features.agent.runtime import runtime_repository
+
+    metadata = runtime_repository.get_run(run_id).metadata
+    record = metadata.get(tool_grounding.METADATA_KEY) if isinstance(metadata, dict) else None
+    return isinstance(record, dict) and record.get("declined") is True
+
+
 def _refusal_text(agent: Any, sdk_agent: Agent[Any]) -> str:
     """拒答の文（業務 Agent の説明・スキルの表示名と、モデルに渡したツールから。#1835）。"""
     skill_names = [
@@ -2869,7 +2889,8 @@ async def _finish(
     """Run を承認待ちにするか、回答を確定する。
 
     `refusal` があれば（根拠・データのツールを呼ばずに作った回答。#1835）、モデルの回答の代わりに
-    その拒答の文を回答にし、最終の検証はせずに `skipped`（`no_tool_grounding`）を残す。
+    その拒答の文を回答にし、最終の検証はせずに `skipped`（`no_tool_grounding`）を残す。回答の対応の
+    basis は、調べずに範囲外・答えられないと判断した拒答なら `declined_without_tools`（#2608）。
     """
     from app.features.agent.runtime import runtime_repository
 
@@ -2904,7 +2925,7 @@ async def _finish(
         runtime_repository.complete_builtin_run(
             run_id,
             refusal,
-            outcome=tool_grounding.refusal_outcome(),
+            outcome=tool_grounding.refusal_outcome(declined=_refusal_declined(run_id)),
             notice=current_answer_notice(),
         )
         return
