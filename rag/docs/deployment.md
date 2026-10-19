@@ -222,6 +222,25 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#2452 文書の削除の後始末の再試行）
+
+文書の削除で保存先の原本・成果物を消せなかったとき（保存先の一時的な障害など）、消す対象（原本の URI・成果物の URI・
+成果物の prefix）を文書の行の削除と同じ transaction で表 `rag_document_cleanups` に残し、後から消し直すようにした。
+記録には保存先の参照だけを持ち、原本の内容・認証情報は持たない。すべて消せたら記録の行を消す。
+
+- 取込ワーカーが、取込の固着の回復と同じ間隔（`RAG_INGESTION_QUEUE_RECOVERY_INTERVAL_SECONDS`）で、最後に試してから
+  5 分以上たった記録を 1 回に 20 件まで消し直す。
+- 同じ文書の削除（`DELETE /api/documents/{document_id}`）を実行すると、文書の行が無くても記録が残っていればすぐに消し直す
+  （削除した利用者の記録だけ。system_admin は全員の分）。記録も無ければ今までどおり 404。
+- 消せたものは記録から外す。無いファイルは消せたものとして扱う。残っている文書（tenant を問わない）が参照する URI と、
+  同じ ID の文書が残っているときの文書の prefix は消さない。
+
+1. システムテーブルを更新する（migration `20261019_002_document_cleanups`）。表 `rag_document_cleanups` と索引を無いときだけ
+   作る（データは変えない。承認は要らない）。表が無い間は文書の削除が失敗する。
+2. backend・取込 worker を再起動する。
+3. 残っている記録は `SELECT document_id, attempt_count, last_error_type, updated_at FROM rag_document_cleanups` で確かめる
+   （`last_error_type` は最後の失敗の例外の型。`attempt_count` が増え続けるときは保存先の権限・到達性を確かめる）。
+
 ## 既存環境の更新手順（#2453 XML ツリー JSON の解析サービスを既定で停止にする）
 
 XML ツリー JSON の解析サービス（`parser-xml-tree-json`）は、文書解析の使用エンジンに選んだときだけ使う（設定の既定

@@ -31,6 +31,7 @@ from fastapi import (
 from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
 
 from app.api.errors import DocumentFileMissingError
+from app.clients.document_cleanup_store import DocumentCleanupStore, DocumentCleanupTargets
 from app.clients.object_storage import ObjectStorageClient, describe_upload_storage_error
 from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
 from app.clients.oracle import (
@@ -58,6 +59,7 @@ from app.rag.chunking_small_to_big import (
     small_to_big_fallback_needed,
 )
 from app.rag.chunking_strategy import resolve_small_to_big_params
+from app.rag.document_cleanup import DocumentCleanupOutcome, run_document_cleanup
 from app.rag.document_crop import (
     DocumentSourceNotFoundError,
     crop_png,
@@ -2544,11 +2546,17 @@ async def _attach_duplicate_source(
 
 @router.delete("/{document_id}", response_model=ApiResponse[DocumentDeleteResult])
 async def delete_document(document_id: str) -> ApiResponse[DocumentDeleteResult]:
-    """ドキュメント本体、検索 index、投入関連行、原本ファイル参照を削除する。"""
+    """ドキュメント本体、検索 index、投入関連行、原本ファイル参照を削除する。
+
+    保存先の原本・成果物は、文書の行の削除と同じ transaction で残した後始末の記録から消す
+    （#2452）。消せなかった対象は記録に残り、同じ文書の削除の再試行と取込ワーカーの定期の
+    後始末でやり直す。文書の行が無くても、扱える後始末の記録があればやり直す。
+    """
     oracle = OracleClient()
+    cleanup_store = DocumentCleanupStore(oracle)
     detail = await oracle.get_document(document_id)
     if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+        return await _retry_document_cleanup(cleanup_store, document_id)
     blocking_jobs = await _list_delete_blocking_ingestion_jobs(oracle, document_id)
     if blocking_jobs:
         raise HTTPException(
@@ -2556,92 +2564,68 @@ async def delete_document(document_id: str) -> ApiResponse[DocumentDeleteResult]
             detail="取込ジョブが実行中のため削除できません。先にキャンセルしてください。",
         )
     artifact_paths = await _document_artifact_paths(oracle, detail)
-
-    try:
-        deleted = await oracle.delete_document(document_id)
-    except DocumentDeleteBlockedByRunningIngestionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if not deleted:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-
-    object_deleted = False
-    artifact_deleted_count = 0
-    artifact_delete_failed_count = 0
-    warning_messages: list[str] = []
-    storage = ObjectStorageClient()
-    if detail.object_storage_path:
-        try:
-            object_deleted = await storage.delete(detail.object_storage_path)
-            if not object_deleted:
-                warning_messages.append("原本ファイルは既に存在しませんでした。")
-        except FileNotFoundError:
-            warning_messages.append("原本ファイルは既に存在しませんでした。")
-        except ValueError:
-            logger.warning(
-                "document_source_delete_invalid_reference",
-                extra={"document_id": document_id},
-            )
-            warning_messages.append("原本ファイルの参照パスが不正なため削除できませんでした。")
-        except Exception:
-            logger.exception(
-                "document_source_delete_failed",
-                extra={"document_id": document_id},
-            )
-            warning_messages.append(
-                "文書は削除しましたが、原本ファイルの削除に失敗しました。保存先を確認してください。"
-            )
-    for artifact_path in artifact_paths:
-        try:
-            if await storage.delete(artifact_path):
-                artifact_deleted_count += 1
-        except Exception:
-            artifact_delete_failed_count += 1
-            artifact_ref_hash = _sha256_hex(artifact_path.encode())[:16]
-            logger.info(
-                "document_artifact_delete_failed",
-                extra={"document_id": document_id, "artifact_ref_hash": artifact_ref_hash},
-            )
-    # 参照が残っていない過去の取込の成果物も、文書の prefix ごと消す（#303）。
-    # 失敗しても文書の削除は取り消さず、ログと warning で知らせる。
-    # 保存先を切り替えた後でも、文書が OCI の参照を持てば OCI の prefix も消す（#2093）。
     has_oci_reference = any(
         path.strip().startswith("oci://")
         for path in (detail.object_storage_path or "", *artifact_paths)
     )
-    for artifact_prefix in document_artifact_prefixes(get_settings(), document_id):
-        try:
-            prefix_result = await storage.delete_prefix(
-                artifact_prefix, include_oci=has_oci_reference
-            )
-        except Exception as exc:  # noqa: BLE001 - 後始末の失敗で削除の結果を変えない
-            artifact_delete_failed_count += 1
-            logger.warning(
-                "document_artifact_prefix_delete_failed",
-                extra={"document_id": document_id, "error_type": type(exc).__name__},
-            )
-            continue
-        artifact_deleted_count += prefix_result.deleted
-        if prefix_result.failed:
-            artifact_delete_failed_count += prefix_result.failed
-            logger.warning(
-                "document_artifact_prefix_delete_partial",
-                extra={"document_id": document_id, "failed_count": prefix_result.failed},
-            )
-    if artifact_delete_failed_count:
-        warning_messages.append(
-            "文書は削除しましたが、一部の抽出 artifact cache の削除に失敗しました。"
-        )
+    targets = DocumentCleanupTargets(
+        source_uri=detail.object_storage_path or None,
+        artifact_uris=tuple(artifact_paths),
+        prefixes=tuple(document_artifact_prefixes(get_settings(), document_id)),
+        include_oci=has_oci_reference,
+    )
 
+    try:
+        task = await cleanup_store.delete_document_with_cleanup(
+            document_id, detail.file_name, targets
+        )
+    except DocumentDeleteBlockedByRunningIngestionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if task is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+
+    outcome = await run_document_cleanup(cleanup_store, ObjectStorageClient(), task)
+    return _document_delete_response(
+        document_id=detail.id,
+        file_name=detail.file_name,
+        object_storage_path=detail.object_storage_path,
+        outcome=outcome,
+    )
+
+
+async def _retry_document_cleanup(
+    cleanup_store: DocumentCleanupStore, document_id: str
+) -> ApiResponse[DocumentDeleteResult]:
+    """文書の行が無いときの削除の再試行。後始末の記録が残っていればやり直す（#2452）。"""
+    task = await cleanup_store.find_for_document(document_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    outcome = await run_document_cleanup(cleanup_store, ObjectStorageClient(), task)
+    return _document_delete_response(
+        document_id=task.document_id,
+        file_name=task.file_name,
+        object_storage_path=task.targets.source_uri,
+        outcome=outcome,
+    )
+
+
+def _document_delete_response(
+    *,
+    document_id: str,
+    file_name: str,
+    object_storage_path: str | None,
+    outcome: DocumentCleanupOutcome,
+) -> ApiResponse[DocumentDeleteResult]:
     return ApiResponse(
         data=DocumentDeleteResult(
-            id=detail.id,
-            file_name=detail.file_name,
-            object_storage_path=detail.object_storage_path,
-            object_deleted=object_deleted,
-            artifact_deleted_count=artifact_deleted_count,
-            artifact_delete_failed_count=artifact_delete_failed_count,
+            id=document_id,
+            file_name=file_name,
+            object_storage_path=object_storage_path,
+            object_deleted=outcome.object_deleted,
+            artifact_deleted_count=outcome.artifact_deleted_count,
+            artifact_delete_failed_count=outcome.artifact_delete_failed_count,
         ),
-        warning_messages=warning_messages,
+        warning_messages=outcome.warning_messages,
     )
 
 

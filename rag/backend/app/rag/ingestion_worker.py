@@ -60,10 +60,16 @@ QueuedJobFetcher = Callable[[int, Collection[IngestionJobPhase]], Awaitable[Sequ
 SchemaReadinessChecker = Callable[[], Awaitable[bool]]
 LeaseHeartbeat = Callable[[], Awaitable[int]]
 LeasedJobRequeuer = Callable[[], Awaitable[Sequence[IngestionJob]]]
+# 文書の削除の後始末の残りをやり直し、すべて消せた記録の数を返す(#2452)。
+DocumentCleanupSweeper = Callable[[], Awaitable[int]]
 Clock = Callable[[], datetime]
 
 # lease_owner 列(VARCHAR2(128))に収める。
 _WORKER_ID_HOST_MAX_CHARS = 80
+# 定期の回復で、1 回にやり直す文書の削除の後始末の記録の数と、最後に試してから待つ秒数(#2452)。
+# 待つのは、削除の要求の中で後始末をしている最中の記録と重ねないため。
+DOCUMENT_CLEANUP_SWEEP_LIMIT = 20
+DOCUMENT_CLEANUP_MIN_AGE_SECONDS = 300.0
 # 子プロセスに SIGTERM を送ってから SIGKILL するまでの秒数。systemd の TimeoutStopSec は
 # 停止の grace + これ + QUEUED に戻す DB の処理より長くする(init_script.sh。テストで照合する)。
 CHILD_TERMINATE_TIMEOUT_SECONDS = 10.0
@@ -99,6 +105,15 @@ async def _default_schema_ready() -> bool:
     from app.rag.system_schema_runtime import system_schema_runtime
 
     return await system_schema_runtime.is_ready()
+
+
+async def _default_sweep_document_cleanups() -> int:
+    from app.rag.document_cleanup import retry_due_document_cleanups
+
+    return await retry_due_document_cleanups(
+        limit=DOCUMENT_CLEANUP_SWEEP_LIMIT,
+        min_age_seconds=DOCUMENT_CLEANUP_MIN_AGE_SECONDS,
+    )
 
 
 class IngestionJobSubprocessError(RuntimeError):
@@ -362,6 +377,7 @@ class IngestionQueueWorker:
         heartbeat_interval_seconds: float | None = None,
         shutdown_grace_seconds: float | None = None,
         clock: Clock | None = None,
+        sweep_document_cleanups: DocumentCleanupSweeper | None = None,
     ) -> None:
         self._settings = settings
         self.worker_id = worker_id or new_worker_id()
@@ -372,6 +388,7 @@ class IngestionQueueWorker:
         self._recover_stale = recover_stale or self._default_recover_stale
         self._heartbeat = heartbeat or self._default_heartbeat
         self._requeue_leased = requeue_leased or self._default_requeue_leased
+        self._sweep_document_cleanups = sweep_document_cleanups or _default_sweep_document_cleanups
         self._schema_ready = schema_ready or _default_schema_ready
         self._clock = clock or _utc_now
         # 全体の枠と重い段(ファイル準備・抽出)の上限。auto は vCPU から決める(#2027)。
@@ -403,6 +420,8 @@ class IngestionQueueWorker:
         self._stop_event: asyncio.Event | None = None
         # 停止中に打ち切られた job がある(停止処理で自分の lease の job を QUEUED に戻す)。
         self._interrupted_on_stop = False
+        # 文書の削除の後始末の task(#2452)。
+        self._cleanup_task: asyncio.Task[None] | None = None
 
     async def run_forever(self, *, stop_event: asyncio.Event | None = None) -> None:
         """停止イベントが立つまでキューを消費し続ける。"""
@@ -550,6 +569,34 @@ class IngestionQueueWorker:
                 "ingestion_worker_recovered_stale_jobs",
                 extra={"job_count": len(recovered)},
             )
+        self._start_document_cleanup_sweep()
+
+    def _start_document_cleanup_sweep(self) -> None:
+        """文書の削除の後始末を別の task で始める(保存先の削除で取込の起動を待たせない)。
+
+        前の回がまだ動いていれば始めない。停止のときは取り消す(記録は残り、次の起動でやり直す)。
+        """
+        if self._cleanup_task is not None and not self._cleanup_task.done():
+            return
+        self._cleanup_task = asyncio.create_task(self._sweep_document_cleanups_safely())
+
+    async def _sweep_document_cleanups_safely(self) -> None:
+        """文書の削除で保存先から消せなかった原本・成果物を消し直す(#2452)。"""
+        try:
+            completed = await self._sweep_document_cleanups()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "ingestion_worker_document_cleanup_failed",
+                extra=oracle_error_log_fields(exc),
+            )
+            return
+        if completed:
+            logger.info(
+                "ingestion_worker_document_cleanups_completed",
+                extra={"cleanup_count": completed},
+            )
 
     async def _dispatch_available(self) -> int:
         """空きスロット分だけ QUEUED ジョブを取り出して実行タスクを起動する。
@@ -665,7 +712,11 @@ class IngestionQueueWorker:
                 await asyncio.gather(*pending, return_exceptions=True)
         finally:
             heartbeat_task.cancel()
-            await asyncio.gather(heartbeat_task, return_exceptions=True)
+            background = [heartbeat_task]
+            if self._cleanup_task is not None:
+                self._cleanup_task.cancel()
+                background.append(self._cleanup_task)
+            await asyncio.gather(*background, return_exceptions=True)
             if had_inflight or self._interrupted_on_stop:
                 await self._requeue_leased_safely()
 

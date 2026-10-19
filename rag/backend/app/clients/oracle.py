@@ -9507,121 +9507,7 @@ class OracleClient:
         """Oracle document table と関連 chunk/vector/ingestion 行を同一 transaction で削除する。"""
 
         def operation(connection: OracleConnectionProtocol) -> bool:
-            existing = _select_document_state(connection, document_id)
-            if existing is None:
-                return False
-            graph_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
-            _delete_graph_rows_for_document(
-                connection,
-                document_id=document_id,
-                entity_ids=graph_entity_ids,
-            )
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_documents
-                SET duplicate_of_document_id = NULL
-                WHERE duplicate_of_document_id = :document_id
-                  AND {tenant_sql}
-                """,
-                    # 正本を消す前に FK の参照を外す。利用者の範囲外の複製も対象にする。
-                    tenant_sql=_oracle_tenant_predicate(),
-                ),
-                _with_tenant_bind({"document_id": document_id}),
-            )
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_documents
-                SET superseded_by_document_id = NULL,
-                    superseded_at = NULL
-                WHERE superseded_by_document_id = :document_id
-                  AND {tenant_sql}
-                """,
-                    # 新しい版を消したら、それに置き換えられていた文書を今有効な版に戻す(#1248)。
-                    # 参照が残ると、旧版は検索から外れたままになる。
-                    tenant_sql=_oracle_tenant_predicate(),
-                ),
-                _with_tenant_bind({"document_id": document_id}),
-            )
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                DELETE FROM rag_ingestion_segments
-                WHERE document_id = :document_id
-                  AND EXISTS (
-                      SELECT 1
-                      FROM rag_documents d
-                      WHERE d.document_id = rag_ingestion_segments.document_id
-                        AND {access_predicate}
-                  )
-                """,
-                    access_predicate=_oracle_access_predicate_sql(alias="d"),
-                ),
-                _with_tenant_bind({"document_id": document_id}),
-            )
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                DELETE FROM rag_ingestion_jobs
-                WHERE document_id = :document_id
-                  AND status <> 'RUNNING'
-                  AND EXISTS (
-                      SELECT 1
-                      FROM rag_documents d
-                      WHERE d.document_id = rag_ingestion_jobs.document_id
-                        AND {access_predicate}
-                  )
-                """,
-                    access_predicate=_oracle_access_predicate_sql(alias="d"),
-                ),
-                _with_tenant_bind({"document_id": document_id}),
-            )
-            running_jobs = _fetch_all(
-                connection,
-                _render_sql(
-                    """
-                SELECT j.job_id
-                FROM rag_ingestion_jobs j
-                JOIN rag_documents d
-                  ON d.document_id = j.document_id
-                WHERE j.document_id = :document_id
-                  AND j.status = 'RUNNING'
-                  AND {document_access_sql}
-                """,
-                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
-                ),
-                _with_tenant_bind({"document_id": document_id}),
-            )
-            if running_jobs:
-                raise DocumentDeleteBlockedByRunningIngestionError(
-                    "取込ジョブが実行中のため削除できません。先にキャンセルしてください。"
-                )
-            _execute(
-                connection,
-                """
-                DELETE FROM rag_chunks
-                WHERE document_id = :document_id
-                """,
-                {"document_id": document_id},
-            )
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                DELETE FROM rag_documents
-                WHERE document_id = :document_id
-                  AND {access_predicate}
-                """,
-                    access_predicate=_oracle_access_predicate_sql(),
-                ),
-                _with_tenant_bind({"document_id": document_id}),
-            )
-            return True
+            return delete_document_rows(connection, document_id)
 
         return await self._run_transaction(operation)
 
@@ -10460,6 +10346,130 @@ def _executemany(
         cursor.executemany(_normalize_sql(statement), rows)
     finally:
         cursor.close()
+
+
+def delete_document_rows(connection: OracleConnectionProtocol, document_id: str) -> bool:
+    """文書と関連 chunk/graph/ingestion 行を、呼び出し側の transaction の中で削除する。
+
+    文書が無ければ False。実行中の取込 job があれば
+    ``DocumentDeleteBlockedByRunningIngestionError``。
+    文書の削除と同じ transaction で後始末の記録を残すとき(#2452)にも使う。
+    """
+    existing = _select_document_state(connection, document_id)
+    if existing is None:
+        return False
+    graph_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
+    _delete_graph_rows_for_document(
+        connection,
+        document_id=document_id,
+        entity_ids=graph_entity_ids,
+    )
+    _execute(
+        connection,
+        _render_sql(
+            """
+        UPDATE rag_documents
+        SET duplicate_of_document_id = NULL
+        WHERE duplicate_of_document_id = :document_id
+          AND {tenant_sql}
+        """,
+            # 正本を消す前に FK の参照を外す。利用者の範囲外の複製も対象にする。
+            tenant_sql=_oracle_tenant_predicate(),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    _execute(
+        connection,
+        _render_sql(
+            """
+        UPDATE rag_documents
+        SET superseded_by_document_id = NULL,
+            superseded_at = NULL
+        WHERE superseded_by_document_id = :document_id
+          AND {tenant_sql}
+        """,
+            # 新しい版を消したら、それに置き換えられていた文書を今有効な版に戻す(#1248)。
+            # 参照が残ると、旧版は検索から外れたままになる。
+            tenant_sql=_oracle_tenant_predicate(),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    _execute(
+        connection,
+        _render_sql(
+            """
+        DELETE FROM rag_ingestion_segments
+        WHERE document_id = :document_id
+          AND EXISTS (
+              SELECT 1
+              FROM rag_documents d
+              WHERE d.document_id = rag_ingestion_segments.document_id
+                AND {access_predicate}
+          )
+        """,
+            access_predicate=_oracle_access_predicate_sql(alias="d"),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    _execute(
+        connection,
+        _render_sql(
+            """
+        DELETE FROM rag_ingestion_jobs
+        WHERE document_id = :document_id
+          AND status <> 'RUNNING'
+          AND EXISTS (
+              SELECT 1
+              FROM rag_documents d
+              WHERE d.document_id = rag_ingestion_jobs.document_id
+                AND {access_predicate}
+          )
+        """,
+            access_predicate=_oracle_access_predicate_sql(alias="d"),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    running_jobs = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT j.job_id
+        FROM rag_ingestion_jobs j
+        JOIN rag_documents d
+          ON d.document_id = j.document_id
+        WHERE j.document_id = :document_id
+          AND j.status = 'RUNNING'
+          AND {document_access_sql}
+        """,
+            document_access_sql=_oracle_access_predicate_sql(alias="d"),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    if running_jobs:
+        raise DocumentDeleteBlockedByRunningIngestionError(
+            "取込ジョブが実行中のため削除できません。先にキャンセルしてください。"
+        )
+    _execute(
+        connection,
+        """
+        DELETE FROM rag_chunks
+        WHERE document_id = :document_id
+        """,
+        {"document_id": document_id},
+    )
+    _execute(
+        connection,
+        _render_sql(
+            """
+        DELETE FROM rag_documents
+        WHERE document_id = :document_id
+          AND {access_predicate}
+        """,
+            access_predicate=_oracle_access_predicate_sql(),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    return True
 
 
 def _select_graph_entity_ids_for_document(
