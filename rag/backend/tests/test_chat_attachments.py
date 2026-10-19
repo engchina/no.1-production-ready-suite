@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -76,10 +77,10 @@ def _upload(service: ChatAttachmentService, name: str, data: str, conversation_i
 
 
 @pytest.fixture
-def service(monkeypatch: MonkeyPatch) -> ChatAttachmentService:
+def service(monkeypatch: MonkeyPatch) -> Iterator[ChatAttachmentService]:
     created = _service()
     chat_attachments.set_chat_attachment_service(created)
-    yield created  # type: ignore[misc]
+    yield created
     chat_attachments.set_chat_attachment_service(None)
 
 

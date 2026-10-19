@@ -161,7 +161,7 @@ async function mockChatWithAttachments(page: Page, { enabled }: { enabled: boole
 const csv = { name: "売上表.csv", mimeType: "text/csv", buffer: Buffer.from("コード,品目,金額\nA-1,品目甲,300\n") };
 
 test.describe("チャットの添付", { tag: "@responsive" }, () => {
-  test("添付して送ると、質問の下に添付を、根拠に添付の箇所を出す", async ({ page }) => {
+  test("添付して送ると、質問の下に添付を、根拠に添付の箇所を出す", async ({ page }, testInfo) => {
     const streamBodies = await mockChatWithAttachments(page, { enabled: true });
     await page.goto("/chat");
     await selectSearchAnswerProfile(page, "経理アシスタント");
@@ -183,6 +183,7 @@ test.describe("チャットの添付", { tag: "@responsive" }, () => {
     await citationSummary.click();
     await expect(page.getByText("添付ファイル", { exact: true }).last()).toBeVisible();
     await expect(page.getByRole("button", { name: /の根拠を表示$/ })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("chat-attachment-answer.png"), fullPage: true });
     await expectNoPageOverflow(page);
   });
 
