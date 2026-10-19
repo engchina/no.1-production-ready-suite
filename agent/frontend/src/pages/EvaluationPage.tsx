@@ -941,6 +941,7 @@ function OutputFieldTable({ items }: { items: EvaluationFieldResult[] }) {
             label={item.correct ? t("evaluation.output.correct") : t("evaluation.output.incorrect")}
           />
           {item.method === "meaning" ? <span className="text-fg-muted">{t("evaluation.output.byMeaning")}</span> : null}
+          {item.reason ? <span className="break-words text-fg-muted">{item.reason}</span> : null}
           {item.note ? <span className="text-fg-muted">{item.note}</span> : null}
         </span>
       ),

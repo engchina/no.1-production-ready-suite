@@ -452,6 +452,8 @@ export interface EvaluationFieldResult {
   correct: boolean;
   /** 比べ方（#2562）と、比べ方どおりに判定できなかった理由（意味の判定の失敗など）。 */
   method?: AgentOutputFieldMatch;
+  /** 意味の判定の理由（#2568。意味で判定した項目だけ）。 */
+  reason?: string;
   note?: string;
 }
 

@@ -1881,7 +1881,15 @@ def test_expected_output_round_trips_through_excel(agent: None) -> None:
 def _meaning(*items: tuple[int, bool]) -> Any:
     return [
         assistant_message(
-            json.dumps({"items": [{"number": number, "same": same} for number, same in items]})
+            json.dumps(
+                {
+                    "items": [
+                        {"number": number, "same": same, "reason": f"理由 {number}"}
+                        for number, same in items
+                    ]
+                },
+                ensure_ascii=False,
+            )
         )
     ]
 
@@ -1955,6 +1963,10 @@ def test_text_fields_are_judged_by_meaning_in_a_job(monkeypatch: MonkeyPatch, ag
     # 言い換えは意味で正しく、違う内容は誤り。文字が一致した項目は意味の判定に渡さない。
     assert judged[(1, "reason")].correct is True
     assert judged[(1, "reason")].method == "meaning"
+    # 意味で判定した項目には理由を残す（#2568）。文字で一致した項目は判定に渡さないので理由は無い。
+    assert judged[(1, "reason")].reason == "理由 1"
+    assert judged[(2, "reason")].reason == "理由 2"
+    assert judged[(3, "reason")].reason == ""
     assert judged[(2, "reason")].correct is False
     assert judged[(3, "reason")].correct is True
     # 完全に一致で比べる項目は、似ていても誤り。
