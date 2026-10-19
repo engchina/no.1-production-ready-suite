@@ -301,7 +301,10 @@ def test_oversized_form_field_is_rejected_and_csv_cannot_have_form_fields() -> N
     assert result.warnings == ("structured_records_invalid:record_too_large@line3",)
     lines: list[DocumentLine | FormFieldLine] = [
         DocumentLine(
-            record_id="document", source_type="csv", converter="csv_to_jsonl", converter_version="v2"
+            record_id="document",
+            source_type="csv",
+            converter="csv_to_jsonl",
+            converter_version="v2",
         ),
         FormFieldLine(
             record_id="field-1",
