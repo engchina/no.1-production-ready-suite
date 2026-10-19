@@ -42,6 +42,7 @@ from pr_system_settings.auth.visibility import (
     can_access_run,
     can_view_all_users_data,
 )
+from pydantic import ValidationError
 
 from app.api.concurrency import run_sync_io
 from app.api.problems import invalid_cursor_exception as _invalid_cursor
@@ -732,6 +733,10 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
         raise _select_ai_credential_missing_exception(exc) from exc
     except JobIdConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValidationError:
+        # 保存した値（添付など）を読めないのは入力の誤りではない。pydantic の原文を 400 の本文に
+        # 出さず、想定外のエラーとして返す（#2548）。
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

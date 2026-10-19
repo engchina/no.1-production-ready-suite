@@ -107,7 +107,7 @@ from pr_system_settings.oci_auth import (
 from pr_system_settings.upload_storage import (
     build_upload_storage_router,
 )
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
@@ -1988,9 +1988,16 @@ async def create_run(
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
+    except ValidationError:
+        # 保存した値（添付など）を読めないのは業務 Agent の状態ではない。409 の「業務 Agent の
+        # 状態を確認」にせず、想定外のエラーとして返す（#2548）。
+        raise
     except ValueError as exc:
         # repository の内部の文（英語）は本文に出さず、「詳細」（error_details.reason）に残す。
-        logger.warning("run_create_rejected", extra={"agent_id": run_request.agent_id})
+        logger.warning(
+            "run_create_rejected",
+            extra={"agent_id": run_request.agent_id, "reason": str(exc)},
+        )
         raise HTTPException(
             status_code=409,
             detail={

@@ -681,6 +681,40 @@ def test_oracle_store_lists_by_conversation_and_reads_outline() -> None:
     assert binds["product"] == "agent"
 
 
+def test_oracle_store_reads_json_columns_returned_as_objects() -> None:
+    # python-oracledb は IS JSON の制約のある CLOB を dict で返す（#2548）。
+    created = datetime(2026, 10, 19, 9, 0)
+    outline = {
+        "sections": [{"section_id": "s1", "title": "画像", "characters": 3}],
+        "sheets": [],
+        "warnings": [],
+    }
+    row = (
+        "id-1",
+        "agent",
+        "user-a",
+        "user-a",
+        None,
+        "a.png",
+        "image/png",
+        "image",
+        6,
+        "0" * 64,
+        outline,
+        created,
+        created + timedelta(hours=24),
+    )
+    store, _ = _oracle(rows=[row])
+    record = store.get("id-1")
+    assert record is not None and record.outline.sections[0].section_id == "s1"
+    assert store.list_pending("agent", "user-a", now=datetime.now(UTC))[0].kind == "image"
+
+    parsed = {"sections": [{"section_id": "s1", "title": "画像", "text": "本文"}]}
+    parsed_store, _ = _oracle(rows=[(parsed,)])
+    result = parsed_store.parsed("id-1")
+    assert result is not None and result.sections[0].text == "本文"
+
+
 def test_oracle_store_purge_is_bounded() -> None:
     store, log = _oracle()
     store.purge_expired(now=datetime.now(UTC), limit=100)

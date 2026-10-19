@@ -253,3 +253,32 @@ def test_routes_are_in_the_permission_manifest() -> None:
     assert ("POST", "/chat-attachments") in ROUTE_PERMISSIONS
     assert ("DELETE", "/chat-attachments/{attachment_id}") in ROUTE_PERMISSIONS
     assert ROUTE_PERMISSIONS[("PUT", "/settings/chat-attachments")]
+
+
+def test_job_api_does_not_show_validation_error_as_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """保存した添付を読めない（ValidationError）のを 400 の入力の誤りにしない（#2548）。"""
+    import httpx
+    from pydantic import BaseModel
+
+    from app.features.nl2sql.service import nl2sql_service
+    from app.main import app
+
+    class _Stored(BaseModel):
+        value: int
+
+    def broken(*_: object, **__: object) -> None:
+        _Stored.model_validate({"value": "x"})
+
+    monkeypatch.setattr(nl2sql_service, "start_job", broken)
+
+    async def post() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post("/api/nl2sql/jobs", json={"question": "質問"})
+
+    response = asyncio.run(post())
+
+    assert response.status_code == 500
+    assert "validation error" not in response.text
