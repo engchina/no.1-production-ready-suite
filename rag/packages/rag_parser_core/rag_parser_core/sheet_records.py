@@ -26,6 +26,9 @@
   同じシート（手順書は同じ章）の続く記録をまとめた表の一部を親にする
   （backend の `app.rag.chunking_small_to_big`）。
 - 選択肢（`ExcelOptions`）は Document Recipe の `excel_options` から前処理へ渡る。
+- 図形の文字・選択の記号（#2526）: テキストボックス・図形の文字は、前処理がアンカーの範囲を 1 つの
+  セルの単位にして読み、そのセル範囲を記録の `shape_cells` に残す。帳票の値の選択の記号
+  （「■A □B」）は前処理が選ばれた選択肢（「A」）を値にし、原文を `value_original` に残す。
 - 列の役割（`SheetColumn.role`。#1281）: 設定値の表の「説明・既定値・例示・現在値・推奨値・
   設定できる範囲」の列を、前処理が表頭の語（または選択肢の `column_roles`）で決める。値の列は
   本文で列名の後に役割の表示（`既定値［資料の既定値］: 30`）を付け、回答の生成が資料の既定値・
@@ -163,6 +166,12 @@ class ExcelOptions(BaseModel):
         default_factory=list, max_length=100, description="読まないシート名。"
     )
     include_hidden_sheets: bool = Field(default=False, description="非表示のシートも読むか。")
+    include_hidden_cells: bool = Field(
+        default=False,
+        description=(
+            "非表示の行・列のセルも読むか（#2526）。既定は読まない（オートフィルターで隠れた行は読む）。"
+        ),
+    )
     exclude_columns: list[str] = Field(
         default_factory=list,
         max_length=200,
@@ -275,6 +284,9 @@ class SheetPreambleRow(BaseModel):
     row_number: int = Field(ge=1)
     cell_range: str
     text: str
+    shape_cells: list[str] = Field(
+        default_factory=list, description="図形・テキストボックスの文字を置いたセル範囲（#2526）。"
+    )
 
 
 class SheetBlock(BaseModel):
@@ -295,6 +307,14 @@ class SheetBlock(BaseModel):
     value: str = Field(default="", description="帳票の項目の値。")
     label_cell: str | None = Field(default=None, description="ラベルのセル（例: B3:E3）。")
     value_cell: str | None = Field(default=None, description="値のセル（例: F3:N3）。")
+    value_original: str | None = Field(
+        default=None,
+        description=("選択の記号を読んで値を選ばれた選択肢にしたときの原文（例: ■A □B。#2526）。"),
+    )
+    shape_cells: list[str] = Field(
+        default_factory=list,
+        description="記録のうち、図形・テキストボックスの文字を置いたセル範囲（#2526）。",
+    )
 
 
 class SheetDiagnostic(BaseModel):
@@ -399,6 +419,11 @@ def _sheet_metadata(sheet: SheetRecords) -> dict[str, str | int]:
     return metadata
 
 
+def _shape_metadata(shape_cells: list[str]) -> dict[str, str]:
+    """図形の文字を置いたセル範囲（要素の metadata は scalar だけなので ``; `` でつなぐ）。"""
+    return {"sheet_shape_cells": "; ".join(shape_cells)} if shape_cells else {}
+
+
 def sheet_records_extraction(
     document: SheetRecordsDocument,
     *,
@@ -439,6 +464,7 @@ def sheet_records_extraction(
                         "cell_column_end": column_end,
                         "sheet_block_kind": "preamble",
                         **sheet_metadata,
+                        **_shape_metadata(preamble.shape_cells),
                     },
                 )
             )
@@ -472,6 +498,12 @@ def sheet_records_extraction(
                         **({"sheet_column_roles": roles_metadata} if roles_metadata else {}),
                         **({"form_label_cell": block.label_cell} if block.label_cell else {}),
                         **({"form_value_cell": block.value_cell} if block.value_cell else {}),
+                        **(
+                            {"form_value_original": block.value_original}
+                            if block.value_original
+                            else {}
+                        ),
+                        **_shape_metadata(block.shape_cells),
                     },
                 )
             )

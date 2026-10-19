@@ -11,15 +11,19 @@
   見出し（以降の項目の節）、縦に結合して右に複数の項目を持つ単位は項目のまとまりの見出しにする。
   塗りつぶし・太字（またはコロンで終わる）のラベルが横に並び、その下に同じ位置の値の行があるときは、
   上のラベルと下の値を組にする（値の行が 2 行以上なら表の行にする）。
+- 値の選択の記号（「■A □B」）は選ばれた選択肢を値にし、原文を ``value_original`` に残す
+  （`app.choices`。#2526）。図形・テキストボックスの文字の単位は ``shape_cells`` に残す。
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Set
 from dataclasses import dataclass
 
 from rag_parser_core.sheet_records import SheetBlock, SheetDiagnostic
 
+from .choices import is_choice_mark, read_choice
 from .grid import Grid, cell_ref, column_letter, is_textual
 
 # 列幅がこれ以下の列を「狭い列」（方眼紙の格子）とみなす（文字数の単位）。
@@ -44,7 +48,10 @@ Box = tuple[int, int, int, int]
 
 @dataclass(frozen=True)
 class Unit:
-    """結合セル（または 1 つのセル）の単位。``text`` が空なら値の無い結合セル。"""
+    """結合セル（または 1 つのセル）の単位。``text`` が空なら値の無い結合セル。
+
+    ``shape`` は図形・テキストボックスの文字の単位（#2526）。
+    """
 
     top: int
     left: int
@@ -52,6 +59,7 @@ class Unit:
     right: int
     text: str
     hinted: bool = False
+    shape: bool = False
 
     @property
     def merged(self) -> bool:
@@ -80,38 +88,48 @@ def _occupied(grid: Grid) -> set[tuple[int, int]]:
     return cells
 
 
-def _runs(values: list[int], gap: int) -> list[tuple[int, int]]:
+def _gap(start: int, end: int, skipped: Set[int]) -> int:
+    """``start`` と ``end`` の間の空きの数（読まなかった非表示の行・列は空きに数えない）。"""
+    return sum(1 for index in range(start + 1, end) if index not in skipped)
+
+
+def _runs(values: list[int], gap: int, skipped: Set[int] = frozenset()) -> list[tuple[int, int]]:
     """昇順の番号を、``gap`` 以上の空きで区切った連続の範囲にする。"""
     runs: list[tuple[int, int]] = []
     for value in values:
-        if runs and value - runs[-1][1] - 1 < gap:
+        if runs and _gap(runs[-1][1], value, skipped) < gap:
             runs[-1] = (runs[-1][0], value)
         else:
             runs.append((value, value))
     return runs
 
 
-def _xy_cut(cells: set[tuple[int, int]], gap_rows: int, gap_columns: int) -> list[Box]:
+def _xy_cut(
+    cells: set[tuple[int, int]],
+    gap_rows: int,
+    gap_columns: int,
+    skipped: tuple[Set[int], Set[int]] = (frozenset(), frozenset()),
+) -> list[Box]:
     rows = sorted({row for row, _ in cells})
     cols = sorted({col for _, col in cells})
     if not rows:
         return []
-    row_runs = _runs(rows, gap_rows)
+    row_runs = _runs(rows, gap_rows, skipped[0])
     if len(row_runs) > 1:
         return [
             box
             for start, end in row_runs
             for box in _xy_cut(
-                {cell for cell in cells if start <= cell[0] <= end}, gap_rows, gap_columns
+                {cell for cell in cells if start <= cell[0] <= end}, gap_rows, gap_columns, skipped
             )
         ]
-    col_runs = _runs(cols, gap_columns)
+    col_runs = _runs(cols, gap_columns, skipped[1])
     if len(col_runs) > 1:
         return [
             box
             for start, end in col_runs
             for box in _xy_cut(
-                {cell for cell in cells if start <= cell[1] <= end}, gap_rows, gap_columns
+                {cell for cell in cells if start <= cell[1] <= end}, gap_rows, gap_columns, skipped
             )
         ]
     return [(rows[0], cols[0], rows[-1], cols[-1])]
@@ -158,7 +176,7 @@ def _starts_new_table(index: _RowIndex, above: Box, below: Box) -> bool:
     """
     if below[1] < above[1] or below[3] > above[3]:
         return True
-    if below[0] - above[2] - 1 >= _NEW_TABLE_GAP_ROWS:
+    if _gap(above[2], below[0], _skipped_rows(index.grid)) >= _NEW_TABLE_GAP_ROWS:
         return True
     grid = index.grid
     rows = index.rows(below)
@@ -182,9 +200,19 @@ def _starts_new_table(index: _RowIndex, above: Box, below: Box) -> bool:
     )
 
 
+def _skipped_rows(grid: Grid) -> set[int]:
+    return grid.hidden_rows - grid.filter_rows
+
+
+def _skipped_columns(grid: Grid) -> set[int]:
+    return grid.hidden_columns
+
+
 def split_regions(grid: Grid, *, gap_rows: int = 1, gap_columns: int = 1) -> list[Box]:
     """シートを表ごとの領域（上・左・下・右）に分ける（上から下、左から右の順）。"""
-    boxes = _xy_cut(_occupied(grid), gap_rows, gap_columns)
+    # 読まなかった非表示の行・列は、表の区切りの空きにしない（#2526）。
+    skipped = (_skipped_rows(grid), _skipped_columns(grid))
+    boxes = _xy_cut(_occupied(grid), gap_rows, gap_columns, skipped)
     if len(boxes) <= 1:
         return boxes
     index = _RowIndex(grid)
@@ -235,12 +263,14 @@ def grid_units(grid: Grid) -> tuple[list[Unit], list[Unit]]:
             (row, col) for row in range(top, bottom + 1) for col in range(left, right + 1)
         )
         text = grid.cells.get((top, left), "").strip()
-        unit = Unit(top, left, bottom, right, text, _hinted(grid, top, left, text))
+        shape = (top, left) in grid.shape_boxes
+        unit = Unit(top, left, bottom, right, text, _hinted(grid, top, left, text), shape)
         (units if text else blanks).append(unit)
     for (row, col), value in grid.cells.items():
         text = value.strip()
         if text and (row, col) not in covered:
-            units.append(Unit(row, col, row, col, text, _hinted(grid, row, col, text)))
+            shape = (row, col) in grid.shape_boxes
+            units.append(Unit(row, col, row, col, text, _hinted(grid, row, col, text), shape))
     key = lambda unit: (unit.top, unit.left)  # noqa: E731
     return sorted(units, key=key), sorted(blanks, key=key)
 
@@ -342,8 +372,14 @@ def _bounds(units: list[Unit]) -> str:
     )
 
 
+def _shape_cells(units: list[Unit]) -> list[str]:
+    return [unit.ref for unit in units if unit.shape]
+
+
 def _field(label: Unit | None, values: list[Unit], section: list[str]) -> SheetBlock:
     units = ([label] if label else []) + values
+    value = " ".join(unit.text for unit in values)
+    chosen = read_choice(value)
     return SheetBlock(
         kind="form_field",
         row_start=min(unit.top for unit in units),
@@ -351,9 +387,11 @@ def _field(label: Unit | None, values: list[Unit], section: list[str]) -> SheetB
         cell_range=_bounds(units),
         section_path=section,
         label=label.text if label else None,
-        value=" ".join(unit.text for unit in values),
+        value=chosen if chosen is not None else value,
         label_cell=label.ref if label else None,
         value_cell=_bounds(values) if values else None,
+        value_original=value if chosen is not None else None,
+        shape_cells=_shape_cells(units),
     )
 
 
@@ -430,6 +468,7 @@ def form_blocks(grid: Grid) -> tuple[list[SheetBlock], list[SheetDiagnostic]]:
                     cell_range=_bounds(values),
                     section_path=group_path(values[0]),
                     values=names,
+                    shape_cells=_shape_cells(values),
                 )
             )
 
@@ -493,6 +532,15 @@ def form_blocks(grid: Grid) -> tuple[list[SheetBlock], list[SheetDiagnostic]]:
             continue
         consumed.add(value)
         values = [value]
+        # 選択の記号と選択肢を別々のセルに置いた値（「□」「A」「☑」「B」）は 1 つの値にする。
+        while (
+            is_choice_mark(values[0].text)
+            and (following := index.right_of(values[-1], values[-1].top, consumed)) is not None
+            and not following.hinted
+            and (is_choice_mark(values[-1].text) or is_choice_mark(following.text))
+        ):
+            consumed.add(following)
+            values.append(following)
         # 値の続き（単位の表示「円」・縦に結合したラベルの下の行の値）。
         while (
             (following := index.right_of(values[-1], values[-1].top, consumed)) is not None
@@ -516,6 +564,9 @@ def form_blocks(grid: Grid) -> tuple[list[SheetBlock], list[SheetDiagnostic]]:
         diagnostics.append(SheetDiagnostic(code="form_empty_fields", detail=str(empty_fields)))
     if unpaired:
         diagnostics.append(SheetDiagnostic(code="form_unpaired_texts", detail=str(unpaired)))
+    choices = sum(1 for block in blocks if block.value_original is not None)
+    if choices:
+        diagnostics.append(SheetDiagnostic(code="form_choices_read", detail=str(choices)))
     blocks.sort(key=lambda block: (block.row_start, _column_of(block.cell_range)))
     return blocks, diagnostics
 
