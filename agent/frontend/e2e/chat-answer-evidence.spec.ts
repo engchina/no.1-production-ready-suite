@@ -205,7 +205,8 @@ for (const viewport of VIEWPORTS) {
     await expect(turn.getByText(WITHHELD_QUOTE, { exact: false })).toHaveCount(1);
 
     // 根拠の行を押すと、その根拠を右のサイドパネル（RAG と同じ共通の部品。#2360）で開く。上部は根拠の要約
-    // （番号・文書名・引用の印・Evidence・スコア・頁）と抜粋、その下に RAG と同じ原文のプレビュー（#2389）。
+    // （番号・文書名・引用の印・Evidence・スコア）と、既定で閉じた「抜粋と頁・章節」（#2502）、その下に RAG と同じ
+    // 原文のプレビュー（#2389）。
     const citationLink = confirmed.nth(0).getByTestId("answer-citation-link");
     await citationLink.click();
     const sheet = page.getByRole("dialog", { name: "回答の根拠" });
@@ -213,10 +214,16 @@ for (const viewport of VIEWPORTS) {
     await expect(summary.getByTestId("evidence-file-name")).toHaveText("文書 0.pdf");
     await expect(summary).toContainText("回答で引用");
     await expect(summary.getByTestId("evidence-route-badges")).toContainText("Evidence");
-    await expect(summary.getByTestId("evidence-chips")).toContainText("p.3");
+    await expect(summary.getByTestId("citation-score-panel")).toBeVisible();
+    // プレビューに場所を空けるため、抜粋と頁・章節のチップは既定で閉じる（RAG と同じ。#2502）。
+    const excerptToggle = summary.getByTestId("evidence-excerpt-toggle");
+    await expect(excerptToggle).toHaveText("抜粋と頁・章節");
+    await expect(summary.getByTestId("evidence-excerpt-details")).not.toHaveAttribute("open", "");
+    await expect(summary.getByTestId("citation-text")).toBeHidden();
+    await expect(summary.getByTestId("evidence-chips")).toBeHidden();
+    await excerptToggle.click();
     await expect(summary.getByTestId("citation-text")).toHaveText(`合成の本文（${CHUNK_A}）。`);
-    // プレビューに場所を空けるため、抜粋は 3 行に畳む（RAG と同じ）。
-    await expect(summary.getByTestId("citation-text")).toHaveAttribute("data-expanded", "false");
+    await expect(summary.getByTestId("evidence-chips")).toContainText("p.3");
     await expect(sheet.getByTestId("evidence-source-preview").getByTestId("preview-viewer")).toBeVisible();
     // 図の根拠でも、要約の下に注記・「図を開く」・文書の詳細へのリンクの帯を出さない（#2462）。
     await expect(summary.getByRole("button", { name: /図を開く/ })).toHaveCount(0);
@@ -299,10 +306,10 @@ for (const viewport of VIEWPORTS) {
     await body.getByTestId("answer-section").nth(0).getByTestId("answer-citation-link").first().click();
     const sheet = page.getByRole("dialog", { name: "回答の根拠" });
     const excerpt = sheet.getByTestId("evidence-source-summary").getByTestId("citation-text");
-    // 原文のプレビュー（#2389）に場所を空けるため抜粋は 3 行に畳む（RAG と同じ）。「抜粋をすべて表示」で表を出す。
-    await expect(excerpt).toHaveAttribute("data-expanded", "false");
+    // 原文のプレビュー（#2389）に場所を空けるため抜粋は既定で閉じる（RAG と同じ。#2502）。開くと表を出す。
+    await expect(excerpt).toBeHidden();
     await sheet.getByTestId("evidence-excerpt-toggle").click();
-    await expect(excerpt).toHaveAttribute("data-expanded", "true");
+    await expect(excerpt).toBeVisible();
     await expect(excerpt.locator("p").first()).toHaveText("見出し A");
     const table = excerpt.getByRole("table", { name: "抜粋の表" });
     await expect(table.getByRole("columnheader")).toHaveText(["項目", "記録内容", "備考"]);

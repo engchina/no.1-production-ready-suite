@@ -92,6 +92,12 @@ test("図の根拠のカードとサイドパネルに、図を開く・文書�
   const summary = sheet.getByTestId("evidence-source-summary");
   await expect(summary.getByTestId("evidence-file-name")).toHaveText("文書 A.pdf");
   // 要約は本文・タグ・スコアまでで、その下の操作の行（図を開く・文書の詳細へのリンク）は無い。
+  // 抜粋と頁・章節のチップは既定で閉じ、「抜粋と頁・章節」で開く（Agent と同じ。#2502）。
+  await expect(summary.getByTestId("citation-score-panel")).toBeVisible();
+  await expect(summary.getByTestId("citation-text")).toBeHidden();
+  await expect(summary.getByTestId("evidence-chips")).toBeHidden();
+  await summary.getByTestId("evidence-excerpt-toggle").click();
+  await expect(summary.getByTestId("citation-text")).toBeVisible();
   await expect(summary.getByTestId("evidence-chips")).toContainText("p.2");
   await expect(summary.getByRole("button", { name: /図を開く/ })).toHaveCount(0);
   await expect(sheet.getByRole("link", { name: "文書の詳細を別タブで開く" })).toHaveCount(0);
