@@ -38,7 +38,7 @@
 | 利用者が直前に実行した保存・作成・実行 | `FormStatus` / `ActionResultRegion` | ボタン群または結果領域のすぐ近く。再試行または関連入力の変更まで残す。詳細・作成・編集の画面（全画面のエディタ）は §3.3.1（確定の行の直上の `SaveErrorBanner`）。 |
 | ページ・機能がずっと使えない | `Banner` / `PageNotice` | ページまたは最小の影響範囲の先頭。復旧の action を添える。 |
 | データ領域の取得失敗 | `ErrorState` | その領域だけを占め、再試行を出す。ページ全体の障害へ格上げしない。 |
-| 固定の表示面がない非同期の失敗 | danger Toast | 最後の手段。固定面と併用せず、利用者が閉じるまで残す。 |
+| 固定の表示面がない非同期の失敗 | danger Toast | 最後の手段。固定面と併用しない。既定 8 秒で消える（§3.1）。 |
 | Job・step・CSV の行 | 状態 / 結果のデータ | Badge・stepper・表は状態を示す。具体的な理由は上の標準の面 1 つにだけ出す。 |
 
 ### 決め方
@@ -112,7 +112,7 @@
   - **文言は 1 文目を「何が起きたか」だけにする**（Material の Snackbar は desktop で 1 行、mobile でも 2 行まで。Carbon・Atlassian も「短く要点だけ」）。目安は 1 文目が 25 字程度（32rem の 1 行）まで。続きの補足（「状態は一覧に反映されます。」・件数）は `description` に分け、失敗の原因と対処は §0 の 5 に従って 1 文目の後に続けてよい。技術的な詳細は Toast に載せず、固定の面の「詳細」（`Disclosure`）に出す（§10.3）。
   - 幅を広げるだけで長い文を収めない（上限を超える文は折り返す。通知が覆う本文の幅が増える）。折り返すときは文末 → 文節の順で、語の途中では切らない（§4.1）。
 - **a11y**：コンテナは `role="region"` + `aria-live="polite"`、フォーカスを奪わない（`toast-accessibility`）。`danger` は `role="alert"`。
-- **自動で消える時間**：success / info / warning は既定 4 秒（`toast-dismiss`：3–5s）。`danger` は既定 `duration: 0`（利用者が閉じるまで残す）とし、閉じる × ボタンを必ず出す。
+- **自動で消える時間**：success / info / warning は既定 4 秒（`toast-dismiss`：3–5s）。`danger` は読む時間を見て既定 8 秒で消し、閉じる × ボタンを必ず出す（#2470。#351 では閉じるまで残したが、一覧の一括操作の失敗などが画面を移っても残り続けた。続けて対処が要る失敗は Toast ではなく、起点の操作の近くの固定の面（`FormStatus`・`ActionResultRegion`・`Banner`）に出す）。
 - **一時停止**：通知にポインタが乗っている間と、通知の中にフォーカスがある間は、すべての通知の自動消滅を止め、離れたら残り時間から再開する（WCAG 2.2.1 の考え方。読んでいる途中・押そうとしている途中で消さない）。`action` 付きの通知は自動では消えない。これらは共有 UI の `<Toaster/>` と `toast` が持ち、製品で時間を補わない。
 - **アニメーション**：enter 200ms ease-out / exit 130ms ease-in（`exit-faster-than-enter`）。`prefers-reduced-motion` で無効にする。
 - **Undo**：削除・一括操作の成功 Toast には、できれば「元に戻す」action を付ける（`undo-support`）。
@@ -123,7 +123,7 @@
 toast.success(message, opts?)
 toast.info(message, opts?)
 toast.warning(message, opts?)
-toast.error(message, opts?)     // = danger。固定面がない場合だけ。既定で自動では消えない
+toast.error(message, opts?)     // = danger。固定面がない場合だけ。既定 8 秒で消える
 // opts: { description?: string; action?: { label; onClick }; duration?: number }
 ```
 

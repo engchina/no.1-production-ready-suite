@@ -290,7 +290,11 @@ function BatchUploadSummary({
                     {item.parser_notice ? (
                       <p className="mt-1 flex items-center gap-1 text-xs text-warning-fg">
                         <AlertTriangle size={14} className="shrink-0" aria-hidden />
-                        {t("upload.parserNotice.short")}
+                        {t(
+                          OFFICE_CONVERSION_NOTICE_CODES.has(item.parser_notice.code)
+                            ? "upload.parserNotice.officeConversion"
+                            : "upload.parserNotice.short"
+                        )}
                       </p>
                     ) : null}
                   </div>
@@ -387,6 +391,9 @@ function BatchMetric({ label, value }: { label: string; value: number }) {
     </div>
   );
 }
+
+/** 原本のままでは解析できず、ファイル準備で変換が要る形式の案内のコード（backend の parser_source_guard。#2470）。 */
+const OFFICE_CONVERSION_NOTICE_CODES = new Set(["office_conversion_required", "office_to_pdf_spreadsheet_not_supported"]);
 
 const UPLOAD_KNOWLEDGE_BASE_PICKER_ID = "upload-knowledge-base-picker";
 const UPLOAD_KNOWLEDGE_BASE_INPUT_ID = "upload-knowledge-base-input";

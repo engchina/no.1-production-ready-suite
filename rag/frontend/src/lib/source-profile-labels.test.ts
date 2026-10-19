@@ -14,7 +14,8 @@ describe("source profile labels", () => {
   it("unsupported parser profiles use specific Japanese i18n keys", () => {
     expect(t(parserProfileKey("unsupported_outlook_msg"))).toBe("Outlook MSG 未対応");
     expect(t(parserProfileKey("unsupported_tiff_image"))).toBe("TIFF 画像未対応");
-    expect(t(parserProfileKey("unsupported_legacy_office_binary"))).toBe("旧 Office 未対応");
+    expect(t(parserProfileKey("unsupported_legacy_office_binary"))).toBe("旧 Office(要変換)");
+    expect(t(parserProfileKey("unsupported_macro_enabled_office"))).toBe("マクロ付き Office(要変換)");
   });
 
   it("unsupported warnings avoid falling back to generic copy", () => {
@@ -25,8 +26,10 @@ describe("source profile labels", () => {
 
   it("unsupported reasons are presented as user-facing Japanese messages", () => {
     expect(unsupportedReasonLabel("tiff_image_not_supported")).toContain("PNG/JPEG/WEBP");
+    // 手で変換させず、文書レシピのファイル準備で変換を選ぶよう案内する（#2470）。
+    expect(unsupportedReasonLabel("macro_enabled_office_not_supported")).toContain("マクロは実行しません");
     expect(unsupportedReasonLabel("legacy_office_binary_not_supported")).toContain(
-      "DOCX/PPTX/XLSX"
+      "Excel は「Excel→JSONL」"
     );
     expect(unsupportedReasonLabel("outlook_msg_not_supported")).toContain("EML");
     expect(unsupportedReasonLabel("custom_reason")).toBe("custom_reason");
@@ -34,7 +37,7 @@ describe("source profile labels", () => {
 
   it("evaluation quality labels share the same unsupported warning mapping", () => {
     expect(qualityCodeLabel("unsupported_tiff_image")).toBe("TIFF 画像未対応");
-    expect(qualityCodeLabel("unsupported_legacy_office_binary")).toBe("旧 Office 未対応");
+    expect(qualityCodeLabel("unsupported_legacy_office_binary")).toBe("旧 Office(要変換)");
   });
 
   it("evaluation quality labels expose segment artifact cache misses in Japanese", () => {

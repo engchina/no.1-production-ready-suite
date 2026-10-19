@@ -146,6 +146,7 @@ from app.rag.page_labels import (
     page_labels_artifact,
     pdf_page_labels,
 )
+from app.rag.parser_source_guard import converted_source_profile
 from app.rag.pdf_segment_merge import (
     ContinuationGeometry,
     consolidate_document_extraction,
@@ -1336,6 +1337,11 @@ class IngestionPipeline:
                 parse_bytes = image_bytes
                 parse_content_type = prepared_artifact.content_type or content_type
                 source_derivation = _source_derivation_from_preprocess_artifact(prepared_artifact)
+            # 旧形式・マクロ付きの Office をファイル準備で変換したら、派生物を原本の形式で
+            # 止めない(#2470)。
+            source_profile = converted_source_profile(
+                source_profile, converted=source_derivation.converted
+            )
             await _raise_if_cancelled(cancel_checker)
             progress = active_ingestion_progress()
             partition_attributes: dict[str, object] = {
@@ -3834,10 +3840,14 @@ def _unsupported_parser_message(result: ParserRegistryResult) -> str:
             "TIFF 画像の取込は現在未対応です。"
             "PNG/JPEG/WEBP へ変換してから再アップロードしてください。"
         )
-    if result.unsupported_reason == "legacy_office_binary_not_supported":
+    if result.unsupported_reason in {
+        "legacy_office_binary_not_supported",
+        "macro_enabled_office_not_supported",
+    }:
         return (
-            "旧形式の Office バイナリ文書は現在未対応です。"
-            "DOCX/PPTX/XLSX へ変換してから再アップロードしてください。"
+            "旧形式の Office・マクロ付きの Office は原本のままでは解析できません。"
+            "文書レシピのファイル準備で変換(Word・PowerPoint は「Office→PDF」、"
+            "Excel は「Excel→JSONL」)を選んでから取り込んでください(マクロは実行しません)。"
         )
     return "このファイル形式は取込に対応していません。"
 

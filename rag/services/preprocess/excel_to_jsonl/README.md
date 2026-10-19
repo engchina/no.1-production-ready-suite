@@ -18,7 +18,7 @@ parse の **前** に Excel(`.xls` / `.xlsx`)原本を決定論で「行の記�
 
 | 項目 | 挙動 |
 |---|---|
-| 対応形式 | `.xlsx`(openpyxl。結合セル・書式を読むため read_only にしない)/ `.xls`(xlrd 2.x、formatting_info) |
+| 対応形式 | `.xlsx` / マクロ付きの `.xlsm`(openpyxl。結合セル・書式を読むため read_only にしない。VBA は読まない)/ `.xls`(xlrd 2.x、formatting_info。マクロは読まない)。マクロは実行しない(#2470) |
 | 読み方(`mode`) | `table` は 1 行 1 記録。`procedure` は手順書(表頭の無い番号の列と、表頭のある最初の列=題名)を、番号と題名のある行から次の手順までで 1 記録にし、詳細の無い題名の行を章にする。`auto`(既定)は番号と題名の列があれば procedure、無ければデータの行の埋まり方(中央値 60% 以上)で table |
 | 表頭 | `header_row`(1 始まり)・`header_row_count`(1〜5)の指定を優先。無ければ先頭 30 行から採点して選び、信頼度と理由を残す(0.6 未満は警告 `excel_header_low_confidence`。抽出の warning にもなり、文書レシピを確認(REVIEW)で止める。#1229)。表頭より上の行は `preamble` |
 | 列名 | 複数行の表頭は「 / 」でつなぐ。空は `column_<列>`、重複は `<名前>__<列>` |

@@ -31,11 +31,11 @@ describe("toast の既定の表示時間（messaging.md §3.1）", () => {
     expect(ids()).toEqual([]);
   });
 
-  it("danger（toast.error）は利用者が閉じるまで自動では消えない", () => {
+  it("danger（toast.error）は 8 秒で消える（閉じるまで残さない。#2470）", () => {
     const id = toast.error("保存に失敗しました");
-    vi.advanceTimersByTime(60_000);
+    vi.advanceTimersByTime(7999);
     expect(ids()).toEqual([id]);
-    toast.dismiss(id);
+    vi.advanceTimersByTime(1);
     expect(ids()).toEqual([]);
   });
 

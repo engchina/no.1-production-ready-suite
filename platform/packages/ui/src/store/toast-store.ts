@@ -43,13 +43,14 @@ interface ToastStore {
 
 /**
  * トーン別の既定表示時間（ms）。UX 契約 messaging.md §3.1 に従う。
- * success / info / warning は 4 秒（toast-dismiss: 3–5s）。danger は 0（利用者が閉じるまで残す）。
+ * success / info / warning は 4 秒（toast-dismiss: 3–5s）。danger は読む時間を見て 8 秒（#2470。
+ * 閉じるまで残すと、画面を移っても古いエラーが残り続けた）。ホバー・フォーカス中は止まる。
  */
 const DEFAULT_DURATION: Record<FeedbackTone, number> = {
   success: 4000,
   info: 4000,
   warning: 4000,
-  danger: 0,
+  danger: 8000,
 };
 
 /** 自動消滅のタイマー。`handle` が無い間は止まっている（`remaining` が残り時間）。 */
@@ -95,7 +96,7 @@ export const useToastStore = create<ToastStore>((set, get) => ({
     const id = nextId();
     set((state) => ({ toasts: [...state.toasts, { ...item, id }] }));
 
-    // action 付き、または duration 明示 0（danger の既定を含む）のときは自動消滅させない。
+    // action 付き、または duration 明示 0 のときは自動消滅させない。
     const duration =
       item.duration ?? (item.action ? 0 : DEFAULT_DURATION[item.tone]);
     if (duration > 0) {

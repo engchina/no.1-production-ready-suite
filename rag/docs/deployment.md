@@ -140,10 +140,12 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
 | 形式 | 既定（Docling）のまま | 取り込み方 |
 |---|---|---|
 | PDF（`.pdf`）・画像（`.png` / `.jpg` / `.jpeg` / `.webp` / `.bmp` / `.gif`） | 解析できる | そのまま「処理を開始」 |
-| Office（`.docx` / `.pptx` / `.xlsx`） | 解析できない | 処理レシピの「ファイル準備」で **Office→PDF** を選ぶ（PDF にしてから Docling で解析）か、「文書解析」で **Unstructured** を選ぶ |
+| Word・PowerPoint（`.docx` / `.pptx`） | 解析できない | 処理レシピの「ファイル準備」で **Office→PDF** を選ぶ（PDF にしてから Docling で解析）か、「文書解析」で **Unstructured** を選ぶ |
+| Excel（`.xlsx`） | 解析できない | 処理レシピの「ファイル準備」で **Excel→JSONL** を選ぶ（文書解析は構造化レコード JSONL）か、「文書解析」で **Unstructured** を選ぶ。**Office→PDF は Excel を変換しない**（#2470） |
+| 旧形式・マクロ付きの Office（`.doc` / `.ppt` / `.xls`・`.docm` / `.pptm` / `.xlsm`） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で変換を選ぶ（Word・PowerPoint は **Office→PDF**、Excel は **Excel→JSONL**）。マクロは実行しない（LibreOffice は変換ごとのプロファイルでマクロを無効にし、Excel→JSONL は VBA を読まない）。変換を選ばずに始めると、ファイル準備を飛ばして案内を出す（#2470） |
 | テキスト・Markdown・CSV / TSV・JSON / JSONL・XML・HTML（`.txt` / `.md` / `.csv` / `.tsv` / `.json` / `.jsonl` / `.xml` / `.html` など） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ |
 | メール（`.eml`） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ |
-| TIFF・旧 Office（`.doc` / `.ppt` / `.xls`）・Outlook（`.msg`）・音声・不明な形式 | どの解析エンジンでも取り込めない（以前から「非対応形式」として止まる） | PDF などに変換してからアップロードする |
+| TIFF・Outlook（`.msg`）・音声・不明な形式 | どの解析エンジンでも取り込めない（以前から「非対応形式」として止まる） | PDF などに変換してからアップロードする |
 
 - Docling で解析できない形式は、**取込を始める前に止まる**。アップロードの結果に「このままでは取込を開始できません」と
   理由・対処を出し、処理レシピの「処理を開始」（文書一覧の一括取込を含む）は HTTP 409 で理由・対処を返す。自動で

@@ -1032,7 +1032,7 @@ export declare function SecretField(props: SecretFieldProps): JSX.Element;
 
 | 決めたこと | 理由 |
 |---|---|
-| 既定の表示時間は success / info / warning が 4 秒、danger（`toast.error`）が 0（利用者が閉じるまで残す）。`duration` を渡せば上書きできる | messaging §3.1。エラーは次の行動を決めるまで読めるようにする（以前は danger 8 秒・warning 6 秒で消えていた） |
+| 既定の表示時間は success / info / warning が 4 秒、danger（`toast.error`）が 8 秒。ホバー・フォーカス中は止まる。`duration` を渡せば上書きできる | messaging §3.1。#351 で danger を閉じるまで残したが、画面を移っても古いエラーが残り続けたため 8 秒に戻した（#2470）。対処が続く失敗は固定の面に出す |
 | `action` 付きの通知は自動では消えない（従来どおり） | 「元に戻す」を押す前に消さない |
 | いずれかの通知にポインタが乗っている間、または通知の中にフォーカスがある間は、**すべての**通知の自動消滅を止め、離れたら残り時間から再開する | 読んでいる・押そうとしている途中で消さない（WCAG 2.2.1 の考え方、Radix / Sonner の通例）。通知ごとに止めると、下の通知が消えて読んでいる通知の位置がずれる |
 | 残り時間は store（`useToastStore`）が持つ。`pause()` / `resume()` と `paused` を公開する | 表示の部品を作り直しても残り時間が失われない。単体テストでタイマーを検証できる |
@@ -1045,7 +1045,7 @@ export declare function SecretField(props: SecretFieldProps): JSX.Element;
 <Toaster dismissLabel={t("common.close")} regionLabel={t("common.notifications")} />
 
 toast.success(t("profiles.message.saved"));                       // 4 秒
-toast.error(error instanceof ApiError ? error.message : t("…"));  // 閉じるまで残る
+toast.error(error instanceof ApiError ? error.message : t("…"));  // 8 秒で消える
 toast.success(t("…deleted"), { action: { label: t("common.undo"), onClick: undo } }); // 自動では消えない
 ```
 

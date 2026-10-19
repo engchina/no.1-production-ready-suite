@@ -5,7 +5,7 @@ import { FIXTURE_BASE_URL } from "./_helpers/web-server";
 // fixture 用の dev server を開く（tests/e2e/_helpers/web-server.ts。#1583）。
 test.use({ baseURL: FIXTURE_BASE_URL });
 
-// #351: 通知はホバー・フォーカス中に消えず、離れたら残り時間から再開する。danger は閉じるまで残る。
+// #351: 通知はホバー・フォーカス中に消えず、離れたら残り時間から再開する。danger は 8 秒で消える（#2470）。
 // タイマーは page.clock で止めて進め、実時間に依存しない。
 async function openFixture(page: Page, theme: "light" | "dark") {
   await page.route("**/__toast-pause", (route) => route.fulfill({ contentType: "text/html", body:
@@ -20,7 +20,7 @@ async function openFixture(page: Page, theme: "light" | "dark") {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`${theme}: 通知はホバー・フォーカス中に止まり、danger は閉じるまで残る`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+  test(`${theme}: 通知はホバー・フォーカス中に止まり、danger は閉じるボタンでも消せる`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     const mobile = testInfo.project.name === "mobile-375";
     await openFixture(page, theme);
     const region = page.getByRole("region", { name: "通知", exact: true });
@@ -59,13 +59,24 @@ for (const theme of ["light", "dark"] as const) {
     await page.clock.runFor(200);
     await expect(success).toHaveCount(0);
 
-    // warning は 4 秒で消える。danger は利用者が閉じるまで残る。
+    // warning は 4 秒で消える。danger は止まっていない時間が 8 秒を超えたので消えている（#2470）。
     await page.getByRole("button", { name: "警告通知" }).click();
     const warning = region.getByRole("status").filter({ hasText: "接続が不安定です" });
     await expect(warning).toBeVisible();
     await page.mouse.move(0, 0);
     await page.clock.runFor(4100);
     await expect(warning).toHaveCount(0);
+    await expect(danger).toHaveCount(0);
+
+    // danger は 8 秒で消え、それより前に閉じるボタンでも消せる。
+    await page.getByRole("button", { name: "エラー通知" }).click();
+    await expect(danger).toBeVisible();
+    await page.mouse.move(0, 0);
+    await page.clock.runFor(7900);
+    await expect(danger).toBeVisible();
+    await page.clock.runFor(200);
+    await expect(danger).toHaveCount(0);
+    await page.getByRole("button", { name: "エラー通知" }).click();
     await expect(danger).toBeVisible();
     await danger.getByRole("button", { name: "閉じる" }).click();
     await expect(danger).toHaveCount(0);
