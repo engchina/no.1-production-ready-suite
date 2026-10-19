@@ -680,3 +680,105 @@ test("実行の詳細の回答にも注意書きを出し、付けていない�
     "この回答は AI が生成したものです。"
   );
 });
+
+// #2554: 会話の添付を読むツールの結果も根拠の塊に出す。添付は RAG の文書ではないので、「添付ファイル」の印を付け、
+// 原文を開く「根拠を表示」は出さない（本文はカードに出ている。RAG のチャットの添付の根拠と同じ）。
+const ATTACHMENT_RUN_ID = "run-evidence-attachment";
+const ATTACHMENT_GOAL = "合成の添付の質問 B は？";
+
+function seedAttachmentRun(mockApi: MockApi) {
+  mockApi.state.runs.push({
+    id: ATTACHMENT_RUN_ID,
+    goal: ATTACHMENT_GOAL,
+    agent_id: "default",
+    runtime_id: "builtin",
+    status: "completed",
+    steps: [],
+    events: [],
+    approvals: [],
+    pending_tool_calls: [],
+    metadata: {},
+    created_by_user_uuid: "local",
+    thread_id: `thread_${"f".repeat(32)}`,
+    created_at: MOCK_NOW,
+    updated_at: MOCK_NOW,
+    artifacts: [
+      {
+        id: "artifact-attachment-evidence",
+        kind: "answer_evidence",
+        name: "回答の根拠",
+        created_at: MOCK_NOW,
+        content: {
+          items: [
+            {
+              document_id: "attachment:att-1",
+              chunk_id: "attachment:att-1:s3",
+              file_name: "manual-a.pdf",
+              excerpt: "合成の本文。費用は 1 回あたり 100 です。",
+              truncated: false,
+              locator: { page_start: 3, page_end: 3 },
+              content_kind: "text",
+              evidence_type: "chat_attachment",
+              chat_attachment_id: "att-1",
+              cited: true,
+              answer_use: null,
+            },
+            {
+              document_id: "attachment:att-2",
+              chunk_id: "attachment:att-2:table-b:1-2",
+              file_name: "table-b.csv",
+              excerpt: "code: A / amount: 100\ncode: B / amount: 200",
+              truncated: false,
+              locator: { sheet_name: "table-b", row_start: 1, row_end: 2 },
+              content_kind: "sheet",
+              evidence_type: "chat_attachment",
+              chat_attachment_id: "att-2",
+              cited: false,
+              answer_use: null,
+            },
+          ],
+          passed: 2,
+          cited: 1,
+          markers: [],
+          passages: [],
+        },
+      },
+      {
+        id: "artifact-attachment-answer",
+        kind: "answer",
+        name: "回答",
+        created_at: MOCK_NOW,
+        content: { text: "費用は 1 回あたり 100 です（出典：manual-a.pdf p.3）。" },
+      },
+    ],
+  });
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`添付の根拠は「添付ファイル」の印で根拠の塊に出し、原文は開かない (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    seedAttachmentRun(mockApi);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await page.getByTestId("chat-history-toggle").click();
+    if (viewport.width >= 1024) {
+      await page.getByTestId("chat-history").getByRole("button", { name: new RegExp(`^${ATTACHMENT_GOAL}`) }).click();
+    } else {
+      await page.getByRole("dialog", { name: "会話の履歴" }).getByText(ATTACHMENT_GOAL).click();
+    }
+    const turn = page.getByTestId(`chat-turn-${ATTACHMENT_RUN_ID}`);
+    const evidence = turn.getByTestId("answer-citations");
+    await expect(evidence.locator("summary")).toHaveText("AI に渡した 2 件 ／ 回答で引用 1 件");
+    await evidence.locator("summary").click();
+    const cards = evidence.getByTestId("evidence-card");
+    await expect(cards).toHaveCount(2);
+    await expect(cards.nth(0)).toContainText("manual-a.pdf");
+    await expect(cards.nth(0)).toContainText("添付ファイル");
+    await expect(cards.nth(0)).toContainText("回答で引用");
+    await expect(cards.nth(0).getByTestId("evidence-chips")).toContainText("p.3");
+    await expect(cards.nth(1)).toContainText("添付ファイル");
+    await expect(cards.nth(1).getByTestId("evidence-chips")).toContainText("table-b · 1–2 行");
+    await expect(evidence.getByRole("button", { name: /の根拠を表示$/ })).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`answer-evidence-attachment-${viewport.name}.png`), fullPage: true });
+  });
+}

@@ -617,6 +617,7 @@ const agentJa = {
   "chat.attachments.tooMany": "添付できるのは {count} 件までです。",
   "chat.attachments.unsupported": "この種類のファイルは添付できません。",
   "chat.attachments.failed": "添付できませんでした。",
+  "chat.attachments.evidenceSource": "添付ファイル",
   "chat.attachments.warning.macros_not_executed": "マクロは実行していません。",
   "chat.attachments.warning.pdf_page_without_text": "文字の無いページは読み取っていません。",
   "chat.attachments.warning.text_truncated": "長いため途中までを読み取りました。",
