@@ -578,7 +578,6 @@ export function RunTimeline({
   );
   const summedMs = steps.reduce((sum, step) => sum + (step.level ? 0 : stepDurationMs(step) ?? 0), 0);
   const total = totalDurationMs ?? (summedMs > 0 ? summedMs : null);
-  const topLevelCount = steps.filter((step) => !step.level).length;
   const nameText = size === "sm" ? "text-xs" : "text-sm";
 
   return (
@@ -590,7 +589,7 @@ export function RunTimeline({
     >
       {showSummary ? (
         <p className="text-xs text-fg-muted tnum">
-          {labels.timelineSummary(topLevelCount, formatRunDuration(total, labels.notRecorded))}
+          {labels.timelineSummary(steps.length, formatRunDuration(total, labels.notRecorded))}
         </p>
       ) : null}
       <ol className={cn("grid min-w-0", size === "sm" ? "gap-1.5" : "gap-1")} aria-label={labels.timeline}>
@@ -710,6 +709,73 @@ export function RunTimeline({
 }
 
 // ---------------------------------------------------------------------------
+// 処理の経過の節
+
+export interface RunTimelineSectionProps {
+  /** 節の見出し（翻訳済み。「処理の経過」）。 */
+  title: string;
+  steps: readonly RunTimelineStep[];
+  /** 処理全体の所要時間（ミリ秒）。開閉の見出しに出す（無ければ段の合計）。 */
+  totalDurationMs?: number | null;
+  /** 段が無いときの表示（開閉の見出しを出さずに置く）。 */
+  empty?: ReactNode;
+  /** 処理の詳細（`RunProcessDetails`。#2325）。開いた中身のタイムラインの後ろに置く。 */
+  processDetails?: ReactNode;
+  /** 段の一覧を最初から開く。既定は閉じる（#2473）。 */
+  defaultOpen?: boolean;
+  labels?: RunDetailLabelsInput;
+  /** 節の `data-testid`。開閉の見出しは `<testId>-summary`。 */
+  testId?: string;
+}
+
+/**
+ * 実行の詳細の「処理の経過」の節（#2473）。節の中を「N ステップ・合計 M 秒」の 1 行の開閉（`Disclosure` の plain。
+ * 回答の根拠の「AI に渡した N 件 ／ 回答で引用 M 件」と同じ形）にし、既定で閉じる。開くと段の一覧（`RunTimeline`）と
+ * その後ろの処理の詳細が出る。段の数はチャットの処理の経過（`ChatProgress`）と同じく入れ子の段も数える。
+ * 3 製品の実行の詳細はこの部品を使い、節の中の並びを自分で組まない。
+ */
+export function RunTimelineSection({
+  title,
+  steps,
+  totalDurationMs,
+  empty,
+  processDetails,
+  defaultOpen = false,
+  labels: labelsInput,
+  testId,
+}: RunTimelineSectionProps) {
+  const labels = resolveRunDetailLabels(labelsInput);
+  const summedMs = steps.reduce((sum, step) => sum + (step.level ? 0 : stepDurationMs(step) ?? 0), 0);
+  const total = totalDurationMs ?? (summedMs > 0 ? summedMs : null);
+  const failed = steps.some((step) => step.status === "failed");
+  return (
+    <RunDetailSection title={title} testId={testId}>
+      {steps.length ? (
+        <Disclosure
+          variant="plain"
+          summary={<span className="tnum">{labels.timelineSummary(steps.length, formatRunDuration(total, labels.notRecorded))}</span>}
+          // 失敗した段がある実行は、色だけでなく失敗のアイコンでも伝える（チャットの処理の経過と同じ）。
+          icon={failed ? XCircle : undefined}
+          defaultOpen={defaultOpen}
+          summaryClassName={failed ? "text-danger-fg [&>span:first-child]:text-danger-fg" : undefined}
+          summaryProps={{ "data-testid": testId ? `${testId}-summary` : undefined }}
+          contentClassName="grid min-w-0 gap-3 pt-2"
+          data-run-timeline-section=""
+        >
+          <RunTimeline steps={steps} totalDurationMs={totalDurationMs} showSummary={false} labels={labelsInput} />
+          {processDetails}
+        </Disclosure>
+      ) : (
+        <>
+          {empty}
+          {processDetails}
+        </>
+      )}
+    </RunDetailSection>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 並び
 
 export interface RunDetailLayoutProps {
@@ -717,7 +783,7 @@ export interface RunDetailLayoutProps {
   summary: ReactNode;
   /** 回答（最終の出力。`RunDetailSection` + 製品の回答の表示）。 */
   answer?: ReactNode;
-  /** 処理の経過（`RunDetailSection` + `RunTimeline` + その後ろの `RunProcessDetails`〔処理の詳細〕。#2325）。 */
+  /** 処理の経過（`RunTimelineSection`。開閉の中にタイムラインと `RunProcessDetails`〔処理の詳細〕。#2325 / #2473）。 */
   timeline?: ReactNode;
   /** 根拠・SQL と結果・検証・成果物（製品の節。複数可）。 */
   evidence?: ReactNode;

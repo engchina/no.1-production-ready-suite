@@ -15,6 +15,7 @@ import {
   RunStatusBadge,
   RunSummary,
   RunTimeline,
+  RunTimelineSection,
   formatRunDateTime,
   formatRunDuration,
   formatRunTokens,
@@ -379,7 +380,7 @@ describe("RunTimeline", () => {
         testId="timeline"
       />
     );
-    expect(container.textContent).toContain("2 ステップ・合計 1.5 秒");
+    expect(container.textContent).toContain("3 ステップ・合計 1.5 秒");
     const buttons = container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]");
     expect(buttons).toHaveLength(2);
     expect(buttons[0].getAttribute("aria-expanded")).toBe("false");
@@ -398,6 +399,70 @@ describe("RunTimeline", () => {
     expect(container.textContent).toContain("引数と結果");
     const region = document.getElementById(buttons[0].getAttribute("aria-controls") ?? "");
     expect(region?.hidden).toBe(false);
+  });
+});
+
+describe("RunTimelineSection（#2473）", () => {
+  const steps: RunTimelineStep[] = [
+    { id: "plan", label: "計画", status: "done", durationMs: 1200 },
+    { id: "tool", label: "ツール: search", status: "done", durationMs: 800, level: 1 },
+    { id: "answer", label: "回答の作成", status: "done", durationMs: 300 },
+  ];
+
+  it("既定で「N ステップ・合計 M 秒」の 1 行に閉じ、開くと段の一覧と処理の詳細を出す", () => {
+    render(
+      <RunTimelineSection
+        title="処理の経過"
+        steps={steps}
+        totalDurationMs={2000}
+        processDetails={<p>処理の詳細の中身</p>}
+        testId="section"
+      />
+    );
+    const summary = container.querySelector<HTMLElement>("[data-testid='section-summary']");
+    // 段の数は入れ子の段も数える（チャットの処理の経過と同じ）。
+    expect(summary?.textContent).toBe("3 ステップ・合計 2.0 秒");
+    const details = container.querySelector("details");
+    expect(details?.open).toBe(false);
+    expect(container.textContent).toContain("処理の経過");
+    act(() => summary?.click());
+    expect(details?.open).toBe(true);
+    expect(container.querySelectorAll("[data-run-timeline-step]")).toHaveLength(3);
+    // 開いた中に要約の行を重ねて出さない。処理の詳細はタイムラインの後ろ。
+    expect(container.querySelector("[data-run-timeline] > p")).toBeNull();
+    expect(container.textContent).toContain("処理の詳細の中身");
+  });
+
+  it("defaultOpen で最初から開き、失敗した段があれば見出しを危険の色にする", () => {
+    render(
+      <RunTimelineSection
+        title="処理の経過"
+        steps={[...steps, { id: "sql", label: "SQL を実行", status: "failed", durationMs: 100 }]}
+        defaultOpen
+        testId="section"
+      />
+    );
+    expect(container.querySelector("details")?.open).toBe(true);
+    const summary = container.querySelector("[data-testid='section-summary']");
+    expect(summary?.className).toContain("text-danger-fg");
+    // 色だけで伝えない（失敗のアイコンも出す）。
+    expect(summary?.querySelectorAll("svg")).toHaveLength(2);
+  });
+
+  it("段が無いときは開閉を出さず、空の表示と処理の詳細を出す", () => {
+    render(
+      <RunTimelineSection
+        title="処理の経過"
+        steps={[]}
+        empty={<p>段の記録はありません</p>}
+        processDetails={<p>処理の詳細の中身</p>}
+        testId="section"
+      />
+    );
+    expect(container.querySelector("details")).toBeNull();
+    expect(container.querySelector("[data-testid='section-summary']")).toBeNull();
+    expect(container.textContent).toContain("段の記録はありません");
+    expect(container.textContent).toContain("処理の詳細の中身");
   });
 });
 

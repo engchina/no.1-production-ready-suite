@@ -219,6 +219,7 @@ for (const viewport of VIEWPORTS) {
 
       // 処理の経過（#1955）: 段の行を開くと、表の形のツールの結果は表、元の JSON は畳む。RAG の結果は JSON のまま。
       const timeline = page.getByTestId("run-timeline-section");
+      await page.getByTestId("run-timeline-section-summary").click();
       const closed = timeline.locator('[data-run-timeline-step] > div:first-child button[aria-expanded="false"]');
       while ((await closed.count()) > 0) await closed.first().click();
       const stepTable = page.getByTestId("run-step-table-step-query");

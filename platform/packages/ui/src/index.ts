@@ -661,6 +661,7 @@ export {
   RunDetailSection,
   RunProcessDetails,
   RunTimeline,
+  RunTimelineSection,
   RunDetailLayout,
   RunDetailSkeleton,
   RunFactList,
@@ -677,6 +678,7 @@ export {
   type RunTimelineStepStatus,
   type RunTimelineBar,
   type RunTimelineProps,
+  type RunTimelineSectionProps,
   type RunDetailLayoutProps,
 } from "./components/data/run-detail";
 export {

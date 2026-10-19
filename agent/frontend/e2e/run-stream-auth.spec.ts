@@ -36,6 +36,7 @@ function streamCard(page: Page) {
 }
 
 async function openStreamControls(page: Page) {
+  await page.getByTestId("run-timeline-section-summary").click();
   await page.getByTestId("run-process-details").click();
   await expect(streamCard(page)).toBeVisible();
 }

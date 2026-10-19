@@ -230,6 +230,15 @@ test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査�
     "run-review-section",
     "run-audit-section",
   ]);
+  // 処理の経過は既定で「N ステップ・合計 M 秒」の 1 行に閉じる（回答の根拠・チャットの処理の経過と同じ開閉。#2473）。
+  const timelineSummary = page.getByTestId("run-timeline-section-summary");
+  await expect(timelineSummary).toContainText("ステップ・合計");
+  await expect(page.getByTestId("run-timeline-section").locator("details[data-run-timeline-section]")).not.toHaveAttribute(
+    "open",
+    ""
+  );
+  await expect(page.getByTestId("run-process-details")).toBeHidden();
+  await timelineSummary.click();
   // 処理の詳細（識別子・イベントの記録・ストリーム）は処理の経過の節の中に置く（チャットの処理の経過と同じ名前・位置。#2325）。
   await expect(page.getByTestId("run-timeline-section").getByTestId("run-technical-section")).toHaveCount(1);
   await expect(page.getByTestId("run-process-details")).toHaveText("処理の詳細");
@@ -363,6 +372,7 @@ test("イベントの記録は 1 行ずつ並び、多いときは内側だけ�
     };
   });
   await page.goto("/runs?id=run-layout");
+  await page.getByTestId("run-timeline-section-summary").click();
   await page.getByTestId("run-process-details").click();
   const log = page.getByTestId("run-event-log");
   await expect(log.locator("[data-run-event]")).toHaveCount(40);
@@ -531,6 +541,7 @@ test("回答を成果物より先に出し、失敗した実行は理由と処�
   await expect(page.getByTestId("run-summary").getByRole("alert")).toContainText("モデルに接続できませんでした");
   // 3 製品共通の失敗のカード: チャットでもう一度質問する案内（#2342）。
   await expect(page.getByTestId("run-failure")).toContainText("チャットでもう一度質問してください");
+  await page.getByTestId("run-timeline-section-summary").click();
   await expect(page.getByTestId("run-timeline-section").getByText(TOOL_STEP)).toBeVisible();
 });
 
@@ -676,6 +687,7 @@ for (const viewport of [
       await page.screenshot({ path: testInfo.outputPath(`runs-detail-${theme}.png`) });
       // 処理の詳細を開いても本文の幅は変わらない。
       const technical = page.getByTestId("run-process-details");
+      await page.getByTestId("run-timeline-section-summary").click();
       await technical.click();
       expect((await checkBounds()).mainWidth).toBe(before.mainWidth);
       await page.evaluate(() => {

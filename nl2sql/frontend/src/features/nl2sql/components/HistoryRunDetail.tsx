@@ -18,7 +18,7 @@ import {
   RunDetailSkeleton,
   RunFactList,
   RunSummary,
-  RunTimeline,
+  RunTimelineSection,
   StatusBadge,
   TimedLoadingState,
   toast,
@@ -204,10 +204,13 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
         }
         timeline={
           steps.length > 0 || processDetails ? (
-            <RunDetailSection title={t("history.detail.timeline")} testId="history-detail-timeline">
-              {steps.length > 0 ? <RunTimeline steps={steps} totalDurationMs={item.elapsed_ms ?? null} /> : null}
-              {processDetails}
-            </RunDetailSection>
+            <RunTimelineSection
+              title={t("history.detail.timeline")}
+              steps={steps}
+              totalDurationMs={item.elapsed_ms ?? null}
+              processDetails={processDetails}
+              testId="history-detail-timeline"
+            />
           ) : null
         }
         evidence={
