@@ -243,6 +243,59 @@ def grounding_used(steps: list[RunStep]) -> bool:
     return False
 
 
+# 根拠・データのツールの実行の失敗（呼び先の障害・接続・応答の誤り）の error code（#2475）。承認の
+# 却下・評価の dry-run・自動実行で呼ばなかったもの・予算の超過・データの範囲の拒否は数えない。
+GROUNDING_TOOL_FAILED_CODE = "runtime.grounding_tool_failed"
+_EXECUTION_FAILURE_PREFIXES = ("mcp.", "external_mcp.")
+_EXECUTION_FAILURE_CODES = frozenset({"tool.unhandled_error"})
+_MCP_TOOL_ERROR = "mcp.tool_error"
+
+
+def _execution_failed(step: RunStep) -> bool:
+    """ツールの呼び出しが、呼び先で実行できずに失敗したか（引数の誤りなど呼び出し側の誤りは除く）。"""
+    result = step.tool_result
+    if step.status != "failed" or result is None or result.success:
+        return False
+    code = result.error_code or ""
+    if code == _MCP_TOOL_ERROR:
+        # 呼び先が 4xx（引数・権限・対象が無い）で返したエラーは、呼び出しを直せば答えられる。
+        status = (result.error_details or {}).get("status")
+        return not (isinstance(status, int) and 400 <= status < 500)
+    return code.startswith(_EXECUTION_FAILURE_PREFIXES) or code in _EXECUTION_FAILURE_CODES
+
+
+def grounding_failure(steps: list[RunStep]) -> RunStep | None:
+    """根拠・データのツールを呼んだが 1 つも結果を得られず、実行に失敗した呼び出しがあれば、
+    その最後の step（#2475）。
+
+    検索・照会を終えられなかった Run の回答は、資料・業務データを調べた結果ではない。そのまま
+    出すと「資料に根拠が無い」と読まれるため、`builtin_runtime` は Run を失敗にする。
+    Control Plane が自分で呼んだものは数えない。
+    """
+    if grounding_used(steps):
+        return None
+    failed: RunStep | None = None
+    for step in steps:
+        call = step.tool_call
+        if call is None or not is_grounding_tool(call.name):
+            continue
+        if (call.trace_id or "").startswith(_CONTROL_PLANE_TRACE_PREFIXES):
+            continue
+        if _execution_failed(step):
+            failed = step
+    return failed
+
+
+def grounding_failure_message(step: RunStep) -> str:
+    """根拠・データのツールの実行の失敗で Run を止めたときの文（ツールの名前と返した理由）。"""
+    call, result = step.tool_call, step.tool_result
+    name = mcp_base_tool_name(call.name) if call is not None else ""
+    reason = (result.error if result is not None else "") or ""
+    head = f"資料・業務データのツール（{name}）の実行に失敗したため、回答を作れませんでした。"
+    tail = "資料・業務データに根拠が無いという意味ではありません。"
+    return f"{head}{reason.strip()}{tail}" if reason.strip() else f"{head}{tail}"
+
+
 def grounded_in_thread(previous_steps: Iterable[list[RunStep]]) -> bool:
     """同じ会話の前の Run（会話の履歴の上限の中）のどれかが、根拠・データのツールで答えたか。
 
@@ -449,6 +502,7 @@ def refusal_outcome() -> JsonObject:
 
 __all__ = [
     "BASIS_NO_TOOL_GROUNDING",
+    "GROUNDING_TOOL_FAILED_CODE",
     "MAX_RETRIES",
     "METADATA_KEY",
     "REASON_NO_TOOL_GROUNDING",
@@ -458,6 +512,8 @@ __all__ = [
     "RETRY_MESSAGE_CONFIRMABLE",
     "clarified_in_text",
     "grounding_attempted",
+    "grounding_failure",
+    "grounding_failure_message",
     "grounded_in_thread",
     "grounding_tools",
     "grounding_used",

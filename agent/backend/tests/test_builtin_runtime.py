@@ -935,7 +935,11 @@ def test_unavailable_mcp_connection_is_skipped_with_a_warning(
 def test_unreachable_mcp_service_is_a_tool_error_and_the_run_continues(
     monkeypatch: MonkeyPatch, mcp_agent: Any
 ) -> None:
-    """RAG が止まっても Run は例外で落ちず、ツールの失敗をモデルへ返して回答まで進む（#854）。"""
+    """RAG が止まっても Run は例外で落ちず、ツールの失敗をモデルへ返す（#854）。
+
+    根拠のツールが 1 つも結果を返さないまま確定した回答は出さず、ツールの失敗の理由で Run を
+    失敗にする（資料に根拠が無いとは読ませない。#2475）。
+    """
     _script(
         monkeypatch,
         [function_call("rag__rag_search", {"query": "契約の更新条件"}, call_id="call-rag")],
@@ -955,7 +959,9 @@ def test_unreachable_mcp_service_is_a_tool_error_and_the_run_continues(
     anyio.run(builtin_runtime.execute_run, run_id)
 
     run = runtime_repository.get_run(run_id)
-    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert run.status == RunStatus.FAILED
+    assert run.events[-1].payload["error_code"] == "runtime.grounding_tool_failed"
+    assert "RAG のサービスが起動しているか" in run.events[-1].message
     [step] = run.steps
     assert step.status == "failed"
     assert step.tool_result is not None

@@ -2296,3 +2296,64 @@ def test_chat_tools_are_not_provided(auth: ProductionAuth, name: str) -> None:
     error = response.json()["error"]
     assert error["code"] == -32602
     assert name in error["message"]
+
+
+def _api_error_in_answer(question: str) -> Exception:
+    """回答の pipeline の中で AI の API が失敗した例外（実行記録が包んだ形。#2475）。"""
+    import httpx
+    import openai
+    from rag_engine.generation.execution_record import AnswerExecutionError
+
+    request = httpx.Request("POST", "https://ai.invalid/v1/responses")
+    cause = openai.APIError(
+        f"provider body: {question}", request, body={"code": "server_error", "message": question}
+    )
+    try:
+        raise AnswerExecutionError(str(cause), question) from cause
+    except AnswerExecutionError as exc:
+        return exc
+
+
+@pytest.mark.parametrize("tool", ["rag_search", "rag_retrieve_evidence"])
+def test_ai_api_failure_is_a_classified_tool_error_without_question(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, tool: str
+) -> None:
+    """回答の pipeline の AI の API の失敗は、汎用の内部エラーではなく種類つきの 5xx のツールの
+    エラーで返し、質問・呼び先の応答の本文を入れない（#2475）。"""
+    question = "合成の質問 A の本文"
+
+    async def fake_run(_request: SearchRequest, **_: Any) -> SearchResponse:
+        raise _api_error_in_answer(question)
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    result = _call(tool, {"query": question}, _token(user.user_uuid))
+
+    assert result["isError"] is True
+    body = result["structuredContent"]
+    assert body["error_code"] == "RAG_ANSWER_AI_API_FAILED"
+    assert body["status"] == 502
+    assert body["details"] == {
+        "kind": "unknown",
+        "error_type": "APIError",
+        "provider_code": "server_error",
+    }
+    assert "検索を終えられませんでした" in body["message"]
+    assert question not in json.dumps(result, ensure_ascii=False)
+
+
+def test_unclassified_search_failure_stays_internal_error(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """AI の API ではない予期しない例外は、従来どおり内容を隠した内部エラー（#2475）。"""
+
+    async def fake_run(_request: SearchRequest, **_: Any) -> SearchResponse:
+        raise RuntimeError("内部の文")
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    result = _call("rag_search", {"query": "質問"}, _token(user.user_uuid))
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "MCP_TOOL_INTERNAL_ERROR"
+    assert "内部の文" not in json.dumps(result, ensure_ascii=False)

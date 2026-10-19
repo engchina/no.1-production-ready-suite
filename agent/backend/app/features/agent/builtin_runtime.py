@@ -2075,6 +2075,7 @@ async def execute_run(run_id: str) -> None:
                 run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
             )
             if not refused:
+                _raise_on_grounding_failure(run.id, result)
                 result = await _require_hops(run, sdk_agent, result, agent.data_scopes)
             _record_usage(run_id, result, agent.model_id)
             await _finish(
@@ -2137,6 +2138,7 @@ async def resume_run(run_id: str) -> None:
                 run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
             )
             if not refused:
+                _raise_on_grounding_failure(run.id, result)
                 result = await _require_hops(run, sdk_agent, result, agent.data_scopes)
             _record_usage(run_id, result, agent.model_id)
             await _finish(
@@ -2569,6 +2571,59 @@ async def _require_hops(
         context=context,
     )
     return await _unattended_approvals(run, sdk_agent, result, data_scopes)
+
+
+def _raise_on_grounding_failure(run_id: str, result: Any) -> None:
+    """根拠・データのツールが 1 つも結果を返さず実行に失敗したまま確定した回答を、Run の失敗にする。
+
+    #2475。
+    検索・照会を終えられなかった回答を出すと、利用者は「資料に根拠が無い」と読む（最終の検証も根拠が
+    無いので本文を外す）。ツールの失敗の理由を出して Run を失敗にし、再実行で直せることを示す。
+    承認で止まった Run・確認の質問だけの回答・NL2SQL の SQL の生成前の確認で止まった Run は対象外。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    if list(getattr(result, "interruptions", []) or []):
+        return
+    steps = list(runtime_repository.get_run(run_id).steps)
+    if tool_grounding.is_exempt_answer(_answer_text(result.final_output), steps):
+        return
+    failed = tool_grounding.grounding_failure(steps)
+    if failed is None:
+        return
+    tool_result = failed.tool_result
+    logger.warning(
+        "builtin_runtime_grounding_tool_failed",
+        extra={
+            "run_id": run_id,
+            "tool_name": failed.tool_call.name if failed.tool_call is not None else None,
+            "tool_error_code": tool_result.error_code if tool_result is not None else None,
+            "tool_error_details": _safe_tool_error_details(tool_result),
+        },
+    )
+    raise BuiltinRuntimeError(
+        tool_grounding.GROUNDING_TOOL_FAILED_CODE, tool_grounding.grounding_failure_message(failed)
+    )
+
+
+def _safe_tool_error_details(result: ToolResult | None) -> dict[str, Any]:
+    """ログに残すツールのエラーの分類（呼び先の error code・status・種類。本文は残さない）。"""
+    if result is None:
+        return {}
+    details = result.error_details or {}
+    raw = details.get("details")
+    nested: dict[str, Any] = raw if isinstance(raw, dict) else {}
+    picked: dict[str, Any] = {
+        key: details.get(key) for key in ("error_code", "status") if details.get(key) is not None
+    }
+    picked.update(
+        {
+            key: nested.get(key)
+            for key in ("kind", "error_type", "provider_status", "provider_code", "stage")
+            if nested.get(key) is not None
+        }
+    )
+    return picked
 
 
 def _grounded_in_thread(run_id: str) -> bool:
