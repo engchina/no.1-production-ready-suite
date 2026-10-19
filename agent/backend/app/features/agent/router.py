@@ -2796,10 +2796,18 @@ async def create_evaluation(
     agent = _require_evaluable_agent(request, evaluation.agent_id or item.agent_id)
     if not agent.enabled or agent.migration_required:
         raise HTTPException(status_code=409, detail="この業務 Agent は実行できない状態です。")
-    # 評価する版（#810）。省略時は、公開していない変更があれば下書き、なければ公開中の版。
+    # 評価する版（#810）。下書きの評価は下書きの実行（`POST /runs` の `draft=true`）と同じく
+    # Agent 管理だけ（#2522）。省略時は、Agent 管理で公開していない変更があれば下書き、それ以外は
+    # 公開中の版。
+    can_run_draft = _policy_has_roles(_actor_policy(request), {"admin"})
     target = evaluation.agent_version or (
-        "draft" if agent.has_unpublished_changes() else "published"
+        "draft" if can_run_draft and agent.has_unpublished_changes() else "published"
     )
+    if target == "draft" and not can_run_draft:
+        raise HTTPException(
+            status_code=403,
+            detail="下書きを評価できるのは Agent 管理の権限がある利用者だけです。",
+        )
     if target == "published" and agent.published_version is None:
         raise HTTPException(
             status_code=409,

@@ -1,35 +1,46 @@
 """シートの版式の判定と、帳票（方眼紙）・1 シートの複数の表の読み方（#2516）。
 
 - 領域の分け方（`split_regions`）: 空の行・空の列で格子を再帰的に分け（XY-cut）、表ごとの領域に
-  する。1 行だけの領域（表の題名）は下の表につなぎ、表頭らしい行で始まらない領域（空の行で
-  区切った表の続き）は上の表につなぐ。結合セルの範囲は分けない。
+  する。セル 1 つの 1 行の領域（表の題名）は下の表につなぎ、セルが 2 つ以上の 1 行の領域と、
+  表頭らしい行で始まらない領域（空の行で区切った表の続き）は上の表につなぐ（#2528）。結合セルの
+  範囲は分けない。
 - 帳票の判定（`detect_form_layout`）: 結合セルを 1 つの単位にし、構造の特徴（結合セルの割合・
-  列幅の狭さ・行どうしの単位の位置の不揃い・ラベルと値の隣接）を 0〜1 の点数にする。業務の語は
-  使わない。
+  ラベルのすぐ右の値・行どうしの単位の位置の不揃い・列幅の狭さ）を 0〜1 の点数にする。狭い列は
+  加点で、普通の列幅の帳票も判定する。位置のそろった格子（普通の表）は点数を下げる（#2530）。
+  業務の語は使わない。
 - 帳票の読み方（`form_blocks`）: ラベルの単位と、その右（空の列 2 つまで）か下の値の単位を組にし、
   「ラベル: 値」の記録（ラベル・値・それぞれのセル・全体のセル範囲）にする。値の無い行の単位は
   見出し（以降の項目の節）、縦に結合して右に複数の項目を持つ単位は項目のまとまりの見出しにする。
   塗りつぶし・太字（またはコロンで終わる）のラベルが横に並び、その下に同じ位置の値の行があるときは、
-  上のラベルと下の値を組にする（値の行が 2 行以上なら表の行にする）。
+  上のラベルと下の値を組にする（値の行が 2 行以上なら表の行にする）。1 つのセルの
+  「ラベル：値」はそれだけで項目にし、下に値の無い結合セル（押印欄の枠など）のあるラベルは
+  空欄として数える（#2529）。
 - 値の選択の記号（「■A □B」）は選ばれた選択肢を値にし、原文を ``value_original`` に残す
-  （`app.choices`。#2526）。図形・テキストボックスの文字の単位は ``shape_cells`` に残す。
+  （`choices`。#2526）。図形・テキストボックスの文字の単位は ``shape_cells`` に残す。
 """
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from collections.abc import Set
 from dataclasses import dataclass
 
-from rag_parser_core.sheet_records import SheetBlock, SheetDiagnostic
-
-from .choices import is_choice_mark, read_choice
+from .choices import is_choice_mark, read_choice, starts_with_choice_mark
 from .grid import Grid, cell_ref, column_letter, is_textual
+from .models import SheetBlock, SheetDiagnostic
 
 # 列幅がこれ以下の列を「狭い列」（方眼紙の格子）とみなす（文字数の単位）。
 NARROW_COLUMN_WIDTH = 4.0
 # 帳票の点数の重み（結合セル・狭い列・位置の不揃い・ラベルと値の隣接）。
-_FORM_WEIGHTS = {"merged": 0.3, "narrow": 0.25, "misaligned": 0.25, "label_value": 0.2}
+# ラベルと値の隣接（ラベルのすぐ右の値）を主にし、狭い列（方眼紙）は加点にする。普通の列幅の帳票
+# （見積書・届出など）も判定できるようにする（#2530）。
+_FORM_WEIGHTS = {"merged": 0.3, "narrow": 0.15, "misaligned": 0.15, "label_value": 0.4}
+# 狭い列でなく、行どうしの単位の位置がそろった格子（結合したデータの列のある普通の表）は、
+# 点数をこの倍率で下げる（帳票はラベルと値の並びが行ごとに違う）。
+_REGULAR_GRID_NARROW = 0.5
+_REGULAR_GRID_MISALIGNED = 0.2
+_REGULAR_GRID_FACTOR = 0.5
 # これより単位の少ない領域は帳票と判定しない（特徴が安定しない）。
 FORM_MIN_UNITS = 4
 # 判定に使う先頭の行の数（大きい表で時間をかけない）。
@@ -38,6 +49,8 @@ _FORM_SAMPLE_ROWS = 200
 _FORM_MAX_GAP_COLUMNS = 2
 _FORM_MAX_GAP_ROWS = 1
 _LABEL_SUFFIXES = (":", "：")
+# 1 つのセルの「ラベル：値」（全角か半角のコロン）。ラベルは改行を含まない 30 文字まで（#2529）。
+_INLINE_FIELD = re.compile(r"^(?P<label>[^：:\n]{1,30}?)\s*[：:]\s*(?P<value>\S.*)$", re.DOTALL)
 # 表の続きか新しい表かを見る、表頭の候補の行の後の行の数。
 _CONTINUATION_LOOKAHEAD_ROWS = 5
 # これ以上の空の行で離れた領域は、表の続きにしない（表の中の区切りの空の行は 1 行が多い）。
@@ -216,22 +229,27 @@ def split_regions(grid: Grid, *, gap_rows: int = 1, gap_columns: int = 1) -> lis
     if len(boxes) <= 1:
         return boxes
     index = _RowIndex(grid)
-    # 1 行だけの領域（題名）は、すぐ下の列の重なる領域につなぐ（無ければすぐ上の領域）。
+    # 1 行だけの領域: セルが 1 つ（題名の形）なら、すぐ下の列の重なる領域の題名にする（無ければ
+    # すぐ上の領域につなぐ）。セルが 2 つ以上の行（空の行の後の表の続き・合計の行など）は、すぐ上の
+    # 列の重なる表の続きにする（無ければすぐ下の領域につなぐ）。データの 1 行を下の表の題名にして
+    # 上下の表をつながない（#2528）。
     merged: list[Box] = []
     pending = list(boxes)
     while pending:
         box = pending.pop(0)
-        if len(index.rows(box)) == 1:
+        rows = index.rows(box)
+        if len(rows) == 1:
             below = [
                 other for other in pending if other[0] > box[2] and _overlaps_columns(box, other)
             ]
-            if below:
-                target = min(below, key=lambda other: other[0])
-                pending[pending.index(target)] = _union(box, target)
-                continue
             above = [
                 other for other in merged if other[2] < box[0] and _overlaps_columns(box, other)
             ]
+            title = len(index.row_columns(box, rows[0])) == 1
+            if below and (title or not above):
+                target = min(below, key=lambda other: other[0])
+                pending[pending.index(target)] = _union(box, target)
+                continue
             if above:
                 target = max(above, key=lambda other: other[2])
                 merged[merged.index(target)] = _union(target, box)
@@ -327,17 +345,17 @@ def form_features(grid: Grid) -> tuple[dict[str, float], int]:
         b = {(unit.left, unit.right) for unit in index.by_row[lower]}
         similarities.append(len(a & b) / len(a | b))
     misaligned = 1 - sum(similarities) / len(similarities) if similarities else 0.0
-    # ラベルと値の隣接: 文字の単位のうち、すぐ右に結合した値の単位があるか、ラベルの手がかり
-    # （塗りつぶし・太字・コロン）があってすぐ右か下に手がかりの無い単位があるもの。
+    # ラベルと値の隣接: 文字の単位のうち、すぐ右に手がかり（塗りつぶし・太字・末尾のコロン）の
+    # 無い値の単位があり、その値が結合しているか、自分に手がかりがあるもの（ラベル）。表頭の下に
+    # 値の並ぶ表は数えない（表頭の右は表頭）。帳票はおよそ半分の単位がラベルなので、ラベルの数を
+    # 単位の数の半分で割って 1 を上限にする（#2530）。
     textual = [unit for unit in units if unit.textual]
     paired = 0
     for unit in textual:
         right_unit = index.right_of(unit, unit.top)
-        nearby = ([right_unit] if right_unit else []) + index.below(unit)
-        merged_value = right_unit is not None and right_unit.merged and not right_unit.hinted
-        if merged_value or (unit.hinted and any(not other.hinted for other in nearby)):
+        if right_unit is not None and not right_unit.hinted and (right_unit.merged or unit.hinted):
             paired += 1
-    label_value = paired / len(textual) if textual else 0.0
+    label_value = min(1.0, 2 * paired / len(textual)) if textual else 0.0
     features = {
         "merged": round(merged, 3),
         "narrow": round(narrow, 3),
@@ -357,6 +375,12 @@ def detect_form_layout(grid: Grid) -> tuple[float, dict[str, float], str]:
         f"単位 {count}・結合セル {features['merged']:.0%}・狭い列 {features['narrow']:.0%}・"
         f"位置の不揃い {features['misaligned']:.0%}・ラベルと値の隣接 {features['label_value']:.0%}"
     )
+    if (
+        features["narrow"] < _REGULAR_GRID_NARROW
+        and features["misaligned"] < _REGULAR_GRID_MISALIGNED
+    ):
+        score *= _REGULAR_GRID_FACTOR
+        reason += "・位置のそろった格子（表らしい）"
     return round(min(max(score, 0.0), 1.0), 3), features, reason
 
 
@@ -376,6 +400,11 @@ def _shape_cells(units: list[Unit]) -> list[str]:
     return [unit.ref for unit in units if unit.shape]
 
 
+def _label_text(text: str) -> str:
+    """ラベルの表示（末尾のコロンを除く。「届出日：」→「届出日」）。"""
+    return text.strip().rstrip(":：").strip() or text.strip()
+
+
 def _field(label: Unit | None, values: list[Unit], section: list[str]) -> SheetBlock:
     units = ([label] if label else []) + values
     value = " ".join(unit.text for unit in values)
@@ -386,12 +415,47 @@ def _field(label: Unit | None, values: list[Unit], section: list[str]) -> SheetB
         row_end=max(unit.bottom for unit in units),
         cell_range=_bounds(units),
         section_path=section,
-        label=label.text if label else None,
+        label=_label_text(label.text) if label else None,
         value=chosen if chosen is not None else value,
         label_cell=label.ref if label else None,
         value_cell=_bounds(values) if values else None,
         value_original=value if chosen is not None else None,
         shape_cells=_shape_cells(units),
+    )
+
+
+def inline_field(text: str) -> tuple[str, str] | None:
+    """1 つのセルに書いた「ラベル：値」を分ける（分けられなければ None）。
+
+    数値・日付のラベル（時刻の「10:30」）、数字で終わるラベルと数字で始まる値（「午前10:30」）、
+    URL（「https://…」）は分けない。
+    """
+    match = _INLINE_FIELD.match(text.strip())
+    if match is None:
+        return None
+    label = match.group("label").strip()
+    value = match.group("value").strip()
+    if not label or not value or not is_textual(label) or value.startswith("//"):
+        return None
+    if label[-1].isdigit() and value[0].isdigit():
+        return None
+    return label, value
+
+
+def _inline_block(unit: Unit, label: str, value: str, section: list[str]) -> SheetBlock:
+    chosen = read_choice(value)
+    return SheetBlock(
+        kind="form_field",
+        row_start=unit.top,
+        row_end=unit.bottom,
+        cell_range=unit.ref,
+        section_path=section,
+        label=label,
+        value=chosen if chosen is not None else value,
+        label_cell=unit.ref,
+        value_cell=unit.ref,
+        value_original=value if chosen is not None else None,
+        shape_cells=_shape_cells([unit]),
     )
 
 
@@ -447,24 +511,24 @@ def form_blocks(grid: Grid) -> tuple[list[SheetBlock], list[SheetDiagnostic]]:
             continue
         consumed.update(band)
         if len(run) == 1:
-            for value in run[0]:
-                label = labels[(value.left, value.right)]
-                consumed.add(value)
-                pending_vertical.append((label, _field(label, [value], group_path(label))))
+            for cell in run[0]:
+                label = labels[(cell.left, cell.right)]
+                consumed.add(cell)
+                pending_vertical.append((label, _field(label, [cell], group_path(label))))
             continue
         for values in run:
             consumed.update(values)
             names: dict[str, str] = {}
-            for value in values:
-                name = labels[(value.left, value.right)].text
+            for cell in values:
+                name = _label_text(labels[(cell.left, cell.right)].text)
                 if name in names:
-                    name = f"{name}__{column_letter(value.left)}"
-                names[name] = value.text
+                    name = f"{name}__{column_letter(cell.left)}"
+                names[name] = cell.text
             blocks.append(
                 SheetBlock(
                     kind="row",
-                    row_start=min(value.top for value in values),
-                    row_end=max(value.bottom for value in values),
+                    row_start=min(cell.top for cell in values),
+                    row_end=max(cell.bottom for cell in values),
                     cell_range=_bounds(values),
                     section_path=group_path(values[0]),
                     values=names,
@@ -498,6 +562,12 @@ def form_blocks(grid: Grid) -> tuple[list[SheetBlock], list[SheetDiagnostic]]:
             blocks.append(_field(None, [unit], path))
             heading_unused = None
             continue
+        inline = inline_field(unit.text)
+        if inline is not None:
+            # 1 つのセルの「ラベル：値」: それだけで項目にし、右の単位と組にしない（#2529）。
+            blocks.append(_inline_block(unit, *inline, path))
+            heading_unused = None
+            continue
         value = index.right_of(unit, unit.top, consumed)
         blank = blank_index.right_of(unit, unit.top)
         if blank is not None and (value is None or blank.left < value.left):
@@ -518,6 +588,10 @@ def form_blocks(grid: Grid) -> tuple[list[SheetBlock], list[SheetDiagnostic]]:
             ]
             if candidates and index.right_of(candidates[0], candidates[0].top) is None:
                 value = candidates[0]
+        if value is None and any(blank.left == unit.left for blank in blank_index.below(unit)):
+            # すぐ下に値の無い結合セル（押印欄の枠など）: 記入されていない項目（#2529）。
+            empty_fields += 1
+            continue
         if value is None:
             if all(other in consumed for other in index.by_row[unit.top]):
                 # 行にこの単位だけ: 以降の項目の見出し。
@@ -532,12 +606,13 @@ def form_blocks(grid: Grid) -> tuple[list[SheetBlock], list[SheetDiagnostic]]:
             continue
         consumed.add(value)
         values = [value]
-        # 選択の記号と選択肢を別々のセルに置いた値（「□」「A」「☑」「B」）は 1 つの値にする。
+        # 選択の記号と選択肢を別々のセルに置いた値（「□」「A」「☑」「B」）と、選択肢ごとの
+        # チェックボックス（「☑ A」「☐ B」。#2537）は 1 つの値にする。
         while (
-            is_choice_mark(values[0].text)
+            starts_with_choice_mark(values[0].text)
             and (following := index.right_of(values[-1], values[-1].top, consumed)) is not None
             and not following.hinted
-            and (is_choice_mark(values[-1].text) or is_choice_mark(following.text))
+            and (is_choice_mark(values[-1].text) or starts_with_choice_mark(following.text))
         ):
             consumed.add(following)
             values.append(following)

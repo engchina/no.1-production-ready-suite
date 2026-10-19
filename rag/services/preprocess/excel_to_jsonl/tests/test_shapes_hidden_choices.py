@@ -16,6 +16,8 @@ import openpyxl
 import pytest
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
+from pr_backend_core.spreadsheet import reader, shapes
+from pr_backend_core.spreadsheet.choices import read_choice
 from rag_parser_core.sheet_records import (
     SheetRecords,
     SheetRecordsDocument,
@@ -29,8 +31,6 @@ from rag_parser_core.structured_records import (
     structured_records_to_sheet_records,
 )
 
-from app import converters, shapes
-from app.choices import read_choice
 from app.converters import convert, read_excel
 
 
@@ -313,15 +313,15 @@ def test_xls_reports_shapes_and_skips_hidden_columns(monkeypatch: pytest.MonkeyP
     )
     book = SimpleNamespace(sheets=lambda: [sheet], xf_list=[], font_list=[])
     monkeypatch.setattr(xlrd, "open_workbook", lambda **kwargs: book)
-    monkeypatch.setattr(converters, "xls_shape_text_counts", lambda data: [2])
+    monkeypatch.setattr(reader, "xls_shape_text_counts", lambda data: [2])
 
-    grids, failure = converters._read_xls(b"synthetic")
+    grids, failure = reader._read_xls(b"synthetic")
     assert failure is None and grids is not None
     assert grids[0].cells == {(1, 1): "項目A", (1, 3): "値A", (2, 1): "項目B", (2, 3): "値B"}
     assert grids[0].hidden_cells == {(1, 2)}
     assert ("shape_text_not_supported_xls", None, "2") in grids[0].notes
 
-    grids, _ = converters._read_xls(b"synthetic", include_hidden=True)
+    grids, _ = reader._read_xls(b"synthetic", include_hidden=True)
     assert grids is not None and grids[0].cells[(1, 2)] == "補助"
 
 
