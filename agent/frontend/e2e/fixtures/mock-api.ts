@@ -977,7 +977,31 @@ function agentScope(state: MockApiState): Set<string> | null {
   if (!user || isAllAccess(user) || user.allowed_agent_ids === null || user.permissions.includes("agent.admin")) {
     return null;
   }
-  return new Set(user.allowed_agent_ids);
+  // 持ち主の個人の業務 Agent は、ロールに割り当てなくても使える（backend と同じ。#2523）。
+  const owned = state.agents.filter((agent) => agent.owner_user_uuid === user.user_uuid).map((agent) => String(agent.id));
+  return new Set([...user.allowed_agent_ids, ...owned]);
+}
+
+/** Agent 管理か（backend の `"admin" in policy.roles`）。未ログインの local は Agent 管理とみなす。 */
+function isAgentAdmin(state: MockApiState): boolean {
+  const user = state.auth.currentUser;
+  return !user || user.is_system_admin || user.permissions.includes("agent.admin");
+}
+
+/** 業務 Agent を変更・下書きで実行できるか（Agent 管理か、個人の Agent の持ち主。backend の `_policy_manages_agent`）。 */
+function managesAgent(state: MockApiState, agent: Json): boolean {
+  if (isAgentAdmin(state)) return true;
+  const user = state.auth.currentUser;
+  return Boolean(
+    user?.permissions.includes("agent.agents.build") && agent.owner_user_uuid && agent.owner_user_uuid === user.user_uuid
+  );
+}
+
+function requireManagesAgent(state: MockApiState, agent: Json) {
+  if (!agentAllowed(state, agent.id)) throw new HttpError(404, "業務 Agent が見つかりません。");
+  if (!managesAgent(state, agent)) {
+    throw new HttpError(403, "この業務 Agent を変更できるのは、Agent 管理か持ち主だけです。");
+  }
 }
 
 function agentAllowed(state: MockApiState, agentId: unknown): boolean {
@@ -1683,7 +1707,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (!agent.enabled) throw new HttpError(409, "無効な業務 Agent は実行できません。", "agent_disabled");
     const currentUser = state.auth.currentUser;
-    if (body.draft && currentUser && !currentUser.is_system_admin && !currentUser.permissions.includes("agent.admin")) {
+    if (body.draft && !managesAgent(state, agent)) {
       throw new HttpError(403, "下書きで実行できるのは Agent 管理の権限がある利用者だけです。");
     }
     if (!body.draft && (agent.published_version ?? null) === null) {
@@ -1792,7 +1816,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     // `draft=true` は編集画面で下書きを試した会話（Agent 管理だけ）、既定は公開中の版の会話（#2515）。
     const draft = query.get("draft") === "true";
     const viewer = state.auth.currentUser;
-    if (draft && viewer && !viewer.is_system_admin && !viewer.permissions.includes("agent.admin")) {
+    if (draft && viewer && !isAgentAdmin(state) && !viewer.permissions.includes("agent.agents.build")) {
       throw new HttpError(403, "下書きの会話を見られるのは Agent 管理の権限がある利用者だけです。");
     }
     const grouped = new Map<string, Json[]>();
@@ -2491,6 +2515,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         agents: state.agents.filter((agent) => agentAllowed(state, agent.id)),
         user_display_names: state.userDisplayNames,
         max_published_versions: MAX_PUBLISHED_VERSIONS,
+        // 個人の業務 Agent の持ち主（user_uuid）→ 表示名（#2523）。
+        owner_display_names: state.creatorDisplayNames,
       };
     // 説明から下書きを提案する（#2519。保存しない）。
     if (method === "POST" && at("agents", "draft-suggestion")) {
@@ -2539,12 +2565,16 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         versions: [],
         published_version: null,
         unpublished_changes: true,
+        // Agent 管理が作れば組織の業務 Agent、それ以外は作った人の個人の業務 Agent（#2523）。
+        owner_user_uuid: isAgentAdmin(state) ? null : (state.auth.currentUser?.user_uuid ?? null),
+        share_request: null,
       };
       state.agents.push(agent);
       return agent;
     }
     if (method === "PATCH" && at("agents", "*")) {
       const agent = findOr404(state.agents, "id", second, "agent");
+      requireManagesAgent(state, agent);
       if (body.name !== undefined && body.name !== null && !String(body.name).trim()) {
         throw new HttpError(422, "業務 Agent の名前を入力してください。");
       }
@@ -2607,8 +2637,36 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       };
     }
     // 下書きを版として公開する・前の版に戻す（#770）。
+    // 個人の業務 Agent の共有の申請・承認・却下（#2523）。
+    if (method === "POST" && at("agents", "*", "share-request")) {
+      const agent = findOr404(state.agents, "id", second, "agent");
+      requireManagesAgent(state, agent);
+      if (!agent.owner_user_uuid) throw new HttpError(409, "組織の業務 Agent は、共有の申請をせずにロールで共有します。");
+      if ((agent.share_request as Json | null | undefined)?.status === "requested") {
+        throw new HttpError(409, "共有を申請しています。結果を待ってください。");
+      }
+      if ((agent.published_version ?? null) === null) throw new HttpError(409, "公開してから共有を申請してください。");
+      agent.share_request = { status: "requested", note: String(body.note ?? "").trim(), requested_at: MOCK_NOW, reason: "", decided_at: null };
+      return agent;
+    }
+    if (method === "POST" && (at("agents", "*", "share-request", "approve") || at("agents", "*", "share-request", "reject"))) {
+      const agent = findOr404(state.agents, "id", second, "agent");
+      if ((agent.share_request as Json | null | undefined)?.status !== "requested") {
+        throw new HttpError(409, "この業務 Agent は共有を申請していません。");
+      }
+      if (segments[3] === "approve") {
+        agent.owner_user_uuid = null;
+        agent.share_request = null;
+      } else {
+        const reason = String(body.reason ?? "").trim();
+        if (!reason) throw new HttpError(422, "却下の理由を入力してください。");
+        agent.share_request = { ...(agent.share_request as Json), status: "rejected", reason, decided_at: MOCK_NOW };
+      }
+      return agent;
+    }
     if (method === "POST" && at("agents", "*", "publish")) {
       const agent = findOr404(state.agents, "id", second, "agent");
+      requireManagesAgent(state, agent);
       if (state.publishEvaluationRefusal) {
         throw new HttpError(409, state.publishEvaluationRefusal, "publish_evaluation_required");
       }
