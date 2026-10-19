@@ -37,6 +37,7 @@ import {
   agentApi,
   type ClarificationPolicy,
   type AgentDataScopes,
+  type AgentOutputField,
   type AgentDraftSuggestion,
   type AgentProfile,
   type AgentTemplate,
@@ -47,6 +48,12 @@ import {
 } from "@/lib/api";
 import { matchesSearch } from "@/components/ListFilters";
 import { AgentDataScopeSection, normalizeDataScopes } from "@/components/agents/AgentDataScopeSection";
+import {
+  AgentOutputFieldsSection,
+  normalizeOutputFields,
+  outputFieldErrors,
+  type OutputFieldErrors,
+} from "@/components/agents/AgentOutputFieldsSection";
 import { AgentDraftAssistant } from "@/components/agents/AgentDraftAssistant";
 import { AgentTemplatePicker } from "@/components/agents/AgentTemplatePicker";
 import { SkillUpdateDiffDisclosure } from "@/components/agents/SkillUpdateDiff";
@@ -74,6 +81,8 @@ interface AgentDraft {
   clarification_max_rounds: number;
   /** スキルの更新の扱い（#1867。固定 / 常に最新）。 */
   skill_policy: SkillPolicy;
+  /** 出力の項目（#2549）。 */
+  output_fields: AgentOutputField[];
 }
 
 /**
@@ -95,6 +104,7 @@ function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
     clarification_policy: agent?.clarification_policy === "assume" ? "assume" : "confirm",
     clarification_max_rounds: agent?.clarification_max_rounds ?? DEFAULT_CLARIFICATION_MAX_ROUNDS,
     skill_policy: agent?.skill_policy === "latest" ? "latest" : "pinned",
+    output_fields: normalizeOutputFields(agent?.output_fields ?? []),
   };
 }
 
@@ -164,6 +174,8 @@ export function AgentEditorView({
   const [clarificationPolicy, setClarificationPolicy] = useState<ClarificationPolicy>(saved.clarification_policy);
   const [clarificationMaxRounds, setClarificationMaxRounds] = useState(saved.clarification_max_rounds);
   const [skillPolicy, setSkillPolicy] = useState<SkillPolicy>(saved.skill_policy);
+  const [outputFields, setOutputFields] = useState<AgentOutputField[]>(saved.output_fields);
+  const [outputErrors, setOutputErrors] = useState<OutputFieldErrors>({});
   // スキルの更新だけを公開する（#1867。下書きの変更は公開しない）。
   const publishSkillUpdates = useSkillUpdatePublish();
   const [baseline, setBaseline] = useState<AgentDraft>(saved);
@@ -200,6 +212,8 @@ export function AgentEditorView({
     setAgentDescription(template.description);
     setInstructions(template.instructions);
     setSkillIds([...usable].sort());
+    setOutputFields(normalizeOutputFields(template.output_fields ?? []));
+    setOutputErrors({});
     setTemplateId(template.id);
     setDraftCases([]);
     toast.success(t("agent.template.applied", { name: template.name }), {
@@ -284,6 +298,7 @@ export function AgentEditorView({
         clarification_policy: payload.clarification_policy ?? "confirm",
         clarification_max_rounds: payload.clarification_max_rounds ?? DEFAULT_CLARIFICATION_MAX_ROUNDS,
         skill_policy: payload.skill_policy ?? "pinned",
+        output_fields: normalizeOutputFields(payload.output_fields ?? []),
       });
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
@@ -305,6 +320,8 @@ export function AgentEditorView({
     setClarificationPolicy(next.clarification_policy);
     setClarificationMaxRounds(next.clarification_max_rounds);
     setSkillPolicy(next.skill_policy);
+    setOutputFields(next.output_fields);
+    setOutputErrors({});
     setBaseline(next);
     setNameError(null);
   }
@@ -319,6 +336,7 @@ export function AgentEditorView({
     clarification_policy: clarificationPolicy,
     clarification_max_rounds: clarificationMaxRounds,
     skill_policy: skillPolicy,
+    output_fields: normalizeOutputFields(outputFields),
   };
   // Agent のフォームの dirty を 1 つの離脱ガードで守る（#87）。
   const dirtySources = useDirtySources();
@@ -348,6 +366,8 @@ export function AgentEditorView({
     setClarificationPolicy(baseline.clarification_policy);
     setClarificationMaxRounds(baseline.clarification_max_rounds);
     setSkillPolicy(baseline.skill_policy);
+    setOutputFields(baseline.output_fields);
+    setOutputErrors({});
     setNewEnabled(true);
     setNameError(null);
     setTemplateId(null);
@@ -404,6 +424,14 @@ export function AgentEditorView({
       focusField(`${fieldId}-agent-name`);
       return;
     }
+    // 出力の項目の key の形・重なり・表示名の空は、保存の前に欄で知らせる（#2549）。
+    const fieldErrors = outputFieldErrors(outputFields);
+    setOutputErrors(fieldErrors);
+    const firstInvalid = Object.keys(fieldErrors).map(Number).sort((a, b) => a - b)[0];
+    if (firstInvalid !== undefined) {
+      focusField(`${fieldId}-output-${firstInvalid}-${fieldErrors[firstInvalid].label ? "label" : "key"}`);
+      return;
+    }
     const payload = {
       name: name.trim(),
       description: agentDescription.trim(),
@@ -414,6 +442,7 @@ export function AgentEditorView({
       clarification_policy: clarificationPolicy,
       clarification_max_rounds: clarificationMaxRounds,
       skill_policy: skillPolicy,
+      output_fields: normalizeOutputFields(outputFields),
     };
     if (agent) {
       setName(payload.name);
@@ -767,6 +796,16 @@ export function AgentEditorView({
               onChange={setDataScopes}
               readOnly={readOnly}
               disabled={pending}
+            />
+            <AgentOutputFieldsSection
+              fieldId={fieldId}
+              value={outputFields}
+              onChange={(fields) => {
+                setOutputFields(fields);
+                setOutputErrors({});
+              }}
+              errors={outputErrors}
+              readOnly={readOnly}
             />
             {/* 回答前の確認（#1839。3 製品で業務の単位に置く設定。用語は UX 契約 confirm-before-answer.md）。 */}
             <Section title={t("agent.clarification.title")} description={t("agent.clarification.description")}>

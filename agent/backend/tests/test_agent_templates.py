@@ -16,7 +16,7 @@ from app.security.service import set_security_service
 
 def test_templates_are_complete_and_use_registered_skills() -> None:
     ids = [template.id for template in AGENT_TEMPLATES]
-    assert len(ids) == len(set(ids)) == 8
+    assert len(ids) == len(set(ids)) == 9
     for template in AGENT_TEMPLATES:
         assert template.name.strip() and template.description.strip() and template.category.strip()
         assert "## 共通のルール" in template.instructions
@@ -26,6 +26,26 @@ def test_templates_are_complete_and_use_registered_skills() -> None:
             assert skill_registry.get(skill_id) is not None, (template.id, skill_id)
         assert len(template.sample_questions) >= 2, template.id
         assert template.evaluation_cases, template.id
+        # 出力の項目は検証済みのモデル（key の重なりが無い）。
+        keys = [field.key for field in template.output_fields]
+        assert len(keys) == len(set(keys)), template.id
+
+
+def test_document_check_template_has_output_fields() -> None:
+    """書類と業務データの照合のテンプレートは、項目ごとの照合の行を記録する（#2549）。"""
+    template = next(item for item in AGENT_TEMPLATES if item.id == "document-data-check")
+    assert [field.key for field in template.output_fields] == [
+        "item",
+        "document_value",
+        "system_value",
+        "matched",
+        "note",
+    ]
+    assert {field.key for field in template.output_fields if field.required} == {
+        "item",
+        "document_value",
+        "matched",
+    }
 
 
 def test_templates_api() -> None:

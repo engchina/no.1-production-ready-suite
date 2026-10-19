@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.features.agent.output_fields import AgentOutputField
 from app.features.agent.skills import (
     BUSINESS_RAG_RESEARCH_SKILL_ID,
     RAG_AND_STRUCTURED_DATA_SKILL_ID,
@@ -44,6 +45,8 @@ class AgentTemplate(BaseModel):
     skill_ids: list[str]
     sample_questions: list[str] = Field(default_factory=list)
     evaluation_cases: list[TemplateEvaluationCase] = Field(default_factory=list)
+    # 出力の項目（#2549。テンプレートを選ぶとフォームに入る）。
+    output_fields: list[AgentOutputField] = Field(default_factory=list)
 
 
 class AgentTemplatesData(BaseModel):
@@ -246,6 +249,54 @@ AGENT_TEMPLATES: tuple[AgentTemplate, ...] = (
             TemplateEvaluationCase(
                 question="100 万円を超える発注の決裁者は誰ですか？",
                 expected="金額の区分に応じた決裁者を、購買規程の条項とともに示していること",
+            ),
+        ],
+    ),
+    # 添付の書類を業務データと照合する（#2549。添付・出力の項目・NL2SQL を組み合わせる）。
+    AgentTemplate(
+        id="document-data-check",
+        category="共通（書類の確認）",
+        name="書類と業務データの照合",
+        description=(
+            "利用者が添付した書類から確かめる項目を読み取り、業務データと照合して、"
+            "項目ごとの一致を表で返します。"
+        ),
+        instructions=(
+            "あなたは、利用者が添付した書類の内容を業務データと照合する担当者です。\n"
+            "- 添付の書類から、確かめる項目（識別子・数量・金額・日付など）を読み取る。"
+            "読み取れない項目は推測しない。\n"
+            "- 項目ごとに、業務データで同じ識別子の記録を引き、書類の値と比べる。\n"
+            "- 1 項目を 1 行として、書類の値・業務データの値・一致したか・確かめたことを"
+            "出力の項目に記録する。\n"
+            "- 回答では、一致しなかった項目を先に示し、その理由（記録が無い・値が違う）を書く。"
+            + _COMMON_RULES
+        ),
+        skill_ids=[NL2SQL],
+        sample_questions=[
+            "添付した書類の内容が業務データと合っているか確かめてください。",
+            "添付した書類の明細を、業務データの記録と照合してください。",
+        ],
+        # 書類を添付せずに照合を頼まれたとき（評価の Run には添付が無いので、この場合を確かめる）。
+        evaluation_cases=[
+            TemplateEvaluationCase(
+                question="書類の内容を業務データと照合してください。",
+                expected=(
+                    "照合する書類が添付されていないことを伝え、書類の添付を求めていること"
+                    "（業務データだけで推測して照合しない）"
+                ),
+            ),
+        ],
+        output_fields=[
+            AgentOutputField(key="item", label="項目", required=True),
+            AgentOutputField(key="document_value", label="書類の値", required=True),
+            AgentOutputField(
+                key="system_value",
+                label="業務データの値",
+                description="業務データに記録が無ければ null",
+            ),
+            AgentOutputField(key="matched", label="一致", type="boolean", required=True),
+            AgentOutputField(
+                key="note", label="確かめたこと", description="照合に使った記録・条件"
             ),
         ],
     ),

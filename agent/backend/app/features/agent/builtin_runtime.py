@@ -29,7 +29,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -178,6 +178,13 @@ from app.features.agent.context_window import (
     tools_text,
 )
 from app.features.agent.guide_steps import unresolved_guide_steps, unresolved_guide_steps_message
+from app.features.agent.output_fields import (
+    OUTPUT_RETRY_MESSAGE,
+    AgentOutputField,
+    output_recorded,
+    output_retried,
+    record_output_tool,
+)
 from app.features.agent.section_coverage import (
     COVERAGE_INCOMPLETE,
     RETRYABLE_REASONS,
@@ -1465,6 +1472,7 @@ def build_function_tools(
     declined: Collection[str] = (),
     confirmation: ConfirmationBudget | None = None,
     attachment_entries: list[tuple[ToolDefinition, ToolHandler]] | None = None,
+    output_entries: list[tuple[ToolDefinition, ToolHandler]] | None = None,
 ) -> list[FunctionTool]:
     """ツールを function tool にする。
 
@@ -1488,6 +1496,8 @@ def build_function_tools(
         entries.append(reference_tool(reference_keys))
     # 会話の添付を読むツール（#2517。添付のある会話の Run だけ）。
     entries.extend(attachment_entries or [])
+    # 出力の項目の記録（#2549。出力の項目を持つ業務 Agent の Run だけ）。
+    entries.extend(output_entries or [])
     if confirmation is not None and (confirmation.asks or confirmation.known_calls):
         # 答えた確認の再開では、上限に達していてもツールを渡す（SDK が同じ呼び出しを実行する）。
         entries.append(confirmation_tool(confirmation))
@@ -1596,6 +1606,7 @@ def build_sdk_agent(
     confirmation: ConfirmationBudget | None = None,
     confirmation_response: Mapping[str, Any] | None = None,
     thread_id: str | None = None,
+    output_fields: Sequence[AgentOutputField] = (),
 ) -> Agent[Any]:
     """SDK の Agent を作る（MCP 接続のツール一覧を HTTP で取るので、イベントループの外で呼ぶ）。
 
@@ -1604,6 +1615,7 @@ def build_sdk_agent(
 
     `support_task` は前の Run から引き継いだ支援タスクの状態（指示の末尾に足す。#1243）。
     `thread_id` の会話に添付があれば、添付を読むツールと添付の索引を足す（#2517）。
+    `output_fields` があれば、その項目の値を記録する `record_output` を渡す（#2549）。
     `cancellations` はこの Run で利用者が取り消した確認（#1441・#1445）。その種類のツールを渡さず、
     ほかの手段で続けるか意図を聞き直す指示を足す。
     """
@@ -1644,6 +1656,7 @@ def build_sdk_agent(
         declined=declined_kinds({CANCEL_METADATA_KEY: cancellations or []}),
         confirmation=confirmation,
         attachment_entries=attachment_tools(attachments) if attachments else None,
+        output_entries=[record_output_tool(run_id, output_fields)] if output_fields else None,
     )
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
     exposed = [tool.name for tool in tools]
@@ -2136,6 +2149,7 @@ async def execute_run(run_id: str) -> None:
                 confirmation=task.confirmation,
                 confirmation_response=task.response,
                 thread_id=run.thread_id,
+                output_fields=agent.output_fields,
             )
             result = await _run_sdk(run_id, sdk_agent, conversation_input(run_id, run.goal))
             result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
@@ -2145,6 +2159,9 @@ async def execute_run(run_id: str) -> None:
             if not refused:
                 _raise_on_grounding_failure(run.id, result)
                 result = await _require_hops(run, sdk_agent, result, agent.data_scopes, task=task)
+                result = await _require_output(
+                    run, sdk_agent, result, agent.data_scopes, agent.output_fields
+                )
             _record_usage(run_id, result, agent.model_id)
             await _finish(
                 run_id,
@@ -2193,6 +2210,7 @@ async def resume_run(run_id: str) -> None:
                 confirmation=task.confirmation,
                 confirmation_response=task.response,
                 thread_id=run.thread_id,
+                output_fields=agent.output_fields,
             )
             state = await RunState.from_string(sdk_agent, state_text)
             for item in state.get_interruptions():
@@ -2209,6 +2227,9 @@ async def resume_run(run_id: str) -> None:
             if not refused:
                 _raise_on_grounding_failure(run.id, result)
                 result = await _require_hops(run, sdk_agent, result, agent.data_scopes, task=task)
+                result = await _require_output(
+                    run, sdk_agent, result, agent.data_scopes, agent.output_fields
+                )
             _record_usage(run_id, result, agent.model_id)
             await _finish(
                 run_id,
@@ -2664,6 +2685,47 @@ async def _require_hops(
         run.id,
         sdk_agent,
         tool_grounding.retry_input(result.to_input_list(), answer, head=head),
+        context=context,
+    )
+    return await _unattended_approvals(run, sdk_agent, result, data_scopes)
+
+
+async def _require_output(
+    run: Any,
+    sdk_agent: Agent[Any],
+    result: Any,
+    data_scopes: data_scope.AgentDataScopes | None,
+    output_fields: Sequence[AgentOutputField],
+) -> Any:
+    """出力の項目を記録せずに作った回答を、1 回だけ差し戻す（#2549）。
+
+    出力の項目を持つ業務 Agent で、`record_output` を呼ばずに回答した Run に、記録してから答え直す
+    ことを利用者のメッセージとして足して続ける（ほかの差し戻しと同じ形。同じ SDK の Agent・ツール・
+    予算）。確認の質問だけの回答・承認で止まった Run・取り消した Run・差し戻した後の Run は対象外。
+    それでも記録しなければ、そのまま回答する（画面が記録の無いことを示す）。
+    """
+    from app.features.agent.runtime import RunStatus, runtime_repository
+
+    if not output_fields or list(getattr(result, "interruptions", []) or []):
+        return result
+    current = runtime_repository.get_run(run.id)
+    if (
+        current.status == RunStatus.CANCELLED
+        or output_retried(current.metadata)
+        or output_recorded(current.artifacts)
+    ):
+        return result
+    answer = _answer_text(result.final_output)
+    if is_clarification_only(answer):
+        return result
+    runtime_repository.record_tool_grounding(run.id, "output_retry", answer)
+    logger.info("builtin_runtime_output_retry", extra={"run_id": run.id})
+    context: RunContextWrapper[Any] = RunContextWrapper(context=result.context_wrapper.context)
+    context.usage.add(result.context_wrapper.usage)
+    result = await _run_sdk(
+        run.id,
+        sdk_agent,
+        tool_grounding.retry_input(result.to_input_list(), answer, head=OUTPUT_RETRY_MESSAGE),
         context=context,
     )
     return await _unattended_approvals(run, sdk_agent, result, data_scopes)

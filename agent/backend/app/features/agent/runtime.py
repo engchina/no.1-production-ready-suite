@@ -76,6 +76,7 @@ from app.features.agent.confirmation import (
 )
 from app.features.agent.confirmation import METADATA_KEYS as CONFIRMATION_METADATA_KEYS
 from app.features.agent.data_scope import AgentDataScopes, normalize_data_scopes
+from app.features.agent.output_fields import AgentOutputField, validate_output_fields
 from app.features.agent.skills import (
     BUSINESS_RAG_RESEARCH_SKILL_ID,
     RAG_AND_STRUCTURED_DATA_SKILL_ID,
@@ -245,6 +246,7 @@ AGENT_VERSIONED_FIELDS: tuple[str, ...] = (
     "clarification_policy",
     "clarification_max_rounds",
     "skill_policy",
+    "output_fields",
 )
 
 
@@ -270,6 +272,8 @@ class AgentVersion(BaseModel):
     )
     # スキルの更新の扱い（#1867。latest は公開中の版でも今のスキルで動く）。
     skill_policy: SkillPolicy = SKILL_POLICY_PINNED
+    # 出力の項目（#2549）。
+    output_fields: list[AgentOutputField] = Field(default_factory=list)
     note: str = ""
     published_at: datetime = Field(default_factory=_now)
     published_by: str | None = None
@@ -317,6 +321,8 @@ class AgentProfile(BaseModel):
     # スキルの更新の扱い（#1867）。pinned（既定）は公開の版に固定したスキル、latest は今のスキル。
     # 版の項目なので、変えたら公開して反映する。
     skill_policy: SkillPolicy = SKILL_POLICY_PINNED
+    # 出力の項目（#2549。key・表示名・型・必須。Run に `record_output` を渡す）。
+    output_fields: list[AgentOutputField] = Field(default_factory=list)
     migration_required: bool = False
     # Deprecated read compatibility。新規 UI/API は skill_ids だけを書き込む。
     tool_names: list[str] = Field(default_factory=list)
@@ -344,6 +350,11 @@ class AgentProfile(BaseModel):
     share_request: AgentShareRequest | None = None
     # Run が使う版に固定したスキル（`_agent_for_run` が入れる。保存・応答には出さない。#1855）。
     pinned_skills: list[PinnedSkill] | None = Field(default=None, exclude=True)
+
+    @field_validator("output_fields")
+    @classmethod
+    def _check_output_fields(cls, value: list[AgentOutputField]) -> list[AgentOutputField]:
+        return validate_output_fields(value)
 
     @field_validator("data_scopes")
     @classmethod
@@ -448,6 +459,7 @@ class AgentProfilePatch(BaseModel):
         validate_max_rounds
     )
     skill_policy: SkillPolicy | None = None
+    output_fields: list[AgentOutputField] | None = None
     tool_names: list[str] | None = None
     enabled: bool | None = None
 
@@ -455,6 +467,13 @@ class AgentProfilePatch(BaseModel):
     @classmethod
     def _normalize_data_scopes(cls, value: AgentDataScopes | None) -> AgentDataScopes | None:
         return normalize_data_scopes(value) if value is not None else None
+
+    @field_validator("output_fields")
+    @classmethod
+    def _check_output_fields(
+        cls, value: list[AgentOutputField] | None
+    ) -> list[AgentOutputField] | None:
+        return validate_output_fields(value) if value is not None else None
 
 
 class RunCreateRequest(BaseModel):
@@ -2985,6 +3004,14 @@ class AgentRuntimeRepository:
                 message = (
                     "回答に使った章節を終わりまで読まずに回答を作ったため、"
                     "章節の続きを読むようモデルに差し戻しました。"
+                )
+            elif action == "output_retry":
+                # 出力の項目を記録せずに回答したため差し戻した（#2549。ほかの差し戻しとは別の
+                # 1 回の枠）。
+                record["output_retry"] = True
+                message = (
+                    "出力の項目を記録せずに回答を作ったため、"
+                    "項目の値を記録するようモデルに差し戻しました。"
                 )
             elif action == "hop_reverted":
                 # 差し戻しの後の回答が前の回答より悪かったため、前の回答を使った（#1978）。

@@ -1,6 +1,7 @@
 import { toTabularData, type TabularData } from "@production-ready/ui";
 
 import type { Artifact, RunState, RunStep } from "./api";
+import { t } from "./i18n";
 
 /**
  * Run の中の表のデータ（#1158）。ツールの結果・成果物が表の形なら、共通の結果の表の部品で出す。
@@ -75,4 +76,37 @@ export function runToolResultTables(run: RunState): ToolResultTable[] {
 export function artifactTable(artifact: Artifact): TabularData | null {
   if (artifact.kind === "answer" || artifact.kind === "rag_evidence") return null;
   return toTabularData(artifact.content);
+}
+
+/** 業務 Agent の出力の項目の成果物（#2549）。 */
+export const OUTPUT_ARTIFACT_KIND = "structured_output";
+
+/**
+ * Run が記録した出力の項目の表（無ければ null）。真偽の列は「はい / いいえ」で出す（表の値は文字・数値として出す）。
+ */
+export function runOutputTable(run: Pick<RunState, "artifacts">): TabularData | null {
+  const artifact = [...run.artifacts].reverse().find((item) => item.kind === OUTPUT_ARTIFACT_KIND);
+  const content = artifact?.content as { columns?: { name: string; type?: string }[]; rows?: Record<string, unknown>[] } | undefined;
+  if (!content || !Array.isArray(content.columns) || !Array.isArray(content.rows)) return null;
+  const booleans = new Set(content.columns.filter((column) => column.type === "boolean").map((column) => column.name));
+  const rows = content.rows.map((row) =>
+    Object.fromEntries(
+      Object.entries(row).map(([key, value]) => [
+        key,
+        booleans.has(key) && typeof value === "boolean" ? (value ? t("chat.output.yes") : t("chat.output.no")) : value,
+      ])
+    )
+  );
+  return toTabularData({ ...content, rows });
+}
+
+/**
+ * 出力の項目を差し戻しても記録しなかった Run か（#2549。backend の `tool_grounding.output_retry`）。画面は記録の無いことを
+ * 回答の下に示す。
+ */
+export function outputMissing(run: Pick<RunState, "artifacts" | "metadata" | "status">): boolean {
+  if (run.status !== "completed") return false;
+  const record = (run.metadata as Record<string, unknown> | undefined)?.tool_grounding;
+  const retried = typeof record === "object" && record !== null && (record as Record<string, unknown>).output_retry === true;
+  return retried && !run.artifacts.some((item) => item.kind === OUTPUT_ARTIFACT_KIND);
 }

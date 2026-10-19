@@ -376,6 +376,20 @@ export interface AgentTemplate {
   skill_ids: string[];
   sample_questions: string[];
   evaluation_cases: { question: string; expected: string }[];
+  /** 出力の項目（#2549）。 */
+  output_fields?: AgentOutputField[];
+}
+
+/** 出力の項目の型（#2549）。 */
+export type AgentOutputFieldType = "text" | "number" | "date" | "boolean";
+
+/** 業務 Agent の出力の項目（#2549。Run に record_output を渡し、記録した値を表で返す）。 */
+export interface AgentOutputField {
+  key: string;
+  label: string;
+  type: AgentOutputFieldType;
+  required: boolean;
+  description: string;
 }
 
 /** 業務の説明から作った業務 Agent の下書きの提案（#2519。保存はしない）。 */
@@ -829,6 +843,8 @@ export interface AgentProfile {
   skills_pinned?: boolean;
   /** スキルの更新の扱い（#1867）。pinned = 公開の版に固定（既定）、latest = 常に今のスキル。 */
   skill_policy?: SkillPolicy;
+  /** 出力の項目（#2549）。 */
+  output_fields?: AgentOutputField[];
   /** 作成に使った業種テンプレート（#810。空は使っていない）。 */
   template_id?: string;
   /** データの範囲（#1378。接続 → 使えるプロファイルと既定）。無い接続は範囲なし。 */
@@ -895,6 +911,8 @@ export interface AgentProfileWritePayload {
   enabled: boolean;
   /** 作成に使った業種テンプレート（#810）。 */
   template_id?: string;
+  /** 出力の項目（#2549）。 */
+  output_fields?: AgentOutputField[];
 }
 
 export interface AgentProfilePatchPayload {
@@ -908,6 +926,8 @@ export interface AgentProfilePatchPayload {
   clarification_max_rounds?: number;
   enabled?: boolean;
   skill_policy?: SkillPolicy;
+  /** 出力の項目（#2549）。 */
+  output_fields?: AgentOutputField[];
 }
 
 export type McpAuthMode = "none" | "api_key" | "oauth_client_credentials" | "service_token";
@@ -1050,6 +1070,8 @@ export interface AgentVersion {
   skills?: PinnedSkill[] | null;
   /** スキルの更新の扱い（#1867）。 */
   skill_policy?: SkillPolicy;
+  /** 出力の項目（#2549）。 */
+  output_fields?: AgentOutputField[];
 }
 
 /** スキルの更新の扱い（#1867）。 */
