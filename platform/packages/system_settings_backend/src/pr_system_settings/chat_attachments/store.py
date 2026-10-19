@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from pydantic import BaseModel
+
 from .errors import schema_required
 from .models import (
     AttachmentOutline,
@@ -206,6 +208,20 @@ def _read_lob(value: Any) -> Any:
     return value
 
 
+def _json_column[M: BaseModel](model: type[M], value: Any) -> M:
+    """`IS JSON` の CLOB の列を読む（#2548）。
+
+    python-oracledb は `IS JSON` の制約のある列を dict / list で返す（制約を知らない経路では
+    文字列・LOB のまま）。どちらでも同じ model にする。
+    """
+    raw = _read_lob(value)
+    if not raw:
+        return model()
+    if isinstance(raw, (str, bytes, bytearray)):
+        return model.model_validate_json(raw)
+    return model.model_validate(raw)
+
+
 def _timestamp(value: Any) -> datetime:
     if isinstance(value, datetime):
         return _utc(value)
@@ -213,10 +229,7 @@ def _timestamp(value: Any) -> datetime:
 
 
 def _record_from_row(row: Sequence[Any]) -> ChatAttachmentRecord:
-    outline_raw = _read_lob(row[10])
-    outline = (
-        AttachmentOutline.model_validate_json(outline_raw) if outline_raw else AttachmentOutline()
-    )
+    outline = _json_column(AttachmentOutline, row[10])
     kind: ChatAttachmentKind = row[7]
     product: ChatAttachmentProduct = row[1]
     return ChatAttachmentRecord(
@@ -307,8 +320,7 @@ class OracleChatAttachmentStore:
             row = cursor.fetchone()
             if row is None:
                 return None
-            raw = _read_lob(row[0])
-        return ParsedAttachment.model_validate_json(raw) if raw else ParsedAttachment()
+            return _json_column(ParsedAttachment, row[0])
 
     def content(self, attachment_id: str) -> bytes | None:
         with self._connection() as conn, conn.cursor() as cursor:

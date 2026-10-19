@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import anyio
+import httpx
 import pytest
 from pytest import MonkeyPatch
 from security_support import ProductionAuth, client, enable_production_auth, login
 
 from app.features.agent.runtime import RunCreateRequest, RunState, runtime_repository
+from app.main import app
 from app.security.permissions import MENU_RUNS, MENU_SKILLS
 from app.security.service import set_security_service
 
@@ -38,6 +41,26 @@ def test_create_run_value_error_is_japanese_and_keeps_reason_in_details(
     assert "この業務 Agent では今は実行できません。" in message
     assert body["error_code"] == "run_not_created"
     assert body["error_details"] == {"reason": "agent disabled"}
+
+
+def test_create_run_validation_error_is_not_agent_state(monkeypatch: MonkeyPatch) -> None:
+    """保存した値を読めない（ValidationError）のを「業務 Agent の状態」の 409 にしない（#2548）。"""
+
+    def broken(_request: RunCreateRequest, **_: object) -> RunState:
+        RunState.model_validate({"goal": 1})
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(runtime_repository, "create_builtin_run", broken)
+
+    async def post() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as http:
+            return await http.post("/api/runs", json={"goal": "質問", "agent_id": "default"})
+
+    response = anyio.run(post)
+
+    assert response.status_code == 500
+    assert "run_not_created" not in response.text
 
 
 def test_capability_denied_message_is_japanese(auth: ProductionAuth) -> None:
