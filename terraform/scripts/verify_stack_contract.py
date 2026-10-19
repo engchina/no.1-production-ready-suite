@@ -247,7 +247,7 @@ INIT_SCRIPT_CONTRACTS = {
         'BACKEND_PORT="8000"',
         # 必ず配備する parser と前処理 Word→JSONL（stack の RAG_BASE_SERVICES にもある）。以前の stack の一覧に
         # 無くても足す（#2042・#2457）。
-        "REQUIRED_RAG_SERVICES=(parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-word-to-jsonl)",
+        "REQUIRED_RAG_SERVICES=(parser-docling parser-structured-records-jsonl parser-xml-tree-json preprocess-csv-to-jsonl preprocess-excel-to-jsonl preprocess-word-to-jsonl)",
         'source "${INIT_SCRIPT_DIR}/scripts/rag-systemd.sh"',
         'find "${WALLET_DIR}" -type f -exec chmod 0600 {} \\;',
         "python -m app.rag.system_schema_cli initialize",

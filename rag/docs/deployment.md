@@ -276,6 +276,8 @@ migration は値の書き換えだけで、データを消さない（承認は�
 1. 本番（OCI Compute）: `sudo platform/deploy/suite-update.sh` で再配備する。`init_script.sh` が
    - `rag_services.txt` の旧名（`preprocess-csv-to-json`・`preprocess-excel-to-json`）を新しい名前として読み、`rag_services.txt` を
      新しい名前で書き戻す（#2484）。
+   - CSV→JSONL・Excel→JSONL は必ず配備するサービス（`REQUIRED_RAG_SERVICES`）なので、#2484 の前の再配備で `rag_services.txt` から
+     消えた環境（サービス管理画面で「未登録」）も、`suite-update.sh` で再配備すれば unit と sudoers が入り、既定どおり起動する（#2486）。
    - 新しい unit と sudoers を作り、旧い unit（`production-ready-rag-preprocess-csv-to-json.service`・
      `production-ready-rag-preprocess-excel-to-json.service`）を「配備しなくなった unit」として止めて消す。新しい unit は旧い unit の
      状態を引き継ぐ（旧い unit が enable なら起動し、利用者が停止して disable なら停止のまま。旧い unit が無ければ既定どおり起動する）。
