@@ -126,7 +126,14 @@ class ExcelOptions(BaseModel):
         le=1000,
         description="表頭の行（1 始まり）。未指定は先頭の行から推定する。",
     )
-    header_row_count: int = Field(default=1, ge=1, le=5, description="表頭の行数。")
+    header_row_count: int = Field(
+        default=1,
+        ge=1,
+        le=5,
+        description=(
+            "表頭の行数。指定しなければ、表頭の行の横の結合から 2 段の表頭を推定する（#2532）。"
+        ),
+    )
     sheets: list[str] = Field(
         default_factory=list,
         max_length=100,
@@ -170,12 +177,12 @@ class ExcelOptions(BaseModel):
         default=1, ge=1, le=20, description="表を分ける空の列の数（これ以上続いたら別の表）。"
     )
     form_detection_threshold: float = Field(
-        default=0.6,
+        default=0.5,
         ge=0.0,
         le=1.0,
         description=(
-            "auto で帳票（form）と判定する点数の下限（列幅の狭さ・結合セルの割合・行の列の"
-            "不揃い・ラベルと値の隣接から計算する。#2516）。"
+            "auto で帳票（form）と判定する点数の下限（結合セルの割合・ラベルのすぐ右の値・"
+            "行の位置の不揃い・列幅の狭さから計算する。#2516・#2530）。"
         ),
     )
 

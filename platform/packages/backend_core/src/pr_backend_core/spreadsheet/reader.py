@@ -663,7 +663,8 @@ def _apply_merges(grid: Grid, header_rows: range) -> None:
     """結合セルの値を埋める。
 
     表頭の行の中では結合の範囲（横・縦）を左上の値で埋める。データでは同じ行の横の結合だけを埋め、
-    縦の結合の値は後の行へ漏らさない（no.1-rag と同じ。手順の境目を増やさない）。
+    縦の結合の値は後の行へ漏らさない（no.1-rag と同じ。手順の境目を増やさない）。データの行で埋めた
+    セルは ``grid.merge_filled`` に残し、記録には入れない（#2531）。
     """
     for min_row, min_col, max_row, max_col in grid.merges:
         value = grid.cells.get((min_row, min_col), "")
@@ -674,7 +675,41 @@ def _apply_merges(grid: Grid, header_rows: range) -> None:
             if row != min_row and not in_header:
                 continue
             for col in range(min_col, max_col + 1):
-                grid.cells.setdefault((row, col), value)
+                if (row, col) in grid.cells:
+                    continue
+                grid.cells[(row, col)] = value
+                if not in_header:
+                    # データの行の横の結合で埋めたセル。版式・表頭の判定には使い、記録には同じ値を
+                    # 繰り返さない（#2531）。
+                    grid.merge_filled.add((row, col))
+    grid.invalidate_rows()
+
+
+def _infer_header_rows(grid: Grid, header_row: int) -> tuple[int, str | None]:
+    """表頭の段数を、表頭の行の横の結合から推定する（#2532。推定しなければ 1 と None）。
+
+    表頭の行に横の結合（上の段の見出し）があり、すぐ下の行が結合の範囲のすべての列に文字
+    （数値・日付でない）を持ち、その下の行に数値・日付があるときだけ 2 段にする。
+    """
+    spans = [
+        (left, right)
+        for top, left, bottom, right in grid.merges
+        if top == bottom == header_row and right > left and grid.cells.get((top, left), "").strip()
+    ]
+    if not spans:
+        return 1, None
+    lower = header_row + 1
+    lower_values = [grid.cells[(lower, col)] for col in grid.row_columns(lower)]
+    if not lower_values or not all(is_textual(value) for value in lower_values):
+        return 1, None
+    for left, right in spans:
+        for col in range(left, right + 1):
+            if not grid.cells.get((lower, col), "").strip():
+                return 1, None
+    data = [grid.cells[(lower + 1, col)] for col in grid.row_columns(lower + 1)]
+    if not any(not is_textual(value) for value in data):
+        return 1, None
+    return 2, "上の段の横の結合から表頭を 2 行と推定"
 
 
 def _detect_header(grid: Grid, nonempty_rows: list[int]) -> tuple[int, float, str]:
@@ -782,7 +817,8 @@ def _table_blocks(
         values = {
             names[col]: value
             for col in columns
-            if (value := grid.cells.get((row, col), "").strip())
+            if (row, col) not in grid.merge_filled
+            and (value := grid.cells.get((row, col), "").strip())
         }
         if values:
             blocks.append(
@@ -836,7 +872,8 @@ def _procedure_blocks(
             parts = [
                 f"{names.get(col, f'column_{column_letter(col)}')}: {value}"
                 for col in all_columns
-                if (value := grid.cells.get((row, col), "").strip())
+                if (row, col) not in grid.merge_filled
+                and (value := grid.cells.get((row, col), "").strip())
             ]
             if parts:
                 lines.append(" | ".join(parts))
@@ -980,6 +1017,10 @@ def _sheet_records(grid: Grid, options: ExcelOptions) -> SheetRecords | None:
             diagnostics.append(
                 SheetDiagnostic(code="header_low_confidence", detail=f"{confidence:.2f}")
             )
+        if "header_row_count" not in options.model_fields_set:
+            header_count, note = _infer_header_rows(grid, header_row)
+            if note:
+                detection = detection.model_copy(update={"reason": f"{detection.reason}・{note}"})
     header_rows = range(header_row, header_row + header_count)
     data_start = header_row + header_count
     _apply_merges(grid, header_rows)

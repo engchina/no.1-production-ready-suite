@@ -78,7 +78,7 @@ def _payload(source: bytes, **options: Any) -> dict[str, Any]:
     assert outcome.converted is True, outcome.warnings
     assert outcome.derived_bytes is not None
     assert outcome.derived_content_type == STRUCTURED_RECORDS_CONTENT_TYPE
-    assert outcome.converter_version == "v6"
+    assert outcome.converter_version == "v7"
     return _loaded(outcome.derived_bytes)
 
 
@@ -211,12 +211,12 @@ def test_merged_header_and_merged_data_cells() -> None:
         "column_E",
     ]
     blocks = sheet["blocks"]
+    # データの横の結合の値は左上の列にだけ置き、結合した列に繰り返さない（#2531）。
     assert blocks[0]["values"] == {
         "部門": "営業",
         "期間 / 開始": "4月",
         "期間 / 終了": "6月",
         "区分": "通期",
-        "column_E": "通期",
     }
     # 縦の結合の値は後の行へ漏らさない（no.1-rag と同じ）。
     assert blocks[1]["values"] == {"期間 / 開始": "7月", "期間 / 終了": "9月"}
