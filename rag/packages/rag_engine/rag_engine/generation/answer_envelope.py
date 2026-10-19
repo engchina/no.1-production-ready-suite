@@ -42,6 +42,15 @@ AnswerOutcome = Literal[
 ]
 # 要求の状態。unknown は監査が無く充足を確かめていない要求。
 RequestStatus = Literal["addressed", "partial", "missing", "unknown"]
+# 業務ガイドの手順の充足を載せる要求の ID の接頭辞（#2491。`guide:<手順 id>`）と、手順の状態から要求の状態への写し。
+GUIDE_STEP_REQUEST_PREFIX = "guide:"
+GUIDE_STEP_REQUEST_ID_CHARS = 64
+_GUIDE_STEP_STATUS: dict[str, RequestStatus] = {
+    "explained": "addressed",
+    "reference_only": "partial",
+    "unused": "missing",
+    "no_evidence": "missing",
+}
 # 確認の行のうち、回答の確定に必要な別の資料の行の接頭辞（grounded.confirmation_lines）。現場の実データ
 # ではないので、needs_environment_data の判定に数えない（#1491）。
 REFERENCE_CONFIRMATION_PREFIX = "資料: "
@@ -213,6 +222,23 @@ def envelope_requests(requests: Sequence[Mapping[str, Any]], reviews: Sequence[M
     return result
 
 
+def guide_step_requests(guide_steps: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    """業務ガイドの必須の手順の充足を、要求と同じ形にする（#2491）。
+
+    手順の根拠を引いた説明を公開した手順は addressed、原文を参考情報として示しただけの手順は partial、
+    説明に使わなかった・根拠の無い手順は missing。必須に数えない手順（条件が決まらない分岐の手順）は載せない。
+    """
+    return [
+        {
+            "id": f"{GUIDE_STEP_REQUEST_PREFIX}{step.get('step_id')}"[:GUIDE_STEP_REQUEST_ID_CHARS],
+            "text": f"業務ガイドの手順: {step.get('title') or step.get('step_id')}",
+            "status": _GUIDE_STEP_STATUS.get(str(step.get("status")), "unknown"),
+        }
+        for step in guide_steps
+        if step.get("required", True)
+    ]
+
+
 def envelope_item(entry: Any) -> dict[str, Any]:
     """公開した説明 1 件（grounded の CheckedItem）。"""
     item = entry.item
@@ -241,6 +267,7 @@ def build_envelope(
     off_goal: bool = False,
     user_conditions: Sequence[str] = (),
     document_items: Sequence[str] = (),
+    guide_steps: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """回答の構造を組み立てる。
 
@@ -249,8 +276,10 @@ def build_envelope(
     確認（「資料:」の行）も現場の実データではないので、needs_environment_data の判定に数えない（#1491）。
     document_items は結論を分けるのに別の資料で確かめる点（確認の項目の who_can_answer=document。#1492）で、
     資料の不足として回答を条件付きにし、reference_materials に載せる。
+    guide_steps は業務ガイドの手順ごとの充足（#2491。grounded の `guide_step_coverage`）で、必須の手順を要求に足す。
+    説明できていない手順は未回答の要求として回答を条件付きにする。
     """
-    request_entries = envelope_requests(requests, reviews)
+    request_entries = [*envelope_requests(requests, reviews), *guide_step_requests(guide_steps)]
     actionable = [item for item in items if item.get("applies") != "quote_only"]
     unsettled = [item for item in actionable if item.get("applies") in {"conditional", "unverified"}]
     unanswered = [entry for entry in request_entries if entry["status"] in {"partial", "missing"}]
@@ -329,6 +358,7 @@ __all__ = [
     "EXCLUDED_KNOWN_CONDITION",
     "EXCLUDED_NOT_DECISIVE",
     "EXCLUDED_VERSION_SETTLED",
+    "GUIDE_STEP_REQUEST_PREFIX",
     "LEGACY_KIND_WHO",
     "REFERENCE_CONFIRMATION_PREFIX",
     "WHO_CAN_ANSWER",
@@ -340,6 +370,7 @@ __all__ = [
     "envelope_item",
     "envelope_requests",
     "fallback_envelope",
+    "guide_step_requests",
     "requires_environment_data",
     "settle_confirmation_items",
 ]

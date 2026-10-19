@@ -3567,12 +3567,12 @@
           "AnswerRequest": {
             "properties": {
               "id": {
-                "description": "質問の要求単位の ID（Q1 など）。",
+                "description": "質問の要求単位の ID（Q1 など）。業務ガイドの手順は guide:<手順の id>。",
                 "title": "Id",
                 "type": "string"
               },
               "text": {
-                "description": "要求の原文。",
+                "description": "要求の原文（業務ガイドの手順は手順の名前）。",
                 "title": "Text",
                 "type": "string"
               },
