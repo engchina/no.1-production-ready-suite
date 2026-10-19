@@ -566,3 +566,176 @@ def test_coverage_is_kept_apart_from_the_claim_validation(
     assert coverage["status"] == "incomplete"
     assert [item["section_id"] for item in coverage["sections"]] == ["sec-a"]
     assert f"**{UNREAD_SECTIONS_HEADING}**" in _answer(run)["text"]
+
+
+# ---- 読み始めていない章節（根拠の抜粋だけで答えた。#2503） ------------------------------------
+
+
+def _evidence_item(
+    excerpt: str,
+    *,
+    section_id: str = "sec-a",
+    chunk_id: str = "doc-a:1",
+    chars: int = 5000,
+    chunk_count: int = 8,
+) -> dict[str, Any]:
+    item: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"]["evidence"][0])
+    item.update(document_id="doc-a", chunk_id=chunk_id, excerpt=excerpt, file_name="文書 A.pdf")
+    item["section"] = {
+        **item["section"],
+        "section_id": section_id,
+        "title": f"章節 {section_id}",
+        "page_start": 3,
+        "page_end": 9,
+        "chars": chars,
+        "chunk_count": chunk_count,
+        "parent_section_id": "sec-root",
+    }
+    return item
+
+
+def _evidence_step(*items: dict[str, Any]) -> RunStep:
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+    output["evidence"] = list(items)
+    return RunStep(
+        run_id="run-2503",
+        title="rag_retrieve_evidence",
+        status="completed",
+        tool_call=ToolCall(name="rag__rag_retrieve_evidence", arguments={"query": "設定 A"}),
+        tool_result=ToolResult(name="rag__rag_retrieve_evidence", success=True, output=output),
+    )
+
+
+def _document_step(arguments: dict[str, Any], next_cursor: str | None) -> RunStep:
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_read_document"])
+    output.update(document_id="doc-a", next_cursor=next_cursor)
+    return RunStep(
+        run_id="run-2503",
+        title="rag_read_document",
+        status="completed",
+        tool_call=ToolCall(
+            name="rag__rag_read_document", arguments={"document_id": "doc-a", **arguments}
+        ),
+        tool_result=ToolResult(name="rag__rag_read_document", success=True, output=output),
+    )
+
+
+def test_coverage_tracks_long_evidence_sections_that_were_not_read() -> None:
+    evidence = _evidence_step(
+        _evidence_item(PART_1),
+        # 探索で当たっただけの章節（回答に使わない）。
+        _evidence_item(OTHER, section_id="sec-x", chunk_id="doc-a:9"),
+        # 抜粋で章節の全体を得ている章節。
+        _evidence_item(PART_2, section_id="sec-s", chunk_id="doc-a:5", chars=len(PART_2)),
+    )
+    coverage = section_coverage([evidence], f"{PART_1}\n{PART_2}", [GOAL])
+    assert coverage is not None
+    [section] = coverage["sections"]
+    assert section["section_id"] == "sec-a"
+    assert section["reason"] == "not_read"
+    assert section["next_cursor"] is None
+    # 予算の上限に達していれば理由は上限。
+    exhausted = section_coverage([evidence], PART_1, [GOAL], budget_exhausted=True)
+    assert exhausted is not None
+    assert exhausted["sections"][0]["reason"] == "budget"
+    # 手順・一覧・条件のまとまりを求めない質問は判定しない。
+    assert section_coverage([evidence], PART_1, ["設定 A はどこにありますか？"]) is None
+
+
+def test_long_evidence_section_counts_as_read_when_read_or_fully_retrieved() -> None:
+    evidence = _evidence_step(_evidence_item(PART_1))
+    complete = {"status": "complete", "sections": []}
+    # 章節を読み切った。
+    read = _step(
+        {"document_id": "doc-a", "section_id": "sec-a"},
+        _section_output("sec-a", f"{PART_1}\n{PART_2}"),
+    )
+    assert section_coverage([evidence, read], PART_1, [GOAL]) == complete
+    # 根拠で章節の chunk をすべて得た。
+    whole = _evidence_step(
+        _evidence_item(PART_1, chunk_count=2),
+        _evidence_item(PART_2, chunk_id="doc-a:2", chunk_count=2),
+    )
+    assert section_coverage([whole], f"{PART_1}\n{PART_2}", [GOAL]) == complete
+    # 文書を先頭から終わりまで読んだ（続きを 1 回たどる）。
+    start = _document_step({}, "doc-cursor-1")
+    rest = _document_step({"cursor": "doc-cursor-1"}, None)
+    assert section_coverage([evidence, start, rest], PART_1, [GOAL]) == complete
+    # 途中の頁から読んだだけ・終わりまで読んでいない文書は読み切っていない。
+    for steps in ([evidence, _document_step({"page": 3}, None)], [evidence, start]):
+        coverage = section_coverage(steps, PART_1, [GOAL])
+        assert coverage is not None
+        assert coverage["status"] == "incomplete"
+
+
+def test_message_for_a_section_that_was_not_read() -> None:
+    section = {
+        "document_id": "doc-a",
+        "file_name": "文書 A.pdf",
+        "section_id": "sec-a",
+        "title": "章節 A",
+        "page_start": 3,
+        "page_end": 9,
+        "next_cursor": None,
+        "reason": "not_read",
+    }
+    message = unread_sections_message([section])
+    assert "section_id: sec-a" in message
+    assert "rag_read_section に渡して終わりまで読む" in message
+    assert "rag_outline" not in message
+    notice = with_unread_sections_notice("回答", [section])
+    assert "「章節 A」（文書 A.pdf、p.3-9）: 章節を読んでいません" in notice
+
+
+def _retrieve(call_id: str) -> list[Any]:
+    return [function_call("rag__rag_retrieve_evidence", {"query": "設定 A 手順"}, call_id=call_id)]
+
+
+def test_answer_from_excerpts_of_a_long_section_is_sent_back_to_read_it(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    mcp.outputs["rag_retrieve_evidence"] = {
+        **deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"]),
+        "evidence": [_evidence_item(PART_1)],
+    }
+    mcp.outputs["rag_read_section"] = lambda _argument: _section_output(
+        "sec-a", f"{PART_1}\n{PART_2}"
+    )
+    model = _script(
+        monkeypatch,
+        _retrieve("c1"),
+        [assistant_message(PART_1)],
+        _read("c2", section_id="sec-a"),
+        [assistant_message(f"{PART_1}\n{PART_2}")],
+    )
+
+    run = _run()
+
+    assert len(model.calls) == 4
+    retry = _retry_message(model, 2)
+    assert retry.startswith(UNREAD_SECTIONS_RETRY_HINT)
+    assert "section_id: sec-a" in retry
+    assert run.metadata[METADATA_KEY] == {"hop_retries": 1, "section_retry": True}
+    assert UNREAD_SECTIONS_HEADING not in _answer(run)["text"]
+
+
+def test_answer_from_excerpts_is_shown_when_the_section_is_still_not_read(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    mcp.outputs["rag_retrieve_evidence"] = {
+        **deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"]),
+        "evidence": [_evidence_item(PART_1)],
+    }
+    _script(
+        monkeypatch,
+        _retrieve("c1"),
+        [assistant_message(PART_1)],
+        [assistant_message(PART_1)],
+    )
+
+    run = _run()
+
+    answer = _answer(run)
+    assert "「章節 sec-a」（文書 A.pdf、p.3-9）: 章節を読んでいません" in answer["text"]
+    assert answer["outcome"]["value"] == "conditional"
+    assert "unread_sections" in answer["outcome"]["signals"]

@@ -15,6 +15,11 @@
 - 続きの読み取り: `cursor` を渡した呼び出しを、その `next_cursor` を返した章節に対応付ける。
   読めなかった理由は、文書の版が変わった（`stale`）・ツールの呼び出しの上限（`budget`）・
   そのほかの失敗（`failed`）。続きを呼んでいなければ `unread`。
+- 読み始めていない章節（#2503）: 根拠を集めるツール（`rag_search` / `rag_retrieve_evidence`）の
+  根拠の章節（`section`）が抜粋より長く、その章節の chunk を根拠ですべて得ていない
+  （`chunk_count`）ものは、`rag_read_section` で読み始めていなくても章節として追跡する（理由
+  `not_read`）。文書を先頭から `rag_read_document` で終わりまで読んだ文書の章節は読み切ったと
+  みなす。
 - 回答に使った章節: 回答が章節の chunk の id を書いたか、回答の本文が章節の本文・題名と当たる
   （`evidence_match`）。探索で読んだだけで回答に使っていない章節は数えない。
 - 質問が手順・一覧・条件のまとまりを求めるとき（`asks_for_grouped_content`）だけ判定する。
@@ -34,6 +39,8 @@ from app.features.agent.answer_validation import cited_chunk_ids
 from app.features.agent.evidence_match import EvidenceText, answer_features, matched_features
 from app.features.agent.support_task import (
     BUDGET_EXCEEDED_CODE,
+    RAG_BUDGET_TOOLS,
+    RAG_READ_DOCUMENT,
     RAG_READ_SECTION,
     asks_for_grouped_content,
 )
@@ -44,13 +51,16 @@ if TYPE_CHECKING:
 
 JsonObject = dict[str, Any]
 
-# 続きを読めていない理由。
+# 続きを読めていない理由（`not_read` は章節を読み始めていない。#2503）。
+REASON_NOT_READ = "not_read"
 REASON_UNREAD = "unread"
 REASON_STALE = "stale"
 REASON_BUDGET = "budget"
 REASON_FAILED = "failed"
 # 差し戻せば読める理由（予算の上限は差し戻しても読めない）。
-RETRYABLE_REASONS = frozenset({REASON_UNREAD, REASON_STALE, REASON_FAILED})
+RETRYABLE_REASONS = frozenset({REASON_NOT_READ, REASON_UNREAD, REASON_STALE, REASON_FAILED})
+# 文書を先頭から読むときに渡さない、読み始めの位置の引数（`rag_read_document`）。
+_DOCUMENT_START_ARGUMENTS = ("cursor", "locator", "page", "section_id")
 # RAG が続きの位置を古い版のもの・形の違うものとして拒んだときの code。
 _STALE_CODES = frozenset({"source_stale", "cursor_invalid"})
 
@@ -61,8 +71,11 @@ MAX_UNREAD_SECTIONS = 5
 
 UNREAD_SECTIONS_RETRY_HINT = (
     "直前の回答は、根拠にした次の章節を終わりまで読まずに作られています。質問は手順・一覧・条件の"
-    "まとまりを求めているので、章節ごとに続きを読んでから改めて回答してください。読み切れない"
+    "まとまりを求めているので、章節ごとに終わりまで読んでから改めて回答してください。読み切れない"
     "章節は、確かめていない範囲として回答に示してください。"
+)
+_START_LINE = (
+    "章節を読んでいない。document_id と section_id を rag_read_section に渡して終わりまで読む"
 )
 _CONTINUE_LINE = "next_cursor を rag_read_section の cursor（document_id も渡す）に渡して続きを読む"
 _STALE_LINE = (
@@ -74,6 +87,7 @@ UNREAD_SECTIONS_INTRO = (
     "次の章節は終わりまで読めていないため、手順・条件の全体は確かめられていません。"
 )
 _REASON_LABELS = {
+    REASON_NOT_READ: "章節を読んでいません（検索の抜粋だけを使いました）",
     REASON_UNREAD: "続きを読んでいません",
     REASON_STALE: "文書が更新され、続きの位置が古くなりました",
     REASON_BUDGET: "この実行のツールの呼び出しの上限に達しました",
@@ -95,7 +109,9 @@ class _Section:
     page_end: int | None = None
     complete: bool = False
     next_cursor: str | None = None
-    reason: str = REASON_UNREAD
+    reason: str = REASON_NOT_READ
+    # 根拠を集めるツールの根拠で得た chunk（章節の chunk をすべて得たら読み切ったとみなす）。
+    evidence_chunk_ids: set[str] = field(default_factory=set)
     chunk_ids: list[str] = field(default_factory=list)
     evidence: EvidenceText = field(default_factory=EvidenceText)
 
@@ -127,17 +143,96 @@ def _failure_reason(step: RunStep) -> str:
     return REASON_FAILED
 
 
+def _succeeded_output(step: RunStep) -> JsonObject | None:
+    result = step.tool_result
+    if result is None or not result.success or step.status != "completed":
+        return None
+    return result.output if isinstance(result.output, dict) else None
+
+
+def _track_evidence(
+    sections: dict[tuple[str, str, str], _Section],
+    parents: dict[tuple[str, str, str], str],
+    connection: str,
+    output: JsonObject,
+) -> None:
+    """根拠を集めるツールの根拠の章節のうち、抜粋より長い章節を追跡に加える（#2503）。"""
+    for item in output.get("evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        section = item.get("section")
+        document_id = _text(item.get("document_id"))
+        section_id = _text(section.get("section_id")) if isinstance(section, dict) else ""
+        if not isinstance(section, dict) or not document_id or not section_id:
+            continue
+        excerpt = _text(item.get("excerpt"))
+        chars = _int(section.get("chars"))
+        key = (connection, document_id, section_id)
+        entry = sections.get(key)
+        if entry is None:
+            if chars is None or chars <= len(excerpt):
+                # 抜粋で章節の全体を得ている。
+                continue
+            entry = sections[key] = _Section(connection, document_id, section_id)
+            entry.title = _text(section.get("title"))
+            entry.page_start = _int(section.get("page_start"))
+            entry.page_end = _int(section.get("page_end"))
+        entry.file_name = entry.file_name or _text(item.get("file_name")) or None
+        parent = _text(section.get("parent_section_id"))
+        if parent:
+            parents.setdefault(key, parent)
+        chunk_id = _text(item.get("chunk_id"))
+        if chunk_id:
+            entry.evidence_chunk_ids.add(chunk_id)
+            if chunk_id not in entry.chunk_ids:
+                entry.chunk_ids.append(chunk_id)
+        entry.evidence.add(excerpt, [entry.title])
+        chunk_count = _int(section.get("chunk_count"))
+        if chunk_count is not None and len(entry.evidence_chunk_ids) >= chunk_count > 0:
+            # 根拠で章節の chunk をすべて得た。
+            entry.complete = True
+
+
 def _track(steps: Sequence[RunStep]) -> list[_Section]:
-    """`rag_read_section` の step から、章節ごとの読み取りの状態を作る（読んだ順）。"""
+    """`rag_read_section` と根拠の step から、章節ごとの読み取りの状態を作る（読んだ順）。"""
     sections: dict[tuple[str, str, str], _Section] = {}
     by_cursor: dict[tuple[str, str], _Section] = {}
     parents: dict[tuple[str, str, str], str] = {}
+    # 先頭から終わりまで読んだ文書と、先頭から読んでいる途中の文書の続きの位置
+    # （rag_read_document）。
+    documents_read: set[tuple[str, str]] = set()
+    document_cursors: dict[tuple[str, str], str] = {}
     for step in steps:
         call = step.tool_call
-        if call is None or mcp_base_tool_name(call.name) != RAG_READ_SECTION:
+        if call is None:
             continue
+        tool = mcp_base_tool_name(call.name)
         connection = _connection(call.name)
         arguments = call.arguments if isinstance(call.arguments, dict) else {}
+        if tool in RAG_BUDGET_TOOLS:
+            output = _succeeded_output(step)
+            if output is not None:
+                _track_evidence(sections, parents, connection, output)
+            continue
+        if tool == RAG_READ_DOCUMENT:
+            output = _succeeded_output(step)
+            if output is None:
+                continue
+            document_id = _text(output.get("document_id"))
+            cursor = _text(arguments.get("cursor"))
+            from_start = not any(arguments.get(name) for name in _DOCUMENT_START_ARGUMENTS)
+            if not document_id or not (
+                from_start or document_cursors.get((connection, cursor)) == document_id
+            ):
+                continue
+            next_cursor = _text(output.get("next_cursor"))
+            if next_cursor:
+                document_cursors[(connection, next_cursor)] = document_id
+            else:
+                documents_read.add((connection, document_id))
+            continue
+        if tool != RAG_READ_SECTION:
+            continue
         cursor = _text(arguments.get("cursor"))
         result = step.tool_result
         output = result.output if result is not None else None
@@ -201,7 +296,7 @@ def _track(steps: Sequence[RunStep]) -> list[_Section]:
     complete = {key for key, entry in sections.items() if entry.complete}
     unread: list[_Section] = []
     for key, entry in sections.items():
-        if entry.complete:
+        if entry.complete or (entry.connection, entry.document_id) in documents_read:
             continue
         # 上の章節を読み切っていれば、その中の章節も読み切っている。
         connection, document_id, section_id = key
@@ -228,7 +323,7 @@ def _used(entry: _Section, answer: str) -> bool:
 
 def _record(entry: _Section, *, budget_exhausted: bool) -> JsonObject:
     reason = entry.reason
-    if budget_exhausted and reason == REASON_UNREAD:
+    if budget_exhausted and reason in {REASON_NOT_READ, REASON_UNREAD}:
         reason = REASON_BUDGET
     return {
         "connection": entry.connection,
@@ -252,7 +347,8 @@ def section_coverage(
 ) -> JsonObject | None:
     """回答に使った章節を終わりまで読んだか（判定しなければ None）。
 
-    質問が手順・一覧・条件のまとまりを求め、`rag_read_section` で読んだ章節がある Run だけ判定する。
+    質問が手順・一覧・条件のまとまりを求め、`rag_read_section` で読んだ章節か、根拠を集めるツールの
+    根拠の章節がある Run だけ判定する。
     返すのは `status`（`complete` / `incomplete`）と、回答に使ったのに終わりまで読めていない章節
     （`sections`。理由 `reason` つき、最大 `MAX_UNREAD_SECTIONS` 件）。`budget_exhausted` は、
     この実行のツールの呼び出しの上限に達したか（続きを読んでいない章節の理由を `budget` にする）。
@@ -260,7 +356,8 @@ def section_coverage(
     if not answer.strip() or not asks_for_grouped_content(question_texts):
         return None
     if not any(
-        step.tool_call is not None and mcp_base_tool_name(step.tool_call.name) == RAG_READ_SECTION
+        step.tool_call is not None
+        and mcp_base_tool_name(step.tool_call.name) in {RAG_READ_SECTION, *RAG_BUDGET_TOOLS}
         for step in steps
     ):
         return None
@@ -293,7 +390,9 @@ def unread_sections_message(sections: Sequence[JsonObject]) -> str:
             f"- {_label(section)}（document_id: {section['document_id']}、"
             f"section_id: {section['section_id']}）: "
         )
-        if section.get("reason") == REASON_STALE or not section.get("next_cursor"):
+        if section.get("reason") == REASON_NOT_READ:
+            lines.append(head + _START_LINE + "。")
+        elif section.get("reason") == REASON_STALE or not section.get("next_cursor"):
             lines.append(head + _STALE_LINE + "。")
         else:
             lines.append(head + f"{_CONTINUE_LINE}（next_cursor: {section['next_cursor']}）。")
