@@ -116,8 +116,9 @@ class ExcelOptions(BaseModel):
     mode: Literal["auto", "table", "procedure", "form"] = Field(
         default="auto",
         description=(
-            "シートの読み方。auto は帳票（狭い列の格子と結合セルにラベルと値を散らした版式）なら"
-            " form、手順書（番号と題名の列）なら procedure、密な表なら table に決める。"
+            "シートの読み方。auto は帳票（ラベルのすぐ右の値と結合セルを主に、行ごとの位置の"
+            "不揃いと列の狭さも見て決める。普通の列幅の帳票も含む）なら form、手順書（番号と"
+            "題名の列）なら procedure、密な表なら table に決める。"
         ),
     )
     header_row: int | None = Field(

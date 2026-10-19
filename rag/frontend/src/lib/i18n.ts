@@ -3092,7 +3092,7 @@ export const ja = {
   "documents.excelOptions.inherited": "全体の既定に従う（{summary}）",
   "documents.excelOptions.mode": "読み方",
   "documents.excelOptions.mode.hint":
-    "自動は、狭い列と結合セルにラベルと値を並べた帳票なら項目ごと、番号と題名の列がある手順書なら手順ごと、項目の埋まった表なら 1 行ずつ読みます。空の行・列で分かれた表は表ごとに読みます。",
+    "自動は、ラベルのすぐ右に値を置き、結合セルの多い帳票（普通の列幅の帳票も含む）なら項目ごと、番号と題名の列がある手順書なら手順ごと、項目の埋まった表なら 1 行ずつ読みます。空の行・列で分かれた表は表ごとに読みます。",
   "documents.excelOptions.mode.auto": "自動",
   "documents.excelOptions.mode.table": "表（1 行ずつ）",
   "documents.excelOptions.mode.procedure": "手順書（手順ごと）",
