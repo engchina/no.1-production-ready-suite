@@ -242,3 +242,30 @@ test("表の成果物が無い Run は、表の形のツールの結果を「構
   // 最後の表（0 行のジョブ）を出す。
   await expect(card.getByTestId("run-structured-table-summary")).toContainText("該当する行はありません");
 });
+
+test("添付の表を読むツールの結果（値を values に入れた行）の値を表に出す", async ({ page, mockApi }) => {
+  // #2591: 出どころの位置つきの行（`{ row_number, cell_range, values }`）を、すべて NULL にしない。
+  seedRun(mockApi);
+  const run = mockApi.state.runs[0] as { steps: unknown[]; artifacts: Record<string, unknown>[] };
+  run.steps = [
+    toolStep("step-attach", "chat_attachment_read_rows", {
+      attachment_id: "attachment-1",
+      file_name: "表 A.xlsx",
+      sheet: "シート 1",
+      columns: ["品目", "数量"],
+      rows: [
+        { row_number: 1, row_start: 2, row_end: 2, cell_range: "A2:B2", values: { 品目: "品目 D", 数量: "5" } },
+        { row_number: 2, row_start: 3, row_end: 3, cell_range: "A3:B3", values: { 品目: "品目 E", 数量: null } },
+      ],
+      row_count: 2,
+      next_start_row: null,
+    }),
+  ];
+  run.artifacts = run.artifacts.filter((artifact) => artifact.kind === "answer");
+  await page.goto(`/runs?id=${RUN_ID}`);
+  const card = page.getByTestId("run-structured-table");
+  await expect(card).toContainText("品目 D");
+  await expect(card).toContainText("5");
+  // 値の無いセルだけを NULL で出す。
+  await expect(card.getByText("NULL", { exact: true })).toHaveCount(1);
+});
