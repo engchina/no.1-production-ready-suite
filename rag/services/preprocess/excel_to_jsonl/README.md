@@ -7,8 +7,11 @@ parse の **前** に Excel(`.xls` / `.xlsx`)原本を決定論で「行の記�
 - 出力契約: `rag_parser_core` の `ConvertResponse`(`POST /convert`)。派生物の content type は
   `application/vnd.production-ready.structured-records+jsonl`(schema は `rag_parser_core.structured_records`)で、
   Docling / Unstructured の parser のサービスが外部の parser に渡さずに 1 記録 1 要素にする。
-  JSONL は `document`(変換器・読まなかったシート)→ シートごとに `sheet`(表頭・推定の信頼度・読み方・列と役割・
-  診断)→ `preamble` / `row` / `procedure_step`(`parent_id` = シートの記録、`location` = 元の行番号とセル範囲)の順。
+  JSONL は `document`(変換器・読まなかったシート)→ シート(複数の表に分けたときは表)ごとに `sheet`(表頭・
+  推定の信頼度・読み方・版式の判定・表の番号と範囲・列と役割・診断)→ `preamble` / `row` / `procedure_step` /
+  `form_field`(`parent_id` = シートの記録、`location` = 元の行番号とセル範囲)の順。
+- 変換の本体 `app.converters.read_excel(bytes, extension=…, options=…)` は前処理のサービスに依存せず、原本の
+  bytes と選択肢だけで `SheetRecordsDocument` を返す(会話の添付などの別の経路でも同じ読み方にするため。#2516)。
 - 選択肢: `POST /convert` の form の `options`(JSON)。backend は文書レシピの `excel_options`(無ければ
   `RAG_PREPROCESS_EXCEL_OPTIONS`)を渡す。
 - readiness: `GET /health`(openpyxl / xlrd 導入状況)
@@ -19,7 +22,9 @@ parse の **前** に Excel(`.xls` / `.xlsx`)原本を決定論で「行の記�
 | 項目 | 挙動 |
 |---|---|
 | 対応形式 | `.xlsx` / マクロ付きの `.xlsm`(openpyxl。結合セル・書式を読むため read_only にしない。VBA は読まない)/ `.xls`(xlrd 2.x、formatting_info。マクロは読まない)。マクロは実行しない(#2470) |
-| 読み方(`mode`) | `table` は 1 行 1 記録。`procedure` は手順書(表頭の無い番号の列と、表頭のある最初の列=題名)を、番号と題名のある行から次の手順までで 1 記録にし、詳細の無い題名の行を章にする。`auto`(既定)は番号と題名の列があれば procedure、無ければデータの行の埋まり方(中央値 60% 以上)で table |
+| 読み方(`mode`) | `table` は 1 行 1 記録。`procedure` は手順書(表頭の無い番号の列と、表頭のある最初の列=題名)を、番号と題名のある行から次の手順までで 1 記録にし、詳細の無い題名の行を章にする。`form` は帳票(下の行)。`auto`(既定)はまず帳票の点数が `form_detection_threshold`(既定 0.6)以上なら form、次に番号と題名の列があれば procedure、無ければデータの行の埋まり方(中央値 60% 以上)で table。判定の根拠(特徴の値)と信頼度はシートの `layout_detection` に残し、帳票と判定したときは診断 `layout_detected_form` も残す |
+| 帳票(方眼紙。#2516) | 判定: 結合セルを 1 つの単位にし、結合セルの割合・狭い列(列幅 4 文字以下)の割合・行どうしの単位の位置の不揃い・ラベルと値の隣接(結合した値がすぐ右にある、または塗りつぶし・太字・コロンのラベルの右か下に値がある)を 0.3 / 0.25 / 0.25 / 0.2 の重みで点数にする(単位 4 個未満は帳票にしない)。業務の語は使わない。読み方: ラベルの単位と、すぐ右(空の列 2 つまで)の値を組にし、右に無ければすぐ下の同じ左端の値と組にして `form_field`(ラベル・値・`label_cell`・`value_cell`・全体のセル範囲)にする。縦に結合したラベルは右の複数行の値をまとめ、値のすぐ右の単位のセル(「円」など)は値に続ける。値の無い結合セルが右にあるラベル(空欄)は記録にせず `form_empty_fields` の数に残す。行に 1 つだけの単位は以降の項目の見出し(`section_path`)、縦に結合して右に複数の項目を持つ単位は項目のまとまりの見出し。塗りつぶし・太字のラベルが横に並び、すぐ下に同じ位置の値の行があれば上下で組にし、値の行が 2 行以上なら表の行(`row`)にする。記録の ID は `sheet-000-r3-B`(1 行に複数の項目があるので列を付ける) |
+| 1 シートの複数の表(#2516) | `split_tables`(既定 true)で、空の行(`table_gap_rows`、既定 1)・空の列(`table_gap_columns`、既定 1)で領域に分け(XY-cut。結合セルは分けない)、領域ごとに版式を判定して表頭を推定し、別々の `sheet`(同じシート名・`table_index`・`region`・題名 `title` = 表頭より上の最初の行)にする。1 行だけの領域(題名)は下の表につなぎ、表頭らしい行で始まらない領域(空の 1 行で区切った表の続き)は上の表につなぐ(列の組が違う・空の行が 2 行以上・題名の行で始まる・後の行に数値の入る表頭の行で始まる領域は新しい表)。シート全体が帳票のとき・`header_row` を指定したときは分けない。要素の節は `[シート名, 題名]`、metadata の `sheet_table_index` で親子階層の親を表ごとに分ける |
 | 表頭 | `header_row`(1 始まり)・`header_row_count`(1〜5)の指定を優先。無ければ先頭 30 行から採点して選び、信頼度と理由を残す(0.6 未満は警告 `excel_header_low_confidence`。抽出の warning にもなり、文書レシピを確認(REVIEW)で止める。#1229)。表頭より上の行は `preamble` |
 | 列名 | 複数行の表頭は「 / 」でつなぐ。空は `column_<列>`、重複は `<名前>__<列>` |
 | 行・場所 | 空行を除く前の元の行番号(`row_start` / `row_end`)とセル範囲(`A5:F5`) |

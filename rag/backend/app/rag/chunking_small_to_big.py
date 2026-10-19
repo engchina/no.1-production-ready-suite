@@ -397,13 +397,16 @@ def _parent_section(chunk: Chunk) -> str:
 
 
 def _joins_sheet_parent(group: list[Chunk], chunk: Chunk, params: SmallToBigParams) -> bool:
-    """続く記録を同じ親にまとめるか(同じシート・同じ章の記録で、親の上限の中に収まる)。"""
+    """続く記録を同じ親にまとめるか(同じシート・同じ表・同じ章の記録で、親の上限の中に収まる)。"""
     first = group[0]
     if not all(
         item.metadata.get("content_kind") == SHEET_RECORD_CONTENT_KIND for item in (first, chunk)
     ):
         return False
     if first.metadata.get("sheet_name") != chunk.metadata.get("sheet_name"):
+        return False
+    # 1 シートを複数の表に分けたときは、表をまたいで親にしない(#2516)。
+    if first.metadata.get("sheet_table_index") != chunk.metadata.get("sheet_table_index"):
         return False
     if _parent_section(first) != _parent_section(chunk):
         return False

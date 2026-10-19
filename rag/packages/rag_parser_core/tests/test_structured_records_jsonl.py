@@ -10,6 +10,7 @@ import pytest
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
 from rag_parser_core.registry import run_external_adapter
 from rag_parser_core.sheet_records import (
+    LayoutDetection,
     SheetBlock,
     SheetColumn,
     SheetPreambleRow,
@@ -23,14 +24,17 @@ from rag_parser_core.structured_records import (
     STRUCTURED_RECORDS_BOUNDARY_COUNT_ARTIFACT_KEY,
     STRUCTURED_RECORDS_CONTENT_TYPE,
     DocumentLine,
+    FormFieldLine,
     RecordBoundaryError,
     RecordField,
     RecordLocation,
     RowLine,
+    StructuredRecordsError,
     dump_structured_records,
     escape_record_boundary,
     has_record_boundaries,
     join_record_boundary_text,
+    parse_structured_records,
     record_boundary_plain_text,
     sheet_records_to_lines,
     split_record_boundary_text,
@@ -222,3 +226,93 @@ def test_capability_accepts_preprocessed_jsonl_and_is_ordered_before_xml_tree() 
     assert not adapter_supports_source(BACKEND, source_profile=None, content_type="application/pdf")
     order = list(ADAPTER_CAPABILITIES)
     assert order.index("unstructured") < order.index(BACKEND) < order.index("xml_tree_json")
+
+
+def _form_sheet(value: str = "値 A") -> bytes:
+    """帳票（#2516）の 1 行に 2 つの項目と、分けた表の番号を持つシート。"""
+    document = SheetRecordsDocument(
+        source_format="xlsx",
+        sheets=[
+            SheetRecords(
+                name="様式",
+                mode="form",
+                layout_detection=LayoutDetection(
+                    layout="form",
+                    method="detected",
+                    confidence=0.9,
+                    reason="合成",
+                    features={"merged": 1.0},
+                ),
+                table_index=1,
+                region="B1:N3",
+                blocks=[
+                    SheetBlock(
+                        kind="form_field",
+                        row_start=3,
+                        row_end=3,
+                        cell_range="B3:F3",
+                        section_path=["見出し"],
+                        label="項目 A",
+                        value=value,
+                        label_cell="B3:C3",
+                        value_cell="D3:F3",
+                    ),
+                    SheetBlock(
+                        kind="form_field",
+                        row_start=3,
+                        row_end=3,
+                        cell_range="H3:N3",
+                        label="項目 B",
+                        value="値 B",
+                        label_cell="H3:I3",
+                        value_cell="J3:N3",
+                    ),
+                ],
+            )
+        ],
+    )
+    return dump_structured_records(
+        sheet_records_to_lines(document, converter="excel_to_jsonl", converter_version="v5")
+    )
+
+
+def test_form_fields_round_trip_as_records_with_cells() -> None:
+    parsed = parse_structured_records(_form_sheet())
+    assert not isinstance(parsed, StructuredRecordsError)
+    fields = [line for line in parsed.lines if isinstance(line, FormFieldLine)]
+    assert [(line.record_id, line.label, line.value_cell) for line in fields] == [
+        ("sheet-000-r3-B", "項目 A", "D3:F3"),
+        ("sheet-000-r3-H", "項目 B", "J3:N3"),
+    ]
+    extraction = run_external_adapter(BACKEND, _form_sheet(), None, "").extraction
+    assert extraction is not None
+    assert [element.text for element in extraction.elements] == ["項目 A: 値 A", "項目 B: 値 B"]
+    first = extraction.elements[0]
+    assert first.section_path == ["様式", "見出し"]
+    assert first.metadata["form_label_cell"] == "B3:C3"
+    assert first.metadata["sheet_table_index"] == 1
+    assert first.metadata["sheet_region"] == "B1:N3"
+    assert first.metadata[STRUCTURED_RECORD_ID_KEY] == "sheet-000-r3-B"
+
+
+def test_oversized_form_field_is_rejected_and_csv_cannot_have_form_fields() -> None:
+    result = run_external_adapter(BACKEND, _form_sheet("長" * 9000), None, "")
+    assert result.extraction is None
+    assert result.warnings == ("structured_records_invalid:record_too_large@line3",)
+    lines: list[DocumentLine | FormFieldLine] = [
+        DocumentLine(
+            record_id="document",
+            source_type="csv",
+            converter="csv_to_jsonl",
+            converter_version="v2",
+        ),
+        FormFieldLine(
+            record_id="field-1",
+            source_type="csv",
+            location=RecordLocation(row_start=2, row_end=2),
+            label="項目",
+            value="値",
+        ),
+    ]
+    parsed = parse_structured_records(dump_structured_records(lines))
+    assert parsed == StructuredRecordsError("unsupported_record_type", 2)

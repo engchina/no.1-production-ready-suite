@@ -6,11 +6,16 @@
 でも）は、この JSONL を外部の parser に渡さず、`sheet_records_extraction` で記録の単位（block）を
 1 つずつ要素にする。
 
-- block は 2 種類（engchina/no.1-rag の前処理に合わせる）。
+- block は 3 種類（`row` / `procedure_step` は engchina/no.1-rag の前処理に合わせる）。
   - `row`: 表の 1 行（「列名: 値」）。
   - `procedure_step`: 手順書の 1 手順（番号と題名の行から次の手順までの複数行）。
-- 節はシート名と、手順なら章・手順の題名（`section_path=[シート名, …]`）。表頭より上の行
-  （説明など）は本文の要素にする。シート名だけの見出しの要素は作らない。
+  - `form_field`: 帳票（方眼紙）の 1 項目（「ラベル: 値」と、ラベル・値のセル。#2516）。
+- 節はシート名と、表の題名（1 シートの複数の表を分けたとき）、手順なら章・手順の題名、帳票なら
+  見出し（`section_path=[シート名, …]`）。表頭より上の行（説明など）は本文の要素にする。
+  シート名だけの見出しの要素は作らない。
+- 1 シートの複数の表（#2516）: 前処理が空の行・列で分けた表は、それぞれ別の `SheetRecords`
+  （同じシート名・`table_index`・`region`）になる。親子階層の親は表をまたがない
+  （metadata の `sheet_table_index`）。
 - 要素の metadata に `sheet_name`・`row_start` / `row_end`・`cell_range`・`cell_column_start` /
   `cell_column_end`・`header_row` を持ち、chunking が chunk の場所にする。
 - 分割（#1349。engchina/no.1-rag の「1 行 = 1 chunk」に合わせる）: 記録（`content_kind=record`）は
@@ -135,11 +140,11 @@ class ExcelOptions(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["auto", "table", "procedure"] = Field(
+    mode: Literal["auto", "table", "procedure", "form"] = Field(
         default="auto",
         description=(
-            "シートの読み方。auto は手順書（番号と題名の列）なら procedure、"
-            "密な表なら table に決める。"
+            "シートの読み方。auto は帳票（狭い列の格子と結合セルにラベルと値を散らした版式）なら"
+            " form、手順書（番号と題名の列）なら procedure、密な表なら table に決める。"
         ),
     )
     header_row: int | None = Field(
@@ -169,6 +174,29 @@ class ExcelOptions(BaseModel):
         description=(
             "読む範囲（例: A3:F200＝選んだすべてのシート、手順!A1:D80＝そのシートだけ）。"
             "範囲の外のセルは表頭の推定にも記録にも使わない。未指定はシート全体。"
+        ),
+    )
+
+    split_tables: bool = Field(
+        default=True,
+        description=(
+            "1 つのシートの、空の行・空の列で分かれた複数の表を別々に読むか（#2516）。"
+            "表ごとに表頭を推定する。"
+        ),
+    )
+    table_gap_rows: int = Field(
+        default=1, ge=1, le=20, description="表を分ける空の行の数（これ以上続いたら別の表）。"
+    )
+    table_gap_columns: int = Field(
+        default=1, ge=1, le=20, description="表を分ける空の列の数（これ以上続いたら別の表）。"
+    )
+    form_detection_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "auto で帳票（form）と判定する点数の下限（列幅の狭さ・結合セルの割合・行の列の"
+            "不揃い・ラベルと値の隣接から計算する。#2516）。"
         ),
     )
 
@@ -212,6 +240,23 @@ class HeaderDetection(BaseModel):
     reason: str
 
 
+SheetLayout = Literal["table", "procedure", "form"]
+
+
+class LayoutDetection(BaseModel):
+    """シートの版式の判定（#2516）。
+
+    ``confidence`` は ``layout`` の確からしさ（帳票は帳票の点数、表・手順書は 1 − 帳票の点数）。
+    ``features`` は判定に使った構造の特徴（0〜1）。
+    """
+
+    layout: SheetLayout
+    method: Literal["configured", "detected"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str
+    features: dict[str, float] = Field(default_factory=dict)
+
+
 class SheetColumn(BaseModel):
     name: str
     column: str = Field(description="列の記号（A, B, …）。")
@@ -233,9 +278,9 @@ class SheetPreambleRow(BaseModel):
 
 
 class SheetBlock(BaseModel):
-    """記録の単位（表の 1 行か、手順書の 1 手順）。"""
+    """記録の単位（表の 1 行・手順書の 1 手順・帳票の 1 項目）。"""
 
-    kind: Literal["row", "procedure_step"]
+    kind: Literal["row", "procedure_step", "form_field"]
     row_start: int = Field(ge=1, description="シートの元の行番号（1 始まり）。")
     row_end: int = Field(ge=1)
     cell_range: str = Field(description="セルの範囲（例: A5:F5、A5:F9）。")
@@ -244,6 +289,12 @@ class SheetBlock(BaseModel):
     )
     values: dict[str, str] = Field(default_factory=dict, description="表の行の列名と値。")
     lines: list[str] = Field(default_factory=list, description="手順の本文の行。")
+    label: str | None = Field(
+        default=None, description="帳票の項目のラベル（ラベルの無い文は None）。"
+    )
+    value: str = Field(default="", description="帳票の項目の値。")
+    label_cell: str | None = Field(default=None, description="ラベルのセル（例: B3:E3）。")
+    value_cell: str | None = Field(default=None, description="値のセル（例: F3:N3）。")
 
 
 class SheetDiagnostic(BaseModel):
@@ -257,7 +308,13 @@ class SheetRecords(BaseModel):
     header_row: int | None = Field(default=None, ge=1)
     header_row_count: int = 1
     header_detection: HeaderDetection | None = None
-    mode: Literal["table", "procedure"] = "table"
+    mode: SheetLayout = "table"
+    layout_detection: LayoutDetection | None = None
+    table_index: int | None = Field(
+        default=None, ge=1, description="1 シートを複数の表に分けたときの表の番号（1 始まり）。"
+    )
+    region: str | None = Field(default=None, description="分けた表のセル範囲（例: A12:F30）。")
+    title: str | None = Field(default=None, description="分けた表の題名（表頭より上の最初の行）。")
     columns: list[SheetColumn] = Field(default_factory=list)
     preamble: list[SheetPreambleRow] = Field(default_factory=list)
     blocks: list[SheetBlock] = Field(default_factory=list)
@@ -284,7 +341,9 @@ def _block_text(
     max_chars: int | None = _BLOCK_TEXT_MAX_CHARS,
 ) -> str:
     """記録の本文（``max_chars`` が None なら切らない。大きさの判定に使う）。"""
-    if block.kind == "procedure_step":
+    if block.kind == "form_field":
+        text = f"{block.label}: {block.value}" if block.label else block.value
+    elif block.kind == "procedure_step":
         # 手順の行は前処理が役割の表示を付けた列名で作る。
         text = "\n".join(line for line in block.lines if line.strip())
     else:
@@ -314,6 +373,32 @@ def _column_bounds(cell_range: str) -> tuple[str | None, str | None]:
     return letters_start, letters_end
 
 
+def sheet_block_record_id(sheet_id: str, block: SheetBlock, mode: str) -> str:
+    """記録の ID（要素の ID と JSONL の record_id）。
+
+    表・手順書は行ごとに 1 つの記録なので ``<シート>-r<行>``。帳票は 1 行に複数の項目があるので
+    先頭の列も付ける（``<シート>-r<行>-<列>``）。
+    """
+    if mode != "form" and block.kind != "form_field":
+        return f"{sheet_id}-r{block.row_start}"
+    column, _ = _column_bounds(block.cell_range)
+    return f"{sheet_id}-r{block.row_start}-{column or 'A'}"
+
+
+def sheet_section_path(sheet: SheetRecords) -> list[str]:
+    """シートの記録の節の先頭（シート名と、分けた表の題名）。"""
+    return [sheet.name, *([sheet.title] if sheet.title else [])]
+
+
+def _sheet_metadata(sheet: SheetRecords) -> dict[str, str | int]:
+    metadata: dict[str, str | int] = {"sheet_layout": sheet.mode}
+    if sheet.table_index is not None:
+        metadata["sheet_table_index"] = sheet.table_index
+    if sheet.region:
+        metadata["sheet_region"] = sheet.region
+    return metadata
+
+
 def sheet_records_extraction(
     document: SheetRecordsDocument,
     *,
@@ -326,7 +411,8 @@ def sheet_records_extraction(
     raw_lines: list[str] = []
     order = 0
     for sheet_index, sheet in enumerate(document.sheets):
-        section_path = [sheet.name]
+        section_path = sheet_section_path(sheet)
+        sheet_metadata = _sheet_metadata(sheet)
         roles = {column.name: column.role for column in sheet.columns if column.role}
         roles_metadata = _column_roles_metadata(roles)
         # シート名は節（section_path）と chunk の文脈の見出しに入るので、見出しだけの要素は作らない
@@ -352,6 +438,7 @@ def sheet_records_extraction(
                         "cell_column_start": column_start,
                         "cell_column_end": column_end,
                         "sheet_block_kind": "preamble",
+                        **sheet_metadata,
                     },
                 )
             )
@@ -367,10 +454,10 @@ def sheet_records_extraction(
                     kind="text",
                     text=text,
                     order=order,
-                    element_id=f"{heading_id}-r{block.row_start}",
+                    element_id=sheet_block_record_id(heading_id, block, sheet.mode),
                     content_kind=SHEET_RECORD_CONTENT_KIND,
                     source_parser=source_parser,
-                    section_path=[sheet.name, *block.section_path],
+                    section_path=[*section_path, *block.section_path],
                     confidence=1.0,
                     metadata={
                         "sheet_name": sheet.name,
@@ -381,7 +468,10 @@ def sheet_records_extraction(
                         "cell_column_end": column_end,
                         "header_row": sheet.header_row,
                         "sheet_block_kind": block.kind,
+                        **sheet_metadata,
                         **({"sheet_column_roles": roles_metadata} if roles_metadata else {}),
+                        **({"form_label_cell": block.label_cell} if block.label_cell else {}),
+                        **({"form_value_cell": block.value_cell} if block.value_cell else {}),
                     },
                 )
             )
@@ -412,6 +502,12 @@ def sheet_records_extraction(
             "source_format": document.source_format,
             "sheet_count": len(document.sheets),
             "block_count": sum(len(sheet.blocks) for sheet in document.sheets),
+            "form_field_count": sum(
+                1
+                for sheet in document.sheets
+                for block in sheet.blocks
+                if block.kind == "form_field"
+            ),
             "skipped_sheet_count": len(document.skipped_sheets),
             "sheet_diagnostics": "\n".join(diagnostics)[:4000],
         },
@@ -431,14 +527,18 @@ __all__ = [
     "ExcelOptions",
     "ExcelRange",
     "HeaderDetection",
+    "LayoutDetection",
     "SheetColumn",
     "SheetDiagnostic",
     "SheetPreambleRow",
     "SheetRecords",
     "SheetRecordsDocument",
     "SheetBlock",
+    "SheetLayout",
     "SkippedSheet",
     "column_display_name",
     "parse_excel_range",
+    "sheet_block_record_id",
     "sheet_records_extraction",
+    "sheet_section_path",
 ]

@@ -375,6 +375,13 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
 
   await excel.getByText("上書き", { exact: true }).click();
   await excel.getByRole("combobox", { name: "読み方" }).click();
+  // 帳票（方眼紙）の読み方も選べる（#2516）。
+  await expect(page.getByRole("option", { name: "帳票（項目ごと）" })).toBeVisible();
+  if (process.env.RAG_E2E_SCREENSHOT_DIR) {
+    await page.screenshot({
+      path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/excel-options-mode-${test.info().project.name}.png`,
+    });
+  }
   await page.getByRole("option", { name: "表（1 行ずつ）" }).click();
   await excel.getByRole("spinbutton", { name: "表頭の行" }).fill("2");
   await excel.getByRole("textbox", { name: "読まない列" }).fill("備考、F");
