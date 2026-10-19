@@ -89,6 +89,51 @@ def test_suggestion_keeps_only_candidates_and_limits(monkeypatch: MonkeyPatch) -
                             {"connection": "nl2sql", "profile_ids": ["profile-y"]},
                             {"connection": "other", "profile_ids": ["profile-a"]},
                         ],
+                        "output_fields": [
+                            {
+                                "key": "item_name",
+                                "label": "  項目  ",
+                                "type": "text",
+                                "required": True,
+                                "description": "",
+                            },
+                            {
+                                "key": "amount",
+                                "label": "金額",
+                                "type": "number",
+                                "required": False,
+                                "description": "円",
+                            },
+                            # 形の違う key は形に合わせて付け、重なる key・空の表示名は外す。
+                            {
+                                "key": "支払期日",
+                                "label": "支払期日",
+                                "type": "date",
+                                "required": False,
+                                "description": "",
+                            },
+                            {
+                                "key": "SQL条件",
+                                "label": "条件",
+                                "type": "text",
+                                "required": False,
+                                "description": "",
+                            },
+                            {
+                                "key": "amount",
+                                "label": "金額 2",
+                                "type": "number",
+                                "required": False,
+                                "description": "",
+                            },
+                            {
+                                "key": "note",
+                                "label": " ",
+                                "type": "text",
+                                "required": False,
+                                "description": "",
+                            },
+                        ],
                         "evaluation_cases": [
                             {"question": f"質問 {index}", "expected": f"要点 {chr(0x3042 + index)}"}
                             for index in range(MAX_EVALUATION_CASES + 2)
@@ -115,7 +160,37 @@ def test_suggestion_keeps_only_candidates_and_limits(monkeypatch: MonkeyPatch) -
     }
     assert len(data["evaluation_cases"]) == MAX_EVALUATION_CASES
     assert data["evaluation_cases"][0] == {"question": "質問 0", "expected": "要点 あ"}
-    assert data["notices"] == ["NL2SQL の候補を取得できません。"]
+    assert data["output_fields"] == [
+        {
+            "key": "item_name",
+            "label": "項目",
+            "type": "text",
+            "required": True,
+            "description": "",
+        },
+        {
+            "key": "amount",
+            "label": "金額",
+            "type": "number",
+            "required": False,
+            "description": "円",
+        },
+        {
+            "key": "field_3",
+            "label": "支払期日",
+            "type": "date",
+            "required": False,
+            "description": "",
+        },
+        {"key": "sql", "label": "条件", "type": "text", "required": False, "description": ""},
+    ]
+    assert data["notices"] == [
+        "NL2SQL の候補を取得できません。",
+        "出力の項目を 4 件入れました。回答を文だけで返す業務なら、"
+        "「出力の項目」から外してください。",
+        "形の正しくない出力の項目を 2 件外しました。",
+        "出力の項目 2 件の key を付けました。key を確かめてください。",
+    ]
     # モデルには業務の説明と、候補（スキル・取得できたプロファイル）だけを渡す。
     [call] = model.calls
     text = json.dumps(call.input, ensure_ascii=False)
@@ -137,6 +212,7 @@ def _proposal(*expected: str) -> Any:
                     "instructions": "",
                     "skill_ids": [],
                     "data_scopes": [],
+                    "output_fields": [],
                     "evaluation_cases": [
                         {"question": f"質問 {index}", "expected": text}
                         for index, text in enumerate(expected)
@@ -166,6 +242,8 @@ def test_invented_numbers_are_sent_back_once(monkeypatch: MonkeyPatch) -> None:
         "根拠の箇所を示す",
     ]
     assert len(model.calls) == 2
+    # 項目を求めない業務では、出力の項目は空のまま。
+    assert data["output_fields"] == []
     resent = json.dumps(model.calls[1].input, ensure_ascii=False)
     assert "直してほしい点" in resent and "上限は第3章により 1 万円と示す" in resent
 

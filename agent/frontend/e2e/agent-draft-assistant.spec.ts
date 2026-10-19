@@ -10,12 +10,20 @@ const SUGGESTION = {
   instructions: "根拠の箇所を示して答える。範囲の外の質問には答えられないと伝える。",
   skill_ids: ["business-rag-research"],
   data_scopes: { rag: { profile_ids: ["bv-legal"], default_profile_id: "bv-legal" } },
+  // #2561: 決まった項目で結果を返す業務なら、出力の項目も提案する。
+  output_fields: [
+    { key: "item_name", label: "項目", type: "text", required: true, description: "" },
+    { key: "amount", label: "金額", type: "number", required: false, description: "円" },
+  ],
   evaluation_cases: [
     { question: "質問 A", expected: "根拠の箇所を示して答える" },
     { question: "質問 B", expected: "範囲の外であることを伝える" },
     { question: "質問 C", expected: "必要な条件を確かめてから答える" },
   ],
-  notices: ["データ問い合わせ（NL2SQL）の候補を取得できません。"],
+  notices: [
+    "データ問い合わせ（NL2SQL）の候補を取得できません。",
+    "出力の項目を 2 件入れました。回答を文だけで返す業務なら、「出力の項目」から外してください。",
+  ],
 };
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -51,7 +59,11 @@ for (const viewport of [
     await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveValue("Agent B");
     await expect(page.getByLabel("指示")).toHaveValue(SUGGESTION.instructions);
     await expect(page.getByTestId("agent-skill-picker")).toContainText("選択 1 件");
+    const outputFields = page.getByTestId("agent-output-fields");
+    await expect(outputFields.getByRole("textbox", { name: "表示名" }).first()).toHaveValue("項目");
+    await expect(outputFields.getByRole("textbox", { name: "key" }).nth(1)).toHaveValue("amount");
     await expect(page.getByTestId("agent-draft-notices")).toContainText("NL2SQL");
+    await expect(page.getByTestId("agent-draft-notices")).toContainText("出力の項目を 2 件入れました");
     const cases = page.getByTestId("agent-draft-cases");
     await expect(page.getByRole("heading", { name: "評価の問い（3 件）" })).toBeVisible();
     await expect(cases).toContainText("質問 A");
@@ -64,6 +76,7 @@ for (const viewport of [
     const created = mockApi.state.agents.find((agent) => agent.name === "Agent B");
     expect(created?.skill_ids).toEqual(["business-rag-research"]);
     expect(created?.data_scopes).toEqual(SUGGESTION.data_scopes);
+    expect(created?.output_fields).toEqual(SUGGESTION.output_fields);
     const evaluationSet = mockApi.lastRequest("POST", "/api/evaluation-sets")?.body as
       | { agent_id: string; name: string; cases: { question: string }[] }
       | undefined;
