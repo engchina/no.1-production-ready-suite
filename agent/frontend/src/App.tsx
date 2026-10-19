@@ -259,6 +259,7 @@ const CAPABILITY_REQUIREMENTS: Record<keyof AgentCapabilities, I18nKey> = {
   operateRuns: "capability.operateRuns",
   decideApprovals: "capability.decideApprovals",
   viewAudit: "capability.viewAudit",
+  buildAgents: "capability.buildAgents",
   admin: "capability.admin",
 };
 

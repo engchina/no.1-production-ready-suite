@@ -36,6 +36,8 @@ import { useEditorRoute } from "@/lib/editor-route";
 import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { AgentEditorView } from "@/pages/agents/AgentEditorView";
+import { AgentSharingSection } from "@/components/agents/AgentSharingSection";
+import { useAuth } from "@/components/security/AuthProvider";
 import { formatDate } from "@/pages/shared/page-helpers";
 import { actorDisplayName } from "@/pages/shared/user-names";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
@@ -45,8 +47,12 @@ export function AgentsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const editor = useEditorRoute();
-  // 業務 Agent の変更は Agent 管理の権限（admin）だけ。それ以外は閲覧だけにする（#215）。
-  const { admin: canManage } = useCapabilities();
+  // 業務 Agent の変更は Agent 管理の権限（admin）と、個人の業務 Agent の持ち主だけ。それ以外は閲覧だけ
+  // にする（#215・#2523）。作成は Agent 管理か、自分の業務 Agent の作成の権限。
+  const { admin: canManage, buildAgents: canCreate } = useCapabilities();
+  const { user } = useAuth();
+  const managesAgent = (agent: AgentProfile) =>
+    canManage || (canCreate && Boolean(agent.owner_user_uuid) && agent.owner_user_uuid === user?.user_uuid);
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const skills = useQuery({ queryKey: ["skills"], queryFn: agentApi.listSkills });
   // 組み込み Runtime で選べるモデル（システム設定 > モデル の登録モデル。#754）。
@@ -82,7 +88,7 @@ export function AgentsPage() {
 
   // 一覧の行と詳細（エディタの概要）で同じ定義を使う（UX 契約 buttons.md §5.1）。
   const agentActions = (agent: AgentProfile): EntityAction[] =>
-    canManage
+    managesAgent(agent)
       ? [
           {
             // 下書きを版として公開する（#770）。公開していない変更があるときだけ出す。
@@ -108,7 +114,7 @@ export function AgentsPage() {
   const [agentQuery, setAgentQuery] = useListSearch("agents");
   const visibleAgents = agentList.filter((agent) => matchesSearch(agentQuery, [agent.name, agent.id, agent.description]));
   // 作成できない利用者が `?id=new` を開いたら一覧を出す。
-  const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
+  const target = !canCreate && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
 
   if (target.kind === "list") {
     return (
@@ -118,7 +124,7 @@ export function AgentsPage() {
           title={t("nav.agents")}
           subtitle={t("page.agents.subtitle")}
           actions={
-            canManage
+            canCreate
               ? [{ id: "create", kind: "primary", label: t("agent.create"), icon: Plus, onClick: editor.openNew }]
               : []
           }
@@ -154,9 +160,9 @@ export function AgentsPage() {
                   ) : (
                     <EmptyState
                       title={t("agent.empty.title")}
-                      hint={canManage ? t("agent.empty.hint") : t("agent.empty.restrictedHint")}
+                      hint={canCreate ? t("agent.empty.hint") : t("agent.empty.restrictedHint")}
                       action={
-                        canManage ? (
+                        canCreate ? (
                           <Button variant="secondary" icon={Plus} onClick={editor.openNew}>
                             {t("agent.createFirst")}
                           </Button>
@@ -201,7 +207,17 @@ export function AgentsPage() {
       defaultModelId={runtimeStatus.data?.model_id ?? ""}
       modelsLoading={runtimeStatus.isLoading}
       actions={agent ? agentActions(agent) : []}
-      readOnly={!canManage}
+      readOnly={agent ? !managesAgent(agent) : !canCreate}
+      sharing={
+        agent?.owner_user_uuid ? (
+          <AgentSharingSection
+            agent={agent}
+            // 持ち主は申請、Agent 管理は承認・却下（Agent 管理が自分の個人の Agent を開いたときも承認の側）。
+            mode={canManage ? "admin" : "owner"}
+            ownerName={agents.data?.owner_display_names?.[agent.owner_user_uuid] ?? t("agent.share.ownerMissing")}
+          />
+        ) : null
+      }
       onBack={() => editor.backToList()}
       onCreated={(created) => editor.openItem(created.id, { replace: true })}
     />
@@ -210,11 +226,36 @@ export function AgentsPage() {
 
 /** 公開の状態（公開中 vN / 未公開 / 公開していない変更あり。#770）。 */
 export function AgentVersionBadges({ agent }: { agent: AgentProfile }) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <AgentOwnershipBadges agent={agent} />
+      <AgentPublishBadges agent={agent} />
+    </span>
+  );
+}
+
+/** 個人の業務 Agent と共有の申請の状態（#2523）。組織の業務 Agent には何も出さない。 */
+function AgentOwnershipBadges({ agent }: { agent: AgentProfile }) {
+  if (!agent.owner_user_uuid) return null;
+  const request = agent.share_request;
+  return (
+    <>
+      <StatusBadge variant="neutral" label={t("agent.share.personalBadge")} icon={false} />
+      {request?.status === "requested" ? (
+        <StatusBadge variant="info" label={t("agent.share.requestedBadge")} />
+      ) : request?.status === "rejected" ? (
+        <StatusBadge variant="warning" label={t("agent.share.rejectedBadge")} />
+      ) : null}
+    </>
+  );
+}
+
+function AgentPublishBadges({ agent }: { agent: AgentProfile }) {
   if (agent.published_version === null) {
     return <StatusBadge variant="warning" label={t("agent.version.unpublished")} />;
   }
   return (
-    <span className="inline-flex flex-wrap items-center gap-1">
+    <>
       <StatusBadge
         variant="success"
         label={t("agent.version.publishedBadge", { version: agent.published_version })}
@@ -230,7 +271,7 @@ export function AgentVersionBadges({ agent }: { agent: AgentProfile }) {
       {agent.skill_policy === "latest" ? (
         <StatusBadge variant="info" label={t("agent.version.latestBadge")} icon={false} />
       ) : null}
-    </span>
+    </>
   );
 }
 

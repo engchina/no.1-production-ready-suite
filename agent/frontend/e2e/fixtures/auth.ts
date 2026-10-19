@@ -40,6 +40,7 @@ export const CAPABILITY_PERMISSION_CODES = [
   "agent.audit.view",
   "agent.runs.operate",
   "agent.approvals.decide",
+  "agent.agents.build",
   "agent.admin",
 ] as const;
 
@@ -133,6 +134,14 @@ export const PERMISSION_CATALOG: Json[] = [
     label: "承認の判断",
     description: "利用できる業務 Agent の実行の承認・却下ができます（実行履歴の参照を含みます）。",
     implies: ["menu.approvals"],
+  },
+  {
+    code: "agent.agents.build",
+    group: MANAGE_GROUP,
+    label: "自分の業務 Agent の作成",
+    description:
+      "自分の業務 Agent を作り、試し、公開して自分で使えます。ほかの業務 Agent・スキル・設定は変えられません。部署などに共有するには、Agent 管理の承認を申請します（業務 Agent の実行と品質評価を含みます）。",
+    implies: ["menu.agents", "menu.evaluation", "agent.runs.operate"],
   },
   {
     code: "agent.admin",

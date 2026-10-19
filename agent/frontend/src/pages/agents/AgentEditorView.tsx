@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { FlaskConical, Rocket, RotateCcw, Save } from "lucide-react";
@@ -129,6 +129,7 @@ export function AgentEditorView({
   modelsLoading,
   actions,
   readOnly,
+  sharing,
   onBack,
   onCreated,
 }: {
@@ -145,6 +146,8 @@ export function AgentEditorView({
   actions: EntityAction[];
   /** 変更の権限がない利用者は閲覧だけ（保存を出さず、入力を無効にする）。 */
   readOnly: boolean;
+  /** 個人の業務 Agent の共有（申請・承認。#2523）。概要の下に出す。 */
+  sharing?: ReactNode;
   onBack: () => void;
   onCreated: (agent: AgentProfile) => void;
 }) {
@@ -627,6 +630,7 @@ export function AgentEditorView({
             ) : null}
           </Section>
         ) : null}
+        {sharing}
         {/* 保存の対象（基本・スキル・データの範囲）を包み、確定の行はこの中だけで画面の下端に貼り付く（#1786）。 */}
         <div className="min-w-0 space-y-6">
           <fieldset disabled={readOnly} className="min-w-0 space-y-6">

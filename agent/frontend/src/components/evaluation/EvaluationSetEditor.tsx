@@ -365,7 +365,7 @@ export function EvaluationSetEditor({
   const setAgent = agents.find((agent) => agent.id === draft.agentId);
   const agentName = setAgent?.name ?? draft.agentId;
   const evaluatedAgent = agents.find((agent) => agent.id === (evaluatedAgentId ?? draft.agentId)) ?? setAgent;
-  const canEvaluateDraft = useCanEvaluateDraft();
+  const canEvaluateDraft = useCanEvaluateDraft(evaluatedAgent);
   const version = usableEvaluationTarget(evaluatedAgent, versionChoice, canEvaluateDraft);
 
   return (
