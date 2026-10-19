@@ -43,8 +43,8 @@ export function CitationSourceSheet({
 }
 
 /**
- * 原文のプレビュー（Office 原本は変換済みの PDF。要素の表示領域を要素ごとに強調する。#349）。強調の計算は Agent の
- * 根拠のパネルと同じ共通の `evidencePreviewFocus`（#2389）。
+ * 原文のプレビュー（Office 原本は変換済みの PDF。要素の表示領域を要素ごとに強調する。#349。テキストの原本は抜粋の
+ * 箇所を強調する。#2512）。強調の計算は Agent の根拠のパネルと同じ共通の `evidencePreviewFocus`（#2389）。
  */
 function CitationSourcePreview({ chunk, open }: { chunk: RetrievedChunk; open: boolean }) {
   const previewFileName = chunk.file_name ?? chunk.document_id;
@@ -70,6 +70,8 @@ function CitationSourcePreview({ chunk, open }: { chunk: RetrievedChunk; open: b
       focusBboxUnit={focus.focusBboxUnit}
       focusPageSize={focus.focusPageSize}
       highlights={focus.highlights}
+      // テキストの原本は、根拠の抜粋の箇所へ移って強調する（#2512）。
+      focusText={chunk.text}
       className="min-h-0 flex-1"
     />
   );

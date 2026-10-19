@@ -95,6 +95,53 @@ describe("DocumentPreview", () => {
     expect(noDownload.textContent).toContain("このファイル形式はプレビューに対応していません。");
   });
 
+  it("テキストは引用した箇所を強調し、本文の領域の中だけをその位置へスクロールする。見つからなければ先頭のまま（#2512）", async () => {
+    const lines = Array.from({ length: 40 }, (_, index) => `合成の行 ${index + 1} の内容。`);
+    const body = lines.join("\n");
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(
+        <DocumentPreview
+          kind="text"
+          fileName="a.txt"
+          loadText={() => Promise.resolve(body)}
+          textKey="a"
+          focusText={"合成の行 30 の内容。\n合成の行 31 の内容。"}
+        />,
+      );
+    });
+    const region = host.querySelector<HTMLElement>('[data-testid="preview-text"]')!;
+    expect(region.getAttribute("role")).toBe("region");
+    expect(region.getAttribute("aria-label")).toBe("a.txt のプレビュー");
+    expect(region.tabIndex).toBe(0);
+    expect(host.querySelector('[data-testid="preview-text-quote"]')?.textContent).toBe(
+      "合成の行 30 の内容。\n合成の行 31 の内容",
+    );
+    expect(region.textContent).toBe(body);
+    const status = host.querySelector('[data-testid="preview-text-highlight"]')!;
+    expect(status.querySelector('[role="status"]')?.textContent).toBe("引用した箇所を強調しています");
+    expect(status.querySelector("button")?.textContent).toContain("強調した位置へ移動");
+
+    await act(async () => {
+      root.render(
+        <DocumentPreview
+          kind="text"
+          fileName="a.txt"
+          loadText={() => Promise.resolve(body)}
+          textKey="b"
+          focusText="本文に無い合成の文章です。"
+        />,
+      );
+    });
+    expect(host.querySelector('[data-testid="preview-text-quote"]')).toBeNull();
+    expect(host.querySelector('[data-testid="preview-text-highlight"]')).toBeNull();
+    expect(host.querySelector<HTMLElement>('[data-testid="preview-text"]')?.scrollTop).toBe(0);
+    act(() => root.unmount());
+    host.remove();
+  });
+
   it("文言は上書きできる", () => {
     const host = html(
       <DocumentPreview

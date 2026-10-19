@@ -30,6 +30,7 @@ export function RagSourcePreview({
   documentId,
   chunkId,
   fileName,
+  quote = null,
   open,
 }: {
   runId: string;
@@ -37,6 +38,8 @@ export function RagSourcePreview({
   chunkId: string;
   /** 根拠の文書名（プレビューを取るまでの見出しと読み上げ）。 */
   fileName: string;
+  /** 根拠の抜粋。テキストの原文では、その箇所へ移って強調する（#2512）。 */
+  quote?: string | null;
   /** パネルが開いているか（閉じている間は取らない・取り直さない）。 */
   open: boolean;
 }) {
@@ -94,6 +97,7 @@ export function RagSourcePreview({
       loadText={loadText}
       // 期限の前に取り直しても、本文は読み直さない（同じ根拠の同じ本文）。
       textKey={`${documentId}:${chunkId}`}
+      focusText={quote}
       unsupportedMessage={t("evidence.previewUnsupported")}
       downloadUrl={`${data.content_url}?disposition=attachment`}
       focusPage={focus.focusPage}

@@ -523,6 +523,80 @@ test("原文を出せない根拠は理由と再試行を出し、本文の資�
   await expect(preview.locator("pre")).toHaveText('{"合成": "本文"}');
 });
 
+// #2512: 抜粋の長い根拠で「抜粋と頁・章節」を開いても、原文のプレビューを画面の外へ押し出さない。抜粋は要約の中の
+// 高さに上限のある領域でスクロールし（Tab で届き、下端のフェードで続きを示す）、テキストの原文は引用した箇所へ
+// 移って強調する。内容はすべて合成のデータ。
+const LONG_LINES = Array.from({ length: 80 }, (_, index) => `合成の項目 ${index + 1} の本文です。`);
+const LONG_DOCUMENT = [
+  "{",
+  '  "items": [',
+  ...LONG_LINES.map((line, index) => `    { "id": ${index + 1}, "text": "${line}" },`),
+  "  ]",
+  "}",
+].join("\n");
+const LONG_EXCERPT = LONG_LINES.slice(49, 79).join("\n");
+
+for (const viewport of VIEWPORTS) {
+  test(`抜粋の長い根拠を開いてもプレビューは画面に残り、テキストの原文は引用の箇所を強調する (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    seedRun(mockApi, LONG_EXCERPT);
+    await serveSourcePreviews(page, LONG_DOCUMENT);
+    mockApi.state.sourcePreviews[CHUNK_A] = {
+      kind: "text",
+      file_name: "合成の文書.json",
+      pages: [],
+      page_url_template: null,
+      highlight_metadata: {},
+    };
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await openThread(page);
+    await page.getByTestId(`chat-turn-${RUN_ID}`).getByTestId("answer-citation-link").first().click();
+    const sheet = page.getByRole("dialog", { name: "回答の根拠" });
+    const summary = sheet.getByTestId("evidence-source-summary");
+    const toggle = summary.getByTestId("evidence-excerpt-toggle");
+    await toggle.click();
+    const scroll = summary.getByRole("region", { name: "抜粋と頁・章節" });
+    await expect(scroll.getByTestId("citation-text")).toContainText(LONG_LINES[49]);
+    // 抜粋は上限の高さの中でスクロールし、続きがあることを下端のフェードで示す。
+    await expect(scroll).toHaveAttribute("data-overflowing", "true");
+    await expect(scroll.getByTestId("evidence-excerpt-fade")).toHaveCSS("opacity", "1");
+    const scrollBox = (await scroll.boundingBox())!;
+    expect(scrollBox.height).toBeLessThanOrEqual(viewport.height * 0.3);
+    // プレビューは押し出されず、画面の中に十分な高さで残る。
+    const preview = sheet.getByTestId("evidence-source-preview");
+    const previewBox = (await preview.boundingBox())!;
+    expect(previewBox.y + previewBox.height / 2).toBeLessThanOrEqual(viewport.height);
+    expect(viewport.height - previewBox.y).toBeGreaterThanOrEqual(viewport.height * 0.35);
+    // テキストの原文は、引用した箇所（抜粋の 50 行目から）へ移って強調する。
+    const text = preview.getByRole("region", { name: "合成の文書.json のプレビュー" });
+    const quote = text.getByTestId("preview-text-quote");
+    await expect(quote).toContainText(LONG_LINES[49]);
+    await expect(quote).toContainText(LONG_LINES[78].replace("。", ""));
+    await expect(quote).not.toContainText(LONG_LINES[79]);
+    await expect(preview.getByTestId("preview-text-highlight")).toContainText("引用した箇所を強調しています");
+    await expect.poll(() => text.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    const textBox = (await text.boundingBox())!;
+    const quoteBox = (await quote.boundingBox())!;
+    expect(quoteBox.y).toBeGreaterThanOrEqual(textBox.y - 1);
+    expect(quoteBox.y).toBeLessThan(textBox.y + textBox.height);
+    await page.screenshot({ path: testInfo.outputPath(`agent-long-excerpt-${viewport.name}.png`) });
+    // 抜粋の領域は Tab で届き、キーボードで最後まで読める（読み終えるとフェードを消す）。
+    await toggle.focus();
+    await page.keyboard.press("Tab");
+    await expect(scroll).toBeFocused();
+    await page.keyboard.press("End");
+    await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await expect(scroll.getByTestId("evidence-excerpt-fade")).toHaveCSS("opacity", "0");
+    // 本文の外へ移したあとも、「強調した位置へ移動」で引用の箇所へ戻れる。
+    await text.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await preview.getByRole("button", { name: "強調した位置へ移動" }).click();
+    await expect.poll(() => text.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
 test("前の RAG のツールの呼び出しの根拠も、原文のプレビューを開ける", async ({ page, mockApi }) => {
   // 成果物「検索の根拠」は rag_search の結果（根拠 A）だけを持ち、前の rag_retrieve_evidence の根拠 C は
   // step の出力にだけある。画面の根拠の一覧と同じ集合で確かめるので、C も開ける（#2427）。
