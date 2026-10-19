@@ -266,6 +266,8 @@ def _form_sheet(value: str = "値 A") -> bytes:
                         value="値 B",
                         label_cell="H3:I3",
                         value_cell="J3:N3",
+                        value_original="■値 B □値 C",
+                        shape_cells=["J3:N3"],
                     ),
                 ],
             )
@@ -293,6 +295,14 @@ def test_form_fields_round_trip_as_records_with_cells() -> None:
     assert first.metadata["sheet_table_index"] == 1
     assert first.metadata["sheet_region"] == "B1:N3"
     assert first.metadata[STRUCTURED_RECORD_ID_KEY] == "sheet-000-r3-B"
+    # 選択の記号を読む前の原文と、図形の文字を置いたセル範囲（#2526）。
+    assert "form_value_original" not in first.metadata
+    assert "sheet_shape_cells" not in first.metadata
+    assert (fields[1].value_original, fields[1].shape_cells) == ("■値 B □値 C", ["J3:N3"])
+    assert fields[0].shape_cells is None
+    second = extraction.elements[1]
+    assert second.metadata["form_value_original"] == "■値 B □値 C"
+    assert second.metadata["sheet_shape_cells"] == "J3:N3"
 
 
 def test_oversized_form_field_is_rejected_and_csv_cannot_have_form_fields() -> None:

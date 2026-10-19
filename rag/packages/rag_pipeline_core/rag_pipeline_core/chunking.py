@@ -511,6 +511,9 @@ _STRUCTURED_RECORD_METADATA_KEYS: tuple[str, ...] = (
     "sheet_region",
     "form_label_cell",
     "form_value_cell",
+    # 選択の記号を読む前の帳票の値・図形の文字を置いたセル範囲(#2526)。
+    "form_value_original",
+    "sheet_shape_cells",
     "record_kind",
     # Word の記録(前処理 word_to_jsonl): 本文の順の位置・表の番号・大きい節を分けた部分。
     "word_location_basis",
