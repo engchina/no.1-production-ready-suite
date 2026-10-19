@@ -79,6 +79,7 @@ from app.mcp.profile_scope import (
     within_profile_scope,
 )
 from app.rag.answer_engine import CATALOG_ARTICLE_ROLE, AnswerScope
+from app.rag.answer_failure import ANSWER_API_FAILED_ERROR_CODE, describe_answer_api_failure
 from app.rag.answer_validation import (
     MAX_ANSWER_TRACE_IDS,
     MAX_DATA_RESULTS,
@@ -3369,6 +3370,33 @@ async def profile_not_found_error(search_answer_profile_id: str) -> McpToolError
     return McpToolError(SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE, message, status=404, details=details)
 
 
+async def _run_search(request: SearchRequest, **options: Any) -> SearchResponse:
+    """検索・回答の pipeline を実行し、AI の API の失敗を種類つきのツールのエラーにする（#2475）。
+
+    汎用の内部エラー（`MCP_TOOL_INTERNAL_ERROR`）にすると、呼び出し元（業務 Agent）が検索の失敗を
+    「資料に根拠が無い」と区別できない。エラーには種類・HTTP status・工程・例外の型だけを入れ、
+    質問・文書・呼び先の応答の本文は入れない（ログも同じ項目だけ）。
+    """
+    try:
+        return await search_route._run_search_with_timeout(request, **options)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        failure = describe_answer_api_failure(exc)
+        if failure is None:
+            raise
+        logger.warning(
+            "rag_mcp_answer_api_failed",
+            extra={"error_code": ANSWER_API_FAILED_ERROR_CODE, **failure.details()},
+        )
+        raise McpToolError(
+            ANSWER_API_FAILED_ERROR_CODE,
+            failure.message,
+            status=failure.status,
+            details=failure.details(),
+        ) from exc
+
+
 def _is_profile_not_found(exc: HTTPException) -> bool:
     """検索の解決（`search_route._resolve_query_context`）の、プロファイルが無い 404 か。"""
     return (
@@ -3569,7 +3597,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         if isinstance(rule, SearchOutput):
             return rule
         request, scope = rule
-        result = await search_route._run_search_with_timeout(request, scope=scope)
+        result = await _run_search(request, scope=scope)
         citations = await _with_extraction_recipe_ids(None, list(result.citations))
         result = result.model_copy(update={"citations": citations})
         returned = mcp_evidence_order(citations, arguments.evidence_limit)
@@ -3623,7 +3651,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         # 検索の画面と同じく質問の理解・拡張・検索・rerank まで行い、回答（CRAG・生成）は作らない。
         request = _search_request(arguments).model_copy(update={"generate_answer": False})
         enforce_rate_limit("search", http_request)
-        result = await search_route._run_search_with_timeout(request)
+        result = await _run_search(request)
         limit = retrieve_evidence_limit(arguments)
         # 検索で当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。
         # 条の目録で選んだ条とそのために足した親の chunk(#2254・#2261)は、上限に数えず後ろに足す

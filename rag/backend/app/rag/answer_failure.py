@@ -6,6 +6,8 @@
   `status=incomplete`）で終わった失敗は、理由ごとの文（出力の上限・安全の判定）と直し方を返す。
   送り直し（上限を広げる・推論の量を下げる）は adapter が済ませている。
 - それ以外の予期しない例外は、定型文（``fallback``）のまま返す（内部の文を利用者に出さない）。
+- MCP のツール（`rag_search` など）では、AI の API の失敗を種類つきのツールのエラーにする
+  （``describe_answer_api_failure``。#2475）。呼び出し元が検索の失敗を根拠の不足と区別するため。
 
 どちらも「詳細」（messaging.md §10.3）に出す項目（エラーの種類・失敗した工程・未完了の理由・
 上限と token）を持つ。trace_id は呼び出し側が持つので、ここでは扱わない。
@@ -13,10 +15,12 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from pr_backend_core.bounded_calls import KIND_LABELS, ErrorKind, classify_error
 from pr_backend_core.logging import safe_error_code
 from rag_engine.adapters.oci import IncompleteResponse
 
@@ -115,4 +119,101 @@ def describe_answer_failure(exc: BaseException, fallback: str) -> AnswerFailure:
         error_type=type(exc).__name__,
         stage=stage,
         error_code=str(code) if code is not None else None,
+    )
+
+
+# 回答の pipeline の中で AI の API（LLM・Embedding・Rerank）の呼び出しが失敗したときの、MCP の
+# ツールのエラー（#2475）。検索を終えられなかったことを、呼び出し元（業務 Agent）が「資料に根拠が
+# 無い」と区別できるように、汎用の内部エラーにせず、種類つきの 5xx で返す。
+ANSWER_API_FAILED_ERROR_CODE = "RAG_ANSWER_AI_API_FAILED"
+# 呼び先の SDK・HTTP の例外の module（この例外が原因の連鎖にあれば AI の API の失敗とみなす）。
+_API_EXCEPTION_MODULES = ("openai", "httpx", "httpcore", "oci")
+# 呼び先が返した error code として残す値の形（本文・識別子を残さない）。
+_SAFE_PROVIDER_CODE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+# 種類ごとの HTTP status（呼び先の失敗なので 5xx。時間切れは 504、流量・一時的な不可用は 503）。
+_KIND_STATUS: dict[ErrorKind, int] = {
+    ErrorKind.RATE_LIMITED: 503,
+    ErrorKind.QUOTA_EXHAUSTED: 503,
+    ErrorKind.UNAVAILABLE: 503,
+    ErrorKind.TIMEOUT: 504,
+}
+# 待てば直る見込みの種類（それ以外は設定・入力を確かめる案内にする）。
+_TRANSIENT_KINDS = frozenset(
+    {
+        ErrorKind.RATE_LIMITED,
+        ErrorKind.UNAVAILABLE,
+        ErrorKind.SERVER_ERROR,
+        ErrorKind.NETWORK,
+        ErrorKind.TIMEOUT,
+        ErrorKind.UNKNOWN,
+    }
+)
+
+
+@dataclass(frozen=True)
+class AnswerApiFailure:
+    """AI の API の失敗の、利用者向けの文と安全な分類。
+
+    質問・文書・呼び先の応答の本文・資格情報は持たない。
+    """
+
+    kind: str
+    status: int
+    message: str
+    # 呼び先の例外の型（`APIError` など）と、呼び先が返した error code（形が安全なときだけ）。
+    error_type: str
+    provider_status: int | None = None
+    provider_code: str | None = None
+    # 例外で終わった回答の工程の名前。
+    stage: str | None = None
+
+    def details(self) -> dict[str, Any]:
+        """MCP のツールのエラーの `details`（値の無いものは入れない）。"""
+        fields: dict[str, Any] = {"kind": self.kind, "error_type": self.error_type}
+        for key in ("provider_status", "provider_code", "stage"):
+            if (value := getattr(self, key)) is not None:
+                fields[key] = value
+        return fields
+
+
+def describe_answer_api_failure(exc: BaseException) -> AnswerApiFailure | None:
+    """回答の pipeline の例外が AI の API の失敗なら、その分類（そうでなければ None）。
+
+    原因の連鎖（`AnswerExecutionError` が包んだ例外）に SDK・HTTP の例外があるときだけ分類する。
+    未完了の応答（`IncompleteResponse`）は別の文で返すので対象にしない。
+    """
+    if find_incomplete_response(exc) is not None:
+        return None
+    api_error = next(
+        (
+            item
+            for item in _causes(exc)
+            if type(item).__module__.split(".", 1)[0] in _API_EXCEPTION_MODULES
+        ),
+        None,
+    )
+    if api_error is None:
+        return None
+    classified = classify_error(exc)
+    kind = classified.kind
+    label = KIND_LABELS.get(kind, KIND_LABELS[ErrorKind.UNKNOWN])
+    advice = (
+        "時間をおいて再試行してください。"
+        if kind in _TRANSIENT_KINDS
+        else "続くときは管理者に AI の API の設定を確かめてもらってください。"
+    )
+    provider_code = getattr(api_error, "code", None)
+    return AnswerApiFailure(
+        kind=kind.value,
+        status=_KIND_STATUS.get(kind, 502),
+        message=(
+            "回答の作成中に AI の API の呼び出しに失敗したため、検索を終えられませんでした"
+            f"（{label}）。{advice}"
+        ),
+        error_type=type(api_error).__name__,
+        provider_status=classified.status,
+        provider_code=provider_code
+        if isinstance(provider_code, str) and _SAFE_PROVIDER_CODE.match(provider_code)
+        else None,
+        stage=failed_stage(exc),
     )

@@ -1463,7 +1463,10 @@ def test_unanswerable_data_query_is_passed_to_the_final_validation() -> None:
 def test_confirmation_right_after_a_tool_error_is_sent_back(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """ツールがエラーで失敗した直後の確認は中断せず、失敗を伝えて終えさせる（#2234）。"""
+    """ツールがエラーで失敗した直後の確認は中断せず、失敗を伝えて終えさせる（#2234）。
+
+    根拠・データのツールが 1 つも結果を返さずに終えた Run は、失敗にする（#2475）。
+    """
     mcp.outputs["nl2sql_query"] = RuntimeError("呼び先の LLM が時間内に応答しませんでした。")
     query = {"question": GOAL, "profile_id": PROFILE}
     model = _script(
@@ -1476,7 +1479,9 @@ def test_confirmation_right_after_a_tool_error_is_sent_back(
     seen = _tool_output(model, 2, "call-ask")
     assert seen["status"] == "tool_failed"
     assert seen["instruction"] == TOOL_FAILED_INSTRUCTION
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.FAILED
+    assert run.events[-1].payload["error_code"] == "runtime.grounding_tool_failed"
+    assert "nl2sql_query" in run.events[-1].message
     assert run.confirmations == []
 
 

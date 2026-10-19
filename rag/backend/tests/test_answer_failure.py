@@ -24,6 +24,7 @@ from app.main import app
 from app.rag.answer_failure import (
     ANSWER_INCOMPLETE_ERROR_CODE,
     ANSWER_INCOMPLETE_ERROR_TYPE,
+    describe_answer_api_failure,
     describe_answer_failure,
 )
 from app.rag.evaluation import EVALUATION_CASE_ERROR_MESSAGE, EvaluationRunner
@@ -198,3 +199,53 @@ async def test_evaluation_case_error_keeps_the_reason(
     else:
         assert result.error_message == EVALUATION_CASE_ERROR_MESSAGE
         assert "raw secret detail" not in str(result.model_dump(mode="json"))
+
+
+def _wrapped(cause: BaseException) -> AnswerExecutionError:
+    try:
+        raise AnswerExecutionError(str(cause), "表示") from cause
+    except AnswerExecutionError as exc:
+        return exc
+
+
+def test_api_failure_is_classified_by_kind_without_body() -> None:
+    """AI の API の失敗は種類・status・例外の型・呼び先の error code だけに分ける（#2475）。"""
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", "https://ai.invalid/v1/responses")
+    limited = openai.RateLimitError(
+        "本文の秘密",
+        response=httpx.Response(429, request=request),
+        body={"code": "rate_limit_exceeded"},
+    )
+    failure = describe_answer_api_failure(_wrapped(limited))
+    assert failure is not None
+    assert (failure.kind, failure.status, failure.provider_status) == ("rate_limited", 503, 429)
+    assert failure.details() == {
+        "kind": "rate_limited",
+        "error_type": "RateLimitError",
+        "provider_status": 429,
+        "provider_code": "rate_limit_exceeded",
+    }
+    assert "時間をおいて再試行" in failure.message
+    assert "本文の秘密" not in failure.message
+
+    timeout = describe_answer_api_failure(_wrapped(openai.APITimeoutError(request)))
+    assert timeout is not None
+    assert (timeout.kind, timeout.status) == ("timeout", 504)
+
+    # 安全でない形の error code は残さない。認証の誤りは設定を確かめる案内。
+    denied = openai.AuthenticationError(
+        "x", response=httpx.Response(401, request=request), body={"code": "bad code with spaces"}
+    )
+    auth = describe_answer_api_failure(_wrapped(denied))
+    assert auth is not None
+    assert (auth.kind, auth.status, auth.provider_code) == ("authentication", 502, None)
+    assert "管理者" in auth.message
+
+
+def test_non_api_failure_and_incomplete_response_are_not_api_failures() -> None:
+    """AI の API の例外が原因に無い失敗と未完了の応答は分類しない（別の返し方。#2475）。"""
+    assert describe_answer_api_failure(_wrapped(RuntimeError("x"))) is None
+    assert describe_answer_api_failure(_answer_failure()) is None

@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
+from copy import deepcopy
 from typing import Any
 
 import anyio
 import pytest
 from agents import Usage
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
-from mcp_support import FakeProductMcp, fake_product_mcp
+from mcp_support import DEFAULT_OUTPUTS, FakeProductMcp, McpToolError, fake_product_mcp
 from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime, tool_grounding
@@ -40,6 +41,7 @@ from app.features.agent.tools import (
     ToolDefinition,
     ToolPermissionLevel,
     ToolPolicy,
+    ToolResult,
     tool_registry,
 )
 from app.settings import get_settings
@@ -821,3 +823,116 @@ def test_retry_input_drops_the_assistant_message_and_its_reasoning() -> None:
     assert content.startswith(tool_grounding.RETRY_MESSAGE)
     assert "直前の回答（利用者には出していません）:\nこんにちは！" in content
     assert content.endswith("…")
+
+
+# 呼び先（RAG）の回答の pipeline で AI の API が失敗したときのツールのエラー（#2475）。
+_API_FAILURE = McpToolError(
+    "RAG_ANSWER_AI_API_FAILED",
+    "回答の作成中に AI の API の呼び出しに失敗したため、検索を終えられませんでした。",
+    status=502,
+    details={"kind": "unknown", "error_type": "APIError"},
+)
+_ABSENCE = "資料には該当する記載が見つかりませんでした。"
+
+
+def test_failed_search_is_a_run_failure_not_insufficient_evidence(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """検索が実行に失敗したまま答えた Run は、根拠が無いという回答にせず失敗にする（#2475）。"""
+    mcp.outputs["rag_search"] = _API_FAILURE
+    _script(
+        monkeypatch,
+        ModelStep(output=[function_call(SEARCH, {"query": "締め日"}, call_id="call-1")]),
+        ModelStep(output=[assistant_message(_ABSENCE)]),
+    )
+
+    run = _run("経費精算の締め日は？")
+
+    assert run.status == RunStatus.FAILED
+    failure = run.events[-1].payload
+    assert failure["error_code"] == tool_grounding.GROUNDING_TOOL_FAILED_CODE
+    message = run.events[-1].message
+    assert "rag_search" in message
+    assert "検索を終えられませんでした" in message
+    assert "根拠が無いという意味ではありません" in message
+    assert run_answer_text(run) != _ABSENCE
+
+
+def test_search_that_found_no_evidence_is_still_insufficient_evidence(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """検索が成功して根拠が無かった回答は、今どおり根拠の不足として出す（#2475）。"""
+    mcp.outputs["rag_search"] = {
+        **DEFAULT_OUTPUTS["rag_search"],
+        "outcome": "insufficient_evidence",
+    }
+    _script(
+        monkeypatch,
+        ModelStep(output=[function_call(SEARCH, {"query": "締め日"}, call_id="call-1")]),
+        ModelStep(output=[assistant_message(_ABSENCE)]),
+        # 業務データを引かずに資料に無いとした回答は 1 回差し戻す（#1979）。差し戻しの後も同じ回答。
+        ModelStep(output=[assistant_message(_ABSENCE)]),
+    )
+
+    run = _run("経費精算の締め日は？")
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert run_answer_text(run) == _ABSENCE
+    assert _answer_content(run)["outcome"]["value"] == "insufficient_evidence"
+
+
+def test_search_retried_after_a_failure_is_answered(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """失敗の後に検索をやり直して結果を得た Run は、今どおり回答する（#2475）。"""
+    outputs = [_API_FAILURE, deepcopy(DEFAULT_OUTPUTS["rag_search"])]
+
+    def search(_argument: Any) -> Any:
+        output = outputs.pop(0)
+        if isinstance(output, Exception):
+            raise output
+        return output
+
+    mcp.outputs["rag_search"] = search
+    _script(
+        monkeypatch,
+        ModelStep(output=[function_call(SEARCH, {"query": "締め日"}, call_id="call-1")]),
+        ModelStep(output=[function_call(SEARCH, {"query": "締め日"}, call_id="call-2")]),
+        ModelStep(output=[assistant_message("締め日は毎月 20 日です。")]),
+    )
+
+    run = _run("経費精算の締め日は？")
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert run_answer_text(run) == "締め日は毎月 20 日です。"
+
+
+def _failed_step(error_code: str, **details: Any) -> RunStep:
+    return RunStep(
+        run_id="run-1",
+        status=StepStatus.FAILED,
+        tool_call=ToolCall(name=SEARCH, arguments={}, trace_id="call-1"),
+        tool_result=ToolResult(
+            name=SEARCH, success=False, error="失敗", error_code=error_code, error_details=details
+        ),
+    )
+
+
+def test_grounding_failure_counts_only_execution_failures() -> None:
+    """呼び先で実行できなかった失敗だけを数える（呼び出し側の誤り・呼ばなかったものは数えない）。"""
+    assert tool_grounding.grounding_failure([_failed_step("mcp.tool_error", status=502)])
+    assert tool_grounding.grounding_failure([_failed_step("mcp.tool_error")])
+    assert tool_grounding.grounding_failure([_failed_step("mcp.rpc_error")])
+    assert tool_grounding.grounding_failure([_failed_step("tool.unhandled_error")])
+    # 引数・対象の誤り（4xx）は、呼び出しを直せば答えられる。
+    assert tool_grounding.grounding_failure([_failed_step("mcp.tool_error", status=404)]) is None
+    # 評価の dry-run・予算の超過は、呼び先の失敗ではない。
+    assert tool_grounding.grounding_failure([_failed_step("evaluation.dry_run")]) is None
+    assert tool_grounding.grounding_failure([_failed_step("budget_exceeded")]) is None
+    # 別の根拠のツールで結果を得ていれば、失敗にしない。
+    succeeded = _step(QUERY)
+    succeeded.tool_result = ToolResult(name=QUERY, success=True, output={})
+    assert (
+        tool_grounding.grounding_failure([_failed_step("mcp.tool_error", status=502), succeeded])
+        is None
+    )
