@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useChatAutoScroll } from "../src";
 
@@ -38,6 +38,28 @@ function Harness({ contentKey, resetKey }: { contentKey: unknown; resetKey?: unk
   );
 }
 
+/** happy-dom は大きさの変化を知らせないので、ResizeObserver を差し替えて `resize()` で呼ぶ。 */
+const resizeCallbacks = new Set<() => void>();
+class FakeResizeObserver {
+  private readonly notify: () => void;
+  constructor(callback: ResizeObserverCallback) {
+    this.notify = () => callback([], this as unknown as ResizeObserver);
+  }
+  observe() {
+    resizeCallbacks.add(this.notify);
+  }
+  unobserve() {}
+  disconnect() {
+    resizeCallbacks.delete(this.notify);
+  }
+}
+
+function resize() {
+  act(() => {
+    for (const callback of resizeCallbacks) callback();
+  });
+}
+
 function render(contentKey: unknown, resetKey?: unknown) {
   act(() => root.render(<Harness contentKey={contentKey} resetKey={resetKey} />));
 }
@@ -50,6 +72,8 @@ function userScrollTo(top: number) {
 }
 
 beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+  resizeCallbacks.clear();
   contentHeight = 1000;
   log = null;
   host = document.createElement("div");
@@ -60,6 +84,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  vi.unstubAllGlobals();
 });
 
 describe("useChatAutoScroll", () => {
@@ -96,6 +121,36 @@ describe("useChatAutoScroll", () => {
     contentHeight = 1600;
     render(3, "c1");
     expect(log!.scrollTop).toBe(1200);
+  });
+
+  it("描いた後に高さが変わっても、末尾を見ていて利用者が操作していなければ末尾に留める (#2479)", () => {
+    render(1, "c1");
+    expect(log!.scrollTop).toBe(600);
+    // フォントの読み込みなどで、内容の値は変わらずに高さだけが伸びる。
+    contentHeight = 1019;
+    resize();
+    expect(log!.scrollTop).toBe(619);
+  });
+
+  it("利用者が会話の欄を操作した後は、高さが変わっても引き戻さない (#2479)", () => {
+    render(1, "c1");
+    act(() => log!.dispatchEvent(new Event("pointerdown")));
+    contentHeight = 1300;
+    resize();
+    expect(log!.scrollTop).toBe(600);
+    // 「最新へ」・新しい内容で末尾へ動かしたら、また追う。
+    act(() => api.scrollToLatest());
+    contentHeight = 1400;
+    resize();
+    expect(log!.scrollTop).toBe(1000);
+  });
+
+  it("上を読んでいる間は、高さが変わっても引き戻さない (#2479)", () => {
+    render(1, "c1");
+    userScrollTo(100);
+    contentHeight = 1300;
+    resize();
+    expect(log!.scrollTop).toBe(100);
   });
 
   it("別の会話を開いたら、上を読んでいても末尾から読み始める", () => {
