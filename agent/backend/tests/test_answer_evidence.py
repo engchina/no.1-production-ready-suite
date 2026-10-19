@@ -20,7 +20,11 @@ from pytest import MonkeyPatch
 from test_answer_validation import AGENT_ID, ANSWER, USER_UUID, _script, mcp  # noqa: F401 - fixture
 
 from app.features.agent import builtin_runtime
-from app.features.agent.answer_evidence import ANSWER_EVIDENCE_KIND, answer_evidence
+from app.features.agent.answer_evidence import (
+    ANSWER_EVIDENCE_KIND,
+    answer_evidence,
+    passed_evidence,
+)
 from app.features.agent.answer_passages import is_lookup_note
 from app.features.agent.answer_validation import (
     UNVERIFIED_HEADING,
@@ -108,6 +112,157 @@ def test_passed_evidence_is_deduplicated_and_cited_by_ids_and_the_validation() -
     assert content["passages"] == [
         {"text": "期限は 30 日です【証拠 ID: 0f3a9c2…:7】。", "chunk_ids": [CHUNK_A]}
     ]
+
+
+ATTACHMENT = "5d1c7a2e-0000-4000-8000-00000000000a"
+SHEET_ATTACHMENT = "5d1c7a2e-0000-4000-8000-00000000000b"
+
+
+def _attachment_step(tool: str, output: dict[str, Any], *, success: bool = True) -> RunStep:
+    return RunStep(
+        run_id="run-evidence",
+        status=StepStatus.COMPLETED if success else StepStatus.FAILED,
+        tool_call=ToolCall(name=tool, arguments={}),
+        tool_result=ToolResult(name=tool, success=success, output=output),
+    )
+
+
+def test_attachment_reads_become_evidence_that_is_not_opened_as_a_rag_source() -> None:
+    """添付を読むツールの結果は根拠の項目になる（#2554）。RAG の根拠の扱いは変えない。"""
+    listing = {
+        "attachments": [
+            {
+                "attachment_id": ATTACHMENT,
+                "file_name": "manual-a.pdf",
+                "sections": [{"section_id": "s3", "title": "第 3 章", "page": 3}],
+                "sheets": [],
+            }
+        ]
+    }
+    steps = [
+        _step("rag_search", {"evidence": [_evidence(CHUNK_A)]}),
+        _attachment_step("chat_attachment_list", listing),
+        _attachment_step(
+            "chat_attachment_read_section",
+            {
+                "attachment_id": ATTACHMENT,
+                "file_name": "manual-a.pdf",
+                "section_id": "s1",
+                "title": "p.1",
+                "page": 1,
+                "content": "合成の本文。" * 500,
+                "next_offset": None,
+            },
+        ),
+        _attachment_step(
+            "chat_attachment_read_rows",
+            {
+                "attachment_id": SHEET_ATTACHMENT,
+                "file_name": "table-b.csv",
+                "sheet": "table-b",
+                "columns": ["code", "amount"],
+                "rows": [
+                    {"row_number": 1, "values": {"code": "A", "amount": 100}},
+                    {"row_number": 2, "values": {"code": "B", "amount": None}},
+                ],
+                "row_count": 2,
+                "next_start_row": None,
+            },
+        ),
+        # 一致した節の頁・見出しは、同じ Run の一覧から引く。同じ節は 1 回だけ。
+        _attachment_step(
+            "chat_attachment_find",
+            {
+                "matches": [
+                    {
+                        "attachment_id": ATTACHMENT,
+                        "file_name": "manual-a.pdf",
+                        "section_id": "s3",
+                        "sheet": None,
+                        "row_number": None,
+                        "snippet": "…費用は 1 回あたり 100 です…",
+                    },
+                    {
+                        "attachment_id": ATTACHMENT,
+                        "file_name": "manual-a.pdf",
+                        "section_id": "s1",
+                        "sheet": None,
+                        "row_number": None,
+                        "snippet": "…合成の本文…",
+                    },
+                ],
+                "truncated": False,
+            },
+        ),
+        # 失敗した呼び出しは数えない。
+        _attachment_step(
+            "chat_attachment_read_section",
+            {"attachment_id": ATTACHMENT, "section_id": "s9", "content": "x"},
+            success=False,
+        ),
+    ]
+    # モデルはファイル名の「-」を別のダッシュに書き換えることがある。
+    content = answer_evidence(steps, "費用は 100 です（出典：manual‑a.pdf p.3）。", None)
+
+    items = content["items"]
+    assert [item["chunk_id"] for item in items] == [
+        CHUNK_A,
+        f"attachment:{ATTACHMENT}:s1",
+        f"attachment:{SHEET_ATTACHMENT}:table-b:1-2",
+        f"attachment:{ATTACHMENT}:s3",
+    ]
+    attachment_items = items[1:]
+    assert {item["document_id"] for item in attachment_items} == {
+        f"attachment:{ATTACHMENT}",
+        f"attachment:{SHEET_ATTACHMENT}",
+    }
+    assert [item["chat_attachment_id"] for item in attachment_items] == [
+        ATTACHMENT,
+        SHEET_ATTACHMENT,
+        ATTACHMENT,
+    ]
+    # 回答がファイル名を書いた添付だけを「回答で引用」にする。
+    assert [item["cited"] for item in items] == [False, True, False, True]
+    assert (content["passed"], content["cited"]) == (4, 2)
+    section, rows, found = attachment_items
+    assert section["locator"] == {"page_start": 1, "page_end": 1}
+    # PDF の節の見出し「p.N」は頁と重ねない。
+    assert "section_title" not in section
+    assert section["truncated"] is True
+    assert len(section["excerpt"]) == 2_000
+    assert rows["locator"] == {"sheet_name": "table-b", "row_start": 1, "row_end": 2}
+    assert rows["excerpt"] == "code: A / amount: 100\ncode: B"
+    assert rows["content_kind"] == "sheet"
+    assert found["locator"] == {"page_start": 3, "page_end": 3}
+    assert found["section_title"] == "第 3 章"
+    # 根拠の原文・図を開く確かめ（RAG の文書）には添付を入れない。
+    assert [item["chunk_id"] for item in passed_evidence(steps)] == [CHUNK_A]
+
+
+def test_attachment_evidence_alone_is_listed_without_a_validation() -> None:
+    steps = [
+        _attachment_step(
+            "chat_attachment_find",
+            {
+                "matches": [
+                    {
+                        "attachment_id": SHEET_ATTACHMENT,
+                        "file_name": "table-b.csv",
+                        "section_id": None,
+                        "sheet": "table-b",
+                        "row_number": 4,
+                        "snippet": "code: D / amount: 400",
+                    }
+                ],
+                "truncated": False,
+            },
+        )
+    ]
+    content = answer_evidence(steps, "金額は 400 です。", None)
+    assert [item["chunk_id"] for item in content["items"]] == [
+        f"attachment:{SHEET_ATTACHMENT}:table-b:4-4"
+    ]
+    assert (content["passed"], content["cited"]) == (1, 0)
 
 
 def test_passages_join_the_validated_chunks_and_skip_unknown_ones() -> None:

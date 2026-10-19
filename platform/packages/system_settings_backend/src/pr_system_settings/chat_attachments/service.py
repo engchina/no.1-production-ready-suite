@@ -24,6 +24,7 @@ from ..auth.visibility import can_access_user_data
 from .errors import ChatAttachmentError, attachment_not_found
 from .limits import PURGE_BATCH_SIZE, ChatAttachmentLimits, chat_attachment_limits, file_too_large
 from .models import (
+    EXCEL_PARSER_VERSION,
     ChatAttachmentData,
     ChatAttachmentLimitsData,
     ChatAttachmentListData,
@@ -32,11 +33,14 @@ from .models import (
     ChatAttachmentReference,
     ParsedAttachment,
 )
-from .parsing import ImageReader, accepted_extensions, parse_attachment
+from .parsing import ImageReader, accepted_extensions, parse_attachment, parse_document
 from .store import ChatAttachmentStore
 from .tools import ChatAttachmentToolset
 
 logger = logging.getLogger(__name__)
+
+# Excel の添付を原本から解析し直せなかった（古い読み方の結果のまま使う。#2544）。
+WARNING_EXCEL_REPARSE_FAILED = "excel_reparse_failed"
 
 MAX_FILE_NAME_CHARACTERS = 400
 
@@ -326,14 +330,58 @@ class ChatAttachmentService:
     # ---- 読む ----
 
     def conversation_records(self, conversation_id: str) -> list[ChatAttachmentRecord]:
-        """会話の期限内の添付（会話の権限は製品が確かめる）。"""
-        return self.store.list_for_conversation(self.product, conversation_id, now=self._clock())
+        """会話の期限内の添付（会話の権限は製品が確かめる。古い読み方の Excel は解析し直す）。"""
+        records = self.store.list_for_conversation(self.product, conversation_id, now=self._clock())
+        return [self._refresh_excel(record)[0] for record in records]
 
     def parsed(self, attachment_id: str) -> ParsedAttachment | None:
         record = self.store.get(attachment_id)
         if record is None or record.product != self.product or record.expires_at <= self._clock():
             return None
-        return self.store.parsed(attachment_id)
+        refreshed, parsed = self._refresh_excel(record)
+        return parsed if parsed is not None else self.store.parsed(refreshed.attachment_id)
+
+    def _refresh_excel(
+        self, record: ChatAttachmentRecord
+    ) -> tuple[ChatAttachmentRecord, ParsedAttachment | None]:
+        """古い読み方で解析した Excel の添付を、保存した原本から 1 回だけ解析し直す（#2544）。
+
+        新しい結果で `PARSED_JSON` / `OUTLINE_JSON` を置き換える。解析し直せなければ古い結果のまま
+        使い、警告（`excel_reparse_failed`）を付けて返す（保存は変えないので、次に使うときに
+        もう一度試す）。Excel 以外と新しい読み方の結果は何もしない（解析の結果は None）。
+        """
+        if record.kind != "excel" or (record.outline.parser_version or 0) >= EXCEL_PARSER_VERSION:
+            return record, None
+        try:
+            content = self.store.content(record.attachment_id)
+            if content is None:
+                raise ValueError("content missing")
+            parsed = parse_document(record.file_name, content, "excel")
+        except Exception as exc:  # noqa: BLE001 - 解析し直せなくても古い結果で使い続ける
+            logger.warning(
+                "chat_attachment_excel_reparse_failed",
+                extra={
+                    "attachment_id": record.attachment_id,
+                    "parser_version": EXCEL_PARSER_VERSION,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            outline = record.outline.model_copy(
+                update={"warnings": [*record.outline.warnings, WARNING_EXCEL_REPARSE_FAILED]}
+            )
+            old = self.store.parsed(record.attachment_id)
+            return record.model_copy(update={"outline": outline}), (
+                old.model_copy(update={"warnings": [*old.warnings, WARNING_EXCEL_REPARSE_FAILED]})
+                if old is not None
+                else None
+            )
+        outline = parsed.outline()
+        self.store.update_parsed(record.attachment_id, parsed, outline)
+        logger.info(
+            "chat_attachment_excel_reparsed",
+            extra={"attachment_id": record.attachment_id, "parser_version": EXCEL_PARSER_VERSION},
+        )
+        return record.model_copy(update={"outline": outline}), parsed
 
     def toolset(self, conversation_id: str) -> ChatAttachmentToolset:
         """会話の添付を読むツール（添付が無い・無効にした製品は空。`bool(toolset)` が False）。"""

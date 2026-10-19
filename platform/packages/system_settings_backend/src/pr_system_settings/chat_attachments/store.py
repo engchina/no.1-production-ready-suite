@@ -42,6 +42,10 @@ class ChatAttachmentStore(Protocol):
 
     def content(self, attachment_id: str) -> bytes | None: ...
 
+    def update_parsed(
+        self, attachment_id: str, parsed: ParsedAttachment, outline: AttachmentOutline
+    ) -> None: ...
+
     def list_for_conversation(
         self, product: ChatAttachmentProduct, conversation_id: str, *, now: datetime
     ) -> list[ChatAttachmentRecord]: ...
@@ -102,6 +106,16 @@ class InMemoryChatAttachmentStore:
     def content(self, attachment_id: str) -> bytes | None:
         with self._lock:
             return self._content.get(attachment_id)
+
+    def update_parsed(
+        self, attachment_id: str, parsed: ParsedAttachment, outline: AttachmentOutline
+    ) -> None:
+        with self._lock:
+            record = self._records.get(attachment_id)
+            if record is None:
+                return
+            self._parsed[attachment_id] = parsed
+            self._records[attachment_id] = record.model_copy(update={"outline": outline})
 
     def _select(self, predicate: Any) -> list[ChatAttachmentRecord]:
         with self._lock:
@@ -333,6 +347,22 @@ class OracleChatAttachmentStore:
                 return None
             value = _read_lob(row[0])
         return bytes(value) if value is not None else None
+
+    def update_parsed(
+        self, attachment_id: str, parsed: ParsedAttachment, outline: AttachmentOutline
+    ) -> None:
+        """解析し直した結果で `PARSED_JSON` / `OUTLINE_JSON` を置き換える（#2544）。"""
+        with self._connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE PLATFORM_CHAT_ATTACHMENTS SET PARSED_JSON = :parsed_json, "
+                "OUTLINE_JSON = :outline_json WHERE ATTACHMENT_ID = :id",
+                {
+                    "parsed_json": parsed.model_dump_json(),
+                    "outline_json": outline.model_dump_json(),
+                    "id": attachment_id,
+                },
+            )
+            conn.commit()
 
     def _list(self, where: str, binds: dict[str, Any]) -> list[ChatAttachmentRecord]:
         with self._connection() as conn, conn.cursor() as cursor:

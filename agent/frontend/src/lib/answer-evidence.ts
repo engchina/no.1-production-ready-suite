@@ -1,4 +1,5 @@
 import { evidenceLabels, type EvidenceChip, type EvidenceListItem } from "@production-ready/ui";
+import { Paperclip } from "lucide-react";
 
 import type { Artifact } from "@/lib/api";
 import { evidenceLocation } from "@/lib/rag-evidence";
@@ -21,6 +22,8 @@ export interface AnswerEvidenceEntry {
   chunkId: string;
   /** 根拠の行の場所（頁があれば頁、無ければ節）。 */
   citationLocation: string;
+  /** 会話の添付の根拠か（#2554）。RAG の文書ではないので、原文のプレビューを開かない。 */
+  attachment: boolean;
 }
 
 export interface AnswerEvidenceMarker {
@@ -98,11 +101,18 @@ export function answerEvidenceData(content: Record<string, unknown> | null | und
     const answerUse = item.answer_use === "confirmed" || item.answer_use === "reference" ? item.answer_use : null;
     const fileName = text(item.file_name) || documentId;
     const page = pageLabel(locator);
+    // 会話の添付の根拠（backend の `chat_attachment_id` の印。#2554）。RAG のチャットの添付の根拠と同じ扱い。
+    const attachment = text(item.chat_attachment_id) !== "";
     return [
       {
         documentId,
         chunkId,
-        citationLocation: page || text(item.section_title).trim() || strings(locator?.section_path).join(" > "),
+        citationLocation:
+          page ||
+          text(item.section_title).trim() ||
+          strings(locator?.section_path).join(" > ") ||
+          (attachment ? (evidenceLocation(locator) ?? "") : ""),
+        attachment,
         item: {
           key: chunkId,
           fileName,
@@ -115,6 +125,8 @@ export function answerEvidenceData(content: Record<string, unknown> | null | und
           score: finite(item.score),
           rerankScore: finite(item.rerank_score),
           chips: chips(item),
+          tags: attachment ? [{ id: "attachment", value: t("chat.attachments.evidenceSource"), icon: Paperclip }] : [],
+          sourceUnavailable: attachment,
         },
       },
     ];
