@@ -76,6 +76,11 @@ export interface ChatLayoutProps {
   children: ReactNode;
   /** 入力欄の領域の中身（設定の行・入力欄と送信・通知）。 */
   composer: ReactNode;
+  /**
+   * スクロールするページの中に置く（例: 業務 Agent の編集画面の「試す」。#2515）。どの幅でも高さを 70dvh（最小 28rem）に
+   * 固定し、残りの高さに伸ばさない。既定はチャットの画面の全体を占める形。
+   */
+  embedded?: boolean;
   /** testid の接頭辞（RAG・Agent は `chat`、NL2SQL は `sql-chat`）。 */
   testIdPrefix?: string;
   testIds?: ChatLayoutTestIds;
@@ -87,7 +92,8 @@ export interface ChatLayoutProps {
  * - 会話の履歴: lg 以上は会話の左に `<aside>`（開くと 20rem の列、閉じている間も描いて `aria-controls` の先を保つ）、
  *   lg 未満はモーダルの `SideSheet`（会話を選ぶ・Escape・scrim・閉じるボタンで閉じ、開閉ボタンへフォーカスを戻す）。
  * - 会話の領域: 上端の行（履歴の開閉・今の会話の名前・「新しい会話」）、`role="log"` の会話の欄（中だけスクロール）、
- *   入力欄の領域の 3 段。lg 未満は高さを 70dvh（最小 28rem）にし、長い会話でページを伸ばさない。lg 以上は残りの高さ。
+ *   入力欄の領域の 3 段。lg 未満は高さを 70dvh（最小 28rem）にし、長い会話でページを伸ばさない。lg 以上は残りの高さ
+ *   （`embedded` はどの幅でも 70dvh）。
  * - 文言は翻訳済みを受け、業務の語彙を持たない。往復の表示・入力欄・履歴の中身は製品が渡す。
  */
 export function ChatLayout({
@@ -106,6 +112,7 @@ export function ChatLayout({
   latest,
   children,
   composer,
+  embedded = false,
   testIdPrefix = "chat",
   testIds,
 }: ChatLayoutProps) {
@@ -127,10 +134,12 @@ export function ChatLayout({
   return (
     <div
       className={cn(
-        "grid min-w-0 gap-4 lg:min-h-0 lg:flex-1",
+        "grid min-w-0 gap-4",
+        embedded ? "h-[70dvh] min-h-[28rem]" : "lg:min-h-0 lg:flex-1",
         history.inline && history.inlineOpen && "lg:grid-cols-[20rem_minmax(0,1fr)]"
       )}
       data-chat-layout=""
+      data-chat-layout-embedded={embedded ? "" : undefined}
     >
       {history.inline ? (
         <aside
@@ -177,7 +186,10 @@ export function ChatLayout({
       <section
         aria-label={label}
         data-testid={ids.panel}
-        className="flex h-[70dvh] min-h-[28rem] min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-sm lg:h-auto lg:min-h-0"
+        className={cn(
+          "flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-sm",
+          embedded ? "min-h-0" : "h-[70dvh] min-h-[28rem] lg:h-auto lg:min-h-0"
+        )}
       >
         {/* 上端の行: 履歴の開閉（左端）・今の会話の名前・新しい会話（右端）。履歴を閉じていても使える。 */}
         <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">

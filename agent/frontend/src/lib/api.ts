@@ -1757,9 +1757,15 @@ export const agentApi = {
       `/api/agents/${encodeURIComponent(agentId)}/versions/${version}/restore`,
       { method: "POST" },
     ),
-  listThreads: (agentId: string | undefined, page: { limit: number; offset: number }) => {
+  /** 会話の一覧。`draft` は業務 Agent の編集画面で下書きを試した会話（#2515。Agent 管理だけ）。 */
+  listThreads: (
+    agentId: string | undefined,
+    page: { limit: number; offset: number },
+    options: { draft?: boolean } = {}
+  ) => {
     const params = new URLSearchParams({ limit: String(page.limit), offset: String(page.offset) });
     if (agentId) params.set("agent_id", agentId);
+    if (options.draft) params.set("draft", "true");
     return request<ThreadsData>(`/api/threads?${params.toString()}`);
   },
   /** 会話の名前の変更（#1817。作った利用者だけ。前後の空白を除いて 1〜80 文字）。 */

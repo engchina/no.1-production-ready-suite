@@ -705,6 +705,14 @@ class ThreadNotFoundError(LookupError):
     """会話が無い・別の利用者や別の Agent の会話（#768）。"""
 
 
+class ThreadKindMismatchError(ThreadNotFoundError):
+    """下書きの会話を公開中の版で続ける・公開中の版の会話に下書きの Run を足す（#2515）。
+
+    会話は始めた Run の種類に固定する。種類の違う会話は無い会話として扱い、画面の API だけが
+    理由を返す。
+    """
+
+
 class ThreadBusyError(ValueError):
     """回答の作成中・承認待ちの Run がある会話は削除しない（#1817）。"""
 
@@ -950,6 +958,16 @@ def run_thread_owner(run: RunState) -> str | None:
 def _thread_owner(runs: Sequence[RunState]) -> str | None:
     """会話（作成順の Run）の持ち主。会話を始めた Run の持ち主（#1928）。"""
     return run_thread_owner(runs[0]) if runs else None
+
+
+def _is_draft_run(run: RunState) -> bool:
+    """下書きで実行した Run か（`metadata.agent_version` が "draft"。#770）。"""
+    return run.metadata.get("agent_version") == "draft"
+
+
+def _is_draft_thread(runs: Sequence[RunState]) -> bool:
+    """下書きの会話か（会話を始めた Run の種類。#2515）。"""
+    return bool(runs) and _is_draft_run(runs[0])
 
 
 def _thread_summary(
@@ -1225,7 +1243,12 @@ class AgentRuntimeRepositoryContract(Protocol):
         self, run_id: str, *, kind: str, name: str, content: JsonObject
     ) -> None: ...
     def list_threads(
-        self, *, user_uuid: str | None, agent_id: str | None = None, all_users: bool = False
+        self,
+        *,
+        user_uuid: str | None,
+        agent_id: str | None = None,
+        all_users: bool = False,
+        draft: bool = False,
     ) -> list[ThreadSummary]: ...
     def get_thread(
         self, thread_id: str, *, user_uuid: str | None, all_users: bool = False
@@ -2107,6 +2130,10 @@ class AgentRuntimeRepository:
                 all_users=all_users,
             )
             thread_owner = _thread_owner(thread_runs)
+            # 会話は始めた Run の種類（下書き / 公開中の版）に固定する（#2515）。版の違う回答を
+            # 1 つの会話の履歴に混ぜない。
+            if _is_draft_thread(thread_runs) != request.draft:
+                raise ThreadKindMismatchError(request.thread_id)
         run = RunState(
             id=f"run_{uuid4().hex}",
             goal=request.goal,
@@ -2330,12 +2357,18 @@ class AgentRuntimeRepository:
             self._persist_locked()
 
     def list_threads(
-        self, *, user_uuid: str | None, agent_id: str | None = None, all_users: bool = False
+        self,
+        *,
+        user_uuid: str | None,
+        agent_id: str | None = None,
+        all_users: bool = False,
+        draft: bool = False,
     ) -> list[ThreadSummary]:
         """利用者の会話の一覧（新しい順）。
 
         会話は持ち主だけが見る（`all_users`〔system_admin。#1889〕なら全員の会話）。持ち主は
         会話を始めた利用者で、system_admin が続けた Run も持ち主の会話に入る（#1928）。
+        `draft` は下書きの会話だけ、既定は公開中の版の会話だけ（#2515）。
         """
         with self._lock:
             grouped: dict[str, list[RunState]] = {}
@@ -2348,6 +2381,8 @@ class AgentRuntimeRepository:
             summaries = []
             for thread_id, runs in grouped.items():
                 runs.sort(key=lambda item: item.created_at)
+                if _is_draft_thread(runs) != draft:
+                    continue
                 owner = _thread_owner(runs)
                 if not all_users and owner != user_uuid:
                     continue

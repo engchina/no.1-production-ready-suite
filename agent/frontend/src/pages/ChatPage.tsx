@@ -51,6 +51,7 @@ import {
   ApiError,
   agentApi,
   runProgressStreamUrl,
+  type AgentProfile,
   type ApprovalRequest,
   type Artifact,
   type ClarificationKind,
@@ -127,27 +128,43 @@ function isHistoryPage(value: unknown): value is HistoryPage {
 }
 
 export function ChatPage() {
+  return <AgentChat />;
+}
+
+/** 業務 Agent の編集画面の「試す」の対象（#2515）。保存済みの下書きで実行し、下書きの会話だけを扱う。 */
+export interface AgentTryTarget {
+  agent: AgentProfile;
+  /** 送信を止める（未保存の変更・無効の業務 Agent など。理由と操作は編集画面が会話の上に出す）。 */
+  blocked?: boolean;
+}
+
+/**
+ * チャットの会話（画面と、業務 Agent の編集画面の「試す」で共通。#2515）。`tryTarget` があれば、業務 Agent の選択と
+ * 画面の見出しを出さず、その業務 Agent の下書きで実行する（会話の履歴は下書きの会話だけ。作業状態は `agentTry` に分ける）。
+ */
+export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
   const queryClient = useQueryClient();
+  const scope = tryTarget ? "agentTry" : "chat";
   const capabilities = useCapabilities();
   const { user } = useAuth();
   // 会話の履歴は既定で閉じ、チャットを全幅にする（RAG のチャットと同じ型。#664 / #889）。
   // lg 以上のインラインのパネルの開閉は作業状態に残す。lg 未満のモーダルの side sheet は残さない
   // （戻ったとき・再読込で画面を塞がない。workspace-state.md）。
   // 開閉の判定・シートの開閉は共通の useChatHistoryPanel（3 製品共通。#1161）。
-  const [historyPanelOpen, setHistoryPanelOpen] = useWorkspaceState("chat", "historyOpen", false);
+  const [historyPanelOpen, setHistoryPanelOpen] = useWorkspaceState(scope, "historyOpen", false);
   const history = useChatHistoryPanel({
     inlineOpen: historyPanelOpen,
     onInlineOpenChange: setHistoryPanelOpen,
   });
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
-  const [agentId, setAgentId] = useWorkspaceState("chat", "agentId", "", isString);
-  const [threadId, setThreadId] = useWorkspaceState<"chat", string | null>(
-    "chat",
+  const [agentId, setAgentId] = useWorkspaceState(scope, "agentId", "", isString);
+  const [threadId, setThreadId] = useWorkspaceState<typeof scope, string | null>(
+    scope,
     "threadId",
     null,
     isNullableString
   );
-  const [draft, setDraft] = useWorkspaceState("chat", "draft", "", isString);
+  const [draft, setDraft] = useWorkspaceState(scope, "draft", "", isString);
   // 実行の詳細の「会話を開く」（`?agent_id=&thread_id=`。#2343）から開いた会話。URL の会話を一度だけ選び（作業状態に
   // 残す）、URL からは外す（読み込み直しや戻るで、選び直した会話を URL の会話に戻さない）。
   const [searchParams, setSearchParams] = useSearchParams();
@@ -177,18 +194,28 @@ export function ChatPage() {
   const [sentRunIds, setSentRunIds] = useState<ReadonlySet<string>>(() => new Set());
   const rememberSentRun = (runId: string) => setSentRunIds((current) => new Set(current).add(runId));
 
-  const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
+  // 「試す」は編集中の業務 Agent だけ（一覧を取らない。公開していなくても下書きで試せる）。
+  const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents, enabled: !tryTarget });
   const usableAgents = useMemo(
     () => (agents.data?.agents ?? []).filter(isRunnableAgent),
     [agents.data]
   );
   // 選んだ Agent が使えなくなっていたら、先頭の Agent にする。
-  const selectedAgent = usableAgents.find((agent) => agent.id === agentId) ?? usableAgents[0];
+  const selectedAgent = tryTarget
+    ? tryTarget.agent
+    : (usableAgents.find((agent) => agent.id === agentId) ?? usableAgents[0]);
   const selectedAgentId = selectedAgent?.id ?? "";
+  // 「試す」で別の業務 Agent を開いたら、前の業務 Agent の会話と書きかけの質問を持ち越さない。
+  if (tryTarget && agentId !== tryTarget.agent.id) {
+    setAgentId(tryTarget.agent.id);
+    setThreadId(null);
+    setDraft("");
+  }
+  const tryBlocked = Boolean(tryTarget?.blocked);
 
   // 会話の履歴はサーバー側でページングする（3 製品共通。#1265）。ページは作業状態に残し、別の Agent に移ったら 1 ページ目から。
-  const [historyPage, setHistoryPage] = useWorkspaceState<"chat", HistoryPage>(
-    "chat",
+  const [historyPage, setHistoryPage] = useWorkspaceState<typeof scope, HistoryPage>(
+    scope,
     "historyPage",
     { agentId: "", offset: 0 },
     isHistoryPage
@@ -196,8 +223,9 @@ export function ChatPage() {
   const threadsOffset = historyPage.agentId === selectedAgentId ? historyPage.offset : 0;
   const setThreadsOffset = (offset: number) => setHistoryPage({ agentId: selectedAgentId, offset });
   const threads = useQuery({
-    queryKey: ["threads", selectedAgentId, threadsOffset],
-    queryFn: () => agentApi.listThreads(selectedAgentId, { limit: DEFAULT_PAGE_SIZE, offset: threadsOffset }),
+    queryKey: ["threads", tryTarget ? "draft" : "published", selectedAgentId, threadsOffset],
+    queryFn: () =>
+      agentApi.listThreads(selectedAgentId, { limit: DEFAULT_PAGE_SIZE, offset: threadsOffset }, { draft: Boolean(tryTarget) }),
     enabled: Boolean(selectedAgentId),
     // 次のページを取得している間は、表示中のページを出したままにする。
     placeholderData: keepPreviousData,
@@ -231,7 +259,7 @@ export function ChatPage() {
   // 無効にするのは業務 Agent の一覧の読み込み中だけ。会話の内容の読み込み中は入力欄に書ける
   // （書いている途中で無効にしてフォーカスと入力を失わせない。#1188）。
   // 会話の内容を読めなかった（一時的な失敗）ときも送信しない（内容の分からない会話に続けて送らない）。
-  const agentsLoading = agents.isLoading;
+  const agentsLoading = !tryTarget && agents.isLoading;
   const threadLoading = Boolean(threadId) && thread.isLoading;
   const threadFailed = Boolean(threadId) && thread.isError && !thread.data && !threadMissing;
   const prerequisitesLoading = agentsLoading || threadLoading;
@@ -299,6 +327,7 @@ export function ChatPage() {
         goal,
         agent_id: selectedAgentId,
         thread_id: threadId ?? undefined,
+        ...(tryTarget ? { draft: true } : {}),
         ...(clarificationCancel ? { clarification_cancel: clarificationCancel } : {}),
       }),
     onSuccess: (run, { generation }) => {
@@ -419,7 +448,7 @@ export function ChatPage() {
   });
 
   function reaskAsSelf(run: RunState) {
-    if (reask.isPending || send.isPending || prerequisitesLoading || threadFailed) return;
+    if (reask.isPending || send.isPending || prerequisitesLoading || threadFailed || tryBlocked) return;
     reask.mutate({ run, generation: viewGenerationRef.current });
   }
 
@@ -440,6 +469,7 @@ export function ChatPage() {
     if (
       !goal ||
       !selectedAgentId ||
+      tryBlocked ||
       running ||
       waitingApproval ||
       send.isPending ||
@@ -462,7 +492,7 @@ export function ChatPage() {
    */
   function cancelClarification(kind: ClarificationKind) {
     const goal = t(`chat.clarificationCancel.${kind}`);
-    if (!selectedAgentId || running || waitingApproval || send.isPending || prerequisitesLoading || threadFailed) return;
+    if (!selectedAgentId || tryBlocked || running || waitingApproval || send.isPending || prerequisitesLoading || threadFailed) return;
     setPending(createOptimisticChatMessage(goal));
     autoScroll.scrollToLatest();
     cancel.reset();
@@ -471,7 +501,7 @@ export function ChatPage() {
 
   /** 送れなかった質問を、そのままもう一度送る（#907）。 */
   function resend() {
-    if (!pending || !selectedAgentId || running || waitingApproval || send.isPending) return;
+    if (!pending || !selectedAgentId || tryBlocked || running || waitingApproval || send.isPending) return;
     setPending(withOptimisticChatStatus(pending, "sending"));
     cancel.reset();
     send.mutate({ goal: pending.content, generation: viewGenerationRef.current });
@@ -597,9 +627,176 @@ export function ChatPage() {
     />
   );
 
-  const composerBlocked = running || waitingApproval;
+  const composerBlocked = running || waitingApproval || tryBlocked;
   // 送信と停止は同じボタン。送信の要求中・回答の作成中・承認待ちは同じ位置で「停止」になる（buttons.md §3.1、#805）。
   const stoppable = send.isPending || Boolean(stoppableRun);
+
+  // 業務 Agent の読み込み中も会話の領域を描く（寸法を予約し、読み込み後に現れて押し下げない。#1153）。
+  const chatLayout =
+    agentsLoading || selectedAgentId ? (
+      // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
+      <ChatLayout
+        embedded={Boolean(tryTarget)}
+        history={history}
+        historyTitle={t("chat.threads.title")}
+        historyCloseLabel={t("chat.threads.close")}
+        historyCaption={historyWindow?.caption}
+        historyContent={historyContent}
+        historyToggleDisabled={agentsLoading}
+        label={t("chat.conversation")}
+        // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す（RAG と同じ。#664）。
+        conversationTitle={currentThreadId ? currentThreadTitle : null}
+        conversationTitleLoading={Boolean(currentThreadId)}
+        newConversation={{ label: t("chat.threads.new"), onClick: startNewThread, disabled: agentsLoading }}
+        logLabel={t("chat.messages")}
+        logRef={autoScroll.logRef}
+        latest={{
+          visible: autoScroll.showLatest,
+          label: t("chat.latest"),
+          onClick: () => autoScroll.scrollToLatest("smooth"),
+        }}
+        composer={
+          <>
+            {/* 入力欄の領域（入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。送信と停止は同じボタンで、
+                送信の要求中・回答の作成中・承認待ちは同じ位置で「停止」になる（buttons.md §3.1、#805）。
+                IME の変換を確定する Enter では送信しない（#459）。Shift+Enter は改行。
+                業務 Agent の一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
+                会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
+            <ChatComposer
+              id="chat-composer"
+              textareaRef={composerRef}
+              value={draft}
+              onValueChange={setDraft}
+              onSubmit={submit}
+              onStop={stop}
+              running={stoppable}
+              submitBlocked={composerBlocked || threadLoading || threadFailed}
+              disabled={agentsLoading}
+              label={t("chat.composer.label")}
+              placeholder={t("chat.composer.placeholder")}
+              sendLabel={t("chat.send")}
+              stopLabel={t("chat.stop")}
+              sendTestId="chat-send"
+              // system_admin が他の利用者の会話を開いているときは、送る前に持ち主にも見えることを示す（#1954）。
+              // 新しい会話・自分の会話では出さない。
+              notice={
+                user?.is_system_admin && currentThreadId && thread.data?.owned === false
+                  ? t("chat.composer.ownerSeesNotice")
+                  : undefined
+              }
+              footer={
+                <>
+                  {cancel.error ? (
+                    // 停止の失敗は入力欄の下に出す（3 製品で同じ ApiErrorBanner。#1161）。
+                    <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} testId="chat-stop-error" />
+                  ) : null}
+                </>
+              }
+            />
+          </>
+        }
+      >
+        {threadLoading && !pending ? (
+          // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する（3 製品で同じ。#1153）。
+          <TimedLoadingState label={t("chat.loading")} framed={false} testId="chat-thread-loading">
+            <ChatSkeleton />
+          </TimedLoadingState>
+        ) : agentsLoading ? (
+          // 業務 Agent の一覧の読み込み中は空の状態を出さず、会話の形の Skeleton だけを出す。
+          // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
+          <ChatSkeleton testId="chat-conversation-skeleton" />
+        ) : threadFailed ? (
+          // 会話を読めなかった（一時的な失敗）。選んだ会話のまま、理由と再試行を出す。
+          <ApiErrorBanner
+            error={thread.error}
+            fallback={t("chat.loadFailed")}
+            testId="chat-thread-error"
+            action={
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={RefreshCw}
+                loading={thread.isFetching}
+                onClick={() => void thread.refetch()}
+              >
+                {t("common.retry")}
+              </Button>
+            }
+          />
+        ) : runs.length === 0 && !pending ? (
+          <EmptyState
+            title={tryTarget ? t("agent.try.empty.title") : t("chat.empty.title")}
+            hint={tryTarget ? t("agent.try.empty.hint") : t("chat.empty.hint")}
+          />
+        ) : (
+          runs.map((run, index) => (
+            <RunChatTurn
+              key={run.id}
+              run={run}
+              // 取り消しの操作は、利用者の答えを待っている最後の回答だけに出す（送信中・実行中は押せない）。
+              latest={index === runs.length - 1 && !pending}
+              cancelDisabled={composerBlocked || send.isPending || threadLoading || threadFailed}
+              onCancelClarification={cancelClarification}
+              confirmationDisabled={
+                send.isPending ||
+                threadLoading ||
+                threadFailed ||
+                // Agent 自身の確認への答えは Run の利用者の権限で再開するので、自分の会話でも、ほかの利用者
+                // （system_admin）が送った往復には答えない（承認と同じ。backend も 404。#1928）。
+                (!runDecidable(run) && pendingConfirmation(run)?.source === "agent")
+              }
+              confirmationBusy={
+                decideConfirmation.isPending && decideConfirmation.variables?.run.id === run.id
+                  ? clarificationBusyAction(decideConfirmation.variables.action)
+                  : null
+              }
+              confirmationError={
+                decideConfirmation.variables?.run.id === run.id ? decideConfirmation.error : null
+              }
+              onDecideConfirmation={onDecideConfirmation}
+              // 入力欄に次の質問を書き始めていたら、その位置を奪わない。
+              confirmationAutoFocus={sentRunIds.has(run.id) && !draft.trim()}
+              // 持ち主以外（system_admin）が送った往復は、送った人の表示名を質問に添える（#1928）。
+              sender={
+                run.id in senderNames
+                  ? t("chat.sender", { name: senderNames[run.id] || t("chat.threads.ownerMissing") })
+                  : undefined
+              }
+              // 承認したツールは Run の利用者の権限で実行するため、自分の会話でも、ほかの利用者（system_admin）が
+              // 送った往復の承認は判断しない（backend も 404。#1928）。
+              canDecide={capabilities.decideApprovals && runDecidable(run)}
+              // 自分では操作できない待ちは、待っている相手（実行した system_admin）を出し、自分で質問し直せる（#1954）。
+              waitingFor={
+                !runDecidable(run) && WAITING_STATUSES.has(run.status)
+                  ? run.executor_display_name || senderNames[run.id] || t("chat.threads.ownerMissing")
+                  : undefined
+              }
+              onReask={capabilities.operateRuns ? () => reaskAsSelf(run) : undefined}
+              reaskBusy={reask.isPending && reask.variables?.run.id === run.id}
+              reaskDisabled={reask.isPending || send.isPending || threadLoading || threadFailed}
+              reaskError={reask.variables?.run.id === run.id ? reask.error : null}
+              // 評価は会話を読める利用者（本人と system_admin）が付け、評価した人を残す（#774・#1928）。
+              canRate={capabilities.operateRuns}
+              deciding={decide.isPending}
+              onDecide={(approval, approved) => decide.mutate({ approval, approved })}
+              onFeedbackSaved={replaceRun}
+              onProgressTerminal={refreshThread}
+            />
+          ))
+        )}
+        {pending ? (
+          <PendingTurn
+            message={pending}
+            errorMessage={send.error ? apiErrorMessage(send.error, t("chat.failedUnknown")) : null}
+            resendDisabled={composerBlocked || send.isPending}
+            onResend={resend}
+          />
+        ) : null}
+      </ChatLayout>
+    ) : null;
+
+  if (tryTarget) return chatLayout;
 
   return (
     <div className="flex min-h-full shrink-0 flex-col lg:h-full lg:min-h-0">
@@ -662,165 +859,7 @@ export function ChatPage() {
           </CardContent>
         </Card>
 
-        {/* 業務 Agent の読み込み中も会話の領域を描く（寸法を予約し、読み込み後に現れて押し下げない。#1153）。 */}
-        {agentsLoading || selectedAgentId ? (
-          // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
-          <ChatLayout
-            history={history}
-            historyTitle={t("chat.threads.title")}
-            historyCloseLabel={t("chat.threads.close")}
-            historyCaption={historyWindow?.caption}
-            historyContent={historyContent}
-            historyToggleDisabled={agentsLoading}
-            label={t("chat.conversation")}
-            // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す（RAG と同じ。#664）。
-            conversationTitle={currentThreadId ? currentThreadTitle : null}
-            conversationTitleLoading={Boolean(currentThreadId)}
-            newConversation={{ label: t("chat.threads.new"), onClick: startNewThread, disabled: agentsLoading }}
-            logLabel={t("chat.messages")}
-            logRef={autoScroll.logRef}
-            latest={{
-              visible: autoScroll.showLatest,
-              label: t("chat.latest"),
-              onClick: () => autoScroll.scrollToLatest("smooth"),
-            }}
-            composer={
-              <>
-                {/* 入力欄の領域（入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。送信と停止は同じボタンで、
-                    送信の要求中・回答の作成中・承認待ちは同じ位置で「停止」になる（buttons.md §3.1、#805）。
-                    IME の変換を確定する Enter では送信しない（#459）。Shift+Enter は改行。
-                    業務 Agent の一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
-                    会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
-                <ChatComposer
-                  id="chat-composer"
-                  textareaRef={composerRef}
-                  value={draft}
-                  onValueChange={setDraft}
-                  onSubmit={submit}
-                  onStop={stop}
-                  running={stoppable}
-                  submitBlocked={composerBlocked || threadLoading || threadFailed}
-                  disabled={agentsLoading}
-                  label={t("chat.composer.label")}
-                  placeholder={t("chat.composer.placeholder")}
-                  sendLabel={t("chat.send")}
-                  stopLabel={t("chat.stop")}
-                  sendTestId="chat-send"
-                  // system_admin が他の利用者の会話を開いているときは、送る前に持ち主にも見えることを示す（#1954）。
-                  // 新しい会話・自分の会話では出さない。
-                  notice={
-                    user?.is_system_admin && currentThreadId && thread.data?.owned === false
-                      ? t("chat.composer.ownerSeesNotice")
-                      : undefined
-                  }
-                  footer={
-                    <>
-                      {cancel.error ? (
-                        // 停止の失敗は入力欄の下に出す（3 製品で同じ ApiErrorBanner。#1161）。
-                        <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} testId="chat-stop-error" />
-                      ) : null}
-                    </>
-                  }
-                />
-              </>
-            }
-          >
-            {threadLoading && !pending ? (
-              // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する（3 製品で同じ。#1153）。
-              <TimedLoadingState label={t("chat.loading")} framed={false} testId="chat-thread-loading">
-                <ChatSkeleton />
-              </TimedLoadingState>
-            ) : agentsLoading ? (
-              // 業務 Agent の一覧の読み込み中は空の状態を出さず、会話の形の Skeleton だけを出す。
-              // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
-              <ChatSkeleton testId="chat-conversation-skeleton" />
-            ) : threadFailed ? (
-              // 会話を読めなかった（一時的な失敗）。選んだ会話のまま、理由と再試行を出す。
-              <ApiErrorBanner
-                error={thread.error}
-                fallback={t("chat.loadFailed")}
-                testId="chat-thread-error"
-                action={
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    icon={RefreshCw}
-                    loading={thread.isFetching}
-                    onClick={() => void thread.refetch()}
-                  >
-                    {t("common.retry")}
-                  </Button>
-                }
-              />
-            ) : runs.length === 0 && !pending ? (
-              <EmptyState title={t("chat.empty.title")} hint={t("chat.empty.hint")} />
-            ) : (
-              runs.map((run, index) => (
-                <RunChatTurn
-                  key={run.id}
-                  run={run}
-                  // 取り消しの操作は、利用者の答えを待っている最後の回答だけに出す（送信中・実行中は押せない）。
-                  latest={index === runs.length - 1 && !pending}
-                  cancelDisabled={composerBlocked || send.isPending || threadLoading || threadFailed}
-                  onCancelClarification={cancelClarification}
-                  confirmationDisabled={
-                    send.isPending ||
-                    threadLoading ||
-                    threadFailed ||
-                    // Agent 自身の確認への答えは Run の利用者の権限で再開するので、自分の会話でも、ほかの利用者
-                    // （system_admin）が送った往復には答えない（承認と同じ。backend も 404。#1928）。
-                    (!runDecidable(run) && pendingConfirmation(run)?.source === "agent")
-                  }
-                  confirmationBusy={
-                    decideConfirmation.isPending && decideConfirmation.variables?.run.id === run.id
-                      ? clarificationBusyAction(decideConfirmation.variables.action)
-                      : null
-                  }
-                  confirmationError={
-                    decideConfirmation.variables?.run.id === run.id ? decideConfirmation.error : null
-                  }
-                  onDecideConfirmation={onDecideConfirmation}
-                  // 入力欄に次の質問を書き始めていたら、その位置を奪わない。
-                  confirmationAutoFocus={sentRunIds.has(run.id) && !draft.trim()}
-                  // 持ち主以外（system_admin）が送った往復は、送った人の表示名を質問に添える（#1928）。
-                  sender={
-                    run.id in senderNames
-                      ? t("chat.sender", { name: senderNames[run.id] || t("chat.threads.ownerMissing") })
-                      : undefined
-                  }
-                  // 承認したツールは Run の利用者の権限で実行するため、自分の会話でも、ほかの利用者（system_admin）が
-                  // 送った往復の承認は判断しない（backend も 404。#1928）。
-                  canDecide={capabilities.decideApprovals && runDecidable(run)}
-                  // 自分では操作できない待ちは、待っている相手（実行した system_admin）を出し、自分で質問し直せる（#1954）。
-                  waitingFor={
-                    !runDecidable(run) && WAITING_STATUSES.has(run.status)
-                      ? run.executor_display_name || senderNames[run.id] || t("chat.threads.ownerMissing")
-                      : undefined
-                  }
-                  onReask={capabilities.operateRuns ? () => reaskAsSelf(run) : undefined}
-                  reaskBusy={reask.isPending && reask.variables?.run.id === run.id}
-                  reaskDisabled={reask.isPending || send.isPending || threadLoading || threadFailed}
-                  reaskError={reask.variables?.run.id === run.id ? reask.error : null}
-                  // 評価は会話を読める利用者（本人と system_admin）が付け、評価した人を残す（#774・#1928）。
-                  canRate={capabilities.operateRuns}
-                  deciding={decide.isPending}
-                  onDecide={(approval, approved) => decide.mutate({ approval, approved })}
-                  onFeedbackSaved={replaceRun}
-                  onProgressTerminal={refreshThread}
-                />
-              ))
-            )}
-            {pending ? (
-              <PendingTurn
-                message={pending}
-                errorMessage={send.error ? apiErrorMessage(send.error, t("chat.failedUnknown")) : null}
-                resendDisabled={composerBlocked || send.isPending}
-                onResend={resend}
-              />
-            ) : null}
-          </ChatLayout>
-        ) : null}
+        {chatLayout}
       </PageBody>
     </div>
   );

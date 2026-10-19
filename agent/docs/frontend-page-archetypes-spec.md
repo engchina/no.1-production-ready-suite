@@ -125,6 +125,7 @@
 
 | 画面 | 保存する field | 戻ったときの検証 |
 |---|---|---|
+| 業務 Agent の編集画面の「試す」（#2515） | チャットと同じ field を `agentTry.*` に分けて持つ（下書きの会話・送る前の下書き・履歴の開閉とページ） | 別の業務 Agent を開いたら会話と書きかけの質問を捨てる。タブ（設定 / 試す）は残さない |
 | チャット | 選んだ業務 Agent（`chat.agentId`）、会話（`chat.threadId`）、送る前の下書き（`chat.draft`）、デスクトップの履歴の開閉（`chat.historyOpen`。既定で閉じる）、会話の履歴のページ（`chat.historyPage`。業務 Agent と offset。別の業務 Agent では 1 ページ目。#1265） | 会話が無くなっていれば新しい会話にする |
 | 実行履歴 | 目標の下書き（`runs.goal`）、選択中の実行（`runs.selectedRunId`） | 詳細の対象は URL が正本。一覧へ戻ると最後に選んだ行へフォーカスを戻す。対象が無い場合は説明を出す。業務 Agent は実行条件なので保存しない |
 | 承認 | 最後に開いた承認（`approvals.selectedId`） | 詳細の対象は URL が正本。一覧へ戻る時の行のフォーカスにだけ使い、判断は確認し直す |
@@ -155,6 +156,8 @@ Playwright は `desktop`（Desktop Chrome）と `mobile-375`（Pixel 5、375×81
 - `frontend/e2e/agent-settings.spec.ts` / `agent-runtime-flow.spec.ts`：各 A 型画面の作成・編集・削除の主な導線。
 
 ## 業種テンプレート（#780）
+
+業務 Agent の編集画面（既存の業務 Agent・変更の権限がある利用者）の見出しに「設定」と「試す」のタブを置く（#2515）。「試す」はチャットと同じ会話の部品（`AgentChat` の `tryTarget`、`ChatLayout` の `embedded`）で、保存した下書きで実行し（`POST /runs` の `draft=true`）、会話の履歴は下書きの会話だけ。未保存の変更があるあいだは送信を止め、会話の上の警告に「保存」を出す（公開と同じく、画面の入力と違う内容で試さない）。無効・移行が要る業務 Agent は理由だけを出す。タブを移ってもフォームの入力は残る。
 
 業務 Agent の新規作成（`/agents?id=new`）の先頭に「テンプレートから始める」を置く。テンプレート（`GET /api/agent-templates`。backend の `app/features/agent/templates.py`）を選ぶと、名前・説明・指示・スキルをフォームに入れる（入力済みなら確認してから置き換える）。テンプレートは業務 Agent を直接作らず、保存はいつもの「作成」で行う。使えない（登録されていない）スキルは外して知らせる。既存の業務 Agent の編集には出さない。
 
