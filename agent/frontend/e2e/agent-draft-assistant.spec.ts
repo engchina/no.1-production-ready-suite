@@ -76,7 +76,8 @@ for (const viewport of [
     const created = mockApi.state.agents.find((agent) => agent.name === "Agent B");
     expect(created?.skill_ids).toEqual(["business-rag-research"]);
     expect(created?.data_scopes).toEqual(SUGGESTION.data_scopes);
-    expect(created?.output_fields).toEqual(SUGGESTION.output_fields);
+    // 下書きは評価の比べ方を提案しないので、画面が既定（完全に一致）を入れて保存する（#2571）。
+    expect(created?.output_fields).toEqual(SUGGESTION.output_fields.map((field) => ({ ...field, match: "exact" })));
     const evaluationSet = mockApi.lastRequest("POST", "/api/evaluation-sets")?.body as
       | { agent_id: string; name: string; cases: { question: string }[] }
       | undefined;
