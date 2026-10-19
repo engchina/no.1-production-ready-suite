@@ -44,6 +44,8 @@ export const CAPABILITY_PERMISSIONS = {
   approvalsDecide: "agent.approvals.decide",
   /** 監査記録・ツール呼出し履歴の閲覧（auditor）。 */
   auditView: "agent.audit.view",
+  /** 自分の業務 Agent の作成（#2523。持ち主として自分の Agent だけを管理する）。 */
+  buildAgents: "agent.agents.build",
   /** 業務 Agent・スキル・運用設定・システム設定の変更とすべての操作（admin）。 */
   admin: "agent.admin",
 } as const;
@@ -62,6 +64,8 @@ export interface AgentCapabilities {
   operateRuns: boolean;
   decideApprovals: boolean;
   viewAudit: boolean;
+  /** 業務 Agent を作れる（Agent 管理か、自分の業務 Agent の作成。#2523）。 */
+  buildAgents: boolean;
   admin: boolean;
 }
 
@@ -76,6 +80,7 @@ export function agentCapabilities(hasPermission: HasPermission): AgentCapabiliti
     operateRuns,
     decideApprovals,
     viewAudit,
+    buildAgents: admin || hasPermission(CAPABILITY_PERMISSIONS.buildAgents),
     admin,
   };
 }

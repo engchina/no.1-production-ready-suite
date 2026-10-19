@@ -282,6 +282,17 @@ class AgentVersion(BaseModel):
         return _unique_skill_ids(value)
 
 
+class AgentShareRequest(BaseModel):
+    """個人の業務 Agent の共有の申請（#2523）。承認すると組織の業務 Agent になり、申請は消える。"""
+
+    status: Literal["requested", "rejected"] = "requested"
+    note: str = Field(default="", max_length=500)
+    requested_at: datetime = Field(default_factory=_now)
+    # 却下の理由と時刻（status が rejected のとき）。
+    reason: str = Field(default="", max_length=500)
+    decided_at: datetime | None = None
+
+
 class AgentProfile(BaseModel):
     id: str = Field(default_factory=lambda: f"agent_{uuid4().hex}")
     name: str
@@ -325,6 +336,11 @@ class AgentProfile(BaseModel):
     # 下書き（版の項目）を最後に変えた時刻（#2519）。公開前の評価の門は、この時刻より後に始めた
     # 下書きの評価だけを数える。None は #2519 より前の業務 Agent（`created_at` を使う）。
     draft_updated_at: datetime | None = None
+    # 個人の業務 Agent の持ち主（#2523。`agent.agents.build` だけの利用者が作った Agent）。
+    # None は組織の業務 Agent（管理は Agent 管理、利用はロールへの割り当て）。持ち主は自分の
+    # Agent を管理し、使える。
+    owner_user_uuid: str | None = None
+    share_request: AgentShareRequest | None = None
     # Run が使う版に固定したスキル（`_agent_for_run` が入れる。保存・応答には出さない。#1855）。
     pinned_skills: list[PinnedSkill] | None = Field(default=None, exclude=True)
 
@@ -1074,6 +1090,8 @@ class AgentsData(BaseModel):
     user_display_names: dict[str, str] = Field(default_factory=dict)
     # 版の履歴に残す版の数（`AGENT_MAX_PUBLISHED_VERSIONS`。画面の版の履歴の案内に出す。#2356）。
     max_published_versions: int = DEFAULT_MAX_PUBLISHED_VERSIONS
+    # 個人の業務 Agent の持ち主（user_uuid）→ 表示名（#2523。画面は持ち主を表示名で出す）。
+    owner_display_names: dict[str, str] = Field(default_factory=dict)
 
 
 class ArtifactsData(BaseModel):
@@ -1288,6 +1306,14 @@ class AgentRuntimeRepositoryContract(Protocol):
     def list_agents(self) -> list[AgentProfile]: ...
     def create_agent(self, agent: AgentProfile) -> AgentProfile: ...
     def patch_agent(self, agent_id: str, patch: AgentProfilePatch) -> AgentProfile: ...
+    def owned_agent_ids(self, user_uuid: str | None) -> frozenset[str]: ...
+    def update_agent_sharing(
+        self,
+        agent_id: str,
+        *,
+        owner_user_uuid: str | None,
+        share_request: AgentShareRequest | None,
+    ) -> AgentProfile: ...
     def publish_agent(
         self, agent_id: str, *, note: str = "", published_by: str | None = None
     ) -> AgentProfile: ...
@@ -3159,6 +3185,34 @@ class AgentRuntimeRepository:
             agent.published_version = version
             agent.updated_at = _now()
             agent.draft_updated_at = agent.updated_at
+            self._mark_agent_changed(agent.id)
+            self._persist_locked()
+            return agent.model_copy(deep=True)
+
+    def owned_agent_ids(self, user_uuid: str | None) -> frozenset[str]:
+        """利用者が持ち主の個人の業務 Agent（#2523。対象範囲に足す）。"""
+        if not user_uuid:
+            return frozenset()
+        with self._lock:
+            return frozenset(
+                agent.id for agent in self._agents.values() if agent.owner_user_uuid == user_uuid
+            )
+
+    def update_agent_sharing(
+        self,
+        agent_id: str,
+        *,
+        owner_user_uuid: str | None,
+        share_request: AgentShareRequest | None,
+    ) -> AgentProfile:
+        """持ち主と共有の申請を変える（申請・承認・却下。#2523。下書きの時刻は進めない）。"""
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent is None:
+                raise KeyError(agent_id)
+            agent.owner_user_uuid = owner_user_uuid
+            agent.share_request = share_request
+            agent.updated_at = _now()
             self._mark_agent_changed(agent.id)
             self._persist_locked()
             return agent.model_copy(deep=True)
