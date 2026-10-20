@@ -844,7 +844,7 @@ async def test_field_extraction_retries_rate_limit_and_stops_on_quota(
             self.failures = failures
             self.calls = 0
 
-        async def generate(self, prompt: str, text: str) -> str:
+        async def generate(self, prompt: str, text: str, **_options: object) -> str:
             self.calls += 1
             if self.failures:
                 raise self.failures.pop(0)
@@ -854,7 +854,10 @@ async def test_field_extraction_retries_rate_limit_and_stops_on_quota(
     pipeline = IngestionPipeline(
         vlm=llm,  # type: ignore[arg-type]
         oracle=Oracle(),  # type: ignore[arg-type]
-        settings=Settings(rag_field_extraction_enabled=True),
+        # 単位の結果を保存しない(2 回目の呼び出しが 1 回目の結果を使い直さないように。#2720)。
+        settings=Settings(
+            rag_field_extraction_enabled=True, rag_extraction_artifact_cache_enabled=False
+        ),
     )
     await pipeline._attach_extraction_fields("trace", extraction, document_id="d1")
     assert llm.calls == 2

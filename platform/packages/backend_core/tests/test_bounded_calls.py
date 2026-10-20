@@ -220,6 +220,16 @@ def calls_of(service: Service, item: object) -> int:
             OpenAiStatusError(400, "context_length_exceeded: maximum context length"),
             ErrorKind.TOO_LARGE,
         ),
+        (
+            # vLLM 系のモデルの入力の長さの超過（#2720。合成の入力での実測の形）。
+            StubError(
+                400,
+                '{"error":{"message":"The engine prompt length 132224 exceeds the max_model_len'
+                ' 131072. Please reduce prompt.","type":"invalid_request_error","param":"input",'
+                '"code":400}}',
+            ),
+            ErrorKind.TOO_LARGE,
+        ),
         (StubError(400, "The response was filtered due to content_filter"), ErrorKind.SAFETY),
         (
             ValueError("OCI Enterprise AI response status=incomplete: content_filter"),

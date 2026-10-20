@@ -24,12 +24,13 @@ from pr_backend_core.bounded_calls import (
     BoundedCallAborted,
     BoundedCaller,
     BoundedCallError,
+    BoundedCallFailed,
 )
 from pr_backend_core.logging import safe_exception_fields
 from pydantic import ValidationError
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
 from rag_parser_core.language import LANGUAGE_PACK_HASH_KEY, current_pack
-from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
+from rag_parser_core.oci_enterprise_ai import LLM_SYSTEM_PROMPT, sdk_retries_disabled
 from rag_parser_core.preprocess import ConvertOutcome, SourceDerivation
 from rag_parser_core.result import (
     EXTERNAL_ADAPTER_PACKAGES,
@@ -71,7 +72,13 @@ from app.clients.parser_service import (
 )
 from app.clients.pipeline_stage import PipelineStageClient
 from app.clients.preprocess_service import PreprocessServiceClient
-from app.config import DEFAULT_PARSER_ADAPTER_BACKEND, Settings, get_settings
+from app.config import (
+    DEFAULT_PARSER_ADAPTER_BACKEND,
+    Settings,
+    enterprise_ai_default_model_id,
+    enterprise_ai_max_input_tokens,
+    get_settings,
+)
 from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
 from app.rag.chunking_small_to_big import (
@@ -87,14 +94,23 @@ from app.rag.chunking_strategy import resolve_chunking_params
 from app.rag.cross_references import annotate_cross_references, apply_reference_search_context
 from app.rag.entity_index import EntityIndex, EntityIndexOptions, build_entity_index
 from app.rag.extraction_field_adapter import (
+    FIELD_EXTRACTION_OUTCOME_ARTIFACT_KEY,
+    FIELD_EXTRACTION_RESPONSE_SCHEMA,
     FieldDefinition,
-    FieldExtractionResponseError,
+    FieldExtractionFailed,
+    UnitExtraction,
     extract_fields_from_extraction,
     field_definitions_prompt,
     load_field_schema,
-    parse_extraction_fields,
+    parse_extraction_candidates,
     resolve_field_definitions,
     with_field_extraction_outcome,
+)
+from app.rag.field_extraction_units import (
+    MIN_UNIT_TEXT_TOKENS,
+    FieldExtractionUnit,
+    FieldValueCandidate,
+    field_extraction_text_budget,
 )
 from app.rag.graph_adapter import resolve_graph_adapter
 from app.rag.graph_index import GraphIndex, build_graph_index
@@ -2699,6 +2715,12 @@ class IngestionPipeline:
         へ Pydantic 検証して保存する（既定 OFF）。項目は文書が属する KB の定義（無ければ全体の
         既定。複数の KB に属するときは和集合）を使う（#548）。実行結果(完了と件数・定義なし)を
         刻み、抽出の失敗(不正な応答を含む)は 0 件にせず取込を止める（#2481）。
+
+        本文は既定のテキストモデルの入力の予算に収まる単位に分けて 1 単位ずつ呼び、候補を統合する
+        （#2720。`app.rag.field_extraction_units`）。単位の結果は抽出の成果物の置き場所に保存し、
+        失敗の後の再実行では、入力・モデル・項目の定義・方式の版が同じ単位を呼び直さない。
+        失敗は分類（入力の上限の超過・出力の打ち切り・応答の形・要求の誤り・一時的な障害）ごとの
+        文で止め、途中の結果は抽出結果に入れない（呼び出し側は旧 active の成果物を保つ）。
         """
         if not getattr(self._settings, "rag_field_extraction_enabled", False):
             return extraction
@@ -2708,48 +2730,134 @@ class IngestionPipeline:
         )
         if not field_defs:
             return with_field_extraction_outcome(extraction, "no_definitions")
-
-        async def _extract(text: str, field_defs: list[FieldDefinition]) -> list[ExtractionField]:
-            prompt = (
-                FIELD_EXTRACTION_PROMPT
-                + f"抽出する field 定義: {field_definitions_prompt(field_defs)}"
+        prompt = (
+            FIELD_EXTRACTION_PROMPT + f"抽出する field 定義: {field_definitions_prompt(field_defs)}"
+        )
+        model_id = enterprise_ai_default_model_id(self._settings)
+        schema_json = json.dumps(FIELD_EXTRACTION_RESPONSE_SCHEMA, ensure_ascii=False)
+        text_budget = field_extraction_text_budget(
+            max_input_tokens=enterprise_ai_max_input_tokens(self._settings, model_id),
+            percent=int(getattr(self._settings, "rag_field_extraction_input_token_percent", 40)),
+            fixed_texts=(LLM_SYSTEM_PROMPT, prompt, schema_json),
+        )
+        if text_budget < MIN_UNIT_TEXT_TOKENS:
+            logger.warning(
+                "field_extraction_budget_insufficient",
+                extra={
+                    "trace_id": trace_id,
+                    "text_budget_tokens": text_budget,
+                    "field_count": len(field_defs),
+                },
             )
+            raise IngestionUserError(
+                "項目の定義（項目名・説明）が長く、項目抽出の 1 回の入力の予算に本文を入れる余地が"
+                "ありません。別経路には切り替えずに取込を停止しました。項目の数・説明を減らすか、"
+                "システム設定 › モデル の既定のテキストモデルの「入力の上限（tokens）」と"
+                " RAG_FIELD_EXTRACTION_INPUT_TOKEN_PERCENT を確認してから再実行してください。"
+            )
+        scope = _field_checkpoint_scope(model_id, field_defs, prompt, schema_json)
 
-            async def once(_: Attempt) -> str:
+        async def _extract_unit(unit: FieldExtractionUnit) -> UnitExtraction:
+            key = self._field_checkpoint_key(document_id, scope, unit.text)
+            if key is not None:
+                saved = _read_field_checkpoint(await self._read_optional_artifact(key))
+                if saved is not None:
+                    return UnitExtraction(saved, reused=True)
+
+            async def once(_: Attempt) -> list[FieldValueCandidate]:
                 with sdk_retries_disabled():
-                    return await self._vlm.generate(prompt, text)
+                    raw = await self._vlm.generate(
+                        prompt,
+                        unit.text,
+                        response_schema=FIELD_EXTRACTION_RESPONSE_SCHEMA,
+                        response_schema_name="field_extraction",
+                    )
+                # 応答の形の誤りは「出力の形の誤り」として、実行器が回数を絞って呼び直す。
+                return parse_extraction_candidates(raw, field_defs)
 
-            # 文書ごとに 1 回の呼び出し。再試行・待ちは共通の実行器に任せる(#2002)。
-            raw = await caller.call(once, label="fields")
-            return parse_extraction_fields(raw, field_defs)
+            label = f"fields:{unit.label}"
+            try:
+                try:
+                    candidates = await caller.call(once, label=label)
+                except BoundedCallFailed as exc:
+                    if not exc.final_retry:
+                        raise
+                    # 再試行を使い切った一時的な失敗は、間隔をあけてもう 1 回だけ呼ぶ(#2002)。
+                    candidates = await caller.call(once, label=label, final=True)
+            except BoundedCallFailed as exc:
+                logger.warning(
+                    "field_extraction_unit_failed",
+                    extra={
+                        "trace_id": trace_id,
+                        "unit": unit.label,
+                        "unit_total": unit.total,
+                        "kind": exc.kind.value,
+                        "status": exc.status,
+                        "attempts": exc.attempts,
+                    },
+                )
+                raise
+            if key is not None:
+                await self._save_field_checkpoint(key, candidates)
+            return UnitExtraction(candidates)
 
         try:
-            with ingestion_ai_calls(self._settings, "field_extraction", total=1) as caller:
-                extracted = await extract_fields_from_extraction(extraction, field_defs, _extract)
+            with ingestion_ai_calls(self._settings, "field_extraction") as caller:
+                extracted = await extract_fields_from_extraction(
+                    extraction, field_defs, _extract_unit, text_budget_tokens=text_budget
+                )
         except BoundedCallAborted as exc:
-            logger.warning("field_extraction_aborted", extra={"trace_id": trace_id})
+            logger.warning(
+                "field_extraction_aborted",
+                extra={"trace_id": trace_id, "kind": exc.kind.value, "status": exc.status},
+            )
             raise IngestionUserError(
                 f"項目抽出を止めました。{exc} 別経路には切り替えずに取込を停止しました。"
             ) from exc
-        except FieldExtractionResponseError as exc:
+        except FieldExtractionFailed as exc:
             logger.warning(
-                "field_extraction_invalid_response",
-                extra={"trace_id": trace_id, **safe_exception_fields(exc)},
+                "field_extraction_failed",
+                extra={
+                    "trace_id": trace_id,
+                    "category": exc.category,
+                    "kind": exc.kind.value,
+                    "status": exc.status,
+                    **exc.run.as_artifact(),
+                },
             )
             raise IngestionUserError(
-                "項目抽出の応答を項目の一覧として読めませんでした。別経路には切り替えずに"
-                "取込を停止しました。Enterprise AI の応答形式を確認してから再実行してください。"
+                _field_extraction_failure_message(
+                    exc, checkpoints=self._field_checkpoints_enabled()
+                )
             ) from exc
         except Exception as exc:
             logger.warning(
                 "field_extraction_failed",
-                extra={"trace_id": trace_id, **safe_exception_fields(exc)},
+                extra={"trace_id": trace_id, "category": "unknown", **safe_exception_fields(exc)},
             )
             raise IngestionUserError(
                 "項目抽出に失敗しました。別経路には切り替えずに取込を停止しました。"
                 "項目抽出設定、field schema、Enterprise AI の応答形式を確認してから"
                 "再実行してください。"
             ) from exc
+        outcome = extracted.parser_artifacts.get(FIELD_EXTRACTION_OUTCOME_ARTIFACT_KEY)
+        if isinstance(outcome, Mapping):
+            logger.info(
+                "field_extraction_completed",
+                extra={
+                    "trace_id": trace_id,
+                    **{
+                        key: value
+                        for key, value in outcome.items()
+                        if isinstance(value, int) and not isinstance(value, bool)
+                    },
+                    "conflict_field_count": (
+                        len(conflicts)
+                        if isinstance(conflicts := outcome.get("conflict_fields"), list)
+                        else 0
+                    ),
+                },
+            )
         # 実際に使った項目の定義を刻む。レイヤーの記録はこれを指紋にする(#550)。
         return extracted.model_copy(
             update={
@@ -2986,6 +3094,43 @@ class IngestionPipeline:
             logger.info(
                 "vision_checkpoints_restored",
                 extra={"document_id": document_id, "count": restored},
+            )
+
+    def _field_checkpoints_enabled(self) -> bool:
+        return bool(getattr(self._settings, "rag_extraction_artifact_cache_enabled", True))
+
+    def _field_checkpoint_key(self, document_id: str, scope: str, unit_text: str) -> str | None:
+        """項目抽出の単位の結果の置き場所(抽出の成果物の prefix の下。文書の削除で消える)。
+
+        名前は方式の版・モデル・項目の定義・指示(``scope``)と単位の本文の hash で、どれかが
+        変われば別の名前になる(違う入力の結果を使い直さない。#2720)。
+        """
+        if not self._field_checkpoints_enabled():
+            return None
+        key_prefix = _safe_artifact_prefix(
+            getattr(self._settings, "rag_extraction_artifact_prefix", "artifacts/extractions")
+        )
+        digest = hashlib.sha256(f"{scope}\n{unit_text}".encode()).hexdigest()
+        return f"{key_prefix}/{_safe_artifact_key_part(document_id)}/fields/{digest}.json"
+
+    async def _save_field_checkpoint(
+        self, key: str, candidates: Sequence[FieldValueCandidate]
+    ) -> None:
+        """単位の結果を保存する(再実行で使い直す補助。保存できなくても取込は続ける)。"""
+        payload = {
+            "version": _FIELD_CHECKPOINT_VERSION,
+            "candidates": [
+                {"field": item.field.model_dump(mode="json"), "raw_value": item.raw_value}
+                for item in candidates
+            ],
+        }
+        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        try:
+            await self._object_storage.put(key, data, content_type="application/json")
+        except Exception as exc:  # noqa: BLE001 - 再開の補助。取込は続ける。
+            logger.warning(
+                "field_extraction_checkpoint_save_failed",
+                extra={"error_type": type(exc).__name__},
             )
 
     async def _read_optional_artifact(self, key: str) -> bytes | None:
@@ -4626,6 +4771,106 @@ def _pdf_checkpoint_segment_id(
     recipe_id: str | None = None,
 ) -> str:
     return f"{_segment_scope(document_id, recipe_id)}:p{segment.page_start}-{segment.page_end}"
+
+
+# 項目抽出の単位の結果の保存の形と、方式の版(#2720)。単位の分け方・頭書き・応答の形・統合の
+# 規則を変えたら版を上げ、前の方式の結果を使い直さない。
+_FIELD_CHECKPOINT_VERSION = 1
+FIELD_EXTRACTION_METHOD_VERSION = "units-1"
+
+# 項目抽出の失敗の分類ごとの文(何が起きたか / どう直すか)。本文・値・応答の本文は入れない。
+_FIELD_FAILURE_REASONS: dict[str, str] = {
+    "input_too_large": (
+        "項目抽出の入力がモデルの入力の上限を超え、本文を分け直しても収まりませんでした"
+    ),
+    "truncated": "項目抽出の応答がモデルの出力の上限で途中で終わりました",
+    "invalid_response": "項目抽出の応答を項目の一覧として読めませんでした",
+    "request_rejected": (
+        "項目抽出の要求をモデルが受け付けませんでした（入力の上限の超過とは判定できない要求の誤り）"
+    ),
+    "safety": "項目抽出の要求がモデルの安全のための確認で拒否されました",
+    "transient": (
+        "Enterprise AI の一時的な障害（流量の制限・サービスの不可用・時間切れ・接続）が、"
+        "再試行の後も続きました"
+    ),
+    "unknown": "項目抽出に失敗しました（分類できない誤り）",
+}
+_FIELD_FAILURE_HINTS: dict[str, str] = {
+    "input_too_large": (
+        "システム設定 › モデル の既定のテキストモデルの「入力の上限（tokens）」が実際のモデルの"
+        "上限を超えていないかと、RAG_FIELD_EXTRACTION_INPUT_TOKEN_PERCENT を確認してから"
+        "再実行してください。"
+    ),
+    "truncated": (
+        "システム設定 › モデル の既定のテキストモデルの「出力の上限（tokens）」を確認するか、"
+        "項目の数を減らしてから再実行してください。"
+    ),
+    "invalid_response": (
+        "Enterprise AI の応答形式（モデルの設定）を確認してから再実行してください。"
+    ),
+    "request_rejected": (
+        "システム設定 › モデル の既定のテキストモデルの設定（payload のテンプレート・"
+        "応答形式）と項目の定義を確認してから再実行してください。"
+    ),
+    "safety": "項目の定義と文書の内容を確認してから再実行してください。",
+    "transient": "時間をおいて再実行してください。",
+    "unknown": (
+        "項目抽出設定、field schema、Enterprise AI の応答形式を確認してから再実行してください。"
+    ),
+}
+
+
+def _field_extraction_failure_message(exc: FieldExtractionFailed, *, checkpoints: bool) -> str:
+    """項目抽出の失敗の、利用者向けの文(分類・HTTP の状態・単位の数だけで作る)。"""
+    run = exc.run
+    status = f"（HTTP {exc.status}）" if exc.status else ""
+    counts = f"{run.unit_count} 部分のうち {run.failed} 部分が失敗"
+    if run.skipped:
+        counts += f"、{run.skipped} 部分は未実行"
+    parts = [
+        f"{_FIELD_FAILURE_REASONS[exc.category]}{status}（{counts}）。",
+        "別経路には切り替えずに取込を停止しました。",
+        _FIELD_FAILURE_HINTS[exc.category],
+    ]
+    if checkpoints and run.succeeded:
+        parts.append(f"成功した {run.succeeded} 部分の結果は、再実行のときに使い直します。")
+    return "".join(parts)
+
+
+def _field_checkpoint_scope(
+    model_id: str, field_defs: Sequence[FieldDefinition], prompt: str, schema_json: str
+) -> str:
+    """単位の結果を使い直してよい範囲(方式の版・モデル・項目の定義・指示・応答の形)。"""
+    payload = json.dumps(
+        [
+            FIELD_EXTRACTION_METHOD_VERSION,
+            model_id.strip(),
+            field_schema_hash(field_defs),
+            prompt,
+            schema_json,
+        ],
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _read_field_checkpoint(data: bytes | None) -> list[FieldValueCandidate] | None:
+    """保存した単位の結果。無い・形が合わないときは None(呼び直す)。"""
+    if data is None:
+        return None
+    try:
+        payload = json.loads(data)
+        if payload.get("version") != _FIELD_CHECKPOINT_VERSION:
+            return None
+        return [
+            FieldValueCandidate(
+                field=ExtractionField.model_validate(item["field"]),
+                raw_value=str(item["raw_value"]),
+            )
+            for item in payload["candidates"]
+        ]
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
 
 
 def _safe_artifact_key_part(value: str) -> str:

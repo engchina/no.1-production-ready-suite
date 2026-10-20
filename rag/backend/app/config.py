@@ -1191,6 +1191,18 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "ときは何もしない。#537）。"
         ),
     )
+    rag_field_extraction_input_token_percent: int = Field(
+        default=40,
+        ge=10,
+        le=90,
+        description=(
+            "項目抽出の 1 回の要求に入れる入力の予算にする、既定のテキストモデルの入力の上限"
+            "（システム設定 › モデル の「入力の上限（tokens）」）に対する割合"
+            "（%。#2720。既定 40）。"
+            "指示・項目の定義を含めてこの予算に収まるように本文を分けて抽出する。残りは出力の枠と、"
+            "token の見積もりの誤差（まれな漢字が続く本文は見積もりより多い）の余裕に使う。"
+        ),
+    )
     rag_min_similarity: float = Field(default=0.05, ge=0.0, le=1.0)
     rag_rrf_k: int = Field(
         default=60,

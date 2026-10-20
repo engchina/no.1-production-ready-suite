@@ -15,6 +15,7 @@ from app.rag.extraction_field_adapter import (
     FieldDefinition,
     FieldExtractionResponseError,
     FieldSchemaStore,
+    UnitExtraction,
     extract_fields_from_extraction,
     field_extraction_outcome,
     field_schema_from_json,
@@ -23,6 +24,7 @@ from app.rag.extraction_field_adapter import (
     resolve_field_definitions,
     validate_field_schema,
 )
+from app.rag.field_extraction_units import FieldExtractionUnit, FieldValueCandidate
 from app.rag.ingestion import IngestionPipeline, IngestionUserError
 from app.schemas.extraction import DocumentElement, ExtractionField, StructuredExtraction
 from tests.support import AsgiTestClient
@@ -84,6 +86,21 @@ def test_parse_clamps_out_of_range_confidence() -> None:
     assert parse_extraction_fields(raw, _DEFS)[0].confidence is None
 
 
+def _extractor(*fields: ExtractionField) -> Any:
+    """どの単位にも同じ候補を返す単位の抽出器。"""
+
+    async def _extract(unit: FieldExtractionUnit) -> UnitExtraction:
+        _ = unit
+        return UnitExtraction(
+            [FieldValueCandidate(field=field, raw_value=field.value) for field in fields]
+        )
+
+    return _extract
+
+
+_BUDGET = 4000
+
+
 @pytest.mark.anyio
 async def test_extract_fields_appends_fields_and_searchable_elements() -> None:
     extraction = StructuredExtraction(
@@ -91,10 +108,12 @@ async def test_extract_fields_appends_fields_and_searchable_elements() -> None:
         elements=[DocumentElement(kind="text", text="本文", order=0, element_id="e0")],
     )
 
-    async def _extract(text: str, defs: list[FieldDefinition]) -> list[ExtractionField]:
-        return [ExtractionField(name="請求書番号", value="INV-1", value_type="string")]
-
-    result = await extract_fields_from_extraction(extraction, _DEFS, _extract)
+    result = await extract_fields_from_extraction(
+        extraction,
+        _DEFS,
+        _extractor(ExtractionField(name="請求書番号", value="INV-1", value_type="string")),
+        text_budget_tokens=_BUDGET,
+    )
     assert [f.name for f in result.fields] == ["請求書番号"]
     field_elements = [e for e in result.elements if e.metadata.get("extracted_field")]
     assert len(field_elements) == 1
@@ -106,16 +125,16 @@ async def test_extract_fields_appends_fields_and_searchable_elements() -> None:
 @pytest.mark.anyio
 async def test_extract_fields_noop_without_schema_or_text() -> None:
     extraction = StructuredExtraction(raw_text="本文あり")
-
-    async def _extract(text: str, defs: list[FieldDefinition]) -> list[ExtractionField]:
-        return [ExtractionField(name="x", value="y")]
+    extract = _extractor(ExtractionField(name="x", value="y"))
 
     # field 定義が空・本文が空なら抽出器を呼ばず、未実行の理由を刻む(#2481)。
-    no_defs = await extract_fields_from_extraction(extraction, [], _extract)
+    no_defs = await extract_fields_from_extraction(
+        extraction, [], extract, text_budget_tokens=_BUDGET
+    )
     assert no_defs.fields == []
     assert field_extraction_outcome(no_defs) == ("no_definitions", 0)
     no_text = await extract_fields_from_extraction(
-        StructuredExtraction(raw_text=" "), _DEFS, _extract
+        StructuredExtraction(raw_text=" "), _DEFS, extract, text_budget_tokens=_BUDGET
     )
     assert no_text.fields == []
     assert field_extraction_outcome(no_text) == ("no_text", 0)
@@ -126,15 +145,16 @@ async def test_extract_fields_records_outcome_of_completed_runs() -> None:
     """抽出の成功は件数を、正常な 0 件は 0 件の完了を刻む(#2481)。"""
     extraction = StructuredExtraction(raw_text="請求書 INV-1")
 
-    async def _one(text: str, defs: list[FieldDefinition]) -> list[ExtractionField]:
-        return [ExtractionField(name="請求書番号", value="INV-1")]
-
-    async def _none(text: str, defs: list[FieldDefinition]) -> list[ExtractionField]:
-        return []
-
-    one = await extract_fields_from_extraction(extraction, _DEFS, _one)
+    one = await extract_fields_from_extraction(
+        extraction,
+        _DEFS,
+        _extractor(ExtractionField(name="請求書番号", value="INV-1")),
+        text_budget_tokens=_BUDGET,
+    )
     assert field_extraction_outcome(one) == ("completed", 1)
-    none = await extract_fields_from_extraction(extraction, _DEFS, _none)
+    none = await extract_fields_from_extraction(
+        extraction, _DEFS, _extractor(), text_budget_tokens=_BUDGET
+    )
     assert none.fields == []
     assert field_extraction_outcome(none) == ("completed", 0)
     # 保存した JSON(dict)からも読める。刻みの無い旧い抽出結果は None。
@@ -150,15 +170,18 @@ async def test_extract_fields_records_outcome_of_completed_runs() -> None:
         FieldExtractionResponseError("synthetic"),
         BoundedCallAborted("synthetic", kind=ErrorKind.PERMISSION),
     ],
+    ids=["runtime", "response", "aborted"],
 )
 async def test_extract_fields_propagates_extractor_errors(error: Exception) -> None:
     """抽出器の失敗(不正な応答・通常の例外・実行器の停止)は元の結果に化けずに出る(#2481)。"""
 
-    async def _fail(text: str, defs: list[FieldDefinition]) -> list[ExtractionField]:
+    async def _fail(unit: FieldExtractionUnit) -> UnitExtraction:
         raise error
 
     with pytest.raises(type(error)):
-        await extract_fields_from_extraction(StructuredExtraction(raw_text="本文"), _DEFS, _fail)
+        await extract_fields_from_extraction(
+            StructuredExtraction(raw_text="本文"), _DEFS, _fail, text_budget_tokens=_BUDGET
+        )
 
 
 def test_field_schema_store_save_load_round_trip() -> None:
@@ -369,7 +392,7 @@ class _PromptRecorder:
     def __init__(self) -> None:
         self.prompts: list[str] = []
 
-    async def generate(self, prompt: str, text: str) -> str:
+    async def generate(self, prompt: str, text: str, **_options: object) -> str:
         self.prompts.append(prompt)
         return '[{"name":"契約日","value":"2025年4月1日"},{"name":"請求書番号","value":"INV-1"}]'
 
@@ -417,7 +440,7 @@ async def test_ingestion_extracts_with_default_when_knowledge_base_has_no_defini
 
 
 class _StandardResponder(_PromptRecorder):
-    async def generate(self, prompt: str, text: str) -> str:
+    async def generate(self, prompt: str, text: str, **_options: object) -> str:
         self.prompts.append(prompt)
         return (
             '[{"name":"文書の種類","value":"規程"},'
@@ -458,7 +481,7 @@ class _FixedResponder(_PromptRecorder):
         super().__init__()
         self.response = response
 
-    async def generate(self, prompt: str, text: str) -> str:
+    async def generate(self, prompt: str, text: str, **_options: object) -> str:
         self.prompts.append(prompt)
         return self.response
 
@@ -486,7 +509,7 @@ async def test_ingestion_stops_on_invalid_response() -> None:
 
 
 class _FailingVlm(_PromptRecorder):
-    async def generate(self, prompt: str, text: str) -> str:
+    async def generate(self, prompt: str, text: str, **_options: object) -> str:
         raise ValueError("synthetic failure")
 
 

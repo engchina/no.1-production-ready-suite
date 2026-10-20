@@ -10,6 +10,8 @@ PoweRAG は LangExtract で entity/field/関係を抽出する。本モジュー
   全体の既定にする(#556)。保存した定義は空でもそのまま使う。
 - **抽出**: OCI Enterprise AI の structured output を注入された抽出器で呼び、`ExtractionField`
   へ Pydantic 検証して保存。検索可能な合成 element も付けて既存 chunking 経路へ流す。
+  本文は入力の予算に収まる単位に分けて 1 単位ずつ呼び、候補を統合する(#2720。分け方と統合の
+  規則は `app.rag.field_extraction_units`)。
 
 抽出器は注入可能でテストは決定論。外部 LLM provider は導入しない。
 """
@@ -20,12 +22,15 @@ import json
 import os
 import re
 import unicodedata
+from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Literal
 
+from pr_backend_core.bounded_calls import BoundedCallFailed, ErrorKind
 from pydantic import BaseModel, Field, field_validator
 from rag_parser_core.extraction import (
     EXTRACTED_FIELD_CONTENT_KIND,
@@ -36,7 +41,20 @@ from rag_parser_core.language import current_pack
 from rag_parser_core.structured_records import record_boundary_plain_text
 
 from app.config import BACKEND_ROOT
-from app.schemas.extraction import DocumentElement, ExtractionField, StructuredExtraction
+from app.rag.field_extraction_units import (
+    FieldExtractionUnit,
+    FieldValueCandidate,
+    UnitCandidates,
+    merge_field_candidates,
+    plan_field_extraction_units,
+    split_field_extraction_unit,
+)
+from app.schemas.extraction import (
+    DocumentElement,
+    ExtractionArtifactValue,
+    ExtractionField,
+    StructuredExtraction,
+)
 
 FIELD_SCHEMA_FILE_ENV = "RAG_FIELD_SCHEMA_FILE"
 DEFAULT_FIELD_SCHEMA_FILE = "extraction-fields.json"
@@ -49,8 +67,89 @@ FieldValueType = Literal["string", "number", "date", "bool"]
 FIELD_EXTRACTION_OUTCOME_ARTIFACT_KEY = "field_extraction_outcome"
 FieldExtractionStatus = Literal["completed", "no_definitions", "no_text"]
 
-# 抽出器: 文書 text と field 定義から ExtractionField のリストを返す。
-FieldExtractor = Callable[[str, "list[FieldDefinition]"], Awaitable[list[ExtractionField]]]
+# 失敗の分類(#2720)。画面の文言と診断のログは、この分類と件数だけで作る(本文・値・応答の
+# 本文・例外の文は使わない)。
+FieldExtractionFailureCategory = Literal[
+    "input_too_large",
+    "truncated",
+    "invalid_response",
+    "request_rejected",
+    "safety",
+    "transient",
+    "unknown",
+]
+_FAILURE_CATEGORY_BY_KIND: dict[ErrorKind, FieldExtractionFailureCategory] = {
+    ErrorKind.TOO_LARGE: "input_too_large",
+    ErrorKind.TRUNCATED: "truncated",
+    ErrorKind.INVALID_OUTPUT: "invalid_response",
+    ErrorKind.BAD_REQUEST: "request_rejected",
+    ErrorKind.NOT_SUPPORTED: "request_rejected",
+    ErrorKind.SAFETY: "safety",
+    ErrorKind.RATE_LIMITED: "transient",
+    ErrorKind.UNAVAILABLE: "transient",
+    ErrorKind.SERVER_ERROR: "transient",
+    ErrorKind.NETWORK: "transient",
+    ErrorKind.TIMEOUT: "transient",
+}
+# 入力の上限の超過で分け直す回数(1 回ごとに単位の本文の予算を半分にする)。
+MAX_FIELD_EXTRACTION_SPLIT_DEPTH = 3
+
+
+@dataclass(frozen=True)
+class UnitExtraction:
+    """1 つの単位の抽出の結果。``reused`` は保存した前の結果を使い直したとき。"""
+
+    candidates: list[FieldValueCandidate]
+    reused: bool = False
+
+
+# 単位の抽出器: 1 つの単位の本文から候補を返す。失敗は実行器の例外(``BoundedCallFailed`` /
+# ``BoundedCallAborted``)で出す。
+UnitExtractor = Callable[[FieldExtractionUnit], Awaitable[UnitExtraction]]
+
+
+@dataclass(frozen=True)
+class FieldExtractionRun:
+    """単位の数の記録(実行結果に刻み、失敗の文言とログにも使う)。"""
+
+    unit_count: int = 0
+    succeeded: int = 0
+    reused: int = 0
+    failed: int = 0
+    skipped: int = 0
+    resplit: int = 0
+
+    def as_artifact(self) -> dict[str, int]:
+        return {
+            "unit_count": self.unit_count,
+            "succeeded_unit_count": self.succeeded,
+            "reused_unit_count": self.reused,
+            "failed_unit_count": self.failed,
+            "skipped_unit_count": self.skipped,
+            "resplit_count": self.resplit,
+        }
+
+
+class FieldExtractionFailed(Exception):
+    """一部か全部の単位の抽出が失敗した(途中の結果は公開しない。#2720)。
+
+    ``category`` は最初に失敗した単位の分類、``kind`` / ``status`` はその実行器の分類と HTTP の
+    状態。本文・値・応答の本文は持たない。
+    """
+
+    def __init__(
+        self,
+        category: FieldExtractionFailureCategory,
+        *,
+        run: FieldExtractionRun,
+        kind: ErrorKind,
+        status: int | None,
+    ) -> None:
+        super().__init__(category)
+        self.category = category
+        self.run = run
+        self.kind = kind
+        self.status = status
 
 
 class FieldExtractionResponseError(ValueError):
@@ -298,26 +397,71 @@ def _safe_confidence(value: object) -> float | None:
     return None
 
 
-def parse_extraction_fields(raw: str, field_defs: list[FieldDefinition]) -> list[ExtractionField]:
-    """LLM の JSON 出力を、許可された field 定義に照らして ExtractionField へ正規化する。
+class FieldExtractionResponseItem(BaseModel):
+    """応答の 1 項目(応答の形を JSON Schema でモデルに渡す。#2720)。"""
 
-    定義外 name・重複・空 value は捨て、value_type は定義側を正とする(LLM の自己申告を信用しない)。
-    応答が JSON の配列として読めなければ `FieldExtractionResponseError`(正常な 0 件と区別する。
-    #2481)。
+    name: str
+    value: str
+    value_type: FieldValueType
+    confidence: float
+
+
+class FieldExtractionResponse(BaseModel):
+    """項目抽出の応答の形(``{"fields": [...]}``)。"""
+
+    fields: list[FieldExtractionResponseItem]
+
+
+class _ResponseEnvelope(BaseModel):
+    """応答の外側の検証(項目の中身は 1 つずつ緩く読み、合わない項目だけを捨てる)。"""
+
+    fields: list[object]
+
+
+FIELD_EXTRACTION_RESPONSE_SCHEMA = FieldExtractionResponse.model_json_schema()
+
+
+def _response_items(raw: str) -> list[object]:
+    """応答から項目の list を取り出す(``{"fields": [...]}``・配列・code fence・前後の説明文)。"""
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+        if text.endswith("```"):
+            text = text[: -len("```")]
+        text = text.strip()
+    try:
+        data: object = json.loads(text)
+    except (ValueError, TypeError):
+        array = find_json_array(text)
+        if array is None:
+            raise FieldExtractionResponseError("項目抽出の応答に JSON がありません。") from None
+        try:
+            data = json.loads(array)
+        except (ValueError, TypeError) as exc:
+            raise FieldExtractionResponseError("項目抽出の応答を JSON として読めません。") from exc
+    if isinstance(data, list):
+        return data
+    try:
+        return _ResponseEnvelope.model_validate(data).fields
+    except ValueError as exc:
+        raise FieldExtractionResponseError(
+            "項目抽出の応答が項目の一覧(fields)の形ではありません。"
+        ) from exc
+
+
+def parse_extraction_candidates(
+    raw: str, field_defs: list[FieldDefinition]
+) -> list[FieldValueCandidate]:
+    """LLM の応答を、許可された field 定義に照らして候補(値とモデルが返した表記)にする。
+
+    定義外 name・同じ応答の中の重複・空 value は捨て、value_type は定義側を正とする(LLM の
+    自己申告を信用しない)。応答が項目の一覧として読めなければ `FieldExtractionResponseError`
+    (正常な 0 件と区別する。#2481)。
     """
     allowed = {definition.name.casefold(): definition for definition in field_defs}
-    array = find_json_array(raw)
-    if array is None:
-        raise FieldExtractionResponseError("項目抽出の応答に JSON の配列がありません。")
-    try:
-        data = json.loads(array)
-    except (ValueError, TypeError) as exc:
-        raise FieldExtractionResponseError("項目抽出の応答を JSON として読めません。") from exc
-    if not isinstance(data, list):
-        raise FieldExtractionResponseError("項目抽出の応答が JSON の配列ではありません。")
-    fields: list[ExtractionField] = []
+    candidates: list[FieldValueCandidate] = []
     seen: set[str] = set()
-    for item in data:
+    for item in _response_items(raw):
         if not isinstance(item, dict):
             continue
         name = str(item.get("name", "")).strip()
@@ -338,8 +482,13 @@ def parse_extraction_fields(raw: str, field_defs: list[FieldDefinition]) -> list
         except ValueError:
             continue
         seen.add(key)
-        fields.append(field)
-    return fields
+        candidates.append(FieldValueCandidate(field=field, raw_value=str(value)))
+    return candidates
+
+
+def parse_extraction_fields(raw: str, field_defs: list[FieldDefinition]) -> list[ExtractionField]:
+    """`parse_extraction_candidates` の値だけ。"""
+    return [candidate.field for candidate in parse_extraction_candidates(raw, field_defs)]
 
 
 def field_definitions_prompt(field_defs: list[FieldDefinition]) -> str:
@@ -379,16 +528,27 @@ def with_field_extraction_outcome(
     extraction: StructuredExtraction,
     status: FieldExtractionStatus,
     field_count: int = 0,
+    *,
+    run: FieldExtractionRun | None = None,
+    candidate_count: int = 0,
+    conflict_fields: Sequence[str] = (),
 ) -> StructuredExtraction:
-    """項目抽出の実行結果を parser_artifacts に刻む(#2481)。"""
+    """項目抽出の実行結果を parser_artifacts に刻む(#2481)。
+
+    分けて抽出したとき(#2720)は、単位の数・使い直した単位の数・候補の数と、違う値の候補が
+    残った項目の名前(値は刻まない)も刻む。
+    """
+    outcome: dict[str, ExtractionArtifactValue] = {"status": status, "field_count": field_count}
+    if run is not None:
+        outcome.update(run.as_artifact())
+        outcome["candidate_count"] = candidate_count
+        conflicts: list[ExtractionArtifactValue] = [*conflict_fields]
+        outcome["conflict_fields"] = conflicts
     return extraction.model_copy(
         update={
             "parser_artifacts": {
                 **extraction.parser_artifacts,
-                FIELD_EXTRACTION_OUTCOME_ARTIFACT_KEY: {
-                    "status": status,
-                    "field_count": field_count,
-                },
+                FIELD_EXTRACTION_OUTCOME_ARTIFACT_KEY: outcome,
             }
         }
     )
@@ -419,25 +579,86 @@ def field_extraction_outcome(extraction: object) -> tuple[FieldExtractionStatus,
 async def extract_fields_from_extraction(
     extraction: StructuredExtraction,
     field_defs: list[FieldDefinition],
-    extract: FieldExtractor,
+    extract_unit: UnitExtractor,
+    *,
+    text_budget_tokens: int,
 ) -> StructuredExtraction:
-    """field schema があれば注入された抽出器で named field を抽出して付与する。
+    """本文を入力の予算に収まる単位に分けて項目を抽出し、候補を統合して付与する(#2720)。
 
     抽出結果は `StructuredExtraction.fields` へ保存し、検索可能な合成 element
-    (content_kind=field)も追加する。実行結果(完了と件数・定義なし・本文なし)を
-    parser_artifacts に刻む。抽出器の失敗(不正な応答を含む)は据え置かずに出し、
-    取込の停止は呼び出し側が決める(#2481。正常な 0 件・未実行と区別する)。
+    (content_kind=field)も追加する。実行結果(完了と件数・定義なし・本文なし・単位の数)を
+    parser_artifacts に刻む。
+
+    - 単位が入力の上限の超過(``ErrorKind.TOO_LARGE``)で拒まれたら、予算を半分にして分け直す
+      (``MAX_FIELD_EXTRACTION_SPLIT_DEPTH`` 回まで)。
+    - ほかの失敗は単位の失敗として記録し、残りの単位を続ける(成功した単位は抽出器が保存し、
+      再実行で使い直す)。1 つも成功しないうちに失敗したら、残りは呼ばない(設定・形式の誤りを
+      同じ要求でくり返さない)。
+    - 1 つでも失敗した単位があれば `FieldExtractionFailed` を出す(途中の結果を完成として返さない)。
+    - 実行器の停止(``BoundedCallAborted``)と取り消しは、そのまま出す。
     """
     if not field_defs:
         return with_field_extraction_outcome(extraction, "no_definitions")
-    # 構造化レコード JSONL の記録の境界のマーカー(#2457)は LLM に渡さない。
-    text = record_boundary_plain_text(extraction).strip()
-    if not text:
+    # 構造化レコード JSONL の記録の境界のマーカー(#2457)は LLM に渡さない(単位は要素の本文)。
+    if not record_boundary_plain_text(extraction).strip():
         return with_field_extraction_outcome(extraction, "no_text")
-    fields = await extract(text, field_defs)
-    fields = [field for field in fields if field.name and field.value]
+    units = plan_field_extraction_units(extraction, text_budget_tokens=text_budget_tokens)
+    if not units:
+        return with_field_extraction_outcome(extraction, "no_text")
+
+    pending = deque((unit, 0) for unit in units)
+    results: list[UnitCandidates] = []
+    failures: list[BoundedCallFailed] = []
+    reused = resplit = 0
+    while pending:
+        unit, depth = pending.popleft()
+        try:
+            outcome = await extract_unit(unit)
+        except BoundedCallFailed as exc:
+            parts = (
+                split_field_extraction_unit(
+                    unit, text_budget_tokens=text_budget_tokens >> (depth + 1)
+                )
+                if exc.kind is ErrorKind.TOO_LARGE and depth < MAX_FIELD_EXTRACTION_SPLIT_DEPTH
+                else []
+            )
+            if parts:
+                resplit += 1
+                pending.extendleft((part, depth + 1) for part in reversed(parts))
+                continue
+            failures.append(exc)
+            if not results:
+                break
+            continue
+        results.append(UnitCandidates(unit=unit, candidates=outcome.candidates))
+        reused += int(outcome.reused)
+    run = FieldExtractionRun(
+        unit_count=len(results) + len(failures) + len(pending),
+        succeeded=len(results),
+        reused=reused,
+        failed=len(failures),
+        skipped=len(pending),
+        resplit=resplit,
+    )
+    if failures:
+        first = failures[0]
+        raise FieldExtractionFailed(
+            _FAILURE_CATEGORY_BY_KIND.get(first.kind, "unknown"),
+            run=run,
+            kind=first.kind,
+            status=first.status,
+        )
+
+    merged = merge_field_candidates(results, [definition.name for definition in field_defs])
+    fields = [field for field in merged.fields if field.name and field.value]
     if not fields:
-        return with_field_extraction_outcome(extraction, "completed")
+        return with_field_extraction_outcome(
+            extraction,
+            "completed",
+            run=run,
+            candidate_count=merged.candidate_count,
+            conflict_fields=merged.conflict_fields,
+        )
 
     next_order = max((element.order for element in extraction.elements), default=0) + 1
     new_elements = [_field_element(field, next_order + index) for index, field in enumerate(fields)]
@@ -447,4 +668,11 @@ async def extract_fields_from_extraction(
             "elements": [*extraction.elements, *new_elements],
         }
     )
-    return with_field_extraction_outcome(extracted, "completed", len(fields))
+    return with_field_extraction_outcome(
+        extracted,
+        "completed",
+        len(fields),
+        run=run,
+        candidate_count=merged.candidate_count,
+        conflict_fields=merged.conflict_fields,
+    )
