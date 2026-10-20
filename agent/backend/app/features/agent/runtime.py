@@ -50,7 +50,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.features.agent import run_claim, storage_backend
+from app.features.agent import call_abort, run_claim, storage_backend
 from app.features.agent import runtime_checkpoint_store as checkpoint_store
 from app.features.agent.chat_progress import record_run_progress
 from app.features.agent.clarification_cancel import (
@@ -1865,7 +1865,8 @@ class AgentRuntimeRepository:
         取消の後は新しいツールを始めない（`start_builtin_tool_step`。#2609）。取消の時点で既に
         呼び先へ送っていた（実行中の）step は `in_flight_step_ids` に残し、未開始の step と
         分ける。送った操作は取り消せないので、その結果は届いたときに事実のまま記録する
-        （`finish_builtin_tool_step`）。
+        （`finish_builtin_tool_step`）。このプロセスで実行中の読み取りの呼び出しは、呼び先への
+        接続を切って打ち切る（`call_abort`。#2691）。
         """
         cancelled_approval_ids: list[str] = []
         in_flight_step_ids = [step.id for step in run.steps if step.status == StepStatus.RUNNING]
@@ -1900,6 +1901,7 @@ class AgentRuntimeRepository:
                 **({"cancelled_by": cancelled_by} if cancelled_by else {}),
             },
         )
+        call_abort.abort_run_calls(run.id, call_abort.REASON_RUN_CANCELLED)
 
     def decide_approval(self, approval_id: str, request: ApprovalDecisionRequest) -> RunState:
         with self._lock:
@@ -2737,7 +2739,8 @@ class AgentRuntimeRepository:
 
         失敗しても Run は続ける（結果を受け取ったモデルが判断する）。取消の前に送った操作の結果が
         取消の後に届いたら、届いた結果を事実のまま記録し（取り消せたとは扱わない）、イベントに
-        Run の状態（`run_status`）を残す（#2609）。
+        Run の状態（`run_status`）を残す（#2609）。取消で打ち切った呼び出し（#2691。
+        `TOOL_CALL_ABORTED_CODE`）は、失敗ではなく取消の step にする。
         """
         with self._lock:
             run = self._require_run(run_id)
@@ -2776,11 +2779,14 @@ class AgentRuntimeRepository:
                 )
                 self._append_guardrail_events(run, step, result)
             else:
-                step.status = StepStatus.FAILED
+                aborted = result.error_code == call_abort.TOOL_CALL_ABORTED_CODE
+                step.status = StepStatus.CANCELLED if aborted else StepStatus.FAILED
                 self._append_event(
                     run,
                     RunEventType.TOOL_FAILED,
-                    f"ツール {call_name} が失敗しました。",
+                    f"ツール {call_name} の呼び出しを取消で打ち切りました。"
+                    if aborted
+                    else f"ツール {call_name} が失敗しました。",
                     {
                         "step_id": step.id,
                         "tool_name": call_name,
