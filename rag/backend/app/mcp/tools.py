@@ -1781,7 +1781,13 @@ class ValidateAnswerOutput(VersionedOutput):
             " 1 つ以上あるか。"
         )
     )
-    status: str = Field(description="completed / no_claims / no_evidence / input_too_large。")
+    status: str = Field(
+        description=(
+            "completed / partial（時間の上限までに一部の段落の監査が終わらず、"
+            "その段落は unassessed）/ timed_out（どの段落の監査も終わらなかった）"
+            "/ no_claims / no_evidence / input_too_large。"
+        )
+    )
     counts: dict[str, int] = Field(default_factory=dict, description="判定ごとの段落の数。")
     claims: list[ValidatedClaim] = Field(default_factory=list)
     missing_evidence: list[EvidenceRefInput] = Field(

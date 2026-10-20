@@ -15,11 +15,22 @@ error の finding があれば valid にしない。
 
 呼び出し側が利用者の前提（回答の前の確認の質問と答え。#1898）を渡したときは、資料ではない前提として根拠と並べて
 監査に渡し、答えをそのまま述べた段落と、資料の規則を答えに当てはめた結論を確かめる（資料の内容の裏付けには使わない）。
+
+時間の上限（#2700）: 検証の全体を `rag_answer_validation_timeout_seconds`（呼び出し側の
+待ち時間より短い）で打ち切る。監査は段落を組に分けて並行に呼び
+（`rag_answer_validation_batch_passages`・`rag_answer_validation_concurrency`）、上限までに
+返らなかった組の段落は確かめ終わらなかった段落（unassessed）として、確かめ終わった段落の
+判定と一緒に返す（status=partial。どの段落も返らなければ timed_out）。上限を過ぎたら LLM を
+呼び続けない（呼び出し側が待つのをやめた後に、同じ LLM を使う他の処理を遅くしない）。
+検証は回答フローとは別の executor で動かす。
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,7 +52,22 @@ from app.rag.answer_engine import (
     _sheet_location,
     build_engine_settings,
 )
-from app.rag.answer_threads import run_answer_in_thread
+from app.rag.answer_threads import (
+    ANSWER_DEADLINE_GRACE_SECONDS,
+    run_answer_in_thread,
+    validation_executor,
+)
+
+logger = logging.getLogger(__name__)
+
+# 期限の後、thread が確かめ終わった組の判定をまとめて返すまでに待つ秒数（#2700。
+# LLM は呼ばない処理だけ）。
+VALIDATION_FINALIZE_SECONDS = 5.0
+# どの段落も監査し終わらなかった（`rag_engine` の STATUS_TIMED_OUT と同じ値）。
+STATUS_TIMED_OUT = "timed_out"
+# 監査の LLM の usage のうち、ログに出す項目（#2700。秒は呼び出しの往復の和で、
+# 並行の呼び出しは重なる）。
+_USAGE_LOG_KEYS = ("calls", "seconds", "output_tokens", "reasoning_tokens", "stall_resends")
 
 # 主張の監査で「検証に通った」とみなさない判定。
 _BLOCKING_STATUSES = frozenset({"unsupported", "contradicted", "citation_error", "unassessed"})
@@ -83,6 +109,9 @@ class AnswerValidation:
     guide_revision: int | None = None
     # RAG の回答の監査の判定を再利用した段落の数（#1527。モデルに渡さなかった段落）。
     reused_claims: int = 0
+    # 時間の上限までに監査し終わらなかった段落の数（#2700。status=partial のときの
+    # unassessed の段落）。
+    timed_out_claims: int = 0
 
 
 def evidence_location(metadata: Mapping[str, Any]) -> dict[str, Any]:
@@ -236,6 +265,8 @@ async def validate_answer(
     premises: Sequence[Mapping[str, str]] = (),
     data_results: Sequence[Mapping[str, str]] = (),
 ) -> AnswerValidation:
+    started = time.monotonic()
+    limit = float(settings.rag_answer_validation_timeout_seconds)
     oracle = oracle or OracleClient()
     # 決定的な検査を先に行う（業務ガイドを読めなければ、モデルを呼ぶ前に止める）。
     findings: list[AnswerFinding] = []
@@ -290,26 +321,69 @@ async def validate_answer(
         else {}
     )
 
+    usage: dict[str, Any] = {}
+
     def run() -> dict[str, Any]:
         from rag_engine.evaluation.answer_validation import validate_answer_claims
+        from rag_engine.resources.llm_usage import bind_llm_usage
 
-        with tempfile.TemporaryDirectory(prefix="rag-engine-validate-") as work:
+        with (
+            tempfile.TemporaryDirectory(prefix="rag-engine-validate-") as work,
+            bind_llm_usage() as calls,
+        ):
             engine_settings = build_engine_settings(settings, output_dir=Path(work))
-            return validate_answer_claims(
-                question,
-                answer,
-                items,
-                engine_settings,
-                audited=audited,
-                premises=list(premises)[:MAX_PREMISES],
-                # 業務データの照会の結果（#1950）。資料ではない根拠として並べる。
-                data_results=list(data_results)[:MAX_DATA_RESULTS],
-            )
+            try:
+                return validate_answer_claims(
+                    question,
+                    answer,
+                    items,
+                    engine_settings,
+                    audited=audited,
+                    premises=list(premises)[:MAX_PREMISES],
+                    # 業務データの照会の結果（#1950）。資料ではない根拠として並べる。
+                    data_results=list(data_results)[:MAX_DATA_RESULTS],
+                    batch_passages=settings.rag_answer_validation_batch_passages,
+                    max_concurrency=settings.rag_answer_validation_concurrency,
+                )
+            finally:
+                usage.update(calls.snapshot())
 
-    # 回答の専用の thread で動かし、呼び出し側の打ち切り・取り消しを thread に伝える(#1422)。
-    result = await run_answer_in_thread(run)
+    # 上限の残り（根拠の読み直しの分を引く）を thread の期限にし、LLM 1 回の timeout と
+    # 再試行をそれに縮める。
+    left = limit - (time.monotonic() - started)
+    result: dict[str, Any] = {"status": STATUS_TIMED_OUT}
+    if left > 0:
+        try:
+            # 検証の専用の thread で動かし、呼び出し側の打ち切り・取り消しを thread に
+            # 伝える(#1422・#2700)。
+            async with asyncio.timeout(
+                left + ANSWER_DEADLINE_GRACE_SECONDS + VALIDATION_FINALIZE_SECONDS
+            ):
+                result = await run_answer_in_thread(
+                    run, timeout_seconds=left, executor=validation_executor()
+                )
+        except TimeoutError:
+            # thread が期限の後に確かめ終わった分をまとめられなかった（期限は取り消し済み）。
+            result = {"status": STATUS_TIMED_OUT}
     counts = {str(key): int(value) for key, value in (result.get("counts") or {}).items()}
     status = str(result.get("status") or "error")
+    timed_out = len(result.get("timed_out_passage_ids") or ())
+    logger.info(
+        "rag_answer_validation",
+        extra={
+            "validation_status": status,
+            "validation_seconds": round(time.monotonic() - started, 1),
+            "validation_limit_seconds": limit,
+            "validation_evidence": len(items),
+            "validation_claims": len(result.get("claim_checks") or ()),
+            "validation_timed_out_claims": timed_out,
+            "validation_reused_claims": len(result.get("reused_passage_ids") or ()),
+            **{
+                f"validation_llm_{key}": round(float(usage.get(key) or 0), 1)
+                for key in _USAGE_LOG_KEYS
+            },
+        },
+    )
     return AnswerValidation(
         status=status,
         valid=is_valid(status, counts, unreadable=len(missing) + len(stale)) and not blocking,
@@ -319,6 +393,7 @@ async def validate_answer(
         stale_evidence=stale,
         evidence_truncated=bool(result.get("evidence_truncated")),
         reused_claims=len(result.get("reused_passage_ids") or ()),
+        timed_out_claims=timed_out,
         **deterministic,
     )
 
