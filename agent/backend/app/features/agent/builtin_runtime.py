@@ -79,7 +79,7 @@ from pr_system_settings.model import (
     seed_to_send,
 )
 
-from app.features.agent import data_scope, run_claim, tool_grounding
+from app.features.agent import data_scope, run_claim, tool_grounding, tool_loop_guard
 from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_KIND,
     ANSWER_EVIDENCE_NAME,
@@ -263,7 +263,11 @@ from app.features.agent.tools import (
     mcp_tool_handler,
     tool_registry,
 )
-from app.observability import CONTEXT_COMPACTIONS_TOTAL, MODEL_INCOMPLETE_RETRIES_TOTAL
+from app.observability import (
+    CONTEXT_COMPACTIONS_TOTAL,
+    MODEL_INCOMPLETE_RETRIES_TOTAL,
+    TOOL_LOOP_STOPS_TOTAL,
+)
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -1144,6 +1148,8 @@ class _ToolRecorder:
         self.confirmation: ConfirmationBudget | None = None
         # モデルに渡したツール（名前 → 定義・handler・モデルに見せた schema。#2630）。
         self.entries: dict[str, _ToolEntry] = {}
+        # 進展の無い呼び出しが上限に達した（#2580。以降の呼び出しは実行しない）。
+        self.loop_stop: tool_loop_guard.LoopFinding | None = None
 
     def _skips_rag_clarification(self, name: str, definition: ToolDefinition | None) -> bool:
         if (
@@ -1275,6 +1281,32 @@ class _ToolRecorder:
             {"error": RUN_CANCELLED_MESSAGE, "error_code": RUN_CANCELLED_CODE}, ensure_ascii=False
         )
 
+    def loop_stop_finding(self) -> tool_loop_guard.LoopFinding | None:
+        """進展の無い呼び出しが上限に達したか（#2580。保存した step から判定する）。"""
+        if self.loop_stop is None:
+            self.loop_stop = tool_loop_guard.stop_finding(_run_steps(self.run_id))
+        return self.loop_stop
+
+    def loop_refused(self, name: str, finding: tool_loop_guard.LoopFinding) -> str:
+        """上限に達した後の呼び出し（step を作らず、呼び先へ送らない。#2580）。"""
+        logger.info(
+            "builtin_runtime_tool_call_rejected",
+            extra={"run_id": self.run_id, "tool_name": name, "error_code": finding.code},
+        )
+        return json.dumps(finding.refusal(), ensure_ascii=False)
+
+    def with_loop_notice(self, payload: dict[str, Any], step_id: str) -> dict[str, Any]:
+        """進展の無い呼び出しが上限の 1 回前なら、次も同じなら終えることを足す（#2580）。"""
+        finding = tool_loop_guard.step_finding(_run_steps(self.run_id), step_id)
+        if finding is None:
+            return payload
+        if finding.stopped:
+            self.loop_stop = self.loop_stop or finding
+            return payload
+        if finding.warns:
+            return {**payload, "loop_notice": finding.notice()}
+        return payload
+
     async def invoke(self, name: str, arguments: str, call_id: str) -> str:
         """モデルが呼んだツールを、境界の順（取消 → 引数 → ツール権限・承認 → handler）で実行する。
 
@@ -1289,6 +1321,11 @@ class _ToolRecorder:
         # 1. 取消: 取消が確定した Run では step を作らず、呼び先へ送らない（#2609）。
         if await asyncio.to_thread(runtime_repository.builtin_run_ended, self.run_id):
             return self.cancelled_result(name)
+        # 進展の無い呼び出しが上限に達した Run では、同じ応答の残りの呼び出しも実行しない（#2580。
+        # Run は次のモデルの呼び出しの前に失敗にする）。
+        stop = await asyncio.to_thread(self.loop_stop_finding)
+        if stop is not None:
+            return self.loop_refused(name, stop)
         # 2. 引数: 読めない JSON・object 以外を空の引数にせず、モデルに見せた schema で確かめる
         # （#2630）。
         parsed, parse_errors = parse_arguments(arguments)
@@ -1447,8 +1484,11 @@ class _ToolRecorder:
                 output = self.hop_hints(
                     call, output, step_id=step_id, adjusted_limits=adjusted_limits
                 )
+                output = self.with_loop_notice(output, step_id)
             return json.dumps(output, ensure_ascii=False, default=str)
-        return json.dumps(tool_failure_payload(result), ensure_ascii=False)
+        return json.dumps(
+            self.with_loop_notice(tool_failure_payload(result), step_id), ensure_ascii=False
+        )
 
     def reject_out_of_scope(self, call: ToolCall, scoped: data_scope.ScopeEnforcement) -> str:
         """範囲の外のプロファイルの呼び出しを、呼び先へ送らずにツールのエラーにする（#1378）。"""
@@ -1487,7 +1527,7 @@ class _ToolRecorder:
             "builtin_runtime_tool_call_rejected",
             extra={"run_id": self.run_id, "tool_name": call.name, "error_code": error_code},
         )
-        return json.dumps(payload, ensure_ascii=False)
+        return json.dumps(self.with_loop_notice(payload, step_id), ensure_ascii=False)
 
     def hop_hints(
         self,
@@ -1703,6 +1743,39 @@ class _ToolRecorder:
                 )
         runtime_repository.finish_builtin_tool_step(self.run_id, step_id, result)
         return result
+
+
+def _run_steps(run_id: str) -> list[Any]:
+    """Run の step（無い Run は空。進展の無い呼び出しの判定に使う。#2580）。"""
+    from app.features.agent.runtime import runtime_repository
+
+    try:
+        return list(runtime_repository.get_run(run_id).steps)
+    except KeyError:
+        return []
+
+
+def _tool_loop_stop(run_id: str) -> BuiltinRuntimeError | None:
+    """進展の無いツールの呼び出しが上限に達した Run を終える理由（#2580。無ければ None）。
+
+    理由は Run の失敗（イベント `runtime.failed` の `error_code` と文）・ログ・metric
+    `agent_tool_loop_stops_total` に残す。引数・結果の値は残さない。
+    """
+    finding = tool_loop_guard.stop_finding(_run_steps(run_id))
+    if finding is None:
+        return None
+    logger.warning(
+        "builtin_runtime_tool_loop_stopped",
+        extra={
+            "run_id": run_id,
+            "tool_name": finding.tool_name,
+            "reason": finding.kind,
+            "count": finding.count,
+            "limit": finding.limit,
+        },
+    )
+    TOOL_LOOP_STOPS_TOTAL.labels(reason=finding.kind).inc()
+    return BuiltinRuntimeError(finding.code, finding.run_message())
 
 
 # function tool に付ける、呼び出しの境界（`_ToolRecorder`）の属性の名前（`_run_sdk` が読む）。
@@ -2217,6 +2290,10 @@ def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
         # 取消が確定した Run ではモデルを呼ばずに止める（#2609。別のプロセスの取消も保存先で判定）。
         if await asyncio.to_thread(runtime_repository.builtin_run_ended, run_id):
             raise RunCancelledError()
+        # 進展の無いツールの呼び出しが上限に達したら、モデルを呼ばずに Run を終える（#2580）。
+        stop = await asyncio.to_thread(_tool_loop_stop, run_id)
+        if stop is not None:
+            raise stop
         return window(data) if window is not None else data.model_data
 
     return RunConfig(
