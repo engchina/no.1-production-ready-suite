@@ -146,7 +146,9 @@ def test_cancel_by_another_process_stops_new_tools_in_oracle(checkpoint_key: str
             seeder._mark_run_changed(run)  # noqa: SLF001
             seeder._persist_locked()  # noqa: SLF001
     seeder.flush_writes()
+    # Run を実行している 2 つのプロセス（取消の前に読み込んだメモリ）と、取り消す API のプロセス。
     worker = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+    stale = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
     api = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
 
     api.cancel_run("run_live_seen")
@@ -157,11 +159,12 @@ def test_cancel_by_another_process_stops_new_tools_in_oracle(checkpoint_key: str
     with pytest.raises(RunNotActiveError):
         worker.start_builtin_tool_step("run_live_seen", ToolCall(name="echo", trace_id="c1"))
     # 取消を知らないメモリのまま書いても、保存先の取消は残る（取消が勝つ）。
-    worker.start_builtin_tool_step("run_live_stale", ToolCall(name="echo", trace_id="c2"))
-    worker.flush_writes()
+    assert stale.get_run("run_live_stale").status == RunStatus.RUNNING
+    stale.start_builtin_tool_step("run_live_stale", ToolCall(name="echo", trace_id="c2"))
+    stale.flush_writes()
     stored = json.loads(_entities(checkpoint_key)[("run", "run_live_stale")][0] or "{}")
     assert stored["status"] == "cancelled"
-    assert worker.get_run("run_live_stale").status == RunStatus.CANCELLED
+    assert stale.get_run("run_live_stale").status == RunStatus.CANCELLED
 
 
 def _legacy_run(run_id: str) -> dict[str, Any]:
