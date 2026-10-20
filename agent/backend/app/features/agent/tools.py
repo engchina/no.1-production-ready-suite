@@ -261,20 +261,27 @@ def _tool_result(
     metadata["success"] = success
     if error_code:
         metadata["error_code"] = error_code
+    warnings = list(guardrail_warnings or [])
+    # 失敗の文・詳細は呼び先の応答・例外の文を含むので、成功の出力と同じ規則で機微情報を伏せてから
+    # 結果にする（#2611。モデルへの結果・Run の step・イベント・ログはすべてこの結果を使う）。
+    error, details, masked = sanitize_tool_error(error, error_details)
+    if masked:
+        metadata["error_masked"] = masked
+        warnings = sorted({*warnings, *masked})
     return ToolResult(
         name=name,
         success=success,
         output=output,
         error=error,
         error_code=error_code,
-        error_details=error_details or {},
+        error_details=details,
         started_at=started_at,
         completed_at=completed_at,
         duration_ms=max(0, round((perf_counter() - started_monotonic) * 1000)),
         policy_decision=policy_decision,
         approval_required=approval_required,
         approval_id=approval_id,
-        guardrail_warnings=guardrail_warnings or [],
+        guardrail_warnings=warnings,
         audit_metadata=metadata,
     )
 
@@ -1020,8 +1027,11 @@ _SENSITIVE_KEY_PATTERN = re.compile(
     r"(password|passwd|secret|token|api[_-]?key|credential|authorization|access[_-]?key)",
     re.IGNORECASE,
 )
+# `api_key=…`・`password: …` に加えて、接頭辞の付いた名前（`access_token`・`client_secret`）と
+# JSON の文（`"access_token": "…"`。呼び先の応答の本文）も対象にする。
 _INLINE_SECRET_PATTERN = re.compile(
-    r"\b(password|passwd|secret|token|api[_-]?key|credential)" r"(\s*[:=]\s*)([^\s,;]+)",
+    r"\b([A-Za-z0-9_-]*?(?:password|passwd|secret|token|api[_-]?key|credential))"
+    r"(\"?\s*[:=]\s*\"?)([^\s,;\"]+)",
     re.IGNORECASE,
 )
 _BEARER_TOKEN_PATTERN = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
@@ -1077,22 +1087,58 @@ def _guard_tool_output(
     return guarded, sorted(warnings)
 
 
-def _sanitize_value(value: Any, warnings: set[str]) -> Any:
+def sanitize_tool_error(
+    error: str | None, details: JsonObject | None
+) -> tuple[str | None, JsonObject, list[str]]:
+    """失敗したツールの文（`error`）と詳細（`error_details`）から機微情報を伏せる（#2611）。
+
+    規則は成功の出力（`_guard_tool_output`）と同じ（機微な名前の項目・文の中の資格情報・Bearer・
+    個人情報）に、文の中の URL の資格情報（`mask_urls_in_text`）を足す。入れ子の詳細（呼び先の
+    応答の本文・JSON-RPC の error）も対象にする。引数の検証の結果（`argument_errors`。値を含まない
+    場所・種類・直し方。#2630）はそのまま残す。返す警告は伏せた種類と項目の名前だけ（元の値は
+    含めない）。
+    """
+    warnings: set[str] = set()
+    clean_error = _sanitize_value(error, warnings, error_text=True) if error else error
+    clean_details: JsonObject = {}
+    for key, item in (details or {}).items():
+        if key == "argument_errors":
+            clean_details[key] = item
+        elif _SENSITIVE_KEY_PATTERN.search(str(key)) and not _is_flag(item):
+            clean_details[key] = "***MASKED***"
+            warnings.add(f"sensitive_field_masked:{key}")
+        else:
+            clean_details[key] = _sanitize_value(item, warnings, error_text=True)
+    return clean_error, clean_details, sorted(warnings)
+
+
+def _is_flag(value: Any) -> bool:
+    """機微な名前の項目でも伏せない値（有無を表す真偽・空の値。値そのものは資格情報ではない）。"""
+    return value is None or isinstance(value, bool)
+
+
+def _sanitize_value(value: Any, warnings: set[str], *, error_text: bool = False) -> Any:
     if isinstance(value, dict):
         sanitized: dict[str, Any] = {}
         for key, item in value.items():
-            if _SENSITIVE_KEY_PATTERN.search(str(key)):
+            if _SENSITIVE_KEY_PATTERN.search(str(key)) and not _is_flag(item):
                 sanitized[key] = "***MASKED***"
                 warnings.add(f"sensitive_field_masked:{key}")
                 continue
-            sanitized[key] = _sanitize_value(item, warnings)
+            sanitized[key] = _sanitize_value(item, warnings, error_text=error_text)
         return sanitized
     if isinstance(value, list):
-        return [_sanitize_value(item, warnings) for item in value]
+        return [_sanitize_value(item, warnings, error_text=error_text) for item in value]
     if isinstance(value, str):
         for code, pattern in _PROMPT_INJECTION_PATTERNS:
             if pattern.search(value):
                 warnings.add(code)
+        if error_text:
+            # 例外の文には接続の URL が入ることがある（userinfo・資格情報らしい query を伏せる）。
+            masked_urls = mask_urls_in_text(value)
+            if masked_urls != value:
+                warnings.add("secret.url_credentials_masked")
+            value = masked_urls
         return _sanitize_sensitive_text(value, warnings)
     return value
 

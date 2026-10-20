@@ -91,6 +91,13 @@ CONTEXT_COMPACTIONS_TOTAL = Counter(
     "Agent model input compacted to fit the model input limit.",
     ("model", "trigger", "outcome"),
 )
+# 進展の無いツールの呼び出し（同じ呼び出しの反復・実行の失敗の連続・引数の誤りの連続）で Run を
+# 終えた回数（#2580。組み込み Runtime の `tool_loop_guard`）。
+TOOL_LOOP_STOPS_TOTAL = Counter(
+    "agent_tool_loop_stops_total",
+    "Agent runs stopped after repeated tool calls without progress.",
+    ("reason",),
+)
 ARTIFACTS_TOTAL = Counter(
     "agent_artifacts_total",
     "Agent artifact count.",
