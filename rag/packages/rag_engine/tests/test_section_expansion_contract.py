@@ -166,3 +166,14 @@ def test_new_search_results_share_the_existing_input_and_time_budget(exhausted):
     assert stub.read_calls.count("s3-1") == 1
     if exhausted == "time":
         assert second.stop_reason == sections.STOP_TIME_LIMIT
+
+
+def test_unreadable_child_after_a_budget_hit_is_not_marked_in_context():
+    stub = SectionStub()
+    original = stub.chunks
+    stub.chunks = lambda **kw: sections.SectionRead([], complete=False) if kw["section_id"] == "s3-3" else original(**kw)
+    result = _expand(
+        _seed_context("c31a"), _settings(answer_max_input_tokens=1600), Grader(needs=None), stub, large_sections=lambda request: None
+    )
+    assert "s3-3" in {item.section_id for item in result.unread}
+    assert "s3-3" not in {item["section_id"] for item in result.trace["completed_sections"]}

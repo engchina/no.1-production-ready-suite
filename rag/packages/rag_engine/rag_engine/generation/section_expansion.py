@@ -888,7 +888,11 @@ def expand_sections(
                 if pending:
                     # 入らない子の章節が出たら、それより関連の低い子の章節もまとめて抽出してから統合に渡す
                     # （関連の低い章節が先に予算を使わない）。読むものが無い章節は渡さない。
-                    if child.chunk_count <= MAX_SECTION_CHUNKS and not reader.read(chain.outline, child):
+                    if (
+                        child.chunk_count <= MAX_SECTION_CHUNKS
+                        and not reader.read(chain.outline, child)
+                        and child_key not in reader.failures
+                    ):
                         reader.mark(chain.outline, child, ())
                         child_entry.update(read="in_context", added_parents=0)
                     else:
