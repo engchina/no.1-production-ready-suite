@@ -167,6 +167,29 @@ def test_process_draft_maps_guide_draft_to_evaluation_expectations() -> None:
     assert any("未登録の資料B.pdf" in warning for warning in draft.warnings)
 
 
+def test_process_draft_does_not_turn_spreadsheet_rows_into_pages() -> None:
+    """表計算の資料の行・頁として読めない位置は、根拠の頁の期待にしない（#2663）。"""
+    recorded = json.loads(RECORDED)
+    recorded["references"] = [
+        {"document_name": "設定一覧D.xlsx", "sheet_name": "シートA", "rows": "42"},
+        {"document_name": "操作手順書A.pdf", "pages": "行42"},
+    ]
+    item = build_item(
+        SupportGuideProcessRow(row=2, question="画面Aで通知が出ない", process=PROCESS_TEXT),
+        parse_draft_output(json.dumps(recorded)),
+        [
+            KnowledgeDocument("doc-a", "操作手順書A.pdf"),
+            KnowledgeDocument("doc-s", "設定一覧D.xlsx", spreadsheet=True),
+        ],
+    )
+
+    draft = process_draft(_row(), item)
+
+    assert draft.relevant_document_ids == ["doc-s", "doc-a"]
+    assert draft.required_evidence == []
+    assert any("頁の範囲として読めません" in warning for warning in draft.warnings)
+
+
 def test_process_draft_reports_failed_rows() -> None:
     from app.rag.support_guide_process_import import failed_item
 

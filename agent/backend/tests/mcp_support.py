@@ -374,7 +374,8 @@ _EVIDENCE = {
 # 手順の finding（guide_step_unexplained）を足した（#2708）。
 # 25: rag_validate_answer の status に partial（一部の段落が時間の上限までに監査されなかった）と
 # timed_out を足した（#2700）。
-RAG_OUTPUT_SCHEMA_VERSION = 25
+# 26: rag_lookup_guides の参照に、表計算の資料のシートと行の範囲（sheet_ranges）を足した（#2663）。
+RAG_OUTPUT_SCHEMA_VERSION = 26
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {

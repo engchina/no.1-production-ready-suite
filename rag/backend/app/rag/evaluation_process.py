@@ -39,7 +39,14 @@ from app.schemas.support_guide import (
 
 # 頁の書き方（「12」「12-14」「p.12」「12〜14 頁」）。数字の範囲だけを読む。
 _PAGE_RANGE = re.compile(r"(\d{1,6})\s*(?:[-~〜～–—]\s*(\d{1,6}))?")
-_REFERENCE_CODES = frozenset({"reference_unresolved", "reference_ambiguous"})
+_REFERENCE_CODES = frozenset(
+    {
+        "reference_unresolved",
+        "reference_ambiguous",
+        "reference_location_mismatch",
+        "reference_location_unreadable",
+    }
+)
 
 
 def guide_process_row(row: EvaluationProcessRow) -> SupportGuideProcessRow:
@@ -102,7 +109,8 @@ def _evidence(
             continue
         if reference.document_id not in relevant:
             relevant.append(reference.document_id)
-        pages = page_range(reference.pages)
+        # 頁として読めた資料だけ（表計算の行・頁として読めない書き方は頁にしない。#2663）。
+        pages = page_range(reference.pages) if reference.page_ranges else None
         section = reference.section.strip() or None
         if pages is None and section is None:
             continue

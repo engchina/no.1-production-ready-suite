@@ -228,7 +228,9 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     guide_steps_unmatched にしないようにした（#2708）。
 # 25: rag_validate_answer の status に、時間の上限までに一部の段落の監査が終わらなかった
 #     partial と、どの段落も終わらなかった timed_out を足した（#2700）。
-MCP_OUTPUT_SCHEMA_VERSION = 25
+# 26: rag_lookup_guides の参照（references）に、表計算の資料のシートと行の範囲（sheet_ranges）を
+#     足した（#2663）。
+MCP_OUTPUT_SCHEMA_VERSION = 26
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -1586,6 +1588,13 @@ class GuidePageRangeItem(BaseModel):
     page_end: int
 
 
+class GuideSheetRangeItem(BaseModel):
+    sheet_name: str
+    row_start: int | None = Field(default=None, description="始まりの行（無ければシートの全体）。")
+    row_end: int | None = None
+    cell_range: str = Field(default="", description="A1 形式のセルの範囲（書いてあれば）。")
+
+
 class GuideReferenceItem(BaseModel):
     document_id: str
     title: str = Field(default="", description="表示名（参照の正本は document_id）。")
@@ -1596,6 +1605,10 @@ class GuideReferenceItem(BaseModel):
             "根拠の頁の範囲（両端を含む。空なら文書の全体）。rag_read_document に document_id と "
             "page（page_start）を渡すと、その頁から読める。"
         ),
+    )
+    sheet_ranges: list[GuideSheetRangeItem] = Field(
+        default_factory=list,
+        description="表計算の資料の根拠のシートと行の範囲（両端を含む。頁ではない）。",
     )
 
 
@@ -3663,6 +3676,15 @@ def _guide_reference(reference: SupportGuideReference) -> GuideReferenceItem:
                 page_start=item.page_start, page_end=item.page_end or item.page_start
             )
             for item in reference.page_ranges
+        ],
+        sheet_ranges=[
+            GuideSheetRangeItem(
+                sheet_name=item.sheet_name,
+                row_start=item.row_start,
+                row_end=item.row_end,
+                cell_range=item.cell_range,
+            )
+            for item in reference.sheet_ranges
         ],
     )
 

@@ -951,6 +951,15 @@ def guide_step_plan(match: GuideMatch) -> list[dict[str, Any]]:
                         {"page_start": item.page_start, "page_end": item.page_end}
                         for item in reference.page_ranges
                     ],
+                    # 表計算の資料のシートの行の範囲（#2663。頁とは別の位置）。
+                    "sheet_ranges": [
+                        {
+                            "sheet_name": item.sheet_name,
+                            "row_start": item.row_start,
+                            "row_end": item.row_end,
+                        }
+                        for item in reference.sheet_ranges
+                    ],
                 }
                 for reference in step.references
             ],

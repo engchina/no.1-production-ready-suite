@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 from openpyxl import Workbook  # type: ignore[import-untyped]
+from pydantic import ValidationError
 from pytest import MonkeyPatch
 from rag_parser_core.language import builtin_pack
 
@@ -29,10 +30,15 @@ from app.rag.support_guide_process_import import (
     parse_draft_output,
     process_headings,
     read_process_workbook,
+    readable_as_pages,
     resolve_document_name,
     split_process_sections,
 )
-from app.schemas.support_guide import SupportGuideProcessRow
+from app.schemas.support_guide import (
+    SupportGuideProcessRow,
+    SupportGuideReference,
+    SupportGuideSheetRange,
+)
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -319,9 +325,25 @@ class _FakeOracle:
     async def list_documents(self, *, knowledge_base_id: str) -> list[Any]:
         assert knowledge_base_id == "kb-1"
         return [
-            SimpleNamespace(id="doc-a", file_name="操作手順書A.pdf", is_superseded=False),
-            SimpleNamespace(id="doc-old", file_name="未登録の資料B.pdf", is_superseded=True),
+            _summary("doc-a", "操作手順書A.pdf"),
+            _summary("doc-old", "未登録の資料B.pdf", is_superseded=True),
+            # 同じ正本を指す、同じ名前の重複のアップロード（#2662）。
+            _summary("doc-a-dup", "操作手順書A.pdf", duplicate_of_document_id="doc-a"),
+            _summary("doc-sheet", "設定一覧D.xlsx"),
         ]
+
+
+def _summary(document_id: str, file_name: str, **values: Any) -> SimpleNamespace:
+    return SimpleNamespace(
+        **{
+            "id": document_id,
+            "file_name": file_name,
+            "is_superseded": False,
+            "duplicate_of_document_id": None,
+            "content_type": None,
+            **values,
+        }
+    )
 
 
 class _Llm:
@@ -384,8 +406,9 @@ def test_preview_endpoint_drafts_each_row_with_the_recorded_response(
     data = client.post(f"{BASE}/preview", json={"rows": rows}).json()["data"]
     first, second = data["items"]
     assert first["row"] == 2 and first["content"]["title"] == "画面Aの通知を表示する"
-    # 置き換えた旧版の文書には当てない（未解決のまま）。
+    # 置き換えた旧版の文書には当てない（未解決のまま）。同じ正本の重複は正本にまとめる（#2662）。
     assert [ref["status"] for ref in first["references"]] == ["resolved", "unresolved"]
+    assert first["references"][0]["document_id"] == "doc-a"
     assert first["valid"] is False
     assert first["rule_candidates"][0]["triggers"] == ["通知"]
     assert second["valid"] is False
@@ -404,3 +427,227 @@ def test_preview_endpoint_limits_rows(monkeypatch: MonkeyPatch) -> None:
     response = client.post(f"{BASE}/preview", json={"rows": rows})
     assert response.status_code == 422
     assert "30 行まで" in response.json()["error_messages"][0]
+
+
+# ---- 同じ正本の重複のアップロード（#2662）----------------------------------------------------
+
+
+def test_duplicate_uploads_of_one_canonical_resolve_to_the_canonical() -> None:
+    canonical = KnowledgeDocument("doc-a", "手順書A.pdf")
+    duplicate = KnowledgeDocument("doc-b", "手順書A.pdf", duplicate_of="doc-a")
+    for documents in ([canonical, duplicate], [duplicate, canonical]):
+        found, candidates = resolve_document_name("01_手順書A.pdf", documents)
+        assert found == canonical
+        assert candidates == []
+    # 名前が重複のファイル名にだけ当たっても、見える正本の文書にする（chunk は正本にある）。
+    renamed = KnowledgeDocument("doc-b", "手順書A_写し.pdf", duplicate_of="doc-a")
+    assert resolve_document_name("手順書A_写し", [canonical, renamed]) == (canonical, [])
+
+
+def test_same_name_with_other_content_or_invisible_canonical_stays_ambiguous() -> None:
+    # 同じ名前でも別の内容（重複でない）の文書は、どちらかに決めない。
+    other = [KnowledgeDocument("doc-a", "手順書A.pdf"), KnowledgeDocument("doc-c", "手順書A.pdf")]
+    found, candidates = resolve_document_name("手順書A.pdf", other)
+    assert found is None
+    assert [item.document_id for item in candidates] == ["doc-a", "doc-c"]
+    # 正本がこのプロファイルの文書に無い（範囲の外・見られない・無い）重複は、まとめない。
+    hidden = [
+        KnowledgeDocument("doc-b", "手順書A.pdf", duplicate_of="doc-x"),
+        KnowledgeDocument("doc-d", "手順書A.pdf", duplicate_of="doc-x"),
+    ]
+    found, candidates = resolve_document_name("手順書A.pdf", hidden)
+    assert found is None
+    assert [item.document_id for item in candidates] == ["doc-b", "doc-d"]
+    # 1 件だけなら、その文書のまま（見えない正本の id を参照にしない）。
+    found, _ = resolve_document_name("手順書A.pdf", hidden[:1])
+    assert found is not None and found.document_id == "doc-b"
+
+
+def test_draft_with_duplicate_documents_is_importable() -> None:
+    recorded = json.loads(RECORDED)
+    recorded["references"] = recorded["references"][:1]
+    documents = [
+        KnowledgeDocument("doc-a", "操作手順書A.pdf"),
+        KnowledgeDocument("doc-a-dup", "操作手順書A.pdf", duplicate_of="doc-a"),
+    ]
+    item = build_item(_row(), parse_draft_output(json.dumps(recorded)), documents)
+    assert item.valid is True
+    assert [(ref.status, ref.document_id) for ref in item.references] == [("resolved", "doc-a")]
+    assert item.content is not None
+    assert [ref.document_id for ref in item.content.references] == ["doc-a"]
+
+
+# ---- 表計算の資料の位置（#2663）---------------------------------------------------------------
+
+SHEET_DOCUMENTS = [
+    KnowledgeDocument("doc-a", "操作手順書A.pdf"),
+    KnowledgeDocument("doc-s", "設定一覧D.xlsx", spreadsheet=True),
+]
+
+
+def _with_references(*references: dict[str, Any]) -> Any:
+    recorded = json.loads(RECORDED)
+    recorded["references"] = list(references)
+    return parse_draft_output(json.dumps(recorded))
+
+
+def test_spreadsheet_rows_become_sheet_ranges_not_pages() -> None:
+    output = _with_references(
+        {"document_name": "設定一覧D.xlsx", "sheet_name": "シートA", "rows": "42"},
+        {"document_name": "設定一覧D.xlsx", "sheet_name": "シートB", "rows": "42-45"},
+        {"document_name": "設定一覧D.xlsx", "sheet_name": "シートA", "cells": "ｂ３：ｄ１０"},
+        {"document_name": "操作手順書A.pdf", "pages": "p.12-14"},
+    )
+    item = build_item(_row(), output, SHEET_DOCUMENTS)
+    assert item.valid is True, item.issues
+    assert item.content is not None
+    sheets = [
+        [(r.sheet_name, r.row_start, r.row_end, r.cell_range) for r in ref.sheet_ranges]
+        for ref in item.content.references
+    ]
+    # 同じ行の番号でもシートで分け、セルの範囲はその行の範囲にする。頁の範囲にはしない。
+    assert sheets == [
+        [("シートA", 42, 42, "")],
+        [("シートB", 42, 45, "")],
+        [("シートA", 3, 10, "B3:D10")],
+        [],
+    ]
+    assert [ref.page_ranges for ref in item.content.references[:3]] == [[], [], []]
+    # 頁の資料は今までどおり頁の範囲にする。
+    pdf_pages = item.content.references[3].page_ranges
+    assert [(r.page_start, r.page_end) for r in pdf_pages] == [(12, 14)]
+
+
+def test_row_written_as_page_is_not_converted_to_a_page_range() -> None:
+    # 表計算の資料の頁の欄の行の番号は頁にしない。
+    sheet = build_item(
+        _row(),
+        _with_references({"document_name": "設定一覧D.xlsx", "pages": "42"}),
+        SHEET_DOCUMENTS,
+    )
+    assert sheet.valid is False
+    assert [issue.code for issue in sheet.issues] == ["reference_location_mismatch"]
+    assert sheet.content is not None
+    assert sheet.content.references[0].page_ranges == []
+    # 頁の資料でも、行・セルの書き方（頁の語でない文字を含む）は頁として読まない。
+    for pages in ("行42", "A1:C3", "42行目"):
+        pdf = build_item(
+            _row(),
+            _with_references({"document_name": "操作手順書A.pdf", "pages": pages}),
+            DOCUMENTS,
+        )
+        assert pdf.valid is False, pages
+        assert [issue.code for issue in pdf.issues] == ["reference_location_unreadable"]
+        assert pdf.content is not None
+        assert pdf.content.references[0].page_ranges == []
+
+
+def test_sheet_location_errors_are_reported() -> None:
+    cases = [
+        # シートの名前の無い行は、どのシートの行か決まらない。
+        ({"document_name": "設定一覧D.xlsx", "rows": "42"}, "reference_location_unreadable"),
+        # 読めないセルの範囲。
+        (
+            {"document_name": "設定一覧D.xlsx", "sheet_name": "シートA", "cells": "どこか"},
+            "reference_location_unreadable",
+        ),
+        # 頁の資料にシート・行は使えない。
+        (
+            {"document_name": "操作手順書A.pdf", "sheet_name": "シートA", "rows": "3"},
+            "reference_location_mismatch",
+        ),
+    ]
+    for reference, code in cases:
+        item = build_item(_row(), _with_references(reference), SHEET_DOCUMENTS)
+        assert item.valid is False, reference
+        assert [issue.code for issue in item.issues] == [code], reference
+
+
+def test_readable_as_pages_uses_page_words_only() -> None:
+    for text in ("12-14", "p.12〜14、20", "ｐ．３～５", "12頁", "12〜14ページ", "pp. 3-5", ""):
+        assert readable_as_pages(text), text
+    for text in ("行42", "42行目", "A1:C3", "シートA 3"):
+        assert not readable_as_pages(text), text
+
+
+def test_reference_location_kinds_are_exclusive() -> None:
+    reference = SupportGuideReference.model_validate(
+        {"document_id": "doc-s", "sheet_ranges": [{"sheet_name": "シートA", "cell_range": "B3"}]}
+    )
+    assert [(r.row_start, r.row_end, r.cell_range) for r in reference.sheet_ranges] == [
+        (3, 3, "B3")
+    ]
+    with pytest.raises(ValidationError, match="どちらかだけ"):
+        SupportGuideReference.model_validate(
+            {
+                "document_id": "doc-s",
+                "page_ranges": [{"page_start": 1}],
+                "sheet_ranges": [{"sheet_name": "シートA"}],
+            }
+        )
+    with pytest.raises(ValidationError, match="セルの範囲の行"):
+        SupportGuideSheetRange(sheet_name="シートA", row_start=1, cell_range="B3:D10")
+    with pytest.raises(ValidationError, match="A1 形式"):
+        SupportGuideSheetRange(sheet_name="シートA", cell_range="3B")
+    with pytest.raises(ValidationError, match="始まり以降"):
+        SupportGuideSheetRange(sheet_name="シートA", row_start=9, row_end=3)
+
+
+# ---- 別の操作の分岐を同じ手順にまとめない（#2666）----------------------------------------------
+
+
+def _branching_output(*branches: dict[str, Any]) -> Any:
+    recorded = json.loads(RECORDED)
+    recorded["references"] = recorded["references"][:1]
+    recorded["steps"].append(
+        {"id": "s3", "title": "別の画面で値を直す", "depends_on": ["s1"], "retrieval_hints": []}
+    )
+    recorded["conditions"] = [
+        {
+            "id": "c1",
+            "label": "項目の種類",
+            "type": "enum",
+            "allowed_values": ["種類A", "種類B"],
+            "handling": "ask",
+            "question": "項目の種類は？",
+        }
+    ]
+    recorded["branches"] = list(branches)
+    recorded["handoff_contact"] = ""
+    recorded["handoff_conditions"] = []
+    return parse_draft_output(json.dumps(recorded))
+
+
+def _branch(values: list[str], goto: str, operation: str | None = None) -> dict[str, Any]:
+    branch: dict[str, Any] = {"condition_id": "c1", "values": values, "goto_step": goto}
+    if operation is not None:
+        branch["operation"] = operation
+    return branch
+
+
+def test_branches_with_different_operations_merged_into_one_step_are_rejected() -> None:
+    output = _branching_output(
+        _branch(["種類A"], "s2", "操作Aをする"), _branch(["種類B"], "s2", "操作Bをする")
+    )
+    item = build_item(_row(), output, DOCUMENTS)
+    assert item.valid is False
+    issue = next(issue for issue in item.issues if issue.code == "branch_operations_merged")
+    assert issue.severity == "error" and issue.path == "branches[0]"
+    assert "種類A" in issue.message and "種類B" in issue.message
+    assert "通知の設定を有効にする" in issue.message
+
+
+def test_faithful_branches_and_common_merge_stay_valid() -> None:
+    cases = [
+        # 値ごとに別の手順へ進む。
+        (_branch(["種類A"], "s2", "操作A"), _branch(["種類B"], "s3", "操作B")),
+        # 値に関わらず同じ操作の手順に合流する（操作が同じ・書いていない）。
+        (_branch(["種類A"], "s2", "共通の操作"), _branch(["種類B"], "s2", "共通の操作。")),
+        (_branch(["種類A"], "s2"), _branch(["種類B"], "s2")),
+        # 条件が分からないときの分岐は、値の分岐と同じ手順でも別の操作と数えない。
+        (_branch(["種類A"], "s2", "操作A"), _branch([], "s2", "確かめる")),
+    ]
+    for branches in cases:
+        item = build_item(_row(), _branching_output(*branches), DOCUMENTS)
+        assert item.valid is True, (branches, item.issues)
+        assert all(issue.code != "branch_operations_merged" for issue in item.issues)
