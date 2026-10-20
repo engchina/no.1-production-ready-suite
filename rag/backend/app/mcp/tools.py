@@ -203,7 +203,9 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 18: rag_lookup_guides の手順に目的・検索の手がかり・参照の資料と頁・必要な根拠・終わりの条件を、
 #     ガイドに分岐（branches）・共通の資料（references）・完了の条件（completion）を足し、
 #     分かっている条件で外れた分岐の手順を返さないようにした（#2396）。
-MCP_OUTPUT_SCHEMA_VERSION = 18
+# 19: rag_validate_answer の claims に、監査が返した判定（audit_status）と根拠の ID の照合の結果
+#     （reference_check）を足し、ID を照合できない矛盾を矛盾のまま返すようにした（#2622）。
+MCP_OUTPUT_SCHEMA_VERSION = 19
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -1588,17 +1590,36 @@ class ValidatedClaim(BaseModel):
     status: str = Field(
         description=(
             "supported=根拠で裏付けられる / unsupported=根拠で確かめられない / contradicted=根拠と"
-            "矛盾 / data_confirmation=実データの確認を促すだけ / unassessed=監査されなかった"
+            "矛盾 / data_confirmation=実データの確認を促すだけ / "
+            "citation_error=出典を照合できない / unassessed=監査されなかった"
         )
     )
     chunk_id: str | None = Field(
         default=None,
         description=(
             "裏付け・矛盾の根拠の chunk_id（利用者の前提〔premises〕・業務データの照会の結果"
-            "〔data_results〕だけで裏付けた段落は null）。"
+            "〔data_results〕だけで裏付けた段落と、根拠の ID を照合できなかった矛盾は null）。"
         ),
     )
     reason: str
+    audit_status: str | None = Field(
+        default=None,
+        description=(
+            "監査が返した判定（status は根拠の ID を照合できないと変わる。例: supported の ID を"
+            "照合できなければ status は citation_error）。"
+        ),
+    )
+    reference_check: str | None = Field(
+        default=None,
+        description=(
+            "裏付け・矛盾の根拠の ID の照合の結果（resolved / "
+            "resolved_by_answer=回答が書いた ID で照合 / "
+            "answer_id_invalid=回答が書いた ID が根拠に無い / "
+            "audit_id_invalid=監査が返した ID だけが根拠に無い / "
+            "ambiguous_id=省いた ID が複数の根拠に当たる / audit_id_missing=ID が無い / "
+            "quote_unmatched=引用が根拠に無い）。照合しない判定は null。"
+        ),
+    )
 
 
 class ValidationFinding(BaseModel):
@@ -3792,6 +3813,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     status=str(claim.get("status") or ""),
                     chunk_id=_claim_chunk_id(claim.get("source_id")),
                     reason=str(claim.get("reason") or ""),
+                    # 監査の判定と ID の照合の結果（#2622。判定を変えた理由を追えるようにする）。
+                    audit_status=str(claim.get("audit_status") or "") or None,
+                    reference_check=str(claim.get("reference_check") or "") or None,
                 )
                 for claim in result.claim_checks
             ],

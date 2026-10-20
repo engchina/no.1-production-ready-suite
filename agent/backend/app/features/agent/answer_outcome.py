@@ -91,6 +91,7 @@ from app.features.agent.answer_validation import (
     STATUS_COMPLETED,
     WITHHOLDING_CHECKS,
     error_findings,
+    is_refuted_claim,
 )
 from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
 from app.features.agent.support_task import (
@@ -177,7 +178,7 @@ _DATA_CONFIRMATION = "data_confirmation"
 # 不足の印（`withheld_claims`）にする、外した段落の判定（根拠で確かめられない・根拠と矛盾）。
 # 確かめが終わらなかった段落（`unassessed`。出典の行・表の区切りなど）を外しただけでは、回答が
 # 条件・不足を示したことにならない（#1317）。外した段落は本文に載らないので主張にも数えない。
-_DISPUTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
+# 判定は `is_refuted_claim`（RAG が出典を照合できずに変えた段落の元の判定も含む。#2622）。
 # 結論の段落を探すときに飛ばす、主張ではない段落の種類（見出し・出典・表の形）。
 _LEAD_SKIPPED_KINDS = frozenset({"heading", "citation", "table"})
 _KIND_SIGNALS = {
@@ -293,7 +294,7 @@ def _validation_parts(
             confirmations.add(quote)
         elif status in BLOCKING_CLAIM_STATUSES and _count(withheld.get("claims")) > 0:
             removed.add(quote)
-            if status in _DISPUTED_CLAIM_STATUSES:
+            if is_refuted_claim(claim):
                 disputed.add(quote)
     return removed, disputed, confirmations, withheld
 
