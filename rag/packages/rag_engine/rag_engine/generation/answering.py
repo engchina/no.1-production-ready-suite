@@ -3758,8 +3758,9 @@ def answer_question_result(
         raise ValueError("呼び出し元の検索文（caller_queries）は回答を作らない検索（generate_answer=False）だけに使います。")
     trusted_queries: tuple[str, ...] = ()
     if caller_planned:
+        question_key = _dedupe_query_key(normalized_question)
         trusted_queries = _dedupe_queries(
-            tuple(query.strip() for query in caller_queries or () if query.strip() and _dedupe_query_key(query) != _dedupe_query_key(normalized_question))
+            tuple(query.strip() for query in caller_queries or () if query.strip() and _dedupe_query_key(query) != question_key)
         )
         # 質問に応じて LLM を呼ぶ検索の補助は、設定に関わらずこの経路では使わない。
         settings = replace(settings, article_catalog_enabled=False, screen_linking_enabled=False)
