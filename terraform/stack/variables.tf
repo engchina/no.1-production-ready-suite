@@ -426,8 +426,8 @@ variable "instance_shape" {
   }
 }
 
-# 選んだ製品は 1 台の Compute に入れる（#1316）。既定は 4 OCPU / 24 GB / boot volume 200 GB（利用者の決定。
-# 2026-10-08）。RAG の CPU の parser（Docling）が最も多く使うので、負荷に合わせて上げる。
+# 選んだ製品は 1 台の Compute に入れる（#1316）。既定は 4 OCPU / 32 GB / boot volume 200 GB（利用者の決定。
+# メモリは 2026-10-20、#2668）。RAG の CPU の parser（Docling）が最も多く使うので、負荷に合わせて上げる。
 variable "instance_flex_shape_ocpus" {
   description = "OCPUs of the Compute instance that runs every selected product."
   type        = number
@@ -442,7 +442,7 @@ variable "instance_flex_shape_ocpus" {
 variable "instance_flex_shape_memory" {
   description = "Memory in GB of the Compute instance that runs every selected product."
   type        = number
-  default     = 24
+  default     = 32
 
   validation {
     condition     = var.instance_flex_shape_memory > 0

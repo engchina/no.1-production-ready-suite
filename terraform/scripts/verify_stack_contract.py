@@ -646,7 +646,7 @@ def _verify_schema(schema: str, variables: str) -> None:
     )
     for name, default in {
         "instance_flex_shape_ocpus": "4",
-        "instance_flex_shape_memory": "24",
+        "instance_flex_shape_memory": "32",
         "instance_boot_volume_size": "200",
     }.items():
         _require_all(_schema_variable(schema, name), [f"default: {default}"], context=f"{name} schema default")
