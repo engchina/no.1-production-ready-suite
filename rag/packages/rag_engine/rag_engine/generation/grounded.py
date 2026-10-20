@@ -105,7 +105,8 @@ GENERATE_SYSTEM_PROMPT = (
     "機能見出しは文書の節名であり、開く画面やメニューとは限らない。\n"
     "- 前回の草稿の検査結果（是正時のみ）: 指摘を直し、支持済みの item は同じ quote のまま保持する。\n"
     "- 添付原画像と根拠レコードの対応（画像がある場合）: 各画像の bbox / context_bbox / target_highlight / asset_kind。\n"
-    "- 業務ガイドがある場合は、目的・必要な根拠・終わりの条件を満たす説明を、前提の手順から順に items にする。質問で確定した状態から外れる操作は混ぜない。資料で裏付けられない要件は gap と確認先を示す。\n"
+    "- 業務ガイドがある場合は、目的・必要な根拠・終わりの条件を満たす説明を、前提の手順から順に items にする。質問で確定した状態から外れる操作は混ぜない。資料で裏付けられない要件は gap にする。\n"
+    "- 業務ガイドは答え方の指示で、資料ではない。items の text には quote の原文が裏付ける内容だけを書き、業務ガイドの文（確認先・方針）を写さない。業務ガイドの窓口と引き継ぐ条件は、システムが「業務ガイドの案内」として本文に出す。\n"
     "2.2 Evidence の見出し行\n"
     "- origin（見出し行では `origin=` と表記）: document_text は解析された本文、image_extraction は画像からの生成説明・OCR、unclassified は未分類。\n"
     # タグは SPAN_TAGGERS が原文へ付け、ITEM_CHECKS が警告の条件に使う。意味を伝えないと、モデルは条件を知らずに書く。
@@ -262,7 +263,8 @@ AUDIT_SYSTEM_PROMPT = (
     "- unused_evidence: items で使われていない根拠の evidence_id、function、先頭の抜粋（全文ではない）。\n"
     "- known_gaps: 検索評価の段階で根拠が無いと分かっている観点。草稿がその観点を gap にしているのは正しい対応。\n"
     "- guide_steps: 回答が沿う業務ガイドの手順（step_id、title）と、手順ごとの根拠の evidence_id（evidence_ids）。\n"
-    "- guide_contracts: 手順の要件（requirements の id と text）と前提手順（depends_on）。gap_items は回答で不足を明示した文と index。\n"
+    "- guide_contracts: 手順の要件（requirements の id と text）と前提手順（depends_on）。gap_items は回答で不足を明示した文と index。"
+    "guide_notes は本文の「業務ガイドの案内」の行（業務ガイドの窓口・引き継ぐ条件。資料の記載ではない）と index。\n"
     "\n"
     "3. 判定規則\n"
     "3.1 support（quote が text を支持するか）\n"
@@ -308,6 +310,7 @@ AUDIT_SYSTEM_PROMPT = (
     "- guide_requirement_reviews: guide_contracts の全要件について、回答 items の text が実際に述べた内容を判定する。"
     "kind=evidence は、その item の主張と引用元が要求された根拠・対応関係を満たせば addressed とする。根拠を検査する指示自体を回答で復唱する必要はない。"
     "kind=completion（kind が無い要件も同じ）は、操作・条件・除外・確認先の全てを本文で説明すれば addressed、一部なら partial、無ければ missing。"
+    "確認先は guide_notes の行の index も引ける（kind=evidence は items でだけ満たす）。"
     "完了条件はその手順の範囲で判定し、別手順や質問全体の未解決をその手順の未充足理由にしない。"
     "資料にある・説明できる・示唆できるだけでは充足しない。対応する item_indexes と、その text を写した answer_quote を返す。\n"
     "- reviews: 各 item の index、support、applicability、condition、reason、output_fields。出力の項目を主張するitemでは、evidenceとfunction_contextが示す根拠の役割と成果物の一致を先に判定する。\n"
@@ -2780,6 +2783,7 @@ def render_answer(
     subquestions: Sequence[dict] = (),
     summary_reasons: Sequence[Mapping[str, Any]] = (),
     answer_warnings: Sequence[Mapping[str, Any]] = (),
+    guide_notes: tuple[str, Sequence[str]] | None = None,
 ) -> RenderedAnswer:
     """本文を組み立て、出典行ごとの根拠と、段落の印・外した段落・回答全体の警告を返す。
 
@@ -2796,6 +2800,9 @@ def render_answer(
     印の付いた item・当てはめ・summary（``summary_reasons``）の行は ``passage_marks`` に、根拠と矛盾して外した item
     は ``removed_passages`` に載せ、本文の末尾に「根拠と矛盾し除いた内容」「確認が必要な点」（回答全体の警告
     ``answer_warnings`` を先に）の節を足す（本文だけを読む利用者向け。#2738）。
+
+    ``guide_notes`` は業務ガイドの（題名, 案内の行）。資料の記載と分けて「業務ガイドの案内」の節に出す（出典の行は
+    付けない。#2792）。
     """
     # 出典行ごとの、その行にまとめた説明（同じ出典・頁が続く説明。#2710）。
     citation_entries: list[list[CheckedItem]] = []
@@ -2864,6 +2871,10 @@ def render_answer(
         sections.append((answer_labels().unverified_section, [f"{bullet}{line}" for line in dict.fromkeys(unverified)]))
     if deadline:
         sections.append((answer_labels().deadline_section, [f"{bullet}{line}" for line in dict.fromkeys(deadline)]))
+    if guide_notes and guide_notes[1]:
+        title, notes = guide_notes
+        labels = answer_labels()
+        sections.append((labels.guide_notes_section, [labels.guide_notes_note(title), *(f"{bullet}{line}" for line in notes)]))
     if confirmations:
         sections.append((answer_labels().confirmations_section, [f"{bullet}{line}" for line in confirmations]))
     removed = [
@@ -2901,7 +2912,11 @@ def _body_sections(
     # 本文に言い換えを出す説明（印の付いた説明を含む。#2738）。適用が未確認（unverified）の印の無い説明は、
     # 結論の節ではなく「参考情報」の節に置く。行末の注記は付けず、節の直下の説明で該当が未確認であることを
     # 伝える (#2040)。
-    shown = [entry for entry in checked if entry.published and not _shown_as_quote(entry)]
+    published = [entry for entry in checked if entry.published and not _shown_as_quote(entry)]
+    # 資料の出典を付けない説明（引用が原文と照合できない・業務ガイドの文から来た。#2792）は、資料の節に置かず、
+    # 出典の行の無い節に分ける。
+    shown = [entry for entry in published if entry.span]
+    unsourced = [entry for entry in published if not entry.span]
     sections: list[tuple[str, list[str]]] = []
     rules = [entry for entry in shown if entry.item.kind == "rule"]
     if rules:
@@ -2917,13 +2932,12 @@ def _body_sections(
     # 同じ文書の中では items の並びで機能が連続する範囲ごとに区切る。機能ごとに集約し直すと、機能を往復する
     # 一連の操作（F1 で選択 → F2 で入力 → F1 で保存）が「選択 → 保存」「入力」の順に変わり、保存後に入力する
     # 手順として表示されていた (#1009)。同じ機能が別の機能を挟んで再び現れれば別の節にし、items の順序は変えない。
-    # 引用元が決まらない説明（印つき。#2738）は、文書の手順の後に機能名の無い見出しで出す。
     by_document: dict[tuple, list[CheckedItem]] = {}
     for entry in shown:
-        if entry.item.kind in _PROCEDURE_KINDS:
-            by_document.setdefault(_document_key(entry.span) if entry.span else (), []).append(entry)
+        if entry.item.kind in _PROCEDURE_KINDS and entry.span:
+            by_document.setdefault(_document_key(entry.span), []).append(entry)
     primary_document = primary_procedure_document(shown)
-    ordered_documents = sorted(by_document, key=lambda key: (key == (), key != primary_document))
+    ordered_documents = sorted(by_document, key=lambda key: key != primary_document)
     groups: list[tuple[Any, list[CheckedItem]]] = []
     for document in ordered_documents:
         for entry in by_document[document]:
@@ -2938,6 +2952,9 @@ def _body_sections(
         confirmation = all(e.item.kind == "confirmation" for e in entries)
         heading = labels.confirmation_steps_heading if confirmation else labels.operation_steps_heading
         sections.append((labels.steps_heading(heading, title), lines(entries, len(entries) > 1)))
+    if unsourced:
+        labels = answer_labels()
+        sections.append((labels.unsourced_section, [labels.unsourced_section_note, *lines(unsourced, False)]))
     # 画面の UI ラベル（「管理者」「管理区分」）のような単語だけの引用は説明を含まないので表示しない (#647)。
     # 表示する引用（画面説明は例の値を除いた後）が空・単語だけなら出さない (#1120)。
     quotes = [entry for entry in checked if _shown_as_quote(entry) and _displayed_quote(entry) and not _bare_label(_displayed_quote(entry))]
@@ -3777,13 +3794,29 @@ def guide_step_assignment(
     return coverage, assigned
 
 
+def _requirement_answer_text(checked: Sequence[CheckedItem], notices: Sequence[str], indexes: Sequence[int]) -> str:
+    """要件の監査が引いた index（items と、その後ろに続く業務ガイドの案内の行）の本文。"""
+    texts = []
+    for index in indexes:
+        if 0 <= index < len(checked):
+            texts.append(checked[index].item.text)
+        elif 0 <= index - len(checked) < len(notices):
+            texts.append(notices[index - len(checked)])
+    return "\n".join(texts)
+
+
 def apply_guide_contracts(
     coverage: Sequence[dict[str, Any]],
     checked: Sequence[CheckedItem],
     contracts: Sequence[dict[str, Any]],
     audit: GroundedAudit | None,
+    notices: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
-    """要件の全件を、監査の後も確かめた説明に対応付ける。未回答・重複・不正な index は充足にしない。"""
+    """要件の全件を、監査の後も確かめた説明に対応付ける。未回答・重複・不正な index は充足にしない。
+
+    ``notices`` は業務ガイドの案内の行（index は items の後ろに続く。#2792）。完了条件（kind=completion）だけが
+    引ける。必要な根拠（kind=evidence）は検索した資料の説明でだけ満たす。
+    """
     if not contracts:
         return list(coverage)
     reviews: dict[str, list[Any]] = {}
@@ -3803,11 +3836,16 @@ def apply_guide_contracts(
             matches = reviews.get(requirement["id"], ())
             review = matches[0] if len(matches) == 1 else None
             cited = review.item_indexes if review else []
-            valid = bool(cited) and all(
-                0 <= index < len(checked) and (checked[index].confirmed or checked[index].item.kind == "gap") and not checked[index].added
-                for index in cited
-            )
-            answer_text = "\n".join(checked[index].item.text for index in cited if 0 <= index < len(checked))
+            notice_allowed = requirement.get("kind", "completion") == "completion"
+
+            def citable(index: int, notice_allowed: bool = notice_allowed) -> bool:
+                if 0 <= index < len(checked):
+                    entry = checked[index]
+                    return (entry.confirmed or entry.item.kind == "gap") and not entry.added
+                return notice_allowed and 0 <= index - len(checked) < len(notices)
+
+            valid = bool(cited) and all(citable(index) for index in cited)
+            answer_text = _requirement_answer_text(checked, notices, cited)
             quote_matches = bool(review and review.answer_quote.strip() and quote_in_text(review.answer_quote, answer_text))
             status = review.status if review else "missing"
             if status == "addressed" and not (valid and quote_matches):
@@ -3877,6 +3915,102 @@ def guide_step_gap_line(step: dict[str, Any]) -> str:
     if step.get("status") == GUIDE_STEP_NOT_SEARCHED:
         return f"業務ガイドの手順「{step['title']}」は、手順ごとの検索を時間・回数の上限で打ち切ったため、資料で確かめていません。"
     return f"業務ガイドの手順「{step['title']}」は、取得した資料で説明を確かめられませんでした。"
+
+
+# ---- 根拠の出所（#2792） ----------------------------------------------------------
+# 資料の出典を付けてよいのは、検索した資料の原文と照合できた説明だけ。引用が原文と照合できない説明（#2738 で本文に
+# 残す）と、引いた根拠に無く業務ガイドの文から来た説明は、印を付けて残すが資料の出典を付けない。業務ガイドは
+# 運用者が設定した答え方の指示で、資料ではない（確認先・引き継ぐ条件はシステムが「業務ガイドの案内」の節に出す）。
+UNSOURCED_MARK_CODES = frozenset({"quote_unmatched", "citation_error", "guide_text"})
+# 説明の文が業務ガイドの文から来たかの判定。文の語（2 文字組）のうち引いた根拠に無いものの割合が
+# ``GUIDE_TEXT_NOVEL_RATIO`` 以上で、その語のうち業務ガイドの文にあるものの割合が ``GUIDE_TEXT_GUIDE_RATIO`` 以上なら
+# 業務ガイドの文とする。語の少ない文（``GUIDE_TEXT_MIN_WORDS`` 未満）は判定しない。業務ガイドの文は資料の言い回しを
+# 写すことが多いので、根拠にある語は業務ガイドにあっても数えない（根拠の言い換えは業務ガイドの文にしない）。
+GUIDE_TEXT_MIN_WORDS = 8
+GUIDE_TEXT_NOVEL_RATIO = 0.6
+GUIDE_TEXT_GUIDE_RATIO = 0.7
+
+
+def _text_words(value: str) -> set[str]:
+    """説明と根拠・業務ガイドの文を照らす語（ひらがなを含む文字の 2 文字組。句読点・空白で切る）。
+
+    手順の語（`_guide_words`）は漢字・カタカナ・英数字だけだが、業務ガイドの方針の文（「推測せず」「確認するよう」）は
+    ひらがなを含む言い回しが目印になるので、ここでは全ての文字を使う。
+    """
+    return {w[i : i + 2] for w in re.findall(r"\w+", fold_width(value or "")) for i in range(len(w) - 1)}
+
+
+def guide_texts(contracts: Sequence[Mapping[str, Any]], notices: Sequence[str] = ()) -> list[str]:
+    """業務ガイドの文（手順の目的・要件・案内の行）。説明が業務ガイドの文から来たかの判定に使う。"""
+    texts = [str(contract.get("purpose") or "") for contract in contracts]
+    texts += [str(entry.get("text") or "") for contract in contracts for entry in contract.get("requirements") or ()]
+    return [text for text in (*texts, *notices) if text.strip()]
+
+
+def _evidence_words(entry: CheckedItem) -> set[str]:
+    """説明が引いた根拠（引用・根拠の本文・同じ機能と隣の本文・画面と文書の文）の語。"""
+    span = check_view(entry.span) if entry.span else {}
+    parts: list[str] = [entry.item.quote]
+    for key in _SPAN_TEXT_FIELDS:
+        value = span.get(key)
+        parts.extend(str(v) for v in value) if isinstance(value, (list, tuple)) else parts.append(str(value or ""))
+    return _text_words(" ".join(parts))
+
+
+def guide_text_sentences(entry: CheckedItem, guide_words: set[str]) -> list[str]:
+    """説明の文のうち、引いた根拠に無く業務ガイドの文から来た文（#2792）。"""
+    if not guide_words or entry.item.kind == "gap":
+        return []
+    evidence = _evidence_words(entry)
+    found = []
+    for sentence in check_cues().sentence_split.split(fold_width(entry.item.text)):
+        words = _text_words(sentence)
+        if len(words) < GUIDE_TEXT_MIN_WORDS:
+            continue
+        novel = words - evidence
+        if novel and len(novel) / len(words) >= GUIDE_TEXT_NOVEL_RATIO and len(novel & guide_words) / len(novel) >= GUIDE_TEXT_GUIDE_RATIO:
+            found.append(sentence.strip())
+    return found
+
+
+def mark_guide_text(checked: Sequence[CheckedItem], texts: Sequence[str]) -> int:
+    """引いた根拠に無く業務ガイドの文から来た説明に印 ``guide_text`` を付ける（#2792）。付けた数を返す。"""
+    words = _text_words(" ".join(texts))
+    count = 0
+    for entry in checked:
+        if entry.removed or entry.quote_only or any(mark["code"] == "guide_text" for mark in entry.marks):
+            continue
+        if sentences := guide_text_sentences(entry, words):
+            entry.mark(
+                "guide_text", "／".join(sentences)[: passage_marks.NOTE_DETAIL_MAX_CHARS], reason="業務ガイドの文を資料の説明に書いた"
+            )
+            count += 1
+    return count
+
+
+def detach_unsourced(checked: Sequence[CheckedItem]) -> int:
+    """資料の出典を付けない説明（``UNSOURCED_MARK_CODES`` の印）から根拠の結び付きを外す（#2792）。外した数を返す。
+
+    本文には印つきで残すが、資料の節・出典の行・回答の根拠の一覧には出さない（「資料の出典を確かめられない説明」の節）。
+    """
+    count = 0
+    for entry in checked:
+        if entry.span is not None and not entry.removed and any(mark["code"] in UNSOURCED_MARK_CODES for mark in entry.marks):
+            entry.span = None
+            count += 1
+    return count
+
+
+def guide_notice_lines(contact: str, conditions: Sequence[str], approval_note: str = "", approval_required: bool = False) -> list[str]:
+    """業務ガイドの設定（窓口・引き継ぐ条件・承認）から決める案内の行（#2792）。資料の記載ではない。"""
+    labels = answer_labels()
+    lines = []
+    conditions = [condition.strip() for condition in conditions if condition.strip()]
+    if conditions and contact.strip():
+        lines.append(labels.guide_handoff(contact.strip(), "／".join(conditions)))
+    if approval_required:
+        lines.append(labels.guide_approval(approval_note.strip()))
+    return lines
 
 
 def build_context_block(
@@ -4001,6 +4135,7 @@ def run_round(
     guide_step_semantics: GuideStepSemantics | None = None,
     guide_unsearched_steps: Sequence[str] = (),
     guide_step_contracts: Sequence[dict[str, Any]] = (),
+    guide_notices: Sequence[str] = (),
 ) -> Round:
     """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -4017,7 +4152,8 @@ def run_round(
     ``guide_step_terms`` は手順ごとの検索の手がかり（共有の根拠の item を手順に対応付ける語。#2649）。
     ``guide_step_semantics`` は共有の根拠の item を語で決められないときに意味の近さで決める embedding（回答の中で
     round をまたいで再利用する。None は語の判定だけ。#2649）。``guide_unsearched_steps`` は手順ごとの検索を打ち切って
-    検索しなかった手順（#2706）。
+    検索しなかった手順（#2706）。``guide_notices`` は業務ガイドの案内の行（窓口・引き継ぐ条件。#2792）。監査は完了条件の
+    充足にこの行を引ける。業務ガイドの文（手順の目的・要件・案内）を引いた根拠に無いまま書いた説明には印を付ける。
     """
     audit_settings = settings if audit_settings is None else audit_settings
     audit_system = audit_system_prompt(compact_reasons=compact_audit_reasons)
@@ -4041,6 +4177,8 @@ def run_round(
     # 引き継ぎは監査の前に行い、引き継いだ item も当該 round の根拠・指摘のもとで監査する (#1011)。監査の後に
     # 引き継ぐと、前の round で誤って支持された主張が監査に掛からないまま復活し、撤回できなかった。
     checked = without_redundant_quotes(carry_over(checked, previous))
+    # 業務ガイドの文を資料の説明として書いた item は、資料の出典を付けない（#2792）。
+    mark_guide_text(checked, guide_texts(guide_step_contracts, guide_notices))
     carried = sum(entry.carried for entry in checked)
     applications = check_applications(
         question,
@@ -4119,6 +4257,9 @@ def run_round(
             inputs["gap_items"] = [
                 {"index": index, "text": entry.item.text} for index, entry in enumerate(checked) if entry.item.kind == "gap"
             ]
+            if guide_notices:
+                # 業務ガイドの案内の行（本文の「業務ガイドの案内」の節。#2792）。index は items の後ろに続ける。
+                inputs["guide_notes"] = [{"index": len(checked) + offset, "text": note} for offset, note in enumerate(guide_notices)]
         if guide_steps:
             # 回答が沿う業務ガイドの手順と、手順ごとの根拠の表示 ID（#2491）。質問の文が後続の手順に触れていなくても、
             # 手順の根拠を引いた説明を質問の対象の手順として判定させる。
@@ -4151,9 +4292,9 @@ def run_round(
                     and entry.status == "addressed"
                     and not (
                         entry.item_indexes
-                        and all(0 <= index < len(checked) for index in entry.item_indexes)
+                        and all(0 <= index < len(checked) + len(guide_notices) for index in entry.item_indexes)
                         and entry.answer_quote.strip()
-                        and quote_in_text(entry.answer_quote, "\n".join(checked[index].item.text for index in entry.item_indexes))
+                        and quote_in_text(entry.answer_quote, _requirement_answer_text(checked, guide_notices, entry.item_indexes))
                     )
                 }
             )
@@ -4284,6 +4425,7 @@ def run_round(
                 checked,
                 guide_step_contracts,
                 audit,
+                guide_notices,
             )
             if guide_steps
             else []

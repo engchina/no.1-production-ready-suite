@@ -2039,6 +2039,7 @@ def synthesize_grounded_answer(
                     guide_step_semantics=guide_semantics,
                     guide_unsearched_steps=guide_unsearched,
                     guide_step_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
+                    guide_notices=runtime_knowledge.guide_notices if runtime_knowledge else (),
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                 )
                 if number == 0:
@@ -2244,6 +2245,10 @@ def synthesize_grounded_answer(
     # 説明をすべて捨てていた）。
     off_goal = grounded.off_goal(current, question)
     answer_warnings = [passage_marks.answer_warning("off_goal", grounded.answer_labels().off_goal_gap)] if off_goal else []
+    # 資料の原文と照合できない説明・業務ガイドの文から来た説明は、資料の出典・回答の根拠の一覧から外す（#2792）。
+    grounded.detach_unsourced(current.checked)
+    guide_notices = runtime_knowledge.guide_notices if runtime_knowledge is not None else ()
+    guide_notes = (runtime_knowledge.guide_title, guide_notices) if runtime_knowledge is not None and guide_notices else None
     # 本文に出す根拠のある item（システムが補った原文を含む。根拠と矛盾して外した item は除く）と、本文に言い換えを
     # 出す item（引用元の決まらない印つきの説明を含む）。
     published = [entry for entry in current.checked if entry.span and not entry.removed]
@@ -2279,7 +2284,11 @@ def synthesize_grounded_answer(
         else []
     )
     guide_coverage = grounded.apply_guide_contracts(
-        guide_coverage, current.checked, runtime_knowledge.guide_step_contracts if runtime_knowledge else (), current.audit
+        guide_coverage,
+        current.checked,
+        runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
+        current.audit,
+        guide_notices,
     )
     guide_gaps = [grounded.guide_step_gap_line(step) for step in grounded.unexplained_guide_steps(guide_coverage)]
     unanswered += guide_gaps
@@ -2328,6 +2337,7 @@ def synthesize_grounded_answer(
             subquestions=subquestions,
             summary_reasons=summary_reasons,
             answer_warnings=answer_warnings,
+            guide_notes=guide_notes,
         )
     elif needed:
         # 本文に出す説明が無い（公開 item が無い、またはシステムが補った原文だけ）なら、根拠全体を見た監査が必要と
@@ -2341,6 +2351,7 @@ def synthesize_grounded_answer(
             unverified=unread_lines,
             deadline=deadline_lines,
             answer_warnings=answer_warnings,
+            guide_notes=guide_notes,
         )
     elif published:
         envelope_entries = published
@@ -2355,6 +2366,7 @@ def synthesize_grounded_answer(
             subquestions=subquestions,
             summary_reasons=summary_reasons,
             answer_warnings=answer_warnings,
+            guide_notes=guide_notes,
         )
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
@@ -2381,6 +2393,7 @@ def synthesize_grounded_answer(
             unverified=unread_lines,
             deadline=deadline_lines,
             answer_warnings=answer_warnings,
+            guide_notes=guide_notes,
         )
     answer_text, citation_lines = rendered.text, rendered.citation_lines
     passage_record = rendered.record()
@@ -4224,6 +4237,18 @@ def answer_question_result(
         extra_budget = ExtraRetrievalBudget.from_settings(settings)
         guide_step_trace: dict[str, Any] | None = None
         if guide_plan is not None:
+            # 業務ガイドの案内（窓口・引き継ぐ条件・承認。#2792）。本文の「業務ガイドの案内」の節に資料とは分けて出す。
+            from rag_engine.generation.grounded import guide_notice_lines
+
+            runtime_knowledge = replace(
+                runtime_knowledge,
+                guide_title=guide_plan.title,
+                guide_notices=tuple(
+                    guide_notice_lines(
+                        guide_plan.contact, guide_plan.handoff_conditions, guide_plan.approval_note, guide_plan.approval_required
+                    )
+                ),
+            )
             with _execution_step(
                 "業務ガイドの手順ごとの検索", "業務ガイドの手順ごとに検索し、手順が参照する資料の頁の根拠を回答の材料に加えます。"
             ) as guide_step:

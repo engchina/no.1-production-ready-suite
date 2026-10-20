@@ -930,6 +930,21 @@ def conditional_step_ids(
     return conditional
 
 
+def guide_notices(match: GuideMatch) -> dict[str, Any]:
+    """業務ガイドの窓口・引き継ぐ条件・承認（#2792）。回答の「業務ガイドの案内」の節に、資料と分けて出す材料。
+
+    承認は、分かっている条件で影響範囲・承認が係る手順が残るとき（`impact_applies`）だけ。
+    """
+    impact = match.content.impact
+    approval = impact.approval_required and impact_applies(match)
+    return {
+        "contact": match.content.handoff.contact,
+        "handoff_conditions": list(match.content.handoff.conditions),
+        "approval_required": approval,
+        "approval_note": impact.approval_note if approval else "",
+    }
+
+
 def guide_step_plan(match: GuideMatch) -> list[dict[str, Any]]:
     """手順ごとの検索（#2395）に渡す手順（分かっている条件で外れた手順を除く）。
 
@@ -1402,6 +1417,7 @@ __all__ = [
     "guide_rule",
     "guide_score",
     "guide_short_circuit_outcome",
+    "guide_notices",
     "guide_step_plan",
     "is_guide_preview_record",
     "is_guide_preview_trace",

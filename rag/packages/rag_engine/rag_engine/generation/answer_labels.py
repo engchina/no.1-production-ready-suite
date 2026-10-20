@@ -46,6 +46,14 @@ class AnswerLabels:
     removed_section_note: str
     marked_section: str
     marked_section_note: str
+    # 検索した資料の原文と照合できない説明の節（#2792。資料の出典を付けない）と、業務ガイドの案内の節（業務ガイドの
+    # 設定の窓口・引き継ぐ条件・承認。{title} に業務ガイドの題名、{contact} に窓口、{conditions} に条件、{note} に承認の補足）。
+    unsourced_section: str
+    unsourced_section_note: str
+    guide_notes_section: str
+    guide_notes_note_template: str
+    guide_handoff_template: str
+    guide_approval_template: str
     # 節の 1 行の型（{text} に段落の短い引用、{reasons} に理由）と、回答全体の警告の行の型。
     passage_note_template: str
     answer_warning_template: str
@@ -86,6 +94,15 @@ class AnswerLabels:
     def answer_warning(self, reasons: str) -> str:
         return self.answer_warning_template.format(reasons=reasons)
 
+    def guide_notes_note(self, title: str) -> str:
+        return self.guide_notes_note_template.format(title=title)
+
+    def guide_handoff(self, contact: str, conditions: str) -> str:
+        return self.guide_handoff_template.format(contact=contact, conditions=conditions)
+
+    def guide_approval(self, note: str) -> str:
+        return self.guide_approval_template.format(note=note).strip()
+
 
 def _build(pack: LanguagePack) -> AnswerLabels:
     def text(key: str) -> str:
@@ -104,6 +121,8 @@ def _build(pack: LanguagePack) -> AnswerLabels:
     # 小問の見出しの型の {label}・{text} 以外の部分（「質問」「：」）。
     subquestion = re.escape(text("subquestion_heading_template"))
     subquestion = subquestion.replace(re.escape("{label}"), r".{1,12}?").replace(re.escape("{text}"), r".*")
+    # 業務ガイドの案内の節の注記（{title} は業務ガイドの題名。#2792）。
+    guide_note = re.escape(text("guide_notes_note_template")).replace(re.escape("{title}"), r".+")
     titles = (
         text("rules_section"),
         text("quote_only_section"),
@@ -116,6 +135,9 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         text("removed_section_note"),
         text("marked_section"),
         text("marked_section_note"),
+        text("unsourced_section"),
+        text("unsourced_section_note"),
+        text("guide_notes_section"),
     )
     return AnswerLabels(
         rules_section=text("rules_section"),
@@ -146,6 +168,12 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         removed_section_note=text("removed_section_note"),
         marked_section=text("marked_section"),
         marked_section_note=text("marked_section_note"),
+        unsourced_section=text("unsourced_section"),
+        unsourced_section_note=text("unsourced_section_note"),
+        guide_notes_section=text("guide_notes_section"),
+        guide_notes_note_template=text("guide_notes_note_template"),
+        guide_handoff_template=text("guide_handoff_template"),
+        guide_approval_template=text("guide_approval_template"),
         passage_note_template=text("passage_note_template"),
         answer_warning_template=text("answer_warning_template"),
         predicate_endings=pack.words("answer_labels", "predicate_endings"),
@@ -157,6 +185,7 @@ def _build(pack: LanguagePack) -> AnswerLabels:
             + re.escape(text("citation_prefix"))
             + rf".*(?: {page_head}.*| {sheet_head}.+)"
             + f"|{subquestion}"
+            + f"|{guide_note}"
         ),
         quote_only_line=re.compile(rf"{item}{re.escape(quote_open)}.*{re.escape(quote_close)}"),
         section_item_line=re.compile(item),

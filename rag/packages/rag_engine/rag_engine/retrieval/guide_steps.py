@@ -103,6 +103,12 @@ class GuidePlan:
     guide_id: str
     revision: int
     steps: tuple[GuideStep, ...] = ()
+    # 業務ガイドの題名と、設定の窓口・引き継ぐ条件・承認（#2792。回答の「業務ガイドの案内」の節の材料）。
+    title: str = ""
+    contact: str = ""
+    handoff_conditions: tuple[str, ...] = ()
+    approval_required: bool = False
+    approval_note: str = ""
 
     @property
     def optional_step_ids(self) -> tuple[str, ...]:
@@ -135,8 +141,13 @@ class GuidePlan:
         )
 
     @classmethod
-    def from_payload(cls, guide_id: str, revision: int, steps: Iterable[Mapping[str, Any]]) -> GuidePlan | None:
-        """呼び出し側の手順の一覧（id・title・required・retrieval_hints・references）から作る。手順が無ければ None。"""
+    def from_payload(
+        cls, guide_id: str, revision: int, steps: Iterable[Mapping[str, Any]], *, title: str = "", notices: Mapping[str, Any] | None = None
+    ) -> GuidePlan | None:
+        """呼び出し側の手順の一覧（id・title・required・retrieval_hints・references）から作る。手順が無ければ None。
+
+        ``notices`` は業務ガイドの窓口（contact）・引き継ぐ条件（handoff_conditions）・承認（approval_required・approval_note）。
+        """
         parsed: list[GuideStep] = []
         for raw in steps:
             if not isinstance(raw, Mapping) or not str(raw.get("id") or "").strip():
@@ -176,7 +187,19 @@ class GuidePlan:
                     depends_on=tuple(str(x) for x in raw.get("depends_on") or () if x),
                 )
             )
-        return cls(guide_id=guide_id, revision=int(revision), steps=tuple(parsed)) if parsed else None
+        notices = notices or {}
+        if not parsed:
+            return None
+        return cls(
+            guide_id=guide_id,
+            revision=int(revision),
+            steps=tuple(parsed),
+            title=str(title or ""),
+            contact=str(notices.get("contact") or ""),
+            handoff_conditions=tuple(str(item) for item in notices.get("handoff_conditions") or () if str(item).strip()),
+            approval_required=notices.get("approval_required") is True,
+            approval_note=str(notices.get("approval_note") or ""),
+        )
 
 
 @dataclass(frozen=True)
