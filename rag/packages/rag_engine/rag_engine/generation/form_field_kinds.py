@@ -8,6 +8,10 @@ button / unknown）を付け、chunk の metadata（``image_evidence[].visual_st
 - 業務ガイドの分からなかった条件（backend が ``evidence_conditions`` として渡す）のうち、選択肢が項目の種類に
   対応する条件（``condition_kind_options``）を、拾った種類が 1 つに決まるときだけ既知にする。種類が割れる・
   拾えないときは決めない（今までどおり）。
+- 条件が決まったら、backend が決まり方ごとに前もって作った業務ガイドの手順の計画（``evidence_plans``。#2689）に
+  切り替える: 外れた分岐の手順を回答の手順から外し、決まった分岐の手順を必須にし、業務ガイドのルールの本文を
+  決まった条件の版にする（``with_resolved_plan``）。分岐の判断は backend の業務ガイドの照合が正本で、ここでは
+  決まった条件の組で計画を選ぶだけ。
 
 照合は決定的（LLM を呼ばない）。項目名は文字の形（NFKC・大小・記号・空白）をそろえて、質問の中に含まれるかで比べる。
 """
@@ -16,7 +20,7 @@ from __future__ import annotations
 
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from rag_engine.generation.answer_payload import _metadata_image_evidence
@@ -30,6 +34,9 @@ MAX_NOTE_OBSERVATIONS = 12
 
 # 業務ガイドの条件の形（backend が照合の結果から渡す）: (条件の id, 名前, ((選択肢, (言い換え, ...)), ...))。
 EvidenceCondition = tuple[str, str, tuple[tuple[str, tuple[str, ...]], ...]]
+# 条件が決まったときの業務ガイドの手順の計画（backend が渡す。#2689）:
+# (決まった条件の (id, 値) の列, 残る手順の (id, 必須か) の列, 業務ガイドのルールの id, そのルールの本文)。
+EvidencePlan = tuple[tuple[tuple[str, str], ...], tuple[tuple[str, bool], ...], str, str]
 
 
 @dataclass(frozen=True)
@@ -144,6 +151,39 @@ def resolve_conditions(observations: Sequence[FieldKindObservation], conditions:
     return resolved
 
 
+def resolved_plan(resolved: Sequence[ResolvedCondition], plans: Iterable[EvidencePlan]) -> EvidencePlan | None:
+    """決まった条件の組（id と値）がちょうど一致する計画。条件が決まらない・一致する計画が無ければ None。"""
+    if not resolved:
+        return None
+    wanted = sorted((item.condition_id, item.value) for item in resolved)
+    return next((plan for plan in plans if sorted(plan[0]) == wanted), None)
+
+
+def with_resolved_plan(runtime_knowledge: Any, resolved: Sequence[ResolvedCondition], plans: Iterable[EvidencePlan]) -> Any:
+    """決まった条件の計画に切り替えた runtime knowledge（#2689）。計画が無ければそのまま返す。
+
+    手順ごとの根拠・検索の手がかりは計画に残る手順だけにし、必須に数えない手順は計画の必須かで決め直し、
+    業務ガイドのルール（rule の id が一致するもの）の本文を計画の本文にする。
+    """
+    plan = resolved_plan(resolved, plans) if runtime_knowledge is not None else None
+    if plan is None:
+        return runtime_knowledge
+    _conditions, steps, rule_id, rule_content = plan
+    kept = {step_id for step_id, _required in steps}
+    rules = tuple(
+        replace(rule, content=rule_content) if rule_content and rule.rule_id == rule_id else rule
+        for rule in runtime_knowledge.matched_rules
+    )
+    return replace(
+        runtime_knowledge,
+        matched_rules=rules,
+        guide_steps=tuple(item for item in runtime_knowledge.guide_steps if item[0] in kept),
+        guide_optional_steps=tuple(step_id for step_id, required in steps if not required),
+        guide_step_terms=tuple(item for item in runtime_knowledge.guide_step_terms if item[0] in kept),
+        guide_unsearched_steps=tuple(step_id for step_id in runtime_knowledge.guide_unsearched_steps if step_id in kept),
+    )
+
+
 def prompt_note(
     observations: Sequence[FieldKindObservation],
     resolved: Sequence[ResolvedCondition],
@@ -175,11 +215,15 @@ def prompt_note(
     return "\n".join(parts)
 
 
-def trace_payload(observations: Sequence[FieldKindObservation], resolved: Sequence[ResolvedCondition]) -> dict[str, Any]:
-    """回答の記録に残す観測と、決まった条件。"""
+def trace_payload(
+    observations: Sequence[FieldKindObservation], resolved: Sequence[ResolvedCondition], plans: Iterable[EvidencePlan] = ()
+) -> dict[str, Any]:
+    """回答の記録に残す観測と、決まった条件と、切り替えた業務ガイドの手順の計画（手順の id と必須か）。"""
+    plan = resolved_plan(resolved, plans)
     return {
         "observations": [{"source_id": item.source_id, "name": item.name, "kind": item.kind} for item in observations],
         "resolved_conditions": [
             {"id": item.condition_id, "label": item.label, "value": item.value, "kind": item.kind} for item in resolved
         ],
+        **({"guide_plan": [{"step_id": step_id, "required": required} for step_id, required in plan[1]]} if plan else {}),
     }

@@ -63,7 +63,9 @@ from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_citation_metadata
 from app.rag.support_guide_evidence import (
     EVIDENCE_CONDITIONS_KEY,
+    EVIDENCE_PLANS_KEY,
     evidence_condition_candidates,
+    evidence_plans,
 )
 from app.rag.support_guide_query import build_guide_query
 from app.rag.support_guide_runtime import (
@@ -396,6 +398,8 @@ async def _resolve_query_context(
                         "clarifications": clarification_questions(match),
                         # 回答の根拠で決められる条件の候補（#2404。画面の図の項目の種類）。
                         EVIDENCE_CONDITIONS_KEY: evidence_condition_candidates(match),
+                        # 根拠で条件が決まったときの手順の計画（#2689）。
+                        EVIDENCE_PLANS_KEY: evidence_plans(match),
                         # 手順ごとの検索（#2395）の手順。回答フローだけが使う（要約には出さない）。
                         "step_plan": guide_step_plan(match),
                         "short_answer": (

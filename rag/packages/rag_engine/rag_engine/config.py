@@ -401,6 +401,9 @@ class Settings:
     # 業務ガイドの照合で分からなかった選択の条件（#2404）。(条件の id, 名前, ((選択肢, (言い換え, ...)), ...))。
     # 選択肢が項目の種類に対応する条件だけを、根拠の画面の図の項目の種類で決める（generation.form_field_kinds）。
     evidence_conditions: tuple[tuple[str, str, tuple[tuple[str, tuple[str, ...]], ...]], ...] = ()
+    # 根拠で条件が決まったときの業務ガイドの手順の計画（#2689）。backend が決まり方ごとに前もって作る。
+    # (決まった条件の (id, 値) の列, 残る手順の (id, 必須か) の列, 業務ガイドのルールの id, そのルールの本文)。
+    evidence_plans: tuple[tuple[tuple[tuple[str, str], ...], tuple[tuple[str, bool], ...], str, str], ...] = ()
 
     @property
     def vision_model(self) -> str:
