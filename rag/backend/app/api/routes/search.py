@@ -432,7 +432,7 @@ async def _resolve_query_context(
                         EVIDENCE_PLANS_KEY: evidence_plans(match),
                         # 手順ごとの検索（#2395）の手順。回答フローだけが使う（要約には出さない）。
                         "step_plan": guide_step_plan(match),
-                        # 業務ガイドの窓口・引き継ぐ条件・承認（#2792。資料と分けて本文の案内の節に出す）。
+                        # 業務ガイドの窓口・引き継ぐ条件・承認（#2792。資料と分けて出す）。
                         "notices": guide_notices(match),
                         "short_answer": (
                             short_circuit_answer(match)
