@@ -171,3 +171,23 @@ def test_evidence_condition_checks_support_without_requiring_its_instruction_in_
     result = grounded.apply_guide_contracts(coverage("a"), [item], plan.step_contracts, audit(review("a:0", [0]), review("a:1", [0])))
     assert (result[0]["status"] == "explained") is supported
     assert "同じ行" not in item.item.text
+
+
+def test_missing_following_step_does_not_invalidate_supported_entry_step():
+    plan = GuidePlan.from_payload(
+        "guide",
+        1,
+        [
+            {"id": "open", "evidence_requirements": ["共通画面への参照"], "done_when": "対象を選択する入口を示す"},
+            {"id": "edit", "done_when": "対象のコードを変更する", "depends_on": ["open"]},
+        ],
+    )
+    assert plan is not None
+    result = grounded.apply_guide_contracts(
+        coverage("open", "edit"),
+        [entry()],
+        plan.step_contracts,
+        audit(review("open:0", [0]), review("open:1", [0]), review("edit:0", [], "missing")),
+    )
+    assert result[0]["status"] == "explained"
+    assert result[1]["status"] == "unused"
