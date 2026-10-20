@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+from rag_parser_core.extraction import EXTRACTED_FIELD_CONTENT_KIND, EXTRACTED_FIELD_KEY
 from rag_parser_core.language import current_pack
 from rag_parser_core.structured_records import record_boundary_plain_text
 
@@ -354,7 +355,7 @@ def _field_element(field: ExtractionField, order: int) -> DocumentElement:
         "field_name": field.name,
         "field_value": field.value,
         "field_value_type": field.value_type,
-        "extracted_field": True,
+        EXTRACTED_FIELD_KEY: True,
     }
     if field.source_element_id:
         metadata["field_source_element_id"] = field.source_element_id
@@ -363,7 +364,7 @@ def _field_element(field: ExtractionField, order: int) -> DocumentElement:
         text=f"{field.name}: {field.value}",
         order=order,
         element_id=f"field-{order}-{field.name}"[:128],
-        content_kind="field",
+        content_kind=EXTRACTED_FIELD_CONTENT_KIND,
         page_number=field.page_number,
         bbox=list(field.bbox) if field.bbox else None,
         metadata=metadata,

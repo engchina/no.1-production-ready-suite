@@ -24,6 +24,25 @@ type ExtractionArtifactValue = (
     | dict[str, "ExtractionArtifactValue"]
 )
 
+# 取込が原文から作った派生の要素・chunk（章節ナビゲーションの要約・項目抽出の値・RAPTOR の要約）の
+# content_kind と印（#2590）。索引の手がかりで、引用できる原文ではない。見出しとして読み直さず、
+# 分割で原文の要素と結合せず、章節の本文に入れない。
+SECTION_SUMMARY_CONTENT_KIND = "section_summary"
+EXTRACTED_FIELD_CONTENT_KIND = "field"
+DERIVED_CONTENT_KINDS = frozenset({SECTION_SUMMARY_CONTENT_KIND, EXTRACTED_FIELD_CONTENT_KIND})
+NAV_SUMMARY_KEY = "nav_summary"
+EXTRACTED_FIELD_KEY = "extracted_field"
+RAPTOR_SUMMARY_KEY = "raptor_summary"
+DERIVED_FLAG_KEYS = (NAV_SUMMARY_KEY, EXTRACTED_FIELD_KEY, RAPTOR_SUMMARY_KEY)
+
+
+def is_derived_content(content_kind: object, metadata: Mapping[str, object]) -> bool:
+    """派生の要素・chunk か（content_kind か印のどちらかで判定する。#2590）。"""
+    if content_kind in DERIVED_CONTENT_KINDS:
+        return True
+    return any(metadata.get(key) for key in DERIVED_FLAG_KEYS)
+
+
 MARKDOWN_HEADING = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>.+)$")
 TABLE_LINE = re.compile(r"^\s*\|.+\|\s*$")
 FENCED_CODE_START = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<language>[\w.+#-]*)\s*$")
@@ -426,7 +445,10 @@ def normalize_document_elements(
         kind = element.kind
         element_id = element.element_id or _metadata_text(metadata.get("element_id"))
         content_kind = element.content_kind or _content_kind_for_element_kind(kind)
-        if heading := _parse_heading(element.text):
+        # 派生の要素（「章節名: 要約」など）は見出しに見えても見出しとして読み直さない(#2590)。
+        if not is_derived_content(content_kind, metadata) and (
+            heading := _parse_heading(element.text)
+        ):
             level, title = heading
             kind = "title"
             content_kind = "text"

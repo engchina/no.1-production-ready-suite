@@ -19,6 +19,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from rag_parser_core.extraction import is_derived_content
+
 from app.clients.oracle import (
     OracleClient,
     OracleConnectionProtocol,
@@ -193,10 +195,11 @@ def _section_path(value: object) -> tuple[str, ...]:
 
 
 def map_chunk_from_row(row: dict[str, object]) -> MapChunk | None:
-    """対応を作る chunk の行（本文でない合成の chunk は None）。"""
+    """対応を作る chunk の行（本文でない派生の chunk は None）。"""
     metadata = _metadata_from_json(row.get("metadata_json"))
-    # 要約（RAPTOR・章節の要約）は本文ではないので、章節の本文に入れない。
-    if metadata.get("raptor_summary") or metadata.get("nav_summary"):
+    # 派生の chunk（RAPTOR・章節の要約、項目抽出の値）は引用できる原文ではないので、章節の本文に
+    # 入れない。印の無い #2590 より前の chunk も content_kind で除く。
+    if is_derived_content(metadata.get("content_kind"), metadata):
         return None
     page_start = _page(metadata, "page_start") or _page(metadata, "page_number")
     page_end = _page(metadata, "page_end") or page_start
