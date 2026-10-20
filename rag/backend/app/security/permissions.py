@@ -342,6 +342,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/documents"): _any(MENU_FILE_LIST, MENU_KNOWLEDGE_BASES),
     # 削除の確認で使う（削除と同じ権限。#303）。
     ("GET", "/documents/delete-impact"): _any(MENU_FILE_LIST),
+    # 一覧の「条件に一致する文書をすべて選ぶ」の ID（一括の操作と同じ画面。#2674）。
+    ("GET", "/documents/ids"): _any(MENU_FILE_LIST),
     # 分類の入力の候補（分類の編集と同じ権限。#547）。
     # 分類の一覧は、管理の画面と、文書の詳細・RAG 検索の分類の選択肢が読む（#2131）。
     ("GET", "/document-categories"): _any(
@@ -353,6 +355,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", "/document-categories/{category_id}"): _any(MENU_DOCUMENT_CATEGORIES),
     ("GET", "/documents/ingestion-jobs"): _DOCUMENT_WORKSPACE,
     ("POST", "/documents/ingestion-jobs/drain"): _any(MENU_UPLOAD),
+    # 文書の一括の投入（1 件の投入と同じ権限。#2674）。
+    ("POST", "/documents/ingestion-jobs/bulk"): _DOCUMENT_WORKSPACE,
     ("POST", "/documents/ingestion-jobs/{job_id}/retry"): _DOCUMENT_WORKSPACE,
     ("POST", "/documents/ingestion-jobs/{job_id}/cancel"): _DOCUMENT_WORKSPACE,
     ("GET", "/documents/ingestion-jobs/{job_id}"): _DOCUMENT_WORKSPACE,

@@ -1960,7 +1960,12 @@ export const ja = {
   "fileList.clearSelection": "選択解除",
   "fileList.selectAllAria": "すべて選択",
   "fileList.selectRowAria": "この行を選択",
-  "fileList.bulkQueueRunning": "投入中… ({done}/{total})",
+  "fileList.bulkQueueRunning": "{total} 件のファイル準備を受け付けています…",
+  // 一覧の全ページの文書を選ぶ（#2674。一括投入の上限まで）。
+  "fileList.selectAllMatching": "条件に一致する {count} 件をすべて選択",
+  "fileList.selectedAllMatching": "条件に一致する {count} 件をすべて選択中",
+  "fileList.selectAllMatchingOverLimit":
+    "条件に一致する {count} 件は、一括投入の上限（{limit} 件）を超えています。条件で絞り込むと、すべてを選んで投入できます。",
   "fileList.bulkDeleteRunning": "削除中… ({done}/{total})",
   "fileList.bulkDelete.confirm.title": "選択した {count} 件を削除しますか？",
   "fileList.bulkDelete.confirm.description":
@@ -2007,11 +2012,32 @@ export const ja = {
   "fileList.ingest.toast.skipped": "「{name}」はファイル準備をスキップしました。",
   "fileList.ingest.toast.failed": "「{name}」のファイル準備を開始できませんでした。",
   "fileList.ingest.toast.failedHint": "文書の状態を確認してから再試行してください。",
-  "fileList.bulkQueue.toast.queued": "{count} 件のファイル準備を開始しました。",
-  "fileList.bulkQueue.toast.partial":
-    "{total} 件中 {queued} 件のファイル準備を開始しました。開始できなかった文書があります。",
-  "fileList.bulkQueue.toast.failed": "選択した文書のファイル準備を開始できませんでした。",
-  "fileList.bulkQueue.toast.detail": "スキップ {skipped} 件・失敗 {failed} 件。{reason}",
+  // 一括投入（#2674）はサーバーが受け付けた job を永続化してから結果を返す。画面を閉じても worker が処理する。
+  "fileList.bulkQueue.toast.accepted": "{count} 件のファイル準備を受け付けました。",
+  "fileList.bulkQueue.backgroundHint": "受け付けた文書は、画面を閉じても順に処理します。状態は一覧に反映されます。",
+  "fileList.bulkQueue.result.title": "{total} 件のうち {accepted} 件のファイル準備を受け付けました。",
+  "fileList.bulkQueue.result.titleNone": "選択した {total} 件のうち、受け付けた文書はありません。",
+  "fileList.bulkQueue.result.counts":
+    "受付済み {accepted} 件・処理中 {active} 件・スキップ {skipped} 件・受付不可 {rejected} 件",
+  "fileList.bulkQueue.result.reason": "{outcome}: {label}（{count} 件）",
+  "fileList.bulkQueue.result.outcome.already_active": "処理中",
+  "fileList.bulkQueue.result.outcome.skipped": "スキップ",
+  "fileList.bulkQueue.result.outcome.rejected": "受付不可",
+  "fileList.bulkQueue.result.keptSelection":
+    "受付不可の文書は選択したままにしています。理由を確かめてから、もう一度投入できます。",
+  "fileList.bulkQueue.result.notSent":
+    "上限（{limit} 件）を超えた {count} 件は送っていません。条件で絞り込んでから投入してください。",
+  "fileList.bulkQueue.result.dismiss": "一括投入の結果を閉じる",
+  "fileList.bulkQueue.error.title": "一括投入の結果を確かめられませんでした。",
+  "fileList.bulkQueue.error.hint":
+    "もう一度「一括投入」を実行してください。受付済みの文書は二重に登録せず、残りだけを受け付けます。",
+  "fileList.bulkQueue.reason.invalid_document_id": "文書の ID の形式が正しくありません。",
+  "fileList.bulkQueue.reason.not_found": "文書が見つからないか、操作する権限がありません。",
+  "fileList.bulkQueue.reason.processing": "文書を処理中です。",
+  "fileList.bulkQueue.reason.job_active": "取込待ちまたは取込中です。",
+  "fileList.bulkQueue.reason.already_indexed": "索引済みです。",
+  "fileList.bulkQueue.reason.awaiting_confirmation": "確認待ちの工程があります。文書の詳細から続けてください。",
+  "fileList.bulkQueue.reason.temporary_failure": "一時的な障害で受け付けられませんでした。",
   "settings.loading": "設定を読み込んでいます",
   "feedback.page.loading": "フィードバックを読み込んでいます",
   "feedback.detail.loading": "フィードバックの詳細を読み込んでいます",

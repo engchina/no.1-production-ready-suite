@@ -45,6 +45,7 @@ from app.clients.oracle import (
     is_transient_oracle_error,
     oracle_error_log_fields,
 )
+from app.clients.oracle_bulk_ingestion_store import OracleBulkIngestionStore
 from app.config import (
     CHUNKING_STRATEGIES_WITH_MIN_CHARS,
     FIXED_DELIMITER_STRATEGY,
@@ -55,6 +56,7 @@ from app.config import (
     get_settings,
 )
 from app.db_degradation import load_or_degrade
+from app.rag.bulk_ingestion import BulkIngestionStore, accept_bulk_ingestion
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
 from app.rag.chunking_small_to_big import (
     SMALL_TO_BIG_FALLBACK_STRATEGY,
@@ -120,9 +122,12 @@ from app.rag.variant_keys import (
 from app.rag.variant_planner import MaterializationPlan, plan_document_materializations
 from app.schemas.common import ApiResponse, Page
 from app.schemas.document import (
+    BULK_INGESTION_MAX_DOCUMENTS,
     INGESTION_HEAVY_PHASES,
     BatchUploadFailedItem,
     BatchUploadResult,
+    BulkIngestionRequest,
+    BulkIngestionResult,
     DocumentApproveRequest,
     DocumentChunkPreviewRequest,
     DocumentChunkPreviewResponse,
@@ -136,6 +141,7 @@ from app.schemas.document import (
     DocumentDetail,
     DocumentExtractionExport,
     DocumentExtractionExportFormat,
+    DocumentIdList,
     DocumentLayerStatusName,
     DocumentMaterializationLayerStatus,
     DocumentPreprocessArtifact,
@@ -587,6 +593,33 @@ async def list_documents(
     )
 
 
+@router.get("/ids", response_model=ApiResponse[DocumentIdList])
+async def list_document_ids(
+    status: FileStatus | None = None,
+    q: str | None = Query(default=None, min_length=1, max_length=200),
+    knowledge_base_id: str | None = Query(default=None, min_length=1, max_length=128),
+    queued_phase: IngestionJobPhase | None = None,
+    limit: int = Query(default=BULK_INGESTION_MAX_DOCUMENTS, ge=1, le=BULK_INGESTION_MAX_DOCUMENTS),
+) -> ApiResponse[DocumentIdList]:
+    """一覧と同じ条件の文書の ID(新しい順に最大 ``limit`` 件)と件数を返す(#2674)。
+
+    一覧の「条件に一致する文書をすべて選ぶ」から一括の投入へ渡す。要約・JSON 列は読まない。
+    """
+    if status is not None and queued_phase is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="status と queued_phase は同時に指定できません。",
+        )
+    ids, total = await OracleClient().list_document_ids(
+        status=status,
+        query=q,
+        knowledge_base_id=knowledge_base_id,
+        queued_phase=queued_phase,
+        limit=limit,
+    )
+    return ApiResponse(data=DocumentIdList(ids=ids, total=total, limit=limit))
+
+
 def _queue_wait_concurrency(
     phase: IngestionJobPhase, plan: IngestionQueueConcurrency | None
 ) -> int:
@@ -872,6 +905,50 @@ async def get_ingestion_job(job_id: str) -> ApiResponse[IngestionJob]:
     if job is None:
         raise HTTPException(status_code=404, detail="取込ジョブが見つかりません。")
     return ApiResponse(data=job)
+
+
+def _bulk_ingestion_store() -> BulkIngestionStore:
+    """一括の投入の保存先(テストは偽の保存先に差し替える)。"""
+    return OracleBulkIngestionStore(OracleClient())
+
+
+@router.post("/ingestion-jobs/bulk", response_model=ApiResponse[BulkIngestionResult])
+async def enqueue_bulk_ingestion_jobs(
+    http_request: Request,
+    request: BulkIngestionRequest,
+) -> ApiResponse[BulkIngestionResult]:
+    """選んだ文書(最大 1 万件)のファイル準備をまとめて受け付ける(#2674)。
+
+    受け付けた文書の取込 job(QUEUED)を永続化してから、文書ごとの結果(受付済み・既に処理中・
+    スキップ・受付不可と理由)を返す。流量制限は要求 1 回として数え、一括の中の各文書は単件の
+    流量制限を通らない(高コストの処理の並行数は取込 worker が制御する)。同じ文書レシピに待機中・
+    実行中の job があれば作らないため、通信断の後に同じ要求を再送しても二重に登録しない。
+    """
+    enforce_rate_limit("ingest", http_request)
+    settings = get_settings()
+    result = await accept_bulk_ingestion(
+        request.document_ids,
+        store=_bulk_ingestion_store(),
+        resolve_settings=lambda config: _merge_document_processing_config(config)[0],
+        enqueue_single=lambda document_id: _enqueue_ingestion_job_for_document(
+            document_id, force=False
+        ),
+        max_attempts=settings.ingestion_job_max_attempts,
+    )
+    if result.accepted_count:
+        request_ingestion_worker_wakeup()
+    logger.info(
+        "bulk_ingestion_accepted",
+        extra={
+            "requested_count": result.requested_count,
+            "unique_count": result.unique_count,
+            "accepted_count": result.accepted_count,
+            "already_active_count": result.already_active_count,
+            "skipped_count": result.skipped_count,
+            "rejected_count": result.rejected_count,
+        },
+    )
+    return ApiResponse(data=result)
 
 
 @router.post("/{document_id}/ingestion-jobs", response_model=ApiResponse[IngestionJob])
