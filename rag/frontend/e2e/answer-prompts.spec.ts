@@ -128,9 +128,9 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 900 },
 ]) {
-  test(`各段のプロンプトは処理の順の区分の見出しの下に並び、閉じたまま使われる条件が分かる（#2054, ${viewport.name}）`, async ({
+  test(`各段のプロンプトは処理の順の区分の見出しの下に並び、閉じたまま使われる条件が分かる（#2054, ${viewport.name}）`, { tag: "@responsive" }, async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.route("**/api/settings/answer-prompts**", (route) =>
       route.fulfill({ json: answerPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false, FLOW_STAGES) })
@@ -162,6 +162,15 @@ for (const viewport of [
     await expect(stages.getByRole("region", { name: "評価" }).getByTestId("answer-prompt-stage-evaluation")).toContainText(
       "使われる条件: 品質評価と、保存した回答を標準回答で評価するときだけ"
     );
+
+    const conditions = stages.getByRole("region", { name: "質問の解釈" })
+      .getByTestId("answer-prompt-stage-support_guide_conditions");
+    await expect(conditions).toContainText("質問から業務ガイドの自由入力条件を読み取る");
+    await expect(conditions).toContainText("利用者が答える未確認の自由入力条件があるとき");
+    await conditions.locator("summary").click();
+    await expect(conditions.getByText("条件認識の system", { exact: true })).toBeVisible();
+    await expect(conditions.locator("textarea")).toHaveCount(0);
+    await conditions.screenshot({ path: testInfo.outputPath("guide-condition-prompt.png") });
 
     // 開くと部分の名前と内容が見える。
     await picture.locator("summary").click();
@@ -266,6 +275,7 @@ const FLOW_STAGES: StageFixture[] = [
     ],
   },
   { id: "field_extraction", phase: "ingestion", prompts: [{ id: "instruction", content: "項目の指示" }] },
+  { id: "support_guide_conditions", phase: "question", prompts: [{ id: "system", content: "条件認識の system" }] },
   { id: "history_rewrite", phase: "question", prompts: [{ id: "system", content: "書き換えの system" }] },
   { id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] },
   { id: "screen_linking", phase: "retrieval", prompts: [{ id: "system", content: "画面の system" }] },

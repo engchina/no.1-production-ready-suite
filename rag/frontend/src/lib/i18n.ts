@@ -3872,6 +3872,9 @@ export const ja = {
   "settings.answerPrompts.stage.raptor_summary": "RAPTOR の階層の要約",
   "settings.answerPrompts.stage.raptor_summary.condition":
     "RAPTOR の要約索引を backend の設定で有効にしたとき（既定は無効）",
+  "settings.answerPrompts.stage.support_guide_conditions": "質問から業務ガイドの自由入力条件を読み取る",
+  "settings.answerPrompts.stage.support_guide_conditions.condition":
+    "回答・確認の対象に選んだ業務ガイドに、利用者が答える未確認の自由入力条件があるとき",
   "settings.answerPrompts.stage.history_rewrite": "会話を踏まえた質問の書き換え",
   "settings.answerPrompts.stage.history_rewrite.condition": "チャットの 2 問目以降（会話の履歴があるとき）",
   "settings.answerPrompts.stage.field_filter": "質問から項目の条件を読み取る",
