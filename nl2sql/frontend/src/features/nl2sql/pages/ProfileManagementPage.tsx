@@ -12,6 +12,7 @@ import {
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import {
+  compareNames,
   Button,
   LoadMoreFooter,
   ListToolbar,
@@ -780,11 +781,11 @@ function SchemaGroupedSelectionPanel({
       // 小文字を含む owner（`"Sales"`）を大文字の同名 owner と同じグループにしない（#563）。
       grouped.set(object.owner, [...(grouped.get(object.owner) ?? []), object]);
     }
-    const sortedOwners = [...grouped.keys()].sort((left, right) => left.localeCompare(right));
+    const sortedOwners = [...grouped.keys()].sort((left, right) => compareNames(left, right));
     const pickerItems: ListPickerItem[] = sortedOwners.flatMap((owner) =>
       (grouped.get(owner) ?? [])
         .slice()
-        .sort((left, right) => schemaTableQualifiedName(left).localeCompare(schemaTableQualifiedName(right)))
+        .sort((left, right) => compareNames(schemaTableQualifiedName(left), schemaTableQualifiedName(right)))
         .map((object) => {
           const qualified = schemaTableQualifiedName(object);
           return {

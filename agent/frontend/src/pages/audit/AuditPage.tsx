@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, RefreshCw } from "lucide-react";
 import {
+  compareNames,
   Banner,
   Button,
   Card,
@@ -160,7 +161,7 @@ export function AuditPage() {
   const toolNameOptions = useMemo(() => {
     const names = new Set([...(tools.data?.tools ?? []).map((tool) => tool.name), ...(auditToolNames ?? [])]);
     if (toolName) names.add(toolName);
-    return [...names].sort().map((name) => ({ value: name, label: name }));
+    return [...names].sort((left, right) => compareNames(left, right)).map((name) => ({ value: name, label: name }));
   }, [tools.data, auditToolNames, toolName]);
 
   function setFilter<K extends keyof AuditFilterForm>(key: K, value: AuditFilterForm[K]) {

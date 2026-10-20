@@ -1,3 +1,5 @@
+import { compareNames } from "@production-ready/ui";
+
 import type { Nl2SqlProfile, ProfileSummary, ProfileSummaryPage } from "./types";
 
 export type ProfileListSortKey = "name" | "tables" | "views";
@@ -52,7 +54,7 @@ export function profileSummaryPageFromLegacyList(
 function profileSortValue(profile: ProfileSummary, key: ProfileListSortKey) {
   if (key === "tables") return profile.allowed_table_count;
   if (key === "views") return profile.allowed_view_count;
-  return profile.name.toLowerCase();
+  return profile.name;
 }
 
 export function sortProfileSummariesForDisplay(
@@ -62,6 +64,7 @@ export function sortProfileSummariesForDisplay(
   return [...profiles].sort((left, right) => {
     const a = profileSortValue(left, sort.key);
     const b = profileSortValue(right, sort.key);
+    if (typeof a === "string" && typeof b === "string") return compareNames(a, b, sort.direction);
     const result = a < b ? -1 : a > b ? 1 : 0;
     return sort.direction === "asc" ? result : -result;
   });

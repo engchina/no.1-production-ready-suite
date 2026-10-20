@@ -17,6 +17,7 @@ export {
 } from "./lib/list-density";
 export { isImeComposing, isSubmitEnter, type KeyboardEventLike } from "./lib/keyboard";
 export { normalizeBasePath, routerBasename, stripBasePath, withBasePath } from "./lib/base-path";
+export { compareNames, type NameSortDirection } from "./lib/name-collation";
 export { isRepeatedActivationKey, runStopClickAction, type RunStopAction } from "./lib/run-stop";
 export { useActionPending, type ActionPending } from "./lib/action-pending";
 export {

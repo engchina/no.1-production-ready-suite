@@ -2,7 +2,7 @@
 // ロールはロール名（表示名。例「システム管理者」）で出す。表示名が空ならロールコード。
 // ID（UUID の `role_id`）は文字にも tooltip にも出さず、参照できない（削除済みの）ロールは
 // 「（削除済みのロール）」と出す。3 製品で同じ関数・部品を使う。
-import { RowTitleButton, StatusBadge, cn, type RowTitleButtonProps } from "@production-ready/ui";
+import { compareNames, RowTitleButton, StatusBadge, cn, type RowTitleButtonProps } from "@production-ready/ui";
 
 import { t } from "./messages";
 
@@ -32,12 +32,12 @@ export function roleDisplayName(
   return role.display_name?.trim() || role.role_code?.trim() || deletedLabel;
 }
 
-/** ロール名で並べるための比較（日本語の順）。 */
+/** ロール名で並べるための比較（共通の名前の順。#2753）。 */
 export function compareRoleDisplayNames(
   left: Pick<RoleNameReference, "display_name" | "role_code" | "deleted">,
   right: Pick<RoleNameReference, "display_name" | "role_code" | "deleted">,
 ): number {
-  return roleDisplayName(left).localeCompare(roleDisplayName(right), "ja");
+  return compareNames(roleDisplayName(left), roleDisplayName(right));
 }
 
 export interface RoleNameBadgesProps {

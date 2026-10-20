@@ -9,6 +9,7 @@ import {
 } from "react";
 import { LockKeyhole, Pencil, Plus, RefreshCw, RotateCcw, Save, ShieldCheck } from "lucide-react";
 import {
+  compareNames,
   Banner,
   BulkSelectionActions,
   Button,
@@ -79,8 +80,7 @@ const EMPTY_DRAFT: RolePermissionsDraft = { permissions: [], targets: {} };
 const NO_TARGETS: never[] = [];
 
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
-  const result = left.localeCompare(right, "ja");
-  return direction === "asc" ? result : -result;
+  return compareNames(left, right, direction);
 }
 
 function compareNumber(left: number, right: number, direction: DataTableSort["direction"]) {

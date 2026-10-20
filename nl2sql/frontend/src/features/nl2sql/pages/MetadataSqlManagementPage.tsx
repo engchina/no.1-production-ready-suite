@@ -10,6 +10,7 @@ import { Database,
 } from "lucide-react";
 
 import {
+  compareNames,
   ApiErrorDetailList,
   Button,
   Banner,
@@ -314,7 +315,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         );
       })
       // 候補の一覧（ListPicker）は名前の順に並べる（列の並べ替えは持たない。#608）。
-      .sort((left, right) => left.qualifiedName.localeCompare(right.qualifiedName));
+      .sort((left, right) => compareNames(left.qualifiedName, right.qualifiedName));
   }, [allTargets, targetFilter, targetOwnerPrefix, targetSearch]);
 
   // 応答の反映は then の callback で行う（effect から呼んでも同期の setState にしない）。

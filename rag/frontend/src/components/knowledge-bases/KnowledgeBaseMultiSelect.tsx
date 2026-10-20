@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  compareNames,
   type FieldWidth,
   SearchableMultiSelect,
   type SearchableMultiSelectLabels,
@@ -44,7 +45,7 @@ function knowledgeBaseMultiSelectLabels(): SearchableMultiSelectLabels {
 }
 
 /**
- * KB の選択肢（名前・説明・文書数）。全件を手元に持つとき（`local`）だけ、既定の KB を先頭に文書の多い順へ並べ、
+ * KB の選択肢（名前・説明・文書数）。全件を手元に持つとき（`local`）だけ、既定の KB を先頭に名前の順（共通の名前の順。#2753）へ並べ、
  * 文書の最も多い KB に「最多」を付ける（ページの途中では決められない）。
  * 文書のない KB も隠さない（作ったばかりの KB へ登録・所属させるため。件数は右端の「0 文書」で分かる。#578）。
  */
@@ -171,9 +172,6 @@ function sortKnowledgeBases(items: readonly KnowledgeBaseSummary[]) {
   return [...items].sort((a, b) => {
     if (a.name === DEFAULT_KNOWLEDGE_BASE_NAME) return -1;
     if (b.name === DEFAULT_KNOWLEDGE_BASE_NAME) return 1;
-    if (b.document_count !== a.document_count) {
-      return b.document_count - a.document_count;
-    }
-    return a.name.localeCompare(b.name, "ja");
+    return compareNames(a.name, b.name);
   });
 }

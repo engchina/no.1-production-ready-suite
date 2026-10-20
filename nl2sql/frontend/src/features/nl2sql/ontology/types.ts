@@ -1,3 +1,5 @@
+import { compareNames } from "@production-ready/ui";
+
 import {
   ontologyJoinConditionText,
   ontologyPhysicalNodeLabel,
@@ -1151,7 +1153,7 @@ export function sortOntologyRelationshipRows(
   };
   const multiplier = direction === "asc" ? 1 : -1;
   return rows.slice().sort((left, right) =>
-    valueForKey(left).localeCompare(valueForKey(right), "ja") * multiplier
+    compareNames(valueForKey(left), valueForKey(right)) * multiplier
   );
 }
 

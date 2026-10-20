@@ -10,6 +10,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { ArrowRight, Database, Eye, FileSpreadsheet, Play, RefreshCw, Table2, Trash2, Upload, X } from "lucide-react";
 
 import {
+  compareNames,
   Button,
   ButtonLink,
   Banner,
@@ -78,6 +79,7 @@ import {
   DbObjectStepIndicator,
   DbSingleObjectPickerList,
   dbAdminExecuteFailureMessage,
+  compareDbObjectSortValues,
   dbObjectSortValue,
   formatDbObjectName,
   parseDbAdminObjectTarget,
@@ -345,10 +347,11 @@ export function DataManagementPage() {
     );
     const sortKey: DbObjectSortKey = previewObjectSort.key === "row_count" ? "row_count" : "name";
     return [...filtered].sort((left, right) => {
-      const a = dbObjectSortValue(left, sortKey);
-      const b = dbObjectSortValue(right, sortKey);
-      const result = a < b ? -1 : a > b ? 1 : 0;
-      return previewObjectSort.direction === "asc" ? result : -result;
+      return compareDbObjectSortValues(
+        dbObjectSortValue(left, sortKey),
+        dbObjectSortValue(right, sortKey),
+        previewObjectSort.direction
+      );
     });
   }, [previewObjectItems, previewObjectKindFilter, previewObjectOwnerPrefix, previewObjectSearch, previewObjectSort]);
   const selectedPreviewObjectItem = useMemo(
@@ -2467,7 +2470,7 @@ function profileObjectName(item: unknown) {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((left, right) =>
-    left.localeCompare(right)
+    compareNames(left, right)
   );
 }
 

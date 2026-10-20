@@ -73,9 +73,11 @@ test("200 件以下は全件を 1 回で読み、検索語をサーバーへ送�
   await combobox.click();
   await expect(listbox.getByRole("option")).toHaveCount(120);
   await expect(page.getByRole("button", { name: "さらに表示" })).toHaveCount(0);
-  // 既定の KB が先頭、次に文書の最も多い KB（「最多」）。
+  // 既定の KB が先頭、その後は名前の順（#2753）。文書の最も多い KB の「最多」は並びに依らず付ける。
   await expect(listbox.getByRole("option").first()).toContainText("DEFAULT");
-  await expect(listbox.getByRole("option").nth(1)).toContainText("最多");
+  await expect(listbox.getByRole("option").nth(1)).toContainText("ナレッジベース-002");
+  await expect(listbox.getByRole("option").last()).toContainText("ナレッジベース-120");
+  await expect(listbox.getByRole("option").last()).toContainText("最多");
 
   // 「-110」〜「-119」の 10 件
   await combobox.fill("-11");
