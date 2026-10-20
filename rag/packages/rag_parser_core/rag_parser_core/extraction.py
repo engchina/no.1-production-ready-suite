@@ -33,6 +33,9 @@ DERIVED_CONTENT_KINDS = frozenset({SECTION_SUMMARY_CONTENT_KIND, EXTRACTED_FIELD
 NAV_SUMMARY_KEY = "nav_summary"
 EXTRACTED_FIELD_KEY = "extracted_field"
 RAPTOR_SUMMARY_KEY = "raptor_summary"
+# 項目抽出の値を読み取った元の要素の ID。分割で chunk に引き継ぎ、検索で当たった値の chunk を
+# 根拠に渡すときに、この要素を含む原文の chunk を読む（#2641）。
+FIELD_SOURCE_ELEMENT_KEY = "field_source_element_id"
 DERIVED_FLAG_KEYS = (NAV_SUMMARY_KEY, EXTRACTED_FIELD_KEY, RAPTOR_SUMMARY_KEY)
 
 

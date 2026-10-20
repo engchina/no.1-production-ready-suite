@@ -36,6 +36,7 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Any, Literal, cast
 
+from rag_parser_core.extraction import is_derived_content
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import parse_number
 
@@ -799,7 +800,7 @@ def annotate_cross_references(chunks: Sequence[Any], *, document_title: str = ""
 
     参照先は同じ文書の chunk 群の見出しの列から決める。自分の節・祖先の節への参照は残さない。
     参照の文書名が自分の文書名なら同じ文書への参照として解決する。他の文書への参照は未解決の
-    まま残す(回答のときに検索範囲から解決する)。RAPTOR の要約 chunk には付けない。
+    まま残す(回答のときに検索範囲から解決する)。派生の chunk(要約・項目の値。#2641)には付けない。
     """
     index = SectionIndex(chunk.metadata.get("section_path") for chunk in chunks)
     citing_title = _citing_title(chunks, document_title)
@@ -807,7 +808,7 @@ def annotate_cross_references(chunks: Sequence[Any], *, document_title: str = ""
     annotated = 0
     for chunk in chunks:
         metadata = chunk.metadata
-        if metadata.get("raptor_summary"):
+        if is_derived_content(metadata.get("content_kind"), metadata):
             continue
         specs = extract_references(chunk.text)
         if not specs:

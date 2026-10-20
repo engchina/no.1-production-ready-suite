@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from rag_parser_core.extraction import (
     EXTRACTED_FIELD_KEY,
+    FIELD_SOURCE_ELEMENT_KEY,
     NAV_SUMMARY_KEY,
     DocumentElement,
     StructuredExtraction,
@@ -178,6 +179,8 @@ ELEMENT_PROVENANCE_METADATA_KEYS: tuple[str, ...] = (
     "parent_section_id",
     "nav_depth",
     EXTRACTED_FIELD_KEY,
+    # 項目抽出の値の元の要素（検索で当たった値の chunk の原文を読む。#2641）。
+    FIELD_SOURCE_ELEMENT_KEY,
 )
 # 表の中の画像を Vision で読み取った説明文(#502 / #513)。要素の metadata の key と、表の本文の
 # 後ろに足す補足の見出し。rag_engine の親子階層（small-to-big）(chunking/records.py)と
