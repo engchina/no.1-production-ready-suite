@@ -733,6 +733,18 @@ class ConfirmationClosedError(ValueError):
     """答えていない回答前の確認ではない（答え済み・古い・取り消し済み。#1839）。"""
 
 
+class RunNotActiveError(RuntimeError):
+    """終わった Run（取消・完了・失敗）では新しいツールを始めない（#2609）。
+
+    取消が先に確定した Run に新しい step を作らず、handler も呼ばない（`start_builtin_tool_step`）。
+    """
+
+    def __init__(self, run_id: str, status: RunStatus) -> None:
+        super().__init__(f"run {run_id} is {status.value}")
+        self.run_id = run_id
+        self.status = status
+
+
 class ConfirmationOutcome(BaseModel):
     """回答前の確認の操作の結果（#1839）。"""
 
@@ -1240,8 +1252,12 @@ class AgentRuntimeRepositoryContract(Protocol):
     def begin_builtin_resume(
         self, run_id: str
     ) -> tuple[RunState, AgentProfile, str, dict[str, bool]] | None: ...
+    def builtin_run_ended(self, run_id: str) -> bool: ...
+    def approved_builtin_call(
+        self, run_id: str, call_id: str, tool_name: str
+    ) -> ApprovalRequest | None: ...
     def start_builtin_tool_step(
-        self, run_id: str, call: ToolCall
+        self, run_id: str, call: ToolCall, *, cleanup: bool = False
     ) -> tuple[str, ToolInvocationContext]: ...
     def finish_builtin_tool_step(self, run_id: str, step_id: str, result: ToolResult) -> None: ...
     def request_builtin_approvals(
@@ -1840,8 +1856,14 @@ class AgentRuntimeRepository:
 
         利用者の操作の取消は、操作した人（`cancelled_by`。Run の利用者と異なることがある。
         system_admin の操作。#1928）をイベントに残す。
+
+        取消の後は新しいツールを始めない（`start_builtin_tool_step`。#2609）。取消の時点で既に
+        呼び先へ送っていた（実行中の）step は `in_flight_step_ids` に残し、未開始の step と
+        分ける。送った操作は取り消せないので、その結果は届いたときに事実のまま記録する
+        （`finish_builtin_tool_step`）。
         """
         cancelled_approval_ids: list[str] = []
+        in_flight_step_ids = [step.id for step in run.steps if step.status == StepStatus.RUNNING]
         run.status = RunStatus.CANCELLED
         run.updated_at = _now()
         run.pending_tool_calls.clear()
@@ -1869,6 +1891,7 @@ class AgentRuntimeRepository:
             "実行をキャンセルしました。",
             {
                 "cancelled_approval_ids": cancelled_approval_ids,
+                **({"in_flight_step_ids": in_flight_step_ids} if in_flight_step_ids else {}),
                 **({"cancelled_by": cancelled_by} if cancelled_by else {}),
             },
         )
@@ -2553,12 +2576,89 @@ class AgentRuntimeRepository:
             self._set_builtin_running_locked(run, "承認・確認の答えを反映して実行を再開しました。")
             return run.model_copy(deep=True), _agent_for_run(agent, run), state_text, decisions
 
+    def builtin_run_ended(self, run_id: str) -> bool:
+        """Run が終わった（取消・完了・失敗）か。終わった Run では新しいツール・モデルの呼び出しを
+        始めない（#2609）。
+
+        別のプロセス（API と runtime-dispatcher）が取り消した Run も、保存先の状態を読み直して
+        判定する（`_refresh_run_from_storage`）。I/O があるので event loop の外で呼ぶ。無い Run は
+        False（取消とは扱わない）。
+        """
+        self._refresh_run_from_storage(run_id)
+        with self._lock:
+            run = self._runs.get(run_id)
+            return run is not None and _is_terminal(run.status)
+
+    def approved_builtin_call(
+        self, run_id: str, call_id: str, tool_name: str
+    ) -> ApprovalRequest | None:
+        """この Run・呼び出し ID・ツールに対する承認済みの記録（無ければ None。#2610）。
+
+        「承認」のツールを実行してよいのは、この記録がある呼び出しだけ（SDK を経由したことだけでは
+        実行しない）。引数の照合は呼ぶ側が行う。
+        """
+        if not call_id:
+            return None
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                return None
+            approval = next(
+                (
+                    item
+                    for item in run.approvals
+                    if item.status == ApprovalStatus.APPROVED
+                    and item.tool_call.trace_id == call_id
+                    and item.tool_call.name == tool_name
+                ),
+                None,
+            )
+            return approval.model_copy(deep=True) if approval is not None else None
+
+    def _refresh_run_from_storage(self, run_id: str) -> None:
+        """別のプロセスが保存先で取り消した Run をメモリに反映する（memory / file は不要）。"""
+        return None
+
+    def _adopt_stored_cancel_locked(self, run: RunState, stored: RunState) -> bool:
+        """保存先で取り消し済みの Run を、このプロセスのメモリでも取り消しにする（#2609）。
+
+        取消は確定した操作なので、ほかのプロセスの古い「実行中」で上書きしない（取消が勝つ）。
+        反映したら True。
+        """
+        if stored.status != RunStatus.CANCELLED or _is_terminal(run.status):
+            return False
+        cancelled = next(
+            (
+                event
+                for event in reversed(stored.events)
+                if event.type == RunEventType.RUN_CANCELLED
+            ),
+            None,
+        )
+        cancelled_by = cancelled.payload.get("cancelled_by") if cancelled is not None else None
+        self._cancel_run_locked(
+            run, cancelled_by=cancelled_by if isinstance(cancelled_by, str) else None
+        )
+        self._mark_run_changed(run)
+        logger.info(
+            "agent_runtime_run_cancelled_by_another_process",
+            extra={"run_id": run.id, "writer_id": checkpoint_store.WRITER_ID},
+        )
+        return True
+
     def start_builtin_tool_step(
-        self, run_id: str, call: ToolCall
+        self, run_id: str, call: ToolCall, *, cleanup: bool = False
     ) -> tuple[str, ToolInvocationContext]:
-        """ツールの step を始める（承認済みの step があれば、それを実行中にする）。"""
+        """ツールの step を始める（承認済みの step があれば、それを実行中にする）。
+
+        終わった Run（取消・完了・失敗）では step を作らずに `RunNotActiveError`（#2609）。取消と
+        同じ lock の中で判定するので、取消が先に確定した呼び出しは始まらない。`cleanup` は取消の
+        後でも呼んでよい後始末（確認をやめた NL2SQL の session を閉じる。#1441）だけに使う。
+        """
         with self._lock:
             run = self._require_run(run_id)
+            if not cleanup and _is_terminal(run.status):
+                raise RunNotActiveError(run_id, run.status)
             step = next(
                 (
                     item
@@ -2593,7 +2693,9 @@ class AgentRuntimeRepository:
     def finish_builtin_tool_step(self, run_id: str, step_id: str, result: ToolResult) -> None:
         """ツールの結果を step・イベント・成果物に記録する。
 
-        失敗しても Run は続ける（結果を受け取ったモデルが判断する）。
+        失敗しても Run は続ける（結果を受け取ったモデルが判断する）。取消の前に送った操作の結果が
+        取消の後に届いたら、届いた結果を事実のまま記録し（取り消せたとは扱わない）、イベントに
+        Run の状態（`run_status`）を残す（#2609）。
         """
         with self._lock:
             run = self._require_run(run_id)
@@ -2601,6 +2703,18 @@ class AgentRuntimeRepository:
             step.tool_result = result
             step.completed_at = _now()
             call_name = step.tool_call.name if step.tool_call else step.kind
+            after_end = {"run_status": run.status.value} if _is_terminal(run.status) else {}
+            if after_end:
+                logger.info(
+                    "agent_runtime_tool_result_after_run_end",
+                    extra={
+                        "run_id": run_id,
+                        "step_id": step_id,
+                        "tool_name": call_name,
+                        "run_status": run.status.value,
+                        "success": result.success,
+                    },
+                )
             if result.success:
                 step.status = StepStatus.COMPLETED
                 self._record_tool_success_artifacts(run, step, result)
@@ -2615,6 +2729,7 @@ class AgentRuntimeRepository:
                         "duration_ms": result.duration_ms,
                         "guardrail_warnings": result.guardrail_warnings,
                         "audit_metadata": result.audit_metadata,
+                        **after_end,
                     },
                 )
                 self._append_guardrail_events(run, step, result)
@@ -2632,6 +2747,7 @@ class AgentRuntimeRepository:
                         "error_details": result.error_details,
                         "duration_ms": result.duration_ms,
                         "audit_metadata": result.audit_metadata,
+                        **after_end,
                     },
                 )
             run.updated_at = _now()
@@ -3800,12 +3916,65 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
             False,
         )
 
+    def _refresh_run_from_storage(self, run_id: str) -> None:
+        """別のプロセスが取り消した Run を、保存先の 1 行を読んでメモリに反映する（#2609）。
+
+        API のプロセスの取消を、Run を実行している runtime-dispatcher のプロセスが次のツール・
+        モデルの呼び出しの前に知る。読めないときは今のメモリで判定する（書き込みのときにも
+        取消を勝たせる。`_carry_stored_cancels_locked`）。
+        """
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None or _is_terminal(run.status):
+                return
+        try:
+            with self._connect_oracle() as connection, connection.cursor() as cursor:
+                row = checkpoint_store.read_entity(
+                    cursor, self._oracle_checkpoint_key, RUN_ENTITY, run_id
+                )
+        except Exception:  # noqa: BLE001 - 読めなければ今のメモリで判定する
+            logger.warning(
+                "agent_runtime_run_refresh_failed", extra={"run_id": run_id}, exc_info=True
+            )
+            return
+        stored = _stored_cancelled_run(row)
+        if stored is None:
+            return
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is not None and self._adopt_stored_cancel_locked(run, stored):
+                self._persist_locked()
+                self._record_fact_locked(run)
+
+    def _carry_stored_cancels_locked(
+        self, batch: _StagedChanges, rows: list[checkpoint_store.EntityRow]
+    ) -> None:
+        """書く Run を別のプロセスが先に取り消していたら、取消を残して書く（取消が勝つ。#2609）。"""
+        for row in rows:
+            key = row.key
+            if key not in batch.entities or row.kind != RUN_ENTITY:
+                continue
+            stored = _stored_cancelled_run(row)
+            run = self._runs.get(row.entity_id)
+            if stored is None or run is None:
+                continue
+            if self._adopt_stored_cancel_locked(run, stored):
+                batch.entities[key] = run.model_dump_json()
+                # 書く内容に入れたので、次の保存の予定には積まない。
+                self._changed.discard(key)
+
     def _write_staged(self, batch: _StagedChanges) -> None:
         """保存の予定を書く（head を lock し、別のプロセスの変更を読んでから。#1916・#1939）。"""
         table, key = self._oracle_table_name, self._oracle_checkpoint_key
         with self._connect_oracle() as connection, connection.cursor() as cursor:
             head = self._lock_head_cursor(cursor)
             others, full = self._changed_rows_cursor(cursor, head)
+            if others:
+                self._lock.acquire()
+                try:
+                    self._carry_stored_cancels_locked(batch, others)
+                finally:
+                    self._lock.release()
             version = head.version + 1
             header: str | None = None
             # 書いた後の保存先の退避の記録。
@@ -3946,6 +4115,22 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
                 ),
             },
         )
+
+
+def _stored_cancelled_run(row: checkpoint_store.EntityRow | None) -> RunState | None:
+    """保存先の Run の行が取り消し済みなら、その Run（それ以外・読めなければ None。#2609）。"""
+    if row is None or row.entity_json is None:
+        return None
+    try:
+        value = json.loads(row.entity_json)
+    except ValueError:
+        return None
+    if not isinstance(value, dict) or value.get("status") != RunStatus.CANCELLED.value:
+        return None
+    try:
+        return RunState.model_validate(value)
+    except ValidationError:
+        return None
 
 
 def _entities_snapshot_json(

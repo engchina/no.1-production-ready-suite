@@ -38,6 +38,12 @@ from app.features.agent.skills import (
     AgentSkillListOutput,
     skill_registry,
 )
+from app.features.agent.tool_arguments import (
+    INVALID_ARGUMENTS_CODE,
+    INVALID_ARGUMENTS_MESSAGE,
+    SchemaUnsupported,
+    validate_arguments,
+)
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -302,9 +308,17 @@ class ToolRegistry:
         force: bool = False,
         definition: ToolDefinition | None = None,
         handler: ToolHandler | None = None,
+        authorization: str | None = None,
     ) -> ToolResult:
         """ツールを呼ぶ。`definition` / `handler` を渡すと、登録していないツール（MCP 接続の
-        ツール。#757）も同じポリシー・ガードレール・監査で呼ぶ。"""
+        ツール。#757）も同じポリシー・ガードレール・監査で呼ぶ。
+
+        境界の順序は「引数の検証 → ポリシー → handler」（#2630）。引数は呼び先の契約
+        （`definition.input_schema`）と照合し、合わなければ handler を呼ばない。`force` は「承認」
+        （ASK）のツールを実行してよいという呼ぶ側の判断（承認の記録と結び付けた呼び出し・Control
+        Plane 自身の読み取り）で、「拒否」（DENY）は `force` でも実行しない。`authorization` は
+        その判断の理由（監査に残す。#2610）。
+        """
         started_at = _now()
         started_monotonic = perf_counter()
         active_context = context or ToolInvocationContext(trace_id=call.trace_id)
@@ -334,6 +348,31 @@ class ToolRegistry:
             context=active_context,
             force=force,
         )
+        if authorization:
+            audit_metadata["authorization"] = authorization
+        checked = validate_arguments(definition.input_schema, call.arguments)
+        if isinstance(checked, SchemaUnsupported):
+            # 検証できない schema は検証済みと扱わない（監査とログに残す）。
+            audit_metadata["argument_validation"] = f"unsupported:{checked.reason}"
+            logger.warning(
+                "tool_argument_schema_unsupported",
+                extra={"tool_name": definition.name, "reason": checked.reason},
+            )
+        elif checked:
+            audit_metadata["argument_validation"] = "failed"
+            return _tool_result(
+                name=call.name,
+                success=False,
+                error=INVALID_ARGUMENTS_MESSAGE,
+                error_code=INVALID_ARGUMENTS_CODE,
+                error_details={"argument_errors": [item.as_dict() for item in checked]},
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                policy_decision=decision,
+                audit_metadata=audit_metadata,
+            )
+        else:
+            audit_metadata["argument_validation"] = "passed"
         if decision == ToolPolicyDecision.DENY:
             return _tool_result(
                 name=call.name,
@@ -370,7 +409,7 @@ class ToolRegistry:
                 error_details=exc.details,
                 started_at=started_at,
                 started_monotonic=started_monotonic,
-                policy_decision=ToolPolicyDecision.ALLOW,
+                policy_decision=decision,
                 audit_metadata=audit_metadata,
             )
         except Exception as exc:  # noqa: BLE001 - ツール境界では失敗を結果に正規化する
@@ -381,7 +420,7 @@ class ToolRegistry:
                 error_code="tool.unhandled_error",
                 started_at=started_at,
                 started_monotonic=started_monotonic,
-                policy_decision=ToolPolicyDecision.ALLOW,
+                policy_decision=decision,
                 audit_metadata=audit_metadata,
             )
         guarded_output, warnings = _guard_tool_output(definition, output)
@@ -391,7 +430,7 @@ class ToolRegistry:
             output=guarded_output,
             started_at=started_at,
             started_monotonic=started_monotonic,
-            policy_decision=ToolPolicyDecision.ALLOW,
+            policy_decision=decision,
             guardrail_warnings=warnings,
             audit_metadata=audit_metadata,
         )

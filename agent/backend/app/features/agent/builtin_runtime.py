@@ -29,7 +29,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -235,6 +235,15 @@ from app.features.agent.support_task import (
     tool_clarification_pending,
     unresolved_hops,
     unresolved_hops_message,
+)
+from app.features.agent.tool_arguments import (
+    INVALID_ARGUMENTS_CODE,
+    ArgumentError,
+    SchemaUnsupported,
+    errors_payload,
+    hidden_arguments,
+    parse_arguments,
+    validate_arguments,
 )
 from app.features.agent.tools import (
     MCP_TOOL_SEPARATOR,
@@ -999,6 +1008,19 @@ def tool_failure_payload(result: ToolResult) -> dict[str, Any]:
     callee_code = details.get("error_code")
     if isinstance(callee_code, str) and _CALLEE_ERROR_CODE.fullmatch(callee_code):
         payload["tool_error_code"] = callee_code
+    checked = details.get("argument_errors")
+    if result.error_code == INVALID_ARGUMENTS_CODE and isinstance(checked, list):
+        # 実行の境界の引数の検証（#2630）。値を含まない場所・種類・直し方だけを返す。
+        payload["argument_errors"] = [
+            {
+                "argument": str(item.get("argument") or "")[:_MAX_VIOLATION_LOCATION_CHARS],
+                "code": str(item.get("code") or "")[:_MAX_VIOLATION_LOCATION_CHARS],
+                "message": str(item.get("message") or "")[:_MAX_VIOLATION_MESSAGE_CHARS],
+            }
+            for item in checked[:MAX_ARGUMENT_VIOLATIONS]
+            if isinstance(item, dict)
+        ]
+        return payload
     inner = details.get("details")
     errors = inner.get("errors") if isinstance(inner, dict) else None
     violations: list[dict[str, str]] = []
@@ -1020,6 +1042,66 @@ def tool_failure_payload(result: ToolResult) -> dict[str, Any]:
     if violations:
         payload["argument_errors"] = violations
     return payload
+
+
+# 取消が確定した Run のツール・モデルの呼び出し（#2609）。
+RUN_CANCELLED_CODE = "runtime.run_cancelled"
+RUN_CANCELLED_MESSAGE = "実行は取り消されました。このツールは実行していません。"
+# 実行の直前に「承認」が要るツールになったが、この呼び出しの承認の記録が無い（#2610）。
+APPROVAL_REQUIRED_CODE = "tool.approval_required"
+APPROVAL_REQUIRED_MESSAGE = (
+    "このツールは実行の前に承認が必要になったため、実行していません。"
+    "必要なら、同じ引数でもう一度呼ぶと承認を求めます。"
+)
+
+
+class RunCancelledError(BuiltinRuntimeError):
+    """取消が確定した Run で、モデルの呼び出しを始めずに SDK の実行を止める（#2609）。"""
+
+    def __init__(self) -> None:
+        super().__init__(RUN_CANCELLED_CODE, "実行は取り消されました。")
+
+
+@dataclass(frozen=True)
+class _ToolEntry:
+    """モデルに渡したツール（呼び出しの境界で使う。#2630）。
+
+    `definition` は呼び先の契約（`tool_registry.invoke` が引数を確かめる schema）、
+    `visible_schema` はモデルに見せた schema（SDK の strict mode の変換の後）、`hidden` は呼び先の
+    契約にあってモデルに見せていない引数（実行環境が埋める・上書きする）。`handler` は
+    登録済みのツールなら None（`tool_registry` の handler で呼ぶ）。
+    """
+
+    definition: ToolDefinition
+    handler: ToolHandler | None
+    visible_schema: Mapping[str, Any]
+    hidden: frozenset[str]
+
+
+@dataclass(frozen=True)
+class _PreparedArguments:
+    """モデルの引数を確かめた結果（`unsupported` は schema で確かめられなかった理由）。"""
+
+    arguments: dict[str, Any]
+    adjusted_limits: dict[str, dict[str, int]]
+    errors: list[ArgumentError]
+    unsupported: str | None
+
+
+@dataclass(frozen=True)
+class _Authorization:
+    """呼び先へ送る直前のツール権限・承認の判断（#2610。`tool_registry.invoke` に渡す）。
+
+    `reason`: policy（自動実行）/ approval（承認の記録と結び付けた呼び出し）/ confirmation
+    （回答前の確認）/ control_plane（Control Plane 自身の読み取り）/ approval_required
+    （承認が無い）。
+    """
+
+    policy: ToolPolicy
+    force: bool
+    reason: str
+    approval_id: str | None = None
+    refused: bool = False
 
 
 class _ToolRecorder:
@@ -1059,6 +1141,8 @@ class _ToolRecorder:
         # 回答前の確認（#1839）。利用者に確認しない Run では、RAG の確認の次の手を「前提を示して
         # 答える」に変える。
         self.confirmation: ConfirmationBudget | None = None
+        # モデルに渡したツール（名前 → 定義・handler・モデルに見せた schema。#2630）。
+        self.entries: dict[str, _ToolEntry] = {}
 
     def _skips_rag_clarification(self, name: str, definition: ToolDefinition | None) -> bool:
         if (
@@ -1095,40 +1179,141 @@ class _ToolRecorder:
             return next_step
         return assume_step(next_step)
 
-    async def invoke(
-        self,
-        name: str,
-        arguments: str,
-        call_id: str,
-        *,
-        definition: ToolDefinition | None = None,
-        handler: ToolHandler | None = None,
-    ) -> str:
-        from app.features.agent.runtime import runtime_repository
+    def add_tool(self, entry: _ToolEntry) -> None:
+        """この Run でモデルに渡すツール（呼び出しの境界で使う定義と、モデルに見せた schema）。"""
+        self.entries[entry.definition.name] = entry
 
-        try:
-            parsed = json.loads(arguments or "{}")
-        except json.JSONDecodeError:
-            parsed = {}
-        call_arguments: dict[str, Any] = parsed if isinstance(parsed, dict) else {}
+    def prepare_arguments(self, name: str, parsed: Mapping[str, Any]) -> _PreparedArguments:
+        """モデルが渡した引数を、モデルに見せた schema で確かめる（#2630）。
+
+        検索の件数（top_k・evidence_limit）は、確かめる前に既定・上限に直す（#1351・#1403。
+        意図した変換。直した値は schema の範囲に入る）。実行環境が決める非表示の引数（データの範囲が
+        1 つのときのプロファイルなど）は確かめない（呼び先の契約は `tool_registry.invoke` が
+        確かめる）。
+        """
+        entry = self.entries.get(name)
+        arguments: dict[str, Any] = dict(parsed)
         adjusted_limits: dict[str, dict[str, int]] = {}
-        if definition is not None and mcp_base_tool_name(name) in RAG_BUDGET_TOOLS:
-            # 既定より小さい件数（top_k・evidence_limit）は既定に引き上げ、上限を超える値は上限に
-            # 丸める（#1351・#1403）。step には送った値を残し、モデルへの結果に直したことを足す。
-            adjusted_limits = adjusted_search_limits(call_arguments, definition.input_schema)
+        if entry is None:
+            return _PreparedArguments(arguments, adjusted_limits, [], None)
+        if entry.handler is not None and mcp_base_tool_name(name) in RAG_BUDGET_TOOLS:
+            adjusted_limits = adjusted_search_limits(arguments, entry.definition.input_schema)
             if adjusted_limits:
-                call_arguments = {
-                    **call_arguments,
+                arguments = {
+                    **arguments,
                     **{key: value["sent"] for key, value in adjusted_limits.items()},
                 }
-                logger.info(
-                    "builtin_runtime_search_limits_adjusted",
-                    extra={
-                        "run_id": self.run_id,
-                        "tool_name": name,
-                        "adjusted_limits": adjusted_limits,
-                    },
-                )
+        checked = validate_arguments(entry.visible_schema, arguments, ignore=entry.hidden)
+        if isinstance(checked, SchemaUnsupported):
+            logger.warning(
+                "builtin_runtime_tool_schema_unsupported",
+                extra={"run_id": self.run_id, "tool_name": name, "reason": checked.reason},
+            )
+            return _PreparedArguments(arguments, adjusted_limits, [], checked.reason)
+        return _PreparedArguments(arguments, adjusted_limits, checked, None)
+
+    def needs_approval(self, name: str, parsed: Mapping[str, Any]) -> bool:
+        """実行の直前の最新のツール権限で、この呼び出しに承認が要るか（#2610。SDK の
+        `needs_approval`）。
+
+        引数が schema に合わない呼び出しは承認に回さない（実行の境界で引数の誤りとして返す。
+        #2630。誤った引数の承認を人に求めない）。
+        """
+        entry = self.entries.get(name)
+        if entry is None:
+            return True
+        if self.prepare_arguments(name, parsed).errors:
+            return False
+        return _active_policy().decide(entry.definition) == ToolPolicyDecision.ASK
+
+    def authorize(self, call: ToolCall, model_arguments: Mapping[str, Any]) -> _Authorization:
+        """ツール権限と承認を、呼び先へ送る直前の最新のポリシーで確かめる（#2610）。
+
+        - 「承認」（ASK）は、この Run・呼び出し ID・ツールの承認済みの記録があり、承認した引数
+          （データの範囲を当てたもの）と今の引数が同じときだけ実行する。SDK を経由したことだけでは
+          実行しない（構築の後に「自動実行」から「承認」に変わった呼び出しを素通しさせない）。
+        - 「拒否」（DENY）は `tool_registry.invoke` が実行しない。
+        - 回答前の確認（`ask_user_confirmation`）は承認ではなく確認の往復で止める（#1839）。
+        """
+        from app.features.agent.runtime import runtime_repository
+
+        policy = _active_policy()
+        entry = self.entries.get(call.name)
+        contract = entry.definition if entry is not None else tool_registry.get(call.name)
+        if call.name == CONFIRMATION_TOOL:
+            return _Authorization(policy, force=True, reason="confirmation")
+        if contract is None or policy.decide(contract) != ToolPolicyDecision.ASK:
+            return _Authorization(policy, force=False, reason="policy")
+        approval = runtime_repository.approved_builtin_call(
+            self.run_id, call.trace_id or "", call.name
+        )
+        expected = _scoped_call(
+            ToolCall(name=call.name, arguments=dict(model_arguments), trace_id=call.trace_id),
+            self.data_scopes,
+        ).arguments
+        if approval is not None and approval.tool_call.arguments == expected:
+            return _Authorization(policy, force=True, reason="approval", approval_id=approval.id)
+        logger.info(
+            "builtin_runtime_tool_approval_missing",
+            extra={
+                "run_id": self.run_id,
+                "tool_name": call.name,
+                "call_id": call.trace_id,
+                "approval_found": approval is not None,
+            },
+        )
+        return _Authorization(policy, force=False, reason="approval_required", refused=True)
+
+    def cancelled_result(self, name: str) -> str:
+        """取消が確定した Run のツールの呼び出し（step を作らず、呼び先へ送らない。#2609）。"""
+        logger.info(
+            "builtin_runtime_tool_call_rejected",
+            extra={"run_id": self.run_id, "tool_name": name, "error_code": RUN_CANCELLED_CODE},
+        )
+        return json.dumps(
+            {"error": RUN_CANCELLED_MESSAGE, "error_code": RUN_CANCELLED_CODE}, ensure_ascii=False
+        )
+
+    async def invoke(self, name: str, arguments: str, call_id: str) -> str:
+        """モデルが呼んだツールを、境界の順（取消 → 引数 → ツール権限・承認 → handler）で実行する。
+
+        通常の実行・承認の再開・MCP 接続のツール・登録済みのツールで同じ境界を通る（#2609・#2610・
+        #2630）。どの段で止めても呼び先へは送らない。
+        """
+        from app.features.agent.runtime import RunNotActiveError, runtime_repository
+
+        entry = self.entries.get(name)
+        definition = entry.definition if entry is not None and entry.handler is not None else None
+        handler = entry.handler if entry is not None else None
+        # 1. 取消: 取消が確定した Run では step を作らず、呼び先へ送らない（#2609）。
+        if await asyncio.to_thread(runtime_repository.builtin_run_ended, self.run_id):
+            return self.cancelled_result(name)
+        # 2. 引数: 読めない JSON・object 以外を空の引数にせず、モデルに見せた schema で確かめる
+        # （#2630）。
+        parsed, parse_errors = parse_arguments(arguments)
+        if parsed is None:
+            return self.reject_call(
+                ToolCall(name=name, arguments={}, trace_id=call_id), errors_payload(parse_errors)
+            )
+        prepared = self.prepare_arguments(name, parsed)
+        call_arguments = prepared.arguments
+        adjusted_limits = prepared.adjusted_limits
+        if prepared.errors:
+            return self.reject_call(
+                ToolCall(name=name, arguments=call_arguments, trace_id=call_id),
+                errors_payload(prepared.errors),
+            )
+        if adjusted_limits:
+            # 既定より小さい件数（top_k・evidence_limit）は既定に引き上げ、上限を超える値は上限に
+            # 丸めた（#1351・#1403）。step には送った値を残し、モデルへの結果に直したことを足す。
+            logger.info(
+                "builtin_runtime_search_limits_adjusted",
+                extra={
+                    "run_id": self.run_id,
+                    "tool_name": name,
+                    "adjusted_limits": adjusted_limits,
+                },
+            )
         if definition is not None and data_scope.takes_profile(name):
             # 確認で選んだ候補の名前をプロファイルの ID に引き直す（#2230）。
             call_arguments, resolved = data_scope.resolve_profile_name(
@@ -1169,9 +1354,25 @@ class _ToolRecorder:
         if scoped is not None and scoped.error is not None:
             # 範囲外は呼び先へ送らない（予算にも数えない）。step には拒否を残す。
             return self.reject_out_of_scope(call, scoped)
+        # 3. ツール権限・承認: 実行の直前の最新のポリシーで確かめる（#2610）。
+        authorization = self.authorize(call, parsed)
+        if authorization.refused:
+            return self.reject_call(
+                call,
+                {
+                    "error": APPROVAL_REQUIRED_MESSAGE,
+                    "error_code": APPROVAL_REQUIRED_CODE,
+                },
+                policy_decision=ToolPolicyDecision.ASK,
+                approval_required=True,
+            )
         # 予算は await の前に数える（同じ応答の並列の呼び出しでも上限を超えない）。
         exceeded = self.budget.reserve(name) if self.budget is not None else None
-        step_id, context = runtime_repository.start_builtin_tool_step(self.run_id, call)
+        try:
+            step_id, context = runtime_repository.start_builtin_tool_step(self.run_id, call)
+        except RunNotActiveError:
+            # 取消が判定の後に確定した（同じ lock で判定する。#2609）。
+            return self.cancelled_result(name)
         if exceeded is not None:
             message = budget_exceeded_message(name, exceeded)
             runtime_repository.finish_builtin_tool_step(
@@ -1189,9 +1390,15 @@ class _ToolRecorder:
                 {"error": message, "error_code": BUDGET_EXCEEDED_CODE, "budget": exceeded},
                 ensure_ascii=False,
             )
-        # 承認は SDK の needs_approval で済んでいる（拒否のツールは渡していない）。
+        # 4. handler（呼び先へ送る）。
         result = await self.execute(
-            step_id, call, context, definition=definition, handler=handler, scoped=scoped
+            step_id,
+            call,
+            context,
+            definition=definition,
+            handler=handler,
+            scoped=scoped,
+            authorization=authorization,
         )
         if result.success:
             output = result.output or {}
@@ -1246,12 +1453,22 @@ class _ToolRecorder:
         """範囲の外のプロファイルの呼び出しを、呼び先へ送らずにツールのエラーにする（#1378）。"""
         return self.reject_call(call, scoped.error_payload())
 
-    def reject_call(self, call: ToolCall, payload: dict[str, Any]) -> str:
+    def reject_call(
+        self,
+        call: ToolCall,
+        payload: dict[str, Any],
+        *,
+        policy_decision: ToolPolicyDecision = ToolPolicyDecision.ALLOW,
+        approval_required: bool = False,
+    ) -> str:
         """呼び先へ送らずにツールのエラーにする（step に拒否を残し、モデルへ案内を返す）。"""
-        from app.features.agent.runtime import runtime_repository
+        from app.features.agent.runtime import RunNotActiveError, runtime_repository
 
         error_code = str(payload.get("error_code") or "")
-        step_id, _context = runtime_repository.start_builtin_tool_step(self.run_id, call)
+        try:
+            step_id, _context = runtime_repository.start_builtin_tool_step(self.run_id, call)
+        except RunNotActiveError:
+            return self.cancelled_result(call.name)
         runtime_repository.finish_builtin_tool_step(
             self.run_id,
             step_id,
@@ -1261,6 +1478,8 @@ class _ToolRecorder:
                 error=str(payload.get("error") or ""),
                 error_code=error_code,
                 error_details={key: value for key, value in payload.items() if key != "error"},
+                policy_decision=policy_decision,
+                approval_required=approval_required,
             ),
         )
         logger.info(
@@ -1405,15 +1624,35 @@ class _ToolRecorder:
         *,
         definition: ToolDefinition | None = None,
         handler: ToolHandler | None = None,
+        cleanup: bool = False,
     ) -> tuple[str, ToolResult]:
         """Control Plane が自分で呼ぶツール（回答の最終の検証。#1246）を step に記録して呼ぶ。
 
-        予算は数えない。ポリシーの「拒否」は守り、「承認」は待たない（読み取りの検証のため）。
+        予算は数えない。ポリシーの「拒否」は守り、「承認」は待たない（読み取りの検証のため。監査には
+        `authorization=control_plane` を残す）。終わった Run では呼ばない（#2609）。`cleanup` は
+        取消の後でも呼ぶ後始末（確認をやめた NL2SQL の session を閉じる）。
         """
-        from app.features.agent.runtime import runtime_repository
+        from app.features.agent.runtime import RunNotActiveError, runtime_repository
 
-        step_id, context = runtime_repository.start_builtin_tool_step(self.run_id, call)
-        result = await self.execute(step_id, call, context, definition=definition, handler=handler)
+        try:
+            step_id, context = runtime_repository.start_builtin_tool_step(
+                self.run_id, call, cleanup=cleanup
+            )
+        except RunNotActiveError:
+            return "", ToolResult(
+                name=call.name,
+                success=False,
+                error=RUN_CANCELLED_MESSAGE,
+                error_code=RUN_CANCELLED_CODE,
+            )
+        result = await self.execute(
+            step_id,
+            call,
+            context,
+            definition=definition,
+            handler=handler,
+            authorization=_Authorization(_active_policy(), force=True, reason="control_plane"),
+        )
         return step_id, result
 
     async def execute(
@@ -1425,6 +1664,7 @@ class _ToolRecorder:
         definition: ToolDefinition | None = None,
         handler: ToolHandler | None = None,
         scoped: data_scope.ScopeEnforcement | None = None,
+        authorization: _Authorization,
     ) -> ToolResult:
         from app.features.agent.runtime import runtime_repository
 
@@ -1433,14 +1673,19 @@ class _ToolRecorder:
             context = context.model_copy(
                 update={"profile_scopes": data_scope.token_profile_scopes(self.data_scopes)}
             )
+        if authorization.approval_id and not context.approval_id:
+            context = context.model_copy(update={"approval_id": authorization.approval_id})
+        # 境界で確かめたのと同じポリシーで呼ぶ（`force` は承認の記録と結び付けた呼び出しなど、
+        # 「承認」を実行してよいと判断したときだけ。#2610）。
         result = await asyncio.to_thread(
             tool_registry.invoke,
             call,
-            policy=_active_policy(),
+            policy=authorization.policy,
             context=context,
-            force=True,
+            force=authorization.force,
             definition=definition,
             handler=handler,
+            authorization=authorization.reason,
         )
         if scoped is not None and result.success and isinstance(result.output, dict):
             # 一覧・推薦の結果は範囲で絞ってから記録し、モデルへ返す（#1378）。
@@ -1457,6 +1702,36 @@ class _ToolRecorder:
                 )
         runtime_repository.finish_builtin_tool_step(self.run_id, step_id, result)
         return result
+
+
+# function tool に付ける、呼び出しの境界（`_ToolRecorder`）の属性の名前（`_run_sdk` が読む）。
+_RECORDER_ATTR = "_agent_tool_recorder"
+
+
+def _approval_gate(
+    recorder: _ToolRecorder, name: str, confirmation: ConfirmationBudget | None
+) -> Callable[[Any, dict[str, Any], str], Awaitable[bool]]:
+    """function tool の `needs_approval`（呼び出しごとに、その時点のツール権限で決める。#2610）。
+
+    回答前の確認（`ask_user_confirmation`）は確認の往復の残りで中断を決める（#1839）。どちらも
+    引数が schema に合わない呼び出しは中断しない（実行の境界で引数の誤りとして返す。#2630）。
+    """
+    if name == CONFIRMATION_TOOL and confirmation is not None:
+        confirm = confirmation_gate(confirmation)
+
+        async def confirmation_needs_answer(
+            context: Any, params: dict[str, Any], call_id: str
+        ) -> bool:
+            if recorder.prepare_arguments(name, params).errors:
+                return False
+            return await confirm(context, params, call_id)
+
+        return confirmation_needs_answer
+
+    async def needs_approval(_context: Any, params: dict[str, Any], _call_id: str) -> bool:
+        return recorder.needs_approval(name, params)
+
+    return needs_approval
 
 
 def build_function_tools(
@@ -1517,20 +1792,11 @@ def build_function_tools(
             ctx: ToolContext[Any],
             arguments: str,
             *,
-            _definition: ToolDefinition = definition,
-            _handler: ToolHandler | None = handler,
+            _name: str = definition.name,
         ) -> str:
             # 引数の型を ToolContext にすると、SDK は呼び出し ID（承認の記録と結び付ける）を渡す。
             call_id = str(getattr(ctx, "tool_call_id", "") or "")
-            if _handler is None:
-                return await recorder.invoke(_definition.name, arguments, call_id)
-            return await recorder.invoke(
-                _definition.name,
-                arguments,
-                call_id,
-                definition=_definition,
-                handler=_handler,
-            )
+            return await recorder.invoke(_name, arguments, call_id)
 
         # データの範囲が 1 つなら、プロファイルの引数をモデルに見せない（#1378）。実行の定義
         # （`tool_registry.invoke` に渡す schema）は呼び先の契約のまま。
@@ -1541,21 +1807,27 @@ def build_function_tools(
                 definition.name, dict(definition.input_schema), recorder.data_scopes
             ),
         )
-        tools.append(
-            FunctionTool(
-                name=definition.name,
-                description=definition.description,
-                params_json_schema=schema,
-                on_invoke_tool=on_invoke,
-                strict_json_schema=_strict_schema(schema),
-                needs_approval=(
-                    confirmation_gate(confirmation)
-                    if definition.name == CONFIRMATION_TOOL and confirmation is not None
-                    else decision == ToolPolicyDecision.ASK
-                ),
-                timeout_seconds=max(definition.timeout_seconds, 1.0) * 2,
+        tool = FunctionTool(
+            name=definition.name,
+            description=definition.description,
+            params_json_schema=schema,
+            on_invoke_tool=on_invoke,
+            strict_json_schema=_strict_schema(schema),
+            # 承認が要るかは構築の時点で固定せず、呼び出しごとに最新のツール権限で決める（#2610）。
+            needs_approval=_approval_gate(recorder, definition.name, confirmation),
+            timeout_seconds=max(definition.timeout_seconds, 1.0) * 2,
+        )
+        # 引数はモデルに見せた schema（SDK の strict mode の変換の後）で確かめる（#2630）。
+        recorder.add_tool(
+            _ToolEntry(
+                definition=definition,
+                handler=handler,
+                visible_schema=tool.params_json_schema,
+                hidden=hidden_arguments(definition.input_schema, tool.params_json_schema),
             )
         )
+        setattr(tool, _RECORDER_ATTR, recorder)
+        tools.append(tool)
     recorder.environment_tools = [tool.name for tool in tools if is_environment_tool(tool.name)]
     exposed = {tool.name for tool in tools}
     if (
@@ -1936,12 +2208,20 @@ def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
         return message
 
     limits = getattr(sdk_agent, _CONTEXT_LIMITS_ATTR, None)
+    window = _ContextWindow(run_id, limits, exposed) if isinstance(limits, ContextLimits) else None
+
+    async def model_input(data: CallModelData[Any]) -> ModelInputData:
+        from app.features.agent.runtime import runtime_repository
+
+        # 取消が確定した Run ではモデルを呼ばずに止める（#2609。別のプロセスの取消も保存先で判定）。
+        if await asyncio.to_thread(runtime_repository.builtin_run_ended, run_id):
+            raise RunCancelledError()
+        return window(data) if window is not None else data.model_data
+
     return RunConfig(
         tool_not_found_behavior="return_error_to_model",
         tool_error_formatter=format_error,
-        call_model_input_filter=(
-            _ContextWindow(run_id, limits, exposed) if isinstance(limits, ContextLimits) else None
-        ),
+        call_model_input_filter=model_input,
     )
 
 
@@ -1952,17 +2232,81 @@ async def _run_sdk(
     *,
     context: RunContextWrapper[Any] | None = None,
 ) -> Any:
-    """Run の SDK の実行（設定は `_run_config`）。終わったら入力の管理の文脈を外す（#2383）。"""
+    """Run の SDK の実行（設定は `_run_config`）。終わったら入力の管理の文脈を外す（#2383）。
+
+    SDK は引数を読めない呼び出し（壊れた JSON・object 以外）を、ツール権限に関わらず承認待ちの
+    中断にする。人に承認を求めず、引数の誤りとしてモデルへ返して続ける（#2630。
+    `_settle_unreadable_calls`）。
+    """
     try:
-        return await Runner.run(
-            sdk_agent,
-            run_input,
-            context=context,
-            max_turns=_max_turns(),
-            run_config=_run_config(run_id, sdk_agent),
+        config = _run_config(run_id, sdk_agent)
+        result = await Runner.run(
+            sdk_agent, run_input, context=context, max_turns=_max_turns(), run_config=config
         )
+        for _ in range(_max_turns()):
+            state = _settle_unreadable_calls(sdk_agent, result)
+            if state is None:
+                break
+            result = await Runner.run(
+                sdk_agent, state, context=context, max_turns=_max_turns(), run_config=config
+            )
+        return result
     finally:
         _ACTIVE_CONTEXT_WINDOW.set(None)
+
+
+def _readable_arguments(raw: object) -> bool:
+    """SDK が承認の判定に読める引数か（空でない JSON の object）。"""
+    if not isinstance(raw, str) or not raw.strip():
+        return False
+    try:
+        return isinstance(json.loads(raw), dict)
+    except ValueError:
+        return False
+
+
+def _settle_unreadable_calls(sdk_agent: Agent[Any], result: Any) -> Any | None:
+    """SDK が引数を読めずに承認待ちにした呼び出しを決める（決めたら次に渡す SDK の状態）。
+
+    - 引数の誤り（壊れた JSON・object 以外・schema に合わない）は、承認に回さず step に残して
+      モデルへ誤りを返す（却下にする。呼び先へは送らない）。
+    - 引数なし（空の文字列）で schema に合い、最新のツール権限が承認を求めないものは、承認なしで
+      実行させる（`_ToolRecorder.invoke` が同じ境界で確かめる）。
+    - 承認が要るものは、そのまま承認待ちにする。
+    """
+    recorders: dict[str, _ToolRecorder] = {}
+    for tool in sdk_agent.tools:
+        recorder = getattr(tool, _RECORDER_ATTR, None)
+        if isinstance(recorder, _ToolRecorder):
+            recorders[str(getattr(tool, "name", ""))] = recorder
+    decided: list[tuple[Any, str | None]] = []
+    for item in list(getattr(result, "interruptions", []) or []):
+        raw = getattr(item, "arguments", None)
+        name = str(getattr(item, "tool_name", "") or getattr(item, "name", "") or "")
+        recorder = recorders.get(name)
+        if recorder is None or _readable_arguments(raw):
+            continue
+        parsed, errors = parse_arguments(raw if isinstance(raw, str) else None)
+        if parsed is not None:
+            errors = recorder.prepare_arguments(name, parsed).errors
+        if errors:
+            call_id = str(getattr(item, "call_id", "") or "")
+            payload = errors_payload(errors)
+            recorder.reject_call(
+                ToolCall(name=name, arguments=parsed or {}, trace_id=call_id), payload
+            )
+            decided.append((item, json.dumps(payload, ensure_ascii=False)))
+        elif name != CONFIRMATION_TOOL and not recorder.needs_approval(name, parsed or {}):
+            decided.append((item, None))
+    if not decided:
+        return None
+    state = result.to_state()
+    for item, rejection in decided:
+        if rejection is None:
+            state.approve(item)
+        else:
+            state.reject(item, rejection_message=rejection)
+    return state
 
 
 def conversation_input(run_id: str, goal: str) -> str | list[Any]:
@@ -2359,6 +2703,8 @@ async def _cancel_requirement_session(
         ),
         definition=definition,
         handler=mcp_tool_handler(config, tool),
+        # 確認をやめた後の session の後始末は、Run を取り消した後でも閉じる（#2609）。
+        cleanup=True,
     )
     if not result.success or not isinstance(result.output, dict):
         return "failed"
@@ -3454,6 +3800,10 @@ def _arguments(value: object) -> dict[str, Any]:
 def _record_failure(run_id: str, exc: Exception) -> None:
     from app.features.agent.runtime import runtime_repository
 
+    if isinstance(exc, RunCancelledError):
+        # 取消が確定した Run を止めた（失敗ではない。Run は取消済みのまま。#2609）。
+        logger.info("builtin_runtime_stopped_after_cancel", extra={"run_id": run_id})
+        return
     if isinstance(exc, BuiltinRuntimeError):
         code, message = exc.code, exc.message
     elif isinstance(exc, MaxTurnsExceeded):

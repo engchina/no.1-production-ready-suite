@@ -22,6 +22,10 @@ dependencies = [
   "openai-agents==0.23.1",
   # 品質評価の評価セットの Excel の取り込み・書き出し（NL2SQL と同じ。#776）。
   "openpyxl>=3.1",
+  # ツールの引数を input schema で検証する（#2630）。openai-agents → mcp が既に使う版を直接の依存に
+  # する（新しい package は入れない）。
+  "jsonschema>=4.26,<5",
+  "referencing>=0.37",
 ]
 
 [dependency-groups]
@@ -70,6 +74,11 @@ line-ending = "auto"
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# jsonschema は型の stub を同梱しない（stub の package は入れない。#2630）。
+module = ["jsonschema", "jsonschema.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

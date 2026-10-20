@@ -169,12 +169,13 @@ def _tool_output(model: ScriptedModel, call_index: int, call_id: str) -> dict[st
     raise AssertionError(f"{call_id} の結果がモデルの入力にありません")
 
 
-def test_model_sees_the_argument_violation_from_the_mcp_server(
+def test_model_sees_the_argument_violation_of_the_input_schema(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
+    """schema で分かる違反は呼び先へ送らず、Agent の実行の境界で返す（#2630。値は含めない）。"""
     model = _script(
         monkeypatch,
-        # max_chars は 1 以上（呼び先の入力の検証で誤りになる）。
+        # max_chars は 1 以上（ツールの input schema の minimum）。
         [
             function_call(
                 "rag__rag_read_section",
@@ -188,12 +189,14 @@ def test_model_sees_the_argument_violation_from_the_mcp_server(
     _run()
 
     output = _tool_output(model, 1, "c1")
-    assert output["error_code"] == "mcp.tool_error"
-    assert output["tool_error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
+    assert output["error_code"] == "tool.invalid_arguments"
     [violation] = output["argument_errors"]
-    assert violation["argument"] == "max_chars"
-    assert violation["message"]
-    assert mcp.calls_of("rag_read_section")
+    assert violation == {
+        "argument": "max_chars",
+        "code": "minimum",
+        "message": "1 以上にしてください。",
+    }
+    assert not mcp.calls_of("rag_read_section")
 
 
 def test_model_sees_the_callee_error_code_of_a_tool_error(
