@@ -3738,6 +3738,7 @@ def answer_question_result(
     scope: tuple[str, Sequence[str]] | None = None,
     guide_plan: GuidePlan | None = None,
     caller_queries: Sequence[str] | None = None,
+    request_question: str | None = None,
 ) -> AnswerQuestionResult:
     """検索・LLM の結果と実行記録を返す。
 
@@ -3757,10 +3758,18 @@ def answer_question_result(
     これだけになり、質問に応じた推論の LLM（検索戦略の判定・質問拡張・条の目録の選択・画面目録の連携）を
     呼ばない。``generate_answer=False`` とだけ組み合わせる。規則による質問の理解・用語の別名の検索文・
     hybrid search・rerank・親子と前後の文脈は通常の検索と同じに行う。
+
+    ``request_question`` は利用者の元の質問（呼び出し元が ``question`` を検索用に言い換えたとき。#2665）。渡すと、
+    回答の要求の単位（``task_contract``）・要求ごとの根拠の確認と欠けた要求の探し直し・回答の生成と検査は
+    この質問で行い、``question`` は検索（質問の理解・質問拡張・検索文・CRAG・章節の拡張・業務ガイドの手順の
+    検索）にだけ使う。言い換えで番号つきの小問が平文になり・まとめられても、元の要求を落とさない。省略すると
+    ``question`` で両方を行う。
     """
     normalized_question = extract_original_question(question)
     if not normalized_question:
         raise ValueError("質問を入力してください。")
+    # 回答の対象と要求の単位の正本（#2665）。検索の文（normalized_question）とは分ける。
+    request_text = extract_original_question(request_question or "") or normalized_question
     caller_planned = caller_queries is not None
     if caller_planned and generate_answer:
         raise ValueError("呼び出し元の検索文（caller_queries）は回答を作らない検索（generate_answer=False）だけに使います。")
@@ -4190,13 +4199,14 @@ def answer_question_result(
                 lexical_queries=lexical_queries,
                 crag_rewrites=crag_rewrites,
                 retrieval_top_k=chunk_top_k,
+                request_question=request_text,
             )
 
         with _execution_step(
             "要求ごとの根拠の確認", "質問の要求ごとに根拠があるかを確かめ、根拠の無い要求だけを探し直します。"
         ) as coverage_step:
             context, request_coverage = _cover_missing_requests(
-                normalized_question,
+                request_text,
                 context,
                 settings,
                 run_id=run_id,
@@ -4270,7 +4280,7 @@ def answer_question_result(
                 )
 
         grounded_answer = synthesize_grounded_answer(
-            normalized_question,
+            request_text,
             context,
             settings,
             question_plan=question_plan,
@@ -4326,6 +4336,7 @@ def answer_question_result(
             lexical_queries=lexical_queries,
             crag_rewrites=crag_rewrites,
             retrieval_top_k=chunk_top_k,
+            request_question=request_text,
         )
 
 
@@ -4635,7 +4646,9 @@ def _answer_question_result(
     lexical_queries: Sequence[str] = (),
     crag_rewrites: Sequence[str] = (),
     retrieval_top_k: int = DEFAULT_RETRIEVAL_TOP_K,
+    request_question: str = "",
 ) -> AnswerQuestionResult:
+    """``request_question`` は要求の単位の正本の質問（#2665。空なら検索の質問 ``expansion.original_question``）。"""
     parsed = response or AnswerResponse(answer_text=answer, raw_text=answer)
     used_image_ids = tuple(_used_image_ids(parsed.used_images))
     text_search = text_search_info or QuestionTextSearchInfo()
@@ -4691,7 +4704,7 @@ def _answer_question_result(
         ),
         evidence_facts=parsed.evidence_facts,
         generation_trace=parsed.generation_trace,
-        task_contract=task_contract(expansion.original_question),
+        task_contract=task_contract(request_question or expansion.original_question),
         rejected_queries=expansion.rejected_queries,
         envelope=parsed.envelope
         or fallback_envelope(
