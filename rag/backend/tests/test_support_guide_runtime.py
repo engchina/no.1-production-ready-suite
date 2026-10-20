@@ -190,10 +190,42 @@ def test_guide_becomes_a_pinned_rule_with_steps_and_hints() -> None:
     assert "分かっている条件: 付与先=グループ" in rule["content"]
     assert "付与先が「グループ」以外の場合の手順は答えに含めない" in rule["content"]
     assert "手順 2（grant）. 権限を選んで付与する（open の後）" in rule["content"]
+    assert "必要な根拠:" not in rule["content"]
     assert "実施の前に承認が要る" in rule["content"]
     payload = with_guide_rule({"terms": [{"term": "x"}], "rules": [{"id": "r1"}]}, match)
     assert [item["id"] for item in payload["rules"]] == ["guide-g-grant", "r1"]
     assert payload["terms"] == [{"term": "x"}]
+
+
+def test_guide_rule_includes_only_visible_step_evidence_requirements() -> None:
+    content = grant_guide(
+        steps=[
+            {
+                "id": "open",
+                "title": "詳細画面を開く",
+                "evidence_requirements": ["入口のメニュー", "対象を選択する条件"],
+            },
+            {
+                "id": "grant",
+                "title": "グループの権限を付与する",
+                "depends_on": ["open"],
+                "evidence_requirements": ["グループの承認者"],
+            },
+        ]
+    )
+    single = match_guide([("g", 1, content)], "個別の利用者にアクセス権限を付与したい")
+    assert single is not None
+    single_text = guide_rule(single)["content"]
+    for requirement in content.steps[0].evidence_requirements:
+        assert single_text.count(requirement) == 1
+    assert "グループの承認者" not in single_text
+
+    group = match_guide([("g", 1, content)], "グループにアクセス権限を付与したい")
+    assert group is not None
+    group_text = guide_rule(group)["content"]
+    assert group_text.count("グループの承認者") == 1
+    assert group_text.index("対象を選択する条件") < group_text.index("手順 2（grant）")
+    assert group_text.index("手順 2（grant）") < group_text.index("グループの承認者")
 
 
 def test_short_circuit_and_diagnostics() -> None:

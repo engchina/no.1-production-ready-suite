@@ -10,7 +10,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from test_grounded_answer import FakeModel, audit, context, draft, item, record
+from test_grounded_answer import FakeModel, audit, context, draft, item, marks, record
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -177,6 +177,31 @@ class GuideStepEnvelopeTest(unittest.TestCase):
 
 
 class GuideStepFulfillmentTest(unittest.TestCase):
+    def test_followup_in_another_document_uses_the_guide_and_application_audit(self):
+        question = "接続先を変更する手順を教えてください"
+        first = "設定画面で接続先を入力します。"
+        followup = "反映画面で反映ボタンを押します。"
+        ctx = _context(
+            _record(0, first, "設定画面", "run:a"),
+            replace(_record(1, followup, "反映画面", "run:b"), source="反映操作.pdf"),
+        )
+        for included, applicability in ((True, "matched"), (False, "matched"), (True, "not_applicable")):
+            with self.subTest(included=included, applicability=applicability):
+                knowledge = _knowledge(GUIDE if included else GUIDE[:1])
+                labels = _ids(ctx, knowledge, question)
+                model = FakeModel(
+                    [draft(item(labels[first], first, first), item(labels[followup], followup, followup))],
+                    [audit((0, "supported", "matched", ""), (1, "supported", applicability, ""))],
+                )
+                response = _run(model, ctx, knowledge, question).response
+                if included and applicability == "matched":
+                    self.assertNotIn(followup, marks(response))
+                    self.assertEqual(_requests(response)["guide:s2"], "addressed")
+                elif not included:
+                    self.assertIn("item_check", marks(response)[followup])
+                else:
+                    self.assertNotEqual(_requests(response)["guide:s2"], "addressed")
+
     def test_reference_only_step_is_regenerated_and_explained(self):
         """B が監査で質問の対象ではないとされても、作り直しの指摘に手順を渡し、説明できれば充足にする。"""
         ctx, knowledge = _ab_context(), _knowledge(GUIDE)

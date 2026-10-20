@@ -850,6 +850,7 @@ def _lines(match: GuideMatch) -> list[str]:
         done = f" 終わりの条件: {step.done_when}" if step.done_when else ""
         # 手順の id は、回答の材料の「手順ごとの根拠」（#2395）と対応させる印。
         lines.append(f"手順 {index}（{step.id}）. {step.title}{after}{purpose}{done}")
+        lines.extend(f"  必要な根拠: {requirement}" for requirement in step.evidence_requirements)
     for branch, applies in branches:
         state = match.state_of(branch.when.condition_id)
         label = state.condition.label if state else branch.when.condition_id

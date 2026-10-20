@@ -1196,7 +1196,9 @@ def _check_item(item: GroundedItem) -> GroundedItem:
     return item.model_copy(update={"text": fold_width(item.text), "quote": fold_width(item.quote), "condition": fold_width(item.condition)})
 
 
-def verify(question: str, draft: GroundedDraft, spans: Sequence[dict]) -> tuple[list[CheckedItem], list[dict]]:
+def verify(
+    question: str, draft: GroundedDraft, spans: Sequence[dict], *, guide_sources: Sequence[str] = ()
+) -> tuple[list[CheckedItem], list[dict]]:
     """原文照合と規則の検査で段落の印を付ける。必須根拠と確定操作の欠落は原文で補う。
 
     原文と照合できない引用の item は本文に残して印（引用元が近い原文・指した根拠に決まれば quote_unmatched、
@@ -1220,6 +1222,7 @@ def verify(question: str, draft: GroundedDraft, spans: Sequence[dict]) -> tuple[
     )
     question_terms = _question_terms(question, contract)
     primary_document = _document_key(spans[0]) if spans else ()
+    guide_source_ids = set(guide_sources)
     substituted: dict[str, str] = {}
     context_ids = _context_request_ids(question)
     for index, item in enumerate(draft.items):
@@ -1311,10 +1314,12 @@ def verify(question: str, draft: GroundedDraft, spans: Sequence[dict]) -> tuple[
             and primary_document
             and _document_key(entry.span) != primary_document
             and not _document_mentions_question(view, question_terms)
+            and str(span.get("source_id") or "") not in guide_source_ids
         ):
             # 最上位候補以外の文書で、本文・見出し・同じ文書の本文が質問の語を 1 つも含まない。別業務の資料の
             # 確定操作（「確認」ボタンを押下して変更を確定します）を質問の手順に混ぜない (#731)。gap は出さない。
             # 最上位候補の文書は検索が質問に最も関係すると判断したもので、対象が別名でも手順は残す（#673 と同じ扱い）。
+            # ガイドが集めた前提・後続手順も質問の語を持たないことがある。適用可否は対象の検査と監査で確かめる。
             _mark_check(entry, OTHER_DOCUMENT_CHECK, "質問の語を含まない別文書の手順")
         if missing_targets and entry.item.kind in {"operation", "confirmation"}:
             # 質問の操作対象（「社印」）が根拠のどこにもない。資料にある別の対象（「角印」）の手順を適用扱いにしない (#700)。
@@ -3856,7 +3861,9 @@ def run_round(
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
     if generation_usage := usage_delta(usage_before):
         timing["generation_usage"] = generation_usage
-    checked, dropped = verify(question, draft, spans)
+    checked, dropped = verify(
+        question, draft, spans, guide_sources=[source for _step_id, _title, sources in guide_steps for source in sources]
+    )
     for entry in dropped:
         ref = _evidence_ref(entry["evidence_id"], spans)
         if ref:
