@@ -7113,12 +7113,15 @@ class OracleClient:
             WHERE {where_sql}
             ORDER BY
                 CASE WHEN UPPER(bv.name) = 'DEFAULT' THEN 0 ELSE 1 END,
-                bv.updated_at DESC,
-                bv.name ASC
+                {name_order_sql},
+                NLSSORT(bv.name, 'NLS_SORT=JAPANESE_M'),
+                bv.name ASC,
+                bv.search_answer_profile_id ASC
             {paging_sql}
             """,
                 where_sql=where_sql,
                 paging_sql=paging_sql,
+                name_order_sql=_oracle_natural_name_order_sql("bv.name"),
             ),
             binds,
         )
@@ -12391,6 +12394,31 @@ def ingestion_dispatch_order_binds(settings: Settings) -> dict[str, object]:
             settings.ingestion_queue_pipeline_priority_window_seconds
         )
     }
+
+
+def _oracle_natural_name_order_sql(expression: str) -> str:
+    """名前の数字の連続を桁数と値で比較する。SQL の内部の列式だけを受け取る。
+
+    全角の数字をそろえ、先頭のゼロを外した桁数を固定幅で前置する。
+    名前は最大 256 文字なので桁数は 3 桁で表せる。数値への変換はせず、
+    Oracle の NUMBER の精度より長い数字も比較する。ページングの前に使う。
+    """
+    normalized = f"TRANSLATE({expression}, '０１２３４５６７８９', '0123456789')"
+    significant = "COALESCE(LTRIM(name_token, '0'), '0')"
+    return f"""NLSSORT((
+        SELECT LISTAGG(
+            CASE WHEN REGEXP_LIKE(name_token, '^[0-9]+$')
+                THEN LPAD(LENGTH({significant}), 3, '0') || {significant}
+                ELSE name_token
+            END, ''
+        ) WITHIN GROUP (ORDER BY token_index)
+        FROM (
+            SELECT LEVEL AS token_index,
+                REGEXP_SUBSTR({normalized}, '[0-9]+|[^0-9]+', 1, LEVEL) AS name_token
+            FROM dual
+            CONNECT BY LEVEL <= REGEXP_COUNT({normalized}, '[0-9]+|[^0-9]+')
+        )
+    ), 'NLS_SORT=JAPANESE_M_CI')"""
 
 
 def _render_sql(template: str, **parts: str) -> str:

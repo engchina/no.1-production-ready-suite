@@ -111,6 +111,12 @@ async def test_search_answer_profile_list_without_references_skips_lookup() -> N
 
     assert views[0].missing_knowledge_base_count == 0
     assert len(pool.connection.calls) == 1
+    statement = pool.connection.calls[0].statement
+    order = statement[statement.index("ORDER BY") :]
+    assert "updated_at DESC" not in order
+    assert "CASE WHEN UPPER(bv.name) = 'DEFAULT' THEN 0 ELSE 1 END" in order
+    assert "JAPANESE_M_CI" in order
+    assert order.index("bv.search_answer_profile_id ASC") < order.index("OFFSET")
 
 
 def test_knowledge_base_where_filters_by_ids() -> None:
