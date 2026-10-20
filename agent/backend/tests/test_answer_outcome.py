@@ -109,13 +109,18 @@ def test_clarification_question_without_rag_search_is_needs_clarification() -> N
     assert content["signals"] == ["question"]
 
 
-def test_validation_that_withholds_the_whole_answer_is_insufficient_evidence() -> None:
+def test_validation_without_readable_evidence_is_insufficient_evidence() -> None:
+    """根拠を 1 件も読めない（no_evidence）と、本文は残すがすべての段落が未確認なので拒答
+    （#2738。本文を置き換えない）。"""
     answer = "契約は 60 日前までに解約できます。"
     validation = _validated(answer, _claim(answer, "unsupported"), status="no_evidence")
-    assert validation["withheld"]["all"] is True
-    assert _outcome(answer, [_retrieve()], validation) == (
+    assert validation["withheld"]["all"] is False
+    assert [item["code"] for item in validation["answer_warnings"]] == ["no_evidence"]
+    content = answer_outcome(answer, steps=[_retrieve()], validation=validation)
+    assert (content["value"], content["basis"], content["signals"]) == (
         "insufficient_evidence",
-        "validation_withheld_all",
+        "validation_nothing_confirmed",
+        ["unverified_passages"],
     )
 
 
@@ -135,18 +140,23 @@ def test_answer_that_relies_on_rag_search_uses_its_outcome() -> None:
     assert _outcome(answer, steps) == ("conditional", "rag_search")
 
 
-def test_answered_rag_search_with_withheld_paragraphs_is_conditional() -> None:
+def test_answered_rag_search_with_unverified_paragraphs_is_conditional() -> None:
     kept = "契約の更新は 30 日前までに申し出ます。"
     fee = "手数料として 5,000 円を支払います。"
     answer = f"{kept}\n{fee}"
     validation = _validated(answer, _claim(kept, "supported"), _claim(fee, "unsupported"))
     content = answer_outcome(answer, steps=[_search("answered")], validation=validation)
     assert (content["value"], content["basis"]) == ("conditional", "rag_search")
-    assert content["signals"] == ["withheld_claims"]
+    assert content["signals"] == ["unverified_passages"]
+    # 警告の印（規則の検査）だけなら answered のまま、記録の rule_warnings だけを付ける。
+    rule = {**_claim(fee, "unsupported"), "support_check": "value_unbound"}
+    validation = _validated(answer, _claim(kept, "supported"), rule)
+    content = answer_outcome(answer, steps=[_search("answered")], validation=validation)
+    assert (content["value"], content["signals"]) == ("answered", ["rule_warnings"])
 
 
-def test_withheld_contradiction_with_an_unbound_citation_is_a_disputed_paragraph() -> None:
-    """RAG が根拠の ID を照合できず判定を変えた段落も、監査の元の判定が矛盾なら
+def test_removed_contradiction_with_an_unbound_citation_is_a_gap() -> None:
+    """RAG が根拠の ID を照合できず判定を変えた段落も、監査の元の判定が矛盾なら外して
     不足の印にする（#2622）。"""
     kept = "設定Bは毎日 0 時に実行します。"
     disputed = "設定Aは有効です。"
@@ -154,7 +164,7 @@ def test_withheld_contradiction_with_an_unbound_citation_is_a_disputed_paragraph
     unbound = {**_claim(disputed, "citation_error"), "audit_status": "contradicted"}
     validation = _validated(answer, _claim(kept, "supported"), unbound)
     content = answer_outcome(answer, steps=[_search("answered")], validation=validation)
-    assert (content["value"], content["signals"]) == ("conditional", ["withheld_claims"])
+    assert (content["value"], content["signals"]) == ("conditional", ["contradicted_removed"])
 
 
 def test_environment_data_is_answered_after_the_environment_tools() -> None:
@@ -198,14 +208,15 @@ def test_absence_only_answer_is_insufficient_evidence() -> None:
     # km-license-fee: 資料に記載が無いことだけを述べた回答（推定は「回答」）。
     answer = "ライセンス費用は資料に記載がありません。"
     assert _outcome(answer, [_retrieve()]) == ("insufficient_evidence", "answer_passages")
-    # 根拠で確かめられない助言を外した後に、不足の文だけが残っても拒答。
+    # 根拠で確かめられない助言だけが不足の文に添えてあっても、確かめた段落が無いので拒答
+    # （助言は本文に残して印を付ける。#2738）。
     advice = "営業部に問い合わせると 1 日で分かります。"
     with_advice = f"{answer}\n{advice}"
     validation = _validated(with_advice, _claim(advice, "unsupported"))
-    assert validation["withheld"] == {"claims": 1, "findings": 0, "all": False}
+    assert [item["text"] for item in validation["passage_marks"]] == [advice]
     assert _outcome(with_advice, [_retrieve()], validation) == (
         "insufficient_evidence",
-        "answer_passages",
+        "validation_nothing_confirmed",
     )
 
 
@@ -297,7 +308,7 @@ def test_citation_location_lines_are_not_withheld_and_the_answer_is_answered() -
         "- ページ: 1": "unassessed",
     }
     validation = _validated(TRIAL_EXPIRY, *_verdicts(TRIAL_EXPIRY, statuses))
-    assert validation["withheld"] == {"claims": 0, "findings": 0, "all": False}
+    assert (validation["passage_marks"], validation["removed_passages"]) == ([], [])
     marked = {
         item["answer_quote"]: item.get("non_claim") for item in validation["result"]["claims"]
     }
@@ -312,8 +323,9 @@ def test_citation_location_lines_are_not_withheld_and_the_answer_is_answered() -
     )
 
 
-def test_only_unsupported_or_contradicted_withheld_paragraphs_are_a_gap() -> None:
-    # 確かめが終わらなかった段落（unassessed）を外しただけでは、条件・不足を示したことにしない。
+def test_unverified_or_removed_paragraphs_are_a_gap() -> None:
+    # 確かめが終わらなかった名前だけの項目（unassessed）には印を付けず、条件・不足を示したことに
+    # しない。
     fact = "検証用アカウントの有効期限は最長 30 日です。"
     pending = "1. **対象の選択**"
     extension = "延長は 90 日までできます。"
@@ -324,13 +336,18 @@ def test_only_unsupported_or_contradicted_withheld_paragraphs_are_a_gap() -> Non
         _claim(pending, "unassessed"),
         _claim(extension, "supported"),
     )
-    assert unassessed["withheld"]["claims"] == 1
+    assert unassessed["passage_marks"] == []
     content = answer_outcome(answer, steps=[_retrieve()], validation=unassessed)
     assert (content["value"], content["signals"]) == ("answered", [])
     # rag_search に拠る回答でも同じ（da-regional-report-export）。
     content = answer_outcome(answer, steps=[_search("answered")], validation=unassessed)
     assert (content["value"], content["basis"]) == ("answered", "rag_search")
-    for status in ("unsupported", "contradicted"):
+    # 未確認の印（確かめが終わっていない主張を含む）・矛盾で外した段落は不足の印（#2738）。
+    for status, signal in (
+        ("unassessed", "unverified_passages"),
+        ("unsupported", "unverified_passages"),
+        ("contradicted", "contradicted_removed"),
+    ):
         disputed = _validated(
             answer,
             _claim(fact, "supported"),
@@ -338,34 +355,48 @@ def test_only_unsupported_or_contradicted_withheld_paragraphs_are_a_gap() -> Non
             _claim(extension, status),
         )
         content = answer_outcome(answer, steps=[_retrieve()], validation=disputed)
-        assert (content["value"], content["signals"]) == ("conditional", ["withheld_claims"])
+        assert (content["value"], content["signals"]) == ("conditional", [signal])
 
 
-def test_answer_kept_with_unresolved_citations_is_conditional() -> None:
-    # #1391（br-document-portal-retention）: 出典を照合できない段落だけで本文が空になるときは、
-    # 本文を残して確かめきれなかった点を示す。拒答（insufficient_evidence）にせず、条件付きの
-    # 回答にする。
+def test_answer_kept_with_only_unresolved_citations_is_insufficient_evidence() -> None:
+    # #1391（br-document-portal-retention）: 出典を照合できない段落だけの回答は、本文を残して
+    # 印を付ける。根拠で確かめた段落が 1 つも無いので、回答の対応は拒答（#2738）。
     fact = "ドキュメントポータルの機密区分は「社内限り」で、データは **3 年間** 保管します。"
     conclusion = "したがって、ドキュメントポータルのデータの保管期間は **3 年** です。"
     answer = f"{fact}\n\n{conclusion}"
     validation = _validated(
         answer, _claim(fact, "citation_error"), _claim(conclusion, "citation_error")
     )
-    assert validation["withheld"] == {"claims": 0, "findings": 0, "all": False, "unverified": 2}
+    assert validation["withheld"] == {
+        "removed": 0,
+        "unverified": 2,
+        "warnings": 0,
+        "all": False,
+        "listed": 2,
+    }
     content = answer_outcome(answer, steps=[_retrieve()], validation=validation)
-    assert (content["value"], content["signals"]) == ("conditional", ["unverified_section"])
+    assert (content["value"], content["basis"], content["signals"]) == (
+        "insufficient_evidence",
+        "validation_nothing_confirmed",
+        ["unverified_passages"],
+    )
+    # 確かめた段落が 1 つでもあれば、条件付きの回答。
+    validation = _validated(answer, _claim(fact, "supported"), _claim(conclusion, "citation_error"))
+    content = answer_outcome(answer, steps=[_retrieve()], validation=validation)
+    assert (content["value"], content["signals"]) == ("conditional", ["unverified_passages"])
 
 
-def test_withheld_unassessed_claims_are_not_counted_as_claims() -> None:
-    # 外した段落（unassessed も）は利用者に見えないので主張に数えない（拒答のまま）。
+def test_unassessed_claims_without_a_confirmed_paragraph_are_insufficient_evidence() -> None:
+    # 不足の文と、確かめが終わらなかった助言だけの回答は、確かめた段落が無いので拒答のまま
+    # （助言は本文に残して印を付ける。#2738）。
     absence = "パスワードの文字数要件は、資料に記載がありません。"
     advice = "現場の契約書や価格表など、別途確認できる情報が必要です。"
     answer = f"{absence}\n{advice}"
     validation = _validated(answer, _claim(absence, "supported"), _claim(advice, "unassessed"))
-    assert validation["withheld"]["claims"] == 1
+    assert validation["withheld"]["unverified"] == 1
     assert _outcome(answer, [_retrieve()], validation) == (
         "insufficient_evidence",
-        "answer_passages",
+        "validation_nothing_confirmed",
     )
 
 
@@ -415,8 +446,12 @@ def test_refusal_that_ends_with_cannot_answer_is_insufficient_evidence(
     # conditional になっていた（期待は insufficient_evidence）。
     validation = _validated(answer, *_verdicts(answer, statuses))
     content = answer_outcome(answer, steps=[_retrieve()], validation=validation)
-    assert (content["value"], content["basis"]) == ("insufficient_evidence", "answer_passages")
-    assert content["signals"] == ["absence"]
+    # 確かめられない段落は本文に残して印を付け（#2738）、確かめた主張が無いので拒答のまま。
+    assert (content["value"], content["basis"]) == (
+        "insufficient_evidence",
+        "validation_nothing_confirmed",
+    )
+    assert content["signals"] == ["absence", "unverified_passages"]
     # rag_search の後に根拠を集め直した回答も同じ（km-password-policy）。
     steps = [_search("insufficient_evidence"), _retrieve()]
     assert answer_outcome(answer, steps=steps, validation=validation)["value"] == (
@@ -476,11 +511,19 @@ def test_paragraph_asking_to_check_logs_needs_environment_data_even_if_supported
         "needs_environment_data",
         "answer_passages",
     )
-    # 検証が外した確認の段落は、利用者に見えないので印にしない。
+    # 検証が矛盾で外した確認の段落は、利用者に見えないので印にしない。
     fact = "E-1023 の原因は、認証トークンの期限切れか権限不足です。"
     answer = f"{fact}\n{only}"
+    validation = _validated(answer, _claim(fact, "supported"), _claim(only, "contradicted"))
+    assert answer_outcome(answer, steps=[_retrieve()], validation=validation)["signals"] == [
+        "contradicted_removed"
+    ]
+    # 本文に残して印を付けた確認の段落は、利用者に見えるので実データの確認の印にする（#2738）。
     validation = _validated(answer, _claim(fact, "supported"), _claim(only, "unassessed"))
-    assert answer_outcome(answer, steps=[_retrieve()], validation=validation)["signals"] == []
+    assert answer_outcome(answer, steps=[_retrieve()], validation=validation)["signals"] == [
+        "data_confirmation",
+        "unverified_passages",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -528,7 +571,11 @@ def test_refusal_with_other_wording_and_a_trailing_note_is_insufficient_evidence
         *_verdicts(PASSWORD_REFUSAL_WITH_NOTE, {advice: "unassessed"}),
     )
     content = answer_outcome(PASSWORD_REFUSAL_WITH_NOTE, steps=[_retrieve()], validation=validation)
-    assert (content["value"], content["signals"]) == ("insufficient_evidence", ["absence"])
+    # 確かめが終わらなかった助言は本文に残して印を付ける（#2738。確かめた主張が無いので拒答）。
+    assert (content["value"], content["signals"]) == (
+        "insufficient_evidence",
+        ["absence", "unverified_passages"],
+    )
 
 
 def test_unknown_current_value_is_a_gap() -> None:
@@ -645,7 +692,7 @@ def test_enclosed_absence_and_a_stray_emphasis_mark_are_not_claims() -> None:
         ]
     )
     validation = _validated(answer, *_verdicts(answer, {"**": "unassessed"}))
-    assert validation["withheld"]["claims"] == 0
+    assert validation["passage_marks"] == []
     content = answer_outcome(answer, steps=[_retrieve()], validation=validation)
     assert (content["value"], content["signals"]) == ("insufficient_evidence", ["absence"])
 

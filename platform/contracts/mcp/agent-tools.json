@@ -195,6 +195,81 @@
             "title": "ConfirmationOutput",
             "type": "object"
           },
+          "PassageMarkOutput": {
+            "description": "回答の本文に残した段落の印（unverified=根拠で確かめられていない / warning=注意が必要）。",
+            "properties": {
+              "text": {
+                "title": "Text",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "unverified",
+                  "warning"
+                ],
+                "title": "State",
+                "type": "string"
+              },
+              "reasons": {
+                "items": {
+                  "$ref": "#/$defs/ReasonOutput"
+                },
+                "title": "Reasons",
+                "type": "array"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "title": "PassageMarkOutput",
+            "type": "object"
+          },
+          "ReasonOutput": {
+            "description": "印・外した段落・回答の警告の理由。",
+            "properties": {
+              "code": {
+                "title": "Code",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "detail": {
+                "default": "",
+                "title": "Detail",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "label"
+            ],
+            "title": "ReasonOutput",
+            "type": "object"
+          },
+          "RemovedPassageOutput": {
+            "description": "根拠と矛盾するため回答の本文から除いた段落。",
+            "properties": {
+              "text": {
+                "title": "Text",
+                "type": "string"
+              },
+              "reasons": {
+                "items": {
+                  "$ref": "#/$defs/ReasonOutput"
+                },
+                "title": "Reasons",
+                "type": "array"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "title": "RemovedPassageOutput",
+            "type": "object"
+          },
           "SourceOutput": {
             "description": "回答の根拠（RAG の資料。回答に使ったもの）。",
             "properties": {
@@ -221,6 +296,12 @@
           }
         },
         "properties": {
+          "schema_version": {
+            "default": 2,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "run_id": {
             "title": "Run Id",
             "type": "string"
@@ -277,6 +358,30 @@
               "$ref": "#/$defs/SourceOutput"
             },
             "title": "Sources",
+            "type": "array"
+          },
+          "passage_marks": {
+            "description": "answer の本文の段落（text）のうち、確かめが要る段落と理由。",
+            "items": {
+              "$ref": "#/$defs/PassageMarkOutput"
+            },
+            "title": "Passage Marks",
+            "type": "array"
+          },
+          "removed_passages": {
+            "description": "根拠と矛盾するため answer の本文から除いた段落と理由。",
+            "items": {
+              "$ref": "#/$defs/RemovedPassageOutput"
+            },
+            "title": "Removed Passages",
+            "type": "array"
+          },
+          "answer_warnings": {
+            "description": "回答全体についての警告。",
+            "items": {
+              "$ref": "#/$defs/ReasonOutput"
+            },
+            "title": "Answer Warnings",
             "type": "array"
           },
           "tools_used": {
@@ -482,6 +587,81 @@
             "title": "ConfirmationOutput",
             "type": "object"
           },
+          "PassageMarkOutput": {
+            "description": "回答の本文に残した段落の印（unverified=根拠で確かめられていない / warning=注意が必要）。",
+            "properties": {
+              "text": {
+                "title": "Text",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "unverified",
+                  "warning"
+                ],
+                "title": "State",
+                "type": "string"
+              },
+              "reasons": {
+                "items": {
+                  "$ref": "#/$defs/ReasonOutput"
+                },
+                "title": "Reasons",
+                "type": "array"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "title": "PassageMarkOutput",
+            "type": "object"
+          },
+          "ReasonOutput": {
+            "description": "印・外した段落・回答の警告の理由。",
+            "properties": {
+              "code": {
+                "title": "Code",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "detail": {
+                "default": "",
+                "title": "Detail",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "label"
+            ],
+            "title": "ReasonOutput",
+            "type": "object"
+          },
+          "RemovedPassageOutput": {
+            "description": "根拠と矛盾するため回答の本文から除いた段落。",
+            "properties": {
+              "text": {
+                "title": "Text",
+                "type": "string"
+              },
+              "reasons": {
+                "items": {
+                  "$ref": "#/$defs/ReasonOutput"
+                },
+                "title": "Reasons",
+                "type": "array"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "title": "RemovedPassageOutput",
+            "type": "object"
+          },
           "SourceOutput": {
             "description": "回答の根拠（RAG の資料。回答に使ったもの）。",
             "properties": {
@@ -508,6 +688,12 @@
           }
         },
         "properties": {
+          "schema_version": {
+            "default": 2,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "run_id": {
             "title": "Run Id",
             "type": "string"
@@ -564,6 +750,30 @@
               "$ref": "#/$defs/SourceOutput"
             },
             "title": "Sources",
+            "type": "array"
+          },
+          "passage_marks": {
+            "description": "answer の本文の段落（text）のうち、確かめが要る段落と理由。",
+            "items": {
+              "$ref": "#/$defs/PassageMarkOutput"
+            },
+            "title": "Passage Marks",
+            "type": "array"
+          },
+          "removed_passages": {
+            "description": "根拠と矛盾するため answer の本文から除いた段落と理由。",
+            "items": {
+              "$ref": "#/$defs/RemovedPassageOutput"
+            },
+            "title": "Removed Passages",
+            "type": "array"
+          },
+          "answer_warnings": {
+            "description": "回答全体についての警告。",
+            "items": {
+              "$ref": "#/$defs/ReasonOutput"
+            },
+            "title": "Answer Warnings",
             "type": "array"
           },
           "tools_used": {
@@ -747,6 +957,81 @@
             "title": "ConfirmationOutput",
             "type": "object"
           },
+          "PassageMarkOutput": {
+            "description": "回答の本文に残した段落の印（unverified=根拠で確かめられていない / warning=注意が必要）。",
+            "properties": {
+              "text": {
+                "title": "Text",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "unverified",
+                  "warning"
+                ],
+                "title": "State",
+                "type": "string"
+              },
+              "reasons": {
+                "items": {
+                  "$ref": "#/$defs/ReasonOutput"
+                },
+                "title": "Reasons",
+                "type": "array"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "title": "PassageMarkOutput",
+            "type": "object"
+          },
+          "ReasonOutput": {
+            "description": "印・外した段落・回答の警告の理由。",
+            "properties": {
+              "code": {
+                "title": "Code",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "detail": {
+                "default": "",
+                "title": "Detail",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "label"
+            ],
+            "title": "ReasonOutput",
+            "type": "object"
+          },
+          "RemovedPassageOutput": {
+            "description": "根拠と矛盾するため回答の本文から除いた段落。",
+            "properties": {
+              "text": {
+                "title": "Text",
+                "type": "string"
+              },
+              "reasons": {
+                "items": {
+                  "$ref": "#/$defs/ReasonOutput"
+                },
+                "title": "Reasons",
+                "type": "array"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "title": "RemovedPassageOutput",
+            "type": "object"
+          },
           "SourceOutput": {
             "description": "回答の根拠（RAG の資料。回答に使ったもの）。",
             "properties": {
@@ -773,6 +1058,12 @@
           }
         },
         "properties": {
+          "schema_version": {
+            "default": 2,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "run_id": {
             "title": "Run Id",
             "type": "string"
@@ -829,6 +1120,30 @@
               "$ref": "#/$defs/SourceOutput"
             },
             "title": "Sources",
+            "type": "array"
+          },
+          "passage_marks": {
+            "description": "answer の本文の段落（text）のうち、確かめが要る段落と理由。",
+            "items": {
+              "$ref": "#/$defs/PassageMarkOutput"
+            },
+            "title": "Passage Marks",
+            "type": "array"
+          },
+          "removed_passages": {
+            "description": "根拠と矛盾するため answer の本文から除いた段落と理由。",
+            "items": {
+              "$ref": "#/$defs/RemovedPassageOutput"
+            },
+            "title": "Removed Passages",
+            "type": "array"
+          },
+          "answer_warnings": {
+            "description": "回答全体についての警告。",
+            "items": {
+              "$ref": "#/$defs/ReasonOutput"
+            },
+            "title": "Answer Warnings",
             "type": "array"
           },
           "tools_used": {

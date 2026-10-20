@@ -45,22 +45,30 @@ def _steps(case: dict[str, Any], *, rag_outcome: str | None = None) -> list[RunS
     return steps
 
 
+def _current(case: dict[str, Any], validation: dict[str, Any] | None = None) -> dict[str, Any]:
+    """記録の判定（`result`）から、今の最終の検証が残す段落の印・外した段落・回答の警告を作り直した
+    成果物の内容（#2738。fixture は #2738 の前の記録で、段落の印を持たない）。"""
+    validation = validation or case["validation"]
+    return {**validation, **publish_answer(case["answer"], validation["result"]).record()}
+
+
 def _outcome(name: str, **kwargs: Any) -> dict[str, Any]:
     case = FIXTURE[name]
-    validation = kwargs.pop("validation", case["validation"])
+    validation = _current(case, kwargs.pop("validation", None))
     return answer_outcome(case["answer"], steps=_steps(case, **kwargs), validation=validation)
 
 
-def test_withheld_supplement_after_a_supported_conclusion_stays_answered() -> None:
-    # da-trial-account-expiry: 結論（最長 30 日）は supported で、外したのは補足の「なお、…
-    # 見当たりませんでした。」だけ。withheld_claims で conditional になっていた（期待は answered）。
+def test_unverified_supplement_after_a_supported_conclusion_stays_answered() -> None:
+    # da-trial-account-expiry: 結論（最長 30 日）は supported で、確かめられないのは補足の「なお、…
+    # 見当たりませんでした。」だけ。不足の印で conditional になっていた（期待は answered）。補足は
+    # 本文に残して印を付ける（#2738）。
     content = _outcome("da-trial-account-expiry")
     assert (content["value"], content["basis"]) == ("answered", "rag_search")
-    assert content["signals"] == ["supplement_withheld"]
+    assert content["signals"] == ["supplement_unverified"]
 
 
-def test_withheld_conclusion_is_still_conditional() -> None:
-    # 同じ回答で、結論の段落を外したなら答えの不足（withheld_claims）のまま。
+def test_unverified_conclusion_is_still_conditional() -> None:
+    # 同じ回答で、結論の段落が確かめられないなら答えの不足（unverified_passages）のまま。
     case = FIXTURE["da-trial-account-expiry"]
     validation = json.loads(json.dumps(case["validation"]))
     for claim in validation["result"]["claims"]:
@@ -68,16 +76,19 @@ def test_withheld_conclusion_is_still_conditional() -> None:
             claim["status"] = "unsupported"
     content = _outcome("da-trial-account-expiry", validation=validation)
     assert content["value"] == "conditional"
-    assert "withheld_claims" in content["signals"]
+    assert "unverified_passages" in content["signals"]
 
 
-def test_guide_step_error_that_withholds_the_whole_answer_needs_a_human() -> None:
+def test_guide_step_error_keeps_the_answer_and_needs_a_human() -> None:
     # mt-delete-account-approved（2 回目の発言）: 業務ガイドの手順の検査の error
-    # （step_wrong_branch）で本文をすべて外した。資料が無いのではないので needs_human。
-    validation = FIXTURE["mt-delete-account-approved"]["validation"]
-    assert validation["withheld"]["all"] is True
+    # （step_wrong_branch）。本文は置き換えず回答全体の警告にする（#2738）。資料が無いのでは
+    # ないので needs_human。
+    case = FIXTURE["mt-delete-account-approved"]
+    published = publish_answer(case["answer"], case["validation"]["result"])
+    assert published.body == case["answer"]
+    assert "guide_check" in [item["code"] for item in published.answer_warnings]
     content = _outcome("mt-delete-account-approved")
-    assert (content["value"], content["basis"]) == ("needs_human", "validation_withheld_guide")
+    assert (content["value"], content["basis"]) == ("needs_human", "validation_guide_check")
     assert "check_errors" in content["signals"]
 
 
@@ -87,9 +98,7 @@ def test_without_the_false_step_error_the_body_is_kept() -> None:
     case = FIXTURE["mt-delete-account-approved"]
     result = json.loads(json.dumps(case["validation"]["result"]))
     result["findings"] = [item for item in result["findings"] if item["check"] != "guide_steps"]
-    _text, withheld = publish_answer(case["answer"], result)
-    assert withheld["all"] is False
-    validation = {**case["validation"], "result": result, "withheld": withheld}
+    validation = {**case["validation"], "result": result}
     # #1453 の後の RAG は、承認・ロールを利用者の条件にして conditional を返す。
     content = _outcome(
         "mt-delete-account-approved", validation=validation, rag_outcome="conditional"

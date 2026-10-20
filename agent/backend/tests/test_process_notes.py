@@ -74,7 +74,7 @@ def test_guide_not_found_passage_is_kept_and_does_not_make_the_answer_conditiona
         answer, [validation_content(STATUS_COMPLETED, result=result, evidence=EVIDENCE)]
     )
     assert published == answer
-    assert content["withheld"]["claims"] == 0
+    assert (content["passage_marks"], content["removed_passages"]) == ([], [])
 
     name = "rag__rag_search"
     search = RunStep(

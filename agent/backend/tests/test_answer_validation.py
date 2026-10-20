@@ -39,12 +39,17 @@ from app.features.agent.answer_passages import (
     passage_spans,
 )
 from app.features.agent.answer_validation import (
-    DEPENDENT_STEP_LABEL,
+    ALL_REMOVED,
+    ANSWER_WARNING_REASONS,
     MAX_CARRIED_EVIDENCE,
     MAX_VALIDATION_EVIDENCE,
     NO_EVIDENCE_NOTICE,
-    UNVERIFIED_HEADING,
-    UNVERIFIED_KEPT_INTRO,
+    PASSAGE_REASONS,
+    REMOVED_HEADING,
+    REMOVED_INTRO,
+    REMOVED_REASONS,
+    REVIEW_HEADING,
+    REVIEW_INTRO,
     UNVERIFIED_NOTICE,
     carried_evidence,
     carried_evidence_groups,
@@ -201,7 +206,7 @@ STEP_FEE = "2. 手数料として 5,000 円を支払い" + "、担当者の確�
 STEP_WRONG = "3. 解約は 60 日前までに申し出ます。"
 
 
-def test_failed_verdict_withholds_unsupported_steps_with_a_notice(
+def test_failed_verdict_keeps_unsupported_steps_and_removes_contradicted_ones(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
     mcp.outputs["rag_validate_answer"] = {
@@ -228,26 +233,58 @@ def test_failed_verdict_withholds_unsupported_steps_with_a_notice(
 
     answer = run_answer_text(run)
     assert answer is not None
-    # 根拠で確かめた段落だけを載せ、確かめられなかった手順は外す（handoff §12）。
-    body, section = answer.split("\n\n**資料で確認できず除いた内容**\n\n", 1)
-    assert body == f"{ANSWER}\n\n{STEP_OK}"
-    assert "手数料" not in body and "60 日前" not in body
-    lines = section.splitlines()
-    assert lines[0] == "根拠で確かめられなかった次の内容は、回答に載せていません。"
+    # 根拠と矛盾した手順だけを外し、根拠で確かめられない手順は本文に残して印を付ける（#2738）。
+    body, rest = answer.split(f"\n\n**{REMOVED_HEADING}**\n\n", 1)
+    removed, review = rest.split(f"\n\n**{REVIEW_HEADING}**\n\n", 1)
+    assert body == f"{ANSWER}\n\n{STEP_OK}\n{STEP_FEE}"
+    assert removed.splitlines() == [REMOVED_INTRO, f"- 根拠と矛盾: 「{STEP_WRONG}」"]
+    lines = review.splitlines()
+    assert lines[0] == REVIEW_INTRO
     assert lines[1].startswith("- 根拠で確かめられない: 「2. 手数料として 5,000 円を支払い")
     quote = lines[1].split("「", 1)[1].split("」", 1)[0]
     assert len(quote) == 80 and quote.endswith("…")
-    # 検証のモデルが書いた理由は本文に出さない（#1833。成果物の判定に残す）。
+    # 検証のモデルが書いた理由は本文に出さない（#1833。成果物の印の理由に残す）。
     assert lines[1].endswith("…」")
-    assert lines[2] == f"- 根拠と矛盾: 「{STEP_WRONG}」"
-    assert lines[3].startswith("- 根拠の 1 件は文書の古い版です。")
-    assert len(lines) == 4
+    assert lines[2].startswith("- 根拠の 1 件は文書の古い版です。")
+    assert len(lines) == 3
     content = _validation(run)
     assert (content["status"], content["valid"]) == ("completed", False)
-    assert content["withheld"] == {"claims": 2, "findings": 0, "all": False}
+    assert content["withheld"] == {
+        "removed": 1,
+        "unverified": 1,
+        "warnings": 0,
+        "all": False,
+        "listed": 3,
+    }
+    assert content["passage_marks"] == [
+        {
+            "text": STEP_FEE,
+            "state": "unverified",
+            "reasons": [
+                {
+                    "code": "unsupported",
+                    "label": "根拠で確かめられない",
+                    "detail": "根拠に金額が無い。",
+                }
+            ],
+        }
+    ]
+    assert content["removed_passages"] == [
+        {
+            "text": STEP_WRONG,
+            "reasons": [
+                {"code": "contradicted", "label": "根拠と矛盾", "detail": "根拠は 30 日前。"}
+            ],
+        }
+    ]
+    assert content["notice"] == {
+        "items": 3,
+        "heading": REMOVED_HEADING,
+        "headings": [REMOVED_HEADING, REVIEW_HEADING],
+    }
 
 
-def test_verdict_without_readable_evidence_withholds_the_whole_answer(
+def test_verdict_without_readable_evidence_keeps_the_answer_with_a_warning(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
     mcp.outputs["rag_validate_answer"] = {
@@ -262,19 +299,35 @@ def test_verdict_without_readable_evidence_withholds_the_whole_answer(
 
     run, _ = _searched_run(monkeypatch)
 
+    # 本文は置き換えず、すべての段落を未確認にして回答全体の警告を出す（#2738）。
     assert run_answer_text(run) == (
-        "根拠で確かめられた内容はありませんでした。\n\n**資料で確認できず除いた内容**\n\n"
-        "根拠で確かめられなかった次の内容は、回答に載せていません。\n"
+        f"{ANSWER}\n\n**{REVIEW_HEADING}**\n\n{REVIEW_INTRO}\n"
+        "- 根拠を読めず、すべての段落が未確認\n"
         "- 根拠の 1 件は見つかりません（削除された・参照できない）。"
     )
-    assert _validation(run)["withheld"] == {"claims": 0, "findings": 0, "all": True}
+    content = _validation(run)
+    assert [item["code"] for item in content["answer_warnings"]] == ["no_evidence"]
+    assert content["passage_marks"] == [
+        {
+            "text": ANSWER,
+            "state": "unverified",
+            "reasons": [{"code": "unsupported", "label": "根拠で確かめられない", "detail": ""}],
+        }
+    ]
+    assert content["withheld"] == {
+        "removed": 0,
+        "unverified": 1,
+        "warnings": 0,
+        "all": False,
+        "listed": 2,
+    }
 
 
 def test_invalid_answer_shows_deterministic_findings(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """RAG の決定的な検査の error（#1276）も「資料で確認できず除いた内容」に出す（warning は
-    除く）。
+    """RAG の決定的な検査の error（#1276）は回答全体の警告にして「確認が必要な点」に出す（warning は
+    除く。#2738）。
     """
     output = deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"])
     output["valid"] = False
@@ -302,11 +355,15 @@ def test_invalid_answer_shows_deterministic_findings(
 
     answer = run_answer_text(run)
     assert answer is not None
-    section = answer.split("**資料で確認できず除いた内容**", 1)[1]
-    lines = [line for line in section.strip().splitlines() if line]
-    assert lines == ["- 要求「更新の手数料」に答えていません。不足も示していません。"]
+    body, section = answer.split(f"\n\n**{REVIEW_HEADING}**\n\n", 1)
+    assert body == ANSWER
+    message = "要求「更新の手数料」に答えていません。不足も示していません。"
+    assert section.splitlines() == [REVIEW_INTRO, f"- 質問の要求の一部に答えていない: {message}"]
     content = _validation(run)
     assert content["result"]["findings"][0]["code"] == "request_missing"
+    assert content["answer_warnings"] == [
+        {"code": "requests", "label": "質問の要求の一部に答えていない", "detail": message}
+    ]
 
 
 def test_validator_failure_keeps_the_answer_with_a_notice(
@@ -1151,10 +1208,12 @@ GUIDE_STEP_ERROR = {
 }
 
 
-def test_search_guide_and_requests_are_checked_and_step_errors_withhold_the_answer(
+def test_search_guide_and_requests_are_checked_and_step_errors_keep_the_answer_with_a_warning(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """rag_search の要求・不足・業務ガイドを渡し、手順の error は本文を載せない（#1276・#1277）。"""
+    """rag_search の要求・不足・業務ガイドを渡す（#1276・#1277）。手順の error は本文を置き換えず、
+    回答全体の警告にする（#2738。回答の対応は人の確認）。
+    """
     search = deepcopy(DEFAULT_OUTPUTS["rag_search"])
     search["requests"] = [{"id": "Q1", "text": "更新の期限", "status": "partial"}]
     search["gaps"] = ["更新の手数料"]
@@ -1190,13 +1249,27 @@ def test_search_guide_and_requests_are_checked_and_step_errors_withhold_the_answ
         "revision": 3,
         "conditions": {"kind": "年間"},
     }
-    # どの段落の手順が誤りかを決められないので、確かめていない手順を出さない（handoff §12）。
+    label = "業務ガイドの手順の確認で問題が見つかった"
     assert run_answer_text(run) == (
-        "業務ガイドの手順・影響範囲と照らして確かめられない点があるため、回答の本文は載せていません。"
-        "\n\n**資料で確認できず除いた内容**\n\n"
-        "- 手順「申し出る」を、先に行う手順「契約を開く」より前に書いています。"
+        f"{ANSWER}\n\n**{REVIEW_HEADING}**\n\n{REVIEW_INTRO}\n"
+        f"- {label}: 手順「申し出る」を、先に行う手順「契約を開く」より前に書いています。"
     )
-    assert _validation(run)["withheld"] == {"claims": 0, "findings": 1, "all": True}
+    content = _validation(run)
+    assert content["answer_warnings"] == [
+        {"code": "guide_check", "label": label, "detail": GUIDE_STEP_ERROR["message"]}
+    ]
+    assert content["withheld"] == {
+        "removed": 0,
+        "unverified": 0,
+        "warnings": 0,
+        "all": False,
+        "listed": 1,
+    }
+    [answer] = [item for item in run.artifacts if item.kind == "answer"]
+    assert (answer.content["outcome"]["value"], answer.content["outcome"]["basis"]) == (
+        "needs_human",
+        "validation_guide_check",
+    )
 
 
 def _step(name: str, arguments: dict[str, Any], output: dict[str, Any]) -> RunStep:
@@ -1274,16 +1347,24 @@ def test_request_errors_keep_the_answer_and_merge_across_connections() -> None:
     assert merged["findings"] == [request_error, warning]
     assert merged["checks"] == ["guide_steps", "requests"]
     assert merged["valid"] is False
-    published, withheld = publish_answer(ANSWER, merged)
-    # 要求の error は本文を残し、不足として示す（warning は出さない）。
-    assert published == (
-        f"{ANSWER}\n\n**資料で確認できず除いた内容**\n\n"
-        "- 要求「更新の手数料」に答えていません。不足も示していません。"
+    published = publish_answer(ANSWER, merged)
+    # 要求の error は本文を残し、回答全体の警告として示す（warning は出さない）。
+    assert published.text == (
+        f"{ANSWER}\n\n**{REVIEW_HEADING}**\n\n{REVIEW_INTRO}\n"
+        "- 質問の要求の一部に答えていない: "
+        "要求「更新の手数料」に答えていません。不足も示していません。"
     )
-    assert withheld == {"claims": 0, "findings": 1, "all": False}
+    assert [item["code"] for item in published.answer_warnings] == ["requests"]
+    assert published.withheld == {
+        "removed": 0,
+        "unverified": 0,
+        "warnings": 0,
+        "all": False,
+        "listed": 1,
+    }
     # 確かめる主張が無くても error の指摘があれば示す。
     no_claims = {"valid": False, "status": "no_claims", "claims": [], "findings": [request_error]}
-    assert publish_answer(ANSWER, no_claims)[0].endswith("不足も示していません。")
+    assert publish_answer(ANSWER, no_claims).text.endswith("不足も示していません。")
 
 
 def test_withhold_removes_only_the_listed_paragraphs() -> None:
@@ -1399,8 +1480,8 @@ def test_followup_answer_starts_without_a_dangling_connective_and_hides_internal
     result = _verdict(
         _claim(
             FOLLOWUP_FIRST,
-            "unsupported",
-            "提供された証拠項目には「経費精算マニュアル」や締め日超過に関する記載がなく、裏付けられない。",
+            "contradicted",
+            "提供された証拠項目には締め日超過時の扱いの記載があり、記載が無いという主張と矛盾する。",
         ),
         _claim(
             FOLLOWUP_ABSENCE, "unsupported", "締め日超過時の処置に関する情報は証拠に含まれない。"
@@ -1413,19 +1494,23 @@ def test_followup_answer_starts_without_a_dangling_connective_and_hides_internal
         ),
     )
 
-    published, withheld = publish_answer(answer, result)
+    published = publish_answer(answer, result)
 
-    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-    # 不足の文（主張ではない）は残し、外した 1 文目を受ける「したがって、」は外す。
-    assert body == "締め日を過ぎた際の具体的な処置は資料からは確認できません。"
+    # 不足の文（主張ではない）は残し、矛盾で外した 1 文目を受ける「したがって、」は外す。根拠で
+    # 確かめられない出典の文は本文に残して印を付ける（#2738）。
+    assert published.body == "締め日を過ぎた際の具体的な処置は資料からは確認できません。" + (
+        FOLLOWUP_SOURCE
+    )
+    removed, review = published.sections
     # 理由は判定の種類の短い文だけ（検証のモデルが書いた理由・内部の語を出さない）。
-    listed = section.splitlines()[1:]
-    assert len(listed) == 2
-    assert all(re.fullmatch(r"- 根拠で確かめられない: 「[^\n]+」", line) for line in listed)
-    assert listed[0].startswith("- 根拠で確かめられない: 「資料を確認したところ、")
-    assert listed[1].startswith("- 根拠で確かめられない: 「※根拠：")
-    assert not re.search(r"evidence_items|監査|クレーム|証拠項目|引用エラー", section)
-    assert withheld == {"claims": 2, "findings": 0, "all": False}
+    [line] = removed.splitlines()[3:]
+    assert line.startswith("- 根拠と矛盾: 「資料を確認したところ、")
+    [listed] = review.splitlines()[3:]
+    assert re.fullmatch(r"- 根拠で確かめられない: 「※根拠：[^\n]+」", listed)
+    assert not re.search(r"evidence_items|監査|クレーム|証拠項目|引用エラー", published.text)
+    # 理由の全文は記録（印の理由の detail）に残す。
+    assert "evidence_items" in published.passage_marks[0]["reasons"][0]["detail"]
+    assert (published.withheld["removed"], published.withheld["unverified"]) == (1, 1)
 
 
 def test_location_and_closing_lines_marked_unassessed_keep_the_answer() -> None:
@@ -1445,7 +1530,8 @@ def test_location_and_closing_lines_marked_unassessed_keep_the_answer() -> None:
         _claim(closing, "unassessed", "本文を見出しとして監査から除外できません。"),
     )
 
-    assert publish_answer(answer, result) == (answer, {"claims": 0, "findings": 0, "all": False})
+    published = publish_answer(answer, result)
+    assert (published.text, published.passage_marks, published.removed_passages) == (answer, [], [])
 
 
 # ---- 主張ではない段落を外さない（#1306） ------------------------------------------------
@@ -1496,7 +1582,7 @@ def _verdict(*claims: dict[str, Any]) -> dict[str, Any]:
     return output
 
 
-def test_non_claim_passages_are_kept_and_unsupported_steps_are_still_withheld(
+def test_non_claim_passages_are_kept_and_unsupported_steps_are_marked(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
     mcp.outputs["rag_validate_answer"] = _verdict(
@@ -1519,29 +1605,23 @@ def test_non_claim_passages_are_kept_and_unsupported_steps_are_still_withheld(
 
     answer = run_answer_text(run)
     assert answer is not None
-    body, section = answer.split("\n\n**資料で確認できず除いた内容**\n\n", 1)
-    # 見出し・出典・不足の文・質問は残し、根拠に無い手順だけを外す。
-    assert body == "\n".join(
-        [
-            TRIAL_HEADING,
-            "",
-            TRIAL_FACT,
-            "",
-            TRIAL_STEPS,
-            TRIAL_STEP_OK,
-            TRIAL_CITATION,
-            TRIAL_SOURCE,
-            "",
-            TRIAL_ABSENCE,
-            TRIAL_QUESTION,
-        ]
-    )
+    body, section = answer.split(f"\n\n**{REVIEW_HEADING}**\n\n", 1)
+    # 見出し・出典・不足の文・質問は印を付けずに残し、根拠に無い手順も本文に残して印を付ける
+    # （#1306・#2738）。
+    assert body == TRIAL_ANSWER
     assert section.splitlines() == [
-        "根拠で確かめられなかった次の内容は、回答に載せていません。",
+        REVIEW_INTRO,
         f"- 根拠で確かめられない: 「{TRIAL_STEP_UNSUPPORTED}」",
     ]
     content = _validation(run)
-    assert content["withheld"] == {"claims": 1, "findings": 0, "all": False}
+    assert content["withheld"] == {
+        "removed": 0,
+        "unverified": 1,
+        "warnings": 0,
+        "all": False,
+        "listed": 1,
+    }
+    assert [item["text"] for item in content["passage_marks"]] == [TRIAL_STEP_UNSUPPORTED]
     # RAG の判定は変えず、主張ではない段落に non_claim を付けて残す（画面が同じ判断をする）。
     marked = {item["answer_quote"]: item.get("non_claim") for item in content["result"]["claims"]}
     assert marked == {
@@ -1589,10 +1669,11 @@ def test_refusal_that_the_documents_lack_the_answer_is_kept_as_a_refusal(
     run, _ = _searched_run(monkeypatch, answer=refusal)
 
     assert run_answer_text(run) == refusal
-    assert _validation(run)["withheld"] == {"claims": 0, "findings": 0, "all": False}
+    content = _validation(run)
+    assert (content["passage_marks"], content["removed_passages"]) == ([], [])
 
 
-def test_refusal_mixed_with_an_unsupported_fee_still_withholds_the_fee() -> None:
+def test_refusal_mixed_with_an_unsupported_fee_still_marks_the_fee() -> None:
     answer = (
         "ライセンス費用は、資料に記載がありません。\n"
         "ライセンス費用は月額 1,000 円で、資料には記載がありません。"
@@ -1606,30 +1687,32 @@ def test_refusal_mixed_with_an_unsupported_fee_still_withholds_the_fee() -> None
         ),
     )
 
-    published, withheld = publish_answer(answer, result)
+    published = publish_answer(answer, result)
 
-    # 金額の主張を抱き合わせた文は「記載が無い」の文として扱わず、外す。
-    body, section = published.split("\n\n**資料で確認できず除いた内容**\n\n", 1)
-    assert body == "ライセンス費用は、資料に記載がありません。"
-    assert "月額 1,000 円" in section
-    assert withheld == {"claims": 1, "findings": 0, "all": False}
+    # 金額の主張を抱き合わせた文は「記載が無い」の文として扱わず、印を付ける（本文には残す）。
+    assert published.body == answer
+    assert [item["text"] for item in published.passage_marks] == [
+        "ライセンス費用は月額 1,000 円で、資料には記載がありません。"
+    ]
+    assert "月額 1,000 円" in published.sections[0]
+    assert published.withheld["unverified"] == 1
 
 
 def test_headings_and_citations_left_alone_are_not_published() -> None:
-    # 手順をすべて外した後に、見出しと出典の行だけを本文として出さない。
+    # 手順をすべて矛盾で外した後に、見出しと出典の行だけを本文として出さない。
     step = "1. 管理画面で「削除」を押します。"
     answer = f"## アカウントの削除の手順\n{step}\n【admin-guide.pdf p.12】"
     result = _verdict(
         _claim("## アカウントの削除の手順", "unassessed", "見出し。"),
-        _claim(step, "unsupported", "根拠に無い。"),
+        _claim(step, "contradicted", "根拠と矛盾。"),
         _claim("【admin-guide.pdf p.12】", "unassessed", "出典。"),
     )
 
-    published, withheld = publish_answer(answer, result)
+    published = publish_answer(answer, result)
 
-    body, _section = published.split("\n\n**資料で確認できず除いた内容**\n\n", 1)
-    assert body == "根拠で確かめられた内容はありませんでした。"
-    assert withheld == {"claims": 1, "findings": 0, "all": True}
+    assert published.body == ALL_REMOVED
+    assert published.headings == [REMOVED_HEADING]
+    assert published.withheld["removed"] == 1 and published.withheld["all"] is False
     # 段落を外した行に残った出典、中身をすべて外した節の見出しも消す。
     kept = withhold_paragraphs(
         f"{TRIAL_FACT}\n\n## 削除の手順\n{step}【admin-guide.pdf p.12】"
@@ -1673,51 +1756,51 @@ def _portal_retention_claims(first_status: str = "citation_error") -> list[dict[
     ]
 
 
-def test_answer_is_kept_when_only_unresolved_citations_would_empty_it() -> None:
-    """根拠で否定された段落が無いのに、出典を照合できない段落を外すと本文が空になるときは、
-    本文を残して確かめきれなかった点を示す（#1391。評価では本文が「確かめられた内容は
-    ありませんでした」だけになった）。"""
+def test_unresolved_citations_are_kept_with_marks() -> None:
+    """出典を照合できない段落は本文に残して印を付ける（#1391・#2738。評価では本文が
+    「確かめられた内容はありませんでした」だけになった）。"""
     result = _verdict(*_portal_retention_claims())
-    blocking = {
-        claim["answer_quote"] for claim in result["claims"] if claim["status"] == "citation_error"
-    }
-    assert withhold_paragraphs(PORTAL_RETENTION_ANSWER, blocking) == ""
 
-    published, withheld = publish_answer(PORTAL_RETENTION_ANSWER, result)
+    published = publish_answer(PORTAL_RETENTION_ANSWER, result)
 
-    body, section = published.split("\n\n**資料で確認できず除いた内容**\n\n", 1)
-    assert body == PORTAL_RETENTION_ANSWER
-    assert section.startswith(UNVERIFIED_KEPT_INTRO)
-    assert "- 出典を確かめられない: 「したがって、ドキュメントポータル" in section
-    assert withheld == {"claims": 0, "findings": 0, "all": False, "unverified": 3}
-    # 確かめが終わらない段落（見出しなど）が混じっても同じ（da-trial-account-setup の
-    # 手順の見出し）。
+    assert published.body == PORTAL_RETENTION_ANSWER
+    assert [(item["state"], item["reasons"][0]["code"]) for item in published.passage_marks] == [
+        ("unverified", "citation_error")
+    ] * 3
+    assert "- 出典を確かめられない: 「したがって、ドキュメントポータル" in published.sections[0]
+    assert published.withheld["unverified"] == 3
+    # 確かめが終わらない見出し（次の行で決まる番号つきの見出し）には印を付けない
+    # （da-trial-account-setup の手順の見出し）。
     heading = "1. **検証用アカウントを登録**"
     step = "- 管理画面の「利用者」メニューを開き「追加」ボタンを押す。"
-    published, withheld = publish_answer(
+    published = publish_answer(
         f"{heading}\n{step}",
         _verdict(_claim(heading, "unassessed", "見出し。"), _claim(step, "citation_error", "")),
     )
-    assert published.startswith(f"{heading}\n{step}\n\n**資料で確認できず除いた内容**")
-    assert withheld["unverified"] == 2 and withheld["all"] is False
+    assert published.text.startswith(f"{heading}\n{step}\n\n**{REVIEW_HEADING}**")
+    assert [item["text"] for item in published.passage_marks] == [step]
 
 
-def test_refuted_paragraphs_still_withhold_the_answer_with_unresolved_citations() -> None:
-    """根拠で否定された段落（裏付けが無い・矛盾）があれば、今までどおり外す（#1391）。"""
+def test_unsupported_paragraphs_are_kept_with_unresolved_citations() -> None:
+    """根拠で確かめられない段落（`unsupported`）も外さず、出典を照合できない段落と同じく本文に
+    残して印を付ける（#2738。外すのは矛盾だけ）。"""
     claims = _portal_retention_claims("unsupported")
-    published, withheld = publish_answer(PORTAL_RETENTION_ANSWER, _verdict(*claims))
-    body, _section = published.split("\n\n**資料で確認できず除いた内容**\n\n", 1)
-    assert body == "根拠で確かめられた内容はありませんでした。"
-    assert withheld == {"claims": 3, "findings": 0, "all": True}
-    # 本文が残る（外したのが一部の段落だけ）ときは、出典を照合できない段落も今までどおり外す。
+    published = publish_answer(PORTAL_RETENTION_ANSWER, _verdict(*claims))
+    assert published.body == PORTAL_RETENTION_ANSWER
+    assert [item["reasons"][0]["code"] for item in published.passage_marks] == [
+        "unsupported",
+        "citation_error",
+        "citation_error",
+    ]
+    assert published.removed_passages == []
     fact = "検証用アカウントの有効期限は最長 30 日です。"
     step = "- 管理画面の「利用者」メニューを開き「追加」ボタンを押す。"
-    published, withheld = publish_answer(
+    published = publish_answer(
         f"{fact}\n\n{step}",
         _verdict(_claim(fact, "supported"), _claim(step, "citation_error", "")),
     )
-    assert published.startswith(f"{fact}\n\n**資料で確認できず除いた内容**")
-    assert withheld == {"claims": 1, "findings": 0, "all": False}
+    assert published.text.startswith(f"{fact}\n\n{step}\n\n**{REVIEW_HEADING}**")
+    assert published.withheld["unverified"] == 1
 
 
 # #2622 の合成の事例（資料は「設定Aは無効」、回答は「設定Aは有効」）。
@@ -1736,35 +1819,37 @@ def _unbound(status: str, audit_status: str, reference_check: str) -> dict[str, 
     }
 
 
-@pytest.mark.parametrize(
-    ("status", "label"),
-    [
-        # 今の RAG: 照合できない矛盾は矛盾のまま返る。
-        ("contradicted", "根拠と矛盾"),
-        # 判定が citation_error に変わっていても、監査の元の判定（audit_status）が矛盾なら同じ。
-        ("citation_error", "出典を確かめられない"),
-    ],
-)
-def test_contradiction_with_an_unbound_citation_is_not_published(status: str, label: str) -> None:
-    """監査が矛盾と判定した段落は、根拠の ID を照合できなくても「否定の判定ではない」
-    として載せない (#2622)。"""
+@pytest.mark.parametrize("status", ["contradicted", "citation_error"])
+def test_contradiction_with_an_unbound_citation_is_not_published(status: str) -> None:
+    """監査が矛盾と判定した段落は、根拠の ID を照合できなくても（判定が citation_error に変わって
+    いても）載せない (#2622)。"""
     claim = _unbound(status, "contradicted", "audit_id_invalid")
-    published, withheld = publish_answer(SETTING_ANSWER, _verdict(claim))
-    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-    assert body == "根拠で確かめられた内容はありませんでした。"
-    assert UNVERIFIED_KEPT_INTRO not in published and SETTING_ANSWER not in body
-    assert f"- {label}: 「{SETTING_ANSWER}」" in section
-    assert withheld == {"claims": 1, "findings": 0, "all": True}
+    published = publish_answer(SETTING_ANSWER, _verdict(claim))
+    assert published.body == ALL_REMOVED
+    assert published.removed_passages == [
+        {
+            "text": SETTING_ANSWER,
+            "reasons": [{"code": "contradicted", "label": "根拠と矛盾", "detail": SETTING_REASON}],
+        }
+    ]
+    assert f"- 根拠と矛盾: 「{SETTING_ANSWER}」" in published.sections[0]
+    assert published.passage_marks == []
 
 
 def test_supported_claims_with_unbound_audit_ids_still_keep_the_answer() -> None:
-    """監査が裏付けありと判定し、ID の照合だけができなかった段落は、今までどおり
-    本文を残す (#1391・#2622)。"""
+    """監査が裏付けありと判定し、ID の照合だけができなかった段落は、本文を残して印を付ける
+    (#1391・#2622・#2738)。"""
     claim = _unbound("citation_error", "supported", "audit_id_invalid")
-    published, withheld = publish_answer(SETTING_ANSWER, _verdict(claim))
-    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-    assert body == SETTING_ANSWER and section.startswith(UNVERIFIED_KEPT_INTRO)
-    assert withheld == {"claims": 0, "findings": 0, "all": False, "unverified": 1}
+    published = publish_answer(SETTING_ANSWER, _verdict(claim))
+    assert published.body == SETTING_ANSWER
+    assert published.passage_marks[0]["reasons"][0]["code"] == "citation_error"
+    # 引用が根拠に無い（quote_unmatched）・監査の元の判定が根拠に無い段落は、その理由にする。
+    unmatched = _unbound("citation_error", "supported", "quote_unmatched")
+    marks = publish_answer(SETTING_ANSWER, _verdict(unmatched)).passage_marks
+    assert marks[0]["reasons"][0]["code"] == "quote_unmatched"
+    refuted = _unbound("citation_error", "unsupported", "audit_id_invalid")
+    marks = publish_answer(SETTING_ANSWER, _verdict(refuted)).passage_marks
+    assert marks[0]["reasons"][0]["code"] == "unsupported"
 
 
 def test_contradiction_from_any_connection_wins_even_when_its_citation_is_unbound() -> None:
@@ -1774,9 +1859,9 @@ def test_contradiction_from_any_connection_wins_even_when_its_citation_is_unboun
     merged = merge_results([passed, unbound])
     [claim] = merged["claims"]
     assert claim["audit_status"] == "contradicted" and merged["valid"] is False
-    published, withheld = publish_answer(SETTING_ANSWER, merged)
-    assert UNVERIFIED_KEPT_INTRO not in published
-    assert withheld == {"claims": 1, "findings": 0, "all": True}
+    published = publish_answer(SETTING_ANSWER, merged)
+    assert published.body == ALL_REMOVED
+    assert published.withheld["removed"] == 1
 
 
 # #2604 の合成の事例: 前提の確認 → 後続の操作の番号つきの手順と、手順と無関係な説明。
@@ -1788,23 +1873,30 @@ STEP_OUTRO = "統合した後は、旧い識別子で検索できません。"
 STEPS_WITH_EXPLANATION = f"{STEP_INTRO}\n\n{STEPS_ANSWER}\n\n{STEP_OUTRO}"
 
 
-def _dependent_line(quote: str) -> str:
-    return f"- {DEPENDENT_STEP_LABEL}: 「{quote}」"
+def _following_mark(quote: str, code: str) -> dict[str, Any]:
+    """続く手順の段落の警告の印（#2738）。"""
+    label = {
+        "after_contradicted_step": "前の手順が根拠と矛盾",
+        "after_unverified_step": "前提の手順が未確認",
+    }
+    return {
+        "text": quote,
+        "state": "warning",
+        "reasons": [{"code": code, "label": label[code], "detail": ""}],
+    }
 
 
 @pytest.mark.parametrize(
-    ("status", "label"),
+    ("status", "code"),
     [
-        ("citation_error", "出典を確かめられない"),
-        ("unsupported", "根拠で確かめられない"),
-        ("unassessed", "確かめが終わっていない"),
+        ("citation_error", "citation_error"),
+        ("unsupported", "unsupported"),
+        ("unassessed", "unassessed"),
     ],
 )
-def test_withheld_prerequisite_step_withholds_the_steps_that_follow(
-    status: str, label: str
-) -> None:
-    """前提の手順を外したら、それに続く操作の手順を実行できる本文として残さず、手順と無関係な
-    説明は残す（#2604）。"""
+def test_unverified_prerequisite_step_marks_the_steps_that_follow(status: str, code: str) -> None:
+    """前提の手順が未確認なら、それに続く操作の手順も本文に残して「前提の手順が未確認」の警告を
+    付け、手順と無関係な説明には付けない（#2604・#2738）。"""
     result = _verdict(
         _claim(STEP_INTRO, "supported"),
         _claim(PREREQUISITE_STEP, status, "未登録の原文ID。"),
@@ -1812,61 +1904,64 @@ def test_withheld_prerequisite_step_withholds_the_steps_that_follow(
         _claim(STEP_OUTRO, "supported"),
     )
 
-    published, withheld = publish_answer(STEPS_WITH_EXPLANATION, result)
+    published = publish_answer(STEPS_WITH_EXPLANATION, result)
 
-    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-    assert body == f"{STEP_INTRO}\n\n{STEP_OUTRO}"
-    assert section.splitlines() == [
-        "根拠で確かめられなかった次の内容は、回答に載せていません。",
-        f"- {label}: 「{PREREQUISITE_STEP}」",
-        *(_dependent_line(step) for step in FOLLOWING_STEPS),
+    assert published.body == STEPS_WITH_EXPLANATION
+    assert published.passage_marks[0]["text"] == PREREQUISITE_STEP
+    assert published.passage_marks[0]["reasons"][0]["code"] == code
+    assert published.passage_marks[1:] == [
+        _following_mark(step, "after_unverified_step") for step in FOLLOWING_STEPS
     ]
-    assert withheld == {"claims": 1, "findings": 0, "all": False, "dependent_steps": 2}
-
-
-@pytest.mark.parametrize("status", ["citation_error", "unassessed"])
-def test_unverified_prerequisite_keeps_the_whole_procedure_with_its_dependents(status: str) -> None:
-    """手順だけの回答で、前提の照合だけが終わらないときは、前提を含む手順の全体を残し、続く手順が
-    前提に依存することを示す（後続の操作だけを残さない。#1391・#2604）。"""
-    result = _verdict(
-        _claim(PREREQUISITE_STEP, status, "未登録の原文ID。"),
-        *(_claim(step, "supported") for step in FOLLOWING_STEPS),
-    )
-
-    published, withheld = publish_answer(STEPS_ANSWER, result)
-
-    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-    assert body == STEPS_ANSWER
-    lines = section.splitlines()
-    assert lines[0] == UNVERIFIED_KEPT_INTRO and PREREQUISITE_STEP in lines[1]
-    assert lines[2:] == [_dependent_line(step) for step in FOLLOWING_STEPS]
-    assert withheld == {
-        "claims": 0,
-        "findings": 0,
-        "all": False,
+    assert published.withheld == {
+        "removed": 0,
         "unverified": 1,
-        "dependent_steps": 2,
+        "warnings": 2,
+        "all": False,
+        "listed": 3,
     }
 
 
-def test_refuted_prerequisite_withholds_a_steps_only_answer() -> None:
-    """前提が根拠で否定されたら、続く手順だけを本文に残さない（#2604。変更前は 2・3 が残った）。"""
+def test_contradicted_prerequisite_removes_it_and_marks_the_steps_that_follow() -> None:
+    """前提の手順が根拠と矛盾したら、その手順だけを外し、続く操作の手順は本文に残して「前の手順が
+    根拠と矛盾」の警告を付ける（#2604・#2738。手順の連鎖で外さない）。"""
+    result = _verdict(
+        _claim(PREREQUISITE_STEP, "contradicted", "根拠と矛盾。"),
+        *(_claim(step, "supported") for step in FOLLOWING_STEPS),
+    )
+
+    published = publish_answer(STEPS_ANSWER, result)
+
+    # 外した項目の後の番号は詰める（#2692）。
+    assert published.body == "1. 対象の情報を訂正する。\n2. 識別子を統合する。"
+    assert [item["text"] for item in published.removed_passages] == [PREREQUISITE_STEP]
+    assert published.passage_marks == [
+        _following_mark(step, "after_contradicted_step") for step in FOLLOWING_STEPS
+    ]
+    review = published.sections[1].splitlines()
+    assert review[3:] == [f"- 前の手順が根拠と矛盾: 「{step}」" for step in FOLLOWING_STEPS]
+
+
+def test_unsupported_prerequisite_keeps_a_steps_only_answer() -> None:
+    """前提が根拠で確かめられなくても、手順だけの回答の本文を残す（#2738。以前は本文を載せな
+    かった）。"""
     result = _verdict(
         _claim(PREREQUISITE_STEP, "unsupported", "根拠に無い。"),
         *(_claim(step, "supported") for step in FOLLOWING_STEPS),
     )
 
-    published, withheld = publish_answer(STEPS_ANSWER, result)
+    published = publish_answer(STEPS_ANSWER, result)
 
-    body, _section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-    assert body == "根拠で確かめられた内容はありませんでした。"
-    assert all(step not in body for step in FOLLOWING_STEPS)
-    assert withheld == {"claims": 1, "findings": 0, "all": True, "dependent_steps": 2}
+    assert published.body == STEPS_ANSWER
+    assert [item["state"] for item in published.passage_marks] == [
+        "unverified",
+        "warning",
+        "warning",
+    ]
 
 
-def test_steps_before_the_withheld_step_and_unordered_lists_are_kept() -> None:
-    """外した手順より前の手順は残す。番号の無い箇条書きは順序を表さないので、一部の項目を外しても
-    ほかの項目は残す（一般の説明文の一部の除外。#2604）。"""
+def test_steps_before_the_marked_step_and_unordered_lists_are_not_marked() -> None:
+    """未確認の手順より前の手順には印を付けない。番号の無い箇条書きは順序を表さないので、一部の
+    項目が未確認でもほかの項目に続く手順の印を付けない（#2604・#2738）。"""
     result = _verdict(
         _claim(STEP_INTRO, "supported"),
         _claim(PREREQUISITE_STEP, "supported"),
@@ -1874,48 +1969,52 @@ def test_steps_before_the_withheld_step_and_unordered_lists_are_kept() -> None:
         _claim(FOLLOWING_STEPS[1], "supported"),
         _claim(STEP_OUTRO, "supported"),
     )
-    published, withheld = publish_answer(STEPS_WITH_EXPLANATION, result)
-    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-    assert body == f"{STEP_INTRO}\n\n{PREREQUISITE_STEP}\n\n{STEP_OUTRO}"
-    assert section.splitlines()[-1] == _dependent_line(FOLLOWING_STEPS[1])
-    assert withheld["dependent_steps"] == 1
+    published = publish_answer(STEPS_WITH_EXPLANATION, result)
+    assert published.body == STEPS_WITH_EXPLANATION
+    assert [item["text"] for item in published.passage_marks] == FOLLOWING_STEPS
+    assert published.passage_marks[1] == _following_mark(
+        FOLLOWING_STEPS[1], "after_unverified_step"
+    )
 
     bullets = ["- 識別子は 12 桁です。", "- 識別子は再利用しません。", "- 識別子は変更できません。"]
     result = _verdict(
         _claim(bullets[0], "unsupported", "根拠に無い。"),
         *(_claim(item, "supported") for item in bullets[1:]),
     )
-    published, withheld = publish_answer("\n".join(bullets), result)
-    body, _section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-    assert body == "\n".join(bullets[1:])
-    assert withheld == {"claims": 1, "findings": 0, "all": False}
+    published = publish_answer("\n".join(bullets), result)
+    assert published.body == "\n".join(bullets)
+    assert [item["text"] for item in published.passage_marks] == [bullets[0]]
 
 
-def test_numbered_facts_after_a_withheld_item_are_kept() -> None:
-    """番号で事実を並べた一覧は、1 項目を外しても後の事実の項目を残す（操作の項目だけが前の項目に
-    依存する。#2604）。"""
+def test_numbered_facts_after_a_flagged_item_are_not_marked() -> None:
+    """番号で事実を並べた一覧は、1 項目が未確認・矛盾でも後の事実の項目に続く手順の印を付けない
+    （操作の項目だけが前の項目に依存する。#2604・#2738）。"""
     facts = [
         "1. 識別子は 12 桁です。",
         "2. 識別子は再利用しません。",
         "3. 識別子は変更できません。",
         "4. 発行の記録は 5 年間保存されます。",
     ]
-    for status in ("citation_error", "unsupported", "unassessed"):
+    for status in ("citation_error", "unsupported", "unassessed", "contradicted"):
         result = _verdict(
             _claim(facts[0], status, "未登録の原文ID。"),
             *(_claim(item, "supported") for item in facts[1:]),
         )
-        published, withheld = publish_answer("\n".join(facts), result)
-        body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-        # 残った項目の番号は詰める（#2692）。
-        assert body == "\n".join(f"{number}.{item[2:]}" for number, item in enumerate(facts[1:], 1))
-        assert DEPENDENT_STEP_LABEL not in section
-        assert "dependent_steps" not in withheld and withheld["claims"] == 1
-    # 外した項目が事実なら、後の操作の項目も前提を失わないので残す（#2735）。
+        published = publish_answer("\n".join(facts), result)
+        flagged = published.removed_passages + published.passage_marks
+        assert [item["text"] for item in flagged] == [facts[0]]
+        if status == "contradicted":
+            # 残った項目の番号は詰める（#2692）。
+            assert published.body == "\n".join(
+                f"{number}.{item[2:]}" for number, item in enumerate(facts[1:], 1)
+            )
+        else:
+            assert published.body == "\n".join(facts)
+    # 項目が事実なら、後の操作の項目も前提を失わない（#2735）。
     request = "5. 変更が必要なときは、管理者に申請してください。"
     answer = "\n".join([*facts, request])
     assert dependent_steps(answer, {facts[0]}) == []
-    # 外した項目が操作なら、後の操作の項目だけを外し、間の事実の項目は残す。
+    # 項目が操作なら、後の操作の項目だけを返し、間の事実の項目は返さない。
     check = "1. 対象が同じものであることを確認する。"
     answer = "\n".join([check, *facts[1:], request])
     assert dependent_steps(answer, {check}) == [(4, 0, request)]
@@ -1939,9 +2038,9 @@ def test_operation_steps_are_decided_by_the_predicate_form(text: str, expected: 
     assert is_operation_step(text) is expected
 
 
-def test_numbered_step_headings_and_their_contents_follow_the_withheld_step() -> None:
-    """見出しの形の番号つきの手順（下の行に中身）は、後の手順の見出しと中身を外し、出典の行・
-    一覧の外の段落は残す（#2604）。"""
+def test_numbered_step_headings_and_their_contents_follow_the_flagged_step() -> None:
+    """見出しの形の番号つきの手順（下の行に中身）は、矛盾・未確認の手順に続く手順の中身に警告の
+    印を付け、名前の見出し・出典の行・一覧の外の段落には付けない（#2604・#2738）。"""
     check = "   - 対象が同じものであることを確認する。"
     fix = "   - 対象の情報を訂正する。"
     merge = "識別子を統合する。"
@@ -1963,31 +2062,45 @@ def test_numbered_step_headings_and_their_contents_follow_the_withheld_step() ->
             STEP_OUTRO,
         ]
     )
-    result = _verdict(
-        _claim(STEP_INTRO, "supported"),
-        _claim(check.strip(), "unsupported", "根拠に無い。"),
-        _claim(fix.strip(), "supported"),
-        _claim(merge, "supported"),
-        _claim(STEP_OUTRO, "supported"),
-    )
 
-    published, withheld = publish_answer(answer, result)
+    def result(status: str) -> dict[str, Any]:
+        return _verdict(
+            _claim(STEP_INTRO, "supported"),
+            _claim(check.strip(), status, "根拠に無い。"),
+            _claim(fix.strip(), "supported"),
+            _claim(merge, "supported"),
+            _claim(STEP_OUTRO, "supported"),
+        )
 
-    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-    # 中身をすべて外した「1. **確認**」の見出しも残さない（#2692）。
-    assert body == "\n".join(
+    published = publish_answer(answer, result("unsupported"))
+    assert published.body == answer
+    assert [(item["text"], item["state"]) for item in published.passage_marks] == [
+        (check.strip(), "unverified"),
+        (fix.strip(), "warning"),
+        (merge, "warning"),
+    ]
+
+    published = publish_answer(answer, result("contradicted"))
+    # 中身をすべて外した「1. **確認**」の見出しも残さず、続く項目の番号を詰める（#2692）。
+    assert published.body == "\n".join(
         [
             STEP_INTRO,
             "",
+            "1. **訂正**",
+            fix,
             "出典: manual-a.pdf p.3",
+            "",
+            "2. **統合**",
+            merge,
             "",
             "## 注意",
             STEP_OUTRO,
         ]
     )
-    assert _dependent_line(fix.strip()) in section and _dependent_line(merge) in section
-    assert "2. **訂正**" not in section
-    assert withheld["dependent_steps"] == 3
+    assert published.passage_marks == [
+        _following_mark(fix.strip(), "after_contradicted_step"),
+        _following_mark(merge, "after_contradicted_step"),
+    ]
 
 
 def test_dependent_steps_are_located_by_position() -> None:
@@ -2039,10 +2152,9 @@ METHODS_ANSWER = "\n".join(
 )
 
 
-def test_withheld_result_in_parallel_methods_keeps_the_other_methods() -> None:
-    """並列の方法の 1 つの結果の段落を外しても、ほかの方法の項目・頁の参照の文・手順を外さない
-    （#2735。変更前は方法 2 の項目と、その事実の文・手順を「確かめられない手順に続く手順」に
-    した）。"""
+def test_flagged_result_in_parallel_methods_does_not_mark_the_other_methods() -> None:
+    """並列の方法の 1 つの結果の段落が未確認でも、ほかの方法の項目・頁の参照の文・手順に続く手順の
+    印を付けない（#2735・#2738）。"""
     assert dependent_steps(METHODS_ANSWER, {METHOD_ONE_RESULT}) == []
     result = _verdict(
         _claim(METHOD_INTRO, "supported"),
@@ -2053,12 +2165,11 @@ def test_withheld_result_in_parallel_methods_keeps_the_other_methods() -> None:
         _claim(METHOD_THREE_PAGE, "supported"),
     )
 
-    published, withheld = publish_answer(METHODS_ANSWER, result)
+    published = publish_answer(METHODS_ANSWER, result)
 
-    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-    assert body == METHODS_ANSWER.replace(f"\n   {METHOD_ONE_RESULT}", "")
-    assert DEPENDENT_STEP_LABEL not in section
-    assert withheld == {"claims": 1, "findings": 0, "all": False}
+    assert published.body == METHODS_ANSWER
+    assert [item["text"] for item in published.passage_marks] == [METHOD_ONE_RESULT]
+    assert published.withheld["warnings"] == 0
 
 
 def test_withheld_operation_in_a_parallel_method_stays_inside_that_method() -> None:
@@ -2076,9 +2187,9 @@ def test_withheld_operation_in_a_parallel_method_stays_inside_that_method() -> N
     assert dependent_steps(answer, {METHOD_TWO_STEP}) == []
 
 
-def test_sequential_steps_withhold_later_operations_but_keep_facts() -> None:
-    """項目の行に中身を書いた順の手順は、外した操作より後の項目の操作を外し、項目の中の事実の段落は
-    残す（#2604・#2735）。"""
+def test_sequential_steps_mark_later_operations_but_not_facts() -> None:
+    """項目の行に中身を書いた順の手順は、未確認の操作より後の項目の操作に警告の印を付け、項目の中の
+    事実の段落には付けない（#2604・#2735・#2738）。"""
     note = "   - 訂正の記録は 5 年間保存されます。"
     answer = "\n".join([PREREQUISITE_STEP, FOLLOWING_STEPS[0], note, FOLLOWING_STEPS[1]])
     assert dependent_steps(answer, {PREREQUISITE_STEP}) == [
@@ -2090,8 +2201,11 @@ def test_sequential_steps_withhold_later_operations_but_keep_facts() -> None:
         *(_claim(step, "supported") for step in FOLLOWING_STEPS),
         _claim(note.strip(), "supported"),
     )
-    body = publish_answer(answer, result)[0].split(f"\n\n**{UNVERIFIED_HEADING}**", 1)[0]
-    assert body == note.strip()
+    published = publish_answer(answer, result)
+    assert published.body == answer
+    assert published.passage_marks[1:] == [
+        _following_mark(step, "after_unverified_step") for step in FOLLOWING_STEPS
+    ]
 
 
 def test_named_steps_with_one_line_each_are_sequential() -> None:
@@ -2132,36 +2246,44 @@ def _order_result(fix_status: str) -> dict[str, Any]:
     )
 
 
-@pytest.mark.parametrize("status", ["contradicted", "unsupported"])
-def test_withheld_operation_also_withholds_its_numbered_name(status: str) -> None:
-    """操作の文を外したら、同じ操作を名前だけで示す番号つきの項目も外し、残りの番号を詰める
+def test_contradicted_operation_also_removes_its_numbered_name() -> None:
+    """操作の文を矛盾で外したら、同じ操作を名前だけで示す番号つきの項目も外し、残りの番号を詰める
     （#2692。変更前は「1. **対象 A の属性訂正（記録修正）**」が実行の順の最初に残った）。"""
-    published, withheld = publish_answer(ORDER_ANSWER, _order_result(status))
+    published = publish_answer(ORDER_ANSWER, _order_result("contradicted"))
 
-    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-    assert body == "\n".join(
+    assert published.body == "\n".join(
         [ORDER_TITLE, "1. **対象 A の同一性確認**", "", ORDER_CHECK, "", ORDER_NOTE]
     )
-    assert "属性訂正" not in body
     # 名前の項目は外した内容の節に数えない（外した主張は操作の文の 1 件）。
-    assert "属性訂正" not in section and withheld == {"claims": 1, "findings": 0, "all": False}
+    assert [item["text"] for item in published.removed_passages] == [ORDER_FIX]
+    assert "属性訂正" not in published.text
+    # 根拠で確かめられないだけなら、操作の文も名前の項目も本文に残す（#2738）。
+    published = publish_answer(ORDER_ANSWER, _order_result("unsupported"))
+    assert published.body == ORDER_ANSWER
+    assert [item["text"] for item in published.passage_marks] == [ORDER_FIX]
 
 
 def test_numbered_names_are_unchanged_when_the_operation_is_supported() -> None:
     """操作の文が根拠で確かめられれば、名前の項目も番号もそのまま（#2692）。"""
-    published, withheld = publish_answer(ORDER_ANSWER, _order_result("supported"))
-    assert published == ORDER_ANSWER
-    assert withheld == {"claims": 0, "findings": 0, "all": False}
+    published = publish_answer(ORDER_ANSWER, _order_result("supported"))
+    assert published.text == ORDER_ANSWER
+    assert published.withheld == {
+        "removed": 0,
+        "unverified": 0,
+        "warnings": 0,
+        "all": False,
+        "listed": 0,
+    }
 
-    # ほかの（操作でない）段落だけを外しても、名前の項目と番号は変えない。
+    # ほかの（操作でない）段落だけを矛盾で外しても、名前の項目と番号は変えない。
     result = _verdict(
         _claim(ORDER_TITLE, "supported"),
         *(_claim(label, "supported") for label in ORDER_LABELS),
         _claim(ORDER_FIX, "supported"),
         _claim(ORDER_CHECK, "supported"),
-        _claim(ORDER_NOTE, "unsupported", "根拠に無い。"),
+        _claim(ORDER_NOTE, "contradicted", "根拠と矛盾。"),
     )
-    body = publish_answer(ORDER_ANSWER, result)[0].split(f"\n\n**{UNVERIFIED_HEADING}**", 1)[0]
+    body = publish_answer(ORDER_ANSWER, result).body
     assert body == "\n".join([ORDER_TITLE, *ORDER_LABELS, "", ORDER_FIX, ORDER_CHECK])
 
 
@@ -2176,8 +2298,7 @@ def test_only_the_main_operation_name_of_a_sentence_is_withheld() -> None:
         *(_claim(label, "supported") for label in labels),
         _claim(sentence, "contradicted", "順序が逆。"),
     )
-    body = publish_answer(answer, result)[0].split(f"\n\n**{UNVERIFIED_HEADING}**", 1)[0]
-    assert body == "\n".join([ORDER_TITLE, labels[0]])
+    assert publish_answer(answer, result).body == "\n".join([ORDER_TITLE, labels[0]])
 
 
 def test_chapter_and_explanatory_names_are_not_withheld_with_an_operation() -> None:
@@ -2188,9 +2309,8 @@ def test_chapter_and_explanatory_names_are_not_withheld_with_an_operation() -> N
         *(_claim(label, "supported") for label in labels),
         _claim(ORDER_FIX, "contradicted", "順序が逆。"),
     )
-    body = publish_answer(answer, result)[0].split(f"\n\n**{UNVERIFIED_HEADING}**", 1)[0]
     # 「属性訂正」は外す操作の名前。ほかの名前は残す。
-    assert body == "\n".join(labels[:3])
+    assert publish_answer(answer, result).body == "\n".join(labels[:3])
     for label, expected in [
         ("概要", None),
         ("手続きの流れ", None),
@@ -2318,7 +2438,8 @@ def test_clarification_with_preface_and_answer_guidance_has_no_notice(
     [
         ("## 確認手順", "heading"),
         ("**手順**", "heading"),
-        ("確認が必要な点：", "heading"),
+        # 「確認が必要な点」は最終の検証が足す節の見出し（#2738。unverified_section）。
+        ("注意が必要な点：", "heading"),
         ("【portal-operations-manual.pdf, section 2. アカウント管理, page 1】", "citation"),
         ("- 出典：admin-guide.pdf 第3章", "citation"),
         ("（参照: security-policy.docx p.4）", "citation"),
@@ -2360,6 +2481,16 @@ def test_unverified_section_keeps_points_but_not_operation_steps() -> None:
         "- 承認の要否は、資料に記載がありません。": "absence",
         "- 復元できる期限は確かめられていません": "unverified_section",
     }
+    # 最終の検証が足す 2 つの節（#2738）も同じ。語の一部に当たる見出しは節にしない。
+    for heading in (REMOVED_HEADING, REVIEW_HEADING):
+        kinds = non_claim_passages(f"**{heading}**\n- 申請の期限は 30 日です。")
+        assert kinds == {
+            f"**{heading}**": "unverified_section",
+            "- 申請の期限は 30 日です。": "unverified_section",
+        }
+    assert non_claim_passages("**再確認が必要な点の一覧**").get("**再確認が必要な点の一覧**") == (
+        "heading"
+    )
     # 同じ文が別の場所で主張なら、主張として扱う。
     assert "パスワードは 90 日です。" not in non_claim_passages(
         "**資料で確認できず除いた内容**\nパスワードは 90 日です。\n\nパスワードは 90 日です。"
@@ -2457,10 +2588,10 @@ def test_table_and_location_lines_are_not_withheld() -> None:
         _claim(citation, "unassessed", "引用情報の記載。"),
     )
 
-    published, withheld = publish_answer(answer, result)
+    published = publish_answer(answer, result)
 
-    assert published == answer
-    assert withheld == {"claims": 0, "findings": 0, "all": False}
+    assert published.text == answer
+    assert published.passage_marks == []
 
 
 # 出典の行の事例（RAG と Agent の両方のテストが読む。#1370）。
@@ -2502,10 +2633,10 @@ def test_citation_lines_left_unassessed_do_not_withhold_the_answer(case: dict[st
         *[_claim(text, "unassessed", "ロケータの提示のみ。") for text in case["citation_passages"]],
     )
 
-    published, withheld = publish_answer(answer, result)
+    published = publish_answer(answer, result)
 
-    assert published == answer
-    assert withheld == {"claims": 0, "findings": 0, "all": False}
+    assert published.text == answer
+    assert published.passage_marks == []
 
 
 # 見出しの名詞句・導入の文の事例（RAG と Agent の両方のテストが読む。#1469）。
@@ -2653,10 +2784,10 @@ def test_headings_left_unassessed_do_not_withhold_the_answer(case: dict[str, Any
         ],
     )
 
-    published, withheld = publish_answer(answer, result)
+    published = publish_answer(answer, result)
 
-    assert published == answer
-    assert withheld == {"claims": 0, "findings": 0, "all": False}
+    assert published.text == answer
+    assert published.passage_marks == []
 
 
 def _answer_outcome(run: RunState) -> dict[str, Any]:
@@ -2801,9 +2932,9 @@ def test_a_label_with_a_note_in_brackets_is_a_heading() -> None:
         _claim("- 初期値は 30 日です。", "supported", "根拠に記載。"),
     )
     answer = f"{label}\n- 初期値は 30 日です。"
-    published, withheld = publish_answer(answer, result)
-    assert published == answer
-    assert withheld == {"claims": 0, "findings": 0, "all": False}
+    published = publish_answer(answer, result)
+    assert published.text == answer
+    assert published.passage_marks == []
 
 
 # 「資料で確認できず除いた内容」の節の事例（RAG の品質評価のテストも読む。#1456）。
@@ -2813,24 +2944,34 @@ UNVERIFIED_SECTION: dict[str, Any] = json.loads(
 )
 
 
-def test_the_unverified_section_heading_is_shared_with_the_rag_evaluation() -> None:
-    """最終の検証が足す節の見出しは、RAG の品質評価が faithfulness から除く見出し（#1456）。"""
-    heading = UNVERIFIED_SECTION["heading"]
-    assert heading == UNVERIFIED_HEADING
-    answer = "検証用アカウントの有効期限は最長 30 日です。\n\n延長は 90 日までできます。"
+def test_the_section_headings_are_shared_with_the_rag_evaluation() -> None:
+    """最終の検証が足す節の見出しは、RAG の品質評価が faithfulness から除く見出し
+    （#1456・#2738）。"""
+    assert UNVERIFIED_SECTION["headings"] == [REMOVED_HEADING, REVIEW_HEADING]
+    answer = (
+        "検証用アカウントの有効期限は最長 30 日です。\n\n延長は 90 日までできます。"
+        "\n\n延長の申請は管理者が行います。"
+    )
     result = _verdict(
         _claim("検証用アカウントの有効期限は最長 30 日です。", "supported", "根拠に記載。"),
-        _claim("延長は 90 日までできます。", "unsupported", "延長の記載が無い。"),
+        _claim("延長は 90 日までできます。", "contradicted", "延長は 60 日まで。"),
+        _claim("延長の申請は管理者が行います。", "unsupported", "申請者の記載が無い。"),
     )
-    published, _withheld = publish_answer(answer, result)
-    # RAG は太字の見出しの行から次の見出しの前までを除く（見出しの後ろに本文を足さない）。
-    body, section = published.split(f"\n\n**{heading}**\n\n")
-    assert body == "検証用アカウントの有効期限は最長 30 日です。"
+    published = publish_answer(answer, result).text
+    # RAG は太字の見出しの行から次の見出しの前までを除く（節の中に見出しの形の行を足さない）。
+    body, rest = published.split(f"\n\n**{REMOVED_HEADING}**\n\n")
+    removed, review = rest.split(f"\n\n**{REVIEW_HEADING}**\n\n")
+    assert body == "検証用アカウントの有効期限は最長 30 日です。\n\n延長の申請は管理者が行います。"
     heading_line = re.compile(r"(?:#{1,6}\s+.+|\*\*[^*\n]+\*\*)\s*[:：]?")
-    assert not any(heading_line.fullmatch(line.strip()) for line in section.split("\n"))
-    for case in UNVERIFIED_SECTION["answers"]:
-        if case["answer"] != case["body"]:
-            assert non_claim_passages(case["answer"]).get(f"**{heading}**") == "unverified_section"
+    for section in (removed, review):
+        assert not any(heading_line.fullmatch(line.strip()) for line in section.split("\n"))
+    for case in UNVERIFIED_SECTION["examples"]:
+        kinds = non_claim_passages(case["answer"])
+        for heading in UNVERIFIED_SECTION["headings"]:
+            if f"**{heading}**" in case["answer"]:
+                assert kinds.get(f"**{heading}**") == "unverified_section"
+        # 節を除いた本文は、Agent が組み立てた回答の本文と同じ。
+        assert case["answer"].startswith(case["body"])
 
 
 def test_answer_trace_ids_are_the_searches_of_the_connection() -> None:
@@ -2851,9 +2992,10 @@ def test_answer_trace_ids_are_the_searches_of_the_connection() -> None:
     assert inputs["answer_trace_ids"] == ["rag-trace-1", "rag-trace-2"]
 
 
-def test_paragraphs_rag_did_not_adopt_as_supported_are_withheld_with_the_reason() -> None:
+def test_paragraphs_rag_did_not_adopt_as_supported_are_marked_with_the_reason() -> None:
     """RAG が監査の supported を採らなかった段落（別の対象の記載・表の別の行の値・写した原文が根拠に
-    無い）は外し、違いの種類を示す。質問の対象の手順は残す（#2653・#2659）。"""
+    無い）は本文に残し、規則の検査は警告、写した原文が無いのは未確認の印にする（#2653・#2659・
+    #2738）。"""
     own_step = "処理 A の一覧で対象を選び、取消ボタンを押します。"
     other_step = "エラー E10 が出た場合は、訂正画面で設定値を 5 に変更します。"
     swapped = "区分Ⅱでは選択肢の値 01 を選びます。"
@@ -2869,17 +3011,90 @@ def test_paragraphs_rag_did_not_adopt_as_supported_are_withheld_with_the_reason(
         not_adopted(swapped, "value_unbound"),
         not_adopted(unquoted, "quote_unmatched", "citation_error"),
     )
+    answer = f"{own_step}\n\n{other_step}\n\n{swapped}\n\n{unquoted}"
 
-    published, withheld = publish_answer(
-        f"{own_step}\n\n{other_step}\n\n{swapped}\n\n{unquoted}", result
-    )
+    published = publish_answer(answer, result)
 
-    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-    assert body == own_step
-    assert section.splitlines() == [
-        "根拠で確かめられなかった次の内容は、回答に載せていません。",
-        f"- 質問と別の対象についての記載: 「{other_step}」",
-        f"- 根拠の表の対応と違う: 「{swapped}」",
-        f"- 出典を確かめられない: 「{unquoted}」",  # 理由の種類の語が無いものは判定の語
+    assert published.body == answer
+    assert [
+        (item["text"], item["state"], item["reasons"][0]["code"])
+        for item in published.passage_marks
+    ] == [
+        (other_step, "warning", "target_mismatch"),
+        (swapped, "warning", "value_unbound"),
+        (unquoted, "unverified", "quote_unmatched"),
     ]
-    assert withheld == {"claims": 3, "findings": 0, "all": False}
+    assert published.sections[0].splitlines()[3:] == [
+        f"- 根拠は別の対象についての記載: 「{other_step}」",
+        f"- 根拠の表の対応と違う可能性: 「{swapped}」",
+        f"- 引用の原文が根拠に見当たらない: 「{unquoted}」",
+    ]
+    assert published.withheld == {
+        "removed": 0,
+        "unverified": 1,
+        "warnings": 2,
+        "all": False,
+        "listed": 3,
+    }
+
+
+# 段落の印の契約の事例（#2738。RAG・Agent・UI のテストが読む）。
+PASSAGE_MARKS: dict[str, Any] = json.loads(
+    (
+        Path(__file__).resolve().parents[3]
+        / "platform/contracts/answer-passages/passage-marks.json"
+    ).read_text("utf-8")
+)
+
+
+def _contract_verdict(case: dict[str, Any]) -> dict[str, Any]:
+    """契約の事例の判定（印の理由から RAG の判定を作る。印・外した段落の無い段落は裏付けあり）。"""
+    marks = {item["text"]: item for item in case["passage_marks"]}
+    removed = {item["text"]: item for item in case["removed_passages"]}
+    claims: list[dict[str, Any]] = []
+    for line in case["answer"].split("\n"):
+        for _start, _end, text in passage_spans(line):
+            if text in removed:
+                claims.append(_claim(text, "contradicted", removed[text]["reasons"][0]["detail"]))
+            elif text in marks:
+                reason = marks[text]["reasons"][0]
+                claim = _claim(text, "unsupported", reason["detail"])
+                if reason["code"] in {"target_mismatch", "value_unbound", "quote_unmatched"}:
+                    claim.update(audit_status="supported", support_check=reason["code"])
+                claims.append(claim)
+            else:
+                claims.append(_claim(text, "supported", "根拠に記載。"))
+    findings = [
+        {
+            "check": "guide_steps" if item["code"] == "guide_check" else item["code"],
+            "code": "step_order",
+            "severity": "error",
+            "message": item["detail"],
+        }
+        for item in case["answer_warnings"]
+    ]
+    return {**_verdict(*claims), "findings": findings}
+
+
+@pytest.mark.parametrize("case", PASSAGE_MARKS["examples"], ids=lambda case: str(case["id"]))
+def test_passage_marks_follow_the_contract(case: dict[str, Any]) -> None:
+    """契約の事例（platform/contracts/answer-passages/passage-marks.json）と同じ本文・印・外した
+    段落・回答の警告を返す（#2738）。契約の `published` は末尾の節の前の本文。"""
+    published = publish_answer(case["answer"], _contract_verdict(case))
+
+    assert published.body == case["published"]
+    assert published.passage_marks == case["passage_marks"]
+    assert published.removed_passages == case["removed_passages"]
+    assert published.answer_warnings == case["answer_warnings"]
+
+
+def test_reason_labels_and_states_follow_the_contract() -> None:
+    """理由の code・状態・利用者に見せる文は契約の語彙と同じ（#2738）。"""
+    contract = PASSAGE_MARKS["reason_codes"]
+    assert set(PASSAGE_MARKS["states"]) == {"unverified", "warning"}
+    for code, (state, label) in PASSAGE_REASONS.items():
+        assert contract[code] == {"kind": "passage", "state": state, "label": label}, code
+    for code, label in REMOVED_REASONS.items():
+        assert contract[code] == {"kind": "removed", "label": label}, code
+    for code, label in ANSWER_WARNING_REASONS.items():
+        assert contract[code] == {"kind": "answer", "label": label}, code

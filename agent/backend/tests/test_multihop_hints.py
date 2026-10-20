@@ -1201,6 +1201,28 @@ def test_answer_after_the_hop_retry_is_kept_when_both_are_withheld(
     assert run.metadata[METADATA_KEY] == {"hop_retries": 1}
 
 
+def test_hop_retry_compares_removed_then_unverified_then_warnings() -> None:
+    """差し戻しの前後の回答は、矛盾で外した段落 → 未確認の段落 → 警告（印と回答の警告）の数の順に
+    比べる（#2738）。判定が出なかった検証は比べない。"""
+
+    def content(removed: int, unverified: int, warnings: int, answers: int = 0) -> dict[str, Any]:
+        return {
+            "status": "completed",
+            "withheld": {"removed": removed, "unverified": unverified, "warnings": warnings},
+            "answer_warnings": [{"code": "requests"}] * answers,
+        }
+
+    def rank(validation: dict[str, Any]) -> tuple[int, int, int]:
+        value = builtin_runtime._withheld_rank(validation)  # noqa: SLF001 - 比べ方の単体の確認
+        assert value is not None
+        return value
+
+    assert rank(content(0, 5, 5)) < rank(content(1, 0, 0))
+    assert rank(content(0, 1, 0)) > rank(content(0, 0, 9))
+    assert rank(content(0, 0, 1, answers=1)) == (0, 0, 2)
+    assert builtin_runtime._withheld_rank({"status": "unvalidated"}) is None  # noqa: SLF001
+
+
 def test_fake_rag_evidence_limit_defaults_match_the_contract() -> None:
     """fake の既定の件数は RAG の契約と同じ（rag_retrieve_evidence 20・rag_search 12。#1365）。"""
     contract = json.loads((CONTRACTS / "rag-tools.json").read_text(encoding="utf-8"))

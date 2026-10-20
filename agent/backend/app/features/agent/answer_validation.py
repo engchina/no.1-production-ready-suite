@@ -16,24 +16,24 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
   （`answer_trace_ids`）も渡し、RAG の回答の監査を通った説明と本文・根拠が同じ段落は、RAG が
   その判定を使ってモデルに渡さない（#1527。根拠は RAG が今の権限と版で読み直す。すべての段落が
   当たればモデルを呼ばない）。
-- 判定が valid でなければ、根拠で確かめられなかった段落（裏付けが無い・矛盾など）を回答から外し、
-  外した内容と理由を「資料で確認できず除いた内容」として足す（確かめていない操作の手順を公開しない。
-  handoff §12）。根拠で確かめた段落と、主張ではない行（見出しなど）は残す。決定的な検査の error も
-  同じく扱う: 手順・影響範囲の error は手順を確かめられないので本文を載せず、要求の error（答えて
-  いない要求を示していない）は本文を残して不足を示す。warning は出さない。根拠で否定された段落
-  （裏付けが無い・矛盾）が無いのに、出典を照合できない・確かめが終わらない段落を外すと本文が空に
-  なるときは、検証が確かめきれなかったものとして本文を残し、確かめきれなかった点を示す（#1391）。
-  番号つきの一覧の段落を外したら、同じ一覧のそれより後の操作の項目も、確かめられない前提に続く操作
-  として外す（実行できる手順として単独で残さない。事実を述べる項目は残す。#2604）。外した操作を
-  名前だけで示す番号つきの項目と、中身をすべて外した番号つきの見出しも外し、残った項目の番号を
-  詰める（#2692）。
+- 判定が valid でなければ、段落の印（platform/contracts/answer-passages/passage-marks.json。#2738）
+  を付ける。本文から外すのは根拠と矛盾する段落（`contradicted`）だけで、外した段落と理由を節
+  「根拠と矛盾し除いた内容」に示す。根拠で確かめられない・出典を確かめられない・確かめが終わら
+  ない・図の画像を読めていない段落は本文に残して未確認（`unverified`）の印を、RAG の規則の検査
+  （別の対象・表の行の対応）は警告（`warning`）の印を付ける。番号つきの手順で、外した操作・未確認
+  の操作に続く操作は本文に残して警告の印を付ける（#2604・#2735 の続く手順）。外した操作を名前だけで
+  示す番号つきの項目と、中身をすべて外した見出しは外し、残った項目の番号を詰める（#2692）。
+  決定的な検査の error（要求・業務ガイドの手順・影響範囲・版）・説明を確かめられない業務ガイドの
+  必須の手順（#2708）・根拠を 1 件も読めない（`no_evidence`。すべての段落を未確認にする）は本文を
+  置き換えず、回答全体の警告（`answer_warnings`）にする。印と回答の警告は節「確認が必要な点」に
+  並べる（本文だけを読む MCP の利用者にも分かるように）。warning の指摘は出さない。
 - 検証そのもの（呼び出し・接続・応答）が失敗したら `unvalidated` にし、回答は消さずに
   「この回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。」を足す
   （基盤の障害で内容を落とさない）。RAG が時間の上限までにどの段落も確かめ終わらなかった
   （`timed_out`）ときも同じ（理由 `validation_timed_out`）。
 - RAG が時間の上限までに一部の段落だけを確かめた（`partial`。#2700）ときは、確かめ終わった
-  段落の判定で回答を組み立て、確かめ終わらなかった段落（`unassessed`）は外さずに本文に残し、
-  確かめきれなかった点として示す（時間切れで内容を落とさない。記録の `withheld.unverified`）。
+  段落の判定で回答を組み立て、確かめ終わらなかった段落（`unassessed`）は本文に残して未確認の
+  印を付ける（時間切れで内容を落とさない）。
 - RAG の根拠を使っていない Run は、RAG の根拠のツールを持つ Agent なら `unvalidated`
   （`no_rag_evidence`）にして「資料と照らし合わせて確かめていない」と足し、持たない Agent は
   `skipped`（回答はそのまま）。利用者への確認の質問だけの回答は、資料の主張を含まないので
@@ -43,7 +43,7 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
 - 会話の続きで、今のターンがモデルの根拠・データのツールで結果を得ずに答えた（前の回答の整形・
   言い換え）ときは、前のターンの検証で回答の段落を裏付けた根拠（`carried_evidence`。#1837）だけで
   検証する（`carried_evidence_groups`。#1879）。前のターンの事実を言い直した段落は裏付けられ、
-  新しい主張は確かめられない段落として外れる。
+  新しい主張は確かめられない段落として印が付く。
 - 図の見た目だけで決まる段落（RAG の判定 `figure_only`。配置・矢印・つながり・分岐への所属
   など、図の本文〔図の説明・OCR の文字〕が明示しない内容。#2678）は、その Run（と前のターンの
   検証）で図の画像がモデルへ届いたかで扱いを決める（`figure_readings`。Run の step の
@@ -51,13 +51,13 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
   chunk_id）。届いていれば画像で確かめた段落として `supported` にし（`figure_check=image_read`・
   `figure_image` に画像の参照と版・領域）、回答に画像で確かめたことの注記を足す。届いて
   いなければ（画像に対応しないモデル・画像の取得の失敗・画像を読んでいない）`unsupported`
-  （`figure_check=image_not_read`）にして外す。RAG の判定は `rag_status` に残す。
+  （`figure_check=image_not_read`）にして、本文に残して未確認の印（`figure_not_read`）を付ける。
+  RAG の判定は `rag_status` に残す。
 - 主張ではない段落（見出し・出典の行・表の区切りと見出しの行・利用者への質問・資料に記載が
-  無いことを述べる文と拒答の文・「資料で確認できず除いた内容」の節）は、RAG の判定にかかわらず
-  外さない
-  （#1306・#1317。判定は `answer_passages`。成果物の段落には `non_claim` を付ける）。利用者に
-  現場のデータ・記録の確認を求める段落には `environment_check` を付ける（#1317。主張のまま
-  確かめて外す。回答の対応が「現場の確認が要る」の印に使う）。
+  無いことを述べる文と拒答の文・最終の検証が足した節）は、RAG の判定にかかわらず外さず、印も
+  付けない（#1306・#1317。判定は `answer_passages`。成果物の段落には `non_claim` を付ける）。
+  利用者に現場のデータ・記録の確認を求める段落には `environment_check` を付ける（#1317。主張の
+  まま確かめる。回答の対応が「現場の確認が要る」の印に使う）。
 
 ここは根拠の参照の集め方・判定のまとめ方・成果物の内容・回答の組み立てだけを持つ（呼び出しは
 `builtin_runtime`）。
@@ -133,9 +133,6 @@ RAG_LOOKUP_GUIDES = "rag_lookup_guides"
 REQUEST_STATUSES = frozenset({"addressed", "partial", "missing", "unknown"})
 # 回答に手順を書く業務ガイドの判断（手順・影響範囲を確かめる）。
 GUIDE_DECISIONS = frozenset({"answer", "branch"})
-# 本文を載せない決定的な検査の error（手順・影響範囲・業務ガイドの版。
-# 確かめていない手順を出さない）。
-WITHHOLDING_CHECKS = frozenset({"guide", "guide_steps", "impact"})
 
 REASON_NO_RAG_EVIDENCE = "no_rag_evidence"
 # 資料（RAG）の根拠ではなく、利用者が添付したファイルを読んで答えた（#2517）。資料と照らし合わせる
@@ -161,22 +158,16 @@ REASON_VALIDATION_ERROR = "validation_error"
 # RAG の「参考情報」の節の説明（該当は確認できていない）と同じ言い方で、照合できなかったことを示す。
 UNVERIFIED_NOTICE = "この回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。"
 NO_EVIDENCE_NOTICE = "この回答は資料の根拠を使っておらず、資料と照らし合わせて確かめていません。"
-UNVERIFIED_HEADING = "資料で確認できず除いた内容"
-WITHHELD_INTRO = "根拠で確かめられなかった次の内容は、回答に載せていません。"
-NOTHING_CONFIRMED = "根拠で確かめられた内容はありませんでした。"
-# 根拠で否定された段落が無いのに、出典を照合できない段落を外すと本文が空になるとき（#1391）。
-UNVERIFIED_KEPT_INTRO = (
-    "次の内容は、根拠の出典と照らし合わせられず確かめきれませんでした。"
-    "根拠と矛盾する・根拠に無いという判定ではないため、回答の本文は載せています。"
-)
-# 照合が時間の上限までに一部の段落を確かめ終わらなかったとき（#2700）。
-TIMED_OUT_KEPT_INTRO = (
-    "次の内容は、資料との照合が時間の上限までに終わらず確かめきれませんでした。"
-    "根拠と矛盾する・根拠に無いという判定ではないため、回答の本文は載せています。"
-)
-GUIDE_WITHHELD = (
-    "業務ガイドの手順・影響範囲と照らして確かめられない点があるため、回答の本文は載せていません。"
-)
+# 回答の末尾に足す 2 つの節（#2738）。本文だけを読む MCP の利用者にも、外した段落と確かめが要る
+# 段落が分かるようにする。RAG の品質評価は、この見出しの節を faithfulness の本文から除く
+# （platform/contracts/answer-passages/unverified-section.json の `headings`）。
+REMOVED_HEADING = "根拠と矛盾し除いた内容"
+REMOVED_INTRO = "次の内容は根拠と矛盾するため、回答から除きました。"
+REVIEW_HEADING = "確認が必要な点"
+REVIEW_INTRO = "次の点は根拠で確かめきれていないか、注意が必要です（内容は回答に載せています）。"
+SECTION_HEADINGS = (REMOVED_HEADING, REVIEW_HEADING)
+# 本文の段落がすべて根拠と矛盾して外れたときの本文。
+ALL_REMOVED = "回答の内容はすべて根拠と矛盾したため、本文を載せていません。"
 EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 # 本文を読むツール（#1330・#1332）。多段の質問では段の事実を読んで確かめるため、読んだ chunk も
 # 最終の検証の根拠に入れる（#1345）。
@@ -189,70 +180,83 @@ FIGURE_ONLY = "figure_only"
 # 図の見た目だけで決まる段落を、図の画像で確かめたか（判定の `figure_check`）。
 FIGURE_IMAGE_READ = "image_read"
 FIGURE_IMAGE_NOT_READ = "image_not_read"
-FIGURE_NOT_READ_LABEL = "図の画像を読めておらず確かめられない"
 # 図の画像で確かめた段落が回答に残ったときに、回答の本文の後に足す注記。
 FIGURE_READ_NOTE = (
     "図の見た目（配置・矢印・つながりなど）に関する内容は、資料の図の画像を読んで確かめたもので、"
     "図の説明や図の中の文字では確かめていません。"
 )
-# 回答に載せない段落の判定（RAG の `is_valid` が検証に通さない判定と同じ）。`figure_only` は
-# `apply_figure_readings` で置き換えるが、置き換える前の判定も図の画像を読めていないものとして外す。
-BLOCKING_CLAIM_STATUSES = frozenset(
+# 検証に通さない（`valid` にしない）段落の判定（RAG の `is_valid` と同じ）。本文から外すのは
+# 根拠と矛盾する段落（`contradicted`）だけで、ほかは本文に残して印を付ける（#2738）。
+INVALID_CLAIM_STATUSES = frozenset(
     {"unsupported", "contradicted", "citation_error", "unassessed", FIGURE_ONLY}
 )
-_CLAIM_LABELS = {
-    "contradicted": "根拠と矛盾",
-    "unsupported": "根拠で確かめられない",
-    "citation_error": "出典を確かめられない",
-    "unassessed": "確かめが終わっていない",
-    FIGURE_ONLY: FIGURE_NOT_READ_LABEL,
+
+# 段落の印（platform/contracts/answer-passages/passage-marks.json。#2738）。正本は構造化した記録で、
+# 本文の文字列に印の記号を埋め込まない。1 段落に複数の理由があれば並べ、状態は未確認を優先する。
+MARK_UNVERIFIED = "unverified"
+MARK_WARNING = "warning"
+# 本文に残す段落の理由（code → 状態・利用者に見せる短い文）。
+PASSAGE_REASONS: dict[str, tuple[str, str]] = {
+    "unsupported": (MARK_UNVERIFIED, "根拠で確かめられない"),
+    "citation_error": (MARK_UNVERIFIED, "出典を確かめられない"),
+    "quote_unmatched": (MARK_UNVERIFIED, "引用の原文が根拠に見当たらない"),
+    "unassessed": (MARK_UNVERIFIED, "確かめが終わっていない"),
+    "figure_not_read": (MARK_UNVERIFIED, "図の画像を読めておらず確かめられない"),
+    "target_mismatch": (MARK_WARNING, "根拠は別の対象についての記載"),
+    "value_unbound": (MARK_WARNING, "根拠の表の対応と違う可能性"),
+    "after_contradicted_step": (MARK_WARNING, "前の手順が根拠と矛盾"),
+    "after_unverified_step": (MARK_WARNING, "前提の手順が未確認"),
 }
-# RAG が監査の裏付け（supported）を採らなかった理由（`support_check`。#2659・#2653）ごとの、
-# 節の項目の理由。語・話題が根拠と一致しても対象・表の行の対応が違う段落は、違いの種類を示す。
-_SUPPORT_CHECK_LABELS = {
-    "target_mismatch": "質問と別の対象についての記載",
-    "value_unbound": "根拠の表の対応と違う",
+# 本文から外した段落の理由。
+REMOVED_REASONS = {"contradicted": "根拠と矛盾"}
+# 回答全体の警告の理由（決定的な検査の error・説明を確かめられない業務ガイドの手順・
+# 根拠を読めない）。
+ANSWER_WARNING_REASONS = {
+    "guide_check": "業務ガイドの手順の確認で問題が見つかった",
+    "no_evidence": "根拠を読めず、すべての段落が未確認",
+    "requests": "質問の要求の一部に答えていない",
+}
+# RAG が監査の裏付け（supported）を採らなかった理由（`support_check`。#2659・#2653）のうち、印の
+# 理由にするもの（それ以外は判定〔`status`〕で決める）。
+_SUPPORT_CHECK_REASONS = frozenset({"target_mismatch", "value_unbound", "quote_unmatched"})
+# 判定（`status`）ごとの印の理由（`supported`・`data_confirmation` など、ここに無い判定は
+# 印にしない）。
+_STATUS_REASONS = {
+    "unsupported": "unsupported",
+    "citation_error": "citation_error",
+    "unassessed": "unassessed",
+    FIGURE_ONLY: "figure_not_read",
 }
 # 業務ガイドの手順の説明の充足（#2708）。`rag_validate_answer` の `guide_steps` の状態の強さの順
 # （接続をまたいでは最も良い状態を採る）と、説明の無い必須の手順の finding（warning。文は RAG の
 # 回答の不足の行と同じ）。
 GUIDE_STEP_STATUS_ORDER = ("explained", "reference_only", "unused", "no_evidence")
 GUIDE_STEP_UNEXPLAINED = "guide_step_unexplained"
-# 外した段落に続く番号つきの手順の段落の、節の項目の理由（#2604。`dependent_steps`）。
-DEPENDENT_STEP_LABEL = "確かめられない手順に続く手順"
-# 根拠で否定した判定（根拠に無い・根拠と矛盾）。出典を照合できない（`citation_error`）・
-# 確かめが終わらない（`unassessed`）は、根拠が主張を否定したのではなく、検証が確かめ
-# きれなかったもの（#1391）。図の画像を読まずに図の見た目を述べた段落（`figure_only`）も、
-# 根拠で確かめようのない断定として否定と同じく扱う（#2678。本文を残して注記するだけにしない）。
-REFUTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted", FIGURE_ONLY})
+# 業務ガイドの手順・影響範囲・版の検査（error は回答全体の警告 `guide_check`。回答の対応は
+# 人の確認）。
+GUIDE_CHECKS = frozenset({"guide", "guide_steps", "impact"})
 # RAG が時間の上限までに一部の段落だけを確かめた結果の status（#2700。確かめ終わらなかった
 # 段落は `unassessed`）と、どの段落も確かめ終わらなかった結果の status（判定として使えない）。
 RESULT_PARTIAL = "partial"
 RESULT_TIMED_OUT = "timed_out"
+RESULT_NO_EVIDENCE = "no_evidence"
 # 判定として使える `rag_validate_answer` の結果の status（それ以外は検証の失敗として扱う）。
 # 接続ごとの結果をまとめるときは、前のものを全体の status にする（どれかが partial なら partial）。
-_USABLE_RESULT_STATUSES = (RESULT_PARTIAL, "completed", "no_evidence", "no_claims")
-# 節の項目は 1 行に縮める（段落・指摘の全文は成果物の判定に残る）。項目の数は切らない（#2361。
-# 画面の件数のバッジと節の項目の数を一致させ、同じ種類の項目を 2 か所に分けない）。
+_USABLE_RESULT_STATUSES = (RESULT_PARTIAL, "completed", RESULT_NO_EVIDENCE, "no_claims")
+# 節の項目は 1 行に縮める（段落・指摘の全文は成果物の判定に残る）。項目の数は切らない（#2361）。
 _MAX_QUOTE_CHARS = 80
 _MAX_FINDING_CHARS = 120
+# 印の理由の詳しい説明（監査・規則の理由）の上限。
+_MAX_DETAIL_CHARS = 400
 
 
-def is_refuted_claim(claim: JsonObject) -> bool:
-    """根拠で否定した判定か（`REFUTED_CLAIM_STATUSES`）。
+def is_contradicted(claim: JsonObject) -> bool:
+    """根拠と矛盾する判定か（本文から外す。#2738）。
 
     RAG が根拠の ID を照合できずに判定（`status`）を変えても、監査モデルが返した元の判定
-    （`audit_status`）が否定なら否定として扱う（#2622。引用の照合の誤りで矛盾の判定が消え、
-    矛盾した本文を「否定の判定が無い」として載せていた）。
+    （`audit_status`）が矛盾なら矛盾として扱う（#2622。引用の照合の誤りで矛盾の判定が消え、
+    矛盾した本文を載せていた）。
     """
-    return (
-        claim.get("status") in REFUTED_CLAIM_STATUSES
-        or claim.get("audit_status") in REFUTED_CLAIM_STATUSES
-    )
-
-
-def _is_contradicted(claim: JsonObject) -> bool:
-    """根拠と矛盾する判定か（元の判定が矛盾のものを含む。#2622）。"""
     return "contradicted" in {claim.get("status"), claim.get("audit_status")}
 
 
@@ -599,8 +603,8 @@ def apply_figure_readings(result: JsonObject, readings: dict[str, JsonObject]) -
     `readings` は検証した接続の図の読み取り（chunk → 記録。`figure_readings`）。段落の根拠の図
     （`chunk_id`）の画像が届いていれば、画像で確かめた段落として `supported` にし、画像の参照を
     `figure_image` に残す。届いていなければ `unsupported` にする（図の画像を読めていない段落は、図の
-    本文〔OCR の文字の並び〕から推した断定なので載せない）。RAG の判定は `rag_status` に残し、件数と
-    `valid` を数え直す。`figure_only` の無い結果はそのまま返す。
+    本文〔OCR の文字の並び〕から推した断定なので未確認の印を付ける）。RAG の判定は `rag_status` に
+    残し、件数と `valid` を数え直す。`figure_only` の無い結果はそのまま返す。
     """
     raw = result.get("claims")
     claims = raw if isinstance(raw, list) else []
@@ -650,7 +654,7 @@ def _judged(result: JsonObject, claims: list[JsonObject]) -> JsonObject:
         result.get("status") == "completed"
         and not _refs_count(result.get("stale_evidence"))
         and not _refs_count(result.get("missing_evidence"))
-        and not any(claim.get("status") in BLOCKING_CLAIM_STATUSES for claim in claims)
+        and not any(claim.get("status") in INVALID_CLAIM_STATUSES for claim in claims)
         and not error_findings(result)
         and counts.get("supported", 0) > 0
     )
@@ -994,6 +998,10 @@ def validation_content(
         "step_id": step_id,
         "evidence": list(evidence or []),
         "result": result,
+        # 段落の印・外した段落・回答全体の警告（#2738。判定が出たときだけ中身がある）。
+        "passage_marks": [],
+        "removed_passages": [],
+        "answer_warnings": [],
     }
 
 
@@ -1006,32 +1014,13 @@ def _refs_count(value: object) -> int:
     return len([item for item in value if isinstance(item, dict)]) if isinstance(value, list) else 0
 
 
-def _claim_line(claim: JsonObject) -> str:
-    """「- 根拠で確かめられない: 「段落」」の 1 行（段落は 80 文字まで）。
-
-    理由は判定の種類の短い文（`_CLAIM_LABELS`。RAG が裏付けを採らなかった理由
-    〔`support_check`〕があれば `_SUPPORT_CHECK_LABELS`）だけにし、検証のモデルが書いた理由
-    （`reason`）は回答の本文に
-    出さない（#1833。「監査」「クレーム」「evidence_items」など内部の語を含む）。理由は成果物の判定に残り、
-    実行の詳細の成果物で見られる。図の画像を読めていない図の見た目の段落（#2678）は、その理由を書く。
-    """
-    quote = _short(claim.get("answer_quote"), _MAX_QUOTE_CHARS)
-    if claim.get("figure_check") == FIGURE_IMAGE_NOT_READ:
-        return f"- {FIGURE_NOT_READ_LABEL}: 「{quote}」"
-    label = (
-        _SUPPORT_CHECK_LABELS.get(str(claim.get("support_check") or ""))
-        or _CLAIM_LABELS[str(claim.get("status"))]
-    )
-    return f"- {label}: 「{quote}」"
-
-
 def _paragraph_claim(claims: list[JsonObject]) -> JsonObject:
     """1 つの接続の、同じ段落の判定（段落に複数の主張があれば最も厳しいもの）。"""
     for claim in claims:
-        if _is_contradicted(claim):
+        if is_contradicted(claim):
             return claim
     for claim in claims:
-        if claim.get("status") in BLOCKING_CLAIM_STATUSES:
+        if claim.get("status") in INVALID_CLAIM_STATUSES:
             return claim
     return next((claim for claim in claims if claim.get("status") == "supported"), claims[0])
 
@@ -1062,9 +1051,9 @@ def merge_results(results: list[JsonObject]) -> JsonObject:
     for quote in order:
         judged = [item[quote] for item in per_result if quote in item]
         chosen = (
-            next((item for item in judged if _is_contradicted(item)), None)
+            next((item for item in judged if is_contradicted(item)), None)
             or next(
-                (item for item in judged if item.get("status") not in BLOCKING_CLAIM_STATUSES),
+                (item for item in judged if item.get("status") not in INVALID_CLAIM_STATUSES),
                 None,
             )
             or judged[0]
@@ -1107,7 +1096,7 @@ def merge_results(results: list[JsonObject]) -> JsonObject:
         status == "completed"
         and not stale
         and not missing
-        and not any(claim.get("status") in BLOCKING_CLAIM_STATUSES for claim in claims)
+        and not any(claim.get("status") in INVALID_CLAIM_STATUSES for claim in claims)
         and not error_findings({"findings": findings})
         and counts.get("supported", 0) > 0
     )
@@ -1153,29 +1142,6 @@ def unexplained_guide_steps(result: JsonObject) -> list[JsonObject]:
         for step in result.get("guide_steps") or []
         if isinstance(step, dict) and step.get("required") and step.get("status") != "explained"
     ]
-
-
-def guide_step_gap_lines(result: JsonObject) -> list[str]:
-    """説明を確かめられなかった必須の手順の、節の項目（RAG の finding の文。回答の本文は残す）。"""
-    missing = {str(step.get("step_id")) for step in unexplained_guide_steps(result)}
-    return [
-        f"- {_short(item['message'], _MAX_FINDING_CHARS)}"
-        for item in result.get("findings") or []
-        if isinstance(item, dict)
-        and item.get("code") == GUIDE_STEP_UNEXPLAINED
-        and item.get("step_id") in missing
-        and item.get("message")
-    ]
-
-
-def _with_guide_step_gaps(
-    answer: str, withheld: JsonObject, lines: list[str]
-) -> tuple[str, JsonObject]:
-    """本文をそのまま載せる回答に、説明を確かめられなかった業務ガイドの手順を節で示す（#2708）。"""
-    if not lines:
-        return answer, withheld
-    record = {**withheld, "guide_steps": len(lines), "listed": _listed(lines)}
-    return f"{answer.rstrip()}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), record
 
 
 # 前の段落を受ける接続の語（#1833）。その前の段落を外すと受ける先が無くなる（「したがって、…」
@@ -1242,9 +1208,8 @@ def withhold_paragraphs(
 ) -> str | None:
     """回答から `quotes` の段落を外した本文（位置を決められない段落があれば None）。
 
-    `positions` は、原文ではなく位置（行の番号・行の中の開始の位置）で外す段落（`dependent_steps`。
-    同じ原文の段落が手順の外にあっても、手順の中のものだけを外す。#2604。`withheld_labels` の
-    項目の名前も位置で外す。#2692）。
+    `positions` は、原文ではなく位置（行の番号・行の中の開始の位置）で外す段落（`withheld_labels`
+    の項目の名前。同じ原文の段落がほかにあっても、その項目だけを外す。#2692）。
 
     段落の位置は RAG と同じ規則で分けて決める（文字列の置換では、同じ文を含む別の段落まで
     削ってしまうため）。段落が無くなった行は消し、続く空行は 1 つにする。段落を外した行に見出し・
@@ -1447,27 +1412,29 @@ def _label_item(line: str, listed: set[str]) -> bool:
 def dependent_steps(
     answer: str, quotes: set[str], operations: frozenset[str] = frozenset()
 ) -> list[tuple[int, int, str]]:
-    """外す段落（`quotes`）に続く、番号つきの手順の段落（行の番号・行の中の開始の位置・原文。#2604）。
+    """段落（`quotes`。矛盾で外した段落か未確認の段落）に続く、番号つきの手順の段落（行の番号・行の
+    中の開始の位置・原文。#2604）。
 
     番号つきの一覧で、利用者に操作・作業を行わせる段落（`is_operation_step`。手順の前提の確認など）
-    を外したら、それより後の操作の段落は、確かめられない前提に続く操作になるので、実行できる手順として
-    単独で残さない。`operations` は、操作の形ではなくても操作を指す外す段落（操作を名前だけで示す
-    項目。`withheld_labels`）。外した段落が操作ではない（事実・結果・状態を述べる）ときは、後の手順の
-    前提は崩れないので何も外さない（#2735）。
+    が根拠と矛盾する・確かめられないなら、それより後の操作の段落は、その前提に続く操作になる。
+    返した段落は本文に残し、警告の印（前の手順が根拠と矛盾・前提の手順が未確認）を付ける（#2738）。
+    `operations` は、操作の形ではなくても操作を指す段落（操作を名前だけで示す項目。
+    `withheld_labels`）。`quotes` の段落が操作ではない（事実・結果・状態を述べる）ときは、後の手順の
+    前提は崩れないので何も返さない（#2735）。
 
-    外すのは後の操作の段落だけで、事実を述べる段落は、操作の項目の中にあっても残す（#2735）。
-    名前だけの項目の行（「2. **訂正**」。`_label_item`）は、その項目の主張の段落をすべて外すときだけ
-    外す（中身の無い操作の名前を実行の順の 1 つとして残さない。#2692）。
+    返すのは後の操作の段落だけで、事実を述べる段落は、操作の項目の中にあっても返さない（#2735）。
+    名前だけの項目の行（「2. **訂正**」。`_label_item`）は、その項目の主張の段落をすべて返すときだけ
+    返す（印は主張の段落だけに付ける）。
 
     どこまでを続く手順とみなすかは一覧の構造で決める（語は見ない。#2735）。項目の行に中身を書いた
     一覧（「1. 〇〇を開く。」「2. 〇〇を入力する。」）と、名前の項目の下に中身が 1 行ずつの一覧
-    （「1. **確認**」の下に 1 つの操作）は、順に行う手順として、外した操作より後の項目の操作も外す。
+    （「1. **確認**」の下に 1 つの操作）は、順に行う手順として、その操作より後の項目の操作も返す。
     名前の項目の下に中身が複数の行ある一覧（並列の方法・場合分けを、項目ごとの手順で並べたもの）は、
     各項目が 1 つの節（Markdown の見出しで切った節と同じ）として独立するので、項目をまたがず、同じ
-    項目の中の外した操作より後の操作だけを外す。
+    項目の中のその操作より後の操作だけを返す。
 
-    一覧の外の段落（前の説明・一覧の後の段落）、一覧の中の外した段落より前の段落、主張ではない段落
-    （出典の行・利用者への質問・不足の文など。`non_claim_passages`）は残す。番号の無い箇条書きは
+    一覧の外の段落（前の説明・一覧の後の段落）、一覧の中の `quotes` の段落より前の段落、主張では
+    ない段落（出典の行・利用者への質問・不足の文など。`non_claim_passages`）は返さない。番号の無い箇条書きは
     順序を表さないので対象にしない。`quotes` に入っている段落は返さない。
     """
     lines = answer.split("\n")
@@ -1519,8 +1486,8 @@ def dependent_steps(
 
 
 def withheld_labels(answer: str, quotes: set[str]) -> list[tuple[int, int, str]]:
-    """外す操作の段落（`quotes`）と同じ操作を名前だけで示す、番号つきの一覧の項目（行の番号・行の
-    中の開始の位置・原文。#2692）。
+    """根拠と矛盾して外す操作の段落（`quotes`）と同じ操作を名前だけで示す、番号つきの一覧の項目
+    （行の番号・行の中の開始の位置・原文。#2692。外すのは矛盾のときだけ。#2738）。
 
     「1. **対象 A の属性訂正**」のような名前だけの項目（下に中身の無い項目。`list_item_label`）は
     主張として根拠と矛盾しなくても、実行の順の 1 つとして読める。外す段落が操作
@@ -1578,7 +1545,7 @@ def without_lookup_notes(answer: str) -> str:
 
 
 def error_findings(result: JsonObject) -> list[JsonObject]:
-    """決定的な検査の error の指摘（valid にしない。warning は確かめたい点なので出さない）。"""
+    """決定的な検査の error の指摘（valid にしない。回答全体の警告にする。warning は出さない）。"""
     return [
         item
         for item in result.get("findings") or []
@@ -1586,45 +1553,13 @@ def error_findings(result: JsonObject) -> list[JsonObject]:
     ]
 
 
-def _notice_lines(result: JsonObject, claims: list[JsonObject]) -> list[str]:
-    """節の項目（すべての段落・指摘を同じ書式の 1 行ずつ。「ほか N 件」で切らない。#2361）。"""
-    lines = [_claim_line(item) for item in claims]
-    # RAG の決定的な検査（要求の漏れ・手順の順序と分岐・影響範囲。#1276）の error。
-    findings = [item for item in error_findings(result) if item.get("message")]
-    lines += [f"- {_short(item['message'], _MAX_FINDING_CHARS)}" for item in findings]
-    # 説明を確かめられなかった業務ガイドの必須の手順（#2708）。
-    lines += guide_step_gap_lines(result)
-    stale = _refs_count(result.get("stale_evidence"))
-    if stale:
-        lines.append(f"- 根拠の {stale} 件は文書の古い版です。最新の版で確かめ直してください。")
-    missing = _refs_count(result.get("missing_evidence"))
-    if missing:
-        lines.append(f"- 根拠の {missing} 件は見つかりません（削除された・参照できない）。")
-    if not lines:
-        lines.append("- 根拠で裏付けられた主張がありません。")
-    return lines
-
-
-def _listed(lines: list[str]) -> JsonObject:
-    """「資料で確認できず除いた内容」の節の記録（#2328・#2361）。
-
-    除いた内容の一覧は節の 1 か所だけに出す。画面の「資料との照合」の件数のバッジは、節の項目の数
-    （`items`。箇条書きの行）を使い、節と必ず一致させる。
-    """
-    return {
-        "items": sum(1 for line in lines if line.startswith("- ")),
-        # 節の見出し（画面が回答の本文と節を分ける）。
-        "heading": UNVERIFIED_HEADING,
-    }
-
-
 def mark_non_claims(answer: str, result: JsonObject) -> JsonObject:
-    """判定の段落のうち、主張ではない段落（見出し・出典・表の形・質問・不足の文・「資料で確認できず除いた内容」の節）に
-    `non_claim`（判定の種類）を付けた結果の写しを返す（#1306。`answer_passages.non_claim_passages`）。
+    """判定の段落のうち、主張ではない段落（見出し・出典・表の形・質問・不足の文・最終の検証が足した
+    節）に `non_claim`（判定の種類）を付けた結果の写しを返す（#1306。
+    `answer_passages.non_claim_passages`）。
 
-    RAG の判定（`status`）は変えずに残し、外すかどうかの判断と画面の「資料で確認できず除いた内容」
-    だけが
-    `non_claim` の段落を除く。利用者に現場のデータ・記録の確認を求める段落には、判定とは別に
+    RAG の判定（`status`）は変えずに残し、段落の印と外すかどうかの判断だけが `non_claim` の段落を
+    除く。利用者に現場のデータ・記録の確認を求める段落には、判定とは別に
     `environment_check: true` を付ける（#1317。主張のまま確かめ、回答の対応だけが使う）。
     """
     kinds = non_claim_passages(answer)
@@ -1646,177 +1581,318 @@ def mark_non_claims(answer: str, result: JsonObject) -> JsonObject:
     return {**result, "claims": claims}
 
 
-def _dependent_lines(answer: str, texts: list[str]) -> list[str]:
-    """外す段落に続く手順のうち、主張の段落の節の項目（見出し・出典・表の形などは本文から外すだけ）。"""
-    if not texts:
-        return []
+def reason_item(code: str, detail: object = "") -> JsonObject:
+    """印・外した段落・回答全体の警告の理由 1 件（契約の `reasons` の項目）。"""
+    label = (
+        PASSAGE_REASONS[code][1]
+        if code in PASSAGE_REASONS
+        else REMOVED_REASONS.get(code) or ANSWER_WARNING_REASONS[code]
+    )
+    return {"code": code, "label": label, "detail": _short(detail, _MAX_DETAIL_CHARS)}
+
+
+def claim_reason(claim: JsonObject) -> str | None:
+    """本文に残す段落の判定の、印の理由の code（印にしない判定は None）。
+
+    根拠と矛盾する段落（`is_contradicted`）は呼ぶ側が先に分ける（本文から外す）。RAG が監査の
+    裏付けを採らなかった理由（`support_check`）のうち、別の対象・表の行の対応は警告、写した原文が
+    根拠に無いのは未確認にする。図の画像を読めていない図の見た目の段落は `figure_not_read`。
+    出典を照合できない段落は、引用が根拠に無ければ `quote_unmatched`、監査の元の判定が
+    根拠に無い（`audit_status=unsupported`）なら `unsupported`。
+    """
+    status = claim.get("status")
+    if status == "supported" or claim.get("non_claim"):
+        return None
+    if claim.get("figure_check") == FIGURE_IMAGE_NOT_READ:
+        return "figure_not_read"
+    support = claim.get("support_check")
+    if support in _SUPPORT_CHECK_REASONS and status in INVALID_CLAIM_STATUSES:
+        return str(support)
+    if status == "citation_error":
+        if claim.get("reference_check") == "quote_unmatched":
+            return "quote_unmatched"
+        if claim.get("audit_status") == "unsupported":
+            return "unsupported"
+    return _STATUS_REASONS.get(str(status))
+
+
+def mark_state(reasons: list[JsonObject]) -> str:
+    """理由の並びの印の状態（未確認を警告より優先する）。"""
+    return (
+        MARK_UNVERIFIED
+        if any(PASSAGE_REASONS[str(item["code"])][0] == MARK_UNVERIFIED for item in reasons)
+        else MARK_WARNING
+    )
+
+
+def answer_warnings(result: JsonObject) -> list[JsonObject]:
+    """回答全体の警告（契約の `answer_warnings`。本文は置き換えない。#2738）。
+
+    根拠を 1 件も読めなかった（`no_evidence`）、決定的な検査の error（要求の不足は `requests`、
+    業務ガイドの手順・影響範囲・版は `guide_check`）、説明を確かめられなかった業務ガイドの必須の
+    手順（#2708。`guide_check`）。`detail` は RAG の指摘の文。同じ理由と文は 1 つにする。
+    """
+    warnings: list[JsonObject] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(code: str, detail: object = "") -> None:
+        item = reason_item(code, detail)
+        key = (code, str(item["detail"]))
+        if key not in seen:
+            seen.add(key)
+            warnings.append(item)
+
+    if result.get("status") == RESULT_NO_EVIDENCE:
+        add("no_evidence")
+    for item in error_findings(result):
+        add("requests" if item.get("check") == "requests" else "guide_check", item.get("message"))
+    missing = {str(step.get("step_id")) for step in unexplained_guide_steps(result)}
+    for item in result.get("findings") or []:
+        if (
+            isinstance(item, dict)
+            and item.get("code") == GUIDE_STEP_UNEXPLAINED
+            and str(item.get("step_id")) in missing
+            and item.get("message")
+        ):
+            add("guide_check", item["message"])
+    return warnings
+
+
+def _paragraph_order(answer: str) -> dict[str, int]:
+    """回答の段落（原文）の出てきた順。"""
+    order: dict[str, int] = {}
+    for line in answer.split("\n"):
+        for _start, _end, text in passage_spans(line):
+            order.setdefault(text, len(order))
+    return order
+
+
+def claim_paragraphs(answer: str) -> list[str]:
+    """回答の主張の段落（見出し・出典・表の形・質問・不足の文・節の行・名前だけの番号つきの項目を
+    除く。出てきた順、重複なし）。
+    """
     kinds = non_claim_passages(answer)
-    headers = table_header_lines(answer)
-    listed = list_heading_lines(answer)
-    quotes = [
+    structure = table_header_lines(answer) | list_heading_lines(answer)
+    return [
         text
-        for text in dict.fromkeys(texts)
-        if not kinds.get(text) and not is_structure(text) and text not in headers | listed
+        for text in _paragraph_order(answer)
+        if text.strip()
+        and not kinds.get(text)
+        and not is_structure(text)
+        and text not in structure
+        and not _LABEL_ITEM.fullmatch(text)
     ]
-    return [f"- {DEPENDENT_STEP_LABEL}: 「{_short(text, _MAX_QUOTE_CHARS)}」" for text in quotes]
 
 
-def _guide_step_count(lines: list[str]) -> JsonObject:
-    """記録の、説明を確かめられなかった業務ガイドの手順の数（無ければ項目を足さない。#2708）。"""
-    return {"guide_steps": len(lines)} if lines else {}
+def _without_removed(answer: str, quotes: set[str], labels: list[tuple[int, int, str]]) -> str:
+    """回答から根拠と矛盾した段落（と、その操作を名前だけで示す項目）を外した本文。
 
-
-def _dependent_count(lines: list[str]) -> JsonObject:
-    """記録の、外す段落に続く手順の段落の数（無ければ項目を足さない）。"""
-    return {"dependent_steps": len(lines)} if lines else {}
-
-
-def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
-    """判定（判定として使える結果）から、利用者に見せる回答と、外した内容の記録を返す。
-
-    valid（または確かめる主張も error の指摘も無い）ならそのまま。主張ではない段落（見出し・
-    出典の行・利用者への質問・資料に記載が無いことを述べる文・「資料で確認できず除いた内容」の節。
-    #1306）は判定にかかわらず外さず、ほかに確かめられない段落・error・読めない根拠が無ければ（裏付けのある主張が
-    あるか、主張ではない段落だけなら）回答をそのまま載せる。そうでなければ、根拠で確かめられ
-    なかった段落を外し、外した段落と理由・決定的な検査の error・古い版や見つからない根拠を
-    「資料で確認できず除いた内容」として足す。根拠を 1 件も読めなかった（`no_evidence`）とき、
-    段落の位置を
-    決められないとき、手順・影響範囲・業務ガイドの版の error があるとき（どの段落の手順が誤りかを
-    決められず、確かめていない手順を出さない）は本文を載せない。要求の error（答えていない要求を
-    示していない）は本文を残し、不足として示す。根拠で否定された段落（`unsupported` /
-    `contradicted`）が無く、出典を照合できない（`citation_error`）・確かめが終わらない
-    （`unassessed`）段落を外すと本文が空になるときは、本文を残して確かめきれなかった点を示す
-    （記録の `withheld.unverified`。#1391）。否定の判定は、RAG が出典を照合できずに判定を
-    変えた段落の元の判定（`audit_status`）も含めて数える（`is_refuted_claim`。#2622）。
-    外した操作の段落が番号つきの一覧の中にあれば、それより後の操作の段落も、確かめられない前提に
-    続く操作として外し、節に「確かめられない手順に続く手順」として示す（`dependent_steps`。#2604。
-    事実を述べる段落と、並列の項目の一覧のほかの項目は残す。#2735。本文を残すときも示す）。
-    記録の `dependent_steps` はその段落の数
-    （無ければ項目を足さない）。RAG が時間の上限までに一部の段落を確かめ終わらなかった結果
-    （`partial`。#2700）の `unassessed` の段落は外さずに残し、節に確かめきれなかった点として
-    示す（記録の `unverified`）。
+    段落の位置は RAG と同じ規則で決める（`withhold_paragraphs`）。段落の分け方が食い違い位置を
+    決められない段落は、原文の一致で除く（矛盾した内容を本文に残さない）。
     """
-    errors = error_findings(result)
-    unchanged = {"claims": 0, "findings": 0, "all": False}
-    step_gaps = guide_step_gap_lines(result)
-    if result.get("valid") is True or (result.get("status") == "no_claims" and not errors):
-        return _with_guide_step_gaps(answer, unchanged, step_gaps)
-    claims = [item for item in mark_non_claims(answer, result)["claims"] if isinstance(item, dict)]
-    # 照合が時間の上限までに確かめ終わらなかった段落（#2700）は外さずに残し、確かめきれなかった
-    # 点として示す。
-    pending = [
-        item
-        for item in claims
-        if result.get("status") == RESULT_PARTIAL
-        and item.get("status") == "unassessed"
-        and not item.get("non_claim")
-    ]
-    pending_ids = {id(item) for item in pending}
-    pending_lines = (
-        [TIMED_OUT_KEPT_INTRO, *(_claim_line(item) for item in pending)] if pending else []
-    )
-    blocking = [
-        item
-        for item in claims
-        if item.get("status") in BLOCKING_CLAIM_STATUSES
-        and not item.get("non_claim")
-        and id(item) not in pending_ids
-    ]
-    unreadable = _refs_count(result.get("stale_evidence")) + _refs_count(
-        result.get("missing_evidence")
-    )
-    if (
-        result.get("status") == "completed"
-        and not errors
-        and not blocking
-        and not unreadable
-        and any(item.get("status") == "supported" or item.get("non_claim") for item in claims)
-    ):
-        return _with_guide_step_gaps(answer, unchanged, step_gaps)
-    guide_errors = any(item.get("check") in WITHHOLDING_CHECKS for item in errors)
-    body: str | None
-    # 外す段落に続く番号つきの手順（#2604）と、その中で節に書く段落（主張の段落）。
-    dependents: list[tuple[int, int, str]] = []
-    if result.get("status") == "no_evidence" or guide_errors:
-        body = None
-    elif blocking:
-        quotes = {str(item.get("answer_quote") or "") for item in blocking}
-        # 外す操作を名前だけで示す番号つきの項目（#2692）。外した項目として、続く手順にも数える。
-        labels = withheld_labels(answer, quotes)
-        names = frozenset(text for _i, _b, text in labels)
-        dependents = dependent_steps(answer, quotes | names, names)
-        body = withhold_paragraphs(
-            answer,
-            quotes,
-            frozenset((index, begin) for index, begin, _text in [*dependents, *labels]),
-        )
-    else:
-        body = answer.rstrip()
-    dependent_lines = _dependent_lines(answer, [text for _i, _b, text in dependents])
-    if (
-        body == ""
-        and blocking
-        and not errors
-        and not unreadable
-        and not any(is_refuted_claim(item) for item in blocking)
-    ):
-        # 根拠で否定された段落が無いのに、出典を照合できない（`citation_error`）・確かめが終わらない
-        # （`unassessed`）段落を外すと本文が空になる: 検証が確かめきれなかったので、本文は消さずに
-        # 確かめきれなかった点を示す（検証の失敗で内容を落とさないのと同じ。#1391）。
-        # 確かめきれなかった前提に続く手順も、本文に残したうえで、前提に続く手順だと示す（#2604）。
-        lines = [
-            UNVERIFIED_KEPT_INTRO,
-            *_notice_lines(result, blocking),
-            *dependent_lines,
-            *pending_lines,
-        ]
-        withheld = {
-            "claims": 0,
-            "findings": 0,
+    located = set(_paragraph_order(answer))
+    positions = frozenset((index, begin) for index, begin, _text in labels)
+    body = withhold_paragraphs(answer, quotes & located, positions) or ""
+    for quote in sorted(quotes - located, key=len, reverse=True):
+        body = body.replace(quote, "")
+    return re.sub(r"\n{3,}", "\n\n", body).strip()
+
+
+@dataclass
+class PublishedAnswer:
+    """最終の検証の判定から組み立てた、利用者に見せる回答と段落の印（#2738）。
+
+    `body` は末尾の節の前の本文（何も変えなければ回答のまま）、`sections` は末尾に足す節
+    （「根拠と矛盾し除いた内容」「確認が必要な点」）。
+    """
+
+    body: str
+    sections: list[str] = field(default_factory=list)
+    headings: list[str] = field(default_factory=list)
+    passage_marks: list[JsonObject] = field(default_factory=list)
+    removed_passages: list[JsonObject] = field(default_factory=list)
+    answer_warnings: list[JsonObject] = field(default_factory=list)
+    # 節の項目（箇条書きの行）の数。
+    listed: int = 0
+
+    @property
+    def text(self) -> str:
+        """利用者に見せる回答（本文と末尾の節）。"""
+        if not self.sections:
+            return self.body
+        return f"{self.body.rstrip()}\n\n" + "\n\n".join(self.sections)
+
+    @property
+    def withheld(self) -> JsonObject:
+        """成果物の `withheld`（外した段落・未確認・警告の段落の数と、節の項目の数）。"""
+        states = [str(item["state"]) for item in self.passage_marks]
+        return {
+            "removed": len(self.removed_passages),
+            "unverified": states.count(MARK_UNVERIFIED),
+            "warnings": states.count(MARK_WARNING),
             "all": False,
-            "unverified": len(blocking) + len(pending),
-            **_guide_step_count(step_gaps),
-            **_dependent_count(dependent_lines),
-            "listed": _listed(lines),
+            "listed": self.listed,
         }
-        return f"{answer.rstrip()}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), withheld
-    # 確かめ終わらなかった段落だけ（外す段落・指摘・読めない根拠・確かめられない業務ガイドの
-    # 手順が無い）なら、外した内容の項目は書かない。
-    only_pending = (
-        bool(pending)
-        and body
-        and not (blocking or errors or unreadable or dependent_lines or step_gaps)
-    )
-    lines = [] if only_pending else [*_notice_lines(result, blocking), *dependent_lines]
-    if blocking or (not body and not guide_errors):
-        lines.insert(0, WITHHELD_INTRO)
-    lines += pending_lines
-    text = body or (GUIDE_WITHHELD if guide_errors else NOTHING_CONFIRMED)
-    withheld = {
-        "claims": len(blocking),
-        "findings": len(errors),
-        "all": not body,
-        **({"unverified": len(pending)} if pending else {}),
-        **_guide_step_count(step_gaps),
-        **_dependent_count(dependent_lines),
-        "listed": _listed(lines),
-    }
-    return f"{text}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), withheld
+
+    def record(self) -> JsonObject:
+        """成果物「資料との照合」に足す内容（印・外した段落・回答の警告・数・節の見出し）。"""
+        content: JsonObject = {
+            "passage_marks": self.passage_marks,
+            "removed_passages": self.removed_passages,
+            "answer_warnings": self.answer_warnings,
+            "withheld": self.withheld,
+        }
+        if self.headings:
+            # 回答の本文と節を分ける見出し（`heading` は本文の終わりの節）。
+            content["notice"] = {
+                "items": self.listed,
+                "heading": self.headings[0],
+                "headings": list(self.headings),
+            }
+        return content
 
 
-def publish_answer(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
-    """`_publish` の、利用者に見せる回答と外した内容の記録（節に書いた項目の数を除く）。"""
-    published, withheld = _publish(answer, result)
-    withheld.pop("listed", None)
-    return published, withheld
+def _dependent_marks(answer: str, found: list[tuple[int, int, str]]) -> list[str]:
+    """続く手順の段落（`dependent_steps`）のうち、印を付ける主張の段落（名前だけの項目などを除く）。"""
+    claims = set(claim_paragraphs(answer))
+    return list(dict.fromkeys(text for _index, _begin, text in found if text in claims))
 
 
-def _with_figure_note(published: str, claims: list[JsonObject]) -> tuple[str, list[JsonObject]]:
-    """図の画像で確かめた段落が本文に残れば、本文の後（「資料で確認できず除いた内容」の節の前）に
-    `FIGURE_READ_NOTE` を足す（#2678）。返すのは回答と、本文に残った段落と画像の参照の一覧。
+def _section_lines(
+    result: JsonObject,
+    removed: list[JsonObject],
+    marks: list[JsonObject],
+    warnings: list[JsonObject],
+) -> tuple[list[str], list[str]]:
+    """末尾の 2 つの節の項目（すべての段落・警告を 1 行ずつ。「ほか N 件」で切らない。#2361）。
+
+    検証のモデルが書いた段落の理由（`detail`）は節に出さない（#1833。内部の語を含む。記録には
+    残る）。回答の警告の `detail` は RAG の決定的な検査の文なので出す。根拠を 1 件も読めなかった
+    ときは、すべての段落が未確認なので段落の一覧は出さない。
     """
-    marker = f"\n\n**{UNVERIFIED_HEADING}**"
-    body, separator, rest = published.partition(marker)
+    removed_lines = [
+        f"- {item['reasons'][0]['label']}: 「{_short(item['text'], _MAX_QUOTE_CHARS)}」"
+        for item in removed
+    ]
+    review = [
+        f"- {item['label']}"
+        + (f": {_short(item['detail'], _MAX_FINDING_CHARS)}" if item["detail"] else "")
+        for item in warnings
+    ]
+    if result.get("status") != RESULT_NO_EVIDENCE:
+        review += [
+            f"- {'・'.join(str(reason['label']) for reason in item['reasons'])}: "
+            f"「{_short(item['text'], _MAX_QUOTE_CHARS)}」"
+            for item in marks
+        ]
+    stale = _refs_count(result.get("stale_evidence"))
+    if stale:
+        review.append(f"- 根拠の {stale} 件は文書の古い版です。最新の版で確かめ直してください。")
+    missing = _refs_count(result.get("missing_evidence"))
+    if missing:
+        review.append(f"- 根拠の {missing} 件は見つかりません（削除された・参照できない）。")
+    return removed_lines, review
+
+
+def publish_answer(answer: str, result: JsonObject) -> PublishedAnswer:
+    """判定（判定として使える結果）から、利用者に見せる回答と段落の印を組み立てる（#2738）。
+
+    - 根拠と矛盾する段落（`contradicted`。元の判定が矛盾のものを含む）だけを本文から外し、
+      `removed_passages` と節「根拠と矛盾し除いた内容」に理由つきで示す。外した操作を名前だけで
+      示す番号つきの項目（`withheld_labels`）と、中身をすべて外した見出しも外し、残った項目の
+      番号を詰める（`withhold_paragraphs`）。
+    - 根拠で確かめられない・出典を確かめられない・確かめが終わっていない・図の画像を読めていない
+      段落は本文に残し、未確認（`unverified`）の印を付ける。RAG の規則の検査（別の対象・表の行の
+      対応）は警告（`warning`）の印にする（`claim_reason`）。
+    - 番号つきの手順で、外した操作・未確認の操作に続く操作の段落は本文に残し、警告の印
+      （`after_contradicted_step` / `after_unverified_step`）を付ける（`dependent_steps`）。
+    - 決定的な検査の error・説明を確かめられない業務ガイドの手順・根拠を読めない（`no_evidence`。
+      すべての主張の段落を未確認にする）は本文を置き換えず、回答全体の警告（`answer_warnings`）に
+      する。
+    - 印・回答の警告・読めない根拠は節「確認が必要な点」に並べる（本文だけを読む MCP の利用者にも
+      分かるように）。主張ではない段落（見出し・出典・質問・不足の文・節の行。#1306）には印を
+      付けない。
+    """
+    claims = [item for item in mark_non_claims(answer, result)["claims"] if isinstance(item, dict)]
+    # 表の見出しの行・次の行で決まる一覧の見出しの行・名前だけの番号つきの項目（中身は下の行）には
+    # 印を付けない。
+    structure = table_header_lines(answer) | list_heading_lines(answer)
+    grouped: dict[str, list[JsonObject]] = {}
+    for claim in claims:
+        quote = str(claim.get("answer_quote") or "")
+        if quote.strip() and not claim.get("non_claim"):
+            grouped.setdefault(quote, []).append(claim)
+    removed: dict[str, list[JsonObject]] = {}
+    marks: dict[str, list[JsonObject]] = {}
+
+    def add(text: str, reason: JsonObject) -> None:
+        reasons = marks.setdefault(text, [])
+        if all(item["code"] != reason["code"] for item in reasons):
+            reasons.append(reason)
+
+    for quote, items in grouped.items():
+        contradicted = next((item for item in items if is_contradicted(item)), None)
+        if contradicted is not None:
+            removed[quote] = [reason_item("contradicted", contradicted.get("reason"))]
+            continue
+        if is_structure(quote) or quote in structure or _LABEL_ITEM.fullmatch(quote):
+            continue
+        for item in items:
+            code = claim_reason(item)
+            if code is not None:
+                add(quote, reason_item(code, item.get("reason")))
+    if result.get("status") == RESULT_NO_EVIDENCE:
+        for text in claim_paragraphs(answer):
+            if text not in removed:
+                add(text, reason_item("unsupported"))
+    labels = withheld_labels(answer, set(removed)) if removed else []
+    names = frozenset(text for _index, _begin, text in labels)
+    if removed:
+        found = dependent_steps(answer, set(removed) | names, names)
+        for text in _dependent_marks(answer, found):
+            if text not in removed:
+                add(text, reason_item("after_contradicted_step"))
+    unverified = {text for text, reasons in marks.items() if mark_state(reasons) == MARK_UNVERIFIED}
+    if unverified:
+        for text in _dependent_marks(answer, dependent_steps(answer, unverified)):
+            if text not in removed:
+                add(text, reason_item("after_unverified_step"))
+    order = _paragraph_order(answer)
+
+    def ordered(items: dict[str, list[JsonObject]]) -> list[str]:
+        return sorted(items, key=lambda text: order.get(text, len(order)))
+
+    removed_passages = [{"text": text, "reasons": removed[text]} for text in ordered(removed)]
+    passage_marks = [
+        {"text": text, "state": mark_state(marks[text]), "reasons": marks[text]}
+        for text in ordered(marks)
+    ]
+    warnings = answer_warnings(result)
+    removed_lines, review_lines = _section_lines(result, removed_passages, passage_marks, warnings)
+    sections: list[str] = []
+    headings: list[str] = []
+    if removed_lines:
+        headings.append(REMOVED_HEADING)
+        sections.append(f"**{REMOVED_HEADING}**\n\n" + "\n".join([REMOVED_INTRO, *removed_lines]))
+    if review_lines:
+        headings.append(REVIEW_HEADING)
+        sections.append(f"**{REVIEW_HEADING}**\n\n" + "\n".join([REVIEW_INTRO, *review_lines]))
+    body = _without_removed(answer, set(removed), labels) if removed else answer
+    return PublishedAnswer(
+        body=body or ALL_REMOVED,
+        sections=sections,
+        headings=headings,
+        passage_marks=passage_marks,
+        removed_passages=removed_passages,
+        answer_warnings=warnings,
+        listed=len(removed_lines) + len(review_lines),
+    )
+
+
+def _with_figure_note(body: str, claims: list[JsonObject]) -> tuple[str, list[JsonObject]]:
+    """図の画像で確かめた段落が本文に残れば、本文の後（末尾の節の前）に `FIGURE_READ_NOTE` を足す
+    （#2678）。返すのは本文と、本文に残った段落と画像の参照の一覧。
+    """
     kept = [
         {
             "answer_quote": claim.get("answer_quote"),
@@ -1827,8 +1903,8 @@ def _with_figure_note(published: str, claims: list[JsonObject]) -> tuple[str, li
         if str(claim.get("answer_quote") or "") and str(claim.get("answer_quote")) in body
     ]
     if not kept:
-        return published, []
-    return f"{body.rstrip()}\n\n{FIGURE_READ_NOTE}{separator}{rest}", kept
+        return body, []
+    return f"{body.rstrip()}\n\n{FIGURE_READ_NOTE}", kept
 
 
 def combine_validations(
@@ -1840,7 +1916,8 @@ def combine_validations(
 
     - どれかの接続を確かめられなかった（`unvalidated`）: 全体も `unvalidated` で、回答は消さずに
       照合を終えられなかったこと（`UNVERIFIED_NOTICE`）を足す（基盤の障害で内容を落とさない）。
-    - すべての接続で判定が出た: 段落ごとにまとめた判定で回答を組み立てる（`publish_answer`）。
+    - すべての接続で判定が出た: 段落ごとにまとめた判定で回答を組み立て（`publish_answer`）、
+      段落の印・外した段落・回答の警告（#2738）を成果物に残す。
 
     `figures` は MCP 接続ごとの図の画像の読み取り（`figure_readings` と `carried_figure_readings`。
     #2678）。接続の結果の図の見た目の段落（`figure_only`）を、図の画像がモデルへ届いたかで判定し直して
@@ -1884,16 +1961,12 @@ def combine_validations(
     else:
         merged = mark_non_claims(answer, merge_results([item["result"] for item in validations]))
         content = validation_content(STATUS_COMPLETED, result=merged, **common)
-        published, withheld = _publish(answer, merged)
-        published, confirmed = _with_figure_note(published, figure_read_claims(merged))
+        review = publish_answer(answer, merged)
+        review.body, confirmed = _with_figure_note(review.body, figure_read_claims(merged))
         if confirmed:
             content["figure_confirmed"] = confirmed
-        listed = withheld.pop("listed", None)
-        content["withheld"] = withheld
-        if listed is not None:
-            # 回答の本文の「資料で確認できず除いた内容」の節の見出しと項目の数
-            # （#2328・#2361。画面の「資料との照合」は一覧を出し直さず、件数だけを出す）。
-            content["notice"] = listed
+        content.update(review.record())
+        published = review.text
     content["connections"] = validations
     return content, published
 

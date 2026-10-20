@@ -152,7 +152,8 @@ def _steps(tools: list[str], search_outcome: str = "insufficient_evidence") -> l
 
 
 def _validated(answer: str, withheld: list[str]) -> dict[str, Any]:
-    """外した段落（unsupported）がある最終の検証の内容（`combine_validations` で組み立てる）。"""
+    """根拠で確かめられない段落（unsupported。本文に残して印を付ける。#2738）がある最終の検証の
+    内容（`combine_validations` で組み立てる）。"""
     claims = [{"answer_quote": quote, "status": "unsupported", "reason": ""} for quote in withheld]
     result = {
         "valid": False,
@@ -176,7 +177,7 @@ def test_answer_concluding_the_target_is_not_in_the_documents_is_insufficient_ev
     answer: str, withheld: list[str], tools: list[str]
 ) -> None:
     validation = _validated(answer, withheld)
-    assert validation["withheld"]["claims"] == len(withheld)
+    assert [item["text"] for item in validation["passage_marks"]] == withheld
 
     content = answer_outcome(answer, steps=_steps(tools), validation=validation)
 

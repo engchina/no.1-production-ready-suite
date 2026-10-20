@@ -27,10 +27,10 @@
   「文書 A.pdf p.3」）。照合で確かめていない結び付けなので、回答での使われ方は参考
   （`reference`）にし、画面は RAG の「参考情報」（根拠の原文と、該当は確認できていないことの
   説明）として出す（`references`。「資料により確認できた事項」にしない）。照合が時間の上限までに
-  どの段落も確かめ終わらなかった（`timed_out`。成果物は `unvalidated`）ときも `text`。一部の段落
-  だけを確かめた（`partial`。#2700）ときは `partial`: 確かめ終わった段落は `validation` と同じに
-  結び付け、確かめ終わらなかった段落（`unassessed`）は本文の根拠の行にせず、決定的な照合で
-  結び付けた根拠を「参考情報」にする（確かめ終わった段落の根拠の行にある根拠は重ねない）。
+  どの段落も確かめ終わらなかった（`timed_out`。成果物は `unvalidated`）ときも `text`。最終の検証が
+  根拠で確かめていない段落に印を付けた（未確認・規則の検査の警告。`passage_marks`。#2700・#2738）
+  ときは `partial`: 確かめた段落は `validation` と同じに結び付け、印の段落は本文の根拠の行にせず、
+  決定的な照合で結び付けた根拠を「参考情報」にする（確かめた段落の根拠の行にある根拠は重ねない）。
 
 内容は画面と MCP が読む形（RAG の MCP の根拠の項目の一部と `cited`）。本文の抜粋は
 RAG が返した長さのまま（添付は `ATTACHMENT_EXCERPT_CHARACTERS` まで）。
@@ -54,7 +54,6 @@ from pr_system_settings.chat_attachments.tools import (
 from app.features.agent.answer_passages import KIND_CITATION, non_claim_passages, passage_spans
 from app.features.agent.answer_validation import (
     FIGURE_IMAGE_READ,
-    RESULT_PARTIAL,
     STATUS_COMPLETED,
     cited_chunk_ids,
     locator_labels,
@@ -89,8 +88,8 @@ _ANSWER_USES = frozenset({"confirmed", "reference"})
 # 結び付けの方法（#2707）。
 BINDING_VALIDATION = "validation"
 BINDING_TEXT = "text"
-# 照合が時間の上限までに一部の段落だけを確かめた（`rag_validate_answer` の status=partial。#2700）。
-# 確かめ終わった段落は `validation`、確かめ終わらなかった段落は `text` と同じに結び付ける。
+# 最終の検証が根拠で確かめていない段落に印を付けた（#2700・#2738）。確かめた段落は `validation`、
+# 印の段落は `text` と同じに結び付ける。
 BINDING_PARTIAL = "partial"
 # 決定的な照合で 1 つの段落に結び付ける根拠の上限（当たりの重みの大きい順）。
 MAX_TEXT_BOUND_PER_PASSAGE = 3
@@ -427,24 +426,21 @@ def _figure_image_readings(validation: Mapping[str, Any] | None) -> dict[str, Js
 
 
 def _pending_quotes(validation: Mapping[str, Any] | None) -> set[str]:
-    """照合が時間の上限までに確かめ終わらなかった主張の段落（partial の `unassessed`。#2700）。
+    """最終の検証が印を付けた段落のうち、根拠で確かめていない段落（#2700・#2738）。
 
-    `answer_validation._publish` が本文に残して「確かめきれなかった点」に示す段落と同じ。
+    `answer_validation.publish_answer` が本文に残して印（`passage_marks`）を付けた段落から、
+    検証が裏付けた（`supported`）段落を除いたもの（未確認の段落と、規則の検査の警告の段落）。
+    その根拠は該当を確かめた記載にしない（「参考情報」にする）。
     """
     if not isinstance(validation, Mapping) or validation.get("status") != STATUS_COMPLETED:
         return set()
-    result = validation.get("result")
-    if not isinstance(result, Mapping) or result.get("status") != RESULT_PARTIAL:
-        return set()
-    claims = result.get("claims")
-    return {
-        claim["answer_quote"]
-        for claim in (claims if isinstance(claims, list) else [])
-        if isinstance(claim, Mapping)
-        and claim.get("status") == "unassessed"
-        and not claim.get("non_claim")
-        and isinstance(claim.get("answer_quote"), str)
+    marks = validation.get("passage_marks")
+    marked = {
+        item["text"]
+        for item in (marks if isinstance(marks, list) else [])
+        if isinstance(item, Mapping) and isinstance(item.get("text"), str) and item["text"]
     }
+    return marked - {quote for quote, _chunk_id in _supported_claims(validation)}
 
 
 # 回答が本文に書いた根拠の ID の印（「【証拠 ID: 0f3a…:7】」「〔根拠: …〕」「[evidence_id: …]」）。
@@ -598,7 +594,7 @@ def _text_bound(
 
     主張の段落は、段落の特徴で当たった根拠と、書いた文書名と頁で指した根拠。出典の行は、書いた
     文書名と頁で指した根拠。見出し・質問・不足の文などには結び付けない。`only` を渡したら、その
-    段落（照合が確かめ終わらなかった主張の段落）だけを結び付ける。
+    段落（最終の検証が印を付けた、根拠で確かめていない主張の段落）だけを結び付ける。
     """
     if not items:
         return {}
@@ -697,7 +693,7 @@ def answer_evidence(
     passages = _passages(
         answer, chunk_ids, supported, markers, text_bound if binding == BINDING_TEXT else {}
     )
-    # 確かめ終わらなかった段落（partial）は本文の根拠の行にせず、「参考情報」の根拠にする。
+    # 印の段落（根拠で確かめていない）は本文の根拠の行にせず、「参考情報」の根拠にする。
     reference_passages = passages
     if binding == BINDING_PARTIAL:
         reference_passages = _passages(answer, chunk_ids, [], markers, text_bound)
@@ -753,7 +749,7 @@ def answer_evidence(
         "citation_lines": [],
     }
     if binding == BINDING_PARTIAL:
-        # 確かめ終わった段落の根拠の行にある根拠は、「参考情報」に重ねない。
+        # 確かめた段落の根拠の行にある根拠は、「参考情報」に重ねない。
         content["references"] = [
             item
             for item in _references(passed, reference_passages)
