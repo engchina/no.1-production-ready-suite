@@ -4431,7 +4431,6 @@ class OracleClient:
             FROM rag_messages m
             JOIN rag_conversations c
               ON c.conversation_id = m.conversation_id
-            -- 回答の段落の印（#2738）は回答の記録から読む（メッセージの列には持たない）。
             LEFT JOIN rag_answer_records r
               ON r.trace_id = m.trace_id
              AND m.role = 'ASSISTANT'

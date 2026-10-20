@@ -9,6 +9,7 @@ OCI クライアントを決定論スタブへ差し替える。embedding は全
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -60,9 +61,18 @@ class DeterministicEnterpriseAi(OciEnterpriseAiClient):
         )
         return extraction.to_document_payload()
 
-    async def generate(  # type: ignore[override]
-        self, prompt: str, context: str, *, system_prompt: str | None = None
+    async def generate(
+        self,
+        prompt: str,
+        context: str,
+        *,
+        system_prompt: str | None = None,
+        response_schema: Mapping[str, Any] | None = None,
+        response_schema_name: str = "structured_answer",
     ) -> str:
+        # 項目抽出は応答の schema を渡して呼ぶ（#2720）。決定論スタブは項目を 1 つも返さない。
+        if response_schema_name == "field_extraction":
+            return '{"fields": []}'
         if not context.strip():
             return "該当する根拠は見つかりませんでした。条件やキーワードを変えて検索してください。"
         snippet = " ".join(context.split())[:200]

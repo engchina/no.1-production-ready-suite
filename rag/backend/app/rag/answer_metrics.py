@@ -34,10 +34,10 @@ UNSUPPORTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
 REFERENCE_ONLY_METRICS = frozenset({"faithfulness"})
 
 
-# Agent の最終の検証が回答の末尾に足す「資料で確認できず除いた内容」の節の見出し（外した段落の
-# 原文と検証の理由を並べる。#1456）。Agent の `answer_validation.UNVERIFIED_HEADING` と同じ文言で、
-# 製品をまたいで import しないため写す（両方のテストが
-# platform/contracts/answer-passages/unverified-section.json で確かめる）。
+# #2738 より前に Agent の最終の検証が回答の末尾に足していた「資料で確認できず除いた内容」の
+# 節の見出し（#1456）。保存済みの回答の faithfulness のために持ち続ける。今の Agent の節の見出しは
+# platform/contracts/answer-passages/unverified-section.json の headings（RAG の回答の節と
+# 同じ見出し）。
 AGENT_UNVERIFIED_HEADING = "資料で確認できず除いた内容"
 
 

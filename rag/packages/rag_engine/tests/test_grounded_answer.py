@@ -88,6 +88,14 @@ def marks(result):
     }
 
 
+def details(result):
+    """本文の段落の印の理由の詳細（段落の文 → detail をつないだ文。本文の節には出さず記録だけに残る。#2738）。"""
+    return {
+        re.sub(r"^(?:・|\d+\. )", "", mark["text"]): "\n".join(reason["detail"] for reason in mark["reasons"])
+        for mark in result.envelope["passage_marks"]
+    }
+
+
 def removed(result):
     """根拠と矛盾して本文から外した段落の文（#2738）。"""
     return [passage["text"] for passage in result.envelope["removed_passages"]]
@@ -162,7 +170,9 @@ class GroundedAnswerTest(unittest.TestCase):
         body = result.answer_text.split(labels.removed_section, 1)[0]
         self.assertNotIn("実行ボタンを押さずに完了します。", body)
         self.assertIn(labels.removed_section + "\n\n" + labels.removed_section_note, result.answer_text)
-        self.assertIn("・「実行ボタンを押さずに完了します。」：根拠と矛盾（r）", result.answer_text)
+        # 本文の節は Agent と同じ書き方（理由の label と短い引用。理由の詳細は記録にだけ残す）。
+        self.assertIn("・根拠と矛盾: 「実行ボタンを押さずに完了します。」", result.answer_text)
+        self.assertEqual(result.envelope["removed_passages"][0]["reasons"][0]["detail"], "r")
         self.assertEqual(removed(result), ["実行ボタンを押さずに完了します。"])
         self.assertEqual(result.envelope["removed_passages"][0]["reasons"][0]["code"], "contradicted")
         self.assertEqual(result.envelope["outcome"], "conditional")
@@ -706,7 +716,7 @@ class GroundedAnswerTest(unittest.TestCase):
         # 見出しの入口化は警告を付けて言い換えを残し、理由に原文を添える（#2738）。
         self.assertIn("・C【出力帳票】画面を開き、集計表Aを選択します。", result.answer_text)
         self.assertIn("item_check", marks(result)["C【出力帳票】画面を開き、集計表Aを選択します。"])
-        self.assertIn("原文「C【出力帳票】」", result.answer_text)
+        self.assertIn("原文「C【出力帳票】」", details(result)["C【出力帳票】画面を開き、集計表Aを選択します。"])
 
     def test_unused_definition_and_dropped_completion_are_restored_verbatim(self):
         definition = "「停止」とは：出荷を一時的に止めている状態をいう。ただし終了日が基準日以前の場合は表示しない。"
@@ -1095,7 +1105,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertIn("・一覧表を選択し、処理を選択します。", result.answer_text)
         (warning,) = result.envelope["answer_warnings"]
         self.assertEqual((warning["code"], warning["detail"]), ("off_goal", grounded.answer_labels().off_goal_gap))
-        self.assertIn("・回答全体：質問からずれている可能性", result.answer_text)
+        self.assertIn("・質問からずれている可能性: " + grounded.answer_labels().off_goal_gap, result.answer_text)
         self.assertEqual((result.confidence, result.envelope["outcome"]), ("low", "conditional"))
 
     def test_audit_prompt_treats_heading_as_an_estimate(self):
@@ -1142,7 +1152,7 @@ class GroundedAnswerTest(unittest.TestCase):
                 result = run(model, ctx, question).response
                 self.assertIn(f"・{claim}", result.answer_text)
                 self.assertEqual(marks(result)[claim], ["item_check"])
-                self.assertIn(f"原文「{quote}」", result.answer_text)
+                self.assertIn(f"原文「{quote}」", details(result)[claim])
                 self.assertTrue(result.needs_human_review)
 
     def test_multiple_processing_modes_are_shown_verbatim_without_choosing_one(self):
@@ -1161,7 +1171,7 @@ class GroundedAnswerTest(unittest.TestCase):
         # 処理区分を言い換えた説明には警告を付け、理由に原文を添える（#2738）。
         self.assertIn("・取引先コード統合を選んで実行します。", result.answer_text)
         self.assertEqual(marks(result)["取引先コード統合を選んで実行します。"], ["item_check"])
-        self.assertIn("原文「・統合元は登録済みの場合に指定します。」", result.answer_text)
+        self.assertIn("原文「・統合元は登録済みの場合に指定します。」", details(result)["取引先コード統合を選んで実行します。"])
 
     def test_conflicting_versions_ask_which_version_applies(self):
         def versioned(index, version):
@@ -1314,7 +1324,7 @@ class GroundedAnswerTest(unittest.TestCase):
         result = run(FakeModel([unknown], [audit(requests=[("Q1", "partial")], summary_supported=True)]), ctx).response
         self.assertTrue(result.answer_text.startswith(guarantee))
         self.assertEqual(marks(result)[guarantee], ["summary_unaudited"])
-        self.assertIn("要約を根拠で確かめていない（監査対象の item がない）", result.answer_text)
+        self.assertEqual(details(result)[guarantee], "監査対象の item がない")
 
     def test_unused_evidence_for_the_audit_is_ranked_by_relevance_to_the_question(self):
         """監査に渡す未使用根拠は先頭 30 件を盲目的に切らず、質問との関連度順に並べる (#1014)。"""
@@ -1508,7 +1518,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual(marks(result)[guarantee], ["summary_unaudited"])
         # 節見出しの入口化は警告にして言い換えを残し、理由に原文を添える。監査が無いので未確認の印も付く。
         self.assertEqual(marks(result)[claim], ["item_check", "unassessed"])
-        self.assertIn("原文「実行ボタンを押して完了します。」", result.answer_text)
+        self.assertIn("原文「実行ボタンを押して完了します。」", details(result)[claim])
         self.assertTrue(all(r["audit"] is None for r in result.generation_trace["rounds"]))
         # 監査を省いた round は全要求を未回答として是正へ渡す（全面拒答をそのまま公開しない）。
         self.assertGreaterEqual(len(result.generation_trace["rounds"]), 2)
@@ -1531,7 +1541,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual([r["accepted"] for r in result.generation_trace["rounds"]], [True, False])
         self.assertTrue(result.answer_text.startswith(guarantee))
         self.assertEqual(marks(result)[guarantee], ["summary_unaudited"])
-        self.assertIn("前の回の監査が同じ summary を不支持", result.answer_text)
+        self.assertEqual(details(result)[guarantee], "前の回の監査が同じ summary を不支持")
         self.assertIn("1. 一覧表を選択し", result.answer_text)  # items は残す
 
     def test_correction_with_more_supported_steps_is_adopted_despite_a_dropped_item(self):
@@ -2877,7 +2887,8 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         result = run(model, ctx, question).response
         self.assertEqual(marks(result)["ロゴ登録ボタンを押して新しいロゴ画像を登録します。"], ["item_check"])
         self.assertIn("『社印』は取得した資料に記載がありません。", result.answer_text)
-        self.assertIn("原文「「ロゴ登録」ボタンを押して", result.answer_text)  # 手順の原文は警告の理由に添える
+        # 手順の原文は警告の理由（記録）に添える。
+        self.assertIn("原文「「ロゴ登録」ボタンを押して", details(result)["ロゴ登録ボタンを押して新しいロゴ画像を登録します。"])
 
     def test_abbreviated_target_present_in_the_evidence_is_not_treated_as_absent(self):
         """「拠点名」は根拠の「拠点倉庫名」に略称として含まれるので降格しない (#700)。"""
@@ -3104,7 +3115,8 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         text = result.response.answer_text
         self.assertIn("・地区を選び倉庫番号を入れて検索ボタンを押します。\n根拠：売上集計業務.pdf p.3", text)
         self.assertEqual(marks(result.response)["地区を選び倉庫番号を入れて検索ボタンを押します。"], ["quote_unmatched"])
-        self.assertIn("最も近い原文「" + step + "」", text)  # 理由に最も近い原文を添える
+        # 理由（記録）に最も近い原文を添える。
+        self.assertEqual(details(result.response)["地区を選び倉庫番号を入れて検索ボタンを押します。"], "最も近い原文「" + step + "」")
         rounds = result.response.generation_trace["rounds"]
         self.assertEqual(rounds[0]["dropped"][0]["nearest_quote"]["evidence_id"], eid)
 
@@ -3309,7 +3321,10 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         result = run(model, ctx, question).response
         self.assertIn("在庫区分を修正し、実行ボタンを押します。", result.answer_text)
         self.assertEqual(marks(result), {"「確認」ボタンを押下して変更を確定します。": ["item_check"]})
-        self.assertIn("別文書の手順：質問の語を含まない別文書の手順。原文「" + unrelated + "」", result.answer_text)
+        self.assertEqual(
+            details(result)["「確認」ボタンを押下して変更を確定します。"],
+            "別文書の手順：質問の語を含まない別文書の手順。原文「" + unrelated + "」",
+        )
 
     def test_summary_is_neutral_when_the_audit_marks_every_request_missing(self):
         """監査が全要求を missing とした round の summary には警告を付ける。1 つでも addressed なら付けない (#732・#2738)。"""

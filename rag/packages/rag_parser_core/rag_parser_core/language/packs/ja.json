@@ -2392,9 +2392,9 @@
     "removed_section": "根拠と矛盾し除いた内容",
     "removed_section_note": "次の内容は根拠と矛盾するため、回答から除きました。",
     "marked_section": "確認が必要な点",
-    "marked_section_note": "次の箇所は根拠で確かめられていないか、注意が必要です。",
-    "passage_note_template": "「{text}」：{reasons}",
-    "answer_warning_template": "回答全体：{reasons}",
+    "marked_section_note": "次の点は根拠で確かめきれていないか、注意が必要です（内容は回答に載せています）。",
+    "passage_note_template": "{reasons}: 「{text}」",
+    "answer_warning_template": "{reasons}",
     "predicate_endings": [
       "た",
       "だ",

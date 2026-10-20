@@ -124,7 +124,7 @@ def test_faithfulness_is_reference_only_and_ignores_generated_boilerplate() -> N
     )
 
 
-# Agent の「資料で確認できず除いた内容」の節の事例（RAG と Agent の両方のテストが読む。#1456）。
+# Agent の最終の検証が回答の末尾に足す節の事例（RAG と Agent の両方のテストが読む。#1456・#2738）。
 UNVERIFIED_SECTION: dict[str, Any] = json.loads(
     (
         Path(__file__).resolve().parents[3]
@@ -133,25 +133,35 @@ UNVERIFIED_SECTION: dict[str, Any] = json.loads(
 )
 
 
-@pytest.mark.parametrize("case", UNVERIFIED_SECTION["answers"], ids=lambda case: str(case["id"]))
-def test_grounding_text_excludes_the_unverified_section_of_the_agent(
-    case: dict[str, str],
-) -> None:
-    """faithfulness は Agent の最終の検証が足した節（#1456）を数えない。
+@pytest.mark.parametrize("case", UNVERIFIED_SECTION["examples"], ids=lambda case: str(case["id"]))
+def test_grounding_text_excludes_the_sections_of_the_agent(case: dict[str, str]) -> None:
+    """faithfulness は Agent の最終の検証が足した節（headings。#1456・#2738）を数えない。
 
-    節の見出しは「資料で確認できず除いた内容」。
-    D の回答は外した段落の原文と検証の理由を末尾の節に並べ、外した段落が多い Run ほど語句の一致が
-    下がっていた。モデルが本文に書いた「資料からは確認できない点」などの節は本文として残す。
+    節は外した段落・印の段落の引用と理由で、本文の主張ではない。印の段落そのものは本文に残る。
     """
     from app.rag.answer_metrics import agent_system_headings, grounding_text
 
-    heading = UNVERIFIED_SECTION["heading"]
-    # 見出しは以前の「資料で確認できず除いた内容」か、#2738 の節の見出し
-    # （Agent の契約が変われば追う）。
-    assert heading in agent_system_headings()
+    assert set(UNVERIFIED_SECTION["headings"]) <= agent_system_headings()
     assert grounding_text(case["answer"]) == grounding_text(case["body"])
-    if case["answer"] != case["body"]:
+    for heading in UNVERIFIED_SECTION["headings"]:
         assert heading not in grounding_text(case["answer"])
+
+
+def test_grounding_text_excludes_the_section_of_saved_agent_answers() -> None:
+    """#2738 より前に保存した Agent の回答の「資料で確認できず除いた内容」の節も数えない。
+
+    #1456。
+    """
+    from app.rag.answer_metrics import AGENT_UNVERIFIED_HEADING, grounding_text
+
+    answer = (
+        "承認の記録は 5 年間保管します。\n\n## 資料からは確認できない点\n- 保管の場所は記載が無い。"
+        f"\n\n**{AGENT_UNVERIFIED_HEADING}**\n\n- 根拠で確かめられない: 「延長は 90 日まで」"
+    )
+    body = (
+        "承認の記録は 5 年間保管します。\n\n## 資料からは確認できない点\n- 保管の場所は記載が無い。"
+    )
+    assert grounding_text(answer) == grounding_text(body)
 
 
 def test_grounding_text_keeps_marked_passages_and_drops_the_system_sections() -> None:

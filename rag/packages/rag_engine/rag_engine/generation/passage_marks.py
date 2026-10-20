@@ -44,9 +44,10 @@ REMOVED_REASONS = frozenset({"contradicted"})
 ANSWER_WARNING_REASONS = frozenset({"guide_check", "no_evidence", "off_goal", "requests"})
 REASON_CODES = frozenset({*PASSAGE_REASON_STATES, *REMOVED_REASONS, *ANSWER_WARNING_REASONS})
 
-# 本文の末尾の節（「確認が必要な点」「根拠と矛盾し除いた内容」）に出す段落の引用と理由の長さの上限。
-NOTE_TEXT_MAX_CHARS = 60
-NOTE_DETAIL_MAX_CHARS = 120
+# 本文の末尾の節（「根拠と矛盾し除いた内容」「確認が必要な点」）に出す段落の引用と、回答全体の警告の理由の長さの
+# 上限（Agent の最終の検証が足す同じ節と同じ。#2738）。
+NOTE_TEXT_MAX_CHARS = 80
+NOTE_DETAIL_MAX_CHARS = 160
 
 
 def reason(code: str, detail: str = "") -> dict[str, str]:
@@ -114,13 +115,16 @@ def _short(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-def _reasons_text(reasons: Sequence[Mapping[str, Any]]) -> str:
-    parts = []
-    for item in reasons:
-        label = str(item.get("label") or item.get("code") or "")
-        detail = _short(str(item.get("detail") or ""), NOTE_DETAIL_MAX_CHARS)
-        parts.append(f"{label}（{detail}）" if detail else label)
-    return "、".join(part for part in parts if part)
+def _passage_reasons(reasons: Sequence[Mapping[str, Any]]) -> str:
+    """段落の理由の label（「・」でつなぐ）。理由の詳細（detail）は本文の節に出さず、記録にだけ残す。"""
+    return "・".join(dict.fromkeys(str(item.get("label") or item.get("code") or "") for item in reasons if item))
+
+
+def _warning_text(item: Mapping[str, Any]) -> str:
+    """回答全体の警告の行の文（label と、決定的な検査の文の detail）。"""
+    label = str(item.get("label") or item.get("code") or "")
+    detail = _short(str(item.get("detail") or ""), NOTE_DETAIL_MAX_CHARS)
+    return f"{label}: {detail}" if detail else label
 
 
 def _passage_quote(text: str) -> str:
@@ -131,21 +135,21 @@ def _passage_quote(text: str) -> str:
 
 
 def removed_section_lines(removed: Sequence[Mapping[str, Any]]) -> list[str]:
-    """本文の末尾の「根拠と矛盾し除いた内容」の節の行（外した段落の短い引用と理由）。"""
+    """本文の末尾の「根拠と矛盾し除いた内容」の節の行（外した段落の短い引用と理由の label）。"""
     labels = answer_labels()
     lines = [
-        labels.item_bullet + labels.passage_note(_passage_quote(str(item.get("text") or "")), _reasons_text(item.get("reasons") or ()))
+        labels.item_bullet + labels.passage_note(_passage_quote(str(item.get("text") or "")), _passage_reasons(item.get("reasons") or ()))
         for item in removed
     ]
     return [labels.removed_section_note, *dict.fromkeys(lines)] if lines else []
 
 
 def marked_section_lines(marks: Sequence[Mapping[str, Any]], warnings: Sequence[Mapping[str, Any]] = ()) -> list[str]:
-    """本文の末尾の「確認が必要な点」の節の行（回答全体の警告と、印の段落の短い引用と理由）。"""
+    """本文の末尾の「確認が必要な点」の節の行（回答全体の警告と、印の段落の短い引用と理由の label）。"""
     labels = answer_labels()
-    lines = [labels.item_bullet + labels.answer_warning(_reasons_text([item])) for item in warnings]
+    lines = [labels.item_bullet + labels.answer_warning(_warning_text(item)) for item in warnings]
     lines += [
-        labels.item_bullet + labels.passage_note(_passage_quote(str(item.get("text") or "")), _reasons_text(item.get("reasons") or ()))
+        labels.item_bullet + labels.passage_note(_passage_quote(str(item.get("text") or "")), _passage_reasons(item.get("reasons") or ()))
         for item in marks
     ]
     return [labels.marked_section_note, *dict.fromkeys(lines)] if lines else []
