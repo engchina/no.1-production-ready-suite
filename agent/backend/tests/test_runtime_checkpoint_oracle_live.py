@@ -127,6 +127,43 @@ def test_two_processes_keep_each_others_updates_in_oracle(checkpoint_key: str) -
     assert "agent_live_first" not in {agent.id for agent in first.list_agents()}
 
 
+def test_cancel_by_another_process_stops_new_tools_in_oracle(checkpoint_key: str) -> None:
+    """別のプロセスの取消を、Run の 1 行を読んで知り、古いメモリの書き込みでも消さない（#2609）。"""
+    from app.features.agent.runtime import RunNotActiveError
+    from app.features.agent.tools import ToolCall
+
+    seeder = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+    for run_id in ("run_live_seen", "run_live_stale"):
+        run = RunState(
+            id=run_id,
+            goal="合成の質問",
+            agent_id="default",
+            runtime_id="builtin",
+            status=RunStatus.RUNNING,
+        )
+        with seeder._lock:  # noqa: SLF001 - テストの準備（保存先に実行中の Run を置く）
+            seeder._runs[run.id] = run  # noqa: SLF001
+            seeder._mark_run_changed(run)  # noqa: SLF001
+            seeder._persist_locked()  # noqa: SLF001
+    seeder.flush_writes()
+    worker = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+    api = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+
+    api.cancel_run("run_live_seen")
+    api.cancel_run("run_live_stale")
+
+    # 次のツールの前に、保存先の Run の行で取消を知る。
+    assert worker.builtin_run_ended("run_live_seen") is True
+    with pytest.raises(RunNotActiveError):
+        worker.start_builtin_tool_step("run_live_seen", ToolCall(name="echo", trace_id="c1"))
+    # 取消を知らないメモリのまま書いても、保存先の取消は残る（取消が勝つ）。
+    worker.start_builtin_tool_step("run_live_stale", ToolCall(name="echo", trace_id="c2"))
+    worker.flush_writes()
+    stored = json.loads(_entities(checkpoint_key)[("run", "run_live_stale")][0] or "{}")
+    assert stored["status"] == "cancelled"
+    assert worker.get_run("run_live_stale").status == RunStatus.CANCELLED
+
+
 def _legacy_run(run_id: str) -> dict[str, Any]:
     run = RunState(
         id=run_id,
