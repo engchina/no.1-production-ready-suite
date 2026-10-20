@@ -729,6 +729,47 @@ def test_profiles_the_editor_cannot_use_are_not_saved(
     assert cleared.json()["data"]["data_scopes"] == {}
 
 
+def test_scopes_keep_their_type_across_repeated_saves(
+    auth: ProductionAuth, mcp: FakeProductMcp
+) -> None:
+    """範囲を保存した後も型を保ち、続けて加える・外す保存が 200 になる（#2694）。"""
+    mcp.outputs["nl2sql_list_profiles"] = {
+        "profiles": [
+            {"id": "profile-a", "name": "A", "category": "", "description": ""},
+            {"id": "profile-b", "name": "B", "category": "", "description": ""},
+        ]
+    }
+    auth.create_user("scope-editor4", system_admin=True)
+    headers = login("scope-editor4")
+    created = client.post(
+        "/api/agents", json={"id": AGENT_ID, "name": "範囲の Agent"}, headers=headers
+    )
+    assert created.status_code == 200, created.text
+
+    def save(*ids: str) -> None:
+        response = client.patch(
+            f"/api/agents/{AGENT_ID}",
+            json={
+                "data_scopes": {"nl2sql": {"profile_ids": list(ids), "default_profile_id": ids[0]}},
+                "output_fields": [{"key": "item", "label": "項目"}],
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["data_scopes"]["nl2sql"]["profile_ids"] == list(ids)
+        agent = next(item for item in runtime_repository.list_agents() if item.id == AGENT_ID)
+        assert isinstance(agent.data_scopes["nl2sql"], AgentDataScope)
+        # 保存した値は、保存先から読み直したときと同じ型（モデル）のまま。
+        assert agent == AgentProfile.model_validate(agent.model_dump())
+
+    save("profile-a")
+    # 2 回目の保存（範囲に加える）も、保存済みの範囲を型のまま比べて 200。
+    save("profile-a", "profile-b")
+    save("profile-b")
+    # 編集者で確かめるのは加えたものだけ（1 回目の profile-a と 2 回目の profile-b）。
+    assert len(mcp.calls_of("nl2sql_list_profiles")) == 2
+
+
 # ---- 候補の名前をプロファイルの ID に引き直す（#2230） ------------------------------------
 
 _CANDIDATES: list[dict[str, Any]] = [

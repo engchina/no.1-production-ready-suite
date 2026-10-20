@@ -3515,7 +3515,13 @@ class AgentRuntimeRepository:
             agent = self._agents.get(agent_id)
             if agent is None:
                 raise KeyError(agent_id)
-            data = patch.model_dump(exclude_unset=True)
+            # 送られた項目を検証済みの型のまま入れる（`model_dump` の dict にしない）。
+            # AgentProfile は代入を検証しないので、dict にするとデータの範囲・出力の項目が
+            # モデルでなくなり、属性で読む処理（次の保存の範囲の確認・record_output）が
+            # 失敗する（#2559・#2694）。
+            data: dict[str, Any] = {
+                key: deepcopy(getattr(patch, key)) for key in patch.model_fields_set
+            }
             tool_names = data.get("tool_names")
             if isinstance(tool_names, list):
                 self._validate_agent_tools(tool_names)
@@ -3523,9 +3529,6 @@ class AgentRuntimeRepository:
             if isinstance(skill_ids, list):
                 self._validate_agent_skills(skill_ids)
                 data["migration_required"] = False
-            if "output_fields" in data:
-                # 出力の項目は検証済みのモデルのまま入れる（dump した dict にしない。#2559）。
-                data["output_fields"] = list(patch.output_fields or [])
             before = {field: getattr(agent, field) for field in AGENT_VERSIONED_FIELDS}
             for key, value in data.items():
                 setattr(agent, key, value)
