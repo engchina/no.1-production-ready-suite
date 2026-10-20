@@ -532,6 +532,9 @@ class GroundedAudit(_StrictModel):
     unused_evidence_ids: list[str] = Field(
         default_factory=list, max_length=8, description="回答に必要なのに items で使われていない根拠の evidence_id。重要な順。"
     )
+    summary_output_fields: OutputFieldEvidence | None = Field(
+        default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
+    )
     summary_supported: bool = Field(description="summary が items の範囲を超える断定をしていなければ true。")
     goal_alignment: Literal["aligned", "partial", "off_target"] = Field(
         description="aligned=items 全体が目的に答えている。partial=一部だけ。off_target=別の対象・業務・目的に答えている。"
