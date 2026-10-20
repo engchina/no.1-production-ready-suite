@@ -9,11 +9,13 @@ from unittest import mock
 
 from rag_engine.adapters import oci
 from rag_engine.config import get_settings
+from rag_engine.generation.execution_record import _execution_step
 from rag_engine.models.llm import TextOutput
 from rag_engine.resources.deadline import (
     Deadline,
     DeadlineExceeded,
     bind_deadline,
+    check_cancelled,
     check_deadline,
     remaining_seconds,
 )
@@ -168,6 +170,40 @@ class LlmCallDeadlineTests(unittest.TestCase):
         with bind_deadline(deadline), self.assertRaises(DeadlineExceeded):
             _parse(client, _settings())
         self.assertEqual(len(client.calls), 1)
+
+
+class StepBoundaryCancelTests(unittest.TestCase):
+    """取り消した回答の thread は、次の工程を始めない（#2691）。"""
+
+    def test_cancelled_answer_does_not_start_the_next_step(self):
+        started = []
+        deadline = Deadline(None)
+        with bind_deadline(deadline):
+            with _execution_step("工程 A"):
+                started.append("A")
+            deadline.cancel()
+            with self.assertRaises(DeadlineExceeded), _execution_step("工程 B"):
+                started.append("B")
+        self.assertEqual(started, ["A"])
+
+    def test_cancel_of_the_outer_answer_stops_a_child_deadline_step(self):
+        outer = Deadline(None)
+        with bind_deadline(outer), bind_deadline(Deadline(60.0, parent=outer)):
+            outer.cancel()
+            with self.assertRaises(DeadlineExceeded):
+                check_cancelled()
+
+    def test_expired_deadline_does_not_stop_the_step(self):
+        """時刻の期限で切れただけでは工程を止めない（確かめ終わった分で確定する。#1516）。"""
+        with bind_deadline(Deadline(0.0)):
+            check_cancelled()
+            with _execution_step("回答の確定"):
+                pass
+
+    def test_without_deadline_steps_run(self):
+        check_cancelled()
+        with _execution_step("工程"):
+            pass
 
 
 if __name__ == "__main__":

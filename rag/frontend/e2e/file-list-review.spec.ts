@@ -41,6 +41,8 @@ interface MockOptions {
   /** 一括投入の要求の本文（document_ids）を記録する。 */
   bulkRequests?: string[][];
   deleteWarnings?: string[];
+  /** 一覧の応答を遅らせる（返した Promise が解決するまで応答しない）。 */
+  delayList?: (url: URL) => Promise<void> | undefined;
 }
 
 test.beforeEach(async ({ page }) => {
@@ -195,6 +197,63 @@ test(
   }
 );
 
+test(
+  "絞り込みを変えた直後は、前の条件の件数で全件の選択・一括投入を出さない（#2696）",
+  { tag: "@responsive" },
+  async ({ page }) => {
+    const documents = [
+      ...Array.from({ length: 40 }, (_, index) =>
+        documentSummary(`doc-u-${index + 1}`, `upload-${String(index + 1).padStart(2, "0")}.txt`, "UPLOADED")
+      ),
+      ...Array.from({ length: 20 }, (_, index) =>
+        documentSummary(`doc-e-${index + 1}`, `error-${String(index + 1).padStart(2, "0")}.txt`, "ERROR")
+      ),
+    ];
+    // 状態で絞り込んだ一覧の応答だけを、手で解除するまで遅らせる（遅い一覧の API の再現）。
+    let releaseFiltered: () => void = () => undefined;
+    const filteredGate = new Promise<void>((resolve) => {
+      releaseFiltered = resolve;
+    });
+    const bulkRequests: string[][] = [];
+    await mockFileListApi(page, documents, {
+      bulkRequests,
+      delayList: (url) => (url.searchParams.get("status") === "UPLOADED" ? filteredGate : undefined),
+    });
+
+    await page.goto("/file-list");
+    const bulkActions = page.getByTestId("file-list-bulk-actions");
+    const selectAll = page.getByRole("checkbox", { name: "すべて選択" });
+    await selectAll.check();
+    await bulkActions.getByRole("button", { name: "条件に一致する 60 件をすべて選択" }).click();
+    await expect(bulkActions).toContainText("条件に一致する 60 件をすべて選択中");
+
+    // 条件を変えたら全件の選択を解除し、新しい一覧を読み込む間は前の条件の件数を出さず、押せない。
+    await page.getByRole("combobox", { name: "状態" }).click();
+    await page.getByRole("option", { name: "ファイル準備待ち", exact: true }).click();
+    await expect(bulkActions).toContainText("新しい条件の一覧を読み込んでいます。");
+    await expect(bulkActions).not.toContainText("60 件");
+    await expect(bulkActions.getByTestId("file-list-select-all-matching")).toHaveCount(0);
+    await expect(bulkActions.getByRole("button", { name: /一括投入/ })).toBeDisabled();
+    await expect(bulkActions.getByRole("button", { name: /一括削除/ })).toBeDisabled();
+    await expect(selectAll).toBeDisabled();
+    await expect(page.getByTestId("file-list-toolbar")).not.toContainText("60 件");
+    await expectNoPageOverflow(page);
+
+    releaseFiltered();
+    await expect(page.getByTestId("file-list-toolbar")).toContainText("40 件（全 60 件）");
+    await expect(bulkActions).toContainText("行を選ぶと、まとめて取込・削除できます。");
+    await selectAll.check();
+    await bulkActions.getByRole("button", { name: "条件に一致する 40 件をすべて選択" }).click();
+    await bulkActions.getByRole("button", { name: "一括投入 (40)" }).click();
+
+    await expect(page.getByText("40 件のファイル準備を受け付けました。").first()).toBeVisible();
+    expect(bulkRequests).toHaveLength(1);
+    expect(new Set(bulkRequests[0])).toEqual(
+      new Set(documents.filter((item) => item.status === "UPLOADED").map((item) => item.id))
+    );
+  }
+);
+
 test("一括投入の結果を確かめられないときは選択を残し、再送を案内する", async ({ page }) => {
   const documents = [
     documentSummary("doc-a", "a.txt", "UPLOADED"),
@@ -346,6 +405,7 @@ async function mockFileListApi(
 
     if (request.method() === "GET" && url.pathname === "/api/documents") {
       onList?.(url);
+      await options.delayList?.(url);
       const status = url.searchParams.get("status");
       const limit = Number(url.searchParams.get("limit") ?? "25");
       const offset = Number(url.searchParams.get("offset") ?? "0");
