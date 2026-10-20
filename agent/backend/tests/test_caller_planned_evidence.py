@@ -2,7 +2,9 @@
 
 - 組み込み Runtime は、スキルが Agent 主体の取得を宣言した接続（`evidence_planning=caller`）の
   `rag_retrieve_evidence` にだけ、検索文を作る主体（planning=caller）と追跡 ID を決定的に付け、
-  モデルに見せない（モデルが渡した値は上書きする）。宣言の無い古いスキルを固定した公開版は今までどおり。
+  モデルに見せない（モデルが渡した値は上書きする）。宣言の無い古いスキルを固定した公開版・固定の
+  中身の無い公開版は RAG が計画し、caller でだけ効く引数（planning・queries など）をモデルに見せず、
+  モデルが渡しても呼び先へ送らない（#2676）。
 - 合成のケース（本文・表・図）で、取得 → 図の確認（`rag_read_source`）→ 回答 → 最終の検証が
   RAG に回答を作らせずに（`rag_search` を呼ばずに）通る。
 - 根拠の取得が検索・回答プロファイルのルールの確認を返したら、確認の次の手と確かめ中の問いにする。
@@ -40,7 +42,12 @@ from app.features.agent.skills import (
     skill_registry,
 )
 from app.features.agent.skills_loader import load_skills_from_dir
-from app.features.agent.support_task import caller_planned_schema, evidence_clarification_step
+from app.features.agent.support_task import (
+    caller_planned_schema,
+    evidence_clarification_step,
+    rag_planned_arguments,
+    rag_planned_schema,
+)
 from app.settings import get_settings
 
 SKILL_ID = "test2651-skill"
@@ -215,8 +222,9 @@ def test_published_version_pinning_an_undeclared_skill_keeps_rag_planning(
     assert "request_id" not in published["arguments"]
     assert draft["arguments"]["planning"] == "caller"
     published_params = _tools(model)["rag__rag_retrieve_evidence"].params_json_schema
-    # 公開版のモデルには、検索文を作る主体の引数も契約のまま見える（RAG の既定は rag）。
-    assert "planning" in published_params["properties"]
+    # 公開版のモデルには、検索文を作る主体と caller でだけ効く引数を見せない（#2676）。
+    assert not _CALLER_ONLY & set(published_params["properties"])
+    assert "query" in published_params["properties"]
 
     # 再公開すると、公開版も Agent 主体の取得になる。
     runtime_repository.publish_agent(AGENT_ID, published_by="admin")
@@ -241,27 +249,54 @@ def _legacy_published_version() -> None:
         stored.published_version = 1
 
 
+# caller でだけ効く引数（#2676。門が閉じた Run ではモデルに見せず、送らない）。
+_CALLER_ONLY = frozenset({"planning", "queries", "request_id", "skip_clarification"})
+# モデルが自分で caller を指定する（今のスキルの本文が言い換えを queries に入れて引くと指示する）。
+_MODEL_CALLER_ARGUMENTS = {
+    "query": "機器 A 点検",
+    "planning": "caller",
+    "queries": ["機器A 定期点検"],
+    "request_id": "model-chosen",
+    "skip_clarification": True,
+}
+
+
+def _assert_rag_planned(run_id: str, call: dict[str, Any], model: ScriptedModel) -> None:
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    # 引数の誤りとして差し戻さず、呼び先へ送る前に取り除く。
+    results = [step.tool_result for step in run.steps if step.tool_result is not None]
+    assert results and all(result.success for result in results)
+    assert not _CALLER_ONLY & set(call["arguments"])
+    assert call["arguments"]["query"] == "機器 A 点検"
+    params = _tools(model)["rag__rag_retrieve_evidence"].params_json_schema
+    assert not _CALLER_ONLY & set(params["properties"])
+
+
 def test_published_version_without_pinned_skills_keeps_rag_planning(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """固定の中身の無い公開の版は、今のスキルが宣言しても caller にしない（配備で切り替えない）。"""
+    """固定の中身の無い公開の版は、今のスキルが宣言しても caller にしない（配備で切り替えない）。
+
+    モデルが planning=caller と queries を渡しても、呼び先へ送らない（#2676）。
+    """
     _legacy_published_version()
-    call = function_call("rag__rag_retrieve_evidence", {"query": "機器 A 点検"}, call_id="c1")
-    _script(
-        monkeypatch,
-        [call],
-        [assistant_message(ANSWER)],
-        [call],
-        [assistant_message(ANSWER)],
-        validation=False,
-    )
+    call = function_call("rag__rag_retrieve_evidence", _MODEL_CALLER_ARGUMENTS, call_id="c1")
+    model = _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    published_run = _run(draft=False)
+    [published] = mcp.calls_of("rag_retrieve_evidence")
+    _assert_rag_planned(published_run, published, model)
 
-    _run(draft=False)
-    _run(draft=True)
-
-    published, draft = mcp.calls_of("rag_retrieve_evidence")
-    assert "planning" not in published["arguments"]
+    # 下書きは今どおり caller（モデルの queries を送り、planning・追跡 ID は実行環境が決める）。
+    model = _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    draft_run = _run(draft=True)
+    draft = mcp.calls_of("rag_retrieve_evidence")[-1]
     assert draft["arguments"]["planning"] == "caller"
+    assert draft["arguments"]["queries"] == ["機器A 定期点検"]
+    assert draft["arguments"]["request_id"] == f"{draft_run}:c1"
+    params = _tools(model)["rag__rag_retrieve_evidence"].params_json_schema
+    assert "queries" in params["properties"]
+    assert "planning" not in params["properties"]
 
 
 def test_latest_policy_version_follows_the_current_skill(
@@ -290,16 +325,16 @@ def test_builtin_published_agents_keep_rag_planning(
     assert agent.published_version is not None
     version = agent.published()
     assert version is not None and version.skills is None
-    call = function_call("rag__rag_retrieve_evidence", {"query": "機器 A 点検"}, call_id="c1")
-    _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    # モデルが planning=caller と queries を渡しても、呼び先へ送らない（#2676）。
+    call = function_call("rag__rag_retrieve_evidence", _MODEL_CALLER_ARGUMENTS, call_id="c1")
+    model = _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
     run = runtime_repository.create_builtin_run(
         RunCreateRequest(goal=GOAL, agent_id=agent_id), created_by_user_uuid=USER_UUID
     )
     anyio.run(builtin_runtime.execute_run, run.id)
 
     [published] = mcp.calls_of("rag_retrieve_evidence")
-    assert "planning" not in published["arguments"]
-    assert "request_id" not in published["arguments"]
+    _assert_rag_planned(run.id, published, model)
 
 
 @pytest.mark.parametrize(
@@ -345,6 +380,38 @@ def test_caller_planned_schema_keeps_old_contracts() -> None:
     assert set(caller_planned_schema("rag__rag_retrieve_evidence", current)["properties"]) == {
         "query"
     }
+
+
+def test_rag_planned_schema_and_arguments_drop_caller_only_arguments() -> None:
+    """門が閉じた接続の根拠の取得は caller の引数を見せず・送らない。
+
+    古い契約・ほかのツールはそのまま。
+    """
+    current = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "planning": {"enum": ["rag", "caller"]},
+            "queries": {"type": "array", "items": {"type": "string"}},
+            "request_id": {"type": "string"},
+            "skip_clarification": {"type": "boolean"},
+            "conditions": {"type": "object"},
+        },
+        "required": ["query", "planning"],
+    }
+    visible = rag_planned_schema("rag__rag_retrieve_evidence", current)
+    assert set(visible["properties"]) == {"query", "conditions"}
+    assert visible["required"] == ["query"]
+    assert set(current["properties"]) >= _CALLER_ONLY  # 契約（呼び先へ送る schema）は変えない
+    assert rag_planned_arguments(
+        "rag__rag_retrieve_evidence", current, _MODEL_CALLER_ARGUMENTS
+    ) == {"query": "機器 A 点検"}
+    assert rag_planned_schema("rag__rag_search", current) is current
+    assert rag_planned_arguments("rag__rag_search", current, _MODEL_CALLER_ARGUMENTS) == (
+        _MODEL_CALLER_ARGUMENTS
+    )
+    old = {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
+    assert rag_planned_schema("rag__rag_retrieve_evidence", old) is old
 
 
 def test_agent_orchestrates_retrieval_figure_reading_answer_and_validation(

@@ -13,7 +13,7 @@ from app.main import app
 from app.rag import extraction_field_adapter as fields_mod
 from app.rag.extraction_field_adapter import FieldDefinition
 from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig, parse_adapter_config
-from app.schemas.document import DocumentDetail, DocumentSummary, FileStatus
+from app.schemas.document import DocumentDetail, DocumentSummary, FileStatus, IngestionJobPhase
 from app.schemas.knowledge_base import (
     KnowledgeBaseDetail,
     KnowledgeBaseRef,
@@ -200,7 +200,11 @@ class FakeKnowledgeBaseOracle:
         limit: int | None = None,
         offset: int = 0,
         knowledge_base_id: str | None = None,
+        queued_phase: IngestionJobPhase | None = None,
     ) -> list[DocumentSummary]:
+        if queued_phase is not None:
+            # fake は取込の job の順番待ちを持たない。
+            return []
         documents = [
             document
             for document in self.documents.values()
@@ -224,10 +228,12 @@ class FakeKnowledgeBaseOracle:
         status: FileStatus | None = None,
         query: str | None = None,
         knowledge_base_id: str | None = None,
+        queued_phase: IngestionJobPhase | None = None,
     ) -> int:
         return len(
             await self.list_documents(
                 status=status,
+                queued_phase=queued_phase,
                 query=query,
                 limit=None,
                 offset=0,

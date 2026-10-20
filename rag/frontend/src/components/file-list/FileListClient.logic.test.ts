@@ -6,6 +6,8 @@ import {
   bulkIngestSeverity,
   classifyEnqueuedJob,
   FILE_LIST_FILTERS,
+  fileListFilterLabel,
+  fileListFilterParams,
   idsToKeepSelected,
   INITIAL_FILE_LIST_VIEW,
   isFileListView,
@@ -48,6 +50,43 @@ describe("FILE_LIST_FILTERS / isFileListView", () => {
   it("不正な offset・状態は復元しない", () => {
     expect(isFileListView({ ...INITIAL_FILE_LIST_VIEW, offset: -20 })).toBe(false);
     expect(isFileListView({ ...INITIAL_FILE_LIST_VIEW, filter: "UNKNOWN" })).toBe(false);
+    expect(isFileListView({ ...INITIAL_FILE_LIST_VIEW, filter: "QUEUED_UNKNOWN" })).toBe(false);
+  });
+
+  // #2677: 行に出る状態（順番待ちを含む）をすべて、処理の順に並べる。すべては先頭、エラーは最後。
+  it("選択肢は行に出る状態を処理の順に並べ、順番待ちは各工程の前に置く", () => {
+    expect(FILE_LIST_FILTERS.map(fileListFilterLabel)).toEqual([
+      "すべて",
+      "ファイル準備待ち",
+      "ファイル準備の順番待ち",
+      "ファイル準備中",
+      "ファイル準備確認待ち",
+      "抽出の順番待ち",
+      "解析（抽出）中",
+      "抽出確認待ち",
+      "Chunk 作成の順番待ち",
+      "Chunk 作成中",
+      "Chunk 確認待ち",
+      "Embedding / 索引の順番待ち",
+      "Embedding / 索引中",
+      "索引済み",
+      "エラー",
+    ]);
+    expect(new Set(FILE_LIST_FILTERS).size).toBe(FILE_LIST_FILTERS.length);
+  });
+
+  it("順番待ちの絞り込みも作業状態から復元する", () => {
+    for (const filter of ["QUEUED_PREPROCESS", "QUEUED_EXTRACT", "QUEUED_CHUNK", "QUEUED_INDEX"]) {
+      expect(isFileListView({ ...INITIAL_FILE_LIST_VIEW, filter })).toBe(true);
+    }
+  });
+
+  it("絞り込みの値を一覧の API の status / queued_phase に分ける", () => {
+    expect(fileListFilterParams("ALL")).toEqual({});
+    expect(fileListFilterParams("UPLOADED")).toEqual({ status: "UPLOADED" });
+    expect(fileListFilterParams("ERROR")).toEqual({ status: "ERROR" });
+    expect(fileListFilterParams("QUEUED_PREPROCESS")).toEqual({ queued_phase: "PREPROCESS" });
+    expect(fileListFilterParams("QUEUED_INDEX")).toEqual({ queued_phase: "INDEX" });
   });
 
   // #1891: 表示件数を作業状態に残す。

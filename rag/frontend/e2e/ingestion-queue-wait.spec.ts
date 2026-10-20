@@ -200,4 +200,110 @@ test.describe("取込の順番待ち", { tag: "@responsive" }, () => {
     await expect(reviewRow).toContainText("抽出確認待ち");
     await expect(page.getByTestId("file-list-queue-wait-doc-b")).toHaveCount(0);
   });
+
+  // #2677: 状態の絞り込みに行の表示と同じ「〈工程〉の順番待ち」を処理の順に並べ、backend の queued_phase で絞る。
+  test("状態の絞り込みは順番待ちを処理の順に並べ、順番待ちの段で絞り込んだ件数を出す", async ({ page }) => {
+    await mockDatabaseReady(page);
+    await mockLocalAuth(page);
+    await page.route("**/api/knowledge-bases**", (route) =>
+      route.fulfill(ok({ items: [], total: 0, limit: 100, offset: 0, has_next: false }))
+    );
+    const summary = (id: string, status: string, phase: string | null) => ({
+      id,
+      file_name: `${id}.pdf`,
+      status,
+      category_name: null,
+      content_type: "application/pdf",
+      file_size_bytes: 2048,
+      content_sha256: null,
+      duplicate_of_document_id: null,
+      uploaded_at: "2026-10-15T00:00:00Z",
+      indexed_at: null,
+      knowledge_bases: [],
+      source_profile: null,
+      ingestion_active: phase !== null,
+      queue_wait: phase
+        ? { phase, job_id: `job-${id}`, queued_at: "2026-10-15T00:00:10Z", jobs_ahead: 2, concurrency: 1 }
+        : null,
+    });
+    const documents = [
+      summary("doc-queued", "UPLOADED", "PREPROCESS"),
+      summary("doc-waiting", "UPLOADED", null),
+      summary("doc-indexed", "INDEXED", null),
+    ];
+    const requests: URL[] = [];
+    await page.route(
+      (url) => url.pathname === "/api/documents",
+      (route) => {
+        const url = new URL(route.request().url());
+        requests.push(url);
+        const status = url.searchParams.get("status");
+        const queuedPhase = url.searchParams.get("queued_phase");
+        // backend と同じく、status は順番待ちでない文書、queued_phase は順番待ちの段で絞る。
+        const filtered = documents.filter((document) =>
+          queuedPhase
+            ? document.queue_wait?.phase === queuedPhase
+            : !status || (document.status === status && document.queue_wait === null)
+        );
+        const limit = Number(url.searchParams.get("limit") ?? "25");
+        return route.fulfill(
+          ok({ items: filtered.slice(0, limit), total: filtered.length, limit, offset: 0, has_next: false })
+        );
+      }
+    );
+
+    await page.goto("/file-list");
+    const toolbar = page.getByTestId("file-list-toolbar");
+    await expect(toolbar).toContainText("全 3 件");
+
+    const status = page.getByRole("combobox", { name: "状態" });
+    await status.click();
+    await expect(page.getByRole("option")).toHaveText([
+      "すべて",
+      "ファイル準備待ち",
+      "ファイル準備の順番待ち",
+      "ファイル準備中",
+      "ファイル準備確認待ち",
+      "抽出の順番待ち",
+      "解析（抽出）中",
+      "抽出確認待ち",
+      "Chunk 作成の順番待ち",
+      "Chunk 作成中",
+      "Chunk 確認待ち",
+      "Embedding / 索引の順番待ち",
+      "Embedding / 索引中",
+      "索引済み",
+      "エラー",
+    ]);
+    await page.getByRole("option", { name: "ファイル準備の順番待ち" }).click();
+
+    await expect(status).toHaveAttribute("data-value", "QUEUED_PREPROCESS");
+    await expect(status).toContainText("ファイル準備の順番待ち");
+    await expect(toolbar).toContainText("1 件（全 3 件）");
+    await expect(page.locator("tbody tr")).toHaveCount(1);
+    await expect(page.locator("tbody tr").first()).toContainText("doc-queued.pdf");
+    await expect(page.locator("tbody tr").first()).toContainText("ファイル準備の順番待ち");
+    const filteredRequest = requests.findLast((url) => url.searchParams.has("queued_phase"));
+    expect(filteredRequest?.searchParams.get("queued_phase")).toBe("PREPROCESS");
+    expect(filteredRequest?.searchParams.has("status")).toBe(false);
+
+    // ファイル準備待ちには順番待ちの行を入れない（行の表示とそろえる）。
+    await status.click();
+    await page.getByRole("option", { name: "ファイル準備待ち", exact: true }).click();
+    await expect(toolbar).toContainText("1 件（全 3 件）");
+    await expect(page.locator("tbody tr").first()).toContainText("doc-waiting.pdf");
+    expect(requests.at(-1)?.searchParams.get("status")).toBe("UPLOADED");
+    expect(requests.at(-1)?.searchParams.has("queued_phase")).toBe(false);
+
+    // 最も長い選択肢でも、ボタンの中の値が切れない。
+    await status.click();
+    await page.getByRole("option", { name: "Embedding / 索引の順番待ち" }).click();
+    await expect(status).toContainText("Embedding / 索引の順番待ち");
+    const clipped = await status.evaluate((element) =>
+      Array.from(element.querySelectorAll<HTMLElement>(".truncate")).some(
+        (span) => span.scrollWidth > span.clientWidth
+      )
+    );
+    expect(clipped).toBe(false);
+  });
 });

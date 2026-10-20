@@ -3124,6 +3124,8 @@ export const api = {
   listDocuments: (
     params: {
       status?: FileStatus;
+      /** レシピ1の取込の job が順番待ちの段（#2677）。`status` とは同時に渡さない。 */
+      queued_phase?: IngestionJobPhase;
       q?: string;
       knowledge_base_id?: string;
       limit?: number;
@@ -3132,6 +3134,7 @@ export const api = {
   ) => {
     const search = new URLSearchParams();
     if (params.status) search.set("status", params.status);
+    if (params.queued_phase) search.set("queued_phase", params.queued_phase);
     if (params.q) search.set("q", params.q);
     if (params.knowledge_base_id)
       search.set("knowledge_base_id", params.knowledge_base_id);
@@ -3234,10 +3237,17 @@ export const api = {
     ),
   /** 一覧と同じ条件の文書の ID（一括の操作の対象。#2674）。 */
   listDocumentIds: (
-    params: { status?: FileStatus; q?: string; knowledge_base_id?: string; limit?: number } = {},
+    params: {
+      status?: FileStatus;
+      queued_phase?: IngestionJobPhase;
+      q?: string;
+      knowledge_base_id?: string;
+      limit?: number;
+    } = {},
   ) => {
     const search = new URLSearchParams();
     if (params.status) search.set("status", params.status);
+    if (params.queued_phase) search.set("queued_phase", params.queued_phase);
     if (params.q) search.set("q", params.q);
     if (params.knowledge_base_id) search.set("knowledge_base_id", params.knowledge_base_id);
     if (params.limit != null) search.set("limit", String(params.limit));

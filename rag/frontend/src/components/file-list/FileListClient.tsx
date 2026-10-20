@@ -77,7 +77,10 @@ import {
   classifyEnqueuedJob,
   FILE_LIST_FILTERS as FILTERS,
   FILE_LIST_QUERY_MAX_LENGTH,
+  fileListFilterLabel,
+  fileListFilterParams,
   idsToKeepSelected,
+  type FileListFilter,
   INITIAL_FILE_LIST_VIEW as INITIAL_VIEW,
   isFileListView,
   orderedBulkReasons,
@@ -120,7 +123,7 @@ export function FileListClient() {
   // 一括削除につながる行の選択は保存せず、ページを離れたら解除する。
   const [view, setView] = useWorkspaceState("fileList.view", INITIAL_VIEW, isFileListView);
   const { filter, q, knowledgeBaseId, offset, limit } = view;
-  const setFilter = (next: FileStatus | "ALL") => setView((current) => ({ ...current, filter: next }));
+  const setFilter = (next: FileListFilter) => setView((current) => ({ ...current, filter: next }));
   const setQ = (next: string) => setView((current) => ({ ...current, q: next }));
   const setKnowledgeBaseId = (next: string) =>
     setView((current) => ({ ...current, knowledgeBaseId: next }));
@@ -140,7 +143,8 @@ export function FileListClient() {
   const [deleteImpactPending, setDeleteImpactPending] = useState(false);
 
   const selection = useSelection<string>();
-  const status = filter === "ALL" ? undefined : filter;
+  // 状態の絞り込みは、文書の状態か順番待ちの段のどちらか（#2677）。
+  const filterParams = fileListFilterParams(filter);
   // 投入直後は UPLOADED→INGESTING の引き継ぎに数秒かかり、その瞬間はまだ非アクティブ。
   // この窓の間もポーリングを続けて取込開始を確実に拾う。
   const [graceActive, setGraceActive] = useState(false);
@@ -157,7 +161,7 @@ export function FileListClient() {
   }, [graceWindow]);
   const query = useDocuments(
     {
-      status,
+      ...filterParams,
       q: q || undefined,
       knowledge_base_id: knowledgeBaseId === "ALL" ? undefined : knowledgeBaseId,
       limit,
@@ -252,12 +256,8 @@ export function FileListClient() {
     ],
     [allKnowledgeBasesOption, knowledgeBaseQuery, knowledgeBases.items, knowledgeBases.remote]
   );
-  const statusOptions = useMemo<SelectFieldOption<FileStatus | "ALL">[]>(
-    () =>
-      FILTERS.map((value) => ({
-        value,
-        label: value === "ALL" ? t("fileList.filterAll") : t(`status.${value}`),
-      })),
+  const statusOptions = useMemo<SelectFieldOption<FileListFilter>[]>(
+    () => FILTERS.map((value) => ({ value, label: fileListFilterLabel(value) })),
     []
   );
 
@@ -306,7 +306,7 @@ export function FileListClient() {
       if (matching) {
         // 一覧と同じ条件の文書を、上限まで新しい順に読む（受付の判定はサーバーが文書ごとに行う）。
         const list = await api.listDocumentIds({
-          status,
+          ...filterParams,
           q: q || undefined,
           knowledge_base_id: knowledgeBaseId === "ALL" ? undefined : knowledgeBaseId,
           limit: BULK_INGESTION_MAX_DOCUMENTS,
@@ -504,7 +504,7 @@ export function FileListClient() {
                 value={filter}
                 options={statusOptions}
                 onValueChange={(value) => resetView(() => setFilter(value))}
-                // 最も長い状態（「状態: ファイル準備確認待ち」）が切れない幅（#613）。
+                // 最も長い状態（「状態: Embedding / 索引の順番待ち」）が切れない幅（#613・#2677）。
                 width="md"
               />
               <SearchableSelectField

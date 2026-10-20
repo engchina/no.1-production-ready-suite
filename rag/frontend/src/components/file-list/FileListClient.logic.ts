@@ -6,33 +6,77 @@ import type {
   BulkIngestionResult,
   FileStatus,
   IngestionJob,
+  IngestionJobPhase,
 } from "@/lib/api";
+import { t } from "@/lib/i18n";
+import { queueWaitLabel } from "@/lib/ingestion-queue";
 import { isPageSize } from "@/lib/list-paging";
 
 /**
  * 文書インデックス（FileListClient）の純粋ロジック。Vitest で境界を検証する（#281）。
  */
 
-/** 状態の絞り込み。backend の FileStatus をすべて選べるようにする（PREPROCESSED を含む）。 */
-export const FILE_LIST_FILTERS: readonly (FileStatus | "ALL")[] = [
+/** 取込の job がレシピ1で順番待ちの段の絞り込みの値（行に「〈工程〉の順番待ち」と出る。#2677）。 */
+export type FileListQueuedFilter = `QUEUED_${IngestionJobPhase}`;
+
+/** 状態の絞り込みの値。行に出る状態の 1 つ（文書の状態か、順番待ちの段）か「すべて」。 */
+export type FileListFilter = "ALL" | FileStatus | FileListQueuedFilter;
+
+/**
+ * 状態の絞り込みの選択肢（#2677）。行に出る状態をすべて、処理の順に並べる。「すべて」は先頭、エラーは最後。
+ * 各段は 投入前・確認待ち → 〈工程〉の順番待ち（worker の空きを待つ）→ 〈工程〉中 の順に進む。
+ */
+export const FILE_LIST_FILTERS: readonly FileListFilter[] = [
   "ALL",
   "UPLOADED",
+  "QUEUED_PREPROCESS",
   "PREPROCESSING",
   "PREPROCESSED",
+  "QUEUED_EXTRACT",
   "INGESTING",
   "REVIEW",
+  "QUEUED_CHUNK",
   "CHUNKING",
   "CHUNKED",
+  "QUEUED_INDEX",
   "INDEXING",
   "INDEXED",
   "ERROR",
 ];
 
+const QUEUED_FILTER_PREFIX = "QUEUED_";
+
+function queuedFilterPhase(filter: FileListFilter): IngestionJobPhase | null {
+  return filter.startsWith(QUEUED_FILTER_PREFIX)
+    ? (filter.slice(QUEUED_FILTER_PREFIX.length) as IngestionJobPhase)
+    : null;
+}
+
+/**
+ * 絞り込みの値 → 一覧の API の条件。`status` は順番待ちでない文書の状態、`queued_phase` は順番待ちの段
+ * （backend が SQL で絞り、ページングと件数がそろう）。
+ */
+export function fileListFilterParams(filter: FileListFilter): {
+  status?: FileStatus;
+  queued_phase?: IngestionJobPhase;
+} {
+  if (filter === "ALL") return {};
+  const phase = queuedFilterPhase(filter);
+  return phase ? { queued_phase: phase } : { status: filter as FileStatus };
+}
+
+/** 選択肢の文言。行の状態の表示（`StatusBadge`）と同じ文言にする。 */
+export function fileListFilterLabel(filter: FileListFilter): string {
+  if (filter === "ALL") return t("fileList.filterAll");
+  const phase = queuedFilterPhase(filter);
+  return phase ? queueWaitLabel(phase) : t(`status.${filter as FileStatus}`);
+}
+
 /** 一覧の検索語の上限。backend の `q`（max_length=200）と同じ値にする。 */
 export const FILE_LIST_QUERY_MAX_LENGTH = 200;
 
 export interface FileListView {
-  filter: FileStatus | "ALL";
+  filter: FileListFilter;
   q: string;
   knowledgeBaseId: string;
   offset: number;

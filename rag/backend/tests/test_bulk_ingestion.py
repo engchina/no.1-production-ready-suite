@@ -497,6 +497,7 @@ def test_document_ids_use_the_list_filters(monkeypatch: MonkeyPatch) -> None:
             "status": FileStatus.UPLOADED,
             "query": "report",
             "knowledge_base_id": "kb-1",
+            "queued_phase": None,
             "limit": BULK_INGESTION_MAX_DOCUMENTS,
         }
     ]

@@ -152,7 +152,7 @@ export function DocumentPreview({
       loadText={loadText}
       textKey={url}
       focusText={focusText}
-      unsupportedMessage={kind === "office" ? t("preview.office") : undefined}
+      // 表示できない形式（Office の原本・処理後の JSONL など）は、形式によらず共通の案内の 1 文にする（#2679）。
       downloadUrl={showFallbackDownload ? downloadUrl : null}
       focusPage={focusPage}
       focusBbox={focusBbox}

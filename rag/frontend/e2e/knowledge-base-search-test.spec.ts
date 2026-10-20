@@ -447,8 +447,9 @@ test("Office 引用プレビューの降格表示では原本をダウンロー�
   await page.getByRole("button", { name: /の根拠を表示$/ }).click();
 
   const dialog = page.getByRole("dialog");
+  // 表示できない形式の案内は形式によらず共通の 1 文（#2679）。
   await expect(
-    dialog.getByText("Office 原本はブラウザーで直接表示できません", { exact: false })
+    dialog.getByText("このファイル形式はプレビューに対応していません。", { exact: true })
   ).toBeVisible();
   await expect(
     dialog.getByRole("link", { name: "ファイルをダウンロード", exact: true })

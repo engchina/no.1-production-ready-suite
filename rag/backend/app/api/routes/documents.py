@@ -545,8 +545,19 @@ async def list_documents(
     status: FileStatus | None = None,
     q: str | None = Query(default=None, min_length=1, max_length=200),
     knowledge_base_id: str | None = Query(default=None, min_length=1, max_length=128),
+    queued_phase: IngestionJobPhase | None = None,
 ) -> ApiResponse[Page[DocumentSummary]]:
-    """取込対象ドキュメントの一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
+    """取込対象ドキュメントの一覧を返す。DB 停止時は空一覧 + warning で縮退する。
+
+    状態の絞り込みは一覧の行に出る状態の 1 つを選ぶ(#2677): ``status`` は順番待ちでない文書の
+    状態(レシピ1の状態)、``queued_phase`` はレシピ1の取込の job が順番待ちの段(行に
+    「〈工程〉の順番待ち」と出る)。両方は同時に受け付けない。
+    """
+    if status is not None and queued_phase is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="status と queued_phase は同時に指定できません。",
+        )
     oracle = OracleClient()
     settings = get_settings()
 
@@ -557,6 +568,7 @@ async def list_documents(
             limit=paging.limit,
             offset=paging.offset,
             knowledge_base_id=knowledge_base_id,
+            queued_phase=queued_phase,
         )
         await _mark_layers_rebuild_required(oracle, documents, settings)
         documents = await _attach_queue_waits(oracle, documents, settings)
@@ -564,6 +576,7 @@ async def list_documents(
             status=status,
             query=q,
             knowledge_base_id=knowledge_base_id,
+            queued_phase=queued_phase,
         )
         return paginate(documents, total=total, limit=paging.limit, offset=paging.offset)
 
@@ -585,14 +598,24 @@ async def list_document_ids(
     status: FileStatus | None = None,
     q: str | None = Query(default=None, min_length=1, max_length=200),
     knowledge_base_id: str | None = Query(default=None, min_length=1, max_length=128),
+    queued_phase: IngestionJobPhase | None = None,
     limit: int = Query(default=BULK_INGESTION_MAX_DOCUMENTS, ge=1, le=BULK_INGESTION_MAX_DOCUMENTS),
 ) -> ApiResponse[DocumentIdList]:
     """一覧と同じ条件の文書の ID(新しい順に最大 ``limit`` 件)と件数を返す(#2674)。
 
     一覧の「条件に一致する文書をすべて選ぶ」から一括の投入へ渡す。要約・JSON 列は読まない。
     """
+    if status is not None and queued_phase is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="status と queued_phase は同時に指定できません。",
+        )
     ids, total = await OracleClient().list_document_ids(
-        status=status, query=q, knowledge_base_id=knowledge_base_id, limit=limit
+        status=status,
+        query=q,
+        knowledge_base_id=knowledge_base_id,
+        queued_phase=queued_phase,
+        limit=limit,
     )
     return ApiResponse(data=DocumentIdList(ids=ids, total=total, limit=limit))
 
