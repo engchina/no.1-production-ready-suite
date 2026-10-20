@@ -16,14 +16,19 @@ HEADING_LEVEL_PROMPT = (
     "1 回ずつ含めてください。見出しを足したり省いたり、文字列を書き換えたりしないでください。"
 )
 
-# 項目抽出(メタデータ/項目抽出)。末尾に「抽出する field 定義: …」を足して渡す。
+# 項目抽出(メタデータ/項目抽出)。末尾に「抽出する field 定義: …」を足して渡す。応答の形は
+# JSON Schema(``FIELD_EXTRACTION_RESPONSE_SCHEMA``)でも渡す(対応しないモデルはこの文だけで決める)。
 FIELD_EXTRACTION_PROMPT = (
     "次の文書から、指定された field を抽出してください。"
-    '各 field は {"name", "value", "value_type", "confidence"} の '
-    "JSON 配列だけで出力し、見つからない field は省略してください。"
+    '{"fields": [{"name", "value", "value_type", "confidence"}]} の '
+    "JSON だけを出力し、見つからない field は省略してください。"
     "value は、value_type が date なら YYYY-MM-DD、number なら桁区切りと単位の"
     "ない数字、bool なら true か false で出力してください。"
 )
+# 項目抽出で本文を分けて渡すとき(#2720)の、各部分の頭書き。位置(i/n)と、その部分の最初の
+# 要素の見出しの位置を付ける(文書の冒頭ではないことと、どの章の中かをモデルに示す)。
+FIELD_EXTRACTION_PART_HEADER = "[文書の一部 {index}/{total}]"
+FIELD_EXTRACTION_PART_PATH = " 見出し: {path}"
 
 # ナビゲーション要約(章節木): 章節ごとの要約。
 NAVIGATION_SUMMARY_PROMPT = (
@@ -35,6 +40,8 @@ RAPTOR_SUMMARY_SYSTEM_PROMPT = "あなたは文書を階層的に要約するア
 RAPTOR_SUMMARY_PROMPT = "次のテキスト群の要点を簡潔な日本語で要約してください。"
 
 __all__ = [
+    "FIELD_EXTRACTION_PART_HEADER",
+    "FIELD_EXTRACTION_PART_PATH",
     "FIELD_EXTRACTION_PROMPT",
     "HEADING_LEVEL_PROMPT",
     "NAVIGATION_SUMMARY_PROMPT",

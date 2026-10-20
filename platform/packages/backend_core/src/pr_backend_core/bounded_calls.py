@@ -215,10 +215,16 @@ _SAFETY_MARKERS = (
     "inappropriate content",
     "blocked by",
 )
+# 入力（prompt）の長さの超過。OCI Enterprise AI の vLLM 系のモデル（openai.gpt-oss-120b）は
+# 400 の本文で「The engine prompt length N exceeds the max_model_len N」（type は
+# invalid_request_error）と返す（2026-10-20 の合成の入力での実測。#2720）。この印が無いと
+# 要求の誤りに分かれ、入力を分け直せない。
 _CONTEXT_MARKERS = (
     "context_length_exceeded",
     "context length",
     "maximum context",
+    "max_model_len",
+    "maximum prompt length",
     "too many tokens",
     "input is too long",
     "prompt is too long",

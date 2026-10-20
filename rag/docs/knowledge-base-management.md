@@ -612,6 +612,46 @@ KB の選択は、共有 UI の検索できる選択部品（`SearchableMultiSel
   `layer_fingerprint.current_field_definitions`）と比べる。文書一覧では、層のある文書の所属 KB の定義を
   1 回の問い合わせ（`list_documents_extraction_field_sets`）で読む。
 
+### 8.4.1b 項目抽出の実行（入力の予算・分割・統合・再開。#2720）
+
+項目抽出の実行は文書レシピの工程（`IngestionPipeline._attach_extraction_fields`）が持つ。KB は項目の定義だけを持ち、
+検索・回答プロファイルには取込の設定を置かない。分け方と統合の規則は `app/rag/field_extraction_units.py`。
+
+- **入力の予算**: 既定のテキストモデルの「入力の上限（tokens）」（システム設定 › モデル）の
+  `RAG_FIELD_EXTRACTION_INPUT_TOKEN_PERCENT`（既定 40%）から、毎回送る文（system の指示・抽出の指示・項目の定義・
+  応答の JSON Schema）の見積もりと枠の余地（512）を引いた残りを、1 回の要求の本文の予算にする。token は platform の
+  `estimate_input_tokens` で見積もる（tokenizer は持たない）。合成の入力の実測（2026-10-20、openai.gpt-oss-120b）で、
+  まれな漢字が続く本文は実際の token が見積もりの約 1.8 倍、ふつうの日本語の文は見積もり以下だったため、残りの 60% を
+  出力の枠と見積もりの誤差の余裕にする。項目の定義だけで予算が尽きる（本文の予算が 256 未満）ときは、取込を止めて
+  項目の数・説明を減らすよう案内する。本文を黙って切り捨てない。
+- **分割**: 解析の成果物の要素（見出し・段落・表。派生の要素は除く）の順に、予算に収まる単位へ詰める。予算を超える
+  要素は行 → 文 → 文字の順に分け、Markdown の表は表頭（1・2 行目）を各部分に付け直す。2 つ以上に分けたときは、
+  各単位の頭に「[文書の一部 i/n] 見出し: …」を付け、前の単位の末尾（予算の 10% まで）を重ねる（境界をまたぐ項目名と
+  値のため）。重ねた範囲は単位の `overlap`、新しく読む範囲は `atoms` に分けて持ち、全要素がちょうど 1 回 `atoms` に
+  入る。検索用の chunk・解析の segment とは目的と予算が違うため、境界・件数をそろえない。
+- **応答の検証**: 応答の形 `{"fields": [...]}` を JSON Schema（`FIELD_EXTRACTION_RESPONSE_SCHEMA`）で渡し、Pydantic で
+  外側を検証してから項目を 1 つずつ読む（定義外・空の値・同じ応答の中の重複は捨てる）。形が合わない応答は「出力の形の
+  誤り」として共通の実行器が回数を絞って呼び直す。
+- **統合**: 項目の定義は 1 項目 1 値（単値）。型ごとに正規化した値（幅・大文字小文字・空白をそろえる）で同じ値をまとめ、
+  根拠（値が書かれた要素。見つからなければ単位）の数が多い値、同じなら文書の前にある値を採る。最後の値・confidence の
+  高い値で置き換えない。値には書かれた要素（`source_element_id`）と頁を出典として付ける。違う値の候補が残った項目は
+  実行結果の `conflict_fields`（名前だけ）に刻む。
+- **実行結果**: `parser_artifacts.field_extraction_outcome` に `status`（completed / no_definitions / no_text）・`field_count`
+  と、単位の数（`unit_count`・`succeeded_unit_count`・`reused_unit_count`・`failed_unit_count`・`skipped_unit_count`・
+  `resplit_count`）・`candidate_count`・`conflict_fields` を刻む。
+- **失敗の分類**: 共通の実行器（`pr_backend_core.bounded_calls`）の分類で分ける。入力の上限の超過（413・context の長さ・
+  vLLM 系の `prompt length … exceeds the max_model_len`）は、その単位の予算を半分にして 3 回まで分け直す。分類できない
+  400 は入力の上限の超過に読み替えない（「要求の誤り」）。429・一時的な 5xx・接続・時間切れは実行器が待って再試行し、
+  使い切ったら間隔をあけて 1 回だけ呼ぶ。設定の誤り・権限・割り当ての使い切りは実行器が取込を止める。単位の失敗は分類
+  （入力の上限の超過 / 出力の打ち切り / 応答の形 / 要求の誤り / 安全の拒否 / 一時的な障害 / 分類できない誤り）・HTTP の
+  状態・単位の数だけで文言とログ（`field_extraction_unit_failed` / `field_extraction_failed`）を作り、応答の本文・例外の文・
+  本文・値は出さない。1 つも成功しないうちに失敗したら残りの単位は呼ばない（同じ誤りをくり返さない）。
+- **再開**: 成功した単位の結果を、抽出の成果物の置き場所（`RAG_EXTRACTION_ARTIFACT_PREFIX` の下の
+  `<文書>/fields/<hash>.json`。文書の削除で消える）に保存する。名前は方式の版・モデル・項目の定義・指示・応答の形と
+  単位の本文の hash で、どれかが変われば使い直さない。1 つでも失敗した単位があれば取込を止め、途中の結果は抽出結果に
+  入れない（旧 active の成果物を保つ）。再実行では保存した単位を使い、失敗した単位だけを呼ぶ。
+  `RAG_EXTRACTION_ARTIFACT_CACHE_ENABLED=false` なら保存しない。
+
 ### 8.4.2 アーカイブした KB と検索・回答プロファイルの参照（#302）
 
 KB をアーカイブしても検索・回答プロファイルの `knowledge_base_ids` からは外さない（検索・回答プロファイルの設定を黙って変えない）。

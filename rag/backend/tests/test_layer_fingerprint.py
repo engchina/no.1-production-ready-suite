@@ -142,7 +142,7 @@ class _FakeVlm:
     def __init__(self, response: str) -> None:
         self.response = response
 
-    async def generate(self, prompt: str, text: str) -> str:
+    async def generate(self, prompt: str, text: str, **_options: object) -> str:
         _ = prompt, text
         return self.response
 
@@ -159,6 +159,8 @@ def _pipeline(settings: Settings, response: str) -> Any:
     return IngestionPipeline(
         vlm=_FakeVlm(response),  # type: ignore[arg-type]
         oracle=_NoOracle(),  # type: ignore[arg-type]
+        # 保存先の無い fake(項目抽出の単位の結果を既定の保存先へ書かない。#2720)。
+        object_storage=object(),  # type: ignore[arg-type]
         settings=settings,
     )
 
