@@ -237,7 +237,9 @@ Agent はプラグインを持たず、スキルだけを持つ（#1798 でマ�
   型の名前・元の文・入力の値・接続の情報は渡さない（step には呼び先の詳細をそのまま残す）。
 - ツール: Skill の requirement が要求するツールを `FunctionTool` にする。`control-plane` は `tool_registry` の
   ツール、それ以外は MCP 接続の `tools/list`（Run の利用者として取得。名前は `<接続>__<ツール>`、英数字・`_`・`-`
-  で 64 文字以内）。取得できない接続は飛ばして Run に `runtime.event`（warning）を残す（#757）。
+  で 64 文字以内）。文字の置き換えで同じ接続の別のツールと同じ名前になるもの（`read.item` と `read_item`）は、置き換えた
+  側に元の名前の hash を付けて分ける（置き換えの要らない名前は変えない。一覧の順に依らない）。それでも別の出自のツールが
+  同じ名前になれば、どれも渡さずに Run に warning を残す（一覧の順で呼べる対象を変えない。#2596）。取得できない接続は飛ばして Run に `runtime.event`（warning）を残す（#757）。
   実行は `tool_registry.invoke`（ポリシー・ガードレール・監査・成果物、サービストークン）。
   ポリシーの「拒否」は渡さず、「承認」は `needs_approval=True`（MCP のツールは `readOnlyHint` が無ければ既定で承認）。
 - 承認: SDK の中断（`result.interruptions`）で承認待ちの step と ApprovalRequest を作り、`result.to_state().to_string()`
@@ -356,7 +358,7 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   `initialize` を送らず、`initialize` を持たない接続（`-32601`）はそのまま `tools/*` を呼ぶ。
 - **再試行と期限（#854）**: 1 メッセージを `AGENT_EXTERNAL_MCP_MAX_RETRIES`（既定 3）回まで再試行する。分類は MCP の意味に合わせる。
 
-  | 失敗 | 手順（`initialize`・`notifications/initialized`・`tools/list`） | 読み取り専用（`readOnlyHint=true`）の `tools/call` | それ以外の `tools/call` |
+  | 失敗 | 手順（`initialize`・`notifications/initialized`・`tools/list`） | 読み取り専用（`readOnlyHint=true`。注釈を信頼する接続だけ）の `tools/call` | それ以外の `tools/call` |
   |---|---|---|---|
   | 送信前（`ConnectError`・`ConnectTimeout`・`PoolTimeout`）・429・503 | 再試行 | 再試行 | 再試行 |
   | 502・504・通信の途中の切断 | 再試行 | 再試行 | しない |
@@ -364,6 +366,9 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
 
   書き込みのツール（`nl2sql_query` など）は、呼び先に届いた可能性がある失敗では再送しない（SQL の実行・LLM の呼び出しを
   重複させない）。読み取り専用のツールも、読み取りの timeout は再送しない（`rag_search` のように呼び先で LLM が動いている）。
+  `readOnlyHint` を送信後の失敗の再送の根拠にするのは、注釈を信頼する接続（標準の接続か「注釈を信頼する」にした接続）だけで、
+  承認の既定の判定と同じ境界にする。信頼しない接続のツールは、ツール権限で許可しても・利用者が承認しても「それ以外」として
+  扱う（実行してよいことと、同じ操作を 2 回送ってよいことは別。`tools.retry_after_delivery_allowed`。#2595）。
   待ちは 0.5 秒から 2 倍ずつ（上限 8 秒、後半を jitter）、429 / 503 の `Retry-After`（秒・HTTP 日付）があればその値（上限 30 秒）。
   1 回のツールの呼び出し（`initialize` から `tools/call` まで）全体を接続の timeout で区切り、各 POST の timeout は残りの時間
   （接続の確立は 10 秒以下）、待つと期限まで 1 秒を切るときは再試行しない。待ちは `tools._retry_sleep` で差し替える（テストは

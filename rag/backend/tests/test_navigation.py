@@ -11,6 +11,8 @@ from typing import Any
 import pytest
 from rag_engine.chunking.headings import layout_section_paths
 
+from app.clients.section_map_store import map_chunk_from_row
+from app.rag.chunking import CHUNKING_STRATEGIES, Chunk, chunk_extraction_with_strategy
 from app.rag.document_sections import sections_from_navigation
 from app.rag.navigation import (
     build_navigation_tree,
@@ -18,6 +20,8 @@ from app.rag.navigation import (
     navigation_summary_elements,
     summarize_navigation_nodes,
 )
+from app.rag.section_chunk_map import build_section_chunk_map
+from app.schemas.document import DocumentSection
 from app.schemas.extraction import (
     DocumentElement,
     DocumentNavigationNode,
@@ -228,3 +232,133 @@ def test_docling_navigation_sections_follow_document_toc(name: str) -> None:
     assert [(section.level, _heading_key(section.title)) for section in sections] == _source_toc(
         name
     )
+
+
+# ---- 章節の要約の由来を分割・章節の本文で保つ（#2590） ----
+
+# 要約だけに含まれる合成の値（原文の要素には無い）。
+_SUMMARY_ONLY_VALUE = "合成値7Q"
+_SUMMARY_TITLES = {"numbered-title": "第1章 総則", "plain-title": "概要"}
+
+
+def _summary_extraction(*, title: str, revalidated: bool) -> StructuredExtraction:
+    """原文の要素の後に章節の要約の要素を足した抽出（取込の ``_attach_navigation_tree`` と同じ形）。
+
+    ``revalidated`` は、保存した抽出を読み直す経路・分割のサービスへ送る経路と同じく、抽出を
+    もう一度検証したもの（要素の正規化がもう一度走る）。
+    """
+    base = StructuredExtraction(
+        raw_text=f"{title}\n本文の段落。",
+        elements=[
+            DocumentElement(
+                kind="heading",
+                text=title,
+                order=1,
+                element_id="e1",
+                page_number=1,
+                section_path=[title],
+            ),
+            DocumentElement(
+                kind="text",
+                text="本文の段落。",
+                order=2,
+                element_id="e2",
+                page_number=1,
+                section_path=[title],
+            ),
+        ],
+    )
+    node = DocumentNavigationNode(
+        section_id="nav-s1",
+        title=title,
+        section_path=[title],
+        depth=1,
+        page_start=1,
+        summary=f"{_SUMMARY_ONLY_VALUE} を含む要約。",
+    )
+    summaries = navigation_summary_elements([node], start_order=3)
+    extraction = base.model_copy(update={"elements": [*base.elements, *summaries]})
+    if revalidated:
+        return StructuredExtraction.model_validate(extraction.model_dump(mode="json"))
+    return extraction
+
+
+def _row(chunk: Chunk) -> dict[str, object]:
+    return {
+        "chunk_id": f"c{chunk.index}",
+        "chunk_index": chunk.index,
+        "metadata_json": chunk.metadata,
+        "head": chunk.text[:80],
+        "chars": len(chunk.text),
+    }
+
+
+@pytest.mark.parametrize("revalidated", [False, True], ids=["in-process", "revalidated"])
+@pytest.mark.parametrize("title_key", sorted(_SUMMARY_TITLES), ids=sorted(_SUMMARY_TITLES))
+@pytest.mark.parametrize("strategy", CHUNKING_STRATEGIES, ids=CHUNKING_STRATEGIES)
+def test_navigation_summary_chunks_keep_derived_marks_in_every_strategy(
+    strategy: str, title_key: str, revalidated: bool
+) -> None:
+    """どの分割方式でも、要約の chunk は生成要約の印を持ち、原文の chunk と混ざらない。"""
+    title = _SUMMARY_TITLES[title_key]
+    extraction = _summary_extraction(title=title, revalidated=revalidated)
+
+    chunks = chunk_extraction_with_strategy(
+        extraction, strategy=strategy, chunk_size=400, overlap=0
+    )
+
+    summary_chunks = [chunk for chunk in chunks if _SUMMARY_ONLY_VALUE in chunk.text]
+    body_chunks = [chunk for chunk in chunks if _SUMMARY_ONLY_VALUE not in chunk.text]
+    if strategy in {"structure_aware", "page_level"}:
+        # 要素から分割する方式は要約も索引する。本文（raw_text）を分割する方式は要約を含まない。
+        assert summary_chunks
+    for chunk in summary_chunks:
+        assert chunk.text.startswith(title)
+        assert chunk.metadata["content_kind"] == "section_summary"
+        assert chunk.metadata["nav_summary"] is True
+        assert chunk.metadata["section_id"] == "nav-s1"
+        assert chunk.metadata["element_ids"] == "nav-summary-nav-s1"
+        assert map_chunk_from_row(_row(chunk)) is None
+    assert any("本文の段落" in chunk.text for chunk in body_chunks)
+    for chunk in body_chunks:
+        assert "nav_summary" not in chunk.metadata
+        assert map_chunk_from_row(_row(chunk)) is not None
+
+
+@pytest.mark.parametrize("title_key", sorted(_SUMMARY_TITLES), ids=sorted(_SUMMARY_TITLES))
+def test_revalidated_navigation_summary_is_not_read_as_a_heading(title_key: str) -> None:
+    """「章節名: 要約」が見出しに見えても、抽出を検証し直したときに見出しにしない。"""
+    title = _SUMMARY_TITLES[title_key]
+    extraction = _summary_extraction(title=title, revalidated=True)
+
+    summary = next(e for e in extraction.elements if e.element_id == "nav-summary-nav-s1")
+
+    assert summary.kind == "text"
+    assert summary.content_kind == "section_summary"
+    assert summary.section_path == [title]
+    assert "section_level" not in summary.metadata
+
+
+@pytest.mark.parametrize("strategy", ["structure_aware", "page_level"], ids=str)
+def test_summary_only_value_never_reaches_the_section_body(strategy: str) -> None:
+    """章節の本文（章節の読み取り・回答の章節の拡張が読む対応）に要約の chunk が入らない。
+
+    同じ章節の原文の chunk は本文として入る。
+    """
+    title = _SUMMARY_TITLES["numbered-title"]
+    extraction = _summary_extraction(title=title, revalidated=True)
+    chunks = chunk_extraction_with_strategy(
+        extraction, strategy=strategy, chunk_size=400, overlap=0
+    )
+    mapped = [found for chunk in chunks if (found := map_chunk_from_row(_row(chunk))) is not None]
+    section = DocumentSection(
+        id="s1", title=title, level=1, page_start=1, page_end=1, source_section_id="nav-s1"
+    )
+
+    mapping = build_section_chunk_map("set-1", [section], mapped, root_title="文書 A")
+
+    texts = {f"c{chunk.index}": chunk.text for chunk in chunks}
+    members = mapping.chunk_ids("s1")
+    assert members
+    assert any("本文の段落" in texts[chunk_id] for chunk_id in members)
+    assert all(_SUMMARY_ONLY_VALUE not in texts[link.chunk_id] for link in mapping.links)

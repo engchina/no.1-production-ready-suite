@@ -51,7 +51,7 @@ uv run bandit -r app          # セキュリティ
 | `POST /api/documents/{id}/ingestion-jobs?force=false&phase=PREPROCESS` | 保存済みドキュメント（既定レシピ）を永続取込 job としてキュー投入 |
 | `POST /api/documents/{id}/recipes/{recipe_id}/ingestion-jobs` | 処理レシピ単位で取込 job をキュー投入 |
 | `POST /api/documents/{id}/recipes/{recipe_id}/approve` | 確認待ちのレシピ（ファイル準備・抽出・Chunk）を承認して次の工程の job を投入。抽出の修正を同時に保存できる |
-| `PATCH /api/documents/{id}/recipes/{recipe_id}/review-edits` | 確認待ち（REVIEW）のレシピの抽出の修正を保存（job は投入しない） |
+| `PATCH /api/documents/{id}/recipes/{recipe_id}/review-edits` | 確認待ち（REVIEW）のレシピの抽出の修正を保存（job は投入しない）。修正は要素・表セルごとに `base_text`（編集を始めたときの文）を持ち、レシピの行ロックの下で最新の抽出結果へ当てる。別の箇所の並行の修正は両方残し、同じ箇所がほかの保存で変わっていれば 409 |
 | `GET /api/documents/ingestion-jobs?status=QUEUED` | 取込 job 履歴・状態をページング取得 |
 | `POST /api/documents/ingestion-jobs/drain` | 永続化済み QUEUED job を再実行 |
 | `POST /api/documents/ingestion-jobs/{job_id}/retry` | 失敗・完了・キャンセル済み job の対象文書を新規 job として再投入 |

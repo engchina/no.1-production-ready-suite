@@ -65,18 +65,26 @@ export function ReviewTextEditor({
     return keys;
   }, [editableTables]);
 
+  // base_text は編集を始めたときの文。保存のときにサーバーが今の文と照合し、ほかの保存が
+  // 先に同じ箇所を変えていれば 409 になる（#2616）。読み込み直しても編集中の基準は変えない。
   function handleElementChange(id: string, value: string) {
-    const element_edits = (edits.element_edits ?? []).filter((edit) => edit.element_id !== id);
-    if (value !== originalElementText.get(id)) element_edits.push({ element_id: id, text: value });
+    const current = edits.element_edits ?? [];
+    const base_text =
+      current.find((edit) => edit.element_id === id)?.base_text ?? originalElementText.get(id) ?? "";
+    const element_edits = current.filter((edit) => edit.element_id !== id);
+    if (value !== base_text) element_edits.push({ element_id: id, text: value, base_text });
     onChange({ ...edits, element_edits });
   }
 
   function handleCellChange(tableId: string, row: number, col: number, value: string) {
-    const table_cell_edits = (edits.table_cell_edits ?? []).filter(
-      (edit) => edit.table_id !== tableId || edit.row !== row || edit.col !== col
-    );
-    if (value !== originalCellText.get(cellKey(tableId, row, col))) {
-      table_cell_edits.push({ table_id: tableId, row, col, text: value });
+    const current = edits.table_cell_edits ?? [];
+    const isTarget = (edit: { table_id: string; row: number; col: number }) =>
+      edit.table_id === tableId && edit.row === row && edit.col === col;
+    const base_text =
+      current.find(isTarget)?.base_text ?? originalCellText.get(cellKey(tableId, row, col)) ?? "";
+    const table_cell_edits = current.filter((edit) => !isTarget(edit));
+    if (value !== base_text) {
+      table_cell_edits.push({ table_id: tableId, row, col, text: value, base_text });
     }
     onChange({ ...edits, table_cell_edits });
   }

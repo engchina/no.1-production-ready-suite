@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass, field
 
 from rag_parser_core.extraction import (
+    EXTRACTED_FIELD_KEY,
+    NAV_SUMMARY_KEY,
     DocumentElement,
     StructuredExtraction,
     bullet_line,
@@ -125,6 +127,8 @@ class _ElementSpan:
     vision_described: bool = False
     # XML ツリー JSON の解析の要素の引用ラベルなどの metadata（``xml_tree_`` で始まる key。#2024）。
     xml_tree_metadata: tuple[tuple[str, str | int | float | bool | None], ...] = ()
+    # 要素の由来の metadata（``ELEMENT_PROVENANCE_METADATA_KEYS``。#2590）。
+    provenance_metadata: tuple[tuple[str, str | int | float | bool], ...] = ()
 
     @property
     def xml_tree_citation_label(self) -> str | None:
@@ -165,6 +169,16 @@ BBOX_COORDINATE_MODE_KEYS = (
     "coordinate_mode",
 )
 BBOX_UNIT_KEYS = ("bbox_unit", "coordinate_unit")
+# 要素の由来（取込が作った派生の要素か・どの章節から作ったか）の metadata。どの分割の経路でも
+# 同じ key で chunk に引き継ぎ、由来の違う要素を 1 つの chunk に結合しない（#2590。章節の本文・
+# 引用の根拠は ``rag_parser_core.extraction.is_derived_content`` で派生を除く）。
+ELEMENT_PROVENANCE_METADATA_KEYS: tuple[str, ...] = (
+    NAV_SUMMARY_KEY,
+    "section_id",
+    "parent_section_id",
+    "nav_depth",
+    EXTRACTED_FIELD_KEY,
+)
 # 表の中の画像を Vision で読み取った説明文(#502 / #513)。要素の metadata の key と、表の本文の
 # 後ろに足す補足の見出し。rag_engine の親子階層（small-to-big）(chunking/records.py)と
 # 同じ書式にする。
@@ -680,7 +694,11 @@ def _chunk_page_level(
             flush_buffer()
             chunks.extend(_chunk_table_span(span, chunk_size=chunk_size, start_index=len(chunks)))
             continue
-        if buffer and span.page_number != buffer_page:
+        # 同じページでも、由来の違う要素（派生の要素と原文の要素。#2590）は別の chunk にする。
+        if buffer and (
+            span.page_number != buffer_page
+            or span.provenance_metadata != buffer[0].provenance_metadata
+        ):
             flush_buffer()
         if not buffer:
             buffer_page = span.page_number
@@ -962,9 +980,21 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
                     for key, value in element.metadata.items()
                     if key.startswith(XML_TREE_METADATA_PREFIX)
                 ),
+                provenance_metadata=_provenance_metadata(element),
             )
         )
     return spans
+
+
+def _provenance_metadata(
+    element: DocumentElement,
+) -> tuple[tuple[str, str | int | float | bool], ...]:
+    """要素の由来の metadata（``ELEMENT_PROVENANCE_METADATA_KEYS`` の値のある key。#2590）。"""
+    return tuple(
+        (key, value)
+        for key in ELEMENT_PROVENANCE_METADATA_KEYS
+        if isinstance(value := element.metadata.get(key), str | int | float | bool)
+    )
 
 
 def _column_index(letters: str) -> int:
@@ -1248,6 +1278,9 @@ def _can_merge_spans(group: list[_ElementSpan], span: _ElementSpan, chunk_size: 
     if first.section_path != span.section_path:
         return False
     if first.content_kind != span.content_kind:
+        return False
+    # 派生の要素（章節の要約など）と原文の要素、別の章節の派生の要素を結合しない(#2590)。
+    if first.provenance_metadata != span.provenance_metadata:
         return False
     # XML ツリー JSON の段落(#2024)は段落ごとに 1 chunk にする（同じ単位の別の段落と結合しない）。
     if first.xml_tree_citation_label != span.xml_tree_citation_label:
@@ -2144,6 +2177,9 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
             else FIGURE_TEXT_SOURCE_OCR
         )
     metadata.update(_sheet_location_metadata(group))
+    # 由来の metadata は結合の条件でそろえているので、先頭の要素の値をそのまま引き継ぐ(#2590)。
+    if all(span.provenance_metadata == first.provenance_metadata for span in group):
+        metadata.update(dict(first.provenance_metadata))
     if first.xml_tree_metadata and all(
         span.xml_tree_citation_label == first.xml_tree_citation_label for span in group
     ):

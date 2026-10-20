@@ -107,6 +107,25 @@ class ToolDefinition(BaseModel):
     # 標準の接続（RAG / NL2SQL）のツールで、Agent が既定で承認なしに実行すると決めたもの（#1832。
     # `nl2sql_query`）。ツール権限で個別に指定（ask / deny を含む）すればそちらが優先する。
     standard_auto_approve: bool = False
+    # MCP 接続のツールの出自（接続の ID と `tools/list` の name。それ以外のツールは None）。
+    # モデルに渡す名前は衝突を避けて元の名前と変わることがあるので（#2596）、Skill の requirement・
+    # 指示の名前との対応と、別のツールの名前の衝突の検出はこちらで行う。
+    mcp_server_id: str | None = None
+    mcp_tool_name: str | None = None
+
+    @property
+    def trusted_read_only(self) -> bool:
+        """読み取り専用（副作用なし）で、その宣言を信頼できるか（#2595・#2632）。
+
+        同じ呼び出しを繰り返しても副作用が無いと Control Plane が判断してよいのは、これが True の
+        ツールだけ（承認の既定の判定・圧縮した結果の読み直しの案内）。管理者の個別の許可や利用者の
+        承認は、繰り返しの安全の根拠にしない。
+        """
+        return (
+            self.permission_level == ToolPermissionLevel.READ
+            and not self.side_effects
+            and self.annotations_trusted
+        )
 
 
 class ToolResult(BaseModel):
@@ -210,11 +229,11 @@ class ToolPolicy(BaseModel):
             return ToolPolicyDecision.ALLOW, "policy"
         if definition.standard_auto_approve:
             return ToolPolicyDecision.ALLOW, "standard"
+        if definition.trusted_read_only:
+            return ToolPolicyDecision.ALLOW, "read_only"
         read_only = (
             definition.permission_level == ToolPermissionLevel.READ and not definition.side_effects
         )
-        if read_only and definition.annotations_trusted:
-            return ToolPolicyDecision.ALLOW, "read_only"
         decision = (
             ToolPolicyDecision.DENY if self.default_mode == "deny" else ToolPolicyDecision.ASK
         )
@@ -242,20 +261,27 @@ def _tool_result(
     metadata["success"] = success
     if error_code:
         metadata["error_code"] = error_code
+    warnings = list(guardrail_warnings or [])
+    # 失敗の文・詳細は呼び先の応答・例外の文を含むので、成功の出力と同じ規則で機微情報を伏せてから
+    # 結果にする（#2611。モデルへの結果・Run の step・イベント・ログはすべてこの結果を使う）。
+    error, details, masked = sanitize_tool_error(error, error_details)
+    if masked:
+        metadata["error_masked"] = masked
+        warnings = sorted({*warnings, *masked})
     return ToolResult(
         name=name,
         success=success,
         output=output,
         error=error,
         error_code=error_code,
-        error_details=error_details or {},
+        error_details=details,
         started_at=started_at,
         completed_at=completed_at,
         duration_ms=max(0, round((perf_counter() - started_monotonic) * 1000)),
         policy_decision=policy_decision,
         approval_required=approval_required,
         approval_id=approval_id,
-        guardrail_warnings=guardrail_warnings or [],
+        guardrail_warnings=warnings,
         audit_metadata=metadata,
     )
 
@@ -445,7 +471,8 @@ class McpRetryKind(StrEnum):
     """MCP の 1 メッセージの再試行の分類（#854）。
 
     - `protocol`: `initialize`・`notifications/initialized`・`tools/list`（状態を変えない手順）
-    - `read_only`: 読み取り専用（`readOnlyHint=true`）のツールの `tools/call`
+    - `read_only`: 読み取り専用（`readOnlyHint=true`。注釈を信頼する接続だけ。#2595）のツールの
+      `tools/call`
     - `unsafe`: それ以外の `tools/call`（書き込み・副作用があり得る）
     """
 
@@ -1000,8 +1027,11 @@ _SENSITIVE_KEY_PATTERN = re.compile(
     r"(password|passwd|secret|token|api[_-]?key|credential|authorization|access[_-]?key)",
     re.IGNORECASE,
 )
+# `api_key=…`・`password: …` に加えて、接頭辞の付いた名前（`access_token`・`client_secret`）と
+# JSON の文（`"access_token": "…"`。呼び先の応答の本文）も対象にする。
 _INLINE_SECRET_PATTERN = re.compile(
-    r"\b(password|passwd|secret|token|api[_-]?key|credential)" r"(\s*[:=]\s*)([^\s,;]+)",
+    r"\b([A-Za-z0-9_-]*?(?:password|passwd|secret|token|api[_-]?key|credential))"
+    r"(\"?\s*[:=]\s*\"?)([^\s,;\"]+)",
     re.IGNORECASE,
 )
 _BEARER_TOKEN_PATTERN = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
@@ -1057,22 +1087,58 @@ def _guard_tool_output(
     return guarded, sorted(warnings)
 
 
-def _sanitize_value(value: Any, warnings: set[str]) -> Any:
+def sanitize_tool_error(
+    error: str | None, details: JsonObject | None
+) -> tuple[str | None, JsonObject, list[str]]:
+    """失敗したツールの文（`error`）と詳細（`error_details`）から機微情報を伏せる（#2611）。
+
+    規則は成功の出力（`_guard_tool_output`）と同じ（機微な名前の項目・文の中の資格情報・Bearer・
+    個人情報）に、文の中の URL の資格情報（`mask_urls_in_text`）を足す。入れ子の詳細（呼び先の
+    応答の本文・JSON-RPC の error）も対象にする。引数の検証の結果（`argument_errors`。値を含まない
+    場所・種類・直し方。#2630）はそのまま残す。返す警告は伏せた種類と項目の名前だけ（元の値は
+    含めない）。
+    """
+    warnings: set[str] = set()
+    clean_error = _sanitize_value(error, warnings, error_text=True) if error else error
+    clean_details: JsonObject = {}
+    for key, item in (details or {}).items():
+        if key == "argument_errors":
+            clean_details[key] = item
+        elif _SENSITIVE_KEY_PATTERN.search(str(key)) and not _is_flag(item):
+            clean_details[key] = "***MASKED***"
+            warnings.add(f"sensitive_field_masked:{key}")
+        else:
+            clean_details[key] = _sanitize_value(item, warnings, error_text=True)
+    return clean_error, clean_details, sorted(warnings)
+
+
+def _is_flag(value: Any) -> bool:
+    """機微な名前の項目でも伏せない値（有無を表す真偽・空の値。値そのものは資格情報ではない）。"""
+    return value is None or isinstance(value, bool)
+
+
+def _sanitize_value(value: Any, warnings: set[str], *, error_text: bool = False) -> Any:
     if isinstance(value, dict):
         sanitized: dict[str, Any] = {}
         for key, item in value.items():
-            if _SENSITIVE_KEY_PATTERN.search(str(key)):
+            if _SENSITIVE_KEY_PATTERN.search(str(key)) and not _is_flag(item):
                 sanitized[key] = "***MASKED***"
                 warnings.add(f"sensitive_field_masked:{key}")
                 continue
-            sanitized[key] = _sanitize_value(item, warnings)
+            sanitized[key] = _sanitize_value(item, warnings, error_text=error_text)
         return sanitized
     if isinstance(value, list):
-        return [_sanitize_value(item, warnings) for item in value]
+        return [_sanitize_value(item, warnings, error_text=error_text) for item in value]
     if isinstance(value, str):
         for code, pattern in _PROMPT_INJECTION_PATTERNS:
             if pattern.search(value):
                 warnings.add(code)
+        if error_text:
+            # 例外の文には接続の URL が入ることがある（userinfo・資格情報らしい query を伏せる）。
+            masked_urls = mask_urls_in_text(value)
+            if masked_urls != value:
+                warnings.add("secret.url_credentials_masked")
+            value = masked_urls
         return _sanitize_sensitive_text(value, warnings)
     return value
 
@@ -1184,14 +1250,47 @@ _FUNCTION_NAME_PATTERN = re.compile(r"[^A-Za-z0-9_-]")
 _FUNCTION_NAME_MAX = 64
 
 
-def mcp_function_name(server_id: str, tool_name: str) -> str:
-    """モデルに渡す function tool の名前（`<接続>__<ツール>`。英数字・`_`・`-`、64 文字以内）。"""
+def mcp_function_name(server_id: str, tool_name: str, *, disambiguate: bool = False) -> str:
+    """モデルに渡す function tool の名前（`<接続>__<ツール>`。英数字・`_`・`-`、64 文字以内）。
+
+    `disambiguate=True` は、文字の置き換えで同じ接続の別のツールと同じ名前になるときの名前
+    （元の名前の hash を後ろに付ける。#2596。付け方は `_mcp_tools_from_result`）。
+    """
     raw = f"{server_id}{MCP_TOOL_SEPARATOR}{tool_name}"
     name = _FUNCTION_NAME_PATTERN.sub("_", raw)
-    if len(name) <= _FUNCTION_NAME_MAX:
+    if len(name) <= _FUNCTION_NAME_MAX and not disambiguate:
         return name
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
     return f"{name[: _FUNCTION_NAME_MAX - 9]}_{digest}"
+
+
+def _mcp_function_names(server_id: str, tool_names: list[str]) -> dict[str, str]:
+    """1 つの接続のツールの名前 → モデルに渡す名前（別のツールが同じ名前にならないように。#2596）。
+
+    文字の置き換え（`read.item` → `read_item`）で別のツールと同じ名前になるものは、元の名前の
+    hash を付けて分ける。置き換えの要らない名前（`read_item`）はそのままにするので、ツール権限・
+    Skill の指示・保存済みの承認の名前は変わらない。一覧の順に依らず同じ結果になる。
+    """
+    plain = {name: mcp_function_name(server_id, name) for name in dict.fromkeys(tool_names)}
+    owners: dict[str, set[str]] = {}
+    for name, function_name in plain.items():
+        owners.setdefault(function_name, set()).add(name)
+    resolved: dict[str, str] = {}
+    for name, function_name in plain.items():
+        changed = function_name != f"{server_id}{MCP_TOOL_SEPARATOR}{name}"
+        if changed and len(owners[function_name]) > 1:
+            resolved[name] = mcp_function_name(server_id, name, disambiguate=True)
+            logger.warning(
+                "mcp_tool_function_name_disambiguated",
+                extra={
+                    "server_id": server_id,
+                    "tool_name": name,
+                    "function_name": resolved[name],
+                },
+            )
+        else:
+            resolved[name] = function_name
+    return resolved
 
 
 def mcp_base_tool_name(function_name: str) -> str:
@@ -1385,12 +1484,14 @@ def _mcp_tools_from_result(server_id: str, response: JsonRpcResponse) -> Externa
             {"server_id": server_id},
         )
     tools: list[ExternalMcpToolInfo] = []
-    for raw_tool in raw_tools:
-        if not isinstance(raw_tool, dict):
-            continue
-        name = raw_tool.get("name")
-        if not isinstance(name, str) or not name:
-            continue
+    valid = [
+        raw_tool
+        for raw_tool in raw_tools
+        if isinstance(raw_tool, dict) and isinstance(raw_tool.get("name"), str) and raw_tool["name"]
+    ]
+    function_names = _mcp_function_names(server_id, [str(raw_tool["name"]) for raw_tool in valid])
+    for raw_tool in valid:
+        name = str(raw_tool["name"])
         description = raw_tool.get("description")
         annotations = raw_tool.get("annotations")
         read_only = isinstance(annotations, dict) and annotations.get("readOnlyHint") is True
@@ -1404,7 +1505,7 @@ def _mcp_tools_from_result(server_id: str, response: JsonRpcResponse) -> Externa
                 output_schema=_mcp_schema_value(raw_tool, "outputSchema", "output_schema"),
                 server_id=server_id,
                 read_only=read_only,
-                function_name=mcp_function_name(server_id, name),
+                function_name=function_names[name],
                 metadata=metadata if isinstance(metadata, dict) else {},
             )
         )
@@ -1556,7 +1657,20 @@ def mcp_tool_definition(config: McpConnectionConfig, tool: ExternalMcpToolInfo) 
         annotations_trusted=config.annotations_trusted(),
         standard_auto_approve=config.source == "builtin"
         and tool.name in STANDARD_AUTO_APPROVED_TOOLS.get(config.server_id, frozenset()),
+        mcp_server_id=config.server_id,
+        mcp_tool_name=tool.name,
     )
+
+
+def retry_after_delivery_allowed(config: McpConnectionConfig, tool: ExternalMcpToolInfo) -> bool:
+    """呼び先に届いた後の失敗（応答が不明）で同じ `tools/call` を送り直してよいか（#2595）。
+
+    読み取り専用の申告（readOnlyHint）を、接続が注釈を信頼するとき（標準の接続か、管理者が信頼を
+    明示した接続）だけ根拠にする。ツール権限の個別の許可や利用者の承認は根拠にしない（実行してよい
+    ことと、同じ操作を 2 回送ってよいことは別）。送信前の失敗と 429 / 503 は、これに依らず
+    再試行する（`_post_mcp_message`）。
+    """
+    return tool.read_only and config.annotations_trusted()
 
 
 def mcp_tool_handler(config: McpConnectionConfig, tool: ExternalMcpToolInfo) -> ToolHandler:
@@ -1568,9 +1682,14 @@ def mcp_tool_handler(config: McpConnectionConfig, tool: ExternalMcpToolInfo) -> 
 
     def handle(arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
         client = McpConnectionClient(config, context=context)
-        # 読み取り専用（readOnlyHint）のツールだけ、送信後の失敗（502 / 504）も再試行する（#854）。
+        # 送信後の失敗（502 / 504・通信の途中の切断）も再試行するのは、読み取り専用
+        # （readOnlyHint）を信頼できる接続のツールだけ（#854・#2595）。注釈を信頼しない接続の
+        # 申告だけでは再送しない（承認の既定の判定 `ToolPolicy.explain` と同じ信頼の境界）。
         result = client.call_tool(
-            tool.name, arguments, idempotent=tool.read_only, trace_id=context.trace_id
+            tool.name,
+            arguments,
+            idempotent=retry_after_delivery_allowed(config, tool),
+            trace_id=context.trace_id,
         )
         if follow_up_tool is None:
             return result
