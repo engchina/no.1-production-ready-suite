@@ -1647,6 +1647,7 @@ def _grounded_spans(
     if available - {d["label"] for s in spans for d in definition_ranges(s["text"], labels)}:
         # 本文予算で落ちた定義は、追加検索せず取得済み原文から先に回復する。
         spans = evidence_spans(question, records, anchors=anchors, definitions_only=True, scope_records=children, **budget_option)
+    spans = form_field_kinds.with_field_kind_evidence(form_field_kinds.question_field_kinds(question, context), spans)
     return tag_spans(question, spans)
 
 

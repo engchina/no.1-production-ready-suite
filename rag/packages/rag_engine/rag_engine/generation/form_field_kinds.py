@@ -4,7 +4,7 @@
 button / unknown）を付け、chunk の metadata（``image_evidence[].visual_structure.form_fields``）に残す。
 回答では、質問に名前が出た項目だけを根拠から拾い、
 
-- 項目の種類を根拠の注記として生成の材料に渡す（どの根拠の画面の図か、表示の語は言語資源）。
+- 項目名と種類を引用できる画像由来の根拠にし、対応する根拠の注記を生成の材料へ渡す（表示の語は言語資源）。
 - 業務ガイドの分からなかった条件（backend が ``evidence_conditions`` として渡す）のうち、選択肢が項目の種類に
   対応する条件（``condition_kind_options``）を、拾った種類が 1 つに決まるときだけ既知にする。種類が割れる・
   拾えないときは決めない（今までどおり）。
@@ -18,6 +18,7 @@ button / unknown）を付け、chunk の metadata（``image_evidence[].visual_st
 
 from __future__ import annotations
 
+import hashlib
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -46,6 +47,7 @@ class FieldKindObservation:
     source_id: str
     name: str
     kind: str
+    page: int | None = None
 
 
 @dataclass(frozen=True)
@@ -64,12 +66,12 @@ def normalized_name(text: str) -> str:
     return "".join(char for char in folded if unicodedata.category(char)[0] in {"L", "N"})
 
 
-def record_form_fields(record: Any) -> list[tuple[str, str]]:
+def _record_form_fields_with_page(record: Any) -> list[tuple[str, str, int | None]]:
     """record の metadata の画面の図の項目（名前, 種類）。種類が unknown の項目と名前の無い項目は除く。"""
     metadata = getattr(record, "metadata", None)
     if not isinstance(metadata, dict):
         return []
-    fields: list[tuple[str, str]] = []
+    fields: list[tuple[str, str, int | None]] = []
     for image in _metadata_image_evidence(metadata):
         structure = image.get("visual_structure")
         items = structure.get("form_fields") if isinstance(structure, dict) else None
@@ -81,8 +83,18 @@ def record_form_fields(record: Any) -> list[tuple[str, str]]:
             name = str(item.get("name") or "").strip()
             kind = form_field_kind(item.get("kind"))
             if name and kind != "unknown":
-                fields.append((name, kind))
+                page = image.get("page")
+                if not isinstance(page, int) or isinstance(page, bool) or page <= 0:
+                    start = getattr(record, "page", None)
+                    end = getattr(record, "page_end", None) or start
+                    page = start if isinstance(start, int) and not isinstance(start, bool) and start > 0 and start == end else None
+                fields.append((name, kind, page))
     return fields
+
+
+def record_form_fields(record: Any) -> list[tuple[str, str]]:
+    """構造化解析の項目名と種類（所在は内部の観測へ引き継ぐ）。"""
+    return [(name, kind) for name, kind, _page in _record_form_fields_with_page(record)]
 
 
 def _source_id(record: Any) -> str:
@@ -103,17 +115,17 @@ def question_field_kinds(question: str, context: Any) -> list[FieldKindObservati
         if tree
         else [(record, [record]) for record in getattr(context, "records", ()) or ()]
     )
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, int | None]] = set()
     observations: list[FieldKindObservation] = []
     for owner, members in groups:
         source_id = _source_id(owner)
         for member in members:
-            for name, kind in record_form_fields(member):
+            for name, kind, page in _record_form_fields_with_page(member):
                 key = normalized_name(name)
-                if len(key) < MIN_FIELD_NAME_CHARS or key not in target or (source_id, key, kind) in seen:
+                if len(key) < MIN_FIELD_NAME_CHARS or key not in target or (source_id, key, kind, page) in seen:
                     continue
-                seen.add((source_id, key, kind))
-                observations.append(FieldKindObservation(source_id, name, kind))
+                seen.add((source_id, key, kind, page))
+                observations.append(FieldKindObservation(source_id, name, kind, page))
     return observations
 
 
@@ -199,6 +211,57 @@ def with_resolved_plan(runtime_knowledge: Any, resolved: Sequence[ResolvedCondit
     )
 
 
+def with_field_kind_evidence(observations: Sequence[FieldKindObservation], spans: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """取得済みの画像の構造化項目を、同じ出典・頁の独立した根拠にする。"""
+    result = [dict(span) for span in spans]
+    names = content_labels()
+    seen: set[tuple[str, str, str, int | None]] = set()
+    for item in observations:
+        key = (item.source_id, item.name, item.kind, item.page)
+        if key in seen:
+            continue
+        candidates = [span for span in spans if item.source_id in (span.get("source_id"), *(span.get("source_aliases") or ()))]
+        if item.page is not None:
+            candidates = [span for span in candidates if span.get("page") == item.page]
+        # 図の頁が分からない複数頁の parent から所在を補わない。
+        pages = {span.get("page") for span in candidates}
+        word = names.form_field_kind(item.kind)
+        if not candidates or len(pages) != 1 or not next(iter(pages)) or not word:
+            continue
+        source = next((span for span in candidates if normalized_name(item.name) in normalized_name(span.get("text", ""))), candidates[0])
+        text = f"{item.name} = {word}"
+        identity = hashlib.sha256("\0".join(map(str, key)).encode()).hexdigest()[:20]
+        evidence = {
+            key: source[key]
+            for key in (
+                "source_id",
+                "source",
+                "document_scope",
+                "business_scope",
+                "page",
+                "page_end",
+                "location",
+                "section_path",
+                "section_path_sources",
+                "source_aliases",
+                "value_context",
+            )
+            if key in source
+        }
+        evidence.update(
+            evidence_id=f"Efield{identity}",
+            text=text,
+            origin="image_extraction",
+            field_kind={"source_id": item.source_id, "name": item.name, "kind": item.kind, "page": item.page},
+            excerpt_only=False,
+        )
+        result.append(evidence)
+        seen.add(key)
+        if len(seen) >= MAX_NOTE_OBSERVATIONS:
+            break
+    return result
+
+
 def prompt_note(
     observations: Sequence[FieldKindObservation],
     resolved: Sequence[ResolvedCondition],
@@ -211,10 +274,20 @@ def prompt_note(
         for source_id in (span.get("source_id"), *(span.get("source_aliases") or ())):
             if source_id and span_label:
                 labels.setdefault(str(source_id), span_label)
+    field_labels = {
+        (
+            str(field.get("source_id") or span.get("source_id") or ""),
+            str(field.get("name") or ""),
+            str(field.get("kind") or ""),
+            field.get("page"),
+        ): str(span.get("label") or "")
+        for span in spans
+        if isinstance(field := span.get("field_kind"), Mapping)
+    }
     names = content_labels()
     lines = []
     for item in observations:
-        label = labels.get(item.source_id)
+        label = field_labels.get((item.source_id, item.name, item.kind, item.page)) or labels.get(item.source_id)
         word = names.form_field_kind(item.kind)
         if label and word:
             lines.append(f"- {label}: {item.name} = {word}")
@@ -236,7 +309,10 @@ def trace_payload(
     """回答の記録に残す観測と、決まった条件と、切り替えた業務ガイドの手順の計画（手順の id と必須か）。"""
     plan = resolved_plan(resolved, plans)
     return {
-        "observations": [{"source_id": item.source_id, "name": item.name, "kind": item.kind} for item in observations],
+        "observations": [
+            {"source_id": item.source_id, "name": item.name, "kind": item.kind, **({"page": item.page} if item.page is not None else {})}
+            for item in observations
+        ],
         "resolved_conditions": [
             {"id": item.condition_id, "label": item.label, "value": item.value, "kind": item.kind} for item in resolved
         ],

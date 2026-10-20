@@ -312,3 +312,108 @@ class ResolvedPlanTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CitableFieldKindTests(unittest.TestCase):
+    def _span(self, page=3, text="別の図の説明"):
+        return {
+            "source_id": "parent",
+            "evidence_id": "original",
+            "text": text,
+            "source": "操作.pdf",
+            "page": page,
+            "origin": "document_text",
+        }
+
+    def test_structured_kind_is_citable_without_borrowing_unrelated_text(self):
+        from rag_engine.generation import grounded
+        from rag_engine.models.llm import GroundedDraft, GroundedItem
+
+        observed = [form_field_kinds.FieldKindObservation("parent", "項目A", "select")]
+        original = self._span()
+        spans = grounded.tag_spans("項目Aの種類", form_field_kinds.with_field_kind_evidence(observed, [original]))
+        evidence = spans[-1]
+        self.assertEqual(evidence["text"], "項目A = 選択")
+        self.assertEqual(evidence["origin"], "image_extraction")
+        self.assertEqual(evidence["page"], 3)
+        self.assertIn("image_generated", evidence["tags"])
+        self.assertFalse(evidence["pinned"])
+        self.assertEqual(original["text"], "別の図の説明")
+        draft = GroundedDraft(
+            summary="",
+            confidence="medium",
+            items=[GroundedItem(kind="rule", text="項目Aは選択項目です。", quote=evidence["text"], evidence_id=evidence["label"])],
+        )
+        checked, dropped = grounded.verify("項目Aの種類", draft, spans)
+        self.assertFalse(dropped)
+        self.assertTrue(checked[0].confirmed)
+
+    def test_same_parent_fields_point_to_their_own_evidence(self):
+        from rag_engine.generation import grounded
+
+        observed = [
+            form_field_kinds.FieldKindObservation("parent", "項目A", "select"),
+            form_field_kinds.FieldKindObservation("parent", "項目B", "button"),
+        ]
+        spans = grounded.tag_spans("項目Aと項目B", form_field_kinds.with_field_kind_evidence(observed, [self._span()]))
+        note = form_field_kinds.prompt_note(observed, [], spans)
+        self.assertIn("- E2: 項目A = 選択", note)
+        self.assertIn("- E3: 項目B = ボタン", note)
+        self.assertNotIn("- E1:", note)
+
+    def test_missing_or_ambiguous_page_does_not_fabricate_a_citation(self):
+        observed = [form_field_kinds.FieldKindObservation("parent", "項目A", "select")]
+        for spans in [[], [self._span(page=None)], [self._span(3), self._span(4)]]:
+            self.assertEqual(form_field_kinds.with_field_kind_evidence(observed, spans), spans)
+
+    def test_conflicting_kinds_remain_distinct_and_are_not_resolved(self):
+        observed = [form_field_kinds.FieldKindObservation("parent", "項目A", kind) for kind in ["select", "text", "select"]]
+        result = form_field_kinds.with_field_kind_evidence(observed, [self._span()])
+        self.assertEqual(len(result), 3)
+        self.assertNotEqual(result[1]["evidence_id"], result[2]["evidence_id"])
+        condition = ("type", "項目Aの種類", (("選択", ()), ("自由入力", ())))
+        self.assertEqual(form_field_kinds.resolve_conditions(observed, [condition]), [])
+
+    def test_generation_material_keeps_structured_kind_when_body_has_no_kind(self):
+        from dataclasses import replace
+
+        from test_grounded_answer import context, record
+
+        from rag_engine.generation.answering import _grounded_spans
+
+        source = record(0, "画面の説明だけ", "設定画面", page=3)
+        source = replace(source, metadata=_chunk("parent", [{"name": "項目A", "kind": "select"}]).metadata)
+        spans = _grounded_spans("項目Aの種類を確認する", context(source), [], None)
+        evidence = next(span for span in spans if span.get("field_kind"))
+        self.assertEqual(evidence["text"], "項目A = 選択")
+        self.assertEqual(evidence["page"], 3)
+        self.assertEqual(evidence["source"], source.source)
+
+    def test_alias_source_note_still_points_to_the_structured_field(self):
+        from rag_engine.generation import grounded
+
+        original = {**self._span(), "source_aliases": ["alias"]}
+        observed = [form_field_kinds.FieldKindObservation("alias", "項目A", "select")]
+        spans = grounded.tag_spans("項目A", form_field_kinds.with_field_kind_evidence(observed, [original]))
+        self.assertIn("- E2: 項目A = 選択", form_field_kinds.prompt_note(observed, [], spans))
+
+    def test_image_page_selects_its_own_page_in_a_multi_page_parent(self):
+        source = _chunk("parent", [{"name": "項目A", "kind": "select"}])
+        source.page = 3
+        source.page_end = 4
+        source.metadata["image_evidence"][0]["page"] = 4
+        observed = form_field_kinds.question_field_kinds("項目Aの種類", _context(source))
+        self.assertEqual(observed[0].page, 4)
+        result = form_field_kinds.with_field_kind_evidence(observed, [self._span(3), self._span(4)])
+        self.assertEqual(result[-1]["page"], 4)
+        self.assertEqual(result[-1]["text"], "項目A = 選択")
+        self.assertEqual(form_field_kinds.trace_payload(observed, [])["observations"][0]["page"], 4)
+
+    def test_multi_page_record_does_not_infer_an_image_page_from_parent_start(self):
+        source = _chunk("parent", [{"name": "項目A", "kind": "select"}])
+        source.page = 3
+        source.page_end = 4
+        observed = form_field_kinds.question_field_kinds("項目Aの種類", _context(source))
+        self.assertIsNone(observed[0].page)
+        spans = [self._span(3), self._span(4)]
+        self.assertEqual(form_field_kinds.with_field_kind_evidence(observed, spans), spans)
