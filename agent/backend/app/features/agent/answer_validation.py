@@ -23,6 +23,8 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
   いない要求を示していない）は本文を残して不足を示す。warning は出さない。根拠で否定された段落
   （裏付けが無い・矛盾）が無いのに、出典を照合できない・確かめが終わらない段落を外すと本文が空に
   なるときは、検証が確かめきれなかったものとして本文を残し、確かめきれなかった点を示す（#1391）。
+  番号つきの手順の段落を外したら、同じ手順のそれより後の段落も、確かめられない前提に続く操作として
+  外す（実行できる手順として単独で残さない。#2604）。
 - 検証そのもの（呼び出し・接続・応答）が失敗したら `unvalidated` にし、回答は消さずに
   「この回答は検証できませんでした。」を足す（基盤の障害で内容を落とさない）。
 - RAG の根拠を使っていない Run は、RAG の根拠のツールを持つ Agent なら `unvalidated`
@@ -161,6 +163,8 @@ _CLAIM_LABELS = {
     "citation_error": "出典を確かめられない",
     "unassessed": "確かめが終わっていない",
 }
+# 外した段落に続く番号つきの手順の段落の、節の項目の理由（#2604。`dependent_steps`）。
+DEPENDENT_STEP_LABEL = "確かめられない手順に続く手順"
 # 根拠で否定した判定（根拠に無い・根拠と矛盾）。出典を照合できない（`citation_error`）・
 # 確かめが終わらない（`unassessed`）は、根拠が主張を否定したのではなく、検証が確かめ
 # きれなかったもの（#1391）。
@@ -857,8 +861,13 @@ _DANGLING_CONNECTIVE = re.compile(
 _NUMBERED_HEADING = re.compile(r"(?:[0-9０-９]{1,3}[.)．）]|[（(][0-9０-９]{1,3}[）)])\s*\S")
 
 
-def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
+def withhold_paragraphs(
+    answer: str, quotes: set[str], positions: frozenset[tuple[int, int]] = frozenset()
+) -> str | None:
     """回答から `quotes` の段落を外した本文（位置を決められない段落があれば None）。
+
+    `positions` は、原文ではなく位置（行の番号・行の中の開始の位置）で外す段落（`dependent_steps`。
+    同じ原文の段落が手順の外にあっても、手順の中のものだけを外す。#2604）。
 
     段落の位置は RAG と同じ規則で分けて決める（文字列の置換では、同じ文を含む別の段落まで
     削ってしまうため）。段落が無くなった行は消し、続く空行は 1 つにする。段落を外した行に見出し・
@@ -889,9 +898,13 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
             if entry is not None and not _NUMBERED_HEADING.match(entry[0].strip()):
                 kept[heading] = None
 
-    for line in answer.split("\n"):
+    for index, line in enumerate(answer.split("\n")):
         spans = passage_spans(line)
-        withheld = [span for span in spans if span[2] in quotes]
+
+        def removed(span: tuple[int, int, str], index: int = index) -> bool:
+            return span[2] in quotes or (index, span[0]) in positions
+
+        withheld = [span for span in spans if removed(span)]
         if not withheld and len(spans) == 1 and (is_heading(spans[0][2]) or spans[0][2] in listed):
             close_section()
             heading, section_content, section_removed = len(kept), False, False
@@ -900,7 +913,7 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
         # 行の中の消す範囲（外す段落と、外した段落の直後の段落の先頭の接続の語）。
         cuts: list[tuple[int, int]] = []
         for start, end, text in spans:
-            if text in quotes:
+            if removed((start, end, text)):
                 cuts.append((start, end))
                 dangling = True
             elif not structure(text):
@@ -928,6 +941,132 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
     if not any(content for _line, _heading, content in lines):
         return ""
     return re.sub(r"\n{3,}", "\n\n", "\n".join(line for line, _h, _c in lines)).strip()
+
+
+# 番号つきの一覧の項目の行（「1. 」「2）」「（3）」「④」。字下げ・強調の印を許す。#2604）。
+# 「1.5 倍」のような数は項目にしないため、半角の「.」の後は空白を求める。
+_STEP_ITEM = re.compile(
+    r"(?P<indent>[ \t\u3000]*)(?:\*\*|__)?"
+    r"(?:(?P<dot>[0-9０-９]{1,3})(?:\.\s|[)．）]\s*)|[（(](?P<paren>[0-9０-９]{1,3})[）)]\s*"
+    r"|(?P<circled>[①-⑳])\s*)\S"
+)
+# 番号つきの一覧を切る行（Markdown の見出し）。
+_SECTION_BREAK = re.compile(r"\s*#{1,6}\s")
+
+
+@dataclass
+class _StepRun:
+    """番号つきの一覧の 1 つの並び（外側の一覧。字下げの深い番号は項目の中の行）。"""
+
+    indent: int
+    style: str
+    last: int
+    start: int
+    # 最後の項目の行と、その項目が見出しの行（下の行に中身がある形）か。
+    last_item: int
+    heading_item: bool
+
+
+def _step_item(line: str) -> tuple[int, str, int] | None:
+    """番号つきの項目の行なら（字下げの幅・番号の種類・番号）。"""
+    match = _STEP_ITEM.match(line)
+    if not match:
+        return None
+    indent = len(match.group("indent").expandtabs(4))
+    if match.group("circled"):
+        return indent, "circled", ord(match.group("circled")) - ord("①") + 1
+    style = "dot" if match.group("dot") else "paren"
+    return indent, style, int(match.group("dot") or match.group("paren"))
+
+
+def _step_ranges(lines: list[str]) -> list[tuple[int, int]]:
+    """回答の行のうち、外側の番号つきの一覧の範囲（[開始の行, 終わりの行)）。
+
+    番号が 1 つずつ増える（同じ番号の繰り返しも許す）同じ字下げ・同じ種類の項目を 1 つの並びにし、
+    項目と項目の間の行は前の項目の中身にする。最後の項目の中身は、字下げした行と、空行を挟まずに
+    続く行（項目が見出しの行なら、次の見出しの行まで）。Markdown の見出しで並びを切る。
+    """
+    ranges: list[tuple[int, int]] = []
+    run: _StepRun | None = None
+
+    def close(at: int) -> None:
+        nonlocal run
+        if run is None:
+            return
+        end = run.last_item + 1
+        blank = False
+        while end < at:
+            line = lines[end]
+            if not line.strip():
+                blank = True
+            elif run.heading_item:
+                spans = passage_spans(line)
+                if len(spans) == 1 and is_heading(spans[0][2]):
+                    break
+            elif blank and len(line) - len(line.lstrip()) <= run.indent:
+                break
+            end += 1
+        while end > run.start and not lines[end - 1].strip():
+            end -= 1
+        ranges.append((run.start, end))
+        run = None
+
+    def heading_item(line: str) -> bool:
+        spans = passage_spans(line)
+        return len(spans) == 1 and (is_heading(spans[0][2]) or spans[0][2] in listed)
+
+    listed = list_heading_lines("\n".join(lines))
+    for index, line in enumerate(lines):
+        if _SECTION_BREAK.match(line):
+            close(index)
+            continue
+        item = _step_item(line)
+        if item is None:
+            continue
+        indent, style, number = item
+        if run is not None and indent > run.indent:
+            continue
+        if (
+            run is not None
+            and indent == run.indent
+            and style == run.style
+            and number in {run.last, run.last + 1}
+        ):
+            run.last, run.last_item, run.heading_item = number, index, heading_item(line)
+            continue
+        close(index)
+        run = _StepRun(indent, style, number, index, index, heading_item(line))
+    close(len(lines))
+    return ranges
+
+
+def dependent_steps(answer: str, quotes: set[str]) -> list[tuple[int, int, str]]:
+    """外す段落（`quotes`）に続く、番号つきの手順の段落（行の番号・行の中の開始の位置・原文。#2604）。
+
+    番号つきの一覧は順序のある手順として扱い、前の項目（手順の前提の確認など）を外したら、同じ一覧の
+    それより後の段落（後の項目と、その項目の下の行）は、確かめられない前提に続く操作になるので、実行
+    できる手順として単独で残さない。後の項目の番号の行（「2. **訂正**」のような見出しの形でも）も
+    外す。
+    一覧の外の段落（前の説明・一覧の後の段落）、一覧の中の外した段落より前の段落、主張ではない段落
+    （出典の行・利用者への質問・不足の文など。`non_claim_passages`）は残す。番号の無い箇条書きは
+    順序を表さないので対象にしない。`quotes` に入っている段落は返さない。
+    """
+    lines = answer.split("\n")
+    kinds = non_claim_passages(answer)
+    structure = table_header_lines(answer) | list_heading_lines(answer)
+    dependents: list[tuple[int, int, str]] = []
+    for start, end in _step_ranges(lines):
+        withheld = False
+        for index in range(start, end):
+            item = _step_item(lines[index]) is not None
+            for begin, _end, text in passage_spans(lines[index]):
+                if text in quotes:
+                    withheld = True
+                elif withheld and (
+                    item or not (kinds.get(text) or is_structure(text) or text.strip() in structure)
+                ):
+                    dependents.append((index, begin, text))
+    return dependents
 
 
 def without_lookup_notes(answer: str) -> str:
@@ -1016,6 +1155,26 @@ def mark_non_claims(answer: str, result: JsonObject) -> JsonObject:
     return {**result, "claims": claims}
 
 
+def _dependent_lines(answer: str, texts: list[str]) -> list[str]:
+    """外す段落に続く手順のうち、主張の段落の節の項目（見出し・出典・表の形などは本文から外すだけ）。"""
+    if not texts:
+        return []
+    kinds = non_claim_passages(answer)
+    headers = table_header_lines(answer)
+    listed = list_heading_lines(answer)
+    quotes = [
+        text
+        for text in dict.fromkeys(texts)
+        if not kinds.get(text) and not is_structure(text) and text not in headers | listed
+    ]
+    return [f"- {DEPENDENT_STEP_LABEL}: 「{_short(text, _MAX_QUOTE_CHARS)}」" for text in quotes]
+
+
+def _dependent_count(lines: list[str]) -> JsonObject:
+    """記録の、外す段落に続く手順の段落の数（無ければ項目を足さない）。"""
+    return {"dependent_steps": len(lines)} if lines else {}
+
+
 def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     """判定（判定として使える結果）から、利用者に見せる回答と、外した内容の記録を返す。
 
@@ -1033,6 +1192,9 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     （`unassessed`）段落を外すと本文が空になるときは、本文を残して確かめきれなかった点を示す
     （記録の `withheld.unverified`。#1391）。否定の判定は、RAG が出典を照合できずに判定を
     変えた段落の元の判定（`audit_status`）も含めて数える（`is_refuted_claim`。#2622）。
+    外した段落が番号つきの手順の中にあれば、同じ手順のそれより後の段落も、確かめられない前提に続く
+    操作として外し、節に「確かめられない手順に続く手順」として示す（`dependent_steps`。#2604。本文を
+    残すときも示す）。記録の `dependent_steps` はその段落の数（無ければ項目を足さない）。
     """
     errors = error_findings(result)
     unchanged = {"claims": 0, "findings": 0, "all": False}
@@ -1057,13 +1219,19 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         return answer, unchanged
     guide_errors = any(item.get("check") in WITHHOLDING_CHECKS for item in errors)
     body: str | None
+    # 外す段落に続く番号つきの手順（#2604）と、その中で節に書く段落（主張の段落）。
+    dependents: list[tuple[int, int, str]] = []
     if result.get("status") == "no_evidence" or guide_errors:
         body = None
     elif blocking:
         quotes = {str(item.get("answer_quote") or "") for item in blocking}
-        body = withhold_paragraphs(answer, quotes)
+        dependents = dependent_steps(answer, quotes)
+        body = withhold_paragraphs(
+            answer, quotes, frozenset((index, begin) for index, begin, _text in dependents)
+        )
     else:
         body = answer.rstrip()
+    dependent_lines = _dependent_lines(answer, [text for _i, _b, text in dependents])
     if (
         body == ""
         and blocking
@@ -1074,16 +1242,18 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         # 根拠で否定された段落が無いのに、出典を照合できない（`citation_error`）・確かめが終わらない
         # （`unassessed`）段落を外すと本文が空になる: 検証が確かめきれなかったので、本文は消さずに
         # 確かめきれなかった点を示す（検証の失敗で内容を落とさないのと同じ。#1391）。
-        lines = [UNVERIFIED_KEPT_INTRO, *_notice_lines(result, blocking)]
+        # 確かめきれなかった前提に続く手順も、本文に残したうえで、前提に続く手順だと示す（#2604）。
+        lines = [UNVERIFIED_KEPT_INTRO, *_notice_lines(result, blocking), *dependent_lines]
         withheld = {
             "claims": 0,
             "findings": 0,
             "all": False,
             "unverified": len(blocking),
+            **_dependent_count(dependent_lines),
             "listed": _listed(lines),
         }
         return f"{answer.rstrip()}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), withheld
-    lines = _notice_lines(result, blocking)
+    lines = [*_notice_lines(result, blocking), *dependent_lines]
     if blocking or (not body and not guide_errors):
         lines.insert(0, WITHHELD_INTRO)
     text = body or (GUIDE_WITHHELD if guide_errors else NOTHING_CONFIRMED)
@@ -1091,6 +1261,7 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         "claims": len(blocking),
         "findings": len(errors),
         "all": not body,
+        **_dependent_count(dependent_lines),
         "listed": _listed(lines),
     }
     return f"{text}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), withheld

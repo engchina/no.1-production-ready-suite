@@ -357,7 +357,8 @@ _EVIDENCE = {
 # 18: rag_lookup_guides の手順の中身（検索の手がかり・参照の資料と頁など）・分岐・完了の条件
 # （#2396）。
 # 19: rag_validate_answer の claims に audit_status・reference_check を足した（#2622）。
-RAG_OUTPUT_SCHEMA_VERSION = 19
+# 20: rag_validate_answer の claims に classification_check を足した（#2625）。
+RAG_OUTPUT_SCHEMA_VERSION = 20
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {

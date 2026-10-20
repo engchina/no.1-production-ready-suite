@@ -333,7 +333,14 @@ def _heading_title(text: str) -> str | None:
         match = pattern.fullmatch(value)
         if match:
             title = match.group("title").strip().strip("*").strip()
-            if title and not _is_sentence(title) and not _OPERATION.search(title):
+            # 語に数量（「最長 90 日」）を含む行は、見出しの記法でも主張（#2625。RAG の
+            # `operation_audit.is_value_heading` と同じ規則）。
+            if (
+                title
+                and not _is_sentence(title)
+                and not _OPERATION.search(title)
+                and not _HEADING_QUANTITY.search(title)
+            ):
                 return title
             return None
     label = _strip_bullet(value)

@@ -18,6 +18,8 @@ from rag_parser_core.language.text import alternation
 
 from rag_engine.evaluation.answer_eval import (
     _CITED_CHUNK_ID,
+    CLASSIFICATION_NON_CLAIM_MISMATCH,
+    CLASSIFICATION_REAUDITED,
     MAX_EVALUATION_INPUT_BYTES,
     ClaimCheck,
     EvaluationContractError,
@@ -50,7 +52,9 @@ from rag_engine.generation.operation_audit import is_non_claim_passage, list_hea
 #     計算を裏付けられるようにした（質問は資料の内容の裏付けには使わない）。根拠の予算を設定にした。
 # 11: 根拠の ID を結び付けられない contradicted を citation_error に変えずに残し、どの判定にも監査モデルが返した
 #     判定（audit_status）と根拠の ID の検査の結果（reference_check）を残すようにした（指示は変えていない。#2622）。
-VALIDATION_RUBRIC_VERSION = 11
+# 12: モデルが not_a_claim とした本文の段落（見出し・出典の行と認めないもの）を、その段落だけで 1 回監査し直し、
+#     分類の照合の結果（classification_check）を残すようにした（最初の監査の指示は変えていない。#2625）。
+VALIDATION_RUBRIC_VERSION = 12
 
 # 質問の文（資料ではない根拠）の id と出典の名前。資料の chunk の id とは重ならない。
 QUESTION_ID = "question:1"
@@ -360,6 +364,73 @@ def _recheck_unreferenced_passages(
     return result, [passage["id"] for passage in targets if passage["id"] in settled]
 
 
+# 監査し直しで受け付ける、内容の判定（not_a_claim・unassessed は内容を確かめていない）。
+REAUDIT_STATUSES = ("supported", "contradicted", "unsupported", "data_confirmation", "citation_error")
+# 監査し直しの差し戻しの文（入力の validation_feedback。違反と直し方だけを書く）。
+REAUDIT_FEEDBACK = (
+    "answer_passages の段落は、見出し・出典の行ではない本文の段落です。not_a_claim を使わず、evidence_items に"
+    "照らして " + " / ".join(REAUDIT_STATUSES) + " のいずれかで判定してください。"
+)
+
+
+def _reaudit_misclassified_passages(
+    claims: list[ClaimCheck],
+    fixed: Mapping[str, Any],
+    passages: Sequence[Mapping[str, str]],
+    evidence: Sequence[Mapping[str, Any]],
+    catalog: Mapping[str, Mapping[str, Any]],
+    settings: Any,
+    provider_id: str | None,
+) -> tuple[list[ClaimCheck], list[str]]:
+    """モデルが not_a_claim とした本文の段落を、その段落だけで 1 回監査し直す (#2625)。
+
+    監査に渡す段落は、見出し・出典の行・表の形・質問を決定的に除いた本文の段落なので、モデルが not_a_claim と
+    返し、コードも見出し・出典の行と認めない段落（`_bind_claims` の non_claim_mismatch。判定は unassessed）は
+    内容を確かめていない。そうした段落だけを、同じ根拠と差し戻しの文（REAUDIT_FEEDBACK）でモデルに 1 回だけ渡す
+    （再試行はしない。段落を絞るので入力は最初の監査の予算に収まる）。段落の判定がすべて内容の判定
+    （REAUDIT_STATUSES）になった段落だけ、食い違った判定を監査し直した判定（classification_check=reaudited）に
+    替える。否定の判定も採る（not_a_claim をそのまま信じて本文を監査から外すことはしない）。決まらない・呼び出しが
+    失敗したときは unassessed（non_claim_mismatch）のまま。戻り値は判定と、監査し直して判定を替えた段落の ID。
+    """
+    target_ids = {claim.answer_passage_id for claim in claims if claim.classification_check == CLASSIFICATION_NON_CLAIM_MISMATCH}
+    targets = [passage for passage in passages if passage["id"] in target_ids]
+    if not targets:
+        return claims, []
+    inputs = {**fixed, "answer_passages": targets, "evidence_items": list(evidence), "validation_feedback": REAUDIT_FEEDBACK}
+    try:
+        output = _parse_checked(
+            VALIDATION_SYSTEM_PROMPT,
+            inputs,
+            settings,
+            ClaimAuditOutput,
+            provider_id,
+            _passage_check(targets, str(fixed.get("answer_text") or "")),
+            max_input_bytes=_max_input_bytes(settings),
+            attempts=1,
+        )
+    except Exception:
+        # 監査し直しは最初の判定を補うだけなので、失敗しても最初の判定（unassessed）を返す。
+        logger.warning("answer validation reaudit failed", exc_info=True)
+        return claims, []
+    rebound = _bind_claims(output, catalog, targets, passage_citations=True)
+    replacements: dict[str, list[ClaimCheck]] = {}
+    for claim in rebound.claim_checks:
+        if claim.answer_passage_id in target_ids:
+            replacements.setdefault(claim.answer_passage_id, []).append(
+                claim.model_copy(update={"classification_check": CLASSIFICATION_REAUDITED})
+            )
+    settled = {passage_id for passage_id, group in replacements.items() if all(claim.status in REAUDIT_STATUSES for claim in group)}
+    result: list[ClaimCheck] = []
+    for claim in claims:
+        passage_id = claim.answer_passage_id
+        if passage_id in settled and claim.classification_check == CLASSIFICATION_NON_CLAIM_MISMATCH:
+            # 食い違った判定を監査し直した判定に替える（同じ段落のほかの判定は残す）。
+            result.extend(replacements.pop(passage_id, []))
+        else:
+            result.append(claim)
+    return result, [passage["id"] for passage in targets if passage["id"] in settled]
+
+
 def premise_items(premises: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """利用者が確認で答えた前提（``{question, answer}``）を、根拠と並べて渡す項目にする（#1898）。
 
@@ -437,6 +508,8 @@ def validate_answer_claims(
     ``section_path``・``sheet_name``・``row_start``・``row_end``・``cell_range`` を足したもの（#1450）。
     戻り値は status（completed / no_claims / input_too_large）・claim_checks・件数・切り詰め。
     見出し・出典の行・表の区切りと見出しの行・利用者への質問の段落は監査せず、claim_checks にも含めない（#1306 / #1317）。
+    監査に渡した段落をモデルが not_a_claim と返したら、その段落だけで 1 回監査し直す（``reaudited_passage_ids``。
+    決まらなければ unassessed のままで、判定の classification_check が non_claim_mismatch。#2625）。
 
     ``audited`` は RAG の回答の監査を通った説明の本文（`audited_line_key`）→ 根拠の chunk の id（`audited_answer_items`。
     呼び出し側が今の権限と版で読み直して本文が変わっていないものだけ。#1527）。行の本文が同じ段落は、根拠が
@@ -505,6 +578,7 @@ def validate_answer_claims(
         return {**base, "status": "input_too_large"}
     bound_claims: list[ClaimCheck] = []
     rechecked: list[str] = []
+    reaudited: list[str] = []
     if remaining:
         inputs = {**fixed, "evidence_items": evidence}
         try:
@@ -522,10 +596,14 @@ def validate_answer_claims(
         catalog = {item["evidence_id"]: item for item in evidence}
         # 回答の段落が書いた根拠の ID でも結び付ける（モデルが ID を写し損ねても出典の誤りにしない。#1404）。
         bound = _bind_claims(output, catalog, remaining, passage_citations=True)
+        # モデルが not_a_claim とした本文の段落は、その段落だけで監査し直す（#2625）。
+        reaudited_claims, reaudited = _reaudit_misclassified_passages(
+            bound.claim_checks, fixed, remaining, evidence, catalog, settings, provider_id
+        )
         # ID を書かない段落の出典が決まらなければ、回答の他の段落が引いた根拠で確かめ直す（#1412）。再利用した段落の
         # 根拠も「他の段落が引いた根拠」に入れる。
         rebound, rechecked = _recheck_unreferenced_passages(
-            [*bound.claim_checks, *reused], fixed, remaining, evidence, catalog, settings, provider_id
+            [*reaudited_claims, *reused], fixed, remaining, evidence, catalog, settings, provider_id
         )
         bound_claims = [_prefer_document_source(claim, catalog) for claim in rebound if claim.answer_passage_id not in settled]
     checked = {claim.answer_passage_id for claim in bound_claims} | set(settled)
@@ -556,6 +634,9 @@ def validate_answer_claims(
         "evidence_truncated": truncated,
         "evidence_ids": sorted({str(item.get("id")) for item in evidence if not is_premise_id(item.get("id"))}),
         "rechecked_passage_ids": rechecked,
+        # 分類が食い違い、内容で監査し直した段落（#2625）。食い違ったまま決まらない段落は、判定の
+        # classification_check が non_claim_mismatch（unassessed）。
+        "reaudited_passage_ids": reaudited,
         "reused_passage_ids": [passage["id"] for passage in passages if passage["id"] in settled],
     }
 
@@ -567,6 +648,8 @@ __all__ = [
     "DATA_RESULT_SOURCE",
     "DATA_RESULT_ID_PREFIX",
     "MAX_DATA_RESULTS",
+    "REAUDIT_FEEDBACK",
+    "REAUDIT_STATUSES",
     "REUSED_CLAIM_REASON",
     "VALIDATION_RUBRIC_VERSION",
     "audited_answer_items",
