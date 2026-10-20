@@ -1,7 +1,7 @@
 /**
  * 原文のプレビュー（ページの画像のビューア・テキスト・表示できない形式の案内）の文言（すべて翻訳済み。#2389）。
  * RAG の文書の詳細・根拠のパネルと、Agent の根拠のパネルで同じ書き方にするため、既定の {@link documentPreviewLabels}
- * を使う。製品だけの案内（RAG の Office の再処理の案内など）は部品の `unsupportedMessage` で渡す。
+ * を使う。製品だけの案内（Agent の根拠のパネルのダウンロードの案内など）は部品の `unsupportedMessage` で渡す。
  */
 export interface DocumentPreviewLabels {
   toolbar: string;

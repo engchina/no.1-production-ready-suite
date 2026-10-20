@@ -3321,9 +3321,6 @@ export const ja = {
   "flow.review.edit.tableCells": "表セル",
   "flow.review.edit.tableCellLabel": "{row} 行 {col} 列のセル",
 
-  "preview.office":
-    "Office 原本はブラウザーで直接表示できません。プレビューするには、ファイル準備で「Office→PDF」を選択して再処理してください。",
-
   "workspace.notFound": "ドキュメントが見つかりません。",
   "documents.knowledgeBases.title": "所属ナレッジベース",
   "documents.knowledgeBases.description":
