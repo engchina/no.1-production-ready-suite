@@ -82,9 +82,7 @@ def test_unexplained_required_step_is_shown_and_makes_the_answer_conditional() -
     result = _result([_step("s1", "値の登録", "explained"), _step("s2", "内容の確定", "unused")])
     content, published = _combined(result)
     label = "業務ガイドの手順の確認で問題が見つかった"
-    assert published == (
-        f"{ANSWER}\n\n**{REVIEW_HEADING}**\n\n{REVIEW_INTRO}\n- {label}: {GAP}"
-    )
+    assert published == (f"{ANSWER}\n\n**{REVIEW_HEADING}**\n\n{REVIEW_INTRO}\n- {label}: {GAP}")
     assert content["answer_warnings"] == [{"code": "guide_check", "label": label, "detail": GAP}]
     assert content["passage_marks"] == []
     assert content["withheld"] == {

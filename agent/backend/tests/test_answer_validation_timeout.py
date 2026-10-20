@@ -68,7 +68,9 @@ def test_partial_result_keeps_the_unfinished_passages_and_removes_contradicted_o
         {
             "text": SECOND,
             "state": "unverified",
-            "reasons": [{"code": "unassessed", "label": "確かめが終わっていない", "detail": "理由"}],
+            "reasons": [
+                {"code": "unassessed", "label": "確かめが終わっていない", "detail": "理由"}
+            ],
         }
     ]
     assert published.headings == [REMOVED_HEADING, REVIEW_HEADING]

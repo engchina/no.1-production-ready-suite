@@ -39,9 +39,9 @@ from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
 from app.features.agent.answer_validation import (
-    FIGURE_NOT_READ_LABEL,
     FIGURE_READ_NOTE,
-    UNVERIFIED_HEADING,
+    PASSAGE_REASONS,
+    REVIEW_HEADING,
     apply_figure_readings,
     carried_figure_readings,
     figure_readings,
@@ -270,7 +270,7 @@ def test_run_that_read_the_figure_image_keeps_the_figure_claims_with_the_image(
     assert {"document_id": "doc-1", "chunk_id": "chunk-fig"} in call["arguments"]["evidence"]
     answer = run_answer_text(run) or ""
     assert answer == f"{ANSWER}\n\n{FIGURE_READ_NOTE}"
-    assert UNVERIFIED_HEADING not in answer
+    assert REVIEW_HEADING not in answer
     content = _artifact(run, "answer_validation")
     assert content["valid"] is True
     claims = _claims(content)
@@ -310,21 +310,24 @@ def test_run_that_read_the_figure_image_keeps_the_figure_claims_with_the_image(
     [(False, "chunk-fig"), (True, "chunk-fig-mistyped")],
     ids=["model-without-image-input", "image-not-fetched"],
 )
-def test_run_that_did_not_read_the_figure_image_withholds_the_figure_claims(
+def test_run_that_did_not_read_the_figure_image_marks_the_figure_claims(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp, vision: bool, chunk_id: str
 ) -> None:
-    """画像を受け取っていない Run: OCR の文字から推した図の見た目の段落を確認済みにしない。"""
+    """画像を受け取っていない Run: OCR の文字から推した図の見た目の段落を確認済みにせず、本文に
+    残して未確認の印（図の画像を読めていない）を付ける（#2738）。"""
     if chunk_id != "chunk-fig":
         mcp.outputs["rag_read_source"] = McpToolError("source_not_found", "根拠が見つかりません")
     run = _run(monkeypatch, vision=vision, chunk_id=chunk_id)
 
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
     answer = run_answer_text(run) or ""
-    body, _heading, notice = answer.partition(f"**{UNVERIFIED_HEADING}**")
+    body, _heading, notice = answer.partition(f"**{REVIEW_HEADING}**")
     assert TEXT_CLAIM in body
-    assert ARROW_CLAIM not in body and MEMBER_CLAIM not in body
+    assert ARROW_CLAIM in body and MEMBER_CLAIM in body
     assert FIGURE_READ_NOTE not in answer
-    assert f"- {FIGURE_NOT_READ_LABEL}: 「{ARROW_CLAIM}」" in notice
+    label = PASSAGE_REASONS["figure_not_read"][1]
+    assert label == "図の画像を読めておらず確かめられない"
+    assert f"- {label}: 「{ARROW_CLAIM}」" in notice
     content = _artifact(run, "answer_validation")
     assert content["valid"] is False
     assert "figure_confirmed" not in content
@@ -336,7 +339,8 @@ def test_run_that_did_not_read_the_figure_image_withholds_the_figure_claims(
     if not vision:
         # 画像を返したが届かなかった理由を残す。
         assert claims[ARROW_CLAIM]["figure_image"] == {"model_input": "unsupported_model"}
-    assert content["withheld"]["claims"] == 2
+    assert content["withheld"]["unverified"] == 2
+    assert {item["reasons"][0]["code"] for item in content["passage_marks"]} == {"figure_not_read"}
     evidence = _artifact(run, "answer_evidence")["items"]
     assert all("image_reading" not in item for item in evidence)
     assert _artifact(run, "answer")["outcome"]["value"] != "answered"
@@ -355,8 +359,8 @@ def test_verdict_without_figure_claims_is_unchanged(
 
     answer = run_answer_text(run) or ""
     assert ARROW_CLAIM in answer and FIGURE_READ_NOTE not in answer
-    body = answer.partition(f"**{UNVERIFIED_HEADING}**")[0]
-    assert MEMBER_CLAIM not in body
+    body, _heading, notice = answer.partition(f"**{REVIEW_HEADING}**")
+    assert MEMBER_CLAIM in body and MEMBER_CLAIM in notice
     claims = _claims(_artifact(run, "answer_validation"))
     assert all("figure_check" not in claim for claim in claims.values())
 

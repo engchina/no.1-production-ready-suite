@@ -133,17 +133,28 @@ def _fact(
     [
         (None, None),
         (
-            _validation("completed", valid=True, withheld={"claims": 0, "findings": 0}),
+            _validation("completed", valid=True, withheld={"removed": 0, "unverified": 0}),
             VALIDATION_PASSED,
         ),
-        (_validation("completed", withheld={"claims": 2, "findings": 0}), VALIDATION_FAILED),
-        (_validation("completed", withheld={"claims": 0, "findings": 1}), VALIDATION_FAILED),
-        (_validation("completed", withheld={"claims": 0, "all": True}), VALIDATION_FAILED),
-        (_validation("completed", withheld={"claims": 0, "unverified": 1}), VALIDATION_FAILED),
+        (_validation("completed", withheld={"removed": 2, "unverified": 0}), VALIDATION_FAILED),
         (
             _validation(
                 "completed",
-                withheld={"claims": 0, "findings": 0, "all": False},
+                withheld={"removed": 0, "unverified": 0},
+                answer_warnings=[{"code": "requests", "label": "要求", "detail": ""}],
+            ),
+            VALIDATION_FAILED,
+        ),
+        # 警告の印（規則の検査・続く手順）だけなら合格（#2738）。
+        (
+            _validation("completed", withheld={"removed": 0, "unverified": 0, "warnings": 2}),
+            VALIDATION_PASSED,
+        ),
+        (_validation("completed", withheld={"removed": 0, "unverified": 1}), VALIDATION_FAILED),
+        (
+            _validation(
+                "completed",
+                withheld={"removed": 0, "unverified": 0, "all": False},
                 result={"stale_evidence": [{"document_id": "d1"}]},
             ),
             VALIDATION_FAILED,
@@ -159,10 +170,10 @@ def _fact(
     ids=[
         "none",
         "passed",
-        "withheld-claims",
-        "check-errors",
-        "withheld-all",
-        "unverified-kept",
+        "removed",
+        "answer-warnings",
+        "rule-warnings-only",
+        "unverified",
         "stale-evidence",
         "validator-failed",
         "no-rag-evidence",
