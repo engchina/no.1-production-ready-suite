@@ -554,6 +554,30 @@ def evidence_clarification_step(output: JsonObject) -> JsonObject | None:
     return ask_clarification_step(clarifications, reason="needs_clarification")
 
 
+def profile_knowledge_summary(output: JsonObject) -> JsonObject | None:
+    """根拠の取得がモデルへ渡した検索・回答プロファイルのルール・用語の記録（#2701）。
+
+    設定の画面の一致の確かめ（preview）と、実行でモデルに渡った内容を分けて追えるように、数と版
+    だけを返す（本文・名前は業務の内容なのでログに残さない。全文は Run の step の結果にある）。
+    渡していなければ None。
+    """
+    knowledge = output.get("profile_knowledge")
+    if not isinstance(knowledge, dict):
+        return None
+    rules = _records(knowledge.get("rules"))
+    terms = _records(knowledge.get("terms"))
+    return {
+        "search_answer_profile_id": knowledge.get("search_answer_profile_id"),
+        "revision": knowledge.get("revision"),
+        "matched_on": knowledge.get("matched_on"),
+        "rules": len(rules),
+        "terms": len(terms),
+        "rules_omitted": knowledge.get("rules_omitted"),
+        "terms_omitted": knowledge.get("terms_omitted"),
+        "load_failed": knowledge.get("load_failed") is True,
+    }
+
+
 def _reference_sources(tool: str, output: JsonObject) -> list[tuple[str, str | None, str]]:
     """参照を探す（document_id, file_name, 本文）。根拠を集める・読むツールの出力だけ。"""
 

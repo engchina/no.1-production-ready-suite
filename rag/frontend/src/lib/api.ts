@@ -4639,7 +4639,12 @@ export interface SupportGuideAnswerSummary {
 }
 
 /** 業務ガイドの手順の充足（#2491）。 */
-export type SupportGuideStepStatus = "explained" | "reference_only" | "unused" | "no_evidence";
+export type SupportGuideStepStatus =
+  | "explained"
+  | "reference_only"
+  | "unused"
+  | "no_evidence"
+  | "not_searched";
 
 /** 下書きで試した回答の、業務ガイドの手順ごとの充足（#2686）。 */
 export interface SupportGuideDraftTryStep {
