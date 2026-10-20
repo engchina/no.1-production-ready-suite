@@ -1911,10 +1911,14 @@ def test_numbered_facts_after_a_withheld_item_are_kept() -> None:
         assert body == "\n".join(f"{number}.{item[2:]}" for number, item in enumerate(facts[1:], 1))
         assert DEPENDENT_STEP_LABEL not in section
         assert "dependent_steps" not in withheld and withheld["claims"] == 1
-    # 事実の項目の後に操作の項目があれば、操作の項目だけを外す。
+    # 外した項目が事実なら、後の操作の項目も前提を失わないので残す（#2735）。
     request = "5. 変更が必要なときは、管理者に申請してください。"
     answer = "\n".join([*facts, request])
-    assert dependent_steps(answer, {facts[0]}) == [(4, 0, request)]
+    assert dependent_steps(answer, {facts[0]}) == []
+    # 外した項目が操作なら、後の操作の項目だけを外し、間の事実の項目は残す。
+    check = "1. 対象が同じものであることを確認する。"
+    answer = "\n".join([check, *facts[1:], request])
+    assert dependent_steps(answer, {check}) == [(4, 0, request)]
 
 
 @pytest.mark.parametrize(
@@ -2005,6 +2009,108 @@ def test_dependent_steps_are_located_by_position() -> None:
         assert dependent_steps(steps, {f"{marks[0]}確認する。"}) == [
             (1, 0, f"{marks[1]}訂正する。")
         ]
+
+
+# #2735 の合成の事例: 並列の別の方法を、名前の項目の下の入れ子の中身（事実と手順）で並べた一覧。
+METHOD_INTRO = "変更の方法は 3 通りあります。"
+METHOD_ONE = "1. **方法1 ファイルを直して取り込む**"
+METHOD_ONE_STEP = (
+    "- 手順概要：終了日の列を空欄にし、開始日の列に新しい年月を入力して保存する【証拠 1】。"
+)
+METHOD_ONE_RESULT = "- 保存したファイルを取込処理から取り込むと、新しい値が反映される。"
+METHOD_TWO = "2. **方法2 画面で直す**"
+METHOD_TWO_PAGE = "- 「方法2 画面で直す」への手順が 9 ページに記載されている。"
+METHOD_TWO_STEP = "- 手順概要：画面で対象の行を開き、値を上書きして登録する【証拠 2】。"
+METHOD_THREE = "3. **方法3 別の取込で直す**"
+METHOD_THREE_PAGE = "- 「方法3 別の取込で直す」への手順が 13 ページに記載されている。"
+METHODS_ANSWER = "\n".join(
+    [
+        METHOD_INTRO,
+        "",
+        METHOD_ONE,
+        f"   {METHOD_ONE_STEP}",
+        f"   {METHOD_ONE_RESULT}",
+        METHOD_TWO,
+        f"   {METHOD_TWO_PAGE}",
+        f"   {METHOD_TWO_STEP}",
+        METHOD_THREE,
+        f"   {METHOD_THREE_PAGE}",
+    ]
+)
+
+
+def test_withheld_result_in_parallel_methods_keeps_the_other_methods() -> None:
+    """並列の方法の 1 つの結果の段落を外しても、ほかの方法の項目・頁の参照の文・手順を外さない
+    （#2735。変更前は方法 2 の項目と、その事実の文・手順を「確かめられない手順に続く手順」に
+    した）。"""
+    assert dependent_steps(METHODS_ANSWER, {METHOD_ONE_RESULT}) == []
+    result = _verdict(
+        _claim(METHOD_INTRO, "supported"),
+        _claim(METHOD_ONE_STEP, "supported"),
+        _claim(METHOD_ONE_RESULT, "unsupported", "根拠に無い。"),
+        _claim(METHOD_TWO_PAGE, "supported"),
+        _claim(METHOD_TWO_STEP, "supported"),
+        _claim(METHOD_THREE_PAGE, "supported"),
+    )
+
+    published, withheld = publish_answer(METHODS_ANSWER, result)
+
+    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+    assert body == METHODS_ANSWER.replace(f"\n   {METHOD_ONE_RESULT}", "")
+    assert DEPENDENT_STEP_LABEL not in section
+    assert withheld == {"claims": 1, "findings": 0, "all": False}
+
+
+def test_withheld_operation_in_a_parallel_method_stays_inside_that_method() -> None:
+    """並列の方法の 1 つの操作を外したら、同じ方法の中の後の操作だけを外し、事実の段落とほかの方法は
+    残す（各項目は Markdown の見出しで切った節と同じく独立する。#2735）。"""
+    # 方法 1 の後の段落は結果を述べる文なので残す。
+    assert dependent_steps(METHODS_ANSWER, {METHOD_ONE_STEP}) == []
+    # 方法 1 の中に後の操作があれば、それだけを外す。
+    register = "- 取り込んだ後に、反映の結果を画面で確認する。"
+    answer = METHODS_ANSWER.replace(
+        f"   {METHOD_ONE_RESULT}", f"   {METHOD_ONE_RESULT}\n   {register}"
+    )
+    assert dependent_steps(answer, {METHOD_ONE_STEP}) == [(5, 3, register)]
+    # 方法 2 の操作を外しても、方法 3 の項目・事実の文は残す。
+    assert dependent_steps(answer, {METHOD_TWO_STEP}) == []
+
+
+def test_sequential_steps_withhold_later_operations_but_keep_facts() -> None:
+    """項目の行に中身を書いた順の手順は、外した操作より後の項目の操作を外し、項目の中の事実の段落は
+    残す（#2604・#2735）。"""
+    note = "   - 訂正の記録は 5 年間保存されます。"
+    answer = "\n".join([PREREQUISITE_STEP, FOLLOWING_STEPS[0], note, FOLLOWING_STEPS[1]])
+    assert dependent_steps(answer, {PREREQUISITE_STEP}) == [
+        (1, 0, FOLLOWING_STEPS[0]),
+        (3, 0, FOLLOWING_STEPS[1]),
+    ]
+    result = _verdict(
+        _claim(PREREQUISITE_STEP, "unsupported", "根拠に無い。"),
+        *(_claim(step, "supported") for step in FOLLOWING_STEPS),
+        _claim(note.strip(), "supported"),
+    )
+    body = publish_answer(answer, result)[0].split(f"\n\n**{UNVERIFIED_HEADING}**", 1)[0]
+    assert body == note.strip()
+
+
+def test_named_steps_with_one_line_each_are_sequential() -> None:
+    """名前の項目の下に中身が 1 行ずつの一覧は順の手順として、後の項目の操作を外す。項目の名前は、
+    事実の段落が残れば残し、主張の段落をすべて外すときだけ外す（#2604・#2692・#2735）。"""
+    check = "   - 対象が同じものであることを確認する。"
+    fix = "   - 対象の情報を訂正する。訂正の記録は 5 年間保存されます。"
+    merge = "   - 識別子を統合する。"
+    answer = "\n".join(["1. **確認**", check, "2. **訂正**", fix, "3. **統合**", merge])
+    dependents = dependent_steps(answer, {check.strip()})
+    assert [text for _index, _begin, text in dependents] == [
+        "- 対象の情報を訂正する。",
+        "3. **統合**",
+        merge.strip(),
+    ]
+    positions = frozenset((index, begin) for index, begin, _text in dependents)
+    assert withhold_paragraphs(answer, {check.strip()}, positions) == (
+        "1. **訂正**\n   訂正の記録は 5 年間保存されます。"
+    )
 
 
 # #2692 の合成の事例: 操作の名前だけを番号で並べた順序と、後半の操作の文。

@@ -1331,6 +1331,13 @@ _STEP_ITEM = re.compile(
 )
 # 番号つきの一覧を切る行（Markdown の見出し）。
 _SECTION_BREAK = re.compile(r"\s*#{1,6}\s")
+# 名前を強調で示すだけの番号つきの項目の行（「1. **名前**」「**1. 名前**」。末尾の「：」を許す。
+# #2735）。
+_LABEL_ITEM = re.compile(
+    r"(?P<open>\*\*|__)?"
+    r"(?:[0-9０-９]{1,3}(?:\.\s|[)．）]\s*)|[（(][0-9０-９]{1,3}[）)]\s*|[①-⑳]\s*)"
+    r"(?(open)|(?:\*\*|__))[^*_\n]+(?:\*\*|__)\s*[:：]?"
+)
 
 
 @dataclass
@@ -1423,43 +1430,91 @@ def _step_ranges(lines: list[str]) -> list[list[tuple[int, int]]]:
     return ranges
 
 
-def dependent_steps(answer: str, quotes: set[str]) -> list[tuple[int, int, str]]:
+def _label_item(line: str, listed: set[str]) -> bool:
+    """番号つきの項目の行が、名前だけを示す見出しの形か（中身は下の行。#2735）。
+
+    強調だけの名前（「1. **名前**」）か見出しの段落で、操作の指示（`is_operation_step`）ではない
+    もの。「1. **申請書を提出する**」のように項目の行が操作なら、その項目は 1 つの手順。
+    """
+    spans = passage_spans(line)
+    if len(spans) != 1:
+        return False
+    text = spans[0][2]
+    shaped = bool(_LABEL_ITEM.fullmatch(text)) or is_heading(text) or text in listed
+    return shaped and not is_operation_step(text)
+
+
+def dependent_steps(
+    answer: str, quotes: set[str], operations: frozenset[str] = frozenset()
+) -> list[tuple[int, int, str]]:
     """外す段落（`quotes`）に続く、番号つきの手順の段落（行の番号・行の中の開始の位置・原文。#2604）。
 
-    番号つきの一覧で前の項目（手順の前提の確認など）の段落を外したら、同じ一覧のそれより後の、操作の
-    項目（項目の行か下の行に、利用者に操作・作業を行わせる段落がある項目。`is_operation_step`）の段落は、
-    確かめられない前提に続く操作になるので、実行できる手順として単独で残さない。その項目の番号の行
-    （「2. **訂正**」のような見出しの形でも）も外す。事実を述べる項目（操作の段落の無い項目）は、
-    番号つきでも前の項目に依存しないので残す（番号で事実を並べた一覧の 1 項目を外しても、後の事実は
-    残る）。一覧の外の段落（前の説明・一覧の後の段落）、一覧の中の外した段落より前の段落、主張では
-    ない段落（出典の行・利用者への質問・不足の文など。`non_claim_passages`）は残す。番号の無い
-    箇条書きは順序を表さないので対象にしない。`quotes` に入っている段落は返さない。
+    番号つきの一覧で、利用者に操作・作業を行わせる段落（`is_operation_step`。手順の前提の確認など）
+    を外したら、それより後の操作の段落は、確かめられない前提に続く操作になるので、実行できる手順として
+    単独で残さない。`operations` は、操作の形ではなくても操作を指す外す段落（操作を名前だけで示す
+    項目。`withheld_labels`）。外した段落が操作ではない（事実・結果・状態を述べる）ときは、後の手順の
+    前提は崩れないので何も外さない（#2735）。
+
+    外すのは後の操作の段落だけで、事実を述べる段落は、操作の項目の中にあっても残す（#2735）。
+    名前だけの項目の行（「2. **訂正**」。`_label_item`）は、その項目の主張の段落をすべて外すときだけ
+    外す（中身の無い操作の名前を実行の順の 1 つとして残さない。#2692）。
+
+    どこまでを続く手順とみなすかは一覧の構造で決める（語は見ない。#2735）。項目の行に中身を書いた
+    一覧（「1. 〇〇を開く。」「2. 〇〇を入力する。」）と、名前の項目の下に中身が 1 行ずつの一覧
+    （「1. **確認**」の下に 1 つの操作）は、順に行う手順として、外した操作より後の項目の操作も外す。
+    名前の項目の下に中身が複数の行ある一覧（並列の方法・場合分けを、項目ごとの手順で並べたもの）は、
+    各項目が 1 つの節（Markdown の見出しで切った節と同じ）として独立するので、項目をまたがず、同じ
+    項目の中の外した操作より後の操作だけを外す。
+
+    一覧の外の段落（前の説明・一覧の後の段落）、一覧の中の外した段落より前の段落、主張ではない段落
+    （出典の行・利用者への質問・不足の文など。`non_claim_passages`）は残す。番号の無い箇条書きは
+    順序を表さないので対象にしない。`quotes` に入っている段落は返さない。
     """
     lines = answer.split("\n")
     kinds = non_claim_passages(answer)
-    structure = table_header_lines(answer) | list_heading_lines(answer)
+    listed = list_heading_lines(answer)
+    structure = table_header_lines(answer) | listed
+
+    def claim(index: int, text: str) -> bool:
+        return _step_item(lines[index]) is not None or not (
+            kinds.get(text) or is_structure(text) or text.strip() in structure
+        )
+
     dependents: list[tuple[int, int, str]] = []
     for items in _step_ranges(lines):
+        labels = [_label_item(lines[start], listed) for start, _end in items]
+        # 名前の項目の下の、主張の段落のある中身の行の数（項目ごと）。
+        bodies = [
+            sum(
+                any(claim(index, text) for _b, _e, text in passage_spans(lines[index]))
+                for index in range(start + 1, end)
+            )
+            for start, end in items
+        ]
+        sections = all(labels) and max(bodies) > 1
         withheld = False
-        for start, end in items:
+        for (start, end), label in zip(items, labels, strict=True):
+            if sections:
+                withheld = False
             spans = [
                 (index, begin, text)
                 for index in range(start, end)
                 for begin, _end, text in passage_spans(lines[index])
             ]
-            operation = any(is_operation_step(text) for _index, _begin, text in spans)
+            found: list[tuple[int, int, str]] = []
             for index, begin, text in spans:
                 if text in quotes:
-                    withheld = True
-                elif (
-                    withheld
-                    and operation
-                    and (
-                        _step_item(lines[index]) is not None
-                        or not (kinds.get(text) or is_structure(text) or text.strip() in structure)
-                    )
-                ):
-                    dependents.append((index, begin, text))
+                    withheld = withheld or is_operation_step(text) or text in operations
+                elif withheld and is_operation_step(text) and claim(index, text):
+                    found.append((index, begin, text))
+            rest = [
+                (index, begin, text)
+                for index, begin, text in spans[1:]
+                if text not in quotes and (index, begin, text) not in found and claim(index, text)
+            ]
+            if found and label and not rest and spans[0][2] not in quotes:
+                found.insert(0, spans[0])
+            dependents += found
     return dependents
 
 
@@ -1633,9 +1688,10 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     （`unassessed`）段落を外すと本文が空になるときは、本文を残して確かめきれなかった点を示す
     （記録の `withheld.unverified`。#1391）。否定の判定は、RAG が出典を照合できずに判定を
     変えた段落の元の判定（`audit_status`）も含めて数える（`is_refuted_claim`。#2622）。
-    外した段落が番号つきの一覧の中にあれば、同じ一覧のそれより後の操作の項目も、確かめられない前提に
+    外した操作の段落が番号つきの一覧の中にあれば、それより後の操作の段落も、確かめられない前提に
     続く操作として外し、節に「確かめられない手順に続く手順」として示す（`dependent_steps`。#2604。
-    事実を述べる項目は残す。本文を残すときも示す）。記録の `dependent_steps` はその段落の数
+    事実を述べる段落と、並列の項目の一覧のほかの項目は残す。#2735。本文を残すときも示す）。
+    記録の `dependent_steps` はその段落の数
     （無ければ項目を足さない）。RAG が時間の上限までに一部の段落を確かめ終わらなかった結果
     （`partial`。#2700）の `unassessed` の段落は外さずに残し、節に確かめきれなかった点として
     示す（記録の `unverified`）。
@@ -1687,7 +1743,8 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         quotes = {str(item.get("answer_quote") or "") for item in blocking}
         # 外す操作を名前だけで示す番号つきの項目（#2692）。外した項目として、続く手順にも数える。
         labels = withheld_labels(answer, quotes)
-        dependents = dependent_steps(answer, quotes | {text for _i, _b, text in labels})
+        names = frozenset(text for _i, _b, text in labels)
+        dependents = dependent_steps(answer, quotes | names, names)
         body = withhold_paragraphs(
             answer,
             quotes,
