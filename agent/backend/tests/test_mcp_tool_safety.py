@@ -325,7 +325,10 @@ def _read_only_tool(server_id: str) -> ExternalMcpToolInfo:
 
 def _call(config: McpConnectionConfig, tool: ExternalMcpToolInfo) -> dict[str, Any]:
     handler = mcp_tool_handler(config, tool)
-    return handler({}, ToolInvocationContext(user_uuid=USER_UUID))
+    result = handler({}, ToolInvocationContext(user_uuid=USER_UUID))
+    # 画像の無い結果は文字の結果（JSON）のまま返る（#2650）。
+    assert isinstance(result, dict)
+    return result
 
 
 @pytest.mark.parametrize(

@@ -1947,6 +1947,8 @@ def synthesize_grounded_answer(
     # 業務ガイドの手順ごとの根拠と、充足で必須に数えない手順（#2491）。監査・是正・回答の構造で同じ単位を使う。
     guide_steps = runtime_knowledge.guide_steps if runtime_knowledge is not None else ()
     guide_optional_steps = runtime_knowledge.guide_optional_steps if runtime_knowledge is not None else ()
+    # 手順ごとの検索の手がかり（共有の根拠の item を手順に対応付ける語。#2649）。
+    guide_step_terms = dict(runtime_knowledge.guide_step_terms) if runtime_knowledge is not None else {}
     for number in range(max_rounds):
         spans = _grounded_spans(
             question,
@@ -1998,6 +2000,7 @@ def synthesize_grounded_answer(
                     compact_audit_reasons=compact_audit_reasons,
                     guide_steps=guide_steps,
                     guide_optional_steps=guide_optional_steps,
+                    guide_step_terms=guide_step_terms,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                 )
                 if number == 0:
@@ -2213,7 +2216,9 @@ def synthesize_grounded_answer(
     # 提示など）の後の説明で決め直す。参考情報としてだけ示した手順・根拠の無い手順は本文の不足に出し、回答の構造の
     # 要求にも載せて、充足済みとして確定しない。
     guide_coverage = (
-        grounded.guide_step_coverage(guide_steps, current.checked, spans, guide_optional_steps) if guide_steps and not off_goal else []
+        grounded.guide_step_coverage(guide_steps, current.checked, spans, guide_optional_steps, guide_step_terms)
+        if guide_steps and not off_goal
+        else []
     )
     guide_gaps = [grounded.guide_step_gap_line(step) for step in grounded.unexplained_guide_steps(guide_coverage)]
     unanswered += guide_gaps
@@ -4062,7 +4067,10 @@ def answer_question_result(
                 )
                 if step_sources:
                     runtime_knowledge = replace(
-                        runtime_knowledge, guide_steps=step_sources, guide_optional_steps=guide_plan.optional_step_ids
+                        runtime_knowledge,
+                        guide_steps=step_sources,
+                        guide_optional_steps=guide_plan.optional_step_ids,
+                        guide_step_terms=guide_plan.step_terms,
                     )
                 skipped = str(guide_step_trace.get("skipped") or "")
                 if skipped:

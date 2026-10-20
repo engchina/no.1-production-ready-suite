@@ -27,6 +27,10 @@ context editing が古いツールの結果から消す、LangChain の `trim_me
   読み取り専用のツールだけ（副作用があり得るツールは、呼び直すと同じ操作をもう一度実行する。#2632）。
 - Run の step に残すツールの結果は全文のまま（回答の検証・引用の照合は step を使う）。縮めるのは
   モデルに渡す入力だけで、呼び出しごとに元の入力から作り直す。
+- **画像**（ツールの結果の `input_image`。#2650）: 見積もりは画像の大きさから（`tool_media`）。
+  同じ画像は最新の結果の 1 つだけに添付し、入力の画像は新しい結果から `MAX_IMAGES_IN_INPUT` 枚まで
+  にする（予算に関わらず）。予算を超えるときは、古い結果の画像を文字を縮める前に外し、最新の結果の
+  画像は文字を縮めても足りないときだけ外す。外した画像は、ID と読み直しの手を書いた文に置き換える。
 
 ここは見積もり・予算・縮め方だけを持つ（Run への記録と SDK・プロバイダへの組み込みは
 `builtin_runtime`）。
@@ -37,11 +41,19 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any
 
 from pr_system_settings.model import estimate_input_tokens
+
+from app.features.agent.tool_media import (
+    MAX_IMAGES_IN_INPUT,
+    ToolImage,
+    data_url_image,
+    estimate_image_tokens,
+)
 
 # 縮めた結果に足す項目の名前。
 COMPACTION_KEY = "context_compaction"
@@ -99,7 +111,12 @@ class ContextBudget:
 
 @dataclass(frozen=True)
 class CompactedOutput:
-    """縮めたツールの結果 1 件（Run の記録に残す）。"""
+    """縮めたツールの結果 1 件（Run の記録に残す）。
+
+    `level` は文字を縮めた段階（0 は文字を縮めず画像だけを外した）。`images_removed` は外した画像の
+    数、`image_reason` はその理由（`duplicate`＝後の結果に同じ画像 / `image_limit`＝入力の画像の
+    枚数の上限 / `budget`＝入力の予算）。
+    """
 
     call_id: str
     tool_name: str
@@ -107,9 +124,11 @@ class CompactedOutput:
     original_chars: int
     compacted_chars: int
     latest: bool
+    images_removed: int = 0
+    image_reason: str | None = None
 
     def as_record(self) -> dict[str, Any]:
-        return {
+        record: dict[str, Any] = {
             "call_id": self.call_id,
             "tool_name": self.tool_name,
             "level": self.level,
@@ -117,6 +136,10 @@ class CompactedOutput:
             "compacted_chars": self.compacted_chars,
             "latest": self.latest,
         }
+        if self.images_removed:
+            record["images_removed"] = self.images_removed
+            record["image_reason"] = self.image_reason
+        return record
 
 
 @dataclass
@@ -129,6 +152,9 @@ class CompactionResult:
     tokens_before: int
     tokens_after: int
     outputs: list[CompactedOutput] = field(default_factory=list)
+    # 入力に残した画像の数と、その token の見積もり（#2650）。
+    images: int = 0
+    image_tokens: int = 0
 
     @property
     def fits(self) -> bool:
@@ -149,12 +175,57 @@ def _as_dict(item: Any) -> Any:
     return item
 
 
+def _output_texts(output: Sequence[Any]) -> list[str]:
+    """文字と画像の出力の列（#2650）の文字の部分。"""
+    texts: list[str] = []
+    for part in output:
+        data = _as_dict(part)
+        if isinstance(data, dict) and data.get("type") in {"input_text", "text"}:
+            texts.append(str(data.get("text") or ""))
+    return texts
+
+
+def _output_images(output: Sequence[Any]) -> list[tuple[int, str]]:
+    """文字と画像の出力の列の画像（位置と data URL か URL）。"""
+    images: list[tuple[int, str]] = []
+    for index, part in enumerate(output):
+        data = _as_dict(part)
+        if isinstance(data, dict) and data.get("type") in {"input_image", "image"}:
+            url = data.get("image_url")
+            images.append((index, url if isinstance(url, str) else ""))
+    return images
+
+
+@lru_cache(maxsize=64)
+def _image_facts(url: str) -> tuple[str, int]:
+    """画像の ID（sha256）と token の見積もり（data URL でなければ ID は空、見積もりは既定）。"""
+    decoded = data_url_image(url)
+    if decoded is None:
+        return "", estimate_image_tokens(None, None)
+    mime, raw = decoded
+    image = ToolImage(data=raw, mime_type=mime)
+    return image.image_id, image.estimated_tokens
+
+
+def _image_tokens(item: Any) -> int:
+    data = _as_dict(item)
+    if not isinstance(data, dict) or data.get("type") not in _TOOL_OUTPUT_TYPES:
+        return 0
+    output = data.get("output")
+    if not isinstance(output, list):
+        return 0
+    return sum(_image_facts(url)[1] for _index, url in _output_images(output))
+
+
 def _item_text(item: Any) -> str:
     data = _as_dict(item)
     if isinstance(data, dict):
         output = data.get("output")
         if data.get("type") in _TOOL_OUTPUT_TYPES and isinstance(output, str):
             return output
+        if data.get("type") in _TOOL_OUTPUT_TYPES and isinstance(output, list):
+            # 画像は文字として数えない（`_image_tokens` が大きさから見積もる）。
+            return "\n".join(_output_texts(output))
         content = data.get("content")
         if isinstance(content, str) and set(data) <= {"role", "content", "type"}:
             return content
@@ -369,7 +440,86 @@ def _latest_outputs(items: Sequence[Any], outputs: Sequence[int]) -> set[int]:
 
 
 def _item_tokens(item: Any, budget: ContextBudget) -> int:
-    return budget.estimate(_item_text(item)) + _ITEM_OVERHEAD_TOKENS
+    return (
+        budget.estimate(_item_text(item))
+        + math.ceil(_image_tokens(item) * budget.estimate_scale)
+        + _ITEM_OVERHEAD_TOKENS
+    )
+
+
+def _is_tool_output(item: Any) -> bool:
+    return (
+        isinstance(item, dict)
+        and item.get("type") in _TOOL_OUTPUT_TYPES
+        and isinstance(item.get("output"), str | list)
+    )
+
+
+def _primary_text(item: Mapping[str, Any]) -> str:
+    """縮める対象の文字（文字の出力そのもの、文字と画像の列なら最初の文字）。"""
+    output = item.get("output")
+    if isinstance(output, str):
+        return output
+    texts = _output_texts(output if isinstance(output, list) else [])
+    return texts[0] if texts else ""
+
+
+def _with_primary_text(item: Mapping[str, Any], text: str) -> dict[str, Any]:
+    output = item.get("output")
+    if isinstance(output, str):
+        return {**item, "output": text}
+    parts = list(output if isinstance(output, list) else [])
+    for index, part in enumerate(parts):
+        data = _as_dict(part)
+        if isinstance(data, dict) and data.get("type") in {"input_text", "text"}:
+            parts[index] = {"type": "input_text", "text": text}
+            break
+    return {**item, "output": parts}
+
+
+_IMAGE_REMOVED_NOTES = {
+    "duplicate": "同じ画像（{image_id}）を後のツールの結果で渡しているため、ここでは外しました。",
+    "image_limit": (
+        "モデルの入力に添付する画像は新しい結果から {limit} 枚までのため、画像（{image_id}）を"
+        "外しました。"
+    ),
+    "budget": "モデルの入力の上限に収めるため、画像（{image_id}）を外しました。",
+}
+
+
+def _image_note(reason: str, image_id: str, read_tool: str | None, rerunnable: bool) -> str:
+    text = _IMAGE_REMOVED_NOTES[reason].format(
+        image_id=image_id or "ID 不明", limit=MAX_IMAGES_IN_INPUT
+    )
+    if reason == "duplicate":
+        return text
+    if read_tool:
+        return text + f"画像の内容が要るときは {read_tool} で画像を読み直してください。"
+    if rerunnable:
+        return text + "画像の内容が要るときは、同じツールを呼び直してください。"
+    return (
+        text + "この画像は読み直せないため、画像の内容は確認できていないものとして扱ってください。"
+    )
+
+
+def _without_images(
+    item: Mapping[str, Any],
+    positions: Collection[int],
+    reason: str,
+    *,
+    read_tool: str | None,
+    rerunnable: bool,
+) -> dict[str, Any]:
+    """指定の位置の画像を、外した理由と読み直しの手の文に置き換える。"""
+    output = item.get("output")
+    parts = list(output if isinstance(output, list) else [])
+    for index, url in _output_images(parts):
+        if index in positions:
+            parts[index] = {
+                "type": "input_text",
+                "text": _image_note(reason, _image_facts(url)[0], read_tool, rerunnable),
+            }
+    return {**item, "output": parts}
 
 
 def estimate_tokens(items: Sequence[Any], *, budget: ContextBudget, fixed_text: str) -> int:
@@ -390,77 +540,138 @@ def compact_items(
 
     `read_tool_for` はツールの名前 → 本文を読み直すツール、`rerunnable` はツールの名前 → 同じ
     ツールを呼び直しても副作用が無いか（無ければどのツールも呼び直しを案内しない）。
+    画像の重複と枚数の上限は予算に関わらず先に直す（#2650）。
     """
     budget_tokens = budget.input_tokens(max_input_tokens)
     fixed_tokens = budget.estimate(fixed_text)
-    sized = [_as_dict(item) for item in items]
-    tokens = [_item_tokens(item, budget) for item in sized]
-    before = fixed_tokens + sum(tokens)
-    result = CompactionResult(
-        items=list(items),
+    sized: list[Any] = [_as_dict(item) for item in items]
+    compacted: list[Any] = list(items)
+    names = _call_names(sized)
+    outputs = [index for index, item in enumerate(sized) if _is_tool_output(item)]
+    latest = _latest_outputs(sized, outputs)
+    levels: dict[int, int] = {}
+    removed: dict[int, tuple[int, str]] = {}
+
+    def hints(index: int) -> tuple[str | None, bool]:
+        name = names.get(str(sized[index].get("call_id") or ""), "")
+        read_tool = read_tool_for(name) if read_tool_for is not None and name else None
+        return read_tool, bool(name) and rerunnable is not None and rerunnable(name)
+
+    def drop_images(index: int, positions: Collection[int], reason: str) -> None:
+        if not positions:
+            return
+        read_tool, safe_to_rerun = hints(index)
+        compacted[index] = _without_images(
+            _as_dict(compacted[index]),
+            positions,
+            reason,
+            read_tool=read_tool,
+            rerunnable=safe_to_rerun,
+        )
+        count = removed.get(index, (0, reason))[0]
+        removed[index] = (count + len(positions), reason)
+
+    # 画像の重複と枚数の上限（新しい結果の画像から残す）。
+    seen: set[str] = set()
+    kept = 0
+    for index in reversed(outputs):
+        output = sized[index].get("output")
+        if not isinstance(output, list):
+            continue
+        duplicates: list[int] = []
+        over: list[int] = []
+        for position, url in reversed(_output_images(output)):
+            image_id = _image_facts(url)[0] or url
+            if image_id in seen:
+                duplicates.append(position)
+                continue
+            seen.add(image_id)
+            if kept >= MAX_IMAGES_IN_INPUT:
+                over.append(position)
+                continue
+            kept += 1
+        drop_images(index, duplicates, "duplicate")
+        drop_images(index, over, "image_limit")
+
+    before = fixed_tokens + sum(_item_tokens(item, budget) for item in sized)
+    tokens = [_item_tokens(_as_dict(item), budget) for item in compacted]
+    total = fixed_tokens + sum(tokens)
+
+    def refresh(index: int) -> None:
+        nonlocal total
+        size = _item_tokens(_as_dict(compacted[index]), budget)
+        total += size - tokens[index]
+        tokens[index] = size
+
+    def apply(index: int, level: int) -> None:
+        item = _as_dict(compacted[index])
+        text = _primary_text(item)
+        read_tool, safe_to_rerun = hints(index)
+        shrunk = compact_output(text, level, read_tool=read_tool, rerunnable=safe_to_rerun)
+        if shrunk == text:
+            return
+        compacted[index] = _with_primary_text(item, shrunk)
+        refresh(index)
+        levels[index] = level
+
+    def remove_images(group: Sequence[int]) -> None:
+        for index in group:
+            if total <= budget_tokens:
+                return
+            output = _as_dict(compacted[index]).get("output")
+            positions = [
+                p for p, _url in _output_images(output if isinstance(output, list) else [])
+            ]
+            if positions:
+                drop_images(index, positions, "budget")
+                refresh(index)
+
+    if total > budget_tokens:
+        older = [index for index in outputs if index not in latest]
+        newest = [index for index in outputs if index in latest]
+        # 古い結果の画像は、文字を縮める前に外す（画像は文字よりずっと大きい）。
+        remove_images(older)
+        for group, max_level in ((older, OLDER_MAX_LEVEL), (newest, LATEST_MAX_LEVEL)):
+            for level in range(1, max_level + 1):
+                for index in group:
+                    if total <= budget_tokens:
+                        break
+                    apply(index, level)
+            if total <= budget_tokens:
+                break
+        # 最新の結果の画像は、文字を縮めても足りないときだけ外す。
+        remove_images(newest)
+
+    remaining = [
+        url
+        for item in (_as_dict(entry) for entry in compacted)
+        if _is_tool_output(item) and isinstance(item.get("output"), list)
+        for _position, url in _output_images(item["output"])
+    ]
+    return CompactionResult(
+        items=compacted,
         budget_tokens=budget_tokens,
         fixed_tokens=fixed_tokens,
         tokens_before=before,
-        tokens_after=before,
+        tokens_after=total,
+        outputs=[
+            CompactedOutput(
+                call_id=str(sized[index].get("call_id") or ""),
+                tool_name=names.get(str(sized[index].get("call_id") or ""), ""),
+                level=levels.get(index, 0),
+                original_chars=len(_primary_text(sized[index])),
+                compacted_chars=len(_primary_text(_as_dict(compacted[index]))),
+                latest=index in latest,
+                images_removed=removed[index][0] if index in removed else 0,
+                image_reason=removed[index][1] if index in removed else None,
+            )
+            for index in sorted({*levels, *removed})
+        ],
+        images=len(remaining),
+        image_tokens=math.ceil(
+            sum(_image_facts(url)[1] for url in remaining) * budget.estimate_scale
+        ),
     )
-    if before <= budget_tokens:
-        return result
-    outputs = [
-        index
-        for index, item in enumerate(sized)
-        if isinstance(item, dict)
-        and item.get("type") in _TOOL_OUTPUT_TYPES
-        and isinstance(item.get("output"), str)
-    ]
-    latest = _latest_outputs(sized, outputs)
-    names = _call_names(sized)
-    compacted: list[Any] = list(items)
-    levels: dict[int, int] = {}
-    total = before
-
-    def apply(index: int, level: int) -> None:
-        nonlocal total
-        item = sized[index]
-        output = str(item["output"])
-        call_id = str(item.get("call_id") or "")
-        name = names.get(call_id, "")
-        read_tool = read_tool_for(name) if read_tool_for is not None and name else None
-        safe_to_rerun = bool(name) and rerunnable is not None and rerunnable(name)
-        shrunk = compact_output(output, level, read_tool=read_tool, rerunnable=safe_to_rerun)
-        if shrunk == output:
-            return
-        compacted[index] = {**item, "output": shrunk}
-        size = _item_tokens(shrunk, budget)
-        total += size - tokens[index]
-        tokens[index] = size
-        levels[index] = level
-
-    for group, max_level in (
-        ([index for index in outputs if index not in latest], OLDER_MAX_LEVEL),
-        ([index for index in outputs if index in latest], LATEST_MAX_LEVEL),
-    ):
-        for level in range(1, max_level + 1):
-            for index in group:
-                if total <= budget_tokens:
-                    break
-                apply(index, level)
-        if total <= budget_tokens:
-            break
-
-    result.items = compacted
-    result.tokens_after = total
-    result.outputs = [
-        CompactedOutput(
-            call_id=str(sized[index].get("call_id") or ""),
-            tool_name=names.get(str(sized[index].get("call_id") or ""), ""),
-            level=level,
-            original_chars=len(str(sized[index]["output"])),
-            compacted_chars=len(str(compacted[index]["output"])),
-            latest=index in latest,
-        )
-        for index, level in sorted(levels.items())
-    ]
-    return result
 
 
 # プロバイダが返す入力の超過の文（vLLM・OpenAI 互換 API）。

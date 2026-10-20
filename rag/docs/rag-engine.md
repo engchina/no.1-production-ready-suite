@@ -295,10 +295,18 @@ MinerU の見出しの level から作るため、この規則にはまだそろ
 （終わる）か chunk の見出しの列に名前を持つ chunk → 開始のページ以降で始まる最初の chunk の順で決める（ページの範囲の外の
 要素の ID は使わない。人がページを直した章節）。各 chunk は、始まりがその chunk 以前の最後の章節（所有の章節）と、その祖先の
 章節と、文書全体（仮想の根の章節 `document`）に入る。所有の章節の終了のページより後ろの chunk は、ページを含む祖先へ、
-無ければ文書全体へ移す。章節の無い文書は文書全体が 1 つの章節になる。要約の chunk（RAPTOR・章節の要約）は入れない。
+無ければ文書全体へ移す。章節の無い文書は文書全体が 1 つの章節になる。派生の chunk（RAPTOR・章節の要約、項目抽出の値）は入れない。
 
 章節の本文は `section_map_service.read_section`（section_id → 章節の中の順の chunk の本文と範囲。検索と同じ見え方の条件）
 で読む。MCP の `rag_read_section` と、回答のときの章節の拡張（#1436 / #1437）が共通で使う。
+
+検索で当たった派生の chunk（章節の要約・RAPTOR の要約・項目抽出の値。判定は `rag_parser_core.extraction.is_derived_content`
+で、印の無い古い chunk も `content_kind` で判定する）は検索の手がかりとして使い、回答の根拠には渡さない（#2641）。回答の
+検索は、その chunk が指す原文（章節の要約は同じ版の同じ `section_path` の chunk、項目抽出の値は `field_source_element_id`
+の要素を含む chunk、RAPTOR の要約は `raptor_child_indices` の子を元の chunk まで辿ったもの）を検索と同じ条件（chunk の種類の
+条件だけを外す）で読み、派生の chunk の位置に置く（`app/rag/derived_evidence.py`。1 件につき 6 件まで）。原文が読めなければ
+何も置かず（根拠不足として扱う）、診断 `derived_evidence` に残す。前後の文脈・交差参照・実体と関係情報の拡張・章節の拡張・
+MCP の `rag_read_document` も派生の chunk を返さない。
 
 Vision は backend がモデル設定の既定の Vision モデル（OCI Enterprise AI）で呼ぶ。docling サービスは LLM を呼ばないため、OCI Enterprise AI の設定は渡さない（#497）。
 

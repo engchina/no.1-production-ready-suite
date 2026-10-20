@@ -25,7 +25,7 @@ from pr_backend_core.internal_http import http_client_options
 from pr_backend_core.observability.request_context import outbound_correlation_headers
 from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.auth.service_token import issue_service_token
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, ValidationError, model_validator
 
 from app.features.agent.config import (
     PRODUCT_MCP_SERVICE_NAMES,
@@ -43,6 +43,13 @@ from app.features.agent.tool_arguments import (
     INVALID_ARGUMENTS_MESSAGE,
     SchemaUnsupported,
     validate_arguments,
+)
+from app.features.agent.tool_media import (
+    CONTENT_IMAGES_KEY,
+    USER_ONLY,
+    ToolImage,
+    ToolOutputWithImages,
+    decode_image,
 )
 from app.settings import get_settings
 
@@ -143,6 +150,20 @@ class ToolResult(BaseModel):
     approval_id: str | None = None
     guardrail_warnings: list[str] = Field(default_factory=list)
     audit_metadata: JsonObject = Field(default_factory=dict)
+    # 結果の画像（#2650）。保存・直列化しない（step・イベント・ログには `output` の参照だけ）。
+    _images: tuple[ToolImage, ...] = PrivateAttr(default=())
+
+
+def tool_result_images(result: ToolResult) -> tuple[ToolImage, ...]:
+    """ツールの結果の画像（モデルへの入力に使う。保存しない）。"""
+    return result._images  # noqa: SLF001 - 非保存の属性の読み出しはここだけ
+
+
+def with_tool_result_images(result: ToolResult, images: tuple[ToolImage, ...]) -> ToolResult:
+    """画像を付け替えた結果（元の結果は変えない）。"""
+    copied = result.model_copy()
+    copied._images = tuple(images)  # noqa: SLF001
+    return copied
 
 
 class ExternalMcpToolInfo(BaseModel):
@@ -193,7 +214,8 @@ class ToolInvocationContext(BaseModel):
     profile_scopes: dict[str, list[str]] = Field(default_factory=dict)
 
 
-ToolHandler = Callable[[JsonObject, ToolInvocationContext], JsonObject]
+# handler は文字の結果（JSON）か、画像を伴う結果（`ToolOutputWithImages`。#2650）を返す。
+ToolHandler = Callable[[JsonObject, ToolInvocationContext], JsonObject | ToolOutputWithImages]
 
 
 class ExternalToolError(RuntimeError):
@@ -449,8 +471,13 @@ class ToolRegistry:
                 policy_decision=decision,
                 audit_metadata=audit_metadata,
             )
+        images: tuple[ToolImage, ...] = ()
+        if isinstance(output, ToolOutputWithImages):
+            # 画像は文字の結果と分けて持つ（#2650。文字の結果だけを検査・記録する）。
+            images = output.images
+            output = output.output
         guarded_output, warnings = _guard_tool_output(definition, output)
-        return _tool_result(
+        result = _tool_result(
             name=call.name,
             success=True,
             output=guarded_output,
@@ -460,6 +487,7 @@ class ToolRegistry:
             guardrail_warnings=warnings,
             audit_metadata=audit_metadata,
         )
+        return with_tool_result_images(result, images) if images else result
 
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
@@ -1298,6 +1326,125 @@ def mcp_base_tool_name(function_name: str) -> str:
     return function_name.split(MCP_TOOL_SEPARATOR, 1)[-1]
 
 
+def _mcp_texts(result: JsonObject) -> list[str]:
+    content = result.get("content")
+    return [
+        str(item.get("text"))
+        for item in (content if isinstance(content, list) else [])
+        if isinstance(item, dict) and item.get("type") == "text" and item.get("text")
+    ]
+
+
+def _serializes(text: str, structured: JsonObject) -> bool:
+    """text の content が構造化データを直列化しただけのもの（互換用の text）か。"""
+    try:
+        return bool(json.loads(text) == structured)
+    except ValueError:
+        return False
+
+
+def _for_model(block: JsonObject) -> bool:
+    """content の対象にモデル（assistant）が入るか（annotations.audience が無ければ入る）。"""
+    annotations = block.get("annotations")
+    audience = annotations.get("audience") if isinstance(annotations, dict) else None
+    return not isinstance(audience, list) or "assistant" in audience
+
+
+# 画像の由来として構造化データから写す項目（RAG の `rag_read_source` の契約: `image.sha256` が
+# content の画像と同じなら、根拠の ID・文書の版・図の領域 `image_ref`〔page・bbox〕）。
+_IMAGE_SOURCE_KEYS = ("evidence_id", "document_id", "chunk_id", "chunk_set_id")
+
+
+def _structured_image_source(structured: object, sha256: str) -> JsonObject:
+    if not isinstance(structured, dict):
+        return {}
+    meta = structured.get("image")
+    if not isinstance(meta, dict) or meta.get("sha256") != sha256:
+        return {}
+    source: JsonObject = {
+        key: structured[key] for key in _IMAGE_SOURCE_KEYS if isinstance(structured.get(key), str)
+    }
+    region = structured.get("image_ref")
+    if isinstance(region, dict):
+        source["region"] = dict(region)
+    return source
+
+
+def parse_mcp_tool_result(
+    result: JsonObject, *, server_id: str, tool_name: str
+) -> ToolOutputWithImages:
+    """MCP の `tools/call` の成功の結果を、文字の結果と画像に分ける（#2650）。
+
+    - `structuredContent`（object）があればそれを結果にする。text の content のうち構造化データを
+      直列化しただけのもの（互換用の text）は入れず（二重に入れない）、それ以外の説明文は
+      `content_text` に残す。構造化データが無ければ text を `content` にする。
+    - image の content は `ToolImage` にし、参照（`image_id`・MIME・大きさ・由来）を
+      `content_images` に残す。対象が利用者だけ（annotations.audience に assistant が無い）・
+      使えない形式・大きすぎる画像はモデルに渡さず、参照に理由を残す。
+    - ほかの種類の content（音声・resource など）は渡さず、種類と数を `content_omitted` に残す。
+    """
+    structured = result.get("structuredContent")
+    content = result.get("content")
+    texts: list[str] = []
+    images: list[ToolImage] = []
+    refs: list[JsonObject] = []
+    omitted: dict[str, int] = {}
+    for index, block in enumerate(content if isinstance(content, list) else []):
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type")
+        if kind == "text":
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                if isinstance(structured, dict) and _serializes(text, structured):
+                    continue
+                texts.append(text)
+            continue
+        if kind != "image":
+            name = str(kind or "unknown")
+            omitted[name] = omitted.get(name, 0) + 1
+            continue
+        source: JsonObject = {
+            "server_id": server_id,
+            "tool_name": tool_name,
+            "content_index": index,
+        }
+        if not _for_model(block):
+            refs.append(
+                {"mime_type": block.get("mimeType"), "source": source, "model_input": USER_ONLY}
+            )
+            continue
+        decoded = decode_image(block.get("data"), block.get("mimeType"), source=source)
+        if isinstance(decoded, ToolImage):
+            provenance = _structured_image_source(structured, decoded.sha256)
+            if provenance:
+                decoded = ToolImage(
+                    data=decoded.data, mime_type=decoded.mime_type, source={**source, **provenance}
+                )
+            images.append(decoded)
+            refs.append(decoded.reference())
+        else:
+            refs.append(decoded)
+    output: JsonObject
+    if isinstance(structured, dict):
+        output = dict(structured)
+        if texts:
+            output["content_text"] = "\n".join(texts)
+    elif texts:
+        output = {"content": "\n".join(texts)}
+    elif refs:
+        output = {}
+    else:
+        output = {"result": {key: value for key, value in result.items() if key != "content"}}
+    if refs:
+        output[CONTENT_IMAGES_KEY] = refs
+    if omitted:
+        output["content_omitted"] = [
+            {"type": name, "count": count} for name, count in sorted(omitted.items())
+        ]
+    return ToolOutputWithImages(output=output, images=tuple(images))
+
+
 class McpConnectionClient:
     """MCP 接続の client。認証は接続の方式（サービストークン・OAuth・API キー・なし）。
 
@@ -1341,10 +1488,24 @@ class McpConnectionClient:
         idempotent: bool = False,
         trace_id: str | None = None,
     ) -> JsonObject:
+        """ツールを呼び、文字の結果（JSON）を返す（画像は参照だけ。画像も要るときは
+        `call_tool_result`）。"""
+        return self.call_tool_result(
+            tool_name, arguments, idempotent=idempotent, trace_id=trace_id
+        ).output
+
+    def call_tool_result(
+        self,
+        tool_name: str,
+        arguments: JsonObject,
+        *,
+        idempotent: bool = False,
+        trace_id: str | None = None,
+    ) -> ToolOutputWithImages:
         """ツールを呼ぶ。`idempotent=False`（既定。書き込みのツール）は、送信前の失敗と 429 / 503
         だけ再試行する。`idempotent=True`（読み取り専用のツール）は 502 / 504 も再試行する。
         読み取りの timeout はどちらも再試行しない（呼び先で LLM の処理が進んでいる可能性が
-        ある）。"""
+        ある）。結果は文字の結果と画像に分ける（`parse_mcp_tool_result`。#2650）。"""
         response = self._session().request(
             "tools/call",
             {"name": tool_name, "arguments": arguments},
@@ -1359,17 +1520,12 @@ class McpConnectionClient:
                 {**details, "error": response.error},
             )
         result = response.result or {}
-        structured = result.get("structuredContent")
-        content = result.get("content")
-        texts = [
-            str(item.get("text"))
-            for item in (content if isinstance(content, list) else [])
-            if isinstance(item, dict) and item.get("type") == "text" and item.get("text")
-        ]
         if result.get("isError") is True:
+            structured = result.get("structuredContent")
             body = structured if isinstance(structured, dict) else {}
             message = body.get("message")
             if not isinstance(message, str) or not message:
+                texts = _mcp_texts(result)
                 message = texts[0] if texts else f"ツール {tool_name} が失敗しました。"
             raise ExternalToolError(
                 "mcp.tool_error",
@@ -1381,9 +1537,7 @@ class McpConnectionClient:
                     "details": body.get("details"),
                 },
             )
-        if isinstance(structured, dict):
-            return structured
-        return {"content": "\n".join(texts)} if texts else {"result": result}
+        return parse_mcp_tool_result(result, server_id=self.server_id, tool_name=tool_name)
 
     @property
     def _label(self) -> str:
@@ -1680,23 +1834,26 @@ def mcp_tool_handler(config: McpConnectionConfig, tool: ExternalMcpToolInfo) -> 
     """
     follow_up_tool = _job_follow_up_tool(config, tool.name)
 
-    def handle(arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
+    def handle(
+        arguments: JsonObject, context: ToolInvocationContext
+    ) -> JsonObject | ToolOutputWithImages:
         client = McpConnectionClient(config, context=context)
         # 送信後の失敗（502 / 504・通信の途中の切断）も再試行するのは、読み取り専用
         # （readOnlyHint）を信頼できる接続のツールだけ（#854・#2595）。注釈を信頼しない接続の
         # 申告だけでは再送しない（承認の既定の判定 `ToolPolicy.explain` と同じ信頼の境界）。
-        result = client.call_tool(
+        result = client.call_tool_result(
             tool.name,
             arguments,
             idempotent=retry_after_delivery_allowed(config, tool),
             trace_id=context.trace_id,
         )
         if follow_up_tool is None:
-            return result
+            # 画像は文字の結果と分けて返す（#2650。`tool_registry.invoke` が分ける）。
+            return result if result.images else result.output
         return wait_for_product_job(
             client,
             follow_up_tool,
-            result,
+            result.output,
             context=context,
             timeout_seconds=config.timeout_seconds,
         )
