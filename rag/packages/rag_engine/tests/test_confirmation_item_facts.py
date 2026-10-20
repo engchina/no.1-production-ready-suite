@@ -260,7 +260,7 @@ def rule(eid, text, kind="rule"):
 
 
 class GroundedConfirmationFactsTest(unittest.TestCase):
-    def test_abolished_version_is_quote_only_and_not_asked(self):
+    def test_abolished_version_gets_a_warning_and_is_not_asked(self):
         question = "地域別集計表を出力する手順を教えてください。"
         ctx = context(
             versioned(0, V2_STEP, V2_TITLE, "guide-v2.pdf"),
@@ -281,14 +281,19 @@ class GroundedConfirmationFactsTest(unittest.TestCase):
         reviews = [(index, "supported", "matched", "") for index in range(3)]
         response = _run(FakeModel([value], [audit(*reviews, requests=[("Q1", "addressed")])]), ctx, question)
         envelope = response.envelope
+        # 旧版の説明は言い換えを残して警告（superseded）を付ける（#2738）。警告だけなので answered。
         self.assertEqual(envelope["outcome"], "answered")
+        self.assertIn("rule_warnings", envelope["handoff_reasons"])
         self.assertEqual(envelope["confirmations"], [])
         self.assertFalse(response.external_data_required)
-        # 旧版を原文のみ提示にしたことは検査の不合格ではない（人の確認に回さない）。
+        # 旧版の警告は検査の不合格ではない（人の確認に回さない）。
         self.assertFalse(response.needs_human_review)
-        applies = {item["text"]: item["applies"] for item in envelope["items"]}
-        self.assertEqual(applies[V1_STEP], "quote_only")
-        self.assertEqual(applies[V2_STEP], "matched")
+        marks = {item["text"]: (item["applies"], item["mark"]) for item in envelope["items"]}
+        self.assertEqual(marks[V1_STEP], ("matched", "warning"))
+        self.assertEqual(marks[V2_STEP], ("matched", ""))
+        (passage,) = envelope["passage_marks"]
+        self.assertTrue(passage["text"].endswith(V1_STEP))
+        self.assertEqual([reason["code"] for reason in passage["reasons"]], ["superseded"])
         structure = response.generation_trace["grounded_draft"]
         self.assertEqual(structure["superseded_evidence_ids"], [eids[V1_STEP]])
         self.assertEqual(structure["superseded_withheld"], 1)

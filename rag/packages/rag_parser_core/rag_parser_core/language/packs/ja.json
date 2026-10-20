@@ -2389,6 +2389,12 @@
     "condition_suffix": "場合",
     "condition_link": "の",
     "subquestion_heading_template": "質問{label}：{text}",
+    "removed_section": "根拠と矛盾し除いた内容",
+    "removed_section_note": "次の内容は根拠と矛盾するため、回答から除きました。",
+    "marked_section": "確認が必要な点",
+    "marked_section_note": "次の箇所は根拠で確かめられていないか、注意が必要です。",
+    "passage_note_template": "「{text}」：{reasons}",
+    "answer_warning_template": "回答全体：{reasons}",
     "predicate_endings": [
       "た",
       "だ",
@@ -2412,6 +2418,26 @@
       "構成明細=member_details",
       "集計対象の一致=population_membership",
       "列挙の網羅（件数・範囲）=enumeration_coverage"
+    ],
+    "passage_reason_labels": [
+      "根拠で確かめられない=unsupported",
+      "出典を確かめられない=citation_error",
+      "引用の原文が根拠に見当たらない=quote_unmatched",
+      "確かめが終わっていない=unassessed",
+      "図の画像を読めておらず確かめられない=figure_not_read",
+      "根拠は別の対象についての記載=target_mismatch",
+      "根拠の表の対応と違う可能性=value_unbound",
+      "システムの検査で注意が必要=item_check",
+      "旧版・廃止の資料に基づく=superseded",
+      "前の手順が根拠と矛盾=after_contradicted_step",
+      "前提の手順が未確認=after_unverified_step",
+      "要約を根拠で確かめていない=summary_unaudited",
+      "条件への当てはめを確かめていない=application_unaudited",
+      "根拠と矛盾=contradicted",
+      "業務ガイドの手順の確認で問題が見つかった=guide_check",
+      "根拠を読めず、すべての段落が未確認=no_evidence",
+      "質問からずれている可能性=off_goal",
+      "質問の要求の一部に答えていない=requests"
     ]
   },
   "answer_check_cues": {

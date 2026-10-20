@@ -54,21 +54,37 @@ class ApplicationTest(unittest.TestCase):
         self.assertFalse(trace["published"])
         self.assertTrue(any(reason.startswith("算式が合わない") for reason in trace["reasons"]))
 
-    def test_application_with_premise_not_in_question_is_not_published(self):
+    def test_application_with_premise_not_in_question_is_published_with_a_warning(self):
+        """前提を質問と照合できない当てはめは、出して警告（application_unaudited）を付ける（#2738）。"""
         result = answer([application(premises=("延滞日数が20日",))])
-        self.assertNotIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
+        self.assertIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
         (trace,) = result.generation_trace["applications"]
-        self.assertIn("前提『延滞日数が20日』は質問に無い", trace["reasons"])
+        self.assertTrue(trace["published"])
+        self.assertIn("前提『延滞日数が20日』は質問に無い", trace["warnings"])
+        (mark,) = [m for m in result.envelope["passage_marks"] if m["text"] == "・延滞料は1200円です。"]
+        self.assertEqual(mark["state"], "warning")
+        self.assertEqual([r["code"] for r in mark["reasons"]], ["application_unaudited"])
 
     def test_application_rejected_by_audit_is_not_published(self):
         result = answer([application()], application_reviews=((0, False),))
         self.assertNotIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
         self.assertFalse(result.generation_trace["applications"][0]["published"])
 
-    def test_application_is_not_published_when_its_rule_is_downgraded(self):
+    def test_application_on_an_unverified_rule_is_published_with_a_warning(self):
+        """当てはめた規則が根拠で確かめられない（印つき）なら、当てはめは出して警告を付ける（#2738）。"""
         result = answer([application()], rule_review=("unsupported", "matched"))
+        self.assertIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
+        self.assertTrue(result.generation_trace["applications"][0]["published"])
+        marks = {m["text"]: m for m in result.envelope["passage_marks"]}
+        self.assertEqual(marks["・延滞料は1200円です。"]["reasons"][0]["code"], "application_unaudited")
+        self.assertEqual(marks["・延滞料は延滞日数に100円を掛けた額です。"]["state"], "unverified")
+
+    def test_application_is_not_published_when_its_rule_is_contradicted(self):
+        """当てはめた規則が根拠と矛盾して外れたら、当てはめも出さない（#2738）。"""
+        result = answer([application()], rule_review=("contradicted", "matched"))
         self.assertNotIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
         self.assertFalse(result.generation_trace["applications"][0]["published"])
+        self.assertEqual([p["text"] for p in result.envelope["removed_passages"]], ["延滞料は延滞日数に100円を掛けた額です。"])
 
     def test_application_with_internal_labels_is_not_published(self):
         """「規則0」「E12」のような内部の番号を利用者向けの文に書いた当てはめは公開しない（#2165）。"""
@@ -113,7 +129,7 @@ class SchemaModel:
 
 
 def neutral_answer(question, step_draft, step_audit):
-    """草稿が当てはめを書かず、監査が結論を支持しない（中立の文になる）回答。"""
+    """草稿が当てはめを書かず、監査が結論を支持しない（summary に警告が付く。#2738）回答。"""
     ctx = context(record(0, RULE_TEXT, FUNCTION))
     eid = ids(ctx, question)[RULE_TEXT]
     review = audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")], summary_supported=False)
@@ -142,15 +158,19 @@ class ApplicationStepTest(unittest.TestCase):
         self.assertEqual((trace["published"], trace["source"]), (True, "step"))
         self.assertEqual(result.generation_trace["application_step"], {"ran": True, "published": 1})
 
-    def test_step_keeps_neutral_summary_when_audit_rejects(self):
+    def test_step_keeps_the_unaudited_summary_with_a_warning_when_audit_rejects(self):
+        """当てはめの監査が誤りとしたら当てはめは出さず、草稿の summary は警告つきで残す（#2738）。"""
         rejected = {"application_reviews": [{"index": 0, "valid": False, "reason": "r"}], "summary_supported": True}
         result, _ = neutral_answer(QUESTION, self.STEP_DRAFT, rejected)
         self.assertNotIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
-        self.assertTrue(result.answer_text.startswith("資料の記載を以下に示します。"))
+        self.assertTrue(result.answer_text.startswith("延滞料は1200円です。"))
+        (mark,) = [m for m in result.envelope["passage_marks"] if m["text"] == "延滞料は1200円です。"]
+        self.assertEqual(mark["reasons"][0]["code"], "summary_unaudited")
 
     def test_step_is_skipped_without_facts_and_survives_failure(self):
         _, model = neutral_answer("延滞料の計算方法を教えてください。", self.STEP_DRAFT, self.STEP_AUDIT)
         self.assertNotIn("ApplicationDraft", model.calls)
         result, _ = neutral_answer(QUESTION, RuntimeError("LLM 失敗"), self.STEP_AUDIT)
-        self.assertTrue(result.answer_text.startswith("資料の記載を以下に示します。"))
+        self.assertTrue(result.answer_text.startswith("延滞料は1200円です。"))
         self.assertIn("RuntimeError", result.generation_trace["application_step"]["error"])
+        self.assertIn("延滞料は1200円です。", [m["text"] for m in result.envelope["passage_marks"]])

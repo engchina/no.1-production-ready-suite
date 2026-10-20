@@ -222,12 +222,16 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "addressed", "guide:s2": "partial"})
         self.assertEqual(result.envelope["outcome"], "conditional")
         self.assertTrue(result.needs_human_review)
-        self.assertIn("業務ガイドの手順「反映ボタンで確定する」は、資料の記載を参考情報として示しただけ", result.answer_text)
+        self.assertIn(
+            "業務ガイドの手順「反映ボタンで確定する」は、資料の記載を参考情報として示したか、根拠で確かめられない説明だけ",
+            result.answer_text,
+        )
         self.assertIn("反映ボタンで確定する", result.insufficient_reason)
         coverage = result.generation_trace["guide_step_coverage"]
         self.assertEqual([step["status"] for step in coverage], ["explained", "reference_only"])
-        # 監査の正当な降格は無効にしない（B の説明は公開せず、原文のまま示す）。
-        self.assertNotIn("反映画面で反映ボタンを押して確定します。", result.answer_text)
+        # 監査の判定は無効にしない（B の説明は警告つきで示し、手順を確かめた説明にはしない。#2738）。
+        (mark,) = result.envelope["passage_marks"]
+        self.assertEqual((mark["text"], mark["reasons"][0]["code"]), ("2. 反映画面で反映ボタンを押して確定します。", "target_mismatch"))
 
     def test_missing_step_evidence_is_shown_without_regeneration(self):
         """手順 B の根拠が回答の材料に無ければ、同じ根拠での作り直しはせず、不足として示す。"""
@@ -534,7 +538,10 @@ class GuideStepSharedEvidenceAnswerTest(unittest.TestCase):
         self.assertIn("guide_steps_unexplained", drafts[1])
         self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "addressed", "guide:s2": "partial"})
         self.assertEqual(result.envelope["outcome"], "conditional")
-        self.assertIn("業務ガイドの手順「反映ボタンで反映する」は、資料の記載を参考情報として示しただけ", result.answer_text)
+        self.assertIn(
+            "業務ガイドの手順「反映ボタンで反映する」は、資料の記載を参考情報として示したか、根拠で確かめられない説明だけ",
+            result.answer_text,
+        )
         self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["explained", "reference_only"])
         # 公開できる部分（手順 1 と共通の操作）は部分回答として残す。
         self.assertIn("設定画面で設定 A の値を入力します。", result.answer_text)

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
 
-from rag_engine.generation.answer_envelope import build_envelope, envelope_requests, fallback_envelope
+from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION, build_envelope, envelope_requests, fallback_envelope
 
 
 class AnswerEnvelopeFromGroundedAnswerTest(unittest.TestCase):
@@ -15,13 +15,15 @@ class AnswerEnvelopeFromGroundedAnswerTest(unittest.TestCase):
         eid = ids(ctx)[LIST_TEXT]
         steps = draft(item(eid, "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。", request_id="Q1"))
         envelope = run(FakeModel([steps], [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])]), ctx).response.envelope
-        self.assertEqual(envelope["schema_version"], 1)
+        self.assertEqual(envelope["schema_version"], ENVELOPE_SCHEMA_VERSION)
         self.assertEqual(envelope["outcome"], "answered")
         self.assertEqual(envelope["requests"][0]["status"], "addressed")
         self.assertEqual(envelope["items"][0]["kind"], "operation")
         self.assertEqual(envelope["items"][0]["evidence_id"], eid)
         self.assertEqual(envelope["items"][0]["location"], "p.20")
+        self.assertEqual(envelope["items"][0]["mark"], "")
         self.assertEqual(envelope["handoff_reasons"], [])
+        self.assertEqual((envelope["passage_marks"], envelope["removed_passages"], envelope["answer_warnings"]), ([], [], []))
 
     def test_conditional_item_makes_the_answer_conditional_with_the_condition(self):
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
@@ -116,6 +118,29 @@ class AnswerEnvelopeBuildTest(unittest.TestCase):
         # 実行できる説明があれば、要求が missing でも答えた部分があるので変えない。
         action = {"kind": "rule", "text": "説明", "applies": "matched", "condition": ""}
         self.assertEqual(build_envelope(items=[action], external_data_required=True, **common)["outcome"], "needs_environment_data")
+
+    def test_passage_marks_decide_the_outcome_and_handoff(self):
+        """矛盾で外した段落・未確認の段落は条件付き、警告だけは answered、すべて未確認は insufficient_evidence（#2738）。"""
+        common = {"requests": [], "reviews": None, "gaps": [], "confirmations": [], "external_data_required": False}
+        confirmed = {"kind": "rule", "text": "説明", "applies": "matched", "condition": "", "mark": ""}
+        unverified = {**confirmed, "text": "未確認の説明", "mark": "unverified"}
+        warning = {**confirmed, "text": "要注意の説明", "mark": "warning"}
+        removed = [{"text": "外した説明", "reasons": [{"code": "contradicted", "label": "根拠と矛盾", "detail": ""}]}]
+
+        def mark(text, state, code):
+            return {"text": f"・{text}", "state": state, "reasons": [{"code": code, "label": "", "detail": ""}]}
+
+        envelope = build_envelope(items=[confirmed], removed_passages=removed, **common)
+        self.assertEqual((envelope["outcome"], envelope["handoff_reasons"]), ("conditional", ["contradicted_removed"]))
+        self.assertEqual(envelope["removed_passages"], removed)
+        envelope = build_envelope(
+            items=[confirmed, unverified], passage_marks=[mark("未確認の説明", "unverified", "unsupported")], **common
+        )
+        self.assertEqual((envelope["outcome"], envelope["handoff_reasons"]), ("conditional", ["unverified_passages"]))
+        envelope = build_envelope(items=[confirmed, warning], passage_marks=[mark("要注意の説明", "warning", "item_check")], **common)
+        self.assertEqual((envelope["outcome"], envelope["handoff_reasons"]), ("answered", ["rule_warnings"]))
+        envelope = build_envelope(items=[unverified], passage_marks=[mark("未確認の説明", "unverified", "unsupported")], **common)
+        self.assertEqual(envelope["outcome"], "insufficient_evidence")
 
     def test_fallback_envelope_for_answers_without_grounded_structure(self):
         self.assertEqual(fallback_envelope(answered=False, insufficient_reason="根拠なし")["outcome"], "insufficient_evidence")

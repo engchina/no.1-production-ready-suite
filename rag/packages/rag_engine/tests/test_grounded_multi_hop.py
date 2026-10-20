@@ -86,8 +86,8 @@ def test_summary_rejected_for_a_merged_hop_is_published_after_the_correction_spl
     assert grounded.answer_labels().quote_only_section not in result.answer_text
 
 
-def test_summary_rejected_while_every_item_was_supported_stays_unpublished():
-    """不支持の round の item がすべて支持されていたなら、summary 自体の断定が理由。後の round で支持されても公開しない (#621)。"""
+def test_summary_rejected_while_every_item_was_supported_keeps_a_warning():
+    """不支持の round の item がすべて支持されていたなら、summary 自体の断定が理由。後の round で支持されても警告を付ける (#621・#2738)。"""
     ctx = _context()
     by_text = ids(ctx, QUESTION)
     hops = _hops(by_text)
@@ -98,14 +98,15 @@ def test_summary_rejected_while_every_item_was_supported_stays_unpublished():
     result = run(model, ctx, QUESTION).response
 
     assert [r["accepted"] for r in result.generation_trace["rounds"]] == [True, True]
-    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
-    assert guarantee not in result.answer_text
+    assert result.answer_text.startswith(guarantee)
+    (mark,) = [m for m in result.envelope["passage_marks"] if m["text"] == guarantee]
+    assert [(r["code"], r["detail"]) for r in mark["reasons"]] == [("summary_unaudited", "前の回の監査が同じ summary を不支持")]
 
 
 def test_summary_rewritten_to_another_conclusion_follows_the_audit_of_the_accepted_round():
     """不支持の summary（別の時間帯を結論にした）を是正で別の結論に書き直したら、採用した回の監査に従う (#1383)。
 
-    #621 の引き継ぎは同じ文を繰り返す summary だけに掛ける。不支持の文が残る summary は公開しない。
+    #621 の引き継ぎは同じ文を繰り返す summary だけに掛ける。不支持の文が残る summary には警告を付ける。
     """
     ctx = _context()
     by_text = ids(ctx, QUESTION)
@@ -124,7 +125,7 @@ def test_summary_rewritten_to_another_conclusion_follows_the_audit_of_the_accept
 
 
 def test_missing_hop_keeps_the_conclusion_out_of_the_summary():
-    """台帳の段が根拠に無ければ、つないだ結論を断定しない（足りない段を推測で埋めない）。"""
+    """台帳の段が根拠に無ければ、つないだ結論には警告を付ける（足りない段を推測で埋めたことを示す。#2738）。"""
     ctx = context(
         record(2, APPROVERS, "第 3 章 部署の承認者", page=2, source="organization-rules.pdf"),
         record(3, DEADLINES, "承認の期限", page=1, source="approval-rules.pdf"),
@@ -137,10 +138,12 @@ def test_missing_hop_keeps_the_conclusion_out_of_the_summary():
     )
     model = FakeModel([draft(*hops, gap, summary=CONCLUSION)], [rejected])
 
-    text = run(model, ctx, QUESTION).response.answer_text
+    result = run(model, ctx, QUESTION).response
+    text = result.answer_text
 
-    assert text.startswith(grounded.answer_labels().neutral_summary)
-    assert CONCLUSION not in text
+    assert text.startswith(CONCLUSION)
+    (mark,) = [m for m in result.envelope["passage_marks"] if m["text"] == CONCLUSION]
+    assert [(r["code"], r["detail"]) for r in mark["reasons"]] == [("summary_unaudited", "監査が summary を不支持")]
     assert "人事給与システムの担当部署は取得した資料に記載がありません。" in text
 
 

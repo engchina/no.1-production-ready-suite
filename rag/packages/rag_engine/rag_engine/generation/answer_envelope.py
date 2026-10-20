@@ -6,10 +6,12 @@
 
 対応（outcome）:
 
-- answered: 公開した説明があり、未回答の要求・不足・条件付きの説明が無い。
+- answered: 公開した説明があり、未回答の要求・不足・条件付きの説明が無い。段落の警告（warning）だけがある回答も
+  ここ（handoff_reasons に rule_warnings。#2738）。
 - conditional: 公開した説明はあるが、未回答の要求・不足・適用の条件（未確認を含む）がある。または原文の
   提示だけ（適用は未確認）で答えた。利用者が答えられる確認の項目（`who_can_answer=user`）・別の資料で
-  分かる項目（`who_can_answer=document`）だけを確かめる回答もここ（#1453、#1492）。
+  分かる項目（`who_can_answer=document`）だけを確かめる回答もここ（#1453、#1492）。根拠と矛盾して外した段落
+  （contradicted_removed）か、根拠で確かめられない段落（unverified_passages）がある回答もここ（#2738）。
 - needs_environment_data: 回答の確定に、システムだけが持つ値（設定値・記録・ログ。確認の項目の
   `who_can_answer=system`）の確認が要る。別の資料の確認（`confirmation_lines` の「資料:」の行）は実データに
   数えない（#1491）。
@@ -18,7 +20,8 @@
 事実（誰が答えられるか・すでに分かっているか・結論がその値で分かれるか）だけを答えさせ、どの対応にするかは
 ここの規則で決める（selective prediction / clarifying question の判定と同じく、自己申告の分類に頼らない）。
 - insufficient_evidence: 公開できる説明も原文も無く、資料から答えられない。実行できる説明が無く、要求が
-  すべて答えられていない（missing）ときも、実データ・別の資料の確認より先にここにする（#1491）。
+  すべて答えられていない（missing）ときも、実データ・別の資料の確認より先にここにする（#1491）。本文の説明が
+  すべて根拠で確かめられない（unverified）ときもここ（本文は出す。#2738）。
 - needs_clarification / needs_human: 利用者への確認・人への引き継ぎ（業務ガイドと会話の段で決める。
   ここでは作らない）。
 """
@@ -31,7 +34,9 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-ENVELOPE_SCHEMA_VERSION = 1
+# 2: 段落の印（passage_marks）・外した段落（removed_passages）・回答全体の警告（answer_warnings）と、
+#    items の印（mark）を足した（#2738）。
+ENVELOPE_SCHEMA_VERSION = 2
 AnswerOutcome = Literal[
     "answered",
     "conditional",
@@ -242,7 +247,7 @@ def guide_step_requests(guide_steps: Sequence[Mapping[str, Any]]) -> list[dict[s
 
 
 def envelope_item(entry: Any) -> dict[str, Any]:
-    """公開した説明 1 件（grounded の CheckedItem）。"""
+    """公開した説明 1 件（grounded の CheckedItem）。mark は段落の印の状態（unverified / warning。無ければ空。#2738）。"""
     item = entry.item
     span = entry.span or {}
     applies = "quote_only" if entry.quote_only else str(item.applies)
@@ -254,6 +259,7 @@ def envelope_item(entry: Any) -> dict[str, Any]:
         "location": str(span.get("location") or (f"p.{span['page']}" if span.get("page") else "")),
         "applies": applies,
         "condition": str(item.condition or ""),
+        "mark": str(getattr(entry, "state", "") or ""),
     }
 
 
@@ -270,6 +276,9 @@ def build_envelope(
     user_conditions: Sequence[str] = (),
     document_items: Sequence[str] = (),
     guide_steps: Sequence[Mapping[str, Any]] = (),
+    passage_marks: Sequence[Mapping[str, Any]] = (),
+    removed_passages: Sequence[Mapping[str, Any]] = (),
+    answer_warnings: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """回答の構造を組み立てる。
 
@@ -280,6 +289,10 @@ def build_envelope(
     資料の不足として回答を条件付きにし、reference_materials に載せる。
     guide_steps は業務ガイドの手順ごとの充足（#2491。grounded の `guide_step_coverage`）で、必須の手順を要求に足す。
     説明できていない手順は未回答の要求として回答を条件付きにする。
+    passage_marks・removed_passages・answer_warnings は段落の印・外した段落・回答全体の警告（#2738。形は
+    ``platform/contracts/answer-passages/passage-marks.json``）。矛盾で外した段落か未確認の段落があれば条件付き、
+    警告だけなら answered のまま handoff_reasons に rule_warnings を付ける。本文の説明（items の mark）がすべて
+    未確認なら insufficient_evidence（本文は出す）。
     """
     request_entries = [*envelope_requests(requests, reviews), *guide_step_requests(guide_steps)]
     actionable = [item for item in items if item.get("applies") != "quote_only"]
@@ -304,15 +317,34 @@ def build_envelope(
         handoff.append("reference_materials")
     if off_goal:
         handoff.append("off_goal")
+    unverified_marks = [mark for mark in passage_marks if mark.get("state") == "unverified"]
+    if removed_passages:
+        handoff.append("contradicted_removed")
+    if unverified_marks:
+        handoff.append("unverified_passages")
+    if any(mark.get("state") == "warning" for mark in passage_marks):
+        handoff.append("rule_warnings")
+    # 本文の説明がすべて根拠で確かめられない（確かめた段落が 1 つも無い）。
+    all_unverified = bool(actionable) and all(item.get("mark") == "unverified" for item in actionable)
 
     outcome: AnswerOutcome
     if no_answer:
         outcome = "insufficient_evidence"
     elif external_data_required or (environment and not actionable):
         outcome = "needs_environment_data"
-    elif not items:
+    elif not items or all_unverified:
         outcome = "insufficient_evidence"
-    elif not actionable or unanswered or gaps or unsettled or off_goal or user_conditions or document_items:
+    elif (
+        not actionable
+        or unanswered
+        or gaps
+        or unsettled
+        or off_goal
+        or user_conditions
+        or document_items
+        or removed_passages
+        or unverified_marks
+    ):
         outcome = "conditional"
     else:
         outcome = "answered"
@@ -326,6 +358,9 @@ def build_envelope(
         "confirmations": _unique(confirmations),
         "reference_materials": _unique([*reference_materials, *document_items]),
         "handoff_reasons": handoff,
+        "passage_marks": [dict(mark) for mark in passage_marks],
+        "removed_passages": [dict(item) for item in removed_passages],
+        "answer_warnings": [dict(item) for item in answer_warnings],
     }
 
 

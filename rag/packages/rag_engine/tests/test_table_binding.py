@@ -100,7 +100,8 @@ def test_markdown_tables_and_other_tables_binding_the_value() -> None:
     assert unbound_table_values("区分Ⅱは 01 です。", ["区分Ⅰは 01 です。区分Ⅱは 02 です。"]) == []  # 表でない本文は見ない
 
 
-def test_grounded_item_with_a_value_from_another_row_is_downgraded() -> None:
+def test_grounded_item_with_a_value_from_another_row_gets_a_warning() -> None:
+    """表の別の行の値を結び付けた説明は、言い換えを残して警告（value_unbound）を付ける（#2738。以前は降格）。"""
     question = "区分Ⅱで選ぶ選択肢の値は？"
     spans = grounded.tag_spans(
         question, [{"evidence_id": "E1", "source_id": "c1", "source": "m.pdf", "page": 1, "text": TABLE, "section_path": []}]
@@ -112,8 +113,11 @@ def test_grounded_item_with_a_value_from_another_row_is_downgraded() -> None:
         entries, _ = grounded.verify(question, GroundedDraft(summary="", confidence="high", items=[item]), spans)
         return next(entry for entry in entries if entry.item.text == item.text)
 
-    assert checked(wrong).quote_only and "表の別の行の値" in checked(wrong).reasons[0]
-    assert not checked(right).quote_only and checked(right).reasons == []
+    entry = checked(wrong)
+    assert not entry.quote_only and entry.state == "warning" and "表の別の行の値" in entry.reasons[0]
+    assert [mark["code"] for mark in entry.marks] == ["value_unbound"]
+    assert "原文「区分Ⅱ | 02」" in entry.marks[0]["detail"]
+    assert not checked(right).quote_only and checked(right).reasons == [] and checked(right).state == ""
 
 
 def test_grounded_item_listing_values_of_several_rows_is_kept() -> None:

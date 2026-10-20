@@ -1,11 +1,14 @@
-"""主張と引用を対で生成し、決定的検査と局所監査で公開範囲を決める回答生成。
+"""主張と引用を対で生成し、決定的検査と局所監査で段落の印を決める回答生成。
 
 自由文を生成してから段落を監査・削除する方式では、監査を強めると支持済みの説明まで
-消え、緩めると未裏付けの操作が残った。ここでは根拠を出力構造で持つ:
+消え、緩めると未裏付けの操作が残った。ここでは根拠を出力構造で持つ（#2738）:
 
-- 削除できるのは決定的検査だけ（未知の Evidence ID、原文と一致しない引用）。
-- ITEM_CHECKS と LLM 監査は降格だけを行う。降格した item は言い換えを捨て、
-  原文引用を「参考情報」の節に逐語表示する（適用が未確認の説明も同じ節に置く）。
+- 本文から外すのは、LLM 監査が根拠と矛盾（contradicted）と判定した item だけ。
+- 根拠で確かめられない item（監査の unsupported、未知の Evidence ID、原文と一致しない引用）は
+  言い換えを本文に残し、段落に印（unverified）を付ける。
+- ITEM_CHECKS・旧版の根拠・監査の not_applicable は、言い換えを残して警告（warning）を付ける。
+- 「参考情報」の節は、システムが補った原文（必須根拠・確定操作・但し書き・拒答の関連原文）と、
+  適用が未確認の説明の原文を示す。
 - 文書固有の知識は SPAN_TAGGERS（原文へのタグ付け）と ITEM_CHECKS（item の検査）に
   関数として並べる。質問ID・ファイル名・ページによる分岐は置かない。
 """
@@ -28,6 +31,7 @@ from typing import Any
 from rag_parser_core.language import current_pack
 
 from rag_engine.chunking import _flatten_table_html, _section_unit
+from rag_engine.generation import passage_marks
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     SettledConfirmations,
@@ -103,13 +107,13 @@ GENERATE_SYSTEM_PROMPT = (
     "- 添付原画像と根拠レコードの対応（画像がある場合）: 各画像の bbox / context_bbox / target_highlight / asset_kind。\n"
     "2.2 Evidence の見出し行\n"
     "- origin（見出し行では `origin=` と表記）: document_text は解析された本文、image_extraction は画像からの生成説明・OCR、unclassified は未分類。\n"
-    # タグは SPAN_TAGGERS が原文へ付け、ITEM_CHECKS が降格の条件に使う。意味を伝えないと、モデルは降格の条件を知らずに書く。
+    # タグは SPAN_TAGGERS が原文へ付け、ITEM_CHECKS が警告の条件に使う。意味を伝えないと、モデルは条件を知らずに書く。
     "- tags は原文の性質を示す。\n"
     "  - definition: 項目の定義・表示条件。\n"
     "  - operation_entry: 質問の操作の入口。\n"
     "  - completion: 確定・完了の操作を含む（手順の最後まで item にする）。\n"
     "  - constraint: 適用条件・限定を含む（質問から成立を確認できなければ applies=conditional）。\n"
-    "  - multi_condition: 複数の処理区分が並ぶ（text は quote と同じ逐語にする。言い換えると公開されない）。\n"
+    "  - multi_condition: 複数の処理区分が並ぶ（text は quote と同じ逐語にし、言い換えない）。\n"
     "  - image_generated: 画像からの生成説明・OCR（origin=image_extraction と同じ扱いで、必須根拠にはならない）。\n"
     "  - aggregate_only: 集計値だけの原文（id が .M1 で終わる構成明細の要求の根拠にしない）。\n"
     f"- {CONTEXT_NOTE_BEGIN} から {CONTEXT_NOTE_END} までは文書の属性を示す補助情報で、本文ではない。読んでよいが quote には写さない。\n"
@@ -184,9 +188,9 @@ GENERATE_SYSTEM_PROMPT = (
     "- 個案判断に必要な実値や別資料が未閲覧という理由だけで low にしない。案内の適用業務・画面・版が未確定なら high にしない。high は個案の最終解決や操作の実行済みを意味しない。\n"
     "4.7 決定的検査\n"
     "- 引用と原文の不一致、根拠にないボタン名・操作語・数値、削除対象の不一致、集計値だけでの明細回答、質問の対象を含まない別文書の手順、見出しの入口化は"
-    "システムの検査で降格・除外される。原文にない語・操作・値を text に足さない。\n"
+    "システムの検査で、根拠と合わない説明として利用者に示される。原文にない語・操作・値を text に足さない。\n"
     "- 原文が『〜が選択可能になります』『〜できるようになります』のような可否・状態の記述なら、操作（kind=operation）に書き換えず kind=rule として原文の語で書く"
-    "（「〜に変更し」のような原文にない操作語は降格される）。\n"
+    "（「〜に変更し」のような原文にない操作語は、根拠で確かめられない説明になる）。\n"
     # 多段の質問で、途中の段を「適用は未確認」に回して結論を書かない回答があった (#1383)。
     "4.8 複数の根拠をつなぐ答え（多段）\n"
     "- 質問の対象から答えまでを複数の根拠でつなぐ質問（例: システム → 台帳の担当部署の略号 → 略号が指す部署 → その部署の承認者 → 承認者の役職の期限）は、"
@@ -260,6 +264,8 @@ AUDIT_SYSTEM_PROMPT = (
     "3. 判定規則\n"
     "3.1 support（quote が text を支持するか）\n"
     "- quote が text の内容をそのまま裏付ければ supported。quote にない操作・画面・値・効果・原因を text が足していれば unsupported。quote と逆なら contradicted。\n"
+    # contradicted の item だけを本文から外すので、書かれていないだけの item を contradicted にさせない (#2738)。
+    "- contradicted は quote（と function_context）が text と両立しない（逆の値・可否・順序・対象）ときだけ。quote に書かれていないだけなら unsupported。\n"
     "- supported は quote（と function_context）が text の対象・操作・効果を積極的に裏付ける場合だけ。quote と矛盾しないだけの付加説明、quote にない前提・限定・因果の追加は unsupported。\n"
     "- 実データが未提供という理由だけで unsupported や not_applicable にしない。原文どおりの説明は supported。\n"
     "- 質問の語（画面名・メッセージ文）が quote にないことだけを理由に unsupported にしない（対象・条件が同じなら supported、対応が未確認なら conditional）。\n"
@@ -301,7 +307,7 @@ AUDIT_SYSTEM_PROMPT = (
     "- request_reviews: request_units の各 id について、items（valid な applications を含む）が答えていれば addressed（複数の item をつないで答えていても addressed）、一部なら partial、なければ missing、背景なら context。reason は質問と同じ言語で書く。\n"
     "- unused_evidence_ids: 未使用根拠のうち、質問への回答に必要なのに items で使われていないものだけを、重要な順に最大8件挙げる。"
     "unused_evidence の text は各根拠の先頭の抜粋で全文ではない。抜粋から必要と読み取れるものだけを挙げ、続きを推測して挙げない。\n"
-    "- items が空の草稿（gap だけ、または全 item が検査で降格）も同じ入力で監査する。items が答えていない要求は unused_evidence に答えがあっても missing とし、その根拠を unused_evidence_ids に挙げる（拒答の妥当性の確認）。\n"
+    "- items が空の草稿（gap だけ）も同じ入力で監査する。items が答えていない要求は unused_evidence に答えがあっても missing とし、その根拠を unused_evidence_ids に挙げる（拒答の妥当性の確認）。\n"
     "- summary_supported: summary が items の範囲を超える断定をしていなければ true。質問が原因・理由を尋ねている場合、summary が supported な item の quote にない原因や可能性を挙げていれば false（「〜のいずれかが原因と考えられます」のような列挙も同じ）。\n"
     "- summary が supported な item の規則と valid な application の result をつないだ結論（規則を質問の事実に当てはめた計算・該当の判断）なら、summary_supported=true。\n"
     "- summary が supported な複数の item の事実をつないだ結論（「A の担当は略号 X」「X は〇〇部」「〇〇部の承認者は Y」→「A の変更は Y が承認」）なら、items の範囲を超える断定ではないので summary_supported=true。つなぐ段のどれかが supported な item に無ければ false。\n"
@@ -697,17 +703,19 @@ def guarantees_unexplained(text: str, quote: str, limits: Sequence[str]) -> str:
     return ""
 
 
-# 降格・除外した主張の語（支持された主張にない 2 文字組）が summary の同じ文にどれだけ現れれば「断定している」と
+# 外した・印の付いた主張の語（支持された主張にない 2 文字組）が summary の同じ文にどれだけ現れれば「断定している」と
 # みなすか。割合と最小組数の両方を要求し、「対象外」の「象外」のような 1 組の揺れでは判定しない (ponytail: 閾値は回帰で調整)。
 _DENIED_CLAIM_RATIO = 0.5
 _DENIED_CLAIM_MIN_BIGRAMS = 2
 
 
-def summary_asserts_denied(summary: str, denied: Sequence[str], verified: Sequence[str]) -> str:
-    """summary の文が、降格・除外した item の主張を繰り返していれば理由を返す (#1013)。
+def summary_asserts_denied(
+    summary: str, denied: Sequence[str], verified: Sequence[str], *, subject: str = "根拠と矛盾して外した主張"
+) -> str:
+    """summary の文が、外した・印の付いた item（``subject``）の主張を繰り返していれば理由を返す (#1013・#2738)。
 
-    監査の summary_supported は item 単位の判定と独立に返るため、item を unsupported にしながら summary を支持する
-    矛盾した応答が通る。降格した item の text の語（漢字・カタカナ・英数字の 2 文字組）のうち、支持された item の
+    監査の summary_supported は item 単位の判定と独立に返るため、item を否定しながら summary を支持する
+    矛盾した応答が通る。否定した item の text の語（漢字・カタカナ・英数字の 2 文字組）のうち、支持された item の
     text に無いもの（その主張に固有の語）が summary の同じ文に一定割合以上現れる場合、summary は否定された主張を
     断定しているとみなす。支持された主張の言い換えは固有の語が無いので判定しない。語の並びで判定し、意味は見ない。
     """
@@ -723,7 +731,7 @@ def summary_asserts_denied(summary: str, denied: Sequence[str], verified: Sequen
         for sentence in sentences:
             present = distinctive & sentence
             if len(present) >= _DENIED_CLAIM_MIN_BIGRAMS and len(present) / len(claim) >= _DENIED_CLAIM_RATIO:
-                return "降格した主張を summary が断定: " + text[:60]
+                return f"{subject}を summary が断定: " + text[:60]
     return ""
 
 
@@ -858,9 +866,10 @@ def _check_verbatim_conditions(question: str, item: GroundedItem, span: dict) ->
     return ""
 
 
-# 降格させる検査。質問が尋ねた対象・画面・要求の種類に合っているか、画面の表示例の値を答えにしていないかを
-# 見る。資料が別の対象を説明していれば引用が正しくても回答として誤りで、スクリーンショットや生成説明に写った
-# 値は利用者の実値でも規則でもないので、監査を待たずに原文のみ提示へ落とす（_check_value は #1100 で戻した）。
+# 警告を付ける検査。質問が尋ねた対象・画面・要求の種類に合っているか、画面の表示例の値を答えにしていないかを
+# 見る。資料が別の対象を説明していれば引用が正しくても回答として誤りのことがあり、スクリーンショットや生成説明に
+# 写った値は利用者の実値でも規則でもない。規則の検査は誤判定があるので、言い換えは本文に残し、段落に警告
+# （item_check。表の行の対応は value_unbound）を付ける（#2738。以前は原文のみ提示へ落としていた）。
 ITEM_CHECKS: list[Callable[[str, GroundedItem, dict], str]] = [
     _check_heading,
     _check_deletion_target,
@@ -870,6 +879,23 @@ ITEM_CHECKS: list[Callable[[str, GroundedItem, dict], str]] = [
     _check_screen_example_values,
     _check_table_binding,
 ]
+# 警告の理由（detail）に書く検査の名前。
+ITEM_CHECK_NAMES: dict[Callable[[str, GroundedItem, dict], str], str] = {
+    _check_heading: "見出しの入口化",
+    _check_deletion_target: "削除対象",
+    _check_members: "構成明細",
+    _check_verbatim_conditions: "処理区分の逐語",
+    _check_value: "値",
+    _check_screen_example_values: "画面の表示例の値",
+    _check_table_binding: "表の行の対応",
+}
+# 本文の手順・規則の検査（verify の中の規則）の名前。
+GENERATED_VALUE_CHECK = "生成説明の値"
+QUESTION_TARGET_CHECK = "質問の対象"
+QUESTION_ERROR_CHECK = "質問のエラー"
+OTHER_DOCUMENT_CHECK = "別文書の手順"
+# 警告の理由に添える原文の引用の長さ。
+MARK_QUOTE_MAX_CHARS = 80
 
 # 降格させず、監査への手がかりとして渡す検査。案内した語が本文にあるかという字句の存在を、限定した本文の
 # 集合に対する文字列照合で見る。照合先は解析した機能・頁で決まるため、狭いと実在する語でも「無い」と判定する。
@@ -1026,23 +1052,30 @@ def verbatim_quote_lines(answer_text: str) -> set[str]:
     return lines
 
 
-# 行をシステムが書く節（モデルの主張を含まない）。読めなかった章節と、時間の上限で省いた処理 (#2040)。
+# 行をシステムが書く節（モデルの主張を含まない）。読めなかった章節と、時間の上限で省いた処理 (#2040)、
+# 根拠と矛盾して外した内容と、印の付いた段落・回答全体の警告の一覧 (#2738)。
 
 
 def generated_section_lines(answer_text: str) -> set[str]:
-    """render() が「回答に未反映の関連章節」「回答時間の上限により省略した処理」の節に出した行を返します。
+    """render() がシステムの節に出した行を返します。
 
-    これらの行はシステムが決まった文で書いた、回答に入っていない範囲・省いた処理の案内で、モデルの主張を
-    含まない。見出し行と同じく、主張監査・評価・指標の対象にしない (#2040)。
+    「回答に未反映の関連章節」「回答時間の上限により省略した処理」の節（回答に入っていない範囲・省いた処理の案内。
+    #2040）と、「根拠と矛盾し除いた内容」「確認が必要な点」の節（外した段落と、本文の印の段落の引用と理由。#2738）。
+    どれもシステムが書いた行で、本文の主張ではない（印の段落は本文に残る）。見出し行と同じく、主張監査・評価・
+    指標の対象にしない。
     """
+    labels = answer_labels()
+    titles = {labels.unverified_section, labels.deadline_section, labels.removed_section, labels.marked_section}
     lines: set[str] = set()
     in_section = False
     for raw in answer_text.splitlines():
         line = raw.strip()
         if not line:
             continue
-        if line in {answer_labels().unverified_section, answer_labels().deadline_section}:
+        if line in titles:
             in_section = True
+        elif in_section and line in {labels.removed_section_note, labels.marked_section_note}:
+            continue
         elif in_section and line.startswith(answer_labels().item_bullet):
             lines.add(line)
         else:
@@ -1057,7 +1090,12 @@ def quote_in_text(quote: str, text: str) -> bool:
 
 @dataclass
 class CheckedItem:
-    """検査後の item。quote_only は言い換えを公開せず、原文引用だけを表示する。"""
+    """検査後の item。
+
+    quote_only はシステムが補った原文（言い換えを持たない）で、「参考情報」の節に原文引用だけを表示する。
+    marks は本文に残した言い換えの段落の印の理由（``passage_marks.reason``。#2738）、removed は監査が根拠と
+    矛盾と判定して本文から外した item（「根拠と矛盾し除いた内容」の節に出す）。
+    """
 
     item: GroundedItem
     span: dict | None = None
@@ -1065,22 +1103,50 @@ class CheckedItem:
     reasons: list[str] = field(default_factory=list)
     added: bool = False  # モデルの草稿ではなく、必須根拠・確定操作としてシステムが補った原文
     quote_match: str = "exact"  # 引用の結び付け方。"fuzzy" は文単位の近似一致（#711）。trace 用
-    hints: list[str] = field(default_factory=list)  # ITEM_HINTS の該当。降格はせず監査へ渡す手がかり (#1090)
+    hints: list[str] = field(default_factory=list)  # ITEM_HINTS の該当。印は付けず監査へ渡す手がかり (#1090)
     carried: bool = False  # 前の round から引き継いだ item（当該 round の草稿にはない）。監査対象に含める (#1011)
     withdrawn: bool = False  # 監査が contradicted / not_applicable と判定して撤回した item (#1011)
     draft_index: int | None = None  # 草稿の items の index（当てはめが規則を指す番号。#2155）
+    marks: list[dict[str, str]] = field(default_factory=list)  # 段落の印の理由（#2738）
+    removed: bool = False  # 監査が根拠と矛盾と判定し、本文から外した（#2738）
+    unmatched: bool = False  # 引用が原文と照合できなかった item（是正の指摘は dropped に出す。#2738）
 
-    def downgrade(self, reason: str) -> None:
-        self.quote_only = True
-        self.reasons.append(reason)
+    def mark(self, code: str, detail: str = "", *, reason: str = "") -> None:
+        """言い換えを本文に残したまま、段落に印（``code`` は契約の語彙）を付ける。``reason`` は trace・是正の指摘の文。"""
+        self.marks.append(passage_marks.reason(code, detail))
+        self.reasons.append(reason or detail or code)
+
+    def remove(self, detail: str, *, reason: str = "") -> None:
+        """根拠と矛盾した item を本文から外す（「根拠と矛盾し除いた内容」の節に理由つきで出す）。"""
+        self.removed = True
+        self.marks.append(passage_marks.reason("contradicted", detail))
+        self.reasons.append(reason or detail)
+
+    @property
+    def state(self) -> str:
+        """段落の印の状態（unverified / warning）。印が無ければ空。"""
+        return passage_marks.passage_state(self.marks) or ""
+
+    @property
+    def published(self) -> bool:
+        """言い換えを本文に出す item か（gap・システムが補った原文・矛盾で外した item を除く）。"""
+        return not self.quote_only and not self.removed and self.item.kind != "gap" and (self.span is not None or bool(self.marks))
+
+    @property
+    def confirmed(self) -> bool:
+        """引用と照合し、印の無い（確かめた）説明として本文に出す item か。"""
+        return self.published and self.span is not None and not self.state
 
 
 _PROCEDURE_KINDS = frozenset({"operation", "confirmation"})
 
 
 def answer_use(entry: CheckedItem) -> str:
-    """回答に出した item が、その箇所をどう使ったか（``ANSWER_USE_CONFIRMED`` / ``ANSWER_USE_REFERENCE``）。"""
-    if entry.quote_only or entry.item.kind == "gap" or entry.item.applies == "unverified":
+    """回答に出した item が、その箇所をどう使ったか（``ANSWER_USE_CONFIRMED`` / ``ANSWER_USE_REFERENCE``）。
+
+    印の付いた段落（未確認・要注意）の根拠は参考（reference）にする（#2738）。
+    """
+    if entry.quote_only or entry.state or entry.removed or entry.item.kind == "gap" or entry.item.applies == "unverified":
         return ANSWER_USE_REFERENCE
     return ANSWER_USE_CONFIRMED
 
@@ -1093,7 +1159,7 @@ def primary_procedure_document(checked: Sequence[CheckedItem]) -> tuple[str, ...
     """
     counts: dict[tuple[str, ...], int] = {}
     for entry in checked:
-        if entry.span and not entry.quote_only and entry.item.kind in _PROCEDURE_KINDS:
+        if entry.span and entry.published and entry.item.kind in _PROCEDURE_KINDS:
             key = _document_key(entry.span)
             counts[key] = counts.get(key, 0) + 1
     return max(counts, key=lambda key: counts[key]) if counts else ()  # max は同数なら先に現れた key を返す
@@ -1131,10 +1197,13 @@ def _check_item(item: GroundedItem) -> GroundedItem:
 
 
 def verify(question: str, draft: GroundedDraft, spans: Sequence[dict]) -> tuple[list[CheckedItem], list[dict]]:
-    """原文照合で削除し、それ以外の不合格は降格する。必須根拠と確定操作の欠落は原文で補う。
+    """原文照合と規則の検査で段落の印を付ける。必須根拠と確定操作の欠落は原文で補う。
 
-    複数の文書の item を混ぜた回答では、制限・禁止の規則をその文書の業務の条件付きにする (#1012)。
-    引用は原文の span と照合して原文の範囲を残し、説明と根拠の語を比べる検査は ``check_view`` の形で行う (#1350)。
+    原文と照合できない引用の item は本文に残して印（引用元が近い原文・指した根拠に決まれば quote_unmatched、
+    決まらなければ citation_error）を付け、是正の指摘には dropped で写し方を示す。規則の検査の不合格は
+    警告を付ける（#2738）。複数の文書の item を混ぜた回答では、制限・禁止の規則をその文書の業務の条件付きに
+    する (#1012)。引用は原文の span と照合して原文の範囲を残し、説明と根拠の語を比べる検査は ``check_view`` の
+    形で行う (#1350)。
     """
     checked: list[CheckedItem] = []
     dropped: list[dict] = []
@@ -1187,15 +1256,18 @@ def verify(question: str, draft: GroundedDraft, spans: Sequence[dict]) -> tuple[
                 entry["miscopied"] = miscopied
             nearest = match.get("nearest")
             if nearest:
-                # 結び付けるほど似ていないが近い原文がある。言い換えは公開せず、その原文を原文のみ提示にする。
-                # feedback には最も近い原文を示し、次の生成がそのまま写せるようにする (#716)。
+                # 結び付けるほど似ていないが近い原文がある。feedback には最も近い原文を示し、次の生成がそのまま
+                # 写せるようにする (#716)。
                 entry["nearest_quote"] = {
                     "evidence_id": nearest["span"]["evidence_id"],
                     "label": nearest["span"].get("label", ""),
                     "quote": nearest["quote"],
                     "ratio": nearest["ratio"],
                 }
-                checked.append(_quote_item(nearest["span"], nearest["quote"], quote))
+            # 言い換えは削除せず本文に残して印を付ける（#2738。以前は削除し、近い原文を原文のみ提示にしていた）。
+            if kept := _unmatched_item(item, index, spans, match, quote):
+                checked.append(kept)
+                entry["kept"] = True
             dropped.append(entry)
             continue
         view = views.get(id(span)) or check_view(span)
@@ -1209,27 +1281,29 @@ def verify(question: str, draft: GroundedDraft, spans: Sequence[dict]) -> tuple[
         for check in ITEM_CHECKS:
             reason = check(question, check_item, view)
             if reason:
-                entry.downgrade(reason)
+                _mark_check(entry, ITEM_CHECK_NAMES[check], reason, code="value_unbound" if check is _check_table_binding else "item_check")
         for check in ITEM_HINTS:
             hint = check(question, check_item, view)
             if hint:
                 entry.hints.append(hint)
         conflicting = _generated_values_absent_from_document_text(question, entry, spans)
         if conflicting:
-            # 生成説明にだけある値は画面の表示例で、利用者の実値ではない。答えに使えば誤りなので降格させる (#1100)。
-            entry.downgrade("生成説明の値『" + "』『".join(conflicting) + "』が同じ機能の本文にない")
+            # 生成説明にだけある値は画面の表示例で、利用者の実値ではない。答えに使えば誤りなので警告を付ける (#1100)。
+            _mark_check(entry, GENERATED_VALUE_CHECK, "生成説明の値『" + "』『".join(conflicting) + "』が同じ機能の本文にない")
         for asked, other in _substituted_objects(missing_objects, entry.item.text):
-            entry.downgrade(f"質問の対象『{asked}』は根拠になく、別の対象『{other}』の説明")
+            _mark_check(entry, QUESTION_TARGET_CHECK, f"質問の対象『{asked}』は根拠になく、別の対象『{other}』の説明")
             substituted.setdefault(asked, other)
         if missing_errors and entry.item.kind in {"operation", "confirmation", "rule"} and not _unit_mentions_error(view, asked_errors):
             # 質問のエラー文が根拠のどこにもなく、この item の機能ユニットが質問のどのエラーにも触れていない。
             # 別のエラー（質問と異なるエラー番号）の手順を適用扱いにしない (#686)。原因・規則の説明（rule）も同じ:
-            # 別エラーの原因を質問のエラーの原因として「資料により確認できた事項」に出さない (#993)。
-            entry.downgrade(
+            # 別エラーの原因を質問のエラーの原因として確かめた事項にしない (#993)。
+            _mark_check(
+                entry,
+                QUESTION_ERROR_CHECK,
                 "質問のエラー『"
                 + "』『".join(missing_errors)
                 + "』は根拠になく、"
-                + ("別のエラーの説明" if entry.item.kind == "rule" else "別の箇所の手順")
+                + ("別のエラーの説明" if entry.item.kind == "rule" else "別の箇所の手順"),
             )
         if (
             question_terms
@@ -1241,24 +1315,23 @@ def verify(question: str, draft: GroundedDraft, spans: Sequence[dict]) -> tuple[
             # 最上位候補以外の文書で、本文・見出し・同じ文書の本文が質問の語を 1 つも含まない。別業務の資料の
             # 確定操作（「確認」ボタンを押下して変更を確定します）を質問の手順に混ぜない (#731)。gap は出さない。
             # 最上位候補の文書は検索が質問に最も関係すると判断したもので、対象が別名でも手順は残す（#673 と同じ扱い）。
-            entry.downgrade("質問の語を含まない別文書の手順")
+            _mark_check(entry, OTHER_DOCUMENT_CHECK, "質問の語を含まない別文書の手順")
         if missing_targets and entry.item.kind in {"operation", "confirmation"}:
             # 質問の操作対象（「社印」）が根拠のどこにもない。資料にある別の対象（「角印」）の手順を適用扱いにしない (#700)。
-            entry.downgrade("質問の対象『" + "』『".join(missing_targets) + "』は根拠になく、別の箇所の手順")
+            _mark_check(entry, QUESTION_TARGET_CHECK, "質問の対象『" + "』『".join(missing_targets) + "』は根拠になく、別の箇所の手順")
             for asked in missing_targets:
                 substituted.setdefault(asked, "")
         for asked in _claims_about_absent_object([*missing_objects, *missing_targets], entry.item):
             # 「地区別売上集計表は…CSV として出力して作成します」のように、資料にない対象を主語に
             # 資料の別内容を結び付けた定義。引用が述部を支持していても対象の話ではない (#673)。
-            entry.downgrade(f"質問の対象『{asked}』は根拠になく、その対象についての説明")
+            _mark_check(entry, QUESTION_TARGET_CHECK, f"質問の対象『{asked}』は根拠になく、その対象についての説明")
             substituted.setdefault(asked, "")
         checked.append(entry)
     for asked in substituted:
-        # 別対象の手順で答えた item は原文のみ提示に落ち、質問の対象が資料にないことを本文で伝える (#642)。
+        # 別対象の手順で答えた item には警告を付け、質問の対象が資料にないことを本文で伝える (#642)。
         checked.append(CheckedItem(GroundedItem(kind="gap", text=f"『{asked}』は取得した資料に記載がありません。")))
     for asked in missing_errors:
-        # 質問のエラー文が根拠のどこにも無ければ、item の種類や降級の有無に関係なく本文で伝える (#993)。以前は
-        # operation / confirmation を降級した回にしか出ず、rule だけの草稿や別の理由で先に降級した回では黙って落ちていた。
+        # 質問のエラー文が根拠のどこにも無ければ、item の種類や警告の有無に関係なく本文で伝える (#993)。
         checked.append(CheckedItem(GroundedItem(kind="gap", text=missing_error_gap(asked, contract["business_objects"]))))
     # 別機能の操作は render が手順を分けて示す。同じ文書の版違いだけは利用者に確認を求める。
     if evidence_scope_error([e.span for e in checked if e.span and e.item.kind == "operation"]).startswith("同一文書の異なる版"):
@@ -1281,6 +1354,64 @@ def verify(question: str, draft: GroundedDraft, spans: Sequence[dict]) -> tuple[
         ):
             checked.append(_quote_item(span, span["text"][:600], "必須根拠が未使用"))
     return without_redundant_quotes(checked), dropped
+
+
+def _short_quote(quote: str) -> str:
+    text = " ".join(_flatten_table_html(str(quote or "")).split())
+    return text if len(text) <= MARK_QUOTE_MAX_CHARS else text[:MARK_QUOTE_MAX_CHARS] + "…"
+
+
+def _quote_note(entry: CheckedItem) -> str:
+    """理由に添える原文の引用（「原文「…」」）。画面説明の表示例の値は除く（``_displayed_quote``）。無ければ空。"""
+    quote = _short_quote(_displayed_quote(entry) if entry.span is not None else entry.item.quote)
+    return f"原文{answer_labels().quote(quote)}" if quote else ""
+
+
+def _mark_check(entry: CheckedItem, name: str, reason: str, *, code: str = "item_check") -> None:
+    """規則の検査の不合格に警告を付ける。理由（detail）は検査の名前と理由に、引用した原文を添える（#2738）。"""
+    note = _quote_note(entry)
+    entry.mark(code, f"{name}：{reason}" + (f"。{note}" if note else ""), reason=reason)
+
+
+def _named_spans(item: GroundedItem, spans: Sequence[dict]) -> list[dict]:
+    """item の evidence_id が指す根拠（表示 ID・根拠 ID・出典 ID・別名のどれか）。"""
+    if not item.evidence_id:
+        return []
+    return [s for s in spans if item.evidence_id in {s["evidence_id"], s.get("label"), s.get("source_id"), *s.get("source_aliases", ())}]
+
+
+def _unmatched_item(item: GroundedItem, index: int, spans: Sequence[dict], match: dict, reason: str) -> CheckedItem | None:
+    """引用が原文と照合できなかった item を、言い換えを残した印つきの item にする（#2738）。
+
+    近い原文（``match["nearest"]``）があればその根拠に、無ければ evidence_id が指す 1 つの根拠に結び付けて
+    quote_unmatched の印を付ける。どちらでも決まらなければ（未知の Evidence ID・複数の根拠に一致）、根拠を
+    結び付けずに citation_error の印を付ける。
+    """
+    if not item.text.strip():
+        return None
+    nearest = match.get("nearest")
+    named = _named_spans(item, spans)
+    span: dict | None
+    if nearest:
+        span, quote, code = nearest["span"], nearest["quote"], "quote_unmatched"
+    elif len(named) == 1:
+        span, quote, code = named[0], item.quote, "quote_unmatched"
+    else:
+        span, quote, code = None, item.quote, "citation_error"
+    update: dict[str, Any] = {"quote": quote, "evidence_id": span["evidence_id"] if span else ""}
+    copied = item.model_copy(update=update)
+    entry = CheckedItem(
+        _normalized(copied, check_view(span)) if span else copied.model_copy(update={"applies": "matched", "condition": ""}),
+        span,
+        quote_match="unmatched",
+        draft_index=index,
+        unmatched=True,
+    )
+    note = _quote_note(entry)
+    # 引用元が決まらなければ照合の理由、近い原文に結んだならその原文を理由に添える。
+    detail = reason if span is None else (f"最も近い{note}" if nearest and note else "")
+    entry.mark(code, detail, reason=reason)
+    return entry
 
 
 _EVIDENCE_LABEL = re.compile(r"(?<![A-Za-z0-9])E[0-9]{1,3}(?![0-9])")
@@ -1492,11 +1623,7 @@ def resolve_evidence(item: GroundedItem, spans: Sequence[dict], *, match: dict |
     完全一致の規則で結び付かない引用は最後に文単位の近似一致（#711）を試し、`match["kind"]` に "fuzzy" を残す。
     規則の item で続く文だけを写し誤った引用は、逐語の先頭の文に結び付け、`match["kind"]` に "prefix" を残す (#1383)。
     """
-    named = [
-        s
-        for s in spans
-        if item.evidence_id and item.evidence_id in {s["evidence_id"], s.get("label"), s.get("source_id"), *s.get("source_aliases", ())}
-    ]
+    named = _named_spans(item, spans)
     for candidates in (named, spans):
         matches = [(s, q) for s in candidates if (q := _original_quote(item.quote, s["text"]))]
         if len(matches) == 1:
@@ -1534,12 +1661,12 @@ def resolve_evidence(item: GroundedItem, spans: Sequence[dict], *, match: dict |
             match["kind"] = "prefix"
         return span, quote
     if nearest and match is not None:
-        # 結び付けるほど似ていないが近い原文がある。削除せず原文のみ提示にし、是正の feedback にも示す。
+        # 結び付けるほど似ていないが近い原文がある。言い換えは印を付けてその原文に結び、是正の feedback にも示す（#2738）。
         span, quote, ratio = max(nearest, key=lambda entry: entry[2])
         match["nearest"] = {"span": span, "quote": quote, "ratio": round(ratio, 2)}
-        return None, f"引用が原文と一致せず、最も近い原文（{span.get('label', span['evidence_id'])}、類似度 {ratio:.2f}）を原文のみ提示"
-    # 文ごとの近似一致が 1 文でも届かないと上の救済は働かない。最長の連続断片で引用元が定まれば、削除せず
-    # その原文を原文のみ提示にし、是正の feedback にも写す原文として示す (#1092)。言い換えは公開しない:
+        return None, f"引用が原文と一致せず、最も近い原文（{span.get('label', span['evidence_id'])}、類似度 {ratio:.2f}）がある"
+    # 文ごとの近似一致が 1 文でも届かないと上の救済は働かない。最長の連続断片で引用元が定まれば、その原文に
+    # 印つきで結び、是正の feedback にも写す原文として示す (#1092)。確かめた説明としては結び付けない:
     # 内容語の置き換え・手順の順序の入れ替え・離れた箇所の継ぎ合わせも断片は一致するため、結び付けて公開すると
     # 原文を歪めた引用が通る（それらを結び付けない既存の規則 #716 / #678 と両立させる）。
     span, quote, share = _fragment_match(item.quote, spans, named)
@@ -1547,7 +1674,7 @@ def resolve_evidence(item: GroundedItem, spans: Sequence[dict], *, match: dict |
         match["nearest"] = {"span": span, "quote": quote, "ratio": round(share, 2)}
         return (
             None,
-            f"引用が原文と一致せず、引用元と定まる原文（{span.get('label', span['evidence_id'])}、連続断片 {share:.0%}）を原文のみ提示",
+            f"引用が原文と一致せず、引用元と定まる原文（{span.get('label', span['evidence_id'])}、連続断片 {share:.0%}）がある",
         )
     return None, "quote がどの Evidence の原文とも一致しない"
 
@@ -1914,10 +2041,17 @@ def _prefers_document_text(entry: CheckedItem, other: CheckedItem) -> bool:
 
 
 def without_redundant_quotes(checked: Sequence[CheckedItem]) -> list[CheckedItem]:
-    """言い換えで説明済みの原文を、原文のみの欄へ重ねて表示しない。"""
-    verified = [e for e in checked if e.span and not e.quote_only]
+    """言い換えで説明済みの原文を、原文のみの欄へ重ねて表示しない。
+
+    根拠と矛盾して外した item（removed）は「根拠と矛盾し除いた内容」の節に出すので残し、重複の判定には使わない。
+    同じ引用・同じ説明の item が重なれば、印の無い（確かめた）item を残す（#2738）。
+    """
+    verified = [e for e in checked if e.span and e.published]
     kept: list[CheckedItem] = []
     for entry in checked:
+        if entry.removed:
+            kept.append(entry)
+            continue
         if entry.quote_only and any(_covers(v, entry) for v in verified):
             continue
         if entry.quote_only:
@@ -1928,20 +2062,22 @@ def without_redundant_quotes(checked: Sequence[CheckedItem]) -> list[CheckedItem
             kept = [k for k in kept if not (k.quote_only and _covers(entry, k))]
         # 同じ引用を同じ種類の説明として繰り返した item は 1 つだけ残す。同じ文が parent と child、
         # または本文と画像の生成説明の両方の根拠に現れると、引用元だけが違う同文の item になる。
-        if entry.span and not entry.quote_only:
+        if entry.span and entry.published:
             duplicate = next(
                 (
                     k
                     for k in kept
                     if k.span
-                    and not k.quote_only
+                    and k.published
                     and k.item.kind == entry.item.kind
                     and (_covers(k, entry) or _same_quote(k, entry) or _compact(k.item.text) == _compact(entry.item.text))
                 ),
                 None,
             )
             if duplicate is not None:
-                if _prefers_document_text(entry, duplicate):
+                if (duplicate.state and not entry.state) or (
+                    bool(duplicate.state) == bool(entry.state) and _prefers_document_text(entry, duplicate)
+                ):
                     kept[kept.index(duplicate)] = entry
                 continue
         kept.append(entry)
@@ -1952,12 +2088,16 @@ def carry_over(candidate: Sequence[CheckedItem], previous: Sequence[CheckedItem]
     """是正後の草稿が落とした引用を引き継ぐ。再生成の揺らぎで、公開できた内容を失わない。
 
     引き継いだ item は複製して `carried=True` を付ける。当該 round の監査対象に含めて撤回できるようにするため
-    （#1011）で、複製するのは監査の降格が前の round（採用済みの公開内容）の item を書き換えないようにするため。
+    （#1011）で、複製するのは監査の印が前の round（採用済みの公開内容）の item を書き換えないようにするため。
+    前の round で根拠と矛盾して外した item も、外したまま引き継ぐ（「根拠と矛盾し除いた内容」の節に残す）。
     """
     kept = list(candidate)
     for entry in previous:
         if entry.span and not any(_covers(current, entry) or _same_quote(current, entry) for current in kept):
-            kept.append(replace(entry, reasons=list(entry.reasons), carried=True))
+            # 撤回（withdrawn）はその round の監査の判定なので、引き継いだ複製では数え直す（#2738）。
+            kept.append(
+                replace(entry, reasons=list(entry.reasons), marks=[dict(mark) for mark in entry.marks], carried=True, withdrawn=False)
+            )
     return kept
 
 
@@ -2048,26 +2188,38 @@ def _is_route_navigation(item: GroundedItem, span: dict) -> bool:
 
 
 def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
-    """監査は降格と条件付けだけを行う。supported を決定的検査の降格から戻すこともしない。
+    """監査の判定で段落の印を付ける（#2738）。supported を決定的検査の印から戻すことはしない。
+
+    - contradicted: 本文から外す（removed。「根拠と矛盾し除いた内容」の節に理由つきで出す）。
+    - not_applicable: 言い換えを残し、警告（target_mismatch）を付ける。
+    - unsupported: 言い換えを残し、未確認の印（unsupported）を付ける。
+    - conditional / unknown: 原文の条件を付ける（条件を書けなければ適用は未確認）。
 
     前の round から引き継いだ item（carried）には、撤回（contradicted / not_applicable）と条件付けだけを適用する。
     言い換えの支持（unsupported）は item 自体の性質で前の round の監査で確定しており、是正で増えた根拠・指摘で
-    変わり得るのは適用性だけ。監査の揺れで支持済みの説明を失わずに、誤った主張の撤回だけを受け入れる (#1011)。
+    変わり得るのは適用性だけ。監査の揺れで支持済みの説明に印を増やさずに、誤った主張の撤回だけを受け入れる (#1011)。
     """
     for review in audit.reviews:
         if not 0 <= review.index < len(checked) or checked[review.index].span is None:
             continue
         entry = checked[review.index]
-        denied = review.support == "contradicted" or review.applicability == "not_applicable"
-        if denied or (review.support != "supported" and not entry.carried):
-            if (
-                review.support == "unsupported"
-                and review.applicability != "not_applicable"
-                and _is_route_navigation(entry.item, entry.span)
-            ):
-                continue  # 見出しの画面経路を開くだけの item は、引用に経路がなくても降格しない (#629)
-            entry.downgrade(f"監査: {review.support}/{review.applicability} {review.reason}")
-            entry.withdrawn = denied
+        if entry.removed:
+            continue
+        reason = f"監査: {review.support}/{review.applicability} {review.reason}"
+        if review.support == "contradicted":
+            entry.remove(review.reason, reason=reason)
+            entry.withdrawn = True
+            continue
+        if review.applicability == "not_applicable":
+            entry.mark("target_mismatch", review.reason, reason=reason)
+            entry.withdrawn = True
+            if review.support == "unsupported" and not entry.carried:
+                entry.mark("unsupported", review.reason, reason=reason)
+            continue
+        if review.support != "supported" and not entry.carried:
+            if review.support == "unsupported" and _is_route_navigation(entry.item, entry.span):
+                continue  # 見出しの画面経路を開くだけの item は、引用に経路がなくても印を付けない (#629)
+            entry.mark("unsupported", review.reason, reason=reason)
         elif review.applicability in {"conditional", "unknown"} and entry.item.applies == "matched":
             entry.item = _normalized(
                 entry.item.model_copy(update={"applies": "conditional", "condition": review.condition.strip()}), entry.span
@@ -2110,13 +2262,14 @@ _SCREEN_HEADING = re.compile(r"^[（(][0-9０-９Ａ-ＺA-Zａ-ｚ]{1,3}[）)]")
 
 
 def _shown_as_quote(entry: CheckedItem) -> bool:
-    """「参考情報」の節に原文の引用で出す item。降格した item と、適用が未確認の説明（#2040）。
+    """「参考情報」の節に原文の引用で出す item。システムが補った原文と、適用が未確認の説明（#2040）。
 
     節の注記は「資料の原文」と書くので、未確認の説明もモデルの言い換え（`item.text`）ではなく引用で出す（#2213）。
+    印の付いた説明（#2738）は言い換えを本文に残すので、ここには置かない。
     """
     if entry.quote_only:
         return True
-    return bool(entry.span) and entry.item.kind != "gap" and entry.item.applies == "unverified"
+    return entry.published and bool(entry.span) and entry.item.applies == "unverified" and not entry.state
 
 
 def _displayed_quote(entry: CheckedItem) -> str:
@@ -2354,9 +2507,9 @@ def user_condition_lines(settled: SettledConfirmations) -> list[str]:
 
 # ---- 廃止・旧版の文書（#1492） ----------------------------------------------------
 # 根拠の文書が新しい版に置き換えられた旧版（backend の `document_superseded` のメタデータ）か、ほかの根拠の原文が
-# 廃止を明記した版（「第1版は第2版の施行により廃止されています」）なら、その文書の説明は今の手順として公開せず
-# 原文のみ提示にする。版の比較・旧版を尋ねる質問は除く。
-SUPERSEDED_REASON = "廃止・旧版の文書の記載（今の版の手順・規則としては示さない）"
+# 廃止を明記した版（「第1版は第2版の施行により廃止されています」）なら、その文書の説明に警告を付ける（#2738）。
+# 版の比較・旧版を尋ねる質問は除く。
+SUPERSEDED_REASON = "廃止・旧版の文書の記載"
 # 版を比べる・旧版を尋ねる質問。旧版の記載はそのまま答えに使う。
 
 
@@ -2398,14 +2551,15 @@ def superseded_evidence_ids(question: str, spans: Sequence[dict]) -> set[str]:
 
 
 def withhold_superseded(checked: Sequence[CheckedItem], superseded: set[str]) -> int:
-    """廃止・旧版の文書の説明を原文のみ提示にする（#1492）。降格した数を返す。
+    """廃止・旧版の文書の説明に警告（superseded）を付ける（#1492・#2738）。警告を付けた数を返す。
 
-    生成の是正の指摘には使わない（モデルが直せるものではない）ので、採用した round の確定の段で呼ぶ。
+    言い換えは本文に残す（以前は原文のみ提示にしていた）。生成の是正の指摘には使わない（モデルが直せるもの
+    ではない）ので、採用した round の確定の段で呼ぶ。
     """
     count = 0
     for entry in checked:
-        if entry.span and not entry.quote_only and entry.item.kind != "gap" and entry.span.get("evidence_id") in superseded:
-            entry.downgrade(SUPERSEDED_REASON)
+        if entry.span and entry.published and entry.span.get("evidence_id") in superseded:
+            entry.mark("superseded", SUPERSEDED_REASON + "：" + _span_title(entry.span).strip(), reason=SUPERSEDED_REASON)
             count += 1
     return count
 
@@ -2506,6 +2660,25 @@ def citation_line_ref(entries: Sequence[CheckedItem]) -> dict[str, Any]:
     }
 
 
+@dataclass
+class RenderedAnswer:
+    """組み立てた本文と、本文の出典行ごとの根拠・段落の印・外した段落・回答全体の警告（#1330・#2738）。"""
+
+    text: str
+    citation_lines: list[dict[str, Any]]
+    passage_marks: list[dict[str, Any]] = field(default_factory=list)
+    removed_passages: list[dict[str, Any]] = field(default_factory=list)
+    answer_warnings: list[dict[str, Any]] = field(default_factory=list)
+
+    def record(self) -> dict[str, list[dict[str, Any]]]:
+        """回答の記録・MCP に載せる 3 つ（``platform/contracts/answer-passages/passage-marks.json`` の形）。"""
+        return {
+            "passage_marks": [dict(item) for item in self.passage_marks],
+            "removed_passages": [dict(item) for item in self.removed_passages],
+            "answer_warnings": [dict(item) for item in self.answer_warnings],
+        }
+
+
 def render_with_citations(
     summary: str,
     checked: Sequence[CheckedItem],
@@ -2517,7 +2690,34 @@ def render_with_citations(
     applications: Sequence[CheckedApplication] = (),
     subquestions: Sequence[dict] = (),
 ) -> tuple[str, list[dict[str, Any]]]:
-    """``render`` の本文と、本文に出した出典行（「根拠：」）ごとの根拠を出した順に返す（#1330）。
+    """``render`` の本文と、本文に出した出典行（「根拠：」）ごとの根拠を出した順に返す（#1330。``render_answer``）。"""
+    rendered = render_answer(
+        summary,
+        checked,
+        unanswered,
+        confirmations,
+        unverified=unverified,
+        deadline=deadline,
+        applications=applications,
+        subquestions=subquestions,
+    )
+    return rendered.text, rendered.citation_lines
+
+
+def render_answer(
+    summary: str,
+    checked: Sequence[CheckedItem],
+    unanswered: Sequence[str] = (),
+    confirmations: Sequence[str] = (),
+    *,
+    unverified: Sequence[str] = (),
+    deadline: Sequence[str] = (),
+    applications: Sequence[CheckedApplication] = (),
+    subquestions: Sequence[dict] = (),
+    summary_reasons: Sequence[Mapping[str, Any]] = (),
+    answer_warnings: Sequence[Mapping[str, Any]] = (),
+) -> RenderedAnswer:
+    """本文を組み立て、出典行ごとの根拠と、段落の印・外した段落・回答全体の警告を返す。
 
     unverified は章節の拡張が上限で読めなかった章節（#1436）。不足の節の後に「回答に未反映の関連章節」として出す。
     deadline は回答時間の上限で省いた処理（#1516）。その後に「回答時間の上限により省略した処理」として出す（#2040）。
@@ -2526,11 +2726,16 @@ def render_with_citations(
     小問ごとの見出しの下に、その小問の説明と不足を出す。説明の無い小問と監査が missing とした小問には
     「確認できませんでした」の行を出す。小問に付かない説明は小問の後に、従来の節で出す。
 
-    出典行の n 番目（1 始まり）が、返す list の n 番目の根拠を指す。画面はこの順で出典行を根拠の chunk に
+    出典行の n 番目（1 始まり）が、返す citation_lines の n 番目の根拠を指す。画面はこの順で出典行を根拠の chunk に
     結び、ファイル名と頁で推測しない。
+
+    印の付いた item・当てはめ・summary（``summary_reasons``）の行は ``passage_marks`` に、根拠と矛盾して外した item
+    は ``removed_passages`` に載せ、本文の末尾に「根拠と矛盾し除いた内容」「確認が必要な点」（回答全体の警告
+    ``answer_warnings`` を先に）の節を足す（本文だけを読む利用者向け。#2738）。
     """
     # 出典行ごとの、その行にまとめた説明（同じ出典・頁が続く説明。#2710）。
     citation_entries: list[list[CheckedItem]] = []
+    marks: list[dict[str, Any]] = []
 
     def lines(entries: Sequence[CheckedItem], numbered: bool) -> list[str]:
         out: list[str] = []
@@ -2542,7 +2747,10 @@ def render_with_citations(
             text = labels.quote(" ".join(_displayed_quote(entry).split())) if _shown_as_quote(entry) else item.text
             if not entry.quote_only and item.applies == "conditional" and item.condition:
                 text = labels.condition(_condition_phrase(item.condition)) + text
-            out.append((f"{number}. " if numbered else labels.item_bullet) + text)
+            line = (f"{number}. " if numbered else labels.item_bullet) + text
+            out.append(line)
+            if entry.state and (mark := passage_marks.passage_mark(line, entry.marks)):
+                marks.append(mark)
             following = entries[number] if number < len(entries) else None
             if entry.span:
                 pending.append(entry)
@@ -2553,12 +2761,20 @@ def render_with_citations(
                 pending = []
         return out
 
+    def mark_application(line: str, application: CheckedApplication) -> None:
+        if mark := passage_marks.passage_mark(line, application.marks):
+            marks.append(mark)
+
     def body_sections(
         checked: Sequence[CheckedItem], unanswered: Sequence[str], applications: Sequence[CheckedApplication]
     ) -> list[tuple[str, list[str]]]:
         """説明・当てはめ・手順・参考情報・不足の節（小問ごとと、小問に付かない分で同じ組み立て）。"""
-        return _body_sections(checked, unanswered, applications, lines, lambda entries: citation_entries.append(list(entries)))
+        return _body_sections(
+            checked, unanswered, applications, lines, lambda entries: citation_entries.append(list(entries)), mark_application
+        )
 
+    if summary.strip() and summary_reasons and (mark := passage_marks.passage_mark(summary.strip(), summary_reasons)):
+        marks.append(mark)
     blocks: list[str] = []
     if groups := _subquestion_groups(subquestions, checked, applications):
         rest_unanswered = list(unanswered)
@@ -2566,7 +2782,7 @@ def render_with_citations(
         grouped_apps = {id(app) for _, _, apps in groups for app in apps}
         for unit, entries, apps in groups:
             missing = missing_request_line({"request_id": unit["id"]}, subquestions)
-            answered = any(entry.span or entry.item.kind == "gap" for entry in entries) or any(app.published for app in apps)
+            answered = any(entry.published or entry.item.kind == "gap" for entry in entries) or any(app.published for app in apps)
             own_gaps = [missing] if missing in unanswered or not answered else []
             rest_unanswered = [line for line in rest_unanswered if line != missing]
             heading = answer_labels().subquestion_heading(str(unit.get("subquestion") or ""), _subquestion_text(unit))
@@ -2586,9 +2802,27 @@ def render_with_citations(
         sections.append((answer_labels().deadline_section, [f"{bullet}{line}" for line in dict.fromkeys(deadline)]))
     if confirmations:
         sections.append((answer_labels().confirmations_section, [f"{bullet}{line}" for line in confirmations]))
+    removed = [
+        item
+        for entry in checked
+        if entry.removed and not entry.added and (item := passage_marks.removed_passage(entry.item.text, entry.marks))
+    ]
+    removed = list({item["text"]: item for item in removed}.values())
+    merged = passage_marks.merge_marks(marks)
+    warnings = [dict(item) for item in answer_warnings]
+    if removed_lines := passage_marks.removed_section_lines(removed):
+        sections.append((answer_labels().removed_section, removed_lines))
+    if marked_lines := passage_marks.marked_section_lines(merged, warnings):
+        sections.append((answer_labels().marked_section, marked_lines))
     body = "\n\n".join([*blocks, *(title + "\n\n" + "\n".join(content) for title, content in sections)])
     text = "\n\n".join(part for part in (summary.strip(), body) if part)
-    return text, [citation_line_ref(entries) for entries in citation_entries]
+    return RenderedAnswer(
+        text,
+        [citation_line_ref(entries) for entries in citation_entries],
+        passage_marks=merged,
+        removed_passages=removed,
+        answer_warnings=warnings,
+    )
 
 
 def _body_sections(
@@ -2597,17 +2831,19 @@ def _body_sections(
     applications: Sequence[CheckedApplication],
     lines: Callable[[Sequence[CheckedItem], bool], list[str]],
     add_citation: Callable[[Sequence[CheckedItem]], None],
+    mark_application: Callable[[str, CheckedApplication], None] | None = None,
 ) -> list[tuple[str, list[str]]]:
-    """``render_with_citations`` の説明・当てはめ・手順・参考情報・不足の節。lines は出典行を数えながら行を作る。"""
-    # 適用が未確認（unverified）の説明は、結論の節ではなく「参考情報」の節に置く。行末の注記は
-    # 付けず、節の直下の説明で該当が未確認であることを伝える (#2040)。
-    verified = [entry for entry in checked if entry.span and not entry.quote_only and entry.item.applies != "unverified"]
+    """``render_answer`` の説明・当てはめ・手順・参考情報・不足の節。lines は出典行を数えながら行を作る。"""
+    # 本文に言い換えを出す説明（印の付いた説明を含む。#2738）。適用が未確認（unverified）の印の無い説明は、
+    # 結論の節ではなく「参考情報」の節に置く。行末の注記は付けず、節の直下の説明で該当が未確認であることを
+    # 伝える (#2040)。
+    shown = [entry for entry in checked if entry.published and not _shown_as_quote(entry)]
     sections: list[tuple[str, list[str]]] = []
-    rules = [entry for entry in verified if entry.item.kind == "rule"]
+    rules = [entry for entry in shown if entry.item.kind == "rule"]
     if rules:
         sections.append((answer_labels().rules_section, lines(rules, False)))
-    # 規則を質問の事実に当てはめた結果（#2155）。検査と監査を通ったものだけ。出典は当てはめた規則の根拠。
-    if applied := application_lines(applications, _citation, add_citation):
+    # 規則を質問の事実に当てはめた結果（#2155）。確かめきれないものは警告つき（#2738）。出典は当てはめた規則の根拠。
+    if applied := application_lines(applications, _citation, add_citation, mark_application):
         sections.append((APPLICATIONS_SECTION_TITLE, applied))
     # 別機能の操作を一つの番号列に並べない。機能ごとに手順を分けて見出しに機能名を出す。
     # 機能が 1 つでも機能名を出す。「どの画面・機能の手順か」が問い合わせ回答の中心情報で、item 本文が
@@ -2617,21 +2853,23 @@ def _body_sections(
     # 同じ文書の中では items の並びで機能が連続する範囲ごとに区切る。機能ごとに集約し直すと、機能を往復する
     # 一連の操作（F1 で選択 → F2 で入力 → F1 で保存）が「選択 → 保存」「入力」の順に変わり、保存後に入力する
     # 手順として表示されていた (#1009)。同じ機能が別の機能を挟んで再び現れれば別の節にし、items の順序は変えない。
+    # 引用元が決まらない説明（印つき。#2738）は、文書の手順の後に機能名の無い見出しで出す。
     by_document: dict[tuple, list[CheckedItem]] = {}
-    for entry in verified:
+    for entry in shown:
         if entry.item.kind in _PROCEDURE_KINDS:
-            by_document.setdefault(_document_key(entry.span), []).append(entry)
-    primary_document = primary_procedure_document(verified)
-    ordered_documents = sorted(by_document, key=lambda key: key != primary_document)
-    groups: list[tuple[tuple, list[CheckedItem]]] = []
+            by_document.setdefault(_document_key(entry.span) if entry.span else (), []).append(entry)
+    primary_document = primary_procedure_document(shown)
+    ordered_documents = sorted(by_document, key=lambda key: (key == (), key != primary_document))
+    groups: list[tuple[Any, list[CheckedItem]]] = []
     for document in ordered_documents:
         for entry in by_document[document]:
-            if groups and groups[-1][0] == entry.span["function"]:
+            function = entry.span["function"] if entry.span else None
+            if groups and groups[-1][0] == function:
                 groups[-1][1].append(entry)
             else:
-                groups.append((entry.span["function"], [entry]))
+                groups.append((function, [entry]))
     for _function, entries in groups:
-        title = _block_screen_title(entries) or _function_title(entries[0].span)
+        title = _block_screen_title(entries) or (_function_title(entries[0].span) if entries[0].span else "")
         labels = answer_labels()
         confirmation = all(e.item.kind == "confirmation" for e in entries)
         heading = labels.confirmation_steps_heading if confirmation else labels.operation_steps_heading
@@ -2682,7 +2920,7 @@ def _subquestion_groups(
         )
         for unit in subquestions
     ]
-    if not any(entry.span or entry.item.kind == "gap" for _, entries, _ in groups for entry in entries) and not any(
+    if not any(entry.published or entry.item.kind == "gap" for _, entries, _ in groups for entry in entries) and not any(
         app.published for _, _, apps in groups for app in apps
     ):
         return []
@@ -2767,8 +3005,12 @@ class Round:
     carried: int = 0
     withdrawn: int = 0
     withdrawn_requests: set[str] = field(default_factory=set)
-    # summary を中立文に置き換えた理由（空なら草稿の summary を公開）。trace 用 (#1013)。
+    # summary を中立文に置き換えた理由（空なら草稿の summary を公開）。根拠と矛盾して外した主張を summary が
+    # 断定したときだけ置き換える（#1013・#2738）。trace 用。
     summary_reason: str = ""
+    # summary を確かめきれなかった理由（監査なし・不支持・保証の過剰・原因の推測など）。summary は残し、段落に
+    # 警告（summary_unaudited）を付ける（#2738）。空なら確かめた summary。
+    summary_warning: str = ""
     # 監査が回答の時間の上限（確定の分を残した期限）までに終わらず、監査なしの round にした (#1516)。
     audit_cut: bool = False
     # 生成と監査の秒・prompt の文字数・LLM の token の数（遅い round の理由を確かめる。#1516）。
@@ -2811,23 +3053,38 @@ class Round:
 
     @property
     def problems(self) -> int:
-        return sum(1 for d in self.dropped if not d.get("ignored")) + sum(entry.quote_only for entry in self.checked)
-
-    @property
-    def verified(self) -> int:
-        # 公開できる当てはめも公開できる説明に数える（当てはめが通った是正 round を採用する。#2155）。
-        return sum(1 for entry in self.checked if entry.span and not entry.quote_only) + sum(
-            1 for application in self.applications if application.published
+        """問題の数: 印の付いた・矛盾で外した説明、原文のまま示した記載、公開しなかった指摘（#2738。印の数で数える）。"""
+        return sum(1 for d in self.dropped if not d.get("ignored") and not d.get("kept")) + sum(
+            1 for entry in self.checked if entry.quote_only or entry.removed or entry.state
         )
 
     @property
-    def unpublished_claims(self) -> bool:
-        """草稿の主張のうち公開しなかったもの（検査・監査で降格、原文と一致せず除外）があるか (#1383)。
+    def verified(self) -> int:
+        # 確かめた説明（印の無い説明）の数。公開できる当てはめも数える（当てはめが通った是正 round を採用する。#2155）。
+        return sum(1 for entry in self.checked if entry.confirmed) + sum(
+            1 for application in self.applications if application.published and not application.marks
+        )
 
-        この round の監査が summary を不支持としたとき、summary が頼る段の item を公開できなかったことが理由の
+    @property
+    def marked(self) -> int:
+        """本文に残して印を付けた説明（未確認・要注意）の数（#2738）。"""
+        return sum(1 for entry in self.checked if entry.published and entry.state)
+
+    @property
+    def removed(self) -> int:
+        """根拠と矛盾して本文から外した説明の数（#2738）。"""
+        return sum(1 for entry in self.checked if entry.removed)
+
+    @property
+    def unpublished_claims(self) -> bool:
+        """草稿の主張のうち確かめられなかったもの（検査・監査の印、矛盾で外した、原文と一致しない）があるか (#1383)。
+
+        この round の監査が summary を不支持としたとき、summary が頼る段の item を確かめられなかったことが理由の
         ことがある（多段の結論の途中の段を 1 つの item に混ぜた・引用を写し誤った）。
         """
-        return any(entry.quote_only and not entry.added for entry in self.checked) or any(not d.get("ignored") for d in self.dropped)
+        return any((entry.state or entry.removed) and not entry.added for entry in self.checked) or any(
+            not d.get("ignored") for d in self.dropped
+        )
 
     def feedback(self) -> dict:
         """次の生成へ渡す具体的な不足。何もなければ空。"""
@@ -2841,8 +3098,11 @@ class Round:
                 for d in self.dropped
                 if not d.get("ignored")
             ],
+            # 印を付けた・矛盾で外した説明（#2738。原文と照合できなかった説明は dropped_items に写し方と出す）。
             "downgraded_items": [
-                {"text": e.item.text, "reasons": e.reasons, **_operation_hint(e)} for e in self.checked if e.quote_only and not e.added
+                {"text": e.item.text, "reasons": e.reasons, **_operation_hint(e)}
+                for e in self.checked
+                if (e.state or e.removed) and not e.added and not e.unmatched
             ],
             "unanswered_requests": [{k: v for k, v in entry.items() if k not in {"reviewed", "text"}} for entry in self.unanswered],
             "unused_evidence_ids": self.unused,  # 表示IDへの変換は build_context_block が現在の根拠で行う
@@ -2877,14 +3137,15 @@ class Round:
                     "quote": e.item.quote,
                 }
                 for e in self.checked
-                if e.span and not e.quote_only
+                if e.confirmed
             ]
         return {key: value for key, value in result.items() if value}
 
     def score(self) -> tuple:
-        """採否比較の順序。充足した要求（撤回した要求は数に含める）→ 公開できる説明 + 撤回 → 撤回 → 問題の少なさ。
+        """採否比較の順序。充足した要求（撤回した要求は数に含める）→ 確かめた説明 + 撤回 → 撤回 → 問題の少なさ。
 
-        撤回した item は原文のみ提示になり problems に数えられるため、撤回だけの round は第 3 要素で採用される。
+        撤回した item は外すか印が付き problems に数えられるため、撤回だけの round は第 3 要素で採用される。
+        問題は印の数で数える（#2738）。
         """
         return (len(self.addressed | self.withdrawn_requests), self.verified + self.withdrawn, self.withdrawn, -self.problems)
 
@@ -2903,6 +3164,8 @@ class Round:
                     "hints": e.hints,
                     "carried": e.carried,
                     "withdrawn": e.withdrawn,
+                    **({"marks": [dict(mark) for mark in e.marks]} if e.marks else {}),
+                    **({"removed": True} if e.removed else {}),
                 }
                 for e in self.checked
             ],
@@ -2911,6 +3174,7 @@ class Round:
             "audited_items": self.audited_items,
             "carried_over": self.carried,
             "summary_reason": self.summary_reason,
+            **({"summary_warning": self.summary_warning} if self.summary_warning else {}),
             "audit_cut": self.audit_cut,
             "timing": self.timing,
             **(
@@ -2921,6 +3185,8 @@ class Round:
             "score": {
                 "addressed": sorted(self.addressed),
                 "verified": self.verified,
+                "marked": self.marked,
+                "removed": self.removed,
                 "withdrawn": self.withdrawn,
                 "withdrawn_requests": sorted(self.withdrawn_requests),
                 "problems": self.problems,
@@ -3071,7 +3337,7 @@ def guide_step_evidence_lines(guide_steps: Sequence[tuple[str, str, Sequence[str
 
 # 業務ガイドの手順の充足（#2491）。生成・監査・是正・回答の構造で同じ単位を使う。
 GUIDE_STEP_EXPLAINED = "explained"  # 手順の根拠を引いた説明を公開した
-GUIDE_STEP_REFERENCE_ONLY = "reference_only"  # 手順の根拠を原文のまま（「参考情報」の節に）示しただけ
+GUIDE_STEP_REFERENCE_ONLY = "reference_only"  # 手順の根拠を原文のまま示したか、印の付いた（確かめられない）説明だけ
 GUIDE_STEP_UNUSED = "unused"  # 手順の根拠は回答の材料にあるが、説明に引いていない
 GUIDE_STEP_NO_EVIDENCE = "no_evidence"  # 手順の根拠が回答の材料に無い
 # 手順ごとの検索を期限・回数の上限で打ち切り、その手順を検索しなかった（根拠が無いのは資料に無いからとは限らない。#2706）。
@@ -3316,8 +3582,8 @@ def guide_step_assignment(
     分からないので、1 つの手順の根拠だけを引いた item でも、検索しなかった手順と根拠を共有しうる item として、
     共有の item と同じ判定（語・意味）を通す（共通の文だけの item を手順の説明にしない）。
 
-    手順の item に公開できる説明（原文のみ提示でも適用未確認でもない）を割り当てられれば explained。手順の item が
-    原文のみ提示（検査・監査で降格）か適用未確認（unverified。「参考情報」の節に出る）だけなら reference_only、
+    手順の item に確かめた説明（原文のみ提示でも適用未確認でも印つきでもない）を割り当てられれば explained。手順の
+    item が原文のみ提示・適用未確認（unverified。「参考情報」の節に出る）・印の付いた説明（#2738）だけなら reference_only、
     根拠は回答の材料にあるが手順の説明を引いていなければ unused、材料に無ければ no_evidence（検索しなかった手順は
     not_searched）。required は回答の充足で必須の手順か（``optional`` は条件が決まらない分岐の行き先とその後続）。
     """
@@ -3394,7 +3660,8 @@ def guide_step_assignment(
     }
 
     def publishable(index: int) -> bool:
-        return not checked[index].quote_only and checked[index].item.applies != "unverified"
+        # 確かめた説明（印の無い説明）だけを手順の説明にする。印の付いた説明は本文に出るが、手順を確かめた説明ではない（#2738）。
+        return checked[index].published and not checked[index].state and checked[index].item.applies != "unverified"
 
     # 公開できる item を手順に 1 対 1 で割り当てる（増加路による最大の割り当て。必須の手順を先に割り当てる）。
     assigned: dict[int, str] = {}
@@ -3447,7 +3714,8 @@ def guide_step_gap_line(step: dict[str, Any]) -> str:
     """説明できていない必須の手順を、本文の不足の行にする（#2491）。"""
     if step.get("status") == GUIDE_STEP_REFERENCE_ONLY:
         return (
-            f"業務ガイドの手順「{step['title']}」は、資料の記載を参考情報として示しただけで、行う操作として確かめた説明になっていません。"
+            f"業務ガイドの手順「{step['title']}」は、資料の記載を参考情報として示したか、根拠で確かめられない説明だけで、"
+            "行う操作として確かめた説明になっていません。"
         )
     if step.get("status") == GUIDE_STEP_NOT_SEARCHED:
         return f"業務ガイドの手順「{step['title']}」は、手順ごとの検索を時間・回数の上限で打ち切ったため、資料で確かめていません。"
@@ -3604,12 +3872,12 @@ def run_round(
     )
     # 撤回の候補 = 前の round で支持済みだった主張のうち、当該 round の監査の前に公開できる状態にあるもの（引き継いだ
     # item、または草稿が同じ引用・同じ説明で再掲した item）。前の round で既に降格していた item は数えない。
-    previous_verified = [p for p in previous if p.span and not p.quote_only]
+    previous_verified = [p for p in previous if p.span and p.published]
     restated = {
         id(e)
         for e in checked
         if e.span
-        and not e.quote_only
+        and e.published
         and (
             e.carried
             or any(
@@ -3619,7 +3887,8 @@ def run_round(
         )
     }
     audit, audit_calls, audit_cut = None, 0, False
-    auditable = [(index, entry) for index, entry in enumerate(checked) if entry.span and not entry.quote_only]
+    # 印の付いた説明も監査する（根拠と矛盾すれば外す。#2738）。システムが補った原文・外した説明は監査しない。
+    auditable = [(index, entry) for index, entry in enumerate(checked) if entry.span and entry.published]
     audit_index = {id(entry): index for index, entry in auditable}
     if spans:
         # 未使用根拠の基準は草稿の items。システムが補った原文のみ提示（必須根拠・確定操作・但し書き）は草稿が
@@ -3704,17 +3973,27 @@ def run_round(
             apply_audit(checked, audit)
             checked = without_redundant_quotes(checked)
             _reconcile_request_reviews(checked, audit)
+    if audit is None and spans:
+        # 監査が時間の上限で切れた・応答が空だった round の説明は、原文との照合だけを済ませた未確認の説明（#2738）。
+        # 引き継いだ item は前の round で監査済み。
+        detail = "回答の時間の上限までに監査が終わらなかった" if audit_cut else "監査の応答が得られなかった"
+        for _index, entry in auditable:
+            if not entry.carried:
+                entry.mark("unassessed", detail)
     apply_application_audit(applications, audit)
-    # 撤回 = 撤回の候補を当該 round の監査が contradicted / not_applicable と判定したもの。新しい主張の降格は撤回に数えない。
+    # 撤回 = 撤回の候補を当該 round の監査が contradicted / not_applicable と判定したもの。新しい主張の印は撤回に数えない。
     withdrawn = [e for e in checked if e.withdrawn and id(e) in restated]
     limits = list(dict.fromkeys(fold_width(limit) for entry in checked if entry.span for limit in entry.span.get("limits", ())))
     # 未説明を述べる原文そのものの引用は、保証の裏付けにはならない。
     quotes = fold_width(
         "".join(entry.item.quote for entry in checked if entry.span and not check_cues().unexplained.search(entry.item.quote))
     )
-    # 監査していない summary は公開しない。監査対象の item がない round では、監査が summary を支持しても
-    # 公開しない: summary は items の範囲を超えた保証（「〜すれば確認できます」）を含み得る (#621)。
-    summary_reason = (
+    # summary の扱い（#2738）: 根拠と矛盾して外した主張を断定するときだけ中立の定型文にする。それ以外の確かめきれない
+    # summary は残し、段落に警告（summary_unaudited）を付ける。監査していない summary・監査対象の item がない round の
+    # summary（items の範囲を超えた保証を含み得る。#621）、保証の過剰、原因の推測（#713）、全要求が missing（#732）、
+    # 支持された説明がすべて条件付き・適用未確認（#1012）が警告の理由。
+    published = [e for e in checked if e.span and e.published]
+    summary_warning = (
         "監査対象の item がない"
         if not auditable
         else "監査なし"
@@ -3723,40 +4002,45 @@ def run_round(
         if audit.summary_supported
         else "監査が summary を不支持"
     )
-    if not summary_reason:
-        summary_reason = guarantees_unexplained(str(draft.summary), quotes, limits)
-    if not summary_reason and task_contract(question)["asks_cause"]:
-        # 原因を尋ねる質問では、supported な引用にない原因候補の列挙を summary から外す (#713)。
-        verified_quotes = fold_width("".join(e.item.quote for e in checked if e.span and not e.quote_only))
-        summary_reason = speculative_causes(str(draft.summary), verified_quotes, question)
-    if not summary_reason and audit is not None and _all_requests_missing(audit, question):
-        # 監査が背景以外の全要求を missing と判定した round では、summary の結論は要求に答えていない。
-        # 本文の「〜で修正します」と「…については確認できませんでした」が並ぶ矛盾を避ける (#732)。
-        summary_reason = "全要求が missing"
-    if (
-        not summary_reason
-        and any(e.span and not e.quote_only for e in checked)
-        and all(e.item.applies != "matched" for e in checked if e.span and not e.quote_only)
-    ):
+    if not summary_warning:
+        summary_warning = guarantees_unexplained(str(draft.summary), quotes, limits)
+    if not summary_warning and task_contract(question)["asks_cause"]:
+        # 原因を尋ねる質問では、確かめた引用にない原因候補の列挙に警告を付ける (#713)。
+        verified_quotes = fold_width("".join(e.item.quote for e in checked if e.confirmed))
+        summary_warning = speculative_causes(str(draft.summary), verified_quotes, question)
+    if not summary_warning and audit is not None and _all_requests_missing(audit, question):
+        # 監査が背景以外の全要求を missing と判定した round では、summary の結論は要求に答えていない (#732)。
+        summary_warning = "全要求が missing"
+    if not summary_warning and published and all(e.item.applies != "matched" for e in published):
         # 支持された説明がすべて条件付き（conditional）か適用未確認（unverified）の round では、summary の結論は
-        # 条件を落とした無条件の断定になる。条件は本文の各 item に付くので、summary は中立文にする (#1012)。
-        summary_reason = "支持された説明がすべて条件付き・適用未確認"
-    if not summary_reason:
-        # 監査・検査で降格した item や原文と一致せず除外した item の主張を、summary が断定していれば公開しない。
-        # 本文で引用のみへ降格しても、冒頭の要約から同じ誤案内が残っていた (#1013)。
-        summary_reason = summary_asserts_denied(
+        # 条件を落とした無条件の断定になり得る。条件は本文の各 item に付く (#1012)。
+        summary_warning = "支持された説明がすべて条件付き・適用未確認"
+    if not summary_warning and published and not any(e.confirmed for e in published):
+        # 本文の説明がすべて印つき（未確認・要注意）なら、summary の結論も確かめた説明で裏付けられていない（#2738）。
+        summary_warning = "確かめた説明が無い"
+    if not summary_warning:
+        # 印の付いた（未確認・要注意の）item の主張を summary が断定していれば、summary にも警告を付ける（#2738）。
+        summary_warning = summary_asserts_denied(
             str(draft.summary),
-            [e.item.text for e in checked if e.quote_only and not e.added]
-            + [str(d.get("text") or "") for d in dropped if not d.get("ignored")],
-            [e.item.text for e in checked if e.span and not e.quote_only],
+            [e.item.text for e in published if e.state and not e.added],
+            [e.item.text for e in checked if e.confirmed],
+            subject="印の付いた主張",
         )
+    # 根拠と矛盾して外した item の主張を summary が断定していれば、summary は中立文にする。本文から外しても、
+    # 冒頭の要約から同じ誤案内が残っていた (#1013)。
+    summary_reason = summary_asserts_denied(
+        str(draft.summary),
+        [e.item.text for e in checked if e.removed and not e.added],
+        [e.item.text for e in published],
+    )
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
+    summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
     if (
         task_contract(question)["asks_cause"]
-        and not any(e.span and not e.quote_only and e.item.kind == "rule" for e in checked)
+        and not any(e.confirmed and e.item.kind == "rule" for e in checked)
         and not any(e.item.kind == "gap" and answer_labels().cause_gap in e.item.text for e in checked)
     ):
-        # 原因を裏付ける規則の item が 1 つもなければ、原因は資料にないと本文で伝える (#713)。
+        # 原因を裏付ける確かめた規則の item が 1 つもなければ、原因は資料にないと本文で伝える (#713)。
         checked.append(CheckedItem(GroundedItem(kind="gap", text=answer_labels().cause_gap)))
     unused = [ref for label in (audit.unused_evidence_ids if audit else []) if (ref := _evidence_ref(label, spans))]
     return Round(
@@ -3773,6 +4057,7 @@ def run_round(
         withdrawn=len(withdrawn),
         withdrawn_requests={e.item.request_id for e in withdrawn if e.item.request_id},
         summary_reason=summary_reason,
+        summary_warning=summary_warning,
         audit_cut=audit_cut,
         timing=timing,
         applications=applications,
@@ -3787,19 +4072,20 @@ def run_round(
 
 
 def _reconcile_request_reviews(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
-    """要求の充足判定を、降格後の item と整合させる (#1013)。
+    """要求の充足判定を、監査の後の item と整合させる (#1013)。
 
-    監査は addressed を降格前の items（監査入力）で判定するため、その要求の item をすべて降格した round でも
-    addressed が残り、summary の公開・採否比較・本文の不足表示が「答えている」前提で進む。要求に結び付いた
-    span 付きの item があり、そのどれも公開できない（すべて原文のみ提示）なら missing に改める。item を結び
-    付けていない要求（gap だけ、request_id なし）は監査の判定のまま。
+    監査は addressed を監査の前の items（監査入力）で判定するため、その要求の item をすべて根拠と矛盾して外した
+    round でも addressed が残り、summary の公開・採否比較・本文の不足表示が「答えている」前提で進む。要求に
+    結び付いた span 付きの item があり、そのどれも本文に残らない（すべて矛盾で外した）なら missing に改める。
+    印の付いた item は本文に残るので答えた扱いのまま（#2738）。item を結び付けていない要求（gap だけ、
+    request_id なし）は監査の判定のまま。
     """
     claimed = {e.item.request_id for e in checked if e.span and e.item.request_id}
-    published = {e.item.request_id for e in checked if e.span and not e.quote_only and e.item.request_id}
+    published = {e.item.request_id for e in checked if e.span and e.published and e.item.request_id}
     for review in audit.request_reviews:
         if review.status == "addressed" and review.request_id in claimed - published:
             review.status = "missing"
-            review.reason = "支持された item がない（すべて原文のみ提示へ降格）: " + review.reason
+            review.reason = "本文に残った item がない（すべて根拠と矛盾して除外）: " + review.reason
 
 
 def _all_requests_missing(audit: GroundedAudit, question: str) -> bool:
@@ -3815,21 +4101,19 @@ def _all_requests_missing(audit: GroundedAudit, question: str) -> bool:
 def off_goal(current: Round, question: str) -> bool:
     """採用ラウンドが質問の目的に答えていないか。監査が off_target のときだけ真。
 
-    partial は拒答にしない (#986)。支持された item を公開し、missing の要求は render の gap 行で示す。
-    以前は手順の質問で partial かつ公開できる operation が無ければ拒答にしていた (#950) が、それが防いで
-    いた「別の変更項目の手順の画面例」は CRAG 評価器の候補判定（relevant=false）で除く (#983)。部分回答を
-    理由に全体を捨てるのは、supported な内容は公開し不足を明示する grounded generation の分担に反する。
+    真なら本文は残し、回答全体の警告（off_goal）を出す（#2738。以前は公開した説明をすべて捨てていた）。
+    partial は警告にしない (#986)。missing の要求は render の gap 行で示す。
     """
-    # 公開できる説明が無い round（gap だけ・全 item が降格）の off_target は拒答理由にしない。gap だけの草稿も
-    # 監査するようになり (#1014)、その監査が「別の対象に答えている」と返しても、別の対象に答えた主張自体が無い。
-    return current.verified > 0 and current.audit is not None and current.audit.goal_alignment == "off_target"
+    # 本文に出す説明が無い round（gap だけ）の off_target は警告にしない。gap だけの草稿も監査するようになり
+    # (#1014)、その監査が「別の対象に答えている」と返しても、別の対象に答えた主張自体が無い。
+    return any(entry.published for entry in current.checked) and current.audit is not None and current.audit.goal_alignment == "off_target"
 
 
 def better(candidate: Round, current: Round) -> bool:
     """支持済みの要求と公開できる説明を失わず、どこかが改善した場合だけ採用する。
 
-    除外（dropped）や原文のみ提示（quote_only）は公開される説明を損なわないため、それらが増えても
-    公開できる説明（verified）や充足した要求が増えた候補は採用する。以前は problems の増加を
+    印の付いた説明・原文のみ提示（quote_only）は確かめた説明を損なわないため、それらが増えても
+    確かめた説明（verified）や充足した要求が増えた候補は採用する。以前は problems の増加を
     必須条件にしていたため、supported な操作が増えた是正 round が不採用になっていた (#621)。
 
     撤回（当該 round の監査が前の round の支持済み主張を contradicted / not_applicable と判定）による減少は
@@ -3837,8 +4121,8 @@ def better(candidate: Round, current: Round) -> bool:
     round も採用する（内容の正確さを件数より優先する）。撤回のない減少は従来どおり採用しない (#1011)。
     """
     if getattr(candidate, "audit_cut", False) and getattr(current, "audit", None) is not None:
-        # 監査が時間の上限で切れた round（#1516）は、監査を通った round より採用しない。監査で降格されていない分だけ
-        # 公開できる説明が多く見え、確かめていない説明が確かめた説明を置き換えてしまう。
+        # 監査が時間の上限で切れた round（#1516）は、監査を通った round より採用しない。監査で印を付けていない分だけ
+        # 確かめた説明が多く見え、確かめていない説明が確かめた説明を置き換えてしまう。
         return False
     lost_requests = current.addressed - candidate.addressed - candidate.withdrawn_requests
     if lost_requests or candidate.verified + candidate.withdrawn < current.verified:
@@ -3855,8 +4139,8 @@ DEADLINE_NO_DRAFT = "deadline_no_draft"  # 1 組目の生成が期限までに�
 NO_IMPROVEMENT_NOT_ACCEPTED = "no_improvement_not_accepted"  # 作り直した組が採用されなかった
 NO_IMPROVEMENT_SAME_FEEDBACK = "no_improvement_same_feedback"  # 作り直した組の指摘が前の組と同じ
 NO_IMPROVEMENT_EVIDENCE_ONLY = "no_improvement_evidence_only"  # 指摘が根拠の不足だけ（同じ根拠では直らない）
-NO_IMPROVEMENT_DOWNGRADED_ONLY = "no_improvement_downgraded_only"  # 作り直した後に残った指摘が降格だけ（#1912）
-# 1 組目の指摘が、監査が質問の対象ではない（not_applicable）とした説明の降格だけ（#1925）
+NO_IMPROVEMENT_DOWNGRADED_ONLY = "no_improvement_downgraded_only"  # 作り直した後に残った指摘が印の付いた説明だけ（#1912）
+# 1 組目の指摘が、監査が質問の対象ではない（not_applicable）とした説明の警告だけ（#1925）
 NO_IMPROVEMENT_NOT_APPLICABLE_ONLY = "no_improvement_not_applicable_only"
 NO_IMPROVEMENT_REASONS = frozenset(
     {
@@ -3867,8 +4151,8 @@ NO_IMPROVEMENT_REASONS = frozenset(
         NO_IMPROVEMENT_NOT_APPLICABLE_ONLY,
     }
 )
-# 同じ根拠のまま指摘を渡して作り直す（是正の「指摘の反映」）ことで直せる指摘（#1527）: 原文と一致せず除いた
-# 説明（写し誤り）・裏付けを確かめられず原文のまま示した説明（降格）・根拠を引用した説明が無いこと。
+# 同じ根拠のまま指摘を渡して作り直す（是正の「指摘の反映」）ことで直せる指摘（#1527）: 原文と一致しない引用
+# （写し誤り）・印を付けた説明（downgraded_items。#2738 で降格から印に変えた）・根拠を引用した説明が無いこと。
 # 答えていない要求・使われていない根拠・質問の目的とのずれは、根拠を足す是正（取得済みの資料・原画像）で直す。
 # 業務ガイドの必須の手順を説明していないこと（#2491。手順の根拠は材料にある）も同じ。
 REGENERATION_FEEDBACK_KEYS = ("dropped_items", "downgraded_items", "no_cited_evidence", "guide_steps_unexplained")
@@ -3878,7 +4162,7 @@ def feedback_signature(feedback: dict[str, Any] | None) -> dict[str, Any]:
     """是正の指摘（`Round.feedback`）の同一性の比較に使う形（#1527）。
 
     LLM の自由文（監査の reason・説明の言い回し）は組ごとに揺れるので比べない。答えていない要求は要求の ID と
-    状態、使われていない根拠は根拠の参照、除いた・降格した説明は件数、目的のずれは監査の値で比べる。
+    状態、使われていない根拠は根拠の参照、原文と一致しない・印を付けた説明は件数、目的のずれは監査の値で比べる。
     """
     feedback = feedback or {}
     return {
@@ -3901,7 +4185,7 @@ def feedback_signature(feedback: dict[str, Any] | None) -> dict[str, Any]:
 def evidence_shortage_only(feedback: dict[str, Any] | None, adopted: Round) -> bool:
     """残った指摘が根拠の不足だけで、同じ根拠のまま作り直しても直らないか（#1527）。
 
-    写し誤り・降格・引用なし（`REGENERATION_FEEDBACK_KEYS`）があれば作り直す。監査が「使われていない根拠」を
+    写し誤り・印・引用なし（`REGENERATION_FEEDBACK_KEYS`）があれば作り直す。監査が「使われていない根拠」を
     挙げたときも、根拠はあるので作り直す。答えていない要求は、採用した組の草稿がその要求を「資料に記載が無い」
     （kind=gap）と答えたときだけ根拠の不足とみなす。草稿が答えようとして監査が partial・missing とした要求は、
     指摘を渡せば同じ根拠で答えられることがある（#621）。答えていない要求が無い（目的のずれだけ）なら作り直す。
@@ -3915,11 +4199,11 @@ def evidence_shortage_only(feedback: dict[str, Any] | None, adopted: Round) -> b
 
 
 def downgraded_only(feedback: dict[str, Any] | None) -> bool:
-    """残った指摘が降格（裏付けを確かめられず原文のまま示した説明）だけか（#1912）。
+    """残った指摘が印を付けた説明（downgraded_items）だけか（#1912・#2738）。
 
-    降格した説明は本文に原文のまま出る（言い換えを公開しない）ので、誤った説明は公開されない。作り直しで直るのは
-    言い換えの体裁だけで、写し誤り・答えていない要求・使われていない根拠・目的のずれ・引用なしのような内容の不足
-    ではない。
+    印を付けた説明は本文に印つきで出る（矛盾した説明は外す）ので、利用者は確かめられていないことが分かる。
+    作り直しで直るのは言い換えの体裁だけで、写し誤り・答えていない要求・使われていない根拠・目的のずれ・
+    引用なしのような内容の不足ではない。
     """
     feedback = feedback or {}
     return bool(feedback.get("downgraded_items")) and not any(
@@ -3942,7 +4226,7 @@ _NOT_APPLICABLE_REASON = re.compile(r"監査: [a-z]+/not_applicable(?:\s|$)")
 def not_applicable_only(feedback: dict[str, Any] | None) -> bool:
     """指摘が、監査が質問の対象ではない（not_applicable）とした説明の降格だけか（#1925）。
 
-    `downgraded_only` で、降格したどの説明の理由も監査の not_applicable だけ（検査の降格・unsupported を含まない）。
+    `downgraded_only` で、印を付けたどの説明の理由も監査の not_applicable だけ（検査の警告・unsupported を含まない）。
     not_applicable は説明の言い回しではなく、引いた原文の対象が質問と違うという判定で、同じ根拠のまま作り直しても
     直らない。要求は答えている（答えていない要求があれば `downgraded_only` が偽）ので、多段の問の途中の段を誤って
     not_applicable にして要求が欠けた監査の揺れは、この打ち切りに当たらない。
@@ -3960,12 +4244,12 @@ def no_improvement_reason(number: int, *, accepted: bool, feedback: dict[str, An
     もので、その指摘を渡して作り直した結果が良くならなかった。採用されても指摘が前の組と同じなら、同じ指摘を
     渡して作り直しても同じ結果になる。
 
-    作り直した後に残った指摘が降格だけなら止める（#1912）。前の組の降格は、次の草稿が同じ引用で書き直さない限り
-    原文のまま引き継がれ（`carry_over`）、監査に掛からないので、作り直しても指摘から消えない。#1864 の記録では、
+    作り直した後に残った指摘が印だけなら止める（#1912）。前の組の印の付いた説明は、次の草稿が同じ引用で書き直さない
+    限り引き継がれ（`carry_over`）、支持の判定は監査し直さないので、作り直しても指摘から消えない。#1864 の記録では、
     作り直した後に降格だけが残った組の次の組（4 組）は、どれも降格の数が減らず、1 組あたり 14〜63 秒を使っていた。
-    1 組目の後の降格だけの指摘は、付け足した前提を直せることがある（#1864 の記録で 6 組中 2 組）ので作り直す。
+    1 組目の後の印だけの指摘は、付け足した前提を直せることがある（#1864 の記録で 6 組中 2 組）ので作り直す。
 
-    ただし 1 組目の指摘が、監査が質問の対象ではない（not_applicable）とした説明の降格だけなら止める（#1925。
+    ただし 1 組目の指摘が、監査が質問の対象ではない（not_applicable）とした説明の警告だけなら止める（#1925。
     `not_applicable_only`）。#1864・#1912 の記録の 4 件は、どれも 2 組目が採用されず（作り直した草稿はその説明を
     落とし、`carry_over` が原文のまま引き継いで同点）、1 組 8.6〜10.5 秒を使っていた。
     """
@@ -4125,9 +4409,9 @@ def pending_feedback_labels(feedback: dict[str, Any]) -> list[str]:
     if count := len(feedback.get("unanswered_requests") or ()):
         labels.append(f"答えていない要求 {count} 件")
     if count := len(feedback.get("dropped_items") or ()):
-        labels.append(f"原文と一致せず除いた説明 {count} 件")
+        labels.append(f"原文と一致しない引用 {count} 件")
     if count := len(feedback.get("downgraded_items") or ()):
-        labels.append(f"裏付けを確かめられず原文のまま示した説明 {count} 件")
+        labels.append(f"根拠で確かめられず印を付けた説明 {count} 件")
     if count := len(feedback.get("unused_evidence_ids") or ()):
         labels.append(f"使われていない根拠 {count} 件")
     if feedback.get("goal_alignment"):
