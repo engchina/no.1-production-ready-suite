@@ -208,15 +208,18 @@ def answer_model_choices(settings: Settings) -> list[dict[str, str]]:
 
 def registered_answer_model_choices(settings: Settings) -> list[dict[str, str]]:
     """回答設定に保存できる登録モデルの、接続情報を含まない候補。"""
-    return [
+    choices = answer_model_choices(settings)
+    selected_ids = {choice["model_id"] for choice in choices}
+    choices.extend(
         {
             "model_id": model.model_id,
             "display_name": model.display_name or model.model_id,
             "kind": "text_vision" if model.vision_enabled else "text",
         }
         for model in enterprise_ai_model_catalog(settings)
-        if model.model_id
-    ]
+        if model.model_id and model.model_id not in selected_ids
+    )
+    return choices
 
 
 def _answer_model_id(request: SearchRequest, settings: Settings) -> str | None:
