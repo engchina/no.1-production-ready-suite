@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from pr_system_settings.answer_notice import DEFAULT_ANSWER_NOTICE_TEXT
+from pr_system_settings.answer_notice import (
+    DEFAULT_ANSWER_NOTICE_CONTACT,
+    DEFAULT_ANSWER_NOTICE_TEXT,
+    AnswerNoticeRecord,
+)
 from pytest import MonkeyPatch
 
 from app.main import app
@@ -52,3 +56,39 @@ def test_other_menu_permission_is_forbidden(monkeypatch: MonkeyPatch) -> None:
     )
     assert response.status_code == 403
     assert auth.service.answer_notice.current_text() == DEFAULT_ANSWER_NOTICE_TEXT
+
+
+def test_profile_screen_reads_the_inherited_contact_only(monkeypatch: MonkeyPatch) -> None:
+    """プロファイルの画面の権限で、継承するシステム設定の窓口だけを読める（#2683）。"""
+    auth = enable_production_auth(monkeypatch)
+    auth.service.answer_notice.save(AnswerNoticeRecord(enabled=True, contact="窓口 A"))
+    auth.user_with_permissions("profile_admin", ["menu.search_answer_profiles"])
+    headers = login(client, "profile_admin")
+
+    response = client.get("/api/search-answer-profiles/inherited-contact", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == {"enabled": True, "contact": "窓口 A"}
+    # 注意書きの設定（本文・保存）は運用設定の権限のまま。
+    assert client.get("/api/settings/answer-notice", headers=headers).status_code == 403
+
+    auth.service.answer_notice.save(AnswerNoticeRecord(enabled=False, contact="窓口 A"))
+    disabled = client.get("/api/search-answer-profiles/inherited-contact", headers=headers)
+    assert disabled.json()["data"] == {"enabled": False, "contact": ""}
+
+
+def test_inherited_contact_uses_the_default_when_unset(monkeypatch: MonkeyPatch) -> None:
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("profile_admin", ["menu.search_answer_profiles"])
+    headers = login(client, "profile_admin")
+
+    response = client.get("/api/search-answer-profiles/inherited-contact", headers=headers)
+    assert response.json()["data"] == {"enabled": True, "contact": DEFAULT_ANSWER_NOTICE_CONTACT}
+
+
+def test_inherited_contact_needs_the_profile_screen_permission(monkeypatch: MonkeyPatch) -> None:
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("chat_user", ["menu.chat"])
+    headers = login(client, "chat_user")
+
+    response = client.get("/api/search-answer-profiles/inherited-contact", headers=headers)
+    assert response.status_code == 403

@@ -1835,7 +1835,7 @@ export const ja = {
   "settings.answerNotice.description":
     "チャットと検索の回答の末尾に、毎回同じ文を出します。確認の質問・エラー・停止には出しません。",
   "settings.answerNotice.helperContact":
-    "本文の後に「{line}」と出します。窓口の名前と連絡の方法（電話・URL など）を 1 行で書きます。検索・回答プロファイルで窓口を上書きできます。",
+    "本文の後に「{line}」と出します。窓口の名前と連絡の方法（電話・URL など）を 1 行で書きます。検索・回答プロファイルの「窓口の上書き」と、業務ガイドの「引き継ぎ先」で窓口を上書きできます（空ならこの窓口を継承します）。",
   "settings.chatAttachments.subtitle":
     "チャットで利用者がファイルを添付して質問できるかを設定します。RAG のチャットだけに使い、NL2SQL・Agent はそれぞれの画面で設定します。",
   "settings.chatAttachments.description":
@@ -3569,7 +3569,18 @@ export const ja = {
     "回答の注意書き（システム設定）の窓口の案内を、このプロファイルの回答だけ変えます。業務ガイドの「人への引き継ぎ」の窓口があれば、そちらを優先します。",
   "searchAnswerProfiles.contact.override": "窓口の上書き",
   "searchAnswerProfiles.contact.overrideHelper":
-    "このプロファイルの業務の窓口の名前と連絡の方法（電話・URL など）を 1 行で書きます。空ならシステム設定の窓口を使います。",
+    "このプロファイルの業務の窓口の名前と連絡の方法（電話・URL など）を 1 行で書きます。空ならシステム設定の窓口を継承します。",
+  // 窓口の継承と有効な窓口（#2683。プロファイルと業務ガイドで共通の文言）
+  "contactInheritance.placeholder": "未設定（{contact} を継承）",
+  "contactInheritance.placeholderNone": "未設定（窓口の案内なし）",
+  "contactInheritance.loadError": "継承するシステム設定の窓口を読み込めませんでした。",
+  "searchAnswerProfiles.contact.effective": "有効な窓口: {contact}（{source}）",
+  "searchAnswerProfiles.contact.effectiveNone":
+    "有効な窓口: なし（システム設定で回答の注意書きが無効のため、窓口の案内を出しません）",
+  "searchAnswerProfiles.contact.source.profile": "このプロファイルの上書き",
+  "searchAnswerProfiles.contact.source.system": "システム設定の窓口を継承",
+  "searchAnswerProfiles.contact.sameAsSystem":
+    "システム設定と同じ窓口です。空にすると、システム設定の窓口を継承します。",
   "searchAnswerProfiles.contact.specThenContact": "資料から分かる仕様を示し、当てはまらなければ窓口へ案内する",
   "searchAnswerProfiles.contact.specThenContactHelper":
     "資料で答えた回答の末尾の案内を「回答は資料から分かる仕様です。ご自身の状況に当てはまらない場合は、〈窓口〉へお問い合わせください。」にします。根拠が足りない回答は、ふつうの窓口の案内のままです。",
@@ -4547,6 +4558,20 @@ export const ja = {
     "特定の分岐の手順だけに係るときに選びます。分かっている条件でこの手順がすべて外れる回答には、影響範囲・承認を求めません。選ばなければ、すべての場合に係ります。",
   "supportGuides.field.handoffConditions": "人へ引き継ぐ条件",
   "supportGuides.field.handoffContact": "引き継ぎ先（窓口の名前）",
+  "supportGuides.field.handoffContactHelp":
+    "空にすると、このプロファイルの窓口の上書き（無ければシステム設定の窓口）を継承します。",
+  "supportGuides.contact.effectiveGuide":
+    "引き継ぎのときの窓口: {contact}（この業務ガイド）。回答の本文でこの窓口を案内し、回答の注意書きには窓口を出しません。",
+  "supportGuides.contact.effectiveInherited":
+    "引き継ぎのときの窓口: {contact}（{source}）。回答の本文は「担当の窓口」と案内し、回答の注意書きでこの窓口を案内します。",
+  "supportGuides.contact.effectiveNone":
+    "引き継ぎのときの窓口: なし。回答の本文は「担当の窓口」と案内します（システム設定で回答の注意書きが無効のため、窓口の案内を出しません）。",
+  "supportGuides.contact.source.profile": "プロファイルの窓口の上書きを継承",
+  "supportGuides.contact.source.system": "システム設定の窓口を継承",
+  "supportGuides.contact.sameAsProfile":
+    "プロファイルの窓口の上書きと同じ窓口です。空にしても、回答の注意書きで同じ窓口を案内します。",
+  "supportGuides.contact.sameAsSystem":
+    "システム設定と同じ窓口です。空にしても、回答の注意書きで同じ窓口を案内します。",
   "supportGuides.select.choose": "選んでください",
   "supportGuides.conditionType.enum": "選択",
   "supportGuides.conditionType.text": "文字",

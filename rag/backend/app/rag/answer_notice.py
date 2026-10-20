@@ -56,6 +56,15 @@ def current_answer_notice() -> AnswerNoticeParts | None:
         return DEFAULT_ANSWER_NOTICE_PARTS
 
 
+def inherited_answer_notice_contact() -> tuple[bool, str]:
+    """プロファイルとガイドが継承する、システム設定の窓口（有効か・窓口。#2683）。
+
+    回答に使う値（`current_answer_notice`）と同じ。無効なら窓口の案内を出さないので (False, "")。
+    """
+    parts = current_answer_notice()
+    return (True, parts.contact) if parts is not None else (False, "")
+
+
 def answer_outcome_takes_notice(diagnostics: Mapping[str, object]) -> bool:
     """回答の診断の outcome が注意書きを付ける回答か（確認の質問は付けない）。"""
     return diagnostics.get("outcome") not in NOTICE_EXCLUDED_OUTCOMES
