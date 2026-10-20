@@ -122,6 +122,8 @@ def section_map(monkeypatch: pytest.MonkeyPatch) -> SectionMapStub:
 
 
 def _engine(**settings: Any) -> AnswerEngine:
+    # 章節の拡張は CRAG のときだけ効く(全体の既定は標準 RAG。#2747)。
+    settings = {"rag_query_strategy": "auto_routing", "rag_answer_flow": "crag", **settings}
     return AnswerEngine(
         Settings(rag_domain_keywords=["受注番号"], **settings),
         oracle=FakeOracle(),  # type: ignore[arg-type]
@@ -464,6 +466,8 @@ async def test_long_section_is_extracted_then_answered_with_verbatim_quotes(
     engine = AnswerEngine(
         Settings(
             rag_domain_keywords=["受注番号"],
+            rag_query_strategy="auto_routing",
+            rag_answer_flow="crag",
             oci_enterprise_ai_models=[
                 EnterpriseAiConfiguredModel(model_id="llm-a", max_input_tokens=4096)
             ],
