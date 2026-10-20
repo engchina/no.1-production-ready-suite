@@ -10,9 +10,10 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.json_schema import SkipJsonSchema
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import alternation
 
@@ -21,7 +22,7 @@ from rag_engine.evaluation.answer_eval import (
     CLASSIFICATION_NON_CLAIM_MISMATCH,
     CLASSIFICATION_REAUDITED,
     MAX_EVALUATION_INPUT_BYTES,
-    ClaimCheck,
+    REFERENCE_QUOTE_UNMATCHED,
     EvaluationContractError,
     EvaluationInputTooLarge,
     _answer_passages,
@@ -34,8 +35,10 @@ from rag_engine.evaluation.answer_eval import (
     model_request,
 )
 from rag_engine.generation.answer_labels import answer_labels
-from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY
+from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY, RELATION_SUPPORT_POLICY
+from rag_engine.generation.grounded import quote_in_text
 from rag_engine.generation.operation_audit import is_non_claim_passage, list_heading_lines, table_header_lines
+from rag_engine.generation.table_binding import unbound_table_values
 
 # 2: 複数の根拠を合わせて裏付ける主張の evidence_id の書き方を足した（#1364）。
 # 3: evidence_id を省かずに書く指示を足し、省いて書いた ID も根拠に結び付けるようにした（#1391）。
@@ -54,7 +57,10 @@ from rag_engine.generation.operation_audit import is_non_claim_passage, list_hea
 #     判定（audit_status）と根拠の ID の検査の結果（reference_check）を残すようにした（指示は変えていない。#2622）。
 # 12: モデルが not_a_claim とした本文の段落（見出し・出典の行と認めないもの）を、その段落だけで 1 回監査し直し、
 #     分類の照合の結果（classification_check）を残すようにした（最初の監査の指示は変えていない。#2625）。
-VALIDATION_RUBRIC_VERSION = 12
+# 13: 主張の関係の裏付け（RELATION_SUPPORT_POLICY）を足し、判定の前に根拠の記載（evidence_quote）と対象の照合
+#     （claim_target・evidence_target・applicability）を返させ、supported は原文が根拠にあり・対象が別でなく・表の行の
+#     対応に反しないときだけにした（結果の support_check。#2659・#2657・#2653）。
+VALIDATION_RUBRIC_VERSION = 13
 
 # 質問の文（資料ではない根拠）の id と出典の名前。資料の chunk の id とは重ならない。
 QUESTION_ID = "question:1"
@@ -88,6 +94,7 @@ VALIDATION_SYSTEM_PROMPT = (
 """
     + OPERATION_GUIDANCE_POLICY
     + OPERATION_BINDING_POLICY
+    + RELATION_SUPPORT_POLICY
     + """
 3. 主張の裏付け（claim_checks）
 - answer_passages は回答を原文のまま分けた ID 付きの段落。全ての ID を各 1 回以上含め、answer_passage_id に ID を指定する（answer_quote は空でよい）。
@@ -113,7 +120,7 @@ VALIDATION_SYSTEM_PROMPT = (
 - unsupported: 渡した根拠では確認できない。誤りとは区別する。
 - data_confirmation: 未確認の実データ（設定値・ログ・個案の状態・件数など）の確認を促すだけの段落。資料の内容の断定や操作の説明をここへ逃がさない。
 - not_a_claim: 見出しだけの行。本文の文には使わない。
-- source_id / evidence_quote は空文字でよい（evidence_id から出典と原文を取る）。
+- source_id は空文字でよい（evidence_id から出典を取る）。
 - evidence_items のうち source が「"""
     + PREMISE_SOURCE
     + """」のもの（id が """
@@ -224,11 +231,70 @@ def _settled_passages(
     return settled
 
 
+# supported を採らなかった理由（ValidationClaimCheck.support_check。#2659・#2657・#2653）。
+SUPPORT_TARGET_MISMATCH = "target_mismatch"  # 根拠は別の対象（処理・画面・成果物・状態）についての記載
+SUPPORT_VALUE_UNBOUND = "value_unbound"  # 段落が、根拠の表の別の行の区分・名前と値を結び付けている
+SUPPORT_QUOTE_UNMATCHED = "quote_unmatched"  # 監査が裏付けとして写した原文が、結び付けた根拠に無い
+SUPPORT_CHECKS = (SUPPORT_TARGET_MISMATCH, SUPPORT_VALUE_UNBOUND, SUPPORT_QUOTE_UNMATCHED)
+
+
+class ValidationClaimCheck(BaseModel):
+    """最終の検証の主張の判定。根拠の記載と対象の一致を判定（status）より先に書かせる（strict schema の生成順）。
+
+    項目の名前・意味は品質評価の ``ClaimCheck`` と同じで、対象の照合（``claim_target``・``evidence_target``・
+    ``applicability``）と診断（SkipJsonSchema）を足したもの。対象を書かせてから比べさせるのは、比べる 2 つの対象を
+    取り違えないため。``applicability`` が None の判定は、モデルではなくシステムが作ったもの（再利用・未返答の段落）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    answer_quote: str = Field(min_length=1)
+    answer_passage_id: str = ""
+    evidence_id: str = ""
+    evidence_quote: str = Field(
+        default="",
+        description=(
+            "supported / contradicted は、判定に使った根拠の記載（段落の対象と値・操作を述べた所）を evidence_items の text "
+            "からそのまま写す。離れた 2 か所は「…」でつなぐ。ほかの判定は空文字。"
+        ),
+    )
+    claim_target: str = Field(
+        default="",
+        description=(
+            "段落が内容を当てはめている対象（処理・画面・帳票やファイル・区分・状態〔実行前・確定後など〕・エラー）を短く書く。"
+            "段落が書いた対象はその語のまま、段落が書いていない点だけを質問の対象で補う。"
+        ),
+    )
+    evidence_target: str = Field(
+        default="",
+        description="evidence_quote の記載が当てはまる対象を、根拠の本文・見出し（section_path）の語で短く書く。",
+    )
+    applicability: Literal["matched", "not_applicable", "unknown"] | SkipJsonSchema[None] = Field(
+        default=None,
+        description=(
+            "evidence_target が claim_target と同じか。matched=同じ（同じ種類の一般の手順・規則で、質問固有の値が無いだけのもの"
+            "を含む）/ not_applicable=別の処理・画面・成果物・状態・エラー（同じ文書・同じ語があっても）/ "
+            "unknown=同じかを根拠から決められない。質問が尋ねていない対象でも、段落がその対象を書いていれば claim_target と"
+            "比べる。supported 以外の判定は matched でよい。"
+        ),
+    )
+    status: Literal["supported", "unsupported", "contradicted", "data_confirmation", "citation_error", "unassessed", "not_a_claim"]
+    source_id: str
+    reason: str = Field(min_length=1)
+    # 以下はシステムが付ける診断（モデルに渡す schema には出さない）。意味は ``ClaimCheck`` と同じ（#2622・#2625）。
+    audit_status: SkipJsonSchema[str] = ""
+    reference_check: SkipJsonSchema[str] = ""
+    classification_check: SkipJsonSchema[str] = ""
+    # 監査が裏付けとして写した原文（evidence_quote は結び付けた根拠の本文に置き換わるので、ここに残す）と、
+    # supported を採らなかった理由（SUPPORT_CHECKS）。
+    support_quote: SkipJsonSchema[str] = ""
+    support_check: SkipJsonSchema[str] = ""
+
+
 class ClaimAuditOutput(BaseModel):
     """主張の監査の結果（標準回答の網羅は持たない）。"""
 
     model_config = ConfigDict(extra="forbid")
-    claim_checks: list[ClaimCheck] = Field(default_factory=list, max_length=128)
+    claim_checks: list[ValidationClaimCheck] = Field(default_factory=list, max_length=128)
 
 
 def _fit_evidence(fixed: dict[str, Any], fragments: list[dict[str, Any]], max_input_bytes: int) -> tuple[list[dict[str, Any]], bool]:
@@ -267,6 +333,81 @@ def _passage_check(passages: Sequence[Mapping[str, str]], answer_text: str):
     return check
 
 
+def _bind_validation(output: ClaimAuditOutput, catalog: Mapping[str, Mapping[str, Any]], passages: Sequence[Mapping[str, str]]):
+    """監査の判定を根拠へ結び付け（``_bind_claims``）、監査が写した原文を ``support_quote`` に残す。
+
+    結び付けで ``evidence_quote`` は根拠の本文に置き換わるので、監査が裏付けとして写した原文は先に取っておき、
+    ``_enforce_support`` が根拠の本文と照らす（#2659）。
+    """
+    bound = _bind_claims(output, catalog, passages, passage_citations=True)
+    claims = [
+        claim.model_copy(update={"support_quote": original.evidence_quote.strip(), "support_check": ""})
+        for original, claim in zip(output.claim_checks, bound.claim_checks, strict=True)
+    ]
+    return bound.model_copy(update={"claim_checks": claims})
+
+
+def _not_supported(claim: ValidationClaimCheck, status: str, check: str, reason: str) -> ValidationClaimCheck:
+    """supported を採らない判定。監査の判定（audit_status）と理由は、採らなかったものとして理由の後ろに残す。"""
+    audited = claim.audit_status or claim.status
+    return claim.model_copy(
+        update={
+            "status": status,
+            "audit_status": audited,
+            "support_check": check,
+            "reason": f"{reason}（採らなかった監査の判定 {audited} の理由: {claim.reason}）",
+        }
+    )
+
+
+def _support_texts(claim: ValidationClaimCheck, catalog: Mapping[str, Mapping[str, Any]], texts: Mapping[str, str]) -> list[str]:
+    """判定を結び付けた根拠の本文（分割する前の全文。結び付けた片段の chunk ごと）。"""
+    chunk_ids = {claim.source_id}
+    for token in str(claim.evidence_id or "").split(","):
+        span = catalog.get(token.strip())
+        if span is not None:
+            chunk_ids.add(str(span.get("id") or ""))
+    return [texts[chunk_id] for chunk_id in chunk_ids if chunk_id in texts]
+
+
+def _enforce_support(
+    claims: Sequence[ValidationClaimCheck],
+    passages: Sequence[Mapping[str, str]],
+    catalog: Mapping[str, Mapping[str, Any]],
+    texts: Mapping[str, str],
+    document_texts: Sequence[str],
+) -> list[ValidationClaimCheck]:
+    """supported を、確かめられる条件をすべて満たすものだけにする（#2659・#2657・#2653）。
+
+    語・話題が根拠と一致することは、主張の対応・対象が根拠と一致することの裏付けにならない。次のどれかに当たる
+    supported は採らない（否定の判定は変えない）。
+
+    - 監査が裏付けとして写した原文（support_quote）が、結び付けた根拠の本文に無い → citation_error（quote_unmatched）。
+    - 監査が、根拠の記載の対象は段落の対象と別（not_applicable）とした → unsupported。``unknown`` は採否に使わない
+      （実の LLM の確認で、対象が同じ正しい段落にも多く付いた。確かめられない段落は監査の判定〔unsupported〕で外す）。
+    - 段落が、根拠の表の別の行の区分・名前と値を結び付けている（決定的な照合。`unbound_table_values`）→ unsupported。
+
+    ``texts`` は根拠の id → 分割する前の本文（資料ではない根拠を含む）、``document_texts`` は資料の根拠の本文。
+    """
+    unbound = {passage["id"]: pairs for passage in passages if (pairs := unbound_table_values(passage["text"], document_texts))}
+    result: list[ValidationClaimCheck] = []
+    for claim in claims:
+        if claim.status == "supported":
+            quote = claim.support_quote
+            if quote and not any(quote_in_text(quote, text) for text in _support_texts(claim, catalog, texts)):
+                claim = _not_supported(
+                    claim, "citation_error", SUPPORT_QUOTE_UNMATCHED, "裏付けとして写した原文が、結び付けた根拠に見当たりません。"
+                )
+                claim = claim.model_copy(update={"reference_check": REFERENCE_QUOTE_UNMATCHED})
+            elif claim.applicability == "not_applicable":
+                claim = _not_supported(claim, "unsupported", SUPPORT_TARGET_MISMATCH, "根拠は段落・質問と別の対象についての記載です。")
+            elif pairs := unbound.get(claim.answer_passage_id):
+                detail = "、".join(f"値『{value}』は『{other}』と別の行の値" for value, other in pairs)
+                claim = _not_supported(claim, "unsupported", SUPPORT_VALUE_UNBOUND, f"根拠の表では{detail}です。")
+        result.append(claim)
+    return result
+
+
 # 段落が根拠の ID を書いた印（chunk の id の形・「【証拠 ID …】」「evidence_id: …」などのラベル）。
 def _passage_id_label() -> re.Pattern[str]:
     """根拠の ID のラベル（「証拠 ID」の「証拠」は言語資源の answer_check_cues。#2181）。"""
@@ -274,13 +415,13 @@ def _passage_id_label() -> re.Pattern[str]:
     return re.compile(rf"{words}\s*ID|evidence[_\s-]?ids?|chunk[_\s-]?ids?", re.IGNORECASE)
 
 
-def _writes_no_id(claim: ClaimCheck) -> bool:
+def _writes_no_id(claim: ValidationClaimCheck) -> bool:
     """段落が根拠の ID を書いていないか（結論・まとめの段落など）。"""
     text = claim.answer_quote or ""
     return _CITED_CHUNK_ID.search(text) is None and _passage_id_label().search(text) is None
 
 
-def _resolved_chunk_ids(claims: Sequence[ClaimCheck], catalog: Mapping[str, Mapping[str, Any]]) -> list[str]:
+def _resolved_chunk_ids(claims: Sequence[ValidationClaimCheck], catalog: Mapping[str, Mapping[str, Any]]) -> list[str]:
     """段落が引いて根拠に決まった chunk の id（段落が書いた ID と、裏付け・矛盾の判定で結び付けた根拠）。"""
     ids: list[str] = []
     for claim in claims:
@@ -293,14 +434,14 @@ def _resolved_chunk_ids(claims: Sequence[ClaimCheck], catalog: Mapping[str, Mapp
 
 
 def _recheck_unreferenced_passages(
-    claims: list[ClaimCheck],
+    claims: list[ValidationClaimCheck],
     fixed: Mapping[str, Any],
     passages: Sequence[Mapping[str, str]],
     evidence: Sequence[Mapping[str, Any]],
     catalog: Mapping[str, Mapping[str, Any]],
     settings: Any,
     provider_id: str | None,
-) -> tuple[list[ClaimCheck], list[str]]:
+) -> tuple[list[ValidationClaimCheck], list[str]]:
     """ID を書かない段落の出典が決まらない citation_error を、他の段落が引いた根拠だけで確かめ直す (#1412)。
 
     結論・まとめの段落は根拠の ID を書かないことが多く、モデルが evidence_id を空・根拠に無い値で返すと
@@ -312,7 +453,7 @@ def _recheck_unreferenced_passages(
     今の判定のまま。段落が書いた ID が根拠に無い citation_error は確かめ直さない。
     戻り値は判定と、確かめ直して判定を替えた段落の ID。
     """
-    by_passage: dict[str, list[ClaimCheck]] = {}
+    by_passage: dict[str, list[ValidationClaimCheck]] = {}
     for claim in claims:
         by_passage.setdefault(claim.answer_passage_id, []).append(claim)
     targets = [
@@ -347,13 +488,13 @@ def _recheck_unreferenced_passages(
         # 確かめ直しは最初の判定を補うだけなので、失敗しても最初の判定を返す。
         logger.warning("answer validation recheck failed", exc_info=True)
         return claims, []
-    rebound = _bind_claims(output, {item["evidence_id"]: item for item in candidates}, targets, passage_citations=True)
-    replacements: dict[str, list[ClaimCheck]] = {}
+    rebound = _bind_validation(output, {item["evidence_id"]: item for item in candidates}, targets)
+    replacements: dict[str, list[ValidationClaimCheck]] = {}
     for claim in rebound.claim_checks:
         if claim.answer_passage_id in target_ids:
             replacements.setdefault(claim.answer_passage_id, []).append(claim)
     settled = {passage_id for passage_id, group in replacements.items() if all(claim.status == "supported" for claim in group)}
-    result: list[ClaimCheck] = []
+    result: list[ValidationClaimCheck] = []
     for claim in claims:
         passage_id = claim.answer_passage_id
         if passage_id in settled and claim.status == "citation_error":
@@ -374,14 +515,14 @@ REAUDIT_FEEDBACK = (
 
 
 def _reaudit_misclassified_passages(
-    claims: list[ClaimCheck],
+    claims: list[ValidationClaimCheck],
     fixed: Mapping[str, Any],
     passages: Sequence[Mapping[str, str]],
     evidence: Sequence[Mapping[str, Any]],
     catalog: Mapping[str, Mapping[str, Any]],
     settings: Any,
     provider_id: str | None,
-) -> tuple[list[ClaimCheck], list[str]]:
+) -> tuple[list[ValidationClaimCheck], list[str]]:
     """モデルが not_a_claim とした本文の段落を、その段落だけで 1 回監査し直す (#2625)。
 
     監査に渡す段落は、見出し・出典の行・表の形・質問を決定的に除いた本文の段落なので、モデルが not_a_claim と
@@ -412,15 +553,15 @@ def _reaudit_misclassified_passages(
         # 監査し直しは最初の判定を補うだけなので、失敗しても最初の判定（unassessed）を返す。
         logger.warning("answer validation reaudit failed", exc_info=True)
         return claims, []
-    rebound = _bind_claims(output, catalog, targets, passage_citations=True)
-    replacements: dict[str, list[ClaimCheck]] = {}
+    rebound = _bind_validation(output, catalog, targets)
+    replacements: dict[str, list[ValidationClaimCheck]] = {}
     for claim in rebound.claim_checks:
         if claim.answer_passage_id in target_ids:
             replacements.setdefault(claim.answer_passage_id, []).append(
                 claim.model_copy(update={"classification_check": CLASSIFICATION_REAUDITED})
             )
     settled = {passage_id for passage_id, group in replacements.items() if all(claim.status in REAUDIT_STATUSES for claim in group)}
-    result: list[ClaimCheck] = []
+    result: list[ValidationClaimCheck] = []
     for claim in claims:
         passage_id = claim.answer_passage_id
         if passage_id in settled and claim.classification_check == CLASSIFICATION_NON_CLAIM_MISMATCH:
@@ -481,7 +622,7 @@ def is_premise_id(value: object) -> bool:
     return isinstance(value, str) and (value == QUESTION_ID or value.startswith((PREMISE_ID_PREFIX, DATA_RESULT_ID_PREFIX)))
 
 
-def _prefer_document_source(claim: ClaimCheck, catalog: Mapping[str, Mapping[str, Any]]) -> ClaimCheck:
+def _prefer_document_source(claim: ValidationClaimCheck, catalog: Mapping[str, Mapping[str, Any]]) -> ValidationClaimCheck:
     """利用者の前提と資料の根拠を合わせて裏付けた段落の出典を、資料の根拠にする（#1898）。"""
     if not is_premise_id(claim.source_id):
         return claim
@@ -544,7 +685,7 @@ def validate_answer_claims(
         if chunk_ids and set(chunk_ids) <= readable
     }
     reused = [
-        ClaimCheck(
+        ValidationClaimCheck(
             answer_quote=passage["text"],
             answer_passage_id=passage["id"],
             status="supported",
@@ -562,23 +703,21 @@ def validate_answer_claims(
         "answer_passages": remaining,
     }
     # 質問の文・利用者の前提（#1898）・業務データの照会の結果（#1950）は根拠の前に置き、予算で切り詰めない。
-    fragments = list(
-        _evidence_fragments(
-            [
-                *question_items(question),
-                *premise_items(premises),
-                *data_result_items(data_results),
-                *(dict(item) for item in evidence_items),
-            ]
-        )
-    )
+    sources = [
+        *question_items(question),
+        *premise_items(premises),
+        *data_result_items(data_results),
+        *(dict(item) for item in evidence_items),
+    ]
+    fragments = list(_evidence_fragments(sources))
     max_input_bytes = _max_input_bytes(settings)
     evidence, truncated = _fit_evidence(fixed, fragments, max_input_bytes)
     if not evidence and fragments:
         return {**base, "status": "input_too_large"}
-    bound_claims: list[ClaimCheck] = []
+    bound_claims: list[ValidationClaimCheck] = []
     rechecked: list[str] = []
     reaudited: list[str] = []
+    catalog = {item["evidence_id"]: item for item in evidence}
     if remaining:
         inputs = {**fixed, "evidence_items": evidence}
         try:
@@ -593,9 +732,8 @@ def validate_answer_claims(
             )
         except EvaluationInputTooLarge:
             return {**base, "status": "input_too_large"}
-        catalog = {item["evidence_id"]: item for item in evidence}
         # 回答の段落が書いた根拠の ID でも結び付ける（モデルが ID を写し損ねても出典の誤りにしない。#1404）。
-        bound = _bind_claims(output, catalog, remaining, passage_citations=True)
+        bound = _bind_validation(output, catalog, remaining)
         # モデルが not_a_claim とした本文の段落は、その段落だけで監査し直す（#2625）。
         reaudited_claims, reaudited = _reaudit_misclassified_passages(
             bound.claim_checks, fixed, remaining, evidence, catalog, settings, provider_id
@@ -611,7 +749,7 @@ def validate_answer_claims(
         *[claim for passage in passages if passage["id"] in settled for claim in reused if claim.answer_passage_id == passage["id"]],
         *bound_claims,
         *[
-            ClaimCheck(
+            ValidationClaimCheck(
                 answer_quote=passage["text"],
                 answer_passage_id=passage["id"],
                 status="unassessed",
@@ -623,6 +761,14 @@ def validate_answer_claims(
             if passage["id"] not in checked
         ],
     ]
+    # supported は、写した原文が根拠にあり・対象が同じで・表の行の対応に反しないものだけ（#2659・#2657・#2653）。
+    claims = _enforce_support(
+        claims,
+        passages,
+        catalog,
+        {str(item.get("chunk_uid") or item.get("id") or ""): str(item.get("text") or "") for item in sources},
+        [str(item.get("text") or "") for item in evidence_items],
+    )
     counts: dict[str, int] = {}
     for claim in claims:
         counts[claim.status] = counts.get(claim.status, 0) + 1
@@ -651,7 +797,12 @@ __all__ = [
     "REAUDIT_FEEDBACK",
     "REAUDIT_STATUSES",
     "REUSED_CLAIM_REASON",
+    "SUPPORT_CHECKS",
+    "SUPPORT_QUOTE_UNMATCHED",
+    "SUPPORT_TARGET_MISMATCH",
+    "SUPPORT_VALUE_UNBOUND",
     "VALIDATION_RUBRIC_VERSION",
+    "ValidationClaimCheck",
     "audited_answer_items",
     "audited_line_key",
     "data_result_items",

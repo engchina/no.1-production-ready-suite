@@ -312,7 +312,9 @@ RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索�
 検証の前に回答から外す（「資料で確認できず除いた内容」にも書かない。RAG の検証はモデルが `not_a_claim` にした本文の行を
 `unassessed` に直すため〔主張を `not_a_claim` にして監査を逃れるのを防ぐ。#1306。その段落はその段落だけで 1 回監査し直し、
 決まらなければ `classification_check: non_claim_mismatch` の `unassessed` のまま返す。#2625〕、Agent はモデルの判定ではなく決定的な
-判定で外す）。
+判定で外す）。RAG が監査の `supported` を採らなかった段落（根拠が別の対象の記載・根拠の表の別の行の値・写した原文が根拠に無い。
+`support_check`。#2659・#2653）は `unsupported`（原文が無いときは `citation_error`）で返り、Agent は外して、節の項目の理由に違いの種類を出す
+（`_SUPPORT_CHECK_LABELS`）。
 
 ツール権限（`/settings/tool-policy`）は `<接続>__<ツール>` の名前で allow / ask / deny を上書きできる。
 画面の一覧は `GET /api/settings/tool-policy/tools`（#1814。`tool_policy_catalog`）で、組み込みのツールに、URL を設定した

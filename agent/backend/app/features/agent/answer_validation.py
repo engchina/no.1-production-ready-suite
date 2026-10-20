@@ -164,6 +164,12 @@ _CLAIM_LABELS = {
     "citation_error": "出典を確かめられない",
     "unassessed": "確かめが終わっていない",
 }
+# RAG が監査の裏付け（supported）を採らなかった理由（`support_check`。#2659・#2653）ごとの、
+# 節の項目の理由。語・話題が根拠と一致しても対象・表の行の対応が違う段落は、違いの種類を示す。
+_SUPPORT_CHECK_LABELS = {
+    "target_mismatch": "質問と別の対象についての記載",
+    "value_unbound": "根拠の表の対応と違う",
+}
 # 外した段落に続く番号つきの手順の段落の、節の項目の理由（#2604。`dependent_steps`）。
 DEPENDENT_STEP_LABEL = "確かめられない手順に続く手順"
 # 根拠で否定した判定（根拠に無い・根拠と矛盾）。出典を照合できない（`citation_error`）・
@@ -748,12 +754,18 @@ def _refs_count(value: object) -> int:
 def _claim_line(claim: JsonObject) -> str:
     """「- 根拠で確かめられない: 「段落」」の 1 行（段落は 80 文字まで）。
 
-    理由は判定の種類の短い文（`_CLAIM_LABELS`）だけにし、検証のモデルが書いた理由（`reason`）は回答の本文に
+    理由は判定の種類の短い文（`_CLAIM_LABELS`。RAG が裏付けを採らなかった理由
+    〔`support_check`〕があれば `_SUPPORT_CHECK_LABELS`）だけにし、検証のモデルが書いた理由
+    （`reason`）は回答の本文に
     出さない（#1833。「監査」「クレーム」「evidence_items」など内部の語を含む）。理由は成果物の判定に残り、
     実行の詳細の成果物で見られる。
     """
     quote = _short(claim.get("answer_quote"), _MAX_QUOTE_CHARS)
-    return f"- {_CLAIM_LABELS[str(claim.get('status'))]}: 「{quote}」"
+    label = (
+        _SUPPORT_CHECK_LABELS.get(str(claim.get("support_check") or ""))
+        or _CLAIM_LABELS[str(claim.get("status"))]
+    )
+    return f"- {label}: 「{quote}」"
 
 
 def _paragraph_claim(claims: list[JsonObject]) -> JsonObject:
