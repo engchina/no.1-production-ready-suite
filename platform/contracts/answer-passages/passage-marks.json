@@ -20,7 +20,8 @@
     "guide_check": {"kind": "answer", "label": "業務ガイドの手順の確認で問題が見つかった"},
     "no_evidence": {"kind": "answer", "label": "根拠を読めず、すべての段落が未確認"},
     "off_goal": {"kind": "answer", "label": "質問からずれている可能性"},
-    "requests": {"kind": "answer", "label": "質問の要求の一部に答えていない"}
+    "requests": {"kind": "answer", "label": "質問の要求の一部に答えていない"},
+    "correction_failed": {"kind": "answer", "label": "回答の作り直しに失敗し、前の回答を示している"}
   },
   "examples": [
     {

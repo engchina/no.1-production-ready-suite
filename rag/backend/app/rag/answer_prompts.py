@@ -198,6 +198,8 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "audit",
         (
             ("system", "rag_engine.generation.grounded:AUDIT_SYSTEM_PROMPT"),
+            # 通常の回答の監査（#2795。事実の信頼性だけ）。
+            ("factSystem", "rag_engine.generation.grounded:FACT_AUDIT_SYSTEM_PROMPT"),
             ("compactRule", "rag_engine.generation.grounded:AUDIT_COMPACT_REASON_RULE"),
         ),
     ),

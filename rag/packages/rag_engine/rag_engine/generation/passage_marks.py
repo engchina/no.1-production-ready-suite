@@ -43,7 +43,7 @@ PASSAGE_REASON_STATES: dict[str, PassageState] = {
 }
 # 本文から外した段落の理由（kind=removed）と、回答全体の警告の理由（kind=answer）。
 REMOVED_REASONS = frozenset({"contradicted"})
-ANSWER_WARNING_REASONS = frozenset({"guide_check", "no_evidence", "off_goal", "requests"})
+ANSWER_WARNING_REASONS = frozenset({"guide_check", "no_evidence", "off_goal", "requests", "correction_failed"})
 REASON_CODES = frozenset({*PASSAGE_REASON_STATES, *REMOVED_REASONS, *ANSWER_WARNING_REASONS})
 
 # 本文の末尾の節（「根拠と矛盾し除いた内容」「確認が必要な点」）に出す段落の引用と、回答全体の警告の理由の長さの

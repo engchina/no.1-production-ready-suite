@@ -516,6 +516,32 @@ class GuideRequirementReview(_StrictModel):
     reason: str = Field(max_length=600, description="不足している操作・条件。充足なら空文字。")
 
 
+class GroundedFactAudit(_StrictModel):
+    """通常の回答の監査（#2795）。主張の支持・適用、summary、目的との一致、要求と業務ガイドの要件の充足を判定する。
+
+    未使用の根拠は列挙しない（詳しい監査 ``GroundedAudit`` の項目）。受け取った後は ``GroundedAudit`` に写して使う
+    （判定しない項目は空）。
+    """
+
+    reviews: list[GroundedItemReview] = Field(max_length=40, description="各 item の局所監査。")
+    guide_requirement_reviews: list[GuideRequirementReview] = Field(
+        default_factory=list,
+        max_length=200,
+        description="guide_contracts の要件ごとの充足。全 id を1回ずつ判定する。設定の要件は回答の評価基準であり、文書の仕様の根拠ではない。",
+    )
+    application_reviews: list[GroundedApplicationReview] = Field(
+        default_factory=list, max_length=6, description="各 application（当てはめ）の監査。"
+    )
+    request_reviews: list[GroundedRequestReview] = Field(default_factory=list, max_length=64, description="request_units の各 id の充足。")
+    summary_output_fields: OutputFieldEvidence | None = Field(
+        default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
+    )
+    summary_supported: bool = Field(description="summary が items の範囲を超える断定をしていなければ true。")
+    goal_alignment: Literal["aligned", "partial", "off_target"] = Field(
+        description="aligned=items 全体が目的に答えている。partial=一部だけ。off_target=別の対象・業務・目的に答えている。"
+    )
+
+
 class GroundedAudit(_StrictModel):
     """監査は降格と不足の指摘だけを行い、原文一致した内容を削除しない。"""
 

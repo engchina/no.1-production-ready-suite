@@ -851,6 +851,8 @@ class EvaluationRagOverrides(BaseModel):
     # 監査の通った判定の reason を空にする・是正の組の回数の上限(#1912)。
     answer_audit_compact_reasons: bool | None = None
     answer_max_correction_rounds: int | None = Field(default=None, ge=0, le=2)
+    # 回答の監査の型(#2795)。
+    answer_audit_mode: Literal["standard", "detailed"] | None = None
     section_skip_regrade_at_scope: bool | None = None
     crag_skip_on_strong_signals: bool | None = None
     crag_skip_min_rerank_score: float | None = Field(default=None, ge=0.0, le=1.0)

@@ -2444,7 +2444,8 @@
       "業務ガイドの手順の確認で問題が見つかった=guide_check",
       "根拠を読めず、すべての段落が未確認=no_evidence",
       "質問からずれている可能性=off_goal",
-      "質問の要求の一部に答えていない=requests"
+      "質問の要求の一部に答えていない=requests",
+      "回答の作り直しに失敗し、前の回答を示している=correction_failed"
     ]
   },
   "answer_check_cues": {

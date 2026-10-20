@@ -1960,7 +1960,16 @@ def synthesize_grounded_answer(
     budget = grounded.RoundBudget(remaining_seconds)
     # 是正の組の回数の上限（#1912。`answer_max_correction_rounds`、0〜2。既定 2 は従来の MAX_ROUNDS と同じ）。
     max_rounds = 1 + max(0, min(grounded.MAX_ROUNDS - 1, int(getattr(settings, "answer_max_correction_rounds", grounded.MAX_ROUNDS - 1))))
+    # 監査の型（#2795）。通常の回答（standard）の作り直しは事実の問題があるときの 1 組まで。完全性の不足（答えていない
+    # 要求・説明していない手順）は作り直さず、本文の不足・確認の節に示す。
+    audit_mode = str(getattr(settings, "answer_audit_mode", grounded.AUDIT_MODE_DETAILED))
+    if audit_mode not in grounded.AUDIT_MODES:
+        audit_mode = grounded.AUDIT_MODE_DETAILED
+    if audit_mode == grounded.AUDIT_MODE_STANDARD:
+        max_rounds = min(max_rounds, grounded.STANDARD_MAX_ROUNDS)
     compact_audit_reasons = bool(getattr(settings, "answer_audit_compact_reasons", False))
+    # 作り直しの組の LLM の呼び出しが失敗し、前の組を公開したときの例外の型（#2729）。
+    correction_failure = ""
     # 業務ガイドの手順ごとの根拠と、充足で必須に数えない手順（#2491）。監査・是正・回答の構造で同じ単位を使う。
     # 根拠の画面の図で業務ガイドの条件が決まったら、round ごとにその条件の手順の計画に切り替える（#2689）。
     base_knowledge = runtime_knowledge
@@ -2040,6 +2049,7 @@ def synthesize_grounded_answer(
                     guide_unsearched_steps=guide_unsearched,
                     guide_step_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
                     guide_notices=runtime_knowledge.guide_notices if runtime_knowledge else (),
+                    audit_mode=audit_mode,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                 )
                 if number == 0:
@@ -2069,6 +2079,8 @@ def synthesize_grounded_answer(
                     step.result("回答の時間の上限が近いため、この作り直しを打ち切り、直前に採用した回答を公開します")
                 else:
                     step.result(f"是正の生成に失敗したため、直前に採用した回答を公開します（{type(exc).__name__}）")
+                    # 作り直しの失敗は根拠の不足と区別し、回答全体の警告に残す（#2729）。
+                    correction_failure = type(exc).__name__
                 break
             quote_only = sum(e.quote_only for e in current.checked)
             step.result(
@@ -2093,7 +2105,7 @@ def synthesize_grounded_answer(
             summary_flags.append((number, current.unpublished_claims, str(current.draft.summary)))
         rounds.append({**current.trace(), "accepted": accepted})
         # 採用しなかった草稿の指摘ではなく、公開候補に残る不足を次の是正へ渡す。
-        previous_feedback, feedback = feedback, best[0].feedback()
+        previous_feedback, feedback = feedback, grounded.correction_feedback(best[0].feedback(), audit_mode)
         budget.note(current, feedback, accepted=accepted)
         if not feedback or number == max_rounds - 1:
             if feedback and max_rounds < grounded.MAX_ROUNDS:
@@ -2245,6 +2257,8 @@ def synthesize_grounded_answer(
     # 説明をすべて捨てていた）。
     off_goal = grounded.off_goal(current, question)
     answer_warnings = [passage_marks.answer_warning("off_goal", grounded.answer_labels().off_goal_gap)] if off_goal else []
+    if correction_failure:
+        answer_warnings.append(passage_marks.answer_warning("correction_failed", correction_failure))
     # 資料の原文と照合できない説明・業務ガイドの文から来た説明は、資料の出典・回答の根拠の一覧から外す（#2792）。
     grounded.detach_unsourced(current.checked)
     guide_notices = runtime_knowledge.guide_notices if runtime_knowledge is not None else ()
@@ -2410,6 +2424,7 @@ def synthesize_grounded_answer(
     mark_counts = passage_marks.mark_counts(passage_record)
     trace = {
         "pipeline": "grounded",
+        "audit_mode": audit_mode,
         "task_contract": task_contract(question),
         "selected_evidence": [_public_span(s) for s in spans],
         "same_unit_fill": unit_fill,

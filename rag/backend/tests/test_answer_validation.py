@@ -857,6 +857,32 @@ def test_check_guide_steps_uses_the_located_paragraphs() -> None:
     assert check_guide_steps("設定画面で操作します。", guide, {}, {}) == []
 
 
+def test_conclusion_first_paragraph_order_is_a_warning_not_an_error() -> None:
+    """結論を先に書く回答の段落の並びは実行の順を表さない（#2732）。
+
+    番号つきの手順の列の中の逆は error のまま。
+    """
+    guide = _guide()
+    conditions = {"target": "グループ"}
+    conclusion_first = "対象のグループを指定すれば変更できます。\n1. タブを開きます。"
+    located = {"open": "1. タブを開きます。", "group": "対象のグループを指定すれば変更できます。"}
+    order = [
+        item
+        for item in check_guide_steps(conclusion_first, guide, conditions, located)
+        if item.code == "step_order"
+    ]
+    assert [(item.severity, item.step_id) for item in order] == [("warning", "group")]
+
+    numbered_reverse = "1. 対象のグループを指定します。\n2. タブを開きます。"
+    located = {"open": "2. タブを開きます。", "group": "1. 対象のグループを指定します。"}
+    order = [
+        item
+        for item in check_guide_steps(numbered_reverse, guide, conditions, located)
+        if item.code == "step_order"
+    ]
+    assert [(item.severity, item.step_id) for item in order] == [("error", "group")]
+
+
 @pytest.mark.usefixtures("auth")
 def test_mcp_validate_answer_passes_requests_and_guide(
     auth: Any,  # noqa: F811
