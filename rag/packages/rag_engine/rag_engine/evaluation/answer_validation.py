@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from rag_parser_core.language import current_pack
@@ -20,7 +20,9 @@ from rag_engine.evaluation.answer_eval import (
     _CITED_CHUNK_ID,
     CLASSIFICATION_NON_CLAIM_MISMATCH,
     CLASSIFICATION_REAUDITED,
+    FIGURE_EVIDENCE_TYPES,
     MAX_EVALUATION_INPUT_BYTES,
+    REFERENCE_RESOLVED,
     ClaimCheck,
     EvaluationContractError,
     EvaluationInputTooLarge,
@@ -29,8 +31,10 @@ from rag_engine.evaluation.answer_eval import (
     _evidence_fragments,
     _json,
     _parse_checked,
+    _span_for_misnamed_id,
     _spans_for_ids,
     _spans_for_passage_citations,
+    _unresolved_reference,
     model_request,
 )
 from rag_engine.generation.answer_labels import answer_labels
@@ -54,7 +58,15 @@ from rag_engine.generation.operation_audit import is_non_claim_passage, list_hea
 #     判定（audit_status）と根拠の ID の検査の結果（reference_check）を残すようにした（指示は変えていない。#2622）。
 # 12: モデルが not_a_claim とした本文の段落（見出し・出典の行と認めないもの）を、その段落だけで 1 回監査し直し、
 #     分類の照合の結果（classification_check）を残すようにした（最初の監査の指示は変えていない。#2625）。
-VALIDATION_RUBRIC_VERSION = 12
+# 13: 図の見た目だけで決まる主張の判定（figure_only）を足し、図の根拠に evidence_type を渡すようにした。図の本文の語の並びから
+#     推した構造を supported にしない（画像で確かめたかは呼び出し側が Run の記録で決める。#2678）。
+VALIDATION_RUBRIC_VERSION = 13
+
+# 図の見た目だけで決まる主張（要素の配置・矢印の向き・つながり・分岐への所属など、図の本文が明示しない内容）の判定。
+# 根拠の本文では確かめられず、図の画像を読んだかどうかで扱いが決まる（#2678。検証に通さない判定に数える）。
+FIGURE_ONLY = "figure_only"
+# figure_only の evidence_id が図の根拠に決まらなかった（図ではない根拠を指した）ときの ID の検査の結果。
+REFERENCE_NOT_FIGURE = "not_figure"
 
 # 質問の文（資料ではない根拠）の id と出典の名前。資料の chunk の id とは重ならない。
 QUESTION_ID = "question:1"
@@ -111,6 +123,7 @@ VALIDATION_SYSTEM_PROMPT = (
 - 同じ略称・名前が範囲の外で別のものを指していても、範囲を限定した主張とは矛盾しない（主張は範囲の外のものについて述べていない）。主張が「唯一」「すべて」と述べていない限り、ほかに同じ略称があることを矛盾や断定できない理由にしない。
 - 例: 質問が「A 社のシステム台帳で、略称が X のシステムの正式名は？」で、A 社の台帳の行が「略称 X = 甲システム」、B 社の台帳の行が「略称 X = 乙システム」なら、「A 社の台帳で略称 X のシステムは甲システム」は A 社の行で supported。B 社の行を理由に contradicted にしない。
 - unsupported: 渡した根拠では確認できない。誤りとは区別する。
+- figure_only: 段落が図の見た目でしか決まらない内容（要素の配置・矢印の向き・線のつながり・どの分岐や枠に属するか）を述べ、図の項目（evidence_type が figure_description / ocr）の本文がそれを明示していない。evidence_id にその図の項目の evidence_id を書く。図の本文の語の並び・近さから推した構造を supported にしない（語の並びは図の配置を表さない）。図の本文が明示する内容（説明の文が述べる関係・図の中の語そのもの）は、ほかの根拠と同じく判定する。
 - data_confirmation: 未確認の実データ（設定値・ログ・個案の状態・件数など）の確認を促すだけの段落。資料の内容の断定や操作の説明をここへ逃がさない。
 - not_a_claim: 見出しだけの行。本文の文には使わない。
 - source_id / evidence_quote は空文字でよい（evidence_id から出典と原文を取る）。
@@ -224,11 +237,61 @@ def _settled_passages(
     return settled
 
 
+class ValidationClaimCheck(ClaimCheck):
+    """最終の検証の判定（品質評価の判定に、図の見た目だけで決まる主張の figure_only を足したもの。#2678）。"""
+
+    status: Literal[
+        "supported", "unsupported", "contradicted", "data_confirmation", "citation_error", "unassessed", "not_a_claim", "figure_only"
+    ]
+
+
 class ClaimAuditOutput(BaseModel):
     """主張の監査の結果（標準回答の網羅は持たない）。"""
 
     model_config = ConfigDict(extra="forbid")
-    claim_checks: list[ClaimCheck] = Field(default_factory=list, max_length=128)
+    claim_checks: list[ValidationClaimCheck] = Field(default_factory=list, max_length=128)
+
+
+def _bind_figure_claims(claims: Sequence[ClaimCheck], catalog: Mapping[str, Mapping[str, Any]]) -> list[ClaimCheck]:
+    """figure_only の判定を図の根拠に結び付ける（#2678）。
+
+    evidence_id が図の根拠（evidence_type が FIGURE_EVIDENCE_TYPES）に決まれば、その図を出典にする（呼び出し側は
+    出典の図の画像を Run が読んだかで扱いを決める）。図の根拠に決まらなければ、図で確かめる主張とは言えないので
+    unsupported にする（ID の検査の結果は、図ではない根拠を指したら not_figure、ID が決まらなければその理由）。
+    """
+    bound: list[ClaimCheck] = []
+    for claim in claims:
+        if claim.status != FIGURE_ONLY:
+            bound.append(claim)
+            continue
+        span = (catalog.get(claim.evidence_id) or _span_for_misnamed_id(claim, catalog)) if claim.evidence_id else None
+        spans = [span] if span else list(_spans_for_ids(claim, catalog) or [])
+        figures = [item for item in spans if item.get("evidence_type") in FIGURE_EVIDENCE_TYPES]
+        if figures:
+            bound.append(
+                claim.model_copy(
+                    update={
+                        "source_id": figures[0]["id"],
+                        "evidence_quote": figures[0]["text"],
+                        "evidence_id": ",".join(item["evidence_id"] for item in figures),
+                        "reference_check": REFERENCE_RESOLVED,
+                    }
+                )
+            )
+            continue
+        reference = REFERENCE_NOT_FIGURE if spans else _unresolved_reference(claim, catalog, passage_citations=True)
+        bound.append(
+            claim.model_copy(
+                update={
+                    "status": "unsupported",
+                    "source_id": "",
+                    "evidence_quote": "",
+                    "reference_check": reference,
+                    "reason": "図の根拠に結び付けられないため、根拠で確かめられないとしました。" + claim.reason,
+                }
+            )
+        )
+    return bound
 
 
 def _fit_evidence(fixed: dict[str, Any], fragments: list[dict[str, Any]], max_input_bytes: int) -> tuple[list[dict[str, Any]], bool]:
@@ -365,7 +428,7 @@ def _recheck_unreferenced_passages(
 
 
 # 監査し直しで受け付ける、内容の判定（not_a_claim・unassessed は内容を確かめていない）。
-REAUDIT_STATUSES = ("supported", "contradicted", "unsupported", "data_confirmation", "citation_error")
+REAUDIT_STATUSES = ("supported", "contradicted", "unsupported", "data_confirmation", "citation_error", FIGURE_ONLY)
 # 監査し直しの差し戻しの文（入力の validation_feedback。違反と直し方だけを書く）。
 REAUDIT_FEEDBACK = (
     "answer_passages の段落は、見出し・出典の行ではない本文の段落です。not_a_claim を使わず、evidence_items に"
@@ -605,6 +668,8 @@ def validate_answer_claims(
         rebound, rechecked = _recheck_unreferenced_passages(
             [*reaudited_claims, *reused], fixed, remaining, evidence, catalog, settings, provider_id
         )
+        # 図の見た目だけで決まる主張は、図の根拠に結び付ける（#2678）。
+        rebound = _bind_figure_claims(rebound, catalog)
         bound_claims = [_prefer_document_source(claim, catalog) for claim in rebound if claim.answer_passage_id not in settled]
     checked = {claim.answer_passage_id for claim in bound_claims} | set(settled)
     claims = [
@@ -642,6 +707,7 @@ def validate_answer_claims(
 
 
 __all__ = [
+    "FIGURE_ONLY",
     "MAX_PREMISES",
     "PREMISE_ID_PREFIX",
     "PREMISE_SOURCE",
@@ -650,8 +716,10 @@ __all__ = [
     "MAX_DATA_RESULTS",
     "REAUDIT_FEEDBACK",
     "REAUDIT_STATUSES",
+    "REFERENCE_NOT_FIGURE",
     "REUSED_CLAIM_REASON",
     "VALIDATION_RUBRIC_VERSION",
+    "ValidationClaimCheck",
     "audited_answer_items",
     "audited_line_key",
     "data_result_items",

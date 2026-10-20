@@ -42,9 +42,13 @@ from app.rag.answer_engine import (
     build_engine_settings,
 )
 from app.rag.answer_threads import run_answer_in_thread
+from app.rag.figure_region import figure_evidence_type
 
-# 主張の監査で「検証に通った」とみなさない判定。
-_BLOCKING_STATUSES = frozenset({"unsupported", "contradicted", "citation_error", "unassessed"})
+# 主張の監査で「検証に通った」とみなさない判定。図の見た目だけで決まる主張（figure_only）は根拠の
+# 本文では確かめられないので通さない（図の画像を読んで確かめたかは呼び出し側が決める。#2678）。
+_BLOCKING_STATUSES = frozenset(
+    {"unsupported", "contradicted", "citation_error", "unassessed", "figure_only"}
+)
 
 
 @dataclass(frozen=True)
@@ -264,6 +268,8 @@ async def validate_answer(
             (stale if exists else missing).append(ref)
             continue
         metadata = dict(chunk.metadata)
+        # 図の根拠には種類を付ける（図の見た目だけで決まる主張を本文の照合と分ける。#2678）。
+        figure = figure_evidence_type(metadata)
         items.append(
             {
                 "id": chunk.chunk_id,
@@ -271,6 +277,7 @@ async def validate_answer(
                 "page_start": metadata.get("page_start"),
                 "page_end": metadata.get("page_end"),
                 **evidence_location(metadata),
+                **({"evidence_type": figure} if figure else {}),
                 "text": chunk.text,
             }
         )

@@ -2055,3 +2055,96 @@ def test_classification_check_is_not_in_the_audit_schema() -> None:
 
     assert "classification_check" not in json.dumps(ClaimAuditOutput.model_json_schema())
     assert REAUDIT_FEEDBACK not in VALIDATION_SYSTEM_PROMPT
+
+
+# ---- 図の見た目だけで決まる主張（#2678）。合成の判定フロー図の根拠（OCR の文字に矢印・配置が無い）。----
+
+FLOW_TEXT = {"id": "t1", "source": "manual.pdf", "page_start": 1, "page_end": 1, "text": "申請は判定の後に処理する。"}
+FLOW_FIGURE = {
+    "id": "f1",
+    "source": "manual.pdf",
+    "page_start": 2,
+    "page_end": 2,
+    "evidence_type": "ocr",
+    "text": "開始 判定 処理A 処理B 終了",
+}
+FLOW_ANSWER = "判定の後に処理します。\n\n判定の右の分岐は処理Aにつながります。\n\n処理Bは左の分岐に属します。"
+
+
+def _figure_validation(statuses: dict[int, tuple[str, str]]):
+    """段落の番号 → (判定, 根拠〔t=本文 / f=図 / ""〕) の監査のスタブで検証し、結果とモデルへの入力を返す。"""
+    seen: dict = {}
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        seen["evidence"] = _documents(payload)
+        seen["system"] = system
+        ids = {item["id"]: item["evidence_id"] for item in seen["evidence"]}
+        return ClaimAuditOutput.model_validate(
+            {
+                "claim_checks": [
+                    {
+                        "answer_quote": "段落",
+                        "answer_passage_id": passage["id"],
+                        "status": statuses[index][0],
+                        "evidence_id": {"t": ids["t1"], "f": ids["f1"], "": ""}[statuses[index][1]],
+                        "source_id": "",
+                        "evidence_quote": "",
+                        "reason": "合成の理由。",
+                    }
+                    for index, passage in enumerate(payload["answer_passages"])
+                ]
+            }
+        )
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("判定の後は？", FLOW_ANSWER, [FLOW_TEXT, FLOW_FIGURE], settings=None)
+    return result, seen
+
+
+def test_figure_only_claims_are_bound_to_the_figure_evidence() -> None:
+    """図の見た目だけで決まる主張は figure_only のまま図の根拠を出典にする（画像で確かめたかは呼び出し側。#2678）。"""
+    result, seen = _figure_validation({0: ("supported", "t"), 1: ("figure_only", "f"), 2: ("figure_only", "f")})
+    # 図の根拠にだけ種類を渡す（本文の根拠には付けない）。
+    assert [item.get("evidence_type") for item in seen["evidence"]] == [None, "ocr"]
+    assert "figure_only" in seen["system"] and "evidence_type" in seen["system"]
+    claims = result["claim_checks"]
+    assert [claim["status"] for claim in claims] == ["supported", "figure_only", "figure_only"]
+    assert [claim["source_id"] for claim in claims] == ["t1", "f1", "f1"]
+    assert claims[1]["reference_check"] == "resolved" and claims[1]["audit_status"] == "figure_only"
+    assert result["counts"] == {"supported": 1, "figure_only": 2}
+
+
+def test_figure_only_claims_that_do_not_point_to_a_figure_are_unsupported() -> None:
+    """figure_only の根拠が図ではない・決まらないときは、図で確かめる主張と言えないので unsupported にする (#2678)。"""
+    result, _seen = _figure_validation({0: ("supported", "t"), 1: ("figure_only", "t"), 2: ("figure_only", "")})
+    claims = result["claim_checks"]
+    assert [(claim["status"], claim["audit_status"]) for claim in claims[1:]] == [
+        ("unsupported", "figure_only"),
+        ("unsupported", "figure_only"),
+    ]
+    assert claims[1]["reference_check"] == "not_figure" and claims[1]["source_id"] == ""
+    assert claims[2]["reference_check"] == "audit_id_missing"
+
+
+def test_claims_judged_from_the_figure_text_stay_as_judged() -> None:
+    """正しい場合は変えない: 図の本文が明示する内容の supported・矛盾は、図の根拠のまま残す (#2678)。"""
+    result, _seen = _figure_validation({0: ("supported", "t"), 1: ("supported", "f"), 2: ("contradicted", "f")})
+    assert [(claim["status"], claim["source_id"]) for claim in result["claim_checks"]] == [
+        ("supported", "t1"),
+        ("supported", "f1"),
+        ("contradicted", "f1"),
+    ]
+
+
+def test_figure_only_is_only_in_the_validation_schema() -> None:
+    """figure_only は最終の検証の判定だけにあり、品質評価の判定の schema には出さない。図の種類は ID を変えない (#2678)。"""
+    from rag_engine.evaluation.answer_eval import AnswerEvaluationOutput, _evidence_fragments
+
+    assert "figure_only" in json.dumps(ClaimAuditOutput.model_json_schema())
+    assert "figure_only" not in json.dumps(AnswerEvaluationOutput.model_json_schema())
+    [fragment] = list(_evidence_fragments([FLOW_FIGURE]))
+    bare = {key: value for key, value in FLOW_FIGURE.items() if key != "evidence_type"}
+    [plain] = list(_evidence_fragments([bare]))
+    assert fragment["evidence_type"] == "ocr" and "evidence_type" not in plain
+    assert plain["evidence_id"] == fragment["evidence_id"]

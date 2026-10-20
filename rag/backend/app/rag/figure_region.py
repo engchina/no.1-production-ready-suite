@@ -38,6 +38,21 @@ def bbox_numbers(value: object) -> list[float] | None:
     return [float(item) for item in value]
 
 
+FigureEvidenceType = Literal["figure_description", "ocr"]
+
+
+def figure_evidence_type(metadata: dict[str, Any]) -> FigureEvidenceType | None:
+    """図の根拠の種類（図でなければ None。#1282）。
+
+    MCP の根拠の ``evidence_type`` と、最終の検証に渡す図の根拠の印（#2678）が同じ判定を使う。
+    図の本文の出どころが分からない古い記録は、VLM の説明として扱う（原文として扱わず、元の図で
+    確かめる側に倒す）。
+    """
+    if _text(metadata, "content_kind") != "figure":
+        return None
+    return "ocr" if metadata.get("figure_text_source") == "ocr" else "figure_description"
+
+
 def figure_region(metadata: dict[str, Any]) -> FigureRegion | None:
     """図の根拠の元の画像の領域。
 

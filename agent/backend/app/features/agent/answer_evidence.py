@@ -39,7 +39,11 @@ from pr_system_settings.chat_attachments.tools import (
 )
 
 from app.features.agent.answer_passages import passage_spans
-from app.features.agent.answer_validation import STATUS_COMPLETED, cited_chunk_ids
+from app.features.agent.answer_validation import (
+    FIGURE_IMAGE_READ,
+    STATUS_COMPLETED,
+    cited_chunk_ids,
+)
 from app.features.agent.support_task import RAG_RETRIEVE_EVIDENCE, RAG_SEARCH
 from app.features.agent.tools import mcp_base_tool_name
 
@@ -364,6 +368,33 @@ def _supported_claims(validation: Mapping[str, Any] | None) -> list[tuple[str, s
     return found
 
 
+def _figure_image_readings(validation: Mapping[str, Any] | None) -> dict[str, JsonObject]:
+    """最終の検証が図の画像で確かめた段落の図（chunk → 画像の読み取りの由来。#2678）。
+
+    由来は画面と MCP の根拠の `image_reading`（会話の添付の画像と同じ項目。#2652）に入れる: モデルへ
+    届いた画像（`model_input=attached`・`image_id`）と、図の版（`chunk_set_id`）・領域（`region`）。
+    """
+    if not isinstance(validation, Mapping) or validation.get("status") != STATUS_COMPLETED:
+        return {}
+    result = validation.get("result")
+    claims = result.get("claims") if isinstance(result, Mapping) else None
+    found: dict[str, JsonObject] = {}
+    for claim in claims if isinstance(claims, list) else []:
+        if not isinstance(claim, Mapping) or claim.get("figure_check") != FIGURE_IMAGE_READ:
+            continue
+        chunk_id, image = claim.get("chunk_id"), claim.get("figure_image")
+        if isinstance(chunk_id, str) and isinstance(image, Mapping) and chunk_id not in found:
+            found[chunk_id] = {
+                "model_input": "attached",
+                **{
+                    key: image[key]
+                    for key in ("image_id", "chunk_set_id", "region", "carried")
+                    if key in image
+                },
+            }
+    return found
+
+
 # 回答が本文に書いた根拠の ID の印（「【証拠 ID: 0f3a…:7】」「〔根拠: …〕」「[evidence_id: …]」）。
 # 中の ID を根拠に引き当てられた印だけを数える（Markdown のリンク `[文](URL)` は除く）。
 _MARKER = re.compile(r"【[^】\n]{1,200}】|〔[^〕\n]{1,200}〕|\[[^\]\n]{1,200}\](?!\()")
@@ -425,6 +456,7 @@ def answer_evidence(
     passed = passed_evidence(steps)
     chunk_ids = [str(item["chunk_id"]) for item in passed]
     supported = _supported_claims(validation)
+    figures = _figure_image_readings(validation)
     cited = cited_chunk_ids(answer, chunk_ids) | {chunk_id for _quote, chunk_id in supported}
     markers = _markers(answer, chunk_ids)
     items: list[JsonObject] = []
@@ -437,6 +469,9 @@ def answer_evidence(
         view["cited"] = used
         answer_use = item.get("answer_use")
         view["answer_use"] = answer_use if used and answer_use in _ANSWER_USES else None
+        if used and item["chunk_id"] in figures:
+            # 図の見た目の段落を、モデルへ届いた図の画像で確かめた（#2678）。
+            view["image_reading"] = figures[item["chunk_id"]]
         items.append(view)
     for item in attachment_evidence(steps)[: max(MAX_ANSWER_EVIDENCE - len(items), 0)]:
         view = {key: item.get(key) for key in _COPIED_FIELDS if key in item}
