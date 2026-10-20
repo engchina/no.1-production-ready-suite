@@ -127,12 +127,14 @@ def test_reference_tool_reads_in_chunks_only_assigned_references(
     context = ToolInvocationContext()
 
     first = read({"skill_id": SKILL_ID, "path": "references/guide.md", "offset": 0}, context)
+    assert isinstance(first, dict)
     assert first["content"] == "あ" * REFERENCE_CHUNK_CHARACTERS
     assert first["next_offset"] == REFERENCE_CHUNK_CHARACTERS
     second = read(
         {"skill_id": SKILL_ID, "path": "references/guide.md", "offset": first["next_offset"]},
         context,
     )
+    assert isinstance(second, dict)
     assert second["content"] == "あ" * 5
     assert second["next_offset"] is None
 
