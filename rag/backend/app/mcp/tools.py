@@ -1736,7 +1736,8 @@ class ValidatedClaim(BaseModel):
             "audit_id_invalid=監査が返した ID だけが根拠に無い / "
             "ambiguous_id=省いた ID が複数の根拠に当たる / audit_id_missing=ID が無い / "
             "quote_unmatched=引用が根拠に無い / "
-            "not_figure=figure_only の根拠が図ではない〔status は unsupported〕）。"
+            "not_figure=figure_only の根拠が図ではない〔status は unsupported〕 / "
+            "single_figure=figure_only の ID が決まらず、根拠の唯一の図に結び付けた）。"
             "照合しない判定は null。"
         ),
     )
@@ -1754,7 +1755,9 @@ class ValidatedClaim(BaseModel):
             "監査の supported を採らなかった理由（target_mismatch=根拠は別の対象"
             "〔処理・画面・成果物・状態〕の記載 / "
             "value_unbound=段落が根拠の表の別の行の区分と値を結び付けている / "
-            "quote_unmatched=裏付けとして写した原文が根拠に無い）。採ったときは null。"
+            "quote_unmatched=裏付けとして写した原文が根拠に無い / "
+            "figure_recheck=図の項目だけの裏付けを確かめ直し、図の見た目だけで決まる・図と矛盾する"
+            "とした）。採ったときは null。"
         ),
     )
 

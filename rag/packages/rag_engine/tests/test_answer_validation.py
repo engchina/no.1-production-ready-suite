@@ -2071,34 +2071,46 @@ FLOW_FIGURE = {
 FLOW_ANSWER = "判定の後に処理します。\n\n判定の右の分岐は処理Aにつながります。\n\n処理Bは左の分岐に属します。"
 
 
-def _figure_validation(statuses: dict[int, tuple[str, str]]):
-    """段落の番号 → (判定, 根拠〔t=本文 / f=図 / ""〕) の監査のスタブで検証し、結果とモデルへの入力を返す。"""
-    seen: dict = {}
+def _figure_validation(statuses: dict[int, tuple[str, str]], recheck: dict[int, str] | None = None, evidence: list | None = None):
+    """段落の番号 → (判定, 根拠〔t=本文 / f=図 / ""〕) の監査のスタブで検証し、結果とモデルへの入力を返す。
+
+    ``recheck`` は図の項目だけの supported を確かめ直す呼び出しへの、段落の番号 → 判定（図の項目を根拠にする）。
+    """
+    seen: dict = {"calls": []}
+    texts = {"t1": FLOW_TEXT["text"], "f1": FLOW_FIGURE["text"]}
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
-        seen["evidence"] = _documents(payload)
-        seen["system"] = system
-        ids = {item["id"]: item["evidence_id"] for item in seen["evidence"]}
-        return ClaimAuditOutput.model_validate(
-            {
-                "claim_checks": [
-                    {
-                        "answer_quote": "段落",
-                        "answer_passage_id": passage["id"],
-                        "status": statuses[index][0],
-                        "evidence_id": {"t": ids["t1"], "f": ids["f1"], "": ""}[statuses[index][1]],
-                        "source_id": "",
-                        "evidence_quote": "",
-                        "reason": "合成の理由。",
-                    }
-                    for index, passage in enumerate(payload["answer_passages"])
-                ]
-            }
-        )
+        evidence = _documents(payload)
+        seen["calls"].append(payload)
+        if "validation_feedback" not in payload:
+            seen["evidence"] = evidence
+            seen["system"] = system
+            seen["passages"] = [passage["id"] for passage in payload["answer_passages"]]
+        ids = {item["id"]: item["evidence_id"] for item in evidence}
+        checks = []
+        for passage in payload["answer_passages"]:
+            index = seen["passages"].index(passage["id"])
+            status, source = statuses[index] if "validation_feedback" not in payload else ((recheck or {})[index], "f")
+            chunk = {"t": "t1", "f": "f1", "": ""}[source]
+            checks.append(
+                {
+                    "answer_quote": "段落",
+                    "answer_passage_id": passage["id"],
+                    "status": status,
+                    "evidence_id": ids.get(chunk, ""),
+                    "source_id": "",
+                    "evidence_quote": texts.get(chunk, "") if status == "supported" else "",
+                    "claim_target": "判定の後の処理",
+                    "evidence_target": "判定の後の処理",
+                    "applicability": "matched",
+                    "reason": "合成の理由。",
+                }
+            )
+        return ClaimAuditOutput.model_validate({"claim_checks": checks})
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
-        result = validate_answer_claims("判定の後は？", FLOW_ANSWER, [FLOW_TEXT, FLOW_FIGURE], settings=None)
+        result = validate_answer_claims("判定の後は？", FLOW_ANSWER, evidence or [FLOW_TEXT, FLOW_FIGURE], settings=None)
     return result, seen
 
 
@@ -2116,8 +2128,11 @@ def test_figure_only_claims_are_bound_to_the_figure_evidence() -> None:
 
 
 def test_figure_only_claims_that_do_not_point_to_a_figure_are_unsupported() -> None:
-    """figure_only の根拠が図ではない・決まらないときは、図で確かめる主張と言えないので unsupported にする (#2678)。"""
-    result, _seen = _figure_validation({0: ("supported", "t"), 1: ("figure_only", "t"), 2: ("figure_only", "")})
+    """figure_only の根拠が図ではない・決まらず、図に結び付けられないときは unsupported にする (#2678)。"""
+    second_figure = {**FLOW_FIGURE, "id": "f2", "text": "別の図の文字"}
+    result, _seen = _figure_validation(
+        {0: ("supported", "t"), 1: ("figure_only", "t"), 2: ("figure_only", "")}, evidence=[FLOW_TEXT, FLOW_FIGURE, second_figure]
+    )
     claims = result["claim_checks"]
     assert [(claim["status"], claim["audit_status"]) for claim in claims[1:]] == [
         ("unsupported", "figure_only"),
@@ -2127,14 +2142,57 @@ def test_figure_only_claims_that_do_not_point_to_a_figure_are_unsupported() -> N
     assert claims[2]["reference_check"] == "audit_id_missing"
 
 
+def test_figure_only_claims_with_unresolved_ids_take_the_only_figure() -> None:
+    """渡した根拠に図が 1 つだけなら、ID を写し損ねた figure_only もその図に結び付ける (#2678)。"""
+    result, _seen = _figure_validation({0: ("supported", "t"), 1: ("figure_only", "t"), 2: ("figure_only", "")})
+    claims = result["claim_checks"]
+    assert [(claim["status"], claim["source_id"], claim["reference_check"]) for claim in claims[1:]] == [
+        ("figure_only", "f1", "single_figure"),
+        ("figure_only", "f1", "single_figure"),
+    ]
+
+
 def test_claims_judged_from_the_figure_text_stay_as_judged() -> None:
-    """正しい場合は変えない: 図の本文が明示する内容の supported・矛盾は、図の根拠のまま残す (#2678)。"""
-    result, _seen = _figure_validation({0: ("supported", "t"), 1: ("supported", "f"), 2: ("contradicted", "f")})
+    """正しい場合は変えない: 図の本文が明示する内容は、確かめ直しでも supported なら図の根拠のまま残す (#2678)。"""
+    result, seen = _figure_validation({0: ("supported", "t"), 1: ("supported", "f"), 2: ("contradicted", "f")}, recheck={1: "supported"})
     assert [(claim["status"], claim["source_id"]) for claim in result["claim_checks"]] == [
         ("supported", "t1"),
         ("supported", "f1"),
         ("contradicted", "f1"),
     ]
+    assert result["figure_rechecked_passage_ids"] == []
+    assert len(seen["calls"]) == 2
+
+
+def test_supported_claims_backed_only_by_a_figure_are_rechecked() -> None:
+    """図の項目だけを根拠に supported とした段落は、その段落と図の項目だけで確かめ直し、figure_only なら替える (#2678)。"""
+    from rag_engine.evaluation.answer_validation import FIGURE_RECHECK_FEEDBACK
+
+    result, seen = _figure_validation(
+        {0: ("supported", "t"), 1: ("supported", "f"), 2: ("supported", "f")}, recheck={1: "figure_only", 2: "unsupported"}
+    )
+    first, second = seen["calls"]
+    assert "validation_feedback" not in first
+    # 確かめ直しは本文の根拠で裏付けた段落を渡さず、根拠は図の項目（と質問の文）だけ。
+    assert second["validation_feedback"] == FIGURE_RECHECK_FEEDBACK
+    assert [passage["id"] for passage in second["answer_passages"]] == seen["passages"][1:]
+    assert [item["id"] for item in _documents(second)] == ["f1"]
+    claims = result["claim_checks"]
+    # figure_only は採り、unsupported は採らない（図の項目に絞った確かめ直しで外す理由を増やさない）。
+    assert [(claim["status"], claim["support_check"]) for claim in claims] == [
+        ("supported", ""),
+        ("figure_only", "figure_recheck"),
+        ("supported", ""),
+    ]
+    assert claims[1]["source_id"] == "f1"
+    assert result["figure_rechecked_passage_ids"] == [seen["passages"][1]]
+
+
+def test_claims_backed_by_text_evidence_are_not_rechecked() -> None:
+    """本文の根拠で裏付けた supported・figure_only の判定だけなら、確かめ直しのモデルは呼ばない (#2678)。"""
+    result, seen = _figure_validation({0: ("supported", "t"), 1: ("figure_only", "f"), 2: ("unsupported", "")})
+    assert len(seen["calls"]) == 1
+    assert result["figure_rechecked_passage_ids"] == []
 
 
 def test_figure_only_is_only_in_the_validation_schema() -> None:
