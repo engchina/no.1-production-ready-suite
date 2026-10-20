@@ -381,7 +381,7 @@ class GroundedDraft(_StrictModel):
     guide_coverage: list[GuideRequirementCoverage] = Field(
         default_factory=list,
         max_length=200,
-        description="guide_contracts の各要件に使う根拠の計画。全 id を1回ずつ、前提の手順から並べる。要件が複数の操作・除外・確認を含む場合はすべてを満たす根拠を選び、items に説明する。足りなければ gap に残す。",
+        description="guide_contracts の各要件に使う根拠の計画。全 id を1回ずつ、前提の手順から並べる。kind=evidence は引用元と主張の対応を検査する要件で、その指示の復唱は不要。kind=completion は items で説明する操作・条件・除外・確認先。どちらも足りなければ gap に残す。",
     )
     items: list[GroundedItem] = Field(max_length=40, description="主張と原文引用の対。機能・前提ごとに分け、見出しは書かない。")
     applications: list[GroundedApplication] = Field(
