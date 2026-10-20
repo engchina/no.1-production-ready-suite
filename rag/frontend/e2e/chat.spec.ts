@@ -2284,3 +2284,58 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 }
+
+// 自由入力の条件は選択肢なしでも確認し、送信した値を会話へ引き継ぐ。
+test("業務ガイドの自由入力条件だけを確認して回答へ進める", { tag: "@responsive" }, async ({ page }) => {
+  await mockChat(page);
+  await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
+    route.fulfill({ json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
+  );
+  await page.route("**/api/search-answer-profiles/*/clarifications/suggest", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          suggestion: {
+            rule_id: "guide:g-text:target",
+            rule_title: "資料の項目を確認する",
+            clarification: {
+              question: "対象の資料と項目を教えてください。",
+              multiple: false,
+              allow_other: true,
+              options: [],
+            },
+          },
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    })
+  );
+  const bodies: Record<string, unknown>[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/messages/stream")) bodies.push(request.postDataJSON() as Record<string, unknown>);
+  });
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  await page.getByRole("textbox", { name: "質問", exact: true }).fill("資料の項目を確認したい");
+  await page.getByRole("button", { name: "送信" }).click();
+  const card = page.getByTestId("chat-clarification-choice");
+  await expect(card.getByRole("heading", { name: "対象の資料と項目を教えてください。" })).toBeFocused();
+  await expect(card.getByRole("radio")).toHaveCount(0);
+  const confirm = card.getByRole("button", { name: "この内容で回答" });
+  await expect(confirm).toBeDisabled();
+  await card.getByRole("textbox", { name: "その他（自由入力）" }).fill("資料 A の項目 B");
+  await expect(confirm).toBeEnabled();
+  await expectNoPageOverflow(page);
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });
+    await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), colorScheme === "dark");
+    await card.screenshot({ path: test.info().outputPath(`guide-text-${colorScheme}.png`) });
+  }
+  await confirm.click();
+  await expect.poll(() => bodies.length).toBe(1);
+  expect(bodies[0]).toMatchObject({
+    clarification: { rule_id: "guide:g-text:target", option_ids: [], other_text: "資料 A の項目 B" },
+  });
+  await expect(card).toHaveCount(0);
+});

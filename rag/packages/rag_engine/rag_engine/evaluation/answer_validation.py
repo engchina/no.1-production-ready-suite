@@ -46,6 +46,7 @@ from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERAT
 from rag_engine.generation.grounded import quote_in_text
 from rag_engine.generation.operation_audit import is_non_claim_passage, list_heading_lines, table_header_lines
 from rag_engine.generation.table_binding import unbound_table_values
+from rag_engine.models.llm import OutputFieldEvidence
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline, current_deadline
 
 # 2: 複数の根拠を合わせて裏付ける主張の evidence_id の書き方を足した（#1364）。
@@ -327,6 +328,9 @@ class ValidationClaimCheck(BaseModel):
             "比べる。supported 以外の判定は matched でよい。"
         ),
     )
+    output_fields: OutputFieldEvidence | None = Field(
+        default=None, description="出力ファイルの列を主張する段落の根拠の役割と成果物の一致。列を主張しない段落はnull。"
+    )
     # figure_only は最終の検証だけの判定（図の見た目だけで決まる主張。品質評価の ClaimCheck には無い。#2678）。
     status: Literal[
         "supported", "unsupported", "contradicted", "data_confirmation", "citation_error", "unassessed", "not_a_claim", "figure_only"
@@ -511,6 +515,13 @@ def _enforce_support(
                 claim = claim.model_copy(update={"reference_check": REFERENCE_QUOTE_UNMATCHED})
             elif claim.applicability == "not_applicable":
                 claim = _not_supported(claim, "unsupported", SUPPORT_TARGET_MISMATCH, "根拠は段落・質問と別の対象についての記載です。")
+            elif claim.output_fields is not None and (
+                claim.output_fields.output_fields_unconfirmed()
+                or not any(quote_in_text(claim.output_fields.definition_quote, text) for text in _support_texts(claim, catalog, texts))
+            ):
+                claim = _not_supported(
+                    claim, "unsupported", "output_field_basis_unconfirmed", "出力ファイルの項目定義と対象の一致を確認できません。"
+                )
             elif pairs := unbound.get(claim.answer_passage_id):
                 detail = "、".join(f"値『{value}』は『{other}』と別の行の値" for value, other in pairs)
                 claim = _not_supported(claim, "unsupported", SUPPORT_VALUE_UNBOUND, f"根拠の表では{detail}です。")

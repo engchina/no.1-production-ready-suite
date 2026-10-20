@@ -403,6 +403,21 @@ class GroundedDraft(_StrictModel):
         return [item.model_dump() for item in self.external_data_items]
 
 
+class OutputFieldEvidence(_StrictModel):
+    """出力データの項目と根拠の役割。生成時と最終検証で同じ契約を使う。"""
+
+    definition_quote: str = Field(
+        default="",
+        description="主張している出力ファイルの列・項目・含まれる値を定義する原文をそのまま写す。画面の抽出条件や出力帳票名の一覧しかない場合は空文字。",
+    )
+    output_artifact_matches: bool | None = Field(
+        default=None, description="definition_quoteが主張と同じ出力ファイルの項目定義ならtrue。別物ならfalse、同一性不明ならnull。"
+    )
+
+    def output_fields_unconfirmed(self) -> bool:
+        return not self.definition_quote.strip() or self.output_artifact_matches is not True
+
+
 class GroundedItemReview(_StrictModel):
     """1 item の局所監査。引用が言い換えを支持するかと、質問への適用性を分ける。"""
 
@@ -415,6 +430,17 @@ class GroundedItemReview(_StrictModel):
     )
     condition: str = Field(default="", description="conditional のとき原文の条件。")
     reason: str = Field(description="判定の根拠を短く。")
+
+    output_fields: OutputFieldEvidence | None = Field(
+        default=None, description="上の判定理由に対応する出力ファイルの項目の照合。列の主張がない操作の説明はnull。"
+    )
+
+    @model_validator(mode="after")
+    def _require_output_field_basis(self) -> GroundedItemReview:
+        if self.output_fields is not None and self.output_fields.output_fields_unconfirmed() and self.support == "supported":
+            self.support = "unsupported"
+            self.reason = "出力ファイルの項目定義と対象の一致を確認できません。" + self.reason
+        return self
 
 
 class GroundedApplicationReview(_StrictModel):

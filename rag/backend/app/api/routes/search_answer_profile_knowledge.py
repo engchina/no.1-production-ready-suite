@@ -41,6 +41,7 @@ from app.rag.search_answer_profile_knowledge import (
     suggest_clarification,
     suggest_domain_keywords,
 )
+from app.rag.support_guide_conditions import resolve_text_conditions
 from app.rag.support_guide_query import build_guide_query
 from app.rag.support_guide_runtime import (
     GuideChoice,
@@ -542,6 +543,7 @@ async def post_clarification_suggest(
                 else None
             ),
         )
+        selected = await resolve_text_conditions(selected, request.query, settings)
         guide: tuple[str, str, Any] | None = None
         if isinstance(selected, GuideChoice):
             guide = guide_choice_clarification(selected)

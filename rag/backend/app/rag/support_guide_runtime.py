@@ -1191,7 +1191,7 @@ def guide_clarification(match: GuideMatch) -> tuple[str, str, Any] | None:
     for condition in match.unknown:
         values = _condition_options(condition)
         question, shown = _clarification(match, condition)
-        if not 2 <= len(shown) <= 8:
+        if condition.type != "text" and not 2 <= len(shown) <= 8:
             continue
         clarification = RuleClarification(
             question=question[:200],
@@ -1289,7 +1289,8 @@ def resolve_guide_clarification(
 ) -> tuple[dict[str, str], str] | None:
     """チャットの確認の答えを、業務ガイドの条件の値と回答の前提の文にする（保存済みの公開の版で引き直す）。
 
-    「その他（自由入力）」（#1839）は条件の値に当てはめない（業務ガイドの値で分かれる手順を、利用者の書いた
+    text 条件の自由入力は利用者が与えた値として保持する。
+    選択・はい／いいえの「その他（自由入力）」（#1839）は条件の値に当てはめない（業務ガイドの値で分かれる手順を、利用者の書いた
     文で決めない）。条件は分からないままにし、利用者の入力を前提の文で回答に渡す（回答は値ごとに分けるか、
     当てはまる値を確かめるよう案内する）。
 
@@ -1303,6 +1304,10 @@ def resolve_guide_clarification(
     if condition is None or len(option_ids) > 1 or (not option_ids and not other):
         return None
     question = f"確認の質問: {condition.question or condition.label}"
+    if condition.type == "text" and condition.source == "user" and not option_ids and other:
+        return {condition.id: other}, "\n".join(
+            [question, f"利用者の入力: {other}", f"前提: {condition.label}は「{other}」"]
+        )
     if not option_ids:
         context = "\n".join(
             [

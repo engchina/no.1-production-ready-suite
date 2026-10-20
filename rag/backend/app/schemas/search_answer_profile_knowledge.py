@@ -210,14 +210,14 @@ class ClarificationOption(BaseModel):
 
 
 class RuleClarification(BaseModel):
-    """ルールの確認の質問と選択肢(2〜8 件)。"""
+    """確認の質問。自由入力のみ、または選択肢2〜8件。"""
 
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(max_length=200)
     multiple: bool = True
     allow_other: bool = True
-    options: list[ClarificationOption] = Field(min_length=2, max_length=8)
+    options: list[ClarificationOption] = Field(max_length=8)
 
     @field_validator("question")
     @classmethod
@@ -229,6 +229,8 @@ class RuleClarification(BaseModel):
 
     @model_validator(mode="after")
     def _unique_options(self) -> "RuleClarification":
+        if len(self.options) == 1 or (not self.options and not self.allow_other):
+            raise ValueError("選択肢は2つ以上、または自由入力だけの確認にしてください。")
         ids = [option.id for option in self.options]
         if len(ids) != len(set(ids)):
             raise ValueError("選択肢の id が重複しています。")

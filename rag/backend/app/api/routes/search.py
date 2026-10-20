@@ -61,6 +61,7 @@ from app.rag.search_answer_profile_config import resolve_search_answer_profile_s
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_citation_metadata
+from app.rag.support_guide_conditions import resolve_text_conditions
 from app.rag.support_guide_evidence import (
     EVIDENCE_CONDITIONS_KEY,
     EVIDENCE_PLANS_KEY,
@@ -365,6 +366,10 @@ async def _resolve_query_context(
             ),
             close_margin=close_margin,
         )
+        if request.generate_answer:
+            selected = await resolve_text_conditions(
+                selected, guide_text, settings, interactive=interactive
+            )
         if guides_failed:
             # 読めなかったことを回答の診断に残す（ガイドを使わずに答える。#1278）。
             settings = settings.model_copy(
