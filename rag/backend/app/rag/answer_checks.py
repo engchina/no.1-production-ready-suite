@@ -267,6 +267,11 @@ def instruction_text(answer: str) -> str:
     return "\n".join(kept)
 
 
+# 番号つきの手順の行（「1.」「1)」「(1)」「①」で始まる行）。
+# 実行の指示の列の中の段落かを決める（#2732）。
+_NUMBERED_STEP_LINE = re.compile(r"^\s*(?:[0-9０-９]+[.．、)）]|[（(][0-9０-９]+[)）]|[①-⑳])")
+
+
 def check_guide_steps(
     answer: str,
     content: SupportGuideContent,
@@ -279,17 +284,31 @@ def check_guide_steps(
     （手順 id → 段落の本文）。その手順の位置は段落の位置にする（言い回しの違う回答でも順序を
     確かめる）。渡したときは、手順の名前が見つからないことを ``guide_steps_unmatched`` に
     しない（説明の無い手順は充足の判定が示す）。
+
+    段落の位置で決めた手順の順序の逆は、どちらかの段落が番号つきの手順の行でなければ
+    warning にする（#2732・#2795）。結論を先に書き、前の手順の内容を根拠として後ろに書く
+    回答では、段落の並びは実行の順を表さない。番号つきの手順の列の中で後の手順を先に
+    指示した逆と、手順の名前の位置で決めた逆は error のまま。
     """
     if not content.steps:
         return []
     normalized = _normalized(instruction_text(answer))
     titles = {step.id: step.title for step in content.steps}
     positions: dict[str, int] = {}
+    # 段落の位置で決めた手順（名前の位置ではない）。
+    by_paragraph: set[str] = set()
+    numbered = {
+        step_id
+        for step_id, paragraph in (located or {}).items()
+        if _NUMBERED_STEP_LINE.match(str(paragraph or ""))
+    }
     for step in content.steps:
         paragraph = _normalized((located or {}).get(step.id, ""))
         title = _normalized(step.title)
         index = normalized.find(paragraph) if paragraph else -1
-        if index < 0 and len(title) >= _MIN_TITLE_CHARS:
+        if index >= 0:
+            by_paragraph.add(step.id)
+        elif len(title) >= _MIN_TITLE_CHARS:
             index = normalized.find(title)
         if index >= 0:
             positions[step.id] = index
@@ -335,13 +354,21 @@ def check_guide_steps(
                     )
                 )
             elif positions[dependency] > positions[step.id]:
+                paragraph_order = (step.id in by_paragraph or dependency in by_paragraph) and not (
+                    {step.id, dependency} <= numbered
+                )
                 findings.append(
                     AnswerFinding(
                         "guide_steps",
                         "step_order",
-                        "error",
+                        "warning" if paragraph_order else "error",
                         f"手順「{step.title}」を、先に行う手順「{titles[dependency]}」より前に"
-                        "書いています。",
+                        "書いています。"
+                        + (
+                            "（段落の並びで判定。実行の順の誤りとは限りません）"
+                            if paragraph_order
+                            else ""
+                        ),
                         step_id=step.id,
                         related_step_id=dependency,
                     )

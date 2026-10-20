@@ -181,6 +181,7 @@ def deterministic_parse_text_response(
         CragRetrievalGradeOutput,
         GroundedAudit,
         GroundedDraft,
+        GroundedFactAudit,
         QueryExpansionOutput,
         QueryRoutingOutput,
         SectionExtractionOutput,
@@ -208,14 +209,15 @@ def deterministic_parse_text_response(
         return GroundedDraft.model_validate(
             {"summary": "決定論スタブの回答", "items": items, "confidence": "high"}
         )
-    if text_format is GroundedAudit:
+    # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
+    if text_format in (GroundedAudit, GroundedFactAudit):
         evidence = _first_evidence(prompt)
         reviews = (
             [{"index": 0, "support": "supported", "applicability": "matched", "reason": "原文"}]
             if evidence
             else []
         )
-        return GroundedAudit.model_validate(
+        return text_format.model_validate(
             {"goal_alignment": "aligned", "summary_supported": True, "reviews": reviews}
         )
     raise AssertionError(f"決定論スタブが扱わない出力の型です: {text_format.__name__}")

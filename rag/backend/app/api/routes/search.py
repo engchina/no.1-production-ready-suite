@@ -358,7 +358,13 @@ async def _resolve_query_context(
         guides, guides_failed = await load_published_guides(oracle, view.id)
         if guide_preview is not None:
             guides = with_draft(guides, guide_preview)
-            settings = settings.model_copy(update={"rag_guide_preview": guide_preview.marker()})
+            # 下書きの試答は業務ガイドの要件ごとの充足まで詳しく監査する(#2795)。
+            settings = settings.model_copy(
+                update={
+                    "rag_guide_preview": guide_preview.marker(),
+                    "rag_answer_audit_mode": "detailed",
+                }
+            )
         guide_text = "\n".join([*guide_context, request.query])
         # 照合の前に用語の別名で展開し、ON なら意味の照合の埋め込みを作る（#2398）。
         query = await build_guide_query(

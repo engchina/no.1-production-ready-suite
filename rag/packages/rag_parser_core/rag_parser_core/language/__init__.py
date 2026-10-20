@@ -650,6 +650,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
             "no_evidence",
             "off_goal",
             "requests",
+            "correction_failed",
         ),
         ingest=False,
     ),

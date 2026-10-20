@@ -11,6 +11,7 @@ from rag_engine.models.llm import (
     CragRetrievalGradeOutput,
     GroundedAudit,
     GroundedDraft,
+    GroundedFactAudit,
     QueryRoutingOutput,
 )
 
@@ -148,8 +149,9 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
         return GroundedDraft.model_validate(
             {"summary": "手順", "items": items, "confidence": "high"}
         )
-    if schema is GroundedAudit:
-        return GroundedAudit.model_validate(
+    # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
+    if schema in (GroundedAudit, GroundedFactAudit):
+        return schema.model_validate(
             {
                 "goal_alignment": "aligned",
                 "summary_supported": True,

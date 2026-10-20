@@ -57,7 +57,7 @@ from rag_engine.generation.operation_audit import deletion_target_supported, mis
 from rag_engine.generation.table_binding import unbound_table_values
 from rag_engine.generation.value_grounding import unsupported_document_value_claim
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
-from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedItem
+from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedFactAudit, GroundedItem
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.resources.deadline import (
     ANSWER_FINALIZE_RESERVE_SECONDS,
@@ -318,7 +318,8 @@ AUDIT_SYSTEM_PROMPT = (
     "- request_reviews: request_units の各 id について、items（valid な applications を含む）が答えていれば addressed（複数の item をつないで答えていても addressed）、一部なら partial、なければ missing、背景なら context。reason は質問と同じ言語で書く。\n"
     "- unused_evidence_ids: 未使用根拠のうち、質問への回答に必要なのに items で使われていないものだけを、重要な順に最大8件挙げる。"
     "unused_evidence の text は各根拠の先頭の抜粋で全文ではない。抜粋から必要と読み取れるものだけを挙げ、続きを推測して挙げない。\n"
-    "- items が空の草稿（gap だけ）も同じ入力で監査する。items が答えていない要求は unused_evidence に答えがあっても missing とし、その根拠を unused_evidence_ids に挙げる（拒答の妥当性の確認）。\n"
+    "- items が空の草稿（gap だけ）も同じ入力で監査する。items が答えていない要求は missing とする（拒答の妥当性の確認）。\n"
+    "- unused_evidence に答えがあっても items が答えていない要求は missing とし、その根拠を unused_evidence_ids に挙げる。\n"
     "- summary_output_fields: summary の各文を確認し、出力ファイルに列・項目・値があるという主張が1つでもあれば、その定義の原文引用と出力対象の一致を返す。"
     "後から未確認と留保しても先の存在の主張は消えない。例:「列Aで抽出する。列定義は未確認。」も列の存在の主張。"
     "抽出条件や帳票一覧は項目定義ではない。存在の主張が無い場合だけnull。\n"
@@ -340,9 +341,37 @@ AUDIT_COMPACT_REASON_RULE = (
 )
 
 
-def audit_system_prompt(*, compact_reasons: bool = False) -> str:
-    """生成後の監査の system prompt。``compact_reasons`` なら通った判定の reason を空にさせる規則を足す（#1912）。"""
-    return AUDIT_SYSTEM_PROMPT + AUDIT_COMPACT_REASON_RULE if compact_reasons else AUDIT_SYSTEM_PROMPT
+# 監査の型（#2795）。standard（通常の回答）は事実の信頼性だけを判定し、detailed（業務ガイドの下書きの試答・評価）は
+# 未使用の根拠の列挙と業務ガイドの要件ごとの充足も判定する。
+AUDIT_MODE_STANDARD = "standard"
+AUDIT_MODE_DETAILED = "detailed"
+AUDIT_MODES = (AUDIT_MODE_STANDARD, AUDIT_MODE_DETAILED)
+# 通常の回答の組の数の上限（1 組目と、事実の問題を直す作り直しの 1 組）。
+STANDARD_MAX_ROUNDS = 2
+# 通常の回答で作り直しに使う指摘（事実の問題）。完全性の不足（答えていない要求・未使用の根拠・説明していない手順・
+# 目的の一部だけ）は作り直さない。目的違い（off_target）は別の対象に答えた誤りなので直す。
+STANDARD_CORRECTION_KEYS = ("dropped_items", "downgraded_items", "no_cited_evidence")
+# detailed だけの入力・出力の規則の行（監査の指示は 1 行 1 規則なので行の先頭で選ぶ）。
+_DETAILED_AUDIT_LINES = (
+    "- unused_evidence:",
+    "- guide_contracts:",
+    "- guide_requirement_reviews:",
+    "- unused_evidence_ids:",
+    "- unused_evidence に答えがあっても",
+)
+# 通常の回答の監査の指示（detailed だけの行を除いたもの）。
+FACT_AUDIT_SYSTEM_PROMPT = "".join(
+    line for line in AUDIT_SYSTEM_PROMPT.splitlines(keepends=True) if not line.startswith(_DETAILED_AUDIT_LINES)
+)
+
+
+def audit_system_prompt(*, compact_reasons: bool = False, detailed: bool = True) -> str:
+    """生成後の監査の system prompt。``compact_reasons`` なら通った判定の reason を空にさせる規則を足す（#1912）。
+
+    ``detailed`` が False（通常の回答。#2795）なら、未使用の根拠と業務ガイドの要件の行を除いた指示にする。
+    """
+    base = AUDIT_SYSTEM_PROMPT if detailed else FACT_AUDIT_SYSTEM_PROMPT
+    return base + AUDIT_COMPACT_REASON_RULE if compact_reasons else base
 
 
 # 監査に渡す同じ機能の本文の上限（機能ごと）。手順は隣の span にあることが多く、機能全体を渡す必要はない。
@@ -3879,15 +3908,23 @@ def apply_guide_contracts(
     for step in result:
         if step["step_id"] in indexes and step["status"] == GUIDE_STEP_EXPLAINED and step["step_id"] not in allocated:
             step["status"] = GUIDE_STEP_UNUSED
+
+    def first_operation(step_id: str) -> int | None:
+        # 順序は利用者が行う操作の説明の並びで比べる（#2732・#2795）。規則・要約・不足の文の位置は実行の順を表さない。
+        operations = [
+            index for index in indexes.get(step_id, ()) if 0 <= index < len(checked) and checked[index].item.kind in _PROCEDURE_KINDS
+        ]
+        return min(operations) if operations else None
+
     for contract in contracts:
         step_id = contract["step_id"]
-        current = indexes.get(step_id, set())
-        if not current:
+        current = first_operation(step_id)
+        if current is None:
             continue
         wrong_order = [
             predecessor
             for predecessor in contract.get("depends_on", ())
-            if indexes.get(predecessor) and min(indexes[predecessor]) > min(current)
+            if (before := first_operation(predecessor)) is not None and before > current
         ]
         if wrong_order:
             by_id[step_id]["status"] = GUIDE_STEP_UNUSED
@@ -4136,6 +4173,7 @@ def run_round(
     guide_unsearched_steps: Sequence[str] = (),
     guide_step_contracts: Sequence[dict[str, Any]] = (),
     guide_notices: Sequence[str] = (),
+    audit_mode: str = AUDIT_MODE_DETAILED,
 ) -> Round:
     """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -4154,9 +4192,14 @@ def run_round(
     round をまたいで再利用する。None は語の判定だけ。#2649）。``guide_unsearched_steps`` は手順ごとの検索を打ち切って
     検索しなかった手順（#2706）。``guide_notices`` は業務ガイドの案内の行（窓口・引き継ぐ条件。#2792）。監査は完了条件の
     充足にこの行を引ける。業務ガイドの文（手順の目的・要件・案内）を引いた根拠に無いまま書いた説明には印を付ける。
+    ``audit_mode`` は監査の型（#2795）。standard は事実の信頼性だけを監査し（未使用の根拠・業務ガイドの要件を渡さず
+    判定させない）、手順の充足は決定的な対応付けだけにする。detailed は要件ごとの充足と未使用の根拠も判定する。
     """
     audit_settings = settings if audit_settings is None else audit_settings
-    audit_system = audit_system_prompt(compact_reasons=compact_audit_reasons)
+    detailed = audit_mode == AUDIT_MODE_DETAILED
+    # 通常の回答（standard）では業務ガイドの要件を監査しない（決定的な対応付けだけ）。
+    contracts = guide_step_contracts if detailed else ()
+    audit_system = audit_system_prompt(compact_reasons=compact_audit_reasons, detailed=detailed)
     started, usage_before = monotonic(), usage_snapshot()
     if image_paths:
         draft = parse_images(
@@ -4250,10 +4293,11 @@ def run_round(
             # 規則を質問の事実に当てはめた結果（#2155）。item_indexes は上の items の index。
             "applications": application_audit_view(applications, lambda item: audit_index.get(id(item))),
             "known_gaps": known_gap_labels(known_gaps),
-            "unused_evidence": _unused_evidence(question, spans, used),
         }
-        if guide_step_contracts:
-            inputs["guide_contracts"] = guide_step_contracts
+        if detailed:
+            inputs["unused_evidence"] = _unused_evidence(question, spans, used)
+        if contracts:
+            inputs["guide_contracts"] = contracts
             inputs["gap_items"] = [
                 {"index": index, "text": entry.item.text} for index, entry in enumerate(checked) if entry.item.kind == "gap"
             ]
@@ -4279,9 +4323,9 @@ def run_round(
         audit_prompt = json.dumps(fold_model_view(inputs), ensure_ascii=False)
         started, usage_before = monotonic(), usage_snapshot()
         try:
-            audit = parse_text(audit_system, audit_prompt, audit_settings, GroundedAudit, provider_id=provider_id)
+            audit = _parse_audit(parse_text, audit_system, audit_prompt, audit_settings, provider_id, detailed=detailed)
             audit_calls = 1
-            expected_requirements = {entry["id"] for contract in guide_step_contracts for entry in contract["requirements"]}
+            expected_requirements = {entry["id"] for contract in contracts for entry in contract["requirements"]}
             returned_requirements = [entry.requirement_id for entry in audit.guide_requirement_reviews]
             missing_requirements = sorted(key for key in expected_requirements if returned_requirements.count(key) != 1)
             invalid_answer_quotes = sorted(
@@ -4309,7 +4353,7 @@ def run_round(
                     audit_prompt = json.dumps(fold_model_view(inputs), ensure_ascii=False)
                 # reviews も request_reviews も空の応答は監査として使えない。そのまま使うと addressed が空になり、
                 # 支持済み item の多い round が採用されず、是正も起きない (#629)。同じ入力で 1 回だけ再試行する。
-                audit = parse_text(audit_system, audit_prompt, audit_settings, GroundedAudit, provider_id=provider_id)
+                audit = _parse_audit(parse_text, audit_system, audit_prompt, audit_settings, provider_id, detailed=detailed)
                 audit_calls = 2
                 if _audit_is_empty(audit):
                     audit = None  # 監査なしの round として扱い、全要求を未回答にして是正へ進む
@@ -4423,7 +4467,7 @@ def run_round(
                     guide_steps, checked, spans, guide_optional_steps, guide_step_terms, guide_step_semantics, guide_unsearched_steps
                 ),
                 checked,
-                guide_step_contracts,
+                contracts,
                 audit,
                 guide_notices,
             )
@@ -4431,6 +4475,28 @@ def run_round(
             else []
         ),
     )
+
+
+def correction_feedback(feedback: Mapping[str, Any], audit_mode: str) -> dict:
+    """次の組へ渡す指摘を監査の型で絞る（#2795）。通常の回答は事実の問題だけで、無ければ空（作り直さない）。"""
+    if audit_mode == AUDIT_MODE_DETAILED:
+        return dict(feedback)
+    kept = {key: feedback[key] for key in STANDARD_CORRECTION_KEYS if feedback.get(key)}
+    if feedback.get("goal_alignment") == "off_target":
+        kept["goal_alignment"] = "off_target"
+    if kept and feedback.get("supported_items"):
+        kept["supported_items"] = feedback["supported_items"]
+    return kept
+
+
+def _parse_audit(
+    parse_text: Callable[..., Any], system: str, prompt: str, settings: Any, provider_id: str | None, *, detailed: bool
+) -> GroundedAudit:
+    """監査を 1 回呼ぶ。通常の回答（#2795）は事実の監査の schema で受け、判定しない項目を空にして写す。"""
+    if detailed:
+        return parse_text(system, prompt, settings, GroundedAudit, provider_id=provider_id)
+    fact = parse_text(system, prompt, settings, GroundedFactAudit, provider_id=provider_id)
+    return GroundedAudit.model_validate(fact.model_dump())
 
 
 def _reconcile_request_reviews(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:

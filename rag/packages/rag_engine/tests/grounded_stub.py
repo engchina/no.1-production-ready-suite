@@ -11,7 +11,7 @@ from unittest.mock import patch
 from pydantic import BaseModel, ConfigDict
 
 from rag_engine.generation import answering, grounded
-from rag_engine.models.llm import GroundedAudit, GroundedDraft, UsedImageOutput
+from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedFactAudit, UsedImageOutput
 
 
 class AnswerOutput(BaseModel):
@@ -87,8 +87,9 @@ def echo_model(system, prompt, settings, schema, **options):
         match = re.search(r"\[(E[0-9]+)\][^\n]*\n([^\n]+)", prompt)
         items = [{"kind": "rule", "text": match.group(2), "evidence_id": match.group(1), "quote": match.group(2)}] if match else []
         return GroundedDraft.model_validate({"summary": "answer", "items": items, "confidence": "high"})
-    if schema is GroundedAudit:
-        return GroundedAudit.model_validate(
+    # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
+    if schema in (GroundedAudit, GroundedFactAudit):
+        return schema.model_validate(
             {
                 "goal_alignment": "aligned",
                 "summary_supported": True,

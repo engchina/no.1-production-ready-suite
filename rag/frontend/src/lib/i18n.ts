@@ -3939,6 +3939,7 @@ export const ja = {
   "settings.answerPrompts.part.picture": "図・画像を読むときの対象の指示",
   "settings.answerPrompts.part.table": "表を読むときの対象の指示",
   "settings.answerPrompts.part.compactRule": "通った判定の理由を省く規則（設定で有効なときだけ足す）",
+  "settings.answerPrompts.part.factSystem": "通常の回答の監査の system プロンプト（事実の信頼性だけを判定する。業務ガイドの下書きの試答は上の system プロンプト）",
   "settings.answerPrompts.part.auditSystem": "監査の system プロンプト",
   "settings.answerPrompts.part.documentSystem": "文書を選ぶ system プロンプト",
   "settings.answerPrompts.part.refineSystem": "同じ章の条を足す system プロンプト",
