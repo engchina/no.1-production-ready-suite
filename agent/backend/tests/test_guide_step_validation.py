@@ -14,8 +14,9 @@ from mcp_support import DEFAULT_OUTPUTS
 
 from app.features.agent.answer_outcome import SIGNAL_GUIDE_STEPS, answer_outcome
 from app.features.agent.answer_validation import (
+    REVIEW_HEADING,
+    REVIEW_INTRO,
     STATUS_COMPLETED,
-    UNVERIFIED_HEADING,
     combine_validations,
     merge_results,
     validation_content,
@@ -73,13 +74,26 @@ def _combined(*results: dict[str, Any]) -> tuple[dict[str, Any], str]:
 
 
 def test_unexplained_required_step_is_shown_and_makes_the_answer_conditional() -> None:
-    """裏付けのある回答でも、説明を確かめられない必須の手順は不足として示し、answered にしない。"""
+    """裏付けのある回答でも、説明を確かめられない必須の手順は不足として示し、answered にしない。
+
+    本文は外さず、回答全体の警告（guide_check。文は RAG の回答の不足の行と同じ）にして、節
+    「確認が必要な点」に示す（#2708・#2738）。
+    """
     result = _result([_step("s1", "値の登録", "explained"), _step("s2", "内容の確定", "unused")])
     content, published = _combined(result)
-    # 本文は外さず、節に手順の不足を足す（RAG の回答の不足の行と同じ文）。
-    assert published.startswith(ANSWER)
-    assert published.endswith(f"**{UNVERIFIED_HEADING}**\n\n- {GAP}")
-    assert content["withheld"] == {"claims": 0, "findings": 0, "all": False, "guide_steps": 1}
+    label = "業務ガイドの手順の確認で問題が見つかった"
+    assert published == (
+        f"{ANSWER}\n\n**{REVIEW_HEADING}**\n\n{REVIEW_INTRO}\n- {label}: {GAP}"
+    )
+    assert content["answer_warnings"] == [{"code": "guide_check", "label": label, "detail": GAP}]
+    assert content["passage_marks"] == []
+    assert content["withheld"] == {
+        "removed": 0,
+        "unverified": 0,
+        "warnings": 0,
+        "all": False,
+        "listed": 1,
+    }
     assert content["notice"]["items"] == 1
     outcome = answer_outcome(ANSWER, steps=[], validation=content)
     assert outcome["value"] == "conditional"
@@ -101,16 +115,20 @@ def test_all_steps_explained_keep_the_answer_answered() -> None:
     assert answer_outcome(ANSWER, steps=[], validation=content)["value"] == "answered"
 
 
-def test_unexplained_steps_are_listed_with_withheld_paragraphs() -> None:
+def test_unexplained_steps_are_listed_with_marked_paragraphs() -> None:
+    """根拠で確かめられない段落は本文に残して印を付け、手順の不足と同じ節に並べる（#2738）。"""
     result = _result([_step("s1", "値の登録", "no_evidence")], valid=False)
     result["claims"][1]["status"] = "unsupported"
     result["counts"] = {"supported": 1, "unsupported": 1}
     content, published = _combined(result)
-    assert "最後は保存ボタン" not in published.split(f"**{UNVERIFIED_HEADING}**")[0]
-    section = published.split(f"**{UNVERIFIED_HEADING}**")[1]
+    body, section = published.split(f"\n\n**{REVIEW_HEADING}**\n\n")
+    assert body == ANSWER
     assert "- 根拠で確かめられない: 「2. 最後は保存ボタンで画面を閉じます。」" in section
-    assert f"- {GAP.replace('内容の確定', '値の登録')}" in section
-    assert content["withheld"]["guide_steps"] == 1
+    assert f": {GAP.replace('内容の確定', '値の登録')}" in section
+    assert [item["code"] for item in content["answer_warnings"]] == ["guide_check"]
+    assert [(item["text"], item["state"]) for item in content["passage_marks"]] == [
+        ("2. 最後は保存ボタンで画面を閉じます。", "unverified")
+    ]
 
 
 def test_merge_takes_the_best_status_of_each_step_across_connections() -> None:

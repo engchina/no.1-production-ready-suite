@@ -1814,6 +1814,9 @@ def publish_answer(answer: str, result: JsonObject) -> PublishedAnswer:
       付けない。
     """
     claims = [item for item in mark_non_claims(answer, result)["claims"] if isinstance(item, dict)]
+    # 表の見出しの行・次の行で決まる一覧の見出しの行・名前だけの番号つきの項目（中身は下の行）には
+    # 印を付けない。
+    structure = table_header_lines(answer) | list_heading_lines(answer)
     grouped: dict[str, list[JsonObject]] = {}
     for claim in claims:
         quote = str(claim.get("answer_quote") or "")
@@ -1831,6 +1834,8 @@ def publish_answer(answer: str, result: JsonObject) -> PublishedAnswer:
         contradicted = next((item for item in items if is_contradicted(item)), None)
         if contradicted is not None:
             removed[quote] = [reason_item("contradicted", contradicted.get("reason"))]
+            continue
+        if is_structure(quote) or quote in structure or _LABEL_ITEM.fullmatch(quote):
             continue
         for item in items:
             code = claim_reason(item)

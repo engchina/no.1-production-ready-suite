@@ -207,12 +207,12 @@ _CITATION_SECTION = re.compile(
     r"出典|参照|参考資料|参考|根拠資料|引用元|sources?|references?", re.IGNORECASE
 )
 # 確かめきれない点・除いた内容の節の見出し（Agent の最終の検証が足す「根拠と矛盾し除いた内容」
-# 「確認が必要な点」〔#2738。answer_validation.SECTION_HEADINGS〕と、RAG・モデルが付ける同じ意味の
-# 見出し）。RAG の回答の見出しは rag_engine の grounded.GAPS_SECTION_TITLE「資料から確認できなかった
+# 「確認が必要な点」〔#2738。answer_validation.SECTION_HEADINGS。後者は語の一部に当たらないよう
+# 見出しの全体で比べる〕と、RAG・モデルが付ける同じ意味の見出し）。RAG の回答の見出しは rag_engine の grounded.GAPS_SECTION_TITLE「資料から確認できなかった
 # 事項」・UNVERIFIED_SECTION_TITLE「回答に未反映の関連章節」・DEADLINE_SECTION_TITLE
 # 「回答時間の上限により省略した処理」（#2040）。
 _UNVERIFIED_SECTION = re.compile(
-    r"根拠と矛盾し除いた内容|確認が必要な点"
+    r"根拠と矛盾し除いた内容|^確認が必要な点$"
     r"|資料で確認できず除いた内容|資料から確認できなかった事項|回答に未反映の関連章節"
     r"|回答時間の上限により省略した処理"
     r"|確かめられていない点|確かめられない点|確認できていない点|確認できない点|未確認の(?:点|事項)"
