@@ -42,6 +42,33 @@ def test_values_from_another_row_are_found(claim: str, expected: list[tuple[str,
     assert unbound_table_values(claim, [TABLE]) == expected
 
 
+# コード・名称・開始・終了・単価の表（見出しの印が無く、値の無い最初の行を見出しとみなす。終了は空欄）。
+PRICE_TABLE = (
+    "<table><tr><td>コード</td><td>名称</td><td>開始</td><td>終了</td><td>単価</td></tr>"
+    "<tr><td>A101</td><td>項目甲</td><td>202504</td><td></td><td>254</td></tr>"
+    "<tr><td>A102</td><td>項目乙</td><td>202504</td><td></td><td>253</td></tr>"
+    "<tr><td>A103</td><td>項目丙</td><td>202504</td><td></td><td>300</td></tr></table>"
+)
+
+
+@pytest.mark.parametrize(
+    ("claim", "expected"),
+    [
+        # 複数の行の値の列挙・範囲は、区分と値の結び付けではない（#2734）。
+        ("E 列が 202504、F 列が空欄、Q 列に 254・253・300 などの単価が表示されている。", []),
+        ("対象はコード A101〜A103 で、単価は 254 から 300 です。", []),
+        # 同じ行のコードと値。同じ行のコードがあれば、別の行の名前を述べても疑わない。
+        ("A101 の単価は 254 です。", []),
+        ("A101 の単価は 254 で項目乙より高い。", []),
+        # 別の行の名前と値の結び付けは検出する。
+        ("項目甲の単価は 253 です。", [("253", "項目甲")]),
+    ],
+    ids=["value-list", "value-range", "same-row-code", "same-row-code-with-other-name", "other-row-name"],
+)
+def test_values_listed_from_several_rows_are_not_suspected(claim: str, expected: list[tuple[str, str]]) -> None:
+    assert unbound_table_values(claim, [PRICE_TABLE]) == expected
+
+
 def test_shared_values_spanned_cells_and_notes_are_not_suspected() -> None:
     shared = "<table><tr><td>区分Ⅰ</td><td>01</td></tr><tr><td>区分Ⅱ</td><td>01</td></tr></table>"
     assert unbound_table_values("区分Ⅰと区分Ⅱはどちらも 01 です。", [shared]) == []
@@ -87,6 +114,18 @@ def test_grounded_item_with_a_value_from_another_row_is_downgraded() -> None:
 
     assert checked(wrong).quote_only and "表の別の行の値" in checked(wrong).reasons[0]
     assert not checked(right).quote_only and checked(right).reasons == []
+
+
+def test_grounded_item_listing_values_of_several_rows_is_kept() -> None:
+    """複数の行の値を列挙した説明は、表の別の行の値として落とさない（#2734）。"""
+    question = "単価の列に表示される値は？"
+    spans = grounded.tag_spans(
+        question, [{"evidence_id": "E1", "source_id": "c1", "source": "m.pdf", "page": 1, "text": PRICE_TABLE, "section_path": []}]
+    )
+    listed = GroundedItem(kind="rule", text="単価の列に 254・253・300 が表示されます。", evidence_id="E1", quote="254")
+    entries, _ = grounded.verify(question, GroundedDraft(summary="", confidence="high", items=[listed]), spans)
+    entry = next(entry for entry in entries if entry.item.text == listed.text)
+    assert not any("表の別の行の値" in reason for reason in entry.reasons)
 
 
 def test_audit_prompt_judges_the_relation_not_the_shared_words() -> None:

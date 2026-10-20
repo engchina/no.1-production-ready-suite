@@ -77,6 +77,28 @@ def test_value_from_another_row_is_not_supported_and_the_audit_reason_is_not_ado
     assert result["counts"] == {"supported": 1, "unsupported": 1}
 
 
+def test_values_listed_from_several_rows_stay_supported() -> None:
+    """複数の行の値の列挙・範囲を述べた段落は、表の対応と違うとしない（#2734）。"""
+    table = (
+        "<table><tr><td>コード</td><td>名称</td><td>単価</td></tr>"
+        "<tr><td>A101</td><td>項目甲</td><td>254</td></tr>"
+        "<tr><td>A102</td><td>項目乙</td><td>253</td></tr>"
+        "<tr><td>A103</td><td>項目丙</td><td>300</td></tr></table>"
+    )
+    listed, ranged, wrong_text = (
+        "単価の列に 254・253・300 などが表示されている。",
+        "対象はコード A101〜A103 で、単価は 254 から 300 です。",
+        "項目甲の単価は 253 です。",
+    )
+    answer = "\n\n".join([listed, ranged, wrong_text])
+    result = _validate(answer, {"c1": table}, [{"chunk": "c1"}, {"chunk": "c1"}, {"chunk": "c1"}])
+    claims = _by_quote(result)
+    assert claims[listed]["status"] == "supported"
+    assert claims[ranged]["status"] == "supported"
+    wrong = claims[wrong_text]
+    assert (wrong["status"], wrong["support_check"]) == ("unsupported", SUPPORT_VALUE_UNBOUND)
+
+
 def test_quote_that_is_not_in_the_evidence_is_not_adopted() -> None:
     """監査が写した原文が根拠に無ければ（取り違えた対応を原文として書いた）、supported にしない（#2659）。"""
     answer = "区分Ⅱでは選択肢の値 02 を選びます。\n\n区分Ⅱの値は画面の一覧から選びます。"
