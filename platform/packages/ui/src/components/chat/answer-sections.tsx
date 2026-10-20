@@ -1,8 +1,24 @@
 import { ChevronDown, ChevronUp, FileText } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { TEXT_ICON_SIZE } from "../ui/text-icon";
+import {
+  ANSWER_PASSAGE_STATE_ICON,
+  AnswerPassageMarked,
+  AnswerPassageWarnings,
+  DEFAULT_ANSWER_PASSAGE_LABELS,
+  answerPassageQuote,
+  answerPassageReasonText,
+  focusAnswerPassage,
+  type AnswerPassageLabels,
+} from "./answer-passage-marks";
+import {
+  matchAnswerPassageMarks,
+  type AnswerPassageMarkGroup,
+  type AnswerPassageRecords,
+} from "./answer-passage-records";
 
 /**
  * 回答の本文の節と根拠の行（RAG のチャット・RAG 検索・Agent のチャットで共通。#2328）。
@@ -14,6 +30,10 @@ import { Button } from "../ui/button";
  * 項目の多い節（`collapsible`。資料から確認できなかった事項など）は、先頭の
  * `ANSWER_SECTION_COLLAPSE_AFTER` 件だけを出し、「すべて表示（全 N 件）」で残りを同じ書式のまま開く（#2361。
  * 「ほか N 件」の行で切らず、同じ種類の項目を 2 か所に分けない）。
+ *
+ * 段落の印の記録（`passages`。#2738）を渡すと、印の付いた段落・項目に左の区切りの線と末尾の印を付け、
+ * 本文の上に回答全体の注意、本文の後ろに「根拠と矛盾し除いた内容」「確認が必要な点」の節を足す。段落の照合は
+ * 段落・項目の原文（`passageText`。無ければ文字列の `content`）と印の `text` で行う。
  */
 
 /** 畳める節で、畳んだときに出す項目の数。 */
@@ -48,6 +68,8 @@ export interface AnswerSectionEntry {
   citations?: readonly AnswerCitationRef[];
   /** 根拠の行の後ろに足すもの（章節を開くリンクなど）。 */
   extra?: ReactNode;
+  /** 段落の印の照合に使う原文（無ければ文字列の `content`）。 */
+  passageText?: string;
 }
 
 export type AnswerSectionsBlock =
@@ -57,6 +79,8 @@ export type AnswerSectionsBlock =
       /** 段落の文（文字列は改行を保って出す）。 */
       content: ReactNode;
       citations?: readonly AnswerCitationRef[];
+      /** 段落の印の照合に使う原文（無ければ文字列の `content`）。 */
+      passageText?: string;
     }
   | {
       /** 段落にできない本文（表・コード・見出しなど。製品が描いたもの）と、その下の根拠の行。 */
@@ -64,6 +88,8 @@ export type AnswerSectionsBlock =
       key: string;
       content: ReactNode;
       citations?: readonly AnswerCitationRef[];
+      /** 段落の印の照合に使う原文。 */
+      passageText?: string;
     }
   | {
       kind: "section";
@@ -74,6 +100,8 @@ export type AnswerSectionsBlock =
       entries: readonly AnswerSectionEntry[];
       /** 項目が多いとき（`ANSWER_SECTION_COLLAPSE_AFTER` 件を超える）、先頭だけを出して残りを畳む。 */
       collapsible?: boolean;
+      /** 節の data-testid（既定 `answer-section`）。 */
+      testId?: string;
     };
 
 /** 根拠の行の並び。 */
@@ -121,6 +149,31 @@ export interface AnswerSectionsProps {
   className?: string;
   testId?: string;
   labels?: AnswerSectionsLabels;
+  /**
+   * 段落の印・外した段落・回答全体の注意（#2738。`parseAnswerPassageRecords` で読んだもの）。新しい記録の無い
+   * 過去の回答は null（今までの表示のまま）。
+   */
+  passages?: AnswerPassageRecords | null;
+  passageLabels?: AnswerPassageLabels;
+}
+
+/** 印を当てた段落（照合の結果と、移る先の id）。 */
+interface MarkedTarget {
+  group: AnswerPassageMarkGroup;
+  anchorId: string;
+}
+
+type MarkedTargets = ReadonlyMap<string, MarkedTarget>;
+
+const NO_MARKS: MarkedTargets = new Map();
+
+function entryTargetKey(blockKey: string, entryKey: string): string {
+  return `${blockKey}/${entryKey}`;
+}
+
+function passageTextOf(passageText: string | undefined, content: ReactNode): string | undefined {
+  if (passageText !== undefined) return passageText;
+  return typeof content === "string" ? content : undefined;
 }
 
 /** 回答の本文の節（段落・見出しつきの箇条書き・各項目の根拠の行）。 */
@@ -131,47 +184,207 @@ export function AnswerSections({
   className,
   testId = "answer-text",
   labels = DEFAULT_ANSWER_SECTIONS_LABELS,
+  passages = null,
+  passageLabels = DEFAULT_ANSWER_PASSAGE_LABELS,
 }: AnswerSectionsProps) {
+  const baseId = useId();
+  // 本文の段落・項目（表示の順）に印を当てる。
+  const { marked, anchors } = useMemo(() => {
+    if (!passages?.marks.length) return { marked: NO_MARKS, anchors: [] as string[] };
+    const keys: string[] = [];
+    const texts: (string | undefined)[] = [];
+    for (const block of blocks) {
+      if (block.kind === "section") {
+        // 補足の行（`muted`）も本文の段落なので照合する（RAG の節の後ろに続く段落など）。
+        for (const entry of block.entries) {
+          keys.push(entryTargetKey(block.key, entry.key));
+          texts.push(passageTextOf(entry.passageText, entry.content));
+        }
+      } else {
+        keys.push(block.key);
+        texts.push(passageTextOf(block.passageText, block.content));
+      }
+    }
+    const { groups, targets } = matchAnswerPassageMarks(texts, passages.marks);
+    const map = new Map<string, MarkedTarget>();
+    groups.forEach((group, index) => {
+      if (group) map.set(keys[index], { group, anchorId: `${baseId}-passage-${index}` });
+    });
+    return {
+      marked: map as MarkedTargets,
+      anchors: targets.map((index) => (index < 0 ? "" : `${baseId}-passage-${index}`)),
+    };
+  }, [blocks, passages, baseId]);
+
+  const extraSections = passages ? passageSections(passages, anchors, passageLabels) : [];
   return (
     <div
       className={cn("space-y-3 text-sm leading-relaxed text-fg", className)}
       aria-live={live ? "polite" : undefined}
       data-testid={testId}
     >
-      {blocks.map((block) =>
-        block.kind === "content" ? (
-          <div key={block.key} className="min-w-0">
-            {block.content}
-            {block.citations?.length ? <AnswerCitationLinks citations={block.citations} /> : null}
-          </div>
-        ) : block.kind === "paragraph" ? (
-          block.citations?.length ? (
-            <div key={block.key}>
-              <p className="whitespace-pre-wrap">{block.content}</p>
-              <AnswerCitationLinks citations={block.citations} />
-            </div>
-          ) : (
-            <p key={block.key} className="whitespace-pre-wrap">
-              {block.content}
-            </p>
-          )
-        ) : (
+      {passages?.warnings.length ? <AnswerPassageWarnings warnings={passages.warnings} labels={passageLabels} /> : null}
+      {blocks.map((block) => {
+        if (block.kind === "section") {
           // 節の見出しの前は、段落の間（0.75rem）より広い 1.25rem（`--space-5`。0.75rem + pt-2）を空け、節の区切りを
           // 見て分かるようにする（#2325。見出しは後ろの内容に近く、前の内容から離す）。先頭の節には付けない。
-          <AnswerSection key={block.key} block={block} labels={labels} />
-        ),
-      )}
+          return (
+            <AnswerSection key={block.key} block={block} labels={labels} marked={marked} passageLabels={passageLabels} />
+          );
+        }
+        const target = marked.get(block.key);
+        const citations = block.citations?.length ? <AnswerCitationLinks citations={block.citations} /> : null;
+        if (target) {
+          return (
+            <AnswerPassageMarked
+              key={block.key}
+              group={target.group}
+              anchorId={target.anchorId}
+              labels={passageLabels}
+              render={(marker) =>
+                block.kind === "content" ? (
+                  <>
+                    {block.content}
+                    {/* 表・コードの後ろには文が続かないので、印は塊の下の行に置く。 */}
+                    <p>{marker}</p>
+                    {citations}
+                  </>
+                ) : (
+                  <>
+                    <p className="whitespace-pre-wrap">
+                      {block.content}
+                      {marker}
+                    </p>
+                    {citations}
+                  </>
+                )
+              }
+            />
+          );
+        }
+        if (block.kind === "content") {
+          return (
+            <div key={block.key} className="min-w-0">
+              {block.content}
+              {citations}
+            </div>
+          );
+        }
+        return citations ? (
+          <div key={block.key}>
+            <p className="whitespace-pre-wrap">{block.content}</p>
+            {citations}
+          </div>
+        ) : (
+          <p key={block.key} className="whitespace-pre-wrap">
+            {block.content}
+          </p>
+        );
+      })}
+      {extraSections.map((block) => (
+        <AnswerSection key={block.key} block={block} labels={labels} marked={NO_MARKS} passageLabels={passageLabels} />
+      ))}
       {children}
     </div>
   );
 }
 
+/**
+ * 本文の後ろの節（#2738）: 「根拠と矛盾し除いた内容」（外した段落と理由）と「確認が必要な点」（印の付いた段落の
+ * 引用と理由。押すと本文の段落へ移る）。どちらも項目が多ければ畳む。
+ */
+function passageSections(
+  passages: AnswerPassageRecords,
+  anchors: readonly string[],
+  labels: AnswerPassageLabels,
+): Extract<AnswerSectionsBlock, { kind: "section" }>[] {
+  const sections: Extract<AnswerSectionsBlock, { kind: "section" }>[] = [];
+  if (passages.removed.length) {
+    sections.push({
+      kind: "section",
+      key: "passage-removed",
+      title: labels.removedTitle,
+      collapsible: true,
+      testId: "answer-removed-passages",
+      entries: [
+        { key: "note", content: labels.removedNote, muted: true },
+        ...passages.removed.map((item, index) => ({
+          key: `removed-${index}`,
+          content: (
+            <span className="block whitespace-normal" data-testid="answer-removed-passage">
+              <span className="[overflow-wrap:anywhere]">{answerPassageQuote(item.text, 200)}</span>
+              {item.reasons.length ? (
+                <span className="block text-xs text-fg-muted [overflow-wrap:anywhere]">
+                  {item.reasons.map(answerPassageReasonText).join(" / ")}
+                </span>
+              ) : null}
+            </span>
+          ),
+        })),
+      ],
+    });
+  }
+  if (passages.marks.length) {
+    sections.push({
+      kind: "section",
+      key: "passage-marks",
+      title: labels.marksTitle,
+      collapsible: true,
+      testId: "answer-marked-passages",
+      entries: [
+        { key: "note", content: labels.marksNote, muted: true },
+        ...passages.marks.map((mark, index) => {
+          const Icon = ANSWER_PASSAGE_STATE_ICON[mark.state];
+          const quote = answerPassageQuote(mark.text);
+          const anchor = anchors[index];
+          const reasons = mark.reasons.map((reason) => reason.label).join("・");
+          return {
+            key: `mark-${index}`,
+            content: (
+              <span className="block whitespace-normal" data-testid="answer-marked-passage" data-passage-state={mark.state}>
+                {anchor ? (
+                  <button
+                    type="button"
+                    // button は inline でも inline-block として並び、折り返すと最後の行の基線にそろう。align-top で箇条書きの印を 1 行目にそろえる。
+                    className="pr-touch-target relative rounded-sm text-left align-top text-accent-fg underline-offset-2 hover:underline [overflow-wrap:anywhere]"
+                    aria-label={labels.jumpLabel(quote)}
+                    onClick={() => focusAnswerPassage(anchor)}
+                    data-testid="answer-marked-passage-link"
+                  >
+                    {quote}
+                  </button>
+                ) : (
+                  <span className="[overflow-wrap:anywhere]">{quote}</span>
+                )}
+                <span className="flex items-start gap-1 text-xs text-fg-muted">
+                  <span className="pr-icon-line">
+                    <Icon size={TEXT_ICON_SIZE.xs} aria-hidden />
+                  </span>
+                  <span className="min-w-0 [overflow-wrap:anywhere]">
+                    {labels.state[mark.state]}
+                    {reasons ? `：${reasons}` : ""}
+                  </span>
+                </span>
+              </span>
+            ),
+          };
+        }),
+      ],
+    });
+  }
+  return sections;
+}
+
 function AnswerSection({
   block,
   labels,
+  marked,
+  passageLabels,
 }: {
   block: Extract<AnswerSectionsBlock, { kind: "section" }>;
   labels: AnswerSectionsLabels;
+  marked: MarkedTargets;
+  passageLabels: AnswerPassageLabels;
 }) {
   const [expanded, setExpanded] = useState(false);
   const listId = useId();
@@ -179,16 +392,18 @@ function AnswerSection({
   const items = block.entries.filter((entry) => !entry.muted).length;
   const toggle = Boolean(block.collapsible) && items > ANSWER_SECTION_COLLAPSE_AFTER;
   const entries = toggle && !expanded ? firstItems(block.entries, ANSWER_SECTION_COLLAPSE_AFTER) : block.entries;
+  const render = (entry: AnswerSectionEntry) =>
+    renderEntry(entry, marked.get(entryTargetKey(block.key, entry.key)), passageLabels);
   return (
-    <section className="space-y-1.5 not-first:pt-2" data-testid="answer-section">
+    <section className="space-y-1.5 not-first:pt-2" data-testid={block.testId ?? "answer-section"}>
       {block.title ? <h4 className="text-sm font-semibold text-fg">{block.title}</h4> : null}
       {block.ordered ? (
         <ol id={listId} className="list-decimal space-y-1.5 pl-5">
-          {entries.map(renderEntry)}
+          {entries.map(render)}
         </ol>
       ) : (
         <ul id={listId} className="list-disc space-y-1.5 pl-5">
-          {entries.map(renderEntry)}
+          {entries.map(render)}
         </ul>
       )}
       {toggle ? (
@@ -223,18 +438,54 @@ function firstItems(entries: readonly AnswerSectionEntry[], limit: number): Answ
   return result;
 }
 
-function renderEntry(entry: AnswerSectionEntry) {
+function renderEntry(entry: AnswerSectionEntry, target: MarkedTarget | undefined, passageLabels: AnswerPassageLabels) {
   if (entry.muted) {
     return (
       <li key={entry.key} className="list-none whitespace-pre-wrap text-fg-muted">
-        {entry.content}
+        {target ? (
+          <AnswerPassageMarked
+            group={target.group}
+            anchorId={target.anchorId}
+            labels={passageLabels}
+            render={(marker) => (
+              <span>
+                {entry.content}
+                {marker}
+              </span>
+            )}
+          />
+        ) : (
+          entry.content
+        )}
+      </li>
+    );
+  }
+  const citations = entry.citations?.length ? <AnswerCitationLinks citations={entry.citations} /> : null;
+  if (target) {
+    return (
+      <li key={entry.key} className="whitespace-pre-wrap">
+        <AnswerPassageMarked
+          group={target.group}
+          anchorId={target.anchorId}
+          labels={passageLabels}
+          render={(marker) => (
+            <>
+              <span>
+                {entry.content}
+                {marker}
+              </span>
+              {citations}
+              {entry.extra}
+            </>
+          )}
+        />
       </li>
     );
   }
   return (
     <li key={entry.key} className="whitespace-pre-wrap">
       {entry.content}
-      {entry.citations?.length ? <AnswerCitationLinks citations={entry.citations} /> : null}
+      {citations}
       {entry.extra}
     </li>
   );

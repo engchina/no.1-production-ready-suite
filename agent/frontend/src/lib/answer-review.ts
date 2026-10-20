@@ -1,3 +1,9 @@
+import {
+  hasAnswerPassageRecords,
+  parseAnswerPassageRecords,
+  type AnswerPassageRecords,
+} from "@production-ready/ui";
+
 import type { Artifact, ClarificationKind, RunState } from "@/lib/api";
 
 /**
@@ -62,12 +68,13 @@ export interface ReviewGuide {
 
 /**
  * 資料との照合の結果。
- * - verified: 資料で確かめた（回答はそのまま）
- * - withheld: 確かめられない点がある（段落を外した・本文を載せていない・不足を示した）
+ * - verified: 資料で確かめた（回答はそのまま。印・外した段落・回答の注意が無い）
+ * - marked: 印の付いた段落・根拠と矛盾して外した段落・回答全体の注意がある（段落の印の記録のある Run。#2738）
+ * - withheld: 確かめられない点がある（段落の印の記録の無い過去の Run。段落を外した・本文を載せていない・不足を示した）
  * - unvalidated: 確かめられなかった（照合の失敗・資料を使わなかった回答）
  * - skipped: 照合の対象外（資料を使わない業務 Agent・空の回答）
  */
-export type ValidationState = "verified" | "withheld" | "unvalidated" | "skipped";
+export type ValidationState = "verified" | "marked" | "withheld" | "unvalidated" | "skipped";
 
 /** 確かめられなかった理由（画面の文言を選ぶため。内部の reason の値そのものは出さない）。 */
 export type ValidationCause =
@@ -92,6 +99,11 @@ export interface ReviewValidation {
    * `notice.items`。#2361）。除いた内容の一覧は節の 1 か所だけに出し、件数のバッジはこの数を使う（節と一致させる）。
    */
   listedItems: number;
+  /**
+   * 段落の印・外した段落・回答全体の注意（#2738）。この記録の無い過去の Run は null（今までの表示のまま。本文の
+   * 「資料から確認できなかった事項」の節と件数のバッジ）。
+   */
+  passages: AnswerPassageRecords | null;
 }
 
 export interface AnswerReview {
@@ -191,49 +203,65 @@ function cause(reason: unknown): ValidationCause {
   return reason ? "failure" : null;
 }
 
-const BLOCKING_CLAIMS = new Set(["contradicted", "unsupported", "citation_error", "unassessed"]);
+/**
+ * 段落の印の記録の無い過去の Run で、当時の backend（`publish_answer`）が回答から外した段落の判定（確かめられない段落）。
+ * 今の方針（#2738）では本文から外すのは根拠と矛盾した段落だけで、確かめられない段落・規則の検査の段落は本文に残して
+ * 印を付け、その記録（`passage_marks`・`removed_passages`・`answer_warnings`）をそのまま読む（`publishedAsIs`）。
+ * 保存済みの過去の回答の表示は変えないため、記録の無い Run だけを当時の判定で読む。
+ */
+const LEGACY_BLOCKING_CLAIMS = new Set(["contradicted", "unsupported", "citation_error", "unassessed"]);
 
 function errorFindings(result: Record<string, unknown>): Record<string, unknown>[] {
   return records(result.findings).filter((item) => item.severity === "error");
 }
 
 /**
- * 回答から外す段落の判定（確かめられない段落）。主張ではない段落（見出し・出典の行・利用者への質問・
+ * 過去の Run で回答から外した段落（確かめられない段落）。主張ではない段落（見出し・出典の行・利用者への質問・
  * 資料に記載が無いことを述べる文。backend が `non_claim` を付ける。#1306）は除く。
  */
-function blockingClaims(result: Record<string, unknown>): Record<string, unknown>[] {
+function legacyBlockingClaims(result: Record<string, unknown>): Record<string, unknown>[] {
   return records(result.claims).filter(
-    (claim) => typeof claim.status === "string" && BLOCKING_CLAIMS.has(claim.status) && !claim.non_claim,
+    (claim) => typeof claim.status === "string" && LEGACY_BLOCKING_CLAIMS.has(claim.status) && !claim.non_claim,
   );
 }
 
-/** 確かめられない点が無く、回答をそのまま載せたか（backend の `publish_answer` と同じ判定）。 */
-function publishedAsIs(result: Record<string, unknown>): boolean {
+/** 過去の Run で、確かめられない点が無く回答をそのまま載せたか（当時の backend の `publish_answer` と同じ判定）。 */
+function legacyPublishedAsIs(result: Record<string, unknown>): boolean {
   if (result.valid === true) return true;
   if (errorFindings(result).length > 0) return false;
   if (result.status === "no_claims") return true;
   if (result.status !== "completed") return false;
   if (records(result.stale_evidence).length > 0 || records(result.missing_evidence).length > 0) return false;
   const claims = records(result.claims);
-  if (blockingClaims(result).length > 0) return false;
+  if (legacyBlockingClaims(result).length > 0) return false;
   return claims.some((claim) => claim.status === "supported" || Boolean(claim.non_claim));
 }
 
-/** 成果物「資料との照合」を、照合の結果にする（backend の `publish_answer` と同じ判定）。 */
+/**
+ * 回答をそのまま載せたか（#2738）。印の付いた段落・根拠と矛盾して外した段落・回答全体の注意のどれも無いとき。
+ * 規則の検査の結果（findings）・確かめられない段落は本文を外さないので、記録の 3 つだけで決める。
+ */
+function publishedAsIs(passages: AnswerPassageRecords): boolean {
+  return !hasAnswerPassageRecords(passages);
+}
+
+const NO_COUNTS = { withheldClaims: 0, withheldAll: false, listedItems: 0, passages: null } as const;
+
+/** 成果物「資料との照合」を、照合の結果にする。 */
 export function validationReview(content: Record<string, unknown>): ReviewValidation | null {
   const status = content.status;
   const reasonCause = cause(content.reason);
-  if (status === "skipped") {
-    return { state: "skipped", cause: reasonCause, withheldClaims: 0, withheldAll: false, listedItems: 0 };
-  }
-  if (status === "unvalidated") {
-    return { state: "unvalidated", cause: reasonCause ?? "failure", withheldClaims: 0, withheldAll: false, listedItems: 0 };
-  }
+  if (status === "skipped") return { state: "skipped", cause: reasonCause, ...NO_COUNTS };
+  if (status === "unvalidated") return { state: "unvalidated", cause: reasonCause ?? "failure", ...NO_COUNTS };
   if (status !== "completed") return null;
-  const result = record(content.result) ?? {};
-  if (publishedAsIs(result)) {
-    return { state: "verified", cause: null, withheldClaims: 0, withheldAll: false, listedItems: 0 };
+  const passages = parseAnswerPassageRecords(content);
+  if (passages) {
+    return publishedAsIs(passages)
+      ? { state: "verified", cause: null, ...NO_COUNTS }
+      : { state: "marked", cause: null, withheldClaims: 0, withheldAll: false, listedItems: 0, passages };
   }
+  const result = record(content.result) ?? {};
+  if (legacyPublishedAsIs(result)) return { state: "verified", cause: null, ...NO_COUNTS };
   const withheld = record(content.withheld);
   return {
     state: "withheld",
@@ -241,7 +269,14 @@ export function validationReview(content: Record<string, unknown>): ReviewValida
     withheldClaims: count(withheld?.claims),
     withheldAll: withheld?.all === true,
     listedItems: count(record(content.notice)?.items),
+    passages: null,
   };
+}
+
+/** Run の最新の成果物「資料との照合」の、段落の印の記録（#2738）。記録の無い Run・照合の無い Run は null。 */
+export function runAnswerPassages(artifacts: Artifact[]): AnswerPassageRecords | null {
+  const content = latest(artifacts, ANSWER_VALIDATION_KIND);
+  return content?.status === "completed" ? parseAnswerPassageRecords(content) : null;
 }
 
 /**

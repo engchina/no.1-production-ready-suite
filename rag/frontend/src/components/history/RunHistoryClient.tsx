@@ -551,7 +551,11 @@ function RunDetailView({ run }: { run: RunDetail }) {
           <RunDetailSection title={t("history.result.answer")} testId="run-history-answer">
             {run.answer_available && run.answer ? (
               <div className="space-y-3">
-                <AnswerText text={run.answer} citations={canPreview ? run.citations : []} />
+                <AnswerText
+                  text={run.answer}
+                  citations={canPreview ? run.citations : []}
+                  diagnostics={run.answer_diagnostics}
+                />
                 {/* 回答に付けた注意書き（そのときの文。#2405）。 */}
                 <AnswerNotice notice={run.answer_notice} label={t("answer.notice.label")} />
               </div>

@@ -1,3 +1,9 @@
+import {
+  matchAnswerPassageMarks,
+  type AnswerPassageLabels,
+  type AnswerPassageRecords,
+} from "@production-ready/ui";
+
 import type { AnswerEvidenceData } from "@/lib/answer-evidence";
 import { t } from "@/lib/i18n";
 
@@ -16,11 +22,17 @@ import { t } from "@/lib/i18n";
  *   事項」は作らない（照合していない内容を「確認できた」と見せない）。検証が一部の段落だけを確かめた回答
  *   （`partial`。#2700）は、確かめ終わった段落に根拠の行を付け、確かめ終わらなかった段落の根拠を「参考情報」にする。
  * - 段落に根拠を 1 つも結び付けられないときは null（呼び出し側は今までの Markdown の描き方にする）。
+ * - 段落の印の記録（`passages`。#2738）のある回答は、根拠を結び付けられなくても節に組み立てる（印は段落ごとに
+ *   付けるため）。「資料から確認できなかった事項」の節は作らず、本文の後ろの節（「根拠と矛盾し除いた内容」
+ *   「確認が必要な点」）は共有の `AnswerSections` が記録から作る。印の付いた段落は「資料により確認できた事項」に
+ *   入れない（確かめていない段落を「確認できた」と見せない）。段落の照合のため、段落・項目は原文（`raw`）を持つ。
  */
 
 export interface StructuredEntry {
   key: string;
   text: string;
+  /** 本文の原文（段落の印の照合に使う。#2738）。 */
+  raw?: string;
   chunkIds: string[];
   /** 箇条書きの印を付けない補足の行。 */
   muted?: boolean;
@@ -29,9 +41,9 @@ export interface StructuredEntry {
 }
 
 export type StructuredBlock =
-  | { kind: "paragraph"; key: string; text: string; chunkIds: string[] }
+  | { kind: "paragraph"; key: string; text: string; raw?: string; chunkIds: string[] }
   /** 表・コード・見出しの続きなど、段落にできない Markdown の塊。 */
-  | { kind: "markdown"; key: string; text: string; chunkIds: string[] }
+  | { kind: "markdown"; key: string; text: string; raw?: string; chunkIds: string[] }
   | {
       kind: "section";
       key: string;
@@ -99,16 +111,27 @@ function chunks(text: string): string[][] {
   return result;
 }
 
-/** 本文と「資料で確認できず除いた内容」の節を分ける。 */
-function splitNotice(answer: string, heading: string | null): { body: string; notice: string[] } {
-  if (!heading) return { body: answer, notice: [] };
-  const marker = `**${heading}**`;
-  const at = answer.indexOf(marker);
+/**
+ * 本文と、本文の末尾に backend が足した節（「資料で確認できず除いた内容」など。見出しは太字の行）を分ける。
+ * 見出しのうち本文の中で最も前にあるものから後ろを節にする。
+ */
+function splitNotice(answer: string, headings: readonly (string | null)[]): { body: string; notice: string[] } {
+  let at = -1;
+  let length = 0;
+  for (const heading of headings) {
+    if (!heading) continue;
+    const marker = `**${heading}**`;
+    const found = answer.indexOf(marker);
+    if (found >= 0 && (at < 0 || found < at)) {
+      at = found;
+      length = marker.length;
+    }
+  }
   if (at < 0) return { body: answer, notice: [] };
   return {
     body: answer.slice(0, at).trim(),
     notice: answer
-      .slice(at + marker.length)
+      .slice(at + length)
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean),
@@ -143,15 +166,50 @@ export function answerStructureTitles(): AnswerStructureTitles {
   };
 }
 
+/** 段落の印の文言（共有の `AnswerSections`・`AnswerPassageBadges`。チャットと実行の詳細で同じ。#2738）。 */
+export function answerPassageLabels(): AnswerPassageLabels {
+  return {
+    state: { unverified: t("chat.answer.passage.unverified"), warning: t("chat.answer.passage.warning") },
+    stateDescription: {
+      unverified: t("chat.answer.passage.unverifiedDescription"),
+      warning: t("chat.answer.passage.warningDescription"),
+    },
+    toggleHint: t("chat.answer.passage.toggleHint"),
+    removedTitle: t("chat.answer.passage.removedTitle"),
+    removedNote: t("chat.answer.passage.removedNote"),
+    marksTitle: t("chat.answer.passage.marksTitle"),
+    marksNote: t("chat.answer.passage.marksNote"),
+    jumpLabel: (quote) => t("chat.answer.passage.jump", { quote }),
+    warningsTitle: t("chat.answer.passage.warningsTitle"),
+    badge: {
+      unverified: (count) => t("chat.answer.passage.badgeUnverified", { count }),
+      warning: (count) => t("chat.answer.passage.badgeWarning", { count }),
+      removed: (count) => t("chat.answer.passage.badgeRemoved", { count }),
+    },
+  };
+}
+
+/** 根拠を結び付けない回答の根拠（段落の印の記録のある回答を、根拠なしで節に組み立てるとき）。 */
+const NO_EVIDENCE: AnswerEvidenceData = {
+  entries: [],
+  markers: [],
+  passages: [],
+  binding: "validation",
+  references: [],
+  citationLines: [],
+};
+
 export function structureAnswer(
   answer: string,
   evidence: AnswerEvidenceData | null,
   heading: string | null,
-  titles: AnswerStructureTitles
+  titles: AnswerStructureTitles,
+  passages: AnswerPassageRecords | null = null
 ): StructuredBlock[] | null {
+  if (passages) return markedAnswer(answer, evidence, heading, titles, passages);
   if (!evidence) return null;
   if (evidence.binding === "text") return referenceAnswer(answer, evidence, titles);
-  const { body, notice } = splitNotice(answer, heading);
+  const { body, notice } = splitNotice(answer, [heading]);
   const { blocks, ownHeadings } = bodyBlocks(body, evidence, true);
 
   const cited = (block: StructuredBlock) =>
@@ -179,6 +237,56 @@ export function structureAnswer(
     });
   }
   return shaped;
+}
+
+/**
+ * 段落の印の記録のある回答（#2738）。根拠を結び付けられなくても節に組み立て（印は段落ごとに付ける）、
+ * 「資料から確認できなかった事項」の節は作らない（外した段落・印の一覧は共有の `AnswerSections` が記録から作る）。
+ * backend が本文の末尾に足した節（過去の見出し・「確認が必要な点」「根拠と矛盾し除いた内容」）は本文から除き、
+ * 2 か所に出さない。印の付いた段落・項目は「資料により確認できた事項」に入れない。
+ */
+function markedAnswer(
+  answer: string,
+  evidence: AnswerEvidenceData | null,
+  heading: string | null,
+  titles: AnswerStructureTitles,
+  passages: AnswerPassageRecords
+): StructuredBlock[] {
+  const { body } = splitNotice(answer, [heading, t("chat.answer.passage.marksTitle"), t("chat.answer.passage.removedTitle")]);
+  const source = evidence ?? NO_EVIDENCE;
+  if (source.binding === "text") {
+    const { blocks } = bodyBlocks(withoutCitationLines(body, source.citationLines), source, false);
+    if (source.references.length) blocks.push(referenceSection(source, titles));
+    return blocks;
+  }
+  const { blocks, ownHeadings } = bodyBlocks(body, source, true);
+  const marked = markedKeys(blocks, passages);
+  const cited = (block: StructuredBlock) =>
+    block.kind === "section" ? block.entries.some((entry) => entry.chunkIds.length) : block.chunkIds.length > 0;
+  const shaped =
+    !blocks.some(cited) || ownHeadings ? blocks : withConfirmedSection(blocks, titles.confirmed, marked);
+  if (source.references.length) shaped.push(referenceSection(source, titles));
+  return shaped;
+}
+
+/** 印の当たる段落・項目の key（共有の `AnswerSections` と同じ照合）。 */
+function markedKeys(blocks: readonly StructuredBlock[], passages: AnswerPassageRecords): Set<string> {
+  const keys: string[] = [];
+  const texts: (string | undefined)[] = [];
+  for (const block of blocks) {
+    if (block.kind === "section") {
+      for (const entry of block.entries) {
+        if (entry.muted) continue;
+        keys.push(entry.key);
+        texts.push(entry.raw ?? entry.text);
+      }
+    } else {
+      keys.push(block.key);
+      texts.push(block.raw ?? block.text);
+    }
+  }
+  const { groups } = matchAnswerPassageMarks(texts, passages.marks);
+  return new Set(keys.filter((_key, index) => groups[index] !== null));
 }
 
 /**
@@ -263,7 +371,7 @@ function bodyBlocks(
     const key = `b${index}`;
     if (lines.some((item) => MARKDOWN_BLOCK.test(item))) {
       const raw = lines.join("\n");
-      blocks.push({ kind: "markdown", key, text: displayText(raw, markers), chunkIds: ids(raw) });
+      blocks.push({ kind: "markdown", key, text: displayText(raw, markers), raw, chunkIds: ids(raw) });
       return;
     }
     let rest = lines;
@@ -283,7 +391,12 @@ function bodyBlocks(
         key,
         title,
         ordered: rest.every((item) => /^\s*\d/.test(item)),
-        entries: parsed.map((item, position) => ({ key: `${key}-${position}`, text: item.text, chunkIds: item.chunkIds })),
+        entries: parsed.map((item, position) => ({
+          key: `${key}-${position}`,
+          text: item.text,
+          raw: item.raw,
+          chunkIds: item.chunkIds,
+        })),
       });
       return;
     }
@@ -295,12 +408,17 @@ function bodyBlocks(
         key,
         title,
         ordered: false,
-        entries: parsed.map((item, position) => ({ key: `${key}-${position}`, text: item.text, chunkIds: item.chunkIds })),
+        entries: parsed.map((item, position) => ({
+          key: `${key}-${position}`,
+          text: item.text,
+          raw: item.raw,
+          chunkIds: item.chunkIds,
+        })),
       });
       return;
     }
     const raw = rest.join("\n");
-    blocks.push({ kind: "paragraph", key, text: displayText(raw, markers), chunkIds: ids(raw) });
+    blocks.push({ kind: "paragraph", key, text: displayText(raw, markers), raw, chunkIds: ids(raw) });
   });
   merge(blocks);
   return { blocks, ownHeadings };
@@ -320,9 +438,14 @@ function merge(blocks: StructuredBlock[]): void {
 /**
  * 見出しの無い回答: 根拠の付いた最初の塊より前を要約の段落にし、そこから後がすべて根拠の付いた段落・項目なら
  * 「資料により確認できた事項」の箇条書きにまとめる（文の順は変えない）。後ろに根拠の無い段落があれば、見出しは
- * 足さずに段落・箇条書きのまま出す。
+ * 足さずに段落・箇条書きのまま出す。印の付いた段落・項目（`marked` の key。#2738）も根拠の無い段落と同じに扱う
+ * （確かめていない段落を「確認できた」の見出しの下に入れない）。
  */
-function withConfirmedSection(blocks: StructuredBlock[], title: string): StructuredBlock[] {
+function withConfirmedSection(
+  blocks: StructuredBlock[],
+  title: string,
+  marked: ReadonlySet<string> = new Set()
+): StructuredBlock[] {
   const first = blocks.findIndex((block) =>
     block.kind === "section" ? block.entries.some((entry) => entry.chunkIds.length) : block.chunkIds.length > 0
   );
@@ -332,10 +455,10 @@ function withConfirmedSection(blocks: StructuredBlock[], title: string): Structu
   for (const block of rest) {
     if (block.kind === "markdown") return blocks;
     if (block.kind === "paragraph") {
-      if (!block.chunkIds.length) return blocks;
-      entries.push({ key: block.key, text: block.text, chunkIds: block.chunkIds });
+      if (!block.chunkIds.length || marked.has(block.key)) return blocks;
+      entries.push({ key: block.key, text: block.text, raw: block.raw, chunkIds: block.chunkIds });
     } else {
-      if (block.entries.some((entry) => !entry.chunkIds.length)) return blocks;
+      if (block.entries.some((entry) => !entry.chunkIds.length || marked.has(entry.key))) return blocks;
       entries.push(...block.entries);
     }
   }
@@ -343,7 +466,7 @@ function withConfirmedSection(blocks: StructuredBlock[], title: string): Structu
   if (!lead.length && rest[0]?.kind === "paragraph" && entries.length > 1) {
     const [summary, ...others] = entries;
     return [
-      { kind: "paragraph", key: summary.key, text: summary.text, chunkIds: summary.chunkIds },
+      { kind: "paragraph", key: summary.key, text: summary.text, raw: summary.raw, chunkIds: summary.chunkIds },
       { kind: "section", key: "confirmed", title, ordered: false, entries: others },
     ];
   }

@@ -3679,6 +3679,22 @@ export const ja = {
   // 「回答に未反映の関連章節」の行から章節の原文を開く（#2040）。読み上げの名前は見える文言を含める。
   "search.answerText.openUnreadSection": "原文を開く",
   "search.answerText.openUnreadSectionLabel": "{section}の原文を開く",
+  // 回答の段落の印（共有の AnswerSections。Agent の chat.answer.passage.* と同じ文言。#2738）。理由の文は backend が
+  // 返す文をそのまま出す。
+  "search.answerText.passage.unverified": "未確認",
+  "search.answerText.passage.warning": "要注意",
+  "search.answerText.passage.unverifiedDescription": "この段落は根拠で確かめられていません。",
+  "search.answerText.passage.warningDescription": "この段落はシステムの検査で注意が必要とされました。",
+  "search.answerText.passage.toggleHint": "の理由",
+  "search.answerText.passage.removedTitle": "根拠と矛盾し除いた内容",
+  "search.answerText.passage.removedNote": "根拠と矛盾したため、次の内容は回答に載せていません。",
+  "search.answerText.passage.marksTitle": "確認が必要な点",
+  "search.answerText.passage.marksNote": "次の段落は根拠で確かめられていないか、注意が必要です。押すと本文の段落へ移ります。",
+  "search.answerText.passage.jump": "{quote}（本文の段落へ移動）",
+  "search.answerText.passage.warningsTitle": "回答全体に注意が必要です",
+  "search.answerText.passage.badgeUnverified": "未確認 {count} 件",
+  "search.answerText.passage.badgeWarning": "要注意 {count} 件",
+  "search.answerText.passage.badgeRemoved": "矛盾で除外 {count} 件",
   "search.answerDetails.autoFieldFilter": "質問から読み取った条件",
   "search.answerDetails.autoFieldFilterRelaxed":
     "読み取った条件では見つからなかったため、条件を外して検索しました。",
