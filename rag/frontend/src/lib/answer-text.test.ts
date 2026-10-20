@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RetrievedChunk } from "./api";
-import { matchCitation, matchCitationLine, parseAnswerText, parseCitationLine } from "./answer-text";
+import { matchCitation, matchCitationLine, parseAnswerText, parseCitationLine, resolveCitationLine } from "./answer-text";
 
 describe("parseAnswerText", () => {
   it("回答エンジンの本文を要約・節・説明・根拠に分ける", () => {
@@ -221,6 +221,57 @@ describe("matchCitationLine", () => {
     const items = section?.kind === "section" ? section.entries.filter((entry) => entry.kind === "item") : [];
 
     expect(items.map((entry) => (entry.kind === "item" ? entry.citationLines : []))).toEqual([[1], [3]]);
+  });
+});
+
+// 出典行の主張を支える箇所と確定した引用だけを正確な位置にする（#2710）。合成の文書: 親 A の同じ頁の子 H（見出し）と F（図の説明）。
+describe("resolveCitationLine", () => {
+  function located(chunkId: string, metadata: RetrievedChunk["metadata"]): RetrievedChunk {
+    const base = chunk("文書 A.pdf", 3);
+    return { ...base, chunk_id: chunkId, metadata: { ...base.metadata, ...metadata } };
+  }
+  const ref = { fileName: "文書 A.pdf", page: 3 };
+
+  it("確定の印のある番号は、引用の並びの先の H ではなく F を正確な位置として開く", () => {
+    const citations = [
+      located("H", { evidence_model_used: false }),
+      located("F", { answer_citation_lines: [1], answer_citation_provenance: "child", evidence_model_used: true }),
+    ];
+    expect(resolveCitationLine(1, ref, citations)).toEqual({ index: 1, position: { kind: "exact" } });
+  });
+
+  it("候補の番号だけの行は、先頭の候補を開くが位置は未確定にする", () => {
+    const citations = [
+      located("H", { answer_citation_candidate_lines: [1] }),
+      located("F", { answer_citation_candidate_lines: [1] }),
+      located("other", {}),
+    ];
+    expect(resolveCitationLine(1, ref, citations)).toEqual({
+      index: 0,
+      position: { kind: "unresolved", reason: "candidates", candidates: [0, 1] },
+    });
+  });
+
+  it("以前の回答の番号（確定の印が無い）は、記録の対応のまま開き、同じ頁に別の箇所があれば未確定にする", () => {
+    const legacy = [located("H", { answer_citation_lines: [1] }), located("F", {})];
+    expect(resolveCitationLine(1, ref, legacy)).toEqual({
+      index: 0,
+      position: { kind: "unresolved", reason: "legacy", candidates: [0, 1] },
+    });
+    // 同じ頁に別の箇所が無ければ、取り違えようがないので確定。
+    const alone = [located("H", { answer_citation_lines: [1] }), { ...located("F", {}), metadata: { page_start: 9 } }];
+    expect(resolveCitationLine(1, ref, alone)).toEqual({ index: 0, position: { kind: "exact" } });
+  });
+
+  it("番号の無い回答は文書名と頁で選び、同じ頁に複数あれば未確定。当たらなければ null", () => {
+    const citations = [located("H", {}), located("F", {})];
+    expect(resolveCitationLine(undefined, ref, citations)?.position).toEqual({
+      kind: "unresolved",
+      reason: "legacy",
+      candidates: [0, 1],
+    });
+    expect(resolveCitationLine(undefined, { fileName: "文書 B.pdf", page: 1 }, citations)).toBeNull();
+    expect(matchCitationLine(undefined, { fileName: "文書 B.pdf", page: 1 }, citations)).toBe(-1);
   });
 });
 

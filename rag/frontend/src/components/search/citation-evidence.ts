@@ -6,6 +6,7 @@ import {
   citationAnswerUse,
   citationMetadataChips,
   citationModelUsed,
+  citationParentUsed,
   citationSourceUrl,
   type CitationMetadataChip,
 } from "@/lib/chunk-metadata";
@@ -31,6 +32,8 @@ export function citationEvidenceItem(chunk: RetrievedChunk): EvidenceListItem {
     // AI に渡した箇所のうち、回答で引用したもの（#1208）。該当確認済みの記載と参考の記載を分ける（#2040）。
     usedInAnswer: citationModelUsed(chunk),
     answerUse: citationAnswerUse(chunk),
+    // 回答がまとまり（親）だけを参照した箇所（「回答で引用」とは分ける。#2710）。
+    usedAsContext: citationParentUsed(chunk),
     // 新しい版に置き換えた文書（旧版）の根拠（#1248。include_superseded で含めたときだけ出る）。
     superseded: chunk.metadata.document_superseded === true,
     routeBadges: citationRetrievalBadges(chunk),

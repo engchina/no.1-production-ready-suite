@@ -80,6 +80,16 @@ describe("citationMetadataChips", () => {
 describe("citationCountLabel", () => {
   const chunk = (metadata: Record<string, boolean | string>) => ({ metadata });
 
+  it("まとまり（親）だけを参照した箇所は「回答で引用」に数えず、「まとまりで参照」に分ける（issue 2710）", () => {
+    expect(
+      citationCountLabel([
+        chunk({ evidence_model_used: true }),
+        chunk({ evidence_model_used: false, evidence_parent_used: true }),
+        chunk({ evidence_model_used: false }),
+      ])
+    ).toBe("AI に渡した 3 件 ／ 回答で引用 1 件 ／ まとまりで参照 1 件");
+  });
+
   it("回答で引用したかが分かるときは、使用した件数を添える", () => {
     expect(
       citationCountLabel([

@@ -61,9 +61,16 @@ _PAGE_AND_SECTION_KEYS = (
 _EVIDENCE_KEYS = (
     # 回答に使った根拠か・根拠の役割・本文の出典行の番号・検索の順位の印。
     "evidence_model_used",
+    # 回答での使われ方（該当確認済み / 参考。#2040）と、親（まとまり）だけを参照した子の
+    # 印（#2710）。
+    "evidence_answer_use",
+    "evidence_parent_used",
     "evidence_role",
     "context_role",
+    # 出典行の番号（確定の子）・候補の番号・番号の決め方（#1330・#2710）。
     "answer_citation_lines",
+    "answer_citation_candidate_lines",
+    "answer_citation_provenance",
     "vector_rank",
     "keyword_rank",
     "rerank_rank",

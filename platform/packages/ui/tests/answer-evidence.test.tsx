@@ -51,6 +51,19 @@ describe("evidenceCountLabel", () => {
     expect(evidenceCountLabel([item(), item()])).toBe("AI に渡した 2 件");
   });
 
+  it("まとまりだけを参照した箇所は「回答で引用」に数えず、「まとまりで参照」に分ける（#2710）", () => {
+    const items = [
+      item({ usedInAnswer: true, answerUse: "confirmed" }),
+      item({ usedAsContext: true }),
+      item({ usedAsContext: true }),
+      // 引用した箇所は、まとまりの印があっても「回答で引用」だけに数える。
+      item({ usedInAnswer: true, answerUse: null, usedAsContext: true }),
+    ];
+    expect(evidenceCountLabel(items)).toBe(
+      "AI に渡した 4 件 ／ 回答で引用 2 件 ／ うち該当確認済み 1 件 ／ まとまりで参照 2 件",
+    );
+  });
+
   it("文言は上書きできる", () => {
     expect(evidenceCountLabel([item()], evidenceLabels({ count: (n) => `${n} items` }))).toBe("1 items");
   });
@@ -93,6 +106,16 @@ describe("EvidenceCard", () => {
     expect(host.querySelector("a")?.getAttribute("href")).toBe("https://example.com/a");
     expect(host.querySelector('[role="meter"]')?.getAttribute("aria-valuetext")).toBe("0.420");
     expect(host.querySelector("button")?.textContent).toBe("根拠を表示");
+  });
+
+  it("まとまりだけを参照した箇所は「回答で引用」ではなく「まとまりで参照」のバッジを出す（#2710）", () => {
+    const context = html(<ul><EvidenceCard index={0} item={item({ usedAsContext: true })} /></ul>);
+    const main = context.querySelector('[data-testid="citation-main"]')!;
+    expect(main.textContent).toContain("まとまりで参照");
+    expect(main.textContent).not.toContain("回答で引用");
+    const cited = html(<ul><EvidenceCard index={0} item={item({ usedInAnswer: true, usedAsContext: true })} /></ul>);
+    expect(cited.textContent).toContain("回答で引用");
+    expect(cited.textContent).not.toContain("まとまりで参照");
   });
 
   it("参考の記載は「参考」、引用していなければバッジを出さず、Rerank が無ければ未実行と出す", () => {
