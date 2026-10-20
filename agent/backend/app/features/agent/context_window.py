@@ -23,7 +23,8 @@ context editing が古いツールの結果から消す、LangChain の `trim_me
   4. ID だけを残す（古い結果だけ）
   どの段階でも ID の項目（`id`・`*_id`。根拠の `document_id`・`chunk_id`・`evidence_id` など）は
   消さない（引用の照合・回答の検証に使う）。縮めた結果には `context_compaction`（元の文字数と
-  次の手。読み直すツールがあればその名前）を足す。
+  次の手。読み直すツールがあればその名前）を足す。同じツールの呼び直しを案内するのは、信頼できる
+  読み取り専用のツールだけ（副作用があり得るツールは、呼び直すと同じ操作をもう一度実行する。#2632）。
 - Run の step に残すツールの結果は全文のまま（回答の検証・引用の照合は step を使う）。縮めるのは
   モデルに渡す入力だけで、呼び出しごとに元の入力から作り直す。
 
@@ -268,7 +269,9 @@ def _ids_only(value: Any, stats: _Stats) -> Any:
     return None
 
 
-def _note(original_chars: int, stats: _Stats, read_tool: str | None) -> dict[str, Any]:
+def _note(
+    original_chars: int, stats: _Stats, read_tool: str | None, rerunnable: bool
+) -> dict[str, Any]:
     done: list[str] = []
     if stats.clipped:
         done.append(f"長い文字列 {stats.clipped} 件を先頭だけ")
@@ -285,13 +288,25 @@ def _note(original_chars: int, stats: _Stats, read_tool: str | None) -> dict[str
         text += (
             f"本文が要る根拠は、document_id と chunk_id を {read_tool} に渡して読み直してください。"
         )
-    else:
+    elif rerunnable:
         text += "省いた内容が要るときは、対象を絞って同じツールを呼び直してください。"
+    else:
+        # 副作用があり得るツール（書き込み・注釈を信頼しない接続）の結果は、呼び直すと同じ操作を
+        # もう一度実行する（#2632）。省いた内容を得る手段として呼び直させない。
+        text += (
+            "省いた内容は読み直せません。このツールは呼び直さず、残っている内容で続けてください。"
+        )
     return {"original_chars": original_chars, "next_step": text}
 
 
-def compact_output(output: str, level: int, *, read_tool: str | None = None) -> str:
-    """ツールの結果（JSON の文字列か文字列）を段階 `level` で縮める（縮まなければ元のまま）。"""
+def compact_output(
+    output: str, level: int, *, read_tool: str | None = None, rerunnable: bool = False
+) -> str:
+    """ツールの結果（JSON の文字列か文字列）を段階 `level` で縮める（縮まなければ元のまま）。
+
+    `read_tool` は本文を読み直すツール、`rerunnable` は同じツールを呼び直しても副作用が無いか
+    （信頼できる読み取り専用。既定は False で、呼び直しを案内しない）。
+    """
     try:
         data = json.loads(output)
     except (TypeError, ValueError):
@@ -310,7 +325,7 @@ def compact_output(output: str, level: int, *, read_tool: str | None = None) -> 
             else _shrink(data, level=level, stats=stats)
         )
         compacted = json.dumps(
-            {**shrunk, COMPACTION_KEY: _note(original_chars, stats, read_tool)},
+            {**shrunk, COMPACTION_KEY: _note(original_chars, stats, read_tool, rerunnable)},
             ensure_ascii=False,
             default=str,
         )
@@ -368,9 +383,14 @@ def compact_items(
     budget: ContextBudget,
     fixed_text: str,
     read_tool_for: Callable[[str], str | None] | None = None,
+    rerunnable: Callable[[str], bool] | None = None,
     max_input_tokens: int | None = None,
 ) -> CompactionResult:
-    """入力の項目を予算に収める（元の項目は変えない。収まらなければ縮められるだけ縮めて返す）。"""
+    """入力の項目を予算に収める（元の項目は変えない。収まらなければ縮められるだけ縮めて返す）。
+
+    `read_tool_for` はツールの名前 → 本文を読み直すツール、`rerunnable` はツールの名前 → 同じ
+    ツールを呼び直しても副作用が無いか（無ければどのツールも呼び直しを案内しない）。
+    """
     budget_tokens = budget.input_tokens(max_input_tokens)
     fixed_tokens = budget.estimate(fixed_text)
     sized = [_as_dict(item) for item in items]
@@ -405,7 +425,8 @@ def compact_items(
         call_id = str(item.get("call_id") or "")
         name = names.get(call_id, "")
         read_tool = read_tool_for(name) if read_tool_for is not None and name else None
-        shrunk = compact_output(output, level, read_tool=read_tool)
+        safe_to_rerun = bool(name) and rerunnable is not None and rerunnable(name)
+        shrunk = compact_output(output, level, read_tool=read_tool, rerunnable=safe_to_rerun)
         if shrunk == output:
             return
         compacted[index] = {**item, "output": shrunk}
