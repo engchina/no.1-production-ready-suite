@@ -1,4 +1,5 @@
 import { expect, type Page, type Route, test } from "./fixtures/test";
+import { findClippedPlaceholders } from "../../../platform/packages/ui/e2e/layout-checks";
 import { expectNoPageOverflow, expectSearchablePanelFits, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 // 業務ガイド（#1237）: 検索・回答プロファイルの知識の「業務ガイド」タブ。
@@ -112,6 +113,9 @@ class SupportGuideApi {
   /** 次の下書きの保存を 409 にする（ほかの人が先に保存した）。 */
   conflictNext = false;
   requests: { method: string; path: string; body: unknown }[] = [];
+  /** 継承するシステム設定の窓口と、プロファイルの保存済みの窓口の上書き（#2683）。 */
+  inheritedContact = { enabled: true, contact: "窓口 A" };
+  contactOverride = "";
   /** 下書きで試したとき、この下書きのガイドで答えたか（#1288）。 */
   tryUsesDraft = true;
   /** 下書きで試す応答を遅らせる時間（ms。処理中の表示を確かめる）。 */
@@ -477,16 +481,23 @@ class SupportGuideApi {
     if (path.endsWith("/approved-faq")) {
       return route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", enabled: true, records: [] }) });
     }
-    if (path.endsWith("/bv-1")) return route.fulfill({ json: envelope(profileDetail) });
+    // 継承するシステム設定の窓口（#2683）。
+    if (path.endsWith("/inherited-contact")) return route.fulfill({ json: envelope(this.inheritedContact) });
+    if (path.endsWith("/bv-1")) {
+      return route.fulfill({
+        json: envelope({ ...profileDetail, config: { ...profileDetail.config, contact_override: this.contactOverride } }),
+      });
+    }
     return route.fulfill({
       json: envelope({ items: [profileSummary], total: 1, limit: 50, offset: 0, has_next: false }),
     });
   }
 }
 
-async function openSupportGuides(page: Page, guides: Guide[] = []) {
+async function openSupportGuides(page: Page, guides: Guide[] = [], setup?: (api: SupportGuideApi) => void) {
   const api = new SupportGuideApi();
   api.guides = guides;
+  setup?.(api);
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/knowledge-bases**", (route) =>
@@ -1072,4 +1083,74 @@ test("取り込みの確認で、同じ名前の既存のガイドとの違い�
   await expect(panel.getByRole("button", { name: "取り込む" })).toBeEnabled();
   await expectNoPageOverflow(page);
   await panel.screenshot({ path: testInfo.outputPath("support-guide-import-diff.png") });
+});
+
+// #2683: 引き継ぎ先が空のときに継承する窓口（プロファイルの上書き、無ければシステム設定）と、有効な窓口・同じ値の案内。
+test("引き継ぎ先は継承する窓口を placeholder で示し、有効な窓口と出どころを出す", { tag: "@responsive" }, async ({
+  page,
+}, testInfo) => {
+  await openSupportGuides(page);
+  await page.getByRole("button", { name: "新しい業務ガイド" }).click();
+  const editor = page.getByTestId("support-guide-editor");
+  const contact = editor.getByRole("textbox", { name: "引き継ぎ先（窓口の名前）" });
+  const effective = editor.getByTestId("support-guide-handoff-contact-effective");
+  const same = editor.getByTestId("support-guide-handoff-contact-same");
+
+  // 空ならシステム設定の窓口を継承する（値は欄にコピーしない）。
+  await expect(contact).toHaveValue("");
+  await expect(contact).toHaveAttribute("placeholder", "未設定（窓口 A を継承）");
+  await expect(effective).toHaveText(
+    "引き継ぎのときの窓口: 窓口 A（システム設定の窓口を継承）。回答の本文は「担当の窓口」と案内し、回答の注意書きでこの窓口を案内します。",
+  );
+  await expect(contact).toHaveAccessibleDescription(/引き継ぎのときの窓口: 窓口 A/);
+  expect(await findClippedPlaceholders(page)).toEqual([]);
+  await expect(same).toHaveCount(0);
+
+  // 継承する窓口と同じ値は、作業を止めずに案内する。
+  await contact.fill("窓口 A");
+  await expect(same).toHaveText("システム設定と同じ窓口です。空にしても、回答の注意書きで同じ窓口を案内します。");
+  await expect(editor.getByRole("button", { name: "保存", exact: true })).toBeEnabled();
+
+  // ガイドの窓口は回答の本文で案内し、注意書きには窓口を出さない。
+  await contact.fill("窓口 C");
+  await expect(effective).toHaveText(
+    "引き継ぎのときの窓口: 窓口 C（この業務ガイド）。回答の本文でこの窓口を案内し、回答の注意書きには窓口を出しません。",
+  );
+  await expect(same).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  // 欄（ラベル・入力・補足）だけを残す。
+  await contact
+    .locator("xpath=ancestor::div[.//p][1]")
+    .screenshot({ path: testInfo.outputPath("support-guide-handoff-contact.png") });
+});
+
+test("引き継ぎ先はプロファイルの窓口の上書きを継承する", async ({ page }) => {
+  await openSupportGuides(page, [], (api) => {
+    api.contactOverride = "窓口 B";
+  });
+  await page.getByRole("button", { name: "新しい業務ガイド" }).click();
+  const editor = page.getByTestId("support-guide-editor");
+  const contact = editor.getByRole("textbox", { name: "引き継ぎ先（窓口の名前）" });
+  await expect(contact).toHaveAttribute("placeholder", "未設定（窓口 B を継承）");
+  await expect(editor.getByTestId("support-guide-handoff-contact-effective")).toContainText(
+    "窓口 B（プロファイルの窓口の上書きを継承）",
+  );
+  await contact.fill("窓口 B");
+  await expect(editor.getByTestId("support-guide-handoff-contact-same")).toHaveText(
+    "プロファイルの窓口の上書きと同じ窓口です。空にしても、回答の注意書きで同じ窓口を案内します。",
+  );
+});
+
+test("回答の注意書きが無効なら、引き継ぎ先が空のときは窓口の案内なしと示す", async ({ page }) => {
+  await openSupportGuides(page, [], (api) => {
+    api.inheritedContact = { enabled: false, contact: "" };
+    api.contactOverride = "窓口 B";
+  });
+  await page.getByRole("button", { name: "新しい業務ガイド" }).click();
+  const editor = page.getByTestId("support-guide-editor");
+  const contact = editor.getByRole("textbox", { name: "引き継ぎ先（窓口の名前）" });
+  await expect(contact).toHaveAttribute("placeholder", "未設定（窓口の案内なし）");
+  await expect(editor.getByTestId("support-guide-handoff-contact-effective")).toHaveText(
+    "引き継ぎのときの窓口: なし。回答の本文は「担当の窓口」と案内します（システム設定で回答の注意書きが無効のため、窓口の案内を出しません）。",
+  );
 });

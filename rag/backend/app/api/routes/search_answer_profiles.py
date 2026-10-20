@@ -16,6 +16,7 @@ from app.schemas.common import ApiResponse, Page
 from app.schemas.search_answer_profile import (
     EntityIndexCoverageData,
     EntityIndexCoverageRequest,
+    InheritedAnswerContactData,
     SearchAnswerProfileCreateRequest,
     SearchAnswerProfileDetail,
     SearchAnswerProfileStatus,
@@ -88,6 +89,20 @@ async def entity_index_coverage(
 
     count = await EntityStore(OracleClient()).count_entity_documents(request.knowledge_base_ids)
     return ApiResponse(data=EntityIndexCoverageData(document_count=count))
+
+
+@router.get("/inherited-contact", response_model=ApiResponse[InheritedAnswerContactData])
+async def inherited_answer_contact() -> ApiResponse[InheritedAnswerContactData]:
+    """プロファイルの窓口の上書きが空のときに継承する、システム設定の窓口（読み取りだけ。#2683）。
+
+    回答の注意書きの設定 API（``/settings/answer-notice``）は運用設定の権限なので、プロファイルの
+    画面の権限で窓口だけを読む。値は回答に使うものと同じ（``current_answer_notice``）。
+    ``/{search_answer_profile_id}`` より先に登録する（id と取り違えない）。
+    """
+    from app.rag.answer_notice import inherited_answer_notice_contact
+
+    enabled, contact = inherited_answer_notice_contact()
+    return ApiResponse(data=InheritedAnswerContactData(enabled=enabled, contact=contact))
 
 
 @router.get("/{search_answer_profile_id}", response_model=ApiResponse[SearchAnswerProfileDetail])

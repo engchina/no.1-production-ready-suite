@@ -100,6 +100,7 @@ import {
 
 import { SupportGuideContentView } from "./SupportGuideContentView";
 import { SupportGuideDraftTry } from "./SupportGuideDraftTry";
+import { SupportGuideHandoffContactField } from "./SupportGuideHandoffContactField";
 import { SupportGuideIssueList } from "./SupportGuideIssueList";
 
 function options<T extends string>(values: readonly T[], prefix: string): SelectFieldOption<T>[] {
@@ -1258,13 +1259,12 @@ function SupportGuideForm({
               rows={3}
               onChange={(event) => update({ handoffConditions: event.target.value })}
             />
-            <TextField
+            {/* 空のときに継承する窓口と、引き継ぎのときの有効な窓口を示す（#2683）。 */}
+            <SupportGuideHandoffContactField
               id={domId("handoff.contact")}
-              width="md"
-              label={t("supportGuides.field.handoffContact")}
+              searchAnswerProfileId={searchAnswerProfileId}
               value={form.handoffContact}
-              maxLength={200}
-              onChange={(event) => update({ handoffContact: event.target.value })}
+              onChange={(value) => update({ handoffContact: value })}
             />
           </FormGrid>
         </FormSection>

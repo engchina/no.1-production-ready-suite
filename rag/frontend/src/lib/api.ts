@@ -1134,6 +1134,15 @@ export interface KnowledgeBaseQueryConfig {
   support_guide_close_match_clarification_enabled?: boolean | null;
 }
 
+/**
+ * プロファイルの窓口の上書きと業務ガイドの引き継ぎ先が空のときに継承する、システム設定の窓口（#2683）。
+ * 回答の注意書きが無効なら `enabled: false`（窓口の案内を出さない）で、`contact` は空。
+ */
+export interface InheritedAnswerContactData {
+  enabled: boolean;
+  contact: string;
+}
+
 /** 参照するナレッジベースで実体の索引を持つ文書の数(#1388)。 */
 export interface EntityIndexCoverageData {
   document_count: number;
@@ -3588,6 +3597,9 @@ export const api = {
     request<SearchAnswerProfileDetail>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}`,
     ),
+  /** 継承するシステム設定の窓口（プロファイルの画面の権限で読む。#2683）。 */
+  getInheritedAnswerContact: () =>
+    request<InheritedAnswerContactData>("/api/search-answer-profiles/inherited-contact"),
   /** 参照するナレッジベースで実体の索引を持つ文書の数(拡張の開閉の案内。#1388)。 */
   entityIndexCoverage: (knowledgeBaseIds: string[]) =>
     request<EntityIndexCoverageData>(

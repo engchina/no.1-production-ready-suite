@@ -172,6 +172,7 @@ export const queryKeys = {
   searchAnswerProfile: (id: string) => ["search-answer-profiles", id] as const,
   entityIndexCoverage: (knowledgeBaseIds: readonly string[]) =>
     ["search-answer-profiles", "entity-index-coverage", ...knowledgeBaseIds] as const,
+  inheritedAnswerContact: () => ["search-answer-profiles", "inherited-contact"] as const,
   conversations: (params: {
     search_answer_profile_id?: string;
     limit?: number;
@@ -1219,6 +1220,18 @@ export function useEntityIndexCoverage(knowledgeBaseIds: readonly string[], enab
     queryKey: queryKeys.entityIndexCoverage(ids),
     queryFn: () => api.entityIndexCoverage(ids),
     enabled: enabled && ids.length > 0,
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * プロファイルの窓口の上書きと業務ガイドの引き継ぎ先が継承する、システム設定の窓口（#2683）。
+ * 空の欄の placeholder と「有効な窓口」の出どころに使う（値は入力欄にコピーしない）。
+ */
+export function useInheritedAnswerContact() {
+  return useQuery({
+    queryKey: queryKeys.inheritedAnswerContact(),
+    queryFn: () => api.getInheritedAnswerContact(),
     staleTime: 30_000,
   });
 }
