@@ -500,10 +500,15 @@ def test_annotate_cross_references_resolves_same_document_sections() -> None:
         _chunk(3, "申請日を書く。", "別紙1 申請書様式"),
         _chunk(4, "第9章を参照。", "第1章 総則"),
         _chunk(5, "要約。第3章を参照。", "第1章 総則", raptor_summary=True),
+        # 章節の要約・項目の値(派生の chunk。印の無い #2590 より前の chunk も。#2641)。
+        _chunk(6, "第1章 総則: 第3章を参照。", "第1章 総則", content_kind="section_summary"),
+        _chunk(7, "項目: 第3章を参照。", None, content_kind="field", extracted_field=True),
     ]
 
     annotated = annotate_cross_references(chunks, document_title="経費精算規程.pdf")
 
+    assert REFERENCE_TARGETS_KEY not in chunks[6].metadata
+    assert REFERENCE_TARGETS_KEY not in chunks[7].metadata
     assert annotated == 2
     first = reference_targets(chunks[0].metadata)
     assert [(t.label, t.section_path, t.resolved) for t in first] == [

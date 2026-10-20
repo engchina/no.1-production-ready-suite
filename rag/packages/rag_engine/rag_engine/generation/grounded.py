@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
@@ -2984,46 +2984,111 @@ GUIDE_STEP_REGENERABLE = frozenset({GUIDE_STEP_REFERENCE_ONLY, GUIDE_STEP_UNUSED
 _GUIDE_STEP_QUOTE_MIN_CHARS = 12
 
 
+def _guide_words(value: str) -> set[str]:
+    """手順の題名・手がかりと根拠の本文・引用を照らす語（漢字・カタカナ・英数字の 2 文字組。#2649）。"""
+    return {w[i : i + 2] for w in check_cues().claim_word.findall(fold_width(value or "")) for i in range(len(w) - 1)}
+
+
+def _guide_step_anchor(words: set[str], step_spans: Sequence[dict]) -> int:
+    """手順の根拠の文のうち、手順の語を最も多く含む文の語の数（手順の主の操作の文。#2649）。"""
+    return max(
+        (
+            len(words & _guide_words(sentence))
+            for span in step_spans
+            for sentence in check_cues().sentence_split.split(str(span.get("text") or ""))
+        ),
+        default=0,
+    )
+
+
 def guide_step_coverage(
     guide_steps: Sequence[tuple[str, str, Sequence[str]]],
     checked: Sequence[CheckedItem],
     spans: Sequence[dict],
     optional: Sequence[str] = (),
+    step_terms: Mapping[str, Sequence[str]] | None = None,
 ) -> list[dict[str, Any]]:
-    """業務ガイドの手順ごとの充足（#2491）。
+    """業務ガイドの手順ごとの充足（#2491・#2649）。
 
-    手順の根拠（手順ごとの検索で取った chunk）を引いた説明を公開していれば explained。同じ本文が別の chunk にも
+    手順の根拠（手順ごとの検索で取った chunk）を引いた item を手順の引用とする。同じ本文が別の chunk にも
     あるので、手順の根拠の本文と照合できる引用（``_GUIDE_STEP_QUOTE_MIN_CHARS`` 以上）も手順の根拠を引いたと数える。
-    引いた説明が原文のみ提示（検査・監査で降格）か適用未確認（unverified。「参考情報」の節に出る）だけなら
-    reference_only、根拠は回答の材料にあるが引いていなければ unused、材料に無ければ no_evidence。
+
+    1 つの item が複数の手順の引用になる（手順が根拠の chunk を共有する・同じ原文が別の手順の根拠にもある）と、
+    chunk の共通の一文（末尾の確定の操作など）だけで全手順を説明したことになる（#2649）。そこで、複数の手順の
+    引用になる item は、引用（原文）が手順の語（題名と ``step_terms`` の検索の手がかり）を、手順の根拠の中で
+    手順の語を最も多く含む文（手順の主の操作の文）と同じ数以上含むときだけ、その手順の item とする。手順の語が
+    根拠の文に 1 つも無い（語で照らせない）手順はこの条件を課さない。さらに 1 つの item は 1 つの手順の説明にだけ
+    数え（必須の手順を先に割り当てる）、同じ item を別の手順の説明に重ねない。
+
+    手順の item に公開できる説明（原文のみ提示でも適用未確認でもない）を割り当てられれば explained。手順の item が
+    原文のみ提示（検査・監査で降格）か適用未確認（unverified。「参考情報」の節に出る）だけなら reference_only、
+    根拠は回答の材料にあるが手順の説明を引いていなければ unused、材料に無ければ no_evidence。
     required は回答の充足で必須の手順か（``optional`` は条件が決まらない分岐の行き先とその後続）。
     """
     by_source: dict[str, list[dict]] = {}
     for span in spans:
         by_source.setdefault(str(span.get("source_id") or ""), []).append(span)
     optional_ids = set(optional)
-    coverage: list[dict[str, Any]] = []
-    for step_id, title, sources in guide_steps:
+    terms = step_terms or {}
+    step_spans: dict[str, list[dict]] = {}
+    cited: dict[str, list[int]] = {}
+    for step_id, _title, sources in guide_steps:
         source_ids = {str(source) for source in sources}
-        step_spans = [span for source in dict.fromkeys(source_ids) for span in by_source.get(source, ())]
-        cited = [
-            entry
-            for entry in checked
+        step_spans[step_id] = [span for source in dict.fromkeys(source_ids) for span in by_source.get(source, ())]
+        cited[step_id] = [
+            index
+            for index, entry in enumerate(checked)
             if entry.span
             and entry.item.kind != "gap"
             and (
                 str(entry.span.get("source_id") or "") in source_ids
                 or (
                     len(_compact(entry.item.quote)) >= _GUIDE_STEP_QUOTE_MIN_CHARS
-                    and any(quote_in_text(entry.item.quote, str(span.get("text") or "")) for span in step_spans)
+                    and any(quote_in_text(entry.item.quote, str(span.get("text") or "")) for span in step_spans[step_id])
                 )
             )
         ]
-        if any(not entry.quote_only and entry.item.applies != "unverified" for entry in cited):
+    steps_per_item: dict[int, int] = {}
+    for indexes in cited.values():
+        for index in indexes:
+            steps_per_item[index] = steps_per_item.get(index, 0) + 1
+    # 手順の item（index と、引用が含む手順の語の数）。語の数の多い順。
+    own: dict[str, list[tuple[int, int]]] = {}
+    for step_id, title, _sources in guide_steps:
+        words = _guide_words(" ".join((title, *terms.get(step_id, ()))))
+        anchor = _guide_step_anchor(words, step_spans[step_id])
+        scored = [(index, len(words & _guide_words(checked[index].item.quote))) for index in cited[step_id]]
+        own[step_id] = sorted(
+            ((index, score) for index, score in scored if steps_per_item[index] == 1 or anchor == 0 or score >= anchor),
+            key=lambda pair: -pair[1],
+        )
+
+    def publishable(index: int) -> bool:
+        return not checked[index].quote_only and checked[index].item.applies != "unverified"
+
+    # 公開できる item を手順に 1 対 1 で割り当てる（増加路による最大の割り当て。必須の手順を先に割り当てる）。
+    assigned: dict[int, str] = {}
+
+    def assign(step_id: str, seen: set[int]) -> bool:
+        for index, _score in own[step_id]:
+            if index in seen or not publishable(index):
+                continue
+            seen.add(index)
+            if index not in assigned or assign(assigned[index], seen):
+                assigned[index] = step_id
+                return True
+        return False
+
+    for step_id in sorted((step[0] for step in guide_steps), key=lambda step_id: step_id in optional_ids):
+        assign(step_id, set())
+    explained = set(assigned.values())
+    coverage: list[dict[str, Any]] = []
+    for step_id, title, _sources in guide_steps:
+        if step_id in explained:
             status = GUIDE_STEP_EXPLAINED
-        elif cited:
+        elif any(not publishable(index) for index, _score in own[step_id]):
             status = GUIDE_STEP_REFERENCE_ONLY
-        elif step_spans:
+        elif step_spans[step_id]:
             status = GUIDE_STEP_UNUSED
         else:
             status = GUIDE_STEP_NO_EVIDENCE
@@ -3033,7 +3098,9 @@ def guide_step_coverage(
                 "title": title,
                 "required": step_id not in optional_ids,
                 "status": status,
-                "evidence_refs": [{"evidence_id": span["evidence_id"], "text": str(span.get("text") or "")[:80]} for span in step_spans],
+                "evidence_refs": [
+                    {"evidence_id": span["evidence_id"], "text": str(span.get("text") or "")[:80]} for span in step_spans[step_id]
+                ],
             }
         )
     return coverage
@@ -3154,6 +3221,7 @@ def run_round(
     compact_audit_reasons: bool = False,
     guide_steps: Sequence[tuple[str, str, Sequence[str]]] = (),
     guide_optional_steps: Sequence[str] = (),
+    guide_step_terms: Mapping[str, Sequence[str]] | None = None,
 ) -> Round:
     """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -3166,7 +3234,8 @@ def run_round(
     監査は ``audit_settings``（監査の推論の量を反映した設定。#1528）で呼ぶ。None は生成と同じ ``settings``。
     ``compact_audit_reasons`` は監査に通った判定の reason を空にさせる（#1912。`audit_system_prompt`）。
     ``guide_steps`` は業務ガイドの手順ごとの根拠（#2395）。監査に手順と根拠の対応を渡し、手順ごとの充足
-    （`guide_step_coverage`。#2491）を round に持つ。``guide_optional_steps`` は充足で必須に数えない手順の id。
+    （`guide_step_coverage`。#2491）を round に持つ。``guide_optional_steps`` は充足で必須に数えない手順の id、
+    ``guide_step_terms`` は手順ごとの検索の手がかり（共有の根拠の item を手順に対応付ける語。#2649）。
     """
     audit_settings = settings if audit_settings is None else audit_settings
     audit_system = audit_system_prompt(compact_reasons=compact_audit_reasons)
@@ -3368,7 +3437,7 @@ def run_round(
         audit_cut=audit_cut,
         timing=timing,
         applications=applications,
-        guide_steps=guide_step_coverage(guide_steps, checked, spans, guide_optional_steps) if guide_steps else [],
+        guide_steps=guide_step_coverage(guide_steps, checked, spans, guide_optional_steps, guide_step_terms) if guide_steps else [],
     )
 
 

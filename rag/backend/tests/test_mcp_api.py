@@ -1911,6 +1911,32 @@ def test_read_document_reads_whole_document_in_order_without_gaps(
     assert all(len(page["text"]) <= 14 for page in pages)
 
 
+def test_read_document_skips_derived_chunks(
+    auth: ProductionAuth, document_oracle: type[_DocumentOracle]
+) -> None:
+    """章節の要約・RAPTOR の要約・項目の値（派生の chunk）は本文として返さない（#2641）。"""
+    document_oracle.chunks = [
+        _doc_chunk(0, "総則の本文。", "規程 > 第1章 総則", 1),
+        # 本文の途中と末尾の派生の chunk（#2590 より前の印の無い要約も）。
+        _doc_chunk(1, "要約の文。", "規程 > 第1章 総則", 1, content_kind="section_summary"),
+        _doc_chunk(2, "承認の本文。", "規程 > 第3章 承認", 3),
+        _doc_chunk(3, "項目: 値", "", 3, content_kind="field", extracted_field=True),
+        _doc_chunk(4, "全体の要約。", "", 3, raptor_summary=True, content_kind="summary"),
+    ]
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+
+    for max_chars in (1000, 8):
+        pages = _read_all({"document_id": "d1", "max_chars": max_chars}, headers)
+        text = "".join(page["text"] for page in pages)
+        returned = [chunk["chunk_id"] for page in pages for chunk in page["chunks"]]
+        assert returned == ["d1:cs-1:0", "d1:cs-1:2"]
+        assert not any(part in text for part in ("要約の文。", "項目: 値", "全体の要約。"))
+        # 続きが派生の chunk だけなら、続きの cursor を返さない。
+        assert pages[-1]["next_cursor"] is None
+        assert pages[-1]["text"]
+
+
 def test_read_document_starts_from_page_section_or_locator(
     auth: ProductionAuth, document_oracle: type[_DocumentOracle]
 ) -> None:
