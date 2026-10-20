@@ -339,7 +339,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
 
 ### Compute・Nginx・HTTPS（3 製品で共通。#1316）
 
-- Compute は 1 台です。既定は **4 OCPU / 24 GB / boot volume 200 GB**。RAG の CPU の parser（Docling）が最も多く使うので、
+- Compute は 1 台です。既定は **4 OCPU / 32 GB / boot volume 200 GB**。RAG の CPU の parser（Docling）が最も多く使うので、
   文書の取込が多いときは OCPU とメモリを上げてください。
 - root の filesystem（`/`）は、最初の起動で boot volume いっぱいに広げます（#1984）。Oracle Linux 9 の image の root（LVM の
   `ocivolume-root`）は boot volume を大きくしても image の大きさ（約 30 GB）のままで、3 製品の Python の環境・RAG の parser・

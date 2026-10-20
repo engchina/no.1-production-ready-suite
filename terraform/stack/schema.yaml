@@ -641,7 +641,7 @@ variables:
     visible: true
     title: "Compute memory (GB)"
     description: "The RAG CPU document parser (Docling) loads ML models; raise it for heavy ingestion."
-    default: 24
+    default: 32
 
   instance_boot_volume_size:
     type: number
