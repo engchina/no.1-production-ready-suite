@@ -1,5 +1,8 @@
-"""会話の添付を文字と節・表へ解析する（3 製品共通。#2517）。
+"""会話の添付の入力の検査と、文字と節・表への解析（3 製品共通。#2517・#2652）。
 
+- アップロードは `inspect_attachment`（種類・magic・空・Office の zip の構造と展開の上限）だけを
+  行い、本文の解析・OCR・Vision は呼ばない（#2652）。解析は送信した後に読むときに
+  `parse_document` / 画像の読み取りで行う（`service.ChatAttachmentService.ensure_parsed`）。
 - 種類は拡張子と先頭の bytes（magic）の両方で決め、合わなければ 415。旧形式の binary
   （`.doc` / `.xls` / `.ppt`）と、ここに無い形式は受けない。
 - PDF（`pypdf`）は 1 頁 = 1 節、Word は見出しの段落で節に分け、PowerPoint は 1 スライド = 1 節。
@@ -9,7 +12,9 @@
   1 シートの複数の表は表ごとのシートにする。行と節には元の行番号・セル範囲を持たせる。
 - Office は zip と XML（`defusedxml`）で読み、マクロ（`vbaProject.bin` など）は読まず実行しない
   （警告 `macros_not_executed`）。展開の合計・部分の大きさ・件数に上限を掛ける（zip bomb）。
-- 画像は製品が渡す読み取りの関数（既定の Vision モデル）で文にする。
+- 画像は製品が渡す読み取りの関数（既定の Vision モデル）で文にする（送信した後。結果は汎用の
+  文字の抽出として、原本の hash・指示の版・モデルで再利用する）。
+- 内容が無い（文字の無い PDF・空の表など）ことは失敗にせず、空の結果（警告 `no_content`）にする。
 
 製品の解析（RAG の `rag_parser_core`・前処理のサービス）は使わない（製品同士は依存しない。
 Issue #2517「依存の向き」）。Excel は platform の共通の読み方を使う。
@@ -18,6 +23,7 @@ Issue #2517「依存の向き」）。Excel は platform の共通の読み方�
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import posixpath
 import re
@@ -66,8 +72,23 @@ IMAGE_READING_PROMPT: Final = (
     "読み取れない部分は読み取れないと書き、推測で補わないでください。"
 )
 
+# 画像の読み取りの指示の版（指示を変えたら読み取り直す。#2652）。
+IMAGE_READING_VERSION: Final = hashlib.sha256(IMAGE_READING_PROMPT.encode()).hexdigest()[:12]
+
+# 解析の版（出力が変わる変更をしたら上げる。上げると送信済みの添付も読むときに解析し直す。#2652）。
+DOCUMENT_PARSER_VERSIONS: Final[dict[str, int]] = {
+    "pdf": 2,
+    "word": 2,
+    "powerpoint": 2,
+    "excel": EXCEL_PARSER_VERSION,
+    "csv": 2,
+    "text": 2,
+}
+
 # 警告（`ParsedAttachment.warnings`。画面とツールの結果に出す）。
 WARNING_MACROS_NOT_EXECUTED: Final = "macros_not_executed"
+# 解析できたが、読める内容（文字・表の行）が無い（失敗とは区別する。#2652）。
+WARNING_NO_CONTENT: Final = "no_content"
 WARNING_PDF_PAGE_WITHOUT_TEXT: Final = "pdf_page_without_text"
 WARNING_TEXT_TRUNCATED: Final = "text_truncated"
 WARNING_ROWS_TRUNCATED: Final = "rows_truncated"
@@ -127,9 +148,44 @@ _OFFICE_MAIN_PART: Final = {
 _MACRO_PART_RE = re.compile(r"(^|/)(vbaProject\.bin|vbaData\.xml)$", re.IGNORECASE)
 
 
-def accepted_extensions(*, image_enabled: bool) -> list[str]:
-    """受け付ける拡張子（画像を読み取れるモデルが無ければ画像を除く）。"""
-    return list(DOCUMENT_EXTENSIONS) + (list(IMAGE_EXTENSIONS) if image_enabled else [])
+def accepted_extensions() -> list[str]:
+    """受け付ける拡張子（画像は Vision モデルが無くても保存する。読み取りは送信の後。#2652）。"""
+    return list(DOCUMENT_EXTENSIONS) + list(IMAGE_EXTENSIONS)
+
+
+def _options_fingerprint() -> str:
+    """出力に影響する解析の設定（上限の定数）の fingerprint。"""
+    values = (
+        MAX_TEXT_CHARACTERS,
+        MAX_TABLE_ROWS,
+        MAX_TABLE_COLUMNS,
+        MAX_CELL_CHARACTERS,
+        MAX_PDF_PAGES,
+        MAX_SLIDES,
+        TEXT_SECTION_CHARACTERS,
+    )
+    return hashlib.sha256(repr(values).encode()).hexdigest()[:12]
+
+
+def document_parse_key(content_sha256: str, kind: ChatAttachmentKind) -> str:
+    """文書の解析の結果を再利用するキー（原本の hash・parser の版・解析の設定。#2652）。"""
+    return f"{content_sha256}:{kind}@{DOCUMENT_PARSER_VERSIONS[kind]}:{_options_fingerprint()}"
+
+
+def image_parse_key(content_sha256: str, model_id: str) -> str:
+    """画像の汎用の読み取り（文字の抽出）を再利用するキー（原本の hash・指示の版・モデル）。
+
+    質問に応じた画像の解釈はこのキーで再利用しない（原画像をモデルへ渡す。#2650・#2652）。
+    """
+    return f"{content_sha256}:image@{IMAGE_READING_VERSION}:{model_id}"
+
+
+def document_extractor(kind: ChatAttachmentKind) -> str:
+    return f"{kind}@{DOCUMENT_PARSER_VERSIONS[kind]}"
+
+
+def image_extractor(model_id: str) -> str:
+    return f"vision:{model_id}@{IMAGE_READING_VERSION}"
 
 
 def _unsupported(file_name: str) -> ChatAttachmentError:
@@ -186,26 +242,39 @@ def _image_magic_matches(media_type: str, data: bytes) -> bool:
     return False
 
 
-async def parse_attachment(
-    file_name: str, data: bytes, *, image_reader: ImageReader | None
-) -> tuple[_FormatSpec, ParsedAttachment]:
-    """種類を決めて解析する。画像は `image_reader` で文にする（無ければ 422）。"""
+def inspect_attachment(file_name: str, data: bytes) -> tuple[_FormatSpec, list[str]]:
+    """アップロードの入力の検査（#2652）。種類・magic・空と、Office の zip の構造・展開の上限。
+
+    本文・表・OCR の抽出はしない（parser・Vision を呼ばない）。返す警告はマクロの有無だけ。
+    """
     spec = detect_format(file_name, data)
-    if spec.kind == "image":
-        if image_reader is None:
-            raise ChatAttachmentError(
-                422,
-                "画像を読み取れるモデルが設定されていません。システム設定 › モデルで、"
-                "画像を読み取れるモデルを既定の Vision モデルにしてください。",
-                code="CHAT_ATTACHMENT_IMAGE_MODEL_MISSING",
-            )
-        text = (await image_reader(data, spec.media_type)).strip()
-        if not text:
-            raise _unreadable(file_name, "画像から内容を読み取れませんでした。")
-        return spec, ParsedAttachment(
-            sections=[ParsedSection(section_id="s1", title=file_name, text=text)]
-        )
-    return spec, parse_document(file_name, data, spec.kind)
+    warnings: list[str] = []
+    if spec.kind in _OFFICE_MAIN_PART:
+        with _open_office_zip(file_name, data, spec.kind) as (_office, found):
+            warnings.extend(found)
+    return spec, warnings
+
+
+async def read_image(
+    file_name: str, data: bytes, media_type: str, *, image_reader: ImageReader, model_id: str
+) -> ParsedAttachment:
+    """画像の汎用の読み取り（文字の抽出。送信した後に、読むときだけ呼ぶ。#2652）。"""
+    text = _clean((await image_reader(data, media_type)) or "")
+    extractor = image_extractor(model_id)
+    if not text:
+        return ParsedAttachment(warnings=[WARNING_NO_CONTENT], extractor=extractor)
+    return ParsedAttachment(
+        sections=[ParsedSection(section_id="s1", title=file_name, text=text)], extractor=extractor
+    )
+
+
+def image_model_missing() -> ChatAttachmentError:
+    return ChatAttachmentError(
+        422,
+        "画像を読み取れるモデルが設定されていません。システム設定 › モデルで、"
+        "画像を読み取れるモデルを既定の Vision モデルにしてください。",
+        code="CHAT_ATTACHMENT_IMAGE_MODEL_MISSING",
+    )
 
 
 def parse_document(file_name: str, data: bytes, kind: ChatAttachmentKind) -> ParsedAttachment:
@@ -229,7 +298,11 @@ def parse_document(file_name: str, data: bytes, kind: ChatAttachmentKind) -> Par
         raise _unreadable(
             file_name, "ファイルが壊れているか、対応していない形式の可能性があります。"
         ) from exc
-    return _limit_text(parsed)
+    limited = _limit_text(parsed)
+    warnings = list(limited.warnings)
+    if limited.is_empty() and WARNING_NO_CONTENT not in warnings:
+        warnings.append(WARNING_NO_CONTENT)
+    return limited.model_copy(update={"warnings": warnings, "extractor": document_extractor(kind)})
 
 
 # ---- 共通 ----
@@ -299,7 +372,7 @@ _MARKDOWN_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 def _parse_text(file_name: str, data: bytes) -> ParsedAttachment:
     text = _clean(_decode_text(data))
     if not text:
-        raise _unreadable(file_name, "文字がありません。")
+        return ParsedAttachment()
     headings: list[tuple[str, int, list[str]]] = []
     preface: list[str] = []
     for line in text.split("\n"):
@@ -443,7 +516,7 @@ def _parse_csv(file_name: str, data: bytes) -> ParsedAttachment:
     reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
     sheet = _sheet_from_rows(posixpath.splitext(file_name)[0] or file_name, reader, budget)
     if sheet is None:
-        raise _unreadable(file_name, "表の行がありません。")
+        return ParsedAttachment(warnings=_table_warnings(budget))
     return ParsedAttachment(sheets=[sheet], warnings=_table_warnings(budget))
 
 
@@ -585,8 +658,6 @@ def _parse_xlsx(file_name: str, data: bytes) -> ParsedAttachment:
         )
         for index, (title, text, location, sheet_name) in enumerate(section_items, start=1)
     ]
-    if not sheets and not sections:
-        raise _unreadable(file_name, "表の行があるシートがありません。")
     return ParsedAttachment(
         sections=sections,
         sheets=sheets,
@@ -764,8 +835,6 @@ def _parse_docx(file_name: str, data: bytes) -> ParsedAttachment:
         for title, level, page, lines in items
         if _clean("\n".join(lines))
     )
-    if not sections:
-        raise _unreadable(file_name, "文字がありません。")
     return ParsedAttachment(sections=sections, warnings=warnings)
 
 
@@ -823,8 +892,6 @@ def _parse_pptx(file_name: str, data: bytes) -> ParsedAttachment:
                 items.append((label, 1, number, text))
     if len(slide_parts) > MAX_SLIDES:
         warnings.append(WARNING_PAGES_TRUNCATED)
-    if not items:
-        raise _unreadable(file_name, "文字のあるスライドがありません。")
     return ParsedAttachment(sections=_numbered_sections(items), warnings=warnings)
 
 
@@ -839,7 +906,8 @@ def _parse_pdf(file_name: str, data: bytes) -> ParsedAttachment:
         raise _unreadable(file_name, "パスワードを外してから添付してください。")
     warnings: list[str] = []
     items: list[tuple[str, int, int | None, str]] = []
-    empty_pages = 0
+    # 文字を取り出せなかった頁（画像だけの頁など）。黙って捨てず、頁の番号を結果に残す（#2652）。
+    empty_pages: list[int] = []
     for number, page in enumerate(reader.pages, start=1):
         if number > MAX_PDF_PAGES:
             warnings.append(WARNING_PAGES_TRUNCATED)
@@ -848,13 +916,9 @@ def _parse_pdf(file_name: str, data: bytes) -> ParsedAttachment:
         if text:
             items.append((f"p.{number}", 1, number, text))
         else:
-            empty_pages += 1
+            empty_pages.append(number)
     if empty_pages:
         warnings.append(WARNING_PDF_PAGE_WITHOUT_TEXT)
-    if not items:
-        raise _unreadable(
-            file_name,
-            "文字を取り出せませんでした（画像だけの PDF の可能性があります）。"
-            "ページを画像（PNG・JPEG）にして添付してください。",
-        )
-    return ParsedAttachment(sections=_numbered_sections(items), warnings=warnings)
+    return ParsedAttachment(
+        sections=_numbered_sections(items), warnings=warnings, pages_without_text=empty_pages
+    )

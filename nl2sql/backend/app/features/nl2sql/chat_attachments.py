@@ -9,6 +9,8 @@
   WITH 句を前に付ける。動的な `CREATE TABLE` はしない（共有の schema に利用者ごとの表を
   作らない・DeepSec の DATA USER に権限を足さない・#904 の接続の分け方を変えない）。
 - 添付の文書（PDF・Word など）: 質問に関係する節を、SQL の生成の参考として渡す。
+- 解析: 会話に送信した添付を、SQL の生成の材料にするときに共通のサービスで解析する（アップロード
+  では解析しない。結果は保存して再利用する。#2652）。読めない添付は材料に入れずに続ける。
 
 1 回のチャットの往復（ジョブ）の間は、会話の添付の表を context variable に置き
 （`use_attachment_context`）、SQL の検証（`validation_sql`）と実行
@@ -32,6 +34,7 @@ from typing import Any, Final
 from pr_system_settings.chat_attachments import (
     IMAGE_READING_PROMPT,
     ChatAttachmentService,
+    ChatAttachmentToolError,
 )
 from pr_system_settings.chat_attachments.models import TABULAR_KINDS, CellValue
 
@@ -51,13 +54,20 @@ _SERVICE: ChatAttachmentService | None = None
 _SERVICE_LOCK = threading.Lock()
 
 
-def _image_reader() -> Callable[[bytes, str], Awaitable[str]] | None:
-    """既定の Vision モデルで画像を文にする関数（Vision モデル・接続が無ければ None）。"""
+def _image_model_id() -> str | None:
+    """画像を読み取る既定の Vision モデル（モデル・接続が無ければ None）。"""
     from pr_system_settings.model import enterprise_ai_connection_for_model
 
     settings = get_settings()
     model_id = enterprise_ai_vision_model_id(settings)
     if not model_id or not enterprise_ai_connection_for_model(settings, model_id).is_configured():
+        return None
+    return str(model_id)
+
+
+def _image_reader() -> Callable[[bytes, str], Awaitable[str]] | None:
+    """既定の Vision モデルで画像を文にする関数（Vision モデル・接続が無ければ None）。"""
+    if not _image_model_id():
         return None
 
     async def read(data: bytes, media_type: str) -> str:
@@ -84,6 +94,7 @@ def chat_attachment_service() -> ChatAttachmentService:
                     product="nl2sql",
                     settings=get_settings,
                     image_reader=_image_reader,
+                    image_model_id=_image_model_id,
                     # 運用設定 › チャットの添付（製品ごと。既定は無効）。
                     enabled=security.chat_attachment_settings.enabled,
                     settings_failure=security.chat_attachment_settings.failure,
@@ -239,7 +250,14 @@ def attachment_context(conversation_id: str | None, question: str = "") -> Attac
         tables: list[AttachmentTable] = []
         documents: list[tuple[str, str]] = []
         for record in toolset.records:
-            parsed = toolset.parsed(record.attachment_id)
+            try:
+                parsed = toolset.parsed(record.attachment_id)
+            except ChatAttachmentToolError as exc:
+                logger.warning(
+                    "nl2sql_chat_attachment_unreadable",
+                    extra={"attachment_id": record.attachment_id, "reason": str(exc)},
+                )
+                continue
             if record.kind in TABULAR_KINDS:
                 for sheet in parsed.sheets:
                     used: set[str] = set()

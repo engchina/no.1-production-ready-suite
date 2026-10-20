@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -138,6 +139,7 @@ def test_attach_and_send_binds_attachment_to_thread(setup: Setup) -> None:
             "file_name": "a.csv",
             "kind": "csv",
             "size_bytes": len(CSV),
+            "content_sha256": hashlib.sha256(CSV).hexdigest(),
         }
     ]
     thread_id = run["thread_id"]
@@ -149,9 +151,13 @@ def test_attach_and_send_binds_attachment_to_thread(setup: Setup) -> None:
     # 会話の表示に添付が残る。
     thread = client.get(f"/api/threads/{thread_id}", headers=alice).json()["data"]
     assert thread["runs"][0]["attachments"][0]["file_name"] == "a.csv"
-    # 会話の続きの添付は、その会話に直接結び付く。
+    # 会話の続きの添付も、アップロードでは会話に結び付けない（送信で結び付ける。#2652）。
     second = _upload(alice, "b.csv", conversation_id=thread_id).json()["data"]
-    assert second["conversation_id"] == thread_id
+    assert (second["conversation_id"], second["parse_status"]) == (None, "pending")
+    in_thread = client.get(
+        "/api/chat-attachments", params={"conversation_id": thread_id}, headers=alice
+    ).json()["data"]["items"]
+    assert [i["attachment_id"] for i in in_thread] == [item["attachment_id"]]
 
 
 def test_other_users_cannot_use_attachment_or_thread(setup: Setup) -> None:
@@ -266,6 +272,53 @@ def test_run_reads_attachment_with_tools(setup: Setup, monkeypatch: MonkeyPatch)
     assert validation.content["reason"] == "attachment_evidence"
 
 
+def test_run_parses_sent_attachment_on_first_read_and_reuses(
+    setup: Setup, monkeypatch: MonkeyPatch
+) -> None:
+    """アップロードでは解析せず、Run のツールが初めて読むときに 1 回だけ解析する（#2652）。"""
+    from pr_system_settings.chat_attachments import parsing
+
+    parsed: list[str] = []
+    original = parsing._parse_csv
+
+    def counted(*args: Any) -> Any:
+        parsed.append(args[0])
+        return original(*args)
+
+    monkeypatch.setattr(parsing, "_parse_csv", counted)
+    unsent = asyncio.run(
+        setup.service.upload(_Principal(setup.alice), file_name="unsent.csv", data=CSV)
+    )
+    run_id, attachment_id = _run_with_attachment(setup)
+    assert parsed == []
+    _script(
+        monkeypatch,
+        [function_call("chat_attachment_list", {}, call_id="call-1")],
+        [
+            function_call(
+                "chat_attachment_read_rows",
+                {"attachment_id": attachment_id, "sheet": "a", "start_row": 1, "limit": 10},
+                call_id="call-2",
+            )
+        ],
+        [assistant_message("品目乙の金額は 3400 です。")],
+    )
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    listed = run.steps[0].tool_result
+    assert listed is not None and listed.output is not None
+    [item] = listed.output["attachments"]
+    assert (item["attachment_id"], item["parse_status"]) == (attachment_id, "ready")
+    assert unsent.attachment_id not in str(listed.output)
+    assert parsed == ["a.csv"]
+    # 同じ会話の後続の質問では、保存した結果を再利用する。
+    assert setup.service.ensure_parsed(attachment_id).reused is True
+    assert parsed == ["a.csv"]
+
+
 def test_tools_and_index_only_for_runs_with_attachments(
     setup: Setup, monkeypatch: MonkeyPatch
 ) -> None:
@@ -287,7 +340,8 @@ def test_tools_and_index_only_for_runs_with_attachments(
         "chat_attachment_read_rows",
         "chat_attachment_find",
     } <= names
-    assert f"- a.csv（attachment_id={attachment_id}、種類=csv、シート「a」2 行）" in str(
+    # 索引は種類と解析の状態だけ（解析はツールが初めて読むとき。#2652）。
+    assert f"- a.csv（attachment_id={attachment_id}、種類=csv、未解析）" in str(
         sdk_agent.instructions
     )
     plain = builtin_runtime.build_sdk_agent(

@@ -147,7 +147,8 @@ PLATFORM_AUTH_DDL: tuple[str, ...] = (
     # だけ保持し、EXPIRES_AT を過ぎた行は添付の操作のたびに消す。OWNER_USER_UUID は会話の持ち主
     # （会話の前は添付した人）、UPLOADED_BY_USER_UUID は添付した人。CONVERSATION_ID は製品の
     # 会話の ID
-    # （最初の送信まで NULL）。PARSED_JSON は解析の本文、OUTLINE_JSON は節・シートの索引。
+    # （最初の送信まで NULL）。PARSED_JSON は解析の本文、OUTLINE_JSON は節・シートの索引と解析の
+    # 状態（`parse_state`。#2652。アップロードの時点の PARSED_JSON は空の結果）。
     """
     CREATE TABLE PLATFORM_CHAT_ATTACHMENTS (
         ATTACHMENT_ID VARCHAR2(36) NOT NULL,

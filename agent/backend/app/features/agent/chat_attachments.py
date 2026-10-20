@@ -3,10 +3,12 @@
 保存・解析・見え方・期限は platform の `pr_system_settings.chat_attachments`。Agent が持つのは:
 
 - 会話（thread）の持ち主の判定（添付の API の `conversation_owner`）。
-- 画像の読み取り（既定の Vision モデル。OCI Enterprise AI の Responses API）。
-- Run に渡すツール: 会話に添付があれば、その Run にだけ 4 つの添付のツール（`chat_attachment_list`
-  など）を Control Plane のツールとして渡す（`skill_reference_read` と同じ per-run のツール。
-  `tool_registry.invoke` のポリシー・監査を通す）。指示には添付の索引だけを入れる。
+- 画像の読み取り（既定の Vision モデル。OCI Enterprise AI の Responses API）。送信した後、ツールが
+  画像を初めて読むときに呼ぶ（アップロードでは呼ばない。#2652）。
+- Run に渡すツール: 会話に送信した添付があれば、その Run にだけ 4 つの添付のツール
+  （`chat_attachment_list` など）を Control Plane のツールとして渡す（`skill_reference_read` と
+  同じ per-run のツール。`tool_registry.invoke` のポリシー・監査を通す）。指示には添付の種類と
+  解析の状態の索引だけを入れ、文書はツールが初めて読むときに解析する（#2652）。
 """
 
 from __future__ import annotations
@@ -50,15 +52,22 @@ _SERVICE: ChatAttachmentService | None = None
 _SERVICE_LOCK = threading.Lock()
 
 
+def _image_model_id() -> str | None:
+    """画像を読み取る既定の Vision モデル（モデル・接続が無ければ None）。"""
+    settings = get_settings()
+    model_id = enterprise_ai_vision_model_id(settings)
+    if not model_id or not enterprise_ai_connection_for_model(settings, model_id).is_configured():
+        return None
+    return str(model_id)
+
+
 def _image_reader() -> Callable[[bytes, str], Awaitable[str]] | None:
     """既定の Vision モデルで画像を文にする関数（Vision モデル・接続が無ければ None）。"""
     settings = get_settings()
-    model_id = enterprise_ai_vision_model_id(settings)
+    model_id = _image_model_id()
     if not model_id:
         return None
     connection = enterprise_ai_connection_for_model(settings, model_id)
-    if not connection.is_configured():
-        return None
 
     async def read(data: bytes, media_type: str) -> str:
         from openai import AsyncOpenAI
@@ -110,6 +119,7 @@ def chat_attachment_service() -> ChatAttachmentService:
                     product="agent",
                     settings=get_settings,
                     image_reader=_image_reader,
+                    image_model_id=_image_model_id,
                     # 運用設定 › チャットの添付（製品ごと。既定は無効）。
                     enabled=security.chat_attachment_settings.enabled,
                     settings_failure=security.chat_attachment_settings.failure,

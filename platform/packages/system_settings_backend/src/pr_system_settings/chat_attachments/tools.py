@@ -1,9 +1,11 @@
 """会話の添付を読むツールの中核（3 製品共通。#2517）。
 
 名前と結果の形は Issue #2517 で固定した契約（後の「出力 schema・抽出→照合のテンプレート」が使う）。
-ツールは渡された会話の添付だけを読む（会話の権限の判定は製品が先に行う）。
+ツールは渡された会話の添付（送信した添付）だけを読む（会話の権限の判定は製品が先に行う）。
+添付は送信した後に初めて読むときに解析する（#2652。`service.ChatAttachmentService.ensure_parsed`）。
+一覧は各添付の解析の状態を返し、読めない添付（解析中・失敗・期限切れ）は理由を返す。
 
-- `chat_attachment_list`: 添付の索引（節・シート）。
+- `chat_attachment_list`: 添付の索引（節・シート）と解析の状態。
 - `chat_attachment_read_section`: 節の本文を `READ_SECTION_CHARACTERS` 文字ずつ。
 - `chat_attachment_read_rows`: シートの行を「列名 → 値」で `READ_ROWS_MAX` 行まで。
 - `chat_attachment_find`: 文字の一致で節と行を探す。
@@ -18,6 +20,7 @@ from typing import Any, Final
 
 from .models import (
     TABULAR_KINDS,
+    AttachmentReadResult,
     ChatAttachmentRecord,
     ParsedAttachment,
     ParsedSheet,
@@ -52,8 +55,8 @@ CHAT_ATTACHMENT_TOOL_SPECS: Final[tuple[ChatAttachmentToolSpec, ...]] = (
     ChatAttachmentToolSpec(
         name=LIST_TOOL_NAME,
         description=(
-            "この会話に利用者が添付したファイルの一覧と、各ファイルの節（section_id・見出し・頁・文字数）"
-            "と表のシート（列名・行数）を返す。本文は返さない。"
+            "この会話に利用者が添付したファイルの一覧と、各ファイルの解析の状態、節（section_id・見出し・"
+            "頁・文字数）と表のシート（列名・行数）を返す。本文は返さない。"
         ),
         input_schema={
             "type": "object",
@@ -148,6 +151,11 @@ class ChatAttachmentToolError(ValueError):
     """モデルが読んで呼び直せる、引数の誤り。"""
 
 
+# 解析の状態の表示（索引の行）。
+_STATUS_LABELS: Final = {"pending": "未解析", "parsing": "解析中", "failed": "解析に失敗"}
+# 画像から読み取った文の由来（#2652。原画像そのものではない）。
+IMAGE_TRANSCRIPTION_SOURCE: Final = "image_transcription"
+
 # Excel だけの索引の項目（#2544）。値の無い添付（Excel 以外・古い索引）では一覧に出さない。
 _EXCEL_SECTION_KEYS: Final = ("sheet",)
 _EXCEL_SHEET_KEYS: Final = ("layout", "source_sheet", "region")
@@ -194,17 +202,20 @@ def _str_argument(arguments: Mapping[str, Any], name: str) -> str:
 
 
 class ChatAttachmentToolset:
-    """会話の添付を読むツール（`records` はその会話の期限内の添付）。"""
+    """会話の添付を読むツール（`records` はその会話の期限内の送信した添付）。
+
+    `load` は添付を読めるようにする関数（未解析なら解析する。`ensure_parsed`）。
+    """
 
     def __init__(
         self,
         records: Sequence[ChatAttachmentRecord],
-        load_parsed: Callable[[str], ParsedAttachment | None],
+        load: Callable[[str], AttachmentReadResult],
     ) -> None:
         self._records = {record.attachment_id: record for record in records}
         self._order = [record.attachment_id for record in records]
-        self._load_parsed = load_parsed
-        self._parsed: dict[str, ParsedAttachment] = {}
+        self._load = load
+        self._ready: dict[str, AttachmentReadResult] = {}
 
     @property
     def records(self) -> list[ChatAttachmentRecord]:
@@ -213,19 +224,28 @@ class ChatAttachmentToolset:
     def __bool__(self) -> bool:
         return bool(self._order)
 
-    def parsed(self, attachment_id: str) -> ParsedAttachment:
+    def read(self, attachment_id: str) -> AttachmentReadResult:
+        """添付を読めるようにする（解析の結果。読めた結果はこのツールの間は覚える）。"""
         if attachment_id not in self._records:
             raise ChatAttachmentToolError(
                 "この会話に無い attachment_id です。"
                 "chat_attachment_list の attachment_id を指定してください。"
             )
-        cached = self._parsed.get(attachment_id)
-        if cached is None:
-            loaded = self._load_parsed(attachment_id)
-            if loaded is None:
-                raise ChatAttachmentToolError("添付ファイルの期限が切れたか、削除されています。")
-            cached = self._parsed[attachment_id] = loaded
-        return cached
+        cached = self._ready.get(attachment_id)
+        if cached is not None:
+            return cached
+        result = self._load(attachment_id)
+        if result.status == "ready" and result.parsed is not None:
+            self._ready[attachment_id] = result
+            if result.record is not None:
+                self._records[attachment_id] = result.record
+        return result
+
+    def parsed(self, attachment_id: str) -> ParsedAttachment:
+        result = self.read(attachment_id)
+        if result.status != "ready" or result.parsed is None:
+            raise ChatAttachmentToolError(_unreadable_message(result))
+        return result.parsed
 
     def call(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         if name == LIST_TOOL_NAME:
@@ -255,25 +275,38 @@ class ChatAttachmentToolset:
         raise ChatAttachmentToolError(f"{name} は添付のツールではありません。")
 
     def list_attachments(self) -> dict[str, Any]:
+        return {"attachments": [self._listed(attachment_id) for attachment_id in self._order]}
+
+    def _listed(self, attachment_id: str) -> dict[str, Any]:
+        result = self.read(attachment_id)
+        record = self._records[attachment_id]
+        item: dict[str, Any] = {
+            "attachment_id": record.attachment_id,
+            "file_name": record.file_name,
+            "kind": record.kind,
+            "size_bytes": record.size_bytes,
+            "parse_status": result.status,
+        }
+        if result.status != "ready" or result.parsed is None:
+            return {**item, "message": _unreadable_message(result)}
+        outline = result.parsed.outline()
+        if result.parsed.is_empty():
+            item["message"] = "読める文字・表の行がありません。"
+        if outline.pages_without_text:
+            item["pages_without_text"] = list(outline.pages_without_text)
+        if record.kind == "image":
+            item["content_source"] = IMAGE_TRANSCRIPTION_SOURCE
         return {
-            "attachments": [
-                {
-                    "attachment_id": record.attachment_id,
-                    "file_name": record.file_name,
-                    "kind": record.kind,
-                    "size_bytes": record.size_bytes,
-                    "warnings": list(record.outline.warnings),
-                    "sections": [
-                        _without_empty(section.model_dump(mode="json"), _EXCEL_SECTION_KEYS)
-                        for section in record.outline.sections
-                    ],
-                    "sheets": [
-                        _without_empty(sheet.model_dump(mode="json"), _EXCEL_SHEET_KEYS)
-                        for sheet in record.outline.sheets
-                    ],
-                }
-                for record in self.records
-            ]
+            **item,
+            "warnings": list(outline.warnings),
+            "sections": [
+                _without_empty(section.model_dump(mode="json"), _EXCEL_SECTION_KEYS)
+                for section in outline.sections
+            ],
+            "sheets": [
+                _without_empty(sheet.model_dump(mode="json"), _EXCEL_SHEET_KEYS)
+                for sheet in outline.sheets
+            ],
         }
 
     def read_section(self, attachment_id: str, section_id: str, offset: int) -> dict[str, Any]:
@@ -294,6 +327,11 @@ class ChatAttachmentToolset:
             "page": section.page,
             **({"sheet": section.sheet} if section.sheet else {}),
             **_location_fields(section.location),
+            **(
+                {"content_source": IMAGE_TRANSCRIPTION_SOURCE}
+                if self._records[attachment_id].kind == "image"
+                else {}
+            ),
             "content": content,
             "next_offset": end if end < len(section.text) else None,
         }
@@ -340,8 +378,21 @@ class ChatAttachmentToolset:
         needle = _normalized(text)
         targets = [attachment_id] if attachment_id else list(self._order)
         matches: list[dict[str, Any]] = []
+        unreadable: list[dict[str, Any]] = []
         truncated = False
         for target in targets:
+            if attachment_id is None:
+                result = self.read(target)
+                if result.status != "ready":
+                    unreadable.append(
+                        {
+                            "attachment_id": target,
+                            "file_name": self._records[target].file_name,
+                            "parse_status": result.status,
+                            "message": _unreadable_message(result),
+                        }
+                    )
+                    continue
             parsed = self.parsed(target)
             file_name = self._records[target].file_name
             for section in parsed.sections:
@@ -393,19 +444,34 @@ class ChatAttachmentToolset:
                     break
             if truncated:
                 break
-        return {"matches": matches, "truncated": truncated}
+        found: dict[str, Any] = {"matches": matches, "truncated": truncated}
+        if unreadable:
+            found["unreadable"] = unreadable
+        return found
 
     def index_lines(self) -> list[str]:
         """モデルへ渡す索引（1 つの添付 = 1 行。本文は入れない）。"""
         lines: list[str] = []
         for record in self.records:
             parts = [f"attachment_id={record.attachment_id}", f"種類={record.kind}"]
-            if record.outline.sections:
+            status = record.outline.parse_status
+            if status != "ready":
+                parts.append(_STATUS_LABELS.get(status, status))
+            elif record.outline.sections:
                 parts.append(f"節 {len(record.outline.sections)}")
             for sheet in record.outline.sheets:
                 parts.append(f"シート「{sheet.sheet}」{sheet.row_count} 行")
             lines.append(f"- {record.file_name}（{'、'.join(parts)}）")
         return lines
+
+
+def _unreadable_message(result: AttachmentReadResult) -> str:
+    """読めない添付の理由（モデルが読んで次の手を決める文）。"""
+    if result.message:
+        return result.message
+    if result.status == "missing":
+        return "添付ファイルの期限が切れたか、削除されています。"
+    return "添付ファイルを読めませんでした。"
 
 
 def _snippet(text: str, position: int, length: int) -> str:
