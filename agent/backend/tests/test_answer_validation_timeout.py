@@ -117,7 +117,7 @@ def test_partial_validation_run_keeps_the_unfinished_answer(
 
     run, _ = _searched_run(monkeypatch)
 
-    assert run_answer_text(run).startswith(f"{ANSWER}\n\n**{UNVERIFIED_HEADING}**")
+    assert (run_answer_text(run) or "").startswith(f"{ANSWER}\n\n**{UNVERIFIED_HEADING}**")
     content = _validation(run)
     assert content["status"] == "completed"
     assert content["result"]["status"] == "partial"
