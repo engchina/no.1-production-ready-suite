@@ -276,6 +276,21 @@ def _saved_clarification(message: StoredMessage) -> ChatClarificationRecord | No
     return None
 
 
+def _guide_user_context(messages: list[StoredMessage]) -> list[str]:
+    """利用者の発話と確認に答えた値を、ガイドの条件認識へ引き継ぐ。"""
+    contexts: list[str] = []
+    for message in [item for item in messages if item.role == "USER"][-GUIDE_CONTEXT_TURNS:]:
+        lines = [message.content]
+        record = _saved_clarification(message)
+        if record is not None and record.outcome == "answered":
+            for entry in record.entries:
+                values = [*entry.selected, *([entry.other_text] if entry.other_text else [])]
+                if values:
+                    lines.append(f"確認の質問: {entry.prompt}\n利用者の答え: {'、'.join(values)}")
+        contexts.append("\n".join(lines))
+    return contexts
+
+
 def _saved_progress_events(message: StoredMessage) -> list[ChatProgressEvent] | None:
     """保存した処理の段階のイベント（#1359）。旧形式（段階の snapshot）・形の違う要素は捨てる。"""
     if message.progress is None:
@@ -689,9 +704,7 @@ async def _prepare_chat_turn(
         base_request,
         settings,
         # 業務ガイドは前の発話も含めて選ぶ（短い返答だけで照合が外れないように。#1238）。
-        guide_context=[message.content for message in prior_messages if message.role == "USER"][
-            -GUIDE_CONTEXT_TURNS:
-        ],
+        guide_context=_guide_user_context(prior_messages),
         interactive=True,
     )
     guardrails = GuardrailPolicy(effective_settings)

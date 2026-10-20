@@ -270,3 +270,42 @@ async def test_retrieval_without_answer_does_not_add_model_calls(
         get_settings(),
     )
     assert not calls
+
+
+async def test_chat_carries_the_users_confirmed_text_into_the_next_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    from app.api.routes.chat import _guide_user_context
+    from app.clients.oracle import StoredMessage
+
+    def message(role: str, content: str, *, outcome: str = "answered") -> StoredMessage:
+        return StoredMessage(
+            id=role,
+            conversation_id="conv-a",
+            role=role,
+            content=content,
+            created_at=datetime.now(UTC),
+            clarification={
+                "outcome": outcome,
+                "entries": [{"prompt": "対象の資料と項目は？", "other_text": "資料 A の項目 B"}],
+            },
+        )
+
+    contexts = _guide_user_context(
+        [
+            message("USER", "資料を確認したい"),
+            message("ASSISTANT", "資料 C の項目 D"),
+            message("USER", "後続の質問", outcome="skipped"),
+        ]
+    )
+    assert len(contexts) == 2
+    assert "資料 A の項目 B" in contexts[0]
+    assert "資料 A の項目 B" not in contexts[1]
+    assert "資料 C" not in "\n".join(contexts)
+    calls = stub(monkeypatch)
+    text = "\n".join([*contexts, "同じ資料を続けて確認したい"])
+    result = await recognition.resolve_text_conditions(matched(), text, get_settings())
+    assert isinstance(result, GuideMatch) and result.decision == "answer"
+    assert "利用者の答え" in calls[0][0]["question"]
