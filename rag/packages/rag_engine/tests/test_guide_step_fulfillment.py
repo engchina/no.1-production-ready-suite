@@ -454,6 +454,219 @@ class GuideStepSharedEvidenceAnswerTest(unittest.TestCase):
         self.assertEqual(result.envelope["outcome"], "answered")
 
 
+class StubEmbedder:
+    """決定論の embedding（#2649）。文に含まれる鍵で合成の vector を返し、呼び出しの入力を記録する。"""
+
+    def __init__(self, table, *, fail=False):
+        self.table = table
+        self.fail = fail
+        self.calls = []
+
+    def embed(self, texts, *, query=False):
+        self.calls.append(list(texts))
+        if self.fail:
+            raise RuntimeError("embedding unavailable")
+        return [self._vector(text) for text in texts]
+
+    def _vector(self, text):
+        for key, vector in self.table:
+            if key in text:
+                return list(vector)
+        raise AssertionError(f"unexpected text: {text}")
+
+
+# 手順の記述と根拠の文の合成の vector。手順 1 の主の操作・手順 2 の主の操作は各手順に近く、共通の末尾の操作は
+# 両手順に同じくらい近い。
+SENTENCE_VECTORS = (("設定 A の値", (1.0, 0.0, 0.3)), ("反映ボタンを押", (0.0, 1.0, 0.3)), ("保存ボタンを押", (0.5, 0.5, 1.0)))
+# 手順の題名・手がかりと根拠の言い回しが違う手順（手順の語が根拠の文に無い。手順 2 の手がかりは共通の文にだけ当たる）。
+REWORDED_GUIDE = (("s1", "値の登録", ("run:s",)), ("s2", "内容の確定", ("run:s",)))
+REWORDED_VECTORS = (("値の登録", (1.0, 0.0, 0.0)), ("内容の確定", (0.0, 1.0, 0.0)), *SENTENCE_VECTORS)
+# 手順 2 の語（ボタン）を主の操作の文と共通の文が同じ数だけ含む手順。
+TIED_GUIDE = (("s1", "設定 A を入力する", ("run:s",)), ("s2", "ボタンを押す", ("run:s",)))
+TIED_VECTORS = (("設定 A を入力", (1.0, 0.0, 0.0)), ("ボタンを押す", (0.0, 1.0, 0.0)), *SENTENCE_VECTORS)
+
+
+class GuideStepSemanticMatchTest(unittest.TestCase):
+    """語で決まらない共有の根拠の item を、意味の近さで手順に対応付ける（#2649）。"""
+
+    def setUp(self):
+        self.span = {"source_id": "run:s", "evidence_id": "e-s", "label": "E1", "text": SHARED}
+
+    def _entry(self, quote, *, quote_only=False):
+        entry = grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=quote, applies="matched"), span=self.span)
+        entry.quote_only = quote_only
+        return entry
+
+    def _statuses(self, steps, quotes, embedder=None, terms=(), semantics=None):
+        if semantics is None and embedder is not None:
+            semantics = grounded.GuideStepSemantics(embedder.embed)
+        checked = [self._entry(quote) for quote in quotes]
+        coverage = grounded.guide_step_coverage(steps, checked, [self.span], (), dict(terms), semantics)
+        return {step["step_id"]: step["status"] for step in coverage}
+
+    def test_reworded_steps_are_explained_by_meaning(self):
+        """手順の語が根拠に無くても、各手順の主の操作を説明した item で両手順を explained にする。"""
+        embedder = StubEmbedder(REWORDED_VECTORS)
+        for quotes in ((SHARED_A, SHARED_B, SHARED_END), (SHARED_END, SHARED_B, SHARED_A), (SHARED_A, SHARED_B)):
+            self.assertEqual(self._statuses(REWORDED_GUIDE, quotes, embedder), {"s1": "explained", "s2": "explained"})
+        # 手がかりが共通の文にだけ当たる（語の判定では主の操作の文が共通の文になる）手順も、意味で主の操作の文を決める。
+        terms = (("s2", ("保存ボタン",)),)
+        self.assertEqual(self._statuses(REWORDED_GUIDE, (SHARED_A, SHARED_B), terms=terms), {"s1": "explained", "s2": "unused"})
+        self.assertEqual(
+            self._statuses(REWORDED_GUIDE, (SHARED_A, SHARED_B), StubEmbedder(REWORDED_VECTORS), terms),
+            {"s1": "explained", "s2": "explained"},
+        )
+
+    def test_common_sentence_alone_explains_no_reworded_step(self):
+        """言い回しの違う手順でも、両手順に同じくらい近い共通の文だけの公開では説明済みにしない。"""
+        self.assertEqual(self._statuses(REWORDED_GUIDE, (SHARED_END,), StubEmbedder(REWORDED_VECTORS)), {"s1": "unused", "s2": "unused"})
+        # 一部分を引いた共通の文も同じ。
+        self.assertEqual(
+            self._statuses(REWORDED_GUIDE, ("保存ボタンを押して画面を閉じます。",), StubEmbedder(REWORDED_VECTORS)),
+            {"s1": "unused", "s2": "unused"},
+        )
+        # 主の操作が参考原文だけなら reference_only（共通の文の公開で補わない）。
+        checked = [self._entry(SHARED_A), self._entry(SHARED_B, quote_only=True), self._entry(SHARED_END)]
+        semantics = grounded.GuideStepSemantics(StubEmbedder(REWORDED_VECTORS).embed)
+        coverage = grounded.guide_step_coverage(REWORDED_GUIDE, checked, [self.span], (), {}, semantics)
+        self.assertEqual([step["status"] for step in coverage], ["explained", "reference_only"])
+
+    def test_common_sentence_with_as_many_step_words_is_not_counted(self):
+        """共通の文が主の操作の文と同じ数の手順の語を含んでも、共通の文を手順の説明に数えない。"""
+        # 語の判定だけでは、共通の文を手順 2 の説明に数えてしまう（Embedder の無い構成の従来の結果）。
+        self.assertEqual(self._statuses(TIED_GUIDE, (SHARED_A, SHARED_END)), {"s1": "explained", "s2": "explained"})
+        embedder = StubEmbedder(TIED_VECTORS)
+        self.assertEqual(self._statuses(TIED_GUIDE, (SHARED_A, SHARED_END), embedder), {"s1": "explained", "s2": "unused"})
+        self.assertEqual(self._statuses(TIED_GUIDE, (SHARED_A, SHARED_B), embedder), {"s1": "explained", "s2": "explained"})
+
+    def test_without_or_failing_embedder_falls_back_to_words(self):
+        """Embedder が無い・失敗したら、語の判定（直前の判定）と同じ結果に戻り、その回答では呼び直さない。"""
+        cases = [
+            (REWORDED_GUIDE, (SHARED_END,), ()),
+            (REWORDED_GUIDE, (SHARED_A, SHARED_B), (("s2", ("保存ボタン",)),)),
+            (TIED_GUIDE, (SHARED_A, SHARED_END), ()),
+            (SHARED_GUIDE, (SHARED_A, SHARED_END), SHARED_TERMS),
+        ]
+        failing = StubEmbedder(REWORDED_VECTORS, fail=True)
+        semantics = grounded.GuideStepSemantics(failing.embed)
+        for steps, quotes, terms in cases:
+            expected = self._statuses(steps, quotes, terms=terms)
+            self.assertEqual(self._statuses(steps, quotes, terms=terms, semantics=grounded.GuideStepSemantics()), expected)
+            self.assertEqual(self._statuses(steps, quotes, terms=terms, semantics=semantics), expected)
+        self.assertEqual(len(failing.calls), 1)
+        self.assertTrue(semantics.failed)
+        self.assertEqual(semantics.trace()["calls"], 1)
+        # 記述（題名・手がかり）の無い手順は意味で照らせないので、呼ばずに語の判定に戻る。
+        untitled = (("s1", "", ("run:s",)), REWORDED_GUIDE[1])
+        working = StubEmbedder(REWORDED_VECTORS)
+        self.assertEqual(self._statuses(untitled, (SHARED_END,), working), self._statuses(untitled, (SHARED_END,)))
+        self.assertEqual(working.calls, [])
+        # 数の合わない応答・零の vector も失敗として語の判定に戻る。
+        for broken in (lambda texts: [], lambda texts: [[0.0, 0.0, 0.0] for _ in texts]):
+            self.assertEqual(
+                self._statuses(REWORDED_GUIDE, (SHARED_END,), semantics=grounded.GuideStepSemantics(broken)),
+                self._statuses(REWORDED_GUIDE, (SHARED_END,)),
+            )
+
+    def test_embedding_only_for_undecided_shared_items_and_reused(self):
+        """embedding は語で決まらない共有の根拠の item があるときだけ呼び、同じ文は呼び直さない。"""
+        embedder = StubEmbedder(REWORDED_VECTORS)
+        semantics = grounded.GuideStepSemantics(embedder.embed)
+        # 根拠を共有しない手順。
+        spans = [
+            {"source_id": "run:a", "evidence_id": "ea", "label": "E1", "text": SHARED_A},
+            {"source_id": "run:b", "evidence_id": "eb", "label": "E2", "text": SHARED_B},
+        ]
+        steps = (("s1", "値の登録", ("run:a",)), ("s2", "内容の確定", ("run:b",)))
+        checked = [
+            grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=span["text"], applies="matched"), span=span)
+            for span in spans
+        ]
+        coverage = grounded.guide_step_coverage(steps, checked, spans, (), {}, semantics)
+        self.assertEqual([step["status"] for step in coverage], ["explained", "explained"])
+        # 根拠を共有しても、手順の語で決まる item。
+        self.assertEqual(self._statuses(SHARED_GUIDE, (SHARED_A, SHARED_B), terms=SHARED_TERMS, semantics=semantics)["s2"], "explained")
+        self.assertEqual(embedder.calls, [])
+        # 語で決まらない共有の item は 1 回で embedding にし、同じ文は再利用する（新しい引用だけを足す）。
+        self._statuses(REWORDED_GUIDE, (SHARED_A, SHARED_B), semantics=semantics)
+        self._statuses(REWORDED_GUIDE, (SHARED_B, SHARED_A, SHARED_END), semantics=semantics)
+        self._statuses(REWORDED_GUIDE, ("保存ボタンを押して画面を閉じます。",), semantics=semantics)
+        self.assertEqual(len(embedder.calls), 2)
+        self.assertEqual(embedder.calls[1], ["保存ボタンを押して画面を閉じます。"])
+        self.assertEqual(semantics.trace()["calls"], 2)
+
+
+class GuideStepSemanticAnswerTest(unittest.TestCase):
+    """回答の round と確定で embedding を再利用し、trace に呼び出しを残す（#2649）。"""
+
+    def test_embedding_is_reused_across_rounds(self):
+        ctx = _context(_record(0, SHARED, "設定画面", "run:s"))
+        knowledge = _knowledge(REWORDED_GUIDE)
+        (eid,) = _ids(ctx, knowledge).values()
+        a = item(eid, "設定画面で設定 A の値を入力します。", SHARED_A, request_id="Q1")
+        b = item(eid, "反映画面で反映ボタンを押して変更を反映します。", SHARED_B, request_id="Q1")
+        end = item(eid, "最後に保存ボタンを押して画面を閉じます。", SHARED_END, request_id="Q1")
+        model = FakeModel(
+            [draft(a, b, end)],
+            [
+                audit(
+                    (0, "supported", "matched", ""),
+                    (1, "supported", "not_applicable", ""),
+                    (2, "supported", "matched", ""),
+                    requests=[("Q1", "addressed")],
+                ),
+                audit(
+                    (0, "supported", "matched", ""),
+                    (1, "supported", "matched", ""),
+                    (2, "supported", "matched", ""),
+                    requests=[("Q1", "addressed")],
+                ),
+            ],
+        )
+        embedder = StubEmbedder(REWORDED_VECTORS)
+
+        def unused(*a, **k):
+            return (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
+        with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused, embedder=embedder)):
+            result = synthesize_grounded_answer(
+                QUESTION, ctx, get_settings(), image_prompt_mode="text_only", runtime_knowledge=knowledge
+            ).response
+
+        rounds = result.generation_trace["rounds"]
+        self.assertEqual(len(_drafts(model)), 2)
+        # 1 回目は手順 2 の主の操作が参考原文だけ（共通の文の公開で説明済みにしない）、2 回目に説明した。
+        self.assertEqual([step["status"] for step in rounds[0]["guide_steps"]], ["explained", "reference_only"])
+        self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["explained", "explained"])
+        self.assertEqual(result.envelope["outcome"], "answered")
+        # 同じ文の embedding は round と回答の確定で再利用する。
+        self.assertEqual(len(embedder.calls), 1)
+        self.assertEqual(result.generation_trace["guide_step_embedding"]["calls"], 1)
+        self.assertFalse(result.generation_trace["guide_step_embedding"]["failed"])
+
+    def test_no_embedding_trace_without_shared_evidence(self):
+        ctx, knowledge = _ab_context(), _knowledge(GUIDE)
+        eids = _ids(ctx, knowledge)
+        a = item(eids[STEP_A], "設定画面で設定 A の値を入力します。", STEP_A, request_id="Q1")
+        b = item(eids[STEP_B], "反映画面で反映ボタンを押して確定します。", STEP_B, request_id="Q1")
+        model = FakeModel(
+            [draft(a, b)], [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")])]
+        )
+        embedder = StubEmbedder(())
+
+        def unused(*a, **k):
+            return (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
+        with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused, embedder=embedder)):
+            result = synthesize_grounded_answer(
+                QUESTION, ctx, get_settings(), image_prompt_mode="text_only", runtime_knowledge=knowledge
+            ).response
+
+        self.assertEqual(embedder.calls, [])
+        self.assertNotIn("guide_step_embedding", result.generation_trace)
+        self.assertEqual(result.envelope["outcome"], "answered")
+
+
 class GuidePlanRequiredTest(unittest.TestCase):
     def test_required_flag_from_payload(self):
         plan = GuidePlan.from_payload(

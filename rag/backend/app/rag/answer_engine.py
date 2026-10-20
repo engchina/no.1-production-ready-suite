@@ -39,7 +39,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.deadline import check_deadline, current_deadline
@@ -944,6 +944,8 @@ class AnswerEngine:
             ),
             # 呼び出し元が検索文を短く言い換えたときの元の質問(#2261)。条の選択だけが使う。
             article_question=lambda: request.original_question,
+            # 業務ガイドの手順の充足を意味の近さで決める embedding(#2649)。検索と同じ Cohere Embed。
+            embedder=_LoopEmbedder(self._genai, loop),
         )
 
         def notify_step(name: str, outcome: str, elapsed: float, record: Mapping[str, Any]) -> None:
@@ -2497,6 +2499,24 @@ class AnswerEngine:
             return []
         ranked = await self._genai.rerank(query, documents, top_n or len(documents))
         return [RerankTextRank(index=index, relevance_score=score) for index, score in ranked]
+
+
+@dataclass(frozen=True)
+class _LoopEmbedder:
+    """回答の thread から event loop の OCI Generative AI の embedding を呼ぶ Embedder(#2649)。
+
+    ``rag_engine.ports.Embedder`` を満たす。業務ガイドの手順の充足で、根拠を共有する手順の
+    どれを item が説明したかを語で決められないときに使う。
+    """
+
+    genai: OciGenAiClient
+    loop: asyncio.AbstractEventLoop
+
+    def embed(self, texts: Sequence[str], *, query: bool = False) -> list[list[float]]:
+        input_type: Literal["SEARCH_QUERY", "SEARCH_DOCUMENT"] = (
+            "SEARCH_QUERY" if query else "SEARCH_DOCUMENT"
+        )
+        return _run_on_loop(lambda: self.genai.embed(list(texts), input_type=input_type), self.loop)
 
 
 def _run_on_loop[R](factory: Callable[[], Awaitable[R]], loop: asyncio.AbstractEventLoop) -> R:
