@@ -1118,6 +1118,14 @@ def _recipe_steps(
         ):
             # 次の工程が順番待ちなら、この工程の確認は済んでいる(#2026)。
             status = _STEP_SUCCEEDED
+        elif (
+            queued_index is not None
+            and index > queued_index
+            and status == DocumentRecipeStepStatus.FAILED
+        ):
+            # 失敗した工程より前の工程から再処理を投入した。後ろの工程は作り直すため、claim まで
+            # レシピ行に残る前回の失敗を出さない(#2687)。
+            status = _STEP_PENDING
         error_message: str | None = None
         if status == DocumentRecipeStepStatus.FAILED:
             # 通しジョブの失敗では失敗工程にジョブ行が無いことがあるため、

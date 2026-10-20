@@ -2018,6 +2018,144 @@ test("Embedding / 索引の失敗は保存済みの Chunk から索引を再実�
   });
 });
 
+// 失敗したレシピを再処理すると、レシピは worker が claim するまで前回の ERROR と本文を持つ。見出しが
+// 「〈工程〉の順番待ち」の間は本文にも前回の失敗を出さず、新しい job が失敗したら新しい本文を出す（#2687）。
+test("再処理の job が順番待ちの間は前回の失敗を出さず、また失敗したら新しい原因を出す", { tag: "@responsive" }, async ({
+  page,
+}) => {
+  const previousCause = "前回の索引の失敗（合成の本文）。";
+  const newCause = "新しい索引の失敗（合成の本文）。";
+  await mockDocumentWorkspace(page, {
+    documentStatus: "ERROR",
+    latestJobStatus: "FAILED",
+    latestJobPhase: "CHUNK",
+    recipeFailedPhase: "INDEX",
+    pendingChunkSet: true,
+    preparedArtifact: true,
+    sharedErrorMessage: previousCause,
+  });
+  // backend と同じ遷移: 失敗 → 再処理の job が順番待ち（レシピは ERROR と前回の本文のまま）→ 新しい失敗。
+  let scenario: "failed" | "queued" | "refailed" = "failed";
+  const reprocessJob = (status: "QUEUED" | "FAILED") => ({
+    ...ingestionJob(status, {
+      phase: "INDEX",
+      queuedAt: "2026-06-15T00:01:00Z",
+      errorMessage: newCause,
+    }),
+    id: "job-reprocess",
+  });
+  const previousJob = ingestionJob("FAILED", { phase: "CHUNK", errorMessage: previousCause });
+  await page.route("**/api/documents/doc-1/recipes", async (route) => {
+    const failedSteps = recipeSteps("ERROR", "INDEX").map((step) =>
+      step.status === "FAILED"
+        ? { ...step, error_message: scenario === "refailed" ? newCause : previousCause }
+        : step
+    );
+    const steps =
+      scenario === "queued"
+        ? failedSteps.map((step) =>
+            step.phase === "INDEX"
+              ? {
+                  ...step,
+                  status: "QUEUED",
+                  error_message: null,
+                  queue_wait: {
+                    phase: "INDEX",
+                    job_id: "job-reprocess",
+                    queued_at: "2026-06-15T00:01:00Z",
+                    jobs_ahead: 2,
+                    concurrency: 1,
+                  },
+                }
+              : step
+          )
+        : failedSteps;
+    await route.fulfill({
+      json: {
+        data: [
+          {
+            recipe_id: "recipe-1",
+            document_id: "doc-1",
+            slot_no: 1,
+            status: "ERROR",
+            failed_phase: "INDEX",
+            processing_config: {},
+            effective_processing_config: {},
+            preprocess_artifact: documentDetail({ status: "ERROR", preparedArtifact: true })
+              .preprocess_artifact,
+            active_extraction_recipe_id: "er-recipe-1-r1",
+            active_chunk_set_id: null,
+            pending_chunk_set_id: "chunk-set-pending",
+            chunk_count: 0,
+            vector_count: 0,
+            config_revision: 1,
+            materialized_revision: null,
+            searchable: false,
+            needs_reprocessing: false,
+            error_message: scenario === "refailed" ? newCause : previousCause,
+            steps,
+            created_at: "2026-06-15T00:00:00Z",
+            updated_at: "2026-06-15T00:00:20Z",
+            started_at: null,
+            finished_at: "2026-06-15T00:00:20Z",
+          },
+        ],
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/ingestion-jobs**", async (route) => {
+    await route.fulfill({
+      json: {
+        data:
+          scenario === "failed"
+            ? [previousJob]
+            : [reprocessJob(scenario === "queued" ? "QUEUED" : "FAILED"), previousJob],
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/ingestion-jobs**", async (route) => {
+    scenario = "queued";
+    await route.fulfill({
+      json: { data: reprocessJob("QUEUED"), error_messages: [], warning_messages: [] },
+    });
+  });
+  await page.route("**/api/documents/ingestion-jobs/job-reprocess", async (route) => {
+    await route.fulfill({
+      json: {
+        data: reprocessJob(scenario === "refailed" ? "FAILED" : "QUEUED"),
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+
+  await page.goto("/documents/doc-1");
+  const failureAlert = page.getByRole("alert").filter({ hasText: "Embedding / 索引で失敗しました" });
+  await expect(failureAlert).toContainText(previousCause);
+
+  await page.getByRole("button", { name: "Embedding / 索引を再実行" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "再実行する" }).click();
+
+  // 順番待ちの間: 見出しは「Embedding / 索引の順番待ち」、前回の失敗は出さず、開始の結果を出す。
+  await expect(page.getByText("Embedding / 索引の順番待ち").first()).toBeVisible();
+  await expect(
+    page.getByText("Embedding / 索引を開始しました。完了まで状態を更新します。")
+  ).toBeVisible();
+  await expect(failureAlert).toHaveCount(0);
+  await expect(page.getByText(previousCause)).toHaveCount(0);
+  await expectNoPageOverflow(page);
+
+  // 再処理の job も失敗した: 新しい原因を出す（前回の本文は出さない）。
+  scenario = "refailed";
+  await expect(failureAlert).toContainText(newCause, { timeout: 9_000 });
+  await expect(page.getByText(previousCause)).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
 test("ERROR は前提 artifact が無ければファイル準備の再実行だけに戻す", async ({ page }) => {
   await mockDocumentWorkspace(page, {
     documentStatus: "ERROR",

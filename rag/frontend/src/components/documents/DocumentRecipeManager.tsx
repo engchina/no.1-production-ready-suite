@@ -381,8 +381,9 @@ export function DocumentRecipeManager({
         ) : null}
 
         {/* 失敗の原因本文は上部の状態メッセージスロット(DocumentWorkspace)が正本(messaging-spec §9 P2)。
-            ここは「検索は旧出力で継続中」という状況提示のみ残す。 */}
-        {selected.status === "ERROR" && selected.searchable ? (
+            ここは「検索は旧出力で継続中」という状況提示のみ残す。再処理の job が順番待ち・実行中の間は、
+            前回の失敗を出さない(#2687)。 */}
+        {selected.status === "ERROR" && selected.searchable && !recipeIsActive(selected) ? (
           <Banner severity="warning" className="mt-3">
             {t("documents.recipes.staleError")}
           </Banner>

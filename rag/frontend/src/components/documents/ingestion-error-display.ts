@@ -30,9 +30,13 @@ export type DocumentFailureView = {
  * 文書の失敗を 1 本化する（messaging-spec §9 P2/P5）。
  * 原因は最も具体的なレイヤから 1 つだけ採る: 最新ジョブ → 失敗セグメント → 文書。
  * これを上部の要約バナーへ昇格し、詳細パネルでは suppress して二重表示を防ぐ。
+ *
+ * 再処理の job が順番待ち・実行中（`ingestionActive`）の間は、レシピが claim まで ERROR と前回の本文を
+ * 持ったままでも失敗にしない（見出しの「〈工程〉の順番待ち」と同じ規則。#2687）。
  */
 export function resolveDocumentFailureView({
   documentStatus,
+  ingestionActive = false,
   latestJobStatus,
   latestJobPhase,
   failedRecipePhase,
@@ -41,6 +45,11 @@ export function resolveDocumentFailureView({
   documentErrorMessage,
 }: {
   documentStatus?: FileStatus | null;
+  /**
+   * このレシピの新しい job が順番待ち・実行中か（レシピの step の QUEUED、または最新・投入した job の
+   * QUEUED / RUNNING）。真なら前回の失敗は過去のもので、出さない。
+   */
+  ingestionActive?: boolean;
   latestJobStatus?: string | null;
   latestJobPhase?: IngestionJobPhase | null;
   /**
@@ -52,7 +61,7 @@ export function resolveDocumentFailureView({
   segments: Pick<IngestionSegment, "status" | "error_message">[];
   documentErrorMessage?: string | null;
 }): DocumentFailureView {
-  if (documentStatus !== "ERROR") {
+  if (documentStatus !== "ERROR" || ingestionActive) {
     return { errored: false, failedStep: null, primaryMessage: null };
   }
   const failedSegment = segments.find(
