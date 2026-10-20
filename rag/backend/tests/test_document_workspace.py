@@ -174,7 +174,11 @@ class FakeWorkspaceOracle:
         limit: int | None = None,
         offset: int = 0,
         knowledge_base_id: str | None = None,
+        queued_phase: IngestionJobPhase | None = None,
     ) -> list[DocumentSummary]:
+        if queued_phase is not None:
+            # fake は取込の job の順番待ちを持たない。
+            return []
         documents = list(self.documents.values())
         if status is not None:
             documents = [document for document in documents if document.status == status]
@@ -204,10 +208,12 @@ class FakeWorkspaceOracle:
         status: FileStatus | None = None,
         query: str | None = None,
         knowledge_base_id: str | None = None,
+        queued_phase: IngestionJobPhase | None = None,
     ) -> int:
         return len(
             await self.list_documents(
                 status=status,
+                queued_phase=queued_phase,
                 query=query,
                 knowledge_base_id=knowledge_base_id,
             )

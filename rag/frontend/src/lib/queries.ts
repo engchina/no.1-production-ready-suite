@@ -113,6 +113,7 @@ export const queryKeys = {
   databaseStatus: DATABASE_STATUS_QUERY_KEY,
   documents: (params: {
     status?: FileStatus;
+    queued_phase?: IngestionJobPhase;
     q?: string;
     knowledge_base_id?: string;
     limit?: number;
@@ -333,6 +334,7 @@ export function documentWorkspaceShouldRefresh({
 export function useDocuments(
   params: {
     status?: FileStatus;
+    queued_phase?: IngestionJobPhase;
     q?: string;
     knowledge_base_id?: string;
     limit?: number;
@@ -344,6 +346,7 @@ export function useDocuments(
     enabled: options.enabled ?? true,
     queryKey: queryKeys.documents({
       status: params.status,
+      queued_phase: params.queued_phase,
       q: params.q,
       knowledge_base_id: params.knowledge_base_id,
       limit: params.limit,

@@ -257,7 +257,7 @@ test("文書インデックスの絞り込み: ボタンから検索して選び
   await expect(dialog).toHaveCount(0);
 });
 
-test("文書インデックスの状態は選択の欄 1 つで絞り込む（11 種の chip を折り返さない）", { tag: "@responsive" }, async ({ page }) => {
+test("文書インデックスの状態は選択の欄 1 つで絞り込む（15 種の chip を折り返さない）", { tag: "@responsive" }, async ({ page }) => {
   await mockKnowledgeBases(page, 3);
   const documentRequests = await mockDocuments(page);
   await page.goto("/file-list");
@@ -267,7 +267,8 @@ test("文書インデックスの状態は選択の欄 1 つで絞り込む（11
   await expect(status).toContainText("状態:すべて");
   await expect(status).toHaveAttribute("data-value", "ALL");
   await status.click();
-  await expect(page.getByRole("listbox", { name: "状態" }).getByRole("option")).toHaveCount(11);
+  // 文書の状態 10 種と取込の順番待ちの 4 段に「すべて」（#2677）。
+  await expect(page.getByRole("listbox", { name: "状態" }).getByRole("option")).toHaveCount(15);
   await page.getByRole("option", { name: "索引済み" }).click();
   await expect.poll(() => documentRequests.at(-1)).toContain("status=INDEXED");
   await expect(page.getByRole("button", { name: "索引済み", exact: true })).toHaveCount(0);
