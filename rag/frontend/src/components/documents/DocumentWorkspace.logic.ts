@@ -47,6 +47,27 @@ export function documentDisplayStatus(
   return recipe?.status ?? documentStatus ?? "UPLOADED";
 }
 
+/**
+ * 選んだレシピの新しい取込の job が順番待ち・実行中か（#2687）。
+ *
+ * レシピは worker が job を claim するまで前回の ERROR と本文（error_message・failed_phase）を持ったまま。
+ * 見出しはこの間「〈工程〉の順番待ち」（レシピの step の QUEUED）を出すため、本文の失敗の判定も同じ
+ * step を見て、この画面が見ている job（最新の job・投入した job）の QUEUED / RUNNING を足す。真の間は
+ * 前回の失敗を出さない。新しい job が FAILED になれば偽に戻り、新しい失敗を出す。
+ */
+export function recipeIngestionActive(
+  recipe: DocumentRecipeView | null,
+  jobStatuses: readonly (IngestionJobStatus | null | undefined)[]
+): boolean {
+  const activeStep = recipe?.steps.some(
+    (step) => step.status === "QUEUED" || step.status === "RUNNING"
+  );
+  return (
+    Boolean(activeStep) ||
+    jobStatuses.some((status) => status === "QUEUED" || status === "RUNNING")
+  );
+}
+
 export function chunkPreviewForm(recipe: DocumentRecipeView | null): ChunkPreviewForm {
   const config = recipe?.effective_processing_config;
   return {

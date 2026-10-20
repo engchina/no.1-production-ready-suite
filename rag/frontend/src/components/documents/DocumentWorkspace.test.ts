@@ -11,6 +11,7 @@ import {
   phaseRetryLabelKey,
   phaseRunningMessageKey,
   phaseStartedMessageKey,
+  recipeIngestionActive,
   resolveDocumentActionPlan,
   resolveExtractStageProgress,
   resolveIngestionParserDisplay,
@@ -27,6 +28,7 @@ import {
 } from "./ingestion-error-display";
 import { t } from "@/lib/i18n";
 import type {
+  DocumentRecipeStep,
   DocumentRecipeView,
   FileStatus,
   IngestionJobPhase,
@@ -52,6 +54,91 @@ describe("文書詳細の見出しの状態", () => {
     expect(documentDisplayStatus(recipes[1], "INDEXED")).toBe("REVIEW");
     expect(documentDisplayStatus(null, "ERROR")).toBe("ERROR");
     expect(documentDisplayStatus(null, undefined)).toBe("UPLOADED");
+  });
+});
+
+// #2687: 失敗したレシピを再処理すると、レシピは worker が claim するまで前回の ERROR と本文を持つ。
+// 見出しは「〈工程〉の順番待ち」を出すため、本文も同じ規則で前回の失敗を出さない。
+describe("再処理の job が動いている間の前回の失敗", () => {
+  const failedRecipe = (steps: DocumentRecipeStep["status"][]) =>
+    ({
+      recipe_id: "recipe-1",
+      status: "ERROR",
+      failed_phase: "INDEX",
+      error_message: "前回の失敗の本文",
+      steps: (["PREPROCESS", "EXTRACT", "CHUNK", "INDEX"] as const).map((phase, index) => ({
+        phase,
+        status: steps[index],
+        started_at: null,
+        finished_at: null,
+        error_message: steps[index] === "FAILED" ? "前回の失敗の本文" : null,
+        queue_wait: null,
+      })),
+    }) as unknown as DocumentRecipeView;
+  const failureView = (
+    recipe: DocumentRecipeView,
+    jobStatuses: Parameters<typeof recipeIngestionActive>[1],
+    latestJob: { status: string; error_message: string | null }
+  ) =>
+    resolveDocumentFailureView({
+      documentStatus: recipe.status,
+      ingestionActive: recipeIngestionActive(recipe, jobStatuses),
+      latestJobStatus: latestJob.status,
+      latestJobPhase: "INDEX",
+      failedRecipePhase: recipe.steps.find((step) => step.status === "FAILED")?.phase ?? null,
+      latestJobErrorMessage: latestJob.error_message,
+      segments: [],
+      documentErrorMessage: recipe.error_message,
+    });
+
+  it("再処理の job が順番待ち（レシピの step が QUEUED）なら、レシピが ERROR でも失敗を出さない", () => {
+    const recipe = failedRecipe(["SUCCEEDED", "SUCCEEDED", "SUCCEEDED", "QUEUED"]);
+    expect(recipeIngestionActive(recipe, [])).toBe(true);
+    expect(failureView(recipe, ["QUEUED"], { status: "QUEUED", error_message: null })).toEqual({
+      errored: false,
+      failedStep: null,
+      primaryMessage: null,
+    });
+  });
+
+  it("レシピの一覧の更新が遅れても、投入した job が QUEUED / RUNNING なら失敗を出さない", () => {
+    // 投入の直後でレシピの step はまだ前回の FAILED のまま。この画面が投入した job は動いている。
+    const recipe = failedRecipe(["SUCCEEDED", "SUCCEEDED", "SUCCEEDED", "FAILED"]);
+    for (const status of ["QUEUED", "RUNNING"] as const) {
+      expect(recipeIngestionActive(recipe, [undefined, status])).toBe(true);
+      const view = failureView(recipe, [undefined, status], {
+        status: "FAILED",
+        error_message: "前回の失敗の本文",
+      });
+      expect(view.errored).toBe(false);
+    }
+  });
+
+  it("新しい job が FAILED になれば、新しい失敗の本文と工程を出す", () => {
+    const recipe = {
+      ...failedRecipe(["SUCCEEDED", "SUCCEEDED", "SUCCEEDED", "FAILED"]),
+      error_message: "新しい失敗の本文",
+    } as DocumentRecipeView;
+    expect(recipeIngestionActive(recipe, ["FAILED", "FAILED", null, undefined])).toBe(false);
+    const view = failureView(recipe, ["FAILED", "FAILED"], {
+      status: "FAILED",
+      error_message: "新しい失敗の本文",
+    });
+    expect(view).toEqual({
+      errored: true,
+      failedStep: "INDEXING",
+      primaryMessage: "新しい失敗の本文",
+    });
+  });
+
+  it("レシピも job も動いていなければ、動いていると見なさない", () => {
+    expect(recipeIngestionActive(null, [])).toBe(false);
+    expect(
+      recipeIngestionActive(failedRecipe(["SUCCEEDED", "SUCCEEDED", "SUCCEEDED", "FAILED"]), [
+        "SUCCEEDED",
+        "CANCELLED",
+      ])
+    ).toBe(false);
   });
 });
 

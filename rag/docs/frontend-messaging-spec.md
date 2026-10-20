@@ -36,6 +36,7 @@ header           : StatusBadge（文書状態の正本 = P1）
 ### 実装の指針
 
 - 原因の一本化は `documents/ingestion-error-display.ts` の `resolveDocumentFailureView()`（最具体レイヤ採用 + 失敗ステップ導出）に集約する。要約バナーに昇格した文字列は `resolveIngestionErrorDisplayPlan({ suppressMessages })` と各詳細パネルの `suppressMessage` で**二重表示を抑止**する。
+- **再処理の job が動いている間は前回の失敗を出さない（#2687）。** レシピは worker が job を claim するまで前回の `ERROR`・`error_message`・`failed_phase` を持つ。見出しが「〈工程〉の順番待ち」（レシピの step の `QUEUED`）を出す間と、画面が見ている job が `QUEUED` / `RUNNING` の間は、失敗原因のバナー・工程の `FAILED`・「再処理に失敗しました」の警告を出さない（判定は `recipeIngestionActive()`）。新しい job が失敗したら、新しい原因を出す。
 - 「失敗した」状態の*存在*（バッジ）と「なぜ失敗したか」の*本文*（バナー1本）と「技術詳細」（折りたたみ）を**役割で分離**し、同じ文を場所を変えて繰り返さない。
 - **抽出の warning は利用者の言葉で（#2034）。** 構造化要素のタブの warning は文にし、backend のコードは閉じた「詳細」に畳む（`extractionWarningView`）。状態メッセージスロットが Excel の表頭の確認の案内を出している間は、タブと変換の記録に同じ案内を出さない（同じ状態の案内は 1 か所）。
 - **工程の操作と結果は状態メッセージスロットに置く（#2034）。** 承認・ファイル準備の実行・工程の再試行・再処理のボタンはスロットの `Banner` の `action`、押した結果（投入・承認の失敗は danger の `FormStatus`、開始の文）は同じ `Banner` の `progress` に出す（UX 契約 messaging.md §10.1・§10.2）。スロットの案内が無い状態（未処理・索引済み）は、同じ場所にボタンと結果だけを出す。カードの下端・別のカードに同じ操作・結果を出さない。

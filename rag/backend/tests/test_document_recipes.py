@@ -284,6 +284,80 @@ def test_recipe_steps_show_queued_overlay_for_newest_job() -> None:
     assert [step.status for step in steps] == [_S, DocumentRecipeStepStatus.QUEUED, _P, _P]
 
 
+@pytest.mark.parametrize(
+    ("failed_phase", "queued_phase", "expected"),
+    [
+        # 失敗した工程そのものを再実行する。
+        (
+            IngestionJobPhase.INDEX,
+            IngestionJobPhase.INDEX,
+            [_S, _S, _S, DocumentRecipeStepStatus.QUEUED],
+        ),
+        # 失敗した工程より前から再処理する。後ろの工程の前回の失敗は残さない(#2687)。
+        (
+            IngestionJobPhase.INDEX,
+            IngestionJobPhase.CHUNK,
+            [_S, _S, DocumentRecipeStepStatus.QUEUED, _P],
+        ),
+        (
+            IngestionJobPhase.CHUNK,
+            IngestionJobPhase.PREPROCESS,
+            [DocumentRecipeStepStatus.QUEUED, _S, _P, _P],
+        ),
+    ],
+)
+def test_recipe_steps_hide_previous_failure_while_reprocess_is_queued(
+    failed_phase: IngestionJobPhase,
+    queued_phase: IngestionJobPhase,
+    expected: list[DocumentRecipeStepStatus],
+) -> None:
+    """再処理の job の claim 前は、レシピ行が ERROR でも前回の FAILED の工程を出さない(#2687)。"""
+    now = datetime.now(UTC)
+    jobs = [
+        _recipe_job(queued_phase, IngestionJobStatus.QUEUED, job_id="job-new", queued_at=now),
+        _recipe_job(
+            failed_phase,
+            IngestionJobStatus.FAILED,
+            job_id="job-old",
+            queued_at=now - timedelta(minutes=5),
+            error_message="前回の失敗の本文",
+        ),
+    ]
+    steps = _recipe_steps(
+        {"status": FileStatus.ERROR.value, "failed_phase": failed_phase.value},
+        jobs,
+    )
+    assert [step.status for step in steps] == expected
+    assert all(step.error_message is None for step in steps)
+
+
+def test_recipe_steps_show_new_failure_after_reprocess_fails() -> None:
+    """再処理の job が失敗すれば、新しい失敗の工程と本文を出す(#2687)。"""
+    now = datetime.now(UTC)
+    jobs = [
+        _recipe_job(
+            IngestionJobPhase.CHUNK,
+            IngestionJobStatus.FAILED,
+            job_id="job-new",
+            queued_at=now,
+            error_message="新しい失敗の本文",
+        ),
+        _recipe_job(
+            IngestionJobPhase.INDEX,
+            IngestionJobStatus.FAILED,
+            job_id="job-old",
+            queued_at=now - timedelta(minutes=5),
+            error_message="前回の失敗の本文",
+        ),
+    ]
+    steps = _recipe_steps(
+        {"status": FileStatus.ERROR.value, "failed_phase": IngestionJobPhase.CHUNK.value},
+        jobs,
+    )
+    assert [step.status for step in steps] == [_S, _S, DocumentRecipeStepStatus.FAILED, _P]
+    assert steps[2].error_message == "新しい失敗の本文"
+
+
 _Q = DocumentRecipeStepStatus.QUEUED
 
 

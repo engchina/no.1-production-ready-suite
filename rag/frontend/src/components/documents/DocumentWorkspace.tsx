@@ -50,6 +50,7 @@ import {
   phaseRetryLabelKey,
   phaseRunningMessageKey,
   phaseStartedMessageKey,
+  recipeIngestionActive,
   resolveDocumentActionPlan,
   resolveIngestionParserDisplay,
   resolveIngestionProgressSummary,
@@ -493,16 +494,23 @@ export function DocumentWorkspace({
     retriedSegmentJob.data?.status === "FAILED"
       ? retriedSegmentJob.data.error_message ?? t("flow.ingestFailed")
       : null;
-  const activeSubmittedJob = [
+  const watchedJobStatuses = [
     latestDocumentJob?.status,
     queuedIngestionJobStatus,
     approvedIngestionJobStatus,
     retriedSegmentJobStatus,
-  ].some(ingestionJobIsActive);
-  const failedDocumentJob =
-    [latestDocumentJob, queuedJob.data, approvedJob.data, retriedSegmentJob.data].find(
-      (job) => job?.status === "FAILED"
-    ) ?? null;
+  ];
+  const activeSubmittedJob = watchedJobStatuses.some(ingestionJobIsActive);
+  // 次の工程・再処理の job が worker の空きを待っている工程（見出しの「〈工程〉の順番待ち」）。
+  const recipeQueuedPhase = recipeQueueWait(selectedRecipe)?.phase ?? null;
+  // 再処理の job が順番待ち・実行中の間は、レシピが claim まで持つ前回の失敗を出さない（#2687）。
+  const ingestionActive = recipeIngestionActive(selectedRecipe, watchedJobStatuses);
+  // 新しい job が動いている間は、この画面で前に失敗した承認・投入の job を失敗として拾わない（#2687）。
+  const failedDocumentJob = ingestionActive
+    ? null
+    : ([latestDocumentJob, queuedJob.data, approvedJob.data, retriedSegmentJob.data].find(
+        (job) => job?.status === "FAILED"
+      ) ?? null);
   const autoRefreshActive = documentWorkspaceShouldRefresh({
     documentStatus: status,
     watchProcessing,
@@ -523,6 +531,7 @@ export function DocumentWorkspace({
     () =>
       resolveDocumentFailureView({
         documentStatus: status,
+        ingestionActive,
         latestJobStatus: failedDocumentJob?.status ?? latestDocumentJob?.status,
         latestJobPhase: failedDocumentJob?.phase ?? latestDocumentJob?.phase,
         failedRecipePhase,
@@ -533,6 +542,7 @@ export function DocumentWorkspace({
       }),
     [
       status,
+      ingestionActive,
       failedDocumentJob?.status,
       failedDocumentJob?.phase,
       failedRecipePhase,
@@ -1365,7 +1375,7 @@ export function DocumentWorkspace({
                 {doc.file_name}
               </span>
             </CardTitle>
-            <StatusBadge status={status} queuedPhase={recipeQueueWait(selectedRecipe)?.phase} />
+            <StatusBadge status={status} queuedPhase={recipeQueuedPhase} />
           </div>
         </CardHeader>
       ) : null}
