@@ -396,3 +396,24 @@ class CitableFieldKindTests(unittest.TestCase):
         observed = [form_field_kinds.FieldKindObservation("alias", "項目A", "select")]
         spans = grounded.tag_spans("項目A", form_field_kinds.with_field_kind_evidence(observed, [original]))
         self.assertIn("- E2: 項目A = 選択", form_field_kinds.prompt_note(observed, [], spans))
+
+    def test_image_page_selects_its_own_page_in_a_multi_page_parent(self):
+        source = _chunk("parent", [{"name": "項目A", "kind": "select"}])
+        source.page = 3
+        source.page_end = 4
+        source.metadata["image_evidence"][0]["page"] = 4
+        observed = form_field_kinds.question_field_kinds("項目Aの種類", _context(source))
+        self.assertEqual(observed[0].page, 4)
+        result = form_field_kinds.with_field_kind_evidence(observed, [self._span(3), self._span(4)])
+        self.assertEqual(result[-1]["page"], 4)
+        self.assertEqual(result[-1]["text"], "項目A = 選択")
+        self.assertEqual(form_field_kinds.trace_payload(observed, [])["observations"][0]["page"], 4)
+
+    def test_multi_page_record_does_not_infer_an_image_page_from_parent_start(self):
+        source = _chunk("parent", [{"name": "項目A", "kind": "select"}])
+        source.page = 3
+        source.page_end = 4
+        observed = form_field_kinds.question_field_kinds("項目Aの種類", _context(source))
+        self.assertIsNone(observed[0].page)
+        spans = [self._span(3), self._span(4)]
+        self.assertEqual(form_field_kinds.with_field_kind_evidence(observed, spans), spans)
