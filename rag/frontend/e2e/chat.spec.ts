@@ -451,14 +451,15 @@ for (const viewport of [
   );
 }
 
-// 回答の注意書き（設定は製品ごと。#2405・#2449）。回答の本文と根拠の後に出し、本文には混ぜない。
+// 回答の注意書き（設定は製品ごと。#2405・#2449）。回答の本文の後・根拠の一覧の前に出し、本文には混ぜない（回答の
+// カードの末尾は Agent のチャットと同じ共通の並び「注意書き → 根拠の一覧 → 評価」。#2707）。
 const NOTICE = "この回答は AI が生成したものです。\n連絡先: https://example.com/help";
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`回答の注意書きを回答の根拠の後に出す (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
+  test(`回答のカードは 本文 → 注意書き → 根拠の一覧 → 評価 の順に出す (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     const streamBody = sseBody.replace(
       '"guardrail_warnings":[]}',
@@ -482,12 +483,23 @@ for (const viewport of [
       "href",
       "https://example.com/help"
     );
-    // 根拠の一覧の後に出す（本文には混ぜない）。
+    // 本文 → 注意書き → 根拠の一覧 → 評価 の順（注意書きは本文には混ぜない）。
+    const body = page.getByText("経費の上限は 10 万円です。").first();
     const citations = page.locator("summary").filter({ hasText: "AI に渡した 1 件" }).first();
-    const [citationsBox, noticeBox] = await Promise.all([citations.boundingBox(), notice.boundingBox()]);
-    expect(noticeBox!.y).toBeGreaterThan(citationsBox!.y);
-    await expect(page.getByText("経費の上限は 10 万円です。").first()).not.toContainText("AI が生成");
+    const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
+    await expect(feedback).toBeVisible();
+    const [bodyBox, noticeBox, citationsBox, feedbackBox] = await Promise.all([
+      body.boundingBox(),
+      notice.boundingBox(),
+      citations.boundingBox(),
+      feedback.boundingBox(),
+    ]);
+    expect(noticeBox!.y).toBeGreaterThan(bodyBox!.y + bodyBox!.height - 1);
+    expect(citationsBox!.y).toBeGreaterThan(noticeBox!.y + noticeBox!.height - 1);
+    expect(feedbackBox!.y).toBeGreaterThan(citationsBox!.y + citationsBox!.height - 1);
+    await expect(body).not.toContainText("AI が生成");
     await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`answer-footer-${viewport.name}.png`) });
   });
 }
 

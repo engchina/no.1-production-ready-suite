@@ -343,6 +343,8 @@ export {
   type AnswerNoticeProps,
   type AnswerNoticeSegment,
 } from "./components/chat/answer-notice";
+// チャットの回答のカードの末尾の並び（注意書き → 回答の根拠 → 評価。3 製品共通。#2707）
+export { AnswerFooter, type AnswerFooterProps } from "./components/chat/answer-footer";
 export {
   ChatAnswer,
   ChatPendingTurn,

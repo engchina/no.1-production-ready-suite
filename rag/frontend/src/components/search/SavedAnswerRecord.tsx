@@ -1,4 +1,4 @@
-import { AnswerNotice, FormStatus, Skeleton, TimedLoadingState } from "@production-ready/ui";
+import { AnswerFooter, FormStatus, Skeleton, TimedLoadingState } from "@production-ready/ui";
 
 import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -67,20 +67,28 @@ export function SavedAnswerRecord({
           {record.answer}
         </p>
       ) : null}
-      {showCitations && record.citations.length > 0 ? (
-        // 回答の根拠はチャット・RAG 検索と同じ部品（折りたたみ・カード。#2097・#2388）。
-        <AnswerCitations
-          citations={record.citations}
-          idPrefix={`answer-record-${record.trace_id}`}
-          cardProps={{
-            traceId: record.trace_id,
-            searchAnswerProfileId,
-            sourceSurface: record.surface,
-          }}
-        />
-      ) : null}
-      {/* 回答に付けた注意書き（そのときの文。回答の本文と根拠の後。#2405）。 */}
-      {showAnswer ? <AnswerNotice notice={record.notice} label={t("answer.notice.label")} /> : null}
+      {/*
+        回答に付けた注意書き（そのときの文。#2405）→ 回答の根拠（チャット・RAG 検索と同じ部品。#2097・#2388）の順
+        （3 製品のチャットと同じ共通の並び。#2707）。
+      */}
+      <AnswerFooter
+        notice={showAnswer ? record.notice : null}
+        noticeLabel={t("answer.notice.label")}
+        evidence={
+          showCitations && record.citations.length > 0 ? (
+            <AnswerCitations
+              citations={record.citations}
+              idPrefix={`answer-record-${record.trace_id}`}
+              cardProps={{
+                traceId: record.trace_id,
+                searchAnswerProfileId,
+                sourceSurface: record.surface,
+              }}
+            />
+          ) : null
+        }
+      />
+
       {/* 根拠（引用の一覧）を先、回答の記録の詳細を後に並べる（#1417。page-archetypes.md §6.1）。 */}
       <AnswerDetailsPanel
         diagnostics={record.answer_diagnostics}

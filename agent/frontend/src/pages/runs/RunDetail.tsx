@@ -54,7 +54,7 @@ import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { MENU_PERMISSIONS, type AgentCapabilities } from "@/lib/permissions";
 import { runAnswerEvidence } from "@/lib/answer-evidence";
 import { answerNoticeText, internalRecordArtifacts, userOutputArtifacts } from "@/lib/run-artifacts";
-import { noticeHeading, structureAnswer } from "@/lib/answer-structure";
+import { answerStructureTitles, noticeHeading, structureAnswer } from "@/lib/answer-structure";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
 import {
   agentRunDetailLabels,
@@ -246,10 +246,7 @@ export function RunDetail({
                 // 回答の本文はチャットと同じ節の形（根拠の行つき。#2328）。結び付けられなければ Markdown のまま
                 // （表は共通の結果の表。#1158 / #1808）。
                 const blocks = evidence
-                  ? structureAnswer(text, evidence, noticeHeading(validationContent), {
-                      confirmed: t("chat.answer.confirmed"),
-                      unconfirmed: t("chat.answer.unconfirmed"),
-                    })
+                  ? structureAnswer(text, evidence, noticeHeading(validationContent), answerStructureTitles())
                   : null;
                 return blocks && evidence ? (
                   <StructuredAnswer
@@ -263,15 +260,7 @@ export function RunDetail({
                   <AnswerBody key={artifact.id} text={text} testId={`run-answer-${artifact.id}`} />
                 );
               })}
-              {evidence ? (
-                <AnswerEvidenceBlock
-                  runId={run.id}
-                  evidence={evidence}
-                  idPrefix={`run-${run.id}`}
-                  className="mt-3 border-t border-border px-2 pt-1"
-                />
-              ) : null}
-              {/* 回答に付けた注意書き（そのときの文。回答の本文と根拠の後。#2405）。 */}
+              {/* 回答に付けた注意書き（そのときの文。回答の本文の後。#2405）。根拠は別の Section（RAG と同じ。#2707）。 */}
               <AnswerNotice
                 notice={answerNoticeText(run.artifacts)}
                 label={t("answer.notice.label")}
@@ -324,6 +313,13 @@ export function RunDetail({
         }
         evidence={
           <>
+            {answers.length && evidence ? (
+              // 回答の根拠は RAG の実行の詳細と同じく別の Section（チャットと同じ「AI に渡した N 件 ／ 回答で引用
+              // M 件」の折りたたみ。#2328・#2707）。
+              <RunDetailSection title={t("run.section.evidence")} testId="run-evidence-section">
+                <AnswerEvidenceBlock runId={run.id} evidence={evidence} idPrefix={`run-${run.id}`} />
+              </RunDetailSection>
+            ) : null}
             {run.approvals.length ? <ApprovalsSection run={run} /> : null}
             {outputs.length ? <ArtifactsSection artifacts={outputs} /> : null}
             {structured ? <StructuredResultCard key={run.id} run={run} table={structured} /> : null}

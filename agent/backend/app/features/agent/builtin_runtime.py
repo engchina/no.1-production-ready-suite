@@ -4109,7 +4109,7 @@ async def _validate_final_answer(
     呼ぶ（ポリシー・監査・Run の利用者のサービストークン・step はモデルのツールと同じ境界）。
     利用者が回答前の確認で答えた内容は前提（`premises`）として渡す（#1898）。
     判定が valid でなければ確かめられなかった段落を外して理由を足し、検証が失敗したら
-    「検証できませんでした」を足す（回答は消さない。`answer_validation.combine_validations`）。
+    照合を終えられなかったことを足す（回答は消さない。`answer_validation.combine_validations`）。
     `rag_tools` は Agent が RAG の根拠のツールを持つか（根拠の無い回答に注記するか）。
 
     今のターンに根拠が無いとき（#1879）: 資料に無い・答えられないことだけを述べる回答は注記せずに

@@ -19,14 +19,16 @@ from test_answer_validation import (  # noqa: F401 - fixture を使う
     mcp,
 )
 
+from app.features.agent.answer_evidence import ANSWER_EVIDENCE_KIND
 from app.features.agent.answer_validation import (
     TIMED_OUT_KEPT_INTRO,
     UNVERIFIED_HEADING,
+    UNVERIFIED_NOTICE,
     WITHHELD_INTRO,
     merge_results,
     publish_answer,
 )
-from app.features.agent.runtime import run_answer_text
+from app.features.agent.runtime import RunState, run_answer_text
 
 FIRST = "契約の更新は 30 日前までに申し出ます。"
 SECOND = "申し出は所定の様式で行います。"
@@ -104,9 +106,11 @@ def test_timed_out_validation_keeps_the_answer_with_a_notice(
 
     run, _ = _searched_run(monkeypatch)
 
-    assert run_answer_text(run) == f"{ANSWER}\n\nこの回答は検証できませんでした。"
+    assert run_answer_text(run) == f"{ANSWER}\n\n{UNVERIFIED_NOTICE}"
     content = _validation(run)
     assert (content["status"], content["reason"]) == ("unvalidated", "validation_timed_out")
+    # 回答の根拠は照合が使えないときと同じ決定的な結び付け（参考情報。#2707）。
+    assert _evidence(run)["binding"] == "text"
 
 
 def test_partial_validation_run_keeps_the_unfinished_answer(
@@ -122,3 +126,12 @@ def test_partial_validation_run_keeps_the_unfinished_answer(
     assert content["status"] == "completed"
     assert content["result"]["status"] == "partial"
     assert content["withheld"]["unverified"] == 1
+    # 確かめ終わらなかった段落は本文の根拠の行にせず、参考情報の根拠にする（#2707）。
+    evidence = _evidence(run)
+    assert evidence["binding"] == "partial"
+    assert all(passage["text"] != ANSWER for passage in evidence["passages"])
+
+
+def _evidence(run: RunState) -> dict[str, Any]:
+    [artifact] = [item for item in run.artifacts if item.kind == ANSWER_EVIDENCE_KIND]
+    return artifact.content

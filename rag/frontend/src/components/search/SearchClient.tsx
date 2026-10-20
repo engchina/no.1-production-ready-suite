@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  AnswerNotice,
+  AnswerFooter,
   DisclosureChevron,
   PageBody,
   PageHeader,
@@ -847,32 +847,40 @@ export function SearchClient() {
                     />
                     {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下（「詳細」に畳まない。#2096）。 */}
                     {meta && phase === "done" ? <AnswerNotices diagnostics={meta.diagnostics?.answer} /> : null}
-                    <AnswerCitations
-                      citations={citations}
-                      idPrefix="search"
-                      cardProps={{
-                        traceId: meta?.trace_id,
-                        searchAnswerProfileId: answerSearchAnswerProfileId,
-                        sourceSurface: "search",
-                        contentSnapshot: feedbackSnapshot,
-                      }}
-                      className="border-t border-border pt-1"
+                    {/*
+                      回答の下は 3 製品のチャットと同じ共通の並び（#2707）: 回答の注意書き（#2405）→ 根拠の一覧 → 評価
+                      （評価は回答の枠の最後。根拠を確かめてから評価できるよう、その後に置く。#1202 / #1420。
+                      page-archetypes.md §6.1）。
+                    */}
+                    <AnswerFooter
+                      notice={meta && phase === "done" ? meta.notice : null}
+                      noticeLabel={t("answer.notice.label")}
+                      evidence={
+                        <AnswerCitations
+                          citations={citations}
+                          idPrefix="search"
+                          cardProps={{
+                            traceId: meta?.trace_id,
+                            searchAnswerProfileId: answerSearchAnswerProfileId,
+                            sourceSurface: "search",
+                            contentSnapshot: feedbackSnapshot,
+                          }}
+                          className="border-t border-border pt-1"
+                        />
+                      }
+                      feedback={
+                        meta && phase === "done" ? (
+                          <FeedbackControls
+                            traceId={meta.trace_id}
+                            searchAnswerProfileId={answerSearchAnswerProfileId}
+                            targetType="answer"
+                            sourceSurface="search"
+                            contentSnapshot={feedbackSnapshot}
+                          />
+                        ) : null
+                      }
                     />
-                    {/* 回答の注意書きは回答の本文と根拠の後（3 製品共通の AnswerNotice。#2405）。 */}
-                    {meta && phase === "done" ? (
-                      <AnswerNotice notice={meta.notice} label={t("answer.notice.label")} />
-                    ) : null}
-                    {/* 評価は回答の枠の最後。根拠を確かめてから評価できるよう、その後に置く（チャットと同じ。
-                        #1202 / #1420。page-archetypes.md §6.1）。 */}
-                    {meta && phase === "done" ? (
-                      <FeedbackControls
-                        traceId={meta.trace_id}
-                        searchAnswerProfileId={answerSearchAnswerProfileId}
-                        targetType="answer"
-                        sourceSurface="search"
-                        contentSnapshot={feedbackSnapshot}
-                      />
-                    ) : null}
+
                   </CardContent>
                 </Card>
               ) : run ? (
