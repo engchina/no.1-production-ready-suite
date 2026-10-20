@@ -515,7 +515,9 @@ def _located(text: str, items: Sequence[Mapping[str, Any]], *, citation: bool) -
     return found
 
 
-def _featured(passage: str, items: Sequence[Mapping[str, Any]], texts: list[EvidenceText]) -> list[str]:
+def _featured(
+    passage: str, items: Sequence[Mapping[str, Any]], texts: list[EvidenceText]
+) -> list[str]:
     """段落の特徴（`evidence_match`）で当たった根拠。回答に固有の特徴（その特徴を持つ根拠が少ない）
     で当たったものを、当たりの重みの大きい順に `MAX_TEXT_BOUND_PER_PASSAGE` 件まで。"""
     features = answer_features(passage)
@@ -603,7 +605,8 @@ def answer_evidence(
     """成果物「回答の根拠」の内容。
 
     - `items`・`passed`・`cited`: AI に渡した根拠と、回答で引用した根拠の数。
-    - `markers`: 回答の中の根拠の ID の印と引き当てた根拠（画面は印を文字で出さず、根拠の行にする）。
+    - `markers`: 回答の中の根拠の ID の印と引き当てた根拠（画面は印を文字で出さず、根拠の
+      行にする）。
     - `passages`: 段落ごとの根拠（画面は段落の下に「根拠：文書 p.N」を出す）。
     - `binding`: 結び付けの方法（`validation` / `text`。#2707）。
     - `references`: `text` のときの「参考情報」の根拠（根拠の原文 `quote` と chunk）。

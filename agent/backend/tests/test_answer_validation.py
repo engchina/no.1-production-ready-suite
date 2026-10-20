@@ -45,6 +45,7 @@ from app.features.agent.answer_validation import (
     NO_EVIDENCE_NOTICE,
     UNVERIFIED_HEADING,
     UNVERIFIED_KEPT_INTRO,
+    UNVERIFIED_NOTICE,
     carried_evidence,
     carried_evidence_groups,
     connection_check_inputs,
@@ -317,7 +318,7 @@ def test_validator_failure_keeps_the_answer_with_a_notice(
 
     assert run.status == RunStatus.COMPLETED
     # 基盤の障害では内容を落とさない（確かめていないことを示す）。
-    assert run_answer_text(run) == f"{ANSWER}\n\nこの回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。"
+    assert run_answer_text(run) == f"{ANSWER}\n\n{UNVERIFIED_NOTICE}"
     content = _validation(run)
     assert content["status"] == "unvalidated"
     assert content["reason"] == "mcp.tool_error"
@@ -337,7 +338,7 @@ def test_validator_timeout_keeps_the_answer_with_a_notice(
 
     run, _ = _searched_run(monkeypatch)
 
-    assert run_answer_text(run) == f"{ANSWER}\n\nこの回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。"
+    assert run_answer_text(run) == f"{ANSWER}\n\n{UNVERIFIED_NOTICE}"
     assert _validation(run)["status"] == "unvalidated"
 
 
@@ -352,7 +353,7 @@ def test_unexpected_validation_error_keeps_the_answer_and_records_it(
     run, _ = _searched_run(monkeypatch)
 
     assert run.status == RunStatus.COMPLETED
-    assert run_answer_text(run) == f"{ANSWER}\n\nこの回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。"
+    assert run_answer_text(run) == f"{ANSWER}\n\n{UNVERIFIED_NOTICE}"
     content = _validation(run)
     assert content["status"] == "unvalidated"
     assert content["reason"] == "validation_error"
@@ -373,7 +374,7 @@ def test_unusable_validator_result_keeps_the_answer_with_a_notice(
 
     run, _ = _searched_run(monkeypatch)
 
-    assert run_answer_text(run) == f"{ANSWER}\n\nこの回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。"
+    assert run_answer_text(run) == f"{ANSWER}\n\n{UNVERIFIED_NOTICE}"
     content = _validation(run)
     assert (content["status"], content["reason"]) == ("unvalidated", "unusable_result")
 
@@ -386,7 +387,7 @@ def test_policy_denied_validator_is_not_called(
     run, _ = _searched_run(monkeypatch)
 
     assert mcp.calls_of("rag_validate_answer") == []
-    assert run_answer_text(run) == f"{ANSWER}\n\nこの回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。"
+    assert run_answer_text(run) == f"{ANSWER}\n\n{UNVERIFIED_NOTICE}"
     assert _validation(run)["reason"] == "policy_denied"
 
 
@@ -1106,7 +1107,7 @@ def test_rag_without_the_validator_is_unvalidated(
 
     run, _ = _searched_run(monkeypatch)
 
-    assert run_answer_text(run) == f"{ANSWER}\n\nこの回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。"
+    assert run_answer_text(run) == f"{ANSWER}\n\n{UNVERIFIED_NOTICE}"
     content = _validation(run)
     assert (content["status"], content["reason"]) == ("unvalidated", "validator_unavailable")
 

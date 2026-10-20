@@ -305,7 +305,8 @@ def test_nothing_is_cited_when_the_answer_shares_nothing_with_the_evidence() -> 
 EXCERPT_A = "合成の規程では、申請書は利用開始日の 30 日前までに提出する。提出先は窓口 X とする。"
 EXCERPT_B = "承認は担当部署の課長が行う。課長が不在のときは代理者が承認する。"
 EXCERPT_C = "<table><tr><td>区分 Q-77</td><td>手当は月額 5000 円</td></tr></table>"
-# モデルは根拠の ID の印を書かず、文書名と頁を「根拠」の節に平文で並べる（照合が時間切れの Run の形）。
+# モデルは根拠の ID の印を書かず、文書名と頁を「根拠」の節に平文で並べる
+# （照合が時間切れの Run の形）。
 FREE_ANSWER = "\n".join(
     [
         "合成の質問への回答です。",
