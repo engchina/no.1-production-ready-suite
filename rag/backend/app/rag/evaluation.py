@@ -31,6 +31,11 @@ golden set の各ケースを回答エンジン(根拠付き回答。全体の�
 すべて案内したケースの割合（`screen_match_rate`）とほかの画面を案内したケースの割合
 （`wrong_screen_rate`）を出す。回答の監査の目的との合い方（`goal_alignment`）が目的外
 （off_target）のケースの割合（`off_target_rate`）も出す。どれも参考の集計（閾値の判定に使わない）。
+
+段落の印（#2738）: 回答ごとに、根拠と矛盾して外した段落・未確認の印の段落・要注意の印の段落の
+数を記録し（`removed_passages` など）、1 回答あたりの平均（`removed_passages_per_answer` など。
+参考の集計）を出す。
+faithfulness は印の段落も本文として数え、外した段落の節は除く（`answer_metrics.grounding_text`）。
 """
 
 import asyncio
@@ -49,6 +54,7 @@ from pr_backend_core.bounded_calls import (
     BoundedCaller,
     BoundedCallFailed,
 )
+from rag_engine.generation.passage_marks import mark_counts
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 
 from app.clients.ai_calls import make_ai_caller
@@ -100,6 +106,7 @@ from app.rag.observability import (
     record_rag_request,
 )
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgressCallback
+from app.rag.stored_answer import PASSAGE_MARK_RECORD_KEYS
 from app.schemas.evaluation import (
     EVALUATION_METRIC_NAMES,
     EVALUATION_REASONING_METRIC_NAMES,
@@ -933,7 +940,11 @@ def _case_result(
     faithfulness: float | None = None
     overlap_count = 0
     feature_count = 0
-    if not abstained and response.answer.strip():
+    passages = _passage_counts(response)
+    # 印の付いた段落は本文の主張として数える（#2738。本文がすべて未確認の回答は対応が
+    # insufficient_evidence でも、本文の段落を照合する）。
+    marked_body = bool(passages and passages["unverified"] + passages["warning"])
+    if (not abstained or marked_body) and response.answer.strip():
         groundedness = evaluate_groundedness(
             grounding_text(response.answer), "\n".join(chunk.text for chunk in response.citations)
         )
@@ -1002,6 +1013,15 @@ def _case_result(
         evidence_chain_complete=None if evidence_recall is None else not missing_evidence,
         **_screen_fields(screens),
         goal_alignment=goal_alignment,
+        **(
+            {
+                "removed_passages": passages["removed"],
+                "unverified_passages": passages["unverified"],
+                "warning_passages": passages["warning"],
+            }
+            if passages is not None
+            else {}
+        ),
         turn_results=turn_results if case.turns else [],
         answer_evaluation=judgement,
         guardrail_warnings=response.guardrail_warnings,
@@ -1064,6 +1084,17 @@ def _goal_alignment(response: SearchResponse) -> str | None:
     """回答の記録の、採用した草稿の監査の目的との合い方（#2402。記録が無ければ None）。"""
     value = (response.diagnostics.answer or {}).get("goal_alignment")
     return value if isinstance(value, str) and value in _GOAL_ALIGNMENTS else None
+
+
+def _passage_counts(response: SearchResponse) -> dict[str, int] | None:
+    """回答の記録の、矛盾で外した段落・未確認の段落・要注意の段落の数（#2738）。
+
+    記録が無ければ None。
+    """
+    details = response.diagnostics.answer or {}
+    if not any(key in details for key in PASSAGE_MARK_RECORD_KEYS):
+        return None
+    return mark_counts(details)
 
 
 def _turn_result(
@@ -1302,6 +1333,9 @@ def _accumulate_case_metrics(aggregate: _Aggregate, result: EvaluationCaseResult
     aggregate.add("wrong_screen_rate", _bool_value(result.wrong_screen))
     if result.goal_alignment is not None:
         aggregate.add("off_target_rate", 1.0 if result.goal_alignment == "off_target" else 0.0)
+    aggregate.add("removed_passages_per_answer", result.removed_passages)
+    aggregate.add("unverified_passages_per_answer", result.unverified_passages)
+    aggregate.add("warning_passages_per_answer", result.warning_passages)
 
 
 def _deadline(time_budget_seconds: float | None) -> float | None:

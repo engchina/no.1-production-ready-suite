@@ -10,7 +10,7 @@ from contextvars import copy_context
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
+from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, marks, record, run
 
 from rag_engine.adapters import oci
 from rag_engine.generation import execution_record, grounded
@@ -90,7 +90,7 @@ class RoundBudgetUnitTest(unittest.TestCase):
 
     def test_pending_feedback_labels(self):
         labels = grounded.pending_feedback_labels({"unanswered_requests": [{}, {}], "dropped_items": [{}], "goal_alignment": "partial"})
-        self.assertEqual(labels, ["答えていない要求 2 件", "原文と一致せず除いた説明 1 件", "質問の目的とのずれ"])
+        self.assertEqual(labels, ["答えていない要求 2 件", "原文と一致しない引用 1 件", "質問の目的とのずれ"])
 
 
 class DeadlineDocumentQuotesTest(unittest.TestCase):
@@ -154,18 +154,19 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         budget = result.generation_trace["round_budget"]
         self.assertEqual(budget["round_seconds"], [350.0])
         # round の所要と、次へ渡す是正の指摘の量を残す（遅い round の理由を確かめる）。
-        self.assertEqual(budget["rounds"][0]["feedback"], ["原文と一致せず除いた説明 1 件"])
+        self.assertEqual(budget["rounds"][0]["feedback"], ["原文と一致しない引用 1 件"])
         self.assertGreater(budget["rounds"][0]["feedback_chars"], 0)
         self.assertGreater(budget["rounds"][0]["prompt_chars"], 0)
         self.assertEqual(budget["stop"]["reason"], grounded.DEADLINE_BEFORE_ROUND)
         self.assertEqual(result.generation_trace["rounds"][0]["deadline_stop"]["estimate_seconds"], 350.0)
         # 確かめ終わった説明は公開し、直していない不足を「回答時間の上限により省略した処理」に出して条件つきにする。
         self.assertIn(GOOD, result.answer_text)
-        self.assertNotIn("CSV", result.answer_text)
+        # 原文と一致しない引用の説明は削除せず印を付ける（#2738）。
+        self.assertEqual(marks(result)["CSVを保存先へ出力します。"], ["quote_unmatched"])
         self.assertIn(grounded.answer_labels().deadline_section + "\n\n・回答の時間の上限が近いため", result.answer_text)
         # 章節の節とは分ける（#2040）。
         self.assertNotIn(grounded.answer_labels().unverified_section, result.answer_text)
-        self.assertIn("原文と一致せず除いた説明 1 件）を直す作り直しをしていません", result.answer_text)
+        self.assertIn("原文と一致しない引用 1 件）を直す作り直しをしていません", result.answer_text)
         self.assertEqual(result.envelope["outcome"], "conditional")
         self.assertTrue(result.needs_human_review)
 
@@ -268,11 +269,13 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         self.assertTrue(rounds[0]["audit_cut"])
         self.assertIsNone(rounds[0]["audit"])
         self.assertTrue(result.generation_trace["round_budget"]["adopted_audit_cut"])
-        # 原文と照合した説明は公開し、監査が終わらなかったことを示して条件つきにする（summary は監査なしで出さない）。
+        # 原文と照合した説明は本文に残して未確認（unassessed）の印を付け、監査が終わらなかったことを示す。summary には
+        # 警告を付ける（#2738）。確かめた段落が 1 つも無いので insufficient_evidence（本文は出す）。
         self.assertIn(GOOD, result.answer_text)
-        self.assertNotIn("集計表出力から明細一覧を出力できます。", result.answer_text)
+        self.assertEqual(marks(result)[GOOD], ["unassessed"])
+        self.assertEqual(marks(result)["集計表出力から明細一覧を出力できます。"], ["summary_unaudited"])
         self.assertIn("確認（監査）が終わらなかったため", result.answer_text)
-        self.assertEqual(result.envelope["outcome"], "conditional")
+        self.assertEqual(result.envelope["outcome"], "insufficient_evidence")
 
     def test_audit_cut_correction_round_does_not_replace_the_audited_round(self):
         """是正の round の監査が切れたら、その round（監査なし）を、監査を通った round より採用しない。"""

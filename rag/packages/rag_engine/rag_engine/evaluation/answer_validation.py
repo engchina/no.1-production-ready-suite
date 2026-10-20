@@ -202,7 +202,8 @@ def audited_answer_items(
     ``envelope_items`` は回答の構造（AnswerEnvelope）の items、``citation_lines`` は引用の chunk の id → その chunk を
     指す出典行の番号（1 始まり。回答の記録の citations の ``answer_citation_lines``。#1330）。説明の行は箇条書き・
     番号の行で、続く最初の出典行（「根拠：」）の根拠を持つ。対象は適用が確定した（applies=matched）説明・規則で、
-    gap・条件つき・適用未確認・原文のみ提示は除く。根拠の chunk が決まらない説明も除く。
+    gap・条件つき・適用未確認・原文のみ提示と、段落の印（mark。未確認・要注意。#2738）の付いた説明は除く。
+    根拠の chunk が決まらない説明も除く。
     """
     by_line: dict[int, list[str]] = {}
     for chunk_id, lines in citation_lines.items():
@@ -225,7 +226,7 @@ def audited_answer_items(
             pending = []
     result: dict[str, list[str]] = {}
     for item in envelope_items:
-        if not isinstance(item, Mapping) or item.get("kind") == "gap" or item.get("applies") != "matched":
+        if not isinstance(item, Mapping) or item.get("kind") == "gap" or item.get("applies") != "matched" or item.get("mark"):
             continue
         key = audited_line_key(str(item.get("text") or ""))
         chunk_ids = list(dict.fromkeys(chunks_by_key.get(key) or ()))
@@ -258,6 +259,33 @@ SUPPORT_TARGET_MISMATCH = "target_mismatch"  # 根拠は別の対象（処理・
 SUPPORT_VALUE_UNBOUND = "value_unbound"  # 段落が、根拠の表の別の行の区分・名前と値を結び付けている
 SUPPORT_QUOTE_UNMATCHED = "quote_unmatched"  # 監査が裏付けとして写した原文が、結び付けた根拠に無い
 SUPPORT_CHECKS = (SUPPORT_TARGET_MISMATCH, SUPPORT_VALUE_UNBOUND, SUPPORT_QUOTE_UNMATCHED)
+
+# 判定（status）・supported を採らなかった理由（support_check）から、段落の印の理由の code（#2738。
+# platform/contracts/answer-passages/passage-marks.json の reason_codes）への写し。判定の語彙は変えず、呼び出し側
+# （Agent の最終の検証）が段落の印・外した段落を決めるのに使う。support_check が status より先に効く。
+CLAIM_MARK_BY_SUPPORT_CHECK = {
+    SUPPORT_TARGET_MISMATCH: "target_mismatch",
+    SUPPORT_VALUE_UNBOUND: "value_unbound",
+    SUPPORT_QUOTE_UNMATCHED: "quote_unmatched",
+}
+CLAIM_MARK_BY_STATUS = {
+    "contradicted": "contradicted",
+    "unsupported": "unsupported",
+    "citation_error": "citation_error",
+    "unassessed": "unassessed",
+    FIGURE_ONLY: "figure_not_read",
+}
+
+
+def claim_mark_code(status: str, support_check: str = "") -> str:
+    """判定の段落の印の理由の code（contradicted は外す、それ以外は本文に残して印）。印が要らない判定は空。
+
+    supported・data_confirmation・not_a_claim は印を付けない。figure_only は図の画像を Run が読んでいないときだけ
+    呼び出し側が印にする（読んでいれば確かめた段落）。
+    """
+    if support_check in CLAIM_MARK_BY_SUPPORT_CHECK and status != "contradicted":
+        return CLAIM_MARK_BY_SUPPORT_CHECK[support_check]
+    return CLAIM_MARK_BY_STATUS.get(status, "")
 
 
 class ValidationClaimCheck(BaseModel):
@@ -460,12 +488,13 @@ def _enforce_support(
 ) -> list[ValidationClaimCheck]:
     """supported を、確かめられる条件をすべて満たすものだけにする（#2659・#2657・#2653）。
 
-    語・話題が根拠と一致することは、主張の対応・対象が根拠と一致することの裏付けにならない。次のどれかに当たる
-    supported は採らない（否定の判定は変えない）。
+    判定と support_check を返すだけで、段落を外すか印を付けるかは呼び出し側が決める（#2738。`claim_mark_code` で
+    印の理由の code に写す）。語・話題が根拠と一致することは、主張の対応・対象が根拠と一致することの裏付けに
+    ならない。次のどれかに当たる supported は採らない（否定の判定は変えない）。
 
     - 監査が裏付けとして写した原文（support_quote）が、結び付けた根拠の本文に無い → citation_error（quote_unmatched）。
     - 監査が、根拠の記載の対象は段落の対象と別（not_applicable）とした → unsupported。``unknown`` は採否に使わない
-      （実の LLM の確認で、対象が同じ正しい段落にも多く付いた。確かめられない段落は監査の判定〔unsupported〕で外す）。
+      （実の LLM の確認で、対象が同じ正しい段落にも多く付いた。確かめられない段落は監査の判定〔unsupported〕に任せる）。
     - 段落が、根拠の表の別の行の区分・名前と値を結び付けている（決定的な照合。`unbound_table_values`）→ unsupported。
 
     ``texts`` は根拠の id → 分割する前の本文（資料ではない根拠を含む）、``document_texts`` は資料の根拠の本文。

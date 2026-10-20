@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.clients.oracle import OracleClient, StoredMessage
+from app.clients.oracle import OracleClient, StoredMessage, _execute
 
 
 @pytest.mark.usefixtures("oracle_db")
@@ -107,3 +107,72 @@ async def test_assistant_answer_notice_round_trips_on_real_oracle() -> None:
     assert by_id[answer_id].content == "合成の回答"
     assert by_id[answer_id].answer_notice == "合成の注意書き\n2 行目"
     assert by_id[user_id].answer_notice is None
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_assistant_passage_marks_are_read_from_the_answer_record_on_real_oracle() -> None:
+    """回答の段落の印（#2738）は回答の記録から trace_id で読み、会話のメッセージに付ける。"""
+    client = OracleClient()
+    profile = await client.ensure_default_search_answer_profile()
+    conversation = await client.create_conversation(search_answer_profile_id=profile.id)
+    trace_id = uuid4().hex
+    answer_id = uuid4().hex
+    user_id = uuid4().hex
+    marks = [
+        {
+            "text": "・合成の説明",
+            "state": "unverified",
+            "reasons": [{"code": "unsupported", "label": "根拠で確かめられない", "detail": ""}],
+        }
+    ]
+    removed = [{"text": "合成の矛盾", "reasons": [{"code": "contradicted", "label": "根拠と矛盾"}]}]
+    try:
+        await client.save_answer_record(
+            {
+                "trace_id": trace_id,
+                "search_answer_profile_id": profile.id,
+                "surface": "chat",
+                "answer_engine": "test",
+                "question": "合成の質問",
+                "answer": "合成の回答",
+                "citations": [],
+                "diagnostics": {"passage_marks": marks, "removed_passages": removed},
+            }
+        )
+        for message in (
+            StoredMessage(
+                id=user_id,
+                conversation_id=conversation.id,
+                role="USER",
+                content="合成の質問",
+                trace_id=trace_id,
+                created_at=datetime.now(UTC),
+            ),
+            StoredMessage(
+                id=answer_id,
+                conversation_id=conversation.id,
+                role="ASSISTANT",
+                content="合成の回答",
+                reply_to_message_id=user_id,
+                trace_id=trace_id,
+                created_at=datetime.now(UTC),
+            ),
+        ):
+            await client.append_message(message)
+        messages = await client.list_messages(conversation.id)
+    finally:
+        await client.delete_conversation(conversation.id)
+        await client._run_transaction(
+            lambda connection: _execute(
+                connection,
+                "DELETE FROM rag_answer_records WHERE trace_id = :trace_id",
+                {"trace_id": trace_id},
+            )
+        )
+
+    by_id = {message.id: message for message in messages}
+    assert by_id[answer_id].passage_record == {
+        "passage_marks": marks,
+        "removed_passages": removed,
+    }
+    assert by_id[user_id].passage_record is None

@@ -41,6 +41,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
 
+from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.deadline import check_deadline, current_deadline
 
@@ -108,7 +109,7 @@ from app.rag.graph_expansion import (
     plan_graph_expansion,
 )
 from app.rag.step_details import step_details_payload
-from app.rag.stored_answer import stored_evaluation_input
+from app.rag.stored_answer import passage_mark_record, stored_evaluation_input
 from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
 from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.search import (
@@ -818,7 +819,7 @@ class AnswerEngine:
                 "answer_source": "approved_faq",
                 # 承認済みの回答をそのまま使うので、対応は「答えた」（#1235）。
                 "outcome": "answered",
-                "envelope": {"schema_version": 1, "outcome": "answered"},
+                "envelope": {"schema_version": ENVELOPE_SCHEMA_VERSION, "outcome": "answered"},
                 "approved_faq_question": faq_question,
                 # 回答した時点の承認済みの回答。FAQ が変わっても根拠の原文を出せる(#737)。
                 "approved_faq_answer": faq_answer,
@@ -3268,6 +3269,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         # 回答の構造（AnswerEnvelope。#1235）。outcome は回答の対応（answered / conditional / …）。
         "outcome": (result.envelope or {}).get("outcome"),
         "envelope": dict(result.envelope or {}),
+        # 段落の印・根拠と矛盾して外した段落・回答全体の警告（#2738。形は
+        # platform/contracts/answer-passages/passage-marks.json）。画面・MCP・評価が読む。
+        **passage_mark_record(result.envelope),
         "reasoning_summary": result.reasoning_summary,
         # rag_poc の回答 viewer が出していた外部データの確認と問い合わせ型(#651)。
         "external_data_required": result.external_data_required,

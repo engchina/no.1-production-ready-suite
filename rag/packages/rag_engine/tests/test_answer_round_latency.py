@@ -82,7 +82,7 @@ class DowngradedOnlyUnitTest(unittest.TestCase):
 
 class DowngradedOnlySynthesizeTest(unittest.TestCase):
     def test_downgrade_left_after_the_context_round_stops_the_correction(self):
-        """資料を足して作り直した組の後に降格だけが残れば、指摘の反映の組（3 組目）を始めない。"""
+        """資料を足して作り直した組の後に印の付いた説明だけが残れば、指摘の反映の組（3 組目）を始めない。"""
         hidden_text = "抽出条件で店舗を指定します。\n抽出結果を保存します。"
         shown = replace(record(0, "●集計表出力\n一覧表を選択します。", "売上-(3)年次集計明細作成"), chunk_uid="run:r0")
         hidden = replace(record(1, hidden_text, "売上-(3)年次集計明細作成", page=21), chunk_uid="run:r1", seq_no=2)
@@ -118,10 +118,11 @@ class DowngradedOnlySynthesizeTest(unittest.TestCase):
         self.assertEqual(rounds[1]["improvement_stop"], grounded.NO_IMPROVEMENT_DOWNGRADED_ONLY)
         stop = result.generation_trace["round_budget"]["stop"]
         self.assertEqual(stop["reason"], grounded.NO_IMPROVEMENT_DOWNGRADED_ONLY)
-        self.assertEqual(stop["feedback"], ["裏付けを確かめられず原文のまま示した説明 1 件"])
-        # 降格した説明は原文のまま示し、時間の上限ではないので「回答時間の上限により省略した処理」には出さない。
-        self.assertIn("抽出結果を保存します。", result.answer_text)
-        self.assertNotIn("抽出結果を CSV で共有フォルダへ保存します。", result.answer_text)
+        self.assertEqual(stop["feedback"], ["根拠で確かめられず印を付けた説明 1 件"])
+        # 確かめられない説明は印つきで本文に残し（#2738）、時間の上限ではないので「回答時間の上限により省略した処理」には出さない。
+        (mark,) = result.envelope["passage_marks"]
+        self.assertTrue(mark["text"].endswith("抽出結果を CSV で共有フォルダへ保存します。"))
+        self.assertEqual(mark["state"], "unverified")
         self.assertNotIn("作り直しをしていません", result.answer_text)
 
 

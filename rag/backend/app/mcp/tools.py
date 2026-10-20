@@ -167,7 +167,11 @@ from app.rag.source_preview import (
     issue_source_preview_token,
     preview_kind,
 )
-from app.rag.stored_answer import stored_citation_metadata
+from app.rag.stored_answer import (
+    PASSAGE_MARK_RECORD_KEYS,
+    passage_mark_record,
+    stored_citation_metadata,
+)
 from app.rag.support_guide_query import build_guide_query
 from app.rag.support_guide_runtime import (
     GuideMatch,
@@ -238,7 +242,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 27: rag_validate_answer の claims の status に、図の見た目だけで決まる主張（figure_only）を、
 #     reference_check に not_figure・single_figure を、support_check に figure_recheck を
 #     足した（#2678）。
-MCP_OUTPUT_SCHEMA_VERSION = 27
+# 28: rag_search に、段落の印（passage_marks）・根拠と矛盾して除いた段落（removed_passages）・
+#     回答全体の警告（answer_warnings）を足した。answer の末尾に「根拠と矛盾し除いた内容」
+#     「確認が必要な点」の節が付く（#2738）。
+MCP_OUTPUT_SCHEMA_VERSION = 28
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -1432,6 +1439,25 @@ class AnswerRequest(BaseModel):
     )
 
 
+class PassageReason(BaseModel):
+    code: str = Field(description="理由の種類。")
+    label: str = Field(description="利用者に示す短い理由。")
+    detail: str = Field(default="", description="理由の詳細（無ければ空）。")
+
+
+class PassageMark(BaseModel):
+    text: str = Field(description="answer の段落（行）の原文。")
+    state: Literal["unverified", "warning"] = Field(
+        description="unverified=根拠で確かめられない / warning=検査で注意が必要。"
+    )
+    reasons: list[PassageReason] = Field(default_factory=list, description="印の理由。")
+
+
+class RemovedPassage(BaseModel):
+    text: str = Field(description="answer から除いた段落。")
+    reasons: list[PassageReason] = Field(default_factory=list, description="除いた理由。")
+
+
 class GuideClarification(BaseModel):
     condition_id: str = Field(description="条件の id（conditions に値を入れて呼び直す）。")
     label: str = Field(description="条件の名前。")
@@ -1564,6 +1590,17 @@ class SearchOutput(VersionedOutput):
         default=None, description="根拠が足りず答えきれなかった理由（無ければ null）。"
     )
     needs_human_review: bool = Field(default=False, description="人の確認が要る回答か。")
+    passage_marks: list[PassageMark] = Field(
+        default_factory=list,
+        description="answer に残した段落のうち、根拠で確かめられない・注意が必要な段落と理由。",
+    )
+    removed_passages: list[RemovedPassage] = Field(
+        default_factory=list, description="根拠と矛盾するため answer から除いた段落と理由。"
+    )
+    answer_warnings: list[PassageReason] = Field(
+        default_factory=list,
+        description="回答全体の警告（質問からずれている可能性など）。",
+    )
     evidence: list[RagEvidence] = Field(
         description=(
             "AI に渡した資料の箇所。回答で引用した箇所（used_in_answer。回答で引用した順）を先に、"
@@ -2573,6 +2610,10 @@ def _answer_fields(
         "guide": _guide_ref(answer.get("guide")),
         "insufficient_reason": reason.strip() or None if isinstance(reason, str) else None,
         "needs_human_review": answer.get("needs_human_review") is True,
+        # 段落の印・外した段落・回答全体の警告（#2738）。古い記録は envelope から読み、無ければ空。
+        **passage_mark_record(
+            answer if any(key in answer for key in PASSAGE_MARK_RECORD_KEYS) else envelope
+        ),
         "evidence": [_evidence(chunk, sections) for chunk in ordered[:evidence_limit]],
         "evidence_omitted": max(0, len(ordered) - evidence_limit),
         "provenance": _provenance(answer.get("provenance")),

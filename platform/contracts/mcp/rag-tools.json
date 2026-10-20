@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 27,
+            "default": 28,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -692,7 +692,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 27,
+            "default": 28,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -862,7 +862,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 27,
+            "default": 28,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1185,7 +1185,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 27,
+            "default": 28,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1565,7 +1565,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 27,
+            "default": 28,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2211,7 +2211,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 27,
+            "default": 28,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2528,7 +2528,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 27,
+            "default": 28,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3646,7 +3646,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 27,
+            "default": 28,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4600,6 +4600,64 @@
             "title": "OlderVersion",
             "type": "object"
           },
+          "PassageMark": {
+            "properties": {
+              "text": {
+                "description": "answer の段落（行）の原文。",
+                "title": "Text",
+                "type": "string"
+              },
+              "state": {
+                "description": "unverified=根拠で確かめられない / warning=検査で注意が必要。",
+                "enum": [
+                  "unverified",
+                  "warning"
+                ],
+                "title": "State",
+                "type": "string"
+              },
+              "reasons": {
+                "description": "印の理由。",
+                "items": {
+                  "$ref": "#/$defs/PassageReason"
+                },
+                "title": "Reasons",
+                "type": "array"
+              }
+            },
+            "required": [
+              "text",
+              "state"
+            ],
+            "title": "PassageMark",
+            "type": "object"
+          },
+          "PassageReason": {
+            "properties": {
+              "code": {
+                "description": "理由の種類。",
+                "title": "Code",
+                "type": "string"
+              },
+              "label": {
+                "description": "利用者に示す短い理由。",
+                "title": "Label",
+                "type": "string"
+              },
+              "detail": {
+                "default": "",
+                "description": "理由の詳細（無ければ空）。",
+                "title": "Detail",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "label"
+            ],
+            "title": "PassageReason",
+            "type": "object"
+          },
           "RagEvidence": {
             "description": "検索・回答の根拠 1 件。",
             "properties": {
@@ -4856,11 +4914,33 @@
             ],
             "title": "RagEvidence",
             "type": "object"
+          },
+          "RemovedPassage": {
+            "properties": {
+              "text": {
+                "description": "answer から除いた段落。",
+                "title": "Text",
+                "type": "string"
+              },
+              "reasons": {
+                "description": "除いた理由。",
+                "items": {
+                  "$ref": "#/$defs/PassageReason"
+                },
+                "title": "Reasons",
+                "type": "array"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "title": "RemovedPassage",
+            "type": "object"
           }
         },
         "properties": {
           "schema_version": {
-            "default": 27,
+            "default": 28,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4963,6 +5043,30 @@
             "description": "人の確認が要る回答か。",
             "title": "Needs Human Review",
             "type": "boolean"
+          },
+          "passage_marks": {
+            "description": "answer に残した段落のうち、根拠で確かめられない・注意が必要な段落と理由。",
+            "items": {
+              "$ref": "#/$defs/PassageMark"
+            },
+            "title": "Passage Marks",
+            "type": "array"
+          },
+          "removed_passages": {
+            "description": "根拠と矛盾するため answer から除いた段落と理由。",
+            "items": {
+              "$ref": "#/$defs/RemovedPassage"
+            },
+            "title": "Removed Passages",
+            "type": "array"
+          },
+          "answer_warnings": {
+            "description": "回答全体の警告（質問からずれている可能性など）。",
+            "items": {
+              "$ref": "#/$defs/PassageReason"
+            },
+            "title": "Answer Warnings",
+            "type": "array"
           },
           "evidence": {
             "description": "AI に渡した資料の箇所。回答で引用した箇所（used_in_answer。回答で引用した順）を先に、検索で当たった根拠（role=retrieved_anchor と、実体からたどった role=entity_expansion。関連度の順）、前後の文脈（neighbor_context など）の順。実体からたどった根拠（前後の文脈の役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に入れる。",
@@ -5548,7 +5652,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 27,
+            "default": 28,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

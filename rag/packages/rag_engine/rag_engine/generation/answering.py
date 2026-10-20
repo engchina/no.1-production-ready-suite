@@ -44,7 +44,7 @@ from rag_engine.dependencies import (
     search_adb_hybrid_chunks,
 )
 from rag_engine.generation import applications as answer_applications
-from rag_engine.generation import form_field_kinds
+from rag_engine.generation import form_field_kinds, passage_marks
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     build_envelope,
@@ -1835,11 +1835,11 @@ MAX_CORRECTION_ROUNDS_STOP = "max_correction_rounds"
 _NO_IMPROVEMENT_RESULTS = {
     "no_improvement_not_accepted": "作り直した回答が前の回答より良くならなかったため、作り直しを止め、採用済みの回答で確定します",
     "no_improvement_same_feedback": "作り直した回答にも前と同じ指摘が残ったため、同じ指摘で作り直さずに確定します",
-    "no_improvement_downgraded_only": "作り直した後に残った指摘は、裏付けを確かめられず原文のまま示した説明だけで、"
-    "作り直しても原文のまま示す説明は減らないため、作り直しをせずに確定します",
+    "no_improvement_downgraded_only": "作り直した後に残った指摘は、根拠で確かめられず印を付けた説明だけで、"
+    "作り直しても印の付いた説明は減らないため、作り直しをせずに確定します",
     "no_improvement_evidence_only": "残った指摘は、回答が「資料に記載が無い」とした要求（根拠の不足）だけで、"
     "同じ根拠のまま作り直しても直らないため、作り直しをせずに確定します",
-    "no_improvement_not_applicable_only": "指摘は、質問の対象ではないと確かめた記載を原文のまま示した説明だけで、"
+    "no_improvement_not_applicable_only": "指摘は、根拠が質問の対象ではないとして警告を付けた説明だけで、"
     "同じ根拠のまま作り直しても対象は変わらないため、作り直しをせずに確定します",
 }
 
@@ -1867,6 +1867,9 @@ def _record_round_audit(step: _ExecutionStep, current: Any, *, accepted: bool, f
     step.field("監査した説明", f"{current.audited_items} 件（監査の呼び出し {current.audit_calls} 回）")
     if current.withdrawn:
         step.field("監査で撤回した説明", f"{current.withdrawn} 件")
+    if current.marked or current.removed:
+        # 段落の印（#2738）: 本文に残して印を付けた説明と、根拠と矛盾して外した説明。
+        step.field("段落の印", f"印を付けた説明 {current.marked} 件・根拠と矛盾して除いた説明 {current.removed} 件")
     if current.applications:
         step.field("規則の当てはめ", f"{sum(1 for item in current.applications if item.published)} / {len(current.applications)} 件を公開")
     if current.guide_steps:
@@ -2065,9 +2068,10 @@ def synthesize_grounded_answer(
                 break
             quote_only = sum(e.quote_only for e in current.checked)
             step.result(
-                f"公開する説明 {current.verified} 件"
+                f"確かめた説明 {current.verified} 件"
+                + (f"、印を付けた説明 {current.marked} 件" if current.marked else "")
+                + (f"、根拠と矛盾して除いた説明 {current.removed} 件" if current.removed else "")
                 + (f"、原文のまま示す記載 {quote_only} 件" if quote_only else "")
-                + (f"、原文と一致せず除外 {len(current.dropped)} 件" if current.dropped else "")
             )
             # 生成と監査の秒と token の数（遅い round の理由を確かめる。#1516）。
             if timing_line := grounded.round_timing_line(current):
@@ -2171,25 +2175,32 @@ def synthesize_grounded_answer(
     runtime_knowledge = form_field_kinds.with_resolved_plan(base_knowledge, resolved_conditions, evidence_plans)
     guide_steps, guide_optional_steps, guide_step_terms = guide_view(runtime_knowledge)
     guide_unsearched = runtime_knowledge.guide_unsearched_steps if runtime_knowledge is not None else ()
-    # 同じ質問・同じ根拠に対する summary が 1 度でも不支持と監査されたら、採用 round の summary も公開しない。
-    # 初回の監査が見逃した保証（「〜により対象者を確認できる」）が、後続 round の指摘に関係なく残っていた (#621)。
-    # 引き継ぐのは、採用 round の summary が不支持の summary の文を繰り返すときだけ（別の結論に書き直した summary は
-    # 採用 round の監査の判定に従う）。また、不支持の round に公開しなかった主張（降格・除外）があり、その後の是正
-    # round が採用されて自身の監査が summary を支持したなら、不支持の理由は summary が頼る item を公開できなかった
-    # ことで、是正で直っている。多段の結論の段を 1 つの item に混ぜた初回の不支持が残り、段を分けて直した結論まで
-    # 外していた (#1383)。
+    # 同じ質問・同じ根拠に対する summary が 1 度でも不支持と監査されたら、採用 round の summary にも警告を付ける
+    # （#2738。以前は中立の文に置き換えていた）。初回の監査が見逃した保証（「〜により対象者を確認できる」）が、後続
+    # round の指摘に関係なく残っていた (#621)。引き継ぐのは、採用 round の summary が不支持の summary の文を繰り返す
+    # ときだけ（別の結論に書き直した summary は採用 round の監査の判定に従う）。また、不支持の round に確かめられ
+    # なかった主張（印・除外）があり、その後の是正 round が採用されて自身の監査が summary を支持したなら、不支持の
+    # 理由は summary が頼る item を確かめられなかったことで、是正で直っている (#1383)。
     summary_flagged = any(
         not (unpublished and number < best_number) and grounded.repeats_summary(str(current.draft.summary), flagged)
         for number, unpublished, flagged in summary_flags
     )
-    if summary_flagged and current.summary != grounded.answer_labels().neutral_summary:
-        current = replace(current, summary=grounded.answer_labels().neutral_summary)
-    # 規則の当てはめが要る質問で、草稿が当てはめを書かずに結論が中立の文になったら、当てはめだけを作る段を 1 回行う
-    # （生成と監査で LLM 2 回。#2159）。生成の可否の欄（applications）をモデルが書かないことがあるため、専用の段で作る。
-    # 失敗しても回答は作り直さず、理由を診断に残す。
+    if (
+        summary_flagged
+        and current.summary != grounded.answer_labels().neutral_summary
+        and str(current.summary or "").strip()
+        and not current.summary_warning
+    ):
+        current = replace(current, summary_warning="前の回の監査が同じ summary を不支持")
+    # 規則の当てはめが要る質問で、草稿が当てはめを書かずに結論が確かめられなかった（中立の文・警告つき）なら、
+    # 当てはめだけを作る段を 1 回行う（生成と監査で LLM 2 回。#2159）。生成の可否の欄（applications）をモデルが
+    # 書かないことがあるため、専用の段で作る。失敗しても回答は作り直さず、理由を診断に残す。
     application_step: dict[str, Any] = {"ran": False}
     if answer_applications.application_step_needed(
-        question, current.summary == grounded.answer_labels().neutral_summary, current.checked, current.applications
+        question,
+        current.summary == grounded.answer_labels().neutral_summary or bool(current.summary_warning),
+        current.checked,
+        current.applications,
     ):
         application_step["ran"] = True
         try:
@@ -2211,23 +2222,30 @@ def synthesize_grounded_answer(
                 current,
                 applications=[*current.applications, *step_applications],
                 summary=step_summary or current.summary,
+                # 当てはめの監査が支持した結論に置き換えたら、確かめた summary にする。
+                summary_warning="" if step_summary else current.summary_warning,
             )
     if image_decision["reason"] == "attempted":
         image_decision["reason"] = (
             "accepted" if mode == "vision_attachments" and image_prompt_mode != "vision_attachments" else "kept_supported_partial_answer"
         )
-    # 廃止・旧版の文書の説明は、今の手順・規則として公開せず原文のみ提示にする（#1492）。生成の是正では直せない
-    # ので、採用した round の確定の段で決定的に行う。
+    # 廃止・旧版の文書の説明には警告を付ける（#1492・#2738）。生成の是正では直せないので、採用した round の確定の段で
+    # 決定的に行う。
     superseded = grounded.superseded_evidence_ids(question, spans)
     superseded_withheld = grounded.withhold_superseded(current.checked, superseded)
-    # 旧版を原文のみ提示にしたことは検査の不合格ではないので、信頼度・人の確認の判定に数えない。
-    problems = current.problems - superseded_withheld
-    # 監査が目的不一致とした round は、支持済み item があっても公開しない (#950)。
+    # 旧版の警告だけの説明は検査の不合格ではないので、信頼度・人の確認の判定に数えない。
+    problems = current.problems - sum(
+        1 for entry in current.checked if entry.marks and all(mark["code"] == "superseded" for mark in entry.marks)
+    )
+    # 監査が目的不一致とした round も本文は残し、回答全体の警告（off_goal）を出す（#2738。以前は #950 で公開した
+    # 説明をすべて捨てていた）。
     off_goal = grounded.off_goal(current, question)
-    published = [] if off_goal else [entry for entry in current.checked if entry.span]
+    answer_warnings = [passage_marks.answer_warning("off_goal", grounded.answer_labels().off_goal_gap)] if off_goal else []
+    # 本文に出す根拠のある item（システムが補った原文を含む。根拠と矛盾して外した item は除く）と、本文に言い換えを
+    # 出す item（引用元の決まらない印つきの説明を含む）。
+    published = [entry for entry in current.checked if entry.span and not entry.removed]
+    removed_entries = [entry for entry in current.checked if entry.removed]
     gaps = [entry.item.text for entry in current.checked if entry.item.kind == "gap"]
-    if off_goal:
-        gaps.append(grounded.answer_labels().off_goal_gap)
     # 章節の拡張が上限で読めなかった章節 (#1436)。本文の「回答に未反映の関連章節」に出し、回答を条件つきにする。
     # 回答時間の上限で確かめられなかった点（#1516。直していない是正の指摘・終わらなかった監査・生成）は
     # 「回答時間の上限により省略した処理」の節に分けて出す（#2040）。不足・条件つきの判定には両方を使う。
@@ -2247,21 +2265,21 @@ def synthesize_grounded_answer(
         if entry["reviewed"] and entry["status"] == "missing"
     ]
     unanswered = [entry["reason"] for entry in current.unanswered]
-    # 業務ガイドの必須の手順を、利用者が行う説明として公開できたか（#2491）。採用した round の確定（旧版の原文のみ
-    # 提示など）の後の説明で決め直す。参考情報としてだけ示した手順・根拠の無い手順は本文の不足に出し、回答の構造の
-    # 要求にも載せて、充足済みとして確定しない。
+    # 業務ガイドの必須の手順を、利用者が行う説明として公開できたか（#2491）。採用した round の確定の後の説明で
+    # 決め直す。参考情報としてだけ示した手順・根拠の無い手順は本文の不足に出し、回答の構造の要求にも載せて、
+    # 充足済みとして確定しない。
     guide_coverage = (
         grounded.guide_step_coverage(
             guide_steps, current.checked, spans, guide_optional_steps, guide_step_terms, guide_semantics, guide_unsearched
         )
-        if guide_steps and not off_goal
+        if guide_steps
         else []
     )
     guide_gaps = [grounded.guide_step_gap_line(step) for step in grounded.unexplained_guide_steps(guide_coverage)]
     unanswered += guide_gaps
     # 監査が「回答に必要なのに使われていない」と挙げた根拠。言い換えや適用の断定は加えず、原文のみ提示で示す (#1098)。
-    needed = [] if off_goal else grounded.audit_needed_quotes(current, spans, question=question)
-    actionable = [entry for entry in published if not entry.quote_only]
+    needed = grounded.audit_needed_quotes(current, spans, question=question)
+    actionable = [entry for entry in current.checked if entry.published]
     # 回答に実際に出す根拠。参照欄と画像の参照はこれに同期する。
     shown = published
     gap_items = [grounded.CheckedItem(GroundedItem(kind="gap", text=gap)) for gap in gaps]
@@ -2282,6 +2300,8 @@ def synthesize_grounded_answer(
     external_data_required = requires_environment_data(
         settled, items=current.draft.confirmation_items(), external_data_required=current.draft.external_data_required
     )
+    # summary を確かめきれなかった理由（#2738）。モデルの summary を出す分岐でだけ、summary の段落に警告を付ける。
+    summary_reasons = [passage_marks.reason("summary_unaudited", current.summary_warning)] if current.summary_warning else []
     # 回答の構造に載せる説明（#1235）。拒答の分岐の「資料の記載」は答えではないので載せない。
     envelope_entries: list[grounded.CheckedItem] = []
     if actionable:
@@ -2290,8 +2310,8 @@ def synthesize_grounded_answer(
         cited = {entry.span["evidence_id"] for entry in published}
         extra = [entry for entry in needed if entry.span["evidence_id"] not in cited] if reviewed_unanswered else []
         shown = [*published, *extra]
-        envelope_entries = shown
-        answer_text, citation_lines = grounded.render_with_citations(
+        envelope_entries = [*[entry for entry in current.checked if entry.published or (entry.span and not entry.removed)], *extra]
+        rendered = grounded.render_answer(
             current.summary,
             [*current.checked, *extra],
             [*reviewed_unanswered, *guide_gaps],
@@ -2300,22 +2320,25 @@ def synthesize_grounded_answer(
             deadline=deadline_lines,
             applications=current.applications,
             subquestions=subquestions,
+            summary_reasons=summary_reasons,
+            answer_warnings=answer_warnings,
         )
     elif needed:
-        # 実行できる説明が無い（公開 item が無い、または降格した原文だけ）なら、モデルが選んだ降格済みの原文より、
-        # 根拠全体を見た監査が必要と挙げた根拠を示す。冒頭は拒答文ではなく中立の文 (#1098, #1106)。
+        # 本文に出す説明が無い（公開 item が無い、またはシステムが補った原文だけ）なら、根拠全体を見た監査が必要と
+        # 挙げた根拠を示す。冒頭は拒答文ではなく中立の文 (#1098, #1106)。
         shown = needed
         envelope_entries = needed
-        answer_text, citation_lines = grounded.render_with_citations(
+        rendered = grounded.render_answer(
             grounded.answer_labels().neutral_summary,
-            [*needed, *gap_items],
+            [*needed, *gap_items, *removed_entries],
             confirmations=confirmation_section,
             unverified=unread_lines,
             deadline=deadline_lines,
+            answer_warnings=answer_warnings,
         )
     elif published:
         envelope_entries = published
-        answer_text, citation_lines = grounded.render_with_citations(
+        rendered = grounded.render_answer(
             current.summary,
             current.checked,
             [*reviewed_unanswered, *guide_gaps],
@@ -2324,6 +2347,8 @@ def synthesize_grounded_answer(
             deadline=deadline_lines,
             applications=current.applications,
             subquestions=subquestions,
+            summary_reasons=summary_reasons,
+            answer_warnings=answer_warnings,
         )
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
@@ -2339,17 +2364,20 @@ def synthesize_grounded_answer(
         # 拒答文では要求ごとの missing 行を重ねない。拒答文と gap がすでに「答えていない」ことを述べており、gap だけの
         # round も監査するようになって (#1014) 全要求が missing になるため、同じ内容の行が要求の数だけ増える。
         # 確認すれば確定できる実データ・別の資料があれば、拒答ではなくそれを案内する。無ければ拒答（作り話をしない。#688）。
-        answer_text, citation_lines = grounded.render_with_citations(
+        rendered = grounded.render_answer(
             grounded.answer_labels().confirmation_only_summary
             if confirmation_section
             else grounded.answer_labels().deadline_summary
             if no_draft
             else "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
-            [*related, *gap_items],
+            [*related, *gap_items, *removed_entries],
             confirmations=confirmation_section,
             unverified=unread_lines,
             deadline=deadline_lines,
+            answer_warnings=answer_warnings,
         )
+    answer_text, citation_lines = rendered.text, rendered.citation_lines
+    passage_record = rendered.record()
     # 適用性が未確定（conditional / unverified）の説明を含む回答は high にしない。引用の一致（support）と質問への
     # 適用（applicability）は別の判定で、適用未確認（unverified）は人手確認の対象にする (#1012)。
     unsettled = [e for e in published if not e.quote_only and e.item.applies != "matched"]
@@ -2359,6 +2387,8 @@ def synthesize_grounded_answer(
     elif confidence == "high" and (problems or unanswered or unsettled or unread):
         confidence = "medium"
     unverified = any(e.item.applies == "unverified" for e in unsettled)
+    # 印・外した段落の数（#2738。評価と比較に使う）。
+    mark_counts = passage_marks.mark_counts(passage_record)
     trace = {
         "pipeline": "grounded",
         "task_contract": task_contract(question),
@@ -2392,8 +2422,10 @@ def synthesize_grounded_answer(
             "filtered": bool(problems),
             "citations_synchronized": True,
             "off_goal": off_goal,
-            "retained_evidence_ids": sorted({e.span["evidence_id"] for e in shown}),
+            "retained_evidence_ids": sorted({e.span["evidence_id"] for e in shown if e.span}),
             "retained_passage_ids": [],
+            # 段落の印の数（矛盾で外した・未確認・要注意・回答全体の警告。#2738）。
+            "passage_mark_counts": mark_counts,
         },
     }
     envelope = build_envelope(
@@ -2410,13 +2442,17 @@ def synthesize_grounded_answer(
         # 本文に出した行（資料名を創作していない行）だけを載せ、本文と食い違わないようにする。
         document_items=[text for text in settled.document if f"{REFERENCE_CONFIRMATION_PREFIX}{text}" in confirmations],
         guide_steps=guide_coverage,
+        # 段落の印・外した段落・回答全体の警告（#2738。platform/contracts/answer-passages/passage-marks.json）。
+        **passage_record,
     )
     # 回答に使った箇所ごとの使われ方（確かめた説明か参考か。#2040）。画面の件数・バッジと MCP の evidence が使う。
-    # 箇所は引用を支える子の chunk（#2710）。子が決まらない説明だけを親（まとまり）の参照にし、親の ID で兄弟の子
-    # すべてを「回答で引用」にしない。
+    # 印の付いた説明の根拠は参考（#2738）。箇所は引用を支える子の chunk（#2710）。子が決まらない説明だけを親
+    # （まとまり）の参照にし、親の ID で兄弟の子すべてを「回答で引用」にしない。
     shown_ids: list[tuple[grounded.CheckedItem, list[str]]] = []
     shown_uses: dict[str, str] = {}
     for entry in shown:
+        if entry.span is None:
+            continue
         exact, _candidates = grounded.citation_children(entry.span, entry.item.quote)
         ids = exact or [entry.span["source_id"]]
         shown_ids.append((entry, ids))
@@ -2446,9 +2482,10 @@ def synthesize_grounded_answer(
                 )
             ),
             reasoning_summary=(
-                f"引用照合済みの説明 {current.verified} 件、"
-                f"原文のみ提示 {sum(e.quote_only for e in current.checked)} 件、"
-                f"原文と一致せず除外 {len(current.dropped)} 件。"
+                f"確かめた説明 {current.verified} 件、"
+                f"印を付けた説明 {mark_counts['unverified'] + mark_counts['warning']} 件、"
+                f"根拠と矛盾して除いた説明 {mark_counts['removed']} 件、"
+                f"原文のみ提示 {sum(e.quote_only for e in current.checked)} 件。"
             ),
             insufficient_reason="\n".join(dict.fromkeys([*gaps, *unread, *unanswered])),
             needs_human_review=bool(
@@ -2460,6 +2497,9 @@ def synthesize_grounded_answer(
                 or unverified
                 or current.draft.reference_materials
                 or settled.document
+                or mark_counts["removed"]
+                or mark_counts["unverified"]
+                or answer_warnings
             ),
             external_data_required=external_data_required,
             external_data_items=settled.system,

@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Literal
 
+from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.knowledge.runtime_knowledge import label_matches, parse_runtime_terms
 
 from app.schemas.classification import category_label
@@ -1063,13 +1064,17 @@ def guide_short_circuit_outcome(guide: Mapping[str, Any]) -> Any:
     outcome = "needs_clarification" if clarify else "needs_human"
     summary = _guide_summary(guide)
     envelope = {
-        "schema_version": 1,
+        "schema_version": ENVELOPE_SCHEMA_VERSION,
         "outcome": outcome,
         "requests": [],
         "items": [],
         "conditions": [],
         "gaps": [],
         "confirmations": [],
+        # 段落の印・外した段落・回答全体の警告（#2738）。確認・引き継ぎは本文の段落を検証しない。
+        "passage_marks": [],
+        "removed_passages": [],
+        "answer_warnings": [],
         "reference_materials": [],
         "handoff_reasons": ["clarification" if clarify else "handoff"],
         "clarifications": list(guide.get("clarifications") or []),

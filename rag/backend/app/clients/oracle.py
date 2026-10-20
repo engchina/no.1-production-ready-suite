@@ -334,6 +334,11 @@ class StoredMessage:
     # 質問に添付したファイル（USER のメッセージだけ。名前・種類・大きさ。#2517）。添付が期限で
     # 消えても発話の表示に残す。添付の無い質問は None。
     attachments: list[dict[str, Any]] | None = None
+    # 回答の段落の印・根拠と矛盾して外した段落・回答全体の警告（ASSISTANT の回答だけ。#2738。
+    # ``passage_marks`` / ``removed_passages`` / ``answer_warnings`` の dict）。メッセージの列には
+    # 保存せず、回答の記録（rag_answer_records の diagnostics_json）から trace_id で読む。
+    # 記録の無い回答（保存の失敗・保存期間の経過・この機能より前の回答）は None。
+    passage_record: dict[str, Any] | None = None
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
@@ -4416,10 +4421,19 @@ class OracleClient:
                 m.clarification_json,
                 m.answer_notice,
                 m.attachments_json,
-                m.created_at
+                m.created_at,
+                JSON_QUERY(r.diagnostics_json, '$.passage_marks' RETURNING CLOB)
+                    AS passage_marks_json,
+                JSON_QUERY(r.diagnostics_json, '$.removed_passages' RETURNING CLOB)
+                    AS removed_passages_json,
+                JSON_QUERY(r.diagnostics_json, '$.answer_warnings' RETURNING CLOB)
+                    AS answer_warnings_json
             FROM rag_messages m
             JOIN rag_conversations c
               ON c.conversation_id = m.conversation_id
+            LEFT JOIN rag_answer_records r
+              ON r.trace_id = m.trace_id
+             AND m.role = 'ASSISTANT'
             WHERE m.conversation_id = :conversation_id
               AND {access_sql}
             ORDER BY m.created_at ASC, m.message_id ASC
@@ -13892,7 +13906,30 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
             if row.get("heartbeat_at") is not None
             else None
         ),
+        passage_record=_message_passage_record(row),
     )
+
+
+_MESSAGE_PASSAGE_COLUMNS = (
+    ("passage_marks", "passage_marks_json"),
+    ("removed_passages", "removed_passages_json"),
+    ("answer_warnings", "answer_warnings_json"),
+)
+
+
+def _message_passage_record(row: Mapping[str, object]) -> dict[str, Any] | None:
+    """回答の記録から読んだ段落の印の 3 つ（#2738）。どれも無ければ None。"""
+    values: dict[str, Any] = {}
+    for key, column in _MESSAGE_PASSAGE_COLUMNS:
+        raw = row.get(column)
+        if isinstance(raw, str | bytes):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                raw = None
+        if isinstance(raw, list):
+            values[key] = raw
+    return values or None
 
 
 def _ingestion_job_from_row(row: Mapping[str, object]) -> IngestionJob:

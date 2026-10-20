@@ -1,12 +1,13 @@
 """回答の「当てはめ」: 支持された規則の item を、質問に書かれた事実に当てはめた結果の検査（#2155）。
 
 原文の引用で支える item（``grounded.GroundedItem``）は、規則を質問の事実に当てはめた結果（計算の結果・
-該当するか）を書けない。当てはめは次の検査をすべて通ったものだけを公開する:
+該当するか）を書けない。当てはめは次の検査で、出さないもの（reasons）と警告を付けて出すもの（warnings）を分ける（#2738）:
 
-- 前提（premises）は質問の原文の連続した一部（決定的に照合する）。
-- 使う規則は、検査と監査を通った item（原文の引用つき）を index で指す。指した item が降格したら公開しない。
-- 本文の算式（数と ＋−×÷ と ＝）は計算し直して、合わないものは公開しない。
-- 監査（``GroundedAudit.application_reviews``）が正しいと判定したものだけを公開する。
+- 出さない: 算式（数と ＋−×÷ と ＝）を計算し直して合わない、監査（``GroundedAudit.application_reviews``）が誤りと
+  判定した（valid=false）、指した規則の item が根拠と矛盾して外れた、規則の item を指していない・前提が無い、
+  内部の番号を利用者向けの文に書いている。
+- 警告（application_unaudited）を付けて出す: 前提（premises）が質問の原文の連続した一部と照合できない、監査が無い・
+  判定が無い、指した規則の item に印が付いている（未確認・要注意）。
 
 特定の業務・文書の知識は持たない（規則は根拠の原文、事実は質問から取る）。
 """
@@ -25,6 +26,7 @@ from typing import Any
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import text_patterns
 
+from rag_engine.generation import passage_marks
 from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.models.llm import ApplicationAudit, ApplicationDraft, GroundedApplication, GroundedAudit
 
@@ -36,27 +38,43 @@ REASONING_LABEL = "当てはめ："
 
 @dataclass
 class CheckedApplication:
-    """検査後の当てはめ。``entries`` は指した規則の item（``grounded.CheckedItem``）。"""
+    """検査後の当てはめ。``entries`` は指した規則の item（``grounded.CheckedItem``）。
+
+    reasons は出さない理由（矛盾・計算の誤り・形の誤り）、warnings は出して警告を付ける理由（確かめきれない。#2738）。
+    """
 
     application: GroundedApplication
     entries: list[Any] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
     # どこで作ったか（draft = 回答の草稿、step = 当てはめだけを作り直す段。#2159）。
     source: str = "draft"
+    warnings: list[str] = field(default_factory=list)
 
     def reject(self, reason: str) -> None:
         self.reasons.append(reason)
 
+    def warn(self, reason: str) -> None:
+        self.warnings.append(reason)
+
     @property
     def published(self) -> bool:
-        """公開できるか（検査・監査を通り、指した規則の item がすべて支持されたまま）。"""
-        return not self.reasons and bool(self.entries) and all(_supported(entry) for entry in self.entries)
+        """出すか（矛盾・誤りが無く、指した規則の item がすべて本文に残っている）。"""
+        return not self.reasons and bool(self.entries) and all(_usable(entry) for entry in self.entries)
+
+    @property
+    def marks(self) -> list[dict[str, str]]:
+        """出す当てはめの警告の理由（application_unaudited）。確かめた当てはめは空。"""
+        details = list(self.warnings)
+        if any(not _supported(entry) for entry in self.entries):
+            details.append("当てはめた規則が根拠で確かめられていない")
+        return [passage_marks.reason("application_unaudited", detail) for detail in dict.fromkeys(details)]
 
     def to_payload(self) -> dict[str, Any]:
         return {
             **self.application.model_dump(),
             "published": self.published,
             "reasons": list(self.reasons),
+            "warnings": list(self.warnings),
             "source": self.source,
         }
 
@@ -77,8 +95,14 @@ def _source_label(span: dict | None) -> str:
     return " / ".join(value for value in (str(span.get("source") or ""), heading) if value)
 
 
+def _usable(entry: Any) -> bool:
+    """当てはめに使える（本文に言い換えが残る）規則の item か。根拠と矛盾して外した item は使えない。"""
+    return bool(entry.span) and not entry.quote_only and not getattr(entry, "removed", False) and entry.item.kind != "gap"
+
+
 def _supported(entry: Any) -> bool:
-    return bool(entry.span) and not entry.quote_only and entry.item.kind != "gap" and entry.item.applies != "unverified"
+    """確かめた規則の item か（印が無く、適用が未確認でない）。"""
+    return _usable(entry) and not getattr(entry, "state", "") and entry.item.applies != "unverified"
 
 
 def _compact(text: str) -> str:
@@ -98,7 +122,7 @@ def check_applications(
             entry.reject("前提が無い")
         for premise in premises:
             if _compact(premise) not in asked:
-                entry.reject(f"前提『{premise}』は質問に無い")
+                entry.warn(f"前提『{premise}』は質問に無い")
         indexes = list(dict.fromkeys(application.item_indexes))
         if not indexes:
             entry.reject("当てはめる規則の item が無い")
@@ -117,14 +141,14 @@ def check_applications(
 
 
 def apply_application_audit(checked: Sequence[CheckedApplication], audit: GroundedAudit | ApplicationAudit | None) -> None:
-    """監査が正しいと判定した当てはめだけを残す。監査が無い・判定が無いものは公開しない。"""
+    """監査が誤りと判定した当てはめは出さない。監査が無い・判定が無いものは警告を付けて出す（#2738）。"""
     reviews = {review.index: review for review in (audit.application_reviews if audit else [])}
     for index, entry in enumerate(checked):
         review = reviews.get(index)
         if audit is None:
-            entry.reject("監査なし")
+            entry.warn("監査なし")
         elif review is None:
-            entry.reject("監査の判定なし")
+            entry.warn("監査の判定なし")
         elif not review.valid:
             entry.reject(f"監査: {review.reason}")
 
@@ -149,11 +173,15 @@ def audit_view(checked: Sequence[CheckedApplication], index_of: Callable[[Any], 
 
 
 def render_lines(
-    checked: Sequence[CheckedApplication], citation: Callable[[dict], str], cite: Callable[[Sequence[Any]], None]
+    checked: Sequence[CheckedApplication],
+    citation: Callable[[dict], str],
+    cite: Callable[[Sequence[Any]], None],
+    mark: Callable[[str, CheckedApplication], None] | None = None,
 ) -> list[str]:
     """公開する当てはめの本文の行。指した規則の出典行を、本文の出典行と同じ形で続ける。
 
     同じ出典行になる規則はまとめて 1 行にし、``cite`` にはその行にまとめた規則（CheckedItem）をすべて渡す（#2710）。
+    ``mark`` には結果の行と当てはめを渡す（警告の段落の印にする。#2738）。
     """
     lines: list[str] = []
     for entry in checked:
@@ -161,6 +189,8 @@ def render_lines(
             continue
         application = entry.application
         lines.append(f"・{application.result.strip()}")
+        if mark is not None and entry.marks:
+            mark(lines[-1], entry)
         premises = "".join(f"「{premise.strip()}」" for premise in application.premises if premise.strip())
         if premises:
             lines.append(PREMISES_LABEL + premises)
@@ -321,7 +351,7 @@ def application_step_needed(
 
 
 def application_step_inputs(question: str, checked: Sequence[Any], request_units: Sequence[dict]) -> tuple[dict[str, Any], dict[int, Any]]:
-    """当てはめの段の入力（支持された items だけ）と、index から item への対応。"""
+    """当てはめの段の入力（確かめた items だけ）と、index から item への対応。"""
     supported = {index: entry for index, entry in enumerate(checked) if _supported(entry)}
     inputs = {
         "question": question,
