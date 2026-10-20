@@ -31,6 +31,7 @@ import {
   resolveSelectedRecipe,
   type RecipeLayerStatusView,
 } from "./DocumentRecipeManager.logic";
+import { useRecipeOperationError } from "./recipe-operation-error";
 import { CitationCard } from "@/components/search/CitationCard";
 import {
   queueAheadText,
@@ -134,6 +135,15 @@ export function DocumentRecipeManager({
   const deleteRecipe = useDeleteDocumentRecipe();
   const enqueue = useEnqueueDocumentRecipeJob();
   const approve = useApproveDocumentRecipe();
+  // 失敗は、失敗した操作のレシピを選んでいるときだけ出す（別のレシピの失敗として見せない。#944）。
+  // 設定を保存した・処理が進んだ後は、前の失敗を出し続けない（#2639）。
+  const processError = useRecipeOperationError(
+    selected
+      ? (enqueue.variables?.recipeId === selected.recipe_id ? enqueue.error : null) ??
+          (approve.variables?.recipeId === selected.recipe_id ? approve.error : null)
+      : null,
+    selected
+  );
   const confirm = useConfirm();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [addMode, setAddMode] = useState<AddMode>("clone");
@@ -243,10 +253,6 @@ export function DocumentRecipeManager({
   const deletePending =
     deleteRecipe.isPending && deleteRecipe.variables?.recipeId === selected.recipe_id;
   const recipeOperationPending = enqueue.isPending || approve.isPending || deleteRecipe.isPending;
-  // 失敗は、失敗した操作のレシピを選んでいるときだけ出す（別のレシピの失敗として見せない。#944）。
-  const processError =
-    (enqueue.variables?.recipeId === selected.recipe_id ? enqueue.error : null) ??
-    (approve.variables?.recipeId === selected.recipe_id ? approve.error : null);
   // 削除の失敗（処理中・最少 1 件など）も操作の近くに出す。以前は確認ダイアログを閉じた後に何も出なかった（#281）。
   const deleteError =
     deleteRecipe.variables?.recipeId === selected.recipe_id ? deleteRecipe.error : null;
