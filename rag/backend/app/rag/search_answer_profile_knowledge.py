@@ -52,6 +52,8 @@ from rag_engine.knowledge.domain_keywords import (
     normalize_domain_keywords,
 )
 from rag_engine.knowledge.runtime_knowledge import (
+    MAX_RULES,
+    MAX_TERMS,
     RuntimeKnowledgeContext,
     build_runtime_knowledge_context,
 )
@@ -480,6 +482,20 @@ def preview_runtime_knowledge(
     """質問に一致する用語・ルールと拡張後の検索文を返す(保存しない)。"""
     with _runtime_knowledge_dir(payload) as (work_dir, path):
         return build_runtime_knowledge_context(question, work_dir, path)
+
+
+def match_runtime_knowledge(
+    payload: Mapping[str, object], question: str
+) -> RuntimeKnowledgeContext:
+    """質問に当たる有効な用語・ルールを、一致の強い順にすべて返す(件数で切らない。保存しない)。
+
+    照合と有効の判定(承認済み・見直し待ちだけ)は回答生成と同じ。件数・字数で切って省いた数を
+    示すのは呼び出し元(MCP の根拠の取得。#2701)。
+    """
+    with _runtime_knowledge_dir(payload) as (work_dir, path):
+        return build_runtime_knowledge_context(
+            question, work_dir, path, term_limit=MAX_TERMS, rule_limit=MAX_RULES
+        )
 
 
 @contextmanager
