@@ -252,6 +252,7 @@ AUDIT_SYSTEM_PROMPT = (
     "- question / task_contract: 原質問と、変更してはいけない目的・条件（goal、current_request、request_units など）。\n"
     "- summary: 草稿の結論。\n"
     "- items: 監査対象。index、request_id、kind、text（言い換え）、applies、condition、quote（原文）、evidence_id（引用元）、checks、function（文書名 / 版 / 機能見出し）、origin、heading、function_limits。\n"
+    "- request_question: 当該 item が答える小問と共通の前提。適用性はこの質問で判断し、他の小問だけのエラー・対象・条件を当てはめない。\n"
     "- checks: 機械照合が付けた手がかり（案内した語が照合先の本文に見当たらない等）。照合先は限定した本文の集合で、"
     "実在する語でも「無い」と出ることがある。結論ではないので、evidence の本文で確かめてから判定する。\n"
     "- evidence: evidence_id ごとの引用元の本文。quote はこの本文から切り出した抜粋で、item の主張の一部しか含まないことがある。\n"
@@ -1205,6 +1206,19 @@ def _check_item(item: GroundedItem) -> GroundedItem:
     return item.model_copy(update={"text": fold_width(item.text), "quote": fold_width(item.quote), "condition": fold_width(item.condition)})
 
 
+def item_question(question: str, request_id: str) -> str:
+    """小問に対応する説明は、その小問と共通の前置きで検査する。未対応の id は全体を保つ。"""
+    units = [unit for unit in task_contract(question)["request_units"] if unit.get("subquestion")]
+    if len(units) < 2:
+        return question
+    unit = next((unit for unit in units if request_id == unit["id"] or request_id.startswith(str(unit["id"]) + ".")), None)
+    if unit is None:
+        return question
+    first = question.find(str(units[0]["text"]))
+    preface = question[:first].strip() if first > 0 else ""
+    return "\n".join(part for part in (preface, str(unit["text"])) if part)
+
+
 def verify(
     question: str, draft: GroundedDraft, spans: Sequence[dict], *, guide_sources: Sequence[str] = ()
 ) -> tuple[list[CheckedItem], list[dict]]:
@@ -1220,21 +1234,33 @@ def verify(
     dropped: list[dict] = []
     views = {id(span): check_view(span) for span in spans}
     view_spans = list(views.values())
-    missing_objects = _missing_question_objects(question, view_spans)
     contract = task_contract(question)
-    asked_errors = contract["error_messages"]
-    missing_errors = _missing_question_errors(asked_errors, view_spans)
-    # 種別語で終わる対象（帳票・画面）は業務対象の検査（`_substituted_objects` / `_claims_about_absent_object`）に任せ、
-    # ここでは「社印」「支店長名」のように種別語で終わらない操作対象だけを見る。
-    missing_targets = _missing_question_targets(
-        [t for t in contract["action_targets"] if t not in contract["business_objects"]], view_spans
-    )
-    question_terms = _question_terms(question, contract)
     primary_document = _document_key(spans[0]) if spans else ()
     guide_source_ids = set(guide_sources)
     substituted: dict[str, str] = {}
     context_ids = _context_request_ids(question)
+    # 小問ごとの文脈を再利用し、他の小問のエラーや対象名を持ち込まない。
+    check_contexts: dict[str, dict[str, Any]] = {}
+
+    def check_context(text: str) -> dict[str, Any]:
+        if text not in check_contexts:
+            local_contract = task_contract(text)
+            local_errors = local_contract["error_messages"]
+            check_contexts[text] = {
+                "contract": local_contract,
+                "objects": _missing_question_objects(text, view_spans),
+                "errors": local_errors,
+                "missing_errors": _missing_question_errors(local_errors, view_spans),
+                "targets": _missing_question_targets(
+                    [target for target in local_contract["action_targets"] if target not in local_contract["business_objects"]], view_spans
+                ),
+                "terms": _question_terms(text, local_contract),
+            }
+        return check_contexts[text]
+
     for index, item in enumerate(draft.items):
+        scoped_question = item_question(question, item.request_id)
+        local = check_context(scoped_question)
         if item.kind == "gap":
             if item.request_id in context_ids:
                 # 背景文（kind=context）は答える対象ではない。それに対する gap は利用者に意味がない (#650)。
@@ -1291,21 +1317,25 @@ def verify(
         )
         check_item = _check_item(entry.item)
         for check in ITEM_CHECKS:
-            reason = check(question, check_item, view)
+            reason = check(scoped_question, check_item, view)
             if reason:
                 _mark_check(entry, ITEM_CHECK_NAMES[check], reason, code="value_unbound" if check is _check_table_binding else "item_check")
         for check in ITEM_HINTS:
-            hint = check(question, check_item, view)
+            hint = check(scoped_question, check_item, view)
             if hint:
                 entry.hints.append(hint)
-        conflicting = _generated_values_absent_from_document_text(question, entry, spans)
+        conflicting = _generated_values_absent_from_document_text(scoped_question, entry, spans)
         if conflicting:
             # 生成説明にだけある値は画面の表示例で、利用者の実値ではない。答えに使えば誤りなので警告を付ける (#1100)。
             _mark_check(entry, GENERATED_VALUE_CHECK, "生成説明の値『" + "』『".join(conflicting) + "』が同じ機能の本文にない")
-        for asked, other in _substituted_objects(missing_objects, entry.item.text):
+        for asked, other in _substituted_objects(local["objects"], entry.item.text):
             _mark_check(entry, QUESTION_TARGET_CHECK, f"質問の対象『{asked}』は根拠になく、別の対象『{other}』の説明")
             substituted.setdefault(asked, other)
-        if missing_errors and entry.item.kind in {"operation", "confirmation", "rule"} and not _unit_mentions_error(view, asked_errors):
+        if (
+            local["missing_errors"]
+            and entry.item.kind in {"operation", "confirmation", "rule"}
+            and not _unit_mentions_error(view, local["errors"])
+        ):
             # 質問のエラー文が根拠のどこにもなく、この item の機能ユニットが質問のどのエラーにも触れていない。
             # 別のエラー（質問と異なるエラー番号）の手順を適用扱いにしない (#686)。原因・規則の説明（rule）も同じ:
             # 別エラーの原因を質問のエラーの原因として確かめた事項にしない (#993)。
@@ -1313,16 +1343,16 @@ def verify(
                 entry,
                 QUESTION_ERROR_CHECK,
                 "質問のエラー『"
-                + "』『".join(missing_errors)
+                + "』『".join(local["missing_errors"])
                 + "』は根拠になく、"
                 + ("別のエラーの説明" if entry.item.kind == "rule" else "別の箇所の手順"),
             )
         if (
-            question_terms
+            local["terms"]
             and entry.item.kind in {"operation", "confirmation"}
             and primary_document
             and _document_key(entry.span) != primary_document
-            and not _document_mentions_question(view, question_terms)
+            and not _document_mentions_question(view, local["terms"])
             and str(span.get("source_id") or "") not in guide_source_ids
         ):
             # 最上位候補以外の文書で、本文・見出し・同じ文書の本文が質問の語を 1 つも含まない。別業務の資料の
@@ -1330,12 +1360,12 @@ def verify(
             # 最上位候補の文書は検索が質問に最も関係すると判断したもので、対象が別名でも手順は残す（#673 と同じ扱い）。
             # ガイドが集めた前提・後続手順も質問の語を持たないことがある。適用可否は対象の検査と監査で確かめる。
             _mark_check(entry, OTHER_DOCUMENT_CHECK, "質問の語を含まない別文書の手順")
-        if missing_targets and entry.item.kind in {"operation", "confirmation"}:
+        if local["targets"] and entry.item.kind in {"operation", "confirmation"}:
             # 質問の操作対象（「社印」）が根拠のどこにもない。資料にある別の対象（「角印」）の手順を適用扱いにしない (#700)。
-            _mark_check(entry, QUESTION_TARGET_CHECK, "質問の対象『" + "』『".join(missing_targets) + "』は根拠になく、別の箇所の手順")
-            for asked in missing_targets:
+            _mark_check(entry, QUESTION_TARGET_CHECK, "質問の対象『" + "』『".join(local["targets"]) + "』は根拠になく、別の箇所の手順")
+            for asked in local["targets"]:
                 substituted.setdefault(asked, "")
-        for asked in _claims_about_absent_object([*missing_objects, *missing_targets], entry.item):
+        for asked in _claims_about_absent_object([*local["objects"], *local["targets"]], entry.item):
             # 「地区別売上集計表は…CSV として出力して作成します」のように、資料にない対象を主語に
             # 資料の別内容を結び付けた定義。引用が述部を支持していても対象の話ではない (#673)。
             _mark_check(entry, QUESTION_TARGET_CHECK, f"質問の対象『{asked}』は根拠になく、その対象についての説明")
@@ -1344,9 +1374,20 @@ def verify(
     for asked in substituted:
         # 別対象の手順で答えた item には警告を付け、質問の対象が資料にないことを本文で伝える (#642)。
         checked.append(CheckedItem(GroundedItem(kind="gap", text=f"『{asked}』は取得した資料に記載がありません。")))
-    for asked in missing_errors:
-        # 質問のエラー文が根拠のどこにも無ければ、item の種類や警告の有無に関係なく本文で伝える (#993)。
-        checked.append(CheckedItem(GroundedItem(kind="gap", text=missing_error_gap(asked, contract["business_objects"]))))
+    subquestions = [unit for unit in contract["request_units"] if unit.get("subquestion")]
+    error_scopes = (
+        [(str(unit["id"]), item_question(question, str(unit["id"]))) for unit in subquestions]
+        if len(subquestions) > 1
+        else [("", question)]
+    )
+    for request_id, text in error_scopes:
+        local = check_context(text)
+        for asked in local["missing_errors"]:
+            checked.append(
+                CheckedItem(
+                    GroundedItem(kind="gap", request_id=request_id, text=missing_error_gap(asked, local["contract"]["business_objects"]))
+                )
+            )
     # 別機能の操作は render が手順を分けて示す。同じ文書の版違いだけは利用者に確認を求める。
     if evidence_scope_error([e.span for e in checked if e.span and e.item.kind == "operation"]).startswith("同一文書の異なる版"):
         checked.append(
@@ -4020,6 +4061,7 @@ def run_round(
                 {
                     "index": index,
                     "request_id": e.item.request_id,
+                    "request_question": item_question(question, e.item.request_id),
                     "kind": e.item.kind,
                     "text": e.item.text,
                     "applies": e.item.applies,
