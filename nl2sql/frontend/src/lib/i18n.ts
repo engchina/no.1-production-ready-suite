@@ -313,7 +313,7 @@ const nl2sqlJa = {
   "chat.attachments.drop": "ここにドロップして添付",
   "chat.attachments.list": "添付ファイル",
   "chat.attachments.remove": "{name} を外す",
-  "chat.attachments.uploading": "読み取り中",
+  "chat.attachments.uploading": "アップロード中",
   "chat.attachments.hint": "1 つ {size}・{count} 件まで。最後に使ってから {hours} 時間で消えます",
   "chat.attachments.tooLarge": "{size} を超えるファイルは添付できません。",
   "chat.attachments.tooMany": "添付できるのは {count} 件までです。",

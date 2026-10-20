@@ -136,15 +136,13 @@ def _service(store: InMemoryChatAttachmentStore) -> ChatAttachmentService:
 
 def _upload(service: ChatAttachmentService, name: str, data: bytes) -> str:
     async def run() -> Any:
-        return await service.upload(
-            ALICE,
-            file_name=name,
-            data=data,
-            conversation_id="c1",
-            conversation_owner_user_uuid="user-a",
-        )
+        return await service.upload(ALICE, file_name=name, data=data)
 
-    return str(anyio.run(run).attachment_id)
+    attachment_id = str(anyio.run(run).attachment_id)
+    service.attach_to_conversation(
+        ALICE, [attachment_id], conversation_id="c1", owner_user_uuid="user-a"
+    )
+    return attachment_id
 
 
 def test_tools_return_cells_of_form_items() -> None:
@@ -185,38 +183,49 @@ def _old_parsed() -> ParsedAttachment:
     )
 
 
+def _as_legacy(store: InMemoryChatAttachmentStore, attachment_id: str) -> None:
+    """#2652 より前の行にする（アップロードの時点の古い読み方の結果。`parse_state` が無い）。"""
+    old = _old_parsed()
+    record = store.get(attachment_id)
+    assert record is not None
+    store._records[attachment_id] = record.model_copy(update={"outline": old.outline()})  # noqa: SLF001
+    store._parsed[attachment_id] = old  # noqa: SLF001
+
+
 def test_old_excel_results_are_reparsed_from_original() -> None:
     store = InMemoryChatAttachmentStore()
     service = _service(store)
     attachment_id = _upload(service, "form.xlsx", _form_bytes())
-    old = _old_parsed()
-    store.update_parsed(attachment_id, old, old.outline())
+    _as_legacy(store, attachment_id)
     assert store.get(attachment_id).outline.parser_version is None  # type: ignore[union-attr]
 
-    [record] = service.conversation_records("c1")
-    parsed = service.parsed(attachment_id)
+    toolset = service.toolset("c1")
+    parsed = toolset.parsed(attachment_id)
 
-    assert record.outline.parser_version == EXCEL_PARSER_VERSION
-    assert parsed is not None and parsed.sheets[0].layout == "form"
+    assert parsed.parser_version == EXCEL_PARSER_VERSION and parsed.sheets[0].layout == "form"
     # 保存の結果も新しい読み方の結果に置き換わる。
     saved = store.parsed(attachment_id)
     assert saved is not None and saved.parser_version == EXCEL_PARSER_VERSION
+    record = store.get(attachment_id)
+    assert record is not None and record.outline.parse_status == "ready"
 
 
 def test_reparse_failure_keeps_old_result_with_warning() -> None:
     store = InMemoryChatAttachmentStore()
     service = _service(store)
     attachment_id = _upload(service, "form.xlsx", _form_bytes())
-    old = _old_parsed()
-    store.update_parsed(attachment_id, old, old.outline())
+    _as_legacy(store, attachment_id)
     store._content[attachment_id] = b"broken"  # noqa: SLF001 - 原本が読めない状態を作る
 
-    [record] = service.conversation_records("c1")
-    parsed = service.parsed(attachment_id)
+    parsed = service.toolset("c1").parsed(attachment_id)
 
-    assert WARNING_EXCEL_REPARSE_FAILED in record.outline.warnings
-    assert parsed is not None and WARNING_EXCEL_REPARSE_FAILED in parsed.warnings
+    assert WARNING_EXCEL_REPARSE_FAILED in parsed.warnings
     assert parsed.sheets[0].columns == ["様式A"]
-    # 保存の結果は変えない（次に使うときにもう一度試す）。
+    # 保存の結果は変えない（失敗の状態だけを残す）。
     saved = store.parsed(attachment_id)
     assert saved is not None and saved.parser_version is None
+    record = store.get(attachment_id)
+    assert record is not None and record.outline.parse_status == "failed"
+    # 2 回目も同じ（入力のせいの失敗は同じ原本と版では試し直さない）。
+    again = service.toolset("c1").parsed(attachment_id)
+    assert WARNING_EXCEL_REPARSE_FAILED in again.warnings

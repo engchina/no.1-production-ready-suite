@@ -2147,7 +2147,11 @@ def build_sdk_agent(
         data_scopes=data_scopes,
         declined=declined_kinds({CANCEL_METADATA_KEY: cancellations or []}),
         confirmation=confirmation,
-        attachment_entries=attachment_tools(attachments) if attachments else None,
+        attachment_entries=(
+            attachment_tools(attachments, image_input=target.vision_enabled)
+            if attachments
+            else None
+        ),
         output_entries=[record_output_tool(run_id, output_fields)] if output_fields else None,
         image_input=target.vision_enabled,
     )

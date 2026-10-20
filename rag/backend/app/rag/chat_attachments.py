@@ -3,7 +3,9 @@
 保存・解析・見え方・期限は platform の `pr_system_settings.chat_attachments`。RAG が持つのは:
 
 - 画像の読み取り（既定の Vision モデル。`OciEnterpriseAiClient.generate_from_image`）。
-- 回答の根拠: 会話の添付の節・行を、質問との関連（rerank。使えなければ文字の一致）で選び、
+- 回答の根拠: 会話に送信した添付を、根拠を選ぶときに共通のサービスで解析し（アップロードでは
+  解析しない。結果は保存して再利用する。#2652）、節・行を、質問との関連（rerank。使えなければ
+  文字の一致）で選び、
   検索の根拠と同じ chunk（`RetrievedChunk`）にする。回答フローは検索の結果と並べて rerank・
   文脈・引用に使い、画面の根拠に添付のファイル名と節・頁・行が出る。ファイル全体はプロンプトに
   入れない。
@@ -23,10 +25,12 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
+from anyio import to_thread
 from pr_system_settings.chat_attachments import (
     IMAGE_READING_PROMPT,
     ChatAttachmentReference,
     ChatAttachmentService,
+    ChatAttachmentToolError,
     ChatAttachmentToolset,
 )
 from pr_system_settings.chat_attachments.models import ChatAttachmentRecord, ParsedAttachment
@@ -54,13 +58,20 @@ _SERVICE: ChatAttachmentService | None = None
 _SERVICE_LOCK = threading.Lock()
 
 
-def _image_reader() -> Callable[[bytes, str], Awaitable[str]] | None:
-    """既定の Vision モデルで画像を文にする関数（Vision モデル・接続が無ければ None）。"""
+def _image_model_id() -> str | None:
+    """画像を読み取る既定の Vision モデル（モデル・接続が無ければ None）。"""
     from pr_system_settings.model import enterprise_ai_connection_for_model
 
     settings = get_settings()
     model_id = enterprise_ai_vision_model_id(settings)
     if not model_id or not enterprise_ai_connection_for_model(settings, model_id).is_configured():
+        return None
+    return str(model_id)
+
+
+def _image_reader() -> Callable[[bytes, str], Awaitable[str]] | None:
+    """既定の Vision モデルで画像を文にする関数（Vision モデル・接続が無ければ None）。"""
+    if not _image_model_id():
         return None
 
     async def read(data: bytes, media_type: str) -> str:
@@ -87,6 +98,7 @@ def chat_attachment_service() -> ChatAttachmentService:
                     product="rag",
                     settings=get_settings,
                     image_reader=_image_reader,
+                    image_model_id=_image_model_id,
                     # 運用設定 › チャットの添付（製品ごと。既定は無効）。
                     enabled=security.chat_attachment_settings.enabled,
                     settings_failure=security.chat_attachment_settings.failure,
@@ -156,10 +168,21 @@ def _split(text: str, size: int) -> list[str]:
 def attachment_units(
     records: Sequence[ChatAttachmentRecord], parsed: Callable[[str], ParsedAttachment]
 ) -> list[AttachmentUnit]:
-    """会話の添付を根拠の候補に分ける（節は `UNIT_CHARACTERS`、表は `ROWS_PER_UNIT` 行ずつ）。"""
+    """会話の添付を根拠の候補に分ける（節は `UNIT_CHARACTERS`、表は `ROWS_PER_UNIT` 行ずつ）。
+
+    `parsed` は初めて読む添付を解析する（同期。event loop からは thread で呼ぶ）。読めない添付
+    （解析中・失敗・期限切れ）は根拠に入れずに続ける。
+    """
     units: list[AttachmentUnit] = []
     for record in records:
-        content = parsed(record.attachment_id)
+        try:
+            content = parsed(record.attachment_id)
+        except ChatAttachmentToolError as exc:
+            logger.warning(
+                "rag_chat_attachment_unreadable",
+                extra={"attachment_id": record.attachment_id, "reason": str(exc)},
+            )
+            continue
         for section in content.sections:
             for index, piece in enumerate(_split(section.text, UNIT_CHARACTERS), start=1):
                 units.append(
@@ -268,7 +291,7 @@ async def attachment_evidence(
     if toolset is None:
         return []
     try:
-        units = attachment_units(toolset.records, toolset.parsed)
+        units = await to_thread.run_sync(lambda: attachment_units(toolset.records, toolset.parsed))
     except Exception as exc:  # noqa: BLE001 - 期限で消えた添付などは根拠に入れずに続ける
         logger.warning("rag_chat_attachments_unreadable", extra={"error_type": type(exc).__name__})
         return []

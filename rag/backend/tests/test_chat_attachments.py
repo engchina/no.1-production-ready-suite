@@ -13,6 +13,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
+import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,6 +26,7 @@ import pytest
 from pr_system_settings.chat_attachments import (
     ChatAttachmentService,
     InMemoryChatAttachmentStore,
+    parsing,
 )
 from pytest import MonkeyPatch
 
@@ -64,14 +68,13 @@ def _service() -> ChatAttachmentService:
 
 
 def _upload(service: ChatAttachmentService, name: str, data: str, conversation_id: str) -> str:
-    item = asyncio.run(
-        service.upload(
-            ALICE,
-            file_name=name,
-            data=data.encode(),
-            conversation_id=conversation_id,
-            conversation_owner_user_uuid=ALICE.user_uuid,
-        )
+    """添付して会話に送信する（会話に結び付くのは送信だけ。解析は根拠を選ぶとき。#2652）。"""
+    item = asyncio.run(service.upload(ALICE, file_name=name, data=data.encode()))
+    service.attach_to_conversation(
+        ALICE,
+        [item.attachment_id],
+        conversation_id=conversation_id,
+        owner_user_uuid=ALICE.user_uuid,
     )
     return item.attachment_id
 
@@ -232,6 +235,7 @@ def test_send_binds_attachments_and_passes_conversation(
             "file_name": "b.csv",
             "kind": "csv",
             "size_bytes": len(CSV.encode()),
+            "content_sha256": hashlib.sha256(CSV.encode()).hexdigest(),
         }
     ]
     assert chat_route._to_chat_message(user).attachments[0].file_name == "b.csv"
@@ -239,6 +243,37 @@ def test_send_binds_attachments_and_passes_conversation(
     assert [record.attachment_id for record in service.conversation_records("conv-x")] == [
         item.attachment_id
     ]
+
+
+def test_evidence_parses_sent_attachments_once_and_skips_unreadable(
+    monkeypatch: MonkeyPatch, service: ChatAttachmentService
+) -> None:
+    """根拠を選ぶときに共通のサービスで解析し、保存した結果を再利用する（#2652）。"""
+    parsed: list[str] = []
+    original = parsing._parse_text
+
+    def counted(*args: Any) -> Any:
+        parsed.append(args[0])
+        return original(*args)
+
+    monkeypatch.setattr(parsing, "_parse_text", counted)
+    _upload(service, "a.md", TEXT, "conv-e")
+    # 壊れた Word は入力の検査を通るが解析で失敗する。根拠に入れずに続ける。
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("word/document.xml", "<w:document>")
+    broken = asyncio.run(service.upload(ALICE, file_name="b.docx", data=buffer.getvalue()))
+    service.attach_to_conversation(
+        ALICE, [broken.attachment_id], conversation_id="conv-e", owner_user_uuid=ALICE.user_uuid
+    )
+    assert parsed == []
+
+    first = asyncio.run(chat_attachments.attachment_evidence("保管の期限", "conv-e", rerank=None))
+    second = asyncio.run(chat_attachments.attachment_evidence("前書き", "conv-e", rerank=None))
+
+    assert first and {chunk.file_name for chunk in first} == {"a.md"}
+    assert {chunk.file_name for chunk in second} == {"a.md"}
+    assert parsed == ["a.md"]
 
 
 def test_send_with_unknown_attachment_is_404(
