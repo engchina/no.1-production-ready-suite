@@ -35,13 +35,14 @@ def _context(*records):
     return context(*records)
 
 
-def _knowledge(guide_steps, optional=()):
+def _knowledge(guide_steps, optional=(), terms=()):
     return RuntimeKnowledgeContext(
         original_question=QUESTION,
         expanded_question=QUESTION,
         path=Path("rk.json"),
         guide_steps=guide_steps,
         guide_optional_steps=tuple(optional),
+        guide_step_terms=tuple(terms),
     )
 
 
@@ -304,6 +305,155 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         self.assertNotIn("guide_step_coverage", result.generation_trace)
 
 
+# 2 つの手順が共有する根拠の chunk（#2649）。手順 1 の主の操作・手順 2 の主の操作・両手順に共通の末尾の操作。
+SHARED_A = "設定画面で設定 A の値を入力します。"
+SHARED_B = "反映画面で反映ボタンを押して変更を反映します。"
+SHARED_END = "最後に保存ボタンを押して画面を閉じます。"
+SHARED = SHARED_A + SHARED_B + SHARED_END
+SHARED_GUIDE = (("s1", "設定 A を入力する", ("run:s",)), ("s2", "反映ボタンで反映する", ("run:s",)))
+SHARED_TERMS = (("s1", ("設定画面",)), ("s2", ("反映ボタン",)))
+
+
+class GuideStepSharedEvidenceTest(unittest.TestCase):
+    """手順が根拠を共有しても、共有の一部分だけで複数の手順を説明済みにしない（#2649）。"""
+
+    def _span(self, source, text, label="E1"):
+        return {"source_id": source, "evidence_id": f"e-{source}", "label": label, "text": text}
+
+    def _entry(self, span, quote, *, quote_only=False, applies="matched"):
+        entry = grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=quote, applies=applies), span=span)
+        entry.quote_only = quote_only
+        return entry
+
+    def _statuses(self, steps, checked, spans, optional=(), terms=SHARED_TERMS):
+        coverage = grounded.guide_step_coverage(steps, checked, spans, optional, dict(terms))
+        return {step["step_id"]: step["status"] for step in coverage}, coverage
+
+    def test_common_sentence_of_a_shared_chunk_explains_no_step(self):
+        span = self._span("run:s", SHARED)
+        statuses, coverage = self._statuses(SHARED_GUIDE, [self._entry(span, SHARED_END)], [span])
+        self.assertEqual(statuses, {"s1": "unused", "s2": "unused"})
+        self.assertEqual([step["step_id"] for step in grounded.unexplained_guide_steps(coverage)], ["s1", "s2"])
+
+    def test_main_operation_left_as_reference_is_not_covered_by_the_common_sentence(self):
+        """主の操作が参考原文だけで、共有の chunk の共通の操作だけを公開した手順は説明済みにしない。"""
+        span = self._span("run:s", SHARED)
+        checked = [
+            self._entry(span, SHARED_A),
+            self._entry(span, SHARED_B, quote_only=True),
+            self._entry(span, SHARED_END),
+        ]
+        statuses, coverage = self._statuses(SHARED_GUIDE, checked, [span])
+        self.assertEqual(statuses, {"s1": "explained", "s2": "reference_only"})
+        self.assertEqual([step["step_id"] for step in grounded.unexplained_guide_steps(coverage)], ["s2"])
+        # 適用未確認（参考情報の節に出る）の主の操作も同じ。
+        checked[1] = self._entry(span, SHARED_B, applies="unverified")
+        self.assertEqual(self._statuses(SHARED_GUIDE, checked, [span])[0], {"s1": "explained", "s2": "reference_only"})
+
+    def test_each_step_explained_from_the_same_chunk(self):
+        span = self._span("run:s", SHARED)
+        checked = [self._entry(span, SHARED_A), self._entry(span, SHARED_B), self._entry(span, SHARED_END)]
+        self.assertEqual(self._statuses(SHARED_GUIDE, checked, [span])[0], {"s1": "explained", "s2": "explained"})
+        # 手順の順と item の順が逆でも、手順の語で対応付ける。
+        reversed_checked = [self._entry(span, SHARED_B), self._entry(span, SHARED_A)]
+        self.assertEqual(self._statuses(SHARED_GUIDE, reversed_checked, [span])[0], {"s1": "explained", "s2": "explained"})
+
+    def test_one_item_is_not_counted_for_two_steps(self):
+        """両手順の主の操作を 1 つの引用にまとめた item は、1 つの手順の説明にだけ数える。"""
+        span = self._span("run:s", SHARED)
+        statuses, _ = self._statuses(SHARED_GUIDE, [self._entry(span, SHARED_A + SHARED_B)], [span])
+        self.assertEqual(sorted(statuses.values()), ["explained", "unused"])
+
+    def test_same_text_in_another_chunk(self):
+        """別の chunk の同じ原文: 共通の文は手順の説明にならず、手順の主の操作の文はその手順の説明になる。"""
+        spans = [self._span("run:a", SHARED_A + SHARED_END), self._span("run:b", SHARED_B + SHARED_END, "E2")]
+        steps = (("s1", "設定 A を入力する", ("run:a",)), ("s2", "反映ボタンで反映する", ("run:b",)))
+        common = self._statuses(steps, [self._entry(spans[0], SHARED_END)], spans)[0]
+        self.assertEqual(common, {"s1": "unused", "s2": "unused"})
+        both = [self._entry(spans[0], SHARED_A), self._entry(spans[1], SHARED_B), self._entry(spans[0], SHARED_END)]
+        self.assertEqual(self._statuses(steps, both, spans)[0], {"s1": "explained", "s2": "explained"})
+        # 手順 1 の根拠（全体の概要の chunk）にある手順 2 の主の操作の原文は、手順 2 の説明にだけ数える。
+        overview = [self._span("run:o", SHARED_A + SHARED_B), self._span("run:b", SHARED_B, "E2")]
+        steps = (("s1", "設定 A を入力する", ("run:o",)), ("s2", "反映ボタンで反映する", ("run:b",)))
+        self.assertEqual(self._statuses(steps, [self._entry(overview[0], SHARED_B)], overview)[0], {"s1": "unused", "s2": "explained"})
+
+    def test_optional_branch_step_does_not_take_the_required_steps_item(self):
+        """不要な分岐（条件が決まらない分岐の手順）は、必須の手順の説明を奪わず、充足の判定にも数えない。"""
+        span = self._span("run:s", SHARED)
+        steps = (SHARED_GUIDE[1], SHARED_GUIDE[0])
+        statuses, coverage = self._statuses(steps, [self._entry(span, SHARED)], [span], optional=("s2",))
+        self.assertEqual(statuses, {"s1": "explained", "s2": "unused"})
+        self.assertEqual(grounded.unexplained_guide_steps(coverage), [])
+
+    def test_missing_evidence_is_kept_apart(self):
+        span = self._span("run:s", SHARED)
+        steps = (*SHARED_GUIDE, ("s3", "承認を依頼する", ("run:z",)))
+        checked = [self._entry(span, SHARED_A), self._entry(span, SHARED_B)]
+        statuses, coverage = self._statuses(steps, checked, [span])
+        self.assertEqual(statuses, {"s1": "explained", "s2": "explained", "s3": "no_evidence"})
+        self.assertEqual([step["step_id"] for step in grounded.unexplained_guide_steps(coverage)], ["s3"])
+
+    def test_steps_without_words_still_take_one_item_each(self):
+        """手順の語で照らせない手順でも、1 つの item で複数の手順を説明済みにしない。"""
+        span = self._span("run:s", SHARED)
+        steps = (("s1", "A", ("run:s",)), ("s2", "B", ("run:s",)))
+        statuses, _ = self._statuses(steps, [self._entry(span, SHARED_END)], [span], terms=())
+        self.assertEqual(sorted(statuses.values()), ["explained", "unused"])
+
+    def test_exclusive_evidence_is_unchanged(self):
+        """根拠を共有しない手順は、従来どおり手順の根拠を引いた公開の説明で explained。"""
+        spans = [self._span("run:a", SHARED_A + SHARED_END), self._span("run:b", SHARED_B, "E2")]
+        steps = (("s1", "設定 A を入力する", ("run:a",)), ("s2", "反映ボタンで反映する", ("run:b",)))
+        checked = [self._entry(spans[0], SHARED_A), self._entry(spans[1], SHARED_B)]
+        self.assertEqual(self._statuses(steps, checked, spans)[0], {"s1": "explained", "s2": "explained"})
+
+
+class GuideStepSharedEvidenceAnswerTest(unittest.TestCase):
+    """主の操作が参考原文だけの最終回答を、全必須手順 addressed・answered にしない（#2649）。"""
+
+    def _run_shared(self, b_applicability):
+        ctx = _context(_record(0, SHARED, "設定画面", "run:s"))
+        knowledge = _knowledge(SHARED_GUIDE, terms=SHARED_TERMS)
+        (eid,) = _ids(ctx, knowledge).values()
+        a = item(eid, "設定画面で設定 A の値を入力します。", SHARED_A, request_id="Q1")
+        b = item(eid, "反映画面で反映ボタンを押して変更を反映します。", SHARED_B, request_id="Q1")
+        end = item(eid, "最後に保存ボタンを押して画面を閉じます。", SHARED_END, request_id="Q1")
+        model = FakeModel(
+            [draft(a, b, end)],
+            [
+                audit(
+                    (0, "supported", "matched", ""),
+                    (1, "supported", b_applicability, ""),
+                    (2, "supported", "matched", ""),
+                    requests=[("Q1", "addressed")],
+                )
+            ],
+        )
+        return model, _run(model, ctx, knowledge).response
+
+    def test_shared_chunk_with_main_operation_as_reference_is_not_answered(self):
+        model, result = self._run_shared("not_applicable")
+
+        # 手順 2 を対象に作り直しを求める（共通の操作だけの公開で充足済みにしない）。
+        drafts = _drafts(model)
+        self.assertGreaterEqual(len(drafts), 2)
+        self.assertIn("guide_steps_unexplained", drafts[1])
+        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "addressed", "guide:s2": "partial"})
+        self.assertEqual(result.envelope["outcome"], "conditional")
+        self.assertIn("業務ガイドの手順「反映ボタンで反映する」は、資料の記載を参考情報として示しただけ", result.answer_text)
+        self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["explained", "reference_only"])
+        # 公開できる部分（手順 1 と共通の操作）は部分回答として残す。
+        self.assertIn("設定画面で設定 A の値を入力します。", result.answer_text)
+        self.assertIn("最後に保存ボタンを押して画面を閉じます。", result.answer_text)
+
+    def test_shared_chunk_explaining_both_steps_is_answered(self):
+        model, result = self._run_shared("matched")
+
+        self.assertEqual(len(_drafts(model)), 1)
+        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "addressed", "guide:s2": "addressed"})
+        self.assertEqual(result.envelope["outcome"], "answered")
+
+
 class GuidePlanRequiredTest(unittest.TestCase):
     def test_required_flag_from_payload(self):
         plan = GuidePlan.from_payload(
@@ -314,6 +464,11 @@ class GuidePlanRequiredTest(unittest.TestCase):
         assert plan is not None
         self.assertEqual([step.required for step in plan.steps], [True, False, True])
         self.assertEqual(plan.optional_step_ids, ("s2",))
+
+    def test_step_terms_from_payload(self):
+        plan = GuidePlan.from_payload("g", 1, [{"id": "s1", "title": "A", "retrieval_hints": ["x", " ", "y"]}, {"id": "s2", "title": "B"}])
+        assert plan is not None
+        self.assertEqual(plan.step_terms, (("s1", ("x", "y")),))
 
 
 if __name__ == "__main__":
