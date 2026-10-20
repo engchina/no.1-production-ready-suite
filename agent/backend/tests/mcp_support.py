@@ -367,7 +367,8 @@ _EVIDENCE = {
 # 20: rag_validate_answer の claims に classification_check を足した（#2625）。
 # 21: rag_retrieve_evidence の planning・queries・request_id・clarifications と、根拠の
 # retrieval_rank・origin を足した（#2651）。
-RAG_OUTPUT_SCHEMA_VERSION = 21
+# 22: rag_validate_answer の claims に support_check を足した（#2659）。
+RAG_OUTPUT_SCHEMA_VERSION = 22
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {
