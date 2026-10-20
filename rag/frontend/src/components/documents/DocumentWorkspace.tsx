@@ -65,6 +65,7 @@ import {
   resolveIngestionErrorDisplayPlan,
   splitErrorCode,
 } from "./ingestion-error-display";
+import { useRecipeOperationError } from "./recipe-operation-error";
 import { IngestionSegmentStrip } from "./IngestionSegmentStrip";
 import { ReviewTextEditor } from "./ReviewTextEditor";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
@@ -594,9 +595,11 @@ export function DocumentWorkspace({
       setDiagnosticsOpen(true);
     }
   }, [diagnosticsHasActivity]);
-  const approveErrorText = approveDocument.isError
-    ? errorMessage(approveDocument.error, t("flow.approveFailed"))
-    : "";
+  // 投入・承認の失敗は、失敗したときからレシピの状態が変わっていない間だけ出す（#2639）。
+  const visibleApproveError = useRecipeOperationError(approveDocument.error, selectedRecipe);
+  const visibleEnqueueError = useRecipeOperationError(enqueueIngestion.error, selectedRecipe);
+  const approveErrorText =
+    visibleApproveError != null ? errorMessage(visibleApproveError, t("flow.approveFailed")) : "";
   const saveReviewErrorText = saveReviewEdits.isError
     ? errorMessage(saveReviewEdits.error, t("flow.review.edit.saveError"))
     : "";
@@ -1164,7 +1167,7 @@ export function DocumentWorkspace({
   });
   const submissionErrorDetail =
     // 組み込みの例外（英語の文）は出さない（#906）。timeout・通信断は利用者向けの文の ApiError で届く。
-    apiErrorMessage(enqueueIngestion.error, "").trim();
+    apiErrorMessage(visibleEnqueueError, "").trim();
   const submissionErrorMessage =
     submissionErrorDetail && submissionErrorDetail !== phaseStartFailedMessage
       ? `${phaseStartFailedMessage} ${submissionErrorDetail}`
@@ -1283,17 +1286,19 @@ export function DocumentWorkspace({
   const reviewEditsPending = status === "REVIEW" && hasReviewEdits;
   const documentActionResult =
     selectedRecipeId &&
-    (approveDocument.isError ||
+    (visibleApproveError != null ||
       reviewEditsPending ||
-      enqueueIngestion.isError ||
+      visibleEnqueueError != null ||
       showSubmittedResult ||
       queuedJobFailure) ? (
       <div className="min-w-0 space-y-2" data-testid="document-action-result">
-        {approveDocument.isError ? <FormStatus tone="danger" message={approveErrorText} /> : null}
+        {visibleApproveError != null ? (
+          <FormStatus tone="danger" message={approveErrorText} />
+        ) : null}
         {reviewEditsPending ? (
           <FormStatus tone="warning" message={t("flow.review.edit.pending")} />
         ) : null}
-        {enqueueIngestion.isError ? (
+        {visibleEnqueueError != null ? (
           <FormStatus tone="danger" message={submissionErrorMessage} />
         ) : null}
         {showSubmittedResult ? (

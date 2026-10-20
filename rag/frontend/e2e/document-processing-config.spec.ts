@@ -104,10 +104,13 @@ async function mockWorkspace(
     recipeCount?: number;
     /** プレビュー結果の chunk に足す metadata(例: 親子階層から構造認識への縮退の印)。 */
     previewChunkMetadata?: Record<string, string>;
+    /** 設定を保存するまで、レシピの処理の投入を 409 にする文(#2639)。 */
+    enqueueConflictUntilSaved?: string;
   } = {}
 ) {
   const status = options.documentStatus ?? "INDEXED";
   let processing = config();
+  let configRevision = 1;
   let saved: DocumentProcessingConfig | null = null;
   let ingestionPosts = 0;
   let previewPosts = 0;
@@ -131,7 +134,7 @@ async function mockWorkspace(
       active_chunk_set_id: status === "INDEXED" ? `chunk-set-recipe-${slotNo}` : null,
       chunk_count: status === "INDEXED" ? 2 : 0,
       vector_count: status === "INDEXED" ? 2 : 0,
-      config_revision: 1,
+      config_revision: configRevision,
       materialized_revision: status === "INDEXED" ? 1 : null,
       searchable: status === "INDEXED",
       needs_reprocessing: false,
@@ -181,12 +184,25 @@ async function mockWorkspace(
       }
       saved = route.request().postDataJSON() as DocumentProcessingConfig;
       processing = saved;
+      configRevision += 1;
     }
     return route.fulfill({ json: ok(recipeResponse()) });
   });
   await page.route("**/api/documents/doc-1/recipes/recipe-1/ingestion-jobs**", (route) => {
-    if (route.request().method() === "POST") ingestionPosts += 1;
-    route.fulfill({ json: ok([]) });
+    if (route.request().method() === "POST") {
+      ingestionPosts += 1;
+      if (options.enqueueConflictUntilSaved && configRevision === 1) {
+        return route.fulfill({
+          status: 409,
+          json: {
+            data: null,
+            error_messages: [options.enqueueConflictUntilSaved],
+            warning_messages: [],
+          },
+        });
+      }
+    }
+    return route.fulfill({ json: ok([]) });
   });
   await page.route("**/api/documents/doc-1/recipes/recipe-1/chunks", (route) =>
     route.fulfill({ json: ok([]) })
@@ -748,6 +764,38 @@ test("保存失敗時は編集値を保持する", async ({ page }) => {
   await expect(panel).toContainText("取込ジョブの実行中は設定を変更できません");
   await expect(panel.getByRole("combobox", { name: "文書解析" })).toContainText("MinerU");
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(
+    `処理の開始の失敗は、設定を直して保存したら消える (${viewport.name})`,
+    { tag: "@responsive" },
+    async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      const conflict = "この形式は原本のままでは解析できません。ファイル準備で変換を選んでください。";
+      const state = await mockWorkspace(page, { enqueueConflictUntilSaved: conflict });
+      await page.goto("/documents/doc-1");
+
+      const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
+      const actions = panel.getByTestId("document-recipe-actions");
+      await actions.getByRole("button", { name: "再処理", exact: true }).click();
+      await expect(panel.getByText(conflict)).toBeVisible();
+      expect(state.ingestionPosts()).toBe(1);
+
+      // 原因の設定を直して保存したら、前の失敗の文は出し続けない(#2639)。
+      await panel.getByRole("button", { name: "処理設定を編集" }).click();
+      await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
+      await panel.getByRole("combobox", { name: "文書解析" }).click();
+      await page.getByRole("option", { name: "MinerU" }).click();
+      await panel.getByRole("button", { name: "構築設定を保存" }).click();
+      await expect(page.getByText(/この文書の処理設定を保存しました/)).toBeVisible();
+      await expect(panel.getByText(conflict)).toHaveCount(0);
+      await expectNoPageOverflow(page);
+    }
+  );
+}
 
 test("派生レイヤー状態チップ・項目の定義が 0 件の警告・抽出セクションを表示する", async ({ page }) => {
   await mockWorkspace(page);
