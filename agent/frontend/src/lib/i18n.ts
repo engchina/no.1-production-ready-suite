@@ -733,6 +733,8 @@ const agentJa = {
   "answer.notice.label": "回答の注意書き",
   "chat.answer.confirmed": "資料により確認できた事項",
   "chat.answer.unconfirmed": "資料から確認できなかった事項",
+  "chat.answer.reference": "参考情報",
+  "chat.answer.referenceNote": "以下は資料の原文です。本質問の条件への該当は確認できていません。",
   // 根拠の一覧のカードから、本文の根拠の行と同じ右のサイドパネルを開く（#2360）。
   "evidence.row": "{row} 行",
   "evidence.rowRange": "{start}–{end} 行",
@@ -1182,6 +1184,7 @@ const agentJa = {
   "run.section.summary": "概要",
   "run.section.question": "質問",
   "run.section.answer": "回答",
+  "run.section.evidence": "回答の根拠",
   "run.section.timeline": "処理の経過",
   "run.section.approvals": "承認",
   "run.section.processDetails": "処理の詳細",

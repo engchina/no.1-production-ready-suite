@@ -1,4 +1,5 @@
 import type { AnswerEvidenceData } from "@/lib/answer-evidence";
+import { t } from "@/lib/i18n";
 
 /**
  * 回答の本文の節（#2328）。RAG のチャットの回答と同じく、要約の段落 →「資料により確認できた事項」の箇条書き
@@ -10,6 +11,9 @@ import type { AnswerEvidenceData } from "@/lib/answer-evidence";
  * - 「資料から確認できなかった事項」は、資料との照合が回答の末尾に足した節（見出しは成果物の `notice.heading`）。
  *   除いた内容の一覧はこの節の 1 か所だけに全件を同じ書式で出し（項目が多ければ共通の「すべて表示」で畳む）、
  *   回答の下の「資料との照合」には件数のバッジだけを出す（#2361）。
+ * - 最終の検証が判定を出さなかった回答（時間切れ・失敗。成果物の `binding: "text"`。#2707）は、決定的な照合で
+ *   結び付けた根拠を RAG と同じ「参考情報」の節（根拠の原文と「根拠：文書 p.N」）にし、「資料により確認できた
+ *   事項」は作らない（照合していない内容を「確認できた」と見せない）。
  * - 段落に根拠を 1 つも結び付けられないときは null（呼び出し側は今までの Markdown の描き方にする）。
  */
 
@@ -19,6 +23,8 @@ export interface StructuredEntry {
   chunkIds: string[];
   /** 箇条書きの印を付けない補足の行。 */
   muted?: boolean;
+  /** Markdown として読まない文（根拠の原文・決まった説明の文）。 */
+  plain?: boolean;
 }
 
 export type StructuredBlock =
@@ -115,19 +121,130 @@ interface Line {
 }
 
 /** 回答の本文を節に組み立てる。結び付けられないときは null。 */
+export interface AnswerStructureTitles {
+  /** 「資料により確認できた事項」。 */
+  confirmed: string;
+  /** 「資料から確認できなかった事項」。 */
+  unconfirmed: string;
+  /** 「参考情報」。 */
+  reference: string;
+  /** 「参考情報」の節の説明（「以下は資料の原文です。本質問の条件への該当は確認できていません。」）。 */
+  referenceNote: string;
+}
+
+/** 節の見出しと説明の文（チャットと実行の詳細で同じ）。 */
+export function answerStructureTitles(): AnswerStructureTitles {
+  return {
+    confirmed: t("chat.answer.confirmed"),
+    unconfirmed: t("chat.answer.unconfirmed"),
+    reference: t("chat.answer.reference"),
+    referenceNote: t("chat.answer.referenceNote"),
+  };
+}
+
 export function structureAnswer(
   answer: string,
   evidence: AnswerEvidenceData | null,
   heading: string | null,
-  titles: { confirmed: string; unconfirmed: string }
+  titles: AnswerStructureTitles
 ): StructuredBlock[] | null {
-  if (!evidence || (!evidence.passages.length && !evidence.markers.length)) return null;
-  const markers = evidence.markers.map((item) => item.text);
+  if (!evidence) return null;
+  if (evidence.binding === "text") return referenceAnswer(answer, evidence, titles);
+  if (!evidence.passages.length && !evidence.markers.length) return null;
   const { body, notice } = splitNotice(answer, heading);
+  const { blocks, ownHeadings } = bodyBlocks(body, evidence, true);
+
+  const cited = (block: StructuredBlock) =>
+    block.kind === "section" ? block.entries.some((entry) => entry.chunkIds.length) : block.chunkIds.length > 0;
+  if (!blocks.some(cited)) return null;
+
+  const shaped = ownHeadings ? blocks : withConfirmedSection(blocks, titles.confirmed);
+  if (notice.length) {
+    shaped.push({
+      kind: "section",
+      key: "notice",
+      title: titles.unconfirmed,
+      ordered: false,
+      collapsible: true,
+      entries: notice.map((item, position) =>
+        BULLET.test(item)
+          ? { key: `n${position}`, text: item.replace(BULLET, ""), chunkIds: [] }
+          : { key: `n${position}`, text: item, chunkIds: [], muted: true }
+      ),
+    });
+  }
+  return shaped;
+}
+
+/**
+ * 最終の検証が判定を出さなかった回答（`binding: "text"`。#2707）。照合で確かめていないので「資料により確認
+ * できた事項」は作らず、本文はそのまま（根拠の行を付けない）出し、決定的な照合で結び付けた根拠を RAG と同じ
+ * 「参考情報」の節（説明の文 → 根拠の原文「…」と「根拠：文書 p.N」）にする。結び付いた出典の行（平文の
+ * 「文書 A.pdf p.3」）は「参考情報」の根拠の行で示すので本文から除き、中身が無くなった見出しも除く。
+ * 根拠を 1 つも結び付けられないときは null。
+ */
+function referenceAnswer(
+  answer: string,
+  evidence: AnswerEvidenceData,
+  titles: AnswerStructureTitles
+): StructuredBlock[] | null {
+  if (!evidence.references.length) return null;
+  const { blocks } = bodyBlocks(withoutCitationLines(answer, evidence.citationLines), evidence, false);
+  blocks.push({
+    kind: "section",
+    key: "reference",
+    title: titles.reference,
+    ordered: false,
+    entries: [
+      { key: "reference-note", text: titles.referenceNote, chunkIds: [], muted: true, plain: true },
+      ...evidence.references.map((reference, index) => ({
+        key: `reference-${index}`,
+        text: `「${reference.quote}」`,
+        chunkIds: reference.chunkIds,
+        plain: true,
+      })),
+    ],
+  });
+  return blocks;
+}
+
+/** 根拠に結び付いた出典の行と、それで中身が無くなった見出しの行を除いた本文。 */
+function withoutCitationLines(answer: string, citationLines: readonly string[]): string {
+  if (!citationLines.length) return answer;
+  const lines = answer.split("\n");
+  const removed = lines.map((line) => citationLines.includes(line.trim()));
+  const kept = (index: number) => !removed[index] && lines[index].trim() !== "";
+  lines.forEach((line, index) => {
+    if (removed[index] || headingText(line) === null) return;
+    // 見出しの下（空行を除く）の最初の行が除いた出典の行で、残る次の行がその見出しの下に入らない（本文の終わり・
+    // 次の見出し・空行の後の箇条書きでない段落）なら、見出しも除く。
+    let next = index + 1;
+    while (next < lines.length && !lines[next].trim()) next += 1;
+    if (next >= lines.length || !removed[next]) return;
+    let blank = false;
+    while (next < lines.length && !kept(next)) {
+      if (!lines[next].trim()) blank = true;
+      next += 1;
+    }
+    if (next >= lines.length || headingText(lines[next]) !== null || (blank && !BULLET.test(lines[next]))) {
+      removed[index] = true;
+    }
+  });
+  return lines.filter((_line, index) => !removed[index]).join("\n");
+}
+
+/** 本文を段落・節に組み立てる。`linked` なら段落・項目に根拠を結び付ける。 */
+function bodyBlocks(
+  body: string,
+  evidence: AnswerEvidenceData,
+  linked: boolean
+): { blocks: StructuredBlock[]; ownHeadings: boolean } {
+  const markers = evidence.markers.map((item) => item.text);
+  const ids = (raw: string) => (linked ? chunkIdsOf(raw, evidence) : []);
   const line = (raw: string): Line => ({
     raw,
     text: displayText(raw.replace(BULLET, ""), markers),
-    chunkIds: chunkIdsOf(raw, evidence),
+    chunkIds: ids(raw),
   });
 
   const blocks: StructuredBlock[] = [];
@@ -136,7 +253,7 @@ export function structureAnswer(
     const key = `b${index}`;
     if (lines.some((item) => MARKDOWN_BLOCK.test(item))) {
       const raw = lines.join("\n");
-      blocks.push({ kind: "markdown", key, text: displayText(raw, markers), chunkIds: chunkIdsOf(raw, evidence) });
+      blocks.push({ kind: "markdown", key, text: displayText(raw, markers), chunkIds: ids(raw) });
       return;
     }
     let rest = lines;
@@ -173,30 +290,10 @@ export function structureAnswer(
       return;
     }
     const raw = rest.join("\n");
-    blocks.push({ kind: "paragraph", key, text: displayText(raw, markers), chunkIds: chunkIdsOf(raw, evidence) });
+    blocks.push({ kind: "paragraph", key, text: displayText(raw, markers), chunkIds: ids(raw) });
   });
   merge(blocks);
-
-  const cited = (block: StructuredBlock) =>
-    block.kind === "section" ? block.entries.some((entry) => entry.chunkIds.length) : block.chunkIds.length > 0;
-  if (!blocks.some(cited)) return null;
-
-  const shaped = ownHeadings ? blocks : withConfirmedSection(blocks, titles.confirmed);
-  if (notice.length) {
-    shaped.push({
-      kind: "section",
-      key: "notice",
-      title: titles.unconfirmed,
-      ordered: false,
-      collapsible: true,
-      entries: notice.map((item, position) =>
-        BULLET.test(item)
-          ? { key: `n${position}`, text: item.replace(BULLET, ""), chunkIds: [] }
-          : { key: `n${position}`, text: item, chunkIds: [], muted: true }
-      ),
-    });
-  }
-  return shaped;
+  return { blocks, ownHeadings };
 }
 
 /** 空の見出しの節の直後の箇条書きは、その見出しの節にまとめる（見出しと箇条書きの間に空行がある書き方）。 */

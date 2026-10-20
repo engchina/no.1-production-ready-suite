@@ -10,7 +10,7 @@ import {
   X,
 } from "lucide-react";
 import {
-  AnswerNotice,
+  AnswerFooter,
   Banner,
   ProcessFailureNotice,
   Button,
@@ -72,7 +72,7 @@ import {
   pendingClarificationKinds,
 } from "@/lib/answer-review";
 import { runAnswerEvidence } from "@/lib/answer-evidence";
-import { noticeHeading, structureAnswer } from "@/lib/answer-structure";
+import { answerStructureTitles, noticeHeading, structureAnswer } from "@/lib/answer-structure";
 import { AGENT_CHAT_PROGRESS_STEPS, chatSubmitProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { useAgentChatAttachments } from "@/components/chat/useAgentChatAttachments";
@@ -970,10 +970,12 @@ function RunChatTurn({
   const answerBlocks = useMemo(
     () =>
       answer && evidence
-        ? structureAnswer(answer, evidence, noticeHeading(latestContent(run.artifacts, ANSWER_VALIDATION_KIND)), {
-            confirmed: t("chat.answer.confirmed"),
-            unconfirmed: t("chat.answer.unconfirmed"),
-          })
+        ? structureAnswer(
+            answer,
+            evidence,
+            noticeHeading(latestContent(run.artifacts, ANSWER_VALIDATION_KIND)),
+            answerStructureTitles()
+          )
         : null,
     [answer, evidence, run.artifacts]
   );
@@ -1210,24 +1212,31 @@ function RunChatTurn({
           />
         ) : null}
 
-        {/* 回答の根拠は回答の本文の下・回答の評価の前（RAG のチャットと同じ位置と部品。#2328）。 */}
-        {evidence ? (
-          <AnswerEvidenceBlock
-            runId={run.id}
-            evidence={evidence}
-            idPrefix={`chat-${run.id}`}
-            className="border-t border-border px-2 pt-1"
-          />
-        ) : null}
+        {/*
+          回答のカードの末尾は RAG のチャットと同じ共通の並び（#2707）: 回答の注意書き（#2405）→ 回答の根拠
+          （「AI に渡した N 件 ／ 回答で引用 M 件」。#2328）→ 回答の評価。
+        */}
+        <AnswerFooter
+          notice={run.status === "completed" ? answerNoticeText(run.artifacts) : null}
+          noticeLabel={t("answer.notice.label")}
+          evidence={
+            evidence ? (
+              <AnswerEvidenceBlock
+                runId={run.id}
+                evidence={evidence}
+                idPrefix={`chat-${run.id}`}
+                className="border-t border-border px-2 pt-1"
+              />
+            ) : null
+          }
+          feedback={
+            canRate && run.status === "completed" && answer ? (
+              <AnswerFeedback runId={run.id} current={run.feedback ?? null} onSaved={onFeedbackSaved} />
+            ) : null
+          }
+          testId={`chat-answer-footer-${run.id}`}
+        />
 
-        {/* 回答の注意書きは回答の本文と根拠の後（3 製品共通の AnswerNotice。#2405）。 */}
-        {run.status === "completed" ? (
-          <AnswerNotice notice={answerNoticeText(run.artifacts)} label={t("answer.notice.label")} />
-        ) : null}
-
-        {canRate && run.status === "completed" && answer ? (
-          <AnswerFeedback runId={run.id} current={run.feedback ?? null} onSaved={onFeedbackSaved} />
-        ) : null}
       </ChatAnswer>
     </ChatTurn>
   );

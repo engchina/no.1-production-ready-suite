@@ -28,7 +28,8 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
   名前だけで示す番号つきの項目と、中身をすべて外した番号つきの見出しも外し、残った項目の番号を
   詰める（#2692）。
 - 検証そのもの（呼び出し・接続・応答）が失敗したら `unvalidated` にし、回答は消さずに
-  「この回答は検証できませんでした。」を足す（基盤の障害で内容を落とさない）。
+  「この回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。」を足す
+  （基盤の障害で内容を落とさない）。
 - RAG の根拠を使っていない Run は、RAG の根拠のツールを持つ Agent なら `unvalidated`
   （`no_rag_evidence`）にして「資料と照らし合わせて確かめていない」と足し、持たない Agent は
   `skipped`（回答はそのまま）。利用者への確認の質問だけの回答は、資料の主張を含まないので
@@ -141,7 +142,8 @@ REASON_CONNECTION_NOT_FOUND = "connection_not_found"
 REASON_UNUSABLE_RESULT = "unusable_result"
 REASON_VALIDATION_ERROR = "validation_error"
 
-UNVERIFIED_NOTICE = "この回答は検証できませんでした。"
+# RAG の「参考情報」の節の説明（該当は確認できていない）と同じ言い方で、照合できなかったことを示す。
+UNVERIFIED_NOTICE = "この回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。"
 NO_EVIDENCE_NOTICE = "この回答は資料の根拠を使っておらず、資料と照らし合わせて確かめていません。"
 UNVERIFIED_HEADING = "資料で確認できず除いた内容"
 WITHHELD_INTRO = "根拠で確かめられなかった次の内容は、回答に載せていません。"
@@ -219,7 +221,7 @@ def _connection_prefix(function_name: str) -> str | None:
     return function_name[: -len(mcp_base_tool_name(function_name)) - len(MCP_TOOL_SEPARATOR)]
 
 
-def _locator_labels(item: JsonObject) -> list[object]:
+def locator_labels(item: JsonObject) -> list[object]:
     """根拠の見出し（章節の列・章節の名前・シート名）。回答と照らすのに使う（#1451）。"""
     labels: list[object] = []
     locator = item.get("locator")
@@ -246,18 +248,18 @@ def _evidence_refs(tool: str, output: JsonObject) -> list[_EvidenceRef]:
     if tool in EVIDENCE_TOOLS:
         evidence = output.get("evidence")
         items = [
-            (item, item.get("excerpt"), _locator_labels(item), [item.get("file_name")])
+            (item, item.get("excerpt"), locator_labels(item), [item.get("file_name")])
             for item in (evidence if isinstance(evidence, list) else [])
             if isinstance(item, dict)
         ]
     elif tool == RAG_READ_SOURCE:
-        items = [(output, output.get("text"), _locator_labels(output), [output.get("file_name")])]
+        items = [(output, output.get("text"), locator_labels(output), [output.get("file_name")])]
     elif tool in {RAG_READ_DOCUMENT, RAG_READ_SECTION}:
         chunks = output.get("chunks")
         document_id = output.get("document_id")
         body = output.get("text")
         body = body if isinstance(body, str) else ""
-        section_labels = _locator_labels(output)
+        section_labels = locator_labels(output)
         names = [output.get("file_name")]
         items = []
         for chunk in chunks if isinstance(chunks, list) else []:
@@ -270,7 +272,7 @@ def _evidence_refs(tool: str, output: JsonObject) -> list[_EvidenceRef]:
                 else ""
             )
             ref = {"document_id": document_id, "chunk_id": chunk.get("chunk_id")}
-            items.append((ref, chunk_text, [*_locator_labels(chunk), *section_labels], names))
+            items.append((ref, chunk_text, [*locator_labels(chunk), *section_labels], names))
     else:
         return []
     refs: list[_EvidenceRef] = []
@@ -1403,7 +1405,7 @@ def combine_validations(answer: str, validations: list[JsonObject]) -> tuple[Jso
     """接続ごとの内容（`validation_content`）を 1 つにし、利用者に見せる回答を返す（#1277）。
 
     - どれかの接続を確かめられなかった（`unvalidated`）: 全体も `unvalidated` で、回答は消さずに
-      「検証できませんでした」を足す（基盤の障害で内容を落とさない）。
+      照合を終えられなかったこと（`UNVERIFIED_NOTICE`）を足す（基盤の障害で内容を落とさない）。
     - すべての接続で判定が出た: 段落ごとにまとめた判定で回答を組み立てる（`publish_answer`）。
     """
     single = validations[0] if len(validations) == 1 else None

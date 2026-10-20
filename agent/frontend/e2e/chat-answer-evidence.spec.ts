@@ -358,7 +358,7 @@ test("段落に根拠を結び付けられない回答は今までの Markdown �
   await expect(page.getByTestId("answer-citations")).toHaveCount(1);
 });
 
-test("実行の詳細の回答も同じ節・根拠の塊で出す", async ({ page, mockApi }) => {
+test("実行の詳細の回答も同じ節で出し、根拠の塊は RAG と同じ別の Section「回答の根拠」に出す", async ({ page, mockApi }) => {
   seedRun(mockApi);
   await page.goto(`/runs?id=${RUN_ID}`);
   const section = page.getByTestId("run-answer-section");
@@ -366,13 +366,141 @@ test("実行の詳細の回答も同じ節・根拠の塊で出す", async ({ pa
     "資料により確認できた事項",
     "資料から確認できなかった事項",
   ]);
-  await expect(section.getByTestId("answer-citations").locator("summary")).toHaveText(
+  // 根拠の塊は「回答」の Section の中ではなく、別の Section「回答の根拠」（RAG の実行の詳細と同じ。#2707）。
+  await expect(section.getByTestId("answer-citations")).toHaveCount(0);
+  const evidenceSection = page.getByTestId("run-evidence-section");
+  await expect(evidenceSection.getByRole("heading", { name: "回答の根拠" })).toBeVisible();
+  await expect(evidenceSection.getByTestId("answer-citations").locator("summary")).toHaveText(
     "AI に渡した 3 件 ／ 回答で引用 2 件 ／ うち該当確認済み 1 件"
   );
+  const [answerBox, evidenceBox] = await Promise.all([section.boundingBox(), evidenceSection.boundingBox()]);
+  expect(evidenceBox!.y).toBeGreaterThan(answerBox!.y + answerBox!.height - 1);
   // 回答の根拠・資料との照合は「成果物」に重ねない（内部の記録は監査ログで見る。#2403）。
   await expect(page.getByTestId("run-artifact-artifact-evidence")).toHaveCount(0);
   await expect(page.getByTestId("run-artifacts-section")).toHaveCount(0);
 });
+
+// #2707: 最終の検証が時間切れ・失敗した回答（`answer_validation` が unvalidated）。backend は決定的な照合で根拠を結び付け
+// （`binding: "text"`）、画面は「資料により確認できた事項」を作らず、RAG と同じ「参考情報」（説明の文・根拠の原文・
+// 「根拠：文書 p.N」）を出す。根拠に結び付いた平文の出典の行と、中身が無くなった見出しは本文に出さない。
+const UNVERIFIED_NOTICE = "この回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。";
+const REFERENCE_NOTE = "以下は資料の原文です。本質問の条件への該当は確認できていません。";
+const UNVALIDATED_ANSWER = [
+  "合成の質問 A の答えは次のとおりです。",
+  "",
+  "- 申請は 30 日前までに行います。",
+  "- 承認は担当の部署が行います。",
+  "",
+  "**根拠**",
+  "",
+  "- 文書 0.pdf p.3",
+  "- 文書 0.pdf p.5",
+  "",
+  UNVERIFIED_NOTICE,
+].join("\n");
+
+function seedUnvalidatedRun(mockApi: MockApi) {
+  seedRun(mockApi);
+  const run = mockApi.state.runs.find((item) => item.id === RUN_ID) as { artifacts: Record<string, unknown>[] };
+  run.artifacts = [
+    {
+      id: "artifact-validation",
+      kind: "answer_validation",
+      name: "資料との照合",
+      created_at: MOCK_NOW,
+      content: { status: "unvalidated", reason: "mcp.timeout", message: "時間切れ", valid: null, result: null },
+    },
+    {
+      id: "artifact-evidence",
+      kind: "answer_evidence",
+      name: "回答の根拠",
+      created_at: MOCK_NOW,
+      content: {
+        items: [
+          evidenceItem(CHUNK_A, { cited: true, answer_use: "reference" }),
+          evidenceItem(CHUNK_B, {
+            cited: true,
+            answer_use: "reference",
+            locator: { page_start: 5, page_end: 5, section_path: [] },
+          }),
+          evidenceItem(CHUNK_C, { file_name: "文書 C.pdf" }),
+        ],
+        passed: 3,
+        cited: 2,
+        markers: [],
+        passages: [
+          { text: "- 申請は 30 日前までに行います。", chunk_ids: [CHUNK_A] },
+          { text: "- 文書 0.pdf p.3", chunk_ids: [CHUNK_A] },
+          { text: "- 文書 0.pdf p.5", chunk_ids: [CHUNK_B] },
+        ],
+        binding: "text",
+        references: [
+          { quote: "合成の原文 A。申請は 30 日前までに行う。", chunk_ids: [CHUNK_A] },
+          { quote: "合成の原文 B。承認は担当の部署が行う。", chunk_ids: [CHUNK_B] },
+        ],
+        citation_lines: ["- 文書 0.pdf p.3", "- 文書 0.pdf p.5"],
+      },
+    },
+    { id: "artifact-answer", kind: "answer", name: "回答", created_at: MOCK_NOW, content: { text: UNVALIDATED_ANSWER } },
+  ];
+}
+
+async function expectReferenceAnswer(body: ReturnType<Page["getByTestId"]>) {
+  const sections = body.getByTestId("answer-section");
+  // 「資料により確認できた事項」は作らず、「参考情報」の節だけ（モデルの見出し「根拠」は中身が無くなったので出さない）。
+  await expect(sections.locator("h4")).toHaveText(["参考情報"]);
+  await expect(body).not.toContainText("資料により確認できた事項");
+  await expect(body.getByText("文書 0.pdf p.3", { exact: true })).toHaveCount(0);
+  // 本文の段落には根拠の行を付けない（照合で確かめていない）。
+  await expect(body.locator("p").first()).toHaveText("合成の質問 A の答えは次のとおりです。");
+  await expect(body.getByText(UNVERIFIED_NOTICE)).toBeVisible();
+  const reference = sections.last();
+  await expect(reference.getByText(REFERENCE_NOTE)).toBeVisible();
+  const items = reference.locator("li:not(.list-none)");
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(0)).toContainText("「合成の原文 A。申請は 30 日前までに行う。」");
+  await expect(items.nth(0).getByTestId("answer-citation-link")).toHaveText("根拠：文書 0.pdf p.3");
+  await expect(items.nth(1).getByTestId("answer-citation-link")).toHaveText("根拠：文書 0.pdf p.5");
+  // 根拠の行は「参考情報」の項目の下だけ。
+  await expect(body.getByTestId("answer-citation-link")).toHaveCount(2);
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`照合が時間切れの回答は「参考情報」に根拠の原文とリンクを出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    seedUnvalidatedRun(mockApi);
+    await serveSourcePreviews(page);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await openThread(page);
+    const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+    const body = turn.getByTestId(`chat-answer-${RUN_ID}`);
+    await expectReferenceAnswer(body);
+    // 根拠の行は RAG と同じ右のサイドパネル（原文のプレビュー）を開く。
+    const link = body.getByTestId("answer-citation-link").first();
+    await link.click();
+    const sheet = page.getByRole("dialog", { name: "回答の根拠" });
+    await expect(sheet.getByTestId("evidence-source-summary").getByTestId("evidence-file-name")).toHaveText("文書 0.pdf");
+    await expect(sheet.getByTestId("evidence-source-preview").getByTestId("preview-viewer")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+    // 根拠の塊は引用を「参考」に数え、「該当確認済み」は数えない（照合で確かめていない。RAG の参考の引用と同じ表示）。
+    await expect(turn.getByTestId("answer-citations").locator("summary")).toHaveText("AI に渡した 3 件 ／ 回答で引用 2 件 ／ 参考 2 件");
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`answer-reference-chat-${viewport.name}.png`), fullPage: true });
+
+    await page.goto(`/runs?id=${RUN_ID}`);
+    const section = page.getByTestId("run-answer-section");
+    await expectReferenceAnswer(section.getByTestId(`run-answer-artifact-answer`));
+    await expect(page.getByTestId("run-evidence-section").getByTestId("answer-citations").locator("summary")).toHaveText(
+      "AI に渡した 3 件 ／ 回答で引用 2 件 ／ 参考 2 件"
+    );
+    await expectNoHorizontalOverflow(page);
+    await section.screenshot({ path: testInfo.outputPath(`answer-reference-run-${viewport.name}.png`) });
+    await page
+      .getByTestId("run-evidence-section")
+      .screenshot({ path: testInfo.outputPath(`answer-reference-run-evidence-${viewport.name}.png`) });
+  });
+}
 
 // #2361: 除いた内容が多い回答も、本文の節に全件を同じ書式で出し（「ほか N 件」で切らない）、件数のバッジと一致させる。
 // 項目が多い節は先頭だけを出し、「すべて表示」で残りを開く。
@@ -632,7 +760,8 @@ test("前の RAG のツールの呼び出しの根拠も、原文のプレビュ
   expect(request?.searchParams.get("chunk_id")).toBe(CHUNK_C);
 });
 
-// #2405: 回答の注意書き（設定は製品ごと。#2449）。backend が回答の成果物の `notice` に付け、画面は回答の本文と根拠の後に出す。
+// #2405: 回答の注意書き（設定は製品ごと。#2449）。backend が回答の成果物の `notice` に付け、画面は回答の本文の後・
+// 根拠の塊の前に出す（RAG のチャットと同じ共通の並び「注意書き → 根拠 → 評価」。#2707）。
 const NOTICE = "この回答は AI が生成したものです。\n連絡先: https://example.com/help";
 
 function withNotice(mockApi: MockApi) {
@@ -645,7 +774,7 @@ function withNotice(mockApi: MockApi) {
 }
 
 for (const viewport of VIEWPORTS) {
-  test(`回答の注意書きを回答の根拠の後に出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }) => {
+  test(`回答のカードは 本文 → 注意書き → 根拠の塊 → 評価 の順に出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }) => {
     seedRun(mockApi);
     withNotice(mockApi);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -658,11 +787,21 @@ for (const viewport of VIEWPORTS) {
       "href",
       "https://example.com/help"
     );
-    // 回答の根拠の塊の後に出し、本文には混ぜない。
+    // 本文 → 注意書き → 根拠の塊 → 評価 の順（注意書きは本文には混ぜない）。
+    const body = turn.getByTestId(`chat-answer-${RUN_ID}`);
     const citations = turn.getByTestId("answer-citations");
-    const [citationsBox, noticeBox] = await Promise.all([citations.boundingBox(), notice.boundingBox()]);
-    expect(noticeBox!.y).toBeGreaterThan(citationsBox!.y);
-    await expect(turn.getByTestId(`chat-answer-${RUN_ID}`)).not.toContainText("AI が生成");
+    const feedback = turn.getByRole("group", { name: "この回答は役に立ちましたか？" });
+    await expect(feedback).toBeVisible();
+    const [bodyBox, noticeBox, citationsBox, feedbackBox] = await Promise.all([
+      body.boundingBox(),
+      notice.boundingBox(),
+      citations.boundingBox(),
+      feedback.boundingBox(),
+    ]);
+    expect(noticeBox!.y).toBeGreaterThan(bodyBox!.y + bodyBox!.height - 1);
+    expect(citationsBox!.y).toBeGreaterThan(noticeBox!.y + noticeBox!.height - 1);
+    expect(feedbackBox!.y).toBeGreaterThan(citationsBox!.y + citationsBox!.height - 1);
+    await expect(body).not.toContainText("AI が生成");
     await expectNoHorizontalOverflow(page);
   });
 }
@@ -671,7 +810,7 @@ test("実行の詳細の回答にも注意書きを出し、付けていない�
   seedRun(mockApi);
   await page.goto(`/runs?id=${RUN_ID}`);
   const section = page.getByTestId("run-answer-section");
-  await expect(section.getByTestId("answer-citations")).toBeVisible();
+  await expect(section.getByTestId("answer-section").first()).toBeVisible();
   await expect(section.getByRole("complementary", { name: "回答の注意書き" })).toHaveCount(0);
 
   withNotice(mockApi);

@@ -1,5 +1,5 @@
 import {
-  AnswerNotice,
+  AnswerFooter,
   ChatComposer,
   ChatComposerOption,
   ChatAnswer,
@@ -407,28 +407,34 @@ function AssistantColumn({
         </Banner>
       ) : null}
       {citations.length > 0 || (finished && (traceId || answerDiagnostics || progress || notice)) ? (
-        // 回答の下は 回答の本文 → 根拠の一覧（AI に渡した N 件）→ 評価 の順（#1202 / #1417。処理の経過は回答の上。
-        // #2115。RAG 検索と同じ）。比較の列の高さをそろえるため、回答の枠の下端にそろえる。
-        <div className="mt-auto flex flex-col gap-3">
-          <AnswerCitations
-            citations={citations}
-            // まとまり（根拠の木）は回答が終わってから届く診断にある（#2097）。
-            idPrefix={messageId ? `message-${messageId}` : listId}
-            cardProps={{ traceId, searchAnswerProfileId, sourceSurface: "chat", messageId }}
-            className="border-t border-border px-2 pt-1"
-          />
-          {/* 回答の注意書きは回答の本文と根拠の後（3 製品共通の AnswerNotice。#2405）。 */}
-          {finished ? <AnswerNotice notice={notice} label={t("answer.notice.label")} /> : null}
-          {finished ? (
-            <FeedbackControls
-              traceId={traceId}
-              searchAnswerProfileId={searchAnswerProfileId}
-              targetType="answer"
-              sourceSurface="chat"
-              messageId={messageId}
+        // 回答の下は 3 製品共通の並び（#2707）: 回答の本文 → 回答の注意書き（#2405）→ 根拠の一覧（AI に渡した
+        // N 件。#1202 / #1417）→ 評価（処理の経過は回答の上。#2115。Agent のチャットと同じ）。比較の列の高さを
+        // そろえるため、回答の枠の下端にそろえる。
+        <AnswerFooter
+          className="mt-auto"
+          notice={finished ? notice : null}
+          noticeLabel={t("answer.notice.label")}
+          evidence={
+            <AnswerCitations
+              citations={citations}
+              // まとまり（根拠の木）は回答が終わってから届く診断にある（#2097）。
+              idPrefix={messageId ? `message-${messageId}` : listId}
+              cardProps={{ traceId, searchAnswerProfileId, sourceSurface: "chat", messageId }}
+              className="border-t border-border px-2 pt-1"
             />
-          ) : null}
-        </div>
+          }
+          feedback={
+            finished ? (
+              <FeedbackControls
+                traceId={traceId}
+                searchAnswerProfileId={searchAnswerProfileId}
+                targetType="answer"
+                sourceSurface="chat"
+                messageId={messageId}
+              />
+            ) : null
+          }
+        />
       ) : null}
     </ChatAnswer>
   );
