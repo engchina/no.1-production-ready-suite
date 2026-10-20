@@ -663,7 +663,7 @@ export function AgentEditorView({
           </Section>
         ) : null}
         {sharing}
-        {/* 保存の対象（基本・スキル・データの範囲）を包み、確定の行はこの中だけで画面の下端に貼り付く（#1786）。 */}
+        {/* 保存の対象（基本・スキル・データの範囲）を包み、その末尾に確定の行を置く（#1786）。 */}
         <div className="min-w-0 space-y-6">
           <fieldset disabled={readOnly} className="min-w-0 space-y-6">
             <Section title={t("agent.basic")}>
@@ -857,9 +857,8 @@ export function AgentEditorView({
           />
           {!readOnly ? (
             // 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。複数のカードを 1 つの保存で確定するので、
-            // 最後のカードの下に置き、長いフォームの途中では画面の下端に貼り付く（#1786）。
+            // 最後のカードの下に置く。画面の下端に貼り付けない（#1786 / #2715）。
             <FormActionBar
-              sticky="page"
               ariaLabel={t("editor.actions.formLabel")}
               testId="agent-form-actions"
               primaryActions={[

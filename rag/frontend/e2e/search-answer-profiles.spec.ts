@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "./fixtures/test";
-import { findClippedPlaceholders } from "../../../platform/packages/ui/e2e/layout-checks";
+import { findClippedPlaceholders, findFloatingFormActionBars } from "../../../platform/packages/ui/e2e/layout-checks";
 import {
   expectNoPageOverflow,
   expectSearchablePanelFits,
@@ -932,7 +932,7 @@ test("検索・回答プロファイルのエディタは未保存の変更が�
 
 // #585 / #1786: 全画面のエディタは、欄に結び付かない保存の失敗を確定の行（フォームの末尾）の直上の 1 か所だけに出す
 // （Toast とフォームの下の FormStatus に重ねない。UX 契約 messaging.md §3.3.1）。
-test("検索・回答プロファイルの保存に失敗すると、理由を確定の行の直上だけに出し、フォームの途中から保存しても見える", async ({
+test("検索・回答プロファイルの保存に失敗すると、理由を確定の行の直上だけに出す", async ({
   page,
 }) => {
   const message = "アーカイブ済みのナレッジベースは参照できません。";
@@ -948,10 +948,8 @@ test("検索・回答プロファイルの保存に失敗すると、理由を�
   });
   await page.goto("/search-answer-profiles?id=bv-1");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("経費と出張の相談");
-  // 長いフォームの先頭のまま、画面の下端に貼り付いた確定の行から保存する（#1786）。
+  // 確定の行はフォームの末尾（画面の下端に貼り付けない。#2715）。行までスクロールして保存する。
   const actions = page.getByRole("group", { name: "確定の操作" });
-  await expect(actions).toHaveAttribute("data-stuck", "true");
-  await expect(actions).toBeInViewport();
   await actions.getByRole("button", { name: "保存", exact: true }).click();
 
   const banner = page.getByTestId("search-answer-profile-save-error");
@@ -1423,9 +1421,9 @@ test("検索・回答プロファイルの一覧は最後のページの行を�
   await expect(pagination.getByRole("button", { name: "次へ" })).toHaveCount(0);
 });
 
-// #1786: 長いフォームの確定の行は、本来の位置（フォームの末尾）が画面の外にある間は画面の下端に貼り付き、
-// フォームの末尾までスクロールすると本来の位置に戻る。下の「プロファイルの知識」（節ごとに保存）には付いて来ない。
-test("長いフォームの確定の行は画面の下端に貼り付き、フォームの末尾で本来の位置に戻る", { tag: "@responsive" }, async ({
+// #1786 / #2715: 確定の行はフォームの末尾のふつうの行（言語資源の画面と同じ）。画面の下端に貼り付けず、内容と一緒に
+// スクロールする。下の「プロファイルの知識」（節ごとに保存）まで進んでも上へ流れて PageHeader の上に描かれない。
+test("確定の行はフォームの末尾に置き、スクロールしても貼り付かず PageHeader に重ならない", { tag: "@responsive" }, async ({
   page,
 }) => {
   await mockSearchAnswerProfiles(page, [accountingView]);
@@ -1434,38 +1432,34 @@ test("長いフォームの確定の行は画面の下端に貼り付き、フ�
   await expect(actions.getByRole("button")).toHaveText(["保存", "変更を破棄"]);
   await expect(page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
 
-  // 先頭: 画面の下端に貼り付き、ボタンは画面の中で押せる。
-  await expect(actions).toHaveAttribute("data-stuck", "true");
-  const viewport = page.viewportSize()!;
+  // 先頭: 長いフォームの末尾の行は画面の外にある（画面の下端に貼り付かない）。
+  await expect(page.getByRole("textbox", { name: "名前", exact: true })).toBeInViewport();
+  await expect(actions).not.toBeInViewport();
+
+  // フォームの末尾（最後の設定の行。言語資源の上書き。#2181）の直下に行がある。
+  const lastRow = page.getByTestId("search-answer-profile-language-pack");
+  await actions.scrollIntoViewIfNeeded();
   const save = actions.getByRole("button", { name: "保存", exact: true });
-  const stuckBox = (await actions.boundingBox())!;
-  expect(Math.abs(stuckBox.y + stuckBox.height - viewport.height)).toBeLessThanOrEqual(1);
-  await expect(save).toBeInViewport({ ratio: 1 });
-  // primary の左端は入力欄の左端（名前の欄）にそろう。
-  const [saveBox, nameBox] = await Promise.all([
+  const [rowBox, barBox, saveBox, nameBox] = await Promise.all([
+    lastRow.boundingBox(),
+    actions.boundingBox(),
     save.boundingBox(),
     page.getByRole("textbox", { name: "名前", exact: true }).boundingBox(),
   ]);
+  expect(barBox!.y).toBeGreaterThanOrEqual(rowBox!.y + rowBox!.height);
+  // primary の左端は入力欄の左端（名前の欄）にそろう。
   expect(Math.abs(saveBox!.x - nameBox!.x)).toBeLessThanOrEqual(1);
 
-  // フォームの末尾（最後の設定の行）までスクロールすると、本来の位置に戻る。行を本文の上端に寄せる（375px は
-  // 行の後ろの設定が約 330px あり、中央では確定の行の本来の位置が画面の下端の外に残る。以前は AppShell の外枠ごと
-  // ずれて通っていた。#2064）。
-  // 最後の設定は言語資源の上書き（#2181）。
-  const lastRow = page.getByTestId("search-answer-profile-language-pack");
-  await lastRow.evaluate((row) => row.scrollIntoView({ block: "start" }));
-  await expect(actions).toHaveAttribute("data-stuck", "false");
-  const [rowBox, restBox] = await Promise.all([lastRow.boundingBox(), actions.boundingBox()]);
-  expect(restBox!.y).toBeGreaterThanOrEqual(rowBox!.y + rowBox!.height);
-
-  // さらに下の「プロファイルの知識」（節ごとに保存）までスクロールしても、確定の行はフォームのカードの中に留まる。
+  // 下の「プロファイルの知識」までスクロールしても、行はフォームのカードの中（知識の節の上）に留まる。
   await page.locator("#pr-main").evaluate((main) => main.scrollTo(0, main.scrollHeight));
-  await expect(actions).toHaveAttribute("data-stuck", "false");
-  const [barBox, knowledgeBox] = await Promise.all([
+  const [endBarBox, knowledgeBox] = await Promise.all([
     actions.boundingBox(),
     page.getByRole("heading", { name: "プロファイルの知識" }).boundingBox(),
   ]);
-  expect(barBox!.y + barBox!.height).toBeLessThanOrEqual(knowledgeBox!.y);
+  expect(endBarBox!.y + endBarBox!.height).toBeLessThanOrEqual(knowledgeBox!.y);
+
+  // 上から下まで、行は画面に貼り付かず、上端の PageHeader（lg 以上）の上に描かれない。
+  expect(await findFloatingFormActionBars(page)).toEqual([]);
   await expectNoPageOverflow(page);
 });
 

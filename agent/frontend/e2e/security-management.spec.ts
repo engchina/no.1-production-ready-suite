@@ -32,7 +32,7 @@ async function expectNoPageOverflow(page: Page) {
 
 /** 編集の画面の保存はフォームの末尾の確定の行（#1786。#618 の PageHeader の右端から移した）。 */
 function editActions(page: Page) {
-  return page.locator("[data-form-action-bar-sticky]");
+  return page.locator("[data-form-action-bar][data-testid$='-form-actions']");
 }
 
 for (const viewport of VIEWPORTS) {

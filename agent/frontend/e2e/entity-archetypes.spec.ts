@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { findFloatingFormActionBars } from "../../../platform/packages/ui/e2e/layout-checks";
 
 // ページの型（platform UX 契約 page-archetypes.md）の Agent への適用（#137）。
 // A 型 = 一覧 → 全画面エディタ（?id= が唯一の情報源、パンくず、行メニュー / ObjectActionBar）、
@@ -73,10 +74,9 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/agents?id=new");
       await page.locator("#new-agent-name").fill("重複する Agent");
       const actions = page.getByRole("group", { name: "確定の操作" });
-      // 複数のカードを 1 つの保存で確定する画面は、最後のカードの下の確定の行が画面の下端に貼り付く（#1786）。
-      await expect(actions).toHaveAttribute("data-form-action-bar-sticky", "page");
-      await expect(actions).toHaveAttribute("data-stuck", "true");
-      await expect(actions).toBeInViewport();
+      // 複数のカードを 1 つの保存で確定する画面も、確定の行は最後のカードの下のふつうの行で、画面に貼り付かず
+      // PageHeader に重ならない（#1786 / #2715）。
+      expect(await findFloatingFormActionBars(page)).toEqual([]);
       // ヘッダーには確定を置かない。
       await expect(page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true })).toHaveCount(0);
       await actions.getByRole("button", { name: "作成", exact: true }).click();
