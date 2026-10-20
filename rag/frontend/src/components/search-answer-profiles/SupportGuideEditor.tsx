@@ -75,12 +75,12 @@ import {
   guideFormFromContent,
   guideFormIssues,
   guideFormSnapshot,
+  MAX_GUIDE_REFERENCES,
   MAX_STEP_REFERENCES,
   moveItem,
   newBranchRow,
   newCompletionRow,
   newConditionRow,
-  newReferenceRow,
   newStepRow,
   removeStep,
   renameConditionId,
@@ -102,6 +102,7 @@ import { SupportGuideContentView } from "./SupportGuideContentView";
 import { SupportGuideDraftTry } from "./SupportGuideDraftTry";
 import { SupportGuideHandoffContactField } from "./SupportGuideHandoffContactField";
 import { SupportGuideIssueList } from "./SupportGuideIssueList";
+import { SupportGuideReferencePicker } from "./SupportGuideReferencePicker";
 
 function options<T extends string>(values: readonly T[], prefix: string): SelectFieldOption<T>[] {
   return values.map((value) => ({ value, label: t(`${prefix}.${value}` as I18nKey) }));
@@ -127,6 +128,9 @@ const SCOPE_OPTIONS = options<SupportGuideImpactScope>(
   ["individual", "group", "all"],
   "supportGuides.scope",
 );
+
+/** 共通の資料の選択を開いているときの `picking` の値（手順の行の key と重ならない）。 */
+const REFERENCES_PICKER = "references";
 
 const ROW_LABEL: Record<GuideRowSection, I18nKey> = {
   conditions: "supportGuides.row.condition",
@@ -253,6 +257,8 @@ function SupportGuideForm({
     detail && detail.issues.length > 0 ? { source: "saved", issues: detail.issues } : null,
   );
   const [viewRevision, setViewRevision] = useState<number | null>(null);
+  // 開いている資料の選択（共通の資料は REFERENCES_PICKER、手順の資料はその手順の行の key）。一度に 1 つだけ開く。
+  const [picking, setPicking] = useState<string | null>(null);
 
   const save = useSaveSupportGuide(searchAnswerProfileId);
   const validate = useValidateSupportGuide(searchAnswerProfileId);
@@ -905,23 +911,10 @@ function SupportGuideForm({
                           >
                             <div className="flex min-w-0 items-start gap-2">
                               <FormGrid className="min-w-0 flex-1">
-                                <TextField
+                                <ReferenceDocumentField
                                   id={domId(refPath("document_id"))}
-                                  width="md"
-                                  label={t("supportGuides.field.documentId")}
-                                  value={reference.documentId}
-                                  maxLength={64}
-                                  required
+                                  reference={reference}
                                   error={errorAt(refPath("document_id"))}
-                                  onChange={(event) => updateReference({ documentId: event.target.value })}
-                                />
-                                <TextField
-                                  id={domId(refPath("title"))}
-                                  width="lg"
-                                  label={t("supportGuides.field.referenceTitle")}
-                                  value={reference.title}
-                                  maxLength={200}
-                                  onChange={(event) => updateReference({ title: event.target.value })}
                                 />
                                 <TextField
                                   id={domId(refPath("page_ranges"))}
@@ -968,11 +961,27 @@ function SupportGuideForm({
                     size="sm"
                     variant="secondary"
                     icon={Plus}
+                    aria-expanded={picking === row.key}
+                    aria-controls={picking === row.key ? `support-guide-step-reference-picker-${row.key}` : undefined}
                     disabled={row.references.length >= MAX_STEP_REFERENCES}
-                    onClick={() => updateRow("steps", index, { references: [...row.references, newReferenceRow()] })}
+                    onClick={() => setPicking((current) => (current === row.key ? null : row.key))}
                   >
                     {t("supportGuides.add.stepReference")}
                   </Button>
+                  {picking === row.key ? (
+                    <SupportGuideReferencePicker
+                      id={`support-guide-step-reference-picker-${row.key}`}
+                      testId={`support-guide-step-reference-picker-${index}`}
+                      searchAnswerProfileId={searchAnswerProfileId}
+                      references={row.references}
+                      maxSelection={MAX_STEP_REFERENCES - row.references.length}
+                      onAdd={(references) => {
+                        updateRow("steps", index, { references: [...row.references, ...references] });
+                        setPicking(null);
+                      }}
+                      onClose={() => setPicking(null)}
+                    />
+                  ) : null}
                 </Fieldset>
                 <div className="col-span-full">
                   <TextareaField
@@ -1111,8 +1120,35 @@ function SupportGuideForm({
           title={t("supportGuides.section.references")}
           help={t("supportGuides.section.referencesHelp")}
           rows={form.references}
-          addLabel={t("supportGuides.add.reference")}
-          onAdd={() => update({ references: [...form.references, newReferenceRow()] })}
+          adder={
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={Plus}
+                aria-expanded={picking === REFERENCES_PICKER}
+                aria-controls={picking === REFERENCES_PICKER ? "support-guide-reference-picker" : undefined}
+                disabled={form.references.length >= MAX_GUIDE_REFERENCES}
+                onClick={() => setPicking((current) => (current === REFERENCES_PICKER ? null : REFERENCES_PICKER))}
+              >
+                {t("supportGuides.add.reference")}
+              </Button>
+              {picking === REFERENCES_PICKER ? (
+                <SupportGuideReferencePicker
+                  id="support-guide-reference-picker"
+                  testId="support-guide-reference-picker"
+                  searchAnswerProfileId={searchAnswerProfileId}
+                  references={form.references}
+                  maxSelection={MAX_GUIDE_REFERENCES - form.references.length}
+                  onAdd={(references) => {
+                    update({ references: [...form.references, ...references] });
+                    setPicking(null);
+                  }}
+                  onClose={() => setPicking(null)}
+                />
+              ) : null}
+            </>
+          }
           rowTitle={(row) => row.title || row.documentId}
           onMove={(index, delta) => moveRow("references", index, delta)}
           onRemove={(index) => removeRow("references", index)}
@@ -1120,23 +1156,10 @@ function SupportGuideForm({
             const path = (field: string) => `references[${index}].${field}`;
             return (
               <FormGrid>
-                <TextField
+                <ReferenceDocumentField
                   id={domId(path("document_id"))}
-                  width="md"
-                  label={t("supportGuides.field.documentId")}
-                  value={row.documentId}
-                  maxLength={64}
-                  required
+                  reference={row}
                   error={errorAt(path("document_id"))}
-                  onChange={(event) => updateRow("references", index, { documentId: event.target.value })}
-                />
-                <TextField
-                  id={domId(path("title"))}
-                  width="lg"
-                  label={t("supportGuides.field.referenceTitle")}
-                  value={row.title}
-                  maxLength={200}
-                  onChange={(event) => updateRow("references", index, { title: event.target.value })}
                 />
                 <TextareaField
                   id={domId(path("section_path"))}
@@ -1485,6 +1508,29 @@ function SwitchRow({
   );
 }
 
+/** 資料の文書（選んだ文書の表示名と ID を読み取り専用で出す。文書は「資料を足す」の選択で入れる。#2749）。 */
+function ReferenceDocumentField({
+  id,
+  reference,
+  error,
+}: {
+  id: string;
+  reference: ReferenceForm;
+  error?: string;
+}) {
+  return (
+    <TextField
+      id={id}
+      width="lg"
+      label={t("supportGuides.field.referenceDocument")}
+      value={reference.title || reference.documentId}
+      helper={t("supportGuides.field.referenceDocumentId", { id: reference.documentId })}
+      readOnly
+      error={error}
+    />
+  );
+}
+
 function RowsSection<R extends { key: string }>({
   section,
   title,
@@ -1492,6 +1538,7 @@ function RowsSection<R extends { key: string }>({
   rows,
   addLabel,
   onAdd,
+  adder,
   rowTitle,
   onMove,
   onRemove,
@@ -1501,8 +1548,10 @@ function RowsSection<R extends { key: string }>({
   title: string;
   help: string;
   rows: readonly R[];
-  addLabel: string;
-  onAdd: () => void;
+  /** 行を足す操作。`adder` を渡したときは、ボタンの代わりにそれを出す（資料は文書を選んで足す）。 */
+  addLabel?: string;
+  onAdd?: () => void;
+  adder?: ReactNode;
   rowTitle: (row: R) => string;
   onMove: (index: number, delta: number) => void;
   onRemove: (index: number) => void;
@@ -1559,9 +1608,11 @@ function RowsSection<R extends { key: string }>({
           );
         })}
       </ol>
-      <Button size="sm" variant="secondary" icon={Plus} onClick={onAdd}>
-        {addLabel}
-      </Button>
+      {adder ?? (
+        <Button size="sm" variant="secondary" icon={Plus} onClick={onAdd}>
+          {addLabel}
+        </Button>
+      )}
     </FormSection>
   );
 }

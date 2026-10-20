@@ -13,6 +13,7 @@ from app.main import app
 from app.rag import extraction_field_adapter as fields_mod
 from app.rag.extraction_field_adapter import FieldDefinition
 from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig, parse_adapter_config
+from app.rag.search_answer_profile_config import MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES
 from app.schemas.document import DocumentDetail, DocumentSummary, FileStatus, IngestionJobPhase
 from app.schemas.knowledge_base import (
     KnowledgeBaseDetail,
@@ -208,7 +209,11 @@ class FakeKnowledgeBaseOracle:
         documents = [
             document
             for document in self.documents.values()
-            if knowledge_base_id is None or (knowledge_base_id, document.id) in self.memberships
+            # 本物と同じく、カンマ区切りの複数の KB のどれかに所属する文書（#2749）。
+            if knowledge_base_id is None
+            or any(
+                (kb_id, document.id) in self.memberships for kb_id in knowledge_base_id.split(",")
+            )
         ]
         if status is not None:
             documents = [document for document in documents if document.status == status]
@@ -528,6 +533,24 @@ def test_assign_and_list_knowledge_base_documents(fake_oracle: FakeKnowledgeBase
     docs_page = docs_resp.json()["data"]
     assert docs_page["total"] == 1
     assert docs_page["items"][0]["id"] == "doc-1"
+
+
+def test_list_documents_accepts_profile_knowledge_bases(
+    fake_oracle: FakeKnowledgeBaseOracle,
+) -> None:
+    """文書一覧は、プロファイルの KB の上限の数を、カンマ区切りでまとめて受ける（#2749）。"""
+    detail = client.post(
+        "/api/knowledge-bases", json={"name": "KB A", "description": "説明"}
+    ).json()["data"]
+    client.post(f"/api/knowledge-bases/{detail['id']}/documents", json={"document_ids": ["doc-1"]})
+    others = [uuid4().hex for _ in range(MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES - 1)]
+
+    resp = client.get(
+        "/api/documents", params={"knowledge_base_id": ",".join([*others, detail["id"]])}
+    )
+
+    assert resp.status_code == 200
+    assert [item["id"] for item in resp.json()["data"]["items"]] == ["doc-1"]
 
 
 def test_document_knowledge_base_replace_endpoint(fake_oracle: FakeKnowledgeBaseOracle) -> None:

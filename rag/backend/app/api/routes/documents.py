@@ -104,6 +104,7 @@ from app.rag.navigation import build_navigation_tree
 from app.rag.parser_source_guard import check_parser_source, settings_convert_source
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
+from app.rag.search_answer_profile_config import MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES
 from app.rag.section_map_service import refresh_document_section_map
 from app.rag.section_rules import (
     extraction_sections,
@@ -539,12 +540,21 @@ async def _delete_orphan_upload_object(storage: ObjectStorageClient, object_path
         )
 
 
+# 文書の一覧の knowledge_base_id の長さの上限。KB の ID（32 文字の hex）とカンマを、
+# プロファイルの KB の上限の数だけ（URL を Nginx の要求行の上限 8 KiB に収める）。
+_KNOWLEDGE_BASE_FILTER_MAX_LENGTH = 33 * MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES
+
+
 @router.get("", response_model=ApiResponse[Page[DocumentSummary]])
 async def list_documents(
     paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))],
     status: FileStatus | None = None,
     q: str | None = Query(default=None, min_length=1, max_length=200),
-    knowledge_base_id: str | None = Query(default=None, min_length=1, max_length=128),
+    # カンマ区切りで複数を受ける（どれかに所属する文書）。業務ガイドの資料の選択は、
+    # 検索・回答プロファイルのナレッジベース（上限 200 件）をまとめて渡す(#2749)。
+    knowledge_base_id: str | None = Query(
+        default=None, min_length=1, max_length=_KNOWLEDGE_BASE_FILTER_MAX_LENGTH
+    ),
     queued_phase: IngestionJobPhase | None = None,
 ) -> ApiResponse[Page[DocumentSummary]]:
     """取込対象ドキュメントの一覧を返す。DB 停止時は空一覧 + warning で縮退する。

@@ -1,11 +1,11 @@
 "use client";
 
-import { FilePlus2, Files, Unlink, X } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { FilePlus2, Files, Unlink } from "lucide-react";
+import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import { DocumentPicker, type DocumentPickerSelection } from "@/components/documents/DocumentPicker";
 import { EmptyState, ApiErrorState } from "@/components/StateViews";
-import { StatusBadge } from "@/components/StatusBadge";
 import { EditorTargetState } from "@/components/layout/EntityLayout";
 import { useAuth } from "@/components/security/AuthProvider";
 import {
@@ -16,10 +16,7 @@ import {
   CardTitle,
   ClearActionButton,
   DEFAULT_PAGE_SIZE,
-  FormActionBar,
   FormSkeleton,
-  ListPicker,
-  type ListPickerItem,
   ListSkeleton,
   ListToolbar,
   OffsetPagination,
@@ -34,15 +31,13 @@ import {
   type DocumentSummary,
   type KnowledgeBaseDetail,
 } from "@/lib/api";
-import { formatDateTime, formatNumber } from "@/lib/format";
+import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { listPickerLabels } from "@/lib/list-picker-labels";
 import { isPageSize, listCountProps } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import {
   AssignDocumentsPartialError,
   useAssignDocumentsToKnowledgeBase,
-  useDocumentCandidates,
   useDocuments,
   useKnowledgeBase,
   useListTotal,
@@ -139,9 +134,8 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
 }
 
 /**
- * 「文書を追加」（#600）。数千〜数万件の文書から、文書名で検索して複数を選び、一度に追加する。
- * 候補はサーバー側の検索（`q`）と追加読み込み（100 件ずつ）で取り、すでに所属している文書は「追加済み」で選べなくする。
- * 選んだ文書は検索語を変えても残り、「選択中だけ表示」で確かめられる。
+ * 「文書を追加」（#600）。共通の文書の選択（`DocumentPicker`）で複数を選び、一度に追加する。
+ * すでに所属している文書は「追加済み」で選べなくする。
  */
 function DocumentAssignment({
   id,
@@ -152,67 +146,20 @@ function DocumentAssignment({
   knowledgeBase: KnowledgeBaseDetail;
   onClose: (options?: { assigned?: boolean }) => void;
 }) {
-  const [candidateQuery, setCandidateQuery] = useState("");
-  const candidates = useDocumentCandidates({ q: candidateQuery || undefined });
   const assign = useAssignDocumentsToKnowledgeBase();
-  // 選んだ文書（検索語を変えても残す。名前を出すために文書ごと持つ）。
-  const [selected, setSelected] = useState<Map<string, DocumentSummary>>(() => new Map());
 
-  const pages = candidates.data?.pages;
-  const documents = useMemo(() => {
-    // offset のページングは、取込中に文書が増えると前のページと重なることがあるので、ID で重複を除く。
-    const seen = new Set<string>();
-    const result: DocumentSummary[] = [];
-    for (const page of pages ?? []) {
-      for (const document of page.items) {
-        if (seen.has(document.id)) continue;
-        seen.add(document.id);
-        result.push(document);
-      }
-    }
-    return result;
-  }, [pages]);
-  const total = pages?.[pages.length - 1]?.total ?? 0;
-
-  const toItem = (document: DocumentSummary): ListPickerItem => {
-    const assigned = documentHasKnowledgeBase(document, knowledgeBase.id);
-    return {
-      key: document.id,
-      label: document.file_name,
-      textValue: document.file_name,
-      description: [document.category_name, formatDateTime(document.uploaded_at)].filter(Boolean).join(" ・ "),
-      meta: <StatusBadge status={document.status} />,
-      disabled: assigned,
-      disabledReason: assigned ? t("knowledgeBases.assignment.alreadyAssigned") : undefined,
-    };
-  };
-  const items = documents.map(toItem);
-  const selectedItems = [...selected.values()].map(toItem);
-  const selectedKeys = new Set(selected.keys());
-  const documentsById = new Map(documents.map((document) => [document.id, document]));
-
-  const errorMessage = (error: unknown) =>
-    error instanceof ApiError ? error.message : t("knowledgeBases.error.documents");
-
-  const handleAssign = () => {
-    const documentIds = [...selected.keys()];
-    if (documentIds.length === 0) return;
+  const handleAssign = (documents: DocumentSummary[], selection: DocumentPickerSelection) => {
     assign.mutate(
-      { id: knowledgeBase.id, documentIds },
+      { id: knowledgeBase.id, documentIds: documents.map((document) => document.id) },
       {
         onSuccess: () => {
-          setSelected(new Map());
           toast.success(t("knowledgeBases.toast.assigned"));
           onClose({ assigned: true });
         },
         onError: (error) => {
           if (error instanceof AssignDocumentsPartialError) {
             // 追加できた分は選択から外し、追加できなかった残りだけを残す（もう一度追加できる）。
-            setSelected((current) => {
-              const copy = new Map(current);
-              for (const documentId of error.assignedIds) copy.delete(documentId);
-              return copy;
-            });
+            selection.deselect(error.assignedIds);
             const reason =
               error.cause instanceof ApiError ? error.cause.message : t("knowledgeBases.error.assign");
             toast.error(
@@ -232,85 +179,16 @@ function DocumentAssignment({
   };
 
   return (
-    <ListPicker
+    <DocumentPicker
       id={id}
-      title={t("knowledgeBases.assignment.panelTitle")}
-      headingLevel={3}
-      description={t("knowledgeBases.assignment.hint")}
-      label={t("knowledgeBases.assignment.listLabel")}
-      items={items}
-      selectedKeys={selectedKeys}
-      selectedItems={selectedItems}
-      onToggle={(item, next) =>
-        setSelected((current) => {
-          const copy = new Map(current);
-          const document = documentsById.get(item.key) ?? current.get(item.key);
-          if (next && document) copy.set(item.key, document);
-          else copy.delete(item.key);
-          return copy;
-        })
-      }
-      onSelectMany={(targets) =>
-        setSelected((current) => {
-          const copy = new Map(current);
-          for (const target of targets) {
-            const document = documentsById.get(target.key);
-            if (document) copy.set(target.key, document);
-          }
-          return copy;
-        })
-      }
-      onClearSelection={() => setSelected(new Map())}
-      total={total}
-      search={{
-        id: "knowledge-base-add-document-search",
-        label: t("knowledgeBases.assignment.search"),
-        placeholder: t("knowledgeBases.assignment.searchPlaceholder"),
-        value: candidateQuery,
-        onSearch: setCandidateQuery,
-        autoFocus: true,
-      }}
-      loading={candidates.isPending}
-      refreshing={candidates.isFetching && candidates.isPlaceholderData}
-      error={candidates.isError && !candidates.data ? errorMessage(candidates.error) : undefined}
-      onRetry={() => void candidates.refetch()}
-      hasMore={Boolean(candidates.hasNextPage)}
-      loadingMore={candidates.isFetchingNextPage}
-      loadMoreError={candidates.isFetchNextPageError ? errorMessage(candidates.error) : undefined}
-      onLoadMore={() => void candidates.fetchNextPage()}
-      labels={listPickerLabels({
-        loading: t("knowledgeBases.assignment.loading"),
-        emptyTitle: t("knowledgeBases.assignment.noOptions"),
-        emptyHint: t("knowledgeBases.assignment.noOptionsHint"),
-        noResultsTitle: t("knowledgeBases.assignment.noResults"),
-        noResultsHint: t("knowledgeBases.assignment.noResultsHint"),
-      })}
-      actions={
-        <FormActionBar
-          ariaLabel={t("knowledgeBases.assignment.title")}
-          primaryActions={[
-            {
-              id: "assign",
-              label: t("knowledgeBases.assignment.submit", { count: formatNumber(selected.size) }),
-              icon: FilePlus2,
-              loading: assign.isPending,
-              disabled: selected.size === 0,
-              onClick: handleAssign,
-              testId: "knowledge-base-add-documents-submit",
-            },
-          ]}
-          secondaryActions={[
-            {
-              id: "close",
-              label: t("knowledgeBases.assignment.close"),
-              icon: X,
-              disabled: assign.isPending,
-              onClick: () => onClose(),
-            },
-          ]}
-        />
-      }
       testId="knowledge-base-add-documents"
+      description={t("knowledgeBases.assignment.hint")}
+      unavailableReason={(document) =>
+        documentHasKnowledgeBase(document, knowledgeBase.id) ? t("documentPicker.alreadyAdded") : undefined
+      }
+      submitting={assign.isPending}
+      onSubmit={handleAssign}
+      onClose={() => onClose()}
     />
   );
 }
