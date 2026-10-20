@@ -123,6 +123,11 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         ),
     ),
     PromptStage(
+        "support_guide_conditions",
+        "question",
+        (("system", "app.rag.support_guide_conditions:CONDITION_SYSTEM_PROMPT"),),
+    ),
+    PromptStage(
         "history_rewrite",
         "question",
         (("system", "app.rag.pipeline:HISTORY_REWRITE_SYSTEM_PROMPT"),),

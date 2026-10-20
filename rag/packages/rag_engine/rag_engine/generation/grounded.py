@@ -302,7 +302,7 @@ AUDIT_SYSTEM_PROMPT = (
     "- 当てはめた items の function（文書名 / 機能見出し）が質問と別の制度・手続・対象のものなら valid=false。\n"
     "\n"
     "4. 出力\n"
-    "- reviews: 各 item の index、support、applicability、condition、reason。\n"
+    "- reviews: 各 item の index、support、applicability、condition、reason、output_fields。出力の項目を主張するitemでは、evidenceとfunction_contextが示す根拠の役割と成果物の一致を先に判定する。\n"
     "- application_reviews: 各 application の index、valid、reason。\n"
     "- request_reviews: request_units の各 id について、items（valid な applications を含む）が答えていれば addressed（複数の item をつないで答えていても addressed）、一部なら partial、なければ missing、背景なら context。reason は質問と同じ言語で書く。\n"
     "- unused_evidence_ids: 未使用根拠のうち、質問への回答に必要なのに items で使われていないものだけを、重要な順に最大8件挙げる。"
@@ -723,6 +723,10 @@ def summary_asserts_denied(
     def bigrams(value: str) -> set[str]:
         return {w[i : i + 2] for w in check_cues().claim_word.findall(value) for i in range(len(w) - 1)}
 
+    for text in denied:
+        exact_claim = text.strip()
+        if exact_claim and exact_claim in summary and not any(exact_claim in value for value in verified):
+            return f"{subject}を summary が断定: " + exact_claim[:60]
     supported = set().union(*(bigrams(v) for v in verified)) if verified else set()
     sentences = [bigrams(t) for t in check_cues().sentence_split.split(summary or "") if t.strip()]
     for text in denied:
@@ -2205,11 +2209,17 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
     変わり得るのは適用性だけ。監査の揺れで支持済みの説明に印を増やさずに、誤った主張の撤回だけを受け入れる (#1011)。
     """
     for review in audit.reviews:
-        if not 0 <= review.index < len(checked) or checked[review.index].span is None:
+        if not 0 <= review.index < len(checked):
             continue
         entry = checked[review.index]
-        if entry.removed:
+        span = entry.span
+        if entry.removed or span is None:
             continue
+        if review.output_fields is not None and review.output_fields.definition_quote.strip():
+            definition = review.output_fields.definition_quote.strip()
+            source_texts = [span["text"], *span.get("document_texts", ())]
+            if not any(quote_in_text(definition, text) for text in source_texts):
+                entry.mark("unsupported", "出力ファイルの項目定義の引用を根拠に確認できません。")
         reason = f"監査: {review.support}/{review.applicability} {review.reason}"
         if review.support == "contradicted":
             entry.remove(review.reason, reason=reason)
@@ -2221,14 +2231,12 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
             if review.support == "unsupported" and not entry.carried:
                 entry.mark("unsupported", review.reason, reason=reason)
             continue
-        if review.support != "supported" and not entry.carried:
-            if review.support == "unsupported" and _is_route_navigation(entry.item, entry.span):
+        if review.support != "supported" and (not entry.carried or review.output_fields is not None):
+            if review.support == "unsupported" and _is_route_navigation(entry.item, span):
                 continue  # 見出しの画面経路を開くだけの item は、引用に経路がなくても印を付けない (#629)
             entry.mark("unsupported", review.reason, reason=reason)
         elif review.applicability in {"conditional", "unknown"} and entry.item.applies == "matched":
-            entry.item = _normalized(
-                entry.item.model_copy(update={"applies": "conditional", "condition": review.condition.strip()}), entry.span
-            )
+            entry.item = _normalized(entry.item.model_copy(update={"applies": "conditional", "condition": review.condition.strip()}), span)
             if entry.item.applies != "conditional":
                 entry.item = entry.item.model_copy(update={"applies": "unverified"})
 
