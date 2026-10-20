@@ -88,8 +88,9 @@ def test_plan_preserves_configured_requirements_and_dependencies():
         [{"id": "a", "purpose": "値を編集", "evidence_requirements": ["入力方法"], "done_when": "保存済み", "depends_on": ["open"]}],
     )
     assert plan is not None
-    assert [r["text"] for r in plan.step_contracts[0]["requirements"]] == ["値を編集", "入力方法", "保存済み"]
+    assert [r["text"] for r in plan.step_contracts[0]["requirements"]] == ["入力方法", "保存済み"]
     assert plan.step_contracts[0]["depends_on"] == ["open"]
+    assert plan.step_contracts[0]["purpose"] == "値を編集"
 
 
 def test_missing_requirement_is_reported_in_answer_without_asserting_it_as_fact():
