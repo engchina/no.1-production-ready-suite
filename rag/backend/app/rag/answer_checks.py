@@ -11,8 +11,10 @@
 - impact: 業務ガイドの影響範囲（グループ / 全体）と承認の要否を回答に書いているか。影響範囲・
   承認が係る手順（`impact.steps`）が、分かっている条件で外れた分岐の手順だけなら確かめない（#1320）。
 
-手順・語の照合は、NFKC・大文字小文字・空白を揃えた文字列の部分一致で行う（言い換えは見つけられない）。
-手順の名前が回答に 1 つも見つからなければ、順序は確かめられないことを warning で示す。手順の照合は
+手順・語の照合は、NFKC・大文字小文字・空白を揃えた文字列の部分一致で行う。手順の充足の判定
+（`guide_step_validation`。#2708）が手順の説明にした段落があれば、その段落の位置を手順の位置に
+する（言い換えた回答でも順序を確かめる）。充足の判定が無く、手順の名前が回答に 1 つも見つから
+なければ、順序は確かめられないことを warning で示す。手順の照合は
 実行の指示の段落（行）だけで行い、満たした前提の言及（「→ この前提は満たしています」「承認済み」の
 行と、見出しが「満たしている条件」などの節）は数えない（#1491）。
 """
@@ -174,30 +176,60 @@ def _branch_matches(when: SupportGuideBranchWhen, known: Mapping[str, str]) -> b
     return value in {_value(item) for item in when.values}
 
 
-def excluded_steps(content: SupportGuideContent, conditions: Mapping[str, str]) -> set[str]:
-    """既知の条件に当たらない分岐の手順（と、それだけに依存する手順）。"""
+def _branch_decisions(
+    content: SupportGuideContent, conditions: Mapping[str, str]
+) -> list[tuple[str, bool | None]]:
+    """分岐ごとの (行き先の手順, 当たるか)。当たる True / 外れる False / 決まらない None。
+
+    どの分岐にも当たらない値（選択肢に無い値など）は、分岐を決められない（外さない。#1320）。
+    """
     known = {key: _value(value) for key, value in conditions.items() if value and value.strip()}
-    taken: set[str] = set()
-    skipped: set[str] = set()
     decided = [(branch, _branch_matches(branch.when, known)) for branch in content.branches]
-    # どの分岐にも当たらない値（選択肢に無い値など）は、分岐を決められない（外さない。#1320）。
     matched_conditions = {branch.when.condition_id for branch, matched in decided if matched}
-    for branch, matched in decided:
-        if matched is False and branch.when.condition_id in matched_conditions:
-            skipped.add(branch.goto_step)
-        else:
-            taken.add(branch.goto_step)
-    excluded = skipped - taken
+    return [
+        (
+            branch.goto_step,
+            False
+            if matched is False and branch.when.condition_id in matched_conditions
+            else (True if matched else None),
+        )
+        for branch, matched in decided
+    ]
+
+
+def _with_dependents(content: SupportGuideContent, steps: set[str], stop: set[str]) -> set[str]:
+    """``steps`` と、``steps`` の手順だけに依存する後続の手順（``stop`` の手順は足さない）。"""
+    result = set(steps)
     changed = True
     while changed:
         changed = False
         for step in content.steps:
-            if step.id in excluded or step.id in taken or not step.depends_on:
+            if step.id in result or step.id in stop or not step.depends_on:
                 continue
-            if all(dependency in excluded for dependency in step.depends_on):
-                excluded.add(step.id)
+            if all(dependency in result for dependency in step.depends_on):
+                result.add(step.id)
                 changed = True
-    return excluded
+    return result
+
+
+def excluded_steps(content: SupportGuideContent, conditions: Mapping[str, str]) -> set[str]:
+    """既知の条件に当たらない分岐の手順（と、それだけに依存する手順）。"""
+    decisions = _branch_decisions(content, conditions)
+    taken = {step for step, applies in decisions if applies is not False}
+    skipped = {step for step, applies in decisions if applies is False}
+    return _with_dependents(content, skipped - taken, taken)
+
+
+def conditional_steps(content: SupportGuideContent, conditions: Mapping[str, str]) -> set[str]:
+    """分かっている条件で決まらない分岐の手順（と、それだけに依存する後続の手順。#2708）。
+
+    どの場合に当たるかで要否が変わるので、回答の充足では必須の手順に数えない（RAG の回答の
+    `support_guide_runtime.conditional_step_ids` と同じ考え）。
+    """
+    decisions = _branch_decisions(content, conditions)
+    decided = {step for step, applies in decisions if applies}
+    undecided = {step for step, applies in decisions if applies is None} - decided
+    return _with_dependents(content, undecided, decided | excluded_steps(content, conditions))
 
 
 def _premise_met(text: str) -> bool:
@@ -236,18 +268,33 @@ def instruction_text(answer: str) -> str:
 
 
 def check_guide_steps(
-    answer: str, content: SupportGuideContent, conditions: Mapping[str, str]
+    answer: str,
+    content: SupportGuideContent,
+    conditions: Mapping[str, str],
+    located: Mapping[str, str] | None = None,
 ) -> list[AnswerFinding]:
-    """回答に出た手順の順序・分岐・依存を業務ガイドの手順と照らす（実行の指示の段落だけ。#1491）。"""
+    """回答に出た手順の順序・分岐・依存を業務ガイドの手順と照らす（実行の指示の段落だけ。#1491）。
+
+    ``located`` は手順の充足の判定（`guide_step_validation`。#2708）が手順の説明にした段落
+    （手順 id → 段落の本文）。その手順の位置は段落の位置にする（言い回しの違う回答でも順序を
+    確かめる）。渡したときは、手順の名前が見つからないことを ``guide_steps_unmatched`` に
+    しない（説明の無い手順は充足の判定が示す）。
+    """
     if not content.steps:
         return []
     normalized = _normalized(instruction_text(answer))
     titles = {step.id: step.title for step in content.steps}
     positions: dict[str, int] = {}
     for step in content.steps:
+        paragraph = _normalized((located or {}).get(step.id, ""))
         title = _normalized(step.title)
-        if len(title) >= _MIN_TITLE_CHARS and (index := normalized.find(title)) >= 0:
+        index = normalized.find(paragraph) if paragraph else -1
+        if index < 0 and len(title) >= _MIN_TITLE_CHARS:
+            index = normalized.find(title)
+        if index >= 0:
             positions[step.id] = index
+    if not positions and located is not None:
+        return []
     if not positions:
         return [
             AnswerFinding(
@@ -372,6 +419,7 @@ __all__ = [
     "check_guide_steps",
     "check_impact",
     "check_requests",
+    "conditional_steps",
     "excluded_steps",
     "impact_applies",
     "instruction_text",

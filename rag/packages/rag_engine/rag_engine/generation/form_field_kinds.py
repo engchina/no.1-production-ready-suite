@@ -180,6 +180,7 @@ def with_resolved_plan(runtime_knowledge: Any, resolved: Sequence[ResolvedCondit
         guide_steps=tuple(item for item in runtime_knowledge.guide_steps if item[0] in kept),
         guide_optional_steps=tuple(step_id for step_id, required in steps if not required),
         guide_step_terms=tuple(item for item in runtime_knowledge.guide_step_terms if item[0] in kept),
+        guide_unsearched_steps=tuple(step_id for step_id in runtime_knowledge.guide_unsearched_steps if step_id in kept),
     )
 
 

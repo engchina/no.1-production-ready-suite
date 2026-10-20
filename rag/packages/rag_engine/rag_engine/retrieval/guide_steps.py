@@ -20,7 +20,9 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Literal
 
-GUIDE_STEP_TRACE_SCHEMA_VERSION = 1
+# 2: 手順ごとの検索をしなかった手順（unsearched_step_ids）と、手順の参照の頁に当たる根拠の数（referenced_count）を
+#    足した（#2706）。
+GUIDE_STEP_TRACE_SCHEMA_VERSION = 2
 # 1 手順の検索文に足す手がかりの上限。
 MAX_STEP_HINTS = 5
 
@@ -204,9 +206,52 @@ def run_step_searches(
     return results, stop
 
 
-def _key(parent: Any) -> str:
-    record = getattr(parent, "record", None)
+def unsearched_steps(plan: GuidePlan, results: Sequence[StepSearch]) -> tuple[str, ...]:
+    """検索できなかった手順の id（期限・回数の上限で検索しなかった・検索がすべて失敗した。#2706）。"""
+    searched = {result.step_id for result in results if not result.error}
+    return tuple(step.step_id for step in plan.steps if step.step_id not in searched)
+
+
+def _record_pages(record: Any) -> tuple[str, int, int] | None:
+    """根拠の (文書の id, 頁の始め, 頁の終わり)。分からなければ None。"""
+    metadata = getattr(record, "metadata", None)
+    document_id = str(metadata.get("document_id") or "") if isinstance(metadata, Mapping) else ""
+    start = getattr(record, "page", None)
+    if not document_id or not isinstance(start, int) or isinstance(start, bool):
+        return None
+    end = getattr(record, "page_end", None)
+    return document_id, start, end if isinstance(end, int) and end >= start else start
+
+
+def reference_step_sources(plan: GuidePlan, records: Iterable[Any]) -> dict[str, tuple[str, ...]]:
+    """手順の参照の頁の範囲に当たる根拠（手順 id → 根拠の key。#2706）。
+
+    業務ガイドの定義で手順の根拠になる根拠（参照の文書と頁の範囲が重なる）を、検索の結果に関係なく手順に紐づける。
+    期限で検索しなかった手順の根拠も、複数の手順が同じ根拠を参照すること（共有）も、これで分かる。頁の範囲の無い
+    参照（文書の全体）は手順に固有な範囲を決めないので紐づけない。
+    """
+    pages = [(key, located) for record in records if (key := _key_of(record)) and (located := _record_pages(record))]
+    sources: dict[str, tuple[str, ...]] = {}
+    for step in plan.steps:
+        ranges = [
+            (reference.document_id, item.page_start, item.page_end) for reference in step.references for item in reference.page_ranges
+        ]
+        keys = [
+            key
+            for key, (document_id, start, end) in pages
+            if any(document_id == ref_doc and start <= ref_end and ref_start <= end for ref_doc, ref_start, ref_end in ranges)
+        ]
+        if keys:
+            sources[step.step_id] = tuple(dict.fromkeys(keys))
+    return sources
+
+
+def _key_of(record: Any) -> str:
     return str(getattr(record, "chunk_uid", "") or getattr(record, "id", "") or "")
+
+
+def _key(parent: Any) -> str:
+    return _key_of(getattr(parent, "record", None))
 
 
 @dataclass(frozen=True)
@@ -292,7 +337,9 @@ __all__ = [
     "StepSearch",
     "StepSelection",
     "planned_searches",
+    "reference_step_sources",
     "run_step_searches",
     "select_step_parents",
     "step_queries",
+    "unsearched_steps",
 ]

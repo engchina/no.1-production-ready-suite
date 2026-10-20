@@ -40,6 +40,7 @@ from app.rag.answer_provenance import search_answer_profile_revision
 from app.rag.answer_threads import run_answer_in_thread
 from app.rag.answer_timeout import (
     AnswerTimeoutError,
+    StageTracker,
     answer_stage_label,
     run_answer_with_timeout,
 )
@@ -578,6 +579,17 @@ def _with_knowledge_base_ids(
     return SearchRequest.model_validate(payload)
 
 
+# 取り消した検索・回答のメトリクスの outcome と、監査の error_stage（#2691）。
+SEARCH_CANCELLED_OUTCOME = "cancelled"
+
+
+class SearchCancelledError(Exception):
+    """取り消した検索・回答（監査の error_type。#2691）。"""
+
+    def __init__(self) -> None:
+        super().__init__("検索・回答は呼び出し元の取消で止めました。")
+
+
 async def _report_tool_progress(progress: SearchStageProgress) -> None:
     """工程の始まりを MCP の進み具合（`notifications/progress`）で知らせる（#1864）。
 
@@ -614,6 +626,8 @@ async def _run_search_with_timeout(
     answer_model_id = _answer_model_id(request, settings)
     if run_recorder is not None:
         run_recorder.model_id = answer_model_id if request.generate_answer else None
+    # 取り消したときに止まった工程を残す（#2691）。
+    stages = StageTracker(_report_tool_progress)
     try:
         result = await run_answer_with_timeout(
             lambda tracker: RagPipeline(
@@ -625,7 +639,7 @@ async def _run_search_with_timeout(
                 caller_queries=caller_queries,
             ).run(request, trace_id=trace_id, progress_callback=tracker),
             settings,
-            _report_tool_progress,
+            stages,
         )
         if applied_kb is not None:
             result.diagnostics.kb_adapter_config_applied = applied_kb
@@ -658,6 +672,20 @@ async def _run_search_with_timeout(
         )
         await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
         raise HTTPException(status_code=504, detail=exc.user_message) from exc
+    except asyncio.CancelledError:
+        # 呼び出し元が取り消した（MCP の client の切断・画面の停止。#2691）。回答の期限を取り消した
+        # ので、回答の thread は次の工程・LLM の呼び出しを始めない。成功としては残さず、取消を監査に
+        # 残す（監査の outcome は error、error_stage は cancelled。回答の記録は保存しない）。
+        _record_cancelled_search(
+            request,
+            settings,
+            trace_id=trace_id,
+            started_at=started_at,
+            stage=stages.current_stage,
+            applied_kb=applied_kb,
+            applied_view=applied_view,
+        )
+        raise
     except HTTPException:
         raise
     except Exception as exc:
@@ -681,6 +709,45 @@ async def _run_search_with_timeout(
             )
             raise AnswerApiFailedHTTPError(api_failure) from exc
         raise
+
+
+def _record_cancelled_search(
+    request: SearchRequest,
+    settings: Settings,
+    *,
+    trace_id: str,
+    started_at: float,
+    stage: str | None,
+    applied_kb: str | None,
+    applied_view: str | None,
+) -> None:
+    """取り消した検索・回答を監査とメトリクスに残す（#2691。止まった工程と秒。業務データは残さない）。"""
+    elapsed = elapsed_ms(started_at)
+    diagnostics = build_search_diagnostics(
+        request, settings=settings, retrieval_strategy_adapter="grounded"
+    )
+    if applied_kb is not None:
+        diagnostics.kb_adapter_config_applied = applied_kb
+    if applied_view is not None:
+        diagnostics.search_answer_profile_applied = applied_view
+    record_rag_request(SEARCH_METRIC_MODE, SEARCH_CANCELLED_OUTCOME, elapsed / 1000, 0)
+    record_rag_search_audit(
+        trace_id=trace_id,
+        outcome="error",
+        sanitized_query=request.query,
+        filters=request.filters,
+        findings=[],
+        retrieved_count=0,
+        citations=[],
+        elapsed_ms=elapsed,
+        diagnostics=diagnostics,
+        error=SearchCancelledError(),
+        error_stage=SEARCH_CANCELLED_OUTCOME,
+    )
+    logger.info(
+        "rag_search_cancelled",
+        extra={"trace_id": trace_id, "stage": stage, "elapsed_ms": round(elapsed)},
+    )
 
 
 async def _record_failed_run(

@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import logging
 import math
 import sys
@@ -60,6 +61,12 @@ from pydantic import (
     ValidationError,
     field_validator,
     model_validator,
+)
+from rag_engine.knowledge.runtime_knowledge import (
+    MAX_MATCHED_RULES,
+    MAX_MATCHED_TERMS,
+    RuntimeRule,
+    RuntimeTerm,
 )
 from rag_engine.retrieval.entity_expansion import entity_expansion_relevant
 from rag_parser_core.extraction import is_derived_content
@@ -134,6 +141,7 @@ from app.rag.search_answer_profile_config import resolve_search_answer_profile_s
 from app.rag.search_answer_profile_knowledge import (
     clarification_document_ids,
     load_runtime_knowledge_payload,
+    match_runtime_knowledge,
     resolve_clarification,
     rule_answer,
     rule_matches,
@@ -213,7 +221,14 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     出力の planning・request_id・clarifications）を足し、根拠に検索の順位（retrieval_rank）と
 #     本文の由来（origin）を足した（#2651）。
 # 22: rag_validate_answer の claims に、裏付けを採らなかった理由（support_check）を足した（#2659）。
-MCP_OUTPUT_SCHEMA_VERSION = 22
+# 23: rag_retrieve_evidence に、元の質問に当たる検索・回答プロファイルの承認済みのルールと用語の
+#     説明（profile_knowledge）を足した（#2701）。
+# 24: rag_validate_answer に、業務ガイドの手順ごとの説明の充足（guide_steps）と、説明の無い
+#     必須の手順の finding（guide_step_unexplained）を足し、手順の名前の一致だけで
+#     guide_steps_unmatched にしないようにした（#2708）。
+# 25: rag_validate_answer の status に、時間の上限までに一部の段落の監査が終わらなかった
+#     partial と、どの段落も終わらなかった timed_out を足した（#2700）。
+MCP_OUTPUT_SCHEMA_VERSION = 25
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -226,6 +241,12 @@ RETRIEVE_EVIDENCE_LIMIT_DEFAULT = 20
 # 検索文の本数と 1 本の長さの上限（全文検索に使う検索文の本数の上限 6 に、query を合わせて収める）。
 CALLER_QUERIES_MAX = 5
 CALLER_QUERY_MAX_CHARS = 1000
+# rag_retrieve_evidence が返す検索・回答プロファイルのルール・用語（profile_knowledge。#2701）の
+# 上限。件数は RAG が回答を作るときに prompt へ入れる件数と同じ。字数はルールの本文・用語の説明など
+# 返す文字の合計で、超える項目は返さずに省いた数へ数える。
+PROFILE_KNOWLEDGE_RULES_MAX = MAX_MATCHED_RULES
+PROFILE_KNOWLEDGE_TERMS_MAX = MAX_MATCHED_TERMS
+PROFILE_KNOWLEDGE_MAX_CHARS = 4000
 # 根拠の結果に示す旧版（older_versions。#1405）の最大件数。
 OLDER_VERSIONS_MAX = 10
 # rag_read_source が 1 回で返す本文・親の本文の上限。
@@ -682,8 +703,8 @@ class ValidateAnswerInput(BaseModel):
     guide: ValidateGuideInput | None = Field(
         default=None,
         description=(
-            "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順の順序・依存・分岐と影響範囲・"
-            "承認の記載を確かめる。"
+            "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順ごとの説明の有無・手順の順序・"
+            "依存・分岐と影響範囲・承認の記載を確かめる。"
         ),
     )
     answer_trace_ids: list[Annotated[str, Field(min_length=1, max_length=64)]] = Field(
@@ -1659,6 +1680,56 @@ class LookupGuidesOutput(VersionedOutput):
     )
 
 
+ProfileKnowledgeStatus = Literal["approved", "stale_review_needed"]
+PROFILE_KNOWLEDGE_STATUS_DESCRIPTION = (
+    "approved=承認済み / stale_review_needed=承認済みで、見直しの期日を過ぎている"
+)
+
+
+class ProfileKnowledgeRule(BaseModel):
+    id: str
+    title: str
+    content: str = Field(description="ルールの本文（判断の方針）。")
+    source: str = Field(description="ルールを登録した人が書いた出典（無ければ空）。")
+    status: ProfileKnowledgeStatus = Field(description=PROFILE_KNOWLEDGE_STATUS_DESCRIPTION)
+    updated_at: str = Field(description="ルールを最後に更新した時刻（不明なら空）。")
+
+
+class ProfileKnowledgeTerm(BaseModel):
+    term: str
+    aliases: list[str] = Field(default_factory=list)
+    description: str = Field(description="用語の説明（無ければ空）。")
+    source: str = Field(description="用語を登録した人が書いた出典（無ければ空）。")
+    status: ProfileKnowledgeStatus = Field(description=PROFILE_KNOWLEDGE_STATUS_DESCRIPTION)
+    updated_at: str = Field(description="用語を最後に更新した時刻（不明なら空）。")
+
+
+class ProfileKnowledge(BaseModel):
+    search_answer_profile_id: str
+    revision: str | None = Field(
+        description=(
+            "照合した用語・ルールの登録の版（登録の内容の sha256 の先頭。読めなければ null）。"
+        )
+    )
+    matched_on: Literal["original_question", "query"] = Field(
+        description="照合に使った文（original_question があればそれ、無ければ query）。"
+    )
+    rules: list[ProfileKnowledgeRule] = Field(
+        description="当たったルール（一致の強い順）。資料の原文ではない。"
+    )
+    terms: list[ProfileKnowledgeTerm] = Field(
+        description="当たった用語と説明（一致の強い順）。資料の原文ではない。"
+    )
+    rules_omitted: int = Field(description="件数・字数の上限を超えて返さなかったルールの数。")
+    terms_omitted: int = Field(description="件数・字数の上限を超えて返さなかった用語の数。")
+    load_failed: bool = Field(
+        default=False,
+        description=(
+            "用語・ルールを読めなかった（rules・terms は空。当たるものが無いとは限らない）。"
+        ),
+    )
+
+
 class RetrieveEvidenceOutput(VersionedOutput):
     trace_id: str
     guardrail_warnings: list[str]
@@ -1690,6 +1761,18 @@ class RetrieveEvidenceOutput(VersionedOutput):
             "planning=caller で、検索・回答プロファイルのルールが検索の前に利用者に確かめる条件"
             "（あれば検索せず、evidence は空）。利用者の答えを conditions の condition_id に入れて"
             "呼び直す。"
+        ),
+    )
+    profile_knowledge: ProfileKnowledge | None = Field(
+        default=None,
+        description=(
+            "検索・回答プロファイルに登録・承認された判断の方針（rules）と用語の説明（terms）のうち、"
+            "利用者の元の質問に当たるもの。資料の原文ではないので evidence と分け、根拠・出典として"
+            "引用しない。根拠の読み方と回答の判断に使う。上限（ルール "
+            f"{PROFILE_KNOWLEDGE_RULES_MAX} 件・用語 {PROFILE_KNOWLEDGE_TERMS_MAX} 件・"
+            f"文字の合計 {PROFILE_KNOWLEDGE_MAX_CHARS} 字）を超えた分は rules_omitted・"
+            "terms_omitted に数える。"
+            "検索・回答プロファイルを使わない検索・当たるものが無いときは null。"
         ),
     )
 
@@ -1758,9 +1841,9 @@ class ValidationFinding(BaseModel):
     code: str = Field(
         description=(
             "request_missing / request_partial / request_unverified / guide_unavailable / "
-            "guide_revision_stale / guide_steps_unmatched / step_order / step_wrong_branch / "
-            "step_dependency_missing / step_following_missing / impact_scope_missing / "
-            "approval_missing"
+            "guide_revision_stale / guide_steps_unmatched / guide_step_unexplained / step_order / "
+            "step_wrong_branch / step_dependency_missing / step_following_missing / "
+            "impact_scope_missing / approval_missing"
         )
     )
     severity: Literal["error", "warning"] = Field(
@@ -1774,6 +1857,24 @@ class ValidationFinding(BaseModel):
     )
 
 
+class ValidatedGuideStep(BaseModel):
+    """業務ガイドの手順 1 つの、回答での説明の充足（#2708）。"""
+
+    step_id: str
+    title: str
+    required: bool = Field(
+        description="回答の充足で必須の手順か（分かっている条件で決まらない分岐の手順は false）。"
+    )
+    status: Literal["explained", "reference_only", "unused", "no_evidence"] = Field(
+        description=(
+            "explained=手順の主の操作を根拠で裏付けた段落で説明した / "
+            "reference_only=根拠の原文を参考として示しただけ / "
+            "unused=手順の根拠は渡した根拠にあるが、手順を説明した段落が無い / "
+            "no_evidence=手順の根拠が渡した根拠に無い（その手順の根拠を集めていない）。"
+        )
+    )
+
+
 class ValidateAnswerOutput(VersionedOutput):
     valid: bool = Field(
         description=(
@@ -1781,7 +1882,13 @@ class ValidateAnswerOutput(VersionedOutput):
             " 1 つ以上あるか。"
         )
     )
-    status: str = Field(description="completed / no_claims / no_evidence / input_too_large。")
+    status: str = Field(
+        description=(
+            "completed / partial（時間の上限までに一部の段落の監査が終わらず、"
+            "その段落は unassessed）/ timed_out（どの段落の監査も終わらなかった）"
+            "/ no_claims / no_evidence / input_too_large。"
+        )
+    )
     counts: dict[str, int] = Field(default_factory=dict, description="判定ごとの段落の数。")
     claims: list[ValidatedClaim] = Field(default_factory=list)
     missing_evidence: list[EvidenceRefInput] = Field(
@@ -1802,6 +1909,14 @@ class ValidateAnswerOutput(VersionedOutput):
     )
     guide_revision: int | None = Field(
         default=None, description="検査に使った業務ガイドの今の公開の版。"
+    )
+    guide_steps: list[ValidatedGuideStep] = Field(
+        default_factory=list,
+        description=(
+            "guide の手順ごとの説明の充足（分かっている条件で外れた分岐の手順は含めない。guide を"
+            "渡さないか、段落の判定が出なければ空）。必須の手順で explained でないものは "
+            "guide_step_unexplained の finding にもなる。"
+        ),
     )
     reused_claims: int = Field(
         default=0,
@@ -3423,6 +3538,121 @@ async def _older_versions(
     ]
 
 
+def _knowledge_status(status: str) -> ProfileKnowledgeStatus:
+    # 状態が空の登録は承認済みとして使う（回答の生成と同じ有効の判定。無効・下書きは照合で除く）。
+    return "stale_review_needed" if status == "stale_review_needed" else "approved"
+
+
+def _knowledge_rule(rule: RuntimeRule) -> ProfileKnowledgeRule:
+    return ProfileKnowledgeRule(
+        id=rule.rule_id,
+        title=rule.title,
+        content=rule.content,
+        source=rule.source,
+        status=_knowledge_status(rule.status),
+        updated_at=rule.updated_at,
+    )
+
+
+def _knowledge_term(term: RuntimeTerm) -> ProfileKnowledgeTerm:
+    return ProfileKnowledgeTerm(
+        term=term.term,
+        aliases=list(term.aliases),
+        description=term.description,
+        source=term.source,
+        status=_knowledge_status(term.status),
+        updated_at=term.updated_at,
+    )
+
+
+def _knowledge_revision(payload: Mapping[str, object]) -> str:
+    text = json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowledge | None:
+    """元の質問に当たる検索・回答プロファイルの承認済みのルールと用語の説明（#2701）。
+
+    RAG が回答を作らない根拠の取得では、回答を作る呼び出し元（業務 Agent）へ渡す。照合は回答の
+    生成と同じ（有効な登録だけ・語の一致。LLM は呼ばない）で、呼び出し元が言い換えた検索文では
+    なく利用者の元の質問に当てる。対象は検索に使った検索・回答プロファイルだけ（利用者の範囲外は
+    無いものになる）。ルールを先に、件数・字数の上限で切り、省いた数を示す。読めなければ
+    ``load_failed`` を返す（当たるものが無いこと〔null〕と区別する）。
+    """
+    profile_id = arguments.search_answer_profile_id
+    if profile_id is None:
+        return None
+    question = arguments.original_question or arguments.query
+    matched_on: Literal["original_question", "query"] = (
+        "original_question" if arguments.original_question else "query"
+    )
+    try:
+        oracle = OracleClient()
+        view = await oracle.get_search_answer_profile(profile_id)
+        if view is None:
+            return None
+        payload = await load_runtime_knowledge_payload(oracle, view.id)
+        context = await asyncio.to_thread(match_runtime_knowledge, payload, question)
+    except Exception:  # noqa: BLE001 - 根拠の結果は返し、読めなかったことを示す
+        logger.warning("rag_mcp_profile_knowledge_load_failed", exc_info=True)
+        context = None
+    if context is None or context.error:
+        if context is not None:
+            logger.warning("rag_mcp_profile_knowledge_invalid")
+        return ProfileKnowledge(
+            search_answer_profile_id=profile_id,
+            revision=None,
+            matched_on=matched_on,
+            rules=[],
+            terms=[],
+            rules_omitted=0,
+            terms_omitted=0,
+            load_failed=True,
+        )
+    if not (context.matched_rules or context.matched_terms):
+        return None
+    remaining = PROFILE_KNOWLEDGE_MAX_CHARS
+    rules: list[ProfileKnowledgeRule] = []
+    for rule in context.matched_rules:
+        size = len(rule.title) + len(rule.content) + len(rule.source)
+        if len(rules) < PROFILE_KNOWLEDGE_RULES_MAX and size <= remaining:
+            rules.append(_knowledge_rule(rule))
+            remaining -= size
+    terms: list[ProfileKnowledgeTerm] = []
+    for term in context.matched_terms:
+        size = len(term.term) + sum(map(len, term.aliases)) + len(term.description)
+        size += len(term.source)
+        if len(terms) < PROFILE_KNOWLEDGE_TERMS_MAX and size <= remaining:
+            terms.append(_knowledge_term(term))
+            remaining -= size
+    return ProfileKnowledge(
+        search_answer_profile_id=profile_id,
+        revision=_knowledge_revision(payload),
+        matched_on=matched_on,
+        rules=rules,
+        terms=terms,
+        rules_omitted=len(context.matched_rules) - len(rules),
+        terms_omitted=len(context.matched_terms) - len(terms),
+    )
+
+
+def _profile_knowledge_log(knowledge: ProfileKnowledge | None) -> dict[str, object]:
+    """モデルへ渡したルール・用語の記録（数と版だけ。本文・名前は業務の内容なので残さない）。"""
+    if knowledge is None:
+        return {"profile_knowledge": None}
+    return {
+        "profile_knowledge": {
+            "revision": knowledge.revision,
+            "matched_on": knowledge.matched_on,
+            "rules": len(knowledge.rules),
+            "terms": len(knowledge.terms),
+            "rules_omitted": knowledge.rules_omitted,
+            "terms_omitted": knowledge.terms_omitted,
+            "load_failed": knowledge.load_failed,
+        }
+    }
+
+
 def _guide_reference(reference: SupportGuideReference) -> GuideReferenceItem:
     return GuideReferenceItem(
         document_id=reference.document_id,
@@ -3906,9 +4136,16 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             result = await _run_search(request, scope=scope, caller_queries=list(arguments.queries))
         else:
             result = await _run_search(request)
+        # 回答を作る呼び出し元へ、元の質問に当たる承認済みのルール・用語の説明を渡す（#2701）。
+        knowledge = await _profile_knowledge(arguments)
         logger.info(
             "rag_mcp_retrieve_evidence",
-            extra={**echo, "trace_id": result.trace_id, "queries": len(arguments.queries)},
+            extra={
+                **echo,
+                "trace_id": result.trace_id,
+                "queries": len(arguments.queries),
+                **_profile_knowledge_log(knowledge),
+            },
         )
         limit = retrieve_evidence_limit(arguments)
         # 検索で当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。
@@ -3934,6 +4171,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             evidence=[_evidence(chunk, sections) for chunk in citations],
             evidence_omitted=max(0, len(hits) - limit),
             older_versions=await _older_versions(arguments, request, result.citations),
+            profile_knowledge=knowledge,
             **echo,
         )
 
@@ -4012,6 +4250,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             checks=result.checks,
             findings=[ValidationFinding.model_validate(item.as_dict()) for item in result.findings],
             guide_revision=result.guide_revision,
+            guide_steps=[ValidatedGuideStep.model_validate(step) for step in result.guide_steps],
             reused_claims=result.reused_claims,
         )
 
@@ -4092,9 +4331,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。"
                     "公開する前の最終の検証に使います。見出し・出典の行・"
                     "利用者への質問の段落は主張ではないので監査せず、claims に含めません。"
-                    "requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順の順序と"
-                    "分岐・影響範囲も"
-                    "決定的に確かめます。"
+                    "requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順ごとの"
+                    "説明と順序・分岐・影響範囲も確かめます。"
                 ),
                 input_model=ValidateAnswerInput,
                 handler=scoped(validate, _check_validate_scope),

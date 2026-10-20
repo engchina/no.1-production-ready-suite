@@ -840,9 +840,8 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                   testId="security-roles-save-error"
                 />
                 {!readOnly ? (
-                  // 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。長いフォームでは画面の下端に貼り付く（#1786）。
+                  // 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。画面の下端に貼り付けない（#1786 / #2715）。
                   <FormActionBar
-                    sticky="card"
                     ariaLabel={t("security.roles.formActionsLabel")}
                     testId="security-roles-form-actions"
                     primaryActions={[
