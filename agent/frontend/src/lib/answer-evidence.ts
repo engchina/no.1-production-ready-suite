@@ -44,9 +44,11 @@ export interface AnswerEvidenceReference {
 
 /**
  * 結び付けの方法（#2707）。`validation` は最終の検証の判定（裏付けた段落は「資料により確認できた事項」）、
- * `text` は検証が判定を出さなかったときの決定的な照合（照合で確かめていないので「参考情報」）。
+ * `text` は検証が判定を出さなかったときの決定的な照合（照合で確かめていないので「参考情報」）、`partial` は
+ * 検証が時間の上限までに一部の段落だけを確かめたとき（確かめ終わった段落は判定、確かめ終わらなかった段落の
+ * 根拠は決定的な照合で「参考情報」。#2700）。
  */
-export type AnswerEvidenceBinding = "validation" | "text";
+export type AnswerEvidenceBinding = "validation" | "partial" | "text";
 
 export interface AnswerEvidenceData {
   entries: AnswerEvidenceEntry[];
@@ -162,7 +164,7 @@ export function answerEvidenceData(content: Record<string, unknown> | null | und
     entries,
     markers: pairs(content?.markers),
     passages: pairs(content?.passages),
-    binding: content?.binding === "text" ? "text" : "validation",
+    binding: content?.binding === "text" || content?.binding === "partial" ? content.binding : "validation",
     references,
     citationLines: strings(content?.citation_lines),
   };

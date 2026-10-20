@@ -13,7 +13,8 @@ import { t } from "@/lib/i18n";
  *   回答の下の「資料との照合」には件数のバッジだけを出す（#2361）。
  * - 最終の検証が判定を出さなかった回答（時間切れ・失敗。成果物の `binding: "text"`。#2707）は、決定的な照合で
  *   結び付けた根拠を RAG と同じ「参考情報」の節（根拠の原文と「根拠：文書 p.N」）にし、「資料により確認できた
- *   事項」は作らない（照合していない内容を「確認できた」と見せない）。
+ *   事項」は作らない（照合していない内容を「確認できた」と見せない）。検証が一部の段落だけを確かめた回答
+ *   （`partial`。#2700）は、確かめ終わった段落に根拠の行を付け、確かめ終わらなかった段落の根拠を「参考情報」にする。
  * - 段落に根拠を 1 つも結び付けられないときは null（呼び出し側は今までの Markdown の描き方にする）。
  */
 
@@ -150,15 +151,19 @@ export function structureAnswer(
 ): StructuredBlock[] | null {
   if (!evidence) return null;
   if (evidence.binding === "text") return referenceAnswer(answer, evidence, titles);
-  if (!evidence.passages.length && !evidence.markers.length) return null;
   const { body, notice } = splitNotice(answer, heading);
   const { blocks, ownHeadings } = bodyBlocks(body, evidence, true);
 
   const cited = (block: StructuredBlock) =>
     block.kind === "section" ? block.entries.some((entry) => entry.chunkIds.length) : block.chunkIds.length > 0;
-  if (!blocks.some(cited)) return null;
+  const anyCited = blocks.some(cited);
+  // 検証が一部の段落だけを確かめたとき（`partial`）、確かめ終わらなかった段落の根拠は「参考情報」（RAG と同じく
+  // 「資料により確認できた事項」の後・「資料から確認できなかった事項」の前）。
+  const references = evidence.references.length ? referenceSection(evidence, titles) : null;
+  if (!anyCited && !references) return null;
 
-  const shaped = ownHeadings ? blocks : withConfirmedSection(blocks, titles.confirmed);
+  const shaped = !anyCited || ownHeadings ? blocks : withConfirmedSection(blocks, titles.confirmed);
+  if (references) shaped.push(references);
   if (notice.length) {
     shaped.push({
       kind: "section",
@@ -190,7 +195,13 @@ function referenceAnswer(
 ): StructuredBlock[] | null {
   if (!evidence.references.length) return null;
   const { blocks } = bodyBlocks(withoutCitationLines(answer, evidence.citationLines), evidence, false);
-  blocks.push({
+  blocks.push(referenceSection(evidence, titles));
+  return blocks;
+}
+
+/** 「参考情報」の節（説明の文 → 根拠の原文「…」と「根拠：文書 p.N」）。 */
+function referenceSection(evidence: AnswerEvidenceData, titles: AnswerStructureTitles): StructuredBlock {
+  return {
     kind: "section",
     key: "reference",
     title: titles.reference,
@@ -204,8 +215,7 @@ function referenceAnswer(
         plain: true,
       })),
     ],
-  });
-  return blocks;
+  };
 }
 
 /** 根拠に結び付いた出典の行と、それで中身が無くなった見出しの行を除いた本文。 */

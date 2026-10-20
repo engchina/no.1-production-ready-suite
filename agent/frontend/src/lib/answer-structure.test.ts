@@ -202,6 +202,55 @@ describe("structureAnswer の照合が判定を出さなかった回答", () => 
   });
 });
 
+// #2700・#2707: 検証が時間の上限までに一部の段落だけを確かめた回答（`binding: "partial"`）。
+describe("structureAnswer の一部の段落だけを確かめた回答", () => {
+  const answer = [
+    "答えは次のとおりです。",
+    "",
+    "- 申請は 30 日前までに行います。",
+    "- 承認は部署が行います。",
+    "",
+    `**${HEADING}**`,
+    "",
+    "次の内容は、資料との照合が時間の上限までに終わらず確かめきれませんでした。",
+    "- 確かめが終わっていない: 「承認は部署が行います。」",
+  ].join("\n");
+
+  it("確かめ終わった段落に根拠の行、確かめ終わらなかった段落の根拠は「参考」節、除いた内容の節はその後", () => {
+    const data = answerEvidenceData({
+      items: [
+        { document_id: "d1", chunk_id: "c1", file_name: "文書 A.pdf", excerpt: "x", locator: { page_start: 3 }, cited: true },
+        { document_id: "d2", chunk_id: "c2", file_name: "文書 B.pdf", excerpt: "y", locator: { page_start: 5 }, cited: true },
+      ],
+      passages: [{ text: "- 申請は 30 日前までに行います。", chunk_ids: ["c1"] }],
+      binding: "partial",
+      references: [{ quote: "承認は部署が行う。", chunk_ids: ["c2"] }],
+      citation_lines: [],
+    });
+    const blocks = structureAnswer(answer, data, HEADING, TITLES);
+    const sections = blocks?.filter((block) => block.kind === "section") ?? [];
+    expect(sections.map((block) => (block.kind === "section" ? block.title : null))).toEqual([null, "参考", "確認できなかった"]);
+    const [list, reference] = sections;
+    if (list.kind !== "section" || reference.kind !== "section") throw new Error("節がありません");
+    // 確かめ終わった段落だけに根拠の行。確かめ終わらなかった段落は本文に残し、根拠の行を付けない。
+    expect(list.entries.map((entry) => entry.chunkIds)).toEqual([["c1"], []]);
+    expect(reference.entries.map((entry) => entry.text)).toEqual(["原文の説明", "「承認は部署が行う。」"]);
+    expect(reference.entries[1].chunkIds).toEqual(["c2"]);
+  });
+
+  it("確かめ終わった段落が無くても、参考情報があれば節に組み立てる", () => {
+    const data = answerEvidenceData({
+      items: [{ document_id: "d2", chunk_id: "c2", file_name: "文書 B.pdf", excerpt: "y", locator: { page_start: 5 }, cited: true }],
+      passages: [],
+      binding: "partial",
+      references: [{ quote: "承認は部署が行う。", chunk_ids: ["c2"] }],
+    });
+    const blocks = structureAnswer(answer, data, HEADING, TITLES);
+    expect(blocks?.some((block) => block.kind === "section" && block.title === TITLES.confirmed)).toBe(false);
+    expect(blocks?.some((block) => block.kind === "section" && block.title === "参考")).toBe(true);
+  });
+});
+
 describe("structureAnswer の除いた内容の節", () => {
   it("「資料から確認できなかった事項」の節は全件を同じ書式で持ち、畳める節にする", () => {
     const items = Array.from({ length: 12 }, (_, index) => `- 根拠で確かめられない: 「段落 ${index}」`);

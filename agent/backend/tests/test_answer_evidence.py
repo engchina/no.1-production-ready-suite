@@ -348,10 +348,12 @@ def _free_steps() -> list[RunStep]:
     "validation",
     [
         validation_content("unvalidated", reason="mcp.timeout", message="時間切れ"),
+        # RAG が時間の上限までにどの段落も確かめ終わらなかった（status=timed_out。#2700）。
+        validation_content("unvalidated", reason="validation_timed_out"),
         validation_content("unvalidated", reason="validation_error"),
         None,
     ],
-    ids=["timeout", "failure", "disabled"],
+    ids=["timeout", "timed_out", "failure", "disabled"],
 )
 def test_without_a_validation_verdict_the_answer_is_bound_by_text_as_reference(
     validation: dict[str, Any] | None,
@@ -413,6 +415,73 @@ def test_with_a_validation_verdict_only_the_supported_paragraphs_are_cited() -> 
         {"text": "- 承認は担当部署の課長が行います。", "chunk_ids": [CHUNK_B]}
     ]
     assert (content["references"], content["citation_lines"]) == ([], [])
+
+
+def test_a_partial_verdict_keeps_verified_paragraphs_and_binds_the_timed_out_ones_by_text() -> None:
+    """照合が一部の段落だけを確かめた（status=partial。#2700）ときは、確かめ終わった段落は判定の
+    まま引用し、確かめ終わらなかった段落（unassessed）は「参考情報」の根拠にする。"""
+    validation = validation_content(
+        "completed",
+        result={
+            "status": "partial",
+            "valid": False,
+            "timed_out_passage_ids": ["p2", "p3"],
+            "claims": [
+                {
+                    "status": "supported",
+                    "chunk_id": CHUNK_B,
+                    "answer_quote": "- 承認は担当部署の課長が行います。",
+                },
+                {
+                    "status": "unassessed",
+                    "answer_quote": "- 申請書は利用開始日の 30 日前までに提出してください。",
+                },
+                {"status": "unassessed", "answer_quote": "- 区分 Q-77 の手当があります。"},
+            ],
+        },
+    )
+    content = answer_evidence(_free_steps(), FREE_ANSWER, validation)
+
+    assert content["binding"] == "partial"
+    items = {item["chunk_id"]: item for item in content["items"]}
+    assert [items[chunk]["cited"] for chunk in (CHUNK_A, CHUNK_B, CHUNK_C)] == [True, True, True]
+    # 確かめ終わった段落の根拠は RAG の使われ方を残し、時間切れの段落の根拠は参考にする。
+    assert [items[chunk]["answer_use"] for chunk in (CHUNK_A, CHUNK_B, CHUNK_C)] == [
+        "reference",
+        None,
+        "reference",
+    ]
+    # 本文の根拠の行は確かめ終わった段落だけ。
+    assert content["passages"] == [
+        {"text": "- 承認は担当部署の課長が行います。", "chunk_ids": [CHUNK_B]}
+    ]
+    references = {ref["chunk_ids"][0]: ref["quote"] for ref in content["references"]}
+    assert list(references) == [CHUNK_A, CHUNK_C]
+    assert references[CHUNK_A] == "合成の規程では、申請書は利用開始日の 30 日前までに提出する。"
+    assert content["citation_lines"] == []
+
+
+def test_a_partial_verdict_does_not_repeat_a_verified_chunk_as_a_reference() -> None:
+    validation = validation_content(
+        "completed",
+        result={
+            "status": "partial",
+            "claims": [
+                {
+                    "status": "supported",
+                    "chunk_id": CHUNK_A,
+                    "answer_quote": "- 承認は担当部署の課長が行います。",
+                },
+                {
+                    "status": "unassessed",
+                    "answer_quote": "- 申請書は利用開始日の 30 日前までに提出してください。",
+                },
+            ],
+        },
+    )
+    content = answer_evidence(_free_steps(), FREE_ANSWER, validation)
+    assert content["binding"] == "partial"
+    assert content["references"] == []
 
 
 def test_a_citation_line_without_a_page_points_at_the_first_evidence_of_the_document() -> None:

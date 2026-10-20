@@ -502,6 +502,118 @@ for (const viewport of VIEWPORTS) {
   });
 }
 
+// #2700・#2707: 最終の検証が時間の上限までに一部の段落だけを確かめた回答（RAG の status=partial。成果物の
+// `binding: "partial"`）。確かめ終わった段落には根拠の行、確かめ終わらなかった段落は本文に残して根拠の行を付けず、
+// その根拠は「参考情報」に出し、確かめきれなかった点は「資料から確認できなかった事項」に出す（RAG と同じ順）。
+const PENDING = "- 承認は担当の部署が行います。";
+const PARTIAL_ANSWER = [
+  "合成の質問 A の答えは次のとおりです。",
+  "",
+  "- 申請は 30 日前までに行います。",
+  PENDING,
+  "",
+  "**資料で確認できず除いた内容**",
+  "",
+  "次の内容は、資料との照合が時間の上限までに終わらず確かめきれませんでした。根拠と矛盾する・根拠に無いという判定ではないため、回答の本文は載せています。",
+  "- 確かめが終わっていない: 「承認は担当の部署が行います。」",
+].join("\n");
+
+function seedPartialRun(mockApi: MockApi) {
+  seedRun(mockApi);
+  const run = mockApi.state.runs.find((item) => item.id === RUN_ID) as { artifacts: Record<string, unknown>[] };
+  run.artifacts = [
+    {
+      id: "artifact-validation",
+      kind: "answer_validation",
+      name: "資料との照合",
+      created_at: MOCK_NOW,
+      content: {
+        status: "completed",
+        reason: null,
+        valid: false,
+        result: {
+          status: "partial",
+          valid: false,
+          timed_out_passage_ids: ["p2"],
+          claims: [
+            { answer_quote: "- 申請は 30 日前までに行います。", status: "supported", chunk_id: CHUNK_A, reason: "合成" },
+            { answer_quote: PENDING, status: "unassessed", reason: "合成" },
+          ],
+          findings: [],
+          missing_evidence: [],
+          stale_evidence: [],
+        },
+        withheld: { claims: 0, findings: 0, all: false, unverified: 1 },
+        notice: { items: 1, heading: "資料で確認できず除いた内容" },
+      },
+    },
+    {
+      id: "artifact-evidence",
+      kind: "answer_evidence",
+      name: "回答の根拠",
+      created_at: MOCK_NOW,
+      content: {
+        items: [
+          evidenceItem(CHUNK_A, { cited: true, answer_use: "confirmed" }),
+          evidenceItem(CHUNK_B, {
+            cited: true,
+            answer_use: "reference",
+            locator: { page_start: 5, page_end: 5, section_path: [] },
+          }),
+          evidenceItem(CHUNK_C, { file_name: "文書 C.pdf" }),
+        ],
+        passed: 3,
+        cited: 2,
+        markers: [],
+        passages: [{ text: "- 申請は 30 日前までに行います。", chunk_ids: [CHUNK_A] }],
+        binding: "partial",
+        references: [{ quote: "合成の原文 B。承認は担当の部署が行う。", chunk_ids: [CHUNK_B] }],
+        citation_lines: [],
+      },
+    },
+    { id: "artifact-answer", kind: "answer", name: "回答", created_at: MOCK_NOW, content: { text: PARTIAL_ANSWER } },
+  ];
+}
+
+async function expectPartialAnswer(body: ReturnType<Page["getByTestId"]>) {
+  const sections = body.getByTestId("answer-section");
+  await expect(sections.locator("h4")).toHaveText(["参考情報", "資料から確認できなかった事項"]);
+  const items = sections.first().locator("li");
+  // 確かめ終わった段落だけに根拠の行。確かめ終わらなかった段落は本文に残すが、根拠の行は付けない。
+  await expect(items.nth(0)).toContainText("申請は 30 日前までに行います。");
+  await expect(items.nth(0).getByTestId("answer-citation-link")).toHaveText("根拠：文書 0.pdf p.3");
+  await expect(items.nth(1)).toContainText("承認は担当の部署が行います。");
+  await expect(items.nth(1).getByTestId("answer-citation-link")).toHaveCount(0);
+  const reference = sections.nth(1);
+  await expect(reference.getByText(REFERENCE_NOTE)).toBeVisible();
+  await expect(reference.locator("li:not(.list-none)")).toHaveCount(1);
+  await expect(reference.getByTestId("answer-citation-link")).toHaveText("根拠：文書 0.pdf p.5");
+  await expect(sections.nth(2)).toContainText("時間の上限までに終わらず確かめきれませんでした");
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`照合が一部の段落だけを確かめた回答は、確かめた段落に根拠の行、残りの根拠を「参考情報」に出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    seedPartialRun(mockApi);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await openThread(page);
+    const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+    await expectPartialAnswer(turn.getByTestId(`chat-answer-${RUN_ID}`));
+    await expect(turn.getByTestId("answer-citations").locator("summary")).toHaveText(
+      "AI に渡した 3 件 ／ 回答で引用 2 件 ／ うち該当確認済み 1 件 ／ 参考 1 件"
+    );
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`answer-partial-chat-${viewport.name}.png`), fullPage: true });
+
+    await page.goto(`/runs?id=${RUN_ID}`);
+    const section = page.getByTestId("run-answer-section");
+    await expectPartialAnswer(section.getByTestId("run-answer-artifact-answer"));
+    await expect(page.getByTestId("run-evidence-section").getByTestId("answer-citations")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await section.screenshot({ path: testInfo.outputPath(`answer-partial-run-${viewport.name}.png`) });
+  });
+}
+
 // #2361: 除いた内容が多い回答も、本文の節に全件を同じ書式で出し（「ほか N 件」で切らない）、件数のバッジと一致させる。
 // 項目が多い節は先頭だけを出し、「すべて表示」で残りを開く。
 for (const viewport of VIEWPORTS) {
