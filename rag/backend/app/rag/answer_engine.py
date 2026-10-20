@@ -109,7 +109,7 @@ from app.rag.graph_expansion import (
 )
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_evaluation_input
-from app.rag.support_guide_evidence import guide_evidence_conditions
+from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
 from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.search import (
     MAX_PAGE_RANGES,
@@ -578,6 +578,7 @@ def build_engine_settings(
         domain_keywords_override=tuple(settings.rag_domain_keywords),
         known_conditions=guide_known_conditions(settings.rag_support_guide),
         evidence_conditions=guide_evidence_conditions(settings.rag_support_guide),
+        evidence_plans=guide_evidence_plans(settings.rag_support_guide),
     )
 
 

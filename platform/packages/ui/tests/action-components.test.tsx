@@ -161,36 +161,23 @@ describe("FormActionBar", () => {
     expect(html).not.toContain("保存中");
   });
 
-  it("sticky は確定の行を画面の下端に貼り付け、狭い画面でも primary → 変更を破棄 を 1 行に並べる（#1786）", () => {
-    const card = renderToStaticMarkup(
+  it("確定の行はフォームの末尾のふつうの行で、画面の下端に貼り付けない（#1786 / #2715）", () => {
+    const html = renderToStaticMarkup(
       <FormActionBar
         ariaLabel="ユーザーの確定"
-        sticky="card"
         primaryActions={[{ id: "save", label: "保存", type: "submit" }]}
         secondaryActions={[{ id: "discard", label: "変更を破棄", onClick: noop }]}
       />
     );
-    expect(card).toContain('data-form-action-bar-sticky="card"');
-    expect(card).toContain('data-stuck="false"');
-    expect(card).toMatch(/class="[^"]*\bsticky bottom-0\b[^"]*bg-surface/);
-    // 縦に積まず（flex-col を持たない）、ボタンは等分の幅。
-    expect(card).not.toContain("flex-col");
-    expect(card).toContain("flex-1");
-    expect(card.indexOf(">保存<")).toBeLessThan(card.indexOf(">変更を破棄<"));
-
-    const page = renderToStaticMarkup(
-      <FormActionBar ariaLabel="確定" sticky="page" primaryActions={[{ id: "create", label: "作成", onClick: noop }]} />
-    );
-    expect(page).toContain('data-form-action-bar-sticky="page"');
-    expect(page).toContain("bg-canvas");
-    // 本来の位置（貼り付いていない）では、ページの地の上に区切り線を出さない。
-    expect(page).toContain("border-transparent");
-
-    const plain = renderToStaticMarkup(
-      <FormActionBar ariaLabel="確定" primaryActions={[{ id: "save", label: "保存", onClick: noop }]} />
-    );
-    expect(plain).not.toContain("data-form-action-bar-sticky");
-    expect(plain).not.toContain("sticky bottom-0");
+    // sticky・fixed で貼り付けず、重なり順も持たない（PageHeader に重ならない）。
+    expect(html).not.toMatch(/\b(sticky|fixed)\b/);
+    expect(html).not.toContain("z-[");
+    expect(html).not.toContain("data-stuck");
+    // フォームの末尾の区切り線の下に、primary → 変更を破棄 の順。狭い画面は縦に積み、sm 以上で横に並べる。
+    expect(html).toMatch(/class="[^"]*\bborder-t border-border pt-4\b/);
+    expect(html).toContain("flex-col");
+    expect(html).toContain("sm:flex-row");
+    expect(html.indexOf(">保存<")).toBeLessThan(html.indexOf(">変更を破棄<"));
   });
 
   it("entityActionToFormAction は一覧・詳細の EntityAction をそのまま移す", () => {

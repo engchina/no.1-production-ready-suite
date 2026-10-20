@@ -591,7 +591,7 @@ function AutomationEditor({
         }}
       />
       <PageBody wide className="space-y-6">
-        {/* 保存の対象（基本・起動の条件）を包み、確定の行はこの中だけで画面の下端に貼り付く（#1786）。 */}
+        {/* 保存の対象（基本・起動の条件）を包み、その末尾に確定の行を置く（#1786）。 */}
         <div className="min-w-0 space-y-6">
           <fieldset disabled={readOnly} className="min-w-0 space-y-6">
             <Section
@@ -763,9 +763,8 @@ function AutomationEditor({
           {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
           <SaveErrorBanner message={save.error ? apiErrorMessage(save.error, t("common.error.save")) : null} attemptKey={save.submittedAt} testId="automation-save-error" />
           {!readOnly ? (
-            // 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。最後のカードの下で、長いフォームでは画面の下端に貼り付く（#1786）。
+            // 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。最後のカードの下に置き、画面の下端に貼り付けない（#1786 / #2715）。
             <FormActionBar
-              sticky="page"
               ariaLabel={t("editor.actions.formLabel")}
               testId="automation-form-actions"
               primaryActions={[
