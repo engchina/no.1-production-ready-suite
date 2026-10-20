@@ -372,7 +372,9 @@ _EVIDENCE = {
 # （#2701）。
 # 24: rag_validate_answer に業務ガイドの手順ごとの説明の充足（guide_steps）と、説明の無い必須の
 # 手順の finding（guide_step_unexplained）を足した（#2708）。
-RAG_OUTPUT_SCHEMA_VERSION = 24
+# 25: rag_validate_answer の status に partial（一部の段落が時間の上限までに監査されなかった）と
+# timed_out を足した（#2700）。
+RAG_OUTPUT_SCHEMA_VERSION = 25
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {

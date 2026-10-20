@@ -226,7 +226,9 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 24: rag_validate_answer に、業務ガイドの手順ごとの説明の充足（guide_steps）と、説明の無い
 #     必須の手順の finding（guide_step_unexplained）を足し、手順の名前の一致だけで
 #     guide_steps_unmatched にしないようにした（#2708）。
-MCP_OUTPUT_SCHEMA_VERSION = 24
+# 25: rag_validate_answer の status に、時間の上限までに一部の段落の監査が終わらなかった
+#     partial と、どの段落も終わらなかった timed_out を足した（#2700）。
+MCP_OUTPUT_SCHEMA_VERSION = 25
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -1880,7 +1882,13 @@ class ValidateAnswerOutput(VersionedOutput):
             " 1 つ以上あるか。"
         )
     )
-    status: str = Field(description="completed / no_claims / no_evidence / input_too_large。")
+    status: str = Field(
+        description=(
+            "completed / partial（時間の上限までに一部の段落の監査が終わらず、"
+            "その段落は unassessed）/ timed_out（どの段落の監査も終わらなかった）"
+            "/ no_claims / no_evidence / input_too_large。"
+        )
+    )
     counts: dict[str, int] = Field(default_factory=dict, description="判定ごとの段落の数。")
     claims: list[ValidatedClaim] = Field(default_factory=list)
     missing_evidence: list[EvidenceRefInput] = Field(

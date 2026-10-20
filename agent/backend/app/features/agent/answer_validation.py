@@ -28,7 +28,12 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
   名前だけで示す番号つきの項目と、中身をすべて外した番号つきの見出しも外し、残った項目の番号を
   詰める（#2692）。
 - 検証そのもの（呼び出し・接続・応答）が失敗したら `unvalidated` にし、回答は消さずに
-  「この回答は検証できませんでした。」を足す（基盤の障害で内容を落とさない）。
+  「この回答は検証できませんでした。」を足す（基盤の障害で内容を落とさない）。RAG が時間の
+  上限までにどの段落も確かめ終わらなかった（`timed_out`）ときも同じ（理由
+  `validation_timed_out`）。
+- RAG が時間の上限までに一部の段落だけを確かめた（`partial`。#2700）ときは、確かめ終わった
+  段落の判定で回答を組み立て、確かめ終わらなかった段落（`unassessed`）は外さずに本文に残し、
+  確かめきれなかった点として示す（時間切れで内容を落とさない。記録の `withheld.unverified`）。
 - RAG の根拠を使っていない Run は、RAG の根拠のツールを持つ Agent なら `unvalidated`
   （`no_rag_evidence`）にして「資料と照らし合わせて確かめていない」と足し、持たない Agent は
   `skipped`（回答はそのまま）。利用者への確認の質問だけの回答は、資料の主張を含まないので
@@ -139,6 +144,9 @@ REASON_ABSENCE_ONLY = "absence_only"
 REASON_ANSWER_TOO_LONG = "answer_too_long"
 REASON_CONNECTION_NOT_FOUND = "connection_not_found"
 REASON_UNUSABLE_RESULT = "unusable_result"
+# RAG が時間の上限までにどの段落も確かめ終わらなかった（`rag_validate_answer` の
+# status=timed_out。#2700）。
+REASON_VALIDATION_TIMED_OUT = "validation_timed_out"
 REASON_VALIDATION_ERROR = "validation_error"
 
 UNVERIFIED_NOTICE = "この回答は検証できませんでした。"
@@ -149,6 +157,11 @@ NOTHING_CONFIRMED = "根拠で確かめられた内容はありませんでし�
 # 根拠で否定された段落が無いのに、出典を照合できない段落を外すと本文が空になるとき（#1391）。
 UNVERIFIED_KEPT_INTRO = (
     "次の内容は、根拠の出典と照らし合わせられず確かめきれませんでした。"
+    "根拠と矛盾する・根拠に無いという判定ではないため、回答の本文は載せています。"
+)
+# 照合が時間の上限までに一部の段落を確かめ終わらなかったとき（#2700）。
+TIMED_OUT_KEPT_INTRO = (
+    "次の内容は、資料との照合が時間の上限までに終わらず確かめきれませんでした。"
     "根拠と矛盾する・根拠に無いという判定ではないため、回答の本文は載せています。"
 )
 GUIDE_WITHHELD = (
@@ -185,8 +198,13 @@ DEPENDENT_STEP_LABEL = "確かめられない手順に続く手順"
 # 確かめが終わらない（`unassessed`）は、根拠が主張を否定したのではなく、検証が確かめ
 # きれなかったもの（#1391）。
 REFUTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
+# RAG が時間の上限までに一部の段落だけを確かめた結果の status（#2700。確かめ終わらなかった
+# 段落は `unassessed`）と、どの段落も確かめ終わらなかった結果の status（判定として使えない）。
+RESULT_PARTIAL = "partial"
+RESULT_TIMED_OUT = "timed_out"
 # 判定として使える `rag_validate_answer` の結果の status（それ以外は検証の失敗として扱う）。
-_USABLE_RESULT_STATUSES = ("completed", "no_evidence", "no_claims")
+# 接続ごとの結果をまとめるときは、前のものを全体の status にする（どれかが partial なら partial）。
+_USABLE_RESULT_STATUSES = (RESULT_PARTIAL, "completed", "no_evidence", "no_claims")
 # 節の項目は 1 行に縮める（段落・指摘の全文は成果物の判定に残る）。項目の数は切らない（#2361。
 # 画面の件数のバッジと節の項目の数を一致させ、同じ種類の項目を 2 か所に分けない）。
 _MAX_QUOTE_CHARS = 80
@@ -1388,7 +1406,9 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     外した段落が番号つきの一覧の中にあれば、同じ一覧のそれより後の操作の項目も、確かめられない前提に
     続く操作として外し、節に「確かめられない手順に続く手順」として示す（`dependent_steps`。#2604。
     事実を述べる項目は残す。本文を残すときも示す）。記録の `dependent_steps` はその段落の数
-    （無ければ項目を足さない）。
+    （無ければ項目を足さない）。RAG が時間の上限までに一部の段落を確かめ終わらなかった結果
+    （`partial`。#2700）の `unassessed` の段落は外さずに残し、節に確かめきれなかった点として
+    示す（記録の `unverified`）。
     """
     errors = error_findings(result)
     unchanged = {"claims": 0, "findings": 0, "all": False}
@@ -1396,10 +1416,25 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     if result.get("valid") is True or (result.get("status") == "no_claims" and not errors):
         return _with_guide_step_gaps(answer, unchanged, step_gaps)
     claims = [item for item in mark_non_claims(answer, result)["claims"] if isinstance(item, dict)]
+    # 照合が時間の上限までに確かめ終わらなかった段落（#2700）は外さずに残し、確かめきれなかった
+    # 点として示す。
+    pending = [
+        item
+        for item in claims
+        if result.get("status") == RESULT_PARTIAL
+        and item.get("status") == "unassessed"
+        and not item.get("non_claim")
+    ]
+    pending_ids = {id(item) for item in pending}
+    pending_lines = (
+        [TIMED_OUT_KEPT_INTRO, *(_claim_line(item) for item in pending)] if pending else []
+    )
     blocking = [
         item
         for item in claims
-        if item.get("status") in BLOCKING_CLAIM_STATUSES and not item.get("non_claim")
+        if item.get("status") in BLOCKING_CLAIM_STATUSES
+        and not item.get("non_claim")
+        and id(item) not in pending_ids
     ]
     unreadable = _refs_count(result.get("stale_evidence")) + _refs_count(
         result.get("missing_evidence")
@@ -1442,25 +1477,39 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         # （`unassessed`）段落を外すと本文が空になる: 検証が確かめきれなかったので、本文は消さずに
         # 確かめきれなかった点を示す（検証の失敗で内容を落とさないのと同じ。#1391）。
         # 確かめきれなかった前提に続く手順も、本文に残したうえで、前提に続く手順だと示す（#2604）。
-        lines = [UNVERIFIED_KEPT_INTRO, *_notice_lines(result, blocking), *dependent_lines]
+        lines = [
+            UNVERIFIED_KEPT_INTRO,
+            *_notice_lines(result, blocking),
+            *dependent_lines,
+            *pending_lines,
+        ]
         withheld = {
             "claims": 0,
             "findings": 0,
             "all": False,
-            "unverified": len(blocking),
+            "unverified": len(blocking) + len(pending),
             **_guide_step_count(step_gaps),
             **_dependent_count(dependent_lines),
             "listed": _listed(lines),
         }
         return f"{answer.rstrip()}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), withheld
-    lines = [*_notice_lines(result, blocking), *dependent_lines]
+    # 確かめ終わらなかった段落だけ（外す段落・指摘・読めない根拠・確かめられない業務ガイドの
+    # 手順が無い）なら、外した内容の項目は書かない。
+    only_pending = (
+        bool(pending)
+        and body
+        and not (blocking or errors or unreadable or dependent_lines or step_gaps)
+    )
+    lines = [] if only_pending else [*_notice_lines(result, blocking), *dependent_lines]
     if blocking or (not body and not guide_errors):
         lines.insert(0, WITHHELD_INTRO)
+    lines += pending_lines
     text = body or (GUIDE_WITHHELD if guide_errors else NOTHING_CONFIRMED)
     withheld = {
         "claims": len(blocking),
         "findings": len(errors),
         "all": not body,
+        **({"unverified": len(pending)} if pending else {}),
         **_guide_step_count(step_gaps),
         **_dependent_count(dependent_lines),
         "listed": _listed(lines),
