@@ -19,7 +19,7 @@ import { Spinner } from "../ui/spinner";
 /** 添付の種類（backend の `pr_system_settings.chat_attachments` の `kind`）。 */
 export type ChatAttachmentKind = "pdf" | "word" | "powerpoint" | "excel" | "csv" | "text" | "image";
 
-/** 添付の 1 件の状態（入力欄の添付）。`uploading` は読み取り中、`failed` は添付できなかった。 */
+/** 添付の 1 件の状態（入力欄の添付）。`uploading` はアップロード中（保存だけ。解析は送信の後。#2652）、`failed` は添付できなかった。 */
 export type ChatAttachmentStatus = "uploading" | "ready" | "failed";
 
 export interface ChatAttachmentItem {
@@ -41,7 +41,7 @@ export interface ChatAttachmentListLabels {
   list: string;
   /** 外すボタンの名前（翻訳済み。ファイル名を受け取る。例: (name) => `${name} を外す`）。 */
   remove?: (fileName: string) => string;
-  /** 読み取り中の文（翻訳済み。例:「読み取り中」）。 */
+  /** アップロード中の文（翻訳済み。例:「アップロード中」）。 */
   uploading?: string;
 }
 
@@ -80,7 +80,7 @@ export interface ChatAttachmentListProps {
  * 添付ファイルの一覧（入力欄の添付と、発話の下の表示。3 製品共通。#2517）。
  *
  * - 1 件 = 種類のアイコン・名前（長ければ省略し、全体は読み上げと `title` で持つ）・大きさ。
- * - 状態は色だけでなくアイコンと文で示す（読み取り中は `Spinner` と文、失敗は `AlertCircle` と理由）。
+ * - 状態は色だけでなくアイコンと文で示す（アップロード中は `Spinner` と文、失敗は `AlertCircle` と理由）。
  * - 外すボタンはアイコンだけ（`X`）で、名前にファイル名を入れる。
  */
 export function ChatAttachmentList({

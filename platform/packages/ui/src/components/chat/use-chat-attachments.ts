@@ -34,7 +34,7 @@ export interface UseChatAttachmentsOptions {
   remove: (attachmentId: string) => Promise<unknown>;
   /** 1 つの大きさの上限（bytes）。無ければ確かめない。 */
   maxBytes?: number;
-  /** 件数の上限（読み取り中・添付済みの合計）。 */
+  /** 件数の上限（アップロード中・添付済みの合計）。 */
   maxFiles?: number;
   /** 受け付ける拡張子（".pdf" など）。無ければ確かめない。 */
   accept?: readonly string[];
@@ -66,7 +66,7 @@ export function useChatAttachments(options: UseChatAttachmentsOptions) {
   const [items, setItems] = useState<Entry[]>([]);
   const optionsRef = useRef(options);
   optionsRef.current = options;
-  // 読み取り中に外したもの（終わったら API でも消す）。
+  // アップロード中に外したもの（終わったら API でも消す）。
   const removedWhileUploading = useRef(new Set<string>());
 
   const update = useCallback((id: string, patch: Partial<Entry>) => {
@@ -184,6 +184,8 @@ export interface ChatAttachmentApiItem {
   kind: ChatAttachmentKind;
   size_bytes: number;
   warnings?: string[];
+  /** 解析の状態（#2652。アップロードの直後は pending で、解析は送信した後に読むとき）。 */
+  parse_status?: "pending" | "parsing" | "ready" | "failed";
 }
 
 /** 添付の上限（backend の `ChatAttachmentLimitsData`）。 */
@@ -192,6 +194,7 @@ export interface ChatAttachmentApiLimits {
   max_files: number;
   ttl_hours: number;
   accept: string[];
+  /** 画像を読み取れるモデルがあるか（画像は無くても添付でき、読むときにモデルが無いことを示す）。 */
   image_enabled: boolean;
   /** 製品の「運用設定 › チャットの添付」で有効か。無効なら入力欄に添付の操作を出さない。 */
   enabled: boolean;

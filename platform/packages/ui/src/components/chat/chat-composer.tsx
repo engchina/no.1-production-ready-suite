@@ -54,7 +54,7 @@ export interface ChatComposerProps {
   footer?: ReactNode;
   /**
    * 会話の添付（#2517）。渡すと「ファイルを添付」の行と添付の一覧を入力欄の上に出し、入力欄の領域への
-   * ドロップと、入力欄への貼り付け（ファイル）で添付する。読み取り中の添付がある間は送れない。
+   * ドロップと、入力欄への貼り付け（ファイル）で添付する。アップロード中の添付がある間は送れない。
    * 状態は `useChatAttachments` が持つ。
    */
   attachments?: ChatComposerAttachments;
