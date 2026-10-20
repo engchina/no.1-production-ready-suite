@@ -1275,7 +1275,9 @@ class AgentRuntimeRepositoryContract(Protocol):
     def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
     def note_builtin_tool_titles(self, run_id: str, titles: Mapping[str, str]) -> None: ...
-    def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None: ...
+    def record_tool_grounding(
+        self, run_id: str, action: str, answer: str, *, declined: bool = False
+    ) -> None: ...
     def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None: ...
     def record_context_compaction(self, run_id: str, payload: JsonObject) -> None: ...
     def set_run_feedback(
@@ -2945,7 +2947,9 @@ class AgentRuntimeRepository:
             self._mark_run_changed(run)
             self._persist_locked()
 
-    def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None:
+    def record_tool_grounding(
+        self, run_id: str, action: str, answer: str, *, declined: bool = False
+    ) -> None:
         """根拠・データのツールを呼ばずに作った回答の差し戻し・拒答を残す（#1835）。
 
         `action` は `retry`（モデルへ差し戻した）か `hop_retry`（根拠の台帳の行の略号・別名を
@@ -2958,6 +2962,9 @@ class AgentRuntimeRepository:
         `text_clarification`（回答前の確認のツールを渡したのに本文で確認の質問だけを返した。
         回答はそのまま出す。#1881）。元の回答は利用者には出さず、Run の経過（イベント）にだけ
         残す。差し戻しの回数は metadata に残し、承認待ちから再開した Run でも 2 回目を差し戻さない。
+        `declined` は、ツールで調べずに範囲外・答えられないと判断した回答（`retry` と `refused`。
+        #2608）。イベントに `declined` を付け、拒答なら metadata にも残す（回答の対応の basis を
+        `declined_without_tools` にするのに使う）。
         """
         from app.features.agent.tool_grounding import METADATA_KEY, retried
 
@@ -2968,8 +2975,15 @@ class AgentRuntimeRepository:
             if action == "retry":
                 record["retries"] = retried(run.metadata) + 1
                 message = (
-                    "根拠・データのツールで確かめずに回答を作ったため、"
-                    "ツールで確かめるようモデルに差し戻しました。"
+                    (
+                        "根拠・データのツールで調べずに範囲外・答えられないと判断したため、"
+                        "ツールで調べてから判断するようモデルに差し戻しました。"
+                    )
+                    if declined
+                    else (
+                        "根拠・データのツールで確かめずに回答を作ったため、"
+                        "ツールで確かめるようモデルに差し戻しました。"
+                    )
                 )
             elif action == "hop_retry":
                 # 引いていない段（略号・別名）を残して回答したため差し戻した（#1958。1 回だけ）。
@@ -3022,9 +3036,18 @@ class AgentRuntimeRepository:
                 )
             elif action == "refused":
                 record["refused"] = True
+                if declined:
+                    record["declined"] = True
                 message = (
-                    "根拠・データのツールで確かめられなかったため、"
-                    "回答を出さずにお答えできない旨の文に置き換えました。"
+                    (
+                        "差し戻しの後も根拠・データのツールで調べずに範囲外・答えられないと"
+                        "判断したため、お答えできない旨の文に置き換えました。"
+                    )
+                    if declined
+                    else (
+                        "根拠・データのツールで確かめられなかったため、"
+                        "回答を出さずにお答えできない旨の文に置き換えました。"
+                    )
                 )
             else:
                 record["text_clarification"] = True
@@ -3037,7 +3060,13 @@ class AgentRuntimeRepository:
                 run,
                 RunEventType.RUNTIME_EVENT,
                 message,
-                {"tool_grounding": {"action": action, "original_answer": answer[:20000]}},
+                {
+                    "tool_grounding": {
+                        "action": action,
+                        "original_answer": answer[:20000],
+                        **({"declined": True} if declined else {}),
+                    }
+                },
             )
             run.updated_at = _now()
             self._persist_locked()

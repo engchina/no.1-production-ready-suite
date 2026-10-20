@@ -1294,6 +1294,46 @@ def is_absence_only(answer: str) -> bool:
     return absent
 
 
+# 質問がこの業務 Agent の範囲外だと述べる文（#2608。「この質問は業務の範囲外です。」）。「範囲外」
+# 「対象外」だけでは事実の主張（「交通費は課税の対象外です。」）と区別できないので、質問・依頼・
+# この業務 Agent・扱う範囲を指す語と一緒に現れる文に限る。
+_OUT_OF_SCOPE = re.compile(r"(?:範囲|対象|専門|担当|管轄)外")
+_OUT_OF_SCOPE_SUBJECT = re.compile(
+    r"質問|問い合わせ|ご依頼|ご相談|お尋ね|(?:この|本|当)\s*(?:業務|Agent|エージェント)"
+    r"|業務の?範囲|扱(?:う|え|っ)|取り扱",
+    re.IGNORECASE,
+)
+# 結論の段落を探すときに飛ばす段落の種類（見出し・出典・表の形）。
+_DECLINE_SKIPPED_KINDS = frozenset({KIND_HEADING, KIND_CITATION, KIND_TABLE})
+
+
+def is_out_of_scope(text: str) -> bool:
+    """質問がこの業務 Agent の範囲外だと述べる文か（#2608。数量・逆接・操作を含む文は除く）。"""
+    value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+    if not (_OUT_OF_SCOPE.search(value) and _OUT_OF_SCOPE_SUBJECT.search(value)):
+        return False
+    return not _ABSENCE_CLAIM.search(value) and not _OPERATION.search(value)
+
+
+def concludes_decline(answer: str) -> bool:
+    """回答の結論（最初の段落）が、答えられない・資料から確かめられない・範囲外と述べるか（#2608）。
+
+    見出し・出典・表の形と、お詫び・了承を求める決まった文（「申し訳ありません。」）は飛ばして、
+    最初の段落を見る。根拠・データのツールを呼ばずに作った回答が、調べずに範囲外・答えられないと
+    判断した拒答か（`tool_grounding.declined`）の判定に使う。
+    """
+    kinds = non_claim_passages(answer)
+    for line in answer.split("\n"):
+        for _start, _end, text in passage_spans(line):
+            value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+            if not value or kinds.get(text) in _DECLINE_SKIPPED_KINDS:
+                continue
+            if _ABSENCE_CLOSING.fullmatch(value):
+                continue
+            return is_absence_conclusion(text) or is_out_of_scope(text)
+    return False
+
+
 __all__ = [
     "KIND_ABSENCE",
     "KIND_CITATION",
@@ -1306,6 +1346,7 @@ __all__ = [
     "asks_for_request",
     "case_label",
     "case_labels",
+    "concludes_decline",
     "environment_check_passages",
     "greets",
     "heading_phrase",
@@ -1318,6 +1359,7 @@ __all__ = [
     "is_guide_not_found",
     "is_heading",
     "is_lead_in",
+    "is_out_of_scope",
     "is_question",
     "is_structure",
     "is_table_rule",
