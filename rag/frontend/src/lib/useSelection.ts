@@ -29,6 +29,9 @@ export function useSelection<T extends string>() {
 
   const clear = useCallback(() => setSelected(new Set<T>()), []);
 
+  // 一括操作の後に、失敗した行だけを選択に残す（#2674）。
+  const replace = useCallback((ids: Iterable<T>) => setSelected(new Set<T>(ids)), []);
+
   return {
     selected,
     count: selected.size,
@@ -36,5 +39,6 @@ export function useSelection<T extends string>() {
     toggle,
     toggleAll,
     clear,
+    replace,
   };
 }

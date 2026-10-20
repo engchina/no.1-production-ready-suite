@@ -729,6 +729,55 @@ export interface DocumentDeleteResult {
   artifact_delete_failed_count: number;
 }
 
+/** 一括の投入（#2674）の 1 回の要求に入れられる文書の数。backend の BULK_INGESTION_MAX_DOCUMENTS と同じ。 */
+export const BULK_INGESTION_MAX_DOCUMENTS = 10_000;
+
+/**
+ * 一括の投入の待ち時間（#2674）。1 万件の判定と登録（失敗の後のやり直しで出力の初期化が要る文書は
+ * 1 件の投入と同じ処理）を 1 回の要求で行うため、通常の 30 秒では足りない。Nginx の既定の待ち時間
+ * （600 秒）にそろえる。途中で切れても、再送は受付済みの文書を二重に登録しない。
+ */
+export const BULK_INGESTION_TIMEOUT_MS = 600_000;
+
+/** 一括の投入の 1 文書の結果。 */
+export type BulkIngestionOutcome = "accepted" | "already_active" | "skipped" | "rejected";
+
+export interface BulkIngestionItem {
+  document_id: string;
+  outcome: BulkIngestionOutcome;
+  /** 機械が読む理由（not_found / job_active / already_indexed / duplicate_content など）。 */
+  reason: string | null;
+  /** 利用者向けの文（backend の日本語）。 */
+  message: string | null;
+  job_id: string | null;
+}
+
+export interface BulkIngestionReasonCount {
+  outcome: BulkIngestionOutcome;
+  reason: string;
+  count: number;
+  message: string | null;
+}
+
+/** 一括の投入の結果。accepted の件数の job は応答の前に永続化済み。 */
+export interface BulkIngestionResult {
+  requested_count: number;
+  unique_count: number;
+  accepted_count: number;
+  already_active_count: number;
+  skipped_count: number;
+  rejected_count: number;
+  reasons: BulkIngestionReasonCount[];
+  items: BulkIngestionItem[];
+}
+
+/** 条件に一致する文書の ID（新しい順に最大 limit 件）と、条件に一致する件数。 */
+export interface DocumentIdList {
+  ids: string[];
+  total: number;
+  limit: number;
+}
+
 /** 削除の前に確認する影響（#303）。正本を参照する重複文書の件数と、その所属ナレッジベース。 */
 export interface DocumentDeleteImpact {
   document_id: string;
@@ -3182,6 +3231,29 @@ export const api = {
   listDocumentKnowledgeBases: (id: string) =>
     request<KnowledgeBaseRef[]>(
       `/api/documents/${encodeURIComponent(id)}/knowledge-bases`,
+    ),
+  /** 一覧と同じ条件の文書の ID（一括の操作の対象。#2674）。 */
+  listDocumentIds: (
+    params: { status?: FileStatus; q?: string; knowledge_base_id?: string; limit?: number } = {},
+  ) => {
+    const search = new URLSearchParams();
+    if (params.status) search.set("status", params.status);
+    if (params.q) search.set("q", params.q);
+    if (params.knowledge_base_id) search.set("knowledge_base_id", params.knowledge_base_id);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    const qs = search.toString();
+    return request<DocumentIdList>(`/api/documents/ids${qs ? `?${qs}` : ""}`);
+  },
+  /** 文書のファイル準備をまとめて受け付ける（#2674）。受付済みの job は応答の前に永続化される。 */
+  bulkEnqueueDocumentIngestionJobs: (documentIds: string[]) =>
+    request<BulkIngestionResult>(
+      "/api/documents/ingestion-jobs/bulk",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ document_ids: documentIds }),
+      },
+      { timeoutMs: BULK_INGESTION_TIMEOUT_MS },
     ),
   getDocumentDeleteImpact: (ids: string[]) => {
     const search = new URLSearchParams();

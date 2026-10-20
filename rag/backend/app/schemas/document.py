@@ -798,6 +798,77 @@ class DocumentDeleteImpact(BaseModel):
     knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list)
 
 
+# 一括の投入(#2674)で 1 回の要求に入れられる文書の数。画面の「条件に一致する文書を
+# すべて選ぶ」の上限と同じ値にする(frontend の BULK_INGESTION_MAX_DOCUMENTS)。
+BULK_INGESTION_MAX_DOCUMENTS = 10_000
+
+
+class BulkIngestionRequest(BaseModel):
+    """文書の一括の投入(ファイル準備から)の要求(#2674)。
+
+    ID の形は 1 件ずつ確かめ、不正な ID は要求全体を拒まずに「受付不可」として返す。
+    同じ ID の重複は 1 件として扱う。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_ids: list[str] = Field(min_length=1, max_length=BULK_INGESTION_MAX_DOCUMENTS)
+
+
+class BulkIngestionOutcome(StrEnum):
+    """一括の投入の 1 文書の結果。"""
+
+    # 取込 job(QUEUED)を永続化した。画面を閉じても worker が順に処理する。
+    ACCEPTED = "accepted"
+    # 待機中・実行中の job がある(二重に登録しない)。
+    ALREADY_ACTIVE = "already_active"
+    # 処理が要らない(索引済み・確認待ち・重複・未対応の形式)。job は作らない。
+    SKIPPED = "skipped"
+    # 受け付けられない(見つからない・権限が無い・ID が不正・解析エンジンで扱えない・
+    # 競合・一時的な障害)。
+    REJECTED = "rejected"
+
+
+class BulkIngestionItem(BaseModel):
+    """一括の投入の 1 文書の結果。``reason`` は機械が読む理由、``message`` は利用者向けの文。"""
+
+    document_id: str
+    outcome: BulkIngestionOutcome
+    reason: str | None = None
+    message: str | None = None
+    job_id: str | None = None
+
+
+class BulkIngestionReasonCount(BaseModel):
+    """結果と理由ごとの件数(画面の内訳)。``message`` はその理由の最初の文書の文。"""
+
+    outcome: BulkIngestionOutcome
+    reason: str
+    count: int
+    message: str | None = None
+
+
+class BulkIngestionResult(BaseModel):
+    """一括の投入の結果。``accepted`` の件数の job を、応答の前に永続化している。"""
+
+    requested_count: int
+    unique_count: int
+    accepted_count: int = 0
+    already_active_count: int = 0
+    skipped_count: int = 0
+    rejected_count: int = 0
+    reasons: list[BulkIngestionReasonCount] = Field(default_factory=list)
+    items: list[BulkIngestionItem] = Field(default_factory=list)
+
+
+class DocumentIdList(BaseModel):
+    """条件に一致する文書の ID(一括の操作の対象。新しい順)。``total`` は条件に一致する件数。"""
+
+    ids: list[str] = Field(default_factory=list)
+    total: int = 0
+    limit: int
+
+
 SectionOrigin = Literal["extraction", "manual"]
 # 1 文書の章節の上限(画面で扱える量。抽出の章節は通常これより少ない)。
 MAX_DOCUMENT_SECTIONS = 500

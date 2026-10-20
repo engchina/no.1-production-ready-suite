@@ -4986,6 +4986,41 @@ class OracleClient:
             knowledge_base_id=knowledge_base_id,
         )
 
+    async def list_document_ids(
+        self,
+        *,
+        status: FileStatus | None = None,
+        query: str | None = None,
+        knowledge_base_id: str | None = None,
+        limit: int,
+    ) -> tuple[list[str], int]:
+        """一覧と同じ条件・順(新しい順)の文書の ID を最大 ``limit`` 件と、条件に一致する件数。
+
+        一覧の「条件に一致する文書をすべて選ぶ」の一括の操作(#2674)で使う。ID だけを読む。
+        """
+        where_sql, binds = _oracle_document_where(
+            status=status,
+            query=query,
+            knowledge_base_id=knowledge_base_id,
+        )
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT document_id
+            FROM rag_documents
+            WHERE {where_sql}
+            ORDER BY uploaded_at DESC, document_id DESC
+            FETCH FIRST :id_limit ROWS ONLY
+            """,
+                where_sql=where_sql,
+            ),
+            {**binds, "id_limit": limit},
+        )
+        total = await self.count_documents(
+            status=status, query=query, knowledge_base_id=knowledge_base_id
+        )
+        return [str(row["document_id"]) for row in rows], total
+
     async def list_duplicate_documents(self, document_ids: Sequence[str]) -> list[DocumentSummary]:
         """指定した正本を参照する重複文書を、所属 KB 付きで返す（削除の影響の確認。#303）。
 
@@ -7568,45 +7603,7 @@ class OracleClient:
                     raise ValueError("このレシピは処理中または待機中です。")
             _execute_ingestion_job_insert(
                 connection,
-                """
-                INSERT INTO rag_ingestion_jobs (
-                    job_id,
-                    document_id,
-                    recipe_id,
-                    recipe_revision,
-                    tenant_id_hash,
-                    status,
-                    phase,
-                    parser_profile,
-                    quality_warnings,
-                    settings_overrides,
-                    skip_reason,
-                    error_message,
-                    attempt_count,
-                    max_attempts,
-                    queued_at,
-                    started_at,
-                    finished_at
-                ) VALUES (
-                    :job_id,
-                    :document_id,
-                    :recipe_id,
-                    :recipe_revision,
-                    :tenant_id_hash,
-                    :status,
-                    :phase,
-                    :parser_profile,
-                    :quality_warnings,
-                    :settings_overrides,
-                    :skip_reason,
-                    :error_message,
-                    :attempt_count,
-                    :max_attempts,
-                    :queued_at,
-                    :started_at,
-                    :finished_at
-                )
-                """,
+                INGESTION_JOB_INSERT_SQL,
                 _ingestion_job_binds(job),
             )
             return job
@@ -11184,6 +11181,48 @@ def _fetch_ingestion_job_rows(
         )
 
 
+# 取込 job の INSERT。1 件の投入と一括の投入(#2674)で共通。
+INGESTION_JOB_INSERT_SQL = """
+                INSERT INTO rag_ingestion_jobs (
+                    job_id,
+                    document_id,
+                    recipe_id,
+                    recipe_revision,
+                    tenant_id_hash,
+                    status,
+                    phase,
+                    parser_profile,
+                    quality_warnings,
+                    settings_overrides,
+                    skip_reason,
+                    error_message,
+                    attempt_count,
+                    max_attempts,
+                    queued_at,
+                    started_at,
+                    finished_at
+                ) VALUES (
+                    :job_id,
+                    :document_id,
+                    :recipe_id,
+                    :recipe_revision,
+                    :tenant_id_hash,
+                    :status,
+                    :phase,
+                    :parser_profile,
+                    :quality_warnings,
+                    :settings_overrides,
+                    :skip_reason,
+                    :error_message,
+                    :attempt_count,
+                    :max_attempts,
+                    :queued_at,
+                    :started_at,
+                    :finished_at
+                )
+                """
+
+
 def _execute_ingestion_job_insert(
     connection: OracleConnectionProtocol,
     statement: str,
@@ -11595,14 +11634,8 @@ def _default_document_recipe_values(row: Mapping[str, object]) -> dict[str, obje
     }
 
 
-def _merge_default_document_recipe(
-    connection: OracleConnectionProtocol,
-    values: Mapping[str, object],
-) -> None:
-    """レシピ1が無ければ作る(あれば何もしない)。文書の登録と ensure の共通の書き込み。"""
-    _execute(
-        connection,
-        """
+# レシピ1が無ければ作る(あれば何もしない)。文書の登録・ensure・一括の投入(#2674)で共通。
+DEFAULT_DOCUMENT_RECIPE_MERGE_SQL = """
         MERGE INTO rag_document_recipes r
         USING (SELECT :document_id AS document_id, 1 AS slot_no FROM dual) s
         ON (r.document_id = s.document_id AND r.slot_no = s.slot_no)
@@ -11615,22 +11648,36 @@ def _merge_default_document_recipe(
             :status, :preprocess_artifact, 1, :materialized_revision,
             :error_message, :created_at, SYSTIMESTAMP, :finished_at
         )
-        """,
-        {
-            "recipe_id": values["recipe_id"],
-            "document_id": values["document_id"],
-            "tenant_id_hash": values.get("tenant_id_hash"),
-            "processing_config": _json_bind(_json_loads(values.get("processing_config"))),
-            "status": values["status"],
-            "preprocess_artifact": _json_bind(
-                _json_loads(values.get("preprocess_artifact")) or None
-            ),
-            "materialized_revision": values.get("materialized_revision"),
-            "error_message": values.get("error_message"),
-            "created_at": values.get("created_at"),
-            "finished_at": values.get("finished_at"),
-        },
-        input_sizes=_json_input_sizes("processing_config", "preprocess_artifact"),
+        """
+DEFAULT_DOCUMENT_RECIPE_MERGE_JSON_BINDS = ("processing_config", "preprocess_artifact")
+
+
+def default_document_recipe_merge_binds(values: Mapping[str, object]) -> dict[str, object]:
+    """``DEFAULT_DOCUMENT_RECIPE_MERGE_SQL`` の bind(``_default_document_recipe_values`` の値)。"""
+    return {
+        "recipe_id": values["recipe_id"],
+        "document_id": values["document_id"],
+        "tenant_id_hash": values.get("tenant_id_hash"),
+        "processing_config": _json_bind(_json_loads(values.get("processing_config"))),
+        "status": values["status"],
+        "preprocess_artifact": _json_bind(_json_loads(values.get("preprocess_artifact")) or None),
+        "materialized_revision": values.get("materialized_revision"),
+        "error_message": values.get("error_message"),
+        "created_at": values.get("created_at"),
+        "finished_at": values.get("finished_at"),
+    }
+
+
+def _merge_default_document_recipe(
+    connection: OracleConnectionProtocol,
+    values: Mapping[str, object],
+) -> None:
+    """レシピ1が無ければ作る(あれば何もしない)。文書の登録と ensure の共通の書き込み。"""
+    _execute(
+        connection,
+        DEFAULT_DOCUMENT_RECIPE_MERGE_SQL,
+        default_document_recipe_merge_binds(values),
+        input_sizes=_json_input_sizes(*DEFAULT_DOCUMENT_RECIPE_MERGE_JSON_BINDS),
     )
 
 

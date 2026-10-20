@@ -21,6 +21,7 @@
 
 2. OCR・本文抽出と索引
    - API: `POST /api/documents/{document_id}/ingestion-jobs`（文書の既定レシピ）/ `POST /api/documents/{document_id}/recipes/{recipe_id}/ingestion-jobs`（レシピ単位）で取込 job を投入する。確認待ちの工程は `POST /api/documents/{document_id}/recipes/{recipe_id}/approve` で次の工程へ進める。
+   - 一括の投入（#2674）: `POST /api/documents/ingestion-jobs/bulk`（`{"document_ids": [...]}`。1 回に最大 10,000 件）は、文書ごとに 受付済み（`accepted`）/ 既に処理中（`already_active`）/ スキップ（`skipped`）/ 受付不可（`rejected`）と理由を判定し、受け付けた文書のレシピ1の job（QUEUED）を永続化してから結果を返す（`app/rag/bulk_ingestion.py`・`app/clients/oracle_bulk_ingestion_store.py`）。一度も取り込んでいない文書は状態の読み込みと job の登録をまとめて行い（IN と `executemany`。500 件ごとの transaction でレシピの行を lock して待機中・実行中の job を確かめ直す）、前回の出力の初期化が要る文書は 1 件の投入と同じ処理を並行数 4 で行う。流量制限（`ingest`）は要求 1 回として数え、高コストの処理の並行数は取込 worker が制御する。同じレシピに待機中・実行中の job があれば作らないため、通信断の後の再送で二重に登録しない。画面の「条件に一致する文書をすべて選ぶ」は `GET /api/documents/ids`（一覧と同じ条件の ID）で対象を読む。
    - LLM/VLM は **OCI Enterprise AI** のみを使う。OCI Generative AI chat API は使わない。
    - Object Storage から取得した原本 bytes は、保存済み `file_size_bytes` / `content_sha256` と照合してから OCR へ渡す。
    - アップロード時の MIME type を VLM payload へ渡し、PDF / 画像 / text の real endpoint 解析条件を維持する。

@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import type { IngestionJob } from "@/lib/api";
+import type { BulkIngestionResult, IngestionJob } from "@/lib/api";
 
 import {
+  bulkIngestSeverity,
   classifyEnqueuedJob,
   FILE_LIST_FILTERS,
+  idsToKeepSelected,
   INITIAL_FILE_LIST_VIEW,
   isFileListView,
+  orderedBulkReasons,
   summarizeDeleteOutcomes,
-  summarizeEnqueueOutcomes,
 } from "./FileListClient.logic";
 
 function job(overrides: Partial<IngestionJob>): IngestionJob {
@@ -56,28 +58,64 @@ describe("FILE_LIST_FILTERS / isFileListView", () => {
   });
 });
 
-describe("classifyEnqueuedJob / summarizeEnqueueOutcomes", () => {
+describe("classifyEnqueuedJob", () => {
   it("SKIPPED の job はスキップとして分類する", () => {
     expect(classifyEnqueuedJob(job({ status: "QUEUED" })).kind).toBe("queued");
     expect(
       classifyEnqueuedJob(job({ status: "SKIPPED", skip_reason: "duplicate_content" })).kind
     ).toBe("skipped");
   });
+});
 
-  it("投入・スキップ・失敗を数え、最初の理由を残す", () => {
-    const summary = summarizeEnqueueOutcomes([
-      classifyEnqueuedJob(job({ id: "a" })),
-      classifyEnqueuedJob(job({ id: "b", status: "SKIPPED", skip_reason: "duplicate_content" })),
-      { kind: "failed", message: "このドキュメントは取込待ちまたは取込中です。" },
-      { kind: "failed", message: "2 件目の失敗" },
-    ]);
-    expect(summary).toEqual({
-      queued: 1,
-      skipped: 1,
-      failed: 2,
-      firstSkipReason: "duplicate_content",
-      firstError: "このドキュメントは取込待ちまたは取込中です。",
+function bulkResult(overrides: Partial<BulkIngestionResult>): BulkIngestionResult {
+  return {
+    requested_count: 4,
+    unique_count: 4,
+    accepted_count: 4,
+    already_active_count: 0,
+    skipped_count: 0,
+    rejected_count: 0,
+    reasons: [],
+    items: [],
+    ...overrides,
+  };
+}
+
+// #2674: 一括投入はサーバーの受付の結果で、件数と理由を出し、受付不可の文書だけを選択に残す。
+describe("bulkIngestSeverity / idsToKeepSelected / orderedBulkReasons", () => {
+  it("すべて受け付けたときだけ成功にし、受付不可があれば完了と見せない", () => {
+    expect(bulkIngestSeverity(bulkResult({}))).toBe("success");
+    expect(
+      bulkIngestSeverity(bulkResult({ accepted_count: 3, already_active_count: 1 }))
+    ).toBe("info");
+    expect(bulkIngestSeverity(bulkResult({ accepted_count: 3, rejected_count: 1 }))).toBe(
+      "warning"
+    );
+    expect(bulkIngestSeverity(bulkResult({ accepted_count: 0, rejected_count: 4 }))).toBe(
+      "danger"
+    );
+  });
+
+  it("受付不可の文書だけを選択に残す", () => {
+    const result = bulkResult({
+      items: [
+        { document_id: "a", outcome: "accepted", reason: null, message: null, job_id: "j" },
+        { document_id: "b", outcome: "rejected", reason: "not_found", message: "m", job_id: null },
+        { document_id: "c", outcome: "skipped", reason: "already_indexed", message: "m", job_id: null },
+        { document_id: "d", outcome: "already_active", reason: "job_active", message: "m", job_id: null },
+        { document_id: "e", outcome: "rejected", reason: "conflict", message: "m", job_id: null },
+      ],
     });
+    expect(idsToKeepSelected(result)).toEqual(["b", "e"]);
+  });
+
+  it("内訳は受付不可・処理中・スキップの順に並べる", () => {
+    const ordered = orderedBulkReasons([
+      { outcome: "skipped", reason: "already_indexed", count: 9, message: null },
+      { outcome: "already_active", reason: "job_active", count: 5, message: null },
+      { outcome: "rejected", reason: "not_found", count: 1, message: null },
+    ]);
+    expect(ordered.map((entry) => entry.reason)).toEqual(["not_found", "job_active", "already_indexed"]);
   });
 });
 

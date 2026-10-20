@@ -1,6 +1,12 @@
 import { DEFAULT_PAGE_SIZE } from "@production-ready/ui";
 
-import type { FileStatus, IngestionJob } from "@/lib/api";
+import type {
+  BulkIngestionOutcome,
+  BulkIngestionReasonCount,
+  BulkIngestionResult,
+  FileStatus,
+  IngestionJob,
+} from "@/lib/api";
 import { isPageSize } from "@/lib/list-paging";
 
 /**
@@ -67,36 +73,33 @@ export function classifyEnqueuedJob(job: IngestionJob): EnqueueOutcome {
   return job.status === "SKIPPED" ? { kind: "skipped", job } : { kind: "queued", job };
 }
 
-export interface EnqueueSummary {
-  queued: number;
-  skipped: number;
-  failed: number;
-  /** 最初にスキップされた job の理由（表示用のラベルは呼び出し側で解決する）。 */
-  firstSkipReason: string | null;
-  firstError: string | null;
+/** 一括投入の結果の面（Banner）の重さ。受付不可があれば warning、1 件も受け付けなければ danger。 */
+export type BulkIngestSeverity = "success" | "info" | "warning" | "danger";
+
+/**
+ * 一括投入の結果（#2674）の見せ方。すべて受け付けたら Toast だけ、それ以外は一括操作のバーの直下に
+ * 件数と理由を残す（自動で消さない。messaging.md §10.4）。
+ */
+export function bulkIngestSeverity(result: BulkIngestionResult): BulkIngestSeverity {
+  if (result.accepted_count === result.unique_count) return "success";
+  if (result.rejected_count > 0) return result.accepted_count > 0 ? "warning" : "danger";
+  return "info";
 }
 
-/** 一括投入の結果をまとめる。部分失敗やスキップを黙って成功扱いにしない。 */
-export function summarizeEnqueueOutcomes(outcomes: readonly EnqueueOutcome[]): EnqueueSummary {
-  const summary: EnqueueSummary = {
-    queued: 0,
-    skipped: 0,
-    failed: 0,
-    firstSkipReason: null,
-    firstError: null,
-  };
-  for (const outcome of outcomes) {
-    if (outcome.kind === "queued") {
-      summary.queued += 1;
-    } else if (outcome.kind === "skipped") {
-      summary.skipped += 1;
-      summary.firstSkipReason = summary.firstSkipReason ?? outcome.job.skip_reason ?? null;
-    } else {
-      summary.failed += 1;
-      summary.firstError = summary.firstError ?? outcome.message;
-    }
-  }
-  return summary;
+/** 一括投入の後も選択に残す文書（受付不可だけ。失敗分まで選択を解除しない）。 */
+export function idsToKeepSelected(result: BulkIngestionResult): string[] {
+  return result.items
+    .filter((item) => item.outcome === "rejected")
+    .map((item) => item.document_id);
+}
+
+/** 内訳の並び（受付不可 → 処理中 → スキップ）。同じ結果の中は件数の多い順（backend の並び）。 */
+const OUTCOME_ORDER: readonly BulkIngestionOutcome[] = ["rejected", "already_active", "skipped"];
+
+export function orderedBulkReasons(
+  reasons: readonly BulkIngestionReasonCount[]
+): BulkIngestionReasonCount[] {
+  return OUTCOME_ORDER.flatMap((outcome) => reasons.filter((entry) => entry.outcome === outcome));
 }
 
 export type DeleteOutcome =

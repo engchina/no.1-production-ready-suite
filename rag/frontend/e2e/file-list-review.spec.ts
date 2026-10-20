@@ -24,8 +24,22 @@ interface DocumentSummary {
   is_superseded?: boolean;
 }
 
+interface BulkItem {
+  document_id: string;
+  outcome: "accepted" | "already_active" | "skipped" | "rejected";
+  reason: string | null;
+  message: string | null;
+  job_id: string | null;
+}
+
 interface MockOptions {
   onEnqueue?: (id: string) => { status: number; json: unknown };
+  /** 一括投入（#2674）の文書ごとの結果。既定はすべて受付済み。 */
+  onBulkItem?: (id: string) => BulkItem;
+  /** 一括投入の要求を通信断にする。 */
+  abortBulk?: boolean;
+  /** 一括投入の要求の本文（document_ids）を記録する。 */
+  bulkRequests?: string[][];
   deleteWarnings?: string[];
 }
 
@@ -108,36 +122,93 @@ test("ファイル準備の投入の失敗・スキップを通知する", async
   await expect(page.getByText("同一内容の文書が既に登録されています。").first()).toBeVisible();
 });
 
-test("一括投入の部分失敗をまとめて通知する", async ({ page }) => {
+// #2674: 一括投入はサーバーの一括の受付 API を 1 回呼び、受付済み・処理中・スキップ・受付不可の件数と理由を出す。
+test("一括投入は件数と理由を出し、受付不可の文書だけを選択に残す", async ({ page }) => {
   const documents = [
     documentSummary("doc-ok", "ok.txt", "UPLOADED"),
     documentSummary("doc-ng", "ng.txt", "ERROR"),
   ];
+  const bulkRequests: string[][] = [];
   await mockFileListApi(page, documents, {
-    onEnqueue: (id) =>
+    bulkRequests,
+    onBulkItem: (id) =>
       id === "doc-ok"
-        ? {
-            status: 200,
-            json: { data: ingestionJob(id, "QUEUED"), error_messages: [], warning_messages: [] },
-          }
-        : {
-            status: 409,
-            json: {
-              data: null,
-              error_messages: ["このドキュメントは現在取込中です。"],
-              warning_messages: [],
-            },
-          },
+        ? bulkItem(id, "accepted")
+        : bulkItem(id, "rejected", "conflict", "このドキュメントは現在取込中です。"),
   });
 
   await page.goto("/file-list");
   await page.getByRole("checkbox", { name: "すべて選択" }).check();
   await page.getByRole("button", { name: "一括投入 (2)" }).click();
 
+  const result = page.getByTestId("file-list-bulk-ingest-result");
+  await expect(result).toContainText("2 件のうち 1 件のファイル準備を受け付けました。");
+  await expect(result).toContainText("受付済み 1 件・処理中 0 件・スキップ 0 件・受付不可 1 件");
+  await expect(result).toContainText("受付不可: このドキュメントは現在取込中です。（1 件）");
+  await expect(result).toContainText("受付不可の文書は選択したままにしています。");
+  // 1 回の要求で送り、受付不可の文書だけを選択に残す（失敗分まで選択を解除しない）。
+  expect(bulkRequests).toEqual([["doc-ok", "doc-ng"]]);
+  await expect(page.getByTestId("file-list-bulk-actions")).toContainText("1 件選択中");
   await expect(
-    page.getByText("2 件中 1 件のファイル準備を開始しました。開始できなかった文書があります。").first()
-  ).toBeVisible();
-  await expect(page.getByText(/失敗 1 件。このドキュメントは現在取込中です。/).first()).toBeVisible();
+    page.locator("tbody tr").filter({ hasText: "ng.txt" }).getByRole("checkbox")
+  ).toBeChecked();
+  await expect(
+    page.locator("tbody tr").filter({ hasText: "ok.txt" }).getByRole("checkbox")
+  ).not.toBeChecked();
+  // 残した文書は理由を確かめてから、もう一度投入できる。
+  await expect(page.getByRole("button", { name: "一括投入 (1)" })).toBeEnabled();
+
+  await result.getByRole("button", { name: "一括投入の結果を閉じる" }).click();
+  await expect(result).toHaveCount(0);
+});
+
+test(
+  "表示中をすべて選んだら、条件に一致する全件を 1 回の操作で投入できる",
+  { tag: "@responsive" },
+  async ({ page }) => {
+    const documents = Array.from({ length: 60 }, (_, index) =>
+      documentSummary(`doc-${index + 1}`, `file-${String(index + 1).padStart(2, "0")}.txt`, "UPLOADED")
+    );
+    const bulkRequests: string[][] = [];
+    await mockFileListApi(page, documents, { bulkRequests });
+
+    await page.goto("/file-list");
+    const bulkActions = page.getByTestId("file-list-bulk-actions");
+    await page.getByRole("checkbox", { name: "すべて選択" }).check();
+    await expect(bulkActions).toContainText("25 件選択中");
+    await bulkActions.getByRole("button", { name: "条件に一致する 60 件をすべて選択" }).click();
+
+    await expect(bulkActions).toContainText("条件に一致する 60 件をすべて選択中");
+    // 全ページを選んだ間は一括投入だけ（削除は表示中の行を選んで行う）。
+    await expect(bulkActions.getByRole("button", { name: /一括削除/ })).toBeDisabled();
+    await expectNoPageOverflow(page);
+    await bulkActions.getByRole("button", { name: "一括投入 (60)" }).click();
+
+    await expect(
+      page.getByText("60 件のファイル準備を受け付けました。").first()
+    ).toBeVisible();
+    expect(bulkRequests).toHaveLength(1);
+    expect(bulkRequests[0]).toHaveLength(60);
+    expect(new Set(bulkRequests[0])).toEqual(new Set(documents.map((item) => item.id)));
+    await expect(bulkActions).toContainText("行を選ぶと、まとめて取込・削除できます。");
+    await expect(page.getByTestId("file-list-bulk-ingest-result")).toHaveCount(0);
+  }
+);
+
+test("一括投入の結果を確かめられないときは選択を残し、再送を案内する", async ({ page }) => {
+  const documents = [
+    documentSummary("doc-a", "a.txt", "UPLOADED"),
+    documentSummary("doc-b", "b.txt", "UPLOADED"),
+  ];
+  await mockFileListApi(page, documents, { abortBulk: true });
+
+  await page.goto("/file-list");
+  await page.getByRole("checkbox", { name: "すべて選択" }).check();
+  await page.getByRole("button", { name: "一括投入 (2)" }).click();
+
+  const error = page.getByTestId("file-list-bulk-ingest-error");
+  await expect(error).toContainText("受付済みの文書は二重に登録せず、残りだけを受け付けます。");
+  await expect(page.getByTestId("file-list-bulk-actions")).toContainText("2 件選択中");
 });
 
 test("検索欄から focus を外しただけでは選択とページを解除しない", async ({ page }) => {
@@ -295,6 +366,56 @@ async function mockFileListApi(
       return;
     }
 
+    if (request.method() === "GET" && url.pathname === "/api/documents/ids") {
+      const status = url.searchParams.get("status");
+      const filtered = documents.filter((document) => !status || document.status === status);
+      await route.fulfill({
+        json: {
+          data: { ids: filtered.map((item) => item.id), total: filtered.length, limit: 10000 },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+
+    if (request.method() === "POST" && url.pathname === "/api/documents/ingestion-jobs/bulk") {
+      if (options.abortBulk) {
+        await route.abort("connectionreset");
+        return;
+      }
+      const ids = (request.postDataJSON() as { document_ids: string[] }).document_ids;
+      options.bulkRequests?.push(ids);
+      const items = ids.map((id) => options.onBulkItem?.(id) ?? bulkItem(id, "accepted"));
+      const count = (outcome: BulkItem["outcome"]) =>
+        items.filter((item) => item.outcome === outcome).length;
+      const reasons = new Map<string, { outcome: string; reason: string; count: number; message: string | null }>();
+      for (const item of items) {
+        if (!item.reason) continue;
+        const key = `${item.outcome}:${item.reason}`;
+        const entry = reasons.get(key);
+        if (entry) entry.count += 1;
+        else reasons.set(key, { outcome: item.outcome, reason: item.reason, count: 1, message: item.message });
+      }
+      await route.fulfill({
+        json: {
+          data: {
+            requested_count: ids.length,
+            unique_count: ids.length,
+            accepted_count: count("accepted"),
+            already_active_count: count("already_active"),
+            skipped_count: count("skipped"),
+            rejected_count: count("rejected"),
+            reasons: [...reasons.values()],
+            items,
+          },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+
     if (request.method() === "POST" && parts[3] === "ingestion-jobs") {
       const result = options.onEnqueue?.(parts[2]) ?? {
         status: 200,
@@ -329,6 +450,21 @@ async function mockFileListApi(
     // 投入後の再取得（ジョブ一覧など）は空で返す。
     await route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } });
   });
+}
+
+function bulkItem(
+  documentId: string,
+  outcome: BulkItem["outcome"],
+  reason: string | null = null,
+  message: string | null = null
+): BulkItem {
+  return {
+    document_id: documentId,
+    outcome,
+    reason,
+    message,
+    job_id: outcome === "accepted" ? `job-${documentId}` : null,
+  };
 }
 
 function ingestionJob(documentId: string, status: string, skipReason: string | null = null) {
