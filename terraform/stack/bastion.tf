@@ -65,8 +65,8 @@ resource "oci_core_instance" "bastion" {
 
   lifecycle {
     precondition {
-      condition     = length(var.bastion_vnc_password) >= 8
-      error_message = "bastion_vnc_password must be configured (at least 8 characters) when bastion_enabled is true."
+      condition     = length(var.bastion_vnc_password) == 8
+      error_message = "bastion_vnc_password must be configured (exactly 8 characters) when bastion_enabled is true."
     }
   }
 }

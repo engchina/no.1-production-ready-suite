@@ -412,7 +412,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
   （display `:1` = TCP `5901`、ユーザー `opc`）・Google Chrome（Google の dnf repository。署名を確かめて入れる）・日本語の font を入れ、
   firewalld で `5901` を開けます。再起動のたびに `ensure-vnc.service` が VNC の起動と firewalld の `5901` を確かめます。
   ログは `/var/log/bastion-init.log`。GNOME の package が多いため、使えるまで 10〜20 分ほどかかります。
-- VNC のパスワードはフォームの `bastion_vnc_password`（8 文字以上。TigerVNC は先頭の 8 文字だけを使う）で、instance metadata
+- VNC のパスワードはフォームの `bastion_vnc_password`（ちょうど 8 文字。TigerVNC は先頭の 8 文字だけを使うため、それより長い値は受けない）で、instance metadata
   （`bastion_vnc_password_b64`）で渡します。スクリプトには書きません。値は Terraform の state と instance metadata に残ります。
 - apply 後の output に `bastion_vnc_address`（`<IP>:5901`）と `ssh_to_bastion` が出ます。VNC のクライアントで `<IP>:5901` に接続します。
   5901 を開けたくないときは、SSH の port forward（`ssh -L 5901:localhost:5901 opc@<bastion の IP>`）で `localhost:5901` に接続します。

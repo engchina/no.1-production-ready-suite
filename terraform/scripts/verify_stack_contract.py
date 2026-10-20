@@ -1550,8 +1550,14 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
         )
     _require_all(
         _schema_variable(schema, "bastion_vnc_password"),
-        ["type: password", "required: false", "visible: bastion_enabled", "confirmation: true"],
+        ["type: password", "required: false", "visible: bastion_enabled", "confirmation: true", "pattern: '^$|^.{8}$'"],
         context="bastion_vnc_password schema",
+    )
+    # TigerVNC は先頭の 8 文字だけを使うため、パスワードはちょうど 8 文字に限る（#2673）。
+    _require_all(
+        _terraform_variable(variables, "bastion_vnc_password"),
+        ["sensitive   = true", "length(var.bastion_vnc_password) == 8"],
+        context="bastion_vnc_password Terraform validation",
     )
     _require_all(
         re.sub(r"[ \t]+", " ", bastion),
@@ -1567,7 +1573,7 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
             "ocpus = var.bastion_flex_shape_ocpus",
             "boot_volume_size_in_gbs = var.bastion_boot_volume_size",
             "boot_volume_vpus_per_gb = var.bastion_boot_volume_vpus",
-            "length(var.bastion_vnc_password) >= 8",
+            "length(var.bastion_vnc_password) == 8",
         ],
         context="bastion.tf",
     )

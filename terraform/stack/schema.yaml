@@ -749,9 +749,9 @@ variables:
     required: false
     visible: bastion_enabled
     title: "Bastion VNC password"
-    description: "VNC password of the opc user (at least 8 characters; TigerVNC uses only the first 8). Required when the bastion is created."
+    description: "VNC password of the opc user (exactly 8 characters; TigerVNC uses only the first 8). Required when the bastion is created."
     confirmation: true
-    pattern: '^$|^.{8,}$'
+    pattern: '^$|^.{8}$'
 
   deploy_rag:
     type: boolean

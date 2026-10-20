@@ -556,16 +556,16 @@ variable "bastion_subnet_id" {
   default     = ""
 }
 
-# TigerVNC は先頭の 8 文字だけを使う。metadata で渡すため、値は state と instance metadata に残る。
+# TigerVNC は先頭の 8 文字だけを使うため、ちょうど 8 文字に限る（#2673）。metadata で渡すため、値は state と instance metadata に残る。
 variable "bastion_vnc_password" {
-  description = "VNC password of the opc user on the bastion Compute instance (TigerVNC uses only the first 8 characters)."
+  description = "VNC password of the opc user on the bastion Compute instance (exactly 8 characters; TigerVNC uses only the first 8)."
   type        = string
   sensitive   = true
   default     = ""
 
   validation {
-    condition     = var.bastion_vnc_password == "" || (length(var.bastion_vnc_password) >= 8 && !can(regex("[\r\n]", var.bastion_vnc_password)))
-    error_message = "bastion_vnc_password must be at least 8 characters and must not contain line breaks."
+    condition     = var.bastion_vnc_password == "" || (length(var.bastion_vnc_password) == 8 && !can(regex("[\r\n]", var.bastion_vnc_password)))
+    error_message = "bastion_vnc_password must be exactly 8 characters and must not contain line breaks."
   }
 }
 
