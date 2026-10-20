@@ -6,6 +6,7 @@ license: MIT
 metadata:
   production-ready-display-name: "資料とデータの横断調査"
   production-ready-mcp-tools: "rag:rag_retrieve_evidence rag:rag_recommend_search_answer_profile rag:rag_list_search_answer_profiles nl2sql:nl2sql_query nl2sql:nl2sql_get_job nl2sql:nl2sql_list_profiles nl2sql:nl2sql_recommend_profile"
+  production-ready-evidence-planning: "rag:caller"
   production-ready-tags: "rag nl2sql business-data"
 ---
 業務 RAG（資料。MCP サーバー `rag`）と NL2SQL（業務データ。MCP サーバー `nl2sql`）のどちらを使うかをその都度判断し、順序を決めずに繰り返し使って調べる。ツールは MCP の素の名前で書く（Agent によって `mcp__rag__` などの前置きが付く）。

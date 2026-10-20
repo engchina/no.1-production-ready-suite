@@ -22,13 +22,20 @@ from contextvars import ContextVar, Token
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
 from app.features.agent.profile_name_migration import migrate_tool_name
 
 JsonObject = dict[str, Any]
+
+# 根拠の取得（`rag_retrieve_evidence`）の検索文を作る主体（#2651）。rag = RAG が質問に応じて
+# 言い換え・条の選択を足す（今までのスキル）/ caller = スキルの指示に沿ってモデルが検索文を作り、
+# RAG は推論を重ねない（組み込み Runtime が `planning=caller` を付ける）。
+EvidencePlanning = Literal["rag", "caller"]
+EVIDENCE_PLANNING_RAG: EvidencePlanning = "rag"
+EVIDENCE_PLANNING_CALLER: EvidencePlanning = "caller"
 
 
 def _now() -> datetime:
@@ -46,6 +53,9 @@ class SkillMcpRequirement(BaseModel):
 
     server_id: str
     tool_names: list[str] = Field(default_factory=list)
+    # この接続の根拠の取得の検索文を作る主体（#2651）。公開の版に固定した要件（`PinnedSkill`）に
+    # 無ければ rag のまま（宣言の無い既存のスキル・固定済みの版の振る舞いを変えない）。
+    evidence_planning: EvidencePlanning = EVIDENCE_PLANNING_RAG
 
     @model_validator(mode="before")
     @classmethod
@@ -152,7 +162,16 @@ def skill_content_hash(skill: AgentSkillDefinition) -> str:
         "description": skill.description,
         "instructions": skill.instructions,
         "mcp_requirements": [
-            {"server_id": item.server_id, "tool_names": list(item.tool_names)}
+            {
+                "server_id": item.server_id,
+                "tool_names": list(item.tool_names),
+                # 既定（rag）は入れない（宣言の無いスキルの hash を変えない）。
+                **(
+                    {"evidence_planning": item.evidence_planning}
+                    if item.evidence_planning != EVIDENCE_PLANNING_RAG
+                    else {}
+                ),
+            }
             for item in skill.mcp_requirements
         ],
         "enabled": skill.enabled,

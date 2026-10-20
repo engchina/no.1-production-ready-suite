@@ -6,6 +6,7 @@ license: MIT
 metadata:
   production-ready-display-name: "業務 RAG 調査"
   production-ready-mcp-tools: "rag:rag_retrieve_evidence rag:rag_recommend_search_answer_profile rag:rag_list_search_answer_profiles rag:rag_read_source rag:rag_lookup_guides rag:rag_outline rag:rag_read_document rag:rag_read_section"
+  production-ready-evidence-planning: "rag:caller"
   production-ready-tags: "rag research business-data"
 ---
 資料の根拠を `rag_retrieve_evidence` で集め、集めた根拠（evidence）から自分で答える（MCP サーバー `rag`。RAG は根拠を返し、回答は作らない）。ツールは MCP の素の名前で書く（Agent によって `mcp__rag__` などの前置きが付く）。

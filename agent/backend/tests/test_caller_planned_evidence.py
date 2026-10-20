@@ -1,7 +1,8 @@
 """Agent が編成する根拠の取得（#2651）の決定論テスト。
 
-- 組み込み Runtime は `rag_retrieve_evidence` に、検索文を作る主体（planning=caller）と追跡 ID を
-  決定的に付け、モデルに見せない（モデルが渡した値は上書きする）。
+- 組み込み Runtime は、スキルが Agent 主体の取得を宣言した接続（`evidence_planning=caller`）の
+  `rag_retrieve_evidence` にだけ、検索文を作る主体（planning=caller）と追跡 ID を決定的に付け、
+  モデルに見せない（モデルが渡した値は上書きする）。宣言の無い古いスキルを固定した公開版は今までどおり。
 - 合成のケース（本文・表・図）で、取得 → 図の確認（`rag_read_source`）→ 回答 → 最終の検証が
   RAG に回答を作らせずに（`rag_search` を呼ばずに）通る。
 - 根拠の取得が検索・回答プロファイルのルールの確認を返したら、確認の次の手と確かめ中の問いにする。
@@ -30,7 +31,13 @@ from app.features.agent.runtime import (
     run_support_task,
     runtime_repository,
 )
-from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
+from app.features.agent.skills import (
+    AgentSkillDefinition,
+    EvidencePlanning,
+    SkillMcpRequirement,
+    skill_registry,
+)
+from app.features.agent.skills_loader import load_skills_from_dir
 from app.features.agent.support_task import caller_planned_schema, evidence_clarification_step
 from app.settings import get_settings
 
@@ -78,23 +85,29 @@ _FIGURE = {
 }
 
 
+def _skill(planning: EvidencePlanning) -> AgentSkillDefinition:
+    return AgentSkillDefinition(
+        id=SKILL_ID,
+        name="根拠の取得の Skill",
+        instructions=f"rag_retrieve_evidence で根拠を集め、根拠から答える（{planning}）。",
+        mcp_requirements=[
+            SkillMcpRequirement(
+                server_id="rag",
+                tool_names=["rag_retrieve_evidence", "rag_read_source"],
+                evidence_planning=planning,
+            )
+        ],
+    )
+
+
 @pytest.fixture
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch)
-    skill_registry.upsert_custom(
-        AgentSkillDefinition(
-            id=SKILL_ID,
-            name="根拠の取得の Skill",
-            instructions="rag_retrieve_evidence で根拠を集め、根拠から答える。",
-            mcp_requirements=[
-                SkillMcpRequirement(
-                    server_id="rag", tool_names=["rag_retrieve_evidence", "rag_read_source"]
-                )
-            ],
-        )
-    )
+    skill_registry.upsert_custom(_skill("caller"))
     runtime_repository.create_agent(
-        AgentProfile(id=AGENT_ID, name="根拠の取得の業務 Agent", skill_ids=[SKILL_ID])
+        AgentProfile(
+            id=AGENT_ID, name="根拠の取得の業務 Agent", skill_ids=[SKILL_ID], versioned=True
+        )
     )
     try:
         yield fake
@@ -128,9 +141,9 @@ def _script(monkeypatch: MonkeyPatch, *steps: Any, validation: bool) -> Scripted
     return model
 
 
-def _run(goal: str = GOAL) -> str:
+def _run(goal: str = GOAL, *, draft: bool = True) -> str:
     run = runtime_repository.create_builtin_run(
-        RunCreateRequest(goal=goal, agent_id=AGENT_ID),
+        RunCreateRequest(goal=goal, agent_id=AGENT_ID, draft=draft),
         created_by_user_uuid=USER_UUID,
     )
     anyio.run(builtin_runtime.execute_run, run.id)
@@ -172,6 +185,68 @@ def test_runtime_fixes_caller_planning_and_hides_it_from_the_model(
     assert "planning" not in params["properties"]
     assert "request_id" not in params["properties"]
     assert "queries" in params["properties"]
+
+
+def test_published_version_pinning_an_undeclared_skill_keeps_rag_planning(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """宣言の無いスキルを固定した公開版は今までどおり（RAG が計画）。下書きは caller。"""
+    skill_registry.upsert_custom(_skill("rag"))
+    runtime_repository.publish_agent(AGENT_ID, published_by="admin")
+    # スキルを Agent 主体の取得に更新する（公開版は再公開するまで固定した中身で動く）。
+    skill_registry.upsert_custom(_skill("caller"))
+    call = function_call("rag__rag_retrieve_evidence", {"query": "機器 A 点検"}, call_id="c1")
+    model = _script(
+        monkeypatch,
+        [call],
+        [assistant_message(ANSWER)],
+        [call],
+        [assistant_message(ANSWER)],
+        validation=False,
+    )
+
+    _run(draft=False)
+    _run(draft=True)
+
+    published, draft = mcp.calls_of("rag_retrieve_evidence")
+    assert "planning" not in published["arguments"]
+    assert "request_id" not in published["arguments"]
+    assert draft["arguments"]["planning"] == "caller"
+    published_params = _tools(model)["rag__rag_retrieve_evidence"].params_json_schema
+    # 公開版のモデルには、検索文を作る主体の引数も契約のまま見える（RAG の既定は rag）。
+    assert "planning" in published_params["properties"]
+
+    # 再公開すると、公開版も Agent 主体の取得になる。
+    runtime_repository.publish_agent(AGENT_ID, published_by="admin")
+    _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    _run(draft=False)
+    assert mcp.calls_of("rag_retrieve_evidence")[-1]["arguments"]["planning"] == "caller"
+
+
+@pytest.mark.parametrize(
+    "skill_id",
+    ["business-rag-research", "rag-and-structured-data", "article-catalog-lookup"],
+)
+def test_builtin_rag_skills_declare_caller_planning(skill_id: str) -> None:
+    skill = skill_registry.get(skill_id)
+    assert skill is not None
+    [rag] = [item for item in skill.mcp_requirements if item.server_id == "rag"]
+    assert rag.evidence_planning == "caller"
+
+
+def test_skill_md_metadata_declares_evidence_planning(tmp_path: Any) -> None:
+    folder = tmp_path / "evidence-skill"
+    folder.mkdir()
+    (folder / "SKILL.md").write_text(
+        "---\nname: evidence-skill\ndescription: 根拠を集めるときに使う。\nmetadata:\n"
+        '  production-ready-mcp-tools: "rag:rag_retrieve_evidence nl2sql"\n'
+        '  production-ready-evidence-planning: "rag:caller nl2sql:unknown"\n'
+        "---\n本文。\n",
+        encoding="utf-8",
+    )
+    [skill] = load_skills_from_dir(str(tmp_path))
+    planning = {item.server_id: item.evidence_planning for item in skill.mcp_requirements}
+    assert planning == {"rag": "caller", "nl2sql": "rag"}
 
 
 def test_caller_planned_schema_keeps_old_contracts() -> None:

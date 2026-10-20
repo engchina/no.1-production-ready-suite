@@ -6,6 +6,7 @@ license: MIT
 metadata:
   production-ready-display-name: "条の目録から根拠を探す"
   production-ready-mcp-tools: "rag:rag_retrieve_evidence rag:rag_outline rag:rag_read_section"
+  production-ready-evidence-planning: "rag:caller"
   production-ready-tags: "rag research articles"
 ---
 検索で当たらない根拠の条を、文書の条の目録から選んで読む（MCP サーバー `rag`）。ツールは MCP の素の名前で書く（Agent によって `mcp__rag__` などの前置きが付く）。

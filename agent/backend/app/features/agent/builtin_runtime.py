@@ -194,6 +194,7 @@ from app.features.agent.section_coverage import (
     with_unread_sections_notice,
 )
 from app.features.agent.skills import (
+    EVIDENCE_PLANNING_CALLER,
     reset_pinned_skills,
     resolve_skill,
     use_pinned_skills,
@@ -755,6 +756,26 @@ def agent_mcp_requirements(skill_ids: list[str]) -> dict[str, set[str] | None]:
     return requirements
 
 
+def agent_caller_planned_connections(skill_ids: list[str]) -> frozenset[str]:
+    """根拠の取得の検索文をモデルが作ると宣言したスキルの接続（#2651）。
+
+    公開中の版の Run は固定したスキルの中身で決まる（`resolve_skill`。宣言の無い古い版を固定した
+    公開版は、今までどおり RAG が検索文を計画する）。同じ接続を使うスキルのどれかが宣言すれば、
+    その接続の取得はすべて呼び出し元の検索文にする（1 つの Run で振る舞いを混ぜない）。
+    """
+    connections: set[str] = set()
+    for skill_id in skill_ids:
+        skill = resolve_skill(skill_id)
+        if skill is None or not skill.enabled:
+            continue
+        connections.update(
+            requirement.server_id.strip()
+            for requirement in skill.mcp_requirements
+            if requirement.evidence_planning == EVIDENCE_PLANNING_CALLER
+        )
+    return frozenset(connections)
+
+
 McpRuntimeTool = tuple[ToolDefinition, ToolHandler]
 
 
@@ -1160,6 +1181,9 @@ class _ToolRecorder:
         self.known_conditions: dict[str, str] = {}
         # 業務 Agent のデータの範囲（#1378。接続 → 使えるプロファイル）。空は範囲なし。
         self.data_scopes: data_scope.AgentDataScopes = {}
+        # 根拠の取得の検索文をモデルが作ると宣言したスキルの接続（#2651。`agent_caller_planned_
+        # connections`）。この接続の `rag_retrieve_evidence` だけに planning=caller を付ける。
+        self.caller_planned_connections: frozenset[str] = frozenset()
         # 照合した（する）接続。並列の呼び出しでも 1 回だけにする。
         self._guide_checked: set[str] = set()
         # 回答前の確認（#1839）。利用者に確認しない Run では、RAG の確認の次の手を「前提を示して
@@ -1205,6 +1229,11 @@ class _ToolRecorder:
         if self.confirmation is None or self.confirmation.asks:
             return next_step
         return assume_step(next_step)
+
+    def caller_planned(self, name: str) -> bool:
+        """この呼び出しの接続を、スキルが検索文を作る取得（planning=caller）と宣言したか。"""
+        connection, separator, _tool = name.partition(MCP_TOOL_SEPARATOR)
+        return bool(separator) and connection in self.caller_planned_connections
 
     def add_tool(self, entry: _ToolEntry) -> None:
         """この Run でモデルに渡すツール（呼び出しの境界で使う定義と、モデルに見せた schema）。"""
@@ -1403,9 +1432,9 @@ class _ToolRecorder:
         original_question = self._original_question(name, definition)
         if original_question is not None and not call_arguments.get("original_question"):
             call_arguments = {**call_arguments, "original_question": original_question}
-        if definition is not None:
-            # 根拠の取得は、モデルが作った検索文で RAG に推論を重ねさせずに検索する（#2651。
-            # モデルに任せず決定的に付け、モデルが渡した値は上書きする）。
+        if definition is not None and self.caller_planned(name):
+            # スキルが宣言したら、根拠の取得はモデルが作った検索文で RAG に推論を重ねさせずに
+            # 検索する（#2651。モデルに任せず決定的に付け、モデルが渡した値は上書きする）。
             call_arguments = {
                 **call_arguments,
                 **caller_planned_arguments(
@@ -1926,6 +1955,7 @@ def build_function_tools(
     confirmation: ConfirmationBudget | None = None,
     attachment_entries: list[tuple[ToolDefinition, ToolHandler]] | None = None,
     output_entries: list[tuple[ToolDefinition, ToolHandler]] | None = None,
+    caller_planned_connections: Collection[str] = (),
 ) -> list[FunctionTool]:
     """ツールを function tool にする。
 
@@ -1936,6 +1966,7 @@ def build_function_tools(
     policy = _active_policy()
     recorder = _ToolRecorder(run_id, budget)
     recorder.data_scopes = dict(data_scopes or {})
+    recorder.caller_planned_connections = frozenset(caller_planned_connections)
     recorder.confirmation = confirmation
     entries: list[tuple[ToolDefinition, ToolHandler | None]] = []
     for name in tool_names:
@@ -1982,15 +2013,12 @@ def build_function_tools(
         # （`tool_registry.invoke` に渡す schema）は呼び先の契約のまま。
         # 根拠のツールの件数の説明には「多段の質問では省略する」を足す（#1403）。
         # 根拠の取得の検索文を作る主体（planning）と追跡 ID は実行環境が決める（#2651）。
-        schema = search_limit_schema(
-            definition.name,
-            caller_planned_schema(
-                definition.name,
-                data_scope.scoped_input_schema(
-                    definition.name, dict(definition.input_schema), recorder.data_scopes
-                ),
-            ),
+        schema = data_scope.scoped_input_schema(
+            definition.name, dict(definition.input_schema), recorder.data_scopes
         )
+        if recorder.caller_planned(definition.name):
+            schema = caller_planned_schema(definition.name, schema)
+        schema = search_limit_schema(definition.name, schema)
         tool = FunctionTool(
             name=definition.name,
             description=definition.description,
@@ -2113,6 +2141,7 @@ def build_sdk_agent(
         confirmation=confirmation,
         attachment_entries=attachment_tools(attachments) if attachments else None,
         output_entries=[record_output_tool(run_id, output_fields)] if output_fields else None,
+        caller_planned_connections=agent_caller_planned_connections(skill_ids),
     )
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
     exposed = [tool.name for tool in tools]
