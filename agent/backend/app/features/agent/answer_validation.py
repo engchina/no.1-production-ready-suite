@@ -44,6 +44,14 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
   言い換え）ときは、前のターンの検証で回答の段落を裏付けた根拠（`carried_evidence`。#1837）だけで
   検証する（`carried_evidence_groups`。#1879）。前のターンの事実を言い直した段落は裏付けられ、
   新しい主張は確かめられない段落として外れる。
+- 図の見た目だけで決まる段落（RAG の判定 `figure_only`。配置・矢印・つながり・分岐への所属
+  など、図の本文〔図の説明・OCR の文字〕が明示しない内容。#2678）は、その Run（と前のターンの
+  検証）で図の画像がモデルへ届いたかで扱いを決める（`figure_readings`。Run の step の
+  `rag_read_source` の `content_images` の `model_input=attached` と由来の document_id・
+  chunk_id）。届いていれば画像で確かめた段落として `supported` にし（`figure_check=image_read`・
+  `figure_image` に画像の参照と版・領域）、回答に画像で確かめたことの注記を足す。届いて
+  いなければ（画像に対応しないモデル・画像の取得の失敗・画像を読んでいない）`unsupported`
+  （`figure_check=image_not_read`）にして外す。RAG の判定は `rag_status` に残す。
 - 主張ではない段落（見出し・出典の行・表の区切りと見出しの行・利用者への質問・資料に記載が
   無いことを述べる文と拒答の文・「資料で確認できず除いた内容」の節）は、RAG の判定にかかわらず
   外さない
@@ -89,6 +97,7 @@ from app.features.agent.support_task import (
     RAG_RETRIEVE_EVIDENCE,
     RAG_SEARCH,
 )
+from app.features.agent.tool_media import ATTACHED, CONTENT_IMAGES_KEY
 from app.features.agent.tools import MCP_TOOL_SEPARATOR, mcp_base_tool_name
 
 if TYPE_CHECKING:
@@ -174,13 +183,29 @@ EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 READ_EVIDENCE_TOOLS = frozenset({RAG_READ_SOURCE, RAG_READ_DOCUMENT, RAG_READ_SECTION})
 # 文書・章節をまとめて読むツール。回答に当たらない chunk は検索の根拠の後ろに置く（#1451）。
 BULK_READ_TOOLS = frozenset({RAG_READ_DOCUMENT, RAG_READ_SECTION})
-# 回答に載せない段落の判定（RAG の `is_valid` が検証に通さない判定と同じ）。
-BLOCKING_CLAIM_STATUSES = frozenset({"unsupported", "contradicted", "citation_error", "unassessed"})
+# 図の見た目だけで決まる段落の RAG の判定（#2678）。`apply_figure_readings` で `supported`
+# （図の画像で確かめた）か `unsupported`（図の画像を読めていない）にする。
+FIGURE_ONLY = "figure_only"
+# 図の見た目だけで決まる段落を、図の画像で確かめたか（判定の `figure_check`）。
+FIGURE_IMAGE_READ = "image_read"
+FIGURE_IMAGE_NOT_READ = "image_not_read"
+FIGURE_NOT_READ_LABEL = "図の画像を読めておらず確かめられない"
+# 図の画像で確かめた段落が回答に残ったときに、回答の本文の後に足す注記。
+FIGURE_READ_NOTE = (
+    "図の見た目（配置・矢印・つながりなど）に関する内容は、資料の図の画像を読んで確かめたもので、"
+    "図の説明や図の中の文字では確かめていません。"
+)
+# 回答に載せない段落の判定（RAG の `is_valid` が検証に通さない判定と同じ）。`figure_only` は
+# `apply_figure_readings` で置き換えるが、置き換える前の判定も図の画像を読めていないものとして外す。
+BLOCKING_CLAIM_STATUSES = frozenset(
+    {"unsupported", "contradicted", "citation_error", "unassessed", FIGURE_ONLY}
+)
 _CLAIM_LABELS = {
     "contradicted": "根拠と矛盾",
     "unsupported": "根拠で確かめられない",
     "citation_error": "出典を確かめられない",
     "unassessed": "確かめが終わっていない",
+    FIGURE_ONLY: FIGURE_NOT_READ_LABEL,
 }
 # RAG が監査の裏付け（supported）を採らなかった理由（`support_check`。#2659・#2653）ごとの、
 # 節の項目の理由。語・話題が根拠と一致しても対象・表の行の対応が違う段落は、違いの種類を示す。
@@ -197,8 +222,9 @@ GUIDE_STEP_UNEXPLAINED = "guide_step_unexplained"
 DEPENDENT_STEP_LABEL = "確かめられない手順に続く手順"
 # 根拠で否定した判定（根拠に無い・根拠と矛盾）。出典を照合できない（`citation_error`）・
 # 確かめが終わらない（`unassessed`）は、根拠が主張を否定したのではなく、検証が確かめ
-# きれなかったもの（#1391）。
-REFUTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
+# きれなかったもの（#1391）。図の画像を読まずに図の見た目を述べた段落（`figure_only`）も、
+# 根拠で確かめようのない断定として否定と同じく扱う（#2678。本文を残して注記するだけにしない）。
+REFUTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted", FIGURE_ONLY})
 # RAG が時間の上限までに一部の段落だけを確かめた結果の status（#2700。確かめ終わらなかった
 # 段落は `unassessed`）と、どの段落も確かめ終わらなかった結果の status（判定として使えない）。
 RESULT_PARTIAL = "partial"
@@ -376,12 +402,15 @@ class _GroupRef:
     bulk_read: bool = True
     # 同じ会話の前のターンの最終の検証で、回答の段落を裏付けた根拠か（#1837）。
     carried: bool = False
+    # その Run で図の画像がモデルへ届いた図の根拠か（#2678。図の見た目の段落を図に結び付ける）。
+    figure: bool = False
 
 
 def _ordered(refs: list[_GroupRef], answer: str) -> list[tuple[str, str]]:
     """回答が使った根拠を先にした並び（#1364・#1451）。
 
-    1. 回答が `chunk_id` を書いた根拠（省いて書いて 1 つに決まる形を含む。新しい呼び出しから順）
+    1. 回答が `chunk_id` を書いた根拠（省いて書いて 1 つに決まる形を含む。新しい呼び出しから順）と、
+       図の画像がモデルへ届いた図の根拠（#2678）
     2. 回答に固有の特徴（ID・コード・引用・見出し・同じ並び・「文書名＋第 N 章」の章節の参照）で
        当たった根拠（重みの大きい順）
     3. 同じ会話の前のターンで回答の段落を裏付けた根拠（#1837。新しいターンから順）
@@ -396,7 +425,7 @@ def _ordered(refs: list[_GroupRef], answer: str) -> list[tuple[str, str]]:
 
     def key(index: int) -> tuple[int, float, int]:
         item = refs[index]
-        if item.ref[1] in cited:
+        if item.ref[1] in cited or item.figure:
             return (0, 0.0, item.order)
         distinct, weight = weights[index]
         if distinct:
@@ -452,6 +481,194 @@ def carried_evidence(validations: list[JsonObject]) -> dict[str, list[JsonObject
     return {prefix: refs for prefix, refs in carried.items() if refs}
 
 
+def _figure_image(ref: JsonObject, step_id: str) -> JsonObject | None:
+    """`rag_read_source` の結果の画像の参照（`content_images` の 1 件）の、図の画像の読み取り。
+
+    由来（`source`）に文書と chunk が無い画像は図の根拠に結び付けられないので None。
+    """
+    source = ref.get("source")
+    if not isinstance(source, dict):
+        return None
+    document_id, chunk_id = source.get("document_id"), source.get("chunk_id")
+    if not isinstance(document_id, str) or not isinstance(chunk_id, str):
+        return None
+    if not document_id or not chunk_id:
+        return None
+    reading: JsonObject = {
+        "document_id": document_id,
+        "chunk_id": chunk_id,
+        "model_input": str(ref.get("model_input") or ""),
+        "step_id": step_id,
+    }
+    if isinstance(ref.get("image_id"), str):
+        reading["image_id"] = ref["image_id"]
+    if isinstance(source.get("chunk_set_id"), str):
+        reading["chunk_set_id"] = source["chunk_set_id"]
+    if isinstance(source.get("region"), dict):
+        reading["region"] = dict(source["region"])
+    return reading
+
+
+def figure_readings(steps: list[RunStep]) -> dict[str, dict[str, JsonObject]]:
+    """その Run で `rag_read_source` が返した図の画像の読み取り（MCP 接続 → chunk → 記録。#2678）。
+
+    記録は画像の参照（`image_id`・版の `chunk_set_id`・領域 `region`）と、モデルへ届いたか
+    （`model_input`。`attached` が届いた）。同じ chunk の画像が何度か返れば、届いた記録を優先し、
+    その中では最も新しい呼び出しのもの。失敗した呼び出し（chunk の id の誤りなど）は画像が無いので
+    記録しない（届いていないものとして扱う）。
+    """
+    readings: dict[str, dict[str, JsonObject]] = {}
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or not result.success or step.status != "completed":
+            continue
+        if mcp_base_tool_name(call.name) != RAG_READ_SOURCE or not isinstance(result.output, dict):
+            continue
+        prefix = _connection_prefix(call.name)
+        refs = result.output.get(CONTENT_IMAGES_KEY)
+        if prefix is None or not isinstance(refs, list):
+            continue
+        found = readings.setdefault(prefix, {})
+        for ref in refs:
+            reading = _figure_image(ref, step.id) if isinstance(ref, dict) else None
+            if reading is None:
+                continue
+            known = found.get(reading["chunk_id"])
+            if (
+                known is None
+                or reading["model_input"] == ATTACHED
+                or known.get("model_input") != ATTACHED
+            ):
+                found[reading["chunk_id"]] = reading
+    return {prefix: found for prefix, found in readings.items() if found}
+
+
+def carried_figure_readings(validations: list[JsonObject]) -> dict[str, dict[str, JsonObject]]:
+    """同じ会話の前のターンの検証で、図の画像で確かめた段落の図の読み取り（#2678）。
+
+    `carried_evidence` で引き継ぐ根拠のうち図の根拠は、前のターンでモデルへ届いた画像で確かめた
+    もの。前の回答の整形・言い換えで同じ図の見た目を述べた段落を、今のターンで画像を読み直して
+    いないことだけで外さない。返す形は `figure_readings` と同じ（新しいターンのものを優先）。
+    """
+    readings: dict[str, dict[str, JsonObject]] = {}
+    for content in reversed(validations):
+        if content.get("status") != STATUS_COMPLETED:
+            continue
+        connections = content.get("connections")
+        for connection in connections if isinstance(connections, list) else []:
+            if not isinstance(connection, dict) or connection.get("status") != STATUS_COMPLETED:
+                continue
+            prefix = _connection_prefix(str(connection.get("tool_name") or ""))
+            result = connection.get("result")
+            if prefix is None or not isinstance(result, dict):
+                continue
+            claims = result.get("claims")
+            for claim in claims if isinstance(claims, list) else []:
+                if not isinstance(claim, dict) or claim.get("figure_check") != FIGURE_IMAGE_READ:
+                    continue
+                image = claim.get("figure_image")
+                chunk_id = claim.get("chunk_id")
+                if isinstance(image, dict) and isinstance(chunk_id, str):
+                    readings.setdefault(prefix, {}).setdefault(
+                        chunk_id, {**image, "model_input": ATTACHED, "carried": True}
+                    )
+    return readings
+
+
+def validation_figure_readings(
+    steps: list[RunStep], validations: list[JsonObject]
+) -> dict[str, dict[str, JsonObject]]:
+    """最終の検証に使う図の画像の読み取り（その Run の `figure_readings` と、前のターンの検証で
+    図の画像で確かめた図の `carried_figure_readings`。#2678）。
+
+    同じ図はモデルへ届いた記録を優先し、どちらも届いていればその Run のものを使う。
+    """
+    readings = {prefix: dict(found) for prefix, found in figure_readings(steps).items()}
+    for prefix, found in carried_figure_readings(validations).items():
+        current = readings.setdefault(prefix, {})
+        for chunk_id, reading in found.items():
+            known = current.get(chunk_id)
+            if known is None or known.get("model_input") != ATTACHED:
+                current[chunk_id] = reading
+    return readings
+
+
+def apply_figure_readings(result: JsonObject, readings: dict[str, JsonObject]) -> JsonObject:
+    """`figure_only` の段落を、図の画像がモデルへ届いたかで `supported` / `unsupported` にする。
+
+    `readings` は検証した接続の図の読み取り（chunk → 記録。`figure_readings`）。段落の根拠の図
+    （`chunk_id`）の画像が届いていれば、画像で確かめた段落として `supported` にし、画像の参照を
+    `figure_image` に残す。届いていなければ `unsupported` にする（図の画像を読めていない段落は、図の
+    本文〔OCR の文字の並び〕から推した断定なので載せない）。RAG の判定は `rag_status` に残し、件数と
+    `valid` を数え直す。`figure_only` の無い結果はそのまま返す。
+    """
+    raw = result.get("claims")
+    claims = raw if isinstance(raw, list) else []
+    if not any(isinstance(item, dict) and item.get("status") == FIGURE_ONLY for item in claims):
+        return result
+    updated: list[JsonObject] = []
+    for claim in claims:
+        if not isinstance(claim, dict):
+            continue
+        if claim.get("status") != FIGURE_ONLY:
+            updated.append(claim)
+            continue
+        chunk_id = claim.get("chunk_id")
+        reading = readings.get(chunk_id) if isinstance(chunk_id, str) else None
+        if reading is not None and reading.get("model_input") == ATTACHED:
+            image = {key: value for key, value in reading.items() if key != "model_input"}
+            updated.append(
+                {
+                    **claim,
+                    "status": "supported",
+                    "rag_status": FIGURE_ONLY,
+                    "figure_check": FIGURE_IMAGE_READ,
+                    "figure_image": image,
+                }
+            )
+            continue
+        not_read: JsonObject = {
+            **claim,
+            "status": "unsupported",
+            "rag_status": FIGURE_ONLY,
+            "figure_check": FIGURE_IMAGE_NOT_READ,
+        }
+        if reading is not None and reading.get("model_input"):
+            # 画像を返したが届かなかった理由（画像に対応しないモデル・上限など）。
+            not_read["figure_image"] = {"model_input": reading["model_input"]}
+        updated.append(not_read)
+    return {**result, **_judged(result, updated)}
+
+
+def _judged(result: JsonObject, claims: list[JsonObject]) -> JsonObject:
+    """判定の一覧から数え直した `claims`・`counts`・`valid`（RAG の `is_valid` と同じ規則）。"""
+    counts: dict[str, int] = {}
+    for claim in claims:
+        key = str(claim.get("status"))
+        counts[key] = counts.get(key, 0) + 1
+    valid = (
+        result.get("status") == "completed"
+        and not _refs_count(result.get("stale_evidence"))
+        and not _refs_count(result.get("missing_evidence"))
+        and not any(claim.get("status") in BLOCKING_CLAIM_STATUSES for claim in claims)
+        and not error_findings(result)
+        and counts.get("supported", 0) > 0
+    )
+    return {"claims": claims, "counts": counts, "valid": valid}
+
+
+def figure_read_claims(result: JsonObject) -> list[JsonObject]:
+    """図の画像で確かめた段落の判定（`figure_check=image_read`。主張ではない段落は除く）。"""
+    claims = result.get("claims")
+    return [
+        claim
+        for claim in (claims if isinstance(claims, list) else [])
+        if isinstance(claim, dict)
+        and claim.get("figure_check") == FIGURE_IMAGE_READ
+        and not claim.get("non_claim")
+    ]
+
+
 def run_evidence_groups(
     steps: list[RunStep],
     answer: str = "",
@@ -472,7 +689,15 @@ def run_evidence_groups(
     ターンで回答の段落を裏付けた根拠も入れる（回答に当たる根拠の後ろ、残りの検索の根拠の前）。
     その Run で根拠を返さなかった接続には入れない（前のターンの根拠だけで検証するのは、その Run が
     根拠・データのツールで結果を得なかったときの `carried_evidence_groups`。#1879）。
+    図の画像がモデルへ届いた図の根拠（`figure_readings`。#2678）は、回答が書いた根拠と同じく先にする
+    （図の見た目の段落を、上限で切った後の根拠でも図に結び付けられるようにする）。
     """
+    attached = {
+        (prefix, chunk_id)
+        for prefix, found in figure_readings(steps).items()
+        for chunk_id, reading in found.items()
+        if reading.get("model_input") == ATTACHED
+    }
     groups: dict[str, tuple[str, dict[tuple[str, str], _GroupRef]]] = {}
     for step in reversed(steps):
         call, result = step.tool_call, step.tool_result
@@ -495,6 +720,8 @@ def run_evidence_groups(
             item.evidence.add(text, labels, file_names)
             if tool not in BULK_READ_TOOLS:
                 item.bulk_read = False
+            if (prefix, ref[1]) in attached:
+                item.figure = True
     grouped: list[tuple[str, list[JsonObject]]] = []
     for prefix, (tool_name, refs) in groups.items():
         if not refs:
@@ -786,9 +1013,11 @@ def _claim_line(claim: JsonObject) -> str:
     〔`support_check`〕があれば `_SUPPORT_CHECK_LABELS`）だけにし、検証のモデルが書いた理由
     （`reason`）は回答の本文に
     出さない（#1833。「監査」「クレーム」「evidence_items」など内部の語を含む）。理由は成果物の判定に残り、
-    実行の詳細の成果物で見られる。
+    実行の詳細の成果物で見られる。図の画像を読めていない図の見た目の段落（#2678）は、その理由を書く。
     """
     quote = _short(claim.get("answer_quote"), _MAX_QUOTE_CHARS)
+    if claim.get("figure_check") == FIGURE_IMAGE_NOT_READ:
+        return f"- {FIGURE_NOT_READ_LABEL}: 「{quote}」"
     label = (
         _SUPPORT_CHECK_LABELS.get(str(claim.get("support_check") or ""))
         or _CLAIM_LABELS[str(claim.get("status"))]
@@ -1525,13 +1754,59 @@ def publish_answer(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     return published, withheld
 
 
-def combine_validations(answer: str, validations: list[JsonObject]) -> tuple[JsonObject, str]:
+def _with_figure_note(published: str, claims: list[JsonObject]) -> tuple[str, list[JsonObject]]:
+    """図の画像で確かめた段落が本文に残れば、本文の後（「資料で確認できず除いた内容」の節の前）に
+    `FIGURE_READ_NOTE` を足す（#2678）。返すのは回答と、本文に残った段落と画像の参照の一覧。
+    """
+    marker = f"\n\n**{UNVERIFIED_HEADING}**"
+    body, separator, rest = published.partition(marker)
+    kept = [
+        {
+            "answer_quote": claim.get("answer_quote"),
+            "chunk_id": claim.get("chunk_id"),
+            "image": claim.get("figure_image"),
+        }
+        for claim in claims
+        if str(claim.get("answer_quote") or "") and str(claim.get("answer_quote")) in body
+    ]
+    if not kept:
+        return published, []
+    return f"{body.rstrip()}\n\n{FIGURE_READ_NOTE}{separator}{rest}", kept
+
+
+def combine_validations(
+    answer: str,
+    validations: list[JsonObject],
+    figures: dict[str, dict[str, JsonObject]] | None = None,
+) -> tuple[JsonObject, str]:
     """接続ごとの内容（`validation_content`）を 1 つにし、利用者に見せる回答を返す（#1277）。
 
     - どれかの接続を確かめられなかった（`unvalidated`）: 全体も `unvalidated` で、回答は消さずに
       照合を終えられなかったこと（`UNVERIFIED_NOTICE`）を足す（基盤の障害で内容を落とさない）。
     - すべての接続で判定が出た: 段落ごとにまとめた判定で回答を組み立てる（`publish_answer`）。
+
+    `figures` は MCP 接続ごとの図の画像の読み取り（`figure_readings` と `carried_figure_readings`。
+    #2678）。接続の結果の図の見た目の段落（`figure_only`）を、図の画像がモデルへ届いたかで判定し直して
+    からまとめる（`apply_figure_readings`。渡さなければ、どの図の画像も届いていないものとして扱う）。
+    図の画像で確かめた段落が回答に残れば、その旨の注記を本文の後に足し、段落と画像の参照を成果物の
+    `figure_confirmed` に残す。
     """
+    validations = [
+        (
+            {
+                **item,
+                "result": apply_figure_readings(
+                    item["result"],
+                    (figures or {}).get(
+                        _connection_prefix(str(item.get("tool_name") or "")) or "", {}
+                    ),
+                ),
+            }
+            if item["status"] == STATUS_COMPLETED and isinstance(item.get("result"), dict)
+            else item
+        )
+        for item in validations
+    ]
     single = validations[0] if len(validations) == 1 else None
     common: JsonObject = {
         "connection": single["connection"] if single else None,
@@ -1553,6 +1828,9 @@ def combine_validations(answer: str, validations: list[JsonObject]) -> tuple[Jso
         merged = mark_non_claims(answer, merge_results([item["result"] for item in validations]))
         content = validation_content(STATUS_COMPLETED, result=merged, **common)
         published, withheld = _publish(answer, merged)
+        published, confirmed = _with_figure_note(published, figure_read_claims(merged))
+        if confirmed:
+            content["figure_confirmed"] = confirmed
         listed = withheld.pop("listed", None)
         content["withheld"] = withheld
         if listed is not None:

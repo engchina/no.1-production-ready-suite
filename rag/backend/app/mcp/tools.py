@@ -123,7 +123,12 @@ from app.rag.element_locator import (
     chunk_element_locator,
     parse_element_locator,
 )
-from app.rag.figure_region import FigureRegion, bbox_numbers, figure_region
+from app.rag.figure_region import (
+    FigureRegion,
+    bbox_numbers,
+    figure_evidence_type,
+    figure_region,
+)
 from app.rag.figure_url import (
     FIGURE_URL_TTL_SECONDS,
     FigureUrlUnavailableError,
@@ -230,7 +235,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     partial と、どの段落も終わらなかった timed_out を足した（#2700）。
 # 26: rag_lookup_guides の参照（references）に、表計算の資料のシートと行の範囲（sheet_ranges）を
 #     足した（#2663）。
-MCP_OUTPUT_SCHEMA_VERSION = 26
+# 27: rag_validate_answer の claims の status に、図の見た目だけで決まる主張（figure_only）を、
+#     reference_check に not_figure・single_figure を、support_check に figure_recheck を
+#     足した（#2678）。
+MCP_OUTPUT_SCHEMA_VERSION = 27
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -1796,7 +1804,9 @@ class ValidatedClaim(BaseModel):
         description=(
             "supported=根拠で裏付けられる / unsupported=根拠で確かめられない / contradicted=根拠と"
             "矛盾 / data_confirmation=実データの確認を促すだけ / "
-            "citation_error=出典を照合できない / unassessed=監査されなかった"
+            "citation_error=出典を照合できない / unassessed=監査されなかった / "
+            "figure_only=図の見た目（配置・矢印・つながり・所属）だけで決まり、図の本文では確かめ"
+            "られない（chunk_id はその図。図の画像を読んで確かめたかは呼び出し側が決める）"
         )
     )
     chunk_id: str | None = Field(
@@ -1822,7 +1832,10 @@ class ValidatedClaim(BaseModel):
             "answer_id_invalid=回答が書いた ID が根拠に無い / "
             "audit_id_invalid=監査が返した ID だけが根拠に無い / "
             "ambiguous_id=省いた ID が複数の根拠に当たる / audit_id_missing=ID が無い / "
-            "quote_unmatched=引用が根拠に無い）。照合しない判定は null。"
+            "quote_unmatched=引用が根拠に無い / "
+            "not_figure=figure_only の根拠が図ではない〔status は unsupported〕 / "
+            "single_figure=figure_only の ID が決まらず、根拠の唯一の図に結び付けた）。"
+            "照合しない判定は null。"
         ),
     )
     classification_check: str | None = Field(
@@ -1839,7 +1852,9 @@ class ValidatedClaim(BaseModel):
             "監査の supported を採らなかった理由（target_mismatch=根拠は別の対象"
             "〔処理・画面・成果物・状態〕の記載 / "
             "value_unbound=段落が根拠の表の別の行の区分と値を結び付けている / "
-            "quote_unmatched=裏付けとして写した原文が根拠に無い）。採ったときは null。"
+            "quote_unmatched=裏付けとして写した原文が根拠に無い / "
+            "figure_recheck=図の項目だけの裏付けを確かめ直し、図の見た目だけで決まる・図と矛盾する"
+            "とした）。採ったときは null。"
         ),
     )
 
@@ -2094,17 +2109,10 @@ def _float_or_none(value: object) -> float | None:
 
 
 def _evidence_type(metadata: dict[str, Any]) -> EvidenceType:
-    """根拠の種類（#1282）。
-
-    図の本文の出どころが分からない古い記録は、VLM の説明として扱う（原文として扱わず、元の図で
-    確かめる側に倒す）。
-    """
-    kind = _metadata_str(metadata, "content_kind")
-    if kind == "table":
+    """根拠の種類（#1282。図の種類は `figure_evidence_type`）。"""
+    if _metadata_str(metadata, "content_kind") == "table":
         return "table"
-    if kind == "figure":
-        return "ocr" if metadata.get("figure_text_source") == "ocr" else "figure_description"
-    return "text"
+    return figure_evidence_type(metadata) or "text"
 
 
 def _image_ref(

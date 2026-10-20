@@ -23,8 +23,11 @@ from rag_engine.evaluation.answer_eval import (
     _CITED_CHUNK_ID,
     CLASSIFICATION_NON_CLAIM_MISMATCH,
     CLASSIFICATION_REAUDITED,
+    FIGURE_EVIDENCE_TYPES,
     MAX_EVALUATION_INPUT_BYTES,
     REFERENCE_QUOTE_UNMATCHED,
+    REFERENCE_RESOLVED,
+    REFERENCE_RESOLVED_BY_ANSWER,
     EvaluationContractError,
     EvaluationInputTooLarge,
     _answer_passages,
@@ -32,8 +35,10 @@ from rag_engine.evaluation.answer_eval import (
     _evidence_fragments,
     _json,
     _parse_checked,
+    _span_for_misnamed_id,
     _spans_for_ids,
     _spans_for_passage_citations,
+    _unresolved_reference,
     model_request,
 )
 from rag_engine.generation.answer_labels import answer_labels
@@ -65,7 +70,18 @@ from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadl
 #     対応に反しないときだけにした（結果の support_check。#2659・#2657・#2653）。
 # 14: 段落を組に分けて並行に監査し（指示は変えていない）、期限までに返らなかった組の段落を unassessed（status=partial）に
 #     するようにした（#2700）。
-VALIDATION_RUBRIC_VERSION = 14
+# 15: 図の見た目だけで決まる主張の判定（figure_only）を足し、図の根拠に evidence_type を渡すようにした。図の本文の語の並びから
+#     推した構造を supported にしない（画像で確かめたかは呼び出し側が Run の記録で決める）。図の項目だけで裏付けた supported は
+#     その段落だけで 1 回確かめ直す（support_check=figure_recheck。#2678）。
+VALIDATION_RUBRIC_VERSION = 15
+
+# 図の見た目だけで決まる主張（要素の配置・矢印の向き・つながり・分岐への所属など、図の本文が明示しない内容）の判定。
+# 根拠の本文では確かめられず、図の画像を読んだかどうかで扱いが決まる（#2678。検証に通さない判定に数える）。
+FIGURE_ONLY = "figure_only"
+# figure_only の evidence_id が図の根拠に決まらなかった（図ではない根拠を指した）ときの ID の検査の結果。
+REFERENCE_NOT_FIGURE = "not_figure"
+# figure_only の ID が決まらず、渡した根拠に図が 1 つだけなのでその図に結び付けたときの ID の検査の結果。
+REFERENCE_SINGLE_FIGURE = "single_figure"
 
 # 質問の文（資料ではない根拠）の id と出典の名前。資料の chunk の id とは重ならない。
 QUESTION_ID = "question:1"
@@ -123,6 +139,7 @@ VALIDATION_SYSTEM_PROMPT = (
 - 同じ略称・名前が範囲の外で別のものを指していても、範囲を限定した主張とは矛盾しない（主張は範囲の外のものについて述べていない）。主張が「唯一」「すべて」と述べていない限り、ほかに同じ略称があることを矛盾や断定できない理由にしない。
 - 例: 質問が「A 社のシステム台帳で、略称が X のシステムの正式名は？」で、A 社の台帳の行が「略称 X = 甲システム」、B 社の台帳の行が「略称 X = 乙システム」なら、「A 社の台帳で略称 X のシステムは甲システム」は A 社の行で supported。B 社の行を理由に contradicted にしない。
 - unsupported: 渡した根拠では確認できない。誤りとは区別する。
+- figure_only: 段落が図の見た目でしか決まらない内容（要素の配置・矢印の向き・線のつながり・どの分岐や枠に属するか）を述べ、図の項目（evidence_type が figure_description / ocr）の本文がそれを明示していない。evidence_id にその図の項目の evidence_id を書く。図の本文の語の並び・近さから推した構造を supported にしない（語の並びは図の配置を表さない）。図の本文が明示する内容（説明の文が述べる関係・図の中の語そのもの）は、ほかの根拠と同じく判定する。図の項目の対象はその図（配置・矢印を含む）なので、その図について述べた段落（図の本文から決められないと述べる段落を含む）との applicability は matched。
 - data_confirmation: 未確認の実データ（設定値・ログ・個案の状態・件数など）の確認を促すだけの段落。資料の内容の断定や操作の説明をここへ逃がさない。
 - not_a_claim: 見出しだけの行。本文の文には使わない。
 - source_id は空文字でよい（evidence_id から出典を取る）。
@@ -282,7 +299,10 @@ class ValidationClaimCheck(BaseModel):
             "比べる。supported 以外の判定は matched でよい。"
         ),
     )
-    status: Literal["supported", "unsupported", "contradicted", "data_confirmation", "citation_error", "unassessed", "not_a_claim"]
+    # figure_only は最終の検証だけの判定（図の見た目だけで決まる主張。品質評価の ClaimCheck には無い。#2678）。
+    status: Literal[
+        "supported", "unsupported", "contradicted", "data_confirmation", "citation_error", "unassessed", "not_a_claim", "figure_only"
+    ]
     source_id: str
     reason: str = Field(min_length=1)
     # 以下はシステムが付ける診断（モデルに渡す schema には出さない）。意味は ``ClaimCheck`` と同じ（#2622・#2625）。
@@ -300,6 +320,62 @@ class ClaimAuditOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     claim_checks: list[ValidationClaimCheck] = Field(default_factory=list, max_length=128)
+
+
+def _bind_figure_claims(claims: Sequence[ValidationClaimCheck], catalog: Mapping[str, Mapping[str, Any]]) -> list[ValidationClaimCheck]:
+    """figure_only の判定を図の根拠に結び付ける（#2678）。
+
+    図の根拠（evidence_type が FIGURE_EVIDENCE_TYPES）を、監査が返した evidence_id、段落が書いた根拠の ID の順に探し、
+    決まればその図を出典にする（呼び出し側は出典の図の画像を Run が読んだかで扱いを決める）。どちらでも決まらず、
+    渡した根拠に図が 1 つだけなら、その図に結び付ける（ID の写し損ねだけで画像で確かめた段落を外さない。
+    reference_check=single_figure）。それでも決まらなければ、図で確かめる主張とは言えないので unsupported にする
+    （ID の検査の結果は、図ではない根拠を指したら not_figure、ID が決まらなければその理由）。
+    """
+    figures_by_id: dict[str, Mapping[str, Any]] = {}
+    for item in catalog.values():
+        if item.get("evidence_type") in FIGURE_EVIDENCE_TYPES:
+            figures_by_id.setdefault(str(item.get("id") or ""), item)
+    bound: list[ValidationClaimCheck] = []
+    for claim in claims:
+        if claim.status != FIGURE_ONLY:
+            bound.append(claim)
+            continue
+        span = (catalog.get(claim.evidence_id) or _span_for_misnamed_id(claim, catalog)) if claim.evidence_id else None
+        spans = [span] if span else list(_spans_for_ids(claim, catalog) or [])
+        figures = [item for item in spans if item.get("evidence_type") in FIGURE_EVIDENCE_TYPES]
+        reference = REFERENCE_RESOLVED
+        if not figures:
+            cited = list(_spans_for_passage_citations(claim, catalog) or [])
+            figures = [item for item in cited if item.get("evidence_type") in FIGURE_EVIDENCE_TYPES]
+            reference = REFERENCE_RESOLVED_BY_ANSWER
+        if not figures and len(figures_by_id) == 1:
+            figures = list(figures_by_id.values())
+            reference = REFERENCE_SINGLE_FIGURE
+        if figures:
+            bound.append(
+                claim.model_copy(
+                    update={
+                        "source_id": figures[0]["id"],
+                        "evidence_quote": figures[0]["text"],
+                        "evidence_id": ",".join(item["evidence_id"] for item in figures),
+                        "reference_check": reference,
+                    }
+                )
+            )
+            continue
+        reference = REFERENCE_NOT_FIGURE if spans else _unresolved_reference(claim, catalog, passage_citations=True)
+        bound.append(
+            claim.model_copy(
+                update={
+                    "status": "unsupported",
+                    "source_id": "",
+                    "evidence_quote": "",
+                    "reference_check": reference,
+                    "reason": "図の根拠に結び付けられないため、根拠で確かめられないとしました。" + claim.reason,
+                }
+            )
+        )
+    return bound
 
 
 def _fit_evidence(fixed: dict[str, Any], fragments: list[dict[str, Any]], max_input_bytes: int) -> tuple[list[dict[str, Any]], bool]:
@@ -511,7 +587,7 @@ def _recheck_unreferenced_passages(
 
 
 # 監査し直しで受け付ける、内容の判定（not_a_claim・unassessed は内容を確かめていない）。
-REAUDIT_STATUSES = ("supported", "contradicted", "unsupported", "data_confirmation", "citation_error")
+REAUDIT_STATUSES = ("supported", "contradicted", "unsupported", "data_confirmation", "citation_error", FIGURE_ONLY)
 # 監査し直しの差し戻しの文（入力の validation_feedback。違反と直し方だけを書く）。
 REAUDIT_FEEDBACK = (
     "answer_passages の段落は、見出し・出典の行ではない本文の段落です。not_a_claim を使わず、evidence_items に"
@@ -673,6 +749,94 @@ def _audit_in_batches(
     if error is not None:
         raise error
     return results
+
+
+# 図の項目だけで裏付けた supported を確かめ直す差し戻しの文（入力の validation_feedback。#2678）。
+FIGURE_RECHECK_FEEDBACK = (
+    "answer_passages の段落は、図の項目（evidence_type が figure_description / ocr）だけを根拠に supported と判定された"
+    "段落です。figure_only の基準に照らして判定し直してください。"
+)
+# 確かめ直しで採る判定（図の見た目だけで決まる・図の本文と矛盾する）。unsupported は採らない（図の項目だけに
+# 絞った確かめ直しで、本文から外す理由を増やさない）。
+FIGURE_RECHECK_STATUSES = frozenset({FIGURE_ONLY, "contradicted"})
+# supported を採らなかった理由（support_check）: 図の項目だけの裏付けを確かめ直し、図の見た目だけで決まる・
+# 図の本文で確かめられないとした。
+SUPPORT_FIGURE_RECHECK = "figure_recheck"
+
+
+def _figure_only_support(claim: ValidationClaimCheck, catalog: Mapping[str, Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """supported の裏付けがすべて図の項目なら、その項目（そうでなければ空）。"""
+    if claim.status != "supported":
+        return []
+    spans = [catalog[token] for token in claim.evidence_id.split(",") if token in catalog]
+    return spans if spans and all(span.get("evidence_type") in FIGURE_EVIDENCE_TYPES for span in spans) else []
+
+
+def _recheck_figure_supported(
+    claims: list[ValidationClaimCheck],
+    fixed: Mapping[str, Any],
+    passages: Sequence[Mapping[str, str]],
+    evidence: Sequence[Mapping[str, Any]],
+    catalog: Mapping[str, Mapping[str, Any]],
+    settings: Any,
+    provider_id: str | None,
+) -> tuple[list[ValidationClaimCheck], list[str]]:
+    """図の項目だけを根拠に supported とした段落を、その段落と図の項目だけで 1 回確かめ直す (#2678)。
+
+    図の本文（図の説明・OCR の文字）の語の並びから推した構造（配置・矢印・つながり・所属）を、最初の監査が
+    supported にすることがある。そうした段落（裏付けがすべて図の項目の supported）だけを、裏付けに使った図の項目と
+    資料ではない根拠（質問の文・前提・照会の結果）、差し戻しの文（FIGURE_RECHECK_FEEDBACK）でモデルに 1 回だけ渡す
+    （再試行はしない）。段落の判定がすべて figure_only・contradicted（FIGURE_RECHECK_STATUSES）になった段落だけ、
+    supported を確かめ直した判定（support_check=figure_recheck）に替える。それ以外（supported・unsupported など）・
+    決まらない・呼び出しが失敗したときは最初の判定のまま（確かめ直しで裏付けを増やすことはしない）。
+    戻り値は判定と、判定を替えた段落の ID。
+    """
+    if _deadline_passed():
+        # 照合の時間の上限を過ぎていれば確かめ直さない（最初の判定のまま）。
+        return claims, []
+    spans: dict[str, Mapping[str, Any]] = {}
+    target_ids: set[str] = set()
+    for claim in claims:
+        found = _figure_only_support(claim, catalog)
+        if found:
+            target_ids.add(claim.answer_passage_id)
+            spans.update({str(span["evidence_id"]): span for span in found})
+    targets = [passage for passage in passages if passage["id"] in target_ids]
+    if not targets:
+        return claims, []
+    items = [*(item for item in evidence if is_premise_id(item.get("id"))), *spans.values()]
+    inputs = {**fixed, "answer_passages": targets, "evidence_items": items, "validation_feedback": FIGURE_RECHECK_FEEDBACK}
+    try:
+        output = _parse_checked(
+            VALIDATION_SYSTEM_PROMPT,
+            inputs,
+            settings,
+            ClaimAuditOutput,
+            provider_id,
+            _passage_check(targets, str(fixed.get("answer_text") or "")),
+            max_input_bytes=_max_input_bytes(settings),
+            attempts=1,
+        )
+    except Exception:
+        # 確かめ直しは最初の判定を厳しくするだけなので、失敗しても最初の判定を返す。
+        logger.warning("answer validation figure recheck failed", exc_info=True)
+        return claims, []
+    subset = {item["evidence_id"]: item for item in items}
+    rebound = _bind_figure_claims(_bind_validation(output, subset, targets).claim_checks, subset)
+    replacements: dict[str, list[ValidationClaimCheck]] = {}
+    for claim in rebound:
+        if claim.answer_passage_id in target_ids:
+            replacements.setdefault(claim.answer_passage_id, []).append(claim.model_copy(update={"support_check": SUPPORT_FIGURE_RECHECK}))
+    settled = {passage_id for passage_id, group in replacements.items() if all(claim.status in FIGURE_RECHECK_STATUSES for claim in group)}
+    result: list[ValidationClaimCheck] = []
+    for claim in claims:
+        passage_id = claim.answer_passage_id
+        if passage_id in settled:
+            # 段落の判定を確かめ直した判定に替える（段落ごとに 1 回）。
+            result.extend(replacements.pop(passage_id, []))
+        else:
+            result.append(claim)
+    return result, [passage["id"] for passage in targets if passage["id"] in settled]
 
 
 def premise_items(premises: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -854,6 +1018,8 @@ def validate_answer_claims(
         rebound, rechecked = _recheck_unreferenced_passages(
             [*reaudited_claims, *reused], fixed, judged, evidence, catalog, settings, provider_id
         )
+        # 図の見た目だけで決まる主張は、図の根拠に結び付ける（#2678）。
+        rebound = _bind_figure_claims(rebound, catalog)
         bound_claims = [_prefer_document_source(claim, catalog) for claim in rebound if claim.answer_passage_id not in settled]
     checked = {claim.answer_passage_id for claim in bound_claims} | set(settled)
     timed_out_ids = {passage["id"] for passage in timed_out}
@@ -881,6 +1047,8 @@ def validate_answer_claims(
         {str(item.get("chunk_uid") or item.get("id") or ""): str(item.get("text") or "") for item in sources},
         [str(item.get("text") or "") for item in evidence_items],
     )
+    # 図の項目だけで裏付けた supported は、図の見た目だけで決まる主張でないかを確かめ直す（#2678）。
+    claims, figure_rechecked = _recheck_figure_supported(claims, fixed, passages, evidence, catalog, settings, provider_id)
     counts: dict[str, int] = {}
     for claim in claims:
         counts[claim.status] = counts.get(claim.status, 0) + 1
@@ -896,12 +1064,17 @@ def validate_answer_claims(
         # classification_check が non_claim_mismatch（unassessed）。
         "reaudited_passage_ids": reaudited,
         "reused_passage_ids": [passage["id"] for passage in passages if passage["id"] in settled],
+        # 図の項目だけの裏付けを確かめ直し、supported を採らなかった段落（#2678）。
+        "figure_rechecked_passage_ids": figure_rechecked,
         # 期限までに監査し終わらなかった段落（#2700。判定は unassessed）。
         "timed_out_passage_ids": [passage["id"] for passage in passages if passage["id"] in timed_out_ids],
     }
 
 
 __all__ = [
+    "FIGURE_ONLY",
+    "FIGURE_RECHECK_FEEDBACK",
+    "SUPPORT_FIGURE_RECHECK",
     "MAX_PREMISES",
     "PREMISE_ID_PREFIX",
     "PREMISE_SOURCE",
@@ -910,6 +1083,8 @@ __all__ = [
     "MAX_DATA_RESULTS",
     "REAUDIT_FEEDBACK",
     "REAUDIT_STATUSES",
+    "REFERENCE_NOT_FIGURE",
+    "REFERENCE_SINGLE_FIGURE",
     "REUSED_CLAIM_REASON",
     "STATUS_PARTIAL",
     "STATUS_TIMED_OUT",
