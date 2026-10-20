@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -1242,13 +1242,41 @@ def caller_planned_schema(function_name: str, schema: JsonObject) -> JsonObject:
     """モデルに見せる根拠の取得の schema から、実行環境が決める引数を外す（#2651）。"""
     if not caller_planned(function_name, schema):
         return schema
+    return _without_properties(schema, CALLER_PLANNED_ARGUMENTS)
+
+
+# Agent 主体の取得を許さない接続（#2676）の根拠の取得で、モデルに見せず、渡されても呼び先へ送らない
+# 引数。planning と追跡 ID は実行環境だけが決め、queries・skip_clarification は planning=caller の
+# ときだけ効く（送らなければ RAG の既定の rag が検索文を計画する）。schema に無い追加の項目として
+# 引数の誤りにすると、caller の手順を書いたスキルの Run が引数の誤りの上限で止まりうるので、
+# 誤りにせずに外す。
+RAG_PLANNED_ARGUMENTS = ("planning", "request_id", "queries", "skip_clarification")
+
+
+def rag_planned_schema(function_name: str, schema: JsonObject) -> JsonObject:
+    """Agent 主体の取得を許さない接続のモデルに見せる根拠の取得の schema（#2676）。"""
+    if not caller_planned(function_name, schema):
+        return schema
+    return _without_properties(schema, RAG_PLANNED_ARGUMENTS)
+
+
+def rag_planned_arguments(
+    function_name: str, input_schema: JsonObject | None, arguments: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Agent 主体の取得を許さない接続の根拠の取得から、caller の引数を除く（#2676）。"""
+    if not caller_planned(function_name, input_schema):
+        return dict(arguments)
+    return {key: value for key, value in arguments.items() if key not in RAG_PLANNED_ARGUMENTS}
+
+
+def _without_properties(schema: JsonObject, names: Collection[str]) -> JsonObject:
     updated = deepcopy(schema)
     properties = updated["properties"]
-    for name in CALLER_PLANNED_ARGUMENTS:
+    for name in names:
         properties.pop(name, None)
     required = updated.get("required")
     if isinstance(required, list):
-        updated["required"] = [name for name in required if name not in CALLER_PLANNED_ARGUMENTS]
+        updated["required"] = [name for name in required if name not in names]
     return updated
 
 
