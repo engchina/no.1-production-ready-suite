@@ -361,7 +361,7 @@ def test_token_budget_selects_relevant_child_sections_and_stays_under_limit():
     assert result.trace["large_section_handoff"] == "extract_then_integrate_unavailable"
 
 
-def test_token_budget_does_not_make_answer_conditional_when_read_part_is_enough():
+def test_token_budget_keeps_unread_sections_even_when_grader_says_enough():
     stub = SectionStub()
     grader = Grader(needs={"c33a", "c33b"})
 
@@ -373,7 +373,7 @@ def test_token_budget_does_not_make_answer_conditional_when_read_part_is_enough(
         rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))],
     )
 
-    assert result.stop_reason == sections.STOP_SUFFICIENT and result.unread == []
+    assert result.stop_reason == sections.STOP_TOKEN_BUDGET and result.unread
 
 
 def test_large_section_handler_receives_sections_that_do_not_fit():

@@ -1083,8 +1083,9 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "回答で、当たった chunk の章節（章節ナビゲーション）から親の章節へ段階的に広げて"
             "文脈に入れる（#1436。既定 ON）。根拠が十分でも最低 1 段（所有の章節）を読み、"
             "新たな根拠を加えた後に CRAG の十分性を確かめ、足りれば止める"
-            "（判定ごとに LLM の呼び出しが 1 回増える）。回答の生成方式が"
-            " CRAG のときだけ効く。検索・回答プロファイルの section_expansion_enabled で選ぶ。"
+            "（判定ごとに LLM の呼び出しが 1 回増える）。標準 RAG では必要な範囲の原文を補完し、"
+            "十分性の評価器は呼ばない。一部取得は読了にしない。"
+            "検索・回答プロファイルの section_expansion_enabled で選ぶ。"
         ),
     )
     rag_section_expansion_max_levels: int = Field(

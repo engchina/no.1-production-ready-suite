@@ -2157,7 +2157,7 @@ export const ja = {
   "searchAnswerProfiles.sectionExpansion.title": "章節で広げる根拠",
   "searchAnswerProfiles.sectionExpansion.enabled": "当たった根拠の章節から親の章節へ広げる",
   "searchAnswerProfiles.sectionExpansion.helper":
-    "根拠が足りると判定した場合でも、最低 1 段は章節の範囲を広げて回答の材料に加えます。1 段目は当たった根拠が属する章節全体です。その後も根拠が足りない場合は、親の章節、…、文書全体の順に 1 段ずつ広げ、足りれば止めます。新たな根拠を加えて足りるかを確かめるたびに、AI の呼び出しが 1 回増えます。上限に達したら、読めなかった章節を「回答に未反映の関連章節」に示し、条件つきの回答にします。回答の生成方式が CRAG のときだけ効きます。既定は有効で、このプロファイルの検索だけに効きます。",
+    "根拠が足りると判定した場合でも、最低 1 段は章節の範囲を広げて回答の材料に加えます。1 段目は当たった根拠が属する章節全体です。標準 RAG は必要な範囲の補完後に回答し、CRAG はその後も根拠が足りない場合に親の章節、…、文書全体の順に 1 段ずつ広げ、足りれば止めます。CRAG で足りるかを確かめるたびに、AI の呼び出しが 1 回増えます。上限に達したら、読めなかった章節を「回答に未反映の関連章節」に示し、条件つきの回答にします。標準 RAG と CRAG の両方で効きます。一部だけを取得した章節は読了として扱いません。既定は有効で、このプロファイルの検索だけに効きます。",
   "searchAnswerProfiles.sectionExpansion.maxLevels": "広げる段の上限",
   "searchAnswerProfiles.sectionExpansion.maxLevelsValue": "{count} 段",
   "searchAnswerProfiles.sectionExpansion.maxLevelsDefault": "{count} 段（既定）",

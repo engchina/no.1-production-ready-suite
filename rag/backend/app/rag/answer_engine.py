@@ -2213,7 +2213,7 @@ class AnswerEngine:
         読んだ chunk は引用へ戻せるよう ``state.chunks`` に入れ、分類・1 ページ目の本文・根拠画像は
         検索の候補と同じく付ける。読めなければ空(広げずに回答を続ける)。
         """
-        from rag_engine.generation.section_expansion import MAX_SECTION_CHUNKS
+        from rag_engine.generation.section_expansion import MAX_SECTION_CHUNKS, SectionRead
 
         from app.rag.section_map_service import read_section
 
@@ -2228,14 +2228,14 @@ class AnswerEngine:
             )
         except Exception:  # noqa: BLE001 - 章節の拡張は補助。この章節を足さずに続ける。
             logger.warning("section chunks load failed", exc_info=True)
-            return []
+            return SectionRead(complete=False, reason="read_error")
         # #2590 より前に作った章節の対応には派生の chunk が残りうるので、原文だけを足す(#2641)。
         chunks = [
             state.chunks.setdefault(chunk.chunk_id, chunk)
             for chunk in original_chunks(row.chunk for row in text.chunks)
         ]
         if not chunks:
-            return []
+            return SectionRead(complete=False, reason="partial_read")
         await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)
         if answer_images_enabled(self._settings):
@@ -2251,7 +2251,10 @@ class AnswerEngine:
             )
             for chunk in chunks
         ]
-        return [*children, *_stored_parents(children, state)]
+        return SectionRead(
+            [*children, *_stored_parents(children, state)],
+            complete=text.complete and len(text.chunks) >= text.section.chunk_count,
+        )
 
     async def _article_catalogs(
         self, state: _SearchState, document_ids: Sequence[str], limit: int
