@@ -100,6 +100,43 @@ def test_markdown_tables_and_other_tables_binding_the_value() -> None:
     assert unbound_table_values("区分Ⅱは 01 です。", ["区分Ⅰは 01 です。区分Ⅱは 02 です。"]) == []  # 表でない本文は見ない
 
 
+@pytest.mark.parametrize(
+    "number",
+    ["5.4", "6.2.1", "step-3", "step‑3", "step−3", "５．４", "-3", "+3", "−3"],
+    ids=["section", "nested-section", "step", "nonbreaking-hyphen", "minus", "full-width", "negative", "positive-sign", "unicode-negative"],
+)
+def test_number_parts_are_not_independent_table_values(number: str) -> None:
+    """節・小数・コードの内部や符号付きの数を、別の行の正の値として扱わない。"""
+    table = "| 番号 | 名称 |\n|---|---|\n| 2 | 項目甲 |\n| 3 | 項目乙 |\n| 4 | 項目丙 |\n| 5 | 項目丁 |\n| 6 | 項目戊 |"
+    assert unbound_table_values(f"項目甲については「{number}」を参照する。", [table]) == []
+
+
+@pytest.mark.parametrize(
+    ("claim", "expected"),
+    [
+        ("「5.4 区分A・登録保留との順序」を参照する。", []),
+        ("**3．登録期限（step-3）**", []),
+        ("登録保留の期間は「4」です。", []),
+        ("仮登録の番号は「4」です。", []),
+        ("登録データは「4」です。", []),
+        ("登録では「2」を指定する。", []),
+        ("登録では「4」を指定する。", [("4", "登録、変更、取消等")]),
+        ("「登録、変更、取消等」では「4」を指定する。", [("4", "登録、変更、取消等")]),
+    ],
+    ids=["section-and-compound", "heading", "suffix", "prefix", "katakana-suffix", "correct-row", "wrong-row", "full-cell-wrong-row"],
+)
+def test_shortened_cell_label_does_not_match_inside_a_compound(claim: str, expected: list[tuple[str, str]]) -> None:
+    """読点で切ったセルの頭は、複合語の一部分だけでは行の手がかりにしない（#2752）。"""
+    table = "| 章 | 操作 |\n|---|---|\n| 2 | 登録、変更、取消等 |\n| 3 | 参照、出力 |\n| 4 | 照会、抽出 |\n| 5 | 相談、案内 |"
+    assert unbound_table_values(claim, [table]) == expected
+
+
+@pytest.mark.parametrize("value", ["1", "A", "B2", "3.2", "step-3"])
+def test_standalone_values_still_detect_wrong_rows(value: str) -> None:
+    table = f"| 名称 | 値 |\n|---|---|\n| 項目甲 | {value} |\n| 項目乙 | 9 |"
+    assert unbound_table_values(f"項目乙では「{value}」を指定する。", [table]) == [(value, "項目乙")]
+
+
 def test_grounded_item_with_a_value_from_another_row_gets_a_warning() -> None:
     """表の別の行の値を結び付けた説明は、言い換えを残して警告（value_unbound）を付ける（#2738。以前は降格）。"""
     question = "区分Ⅱで選ぶ選択肢の値は？"
