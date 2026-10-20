@@ -4976,14 +4976,21 @@ class OracleClient:
         limit: int | None = None,
         offset: int = 0,
         knowledge_base_id: str | None = None,
+        queued_phase: IngestionJobPhase | None = None,
     ) -> list[DocumentSummary]:
-        """ドキュメント一覧を返す。"""
+        """ドキュメント一覧を返す。
+
+        ``status`` は一覧に出す状態(レシピ1の状態)。``queued_phase`` を渡さないときは、順番待ちの
+        文書(一覧に「〈工程〉の順番待ち」と出る)を除く。``queued_phase`` はレシピ1の取込の job が
+        順番待ちの段(#2677)。
+        """
         return await self._list_documents_with_oracle(
             status=status,
             query=query,
             limit=limit,
             offset=offset,
             knowledge_base_id=knowledge_base_id,
+            queued_phase=queued_phase,
         )
 
     async def list_duplicate_documents(self, document_ids: Sequence[str]) -> list[DocumentSummary]:
@@ -5035,12 +5042,14 @@ class OracleClient:
         status: FileStatus | None = None,
         query: str | None = None,
         knowledge_base_id: str | None = None,
+        queued_phase: IngestionJobPhase | None = None,
     ) -> int:
-        """条件に一致するドキュメント数を返す。"""
+        """条件に一致するドキュメント数を返す(条件は ``list_documents`` と同じ)。"""
         return await self._count_documents_with_oracle(
             status=status,
             query=query,
             knowledge_base_id=knowledge_base_id,
+            queued_phase=queued_phase,
         )
 
     async def count_document_chunks(self, document_id: str) -> int:
@@ -8962,12 +8971,14 @@ class OracleClient:
         limit: int | None,
         offset: int,
         knowledge_base_id: str | None,
+        queued_phase: IngestionJobPhase | None = None,
     ) -> list[DocumentSummary]:
         """Oracle document table から一覧取得する。"""
         where_sql, binds = _oracle_document_where(
             status=status,
             query=query,
             knowledge_base_id=knowledge_base_id,
+            queued_phase=queued_phase,
         )
         binds.update(offset_fetch_binds(offset=offset, limit=limit))
         limit_clause = offset_fetch_clause(with_limit=limit is not None)
@@ -9017,12 +9028,14 @@ class OracleClient:
         status: FileStatus | None,
         query: str | None,
         knowledge_base_id: str | None,
+        queued_phase: IngestionJobPhase | None = None,
     ) -> int:
         """Oracle document table の件数を取得する。"""
         where_sql, binds = _oracle_document_where(
             status=status,
             query=query,
             knowledge_base_id=knowledge_base_id,
+            queued_phase=queued_phase,
         )
         row = await self._fetch_one(
             _render_sql(
@@ -11438,6 +11451,30 @@ _DOCUMENT_LIST_STATUS_SQL = """COALESCE(
                 rag_documents.status
             )"""
 
+# 一覧の行が「〈工程〉の順番待ち」と出る段(#2026・#2677)。一覧の API の `_attach_queue_waits` と
+# 同じ選び方で、レシピ1(`slot_no` の最も小さいレシピ。レシピの行が無い文書は job のレシピも無いもの)
+# の QUEUED の job のうち、投入の古い順(`queued_at`・`job_id`)の最初の job の段。順番待ちで
+# なければ NULL。状態の絞り込み・件数で使う(FROM rag_documents を別名なしで読む SQL 用)。
+# DECODE は NULL どうしを一致とみなす(レシピの行が無い文書の job)。
+_DOCUMENT_LIST_QUEUED_PHASE_SQL = """(
+                SELECT MIN(qj.phase) KEEP (DENSE_RANK FIRST ORDER BY qj.queued_at, qj.job_id)
+                FROM rag_ingestion_jobs qj
+                LEFT JOIN rag_document_recipes qr
+                  ON qr.recipe_id = qj.recipe_id
+                WHERE qj.document_id = rag_documents.document_id
+                  AND qj.status = 'QUEUED'
+                  AND DECODE(
+                      qr.slot_no,
+                      (
+                          SELECT MIN(fr.slot_no)
+                          FROM rag_document_recipes fr
+                          WHERE fr.document_id = rag_documents.document_id
+                      ),
+                      1,
+                      0
+                  ) = 1
+            )"""
+
 # 一覧の列。状態を `_DOCUMENT_LIST_STATUS_SQL` に置き換え、待機中・実行中の取込 job があるかを
 # 足す(投入直後の job は worker が拾うまでレシピの状態が変わらないため、一覧の定期の取り直しの
 # 判定に使う)。
@@ -12303,6 +12340,7 @@ def _oracle_document_where(
     status: FileStatus | None = None,
     query: str | None = None,
     knowledge_base_id: str | None = None,
+    queued_phase: IngestionJobPhase | None = None,
 ) -> tuple[str, dict[str, object]]:
     clauses = _oracle_access_predicates()
     binds = _with_tenant_bind({})
@@ -12310,6 +12348,13 @@ def _oracle_document_where(
         # 一覧に出す状態(レシピ1の状態)で絞り込む(#2012)。
         clauses.append(f"{_DOCUMENT_LIST_STATUS_SQL} = :status")
         binds["status"] = status.value
+        if queued_phase is None:
+            # 順番待ちの行は「〈工程〉の順番待ち」と出るため、状態の絞り込みには入れない(#2677)。
+            clauses.append(f"{_DOCUMENT_LIST_QUEUED_PHASE_SQL} IS NULL")
+    if queued_phase is not None:
+        # 一覧の行が「〈工程〉の順番待ち」と出る段で絞り込む(#2677)。
+        clauses.append(f"{_DOCUMENT_LIST_QUEUED_PHASE_SQL} = :queued_phase")
+        binds["queued_phase"] = queued_phase.value
     if query and query.strip():
         clauses.append(
             "(LOWER(file_name) LIKE :query ESCAPE '\\' "
