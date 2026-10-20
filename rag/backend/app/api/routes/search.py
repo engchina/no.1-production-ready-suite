@@ -569,6 +569,7 @@ async def _run_search_with_timeout(
     guide_preview: GuidePreview | None = None,
     run_recorder: RunRecorder | None = None,
     scope: AnswerScope | None = None,
+    caller_queries: Sequence[str] | None = None,
 ) -> SearchResponse:
     """検索・回答の pipeline を回答生成の上限（`rag_answer_timeout_seconds`。#375）付きで実行する。
 
@@ -576,6 +577,8 @@ async def _run_search_with_timeout(
     ``guide_preview`` は業務ガイドの下書きで試す回答（#1288。trace_id に接頭辞を付ける）。
     ``run_recorder`` は RAG 検索の画面の実行を実行履歴に残す（#1890。MCP・下書きは渡さない）。
     ``scope`` は回答前の確認の答え（MCP の rag_search のルールの確認。#2117）。
+    ``caller_queries`` は呼び出し元（業務 Agent）が作った検索文（MCP の rag_retrieve_evidence の
+    planning=caller。#2651）。渡すと質問に応じた推論の LLM を呼ばずに検索する（`RagPipeline`）。
     """
     request, settings, applied_kb, applied_view = await _resolve_query_context(
         request, get_settings(), guide_preview=guide_preview
@@ -595,6 +598,7 @@ async def _run_search_with_timeout(
                 run_recorder=run_recorder,
                 scope=scope,
                 answer_notice=current_answer_notice,
+                caller_queries=caller_queries,
             ).run(request, trace_id=trace_id, progress_callback=tracker),
             settings,
             _report_tool_progress,

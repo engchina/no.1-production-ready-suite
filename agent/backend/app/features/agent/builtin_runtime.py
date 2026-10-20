@@ -218,6 +218,9 @@ from app.features.agent.support_task import (
     assume_step,
     budget_exceeded_message,
     build_support_task,
+    caller_planned_arguments,
+    caller_planned_schema,
+    evidence_clarification_step,
     guide_check_note,
     has_support_task_activity,
     is_environment_tool,
@@ -1172,11 +1175,12 @@ class _ToolRecorder:
             definition is None
             or self.confirmation is None
             or not self.confirmation.skips_tool_clarification
-            or mcp_base_tool_name(name) != RAG_SEARCH
+            or mcp_base_tool_name(name) not in {RAG_SEARCH, RAG_RETRIEVE_EVIDENCE}
         ):
             return False
         properties = (definition.input_schema or {}).get("properties")
-        # 確認を持たない RAG（引数の無い版）には送らない（未定義の引数は拒否される）。
+        # 確認を持たない RAG（引数の無い版）には送らない（未定義の引数は拒否される）。根拠の取得の
+        # ルールの確認は、呼び出し元が検索文を作る取得（#2651）でだけ出る。
         return isinstance(properties, dict) and "skip_clarification" in properties
 
     def _original_question(self, name: str, definition: ToolDefinition | None) -> str | None:
@@ -1399,6 +1403,15 @@ class _ToolRecorder:
         original_question = self._original_question(name, definition)
         if original_question is not None and not call_arguments.get("original_question"):
             call_arguments = {**call_arguments, "original_question": original_question}
+        if definition is not None:
+            # 根拠の取得は、モデルが作った検索文で RAG に推論を重ねさせずに検索する（#2651。
+            # モデルに任せず決定的に付け、モデルが渡した値は上書きする）。
+            call_arguments = {
+                **call_arguments,
+                **caller_planned_arguments(
+                    name, definition.input_schema, run_id=self.run_id, call_id=call_id
+                ),
+            }
         call = ToolCall(
             name=name,
             arguments=call_arguments,
@@ -1482,6 +1495,10 @@ class _ToolRecorder:
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
             if base == RAG_RETRIEVE_EVIDENCE and isinstance(output, dict):
+                # 検索・回答プロファイルのルールの確認（#2651。検索文を作る取得だけが返す）。
+                next_step = self._without_asking(evidence_clarification_step(output))
+                if next_step is not None:
+                    output = {**output, "next_step": next_step}
                 note = await self.check_guides(name, call.arguments)
                 if note is not None:
                     output = {**output, "guide_check": note}
@@ -1964,10 +1981,14 @@ def build_function_tools(
         # データの範囲が 1 つなら、プロファイルの引数をモデルに見せない（#1378）。実行の定義
         # （`tool_registry.invoke` に渡す schema）は呼び先の契約のまま。
         # 根拠のツールの件数の説明には「多段の質問では省略する」を足す（#1403）。
+        # 根拠の取得の検索文を作る主体（planning）と追跡 ID は実行環境が決める（#2651）。
         schema = search_limit_schema(
             definition.name,
-            data_scope.scoped_input_schema(
-                definition.name, dict(definition.input_schema), recorder.data_scopes
+            caller_planned_schema(
+                definition.name,
+                data_scope.scoped_input_schema(
+                    definition.name, dict(definition.input_schema), recorder.data_scopes
+                ),
             ),
         )
         tool = FunctionTool(

@@ -57,6 +57,10 @@ class RagSearchIn(_ContractInput):
 class RagRetrieveEvidenceIn(RagSearchIn):
     # 根拠の収集は検索する件数（top_k の既定 20）と同じ件数を既定で返す（#1365）。
     evidence_limit: int = Field(default=20, ge=1, le=50)
+    # 検索文を作る主体と、呼び出し元の検索文・追跡 ID（#2651）。
+    planning: Literal["rag", "caller"] = "rag"
+    queries: list[str] = Field(default_factory=list, max_length=5)
+    request_id: str | None = Field(default=None, max_length=128)
 
 
 class RagLookupGuidesIn(_ContractInput):
@@ -331,6 +335,9 @@ _EVIDENCE = {
     "role": "retrieved_anchor",
     "score": 0.9,
     "rerank_score": None,
+    # 検索の順位と本文の由来（#2651）。
+    "retrieval_rank": 1,
+    "origin": "source",
     # 根拠が属する章節（章節ナビゲーションの章節。#1438）。
     "section": {
         "section_id": "sec-5",
@@ -358,7 +365,9 @@ _EVIDENCE = {
 # （#2396）。
 # 19: rag_validate_answer の claims に audit_status・reference_check を足した（#2622）。
 # 20: rag_validate_answer の claims に classification_check を足した（#2625）。
-RAG_OUTPUT_SCHEMA_VERSION = 20
+# 21: rag_retrieve_evidence の planning・queries・request_id・clarifications と、根拠の
+# retrieval_rank・origin を足した（#2651）。
+RAG_OUTPUT_SCHEMA_VERSION = 21
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {
@@ -587,6 +596,9 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "evidence": [{**_EVIDENCE, "used_in_answer": False}],
         "evidence_omitted": 0,
         "older_versions": [],
+        "planning": "caller",
+        "request_id": None,
+        "clarifications": [],
     },
     # 回答の最終の検証（#1246）。既定は根拠で裏付けられた回答。
     "rag_validate_answer": {

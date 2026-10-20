@@ -789,8 +789,12 @@ def build_adb_hybrid_answer_context(
     query_embedder: Callable[[str, Settings], list[float]] | None = None,
     vector_only_queries: Sequence[str] = (),
     page_ranges: Sequence[Mapping[str, Any]] = (),
+    trusted_queries: Sequence[str] = (),
 ) -> AnswerContext:
     """ADB hybrid search で回答用 context を構築する。
+
+    trusted_queries は retrieval_queries のうち呼び出し元が作った検索文（#2651）。質問の目的の照合
+    （LLM の言い換えの逸脱を外す）で外さない。
 
     page_ranges は検索を絞る文書の頁の範囲（{document_id, page_start, page_end} の列。業務ガイドの手順の参照。
     #2395）。空なら絞らない。絞り込みは注入された検索実装が行う。
@@ -820,7 +824,10 @@ def build_adb_hybrid_answer_context(
     # SDK・評価からの直接呼出では未指定。回答入口と CRAG の各回は読込済みの結果を渡す。
     runtime = runtime_knowledge or build_runtime_knowledge_context(question, settings.output_dir, settings.runtime_knowledge_path)
     grounded = " ".join(label for term in runtime.matched_terms for label in term.labels())
-    queries, _ = filter_queries(question, _retrieval_queries(question, retrieval_queries), grounded_text=grounded)
+    candidate_queries = _retrieval_queries(question, retrieval_queries)
+    queries, rejected = filter_queries(question, candidate_queries, grounded_text=grounded)
+    if trusted_queries:
+        queries, _ = _keep_trusted_queries(candidate_queries, queries, rejected, trusted_queries)
     if getattr(settings, "original_query_only", False):
         # 拡張の寄与を測る比較実験用。原質問は _retrieval_queries が常に先頭へ置く。
         queries = queries[:1]
@@ -3677,6 +3684,28 @@ def answer_question(
     ).answer
 
 
+# 呼び出し元（業務 Agent）が検索文を作った検索の、質問拡張戦略の工程の設定の表示（#2651）。
+CALLER_QUERIES_LABEL = "呼び出し元の検索文（LLM は使いません）"
+
+
+def _keep_trusted_queries(
+    candidates: Sequence[str],
+    accepted: Sequence[str],
+    rejected: Sequence[dict[str, str]],
+    trusted: Sequence[str],
+) -> tuple[tuple[str, ...], tuple[dict[str, str], ...]]:
+    """質問の目的の照合で外した検索文のうち、呼び出し元が作ったものを候補の順のまま戻す（#2651）。
+
+    照合は RAG の LLM が作った言い換えの逸脱を外すためのもので、呼び出し元が明示した検索文には当てない。
+    """
+    trusted_keys = {_dedupe_query_key(query) for query in trusted}
+    kept = {_dedupe_query_key(query) for query in accepted} | trusted_keys
+    return (
+        tuple(query for query in candidates if _dedupe_query_key(query) in kept),
+        tuple(item for item in rejected if _dedupe_query_key(item.get("query", "")) not in trusted_keys),
+    )
+
+
 @_record_answer_execution
 def answer_question_result(
     question: str,
@@ -3695,6 +3724,7 @@ def answer_question_result(
     generate_answer: bool = True,
     scope: tuple[str, Sequence[str]] | None = None,
     guide_plan: GuidePlan | None = None,
+    caller_queries: Sequence[str] | None = None,
 ) -> AnswerQuestionResult:
     """検索・LLM の結果と実行記録を返す。
 
@@ -3709,10 +3739,25 @@ def answer_question_result(
     空質問は ValueError、処理失敗は中断記録付きの AnswerExecutionError を送出する。
     ADB の準備不足や空検索は
     未実行工程を明示した結果を返し、回答 LLM を呼ばない。記録は呼び出しごとに分離する。
+
+    ``caller_queries`` は呼び出し元（業務 Agent）が作った検索文（#2651）。渡すと検索文は ``question`` と
+    これだけになり、質問に応じた推論の LLM（検索戦略の判定・質問拡張・条の目録の選択・画面目録の連携）を
+    呼ばない。``generate_answer=False`` とだけ組み合わせる。規則による質問の理解・用語の別名の検索文・
+    hybrid search・rerank・親子と前後の文脈は通常の検索と同じに行う。
     """
     normalized_question = extract_original_question(question)
     if not normalized_question:
         raise ValueError("質問を入力してください。")
+    caller_planned = caller_queries is not None
+    if caller_planned and generate_answer:
+        raise ValueError("呼び出し元の検索文（caller_queries）は回答を作らない検索（generate_answer=False）だけに使います。")
+    trusted_queries: tuple[str, ...] = ()
+    if caller_planned:
+        trusted_queries = _dedupe_queries(
+            tuple(query.strip() for query in caller_queries or () if query.strip() and _dedupe_query_key(query) != _dedupe_query_key(normalized_question))
+        )
+        # 質問に応じて LLM を呼ぶ検索の補助は、設定に関わらずこの経路では使わない。
+        settings = replace(settings, article_catalog_enabled=False, screen_linking_enabled=False)
     # 章節の拡張（#1436）の時間の上限は、回答の開始から数える。
     answer_started_at = monotonic()
 
@@ -3721,6 +3766,8 @@ def answer_question_result(
     selected_retrieval_scope = normalize_retrieval_scope(retrieval_scope)
     selected_classification_filter = classification_filter or classification_filter_from_values()
     query_strategy_value = SIMPLE_RETRIEVAL_LABEL if _legacy_crag_query_strategy(query_strategy) else query_strategy
+    if caller_planned:
+        query_strategy_value = SIMPLE_RETRIEVAL_STRATEGY
     if _legacy_crag_query_strategy(query_strategy):
         # flow を分ける前の呼び出し側は strategy で CRAG を指定する。SDK の既定 flow は standard なので、
         # flow の値にかかわらず旧指定を CRAG として扱う。
@@ -3837,30 +3884,39 @@ def answer_question_result(
         inquiry_conditions=inquiry_conditions,
     )
     with _execution_step("質問拡張戦略", "原質問の言い回しでは届きにくい資料の表現を補う検索文を作ります。") as step:
-        step.field("設定", query_strategy_label(query_strategy_id(query_strategy_value)))
-        try:
-            expansion = build_query_expansion(
-                normalized_question,
-                query_strategy_value,
-                settings,
-                answer_llm_provider=answer_llm_provider,
+        if caller_planned:
+            # 呼び出し元が検索文を作った（#2651）。LLM で言い換えを足さない（先読みも始めていない）。
+            expansion = replace(base_expansion, generated_queries=trusted_queries)
+            step.field("設定", CALLER_QUERIES_LABEL)
+            if trusted_queries:
+                step.add("呼び出し元の検索文:", *numbered([_display_query(query) for query in trusted_queries], limit=8))
+        else:
+            step.field("設定", query_strategy_label(query_strategy_id(query_strategy_value)))
+            try:
+                expansion = build_query_expansion(
+                    normalized_question,
+                    query_strategy_value,
+                    settings,
+                    answer_llm_provider=answer_llm_provider,
+                )
+            finally:
+                prefetch_note = _wait_original_query_prefetch(prefetch)
+            if prefetch_note:
+                step.add(prefetch_note)
+            step.add(
+                *_query_expansion_details(
+                    expansion, original_query_weighting=bool(getattr(settings, "original_query_weighting_enabled", True))
+                )
             )
-        finally:
-            prefetch_note = _wait_original_query_prefetch(prefetch)
-        if prefetch_note:
-            step.add(prefetch_note)
-        step.add(
-            *_query_expansion_details(expansion, original_query_weighting=bool(getattr(settings, "original_query_weighting_enabled", True)))
-        )
-        # 言い換えた検索文そのもの（処理の経過の段を開いて見る。#2341）。最終の一覧は次の工程が示す。
-        if added_queries := [*expansion.generated_queries, *expansion.provision_queries]:
-            step.add("言い換えた検索文:", *numbered([_display_query(query) for query in added_queries], limit=8))
-        if expansion.rejected_queries:
-            step.field("使わなかった検索文", f"{len(expansion.rejected_queries)} 本（質問の目的から外れる）")
-        if query_strategy_id(query_strategy_value) != SIMPLE_RETRIEVAL_STRATEGY and (
-            note := llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY, answer_llm_provider)
-        ):
-            step.add(note)
+            # 言い換えた検索文そのもの（処理の経過の段を開いて見る。#2341）。最終の一覧は次の工程が示す。
+            if added_queries := [*expansion.generated_queries, *expansion.provision_queries]:
+                step.add("言い換えた検索文:", *numbered([_display_query(query) for query in added_queries], limit=8))
+            if expansion.rejected_queries:
+                step.field("使わなかった検索文", f"{len(expansion.rejected_queries)} 本（質問の目的から外れる）")
+            if query_strategy_id(query_strategy_value) != SIMPLE_RETRIEVAL_STRATEGY and (
+                note := llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY, answer_llm_provider)
+            ):
+                step.add(note)
 
     with _execution_step("検索文と検索語の確定", "意味の近さで探す検索文と、全文検索に使うキーワードを確定します。") as step:
         keyword_trace: dict[str, Any] = {}
@@ -3873,14 +3929,16 @@ def answer_question_result(
         # 用語・同義語に一致したら、一致した用語と別名だけの検索文を足す（#2163）。原質問の後ろに足しただけの
         # 検索文（用語・ルールの拡張）は長い質問に別名が埋もれ、規定の用語で書かれた根拠に当たりにくい。
         term_query = matched_term_query(runtime_knowledge)
-        retrieval_queries = inquiry_retrieval_queries(
+        candidate_queries = inquiry_retrieval_queries(
             normalized_question,
             runtime_knowledge.expanded_question,
             _dedupe_queries((*expansion.retrieval_queries, *lexical_queries, *((term_query,) if term_query else ()))),
             inquiry_conditions,
         )
         grounded = " ".join(label for term in runtime_knowledge.matched_terms for label in term.labels())
-        retrieval_queries, rejected = filter_queries(normalized_question, retrieval_queries, grounded_text=grounded)
+        retrieval_queries, rejected = filter_queries(normalized_question, candidate_queries, grounded_text=grounded)
+        if trusted_queries:
+            retrieval_queries, rejected = _keep_trusted_queries(candidate_queries, retrieval_queries, rejected, trusted_queries)
         keyword_trace["combined_rejections"] = list(rejected)
         if getattr(settings, "original_query_only", False):
             # 比較実験用。検索直前にも同じ絞り込みがあるが、ここで適用しないと記録が実際の検索と食い違う。
@@ -3897,7 +3955,7 @@ def answer_question_result(
         if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
             sources.setdefault(_dedupe_query_key(runtime_knowledge.expanded_question), "用語・ルール")
         for query in expansion.generated_queries:
-            sources.setdefault(_dedupe_query_key(query), "質問拡張")
+            sources.setdefault(_dedupe_query_key(query), "呼び出し元" if caller_planned else "質問拡張")
         for query in lexical_queries:
             sources.setdefault(_dedupe_query_key(query), "語彙の補助")
         if term_query:
@@ -3940,6 +3998,7 @@ def answer_question_result(
             inquiry_conditions=inquiry_conditions,
             retrieval_scope=selected_retrieval_scope,
             classification_filter=selected_classification_filter,
+            trusted_queries=trusted_queries,
         )
 
     with _execution_step("回答生成フロー", "根拠を集めて確かめ、根拠に基づく回答を作ります。") as flow_step:
@@ -4447,10 +4506,12 @@ def _retrieve_without_answer(
     inquiry_conditions: InquiryConditionParse,
     retrieval_scope: str,
     classification_filter: ClassificationFilter,
+    trusted_queries: Sequence[str] = (),
 ) -> AnswerQuestionResult:
     """回答の生成をせずに文書検索だけを行う（``answer_question_result(generate_answer=False)``）。
 
     CRAG（検索結果の評価と補正検索）は回答のための工程なので使わない。検索できないときは理由を本文に入れて返す。
+    ``trusted_queries`` は呼び出し元が作った検索文（#2651。質問の目的の照合で外さない）。
     """
     records: Sequence[AnswerRecord] = ()
     evidence_tree: Sequence[ContextParentEvidence] = ()
@@ -4471,6 +4532,7 @@ def _retrieve_without_answer(
                 classification_filter=classification_filter,
                 runtime_knowledge=runtime_knowledge,
                 vector_only_queries=expansion.vector_only_queries,
+                trusted_queries=trusted_queries,
             )
         except AdbHybridSearchUnavailable as exc:
             step.status = "中止"

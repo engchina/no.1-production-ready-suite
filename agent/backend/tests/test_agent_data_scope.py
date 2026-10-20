@@ -41,9 +41,14 @@ AGENT_ID = "test1378-agent"
 USER_UUID = "13781378-2222-3333-4444-555555555555"
 
 
+# Control Plane が決定的に付ける引数（利用者の元の質問。#2261。根拠の取得の検索文を作る主体と
+# 追跡 ID。#2651）。
+_RUNTIME_ARGUMENTS = frozenset({"original_question", "planning", "request_id"})
+
+
 def _scope_arguments(call: dict[str, Any]) -> dict[str, Any]:
-    """範囲の確認に関係する引数（Control Plane が付ける利用者の元の質問は除く。#2261）。"""
-    return {key: value for key, value in call["arguments"].items() if key != "original_question"}
+    """範囲の確認に関係する引数（Control Plane が付ける引数は除く）。"""
+    return {key: value for key, value in call["arguments"].items() if key not in _RUNTIME_ARGUMENTS}
 
 
 def _scope(*ids: str, default: str = "") -> AgentDataScope:
