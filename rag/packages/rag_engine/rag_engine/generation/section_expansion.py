@@ -6,8 +6,9 @@
 
 広げる順は、当たった chunk → 所有の章節（leaf）→ 親の章節 → … → 最上位の章節 → 文書全体（根の章節）。
 
-- 1 段上げる前に、既存の CRAG の十分性の判定（``grade``）で足りるかを確かめ、足りれば止める。最初の段の前は、CRAG の
-  最後の判定を使う（評価器の呼び出しを増やさない）。足りるは「十分と判定され、内容の観点（``CONTENT_ASPECTS``）に
+- 最初の CRAG の判定が十分でも、最低 1 段（所有の章節）を読んでから、既存の CRAG の十分性の判定（``grade``）で
+  足りるかを確かめ、足りれば止める。所有の章節がすでに全量文脈にあれば、再判定せず最後の判定を使う。
+  足りるは「十分と判定され、内容の観点（``CONTENT_ASPECTS``）に
   確かめられていないものが無い」。適用の観点（applicability）は利用者の状況の確認で、章節を読んでも埋まらないため
   広げる理由にしない。
 - 列挙・網羅の問（#1503。``retrieval.enumeration``）は、件数・章の範囲の欠けを評価器の項目ごとの根拠から数え、
@@ -574,12 +575,9 @@ def expand_sections(
     if not getattr(settings, "section_expansion_enabled", True) or limits.max_levels <= 0:
         trace["enabled"] = False
         return finish(STOP_DISABLED)
-    # 列挙・網羅の問で、足りると判定する前に読む範囲（#1503。None は範囲の規則なし）。
-    need = minimum_scope(question)
-    if need is not None:
-        trace["minimum_scope"] = need
-    if need is None and is_enough(last_attempt):
-        return finish(STOP_SUFFICIENT)
+    # 最低でも所有の章節を読む。列挙・網羅の問がさらに広い範囲を求めればそちらを優先する。
+    need = minimum_scope(question) or "leaf"
+    trace["minimum_scope"] = need
     seeds = seed_chunk_ids(context, last_attempt.relevant_chunk_ids if last_attempt is not None else ())
     chains: list[_Chain] = []
     owners: set[tuple[str, str, str]] = set()
@@ -612,8 +610,6 @@ def expand_sections(
 
     def scope_reached() -> bool:
         """読む範囲まで読んだか（leaf: いずれかの起点の所有の章節、document: 起点の列の最上位の章節）。"""
-        if need is None:
-            return True
         if need == "leaf":
             return any(chain.position >= 0 for chain in chains)
         return any(chain.position >= len(chain.sections) - 1 for chain in chains)
@@ -838,7 +834,7 @@ def expand_sections(
             # 判定を飛ばした段で足した根拠がまだ判定・生成に渡っていない（#1526）。評価し直しの省略（#1528）は、
             # 下の判定の前で扱う（足した根拠が判定に渡っていないときだけ）。
             unjudged = current is not result.context
-            if need is not None and scope_reached() and is_enough(latest) and not unjudged:
+            if scope_reached() and is_enough(latest) and not unjudged:
                 # 読む範囲の章節はすでに文脈にあった（足す根拠が無い）。最後の判定のまま止める。
                 return finish(STOP_SUFFICIENT)
             if not (unjudged and scope_reached()):

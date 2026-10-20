@@ -236,24 +236,48 @@ def _child_ids(context: AnswerContext) -> list[str]:
     return [child.record.chunk_uid for parent in context.evidence_tree for child in parent.children]
 
 
-def test_does_not_expand_when_crag_judged_enough():
-    stub, grader = SectionStub(), Grader()
+def test_reads_first_section_even_when_crag_judged_enough():
+    stub, grader = SectionStub(), Grader(needs=set(_members("s3-1")))
     context = _seed_context("c31a")
 
     result = _expand(context, _settings(), grader, stub, last=_attempt(sufficient=True))
 
     assert result.stop_reason == sections.STOP_SUFFICIENT
-    assert result.context is context and not result.applied
-    # 足りれば章節を読まず、評価器も呼ばない。
-    assert stub.outline_calls == [] and stub.read_calls == [] and grader.calls == []
+    assert result.applied and result.levels == 1
+    assert result.trace["minimum_scope"] == "leaf"
+    assert stub.read_calls == ["s3-1"] and grader.calls == [1]
+    assert set(_child_ids(result.context)) == set(_members("s3-1"))
 
 
-def test_applicability_alone_does_not_trigger_expansion():
+def test_initial_sufficient_grade_does_not_skip_a_missing_followup_in_the_parent():
+    stub, grader = SectionStub(), Grader(needs=set(_members("s3")))
+
+    result = _expand(_seed_context("c31a"), _settings(), grader, stub, last=_attempt(sufficient=True))
+
+    assert result.stop_reason == sections.STOP_SUFFICIENT
+    assert stub.read_calls == ["s3-1", "s3"] and grader.calls == [1, 2]
+    assert set(_child_ids(result.context)) == set(_members("s3"))
+
+
+def test_first_section_already_in_context_does_not_climb_to_parent_when_enough():
     stub, grader = SectionStub(), Grader()
+    context = _seed_context(*_members("s3-1"))
+
+    result = _expand(context, _settings(), grader, stub, last=_attempt(sufficient=True))
+
+    assert result.stop_reason == sections.STOP_SUFFICIENT and result.levels == 1
+    assert result.context is context and not result.applied
+    assert stub.read_calls == ["s3-1"] and grader.calls == []
+    assert result.trace["levels"][0]["sections"][0]["read"] == "in_context"
+
+
+def test_applicability_alone_does_not_expand_beyond_the_first_section():
+    stub, grader = SectionStub(), Grader(missing=("applicability",))
 
     result = _expand(_seed_context("c31a"), _settings(), grader, stub, last=_attempt(sufficient=True, missing=("applicability",)))
 
-    assert result.stop_reason == sections.STOP_SUFFICIENT and stub.read_calls == []
+    assert result.stop_reason == sections.STOP_SUFFICIENT
+    assert stub.read_calls == ["s3-1"] and grader.calls == [1]
 
 
 def test_climbs_leaf_then_parent_and_stops_when_enough():

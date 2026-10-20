@@ -413,6 +413,8 @@ test("章節で広げる根拠は既定 on で、選んだ上限だけを保存�
   await expect(toggle).toHaveAccessibleDescription(
     /読めなかった章節を「回答に未反映の関連章節」に示し/,
   );
+  await expect(toggle).toHaveAccessibleDescription(/根拠が足りると判定した場合でも、最低 1 段/);
+  await expect(section).toContainText("1 段目は当たった根拠が属する章節全体です。");
   await expect(section).toContainText("回答のモデルの入力の上限");
   await expect(section).toContainText("一致しないものは使いません");
   const levels = section.getByRole("combobox", { name: "広げる段の上限" });

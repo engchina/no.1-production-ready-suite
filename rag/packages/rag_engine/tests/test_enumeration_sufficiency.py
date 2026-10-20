@@ -320,9 +320,11 @@ def test_counted_enumeration_relies_on_the_counted_aspect():
     )
     assert stub.read_calls == ["s3-1", "s3"] and short.stop_reason == sections.STOP_SUFFICIENT
 
-    stub2, grader2 = SectionStub(), Grader()
+    stub2, grader2 = SectionStub(), Grader(needs=set(_members("s3-1")))
     enough = _expand(_seed_context("c31a"), _settings(), grader2, stub2, last=_attempt(sufficient=True), question=BUSINESS_DAY_FIVE)
-    assert enough.stop_reason == sections.STOP_SUFFICIENT and stub2.read_calls == [] and grader2.calls == []
+    # 最初の判定で件数が足りても、最低 1 段は読んでから止める。
+    assert enough.stop_reason == sections.STOP_SUFFICIENT
+    assert stub2.read_calls == ["s3-1"] and grader2.calls == [1]
 
 
 class TitledSectionStub(SectionStub):

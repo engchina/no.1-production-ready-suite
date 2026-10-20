@@ -181,6 +181,51 @@ async def test_max_levels_limit_makes_the_answer_conditional(
     assert "「manual.pdf」の全体" in outcome.answer
 
 
+async def test_initial_sufficient_grade_still_adds_section_text_to_generation(
+    section_map: SectionMapStub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import rag_engine.adapters.oci as engine_oci
+    from rag_engine.generation import answering
+    from rag_engine.generation.answer_models import CragRetrievalAttempt
+    from rag_engine.models.llm import GroundedDraft
+
+    prompts: list[str] = []
+
+    def enough(
+        attempt: int,
+        question: str,
+        query: str,
+        queries: Any,
+        context: Any,
+        settings: Any,
+        **options: Any,
+    ) -> CragRetrievalAttempt:
+        return CragRetrievalAttempt(
+            attempt=attempt,
+            query=query,
+            retrieval_queries=tuple(queries),
+            sufficient=True,
+            relevant_chunk_ids=tuple(
+                child.record.chunk_uid
+                for parent in context.evidence_tree
+                for child in parent.children
+            ),
+        )
+
+    def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+        if schema is GroundedDraft:
+            prompts.append(prompt)
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    monkeypatch.setattr(answering, "_grade_crag_retrieval", enough)
+    monkeypatch.setattr(engine_oci, "parse_text_response", llm)
+    outcome = await _engine().run(SearchRequest(query="受注の登録方法は？"))
+
+    assert section_map.reads and section_map.reads[0][0] == "s1"
+    assert outcome.diagnostics["section_expansion"]["levels_read"] == 1
+    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts)
+
+
 @pytest.mark.usefixtures("stub_llm")
 async def test_disabled_profile_does_not_read_sections(section_map: SectionMapStub) -> None:
     outcome = await _engine(rag_section_expansion_enabled=False).run(
