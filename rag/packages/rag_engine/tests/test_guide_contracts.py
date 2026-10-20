@@ -191,3 +191,42 @@ def test_missing_following_step_does_not_invalidate_supported_entry_step():
     )
     assert result[0]["status"] == "explained"
     assert result[1]["status"] == "unused"
+
+
+@pytest.mark.parametrize("repair", [True, False])
+def test_invalid_answer_proof_uses_one_bounded_audit_retry(repair):
+    from dataclasses import replace
+
+    from test_grounded_answer import FakeModel, draft, item
+    from test_grounded_answer import audit as make_audit
+    from test_guide_step_fulfillment import GUIDE, STEP_A, STEP_B, _ab_context, _audits, _ids, _knowledge, _run
+
+    text = "設定 A の値を入力してください。"
+    ctx = _ab_context()
+    knowledge = replace(
+        _knowledge(GUIDE), guide_step_contracts=(contract("s1", "入力方法"), contract("s2", "確定操作", dependencies=["s1"]))
+    )
+    labels = _ids(ctx, knowledge)
+    base = make_audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")])
+    bad = {
+        **base,
+        "guide_requirement_reviews": [
+            {**review("s1:0", [0]), "answer_quote": STEP_A},
+            {**review("s2:0", [1]), "answer_quote": STEP_B},
+        ],
+    }
+    good = {
+        **base,
+        "guide_requirement_reviews": [
+            {**review("s1:0", [0]), "answer_quote": text},
+            {**review("s2:0", [1]), "answer_quote": STEP_B},
+        ],
+    }
+    model = FakeModel([draft(item(labels[STEP_A], text, STEP_A), item(labels[STEP_B], STEP_B, STEP_B))], [bad, good if repair else bad])
+    result = _run(model, ctx, knowledge).response
+    audits = _audits(model)
+    assert audits[1]["validation_error"]["invalid_answer_quotes"] == ["s1:0"]
+    first_round = result.generation_trace["rounds"][0]
+    assert first_round["audit_calls"] == 2
+    first_step = next(s for s in first_round["guide_steps"] if s["step_id"] == "s1")
+    assert (first_step["status"] == "explained") is repair

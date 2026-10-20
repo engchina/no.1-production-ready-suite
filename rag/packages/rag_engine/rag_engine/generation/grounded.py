@@ -4127,12 +4127,27 @@ def run_round(
             expected_requirements = {entry["id"] for contract in guide_step_contracts for entry in contract["requirements"]}
             returned_requirements = [entry.requirement_id for entry in audit.guide_requirement_reviews]
             missing_requirements = sorted(key for key in expected_requirements if returned_requirements.count(key) != 1)
-            if _audit_is_empty(audit) or missing_requirements:
-                if missing_requirements:
+            invalid_answer_quotes = sorted(
+                {
+                    entry.requirement_id
+                    for entry in audit.guide_requirement_reviews
+                    if entry.requirement_id in expected_requirements
+                    and entry.status == "addressed"
+                    and not (
+                        entry.item_indexes
+                        and all(0 <= index < len(checked) for index in entry.item_indexes)
+                        and entry.answer_quote.strip()
+                        and quote_in_text(entry.answer_quote, "\n".join(checked[index].item.text for index in entry.item_indexes))
+                    )
+                }
+            )
+            if _audit_is_empty(audit) or missing_requirements or invalid_answer_quotes:
+                if missing_requirements or invalid_answer_quotes:
                     inputs["validation_error"] = {
                         "field": "guide_requirement_reviews",
                         "required_once": missing_requirements,
-                        "message": "次の要件 id の判定が未出力または重複しています。全要件の判定を含む監査を返してください。",
+                        "invalid_answer_quotes": invalid_answer_quotes,
+                        "message": "required_once の要件 id は1回ずつ判定してください。invalid_answer_quotes の判定は、item_indexes が指す回答の text から answer_quote をそのまま写してください。根拠の原文や quote を代わりに写さず、回答に必要な説明がなければ partial または missing としてください。全要件の判定を含む監査を返してください。",
                     }
                     audit_prompt = json.dumps(fold_model_view(inputs), ensure_ascii=False)
                 # reviews も request_reviews も空の応答は監査として使えない。そのまま使うと addressed が空になり、
