@@ -6,6 +6,7 @@ import asyncio
 import contextvars
 import functools
 import heapq
+import json
 import ssl
 import threading
 import time
@@ -104,6 +105,16 @@ class OpenAiStatusError(Exception):
         self.body = body
 
 
+class OpenAiStreamError(Exception):
+    """openai SDK の ``APIError``（stream の error event）と同じ属性。HTTP status を持たない。"""
+
+    def __init__(self, message: str, body: object = None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.body = body
+        self.code = body.get("code") if isinstance(body, dict) else None
+
+
 class EnterpriseAiIncompleteResponseError(ValueError):
     pass
 
@@ -183,6 +194,7 @@ def calls_of(service: Service, item: object) -> int:
     [
         (StubError(429, "Too many requests"), ErrorKind.RATE_LIMITED),
         (StubError(429, '{"error": {"code": "insufficient_quota"}}'), ErrorKind.QUOTA_EXHAUSTED),
+        (StubError(429, "token quota per hour"), ErrorKind.QUOTA_EXHAUSTED),
         (OciServiceError(429, "TooManyRequests"), ErrorKind.RATE_LIMITED),
         (StubError(500, "internal"), ErrorKind.SERVER_ERROR),
         (StubError(502), ErrorKind.UNAVAILABLE),
@@ -241,6 +253,61 @@ def test_classify_error_finds_tls_and_status_in_cause_chain() -> None:
     except RuntimeError as outer:
         info = classify_error(outer)
     assert (info.kind, info.status, info.retry_after) == (ErrorKind.UNAVAILABLE, 503, 7.0)
+
+
+def _nested(inner: dict[str, object]) -> OpenAiStreamError:
+    """呼び先のエラーを JSON の文字列にして ``body.message`` に入れた、status の無い例外。"""
+    text = json.dumps({"error": inner})
+    return OpenAiStreamError(text, body={"code": None, "message": text})
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        # 割り当て（token の期間の上限）の使い切り（#2667）。
+        (
+            _nested({"code": 429, "status": "resource-exhausted", "message": "token quota"}),
+            ErrorKind.QUOTA_EXHAUSTED,
+        ),
+        (_nested({"status": "RESOURCE_EXHAUSTED", "message": "x"}), ErrorKind.RATE_LIMITED),
+        (OpenAiStreamError("x", body={"code": "rate_limit_exceeded"}), ErrorKind.RATE_LIMITED),
+        (OpenAiStreamError("x", body={"code": "insufficient_quota"}), ErrorKind.QUOTA_EXHAUSTED),
+        (_nested({"code": "401", "message": "x"}), ErrorKind.AUTHENTICATION),
+        (_nested({"status": "PERMISSION_DENIED"}), ErrorKind.PERMISSION),
+        (OpenAiStreamError("x", body={"code": "model_not_found"}), ErrorKind.NOT_FOUND),
+        (_nested({"status": "INVALID_ARGUMENT", "message": "x"}), ErrorKind.BAD_REQUEST),
+        (
+            OpenAiStreamError("x", body={"type": "invalid_request_error", "code": None}),
+            ErrorKind.BAD_REQUEST,
+        ),
+        (_nested({"status": "UNAVAILABLE"}), ErrorKind.UNAVAILABLE),
+        (_nested({"status": "DEADLINE_EXCEEDED"}), ErrorKind.TIMEOUT),
+        # 外側が汎用の誤りでも、入れ子の内側（呼び先の元のエラー）の code を使う。
+        (
+            OpenAiStreamError(
+                "x",
+                body={
+                    "code": "server_error",
+                    "message": json.dumps({"error": {"code": 429, "message": "quota"}}),
+                },
+            ),
+            ErrorKind.QUOTA_EXHAUSTED,
+        ),
+        # 分類できる code の無い本文・読めない JSON は分類しない。
+        (OpenAiStreamError("x", body={"code": None, "message": "boom"}), ErrorKind.UNKNOWN),
+        (OpenAiStreamError("x", body={"message": '{"error": '}), ErrorKind.UNKNOWN),
+        # 例外の文（str）の JSON は読まない（出力の検証の失敗の文に入ったモデルの出力など）。
+        (RuntimeError('{"status": "not_found"}'), ErrorKind.UNKNOWN),
+    ],
+    ids=lambda value: value.value if isinstance(value, ErrorKind) else type(value).__name__,
+)
+def test_classify_error_reads_structured_error_without_status(
+    error: BaseException, kind: ErrorKind
+) -> None:
+    info = classify_error(error)
+    assert info.kind is kind
+    # HTTP status は推定なので残さない。
+    assert info.status is None
 
 
 def test_parse_retry_after_seconds_ms_and_http_date() -> None:

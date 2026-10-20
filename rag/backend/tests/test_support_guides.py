@@ -755,6 +755,55 @@ def test_try_draft_refuses_stale_broken_or_archived_drafts(
     assert missing.status_code == 404
 
 
+def test_try_draft_returns_the_ai_api_failure_reason_instead_of_500(
+    fakes: tuple[FakeStore, FakeOracle], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回答の作成で AI の割り当てを使い切ったら、定型の 500 でなく理由・目安・工程を返す（#2667）。
+
+    呼び先の例外は合成の SDK の例外（HTTP status 無し、本文の JSON の文字列に割り当ての超過）。
+    """
+    import json
+
+    import httpx
+    import openai
+    from rag_engine.generation.execution_record import AnswerExecutionError
+
+    text = json.dumps(
+        {"error": {"code": 429, "status": "resource-exhausted", "message": "synthetic quota"}}
+    )
+
+    class QuotaPipeline:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def run(self, *_args: object, **_kwargs: object) -> SearchResponse:
+            cause = openai.APIError(
+                text,
+                httpx.Request("POST", "https://ai.invalid/v1/responses"),
+                body={"code": None, "message": text},
+            )
+            error = AnswerExecutionError(str(cause), "質問")
+            error.execution_steps = (  # type: ignore[attr-defined]
+                {"name": "回答の作成", "status": "エラーで中断"},
+            )
+            raise error from cause
+
+    async def resolved(request: SearchRequest, settings: Any, **_kwargs: Any) -> tuple[Any, ...]:
+        return request, settings, None, None
+
+    monkeypatch.setattr(search_route, "_resolve_query_context", resolved)
+    monkeypatch.setattr(search_route, "RagPipeline", QuotaPipeline)
+    guide_id = client.post(BASE, json={"draft": guide()}).json()["data"]["guide_id"]
+
+    response = client.post(f"{BASE}/{guide_id}/try", json={"query": "権限", "draft_revision": 1})
+
+    assert response.status_code == 503
+    [message] = response.json()["error_messages"]
+    assert "割り当ての使い切り。中断した工程: 回答の作成" in message
+    assert "割り当てが戻るまで時間をおいて再試行" in message
+    assert "synthetic" not in response.text
+
+
 def test_try_draft_requires_the_guide_management_permission(
     fakes: tuple[FakeStore, FakeOracle], monkeypatch: pytest.MonkeyPatch
 ) -> None:

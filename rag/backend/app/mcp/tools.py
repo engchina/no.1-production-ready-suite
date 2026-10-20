@@ -3583,22 +3583,27 @@ async def _run_search(request: SearchRequest, **options: Any) -> SearchResponse:
     """
     try:
         return await search_route._run_search_with_timeout(request, **options)
+    except search_route.AnswerApiFailedHTTPError as exc:
+        # 検索の REST と同じ分類（#2667）を、種類つきのツールのエラーにする。
+        failure = exc.failure
+        cause: BaseException = exc
     except HTTPException:
         raise
     except Exception as exc:
-        failure = describe_answer_api_failure(exc)
-        if failure is None:
+        api_failure = describe_answer_api_failure(exc)
+        if api_failure is None:
             raise
-        logger.warning(
-            "rag_mcp_answer_api_failed",
-            extra={"error_code": ANSWER_API_FAILED_ERROR_CODE, **failure.details()},
-        )
-        raise McpToolError(
-            ANSWER_API_FAILED_ERROR_CODE,
-            failure.message,
-            status=failure.status,
-            details=failure.details(),
-        ) from exc
+        failure, cause = api_failure, exc
+    logger.warning(
+        "rag_mcp_answer_api_failed",
+        extra={"error_code": ANSWER_API_FAILED_ERROR_CODE, **failure.details()},
+    )
+    raise McpToolError(
+        ANSWER_API_FAILED_ERROR_CODE,
+        failure.message,
+        status=failure.status,
+        details=failure.details(),
+    ) from cause
 
 
 def _is_profile_not_found(exc: HTTPException) -> bool:

@@ -249,3 +249,135 @@ def test_non_api_failure_and_incomplete_response_are_not_api_failures() -> None:
     """AI の API の例外が原因に無い失敗と未完了の応答は分類しない（別の返し方。#2475）。"""
     assert describe_answer_api_failure(_wrapped(RuntimeError("x"))) is None
     assert describe_answer_api_failure(_answer_failure()) is None
+
+
+# ---- 割り当ての使い切り（HTTP status の無い SDK の例外。#2667） ---------------------------
+
+
+def _stream_api_failure(provider_error: dict[str, object]) -> AnswerExecutionError:
+    """stream の error event の SDK の `APIError`（HTTP status 無し）を実行記録で包んだもの。
+
+    呼び先のエラーを JSON の文字列にして `body.message` に入れる（合成の値）。
+    """
+    import httpx
+    import openai
+
+    text = json.dumps({"error": provider_error})
+    cause = openai.APIError(
+        text,
+        httpx.Request("POST", "https://ai.invalid/v1/responses"),
+        body={"code": None, "message": text},
+    )
+    error = AnswerExecutionError(str(cause), "質問")
+    error.execution_steps = (  # type: ignore[attr-defined]
+        {"name": "根拠の評価", "status": "complete"},
+        {"name": "回答の作成", "status": "エラーで中断"},
+    )
+    error.__cause__ = cause
+    return error
+
+
+_QUOTA_ERROR: dict[str, object] = {
+    "code": 429,
+    "status": "resource-exhausted",
+    "message": "synthetic token quota per hour exceeded",
+}
+
+
+def test_quota_exhausted_without_status_is_classified_with_stage_and_advice() -> None:
+    """status の無い SDK の例外でも、本文の構造化したエラーから割り当ての使い切りに分ける。"""
+    failure = describe_answer_api_failure(_stream_api_failure(_QUOTA_ERROR))
+
+    assert failure is not None
+    assert (failure.kind, failure.status, failure.provider_status) == ("quota_exhausted", 503, None)
+    assert failure.details() == {
+        "kind": "quota_exhausted",
+        "error_type": "APIError",
+        "stage": "回答の作成",
+    }
+    assert "割り当ての使い切り。中断した工程: 回答の作成" in failure.message
+    assert "割り当てが戻るまで時間をおいて再試行" in failure.message
+    # 呼び先の応答の本文は出さない。
+    assert "synthetic" not in failure.message
+
+    limited = describe_answer_api_failure(
+        _stream_api_failure({"status": "RESOURCE_EXHAUSTED", "message": "synthetic"})
+    )
+    assert limited is not None
+    assert (limited.kind, limited.status) == ("rate_limited", 503)
+    assert "時間をおいて再試行" in limited.message
+
+    unknown = describe_answer_api_failure(_stream_api_failure({"message": "synthetic"}))
+    assert unknown is not None
+    assert (unknown.kind, unknown.status) == ("unknown", 502)
+
+
+class _QuotaPipeline:
+    def __init__(self, **_kwargs: object) -> None:
+        pass
+
+    async def run(self, *_args: object, **_kwargs: object) -> SearchResponse:
+        raise _stream_api_failure(_QUOTA_ERROR)
+
+
+def test_rest_search_returns_the_classified_api_failure_instead_of_500(
+    monkeypatch: MonkeyPatch, caplog: LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(search_route, "RagPipeline", _QuotaPipeline)
+
+    with caplog.at_level(logging.WARNING, logger=search_route.__name__):
+        response = client.post("/api/search", json={"query": "条件の多い質問"})
+
+    assert response.status_code == 503
+    [message] = response.json()["error_messages"]
+    assert "割り当ての使い切り。中断した工程: 回答の作成" in message
+    assert "synthetic" not in response.text
+    record = next(r for r in caplog.records if r.getMessage() == "rag_search_answer_api_failed")
+    assert (record.__dict__["kind"], record.__dict__["stage"]) == ("quota_exhausted", "回答の作成")
+
+
+def test_rest_search_passes_the_provider_retry_after(monkeypatch: MonkeyPatch) -> None:
+    import httpx
+    import openai
+
+    class LimitedPipeline:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def run(self, *_args: object, **_kwargs: object) -> SearchResponse:
+            request = httpx.Request("POST", "https://ai.invalid/v1/responses")
+            cause = openai.RateLimitError(
+                "synthetic",
+                response=httpx.Response(429, request=request, headers={"retry-after": "30"}),
+                body={"code": "rate_limit_exceeded"},
+            )
+            raise _wrapped(cause)
+
+    monkeypatch.setattr(search_route, "RagPipeline", LimitedPipeline)
+
+    response = client.post("/api/search", json={"query": "条件の多い質問"})
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "30"
+    assert "30 秒ほど待ってから再試行" in response.json()["error_messages"][0]
+
+
+async def test_mcp_search_turns_the_classified_failure_into_a_tool_error(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from pr_backend_core.mcp import McpToolError
+
+    from app.mcp import tools as mcp_tools
+    from app.schemas.search import SearchRequest
+
+    monkeypatch.setattr(search_route, "RagPipeline", _QuotaPipeline)
+
+    with pytest.raises(McpToolError) as caught:
+        await mcp_tools._run_search(SearchRequest(query="条件の多い質問"))
+
+    assert (caught.value.code, caught.value.status) == ("RAG_ANSWER_AI_API_FAILED", 503)
+    assert caught.value.details == {
+        "kind": "quota_exhausted",
+        "error_type": "APIError",
+        "stage": "回答の作成",
+    }

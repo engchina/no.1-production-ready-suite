@@ -6,8 +6,10 @@
   `status=incomplete`）で終わった失敗は、理由ごとの文（出力の上限・安全の判定）と直し方を返す。
   送り直し（上限を広げる・推論の量を下げる）は adapter が済ませている。
 - それ以外の予期しない例外は、定型文（``fallback``）のまま返す（内部の文を利用者に出さない）。
-- MCP のツール（`rag_search` など）では、AI の API の失敗を種類つきのツールのエラーにする
-  （``describe_answer_api_failure``。#2475）。呼び出し元が検索の失敗を根拠の不足と区別するため。
+- AI の API の失敗（``describe_answer_api_failure``）は、種類・再試行の目安・中断した工程の
+  文にする。MCP のツール（`rag_search` など）は種類つきのツールのエラー（#2475）、REST の
+  検索・業務ガイドの下書きの試答は種類ごとの HTTP status（#2667）で返す。呼び出し元・利用者が、
+  検索の失敗を根拠の不足と区別し、待つか設定を確かめるかを判断できるようにするため。
 
 どちらも「詳細」（messaging.md §10.3）に出す項目（エラーの種類・失敗した工程・未完了の理由・
 上限と token）を持つ。trace_id は呼び出し側が持つので、ここでは扱わない。
@@ -15,6 +17,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -166,14 +169,22 @@ class AnswerApiFailure:
     provider_code: str | None = None
     # 例外で終わった回答の工程の名前。
     stage: str | None = None
+    # 呼び先が示した待ちの秒数（`Retry-After`。示さなければ None）。
+    retry_after_seconds: int | None = None
 
     def details(self) -> dict[str, Any]:
         """MCP のツールのエラーの `details`（値の無いものは入れない）。"""
         fields: dict[str, Any] = {"kind": self.kind, "error_type": self.error_type}
-        for key in ("provider_status", "provider_code", "stage"):
+        for key in ("provider_status", "provider_code", "stage", "retry_after_seconds"):
             if (value := getattr(self, key)) is not None:
                 fields[key] = value
         return fields
+
+    def headers(self) -> dict[str, str] | None:
+        """REST の応答の header（呼び先が待ちの秒数を示したときだけ `Retry-After`）。"""
+        if self.retry_after_seconds is None:
+            return None
+        return {"Retry-After": str(self.retry_after_seconds)}
 
 
 def describe_answer_api_failure(exc: BaseException) -> AnswerApiFailure | None:
@@ -197,23 +208,38 @@ def describe_answer_api_failure(exc: BaseException) -> AnswerApiFailure | None:
     classified = classify_error(exc)
     kind = classified.kind
     label = KIND_LABELS.get(kind, KIND_LABELS[ErrorKind.UNKNOWN])
-    advice = (
-        "時間をおいて再試行してください。"
-        if kind in _TRANSIENT_KINDS
-        else "続くときは管理者に AI の API の設定を確かめてもらってください。"
+    retry_after = (
+        max(1, math.ceil(classified.retry_after)) if classified.retry_after is not None else None
     )
+    stage = failed_stage(exc)
+    where = f"。中断した工程: {stage}" if stage else ""
     provider_code = getattr(api_error, "code", None)
     return AnswerApiFailure(
         kind=kind.value,
         status=_KIND_STATUS.get(kind, 502),
         message=(
             "回答の作成中に AI の API の呼び出しに失敗したため、検索を終えられませんでした"
-            f"（{label}）。{advice}"
+            f"（{label}{where}）。{_advice(kind, retry_after)}"
         ),
         error_type=type(api_error).__name__,
         provider_status=classified.status,
         provider_code=provider_code
         if isinstance(provider_code, str) and _SAFE_PROVIDER_CODE.match(provider_code)
         else None,
-        stage=failed_stage(exc),
+        stage=stage,
+        retry_after_seconds=retry_after,
     )
+
+
+def _advice(kind: ErrorKind, retry_after: int | None) -> str:
+    """種類ごとの、利用者が次にすること（待つか、設定・割り当てを確かめてもらうか）。"""
+    wait = f"{retry_after} 秒ほど待ってから" if retry_after is not None else "時間をおいて"
+    if kind is ErrorKind.QUOTA_EXHAUSTED:
+        # 割り当て（期間の上限）は、すぐに送り直しても戻らない。
+        return (
+            f"AI の API の割り当てが戻るまで{wait}再試行してください。"
+            "続くときは管理者に割り当てを確かめてもらってください。"
+        )
+    if kind in _TRANSIENT_KINDS:
+        return f"{wait}再試行してください。"
+    return "続くときは管理者に AI の API の設定を確かめてもらってください。"

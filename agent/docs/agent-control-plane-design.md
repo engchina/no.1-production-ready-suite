@@ -941,7 +941,7 @@ SDK の Agent・ツール・予算。利用量は前の分に積む。差し戻�
 ツールが返した理由に「資料・業務データに根拠が無いという意味ではありません」を添える）にする（`tool_grounding.grounding_failure`）。
 検索を終えられなかった回答を、資料を調べた結果の根拠の不足と読ませないため。確認の質問だけの回答・NL2SQL の SQL の生成前の確認で
 止まった Run・承認で止まった Run は対象外。RAG は回答の pipeline の AI の API の失敗を、汎用の内部エラーではなく種類つきの
-5xx（`RAG_ANSWER_AI_API_FAILED`。`details` は種類・例外の型・呼び先の status と error code・工程だけ）で返す。
+5xx（`RAG_ANSWER_AI_API_FAILED`。`details` は種類・例外の型・呼び先の status と error code・工程・呼び先が示した待ちの秒数だけ）で返す（REST の検索・業務ガイドの下書きの試答も同じ分類の status と文。#2667）。
 差し戻しの文と本文の確認の質問は Run で分ける（`tool_grounding.retry_message`）: 確認のツール（`ask_user_confirmation`）を渡した
 Run は「先に資料・業務データのツールで調べ、決まらなければ確認のツールで聞く。本文に確認の質問を書かない」（#1881）、利用者に
 確認しない Run（方針 `assume` と「確認せずに回答」を選んだ Run と、無人の Run〔品質評価・自動実行。利用者に聞けない。#1959〕。#1903）は

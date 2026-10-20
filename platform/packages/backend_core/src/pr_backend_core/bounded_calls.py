@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import email.utils
+import json
 import logging
 import math
 import random as _random
@@ -227,6 +228,55 @@ _CONTEXT_MARKERS = (
 _TRUNCATED_MARKERS = ("max_output_tokens", "max_tokens", "finish_reason=length")
 _TLS_MARKERS = ("certificate_verify_failed", "certificate verify failed", "ssl: certificate")
 
+# HTTP status の無い SDK の例外（stream の中の error event の `APIError` など）が本文の構造化した
+# エラーで示す code（#2667）。gRPC の status の名前と OpenAI 互換の error code を、相当する HTTP
+# status に読み替えて HTTP status と同じ規則で分ける。区切り（`-`・空白）は `_` にそろえて引く。
+_ERROR_CODE_STATUS: Mapping[str, int] = {
+    "resource_exhausted": 429,
+    "rate_limit_exceeded": 429,
+    "rate_limit_error": 429,
+    "rate_limited": 429,
+    "too_many_requests": 429,
+    "toomanyrequests": 429,
+    "insufficient_quota": 429,
+    "quota_exceeded": 429,
+    "unauthenticated": 401,
+    "notauthenticated": 401,
+    "invalid_api_key": 401,
+    "authentication_error": 401,
+    "permission_denied": 403,
+    "permission_error": 403,
+    "forbidden": 403,
+    "notauthorizedornotfound": 404,
+    "not_found": 404,
+    "not_found_error": 404,
+    "model_not_found": 404,
+    "invalid_argument": 400,
+    "invalid_request_error": 400,
+    "invalidparameter": 400,
+    "bad_request": 400,
+    "failed_precondition": 400,
+    "deadline_exceeded": 408,
+    "request_timeout": 408,
+    "payload_too_large": 413,
+    "unimplemented": 501,
+    "internal": 500,
+    "internal_error": 500,
+    "internalservererror": 500,
+    "server_error": 500,
+    "api_error": 500,
+    "unavailable": 503,
+    "service_unavailable": 503,
+    "overloaded": 503,
+    "overloaded_error": 503,
+}
+# 構造化したエラーで code を読む key（小文字）。
+_ERROR_CODE_KEYS = frozenset({"code", "status", "status_code", "http_status", "http_code", "type"})
+# 構造化したエラーをたどる上限（入れ子の深さ・見る値の数・JSON として読む文字列の長さ）。
+_STRUCTURED_MAX_DEPTH = 6
+_STRUCTURED_MAX_NODES = 200
+_STRUCTURED_MAX_TEXT = 20_000
+
 _TIMEOUT_NAMES = ("timeout", "timedout")
 _NETWORK_NAMES = (
     "connecterror",
@@ -335,9 +385,74 @@ def parse_retry_after(
     return None
 
 
+def _json_in(text: str) -> object | None:
+    """文字列の中の JSON（最初の ``{`` / ``[`` から）。読めない・長すぎるときは None。"""
+    if len(text) > _STRUCTURED_MAX_TEXT:
+        return None
+    starts = [index for index in (text.find("{"), text.find("[")) if index >= 0]
+    if not starts:
+        return None
+    try:
+        value, _ = json.JSONDecoder().raw_decode(text, min(starts))
+    except ValueError:
+        return None
+    return value if isinstance(value, Mapping | list) else None
+
+
+def _status_from_code(value: object) -> int | None:
+    """構造化したエラーの code の値（数・数の文字列・名前）を HTTP status にする。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 400 <= value <= 599 else None
+    if not isinstance(value, str):
+        return None
+    name = value.strip().casefold()
+    if name.isdigit():
+        number = int(name)
+        return number if 400 <= number <= 599 else None
+    return _ERROR_CODE_STATUS.get(name.replace("-", "_").replace(" ", "_"))
+
+
+def _structured_status(exc: BaseException) -> int | None:
+    """例外の本文の構造化したエラーが示す HTTP status（#2667）。無ければ None。
+
+    SDK の例外の ``body``（dict・文字列）と ``message`` を読み、値の中の JSON の文字列（エラーの
+    message に入れ子にした呼び先のエラー）もたどる。最も内側（呼び先の元のエラーに近い）の code を
+    使う。例外の文（``str``）は読まない（出力の検証の失敗の文に入ったモデルの出力の JSON を、
+    呼び先のエラーと取り違えない）。
+    """
+    roots = [getattr(exc, "body", None), getattr(exc, "message", None)]
+    pending: list[tuple[object, int]] = [(root, 0) for root in roots if root is not None]
+    found: tuple[int, int] | None = None  # (深さ, status)
+    nodes = 0
+    while pending and nodes < _STRUCTURED_MAX_NODES:
+        value, depth = pending.pop(0)
+        nodes += 1
+        if depth > _STRUCTURED_MAX_DEPTH:
+            continue
+        if isinstance(value, str):
+            parsed = _json_in(value)
+            if parsed is not None:
+                pending.append((parsed, depth + 1))
+        elif isinstance(value, Mapping):
+            for key, item in value.items():
+                if str(key).casefold() in _ERROR_CODE_KEYS:
+                    status = _status_from_code(item)
+                    if status is not None and (found is None or depth > found[0]):
+                        found = (depth, status)
+                if isinstance(item, str | Mapping | list):
+                    pending.append((item, depth + 1))
+        elif isinstance(value, list):
+            pending.extend((item, depth + 1) for item in value)
+    return found[1] if found is not None else None
+
+
 def _kind_from_status(status: int, text: str) -> ErrorKind:
     if status == 429:
-        if any(marker in text for marker in _QUOTA_MARKERS):
+        # 割り当て（quota。期間の上限）を使い切った 429 は、待っても今の要求の間は戻らないので、
+        # 流量の制限と分ける（#2667）。
+        if "quota" in text or any(marker in text for marker in _QUOTA_MARKERS):
             return ErrorKind.QUOTA_EXHAUSTED
         return ErrorKind.RATE_LIMITED
     if status == 401:
@@ -397,7 +512,9 @@ def classify_error(exc: BaseException) -> ClassifiedError:
     1. TLS の証明書の誤り（``ssl.SSLCertVerificationError`` など）。
     2. HTTP status（openai・httpx・OCI の ``ServiceError``）と本文（quota・安全・context の長さ・
        OCI の ``NotAuthorizedOrNotFound``）。``Retry-After`` を読む。
-    3. 例外の型（時間切れ・接続・出力の打ち切り・出力の形の誤り）と、本文の印（安全の拒否・
+    3. HTTP status の無い SDK の例外の、本文の構造化したエラーの code（``RESOURCE_EXHAUSTED``・
+       ``rate_limit_exceeded``・入れ子の JSON の ``"code": 429`` など）。2 と同じ規則で分ける。
+    4. 例外の型（時間切れ・接続・出力の打ち切り・出力の形の誤り）と、本文の印（安全の拒否・
        出力の上限）。
     """
     chain = _exception_chain(exc)
@@ -418,6 +535,17 @@ def classify_error(exc: BaseException) -> ClassifiedError:
         return ClassifiedError(
             _kind_from_status(status, text),
             status=status,
+            retry_after=parse_retry_after(_headers_of(item)),
+            detail=detail,
+        )
+    for item in chain:
+        # HTTP status の無い SDK の例外（stream の中の error event など）は、本文の構造化した
+        # エラーの code を HTTP status と同じ規則で分ける（#2667）。status は推定なので残さない。
+        structured = _structured_status(item)
+        if structured is None:
+            continue
+        return ClassifiedError(
+            _kind_from_status(structured, _text_of(item)),
             retry_after=parse_retry_after(_headers_of(item)),
             detail=detail,
         )
