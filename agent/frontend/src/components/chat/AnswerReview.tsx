@@ -1,15 +1,17 @@
 import { useId, type ReactNode } from "react";
 import { Info, ShieldCheck } from "lucide-react";
-import { Disclosure, StatusBadge, TEXT_ICON_SIZE, type StatusVariant } from "@production-ready/ui";
+import { AnswerPassageBadges, Disclosure, StatusBadge, TEXT_ICON_SIZE, type StatusVariant } from "@production-ready/ui";
 
 import type { AnswerReview, ConditionSource, ReviewOutcome, ReviewValidation } from "@/lib/answer-review";
+import { answerPassageLabels } from "@/lib/answer-structure";
 import { t, type I18nKey } from "@/lib/i18n";
 
 /**
  * 資料との照合（#1286・#2361）。回答の下に、照合の結果（回答の対応と照合のバッジ）を 1 行で出す。確かめた条件・
  * 確認待ちの質問・使った業務ガイド・足りない情報、照合できなかった・対象外の理由があるときだけ、同じ行を開いて
- * 見られるようにする（出典と同じ plain の Disclosure）。除いた内容の一覧は回答の本文の節
- * 「資料から確認できなかった事項」の 1 か所だけに出し、ここには出さない（件数はバッジで節と一致させる）。
+ * 見られるようにする（出典と同じ plain の Disclosure）。印の付いた段落・外した段落の一覧は回答の本文の節
+ * 「確認が必要な点」「根拠と矛盾し除いた内容」（段落の印の記録の無い過去の Run は「資料から確認できなかった事項」）の
+ * 1 か所だけに出し、ここには件数のバッジだけを出す（#2738）。
  * 成果物の JSON・内部の語は出さない（handoff §13。元の JSON は実行の詳細の監査ログで、監査の閲覧の権限のある利用者だけが見る。#2403）。
  */
 export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; testId: string }) {
@@ -191,8 +193,14 @@ export function OutcomeBadge({ outcome, testId }: { outcome: ReviewOutcome; test
   );
 }
 
-/** 照合の結果のバッジ（状態の対応表。色だけに頼らず StatusBadge のアイコンを付ける）。 */
+/**
+ * 照合の結果のバッジ（状態の対応表。色だけに頼らず StatusBadge のアイコンを付ける）。段落の印の記録のある Run（#2738）は
+ * 「未確認 N 件」「要注意 N 件」「矛盾で除外 N 件」（0 件は出さない。RAG と同じ共有の部品）。
+ */
 function ValidationBadge({ validation }: { validation: ReviewValidation }) {
+  if (validation.state === "marked") {
+    return <AnswerPassageBadges records={validation.passages} labels={answerPassageLabels()} testId="answer-review-passages" />;
+  }
   const { variant, label } = validationBadge(validation);
   return <StatusBadge variant={variant} label={label} />;
 }
@@ -201,13 +209,13 @@ function validationBadge(validation: ReviewValidation): { variant: StatusVariant
   switch (validation.state) {
     case "verified":
       return { variant: "success", label: t("chat.review.state.verified") };
+    case "marked":
+      // 印の数のバッジ（ValidationBadge が出す）。ここには来ない。
+      return { variant: "warning", label: t("chat.review.state.unverifiedPointsNoCount") };
     case "withheld": {
-      if (validation.withheldAll) return { variant: "warning", label: t("chat.review.state.withheldAll") };
-      // 件数は本文の節の項目の数（節と一致させる。#2361）。節の記録が無い古い Run は外した段落の数。
-      const count = validation.listedItems || validation.withheldClaims;
-      if (validation.withheldClaims > 0) {
-        return { variant: "warning", label: t("chat.review.state.withheld", { count }) };
-      }
+      // 段落の印の記録の無い過去の Run（#2738）。件数は本文の節の項目の数（節と一致させる。#2361）。節の記録が無い
+      // 古い Run は外した段落の数。本文を載せなかった Run は件数なし。
+      const count = validation.withheldAll ? 0 : validation.listedItems || validation.withheldClaims;
       return count > 0
         ? { variant: "warning", label: t("chat.review.state.unverifiedPoints", { count }) }
         : { variant: "warning", label: t("chat.review.state.unverifiedPointsNoCount") };
@@ -226,6 +234,7 @@ function validationBadge(validation: ReviewValidation): { variant: StatusVariant
 function validationMessage(validation: ReviewValidation): string | null {
   switch (validation.state) {
     case "verified":
+    case "marked":
     case "withheld":
       return null;
     case "unvalidated":

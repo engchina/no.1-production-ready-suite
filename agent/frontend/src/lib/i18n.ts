@@ -735,6 +735,22 @@ const agentJa = {
   "chat.answer.unconfirmed": "資料から確認できなかった事項",
   "chat.answer.reference": "参考情報",
   "chat.answer.referenceNote": "以下は資料の原文です。本質問の条件への該当は確認できていません。",
+  // 回答の段落の印（共有の AnswerSections。RAG の search.answerText.passage.* と同じ文言。#2738）。理由の文は backend が
+  // 返す文をそのまま出す。
+  "chat.answer.passage.unverified": "未確認",
+  "chat.answer.passage.warning": "要注意",
+  "chat.answer.passage.unverifiedDescription": "この段落は根拠で確かめられていません。",
+  "chat.answer.passage.warningDescription": "この段落はシステムの検査で注意が必要とされました。",
+  "chat.answer.passage.toggleHint": "の理由",
+  "chat.answer.passage.removedTitle": "根拠と矛盾し除いた内容",
+  "chat.answer.passage.removedNote": "根拠と矛盾したため、次の内容は回答に載せていません。",
+  "chat.answer.passage.marksTitle": "確認が必要な点",
+  "chat.answer.passage.marksNote": "次の段落は根拠で確かめられていないか、注意が必要です。押すと本文の段落へ移ります。",
+  "chat.answer.passage.jump": "{quote}（本文の段落へ移動）",
+  "chat.answer.passage.warningsTitle": "回答全体に注意が必要です",
+  "chat.answer.passage.badgeUnverified": "未確認 {count} 件",
+  "chat.answer.passage.badgeWarning": "要注意 {count} 件",
+  "chat.answer.passage.badgeRemoved": "矛盾で除外 {count} 件",
   // 根拠の一覧のカードから、本文の根拠の行と同じ右のサイドパネルを開く（#2360）。
   "evidence.row": "{row} 行",
   "evidence.rowRange": "{start}–{end} 行",
@@ -757,9 +773,8 @@ const agentJa = {
   "chat.review.guideUntitled": "名前の無い業務ガイド",
   "chat.review.guideRevision": "（第 {revision} 版）",
   "chat.review.state.verified": "照合済み",
-  "chat.review.state.withheld": "一部を確かめられず省略 {count} 件",
-  "chat.review.state.withheldAll": "確かめられず本文を省略",
-  // 件数は回答の本文の節「資料から確認できなかった事項」の項目の数（節と一致させる。#2361）。
+  // 段落の印の記録の無い過去の Run（#2738 より前）。件数は回答の本文の節「資料から確認できなかった事項」の項目の数
+  // （節と一致させる。#2361）。今の Run は印の数のバッジ（chat.answer.passage.badge*）。
   "chat.review.state.unverifiedPoints": "確かめられない点 {count} 件",
   "chat.review.state.unverifiedPointsNoCount": "確かめられない点あり",
   "chat.review.state.unvalidated": "照合できませんでした",

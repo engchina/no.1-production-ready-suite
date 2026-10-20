@@ -3846,14 +3846,16 @@ import { AnswerEvidence, AnswerSections, evidenceLabels, type EvidenceListItem }
 | `useEvidenceSource<T>()` | — | パネルで開く根拠の状態（`selected`・`shown`・`mounted`・`open(value)`・`close()`）。`shown` は閉じた後も前の根拠を覚え（滑って消える間も中身を出す）、`mounted` は一度開くまで false（閉じた後もパネルを描いたままにし、フォーカスを戻す） |
 | `EvidenceAnswerUseBadge` | `use`・`labels?` | 該当確認済み =「回答で引用」（success）、参考 =「参考」（neutral・`BookOpen`）、使われ方が不明 =「回答で引用」（info） |
 | `evidenceCountLabel` | `(items, labels?)` | 見出しの文。引用したかが分からない（`usedInAnswer: null`。検索だけ）なら件数だけ、0 件の項目は出さない |
-| `AnswerSections` / `AnswerCitationLinks` | `blocks`・`live?`・`children?`（シート・ダイアログ）・`testId?`（既定 `answer-text`） | 段落（`paragraph`）・段落にできない塊（`content`。表など）・見出しつきの箇条書き（`section`。`muted` の項目は印なしの補足）と、各段落・項目の下の根拠の行（`onOpen` があれば強調色の押せる行、無ければ文字だけ） |
+| `AnswerSections` / `AnswerCitationLinks` | `blocks`・`live?`・`children?`（シート・ダイアログ）・`testId?`（既定 `answer-text`）・`passages?`・`passageLabels?` | 段落（`paragraph`）・段落にできない塊（`content`。表など）・見出しつきの箇条書き（`section`。`muted` の項目は印なしの補足）と、各段落・項目の下の根拠の行（`onOpen` があれば強調色の押せる行、無ければ文字だけ）。`passages`（#2738）を渡すと、段落・項目の原文（`passageText`。無ければ文字列の `content`）と印の `text` を照合して印を付け、本文の上に回答全体の注意、後ろに「根拠と矛盾し除いた内容」「確認が必要な点」の節を足す |
+| `parseAnswerPassageRecords` / `matchAnswerPassageMarks` / `answerPassageCounts` | `(source)` / `(passages, marks)` / `(records)` | 回答の記録の `passage_marks`・`removed_passages`・`answer_warnings` を読む（3 つとも無い過去の記録は null）。照合は印の原文と同じ段落 → 含む段落 → 含まれる段落の順（箇条書きの印・強調・空白・「根拠：」の行を除いて比べる。契約は `platform/contracts/answer-passages/passage-marks.json`） |
+| `AnswerPassageMarked` / `AnswerPassageWarnings` / `AnswerPassageBadges` | `group`・`anchorId`・`render(marker)` / `warnings` / `records`・`labels?`・`testId?` | 印の段落（左の線・末尾の印・開く理由）、回答全体の注意（warning の `Banner`）、印の数のバッジ（0 件は出さない）。文言は `AnswerPassageLabels`（製品が i18n で渡す。RAG `answerPassageLabels()`・Agent `answerPassageLabels()`） |
 | `MarkdownInlineText` | `text`・`labels?` | 段落・項目の中の太字・斜体・コード・リンクだけを描く（`<p>` / `<li>` の中に置く） |
 
 **データの契約（`EvidenceListItem`）**: `key`・`fileName`・`text`・`usedInAnswer: boolean | null`・`answerUse: "confirmed" | "reference" | null`・`superseded?`・`routeBadges?`（翻訳済み）・`score: number | null`・`rerankScore: number | null`・`chips?: { id, label, value }[]`（`label` は読み上げ）・`tags?: { id, value, icon?, tone? }[]`・`sourceUrl?`（https）。
 
 - RAG: `RetrievedChunk` → `citationEvidenceItem`（`rag/frontend/src/components/search/citation-evidence.ts`）。根拠のパネルは `CitationSourceSheet`（`EvidenceSourceSheet` に原文のプレビュー `DocumentPreview` を渡す）。
 - Agent: 成果物 `answer_evidence`（backend の `answer_evidence.py`）→ `answerEvidenceData`（`agent/frontend/src/lib/answer-evidence.ts`）。根拠のパネルは `EvidenceSourceSheet` に RAG と同じ `DocumentPreview`（`RagSourcePreview`）を渡す。原文は RAG の画面用の Cookie の API ではなく、Agent の backend（`GET /api/runs/{run_id}/source-preview`）が閲覧者として RAG に作らせた短命の署名つきの URL で読む（#2389）。本文の節は `structureAnswer`（`answer-structure.ts`。本文の文は書き換えず、段落ごとの根拠・根拠の ID の印・最終の検証の節から組み立てる。結び付けられなければ Markdown のまま）。
-- 単体テストは `packages/ui/tests/answer-evidence.test.tsx`・`answer-sections.test.tsx`・`evidence-figure.test.tsx`。
+- 単体テストは `packages/ui/tests/answer-evidence.test.tsx`・`answer-sections.test.tsx`・`answer-passage-marks.test.tsx`（段落の印の契約の事例を読む）・`evidence-figure.test.tsx`。
 
 ---
 

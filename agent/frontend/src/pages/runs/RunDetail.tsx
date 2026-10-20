@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Check, FileText, GitBranch, PlayCircle, RefreshCw, Server, ShieldAlert } from "lucide-react";
 import {
+  AnswerPassageBadges,
   AnswerNotice,
   Banner,
   Button,
@@ -46,7 +47,7 @@ import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { OutcomeBadge } from "@/components/chat/AnswerReview";
 import { AnswerBody, ResultTable } from "@/components/chat/ResultTables";
 import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
-import { ANSWER_KIND, ANSWER_VALIDATION_KIND, answerOutcome } from "@/lib/answer-review";
+import { ANSWER_KIND, ANSWER_VALIDATION_KIND, answerOutcome, runAnswerPassages } from "@/lib/answer-review";
 import { dataScopeNotes } from "@/lib/data-scope";
 import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -54,7 +55,7 @@ import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { MENU_PERMISSIONS, type AgentCapabilities } from "@/lib/permissions";
 import { runAnswerEvidence } from "@/lib/answer-evidence";
 import { answerNoticeText, internalRecordArtifacts, userOutputArtifacts } from "@/lib/run-artifacts";
-import { answerStructureTitles, noticeHeading, structureAnswer } from "@/lib/answer-structure";
+import { answerPassageLabels, answerStructureTitles, noticeHeading, structureAnswer } from "@/lib/answer-structure";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
 import {
   agentRunDetailLabels,
@@ -151,6 +152,8 @@ export function RunDetail({
   const evidence = runAnswerEvidence(run.artifacts);
   const validationContent =
     [...run.artifacts].reverse().find((artifact) => artifact.kind === ANSWER_VALIDATION_KIND)?.content ?? null;
+  // 段落の印・外した段落・回答全体の注意（#2738）。記録の無い過去の Run は null（今までの表示のまま）。
+  const passages = runAnswerPassages(run.artifacts);
   const latestAnswer = answers.at(-1);
   const outcome = latestAnswer ? answerOutcome(latestAnswer.content) : null;
   const timelineSteps = runTimelineSteps(run, (step) => stepDetails(step));
@@ -166,8 +169,14 @@ export function RunDetail({
             status={commonRunStatus(run.status)}
             statusLabel={runStatusLabel(run.status)}
             badges={
-              outcome && latestAnswer ? (
-                <OutcomeBadge outcome={outcome} testId={`run-answer-outcome-${latestAnswer.id}`} />
+              (outcome && latestAnswer) || passages ? (
+                <>
+                  {outcome && latestAnswer ? (
+                    <OutcomeBadge outcome={outcome} testId={`run-answer-outcome-${latestAnswer.id}`} />
+                  ) : null}
+                  {/* 印の数のバッジ（チャットの「資料との照合」・RAG と同じ共有の部品。0 件は出さない。#2738）。 */}
+                  <AnswerPassageBadges records={passages} labels={answerPassageLabels()} testId="run-answer-passages" />
+                </>
               ) : null
             }
             question={run.goal}
@@ -245,15 +254,23 @@ export function RunDetail({
                 const text = String(artifact.content.text ?? artifact.content.answer);
                 // 回答の本文はチャットと同じ節の形（根拠の行つき。#2328）。結び付けられなければ Markdown のまま
                 // （表は共通の結果の表。#1158 / #1808）。
-                const blocks = evidence
-                  ? structureAnswer(text, evidence, noticeHeading(validationContent), answerStructureTitles())
-                  : null;
-                return blocks && evidence ? (
+                const blocks =
+                  evidence || passages
+                    ? structureAnswer(
+                        text,
+                        evidence,
+                        noticeHeading(validationContent),
+                        answerStructureTitles(),
+                        passages
+                      )
+                    : null;
+                return blocks ? (
                   <StructuredAnswer
                     key={artifact.id}
                     runId={run.id}
                     blocks={blocks}
                     evidence={evidence}
+                    passages={passages}
                     testId={`run-answer-${artifact.id}`}
                   />
                 ) : (

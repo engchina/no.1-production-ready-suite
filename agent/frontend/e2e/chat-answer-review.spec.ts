@@ -243,7 +243,7 @@ for (const viewport of VIEWPORTS) {
       const summary = turn.getByTestId("chat-review-run-review-1-summary");
       await expect(summary).toContainText("資料との照合");
       const badge = summary.locator("[data-status-variant]");
-      await expect(badge).toHaveText(`一部を確かめられず省略 ${WITHHELD_ITEMS.length} 件`);
+      await expect(badge).toHaveText(`確かめられない点 ${WITHHELD_ITEMS.length} 件`);
       await expect(badge).toHaveAttribute("data-status-variant", "warning");
       await expect(badge.locator("svg")).toHaveCount(1);
       const panel = turn.getByTestId("chat-review-run-review-1");
@@ -282,7 +282,7 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
-test("資料との照合の結果は、照合済み・本文を省略・照合できなかった・対象外を見分けて出し、理由があるときだけ開ける", async ({ page, mockApi }) => {
+test("資料との照合の結果は、照合済み・確かめられない点（過去の Run）・照合できなかった・対象外を見分けて出し、理由があるときだけ開ける", async ({ page, mockApi }) => {
   seedRun(mockApi, "run-verified", [
     answer("回答 1"),
     validation({ status: "completed", valid: true, result: { status: "completed", valid: true, claims: [] }, withheld: { claims: 0, findings: 0, all: false } }),
@@ -333,7 +333,7 @@ test("資料との照合の結果は、照合済み・本文を省略・照合�
   // 照合済み・除いた内容があるとき（バッジと本文で分かる）は開いて見るものが無いので、⌄ を出さずに行だけを出す。
   const cases = [
     ["run-verified", "照合済み", "success", null],
-    ["run-all", "確かめられず本文を省略", "warning", null],
+    ["run-all", "確かめられない点あり", "warning", null],
     ["run-failed", "照合できませんでした", "warning", "資料との照らし合わせが途中で止まったため、この回答は確かめられていません。内容を資料で確かめてから使ってください。"],
     ["run-no-evidence", "照合できませんでした", "warning", "この回答は資料を使わずに作ったため、資料と照らし合わせて確かめていません。"],
     ["run-skipped", "照合の対象外", "neutral", "この業務 Agent は資料を使わないため、資料との照らし合わせの対象外です。"],
@@ -469,7 +469,7 @@ for (const viewport of VIEWPORTS) {
       await expect(summary).toBeVisible();
       // 見出し → 対応 → 検証の順に並ぶ（どちらもアイコン付き。色だけに頼らない）。
       const badges = summary.locator("[data-status-variant]");
-      await expect(badges).toHaveText(["条件付きの回答", "一部を確かめられず省略 4 件"]);
+      await expect(badges).toHaveText(["条件付きの回答", "確かめられない点 4 件"]);
       const outcomeBadge = turn.getByTestId("chat-review-run-outcome-1-outcome").locator("[data-status-variant]");
       await expect(outcomeBadge).toHaveAttribute("data-status-variant", "warning");
       await expect(outcomeBadge.locator("svg")).toHaveCount(1);

@@ -70,6 +70,7 @@ import {
   answerReview,
   cancelledClarificationKinds,
   pendingClarificationKinds,
+  runAnswerPassages,
 } from "@/lib/answer-review";
 import { runAnswerEvidence } from "@/lib/answer-evidence";
 import { answerStructureTitles, noticeHeading, structureAnswer } from "@/lib/answer-structure";
@@ -967,17 +968,20 @@ function RunChatTurn({
   const review = ACTIVE_STATUSES.has(run.status) ? null : answerReview(run.artifacts);
   // 回答の本文の節（要約 →「資料により確認できた事項」と根拠の行 →「資料から確認できなかった事項」。RAG のチャットと
   // 同じ形。#2328）。段落に根拠を結び付けられないときは今までの Markdown の描き方にする。
+  // 段落の印・外した段落・回答全体の注意（#2738）。記録の無い過去の Run は null（今までの表示のまま）。
+  const passages = useMemo(() => runAnswerPassages(run.artifacts), [run.artifacts]);
   const answerBlocks = useMemo(
     () =>
-      answer && evidence
+      answer && (evidence || passages)
         ? structureAnswer(
             answer,
             evidence,
             noticeHeading(latestContent(run.artifacts, ANSWER_VALIDATION_KIND)),
-            answerStructureTitles()
+            answerStructureTitles(),
+            passages
           )
         : null,
-    [answer, evidence, run.artifacts]
+    [answer, evidence, passages, run.artifacts]
   );
   // 確認の取り消し（#1441・#1445）。取り消した往復には補足の文を、利用者の答えを待っている最後の回答には操作を出す。
   const cancelledKinds = cancelledClarificationKinds(run);
@@ -1072,8 +1076,14 @@ function RunChatTurn({
           // 回答の Markdown の表と、表の形のツールの結果（NL2SQL の SQL の実行の結果など）は、NL2SQL のチャットと
           // 同じ共通の結果の表で出す（#1158）。表でない部分は見出し・太字・箇条書きなどを描く（#1808）。
           // チャットの画面にはページの見出し（h1）の下の見出しが無いため、回答の見出しは h2 から始める。
-          answerBlocks && evidence ? (
-            <StructuredAnswer runId={run.id} blocks={answerBlocks} evidence={evidence} testId={`chat-answer-${run.id}`} />
+          answerBlocks ? (
+            <StructuredAnswer
+              runId={run.id}
+              blocks={answerBlocks}
+              evidence={evidence}
+              passages={passages}
+              testId={`chat-answer-${run.id}`}
+            />
           ) : (
             <AnswerBody text={answer} headingLevel={2} testId={`chat-answer-${run.id}`} />
           )

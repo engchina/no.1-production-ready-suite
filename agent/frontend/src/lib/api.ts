@@ -845,6 +845,25 @@ export interface RunSourcePreview {
   expires_in_seconds: number;
 }
 
+/** 段落の印・外した段落・回答全体の注意の理由（#2738。契約は platform/contracts/answer-passages/passage-marks.json）。 */
+export interface AnswerPassageReasonData {
+  code: string;
+  label: string;
+  detail?: string;
+}
+
+/**
+ * 成果物「資料との照合」（kind=`answer_validation`）の内容のうち、段落の印の記録（#2738）。根拠と矛盾した段落だけを
+ * 本文から外し（`removed_passages`）、確かめられない段落・規則の検査で注意の要る段落は本文に残して印（`passage_marks`）を
+ * 付け、回答全体の注意（`answer_warnings`）を持つ。`withheld` は件数（`claims` は持たない）。この形より前の Run には無い。
+ */
+export interface AnswerValidationPassageContent {
+  passage_marks?: { text: string; state: "unverified" | "warning"; reasons: AnswerPassageReasonData[] }[];
+  removed_passages?: { text: string; reasons: AnswerPassageReasonData[] }[];
+  answer_warnings?: AnswerPassageReasonData[];
+  withheld?: { removed: number; unverified: number; warnings: number; all: boolean; listed: number };
+}
+
 export interface Artifact {
   id: string;
   name: string;

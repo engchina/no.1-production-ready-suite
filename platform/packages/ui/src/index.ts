@@ -311,6 +311,33 @@ export {
   type AnswerSectionsLabels,
   type AnswerSectionsProps,
 } from "./components/chat/answer-sections";
+// 回答の段落の印・外した段落・回答全体の注意（RAG・Agent 共通。#2738）
+export {
+  ANSWER_PASSAGE_STATE_ICON,
+  AnswerPassageBadges,
+  AnswerPassageMarked,
+  AnswerPassageWarnings,
+  DEFAULT_ANSWER_PASSAGE_LABELS,
+  answerPassageQuote,
+  answerPassageReasonText,
+  focusAnswerPassage,
+  type AnswerPassageLabels,
+} from "./components/chat/answer-passage-marks";
+export {
+  answerPassageCounts,
+  answerPassageKey,
+  hasAnswerPassageRecords,
+  matchAnswerPassageMarks,
+  parseAnswerPassageRecords,
+  type AnswerPassageCounts,
+  type AnswerPassageMark,
+  type AnswerPassageMarkGroup,
+  type AnswerPassageMarkState,
+  type AnswerPassageReason,
+  type AnswerPassageRecords,
+  type AnswerRemovedPassage,
+  type AnswerWarning,
+} from "./components/chat/answer-passage-records";
 export {
   AnswerEvidence,
   DEFAULT_EVIDENCE_LABELS,

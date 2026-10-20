@@ -265,6 +265,7 @@ function AssistantColumn({
   storageFailures,
   guardrailWarnings,
   answerDiagnostics = null,
+  passageSource = null,
   notice = null,
   savedAnswer = false,
   progress = null,
@@ -286,6 +287,11 @@ function AssistantColumn({
   storageFailures?: StorageFailure[];
   guardrailWarnings: string[];
   answerDiagnostics?: unknown;
+  /**
+   * 段落の印の記録（#2738）を読む、診断の無い保存した回答の会話のメッセージ（会話を開き直したとき）。診断があれば
+   * 診断から読む。
+   */
+  passageSource?: unknown;
   /** 回答の注意書き（回答の本文と根拠の後に出す。#2405）。 */
   notice?: string | null;
   /** 保存された回答がある(trace_id から回答の実行記録を開ける)。 */
@@ -389,6 +395,7 @@ function AssistantColumn({
             streaming={streaming}
             citations={citations}
             unreadSections={canOpenSections ? unreadSectionLinks(answerDiagnostics) : []}
+            diagnostics={finished ? (answerDiagnostics ?? passageSource) : null}
             live
             cursor={
               streaming ? (
@@ -397,7 +404,9 @@ function AssistantColumn({
             }
           />
           {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下に出す（#2096）。 */}
-          {finished && answerDiagnostics ? <AnswerNotices diagnostics={answerDiagnostics} /> : null}
+          {finished && (answerDiagnostics || passageSource) ? (
+            <AnswerNotices diagnostics={answerDiagnostics} passageSource={passageSource} />
+          ) : null}
         </>
       )}
       {guardrailWarnings.length > 0 ? (
@@ -479,6 +488,7 @@ function MessageTurn({
     storageFailures?: StorageFailure[];
     guardrailWarnings: string[];
     answerDiagnostics?: unknown;
+    passageSource?: unknown;
     notice?: string | null;
     savedAnswer?: boolean;
     progress?: { steps: ChatProgressStep[]; startedAtMs: number; reconnecting?: boolean } | null;
@@ -555,6 +565,7 @@ function MessageTurn({
               storageFailures={column.storageFailures}
               guardrailWarnings={column.guardrailWarnings}
               answerDiagnostics={column.answerDiagnostics}
+              passageSource={column.passageSource}
               notice={column.notice}
               savedAnswer={column.savedAnswer}
               progress={column.progress}
@@ -1802,6 +1813,8 @@ export function ChatClient() {
                         stoppedMessage: reply.status === "CANCELLED" ? reply.content : null,
                         guardrailWarnings: reply.guardrail_warnings,
                         notice: reply.status === "COMPLETE" ? (reply.notice ?? null) : null,
+                        // 段落の印の記録（#2738）。会話のメッセージに記録があるときだけ読む（無ければ今までの表示）。
+                        passageSource: reply.status === "COMPLETE" ? reply : null,
                         savedAnswer: Boolean(
                           reply.trace_id && answerTraceIds.has(reply.trace_id)
                         ),
