@@ -2148,6 +2148,7 @@ def build_sdk_agent(
     confirmation_response: Mapping[str, Any] | None = None,
     thread_id: str | None = None,
     output_fields: Sequence[AgentOutputField] = (),
+    caller_planning: bool = True,
 ) -> Agent[Any]:
     """SDK の Agent を作る（MCP 接続のツール一覧を HTTP で取るので、イベントループの外で呼ぶ）。
 
@@ -2159,6 +2160,8 @@ def build_sdk_agent(
     `output_fields` があれば、その項目の値を記録する `record_output` を渡す（#2549）。
     `cancellations` はこの Run で利用者が取り消した確認（#1441・#1445）。その種類のツールを渡さず、
     ほかの手段で続けるか意図を聞き直す指示を足す。
+    `caller_planning` が False（固定の中身の無い公開の版）なら、スキルの Agent 主体の根拠の取得の
+    宣言に従わない（RAG が検索文を計画する。#2651）。
     """
     from app.features.agent.chat_attachments import (
         attachment_instructions,
@@ -2202,7 +2205,9 @@ def build_sdk_agent(
             else None
         ),
         output_entries=[record_output_tool(run_id, output_fields)] if output_fields else None,
-        caller_planned_connections=agent_caller_planned_connections(skill_ids),
+        caller_planned_connections=(
+            agent_caller_planned_connections(skill_ids) if caller_planning else frozenset()
+        ),
         image_input=target.vision_enabled,
     )
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
@@ -2844,6 +2849,7 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                 confirmation_response=task.response,
                 thread_id=run.thread_id,
                 output_fields=agent.output_fields,
+                caller_planning=agent.caller_planning_allowed,
             )
             result = await _run_sdk(run_id, sdk_agent, conversation_input(run_id, run.goal))
             result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
@@ -2912,6 +2918,7 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                 confirmation_response=task.response,
                 thread_id=run.thread_id,
                 output_fields=agent.output_fields,
+                caller_planning=agent.caller_planning_allowed,
             )
             state = await RunState.from_string(sdk_agent, state_text)
             for item in state.get_interruptions():

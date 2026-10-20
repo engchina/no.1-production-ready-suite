@@ -352,6 +352,9 @@ class AgentProfile(BaseModel):
     share_request: AgentShareRequest | None = None
     # Run が使う版に固定したスキル（`_agent_for_run` が入れる。保存・応答には出さない。#1855）。
     pinned_skills: list[PinnedSkill] | None = Field(default=None, exclude=True)
+    # Run が使うスキルの宣言（Agent 主体の根拠の取得。#2651）に従ってよいか（`_agent_for_run` が
+    # 入れる。保存・応答には出さない）。固定の中身の無い公開の版は宣言を確かめられないので False。
+    caller_planning_allowed: bool = Field(default=True, exclude=True)
 
     @field_validator("output_fields")
     @classmethod
@@ -5938,6 +5941,13 @@ def _agent_for_run(agent: AgentProfile, run: RunState) -> AgentProfile:
             # 版に固定したスキル（#1855）。固定なし・常に最新の版は None で今のスキル（#1867）。
             "pinned_skills": (
                 None if target.skill_policy == SKILL_POLICY_LATEST else deepcopy(target.skills)
+            ),
+            # 固定の中身の無い版（#1855 より前の版・組み込みの業務 Agent の版）は今のスキルで
+            # 動くが、公開した時点のスキルが Agent 主体の取得を宣言していたかは分からない。
+            # 今のスキルの宣言で配備の時点に振る舞いを変えないよう、RAG が検索文を計画する
+            # （#2651）。利用者が「常に最新」を選んだ版は今のスキルに従う。
+            "caller_planning_allowed": (
+                target.skill_policy == SKILL_POLICY_LATEST or target.skills is not None
             ),
         },
     )

@@ -26,6 +26,8 @@ from app.features.agent import builtin_runtime
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.runtime import (
     AgentProfile,
+    AgentProfilePatch,
+    AgentVersion,
     RunCreateRequest,
     RunStatus,
     run_support_task,
@@ -221,6 +223,83 @@ def test_published_version_pinning_an_undeclared_skill_keeps_rag_planning(
     _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
     _run(draft=False)
     assert mcp.calls_of("rag_retrieve_evidence")[-1]["arguments"]["planning"] == "caller"
+
+
+def _legacy_published_version() -> None:
+    """固定の中身の無い公開の版（#1855 より前の版・組み込みの業務 Agent の版と同じ形）にする。"""
+    repository: Any = runtime_repository
+    with repository._lock:  # noqa: SLF001 - 固定していない版を作る
+        stored = repository._agents[AGENT_ID]
+        stored.versions = [
+            AgentVersion(
+                version=1,
+                name=stored.name,
+                instructions=stored.instructions,
+                skill_ids=list(stored.skill_ids),
+            )
+        ]
+        stored.published_version = 1
+
+
+def test_published_version_without_pinned_skills_keeps_rag_planning(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """固定の中身の無い公開の版は、今のスキルが宣言しても caller にしない（配備で切り替えない）。"""
+    _legacy_published_version()
+    call = function_call("rag__rag_retrieve_evidence", {"query": "機器 A 点検"}, call_id="c1")
+    _script(
+        monkeypatch,
+        [call],
+        [assistant_message(ANSWER)],
+        [call],
+        [assistant_message(ANSWER)],
+        validation=False,
+    )
+
+    _run(draft=False)
+    _run(draft=True)
+
+    published, draft = mcp.calls_of("rag_retrieve_evidence")
+    assert "planning" not in published["arguments"]
+    assert draft["arguments"]["planning"] == "caller"
+
+
+def test_latest_policy_version_follows_the_current_skill(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """「常に最新」を選んだ公開の版は今のスキルの宣言に従う（利用者が今のスキルを選んでいる）。"""
+    skill_registry.upsert_custom(_skill("rag"))
+    runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(skill_policy="latest"))
+    runtime_repository.publish_agent(AGENT_ID, published_by="admin")
+    skill_registry.upsert_custom(_skill("caller"))
+    call = function_call("rag__rag_retrieve_evidence", {"query": "機器 A 点検"}, call_id="c1")
+    _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+
+    _run(draft=False)
+
+    [published] = mcp.calls_of("rag_retrieve_evidence")
+    assert published["arguments"]["planning"] == "caller"
+
+
+@pytest.mark.parametrize("agent_id", ["default", "rag-research"])
+def test_builtin_published_agents_keep_rag_planning(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, agent_id: str
+) -> None:
+    """組み込みの業務 Agent の公開の版（固定の中身が無い）は、配備の時点では RAG が計画する。"""
+    agent = next(item for item in runtime_repository.list_agents() if item.id == agent_id)
+    assert agent.published_version is not None
+    version = agent.published()
+    assert version is not None and version.skills is None
+    call = function_call("rag__rag_retrieve_evidence", {"query": "機器 A 点検"}, call_id="c1")
+    _script(monkeypatch, [call], [assistant_message(ANSWER)], validation=False)
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal=GOAL, agent_id=agent_id), created_by_user_uuid=USER_UUID
+    )
+    anyio.run(builtin_runtime.execute_run, run.id)
+
+    [published] = mcp.calls_of("rag_retrieve_evidence")
+    assert "planning" not in published["arguments"]
+    assert "request_id" not in published["arguments"]
 
 
 @pytest.mark.parametrize(
