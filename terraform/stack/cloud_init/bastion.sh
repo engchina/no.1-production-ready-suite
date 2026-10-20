@@ -54,8 +54,8 @@ read_vnc_password() {
     exit 1
   fi
   VNC_PASS="$(printf '%s' "${encoded}" | base64 -d)"
-  if [ "${#VNC_PASS}" -lt 8 ]; then
-    log "ERROR: the VNC password must be at least 8 characters"
+  if [ "${#VNC_PASS}" -ne 8 ]; then
+    log "ERROR: the VNC password must be exactly 8 characters"
     exit 1
   fi
 }
