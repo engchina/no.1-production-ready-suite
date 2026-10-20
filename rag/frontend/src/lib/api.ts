@@ -1091,6 +1091,7 @@ export interface KnowledgeBaseQueryConfig {
   // 業務ガイドの手順ごとに探し、手順の参照の頁の根拠を入れる(LLM は呼ばない。#2395)。上限は 0〜10。
   guide_step_retrieval_enabled?: boolean | null;
   guide_step_max_queries?: number | null;
+  guide_step_deadline_seconds?: number | null;
   // 質問から抽出項目の条件を読み取る(LLM の呼び出しが 1 回増える。#652)。
   auto_field_filter_enabled?: boolean | null;
   /**
@@ -4691,6 +4692,7 @@ export interface SupportGuideDraftTryData {
   guide_used: boolean;
   guide: SupportGuideAnswerSummary | null;
   outcome: string | null;
+  notice?: string | null;
   answer: string;
   citations: RetrievedChunk[];
   clarifications: { condition_id: string; label?: string; question?: string; options?: string[] }[];

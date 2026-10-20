@@ -532,6 +532,7 @@ class SupportGuideDraftTryData(BaseModel):
     # 回答に使った業務ガイドの要約（guide_id・版・判断・既知 / 不明の条件）。無ければ None。
     guide: dict[str, Any] | None = None
     outcome: str | None = None
+    notice: str | None = None
     answer: str
     citations: list[RetrievedChunk] = Field(default_factory=list)
     clarifications: list[dict[str, Any]] = Field(default_factory=list)

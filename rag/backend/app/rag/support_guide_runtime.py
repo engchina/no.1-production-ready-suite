@@ -944,6 +944,10 @@ def guide_step_plan(match: GuideMatch) -> list[dict[str, Any]]:
             "id": step.id,
             "title": step.title,
             "required": step.id not in conditional,
+            "purpose": step.purpose,
+            "evidence_requirements": list(step.evidence_requirements),
+            "done_when": step.done_when,
+            "depends_on": list(step.depends_on),
             "retrieval_hints": list(step.retrieval_hints),
             "references": [
                 {

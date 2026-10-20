@@ -632,6 +632,7 @@ def _preview_response(preview: GuidePreview, *, used: bool = True) -> SearchResp
     }
     return SearchResponse(
         answer="権限は詳細画面の権限タブで付与します。",
+        notice="変更前に管理窓口へ確認してください。",
         citations=[],
         trace_id=GUIDE_PREVIEW_TRACE_PREFIX + "0" * 32,
         elapsed_ms=12.0,
@@ -677,6 +678,7 @@ def test_try_draft_answers_with_the_draft_and_leaves_published_unchanged(
     )
     assert data["trace_id"].startswith(GUIDE_PREVIEW_TRACE_PREFIX)
     assert data["outcome"] == "conditional"
+    assert data["notice"] == "変更前に管理窓口へ確認してください。"
     assert data["guide"]["decision"] == "branch"
     assert data["clarifications"][0]["condition_id"] == "target"
     # 手順ごとの充足に下書きの手順の題名を付けて返す（#2686。知らない状態の手順は返さない）。

@@ -2140,6 +2140,8 @@ export const ja = {
   "searchAnswerProfiles.field.guideStepRetrieval": "業務ガイドの手順ごとに探す",
   "searchAnswerProfiles.field.guideStepRetrievalHelper":
     "質問に業務ガイドが当たったとき、ガイドの手順ごとに検索の手がかりで探し、手順が参照する資料の頁の根拠を回答の材料に加えます。AI の呼び出しは増えませんが、手順ごとに数秒かかります。全体の既定は有効です。",
+  "searchAnswerProfiles.field.guideStepDeadline": "手順ごとの検索の時間上限（秒）",
+  "searchAnswerProfiles.field.guideStepDeadlineHelper": "この回答設定での上限です。0 は手順検索を開始しません。回答全体の時間上限と検索回数の上限は引き続き適用します。",
   "searchAnswerProfiles.field.guideStepMaxQueries": "手順ごとの検索の上限",
   "searchAnswerProfiles.field.guideStepMaxQueriesHelper":
     "1 回の回答で手順ごとに探す回数の上限です（参照の頁に絞った検索を含む）。主の検索の後に足す検索の合計の枠も超えません。全体の既定は 4 回です。",

@@ -2224,6 +2224,7 @@ class CarryOverWithdrawalTest(unittest.TestCase):
                 problems=problems,
                 withdrawn=withdrawn,
                 withdrawn_requests=set(withdrawn_requests),
+                guide_steps=[],
             )
             r.score = lambda: grounded.Round.score(r)
             return r

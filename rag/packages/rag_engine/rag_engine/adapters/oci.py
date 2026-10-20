@@ -812,6 +812,10 @@ def _openai_parsed[StructuredOutputT: BaseModel](
         _note_output_rate(provider, response_usage(response)["output_tokens"], seconds)
         if timing is not None:
             _note_stream_timing(provider, timing)
+        # 入力に無い置換文字を含む生成文は、破損した構造化出力として既存の上限内で再取得する。
+        # 原文に元からある文字は改変しない。削除や推測による文字の補完もしない。
+        if "\ufffd" not in json.dumps(input_messages, ensure_ascii=False) and "\ufffd" in parsed.model_dump_json():
+            raise InvalidStructuredOutput("生成文に入力にはない Unicode の置換文字が含まれています。再生成してください。")
         return parsed
 
 

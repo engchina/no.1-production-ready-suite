@@ -364,11 +364,24 @@ class ExternalDataItem(_StrictModel):
         return value
 
 
+class GuideRequirementCoverage(_StrictModel):
+    requirement_id: str = Field(description="guide_contracts の要件 id。")
+    evidence_ids: list[str] = Field(
+        max_length=8, description="この要件の説明を支える Evidence の id。ガイドの要件そのものは文書の仕様を示す根拠にしない。"
+    )
+    gap: str = Field(description="根拠が不足するとき、確認できない操作・条件と確認先。根拠があれば空文字。")
+
+
 class GroundedDraft(_StrictModel):
     """主張と引用の対で構成する回答草稿。本文の体裁は render が決定的に組み立てる。"""
 
     request_coverage: list[RequestCoverage] = Field(
         default_factory=list, max_length=64, description="要求単位ごとに使う根拠の計画。items より先に書く。"
+    )
+    guide_coverage: list[GuideRequirementCoverage] = Field(
+        default_factory=list,
+        max_length=200,
+        description="guide_contracts の各要件に使う根拠の計画。全 id を1回ずつ、前提の手順から並べる。要件が複数の操作・除外・確認を含む場合はすべてを満たす根拠を選び、items に説明する。足りなければ gap に残す。",
     )
     items: list[GroundedItem] = Field(max_length=40, description="主張と原文引用の対。機能・前提ごとに分け、見出しは書かない。")
     applications: list[GroundedApplication] = Field(
@@ -486,10 +499,32 @@ class GroundedRequestReview(_StrictModel):
     reason: str = Field(description="質問と同じ言語で短く。")
 
 
+class GuideRequirementReview(_StrictModel):
+    answer_quote: str = Field(
+        default="",
+        max_length=2400,
+        description="要件を説明している回答 items の text の原文。複数の item を使う場合は該当の text を改変せず改行でつなぐ。説明がなければ空文字。資料から引用しない。",
+    )
+    requirement_id: str = Field(description="guide_contracts の requirements の id。")
+    status: Literal["addressed", "partial", "missing"] = Field(
+        description="addressed=全体を説明、partial=一部、missing=説明なし。判定の基準は監査の指示に従う。"
+    )
+    item_indexes: list[int] = Field(
+        max_length=40,
+        description="要件を説明する回答の items / gap_items の index。未確認の明示を求める要件は gap_items でもよいが、実施手順の説明を求める要件を不足の文だけで充足にしない。",
+    )
+    reason: str = Field(max_length=600, description="不足している操作・条件。充足なら空文字。")
+
+
 class GroundedAudit(_StrictModel):
     """監査は降格と不足の指摘だけを行い、原文一致した内容を削除しない。"""
 
     reviews: list[GroundedItemReview] = Field(max_length=40, description="各 item の局所監査。")
+    guide_requirement_reviews: list[GuideRequirementReview] = Field(
+        default_factory=list,
+        max_length=200,
+        description="guide_contracts の要件ごとの充足。全 id を1回ずつ判定する。設定の要件は回答の評価基準であり、文書の仕様の根拠ではない。",
+    )
     application_reviews: list[GroundedApplicationReview] = Field(
         default_factory=list, max_length=6, description="各 application（当てはめ）の監査。"
     )

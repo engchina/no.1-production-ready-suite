@@ -84,6 +84,10 @@ class GuideStep:
     references: tuple[GuideStepReference, ...] = ()
     # 回答の充足で必須の手順か（条件が決まらない分岐の行き先とその後続は False。#2491）。
     required: bool = True
+    purpose: str = ""
+    evidence_requirements: tuple[str, ...] = ()
+    done_when: str = ""
+    depends_on: tuple[str, ...] = ()
 
     def hints(self) -> tuple[str, ...]:
         return self.retrieval_hints[:MAX_STEP_HINTS] or ((self.title,) if self.title else ())
@@ -109,6 +113,23 @@ class GuidePlan:
     def step_terms(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
         """手順ごとの検索の手がかり（手順 id, 手がかりの列）。回答の item を手順に対応付ける語に使う（#2649）。"""
         return tuple((step.step_id, step.retrieval_hints[:MAX_STEP_HINTS]) for step in self.steps if step.retrieval_hints)
+
+    @property
+    def step_contracts(self) -> tuple[dict[str, Any], ...]:
+        """手順の目的・根拠の要件・完了条件と前提手順を監査へ渡す。"""
+        return tuple(
+            {
+                "step_id": step.step_id,
+                "requirements": [
+                    {"id": f"{step.step_id}:{index}", "text": text}
+                    for index, text in enumerate((step.purpose, *step.evidence_requirements, step.done_when))
+                    if text
+                ],
+                "depends_on": list(step.depends_on),
+            }
+            for step in self.steps
+            if step.purpose or step.evidence_requirements or step.done_when
+        )
 
     @classmethod
     def from_payload(cls, guide_id: str, revision: int, steps: Iterable[Mapping[str, Any]]) -> GuidePlan | None:
@@ -146,6 +167,10 @@ class GuidePlan:
                     retrieval_hints=tuple(str(h).strip() for h in raw.get("retrieval_hints") or () if str(h).strip()),
                     references=references,
                     required=raw.get("required") is not False,
+                    purpose=str(raw.get("purpose") or ""),
+                    evidence_requirements=tuple(str(x) for x in raw.get("evidence_requirements") or () if x),
+                    done_when=str(raw.get("done_when") or ""),
+                    depends_on=tuple(str(x) for x in raw.get("depends_on") or () if x),
                 )
             )
         return cls(guide_id=guide_id, revision=int(revision), steps=tuple(parsed)) if parsed else None
