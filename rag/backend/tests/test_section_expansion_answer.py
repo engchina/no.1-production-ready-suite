@@ -487,7 +487,9 @@ async def test_long_section_is_extracted_then_answered_with_verbatim_quotes(
     )
 
     prompts: dict[str, list[str]] = {"extract": [], "draft": []}
-    block = re.compile(r"^\[(C\d+)[^\]\n]*\]\n(.*?)(?=\n\n\[C\d+|\n\n</資料>)", re.M | re.S)
+    block = re.compile(
+        r"^\[(C\d+)[^\]\n]*\]\n(.*?)(?=\n\n\[C\d+|\n\nEND_UNTRUSTED_RETRIEVED_CONTEXT)", re.M | re.S
+    )
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
         if schema is SectionExtractionOutput:
