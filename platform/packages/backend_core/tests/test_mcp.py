@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
@@ -348,3 +348,181 @@ def test_tools_call_stays_json_without_progress_token_or_sse_accept() -> None:
 
 def test_report_tool_progress_is_noop_outside_progress_calls() -> None:
     report_tool_progress("検索")  # 進み具合を受け取る呼び出しの外では何もしない
+
+
+# ---- #2691: client の切断で読み取りのツールを取り消す -------------------------------------------
+
+
+class _Stages:
+    """工程を 1 つずつ進める合成のツール（始めた工程・取り消しを数える）。"""
+
+    def __init__(self) -> None:
+        self.started: list[str] = []
+        self.cancelled = 0
+        self.gate = asyncio.Event()
+        self.first_started = asyncio.Event()
+
+    async def run(self, _arguments: _EchoInput) -> _EchoOutput:
+        try:
+            self.started.append("search")
+            self.first_started.set()
+            await self.gate.wait()
+            # 切断の後に始めてはいけない次の工程（LLM の呼び出しの代わり）。
+            self.started.append("llm")
+            return _EchoOutput(echoed="done")
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+
+
+def _stage_server(stages: _Stages, *, read_only: bool) -> McpServer:
+    return McpServer(
+        name="test",
+        version="1",
+        tools=[
+            McpTool(
+                name="stage",
+                description="工程の合成のツール",
+                input_model=_EchoInput,
+                handler=stages.run,
+                read_only=read_only,
+            )
+        ],
+    )
+
+
+def _call_message(meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    params: dict[str, Any] = {"name": "stage", "arguments": {"text": "q"}}
+    if meta is not None:
+        params["_meta"] = meta
+    return {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params}
+
+
+def _request(
+    message: dict[str, Any], disconnect: asyncio.Event, *, accept: str = "application/json"
+) -> Request:
+    """本文を返した後は、`disconnect` が立つまで待ってから `http.disconnect` を返す receive。"""
+    body = json.dumps(message).encode()
+    sent = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        await disconnect.wait()
+        return {"type": "http.disconnect"}
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [(b"accept", accept.encode())],
+        "query_string": b"",
+    }
+    return Request(scope, receive)
+
+
+def test_client_disconnect_cancels_a_read_only_tool_before_the_next_stage() -> None:
+    """切断を受けたら読み取りのツールを取り消し、次の工程（LLM の呼び出し）を始めない。"""
+    stages = _Stages()
+
+    async def scenario() -> Response:
+        disconnect = asyncio.Event()
+        server = _stage_server(stages, read_only=True)
+        pending = asyncio.create_task(
+            mcp_http_response(
+                _request(_call_message(), disconnect), server, has_any_permission=lambda _p: True
+            )
+        )
+        await stages.first_started.wait()
+        disconnect.set()
+        response = await asyncio.wait_for(pending, 5)
+        # 切断の後に工程の待ちが解けても、次の工程は始まらない。
+        stages.gate.set()
+        await asyncio.sleep(0)
+        return response
+
+    response = asyncio.run(scenario())
+    assert response.status_code == 499
+    assert stages.started == ["search"]
+    assert stages.cancelled == 1
+
+
+def test_client_disconnect_does_not_stop_a_write_tool() -> None:
+    """書き込みのツールは切断で止めず、最後まで実行する。"""
+    stages = _Stages()
+
+    async def scenario() -> Response:
+        disconnect = asyncio.Event()
+        server = _stage_server(stages, read_only=False)
+        pending = asyncio.create_task(
+            mcp_http_response(
+                _request(_call_message(), disconnect), server, has_any_permission=lambda _p: True
+            )
+        )
+        await stages.first_started.wait()
+        disconnect.set()
+        await asyncio.sleep(0.05)
+        stages.gate.set()
+        return await asyncio.wait_for(pending, 5)
+
+    response = asyncio.run(scenario())
+    assert response.status_code == 200
+    assert stages.started == ["search", "llm"]
+    assert stages.cancelled == 0
+
+
+def test_tool_finishing_before_disconnect_returns_its_result() -> None:
+    """切断が無ければ、今までどおり JSON の結果を返す（切断の待ちは後に残らない）。"""
+    stages = _Stages()
+    stages.gate.set()
+
+    async def scenario() -> Response:
+        server = _stage_server(stages, read_only=True)
+        return await mcp_http_response(
+            _request(_call_message(), asyncio.Event()), server, has_any_permission=lambda _p: True
+        )
+
+    response = asyncio.run(scenario())
+    assert response.status_code == 200
+    assert json.loads(bytes(response.body))["result"]["structuredContent"] == {"echoed": "done"}
+    assert stages.started == ["search", "llm"]
+
+
+def test_client_disconnect_cancels_a_streaming_tool_without_waiting_for_heartbeat() -> None:
+    """進み具合を SSE で送る呼び出しも、次の進み具合の送信を待たずに切断で取り消す。"""
+    stages = _Stages()
+
+    async def scenario() -> list[str]:
+        disconnect = asyncio.Event()
+        server = _stage_server(stages, read_only=True)
+        response = await mcp_http_response(
+            _request(
+                _call_message({"progressToken": "p1"}),
+                disconnect,
+                accept="application/json, text/event-stream",
+            ),
+            server,
+            has_any_permission=lambda _p: True,
+            progress_heartbeat_seconds=60,
+        )
+        assert isinstance(response, StreamingResponse)
+        chunks: list[str] = []
+
+        async def consume() -> None:
+            async for chunk in response.body_iterator:
+                chunks.append(chunk if isinstance(chunk, str) else bytes(chunk).decode())
+
+        consumer = asyncio.create_task(consume())
+        await stages.first_started.wait()
+        disconnect.set()
+        await asyncio.wait_for(consumer, 5)
+        stages.gate.set()
+        await asyncio.sleep(0)
+        return chunks
+
+    chunks = asyncio.run(scenario())
+    assert chunks == []
+    assert stages.started == ["search"]
+    assert stages.cancelled == 1

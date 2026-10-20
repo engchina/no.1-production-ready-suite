@@ -1955,6 +1955,8 @@ export const ja = {
   "fileList.knowledgeBaseFilter.all": "利用できるすべてのナレッジベース",
   "fileList.selected": "{count} 件選択中",
   "fileList.selectionHint": "行を選ぶと、まとめて取込・削除できます。",
+  // 絞り込みを変えて、新しい条件の一覧を読み込んでいる間（#2696）。前の条件の件数・行では選ばせない。
+  "fileList.selectionLoading": "新しい条件の一覧を読み込んでいます。読み込み後に選択できます。",
   "fileList.bulkQueue": "一括投入",
   "fileList.bulkDelete": "一括削除",
   "fileList.clearSelection": "選択解除",

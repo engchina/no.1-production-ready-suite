@@ -102,7 +102,8 @@ class IngestionJobPhase(StrEnum):
 
 # 解析サービスの CPU を使う重い段（ファイル準備・抽出）。取込を始める最初の段でもある。worker は
 # 重い段の同時実行数を全体の枠より小さく絞り、軽い段（Chunk 作成・索引）が待ち続けないようにする
-# (#2027)。
+# (#2027)。重い段の枠は job の中の解析の区間だけで持ち、その後の項目抽出などの LLM の応答待ちでは
+# 返す(#2702。``app.rag.ingestion_slots``)。
 INGESTION_HEAVY_PHASES: frozenset[IngestionJobPhase] = frozenset(
     {IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT}
 )

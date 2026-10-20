@@ -255,6 +255,22 @@ items のうち `applies=matched` の規則・操作など。gap・条件つき�
 id を落とした形（「chunk_set:番号」）と、区切りを横線で書いた形（「78f40985‑…‑244」）も根拠に結び付ける（番号はそのまま一致し、
 1 つの根拠に決まるときだけ）。Agent が検証に渡す根拠の並び（回答が引いた根拠を先に）も同じ形を数える（検証の指示の版 10）。
 
+**最終の検証の対応・対象の確かめ（#2659・#2657・#2653）**: 語・値・名前が根拠のどこかにあること、同じ話題の根拠が
+あることは、段落が述べる対応（区分と値・成果物と列・処理と操作）の裏付けにならない。検証のモデルは、判定（`status`）の
+前に、判定に使った根拠の記載（`evidence_quote`。根拠の本文からそのまま写す）、段落が内容を当てはめている対象
+（`claim_target`。段落が書いていない点は質問の対象）と根拠の記載の対象（`evidence_target`）、その 2 つが同じか
+（`applicability`: `matched` / `not_applicable` / `unknown`）を返す（strict schema の生成順。判定の規則は
+`answer_policy.RELATION_SUPPORT_POLICY`）。システムは次の `supported` を採らず、理由を `support_check` に、監査の判定を
+`audit_status` に残す（否定の判定は変えない。`evaluation/answer_validation.py` の `_enforce_support`）: 写した原文が
+結び付けた根拠に無い（`quote_unmatched`。`citation_error`）・対象が別（`target_mismatch`。`unsupported`）・段落が根拠の表の
+別の行の区分と値を結び付けている（`value_unbound`。`unsupported`。HTML の表・Markdown の表・「名前：値」の行の並びを行で
+照合する決定的な検査 `generation/table_binding.py`。値の行に段落の区分・名前が無く、値を持つ別の行の区分・名前を同じ区間で
+述べたときだけ）。`unknown` は採否に使わない（実の LLM の確認で、対象が同じ正しい段落にも多く付いたため。確かめられない
+段落は監査の判定 `unsupported` で外す）。表の行の照合は回答の生成の検査
+（`grounded.ITEM_CHECKS` の `_check_table_binding`。原文のみ提示に落とす）でも使い、回答の生成の監査の指示（3.1）にも
+同じ規則（`RELATION_SUPPORT_RULES`）を入れる。Agent は `support_check` の種類を「資料で確認できず除いた内容」の項目の
+理由に出す（検証の指示の版 13）。
+
 **チャットの確認の質問（#717）**: 検索・回答プロファイルのルールに確認の質問と選択肢（2〜8 件。表示名・説明・検索に足す語・回答に渡す前提・章節）を設定すると、チャットは質問がそのルールに一致したとき（選択肢の名前・語が質問に既に入っていれば除く）、回答の前に確認を出す。類似問の提示の後（「どれでもない」を選んだとき）に出し、1 つの質問で聞き返すのは 1 回だけ。選んだ答えは backend がルールから引き直し、章節は検索の絞り込み `page_ranges`（文書と chunk のページの重なり。複数の章節は OR）に、選択・前提・その他の入力は回答のプロンプトの前置きに、検索に足す語は補助の検索文にする。範囲の中に根拠が無ければ、そのように答える（範囲の外から補わない）。回答の末尾に対象の範囲を示し、回答の記録の diagnostics の `scope` に残す。章節のページは、確認を出すときの文書の今の章節（章節ナビゲーションの章節。人の修正と今の抽出の結果から決める。`app/rag/document_sections_service.py`）のページを使う（#721。ルールには章節の id を保存しているので、抽出をやり直したり章節を直したりしてページが変わっても追う）。章節が今は無いときだけ、ルールに保存したときのページを使う。
 
 **回答前の確認（#1839。3 製品共通の部品と UX 契約）**: チャットの確認のカードは platform の `ClarificationCard`（[UX 契約 confirm-before-answer.md](../../platform/docs/ux-contracts/confirm-before-answer.md)）で出し、ルールの確認と業務ガイドの条件の確認（#1238）で同じ操作にする。「その他（自由入力）」は常に出す（ルールに保存した `allow_other` は読まない。業務ガイドの確認も同じ）。業務ガイドの条件の確認の自由入力は条件の値に当てはめず（値で分かれる手順を利用者の文で決めない）、条件は分からないままにして、利用者の入力を回答のプロンプトの前置きに渡す（値ごとに分けるか、当てはまる値を確かめるよう案内する）。確認を終えるのは「確認せずに回答」だけで、確認を使わずに質問のまま送る（`clarification_skipped_rule_id`）。カードに「確認をやめる」は置かない（#2311。質問を取り消すのは入力欄の「停止」）。確認は規則の照合（LLM を使わない）なので準備の経過の行は出さず、「この内容で回答」もカードを閉じてすぐ回答の作成に進む。答え・飛ばしたことは USER のメッセージの `clarification_json`（migration `20261015_001_message_clarification`）に保存し、会話の利用者の側に「回答前に確認した内容」（`ClarificationRecord`）で出す。検索・回答プロファイルの設定「曖昧な質問の扱い」（`config.clarification_policy`。`confirm` = 確認してから回答する（既定）/ `assume` = 前提を示して回答する）が `assume` なら、確認を出さない（`/clarifications/suggest` が None を返す）。1 つの質問で聞き返すのは 1 回だけなので、確認の上限（往復）は持たない。MCP の `rag_search`（Agent から呼ぶとき。#2117）も同じルールの確認を使う: 方針が `confirm` で、質問に一致したルールが確認を持てば（`suggest_clarification`）、検索・回答をせずに `outcome=needs_clarification` と `clarifications`（`condition_id` = `rule:<ルールの id>`・問い・選択肢の表示名・`multiple`）を返す。答えは `conditions` の `rule:<id>`（選んだ選択肢の表示名と自由入力を「、」で区切る。表示名と同じ部分を選択肢、残りを自由入力にする）で受け、今の質問にそのルールが一致するときだけ（会話の前の答えを別の話題に当てない）`resolve_clarification` で回答の前提と `page_ranges` にする。`skip_clarification: true` は確認を出さずに回答する（Agent の Control Plane が、利用者に確認しない Run で付ける）。業務ガイドの条件の確認は、MCP では今までどおり回答の中の判断（`guide.decision=clarify`）で返す。

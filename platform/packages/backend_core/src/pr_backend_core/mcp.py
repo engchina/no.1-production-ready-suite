@@ -6,6 +6,10 @@ Streamable HTTP の「POST に JSON で応答する」モードを基本にす�
 含むときだけ、応答を SSE にして実行中の進み具合（`notifications/progress`）を送り、最後に
 結果を送る（#1864。長くかかるツールで、進み具合を受けて待ち時間を延ばす client が時間切れに
 ならないように）。
+読み取り専用のツールの `tools/call` は、client が接続を切ったら実行を取り消す（#2691。Agent の
+Run の取消・外部の client の中断。応答を受け取る相手がいない処理の検索・LLM の呼び出しを続けない）。
+この server は切れた接続の応答を後で受け取る仕組み（SSE の再開）を持たないため、切断は取消と同じに
+扱う。書き込みのツールは途中で止めず、最後まで実行する。
 認証と利用者の特定は製品の認可 dependency（サービストークン）が行い、ここではツールの権限を
 `has_any_permission` で判定する。
 
@@ -54,6 +58,10 @@ HasAnyPermission = Callable[[frozenset[str]], bool]
 # 進み具合の通知（`notifications/progress`）の間隔（秒）。ツールが段階を知らせなくても、この間隔で
 # 経過の秒を送る（client の待ち時間の延長と、利用者への経過の表示のため。#1864）。
 PROGRESS_HEARTBEAT_SECONDS = 10.0
+
+# client が接続を切ったときに返す status（応答は届かない。アクセスログで取消と分かるように nginx の
+# 「client closed request」と同じ値にする）。
+CLIENT_CLOSED_REQUEST_STATUS = 499
 
 # 実行中のツールの進み具合を受け取る関数（`report_tool_progress` が呼ぶ）。progressToken の
 # 無い呼び出しでは None。
@@ -183,6 +191,17 @@ class McpServer:
         if method == "tools/call":
             return await self._call_tool(request_id, params, has_any_permission)
         return _error(request_id, METHOD_NOT_FOUND, f"未対応の method です: {method}")
+
+    def cancellable_tool(self, message: Any) -> McpTool | None:
+        """client の切断で取り消してよい `tools/call` のツール（読み取り専用だけ。#2691）。"""
+        if not isinstance(message, dict) or message.get("method") != "tools/call":
+            return None
+        if "id" not in message:
+            return None
+        params = message.get("params")
+        name = params.get("name") if isinstance(params, dict) else None
+        tool = self.tools.get(name) if isinstance(name, str) else None
+        return tool if tool is not None and tool.read_only else None
 
     def _initialize(self, params: Mapping[str, Any]) -> dict[str, Any]:
         requested = params.get("protocolVersion")
@@ -345,7 +364,64 @@ def _sse(payload: Mapping[str, Any]) -> str:
     return f"event: message\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+async def _until_disconnected(request: Request) -> None:
+    """client が接続を切るまで待つ（本文を読み終えた後の `http.disconnect` を受け取る）。"""
+    while True:
+        message = await request.receive()
+        if message.get("type") == "http.disconnect":
+            return
+
+
+def _log_cancelled(tool: McpTool, started: float) -> None:
+    logger.info(
+        "mcp_tool_call_cancelled",
+        extra={
+            "tool": tool.name,
+            "reason": "client_disconnected",
+            "elapsed_ms": round((monotonic() - started) * 1000),
+        },
+    )
+
+
+async def _stop(task: asyncio.Task[Any]) -> None:
+    """task を取り消し、終わるまで待つ（取り消しの例外は外へ出さない）。"""
+    if not task.done():
+        task.cancel()
+    await asyncio.wait({task})
+
+
+async def _handle_until_disconnected(
+    request: Request,
+    server: McpServer,
+    message: Any,
+    *,
+    has_any_permission: HasAnyPermission,
+) -> tuple[dict[str, Any] | None, bool]:
+    """JSON-RPC の 1 メッセージを処理する。読み取り専用のツールの `tools/call` は、client が
+    接続を切ったら取り消す（#2691）。戻り値は（応答、切断で取り消したか）。"""
+    tool = server.cancellable_tool(message)
+    if tool is None:
+        return await server.handle(message, has_any_permission=has_any_permission), False
+    started = monotonic()
+    work = asyncio.create_task(server.handle(message, has_any_permission=has_any_permission))
+    watcher = asyncio.create_task(_until_disconnected(request))
+    try:
+        await asyncio.wait({work, watcher}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        await _stop(watcher)
+        if not work.done() and (watcher.done() and not watcher.cancelled()):
+            await _stop(work)
+            _log_cancelled(tool, started)
+        elif not work.done():
+            # この処理自体が取り消された（server の停止など）。ツールも止める。
+            await _stop(work)
+    if work.cancelled():
+        return None, True
+    return work.result(), False
+
+
 def _progress_response(
+    request: Request,
     server: McpServer,
     message: Mapping[str, Any],
     token: str | int,
@@ -356,7 +432,8 @@ def _progress_response(
     """ツールを実行しながら進み具合を SSE で送り、最後に JSON-RPC の応答を送る。
 
     ツールは request の文脈（利用者・request id などの contextvar）のまま、ここで作る task で
-    動かす。client が切断したら task を取り消す（回答の生成なども止まる）。
+    動かす。client が切断したら task を取り消す（回答の生成なども止まる）。読み取り専用のツールは、
+    次の進み具合を送るのを待たずに、切断を受け取った時点で取り消す（#2691）。
     """
     loop = asyncio.get_running_loop()
     stages: asyncio.Queue[str] = asyncio.Queue()
@@ -370,15 +447,23 @@ def _progress_response(
     finally:
         _progress_reporter.reset(reset)
 
+    cancellable = server.cancellable_tool(message)
+
     async def stream() -> AsyncIterator[str]:
         started = monotonic()
         count = 0
         stage = ""
+        disconnect = (
+            asyncio.ensure_future(_until_disconnected(request)) if cancellable is not None else None
+        )
         try:
             while True:
                 waiter = asyncio.ensure_future(stages.get())
+                waiting: set[asyncio.Future[Any]] = {task, waiter}
+                if disconnect is not None:
+                    waiting.add(disconnect)
                 done, _ = await asyncio.wait(
-                    {task, waiter}, timeout=heartbeat_seconds, return_when=asyncio.FIRST_COMPLETED
+                    waiting, timeout=heartbeat_seconds, return_when=asyncio.FIRST_COMPLETED
                 )
                 if waiter in done:
                     stage = waiter.result()
@@ -386,6 +471,10 @@ def _progress_response(
                     waiter.cancel()
                 if task in done:
                     break
+                if disconnect is not None and disconnect in done and cancellable is not None:
+                    await _stop(task)
+                    _log_cancelled(cancellable, started)
+                    return
                 count += 1
                 elapsed = int(monotonic() - started)
                 text = f"経過 {elapsed} 秒: {stage or '実行中'}"
@@ -400,6 +489,8 @@ def _progress_response(
             if response is not None:
                 yield _sse(response)
         finally:
+            if disconnect is not None and not disconnect.done():
+                disconnect.cancel()
             if not task.done():
                 task.cancel()
 
@@ -435,13 +526,18 @@ async def mcp_http_response(
     token = _progress_token(message, request.headers.get("accept", ""))
     if token is not None:
         return _progress_response(
+            request,
             server,
             message,
             token,
             has_any_permission=has_any_permission,
             heartbeat_seconds=progress_heartbeat_seconds,
         )
-    response = await server.handle(message, has_any_permission=has_any_permission)
+    response, disconnected = await _handle_until_disconnected(
+        request, server, message, has_any_permission=has_any_permission
+    )
+    if disconnected:
+        return Response(status_code=CLIENT_CLOSED_REQUEST_STATUS)
     if response is None:
         return Response(status_code=202)
     return JSONResponse(response)
