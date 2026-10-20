@@ -37,6 +37,7 @@ import tempfile
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import date
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -148,6 +149,8 @@ _REFERENCE_EXTENDED_ANCHORS = 20
 _REFERENCE_EXTENDED_TARGETS = 6
 # 交差参照: 1 つの参照先の節から足す chunk の数の上限(節の先頭から。親子階層では親本文も入る)。
 _REFERENCE_CHUNKS_PER_TARGET = 2
+# 検索の基準日の条件の名前(文書の有効期間をこの日で判定する。YYYY-MM-DD)。
+AS_OF_FILTER_KEY = "as_of"
 # 交差参照: 参照先の chunk の RRF の点(起点の点に掛ける。rerank が無効なときの並びに使う)。
 _REFERENCE_SCORE_DECAY = 0.5
 # 交差参照: 他の文書への参照で、文書名・タイトルが合う文書を探す行の上限(文書とタイトルの組)。
@@ -156,9 +159,10 @@ _REFERENCE_DOCUMENT_CANDIDATES = 20
 # 検索して rerank にかける chunk の数(このうち関連の高い順に参照先 1 つにつき
 # ``_REFERENCE_CHUNKS_PER_TARGET`` 件を足す)。
 _DOCUMENT_REFERENCE_CANDIDATES = 8
-# 交差参照: 参照先を探す範囲に残す検索条件(ナレッジベースと旧版の扱いだけ)。文書名・ページ・
-# 分類などの絞り込みは参照を辿るときには使わない(業務の絞り込みで正当な参照を止めない。§7.2)。
-_REFERENCE_SCOPE_FILTER_KEYS = ("knowledge_base_id", "include_superseded")
+# 交差参照: 参照先を探す範囲に残す検索条件(ナレッジベース・旧版の扱い・基準日だけ)。文書名・
+# ページ・分類などの絞り込みは参照を辿るときには使わない(業務の絞り込みで正当な参照を止めない。
+# §7.2)。基準日(as_of)は時点の境界なので外さない(主検索と同じ日で有効期間を判定する。#2602)。
+_REFERENCE_SCOPE_FILTER_KEYS = ("knowledge_base_id", "include_superseded", AS_OF_FILTER_KEY)
 # 診断に出す交差参照の件数の上限。
 _REFERENCE_DIAGNOSTICS_LIMIT = 10
 # 診断に出す交差参照の起点の記録の、検索の回数の上限(CRAG の各回・要求ごとの再検索)。
@@ -168,7 +172,7 @@ _REFERENCE_DIAGNOSTICS_SEARCHES = 4
 _ENTITY_INSERT_AFTER = 3
 # 実体の拡張の chunk の RRF の点(起点の点に掛ける。rerank が無効なときの並びに使う)。
 _ENTITY_SCORE_DECAY = 0.5
-# 実体の拡張の範囲に残す検索条件(交差参照と同じ。ナレッジベースと旧版の扱いだけ)。
+# 実体・関係情報の拡張の範囲に残す検索条件(交差参照と同じ。ナレッジベース・旧版の扱い・基準日)。
 _ENTITY_SCOPE_FILTER_KEYS = _REFERENCE_SCOPE_FILTER_KEYS
 # 関係情報(#2055)で足した chunk を置く候補の位置(先頭からこの件数の後ろ。実体の拡張の後)。
 # 位置は rerank が決め直す(実体の拡張と違い、位置を保つ枠は持たない)。
@@ -312,6 +316,10 @@ class _SearchState:
     article_documents: list[tuple[str, str]] | None = None
     # 目録で選んだ条(#2254。chunk_id か section_id ごと。診断の article_catalog に残す)。
     article_selections: dict[str, dict[str, object]] = field(default_factory=dict)
+    # 利用者が明示した基準日(as_of。無ければ空)。検索の条件は 1 回の回答の初めに決めた基準日を
+    # 使い(``_with_effective_as_of``。#2602)、回答のプロンプトと記録の分類の条件には明示した値
+    # だけを渡す。
+    requested_as_of: str = ""
 
     @property
     def auto_field_relaxed(self) -> bool:
@@ -645,7 +653,10 @@ class AnswerEngine:
         self, request: SearchRequest, *, step_callback: StepCallback | None
     ) -> AnswerOutcome:
         loop = asyncio.get_running_loop()
-        state = _SearchState()
+        requested = request
+        # 基準日を 1 回の回答で 1 回だけ決め、主検索と拡張の検索で同じ日を使う(#2602)。
+        request = _with_effective_as_of(request)
+        state = _SearchState(requested_as_of=requested.filters.get(AS_OF_FILTER_KEY, ""))
         try:
             overrides = await self._oracle.answer_prompt_overrides()
         except Exception:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で回答を続ける。
@@ -740,7 +751,7 @@ class AnswerEngine:
                 "max_steps": self._settings.rag_filter_relaxation_max_steps,
             }
         if not outcome.citations and (
-            zero_evidence := _zero_evidence_diagnostics(result, state, request)
+            zero_evidence := _zero_evidence_diagnostics(result, state, requested)
         ):
             outcome.diagnostics["zero_evidence"] = zero_evidence
         return outcome
@@ -809,6 +820,8 @@ class AnswerEngine:
         検索比較で、引用の候補を確かめるために使う。件数は ``request.top_k``。
         """
         state = _SearchState()
+        # 主検索と同じ基準日で読む(#2602。この経路は拡張しないが、条件の決め方をそろえる)。
+        request = _with_effective_as_of(request)
         with read_lobs_as_values():
             result = await self._search(
                 request,
@@ -946,7 +959,8 @@ class AnswerEngine:
                     large_category=request.filters.get("large_category", ""),
                     middle_category=request.filters.get("middle_category", ""),
                     small_category=request.filters.get("small_category", ""),
-                    as_of=request.filters.get("as_of", ""),
+                    # 明示した基準日だけ(検索の条件の補った今日の日付は回答の条件に出さない)。
+                    as_of=state.requested_as_of,
                 ),
                 scope=(
                     (self._scope.context, self._scope.search_terms)
@@ -2530,6 +2544,25 @@ def _document_name_targets(
         known.add(key)
         targets.append(ReferenceTarget(spec.label, spec.kind, spec.key, spec.document_title))
     return targets
+
+
+def _today() -> date:
+    """今日の日付(基準日の既定。テストで差し替える)。"""
+    return date.today()
+
+
+def _with_effective_as_of(request: SearchRequest) -> SearchRequest:
+    """検索の基準日(as_of)を決めた要求(#2602)。
+
+    基準日の無い要求は今日にする(``OracleClient`` の有効期間の判定の既定と同じ日)。主検索・先読み・
+    交差参照・実体・関係情報の拡張・画面目録・章節の読み取りはこの要求の条件を使うので、回答の途中で
+    日付が変わっても、すべての検索が同じ日で有効期間を判定する。明示した基準日は変えない。
+    """
+    if (request.filters.get(AS_OF_FILTER_KEY) or "").strip():
+        return request
+    return request.model_copy(
+        update={"filters": {**request.filters, AS_OF_FILTER_KEY: _today().isoformat()}}
+    )
 
 
 def _screen_filters(request: SearchRequest, state: _SearchState) -> dict[str, str]:

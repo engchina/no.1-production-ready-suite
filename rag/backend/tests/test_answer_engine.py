@@ -3,6 +3,7 @@
 import json
 import re
 from collections.abc import Sequence
+from datetime import date
 from typing import Any, cast
 
 import pytest
@@ -13,6 +14,7 @@ from rag_engine.models.llm import (
     QueryRoutingOutput,
 )
 
+import app.rag.answer_engine as answer_engine_module
 from app.config import EnterpriseAiConfiguredModel, Settings
 from app.rag.answer_engine import AnswerEngine
 from app.rag.stored_answer import STORED_CITATION_METADATA_KEYS
@@ -1317,6 +1319,7 @@ async def test_answer_engine_keeps_only_candidates_of_named_business(
         "doc-b": {"large_category": "20_業務B"},
     }
     oracle.large_categories = [stored, "20_業務B"]
+    monkeypatch.setattr(answer_engine_module, "_today", lambda: date(2026, 4, 1))
 
     outcome = await _answer_two_documents(
         monkeypatch, oracle, question, filters={"knowledge_base_id": "kb-1"}
@@ -1325,8 +1328,9 @@ async def test_answer_engine_keeps_only_candidates_of_named_business(
     assert {chunk.document_id for chunk in outcome.citations} == {"doc-a"}
     # 分類はヒットした document_id でまとめて 1 回だけ読む(N+1 にしない)。
     assert oracle.classification_calls == [["doc-a", "doc-b"]]
-    # 大分類の語の一覧は、検索と同じ範囲で 1 回の回答に 1 回だけ読む(#553)。
-    assert oracle.large_category_calls == [{"knowledge_base_id": "kb-1"}]
+    # 大分類の語の一覧は、検索と同じ範囲(回答の初めに決めた基準日を含む。#2602)で 1 回の回答に
+    # 1 回だけ読む(#553)。
+    assert oracle.large_category_calls == [{"knowledge_base_id": "kb-1", "as_of": "2026-04-01"}]
 
 
 @pytest.mark.parametrize(
@@ -1995,12 +1999,13 @@ async def test_screen_linking_adds_screen_missing_from_search_results(
 ) -> None:
     """有効なら、検索で出なかった画面が範囲の目録に載り、その画面の chunk が候補に加わる(#554)。"""
     oracle = ScreenOracle()
+    monkeypatch.setattr(answer_engine_module, "_today", lambda: date(2026, 4, 1))
 
     outcome, calls = await _answer_with_screens(monkeypatch, oracle, enabled=True)
 
     assert calls.count("ScreenLinks") == 1
-    # 目録と画面の chunk は検索と同じ範囲(filters)で読む。
-    assert oracle.section_calls == [{"knowledge_base_id": "kb-1"}]
+    # 目録と画面の chunk は検索と同じ範囲(filters。回答の初めに決めた基準日を含む。#2602)で読む。
+    assert oracle.section_calls == [{"knowledge_base_id": "kb-1", "as_of": "2026-04-01"}]
     assert oracle.screen_calls == [(_SCREEN_FILE, _SCREEN_HEADING)]
     evidence = _evidence_ids(outcome)
     assert "setting:c1" in evidence
