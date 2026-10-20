@@ -121,6 +121,7 @@ from app.rag.ingestion_prompts import (
     RAPTOR_SUMMARY_SYSTEM_PROMPT,
 )
 from app.rag.ingestion_quality import build_ingestion_quality_report, requires_review
+from app.rag.ingestion_slots import release_heavy_ingestion_slot
 from app.rag.ingestion_strategy import extraction_strategy_for_source
 from app.rag.layer_fingerprint import (
     FIELD_SCHEMA_HASH_ARTIFACT_KEY,
@@ -1541,6 +1542,10 @@ class IngestionPipeline:
                     source_bytes=parse_bytes,
                     geometry=ContinuationGeometry.from_settings(self._settings),
                 )
+            # 解析の区間(解析サービス・図表の読み取り・文書全体の整理)はここまで。この後の見出しの
+            # 階層の推定・項目抽出は LLM の応答待ちが主のため、worker に重い段の枠を返し、全体の枠
+            # だけで待つ(LLM の並行は段ごとの実行器の上限で絞る。#2702)。
+            release_heavy_ingestion_slot()
             # 見出しの階層の推定(任意。#2277)。原本全体の整理の後、章節の木・項目抽出・chunk の前。
             extraction = await self._attach_heading_levels(trace_id, extraction)
             quality_report = build_ingestion_quality_report(
