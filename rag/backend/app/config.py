@@ -1282,12 +1282,12 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_query_strategy: QueryStrategy = Field(
-        default="auto_routing",
+        default="simple_retrieval",
         description="質問の拡張(query rewriting / expa"
         "nsion)の方式。検索・回答プロファイルで上書きできる。",
     )
     rag_answer_flow: AnswerFlow = Field(
-        default="crag",
+        default="standard_rag",
         description=(
             "回答の生成方式。crag(CRAG)は検索結果を評価して必要なら補正検索し、"
             "standard_rag(標準 RAG)は補正しない。"

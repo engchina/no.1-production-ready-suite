@@ -102,7 +102,7 @@ def test_rag_config_fingerprint_changes_when_context_group_max_chunks_changes() 
     "update",
     [
         {"rag_query_strategy": "rag_fusion"},
-        {"rag_answer_flow": "standard_rag"},
+        {"rag_answer_flow": "crag"},
         {"rag_neighbor_child_count": 5},
         {"rag_rerank_enabled": False},
         {"rag_screen_linking_enabled": True},

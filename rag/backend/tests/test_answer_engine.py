@@ -444,8 +444,8 @@ def test_search_answer_profile_overrides_answer_options() -> None:
 @pytest.mark.parametrize(
     ("settings", "expected"),
     [
-        # 既定値は移植前(answer_question_result の既定)と同じ。
-        (Settings(), ("auto_routing", "crag", 3, True)),
+        # 全体の既定は単純検索と標準 RAG(#2747)。
+        (Settings(), ("simple_retrieval", "standard_rag", 3, True)),
         (
             Settings(
                 rag_query_strategy="rag_fusion",
@@ -2456,7 +2456,7 @@ async def test_search_without_answer_skips_crag_and_generation(
     monkeypatch.setattr(engine_oci, "parse_text_response", record_llm)
     oracle = SavingOracle()
     pipeline = pipeline_module.RagPipeline(
-        settings=Settings(rag_answer_flow="crag"),
+        settings=Settings(rag_query_strategy="auto_routing", rag_answer_flow="crag"),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )

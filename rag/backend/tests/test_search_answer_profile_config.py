@@ -30,7 +30,7 @@ def test_query_overrides_apply() -> None:
     assert merged.rag_query_strategy == "rag_fusion"
     assert merged.rag_guardrail_policy == "strict"
     # グローバルは破壊しない。
-    assert settings.rag_query_strategy == "auto_routing"
+    assert settings.rag_query_strategy == "simple_retrieval"
 
 
 def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
