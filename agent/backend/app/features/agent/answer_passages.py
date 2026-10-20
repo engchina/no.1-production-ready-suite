@@ -261,9 +261,9 @@ _REFUSAL_END = re.compile(
     r"|(?:示せ|答えられ)ません(?:でした)?[。．]?$"
 )
 # 不足の文に混ざった主張（数量・逆接・「〜は〜で、」の言い切り）。
+_QUANTITY = r"[0-9０-９]+\s*(?:円|日|時間|分|秒|件|%|％|回|か月|ヶ月|カ月|年|名|人|GB|MB)"
 _ABSENCE_CLAIM = re.compile(
-    r"[0-9０-９]+\s*(?:円|日|時間|分|秒|件|%|％|回|か月|ヶ月|カ月|年|名|人|GB|MB)"
-    r"|ますが|ですが|ものの|けれど|けど|ただし"
+    _QUANTITY + r"|ますが|ですが|ものの|けれど|けど|ただし"
     r"|(?:は|が)[^。、]{1,20}(?:で|であり|となり)、"
 )
 # 業務ガイドが見つからなかったことだけを述べる文（#1452。「補足：この内容に当たる公開の
@@ -1305,6 +1305,23 @@ _OUT_OF_SCOPE_SUBJECT = re.compile(
 )
 # 結論の段落を探すときに飛ばす段落の種類（見出し・出典・表の形）。
 _DECLINE_SKIPPED_KINDS = frozenset({KIND_HEADING, KIND_CITATION, KIND_TABLE})
+# 拒答の判定の前にそろえる、文頭のお詫びの節と謙譲の否定（#2608。実サービスの評価で
+# 「申し訳ございませんが、…情報は含まれておりません。」が判定から漏れた）。
+_APOLOGY_LEAD = re.compile(
+    r"^(?:大変|誠に)?申し訳(?:ありません|ございません)(?:が|けれども)?[、,]\s*"
+)
+_HUMBLE_NEGATIVES = (("ておりません", "ていません"), ("ございません", "ありません"))
+# 資料に無いことを理由の節にして、答えられないと結ぶ文（#2608。「…確認できる情報がありません
+# ので、…についてはお答えできません。」）。理由の節の「…ので、」は `_ABSENCE_CLAIM` の言い切り
+# （「〜が〜で、」）に当たるので、`is_absence` とは別に見る。結びは答える動詞に限る。
+_DECLINE_REASON = re.compile(
+    r"(?:ありません|含まれていません|見つかりません|見当たりません|確認できません|確かめられません"
+    r"|ない|無い)(?:ので|ため)[、,]"
+)
+_DECLINE_END = re.compile(
+    r"(?:お答え|回答|ご回答|ご案内|案内)(?:は|を|も)?(?:でき|出来)ません(?:でした)?[。．]?$"
+    r"|(?:お答え|回答|ご回答|ご案内)(?:いたし|致し|し)かねます[。．]?$"
+)
 
 
 def is_out_of_scope(text: str) -> bool:
@@ -1319,7 +1336,8 @@ def concludes_decline(answer: str) -> bool:
     """回答の結論（最初の段落）が、答えられない・資料から確かめられない・範囲外と述べるか（#2608）。
 
     見出し・出典・表の形と、お詫び・了承を求める決まった文（「申し訳ありません。」）は飛ばして、
-    最初の段落を見る。根拠・データのツールを呼ばずに作った回答が、調べずに範囲外・答えられないと
+    最初の段落を見る。文頭のお詫びの節（「申し訳ございませんが、」）は外し、謙譲の否定
+    （「含まれておりません」「ございません」）はそろえてから判定する。根拠・データのツールを呼ばずに作った回答が、調べずに範囲外・答えられないと
     判断した拒答か（`tool_grounding.declined`）の判定に使う。
     """
     kinds = non_claim_passages(answer)
@@ -1330,8 +1348,24 @@ def concludes_decline(answer: str) -> bool:
                 continue
             if _ABSENCE_CLOSING.fullmatch(value):
                 continue
-            return is_absence_conclusion(text) or is_out_of_scope(text)
+            value = _APOLOGY_LEAD.sub("", value)
+            for humble, plain in _HUMBLE_NEGATIVES:
+                value = value.replace(humble, plain)
+            return (
+                is_absence_conclusion(value)
+                or is_out_of_scope(value)
+                or _declines_for_absence(value)
+            )
     return False
+
+
+def _declines_for_absence(value: str) -> bool:
+    """資料に無いことを理由の節にして、答えられないと結ぶ文か（#2608。数量・操作を含む文は除く）。"""
+    if not (_ABSENCE_SUBJECT.search(value) and _DECLINE_REASON.search(value)):
+        return False
+    if not (_DECLINE_END.search(value) or _REFUSAL_END.search(value)):
+        return False
+    return not re.search(_QUANTITY, value) and not _OPERATION.search(value)
 
 
 __all__ = [
