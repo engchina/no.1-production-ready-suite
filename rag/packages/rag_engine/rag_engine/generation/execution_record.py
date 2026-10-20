@@ -13,6 +13,7 @@ from typing import Any
 
 from rag_engine.dependencies import llm_call_count
 from rag_engine.generation.answer_models import QUESTION_DISPLAY_METADATA_SEPARATOR, extract_original_question
+from rag_engine.resources.deadline import check_cancelled
 from rag_engine.resources.llm_usage import LlmUsage, usage_delta, usage_snapshot
 from rag_engine.resources.llm_usage import llm_usage as _llm_usage
 
@@ -225,7 +226,9 @@ def _execution_step(name: str, purpose: str = ""):
     """工程境界で記録し、例外時には終了状態を「エラーで中断」にする。
 
     purpose は利用者向けの「何のための処理か」。工程名だけでは分からない場合に付ける。
+    回答が取り消された（呼び出し元の切断・停止。#2691）後は、次の工程を始めない（`DeadlineExceeded`）。
     """
+    check_cancelled()
     steps = _structured_steps.get()
     index = len(steps) if steps is not None else 0
     start = monotonic()
