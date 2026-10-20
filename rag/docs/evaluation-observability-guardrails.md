@@ -43,7 +43,7 @@ API: `POST /api/evaluation/jobs/run`（job。#390）。`GET /api/evaluation/jobs
 |---|---|---|---|---|
 | 検索 | `context_recall` | 正解の文書のうち、回答の根拠に取れた割合 | `relevant_document_ids` のあるケース | 旧 `recall_at_k` と `context_recall`（同じ計算）をまとめた。Ragas ID-based context recall |
 | 検索 | `mrr` | 最初の正解の文書の順位の逆数 | 同上 | 残す（rag_poc の検索評価も使う） |
-| 根拠 | `faithfulness`（画面の名前は「根拠との語句の一致率（参考）」） | 回答の語句のうち、根拠の本文に含まれる割合（決定論の近似。業務 Agent の最終の検証が回答の末尾に足す「資料で確認できず除いた内容」の節は数えない。#1456） | 拒答していないケース | **参考値**。言い換えるだけで下がるため、閾値の判定・ケースの失敗理由・1 件の回答の合否に使わない（#711）。閾値は目安として表示する |
+| 根拠 | `faithfulness`（画面の名前は「根拠との語句の一致率（参考）」） | 回答の語句のうち、根拠の本文に含まれる割合（決定論の近似。業務 Agent の最終の検証が回答の末尾に足す節〔「資料で確認できず除いた内容」#1456、「根拠と矛盾し除いた内容」「確認が必要な点」#2738〕と、RAG の回答の同じ 2 つの節は数えない。印の付いた段落は本文として数える。本文がすべて未確認の回答〔対応は `insufficient_evidence`〕も本文を照合する） | 拒答していないケース | **参考値**。言い換えるだけで下がるため、閾値の判定・ケースの失敗理由・1 件の回答の合否に使わない（#711）。閾値は目安として表示する |
 | 根拠 | `citation_traceability_coverage` | 引用を文書・ページ・要素までたどれる割合（頁のある引用は頁と要素の ID・bbox・節のどれか、表計算の引用は頁の代わりにシート名と行・セル範囲・要素の ID のどれか。#1456） | 引用のあるケース | 旧 `bbox_citation_coverage`・`element_lineage_coverage` をまとめた（bbox・要素の細部は file-processing の golden gate が見る） |
 | 根拠 | `claim_support_rate`（画面の名前は「Faithfulness（根拠への忠実性）」） | LLM が回答を主張に分け、根拠のない主張・根拠と矛盾する主張が無いケースの割合 | `standard_answer` のあるケース | 業界の faithfulness（RAGAS・DeepEval・Azure・Google の groundedness）と同じ考え方。保存値の key は変えない（#711） |
 | 回答 | `answer_keyword_hit_rate` | 期待する語をすべて含む回答の割合 | `expected_answer_keywords` のあるケース | 残す（標準回答の無い golden set の決定論の近似） |
@@ -73,6 +73,8 @@ CI gate の閾値を毎回インラインで書かずに選べるよう、**Eval
 - **解決順**: request の明示 `thresholds` > request の `suite`(任意) > 設定 `rag_evaluation_suite`。`EvaluationMetrics.evaluation_suite` に確定した基準を残す。
 - 削除した基準（`request_only` / `retrieval_focused` / `balanced` / `ragas_like` / `strict_ci`）は、保存済みの `RAG_EVALUATION_SUITE` を起動時に後継（`strict_ci` → `strict`、ほか → `standard`）へ寄せる。API では受け付けない。閾値を使わない評価は、request に `thresholds: {}` を書く。
 - 評価の基準はグローバル設定(と request の `suite`)だけで決まり、検索・回答プロファイルでは上書きしない。保存済みの `profile_config.query.evaluation_suite` は読み込み時に無視し、次回保存で消える。
+
+段落の印（#2738）: 各ケースに、根拠と矛盾して外した段落・未確認の印の段落・要注意の印の段落の数（`removed_passages`・`unverified_passages`・`warning_passages`。印の記録の無い回答は `null`）を残し、1 回答あたりの平均（`removed_passages_per_answer`・`unverified_passages_per_answer`・`warning_passages_per_answer`。参考の集計で閾値の判定に使わない）を出す。
 
 レスポンスには `case_results` も含める。各 case について `case_id`、`trace_id`、`status`、取得 document id、関連 document id、hit document id、case 単位の context recall / reciprocal rank / faithfulness（overlap count）/ citation traceability、回答キーワード命中、拒答したか（`abstained`）とそれが期待どおりか（`refusal_correct`）、標準回答による評価の要約（`answer_evaluation`: status・点・合否・主張の裏付け・必要な項目の対応率）、guardrail warning、diagnostics、elapsed ms、error type・error stage・error message を返す。測れない値は `null`。検索失敗または timeout の case は `status=error` として残し、query 本文や例外 message はレスポンスへ出さない。評価 runner が捕捉した case 失敗は `rag_search_audit` にも残し、timeout は `error_stage=timeout`、その他の case 例外は `error_stage=evaluation` とする。
 

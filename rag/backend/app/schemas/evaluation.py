@@ -173,6 +173,11 @@ EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = (
     "wrong_screen_rate",
     # 回答の監査が目的外（goal_alignment=off_target）と判定したケースの割合（#2402。低いほどよい）。
     "off_target_rate",
+    # 1 回答あたりの、根拠と矛盾して外した段落・未確認の印の段落・要注意の印の段落の数（#2738。
+    # 記録の無い回答は数えない）。
+    "removed_passages_per_answer",
+    "unverified_passages_per_answer",
+    "warning_passages_per_answer",
 )
 
 # 期待する手順の別解の上限（列の数）。
@@ -634,6 +639,11 @@ class EvaluationCaseResult(BaseModel):
     screen_judged_by: Literal["deterministic", "judge", "unresolved"] | None = None
     # 回答の監査の目的との合い方（#2402。aligned / partial / off_target。記録の無い回答は None）。
     goal_alignment: str | None = None
+    # 根拠と矛盾して外した段落・未確認の印の段落・要注意の印の段落の数（#2738。記録の無い回答は
+    # None）。
+    removed_passages: int | None = None
+    unverified_passages: int | None = None
+    warning_passages: int | None = None
     # 往復ごとの採点（往復のあるケースだけ。#1284）。
     turn_results: list[EvaluationTurnResult] = Field(default_factory=list)
     answer_evaluation: EvaluationAnswerJudgement | None = None
@@ -741,6 +751,10 @@ class EvaluationMetrics(BaseModel):
     screen_match_rate: float | None = None
     wrong_screen_rate: float | None = None
     off_target_rate: float | None = None
+    # 1 回答あたりの段落の印の数（参考の集計で閾値の判定には使わない。#2738）。
+    removed_passages_per_answer: float | None = None
+    unverified_passages_per_answer: float | None = None
+    warning_passages_per_answer: float | None = None
     metric_case_counts: dict[str, int] = Field(default_factory=dict)
     passed: bool = True
     threshold_failures: list[EvaluationThresholdFailure] = Field(default_factory=list)

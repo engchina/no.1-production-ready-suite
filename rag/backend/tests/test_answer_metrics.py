@@ -143,9 +143,54 @@ def test_grounding_text_excludes_the_unverified_section_of_the_agent(
     D の回答は外した段落の原文と検証の理由を末尾の節に並べ、外した段落が多い Run ほど語句の一致が
     下がっていた。モデルが本文に書いた「資料からは確認できない点」などの節は本文として残す。
     """
-    from app.rag.answer_metrics import AGENT_UNVERIFIED_HEADING, grounding_text
+    from app.rag.answer_metrics import agent_system_headings, grounding_text
 
-    assert UNVERIFIED_SECTION["heading"] == AGENT_UNVERIFIED_HEADING
+    heading = UNVERIFIED_SECTION["heading"]
+    # 見出しは以前の「資料で確認できず除いた内容」か、#2738 の節の見出し
+    # （Agent の契約が変われば追う）。
+    assert heading in agent_system_headings()
     assert grounding_text(case["answer"]) == grounding_text(case["body"])
     if case["answer"] != case["body"]:
-        assert AGENT_UNVERIFIED_HEADING not in grounding_text(case["answer"])
+        assert heading not in grounding_text(case["answer"])
+
+
+def test_grounding_text_keeps_marked_passages_and_drops_the_system_sections() -> None:
+    """faithfulness は印の段落を本文として数え、外した段落・確認が必要な点の節は数えない。
+
+    #2738。
+    """
+    from rag_engine.generation.answer_labels import answer_labels
+
+    from app.rag.answer_metrics import grounding_text
+
+    labels = answer_labels()
+    rag_answer = "\n".join(
+        [
+            "設定は 2 段階で変更します。",
+            "",
+            labels.rules_section,
+            "",
+            "・区分Ⅱの選択肢の値は 01 です。",
+            "根拠：設定.pdf p.1",
+            "",
+            labels.removed_section,
+            "",
+            labels.removed_section_note,
+            "・「変更は翌月から反映されます。」：根拠と矛盾（当月から反映）",
+            "",
+            labels.marked_section,
+            "",
+            labels.marked_section_note,
+            "・「区分Ⅱの選択肢の値は 01 です。」：根拠の表の対応と違う可能性",
+        ]
+    )
+    assert grounding_text(rag_answer).splitlines() == [
+        "設定は 2 段階で変更します。",
+        "・区分Ⅱの選択肢の値は 01 です。",
+    ]
+    agent_answer = (
+        "登録後は自動で通知されます。\n\n**根拠と矛盾し除いた内容**\n\n"
+        "- 「翌月から反映」（根拠と矛盾）"
+        "\n\n## 確認が必要な点\n- 「登録後は自動で通知されます。」：根拠で確かめられない"
+    )
+    assert grounding_text(agent_answer) == "登録後は自動で通知されます。"

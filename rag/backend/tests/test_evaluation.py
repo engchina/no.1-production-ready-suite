@@ -187,6 +187,10 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
         "screen_match_rate": 0,
         "wrong_screen_rate": 0,
         "off_target_rate": 0,
+        # 段落の印の数（#2738）。印の記録の無い回答なので測らない。
+        "removed_passages_per_answer": 0,
+        "unverified_passages_per_answer": 0,
+        "warning_passages_per_answer": 0,
     }
     assert metrics.required_evidence_recall is None
     assert metrics.evidence_chain_complete_rate is None

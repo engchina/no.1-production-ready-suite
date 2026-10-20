@@ -39,6 +39,19 @@ REFERENCE_ONLY_METRICS = frozenset({"faithfulness"})
 # 製品をまたいで import しないため写す（両方のテストが
 # platform/contracts/answer-passages/unverified-section.json で確かめる）。
 AGENT_UNVERIFIED_HEADING = "資料で確認できず除いた内容"
+
+
+def agent_system_headings() -> frozenset[str]:
+    """Agent の最終の検証が回答の末尾に足す節の見出し（#1456・#2738）。
+
+    以前の「資料で確認できず除いた内容」と、根拠と矛盾して外した内容・確認が必要な点の節（RAG の
+    回答と同じ見出し。言語資源の answer_labels）。どれも外した段落・本文の印の段落の引用と理由で、
+    本文の主張ではない。
+    """
+    labels = answer_labels()
+    return frozenset({AGENT_UNVERIFIED_HEADING, labels.removed_section, labels.marked_section})
+
+
 # 見出しの行（Markdown の見出し・太字だけの行。後ろの「：」は許す）。
 _HEADING_LINE = re.compile(r"(?:#{1,6}\s+(?P<md>.+?)|\*\*(?P<bold>[^*\n]+)\*\*)\s*[:：]?")
 
@@ -51,17 +64,19 @@ def _heading_title(line: str) -> str | None:
 
 
 def without_unverified_section(answer: str) -> str:
-    """Agent の最終の検証が足した「資料で確認できず除いた内容」の節（次の見出しの前まで）を除く。
+    """Agent の最終の検証が足した節（``agent_system_headings``。次の見出しの前まで）を除く。
 
-    節は回答の本文ではなく、検証が外した段落の原文と理由なので、忠実さ（語句の一致）に数えない
-    （#1456。外した段落が多い Run ほど faithfulness が下がり、A と D の比較を歪めていた）。
+    節は回答の本文ではなく、検証が外した段落・印の段落の原文と理由なので、忠実さ（語句の一致）に
+    数えない（#1456。外した段落が多い Run ほど faithfulness が下がり、A と D の比較を歪めていた）。
+    印の段落そのものは本文に残るので数える（#2738）。
     """
+    headings = agent_system_headings()
     kept: list[str] = []
     inside = False
     for line in answer.splitlines():
         title = _heading_title(line)
         if title is not None:
-            inside = title == AGENT_UNVERIFIED_HEADING
+            inside = title in headings
         if not inside:
             kept.append(line)
     return "\n".join(kept)
@@ -71,7 +86,8 @@ def grounding_text(answer: str) -> str:
     """忠実さの照合に使う回答の本文。
 
     回答生成が付けた見出し・出典行・定型文（「参考情報」の節の直下の説明を含む。#2040）と、
-    Agent の最終の検証が足した「資料で確認できず除いた内容」の節（#1456）は主張ではないので外す。
+    「根拠と矛盾し除いた内容」「確認が必要な点」の節（#2738）と、Agent の最終の検証が足した節
+    （#1456）は主張ではないので外す。印の付いた段落は本文の主張として数える（#2738）。
     """
     body = without_unverified_section(answer)
     # 読めなかった章節・時間の上限で省いた処理の行もシステムの案内なので外す（#2040）。

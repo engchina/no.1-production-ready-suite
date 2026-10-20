@@ -6,7 +6,7 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pr_backend_core.chat_progress import ChatProgressEvent
 from pr_system_settings.chat_attachments import ChatAttachmentReference
@@ -90,6 +90,11 @@ class ChatMessage(BaseModel):
     sender_display_name: str = ""
     # 質問に添付したファイル（#2517。名前・種類・大きさ）。添付の無い質問・回答は空。
     attachments: list[ChatAttachmentReference] = Field(default_factory=list)
+    # 回答の段落の印・根拠と矛盾して外した段落・回答全体の警告（ASSISTANT の回答だけ。#2738。形は
+    # platform/contracts/answer-passages/passage-marks.json）。記録の無い回答は空。
+    passage_marks: list[dict[str, Any]] = Field(default_factory=list)
+    removed_passages: list[dict[str, Any]] = Field(default_factory=list)
+    answer_warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatAnswerCancelResult(BaseModel):

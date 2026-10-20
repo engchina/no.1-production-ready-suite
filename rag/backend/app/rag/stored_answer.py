@@ -18,6 +18,10 @@
 
 親子階層（small-to-big）の要素の表示領域は ``engine_metadata_json.layout.display_regions`` から
 ``display_regions`` へ取り出して持つ（画面は ``metadata.display_regions`` も読む）。
+
+回答の診断（``diagnostics``）には、段落の印・根拠と矛盾して外した段落・回答全体の警告（#2738）を、
+契約（``platform/contracts/answer-passages/passage-marks.json``）の項目だけにして持つ
+（``passage_mark_record``）。保存済みの過去の回答は書き換えない（無ければ空の一覧として読む）。
 """
 
 from __future__ import annotations
@@ -185,6 +189,58 @@ _EVALUATION_EVIDENCE_KEYS = (
 # 1 回答の記録（引用と評価の入力の JSON の文字数の合計）がこれを超えたら警告を残す。
 # 切り詰めはしない（引用を削ると画面の根拠が欠け、評価の入力を削ると評価の結果が変わるため）。
 ANSWER_RECORD_WARN_CHARS = 512 * 1024
+
+
+# 段落の印・外した段落・回答全体の警告（#2738）の記録の key と、各要素に残す項目（許可の一覧）。
+PASSAGE_MARK_RECORD_KEYS = ("passage_marks", "removed_passages", "answer_warnings")
+_PASSAGE_KEYS = ("text", "state", "reasons")
+_REASON_KEYS = ("code", "label", "detail")
+
+
+def _reason_entries(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        return []
+    return [
+        {key: str(item.get(key) or "") for key in _REASON_KEYS}
+        for item in value
+        if isinstance(item, Mapping) and item.get("code")
+    ]
+
+
+def _passage_entry(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping) or not str(value.get("text") or "").strip():
+        return None
+    entry: dict[str, Any] = {
+        key: str(value.get(key) or "") for key in _PASSAGE_KEYS if key != "reasons" and key in value
+    }
+    entry["reasons"] = _reason_entries(value.get("reasons"))
+    return entry
+
+
+def passage_mark_record(envelope: Mapping[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
+    """回答の構造（envelope）から、段落の印・外した段落・回答全体の警告を記録の形で取り出す（#2738）。
+
+    契約の項目（text・state・reasons の code・label・detail）だけを残す。無い・古い記録は空の一覧。
+    """
+    source = envelope if isinstance(envelope, Mapping) else {}
+
+    def entries(key: str) -> list[Any]:
+        value = source.get(key)
+        return (
+            list(value)
+            if isinstance(value, Sequence) and not isinstance(value, str | bytes)
+            else []
+        )
+
+    return {
+        "passage_marks": [
+            entry for item in entries("passage_marks") if (entry := _passage_entry(item))
+        ],
+        "removed_passages": [
+            entry for item in entries("removed_passages") if (entry := _passage_entry(item))
+        ],
+        "answer_warnings": _reason_entries(entries("answer_warnings")),
+    }
 
 
 def stored_citation_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:

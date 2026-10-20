@@ -89,7 +89,7 @@ from app.rag.search_answer_profile_knowledge import (
     load_runtime_knowledge_payload,
     resolve_clarification,
 )
-from app.rag.stored_answer import stored_citation, stored_citations
+from app.rag.stored_answer import passage_mark_record, stored_citation, stored_citations
 from app.rag.support_guide_runtime import (
     GUIDE_CLARIFICATION_PREFIX,
     guide_clarification_record,
@@ -226,6 +226,12 @@ def _to_chat_message(
             "" if sent_by_owner else (sender_names or {}).get(message.user_id_hash or "", "")
         ),
         attachments=_saved_attachments(message),
+        # 段落の印（終わった回答だけ。#2738）。契約の項目だけを返す。
+        **(
+            passage_mark_record(message.passage_record)
+            if message.status == "COMPLETE" and message.passage_record
+            else {}
+        ),
     )
 
 
@@ -817,6 +823,8 @@ async def _generate_chat_answer(
             progress=tracker.dump() if tracker is not None else None,
             # 回答の注意書き（#2405）。本文（会話の履歴に使う）とは別の列に保存する。
             answer_notice=result.notice,
+            # 段落の印（#2738）。列には保存せず、回答の記録（diagnostics_json）から読み直す。
+            passage_record=passage_mark_record(result.diagnostics.answer),
         )
     except Exception as exc:
         if tracker is not None:
