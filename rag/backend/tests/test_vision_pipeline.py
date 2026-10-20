@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -84,14 +84,26 @@ def _with_pictures(extraction: StructuredExtraction) -> StructuredExtraction:
 
 
 class Runner:
-    """解析サービスの代わり（段ごとに ``delay`` 秒かかる。``fail_on_call`` 回目は失敗）。"""
+    """解析サービスの代わり（段ごとに ``delay`` 秒かかる。``fail_on_call`` 回目は失敗）。
+
+    ``hold`` は、何回目の呼び出しを終えてよいかを返す（偽の間は終えずに待つ。上限 ``HOLD_TIMEOUT``
+    秒）。重なり・先読みを、実行の速さ（CI の負荷）によらず確かめるために、時間ではなく相手の進み
+    で待つ。
+    """
+
+    HOLD_TIMEOUT = 30.0
 
     def __init__(
-        self, delay: float = 0.0, fail_on_call: int | None = None, fail_delay: float = 0.0
+        self,
+        delay: float = 0.0,
+        fail_on_call: int | None = None,
+        fail_delay: float = 0.0,
+        hold: Callable[[int], bool] | None = None,
     ) -> None:
         self.delay = delay
         self.fail_on_call = fail_on_call
         self.fail_delay = fail_delay
+        self.hold = hold
         self.calls: list[tuple[float, float, list[int]]] = []
 
     def __call__(
@@ -100,8 +112,12 @@ class Runner:
         from app.clients.parser_service import ParserServiceUnavailableError
 
         started = time.monotonic()
-        failing = self.fail_on_call is not None and len(self.calls) + 1 == self.fail_on_call
+        number = len(self.calls) + 1
+        failing = self.fail_on_call is not None and number == self.fail_on_call
         time.sleep(self.fail_delay if failing else self.delay)
+        deadline = started + self.HOLD_TIMEOUT
+        while self.hold is not None and not self.hold(number) and time.monotonic() < deadline:
+            time.sleep(0.01)
         pages = _original_pages(source_bytes)
         self.calls.append((started, time.monotonic(), pages))
         if failing:
@@ -197,10 +213,10 @@ async def test_vision_starts_per_segment_while_next_segments_parse(
 
     全体の読み取りは呼び直さない。
     """
-    # 段の解析は 1 段 1 秒（段の図の画像の準備より長くし、重なりを確かめる）。
-    runner = Runner(delay=1.0)
-    _install(monkeypatch, runner)
     reader = Reader()
+    # 最後の段の解析は、先に解析した段の図の Vision が始まるまで終えない（重なりを確かめる）。
+    runner = Runner(hold=lambda number: number < 3 or bool(reader.calls))
+    _install(monkeypatch, runner)
     oracle = PromptOracle()
     await _ingest(_pipeline(reader, oracle, Storage()), _pdf(23))
 
@@ -243,8 +259,12 @@ async def test_resume_reuses_vision_of_finished_segments(monkeypatch: pytest.Mon
     storage = Storage()
     # 同じ原本（再試行は同じ文書のバイト列。応答の鍵は原本の hash を含む）。
     pdf = _pdf(23)
-    # 段 3 の解析は 3 秒かけて失敗する（その間に段 1・2 の先読みが終わる）。
-    failing = Runner(fail_on_call=3, fail_delay=3.0)
+
+    # 段 3 の解析は、段 1・2 の先読みの応答を段の artifact に残してから失敗する。
+    def vision_saved() -> int:
+        return sum(1 for key, _, _ in storage.puts if "/vision/" in key)
+
+    failing = Runner(fail_on_call=3, hold=lambda number: number != 3 or vision_saved() >= 2)
     _install(monkeypatch, failing)
     first = Reader()
     with pytest.raises(IngestionUserError):
