@@ -316,6 +316,9 @@ AUDIT_SYSTEM_PROMPT = (
     "- unused_evidence_ids: 未使用根拠のうち、質問への回答に必要なのに items で使われていないものだけを、重要な順に最大8件挙げる。"
     "unused_evidence の text は各根拠の先頭の抜粋で全文ではない。抜粋から必要と読み取れるものだけを挙げ、続きを推測して挙げない。\n"
     "- items が空の草稿（gap だけ）も同じ入力で監査する。items が答えていない要求は unused_evidence に答えがあっても missing とし、その根拠を unused_evidence_ids に挙げる（拒答の妥当性の確認）。\n"
+    "- summary_output_fields: summary の各文を確認し、出力ファイルに列・項目・値があるという主張が1つでもあれば、その定義の原文引用と出力対象の一致を返す。"
+    "後から未確認と留保しても先の存在の主張は消えない。例:「列Aで抽出する。列定義は未確認。」も列の存在の主張。"
+    "抽出条件や帳票一覧は項目定義ではない。存在の主張が無い場合だけnull。\n"
     "- summary_supported: summary が items の範囲を超える断定をしていなければ true。質問が原因・理由を尋ねている場合、summary が supported な item の quote にない原因や可能性を挙げていれば false（「〜のいずれかが原因と考えられます」のような列挙も同じ）。\n"
     "- summary が supported な item の規則と valid な application の result をつないだ結論（規則を質問の事実に当てはめた計算・該当の判断）なら、summary_supported=true。\n"
     "- summary が supported な複数の item の事実をつないだ結論（「A の担当は略号 X」「X は〇〇部」「〇〇部の承認者は Y」→「A の変更は Y が承認」）なら、items の範囲を超える断定ではないので summary_supported=true。つなぐ段のどれかが supported な item に無ければ false。\n"
@@ -3959,6 +3962,19 @@ def _unused_evidence(question: str, spans: Sequence[dict], used: set[str]) -> li
     return [{"evidence_id": s["label"], "function": _function_label(s), "text": s["text"][:AUDIT_UNUSED_EVIDENCE_CHARS]} for s in selected]
 
 
+def summary_output_fields_error(audit: GroundedAudit | None, spans: Sequence[dict]) -> str:
+    """要約も本文と同じ出力項目の契約と原文に照合する。"""
+    fields = audit.summary_output_fields if audit else None
+    if fields is None:
+        return ""
+    if fields.output_fields_unconfirmed():
+        return "要約が主張する出力ファイルの項目定義と対象の一致を確認できません。"
+    texts = [text for span in spans for text in (span["text"], *span.get("document_texts", ()))]
+    if not any(quote_in_text(fields.definition_quote, text) for text in texts):
+        return "要約が主張する出力ファイルの項目定義の引用を根拠に確認できません。"
+    return ""
+
+
 def _audit_function_context(span: dict) -> str:
     """監査に渡す同じ機能の本文。`function_texts` を読み順につないで上限で切る。"""
     return "\n".join(span.get("function_texts", ()))[:AUDIT_FUNCTION_CONTEXT_CHARS]
@@ -4189,7 +4205,10 @@ def run_round(
     # summary（items の範囲を超えた保証を含み得る。#621）、保証の過剰、原因の推測（#713）、全要求が missing（#732）、
     # 支持された説明がすべて条件付き・適用未確認（#1012）が警告の理由。
     published = [e for e in checked if e.span and e.published]
-    summary_warning = (
+    summary_fields_error = summary_output_fields_error(audit, spans)
+    if summary_fields_error and audit is not None:
+        audit.summary_supported = False
+    summary_warning = summary_fields_error or (
         "監査対象の item がない"
         if not auditable
         else "監査なし"
