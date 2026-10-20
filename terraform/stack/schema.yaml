@@ -138,6 +138,22 @@ variableGroups:
       - subnet_ai_subnet_id
       - ssh_authorized_keys
 
+  - title: "Bastion"
+    visible: true
+    variables:
+      - bastion_enabled
+
+  - title: "Bastion Compute"
+    visible: bastion_enabled
+    variables:
+      - bastion_display_name
+      - bastion_flex_shape_ocpus
+      - bastion_flex_shape_memory
+      - bastion_boot_volume_size
+      - bastion_boot_volume_vpus
+      - bastion_subnet_id
+      - bastion_vnc_password
+
 variables:
   region:
     title: Region
@@ -675,6 +691,68 @@ variables:
     title: "SSHキーの追加"
     description: "SSHキーペアを自動生成するか、既存の公開キーをアップロードまたは貼り付けて、opcユーザーのSSH接続に使用します。"
 
+  bastion_enabled:
+    type: boolean
+    required: true
+    visible: true
+    title: "Bastion Compute"
+    description: "オンにすると、Suite の Compute とは別に bastion の Compute を 1 台作ります。GNOME のデスクトップ・TigerVNC（:1 = TCP 5901。firewalld で開けます）・Google Chrome を入れます。shape・image（Oracle Linux 9）・SSH キーは Suite の Compute と同じです。bastion から ADB（1522）と Suite の Compute（公開の port・22）に届くよう、それぞれの subnet の security list で bastion の subnet の CIDR を許可してください。"
+    default: false
+
+  bastion_display_name:
+    type: string
+    required: true
+    visible: bastion_enabled
+    title: "Bastion instance name"
+    default: "PRODUCTION_READY_BASTION"
+
+  bastion_flex_shape_ocpus:
+    type: number
+    required: true
+    visible: bastion_enabled
+    title: "Bastion OCPUs"
+    default: 2
+
+  bastion_flex_shape_memory:
+    type: number
+    required: true
+    visible: bastion_enabled
+    title: "Bastion memory (GB)"
+    default: 16
+
+  bastion_boot_volume_size:
+    type: number
+    required: true
+    visible: bastion_enabled
+    title: "Bastion boot volume size (GB)"
+    default: 100
+
+  bastion_boot_volume_vpus:
+    type: number
+    required: true
+    visible: bastion_enabled
+    title: "Bastion boot volume VPUs/GB"
+    default: 10
+
+  bastion_subnet_id:
+    type: oci:core:subnet:id
+    required: false
+    visible: bastion_enabled
+    title: "Bastion subnet"
+    description: "Subnet of the bastion Compute instance (empty: the Compute subnet). Public IP assignment is detected automatically. Allow TCP 22 and 5901 from the administrators' CIDR only in its security list."
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+      vcnId: ${vcn_ai_vcn_id}
+
+  bastion_vnc_password:
+    type: password
+    required: false
+    visible: bastion_enabled
+    title: "Bastion VNC password"
+    description: "VNC password of the opc user (at least 8 characters; TigerVNC uses only the first 8). Required when the bastion is created."
+    confirmation: true
+    pattern: '^$|^.{8,}$'
+
   deploy_rag:
     type: boolean
     required: true
@@ -853,3 +931,15 @@ outputs:
     displayText: "SSH command"
     type: copyableString
     visible: true
+
+  bastion_vnc_address:
+    title: "Bastion VNC address"
+    displayText: "Bastion VNC address (user opc, the bastion VNC password)"
+    type: copyableString
+    visible: bastion_enabled
+
+  ssh_to_bastion:
+    title: "Bastion SSH command"
+    displayText: "Bastion SSH command"
+    type: copyableString
+    visible: bastion_enabled

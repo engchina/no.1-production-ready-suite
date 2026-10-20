@@ -23,12 +23,16 @@ stack は VCN・subnet・security list・NSG を作らず、フォームで選�
 | Compute の subnet | 利用者の端末の CIDR（社内の出口の範囲など。どこからでも使わせるなら `0.0.0.0/0`） | 公開の port: フォームの `https_port`（既定 `443`）。HTTPS を off にしたときは `http_port`（既定 `80`） | 3 製品の画面と MCP（`https://<host>/<製品>/`） |
 | Compute の subnet | 管理者の端末の CIDR | `22` | SSH（`ssh opc@<IP>`。[配備した後の運用](#配備した後の運用)） |
 | ADB のプライベート・エンドポイントの subnet | **Compute の subnet の CIDR**（例 `10.0.1.0/24`） | `1522` | Compute（3 製品と配備の `suite-init.sh`）から ADB への接続 |
+| bastion の subnet（`bastion_enabled` のときだけ） | 管理者の端末の CIDR（`0.0.0.0/0` にしない） | `22`・`5901` | bastion への SSH と VNC（[terraform/README.md「bastion の Compute」](./terraform/README.md#bastion-の-compute任意2670)） |
+| Compute の subnet（`bastion_enabled` のときだけ） | **bastion の subnet の CIDR** | 公開の port（既定 `443`）・`22` | bastion の Chrome から 3 製品の画面、bastion から Compute への SSH |
+| ADB のプライベート・エンドポイントの subnet（`bastion_enabled` のときだけ） | **bastion の subnet の CIDR** | `1522` | bastion（SQL の道具など）から ADB への接続 |
 
 - 公開の port は、フォームで選んだ値を開けます（443 以外にしたら URL は `https://<IP>:<port>/`）。HTTPS が on のとき `http_port` は Compute で使わないので開けません。Compute の OS の firewall（firewalld）は配備のスクリプトが同じ port を開けます。
 - ADB の 1522 は、ADB のアクセス・タイプが「プライベート・エンドポイント・アクセスのみ」（既定）のときの規則です。Compute と ADB のプライベート・エンドポイントが同じ subnet でも、その subnet の security list に「送信元 = その subnet 自身の CIDR、port `1522`」を足します（同じ subnet の中の通信にも security list の規則が要ります）。
   - 「許可された IP および VCN 限定のセキュア・アクセス」（ACL）なら、security list ではなく ADB の ACL で Compute の subnet（または VCN）を許可します。「すべての場所からのセキュア・アクセス」なら足すものはありません。
 - egress: Compute は配備と実行で外部（GitHub・dnf・uv / npm の取得、OCI Generative AI・OCI Enterprise AI・Object Storage）へ HTTPS で出ます。Compute の subnet の security list の egress（既定は `0.0.0.0/0` のすべて）を絞っているなら TCP `443` の egress を残し、private subnet なら NAT gateway（と Service gateway）の経路を用意します。
 - 製品間の通信（Agent → RAG / NL2SQL の MCP）は同じ Compute の `127.0.0.1` なので、security list は要りません。
+- bastion を Compute と同じ subnet に置く（`bastion_subnet_id` を空にする）ときも、上の bastion の規則は「送信元 = その subnet 自身の CIDR」で足します。ADB が ACL（許可された IP および VCN）なら、ADB の ACL で bastion の subnet（または VCN）も許可します。
 
 ### 配備の前に: Object Storage の bucket
 

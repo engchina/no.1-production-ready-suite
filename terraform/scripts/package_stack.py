@@ -32,6 +32,7 @@ def _stack_files(stack_dir: Path) -> list[Path]:
     ]
     nested_files = [
         stack_dir / "cloud_init" / "bootstrap.template.yaml",
+        stack_dir / "cloud_init" / "bastion.sh",
     ]
     files = [path for path in [*root_files, *nested_files] if path.is_file()]
 
@@ -39,6 +40,7 @@ def _stack_files(stack_dir: Path) -> list[Path]:
         stack_dir / "schema.yaml",
         stack_dir / "extract_wallet.sh",
         stack_dir / "cloud_init" / "bootstrap.template.yaml",
+        stack_dir / "cloud_init" / "bastion.sh",
     }
     missing = sorted(
         path.relative_to(stack_dir).as_posix() for path in required if not path.is_file()

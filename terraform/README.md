@@ -11,6 +11,7 @@
   選んだ製品の `init_script.sh`（[`rag/`](../rag/init_script.sh) / [`nl2sql/`](../nl2sql/init_script.sh) / [`agent/`](../agent/init_script.sh)）を順に呼び、
   Nginx の site（製品の path の prefix と HTTPS）を 1 つだけ書く
 - 3製品で共通のサービス間 token の署名鍵（`random_password`。共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`。#233）
+- 任意で bastion の Compute を 1 台（`bastion_enabled`、既定 off。VNC のデスクトップと Google Chrome 入り。製品は入れない。下の「bastion の Compute」。#2670）
 
 ```text
               ┌──────────────────────────────┐
@@ -339,7 +340,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
 
 ### Compute・Nginx・HTTPS（3 製品で共通。#1316）
 
-- Compute は 1 台です。既定は **4 OCPU / 32 GB / boot volume 200 GB**。RAG の CPU の parser（Docling）が最も多く使うので、
+- 3 製品を入れる Compute は 1 台です（bastion の Compute は別。下の「bastion の Compute」）。既定は **4 OCPU / 32 GB / boot volume 200 GB**。RAG の CPU の parser（Docling）が最も多く使うので、
   文書の取込が多いときは OCPU とメモリを上げてください。
 - root の filesystem（`/`）は、最初の起動で boot volume いっぱいに広げます（#1984）。Oracle Linux 9 の image の root（LVM の
   `ocivolume-root`）は boot volume を大きくしても image の大きさ（約 30 GB）のままで、3 製品の Python の環境・RAG の parser・
@@ -396,7 +397,38 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
   どの製品の `/login` でログインしても全製品を使えます。
 - Wallet は `/u01/aipoc/wallet`、ログは `/var/log/cloud-init-custom.log`（bootstrap）・`/var/log/suite-init.log`（全体）・`/var/log/<製品>-init.log`。
 - apply 後の output に、`application_url`（`/`）、製品ごとの URL（`rag_application_url` など。配備しなかった製品は表示されない）、
-  `ca_certificate_url`（HTTPS のとき）、`ssh_to_instance` が出ます。
+  `ca_certificate_url`（HTTPS のとき）、`ssh_to_instance`、bastion を作ったときは `bastion_vnc_address`・`ssh_to_bastion` が出ます。
+
+#### bastion の Compute（任意。#2670）
+
+- フォームの「Bastion Compute」（`bastion_enabled`、既定 off）をオンにすると、Suite の Compute とは別に bastion の Compute を 1 台作ります
+  （`terraform/stack/bastion.tf`）。3 製品は入れません。private subnet の Compute の画面や、プライベート・エンドポイントの ADB に、
+  GUI のブラウザ・SQL の道具で届くための踏み台です。
+- 既定は **2 OCPU / 16 GB / boot volume 100 GB / 10 VPUs/GB**（`bastion_flex_shape_ocpus` / `bastion_flex_shape_memory` /
+  `bastion_boot_volume_size` / `bastion_boot_volume_vpus`）。shape（`instance_shape`）・image（Oracle Linux 9 の `instance_image_source_id`）・
+  SSH キーは Suite の Compute と同じです。subnet（`bastion_subnet_id`）を空にすると Suite の Compute と同じ subnet に置きます。
+  公開 IP は subnet から自動で決めます（public subnet なら付ける）。
+- 最初の起動で cloud-init（`terraform/stack/cloud_init/bastion.sh`）が、root の filesystem を広げ、GNOME（「Server with GUI」）・TigerVNC
+  （display `:1` = TCP `5901`、ユーザー `opc`）・Google Chrome（Google の dnf repository。署名を確かめて入れる）・日本語の font を入れ、
+  firewalld で `5901` を開けます。再起動のたびに `ensure-vnc.service` が VNC の起動と firewalld の `5901` を確かめます。
+  ログは `/var/log/bastion-init.log`。GNOME の package が多いため、使えるまで 10〜20 分ほどかかります。
+- VNC のパスワードはフォームの `bastion_vnc_password`（8 文字以上。TigerVNC は先頭の 8 文字だけを使う）で、instance metadata
+  （`bastion_vnc_password_b64`）で渡します。スクリプトには書きません。値は Terraform の state と instance metadata に残ります。
+- apply 後の output に `bastion_vnc_address`（`<IP>:5901`）と `ssh_to_bastion` が出ます。VNC のクライアントで `<IP>:5901` に接続します。
+  5901 を開けたくないときは、SSH の port forward（`ssh -L 5901:localhost:5901 opc@<bastion の IP>`）で `localhost:5901` に接続します。
+- **security list**（stack は規則を作りません。#259）に、次の ingress（ステートフル・TCP）を足してください。直下の
+  [README.md](../README.md#配備の前に-vcn-の-security-list) の表にもあります。
+
+  | 足す security list | 送信元 CIDR | 宛先の port（TCP） | 用途 |
+  |---|---|---|---|
+  | bastion の subnet | 管理者の端末の CIDR（`0.0.0.0/0` にしない。VNC の認証はパスワードだけ） | `22`・`5901` | bastion への SSH と VNC |
+  | Compute の subnet | bastion の subnet の CIDR | 公開の port（`https_port`、既定 `443`。HTTPS が off なら `http_port`）・`22` | bastion の Chrome から 3 製品の画面、bastion から Compute への SSH |
+  | ADB のプライベート・エンドポイントの subnet | bastion の subnet の CIDR | `1522` | bastion から ADB への接続 |
+
+  - bastion と Compute（または ADB）が同じ subnet でも、その subnet の security list に「送信元 = その subnet 自身の CIDR」の規則が要ります。
+  - ADB が「許可された IP および VCN 限定のセキュア・アクセス」（ACL）なら、security list ではなく ADB の ACL で bastion の subnet（または VCN）を許可します。
+  - egress: bastion は dnf と Google Chrome の取得（`dl.google.com`）で外部へ HTTPS で出ます。private subnet なら NAT gateway の経路を用意します。
+  - Suite の Compute の HTTPS の証明書は自作の CA なので、bastion の Chrome で警告を消すには `ca_certificate_url` の CA を Chrome に取り込みます。
 
 #### Compute の OS（Oracle Linux 9。#1611）
 

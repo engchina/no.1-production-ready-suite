@@ -61,3 +61,22 @@ output "ssh_to_instance" {
   description = "SSH command for the Compute instance."
   value       = "ssh -o ServerAliveInterval=10 opc@${local.instance_access_ip}"
 }
+
+# bastion の Compute（#2670）。作らないときは null（Resource Manager では表示されない）。
+locals {
+  bastion_access_ip = var.bastion_enabled ? (
+    local.bastion_subnet_prohibits_public_ip
+    ? oci_core_instance.bastion[0].private_ip
+    : oci_core_instance.bastion[0].public_ip
+  ) : null
+}
+
+output "bastion_vnc_address" {
+  description = "VNC address of the bastion Compute instance (TigerVNC display :1). Log in with the bastion VNC password."
+  value       = var.bastion_enabled ? "${local.bastion_access_ip}:5901" : null
+}
+
+output "ssh_to_bastion" {
+  description = "SSH command for the bastion Compute instance."
+  value       = var.bastion_enabled ? "ssh -o ServerAliveInterval=10 opc@${local.bastion_access_ip}" : null
+}
