@@ -35,7 +35,7 @@ async def test_profile_list_uses_natural_name_order_before_paging() -> None:
     ]
     ids = [item.id for item in reversed(created)] + [default.id]
     expected = [default.id] + [item.id for item in created]
-    actual = []
+    actual: list[str] = []
     for offset in range(0, len(expected), 3):
         page = await client.list_search_answer_profiles(
             search_answer_profile_ids=ids, limit=3, offset=offset
