@@ -24,6 +24,8 @@ dependencies = [
 ]
 
 [tool.uv]
+# docling-slim（最新 2.141.0）が pillow を <13 に制約するが、取り込む文書の画像の解析の脆弱性（GHSA-462x-pgg6-55fp ほか 8 件）の修正版は 13.0.0。13.0.0 の非互換は削除された API だけで docling・本リポジトリは使わないため、制約を上書きする（#2790）。docling が 13 を許したら外す。
+override-dependencies = ["pillow>=13.0.0"]
 # rapidocr が要求する GUI 版の opencv-python を入れない(cv2 は上の headless 版が提供する)。
 # 両方を入れると同じ cv2 パッケージを上書きし合うため、依存の解決から外す(uv.lock にも残らない)。
 exclude-dependencies = ["opencv-python"]
