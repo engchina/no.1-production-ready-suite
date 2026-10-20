@@ -176,6 +176,11 @@ _SUPPORT_CHECK_LABELS = {
     "target_mismatch": "質問と別の対象についての記載",
     "value_unbound": "根拠の表の対応と違う",
 }
+# 業務ガイドの手順の説明の充足（#2708）。`rag_validate_answer` の `guide_steps` の状態の強さの順
+# （接続をまたいでは最も良い状態を採る）と、説明の無い必須の手順の finding（warning。文は RAG の
+# 回答の不足の行と同じ）。
+GUIDE_STEP_STATUS_ORDER = ("explained", "reference_only", "unused", "no_evidence")
+GUIDE_STEP_UNEXPLAINED = "guide_step_unexplained"
 # 外した段落に続く番号つきの手順の段落の、節の項目の理由（#2604。`dependent_steps`）。
 DEPENDENT_STEP_LABEL = "確かめられない手順に続く手順"
 # 根拠で否定した判定（根拠に無い・根拠と矛盾）。出典を照合できない（`citation_error`）・
@@ -843,6 +848,15 @@ def merge_results(results: list[JsonObject]) -> JsonObject:
                 seen_findings.add(finding_key)
                 findings.append(item)
     checks = sorted({str(item) for result in results for item in result.get("checks") or []})
+    guide_steps = merge_guide_steps(results)
+    if guide_steps:
+        # 接続のどれかで説明を確かめた手順は、ほかの接続の「説明が無い」を残さない。
+        explained = {str(step["step_id"]) for step in guide_steps if step["status"] == "explained"}
+        findings = [
+            item
+            for item in findings
+            if item.get("code") != GUIDE_STEP_UNEXPLAINED or item.get("step_id") not in explained
+        ]
     valid = (
         status == "completed"
         and not stale
@@ -863,7 +877,59 @@ def merge_results(results: list[JsonObject]) -> JsonObject:
         "missing_evidence": missing,
         "stale_evidence": stale,
         "evidence_truncated": any(bool(result.get("evidence_truncated")) for result in results),
+        "guide_steps": guide_steps,
     }
+
+
+def merge_guide_steps(results: list[JsonObject]) -> list[JsonObject]:
+    """接続ごとの業務ガイドの手順の充足（`guide_steps`）を、手順ごとに最も良い状態にまとめる（#2708）。"""
+    merged: dict[str, JsonObject] = {}
+    for result in results:
+        for step in result.get("guide_steps") or []:
+            if not isinstance(step, dict) or step.get("status") not in GUIDE_STEP_STATUS_ORDER:
+                continue
+            step_id = str(step.get("step_id") or "")
+            current = merged.get(step_id)
+            if current is None or GUIDE_STEP_STATUS_ORDER.index(
+                step["status"]
+            ) < GUIDE_STEP_STATUS_ORDER.index(current["status"]):
+                merged[step_id] = dict(step)
+    return list(merged.values())
+
+
+def unexplained_guide_steps(result: JsonObject) -> list[JsonObject]:
+    """必須の手順のうち、回答で説明を確かめられなかった手順（#2708）。
+
+    `rag_validate_answer` の `guide_steps` から選ぶ。
+    """
+    return [
+        step
+        for step in result.get("guide_steps") or []
+        if isinstance(step, dict) and step.get("required") and step.get("status") != "explained"
+    ]
+
+
+def guide_step_gap_lines(result: JsonObject) -> list[str]:
+    """説明を確かめられなかった必須の手順の、節の項目（RAG の finding の文。回答の本文は残す）。"""
+    missing = {str(step.get("step_id")) for step in unexplained_guide_steps(result)}
+    return [
+        f"- {_short(item['message'], _MAX_FINDING_CHARS)}"
+        for item in result.get("findings") or []
+        if isinstance(item, dict)
+        and item.get("code") == GUIDE_STEP_UNEXPLAINED
+        and item.get("step_id") in missing
+        and item.get("message")
+    ]
+
+
+def _with_guide_step_gaps(
+    answer: str, withheld: JsonObject, lines: list[str]
+) -> tuple[str, JsonObject]:
+    """本文をそのまま載せる回答に、説明を確かめられなかった業務ガイドの手順を節で示す（#2708）。"""
+    if not lines:
+        return answer, withheld
+    record = {**withheld, "guide_steps": len(lines), "listed": _listed(lines)}
+    return f"{answer.rstrip()}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), record
 
 
 # 前の段落を受ける接続の語（#1833）。その前の段落を外すと受ける先が無くなる（「したがって、…」
@@ -1225,6 +1291,8 @@ def _notice_lines(result: JsonObject, claims: list[JsonObject]) -> list[str]:
     # RAG の決定的な検査（要求の漏れ・手順の順序と分岐・影響範囲。#1276）の error。
     findings = [item for item in error_findings(result) if item.get("message")]
     lines += [f"- {_short(item['message'], _MAX_FINDING_CHARS)}" for item in findings]
+    # 説明を確かめられなかった業務ガイドの必須の手順（#2708）。
+    lines += guide_step_gap_lines(result)
     stale = _refs_count(result.get("stale_evidence"))
     if stale:
         lines.append(f"- 根拠の {stale} 件は文書の古い版です。最新の版で確かめ直してください。")
@@ -1292,6 +1360,11 @@ def _dependent_lines(answer: str, texts: list[str]) -> list[str]:
     return [f"- {DEPENDENT_STEP_LABEL}: 「{_short(text, _MAX_QUOTE_CHARS)}」" for text in quotes]
 
 
+def _guide_step_count(lines: list[str]) -> JsonObject:
+    """記録の、説明を確かめられなかった業務ガイドの手順の数（無ければ項目を足さない。#2708）。"""
+    return {"guide_steps": len(lines)} if lines else {}
+
+
 def _dependent_count(lines: list[str]) -> JsonObject:
     """記録の、外す段落に続く手順の段落の数（無ければ項目を足さない）。"""
     return {"dependent_steps": len(lines)} if lines else {}
@@ -1321,8 +1394,9 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     """
     errors = error_findings(result)
     unchanged = {"claims": 0, "findings": 0, "all": False}
+    step_gaps = guide_step_gap_lines(result)
     if result.get("valid") is True or (result.get("status") == "no_claims" and not errors):
-        return answer, unchanged
+        return _with_guide_step_gaps(answer, unchanged, step_gaps)
     claims = [item for item in mark_non_claims(answer, result)["claims"] if isinstance(item, dict)]
     blocking = [
         item
@@ -1339,7 +1413,7 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         and not unreadable
         and any(item.get("status") == "supported" or item.get("non_claim") for item in claims)
     ):
-        return answer, unchanged
+        return _with_guide_step_gaps(answer, unchanged, step_gaps)
     guide_errors = any(item.get("check") in WITHHOLDING_CHECKS for item in errors)
     body: str | None
     # 外す段落に続く番号つきの手順（#2604）と、その中で節に書く段落（主張の段落）。
@@ -1376,6 +1450,7 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
             "findings": 0,
             "all": False,
             "unverified": len(blocking),
+            **_guide_step_count(step_gaps),
             **_dependent_count(dependent_lines),
             "listed": _listed(lines),
         }
@@ -1388,6 +1463,7 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         "claims": len(blocking),
         "findings": len(errors),
         "all": not body,
+        **_guide_step_count(step_gaps),
         **_dependent_count(dependent_lines),
         "listed": _listed(lines),
     }

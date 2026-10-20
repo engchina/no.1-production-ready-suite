@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 22,
+            "default": 24,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -640,7 +640,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 22,
+            "default": 24,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -810,7 +810,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 22,
+            "default": 24,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1133,7 +1133,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 22,
+            "default": 24,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1513,7 +1513,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 22,
+            "default": 24,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2159,7 +2159,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 22,
+            "default": 24,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2476,7 +2476,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 22,
+            "default": 24,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3168,6 +3168,172 @@
             "title": "OlderVersion",
             "type": "object"
           },
+          "ProfileKnowledge": {
+            "properties": {
+              "search_answer_profile_id": {
+                "title": "Search Answer Profile Id",
+                "type": "string"
+              },
+              "revision": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "照合した用語・ルールの登録の版（登録の内容の sha256 の先頭。読めなければ null）。",
+                "title": "Revision"
+              },
+              "matched_on": {
+                "description": "照合に使った文（original_question があればそれ、無ければ query）。",
+                "enum": [
+                  "original_question",
+                  "query"
+                ],
+                "title": "Matched On",
+                "type": "string"
+              },
+              "rules": {
+                "description": "当たったルール（一致の強い順）。資料の原文ではない。",
+                "items": {
+                  "$ref": "#/$defs/ProfileKnowledgeRule"
+                },
+                "title": "Rules",
+                "type": "array"
+              },
+              "terms": {
+                "description": "当たった用語と説明（一致の強い順）。資料の原文ではない。",
+                "items": {
+                  "$ref": "#/$defs/ProfileKnowledgeTerm"
+                },
+                "title": "Terms",
+                "type": "array"
+              },
+              "rules_omitted": {
+                "description": "件数・字数の上限を超えて返さなかったルールの数。",
+                "title": "Rules Omitted",
+                "type": "integer"
+              },
+              "terms_omitted": {
+                "description": "件数・字数の上限を超えて返さなかった用語の数。",
+                "title": "Terms Omitted",
+                "type": "integer"
+              },
+              "load_failed": {
+                "default": false,
+                "description": "用語・ルールを読めなかった（rules・terms は空。当たるものが無いとは限らない）。",
+                "title": "Load Failed",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "search_answer_profile_id",
+              "revision",
+              "matched_on",
+              "rules",
+              "terms",
+              "rules_omitted",
+              "terms_omitted"
+            ],
+            "title": "ProfileKnowledge",
+            "type": "object"
+          },
+          "ProfileKnowledgeRule": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "title": {
+                "title": "Title",
+                "type": "string"
+              },
+              "content": {
+                "description": "ルールの本文（判断の方針）。",
+                "title": "Content",
+                "type": "string"
+              },
+              "source": {
+                "description": "ルールを登録した人が書いた出典（無ければ空）。",
+                "title": "Source",
+                "type": "string"
+              },
+              "status": {
+                "description": "approved=承認済み / stale_review_needed=承認済みで、見直しの期日を過ぎている",
+                "enum": [
+                  "approved",
+                  "stale_review_needed"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "updated_at": {
+                "description": "ルールを最後に更新した時刻（不明なら空）。",
+                "title": "Updated At",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "content",
+              "source",
+              "status",
+              "updated_at"
+            ],
+            "title": "ProfileKnowledgeRule",
+            "type": "object"
+          },
+          "ProfileKnowledgeTerm": {
+            "properties": {
+              "term": {
+                "title": "Term",
+                "type": "string"
+              },
+              "aliases": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Aliases",
+                "type": "array"
+              },
+              "description": {
+                "description": "用語の説明（無ければ空）。",
+                "title": "Description",
+                "type": "string"
+              },
+              "source": {
+                "description": "用語を登録した人が書いた出典（無ければ空）。",
+                "title": "Source",
+                "type": "string"
+              },
+              "status": {
+                "description": "approved=承認済み / stale_review_needed=承認済みで、見直しの期日を過ぎている",
+                "enum": [
+                  "approved",
+                  "stale_review_needed"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "updated_at": {
+                "description": "用語を最後に更新した時刻（不明なら空）。",
+                "title": "Updated At",
+                "type": "string"
+              }
+            },
+            "required": [
+              "term",
+              "description",
+              "source",
+              "status",
+              "updated_at"
+            ],
+            "title": "ProfileKnowledgeTerm",
+            "type": "object"
+          },
           "RagEvidence": {
             "description": "検索・回答の根拠 1 件。",
             "properties": {
@@ -3428,7 +3594,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 22,
+            "default": 24,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3507,6 +3673,18 @@
             },
             "title": "Clarifications",
             "type": "array"
+          },
+          "profile_knowledge": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProfileKnowledge"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "検索・回答プロファイルに登録・承認された判断の方針（rules）と用語の説明（terms）のうち、利用者の元の質問に当たるもの。資料の原文ではないので evidence と分け、根拠・出典として引用しない。根拠の読み方と回答の判断に使う。上限（ルール 6 件・用語 8 件・文字の合計 4000 字）を超えた分は rules_omitted・terms_omitted に数える。検索・回答プロファイルを使わない検索・当たるものが無いときは null。"
           }
         },
         "required": [
@@ -4630,7 +4808,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 22,
+            "default": 24,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4808,7 +4986,7 @@
     {
       "name": "rag_validate_answer",
       "title": "資料との照合",
-      "description": "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。公開する前の最終の検証に使います。見出し・出典の行・利用者への質問の段落は主張ではないので監査せず、claims に含めません。requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順の順序と分岐・影響範囲も決定的に確かめます。",
+      "description": "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。公開する前の最終の検証に使います。見出し・出典の行・利用者への質問の段落は主張ではないので監査せず、claims に含めません。requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順ごとの説明と順序・分岐・影響範囲も確かめます。",
       "inputSchema": {
         "$defs": {
           "EvidenceRefInput": {
@@ -5042,7 +5220,7 @@
               }
             ],
             "default": null,
-            "description": "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順の順序・依存・分岐と影響範囲・承認の記載を確かめる。"
+            "description": "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順ごとの説明の有無・手順の順序・依存・分岐と影響範囲・承認の記載を確かめる。"
           },
           "answer_trace_ids": {
             "description": "回答に使った rag_search の trace_id。渡すと、その回答で監査を通った段落の判定を使う（速くなる）。",
@@ -5200,6 +5378,43 @@
             "title": "ValidatedClaim",
             "type": "object"
           },
+          "ValidatedGuideStep": {
+            "description": "業務ガイドの手順 1 つの、回答での説明の充足（#2708）。",
+            "properties": {
+              "step_id": {
+                "title": "Step Id",
+                "type": "string"
+              },
+              "title": {
+                "title": "Title",
+                "type": "string"
+              },
+              "required": {
+                "description": "回答の充足で必須の手順か（分かっている条件で決まらない分岐の手順は false）。",
+                "title": "Required",
+                "type": "boolean"
+              },
+              "status": {
+                "description": "explained=手順の主の操作を根拠で裏付けた段落で説明した / reference_only=根拠の原文を参考として示しただけ / unused=手順の根拠は渡した根拠にあるが、手順を説明した段落が無い / no_evidence=手順の根拠が渡した根拠に無い（その手順の根拠を集めていない）。",
+                "enum": [
+                  "explained",
+                  "reference_only",
+                  "unused",
+                  "no_evidence"
+                ],
+                "title": "Status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "step_id",
+              "title",
+              "required",
+              "status"
+            ],
+            "title": "ValidatedGuideStep",
+            "type": "object"
+          },
           "ValidationFinding": {
             "properties": {
               "check": {
@@ -5214,7 +5429,7 @@
                 "type": "string"
               },
               "code": {
-                "description": "request_missing / request_partial / request_unverified / guide_unavailable / guide_revision_stale / guide_steps_unmatched / step_order / step_wrong_branch / step_dependency_missing / step_following_missing / impact_scope_missing / approval_missing",
+                "description": "request_missing / request_partial / request_unverified / guide_unavailable / guide_revision_stale / guide_steps_unmatched / guide_step_unexplained / step_order / step_wrong_branch / step_dependency_missing / step_following_missing / impact_scope_missing / approval_missing",
                 "title": "Code",
                 "type": "string"
               },
@@ -5281,7 +5496,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 22,
+            "default": 24,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -5367,6 +5582,14 @@
             "default": null,
             "description": "検査に使った業務ガイドの今の公開の版。",
             "title": "Guide Revision"
+          },
+          "guide_steps": {
+            "description": "guide の手順ごとの説明の充足（分かっている条件で外れた分岐の手順は含めない。guide を渡さないか、段落の判定が出なければ空）。必須の手順で explained でないものは guide_step_unexplained の finding にもなる。",
+            "items": {
+              "$ref": "#/$defs/ValidatedGuideStep"
+            },
+            "title": "Guide Steps",
+            "type": "array"
           },
           "reused_claims": {
             "default": 0,

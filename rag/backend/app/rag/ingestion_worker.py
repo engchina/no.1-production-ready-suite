@@ -43,6 +43,11 @@ from pr_backend_core.observability.request_context import bind_log_context
 from app.clients.oracle import OracleClient, close_oracle_pool, oracle_error_log_fields
 from app.config import Settings, get_settings
 from app.logging_config import configure_logging
+from app.rag.ingestion_slots import (
+    HeavySlotRelease,
+    current_heavy_slot_release,
+    heavy_slot_releaser,
+)
 from app.schemas.document import (
     INGESTION_HEAVY_PHASES,
     FileStatus,
@@ -305,7 +310,92 @@ async def run_ingestion_job_subprocess(
     command = [sys.executable, "-m", "app.rag.ingestion_job_runner", job_id]
     if lease_owner is not None:
         command += ["--lease-owner", lease_owner]
-    process = await asyncio.create_subprocess_exec(*command)
+    # worker の中なら、子が解析の区間を終えたときに重い段の枠を返せるよう pipe を渡す(#2702)。
+    release = current_heavy_slot_release()
+    release_pipe = _HeavySlotReleasePipe(release) if release is not None else None
+    try:
+        if release_pipe is None:
+            process = await asyncio.create_subprocess_exec(*command)
+        else:
+            command += ["--heavy-slot-release-fd", str(release_pipe.write_fd)]
+            process = await asyncio.create_subprocess_exec(
+                *command, pass_fds=(release_pipe.write_fd,)
+            )
+            release_pipe.start_watching()
+    except BaseException:
+        if release_pipe is not None:
+            release_pipe.close()
+        raise
+    try:
+        await _wait_job_subprocess(
+            process,
+            job_id,
+            timeout=timeout,
+            stall_timeout=stall_timeout,
+            poll_interval=poll_interval,
+            reader=reader,
+            now=now,
+        )
+    finally:
+        if release_pipe is not None:
+            release_pipe.close()
+
+
+class _HeavySlotReleasePipe:
+    """子プロセスから重い段の枠を返す印(1 byte)を受ける pipe(#2702)。
+
+    書き込み側の fd を子へ渡し、親は子を起動した後に自分の書き込み側を閉じる。読めた byte が
+    あれば枠を返す。子が書かずに終わったとき(EOF)は何もしない(job の終わりで worker が返す)。
+    """
+
+    def __init__(self, release: HeavySlotRelease) -> None:
+        self._release = release
+        self.read_fd, self.write_fd = os.pipe()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._closed = False
+
+    def start_watching(self) -> None:
+        os.close(self.write_fd)
+        self.write_fd = -1
+        self._loop = asyncio.get_running_loop()
+        self._loop.add_reader(self.read_fd, self._on_readable)
+
+    def _on_readable(self) -> None:
+        try:
+            data = os.read(self.read_fd, 1)
+        except OSError:
+            data = b""
+        self._stop_watching()
+        if data:
+            self._release()
+
+    def _stop_watching(self) -> None:
+        if self._loop is not None:
+            self._loop.remove_reader(self.read_fd)
+            self._loop = None
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._stop_watching()
+        for fd in (self.read_fd, self.write_fd):
+            if fd >= 0:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+
+
+async def _wait_job_subprocess(
+    process: asyncio.subprocess.Process,
+    job_id: str,
+    *,
+    timeout: float,
+    stall_timeout: float,
+    poll_interval: float,
+    reader: JobProgressReader,
+    now: MonotonicClock,
+) -> None:
+    """子プロセスの終わり・停滞・全体の上限を待つ(``run_ingestion_job_subprocess`` の本体)。"""
     started_at = now()
     deadline = started_at + timeout
     watch = _ProgressWatch(started_at=started_at)
@@ -605,6 +695,8 @@ class IngestionQueueWorker:
         (Chunk 作成・索引)に空ける(段ごとの枠。#2027)。重い段の上限に達していれば重い段を
         除いて取る。上限の手前なら取った順に重い段を上限まで起動し、超える分は飛ばす(1 件でも
         起動すれば run_forever がすぐ次を呼ぶので、次の回で重い段を除いて軽い段を取る)。
+        重い段の job は、解析の区間が終わると重い段の枠を返し(``release_heavy_ingestion_slot``)、
+        その後の LLM の応答待ちは全体の枠だけで数える(#2702)。
         """
         free = self._concurrency - len(self._inflight)
         if free <= 0:
@@ -630,7 +722,9 @@ class IngestionQueueWorker:
                     continue
                 self._inflight_heavy.add(job.id)
             self._inflight.add(job.id)
-            task = asyncio.create_task(self._run_job(job.id))
+            task = asyncio.create_task(
+                self._run_job(job.id, heavy=job.phase in INGESTION_HEAVY_PHASES)
+            )
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
             dispatched += 1
@@ -638,10 +732,33 @@ class IngestionQueueWorker:
                 break
         return dispatched
 
-    async def _run_job(self, job_id: str) -> None:
+    def _release_heavy_slot(self, job_id: str) -> None:
+        """job の解析の区間が終わった。全体の枠は持ったまま、重い段の枠だけを返す(#2702)。"""
+        if job_id not in self._inflight_heavy:
+            return
+        self._inflight_heavy.discard(job_id)
+        logger.info(
+            "ingestion_worker_heavy_slot_released",
+            extra={
+                "job_id": job_id,
+                "worker_id": self.worker_id,
+                "inflight": len(self._inflight),
+                "inflight_heavy": len(self._inflight_heavy),
+            },
+        )
+        # 重い段の枠が空いたので次の重い段の job を取る。
+        _WAKEUP.set()
+
+    async def _run_job(self, job_id: str, *, heavy: bool = False) -> None:
         with bind_log_context(job_id=job_id, worker_id=self.worker_id):
+            releaser = (
+                heavy_slot_releaser(lambda: self._release_heavy_slot(job_id))
+                if heavy
+                else contextlib.nullcontext()
+            )
             try:
-                await self._job_runner(job_id)
+                with releaser:
+                    await self._job_runner(job_id)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

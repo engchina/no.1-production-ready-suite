@@ -29,7 +29,7 @@ import {
 } from "@production-ready/ui";
 import { Link } from "react-router-dom";
 import { CheckSquare, History, RefreshCw, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
@@ -207,6 +207,9 @@ export function FileListClient() {
 
   const page = query.data;
   const items = page?.items ?? [];
+  // 絞り込み・検索・ページを変えて取り直す間は、前の条件の一覧（keepPreviousData。#535）を出したまま。
+  // その間の件数・行は今の条件の結果ではないため、選択・一括操作・件数に使わない（#2696）。
+  const listStale = query.isPlaceholderData;
   // 全面のエラーは初回の取得（一覧が無い）の失敗だけ。一覧があるときの再取得の失敗は一覧の上に出す（#938）。
   const loadError = initialLoadError(query);
   const refreshError = query.isError && !loadError ? query.error : null;
@@ -230,15 +233,26 @@ export function FileListClient() {
 
   const ingestibleSelected = selectedDocuments.filter(canEnqueue);
   // 条件に一致する文書をすべて選ぶのは、表示中のページをすべて選んでいる間だけ（行の選択を変える・ページを
-  // 移る・絞り込みを変えると解除する）。
+  // 移る・絞り込みを変えると解除する）。件数は今の条件の応答だけから出す（前の条件の値では出さない。#2696）。
   const matchingTotal = page?.total ?? 0;
-  const matchingActive = matchingAll && allSelected;
+  const matchingActive = matchingAll && allSelected && !listStale;
   const clearSelection = () => {
     selection.clear();
     setMatchingAll(false);
   };
+  // 条件（状態・検索語・ナレッジベース・ページ）が変わったら、どの経路で変わっても選択を解除する
+  // （削除・アーカイブ済みの KB の絞り込みを「すべて」に戻すときなど、resetView を通らない変更を含む。#2696）。
+  const selectionScope = JSON.stringify([filter, q, knowledgeBaseId, offset, limit]);
+  const selectionScopeRef = useRef(selectionScope);
+  const clearSelected = selection.clear;
+  useEffect(() => {
+    if (selectionScopeRef.current === selectionScope) return;
+    selectionScopeRef.current = selectionScope;
+    clearSelected();
+    setMatchingAll(false);
+  }, [selectionScope, clearSelected]);
   const canSelectAllMatching =
-    !matchingActive && allSelected && matchingTotal > items.length;
+    !listStale && !matchingActive && allSelected && matchingTotal > items.length;
   const bulkIngestCount = matchingActive ? matchingTotal : ingestibleSelected.length;
   const bulkBusy = bulkIngest !== null || bulkDelete !== null || deleteImpactPending;
   const allKnowledgeBasesOption = useMemo<SearchableSelectOption>(
@@ -293,7 +307,7 @@ export function FileListClient() {
   };
 
   const runBulkIngest = async () => {
-    if (bulkBusy) return;
+    if (bulkBusy || listStale) return;
     const matching = matchingActive;
     const pageTargets = ingestibleSelected.map((d) => d.id);
     if (!matching && pageTargets.length === 0) return;
@@ -357,7 +371,7 @@ export function FileListClient() {
 
   const runBulkDelete = async () => {
     const targets = selectedDocuments.map((doc) => doc.id);
-    if (targets.length === 0 || bulkBusy) return;
+    if (targets.length === 0 || bulkBusy || listStale) return;
     const impacts = await loadDeleteImpacts(targets);
     if (!impacts) return;
     const confirmed = await confirm({
@@ -490,7 +504,9 @@ export function FileListClient() {
               onSearch={applySearch}
               clearLabel={t("common.clearSearch")}
               resultCountLabel={
-                page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
+                page && !listStale
+                  ? t("common.searchResultCount", { count: formatNumber(page.total) })
+                  : ""
               }
               maxLength={FILE_LIST_QUERY_MAX_LENGTH}
               placeholder={t("fileList.searchPlaceholder")}
@@ -553,7 +569,8 @@ export function FileListClient() {
           }
           labels={listToolbarLabels()}
           count={listCountProps({
-            matchedTotal: page?.total,
+            // 前の条件の一覧を出している間は、その件数を今の条件の件数として出さない（#2696）。
+            matchedTotal: listStale ? undefined : page?.total,
             filtered,
             allTotal: allTotal.data,
           })}
@@ -621,7 +638,9 @@ export function FileListClient() {
                       ? t("fileList.selectedAllMatching", { count: formatNumber(matchingTotal) })
                       : selectedCount > 0
                         ? t("fileList.selected", { count: selectedCount })
-                        : t("fileList.selectionHint")}
+                        : listStale
+                          ? t("fileList.selectionLoading")
+                          : t("fileList.selectionHint")}
               </span>
               {/* 表示中のページをすべて選んだら、全ページの条件に一致する文書を選べる（一括投入の上限まで）。 */}
               {canSelectAllMatching && !bulkBusy ? (
@@ -651,7 +670,8 @@ export function FileListClient() {
                 size="sm"
                 onClick={() => void runBulkIngest()}
                 loading={bulkIngest !== null}
-                disabled={bulkBusy || bulkIngestCount === 0} icon={Sparkles}>
+                // 新しい条件の一覧を読み込む間は押せない（前の条件の件数・行で投入させない。#2696）。
+                disabled={bulkBusy || listStale || bulkIngestCount === 0} icon={Sparkles}>
                 {`${t("fileList.bulkQueue")} (${formatNumber(bulkIngestCount)})`}
               </Button>
               {/* 確認ダイアログを開く起点（確定は ConfirmDialog の danger ボタン）。赤塗りにせず secondary + tone="danger"。 */}
@@ -662,7 +682,7 @@ export function FileListClient() {
                 onClick={() => void runBulkDelete()}
                 loading={bulkDelete !== null}
                 // 条件に一致する文書をすべて選んだ間は一括投入だけ（削除は表示中の行を選んで行う）。
-                disabled={bulkBusy || matchingActive || selectedDocuments.length === 0} icon={Trash2}>
+                disabled={bulkBusy || listStale || matchingActive || selectedDocuments.length === 0} icon={Trash2}>
                 {`${t("fileList.bulkDelete")} (${selectedDocuments.length})`}
               </Button>
               <Button
@@ -710,7 +730,8 @@ export function FileListClient() {
             <TableSkeleton columns={8} />
           </TimedLoadingState>
         ) : (page?.total ?? 0) > 0 ? (
-          <div className="grid gap-2">
+          // 前の条件の一覧を出したまま取り直す間は、読み込み中と伝える（#2696）。
+          <div className="grid gap-2" aria-busy={listStale || undefined}>
             <DataTable<DocumentSummary>
               // 表示中のページが範囲外になったら（最後のページの最後の行を削除した等）、OffsetPagination が残っている
               // 最後のページへ移す。移る間は空のページに「該当なし」を出さず、表の形の読み込み中にする（#281）。
@@ -718,6 +739,8 @@ export function FileListClient() {
               loading={items.length === 0}
               columns={documentColumns({
                 allSelected,
+                // 前の条件の行は選ばせない（今の条件に入らない文書を一括操作に送らない。#2696）。
+                selectionDisabled: listStale,
                 onToggleAll: () => {
                   setMatchingAll(false);
                   selection.toggleAll(pageIds);
@@ -752,6 +775,7 @@ export function FileListClient() {
               limit={limit}
               total={page?.total ?? 0}
               count={items.length}
+              disabled={listStale}
               onPageChange={(_page, nextOffset) => {
                 setOffset(nextOffset);
                 clearSelection();
@@ -905,6 +929,7 @@ function BulkIngestResultBanner({
 /** 一覧の列定義。先頭列は一括選択のチェックボックス、ファイル名列を行見出しにする。 */
 function documentColumns({
   allSelected,
+  selectionDisabled,
   onToggleAll,
   isSelected,
   onToggle,
@@ -915,6 +940,7 @@ function documentColumns({
   actionsDisabled,
 }: {
   allSelected: boolean;
+  selectionDisabled: boolean;
   onToggleAll: () => void;
   isSelected: (doc: DocumentSummary) => boolean;
   onToggle: (doc: DocumentSummary) => void;
@@ -932,8 +958,9 @@ function documentColumns({
           type="checkbox"
           checked={allSelected}
           onChange={onToggleAll}
+          disabled={selectionDisabled}
           aria-label={t("fileList.selectAllAria")}
-          className="cursor-pointer accent-accent-emphasis"
+          className="cursor-pointer accent-accent-emphasis disabled:cursor-not-allowed"
         />
       ),
       headerClassName: "w-10",
@@ -942,8 +969,9 @@ function documentColumns({
           type="checkbox"
           checked={isSelected(doc)}
           onChange={() => onToggle(doc)}
+          disabled={selectionDisabled}
           aria-label={t("fileList.selectRowAria")}
-          className="cursor-pointer accent-accent-emphasis"
+          className="cursor-pointer accent-accent-emphasis disabled:cursor-not-allowed"
         />
       ),
     },

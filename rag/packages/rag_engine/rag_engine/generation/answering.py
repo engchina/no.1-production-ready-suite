@@ -234,8 +234,10 @@ from rag_engine.retrieval.extra_retrieval import GUIDE_STEPS_KIND, REQUEST_COVER
 from rag_engine.retrieval.guide_steps import (
     GUIDE_STEP_TRACE_SCHEMA_VERSION,
     GuidePlan,
+    reference_step_sources,
     run_step_searches,
     select_step_parents,
+    unsearched_steps,
 )
 from rag_engine.retrieval.inquiry_conditions import (
     InquiryConditionParse,
@@ -1876,12 +1878,14 @@ def _record_round_audit(step: _ExecutionStep, current: Any, *, accepted: bool, f
                 grounded.GUIDE_STEP_REFERENCE_ONLY,
                 grounded.GUIDE_STEP_UNUSED,
                 grounded.GUIDE_STEP_NO_EVIDENCE,
+                grounded.GUIDE_STEP_NOT_SEARCHED,
             )
         }
         step.field(
             "業務ガイドの手順",
             f"説明 {counts[grounded.GUIDE_STEP_EXPLAINED]}・参考情報のみ {counts[grounded.GUIDE_STEP_REFERENCE_ONLY]}"
-            f"・根拠を未使用 {counts[grounded.GUIDE_STEP_UNUSED]}・根拠なし {counts[grounded.GUIDE_STEP_NO_EVIDENCE]}",
+            f"・根拠を未使用 {counts[grounded.GUIDE_STEP_UNUSED]}・根拠なし {counts[grounded.GUIDE_STEP_NO_EVIDENCE]}"
+            + (f"・検索を打ち切り {counts[grounded.GUIDE_STEP_NOT_SEARCHED]}" if counts[grounded.GUIDE_STEP_NOT_SEARCHED] else ""),
         )
     step.field("残った指摘", join_values(grounded.pending_feedback_labels(current.feedback())))
     if not first:
@@ -1957,6 +1961,8 @@ def synthesize_grounded_answer(
     guide_optional_steps = runtime_knowledge.guide_optional_steps if runtime_knowledge is not None else ()
     # 手順ごとの検索の手がかり（共有の根拠の item を手順に対応付ける語。#2649）。
     guide_step_terms = dict(runtime_knowledge.guide_step_terms) if runtime_knowledge is not None else {}
+    # 手順ごとの検索を期限・回数の上限で打ち切って検索しなかった手順（#2706）。
+    guide_unsearched = runtime_knowledge.guide_unsearched_steps if runtime_knowledge is not None else ()
     # 共有の根拠の item を語で決められないときに意味の近さで決める embedding（#2649）。round と回答の確定で同じ文の
     # vector を再利用する。注入が無ければ語の判定だけ。
     embedder = injected_embedder() if guide_steps else None
@@ -2014,6 +2020,7 @@ def synthesize_grounded_answer(
                     guide_optional_steps=guide_optional_steps,
                     guide_step_terms=guide_step_terms,
                     guide_step_semantics=guide_semantics,
+                    guide_unsearched_steps=guide_unsearched,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                 )
                 if number == 0:
@@ -2229,7 +2236,9 @@ def synthesize_grounded_answer(
     # 提示など）の後の説明で決め直す。参考情報としてだけ示した手順・根拠の無い手順は本文の不足に出し、回答の構造の
     # 要求にも載せて、充足済みとして確定しない。
     guide_coverage = (
-        grounded.guide_step_coverage(guide_steps, current.checked, spans, guide_optional_steps, guide_step_terms, guide_semantics)
+        grounded.guide_step_coverage(
+            guide_steps, current.checked, spans, guide_optional_steps, guide_step_terms, guide_semantics, guide_unsearched
+        )
         if guide_steps and not off_goal
         else []
     )
@@ -2730,10 +2739,23 @@ def _cover_guide_steps(
                 document_selection=context.document_selection,
             )
     in_context = {r.chunk_uid or r.id for r in context.records}
+    # 手順の根拠は、手順ごとの検索の結果に、手順の参照の頁に当たる回答の材料の根拠を足したもの（#2706）。期限で検索
+    # しなかった手順の根拠と、同じ根拠を参照する手順どうしの共有が、検索の打ち切りで見えなくならないようにする。
+    referenced = reference_step_sources(plan, context.records)
     step_sources = tuple(
-        (step.step_id, step.title, tuple(key for key in selection.step_sources.get(step.step_id, ()) if key in in_context))
+        (
+            step.step_id,
+            step.title,
+            tuple(
+                key
+                for key in dict.fromkeys((*selection.step_sources.get(step.step_id, ()), *referenced.get(step.step_id, ())))
+                if key in in_context
+            ),
+        )
         for step in plan.steps
     )
+    # 期限・回数の上限で検索しなかった（検索がすべて失敗した）手順。根拠の無いことを「資料に無い」と区別する（#2706）。
+    unsearched = unsearched_steps(plan, results)
     added_by_step: dict[str, list[str]] = {}
     for step_id, kind, parent in selection.added:
         key = parent.record.chunk_uid or parent.record.id
@@ -2743,6 +2765,7 @@ def _cover_guide_steps(
     trace.update(
         {
             "stop_reason": stop or ("rejected:" + rejected if rejected else ""),
+            "unsearched_step_ids": list(unsearched),
             "elapsed_ms": int((clock() - started) * 1000),
             "budget": extra_budget.to_payload(),
             "steps": [
@@ -2765,6 +2788,8 @@ def _cover_guide_steps(
                     ],
                     "evidence_count": len(sources.get(step.step_id, ())),
                     "reference_chunk_count": len(added_by_step.get(f"{step.step_id}:reference", [])),
+                    # 手順の参照の頁に当たる回答の材料の根拠の数（検索の結果に関係なく手順に紐づける。#2706）。
+                    "referenced_count": len(referenced.get(step.step_id, ())),
                 }
                 for step in plan.steps
             ],
@@ -2784,10 +2809,12 @@ _GUIDE_STEP_SKIP_LABELS = {
 def _guide_step_lines(trace: dict[str, Any]) -> list[str]:
     """手順ごとの検索の記録の文（処理の経過の段の詳細）。"""
     lines: list[str] = []
+    cut = "期限" if trace.get("stop_reason") == "deadline" else "上限"
     for step in trace.get("steps") or ():
         searches = step.get("searches") or []
         if not searches:
-            lines.append(f"{step['id']}「{step['title']}」: 検索しない（上限）")
+            referenced = f"、参照の頁の根拠 {step['referenced_count']} 件" if step.get("referenced_count") else ""
+            lines.append(f"{step['id']}「{step['title']}」: 検索しない（{cut}で打ち切り）{referenced}")
             continue
         note = "、参照の頁に絞った検索あり" if any(s["kind"] == "reference" for s in searches) else ""
         lines.append(f"{step['id']}「{step['title']}」: 根拠 {step['evidence_count']} 件{note}")
@@ -4148,6 +4175,7 @@ def answer_question_result(
                         guide_steps=step_sources,
                         guide_optional_steps=guide_plan.optional_step_ids,
                         guide_step_terms=guide_plan.step_terms,
+                        guide_unsearched_steps=tuple(guide_step_trace.get("unsearched_step_ids") or ()),
                     )
                 skipped = str(guide_step_trace.get("skipped") or "")
                 if skipped:
