@@ -48,7 +48,9 @@ from rag_engine.generation.operation_audit import is_non_claim_passage, list_hea
 #    結果の値に当てはめた結論を裏付けられるようにした（照会の結果は資料の内容の裏付けには使わない。#1950）。
 # 10: 質問の文を資料ではない根拠として並べ、質問の事実をそのまま述べた段落と、資料の規則を質問の事実に当てはめた結論・
 #     計算を裏付けられるようにした（質問は資料の内容の裏付けには使わない）。根拠の予算を設定にした。
-VALIDATION_RUBRIC_VERSION = 10
+# 11: 根拠の ID を結び付けられない contradicted を citation_error に変えずに残し、どの判定にも監査モデルが返した
+#     判定（audit_status）と根拠の ID の検査の結果（reference_check）を残すようにした（指示は変えていない。#2622）。
+VALIDATION_RUBRIC_VERSION = 11
 
 # 質問の文（資料ではない根拠）の id と出典の名前。資料の chunk の id とは重ならない。
 QUESTION_ID = "question:1"

@@ -145,6 +145,18 @@ def test_answered_rag_search_with_withheld_paragraphs_is_conditional() -> None:
     assert content["signals"] == ["withheld_claims"]
 
 
+def test_withheld_contradiction_with_an_unbound_citation_is_a_disputed_paragraph() -> None:
+    """RAG が根拠の ID を照合できず判定を変えた段落も、監査の元の判定が矛盾なら
+    不足の印にする（#2622）。"""
+    kept = "設定Bは毎日 0 時に実行します。"
+    disputed = "設定Aは有効です。"
+    answer = f"{kept}\n{disputed}"
+    unbound = {**_claim(disputed, "citation_error"), "audit_status": "contradicted"}
+    validation = _validated(answer, _claim(kept, "supported"), unbound)
+    content = answer_outcome(answer, steps=[_search("answered")], validation=validation)
+    assert (content["value"], content["signals"]) == ("conditional", ["withheld_claims"])
+
+
 def test_environment_data_is_answered_after_the_environment_tools() -> None:
     answer = "今のセッションの有効期限は 45 分です（NL2SQL の照会の結果）。"
     search = _search("needs_environment_data")
