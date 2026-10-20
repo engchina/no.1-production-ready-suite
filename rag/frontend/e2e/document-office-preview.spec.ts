@@ -5,6 +5,11 @@ function ok(json: unknown) {
   return { data: json, error_messages: [], warning_messages: [] };
 }
 
+// 表示できない形式の案内は、Office の原本・処理後の JSONL を含めて共通の 1 文（#2679）。
+const UNSUPPORTED_NOTICE = "このファイル形式はプレビューに対応していません。";
+// 以前の Office 独自の案内（再処理の手順）。もう出さない。
+const OFFICE_REPROCESS_NOTICE = /Office 原本はブラウザー/;
+
 // Office 原本 + 変換済 PDF(preprocess_artifact)あり。
 const documentDetail = {
   id: "doc-1",
@@ -128,12 +133,10 @@ test("Office 原本でも変換済 PDF をその場で表示する(unsupported �
 
   // 既定(原本ビュー)でも prepared PDF の iframe を描画する。
   await expect(page.locator('iframe[src*="variant=prepared"]')).toBeVisible();
-  await expect(
-    page.getByText("Office 原本はブラウザーで直接表示できません", { exact: false })
-  ).toHaveCount(0);
+  await expect(page.getByText(UNSUPPORTED_NOTICE)).toHaveCount(0);
 });
 
-test("処理後 PDF が無い Office 原本は案内だけを表示し、ダウンロードを重複させない", async ({
+test("処理後 PDF が無い Office 原本は共通の案内だけを表示し、ダウンロードを重複させない", async ({
   page,
 }) => {
   await mockWorkspace(page, null);
@@ -144,9 +147,8 @@ test("処理後 PDF が無い Office 原本は案内だけを表示し、ダウ�
     .getByRole("heading", { name: "原本プレビュー" })
     .locator("xpath=ancestor::section[1]");
   await expect(previewPanel.getByRole("tab", { name: "処理後" })).toBeDisabled();
-  await expect(
-    previewPanel.getByText("Office 原本はブラウザーで直接表示できません", { exact: false })
-  ).toBeVisible();
+  await expect(previewPanel.getByText(UNSUPPORTED_NOTICE, { exact: true })).toBeVisible();
+  await expect(previewPanel.getByText(OFFICE_REPROCESS_NOTICE)).toHaveCount(0);
   await expect(
     previewPanel.getByRole("link", { name: "ダウンロード", exact: true })
   ).toHaveAttribute("href", /\/api\/documents\/doc-1\/recipes\/recipe-1\/content\?disposition=attachment$/);
@@ -187,7 +189,29 @@ test("Office の非 PDF artifact を PDF iframe で開かない", async ({ page 
   await page.goto("/documents/doc-1");
 
   await expect(page.locator('iframe[src*="variant=prepared"]')).toHaveCount(0);
-  await expect(
-    page.getByText("Office 原本はブラウザーで直接表示できません", { exact: false })
-  ).toBeVisible();
+  await expect(page.getByText(UNSUPPORTED_NOTICE, { exact: true })).toBeVisible();
+  await expect(page.getByText(OFFICE_REPROCESS_NOTICE)).toHaveCount(0);
+});
+
+test("Excel→JSONL の処理後のタブは共通の案内を表示する", async ({ page }) => {
+  // 合成の構造化レコードの JSONL（処理後のプレビューの記録ごとの表示は未対応。#2679）。
+  await mockWorkspace(page, {
+    object_storage_path: "prepared/doc-1.jsonl",
+    content_type: "application/vnd.production-ready.structured-records+jsonl",
+    file_name: "report.jsonl",
+    profile: "excel_to_jsonl",
+    converted: true,
+  });
+
+  await page.goto("/documents/doc-1");
+
+  const previewPanel = page
+    .getByRole("heading", { name: "原本プレビュー" })
+    .locator("xpath=ancestor::section[1]");
+  // 処理前（Office の原本）も処理後（JSONL）も、同じ 1 文の案内になる。
+  await expect(previewPanel.getByText(UNSUPPORTED_NOTICE, { exact: true })).toBeVisible();
+  await previewPanel.getByRole("tab", { name: "処理後" }).click();
+  await expect(previewPanel.getByRole("tab", { name: "処理後" })).toHaveAttribute("aria-selected", "true");
+  await expect(previewPanel.getByText(UNSUPPORTED_NOTICE, { exact: true })).toBeVisible();
+  await expect(previewPanel.getByText(OFFICE_REPROCESS_NOTICE)).toHaveCount(0);
 });

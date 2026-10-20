@@ -3886,7 +3886,7 @@ const focus = evidencePreviewFocus(chunkMetadata);   // 最初のページ・bbo
   loadText={(signal) => fetchText(url, signal)}       // kind=text（失敗は throw → 理由と再試行）
   textKey={url}
   downloadUrl={downloadUrl}                           // kind=unsupported のダウンロード（無ければボタンなし）
-  unsupportedMessage={message}                        // 製品だけの案内（RAG の Office の再処理など）
+  unsupportedMessage={message}                        // 製品だけの案内（Agent の根拠のダウンロードの案内など）
   {...focus}
   labels={documentPreviewLabels({ retry: t("common.retry") })}
   sizing="fill"                                       // fill（根拠のパネル）/ page（文書の詳細。1 ページ全体が入る高さ）
