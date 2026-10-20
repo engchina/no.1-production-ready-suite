@@ -4197,17 +4197,23 @@ def answer_question_result(
                 crag_rewrites=crag_rewrites,
                 retrieval_top_k=chunk_top_k,
             )
-        section_expansion = None
-        if selected_answer_flow == CRAG_ANSWER_FLOW and context.records and context.text.strip():
-            context, section_expansion = _expand_context_by_sections(
+        section_state: dict[str, Any] = {}
+
+        def complete_sections(candidate: AnswerContext, phase: str) -> tuple[AnswerContext, Any]:
+            return _expand_context_by_sections(
                 normalized_question,
-                context,
+                candidate,
                 settings,
                 crag_attempts,
                 answer_llm_provider=answer_llm_provider,
                 rerank_enabled=effective_rerank_enabled,
                 started_at=answer_started_at,
+                use_grader=selected_answer_flow == CRAG_ANSWER_FLOW,
+                state=section_state,
+                phase=phase,
             )
+
+        context, section_expansion = complete_sections(context, "main")
         # 主の検索の後に足す検索の枠（手順ごとの検索と根拠の無い要求の再検索で共有する。#2395）。
         extra_budget = ExtraRetrievalBudget.from_settings(settings)
         guide_step_trace: dict[str, Any] | None = None
@@ -4251,6 +4257,8 @@ def answer_question_result(
                     )
                     if guide_step_trace.get("added_chunk_ids"):
                         guide_step.impact(f"手順の根拠 {len(guide_step_trace['added_chunk_ids'])} 件を回答の材料に加えます。")
+        # 手順別の検索で新たに得た根拠も、要求ごとの判定に渡す前に最低範囲を読む。
+        context, section_expansion = complete_sections(context, "guide_steps")
         if not context.records or not context.text.strip():
             flow_step.status = "根拠不足で終了"
             flow_step.add("回答に使える根拠がありません。回答文の生成は未実行です。")
@@ -4328,6 +4336,9 @@ def answer_question_result(
             )
             if re_retrieval.get("applied"):
                 coverage_step.impact(f"根拠の無い要求の根拠 {len(re_retrieval['added_chunk_ids'])} 件を回答の材料に加えます。")
+
+        # 不足要求の追加検索も同じ読取記録・時間・入力・抽出呼び出しの予算を使う。
+        context, section_expansion = complete_sections(context, "request_coverage")
 
         with _execution_step(
             "回答に使う画像の確認", "根拠に含まれる画面・図を、回答するモデルへ原画像のまま見せるかを決めます。"
@@ -4488,20 +4499,44 @@ def _expand_context_by_sections(
     answer_llm_provider: str | None,
     rerank_enabled: bool,
     started_at: float,
+    use_grader: bool = True,
+    state: dict[str, Any] | None = None,
+    phase: str = "main",
 ) -> tuple[AnswerContext, Any]:
     """当たった chunk の章節から親の章節へ段階的に広げる (#1436。`section_expansion`)。
 
-    章節の読み込みが注入されていない・設定で無効なら何もしない（None を返す）。足りるかの判定は CRAG の評価器
-    （`_grade_crag_retrieval`）で、段ごとに 1 回呼ぶ。
+    標準 RAG は最低範囲を補完し、CRAG は追加で十分性を判定する。state は1回答内で共有し、
+    追加検索後も同じ原文・抽出の呼び出し・時間の予算を使う。無効と読み込み未設定は診断で区別する。
     """
     from rag_engine.dependencies import section_dependencies
     from rag_engine.generation import section_expansion as sections
     from rag_engine.resources.deadline import remaining_seconds
 
     ports = section_dependencies()
+    if state is None:
+        state = {}
+    if not context.records or not context.text.strip():
+        return context, state.get("result")
     if ports is None or not getattr(settings, "section_expansion_enabled", True):
-        return context, None
-    last = attempts[-1] if attempts else None
+        reason = "disabled" if not getattr(settings, "section_expansion_enabled", True) else "not_configured"
+        result = sections.SectionExpansionResult(
+            context=context,
+            stop_reason=reason,
+            trace={"enabled": reason != "disabled", "stop_reason": reason, "applied": False, "minimum_scope_complete": False},
+        )
+        state["result"] = result
+        return context, result
+
+    def signature_of(candidate: AnswerContext) -> tuple[Any, ...]:
+        return (
+            tuple((record.chunk_uid or record.id, record.text) for record in candidate.records),
+            tuple(sections.seed_chunk_ids(candidate)),
+        )
+
+    signature = signature_of(context)
+    if signature == state.get("signature"):
+        return context, state.get("result")
+    last = attempts[-1] if attempts and not state.get("result") else None
     graded: list[CragRetrievalAttempt] = []
 
     def grade(candidate: AnswerContext, level: int) -> CragRetrievalAttempt:
@@ -4516,22 +4551,43 @@ def _expand_context_by_sections(
     from rag_engine.generation.section_extraction import SectionExtractor
 
     # 予算に入らない章節は、質問に関係する原文を抜き出してから統合する (#1437)。呼び出しの上限は 1 回の回答で数える。
-    extractor = SectionExtractor(settings, parse_text_response, provider_id=answer_llm_provider)
+    if "extractor" not in state:
+        state["extractor"] = SectionExtractor(settings, parse_text_response, provider_id=answer_llm_provider)
+        state["reader"] = sections.SectionReader(read_chunks=ports[1], known_ids=set())
+        state["outlines"] = {}
+    extractor = state["extractor"]
+
+    def outline(**kwargs: Any) -> Any:
+        uid = kwargs["chunk_uid"]
+        if uid not in state["outlines"]:
+            state["outlines"][uid] = ports[0](**kwargs)
+        return state["outlines"][uid]
+
     with _execution_step("章節の拡張", "当たった根拠の章節から親の章節へ段階的に広げ、足りるかを確かめながら根拠に加えます。") as step:
         result = sections.expand_sections(
             question,
             context,
             settings,
             last_attempt=last,
-            grade=grade,
-            section_outline=ports[0],
+            grade=grade if use_grader else None,
+            section_outline=outline,
             section_chunks=ports[1],
             rerank=rerank,
             large_sections=extractor,
             started_at=started_at,
             deadline_remaining=remaining_seconds,
             clock=monotonic,
+            reader=state["reader"],
         )
+        result.trace["phase"] = phase
+        previous = state.get("result")
+        if previous is not None:
+            result.applied = result.applied or previous.applied
+            result.trace["applied"] = result.applied
+        result.trace["phases"] = [
+            *(previous.trace.get("phases", []) if previous else []),
+            {key: value for key, value in result.trace.items() if key != "phases"},
+        ]
         result.trace["grades"] = [item.to_payload() for item in graded]
         if extractor.calls:
             result.trace["extraction"] = {
@@ -4559,6 +4615,8 @@ def _expand_context_by_sections(
         if result.unread:
             step.field("読めなかった章節", f"{len(result.unread)} 件")
             step.impact("上限に達したため、読めなかった章節を「回答に未反映の関連章節」に示し、条件つきの回答にします。")
+    state["result"] = result
+    state["signature"] = signature_of(result.context)
     return result.context, result
 
 
@@ -4569,9 +4627,12 @@ _SECTION_STOP_LABELS = {
     "token_budget": "根拠の入力の上限",
     "time_limit": "回答の時間の上限",
     "no_sections": "章節の対応なし",
+    "not_configured": "章節の読み込み未設定",
     "grade_error": "判定に失敗",
     "disabled": "無効",
-    "scope_read": "読む範囲（文書全体）まで読んだ",
+    "scope_read": "必要な範囲まで読んだ",
+    "read_error": "原文の読取に失敗",
+    "partial_read": "必要な範囲の一部が未読",
 }
 
 
@@ -4593,17 +4654,22 @@ def _known_gaps(attempts: Sequence[CragRetrievalAttempt], expansion: Any) -> tup
 def _section_evidence_budget(context: AnswerContext, settings: Settings, expansion: Any) -> int | None:
     """章節を広げたときの原文の予算（文字）。広げた根拠を切らずに渡せるよう、入力の上限の範囲で広げる (#1436)。
 
-    見積もりは 1 字 1 token 以上なので、文字の予算を入力 token の上限以下にすれば token も上限を超えない。
-    広げていなければ None（既定の `evidence_budget_chars`）。
+    根拠全体の見積もりが token の上限内なら、文字予算を全原文の長さまで確保する。
+    超える場合は文字予算も上限内に絞る。補完をしていなければ None（既定の `evidence_budget_chars`）。
     """
-    if expansion is None or not expansion.applied:
+    if expansion is None or not (expansion.applied or expansion.trace.get("minimum_scope_complete")):
         return None
     from rag_engine.generation.section_expansion import SectionExpansionLimits
 
     base = int(getattr(settings, "evidence_budget_chars", 0) or 0)
     total = sum(len(str(getattr(record, "text", "") or "")) for record in context.records)
     limit = SectionExpansionLimits.from_settings(settings).input_tokens
-    return max(base, min(limit, total + total // 10))
+    from rag_engine.generation.section_expansion import context_tokens
+
+    if context_tokens(context) > limit:
+        return max(1, min(base or limit, limit))
+    # ASCII の原文も、token と文字数を混同して切らない。全量が token 予算内なら全文を渡す。
+    return max(base, total + total // 10)
 
 
 def _retrieve_without_answer(

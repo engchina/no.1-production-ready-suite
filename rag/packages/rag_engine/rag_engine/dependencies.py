@@ -31,7 +31,8 @@ class AnswerDependencies:
     section_outline / section_chunks は章節の拡張（#1436）の入力。章節と chunk の対応を持つ呼び出し元が渡す。
     section_outline は chunk_uid を受け取り、その chunk の文書の章節の一覧（`section_expansion.SectionOutline`。
     対応が無い chunk は None）を返す。section_chunks は document_id・chunk_set_id・section_id を受け取り、
-    章節の chunk（child と親の StoredChunk。child は章節の中の順）を返す。省略時は章節で広げない。
+    章節の chunk（child と親の StoredChunk。child は章節の中の順）を返す。部分取得や失敗は
+    `SectionRead(complete=False)` で区別する。省略時は章節で広げない。
     prefetch_search は、質問拡張の LLM と並行に元の質問の検索を先に読む入力（#1499）。query・candidate_limit・
     inquiry_conditions・settings を keyword で受け取り、続く search が同じ検索文の結果を読めるよう呼び出し元の
     cache に入れる（戻り値は使わない）。結果を変えない（search の結果は並行にしないときと同じ）実装だけを渡す。

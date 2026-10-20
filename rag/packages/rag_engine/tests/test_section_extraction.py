@@ -539,7 +539,7 @@ def test_expansion_hands_large_section_to_extraction_and_answer_uses_only_extrac
         large_sections=extractor,
     )
 
-    assert result.applied and result.unread == [] and graded == [1]
+    assert result.applied and result.unread and not result.trace["minimum_scope_complete"] and graded == [1]
     assert result.trace["large_section_handoff"] == "extract_then_integrate"
     entry = result.trace["levels"][0]["sections"][0]
     assert entry["read"] == "extracted" and entry["extraction"]["quotes"] == PARENTS
@@ -639,7 +639,7 @@ def test_first_evidence_in_the_section_returns_its_budget_to_extraction():
 
     result, extractor = _expand_section(context, settings, stub)
 
-    assert extractor.calls >= 1 and result.unread == []
+    assert extractor.calls >= 1 and result.unread and not result.trace["minimum_scope_complete"]
     entry = result.trace["levels"][0]["sections"][0]
     assert entry["read"] == "extracted"
     assert entry["extraction"]["remaining_tokens"] == limit and entry["extraction"]["context_parents"] == 2
@@ -668,7 +668,7 @@ def test_first_evidence_over_the_budget_is_replaced_by_extracted_text_within_lim
 
     result, extractor = _expand_section(context, settings, stub)
 
-    assert extractor.calls >= 1 and result.unread == [] and result.applied
+    assert extractor.calls >= 1 and result.unread and not result.trace["minimum_scope_complete"] and result.applied
     assert sections.context_tokens(result.context) <= limit
     ids = _record_ids(result.context)
     assert len(ids) == len(set(ids)) and set(ids) == {f"{DOC}:p{index}" for index in range(1, PARENTS + 1)}

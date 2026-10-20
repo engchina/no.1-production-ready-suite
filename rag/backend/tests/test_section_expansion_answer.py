@@ -122,7 +122,7 @@ def section_map(monkeypatch: pytest.MonkeyPatch) -> SectionMapStub:
 
 
 def _engine(**settings: Any) -> AnswerEngine:
-    # 章節の拡張は CRAG のときだけ効く(全体の既定は標準 RAG。#2747)。
+    # 既存の親への追加拡張のテストは CRAG、共通の最低範囲は両方式で確かめる。
     settings = {"rag_query_strategy": "auto_routing", "rag_answer_flow": "crag", **settings}
     return AnswerEngine(
         Settings(rag_domain_keywords=["受注番号"], **settings),
@@ -233,7 +233,7 @@ async def test_disabled_profile_does_not_read_sections(section_map: SectionMapSt
     )
 
     assert section_map.reads == []
-    assert outcome.diagnostics["section_expansion"] == {}
+    assert outcome.diagnostics["section_expansion"]["stop_reason"] == "disabled"
     assert all(
         chunk.metadata.get("evidence_role") != "section_context" for chunk in outcome.citations
     )
@@ -539,3 +539,202 @@ async def test_long_section_is_extracted_then_answered_with_verbatim_quotes(
     assert prompts["draft"] and APPROVAL in prompts["draft"][0]
     assert FILLER not in prompts["draft"][0]
     assert "登録ボタン" in outcome.answer
+
+
+@pytest.mark.parametrize("flow", ["standard_rag", "crag"])
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_section_completion_reaches_generation_in_both_answer_flows(
+    flow: str, enabled: bool, section_map: SectionMapStub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import rag_engine.adapters.oci as engine_oci
+    from rag_engine.generation import answering
+    from rag_engine.generation.answer_models import CragRetrievalAttempt
+    from rag_engine.models.llm import GroundedDraft
+
+    prompts: list[str] = []
+    grades: list[int] = []
+
+    def grade(
+        attempt: int,
+        question: str,
+        query: str,
+        queries: Any,
+        context: Any,
+        settings: Any,
+        **options: Any,
+    ) -> CragRetrievalAttempt:
+        grades.append(attempt)
+        return CragRetrievalAttempt(
+            attempt=attempt, query=query, retrieval_queries=tuple(queries), sufficient=True
+        )
+
+    def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+        if schema is GroundedDraft:
+            prompts.append(prompt)
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    monkeypatch.setattr(answering, "_grade_crag_retrieval", grade)
+    monkeypatch.setattr(engine_oci, "parse_text_response", llm)
+    outcome = await _engine(rag_answer_flow=flow, rag_section_expansion_enabled=enabled).run(
+        SearchRequest(query="登録方法は？")
+    )
+
+    assert bool(section_map.reads) is enabled
+    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts) is enabled
+    if flow == "standard_rag":
+        assert grades == []
+    if enabled:
+        assert outcome.diagnostics["section_expansion"]["minimum_scope_complete"] is True
+        assert [section_id for section_id, _ in section_map.reads] == ["s1"]
+
+
+@pytest.mark.parametrize("failure", ["empty", "partial", "forbidden", "exception"])
+@pytest.mark.usefixtures("stub_llm")
+async def test_incomplete_or_unreadable_sections_never_count_as_complete(
+    failure: str, section_map: SectionMapStub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = section_map_service.read_section
+
+    async def incomplete(*args: Any, **kwargs: Any) -> Any:
+        if failure in {"forbidden", "exception"}:
+            raise PermissionError("unavailable")
+        text = await original(*args, **kwargs)
+        return section_map_service.SectionText(
+            outline=text.outline,
+            section=text.section,
+            chunks=text.chunks[:1] if failure == "partial" else [],
+            complete=False,
+        )
+
+    monkeypatch.setattr(section_map_service, "read_section", incomplete)
+    outcome = await _engine(rag_answer_flow="standard_rag").run(SearchRequest(query="登録方法は？"))
+    trace = outcome.diagnostics["section_expansion"]
+    assert trace["minimum_scope_complete"] is False
+    assert trace["unread"]
+    assert outcome.diagnostics["outcome"] == "conditional"
+
+
+@pytest.mark.parametrize("stage", ["guide", "coverage", "coverage_same_parent"])
+@pytest.mark.usefixtures("stub_llm")
+async def test_supplemental_searches_complete_new_sections_before_generation(
+    stage: str, section_map: SectionMapStub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    from rag_engine.generation import answering
+    from rag_engine.generation.answer_models import AnswerContext
+    from rag_engine.generation.crag_support import _merge_crag_evidence
+    from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
+    from rag_engine.retrieval.guide_steps import GuidePlan, GuideStep
+
+    import app.rag.answer_engine as backend
+
+    # 検索済みの根拠と追加検索の根拠を異なる章節にする。
+    original_outline = section_map_service.section_outline
+    original_read = section_map_service.read_section
+
+    async def outline(*args: Any, **kwargs: Any) -> Any:
+        result = await original_outline(*args, **kwargs)
+        assert result is not None
+        return replace(
+            result,
+            sections=[
+                *result.sections,
+                SectionNode("s2", "追加操作", 1, 2, "document", 4, 4, chunk_count=2, chars=40),
+            ],
+        )
+
+    async def owner(document_id: str, chunk_id: str, **kwargs: Any) -> Any:
+        return "cs-1", "s2" if chunk_id in {"doc-1:c5", "doc-1:c6"} else "s1"
+
+    async def read(document_id: str, section_id: str, **kwargs: Any) -> Any:
+        if section_id != "s2":
+            return await original_read(document_id, section_id, **kwargs)
+        section_map.reads.append((section_id, dict(kwargs.get("filters") or {})))
+        result = await outline(document_id)
+        chunks = [
+            _section_chunk("doc-1:c5", "設定を変更します。", 5, 4),
+            _section_chunk("doc-1:c6", "変更後に確認を実行します。", 6, 4),
+        ]
+        return section_map_service.SectionText(
+            result, result.get("s2"), [SectionChunkRow(i, c) for i, c in enumerate(chunks)], True
+        )
+
+    # 追加検索の返却だけをスタブにし、その後の共通補完・引用・生成は実際の経路を通す。
+    async def new_anchor(self: Any, state: Any) -> Any:
+        chunk = _section_chunk("doc-1:c5", "設定を変更します。", 5, 4)
+        state.chunks[chunk.chunk_id] = chunk
+        return await original_engine_outline(self, state, chunk.chunk_id)
+
+    original_engine_outline = backend.AnswerEngine._section_outline
+
+    async def engine_outline(self: Any, state: Any, chunk_id: str) -> Any:
+        if chunk_id == "doc-1:c5" and chunk_id not in state.chunks:
+            return await new_anchor(self, state)
+        return await original_engine_outline(self, state, chunk_id)
+
+    def add_anchor(context: Any) -> Any:
+        template = context.evidence_tree[0].children[0].record
+        record = replace(
+            template,
+            id="doc-1:c5",
+            chunk_uid="doc-1:c5",
+            chunk_id="doc-1:c5",
+            text="設定を変更します。",
+            body_text="設定を変更します。",
+        )
+        tree = ContextParentEvidence(
+            record,
+            "child_fallback",
+            "retrieved",
+            (ContextChildEvidence(record, "retrieved_anchor", "retrieved"),),
+        )
+        if stage == "coverage_same_parent":
+            parent = context.evidence_tree[0]
+            return replace(
+                context,
+                evidence_tree=(
+                    replace(parent, children=(*parent.children, tree.children[0])),
+                    *context.evidence_tree[1:],
+                ),
+            )
+        return _merge_crag_evidence(
+            context,
+            AnswerContext(records=[record], text=record.text, evidence_tree=(tree,)),
+            "操作",
+            max_records=20,
+            max_chars=40000,
+        )
+
+    monkeypatch.setattr(section_map_service, "section_outline", outline)
+    monkeypatch.setattr(section_map_service, "chunk_section", owner)
+    monkeypatch.setattr(section_map_service, "read_section", read)
+    monkeypatch.setattr(backend.AnswerEngine, "_section_outline", engine_outline)
+    if stage == "guide":
+        monkeypatch.setattr(
+            backend,
+            "guide_step_plan",
+            lambda _: GuidePlan("guide-a", 1, (GuideStep("step-a", "設定"),)),
+        )
+        monkeypatch.setattr(
+            answering,
+            "_cover_guide_steps",
+            lambda question, context, *args, **kw: (
+                add_anchor(context),
+                {"steps": [], "added_chunk_ids": ["doc-1:c5"]},
+                (),
+            ),
+        )
+    else:
+        original = answering._cover_missing_requests
+
+        def cover(question: str, context: Any, *args: Any, **kwargs: Any) -> Any:
+            _, trace = original(question, context, *args, **kwargs)
+            return add_anchor(context), trace
+
+        monkeypatch.setattr(answering, "_cover_missing_requests", cover)
+
+    outcome = await _engine(rag_answer_flow="standard_rag").run(SearchRequest(query="登録方法は？"))
+    assert [key for key, _ in section_map.reads] == ["s1", "s2"]
+    assert outcome.diagnostics["section_expansion"]["minimum_scope_complete"]
+    assert "doc-1:c6" in {citation.chunk_id for citation in outcome.citations}
