@@ -5,6 +5,7 @@ import {
   MarkdownInlineText,
   useEvidenceSource,
   type AnswerCitationRef,
+  type AnswerPassageRecords,
   type AnswerSectionsBlock,
   type EvidenceSourceState,
 } from "@production-ready/ui";
@@ -16,7 +17,7 @@ import {
   citationLabel,
   type AnswerEvidenceData,
 } from "@/lib/answer-evidence";
-import type { StructuredBlock } from "@/lib/answer-structure";
+import { answerPassageLabels, type StructuredBlock } from "@/lib/answer-structure";
 
 /**
  * 回答の根拠の塊（#2328）。RAG のチャットと同じ共有の `AnswerEvidence`（「AI に渡した N 件 ／ 回答で引用 M 件」の
@@ -102,20 +103,24 @@ function EvidenceSource({
 /**
  * 回答の本文の節（RAG のチャットの回答と同じ共有の `AnswerSections`。#2328）。段落・項目の下の「根拠：文書 p.N」を
  * 押すと、その根拠を右のサイドパネルで開く（RAG の根拠の行と同じ共通の `EvidenceSourceSheet`。#2360）。
+ * 段落の印の記録（`passages`。#2738）があれば、印の付いた段落に線と印を付け、回答全体の注意・外した段落・
+ * 確認が必要な点を共有の部品で出す（RAG のチャットと同じ見た目）。根拠の無い回答（`evidence` が null）も描ける。
  */
 export function StructuredAnswer({
   runId,
   blocks,
   evidence,
+  passages = null,
   testId,
 }: {
   runId: string;
   blocks: StructuredBlock[];
-  evidence: AnswerEvidenceData;
+  evidence: AnswerEvidenceData | null;
+  passages?: AnswerPassageRecords | null;
   testId: string;
 }) {
   const source = useEvidenceSource<number>();
-  const byChunk = new Map(evidence.entries.map((entry, index) => [entry.chunkId, { entry, index }]));
+  const byChunk = new Map((evidence?.entries ?? []).map((entry, index) => [entry.chunkId, { entry, index }]));
   const citations = (chunkIds: readonly string[]): AnswerCitationRef[] => {
     const refs: AnswerCitationRef[] = [];
     for (const chunkId of chunkIds) {
@@ -140,6 +145,7 @@ export function StructuredAnswer({
         key: block.key,
         content: <MarkdownInlineText text={block.text} />,
         citations: citations(block.chunkIds),
+        passageText: block.raw ?? block.text,
       };
     }
     if (block.kind === "markdown") {
@@ -148,6 +154,7 @@ export function StructuredAnswer({
         key: block.key,
         content: <AnswerBody text={block.text} headingLevel={2} />,
         citations: citations(block.chunkIds),
+        passageText: block.raw ?? block.text,
       };
     }
     return {
@@ -162,12 +169,15 @@ export function StructuredAnswer({
         content: entry.plain ? entry.text : <MarkdownInlineText text={entry.text} />,
         muted: entry.muted,
         citations: citations(entry.chunkIds),
+        passageText: entry.raw ?? entry.text,
       })),
     };
   });
   return (
-    <AnswerSections blocks={sections} testId={testId}>
-      <EvidenceSource runId={runId} evidence={evidence} source={source} testId={`${testId}-citation-sheet`} />
+    <AnswerSections blocks={sections} testId={testId} passages={passages} passageLabels={answerPassageLabels()}>
+      {evidence ? (
+        <EvidenceSource runId={runId} evidence={evidence} source={source} testId={`${testId}-citation-sheet`} />
+      ) : null}
     </AnswerSections>
   );
 }

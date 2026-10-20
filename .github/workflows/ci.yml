@@ -7,6 +7,7 @@ name: CI
 # 本 workflow・.github/actions/ と、どちらにも属さない platform のファイル（.env.example・contracts/ 等）の変更は両方に効く。
 # 例外: 回答の段落の判定の共通の事例（platform/contracts/answer-passages/）は backend のテストだけが読むので、
 # それを読む RAG / Engine・RAG / Backend・Agent / Backend だけを動かす（frontend・e2e は動かさない。#1488）。
+# ただし段落の印の契約（passage-marks.json）は共有 UI のテストも読むので、共有 UI の変更として frontend も動かす（#2738）。
 # 製品の frontend と E2E smoke の job は、その製品の frontend（と frontend のテストが読む backend の一部のファイル。
 # <製品>_frontend）か共有 UI の変更でだけ動く。e2e は API をすべてモックするので backend のコードを実行しない（#1531）。
 # 製品の backend の job（Backend・Engine・services の lint）は、その製品の frontend 以外（と backend のテストが読む
@@ -197,6 +198,8 @@ jobs:
               - "platform/docs/design-system/**"
               - "platform/package.json"
               - "platform/package-lock.json"
+              # 共有 UI のテスト（tests/answer-passage-marks.test.tsx）が読む段落の印の契約（#2738）。
+              - "platform/contracts/answer-passages/passage-marks.json"
               - "!platform/docs/design-system/**/*.md"
             platform_backend:
               - "platform/packages/backend_core/**"
@@ -387,7 +390,7 @@ jobs:
               - "agent/backend/app/features/agent/run_signals.py"
               - "agent/backend/tests/*oracle_live*.py"
             # frontend / backend のどちらにも属さない platform のファイル（.env.example・contracts/・scripts/・templates/ 等）。
-            # answer-passages の事例は answer_passages_contract だけで判定する（読むのは backend のテストだけ。#1488）。
+            # answer-passages の事例は answer_passages_contract（段落の印の契約は platform_frontend も）で判定する（#1488・#2738）。
             platform_other:
               - "platform/**"
               - "!platform/packages/ui/**"
