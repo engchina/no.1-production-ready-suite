@@ -556,6 +556,11 @@ class GuideStepSemanticMatchTest(unittest.TestCase):
         self.assertEqual(len(failing.calls), 1)
         self.assertTrue(semantics.failed)
         self.assertEqual(semantics.trace()["calls"], 1)
+        # 記述（題名・手がかり）の無い手順は意味で照らせないので、呼ばずに語の判定に戻る。
+        untitled = (("s1", "", ("run:s",)), REWORDED_GUIDE[1])
+        working = StubEmbedder(REWORDED_VECTORS)
+        self.assertEqual(self._statuses(untitled, (SHARED_END,), working), self._statuses(untitled, (SHARED_END,)))
+        self.assertEqual(working.calls, [])
         # 数の合わない応答・零の vector も失敗として語の判定に戻る。
         for broken in (lambda texts: [], lambda texts: [[0.0, 0.0, 0.0] for _ in texts]):
             self.assertEqual(

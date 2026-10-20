@@ -3111,6 +3111,9 @@ def _guide_semantic_owners(
         for sentence in step_sentences:
             containing.setdefault(sentence, []).append(step_id)
     compared = [step_id for step_id in descriptions if sentences.get(step_id) or step_id in involved]
+    if any(not descriptions[step_id] for step_id in compared):
+        # 記述（題名・手がかり）の無い手順は意味で照らせない。
+        return None
     vectors = semantics.lookup(
         [
             *(descriptions[step_id] for step_id in compared),
