@@ -292,6 +292,33 @@ def test_map_chunk_skips_summaries_and_reads_pages_and_elements() -> None:
     assert map_chunk_from_row({**row, "metadata_json": {"nav_summary": True}}) is None
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        # 印の無い分割（#2590 より前に保存した chunk）でも、要約・項目の値の種類で除く。
+        {"content_kind": "section_summary", "element_ids": "nav-summary-nav-1"},
+        {"content_kind": "field", "element_ids": "field-3-amount"},
+        {"content_kind": "text", "extracted_field": True},
+    ],
+    ids=["section-summary-without-mark", "field-without-mark", "extracted-field-mark"],
+)
+def test_map_chunk_skips_derived_chunks_without_summary_marks(metadata: dict[str, object]) -> None:
+    row: dict[str, object] = {"chunk_id": "c1", "chunk_index": 0, "metadata_json": metadata}
+    assert map_chunk_from_row(row) is None
+
+
+@pytest.mark.parametrize("content_kind", ["text", "list", "table", "figure", "record"])
+def test_map_chunk_keeps_source_chunks_of_every_body_kind(content_kind: str) -> None:
+    row: dict[str, object] = {
+        "chunk_id": "c1",
+        "chunk_index": 0,
+        "metadata_json": {"content_kind": content_kind, "page_number": 2},
+    }
+    chunk = map_chunk_from_row(row)
+    assert chunk is not None
+    assert chunk.page_start == 2
+
+
 # ---- 作り直し（章節の正本から、対応の表だけを置き換える） ----
 
 

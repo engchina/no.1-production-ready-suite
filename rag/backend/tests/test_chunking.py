@@ -200,6 +200,31 @@ def test_chunk_extraction_isolates_tables_and_adds_element_metadata() -> None:
     assert table_chunk.metadata["text_chars"] == len(table_chunk.text)
 
 
+def test_chunk_extraction_keeps_extracted_field_marks_apart_from_source_text() -> None:
+    """項目抽出の値の要素（派生）は見出しに読み直さず、印を chunk に引き継ぎ、原文と結合しない。"""
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(kind="text", text="原文の段落です。", page_number=1, element_id="e1"),
+            DocumentElement(
+                kind="text",
+                text="1. 項目 A: 値 A",
+                page_number=1,
+                element_id="field-2-a",
+                content_kind="field",
+                metadata={"extracted_field": True, "field_name": "1. 項目 A"},
+            ),
+        ]
+    )
+
+    chunks = chunk_extraction(extraction, chunk_size=200, overlap=0)
+
+    assert [chunk.text for chunk in chunks] == ["原文の段落です。", "1. 項目 A: 値 A"]
+    assert "extracted_field" not in chunks[0].metadata
+    assert chunks[1].metadata["content_kind"] == "field"
+    assert chunks[1].metadata["extracted_field"] is True
+    assert extraction.elements[1].kind == "text"
+
+
 def test_chunk_extraction_preserves_bbox_coordinate_metadata() -> None:
     """bbox の coordinate mode / unit は citation-to-preview 用 metadata に残す。"""
     extraction = StructuredExtraction(

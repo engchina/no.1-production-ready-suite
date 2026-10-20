@@ -14,6 +14,8 @@ import hashlib
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
+from rag_parser_core.extraction import NAV_SUMMARY_KEY, SECTION_SUMMARY_CONTENT_KIND
+
 from app.schemas.extraction import (
     DocumentElement,
     DocumentNavigationNode,
@@ -224,7 +226,7 @@ def navigation_summary_elements(
         metadata: dict[str, object] = {
             "section_id": node.section_id,
             "section_path": " > ".join(node.section_path),
-            "nav_summary": True,
+            NAV_SUMMARY_KEY: True,
             "nav_depth": node.depth,
         }
         if node.parent_section_id:
@@ -235,7 +237,7 @@ def navigation_summary_elements(
                 text=text,
                 order=order,
                 element_id=f"nav-summary-{node.section_id}"[:128],
-                content_kind="section_summary",
+                content_kind=SECTION_SUMMARY_CONTENT_KIND,
                 page_number=node.page_start,
                 section_path=list(node.section_path),
                 metadata=metadata,
