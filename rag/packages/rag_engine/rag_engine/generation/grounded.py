@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
 import re
 import unicodedata
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -68,6 +70,8 @@ from rag_engine.retrieval.evidence_selection import evidence_relevance
 from rag_engine.retrieval.operation_context import operation_labels, operation_target_score
 from rag_engine.retrieval.result_granularity import aggregate_only_evidence
 from rag_engine.retrieval.task_contract import task_contract
+
+logger = logging.getLogger(__name__)
 
 MAX_ROUNDS = 3  # 初回 + 是正は最大2回。各回は生成1回と監査1回。
 MAX_PINNED = 4
@@ -2989,16 +2993,166 @@ def _guide_words(value: str) -> set[str]:
     return {w[i : i + 2] for w in check_cues().claim_word.findall(fold_width(value or "")) for i in range(len(w) - 1)}
 
 
-def _guide_step_anchor(words: set[str], step_spans: Sequence[dict]) -> int:
-    """手順の根拠の文のうち、手順の語を最も多く含む文の語の数（手順の主の操作の文。#2649）。"""
-    return max(
-        (
-            len(words & _guide_words(sentence))
+# 意味の近さ（cosine）の差がこれより小さい手順の組は、文の近さで区別できないとみなす（#2649）。手順の主の操作の文は
+# その手順の記述に他の手順の記述より 0.1 以上近いのが通常で、同じ文の言い換え・語順の違いでは cosine が数百分の 1
+# 揺れる。差がこの値に満たない文は複数の手順に同じくらい近い共通の文として、どの手順の主の操作の文にもしない。
+# 小さくすると共通の文を手順の説明に数え（誤って explained）、大きくすると正しい説明も決まらない（unused。不足を
+# 示す安全側）ので、揺れの幅より上の安全側に寄せた値。
+GUIDE_STEP_COMMON_MARGIN = 0.05
+
+
+@dataclass
+class GuideStepSemantics:
+    """業務ガイドの手順の主の操作の文を、意味の近さで決めるための embedding（#2649）。
+
+    ``embed`` は文の列を受け取り入力順の vector を返す（`ports.Embedder.embed`。OCI Generative AI の Cohere Embed）。
+    None なら意味の判定をせず、語の判定（安全側）に戻る。1 回の回答で 1 つ作り、同じ文の vector を作り直しの round と
+    回答の確定でも再利用する（呼び直さない）。呼び出しが失敗したら、その回答では以後呼ばずに語の判定に戻る。
+    ``calls`` / ``texts`` / ``seconds`` は回答の trace に残す呼び出しの回数・文の数・時間。
+    """
+
+    embed: Callable[[Sequence[str]], Sequence[Sequence[float]]] | None = None
+    vectors: dict[str, tuple[float, ...]] = field(default_factory=dict)
+    calls: int = 0
+    texts: int = 0
+    seconds: float = 0.0
+    failed: bool = False
+
+    @property
+    def available(self) -> bool:
+        return self.embed is not None and not self.failed
+
+    def lookup(self, texts: Sequence[str]) -> dict[str, tuple[float, ...]] | None:
+        """文ごとの単位 vector。まだ無い文だけを 1 回で embedding にする。使えない・失敗なら None。"""
+        wanted = list(dict.fromkeys(texts))
+        missing = [text for text in wanted if text not in self.vectors]
+        if missing:
+            if self.embed is None or self.failed:
+                return None
+            started = monotonic()
+            self.calls += 1
+            self.texts += len(missing)
+            try:
+                raw = list(self.embed(missing))
+                if len(raw) != len(missing):
+                    raise ValueError(f"embedding count mismatch: {len(raw)} != {len(missing)}")
+                units = [_unit_vector(vector) for vector in raw]
+            except Exception:  # noqa: BLE001 - 意味の判定は補助。語の判定（安全側）に戻る。
+                self.failed = True
+                logger.warning("guide step embedding failed; falling back to word matching", exc_info=True)
+                return None
+            finally:
+                self.seconds += monotonic() - started
+            self.vectors.update(zip(missing, units, strict=True))
+        return {text: self.vectors[text] for text in wanted}
+
+    def trace(self) -> dict[str, Any]:
+        """回答の trace に残す呼び出しの計測。"""
+        return {"calls": self.calls, "texts": self.texts, "elapsed_ms": round(self.seconds * 1000), "failed": self.failed}
+
+
+def _unit_vector(vector: Sequence[float]) -> tuple[float, ...]:
+    values = tuple(float(value) for value in vector)
+    norm = math.sqrt(sum(value * value for value in values))
+    if not values or not norm or not math.isfinite(norm):
+        raise ValueError("embedding is empty or zero")
+    return tuple(value / norm for value in values)
+
+
+def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
+    return sum(a * b for a, b in zip(left, right, strict=False))
+
+
+def _guide_sentences(step_spans: Sequence[dict]) -> list[str]:
+    """手順の根拠の文（語を含む文。同じ文は 1 つ。#2649）。"""
+    cues = check_cues()
+    return list(
+        dict.fromkeys(
+            sentence.strip()
             for span in step_spans
-            for sentence in check_cues().sentence_split.split(str(span.get("text") or ""))
-        ),
-        default=0,
+            for sentence in cues.sentence_split.split(str(span.get("text") or ""))
+            if cues.claim_word.search(fold_width(sentence))
+        )
     )
+
+
+# 手順の主の操作の文を語で決めるのに要る、文が含む手順の語（2 文字組）の最少の数（#2649）。2 文字組 1 つ（「画面」
+# 「入力」など）は手順に関係の無い文にもよく現れるので、それだけで主の操作の文とはしない（意味の判定に回す）。
+_GUIDE_STEP_ANCHOR_MIN_WORDS = 2
+
+
+def _guide_step_anchor(words: set[str], sentences: Sequence[str]) -> tuple[int, bool]:
+    """手順の根拠の文のうち手順の語を最も多く含む文（手順の主の操作の文）の語の数と、その文が語で 1 つに決まるか（#2649）。
+
+    決まるのは、その文が ``_GUIDE_STEP_ANCHOR_MIN_WORDS`` 以上の手順の語を含み、同じ数の語を含む文が他に無いとき。
+    """
+    scores = [len(words & _guide_words(sentence)) for sentence in sentences]
+    anchor = max(scores, default=0)
+    return anchor, anchor >= _GUIDE_STEP_ANCHOR_MIN_WORDS and scores.count(anchor) == 1
+
+
+def _guide_semantic_owners(
+    descriptions: Mapping[str, str],
+    sentences: Mapping[str, Sequence[str]],
+    items: Mapping[int, tuple[str, Sequence[str]]],
+    semantics: GuideStepSemantics,
+) -> dict[int, set[str]] | None:
+    """語で決まらない共有の item（index → (引用, 引用になる手順)）がどの手順の説明かを、意味の近さで決める（#2649）。
+
+    手順の主の操作の文: 手順の根拠の文のうち、その文を根拠に持つ手順の中で手順の記述（題名・検索の手がかり）が
+    一番近く、2 番目の手順との差が ``GUIDE_STEP_COMMON_MARGIN`` 以上の文（差が小さい文は共通の文で、どの手順の
+    主の操作の文にもしない）の中で、その手順に一番近い文。item は、引用がその文を含むか、引用に意味で一番近い
+    手順の根拠の文がその文で、引用になる手順の中でその手順が一番近い（差が閾値以上）ときに、その手順の説明とする。
+    embedding が使えなければ None（呼び出し側が語の判定に戻る）。
+    """
+    involved = list(dict.fromkeys(step_id for _quote, step_ids in items.values() for step_id in step_ids))
+    containing: dict[str, list[str]] = {}
+    for step_id, step_sentences in sentences.items():
+        for sentence in step_sentences:
+            containing.setdefault(sentence, []).append(step_id)
+    compared = [step_id for step_id in descriptions if sentences.get(step_id) or step_id in involved]
+    vectors = semantics.lookup(
+        [
+            *(descriptions[step_id] for step_id in compared),
+            *(sentence for step_id in involved for sentence in sentences[step_id]),
+            *(quote for quote, _step_ids in items.values()),
+        ]
+    )
+    if vectors is None:
+        return None
+
+    def near(text: str, step_id: str) -> float:
+        return _cosine(vectors[text], vectors[descriptions[step_id]])
+
+    def nearest(text: str, step_ids: Sequence[str]) -> tuple[str, float]:
+        """text に一番近い手順と、2 番目の手順との近さの差（手順が 1 つなら無限大）。"""
+        ranked = sorted(((near(text, step_id), step_id) for step_id in step_ids), key=lambda pair: -pair[0])
+        return ranked[0][1], (ranked[0][0] - ranked[1][0] if len(ranked) > 1 else math.inf)
+
+    def distinct(text: str, step_id: str, step_ids: Sequence[str]) -> bool:
+        owner, margin = nearest(text, step_ids)
+        return owner == step_id and margin >= GUIDE_STEP_COMMON_MARGIN
+
+    main: dict[str, str] = {}
+    for step_id in involved:
+        candidates = [sentence for sentence in sentences[step_id] if distinct(sentence, step_id, containing[sentence])]
+        if candidates:
+            main[step_id] = max(candidates, key=lambda sentence: near(sentence, step_id))
+    owners: dict[int, set[str]] = {}
+    for index, (quote, step_ids) in items.items():
+        owners[index] = {
+            step_id
+            for step_id in step_ids
+            if step_id in main
+            and (
+                quote_in_text(main[step_id], quote)
+                or (
+                    distinct(quote, step_id, step_ids)
+                    and max(sentences[step_id], key=lambda sentence: _cosine(vectors[quote], vectors[sentence])) == main[step_id]
+                )
+            )
+        }
+    return owners
 
 
 def guide_step_coverage(
@@ -3007,6 +3161,7 @@ def guide_step_coverage(
     spans: Sequence[dict],
     optional: Sequence[str] = (),
     step_terms: Mapping[str, Sequence[str]] | None = None,
+    semantics: GuideStepSemantics | None = None,
 ) -> list[dict[str, Any]]:
     """業務ガイドの手順ごとの充足（#2491・#2649）。
 
@@ -3015,10 +3170,13 @@ def guide_step_coverage(
 
     1 つの item が複数の手順の引用になる（手順が根拠の chunk を共有する・同じ原文が別の手順の根拠にもある）と、
     chunk の共通の一文（末尾の確定の操作など）だけで全手順を説明したことになる（#2649）。そこで、複数の手順の
-    引用になる item は、引用（原文）が手順の語（題名と ``step_terms`` の検索の手がかり）を、手順の根拠の中で
-    手順の語を最も多く含む文（手順の主の操作の文）と同じ数以上含むときだけ、その手順の item とする。手順の語が
-    根拠の文に 1 つも無い（語で照らせない）手順はこの条件を課さない。さらに 1 つの item は 1 つの手順の説明にだけ
-    数え（必須の手順を先に割り当てる）、同じ item を別の手順の説明に重ねない。
+    引用になる item は、まず語で決める: 引用（原文）が手順の語（題名と ``step_terms`` の検索の手がかり）を、手順の
+    根拠の中で手順の語を最も多く含む文（手順の主の操作の文。語で 1 つに決まるとき）と同じ数以上含めば、その手順の
+    item。どの手順でも語で決まらない item（手順の語が根拠に無い・主の操作の文が語で 1 つに決まらない・引用が語で
+    主の操作の文に届かない）は、``semantics`` が使えれば意味の近さで決める（`_guide_semantic_owners`）。使えない・
+    失敗なら語の判定（主の操作の文と同じ数以上の手順の語を含む引用。手順の語が根拠の文に無い手順には条件を課さない）
+    に戻る。さらに 1 つの item は 1 つの手順の説明にだけ数え（必須の手順を先に割り当てる）、同じ item を別の手順の
+    説明に重ねない。
 
     手順の item に公開できる説明（原文のみ提示でも適用未確認でもない）を割り当てられれば explained。手順の item が
     原文のみ提示（検査・監査で降格）か適用未確認（unverified。「参考情報」の節に出る）だけなら reference_only、
@@ -3048,20 +3206,50 @@ def guide_step_coverage(
                 )
             )
         ]
-    steps_per_item: dict[int, int] = {}
-    for indexes in cited.values():
+    citing: dict[int, list[str]] = {}
+    for step_id, indexes in cited.items():
         for index in indexes:
-            steps_per_item[index] = steps_per_item.get(index, 0) + 1
+            citing.setdefault(index, []).append(step_id)
+    descriptions = {step_id: " ".join((title, *terms.get(step_id, ()))).strip() for step_id, title, _sources in guide_steps}
+    sentences = {step_id: _guide_sentences(spans_of_step) for step_id, spans_of_step in step_spans.items()}
+    # 手順の item の候補（index と、引用が含む手順の語の数）と、主の操作の文の語の数・その文が語で 1 つに決まるか。
+    scored: dict[str, list[tuple[int, int]]] = {}
+    anchors: dict[str, tuple[int, bool]] = {}
+    for step_id, _title, _sources in guide_steps:
+        words = _guide_words(descriptions[step_id])
+        anchors[step_id] = _guide_step_anchor(words, sentences[step_id])
+        scored[step_id] = [(index, len(words & _guide_words(checked[index].item.quote))) for index in cited[step_id]]
+    # 語で手順に決まる共有の item（主の操作の文が語で 1 つに決まり、引用がその文と同じ数以上の手順の語を含む）。
+    word_owned = {
+        (step_id, index)
+        for step_id, pairs in scored.items()
+        for index, score in pairs
+        if len(citing[index]) > 1 and anchors[step_id][1] and score >= anchors[step_id][0]
+    }
+    # 語で決まらない共有の item。引用の無い item は意味でも照らせないので、意味の判定ではどの手順の説明にもしない。
+    undecided = {
+        index: (checked[index].item.quote.strip(), step_ids)
+        for index, step_ids in citing.items()
+        if len(step_ids) > 1 and not any((step_id, index) in word_owned for step_id in step_ids)
+    }
+    owners = (
+        _guide_semantic_owners(descriptions, sentences, {index: value for index, value in undecided.items() if value[0]}, semantics)
+        if undecided and semantics is not None and semantics.available
+        else None
+    )
+
+    def owns(step_id: str, index: int, score: int) -> bool:
+        if len(citing[index]) == 1:
+            return True
+        if owners is None:
+            # 語の判定: 主の操作の文と同じ数以上の手順の語を含む引用（手順の語が根拠の文に無い手順には条件を課さない）。
+            return anchors[step_id][0] == 0 or score >= anchors[step_id][0]
+        return (step_id, index) in word_owned or step_id in owners.get(index, ())
+
     # 手順の item（index と、引用が含む手順の語の数）。語の数の多い順。
-    own: dict[str, list[tuple[int, int]]] = {}
-    for step_id, title, _sources in guide_steps:
-        words = _guide_words(" ".join((title, *terms.get(step_id, ()))))
-        anchor = _guide_step_anchor(words, step_spans[step_id])
-        scored = [(index, len(words & _guide_words(checked[index].item.quote))) for index in cited[step_id]]
-        own[step_id] = sorted(
-            ((index, score) for index, score in scored if steps_per_item[index] == 1 or anchor == 0 or score >= anchor),
-            key=lambda pair: -pair[1],
-        )
+    own = {
+        step_id: sorted((pair for pair in pairs if owns(step_id, *pair)), key=lambda pair: -pair[1]) for step_id, pairs in scored.items()
+    }
 
     def publishable(index: int) -> bool:
         return not checked[index].quote_only and checked[index].item.applies != "unverified"
@@ -3222,6 +3410,7 @@ def run_round(
     guide_steps: Sequence[tuple[str, str, Sequence[str]]] = (),
     guide_optional_steps: Sequence[str] = (),
     guide_step_terms: Mapping[str, Sequence[str]] | None = None,
+    guide_step_semantics: GuideStepSemantics | None = None,
 ) -> Round:
     """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -3236,6 +3425,8 @@ def run_round(
     ``guide_steps`` は業務ガイドの手順ごとの根拠（#2395）。監査に手順と根拠の対応を渡し、手順ごとの充足
     （`guide_step_coverage`。#2491）を round に持つ。``guide_optional_steps`` は充足で必須に数えない手順の id、
     ``guide_step_terms`` は手順ごとの検索の手がかり（共有の根拠の item を手順に対応付ける語。#2649）。
+    ``guide_step_semantics`` は共有の根拠の item を語で決められないときに意味の近さで決める embedding（回答の中で
+    round をまたいで再利用する。None は語の判定だけ。#2649）。
     """
     audit_settings = settings if audit_settings is None else audit_settings
     audit_system = audit_system_prompt(compact_reasons=compact_audit_reasons)
@@ -3437,7 +3628,11 @@ def run_round(
         audit_cut=audit_cut,
         timing=timing,
         applications=applications,
-        guide_steps=guide_step_coverage(guide_steps, checked, spans, guide_optional_steps, guide_step_terms) if guide_steps else [],
+        guide_steps=(
+            guide_step_coverage(guide_steps, checked, spans, guide_optional_steps, guide_step_terms, guide_step_semantics)
+            if guide_steps
+            else []
+        ),
     )
 
 

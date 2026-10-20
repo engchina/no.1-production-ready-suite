@@ -8,7 +8,10 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from rag_engine.ports import Embedder
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,9 @@ class AnswerDependencies:
     sections（{section_id: 章節の名前}）・settings を受け取り、その章節の本文の書き出し（名前を除く。
     {section_id: 文}）を返す。条の選択の 2 段目（選んだ条と同じ章の条を書き出しつきで見せて足させる）が使う。
     省略時は 2 段目を行わない。
+    embedder は業務ガイドの手順の充足で、根拠を共有する手順のどれを item が説明したかを語で決められないときに、
+    意味の近さで決める embedding（`ports.Embedder`。索引と同じ OCI Generative AI の Cohere Embed。#2649）。省略時は
+    語の判定だけで決める。
     """
 
     search: Callable[..., Any]
@@ -62,6 +68,7 @@ class AnswerDependencies:
     article_documents: Callable[..., Sequence[tuple[str, str]]] | None = None
     article_question: Callable[[], str | None] | None = None
     article_leads: Callable[..., Mapping[str, str]] | None = None
+    embedder: "Embedder | None" = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -153,6 +160,12 @@ def injected_article_question() -> str | None:
         return None
     value = current.article_question()
     return value.strip() or None if isinstance(value, str) else None
+
+
+def injected_embedder() -> "Embedder | None":
+    """注入された embedding（#2649）。注入が無ければ None（業務ガイドの手順の充足を語の判定だけで決める）。"""
+    current = _active.get()
+    return None if current is None else current.embedder
 
 
 def injected_prefetch_search() -> Callable[..., Any] | None:

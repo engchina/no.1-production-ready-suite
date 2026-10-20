@@ -36,6 +36,7 @@ from rag_engine.config import (
 )
 from rag_engine.dependencies import (
     check_adb_hybrid_search_ready,
+    injected_embedder,
     injected_prefetch_search,
     parse_multimodal_response,
     parse_text_response,
@@ -1949,6 +1950,10 @@ def synthesize_grounded_answer(
     guide_optional_steps = runtime_knowledge.guide_optional_steps if runtime_knowledge is not None else ()
     # 手順ごとの検索の手がかり（共有の根拠の item を手順に対応付ける語。#2649）。
     guide_step_terms = dict(runtime_knowledge.guide_step_terms) if runtime_knowledge is not None else {}
+    # 共有の根拠の item を語で決められないときに意味の近さで決める embedding（#2649）。round と回答の確定で同じ文の
+    # vector を再利用する。注入が無ければ語の判定だけ。
+    embedder = injected_embedder() if guide_steps else None
+    guide_semantics = grounded.GuideStepSemantics(embedder.embed if embedder is not None else None)
     for number in range(max_rounds):
         spans = _grounded_spans(
             question,
@@ -2001,6 +2006,7 @@ def synthesize_grounded_answer(
                     guide_steps=guide_steps,
                     guide_optional_steps=guide_optional_steps,
                     guide_step_terms=guide_step_terms,
+                    guide_step_semantics=guide_semantics,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                 )
                 if number == 0:
@@ -2216,7 +2222,7 @@ def synthesize_grounded_answer(
     # 提示など）の後の説明で決め直す。参考情報としてだけ示した手順・根拠の無い手順は本文の不足に出し、回答の構造の
     # 要求にも載せて、充足済みとして確定しない。
     guide_coverage = (
-        grounded.guide_step_coverage(guide_steps, current.checked, spans, guide_optional_steps, guide_step_terms)
+        grounded.guide_step_coverage(guide_steps, current.checked, spans, guide_optional_steps, guide_step_terms, guide_semantics)
         if guide_steps and not off_goal
         else []
     )
@@ -2348,6 +2354,8 @@ def synthesize_grounded_answer(
             if guide_coverage
             else {}
         ),
+        # 手順の充足を意味の近さで決めた embedding の呼び出しの回数・文の数・時間（#2649。呼んだときだけ）。
+        **({"guide_step_embedding": guide_semantics.trace()} if guide_semantics.calls else {}),
         # 参照欄は公開した引用だけに同期する。
         "finalization": {
             "filtered": bool(problems),
