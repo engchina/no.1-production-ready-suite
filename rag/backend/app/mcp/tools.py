@@ -205,7 +205,9 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     分かっている条件で外れた分岐の手順を返さないようにした（#2396）。
 # 19: rag_validate_answer の claims に、監査が返した判定（audit_status）と根拠の ID の照合の結果
 #     （reference_check）を足し、ID を照合できない矛盾を矛盾のまま返すようにした（#2622）。
-MCP_OUTPUT_SCHEMA_VERSION = 19
+# 20: rag_validate_answer の claims に、段落の分類の照合の結果（classification_check）を
+#     足した（#2625）。
+MCP_OUTPUT_SCHEMA_VERSION = 20
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -1618,6 +1620,14 @@ class ValidatedClaim(BaseModel):
             "audit_id_invalid=監査が返した ID だけが根拠に無い / "
             "ambiguous_id=省いた ID が複数の根拠に当たる / audit_id_missing=ID が無い / "
             "quote_unmatched=引用が根拠に無い）。照合しない判定は null。"
+        ),
+    )
+    classification_check: str | None = Field(
+        default=None,
+        description=(
+            "段落の分類の照合の結果（non_claim_mismatch=監査が見出しとしたが本文の段落で、"
+            "内容を確かめていない〔status は unassessed〕 / "
+            "reaudited=その段落を内容で監査し直した判定）。食い違いが無ければ null。"
         ),
     )
 
@@ -3816,6 +3826,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     # 監査の判定と ID の照合の結果（#2622。判定を変えた理由を追えるようにする）。
                     audit_status=str(claim.get("audit_status") or "") or None,
                     reference_check=str(claim.get("reference_check") or "") or None,
+                    # 段落の分類の食い違いと監査し直し（#2625）。
+                    classification_check=str(claim.get("classification_check") or "") or None,
                 )
                 for claim in result.claim_checks
             ],

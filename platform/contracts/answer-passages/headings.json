@@ -102,6 +102,11 @@
     {
       "id": "closing-wish-helpful",
       "passage": "お役に立てれば幸いです。"
+    },
+    {
+      "id": "markdown-heading-fiscal-year",
+      "note": "年度・章節の番号は数量に数えない（#2625）。",
+      "passage": "## 2026年度の申請の流れ"
     }
   ],
   "numbered_heading_passages": [
@@ -349,6 +354,19 @@
       "id": "numbered-bold-quantity",
       "note": "番号つきの太字だけの行でも、数量は値の主張（#1898）。",
       "passage": "2. **30 日以内**"
+    },
+    {
+      "id": "markdown-heading-with-quantity",
+      "note": "見出しの記法でも、語に数量を含む行は主張（#2625。本文を見出しに書き換えて監査から外さない）。",
+      "passage": "## 申請は 30 日前まで"
+    },
+    {
+      "id": "bold-line-with-quantity",
+      "passage": "**上限は最長 90 日**"
+    },
+    {
+      "id": "bracket-label-with-quantity",
+      "passage": "【所要 10 分】"
     }
   ],
   "answers": [

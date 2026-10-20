@@ -151,6 +151,15 @@ def test_mcp_validate_answer(auth: Any, monkeypatch: MonkeyPatch) -> None:  # no
                     "audit_status": "contradicted",
                     "reference_check": "audit_id_invalid",
                 },
+                # 監査が見出しとした本文の段落（#2625）。監査し直しても決まらなければ unassessed。
+                {
+                    "answer_quote": "上限は 90 日。",
+                    "status": "unassessed",
+                    "source_id": "",
+                    "reason": "本文を見出しとして監査から除外できません。",
+                    "audit_status": "not_a_claim",
+                    "classification_check": "non_claim_mismatch",
+                },
             ],
         )
 
@@ -172,8 +181,11 @@ def test_mcp_validate_answer(auth: Any, monkeypatch: MonkeyPatch) -> None:  # no
         "supported",
         "unsupported",
         "contradicted",
+        "unassessed",
     ]
     assert body["claims"][0]["chunk_id"] == "c1" and body["claims"][1]["chunk_id"] is None
+    assert body["claims"][0]["classification_check"] is None
+    assert body["claims"][3]["classification_check"] == "non_claim_mismatch"
     # 診断の無い判定は null、照合できなかった矛盾は監査の判定と照合の結果を返す（#2622）。
     assert (body["claims"][0]["audit_status"], body["claims"][0]["reference_check"]) == (
         None,

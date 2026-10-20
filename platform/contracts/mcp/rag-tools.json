@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 19,
+            "default": 20,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -640,7 +640,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 19,
+            "default": 20,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -810,7 +810,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 19,
+            "default": 20,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1133,7 +1133,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 19,
+            "default": 20,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1513,7 +1513,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 19,
+            "default": 20,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2159,7 +2159,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 19,
+            "default": 20,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2476,7 +2476,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 19,
+            "default": 20,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3330,7 +3330,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 19,
+            "default": 20,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4478,7 +4478,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 19,
+            "default": 20,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -5012,6 +5012,19 @@
                 "default": null,
                 "description": "裏付け・矛盾の根拠の ID の照合の結果（resolved / resolved_by_answer=回答が書いた ID で照合 / answer_id_invalid=回答が書いた ID が根拠に無い / audit_id_invalid=監査が返した ID だけが根拠に無い / ambiguous_id=省いた ID が複数の根拠に当たる / audit_id_missing=ID が無い / quote_unmatched=引用が根拠に無い）。照合しない判定は null。",
                 "title": "Reference Check"
+              },
+              "classification_check": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "段落の分類の照合の結果（non_claim_mismatch=監査が見出しとしたが本文の段落で、内容を確かめていない〔status は unassessed〕 / reaudited=その段落を内容で監査し直した判定）。食い違いが無ければ null。",
+                "title": "Classification Check"
               }
             },
             "required": [
@@ -5103,7 +5116,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 19,
+            "default": 20,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

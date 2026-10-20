@@ -81,6 +81,9 @@ class ClaimCheck(BaseModel):
     # 根拠の ID の検査の結果（REFERENCE_CHECKS）。
     audit_status: SkipJsonSchema[str] = ""
     reference_check: SkipJsonSchema[str] = ""
+    # 段落の分類の照合（#2625）。モデルが not_a_claim とした段落を、コードが見出し・出典の行と認めなければ
+    # non_claim_mismatch（判定は unassessed）、その段落を内容で監査し直した判定なら reaudited。
+    classification_check: SkipJsonSchema[str] = ""
 
 
 class AnswerEvaluationOutput(BaseModel):
@@ -252,10 +255,15 @@ def _next_batch(fixed: dict[str, Any], pending: deque, previous, batch_index: in
     return inputs
 
 
-def _parse_checked(system, inputs, settings, schema, provider_id, check, *, max_input_bytes: int = MAX_EVALUATION_INPUT_BYTES):
-    """同じ根拠と採点範囲を保ち、違反内容を指摘して1回だけ再試行する。根拠の本文は ``model_request`` の形で渡す。"""
+def _parse_checked(
+    system, inputs, settings, schema, provider_id, check, *, max_input_bytes: int = MAX_EVALUATION_INPUT_BYTES, attempts: int = 2
+):
+    """同じ根拠と採点範囲を保ち、違反内容を指摘して1回だけ再試行する。根拠の本文は ``model_request`` の形で渡す。
+
+    attempts=1 は再試行しない（監査し直しのように、最初の判定を補うだけの呼び出し。#2625）。
+    """
     request = dict(model_request(inputs))
-    for attempt in range(2):
+    for attempt in range(attempts):
         size = len((system + _json(request) + _json(schema.model_json_schema())).encode("utf-8"))
         if size > max_input_bytes:
             raise EvaluationInputTooLarge
@@ -265,7 +273,7 @@ def _parse_checked(system, inputs, settings, schema, provider_id, check, *, max_
             check(output)
             return output
         except (ValidationError, EvaluationContractError) as exc:
-            if attempt:
+            if attempt + 1 >= attempts:
                 raise
             # 同じ不正出力を繰り返さないため、値や根拠を変更せず契約違反だけを返す。
             detail = str(exc)[:220] if isinstance(exc, EvaluationContractError) else "必須フィールドまたは型がschemaに一致しません。"
@@ -568,6 +576,9 @@ REFERENCE_AUDIT_ID_INVALID = "audit_id_invalid"  # 監査が返した ID が根�
 REFERENCE_AMBIGUOUS_ID = "ambiguous_id"  # 省いて書いた ID が複数の chunk に当たり、1 つに決まらない
 REFERENCE_AUDIT_ID_MISSING = "audit_id_missing"  # 監査が ID を返さず、段落も ID を書いていない
 REFERENCE_QUOTE_UNMATCHED = "quote_unmatched"  # ID は決まるが、監査が返した引用がその根拠に無い
+# 段落の分類の照合の結果（ClaimCheck.classification_check。#2625）。
+CLASSIFICATION_NON_CLAIM_MISMATCH = "non_claim_mismatch"  # モデルは not_a_claim、コードは見出し・出典の行と認めない
+CLASSIFICATION_REAUDITED = "reaudited"  # 分類が食い違った段落を、内容で監査し直した判定
 REFERENCE_CHECKS = (
     REFERENCE_RESOLVED,
     REFERENCE_RESOLVED_BY_ANSWER,
@@ -621,7 +632,7 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, 
     bound = []
     for claim in output.claim_checks:
         # 診断はシステムが付ける（モデルの出力の値は使わない）。
-        claim = claim.model_copy(update={"audit_status": claim.status, "reference_check": ""})
+        claim = claim.model_copy(update={"audit_status": claim.status, "reference_check": "", "classification_check": ""})
         if passage_citations and claim.status == "citation_error":
             if _spans_for_ids(claim, catalog) or _spans_for_passage_citations(claim, catalog):
                 claim = claim.model_copy(
@@ -673,11 +684,18 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, 
             matches = [p["id"] for p in passages if p["text"] == claim.answer_quote]
             if len(matches) == 1:
                 claim = claim.model_copy(update={"answer_passage_id": matches[0]})
-        # 見出しと出典の行（定位子・根拠の ID・文書名と場所だけの行。#1370）は not_a_claim のまま残す。
+        # 見出しと出典の行（定位子・根拠の ID・文書名と場所だけの行。#1370）は not_a_claim のまま残す。それ以外は
+        # 内容を確かめていないので unassessed にし、分類の食い違いとして残す（最終の検証は監査し直す。#2625）。
         if claim.status == "not_a_claim" and not (
             is_heading(claim.answer_quote) or is_citation_line(claim.answer_quote) or claim.answer_quote.strip() in heading_lines
         ):
-            claim = claim.model_copy(update={"status": "unassessed", "reason": "本文を見出しとして監査から除外できません。" + claim.reason})
+            claim = claim.model_copy(
+                update={
+                    "status": "unassessed",
+                    "reason": "本文を見出しとして監査から除外できません。" + claim.reason,
+                    "classification_check": CLASSIFICATION_NON_CLAIM_MISMATCH,
+                }
+            )
         bound.append(claim)
     return output.model_copy(update={"claim_checks": bound})
 

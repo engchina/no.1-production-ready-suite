@@ -333,7 +333,14 @@ def _heading_title(text: str) -> str | None:
         match = pattern.fullmatch(value)
         if match:
             title = match.group("title").strip().strip("*").strip()
-            if title and not _is_sentence(title) and not _OPERATION.search(title):
+            # 語に数量（「最長 90 日」）を含む行は、見出しの記法でも主張（#2625。RAG の
+            # `operation_audit.is_value_heading` と同じ規則）。
+            if (
+                title
+                and not _is_sentence(title)
+                and not _OPERATION.search(title)
+                and not _HEADING_QUANTITY.search(title)
+            ):
                 return title
             return None
     label = _strip_bullet(value)
@@ -562,6 +569,26 @@ def is_lead_in(text: str) -> bool:
     return not (
         _HEADING_QUANTITY.search(head) or _OPERATION.search(head) or "は" in head or "、" in head
     )
+
+
+# 利用者に行わせる指示の文末（「…を訂正する。」「…してください。」「…を確認します。」。#2604）。
+# 述語の形だけで決め、業務の語は見ない。「です」で言い切る事実の文と、「…できます」「…あります」
+# 「…が発生します」（目的語の「を」の無い「します」）の状態の文は含めない。
+_INSTRUCTION_END = re.compile(
+    r"(?:する|しない|しておく|ておく|てください|でください|て下さい|すること|しましょう"
+    r"|を[^。、]{1,40}?(?:します|しておきます)|を行(?:う|います))[。．!！]?$"
+)
+
+
+def is_operation_step(text: str) -> bool:
+    """利用者に操作・作業を行わせる段落か（番号つきの手順の項目の判定。#2604）。
+
+    操作の指示（`_OPERATION`）を含むか、文末が指示の形（`_INSTRUCTION_END`）のもの。箇条書き・
+    番号の印・強調と、文末の補足の括弧は除いて確かめる。事実を述べる文（「上限は 90 日です。」）は
+    含めない。
+    """
+    value = _TRAILING_NOTE.sub("", _EMPHASIS.sub("", _strip_bullet(text))).strip()
+    return bool(_OPERATION.search(value) or _INSTRUCTION_END.search(value))
 
 
 def is_heading(text: str) -> bool:
@@ -1393,6 +1420,7 @@ __all__ = [
     "is_guide_not_found",
     "is_heading",
     "is_lead_in",
+    "is_operation_step",
     "is_out_of_scope",
     "is_question",
     "is_structure",

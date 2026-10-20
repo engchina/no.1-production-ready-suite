@@ -79,8 +79,30 @@ def answer_passages(text: str) -> list[dict[str, str]]:
     return result
 
 
+# 見出しの記法（Markdown の見出し・【…】・太字だけの行）と、その語。
+_MARKUP_HEADING = re.compile(r"\s*(?:#{1,6}\s+(?P<md>[^。]{1,35})|【(?P<bracket>[^】]{1,25})】|\*\*(?P<bold>[^*。]{1,30})\*\*[:：]?)\s*")
+
+
+def is_value_heading(text: str) -> bool:
+    """見出しの記法だが、語に数量（「最長 90 日」）を含む行か（#2625）。
+
+    数量は主張の値なので、見出しの記法に書き換えても監査から外さない（見出しの名詞句の規則 ``heading_phrase``
+    と同じ。年度・章節の番号は数量に数えない）。
+    """
+    match = _MARKUP_HEADING.fullmatch(text)
+    if not match:
+        return False
+    title = match.group("md") or match.group("bracket") or match.group("bold") or ""
+    return bool(_HEADING_QUANTITY.search(title))
+
+
 def is_heading(text: str) -> bool:
-    """短い操作見出しと見出し記法を識別する。普通の文を長さだけで除外しない。"""
+    """短い操作見出しと見出し記法を識別する。普通の文を長さだけで除外しない。
+
+    見出しの記法でも、語に数量を含む行は主張（``is_value_heading``。#2625）。
+    """
+    if is_value_heading(text):
+        return False
     # 確定までの短い節名を本文と誤認すると、未監査の見出しだけで全手順が落ちる。
     # 状態条件（登録済みの場合等）や操作を含む文はこの限定規則に含めない。
     operation_word = r"(?:操作|入力|登録|追加|削除|変更|保存|確定|完了|実行)"

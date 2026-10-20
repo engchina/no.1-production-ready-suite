@@ -1882,3 +1882,176 @@ def test_unbound_contradictions_are_not_rechecked_and_other_passages_still_are()
     assert result["claim_checks"][0]["reference_check"] == "audit_id_missing"
     assert [passage["id"] for passage in calls[1][1]["answer_passages"]] == ["A6"]
     assert result["rechecked_passage_ids"] == ["A6"]
+
+
+# ---- 非主張の分類の食い違いの監査し直し（#2625） ----------------------------------------------------------
+# 同じ内容（合成の「上限は最長 90 日」）を、文・箇条書き・見出しの記法・表の行・例示の形で書いた段落。
+LIMIT_EVIDENCE = [{"id": "c1", "source": "manual-a.pdf", "page_start": 1, "page_end": 1, "text": "延長の上限は最長 90 日です。"}]
+LIMIT_FORMS = {
+    "sentence": "延長の上限は最長 90 日です。",
+    "bullet": "- 延長の上限は最長 90 日です。",
+    "bold": "**延長の上限は最長 90 日**",
+    "markdown_heading": "## 延長の上限は最長 90 日",
+    "table_row": "| 延長の上限 | 最長 90 日 |",
+    "example": "例: 30 日を超えて延長するときは、最長 90 日まで延長できます。",
+}
+LIMIT_OWNER = "申請は所属の管理者が行います。"
+
+
+def _limit_answer(form: str) -> str:
+    text = LIMIT_FORMS[form]
+    if form == "table_row":
+        return f"| 項目 | 内容 |\n| --- | --- |\n{text}"
+    return f"{text}\n\n{LIMIT_OWNER}"
+
+
+def _claim_output(payload: dict, statuses: dict[str, str]) -> ClaimAuditOutput:
+    """段落の原文 → 判定（無い段落は返さない）。裏付け・矛盾は最初の根拠の evidence_id を付ける。"""
+    evidence_id = _documents(payload)[0]["evidence_id"]
+    return ClaimAuditOutput.model_validate(
+        {
+            "claim_checks": [
+                {
+                    "answer_quote": "段落",
+                    "answer_passage_id": item["id"],
+                    "status": statuses[item["text"]],
+                    "evidence_id": evidence_id if statuses[item["text"]] in {"supported", "contradicted"} else "",
+                    "source_id": "",
+                    "evidence_quote": "",
+                    "reason": "合成の理由。",
+                }
+                for item in payload["answer_passages"]
+                if item["text"] in statuses
+            ]
+        }
+    )
+
+
+@pytest.mark.parametrize("form", list(LIMIT_FORMS))
+def test_content_rewritten_as_headings_tables_or_examples_is_still_audited(form: str) -> None:
+    """同じ内容を見出しの記法・表の行・例示に書き換えても、内容の段落は監査に渡す (#2625)。"""
+    seen: list[list[str]] = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        seen.append([item["text"] for item in payload["answer_passages"]])
+        return _claim_output(payload, {text: "supported" for text in seen[-1]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("上限は？", _limit_answer(form), LIMIT_EVIDENCE, settings=None)
+    assert LIMIT_FORMS[form] in seen[0]
+    assert len(seen) == 1 and result["reaudited_passage_ids"] == []
+    assert {claim["classification_check"] for claim in result["claim_checks"]} == {""}
+
+
+def test_passages_the_model_calls_non_claims_are_reaudited() -> None:
+    """モデルが not_a_claim とした本文の段落は、その段落だけを差し戻しの文と同じ根拠で 1 回監査し直し、
+    内容の判定（否定を含む）を採る (#2625)。"""
+    from rag_engine.evaluation.answer_validation import REAUDIT_FEEDBACK
+
+    bold, example = LIMIT_FORMS["bold"], LIMIT_FORMS["example"]
+    answer = f"{bold}\n\n{example}\n\n{LIMIT_OWNER}"
+    calls: list[dict] = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        calls.append(payload)
+        if len(calls) == 1:
+            return _claim_output(payload, {bold: "not_a_claim", example: "not_a_claim", LIMIT_OWNER: "unsupported"})
+        return _claim_output(payload, {bold: "supported", example: "unsupported"})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("上限は？", answer, LIMIT_EVIDENCE, settings=None)
+
+    assert len(calls) == 2
+    assert "validation_feedback" not in calls[0]
+    assert calls[1]["validation_feedback"] == REAUDIT_FEEDBACK
+    assert [item["text"] for item in calls[1]["answer_passages"]] == [bold, example]
+    assert _documents(calls[1]) == _documents(calls[0])
+    claims = {claim["answer_quote"]: claim for claim in result["claim_checks"]}
+    assert {quote: claim["status"] for quote, claim in claims.items()} == {
+        bold: "supported",
+        example: "unsupported",
+        LIMIT_OWNER: "unsupported",
+    }
+    assert claims[bold]["source_id"] == "c1"
+    assert {quote: claim["classification_check"] for quote, claim in claims.items()} == {
+        bold: "reaudited",
+        example: "reaudited",
+        LIMIT_OWNER: "",
+    }
+    assert result["reaudited_passage_ids"] == [claims[bold]["answer_passage_id"], claims[example]["answer_passage_id"]]
+    assert result["counts"] == {"supported": 1, "unsupported": 2}
+
+
+def test_unresolved_classification_mismatch_stays_unassessed_and_is_traceable() -> None:
+    """監査し直しでも内容の判定が返らない段落は unassessed のまま、分類の食い違いとして残す。再試行はしない (#2625)。"""
+    bold = LIMIT_FORMS["bold"]
+    answer = f"{bold}\n\n{LIMIT_OWNER}"
+    calls: list[dict] = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        calls.append(payload)
+        if len(calls) == 1:
+            return _claim_output(payload, {bold: "not_a_claim", LIMIT_OWNER: "supported"})
+        return _claim_output(payload, {bold: "not_a_claim"})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("上限は？", answer, LIMIT_EVIDENCE, settings=None)
+
+    assert len(calls) == 2
+    claims = {claim["answer_quote"]: claim for claim in result["claim_checks"]}
+    assert claims[bold]["status"] == "unassessed"
+    assert (claims[bold]["audit_status"], claims[bold]["classification_check"]) == ("not_a_claim", "non_claim_mismatch")
+    assert claims[bold]["reason"].startswith("本文を見出しとして監査から除外できません。")
+    assert result["reaudited_passage_ids"] == []
+    assert claims[LIMIT_OWNER]["classification_check"] == ""
+
+    def failing(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        if "validation_feedback" in payload:
+            raise RuntimeError("合成の失敗")
+        return _claim_output(payload, {bold: "not_a_claim", LIMIT_OWNER: "supported"})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=failing):
+        failed = validate_answer_claims("上限は？", answer, LIMIT_EVIDENCE, settings=None)
+    assert failed["status"] == "completed"
+    assert [claim["classification_check"] for claim in failed["claim_checks"]] == ["non_claim_mismatch", ""]
+
+
+def test_quality_evaluation_records_the_classification_mismatch() -> None:
+    """品質評価の主張の監査（監査し直しはしない）でも、分類の食い違いを残し、モデルの値は使わない (#2625)。"""
+    from rag_engine.evaluation.answer_eval import _bind_claims
+
+    passages = [{"id": "A1", "text": "## 根拠"}, {"id": "A2", "text": LIMIT_FORMS["bold"]}]
+    output = ClaimAuditOutput.model_validate(
+        {
+            "claim_checks": [
+                {
+                    "answer_quote": item["text"],
+                    "answer_passage_id": item["id"],
+                    "status": "not_a_claim",
+                    "evidence_id": "",
+                    "source_id": "",
+                    "evidence_quote": "",
+                    "reason": "見出し",
+                    "classification_check": "reaudited",
+                }
+                for item in passages
+            ]
+        }
+    )
+    bound = _bind_claims(output, {}, passages)
+    assert [(claim.status, claim.classification_check) for claim in bound.claim_checks] == [
+        ("not_a_claim", ""),
+        ("unassessed", "non_claim_mismatch"),
+    ]
+
+
+def test_classification_check_is_not_in_the_audit_schema() -> None:
+    """分類の照合の結果は監査モデルの schema に出さず、最初の監査の指示は差し戻しの文を含まない (#2625)。"""
+    from rag_engine.evaluation.answer_validation import REAUDIT_FEEDBACK, VALIDATION_SYSTEM_PROMPT
+
+    assert "classification_check" not in json.dumps(ClaimAuditOutput.model_json_schema())
+    assert REAUDIT_FEEDBACK not in VALIDATION_SYSTEM_PROMPT

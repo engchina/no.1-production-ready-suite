@@ -30,12 +30,14 @@ from app.features.agent import builtin_runtime
 from app.features.agent.answer_passages import (
     is_absence_only,
     is_heading,
+    is_operation_step,
     list_heading_lines,
     non_claim_passages,
     passage_kind,
     passage_spans,
 )
 from app.features.agent.answer_validation import (
+    DEPENDENT_STEP_LABEL,
     MAX_CARRIED_EVIDENCE,
     MAX_VALIDATION_EVIDENCE,
     NO_EVIDENCE_NOTICE,
@@ -44,6 +46,7 @@ from app.features.agent.answer_validation import (
     carried_evidence,
     carried_evidence_groups,
     connection_check_inputs,
+    dependent_steps,
     merge_results,
     publish_answer,
     run_evidence_groups,
@@ -1771,6 +1774,234 @@ def test_contradiction_from_any_connection_wins_even_when_its_citation_is_unboun
     published, withheld = publish_answer(SETTING_ANSWER, merged)
     assert UNVERIFIED_KEPT_INTRO not in published
     assert withheld == {"claims": 1, "findings": 0, "all": True}
+
+
+# #2604 の合成の事例: 前提の確認 → 後続の操作の番号つきの手順と、手順と無関係な説明。
+PREREQUISITE_STEP = "1. 対象が同じものであることを確認する。"
+FOLLOWING_STEPS = ["2. 対象の情報を訂正する。", "3. 識別子を統合する。"]
+STEPS_ANSWER = "\n".join([PREREQUISITE_STEP, *FOLLOWING_STEPS])
+STEP_INTRO = "識別子は対象ごとに 1 つだけ持ちます。"
+STEP_OUTRO = "統合した後は、旧い識別子で検索できません。"
+STEPS_WITH_EXPLANATION = f"{STEP_INTRO}\n\n{STEPS_ANSWER}\n\n{STEP_OUTRO}"
+
+
+def _dependent_line(quote: str) -> str:
+    return f"- {DEPENDENT_STEP_LABEL}: 「{quote}」"
+
+
+@pytest.mark.parametrize(
+    ("status", "label"),
+    [
+        ("citation_error", "出典を確かめられない"),
+        ("unsupported", "根拠で確かめられない"),
+        ("unassessed", "確かめが終わっていない"),
+    ],
+)
+def test_withheld_prerequisite_step_withholds_the_steps_that_follow(
+    status: str, label: str
+) -> None:
+    """前提の手順を外したら、それに続く操作の手順を実行できる本文として残さず、手順と無関係な
+    説明は残す（#2604）。"""
+    result = _verdict(
+        _claim(STEP_INTRO, "supported"),
+        _claim(PREREQUISITE_STEP, status, "未登録の原文ID。"),
+        *(_claim(step, "supported") for step in FOLLOWING_STEPS),
+        _claim(STEP_OUTRO, "supported"),
+    )
+
+    published, withheld = publish_answer(STEPS_WITH_EXPLANATION, result)
+
+    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+    assert body == f"{STEP_INTRO}\n\n{STEP_OUTRO}"
+    assert section.splitlines() == [
+        "根拠で確かめられなかった次の内容は、回答に載せていません。",
+        f"- {label}: 「{PREREQUISITE_STEP}」",
+        *(_dependent_line(step) for step in FOLLOWING_STEPS),
+    ]
+    assert withheld == {"claims": 1, "findings": 0, "all": False, "dependent_steps": 2}
+
+
+@pytest.mark.parametrize("status", ["citation_error", "unassessed"])
+def test_unverified_prerequisite_keeps_the_whole_procedure_with_its_dependents(status: str) -> None:
+    """手順だけの回答で、前提の照合だけが終わらないときは、前提を含む手順の全体を残し、続く手順が
+    前提に依存することを示す（後続の操作だけを残さない。#1391・#2604）。"""
+    result = _verdict(
+        _claim(PREREQUISITE_STEP, status, "未登録の原文ID。"),
+        *(_claim(step, "supported") for step in FOLLOWING_STEPS),
+    )
+
+    published, withheld = publish_answer(STEPS_ANSWER, result)
+
+    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+    assert body == STEPS_ANSWER
+    lines = section.splitlines()
+    assert lines[0] == UNVERIFIED_KEPT_INTRO and PREREQUISITE_STEP in lines[1]
+    assert lines[2:] == [_dependent_line(step) for step in FOLLOWING_STEPS]
+    assert withheld == {
+        "claims": 0,
+        "findings": 0,
+        "all": False,
+        "unverified": 1,
+        "dependent_steps": 2,
+    }
+
+
+def test_refuted_prerequisite_withholds_a_steps_only_answer() -> None:
+    """前提が根拠で否定されたら、続く手順だけを本文に残さない（#2604。変更前は 2・3 が残った）。"""
+    result = _verdict(
+        _claim(PREREQUISITE_STEP, "unsupported", "根拠に無い。"),
+        *(_claim(step, "supported") for step in FOLLOWING_STEPS),
+    )
+
+    published, withheld = publish_answer(STEPS_ANSWER, result)
+
+    body, _section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+    assert body == "根拠で確かめられた内容はありませんでした。"
+    assert all(step not in body for step in FOLLOWING_STEPS)
+    assert withheld == {"claims": 1, "findings": 0, "all": True, "dependent_steps": 2}
+
+
+def test_steps_before_the_withheld_step_and_unordered_lists_are_kept() -> None:
+    """外した手順より前の手順は残す。番号の無い箇条書きは順序を表さないので、一部の項目を外しても
+    ほかの項目は残す（一般の説明文の一部の除外。#2604）。"""
+    result = _verdict(
+        _claim(STEP_INTRO, "supported"),
+        _claim(PREREQUISITE_STEP, "supported"),
+        _claim(FOLLOWING_STEPS[0], "unsupported", "根拠に無い。"),
+        _claim(FOLLOWING_STEPS[1], "supported"),
+        _claim(STEP_OUTRO, "supported"),
+    )
+    published, withheld = publish_answer(STEPS_WITH_EXPLANATION, result)
+    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+    assert body == f"{STEP_INTRO}\n\n{PREREQUISITE_STEP}\n\n{STEP_OUTRO}"
+    assert section.splitlines()[-1] == _dependent_line(FOLLOWING_STEPS[1])
+    assert withheld["dependent_steps"] == 1
+
+    bullets = ["- 識別子は 12 桁です。", "- 識別子は再利用しません。", "- 識別子は変更できません。"]
+    result = _verdict(
+        _claim(bullets[0], "unsupported", "根拠に無い。"),
+        *(_claim(item, "supported") for item in bullets[1:]),
+    )
+    published, withheld = publish_answer("\n".join(bullets), result)
+    body, _section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+    assert body == "\n".join(bullets[1:])
+    assert withheld == {"claims": 1, "findings": 0, "all": False}
+
+
+def test_numbered_facts_after_a_withheld_item_are_kept() -> None:
+    """番号で事実を並べた一覧は、1 項目を外しても後の事実の項目を残す（操作の項目だけが前の項目に
+    依存する。#2604）。"""
+    facts = [
+        "1. 識別子は 12 桁です。",
+        "2. 識別子は再利用しません。",
+        "3. 識別子は変更できません。",
+        "4. 発行の記録は 5 年間保存されます。",
+    ]
+    for status in ("citation_error", "unsupported", "unassessed"):
+        result = _verdict(
+            _claim(facts[0], status, "未登録の原文ID。"),
+            *(_claim(item, "supported") for item in facts[1:]),
+        )
+        published, withheld = publish_answer("\n".join(facts), result)
+        body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+        assert body == "\n".join(facts[1:])
+        assert DEPENDENT_STEP_LABEL not in section
+        assert "dependent_steps" not in withheld and withheld["claims"] == 1
+    # 事実の項目の後に操作の項目があれば、操作の項目だけを外す。
+    request = "5. 変更が必要なときは、管理者に申請してください。"
+    answer = "\n".join([*facts, request])
+    assert dependent_steps(answer, {facts[0]}) == [(4, 0, request)]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("1. 対象の情報を訂正する。", True),
+        ("- 管理者に申請してください。", True),
+        ("2. **申請書を提出します**（第 2 章）。", True),
+        ("3. 対象を確認しておく。", True),
+        ("1. 識別子は 12 桁です。", False),
+        ("- 延長は最長 90 日までできます。", False),
+        ("2. 処理の中で通知が発生します。", False),
+        ("3. 承認者は管理者である。", False),
+    ],
+)
+def test_operation_steps_are_decided_by_the_predicate_form(text: str, expected: bool) -> None:
+    """手順の項目かは、操作の指示か文末の指示の形で決める（業務の語は見ない。#2604）。"""
+    assert is_operation_step(text) is expected
+
+
+def test_numbered_step_headings_and_their_contents_follow_the_withheld_step() -> None:
+    """見出しの形の番号つきの手順（下の行に中身）は、後の手順の見出しと中身を外し、出典の行・
+    一覧の外の段落は残す（#2604）。"""
+    check = "   - 対象が同じものであることを確認する。"
+    fix = "   - 対象の情報を訂正する。"
+    merge = "識別子を統合する。"
+    answer = "\n".join(
+        [
+            STEP_INTRO,
+            "",
+            "1. **確認**",
+            check,
+            "",
+            "2. **訂正**",
+            fix,
+            "出典: manual-a.pdf p.3",
+            "",
+            "3. **統合**",
+            merge,
+            "",
+            "## 注意",
+            STEP_OUTRO,
+        ]
+    )
+    result = _verdict(
+        _claim(STEP_INTRO, "supported"),
+        _claim(check.strip(), "unsupported", "根拠に無い。"),
+        _claim(fix.strip(), "supported"),
+        _claim(merge, "supported"),
+        _claim(STEP_OUTRO, "supported"),
+    )
+
+    published, withheld = publish_answer(answer, result)
+
+    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+    assert body == "\n".join(
+        [
+            STEP_INTRO,
+            "",
+            "1. **確認**",
+            "",
+            "出典: manual-a.pdf p.3",
+            "",
+            "## 注意",
+            STEP_OUTRO,
+        ]
+    )
+    assert _dependent_line(fix.strip()) in section and _dependent_line(merge) in section
+    assert "2. **訂正**" not in section
+    assert withheld["dependent_steps"] == 3
+
+
+def test_dependent_steps_are_located_by_position() -> None:
+    """同じ文が手順の外にもあれば、手順の外のものは外さない。
+
+    数（「1.5 倍」）は手順の番号にしない。
+    """
+    record = "訂正した内容を記録する。"
+    step = f"{FOLLOWING_STEPS[0]}{record}"
+    answer = "\n".join([PREREQUISITE_STEP, step, "", f"1.5 倍の時間がかかります。{record}"])
+    dependents = dependent_steps(answer, {PREREQUISITE_STEP})
+    assert dependents == [(1, 0, FOLLOWING_STEPS[0]), (1, len(FOLLOWING_STEPS[0]), record)]
+    positions = frozenset((index, begin) for index, begin, _text in dependents)
+    kept = withhold_paragraphs(answer, {PREREQUISITE_STEP}, positions)
+    assert kept == f"1.5 倍の時間がかかります。{record}"
+    # 全角の番号・括弧の番号・丸数字も手順の番号。
+    for marks in (["１．", "２．"], ["（1）", "（2）"], ["①", "②"]):
+        steps = f"{marks[0]}確認する。\n{marks[1]}訂正する。"
+        assert dependent_steps(steps, {f"{marks[0]}確認する。"}) == [
+            (1, 0, f"{marks[1]}訂正する。")
+        ]
 
 
 def test_clarification_only_answer_without_evidence_has_no_notice(
