@@ -2523,8 +2523,9 @@ def test_ai_api_failure_is_a_classified_tool_error_without_question(
     body = result["structuredContent"]
     assert body["error_code"] == "RAG_ANSWER_AI_API_FAILED"
     assert body["status"] == 502
+    # HTTP status の無い SDK の例外も、本文の error code（server_error）で分ける（#2667）。
     assert body["details"] == {
-        "kind": "unknown",
+        "kind": "server_error",
         "error_type": "APIError",
         "provider_code": "server_error",
     }

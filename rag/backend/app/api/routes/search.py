@@ -28,7 +28,10 @@ from app.config import (
 )
 from app.rag.answer_engine import AnswerScope, evaluate_answer_record
 from app.rag.answer_failure import (
+    ANSWER_API_FAILED_ERROR_CODE,
     ANSWER_INCOMPLETE_ERROR_CODE,
+    AnswerApiFailure,
+    describe_answer_api_failure,
     describe_answer_failure,
     find_incomplete_response,
 )
@@ -109,6 +112,23 @@ class AnswerIncompleteHTTPError(HTTPException):
 
     def __init__(self, message: str) -> None:
         super().__init__(status_code=502, detail=message)
+
+
+class AnswerApiFailedHTTPError(HTTPException):
+    """回答の pipeline の中で AI の API の呼び出しが失敗した回答（種類ごとの 5xx。#2667）。
+
+    割り当ての使い切り・流量の制限などを定型の 500 にせず、種類・再試行の目安・中断した工程の文と
+    種類ごとの status（呼び先が示せば ``Retry-After``）で返す。MCP の ``rag_search`` は
+    ``failure`` を種類つきのツールのエラーにする（#2475）。呼び先の応答の本文・質問は入れない。
+    """
+
+    code = ANSWER_API_FAILED_ERROR_CODE
+
+    def __init__(self, failure: AnswerApiFailure) -> None:
+        super().__init__(
+            status_code=failure.status, detail=failure.message, headers=failure.headers()
+        )
+        self.failure = failure
 
 
 def _log_answer_failure(event: str, trace_id: str, exc: Exception, fallback: str) -> None:
@@ -643,6 +663,19 @@ async def _run_search_with_timeout(
             # 送り直しても未完了の応答（#2023）。定型の 500 ではなく、理由と直し方を返す。
             _log_answer_failure("rag_search_answer_incomplete", trace_id, exc, STREAM_ERROR_MESSAGE)
             raise AnswerIncompleteHTTPError(incomplete.user_message) from exc
+        api_failure = describe_answer_api_failure(exc)
+        if api_failure is not None:
+            # AI の API の失敗（割り当ての使い切り・流量の制限・認証など。#2667）。定型の 500 に
+            # せず、種類・再試行の目安・中断した工程を返す。ログも分類の項目だけ（本文を残さない）。
+            logger.warning(
+                "rag_search_answer_api_failed",
+                extra={
+                    "trace_id": trace_id,
+                    "error_code": ANSWER_API_FAILED_ERROR_CODE,
+                    **api_failure.details(),
+                },
+            )
+            raise AnswerApiFailedHTTPError(api_failure) from exc
         raise
 
 
