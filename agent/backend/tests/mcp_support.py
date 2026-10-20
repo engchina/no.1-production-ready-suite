@@ -368,9 +368,11 @@ _EVIDENCE = {
 # 21: rag_retrieve_evidence の planning・queries・request_id・clarifications と、根拠の
 # retrieval_rank・origin を足した（#2651）。
 # 22: rag_validate_answer の claims に support_check を足した（#2659）。
-# 23: rag_validate_answer に業務ガイドの手順ごとの説明の充足（guide_steps）と、説明の無い必須の
+# 23: rag_retrieve_evidence に検索・回答プロファイルのルールと用語（profile_knowledge）を足した
+# （#2701）。
+# 24: rag_validate_answer に業務ガイドの手順ごとの説明の充足（guide_steps）と、説明の無い必須の
 # 手順の finding（guide_step_unexplained）を足した（#2708）。
-RAG_OUTPUT_SCHEMA_VERSION = 23
+RAG_OUTPUT_SCHEMA_VERSION = 24
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {
@@ -602,6 +604,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "planning": "caller",
         "request_id": None,
         "clarifications": [],
+        "profile_knowledge": None,
     },
     # 回答の最終の検証（#1246）。既定は根拠で裏付けられた回答。
     "rag_validate_answer": {

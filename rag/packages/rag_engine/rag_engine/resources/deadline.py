@@ -139,6 +139,17 @@ def check_deadline() -> None:
         deadline.check()
 
 
+def check_cancelled() -> None:
+    """この文脈の回答が取り消されていたら `DeadlineExceeded` を送出する（#2691）。
+
+    呼び出し元の切断・停止で待つ側が抜けた回答の thread が、次の工程を始めないために工程の境目で
+    確かめる。時刻の期限で切れただけ（確かめ終わった分で確定する。#1516）では止めない。
+    """
+    deadline = _current.get()
+    if deadline is not None and deadline.cancelled:
+        raise DeadlineExceeded("回答の処理が取り消されました。")
+
+
 def expire_deadline() -> None:
     """この文脈の回答の期限の時刻を今にする（期限が無ければ何もしない。`Deadline.expire`。#1548）。"""
     deadline = _current.get()

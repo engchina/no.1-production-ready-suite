@@ -27,6 +27,7 @@ from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.auth.service_token import issue_service_token
 from pydantic import BaseModel, Field, PrivateAttr, ValidationError, model_validator
 
+from app.features.agent.call_abort import CallAbort, current_call_abort
 from app.features.agent.config import (
     PRODUCT_MCP_SERVICE_NAMES,
     McpConnectionConfig,
@@ -707,14 +708,70 @@ def _post_mcp_message(
       timeout は `protocol` だけ（ツールは呼び先で処理が進んでいる可能性がある）
     - 待ちは指数 backoff + jitter、429 / 503 の `Retry-After` に従う。期限（`deadline`）を超える
       待ちはしない
+
+    Run の取消（#2691。`call_abort`）: 打ち切った後は送らず・再試行せず、
+    `<service_code>.call_aborted` にする。送信中の接続は、状態を変えない手順と読み取り専用の
+    ツール（`unsafe` 以外）だけ切る（書き込みのツールは送った後は結果を待つ）。
     """
+    abort = current_call_abort()
+    try:
+        return _post_mcp_attempts(
+            service_code=service_code,
+            service_label=service_label,
+            url=url,
+            payload=payload,
+            headers=headers,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            kind=kind,
+            deadline=deadline,
+            target_name=target_name,
+            abort=abort,
+        )
+    except ExternalToolError as exc:
+        if abort is None or not abort.aborted or exc.code == f"{service_code}.call_aborted":
+            raise
+        # 打ち切りで切った接続の失敗（通信の途中の切断など）は、取消にする。
+        raise _call_aborted_error(service_code, service_label, payload, abort) from exc
+
+
+def _call_aborted_error(
+    service_code: str, service_label: str, payload: JsonObject, abort: CallAbort
+) -> ExternalToolError:
+    abort.note_interrupted()
+    return ExternalToolError(
+        f"{service_code}.call_aborted",
+        f"実行の取消で、{service_label}の呼び出しを打ち切りました。",
+        {"method": payload.get("method"), "reason": abort.reason, "retryable": False},
+    )
+
+
+def _post_mcp_attempts(
+    *,
+    service_code: str,
+    service_label: str,
+    url: str,
+    payload: JsonObject,
+    headers: dict[str, str],
+    timeout_seconds: float,
+    max_retries: int,
+    kind: McpRetryKind,
+    deadline: float | None,
+    target_name: str | None,
+    abort: CallAbort | None,
+) -> tuple[JsonObject | None, Any]:
     target = target_name or service_label
+    # 送信中に接続を切ってよいか（書き込みのツールは送った後は切らない）。
+    trace = abort.httpcore_trace() if abort is not None and kind != McpRetryKind.UNSAFE else None
+    request_options: dict[str, Any] = {"extensions": {"trace": trace}} if trace else {}
     end = deadline if deadline is not None else monotonic() + max(0.1, timeout_seconds)
     attempts = max(0, max_retries) + 1
     retry_statuses = _RETRY_STATUSES[kind]
     attempt = 0
     while True:
         attempt += 1
+        if abort is not None and abort.aborted:
+            raise _call_aborted_error(service_code, service_label, payload, abort)
         remaining = end - monotonic()
         if remaining <= 0:
             raise ExternalToolError(
@@ -727,7 +784,7 @@ def _post_mcp_message(
         retry_after: float | None = None
         try:
             with httpx.Client(timeout=timeout, **http_client_options(url)) as client:
-                response = client.post(url, json=payload, headers=headers)
+                response = client.post(url, json=payload, headers=headers, **request_options)
                 response.raise_for_status()
                 response_headers = response.headers
                 if response.status_code == 202 or not response.content:
@@ -799,7 +856,7 @@ def _post_mcp_message(
                 "retryable": retryable and attempt < attempts,
             }
         )
-        if not retryable or attempt >= attempts:
+        if not retryable or attempt >= attempts or (abort is not None and abort.aborted):
             raise error
         logger.warning(
             "mcp_request_retry",
