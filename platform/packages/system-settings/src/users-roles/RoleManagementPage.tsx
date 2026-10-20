@@ -25,6 +25,7 @@ import {
 import { Link } from "react-router-dom";
 
 import {
+  compareNames,
   Banner,
   ButtonLink,
   EmptyState,
@@ -100,8 +101,7 @@ const ROLE_POINTER_TO_FIELD = {
 const EMPTY_DRAFT: RoleDraftState = { roleCode: "", displayName: "", description: "" };
 
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
-  const result = left.localeCompare(right, "ja");
-  return direction === "asc" ? result : -result;
+  return compareNames(left, right, direction);
 }
 
 function roleStatusText(role: SecurityRole) {

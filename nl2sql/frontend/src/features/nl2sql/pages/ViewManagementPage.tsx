@@ -40,6 +40,7 @@ import {
   DropDbObjectDialog,
   dbAdminExecuteFailureMessage,
   formatDbObjectName,
+  compareDbObjectSortValues,
   dbObjectSortValue,
   parseDbAdminObjectTarget,
   type DbObjectDetailTab,
@@ -471,10 +472,11 @@ export function ViewManagementPage() {
         );
       })
       .sort((left, right) => {
-        const a = dbObjectSortValue(left, viewSort.key);
-        const b = dbObjectSortValue(right, viewSort.key);
-        const result = a < b ? -1 : a > b ? 1 : 0;
-        return viewSort.direction === "asc" ? result : -result;
+        return compareDbObjectSortValues(
+          dbObjectSortValue(left, viewSort.key),
+          dbObjectSortValue(right, viewSort.key),
+          viewSort.direction
+        );
       });
   }, [viewItems, viewOwnerPrefix, viewSearch, viewSort]);
 

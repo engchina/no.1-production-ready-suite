@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  compareNames,
   SearchableSelectField,
   Skeleton,
   type SearchableSelectOption,
@@ -89,9 +90,6 @@ function sortSearchAnswerProfiles(items: SearchAnswerProfileSummary[]) {
   return [...items].sort((a, b) => {
     if (a.name === DEFAULT_SEARCH_ANSWER_PROFILE_NAME) return -1;
     if (b.name === DEFAULT_SEARCH_ANSWER_PROFILE_NAME) return 1;
-    if (b.knowledge_base_count !== a.knowledge_base_count) {
-      return b.knowledge_base_count - a.knowledge_base_count;
-    }
-    return a.name.localeCompare(b.name, "ja");
+    return compareNames(a.name, b.name);
   });
 }

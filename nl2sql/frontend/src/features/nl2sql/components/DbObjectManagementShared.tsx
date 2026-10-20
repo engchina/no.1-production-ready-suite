@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import {
+  compareNames,
   Button,
   Banner,
   DataTable,
@@ -171,8 +172,15 @@ export interface DbObjectStatusMetric {
 
 export function dbObjectSortValue(item: DbAdminObjectSummary, key: DbObjectSortKey) {
   if (key === "row_count") return item.row_count ?? -1;
-  if (key === "name") return formatDbObjectName(item).toLowerCase();
-  return item.owner.toLowerCase();
+  if (key === "name") return formatDbObjectName(item);
+  return item.owner;
+}
+
+/** 一覧の並べ替えの比較（文字は共通の名前の順。#2753）。 */
+export function compareDbObjectSortValues(a: string | number, b: string | number, direction: "asc" | "desc") {
+  if (typeof a === "string" && typeof b === "string") return compareNames(a, b, direction);
+  const result = a < b ? -1 : a > b ? 1 : 0;
+  return direction === "asc" ? result : -result;
 }
 
 export function rowCountLabel(rowCount?: number | null) {
@@ -547,9 +555,9 @@ export interface DbObjectPickerItem {
 
 export function dbObjectPickerSortValue(item: DbObjectPickerItem, key: DbObjectPickerSortKey) {
   if (key === "row_count") return item.rowCount ?? -1;
-  if (key === "kind") return (item.kind ?? item.kindLabel ?? "").toLowerCase();
-  if (key === "owner") return (item.owner ?? "").toLowerCase();
-  return item.name.toLowerCase();
+  if (key === "kind") return item.kind ?? item.kindLabel ?? "";
+  if (key === "owner") return item.owner ?? "";
+  return item.name;
 }
 
 export function sortDbObjectPickerItems<T extends DbObjectPickerItem>(
@@ -557,13 +565,11 @@ export function sortDbObjectPickerItems<T extends DbObjectPickerItem>(
   sort: DbObjectPickerSortState
 ) {
   return items.slice().sort((left, right) => {
-    const a = dbObjectPickerSortValue(left, sort.key);
-    const b = dbObjectPickerSortValue(right, sort.key);
-    const comparison =
-      typeof a === "number" && typeof b === "number"
-        ? a - b
-        : String(a).localeCompare(String(b), "ja");
-    return sort.direction === "asc" ? comparison : -comparison;
+    return compareDbObjectSortValues(
+      dbObjectPickerSortValue(left, sort.key),
+      dbObjectPickerSortValue(right, sort.key),
+      sort.direction
+    );
   });
 }
 

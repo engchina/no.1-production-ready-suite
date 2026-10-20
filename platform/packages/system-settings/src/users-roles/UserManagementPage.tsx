@@ -1,4 +1,5 @@
 import {
+  compareNames,
   Banner,
   CopyButton,
   EmptyState,
@@ -131,8 +132,7 @@ const EMPTY_DRAFT: UserDraftState = {
 };
 
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
-  const result = left.localeCompare(right, "ja");
-  return direction === "asc" ? result : -result;
+  return compareNames(left, right, direction);
 }
 
 function assignedRoleLabel(role: AssignedRole) {

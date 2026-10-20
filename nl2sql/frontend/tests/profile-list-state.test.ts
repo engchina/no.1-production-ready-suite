@@ -72,6 +72,17 @@ test("profile display sorting does not mutate query data", () => {
   assert.notEqual(sorted, source);
 });
 
+test("名前の並べ替えは共通の名前の順（記号 → 数字は数値の順 → 英字 → かな → 漢字。#2753）", () => {
+  const source = ["漢字", "かな", "beta", "Alpha", "10_x", "2_x", "_x"].map((name) =>
+    summary({ id: name, name })
+  );
+
+  const asc = sortProfileSummariesForDisplay(source, { key: "name", direction: "asc" });
+  assert.deepEqual(asc.map((item) => item.name), ["_x", "2_x", "10_x", "Alpha", "beta", "かな", "漢字"]);
+  const desc = sortProfileSummariesForDisplay(source, { key: "name", direction: "desc" });
+  assert.deepEqual(desc.map((item) => item.name), ["漢字", "かな", "beta", "Alpha", "10_x", "2_x", "_x"]);
+});
+
 test("legacy profile summary fallback filters active profiles by name and category", () => {
   const page = profileSummaryPageFromLegacyList(
     [
