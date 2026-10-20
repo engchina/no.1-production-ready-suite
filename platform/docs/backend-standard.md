@@ -130,6 +130,7 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
   用途のトークンとしては使えない）。トークンは URL の path に置いてアクセスログで伏せ、読むたびに利用者の今の権限と対象の版を
   確かめ直す（RAG の `app/rag/signed_url.py`・`figure_url.py`・`source_preview.py`、`app/api/routes/figures.py`・
   `source_previews.py`）。
+- 呼び出しの取消（#2691）: 呼び先の `mcp_http_response` は、読み取り専用（`McpTool.read_only`）のツールの `tools/call` の処理中に client の切断（`http.disconnect`）を受けたら、ツールの task を取り消して 499 を返す（SSE の進み具合の応答も次の通知を待たずに止める。ログ `mcp_tool_call_cancelled`）。切れた接続の応答を後で受け取る仕組み（SSE の再開）を持たないので、切断を取消と同じに扱う。書き込みのツールは止めずに最後まで実行する。呼び出し元（Agent）は Run の取消で接続を切り（書き込みのツールは送った後は切らない）、独自の取消の API・`notifications/cancelled` は使わない。
 - 呼び出し元の再試行と timeout（#854。Agent の `McpSession`）: 送信前の失敗（接続できない・接続の timeout）と 429 / 503 はどのメッセージも、502 / 504 は状態を変えない手順（`initialize`・`tools/list`）と読み取り専用（`annotations.readOnlyHint=true`）のツールの `tools/call` だけ、上限付きの指数 backoff + jitter（`Retry-After` に従う）で再試行する。書き込みのツールは呼び先に届いた可能性がある失敗（読み取りの timeout・500 / 502 / 504）では再送しない。1 回のツールの呼び出し全体は接続の timeout に収める。呼び先は、副作用のあるツールに `readOnlyHint` を付けない・429 / 503 は処理を始める前にだけ返す（`Retry-After` を付けてよい）こと。
 - ツールの契約（名前・`inputSchema`・`outputSchema`（`McpTool.output_model`。#250）・`annotations`）の正本は `platform/contracts/mcp/<製品>-tools.json`（#248。Agent の外部向けのツールは `agent-tools.json`。#1874）。3 製品の `tests/test_mcp_contract.py` が実装と一致を、Agent の `tests/test_product_mcp.py` が組み込み Skill の使うツールが契約にあることと、契約どおりの fake の MCP（`tests/mcp_support.py`）の引数が契約（必須の項目・項目の名前）と合うことを確かめる。ツールを変えたら呼び先の製品で `UPDATE_MCP_CONTRACT=1 uv run pytest tests/test_mcp_contract.py` で契約を書き直し、Agent のテストも通す。
 

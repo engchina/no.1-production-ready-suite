@@ -26,6 +26,7 @@ Control Plane の中で業務 Agent を実行する。外部の Runtime・Bindin
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import re
@@ -79,7 +80,13 @@ from pr_system_settings.model import (
     seed_to_send,
 )
 
-from app.features.agent import data_scope, run_claim, tool_grounding, tool_loop_guard
+from app.features.agent import (
+    call_abort,
+    data_scope,
+    run_claim,
+    tool_grounding,
+    tool_loop_guard,
+)
 from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_KIND,
     ANSWER_EVIDENCE_NAME,
@@ -230,6 +237,7 @@ from app.features.agent.support_task import (
     nl2sql_clarification_pending,
     nl2sql_next_step,
     nl2sql_skip_step,
+    profile_knowledge_summary,
     rag_next_step,
     rag_planned_arguments,
     rag_planned_schema,
@@ -1561,6 +1569,14 @@ class _ToolRecorder:
                 next_step = self._without_asking(evidence_clarification_step(output))
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
+                knowledge = profile_knowledge_summary(output)
+                if knowledge is not None:
+                    # 検索・回答プロファイルのルール・用語は結果のまま（根拠と分けた項目で）モデルへ
+                    # 渡す。渡したことを記録する（#2701）。
+                    logger.info(
+                        "builtin_runtime_profile_knowledge_passed",
+                        extra={"run_id": self.run_id, "tool_name": name, **knowledge},
+                    )
                 note = await self.check_guides(name, call.arguments)
                 if note is not None:
                     output = {**output, "guide_check": note}
@@ -1791,6 +1807,8 @@ class _ToolRecorder:
             definition=definition,
             handler=handler,
             authorization=_Authorization(_active_policy(), force=True, reason="control_plane"),
+            # 後始末は取消の後にも送る（打ち切らない）。
+            abortable=not cleanup,
         )
         return step_id, result
 
@@ -1804,7 +1822,13 @@ class _ToolRecorder:
         handler: ToolHandler | None = None,
         scoped: data_scope.ScopeEnforcement | None = None,
         authorization: _Authorization,
+        abortable: bool = True,
     ) -> ToolResult:
+        """handler を呼び、結果を step に記録する。
+
+        `abortable` の呼び出しは、Run の取消・終了で実行中の呼び先への送信を打ち切る（#2691。
+        `_invoke_abortable`）。打ち切った呼び出しは失敗ではなく取消として step に残す。
+        """
         from app.features.agent.runtime import runtime_repository
 
         if self.data_scopes:
@@ -1816,7 +1840,7 @@ class _ToolRecorder:
             context = context.model_copy(update={"approval_id": authorization.approval_id})
         # 境界で確かめたのと同じポリシーで呼ぶ（`force` は承認の記録と結び付けた呼び出しなど、
         # 「承認」を実行してよいと判断したときだけ。#2610）。
-        result = await asyncio.to_thread(
+        invoke = functools.partial(
             tool_registry.invoke,
             call,
             policy=authorization.policy,
@@ -1826,6 +1850,10 @@ class _ToolRecorder:
             handler=handler,
             authorization=authorization.reason,
         )
+        if abortable:
+            result = await _invoke_abortable(self.run_id, call.name, invoke)
+        else:
+            result = await asyncio.to_thread(invoke)
         if scoped is not None and result.success and isinstance(result.output, dict):
             # 一覧・推薦の結果は範囲で絞ってから記録し、モデルへ返す（#1378）。
             output, removed = scoped.filter_output(result.output)
@@ -1867,6 +1895,79 @@ class _ToolRecorder:
             }
         )
         return with_tool_result_images(updated, delivery.attached)
+
+
+# 実行中のツールの呼び出しの間に、別のプロセスの取消を保存先で確かめる間隔（秒。#2691）。
+# 同じプロセスの取消は `call_abort.abort_run_calls` ですぐに伝わる。
+TOOL_CALL_CANCEL_POLL_SECONDS = 2.0
+
+
+async def _invoke_abortable(
+    run_id: str, tool_name: str, invoke: Callable[[], ToolResult]
+) -> ToolResult:
+    """ツールを thread で呼び、Run の取消・終了で呼び先への送信を打ち切る（#2691）。
+
+    - 打ち切りの印を文脈に置いてから thread を始める（thread は文脈を引き継ぐ）。同じプロセスの
+      取消は `runtime._cancel_run_locked` が、別のプロセスの取消はここでの定期の確認
+      （`builtin_run_ended`）が印を立てる。この task が取り消されたとき（SDK のツールの timeout・
+      停止）も立てる。
+    - 印が立つと、MCP の送信は送る前に止まり、送信中の接続は切る（`tools._post_mcp_message`）。
+    - 打ち切った呼び出しの結果は、失敗ではなく取消（`TOOL_CALL_ABORTED_CODE`）にする。打ち切りの前に
+      届いた結果は事実のまま返す。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    with call_abort.bind_call_abort(run_id) as abort:
+        work = asyncio.ensure_future(asyncio.to_thread(invoke))
+
+        async def watch() -> None:
+            while not abort.aborted:
+                await asyncio.sleep(TOOL_CALL_CANCEL_POLL_SECONDS)
+                if await asyncio.to_thread(runtime_repository.builtin_run_ended, run_id):
+                    abort.abort(call_abort.REASON_RUN_ENDED)
+
+        watcher = asyncio.ensure_future(watch())
+        try:
+            result = await work
+        except asyncio.CancelledError:
+            if abort.abort(call_abort.REASON_TASK_CANCELLED):
+                logger.info(
+                    "builtin_runtime_tool_call_aborted",
+                    extra={
+                        "run_id": run_id,
+                        "tool_name": tool_name,
+                        "reason": call_abort.REASON_TASK_CANCELLED,
+                    },
+                )
+            raise
+        finally:
+            watcher.cancel()
+            await asyncio.wait({watcher})
+    if not (abort.interrupted and not result.success):
+        return result
+    stopped = abort.seconds_since_abort()
+    logger.info(
+        "builtin_runtime_tool_call_aborted",
+        extra={
+            "run_id": run_id,
+            "tool_name": tool_name,
+            "reason": abort.reason,
+            "error_code": result.error_code,
+            # 取消から呼び出しが戻るまでの秒（業務データは残さない）。
+            "stopped_after_seconds": None if stopped is None else round(stopped, 3),
+        },
+    )
+    return result.model_copy(
+        update={
+            "error": call_abort.TOOL_CALL_ABORTED_MESSAGE,
+            "error_code": call_abort.TOOL_CALL_ABORTED_CODE,
+            "error_details": {
+                "reason": abort.reason,
+                "transport_error_code": result.error_code,
+                **({"stopped_after_seconds": round(stopped, 3)} if stopped is not None else {}),
+            },
+        }
+    )
 
 
 def _run_steps(run_id: str) -> list[Any]:
