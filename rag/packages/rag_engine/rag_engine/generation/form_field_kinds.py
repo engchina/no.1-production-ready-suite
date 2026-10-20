@@ -137,14 +137,28 @@ def condition_kind_options(options: Iterable[tuple[str, Sequence[str]]]) -> dict
     return mapping if len(mapping) >= 2 else {}
 
 
-def resolve_conditions(observations: Sequence[FieldKindObservation], conditions: Iterable[EvidenceCondition]) -> list[ResolvedCondition]:
-    """観測した種類が 1 つに決まるとき、その種類に対応する選択肢で条件を決める。割れていれば何も決めない。"""
-    kinds = {item.kind for item in observations}
-    if len(kinds) != 1:
+def _condition_observations(observations: Sequence[FieldKindObservation], label: str, *, allow_single: bool) -> list[FieldKindObservation]:
+    """条件の対象名を特定する。重なる名前は具体的な方、特定できない複数項目は未確定にする。"""
+    names = {normalized_name(item.name) for item in observations} - {""}
+    target = normalized_name(label)
+    matched = {name for name in names if name in target}
+    if not matched and not allow_single:
         return []
-    (kind,) = kinds
+    selected = {name for name in matched if not any(name != other and name in other for other in matched)} if matched else names
+    if len(selected) != 1:
+        return []
+    return [item for item in observations if normalized_name(item.name) in selected]
+
+
+def resolve_conditions(observations: Sequence[FieldKindObservation], conditions: Iterable[EvidenceCondition]) -> list[ResolvedCondition]:
+    """条件が指す項目の種類だけで選択肢を決める。同じ項目の競合・対象不明は決めない。"""
+    conditions = list(conditions)
     resolved: list[ResolvedCondition] = []
     for condition_id, label, options in conditions:
+        kinds = {item.kind for item in _condition_observations(observations, label, allow_single=len(conditions) == 1)}
+        if len(kinds) != 1:
+            continue
+        (kind,) = kinds
         value = condition_kind_options(options).get(kind)
         if value:
             resolved.append(ResolvedCondition(condition_id, label, value, kind))
@@ -192,10 +206,10 @@ def prompt_note(
     """生成の材料に入れる根拠の注記。生成に渡す根拠（spans）に無い出典の観測は出さない。"""
     labels: dict[str, str] = {}
     for span in spans:
-        label = str(span.get("label") or "")
+        span_label = str(span.get("label") or "")
         for source_id in (span.get("source_id"), *(span.get("source_aliases") or ())):
-            if source_id and label:
-                labels.setdefault(str(source_id), label)
+            if source_id and span_label:
+                labels.setdefault(str(source_id), span_label)
     names = content_labels()
     lines = []
     for item in observations:

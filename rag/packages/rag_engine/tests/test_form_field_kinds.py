@@ -165,6 +165,53 @@ class AnswerEvidenceTests(unittest.TestCase):
         self.assertEqual(form_field_kinds.resolve_conditions(both, [self.CONDITION]), [])
         self.assertEqual(form_field_kinds.resolve_conditions([], [self.CONDITION]), [])
 
+    def test_overlapping_button_name_does_not_conflict_with_the_named_field(self) -> None:
+        fields = [{"name": "対象種別", "kind": "select"}, {"name": "対象", "kind": "button"}]
+        observed = form_field_kinds.question_field_kinds("対象種別を変更したい", _context(_chunk("c1", fields)))
+        condition = ("field_kind", "対象種別の項目の種類", self.CONDITION[2])
+        resolved = form_field_kinds.resolve_conditions(observed, [condition])
+        self.assertEqual(resolved, [form_field_kinds.ResolvedCondition("field_kind", condition[1], "選択", "select")])
+
+    def test_each_condition_binds_to_its_own_field(self) -> None:
+        observed = [
+            form_field_kinds.FieldKindObservation("c1", "項目Ａ", "select"),
+            form_field_kinds.FieldKindObservation("c2", "項目Ｂ", "text"),
+        ]
+        conditions = [("a", "項目Aの種類", self.CONDITION[2]), ("b", "項目Bの種類", self.CONDITION[2])]
+        resolved = form_field_kinds.resolve_conditions(observed, conditions)
+        self.assertEqual([(item.condition_id, item.value) for item in resolved], [("a", "選択"), ("b", "入力欄")])
+
+    def test_same_named_field_with_conflicting_sources_stays_unknown(self) -> None:
+        observed = [
+            form_field_kinds.FieldKindObservation("c1", "対象種別", "select"),
+            form_field_kinds.FieldKindObservation("c2", "対象種別", "text"),
+            form_field_kinds.FieldKindObservation("c3", "対象", "button"),
+        ]
+        self.assertEqual(form_field_kinds.resolve_conditions(observed, [("field_kind", "対象種別の種類", self.CONDITION[2])]), [])
+
+    def test_missing_field_is_not_filled_from_another_conditions_field(self) -> None:
+        observed = [form_field_kinds.FieldKindObservation("c1", "項目A", "select")]
+        conditions = [("a", "項目Aの種類", self.CONDITION[2]), ("b", "項目Bの種類", self.CONDITION[2])]
+        resolved = form_field_kinds.resolve_conditions(observed, conditions)
+        self.assertEqual([(item.condition_id, item.value) for item in resolved], [("a", "選択")])
+
+    def test_multiple_fields_without_a_binding_stay_unknown_even_with_the_same_kind(self) -> None:
+        observed = [
+            form_field_kinds.FieldKindObservation("c1", "項目A", "select"),
+            form_field_kinds.FieldKindObservation("c2", "項目B", "select"),
+        ]
+        self.assertEqual(form_field_kinds.resolve_conditions(observed, [self.CONDITION]), [])
+        self.assertEqual(form_field_kinds.resolve_conditions(observed, [("field_kind", "項目Aと項目Bの種類", self.CONDITION[2])]), [])
+
+    def test_short_named_button_can_be_the_target(self) -> None:
+        observed = [
+            form_field_kinds.FieldKindObservation("c1", "対象", "button"),
+            form_field_kinds.FieldKindObservation("c2", "対象種別", "select"),
+        ]
+        condition = ("field_kind", "対象の種類", (("ボタン", ("button",)), ("選択", ("select",))))
+        resolved = form_field_kinds.resolve_conditions(observed, [condition])
+        self.assertEqual([(item.value, item.kind) for item in resolved], [("ボタン", "button")])
+
     def test_only_conditions_whose_options_map_to_kinds_are_used(self) -> None:
         # 選択肢が項目の種類に 1 つしか対応しない条件・項目の種類と関係の無い条件は決めない。
         self.assertEqual(form_field_kinds.condition_kind_options([("選択", ()), ("その他", ())]), {})
@@ -239,6 +286,18 @@ class ResolvedPlanTests(unittest.TestCase):
         self.assertEqual(knowledge.guide_step_terms, (("code", ("コード",)),))
         self.assertEqual([rule.content for rule in knowledge.matched_rules], ["RESOLVED-RULE", "OTHER"])
         self.assertIn("RESOLVED-RULE", knowledge.prompt_context())
+
+    def test_named_field_resolution_selects_the_required_branch(self) -> None:
+        observed = [
+            form_field_kinds.FieldKindObservation("c1", "対象種別", "select"),
+            form_field_kinds.FieldKindObservation("c2", "対象", "button"),
+        ]
+        condition = ("field_kind", "対象種別の種類", (("選択", ()), ("自由入力", ())))
+        resolved = form_field_kinds.resolve_conditions(observed, [condition])
+        knowledge = form_field_kinds.with_resolved_plan(self._knowledge(), resolved, [self.PLAN])
+        self.assertEqual([step[0] for step in knowledge.guide_steps], ["screen", "code"])
+        self.assertEqual(knowledge.guide_optional_steps, ())
+        self.assertEqual(knowledge.matched_rules[0].content, "RESOLVED-RULE")
 
     def test_keeps_knowledge_without_matching_plan(self) -> None:
         base = self._knowledge()
