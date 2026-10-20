@@ -83,6 +83,12 @@ from app.rag.cross_references import (
     split_section_path,
     title_key,
 )
+from app.rag.derived_evidence import (
+    derived_kind,
+    derived_source_chunks,
+    is_derived_chunk,
+    original_chunks,
+)
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
 from app.rag.element_locator import chunk_element_ids
 from app.rag.entity_expansion import (
@@ -320,6 +326,12 @@ class _SearchState:
     # 使い(``_with_effective_as_of``。#2602)、回答のプロンプトと記録の分類の条件には明示した値
     # だけを渡す。
     requested_as_of: str = ""
+    # 検索で当たった派生の chunk(章節の要約・RAPTOR の要約・項目抽出の値)と、置き換えた原文の
+    # chunk(#2641。chunk_id → 種類・原文の chunk_id。CRAG の各回で読み直さない。診断に出す)。
+    derived_hits: dict[str, dict[str, Any]] = field(default_factory=dict)
+    derived_sources: dict[tuple[str, tuple[tuple[str, str], ...]], list[str]] = field(
+        default_factory=dict
+    )
 
     @property
     def auto_field_relaxed(self) -> bool:
@@ -739,6 +751,15 @@ class AnswerEngine:
                 # 検索ごとの、参照を持つ候補の統合の順位と辿った結果・辿らなかった理由(#1549)。
                 "searches": list(state.reference_sources),
             }
+        if state.derived_hits:
+            # 当たった派生の chunk と、根拠に置き換えた原文(#2641)。原文が無いものは根拠に
+            # 渡していない。
+            hits = list(state.derived_hits.values())
+            outcome.diagnostics["derived_evidence"] = {
+                "resolved_count": sum(1 for hit in hits if hit["source_chunk_ids"]),
+                "unresolved_count": sum(1 for hit in hits if not hit["source_chunk_ids"]),
+                "chunks": hits[:_REFERENCE_DIAGNOSTICS_LIMIT],
+            }
         if state.auto_field_conditions:
             outcome.diagnostics["auto_field_filter"] = {
                 "conditions": [condition.model_dump() for condition in state.auto_field_conditions],
@@ -1087,13 +1108,25 @@ class AnswerEngine:
                 new_document=self._settings.rag_candidate_diversity_new_document,
                 present_document=self._settings.rag_candidate_diversity_present_document,
             )[: self._settings.rag_candidate_diversity_max_extra]
-        anchors = [state.chunks[chunk_id] for chunk_id in ranked]
+        # 当たった派生の chunk(要約・項目抽出の値)は検索の手がかり。回答の根拠には、その chunk が
+        # 指す原文の chunk を同じ位置に置く(原文が読めなければ根拠に渡さない。#2641)。
+        anchors = await self._original_anchors(
+            state,
+            [state.chunks[chunk_id] for chunk_id in ranked],
+            fused,
+            filters=(_with_page_ranges(state.filters, page_ranges) or {})
+            if page_ranges
+            else dict(state.filters),
+        )
+        ranked = [chunk.chunk_id for chunk in anchors]
         for rank, chunk_id in enumerate(ranked, start=1):
             known = state.fused_ranks.get(chunk_id)
             if known is None or rank < known[0]:
                 state.fused_ranks[chunk_id] = (rank, fused[chunk_id])
-        siblings = await self._oracle.context_group_siblings(
-            anchors, max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks)
+        siblings = original_chunks(
+            await self._oracle.context_group_siblings(
+                anchors, max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks)
+            )
         )
         for sibling in siblings:
             state.chunks.setdefault(sibling.chunk_id, sibling)
@@ -1232,6 +1265,50 @@ class AnswerEngine:
         return HybridSearchResult(
             child_chunks=children, all_chunks=[*all_children.values(), *parents]
         )
+
+    async def _original_anchors(
+        self,
+        state: _SearchState,
+        anchors: Sequence[RetrievedChunk],
+        fused: dict[str, float],
+        *,
+        filters: Mapping[str, str],
+    ) -> list[RetrievedChunk]:
+        """検索の候補の派生の chunk を、その chunk が指す原文の chunk に置き換える(#2641)。
+
+        派生の chunk(章節の要約・RAPTOR の要約・項目抽出の値)は検索の手がかりで、引用できる原文
+        ではない。原文の chunk を派生の chunk の位置(統合の点)に置き、派生の chunk は根拠に
+        渡さない。原文が読めなければ何も置かない(根拠不足として扱い、要約の文を確かめた記載に
+        しない)。候補にすでにある原文は、上の位置を保つ。
+        """
+        if not any(is_derived_chunk(chunk) for chunk in anchors):
+            return list(anchors)
+        resolved: dict[str, RetrievedChunk] = {}
+        for chunk in anchors:
+            if not is_derived_chunk(chunk):
+                resolved.setdefault(chunk.chunk_id, chunk)
+                continue
+            key = (chunk.chunk_id, tuple(sorted(filters.items())))
+            source_ids = state.derived_sources.get(key)
+            if source_ids is None:
+                sources = await derived_source_chunks(self._oracle, chunk, filters=filters)
+                for source in sources:
+                    state.chunks.setdefault(source.chunk_id, source)
+                source_ids = [source.chunk_id for source in sources]
+                state.derived_sources[key] = source_ids
+                state.derived_hits[chunk.chunk_id] = {
+                    "chunk_id": chunk.chunk_id,
+                    "document_id": chunk.document_id,
+                    "kind": derived_kind(chunk.metadata),
+                    "source_chunk_ids": source_ids,
+                }
+            score = fused.pop(chunk.chunk_id, 0.0)
+            for source_id in source_ids:
+                if (original := state.chunks.get(source_id)) is None:
+                    continue
+                fused[source_id] = max(fused.get(source_id, 0.0), score)
+                resolved.setdefault(source_id, original)
+        return list(resolved.values())
 
     async def _ensure_search_filters(
         self, request: SearchRequest, state: _SearchState, inquiry_conditions: Any
@@ -1382,6 +1459,9 @@ class AnswerEngine:
             state.entity_plans[key] = plan
         added: list[RetrievedChunk] = []
         for item in plan:
+            if is_derived_chunk(item.chunk):
+                # 派生の chunk(要約・項目の値)は原文ではないので足さない(#2641)。
+                continue
             marked = expansion_metadata(
                 state.chunks.get(item.chunk.chunk_id, item.chunk), item.info
             )
@@ -1443,7 +1523,7 @@ class AnswerEngine:
             state.graph_plans[key] = plan
         added: list[RetrievedChunk] = []
         for item in plan:
-            if item.chunk.chunk_id in exclude:
+            if item.chunk.chunk_id in exclude or is_derived_chunk(item.chunk):
                 continue
             marked = graph_expansion_metadata(
                 state.chunks.get(item.chunk.chunk_id, item.chunk), item.info
@@ -1701,7 +1781,7 @@ class AnswerEngine:
             return [*stored, *extra]
         if anchor.chunk_id in state.query_reference_targets:
             return state.query_reference_targets[anchor.chunk_id]
-        specs = [] if metadata.get("raptor_summary") else extract_references(anchor.text)
+        specs = [] if is_derived_chunk(anchor) else extract_references(anchor.text)
         targets: list[ReferenceTarget] = []
         if specs:
             file_name = anchor.file_name or ""
@@ -1757,9 +1837,10 @@ class AnswerEngine:
                     chunk_set_id=chunk_set_id or None,
                     limit=limit,
                 )
+                # 参照先の節の要約・項目の値(派生の chunk)は原文ではないので足さない(#2641)。
                 state.reference_chunks[key] = [
                     row
-                    for row in rows
+                    for row in original_chunks(rows)
                     if section_path_within(row.metadata.get("section_path"), target.section_path)
                 ]
             return state.reference_chunks[key]
@@ -1809,7 +1890,7 @@ class AnswerEngine:
         )
         rows = [
             row
-            for row in rows
+            for row in original_chunks(rows)
             if section_path_within(row.metadata.get("section_path"), section_path)
         ]
         if not rows:
@@ -1888,11 +1969,7 @@ class AnswerEngine:
             mode=SearchMode.HYBRID,
             filters={**scope, "document_id": document_id},
         )
-        rows = [
-            hit
-            for hit in hits
-            if hit.document_id == document_id and not hit.metadata.get("raptor_summary")
-        ]
+        rows = [hit for hit in original_chunks(hits) if hit.document_id == document_id]
         if not rows:
             return []
         first_set = rows[0].metadata.get("chunk_set_id")
@@ -2020,7 +2097,7 @@ class AnswerEngine:
                 continue
             matched = [
                 chunk
-                for chunk in rows
+                for chunk in original_chunks(rows)
                 if chunk.chunk_id not in existing
                 and chunk.chunk_id not in added
                 and heading in _chunk_headings(chunk)
@@ -2126,7 +2203,11 @@ class AnswerEngine:
         except Exception:  # noqa: BLE001 - 章節の拡張は補助。この章節を足さずに続ける。
             logger.warning("section chunks load failed", exc_info=True)
             return []
-        chunks = [state.chunks.setdefault(row.chunk.chunk_id, row.chunk) for row in text.chunks]
+        # #2590 より前に作った章節の対応には派生の chunk が残りうるので、原文だけを足す(#2641)。
+        chunks = [
+            state.chunks.setdefault(chunk.chunk_id, chunk)
+            for chunk in original_chunks(row.chunk for row in text.chunks)
+        ]
         if not chunks:
             return []
         await self._load_classifications(chunks, state)
@@ -2284,7 +2365,9 @@ class AnswerEngine:
                 logger.warning("article chunks load failed", exc_info=True)
                 continue
             found.extend(
-                (firsts[item.section_id], item) for item in items if item.section_id in firsts
+                (firsts[item.section_id], item)
+                for item in items
+                if item.section_id in firsts and not is_derived_chunk(firsts[item.section_id])
             )
             for item in items:
                 chunk = firsts.get(item.section_id)
@@ -2529,9 +2612,10 @@ def _document_name_targets(
     """取込で残した参照先に無い、本文の文書名だけの参照(#1400)。
 
     #1400 より前に取り込んだ chunk の印(``reference_targets_json``)には文書名だけの参照が無いので、
-    回答のときに本文から足す(再処理しなくても辿れる)。RAPTOR の要約 chunk は辿らない。
+    回答のときに本文から足す(再処理しなくても辿れる)。派生の chunk(要約・項目の値。#2641)は
+    辿らない。
     """
-    if anchor.metadata.get("raptor_summary"):
+    if is_derived_chunk(anchor):
         return []
     known = {
         title_key(target.document_title or "") for target in stored if target.kind == "document"

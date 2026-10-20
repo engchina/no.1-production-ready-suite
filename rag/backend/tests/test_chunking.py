@@ -225,6 +225,39 @@ def test_chunk_extraction_keeps_extracted_field_marks_apart_from_source_text() -
     assert extraction.elements[1].kind == "text"
 
 
+def test_chunk_extraction_keeps_field_source_element_per_value() -> None:
+    """項目抽出の値の元の要素を chunk に引き継ぎ、元の要素の違う値を結合しない（#2641）。
+
+    検索で当たった値の chunk を根拠に渡すとき、この要素を含む原文の chunk を読む。
+    """
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(kind="text", text="原文の段落です。", page_number=1, element_id="e1"),
+            *(
+                DocumentElement(
+                    kind="text",
+                    text=f"項目 {name}: 値 {name}",
+                    page_number=1,
+                    element_id=f"field-{order}-{name}",
+                    content_kind="field",
+                    metadata={"extracted_field": True, "field_source_element_id": source},
+                )
+                for order, (name, source) in enumerate([("A", "e1"), ("B", "e1"), ("C", "e9")])
+            ),
+        ]
+    )
+
+    chunks = chunk_extraction(extraction, chunk_size=200, overlap=0)
+
+    assert [chunk.text for chunk in chunks] == [
+        "原文の段落です。",
+        "項目 A: 値 A\n項目 B: 値 B",
+        "項目 C: 値 C",
+    ]
+    assert "field_source_element_id" not in chunks[0].metadata
+    assert [chunk.metadata["field_source_element_id"] for chunk in chunks[1:]] == ["e1", "e9"]
+
+
 def test_chunk_extraction_preserves_bbox_coordinate_metadata() -> None:
     """bbox の coordinate mode / unit は citation-to-preview 用 metadata に残す。"""
     extraction = StructuredExtraction(

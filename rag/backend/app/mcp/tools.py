@@ -100,6 +100,7 @@ from app.rag.cross_references import (
     section_path_within,
     split_section_path,
 )
+from app.rag.derived_evidence import is_derived_chunk
 from app.rag.document_crop import (
     BoundedCrop,
     CropTooLargeError,
@@ -2856,6 +2857,7 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
     file_name: str | None = None
     superseded = False
     first = True
+    skipped = False
     while True:
         batch = await oracle.readable_document_chunks(
             arguments.document_id,
@@ -2864,7 +2866,7 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
             limit=READ_DOCUMENT_BATCH,
         )
         if not batch:
-            if first:
+            if first and not skipped:
                 raise await _first_chunk_or_missing(
                     oracle, arguments.document_id, stale=from_position
                 )
@@ -2874,6 +2876,13 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
         for chunk in batch:
             metadata = dict(chunk.metadata)
             chunk_index = _metadata_int(metadata, "chunk_index") or index
+            if is_derived_chunk(chunk):
+                # 派生の chunk(章節の要約・RAPTOR の要約・項目抽出の値)は文書の本文ではないので
+                # 返さない(#2641)。
+                index = chunk_index + 1
+                offset = 0
+                skipped = True
+                continue
             if first:
                 file_name = chunk.file_name
                 superseded = metadata.get("document_superseded") is True
@@ -2930,9 +2939,13 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
     if next_cursor is None and chunks:
         # 最後の batch がちょうど上限の件数だったとき、続きがあるかを確かめる。
         more = await oracle.readable_document_chunks(
-            arguments.document_id, chunk_set_id=chunk_set_id, from_index=index, limit=1
+            arguments.document_id,
+            chunk_set_id=chunk_set_id,
+            from_index=index,
+            limit=READ_DOCUMENT_BATCH,
         )
-        if more:
+        # 続きが派生の chunk だけ(文書の末尾の要約など)なら、続きは無い(#2641)。
+        if any(not is_derived_chunk(chunk) for chunk in more):
             next_cursor = _read_cursor(chunk_set_id, index, 0)
     return ReadDocumentOutput(
         document_id=arguments.document_id,
