@@ -98,7 +98,11 @@ def is_abstained_answer(
         return True
     if not insufficient_reason.strip():
         return False
-    return not any(chunk.metadata.get("evidence_model_used") for chunk in citations)
+    # 親（まとまり）だけを参照した根拠（#2710）も、回答が資料を使った印にする。
+    return not any(
+        chunk.metadata.get("evidence_model_used") or chunk.metadata.get("evidence_parent_used")
+        for chunk in citations
+    )
 
 
 def claims_supported(claims: Sequence[Mapping[str, Any]]) -> bool:

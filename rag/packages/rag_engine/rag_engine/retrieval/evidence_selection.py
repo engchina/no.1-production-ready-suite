@@ -386,6 +386,12 @@ def evidence_spans(
         parent_keys = member_keys[key]
         located = _child_ranges(record, anchors, parent_keys=parent_keys)
         scoped = [(a, b, page, child) for child in scope_records for a, b, page in _child_ranges(record, [child], parent_keys=parent_keys)]
+        # 出典の行を結ぶ子の範囲（#2710）。子の検索文は画面の例の値などを除いているので、子の元の本文で親の中を探す。
+        provenance = [
+            (a, b, page, child)
+            for child in scope_records
+            for a, b, page in _child_ranges(record, [child], parent_keys=parent_keys, body_text=True)
+        ]
         image_ranges = _child_ranges(
             record,
             [a for a in anchors if any(ref.get("category") == "Picture" for ref in getattr(a, "source_record_refs", ()))],
@@ -476,6 +482,10 @@ def evidence_spans(
                 seen_documents.add(document_key)
             if len(pages) == 1:
                 result[-1]["page"] = result[-1]["page_end"] = next(iter(pages))
+            # 抜粋の範囲に重なる子と、その子の親の本文の中の範囲（#2710）。出典の行を、引用が実際に入る子へ
+            # 結ぶのに使う（親の ID だけでは同じ親・同じ頁の兄弟の子を区別できない）。
+            if child_ranges := _overlapping_child_ranges(provenance, start, end):
+                result[-1]["child_ranges"] = child_ranges
             # parentの章一覧には隣接する別機能が混在し得る。本文位置と文書・版・
             # 親子関係を照合した単一childだけで、引用そのものの所属を確定する。
             matching = [(a, child) for a, b, _, child in scoped if a <= start and end <= b]
@@ -528,6 +538,8 @@ def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
         previous = merged[-1] if merged else None
         if previous is not None and (joinable(previous, span) or glue(index, previous)):
             text = previous["text"] + span["text"]
+            if ranges := _merged_child_ranges(previous.get("child_ranges"), span.get("child_ranges")):
+                previous["child_ranges"] = ranges
             previous.update(
                 text=text,
                 end=span["end"],
@@ -537,6 +549,37 @@ def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             merged.append(dict(span))
     return [span for span in merged if span["text"].strip()]
+
+
+def _overlapping_child_ranges(scoped: Sequence[tuple[int, int, Any, Any]], start: int, end: int) -> list[dict[str, Any]]:
+    """抜粋 [start, end) に重なる子の ID と、重なる範囲（親の本文の位置）。親の中の位置の順に並べる（#2710）。"""
+    found: dict[str, dict[str, Any]] = {}
+    for a, b, _page, child in scoped:
+        child_id = getattr(child, "chunk_uid", "") or getattr(child, "id", "")
+        if not child_id or a >= end or b <= start:
+            continue
+        key = str(child_id)
+        current = found.get(key)
+        if current is None:
+            found[key] = {"id": key, "start": max(a, start), "end": min(b, end)}
+        else:
+            current.update(start=min(current["start"], max(a, start)), end=max(current["end"], min(b, end)))
+    return sorted(found.values(), key=lambda item: (item["start"], item["end"], item["id"]))
+
+
+def _merged_child_ranges(left: Any, right: Any) -> list[dict[str, Any]]:
+    """つないだ抜粋の子の範囲（同じ子は範囲をまとめる。#2710）。"""
+    merged: dict[str, dict[str, Any]] = {}
+    for item in [*(left or ()), *(right or ())]:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        key = str(item["id"])
+        current = merged.get(key)
+        if current is None:
+            merged[key] = dict(item)
+        else:
+            current.update(start=min(current["start"], item["start"]), end=max(current["end"], item["end"]))
+    return sorted(merged.values(), key=lambda item: (item["start"], item["end"], item["id"]))
 
 
 def _local_child_path(child: Any, preceding: str) -> tuple[str, ...]:
@@ -595,10 +638,13 @@ def _span_origin(record: Any, start: int, end: int, image_ranges: Sequence[tuple
     return "unclassified"
 
 
-def _child_ranges(parent: Any, anchors: Sequence[Any], *, parent_keys: Collection[str] = ()) -> list[tuple[int, int, Any]]:
+def _child_ranges(
+    parent: Any, anchors: Sequence[Any], *, parent_keys: Collection[str] = (), body_text: bool = False
+) -> list[tuple[int, int, Any]]:
     """同文書・同版・親子関係と本文一致を検証してからchildの位置と頁を返す。
 
     parent_keysは parent にまとめた根拠（#1331）の ID。その child も本文一致を検証してから使う。
+    body_text は child の元の本文（``body_text``）で探す（出典の行の子の範囲。#2710）。既定は検索文の本文。
     """
     found = []
     parent_key = getattr(parent, "chunk_uid", "") or parent.id
@@ -617,7 +663,8 @@ def _child_ranges(parent: Any, anchors: Sequence[Any], *, parent_keys: Collectio
             )
         ):
             continue
-        body = child.text.split("Child text:\n", 1)[-1].strip()
+        raw = (getattr(child, "body_text", "") or child.text) if body_text else child.text
+        body = raw.split("Child text:\n", 1)[-1].strip()
         start = parent.text.find(body) if body else -1
         if start >= 0 and parent.text.find(body, start + 1) < 0:
             found.append((start, start + len(body), getattr(child, "page", 0)))

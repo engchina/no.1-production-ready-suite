@@ -1,4 +1,4 @@
-import { BookOpen, ExternalLink, FileText, History, LocateFixed, type LucideIcon } from "lucide-react";
+import { BookOpen, ExternalLink, FileText, History, Layers, LocateFixed, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { excerptPlainText } from "../../lib/excerpt-text";
@@ -6,6 +6,7 @@ import { INFORMATION_TABLE_FOCUS_CLASS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
 import { ExcerptContent } from "../data/excerpt-content";
 import { StatusBadge } from "../data/status-badge";
+import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
 import { Disclosure } from "../ui/disclosure";
 import { SideSheet } from "../ui/side-sheet";
@@ -53,6 +54,11 @@ export interface EvidenceListItem {
   usedInAnswer: boolean | null;
   /** 回答での使われ方。引用していない・分からなければ null。 */
   answerUse: EvidenceAnswerUse | null;
+  /**
+   * 箇所そのものは引用していないが、回答がその箇所を含むまとまり（親）を参照したか（#2710）。引用した箇所が
+   * 決まらなかった参照の候補で、「回答で引用」とは分けて数え、「まとまりで参照」のバッジを出す。
+   */
+  usedAsContext?: boolean;
   /** 新しい版に置き換えた文書（旧版）の根拠か。 */
   superseded?: boolean;
   /** 検索の経路のバッジ（翻訳済み。例:「Vector #1」「Rerank #2」）。 */
@@ -82,11 +88,15 @@ export interface EvidenceLabels {
   confirmed: (count: number) => string;
   /** 例:「参考 1 件」。 */
   reference: (count: number) => string;
+  /** 例:「まとまりで参照 2 件」（回答がまとまりだけを参照した箇所。#2710）。 */
+  context: (count: number) => string;
   separator: string;
   /** 回答で引用した箇所のバッジ。 */
   usedBadge: string;
   /** 参考の記載として引用した箇所のバッジ。 */
   referenceBadge: string;
+  /** 回答がまとまり（親）だけを参照した箇所のバッジ（#2710）。 */
+  contextBadge: string;
   superseded: string;
   /** 経路のバッジの「Evidence」（AI に渡した箇所の印）。 */
   evidenceBadge: string;
@@ -125,9 +135,11 @@ export function evidenceLabels(overrides: Partial<EvidenceLabels> = {}): Evidenc
     used: (count) => `回答で引用 ${count} 件`,
     confirmed: (count) => `うち該当確認済み ${count} 件`,
     reference: (count) => `参考 ${count} 件`,
+    context: (count) => `まとまりで参照 ${count} 件`,
     separator: " ／ ",
     usedBadge: "回答で引用",
     referenceBadge: "参考",
+    contextBadge: "まとまりで参照",
     superseded: "旧版",
     evidenceBadge: "Evidence",
     scoreRetrieval: "取得スコア",
@@ -152,10 +164,11 @@ export function evidenceLabels(overrides: Partial<EvidenceLabels> = {}): Evidenc
 
 export const DEFAULT_EVIDENCE_LABELS: EvidenceLabels = evidenceLabels();
 
-type CountItem = Pick<EvidenceListItem, "usedInAnswer" | "answerUse">;
+type CountItem = Pick<EvidenceListItem, "usedInAnswer" | "answerUse" | "usedAsContext">;
 
 /**
  * 見出しの件数と内訳（「AI に渡した 45 件 ／ 回答で引用 13 件 ／ うち該当確認済み 10 件 ／ 参考 3 件」。3 製品で同じ）。
+ * 回答がまとまりだけを参照した箇所は「回答で引用」に数えず、「まとまりで参照 N 件」として後ろに分ける（#2710）。
  * 引用したかが分からない（検索だけ）なら件数だけ、0 件の項目は出さない。
  */
 export function evidenceCountLabel(
@@ -170,6 +183,8 @@ export function evidenceCountLabel(
     if (used.length) parts.push(labels.used(used.length));
     if (confirmed) parts.push(labels.confirmed(confirmed));
     if (reference) parts.push(labels.reference(reference));
+    const context = items.filter((item) => item.usedInAnswer !== true && item.usedAsContext === true).length;
+    if (context) parts.push(labels.context(context));
   }
   return parts.join(labels.separator);
 }
@@ -284,7 +299,11 @@ function EvidenceSummaryBody({
             </span>
           </span>
           {item.superseded ? <StatusBadge variant="warning" icon={History} label={labels.superseded} /> : null}
-          {item.usedInAnswer ? <EvidenceAnswerUseBadge use={item.answerUse} labels={labels} /> : null}
+          {item.usedInAnswer ? (
+            <EvidenceAnswerUseBadge use={item.answerUse} labels={labels} />
+          ) : item.usedAsContext ? (
+            <StatusBadge variant="neutral" icon={Layers} label={labels.contextBadge} />
+          ) : null}
           {badges.length ? (
             <span className="flex flex-wrap gap-1" data-testid="evidence-route-badges">
               {badges.map((badge) => (
@@ -685,6 +704,11 @@ export interface EvidenceSourceSheetProps {
    * 渡す。無ければ抜粋の全文を出す。
    */
   children?: ReactNode;
+  /**
+   * 要約の上に出す案内（info の `Banner`。翻訳済み）。本文の根拠の行が指す箇所を確定できないときなどに、
+   * 開いた箇所が正確な位置ではないことを示す（#2710）。
+   */
+  notice?: { title: string; body?: string };
   returnFocusRef?: RefObject<HTMLElement | null>;
   "data-testid"?: string;
 }
@@ -705,6 +729,7 @@ export function EvidenceSourceSheet({
   labels = DEFAULT_EVIDENCE_LABELS,
   kind = "answer",
   children,
+  notice,
   returnFocusRef,
   "data-testid": testId = "evidence-source-sheet",
 }: EvidenceSourceSheetProps) {
@@ -733,6 +758,13 @@ export function EvidenceSourceSheet({
     >
       {item ? (
         <>
+          {notice ? (
+            <div className="shrink-0" data-testid="evidence-source-notice">
+              <Banner severity="info" title={notice.title}>
+                {notice.body}
+              </Banner>
+            </div>
+          ) : null}
           <section
             aria-label={labels.sourceSummary}
             className="shrink-0 rounded-lg border border-border bg-surface p-3"

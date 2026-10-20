@@ -86,6 +86,14 @@ export function citationModelUsed(chunk: Pick<RetrievedChunk, "metadata">): bool
   return typeof value === "boolean" ? value : null;
 }
 
+/**
+ * 回答がこの箇所を含むまとまり（親）だけを参照したか（`evidence_parent_used`。#2710）。箇所そのものを引用した
+ * ものは「回答で引用」なので false。
+ */
+export function citationParentUsed(chunk: Pick<RetrievedChunk, "metadata">): boolean {
+  return citationModelUsed(chunk) !== true && chunk.metadata.evidence_parent_used === true;
+}
+
 /** 回答での使われ方（#2040）。confirmed は質問の条件への該当確認済みの記載、reference は参考の記載。 */
 export type CitationAnswerUse = "confirmed" | "reference";
 
@@ -106,6 +114,10 @@ export function citationAnswerUse(chunk: Pick<RetrievedChunk, "metadata">): Cita
  */
 export function citationCountLabel(citations: readonly Pick<RetrievedChunk, "metadata">[]): string {
   return evidenceCountLabel(
-    citations.map((chunk) => ({ usedInAnswer: citationModelUsed(chunk), answerUse: citationAnswerUse(chunk) })),
+    citations.map((chunk) => ({
+      usedInAnswer: citationModelUsed(chunk),
+      answerUse: citationAnswerUse(chunk),
+      usedAsContext: citationParentUsed(chunk),
+    })),
   );
 }

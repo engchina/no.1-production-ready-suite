@@ -148,8 +148,13 @@ def audit_view(checked: Sequence[CheckedApplication], index_of: Callable[[Any], 
     return view
 
 
-def render_lines(checked: Sequence[CheckedApplication], citation: Callable[[dict], str], cite: Callable[[dict], None]) -> list[str]:
-    """公開する当てはめの本文の行。指した規則の出典行を、本文の出典行と同じ形で続ける。"""
+def render_lines(
+    checked: Sequence[CheckedApplication], citation: Callable[[dict], str], cite: Callable[[Sequence[Any]], None]
+) -> list[str]:
+    """公開する当てはめの本文の行。指した規則の出典行を、本文の出典行と同じ形で続ける。
+
+    同じ出典行になる規則はまとめて 1 行にし、``cite`` にはその行にまとめた規則（CheckedItem）をすべて渡す（#2710）。
+    """
     lines: list[str] = []
     for entry in checked:
         if not entry.published:
@@ -160,13 +165,13 @@ def render_lines(checked: Sequence[CheckedApplication], citation: Callable[[dict
         if premises:
             lines.append(PREMISES_LABEL + premises)
         lines.append(REASONING_LABEL + " ".join(application.reasoning.split()))
-        shown: list[str] = []
+        shown: dict[str, list[Any]] = {}
         for item in entry.entries:
-            line = citation(item.span)
-            if line not in shown:
-                shown.append(line)
-                lines.append(line)
-                cite(item.span)
+            if item.span:
+                shown.setdefault(citation(item.span), []).append(item)
+        for line, items in shown.items():
+            lines.append(line)
+            cite(items)
     return lines
 
 

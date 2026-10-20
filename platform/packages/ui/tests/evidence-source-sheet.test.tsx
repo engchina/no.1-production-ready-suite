@@ -35,7 +35,15 @@ const ITEMS: EvidenceListItem[] = [
   },
 ];
 
-function Harness({ preview = false, kind }: { preview?: boolean; kind?: "answer" | "search" }) {
+function Harness({
+  preview = false,
+  kind,
+  notice,
+}: {
+  preview?: boolean;
+  kind?: "answer" | "search";
+  notice?: { title: string; body?: string };
+}) {
   const source = useEvidenceSource<number>();
   return (
     <>
@@ -51,6 +59,7 @@ function Harness({ preview = false, kind }: { preview?: boolean; kind?: "answer"
           item={ITEMS[source.shown]}
           index={source.shown}
           kind={kind}
+          notice={notice}
         >
           {preview ? <div data-testid="preview">原文</div> : null}
         </EvidenceSourceSheet>
@@ -111,6 +120,21 @@ describe("EvidenceSourceSheet", () => {
     expect(summary.querySelector('[data-testid="citation-text"]')?.textContent).toBe("合成の抜粋 1");
     expect(summary.querySelector('[data-testid="evidence-excerpt-details"]')).toBeNull();
     expect(panel.querySelector('[data-testid="evidence-source-preview"]')).toBeNull();
+  });
+
+  it("案内を渡すと要約の上に info の Banner で出す（位置の決まらない根拠の行。#2710）", () => {
+    act(() => root.render(<Harness preview notice={{ title: "位置は確定していません", body: "候補 2 件" }} />));
+    click($('[data-testid="open-0"]')!);
+    const panel = sheet()!;
+    const notice = panel.querySelector('[data-testid="evidence-source-notice"]')!;
+    expect(notice.querySelector('[data-surface-tint="info"]')).not.toBeNull();
+    expect(notice.textContent).toContain("位置は確定していません");
+    expect(notice.textContent).toContain("候補 2 件");
+    const summary = panel.querySelector('[data-testid="evidence-source-summary"]')!;
+    // 案内は要約より前（読み上げの順も先）。
+    expect(notice.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    act(() => root.render(<Harness preview />));
+    expect(sheet()!.querySelector('[data-testid="evidence-source-notice"]')).toBeNull();
   });
 
   it("プレビューを渡すと抜粋と頁・章節のチップを既定で閉じた開閉に入れ、要約の下にプレビューの領域を置く（#2502）", () => {

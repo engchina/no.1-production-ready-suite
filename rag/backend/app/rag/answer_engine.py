@@ -3149,6 +3149,8 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
                     "catalog": CATALOG_ARTICLE_REASON
                     in {child.get("context_reason"), parent.get("context_reason")},
                     "is_model_used": used,
+                    # 子そのものは引用していないが、回答が親（まとまり）を参照した（#2710）。
+                    "parent_used": not used and child.get("parent_model_used") is True,
                     # 回答での使われ方（confirmed=確かめた説明 / reference=参考。#2040）。
                     "answer_use": _answer_use(child) if used else None,
                     "page": child.get("page_start"),
@@ -3191,6 +3193,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         if evidence.get("answer_use"):
             # 回答に使った箇所の使われ方（画面の件数・バッジと MCP の answer_use。#2040）。
             metadata["evidence_answer_use"] = evidence["answer_use"]
+        if evidence.get("parent_used"):
+            # 回答が親（まとまり）だけを参照した子（#2710）。「回答で引用」とは分けて数える。
+            metadata[EVIDENCE_PARENT_USED_KEY] = True
         if evidence.get("catalog"):
             # 条の目録で選んだ条(#2261)。MCP は検索の根拠の上限に数えず、後ろに足す。
             metadata["evidence_role"] = CATALOG_ARTICLE_ROLE
@@ -3495,8 +3500,19 @@ def _section_expansion_diagnostics(trace: Any) -> dict[str, Any]:
 
 # 本文の出典行（「根拠：」）の順番（1 始まり）を、出典行が指す根拠の chunk の metadata に
 # 入れる key（#1330）。画面は n 番目の出典行を、この list に n を持つ根拠に結ぶ
-# （ファイル名と頁で推測しない）。
+# （ファイル名と頁で推測しない）。番号を付けるのは、出典行の主張を支える子と確定した
+# chunk だけ（#2710）。
 ANSWER_CITATION_LINES_KEY = "answer_citation_lines"
+# 出典行の主張を支える子が決まらなかったときの、候補の chunk の出典行の番号（#2710）。
+# 画面はどれか 1 つを正しい位置として強調せず、「位置未確定」として候補を示す。
+ANSWER_CITATION_CANDIDATE_LINES_KEY = "answer_citation_candidate_lines"
+# 出典行の番号をどう決めたか（#2710）。``child`` は主張を支える子と確定した番号。この印の無い番号は
+# 以前の回答の記録（同じ親・頁の子から並びで選んだ番号）で、画面は位置を確定したものとして扱わない。
+ANSWER_CITATION_PROVENANCE_KEY = "answer_citation_provenance"
+ANSWER_CITATION_PROVENANCE_CHILD = "child"
+# 回答が親（まとまり）だけを参照した子の印（#2710）。
+# 「回答で引用」（evidence_model_used）とは分ける。
+EVIDENCE_PARENT_USED_KEY = "evidence_parent_used"
 
 
 def _with_citation_lines(
@@ -3504,20 +3520,21 @@ def _with_citation_lines(
 ) -> list[RetrievedChunk]:
     """出典行ごとの根拠（rag_engine の ``citation_lines``）を、引用の chunk に結ぶ（#1330）。
 
-    出典行の根拠は親の範囲（``source_id``）で、引用は子の chunk。引用の位置が 1 つの子に
-    決まっていれば（``scope_source_ids``）その子、決まっていなければ親の子のうち回答に使った・
-    頁の合うものを選ぶ。
+    出典行の根拠は親の範囲（``source_id`` / ``source_ids``）で、引用は子の chunk。
+    出典行の主張を支える子が決まっていれば（``scope_source_ids``）その子に番号を付ける。
+    決まっていなければ、どの子も確定の位置にしない（引用一覧の並び・回答に使った印・頁の
+    一致で 1 つを選ばない。#2710）。候補（rag_engine の ``candidate_source_ids``。無ければ
+    その親の子のうち出典行の頁に重なるもの）に候補の番号を付ける。
     """
     if not isinstance(refs, list) or not refs or not citations:
         return citations
-    citation_ids = [chunk.chunk_id for chunk in citations]
     pages = {chunk.chunk_id: _chunk_page_range(chunk) for chunk in citations}
-    children_by_parent: dict[str, list[tuple[str, bool]]] = {}
+    children_by_parent: dict[str, list[str]] = {}
     for parent in evidence_items:
         if not isinstance(parent, Mapping):
             continue
         children = [
-            (str(child.get("chunk_id") or child.get("id") or ""), bool(child.get("is_model_used")))
+            str(child.get("chunk_id") or child.get("id") or "")
             for child in parent.get("children") or []
             if isinstance(child, Mapping)
         ]
@@ -3525,44 +3542,75 @@ def _with_citation_lines(
             if value := str(parent.get(key) or ""):
                 children_by_parent.setdefault(value, children)
     lines: dict[str, list[int]] = {}
+    candidate_lines: dict[str, list[int]] = {}
     for ordinal, ref in enumerate(refs, 1):
         if not isinstance(ref, Mapping):
             continue
-        scoped = [str(item) for item in ref.get("scope_source_ids") or () if str(item) in pages]
-        if scoped:
-            candidates = scoped
-        else:
-            children = [
-                (chunk_id, used)
-                for chunk_id, used in children_by_parent.get(str(ref.get("source_id") or ""), [])
-                if chunk_id in pages
-            ]
-            page = _int(ref.get("page"))
-            candidates = [
-                chunk_id
-                for chunk_id, _used in sorted(
-                    children,
-                    key=lambda item: (
-                        not item[1],
-                        not (page and pages[item[0]][0] <= page <= pages[item[0]][1]),
-                        citation_ids.index(item[0]),
-                    ),
-                )
-            ]
-        if candidates:
-            lines.setdefault(candidates[0], []).append(ordinal)
-    if not lines:
+        exact = _known_ids(ref.get("scope_source_ids"), pages)
+        for chunk_id in exact:
+            lines.setdefault(chunk_id, []).append(ordinal)
+        candidates = [
+            chunk_id
+            for chunk_id in _known_ids(ref.get("candidate_source_ids"), pages)
+            if chunk_id not in exact
+        ]
+        if not exact and not candidates:
+            candidates = _page_candidates(ref, children_by_parent, pages)
+        for chunk_id in candidates:
+            candidate_lines.setdefault(chunk_id, []).append(ordinal)
+    if not lines and not candidate_lines:
         return citations
-    return [
-        chunk.model_copy(
-            update={
-                "metadata": {**chunk.metadata, ANSWER_CITATION_LINES_KEY: lines[chunk.chunk_id]}
-            }
+    result: list[RetrievedChunk] = []
+    for chunk in citations:
+        update: dict[str, Any] = {}
+        if chunk.chunk_id in lines:
+            update[ANSWER_CITATION_LINES_KEY] = lines[chunk.chunk_id]
+            update[ANSWER_CITATION_PROVENANCE_KEY] = ANSWER_CITATION_PROVENANCE_CHILD
+        if chunk.chunk_id in candidate_lines:
+            update[ANSWER_CITATION_CANDIDATE_LINES_KEY] = candidate_lines[chunk.chunk_id]
+        result.append(
+            chunk.model_copy(update={"metadata": {**chunk.metadata, **update}}) if update else chunk
         )
-        if chunk.chunk_id in lines
-        else chunk
-        for chunk in citations
+    return result
+
+
+def _known_ids(values: Any, pages: Mapping[str, tuple[int, int]]) -> list[str]:
+    """引用にある chunk の ID だけを、重ねずに順に。"""
+    if not isinstance(values, list | tuple):
+        return []
+    return list(dict.fromkeys(str(item) for item in values if str(item) in pages))
+
+
+def _page_candidates(
+    ref: Mapping[str, Any],
+    children_by_parent: Mapping[str, list[str]],
+    pages: Mapping[str, tuple[int, int]],
+) -> list[str]:
+    """子の決まらない出典行の候補。
+
+    出典行の親の子のうち、出典行の頁に重なるもの（無ければ親の子すべて）。
+    """
+    sources = ref.get("source_ids")
+    parents = [str(item) for item in sources if item] if isinstance(sources, list) else []
+    parents = parents or [str(ref.get("source_id") or "")]
+    children = list(
+        dict.fromkeys(
+            chunk_id
+            for parent in parents
+            for chunk_id in children_by_parent.get(parent, [])
+            if chunk_id in pages
+        )
+    )
+    start = _int(ref.get("page"))
+    if not start:
+        return children
+    end = max(start, _int(ref.get("page_end"), start))
+    on_page = [
+        chunk_id
+        for chunk_id in children
+        if pages[chunk_id][0] <= end and start <= pages[chunk_id][1]
     ]
+    return on_page or children
 
 
 def _chunk_page_range(chunk: RetrievedChunk) -> tuple[int, int]:

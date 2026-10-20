@@ -194,21 +194,90 @@ function matchSheetCitation(
 }
 
 /**
- * 本文の n 番目（1 始まり）の根拠の行に当たる引用の位置（#1330）。回答エンジンが引用の metadata の
- * `answer_citation_lines` に出典行の番号を付けていれば、その番号で結ぶ（ファイル名と頁で推測しない）。
- * 番号の無い回答（古い記録・別の回答方式）は、ファイル名と頁で選ぶ（`matchCitation`）。
+ * 本文の根拠の行が開く引用の位置の決まり方（#2710）。`exact` は行の主張を支える箇所と確定した引用。
+ * `unresolved` は確定できない引用で、`candidates` は候補の引用の位置（引用の並び順）。`reason` は
+ * `candidates`（回答エンジンが候補として残した）か `legacy`（行と箇所の対応を持たない・以前の回答の記録で、
+ * 同じ文書・頁の箇所が複数ある）。
  */
+export type CitationPosition =
+  | { kind: "exact" }
+  | { kind: "unresolved"; reason: "candidates" | "legacy"; candidates: number[] };
+
+export interface CitationTarget {
+  /** 開く引用の位置（`citations` の index）。 */
+  index: number;
+  position: CitationPosition;
+}
+
+// 回答エンジンが出典行の主張を支える子と確定した番号の印（backend の ANSWER_CITATION_PROVENANCE_CHILD。#2710）。
+const PROVENANCE_CHILD = "child";
+
+function lineNumbers(value: unknown): number[] {
+  return Array.isArray(value) ? value.filter((item): item is number => typeof item === "number") : [];
+}
+
+/**
+ * 同じ文書・同じ頁に重なる引用の位置（自分を含む。表計算の行の引用は行で決まるので自分だけ）。以前の回答の
+ * 番号・文書名と頁の対応で選んだ引用が、同じ頁の別の箇所と取り違えうるかを見る（#2710）。
+ */
+function samePlaceCitations(index: number, citations: readonly RetrievedChunk[]): number[] {
+  const target = citations[index];
+  if (typeof target.metadata.sheet_name === "string" && target.metadata.sheet_name) return [index];
+  const name = normalizedFileName(target.file_name ?? "");
+  const [start, end] = chunkPages(target);
+  return citations.flatMap((chunk, position) => {
+    if (normalizedFileName(chunk.file_name ?? "") !== name) return [];
+    if (typeof chunk.metadata.sheet_name === "string" && chunk.metadata.sheet_name) return [];
+    const [chunkStart, chunkEnd] = chunkPages(chunk);
+    return chunkStart <= end && start <= chunkEnd ? [position] : [];
+  });
+}
+
+function fromMatch(index: number, citations: readonly RetrievedChunk[]): CitationTarget {
+  const candidates = samePlaceCitations(index, citations);
+  return candidates.length > 1
+    ? { index, position: { kind: "unresolved", reason: "legacy", candidates } }
+    : { index, position: { kind: "exact" } };
+}
+
+/**
+ * 本文の n 番目（1 始まり）の根拠の行が開く引用（#1330・#2710）。
+ *
+ * 回答エンジンが行の主張を支える箇所と確定した引用（`answer_citation_lines` と印 `answer_citation_provenance`）が
+ * あれば、それを正確な位置として開く。確定できなかった行は、候補（`answer_citation_candidate_lines`）の先頭を開き、
+ * 位置は未確定とする（別の箇所を正しい位置として強調しない）。印の無い番号（以前の回答の記録）と、番号の無い
+ * 回答のファイル名と頁による対応は、同じ文書・頁に別の箇所があれば未確定とする（保存した対応は書き換えない）。
+ * 当たる引用が無ければ null。
+ */
+export function resolveCitationLine(
+  ordinal: number | undefined,
+  ref: AnswerCitationRef | null,
+  citations: readonly RetrievedChunk[],
+): CitationTarget | null {
+  if (ordinal != null) {
+    const index = citations.findIndex((chunk) => lineNumbers(chunk.metadata.answer_citation_lines).includes(ordinal));
+    if (index >= 0) {
+      return citations[index].metadata.answer_citation_provenance === PROVENANCE_CHILD
+        ? { index, position: { kind: "exact" } }
+        : fromMatch(index, citations);
+    }
+    const candidates = citations.flatMap((chunk, position) =>
+      lineNumbers(chunk.metadata.answer_citation_candidate_lines).includes(ordinal) ? [position] : [],
+    );
+    if (candidates.length) {
+      return { index: candidates[0], position: { kind: "unresolved", reason: "candidates", candidates } };
+    }
+  }
+  if (!ref) return null;
+  const index = matchCitation(ref, citations);
+  return index < 0 ? null : fromMatch(index, citations);
+}
+
+/** {@link resolveCitationLine} の開く引用の位置だけ（当たる引用が無ければ -1）。 */
 export function matchCitationLine(
   ordinal: number | undefined,
   ref: AnswerCitationRef | null,
   citations: readonly RetrievedChunk[],
 ): number {
-  if (ordinal != null) {
-    const index = citations.findIndex((chunk) => {
-      const lines = chunk.metadata.answer_citation_lines;
-      return Array.isArray(lines) && lines.includes(ordinal);
-    });
-    if (index >= 0) return index;
-  }
-  return ref ? matchCitation(ref, citations) : -1;
+  return resolveCitationLine(ordinal, ref, citations)?.index ?? -1;
 }

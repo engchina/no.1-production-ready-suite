@@ -346,6 +346,8 @@ def answer_evidence_items(
             parent_item = _answer_record_evidence_item(parent.record, used_ids, usage_order, uses)
             child_items: list[dict[str, Any]] = []
             anchor_refs: list[dict[str, Any]] = []
+            # 回答が親（まとまり）の ID だけで参照した（引用を支える子が決まらなかった）か（#2710）。
+            parent_referenced = bool(used_ids & _answer_record_own_keys(parent.record))
             for child in parent.children:
                 child_item = _answer_record_evidence_item(child.record, used_ids, usage_order, uses)
                 child_item.update(
@@ -353,6 +355,9 @@ def answer_evidence_items(
                         "retrieval_role": child.role,
                         "context_reason": child.reason,
                         "retrieval_rank": child.retrieval_rank,
+                        # 子そのものは引用していないが、親を参照した（位置の決まらない参照の候補）。「回答で引用」とは
+                        # 分ける（親の参照で兄弟の子すべてを引用にしない。#2710）。
+                        "parent_model_used": parent_referenced and not child_item["is_model_used"],
                         "children": [],
                     }
                 )
@@ -463,13 +468,24 @@ def _record_rerank_metadata(record: AnswerRecord) -> dict[str, Any]:
     return metadata if isinstance(metadata, dict) else {}
 
 
+def _answer_record_own_keys(record: AnswerRecord) -> set[str]:
+    """record そのものの ID（子・親の ID は含めない。#2710）。"""
+    values = [record.id, record.chunk_id, record.chunk_uid]
+    return {_evidence_id_key(value) for value in values if _evidence_id_key(value)}
+
+
 def _answer_record_identity_keys(record: AnswerRecord, item_id: str) -> set[str]:
+    """回答に使った ID と照らす record の ID。
+
+    子の chunk には親の ID（``parent_chunk_uid``）を含めない。含めると、親の ID で参照した回答で同じ親の兄弟の
+    子がすべて「回答で引用」になり、主張を支える子を見分けられない（#2710）。親は子の ID を含める（子を引用
+    すれば、その親のまとまりも回答に使った）。
+    """
     values: list[str] = [
         record.id,
         record.chunk_id,
         record.chunk_uid,
         item_id,
-        record.parent_chunk_uid,
         record.citation,
         *record.child_chunk_ids,
     ]

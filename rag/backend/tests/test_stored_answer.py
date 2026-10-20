@@ -70,6 +70,20 @@ def test_stored_citation_metadata_takes_display_regions_like_the_screen() -> Non
     assert stored_citation_metadata({"display_regions": {"page": 1}}) == {}
 
 
+def test_stored_citation_metadata_keeps_how_the_answer_used_the_evidence() -> None:
+    """使われ方（#2040・#2721）・親だけの参照の印と、出典行の確定・候補の番号（#2710）を保存する。"""
+    metadata = {
+        "evidence_model_used": False,
+        "evidence_answer_use": "reference",
+        "evidence_parent_used": True,
+        "answer_citation_lines": [1],
+        "answer_citation_candidate_lines": [2],
+        "answer_citation_provenance": "child",
+    }
+
+    assert stored_citation_metadata(metadata) == metadata
+
+
 def test_stored_citation_metadata_drops_null_and_unknown_keys() -> None:
     # 分割の版と統合の値は監査・調査のために残す（#1376）。
     assert stored_citation_metadata(

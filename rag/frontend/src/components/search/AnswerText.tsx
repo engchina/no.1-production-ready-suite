@@ -11,10 +11,11 @@ import type { ReactNode } from "react";
 
 import type { RetrievedChunk } from "@/lib/api";
 import {
-  matchCitationLine,
   parseAnswerText,
   parseCitationLine,
+  resolveCitationLine,
   type AnswerTextEntry,
+  type CitationTarget,
 } from "@/lib/answer-text";
 import type { UnreadSectionLink } from "@/lib/answer-diagnostics";
 import { t } from "@/lib/i18n";
@@ -32,7 +33,8 @@ const GAPS_SECTION_TITLE = "資料から確認できなかった事項";
  * 回答本文（#651）。回答エンジンの書式（節の見出し・説明・「根拠：」の行）に合う本文は、節・説明・根拠に分けて出す。
  * 生成中と、書式に合わない本文（根拠不足の案内など）はそのままの文字列で出す。
  * 根拠の行は、当たる引用（`citations`）があれば押せるようにし、その引用の原文のプレビューを開く（#657）。
- * 当たる引用は、回答エンジンが付けた出典行の番号で決める（無ければファイル名と頁。#1330）。
+ * 当たる引用は、回答エンジンが付けた出典行の番号で決める（無ければファイル名と頁。#1330）。位置が確定できない行は
+ * 候補の引用を開き、位置は未確定と示して原文を強調しない（#2710）。
  */
 export function AnswerText({
   text,
@@ -56,7 +58,7 @@ export function AnswerText({
    */
   unreadSections?: readonly UnreadSectionLink[];
 }) {
-  const source = useEvidenceSource<number>();
+  const source = useEvidenceSource<CitationTarget>();
   const blocks = streaming ? null : parseAnswerText(text);
   if (!blocks) {
     return (
@@ -86,8 +88,9 @@ export function AnswerText({
       {/* 根拠の行から、根拠の一覧の「根拠を表示」と同じ右のサイドパネルを開く（#2360）。 */}
       {source.mounted && source.shown != null ? (
         <CitationSourceSheet
-          chunk={citations[source.shown] ?? null}
-          index={source.shown}
+          chunk={citations[source.shown.index] ?? null}
+          index={source.shown.index}
+          position={source.shown.position}
           open={source.selected !== null}
           onClose={source.close}
         />
@@ -97,14 +100,14 @@ export function AnswerText({
 
   function toCitation(citation: string, ordinal: number | undefined): AnswerCitationRef {
     const ref = parseCitationLine(citation);
-    const index = matchCitationLine(ordinal, ref, citations);
-    return index < 0
+    const target = resolveCitationLine(ordinal, ref, citations);
+    return target == null
       ? { key: citation, label: citation }
       : {
           key: citation,
           label: citation,
           ariaLabel: t("search.answerText.openCitation", { citation }),
-          onOpen: () => source.open(index),
+          onOpen: () => source.open(target),
         };
   }
 

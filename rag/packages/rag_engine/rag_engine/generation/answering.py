@@ -2412,10 +2412,16 @@ def synthesize_grounded_answer(
         guide_steps=guide_coverage,
     )
     # 回答に使った箇所ごとの使われ方（確かめた説明か参考か。#2040）。画面の件数・バッジと MCP の evidence が使う。
+    # 箇所は引用を支える子の chunk（#2710）。子が決まらない説明だけを親（まとまり）の参照にし、親の ID で兄弟の子
+    # すべてを「回答で引用」にしない。
+    shown_ids: list[tuple[grounded.CheckedItem, list[str]]] = []
     shown_uses: dict[str, str] = {}
     for entry in shown:
-        source_id = entry.span["source_id"]
-        shown_uses[source_id] = merge_answer_use(shown_uses.get(source_id), grounded.answer_use(entry)) or ""
+        exact, _candidates = grounded.citation_children(entry.span, entry.item.quote)
+        ids = exact or [entry.span["source_id"]]
+        shown_ids.append((entry, ids))
+        for used_id in ids:
+            shown_uses[used_id] = merge_answer_use(shown_uses.get(used_id), grounded.answer_use(entry)) or ""
     response = _normalize_answer_response(
         AnswerResponse(
             envelope=envelope,
@@ -2426,15 +2432,16 @@ def synthesize_grounded_answer(
                 _used_image_entries(
                     [
                         {
-                            "image_id": e.span["source_id"],
+                            "image_id": used_id,
                             "source": e.span.get("source", ""),
                             "page": e.span.get("page", ""),
                             "look_at": "引用",
                             "visible_evidence": e.item.quote[:200],
                             # 同じ箇所を使った item のうち 1 つでも確かめた説明なら confirmed（#2040）。
-                            "answer_use": shown_uses.get(e.span["source_id"]) or "",
+                            "answer_use": shown_uses.get(used_id) or "",
                         }
-                        for e in shown
+                        for e, ids in shown_ids
+                        for used_id in ids
                     ]
                 )
             ),

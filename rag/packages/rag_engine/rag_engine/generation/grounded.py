@@ -2420,14 +2420,89 @@ def render(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[st
     return render_with_citations(summary, checked, unanswered, confirmations)[0]
 
 
-def citation_line_ref(span: dict) -> dict[str, Any]:
-    """本文の出典行が指す根拠（画面が出典行を根拠の chunk に結ぶため。#1330）。"""
+def _quote_ranges(quote: str, span: dict) -> list[tuple[int, int]]:
+    """引用の各片（``_original_quote`` が「 … 」でつないだ片）の、親の本文の中の範囲（#2710）。
+
+    片が根拠の本文に見つからないか、2 か所以上に当たれば位置は決まらないので空を返す。
+    """
+    text = str(span.get("text") or "")
+    base = span.get("start")
+    if not isinstance(base, int) or not text:
+        return []
+    canonical: tuple[str, list[int]] | None = None
+    ranges: list[tuple[int, int]] = []
+    for piece in (part for part in str(quote or "").split(" … ") if part.strip()):
+        at = text.find(piece)
+        if at >= 0:
+            if text.find(piece, at + 1) >= 0:
+                return []
+            ranges.append((base + at, base + at + len(piece)))
+            continue
+        canonical = canonical or _canonical(text)
+        canonical_piece, _ = _canonical(piece)
+        at = canonical[0].find(canonical_piece) if canonical_piece else -1
+        if at < 0 or canonical[0].find(canonical_piece, at + 1) >= 0:
+            return []
+        positions = canonical[1]
+        ranges.append((base + positions[at], base + positions[at + len(canonical_piece) - 1] + 1))
+    return ranges
+
+
+def citation_children(span: dict | None, quote: str = "") -> tuple[list[str], list[str]]:
+    """出典の根拠（span）のうち、引用を支える子の chunk の ID と、決まらないときの候補の子の ID（#2710）。
+
+    根拠は親の範囲（``source_id``）で、親の中の子は ``child_ranges``（子の ID と親の本文の中の範囲）に持つ。
+    引用の位置に重なる子を、引用を支える子にする（確定）。引用の位置が決まらず、根拠の範囲が 1 つの子に
+    収まらなければ、根拠の範囲に重なる子を候補に返し、どれかを確定の位置にしない。子の範囲を持たない根拠は、
+    所属の照合で決まった子（``scope_source_ids``）だけを確定にする。
+    """
+    if not span:
+        return [], []
+    scoped = [str(item) for item in span.get("scope_source_ids") or () if item]
+    ranges = [item for item in span.get("child_ranges") or () if isinstance(item, Mapping) and item.get("id")]
+    if not ranges:
+        return scoped, []
+    if located := _quote_ranges(quote, span):
+        hits = [str(item["id"]) for item in ranges if any(item["start"] < end and start < item["end"] for start, end in located)]
+        # 引用が子の外（親だけにある前置きなど）にあれば、親の範囲の参照のまま（候補も無い）。
+        return (list(dict.fromkeys(hits)), []) if hits else (scoped, [])
+    start, end = span.get("start"), span.get("end")
+    if (
+        len(ranges) == 1
+        and ranges[0]["start"] <= (start if isinstance(start, int) else -1)
+        and (end if isinstance(end, int) else 0) <= ranges[0]["end"]
+    ):
+        return [str(ranges[0]["id"])], []
+    if scoped:
+        return scoped, []
+    return [], list(dict.fromkeys(str(item["id"]) for item in ranges))
+
+
+def citation_line_ref(entries: Sequence[CheckedItem]) -> dict[str, Any]:
+    """本文の出典行が指す根拠（画面が出典行を根拠の chunk に結ぶため。#1330）。
+
+    同じ出典・頁の説明が続くと出典行は 1 行にまとめるので、まとめたすべての説明の根拠を持つ（#2710）。
+    ``scope_source_ids`` は引用を支える子の chunk（確定）、``candidate_source_ids`` は位置が決まらなかった
+    説明の候補の子（確定の子を除く）。``evidence_id`` / ``source_id`` / ``page`` は最後の説明の根拠。
+    """
+    spans = [entry.span for entry in entries if entry.span]
+    last = spans[-1] if spans else {}
+    exact: list[str] = []
+    candidates: list[str] = []
+    for entry in entries:
+        ids, options = citation_children(entry.span, entry.item.quote)
+        exact.extend(ids)
+        candidates.extend(options)
+    exact = list(dict.fromkeys(exact))
     return {
-        "evidence_id": span.get("evidence_id", ""),
-        "source_id": span.get("source_id", ""),
-        "scope_source_ids": list(span.get("scope_source_ids") or ()),
-        "page": span.get("page"),
-        "page_end": span.get("page_end"),
+        "evidence_id": last.get("evidence_id", ""),
+        "source_id": last.get("source_id", ""),
+        "evidence_ids": list(dict.fromkeys(str(span.get("evidence_id") or "") for span in spans if span.get("evidence_id"))),
+        "source_ids": list(dict.fromkeys(str(span.get("source_id") or "") for span in spans if span.get("source_id"))),
+        "scope_source_ids": exact,
+        "candidate_source_ids": [item for item in dict.fromkeys(candidates) if item not in exact],
+        "page": last.get("page"),
+        "page_end": last.get("page_end"),
     }
 
 
@@ -2454,10 +2529,12 @@ def render_with_citations(
     出典行の n 番目（1 始まり）が、返す list の n 番目の根拠を指す。画面はこの順で出典行を根拠の chunk に
     結び、ファイル名と頁で推測しない。
     """
-    citation_spans: list[dict] = []
+    # 出典行ごとの、その行にまとめた説明（同じ出典・頁が続く説明。#2710）。
+    citation_entries: list[list[CheckedItem]] = []
 
     def lines(entries: Sequence[CheckedItem], numbered: bool) -> list[str]:
         out: list[str] = []
+        pending: list[CheckedItem] = []
         for number, entry in enumerate(entries, 1):
             item = entry.item
             # 原文の改行（OCR・表題）を残すと1つの引用が複数行に割れる。引用は1行で示す。
@@ -2467,17 +2544,20 @@ def render_with_citations(
                 text = labels.condition(_condition_phrase(item.condition)) + text
             out.append((f"{number}. " if numbered else labels.item_bullet) + text)
             following = entries[number] if number < len(entries) else None
-            # 同じ出典・頁が続く間は出典行を繰り返さない。
+            if entry.span:
+                pending.append(entry)
+            # 同じ出典・頁が続く間は出典行を繰り返さない。行にまとめた説明の根拠はすべて残す（#2710）。
             if entry.span and (following is None or following.span is None or _citation(following.span) != _citation(entry.span)):
                 out.append(_citation(entry.span))
-                citation_spans.append(entry.span)
+                citation_entries.append(pending)
+                pending = []
         return out
 
     def body_sections(
         checked: Sequence[CheckedItem], unanswered: Sequence[str], applications: Sequence[CheckedApplication]
     ) -> list[tuple[str, list[str]]]:
         """説明・当てはめ・手順・参考情報・不足の節（小問ごとと、小問に付かない分で同じ組み立て）。"""
-        return _body_sections(checked, unanswered, applications, lines, citation_spans.append)
+        return _body_sections(checked, unanswered, applications, lines, lambda entries: citation_entries.append(list(entries)))
 
     blocks: list[str] = []
     if groups := _subquestion_groups(subquestions, checked, applications):
@@ -2508,7 +2588,7 @@ def render_with_citations(
         sections.append((answer_labels().confirmations_section, [f"{bullet}{line}" for line in confirmations]))
     body = "\n\n".join([*blocks, *(title + "\n\n" + "\n".join(content) for title, content in sections)])
     text = "\n\n".join(part for part in (summary.strip(), body) if part)
-    return text, [citation_line_ref(span) for span in citation_spans]
+    return text, [citation_line_ref(entries) for entries in citation_entries]
 
 
 def _body_sections(
@@ -2516,7 +2596,7 @@ def _body_sections(
     unanswered: Sequence[str],
     applications: Sequence[CheckedApplication],
     lines: Callable[[Sequence[CheckedItem], bool], list[str]],
-    add_citation: Callable[[dict], None],
+    add_citation: Callable[[Sequence[CheckedItem]], None],
 ) -> list[tuple[str, list[str]]]:
     """``render_with_citations`` の説明・当てはめ・手順・参考情報・不足の節。lines は出典行を数えながら行を作る。"""
     # 適用が未確認（unverified）の説明は、結論の節ではなく「参考情報」の節に置く。行末の注記は
