@@ -131,6 +131,8 @@ class RuntimeKnowledgeContext:
     guide_steps: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
     # 業務ガイドの手順のうち、回答の充足で必須に数えない手順の id(条件が決まらない分岐の行き先とその後続。#2491)。
     guide_optional_steps: tuple[str, ...] = ()
+    # 業務ガイドの手順ごとの検索の手がかり(手順 id, 手がかりの列)。共有の根拠の item を手順に対応付ける語(#2649)。
+    guide_step_terms: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def with_scope(self, context: str, search_terms: Sequence[str] = ()) -> RuntimeKnowledgeContext:
         """利用者が選んだ条件を足す。検索に足す語は補助の検索文に加える。"""

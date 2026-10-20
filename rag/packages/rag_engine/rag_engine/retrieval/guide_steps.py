@@ -86,6 +86,11 @@ class GuidePlan:
         """回答の充足で必須に数えない手順の id（#2491）。"""
         return tuple(step.step_id for step in self.steps if not step.required)
 
+    @property
+    def step_terms(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """手順ごとの検索の手がかり（手順 id, 手がかりの列）。回答の item を手順に対応付ける語に使う（#2649）。"""
+        return tuple((step.step_id, step.retrieval_hints[:MAX_STEP_HINTS]) for step in self.steps if step.retrieval_hints)
+
     @classmethod
     def from_payload(cls, guide_id: str, revision: int, steps: Iterable[Mapping[str, Any]]) -> GuidePlan | None:
         """呼び出し側の手順の一覧（id・title・required・retrieval_hints・references）から作る。手順が無ければ None。"""
