@@ -24,7 +24,7 @@ async function mockAttachments(page: Page, { enabled }: { enabled: boolean }) {
     }
     if (method === "POST") {
       counter += 1;
-      // 読み取り中の表示を確かめられるよう、少し待ってから返す。
+      // アップロード中の表示を確かめられるよう、少し待ってから返す。
       await new Promise((resolve) => setTimeout(resolve, 300));
       await route.fulfill({
         json: {
@@ -35,9 +35,11 @@ async function mockAttachments(page: Page, { enabled }: { enabled: boolean }) {
             kind: "csv",
             size_bytes: 24,
             conversation_id: null,
+            // アップロードは原本の保存だけで、解析は送信した後（#2652）。
             section_count: 0,
-            sheets: [{ sheet: "売上表", columns: ["コード"], row_count: 2 }],
+            sheets: [],
             warnings: ["macros_not_executed"],
+            parse_status: "pending",
             created_at: "2026-10-19T00:00:00Z",
             expires_at: "2026-10-20T00:00:00Z",
             uploaded_by_me: true,
@@ -64,6 +66,7 @@ test.describe("チャットの添付", { tag: "@responsive" }, () => {
     await page.getByTestId("chat-attachments-input").setInputFiles(csv);
     const chip = page.locator("[data-chat-attachment]").first();
     await expect(chip).toHaveAttribute("data-status", "uploading");
+    await expect(chip).toContainText("アップロード中");
     await expect(page.getByTestId("chat-send")).toBeDisabled();
     await expect(chip).toHaveAttribute("data-status", "ready");
     await expect(chip).toContainText("マクロは実行していません。");

@@ -1,6 +1,7 @@
 """会話の添付の API（3 製品で同じ形。製品は `/api` の下に置く。#2517）。
 
-- `POST /chat-attachments`（multipart `file`・任意 `conversation_id`）→ 添付の要約。
+- `POST /chat-attachments`（multipart `file`・任意 `conversation_id`）→ 添付の要約（原本を保存し、
+  解析はしない。会話には送信のときに結び付ける。#2652）。
 - `GET /chat-attachments?conversation_id=…` → 会話の添付（無ければ自分が添付して送る前のもの）
   と上限。
 - `DELETE /chat-attachments/{attachment_id}` → 外す。
@@ -52,7 +53,7 @@ def build_chat_attachment_router(
         conversation_id: Annotated[str | None, Form(max_length=128)] = None,
         principal: Any = principal_dependency,
     ) -> ApiResponse[ChatAttachmentData]:
-        """ファイルを添付する（解析して保存する。会話があれば結び付ける）。"""
+        """ファイルを添付する（検査して原本を保存する。解析と会話への結び付けは送信の後）。"""
         service = get_service()
         owner: str | None = None
         if conversation_id:

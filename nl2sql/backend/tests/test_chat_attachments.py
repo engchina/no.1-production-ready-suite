@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -79,6 +81,42 @@ def _bound(service: ChatAttachmentService) -> AttachmentContext:
         _Principal("user-1", True), [attachment_id], conversation_id="c1", owner_user_uuid="user-1"
     )
     return attachment_context("c1", "金額")
+
+
+def test_attachment_context_parses_sent_files_once_and_skips_unreadable(
+    service: ChatAttachmentService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """アップロードでは解析せず、SQL の材料にするときに 1 回だけ解析する（#2652）。"""
+    from pr_system_settings.chat_attachments import parsing
+
+    parsed: list[str] = []
+    original = parsing._parse_csv
+
+    def counted(*args: Any) -> Any:
+        parsed.append(args[0])
+        return original(*args)
+
+    monkeypatch.setattr(parsing, "_parse_csv", counted)
+    principal = _Principal("user-1", True)
+    attachment_id = _upload(service)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("word/document.xml", "<w:document>")
+    broken = asyncio.run(service.upload(principal, file_name="b.docx", data=buffer.getvalue()))
+    assert parsed == []
+    service.attach_to_conversation(
+        principal,
+        [attachment_id, broken.attachment_id],
+        conversation_id="c1",
+        owner_user_uuid="user-1",
+    )
+
+    first = attachment_context("c1", "金額")
+    second = attachment_context("c1", "受付日")
+
+    assert [table.file_name for table in first.tables] == ["a.csv"]
+    assert [table.file_name for table in second.tables] == ["a.csv"]
+    assert first.documents == () and parsed == ["a.csv"]
 
 
 # ---- 添付の表 ----

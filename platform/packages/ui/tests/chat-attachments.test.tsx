@@ -71,7 +71,7 @@ function Harness({
           drop: "ここにドロップして添付",
           list: "添付ファイル",
           remove: (name) => `${name} を外す`,
-          uploading: "読み取り中",
+          uploading: "アップロード中",
         },
       }}
     />
@@ -112,7 +112,7 @@ afterEach(() => {
 });
 
 describe("ChatComposer の添付", () => {
-  it("選んだファイルを読み取り中にし、終わるまで送れない。終われば readyIds に入る", async () => {
+  it("選んだファイルをアップロード中にし、終わるまで送れない。終われば readyIds に入る", async () => {
     const pending = deferred<ChatAttachmentUploadResult>();
     const upload = vi.fn<Upload>(() => pending.promise);
     let ids: string[] = [];
@@ -125,7 +125,7 @@ describe("ChatComposer の添付", () => {
     choose([file("a.pdf")]);
     expect(upload).toHaveBeenCalledTimes(1);
     expect(chips()[0]?.dataset.status).toBe("uploading");
-    expect(chips()[0]?.textContent).toContain("読み取り中");
+    expect(chips()[0]?.textContent).toContain("アップロード中");
     expect(send().disabled || send().getAttribute("aria-disabled") === "true").toBe(true);
     await act(async () => {
       pending.resolve({ attachmentId: "att-1", fileName: "a.pdf", sizeBytes: 10, kind: "pdf" });
@@ -153,7 +153,7 @@ describe("ChatComposer の添付", () => {
     expect(upload).toHaveBeenCalledTimes(2);
   });
 
-  it("外すと API でも消し、読み取り中に外したものは終わった後に消す", async () => {
+  it("外すと API でも消し、アップロード中に外したものは終わった後に消す", async () => {
     const pending = deferred<ChatAttachmentUploadResult>();
     const upload = vi.fn<Upload>(() => pending.promise);
     const remove = vi.fn(async () => undefined);

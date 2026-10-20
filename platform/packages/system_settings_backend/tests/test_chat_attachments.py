@@ -1,4 +1,7 @@
-"""会話の添付（#2517）: 種類の判定・解析・上限・期限・見え方・ツール・API・Oracle の SQL。"""
+"""会話の添付（#2517）: 種類の判定・解析・上限・期限・見え方・ツール・API・Oracle の SQL。
+
+アップロードと送信した後の解析の分け方（#2652）は `test_chat_attachment_lifecycle.py`。
+"""
 
 from __future__ import annotations
 
@@ -39,9 +42,9 @@ from pr_system_settings.chat_attachments.limits import (
 from pr_system_settings.chat_attachments.models import EXCEL_PARSER_VERSION
 from pr_system_settings.chat_attachments.parsing import (
     WARNING_MACROS_NOT_EXECUTED,
+    WARNING_NO_CONTENT,
     WARNING_PDF_PAGE_WITHOUT_TEXT,
     detect_format,
-    parse_attachment,
     parse_document,
 )
 
@@ -82,6 +85,7 @@ def _service(
         product=product,
         settings=lambda: settings or SimpleNamespace(),
         image_reader=lambda: reader if image_text is not None else None,
+        image_model_id=lambda: "vision-model" if image_text is not None else None,
         clock=clock or _Clock(),
     )
 
@@ -90,6 +94,23 @@ def _upload(
     service: ChatAttachmentService, principal: _Principal, name: str, data: bytes, **kwargs: Any
 ) -> Any:
     return asyncio.run(service.upload(principal, file_name=name, data=data, **kwargs))
+
+
+def _sent(
+    service: ChatAttachmentService,
+    principal: _Principal,
+    name: str,
+    data: bytes,
+    *,
+    conversation_id: str = "c1",
+    owner: str = "user-a",
+) -> Any:
+    """添付して会話に送信する（会話に結び付くのは送信だけ。#2652）。"""
+    item = _upload(service, principal, name, data)
+    service.attach_to_conversation(
+        principal, [item.attachment_id], conversation_id=conversation_id, owner_user_uuid=owner
+    )
+    return item
 
 
 # ---- 種類の判定 ----
@@ -135,10 +156,13 @@ def test_parse_pdf_one_section_per_page_and_warns_empty_page() -> None:
     assert WARNING_PDF_PAGE_WITHOUT_TEXT in parsed.warnings
 
 
-def test_parse_pdf_without_text_is_unreadable() -> None:
-    with pytest.raises(ChatAttachmentError) as caught:
-        parse_document("a.pdf", pdf_bytes([""]), "pdf")
-    assert caught.value.status_code == 422
+def test_parse_pdf_without_text_is_empty_not_failure() -> None:
+    # 画像だけの PDF は失敗にせず、文字の無い頁を残した空の結果にする（#2652）。
+    parsed = parse_document("a.pdf", pdf_bytes(["", ""]), "pdf")
+    assert parsed.sections == [] and parsed.is_empty()
+    assert parsed.pages_without_text == [1, 2]
+    assert {WARNING_PDF_PAGE_WITHOUT_TEXT, WARNING_NO_CONTENT} <= set(parsed.warnings)
+    assert parsed.extractor is not None and parsed.extractor.startswith("pdf@")
 
 
 def test_parse_docx_splits_by_heading_and_flattens_tables() -> None:
@@ -228,18 +252,6 @@ def test_xml_entities_are_not_expanded() -> None:
         parse_document("a.docx", buffer.getvalue(), "word")
 
 
-def test_image_uses_reader_and_requires_vision_model() -> None:
-    async def reader(data: bytes, media_type: str) -> str:
-        return "画面に表が表示されている"
-
-    spec, parsed = asyncio.run(parse_attachment("a.png", PNG_BYTES, image_reader=reader))
-    assert spec.kind == "image"
-    assert parsed.sections[0].text == "画面に表が表示されている"
-    with pytest.raises(ChatAttachmentError) as caught:
-        asyncio.run(parse_attachment("a.png", PNG_BYTES, image_reader=None))
-    assert caught.value.code == "CHAT_ATTACHMENT_IMAGE_MODEL_MISSING"
-
-
 # ---- 上限・期限・見え方 ----
 
 
@@ -324,6 +336,12 @@ def test_admin_upload_into_other_users_conversation_keeps_owner() -> None:
         ALICE.user_uuid,
         ADMIN.user_uuid,
     )
+    # アップロードでは会話に結び付けない（送信で結び付ける。#2652）。
+    assert record.conversation_id is None
+    assert service.list_items(ALICE, conversation_id="c1").items == []
+    service.attach_to_conversation(
+        ADMIN, [item.attachment_id], conversation_id="c1", owner_user_uuid=ALICE.user_uuid
+    )
     listed = service.list_items(ALICE, conversation_id="c1").items
     assert [i.uploaded_by_me for i in listed] == [False]
     service.delete(ALICE, item.attachment_id)
@@ -365,14 +383,7 @@ def test_products_do_not_share_attachments() -> None:
 
 def test_delete_conversation_removes_its_attachments() -> None:
     service = _service()
-    item = _upload(
-        service,
-        ALICE,
-        "a.txt",
-        b"hello",
-        conversation_id="c1",
-        conversation_owner_user_uuid="user-a",
-    )
+    item = _sent(service, ALICE, "a.txt", b"hello")
     assert service.delete_conversation("c1") == 1
     assert service.store.get(item.attachment_id) is None
 
@@ -382,22 +393,8 @@ def test_delete_conversation_removes_its_attachments() -> None:
 
 def _toolset() -> Any:
     service = _service()
-    doc = _upload(
-        service,
-        ALICE,
-        "a.docx",
-        docx_bytes(),
-        conversation_id="c1",
-        conversation_owner_user_uuid="user-a",
-    )
-    sheet = _upload(
-        service,
-        ALICE,
-        "b.xlsx",
-        xlsx_bytes(),
-        conversation_id="c1",
-        conversation_owner_user_uuid="user-a",
-    )
+    doc = _sent(service, ALICE, "a.docx", docx_bytes())
+    sheet = _sent(service, ALICE, "b.xlsx", xlsx_bytes())
     return service.toolset("c1"), doc.attachment_id, sheet.attachment_id
 
 
@@ -414,6 +411,7 @@ def test_list_tool_returns_outline_without_bodies() -> None:
     result = toolset.call("chat_attachment_list", {})
     by_id = {item["attachment_id"]: item for item in result["attachments"]}
     assert by_id[doc_id]["kind"] == "word"
+    assert by_id[doc_id]["parse_status"] == "ready"
     assert by_id[doc_id]["sections"][1] == {
         "section_id": "s2",
         "title": "第一の見出し",
@@ -592,15 +590,20 @@ def test_api_upload_list_delete() -> None:
     )
     assert response.status_code == 200, response.text
     item = response.json()["data"]
-    assert (item["kind"], item["conversation_id"], item["sheets"][0]["row_count"]) == (
+    # アップロードは保存だけ（解析・会話への結び付けは送信の後。#2652）。
+    assert (item["kind"], item["conversation_id"], item["parse_status"], item["sheets"]) == (
         "csv",
-        "c1",
-        1,
+        None,
+        "pending",
+        [],
     )
-    listed = client.get("/api/chat-attachments", params={"conversation_id": "c1"}).json()["data"]
+    listed = client.get("/api/chat-attachments").json()["data"]
     assert [i["attachment_id"] for i in listed["items"]] == [item["attachment_id"]]
+    in_conversation = client.get("/api/chat-attachments", params={"conversation_id": "c1"})
+    assert in_conversation.json()["data"]["items"] == []
     assert listed["limits"]["max_bytes"] == 1024 * 1024
-    assert ".png" not in listed["limits"]["accept"] and listed["limits"]["image_enabled"] is False
+    # 画像は Vision モデルが無くても添付できる（読むときにモデルが無いことを示す）。
+    assert ".png" in listed["limits"]["accept"] and listed["limits"]["image_enabled"] is False
     assert client.delete(f"/api/chat-attachments/{item['attachment_id']}").json()["data"] == {
         "deleted": True
     }
@@ -873,9 +876,7 @@ def test_disabled_product_rejects_upload_and_send_and_hides_tools() -> None:
     service = ChatAttachmentService(
         store, product="agent", settings=lambda: SimpleNamespace(), enabled=lambda: enabled[0]
     )
-    item = _upload(
-        service, ALICE, "a.txt", b"x", conversation_id="c1", conversation_owner_user_uuid="user-a"
-    )
+    item = _sent(service, ALICE, "a.txt", b"x")
     assert service.toolset("c1")
     enabled[0] = False
     with pytest.raises(ChatAttachmentError) as caught:

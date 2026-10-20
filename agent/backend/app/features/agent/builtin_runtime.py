@@ -250,6 +250,11 @@ from app.features.agent.tool_arguments import (
     parse_arguments,
     validate_arguments,
 )
+from app.features.agent.tool_media import (
+    model_tool_output,
+    plan_image_delivery,
+    strip_image_data,
+)
 from app.features.agent.tools import (
     MCP_TOOL_SEPARATOR,
     ExternalToolError,
@@ -266,6 +271,8 @@ from app.features.agent.tools import (
     mcp_tool_definition,
     mcp_tool_handler,
     tool_registry,
+    tool_result_images,
+    with_tool_result_images,
 )
 from app.observability import (
     CONTEXT_COMPACTIONS_TOTAL,
@@ -322,6 +329,9 @@ class ModelTarget:
     # 入力の上限（#2383。prompt と応答の合計。システム設定 > モデル の登録モデルの値。
     # 既定 128000）。
     max_input_tokens: int = DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS
+    # 画像の入力に対応するか（#2650。システム設定 > モデル の登録モデルの「画像対応」）。対応しない
+    # モデルにはツールの結果の画像を添付せず、読めなかったことを結果に書く。
+    vision_enabled: bool = False
     # openai SDK の再試行の回数（#2004）。None は SDK の既定。上限つきの並行の実行器
     # （pr_backend_core.bounded_calls）を通す呼び出しは 0 にし、再試行を実行器に任せる。
     sdk_max_retries: int | None = None
@@ -365,6 +375,16 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
         # モデルの出力の上限と入力の上限の小さい方（#1719。prompt は会話で伸びるので見積もらない）。
         max_output_tokens=enterprise_ai_output_token_budget(settings, resolved),
         max_input_tokens=enterprise_ai_max_input_tokens(settings, resolved),
+        vision_enabled=model_accepts_images(settings, resolved),
+    )
+
+
+def model_accepts_images(settings: Any, model_id: str) -> bool:
+    """登録モデルが画像の入力に対応するか（#2650。登録モデルに無い ID は対応しないと扱う）。"""
+    normalized = model_id.strip()
+    return any(
+        model.model_id == normalized and model.vision_enabled
+        for model in enterprise_ai_model_catalog(settings)
     )
 
 
@@ -578,6 +598,9 @@ class _OciResponses:
                     None if request.get("stream") else _response_incomplete(response, request)
                 )
                 if incomplete is None:
+                    window = _ACTIVE_CONTEXT_WINDOW.get()
+                    if window is not None:
+                        window.measure(response)
                     return response
                 if (
                     self._lower_effort_on_incomplete
@@ -1193,6 +1216,8 @@ class _ToolRecorder:
         self.entries: dict[str, _ToolEntry] = {}
         # 進展の無い呼び出しが上限に達した（#2580。以降の呼び出しは実行しない）。
         self.loop_stop: tool_loop_guard.LoopFinding | None = None
+        # モデルが画像の入力に対応するか（#2650。対応しなければ結果の画像を添付しない）。
+        self.image_input = False
 
     def _skips_rag_clarification(self, name: str, definition: ToolDefinition | None) -> bool:
         if (
@@ -1356,7 +1381,7 @@ class _ToolRecorder:
             return {**payload, "loop_notice": finding.notice()}
         return payload
 
-    async def invoke(self, name: str, arguments: str, call_id: str) -> str:
+    async def invoke(self, name: str, arguments: str, call_id: str) -> str | list[Any]:
         """モデルが呼んだツールを、境界の順（取消 → 引数 → ツール権限・承認 → handler）で実行する。
 
         通常の実行・承認の再開・MCP 接続のツール・登録済みのツールで同じ境界を通る（#2609・#2610・
@@ -1547,7 +1572,10 @@ class _ToolRecorder:
                     call, output, step_id=step_id, adjusted_limits=adjusted_limits
                 )
                 output = self.with_loop_notice(output, step_id)
-            return json.dumps(output, ensure_ascii=False, default=str)
+            # 結果の画像は SDK の画像の出力で渡す（#2650。`deliver_images` が決めたもの）。
+            return model_tool_output(
+                json.dumps(output, ensure_ascii=False, default=str), tool_result_images(result)
+            )
         return json.dumps(
             self.with_loop_notice(tool_failure_payload(result), step_id), ensure_ascii=False
         )
@@ -1803,8 +1831,34 @@ class _ToolRecorder:
                         },
                     }
                 )
+        result = self.deliver_images(call, result)
         runtime_repository.finish_builtin_tool_step(self.run_id, step_id, result)
         return result
+
+    def deliver_images(self, call: ToolCall, result: ToolResult) -> ToolResult:
+        """結果の画像のうちモデルに添付するものを決め、参照と監査に残す（#2650）。
+
+        画像のデータは結果の非保存の属性だけに置き、step には参照（`content_images` の
+        `model_input`）と見積もり（`audit_metadata.image_input`）だけを残す。ログにも数だけを出す。
+        """
+        images = tool_result_images(result)
+        output = result.output
+        if not result.success or not isinstance(output, dict):
+            return result
+        if not images and not output.get("content_images"):
+            return result
+        delivery = plan_image_delivery(output, images, image_input=self.image_input)
+        logger.info(
+            "builtin_runtime_tool_images",
+            extra={"run_id": self.run_id, "tool_name": call.name, **delivery.summary},
+        )
+        updated = result.model_copy(
+            update={
+                "output": delivery.output,
+                "audit_metadata": {**result.audit_metadata, "image_input": delivery.summary},
+            }
+        )
+        return with_tool_result_images(updated, delivery.attached)
 
 
 def _run_steps(run_id: str) -> list[Any]:
@@ -1956,15 +2010,18 @@ def build_function_tools(
     attachment_entries: list[tuple[ToolDefinition, ToolHandler]] | None = None,
     output_entries: list[tuple[ToolDefinition, ToolHandler]] | None = None,
     caller_planned_connections: Collection[str] = (),
+    image_input: bool = False,
 ) -> list[FunctionTool]:
     """ツールを function tool にする。
 
     `declined` はこの Run で利用者が確認を取り消した種類（#1441・#1445。そのツールは渡さない）。
     `confirmation` は回答前の確認の往復（#1839）。確認できる Run にだけ `ask_user_confirmation` を
     渡し、呼び出しごとに中断するか（利用者の答えを待つか）を往復の残りで決める。
+    `image_input` はモデルが画像の入力に対応するか（#2650。ツールの結果の画像を添付するか）。
     """
     policy = _active_policy()
     recorder = _ToolRecorder(run_id, budget)
+    recorder.image_input = image_input
     recorder.data_scopes = dict(data_scopes or {})
     recorder.caller_planned_connections = frozenset(caller_planned_connections)
     recorder.confirmation = confirmation
@@ -2004,7 +2061,7 @@ def build_function_tools(
             arguments: str,
             *,
             _name: str = definition.name,
-        ) -> str:
+        ) -> str | list[Any]:
             # 引数の型を ToolContext にすると、SDK は呼び出し ID（承認の記録と結び付ける）を渡す。
             call_id = str(getattr(ctx, "tool_call_id", "") or "")
             return await recorder.invoke(_name, arguments, call_id)
@@ -2139,9 +2196,14 @@ def build_sdk_agent(
         data_scopes=data_scopes,
         declined=declined_kinds({CANCEL_METADATA_KEY: cancellations or []}),
         confirmation=confirmation,
-        attachment_entries=attachment_tools(attachments) if attachments else None,
+        attachment_entries=(
+            attachment_tools(attachments, image_input=target.vision_enabled)
+            if attachments
+            else None
+        ),
         output_entries=[record_output_tool(run_id, output_fields)] if output_fields else None,
         caller_planned_connections=agent_caller_planned_connections(skill_ids),
+        image_input=target.vision_enabled,
     )
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
     exposed = [tool.name for tool in tools]
@@ -2260,6 +2322,8 @@ class _ContextWindow:
         # プロバイダが返した入力の上限（設定より小さいとき。Run の残りの呼び出しにも使う）。
         self._provider_limit: int | None = None
         self._recorded: tuple[object, ...] | None = None
+        # 直前のモデルの呼び出しの入力（見積もりと画像。実測と並べる。#2650）。
+        self.last_input: CompactionResult | None = None
 
     def read_tool_for(self, tool_name: str) -> str | None:
         """縮めた結果の本文を読み直すツール（モデルに渡した名前。無ければ None）。"""
@@ -2292,7 +2356,31 @@ class _ContextWindow:
             self._fail(result, trigger="budget")
         if result.outputs:
             self._record(result, trigger="budget")
+        self.last_input = result
         return ModelInputData(input=result.items, instructions=model_data.instructions)
+
+    def measure(self, response: Any) -> None:
+        """画像を添付した呼び出しの、入力の見積もりとプロバイダが数えた入力（実測）を残す（#2650）。
+
+        画像の token の見積もりはモデルの画像の扱いに依らない多めの値なので、実測と並べてログに
+        残し、見積もりの係数を直す根拠にする（画像・本文の値は出さない）。
+        """
+        last = self.last_input
+        if last is None or not last.images:
+            return
+        usage = getattr(response, "usage", None)
+        measured = getattr(usage, "input_tokens", None)
+        logger.info(
+            "builtin_runtime_model_input_measured",
+            extra={
+                "run_id": self.run_id,
+                "model": self.budget.limits.model_id,
+                "images": last.images,
+                "estimated_image_tokens": last.image_tokens,
+                "estimated_tokens": last.tokens_after,
+                "measured_input_tokens": measured if isinstance(measured, int) else None,
+            },
+        )
 
     def retry_request(self, request: dict[str, Any], overflow: ProviderOverflow) -> dict[str, Any]:
         """プロバイダが入力の超過を返した要求を縮める（縮められなければ失敗させる）。"""
@@ -2382,6 +2470,9 @@ class _ContextWindow:
             "estimated_tokens_before": result.tokens_before,
             "estimated_tokens_after": result.tokens_after,
             "estimate_scale": round(self.budget.estimate_scale, 3),
+            # 入力に添付した画像の数と見積もり（#2650）。
+            "images": result.images,
+            "estimated_image_tokens": result.image_tokens,
         }
 
     def _record(self, result: CompactionResult, *, trigger: str) -> None:
@@ -3521,8 +3612,15 @@ async def _finish(
                 confirmations.append(_agent_confirmation(call, task, run_id))
             else:
                 calls.append(_scoped_call(call, data_scopes))
+        # 保存する状態には画像のデータを残さない（#2650。再開ではツールで取り直す）。
+        state_text, removed_images = strip_image_data(result.to_state().to_string())
+        if removed_images:
+            logger.info(
+                "builtin_runtime_state_images_removed",
+                extra={"run_id": run_id, "images": removed_images},
+            )
         runtime_repository.request_builtin_approvals(
-            run_id, calls, state=result.to_state().to_string(), confirmations=confirmations
+            run_id, calls, state=state_text, confirmations=confirmations
         )
         return
     if refusal is not None:

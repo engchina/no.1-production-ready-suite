@@ -1,7 +1,11 @@
 """会話の添付の保存（`PLATFORM_CHAT_ATTACHMENTS`。#2517）。
 
-原本は BLOB、解析の結果は CLOB の JSON（`PARSED_JSON` は本文、`OUTLINE_JSON` は索引）。一覧は
-索引だけを読み、本文は 1 件ずつ読む。DDL は `auth.migrations` の共通の DDL。
+原本は BLOB、解析の結果は CLOB の JSON（`PARSED_JSON` は本文、`OUTLINE_JSON` は索引と解析の
+状態）。一覧は索引だけを読み、本文は 1 件ずつ読む。DDL は `auth.migrations` の共通の DDL。
+
+解析の状態（#2652）は `OUTLINE_JSON` の `parse_state` に置き、`replace_state` が
+`parse_state.revision` を比べて書き換える（列を足さない。同時の解析・古い試行の遅い完了・削除や
+期限の後の完了で、状態を壊さず行を復活させない）。
 """
 
 from __future__ import annotations
@@ -42,9 +46,21 @@ class ChatAttachmentStore(Protocol):
 
     def content(self, attachment_id: str) -> bytes | None: ...
 
-    def update_parsed(
-        self, attachment_id: str, parsed: ParsedAttachment, outline: AttachmentOutline
-    ) -> None: ...
+    def replace_state(
+        self,
+        attachment_id: str,
+        outline: AttachmentOutline,
+        *,
+        expected_revision: int,
+        now: datetime,
+        parsed: ParsedAttachment | None = None,
+    ) -> bool:
+        """`OUTLINE_JSON`（と `parsed` があれば `PARSED_JSON`）を置き換える（#2652）。
+
+        今の `parse_state.revision`（無い行は 0）が `expected_revision` で、期限内の行だけを
+        書き換え、書き換えたかを返す（消えた・期限の切れた・ほかの試行が書き換えた行は False）。
+        """
+        ...
 
     def list_for_conversation(
         self, product: ChatAttachmentProduct, conversation_id: str, *, now: datetime
@@ -107,15 +123,27 @@ class InMemoryChatAttachmentStore:
         with self._lock:
             return self._content.get(attachment_id)
 
-    def update_parsed(
-        self, attachment_id: str, parsed: ParsedAttachment, outline: AttachmentOutline
-    ) -> None:
+    def replace_state(
+        self,
+        attachment_id: str,
+        outline: AttachmentOutline,
+        *,
+        expected_revision: int,
+        now: datetime,
+        parsed: ParsedAttachment | None = None,
+    ) -> bool:
         with self._lock:
             record = self._records.get(attachment_id)
-            if record is None:
-                return
-            self._parsed[attachment_id] = parsed
+            if (
+                record is None
+                or _utc(record.expires_at) <= _utc(now)
+                or record.outline.revision != expected_revision
+            ):
+                return False
+            if parsed is not None:
+                self._parsed[attachment_id] = parsed
             self._records[attachment_id] = record.model_copy(update={"outline": outline})
+            return True
 
     def _select(self, predicate: Any) -> list[ChatAttachmentRecord]:
         with self._lock:
@@ -348,21 +376,38 @@ class OracleChatAttachmentStore:
             value = _read_lob(row[0])
         return bytes(value) if value is not None else None
 
-    def update_parsed(
-        self, attachment_id: str, parsed: ParsedAttachment, outline: AttachmentOutline
-    ) -> None:
-        """解析し直した結果で `PARSED_JSON` / `OUTLINE_JSON` を置き換える（#2544）。"""
+    def replace_state(
+        self,
+        attachment_id: str,
+        outline: AttachmentOutline,
+        *,
+        expected_revision: int,
+        now: datetime,
+        parsed: ParsedAttachment | None = None,
+    ) -> bool:
+        """解析の状態（と結果）を、今の版と期限を確かめて置き換える（#2652）。"""
+        binds: dict[str, Any] = {
+            "outline_json": outline.model_dump_json(),
+            "id": attachment_id,
+            "now": now,
+            "revision": expected_revision,
+        }
+        assignments = "OUTLINE_JSON = :outline_json"
+        if parsed is not None:
+            assignments += ", PARSED_JSON = :parsed_json"
+            binds["parsed_json"] = parsed.model_dump_json()
         with self._connection() as conn, conn.cursor() as cursor:
             cursor.execute(
-                "UPDATE PLATFORM_CHAT_ATTACHMENTS SET PARSED_JSON = :parsed_json, "
-                "OUTLINE_JSON = :outline_json WHERE ATTACHMENT_ID = :id",
-                {
-                    "parsed_json": parsed.model_dump_json(),
-                    "outline_json": outline.model_dump_json(),
-                    "id": attachment_id,
-                },
+                # 列は固定の 2 つだけ（値はすべて bind）。
+                f"UPDATE PLATFORM_CHAT_ATTACHMENTS SET {assignments} "  # nosec B608
+                "WHERE ATTACHMENT_ID = :id AND EXPIRES_AT > :now "
+                "AND NVL(JSON_VALUE(OUTLINE_JSON, '$.parse_state.revision' RETURNING NUMBER), 0) "
+                "= :revision",
+                binds,
             )
+            updated = int(cursor.rowcount or 0)
             conn.commit()
+        return updated == 1
 
     def _list(self, where: str, binds: dict[str, Any]) -> list[ChatAttachmentRecord]:
         with self._connection() as conn, conn.cursor() as cursor:

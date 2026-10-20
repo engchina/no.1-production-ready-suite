@@ -1,12 +1,17 @@
 """会話の添付を読むツールの中核（3 製品共通。#2517）。
 
 名前と結果の形は Issue #2517 で固定した契約（後の「出力 schema・抽出→照合のテンプレート」が使う）。
-ツールは渡された会話の添付だけを読む（会話の権限の判定は製品が先に行う）。
+ツールは渡された会話の添付（送信した添付）だけを読む（会話の権限の判定は製品が先に行う）。
+添付は送信した後に初めて読むときに解析する（#2652。`service.ChatAttachmentService.ensure_parsed`）。
+一覧は各添付の解析の状態を返し、読めない添付（解析中・失敗・期限切れ）は理由を返す。
 
-- `chat_attachment_list`: 添付の索引（節・シート）。
+- `chat_attachment_list`: 添付の索引（節・シート）と解析の状態。
 - `chat_attachment_read_section`: 節の本文を `READ_SECTION_CHARACTERS` 文字ずつ。
 - `chat_attachment_read_rows`: シートの行を「列名 → 値」で `READ_ROWS_MAX` 行まで。
 - `chat_attachment_find`: 文字の一致で節と行を探す。
+- `chat_attachment_view_image`: 画像の原本を、質問に必要な観点（`focus`）とともに読む（#2652）。
+  この中核は画像の参照と原本のバイト列を返し、モデルの入力に画像を渡すのは製品（Agent の
+  ツールの結果の画像。#2650）。画像の解釈は質問ごとにモデルが行い、原本だけをキーに再利用しない。
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from typing import Any, Final
 
 from .models import (
     TABULAR_KINDS,
+    AttachmentReadResult,
     ChatAttachmentRecord,
     ParsedAttachment,
     ParsedSheet,
@@ -28,11 +34,13 @@ LIST_TOOL_NAME: Final = "chat_attachment_list"
 READ_SECTION_TOOL_NAME: Final = "chat_attachment_read_section"
 READ_ROWS_TOOL_NAME: Final = "chat_attachment_read_rows"
 FIND_TOOL_NAME: Final = "chat_attachment_find"
+VIEW_IMAGE_TOOL_NAME: Final = "chat_attachment_view_image"
 CHAT_ATTACHMENT_TOOL_NAMES: Final = (
     LIST_TOOL_NAME,
     READ_SECTION_TOOL_NAME,
     READ_ROWS_TOOL_NAME,
     FIND_TOOL_NAME,
+    VIEW_IMAGE_TOOL_NAME,
 )
 READ_SECTION_CHARACTERS: Final = 8_000
 READ_ROWS_MAX: Final = 200
@@ -52,8 +60,8 @@ CHAT_ATTACHMENT_TOOL_SPECS: Final[tuple[ChatAttachmentToolSpec, ...]] = (
     ChatAttachmentToolSpec(
         name=LIST_TOOL_NAME,
         description=(
-            "この会話に利用者が添付したファイルの一覧と、各ファイルの節（section_id・見出し・頁・文字数）"
-            "と表のシート（列名・行数）を返す。本文は返さない。"
+            "この会話に利用者が添付したファイルの一覧と、各ファイルの解析の状態、節（section_id・見出し・"
+            "頁・文字数）と表のシート（列名・行数）を返す。本文は返さない。"
         ),
         input_schema={
             "type": "object",
@@ -141,12 +149,46 @@ CHAT_ATTACHMENT_TOOL_SPECS: Final[tuple[ChatAttachmentToolSpec, ...]] = (
             "additionalProperties": False,
         },
     ),
+    ChatAttachmentToolSpec(
+        name=VIEW_IMAGE_TOOL_NAME,
+        description=(
+            "添付の画像（kind が image）の原画像を読む。画像の中の文字・図・表・画面の細部を、"
+            "質問に照らして確かめるときに使う。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "attachment_id": _ATTACHMENT_ID,
+                "focus": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "画像で確かめたいこと（質問に答えるのに要る観点を具体的に）。",
+                },
+            },
+            "required": ["attachment_id", "focus"],
+            "additionalProperties": False,
+        },
+    ),
 )
+
+
+@dataclass(frozen=True)
+class AttachmentImage:
+    """`chat_attachment_view_image` の結果（文字の結果と、原画像のバイト列）。"""
+
+    output: dict[str, Any]
+    data: bytes
+    media_type: str
 
 
 class ChatAttachmentToolError(ValueError):
     """モデルが読んで呼び直せる、引数の誤り。"""
 
+
+# 解析の状態の表示（索引の行）。
+_STATUS_LABELS: Final = {"pending": "未解析", "parsing": "解析中", "failed": "解析に失敗"}
+# 画像から読み取った文の由来（#2652。原画像そのものではない）。
+IMAGE_TRANSCRIPTION_SOURCE: Final = "image_transcription"
 
 # Excel だけの索引の項目（#2544）。値の無い添付（Excel 以外・古い索引）では一覧に出さない。
 _EXCEL_SECTION_KEYS: Final = ("sheet",)
@@ -194,17 +236,23 @@ def _str_argument(arguments: Mapping[str, Any], name: str) -> str:
 
 
 class ChatAttachmentToolset:
-    """会話の添付を読むツール（`records` はその会話の期限内の添付）。"""
+    """会話の添付を読むツール（`records` はその会話の期限内の送信した添付）。
+
+    `load` は添付を読めるようにする関数（未解析なら解析する。`ensure_parsed`）。
+    """
 
     def __init__(
         self,
         records: Sequence[ChatAttachmentRecord],
-        load_parsed: Callable[[str], ParsedAttachment | None],
+        load: Callable[[str], AttachmentReadResult],
+        content: Callable[[str], bytes | None] = lambda _attachment_id: None,
     ) -> None:
         self._records = {record.attachment_id: record for record in records}
         self._order = [record.attachment_id for record in records]
-        self._load_parsed = load_parsed
-        self._parsed: dict[str, ParsedAttachment] = {}
+        self._load = load
+        # 原本（期限内の行だけ。画像を読むツールが使う）。
+        self._content = content
+        self._ready: dict[str, AttachmentReadResult] = {}
 
     @property
     def records(self) -> list[ChatAttachmentRecord]:
@@ -213,19 +261,28 @@ class ChatAttachmentToolset:
     def __bool__(self) -> bool:
         return bool(self._order)
 
-    def parsed(self, attachment_id: str) -> ParsedAttachment:
+    def read(self, attachment_id: str) -> AttachmentReadResult:
+        """添付を読めるようにする（解析の結果。読めた結果はこのツールの間は覚える）。"""
         if attachment_id not in self._records:
             raise ChatAttachmentToolError(
                 "この会話に無い attachment_id です。"
                 "chat_attachment_list の attachment_id を指定してください。"
             )
-        cached = self._parsed.get(attachment_id)
-        if cached is None:
-            loaded = self._load_parsed(attachment_id)
-            if loaded is None:
-                raise ChatAttachmentToolError("添付ファイルの期限が切れたか、削除されています。")
-            cached = self._parsed[attachment_id] = loaded
-        return cached
+        cached = self._ready.get(attachment_id)
+        if cached is not None:
+            return cached
+        result = self._load(attachment_id)
+        if result.status == "ready" and result.parsed is not None:
+            self._ready[attachment_id] = result
+            if result.record is not None:
+                self._records[attachment_id] = result.record
+        return result
+
+    def parsed(self, attachment_id: str) -> ParsedAttachment:
+        result = self.read(attachment_id)
+        if result.status != "ready" or result.parsed is None:
+            raise ChatAttachmentToolError(_unreadable_message(result))
+        return result.parsed
 
     def call(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         if name == LIST_TOOL_NAME:
@@ -243,6 +300,10 @@ class ChatAttachmentToolset:
                 _int_argument(arguments, "start_row", minimum=1),
                 _int_argument(arguments, "limit", minimum=1, maximum=READ_ROWS_MAX),
             )
+        if name == VIEW_IMAGE_TOOL_NAME:
+            return self.view_image(
+                _str_argument(arguments, "attachment_id"), _str_argument(arguments, "focus")
+            ).output
         if name == FIND_TOOL_NAME:
             attachment_id = arguments.get("attachment_id")
             if attachment_id is not None and not isinstance(attachment_id, str):
@@ -255,25 +316,49 @@ class ChatAttachmentToolset:
         raise ChatAttachmentToolError(f"{name} は添付のツールではありません。")
 
     def list_attachments(self) -> dict[str, Any]:
+        return {"attachments": [self._listed(attachment_id) for attachment_id in self._order]}
+
+    def _listed(self, attachment_id: str) -> dict[str, Any]:
+        record = self._records[attachment_id]
+        if record.kind == "image" and attachment_id not in self._ready:
+            # 画像は一覧で読み取らない（原画像は `chat_attachment_view_image` で質問に応じて読む）。
+            return {
+                "attachment_id": record.attachment_id,
+                "file_name": record.file_name,
+                "kind": record.kind,
+                "size_bytes": record.size_bytes,
+                "media_type": record.media_type,
+                "parse_status": record.outline.parse_status,
+                "message": f"原画像は {VIEW_IMAGE_TOOL_NAME} で読めます。",
+            }
+        result = self.read(attachment_id)
+        item: dict[str, Any] = {
+            "attachment_id": record.attachment_id,
+            "file_name": record.file_name,
+            "kind": record.kind,
+            "size_bytes": record.size_bytes,
+            "parse_status": result.status,
+        }
+        if result.status != "ready" or result.parsed is None:
+            return {**item, "message": _unreadable_message(result)}
+        outline = result.parsed.outline()
+        if result.parsed.is_empty():
+            item["message"] = "読める文字・表の行がありません。"
+        if outline.pages_without_text:
+            item["pages_without_text"] = list(outline.pages_without_text)
+        if record.kind == "image":
+            item["content_source"] = IMAGE_TRANSCRIPTION_SOURCE
         return {
-            "attachments": [
-                {
-                    "attachment_id": record.attachment_id,
-                    "file_name": record.file_name,
-                    "kind": record.kind,
-                    "size_bytes": record.size_bytes,
-                    "warnings": list(record.outline.warnings),
-                    "sections": [
-                        _without_empty(section.model_dump(mode="json"), _EXCEL_SECTION_KEYS)
-                        for section in record.outline.sections
-                    ],
-                    "sheets": [
-                        _without_empty(sheet.model_dump(mode="json"), _EXCEL_SHEET_KEYS)
-                        for sheet in record.outline.sheets
-                    ],
-                }
-                for record in self.records
-            ]
+            **item,
+            "warnings": list(outline.warnings),
+            "sections": [
+                _without_empty(section.model_dump(mode="json"), _EXCEL_SECTION_KEYS)
+                for section in outline.sections
+            ],
+            "sheets": [
+                _without_empty(sheet.model_dump(mode="json"), _EXCEL_SHEET_KEYS)
+                for sheet in outline.sheets
+            ],
         }
 
     def read_section(self, attachment_id: str, section_id: str, offset: int) -> dict[str, Any]:
@@ -294,6 +379,11 @@ class ChatAttachmentToolset:
             "page": section.page,
             **({"sheet": section.sheet} if section.sheet else {}),
             **_location_fields(section.location),
+            **(
+                {"content_source": IMAGE_TRANSCRIPTION_SOURCE}
+                if self._records[attachment_id].kind == "image"
+                else {}
+            ),
             "content": content,
             "next_offset": end if end < len(section.text) else None,
         }
@@ -340,8 +430,25 @@ class ChatAttachmentToolset:
         needle = _normalized(text)
         targets = [attachment_id] if attachment_id else list(self._order)
         matches: list[dict[str, Any]] = []
+        unreadable: list[dict[str, Any]] = []
         truncated = False
         for target in targets:
+            if attachment_id is None:
+                record = self._records[target]
+                if record.kind == "image" and record.outline.parse_status != "ready":
+                    # 読み取っていない画像は文字で探さない（原画像は画像を読むツールで）。
+                    continue
+                result = self.read(target)
+                if result.status != "ready":
+                    unreadable.append(
+                        {
+                            "attachment_id": target,
+                            "file_name": self._records[target].file_name,
+                            "parse_status": result.status,
+                            "message": _unreadable_message(result),
+                        }
+                    )
+                    continue
             parsed = self.parsed(target)
             file_name = self._records[target].file_name
             for section in parsed.sections:
@@ -393,19 +500,63 @@ class ChatAttachmentToolset:
                     break
             if truncated:
                 break
-        return {"matches": matches, "truncated": truncated}
+        found: dict[str, Any] = {"matches": matches, "truncated": truncated}
+        if unreadable:
+            found["unreadable"] = unreadable
+        return found
+
+    def view_image(self, attachment_id: str, focus: str) -> AttachmentImage:
+        """画像の原本と参照（送信した期限内の画像だけ。解釈はしない）。"""
+        record = self._records.get(attachment_id)
+        if record is None:
+            raise ChatAttachmentToolError(
+                "この会話に無い attachment_id です。"
+                "chat_attachment_list の attachment_id を指定してください。"
+            )
+        if record.kind != "image":
+            raise ChatAttachmentToolError(
+                "この添付は画像ではありません。chat_attachment_read_section か "
+                "chat_attachment_read_rows で読んでください。"
+            )
+        data = self._content(attachment_id)
+        if data is None:
+            raise ChatAttachmentToolError("添付ファイルの期限が切れたか、削除されています。")
+        return AttachmentImage(
+            output={
+                "attachment_id": attachment_id,
+                "file_name": record.file_name,
+                "kind": record.kind,
+                "media_type": record.media_type,
+                "content_sha256": record.content_sha256,
+                "focus": focus,
+            },
+            data=data,
+            media_type=record.media_type,
+        )
 
     def index_lines(self) -> list[str]:
         """モデルへ渡す索引（1 つの添付 = 1 行。本文は入れない）。"""
         lines: list[str] = []
         for record in self.records:
             parts = [f"attachment_id={record.attachment_id}", f"種類={record.kind}"]
-            if record.outline.sections:
+            status = record.outline.parse_status
+            if status != "ready":
+                parts.append(_STATUS_LABELS.get(status, status))
+            elif record.outline.sections:
                 parts.append(f"節 {len(record.outline.sections)}")
             for sheet in record.outline.sheets:
                 parts.append(f"シート「{sheet.sheet}」{sheet.row_count} 行")
             lines.append(f"- {record.file_name}（{'、'.join(parts)}）")
         return lines
+
+
+def _unreadable_message(result: AttachmentReadResult) -> str:
+    """読めない添付の理由（モデルが読んで次の手を決める文）。"""
+    if result.message:
+        return result.message
+    if result.status == "missing":
+        return "添付ファイルの期限が切れたか、削除されています。"
+    return "添付ファイルを読めませんでした。"
 
 
 def _snippet(text: str, position: int, length: int) -> str:
