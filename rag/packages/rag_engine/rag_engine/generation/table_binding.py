@@ -55,6 +55,10 @@ _EMPHASIS = re.compile(r"\*\*|__|`")
 _LIST_MARKER = re.compile(r"(?m)^\s*(?:[0-9]{1,3}[.)．、]|[（(][0-9]{1,3}[）)]|[①-⑳])\s*")
 # 漢字（「手順1」「第1」「1件」のように 1 文字の数字に続く・先立つ語）。
 _IDEOGRAPH = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+# 数字・コードの内部の区切り（節番号・小数・英字付きの番号を一部の値として拾わない）。
+_VALUE_JOINERS = frozenset("-_.‐‑‒–−")
+# 読点などで短くしたセルの語を、別の複合語の一部分として照合しない。
+_LABEL_LETTER = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\u30a0-\u30ff]")
 
 
 def _fold(text: str) -> str:
@@ -185,11 +189,12 @@ def _clean_claim(text: str) -> str:
     return _fold(_EMPHASIS.sub("", text))
 
 
-def _mentions(key: str, window: str) -> bool:
+def _mentions(key: str, window: str, *, shortened_label: bool = False) -> bool:
     """セルの照合の形が区間に現れるか。
 
     英数字で終わる・始まるセルは、前後が英数字の続きなら別の語。1 文字の値（「1」）は、前後が漢字なら手順の番号・
-    数量（「手順1」「1件」）とみなして数えない。
+    数量（「手順1」「1件」）とみなして数えない。区切り付きの番号・コードの内部も独立した値として扱わない。
+    セルを短くした区分・名前は、漢字・カタカナが続く複合語の内部だけでは行の手がかりにしない。
     """
     start = window.find(key)
     while start >= 0:
@@ -199,6 +204,18 @@ def _mentions(key: str, window: str) -> bool:
         joined = (key[0].isalnum() and key[0].isascii() and before.isascii() and before.isalnum()) or (
             key[-1].isalnum() and key[-1].isascii() and after.isascii() and after.isalnum()
         )
+        if _is_value(key):
+            left = window[start - 2] if start >= 2 else ""
+            right = window[end + 1] if end + 1 < len(window) else ""
+            joined = (
+                joined
+                or (before in _VALUE_JOINERS and left.isascii() and left.isalnum())
+                or (after in _VALUE_JOINERS and right.isascii() and right.isalnum())
+            )
+            # 符号付きの数を、正の値と誤って同一視しない。
+            joined = joined or (key[0].isdigit() and before in {"+", "-", "−"})
+        if shortened_label:
+            joined = joined or bool(_LABEL_LETTER.fullmatch(before) or _LABEL_LETTER.fullmatch(after))
         counted = len(key) == 1 and (_IDEOGRAPH.fullmatch(before or " ") or _IDEOGRAPH.fullmatch(after or " "))
         if not joined and not counted:
             return True
@@ -231,7 +248,12 @@ def _unbound_in_table(window: str, table: Table) -> tuple[list[tuple[str, str]],
     for row in table.rows:
         for key in row:
             counts[key] = counts.get(key, 0) + 1
-    mentioned = {key for key in counts if (_is_value(key) or _is_label(key)) and _mentions(key, window)}
+    mentioned = {
+        key
+        for key in counts
+        if (_is_value(key) or _is_label(key))
+        and _mentions(key, window, shortened_label=_is_label(key) and _fold(table.cells.get(key, key)) != key)
+    }
     # 行を見分ける手がかり: その表の 1 行にだけあり、区間に現れるセル。
     distinct = {key for key in mentioned if counts[key] == 1}
     unbound: list[tuple[str, str]] = []
