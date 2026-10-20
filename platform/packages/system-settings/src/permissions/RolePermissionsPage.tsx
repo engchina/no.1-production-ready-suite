@@ -916,9 +916,8 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                 {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
                 <SaveErrorBanner message={formError} attemptKey={submitAttempt} testId="security-permissions-save-error" />
                 {!readOnly ? (
-                  // 確定はフォームの末尾の左（保存 → 変更を破棄）。機能権限と対象の一覧で長くなるので、画面の下端に貼り付く（#1786）。
+                  // 確定はフォームの末尾の左（保存 → 変更を破棄）。画面の下端に貼り付けない（#1786 / #2715）。
                   <FormActionBar
-                    sticky="card"
                     ariaLabel={m.formActionsLabel}
                     testId="security-permissions-form-actions"
                     primaryActions={[

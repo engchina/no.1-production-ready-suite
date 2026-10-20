@@ -643,9 +643,8 @@ export function EvaluationSetEditor({
           attemptKey={save.submittedAt}
           testId="evaluation-set-save-error"
         />
-        {/* 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。最後のカードの下で、ケースが多いときは画面の下端に貼り付く（#1786）。 */}
+        {/* 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。最後のカードの下に置き、画面の下端に貼り付けない（#1786 / #2715）。 */}
         <FormActionBar
-          sticky="page"
           ariaLabel={t("editor.actions.formLabel")}
           testId="evaluation-set-form-actions"
           primaryActions={[

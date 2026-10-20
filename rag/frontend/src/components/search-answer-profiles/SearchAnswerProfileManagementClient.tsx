@@ -1178,10 +1178,9 @@ function SearchAnswerProfileEditor({
                 attemptKey={saveMutation.submittedAt}
                 testId="search-answer-profile-save-error"
               />
-              {/* 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。設定が長いので、途中でも画面の下端に貼り付く（#1786）。
-                  下の「プロファイルの知識」は節ごとに保存するので、この行はフォームのカードの中だけで貼り付く。 */}
+              {/* 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。画面の下端に貼り付けず、内容と
+                  一緒にスクロールする（#1786 / #2715）。下の「プロファイルの知識」は節ごとに保存する。 */}
               <FormActionBar
-                sticky="card"
                 ariaLabel={t("editor.actions.formLabel")}
                 testId="search-answer-profile-form-actions"
                 primaryActions={[

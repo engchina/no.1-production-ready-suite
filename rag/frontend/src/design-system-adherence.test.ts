@@ -277,7 +277,7 @@ const a = <PageHeader title="x" back={{ label: "一覧へ戻る", onClick: f }} 
 const b = <PageHeader title="x" actions={[{ id: "discard", kind: "secondary", label: "変更を破棄", onClick: g }]} />;
 const c = <PageHeader title="x" back={{ label: "一覧へ戻る", onClick: f }} actions={[{ id: "create", kind: "primary", label: "作成", onClick: g }]} />;
 const d = <PageHeader title="一覧" actions={[{ id: "create", kind: "primary", label: "新規作成", onClick: g }]} />;
-const e = <FormActionBar ariaLabel="確定" sticky="card" primaryActions={[{ id: "save", label: "保存" }]} secondaryActions={[{ id: "discard", label: "変更を破棄" }]} />;
+const e = <FormActionBar ariaLabel="確定" primaryActions={[{ id: "save", label: "保存" }]} secondaryActions={[{ id: "discard", label: "変更を破棄" }]} />;
 `);
     expect(linesWith(messages, CONFIRM_IN_HEADER)).toEqual([2, 3, 4]);
   });

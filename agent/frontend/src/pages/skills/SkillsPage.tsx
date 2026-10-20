@@ -406,7 +406,7 @@ function SkillEditor({
         {skill && !editable ? (
           <SkillReadOnlyDetail skill={skill} />
         ) : (
-          // 保存の対象（基本・依存）を包み、確定の行はこの中だけで画面の下端に貼り付く（#1786）。
+          // 保存の対象（基本・依存）を包み、その末尾に確定の行を置く（#1786）。
           <div className="min-w-0 space-y-6">
             <Section title={t("skills.basic")}>
               <Card className="min-w-0">
@@ -508,10 +508,9 @@ function SkillEditor({
               attemptKey={saveMutation.submittedAt}
               testId="skill-save-error"
             />
-            {/* 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。最後のカードの下で、長いフォームでは画面の下端に貼り付く（#1786）。 */}
+            {/* 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。最後のカードの下に置き、画面の下端に貼り付けない（#1786 / #2715）。 */}
             {editable ? (
             <FormActionBar
-              sticky="page"
               ariaLabel={t("editor.actions.formLabel")}
               testId="skill-form-actions"
               primaryActions={[
