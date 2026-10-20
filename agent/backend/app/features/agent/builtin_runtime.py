@@ -817,7 +817,11 @@ def approval_required_tools(
 _TOOL_NAME_BOUNDARY = "A-Za-z0-9_-"
 
 
-def instruction_tool_names(skill_ids: list[str], exposed: Collection[str]) -> dict[str, str]:
+def instruction_tool_names(
+    skill_ids: list[str],
+    exposed: Collection[str],
+    origins: Mapping[tuple[str, str], str] | None = None,
+) -> dict[str, str]:
     """指示に書いた MCP のツールの素の名前 → モデルに渡す名前（`<接続>__<ツール>`。#1303）。
 
     Skill の指示は MCP のツールを接頭辞の無い名前（`rag_search`）で書くが、モデルに渡す
@@ -827,6 +831,9 @@ def instruction_tool_names(skill_ids: list[str], exposed: Collection[str]) -> di
     対象は Skill の requirement が名前で宣言したツールのうち、この Run でモデルに渡すもの
     だけ（ポリシーで拒否したもの・一覧に無いものは書き換えない）。同じ素の名前が複数の接続に
     あって 1 つに決まらないものと、素の名前のままのツールがあるものは書き換えない。
+
+    `origins`（モデルに渡した MCP のツールの（接続, 元の名前）→ 名前。`exposed_mcp_origins`）を
+    渡すと、名前を出自で引く（衝突を避けて変えた名前も、元のツールに対応させる。#2596）。
     """
     exposed_names = set(exposed)
     candidates: dict[str, set[str]] = {}
@@ -839,8 +846,16 @@ def instruction_tool_names(skill_ids: list[str], exposed: Collection[str]) -> di
             if not server_id or server_id == CONTROL_PLANE_SERVER_ID:
                 continue
             for tool_name in requirement.tool_names:
-                function_name = mcp_function_name(server_id, tool_name)
-                if function_name in exposed_names and tool_name not in exposed_names:
+                function_name = (
+                    origins.get((server_id, tool_name))
+                    if origins is not None
+                    else mcp_function_name(server_id, tool_name)
+                )
+                if (
+                    function_name is not None
+                    and function_name in exposed_names
+                    and tool_name not in exposed_names
+                ):
                     candidates.setdefault(tool_name, set()).add(function_name)
     return {name: next(iter(found)) for name, found in candidates.items() if len(found) == 1}
 
@@ -860,6 +875,7 @@ def compose_instructions(
     agent_instructions: str,
     skill_ids: list[str],
     exposed_tool_names: Collection[str] | None = None,
+    origins: Mapping[tuple[str, str], str] | None = None,
 ) -> str:
     """Agent の指示と Skill の指示（AgentSkills の本文）を 1 つの system の指示にする。
 
@@ -881,7 +897,7 @@ def compose_instructions(
         "使ったツールと根拠は回答とは別に示します。"
     ]
     if agent_instructions.strip():
-        agent_names = instruction_tool_names(skill_ids, exposed)
+        agent_names = instruction_tool_names(skill_ids, exposed, origins)
         sections.append(
             "# 業務の指示\n" + render_tool_names(agent_instructions.strip(), agent_names)
         )
@@ -890,7 +906,7 @@ def compose_instructions(
         if skill is None or not skill.enabled or not skill.instructions.strip():
             continue
         # Skill の指示は、その Skill が宣言した接続のツールの名前で書き直す。
-        skill_names = instruction_tool_names([skill_id], exposed)
+        skill_names = instruction_tool_names([skill_id], exposed, origins)
         sections.append(
             f"# Skill: {skill.name}\n{render_tool_names(skill.instructions.strip(), skill_names)}"
         )
@@ -1808,6 +1824,77 @@ def _approval_gate(
     return needs_approval
 
 
+def _tool_origin(definition: ToolDefinition) -> tuple[str, ...]:
+    """ツールの出自（MCP 接続のツールは接続と元の名前、それ以外はツールの名前）。"""
+    if definition.mcp_server_id is not None and definition.mcp_tool_name is not None:
+        return ("mcp", definition.mcp_server_id, definition.mcp_tool_name)
+    return ("local", definition.name)
+
+
+def _origin_label(origin: tuple[str, ...]) -> str:
+    if origin[0] == "mcp":
+        return f"接続「{origin[1]}」のツール「{origin[2]}」"
+    return f"ツール「{origin[1]}」"
+
+
+def _conflicting_tool_names(
+    entries: Sequence[tuple[ToolDefinition, Any]],
+) -> dict[str, list[tuple[str, ...]]]:
+    """別の出自のツールが同じ名前になったもの（名前 → 出自。#2596）。
+
+    同じ出自の再列挙は重複として 1 つにまとめる（衝突ではない）。別の出自が同じ名前になったものは、
+    どれか 1 つを一覧の順で選ぶと呼べる対象とツール権限の対応が順で変わるので、どれも渡さない。
+    MCP の同じ接続の中の衝突は `_mcp_tools_from_result` が名前を分けるので、ここに来るのは
+    接続の ID の区切りなどで別の接続・Control Plane のツールと重なった名前だけ。
+    """
+    origins: dict[str, list[tuple[str, ...]]] = {}
+    for definition, _handler in entries:
+        found = origins.setdefault(definition.name, [])
+        origin = _tool_origin(definition)
+        if origin not in found:
+            found.append(origin)
+    return {name: found for name, found in origins.items() if len(found) > 1}
+
+
+def _note_tool_name_conflicts(run_id: str, conflicts: Mapping[str, list[tuple[str, ...]]]) -> None:
+    """名前が衝突したツールを渡さないことを、ログと Run の警告に残す（黙って外さない）。"""
+    if not conflicts:
+        return
+    from app.features.agent.runtime import runtime_repository
+
+    for name, origins in sorted(conflicts.items()):
+        logger.warning(
+            "builtin_runtime_tool_name_conflict",
+            extra={"run_id": run_id, "tool_name": name, "origins": [list(o) for o in origins]},
+        )
+        try:
+            runtime_repository.note_builtin_warning(
+                run_id,
+                f"ツールの名前「{name}」が複数のツール"
+                f"（{'、'.join(_origin_label(origin) for origin in origins)}）で重なるため、"
+                "どれも使いません。MCP 接続の ID かツールの名前を変えてください。",
+            )
+        except Exception as exc:  # noqa: BLE001 - 記録は補助。残せなくてもツールの構築は続ける
+            logger.warning(
+                "builtin_runtime_tool_name_conflict_record_failed",
+                extra={"run_id": run_id, "exception_type": type(exc).__name__},
+            )
+
+
+def exposed_mcp_origins(tools: Sequence[FunctionTool]) -> dict[tuple[str, str], str]:
+    """モデルに渡した MCP 接続のツールの（接続の ID, 元の名前）→ モデルに渡した名前（#2596）。"""
+    origins: dict[tuple[str, str], str] = {}
+    for tool in tools:
+        recorder = getattr(tool, _RECORDER_ATTR, None)
+        entry = recorder.entries.get(tool.name) if isinstance(recorder, _ToolRecorder) else None
+        if entry is None:
+            continue
+        definition = entry.definition
+        if definition.mcp_server_id is not None and definition.mcp_tool_name is not None:
+            origins[(definition.mcp_server_id, definition.mcp_tool_name)] = tool.name
+    return origins
+
+
 def build_function_tools(
     run_id: str,
     tool_names: list[str],
@@ -1852,8 +1939,10 @@ def build_function_tools(
         entries.append(confirmation_tool(confirmation))
     tools: list[FunctionTool] = []
     seen: set[str] = set()
+    conflicts = _conflicting_tool_names(entries)
+    _note_tool_name_conflicts(run_id, conflicts)
     for definition, handler in entries:
-        if definition.name in seen:
+        if definition.name in seen or definition.name in conflicts:
             continue
         seen.add(definition.name)
         if is_declined_tool(definition.name, declined):
@@ -2006,14 +2095,15 @@ def build_sdk_agent(
     )
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
     exposed = [tool.name for tool in tools]
-    composed = compose_instructions(instructions, skill_ids, exposed)
+    origins = exposed_mcp_origins(tools)
+    composed = compose_instructions(instructions, skill_ids, exposed, origins)
     # データの範囲の案内（#1378。強制は tool handler がする）。
     scope_text = data_scope.scope_instructions(data_scopes, exposed)
     if scope_text:
-        scope_names = instruction_tool_names(skill_ids, exposed)
+        scope_names = instruction_tool_names(skill_ids, exposed, origins)
         composed = f"{composed}\n\n{render_tool_names(scope_text, scope_names)}"
     if support_task:
-        support_names = instruction_tool_names(skill_ids, exposed)
+        support_names = instruction_tool_names(skill_ids, exposed, origins)
         composed = f"{composed}\n\n{render_tool_names(support_task, support_names)}"
     cancel_text = cancel_instructions(list(cancellations or []))
     if cancel_text:
@@ -2022,7 +2112,7 @@ def build_sdk_agent(
         composed = f"{composed}\n\n{attachment_instructions(attachments)}"
     if confirmation is not None:
         # 回答前の確認の方針と、カードで答えた内容（#1839）。ツールの名前はモデルに渡す名前にする。
-        confirmation_names = instruction_tool_names(skill_ids, exposed)
+        confirmation_names = instruction_tool_names(skill_ids, exposed, origins)
         for text in (
             policy_instructions(confirmation, tool_exposed=CONFIRMATION_TOOL in exposed),
             response_instructions(confirmation_response),
@@ -2098,7 +2188,13 @@ class _ContextWindow:
     見積もりを補正し、縮めた要求を返す。
     """
 
-    def __init__(self, run_id: str, limits: ContextLimits, exposed: Collection[str]) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        limits: ContextLimits,
+        exposed: Collection[str],
+        rerunnable: Collection[str] = (),
+    ) -> None:
         settings = get_settings()
         self.run_id = run_id
         self.enabled = bool(settings.agent_context_compaction_enabled)
@@ -2108,6 +2204,8 @@ class _ContextWindow:
             margin_ratio=float(settings.agent_context_safety_margin_ratio),
         )
         self._exposed = set(exposed)
+        # 呼び直しても副作用の無いツール（信頼できる読み取り専用。#2632）。
+        self._rerunnable = set(rerunnable)
         self._tools_text: str | None = None
         # プロバイダが返した入力の上限（設定より小さいとき。Run の残りの呼び出しにも使う）。
         self._provider_limit: int | None = None
@@ -2121,6 +2219,10 @@ class _ContextWindow:
         name = f"{prefix}{MCP_TOOL_SEPARATOR}{RAG_READ_SOURCE}"
         return name if name in self._exposed else None
 
+    def rerunnable(self, tool_name: str) -> bool:
+        """縮めた結果の内容を得るために、同じツールを呼び直してよいか（#2632）。"""
+        return tool_name in self._rerunnable
+
     def __call__(self, data: CallModelData[Any]) -> ModelInputData:
         _ACTIVE_CONTEXT_WINDOW.set(self)
         model_data = data.model_data
@@ -2133,6 +2235,7 @@ class _ContextWindow:
             budget=self.budget,
             fixed_text=f"{model_data.instructions or ''}\n{self._tools_text}",
             read_tool_for=self.read_tool_for,
+            rerunnable=self.rerunnable,
             max_input_tokens=self._provider_limit,
         )
         if not result.fits:
@@ -2164,6 +2267,7 @@ class _ContextWindow:
             budget=self.budget,
             fixed_text=fixed,
             read_tool_for=self.read_tool_for,
+            rerunnable=self.rerunnable,
             max_input_tokens=self._provider_limit,
         )
         logger.warning(
@@ -2261,6 +2365,18 @@ class _ContextWindow:
             )
 
 
+def _rerunnable_tool_names(tools: Sequence[Any]) -> set[str]:
+    """呼び直しても副作用の無いツール（モデルに渡した定義が信頼できる読み取り専用のもの。#2632）。"""
+    names: set[str] = set()
+    for tool in tools:
+        recorder = getattr(tool, _RECORDER_ATTR, None)
+        name = str(getattr(tool, "name", ""))
+        entry = recorder.entries.get(name) if isinstance(recorder, _ToolRecorder) else None
+        if entry is not None and entry.definition.trusted_read_only:
+            names.add(name)
+    return names
+
+
 def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
     """Run の SDK の設定。無いツールの呼び出しで Run を落とさず、モデルへ案内を返す（#1303）。
 
@@ -2282,7 +2398,11 @@ def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
         return message
 
     limits = getattr(sdk_agent, _CONTEXT_LIMITS_ATTR, None)
-    window = _ContextWindow(run_id, limits, exposed) if isinstance(limits, ContextLimits) else None
+    window = (
+        _ContextWindow(run_id, limits, exposed, _rerunnable_tool_names(sdk_agent.tools))
+        if isinstance(limits, ContextLimits)
+        else None
+    )
 
     async def model_input(data: CallModelData[Any]) -> ModelInputData:
         from app.features.agent.runtime import runtime_repository

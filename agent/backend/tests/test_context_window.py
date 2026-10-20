@@ -157,7 +157,77 @@ def test_level_one_shortens_excerpts_and_marks_them_truncated() -> None:
         assert _EXCERPT.startswith(item["excerpt"].rstrip("…"))
     # 一覧の外の項目はそのまま。
     assert compacted["trace_id"] == "trace-a"
-    # 読み直すツールが無ければ、絞って呼び直す案内にする。
+    # 呼び直しても副作用の無いツールと分からなければ、呼び直しを案内しない（#2632）。
+    assert "呼び直して" not in compacted[COMPACTION_KEY]["next_step"]
+    # 読み直すツールが無い信頼できる読み取りのツールは、絞って呼び直す案内にする。
+    rerun = json.loads(compact_output(json.dumps(output, ensure_ascii=False), 1, rerunnable=True))
+    assert "呼び直して" in rerun[COMPACTION_KEY]["next_step"]
+
+
+# 合成の書き込みのツール（#2632）。
+WRITE_TOOL = "synthetic__synthetic_write"
+TRUSTED_READ_TOOL = "synthetic__synthetic_read"
+
+
+def _write_items(name: str = WRITE_TOOL) -> list[dict[str, Any]]:
+    """書き込みのツールの長い結果（`operation_id` と約 25,000 文字の `rows[].detail`）。"""
+    output = {
+        "operation_id": "op-2632",
+        "rows": [{"row_id": f"row-{index}", "detail": "合成の詳細。" * 125} for index in range(33)],
+    }
+    return [
+        {"role": "user", "content": "合成の質問"},
+        {"type": "function_call", "call_id": "call-w", "name": name, "arguments": "{}"},
+        {
+            "type": "function_call_output",
+            "call_id": "call-w",
+            "output": json.dumps(output, ensure_ascii=False),
+        },
+        {"type": "function_call", "call_id": "call-r", "name": EVIDENCE_TOOL, "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call-r", "output": "{}"},
+    ]
+
+
+def _compact_write(rerunnable: set[str]) -> dict[str, Any]:
+    items = _write_items()
+    result = compact_items(
+        items,
+        budget=_budget(2_400, 400),
+        fixed_text="指示",
+        read_tool_for=lambda _name: None,
+        rerunnable=lambda name: name in rerunnable,
+    )
+    assert result.fits
+    assert [item.tool_name for item in result.outputs] == [WRITE_TOOL]
+    compacted: dict[str, Any] = json.loads(result.items[2]["output"])
+    return compacted
+
+
+def test_compacted_write_results_never_ask_to_rerun_the_operation() -> None:
+    """書き込みの結果を縮めても、同じツールの呼び直し（同じ操作の再実行）を案内しない。"""
+    compacted = _compact_write({TRUSTED_READ_TOOL})
+
+    note = compacted[COMPACTION_KEY]
+    assert "呼び直して" not in note["next_step"]
+    assert "読み直せません" in note["next_step"]
+    # ID は残す（結果と操作の対応を保つ）。
+    assert compacted["operation_id"] == "op-2632"
+    assert [row["row_id"] for row in compacted["rows"]][:3] == ["row-0", "row-1", "row-2"]
+    # 縮め直しても制約を保つ。
+    again = json.loads(compact_output(json.dumps(compacted, ensure_ascii=False), 4))
+    assert "呼び直して" not in again[COMPACTION_KEY]["next_step"]
+    assert again[COMPACTION_KEY]["original_chars"] == note["original_chars"]
+
+
+def test_trusted_read_results_keep_the_rerun_hint() -> None:
+    items = _write_items(TRUSTED_READ_TOOL)
+    result = compact_items(
+        items,
+        budget=_budget(2_400, 400),
+        fixed_text="指示",
+        rerunnable=lambda name: name == TRUSTED_READ_TOOL,
+    )
+    compacted = json.loads(result.items[2]["output"])
     assert "呼び直して" in compacted[COMPACTION_KEY]["next_step"]
 
 
@@ -583,3 +653,66 @@ def test_provider_overflow_without_a_run_window_is_raised_as_is() -> None:
     with pytest.raises(BadRequestError):
         anyio.run(call)
     assert len(inner.requests) == 1
+
+
+def test_only_trusted_read_only_tools_are_offered_for_rerun() -> None:
+    """Run が呼び直しを案内するのは、信頼できる読み取り専用のツールだけ（#2632）。
+
+    書き込みのツールと、注釈を信頼しない接続が読み取り専用と申告したツールは対象にしない。縮めても
+    ツールは実行しない（副作用の handler の実行数は増えない）。
+    """
+    from app.features.agent.config import McpConnectionConfig
+    from app.features.agent.tools import (
+        ExternalMcpToolInfo,
+        ToolInvocationContext,
+        mcp_tool_definition,
+    )
+
+    executed: list[str] = []
+
+    def handler(name: str) -> Any:
+        def handle(_arguments: dict[str, Any], _context: ToolInvocationContext) -> dict[str, Any]:
+            executed.append(name)
+            return {}
+
+        return handle
+
+    trusted = McpConnectionConfig(
+        server_id="synthetic", source="runtime", trust_tool_annotations=True
+    )
+    untrusted = McpConnectionConfig(server_id="untrusted", source="runtime")
+    entries = [
+        (
+            mcp_tool_definition(
+                config, ExternalMcpToolInfo(name=name, server_id=config.server_id, read_only=ro)
+            ),
+            handler(name),
+        )
+        for config, name, ro in (
+            (trusted, "synthetic_write", False),
+            (trusted, "synthetic_read", True),
+            (untrusted, "synthetic_read", True),
+        )
+    ]
+    tools = builtin_runtime.build_function_tools("run_2632", [], entries)
+
+    rerunnable = builtin_runtime._rerunnable_tool_names(tools)  # noqa: SLF001
+
+    assert rerunnable == {TRUSTED_READ_TOOL}
+    window = builtin_runtime._ContextWindow(  # noqa: SLF001
+        "run_2632",
+        ContextLimits(model_id="test-model-2632", max_input_tokens=2_400, max_output_tokens=400),
+        [tool.name for tool in tools],
+        rerunnable,
+    )
+    for name in (WRITE_TOOL, "untrusted__synthetic_read"):
+        result = compact_items(
+            _write_items(name),
+            budget=_budget(2_400, 400),
+            fixed_text="指示",
+            read_tool_for=window.read_tool_for,
+            rerunnable=window.rerunnable,
+        )
+        note = json.loads(result.items[2]["output"])[COMPACTION_KEY]
+        assert "呼び直して" not in note["next_step"], name
+    assert executed == []
