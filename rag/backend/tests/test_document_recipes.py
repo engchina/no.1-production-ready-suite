@@ -1,6 +1,6 @@
 """1文書1〜3レシピの境界・工程状態・検索対象契約。"""
 
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -18,6 +18,7 @@ from app.api.routes.documents import (
 )
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oracle import (
+    ReviewedExtractionWrite,
     oracle_chunk_set_schema_sql,
     oracle_document_recipe_schema_sql,
     oracle_ingestion_job_schema_sql,
@@ -525,8 +526,7 @@ async def test_recipe_review_edit_copies_shared_extraction_before_pointer_switch
     """既存共有 artifact は変更せず recipe 固有 ID へ copy-on-write する。"""
 
     class FakeOracle:
-        upsert: dict[str, Any] | None = None
-        pointer: str | None = None
+        write: ReviewedExtractionWrite | None = None
 
         async def get_document(self, document_id: str) -> DocumentDetail:
             return DocumentDetail(
@@ -537,8 +537,14 @@ async def test_recipe_review_edit_copies_shared_extraction_before_pointer_switch
                 uploaded_at=datetime.now(UTC),
             )
 
-        async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, object]:
-            return {
+        async def save_document_recipe_review_extraction(
+            self,
+            *,
+            document_id: str,
+            recipe_id: str,
+            build: Callable[[Mapping[str, object], Mapping[str, object]], ReviewedExtractionWrite],
+        ) -> str:
+            recipe: dict[str, object] = {
                 "document_id": document_id,
                 "recipe_id": recipe_id,
                 "status": "REVIEW",
@@ -546,30 +552,22 @@ async def test_recipe_review_edit_copies_shared_extraction_before_pointer_switch
                 "processing_config": {},
                 "active_extraction_recipe_id": "er_shared",
             }
-
-        async def get_document_extraction_artifact(self, **_kwargs: object) -> dict[str, object]:
-            return {
+            artifact: dict[str, object] = {
                 "extraction_json": StructuredExtraction(raw_text="共有本文").to_document_payload(),
                 "recipe_subset": {},
                 "status": "materialized",
             }
-
-        async def upsert_document_extraction_artifact(self, **kwargs: Any) -> None:
-            self.upsert = kwargs
-
-        async def update_document_recipe_status(
-            self, *, active_extraction_recipe_id: str | None = None, **_kwargs: object
-        ) -> None:
-            self.pointer = active_extraction_recipe_id
+            self.write = build(recipe, artifact)
+            return self.write.extraction_recipe_id
 
     fake = FakeOracle()
     monkeypatch.setattr(documents_route, "OracleClient", lambda: fake)
 
     await _apply_recipe_review_text_edits("doc-1", "recipe-1", DocumentReviewEditsRequest())
 
-    assert fake.upsert is not None
-    assert fake.upsert["extraction_recipe_id"] != "er_shared"
-    assert fake.pointer == fake.upsert["extraction_recipe_id"]
+    assert fake.write is not None
+    assert fake.write.extraction_recipe_id != "er_shared"
+    assert fake.write.source_sha256 == "a" * 64
 
 
 async def test_list_document_recipes_fetches_jobs_once_for_all_recipes(

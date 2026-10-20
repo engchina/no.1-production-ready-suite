@@ -13,6 +13,7 @@ import pytest
 from app.api.routes import documents as documents_route
 from app.clients.document_cleanup_store import DocumentCleanupTargets, DocumentCleanupTask
 from app.clients.object_storage import ObjectStorageClient
+from app.clients.oracle import DocumentReviewEditConflictError, ReviewedExtractionWrite
 from app.config import Settings, get_settings
 from app.main import app
 from app.rag.document_cleanup import retry_due_document_cleanups
@@ -535,6 +536,38 @@ class FakeWorkspaceOracle:
         artifact = self.extraction_artifacts.get(extraction_recipe_id)
         return dict(artifact) if artifact is not None else None
 
+    async def save_document_recipe_review_extraction(
+        self,
+        *,
+        document_id: str,
+        recipe_id: str,
+        build: Callable[[Mapping[str, object], Mapping[str, object]], ReviewedExtractionWrite],
+    ) -> str:
+        """実 Oracle がレシピの行ロックの下で行う、読み・修正・書きをまとめた fake(#2616)。"""
+        row = self.recipes.get(recipe_id)
+        if row is None or row.get("document_id") != document_id:
+            raise KeyError("レシピが見つかりません。")
+        if row.get("status") != FileStatus.REVIEW.value:
+            raise DocumentReviewEditConflictError("確認待ちのレシピのみ修正できます。")
+        if any(
+            job.recipe_id == recipe_id
+            and job.status in {IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING}
+            for job in self.ingestion_jobs.values()
+        ):
+            raise DocumentReviewEditConflictError("このレシピは処理中または待機中です。")
+        source_id = row.get("active_extraction_recipe_id")
+        artifact = self.extraction_artifacts.get(str(source_id)) if source_id else None
+        if artifact is None or not artifact.get("extraction_json"):
+            raise DocumentReviewEditConflictError("修正対象の抽出結果がありません。")
+        write = build(dict(row), dict(artifact))
+        self.extraction_artifacts[write.extraction_recipe_id] = {
+            "extraction_json": dict(write.extraction),
+            "recipe_subset": write.recipe_subset,
+            "status": write.status,
+        }
+        row["active_extraction_recipe_id"] = write.extraction_recipe_id
+        return write.extraction_recipe_id
+
     async def list_chunk_set_chunks(self, chunk_set_id: str) -> list[DocumentChunkView]:
         return list(self.chunk_set_chunks.get(chunk_set_id, []))
 
@@ -755,7 +788,15 @@ def test_recipe_review_edits_patch_saves_without_creating_chunks(
 
     response = client.patch(
         f"/api/documents/{document_id}/recipes/{recipe_id}/review-edits",
-        json={"element_edits": [{"element_id": "el-0000", "text": "経費申請（レビュー済み）"}]},
+        json={
+            "element_edits": [
+                {
+                    "element_id": "el-0000",
+                    "text": "経費申請（レビュー済み）",
+                    "base_text": "経費申請",
+                }
+            ]
+        },
     )
 
     assert response.status_code == 200
@@ -784,7 +825,7 @@ def test_recipe_review_edits_patch_rejects_unknown_element(
 
     response = client.patch(
         f"/api/documents/{document_id}/recipes/{recipe_id}/review-edits",
-        json={"element_edits": [{"element_id": "missing", "text": "x"}]},
+        json={"element_edits": [{"element_id": "missing", "text": "x", "base_text": ""}]},
     )
 
     assert response.status_code == 400
@@ -808,6 +849,67 @@ def test_recipe_review_edits_patch_requires_review_status(
     )
 
     assert response.status_code == 409
+
+
+def test_recipe_review_edits_patch_rejects_stale_base_text(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """読み込んだ後にほかの保存で変わった要素への修正は 409 にし、成果を変えない(#2616)。"""
+    document_id = _upload("policy.txt", b"sample", "text/plain")
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.REVIEW,
+        extraction=_review_extraction_payload(),
+    )
+    before = dict(fake_document_dependencies.extraction_artifacts)
+
+    response = client.patch(
+        f"/api/documents/{document_id}/recipes/{recipe_id}/review-edits",
+        json={
+            "element_edits": [{"element_id": "el-0000", "text": "新しい文", "base_text": "古い文"}]
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error_messages"] == [
+        "読み込んだ後に、ほかの操作で同じ箇所が保存されました。"
+        "変更を破棄して読み込み直してから直してください。"
+    ]
+    assert fake_document_dependencies.extraction_artifacts == before
+    assert fake_document_dependencies.recipes[recipe_id]["active_extraction_recipe_id"] == (
+        "er-recipe-1"
+    )
+
+
+def test_recipe_review_edits_patch_after_approval_is_rejected(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """承認で CHUNK job を投入した後の下書き保存は 409 にする(承認した内容を後から変えない)。"""
+    document_id = _upload("policy.txt", b"sample", "text/plain")
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.REVIEW,
+        extraction=_review_extraction_payload(),
+    )
+    approved = client.post(f"/api/documents/{document_id}/recipes/{recipe_id}/approve")
+    assert approved.status_code == 200
+
+    response = client.patch(
+        f"/api/documents/{document_id}/recipes/{recipe_id}/review-edits",
+        json={
+            "element_edits": [
+                {"element_id": "el-0000", "text": "承認後の修正", "base_text": "経費申請"}
+            ]
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error_messages"] == ["このレシピは処理中または待機中です。"]
+    assert fake_document_dependencies.recipes[recipe_id]["active_extraction_recipe_id"] == (
+        "er-recipe-1"
+    )
 
 
 def test_document_upload_returns_assigned_knowledge_bases() -> None:
@@ -1390,7 +1492,11 @@ def test_recipe_approve_review_with_edits_saves_before_chunk_phase(
 
     resp = client.post(
         f"/api/documents/{document_id}/recipes/{recipe_id}/approve",
-        json={"element_edits": [{"element_id": "el-0000", "text": "経費申請（承認時修正）"}]},
+        json={
+            "element_edits": [
+                {"element_id": "el-0000", "text": "経費申請（承認時修正）", "base_text": "経費申請"}
+            ]
+        },
     )
 
     assert resp.status_code == 200
@@ -1416,7 +1522,7 @@ def test_recipe_approve_review_with_unknown_element_is_rejected(
 
     resp = client.post(
         f"/api/documents/{document_id}/recipes/{recipe_id}/approve",
-        json={"element_edits": [{"element_id": "does-not-exist", "text": "x"}]},
+        json={"element_edits": [{"element_id": "does-not-exist", "text": "x", "base_text": ""}]},
     )
 
     assert resp.status_code == 400

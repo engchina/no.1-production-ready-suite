@@ -718,6 +718,12 @@ export function useSaveDocumentRecipeReviewEdits() {
     }) => api.saveDocumentRecipeReviewEdits(id, recipeId, payload),
     onSuccess: (_recipe, variables) =>
       invalidateDocumentRecipeQueries(qc, variables.id),
+    // 409（ほかの保存が先に同じ箇所を変えた・承認済み）は、今の抽出結果と状態を読み込み直す（#2616）。
+    onError: (error, variables) => {
+      if (error instanceof ApiError && error.status === 409) {
+        invalidateDocumentRecipeQueries(qc, variables.id);
+      }
+    },
   });
 }
 

@@ -402,11 +402,12 @@ test("構造化要素の修正を保持し、保存後だけ承認できる", { 
   await expect(page.locator("#review-edit-el-0000")).toHaveValue("経費申請(編集後)");
   expect(calls.save).toBe(1);
   const saveBody = calls.saveBody as {
-    element_edits: { element_id: string; text: string }[];
+    element_edits: { element_id: string; text: string; base_text: string }[];
   };
   expect(saveBody.element_edits).toContainEqual({
     element_id: "el-0000",
     text: "経費申請(編集後)",
+    base_text: "経費申請",
   });
 
   await expect(page.getByRole("button", { name: "承認して Chunk 作成" })).toBeEnabled();
@@ -433,13 +434,14 @@ test("表セルの修正を下書き保存すると table_cell_edits を送信�
   await expect(page.getByText("変更を保存しました。")).toBeVisible();
 
   const body = calls.saveBody as {
-    table_cell_edits: { table_id: string; row: number; col: number; text: string }[];
+    table_cell_edits: { table_id: string; row: number; col: number; text: string; base_text: string }[];
   };
   expect(body.table_cell_edits).toContainEqual({
     table_id: "tbl-1",
     row: 1,
     col: 1,
     text: "2000円",
+    base_text: "1000円",
   });
   expect(calls.approve).toBe(0);
 });
@@ -466,6 +468,29 @@ test("下書き保存に失敗しても入力と未保存状態を保持する",
 
   await expect(page.getByText("Oracleへの保存に失敗しました。")).toBeVisible();
   await expect(elementField).toHaveValue("保存失敗後も残る修正");
+  await expect(page.getByRole("button", { name: "承認して Chunk 作成" })).toBeDisabled();
+});
+
+test("ほかの保存と競合した 409 では理由を出し、入力を保持して抽出結果を読み込み直す", async ({ page }) => {
+  await mockReviewWorkspace(page);
+  const conflict = "読み込んだ後に、ほかの操作で同じ箇所が保存されました。変更を破棄して読み込み直してから直してください。";
+  await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/review-edits`, (route) =>
+    route.fulfill({ status: 409, json: { data: null, error_messages: [conflict], warning_messages: [] } })
+  );
+  await page.goto(`/documents/${DOC_ID}`);
+
+  await page.getByRole("tab", { name: "構造化要素" }).click();
+  await page.getByRole("button", { name: "構造化要素を修正" }).click();
+  const elementField = page.locator("#review-edit-el-0000");
+  await elementField.fill("競合する修正");
+  const refetch = page.waitForRequest((request) =>
+    request.url().includes(`/api/documents/${DOC_ID}/recipes/recipe-1/extraction-export`)
+  );
+  await page.getByRole("button", { name: "変更を保存" }).click();
+
+  await expect(page.getByText(conflict)).toBeVisible();
+  await refetch;
+  await expect(elementField).toHaveValue("競合する修正");
   await expect(page.getByRole("button", { name: "承認して Chunk 作成" })).toBeDisabled();
 });
 

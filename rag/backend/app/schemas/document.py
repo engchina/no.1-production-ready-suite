@@ -745,6 +745,8 @@ class DocumentElementTextEdit(BaseModel):
 
     element_id: str = Field(..., max_length=128)
     text: str = Field(default="", max_length=200000)
+    # 読み込んだときの文。保存のときに今の文と違えば、ほかの保存が先に変えていたため 409(#2616)。
+    base_text: str = Field(..., max_length=200000)
 
 
 class DocumentTableCellTextEdit(BaseModel):
@@ -754,6 +756,8 @@ class DocumentTableCellTextEdit(BaseModel):
     row: int = Field(..., ge=0)
     col: int = Field(..., ge=0)
     text: str = Field(default="", max_length=200000)
+    # 読み込んだときの文。保存のときに今の文と違えば、ほかの保存が先に変えていたため 409(#2616)。
+    base_text: str = Field(..., max_length=200000)
 
 
 class DocumentReviewEditsRequest(BaseModel):
