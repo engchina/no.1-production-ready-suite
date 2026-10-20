@@ -10,10 +10,12 @@ import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
 
 import type { RetrievedChunk } from "@/lib/api";
+import { answerPassageLabels, answerPassages } from "@/lib/answer-passages";
 import {
   parseAnswerText,
   parseCitationLine,
   resolveCitationLine,
+  type AnswerTextBlock,
   type AnswerTextEntry,
   type CitationTarget,
 } from "@/lib/answer-text";
@@ -35,6 +37,9 @@ const GAPS_SECTION_TITLE = "資料から確認できなかった事項";
  * 根拠の行は、当たる引用（`citations`）があれば押せるようにし、その引用の原文のプレビューを開く（#657）。
  * 当たる引用は、回答エンジンが付けた出典行の番号で決める（無ければファイル名と頁。#1330）。位置が確定できない行は
  * 候補の引用を開き、位置は未確定と示して原文を強調しない（#2710）。
+ * 回答の記録の診断（`diagnostics`）に段落の印の記録（#2738）があれば、印の付いた段落・項目に線と印を付け、本文の上に
+ * 回答全体の注意、本文の後ろに「根拠と矛盾し除いた内容」「確認が必要な点」を出す（Agent と同じ共有の部品）。書式に
+ * 合わない本文も、記録があれば空行で段落に分けて印を付ける。記録の無い過去の回答は今までの表示のまま。
  */
 export function AnswerText({
   text,
@@ -43,6 +48,7 @@ export function AnswerText({
   live = false,
   citations = [],
   unreadSections = [],
+  diagnostics,
 }: {
   text: string;
   streaming?: boolean;
@@ -57,9 +63,12 @@ export function AnswerText({
    * 文書の詳細を開けない利用者には渡さない（呼び出し側が `canOpenDocumentDetail` で決める）。
    */
   unreadSections?: readonly UnreadSectionLink[];
+  /** 回答の記録の診断（`diagnostics.answer`）。段落の印の記録（#2738）を読む。生成中は渡さない。 */
+  diagnostics?: unknown;
 }) {
   const source = useEvidenceSource<CitationTarget>();
-  const blocks = streaming ? null : parseAnswerText(text);
+  const passages = streaming ? null : answerPassages(diagnostics);
+  const blocks = streaming ? null : (parseAnswerText(text) ?? (passages ? plainParagraphs(text) : null));
   if (!blocks) {
     return (
       <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg" aria-live={live ? "polite" : undefined}>
@@ -72,6 +81,8 @@ export function AnswerText({
   return (
     <AnswerSections
       live={live}
+      passages={passages}
+      passageLabels={answerPassageLabels()}
       blocks={blocks.map((block, index): AnswerSectionsBlock =>
         block.kind === "paragraph"
           ? { kind: "paragraph", key: String(index), content: block.text }
@@ -143,4 +154,13 @@ export function AnswerText({
       extra: renderSectionLink(entry.text, title),
     };
   }
+}
+
+/** 書式の見出しの無い本文を、空行で段落に分ける（段落の印の記録のある回答だけ。#2738）。 */
+function plainParagraphs(text: string): AnswerTextBlock[] {
+  return text
+    .split(/\n\s*\n/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => ({ kind: "paragraph", text: part }));
 }

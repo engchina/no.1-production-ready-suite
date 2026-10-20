@@ -1,5 +1,6 @@
 import type { Page, Route } from "@playwright/test";
 
+import type { AnswerValidationPassageContent } from "../src/lib/api";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
 // #2328: Agent のチャットの回答を RAG のチャットと同じ共有の部品で出す。
@@ -278,12 +279,165 @@ for (const viewport of VIEWPORTS) {
 
     // 「資料との照合」は件数のバッジだけ（節の項目の数と一致）。開いて見るものが無いので ⌄ を出さない。
     const review = turn.getByTestId(`chat-review-${RUN_ID}`);
-    await expect(review).toHaveText("資料との照合一部を確かめられず省略 1 件");
+    await expect(review).toHaveText("資料との照合確かめられない点 1 件");
     await expect(turn.getByTestId(`chat-review-${RUN_ID}-summary`)).toHaveCount(0);
     await expect(review.getByTestId("answer-review-unverified")).toHaveCount(0);
 
     await expectNoHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`answer-evidence-${viewport.name}.png`), fullPage: true });
+  });
+}
+
+// #2738: 根拠と矛盾した段落だけを本文から外し、確かめられない段落（未確認）と規則の検査の段落（要注意）は本文に
+// 残して印を付ける。印を押すと理由を開き、「確認が必要な点」から本文の段落へ移る。回答全体の注意は本文の上。
+// 「資料との照合」と実行の詳細は「未確認 N 件」「要注意 N 件」「矛盾で除外 N 件」のバッジ（RAG と同じ共有の部品）。
+const MARKED_UNVERIFIED = "申請後の手続きは自動で通知されます。";
+const MARKED_ANSWER = [
+  "合成の質問 A の答えは次のとおりです。",
+  "",
+  "- 申請は 30 日前までに行います【証拠 ID: 0f3a9c2…:7】。",
+  "- 承認は担当の部署が行います。",
+  "",
+  MARKED_UNVERIFIED,
+].join("\n");
+
+function seedMarkedRun(mockApi: MockApi) {
+  seedRun(mockApi);
+  const run = mockApi.state.runs.find((item) => item.id === RUN_ID) as {
+    artifacts: { kind: string; content: Record<string, unknown> }[];
+  };
+  run.artifacts = run.artifacts.map((artifact) => {
+    if (artifact.kind === "answer") return { ...artifact, content: { text: MARKED_ANSWER } };
+    if (artifact.kind !== "answer_validation") return artifact;
+    const content: Record<string, unknown> & AnswerValidationPassageContent = {
+      ...artifact.content,
+      notice: undefined,
+      withheld: { removed: 1, unverified: 1, warnings: 1, all: false, listed: 3 },
+      passage_marks: [
+        {
+          text: "- 承認は担当の部署が行います。",
+          state: "warning",
+          reasons: [{ code: "target_mismatch", label: "根拠は別の対象についての記載", detail: "合成の理由 B。" }],
+        },
+        {
+          text: MARKED_UNVERIFIED,
+          state: "unverified",
+          reasons: [{ code: "unsupported", label: "根拠で確かめられない", detail: "合成の理由 C。" }],
+        },
+      ],
+      removed_passages: [
+        { text: WITHHELD_QUOTE, reasons: [{ code: "contradicted", label: "根拠と矛盾", detail: "合成の理由 D。" }] },
+      ],
+      answer_warnings: [
+        { code: "guide_check", label: "業務ガイドの手順の確認で問題が見つかった", detail: "合成の手順の説明がありません。" },
+      ],
+    };
+    return { ...artifact, content };
+  });
+}
+
+async function expectMarkedAnswer(page: Page, body: ReturnType<Page["getByTestId"]>, viewportWidth: number) {
+  // 回答全体の注意は本文の上の warning の Banner。
+  const warnings = body.getByTestId("answer-passage-warnings");
+  await expect(warnings).toContainText("業務ガイドの手順の確認で問題が見つかった");
+  await expect(warnings).toContainText("合成の手順の説明がありません。");
+  await expect(warnings.getByRole("status")).toBeVisible();
+  // 印の段落は本文に残る（外さない）。印を付けた段落は「資料により確認できた事項」の見出しの下に入れない。
+  const marked = body.getByTestId("answer-passage-mark");
+  await expect(marked).toHaveCount(2);
+  await expect(marked.nth(0)).toHaveAttribute("data-passage-state", "warning");
+  await expect(marked.nth(0)).toContainText("承認は担当の部署が行います。");
+  await expect(marked.nth(1)).toHaveAttribute("data-passage-state", "unverified");
+  await expect(marked.nth(1)).toContainText(MARKED_UNVERIFIED);
+  await expect(body.getByRole("heading", { name: "資料により確認できた事項" })).toHaveCount(0);
+  await expect(body).not.toContainText("資料から確認できなかった事項");
+  // 印は段落の末尾の小さな印（アイコンと短いラベル。色だけに頼らない）。押すと理由を開き、もう一度で閉じる。
+  const toggle = marked.nth(1).getByTestId("answer-passage-mark-toggle");
+  await expect(toggle).toHaveText("未確認の理由");
+  await expect(toggle.locator("svg")).toHaveCount(1);
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const reasons = marked.nth(1).getByTestId("answer-passage-mark-reasons");
+  await expect(reasons).toHaveText("根拠で確かめられない合成の理由 C。");
+  // キーボードでも開閉できる。
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(reasons).toHaveCount(0);
+  const warningToggle = marked.nth(0).getByTestId("answer-passage-mark-toggle");
+  await warningToggle.focus();
+  await page.keyboard.press("Space");
+  await expect(marked.nth(0).getByTestId("answer-passage-mark-reasons")).toHaveText(
+    "根拠は別の対象についての記載合成の理由 B。"
+  );
+  // 印は段落の幅に収まる（375px でも折り返して、はみ出さない）。
+  const markedBox = await marked.nth(1).boundingBox();
+  const toggleBox = await toggle.boundingBox();
+  expect(toggleBox!.x + toggleBox!.width).toBeLessThanOrEqual(markedBox!.x + markedBox!.width + 1);
+  expect(toggleBox!.x + toggleBox!.width).toBeLessThanOrEqual(viewportWidth);
+
+  // 本文の後ろの節: 根拠と矛盾し除いた内容 → 確認が必要な点。
+  const removed = body.getByTestId("answer-removed-passages");
+  await expect(removed.locator("h4")).toHaveText("根拠と矛盾し除いた内容");
+  await expect(removed.getByTestId("answer-removed-passage")).toHaveText(`「${WITHHELD_QUOTE}」根拠と矛盾：合成の理由 D。`);
+  const points = body.getByTestId("answer-marked-passages");
+  await expect(points.locator("h4")).toHaveText("確認が必要な点");
+  await expect(points.getByTestId("answer-marked-passage")).toHaveText([
+    "「承認は担当の部署が行います。」要注意：根拠は別の対象についての記載",
+    `「${MARKED_UNVERIFIED}」未確認：根拠で確かめられない`,
+  ]);
+  // 項目を押すと本文の段落へ移り、フォーカスする。
+  await points.getByTestId("answer-marked-passage-link").nth(1).click();
+  await expect(marked.nth(1)).toBeFocused();
+  await expect(marked.nth(1)).toBeInViewport();
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`矛盾した段落だけを外し、確かめられない段落に印・理由・確認が必要な点・回答の注意を出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    seedMarkedRun(mockApi);
+    await serveSourcePreviews(page);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await openThread(page);
+    const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+    await expectMarkedAnswer(page, turn.getByTestId(`chat-answer-${RUN_ID}`), viewport.width);
+    // 確かめた段落には根拠の行が付いたまま。
+    await expect(turn.getByTestId(`chat-answer-${RUN_ID}`).getByTestId("answer-citation-link").first()).toHaveText(
+      "根拠：文書 0.pdf p.3"
+    );
+    // 「資料との照合」は印の数のバッジ（0 件は出さない）。「一部を確かめられず省略」は出さない。
+    const review = turn.getByTestId(`chat-review-${RUN_ID}`);
+    const badges = review.locator("[data-status-variant]");
+    await expect(badges).toHaveText(["未確認 1 件", "要注意 1 件", "矛盾で除外 1 件"]);
+    await expect(badges.nth(0)).toHaveAttribute("data-status-variant", "warning");
+    await expect(badges.nth(1)).toHaveAttribute("data-status-variant", "neutral");
+    await expect(badges.nth(2)).toHaveAttribute("data-status-variant", "danger");
+    for (const badge of await badges.all()) await expect(badge.locator("svg")).toHaveCount(1);
+    await expect(turn).not.toContainText("省略");
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`answer-marks-chat-${viewport.name}.png`), fullPage: true });
+
+    // 実行の詳細の回答も同じ部品・同じバッジ。
+    await page.goto(`/runs?id=${RUN_ID}`);
+    const section = page.getByTestId("run-answer-section");
+    await expectMarkedAnswer(page, section.getByTestId("run-answer-artifact-answer"), viewport.width);
+    await expect(page.getByTestId("run-answer-passages").locator("[data-status-variant]")).toHaveText([
+      "未確認 1 件",
+      "要注意 1 件",
+      "矛盾で除外 1 件",
+    ]);
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`answer-marks-run-${viewport.name}.png`), fullPage: true });
+
+    // ダークのテーマでも同じ印・線・節を出す（色は共有のトークン）。
+    await page.evaluate(() =>
+      window.localStorage.setItem("production-ready-agent.ui", JSON.stringify({ state: { theme: "dark" }, version: 0 }))
+    );
+    await page.reload();
+    await expect(page.getByTestId("run-answer-section").getByTestId("answer-passage-mark")).toHaveCount(2);
+    await page.getByTestId("run-answer-section").getByTestId("answer-passage-mark-toggle").nth(1).click();
+    await page.screenshot({ path: testInfo.outputPath(`answer-marks-run-dark-${viewport.name}.png`), fullPage: true });
   });
 }
 
@@ -658,7 +812,7 @@ for (const viewport of VIEWPORTS) {
     const toggle = section.getByTestId("answer-section-toggle");
     await expect(toggle).toHaveText(`すべて表示（全 ${quotes.length} 件）`);
     await expect(turn.getByTestId(`chat-review-${RUN_ID}`).locator("[data-status-variant]")).toHaveText(
-      `一部を確かめられず省略 ${quotes.length} 件`
+      `確かめられない点 ${quotes.length} 件`
     );
     await page.screenshot({ path: testInfo.outputPath(`answer-withheld-collapsed-${viewport.name}.png`), fullPage: true });
     await toggle.click();

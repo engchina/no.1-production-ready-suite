@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { answerEvidenceData } from "@/lib/answer-evidence";
 import { validationReview } from "@/lib/answer-review";
-import { noticeHeading, structureAnswer } from "@/lib/answer-structure";
+import { noticeHeading, structureAnswer, type StructuredBlock } from "@/lib/answer-structure";
 
 // #2328: Agent の回答を RAG のチャットと同じ節に組み立てる（表示だけ。本文の文は書き換えない）。内容は合成のデータ。
 
@@ -18,6 +18,19 @@ function evidence(passages: { text: string; chunk_ids: string[] }[], markers: { 
     passages,
     markers,
   });
+}
+
+/** 段落の照合のための原文（`raw`。#2738）を除いた形（節の組み立ての比較）。 */
+function withoutRaw<T extends { raw?: string }>(value: T): Omit<T, "raw"> {
+  const copy: T = { ...value };
+  delete copy.raw;
+  return copy;
+}
+
+function shape(blocks: StructuredBlock[] | null) {
+  return blocks?.map((block) =>
+    block.kind === "section" ? { ...block, entries: block.entries.map(withoutRaw) } : withoutRaw(block)
+  );
 }
 
 describe("structureAnswer", () => {
@@ -45,7 +58,7 @@ describe("structureAnswer", () => {
       HEADING,
       TITLES
     );
-    expect(blocks).toEqual([
+    expect(shape(blocks)).toEqual([
       { kind: "paragraph", key: "b0", text: "答えは次のとおりです。", chunkIds: [] },
       {
         kind: "section",
@@ -123,6 +136,7 @@ describe("validationReview", () => {
       withheldClaims: 6,
       withheldAll: false,
       listedItems: 6,
+      passages: null,
     });
     // 節の記録が無い古い Run は 0（画面は外した段落の数で出す）。
     expect(validationReview({ ...content, notice: undefined })?.listedItems).toBe(0);
@@ -162,7 +176,7 @@ describe("structureAnswer の照合が判定を出さなかった回答", () => 
 
   it("「確認できた」節を作らず、本文に根拠の行を付けず、根拠の原文を「参考」節にする", () => {
     const blocks = structureAnswer(answer, textEvidence([{ quote: "申請は 30 日前までに行う。", chunk_ids: ["c1"] }]), null, TITLES);
-    expect(blocks).toEqual([
+    expect(shape(blocks)).toEqual([
       { kind: "paragraph", key: "b0", text: "答えは次のとおりです。", chunkIds: [] },
       {
         kind: "section",
@@ -261,5 +275,86 @@ describe("structureAnswer の除いた内容の節", () => {
     if (notice?.kind !== "section") throw new Error("節がありません");
     expect(notice.entries.filter((entry) => !entry.muted)).toHaveLength(12);
     expect(notice.entries.some((entry) => entry.text.includes("ほか"))).toBe(false);
+  });
+});
+
+// #2738: 根拠と矛盾した段落だけを外し、確かめられない段落・規則の検査の段落は本文に残して印を付ける。
+describe("段落の印の記録のある回答", () => {
+  const marks = {
+    passage_marks: [
+      {
+        text: "- 承認は部署が行います。",
+        state: "unverified",
+        reasons: [{ code: "unsupported", label: "根拠で確かめられない", detail: "" }],
+      },
+    ],
+    removed_passages: [{ text: "延長は 2 回です。", reasons: [{ code: "contradicted", label: "根拠と矛盾", detail: "" }] }],
+    answer_warnings: [],
+  };
+
+  it("照合の結果は印の記録を持ち、過去の判定（確かめられない段落で外す）を使わない", () => {
+    const content = {
+      status: "completed",
+      result: {
+        status: "completed",
+        valid: false,
+        claims: [{ answer_quote: "承認は部署が行います。", status: "unsupported", reason: "" }],
+        findings: [{ check: "guide", severity: "error", message: "手順の順序" }],
+      },
+      withheld: { removed: 1, unverified: 1, warnings: 0, all: false, listed: 2 },
+      ...marks,
+    };
+    const review = validationReview(content);
+    expect(review?.state).toBe("marked");
+    expect(review?.passages?.marks).toHaveLength(1);
+    expect(review?.passages?.removed).toHaveLength(1);
+    // 印も外した段落も回答の注意も無ければ「照合済み」（規則の検査の結果だけでは本文を外さない）。
+    expect(
+      validationReview({ ...content, passage_marks: [], removed_passages: [], answer_warnings: [] })
+    ).toMatchObject({ state: "verified", passages: null });
+  });
+
+  it("印の付いた項目は「確認できた」節に入れず、記録の節の見出し（過去の節・確認が必要な点）は本文から除く", () => {
+    const answer = [
+      "答えは次のとおりです。",
+      "",
+      "- 申請は 30 日前です【証拠 ID: c1】。",
+      "- 承認は部署が行います。",
+      "",
+      "**確認が必要な点**",
+      "",
+      "- 「承認は部署が行います。」根拠で確かめられない",
+    ].join("\n");
+    const blocks = structureAnswer(
+      answer,
+      evidence(
+        [
+          { text: "- 申請は 30 日前です【証拠 ID: c1】。", chunk_ids: ["c1"] },
+          { text: "- 承認は部署が行います。", chunk_ids: ["c2"] },
+        ],
+        [{ text: "【証拠 ID: c1】", chunk_ids: ["c1"] }]
+      ),
+      HEADING,
+      TITLES,
+      validationReview({ status: "completed", ...marks })?.passages ?? null
+    );
+    expect(blocks?.some((block) => block.kind === "section" && block.title === TITLES.confirmed)).toBe(false);
+    expect(blocks?.some((block) => block.kind === "section" && block.title === TITLES.unconfirmed)).toBe(false);
+    const list = blocks?.find((block) => block.kind === "section" && block.key === "b1");
+    if (list?.kind !== "section") throw new Error("箇条書きがありません");
+    expect(list.entries.map((entry) => entry.raw)).toEqual(["- 申請は 30 日前です【証拠 ID: c1】。", "- 承認は部署が行います。"]);
+    expect(JSON.stringify(blocks)).not.toContain("確認が必要な点");
+  });
+
+  it("根拠を結び付けられない回答も、記録があれば段落に組み立てる", () => {
+    const blocks = structureAnswer("段落 1。\n\n段落 2。", null, null, TITLES, {
+      marks: [{ text: "段落 2。", state: "warning", reasons: [] }],
+      removed: [],
+      warnings: [],
+    });
+    expect(shape(blocks)).toEqual([
+      { kind: "paragraph", key: "b0", text: "段落 1。", chunkIds: [] },
+      { kind: "paragraph", key: "b1", text: "段落 2。", chunkIds: [] },
+    ]);
   });
 });

@@ -839,6 +839,7 @@ export function SearchClient() {
                       streaming={isStreaming}
                       citations={citations}
                       unreadSections={canOpenSections ? unreadSectionLinks(meta?.diagnostics?.answer) : []}
+                      diagnostics={phase === "done" ? meta?.diagnostics?.answer : null}
                       cursor={
                         isStreaming ? (
                           <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle" />

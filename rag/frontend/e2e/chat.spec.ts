@@ -933,6 +933,105 @@ for (const viewport of [
   });
 }
 
+// #2738: 根拠と矛盾した段落だけを本文から外し、確かめられない段落（未確認）と規則の検査の段落（要注意）は本文に
+// 残して印を付ける（Agent と同じ共有の部品）。印を押すと理由、「確認が必要な点」から本文の段落へ移る。回答全体の注意は
+// 本文の上、印の数のバッジは本文の下。内容は合成のデータ。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`矛盾した段落だけを外し、確かめられない段落に印・理由・確認が必要な点・バッジを出す (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const unverified = "合成の手続きは翌日に自動で通知されます。";
+    const text = [
+      "合成の手続きは 2 段階です。",
+      "",
+      "資料により確認できた事項",
+      "",
+      "・対象の行の終了日を入力します。",
+      "根拠：合成の文書 A.pdf p.2",
+      "・新しい開始日の行を追加します。",
+      "根拠：合成の文書 A.pdf p.3",
+      "",
+      unverified,
+    ].join("\n");
+    const answerDiagnostics = {
+      execution_steps: [],
+      evidence_tree: [],
+      passage_marks: [
+        {
+          text: "・新しい開始日の行を追加します。",
+          state: "warning",
+          reasons: [{ code: "value_unbound", label: "根拠の表の対応と違う可能性", detail: "合成の理由 A。" }],
+        },
+        {
+          text: unverified,
+          state: "unverified",
+          reasons: [{ code: "unsupported", label: "根拠で確かめられない", detail: "" }],
+        },
+      ],
+      removed_passages: [
+        { text: "合成の変更は翌月から反映されます。", reasons: [{ code: "contradicted", label: "根拠と矛盾", detail: "合成の理由 B。" }] },
+      ],
+      answer_warnings: [{ code: "off_goal", label: "質問からずれている可能性", detail: "" }],
+    };
+    const streamBody = [
+      sseStart,
+      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text })}\n\n`,
+      `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
+      `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+    ].join("");
+    await mockChat(page, "ready", [], { streamBody });
+
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    await page.getByRole("button", { name: "新しい会話" }).click();
+    await page.getByRole("textbox").fill("合成の質問です。");
+    await page.getByRole("button", { name: "送信" }).click();
+
+    const answer = page.getByTestId("answer-text");
+    // 回答全体の注意は本文の上の warning の Banner。
+    await expect(answer.getByTestId("answer-passage-warnings")).toHaveText("質問からずれている可能性");
+    const marked = answer.getByTestId("answer-passage-mark");
+    await expect(marked).toHaveCount(2);
+    await expect(marked.nth(0)).toHaveAttribute("data-passage-state", "warning");
+    await expect(marked.nth(0)).toContainText("新しい開始日の行を追加します。");
+    // 印の付いた項目の根拠の行は残る。
+    await expect(marked.nth(0)).toContainText("根拠：合成の文書 A.pdf p.3");
+    await expect(marked.nth(1)).toHaveAttribute("data-passage-state", "unverified");
+    await expect(marked.nth(1)).toContainText(unverified);
+    const toggle = marked.nth(0).getByTestId("answer-passage-mark-toggle");
+    await expect(toggle).toHaveText("要注意の理由");
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(marked.nth(0).getByTestId("answer-passage-mark-reasons")).toHaveText("根拠の表の対応と違う可能性合成の理由 A。");
+    // 詳しい理由（detail）の無い印は短い理由だけを出す。
+    await marked.nth(1).getByTestId("answer-passage-mark-toggle").click();
+    await expect(marked.nth(1).getByTestId("answer-passage-mark-reasons")).toHaveText("根拠で確かめられない");
+
+    await expect(answer.getByTestId("answer-removed-passages").getByTestId("answer-removed-passage")).toHaveText(
+      "「合成の変更は翌月から反映されます。」根拠と矛盾：合成の理由 B。"
+    );
+    const points = answer.getByTestId("answer-marked-passages");
+    await expect(points.locator("h4")).toHaveText("確認が必要な点");
+    await expect(points.getByTestId("answer-marked-passage")).toHaveText([
+      "「新しい開始日の行を追加します。」要注意：根拠の表の対応と違う可能性",
+      `「${unverified}」未確認：根拠で確かめられない`,
+    ]);
+    await points.getByTestId("answer-marked-passage-link").nth(1).click();
+    await expect(marked.nth(1)).toBeFocused();
+
+    // 印の数のバッジは本文の下（Agent の「資料との照合」と同じ部品・文言）。
+    const badges = page.getByTestId("answer-passage-badges").locator("[data-status-variant]");
+    await expect(badges).toHaveText(["未確認 1 件", "要注意 1 件", "矛盾で除外 1 件"]);
+    await expect(badges.nth(0)).toHaveAttribute("data-status-variant", "warning");
+    await expect(badges.nth(2)).toHaveAttribute("data-status-variant", "danger");
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`answer-marks-rag-chat-${viewport.name}.png`), fullPage: true });
+  });
+}
+
 // #2096: 回答の処理の経過は、回答の工程ごとの段階（answer_step。工程名・入れ子の深さ・LLM の回数）を 1 か所に
 // 既定で開いて出す。名前は「処理の経過」1 つで、処理の経過 → 回答の本文 → 根拠の一覧 → 評価 の順（#2115）。
 for (const theme of ["light", "dark"] as const) {

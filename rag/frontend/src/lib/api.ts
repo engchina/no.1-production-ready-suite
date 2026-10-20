@@ -1436,6 +1436,32 @@ export interface ChatMessage {
   sender_display_name?: string;
   /** 質問に添付したファイル（#2517）。 */
   attachments?: ChatAttachmentApiReference[];
+  /**
+   * 回答の段落の印・根拠と矛盾して外した段落・回答全体の注意（ASSISTANT の完了した回答。#2738。契約は
+   * platform/contracts/answer-passages/passage-marks.json）。この記録より前の回答は未指定（今までの表示のまま）。
+   */
+  passage_marks?: AnswerPassageMarkData[];
+  removed_passages?: AnswerRemovedPassageData[];
+  answer_warnings?: AnswerPassageReasonData[];
+}
+
+/** 段落の印・外した段落・回答全体の注意の理由（#2738）。label は利用者に見せる短い文（backend の文をそのまま出す）。 */
+export interface AnswerPassageReasonData {
+  code: string;
+  label: string;
+  detail?: string;
+}
+
+export interface AnswerPassageMarkData {
+  /** 回答の本文の段落の原文（段落の照合に使う）。 */
+  text: string;
+  state: "unverified" | "warning";
+  reasons: AnswerPassageReasonData[];
+}
+
+export interface AnswerRemovedPassageData {
+  text: string;
+  reasons: AnswerPassageReasonData[];
 }
 
 export interface ConversationSummary {
