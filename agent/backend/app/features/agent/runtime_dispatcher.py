@@ -6,6 +6,10 @@
 この worker が Oracle の checkpoint の row lock で Run を claim して実行する。承認がすべて決まって
 queued に戻った Run は、保存した SDK の状態から再開する。
 
+claim は所有者・一意な token・世代を lease に書き、実行の開始はその claim を渡した条件付きの
+遷移にする（`app.features.agent.run_claim`。#2606）。lease の期限が切れて別の worker が claim し
+直した Run は、旧所有者が開始しても受け付けない（同じ claim の 2 回目の開始も受け付けない）。
+
 1 回の claim・実行の失敗（DB の一時的な障害など）で worker を止めない。失敗はログに残し、
 待ち（poll の間隔から 2 倍ずつ、上限 60 秒）を置いて続ける（#853）。
 """
@@ -21,7 +25,7 @@ from uuid import uuid4
 from pr_backend_core import configure_logging
 from pr_backend_core.observability.request_context import bind_log_context
 
-from app.features.agent import builtin_runtime
+from app.features.agent import builtin_runtime, run_claim
 from app.features.agent.runtime import builtin_resume_pending, runtime_repository
 from app.settings import get_settings
 
@@ -43,11 +47,19 @@ async def dispatch_once(worker_id: str) -> bool:
     )
     if run is None:
         return False
+    claim = run_claim.claim_of(run.id, run.metadata)
     with bind_log_context(run_id=run.id, worker_id=worker_id):
+        if claim is None:
+            # claim の結果に lease が無い（起きないはず）。所有を示せないので開始しない。
+            logger.warning(
+                "runtime_dispatcher_claim_without_lease",
+                extra={"run_id": run.id, "worker_id": worker_id},
+            )
+            return True
         if builtin_resume_pending(run):
-            await builtin_runtime.resume_run(run.id)
+            await builtin_runtime.resume_run(run.id, claim=claim)
         else:
-            await builtin_runtime.execute_run(run.id)
+            await builtin_runtime.execute_run(run.id, claim=claim)
     return True
 
 

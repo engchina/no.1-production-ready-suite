@@ -1714,6 +1714,65 @@ def test_refuted_paragraphs_still_withhold_the_answer_with_unresolved_citations(
     assert withheld == {"claims": 1, "findings": 0, "all": False}
 
 
+# #2622 の合成の事例（資料は「設定Aは無効」、回答は「設定Aは有効」）。
+SETTING_ANSWER = "設定Aは有効です。"
+SETTING_REASON = "合成資料は設定Aが無効と記載している。"
+
+
+def _unbound(status: str, audit_status: str, reference_check: str) -> dict[str, Any]:
+    """RAG が根拠の ID を照合できなかった判定（出典は無い）。"""
+    return {
+        "answer_quote": SETTING_ANSWER,
+        "status": status,
+        "reason": SETTING_REASON,
+        "audit_status": audit_status,
+        "reference_check": reference_check,
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "label"),
+    [
+        # 今の RAG: 照合できない矛盾は矛盾のまま返る。
+        ("contradicted", "根拠と矛盾"),
+        # 判定が citation_error に変わっていても、監査の元の判定（audit_status）が矛盾なら同じ。
+        ("citation_error", "出典を確かめられない"),
+    ],
+)
+def test_contradiction_with_an_unbound_citation_is_not_published(status: str, label: str) -> None:
+    """監査が矛盾と判定した段落は、根拠の ID を照合できなくても「否定の判定ではない」
+    として載せない (#2622)。"""
+    claim = _unbound(status, "contradicted", "audit_id_invalid")
+    published, withheld = publish_answer(SETTING_ANSWER, _verdict(claim))
+    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+    assert body == "根拠で確かめられた内容はありませんでした。"
+    assert UNVERIFIED_KEPT_INTRO not in published and SETTING_ANSWER not in body
+    assert f"- {label}: 「{SETTING_ANSWER}」" in section
+    assert withheld == {"claims": 1, "findings": 0, "all": True}
+
+
+def test_supported_claims_with_unbound_audit_ids_still_keep_the_answer() -> None:
+    """監査が裏付けありと判定し、ID の照合だけができなかった段落は、今までどおり
+    本文を残す (#1391・#2622)。"""
+    claim = _unbound("citation_error", "supported", "audit_id_invalid")
+    published, withheld = publish_answer(SETTING_ANSWER, _verdict(claim))
+    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+    assert body == SETTING_ANSWER and section.startswith(UNVERIFIED_KEPT_INTRO)
+    assert withheld == {"claims": 0, "findings": 0, "all": False, "unverified": 1}
+
+
+def test_contradiction_from_any_connection_wins_even_when_its_citation_is_unbound() -> None:
+    """接続をまたいでも、監査の元の判定が矛盾の段落は矛盾として選ぶ（ほかの接続が通しても載せない。#2622）。"""
+    unbound = _verdict(_unbound("citation_error", "contradicted", "audit_id_invalid"))
+    passed = _verdict(_claim(SETTING_ANSWER, "supported", "根拠に記載。"))
+    merged = merge_results([passed, unbound])
+    [claim] = merged["claims"]
+    assert claim["audit_status"] == "contradicted" and merged["valid"] is False
+    published, withheld = publish_answer(SETTING_ANSWER, merged)
+    assert UNVERIFIED_KEPT_INTRO not in published
+    assert withheld == {"claims": 1, "findings": 0, "all": True}
+
+
 def test_clarification_only_answer_without_evidence_has_no_notice(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:

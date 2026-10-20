@@ -168,15 +168,18 @@ def evidence_excerpt(
 
 
 def record_fingerprint(record: Any) -> str:
-    """同じ文書・ページ・節・全文の重複だけを識別する。版の異なる本文は統合しない。"""
+    """同じ文書・ページ・節・全文の重複だけを識別する。版の異なる本文・別の文書の同じ本文は統合しない。"""
     metadata = getattr(record, "metadata", {}) or {}
+    record_id = getattr(record, "chunk_uid", "") or record.id
     # 出典不明の本文は、同文でも別資料の可能性があるためIDを隔離キーにする。
-    source = getattr(record, "source", "") or getattr(record, "chunk_uid", "") or record.id
-    from rag_engine.retrieval.metadata_context import document_context_key
+    source = getattr(record, "source", "") or record_id
+    from rag_engine.retrieval.metadata_context import document_context_key, document_identity
 
     value = [
         source,
         document_context_key(record),
+        # 文書の確かな識別子が無い根拠は、表示名が同じでも別の文書の可能性があるので record ごとに隔離する（#2603）。
+        document_identity(record) or "record:" + record_id,
         getattr(record, "page", 0),
         metadata.get("section_path"),
         str(getattr(record, "text", "")),
@@ -225,12 +228,11 @@ def _span_shingles(record: Any, cache: dict[int, frozenset[str]]) -> frozenset[s
 
 
 def _same_source_document(left: Any, right: Any) -> bool:
-    from rag_engine.retrieval.metadata_context import document_context_key
+    """同じ文書の根拠か。文書の確かな識別子が両方で同じときだけ True（表示名だけでは決めない。#2603）。"""
+    from rag_engine.retrieval.metadata_context import document_context_key, document_identity
 
-    if document_context_key(left) != document_context_key(right):
-        return False
-    ids = [str((getattr(record, "metadata", {}) or {}).get("document_id") or "") for record in (left, right)]
-    return not all(ids) or ids[0] == ids[1]
+    identity = document_identity(left)
+    return bool(identity) and identity == document_identity(right) and document_context_key(left) == document_context_key(right)
 
 
 def source_span_relation(kept: Any, other: Any, cache: dict[int, frozenset[str]] | None = None) -> str | None:

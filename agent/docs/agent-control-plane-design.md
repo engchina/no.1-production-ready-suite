@@ -498,6 +498,22 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
 `SELECT ... FOR UPDATE` し、queued の組み込み Runtime の Run に期限付き lease を付けて claim し、実行・再開する。
 実行を始めたら lease を外す（承認の決定で queued に戻った Run を、すぐ claim できるようにする）。別 queue 製品は追加しない。
 
+- **claim と実行の世代（fencing。#2606。`app/features/agent/run_claim.py`）**: lease は所有者（`worker_id`）・一意な
+  `token`・単調に増える `generation` を持つ（表・列は足さず、Run の予約の metadata `_runtime_dispatch_lease`）。
+  実行の開始（`begin_builtin_run` / `begin_builtin_resume` に claim を渡す）は、queued の Run を、今の lease と
+  token・所有者・世代が一致し期限（`expires_at`）が今より後のときだけ 1 回受け付ける。Oracle では head を lock して
+  別のプロセスの claim を読んでから判定し、その場で書く（条件付きの遷移）。期限の切れた・claim し直された旧所有者の
+  開始、同じ claim の 2 回目の開始、running・承認待ち・確認待ち・終了した Run の開始は受け付けない。in_process の
+  開始（claim なし）も queued だけを 1 回開始し、期限内の lease を持つ worker がいれば開始しない。
+- 開始で lease を外し、token と世代を実行の記録（`_runtime_execution`）に移す。実行の区切りの書き戻し（完了・失敗・
+  承認待ちの SDK の状態の保存）は、running で実行の記録の token が自分の実行と同じときだけ受け付け、利用量は
+  token が同じときだけ受け付ける（実行の文脈の token は `run_claim.bind_execution`。実行の外の API の操作は
+  検査しない）。別の実行が始まった後・自分の実行が承認待ちで区切った後の遅れた書き戻しは無視する（ログ
+  `agent_runtime_stale_execution_write_ignored`。開始の拒否は `agent_runtime_begin_rejected`）。
+- running の Run を自動で claim し直す仕組み・heartbeat は持たない（止まった worker の Run は再起動の回復の方針の
+  まま）。この fencing は保存先の中で同じ Run の実行が重ならないようにするだけで、外部のサービスへの副作用の
+  重複を防ぐものではない（#2601）。
+
 外部 dispatcher は `AGENT_RUNTIME_REPOSITORY_BACKEND=oracle_checkpoint|oracle_normalized` が前提。
 memory backend は process 間共有されないため production dispatcher に使用しない。
 
@@ -889,12 +905,19 @@ Agent ごとに変わり、申告と本文の食い違いの扱いも要るた�
 ガイドを返したときだけ数える〔業務ガイドが無いことは資料が無いことではない。0 件の結果には資料の根拠を集める次の手
 `NO_GUIDE_HINT` を足す。#2504〕）を渡した Run で、モデルがどれも呼ばずに最終の回答を
 作ったら、回答を確定する前に（最終の検証の前に）1 回だけ「業務の事実はツールで確かめてから答える。曖昧なら確認の質問だけを
-返してよい。確かめられない・範囲外なら答えられないと答える」を利用者のメッセージとしてモデルへ返して Run を続ける（同じ
+返してよい。ツールで調べても確かめられないなら答えられないと答える」を利用者のメッセージとしてモデルへ返して Run を続ける
+（差し戻しは調べていない回答にだけ行うので、範囲外かを調べずに決めてよいとは書かない。回答の結論が範囲外・答えられないと
+述べる回答〔調べずに判断した拒答。`tool_grounding.declined`〕は、範囲の内外と根拠の有無をツールの結果で判断させる頭の文
+`RETRY_HEAD_DECLINED` で差し戻す。#2608。同じ
 SDK の Agent・ツール・予算。利用量は前の分に積む。差し戻しの回数は Run の metadata `tool_grounding` に残し、承認待ちから
 再開しても 2 回目を差し戻さない）。それでも呼ばなければ、本文を出さずに決まった拒答の文（「社内の資料・業務データで
 確かめられなかったため、お答えできません。推測ではお答えしていません。」＋業務 Agent の説明とスキルの表示名＋渡したツールの
-種類に合わせた質問の例）に置き換え、回答の対応を `insufficient_evidence`（`basis` は `no_tool_grounding`）、最終の検証の
-成果物を `skipped`（`reason` は `no_tool_grounding`）にする。差し戻し・拒答と元の回答は Run の経過（イベントの
+種類に合わせた質問の例）に置き換え、回答の対応を `insufficient_evidence`（`basis` は `no_tool_grounding`。差し戻しの後も
+調べずに範囲外・答えられないと判断した拒答は `declined_without_tools`。経過のイベントと metadata の `tool_grounding` にも
+`declined` を残す。#2608）、最終の検証の成果物を `skipped`（`reason` は `no_tool_grounding`）にする。品質評価のケースの結果は
+回答の対応（`answer_outcome`・`answer_basis`）と、拒答が根拠・データのツールで調べる前か後か（`refusal_stage` の
+`before_tools` / `after_tools`）を持ち、集計は `refused_before_tools` / `refused_after_tools` で数える（調べた結果として根拠が
+無かった拒答と、調べずに拒答したものを分ける）。差し戻し・拒答と元の回答は Run の経過（イベントの
 `tool_grounding`）にだけ残す。呼んだかは Run の step で数え（失敗・承認の却下・評価の dry-run・自動実行で承認が要るため
 呼ばなかったものも数える）、Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合）は数えない。対象外は、
 確認のツールを渡さない Run（上限に達した Run）の確認の質問だけの回答・NL2SQL の SQL の生成前の確認で止まった Run・利用者が確認を取り消した Run（#1441・#1445）・根拠・データの

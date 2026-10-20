@@ -142,6 +142,15 @@ def test_mcp_validate_answer(auth: Any, monkeypatch: MonkeyPatch) -> None:  # no
                     "source_id": "",
                     "reason": "記載なし",
                 },
+                # 根拠の ID を照合できなかった矛盾（#2622）。監査の判定と照合の結果を返す。
+                {
+                    "answer_quote": "設定Aは有効。",
+                    "status": "contradicted",
+                    "source_id": "",
+                    "reason": "記載と食い違う",
+                    "audit_status": "contradicted",
+                    "reference_check": "audit_id_invalid",
+                },
             ],
         )
 
@@ -159,8 +168,22 @@ def test_mcp_validate_answer(auth: Any, monkeypatch: MonkeyPatch) -> None:  # no
     assert body["valid"] is False
     assert body["schema_version"] == mcp_tools.MCP_OUTPUT_SCHEMA_VERSION
     assert (body["checks"], body["findings"], body["guide_revision"]) == ([], [], None)
-    assert [claim["status"] for claim in body["claims"]] == ["supported", "unsupported"]
+    assert [claim["status"] for claim in body["claims"]] == [
+        "supported",
+        "unsupported",
+        "contradicted",
+    ]
     assert body["claims"][0]["chunk_id"] == "c1" and body["claims"][1]["chunk_id"] is None
+    # 診断の無い判定は null、照合できなかった矛盾は監査の判定と照合の結果を返す（#2622）。
+    assert (body["claims"][0]["audit_status"], body["claims"][0]["reference_check"]) == (
+        None,
+        None,
+    )
+    assert body["claims"][2]["chunk_id"] is None
+    assert (body["claims"][2]["audit_status"], body["claims"][2]["reference_check"]) == (
+        "contradicted",
+        "audit_id_invalid",
+    )
     chatter = auth.user_with_permissions("chatter", ["menu.chat"])
     denied = _call(
         "rag_validate_answer",

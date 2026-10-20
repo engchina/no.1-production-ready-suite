@@ -25,7 +25,7 @@ from agents.testing import ScriptedModel, assistant_message, function_call
 from checkpoint_support import CheckpointTable
 from pytest import MonkeyPatch
 
-from app.features.agent import builtin_runtime
+from app.features.agent import builtin_runtime, run_claim
 from app.features.agent.builtin_runtime import (
     APPROVAL_REQUIRED_CODE,
     RUN_CANCELLED_CODE,
@@ -713,3 +713,38 @@ def test_cancel_by_another_process_wins_over_a_stale_write() -> None:
     run = worker.get_run("run_y")
     assert run.status == RunStatus.CANCELLED
     assert [step.id for step in run.steps] == [step_id]
+
+
+# ---- #2609 と #2606: 置き換わった実行は新しいツールを始めない --------------------------------
+
+
+def _with_execution(run: RunState, token: str) -> RunState:
+    return run.model_copy(
+        update={
+            "metadata": {
+                run_claim.EXECUTION_METADATA_KEY: {"token": token, "generation": 1},
+            }
+        }
+    )
+
+
+def test_superseded_execution_starts_no_new_tool() -> None:
+    """別の実行が始まった後の旧い実行は、取消と同じく新しい step を作らない（#2606 の世代）。"""
+    table = CheckpointTable()
+    table.seed([_with_execution(_stored_run("run_g"), "token-old")])
+    worker = _process(table)
+    with run_claim.execution_fence("run_g", worker.get_run("run_g").metadata):
+        assert worker.builtin_run_ended("run_g") is False
+        # 別のプロセスで次の実行が始まった（保存先の実行の token が変わった）。
+        table.seed([_with_execution(_stored_run("run_g"), "token-new")], version=5)
+        assert worker.builtin_run_ended("run_g") is True
+    # 同じプロセスのメモリで実行が置き換わったときも、step を作らない。
+    memory = _process(CheckpointTable())
+    with memory._lock:  # noqa: SLF001 - テストの準備
+        memory._runs["run_m"] = _with_execution(_stored_run("run_m"), "token-new")  # noqa: SLF001
+        memory._mark_run_changed("run_m")  # noqa: SLF001
+        memory._persist_locked()  # noqa: SLF001
+    old = {run_claim.EXECUTION_METADATA_KEY: {"token": "token-old", "generation": 1}}
+    with run_claim.execution_fence("run_m", old), pytest.raises(RunNotActiveError):
+        memory.start_builtin_tool_step("run_m", ToolCall(name=READ, trace_id="c1"))
+    assert memory.get_run("run_m").steps == []

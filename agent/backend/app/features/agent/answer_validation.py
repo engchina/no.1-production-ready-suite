@@ -173,6 +173,24 @@ _MAX_QUOTE_CHARS = 80
 _MAX_FINDING_CHARS = 120
 
 
+def is_refuted_claim(claim: JsonObject) -> bool:
+    """根拠で否定した判定か（`REFUTED_CLAIM_STATUSES`）。
+
+    RAG が根拠の ID を照合できずに判定（`status`）を変えても、監査モデルが返した元の判定
+    （`audit_status`）が否定なら否定として扱う（#2622。引用の照合の誤りで矛盾の判定が消え、
+    矛盾した本文を「否定の判定が無い」として載せていた）。
+    """
+    return (
+        claim.get("status") in REFUTED_CLAIM_STATUSES
+        or claim.get("audit_status") in REFUTED_CLAIM_STATUSES
+    )
+
+
+def _is_contradicted(claim: JsonObject) -> bool:
+    """根拠と矛盾する判定か（元の判定が矛盾のものを含む。#2622）。"""
+    return "contradicted" in {claim.get("status"), claim.get("audit_status")}
+
+
 def _short(value: object, limit: int) -> str:
     """1 行にして `limit` 文字まで（超えたら末尾を「…」にする）。"""
     text = " ".join(str(value or "").split())
@@ -736,7 +754,7 @@ def _claim_line(claim: JsonObject) -> str:
 def _paragraph_claim(claims: list[JsonObject]) -> JsonObject:
     """1 つの接続の、同じ段落の判定（段落に複数の主張があれば最も厳しいもの）。"""
     for claim in claims:
-        if claim.get("status") == "contradicted":
+        if _is_contradicted(claim):
             return claim
     for claim in claims:
         if claim.get("status") in BLOCKING_CLAIM_STATUSES:
@@ -770,7 +788,7 @@ def merge_results(results: list[JsonObject]) -> JsonObject:
     for quote in order:
         judged = [item[quote] for item in per_result if quote in item]
         chosen = (
-            next((item for item in judged if item.get("status") == "contradicted"), None)
+            next((item for item in judged if _is_contradicted(item)), None)
             or next(
                 (item for item in judged if item.get("status") not in BLOCKING_CLAIM_STATUSES),
                 None,
@@ -1013,7 +1031,8 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     示していない）は本文を残し、不足として示す。根拠で否定された段落（`unsupported` /
     `contradicted`）が無く、出典を照合できない（`citation_error`）・確かめが終わらない
     （`unassessed`）段落を外すと本文が空になるときは、本文を残して確かめきれなかった点を示す
-    （記録の `withheld.unverified`。#1391）。
+    （記録の `withheld.unverified`。#1391）。否定の判定は、RAG が出典を照合できずに判定を
+    変えた段落の元の判定（`audit_status`）も含めて数える（`is_refuted_claim`。#2622）。
     """
     errors = error_findings(result)
     unchanged = {"claims": 0, "findings": 0, "all": False}
@@ -1050,7 +1069,7 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         and blocking
         and not errors
         and not unreadable
-        and not any(item.get("status") in REFUTED_CLAIM_STATUSES for item in blocking)
+        and not any(is_refuted_claim(item) for item in blocking)
     ):
         # 根拠で否定された段落が無いのに、出典を照合できない（`citation_error`）・確かめが終わらない
         # （`unassessed`）段落を外すと本文が空になる: 検証が確かめきれなかったので、本文は消さずに

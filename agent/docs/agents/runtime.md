@@ -14,7 +14,7 @@
   - ポリシーが「拒否」のツールはモデルに渡さない。
   - 「承認」のツールは SDK の `needs_approval` で中断する。中断した Run は `waiting_approval` にし、SDK の状態を Run に保存する。
   - 承認がすべて決まったら状態を復元して再開する。却下したツールは実行しない。
-  - 呼び先へ送る直前の境界は、通常の実行・承認の再開・MCP 接続のツール・登録済みのツールで同じ順に通す（`_ToolRecorder.invoke`。#2609・#2610・#2630）: ① 取消（終わった Run では step を作らず handler を呼ばない。別のプロセスの取消も保存先の Run の行で判定し、書き込みでも取消を勝たせる。モデルの呼び出しの前も同じ判定で止める）→ ② 引数（壊れた JSON・object 以外を空の引数にせず、モデルに見せた schema で型・必須・enum・範囲・追加の項目・入れ子を確かめる。検索の件数の正規化の後に確かめ、実行環境が埋める非表示の引数は求めない。呼び先の契約は `tool_registry.invoke` も確かめる。外部の `$ref` は取りに行かない。誤りは値を含まない `argument_errors`（場所・種類・直し方）で返す。`tool_arguments.py`）→ ③ ツール権限・承認（SDK の `needs_approval` は呼び出しごとに最新のツール権限で決める。「承認」のツールは、その Run・呼び出し ID・ツール・引数の承認の記録がある呼び出しだけを実行する）→ ④ handler。
+  - 呼び先へ送る直前の境界は、通常の実行・承認の再開・MCP 接続のツール・登録済みのツールで同じ順に通す（`_ToolRecorder.invoke`。#2609・#2610・#2630）: ① 取消（終わった Run と、別の実行に置き換わった実行〔実行の token が違う。#2606〕では step を作らず handler を呼ばない。別のプロセスの取消も保存先の Run の行で判定し、書き込みでも取消を勝たせる。モデルの呼び出しの前も同じ判定で止める）→ ② 引数（壊れた JSON・object 以外を空の引数にせず、モデルに見せた schema で型・必須・enum・範囲・追加の項目・入れ子を確かめる。検索の件数の正規化の後に確かめ、実行環境が埋める非表示の引数は求めない。呼び先の契約は `tool_registry.invoke` も確かめる。外部の `$ref` は取りに行かない。誤りは値を含まない `argument_errors`（場所・種類・直し方）で返す。`tool_arguments.py`）→ ③ ツール権限・承認（SDK の `needs_approval` は呼び出しごとに最新のツール権限で決める。「承認」のツールは、その Run・呼び出し ID・ツール・引数の承認の記録がある呼び出しだけを実行する）→ ④ handler。
   - 取消の前に送った操作は取り消せない。結果が取消の後に届いたら事実のまま記録し（イベントに `run_status`）、取消のイベントに送っていた step（`in_flight_step_ids`）を残す。
 - モデルに渡す入力は、モデルの入力の上限に収める（#2383。`features/agent/context_window.py`。SDK の `call_model_input_filter`）。
   - 予算は登録モデルの `max_input_tokens`（システム設定 > モデル）から、出力の上限（入力の上限の半分まで）と余白（`AGENT_CONTEXT_SAFETY_MARGIN_RATIO`）を引いた token の数。見積もりは platform の `estimate_input_tokens` × `AGENT_CONTEXT_TOKEN_ESTIMATE_SCALE`。
@@ -28,6 +28,7 @@
   - 版の履歴は直近 `AGENT_MAX_PUBLISHED_VERSIONS`（既定 5）版だけを残す。公開のときに古い版から消し（公開中の版・スキルの更新の取り込みの前の公開中の版は残す。番号は振り直さない。規則は `pr_backend_core.version_retention`）、Run・評価の記録は版の番号だけを持つので消えない。消えた版で続ける Run は公開中の版で動く（#2356）。
   - 公開の版は使うスキルの中身（指示・説明・MCP のツール・中身の hash）を固定し、公開中の版の Run は固定した中身で動く（下書きは今のスキル。組み込みのスキルも固定する）。スキルが変わった業務 Agent は「スキルが更新されています」を出し、再公開で取り込む（#1855）。
 - Run は Agent を選ぶだけで作れる（Binding の選択は無い）。開発は API のプロセスで実行（`in_process`）し、本番は Oracle checkpoint の row lock と Run lease を使う runtime-dispatcher（`python -m app.features.agent.runtime_dispatcher`）。
+  - 実行の開始は、queued の Run を今の claim（lease の所有者・token・世代と期限）に対して 1 回だけ受け付ける条件付きの遷移にし、実行の区切りの書き戻しは実行の世代（token）で守る（`run_claim`。#2606。詳細は設計 §5）。開始の入口（dispatcher・in_process・承認の後の再開）を足すときもこの契約を通す。
 - 保存先: Run・業務 Agent と、画面・API で変えた定義（Skill・MCP 接続・ツール権限）は `AGENT_RUNTIME_REPOSITORY_BACKEND` に従い、Oracle では共通の `PLATFORM_ORACLE_*` で `AGENT_RUNTIME_*` / `AGENT_CONTROL_PLANE_ITEMS` に保存する（テーブルはシステムテーブルが作る。アプリは DDL を実行しない）。
   - MCP 接続の秘密は `app.secret_box` で暗号化する。`.env` の宣言は保存しない。
   - 既定の `auto` は、DB の設定がそろっていれば `oracle_checkpoint`、無ければ `memory`（保存しない。再起動で消える）を起動時に選ぶ（`storage_backend`）。保存先の 1 件の Run の不整合では起動を止めず、Run 単位で直す・退避する（`quarantined`）。

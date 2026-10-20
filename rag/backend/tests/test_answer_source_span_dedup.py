@@ -61,3 +61,57 @@ def test_chunks_without_element_ids_do_not_get_the_key() -> None:
     child = _stored_child(_chunk("cs-c:fixed-1", {}, _PARAGRAPHS[0]), rrf_score=1.0)
 
     assert "element_ids" not in child.metadata
+
+
+def _named_chunk(
+    document_id: str, text: str, *, group: str = "group-a", section_path: str = "章 1"
+) -> RetrievedChunk:
+    """同じ表示名(sample.pdf)の合成の chunk(#2603)。"""
+    return RetrievedChunk(
+        document_id=document_id,
+        chunk_id=f"{document_id}:{group}:child-1",
+        text=text,
+        score=1.0,
+        file_name="sample.pdf",
+        metadata={"page_start": 1, "section_path": section_path, "chunk_group_id": group},
+    )
+
+
+def _records(chunks: list[RetrievedChunk]) -> list[object]:
+    """本番の型変換(子 → 親 → 回答の記録)を通した根拠。"""
+    state = _SearchState(chunks={chunk.chunk_id: chunk for chunk in chunks})
+    children = [_stored_child(chunk, rrf_score=1.0) for chunk in chunks]
+    return [_stored_chunk_answer_record(parent) for parent in _stored_parents(children, state)]
+
+
+_SYNTHETIC_TEXT = "合成の段落です。保存ボタンで確定します。"
+
+
+def test_same_passage_of_same_name_documents_is_not_merged() -> None:
+    """同じ表示名・頁・章節・本文でも、文書 ID が違う根拠はまとめず、別名も混ぜない(#2603)。"""
+    records = _records(
+        [_named_chunk("document-a", _SYNTHETIC_TEXT), _named_chunk("document-b", _SYNTHETIC_TEXT)]
+    )
+
+    spans = evidence_spans("保存の操作", records)
+
+    assert [span["source_aliases"] for span in spans] == [
+        ["document-a:group-a"],
+        ["document-b:group-a"],
+    ]
+
+
+def test_same_passage_in_different_sections_of_one_document_is_not_merged() -> None:
+    records = _records(
+        [
+            _named_chunk("document-a", _SYNTHETIC_TEXT, group="group-a", section_path="章 1"),
+            _named_chunk("document-a", _SYNTHETIC_TEXT, group="group-b", section_path="章 2"),
+        ]
+    )
+
+    spans = evidence_spans("保存の操作", records)
+
+    assert [span["source_aliases"] for span in spans] == [
+        ["document-a:group-a"],
+        ["document-a:group-b"],
+    ]

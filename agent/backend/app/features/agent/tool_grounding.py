@@ -22,6 +22,13 @@ BLOCK と同じ考え方）。
 - 1 回だけ差し戻す: 「業務の事実はツールで確かめてから答える。確かめられないなら拒答する」を
   利用者のメッセージとしてモデルへ返して続けさせる（自己修正）。それでも呼ばなければ、本文を
   出さず、決まった形の拒答の文（`refusal_text`）に置き換える。元の回答は Run の経過に残す。
+- 調べずに範囲外・答えられないと判断した拒答（回答の結論が範囲外・確かめられないと述べる。
+  `declined`。#2608）は、範囲の内外と根拠の有無をツールの結果で判断させる文（`RETRY_HEAD_DECLINED`）で
+  差し戻す。差し戻しの文の結びは「調べても確かめられないときは答えられないと答える」で、範囲外かを
+  調べずに決めてよいとは書かない。Run の経過（イベントの `declined`）と拒答の回答の対応の basis
+  （`declined_without_tools`）で、ツールで確かめずに答えた回答の拒答（`no_tool_grounding`）と分ける。
+  調べた結果として根拠が無かった拒答は、ツールを呼んでいるのでここの対象ではない（basis は
+  `answer_outcome` の `absence_conclusion` など）。品質評価は両者を `refusal_stage` で分けて数える。
 - 差し戻しの文の曖昧な質問の扱いは、その Run でモデルに回答前の確認のツール
   （`ask_user_confirmation`）を渡したかで分ける（#1881）。渡したときは、まず資料・業務データの
   ツールで調べる（業務ガイド・NL2SQL が確認事項を返せば、それが確認のカードになる）か、
@@ -40,7 +47,8 @@ BLOCK と同じ考え方）。
   （条件ごとに分ける）」にする（`RETRY_MESSAGE_ASSUME`）。差し戻しの後も本文の聞き返しだけなら、
   拒答にはせずそのまま出し、Run の経過に残す（拒答は範囲外・確かめられない質問のためのもので、
   対象が曖昧な質問の聞き返しを「お答えできません」にすると利用者が次に何をすればよいか分からない）。
-- 回答の対応は `insufficient_evidence`（basis `no_tool_grounding`）。最終の検証の成果物は
+- 回答の対応は `insufficient_evidence`（basis `no_tool_grounding`。調べずに範囲外・答えられないと
+  判断した拒答は `declined_without_tools`）。最終の検証の成果物は
   `skipped`（reason `no_tool_grounding`）にする（資料の根拠を使わずに答えた `no_rag_evidence`
   とは分ける。#1834 のシグナルは拒答した Run を「答えられなかった」に数える）。
 
@@ -56,6 +64,7 @@ from typing import TYPE_CHECKING, Any
 from app.features.agent.answer_outcome import INSUFFICIENT_EVIDENCE, OUTCOME_SCHEMA_VERSION
 from app.features.agent.answer_passages import (
     asks_for_request,
+    concludes_decline,
     greets,
     is_clarification_only,
     is_greeting_only,
@@ -74,13 +83,19 @@ if TYPE_CHECKING:
 
 JsonObject = dict[str, Any]
 
-# 回答の対応の basis と、最終の検証の成果物の reason。
+# 回答の対応の basis と、最終の検証の成果物の reason。ツールで確かめずに答えた回答を拒答に
+# 置き換えたものと、ツールで調べずに範囲外・答えられないと判断した拒答（#2608）を分ける（最終の
+# 検証の成果物の reason はどちらも `no_tool_grounding`）。
 BASIS_NO_TOOL_GROUNDING = "no_tool_grounding"
+BASIS_DECLINED_WITHOUT_TOOLS = "declined_without_tools"
 REASON_NO_TOOL_GROUNDING = "no_tool_grounding"
 # Run の metadata に残す、差し戻しの記録（承認待ちから再開しても 2 回目を差し戻さない）。
 METADATA_KEY = "tool_grounding"
 # 差し戻しの回数（ユーザーの確認待ち。#1835）。
 MAX_RETRIES = 1
+# 拒答が、根拠・データのツールで調べる前か後か（`refusal_stage`。品質評価の集計。#2608）。
+REFUSAL_BEFORE_TOOLS = "before_tools"
+REFUSAL_AFTER_TOOLS = "after_tools"
 
 # 根拠・データを確かめないツール（業務プロファイル・検索・回答プロファイルの一覧と推薦）と、
 # Control Plane が自分で呼ぶツール（最終の検証・SQL の生成前の確認の取り消し）。
@@ -107,38 +122,49 @@ _RETRY_HEAD = (
     "業務の事実（規程・手順・数値・状態・記録など）は、資料の根拠のツールと業務データのツールの"
     "結果だけで答えてください。質問に答えるのに要るツールを呼んで確かめてから、改めて回答してください。"
 )
+# ツールを呼ばずに、範囲外・答えられないと判断した回答（`declined`。#2608）の差し戻しの頭。範囲の
+# 内外と根拠の有無を、モデルの判断ではなくツールの結果で決めさせる（権限・データの範囲の外は
+# ツールが呼び先へ送らないので、調べられるのは利用者と業務 Agent が使える範囲だけ）。
+RETRY_HEAD_DECLINED = (
+    "直前の回答は、ツールで調べずに、質問をこの業務の範囲外・確かめられないと判断しています。"
+    "そのままでは利用者に出せません。範囲の内外と、資料・業務データに根拠があるかは、ツールの結果で"
+    "判断してください。質問に答えるのに要るツールを呼んで調べてから、改めて回答してください。"
+)
+# 差し戻しはツールを 1 つも呼んでいない回答にだけ行うので、範囲外かどうかを調べずに決めてよいとは
+# 書かない（#2608。調べずに範囲外と判断した拒答を、差し戻しの文が認めていた）。
 _RETRY_TAIL = (
-    "ツールで確かめられないとき・この業務の範囲外の質問のときは、推測や一般的な知識で答えず、"
+    "ツールで調べても確かめられないときは、推測や一般的な知識で答えず、"
     "確かめられないため答えられないと短く答えてください。"
 )
-# 回答前の確認のツールを渡していない Run（確認の上限）。
-RETRY_MESSAGE = (
-    _RETRY_HEAD
-    + "質問が曖昧で対象（文書・システム・期間など）が分からないときは、ツールを呼ばずに、"
+# 回答前の確認のツールを渡していない Run（確認の上限）の、曖昧な質問の扱い。
+_CLARIFY_PLAIN = (
+    "質問が曖昧で対象（文書・システム・期間など）が分からないときは、ツールを呼ばずに、"
     "対象を確かめる確認の質問だけを返してかまいません（質問の文だけにし、例・説明・答えた後の"
-    "案内は添えない）。" + _RETRY_TAIL
+    "案内は添えない）。"
 )
 # 利用者に確認しない Run（方針「前提を示して回答」・利用者が「確認せずに回答」を選んだ。#1903）。
 # 確認の質問をさせず、ツールで調べてから、決まらない点は前提を示して答えさせる。
-RETRY_MESSAGE_ASSUME = (
-    _RETRY_HEAD + "この実行では利用者に確認しません。質問が曖昧に見えるときも、確認の質問はせず"
+_CLARIFY_ASSUME = (
+    "この実行では利用者に確認しません。質問が曖昧に見えるときも、確認の質問はせず"
     "（本文でも聞き返さない）、まず資料・業務データのツールで調べてください。ツールの結果を見ても"
     "決まらない点は、何を前提にしたかを回答の中で示して答えてください（条件によって答えが変わる"
     "ときは、条件ごとに分けて示してください）。業務プロファイル・検索の対象の推薦が無い（null の）"
     "ときも聞き返さず、推薦の候補（score の高い順）か一覧の説明から質問に最も合うものを選んで"
-    "調べてください。" + _RETRY_TAIL
+    "調べてください。"
 )
 # 回答前の確認のツール（ask_user_confirmation）を渡した Run（#1881）。本文で聞き返させず、資料・
 # 業務データのツールの確認事項か、確認のツールのカードで確かめさせる。
-RETRY_MESSAGE_CONFIRMABLE = (
-    _RETRY_HEAD
-    + "質問が曖昧に見えるときも、まず資料・業務データのツールで調べてください（業務ガイド・資料・"
+_CLARIFY_CONFIRMABLE = (
+    "質問が曖昧に見えるときも、まず資料・業務データのツールで調べてください（業務ガイド・資料・"
     "業務データのツールが確認事項を返せば、それが利用者への確認のカードになります）。"
     "ツールの結果を見ても対象（文書・システム・期間など）が決まらないときと、プロファイルの推薦の"
     "候補が割れたときだけ、"
     f"{CONFIRMATION_TOOL} で確認してください（選択肢は候補の名前と説明）。"
-    "本文に確認の質問や選ばせる表を書かないでください。" + _RETRY_TAIL
+    "本文に確認の質問や選ばせる表を書かないでください。"
 )
+RETRY_MESSAGE = _RETRY_HEAD + _CLARIFY_PLAIN + _RETRY_TAIL
+RETRY_MESSAGE_ASSUME = _RETRY_HEAD + _CLARIFY_ASSUME + _RETRY_TAIL
+RETRY_MESSAGE_CONFIRMABLE = _RETRY_HEAD + _CLARIFY_CONFIRMABLE + _RETRY_TAIL
 
 REFUSAL_HEAD = (
     "社内の資料・業務データで確かめられなかったため、お答えできません。推測ではお答えしていません。"
@@ -388,15 +414,19 @@ def clarified_in_text(answer: str, *, steps: list[RunStep], tool_names: Collecti
     return is_clarification_only(answer)
 
 
-def retry_message(*, confirmable: bool, assume: bool = False) -> str:
+def retry_message(*, confirmable: bool, assume: bool = False, declined: bool = False) -> str:
     """差し戻しの文（回答前の確認のツールを渡したかで、曖昧な質問の扱いを分ける。#1881）。
 
     `assume` は利用者に確認しない Run（#1903）。確認のツールを渡していても（「確認せずに回答」で
     再開した Run は、答えた呼び出しの再開のためにツールが残る）、確認させない文にする。
+    `declined` は、直前の回答がツールで調べずに範囲外・答えられないと判断した拒答（`declined`。
+    #2608）。頭の文を、範囲の内外と根拠の有無をツールの結果で判断させる文にする。
     """
+    clarify = _CLARIFY_CONFIRMABLE if confirmable else _CLARIFY_PLAIN
     if assume:
-        return RETRY_MESSAGE_ASSUME
-    return RETRY_MESSAGE_CONFIRMABLE if confirmable else RETRY_MESSAGE
+        clarify = _CLARIFY_ASSUME
+    head = RETRY_HEAD_DECLINED if declined else _RETRY_HEAD
+    return head + clarify + _RETRY_TAIL
 
 
 # 差し戻しに添える元の回答の長さの上限（モデルへの入力を増やしすぎない）。
@@ -409,6 +439,7 @@ def retry_input(
     *,
     confirmable: bool = False,
     assume: bool = False,
+    declined: bool = False,
     head: str | None = None,
 ) -> list[Any]:
     """差し戻して Run を続ける入力（前の入力・ツールの呼び出し・差し戻しの利用者のメッセージ）。
@@ -418,8 +449,9 @@ def retry_input(
     400 で拒否する（2026-10-14 に実環境で確認）。その直前の reasoning item も、続く出力が無くなる
     ため外す。元の回答は差し戻しのメッセージの中に引用として添える（何を直すかをモデルに示す）。
     `confirmable` は、この Run でモデルに `ask_user_confirmation` を渡したか、`assume` は利用者に
-    確認しない Run か（`retry_message`）。`head` を渡すと差し戻しの文をそれにする（多段の段の
-    差し戻し。#1958）。
+    確認しない Run か、`declined` は調べずに範囲外・答えられないと判断した拒答か
+    （`retry_message`）。
+    `head` を渡すと差し戻しの文をそれにする（多段の段の差し戻し。#1958）。
     """
     kept: list[Any] = []
     for item in items:
@@ -434,7 +466,7 @@ def retry_input(
     quoted = answer.strip()
     if len(quoted) > _RETRY_ANSWER_MAX_CHARS:
         quoted = quoted[: _RETRY_ANSWER_MAX_CHARS - 1] + "…"
-    head = head or retry_message(confirmable=confirmable, assume=assume)
+    head = head or retry_message(confirmable=confirmable, assume=assume, declined=declined)
     message = f"{head}\n\n直前の回答（利用者には出していません）:\n{quoted}"
     return [*kept, {"role": "user", "content": message}]
 
@@ -517,28 +549,62 @@ def refusal_text(
     return "\n\n".join(lines)
 
 
-def refusal_outcome() -> JsonObject:
-    """拒答の回答の対応（`answer_outcome` と同じ形）。"""
+def declined(answer: str) -> bool:
+    """回答の結論が、答えられない・資料から確かめられない・この業務の範囲外と述べるか（#2608）。
+
+    根拠・データのツールを呼ばずに作った回答に使い、調べずに範囲外・答えられないと判断した拒答と、
+    ツールで確かめずに業務の事実を答えた回答を分ける（差し戻しの文・Run の経過・回答の対応の
+    basis）。判定は回答の最初の段落だけで決める（`answer_passages.concludes_decline`）。
+    """
+    return concludes_decline(answer)
+
+
+def refusal_outcome(*, declined: bool = False) -> JsonObject:
+    """拒答の回答の対応（`answer_outcome` と同じ形）。
+
+    差し戻しの後もツールを呼ばずに、範囲外・答えられないと判断した拒答（`declined`。#2608）は
+    basis を `declined_without_tools`、ツールで確かめずに答えた回答を置き換えたものは
+    `no_tool_grounding` にする。
+    """
     return {
         "schema_version": OUTCOME_SCHEMA_VERSION,
         "value": INSUFFICIENT_EVIDENCE,
-        "basis": BASIS_NO_TOOL_GROUNDING,
+        "basis": BASIS_DECLINED_WITHOUT_TOOLS if declined else BASIS_NO_TOOL_GROUNDING,
         "rag_outcome": None,
         "signals": [],
     }
 
 
+def refusal_stage(outcome: str | None, tool_calls: Iterable[str]) -> str | None:
+    """拒答（回答の対応が insufficient_evidence）が、ツールで調べる前か後か（#2608）。
+
+    呼んだ（呼ぼうとした）ツールの名前に根拠・データのツールが 1 つも無ければ `before_tools`
+    （調べずに拒答した。ツールを呼ばずに作った回答の拒答 #1835 を含む）、あれば `after_tools`
+    （調べた結果として根拠が無かった）。拒答でなければ None。品質評価の集計に使う。
+    """
+    if outcome != INSUFFICIENT_EVIDENCE:
+        return None
+    if any(is_grounding_tool(name) for name in tool_calls):
+        return REFUSAL_AFTER_TOOLS
+    return REFUSAL_BEFORE_TOOLS
+
+
 __all__ = [
+    "BASIS_DECLINED_WITHOUT_TOOLS",
     "BASIS_NO_TOOL_GROUNDING",
     "GROUNDING_TOOL_FAILED_CODE",
     "MAX_RETRIES",
     "METADATA_KEY",
     "REASON_NO_TOOL_GROUNDING",
+    "REFUSAL_AFTER_TOOLS",
+    "REFUSAL_BEFORE_TOOLS",
     "REFUSAL_HEAD",
+    "RETRY_HEAD_DECLINED",
     "RETRY_MESSAGE",
     "RETRY_MESSAGE_ASSUME",
     "RETRY_MESSAGE_CONFIRMABLE",
     "clarified_in_text",
+    "declined",
     "grounding_attempted",
     "grounding_failure",
     "grounding_failure_message",
@@ -552,6 +618,7 @@ __all__ = [
     "is_grounding_tool",
     "needs_grounding",
     "refusal_outcome",
+    "refusal_stage",
     "refusal_text",
     "retried",
     "retry_input",

@@ -1702,3 +1702,183 @@ def test_chunk_ids_written_without_the_document_id_point_to_their_evidence(writt
     from rag_engine.evaluation.answer_eval import _abbreviated_id_matches
 
     assert _abbreviated_id_matches(written, "doc0123456789:set0123456789abcdef:37") is expected
+
+
+# ---- 監査の判定の根拠の ID の照合（#2622）。設定の名前・本文・ID はすべて合成した値。----
+SETTING_SET = "0f1e2d3c4b5a69788796a5b4c3d2e1f0:" + "a1" * 32
+SETTING_OFF = f"{SETTING_SET}:1"
+SETTING_NOTE = f"{SETTING_SET}:2"
+SETTING_EVIDENCE = [
+    {"id": SETTING_OFF, "source": "synthetic-settings.pdf", "page_start": 1, "page_end": 1, "text": "設定Aは無効です。"},
+    {"id": SETTING_NOTE, "source": "synthetic-settings.pdf", "page_start": 1, "page_end": 1, "text": "設定Bは毎日 0 時に実行します。"},
+]
+SETTING_ANSWER = "設定Aは有効です。"
+# catalog に無い片段の ID（監査モデルが返した値の形）。
+UNKNOWN_SPAN_ID = "E123456789abcdef"
+
+
+def _setting_catalog() -> dict[str, dict]:
+    from rag_engine.evaluation.answer_eval import _evidence_fragments
+
+    return {item["evidence_id"]: item for item in _evidence_fragments(SETTING_EVIDENCE)}
+
+
+def _span_id(chunk_id: str) -> str:
+    return next(item["evidence_id"] for item in _setting_catalog().values() if item["id"] == chunk_id)
+
+
+def test_contradiction_with_an_unknown_audit_id_stays_contradicted() -> None:
+    """監査モデルが catalog に無い evidence_id を返しても、矛盾の判定を citation_error に変えない (#2622)。
+
+    以前は「未登録の原文ID。」の citation_error になり、Agent が「矛盾の判定ではない」として本文を載せていた。
+    """
+    calls: list[dict] = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        calls.append(payload)
+        assert [item["id"] for item in _documents(payload)] == [SETTING_OFF, SETTING_NOTE]
+        return ClaimAuditOutput.model_validate(
+            {
+                "claim_checks": [
+                    {
+                        "answer_quote": "段落",
+                        "answer_passage_id": payload["answer_passages"][0]["id"],
+                        "status": "contradicted",
+                        "evidence_id": UNKNOWN_SPAN_ID,
+                        "source_id": "",
+                        "evidence_quote": "",
+                        "reason": "合成資料は設定Aが無効と記載している。",
+                    }
+                ]
+            }
+        )
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("設定Aは有効ですか？", SETTING_ANSWER, SETTING_EVIDENCE, settings=None)
+    assert result["counts"] == {"contradicted": 1}
+    [claim] = result["claim_checks"]
+    assert claim["status"] == claim["audit_status"] == "contradicted"
+    assert claim["reference_check"] == "audit_id_invalid"
+    # 出典は決めず、監査が返した ID はそのまま残す（変換前の応答を追える）。
+    assert (claim["source_id"], claim["evidence_quote"], claim["evidence_id"]) == ("", "", UNKNOWN_SPAN_ID)
+    assert claim["reason"].endswith("合成資料は設定Aが無効と記載している。")
+    # 否定の判定は確かめ直さない（根拠を絞った確かめ直しで判定を替えない）。
+    assert len(calls) == 1 and result["rechecked_passage_ids"] == []
+
+
+def _bind_one(status: str, answer_quote: str, evidence_id: str, evidence_quote: str = "", *, passage_citations: bool = True):
+    from rag_engine.evaluation.answer_eval import _bind_claims
+
+    output = ClaimAuditOutput.model_validate(
+        {
+            "claim_checks": [
+                {
+                    "answer_quote": answer_quote,
+                    "answer_passage_id": "A1",
+                    "status": status,
+                    "evidence_id": evidence_id,
+                    "source_id": "",
+                    "evidence_quote": evidence_quote,
+                    "reason": "合成の理由。",
+                }
+            ]
+        }
+    )
+    passages = [{"id": "A1", "text": answer_quote}]
+    [claim] = _bind_claims(output, _setting_catalog(), passages, passage_citations=passage_citations).claim_checks
+    return claim
+
+
+REFERENCE_CASES = [
+    # （名前, 段落, 監査の evidence_id, 監査の引用, reference_check）。
+    ("正常な ID", SETTING_ANSWER, "{off}", "", "resolved"),
+    ("監査の ID だけが無効で、回答の ID で照合", f"設定Aは有効です【証拠 ID {SETTING_OFF}】。", UNKNOWN_SPAN_ID, "", "resolved_by_answer"),
+    ("回答側の無効な ID", f"設定Aは有効です【証拠 ID {SETTING_SET}:9】。", "", "", "answer_id_invalid"),
+    ("回答側の無効な ID（監査の ID も無効）", f"設定Aは有効です【証拠 ID {SETTING_SET}:9】。", UNKNOWN_SPAN_ID, "", "answer_id_invalid"),
+    ("監査モデルだけの無効な ID", SETTING_ANSWER, UNKNOWN_SPAN_ID, "", "audit_id_invalid"),
+    ("監査モデルだけの ID でない値", SETTING_ANSWER, "第 3 章", "", "audit_id_invalid"),
+    ("曖昧な省略 ID", SETTING_ANSWER, f"{SETTING_SET[:40]}…", "", "ambiguous_id"),
+    ("ID の欠落", SETTING_ANSWER, "", "", "audit_id_missing"),
+    ("引用が根拠に無い", SETTING_ANSWER, "{off}, {note}", "根拠に無い合成の文", "quote_unmatched"),
+]
+
+
+@pytest.mark.parametrize(
+    ("name", "quote", "written", "evidence_quote", "expected"), REFERENCE_CASES, ids=[case[0] for case in REFERENCE_CASES]
+)
+@pytest.mark.parametrize("status", ["supported", "contradicted"])
+def test_reference_checks_separate_audit_id_errors_from_answer_citation_errors(
+    status: str, name: str, quote: str, written: str, evidence_quote: str, expected: str
+) -> None:
+    """根拠の ID の照合の結果を、正常・回答側の無効・監査モデルだけの無効・曖昧な省略・欠落・引用の不一致に分ける (#2622)。
+
+    結び付けられない supported は根拠と一致したと扱わず citation_error、contradicted は矛盾のまま残す。
+    """
+    evidence_id = written.format(off=_span_id(SETTING_OFF), note=_span_id(SETTING_NOTE))
+    claim = _bind_one(status, quote, evidence_id, evidence_quote)
+    assert claim.reference_check == expected, name
+    assert claim.audit_status == status
+    if expected.startswith("resolved"):
+        assert (claim.status, claim.source_id) == (status, SETTING_OFF)
+    elif status == "supported":
+        assert claim.status == "citation_error" and claim.reason.startswith("未登録の原文ID。")
+    else:
+        assert (claim.status, claim.source_id) == ("contradicted", "")
+        # 監査が返した ID はそのまま残す。
+        assert claim.evidence_id == evidence_id
+
+
+def test_model_citation_errors_record_the_reference_check() -> None:
+    """モデルが返した citation_error も、ID を照合した結果を残す（判定の変換を追える。#2622）。"""
+    resolved = _bind_one("citation_error", f"設定Aは有効です【証拠 ID {SETTING_OFF}】。", "")
+    assert (resolved.status, resolved.audit_status, resolved.reference_check) == ("unassessed", "citation_error", "resolved")
+    invalid = _bind_one("citation_error", f"設定Aは有効です【証拠 ID {SETTING_SET}:9】。", "")
+    assert (invalid.status, invalid.audit_status, invalid.reference_check) == ("citation_error", "citation_error", "answer_id_invalid")
+    # 照合しない判定は reference_check が空（監査の判定だけを残す）。
+    unsupported = _bind_one("unsupported", SETTING_ANSWER, "")
+    assert (unsupported.status, unsupported.audit_status, unsupported.reference_check) == ("unsupported", "unsupported", "")
+
+
+def test_quality_evaluation_keeps_its_citation_errors_but_records_the_audit_status() -> None:
+    """品質評価（passage_citations なし）の判定は今までどおり citation_error にし、元の判定と照合の結果を残す (#2622)。"""
+    claim = _bind_one("contradicted", SETTING_ANSWER, UNKNOWN_SPAN_ID, passage_citations=False)
+    assert (claim.status, claim.audit_status, claim.reference_check) == ("citation_error", "contradicted", "audit_id_invalid")
+
+
+def test_diagnostics_are_not_in_the_schema_sent_to_the_model() -> None:
+    """診断（audit_status・reference_check）はモデルに渡す schema に出さず、モデルの値も使わない (#2622)。"""
+    schema = json.dumps(ClaimAuditOutput.model_json_schema(), ensure_ascii=False)
+    assert "audit_status" not in schema and "reference_check" not in schema
+    from rag_engine.evaluation.answer_eval import _bind_claims
+
+    output = ClaimAuditOutput.model_validate(
+        {
+            "claim_checks": [
+                {
+                    "answer_quote": SETTING_ANSWER,
+                    "answer_passage_id": "A1",
+                    "status": "contradicted",
+                    "evidence_id": UNKNOWN_SPAN_ID,
+                    "source_id": "",
+                    "evidence_quote": "",
+                    "reason": "合成の理由。",
+                    "audit_status": "supported",
+                    "reference_check": "resolved",
+                }
+            ]
+        }
+    )
+    passages = [{"id": "A1", "text": SETTING_ANSWER}]
+    [claim] = _bind_claims(output, _setting_catalog(), passages, passage_citations=True).claim_checks
+    assert (claim.audit_status, claim.reference_check) == ("contradicted", "audit_id_invalid")
+
+
+def test_unbound_contradictions_are_not_rechecked_and_other_passages_still_are() -> None:
+    """ID を書かない段落の矛盾は、出典が決まらなくても確かめ直さずに残し、ほかの段落の確かめ直しは今までどおり (#2622・#1412)。"""
+    both = _cite(f"{PLAN}:1", f"{CHANGE}:4")
+    result, calls = _window_validation({**WINDOW_FIRST, "A2": ("contradicted", "")}, {"A6": ("supported", both)})
+    assert [claim["status"] for claim in result["claim_checks"]] == ["contradicted", "supported", "supported", "supported"]
+    assert result["claim_checks"][0]["reference_check"] == "audit_id_missing"
+    assert [passage["id"] for passage in calls[1][1]["answer_passages"]] == ["A6"]
+    assert result["rechecked_passage_ids"] == ["A6"]

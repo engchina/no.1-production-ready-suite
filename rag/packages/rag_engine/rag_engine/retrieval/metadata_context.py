@@ -29,8 +29,31 @@ def with_child_contexts(record: Any, children: Any) -> Any:
     return result
 
 
+def document_identity(record: Any) -> str:
+    """根拠の文書の確かな識別子。表示名からしか決められなければ空。
+
+    backend の文書 ID（``metadata.document_id``。文書ごとに不変で、同名の別文書・旧版と新版で異なる）を
+    優先し、無ければ管理側で明示した / URL から導いた ``source_document_id`` を使う。ファイル名から導いた
+    ``source_document_id``（``identity_source=local_filename``）と表示名の ``source`` は、同名の別文書で
+    同じ値になるので識別子にしない（#2603）。
+    """
+    metadata = getattr(record, "metadata", {}) or {}
+    document_id = str(metadata.get("document_id") or "").strip()
+    if document_id:
+        return "document:" + document_id
+    document = metadata.get("document") or {}
+    source_document_id = str(document.get("source_document_id") or "").strip()
+    if source_document_id and document.get("identity_source") != "local_filename":
+        return "source:" + source_document_id
+    return ""
+
+
 def document_context_key(record: Any) -> tuple[str, ...]:
-    """同一文書でも有効開始日（改訂版）・解析・engine が異なる背景を共有しないためのキー。"""
+    """同一文書でも有効開始日（改訂版）・解析・engine が異なる背景を共有しないためのキー。
+
+    先頭は文書の論理的な名前（``source_document_id``・表示名。改訂版の照合に使う）、2 つ目は有効開始日。
+    末尾の backend の文書 ID で、同じ名前の別文書の背景・根拠を区別する（#2603）。
+    """
     metadata = getattr(record, "metadata", {}) or {}
     document = metadata.get("document") or {}
     return (
@@ -39,6 +62,7 @@ def document_context_key(record: Any) -> tuple[str, ...]:
         str(getattr(record, "source_run_id", "")),
         str(getattr(record, "engine", "")),
         str(getattr(record, "chunk_run_id", "")),
+        str(metadata.get("document_id") or ""),
     )
 
 
