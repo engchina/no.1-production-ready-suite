@@ -26,6 +26,7 @@
   - 版の履歴は直近 `AGENT_MAX_PUBLISHED_VERSIONS`（既定 5）版だけを残す。公開のときに古い版から消し（公開中の版・スキルの更新の取り込みの前の公開中の版は残す。番号は振り直さない。規則は `pr_backend_core.version_retention`）、Run・評価の記録は版の番号だけを持つので消えない。消えた版で続ける Run は公開中の版で動く（#2356）。
   - 公開の版は使うスキルの中身（指示・説明・MCP のツール・中身の hash）を固定し、公開中の版の Run は固定した中身で動く（下書きは今のスキル。組み込みのスキルも固定する）。スキルが変わった業務 Agent は「スキルが更新されています」を出し、再公開で取り込む（#1855）。
 - Run は Agent を選ぶだけで作れる（Binding の選択は無い）。開発は API のプロセスで実行（`in_process`）し、本番は Oracle checkpoint の row lock と Run lease を使う runtime-dispatcher（`python -m app.features.agent.runtime_dispatcher`）。
+  - 実行の開始は、queued の Run を今の claim（lease の所有者・token・世代と期限）に対して 1 回だけ受け付ける条件付きの遷移にし、実行の区切りの書き戻しは実行の世代（token）で守る（`run_claim`。#2606。詳細は設計 §5）。開始の入口（dispatcher・in_process・承認の後の再開）を足すときもこの契約を通す。
 - 保存先: Run・業務 Agent と、画面・API で変えた定義（Skill・MCP 接続・ツール権限）は `AGENT_RUNTIME_REPOSITORY_BACKEND` に従い、Oracle では共通の `PLATFORM_ORACLE_*` で `AGENT_RUNTIME_*` / `AGENT_CONTROL_PLANE_ITEMS` に保存する（テーブルはシステムテーブルが作る。アプリは DDL を実行しない）。
   - MCP 接続の秘密は `app.secret_box` で暗号化する。`.env` の宣言は保存しない。
   - 既定の `auto` は、DB の設定がそろっていれば `oracle_checkpoint`、無ければ `memory`（保存しない。再起動で消える）を起動時に選ぶ（`storage_backend`）。保存先の 1 件の Run の不整合では起動を止めず、Run 単位で直す・退避する（`quarantined`）。

@@ -19,11 +19,11 @@ from contextlib import contextmanager, suppress
 from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from threading import Condition, Lock, RLock
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol, TypeVar, cast
 from uuid import uuid4
 
 from pr_backend_core import Page
@@ -50,8 +50,8 @@ from pydantic import (
     model_validator,
 )
 
+from app.features.agent import run_claim, storage_backend
 from app.features.agent import runtime_checkpoint_store as checkpoint_store
-from app.features.agent import storage_backend
 from app.features.agent.chat_progress import record_run_progress
 from app.features.agent.clarification_cancel import (
     CANCEL_METADATA_KEY,
@@ -77,6 +77,7 @@ from app.features.agent.confirmation import (
 from app.features.agent.confirmation import METADATA_KEYS as CONFIRMATION_METADATA_KEYS
 from app.features.agent.data_scope import AgentDataScopes, normalize_data_scopes
 from app.features.agent.output_fields import AgentOutputField, validate_output_fields
+from app.features.agent.run_claim import RunClaim
 from app.features.agent.skills import (
     BUSINESS_RAG_RESEARCH_SKILL_ID,
     RAG_AND_STRUCTURED_DATA_SKILL_ID,
@@ -113,6 +114,7 @@ OracleConnectFactory = Callable[[], Any]
 
 # 組み込み Runtime（#754）の Runtime ID と、承認待ちの Run に保存する SDK の状態の key。
 BUILTIN_RUNTIME_ID = "builtin"
+_T = TypeVar("_T")
 _BUILTIN_STATE_KEY = "_builtin_sdk_state"
 # backend の再起動で実行が中断した Run の失敗（#1894。in_process の実行は backend のプロセスの
 # task だけで、再起動の後に拾い直す仕組みが無い）。
@@ -1236,9 +1238,11 @@ class AgentRuntimeRepositoryContract(Protocol):
         all_users: bool = False,
         attachments: list[ChatAttachmentReference] | None = None,
     ) -> RunState: ...
-    def begin_builtin_run(self, run_id: str) -> tuple[RunState, AgentProfile] | None: ...
+    def begin_builtin_run(
+        self, run_id: str, *, claim: RunClaim | None = None
+    ) -> tuple[RunState, AgentProfile] | None: ...
     def begin_builtin_resume(
-        self, run_id: str
+        self, run_id: str, *, claim: RunClaim | None = None
     ) -> tuple[RunState, AgentProfile, str, dict[str, bool]] | None: ...
     def start_builtin_tool_step(
         self, run_id: str, call: ToolCall
@@ -1740,27 +1744,23 @@ class AgentRuntimeRepository:
             # 組み込み Runtime の queued の Run（新規・承認の決定後の再開。#754）だけを claim する。
             if run.runtime_id != BUILTIN_RUNTIME_ID or run.status != RunStatus.QUEUED:
                 continue
-            lease = run.metadata.get("_runtime_dispatch_lease")
-            if isinstance(lease, dict):
-                expires_at = lease.get("expires_at")
-                if isinstance(expires_at, str):
-                    try:
-                        if datetime.fromisoformat(expires_at) > now:
-                            continue
-                    except ValueError:
-                        pass
-            expires = now + timedelta(seconds=max(1, lease_seconds))
-            run.metadata["_runtime_dispatch_lease"] = {
-                "worker_id": worker_id,
-                "claimed_at": now.isoformat(),
-                "expires_at": expires.isoformat(),
-            }
+            if run_claim.lease_active(run.metadata, now):
+                continue
+            # 所有者・一意な token・次の世代を持つ lease（期限の切れた lease は置き換える。#2606）。
+            lease = run_claim.new_lease(
+                run.metadata, worker_id, now=now, lease_seconds=lease_seconds
+            )
+            run.metadata[run_claim.LEASE_METADATA_KEY] = lease
             run.updated_at = now
             self._append_event(
                 run,
                 RunEventType.RUNTIME_DISPATCH_CLAIMED,
                 "runtime-dispatcher が Run を claim しました。",
-                {"worker_id": worker_id, "lease_expires_at": expires.isoformat()},
+                {
+                    "worker_id": worker_id,
+                    "lease_expires_at": lease["expires_at"],
+                    "generation": lease["generation"],
+                },
             )
             return run
         return None
@@ -2501,59 +2501,78 @@ class AgentRuntimeRepository:
             for run in runs:
                 self._record_fact_locked(run)
 
-    def begin_builtin_run(self, run_id: str) -> tuple[RunState, AgentProfile] | None:
-        """実行を始める（取消済み・終了済みなら None）。"""
+    def begin_builtin_run(
+        self, run_id: str, *, claim: RunClaim | None = None
+    ) -> tuple[RunState, AgentProfile] | None:
+        """実行を始める（開始できない・取消済み・終了済みなら None）。
+
+        queued の Run を、`claim`（dispatcher）が今の lease と一致するとき・claim なし（in_process）
+        なら期限内の lease を別の worker が持たないときだけ、1 回だけ開始する（#2606）。
+        """
         with self._lock:
-            run = self._require_run(run_id)
-            agent = self._agents.get(run.agent_id)
-            if _is_terminal(run.status) or run.status in _WAITING_STATUSES:
-                return None
-            if agent is None:
-                self._fail_builtin_locked(
-                    run, "runtime.agent_not_found", "業務 Agent が見つかりません。"
-                )
-                return None
-            self._set_builtin_running_locked(run, "実行を開始しました。")
-            return run.model_copy(deep=True), _agent_for_run(agent, run)
+            return self._begin_builtin_run_locked(run_id, claim)
+
+    def _begin_builtin_run_locked(
+        self, run_id: str, claim: RunClaim | None
+    ) -> tuple[RunState, AgentProfile] | None:
+        run = self._require_run(run_id)
+        if not self._may_begin_locked(run, claim):
+            return None
+        agent = self._agents.get(run.agent_id)
+        if agent is None:
+            self._fail_builtin_locked(
+                run, "runtime.agent_not_found", "業務 Agent が見つかりません。"
+            )
+            return None
+        self._set_builtin_running_locked(run, "実行を開始しました。", claim)
+        return run.model_copy(deep=True), _agent_for_run(agent, run)
 
     def begin_builtin_resume(
-        self, run_id: str
+        self, run_id: str, *, claim: RunClaim | None = None
     ) -> tuple[RunState, AgentProfile, str, dict[str, bool]] | None:
-        """承認の決定を反映して再開する（承認待ちが残る・状態が無いときは None）。"""
+        """承認の決定を反映して再開する（開始できない・承認待ちが残る・状態が無いときは None）。
+
+        開始の条件は `begin_builtin_run` と同じ（queued・今の claim。#2606）。
+        """
         with self._lock:
-            run = self._require_run(run_id)
-            agent = self._agents.get(run.agent_id)
-            state_text = run.metadata.get(_BUILTIN_STATE_KEY)
-            if (
-                _is_terminal(run.status)
-                or _pending_approval_count(run) > 0
-                or _pending_agent_confirmations(run)
-            ):
-                return None
-            if agent is None or not isinstance(state_text, str):
-                self._fail_builtin_locked(
-                    run, "runtime.resume_state_missing", "再開に必要な実行の状態がありません。"
-                )
-                return None
-            decisions = {
-                approval.tool_call.trace_id or "": approval.status == ApprovalStatus.APPROVED
-                for approval in run.approvals
-                if approval.tool_call.trace_id
-                and approval.status in {ApprovalStatus.APPROVED, ApprovalStatus.REJECTED}
-            }
-            # 回答前の確認（#1839）: 答え・スキップした確認は実行し、ツールの結果で答えを返す。
-            decisions.update(
-                {
-                    item.call_id: True
-                    for item in run.confirmations
-                    if item.source == SOURCE_AGENT
-                    and item.call_id
-                    and item.status in {"answered", "skipped"}
-                }
+            return self._begin_builtin_resume_locked(run_id, claim)
+
+    def _begin_builtin_resume_locked(
+        self, run_id: str, claim: RunClaim | None
+    ) -> tuple[RunState, AgentProfile, str, dict[str, bool]] | None:
+        run = self._require_run(run_id)
+        if not self._may_begin_locked(run, claim):
+            return None
+        agent = self._agents.get(run.agent_id)
+        state_text = run.metadata.get(_BUILTIN_STATE_KEY)
+        if _pending_approval_count(run) > 0 or _pending_agent_confirmations(run):
+            return None
+        if agent is None or not isinstance(state_text, str):
+            self._fail_builtin_locked(
+                run, "runtime.resume_state_missing", "再開に必要な実行の状態がありません。"
             )
-            run.metadata.pop(_BUILTIN_STATE_KEY, None)
-            self._set_builtin_running_locked(run, "承認・確認の答えを反映して実行を再開しました。")
-            return run.model_copy(deep=True), _agent_for_run(agent, run), state_text, decisions
+            return None
+        decisions = {
+            approval.tool_call.trace_id or "": approval.status == ApprovalStatus.APPROVED
+            for approval in run.approvals
+            if approval.tool_call.trace_id
+            and approval.status in {ApprovalStatus.APPROVED, ApprovalStatus.REJECTED}
+        }
+        # 回答前の確認（#1839）: 答え・スキップした確認は実行し、ツールの結果で答えを返す。
+        decisions.update(
+            {
+                item.call_id: True
+                for item in run.confirmations
+                if item.source == SOURCE_AGENT
+                and item.call_id
+                and item.status in {"answered", "skipped"}
+            }
+        )
+        run.metadata.pop(_BUILTIN_STATE_KEY, None)
+        self._set_builtin_running_locked(
+            run, "承認・確認の答えを反映して実行を再開しました。", claim
+        )
+        return run.model_copy(deep=True), _agent_for_run(agent, run), state_text, decisions
 
     def start_builtin_tool_step(
         self, run_id: str, call: ToolCall
@@ -2654,7 +2673,9 @@ class AgentRuntimeRepository:
         """
         with self._lock:
             run = self._require_run(run_id)
-            if _is_terminal(run.status):
+            if _is_terminal(run.status) or self._stale_execution_locked(
+                run, "request_approvals", segment_end=True
+            ):
                 return run.model_copy(deep=True)
             for confirmation in confirmations:
                 run.confirmations.append(confirmation.model_copy(deep=True))
@@ -2722,7 +2743,9 @@ class AgentRuntimeRepository:
         """
         with self._lock:
             run = self._require_run(run_id)
-            if _is_terminal(run.status):
+            if _is_terminal(run.status) or self._stale_execution_locked(
+                run, "complete", segment_end=True
+            ):
                 return run.model_copy(deep=True)
             for confirmation in confirmations:
                 run.confirmations.append(confirmation.model_copy(deep=True))
@@ -2749,7 +2772,9 @@ class AgentRuntimeRepository:
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState:
         with self._lock:
             run = self._require_run(run_id)
-            if not _is_terminal(run.status):
+            if not _is_terminal(run.status) and not self._stale_execution_locked(
+                run, "fail", segment_end=True
+            ):
                 self._fail_builtin_locked(run, code, detail)
             return run.model_copy(deep=True)
 
@@ -2785,7 +2810,7 @@ class AgentRuntimeRepository:
                 step.status = StepStatus.FAILED
                 step.completed_at = step.completed_at or now
         run.pending_tool_calls.clear()
-        run.metadata.pop("_runtime_dispatch_lease", None)
+        run.metadata.pop(run_claim.LEASE_METADATA_KEY, None)
         run.metadata.pop(_BUILTIN_STATE_KEY, None)
         run.status = RunStatus.FAILED
         run.updated_at = now
@@ -2913,7 +2938,8 @@ class AgentRuntimeRepository:
         """モデルの利用量（再開を含めた累計）を Run に記録する（#772）。"""
         with self._lock:
             run = self._runs.get(run_id)
-            if run is None:
+            # 別の実行が始まった後の遅れた利用量は、新しい実行の累計を上書きしない（#2606）。
+            if run is None or self._stale_execution_locked(run, "usage", segment_end=False):
                 return
             run.usage = usage
             self._mark_run_changed(run)
@@ -3106,20 +3132,83 @@ class AgentRuntimeRepository:
             run.updated_at = _now()
             self._persist_locked()
 
-    def _set_builtin_running_locked(self, run: RunState, message: str) -> None:
+    def _may_begin_locked(self, run: RunState, claim: RunClaim | None) -> bool:
+        """queued の Run を今の claim で開始できるか（#2606）。
+
+        claim なし（in_process）は、期限内の lease を別の worker が持たないこと。running の Run
+        （同じ claim・別の入口の 2 回目の開始）・承認待ち・確認待ち・終了した Run は開始しない。
+        期限の切れた・claim し直された旧所有者の claim も開始しない。
+        """
+        if run.status != RunStatus.QUEUED:
+            reason: str | None = run_claim.REJECT_NOT_QUEUED
+        else:
+            reason = run_claim.begin_rejection(run.metadata, claim, now=_now())
+        if reason is None:
+            return True
+        logger.log(
+            logging.WARNING if claim is not None else logging.INFO,
+            "agent_runtime_begin_rejected",
+            extra={
+                "run_id": run.id,
+                "status": run.status.value,
+                "reason": reason,
+                "worker_id": claim.worker_id if claim is not None else None,
+                "claim_generation": claim.generation if claim is not None else None,
+                "current_generation": run_claim.generation_of(run.metadata),
+            },
+        )
+        return False
+
+    def _set_builtin_running_locked(
+        self, run: RunState, message: str, claim: RunClaim | None = None
+    ) -> None:
         # 実行を始めたら dispatcher の lease は要らない（running は claim しない）。
         # 残すと、承認の決定で queued に戻った Run を lease の期限まで claim できない。
-        run.metadata.pop("_runtime_dispatch_lease", None)
+        # lease の token・世代は実行の記録に移し、書き戻しの fencing に使う（#2606）。
+        now = _now()
+        execution = run_claim.start_execution(run.metadata, claim, now=now)
         run.status = RunStatus.RUNNING
-        run.updated_at = _now()
+        run.updated_at = now
         self._append_event(
             run,
             RunEventType.RUN_STATUS_CHANGED,
             message,
-            {"status": RunStatus.RUNNING.value, "runtime_id": BUILTIN_RUNTIME_ID},
+            {
+                "status": RunStatus.RUNNING.value,
+                "runtime_id": BUILTIN_RUNTIME_ID,
+                "generation": execution["generation"],
+            },
         )
         self._persist_locked()
         self._record_fact_locked(run)
+
+    def _stale_execution_locked(self, run: RunState, write: str, *, segment_end: bool) -> bool:
+        """この文脈の実行の書き戻しが、もう受け付けられないか（#2606）。
+
+        実行の外（API の操作・テストの直接の呼び出し）は検査しない。実行の中では、Run の実行の
+        記録の token が自分の token と違えば（別の実行が始まった）受け付けない。`segment_end`
+        （完了・失敗・承認待ちの保存）は、running でなければ（自分の実行が区切りを終えた後の
+        遅れた書き戻し）も受け付けない。終了した Run の扱いは各書き戻しの既存の判定に任せる。
+        """
+        token = run_claim.current_execution_token(run.id)
+        if token is None:
+            return False
+        current = run_claim.execution_token(run.metadata)
+        stale = current != token or (
+            segment_end and run.status != RunStatus.RUNNING and not _is_terminal(run.status)
+        )
+        if stale:
+            logger.warning(
+                "agent_runtime_stale_execution_write_ignored",
+                extra={
+                    "run_id": run.id,
+                    "write": write,
+                    "status": run.status.value,
+                    "current_generation": run_claim.generation_of(run.metadata),
+                    "superseded": current != token,
+                },
+            )
+        return stale
 
     def _fail_builtin_locked(self, run: RunState, code: str, detail: str) -> None:
         run.status = RunStatus.FAILED
@@ -3747,49 +3836,113 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
 
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None:
         """head の行を lock して別のプロセスの変更をそろえ、Run の lease を原子的に取る。"""
+
+        def claim() -> RunState | None:
+            run = self._claim_control_plane_run_locked(worker_id, lease_seconds=lease_seconds)
+            self._persist_locked()
+            return run.model_copy(deep=True) if run is not None else None
+
+        return self._storage_transition(claim)
+
+    def begin_builtin_run(
+        self, run_id: str, *, claim: RunClaim | None = None
+    ) -> tuple[RunState, AgentProfile] | None:
+        """dispatcher の開始は、保存先の今の claim と状態に対する条件付きの遷移にする（#2606）。
+
+        別のプロセスの dispatcher が期限の切れた lease を claim し直していれば、その変更を読んでから
+        判定するので、旧所有者は開始できない。in_process の開始（claim なし）は 1 プロセスなので
+        メモリで判定する（event loop の上で保存先を待たない）。
+        """
+        if claim is None:
+            return super().begin_builtin_run(run_id)
+        return self._storage_transition(lambda: self._begin_builtin_run_locked(run_id, claim))
+
+    def begin_builtin_resume(
+        self, run_id: str, *, claim: RunClaim | None = None
+    ) -> tuple[RunState, AgentProfile, str, dict[str, bool]] | None:
+        """承認の後の再開も、dispatcher のときは保存先に対する条件付きの遷移にする（#2606）。"""
+        if claim is None:
+            return super().begin_builtin_resume(run_id)
+        return self._storage_transition(lambda: self._begin_builtin_resume_locked(run_id, claim))
+
+    def _storage_transition(self, mutate: Callable[[], _T]) -> _T:
+        """head の行を lock し、別のプロセスの変更をそろえてから `mutate`（判定と変更）を行い、
+        積んだ保存の予定を同じ transaction で書く（claim・dispatcher の開始。#1939・#2606）。
+
+        head の lock の中で判定と書き込みをするので、別のプロセスの claim・開始と重ならない。
+        書けなければ、この遷移で変えた分は次の書き込みで保存先の値に戻す（メモリだけを進めた
+        ままにしない。保存先に書いていない開始で、実行の無い running を残さない）。
+        """
+        table, key = self._oracle_table_name, self._oracle_checkpoint_key
         with self._write_lock:
             self.flush_writes()
-            with self._connect_oracle() as connection, connection.cursor() as cursor:
-                head = self._lock_head_cursor(cursor)
-                others, full = self._changed_rows_cursor(cursor, head)
+            earlier: _StagedChanges | None = None
+            batch: _StagedChanges | None = None
+            try:
+                with self._connect_oracle() as connection, connection.cursor() as cursor:
+                    head = self._lock_head_cursor(cursor)
+                    others, full = self._changed_rows_cursor(cursor, head)
+                    self._lock.acquire()
+                    try:
+                        self._reset_change_tracking_locked()
+                        self._apply_storage_changes_locked(
+                            others, full=full, written=set(), head=head
+                        )
+                        self._sync_quarantine_locked(head.header.get("quarantined"))
+                        # flush の後に別のスレッドが積んだ予定（この遷移の変更とは分けて持つ）。
+                        earlier = self._take_pending_locked()
+                        result = mutate()
+                        ours = self._take_pending_locked()
+                        batch = earlier
+                        if ours is not None:
+                            batch = ours if batch is None else _merged_batch(batch, ours)
+                    finally:
+                        self._lock.release()
+                    version = head.version
+                    if batch is not None:
+                        version += 1
+                        header: str | None = None
+                        if batch.quarantined is not None:
+                            header = checkpoint_store.header_json(
+                                quarantined=list(
+                                    _merge_quarantine(
+                                        batch.quarantined, head.header.get("quarantined")
+                                    )
+                                )
+                            )
+                        checkpoint_store.write_entities(
+                            cursor, key, batch.entities, version=version
+                        )
+                        checkpoint_store.update_head(
+                            cursor, table, key, version=version, text=header
+                        )
+                        self._write_projection_cursor(cursor, batch)
+                    connection.commit()
+            except Exception:
                 self._lock.acquire()
                 try:
-                    self._apply_storage_changes_locked(others, full=full, written=set(), head=head)
-                    self._sync_quarantine_locked(head.header.get("quarantined"))
-                    run = self._claim_control_plane_run_locked(
-                        worker_id, lease_seconds=lease_seconds
-                    )
-                    if run is None:
-                        connection.commit()
-                        self._synced_version = head.version
-                        return None
-                    claimed = run.model_copy(deep=True)
-                    text = run.model_dump_json()
-                    # この Run は下で書く（予定に積まない）。
-                    self._changed.discard((RUN_ENTITY, run.id))
-                    self._reset_change_tracking_locked()
+                    # 別のスレッドの予定は書き直す。この遷移の変更は書き直さず、次の書き込みで
+                    # 保存先の全体を読んで保存先の値に戻す。
+                    if earlier is not None:
+                        self._pending.insert(0, earlier)
+                    if batch is not None:
+                        self._synced_version = None
                 finally:
                     self._lock.release()
-                version = head.version + 1
-                checkpoint_store.write_entities(
-                    cursor,
-                    self._oracle_checkpoint_key,
-                    {(RUN_ENTITY, claimed.id): text},
-                    version=version,
-                )
-                checkpoint_store.update_head(
-                    cursor,
-                    self._oracle_table_name,
-                    self._oracle_checkpoint_key,
-                    version=version,
-                    text=None,
-                )
-                self._write_projection_cursor(
-                    cursor, _StagedChanges(ticket=0, entities={(RUN_ENTITY, claimed.id): text})
-                )
-                connection.commit()
+                raise
             self._synced_version = version
-            return claimed
+            if batch is not None:
+                self._written_ticket = max(self._written_ticket, batch.ticket)
+            return result
+
+    def _take_pending_locked(self) -> _StagedChanges | None:
+        """積んだ保存の予定を 1 つに重ねて取り出す（lock の中）。"""
+        if not self._pending:
+            return None
+        batch = self._pending.pop(0)
+        while self._pending:
+            batch.merge(self._pending.pop(0))
+        return batch
 
     def _lock_head_cursor(self, cursor: Any) -> checkpoint_store.CheckpointHead:
         """head の行を lock して読む（無ければ版 0 で作る）。"""
@@ -4013,6 +4166,15 @@ def _unreadable_record(row: checkpoint_store.EntityRow) -> QuarantinedSnapshotRe
         reasons=["保存先の行が JSON として読めません"],
         raw=row.entity_json,
     )
+
+
+def _merged_batch(first: _StagedChanges, later: _StagedChanges) -> _StagedChanges:
+    """2 つの保存の予定を重ねた新しい予定（元の予定は変えない）。"""
+    merged = _StagedChanges(
+        ticket=first.ticket, entities=dict(first.entities), quarantined=first.quarantined
+    )
+    merged.merge(later)
+    return merged
 
 
 def _merge_quarantine(ours: list[Any], theirs: object) -> list[Any]:
@@ -4670,10 +4832,6 @@ def _pending_agent_confirmations(run: RunState) -> list[ConfirmationRequest]:
         for item in run.confirmations
         if item.source == SOURCE_AGENT and item.status == "pending"
     ]
-
-
-# 利用者の操作を待つ Run の状態（承認・回答前の確認。#1839）。
-_WAITING_STATUSES = frozenset({RunStatus.WAITING_APPROVAL, RunStatus.WAITING_CONFIRMATION})
 
 
 def _validate_oracle_identifier(identifier: str) -> str:

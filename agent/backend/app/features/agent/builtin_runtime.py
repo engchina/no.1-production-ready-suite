@@ -79,7 +79,7 @@ from pr_system_settings.model import (
     seed_to_send,
 )
 
-from app.features.agent import data_scope, tool_grounding
+from app.features.agent import data_scope, run_claim, tool_grounding
 from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_KIND,
     ANSWER_EVIDENCE_NAME,
@@ -185,6 +185,7 @@ from app.features.agent.output_fields import (
     output_retried,
     record_output_tool,
 )
+from app.features.agent.run_claim import RunClaim
 from app.features.agent.section_coverage import (
     COVERAGE_INCOMPLETE,
     RETRYABLE_REASONS,
@@ -2117,15 +2118,26 @@ def _save_support_task(run_id: str, task: _SupportTaskRun) -> dict[str, Any] | N
         return None
 
 
-async def execute_run(run_id: str) -> None:
-    """Run を最初から実行する（作成直後・dispatcher から呼ぶ）。"""
+async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
+    """Run を最初から実行する（作成直後・dispatcher から呼ぶ）。
+
+    `claim` は dispatcher が claim した所有の証明（#2606）。開始は今の claim に対する条件付きの
+    遷移で、開始できなければ何もしない。開始した実行の書き戻しは、この実行の token で守る。
+    """
     with bind_log_context(run_id=run_id):
         from app.features.agent.runtime import runtime_repository
 
-        started = runtime_repository.begin_builtin_run(run_id)
+        if claim is None:
+            started = runtime_repository.begin_builtin_run(run_id)
+        else:
+            # 保存先の head を lock して判定・書き込みをする。event loop を塞がない。
+            started = await asyncio.to_thread(
+                runtime_repository.begin_builtin_run, run_id, claim=claim
+            )
         if started is None:
             return
         run, agent = started
+        execution = run_claim.bind_execution(run.id, run.metadata)
         # 公開中の版に固定したスキルで動く（#1855。下書きの Run・固定の無い古い版は今のスキル）。
         pinned = use_pinned_skills(agent.pinned_skills)
         try:
@@ -2176,17 +2188,24 @@ async def execute_run(run_id: str) -> None:
             _record_failure(run_id, exc)
         finally:
             reset_pinned_skills(pinned)
+            run_claim.release_execution(execution)
 
 
-async def resume_run(run_id: str) -> None:
-    """承認がすべて決まった Run を、保存した SDK の状態から再開する。"""
+async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
+    """承認がすべて決まった Run を、保存した SDK の状態から再開する（`claim` は `execute_run`）。"""
     with bind_log_context(run_id=run_id):
         from app.features.agent.runtime import runtime_repository
 
-        resumed = runtime_repository.begin_builtin_resume(run_id)
+        if claim is None:
+            resumed = runtime_repository.begin_builtin_resume(run_id)
+        else:
+            resumed = await asyncio.to_thread(
+                runtime_repository.begin_builtin_resume, run_id, claim=claim
+            )
         if resumed is None:
             return
         run, agent, state_text, decisions = resumed
+        execution = run_claim.bind_execution(run.id, run.metadata)
         pinned = use_pinned_skills(agent.pinned_skills)
         try:
             task = _support_task_run(run, agent)
@@ -2244,6 +2263,7 @@ async def resume_run(run_id: str) -> None:
             _record_failure(run_id, exc)
         finally:
             reset_pinned_skills(pinned)
+            run_claim.release_execution(execution)
 
 
 def _run_cancellations(run: Any) -> list[dict[str, Any]]:

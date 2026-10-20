@@ -1,6 +1,7 @@
 """Run・業務 Agent の保存先（head と 1 件 = 1 行）を、実の Oracle で確かめる（#1916・#1939）。
 
 - 2 つのプロセスが同じ保存先に書いても、互いの更新を消さない（#1916）。
+- lease の切れた旧 worker は、別のプロセスが claim し直した Run を開始できない（#2606）。
 - migration 016 が、以前の全体の snapshot（1 行の JSON）を Run・業務 Agent の行に移し、元の
   snapshot を残す（#1939）。
 - Run が 1,000 件あっても、会話の削除・名前の変更・フィードバック・取り消しが 1 秒以内に終わる
@@ -25,7 +26,7 @@ from uuid import uuid4
 import oracledb
 import pytest
 
-from app.features.agent import runtime
+from app.features.agent import run_claim, runtime
 from app.features.agent import runtime_checkpoint_store as checkpoint_store
 from app.features.agent.runtime import (
     RUNTIME_CHECKPOINT_TABLE,
@@ -35,6 +36,7 @@ from app.features.agent.runtime import (
     Artifact,
     FeedbackRating,
     FeedbackReason,
+    RunCreateRequest,
     RunEvent,
     RunEventType,
     RunFeedback,
@@ -125,6 +127,43 @@ def test_two_processes_keep_each_others_updates_in_oracle(checkpoint_key: str) -
     first.create_agent(AgentProfile(id="agent_live_fourth", name="四つ目"))
     assert _entities(checkpoint_key)[("agent", "agent_live_first")][0] is None
     assert "agent_live_first" not in {agent.id for agent in first.list_agents()}
+
+
+def test_stale_dispatcher_cannot_start_a_reclaimed_run_in_oracle(
+    checkpoint_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lease の切れた旧 worker（別のプロセス）は、claim し直された Run を開始できない（#2606）。"""
+    now = [datetime(2026, 1, 1, 9, 0, tzinfo=UTC)]
+    monkeypatch.setattr(runtime, "_now", lambda: now[0])
+    api = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+    worker_a = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+    worker_b = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+    run = api.create_builtin_run(RunCreateRequest(goal="合成の質問", agent_id="default"))
+
+    claimed_a = worker_a.claim_control_plane_run("worker-a", lease_seconds=1)
+    assert claimed_a is not None and claimed_a.id == run.id
+    claim_a = run_claim.claim_of(run.id, claimed_a.metadata)
+    now[0] += timedelta(seconds=2)
+    claimed_b = worker_b.claim_control_plane_run("worker-b", lease_seconds=1)
+    assert claimed_b is not None and claimed_b.id == run.id
+    claim_b = run_claim.claim_of(run.id, claimed_b.metadata)
+    assert claim_a is not None and claim_b is not None
+    assert claim_b.generation == claim_a.generation + 1
+
+    assert worker_a.begin_builtin_run(run.id, claim=claim_a) is None
+    stored = json.loads(_entities(checkpoint_key)[("run", run.id)][0] or "{}")
+    assert stored["status"] == "queued"
+    assert stored["metadata"][run_claim.LEASE_METADATA_KEY]["token"] == claim_b.token
+
+    assert worker_b.begin_builtin_run(run.id, claim=claim_b) is not None
+    assert worker_b.begin_builtin_run(run.id, claim=claim_b) is None
+    stored = json.loads(_entities(checkpoint_key)[("run", run.id)][0] or "{}")
+    assert stored["status"] == "running"
+    assert stored["metadata"][run_claim.EXECUTION_METADATA_KEY]["token"] == claim_b.token
+    assert run_claim.LEASE_METADATA_KEY not in stored["metadata"]
+    # running の Run は、期限の後でも別の worker が claim し直さない。
+    now[0] += timedelta(seconds=10)
+    assert worker_a.claim_control_plane_run("worker-a", lease_seconds=1) is None
 
 
 def _legacy_run(run_id: str) -> dict[str, Any]:

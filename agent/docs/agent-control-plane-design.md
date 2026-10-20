@@ -498,6 +498,22 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
 `SELECT ... FOR UPDATE` し、queued の組み込み Runtime の Run に期限付き lease を付けて claim し、実行・再開する。
 実行を始めたら lease を外す（承認の決定で queued に戻った Run を、すぐ claim できるようにする）。別 queue 製品は追加しない。
 
+- **claim と実行の世代（fencing。#2606。`app/features/agent/run_claim.py`）**: lease は所有者（`worker_id`）・一意な
+  `token`・単調に増える `generation` を持つ（表・列は足さず、Run の予約の metadata `_runtime_dispatch_lease`）。
+  実行の開始（`begin_builtin_run` / `begin_builtin_resume` に claim を渡す）は、queued の Run を、今の lease と
+  token・所有者・世代が一致し期限（`expires_at`）が今より後のときだけ 1 回受け付ける。Oracle では head を lock して
+  別のプロセスの claim を読んでから判定し、その場で書く（条件付きの遷移）。期限の切れた・claim し直された旧所有者の
+  開始、同じ claim の 2 回目の開始、running・承認待ち・確認待ち・終了した Run の開始は受け付けない。in_process の
+  開始（claim なし）も queued だけを 1 回開始し、期限内の lease を持つ worker がいれば開始しない。
+- 開始で lease を外し、token と世代を実行の記録（`_runtime_execution`）に移す。実行の区切りの書き戻し（完了・失敗・
+  承認待ちの SDK の状態の保存）は、running で実行の記録の token が自分の実行と同じときだけ受け付け、利用量は
+  token が同じときだけ受け付ける（実行の文脈の token は `run_claim.bind_execution`。実行の外の API の操作は
+  検査しない）。別の実行が始まった後・自分の実行が承認待ちで区切った後の遅れた書き戻しは無視する（ログ
+  `agent_runtime_stale_execution_write_ignored`。開始の拒否は `agent_runtime_begin_rejected`）。
+- running の Run を自動で claim し直す仕組み・heartbeat は持たない（止まった worker の Run は再起動の回復の方針の
+  まま）。この fencing は保存先の中で同じ Run の実行が重ならないようにするだけで、外部のサービスへの副作用の
+  重複を防ぐものではない（#2601）。
+
 外部 dispatcher は `AGENT_RUNTIME_REPOSITORY_BACKEND=oracle_checkpoint|oracle_normalized` が前提。
 memory backend は process 間共有されないため production dispatcher に使用しない。
 
