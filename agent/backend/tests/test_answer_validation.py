@@ -30,6 +30,7 @@ from app.features.agent import builtin_runtime
 from app.features.agent.answer_passages import (
     is_absence_only,
     is_heading,
+    is_operation_step,
     list_heading_lines,
     non_claim_passages,
     passage_kind,
@@ -1885,6 +1886,49 @@ def test_steps_before_the_withheld_step_and_unordered_lists_are_kept() -> None:
     body, _section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
     assert body == "\n".join(bullets[1:])
     assert withheld == {"claims": 1, "findings": 0, "all": False}
+
+
+def test_numbered_facts_after_a_withheld_item_are_kept() -> None:
+    """番号で事実を並べた一覧は、1 項目を外しても後の事実の項目を残す（操作の項目だけが前の項目に
+    依存する。#2604）。"""
+    facts = [
+        "1. 識別子は 12 桁です。",
+        "2. 識別子は再利用しません。",
+        "3. 識別子は変更できません。",
+        "4. 発行の記録は 5 年間保存されます。",
+    ]
+    for status in ("citation_error", "unsupported", "unassessed"):
+        result = _verdict(
+            _claim(facts[0], status, "未登録の原文ID。"),
+            *(_claim(item, "supported") for item in facts[1:]),
+        )
+        published, withheld = publish_answer("\n".join(facts), result)
+        body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+        assert body == "\n".join(facts[1:])
+        assert DEPENDENT_STEP_LABEL not in section
+        assert "dependent_steps" not in withheld and withheld["claims"] == 1
+    # 事実の項目の後に操作の項目があれば、操作の項目だけを外す。
+    request = "5. 変更が必要なときは、管理者に申請してください。"
+    answer = "\n".join([*facts, request])
+    assert dependent_steps(answer, {facts[0]}) == [(4, 0, request)]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("1. 対象の情報を訂正する。", True),
+        ("- 管理者に申請してください。", True),
+        ("2. **申請書を提出します**（第 2 章）。", True),
+        ("3. 対象を確認しておく。", True),
+        ("1. 識別子は 12 桁です。", False),
+        ("- 延長は最長 90 日までできます。", False),
+        ("2. 処理の中で通知が発生します。", False),
+        ("3. 承認者は管理者である。", False),
+    ],
+)
+def test_operation_steps_are_decided_by_the_predicate_form(text: str, expected: bool) -> None:
+    """手順の項目かは、操作の指示か文末の指示の形で決める（業務の語は見ない。#2604）。"""
+    assert is_operation_step(text) is expected
 
 
 def test_numbered_step_headings_and_their_contents_follow_the_withheld_step() -> None:
