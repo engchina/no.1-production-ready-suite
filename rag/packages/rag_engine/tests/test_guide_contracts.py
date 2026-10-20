@@ -89,6 +89,7 @@ def test_plan_preserves_configured_requirements_and_dependencies():
     )
     assert plan is not None
     assert [r["text"] for r in plan.step_contracts[0]["requirements"]] == ["入力方法", "保存済み"]
+    assert [r["kind"] for r in plan.step_contracts[0]["requirements"]] == ["evidence", "completion"]
     assert plan.step_contracts[0]["depends_on"] == ["open"]
     assert plan.step_contracts[0]["purpose"] == "値を編集"
 
@@ -154,3 +155,19 @@ def test_generation_receives_requirements_and_missing_audit_rows_are_retried():
     assert _audits(model)[1]["validation_error"]["required_once"] == ["s1:0", "s2:0"]
     assert all(step["status"] == "explained" for step in result.generation_trace["rounds"][0]["guide_steps"])
     assert len(_audits(model)) == 2
+
+
+@pytest.mark.parametrize("supported", [True, False])
+def test_evidence_condition_checks_support_without_requiring_its_instruction_in_answer(supported):
+    plan = GuidePlan.from_payload(
+        "guide",
+        1,
+        [{"id": "a", "evidence_requirements": ["対象の項目名と入力先が同じ行にあること"], "done_when": "対象を選択する操作を説明する"}],
+    )
+    assert plan is not None
+    item = entry()
+    if not supported:
+        item.mark("unassessed", "引用元の行を確認できない")
+    result = grounded.apply_guide_contracts(coverage("a"), [item], plan.step_contracts, audit(review("a:0", [0]), review("a:1", [0])))
+    assert (result[0]["status"] == "explained") is supported
+    assert "同じ行" not in item.item.text

@@ -122,8 +122,10 @@ class GuidePlan:
                 "step_id": step.step_id,
                 "purpose": step.purpose,
                 "requirements": [
-                    {"id": f"{step.step_id}:{index}", "text": text}
-                    for index, text in enumerate((*step.evidence_requirements, step.done_when or step.title))
+                    {"id": f"{step.step_id}:{index}", "text": text, "kind": kind}
+                    for index, (kind, text) in enumerate(
+                        [*(("evidence", text) for text in step.evidence_requirements), ("completion", step.done_when or step.title)]
+                    )
                     if text
                 ],
                 "depends_on": list(step.depends_on),
