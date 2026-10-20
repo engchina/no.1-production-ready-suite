@@ -3102,6 +3102,108 @@ async def test_request_coverage_disabled_does_not_re_retrieve(
     assert "doc-invoice:c1" not in _evidence_ids(outcome)
 
 
+# --- 元の質問の要求の単位と、検索用に言い換えた検索文(#2665) ---
+
+_NUMBERED_ORIGINAL = "1. 受注の登録方法は？\n2. 請求書の再発行方法は？\n3. 承認の担当は？"
+
+
+class ApprovalOnlyOracle(CoverageOracle):
+    """「承認」を含む検索文にだけ根拠を返す検索のスタブ(前半の 2 要求は根拠が無い)。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        self.queries.append(query)
+        return [_doc_chunk("doc-approval", "承認の担当は課長です。")] if "承認" in query else []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "受注を登録する。請求書を再発行する。承認の担当を知りたい。",
+        "受注 登録 請求書 再発行 承認 担当",
+    ],
+)
+async def test_original_question_keeps_numbered_requests_through_coverage(
+    monkeypatch: pytest.MonkeyPatch, query: str
+) -> None:
+    """元の質問の番号つきの 3 要求を、検索用に言い換えた検索文から作り直さずに、要求ごとの
+    根拠の確認と探し直し・診断まで保つ(#2665)。検索は検索文で行う。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    oracle = ApprovalOnlyOracle()
+    engine = AnswerEngine(
+        Settings(
+            rag_query_strategy="simple_retrieval",
+            rag_answer_flow="standard_rag",
+            rag_rerank_enabled=False,
+        ),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(
+        SearchRequest(
+            query=query,
+            original_question=_NUMBERED_ORIGINAL,
+            filters={"knowledge_base_id": "kb-1"},
+        )
+    )
+
+    coverage = outcome.diagnostics["request_coverage"]
+    assert {row["id"]: (row["kind"], row["status"]) for row in coverage["requests"]} == {
+        "Q1": ("request", "missing"),
+        "Q2": ("request", "missing"),
+        "Q3": ("request", "supported"),
+    }
+    # 1 要求として探し直しを省かず、根拠の無い要求ごとに要求の文で探し直す。
+    assert [item["request_id"] for item in coverage["re_retrieval"]["queries"]] == ["Q1", "Q2"]
+    assert "1. 受注の登録方法は？" in oracle.queries
+    # 主の検索は言い換えた検索文で行う(元の質問の全文の検索は、条の目録の候補の補いだけ)。
+    assert oracle.queries[0] == query
+    # 回答の要求(rag_search の requests。回答の検査の入力)も元の質問の 3 要求(充足は監査が決める)。
+    requests = outcome.diagnostics["envelope"]["requests"]
+    assert [(item["id"], item["text"]) for item in requests] == [
+        ("Q1", "1. 受注の登録方法は？"),
+        ("Q2", "2. 請求書の再発行方法は？"),
+        ("Q3", "3. 承認の担当は？"),
+    ]
+
+
+async def test_without_original_question_requests_come_from_the_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """元の質問を渡さなければ、要求は検索文から作る(省略時の挙動を変えない。#2665)。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    engine = AnswerEngine(
+        Settings(
+            rag_query_strategy="simple_retrieval",
+            rag_answer_flow="standard_rag",
+            rag_rerank_enabled=False,
+        ),
+        oracle=ApprovalOnlyOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(
+        SearchRequest(
+            query="受注 登録 請求書 再発行 承認 担当", filters={"knowledge_base_id": "kb-1"}
+        )
+    )
+
+    coverage = outcome.diagnostics["request_coverage"]
+    assert [row["id"] for row in coverage["requests"]] == ["Q1"]
+    assert coverage["re_retrieval"]["skipped"] == "single_request"
+
+
 def test_build_engine_settings_passes_request_coverage(tmp_path: Any) -> None:
     """根拠の無い要求の再検索の設定と予算を rag_engine の設定へ渡す(#1279)。"""
     from app.rag.answer_engine import build_engine_settings

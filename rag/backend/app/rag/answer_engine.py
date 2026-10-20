@@ -959,7 +959,8 @@ class AnswerEngine:
             article_leads=lambda *, document_id, chunk_set_id, sections, **kwargs: run_async(
                 lambda: self._article_leads(document_id, chunk_set_id, sections)
             ),
-            # 呼び出し元が検索文を短く言い換えたときの元の質問(#2261)。条の選択だけが使う。
+            # 呼び出し元が検索文を短く言い換えたときの元の質問(#2261)。条の選択に使う(回答の要求の
+            # 単位には answer_question_result の request_question で使う。#2665)。
             article_question=lambda: request.original_question,
             # 業務ガイドの手順の充足を意味の近さで決める embedding(#2649)。検索と同じ Cohere Embed。
             embedder=_LoopEmbedder(self._genai, loop),
@@ -1009,6 +1010,9 @@ class AnswerEngine:
                 ),
                 guide_plan=guide_step_plan(self._settings.rag_support_guide),
                 caller_queries=self._caller_queries,
+                # 呼び出し元が検索文を言い換えたときの元の質問(#2665)。回答の要求の単位・要求ごとの
+                # 根拠の確認・回答の生成と検査に使い、検索は request.query で行う。
+                request_question=request.original_question,
             )
 
     async def _search(

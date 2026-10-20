@@ -389,8 +389,9 @@ class SearchInput(BaseModel):
         default=None,
         max_length=8000,
         description=(
-            "利用者の元の質問。query を検索用に短く言い換えたときに渡す。条で構成された文書の"
-            "根拠の条を選ぶときに query と合わせて使う（検索は query で行う）。"
+            "利用者の元の質問。query を検索用に短く言い換えたときに、言い換える前の全文を渡す"
+            "（番号つきの小問は番号のまま）。検索は query で行い、回答は元の質問の要求ごとに"
+            "根拠を確かめて作る。条で構成された文書の根拠の条は query と合わせて選ぶ。"
         ),
     )
     search_answer_profile_id: OptionalText = Field(
@@ -483,6 +484,16 @@ class RetrieveEvidenceInput(SearchInput):
         description=(
             "検索文。planning=caller はこの文と queries だけで検索する（言い換えない）。"
             "planning=rag は質問文でよい。"
+        ),
+    )
+    # 回答を作らないので、元の質問は条の選択（とルールの確認）にだけ使う
+    # （rag_search と説明を分ける。#2665）。
+    original_question: OptionalText = Field(
+        default=None,
+        max_length=8000,
+        description=(
+            "利用者の元の質問。query を検索用に短く言い換えたときに渡す。条で構成された文書の"
+            "根拠の条を選ぶときに query と合わせて使う（検索は query で行う）。"
         ),
     )
     planning: Literal["rag", "caller"] = Field(

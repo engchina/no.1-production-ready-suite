@@ -396,3 +396,81 @@ def test_cover_missing_requests_counts_in_the_shared_extra_retrieval_budget(monk
     left = ExtraRetrievalBudget(max_queries=3, used={"guide_steps": 2})
     assert cover(left)["re_retrieval"]["applied"] is True
     assert left.used == {"guide_steps": 2, "request_coverage": 1} and left.remaining == 0
+
+
+# #2665 の合成の事例: 番号つきの 3 要求の元の質問と、呼び出し元が検索用に言い換えた検索文（番号を除いた文・
+# 検索語の連結）。
+NUMBERED_ORIGINAL = "1. 受注の登録方法は？\n2. 請求書の再発行方法は？\n3. 承認の担当は？"
+SHORTENED_QUERIES = ("受注を登録する。請求書を再発行する。承認の担当を知りたい。", "受注 登録 請求書 再発行 承認 担当")
+
+
+def _answer_with_request_question(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, query: str, request_question: str | None
+) -> tuple[Any, list[str], list[str]]:
+    """検索は「承認」を含む文だけに根拠を返し（前半の 2 要求は根拠なし）、生成は渡された質問を記録する。"""
+    from rag_engine.generation.answer_models import AnswerResponse, GroundedAnswer
+
+    searched: list[str] = []
+    generated: list[str] = []
+
+    def fake_build(question: str, run_id: Any, engines: Any, settings: Any, **kwargs: Any) -> AnswerContext:
+        searched.append(question)
+        return context(parent("apr", "承認の担当は課長です。")) if "承認" in question else context()
+
+    def fake_synthesize(question: str, ctx: AnswerContext, settings: Any, **options: Any) -> GroundedAnswer:
+        generated.append(question)
+        return GroundedAnswer(AnswerResponse(answer_text="承認の担当は課長です。"), ctx, (), options["image_prompt_mode"])
+
+    monkeypatch.setattr(a, "check_adb_hybrid_search_ready", lambda **kwargs: None)
+    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", fake_build)
+    monkeypatch.setattr(a, "_coverage_tokenizer", lambda settings: split)
+    monkeypatch.setattr(a, "synthesize_grounded_answer", fake_synthesize)
+    result = a.answer_question_result(
+        query,
+        "",
+        ["docling"],
+        replace(_settings(), output_dir=tmp_path),
+        query_strategy=a.SIMPLE_RETRIEVAL_LABEL,
+        answer_flow=a.STANDARD_ANSWER_FLOW,
+        retrieval_scope=a.RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+        request_question=request_question,
+    )
+    return result, searched, generated
+
+
+@pytest.mark.parametrize("query", SHORTENED_QUERIES)
+def test_requests_come_from_the_original_question_and_search_uses_the_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, query: str
+) -> None:
+    """要求の単位・要求ごとの根拠の確認・探し直し・回答の生成は元の質問で行い、主の検索は検索文で行う（#2665）。
+
+    前半の 2 要求に根拠が無く最後の要求だけに根拠があるとき、全要求を満たした扱いにせず、要求ごとに不足を示す。
+    """
+    result, searched, generated = _answer_with_request_question(monkeypatch, tmp_path, query, NUMBERED_ORIGINAL)
+
+    coverage = result.generation_trace["request_coverage"]
+    statuses = {row["id"]: (row["kind"], row["status"]) for row in coverage["requests"]}
+    assert statuses == {"Q1": ("request", "missing"), "Q2": ("request", "missing"), "Q3": ("request", "supported")}
+    # 根拠の無い要求ごとに、元の質問の要求の文で探し直す（1 要求として省かない）。
+    retrieval = coverage["re_retrieval"]
+    assert retrieval.get("skipped") != "single_request"
+    assert [item["request_id"] for item in retrieval["queries"]] == ["Q1", "Q2"]
+    # 主の検索は検索文で行い、元の質問の全文では検索しない。
+    assert searched[0] == query
+    assert NUMBERED_ORIGINAL not in searched
+    # 回答の生成と、結果の要求の単位（回答の検査・診断の正本）は元の質問。
+    assert generated == [NUMBERED_ORIGINAL]
+    assert [unit["kind"] for unit in result.task_contract["request_units"]] == ["request"] * 3
+
+
+def test_without_request_question_requests_come_from_the_query(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    """元の質問を渡さなければ、今までどおり検索文から要求を作り、検索文で回答する（#2665）。"""
+    result, searched, generated = _answer_with_request_question(monkeypatch, tmp_path, NUMBERED_ORIGINAL, None)
+
+    assert [row["id"] for row in result.generation_trace["request_coverage"]["requests"]] == ["Q1", "Q2", "Q3"]
+    assert searched[0] == NUMBERED_ORIGINAL and generated == [NUMBERED_ORIGINAL]
+
+    short = SHORTENED_QUERIES[1]
+    result, _searched, generated = _answer_with_request_question(monkeypatch, tmp_path, short, None)
+    assert generated == [short]
+    assert result.task_contract == a.task_contract(short)
