@@ -3102,8 +3102,11 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         # 省略記号が無い引用の扱いは変えない
         self.assertEqual(grounded._original_quote("地区を選択して", text), "地区を選択して")
 
-    def test_unbound_quote_with_a_near_original_is_shown_as_document_text(self):
-        """結び付けるほど似ていない引用は削除せず、最も近い原文に結んで印を付け、feedback に示す (#716・#2738)。"""
+    def test_unbound_quote_with_a_near_original_is_kept_without_a_document_citation(self):
+        """結び付けるほど似ていない引用は削除せず印を付けて残すが、資料の出典は付けない（#716・#2738・#2792）。
+
+        資料の原文として示してよいのは検索結果にある文だけ。最も近い原文は印の理由と feedback に示す。
+        """
         step = "地区を選択して倉庫番号を入力して検索ボタンを押します。"
         ctx = context(record(0, step, "[ 画面：出荷倉庫登録 ]", page=3))
         question = "倉庫番号を確認するにはどうすればよいか。"
@@ -3114,7 +3117,12 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         )
         result = run(model, ctx, question)
         text = result.response.answer_text
-        self.assertIn("・地区を選び倉庫番号を入れて検索ボタンを押します。\n根拠：売上集計業務.pdf p.3", text)
+        labels = grounded.answer_labels()
+        unsourced = text.split(labels.unsourced_section + "\n\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("・地区を選び倉庫番号を入れて検索ボタンを押します。", unsourced)
+        self.assertNotIn(labels.citation_prefix, unsourced)
+        self.assertNotIn(labels.rules_section, text)
+        self.assertEqual(result.response.generation_trace["citation_lines"], [])
         self.assertEqual(marks(result.response)["地区を選び倉庫番号を入れて検索ボタンを押します。"], ["quote_unmatched"])
         # 理由（記録）に最も近い原文を添える。
         self.assertEqual(details(result.response)["地区を選び倉庫番号を入れて検索ボタンを押します。"], "最も近い原文「" + step + "」")

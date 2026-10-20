@@ -136,6 +136,9 @@ class RuntimeKnowledgeContext:
     # 業務ガイドの手順のうち、手順ごとの検索を期限・回数の上限で打ち切って検索しなかった手順の id(#2706)。
     guide_unsearched_steps: tuple[str, ...] = ()
     guide_step_contracts: tuple[dict[str, Any], ...] = ()
+    # 業務ガイドの題名と案内の行（窓口・引き継ぐ条件・承認。#2792）。本文の「業務ガイドの案内」の節に資料とは分けて出す。
+    guide_title: str = ""
+    guide_notices: tuple[str, ...] = ()
 
     def with_scope(self, context: str, search_terms: Sequence[str] = ()) -> RuntimeKnowledgeContext:
         """利用者が選んだ条件を足す。検索に足す語は補助の検索文に加える。"""

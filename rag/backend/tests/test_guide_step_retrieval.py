@@ -13,6 +13,7 @@ from app.rag.answer_engine import guide_step_plan as engine_guide_step_plan
 from app.rag.support_guide import reference_issues
 from app.rag.support_guide_runtime import (
     apply_guide_to_diagnostics,
+    guide_notices,
     guide_step_plan,
     match_guide,
 )
@@ -354,6 +355,44 @@ def test_guide_step_plan_marks_steps_of_undecided_branches_optional() -> None:
     )
     assert plan_object is not None
     assert plan_object.optional_step_ids == ("s3", "s4")
+
+
+def test_guide_notices_reach_the_answer_plan_apart_from_the_documents() -> None:
+    """業務ガイドの窓口・引き継ぐ条件・承認は、資料と分けて回答の案内の材料にする(#2792)。"""
+    content = _content(
+        handoff={"conditions": ["種類が分からない場合"], "contact": "窓口 X"},
+        impact={"approval_required": True, "approval_note": "担当者の承認", "steps": ["s3"]},
+    )
+    undecided = match_guide([("g", 1, content)], "設定 A を変えたい", {})
+    assert undecided is not None
+    notices = guide_notices(undecided)
+    assert notices == {
+        "contact": "窓口 X",
+        "handoff_conditions": ["種類が分からない場合"],
+        "approval_required": True,
+        "approval_note": "担当者の承認",
+    }
+    # 承認が係る手順（s3）が分かっている条件で外れれば、承認は案内しない。
+    excluded = match_guide([("g", 1, content)], "設定 A を変えたい", {"kind": "甲"})
+    assert excluded is not None
+    assert guide_notices(excluded)["approval_required"] is False
+
+    plan = engine_guide_step_plan(
+        {
+            "decision": "answer",
+            "guide_id": "g",
+            "revision": 1,
+            "title": content.title,
+            "step_plan": guide_step_plan(undecided),
+            "notices": notices,
+        }
+    )
+    assert plan is not None
+    assert (plan.title, plan.contact, plan.handoff_conditions) == (
+        content.title,
+        "窓口 X",
+        ("種類が分からない場合",),
+    )
 
 
 async def test_reference_issues_check_step_references() -> None:

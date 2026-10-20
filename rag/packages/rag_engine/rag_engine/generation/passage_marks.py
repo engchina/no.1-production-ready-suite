@@ -38,6 +38,8 @@ PASSAGE_REASON_STATES: dict[str, PassageState] = {
     "after_unverified_step": WARNING,
     "summary_unaudited": WARNING,
     "application_unaudited": WARNING,
+    # 説明が引いた根拠に無く、業務ガイドの文から来た（資料の記載ではない。#2792）。
+    "guide_text": UNVERIFIED,
 }
 # 本文から外した段落の理由（kind=removed）と、回答全体の警告の理由（kind=answer）。
 REMOVED_REASONS = frozenset({"contradicted"})

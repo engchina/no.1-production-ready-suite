@@ -3371,10 +3371,13 @@ def guide_step_plan(guide: Mapping[str, Any] | None) -> Any:
     if guide.get("decision") not in {"answer", "branch"} or not guide.get("step_plan"):
         return None
     steps = guide.get("step_plan")
+    notices = guide.get("notices")
     return GuidePlan.from_payload(
         str(guide.get("guide_id") or ""),
         int(cast(Any, guide.get("revision") or 0)),
         steps if isinstance(steps, list) else [],
+        title=str(guide.get("title") or ""),
+        notices=notices if isinstance(notices, Mapping) else None,
     )
 
 

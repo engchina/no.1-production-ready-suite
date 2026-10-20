@@ -15,6 +15,7 @@
     "after_unverified_step": {"kind": "passage", "state": "warning", "label": "前提の手順が未確認"},
     "summary_unaudited": {"kind": "passage", "state": "warning", "label": "要約を根拠で確かめていない"},
     "application_unaudited": {"kind": "passage", "state": "warning", "label": "条件への当てはめを確かめていない"},
+    "guide_text": {"kind": "passage", "state": "unverified", "label": "資料に無い業務ガイドの文"},
     "contradicted": {"kind": "removed", "label": "根拠と矛盾"},
     "guide_check": {"kind": "answer", "label": "業務ガイドの手順の確認で問題が見つかった"},
     "no_evidence": {"kind": "answer", "label": "根拠を読めず、すべての段落が未確認"},

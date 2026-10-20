@@ -77,6 +77,7 @@ from app.rag.support_guide_runtime import (
     GuidePreview,
     build_guide_context,
     clarification_questions,
+    guide_notices,
     guide_step_plan,
     is_guide_preview_record,
     query_summary,
@@ -431,6 +432,8 @@ async def _resolve_query_context(
                         EVIDENCE_PLANS_KEY: evidence_plans(match),
                         # 手順ごとの検索（#2395）の手順。回答フローだけが使う（要約には出さない）。
                         "step_plan": guide_step_plan(match),
+                        # 業務ガイドの窓口・引き継ぐ条件・承認（#2792。資料と分けて出す）。
+                        "notices": guide_notices(match),
                         "short_answer": (
                             short_circuit_answer(match)
                             if match.decision in {"clarify", "handoff"}
