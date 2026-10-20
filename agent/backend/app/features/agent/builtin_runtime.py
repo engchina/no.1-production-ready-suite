@@ -3848,18 +3848,22 @@ def _save_answer_evidence(run_id: str, answer: str, validation: Mapping[str, Any
         )
 
 
-def _withheld_rank(validation: Mapping[str, Any] | None) -> tuple[int, int] | None:
-    """最終の検証で外した内容の重さ（すべて外した, 外した・確かめきれなかった段落の数。#1978）。
+def _withheld_rank(validation: Mapping[str, Any] | None) -> tuple[int, int, int] | None:
+    """最終の検証の指摘の重さ（矛盾で外した段落の数, 未確認の段落の数, 警告の数。#1978・#2738）。
 
-    判定が出なかった検証（`unvalidated`・`skipped`）は比べない（None）。
+    警告の数は、警告の印の段落と回答全体の警告の和。判定が出なかった検証（`unvalidated`・
+    `skipped`）は比べない（None）。
     """
     if not isinstance(validation, Mapping) or validation.get("status") != STATUS_COMPLETED:
         return None
     withheld = validation.get("withheld")
-    if not isinstance(withheld, Mapping):
-        return (0, 0)
-    count = sum(int(withheld.get(key) or 0) for key in ("claims", "unverified"))
-    return (1 if withheld.get("all") else 0, count)
+    withheld = withheld if isinstance(withheld, Mapping) else {}
+    warnings = validation.get("answer_warnings")
+    return (
+        int(withheld.get("removed") or 0),
+        int(withheld.get("unverified") or 0),
+        int(withheld.get("warnings") or 0) + (len(warnings) if isinstance(warnings, list) else 0),
+    )
 
 
 async def _answer_before_hop_retry(
@@ -3873,8 +3877,9 @@ async def _answer_before_hop_retry(
     """差し戻し（`hop_retry`。#1958）の後の回答が前の回答より悪ければ、前の回答を使う（#1978）。
 
     差し戻しを受けたモデルが、要らない区分を引き直して最初の回答の根拠から離れることがある。
-    差し戻しの後の回答の最終の検証で段落を外したときだけ、経過に残した前の回答も同じ根拠で
-    検証し、前の回答のほうが外した内容が軽ければ（すべて外していない・外した段落が少ない）、
+    差し戻しの後の回答の最終の検証が指摘（矛盾で外した段落・未確認の段落・警告）を出したときだけ、
+    経過に残した前の回答も同じ根拠で検証し、前の回答のほうが指摘が軽ければ（矛盾で外した段落 →
+    未確認の段落 → 警告の数の順に少ない。#2738）、
     （モデルの回答, 利用者に見せる回答, 検証の内容）を前の回答のものにして返す。差し戻しの後の
     回答は経過（`tool_grounding` の `hop_reverted`）に残す。そうでなければ None（検証の成果物は
     差し戻しの後の回答のものに戻す）。
@@ -3882,7 +3887,7 @@ async def _answer_before_hop_retry(
     from app.features.agent.runtime import runtime_repository
 
     after = _withheld_rank(validation)
-    if after is None or after == (0, 0):
+    if after is None or after == (0, 0, 0):
         return None
     original = tool_grounding.hop_original_answer(runtime_repository.get_run(run_id).events)
     original = without_lookup_notes(original) if original else original
@@ -4109,7 +4114,8 @@ async def _validate_final_answer(
     モデルではなく Control Plane が、根拠を返した RAG の MCP 接続ごとに `rag_validate_answer` を
     呼ぶ（ポリシー・監査・Run の利用者のサービストークン・step はモデルのツールと同じ境界）。
     利用者が回答前の確認で答えた内容は前提（`premises`）として渡す（#1898）。
-    判定が valid でなければ確かめられなかった段落を外して理由を足し、検証が失敗したら
+    判定が valid でなければ根拠と矛盾する段落を外し、確かめられない段落に印を付けて理由を足し
+    （#2738）、検証が失敗したら
     照合を終えられなかったことを足す（回答は消さない。`answer_validation.combine_validations`）。
     `rag_tools` は Agent が RAG の根拠のツールを持つか（根拠の無い回答に注記するか）。
 

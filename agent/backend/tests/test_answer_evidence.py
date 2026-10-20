@@ -27,8 +27,9 @@ from app.features.agent.answer_evidence import (
 )
 from app.features.agent.answer_passages import is_lookup_note
 from app.features.agent.answer_validation import (
-    UNVERIFIED_HEADING,
+    REVIEW_HEADING,
     combine_validations,
+    publish_answer,
     validation_content,
     without_lookup_notes,
 )
@@ -417,9 +418,15 @@ def test_with_a_validation_verdict_only_the_supported_paragraphs_are_cited() -> 
     assert (content["references"], content["citation_lines"]) == ([], [])
 
 
+def _marked(validation: dict[str, Any], answer: str = FREE_ANSWER) -> dict[str, Any]:
+    """最終の検証が付ける段落の印（#2738）を足した成果物の内容。"""
+    return {**validation, **publish_answer(answer, validation["result"]).record()}
+
+
 def test_a_partial_verdict_keeps_verified_paragraphs_and_binds_the_timed_out_ones_by_text() -> None:
     """照合が一部の段落だけを確かめた（status=partial。#2700）ときは、確かめ終わった段落は判定の
-    まま引用し、確かめ終わらなかった段落（unassessed）は「参考情報」の根拠にする。"""
+    まま引用し、確かめ終わらなかった段落（unassessed。未確認の印。#2738）は「参考情報」の根拠に
+    する。"""
     validation = validation_content(
         "completed",
         result={
@@ -440,7 +447,7 @@ def test_a_partial_verdict_keeps_verified_paragraphs_and_binds_the_timed_out_one
             ],
         },
     )
-    content = answer_evidence(_free_steps(), FREE_ANSWER, validation)
+    content = answer_evidence(_free_steps(), FREE_ANSWER, _marked(validation))
 
     assert content["binding"] == "partial"
     items = {item["chunk_id"]: item for item in content["items"]}
@@ -479,9 +486,43 @@ def test_a_partial_verdict_does_not_repeat_a_verified_chunk_as_a_reference() -> 
             ],
         },
     )
-    content = answer_evidence(_free_steps(), FREE_ANSWER, validation)
+    content = answer_evidence(_free_steps(), FREE_ANSWER, _marked(validation))
     assert content["binding"] == "partial"
     assert content["references"] == []
+
+
+def test_marked_paragraphs_of_a_completed_verdict_are_bound_as_references() -> None:
+    """判定が出た検証でも、本文に残して印を付けた段落（根拠で確かめられない・規則の検査の警告）の
+    根拠は該当を確かめた記載にせず「参考情報」にする（#2738）。"""
+    validation = validation_content(
+        "completed",
+        result={
+            "status": "completed",
+            "valid": False,
+            "claims": [
+                {
+                    "status": "supported",
+                    "chunk_id": CHUNK_B,
+                    "answer_quote": "- 承認は担当部署の課長が行います。",
+                },
+                {
+                    "status": "unsupported",
+                    "support_check": "target_mismatch",
+                    "answer_quote": "- 申請書は利用開始日の 30 日前までに提出してください。",
+                },
+            ],
+        },
+    )
+    marked = _marked(validation)
+    assert [item["state"] for item in marked["passage_marks"]] == ["warning"]
+    content = answer_evidence(_free_steps(), FREE_ANSWER, marked)
+    assert content["binding"] == "partial"
+    items = {item["chunk_id"]: item for item in content["items"]}
+    assert (items[CHUNK_A]["cited"], items[CHUNK_A]["answer_use"]) == (True, "reference")
+    assert content["passages"] == [
+        {"text": "- 承認は担当部署の課長が行います。", "chunk_ids": [CHUNK_B]}
+    ]
+    assert [ref["chunk_ids"] for ref in content["references"]] == [[CHUNK_A]]
 
 
 def test_a_citation_line_without_a_page_points_at_the_first_evidence_of_the_document() -> None:
@@ -538,15 +579,26 @@ def test_the_notice_section_lists_every_item_and_records_the_count() -> None:
     content, published = combine_validations(
         answer, [validation_content("completed", connection="rag", result=result)]
     )
-    assert f"**{UNVERIFIED_HEADING}**" in published
-    # 節には 7 件すべてを同じ書式で書き、「ほか N 件」で切らない（#2361）。
-    section = published.split(f"**{UNVERIFIED_HEADING}**", 1)[1]
+    # 本文は残し（#2738）、節には 7 件すべてを同じ書式で書き、「ほか N 件」で切らない（#2361）。
+    body, section = published.split(f"\n\n**{REVIEW_HEADING}**", 1)
+    assert body == answer
     items = [line for line in section.splitlines() if line.startswith("- ")]
     assert items == [f"- 根拠で確かめられない: 「{quote}」" for quote in quotes]
     assert "ほか" not in section
-    # 画面の「資料との照合」の件数のバッジは、節の項目の数を使う。
-    assert content["notice"] == {"items": 7, "heading": UNVERIFIED_HEADING}
-    assert content["withheld"] == {"claims": 7, "findings": 0, "all": True}
+    # 節の項目の数と見出しを記録する（印の件数は passage_marks）。
+    assert content["notice"] == {
+        "items": 7,
+        "heading": REVIEW_HEADING,
+        "headings": [REVIEW_HEADING],
+    }
+    assert content["withheld"] == {
+        "removed": 0,
+        "unverified": 7,
+        "warnings": 0,
+        "all": False,
+        "listed": 7,
+    }
+    assert len(content["passage_marks"]) == 7
 
 
 def test_the_run_saves_the_answer_evidence_and_drops_lookup_notes_before_validation(

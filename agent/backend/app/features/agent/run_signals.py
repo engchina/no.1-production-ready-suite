@@ -7,8 +7,9 @@ fix の流れ）。モデルは呼ばない（保存した Run の事実だけ�
 シグナルの定義（Python の `fact_signals` と SQL の `SIGNAL_CONDITIONS` は同じ規則）:
 
 - `not_helpful`: 本人か管理者の評価が「役に立たなかった」。
-- `validation_failed`: 最終の検証が、根拠で確かめられない・矛盾する段落・決定的な検査の error・
-  読めない根拠のために回答を変えた（`run_facts.VALIDATION_FAILED`）。
+- `validation_failed`: 最終の検証が、根拠と矛盾する段落を外した・未確認の印を付けた・回答全体の
+  警告（決定的な検査の error など）を出した・読めない根拠があった（`run_facts.VALIDATION_FAILED`。
+  警告の印だけは数えない。#2738）。
 - `unvalidated`: 最終の検証そのものが失敗した（`run_facts.VALIDATION_UNVALIDATED`）。
 - `ungrounded_no_tools`: 資料の根拠を使わずに答え（RAG の根拠のツールを持つ Agent の
   `run_facts.VALIDATION_UNGROUNDED` か、持たない Agent の `VALIDATION_NO_EVIDENCE_TOOLS`）、

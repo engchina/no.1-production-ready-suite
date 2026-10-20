@@ -11,7 +11,7 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 語彙（RAG の `AnswerOutcome` と同じ）:
 
 - answered: 答えた（条件・不足を示していない）
-- conditional: 条件・不足・資料で確認できず除いた内容を示して答えた
+- conditional: 条件・不足・根拠と矛盾し除いた内容・確かめきれない段落を示して答えた
 - needs_clarification: 利用者に条件を確かめた（確認の質問だけの回答）
 - needs_environment_data: 現場の値・記録の確認が要ると示した
 - needs_human: 人への引き継ぎを示した
@@ -27,10 +27,12 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 2. `nl2sql_clarification`: 最後の `nl2sql_query` が SQL の生成前の確認の項目を返した（SQL を作らずに
    利用者に確かめた。#1441）→ needs_clarification
    `clarification_question`: 確認の質問だけの回答（`is_clarification_only`）→ needs_clarification
-3. `validation_withheld_guide`: 最終の検証が、業務ガイドの手順・影響範囲・版の検査の error で
-   本文をすべて載せなかった（どの段落の手順が誤りかを決められない）→ needs_human（人が手順を
-   確かめる。#1491）
-   `validation_withheld_all`: それ以外で最終の検証が本文をすべて載せなかった → insufficient_evidence
+3. `validation_guide_check`: 最終の検証が、業務ガイドの手順・影響範囲・版の検査の error を
+   回答全体の警告にした（どの段落の手順が誤りかを決められない。本文は出す）→ needs_human（人が
+   手順を確かめる。#1491・#2738）
+   `validation_nothing_confirmed`: 最終の検証が、残った主張の段落をすべて未確認とした（根拠で
+   確かめた段落が 1 つも無い。根拠を読めない `no_evidence` を含む）か、主張の段落をすべて根拠と
+   矛盾するとして外した → insufficient_evidence（本文は出す。#2738）
 4. `rag_search`: 回答が最後の `rag_search` に拠る（その後に根拠を集め直していない）とき、
    その対応。ただし、現場のデータが要る（needs_environment_data）を現場のデータの道具（RAG 以外の
    MCP 接続のツール。#1283）で確かめたら answered / conditional（`environment_tools`）、確認の
@@ -50,26 +52,25 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 〔補足の外の主張に、最終の検証が根拠で確かめた段落がある〕、不足の文が補足の段落〔見出しが「補足」
 「注記」などの節と「なお、」で始まる段落〕にだけあるときは、質問が求めない周辺の事柄の不足として
 不足の印にせず、記録の `supplement_absence` だけを付ける。#1475）・主張に添えた利用者への質問
-（`question`）・回答の中の「資料で確認できず除いた内容」の節（`unverified_section`。最終の検証が
-本文を残して確かめきれなかった点を示したときも。#1391）・最終の検証が
-根拠で確かめられない・根拠と矛盾すると判定して外した段落（`withheld_claims`。`unsupported` /
-`contradicted`。確かめが終わらなかった `unassessed` などだけなら付けない。#1317。外した段落が補足の
-段落にだけあり、結論の段落〔補足の外の主張〕に最終の検証が根拠で確かめた段落があるときは、質問が
-求めない周辺の事柄を外しただけなので不足の印にせず、記録の `supplement_withheld` だけを付ける。
-#1491）・要求の不足などの
-決定的な検査の error（`check_errors`）・実データの確認を促す段落（`data_confirmation`。RAG の
-`rag_validate_answer` の判定か、利用者に現場のデータ・記録の確認を求める段落の決定的な判定
-`environment_check_passages`。#1317。外した段落は数えない）・分岐ごとに答えた印（`branches`。
-「…の場合」の見出し・ラベルが 2 つ以上。利用者の条件を確かめずに分岐ごとに答えた。#1317）・
-業務ガイドの条件が分からないまま答えた印（`guide_conditions`。最後の `rag_search` の後の、最も新しい
-`rag_lookup_guides`（モデルか Control Plane の照合。#1322）の最上位の業務ガイドの判断が、条件を
-確かめる（clarify）・条件ごとに答える（branch）なのに、確認の質問だけで答えなかった。回答の前提が
+（`question`）・モデルが回答に書いた確かめられない点の節（`unverified_section`）・最終の検証が
+根拠と矛盾するとして外した段落（`contradicted_removed`。#2738）・最終の検証が未確認の印を付けた
+段落（`unverified_passages`。#2738）（外した段落・未確認の段落が補足の段落にだけあり、結論の段落
+〔補足の外の主張〕に最終の検証が根拠で確かめた段落があるときは、質問が求めない周辺の事柄なので
+不足の印にせず、記録の `supplement_withheld` / `supplement_unverified` だけを付ける。#1491）・
+要求の不足などの決定的な検査の error（`check_errors`）・実データの確認を促す段落
+（`data_confirmation`。RAG の `rag_validate_answer` の判定か、利用者に現場のデータ・記録の確認を
+求める段落の決定的な判定 `environment_check_passages`。#1317。外した段落は数えない）・分岐ごとに
+答えた印（`branches`。「…の場合」の見出し・ラベルが 2 つ以上。利用者の条件を確かめずに分岐
+ごとに答えた。#1317）・業務ガイドの条件が分からないまま答えた印（`guide_conditions`。最後の
+`rag_search` の後の、最も新しい `rag_lookup_guides`（モデルか Control Plane の照合。#1322）の
+最上位の業務ガイドの判断が、条件を確かめる（clarify）・条件ごとに答える（branch）なのに、確認の質問だけで答えなかった。回答の前提が
 利用者の分かっていない条件に拠るので、条件付きの回答（conditional）にする。`rag_search` が確認を
 求めたのに答えたときと同じ扱い。#1321・#1322）・回答に使った章節を終わりまで読めず、
 「読み切れていない章節」を示した印（`unread_sections`。#2492）・最終の検証が、業務ガイドの
 必須の手順の説明を回答で確かめられなかった印（`guide_steps`。RAG の `rag_validate_answer` の
 手順ごとの充足〔RAG の回答と同じ規則〕。共有の根拠の共通の文だけを述べた手順・根拠を集めていない
-手順。#2708）。
+手順。#2708）。最終の検証が警告の印（規則の検査・続く手順）だけを付けたときは不足の印にせず、
+記録の `rule_warnings` だけを付ける（answered のまま。#2738）。
 
 ここは決め方だけを持つ（呼び出しと保存は `builtin_runtime`）。
 """
@@ -91,11 +92,11 @@ from app.features.agent.answer_passages import (
     supplement_passages,
 )
 from app.features.agent.answer_validation import (
-    BLOCKING_CLAIM_STATUSES,
+    GUIDE_CHECKS,
+    MARK_UNVERIFIED,
+    MARK_WARNING,
     STATUS_COMPLETED,
-    WITHHOLDING_CHECKS,
     error_findings,
-    is_refuted_claim,
     unexplained_guide_steps,
 )
 from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
@@ -135,9 +136,11 @@ ANSWER_OUTCOMES = frozenset(
 BASIS_EMPTY_ANSWER = "empty_answer"
 BASIS_CLARIFICATION = "clarification_question"
 BASIS_NL2SQL_CLARIFICATION = "nl2sql_clarification"
-BASIS_WITHHELD_ALL = "validation_withheld_all"
-# 業務ガイドの手順・影響範囲・版の検査の error で、最終の検証が本文をすべて外した（#1491）。
-BASIS_WITHHELD_GUIDE = "validation_withheld_guide"
+# 最終の検証が、残った主張の段落をすべて未確認とした・すべて矛盾として外した（#2738）。
+BASIS_NOTHING_CONFIRMED = "validation_nothing_confirmed"
+# 業務ガイドの手順・影響範囲・版の検査の error を、最終の検証が回答全体の警告にした
+# （#1491・#2738）。
+BASIS_GUIDE_CHECK = "validation_guide_check"
 BASIS_RAG_SEARCH = "rag_search"
 BASIS_ENVIRONMENT_TOOLS = "environment_tools"
 BASIS_GUIDE_HANDOFF = "guide_handoff"
@@ -149,7 +152,11 @@ BASIS_ABSENCE_CONCLUSION = "absence_conclusion"
 SIGNAL_ABSENCE = "absence"
 SIGNAL_QUESTION = "question"
 SIGNAL_UNVERIFIED_SECTION = "unverified_section"
-SIGNAL_WITHHELD_CLAIMS = "withheld_claims"
+# 最終の検証が根拠と矛盾するとして外した段落・未確認の印を付けた段落がある（#2738）。
+SIGNAL_CONTRADICTED_REMOVED = "contradicted_removed"
+SIGNAL_UNVERIFIED_PASSAGES = "unverified_passages"
+# 最終の検証が警告の印（規則の検査・続く手順）だけを付けた（不足の印にしない記録。#2738）。
+SIGNAL_RULE_WARNINGS = "rule_warnings"
 SIGNAL_CHECK_ERRORS = "check_errors"
 SIGNAL_DATA_CONFIRMATION = "data_confirmation"
 SIGNAL_ENVIRONMENT_TOOLS = "environment_tools"
@@ -161,8 +168,10 @@ SIGNAL_UNREAD_SECTIONS = "unread_sections"
 SIGNAL_GUIDE_STEPS = "guide_steps"
 # 結論の段落で答えた後の、補足の段落だけの不足の文（不足の印にしない記録。#1475）。
 SIGNAL_SUPPLEMENT_ABSENCE = "supplement_absence"
-# 結論の段落で答えた後の、補足の段落だけを最終の検証が外した（不足の印にしない記録。#1491）。
+# 結論の段落で答えた後の、補足の段落だけを最終の検証が外した・未確認とした（不足の印にしない
+# 記録。#1491）。
 SIGNAL_SUPPLEMENT_WITHHELD = "supplement_withheld"
+SIGNAL_SUPPLEMENT_UNVERIFIED = "supplement_unverified"
 # 回答が不足・条件を示している印（answered を conditional にする）。
 _GAP_SIGNALS = frozenset(
     {
@@ -173,7 +182,8 @@ _GAP_SIGNALS = frozenset(
         SIGNAL_ABSENCE,
         SIGNAL_QUESTION,
         SIGNAL_UNVERIFIED_SECTION,
-        SIGNAL_WITHHELD_CLAIMS,
+        SIGNAL_CONTRADICTED_REMOVED,
+        SIGNAL_UNVERIFIED_PASSAGES,
         SIGNAL_CHECK_ERRORS,
         SIGNAL_DATA_CONFIRMATION,
     }
@@ -183,10 +193,6 @@ _RAG_LOOKUP_GUIDES = "rag_lookup_guides"
 _GUIDE_CONDITIONAL_DECISIONS = frozenset({"clarify", "branch"})
 # RAG の `rag_validate_answer` の、実データの確認を促すだけの段落の判定。
 _DATA_CONFIRMATION = "data_confirmation"
-# 不足の印（`withheld_claims`）にする、外した段落の判定（根拠で確かめられない・根拠と矛盾）。
-# 確かめが終わらなかった段落（`unassessed`。出典の行・表の区切りなど）を外しただけでは、回答が
-# 条件・不足を示したことにならない（#1317）。外した段落は本文に載らないので主張にも数えない。
-# 判定は `is_refuted_claim`（RAG が出典を照合できずに変えた段落の元の判定も含む。#2622）。
 # 結論の段落を探すときに飛ばす、主張ではない段落の種類（見出し・出典・表の形）。
 _LEAD_SKIPPED_KINDS = frozenset({"heading", "citation", "table"})
 _KIND_SIGNALS = {
@@ -274,41 +280,44 @@ def _guide_decision(steps: list[RunStep]) -> str | None:
     return None
 
 
+def _texts(value: object, state: str | None = None) -> set[str]:
+    """印・外した段落の一覧（`passage_marks` / `removed_passages`）の段落の原文。
+
+    `state` を渡すと、その状態の印だけにする。
+    """
+    return {
+        str(item.get("text") or "")
+        for item in (value if isinstance(value, list) else [])
+        if isinstance(item, dict) and (state is None or item.get("state") == state)
+    } - {""}
+
+
 def _validation_parts(
     validation: JsonObject | None,
-) -> tuple[set[str], set[str], set[str], JsonObject]:
-    """最終の検証から（外した段落, そのうち確かめられない・矛盾の段落, 実データの確認を促す段落,
-    外した数）を取り出す。
+) -> tuple[set[str], set[str], set[str], set[str]]:
+    """最終の検証から（矛盾で外した段落, 未確認の段落, 警告の段落, 実データの確認を促す段落）を
+    取り出す（#2738。成果物の `removed_passages`・`passage_marks`）。
 
     判定が出た（`completed`）ときだけ使う（確かめられなかった検証の段落の判定は使わない）。
     """
     if not isinstance(validation, dict) or validation.get("status") != STATUS_COMPLETED:
-        return set(), set(), set(), {}
-    withheld = validation.get("withheld")
-    withheld = withheld if isinstance(withheld, dict) else {}
+        return set(), set(), set(), set()
     result = validation.get("result")
     claims = result.get("claims") if isinstance(result, dict) else None
-    removed: set[str] = set()
-    disputed: set[str] = set()
-    confirmations: set[str] = set()
-    for claim in claims if isinstance(claims, list) else []:
-        if not isinstance(claim, dict) or claim.get("non_claim"):
-            continue
-        quote = str(claim.get("answer_quote") or "")
-        if not quote:
-            continue
-        status = claim.get("status")
-        if status == _DATA_CONFIRMATION:
-            confirmations.add(quote)
-        elif status in BLOCKING_CLAIM_STATUSES and _count(withheld.get("claims")) > 0:
-            removed.add(quote)
-            if is_refuted_claim(claim):
-                disputed.add(quote)
-    return removed, disputed, confirmations, withheld
-
-
-def _count(value: object) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+    confirmations = {
+        str(claim.get("answer_quote") or "")
+        for claim in (claims if isinstance(claims, list) else [])
+        if isinstance(claim, dict)
+        and not claim.get("non_claim")
+        and claim.get("status") == _DATA_CONFIRMATION
+    } - {""}
+    marks = validation.get("passage_marks")
+    return (
+        _texts(validation.get("removed_passages")),
+        _texts(marks, MARK_UNVERIFIED),
+        _texts(marks, MARK_WARNING),
+        confirmations,
+    )
 
 
 def _supported_quotes(validation: JsonObject | None) -> set[str]:
@@ -363,14 +372,22 @@ def _only_in_supplement(
     return any(text in answered for text in claims if text not in supplement)
 
 
-def _guide_withheld(validation: JsonObject | None) -> bool:
+def _guide_errors(validation: JsonObject | None) -> bool:
     """最終の検証が、業務ガイドの手順・影響範囲・版の検査の error を出したか（#1491）。"""
-    if not isinstance(validation, dict):
+    if not isinstance(validation, dict) or validation.get("status") != STATUS_COMPLETED:
         return False
     result = validation.get("result")
     return isinstance(result, dict) and any(
-        item.get("check") in WITHHOLDING_CHECKS for item in error_findings(result)
+        item.get("check") in GUIDE_CHECKS for item in error_findings(result)
     )
+
+
+def _check_errors(validation: JsonObject | None) -> bool:
+    """最終の検証が、決定的な検査の error（要求の不足など）を出したか。"""
+    if not isinstance(validation, dict) or validation.get("status") != STATUS_COMPLETED:
+        return False
+    result = validation.get("result")
+    return isinstance(result, dict) and bool(error_findings(result))
 
 
 def _guide_steps_unexplained(validation: JsonObject | None) -> bool:
@@ -427,7 +444,7 @@ def answer_outcome(
 ) -> JsonObject:
     """最終の回答の対応（成果物 `answer` の `outcome`）。
 
-    `answer` はモデルの最終の回答（最終の検証で段落を外す前の本文）、`validation` は最終の
+    `answer` はモデルの最終の回答（最終の検証で矛盾の段落を外す前の本文）、`validation` は最終の
     検証の成果物の内容（検証しなかった Run は None）。返す内容は `value`（対応）・`basis`
     （決めた手がかり）・`rag_outcome`（最後の `rag_search` の対応。呼んでいなければ None）・
     `signals`（不足の印）。`coverage` は回答に使った章節を終わりまで読んだか
@@ -453,33 +470,48 @@ def answer_outcome(
             rag_outcome=rag_outcome,
             signals={SIGNAL_QUESTION},
         )
-    removed, disputed, confirmations, withheld = _validation_parts(validation)
+    removed, unverified, warned, confirmations = _validation_parts(validation)
     claims, signals, absences = _passages(answer)
-    if withheld.get("all") is True:
-        if _guide_withheld(validation):
-            # 手順・影響範囲の検査で本文を載せなかった: 資料が無いのではなく、どの段落の手順が
-            # 誤りかを決められない。人が業務ガイドと照らして確かめる（#1491）。
-            signals.add(SIGNAL_CHECK_ERRORS)
-            return _content(
-                NEEDS_HUMAN, BASIS_WITHHELD_GUIDE, rag_outcome=rag_outcome, signals=signals
-            )
-        return _content(
-            INSUFFICIENT_EVIDENCE, BASIS_WITHHELD_ALL, rag_outcome=rag_outcome, signals=signals
-        )
+    if _guide_errors(validation):
+        # 業務ガイドの手順・影響範囲の検査の error: どの段落の手順が誤りかを決められない。本文は
+        # 出し、人が業務ガイドと照らして確かめる（#1491・#2738）。
+        signals.add(SIGNAL_CHECK_ERRORS)
+        return _content(NEEDS_HUMAN, BASIS_GUIDE_CHECK, rag_outcome=rag_outcome, signals=signals)
     # 利用者に現場のデータ・記録の確認を求める段落（検証の判定が supported でも。#1317）。
     # 外した段落は利用者に見えないので数えない。
     confirmations |= environment_check_passages(answer) - removed
+    remaining = [text for text in claims if text not in removed and text not in confirmations]
+    if (
+        (removed or unverified)
+        and (remaining or not confirmations)
+        and all(text in unverified for text in remaining)
+    ):
+        # 根拠で確かめた段落が 1 つも無い（残った主張の段落がすべて未確認か、すべて矛盾で外した）。
+        # 本文と印は出す（#2738）。実データの確認を促す段落だけが残ったときは下で決める。
+        if removed:
+            signals.add(SIGNAL_CONTRADICTED_REMOVED)
+        if unverified:
+            signals.add(SIGNAL_UNVERIFIED_PASSAGES)
+        return _content(
+            INSUFFICIENT_EVIDENCE, BASIS_NOTHING_CONFIRMED, rag_outcome=rag_outcome, signals=signals
+        )
     # 結論の段落で答えた後の、補足の段落だけの不足の文は不足の印にしない（#1475）。
-    answered = _supported_quotes(validation) - removed - confirmations
+    answered = _supported_quotes(validation) - removed - unverified - confirmations
     if _only_in_supplement(answer, claims=claims, passages=absences, answered=answered):
         signals.discard(SIGNAL_ABSENCE)
         signals.add(SIGNAL_SUPPLEMENT_ABSENCE)
-    if disputed:
-        # 補足の段落だけを外したときは、答えの不足ではない（#1491）。
-        supplement_only = _only_in_supplement(
-            answer, claims=claims, passages=disputed, answered=answered
-        )
-        signals.add(SIGNAL_SUPPLEMENT_WITHHELD if supplement_only else SIGNAL_WITHHELD_CLAIMS)
+    # 補足の段落だけを外した・未確認としたときは、答えの不足ではない（#1491）。
+    for flagged, signal, supplement_signal in (
+        (removed, SIGNAL_CONTRADICTED_REMOVED, SIGNAL_SUPPLEMENT_WITHHELD),
+        (unverified, SIGNAL_UNVERIFIED_PASSAGES, SIGNAL_SUPPLEMENT_UNVERIFIED),
+    ):
+        if flagged:
+            supplement_only = _only_in_supplement(
+                answer, claims=claims, passages=flagged, answered=answered
+            )
+            signals.add(supplement_signal if supplement_only else signal)
+    if warned:
+        signals.add(SIGNAL_RULE_WARNINGS)
     # 利用者の条件を確かめずに、分岐ごとに答えた（rag_search の確認の求めに分岐で答えたのと同じ）。
     if len(case_labels(answer)) >= 2:
         signals.add(SIGNAL_BRANCHES)
@@ -488,11 +520,8 @@ def answer_outcome(
     after_search = last_search[0] + 1 if last_search is not None else 0
     if _guide_decision(steps[after_search:]) in _GUIDE_CONDITIONAL_DECISIONS:
         signals.add(SIGNAL_GUIDE_CONDITIONS)
-    if _count(withheld.get("findings")) > 0:
+    if _check_errors(validation):
         signals.add(SIGNAL_CHECK_ERRORS)
-    # 本文を残して、確かめきれなかった点（出典を照合できない段落など）を示した（#1391）。
-    if _count(withheld.get("unverified")) > 0:
-        signals.add(SIGNAL_UNVERIFIED_SECTION)
     if confirmations:
         signals.add(SIGNAL_DATA_CONFIRMATION)
     if isinstance(coverage, dict) and coverage.get("status") == "incomplete":

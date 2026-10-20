@@ -81,6 +81,8 @@ QUESTION_MAX_CHARS = 8000
 wait_poll_seconds = 0.5
 
 # 根拠の抜き出しの長さと件数（呼び出し側のモデルの文脈を膨らませない）。
+# RunOutput の形の版（#2738 で段落の印・外した段落・回答の警告を足して 2）。
+RUN_OUTPUT_SCHEMA_VERSION = 2
 _SOURCE_EXCERPT_CHARS = 400
 _MAX_SOURCES = 10
 
@@ -261,7 +263,34 @@ class SourceOutput(BaseModel):
     excerpt: str = ""
 
 
+class ReasonOutput(BaseModel):
+    """印・外した段落・回答の警告の理由。"""
+
+    code: str
+    # 利用者に見せる短い文。
+    label: str
+    detail: str = ""
+
+
+class PassageMarkOutput(BaseModel):
+    """回答の本文に残した段落の印（unverified=根拠で確かめられていない / warning=注意が必要）。"""
+
+    text: str
+    state: Literal["unverified", "warning"]
+    reasons: list[ReasonOutput] = Field(default_factory=list)
+
+
+class RemovedPassageOutput(BaseModel):
+    """根拠と矛盾するため回答の本文から除いた段落。"""
+
+    text: str
+    reasons: list[ReasonOutput] = Field(default_factory=list)
+
+
 class RunOutput(BaseModel):
+    schema_version: int = Field(
+        default=RUN_OUTPUT_SCHEMA_VERSION, description="出力の形の版（変わったら上がる）。"
+    )
     run_id: str
     agent_id: str
     # 会話の ID。続きの質問は agent_chat の thread_id に渡す。
@@ -274,6 +303,16 @@ class RunOutput(BaseModel):
     # 回答前の確認（答えていないもの）。あれば agent_answer_confirmation で答える。
     confirmation: ConfirmationOutput | None = None
     sources: list[SourceOutput] = Field(default_factory=list)
+    passage_marks: list[PassageMarkOutput] = Field(
+        default_factory=list,
+        description="answer の本文の段落（text）のうち、確かめが要る段落と理由。",
+    )
+    removed_passages: list[RemovedPassageOutput] = Field(
+        default_factory=list, description="根拠と矛盾するため answer の本文から除いた段落と理由。"
+    )
+    answer_warnings: list[ReasonOutput] = Field(
+        default_factory=list, description="回答全体についての警告。"
+    )
     # 使ったツールの名前（Agent の中の名前。例: rag__rag_search）。
     tools_used: list[str] = Field(default_factory=list)
     # 承認が要るため使わなかったツール（MCP から作った Run は承認の要るツールを呼ばない）。
@@ -450,15 +489,57 @@ def _answer_evidence(run: RunState) -> Mapping[str, Any]:
     for artifact in reversed(run.artifacts):
         if artifact.kind == ANSWER_EVIDENCE_KIND and isinstance(artifact.content, dict):
             return artifact.content
-    validation = next(
-        (
-            artifact.content
-            for artifact in reversed(run.artifacts)
-            if artifact.kind == ANSWER_VALIDATION_KIND and isinstance(artifact.content, dict)
-        ),
-        None,
+    return answer_evidence(run.steps, run_answer_text(run) or "", _answer_validation(run) or None)
+
+
+def _answer_validation(run: RunState) -> Mapping[str, Any]:
+    """Run の最終の検証の成果物の内容（無ければ空）。"""
+    for artifact in reversed(run.artifacts):
+        if artifact.kind == ANSWER_VALIDATION_KIND and isinstance(artifact.content, dict):
+            return artifact.content
+    return {}
+
+
+def _reasons(value: object) -> list[ReasonOutput]:
+    return [
+        ReasonOutput(
+            code=str(item.get("code") or ""),
+            label=str(item.get("label") or ""),
+            detail=str(item.get("detail") or ""),
+        )
+        for item in (value if isinstance(value, list) else [])
+        if isinstance(item, Mapping)
+    ]
+
+
+def _review(
+    run: RunState,
+) -> tuple[list[PassageMarkOutput], list[RemovedPassageOutput], list[ReasonOutput]]:
+    """回答の段落の印・外した段落・回答の警告（成果物「資料との照合」。#2738）。"""
+    if run.status != RunStatus.COMPLETED:
+        return [], [], []
+    content = _answer_validation(run)
+    marks = content.get("passage_marks")
+    removed = content.get("removed_passages")
+    return (
+        [
+            PassageMarkOutput(
+                text=str(item.get("text") or ""),
+                state=item["state"],
+                reasons=_reasons(item.get("reasons")),
+            )
+            for item in (marks if isinstance(marks, list) else [])
+            if isinstance(item, Mapping) and item.get("state") in {"unverified", "warning"}
+        ],
+        [
+            RemovedPassageOutput(
+                text=str(item.get("text") or ""), reasons=_reasons(item.get("reasons"))
+            )
+            for item in (removed if isinstance(removed, list) else [])
+            if isinstance(item, Mapping)
+        ],
+        _reasons(content.get("answer_warnings")),
     )
-    return answer_evidence(run.steps, run_answer_text(run) or "", validation)
 
 
 def _sources(run: RunState) -> list[SourceOutput]:
@@ -527,6 +608,7 @@ def run_output(run: RunState, *, include_notice: bool = False) -> RunOutput:
         )
     else:
         message = "実行しています。agent_get_run（wait_seconds）で続きを読んでください。"
+    passage_marks, removed_passages, warnings = _review(run)
     return RunOutput(
         run_id=run.id,
         agent_id=run.agent_id,
@@ -536,6 +618,9 @@ def run_output(run: RunState, *, include_notice: bool = False) -> RunOutput:
         answer=run_answer_text(run),
         confirmation=_confirmation_output(confirmation) if confirmation is not None else None,
         sources=_sources(run),
+        passage_marks=passage_marks,
+        removed_passages=removed_passages,
+        answer_warnings=warnings,
         tools_used=tools_used,
         skipped_approval_tools=skipped,
         pending_approvals=pending_approvals,

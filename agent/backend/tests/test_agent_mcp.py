@@ -18,6 +18,7 @@ from pytest import MonkeyPatch
 from security_support import ProductionAuth, client, enable_production_auth, login
 
 from app.features.agent import builtin_runtime, mcp_server
+from app.features.agent.answer_validation import combine_validations, validation_content
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.confirmation import CONFIRMATION_TOOL
 from app.features.agent.runtime import (
@@ -468,3 +469,76 @@ def test_audit_shows_mcp_runs_with_the_key_name(agents: None) -> None:
     exported = client.get(f"/api/audit/tool-calls.csv?run_id={run.id}").text
     assert "run_source,api_key_name" in exported
     assert ",mcp,経理" in exported
+
+
+def test_run_output_returns_the_passage_marks_of_the_validation() -> None:
+    """agent_chat・agent_get_run は、最終の検証の段落の印・外した段落・回答の警告を返す（#2738）。
+
+    本文（answer）には同じ内容の節が付く（本文だけを読む利用者のため）。
+    """
+    kept = "申請は翌月10日までです。"
+    unverified = "申請後は自動で通知されます。"
+    removed = "申請は郵送でもできます。"
+    answer = f"{kept}\n\n{unverified}\n\n{removed}"
+    result = {
+        "valid": False,
+        "status": "completed",
+        "claims": [
+            {"answer_quote": kept, "status": "supported", "chunk_id": "c1", "reason": "記載"},
+            {"answer_quote": unverified, "status": "unsupported", "reason": "記載が無い"},
+            {"answer_quote": removed, "status": "contradicted", "reason": "窓口だけ"},
+        ],
+        "findings": [
+            {
+                "check": "requests",
+                "code": "request_missing",
+                "severity": "error",
+                "message": "要求「費用」に答えていません。",
+            }
+        ],
+        "missing_evidence": [],
+        "stale_evidence": [],
+    }
+    content, published = combine_validations(
+        answer, [validation_content("completed", connection="rag", result=result)]
+    )
+    run = RunState(
+        id="run_marks",
+        goal="申請の期限は？",
+        agent_id=AGENT_ID,
+        status=RunStatus.COMPLETED,
+        artifacts=[
+            Artifact(name="回答", kind="answer", content={"text": published}),
+            Artifact(name="資料との照合", kind="answer_validation", content=content),
+        ],
+    )
+
+    output = mcp_server.run_output(run).model_dump()
+
+    assert output["schema_version"] == 2
+    assert output["answer"].startswith(f"{kept}\n\n{unverified}\n\n**根拠と矛盾し除いた内容**")
+    assert output["passage_marks"] == [
+        {
+            "text": unverified,
+            "state": "unverified",
+            "reasons": [
+                {"code": "unsupported", "label": "根拠で確かめられない", "detail": "記載が無い"}
+            ],
+        }
+    ]
+    assert output["removed_passages"] == [
+        {
+            "text": removed,
+            "reasons": [{"code": "contradicted", "label": "根拠と矛盾", "detail": "窓口だけ"}],
+        }
+    ]
+    assert output["answer_warnings"] == [
+        {
+            "code": "requests",
+            "label": "質問の要求の一部に答えていない",
+            "detail": "要求「費用」に答えていません。",
+        }
+    ]
+    # 完了していない Run には返さない。
+    running = run.model_copy(update={"status": RunStatus.RUNNING})
+    assert mcp_server.run_output(running).passage_marks == []

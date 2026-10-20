@@ -45,8 +45,8 @@ RUN_SOURCE_USER = "user"
 
 # 最終の検証の結果（成果物「資料との照合」から決める。#1822）。列 `VALIDATION_RESULT` の値。
 VALIDATION_PASSED = "passed"
-# 根拠で確かめられない・矛盾する段落・決定的な検査の error・読めない根拠があり、回答から外すか
-# 「資料で確認できず除いた内容」を足した（利用者に見せる回答を検証が変えた）。
+# 根拠と矛盾する段落を外した・未確認の段落がある・回答全体の警告がある・読めない根拠がある
+# （#2738。警告の印だけなら合格）。
 VALIDATION_FAILED = "failed"
 # 検証そのものが失敗した（呼び出し・接続・応答の失敗、長すぎる回答など）。
 VALIDATION_UNVALIDATED = "unvalidated"
@@ -166,9 +166,10 @@ def _has_items(value: object) -> bool:
 def run_validation_result(run: RunState) -> str | None:
     """最終の検証の結果（成果物「資料との照合」。#1246・#1277・#1822）。
 
-    判定が出た（`completed`）検証は、利用者に見せる回答を変えたか（段落を外した・決定的な検査の
-    error・本文を載せなかった・確かめきれなかった点を足した・読めない根拠があった）で
-    不合格 / 合格を分ける（`answer_validation.publish_answer` の `withheld` と結果の根拠）。
+    判定が出た（`completed`）検証は、根拠と矛盾する段落を外した・未確認の段落がある・回答全体の
+    警告（決定的な検査の error・説明を確かめられない業務ガイドの手順・根拠を読めない）がある・
+    読めない根拠があったら不合格、警告の印（規則の検査・続く手順）だけなら合格にする（#2738。
+    `answer_validation.publish_answer` の `withheld`・`answer_warnings` と結果の根拠）。
     """
     content = _latest_artifact_content(run, ANSWER_VALIDATION_KIND)
     if content is None:
@@ -189,10 +190,9 @@ def run_validation_result(run: RunState) -> str | None:
     result = content.get("result")
     result = result if isinstance(result, dict) else {}
     altered = (
-        _positive(withheld.get("claims"))
-        or _positive(withheld.get("findings"))
+        _positive(withheld.get("removed"))
         or _positive(withheld.get("unverified"))
-        or withheld.get("all") is True
+        or _has_items(content.get("answer_warnings"))
         or _has_items(result.get("stale_evidence"))
         or _has_items(result.get("missing_evidence"))
     )

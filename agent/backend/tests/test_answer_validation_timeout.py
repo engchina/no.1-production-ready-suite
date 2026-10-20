@@ -21,10 +21,9 @@ from test_answer_validation import (  # noqa: F401 - fixture を使う
 
 from app.features.agent.answer_evidence import ANSWER_EVIDENCE_KIND
 from app.features.agent.answer_validation import (
-    TIMED_OUT_KEPT_INTRO,
-    UNVERIFIED_HEADING,
+    REMOVED_HEADING,
+    REVIEW_HEADING,
     UNVERIFIED_NOTICE,
-    WITHHELD_INTRO,
     merge_results,
     publish_answer,
 )
@@ -52,7 +51,7 @@ def _result(status: str, *claims: dict[str, Any]) -> dict[str, Any]:
     return output
 
 
-def test_partial_result_keeps_the_unfinished_passages_and_withholds_refuted_ones() -> None:
+def test_partial_result_keeps_the_unfinished_passages_and_removes_contradicted_ones() -> None:
     result = _result(
         "partial",
         _claim(FIRST, "supported"),
@@ -60,29 +59,41 @@ def test_partial_result_keeps_the_unfinished_passages_and_withholds_refuted_ones
         _claim(THIRD, "contradicted"),
     )
 
-    published, withheld = publish_answer(PARTIAL_ANSWER, result)
+    published = publish_answer(PARTIAL_ANSWER, result)
 
-    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-    # 根拠と矛盾した段落は外し、時間切れで確かめ終わらなかった段落は本文に残す。
-    assert body == f"{FIRST}\n\n{SECOND}"
-    lines = section.splitlines()
-    assert lines[0] == WITHHELD_INTRO
-    assert TIMED_OUT_KEPT_INTRO in lines
-    assert any(SECOND in line for line in lines[lines.index(TIMED_OUT_KEPT_INTRO) + 1 :])
-    assert withheld == {"claims": 1, "findings": 0, "all": False, "unverified": 1}
+    # 根拠と矛盾した段落だけを外し、時間切れで確かめ終わらなかった段落は本文に残して印を付ける。
+    assert published.body == f"{FIRST}\n\n{SECOND}"
+    assert [item["text"] for item in published.removed_passages] == [THIRD]
+    assert published.passage_marks == [
+        {
+            "text": SECOND,
+            "state": "unverified",
+            "reasons": [
+                {"code": "unassessed", "label": "確かめが終わっていない", "detail": "理由"}
+            ],
+        }
+    ]
+    assert published.headings == [REMOVED_HEADING, REVIEW_HEADING]
+    assert published.withheld == {
+        "removed": 1,
+        "unverified": 1,
+        "warnings": 0,
+        "all": False,
+        "listed": 2,
+    }
 
 
 def test_partial_result_with_only_unfinished_passages_keeps_the_whole_answer() -> None:
     result = _result("partial", _claim(FIRST, "supported"), _claim(SECOND, "unassessed"))
     answer = f"{FIRST}\n\n{SECOND}"
 
-    published, withheld = publish_answer(answer, result)
+    published = publish_answer(answer, result)
 
-    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+    body, section = published.text.split(f"\n\n**{REVIEW_HEADING}**\n\n", 1)
     assert body == answer
-    assert section.splitlines()[0] == TIMED_OUT_KEPT_INTRO
-    assert WITHHELD_INTRO not in section
-    assert withheld == {"claims": 0, "findings": 0, "all": False, "unverified": 1}
+    assert section.splitlines()[1:] == [f"- 確かめが終わっていない: 「{SECOND}」"]
+    assert REMOVED_HEADING not in published.text
+    assert published.withheld["unverified"] == 1
 
 
 def test_merge_results_keeps_partial_when_one_connection_timed_out() -> None:
@@ -121,11 +132,12 @@ def test_partial_validation_run_keeps_the_unfinished_answer(
 
     run, _ = _searched_run(monkeypatch)
 
-    assert (run_answer_text(run) or "").startswith(f"{ANSWER}\n\n**{UNVERIFIED_HEADING}**")
+    assert (run_answer_text(run) or "").startswith(f"{ANSWER}\n\n**{REVIEW_HEADING}**")
     content = _validation(run)
     assert content["status"] == "completed"
     assert content["result"]["status"] == "partial"
     assert content["withheld"]["unverified"] == 1
+    assert [item["state"] for item in content["passage_marks"]] == ["unverified"]
     # 確かめ終わらなかった段落は本文の根拠の行にせず、参考情報の根拠にする（#2707）。
     evidence = _evidence(run)
     assert evidence["binding"] == "partial"
