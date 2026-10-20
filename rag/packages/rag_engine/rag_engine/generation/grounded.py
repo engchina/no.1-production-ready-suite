@@ -252,7 +252,7 @@ AUDIT_SYSTEM_PROMPT = (
     "- question / task_contract: 原質問と、変更してはいけない目的・条件（goal、current_request、request_units など）。\n"
     "- summary: 草稿の結論。\n"
     "- items: 監査対象。index、request_id、kind、text（言い換え）、applies、condition、quote（原文）、evidence_id（引用元）、checks、function（文書名 / 版 / 機能見出し）、origin、heading、function_limits。\n"
-    "- request_question: 当該 item が答える小問と共通の前提。適用性はこの質問で判断し、他の小問だけのエラー・対象・条件を当てはめない。\n"
+    "- request_question（ある場合）: 当該 item が答える小問と共通の前提。適用性はこの質問で判断し、他の小問だけのエラー・対象・条件を当てはめない。\n"
     "- checks: 機械照合が付けた手がかり（案内した語が照合先の本文に見当たらない等）。照合先は限定した本文の集合で、"
     "実在する語でも「無い」と出ることがある。結論ではないので、evidence の本文で確かめてから判定する。\n"
     "- evidence: evidence_id ごとの引用元の本文。quote はこの本文から切り出した抜粋で、item の主張の一部しか含まないことがある。\n"
@@ -4061,7 +4061,11 @@ def run_round(
                 {
                     "index": index,
                     "request_id": e.item.request_id,
-                    "request_question": item_question(question, e.item.request_id),
+                    **(
+                        {"request_question": scoped_question}
+                        if (scoped_question := item_question(question, e.item.request_id)) != question
+                        else {}
+                    ),
                     "kind": e.item.kind,
                     "text": e.item.text,
                     "applies": e.item.applies,
