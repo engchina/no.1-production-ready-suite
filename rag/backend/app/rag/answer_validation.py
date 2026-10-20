@@ -19,6 +19,7 @@ error の finding があれば valid にしない。
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -32,7 +33,6 @@ from app.clients.support_guide_store import SupportGuideStore
 from app.config import Settings
 from app.rag.answer_checks import (
     AnswerFinding,
-    check_guide_steps,
     check_impact,
     check_requests,
 )
@@ -42,6 +42,8 @@ from app.rag.answer_engine import (
     build_engine_settings,
 )
 from app.rag.answer_threads import run_answer_in_thread
+from app.rag.guide_step_validation import guide_step_embed, guide_step_findings
+from app.schemas.support_guide import SupportGuideContent
 
 # 主張の監査で「検証に通った」とみなさない判定。
 _BLOCKING_STATUSES = frozenset({"unsupported", "contradicted", "citation_error", "unassessed"})
@@ -83,6 +85,10 @@ class AnswerValidation:
     guide_revision: int | None = None
     # RAG の回答の監査の判定を再利用した段落の数（#1527。モデルに渡さなかった段落）。
     reused_claims: int = 0
+    # 業務ガイドの手順ごとの充足（#2708。`guide_step_validation`）と、意味の判定の embedding の
+    # 呼び出し。
+    guide_steps: list[dict[str, Any]] = field(default_factory=list)
+    guide_step_embedding: dict[str, Any] | None = None
 
 
 def evidence_location(metadata: Mapping[str, Any]) -> dict[str, Any]:
@@ -118,8 +124,8 @@ def is_valid(status: str, counts: dict[str, int], *, unreadable: int) -> bool:
 
 async def _guide_findings(
     oracle: OracleClient, answer: str, guide: GuideCheckRef
-) -> tuple[list[AnswerFinding], list[str], int | None]:
-    """業務ガイドの公開の版を読み直し、手順・影響範囲を確かめる。
+) -> tuple[list[AnswerFinding], list[str], int | None, SupportGuideContent | None]:
+    """業務ガイドの公開の版を読み直し、影響範囲を確かめる（手順は主張の監査の後に確かめる。#2708）。
 
     ストアの障害は例外のまま上げる（「業務ガイドが無い」と区別する。handoff §10）。
     """
@@ -143,6 +149,7 @@ async def _guide_findings(
             ],
             ["guide"],
             None,
+            None,
         )
     revision, content = found
     findings: list[AnswerFinding] = []
@@ -156,9 +163,8 @@ async def _guide_findings(
                 f"業務ガイドの版 {guide.revision} は古い版です（今の公開の版は {revision}）。",
             )
         )
-    findings += check_guide_steps(answer, content, guide.conditions)
     findings += check_impact(answer, content, guide.conditions)
-    return findings, ["guide", "guide_steps", "impact"], revision
+    return findings, ["guide", "guide_steps", "impact"], revision, content
 
 
 # 監査の判定を再利用する回答の記録の数の上限（契約の maxItems）。
@@ -244,17 +250,22 @@ async def validate_answer(
     if requests is not None:
         findings += check_requests(answer, requests, gaps)
         checks.append("requests")
+    guide_content: SupportGuideContent | None = None
     if guide is not None:
-        guide_items, guide_checks, guide_revision = await _guide_findings(oracle, answer, guide)
+        guide_items, guide_checks, guide_revision, guide_content = await _guide_findings(
+            oracle, answer, guide
+        )
         findings += guide_items
         checks += guide_checks
-    blocking = any(item.severity == "error" for item in findings)
     deterministic: dict[str, Any] = {
         "findings": findings,
         "checks": checks,
         "guide_revision": guide_revision,
     }
     items: list[dict[str, Any]] = []
+    # 根拠の chunk の id → 文書の id（業務ガイドの手順の参照の照合に使う。監査のモデルには
+    # 渡さない）。
+    documents: dict[str, str] = {}
     missing: list[EvidenceRef] = []
     stale: list[EvidenceRef] = []
     for ref in dict.fromkeys(refs):
@@ -264,6 +275,7 @@ async def validate_answer(
             (stale if exists else missing).append(ref)
             continue
         metadata = dict(chunk.metadata)
+        documents[chunk.chunk_id] = chunk.document_id
         items.append(
             {
                 "id": chunk.chunk_id,
@@ -274,7 +286,12 @@ async def validate_answer(
                 "text": chunk.text,
             }
         )
+    conditions = dict(guide.conditions) if guide is not None else {}
     if not items:
+        if guide_content is not None:
+            findings += guide_step_findings(
+                answer, guide_content, conditions, None, [], embed=None
+            )[0]
         return AnswerValidation(
             status="no_evidence",
             valid=False,
@@ -290,12 +307,14 @@ async def validate_answer(
         else {}
     )
 
+    loop = asyncio.get_running_loop()
+
     def run() -> dict[str, Any]:
         from rag_engine.evaluation.answer_validation import validate_answer_claims
 
         with tempfile.TemporaryDirectory(prefix="rag-engine-validate-") as work:
             engine_settings = build_engine_settings(settings, output_dir=Path(work))
-            return validate_answer_claims(
+            result = validate_answer_claims(
                 question,
                 answer,
                 items,
@@ -305,11 +324,29 @@ async def validate_answer(
                 # 業務データの照会の結果（#1950）。資料ではない根拠として並べる。
                 data_results=list(data_results)[:MAX_DATA_RESULTS],
             )
+        if guide_content is not None:
+            # 業務ガイドの手順ごとの充足（#2708）。主張の監査で裏付けた段落と、手順の主の操作の
+            # 文を対応付ける。
+            completed = result.get("status") == "completed"
+            result["guide_step_results"] = guide_step_findings(
+                answer,
+                guide_content,
+                conditions,
+                list(result.get("claim_checks") or []) if completed else None,
+                [{**item, "document_id": documents.get(item["id"], "")} for item in items],
+                embed=guide_step_embed(settings, loop)
+                if completed and guide_content.steps
+                else None,
+            )
+        return result
 
     # 回答の専用の thread で動かし、呼び出し側の打ち切り・取り消しを thread に伝える(#1422)。
     result = await run_answer_in_thread(run)
     counts = {str(key): int(value) for key, value in (result.get("counts") or {}).items()}
     status = str(result.get("status") or "error")
+    step_findings, guide_steps, step_embedding = result.get("guide_step_results") or ([], [], None)
+    findings += step_findings
+    blocking = any(item.severity == "error" for item in findings)
     return AnswerValidation(
         status=status,
         valid=is_valid(status, counts, unreadable=len(missing) + len(stale)) and not blocking,
@@ -319,6 +356,8 @@ async def validate_answer(
         stale_evidence=stale,
         evidence_truncated=bool(result.get("evidence_truncated")),
         reused_claims=len(result.get("reused_passage_ids") or ()),
+        guide_steps=guide_steps,
+        guide_step_embedding=step_embedding,
         **deterministic,
     )
 

@@ -368,7 +368,9 @@ _EVIDENCE = {
 # 21: rag_retrieve_evidence の planning・queries・request_id・clarifications と、根拠の
 # retrieval_rank・origin を足した（#2651）。
 # 22: rag_validate_answer の claims に support_check を足した（#2659）。
-RAG_OUTPUT_SCHEMA_VERSION = 22
+# 23: rag_validate_answer に業務ガイドの手順ごとの説明の充足（guide_steps）と、説明の無い必須の
+# 手順の finding（guide_step_unexplained）を足した（#2708）。
+RAG_OUTPUT_SCHEMA_VERSION = 23
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {
@@ -621,6 +623,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "checks": [],
         "findings": [],
         "guide_revision": None,
+        "guide_steps": [],
         "reused_claims": 0,
     },
     "nl2sql_query": _job(),
