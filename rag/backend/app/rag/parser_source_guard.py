@@ -26,6 +26,7 @@ worker が parser サービスを呼んだ後で失敗する。アップロー�
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import PurePath
 
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
 from rag_parser_core.structured_records import (
@@ -153,8 +154,14 @@ def _office_format(source_profile: SourceProfile) -> str | None:
 
 def is_spreadsheet(source_profile: SourceProfile) -> bool:
     """表計算(Excel)の原本か。"""
-    return (source_profile.extension or "").casefold() in _SPREADSHEET_FORMATS or (
-        (source_profile.content_type or "").casefold() in _SPREADSHEET_CONTENT_TYPES
+    return is_spreadsheet_file(source_profile.extension or "", source_profile.content_type)
+
+
+def is_spreadsheet_file(file_name: str, content_type: str | None = None) -> bool:
+    """ファイル名(拡張子)か content type が表計算(Excel)の原本か。"""
+    suffix = PurePath(file_name).suffix or (file_name if file_name.startswith(".") else "")
+    return suffix.casefold() in _SPREADSHEET_FORMATS or (
+        (content_type or "").casefold() in _SPREADSHEET_CONTENT_TYPES
     )
 
 

@@ -53,6 +53,7 @@ from pr_system_settings.chat_attachments.tools import (
 
 from app.features.agent.answer_passages import KIND_CITATION, non_claim_passages, passage_spans
 from app.features.agent.answer_validation import (
+    FIGURE_IMAGE_READ,
     RESULT_PARTIAL,
     STATUS_COMPLETED,
     cited_chunk_ids,
@@ -398,6 +399,33 @@ def _supported_claims(validation: Mapping[str, Any] | None) -> list[tuple[str, s
     return found
 
 
+def _figure_image_readings(validation: Mapping[str, Any] | None) -> dict[str, JsonObject]:
+    """最終の検証が図の画像で確かめた段落の図（chunk → 画像の読み取りの由来。#2678）。
+
+    由来は画面と MCP の根拠の `image_reading`（会話の添付の画像と同じ項目。#2652）に入れる: モデルへ
+    届いた画像（`model_input=attached`・`image_id`）と、図の版（`chunk_set_id`）・領域（`region`）。
+    """
+    if not isinstance(validation, Mapping) or validation.get("status") != STATUS_COMPLETED:
+        return {}
+    result = validation.get("result")
+    claims = result.get("claims") if isinstance(result, Mapping) else None
+    found: dict[str, JsonObject] = {}
+    for claim in claims if isinstance(claims, list) else []:
+        if not isinstance(claim, Mapping) or claim.get("figure_check") != FIGURE_IMAGE_READ:
+            continue
+        chunk_id, image = claim.get("chunk_id"), claim.get("figure_image")
+        if isinstance(chunk_id, str) and isinstance(image, Mapping) and chunk_id not in found:
+            found[chunk_id] = {
+                "model_input": "attached",
+                **{
+                    key: image[key]
+                    for key in ("image_id", "chunk_set_id", "region", "carried")
+                    if key in image
+                },
+            }
+    return found
+
+
 def _pending_quotes(validation: Mapping[str, Any] | None) -> set[str]:
     """照合が時間の上限までに確かめ終わらなかった主張の段落（partial の `unassessed`。#2700）。
 
@@ -653,6 +681,7 @@ def answer_evidence(
     passed = passed_evidence(steps)
     chunk_ids = [str(item["chunk_id"]) for item in passed]
     supported = _supported_claims(validation)
+    figures = _figure_image_readings(validation)
     pending = _pending_quotes(validation)
     if not isinstance(validation, Mapping) or validation.get("status") != STATUS_COMPLETED:
         binding = BINDING_TEXT
@@ -698,6 +727,9 @@ def answer_evidence(
             view["answer_use"] = "reference" if used else None
         else:
             view["answer_use"] = answer_use if used and answer_use in _ANSWER_USES else None
+        if used and item["chunk_id"] in figures:
+            # 図の見た目の段落を、モデルへ届いた図の画像で確かめた（#2678）。
+            view["image_reading"] = figures[item["chunk_id"]]
         items.append(view)
     for item in attachment_evidence(steps)[: max(MAX_ANSWER_EVIDENCE - len(items), 0)]:
         view = {key: item.get(key) for key in _COPIED_FIELDS if key in item}

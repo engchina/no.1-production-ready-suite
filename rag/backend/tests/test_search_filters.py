@@ -344,6 +344,48 @@ def test_page_ranges_filter_is_normalized_and_becomes_an_or_of_page_overlaps() -
     assert "'$.page_end' RETURNING NUMBER" in sql
 
 
+def test_page_ranges_filter_carries_sheet_row_ranges_apart_from_pages() -> None:
+    """表計算のシートの行の範囲(#2663)。行の番号を頁として絞らない。"""
+    from app.clients.oracle import _oracle_retrieval_where
+
+    normalized = normalize_search_filters(
+        {
+            "page_ranges": '[{"document_id":"doc-s","sheet_name":"シートA","row_start":42,'
+            '"row_end":45},{"document_id":"doc-s","sheet_name":"シートB"},'
+            '{"document_id":"doc-a","page_start":3,"page_end":5}]'
+        }
+    )
+    sql, binds = _oracle_retrieval_where(normalized)
+    assert binds["filter_pr_sheet_0"] == "シートA"
+    assert (binds["filter_pr_row_start_0"], binds["filter_pr_row_end_0"]) == (42, 45)
+    assert "filter_pr_start_0" not in binds and "filter_pr_end_0" not in binds
+    # 行の無いシートの範囲はシートの全体。
+    assert binds["filter_pr_sheet_1"] == "シートB"
+    assert "filter_pr_row_start_1" not in binds
+    # 頁の範囲は今までどおり頁で絞る。
+    assert (binds["filter_pr_start_2"], binds["filter_pr_end_2"]) == (3, 5)
+    assert "JSON_VALUE(c.metadata_json, '$.sheet_name') = :filter_pr_sheet_0" in sql
+    assert "'$.row_start' RETURNING NUMBER" in sql
+    # 頁の範囲だけの値は、従来の形で書く。
+    assert normalized["page_ranges"].endswith(
+        '{"document_id":"doc-a","page_start":3,"page_end":5}]'
+    )
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"document_id": "a", "row_start": 3},
+        {"document_id": "a", "sheet_name": "シートA", "page_start": 3},
+        {"document_id": "a", "sheet_name": "シートA", "row_start": 5, "row_end": 2},
+    ],
+    ids=["rows-without-sheet", "sheet-and-page", "reversed-rows"],
+)
+def test_sheet_row_ranges_are_validated(item: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        normalize_search_filters({"page_ranges": json.dumps([item])})
+
+
 def test_page_number_filters_use_chunk_page_ranges() -> None:
     """page_number を持たない分割の chunk も、page_start / page_end で絞れる(#717)。"""
     from app.clients.oracle import _oracle_retrieval_where

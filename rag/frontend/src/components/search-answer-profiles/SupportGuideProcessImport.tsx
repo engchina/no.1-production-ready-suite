@@ -476,6 +476,14 @@ function ReferenceRow({ reference }: { reference: SupportGuideProcessReference }
       {reference.pages ? (
         <span className="text-xs text-fg-muted">{t("supportGuides.processImport.pages", { pages: reference.pages })}</span>
       ) : null}
+      {reference.sheet_name || reference.rows || reference.cells ? (
+        <span className="min-w-0 break-words text-xs text-fg-muted">
+          {t("supportGuides.processImport.sheetLocation", {
+            sheet: reference.sheet_name ?? "",
+            location: [reference.rows, reference.cells].filter(Boolean).join(" "),
+          })}
+        </span>
+      ) : null}
       {reference.status === "resolved" && reference.file_name ? (
         <span className="min-w-0 break-words text-xs text-fg-muted">
           {t("supportGuides.processImport.resolvedTo", { name: reference.file_name })}

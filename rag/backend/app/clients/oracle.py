@@ -12530,6 +12530,18 @@ _CHUNK_PAGE_END_SQL = (
     "JSON_VALUE(c.metadata_json, '$.page_start' RETURNING NUMBER), "
     "JSON_VALUE(c.metadata_json, '$.page_number' RETURNING NUMBER))"
 )
+# 表計算の chunk のシート名と行の範囲(#1221 の sheet_name・row_start・row_end。#2663)。行の記録の
+# 子は自分の行、表の一部の親は parent_row_start〜parent_row_end を持つ。
+_CHUNK_SHEET_SQL = "JSON_VALUE(c.metadata_json, '$.sheet_name')"
+_CHUNK_ROW_START_SQL = (
+    "COALESCE(JSON_VALUE(c.metadata_json, '$.row_start' RETURNING NUMBER), "
+    "JSON_VALUE(c.metadata_json, '$.parent_row_start' RETURNING NUMBER))"
+)
+_CHUNK_ROW_END_SQL = (
+    "COALESCE(JSON_VALUE(c.metadata_json, '$.row_end' RETURNING NUMBER), "
+    "JSON_VALUE(c.metadata_json, '$.row_start' RETURNING NUMBER), "
+    "JSON_VALUE(c.metadata_json, '$.parent_row_end' RETURNING NUMBER))"
+)
 
 
 # 重複の文書(同じ内容のアップロード)が自前の索引を持つか(#1381)。持つ重複は自分の chunk で
@@ -12700,6 +12712,19 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
             for index, page_range in enumerate(parse_page_ranges(cleaned)):
                 parts = [f"d.document_id = :filter_pr_doc_{index}"]
                 binds[f"filter_pr_doc_{index}"] = page_range.document_id
+                if page_range.sheet_name is not None:
+                    # 表計算のシートの行の範囲(#2663)。chunk のシート名と行の範囲の重なりで
+                    # 判定する。
+                    parts.append(f"{_CHUNK_SHEET_SQL} = :filter_pr_sheet_{index}")
+                    binds[f"filter_pr_sheet_{index}"] = page_range.sheet_name
+                    if page_range.row_end is not None:
+                        parts.append(f"{_CHUNK_ROW_START_SQL} <= :filter_pr_row_end_{index}")
+                        binds[f"filter_pr_row_end_{index}"] = page_range.row_end
+                    if page_range.row_start is not None:
+                        parts.append(f"{_CHUNK_ROW_END_SQL} >= :filter_pr_row_start_{index}")
+                        binds[f"filter_pr_row_start_{index}"] = page_range.row_start
+                    range_clauses.append("(" + " AND ".join(parts) + ")")
+                    continue
                 if page_range.page_end is not None:
                     parts.append(f"{_CHUNK_PAGE_START_SQL} <= :filter_pr_end_{index}")
                     binds[f"filter_pr_end_{index}"] = page_range.page_end

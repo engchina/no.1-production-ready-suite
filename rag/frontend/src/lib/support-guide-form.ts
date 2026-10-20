@@ -21,6 +21,7 @@ import type {
   SupportGuideIssue,
   SupportGuidePageRange,
   SupportGuideReference,
+  SupportGuideSheetRange,
   SupportGuideStepStatus,
   SupportGuideSummary,
   SupportGuideTool,
@@ -40,6 +41,9 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 export const MAX_PAGE_RANGES = 10;
 export const MAX_STEP_REFERENCES = 10;
 const MAX_PAGE = 100_000;
+/** 表計算の行の番号の上限（backend の MAX_SHEET_ROW。Excel のシートの行の数）。 */
+const MAX_SHEET_ROW = 1_048_576;
+const CELL_RANGE = /^([A-Z]{1,3})([1-9]\d{0,6})(?::([A-Z]{1,3})([1-9]\d{0,6}))?$/;
 
 export type ConditionForm = {
   key: string;
@@ -88,6 +92,8 @@ export type ReferenceForm = {
   version: string;
   /** 根拠の頁（「3-5, 8」の形。空なら文書の全体。#2395）。 */
   pageRanges: string;
+  /** 表計算の資料のシートの行（1 行に 1 つ。「シート名!42-45」「シート名!B3:D10」。#2663）。 */
+  sheetRanges: string;
 };
 
 export type CompletionForm = {
@@ -311,10 +317,12 @@ function referenceFormFromContent(reference: SupportGuideReference): ReferenceFo
     sectionPath: joinLines(reference.section_path),
     version: reference.version,
     pageRanges: formatPageRanges(reference.page_ranges ?? []),
+    sheetRanges: formatSheetRanges(reference.sheet_ranges ?? []),
   };
 }
 
 function referenceContentFromForm(reference: ReferenceForm): SupportGuideReference {
+  const sheets = parseSheetRanges(reference.sheetRanges) ?? [];
   return {
     document_id: reference.documentId.trim(),
     title: reference.title.trim(),
@@ -322,6 +330,8 @@ function referenceContentFromForm(reference: ReferenceForm): SupportGuideReferen
     version: reference.version.trim(),
     // 形の違う入力は保存の前の確かめ（guideFormIssues）で止める。ここでは読めた範囲だけを送る。
     page_ranges: parsePageRanges(reference.pageRanges) ?? [],
+    // 表計算の資料だけが持つ（無ければ送らない。backend の既定は空）。
+    ...(sheets.length > 0 ? { sheet_ranges: sheets } : {}),
   };
 }
 
@@ -350,6 +360,59 @@ export function parsePageRanges(text: string): SupportGuidePageRange[] | null {
     const end = match[2] === undefined ? start : Number(match[2]);
     if (start < 1 || end < start || end > MAX_PAGE) return null;
     ranges.push({ page_start: start, page_end: end });
+  }
+  return ranges.length > MAX_PAGE_RANGES ? null : ranges;
+}
+
+/** シートの行の範囲を「シート名!42-45」（セルの範囲があれば「シート名!B3:D10」）の行にする。 */
+export function formatSheetRanges(ranges: readonly SupportGuideSheetRange[]): string {
+  return ranges
+    .map((range) => {
+      if (range.cell_range) return `${range.sheet_name}!${range.cell_range}`;
+      if (range.row_start == null) return range.sheet_name;
+      const end = range.row_end ?? range.row_start;
+      return `${range.sheet_name}!${end === range.row_start ? range.row_start : `${range.row_start}-${end}`}`;
+    })
+    .join("\n");
+}
+
+/**
+ * 1 行に 1 つの「シート名!42-45」「シート名!B3:D10」「シート名」をシートの行の範囲にする（#2663）。
+ * シート名は最後の「!」の前。空なら空の一覧。形が違う・行が 1 未満・逆の範囲・多すぎるときは null。
+ */
+export function parseSheetRanges(text: string): SupportGuideSheetRange[] | null {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const ranges: SupportGuideSheetRange[] = [];
+  for (const line of lines) {
+    const mark = Math.max(line.lastIndexOf("!"), line.lastIndexOf("！"));
+    const sheet = (mark >= 0 ? line.slice(0, mark) : line).trim();
+    const location = mark >= 0 ? line.slice(mark + 1).normalize("NFKC").replace(/\s+/g, "").toUpperCase() : "";
+    if (!sheet || sheet.length > 200) return null;
+    if (!location) {
+      ranges.push({ sheet_name: sheet });
+      continue;
+    }
+    const cells = CELL_RANGE.exec(location);
+    if (cells) {
+      const first = Number(cells[2]);
+      const last = cells[4] === undefined ? first : Number(cells[4]);
+      ranges.push({
+        sheet_name: sheet,
+        row_start: Math.min(first, last),
+        row_end: Math.max(first, last),
+        cell_range: location,
+      });
+      continue;
+    }
+    const rows = /^(\d+)(?:[-~〜–](\d+))?$/.exec(location);
+    if (!rows) return null;
+    const start = Number(rows[1]);
+    const end = rows[2] === undefined ? start : Number(rows[2]);
+    if (start < 1 || end < start || end > MAX_SHEET_ROW) return null;
+    ranges.push({ sheet_name: sheet, row_start: start, row_end: end });
   }
   return ranges.length > MAX_PAGE_RANGES ? null : ranges;
 }
@@ -410,7 +473,15 @@ export function newBranchRow(form: GuideForm): BranchForm {
 }
 
 export function newReferenceRow(): ReferenceForm {
-  return { key: newRowKey("reference"), documentId: "", title: "", sectionPath: "", version: "", pageRanges: "" };
+  return {
+    key: newRowKey("reference"),
+    documentId: "",
+    title: "",
+    sectionPath: "",
+    version: "",
+    pageRanges: "",
+    sheetRanges: "",
+  };
 }
 
 export function newCompletionRow(form: GuideForm): CompletionForm {
@@ -596,6 +667,12 @@ function referenceIssues(base: string, references: readonly ReferenceForm[]): Su
     if (parsePageRanges(reference.pageRanges) === null) {
       issues.push(clientIssue(`${base}[${index}].page_ranges`, t("supportGuides.check.pageRanges")));
     }
+    const sheets = parseSheetRanges(reference.sheetRanges);
+    if (sheets === null) {
+      issues.push(clientIssue(`${base}[${index}].sheet_ranges`, t("supportGuides.check.sheetRanges")));
+    } else if (sheets.length > 0 && (parsePageRanges(reference.pageRanges) ?? []).length > 0) {
+      issues.push(clientIssue(`${base}[${index}].sheet_ranges`, t("supportGuides.check.sheetAndPages")));
+    }
   });
   return issues.filter((issue): issue is SupportGuideIssue => issue !== null);
 }
@@ -671,6 +748,7 @@ const FIELD_LABEL: Record<string, I18nKey> = {
   "steps.references.document_id": "supportGuides.field.documentId",
   "steps.references.title": "supportGuides.field.referenceTitle",
   "steps.references.page_ranges": "supportGuides.field.pageRanges",
+  "steps.references.sheet_ranges": "supportGuides.field.sheetRanges",
   "branches.id": "supportGuides.field.id",
   "branches.when": "supportGuides.field.branchCondition",
   "branches.when.condition_id": "supportGuides.field.branchCondition",
@@ -683,6 +761,7 @@ const FIELD_LABEL: Record<string, I18nKey> = {
   "references.section_path": "supportGuides.field.sectionPath",
   "references.version": "supportGuides.field.version",
   "references.page_ranges": "supportGuides.field.pageRanges",
+  "references.sheet_ranges": "supportGuides.field.sheetRanges",
   "completion.id": "supportGuides.field.id",
   "completion.description": "supportGuides.field.completionDescription",
   "completion.check_method": "supportGuides.field.checkMethod",

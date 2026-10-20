@@ -204,6 +204,9 @@ def _input_bytes(inputs: dict[str, Any]) -> int:
 
 # 根拠の場所のうち、頁（page_start・page_end）のほかにモデルへ渡す項目（MCP の根拠の location と同じ値。#1450）。
 EVIDENCE_LOCATION_KEYS = ("section_path", "sheet_name", "row_start", "row_end", "cell_range")
+# 図の根拠の種類（evidence_type。figure_description=図を AI が読んだ説明 / ocr=図の中・周りの文字）。図の根拠の
+# 項目にだけ写し、最終の検証が図の見た目だけで決まる主張を本文の照合と分ける（#2678）。
+FIGURE_EVIDENCE_TYPES = frozenset({"figure_description", "ocr"})
 
 
 def _evidence_fragments(items, parent_id: str = "", ancestor_text: str = ""):
@@ -216,6 +219,8 @@ def _evidence_fragments(items, parent_id: str = "", ancestor_text: str = ""):
         metadata = {key: item.get(key) for key in ("id", "source", "source_run_id", "page_start", "page_end")}
         # 頁の無い根拠（表計算の行など）の場所も写す（渡されたときだけ。#1450）。根拠の ID は変えない。
         metadata.update({key: item[key] for key in EVIDENCE_LOCATION_KEYS if item.get(key) not in (None, "", [])})
+        if item.get("evidence_type") in FIGURE_EVIDENCE_TYPES:
+            metadata["evidence_type"] = item["evidence_type"]
         metadata["id"] = item.get("chunk_uid") or metadata["id"]
         metadata["parent_id"] = parent_id
         for start in range(0, max(1, len(text)), EVIDENCE_FRAGMENT_CHARS):

@@ -933,6 +933,17 @@ function SupportGuideForm({
                                   error={errorAt(refPath("page_ranges"))}
                                   onChange={(event) => updateReference({ pageRanges: event.target.value })}
                                 />
+                                <TextareaField
+                                  id={domId(refPath("sheet_ranges"))}
+                                  className="col-span-full"
+                                  width="full"
+                                  label={t("supportGuides.field.sheetRanges")}
+                                  helper={t("supportGuides.field.sheetRangesHelp")}
+                                  value={reference.sheetRanges}
+                                  rows={2}
+                                  error={errorAt(refPath("sheet_ranges"))}
+                                  onChange={(event) => updateReference({ sheetRanges: event.target.value })}
+                                />
                               </FormGrid>
                               <Button
                                 size="sm"
@@ -1153,6 +1164,17 @@ function SupportGuideForm({
                   inputMode="numeric"
                   error={errorAt(path("page_ranges"))}
                   onChange={(event) => updateRow("references", index, { pageRanges: event.target.value })}
+                />
+                <TextareaField
+                  id={domId(path("sheet_ranges"))}
+                  className="col-span-full"
+                  width="full"
+                  label={t("supportGuides.field.sheetRanges")}
+                  helper={t("supportGuides.field.sheetRangesHelp")}
+                  value={row.sheetRanges}
+                  rows={2}
+                  error={errorAt(path("sheet_ranges"))}
+                  onChange={(event) => updateRow("references", index, { sheetRanges: event.target.value })}
                 />
               </FormGrid>
             );

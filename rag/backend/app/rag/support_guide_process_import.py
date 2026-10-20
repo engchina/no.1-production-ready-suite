@@ -13,8 +13,14 @@ OCI Enterprise AI で業務ガイドの内容（``SupportGuideContent``）の下
    ``GuideDraftOutput``（Pydantic）で検証し、業務ガイドの内容に直して ``SupportGuideContent`` と
    ``validate_content`` で検証する。
 4. 資料名の解決（``resolve_document_name``）: 回答の過程に書いた資料の名前を、検索・回答
-   プロファイルのナレッジベースの文書の名前と照合して ``document_id`` にする。解決できない・複数に
-   当たる資料は検証のエラー（KB への取り込みを促す）。
+   プロファイルのナレッジベースの文書の名前と照合して ``document_id`` にする。同じ正本を指す重複の
+   アップロード（``duplicate_of_document_id``）は正本にまとめてから決める（#2662）。解決できない・
+   複数に当たる資料は検証のエラー（KB への取り込みを促す）。
+5. 資料の位置（``_location``）: PDF などの頁は頁の範囲に、表計算の資料のシート・行・セルはシートの
+   行の範囲にする。表計算の資料の頁・頁の資料の行、頁として読めない頁は変換せず検証のエラーにする
+   （行の番号を頁にしない。#2663）。
+6. 分岐の検証（``merged_branch_issues``）: 同じ条件の別の値が、回答の過程では別の操作なのに同じ
+   手順へ進む下書きは、検証のエラーにする（値ごとの手順と資料の絞り込みを失うため。#2666）。
 
 下書きは保存しない（画面で行ごとに確かめ、選んだものだけを取り込みの API で下書きにする）。
 """
@@ -35,17 +41,21 @@ from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
 from pr_backend_core.bounded_calls import Attempt
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from rag_parser_core.language import LanguagePack
+from rag_parser_core.language.markers import marker_patterns
 
 from app.rag.cross_references import document_name_match, title_key
+from app.rag.parser_source_guard import is_spreadsheet_file
 from app.rag.support_guide import has_errors, validate_content
 from app.schemas.support_guide import (
     MAX_PAGE_NUMBER,
     MAX_REFERENCE_PAGE_RANGES,
+    MAX_SHEET_ROW,
     MAX_STEP_REFERENCES,
     PROCESS_IMPORT_QUESTION_MAX_CHARS,
     PROCESS_IMPORT_TEXT_MAX_CHARS,
     SupportGuideContent,
     SupportGuideIssue,
+    SupportGuidePageRange,
     SupportGuideProcessColumn,
     SupportGuideProcessItem,
     SupportGuideProcessReference,
@@ -53,6 +63,7 @@ from app.schemas.support_guide import (
     SupportGuideProcessSheet,
     SupportGuideProcessWorkbookData,
     SupportGuideRuleCandidate,
+    SupportGuideSheetRange,
 )
 
 logger = logging.getLogger(__name__)
@@ -321,12 +332,22 @@ class DraftBranch(_Out):
         default_factory=list, description="この値のとき（空なら条件が分からないとき）。"
     )
     goto_step: str = Field(description="進む手順の id。")
+    operation: str = Field(
+        default="", description="この値のときに回答の過程が案内する操作（書いたまま）。"
+    )
     note: str = ""
 
 
 class DraftReference(_Out):
     document_name: str = Field(description="資料の名前（回答の過程に書いたまま）。")
-    pages: str = Field(default="", description="頁（書いたまま。例: 12-14）。")
+    pages: str = Field(
+        default="", description="頁（書いたまま。例: 12-14）。表計算の行・セルは入れない。"
+    )
+    sheet_name: str = Field(default="", description="表計算の資料のシート名（書いたまま）。")
+    rows: str = Field(default="", description="表計算の資料の行（書いたまま。例: 42-45）。")
+    cells: str = Field(
+        default="", description="表計算の資料のセルの範囲（書いたまま。例: B3:D10）。"
+    )
     section: str = Field(default="", description="章節（書いたまま）。")
     step_ids: list[str] = Field(
         default_factory=list,
@@ -370,12 +391,14 @@ GUIDE_DRAFT_PROMPT = """\
   id を入れる。手順の画面名・機能名は retrieval_hints に入れる。
 - conditions（必要な確認事項）: 確かめる事項を conditions に、「X なら手順 P」を branches に入れる。
   選択肢が決まっていれば type=enum（2 つ以上）、はい / いいえなら boolean、それ以外は text。
+  値ごとに案内する操作が違えば、値ごとに別の手順にして goto_step を分け、その値の操作を
+  operation に入れる（同じ手順に進めるのは、値に関わらず同じ操作を案内するときだけ）。
   「窓口へ連絡」のような人へ引き継ぐ場合は handling=handoff にし、handoff_contact に窓口の名前、
   handoff_conditions にその場合を入れる。利用者に聞けば決まる事項は handling=ask と question を
   入れる。
-- references（検索する資料と根拠の頁）: 資料の名前は書いたまま document_name に、頁は pages、章節は
-  section に入れる。どの手順の根拠の資料かが書いてあれば、step_ids にその手順の id を入れる
-  （全手順に共通の資料なら空）。
+- references（検索する資料と根拠の頁）: 資料の名前は書いたまま document_name に、頁は pages、
+  表計算のシート・行・セルの範囲は sheet_name・rows・cells、章節は section に入れる。どの手順の
+  根拠の資料かが書いてあれば、step_ids にその手順の id を入れる（全手順に共通の資料なら空）。
 - search_terms（検索の語）: match_terms と、関係する手順の retrieval_hints に入れる。
 - notes（補足）: 1 つの手順に係る注意はその手順の note に入れる。この質問に限らず回答の仕方を決める
   規則（「この種類の質問はこの画面を案内する」「言い切らず可能性にとどめる」「Aと Bを区別する」
@@ -435,6 +458,37 @@ class KnowledgeDocument:
 
     document_id: str
     file_name: str
+    # 同じ内容の重複のアップロードなら正本の文書の id（``duplicate_of_document_id``。#2662）。
+    duplicate_of: str = ""
+    # 表計算の資料か（頁ではなくシート・行で位置を書く。#2663）。
+    spreadsheet: bool = False
+
+    @property
+    def identity(self) -> str:
+        """同じ内容の文書をまとめる id（重複なら正本の id）。"""
+        return self.duplicate_of or self.document_id
+
+
+async def list_knowledge_documents(
+    oracle: Any, knowledge_base_ids: Sequence[str]
+) -> list[KnowledgeDocument]:
+    """ナレッジベースの文書（利用者が見られるもの。新しい版に置き換えた文書は除く）。
+
+    重複のアップロードは正本の id（``duplicate_of_document_id``）を持たせ、資料名の解決で正本に
+    まとめる（#2662）。表計算の資料かは、頁ではなくシート・行で位置を書く資料かの判定に使う（#2663）。
+    """
+    documents: dict[str, KnowledgeDocument] = {}
+    for knowledge_base_id in knowledge_base_ids:
+        for summary in await oracle.list_documents(knowledge_base_id=knowledge_base_id):
+            if summary.is_superseded:
+                continue
+            documents[summary.id] = KnowledgeDocument(
+                summary.id,
+                summary.file_name,
+                duplicate_of=summary.duplicate_of_document_id or "",
+                spreadsheet=is_spreadsheet_file(summary.file_name, summary.content_type),
+            )
+    return list(documents.values())
 
 
 _EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,5}$")
@@ -442,6 +496,25 @@ _EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,5}$")
 
 def _stem_key(file_name: str) -> str:
     return title_key(_EXTENSION.sub("", unicodedata.normalize("NFKC", file_name).strip()))
+
+
+def _settle(
+    candidates: Sequence[KnowledgeDocument], documents: Sequence[KnowledgeDocument]
+) -> tuple[KnowledgeDocument | None, list[KnowledgeDocument]]:
+    """候補を同じ内容の文書（正本と、その正本を指す重複）ごとにまとめて決める（#2662）。
+
+    正本が候補の文書の中に見えるとき（このプロファイルのナレッジベースにあり、利用者が見られる）だけ、
+    その正本と重複を 1 つにまとめ、正本の文書にする。正本が見えない（範囲の外・見られない・無い）
+    重複は、まとめずにそれぞれの文書のまま扱う（見えない正本の id を参照にしない）。
+    """
+    visible = {item.document_id: item for item in documents}
+    groups: dict[str, KnowledgeDocument] = {}
+    for item in candidates:
+        canonical = visible.get(item.identity)
+        key = item.identity if canonical is not None else item.document_id
+        groups.setdefault(key, canonical or item)
+    settled = list(groups.values())
+    return (settled[0], []) if len(settled) == 1 else (None, settled)
 
 
 def resolve_document_name(
@@ -455,6 +528,7 @@ def resolve_document_name(
        （``document_name_match``。他の文書への参照の解決と同じ規則）。
     3. 資料の名前がファイル名（拡張子を除く）を含む（利用者のファイル名の接頭辞・接尾辞）。最も
        長いファイル名だけを候補にする。
+    候補は同じ正本の重複をまとめてから数える（``_settle``）。
     """
     key = title_key(name)
     stem = _stem_key(name)
@@ -466,15 +540,14 @@ def resolve_document_name(
         if title_key(item.file_name) == key or (stem and _stem_key(item.file_name) == stem)
     ]
     if exact:
-        return (exact[0], []) if len(exact) == 1 else (None, exact)
+        return _settle(exact, documents)
     ranked: dict[int, list[KnowledgeDocument]] = {}
     for item in documents:
         rank = document_name_match(name, item.file_name)
         if rank is not None:
             ranked.setdefault(rank, []).append(item)
     if ranked:
-        best = ranked[min(ranked)]
-        return (best[0], []) if len(best) == 1 else (None, best)
+        return _settle(ranked[min(ranked)], documents)
     contained = [
         (len(_stem_key(item.file_name)), item)
         for item in documents
@@ -483,8 +556,7 @@ def resolve_document_name(
     if not contained:
         return None, []
     longest = max(length for length, _ in contained)
-    best = [item for length, item in contained if length == longest]
-    return (best[0], []) if len(best) == 1 else (None, best)
+    return _settle([item for length, item in contained if length == longest], documents)
 
 
 # ---- 下書きにする ---------------------------------------------------------------------------
@@ -492,19 +564,152 @@ def resolve_document_name(
 
 # 頁の書き方（「12-14」「p.12〜14、20」）から頁の範囲を読む（数字と範囲の記号だけを見る。#2395）。
 _PAGE_RANGE = re.compile(r"(\d+)\s*[-~〜–—]\s*(\d+)|(\d+)")
+# 頁の書き方の略記（p. / pp.）。頁の語そのもの（「頁」「ページ」）は言語資源の markers.page_words。
+_PAGE_ABBREVIATION = re.compile(r"(?<![A-Za-z])pp?(?![A-Za-z])", re.IGNORECASE)
+# 表計算のセルの範囲（A1 形式）。
+_CELL_RANGE = re.compile(r"[A-Za-z]{1,3}[1-9]\d{0,6}(?:\s*:\s*[A-Za-z]{1,3}[1-9]\d{0,6})?")
+
+
+def _numbered_ranges(text: str, limit: int) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for match in _PAGE_RANGE.finditer(unicodedata.normalize("NFKC", text)):
+        start = int(match.group(1) or match.group(3))
+        end = int(match.group(2) or start)
+        if 1 <= start <= end <= limit and (start, end) not in ranges:
+            ranges.append((start, end))
+    return ranges[:MAX_REFERENCE_PAGE_RANGES]
 
 
 def page_ranges_from_text(text: str) -> list[dict[str, int]]:
     """回答の過程に書いた頁を、業務ガイドの資料の頁の範囲にする（読めない・逆の範囲は除く）。"""
-    ranges: list[dict[str, int]] = []
-    for match in _PAGE_RANGE.finditer(unicodedata.normalize("NFKC", text)):
-        start = int(match.group(1) or match.group(3))
-        end = int(match.group(2) or start)
-        if 1 <= start <= end <= MAX_PAGE_NUMBER:
-            item = {"page_start": start, "page_end": end}
-            if item not in ranges:
-                ranges.append(item)
-    return ranges[:MAX_REFERENCE_PAGE_RANGES]
+    return [
+        {"page_start": start, "page_end": end}
+        for start, end in _numbered_ranges(text, MAX_PAGE_NUMBER)
+    ]
+
+
+def readable_as_pages(text: str) -> bool:
+    """頁の書き方として読めるか（数字・範囲・区切りと、頁の語・略記だけ）。
+
+    「行42」「A1:C3」のように、頁の語でない文字（行・セル・シートの名前など）を含む書き方は頁として
+    読まない（行の番号を頁にしない。#2663）。頁の語は言語資源（``markers.page_words``）。
+    """
+    normalized = unicodedata.normalize("NFKC", text)
+    stripped = re.sub(marker_patterns().page_words, " ", normalized, flags=re.IGNORECASE)
+    stripped = _PAGE_ABBREVIATION.sub(" ", stripped)
+    return not any(unicodedata.category(char)[0] == "L" for char in stripped)
+
+
+def _location_issue(index: int, code: str, message: str) -> SupportGuideIssue:
+    return SupportGuideIssue(
+        severity="error", code=code, path=f"references[{index}]", message=message
+    )
+
+
+def _sheet_ranges(item: DraftReference) -> list[SupportGuideSheetRange] | None:
+    """シート・行・セルからシートの行の範囲（読めなければ None）。
+
+    行は書いた数字（範囲・列挙）を行の番号として読み、セルは A1 形式の範囲として読む。シートの名前の
+    無い行・セルは、どのシートの行か決まらないので読まない。
+    """
+    sheet = item.sheet_name.strip()[:200]
+    if not sheet:
+        return None
+    rows = _numbered_ranges(item.rows, MAX_SHEET_ROW) if item.rows.strip() else []
+    cells = [
+        re.sub(r"\s+", "", match.group(0)).upper()
+        for match in _CELL_RANGE.finditer(unicodedata.normalize("NFKC", item.cells))
+    ]
+    if (item.rows.strip() and not rows) or (item.cells.strip() and not cells):
+        return None
+    try:
+        if cells:
+            return [
+                SupportGuideSheetRange(sheet_name=sheet, cell_range=cell)
+                for cell in cells[:MAX_REFERENCE_PAGE_RANGES]
+            ]
+        if rows:
+            return [
+                SupportGuideSheetRange(sheet_name=sheet, row_start=start, row_end=end)
+                for start, end in rows
+            ]
+        return [SupportGuideSheetRange(sheet_name=sheet)]
+    except ValidationError:
+        return None
+
+
+def _location(
+    index: int, item: DraftReference, document: KnowledgeDocument
+) -> tuple[list[SupportGuidePageRange], list[SupportGuideSheetRange], list[SupportGuideIssue]]:
+    """解決した資料の根拠の位置（頁の範囲・表計算のシートの行の範囲）と、位置の検証の誤り（#2663）。
+
+    表計算の資料はシート・行・セルで、それ以外の資料は頁で位置を書く。書き方が資料の種類に合わない・
+    読めない位置は変換せず、誤りにする（行の番号を頁の範囲にしない）。
+    """
+    name = item.document_name.strip()
+    pages = item.pages.strip()
+    has_pages = bool(re.search(r"\d", unicodedata.normalize("NFKC", pages)))
+    has_sheet = bool(item.sheet_name.strip() or item.rows.strip() or item.cells.strip())
+    if document.spreadsheet:
+        issues: list[SupportGuideIssue] = []
+        if has_pages and not has_sheet:
+            issues.append(
+                _location_issue(
+                    index,
+                    "reference_location_mismatch",
+                    f"資料「{name}」は表計算の資料のため、頁「{pages}」を根拠の位置にできません。"
+                    "シート・行・セルの範囲で指定してください。",
+                )
+            )
+        if not has_sheet:
+            return [], [], issues
+        sheets = _sheet_ranges(item)
+        if sheets is None:
+            location = " ".join(
+                part for part in (item.sheet_name, item.rows, item.cells) if part.strip()
+            )
+            issues.append(
+                _location_issue(
+                    index,
+                    "reference_location_unreadable",
+                    f"資料「{name}」のシート・行・セル「{location.strip()}」を読めません。"
+                    "シートの名前と、行の番号（例: 42-45）かセルの範囲（例: B3:D10）で"
+                    "指定してください。",
+                )
+            )
+            return [], [], issues
+        return [], sheets, issues
+    if has_sheet:
+        return (
+            [],
+            [],
+            [
+                _location_issue(
+                    index,
+                    "reference_location_mismatch",
+                    f"資料「{name}」は表計算の資料ではないため、シート・行・セルを根拠の位置に"
+                    "できません。頁か章節で指定してください。",
+                )
+            ],
+        )
+    if pages and not readable_as_pages(pages):
+        return (
+            [],
+            [],
+            [
+                _location_issue(
+                    index,
+                    "reference_location_unreadable",
+                    f"資料「{name}」の頁「{pages}」を頁の範囲として読めません。"
+                    "頁の番号と範囲（例: 12-14）で指定してください。",
+                )
+            ],
+        )
+    return (
+        [SupportGuidePageRange.model_validate(page) for page in page_ranges_from_text(pages)],
+        [],
+        [],
+    )
 
 
 def _clean(values: Sequence[str], limit: int, max_chars: int = 200) -> list[str]:
@@ -522,27 +727,34 @@ def _references(
         name = item.document_name.strip()
         if not name:
             continue
+        written = {
+            "name": name,
+            "pages": item.pages[:64],
+            "sheet_name": item.sheet_name[:200],
+            "rows": item.rows[:64],
+            "cells": item.cells[:64],
+            "section": item.section[:200],
+            "step_ids": _clean(item.step_ids, 20, 64),
+        }
         found, candidates = resolve_document_name(name, documents)
         if found is not None:
+            page_ranges, sheet_ranges, location_issues = _location(index, item, found)
+            issues.extend(location_issues)
             references.append(
                 SupportGuideProcessReference(
-                    name=name,
-                    pages=item.pages[:64],
-                    section=item.section[:200],
-                    step_ids=_clean(item.step_ids, 20, 64),
+                    **written,
                     status="resolved",
                     document_id=found.document_id,
                     file_name=found.file_name,
+                    page_ranges=page_ranges,
+                    sheet_ranges=sheet_ranges,
                 )
             )
             continue
         status: Literal["unresolved", "ambiguous"] = "ambiguous" if candidates else "unresolved"
         references.append(
             SupportGuideProcessReference(
-                name=name,
-                pages=item.pages[:64],
-                section=item.section[:200],
-                step_ids=_clean(item.step_ids, 20, 64),
+                **written,
                 status=status,
                 candidates=[candidate.file_name for candidate in candidates[:10]],
             )
@@ -582,7 +794,12 @@ def _content_payload(
             "document_id": item.document_id,
             "title": (item.file_name or item.name)[:200],
             "section_path": [item.section[:200]] if item.section else [],
-            "page_ranges": page_ranges_from_text(item.pages),
+            "page_ranges": [
+                page.model_dump() for page in item.page_ranges[:MAX_REFERENCE_PAGE_RANGES]
+            ],
+            "sheet_ranges": [
+                sheet.model_dump() for sheet in item.sheet_ranges[:MAX_REFERENCE_PAGE_RANGES]
+            ],
         }
         owners = [step_id for step_id in item.step_ids if step_id in step_ids]
         for step_id in owners:
@@ -636,7 +853,7 @@ def _content_payload(
                     "values": values,
                 },
                 "goto_step": branch.goto_step,
-                "note": branch.note[:200],
+                "note": (branch.note or branch.operation)[:200],
             }
         )
     title = output.title.strip() or question
@@ -658,6 +875,48 @@ def _content_payload(
     }
 
 
+def _operation_key(text: str) -> str:
+    """操作の文の比べる形（NFKC・大小・記号と空白を除く）。"""
+    folded = unicodedata.normalize("NFKC", text).casefold()
+    return "".join(char for char in folded if unicodedata.category(char)[0] in {"L", "N"})
+
+
+def merged_branch_issues(output: GuideDraftOutput) -> list[SupportGuideIssue]:
+    """同じ条件の別の値が、別の操作なのに同じ手順へ進む分岐（#2666）。
+
+    回答の過程が値ごとに別の操作を案内するのに、下書きがその値の分岐を同じ手順にまとめると、値を
+    選んでもその操作の手順と資料の絞り込みに分けられない。値ごとの操作（``operation``）が違う分岐が
+    同じ手順へ進むときを誤りにする。値に関わらず同じ操作を案内する合流（操作が同じ・書いていない）と、
+    条件が分からないときの分岐は対象にしない。
+    """
+    titles = {step.id: step.title for step in output.steps}
+    labels = {condition.id: condition.label for condition in output.conditions}
+    groups: dict[tuple[str, str], list[tuple[int, DraftBranch]]] = {}
+    for index, branch in enumerate(output.branches[:50]):
+        if branch.values and _operation_key(branch.operation):
+            groups.setdefault((branch.condition_id, branch.goto_step), []).append((index, branch))
+    issues: list[SupportGuideIssue] = []
+    for (condition_id, goto_step), members in groups.items():
+        operations = {_operation_key(branch.operation): branch for _, branch in members}
+        if len(operations) < 2:
+            continue
+        values = "」「".join("／".join(branch.values) for branch in operations.values())
+        issues.append(
+            SupportGuideIssue(
+                severity="error",
+                code="branch_operations_merged",
+                path=f"branches[{members[0][0]}]",
+                message=(
+                    f"確認事項「{labels.get(condition_id, condition_id)}」の値「{values}」は"
+                    "回答の過程で別の操作ですが、同じ手順"
+                    f"「{titles.get(goto_step, goto_step)}」に進みます。"
+                    "値ごとに手順と資料を分けて、もう一度下書きを作ってください。"
+                ),
+            )
+        )
+    return issues
+
+
 def build_item(
     row: SupportGuideProcessRow,
     output: GuideDraftOutput,
@@ -665,6 +924,7 @@ def build_item(
 ) -> SupportGuideProcessItem:
     """LLM の応答を業務ガイドの下書きにし、資料の対応と検証の結果を付ける。"""
     references, issues = _references(output, documents)
+    issues.extend(merged_branch_issues(output))
     rules = [
         SupportGuideRuleCandidate(
             title=rule.title[:200] or rule.content[:40],
@@ -768,9 +1028,12 @@ __all__ = [
     "draft_context",
     "draft_guides",
     "failed_item",
+    "list_knowledge_documents",
     "parse_draft_output",
+    "merged_branch_issues",
     "process_headings",
     "read_process_workbook",
+    "readable_as_pages",
     "resolve_document_name",
     "split_process_sections",
 ]

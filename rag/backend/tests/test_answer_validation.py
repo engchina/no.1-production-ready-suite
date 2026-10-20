@@ -47,6 +47,110 @@ def test_validity_rules() -> None:
     assert not is_valid("completed", {"supported": 1}, unreadable=1)
     assert not is_valid("completed", {"data_confirmation": 1}, unreadable=0)
     assert not is_valid("input_too_large", {}, unreadable=0)
+    # 図の見た目だけで決まる主張は根拠の本文では確かめられない（#2678）。
+    assert not is_valid("completed", {"supported": 1, "figure_only": 1}, unreadable=0)
+
+
+async def test_validate_answer_marks_figure_evidence(monkeypatch: MonkeyPatch) -> None:
+    """図の根拠にだけ種類を付けて監査に渡し、figure_only は検証に通さない（#2678）。"""
+    captured: dict[str, Any] = {}
+    oracle = _Oracle()
+    oracle.chunks[("d1", "f1")] = RetrievedChunk(
+        document_id="d1",
+        chunk_id="f1",
+        text="開始 判定 処理A 処理B 終了",
+        score=0.5,
+        file_name="manual.pdf",
+        metadata={"page_start": 2, "page_end": 2, "content_kind": "figure"},
+    )
+    oracle.chunks[("d1", "f2")] = RetrievedChunk(
+        document_id="d1",
+        chunk_id="f2",
+        text="図の中の文字",
+        score=0.5,
+        file_name="manual.pdf",
+        metadata={"page_start": 3, "content_kind": "figure", "figure_text_source": "ocr"},
+    )
+
+    def fake_claims(
+        question: str, answer: str, items: list[dict[str, Any]], settings: Any, **_options: Any
+    ) -> dict[str, Any]:
+        captured["items"] = items
+        return {
+            "status": "completed",
+            "counts": {"supported": 1, "figure_only": 1},
+            "claim_checks": [
+                {"answer_quote": "30 日。", "status": "supported", "source_id": "c1"},
+                {"answer_quote": "右へ進む。", "status": "figure_only", "source_id": "f1"},
+            ],
+        }
+
+    import rag_engine.evaluation.answer_validation as engine_validation
+
+    monkeypatch.setattr(engine_validation, "validate_answer_claims", fake_claims)
+    refs = [EvidenceRef("d1", "c1"), EvidenceRef("d1", "f1"), EvidenceRef("d1", "f2")]
+    result = await validate_answer(
+        "q", "30 日。右へ進む。", refs, get_settings(), oracle=cast(Any, oracle)
+    )
+    assert [item.get("evidence_type") for item in captured["items"]] == [
+        None,
+        "figure_description",
+        "ocr",
+    ]
+    assert result.valid is False
+
+
+def test_mcp_validate_answer_returns_figure_only_claims(
+    auth: Any,  # noqa: F811
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """figure_only は図の chunk_id を、図でない根拠を指した判定は照合の結果を返す（#2678）。"""
+
+    async def fake_validate(
+        question: str, answer: str, refs: list[EvidenceRef], settings: Any, **kwargs: Any
+    ) -> AnswerValidation:
+        return AnswerValidation(
+            status="completed",
+            valid=False,
+            counts={"figure_only": 1, "unsupported": 1},
+            claim_checks=[
+                {
+                    "answer_quote": "右へ進む。",
+                    "status": "figure_only",
+                    "source_id": "f1",
+                    "reason": "図の配置",
+                    "audit_status": "figure_only",
+                    "reference_check": "resolved",
+                },
+                {
+                    "answer_quote": "左は終了。",
+                    "status": "unsupported",
+                    "source_id": "",
+                    "reason": "図の根拠に結び付けられない",
+                    "audit_status": "figure_only",
+                    "reference_check": "not_figure",
+                },
+            ],
+        )
+
+    monkeypatch.setattr(mcp_tools, "validate_answer", fake_validate)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call(
+        "rag_validate_answer",
+        {
+            "query": "q",
+            "answer": "右へ進む。左は終了。",
+            "evidence": [{"document_id": "d1", "chunk_id": "f1"}],
+        },
+        _token(user.user_uuid),
+    )["structuredContent"]
+    figure, unbound = body["claims"]
+    assert (figure["status"], figure["chunk_id"], figure["audit_status"]) == (
+        "figure_only",
+        "f1",
+        "figure_only",
+    )
+    assert (unbound["status"], unbound["reference_check"]) == ("unsupported", "not_figure")
 
 
 class _Oracle:

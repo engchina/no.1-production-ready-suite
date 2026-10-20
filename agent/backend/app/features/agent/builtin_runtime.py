@@ -127,6 +127,7 @@ from app.features.agent.answer_validation import (
     usable_result,
     validation_content,
     validation_data_results,
+    validation_figure_readings,
     with_no_evidence_notice,
     with_unverified_notice,
     without_lookup_notes,
@@ -4166,7 +4167,10 @@ async def _validate_final_answer(
         await _validate_with_connection(run, answer, evidence_tool, items, data_scopes)
         for evidence_tool, items in groups
     ]
-    content, published = combine_validations(answer, validations)
+    # 図の見た目の段落は、この Run（と前のターンの検証）で図の画像がモデルへ届いたかで判定する
+    # （#2678。画像の有無は Run の記録から決める）。
+    figures = validation_figure_readings(run.steps, previous[-max_turns:] if max_turns > 0 else [])
+    content, published = combine_validations(answer, validations, figures)
     return published, save(content)
 
 

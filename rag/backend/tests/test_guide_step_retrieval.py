@@ -165,6 +165,72 @@ def test_with_page_ranges_intersects_user_scope() -> None:
     assert _with_page_ranges({"page_ranges": other}, wanted) is None
 
 
+def test_with_page_ranges_keeps_sheet_rows_apart_from_pages() -> None:
+    """表計算のシートの行の範囲(#2663)は、同じシートの行とだけ重ね、頁の範囲とは重ねない。"""
+    from app.rag.answer_engine import _with_page_ranges
+
+    wanted = [{"document_id": "doc-s", "sheet_name": "シートA", "row_start": 40, "row_end": 50}]
+    plain = _with_page_ranges({}, wanted)
+    assert plain is not None
+    assert json.loads(plain["page_ranges"]) == [
+        {
+            "document_id": "doc-s",
+            "page_start": None,
+            "page_end": None,
+            "sheet_name": "シートA",
+            "row_start": 40,
+            "row_end": 50,
+        }
+    ]
+
+    def scope(*items: dict[str, Any]) -> dict[str, str]:
+        return {"page_ranges": json.dumps(list(items))}
+
+    rows = _with_page_ranges(
+        scope({"document_id": "doc-s", "sheet_name": "シートA", "row_start": 45}), wanted
+    )
+    assert rows is not None
+    assert json.loads(rows["page_ranges"])[0]["row_start"] == 45
+    whole = _with_page_ranges(scope({"document_id": "doc-s"}), wanted)
+    assert whole is not None
+    assert json.loads(whole["page_ranges"])[0]["sheet_name"] == "シートA"
+    other_sheet = scope({"document_id": "doc-s", "sheet_name": "シートB", "row_start": 45})
+    assert _with_page_ranges(other_sheet, wanted) is None
+    pages = scope({"document_id": "doc-s", "page_start": 40, "page_end": 50})
+    assert _with_page_ranges(pages, wanted) is None
+
+
+async def test_guide_step_sheet_reference_searches_sheet_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """表計算の資料を参照する手順は、シートの行に絞って検索する(行を頁として絞らない。#2663)。"""
+    oracle = GuideStepOracle()
+    guide = _guide()
+    guide["step_plan"][1]["references"] = [
+        {
+            "document_id": "doc-c",
+            "title": "表計算 C",
+            "page_ranges": [],
+            "sheet_ranges": [{"sheet_name": "シートA", "row_start": 42, "row_end": 45}],
+        }
+    ]
+
+    await _answer(monkeypatch, oracle, rag_support_guide=guide)
+
+    page_filters = [filters for _, filters in oracle.calls if "page_ranges" in filters]
+    assert page_filters
+    assert json.loads(page_filters[0]["page_ranges"]) == [
+        {
+            "document_id": "doc-c",
+            "page_start": None,
+            "page_end": None,
+            "sheet_name": "シートA",
+            "row_start": 42,
+            "row_end": 45,
+        }
+    ]
+
+
 def test_build_engine_settings_passes_guide_step_settings(tmp_path: Any) -> None:
     """手順ごとの検索の設定と追加の検索の枠を rag_engine の設定へ渡す。"""
     from app.rag.answer_engine import build_engine_settings
@@ -249,7 +315,12 @@ def test_guide_step_plan_excludes_steps_of_branches_that_do_not_apply() -> None:
 
     assert [step["id"] for step in plan] == ["s1", "s2"]
     assert plan[1]["references"] == [
-        {"document_id": "doc-b", "title": "", "page_ranges": [{"page_start": 4, "page_end": 6}]}
+        {
+            "document_id": "doc-b",
+            "title": "",
+            "page_ranges": [{"page_start": 4, "page_end": 6}],
+            "sheet_ranges": [],
+        }
     ]
     applies = match_guide([("g", 1, _content())], "設定 A を変えたい", {"kind": "乙"})
     assert applies is not None
@@ -354,3 +425,29 @@ def test_answer_diagnostics_keep_only_step_ids_statuses_and_call_counts() -> Non
     }
     assert _guide_step_diagnostics({}) == {}
     assert _guide_step_diagnostics(None) == {}
+
+
+def test_mcp_guide_reference_carries_sheet_ranges_apart_from_pages() -> None:
+    """rag_lookup_guides の参照は、表計算の資料のシートの行を頁と別に返す(#2663)。"""
+    from app.mcp.tools import _guide_reference
+    from app.schemas.support_guide import SupportGuideReference
+
+    sheet = _guide_reference(
+        SupportGuideReference.model_validate(
+            {
+                "document_id": "doc-s",
+                "sheet_ranges": [{"sheet_name": "シートA", "cell_range": "B42:D45"}],
+            }
+        )
+    )
+    assert sheet.page_ranges == []
+    assert [(r.sheet_name, r.row_start, r.row_end, r.cell_range) for r in sheet.sheet_ranges] == [
+        ("シートA", 42, 45, "B42:D45")
+    ]
+    pages = _guide_reference(
+        SupportGuideReference.model_validate(
+            {"document_id": "doc-a", "page_ranges": [{"page_start": 3}]}
+        )
+    )
+    assert [(r.page_start, r.page_end) for r in pages.page_ranges] == [(3, 3)]
+    assert pages.sheet_ranges == []

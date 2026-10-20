@@ -4478,6 +4478,15 @@ export interface SupportGuidePageRange {
   page_end: number;
 }
 
+/** 表計算の資料のシートと行の範囲（行が無ければシートの全体。頁とは別の位置。#2663）。 */
+export interface SupportGuideSheetRange {
+  sheet_name: string;
+  row_start?: number | null;
+  row_end?: number | null;
+  /** A1 形式のセルの範囲（例: B3:D10）。 */
+  cell_range?: string;
+}
+
 export interface SupportGuideReference {
   document_id: string;
   title: string;
@@ -4485,6 +4494,8 @@ export interface SupportGuideReference {
   version: string;
   /** 根拠にする頁の範囲（空なら文書の全体。#2395）。 */
   page_ranges: SupportGuidePageRange[];
+  /** 表計算の資料の根拠にするシートの行の範囲（頁の範囲とは同時に書かない。#2663）。 */
+  sheet_ranges?: SupportGuideSheetRange[];
 }
 
 export interface SupportGuideCompletion {
@@ -4713,6 +4724,10 @@ export interface SupportGuideProcessWorkbookSelection {
 export interface SupportGuideProcessReference {
   name: string;
   pages: string;
+  /** 回答の過程に書いた表計算のシート・行・セル（書いたまま。#2663）。 */
+  sheet_name?: string;
+  rows?: string;
+  cells?: string;
   section: string;
   /** この資料を根拠にする手順の id（空なら全手順に共通の資料。#2395）。 */
   step_ids: string[];
