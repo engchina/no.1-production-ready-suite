@@ -1087,18 +1087,35 @@ export function useKnowledgeBaseSearch(
   });
 }
 
-/** 文書を選ぶ一覧（KB の「文書を追加」）で 1 回に取得する件数。続きは「さらに読み込む」で取る（#600）。 */
+/** 文書を選ぶ一覧（`DocumentPicker`）で 1 回に取得する件数。続きは「さらに読み込む」で取る（#600）。 */
 export const DOCUMENT_CANDIDATE_PAGE_SIZE = 100;
 
 /**
  * 文書を選ぶ一覧の候補（文書名のサーバー側検索 + ページング。#600）。数千〜数万件の文書を一度に読まず、
  * `fetchNextPage` で続きを積む。検索語を変えている間は直前の候補を出したままにする。
+ * `knowledgeBaseIds` を渡すと、そのナレッジベースのどれかに所属する文書に絞る（業務ガイドの資料。#2749）。
  */
-export function useDocumentCandidates(params: { q?: string }, options: { enabled?: boolean } = {}) {
+export function useDocumentCandidates(
+  params: { q?: string; knowledgeBaseIds?: readonly string[] },
+  options: { enabled?: boolean } = {},
+) {
+  const knowledgeBaseId = params.knowledgeBaseIds ? [...params.knowledgeBaseIds].sort().join(",") : undefined;
   return useInfiniteQuery({
-    queryKey: [...queryKeys.documents({ q: params.q, limit: DOCUMENT_CANDIDATE_PAGE_SIZE }), "candidates"],
+    queryKey: [
+      ...queryKeys.documents({
+        q: params.q,
+        knowledge_base_id: knowledgeBaseId,
+        limit: DOCUMENT_CANDIDATE_PAGE_SIZE,
+      }),
+      "candidates",
+    ],
     queryFn: ({ pageParam }) =>
-      api.listDocuments({ q: params.q, limit: DOCUMENT_CANDIDATE_PAGE_SIZE, offset: pageParam }),
+      api.listDocuments({
+        q: params.q,
+        knowledge_base_id: knowledgeBaseId,
+        limit: DOCUMENT_CANDIDATE_PAGE_SIZE,
+        offset: pageParam,
+      }),
     initialPageParam: 0,
     getNextPageParam: (lastPage) =>
       lastPage.has_next ? lastPage.offset + lastPage.items.length : undefined,

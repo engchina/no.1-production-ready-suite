@@ -8,6 +8,7 @@
  */
 
 import type {
+  DocumentSummary,
   SupportGuideAnswerSummary,
   SupportGuideBranchOperator,
   SupportGuideChange,
@@ -40,6 +41,8 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 /** 1 つの資料の頁の範囲・1 つの手順の参照の上限（backend の MAX_REFERENCE_PAGE_RANGES / MAX_STEP_REFERENCES）。 */
 export const MAX_PAGE_RANGES = 10;
 export const MAX_STEP_REFERENCES = 10;
+/** 全手順に共通の資料の上限（backend の SupportGuideContent.references の max_length）。 */
+export const MAX_GUIDE_REFERENCES = 30;
 const MAX_PAGE = 100_000;
 /** 表計算の行の番号の上限（backend の MAX_SHEET_ROW。Excel のシートの行の数）。 */
 const MAX_SHEET_ROW = 1_048_576;
@@ -472,11 +475,12 @@ export function newBranchRow(form: GuideForm): BranchForm {
   };
 }
 
-export function newReferenceRow(): ReferenceForm {
+/** 選んだ文書から資料の行を作る（文書 ID と表示名は文書から入れる。#2749）。 */
+export function referenceRowFromDocument(document: Pick<DocumentSummary, "id" | "file_name">): ReferenceForm {
   return {
     key: newRowKey("reference"),
-    documentId: "",
-    title: "",
+    documentId: document.id,
+    title: document.file_name,
     sectionPath: "",
     version: "",
     pageRanges: "",

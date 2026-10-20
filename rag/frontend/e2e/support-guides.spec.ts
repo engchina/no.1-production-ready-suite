@@ -1,4 +1,4 @@
-import { expect, type Page, type Route, test } from "./fixtures/test";
+import { expect, type Locator, type Page, type Route, test } from "./fixtures/test";
 import { findClippedPlaceholders } from "../../../platform/packages/ui/e2e/layout-checks";
 import { expectNoPageOverflow, expectSearchablePanelFits, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
@@ -113,6 +113,8 @@ class SupportGuideApi {
   /** 次の下書きの保存を 409 にする（ほかの人が先に保存した）。 */
   conflictNext = false;
   requests: { method: string; path: string; body: unknown }[] = [];
+  /** 資料の選択が文書の一覧に渡したナレッジベース（#2749）。 */
+  documentQueries: (string | null)[] = [];
   /** 継承するシステム設定の窓口と、プロファイルの保存済みの窓口の上書き（#2683）。 */
   inheritedContact = { enabled: true, contact: "窓口 A" };
   contactOverride = "";
@@ -504,6 +506,36 @@ class SupportGuideApi {
   }
 }
 
+/** 資料に選ぶ文書（#2749）。kb-1（プロファイルのナレッジベース）の文書だけを候補に返す。 */
+const referenceDocuments = [
+  { id: "doc-1", file_name: "運用手順書", knowledge_base_ids: ["kb-1"] },
+  { id: "doc-a", file_name: "文書 A.pdf", knowledge_base_ids: ["kb-1"] },
+  { id: "doc-b", file_name: "画面の説明", knowledge_base_ids: ["kb-1"] },
+  { id: "doc-s", file_name: "一覧 A.xlsx", knowledge_base_ids: ["kb-1"] },
+  { id: "doc-x", file_name: "ほかの文書.pdf", knowledge_base_ids: ["kb-2"] },
+].map((document) => ({
+  id: document.id,
+  file_name: document.file_name,
+  status: "INDEXED",
+  category_name: null,
+  uploaded_at: "2026-10-01T00:00:00Z",
+  knowledge_bases: document.knowledge_base_ids.map((id) => ({ id, name: id })),
+}));
+
+/** 資料の選択（ナレッジベースの「文書を追加」と同じ部品）を開き、文書名で選んで足す。 */
+async function pickReferenceDocuments(
+  page: Page,
+  container: Locator,
+  addButton: string,
+  names: string[],
+) {
+  await container.getByRole("button", { name: addButton, exact: true }).click();
+  const listbox = page.getByRole("listbox", { name: "追加する文書の候補" });
+  for (const name of names) await listbox.getByRole("option", { name }).click();
+  await page.getByRole("button", { name: `選択した ${names.length} 件を追加` }).click();
+  await expect(listbox).toHaveCount(0);
+}
+
 async function openSupportGuides(page: Page, guides: Guide[] = [], setup?: (api: SupportGuideApi) => void) {
   const api = new SupportGuideApi();
   api.guides = guides;
@@ -513,6 +545,17 @@ async function openSupportGuides(page: Page, guides: Guide[] = [], setup?: (api:
   await page.route("**/api/knowledge-bases**", (route) =>
     route.fulfill({ json: envelope({ items: [], total: 0, limit: 50, offset: 0, has_next: false }) }),
   );
+  await page.route("**/api/documents?**", (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    api.documentQueries.push(params.get("knowledge_base_id"));
+    const bases = (params.get("knowledge_base_id") ?? "").split(",").filter(Boolean);
+    const items = referenceDocuments.filter(
+      (document) => bases.length === 0 || document.knowledge_bases.some((kb) => bases.includes(kb.id)),
+    );
+    return route.fulfill({
+      json: envelope({ items, total: items.length, limit: 100, offset: 0, has_next: false }),
+    });
+  });
   await page.route("**/api/search-answer-profiles**", (route) => api.handle(route));
   await page.goto("/search-answer-profiles?id=bv-1");
   await page.getByRole("tab", { name: "業務ガイド" }).click();
@@ -598,10 +641,9 @@ test("空の一覧から業務ガイドを作り、保存・検証（問題と�
   await page.getByRole("option", { name: /再設定する/ }).click();
   await page.keyboard.press("Escape");
 
-  await editor.getByRole("button", { name: "資料を足す", exact: true }).click();
+  await pickReferenceDocuments(page, editor, "資料を足す", ["運用手順書"]);
   const reference = editor.getByRole("listitem", { name: "資料 1", exact: true });
-  await reference.getByLabel("文書 ID").fill("doc-1");
-  await reference.getByLabel("表示名").fill("運用手順書");
+  await expect(reference.getByLabel("文書", { exact: true })).toHaveValue("運用手順書");
 
   await editor.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("業務ガイドを下書きとして作りました。")).toBeVisible();
@@ -613,6 +655,7 @@ test("空の一覧から業務ガイドを作り、保存・検証（問題と�
       conditions: [{ id: "cond1", allowed_values: ["社員", "派遣"] }],
       branches: [{ when: { condition_id: "cond1", operator: "equals", values: ["社員"] }, goto_step: "step2" }],
       impact: { steps: ["step2"] },
+      references: [{ document_id: "doc-1", title: "運用手順書" }],
     },
   });
   await expect(editor.getByRole("heading", { name: "編集中: パスワードの再設定" })).toBeVisible();
@@ -648,7 +691,7 @@ test("空の一覧から業務ガイドを作り、保存・検証（問題と�
 });
 
 // #2395: 参照する資料の頁の範囲と、手順ごとの参照（資料と頁）を入れて保存する。頁の形の誤りは欄の直下に出す。
-test("参照する資料の頁と手順ごとの参照を入れて保存できる", { tag: "@responsive" }, async ({ page }) => {
+test("参照する資料の頁と手順ごとの参照を入れて保存できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const api = await openSupportGuides(page);
   await page.getByRole("button", { name: "新しい業務ガイド" }).click();
   const editor = page.getByTestId("support-guide-editor");
@@ -663,15 +706,33 @@ test("参照する資料の頁と手順ごとの参照を入れて保存でき�
   await second.getByLabel("題名").fill("画面 B で反映する");
   const stepReferences = second.getByRole("group", { name: "この手順が参照する資料" });
   await expect(stepReferences).toHaveAccessibleDescription(/この頁に絞って根拠を探し/);
+  // 資料は、ナレッジベースの「文書を追加」と同じ選択で、プロファイルのナレッジベースの文書から選ぶ（#2749）。
   await stepReferences.getByRole("button", { name: "この手順の資料を足す" }).click();
+  const picker = page.getByTestId("support-guide-step-reference-picker-1");
+  const listbox = picker.getByRole("listbox", { name: "追加する文書の候補" });
+  await expect(picker.getByRole("searchbox", { name: "追加する文書を検索" })).toBeFocused();
+  await expect(listbox.getByRole("option", { name: "ほかの文書.pdf" })).toHaveCount(0);
+  expect(api.documentQueries.at(-1)).toBe("kb-1");
+  await expectNoPageOverflow(page);
+  await picker.screenshot({ path: testInfo.outputPath("support-guide-reference-picker.png") });
+  await listbox.getByRole("option", { name: "画面の説明" }).click();
+  await picker.getByRole("button", { name: "選択した 1 件を追加" }).click();
+  await expect(picker).toHaveCount(0);
   const stepReference = stepReferences.getByRole("listitem", { name: "手順 2 の資料 1" });
-  await stepReference.getByLabel("文書 ID").fill("doc-b");
-  await stepReference.getByLabel("表示名").fill("画面の説明");
+  await expect(stepReference.getByLabel("文書", { exact: true })).toHaveValue("画面の説明");
+  await expect(stepReference.getByLabel("文書", { exact: true })).toHaveAccessibleDescription("文書 ID: doc-b");
   await stepReference.getByLabel("根拠の頁").fill("6-4");
+  await stepReference.screenshot({ path: testInfo.outputPath("support-guide-step-reference.png") });
+  // すでに入れた文書は「追加済み」で選べない。
+  await stepReferences.getByRole("button", { name: "この手順の資料を足す" }).click();
+  const added = picker.getByRole("option", { name: "画面の説明" });
+  await expect(added).toHaveAttribute("aria-disabled", "true");
+  await expect(added).toContainText("追加済み");
+  await picker.getByRole("button", { name: "閉じる" }).click();
+  await expect(picker).toHaveCount(0);
 
-  await editor.getByRole("button", { name: "資料を足す", exact: true }).click();
+  await pickReferenceDocuments(page, editor, "資料を足す", ["文書 A.pdf"]);
   const reference = editor.getByRole("listitem", { name: "資料 1", exact: true });
-  await reference.getByLabel("文書 ID").fill("doc-a");
   await reference.getByLabel("根拠の頁").fill("2-3");
 
   // 頁の形の誤り（始まりより前の終わり）は保存の前に止め、欄の直下に出す。
@@ -703,7 +764,7 @@ test("参照する資料の頁と手順ごとの参照を入れて保存でき�
           ],
         },
       ],
-      references: [{ document_id: "doc-a", page_ranges: [{ page_start: 2, page_end: 3 }] }],
+      references: [{ document_id: "doc-a", title: "文書 A.pdf", page_ranges: [{ page_start: 2, page_end: 3 }] }],
     },
   });
   // 読み込み直した下書きでも同じ形で出す。
@@ -727,9 +788,8 @@ test("表計算の資料をシートと行で参照して保存できる", { tag
   const step = editor.getByRole("listitem", { name: "手順 1", exact: true });
   await step.getByLabel("題名").fill("一覧で値を確かめる");
   const stepReferences = step.getByRole("group", { name: "この手順が参照する資料" });
-  await stepReferences.getByRole("button", { name: "この手順の資料を足す" }).click();
+  await pickReferenceDocuments(page, stepReferences, "この手順の資料を足す", ["一覧 A.xlsx"]);
   const stepReference = stepReferences.getByRole("listitem", { name: "手順 1 の資料 1" });
-  await stepReference.getByLabel("文書 ID").fill("doc-s");
   const sheets = stepReference.getByLabel("根拠のシートと行（表計算）");
   await expect(sheets).toHaveAccessibleDescription(/シート名!42-45/);
   await sheets.fill("シートA!42-45\nシートB!B3:D10");
