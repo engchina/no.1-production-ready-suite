@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -427,10 +427,33 @@ class SupportGuideDraftTryRequest(BaseModel):
         return value
 
 
+# 業務ガイドの手順の充足（#2491。rag_engine の guide_step_coverage の状態）。
+SupportGuideStepStatus = Literal["explained", "reference_only", "unused", "no_evidence"]
+SUPPORT_GUIDE_STEP_STATUSES: tuple[str, ...] = get_args(SupportGuideStepStatus)
+
+
+class SupportGuideDraftTryStep(BaseModel):
+    """下書きで試した回答の、業務ガイドの手順ごとの充足（#2686）。"""
+
+    step_id: str
+    title: str
+    status: SupportGuideStepStatus = Field(
+        description=(
+            "explained=手順の根拠を引いた説明を公開した / "
+            "reference_only=根拠を原文のまま示しただけ / "
+            "unused=根拠は回答の材料にあるが説明に引いていない / no_evidence=根拠が材料に無い。"
+        )
+    )
+    required: bool = Field(
+        description="回答の充足で必須の手順か（条件が決まらない分岐の手順は False）。"
+    )
+
+
 class SupportGuideDraftTryData(BaseModel):
     """下書きで試した回答。
 
-    回答の記録には ``guide_preview`` を残し、利用者の履歴・評価に混ぜない。
+    回答の記録には ``guide_preview`` を残し、利用者の履歴・評価に混ぜない。記録は
+    ``GET /api/search/answers/{trace_id}`` で読める（回答の履歴の一覧には出ない）。
     """
 
     trace_id: str
@@ -445,6 +468,9 @@ class SupportGuideDraftTryData(BaseModel):
     answer: str
     citations: list[RetrievedChunk] = Field(default_factory=list)
     clarifications: list[dict[str, Any]] = Field(default_factory=list)
+    # この下書きの業務ガイドの手順ごとの充足（#2686）。ガイドを使わなかった・手順で答えなかった
+    # （確認・引き継ぎ）ときは空。
+    steps: list[SupportGuideDraftTryStep] = Field(default_factory=list)
     elapsed_ms: float
 
 

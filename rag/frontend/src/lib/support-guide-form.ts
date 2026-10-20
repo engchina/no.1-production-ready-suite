@@ -21,6 +21,7 @@ import type {
   SupportGuideIssue,
   SupportGuidePageRange,
   SupportGuideReference,
+  SupportGuideStepStatus,
   SupportGuideSummary,
   SupportGuideTool,
   SupportGuideUnknownHandling,
@@ -773,6 +774,14 @@ export const SUPPORT_GUIDE_DECISION_VARIANT = {
   clarify: "warning",
   handoff: "warning",
 } as const satisfies Record<SupportGuideAnswerSummary["decision"], string>;
+
+/** 業務ガイドの手順の充足（#2686）→ StatusBadge の variant。説明できていない手順は注意・根拠なしは危険。 */
+export const SUPPORT_GUIDE_STEP_STATUS_VARIANT = {
+  explained: "success",
+  reference_only: "warning",
+  unused: "warning",
+  no_evidence: "danger",
+} as const satisfies Record<SupportGuideStepStatus, string>;
 
 /** 試すときに値を選べる条件の選択肢（選択・はい / いいえ）。文字の条件は入力欄にする。 */
 export function tryConditionOptions(condition: SupportGuideCondition): string[] {

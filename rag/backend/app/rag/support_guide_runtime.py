@@ -76,6 +76,17 @@ GUIDE_LOAD_FAILED_KEY = "guide_load_failed"
 # 回答の診断の、業務ガイドの手順ごとの検索の記録の key（回答エンジンが置き、業務ガイドの記録へ
 # 移す。#2395）。
 GUIDE_STEP_RETRIEVAL_KEY = "guide_step_retrieval"
+# 回答の診断の、業務ガイドの手順ごとの充足（手順の id・状態・必須か）と、手順の対応付けの
+# embedding の呼び出しの記録の key（回答エンジンが置き、業務ガイドの記録の step_coverage・
+# step_embedding へ移す。#2686）。
+GUIDE_STEP_COVERAGE_KEY = "guide_step_coverage"
+GUIDE_STEP_EMBEDDING_KEY = "guide_step_embedding"
+# 業務ガイドの記録へ移す回答の診断の key と、移した先の key。
+_GUIDE_STEP_RECORD_KEYS = (
+    (GUIDE_STEP_RETRIEVAL_KEY, "step_retrieval"),
+    (GUIDE_STEP_COVERAGE_KEY, "step_coverage"),
+    (GUIDE_STEP_EMBEDDING_KEY, "step_embedding"),
+)
 _DIMENSION_LABELS: dict[str, str] = {
     "business_domains": "業務",
     "object_types": "対象の種類",
@@ -1080,14 +1091,15 @@ def apply_guide_to_diagnostics(diagnostics: dict[str, Any], guide: Mapping[str, 
         diagnostics[GUIDE_LOAD_FAILED_KEY] = True
         return
     summary = _guide_summary(guide)
-    # 手順ごとの検索の記録（#2395。手順ごとの検索文・根拠の件数・参照の頁の有無）は回答の記録の
-    # 業務ガイドの記録に置く（回答の構造 envelope には出さない）。
-    step_retrieval = diagnostics.pop(GUIDE_STEP_RETRIEVAL_KEY, None)
-    diagnostics["guide"] = (
-        {**summary, "step_retrieval": step_retrieval}
-        if isinstance(step_retrieval, dict)
-        else summary
-    )
+    # 手順ごとの検索の記録（#2395。手順ごとの検索文・根拠の件数・参照の頁の有無）と、手順ごとの
+    # 充足・手順の対応付けの embedding の呼び出し（#2686）は、回答の記録の業務ガイドの記録に置く
+    # （回答の構造 envelope には出さない）。
+    records = {
+        target: value
+        for key, target in _GUIDE_STEP_RECORD_KEYS
+        if isinstance(value := diagnostics.pop(key, None), dict | list)
+    }
+    diagnostics["guide"] = {**summary, **records}
     envelope = diagnostics.get("envelope")
     if isinstance(envelope, dict):
         envelope["guide"] = summary
@@ -1340,6 +1352,8 @@ __all__ = [
     "GUIDE_LOAD_FAILED_KEY",
     "GUIDE_PREVIEW_KEY",
     "GUIDE_PREVIEW_TRACE_PREFIX",
+    "GUIDE_STEP_COVERAGE_KEY",
+    "GUIDE_STEP_EMBEDDING_KEY",
     "GUIDE_STEP_RETRIEVAL_KEY",
     "MATCH_THRESHOLD",
     "SEMANTIC_POINTS",

@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from app.config import Settings
-from app.rag.answer_engine import AnswerEngine
+from app.rag.answer_engine import AnswerEngine, _guide_step_diagnostics
 from app.rag.answer_engine import guide_step_plan as engine_guide_step_plan
 from app.rag.support_guide import reference_issues
 from app.rag.support_guide_runtime import (
@@ -119,6 +119,10 @@ async def test_guide_steps_add_step_b_and_reference_page_evidence(
         step["name"] == "業務ガイドの手順ごとの検索"
         for step in outcome.diagnostics["execution_steps"]
     )
+    # 手順ごとの充足（#2686）は id・状態・必須かだけを回答の診断に写す。
+    coverage = outcome.diagnostics["guide_step_coverage"]
+    assert [step["step_id"] for step in coverage] == ["s1", "s2"]
+    assert all(set(step) == {"step_id", "status", "required"} for step in coverage)
 
 
 async def test_guide_steps_skip_without_answer_decision_or_when_disabled(
@@ -301,3 +305,52 @@ def test_step_retrieval_record_goes_to_guide_diagnostics_not_envelope() -> None:
     assert diagnostics["guide"]["step_retrieval"]["steps"][0]["id"] == "s2"
     assert "step_retrieval" not in diagnostics["envelope"]["guide"]
     assert "guide_step_retrieval" not in diagnostics
+
+
+def test_step_coverage_and_embedding_go_to_guide_diagnostics() -> None:
+    """手順の充足と embedding の呼び出しを業務ガイドの記録に移す（#2686。envelope は除く）。"""
+    diagnostics: dict[str, Any] = {
+        "envelope": {"outcome": "conditional"},
+        "guide_step_coverage": [{"step_id": "s1", "status": "unused", "required": True}],
+        "guide_step_embedding": {"calls": 1, "texts": 4, "elapsed_ms": 30, "failed": False},
+    }
+
+    apply_guide_to_diagnostics(diagnostics, {"guide_id": "g-1", "revision": 2})
+
+    assert diagnostics["guide"]["step_coverage"] == [
+        {"step_id": "s1", "status": "unused", "required": True}
+    ]
+    assert diagnostics["guide"]["step_embedding"]["calls"] == 1
+    assert "step_retrieval" not in diagnostics["guide"]
+    assert {"step_coverage", "step_embedding"}.isdisjoint(diagnostics["envelope"]["guide"])
+    assert {"guide_step_coverage", "guide_step_embedding"}.isdisjoint(diagnostics)
+
+
+def test_answer_diagnostics_keep_only_step_ids_statuses_and_call_counts() -> None:
+    """記録には手順の id・状態・必須かと呼び出しの回数・時間だけを写す（#2686）。"""
+    trace = {
+        "guide_step_coverage": [
+            {
+                "step_id": "s1",
+                "title": "手順 1",
+                "required": True,
+                "status": "explained",
+                "evidence_refs": [{"evidence_id": "e1", "text": "根拠の本文"}],
+            },
+            "壊れた値",
+        ],
+        "guide_step_embedding": {
+            "calls": 2,
+            "texts": 9,
+            "elapsed_ms": 120,
+            "failed": True,
+            "extra": "x",
+        },
+    }
+
+    assert _guide_step_diagnostics(trace) == {
+        "guide_step_coverage": [{"step_id": "s1", "status": "explained", "required": True}],
+        "guide_step_embedding": {"calls": 2, "texts": 9, "elapsed_ms": 120, "failed": True},
+    }
+    assert _guide_step_diagnostics({}) == {}
+    assert _guide_step_diagnostics(None) == {}

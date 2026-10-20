@@ -26,6 +26,7 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { useTrySupportGuideDraft } from "@/lib/queries";
 import {
   SUPPORT_GUIDE_DECISION_VARIANT,
+  SUPPORT_GUIDE_STEP_STATUS_VARIANT,
   tryConditionOptions,
   tryConditionsPayload,
 } from "@/lib/support-guide-form";
@@ -210,6 +211,9 @@ export function SupportGuideDraftTry({
 
 function DraftTryResult({ result }: { result: SupportGuideDraftTryData }) {
   const guide = result.guide;
+  const steps = result.steps ?? [];
+  // 説明できていない必須の手順の数（回答の不足として envelope の guide:<手順> にも出る）。
+  const missing = steps.filter((step) => step.required && step.status !== "explained").length;
   const seconds = (result.elapsed_ms / 1000).toFixed(1);
   const title = result.guide_used
     ? t("supportGuides.try.used", { revision: result.draft_revision })
@@ -254,6 +258,38 @@ function DraftTryResult({ result }: { result: SupportGuideDraftTryData }) {
                 {guide.unknown_conditions
                   .map((item) => item.label)
                   .join(t("supportGuides.change.fieldSeparator"))}
+              </dd>
+            </>
+          ) : null}
+          {steps.length > 0 ? (
+            <>
+              <dt className="text-xs font-medium text-fg-muted">{t("supportGuides.try.steps")}</dt>
+              <dd className="min-w-0 space-y-1.5" data-testid="support-guide-try-steps">
+                {missing > 0 ? (
+                  <p className="text-fg" data-testid="support-guide-try-steps-missing">
+                    {t("supportGuides.try.stepsMissing", { count: missing })}
+                  </p>
+                ) : null}
+                {/* 手順ごとの充足（#2686）。状態は色だけでなく文言で示し、375px では折り返す。 */}
+                <ul className="space-y-1.5">
+                  {steps.map((step) => (
+                    <li
+                      key={step.step_id}
+                      className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"
+                      data-testid="support-guide-try-step"
+                      data-status={step.status}
+                    >
+                      <span className="min-w-0 break-words text-fg">{step.title}</span>
+                      <StatusBadge
+                        variant={SUPPORT_GUIDE_STEP_STATUS_VARIANT[step.status]}
+                        label={t(`supportGuides.try.stepStatus.${step.status}` as I18nKey)}
+                      />
+                      {step.required ? null : (
+                        <span className="text-xs text-fg-muted">{t("supportGuides.try.stepOptional")}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               </dd>
             </>
           ) : null}
