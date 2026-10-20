@@ -160,6 +160,16 @@ def test_mcp_validate_answer(auth: Any, monkeypatch: MonkeyPatch) -> None:  # no
                     "audit_status": "not_a_claim",
                     "classification_check": "non_claim_mismatch",
                 },
+                # 監査は supported としたが、根拠が別の対象の記載なので採らなかった段落（#2653）。
+                {
+                    "answer_quote": "画面 B で値を直す。",
+                    "status": "unsupported",
+                    "source_id": "c1",
+                    "reason": "根拠は段落・質問と別の対象についての記載です。",
+                    "audit_status": "supported",
+                    "reference_check": "resolved",
+                    "support_check": "target_mismatch",
+                },
             ],
         )
 
@@ -182,7 +192,11 @@ def test_mcp_validate_answer(auth: Any, monkeypatch: MonkeyPatch) -> None:  # no
         "unsupported",
         "contradicted",
         "unassessed",
+        "unsupported",
     ]
+    # 裏付けを採らなかった理由（#2659）。採った・理由の無い判定は null。
+    assert [claim["support_check"] for claim in body["claims"]] == [None] * 4 + ["target_mismatch"]
+    assert body["claims"][4]["audit_status"] == "supported"
     assert body["claims"][0]["chunk_id"] == "c1" and body["claims"][1]["chunk_id"] is None
     assert body["claims"][0]["classification_check"] is None
     assert body["claims"][3]["classification_check"] == "non_claim_mismatch"
