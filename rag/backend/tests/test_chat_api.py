@@ -459,7 +459,7 @@ def test_chat_endpoints_return_404_when_disabled(
 
 
 def test_resolve_compare_models_caps_and_defaults(monkeypatch: MonkeyPatch) -> None:
-    """テキストと Vision の既定モデルだけを受け付け、上限を超えない。未指定なら既定 1 系統。"""
+    """登録済みモデルの明示指定を受け付け、上限を超えない。未指定なら有効な既定 1 系統。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_chat_max_compare_models", 1)
     _stub_answer_models(monkeypatch, ["m1", "m2", "m3"], text="m1", vision=["m2"])
@@ -467,10 +467,10 @@ def test_resolve_compare_models_caps_and_defaults(monkeypatch: MonkeyPatch) -> N
     from app.schemas.chat import ChatMessageRequest
 
     selected = chat_route._resolve_compare_models(
-        ChatMessageRequest(content="質問", model_ids=["m3", "m2", "m1"]), settings
+        ChatMessageRequest(content="質問", model_ids=["not-registered", "m3", "m2", "m1"]), settings
     )
-    # m3 は候補外なので無視し、上限 1 で先頭の m2 だけ。
-    assert [c["model_id"] for c in selected] == ["m2"]
+    # 未登録を無視し、全体の既定以外の登録モデルも受け付け、上限 1 に抑える。
+    assert [c["model_id"] for c in selected] == ["m3"]
 
     default_only = chat_route._resolve_compare_models(ChatMessageRequest(content="質問"), settings)
     assert [c["model_id"] for c in default_only] == ["m1"]

@@ -1224,6 +1224,7 @@ export interface SearchAnswerProfileRef {
 /** Search Answer Profile の設定一式。query は検索・回答設定。 */
 export interface SearchAnswerProfileConfig {
   version: number;
+  answer_model_id?: string | null;
   knowledge_base_ids: string[];
   query: KnowledgeBaseQueryConfig;
   /**
@@ -3931,6 +3932,7 @@ export const api = {
     ),
   listCompareModels: () => request<CompareModel[]>("/api/chat/models"),
   listSearchAnswerModels: () => request<CompareModel[]>("/api/search/models"),
+  listProfileAnswerModels: () => request<CompareModel[]>("/api/search-answer-profiles/answer-models"),
 
   // 検索
   // 検索・回答プロファイル / KB の範囲外の 403（RAG_SCOPE_FORBIDDEN）は理由をその場で見せる（#214 / #224）。

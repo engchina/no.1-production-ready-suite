@@ -206,10 +206,27 @@ def answer_model_choices(settings: Settings) -> list[dict[str, str]]:
     return choices
 
 
+def registered_answer_model_choices(settings: Settings) -> list[dict[str, str]]:
+    """回答設定に保存できる登録モデルの、接続情報を含まない候補。"""
+    choices = answer_model_choices(settings)
+    selected_ids = {choice["model_id"] for choice in choices}
+    choices.extend(
+        {
+            "model_id": model.model_id,
+            "display_name": model.display_name or model.model_id,
+            "kind": "text_vision" if model.vision_enabled else "text",
+        }
+        for model in enterprise_ai_model_catalog(settings)
+        if model.model_id and model.model_id not in selected_ids
+    )
+    return choices
+
+
 def _answer_model_id(request: SearchRequest, settings: Settings) -> str | None:
     """RAG 検索で選んだ回答のモデル。候補外・未指定は None(既定のテキストモデル)。"""
     if request.model_id and any(
-        choice["model_id"] == request.model_id for choice in answer_model_choices(settings)
+        choice["model_id"] == request.model_id
+        for choice in registered_answer_model_choices(settings)
     ):
         return request.model_id
     return None
@@ -315,7 +332,14 @@ async def _resolve_query_context(
         effective_request = _scope_request_knowledge_bases(
             effective_request, from_search_answer_profile=not request.knowledge_base_ids
         )
-        settings, applied = resolve_search_answer_profile_settings(settings, view.config)
+        profile_config = view.config
+        if request.generate_answer and (
+            explicit_model := _answer_model_id(request, global_settings)
+        ):
+            profile_config = profile_config.model_copy(update={"answer_model_id": explicit_model})
+        settings, applied = resolve_search_answer_profile_settings(
+            settings, profile_config, apply_answer_model=request.generate_answer
+        )
         # 回答の記録に残す検索・回答プロファイルの版（#1276）。
         settings = settings.model_copy(
             update={"rag_search_answer_profile_revision": search_answer_profile_revision(view)}

@@ -31,7 +31,7 @@ from pr_system_settings.answer_notice import (
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from rag_parser_core.language import FIELD_SPECS, LanguagePackError, builtin_pack, resolve
 
-from app.config import Settings
+from app.config import Settings, enterprise_ai_model_catalog
 from app.rag.kb_adapter_config import (
     KnowledgeBaseQueryConfig,
     compose_query_settings,
@@ -45,12 +45,27 @@ MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES = 200
 CONTACT_OVERRIDE_MAX_CHARS = ANSWER_NOTICE_CONTACT_MAX_CHARS
 
 
+class ProfileAnswerModelUnavailableError(ValueError):
+    """回答設定が指すモデルが現在の登録にない。"""
+
+
 class SearchAnswerProfileConfig(BaseModel):
     """検索・回答プロファイルの設定一式(参照 KB + query 上書き)。"""
 
     model_config = ConfigDict(extra="ignore")
 
     version: int = SEARCH_ANSWER_PROFILE_CONFIG_VERSION
+    answer_model_id: str | None = Field(
+        default=None,
+        max_length=256,
+        description="回答に使う登録済みモデル。null は全体の既定を継承する。",
+    )
+
+    @field_validator("answer_model_id")
+    @classmethod
+    def _normalize_answer_model(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
     knowledge_base_ids: list[str] = Field(
         default_factory=list,
         max_length=MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES,
@@ -129,17 +144,36 @@ def dump_search_answer_profile_config(config: SearchAnswerProfileConfig) -> dict
     return config.model_dump(mode="json")
 
 
+def validate_profile_answer_model(settings: Settings, config: SearchAnswerProfileConfig) -> None:
+    """登録済みのモデルだけを参照し、登録削除後の別モデルへの切り替えを防ぐ。"""
+    if config.answer_model_id and not any(
+        model.model_id == config.answer_model_id for model in enterprise_ai_model_catalog(settings)
+    ):
+        raise ProfileAnswerModelUnavailableError(
+            "回答設定で選んだモデルが登録されていません。検索・回答プロファイルの回答モデルを選び直すか、全体の既定を継承してください。"
+        )
+
+
 def resolve_search_answer_profile_settings(
     global_settings: Settings,
     config: SearchAnswerProfileConfig,
+    *,
+    apply_answer_model: bool = True,
 ) -> tuple[Settings, bool]:
     """グローバルへ検索・回答プロファイルの query 上書きを重ねた Settings。
 
     KB はナレッジ構築設定だけを持つため、KB に残る query legacy 値はここでは扱わない。
     戻り値 2 番目は上書きが実際に効いたかどうか。
     """
+    if apply_answer_model:
+        validate_profile_answer_model(global_settings, config)
     overlays: list[KnowledgeBaseQueryConfig] = [config.query]
     settings, applied = compose_query_settings(global_settings, overlays)
+    if apply_answer_model and config.answer_model_id:
+        settings = settings.model_copy(
+            update={"oci_enterprise_ai_default_text_model": config.answer_model_id}
+        )
+        applied = True
     if config.language_pack:
         settings = settings.model_copy(update={"rag_language_pack_overrides": config.language_pack})
         applied = True

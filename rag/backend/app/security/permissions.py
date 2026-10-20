@@ -413,6 +413,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/search-answer-profiles/entity-index-coverage"): _any(MENU_SEARCH_ANSWER_PROFILES),
     # プロファイルとガイドが継承するシステム設定の窓口（読み取りだけ。#2683）。
     ("GET", "/search-answer-profiles/inherited-contact"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("GET", "/search-answer-profiles/answer-models"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("GET", _BV): _SEARCH_ANSWER_PROFILE_READ,
     ("PATCH", _BV): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/archive"): _any(SEARCH_ANSWER_PROFILES_MANAGE),

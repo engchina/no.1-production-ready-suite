@@ -89,6 +89,7 @@ import {
   useArchiveSearchAnswerProfile,
   useSearchAnswerProfile,
   useSearchAnswerProfiles,
+  useProfileAnswerModels,
   useListTotal,
   useCreateSearchAnswerProfile,
   useUpdateSearchAnswerProfile,
@@ -694,6 +695,8 @@ function SearchAnswerProfileEditor({
   onArchived: () => void;
 }) {
   const mode: "create" | "edit" = initial ? "edit" : "create";
+  const answerModels = useProfileAnswerModels();
+  const registeredModels = Array.isArray(answerModels.data) ? answerModels.data : [];
   const create = useCreateSearchAnswerProfile();
   const update = useUpdateSearchAnswerProfile();
   const actionsFor = useSearchAnswerProfileActions(onArchived);
@@ -1095,6 +1098,22 @@ function SearchAnswerProfileEditor({
                       />
                     </div>
                   </div>
+                  <QuerySelectRow
+                    id="search-answer-profile-answer-model"
+                    width="md"
+                    label={t("searchAnswerProfiles.field.answerModel")}
+                    helper={answerModels.isError ? t("searchAnswerProfiles.field.answerModelLoadFailed") : t("searchAnswerProfiles.field.answerModelHelper")}
+                    value={config.answer_model_id ?? null}
+                    options={[
+                      ...registeredModels.map((model) => ({ value: model.model_id, label: model.display_name })),
+                      ...(config.answer_model_id && !registeredModels.some((model) => model.model_id === config.answer_model_id)
+                        ? [{ value: config.answer_model_id, label: t("searchAnswerProfiles.field.unavailableModel", { model: config.answer_model_id }) }]
+                        : []),
+                    ]}
+                    defaultOnOverride={registeredModels[0]?.model_id ?? ""}
+                    disabled={locked || (!config.answer_model_id && !registeredModels.length)}
+                    onChange={(value) => setConfig((current) => ({ ...current, answer_model_id: value || null }))}
+                  />
                   <QuerySelectRow
                     id="search-answer-profile-guide-step-max-queries"
                     label={t("searchAnswerProfiles.field.guideStepMaxQueries")}

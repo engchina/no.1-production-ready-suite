@@ -217,6 +217,14 @@ def create_app() -> FastAPI:
             request_id=_response_request_id(request),
         )
 
+    from app.rag.search_answer_profile_config import ProfileAnswerModelUnavailableError
+
+    @app.exception_handler(ProfileAnswerModelUnavailableError)
+    async def profile_answer_model_handler(
+        request: Request, exc: ProfileAnswerModelUnavailableError
+    ) -> JSONResponse:
+        return api_error_response(422, [str(exc)], request_id=_response_request_id(request))
+
     @app.exception_handler(DocumentFileMissingError)
     async def document_file_missing_handler(
         request: Request, exc: DocumentFileMissingError

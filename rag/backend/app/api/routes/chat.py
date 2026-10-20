@@ -45,6 +45,7 @@ from app.api.routes.search import (
     answer_model_choices,
     ensure_search_answer_profile_has_knowledge_bases,
     ensure_search_answer_profile_knowledge_bases_permitted,
+    registered_answer_model_choices,
 )
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oracle import OracleClient, StoredConversation, StoredMessage
@@ -527,7 +528,8 @@ def _resolve_compare_models(
 ) -> list[dict[str, str]]:
     """比較対象の OCI モデル(model_id + label)を解決する。上限は設定値で抑える。"""
     catalog = {
-        choice["model_id"]: choice["display_name"] for choice in answer_model_choices(settings)
+        choice["model_id"]: choice["display_name"]
+        for choice in registered_answer_model_choices(settings)
     }
     default_model = enterprise_ai_default_model_id(settings)
     if request.model_ids:
@@ -688,6 +690,7 @@ async def _prepare_chat_turn(
         )
     base_request = SearchRequest(
         query=request.content,
+        model_id=request.model_ids[0] if request.model_ids else None,
         top_k=request.top_k,
         search_answer_profile_id=search_answer_profile_id,
         filters=filters,

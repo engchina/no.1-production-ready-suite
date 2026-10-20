@@ -12,6 +12,7 @@ from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginat
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.db_degradation import load_or_degrade
+from app.rag.search_answer_profile_config import validate_profile_answer_model
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search_answer_profile import (
     EntityIndexCoverageData,
@@ -63,6 +64,7 @@ async def create_search_answer_profile(
     request: SearchAnswerProfileCreateRequest,
 ) -> ApiResponse[SearchAnswerProfileDetail]:
     """検索・回答プロファイルを作成する。"""
+    validate_profile_answer_model(get_settings(), request.config)
     oracle = OracleClient()
     created = await oracle.create_search_answer_profile(
         name=request.name,
@@ -72,6 +74,14 @@ async def create_search_answer_profile(
     # 参照 KB 名を解決した詳細を返す。
     detail = await oracle.get_search_answer_profile(created.id)
     return ApiResponse(data=detail or created)
+
+
+@router.get("/answer-models", response_model=ApiResponse[list[dict[str, str]]])
+async def profile_answer_models() -> ApiResponse[list[dict[str, str]]]:
+    """回答設定の権限で読める、接続情報を含まない登録済みモデルの候補。"""
+    from app.api.routes.search import registered_answer_model_choices
+
+    return ApiResponse(data=registered_answer_model_choices(get_settings()))
 
 
 @router.post("/entity-index-coverage", response_model=ApiResponse[EntityIndexCoverageData])
@@ -122,6 +132,8 @@ async def update_search_answer_profile(
     request: SearchAnswerProfileUpdateRequest,
 ) -> ApiResponse[SearchAnswerProfileDetail]:
     """検索・回答プロファイルを更新する。"""
+    if request.config is not None:
+        validate_profile_answer_model(get_settings(), request.config)
     update_fields = set(request.model_fields_set)
     oracle = OracleClient()
     try:

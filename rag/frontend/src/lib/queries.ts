@@ -1806,6 +1806,13 @@ export function useCompareModels(enabled = true) {
 }
 
 /** RAG 検索の回答に選べるモデル（既定のテキストモデルと Vision モデル。#675）。cache は `useCompareModels` と同じ（#1416）。 */
+export function useProfileAnswerModels() {
+  return useQuery({
+    queryKey: ["search-answer-profiles", "answer-models"],
+    queryFn: () => api.listProfileAnswerModels(),
+  });
+}
+
 export function useSearchAnswerModels(enabled = true) {
   return useQuery({
     queryKey: queryKeys.searchAnswerModels,
