@@ -387,6 +387,25 @@ class DocumentSectionsConflictError(ValueError):
     """文書の章節を、読み込んだ後にほかの人が保存していた(#713)。"""
 
 
+class DocumentReviewEditConflictError(ValueError):
+    """抽出確認の修正を保存できない状態だった(#2616)。
+
+    レシピが確認待ちでない・処理中・抽出結果が無い、または読み込んだ後にほかの保存が同じ要素・
+    表セルを変えていた。文言は利用者に見せてよい日本語。
+    """
+
+
+@dataclass(frozen=True)
+class ReviewedExtractionWrite:
+    """抽出確認の修正を当てた抽出成果の書き込み内容(#2616)。"""
+
+    extraction_recipe_id: str
+    source_sha256: str
+    extraction: Mapping[str, object]
+    recipe_subset: Mapping[str, object] | None
+    status: str
+
+
 class KnowledgeBaseNameConflictError(ValueError):
     """同じ tenant に同じ名前（大文字小文字を区別しない）のナレッジベースがある。
 
@@ -2705,44 +2724,9 @@ class OracleClient:
             "metrics_json": _json_bind(metrics),
         }
 
-        extraction_update = (
-            "                    t.extraction_json = :extraction_json,\n"
-            if extraction is not None
-            else ""
-        )
-
         def operation(connection: OracleConnectionProtocol) -> None:
-            _execute(
-                connection,
-                f"""
-                MERGE INTO rag_document_extractions t
-                USING (
-                    SELECT :document_id AS document_id,
-                           :extraction_recipe_id AS extraction_recipe_id
-                    FROM dual
-                ) s
-                ON (t.document_id = s.document_id
-                    AND t.extraction_recipe_id = s.extraction_recipe_id)
-                WHEN MATCHED THEN UPDATE SET
-                    t.source_sha256 = :source_sha256,
-                    t.recipe_subset = :recipe_subset,
-{extraction_update}                    t.status = :status,
-                    t.reason = :reason,
-                    t.metrics_json = :metrics_json,
-                    t.updated_at = SYSTIMESTAMP
-                WHEN NOT MATCHED THEN INSERT
-                    (document_id, extraction_recipe_id, source_sha256, tenant_id_hash,
-                     recipe_subset, extraction_json, status, reason, metrics_json)
-                    VALUES
-                    (:document_id, :extraction_recipe_id, :source_sha256, :tenant_id_hash,
-                     :recipe_subset, :extraction_json, :status, :reason, :metrics_json)
-                """,
-                binds,
-                input_sizes=_json_input_sizes(
-                    "recipe_subset",
-                    "extraction_json",
-                    "metrics_json",
-                ),
+            _merge_document_extraction_artifact(
+                connection, binds, update_extraction=extraction is not None
             )
 
         await self._run_transaction(operation)
@@ -2771,6 +2755,105 @@ class OracleClient:
         normalized["extraction_json"] = _json_loads(normalized.get("extraction_json"))
         normalized["metrics_json"] = _json_loads(normalized.get("metrics_json"))
         return normalized
+
+    async def save_document_recipe_review_extraction(
+        self,
+        *,
+        document_id: str,
+        recipe_id: str,
+        build: Callable[[Mapping[str, object], Mapping[str, object]], ReviewedExtractionWrite],
+    ) -> str:
+        """抽出確認の修正を、レシピの行ロックの下で最新の抽出成果へ当てて保存する(#2616)。
+
+        レシピの行を ``FOR UPDATE`` で押さえてから、レシピの状態と今の抽出成果を読み、
+        ``build(レシピの行, 抽出成果の行)`` が作った成果を書き、レシピの成果の参照を切り替える。
+        同じレシピの保存・承認・job の投入はこの行ロックで直列になるため、読んだ後に別の保存が
+        入って先の修正を上書きすることはない(修正は要素・表セルの差分として最新の成果へ当てる)。
+        確認待ちでない・処理中・抽出結果が無いときは ``DocumentReviewEditConflictError``。
+        ``build`` の例外は transaction を rollback してそのまま返す。書いた成果の ID を返す。
+        """
+        tenant = current_audit_request_context().tenant_id_hash
+
+        def operation(connection: OracleConnectionProtocol) -> str:
+            _ensure_recipe_row_if_default(connection, document_id, recipe_id)
+            locked = _select_document_recipe_for_update(connection, document_id, recipe_id)
+            if locked is None:
+                raise KeyError("レシピが見つかりません。")
+            recipe = _document_recipe_row(locked)
+            if recipe["status"] != FileStatus.REVIEW.value:
+                raise DocumentReviewEditConflictError("確認待ちのレシピのみ修正できます。")
+            active_job = _fetch_one(
+                connection,
+                """
+                SELECT job_id FROM rag_ingestion_jobs
+                WHERE recipe_id = :recipe_id
+                  AND document_id = :document_id
+                  AND status IN ('QUEUED', 'RUNNING')
+                FETCH FIRST 1 ROWS ONLY
+                """,
+                {"recipe_id": recipe_id, "document_id": document_id},
+            )
+            if active_job is not None:
+                raise DocumentReviewEditConflictError("このレシピは処理中または待機中です。")
+            source_extraction_recipe_id = recipe["active_extraction_recipe_id"]
+            if source_extraction_recipe_id is None:
+                raise DocumentReviewEditConflictError("修正対象の抽出結果がありません。")
+            artifact_row = _fetch_one(
+                connection,
+                """
+                SELECT document_id, extraction_recipe_id, source_sha256, status, reason,
+                       recipe_subset, extraction_json, metrics_json
+                FROM rag_document_extractions
+                WHERE document_id = :document_id
+                  AND extraction_recipe_id = :extraction_recipe_id
+                """,
+                {
+                    "document_id": document_id,
+                    "extraction_recipe_id": source_extraction_recipe_id,
+                },
+            )
+            artifact = (
+                {str(key).lower(): value for key, value in artifact_row.items()}
+                if artifact_row is not None
+                else {}
+            )
+            artifact["recipe_subset"] = _json_loads(artifact.get("recipe_subset"))
+            artifact["extraction_json"] = _json_loads(artifact.get("extraction_json"))
+            artifact["metrics_json"] = _json_loads(artifact.get("metrics_json"))
+            if artifact_row is None or not artifact["extraction_json"]:
+                raise DocumentReviewEditConflictError("修正対象の抽出結果がありません。")
+            write = build(recipe, artifact)
+            _merge_document_extraction_artifact(
+                connection,
+                {
+                    "document_id": document_id,
+                    "extraction_recipe_id": write.extraction_recipe_id,
+                    "source_sha256": write.source_sha256,
+                    "tenant_id_hash": tenant,
+                    "recipe_subset": _json_bind(write.recipe_subset),
+                    "extraction_json": _json_bind(write.extraction),
+                    "status": write.status,
+                    "reason": None,
+                    "metrics_json": _json_bind(None),
+                },
+                update_extraction=True,
+            )
+            _execute(
+                connection,
+                """
+                UPDATE rag_document_recipes
+                SET active_extraction_recipe_id = :extraction_recipe_id,
+                    failed_phase = NULL,
+                    error_message = NULL,
+                    finished_at = NULL,
+                    updated_at = SYSTIMESTAMP
+                WHERE recipe_id = :recipe_id
+                """,
+                {"recipe_id": recipe_id, "extraction_recipe_id": write.extraction_recipe_id},
+            )
+            return write.extraction_recipe_id
+
+        return await self._run_transaction(operation)
 
     async def upsert_artifact_layer(
         self,
@@ -11340,6 +11423,50 @@ def _select_document_for_update(
             access_predicate=_oracle_access_predicate_sql(),
         ),
         _with_tenant_bind({"document_id": document_id}),
+    )
+
+
+def _merge_document_extraction_artifact(
+    connection: OracleConnectionProtocol,
+    binds: Mapping[str, object],
+    *,
+    update_extraction: bool,
+) -> None:
+    """抽出 artifact を document_id + extraction_recipe_id で作るか更新する。"""
+    extraction_update = (
+        "            t.extraction_json = :extraction_json,\n" if update_extraction else ""
+    )
+    _execute(
+        connection,
+        f"""
+        MERGE INTO rag_document_extractions t
+        USING (
+            SELECT :document_id AS document_id,
+                   :extraction_recipe_id AS extraction_recipe_id
+            FROM dual
+        ) s
+        ON (t.document_id = s.document_id
+            AND t.extraction_recipe_id = s.extraction_recipe_id)
+        WHEN MATCHED THEN UPDATE SET
+            t.source_sha256 = :source_sha256,
+            t.recipe_subset = :recipe_subset,
+{extraction_update}            t.status = :status,
+            t.reason = :reason,
+            t.metrics_json = :metrics_json,
+            t.updated_at = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT
+            (document_id, extraction_recipe_id, source_sha256, tenant_id_hash,
+             recipe_subset, extraction_json, status, reason, metrics_json)
+            VALUES
+            (:document_id, :extraction_recipe_id, :source_sha256, :tenant_id_hash,
+             :recipe_subset, :extraction_json, :status, :reason, :metrics_json)
+        """,
+        dict(binds),
+        input_sizes=_json_input_sizes(
+            "recipe_subset",
+            "extraction_json",
+            "metrics_json",
+        ),
     )
 
 

@@ -79,7 +79,11 @@ def test_apply_table_cell_edits_replaces_only_targeted_cell_text() -> None:
     extraction = _extraction_with_table()
     updated = _apply_table_cell_edits(
         extraction,
-        [DocumentTableCellTextEdit(table_id="tbl-1", row=1, col=1, text="2000円")],
+        [
+            DocumentTableCellTextEdit(
+                table_id="tbl-1", row=1, col=1, text="2000円", base_text="1000円"
+            )
+        ],
     )
 
     cells = {(c.row, c.col): c for c in updated.tables[0].cells}
@@ -96,7 +100,7 @@ def test_apply_table_cell_edits_rejects_unknown_cell() -> None:
     with pytest.raises(HTTPException) as exc_info:
         _apply_table_cell_edits(
             extraction,
-            [DocumentTableCellTextEdit(table_id="tbl-1", row=9, col=9, text="x")],
+            [DocumentTableCellTextEdit(table_id="tbl-1", row=9, col=9, text="x", base_text="")],
         )
     assert exc_info.value.status_code == 400
 
@@ -107,7 +111,7 @@ def test_apply_table_cell_edits_rejects_unknown_table() -> None:
     with pytest.raises(HTTPException) as exc_info:
         _apply_table_cell_edits(
             extraction,
-            [DocumentTableCellTextEdit(table_id="missing", row=0, col=0, text="x")],
+            [DocumentTableCellTextEdit(table_id="missing", row=0, col=0, text="x", base_text="")],
         )
     assert exc_info.value.status_code == 400
 
@@ -125,7 +129,11 @@ def test_canonicalize_reviewed_extraction_syncs_structure_and_raw_text() -> None
     ]
     edited = _apply_table_cell_edits(
         extraction.model_copy(update={"elements": elements}),
-        [DocumentTableCellTextEdit(table_id="tbl-1", row=1, col=1, text="2000円")],
+        [
+            DocumentTableCellTextEdit(
+                table_id="tbl-1", row=1, col=1, text="2000円", base_text="1000円"
+            )
+        ],
     )
 
     normalized = _canonicalize_reviewed_extraction(edited)
@@ -153,7 +161,11 @@ def test_saved_review_text_is_used_by_every_chunk_strategy(strategy: str) -> Non
     """保存後の構造化要素を全 Chunk 戦略の入力として利用する。"""
     edited = _apply_table_cell_edits(
         _extraction_with_table(),
-        [DocumentTableCellTextEdit(table_id="tbl-1", row=1, col=1, text="2000円")],
+        [
+            DocumentTableCellTextEdit(
+                table_id="tbl-1", row=1, col=1, text="2000円", base_text="1000円"
+            )
+        ],
     )
     normalized = _canonicalize_reviewed_extraction(edited)
 

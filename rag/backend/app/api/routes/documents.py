@@ -37,9 +37,11 @@ from app.clients.object_storage import ObjectStorageClient, describe_upload_stor
 from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
 from app.clients.oracle import (
     DocumentDeleteBlockedByRunningIngestionError,
+    DocumentReviewEditConflictError,
     DocumentSectionsConflictError,
     DocumentSupersessionError,
     OracleClient,
+    ReviewedExtractionWrite,
     is_transient_oracle_error,
     oracle_error_log_fields,
 )
@@ -2717,77 +2719,91 @@ async def _apply_recipe_review_text_edits(
     recipe_id: str,
     edits: DocumentReviewEditsRequest | DocumentApproveRequest,
 ) -> None:
-    """選択レシピの extraction artifact だけを構造保持で修正する。"""
+    """選択レシピの extraction artifact だけを構造保持で修正する。
+
+    修正は要素・表セルの差分として、レシピの行ロックの下で読んだ最新の抽出成果へ当てる
+    (#2616)。別の要素・表セルへの並行の修正は両方残し、読み込んだ後に同じ要素・表セルが
+    ほかの保存で変わっていたら 409 にする(``base_text`` で照合する)。初回の保存は共有の
+    抽出成果を書き換えず、レシピ固有の ID へ copy-on-write する。
+    """
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
-    row = await oracle.get_document_recipe(document_id, recipe_id)
-    if detail is None or row is None:
+    if detail is None:
         raise HTTPException(status_code=404, detail="レシピが見つかりません。")
-    if FileStatus(str(row.get("status"))) != FileStatus.REVIEW:
-        raise HTTPException(status_code=409, detail="確認待ちのレシピのみ修正できます。")
-    extraction_recipe_id = row.get("active_extraction_recipe_id")
-    if extraction_recipe_id is None:
-        raise HTTPException(status_code=409, detail="修正対象の抽出結果がありません。")
-    artifact = await oracle.get_document_extraction_artifact(
-        document_id=document_id,
-        extraction_recipe_id=str(extraction_recipe_id),
-    )
-    if artifact is None or not artifact.get("extraction_json"):
-        raise HTTPException(status_code=409, detail="修正対象の抽出結果がありません。")
-    extraction = _reviewed_extraction_with_edits(
-        StructuredExtraction.model_validate(artifact["extraction_json"]),
-        edits,
-    )
-    raw_recipe_subset = artifact.get("recipe_subset")
-    recipe_subset = (
-        {str(key): value for key, value in raw_recipe_subset.items()}
-        if isinstance(raw_recipe_subset, Mapping)
-        else None
-    )
     if not detail.content_sha256:
         raise HTTPException(status_code=409, detail="文書のソースハッシュが未確定です。")
-    config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-    recipe_settings, _ = _merge_document_processing_config(config)
-    if recipe_subset and isinstance(recipe_subset.get("rag_preprocess_profile"), str):
-        recipe_settings = recipe_settings.model_copy(
-            update={"rag_preprocess_profile": recipe_subset["rag_preprocess_profile"]}
+    content_sha256 = detail.content_sha256
+
+    def build(
+        recipe: Mapping[str, object], artifact: Mapping[str, object]
+    ) -> ReviewedExtractionWrite:
+        extraction = _reviewed_extraction_with_edits(
+            StructuredExtraction.model_validate(artifact["extraction_json"]),
+            edits,
         )
-    base_extraction_recipe_id = compute_extraction_recipe_id(detail.content_sha256, recipe_settings)
-    scoped_extraction_recipe_id = compute_document_recipe_extraction_id(
-        base_extraction_recipe_id,
-        recipe_id,
-        int(str(row.get("config_revision") or 1)),
-    )
-    await oracle.upsert_document_extraction_artifact(
-        document_id=document_id,
-        extraction_recipe_id=scoped_extraction_recipe_id,
-        source_sha256=detail.content_sha256,
-        recipe_subset=recipe_subset,
-        extraction=extraction.to_document_payload(),
-        status=str(artifact.get("status") or "materialized"),
-    )
-    await oracle.update_document_recipe_status(
-        recipe_id=recipe_id,
-        status=FileStatus.REVIEW,
-        active_extraction_recipe_id=scoped_extraction_recipe_id,
-    )
+        raw_recipe_subset = artifact.get("recipe_subset")
+        recipe_subset = (
+            {str(key): value for key, value in raw_recipe_subset.items()}
+            if isinstance(raw_recipe_subset, Mapping)
+            else None
+        )
+        config = DocumentProcessingConfig.model_validate(recipe.get("processing_config") or {})
+        recipe_settings, _ = _merge_document_processing_config(config)
+        if recipe_subset and isinstance(recipe_subset.get("rag_preprocess_profile"), str):
+            recipe_settings = recipe_settings.model_copy(
+                update={"rag_preprocess_profile": recipe_subset["rag_preprocess_profile"]}
+            )
+        base_extraction_recipe_id = compute_extraction_recipe_id(content_sha256, recipe_settings)
+        return ReviewedExtractionWrite(
+            extraction_recipe_id=compute_document_recipe_extraction_id(
+                base_extraction_recipe_id,
+                recipe_id,
+                int(str(recipe.get("config_revision") or 1)),
+            ),
+            source_sha256=content_sha256,
+            extraction=extraction.to_document_payload(),
+            recipe_subset=recipe_subset,
+            status=str(artifact.get("status") or "materialized"),
+        )
+
+    try:
+        await oracle.save_document_recipe_review_extraction(
+            document_id=document_id,
+            recipe_id=recipe_id,
+            build=build,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。") from exc
+    except DocumentReviewEditConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _reviewed_extraction_with_edits(
     extraction: StructuredExtraction,
     edits: DocumentReviewEditsRequest | DocumentApproveRequest,
 ) -> StructuredExtraction:
-    """構造・bbox を維持し、許可されたテキストだけを差し替える。"""
+    """構造・bbox を維持し、許可されたテキストだけを差し替える。
+
+    読み込んだときの文(``base_text``)と今の文が違い、修正後の文とも違う要素・表セルは、
+    ほかの保存が先に変えていたため ``DocumentReviewEditConflictError`` にする(#2616)。
+    """
     text_by_element_id = {edit.element_id: edit.text for edit in edits.element_edits}
-    unknown_ids = sorted(
-        text_by_element_id.keys()
-        - {element.element_id for element in extraction.elements if element.element_id}
-    )
+    current_text_by_element_id = {
+        element.element_id: element.text for element in extraction.elements if element.element_id
+    }
+    unknown_ids = sorted(text_by_element_id.keys() - current_text_by_element_id.keys())
     if unknown_ids:
         raise HTTPException(
             status_code=400,
             detail="存在しない要素 ID が含まれています。",
         )
+    if any(
+        _review_edit_conflicts(
+            edit.base_text, edit.text, current_text_by_element_id[edit.element_id]
+        )
+        for edit in edits.element_edits
+    ):
+        raise DocumentReviewEditConflictError(_REVIEW_EDIT_CONFLICT_MESSAGE)
     if text_by_element_id:
         updated_elements = [
             (
@@ -2991,24 +3007,47 @@ def _review_heading(element: DocumentElement, text: str) -> tuple[int, str]:
     return min(6, level), re.sub(r"\s+", " ", title).strip().strip("#")[:80]
 
 
+_REVIEW_EDIT_CONFLICT_MESSAGE = (
+    "読み込んだ後に、ほかの操作で同じ箇所が保存されました。"
+    "変更を破棄して読み込み直してから直してください。"
+)
+
+
+def _review_edit_conflicts(base_text: str, text: str, current_text: str) -> bool:
+    """読み込んだ後にほかの保存が同じ箇所を別の文へ変えていたか(前後の空白は比べない)。"""
+    current = current_text.strip()
+    return base_text.strip() != current and text.strip() != current
+
+
 def _apply_table_cell_edits(
     extraction: StructuredExtraction,
     cell_edits: list[DocumentTableCellTextEdit],
 ) -> StructuredExtraction:
     """表セルのテキストのみを差し替える(row/col/span・bbox・構造は保持)。"""
     text_by_cell_key = {(edit.table_id, edit.row, edit.col): edit.text for edit in cell_edits}
-    valid_cell_keys = {
-        (table.table_id, cell.row, cell.col) for table in extraction.tables for cell in table.cells
+    current_text_by_cell_key = {
+        (table.table_id, cell.row, cell.col): cell.text
+        for table in extraction.tables
+        for cell in table.cells
     }
     unknown_cells = sorted(
         f"{table_id}:{row},{col}"
-        for (table_id, row, col) in text_by_cell_key.keys() - valid_cell_keys
+        for (table_id, row, col) in text_by_cell_key.keys() - current_text_by_cell_key.keys()
     )
     if unknown_cells:
         raise HTTPException(
             status_code=400,
             detail="存在しない表セルが含まれています。",
         )
+    if any(
+        _review_edit_conflicts(
+            edit.base_text,
+            edit.text,
+            current_text_by_cell_key[(edit.table_id, edit.row, edit.col)],
+        )
+        for edit in cell_edits
+    ):
+        raise DocumentReviewEditConflictError(_REVIEW_EDIT_CONFLICT_MESSAGE)
     updated_tables = [
         table.model_copy(
             update={

@@ -395,6 +395,8 @@ export interface IngestionQueueWait {
 export interface DocumentElementTextEdit {
   element_id: string;
   text: string;
+  /** 編集を始めたときの文。今の文と違えば、ほかの保存が先に変えていたため 409（#2616）。 */
+  base_text: string;
 }
 
 export interface DocumentTableCellTextEdit {
@@ -402,6 +404,8 @@ export interface DocumentTableCellTextEdit {
   row: number;
   col: number;
   text: string;
+  /** 編集を始めたときの文。今の文と違えば、ほかの保存が先に変えていたため 409（#2616）。 */
+  base_text: string;
 }
 
 export interface DocumentReviewEditsRequest {
