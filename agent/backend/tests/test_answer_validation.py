@@ -31,7 +31,9 @@ from app.features.agent.answer_passages import (
     is_absence_only,
     is_heading,
     is_operation_step,
+    label_operation_end,
     list_heading_lines,
+    list_item_label,
     non_claim_passages,
     passage_kind,
     passage_spans,
@@ -1295,12 +1297,13 @@ def test_withhold_removes_only_the_listed_paragraphs() -> None:
     assert withhold_paragraphs(answer, {"どこにも無い。"}) is None
 
 
-def test_withhold_keeps_numbered_headings_of_emptied_sections() -> None:
-    """中身をすべて外した節の見出しは消すが、番号つきの見出しは番号が飛ぶので残す（#1898）。
+def test_withhold_removes_numbered_headings_of_emptied_sections_and_renumbers() -> None:
+    """中身をすべて外した節の見出しは、番号つきでも消し、残った項目の番号を詰める（#1898・#2692）。
 
     業務 Agent の確認 #1863（run_839d27d75e224dd39e9bb2fdecee1c99）の形。「1. **承認の有無の
-    確認**」の下の段落を外すと、本文が「2. **削除手順の要件**」から始まっていた。番号の無い
-    見出し（「**補足**」）は今までどおり消す。
+    確認**」の下の段落を外すと、本文が「2. **削除手順の要件**」から始まっていた（#1898 は見出しを
+    残したが、中身の無い名前が実行の順の 1 つとして読めるので、#2692 で消して番号を詰める）。
+    番号の無い見出し（「**補足**」）は今までどおり消す。
     """
     answer = (
         "**手順（部門長の承認がない場合）**\n\n"
@@ -1319,8 +1322,7 @@ def test_withhold_keeps_numbered_headings_of_emptied_sections() -> None:
 
     assert kept == (
         "**手順（部門長の承認がない場合）**\n\n"
-        "1. **承認の有無の確認**\n\n"
-        "2. **削除手順の要件**\n"
+        "1. **削除手順の要件**\n"
         "   - アカウントを削除するには、所属部署の部門長の承認が必要です。"
     )
 
@@ -1904,7 +1906,8 @@ def test_numbered_facts_after_a_withheld_item_are_kept() -> None:
         )
         published, withheld = publish_answer("\n".join(facts), result)
         body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
-        assert body == "\n".join(facts[1:])
+        # 残った項目の番号は詰める（#2692）。
+        assert body == "\n".join(f"{number}.{item[2:]}" for number, item in enumerate(facts[1:], 1))
         assert DEPENDENT_STEP_LABEL not in section
         assert "dependent_steps" not in withheld and withheld["claims"] == 1
     # 事実の項目の後に操作の項目があれば、操作の項目だけを外す。
@@ -1966,11 +1969,10 @@ def test_numbered_step_headings_and_their_contents_follow_the_withheld_step() ->
     published, withheld = publish_answer(answer, result)
 
     body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+    # 中身をすべて外した「1. **確認**」の見出しも残さない（#2692）。
     assert body == "\n".join(
         [
             STEP_INTRO,
-            "",
-            "1. **確認**",
             "",
             "出典: manual-a.pdf p.3",
             "",
@@ -2002,6 +2004,154 @@ def test_dependent_steps_are_located_by_position() -> None:
         assert dependent_steps(steps, {f"{marks[0]}確認する。"}) == [
             (1, 0, f"{marks[1]}訂正する。")
         ]
+
+
+# #2692 の合成の事例: 操作の名前だけを番号で並べた順序と、後半の操作の文。
+ORDER_TITLE = "処理の順序"
+ORDER_LABELS = ["1. **対象 A の属性訂正（記録修正）**", "2. **対象 A の同一性確認**"]
+ORDER_FIX = "対象 A の属性を先に訂正する。"
+ORDER_CHECK = "対象 A が同一であることを確認する。"
+ORDER_NOTE = "訂正の記録は 5 年間保存されます。"
+ORDER_ANSWER = "\n".join([ORDER_TITLE, *ORDER_LABELS, "", ORDER_FIX, ORDER_CHECK, "", ORDER_NOTE])
+
+
+def _order_result(fix_status: str) -> dict[str, Any]:
+    return _verdict(
+        _claim(ORDER_TITLE, "supported"),
+        *(_claim(label, "supported") for label in ORDER_LABELS),
+        _claim(ORDER_FIX, fix_status, "根拠は同一性の確認を先にしている。"),
+        _claim(ORDER_CHECK, "supported"),
+        _claim(ORDER_NOTE, "supported"),
+    )
+
+
+@pytest.mark.parametrize("status", ["contradicted", "unsupported"])
+def test_withheld_operation_also_withholds_its_numbered_name(status: str) -> None:
+    """操作の文を外したら、同じ操作を名前だけで示す番号つきの項目も外し、残りの番号を詰める
+    （#2692。変更前は「1. **対象 A の属性訂正（記録修正）**」が実行の順の最初に残った）。"""
+    published, withheld = publish_answer(ORDER_ANSWER, _order_result(status))
+
+    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+    assert body == "\n".join(
+        [ORDER_TITLE, "1. **対象 A の同一性確認**", "", ORDER_CHECK, "", ORDER_NOTE]
+    )
+    assert "属性訂正" not in body
+    # 名前の項目は外した内容の節に数えない（外した主張は操作の文の 1 件）。
+    assert "属性訂正" not in section and withheld == {"claims": 1, "findings": 0, "all": False}
+
+
+def test_numbered_names_are_unchanged_when_the_operation_is_supported() -> None:
+    """操作の文が根拠で確かめられれば、名前の項目も番号もそのまま（#2692）。"""
+    published, withheld = publish_answer(ORDER_ANSWER, _order_result("supported"))
+    assert published == ORDER_ANSWER
+    assert withheld == {"claims": 0, "findings": 0, "all": False}
+
+    # ほかの（操作でない）段落だけを外しても、名前の項目と番号は変えない。
+    result = _verdict(
+        _claim(ORDER_TITLE, "supported"),
+        *(_claim(label, "supported") for label in ORDER_LABELS),
+        _claim(ORDER_FIX, "supported"),
+        _claim(ORDER_CHECK, "supported"),
+        _claim(ORDER_NOTE, "unsupported", "根拠に無い。"),
+    )
+    body = publish_answer(ORDER_ANSWER, result)[0].split(f"\n\n**{UNVERIFIED_HEADING}**", 1)[0]
+    assert body == "\n".join([ORDER_TITLE, *ORDER_LABELS, "", ORDER_FIX, ORDER_CHECK])
+
+
+def test_only_the_main_operation_name_of_a_sentence_is_withheld() -> None:
+    """1 つの文が 2 つの操作の名前を含むときは、文末の述語に近い名前（主の操作）だけを外す
+    （#2692。前の操作は文の中の条件として出てくるだけ）。"""
+    labels = ["1. **対象 A の同一性確認**", "2. **対象 A の属性訂正**"]
+    sentence = "対象 A の属性を、同一性確認の前に訂正する。"
+    answer = "\n".join([ORDER_TITLE, *labels, "", sentence])
+    result = _verdict(
+        _claim(ORDER_TITLE, "supported"),
+        *(_claim(label, "supported") for label in labels),
+        _claim(sentence, "contradicted", "順序が逆。"),
+    )
+    body = publish_answer(answer, result)[0].split(f"\n\n**{UNVERIFIED_HEADING}**", 1)[0]
+    assert body == "\n".join([ORDER_TITLE, labels[0]])
+
+
+def test_chapter_and_explanatory_names_are_not_withheld_with_an_operation() -> None:
+    """章題・説明の名前（外す操作の語と重ならない・短い名前）は外さない（#2692）。"""
+    labels = ["1. **概要**", "2. **手続きの流れ**", "3. **記録の保存期間**", "4. **属性訂正**"]
+    answer = "\n".join([*labels, "", ORDER_FIX])
+    result = _verdict(
+        *(_claim(label, "supported") for label in labels),
+        _claim(ORDER_FIX, "contradicted", "順序が逆。"),
+    )
+    body = publish_answer(answer, result)[0].split(f"\n\n**{UNVERIFIED_HEADING}**", 1)[0]
+    # 「属性訂正」は外す操作の名前。ほかの名前は残す。
+    assert body == "\n".join(labels[:3])
+    for label, expected in [
+        ("概要", None),
+        ("手続きの流れ", None),
+        ("訂正", None),
+        ("属性訂正", 11),
+        ("対象 A の属性訂正", 11),
+        ("対象 B の属性訂正", None),
+    ]:
+        assert label_operation_end(label, ORDER_FIX) == expected, label
+    assert list_item_label("1. **対象 A の属性訂正（記録修正）**") == "対象 A の属性訂正"
+    assert list_item_label("1. 対象 A の属性を訂正する。") is None
+    assert list_item_label("**対象 A の属性訂正**") is None
+
+
+def test_heading_keeps_its_number_while_correct_content_remains() -> None:
+    """見出しの下に正しい内容が残る項目は、見出しも番号も残す（下の内容を消さない。#2692）。
+    中身をすべて外した見出しは消し、続く項目の番号を詰める。"""
+    answer = "\n".join(
+        [
+            "1. **属性訂正**",
+            "   - 対象 A の属性を先に訂正する。",
+            "   - 訂正の記録は 5 年間保存されます。",
+            "2. **記録の保存**",
+            "   - 保存期間の満了後は記録を消去できます。",
+        ]
+    )
+    quote = "- 対象 A の属性を先に訂正する。"
+    assert withhold_paragraphs(answer, {quote}) == "\n".join(
+        [
+            "1. **属性訂正**",
+            "   - 訂正の記録は 5 年間保存されます。",
+            "2. **記録の保存**",
+            "   - 保存期間の満了後は記録を消去できます。",
+        ]
+    )
+    assert withhold_paragraphs(answer, {quote, "- 訂正の記録は 5 年間保存されます。"}) == (
+        "1. **記録の保存**\n   - 保存期間の満了後は記録を消去できます。"
+    )
+
+
+@pytest.mark.parametrize(
+    ("marks", "expected"),
+    [
+        (["１．", "２．", "３．"], ["１．", "２．"]),
+        (["（1）", "（2）", "（3）"], ["（1）", "（2）"]),
+        (["①", "②", "③"], ["①", "②"]),
+    ],
+)
+def test_renumbering_keeps_the_number_style(marks: list[str], expected: list[str]) -> None:
+    """番号を詰めるときは、全角の数字・括弧・丸数字の番号の形を保つ（#2692）。"""
+    items = ["事実の 1 つ目です。", "事実の 2 つ目です。", "事実の 3 つ目です。"]
+    answer = "\n".join(f"{mark}{item}" for mark, item in zip(marks, items, strict=True))
+    kept = withhold_paragraphs(answer, {f"{marks[0]}{items[0]}"})
+    assert kept == "\n".join(
+        f"{mark}{item}" for mark, item in zip(expected, items[1:], strict=True)
+    )
+
+
+def test_numbers_are_not_renumbered_when_the_body_refers_to_them() -> None:
+    """本文が番号で項目を指していれば（「手順 3 の後に」）、番号を詰めない（指す先が変わるため。
+    #2692）。"""
+    answer = (
+        "1. 事実の 1 つ目です。\n2. 事実の 2 つ目です。\n3. 事実の 3 つ目です。\n"
+        "手順 3 の後に連絡する。"
+    )
+    assert withhold_paragraphs(answer, {"1. 事実の 1 つ目です。"}) == (
+        "2. 事実の 2 つ目です。\n3. 事実の 3 つ目です。\n手順 3 の後に連絡する。"
+    )
 
 
 def test_clarification_only_answer_without_evidence_has_no_notice(
