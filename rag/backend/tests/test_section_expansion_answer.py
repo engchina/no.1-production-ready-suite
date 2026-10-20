@@ -614,7 +614,7 @@ async def test_incomplete_or_unreadable_sections_never_count_as_complete(
     assert outcome.diagnostics["outcome"] == "conditional"
 
 
-@pytest.mark.parametrize("stage", ["guide", "coverage"])
+@pytest.mark.parametrize("stage", ["guide", "coverage", "coverage_same_parent"])
 @pytest.mark.usefixtures("stub_llm")
 async def test_supplemental_searches_complete_new_sections_before_generation(
     stage: str, section_map: SectionMapStub, monkeypatch: pytest.MonkeyPatch
@@ -689,6 +689,15 @@ async def test_supplemental_searches_complete_new_sections_before_generation(
             "retrieved",
             (ContextChildEvidence(record, "retrieved_anchor", "retrieved"),),
         )
+        if stage == "coverage_same_parent":
+            parent = context.evidence_tree[0]
+            return replace(
+                context,
+                evidence_tree=(
+                    replace(parent, children=(*parent.children, tree.children[0])),
+                    *context.evidence_tree[1:],
+                ),
+            )
         return _merge_crag_evidence(
             context,
             AnswerContext(records=[record], text=record.text, evidence_tree=(tree,)),

@@ -4526,7 +4526,14 @@ def _expand_context_by_sections(
         )
         state["result"] = result
         return context, result
-    signature = tuple((record.chunk_uid or record.id, record.text) for record in context.records)
+
+    def signature_of(candidate: AnswerContext) -> tuple[Any, ...]:
+        return (
+            tuple((record.chunk_uid or record.id, record.text) for record in candidate.records),
+            tuple(sections.seed_chunk_ids(candidate)),
+        )
+
+    signature = signature_of(context)
     if signature == state.get("signature"):
         return context, state.get("result")
     last = attempts[-1] if attempts and not state.get("result") else None
@@ -4609,7 +4616,7 @@ def _expand_context_by_sections(
             step.field("読めなかった章節", f"{len(result.unread)} 件")
             step.impact("上限に達したため、読めなかった章節を「回答に未反映の関連章節」に示し、条件つきの回答にします。")
     state["result"] = result
-    state["signature"] = tuple((record.chunk_uid or record.id, record.text) for record in result.context.records)
+    state["signature"] = signature_of(result.context)
     return result.context, result
 
 
