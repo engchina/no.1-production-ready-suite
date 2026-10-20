@@ -1,8 +1,8 @@
-"""回答の監査の型（#2795）。standard は事実の信頼性だけを監査し、作り直しは事実の問題の 1 組まで。
+"""回答の監査の型（#2795）。standard は未使用の根拠を列挙させず、作り直しは事実の問題の 1 組まで。
 
-完全性の不足（答えていない要求・未使用の根拠・説明していない手順）では作り直さず、本文の不足に示す。detailed は
-業務ガイドの要件ごとの充足と未使用の根拠も監査する（従来）。誤った内容（根拠と矛盾・根拠に無い・引用の不一致）の
-検出は standard でも変えない。
+完全性の不足（答えていない要求・未使用の根拠・説明していない手順）では作り直さず、本文の不足に示す（要求・業務ガイドの
+要件の充足は同じ 1 回の監査で判定する）。detailed は未使用の根拠も列挙させ、完全性の不足でも作り直す（従来）。誤った
+内容（根拠と矛盾・根拠に無い・引用の不一致）の検出は standard でも変えない。
 """
 
 from __future__ import annotations
@@ -51,10 +51,18 @@ def test_standard_prompt_drops_only_the_completeness_rules():
     assert detailed == grounded.AUDIT_SYSTEM_PROMPT
     removed = [line for line in detailed.splitlines() if line not in standard.splitlines()]
     assert removed and all(line.startswith(grounded._DETAILED_AUDIT_LINES) for line in removed)
-    # 事実の信頼性の規則（支持・矛盾・適用・要約・目的）は残す。
-    for kept in ("3.1 support", "contradicted", "3.2 applicability", "summary_supported", "goal_alignment", "request_reviews"):
+    # 主張の信頼性（支持・矛盾・適用・要約・目的）と、要求・業務ガイドの要件の充足の規則は残す。
+    for kept in (
+        "3.1 support",
+        "contradicted",
+        "3.2 applicability",
+        "summary_supported",
+        "goal_alignment",
+        "request_reviews",
+        "guide_requirement_reviews",
+    ):
         assert kept in standard
-    assert "unused_evidence" not in standard and "guide_requirement_reviews" not in standard
+    assert "unused_evidence" not in standard
 
 
 def test_standard_does_not_regenerate_for_an_unanswered_request_only():
@@ -128,7 +136,7 @@ def test_correction_feedback_keeps_factual_problems_only():
 def test_fact_audit_is_read_as_a_full_audit_with_empty_completeness_fields():
     fact = GroundedFactAudit.model_validate(_fact(audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])))
     full = GroundedAudit.model_validate(fact.model_dump())
-    assert full.unused_evidence_ids == [] and full.guide_requirement_reviews == []
+    assert full.unused_evidence_ids == []
     assert full.reviews[0].support == "supported"
 
 

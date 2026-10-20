@@ -1960,8 +1960,8 @@ def synthesize_grounded_answer(
     budget = grounded.RoundBudget(remaining_seconds)
     # 是正の組の回数の上限（#1912。`answer_max_correction_rounds`、0〜2。既定 2 は従来の MAX_ROUNDS と同じ）。
     max_rounds = 1 + max(0, min(grounded.MAX_ROUNDS - 1, int(getattr(settings, "answer_max_correction_rounds", grounded.MAX_ROUNDS - 1))))
-    # 監査の型（#2795）。通常の回答（standard）は事実の信頼性だけを監査し、作り直しは事実の問題があるときの 1 組まで。
-    # 完全性の不足（答えていない要求・説明していない手順）は作り直さず、本文の不足・確認の節に示す。
+    # 監査の型（#2795）。通常の回答（standard）の作り直しは事実の問題があるときの 1 組まで。完全性の不足（答えていない
+    # 要求・説明していない手順）は作り直さず、本文の不足・確認の節に示す。
     audit_mode = str(getattr(settings, "answer_audit_mode", grounded.AUDIT_MODE_DETAILED))
     if audit_mode not in grounded.AUDIT_MODES:
         audit_mode = grounded.AUDIT_MODE_DETAILED
@@ -2300,8 +2300,7 @@ def synthesize_grounded_answer(
     guide_coverage = grounded.apply_guide_contracts(
         guide_coverage,
         current.checked,
-        # 業務ガイドの要件ごとの判定は詳しい監査だけ（#2795。通常の回答は決定的な対応付けの充足）。
-        runtime_knowledge.guide_step_contracts if runtime_knowledge and audit_mode == grounded.AUDIT_MODE_DETAILED else (),
+        runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
         current.audit,
         guide_notices,
     )

@@ -517,13 +517,18 @@ class GuideRequirementReview(_StrictModel):
 
 
 class GroundedFactAudit(_StrictModel):
-    """通常の回答の監査（#2795）。事実の信頼性（主張の支持・適用、summary、目的との一致、要求の充足）だけを判定する。
+    """通常の回答の監査（#2795）。主張の支持・適用、summary、目的との一致、要求と業務ガイドの要件の充足を判定する。
 
-    未使用の根拠の列挙と業務ガイドの要件ごとの充足は判定しない（詳しい監査 ``GroundedAudit`` の項目）。受け取った後は
-    ``GroundedAudit`` に写して使う（判定しない項目は空）。
+    未使用の根拠は列挙しない（詳しい監査 ``GroundedAudit`` の項目）。受け取った後は ``GroundedAudit`` に写して使う
+    （判定しない項目は空）。
     """
 
     reviews: list[GroundedItemReview] = Field(max_length=40, description="各 item の局所監査。")
+    guide_requirement_reviews: list[GuideRequirementReview] = Field(
+        default_factory=list,
+        max_length=200,
+        description="guide_contracts の要件ごとの充足。全 id を1回ずつ判定する。設定の要件は回答の評価基準であり、文書の仕様の根拠ではない。",
+    )
     application_reviews: list[GroundedApplicationReview] = Field(
         default_factory=list, max_length=6, description="各 application（当てはめ）の監査。"
     )

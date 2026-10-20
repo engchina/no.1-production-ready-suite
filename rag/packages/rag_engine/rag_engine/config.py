@@ -381,8 +381,9 @@ class Settings:
     answer_audit_compact_reasons: bool = False
     # 回答文の生成と根拠確認の是正の組（作り直し）の回数の上限(#1912。0〜2)。既定 2 は従来の MAX_ROUNDS と同じ。
     answer_max_correction_rounds: int = 2
-    # 回答の監査の型(#2795)。standard は事実の信頼性だけを監査し、作り直しは事実の問題の 1 組まで。detailed は業務ガイドの
-    # 要件ごとの充足と未使用の根拠も監査する(従来)。engine の既定は従来どおり detailed、backend の既定は standard。
+    # 回答の監査の型(#2795)。standard は未使用の根拠を列挙させず、作り直しは事実の問題の 1 組まで(完全性の不足は本文に
+    # 示す)。detailed は未使用の根拠も列挙させ、完全性の不足でも作り直す(従来)。engine の既定は従来どおり detailed、
+    # backend の既定は standard。
     answer_audit_mode: str = "detailed"
     # 回答の期限のある LLM の呼び出しを streaming で受け、停滞（event が来ない・出力が直近の速さより遅い）を
     # 検出したら打ち切って送り直す(#1926。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。

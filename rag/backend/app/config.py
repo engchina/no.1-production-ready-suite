@@ -1627,12 +1627,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_answer_audit_mode: Literal["standard", "detailed"] = Field(
         default="standard",
         description=(
-            "(#2795)回答の監査の型。standard(既定)は生成後の監査を事実の信頼性(主張の支持・適用、"
-            "要約、目的との一致、要求の充足)に絞り、作り直しは事実の問題(引用の不一致・根拠と矛盾・"
-            "根拠に無い・別の対象・目的違い)があるときの 1 組まで。"
-            "完全性の不足は作り直さず本文に示す。"
-            "業務ガイドの手順の充足は決定的な対応付けだけ。detailed は業務ガイドの要件ごとの充足と"
-            "未使用の根拠も監査し、最大 3 組まで作り直す(業務ガイドの下書きの試答は常に detailed)。"
+            "(#2795)回答の監査の型。standard(既定)は生成後の監査で未使用の根拠を列挙させず、"
+            "作り直しは事実の問題(引用の不一致・根拠と矛盾・根拠に無い・別の対象・根拠を引かない・"
+            "目的違い)があるときの 1 組まで。答えていない要求・説明していない手順などの"
+            "完全性の不足は作り直さず本文に示す(主張・要求・業務ガイドの要件の判定は同じ 1 回の"
+            "監査で行う)。"
+            "detailed は未使用の根拠も列挙させ、完全性の不足でも最大 3 組まで作り直す"
+            "(業務ガイドの下書きの試答は常に detailed)。"
         ),
     )
     rag_llm_stall_detection_enabled: bool = Field(

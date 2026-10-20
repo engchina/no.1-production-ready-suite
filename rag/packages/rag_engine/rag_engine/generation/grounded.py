@@ -311,6 +311,7 @@ AUDIT_SYSTEM_PROMPT = (
     "kind=evidence は、その item の主張と引用元が要求された根拠・対応関係を満たせば addressed とする。根拠を検査する指示自体を回答で復唱する必要はない。"
     "kind=completion（kind が無い要件も同じ）は、操作・条件・除外・確認先の全てを本文で説明すれば addressed、一部なら partial、無ければ missing。"
     "確認先は guide_notes の行の index も引ける（kind=evidence は items でだけ満たす）。"
+    "「〜、またはその未確認の範囲」のように未確認の明示を認める要件は、その範囲を明示した gap_items の index で addressed にできる（資料に記載が無いことは missing の理由にならない）。"
     "完了条件はその手順の範囲で判定し、別手順や質問全体の未解決をその手順の未充足理由にしない。"
     "資料にある・説明できる・示唆できるだけでは充足しない。対応する item_indexes と、その text を写した answer_quote を返す。\n"
     "- reviews: 各 item の index、support、applicability、condition、reason、output_fields。出力の項目を主張するitemでは、evidenceとfunction_contextが示す根拠の役割と成果物の一致を先に判定する。\n"
@@ -341,8 +342,9 @@ AUDIT_COMPACT_REASON_RULE = (
 )
 
 
-# 監査の型（#2795）。standard（通常の回答）は事実の信頼性だけを判定し、detailed（業務ガイドの下書きの試答・評価）は
-# 未使用の根拠の列挙と業務ガイドの要件ごとの充足も判定する。
+# 監査の型（#2795）。standard（通常の回答）は主張の信頼性と要求・業務ガイドの要件の充足を 1 回の監査で判定し、
+# 未使用の根拠は列挙しない。detailed（業務ガイドの下書きの試答・評価）は未使用の根拠も列挙する。作り直しの違いは
+# `correction_feedback`（standard は事実の問題だけ）。
 AUDIT_MODE_STANDARD = "standard"
 AUDIT_MODE_DETAILED = "detailed"
 AUDIT_MODES = (AUDIT_MODE_STANDARD, AUDIT_MODE_DETAILED)
@@ -354,8 +356,6 @@ STANDARD_CORRECTION_KEYS = ("dropped_items", "downgraded_items", "no_cited_evide
 # detailed だけの入力・出力の規則の行（監査の指示は 1 行 1 規則なので行の先頭で選ぶ）。
 _DETAILED_AUDIT_LINES = (
     "- unused_evidence:",
-    "- guide_contracts:",
-    "- guide_requirement_reviews:",
     "- unused_evidence_ids:",
     "- unused_evidence に答えがあっても",
 )
@@ -368,7 +368,7 @@ FACT_AUDIT_SYSTEM_PROMPT = "".join(
 def audit_system_prompt(*, compact_reasons: bool = False, detailed: bool = True) -> str:
     """生成後の監査の system prompt。``compact_reasons`` なら通った判定の reason を空にさせる規則を足す（#1912）。
 
-    ``detailed`` が False（通常の回答。#2795）なら、未使用の根拠と業務ガイドの要件の行を除いた指示にする。
+    ``detailed`` が False（通常の回答。#2795）なら、未使用の根拠の行を除いた指示にする。
     """
     base = AUDIT_SYSTEM_PROMPT if detailed else FACT_AUDIT_SYSTEM_PROMPT
     return base + AUDIT_COMPACT_REASON_RULE if compact_reasons else base
@@ -4192,13 +4192,11 @@ def run_round(
     round をまたいで再利用する。None は語の判定だけ。#2649）。``guide_unsearched_steps`` は手順ごとの検索を打ち切って
     検索しなかった手順（#2706）。``guide_notices`` は業務ガイドの案内の行（窓口・引き継ぐ条件。#2792）。監査は完了条件の
     充足にこの行を引ける。業務ガイドの文（手順の目的・要件・案内）を引いた根拠に無いまま書いた説明には印を付ける。
-    ``audit_mode`` は監査の型（#2795）。standard は事実の信頼性だけを監査し（未使用の根拠・業務ガイドの要件を渡さず
-    判定させない）、手順の充足は決定的な対応付けだけにする。detailed は要件ごとの充足と未使用の根拠も判定する。
+    ``audit_mode`` は監査の型（#2795）。standard は未使用の根拠を渡さず列挙させない（detailed は列挙させる）。
     """
     audit_settings = settings if audit_settings is None else audit_settings
     detailed = audit_mode == AUDIT_MODE_DETAILED
-    # 通常の回答（standard）では業務ガイドの要件を監査しない（決定的な対応付けだけ）。
-    contracts = guide_step_contracts if detailed else ()
+    contracts = guide_step_contracts
     audit_system = audit_system_prompt(compact_reasons=compact_audit_reasons, detailed=detailed)
     started, usage_before = monotonic(), usage_snapshot()
     if image_paths:
