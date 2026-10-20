@@ -230,6 +230,8 @@ from app.features.agent.support_task import (
     nl2sql_next_step,
     nl2sql_skip_step,
     rag_next_step,
+    rag_planned_arguments,
+    rag_planned_schema,
     record_codes,
     repeated_query_note,
     search_limit_schema,
@@ -1466,6 +1468,10 @@ class _ToolRecorder:
                     name, definition.input_schema, run_id=self.run_id, call_id=call_id
                 ),
             }
+        elif definition is not None:
+            # 宣言の無い接続・Agent 主体の取得を許さない Run（#2676）: 検索文を作る主体は実行環境
+            # だけが決める。モデルが caller の引数を渡しても送らず、RAG の既定（rag）で検索する。
+            call_arguments = rag_planned_arguments(name, definition.input_schema, call_arguments)
         call = ToolCall(
             name=name,
             arguments=call_arguments,
@@ -2070,11 +2076,15 @@ def build_function_tools(
         # （`tool_registry.invoke` に渡す schema）は呼び先の契約のまま。
         # 根拠のツールの件数の説明には「多段の質問では省略する」を足す（#1403）。
         # 根拠の取得の検索文を作る主体（planning）と追跡 ID は実行環境が決める（#2651）。
+        # Agent 主体の取得を許さない接続は、caller でだけ効く引数（queries など）も
+        # 見せない（#2676）。
         schema = data_scope.scoped_input_schema(
             definition.name, dict(definition.input_schema), recorder.data_scopes
         )
         if recorder.caller_planned(definition.name):
             schema = caller_planned_schema(definition.name, schema)
+        else:
+            schema = rag_planned_schema(definition.name, schema)
         schema = search_limit_schema(definition.name, schema)
         tool = FunctionTool(
             name=definition.name,
