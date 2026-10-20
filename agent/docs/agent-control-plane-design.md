@@ -315,6 +315,11 @@ RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索�
 判定で外す）。RAG が監査の `supported` を採らなかった段落（根拠が別の対象の記載・根拠の表の別の行の値・写した原文が根拠に無い。
 `support_check`。#2659・#2653）は `unsupported`（原文が無いときは `citation_error`）で返り、Agent は外して、節の項目の理由に違いの種類を出す
 （`_SUPPORT_CHECK_LABELS`）。
+業務ガイドの手順の説明は、RAG の `rag_validate_answer` の `guide_steps`（RAG の回答と同じ規則の手順ごとの充足。#2708）で
+確かめる。説明を確かめられなかった必須の手順は、本文を残したまま「資料で確認できず除いた内容」の節に RAG の finding の文で
+示し（記録の `withheld.guide_steps`）、回答の対応の不足の印 `guide_steps`（conditional）にする。接続をまたいでは手順ごとに
+最も良い状態を採る。支援タスクの状態の `guide.steps[].shared` は、手順の根拠がほかの手順と共有の chunk だけかを示す
+（根拠の有無 `evidence` は共有の chunk でも true になるので、説明の確かめには使わない）。
 
 ツール権限（`/settings/tool-policy`）は `<接続>__<ツール>` の名前で allow / ask / deny を上書きできる。
 画面の一覧は `GET /api/settings/tool-policy/tools`（#1814。`tool_policy_catalog`）で、組み込みのツールに、URL を設定した

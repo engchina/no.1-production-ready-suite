@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -210,6 +211,48 @@ def test_cover_guide_steps_adds_step_b_evidence_and_reference_pages(monkeypatch:
     assert step_b["reference_chunk_count"] == 1
     assert [s["kind"] for s in step_b["searches"]] == ["reference", "step"]
     assert trace["budget"]["used"] == {"guide_steps": 3}
+
+
+def _paged(uid: str, document_id: str, page: int) -> ContextParentEvidence:
+    rec = replace(record(uid), page=page, page_end=page, metadata={"document_id": document_id})
+    return ContextParentEvidence(record=rec, role="synthesis_parent", reason="top")
+
+
+def test_cover_guide_steps_links_reference_pages_of_steps_cut_by_the_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """期限で手順 B を検索しなくても、手順 B の参照の頁の根拠（回答の材料にある）を手順 B の根拠にする（#2706）。"""
+    step_a = {**STEP_A, "references": [{"document_id": "doc-b", "page_ranges": [{"page_start": 5, "page_end": 5}]}]}
+    calls = _patch_search(monkeypatch, {"reference": context(_paged("shared", "doc-b", 5))})
+    ctx = context(_paged("shared", "doc-b", 5), _paged("other", "doc-b", 9))
+    # 開始・検索の開始・1 回目の期限の確認・1 回目の検索の開始は 0 秒、検索 1 回が 30 秒かかる。
+    ticks = itertools.chain([0.0, 0.0, 0.0, 0.0], itertools.repeat(30.0))
+
+    merged, trace, sources = a._cover_guide_steps(
+        QUESTION,
+        ctx,
+        _settings(guide_step_deadline_seconds=10.0),
+        plan(step_a, STEP_B),
+        extra_budget=ExtraRetrievalBudget.from_settings(_settings()),
+        run_id="run",
+        preferred_engines=["docling"],
+        top_k=8,
+        neighbor_child_count=0,
+        rerank_enabled=False,
+        inquiry_conditions=None,
+        retrieval_scope="knowledge_base",
+        classification_filter=None,
+        runtime_knowledge=None,
+        clock=lambda: next(ticks),
+    )
+
+    # 手順 A の参照の検索 1 回で期限。手順 B は検索していない。
+    assert len(calls) == 1
+    assert trace["stop_reason"] == "deadline"
+    assert trace["unsearched_step_ids"] == ["s2"]
+    # 手順 B の参照の頁（文書 B の 4〜6 頁）に当たる材料の根拠は、手順 A と共有する根拠として手順 B にも紐づく。
+    assert sources == (("s1", "画面 A で設定を変える", ("run:shared",)), ("s2", "画面 B で反映する", ("run:shared",)))
+    assert [step["referenced_count"] for step in trace["steps"]] == [1, 1]
+    assert a._guide_step_lines(trace)[1] == "s2「画面 B で反映する」: 検索しない（期限で打ち切り）、参照の頁の根拠 1 件"
+    assert [r.chunk_uid for r in merged.records] == ["run:shared", "run:other"]
 
 
 def test_cover_guide_steps_respects_disabled_and_budget(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -510,7 +510,20 @@ async def test_validate_answer_runs_deterministic_checks(monkeypatch: MonkeyPatc
         requests=[{"id": "Q1", "text": "手順", "status": "addressed"}],
         guide=GuideCheckRef("sap-1", "guide-1", 2, {"target": "グループ"}),
     )
-    assert (result.valid, result.findings) == (True, [])
+    # 手順の題名が回答にあっても、手順の根拠（参照の頁・検索の手がかり）が渡した根拠に無い手順は、
+    # 説明を確かめられない（#2708。warning なので valid は変えない）。条件で外れた分岐の手順
+    # （user）は確かめない。
+    assert result.valid is True
+    assert [(item.code, item.severity, item.step_id) for item in result.findings] == [
+        ("guide_step_unexplained", "warning", step)
+        for step in ("open", "group", "group_save", "verify")
+    ]
+    assert [(step["step_id"], step["status"]) for step in result.guide_steps] == [
+        ("open", "no_evidence"),
+        ("group", "no_evidence"),
+        ("group_save", "no_evidence"),
+        ("verify", "no_evidence"),
+    ]
     assert result.checks == ["requests", "guide", "guide_steps", "impact"]
     assert result.guide_revision == 2
     assert seen == ["sap-1"]
@@ -582,6 +595,164 @@ async def test_validate_answer_guide_unavailable_and_profile_scope(
     assert len(calls) == before
 
 
+# 業務ガイドの手順の充足（#2708）。2 つの手順が同じ頁の 1 つの chunk（手順 1・2 の主の操作と
+# 共通の末尾の操作）を参照し、手順の題名は根拠の原文と言い回しが違う。
+_MAIN_1 = "設定画面で設定 A の値を入力します。"
+_MAIN_2 = "反映画面で反映ボタンを押して変更を反映します。"
+_COMMON = "最後に保存ボタンを押して画面を閉じます。"
+_STEP_VECTORS = (
+    ("値の登録", (1.0, 0.0, 0.0)),
+    ("内容の確定", (0.0, 1.0, 0.0)),
+    ("設定 A の値", (1.0, 0.0, 0.3)),
+    ("反映ボタンを押", (0.0, 1.0, 0.3)),
+    ("保存ボタンを押", (0.5, 0.5, 1.0)),
+)
+
+
+def _shared_guide() -> SupportGuideContent:
+    reference = [{"document_id": "d2", "page_ranges": [{"page_start": 3, "page_end": 3}]}]
+    return _guide(
+        conditions=[],
+        branches=[],
+        steps=[
+            {"id": "s1", "title": "値の登録", "references": reference},
+            {"id": "s2", "title": "内容の確定", "depends_on": ["s1"], "references": reference},
+        ],
+    )
+
+
+class _SharedOracle(_GuideOracle):
+    def __init__(self) -> None:
+        super().__init__({"sap-1"})
+        self.chunks[("d2", "c2")] = RetrievedChunk(
+            document_id="d2",
+            chunk_id="c2",
+            text=_MAIN_1 + _MAIN_2 + _COMMON,
+            score=0.5,
+            file_name="manual.pdf",
+            metadata={"page_start": 3, "page_end": 3},
+        )
+
+
+def _paragraph_claims(monkeypatch: MonkeyPatch, quotes: dict[str, str]) -> None:
+    """段落（行）ごとに、裏付けとして写した原文を返す主張の監査のスタブ（すべて supported）。"""
+
+    def fake_claims(
+        question: str, answer: str, items: list[dict[str, Any]], settings: Any, **_options: Any
+    ) -> dict[str, Any]:
+        lines = [line for line in answer.split("\n") if line.strip()]
+        return {
+            "status": "completed",
+            "counts": {"supported": len(lines)},
+            "claim_checks": [
+                {
+                    "answer_quote": line,
+                    "status": "supported",
+                    "source_id": "c2",
+                    "support_quote": next(q for key, q in quotes.items() if key in line),
+                    "reason": "記載",
+                }
+                for line in lines
+            ],
+        }
+
+    import rag_engine.evaluation.answer_validation as engine_validation
+
+    monkeypatch.setattr(engine_validation, "validate_answer_claims", fake_claims)
+
+
+def _stub_embed(monkeypatch: MonkeyPatch) -> list[list[str]]:
+    calls: list[list[str]] = []
+
+    def embed(texts: Any) -> list[list[float]]:
+        calls.append(list(texts))
+        return [
+            next(list(vector) for key, vector in _STEP_VECTORS if key in text) for text in texts
+        ]
+
+    import app.rag.answer_validation as validation
+
+    monkeypatch.setattr(validation, "guide_step_embed", lambda settings, loop: embed)
+    return calls
+
+
+async def test_validate_answer_checks_each_guide_step_by_its_main_operation(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """言い回しの違う正しい説明は手順の説明になり、共通の文だけの回答はならない（#2708）。"""
+
+    async def published_contents(self: Any, profile_id: str) -> list[Any]:
+        return [("guide-1", 2, _shared_guide())]
+
+    monkeypatch.setattr(
+        support_guide_store.SupportGuideStore, "published_contents", published_contents
+    )
+    calls = _stub_embed(monkeypatch)
+    _paragraph_claims(
+        monkeypatch, {"設定 A に": _MAIN_1, "反映ボタンで": _MAIN_2, "保存ボタン": _COMMON}
+    )
+    oracle = cast(Any, _SharedOracle())
+    guide = GuideCheckRef("sap-1", "guide-1", 2)
+    refs = [EvidenceRef("d2", "c2")]
+
+    # 手順の題名（値の登録・内容の確定）は回答に出ない。
+    reworded = (
+        "1. 設定画面を開き、設定 A に値を入れてください。\n"
+        "2. 続いて反映画面の反映ボタンで変更を反映させます。\n"
+        "最後は保存ボタンで画面を閉じます。"
+    )
+    result = await validate_answer("q", reworded, refs, get_settings(), oracle=oracle, guide=guide)
+    assert [(step["step_id"], step["status"]) for step in result.guide_steps] == [
+        ("s1", "explained"),
+        ("s2", "explained"),
+    ]
+    # 題名の文字の一致で結び付けない（unmatched にしない）。順序は説明の段落の位置で確かめる。
+    assert result.findings == []
+    assert result.valid is True
+    assert len(calls) == 1
+
+    common = "保存ボタンを押して画面を閉じれば完了です。"
+    result = await validate_answer("q", common, refs, get_settings(), oracle=oracle, guide=guide)
+    assert [(step["step_id"], step["status"]) for step in result.guide_steps] == [
+        ("s1", "unused"),
+        ("s2", "unused"),
+    ]
+    assert [(item.code, item.step_id) for item in result.findings] == [
+        ("guide_step_unexplained", "s1"),
+        ("guide_step_unexplained", "s2"),
+    ]
+    assert result.findings[0].message == (
+        "業務ガイドの手順「値の登録」は、取得した資料で説明を確かめられませんでした。"
+    )
+
+    # 説明の段落の順が手順の依存と逆なら、題名が回答に無くても順序の誤りにする。
+    swapped = (
+        "1. 反映画面の反映ボタンで変更を反映させます。\n"
+        "2. 設定画面を開き、設定 A に値を入れてください。"
+    )
+    result = await validate_answer("q", swapped, refs, get_settings(), oracle=oracle, guide=guide)
+    assert [(item.code, item.severity) for item in result.findings] == [("step_order", "error")]
+    assert result.valid is False
+
+
+def test_check_guide_steps_uses_the_located_paragraphs() -> None:
+    guide = _guide()
+    answer = "1. タブを開きます。\n2. 対象のグループを指定します。"
+    located = {"open": "1. タブを開きます。", "group": "2. 対象のグループを指定します。"}
+    assert check_guide_steps(answer, guide, {"target": "グループ"}, located) == [
+        AnswerFinding(
+            "guide_steps",
+            "step_following_missing",
+            "warning",
+            "手順「グループを選ぶ」の後の手順「グループの設定を保存する」が回答にありません。",
+            step_id="group_save",
+            related_step_id="group",
+        )
+    ]
+    # 充足の判定がどの手順も説明にしなかったときは、題名の不一致を unmatched にしない。
+    assert check_guide_steps("設定画面で操作します。", guide, {}, {}) == []
+
+
 @pytest.mark.usefixtures("auth")
 def test_mcp_validate_answer_passes_requests_and_guide(
     auth: Any,  # noqa: F811
@@ -611,6 +782,15 @@ def test_mcp_validate_answer_passes_requests_and_guide(
                 )
             ],
             guide_revision=3,
+            guide_steps=[
+                {
+                    "step_id": "open",
+                    "title": "権限タブを開く",
+                    "required": True,
+                    "status": "explained",
+                },
+                {"step_id": "user", "title": "利用者を選ぶ", "required": True, "status": "unused"},
+            ],
         )
 
     monkeypatch.setattr(mcp_tools, "validate_answer", fake_validate)
@@ -635,6 +815,10 @@ def test_mcp_validate_answer_passes_requests_and_guide(
     assert body["valid"] is False
     assert body["checks"] == ["requests", "guide", "guide_steps", "impact"]
     assert body["guide_revision"] == 3
+    assert body["guide_steps"] == [
+        {"step_id": "open", "title": "権限タブを開く", "required": True, "status": "explained"},
+        {"step_id": "user", "title": "利用者を選ぶ", "required": True, "status": "unused"},
+    ]
     assert body["findings"] == [
         {
             "check": "guide_steps",

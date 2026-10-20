@@ -37,13 +37,13 @@ from pathlib import Path
 from typing import Any
 
 from rag_engine.evaluation.answer_validation import MAX_DATA_RESULTS, MAX_PREMISES, is_premise_id
+from rag_engine.resources.deadline import remaining_seconds
 
 from app.clients.oracle import OracleClient
 from app.clients.support_guide_store import SupportGuideStore
 from app.config import Settings
 from app.rag.answer_checks import (
     AnswerFinding,
-    check_guide_steps,
     check_impact,
     check_requests,
 )
@@ -57,11 +57,14 @@ from app.rag.answer_threads import (
     run_answer_in_thread,
     validation_executor,
 )
+from app.rag.guide_step_validation import guide_step_embed, guide_step_findings
+from app.schemas.support_guide import SupportGuideContent
 
 logger = logging.getLogger(__name__)
 
 # 期限の後、thread が確かめ終わった組の判定をまとめて返すまでに待つ秒数（#2700。
-# LLM は呼ばない処理だけ）。
+# LLM は呼ばない処理だけ）。業務ガイドの手順の意味の判定の embedding（1 回）は、期限の残りが
+# これより短ければ呼ばない。
 VALIDATION_FINALIZE_SECONDS = 5.0
 # どの段落も監査し終わらなかった（`rag_engine` の STATUS_TIMED_OUT と同じ値）。
 STATUS_TIMED_OUT = "timed_out"
@@ -112,6 +115,10 @@ class AnswerValidation:
     # 時間の上限までに監査し終わらなかった段落の数（#2700。status=partial のときの
     # unassessed の段落）。
     timed_out_claims: int = 0
+    # 業務ガイドの手順ごとの充足（#2708。`guide_step_validation`）と、意味の判定の embedding の
+    # 呼び出し。
+    guide_steps: list[dict[str, Any]] = field(default_factory=list)
+    guide_step_embedding: dict[str, Any] | None = None
 
 
 def evidence_location(metadata: Mapping[str, Any]) -> dict[str, Any]:
@@ -147,8 +154,8 @@ def is_valid(status: str, counts: dict[str, int], *, unreadable: int) -> bool:
 
 async def _guide_findings(
     oracle: OracleClient, answer: str, guide: GuideCheckRef
-) -> tuple[list[AnswerFinding], list[str], int | None]:
-    """業務ガイドの公開の版を読み直し、手順・影響範囲を確かめる。
+) -> tuple[list[AnswerFinding], list[str], int | None, SupportGuideContent | None]:
+    """業務ガイドの公開の版を読み直し、影響範囲を確かめる（手順は主張の監査の後に確かめる。#2708）。
 
     ストアの障害は例外のまま上げる（「業務ガイドが無い」と区別する。handoff §10）。
     """
@@ -172,6 +179,7 @@ async def _guide_findings(
             ],
             ["guide"],
             None,
+            None,
         )
     revision, content = found
     findings: list[AnswerFinding] = []
@@ -185,9 +193,8 @@ async def _guide_findings(
                 f"業務ガイドの版 {guide.revision} は古い版です（今の公開の版は {revision}）。",
             )
         )
-    findings += check_guide_steps(answer, content, guide.conditions)
     findings += check_impact(answer, content, guide.conditions)
-    return findings, ["guide", "guide_steps", "impact"], revision
+    return findings, ["guide", "guide_steps", "impact"], revision, content
 
 
 # 監査の判定を再利用する回答の記録の数の上限（契約の maxItems）。
@@ -275,17 +282,22 @@ async def validate_answer(
     if requests is not None:
         findings += check_requests(answer, requests, gaps)
         checks.append("requests")
+    guide_content: SupportGuideContent | None = None
     if guide is not None:
-        guide_items, guide_checks, guide_revision = await _guide_findings(oracle, answer, guide)
+        guide_items, guide_checks, guide_revision, guide_content = await _guide_findings(
+            oracle, answer, guide
+        )
         findings += guide_items
         checks += guide_checks
-    blocking = any(item.severity == "error" for item in findings)
     deterministic: dict[str, Any] = {
         "findings": findings,
         "checks": checks,
         "guide_revision": guide_revision,
     }
     items: list[dict[str, Any]] = []
+    # 根拠の chunk の id → 文書の id（業務ガイドの手順の参照の照合に使う。監査のモデルには
+    # 渡さない）。
+    documents: dict[str, str] = {}
     missing: list[EvidenceRef] = []
     stale: list[EvidenceRef] = []
     for ref in dict.fromkeys(refs):
@@ -295,6 +307,7 @@ async def validate_answer(
             (stale if exists else missing).append(ref)
             continue
         metadata = dict(chunk.metadata)
+        documents[chunk.chunk_id] = chunk.document_id
         items.append(
             {
                 "id": chunk.chunk_id,
@@ -305,7 +318,12 @@ async def validate_answer(
                 "text": chunk.text,
             }
         )
+    conditions = dict(guide.conditions) if guide is not None else {}
     if not items:
+        if guide_content is not None:
+            findings += guide_step_findings(
+                answer, guide_content, conditions, None, [], embed=None
+            )[0]
         return AnswerValidation(
             status="no_evidence",
             valid=False,
@@ -322,6 +340,7 @@ async def validate_answer(
     )
 
     usage: dict[str, Any] = {}
+    loop = asyncio.get_running_loop()
 
     def run() -> dict[str, Any]:
         from rag_engine.evaluation.answer_validation import validate_answer_claims
@@ -333,7 +352,7 @@ async def validate_answer(
         ):
             engine_settings = build_engine_settings(settings, output_dir=Path(work))
             try:
-                return validate_answer_claims(
+                result = validate_answer_claims(
                     question,
                     answer,
                     items,
@@ -347,6 +366,23 @@ async def validate_answer(
                 )
             finally:
                 usage.update(calls.snapshot())
+        if guide_content is not None:
+            # 業務ガイドの手順ごとの充足（#2708）。主張の監査で裏付けた段落と、手順の主の操作の
+            # 文を対応付ける。意味の判定の embedding は、期限の残りが短ければ呼ばない（#2700）。
+            completed = result.get("status") == "completed"
+            remaining = remaining_seconds()
+            room = remaining is None or remaining > VALIDATION_FINALIZE_SECONDS
+            result["guide_step_results"] = guide_step_findings(
+                answer,
+                guide_content,
+                conditions,
+                list(result.get("claim_checks") or []) if completed else None,
+                [{**item, "document_id": documents.get(item["id"], "")} for item in items],
+                embed=guide_step_embed(settings, loop)
+                if completed and room and guide_content.steps
+                else None,
+            )
+        return result
 
     # 上限の残り（根拠の読み直しの分を引く）を thread の期限にし、LLM 1 回の timeout と
     # 再試行をそれに縮める。
@@ -367,6 +403,14 @@ async def validate_answer(
             result = {"status": STATUS_TIMED_OUT}
     counts = {str(key): int(value) for key, value in (result.get("counts") or {}).items()}
     status = str(result.get("status") or "error")
+    if "guide_step_results" not in result and guide_content is not None:
+        # 監査が上限までに返らなかった: 手順の名前の一致で順序だけを確かめる（モデルは呼ばない）。
+        result["guide_step_results"] = guide_step_findings(
+            answer, guide_content, conditions, None, [], embed=None
+        )
+    step_findings, guide_steps, step_embedding = result.get("guide_step_results") or ([], [], None)
+    findings += step_findings
+    blocking = any(item.severity == "error" for item in findings)
     timed_out = len(result.get("timed_out_passage_ids") or ())
     logger.info(
         "rag_answer_validation",
@@ -378,6 +422,7 @@ async def validate_answer(
             "validation_claims": len(result.get("claim_checks") or ()),
             "validation_timed_out_claims": timed_out,
             "validation_reused_claims": len(result.get("reused_passage_ids") or ()),
+            "validation_guide_step_embedding": step_embedding is not None,
             **{
                 f"validation_llm_{key}": round(float(usage.get(key) or 0), 1)
                 for key in _USAGE_LOG_KEYS
@@ -394,6 +439,8 @@ async def validate_answer(
         evidence_truncated=bool(result.get("evidence_truncated")),
         reused_claims=len(result.get("reused_passage_ids") or ()),
         timed_out_claims=timed_out,
+        guide_steps=guide_steps,
+        guide_step_embedding=step_embedding,
         **deterministic,
     )
 

@@ -50,6 +50,8 @@ _GUIDE_STEP_STATUS: dict[str, RequestStatus] = {
     "reference_only": "partial",
     "unused": "missing",
     "no_evidence": "missing",
+    # 手順ごとの検索を打ち切って検索しなかった手順（#2706）。確かめていないので答えたことにしない。
+    "not_searched": "missing",
 }
 # 確認の行のうち、回答の確定に必要な別の資料の行の接頭辞（grounded.confirmation_lines）。現場の実データ
 # ではないので、needs_environment_data の判定に数えない（#1491）。

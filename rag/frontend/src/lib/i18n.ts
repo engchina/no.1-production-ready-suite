@@ -4861,6 +4861,7 @@ export const ja = {
   "supportGuides.try.stepStatus.reference_only": "資料の原文だけ",
   "supportGuides.try.stepStatus.unused": "説明していない",
   "supportGuides.try.stepStatus.no_evidence": "根拠が見つからない",
+  "supportGuides.try.stepStatus.not_searched": "検索を打ち切った",
 
   "status.UPLOADED": "ファイル準備待ち",
   "status.PREPROCESSING": "ファイル準備中",

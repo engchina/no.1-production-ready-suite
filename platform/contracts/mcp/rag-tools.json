@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 23,
+            "default": 25,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -640,7 +640,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 23,
+            "default": 25,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -810,7 +810,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 23,
+            "default": 25,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1133,7 +1133,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 23,
+            "default": 25,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1513,7 +1513,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 23,
+            "default": 25,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2159,7 +2159,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 23,
+            "default": 25,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2476,7 +2476,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 23,
+            "default": 25,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3594,7 +3594,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 23,
+            "default": 25,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4808,7 +4808,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 23,
+            "default": 25,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4986,7 +4986,7 @@
     {
       "name": "rag_validate_answer",
       "title": "資料との照合",
-      "description": "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。公開する前の最終の検証に使います。見出し・出典の行・利用者への質問の段落は主張ではないので監査せず、claims に含めません。requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順の順序と分岐・影響範囲も決定的に確かめます。",
+      "description": "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。公開する前の最終の検証に使います。見出し・出典の行・利用者への質問の段落は主張ではないので監査せず、claims に含めません。requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順ごとの説明と順序・分岐・影響範囲も確かめます。",
       "inputSchema": {
         "$defs": {
           "EvidenceRefInput": {
@@ -5220,7 +5220,7 @@
               }
             ],
             "default": null,
-            "description": "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順の順序・依存・分岐と影響範囲・承認の記載を確かめる。"
+            "description": "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順ごとの説明の有無・手順の順序・依存・分岐と影響範囲・承認の記載を確かめる。"
           },
           "answer_trace_ids": {
             "description": "回答に使った rag_search の trace_id。渡すと、その回答で監査を通った段落の判定を使う（速くなる）。",
@@ -5378,6 +5378,43 @@
             "title": "ValidatedClaim",
             "type": "object"
           },
+          "ValidatedGuideStep": {
+            "description": "業務ガイドの手順 1 つの、回答での説明の充足（#2708）。",
+            "properties": {
+              "step_id": {
+                "title": "Step Id",
+                "type": "string"
+              },
+              "title": {
+                "title": "Title",
+                "type": "string"
+              },
+              "required": {
+                "description": "回答の充足で必須の手順か（分かっている条件で決まらない分岐の手順は false）。",
+                "title": "Required",
+                "type": "boolean"
+              },
+              "status": {
+                "description": "explained=手順の主の操作を根拠で裏付けた段落で説明した / reference_only=根拠の原文を参考として示しただけ / unused=手順の根拠は渡した根拠にあるが、手順を説明した段落が無い / no_evidence=手順の根拠が渡した根拠に無い（その手順の根拠を集めていない）。",
+                "enum": [
+                  "explained",
+                  "reference_only",
+                  "unused",
+                  "no_evidence"
+                ],
+                "title": "Status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "step_id",
+              "title",
+              "required",
+              "status"
+            ],
+            "title": "ValidatedGuideStep",
+            "type": "object"
+          },
           "ValidationFinding": {
             "properties": {
               "check": {
@@ -5392,7 +5429,7 @@
                 "type": "string"
               },
               "code": {
-                "description": "request_missing / request_partial / request_unverified / guide_unavailable / guide_revision_stale / guide_steps_unmatched / step_order / step_wrong_branch / step_dependency_missing / step_following_missing / impact_scope_missing / approval_missing",
+                "description": "request_missing / request_partial / request_unverified / guide_unavailable / guide_revision_stale / guide_steps_unmatched / guide_step_unexplained / step_order / step_wrong_branch / step_dependency_missing / step_following_missing / impact_scope_missing / approval_missing",
                 "title": "Code",
                 "type": "string"
               },
@@ -5459,7 +5496,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 23,
+            "default": 25,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -5545,6 +5582,14 @@
             "default": null,
             "description": "検査に使った業務ガイドの今の公開の版。",
             "title": "Guide Revision"
+          },
+          "guide_steps": {
+            "description": "guide の手順ごとの説明の充足（分かっている条件で外れた分岐の手順は含めない。guide を渡さないか、段落の判定が出なければ空）。必須の手順で explained でないものは guide_step_unexplained の finding にもなる。",
+            "items": {
+              "$ref": "#/$defs/ValidatedGuideStep"
+            },
+            "title": "Guide Steps",
+            "type": "array"
           },
           "reused_claims": {
             "default": 0,
