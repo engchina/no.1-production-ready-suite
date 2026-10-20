@@ -24,7 +24,9 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
   （裏付けが無い・矛盾）が無いのに、出典を照合できない・確かめが終わらない段落を外すと本文が空に
   なるときは、検証が確かめきれなかったものとして本文を残し、確かめきれなかった点を示す（#1391）。
   番号つきの一覧の段落を外したら、同じ一覧のそれより後の操作の項目も、確かめられない前提に続く操作
-  として外す（実行できる手順として単独で残さない。事実を述べる項目は残す。#2604）。
+  として外す（実行できる手順として単独で残さない。事実を述べる項目は残す。#2604）。外した操作を
+  名前だけで示す番号つきの項目と、中身をすべて外した番号つきの見出しも外し、残った項目の番号を
+  詰める（#2692）。
 - 検証そのもの（呼び出し・接続・応答）が失敗したら `unvalidated` にし、回答は消さずに
   「この回答は検証できませんでした。」を足す（基盤の障害で内容を落とさない）。
 - RAG の根拠を使っていない Run は、RAG の根拠のツールを持つ Agent なら `unvalidated`
@@ -62,7 +64,9 @@ from app.features.agent.answer_passages import (
     is_lookup_note,
     is_operation_step,
     is_structure,
+    label_operation_end,
     list_heading_lines,
+    list_item_label,
     non_claim_passages,
     passage_spans,
     table_header_lines,
@@ -857,9 +861,54 @@ _DANGLING_CONNECTIVE = re.compile(
 )
 
 
-# 番号つきの見出しの行（「1. **承認の有無の確認**」）。中身をすべて外しても消さない
-# （消すと番号が飛ぶ。#1898）。
-_NUMBERED_HEADING = re.compile(r"(?:[0-9０-９]{1,3}[.)．）]|[（(][0-9０-９]{1,3}[）)])\s*\S")
+# 番号で一覧の項目を指す語（「手順 2 の後に」）。本文に残っていれば、項目を外しても番号を振り
+# 直さない（指す先が変わるため。#2692）。
+_STEP_REFERENCE = re.compile(r"(?:手順|ステップ|step)\s*[0-9０-９]{1,3}", re.IGNORECASE)
+_FULLWIDTH_DIGITS = str.maketrans("0123456789", "０１２３４５６７８９")
+
+
+def _with_number(line: str, number: int) -> str:
+    """番号つきの項目の行（`_STEP_ITEM`）の番号を `number` にした行（番号の字の種類は保つ）。"""
+    match = _STEP_ITEM.match(line)
+    if match is None:
+        return line
+    name = next(key for key in ("dot", "paren", "circled") if match.group(key))
+    old = match.group(name)
+    if name == "circled":
+        new = chr(ord("①") + number - 1) if 1 <= number <= 20 else old
+    else:
+        new = str(number)
+        if any("０" <= char <= "９" for char in old):
+            new = new.translate(_FULLWIDTH_DIGITS)
+    return line[: match.start(name)] + new + line[match.end(name) :]
+
+
+def _renumber(original: list[str], kept: dict[int, str]) -> None:
+    """外した項目のある番号つきの一覧の、残った項目の番号を詰める（#2692）。
+
+    `kept` は元の行の番号 → 残った行（書き換える）。
+
+    項目の行が消えたか、番号の印ごと外れた（行の初めの段落を外した）項目を外した項目とする。同じ
+    番号の繰り返しは保つ。本文に番号で項目を指す語（`_STEP_REFERENCE`）があれば振り直さない。
+    """
+    if any(_STEP_REFERENCE.search(line) for line in kept.values()):
+        return
+    for items in _step_ranges(original):
+        numbers: list[tuple[int, int, bool]] = []
+        for start, _end in items:
+            item = _step_item(original[start])
+            now = _step_item(kept[start]) if start in kept else None
+            if item is not None:
+                numbers.append((start, item[2], now is not None and now[:2] == item[:2]))
+        if all(survived for _s, _n, survived in numbers):
+            continue
+        removed = {number for _s, number, survived in numbers if not survived} - {
+            number for _s, number, survived in numbers if survived
+        }
+        for start, number, survived in numbers:
+            shift = sum(1 for item in removed if item < number)
+            if survived and shift:
+                kept[start] = _with_number(kept[start], number - shift)
 
 
 def withhold_paragraphs(
@@ -868,12 +917,14 @@ def withhold_paragraphs(
     """回答から `quotes` の段落を外した本文（位置を決められない段落があれば None）。
 
     `positions` は、原文ではなく位置（行の番号・行の中の開始の位置）で外す段落（`dependent_steps`。
-    同じ原文の段落が手順の外にあっても、手順の中のものだけを外す。#2604）。
+    同じ原文の段落が手順の外にあっても、手順の中のものだけを外す。#2604。`withheld_labels` の
+    項目の名前も位置で外す。#2692）。
 
     段落の位置は RAG と同じ規則で分けて決める（文字列の置換では、同じ文を含む別の段落まで
     削ってしまうため）。段落が無くなった行は消し、続く空行は 1 つにする。段落を外した行に見出し・
-    出典だけが残ればその行も消し、中身をすべて外した節の見出しも消す（#1306。番号つきの見出しは
-    消すと番号が飛ぶので残す。#1898）。見出し・出典の
+    出典だけが残ればその行も消し、中身をすべて外した節の見出しも消す（#1306。番号つきの見出しも
+    消す: 中身の無い操作の名前を実行の順の 1 つとして残さない。#2692）。番号つきの一覧の項目を
+    外したら、残った項目の番号を詰める（`_renumber`。#1898 の番号の飛びを残さない）。見出し・出典の
     ほかに何も残らなければ空文字を返す（本文を載せない）。外した段落の直後（見出し・出典を挟んでも）の
     段落が前の段落を受ける接続の語（「したがって、」など）で始まれば、その語を外す（#1833）。
     """
@@ -885,8 +936,8 @@ def withhold_paragraphs(
     def structure(text: str) -> bool:
         return is_structure(text) or text in headers or text in listed
 
-    # （行, 見出しの行か, 中身のある行か）。消した見出しは None にする。
-    kept: list[tuple[str, bool, bool] | None] = []
+    # （元の行の番号, 行, 見出しの行か, 中身のある行か）。消した見出しは None にする。
+    kept: list[tuple[int, str, bool, bool] | None] = []
     heading: int | None = None
     section_content = False
     section_removed = False
@@ -895,11 +946,10 @@ def withhold_paragraphs(
 
     def close_section() -> None:
         if heading is not None and section_removed and not section_content:
-            entry = kept[heading]
-            if entry is not None and not _NUMBERED_HEADING.match(entry[0].strip()):
-                kept[heading] = None
+            kept[heading] = None
 
-    for index, line in enumerate(answer.split("\n")):
+    original = answer.split("\n")
+    for index, line in enumerate(original):
         spans = passage_spans(line)
 
         def removed(span: tuple[int, int, str], index: int = index) -> bool:
@@ -909,7 +959,7 @@ def withhold_paragraphs(
         if not withheld and len(spans) == 1 and (is_heading(spans[0][2]) or spans[0][2] in listed):
             close_section()
             heading, section_content, section_removed = len(kept), False, False
-            kept.append((line, True, False))
+            kept.append((index, line, True, False))
             continue
         # 行の中の消す範囲（外す段落と、外した段落の直後の段落の先頭の接続の語）。
         cuts: list[tuple[int, int]] = []
@@ -927,21 +977,23 @@ def withhold_paragraphs(
         if not withheld:
             content = any(not structure(text) for _s, _e, text in spans)
             section_content = section_content or content
-            kept.append((line, False, content))
+            kept.append((index, line, False, content))
             continue
         found.update(span[2] for span in withheld)
         section_removed = True
         rest = [text for _s, _e, text in passage_spans(line)]
         if line.strip() and any(not structure(text) for text in rest):
             section_content = True
-            kept.append((line.rstrip(), False, True))
+            kept.append((index, line.rstrip(), False, True))
     close_section()
     if quotes - found:
         return None
     lines = [item for item in kept if item is not None]
-    if not any(content for _line, _heading, content in lines):
+    if not any(content for _index, _line, _heading, content in lines):
         return ""
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(line for line, _h, _c in lines)).strip()
+    texts = {index: line for index, line, _h, _c in lines}
+    _renumber(original, texts)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(texts[index] for index, *_ in lines)).strip()
 
 
 # 番号つきの一覧の項目の行（「1. 」「2）」「（3）」「④」。字下げ・強調の印を許す。#2604）。
@@ -1083,6 +1135,46 @@ def dependent_steps(answer: str, quotes: set[str]) -> list[tuple[int, int, str]]
                 ):
                     dependents.append((index, begin, text))
     return dependents
+
+
+def withheld_labels(answer: str, quotes: set[str]) -> list[tuple[int, int, str]]:
+    """外す操作の段落（`quotes`）と同じ操作を名前だけで示す、番号つきの一覧の項目（行の番号・行の
+    中の開始の位置・原文。#2692）。
+
+    「1. **対象 A の属性訂正**」のような名前だけの項目（下に中身の無い項目。`list_item_label`）は
+    主張として根拠と矛盾しなくても、実行の順の 1 つとして読める。外す段落が操作
+    （`is_operation_step`）で、その操作を名前が指すとき（`label_operation_end`）、項目も外す。
+    1 つの段落を複数の名前が指すときは、段落の文末の述語に近い名前（主の操作）だけを外す。
+    下に中身のある見出しの項目は、中身をすべて外したときに `withhold_paragraphs` が消す（中身の
+    正しい内容は残す）。章題・説明の名前（段落と語の重ならない名前）は外さない。
+    """
+    operations = [quote for quote in quotes if is_operation_step(quote)]
+    if not operations:
+        return []
+    lines = answer.split("\n")
+    labels: list[tuple[int, int, str, str]] = []
+    for items in _step_ranges(lines):
+        for start, end in items:
+            spans = passage_spans(lines[start])
+            if len(spans) != 1 or any(lines[index].strip() for index in range(start + 1, end)):
+                continue
+            begin, _end, text = spans[0]
+            label = list_item_label(text)
+            if label is not None and text not in quotes:
+                labels.append((start, begin, text, label))
+    chosen: dict[tuple[int, int], str] = {}
+    for quote in operations:
+        ends = [
+            (position, item)
+            for item in labels
+            if (position := label_operation_end(item[3], quote)) is not None
+        ]
+        if ends:
+            last = max(position for position, _item in ends)
+            chosen.update(
+                {(item[0], item[1]): item[2] for position, item in ends if position == last}
+            )
+    return [(index, begin, text) for (index, begin), text in sorted(chosen.items())]
 
 
 def without_lookup_notes(answer: str) -> str:
@@ -1242,9 +1334,13 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         body = None
     elif blocking:
         quotes = {str(item.get("answer_quote") or "") for item in blocking}
-        dependents = dependent_steps(answer, quotes)
+        # 外す操作を名前だけで示す番号つきの項目（#2692）。外した項目として、続く手順にも数える。
+        labels = withheld_labels(answer, quotes)
+        dependents = dependent_steps(answer, quotes | {text for _i, _b, text in labels})
         body = withhold_paragraphs(
-            answer, quotes, frozenset((index, begin) for index, begin, _text in dependents)
+            answer,
+            quotes,
+            frozenset((index, begin) for index, begin, _text in [*dependents, *labels]),
         )
     else:
         body = answer.rstrip()

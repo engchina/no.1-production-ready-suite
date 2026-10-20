@@ -48,6 +48,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from app.features.agent.answer_passage_vocabulary import alt as _v
 
@@ -589,6 +590,72 @@ def is_operation_step(text: str) -> bool:
     """
     value = _TRAILING_NOTE.sub("", _EMPHASIS.sub("", _strip_bullet(text))).strip()
     return bool(_OPERATION.search(value) or _INSTRUCTION_END.search(value))
+
+
+def list_item_label(text: str) -> str | None:
+    """番号つきの項目の段落が名詞句の名前だけなら、番号・強調・注記の括弧を除いた語（#2692）。
+
+    「1. **対象 A の属性訂正（記録修正）**」→「対象 A の属性訂正」。文・操作の指示・数量・
+    言い切りの「は」を含む項目（「1. 対象 A を訂正する。」）と、番号の無い行は None。
+    """
+    if not _HEADING_NUMBER.match(text.strip()):
+        return None
+    found = _heading_value(text)
+    return found[0] if found else None
+
+
+# 名前の語（漢字・片仮名・英数字の並び。仮名の助詞・送り仮名と記号で切る。#2692）。
+_NAME_RUN = re.compile(r"[一-鿿々〆ヶァ-ヺー0-9A-Za-z]+")
+# 名前が段落と同じ操作を指すとみなす、名前の語の最小の字数と、段落の語に占める最小の割合。
+# 短い名前（「申請」）と、長い段落の一部の語だけに当たる名前は対応させない。
+_LABEL_MIN_CHARS = 4
+_LABEL_MIN_SHARE = 0.4
+
+
+def _name_runs(text: str) -> list[str]:
+    return _NAME_RUN.findall(re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)))
+
+
+def _covered_end(run: str, text: str, pieces: list[str]) -> int | None:
+    """名前の語 `run` を段落の語 `pieces` の 2 字以上の部分（1 字の語はそのまま）で書けるとき、
+    最後の部分が段落 `text` の中で終わる位置（書けなければ None）。"""
+    if len(run) == 1:
+        return text.rfind(run) + 1 if any(run in piece for piece in pieces) else None
+    # reach[i]: run[:i] を書ける最後の部分（無ければ None）。
+    reach: list[str | None] = [None] * (len(run) + 1)
+    reach[0] = ""
+    for start in range(len(run)):
+        if reach[start] is None:
+            continue
+        for end in range(start + 2, len(run) + 1):
+            part = run[start:end]
+            if any(part in piece for piece in pieces):
+                reach[end] = part
+    last = reach[len(run)]
+    return text.rfind(last) + len(last) if last else None
+
+
+def label_operation_end(label: str, text: str) -> int | None:
+    """名前 `label`（`list_item_label`）が段落 `text` と同じ操作を名前だけで指すとき、名前の
+    最後の語が段落の中で終わる位置（指さなければ None。#2692）。
+
+    名前の語（漢字・片仮名・英数字の並び）がすべて段落の語の部分で書け（「属性訂正」は「属性を
+    先に訂正する」の「属性」と「訂正」）、名前が段落の語の一定の割合を占めるとき対応させる。業務の
+    語は見ない。位置は、1 つの段落が複数の名前を含むとき、文末の述語に近い名前（主の操作）を
+    選ぶのに使う。
+    """
+    runs = _name_runs(label)
+    size = sum(len(run) for run in runs)
+    flat = re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
+    pieces = _NAME_RUN.findall(flat)
+    if size < _LABEL_MIN_CHARS or size < _LABEL_MIN_SHARE * sum(len(piece) for piece in pieces):
+        return None
+    end: int | None = None
+    for run in runs:
+        end = _covered_end(run, flat, pieces)
+        if end is None:
+            return None
+    return end
 
 
 def is_heading(text: str) -> bool:
