@@ -38,6 +38,7 @@ from rag_engine.generation.answer_models import (
     ANSWER_USE_CONFIRMED,
     ANSWER_USE_REFERENCE,
 )
+from rag_engine.generation.answer_policy import RELATION_SUPPORT_RULES
 from rag_engine.generation.applications import (
     APPLICATIONS_SECTION_TITLE,
     CheckedApplication,
@@ -49,6 +50,7 @@ from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
+from rag_engine.generation.table_binding import unbound_table_values
 from rag_engine.generation.value_grounding import unsupported_document_value_claim
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedItem
@@ -262,7 +264,9 @@ AUDIT_SYSTEM_PROMPT = (
     "- 実データが未提供という理由だけで unsupported や not_applicable にしない。原文どおりの説明は supported。\n"
     "- 質問の語（画面名・メッセージ文）が quote にないことだけを理由に unsupported にしない（対象・条件が同じなら supported、対応が未確認なら conditional）。\n"
     "- 観測結果から原因・成功・解消を断定する text も、quote にその因果がなければ unsupported。\n"
-    "3.2 applicability（質問へ適用できるか）\n"
+    # 語・値が根拠のどこかにあることで、別の行・別の成果物の関係を支持済みにしていた (#2659・#2657)。
+    + RELATION_SUPPORT_RULES
+    + "3.2 applicability（質問へ適用できるか）\n"
     "- 質問の対象・変更項目・発生条件と quote の前提が一致すれば matched。quote が同じ業務・機能の種類の一般手順・規則で、質問固有の値（コード名・グループ名・回数・メニュー名の言い回し）が無いだけなら matched とする（資料は一般手順を書く）。\n"
     "- applicability は quote の対象が質問の対象と一致するかで決め、その item 1 つが質問のすべて（承認者・期限・時間帯など）に答えているかでは決めない。「この item だけでは質問に直接答えていない」は not_applicable の理由にならない（答えの充足は request_reviews で判定する）。\n"
     "- 原文に適用条件・限定が明記され、その成立が質問から確認できなければ conditional とし condition に原文の条件を書く。別の対象・項目・業務向けなら not_applicable。\n"
@@ -279,8 +283,8 @@ AUDIT_SYSTEM_PROMPT = (
     "- heading は quote が属する文書の見出し（〔マスタ管理⇒マスタ管理2タブ⇒基本設定〕のような画面経路を含む）。文書の見出し分類と番号表記から推定した参考情報で、誤り得る。"
     "text がその画面名・経路・語を使っていることを理由に unsupported にしない。heading が text の画面・機能と違うことだけを理由に unsupported や not_applicable にもしない（判定は quote と function_context の本文で行う）。\n"
     "- heading・画面コード・本文が示す対象が互いに食い違う場合は matched と即断せず、quote と function_context で質問の対象との一致を確認できなければ conditional か unknown にする。\n"
-    "- function_context は item の function ごとの、quote と同じ機能の本文（隣の手順行を含む原文）。text が quote にない操作・画面・値を含んでいても、それが同じ function の function_context にあれば unsupported にしない。\n"
-    "- 同じく、text が quote にない操作・画面・値を含んでいても、item の evidence_id が指す evidence の本文にあれば unsupported にしない。quote にも evidence にも function_context にもなければ unsupported。\n"
+    "- function_context は item の function ごとの、quote と同じ機能の本文（隣の手順行を含む原文）。text が quote にない操作・画面・値を含んでいても、それが同じ function の function_context で text と同じ対象について述べられていれば unsupported にしない。\n"
+    "- 同じく、text が quote にない操作・画面・値を含んでいても、item の evidence_id が指す evidence の本文で text と同じ対象について述べられていれば unsupported にしない。quote にも evidence にも function_context にもなければ unsupported。別の行・別の対象の記載にあるだけなら、3.1 のとおり裏付けにしない。\n"
     "- checks が指摘した語は evidence と function_context で確かめる。そこにあれば supported のままとし、checks を理由に unsupported にしない。どこにも無ければ unsupported。\n"
     "3.4 function_limits（同じ機能の限定・未説明）\n"
     "- function_limits は同じ機能の原文にある限定・未説明の文。quote や function_limits が『説明していない』『未確認』『のみ適用』と限定している事項を、text が『確認できる』『一致する』『出力できる』と保証していれば unsupported（末尾で留保していても同じ）。summary が同じ保証をしていれば summary_supported=false。\n"
@@ -841,6 +845,13 @@ def _check_screen_example_values(question: str, item: GroundedItem, span: dict) 
     return "画面の表示例の値『" + "』『".join(used) + "』を答えに使っている" if used else ""
 
 
+def _check_table_binding(question: str, item: GroundedItem, span: dict) -> str:
+    # 引用元の表で、値を別の行の区分・名前と結び付けた説明（区分Ⅱ の値として区分Ⅰ の行の値を書く）は、語と値が
+    # 根拠にあっても表の対応と違う。表の行で決定的に確かめる (#2659)。
+    pairs = unbound_table_values(item.text, [span["text"]])
+    return "表の別の行の値: " + "、".join(f"『{value}』は『{other}』の行に無い" for value, other in pairs) if pairs else ""
+
+
 def _check_verbatim_conditions(question: str, item: GroundedItem, span: dict) -> str:
     if "multi_condition" in span.get("tags", ()) and _compact(item.text) != _compact(item.quote):
         return "複数の処理区分は原文のまま提示する"
@@ -857,6 +868,7 @@ ITEM_CHECKS: list[Callable[[str, GroundedItem, dict], str]] = [
     _check_verbatim_conditions,
     _check_value,
     _check_screen_example_values,
+    _check_table_binding,
 ]
 
 # 降格させず、監査への手がかりとして渡す検査。案内した語が本文にあるかという字句の存在を、限定した本文の

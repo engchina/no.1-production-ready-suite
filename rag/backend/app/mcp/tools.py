@@ -217,9 +217,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 21: rag_retrieve_evidence に、呼び出し元が検索文を作る契約（入力の planning・queries・request_id、
 #     出力の planning・request_id・clarifications）を足し、根拠に検索の順位（retrieval_rank）と
 #     本文の由来（origin）を足した（#2651）。
-# 22: rag_validate_answer の claims の status に、図の見た目だけで決まる主張（figure_only）を、
+# 22: rag_validate_answer の claims に、裏付けを採らなかった理由（support_check）を足した（#2659）。
+# 23: rag_validate_answer の claims の status に、図の見た目だけで決まる主張（figure_only）を、
 #     reference_check に図ではない根拠を指した figure_only（not_figure）を足した（#2678）。
-MCP_OUTPUT_SCHEMA_VERSION = 22
+MCP_OUTPUT_SCHEMA_VERSION = 23
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -1745,6 +1746,15 @@ class ValidatedClaim(BaseModel):
             "段落の分類の照合の結果（non_claim_mismatch=監査が見出しとしたが本文の段落で、"
             "内容を確かめていない〔status は unassessed〕 / "
             "reaudited=その段落を内容で監査し直した判定）。食い違いが無ければ null。"
+        ),
+    )
+    support_check: str | None = Field(
+        default=None,
+        description=(
+            "監査の supported を採らなかった理由（target_mismatch=根拠は別の対象"
+            "〔処理・画面・成果物・状態〕の記載 / "
+            "value_unbound=段落が根拠の表の別の行の区分と値を結び付けている / "
+            "quote_unmatched=裏付けとして写した原文が根拠に無い）。採ったときは null。"
         ),
     )
 
@@ -3989,6 +3999,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     reference_check=str(claim.get("reference_check") or "") or None,
                     # 段落の分類の食い違いと監査し直し（#2625）。
                     classification_check=str(claim.get("classification_check") or "") or None,
+                    # 裏付けを採らなかった理由（#2659。監査の判定は audit_status）。
+                    support_check=str(claim.get("support_check") or "") or None,
                 )
                 for claim in result.claim_checks
             ],
