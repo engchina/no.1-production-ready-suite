@@ -66,7 +66,10 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 確かめる（clarify）・条件ごとに答える（branch）なのに、確認の質問だけで答えなかった。回答の前提が
 利用者の分かっていない条件に拠るので、条件付きの回答（conditional）にする。`rag_search` が確認を
 求めたのに答えたときと同じ扱い。#1321・#1322）・回答に使った章節を終わりまで読めず、
-「読み切れていない章節」を示した印（`unread_sections`。#2492）。
+「読み切れていない章節」を示した印（`unread_sections`。#2492）・最終の検証が、業務ガイドの
+必須の手順の説明を回答で確かめられなかった印（`guide_steps`。RAG の `rag_validate_answer` の
+手順ごとの充足〔RAG の回答と同じ規則〕。共有の根拠の共通の文だけを述べた手順・根拠を集めていない
+手順。#2708）。
 
 ここは決め方だけを持つ（呼び出しと保存は `builtin_runtime`）。
 """
@@ -93,6 +96,7 @@ from app.features.agent.answer_validation import (
     WITHHOLDING_CHECKS,
     error_findings,
     is_refuted_claim,
+    unexplained_guide_steps,
 )
 from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
 from app.features.agent.support_task import (
@@ -153,6 +157,8 @@ SIGNAL_BRANCHES = "branches"
 SIGNAL_GUIDE_CONDITIONS = "guide_conditions"
 # 回答に使った章節を終わりまで読めず、回答に「読み切れていない章節」を示した（#2492）。
 SIGNAL_UNREAD_SECTIONS = "unread_sections"
+# 最終の検証が、業務ガイドの必須の手順の説明を回答で確かめられなかった（#2708）。
+SIGNAL_GUIDE_STEPS = "guide_steps"
 # 結論の段落で答えた後の、補足の段落だけの不足の文（不足の印にしない記録。#1475）。
 SIGNAL_SUPPLEMENT_ABSENCE = "supplement_absence"
 # 結論の段落で答えた後の、補足の段落だけを最終の検証が外した（不足の印にしない記録。#1491）。
@@ -163,6 +169,7 @@ _GAP_SIGNALS = frozenset(
         SIGNAL_BRANCHES,
         SIGNAL_GUIDE_CONDITIONS,
         SIGNAL_UNREAD_SECTIONS,
+        SIGNAL_GUIDE_STEPS,
         SIGNAL_ABSENCE,
         SIGNAL_QUESTION,
         SIGNAL_UNVERIFIED_SECTION,
@@ -366,6 +373,14 @@ def _guide_withheld(validation: JsonObject | None) -> bool:
     )
 
 
+def _guide_steps_unexplained(validation: JsonObject | None) -> bool:
+    """最終の検証が、業務ガイドの必須の手順の説明を確かめられなかったか（判定が出たときだけ。#2708）。"""
+    if not isinstance(validation, dict) or validation.get("status") != STATUS_COMPLETED:
+        return False
+    result = validation.get("result")
+    return isinstance(result, dict) and bool(unexplained_guide_steps(result))
+
+
 def _rag_insufficient(steps: list[RunStep]) -> bool:
     """Run のどれかの `rag_search` が insufficient_evidence を返したか（#1454）。"""
     for step in steps:
@@ -482,6 +497,8 @@ def answer_outcome(
         signals.add(SIGNAL_DATA_CONFIRMATION)
     if isinstance(coverage, dict) and coverage.get("status") == "incomplete":
         signals.add(SIGNAL_UNREAD_SECTIONS)
+    if _guide_steps_unexplained(validation):
+        signals.add(SIGNAL_GUIDE_STEPS)
     gaps = bool(signals & _GAP_SIGNALS)
 
     if last_search is not None and not _retrieved_after(steps, last_search[0]):

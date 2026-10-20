@@ -15,6 +15,8 @@
  * - `measureSearchablePanels`: 開いた検索つきの複数選択のパネルの下部の行（1 行か・件数の折り返し・操作の組の分かれ）と位置（#2091）
  * - `findIconTextMisalignment`: 文字の横のアイコン（lucide の svg）のうち、縦の中心が隣の文字の 1 行目の中心から
  *   ずれたもの（px。#2371）
+ * - `findFloatingFormActionBars`: 本文を上から下へスクロールして、画面に貼り付く・`PageHeader` の上に描かれる
+ *   フォームの確定の行（`FormActionBar`。#2715）
  *
  * 製品の spec は相対パスで import し（RAG・Agent `../../platform/packages/ui/e2e/layout-checks`、NL2SQL
  * `../../../../platform/packages/ui/e2e/layout-checks`）、結果を製品の `expect` で確かめる:
@@ -874,4 +876,65 @@ export async function findIconTextMisalignment(
     },
     { root: options.root ?? "body", tolerance: options.tolerance ?? 1 }
   );
+}
+
+/** スクロールで画面に貼り付いた（または `PageHeader` の上に描かれた）フォームの確定の行（#2715）。 */
+export interface FloatingFormActionBar {
+  /** 行の読み上げ名（`FormActionBar` の `ariaLabel`）。 */
+  label: string;
+  /** 本文（`#pr-main`）のスクロールの位置（px）。 */
+  scrollTop: number;
+  /**
+   * `positioned`: `position` が static / relative でない（sticky・fixed で画面に貼り付く）。
+   * `over-page-header`: `PageHeader` の上に描かれた。`missing`: 確定の行が見つからない（検査が空振りしない）。
+   */
+  reason: "positioned" | "over-page-header" | "missing";
+}
+
+/**
+ * 本文（`#pr-main`）を上端から下端まで半画面ずつスクロールし、フォームの確定の行（`[data-form-action-bar]`）が
+ * 画面に貼り付く・`PageHeader`（`[data-page-header]`。lg 以上は上端に貼り付く）の上に描かれる所を探す（#2715）。
+ * 確定の行はフォームの末尾のふつうの行で、内容と一緒にスクロールし、上端の `PageHeader` の下へ隠れる。
+ * 重なりは、行と `PageHeader` の見えている範囲が重なる所の中央で `elementFromPoint` が行を指すかで確かめる。
+ * 終わったら本文のスクロールを元の位置に戻す。
+ */
+export async function findFloatingFormActionBars(page: EvaluatePage): Promise<FloatingFormActionBar[]> {
+  return page.evaluate(() => {
+    const results: { label: string; scrollTop: number; reason: "positioned" | "over-page-header" | "missing" }[] = [];
+    const main = document.querySelector<HTMLElement>("#pr-main");
+    const header = document.querySelector<HTMLElement>("[data-page-header]");
+    const bars = Array.from(document.querySelectorAll<HTMLElement>("[data-form-action-bar]"));
+    if (!main || bars.length === 0) return [{ label: "", scrollTop: 0, reason: "missing" as const }];
+    const original = main.scrollTop;
+    const step = Math.max(1, Math.floor(main.clientHeight / 2));
+    const max = main.scrollHeight - main.clientHeight;
+    const seen = new Set<string>();
+    for (let top = 0; ; top = Math.min(max, top + step)) {
+      main.scrollTop = top;
+      const viewport = main.getBoundingClientRect();
+      const head = header?.getBoundingClientRect();
+      for (const bar of bars) {
+        const label = bar.getAttribute("aria-label") ?? "";
+        const position = getComputedStyle(bar).position;
+        if (position !== "static" && position !== "relative" && !seen.has(`${label}:positioned`)) {
+          seen.add(`${label}:positioned`);
+          results.push({ label, scrollTop: main.scrollTop, reason: "positioned" });
+        }
+        if (!head) continue;
+        const rect = bar.getBoundingClientRect();
+        const left = Math.max(rect.left, head.left, viewport.left);
+        const right = Math.min(rect.right, head.right, viewport.right);
+        const upper = Math.max(rect.top, head.top, viewport.top);
+        const lower = Math.min(rect.bottom, head.bottom, viewport.bottom);
+        if (right - left < 1 || lower - upper < 1) continue;
+        const hit = document.elementFromPoint((left + right) / 2, (upper + lower) / 2);
+        if (hit && bar.contains(hit)) {
+          results.push({ label, scrollTop: main.scrollTop, reason: "over-page-header" });
+        }
+      }
+      if (top >= max) break;
+    }
+    main.scrollTop = original;
+    return results;
+  }, undefined);
 }

@@ -111,13 +111,15 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_ARTICLE_CATALOG_REFINE_ARTICLES` / `RAG_ARTICLE_CATALOG_REFINE_CANDIDATES` | `6` / `60` | 条の選択の 2 段目（#2379）。1 段目で選んだ条と同じ章（目録の親の見出しの下で同じ深さ）の条を `RAG_ARTICLE_CATALOG_REFINE_CANDIDATES` 件まで本文の書き出し（章節の最初の chunk から名前を除いた 120 文字。`AnswerDependencies.article_leads`）つきで見せ、足りない論点の条を文書ごとに `RAG_ARTICLE_CATALOG_REFINE_ARTICLES` 件まで足させる（論点ごとの出力）。目録は文書全体の条を名前だけで並べるので、条の名前が質問の語から遠い条（重なったときの扱い・特例など）は 1 段目で選ばれにくい。全部の条に書き出しを付けると目録が大きくなりすぎるため、選んだ条の章に絞る（粗い選択から細かい選択へ）。2 段目の呼び出しにも出力と時間の上限を同じく掛け、失敗したら 1 段目の条だけを使う。工程に「同じ章から足した条」を残す。0 は 2 段目を行わない。`backend/.env` だけで変える |
 | `RAG_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP` / `RAG_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS` | `4096` / `90` | 条の選択の LLM の呼び出し 1 回の出力の上限（token）と時間の上限（秒）。選ぶ出力は目録の番号の列で、推論の量が low なら数百 token・数秒、medium なら推論を含めて約 2,600 token・中央値 16 秒（最大 43 秒）で終わる。時間の上限は出力の上限を遅い速さ（約 70 token/秒）で出し切る秒より長くし、停滞の検出で送り直した呼び出しも終わるようにする（45 秒では medium で送り直しの後に切れた）。まれにモデルが同じ出力を繰り返して回答の上限（32768 token）まで書き続け、並行の呼び出しをすべて待つ段全体が数分止まるため、役目に合わせて抑える（上限で未完了でも上限を広げて送り直さない。`rag_engine.adapters.oci.bind_output_cap`）。超えた文書は選ばずに続け（温度 0 で同じ入力は同じ出力になるので送り直さない）、工程「条の選択」に「条を選べなかった文書」と理由（出力の上限 / 時間の上限）を残す。失敗は cache しない。0 は抑えない。`backend/.env` だけで変える |
 | `RAG_ANSWER_VALIDATION_MAX_INPUT_BYTES` | `96000` | 回答の最終の検証（`rag_validate_answer`）でモデルに渡す入力の上限（UTF-8 の bytes。指示・質問・回答・根拠を含む。16,000〜1,000,000）。根拠は渡された順に収まるだけ使い、収まらない根拠は検証に使わない（`evidence_truncated`）。検証のモデルの入力の上限より小さくする（下の「最終の検証の質問の事実と根拠の予算」）。`backend/.env` だけで変える |
+| `RAG_ANSWER_VALIDATION_TIMEOUT_SECONDS` | `540` | 回答の最終の検証の通しの上限（秒。600 以下。#2700）。根拠の読み直しから監査の LLM の呼び出しまでを含み、LLM 1 回の timeout・再試行・停滞の送り直しをこの残り時間に縮める。上限までに監査が返らなかった段落は `unassessed`（`status=partial`。どの段落も返らなければ `timed_out`）にして返す（下の「最終の検証の時間の上限と段落の組」）。Agent の接続 `rag` の待ち時間（`AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`、既定 630 秒）より短くする。`backend/.env` だけで変える |
+| `RAG_ANSWER_VALIDATION_BATCH_PASSAGES` / `RAG_ANSWER_VALIDATION_CONCURRENCY` | `5` / `4` | 回答の最終の検証で、監査の LLM の 1 回の呼び出しに渡す回答の段落の数（1〜128）と、同時に監査する組の数（1〜16。#2700）。`backend/.env` だけで変える |
 | `RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED` | `true` | 要求ごとの根拠の確認と、根拠の無い要求だけの再検索（#1279、handoff §8.3 / §9）。回答の生成の前に、質問契約の要求単位（`task_contract.request_units`。背景の文は除く）ごとに、回答の材料（親と子の本文）が要求の語（全文検索と同じ分かち書き）をどれだけ含むかを決定的に判定する（`rag_engine/retrieval/request_coverage.py`。LLM は呼ばない）。最良の根拠が語の 6 割以上を含めば「根拠あり」、3 割台なら「一部」、それ未満なら「なし」。判定した要求が 2 つ以上あり「なし」の要求があるときだけ、その要求の文（＋要求の語を含む用語の別名・業務ガイドの検索の手がかり）で 1 回ずつ検索し（embedding・hybrid 検索・rerank。文書の選択と画面目録は使わない）、回答の材料に無い根拠を既存の根拠の後ろに足す（既存の根拠は減らさない）。工程の名前は「要求ごとの根拠の確認」、記録は `diagnostics.answer.request_coverage`（要求ごとの状態・再検索の前後・検索文・足した根拠・時間）。取込・回答設定 > 検索方法「回答の検索と生成」で変更でき、検索・回答プロファイルで上書きできる |
 | `RAG_REQUEST_COVERAGE_MAX_QUERIES` | `2` | 根拠の無い要求の再検索の回数の上限（1 要求 1 回、0〜5） |
 | `RAG_REQUEST_COVERAGE_MAX_CHUNKS` | `4` | 再検索で回答の材料に足す根拠（親 chunk）の数の上限（0〜12）。要求ごとに順番に 1 件ずつ選ぶ |
 | `RAG_REQUEST_COVERAGE_DEADLINE_SECONDS` | `10` | 再検索の期限（秒、0〜60）。過ぎたら次の要求の検索を始めない（実行中の 1 回は止めない） |
 | `RAG_REQUEST_COVERAGE_MAX_SUBQUESTIONS` | `5` | 小問ごとの検索をする小問の数の上限（1 小問 1 回、0〜10。0 はしない。#2399）。丸数字・(1) などで並べた小問（言語資源の `question_cues` の小問の印。資料の手順の印 `markers.circled_numbers` とは別）は、小問ごとに 1 つの要求単位になり（小問の前の前置きは背景の単位にし、各小問に `preamble` として付ける）、根拠が「なし」か「一部」の小問ごとに、前置き＋小問の文で検索する。小問の検索を先に、根拠の無い要求の再検索を後に、同じ期限（`RAG_REQUEST_COVERAGE_DEADLINE_SECONDS`）で行い、検索の枠は `request_coverage.plan_targeted_retrievals` の 1 か所で数える。回答の本文は小問ごとの見出し（言語資源の `answer_labels.subquestion_heading_template`）で分け、根拠の無い小問だけを「確認できませんでした」にする |
 | `RAG_REQUEST_COVERAGE_CHUNKS_PER_SUBQUESTION` | `2` | 小問ごとの検索で、小問ごとに回答の材料に確保する根拠（親 chunk）の数（0〜6。0 は小問ごとの検索をしない）。根拠の無い要求の再検索の `RAG_REQUEST_COVERAGE_MAX_CHUNKS` とは別に数える |
-| `RAG_GUIDE_STEP_RETRIEVAL_ENABLED` | `true` | 業務ガイドの手順ごとの検索（#2395。静的な多段）。照合した業務ガイドの手順（分かっている条件で外れた分岐の手順を除く）ごとに「質問 + 手順の検索の手がかり（無ければ題名）」で検索し、手順が参照する資料と頁（`steps[].references`）があれば、その頁に絞った検索も行う（`rag_engine/retrieval/guide_steps.py`。LLM は呼ばない。文書の選択・画面目録・条の目録は使わない）。各手順に 1 回を先に割り当て、残りで参照のある手順の絞らない検索をする。手順の上位の根拠と参照の頁の根拠を既存の根拠の後ろに足し（既存の根拠は減らさない）、回答の生成には手順の id ごとの根拠（Evidence の表示 ID）を渡す。工程の名前は「業務ガイドの手順ごとの検索」、記録は `diagnostics.answer.guide.step_retrieval`（手順ごとの検索文・取れた根拠の件数・参照の頁の有無・足した根拠）。同じ業務ガイドの記録に、回答の手順ごとの充足 `step_coverage`（手順の id・状態・必須か）と、手順の対応付けの embedding の呼び出し `step_embedding`（回数・文の数・時間・失敗か）も残す（#2686。下書きで試した回答の応答 `steps` にも手順ごとの状態を返す）。検索・回答プロファイルで上書きできる |
+| `RAG_GUIDE_STEP_RETRIEVAL_ENABLED` | `true` | 業務ガイドの手順ごとの検索（#2395。静的な多段）。照合した業務ガイドの手順（分かっている条件で外れた分岐の手順を除く）ごとに「質問 + 手順の検索の手がかり（無ければ題名）」で検索し、手順が参照する資料と頁（`steps[].references`。表計算の資料は頁ではなくシートと行の `sheet_ranges` で、chunk のシート名と行の範囲で絞る。#2663）があれば、その範囲に絞った検索も行う（`rag_engine/retrieval/guide_steps.py`。LLM は呼ばない。文書の選択・画面目録・条の目録は使わない）。各手順に 1 回を先に割り当て、残りで参照のある手順の絞らない検索をする。手順の上位の根拠と参照の頁の根拠を既存の根拠の後ろに足し（既存の根拠は減らさない）、回答の生成には手順の id ごとの根拠（Evidence の表示 ID）を渡す。工程の名前は「業務ガイドの手順ごとの検索」、記録は `diagnostics.answer.guide.step_retrieval`（手順ごとの検索文・取れた根拠の件数・参照の頁の有無・足した根拠）。同じ業務ガイドの記録に、回答の手順ごとの充足 `step_coverage`（手順の id・状態・必須か）と、手順の対応付けの embedding の呼び出し `step_embedding`（回数・文の数・時間・失敗か）も残す（#2686。下書きで試した回答の応答 `steps` にも手順ごとの状態を返す）。検索・回答プロファイルで上書きできる |
 | `RAG_GUIDE_STEP_MAX_QUERIES` | `4` | 手順ごとの検索の回数の上限（参照の頁に絞った検索を含む、0〜10）。検索・回答プロファイルで上書きできる |
 | `RAG_GUIDE_STEP_CHUNKS_PER_STEP` | `2` | 1 手順の絞らない検索から手順の根拠にする親 chunk の数（1〜5） |
 | `RAG_GUIDE_REFERENCE_MAX_CHUNKS` | `4` | 参照の頁に絞った検索から、順位に関係なく回答の材料に入れる親 chunk の数の合計（0〜12）。手順の間で交互に選ぶ |
@@ -255,6 +257,21 @@ items のうち `applies=matched` の規則・操作など。gap・条件つき�
 id を落とした形（「chunk_set:番号」）と、区切りを横線で書いた形（「78f40985‑…‑244」）も根拠に結び付ける（番号はそのまま一致し、
 1 つの根拠に決まるときだけ）。Agent が検証に渡す根拠の並び（回答が引いた根拠を先に）も同じ形を数える（検証の指示の版 10）。
 
+**最終の検証の時間の上限と段落の組（#2700）**: 監査の 1 回の呼び出しの時間は、ほぼ出力（判定と推論）の token の数で決まり、
+段落の数に比例する。推論型のモデル（出力が毎秒 16〜26 token、混んだ時間は 3〜10 token）では、回答の全段落（10〜50 段落）を
+1 回で監査すると 1 回の出力が 1 万〜2 万 token・100〜540 秒になり、停滞の送り直し・LLM 1 回の timeout（600 秒）と重なって
+Agent の MCP の待ち時間（630 秒）を超えていた（呼び出し側が待つのをやめた後も RAG は LLM を呼び続け、最長 1,937 秒かかった）。
+そこで回答の段落を `RAG_ANSWER_VALIDATION_BATCH_PASSAGES` 個ずつの組に分け、同時に `RAG_ANSWER_VALIDATION_CONCURRENCY` 組までを
+並行に監査する（どの組にも指示・質問・回答の全文・根拠を同じに渡し、渡す段落だけを替える。判定の基準・照合・`_enforce_support`
+は変えない）。検証の全体に `RAG_ANSWER_VALIDATION_TIMEOUT_SECONDS` の期限を置き、LLM 1 回の timeout・再試行を残りの時間に縮め、
+期限までに返らなかった組の段落は「照合の時間の上限までに、この段落の監査が終わりませんでした。」の `unassessed` にして、
+確かめ終わった組の判定と一緒に返す（`status=partial`。組の期限は組ごとの子の期限で、1 つの組が出力の上限で期限を切っても
+ほかの組は続ける）。期限の前に起きたほかの失敗（出力の契約の違反が続いた等）は、分けない監査と同じく失敗にする。検証は
+回答フロー（チャット・検索・品質評価の回答）とは別の executor で動かし（`answer_threads.validation_executor`）、回答の
+executor が埋まっても待たない。1 回の検証ごとに `rag_answer_validation` のログ（状態・秒・上限・根拠と判定の数・時間切れの
+段落の数・LLM の呼び出しの回数と秒・出力と推論の token・停滞の送り直し）を残す。Agent は `partial` の確かめ終わらなかった
+段落を外さずに本文に残して確かめきれなかった点として示し、`timed_out` は検証できなかった（`validation_timed_out`）として扱う。
+
 **最終の検証の対応・対象の確かめ（#2659・#2657・#2653）**: 語・値・名前が根拠のどこかにあること、同じ話題の根拠が
 あることは、段落が述べる対応（区分と値・成果物と列・処理と操作）の裏付けにならない。検証のモデルは、判定（`status`）の
 前に、判定に使った根拠の記載（`evidence_quote`。根拠の本文からそのまま写す）、段落が内容を当てはめている対象
@@ -271,11 +288,24 @@ id を落とした形（「chunk_set:番号」）と、区切りを横線で書�
 同じ規則（`RELATION_SUPPORT_RULES`）を入れる。Agent は `support_check` の種類を「資料で確認できず除いた内容」の項目の
 理由に出す（検証の指示の版 13）。
 
+**業務ガイドの手順の充足（#2491・#2649・#2685・#2706・#2708）**: 手順の根拠は、手順ごとの検索の結果に、手順の参照の頁の
+範囲に当たる回答の材料の根拠を足したもの（`retrieval/guide_steps.py` の `reference_step_sources`）。手順ごとの検索が期限・
+回数の上限で止まって検索しなかった手順（記録の `step_retrieval.unsearched_step_ids`）は、参照の頁の根拠が材料に無ければ
+`not_searched`（「検索を打ち切った」。`no_evidence` と分ける。回答の構造では `guide:<手順>=missing`）。検索しなかった手順が
+あるときは、1 つの手順の根拠だけを引いた item も、その手順と根拠を共有しうるものとして共有の item と同じ判定（主の操作の
+文・手順に固有な度合い）を通し、共通の文だけで手順を `explained` にしない（`grounded.guide_step_assignment`）。
+最終の検証（`rag_validate_answer`）に業務ガイドを渡すと、同じ規則で Agent の回答の段落と手順を対応付ける
+（`evaluation/guide_step_validation.py`。手順の根拠は渡した根拠のうち参照の頁の範囲に当たるものと本文に検索の手がかりが
+出るもの、手順の説明の item は監査が裏付けとして写した原文。embedding は語で決まらない共有の item があるときだけ 1 回）。
+結果は出力の `guide_steps`（`explained` / `reference_only` / `unused` / `no_evidence`。`no_evidence` は渡した根拠に手順の
+根拠が無い）で、説明の無い必須の手順は warning の finding `guide_step_unexplained`（文は回答の不足の行と同じ）にする。
+順序の検査は説明にした段落の位置で行い、手順の題名の一致だけで `guide_steps_unmatched` にしない（MCP の出力の版 24）。
+
 **チャットの確認の質問（#717）**: 検索・回答プロファイルのルールに確認の質問と選択肢（2〜8 件。表示名・説明・検索に足す語・回答に渡す前提・章節）を設定すると、チャットは質問がそのルールに一致したとき（選択肢の名前・語が質問に既に入っていれば除く）、回答の前に確認を出す。類似問の提示の後（「どれでもない」を選んだとき）に出し、1 つの質問で聞き返すのは 1 回だけ。選んだ答えは backend がルールから引き直し、章節は検索の絞り込み `page_ranges`（文書と chunk のページの重なり。複数の章節は OR）に、選択・前提・その他の入力は回答のプロンプトの前置きに、検索に足す語は補助の検索文にする。範囲の中に根拠が無ければ、そのように答える（範囲の外から補わない）。回答の末尾に対象の範囲を示し、回答の記録の diagnostics の `scope` に残す。章節のページは、確認を出すときの文書の今の章節（章節ナビゲーションの章節。人の修正と今の抽出の結果から決める。`app/rag/document_sections_service.py`）のページを使う（#721。ルールには章節の id を保存しているので、抽出をやり直したり章節を直したりしてページが変わっても追う）。章節が今は無いときだけ、ルールに保存したときのページを使う。
 
 **回答前の確認（#1839。3 製品共通の部品と UX 契約）**: チャットの確認のカードは platform の `ClarificationCard`（[UX 契約 confirm-before-answer.md](../../platform/docs/ux-contracts/confirm-before-answer.md)）で出し、ルールの確認と業務ガイドの条件の確認（#1238）で同じ操作にする。「その他（自由入力）」は常に出す（ルールに保存した `allow_other` は読まない。業務ガイドの確認も同じ）。業務ガイドの条件の確認の自由入力は条件の値に当てはめず（値で分かれる手順を利用者の文で決めない）、条件は分からないままにして、利用者の入力を回答のプロンプトの前置きに渡す（値ごとに分けるか、当てはまる値を確かめるよう案内する）。確認を終えるのは「確認せずに回答」だけで、確認を使わずに質問のまま送る（`clarification_skipped_rule_id`）。カードに「確認をやめる」は置かない（#2311。質問を取り消すのは入力欄の「停止」）。確認は規則の照合（LLM を使わない）なので準備の経過の行は出さず、「この内容で回答」もカードを閉じてすぐ回答の作成に進む。答え・飛ばしたことは USER のメッセージの `clarification_json`（migration `20261015_001_message_clarification`）に保存し、会話の利用者の側に「回答前に確認した内容」（`ClarificationRecord`）で出す。検索・回答プロファイルの設定「曖昧な質問の扱い」（`config.clarification_policy`。`confirm` = 確認してから回答する（既定）/ `assume` = 前提を示して回答する）が `assume` なら、確認を出さない（`/clarifications/suggest` が None を返す）。1 つの質問で聞き返すのは 1 回だけなので、確認の上限（往復）は持たない。MCP の `rag_search`（Agent から呼ぶとき。#2117）も同じルールの確認を使う: 方針が `confirm` で、質問に一致したルールが確認を持てば（`suggest_clarification`）、検索・回答をせずに `outcome=needs_clarification` と `clarifications`（`condition_id` = `rule:<ルールの id>`・問い・選択肢の表示名・`multiple`）を返す。答えは `conditions` の `rule:<id>`（選んだ選択肢の表示名と自由入力を「、」で区切る。表示名と同じ部分を選択肢、残りを自由入力にする）で受け、今の質問にそのルールが一致するときだけ（会話の前の答えを別の話題に当てない）`resolve_clarification` で回答の前提と `page_ranges` にする。`skip_clarification: true` は確認を出さずに回答する（Agent の Control Plane が、利用者に確認しない Run で付ける）。業務ガイドの条件の確認は、MCP では今までどおり回答の中の判断（`guide.decision=clarify`）で返す。
 
-**画面の図の項目の種類（#2404）**: Vision は画面の図の項目（`form_fields`）に種類 `kind`（`select` / `text` / `checkbox` / `radio` / `date` / `button` / `unknown`。固定の値で、見た目の手がかりで判断できなければ `unknown`）を付ける（`rag_engine/models/llm.py` の `FormFieldOutput`・抽出の規則 `parsing/vision_prompt_rules.py`）。chunk の本文の行は `項目名 = 表示値 [状態] (種類)`（種類の語は言語資源の `content_labels.form_field_kinds`。`unknown` は付けない）、metadata は `image_evidence[].visual_structure.form_fields[].kind`。Vision の応答の台帳（`VisionCheckpoints`）は版 2 にし、種類の無い応答は使い回さない（既存の文書は再解析で反映する）。回答では、質問に名前が出た項目の種類を根拠の注記として生成の材料に渡す（`generation/form_field_kinds.py`。LLM は呼ばない）。業務ガイドの照合で分からなかった選択の条件のうち、選択肢（か言い換え `value_aliases`）が種類の語と同じで 2 つ以上の種類に対応する条件は、根拠の種類が 1 つに決まれば値を決め、回答の記録の業務ガイドの要約で「分かっている条件」（出所 `document`）にする（`app/rag/support_guide_evidence.py`。種類が割れる・拾えないときは今までどおり）。画面の図で確かめる条件は、業務ガイドで出所を「資料」（`source=document`）にすると、利用者に聞かずに回答の根拠で決まる（出所が利用者の条件は、今までどおり回答の前に確認する）。業務ガイドの schema は変えない。
+**画面の図の項目の種類（#2404）**: Vision は画面の図の項目（`form_fields`）に種類 `kind`（`select` / `text` / `checkbox` / `radio` / `date` / `button` / `unknown`。固定の値で、見た目の手がかりで判断できなければ `unknown`）を付ける（`rag_engine/models/llm.py` の `FormFieldOutput`・抽出の規則 `parsing/vision_prompt_rules.py`）。chunk の本文の行は `項目名 = 表示値 [状態] (種類)`（種類の語は言語資源の `content_labels.form_field_kinds`。`unknown` は付けない）、metadata は `image_evidence[].visual_structure.form_fields[].kind`。Vision の応答の台帳（`VisionCheckpoints`）は版 2 にし、種類の無い応答は使い回さない（既存の文書は再解析で反映する）。回答では、質問に名前が出た項目の種類を根拠の注記として生成の材料に渡す（`generation/form_field_kinds.py`。LLM は呼ばない）。業務ガイドの照合で分からなかった選択の条件のうち、選択肢（か言い換え `value_aliases`）が種類の語と同じで 2 つ以上の種類に対応する条件は、根拠の種類が 1 つに決まれば値を決め、回答の記録の業務ガイドの要約で「分かっている条件」（出所 `document`）にする（`app/rag/support_guide_evidence.py`。種類が割れる・拾えないときは今までどおり）。画面の図で確かめる条件は、業務ガイドで出所を「資料」（`source=document`）にすると、利用者に聞かずに回答の根拠で決まる（出所が利用者の条件は、今までどおり回答の前に確認する）。条件が決まったら、回答の手順の計画もその値に切り替える（#2689）: backend が照合の時に、種類ごとに決まる値の組を既知にした手順の計画（残る手順と必須か・業務ガイドのルールの本文）を前もって作って渡し（`evidence_plans`）、rag_engine は回答の各 round と確定で、根拠で決まった条件の組に一致する計画に切り替える（`form_field_kinds.with_resolved_plan`）。外れた分岐の手順（「分からない場合」の手順を含む）は回答の手順と充足から外れ、決まった分岐の手順とその後続は必須になる（参考の原文だけでは充足しない）。切り替えた計画は回答の記録の `form_field_kinds.guide_plan`（手順の id と必須か）に残す。種類が割れる・拾えないときは、条件が決まっていない計画のまま。業務ガイドの schema は変えない。
 
 **見出しの木（#1517）**: Docling の解析の結果では、chunk の見出しの列（`section_path`）と、章節ナビゲーションの抽出の章節
 （方式「解析エンジンの見出し」）の元になる要素の `section_path` を、同じ規則で作る（`rag_engine/chunking/headings.py` の

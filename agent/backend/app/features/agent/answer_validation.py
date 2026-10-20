@@ -28,7 +28,12 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
   名前だけで示す番号つきの項目と、中身をすべて外した番号つきの見出しも外し、残った項目の番号を
   詰める（#2692）。
 - 検証そのもの（呼び出し・接続・応答）が失敗したら `unvalidated` にし、回答は消さずに
-  「この回答は検証できませんでした。」を足す（基盤の障害で内容を落とさない）。
+  「この回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。」を足す
+  （基盤の障害で内容を落とさない）。RAG が時間の上限までにどの段落も確かめ終わらなかった
+  （`timed_out`）ときも同じ（理由 `validation_timed_out`）。
+- RAG が時間の上限までに一部の段落だけを確かめた（`partial`。#2700）ときは、確かめ終わった
+  段落の判定で回答を組み立て、確かめ終わらなかった段落（`unassessed`）は外さずに本文に残し、
+  確かめきれなかった点として示す（時間切れで内容を落とさない。記録の `withheld.unverified`）。
 - RAG の根拠を使っていない Run は、RAG の根拠のツールを持つ Agent なら `unvalidated`
   （`no_rag_evidence`）にして「資料と照らし合わせて確かめていない」と足し、持たない Agent は
   `skipped`（回答はそのまま）。利用者への確認の質問だけの回答は、資料の主張を含まないので
@@ -148,9 +153,13 @@ REASON_ABSENCE_ONLY = "absence_only"
 REASON_ANSWER_TOO_LONG = "answer_too_long"
 REASON_CONNECTION_NOT_FOUND = "connection_not_found"
 REASON_UNUSABLE_RESULT = "unusable_result"
+# RAG が時間の上限までにどの段落も確かめ終わらなかった（`rag_validate_answer` の
+# status=timed_out。#2700）。
+REASON_VALIDATION_TIMED_OUT = "validation_timed_out"
 REASON_VALIDATION_ERROR = "validation_error"
 
-UNVERIFIED_NOTICE = "この回答は検証できませんでした。"
+# RAG の「参考情報」の節の説明（該当は確認できていない）と同じ言い方で、照合できなかったことを示す。
+UNVERIFIED_NOTICE = "この回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。"
 NO_EVIDENCE_NOTICE = "この回答は資料の根拠を使っておらず、資料と照らし合わせて確かめていません。"
 UNVERIFIED_HEADING = "資料で確認できず除いた内容"
 WITHHELD_INTRO = "根拠で確かめられなかった次の内容は、回答に載せていません。"
@@ -158,6 +167,11 @@ NOTHING_CONFIRMED = "根拠で確かめられた内容はありませんでし�
 # 根拠で否定された段落が無いのに、出典を照合できない段落を外すと本文が空になるとき（#1391）。
 UNVERIFIED_KEPT_INTRO = (
     "次の内容は、根拠の出典と照らし合わせられず確かめきれませんでした。"
+    "根拠と矛盾する・根拠に無いという判定ではないため、回答の本文は載せています。"
+)
+# 照合が時間の上限までに一部の段落を確かめ終わらなかったとき（#2700）。
+TIMED_OUT_KEPT_INTRO = (
+    "次の内容は、資料との照合が時間の上限までに終わらず確かめきれませんでした。"
     "根拠と矛盾する・根拠に無いという判定ではないため、回答の本文は載せています。"
 )
 GUIDE_WITHHELD = (
@@ -199,6 +213,11 @@ _SUPPORT_CHECK_LABELS = {
     "target_mismatch": "質問と別の対象についての記載",
     "value_unbound": "根拠の表の対応と違う",
 }
+# 業務ガイドの手順の説明の充足（#2708）。`rag_validate_answer` の `guide_steps` の状態の強さの順
+# （接続をまたいでは最も良い状態を採る）と、説明の無い必須の手順の finding（warning。文は RAG の
+# 回答の不足の行と同じ）。
+GUIDE_STEP_STATUS_ORDER = ("explained", "reference_only", "unused", "no_evidence")
+GUIDE_STEP_UNEXPLAINED = "guide_step_unexplained"
 # 外した段落に続く番号つきの手順の段落の、節の項目の理由（#2604。`dependent_steps`）。
 DEPENDENT_STEP_LABEL = "確かめられない手順に続く手順"
 # 根拠で否定した判定（根拠に無い・根拠と矛盾）。出典を照合できない（`citation_error`）・
@@ -206,8 +225,13 @@ DEPENDENT_STEP_LABEL = "確かめられない手順に続く手順"
 # きれなかったもの（#1391）。図の画像を読まずに図の見た目を述べた段落（`figure_only`）も、
 # 根拠で確かめようのない断定として否定と同じく扱う（#2678。本文を残して注記するだけにしない）。
 REFUTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted", FIGURE_ONLY})
+# RAG が時間の上限までに一部の段落だけを確かめた結果の status（#2700。確かめ終わらなかった
+# 段落は `unassessed`）と、どの段落も確かめ終わらなかった結果の status（判定として使えない）。
+RESULT_PARTIAL = "partial"
+RESULT_TIMED_OUT = "timed_out"
 # 判定として使える `rag_validate_answer` の結果の status（それ以外は検証の失敗として扱う）。
-_USABLE_RESULT_STATUSES = ("completed", "no_evidence", "no_claims")
+# 接続ごとの結果をまとめるときは、前のものを全体の status にする（どれかが partial なら partial）。
+_USABLE_RESULT_STATUSES = (RESULT_PARTIAL, "completed", "no_evidence", "no_claims")
 # 節の項目は 1 行に縮める（段落・指摘の全文は成果物の判定に残る）。項目の数は切らない（#2361。
 # 画面の件数のバッジと節の項目の数を一致させ、同じ種類の項目を 2 か所に分けない）。
 _MAX_QUOTE_CHARS = 80
@@ -245,7 +269,7 @@ def _connection_prefix(function_name: str) -> str | None:
     return function_name[: -len(mcp_base_tool_name(function_name)) - len(MCP_TOOL_SEPARATOR)]
 
 
-def _locator_labels(item: JsonObject) -> list[object]:
+def locator_labels(item: JsonObject) -> list[object]:
     """根拠の見出し（章節の列・章節の名前・シート名）。回答と照らすのに使う（#1451）。"""
     labels: list[object] = []
     locator = item.get("locator")
@@ -272,18 +296,18 @@ def _evidence_refs(tool: str, output: JsonObject) -> list[_EvidenceRef]:
     if tool in EVIDENCE_TOOLS:
         evidence = output.get("evidence")
         items = [
-            (item, item.get("excerpt"), _locator_labels(item), [item.get("file_name")])
+            (item, item.get("excerpt"), locator_labels(item), [item.get("file_name")])
             for item in (evidence if isinstance(evidence, list) else [])
             if isinstance(item, dict)
         ]
     elif tool == RAG_READ_SOURCE:
-        items = [(output, output.get("text"), _locator_labels(output), [output.get("file_name")])]
+        items = [(output, output.get("text"), locator_labels(output), [output.get("file_name")])]
     elif tool in {RAG_READ_DOCUMENT, RAG_READ_SECTION}:
         chunks = output.get("chunks")
         document_id = output.get("document_id")
         body = output.get("text")
         body = body if isinstance(body, str) else ""
-        section_labels = _locator_labels(output)
+        section_labels = locator_labels(output)
         names = [output.get("file_name")]
         items = []
         for chunk in chunks if isinstance(chunks, list) else []:
@@ -296,7 +320,7 @@ def _evidence_refs(tool: str, output: JsonObject) -> list[_EvidenceRef]:
                 else ""
             )
             ref = {"document_id": document_id, "chunk_id": chunk.get("chunk_id")}
-            items.append((ref, chunk_text, [*_locator_labels(chunk), *section_labels], names))
+            items.append((ref, chunk_text, [*locator_labels(chunk), *section_labels], names))
     else:
         return []
     refs: list[_EvidenceRef] = []
@@ -1070,6 +1094,15 @@ def merge_results(results: list[JsonObject]) -> JsonObject:
                 seen_findings.add(finding_key)
                 findings.append(item)
     checks = sorted({str(item) for result in results for item in result.get("checks") or []})
+    guide_steps = merge_guide_steps(results)
+    if guide_steps:
+        # 接続のどれかで説明を確かめた手順は、ほかの接続の「説明が無い」を残さない。
+        explained = {str(step["step_id"]) for step in guide_steps if step["status"] == "explained"}
+        findings = [
+            item
+            for item in findings
+            if item.get("code") != GUIDE_STEP_UNEXPLAINED or item.get("step_id") not in explained
+        ]
     valid = (
         status == "completed"
         and not stale
@@ -1090,7 +1123,59 @@ def merge_results(results: list[JsonObject]) -> JsonObject:
         "missing_evidence": missing,
         "stale_evidence": stale,
         "evidence_truncated": any(bool(result.get("evidence_truncated")) for result in results),
+        "guide_steps": guide_steps,
     }
+
+
+def merge_guide_steps(results: list[JsonObject]) -> list[JsonObject]:
+    """接続ごとの業務ガイドの手順の充足（`guide_steps`）を、手順ごとに最も良い状態にまとめる（#2708）。"""
+    merged: dict[str, JsonObject] = {}
+    for result in results:
+        for step in result.get("guide_steps") or []:
+            if not isinstance(step, dict) or step.get("status") not in GUIDE_STEP_STATUS_ORDER:
+                continue
+            step_id = str(step.get("step_id") or "")
+            current = merged.get(step_id)
+            if current is None or GUIDE_STEP_STATUS_ORDER.index(
+                step["status"]
+            ) < GUIDE_STEP_STATUS_ORDER.index(current["status"]):
+                merged[step_id] = dict(step)
+    return list(merged.values())
+
+
+def unexplained_guide_steps(result: JsonObject) -> list[JsonObject]:
+    """必須の手順のうち、回答で説明を確かめられなかった手順（#2708）。
+
+    `rag_validate_answer` の `guide_steps` から選ぶ。
+    """
+    return [
+        step
+        for step in result.get("guide_steps") or []
+        if isinstance(step, dict) and step.get("required") and step.get("status") != "explained"
+    ]
+
+
+def guide_step_gap_lines(result: JsonObject) -> list[str]:
+    """説明を確かめられなかった必須の手順の、節の項目（RAG の finding の文。回答の本文は残す）。"""
+    missing = {str(step.get("step_id")) for step in unexplained_guide_steps(result)}
+    return [
+        f"- {_short(item['message'], _MAX_FINDING_CHARS)}"
+        for item in result.get("findings") or []
+        if isinstance(item, dict)
+        and item.get("code") == GUIDE_STEP_UNEXPLAINED
+        and item.get("step_id") in missing
+        and item.get("message")
+    ]
+
+
+def _with_guide_step_gaps(
+    answer: str, withheld: JsonObject, lines: list[str]
+) -> tuple[str, JsonObject]:
+    """本文をそのまま載せる回答に、説明を確かめられなかった業務ガイドの手順を節で示す（#2708）。"""
+    if not lines:
+        return answer, withheld
+    record = {**withheld, "guide_steps": len(lines), "listed": _listed(lines)}
+    return f"{answer.rstrip()}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), record
 
 
 # 前の段落を受ける接続の語（#1833）。その前の段落を外すと受ける先が無くなる（「したがって、…」
@@ -1452,6 +1537,8 @@ def _notice_lines(result: JsonObject, claims: list[JsonObject]) -> list[str]:
     # RAG の決定的な検査（要求の漏れ・手順の順序と分岐・影響範囲。#1276）の error。
     findings = [item for item in error_findings(result) if item.get("message")]
     lines += [f"- {_short(item['message'], _MAX_FINDING_CHARS)}" for item in findings]
+    # 説明を確かめられなかった業務ガイドの必須の手順（#2708）。
+    lines += guide_step_gap_lines(result)
     stale = _refs_count(result.get("stale_evidence"))
     if stale:
         lines.append(f"- 根拠の {stale} 件は文書の古い版です。最新の版で確かめ直してください。")
@@ -1519,6 +1606,11 @@ def _dependent_lines(answer: str, texts: list[str]) -> list[str]:
     return [f"- {DEPENDENT_STEP_LABEL}: 「{_short(text, _MAX_QUOTE_CHARS)}」" for text in quotes]
 
 
+def _guide_step_count(lines: list[str]) -> JsonObject:
+    """記録の、説明を確かめられなかった業務ガイドの手順の数（無ければ項目を足さない。#2708）。"""
+    return {"guide_steps": len(lines)} if lines else {}
+
+
 def _dependent_count(lines: list[str]) -> JsonObject:
     """記録の、外す段落に続く手順の段落の数（無ければ項目を足さない）。"""
     return {"dependent_steps": len(lines)} if lines else {}
@@ -1544,17 +1636,35 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     外した段落が番号つきの一覧の中にあれば、同じ一覧のそれより後の操作の項目も、確かめられない前提に
     続く操作として外し、節に「確かめられない手順に続く手順」として示す（`dependent_steps`。#2604。
     事実を述べる項目は残す。本文を残すときも示す）。記録の `dependent_steps` はその段落の数
-    （無ければ項目を足さない）。
+    （無ければ項目を足さない）。RAG が時間の上限までに一部の段落を確かめ終わらなかった結果
+    （`partial`。#2700）の `unassessed` の段落は外さずに残し、節に確かめきれなかった点として
+    示す（記録の `unverified`）。
     """
     errors = error_findings(result)
     unchanged = {"claims": 0, "findings": 0, "all": False}
+    step_gaps = guide_step_gap_lines(result)
     if result.get("valid") is True or (result.get("status") == "no_claims" and not errors):
-        return answer, unchanged
+        return _with_guide_step_gaps(answer, unchanged, step_gaps)
     claims = [item for item in mark_non_claims(answer, result)["claims"] if isinstance(item, dict)]
+    # 照合が時間の上限までに確かめ終わらなかった段落（#2700）は外さずに残し、確かめきれなかった
+    # 点として示す。
+    pending = [
+        item
+        for item in claims
+        if result.get("status") == RESULT_PARTIAL
+        and item.get("status") == "unassessed"
+        and not item.get("non_claim")
+    ]
+    pending_ids = {id(item) for item in pending}
+    pending_lines = (
+        [TIMED_OUT_KEPT_INTRO, *(_claim_line(item) for item in pending)] if pending else []
+    )
     blocking = [
         item
         for item in claims
-        if item.get("status") in BLOCKING_CLAIM_STATUSES and not item.get("non_claim")
+        if item.get("status") in BLOCKING_CLAIM_STATUSES
+        and not item.get("non_claim")
+        and id(item) not in pending_ids
     ]
     unreadable = _refs_count(result.get("stale_evidence")) + _refs_count(
         result.get("missing_evidence")
@@ -1566,7 +1676,7 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         and not unreadable
         and any(item.get("status") == "supported" or item.get("non_claim") for item in claims)
     ):
-        return answer, unchanged
+        return _with_guide_step_gaps(answer, unchanged, step_gaps)
     guide_errors = any(item.get("check") in WITHHOLDING_CHECKS for item in errors)
     body: str | None
     # 外す段落に続く番号つきの手順（#2604）と、その中で節に書く段落（主張の段落）。
@@ -1597,24 +1707,40 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         # （`unassessed`）段落を外すと本文が空になる: 検証が確かめきれなかったので、本文は消さずに
         # 確かめきれなかった点を示す（検証の失敗で内容を落とさないのと同じ。#1391）。
         # 確かめきれなかった前提に続く手順も、本文に残したうえで、前提に続く手順だと示す（#2604）。
-        lines = [UNVERIFIED_KEPT_INTRO, *_notice_lines(result, blocking), *dependent_lines]
+        lines = [
+            UNVERIFIED_KEPT_INTRO,
+            *_notice_lines(result, blocking),
+            *dependent_lines,
+            *pending_lines,
+        ]
         withheld = {
             "claims": 0,
             "findings": 0,
             "all": False,
-            "unverified": len(blocking),
+            "unverified": len(blocking) + len(pending),
+            **_guide_step_count(step_gaps),
             **_dependent_count(dependent_lines),
             "listed": _listed(lines),
         }
         return f"{answer.rstrip()}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), withheld
-    lines = [*_notice_lines(result, blocking), *dependent_lines]
+    # 確かめ終わらなかった段落だけ（外す段落・指摘・読めない根拠・確かめられない業務ガイドの
+    # 手順が無い）なら、外した内容の項目は書かない。
+    only_pending = (
+        bool(pending)
+        and body
+        and not (blocking or errors or unreadable or dependent_lines or step_gaps)
+    )
+    lines = [] if only_pending else [*_notice_lines(result, blocking), *dependent_lines]
     if blocking or (not body and not guide_errors):
         lines.insert(0, WITHHELD_INTRO)
+    lines += pending_lines
     text = body or (GUIDE_WITHHELD if guide_errors else NOTHING_CONFIRMED)
     withheld = {
         "claims": len(blocking),
         "findings": len(errors),
         "all": not body,
+        **({"unverified": len(pending)} if pending else {}),
+        **_guide_step_count(step_gaps),
         **_dependent_count(dependent_lines),
         "listed": _listed(lines),
     }
@@ -1656,7 +1782,7 @@ def combine_validations(
     """接続ごとの内容（`validation_content`）を 1 つにし、利用者に見せる回答を返す（#1277）。
 
     - どれかの接続を確かめられなかった（`unvalidated`）: 全体も `unvalidated` で、回答は消さずに
-      「検証できませんでした」を足す（基盤の障害で内容を落とさない）。
+      照合を終えられなかったこと（`UNVERIFIED_NOTICE`）を足す（基盤の障害で内容を落とさない）。
     - すべての接続で判定が出た: 段落ごとにまとめた判定で回答を組み立てる（`publish_answer`）。
 
     `figures` は MCP 接続ごとの図の画像の読み取り（`figure_readings` と `carried_figure_readings`。

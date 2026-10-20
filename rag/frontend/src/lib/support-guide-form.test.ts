@@ -23,7 +23,9 @@ import {
   nextRowId,
   normalizeIssuePath,
   formatPageRanges,
+  formatSheetRanges,
   parsePageRanges,
+  parseSheetRanges,
   parseSupportGuideImport,
   removeStep,
   renameConditionId,
@@ -145,6 +147,53 @@ describe("資料の頁の範囲", () => {
     );
     expect(issuePathLabel("steps[1].references[0].page_ranges")).toBe("手順 2・根拠の頁");
     expect(issuePathLabel("references[0].page_ranges")).toBe("資料 1・根拠の頁");
+  });
+});
+
+describe("表計算の資料のシートと行", () => {
+  it("「シート名!42-45」「シート名!B3:D10」「シート名」を読み、同じ形に戻す", () => {
+    const ranges = parseSheetRanges(" シートA!42-45 \nシート B！ｂ３：ｄ１０\n\nシートC");
+    expect(ranges).toEqual([
+      { sheet_name: "シートA", row_start: 42, row_end: 45 },
+      { sheet_name: "シート B", row_start: 3, row_end: 10, cell_range: "B3:D10" },
+      { sheet_name: "シートC" },
+    ]);
+    expect(formatSheetRanges(ranges ?? [])).toBe("シートA!42-45\nシート B!B3:D10\nシートC");
+    expect(parseSheetRanges("")).toEqual([]);
+  });
+
+  it("シート名の無い行・逆の行・読めない位置は読まない", () => {
+    expect(parseSheetRanges("!42")).toBeNull();
+    expect(parseSheetRanges("シートA!45-42")).toBeNull();
+    expect(parseSheetRanges("シートA!行42")).toBeNull();
+    expect(parseSheetRanges("シートA!0")).toBeNull();
+  });
+
+  it("シートの行を内容に保ち、頁と同時に入れたら保存の前に止める", () => {
+    const sheetContent: SupportGuideContent = {
+      ...content,
+      references: [
+        {
+          document_id: "doc-s",
+          title: "表計算 D",
+          section_path: [],
+          version: "",
+          page_ranges: [],
+          sheet_ranges: [{ sheet_name: "シートA", row_start: 42, row_end: 42 }],
+        },
+      ],
+    };
+    const form = guideFormFromContent(sheetContent);
+    expect(form.references[0].sheetRanges).toBe("シートA!42");
+    expect(guideContentFromForm(form).references[0].sheet_ranges).toEqual([
+      { sheet_name: "シートA", row_start: 42, row_end: 42 },
+    ]);
+    expect(guideFormIssues(form)).toEqual([]);
+    form.references[0] = { ...form.references[0], pageRanges: "3" };
+    expect(guideFormIssues(form).map((issue) => issue.path)).toContain("references[0].sheet_ranges");
+    form.references[0] = { ...form.references[0], pageRanges: "", sheetRanges: "!3" };
+    expect(guideFormIssues(form).map((issue) => issue.path)).toContain("references[0].sheet_ranges");
+    expect(issuePathLabel("references[0].sheet_ranges")).toBe("資料 1・根拠のシートと行（表計算）");
   });
 });
 

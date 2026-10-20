@@ -19,6 +19,19 @@
   開く確かめ（`passed_evidence`）には入れない）。添付は最終の検証の対象外で根拠の ID の
   印も無いため、回答で引用は回答がその添付のファイル名を書いたときに付ける。
 
+- 結び付けの方法（`binding`。#2707）: 最終の検証が判定を出した（`completed`）ときは、その
+  判定（`supported`）と根拠の ID の印だけで結び付ける（`validation`）。検証が時間切れ・失敗・
+  無効のときは、モデルを呼ばない決定的な照合（`text`）で、回答の段落と AI に渡した根拠を結び
+  付ける: 段落の特徴（引用・ID・コード・見出し・同じ文字の並び・章節の参照。最終の検証に渡す
+  根拠の並べ替えと同じ `evidence_match`）と、文書名と頁を書いた行（出典の行・段落の中の
+  「文書 A.pdf p.3」）。照合で確かめていない結び付けなので、回答での使われ方は参考
+  （`reference`）にし、画面は RAG の「参考情報」（根拠の原文と、該当は確認できていないことの
+  説明）として出す（`references`。「資料により確認できた事項」にしない）。照合が時間の上限までに
+  どの段落も確かめ終わらなかった（`timed_out`。成果物は `unvalidated`）ときも `text`。一部の段落
+  だけを確かめた（`partial`。#2700）ときは `partial`: 確かめ終わった段落は `validation` と同じに
+  結び付け、確かめ終わらなかった段落（`unassessed`）は本文の根拠の行にせず、決定的な照合で
+  結び付けた根拠を「参考情報」にする（確かめ終わった段落の根拠の行にある根拠は重ねない）。
+
 内容は画面と MCP が読む形（RAG の MCP の根拠の項目の一部と `cited`）。本文の抜粋は
 RAG が返した長さのまま（添付は `ATTACHMENT_EXCERPT_CHARACTERS` まで）。
 """
@@ -38,11 +51,19 @@ from pr_system_settings.chat_attachments.tools import (
     VIEW_IMAGE_TOOL_NAME,
 )
 
-from app.features.agent.answer_passages import passage_spans
+from app.features.agent.answer_passages import KIND_CITATION, non_claim_passages, passage_spans
 from app.features.agent.answer_validation import (
     FIGURE_IMAGE_READ,
+    RESULT_PARTIAL,
     STATUS_COMPLETED,
     cited_chunk_ids,
+    locator_labels,
+)
+from app.features.agent.evidence_match import (
+    EvidenceText,
+    answer_features,
+    matched_features,
+    order_weights,
 )
 from app.features.agent.support_task import RAG_RETRIEVE_EVIDENCE, RAG_SEARCH
 from app.features.agent.tools import mcp_base_tool_name
@@ -65,6 +86,16 @@ ATTACHMENT_EVIDENCE_TYPE = "chat_attachment"
 # 添付の根拠の抜粋の上限（節は 1 回に 8000 文字まで読めるので、画面と成果物では縮める）。
 ATTACHMENT_EXCERPT_CHARACTERS = 2_000
 _ANSWER_USES = frozenset({"confirmed", "reference"})
+# 結び付けの方法（#2707）。
+BINDING_VALIDATION = "validation"
+BINDING_TEXT = "text"
+# 照合が時間の上限までに一部の段落だけを確かめた（`rag_validate_answer` の status=partial。#2700）。
+# 確かめ終わった段落は `validation`、確かめ終わらなかった段落は `text` と同じに結び付ける。
+BINDING_PARTIAL = "partial"
+# 決定的な照合で 1 つの段落に結び付ける根拠の上限（当たりの重みの大きい順）。
+MAX_TEXT_BOUND_PER_PASSAGE = 3
+# 「参考情報」に出す根拠の原文の上限の文字数。
+REFERENCE_QUOTE_CHARACTERS = 200
 # RAG の根拠の項目のうち、そのまま写すもの。
 _COPIED_FIELDS = (
     "document_id",
@@ -395,6 +426,27 @@ def _figure_image_readings(validation: Mapping[str, Any] | None) -> dict[str, Js
     return found
 
 
+def _pending_quotes(validation: Mapping[str, Any] | None) -> set[str]:
+    """照合が時間の上限までに確かめ終わらなかった主張の段落（partial の `unassessed`。#2700）。
+
+    `answer_validation._publish` が本文に残して「確かめきれなかった点」に示す段落と同じ。
+    """
+    if not isinstance(validation, Mapping) or validation.get("status") != STATUS_COMPLETED:
+        return set()
+    result = validation.get("result")
+    if not isinstance(result, Mapping) or result.get("status") != RESULT_PARTIAL:
+        return set()
+    claims = result.get("claims")
+    return {
+        claim["answer_quote"]
+        for claim in (claims if isinstance(claims, list) else [])
+        if isinstance(claim, Mapping)
+        and claim.get("status") == "unassessed"
+        and not claim.get("non_claim")
+        and isinstance(claim.get("answer_quote"), str)
+    }
+
+
 # 回答が本文に書いた根拠の ID の印（「【証拠 ID: 0f3a…:7】」「〔根拠: …〕」「[evidence_id: …]」）。
 # 中の ID を根拠に引き当てられた印だけを数える（Markdown のリンク `[文](URL)` は除く）。
 _MARKER = re.compile(r"【[^】\n]{1,200}】|〔[^〕\n]{1,200}〕|\[[^\]\n]{1,200}\](?!\()")
@@ -419,36 +471,209 @@ def _passages(
     chunk_ids: Sequence[str],
     supported: list[tuple[str, str]],
     markers: list[JsonObject],
+    text_bound: Mapping[str, list[str]],
 ) -> list[JsonObject]:
     """回答の段落ごとの根拠（段落の原文, chunk の一覧）。
 
-    根拠は、最終の検証がその段落を裏付けた根拠と、段落が書いた根拠の ID の印の根拠。画面は
-    段落の下に「根拠：文書 p.N」を出す。根拠の無い段落は入れない。
+    根拠は、最終の検証がその段落を裏付けた根拠と、段落が書いた根拠の ID の印の根拠と、決定的な
+    照合で結び付けた根拠（`text_bound`。検証が判定を出さなかったときだけ）。画面は段落の下に
+    「根拠：文書 p.N」を出す。根拠の無い段落は入れない。
     """
     known = set(chunk_ids)
     passages: list[JsonObject] = []
-    seen: set[str] = set()
-    for line in answer.split("\n"):
-        for _start, _end, text in passage_spans(line):
-            if not text or text in seen:
-                continue
-            seen.add(text)
-            ids = {chunk_id for quote, chunk_id in supported if quote == text and chunk_id in known}
-            for marker in markers:
-                if marker["text"] in text:
-                    ids.update(marker["chunk_ids"])
-            if ids:
-                passages.append({"text": text, "chunk_ids": _ordered_ids(ids, chunk_ids)})
+    for text in dict.fromkeys(_answer_passages(answer)):
+        ids = {chunk_id for quote, chunk_id in supported if quote == text and chunk_id in known}
+        for marker in markers:
+            if marker["text"] in text:
+                ids.update(marker["chunk_ids"])
+        ids.update(text_bound.get(text, ()))
+        if ids:
+            passages.append({"text": text, "chunk_ids": _ordered_ids(ids, chunk_ids)})
     return passages
+
+
+def _answer_passages(answer: str) -> list[str]:
+    """回答の段落の原文（行ごとに分けた文。最終の検証の `answer_quote` と同じ分け方）。"""
+    return [
+        text for line in answer.split("\n") for _start, _end, text in passage_spans(line) if text
+    ]
+
+
+# ---- 決定的な照合（検証が判定を出さなかったとき。#2707） ------------------------------
+
+# 文書名の後ろの頁（「p.3」「p. 3-5」「pp.3–5」「3 頁」「3ページ」）。
+_PAGE = re.compile(
+    r"(?<![A-Za-z])p{1,2}\.?\s*([0-9]{1,4})(?:\s*[-–〜~]\s*([0-9]{1,4}))?"
+    r"|([0-9]{1,4})\s*(?:[-–〜~]\s*([0-9]{1,4})\s*)?(?:ページ|頁)",
+    re.IGNORECASE,
+)
+# 抜粋の中の HTML の印（表の抜粋）と、原文を文に分ける区切り。
+_TAG = re.compile(r"<[^>]+>")
+_SENTENCE_END = re.compile(r"(?<=[。！？!?])|\n+")
+_MIN_FILE_STEM_CHARS = 3
+
+
+def _evidence_text(item: Mapping[str, Any]) -> EvidenceText:
+    evidence = EvidenceText()
+    evidence.add(item.get("excerpt"), locator_labels(dict(item)), [item.get("file_name")])
+    return evidence
+
+
+def _pages(text: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for match in _PAGE.finditer(unicodedata.normalize("NFKC", text)):
+        start = int(match.group(1) or match.group(3))
+        end = int(match.group(2) or match.group(4) or start)
+        ranges.append((start, max(start, end)))
+    return ranges
+
+
+def _page_range(item: Mapping[str, Any]) -> tuple[int, int] | None:
+    locator = item.get("locator")
+    if not isinstance(locator, Mapping):
+        return None
+    start, end = locator.get("page_start"), locator.get("page_end")
+    if not isinstance(start, int) or isinstance(start, bool) or start <= 0:
+        return None
+    if isinstance(end, int) and not isinstance(end, bool) and end >= start:
+        return start, end
+    return start, start
+
+
+def _names_document(text: str, file_name: str) -> bool:
+    """段落が文書のファイル名（拡張子つき、または 3 文字以上の拡張子なしの名前）を書いたか。"""
+    name = _comparable(file_name).strip()
+    if not name:
+        return False
+    value = _comparable(text)
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return name in value or (len(stem) >= _MIN_FILE_STEM_CHARS and stem in value)
+
+
+def _located(text: str, items: Sequence[Mapping[str, Any]], *, citation: bool) -> list[str]:
+    """段落が文書名と頁で指した根拠（文書名を書き、書いた頁が根拠の頁に重なるもの）。
+
+    出典の行（`citation`）で頁を書いていないときは、その文書の最初の根拠に結び付ける（どの根拠か
+    決まらないが、文書は回答が示した）。主張の段落の頁の無い文書名は結び付けない（特徴の照合に任せる）。
+    """
+    pages = _pages(text)
+    found: list[str] = []
+    for file_name in dict.fromkeys(str(item.get("file_name") or "") for item in items):
+        if not file_name or not _names_document(text, file_name):
+            continue
+        same = [item for item in items if item.get("file_name") == file_name]
+        if pages:
+            for item in same:
+                page = _page_range(item)
+                if page and any(start <= page[1] and page[0] <= end for start, end in pages):
+                    found.append(str(item["chunk_id"]))
+        elif citation:
+            found.append(str(same[0]["chunk_id"]))
+    return found
+
+
+def _featured(
+    passage: str, items: Sequence[Mapping[str, Any]], texts: list[EvidenceText]
+) -> list[str]:
+    """段落の特徴（`evidence_match`）で当たった根拠。回答に固有の特徴（その特徴を持つ根拠が少ない）
+    で当たったものを、当たりの重みの大きい順に `MAX_TEXT_BOUND_PER_PASSAGE` 件まで。"""
+    features = answer_features(passage)
+    matched = [matched_features(features, text) for text in texts]
+    ranked = sorted(
+        (
+            (-weight, index)
+            for index, ((distinct, weight), keys) in enumerate(
+                zip(order_weights(matched), matched, strict=True)
+            )
+            if keys and distinct
+        ),
+    )
+    return [str(items[index]["chunk_id"]) for _weight, index in ranked[:MAX_TEXT_BOUND_PER_PASSAGE]]
+
+
+def _text_bound(
+    answer: str, items: Sequence[Mapping[str, Any]], only: set[str] | None = None
+) -> dict[str, list[str]]:
+    """決定的な照合で段落に結び付けた根拠（段落の原文 → chunk の一覧）。
+
+    主張の段落は、段落の特徴で当たった根拠と、書いた文書名と頁で指した根拠。出典の行は、書いた
+    文書名と頁で指した根拠。見出し・質問・不足の文などには結び付けない。`only` を渡したら、その
+    段落（照合が確かめ終わらなかった主張の段落）だけを結び付ける。
+    """
+    if not items:
+        return {}
+    kinds = non_claim_passages(answer)
+    texts = [_evidence_text(item) for item in items]
+    bound: dict[str, list[str]] = {}
+    for passage in dict.fromkeys(_answer_passages(answer)):
+        kind = kinds.get(passage)
+        if only is not None and (passage not in only or kind is not None):
+            continue
+        if kind is not None and kind != KIND_CITATION:
+            continue
+        ids = _located(passage, items, citation=kind == KIND_CITATION)
+        if kind is None:
+            ids.extend(_featured(passage, items, texts))
+        if ids:
+            bound[passage] = list(dict.fromkeys(ids))
+    return bound
+
+
+def _reference_quote(item: Mapping[str, Any], passages: Sequence[str]) -> str:
+    """「参考情報」に出す根拠の原文（抜粋の中で、結び付けた段落と最も多くの特徴が当たる文）。
+
+    当たる文が無ければ抜粋の先頭の文。`REFERENCE_QUOTE_CHARACTERS` を超えたら縮めて「…」を付ける。
+    原文の文字は変えない（表の抜粋の HTML の印だけを除き、空白をつめる）。
+    """
+    excerpt = _TAG.sub(" ", str(item.get("excerpt") or ""))
+    sentences = [" ".join(part.split()) for part in _SENTENCE_END.split(excerpt)]
+    sentences = [sentence for sentence in sentences if sentence]
+    if not sentences:
+        return ""
+    features = [answer_features(passage) for passage in passages]
+    best, score = sentences[0], 0
+    for sentence in sentences:
+        evidence = EvidenceText()
+        evidence.add(sentence, [])
+        found = sum(len(matched_features(feature, evidence)) for feature in features)
+        if found > score:
+            best, score = sentence, found
+    if len(best) > REFERENCE_QUOTE_CHARACTERS:
+        return best[:REFERENCE_QUOTE_CHARACTERS].rstrip() + "…"
+    return best
+
+
+def _references(
+    passed: Sequence[Mapping[str, Any]], passages: Sequence[JsonObject]
+) -> list[JsonObject]:
+    """「参考情報」の根拠（根拠ごとの原文。回答の段落に結び付いた順）。"""
+    by_chunk = {str(item["chunk_id"]): item for item in passed}
+    used: dict[str, list[str]] = {}
+    for passage in passages:
+        for chunk_id in passage["chunk_ids"]:
+            used.setdefault(chunk_id, []).append(passage["text"])
+    references: list[JsonObject] = []
+    for chunk_id, texts in used.items():
+        item = by_chunk.get(chunk_id)
+        quote = _reference_quote(item, texts) if item is not None else ""
+        if quote:
+            references.append({"quote": quote, "chunk_ids": [chunk_id]})
+    return references
 
 
 def answer_evidence(
     steps: Sequence[RunStep], answer: str, validation: Mapping[str, Any] | None
 ) -> JsonObject:
-    """成果物「回答の根拠」の内容（`items`・`passed`・`cited`・`markers`・`passages`）。
+    """成果物「回答の根拠」の内容。
 
-    `markers` は回答の中の根拠の ID の印と引き当てた根拠（画面は印を文字で出さず、根拠の行にする）、
-    `passages` は段落ごとの根拠（画面は段落の下に「根拠：文書 p.N」を出す）。
+    - `items`・`passed`・`cited`: AI に渡した根拠と、回答で引用した根拠の数。
+    - `markers`: 回答の中の根拠の ID の印と引き当てた根拠（画面は印を文字で出さず、根拠の
+      行にする）。
+    - `passages`: 段落ごとの根拠（画面は段落の下に「根拠：文書 p.N」を出す）。
+    - `binding`: 結び付けの方法（`validation` / `partial` / `text`。#2707）。
+    - `references`: `text` / `partial` のときの「参考情報」の根拠（根拠の原文 `quote` と chunk）。
+    - `citation_lines`: `text` のときの、根拠に結び付いた出典の行（画面は「参考情報」の根拠の
+      行で示し、平文の行を重ねて出さない）。
 
     `answer` は利用者に見せる回答（最終の検証の後の本文）、`validation` は最終の検証の成果物の内容
     （無ければ None）。
@@ -457,8 +682,35 @@ def answer_evidence(
     chunk_ids = [str(item["chunk_id"]) for item in passed]
     supported = _supported_claims(validation)
     figures = _figure_image_readings(validation)
-    cited = cited_chunk_ids(answer, chunk_ids) | {chunk_id for _quote, chunk_id in supported}
+    pending = _pending_quotes(validation)
+    if not isinstance(validation, Mapping) or validation.get("status") != STATUS_COMPLETED:
+        binding = BINDING_TEXT
+    else:
+        binding = BINDING_PARTIAL if pending else BINDING_VALIDATION
     markers = _markers(answer, chunk_ids)
+    if binding == BINDING_TEXT:
+        text_bound = _text_bound(answer, passed)
+    elif binding == BINDING_PARTIAL:
+        text_bound = _text_bound(answer, passed, only=pending)
+    else:
+        text_bound = {}
+    passages = _passages(
+        answer, chunk_ids, supported, markers, text_bound if binding == BINDING_TEXT else {}
+    )
+    # 確かめ終わらなかった段落（partial）は本文の根拠の行にせず、「参考情報」の根拠にする。
+    reference_passages = passages
+    if binding == BINDING_PARTIAL:
+        reference_passages = _passages(answer, chunk_ids, [], markers, text_bound)
+        reference_passages = [item for item in reference_passages if item["text"] in pending]
+        passages = [item for item in passages if item["text"] not in pending]
+    confirmed = {chunk_id for item in passages for chunk_id in item["chunk_ids"]} | {
+        chunk_id for _quote, chunk_id in supported
+    }
+    cited = (
+        cited_chunk_ids(answer, chunk_ids)
+        | {chunk_id for _quote, chunk_id in supported}
+        | {chunk_id for ids in text_bound.values() for chunk_id in ids}
+    )
     items: list[JsonObject] = []
     for item in passed:
         view: JsonObject = {key: item.get(key) for key in _COPIED_FIELDS if key in item}
@@ -468,7 +720,13 @@ def answer_evidence(
         used = item["chunk_id"] in cited
         view["cited"] = used
         answer_use = item.get("answer_use")
-        view["answer_use"] = answer_use if used and answer_use in _ANSWER_USES else None
+        if binding == BINDING_TEXT or (
+            binding == BINDING_PARTIAL and used and item["chunk_id"] not in confirmed
+        ):
+            # 照合で確かめていない引用は、該当を確認した記載にしない（#2707）。
+            view["answer_use"] = "reference" if used else None
+        else:
+            view["answer_use"] = answer_use if used and answer_use in _ANSWER_USES else None
         if used and item["chunk_id"] in figures:
             # 図の見た目の段落を、モデルへ届いた図の画像で確かめた（#2678）。
             view["image_reading"] = figures[item["chunk_id"]]
@@ -484,10 +742,27 @@ def answer_evidence(
         view["cited"] = _attachment_cited(answer, str(item.get("file_name") or ""))
         view["answer_use"] = None
         items.append(view)
-    return {
+    content: JsonObject = {
         "items": items,
         "passed": len(items),
         "cited": sum(1 for item in items if item["cited"]),
         "markers": markers,
-        "passages": _passages(answer, chunk_ids, supported, markers),
+        "passages": passages,
+        "binding": binding,
+        "references": [],
+        "citation_lines": [],
     }
+    if binding == BINDING_PARTIAL:
+        # 確かめ終わった段落の根拠の行にある根拠は、「参考情報」に重ねない。
+        content["references"] = [
+            item
+            for item in _references(passed, reference_passages)
+            if not set(item["chunk_ids"]) & confirmed
+        ]
+    if binding == BINDING_TEXT:
+        content["references"] = _references(passed, passages)
+        kinds = non_claim_passages(answer)
+        content["citation_lines"] = [
+            passage["text"] for passage in passages if kinds.get(passage["text"]) == KIND_CITATION
+        ]
+    return content

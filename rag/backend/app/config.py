@@ -1409,6 +1409,38 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "検証のモデルの入力の上限より小さくする。"
         ),
     )
+    rag_answer_validation_timeout_seconds: float = Field(
+        default=540.0,
+        gt=0.0,
+        le=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
+        description=(
+            "回答の最終の検証(rag_validate_answer)の通しの上限(秒。#2700)。"
+            "根拠の読み直しから監査の LLM の呼び出しまでを含み、LLM 1 回の timeout と"
+            "再試行をこの残り時間に縮める。上限までに監査が返らなかった段落は、"
+            "確かめ終わらなかった段落(unassessed)として返す(status=partial、"
+            "どの段落も返らなければ timed_out)。呼び出し側(Agent の接続 rag の待ち時間 "
+            "AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS、既定 630 秒)より短くする。"
+        ),
+    )
+    rag_answer_validation_batch_passages: int = Field(
+        default=5,
+        ge=1,
+        le=128,
+        description=(
+            "回答の最終の検証で、監査の LLM の 1 回の呼び出しに渡す回答の段落の数"
+            "(#2700)。段落がこれより多い回答は組に分けて監査する(指示・質問・回答の"
+            "全文・根拠はどの組も同じ)。1 回の出力が減り、組ごとに並行に呼べる。"
+        ),
+    )
+    rag_answer_validation_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description=(
+            "回答の最終の検証の 1 回で、同時に監査する段落の組の数(#2700)。"
+            "組がこれより多ければ、空いた分から順に監査する。"
+        ),
+    )
     rag_request_coverage_retrieval_enabled: bool = Field(
         default=True,
         description=(

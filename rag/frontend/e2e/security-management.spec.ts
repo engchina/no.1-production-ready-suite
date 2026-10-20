@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "./fixtures/test";
+import { findFloatingFormActionBars } from "../../../platform/packages/ui/e2e/layout-checks";
 
 import {
   ALL_PERMISSION_CODES,
@@ -451,9 +452,8 @@ test("ユーザー・ロールの作成と編集の確定は、フォームの�
     for (const label of labels) {
       await expect(headerActions.getByRole("button", { name: label, exact: true })).toHaveCount(0);
     }
-    // フォームの末尾まで見えるようにする（375px では行が画面の下端に貼り付いているため、本来の位置に戻す）。
+    // フォームの末尾まで見えるようにする（確定の行は画面の下端に貼り付けない。#2715）。
     await page.locator(lastField).evaluate((element) => element.scrollIntoView({ block: "center" }));
-    await expect(actions).toHaveAttribute("data-stuck", "false");
     const primary = actions.getByRole("button", { name: labels[0], exact: true });
     const discard = actions.getByRole("button", { name: labels[1], exact: true });
     const [primaryBox, discardBox, fieldBox, lastBox] = await Promise.all([
@@ -464,11 +464,19 @@ test("ユーザー・ロールの作成と編集の確定は、フォームの�
     ]);
     // primary の左端は入力欄の左端（GOV.UK / Carbon のフォームと同じく左寄せ）。
     expect(Math.abs(primaryBox!.x - fieldBox!.x)).toBeLessThanOrEqual(1);
-    // 変更を破棄は primary の右の同じ行（375px でも縦に積まない）。
-    expect(discardBox!.x).toBeGreaterThan(primaryBox!.x + primaryBox!.width - 1);
-    expect(Math.abs(discardBox!.y - primaryBox!.y)).toBeLessThanOrEqual(1);
+    // 変更を破棄は primary の右の同じ行。sm（640px）未満は言語資源の画面などのフォームの末尾の行と同じく、
+    // primary の下に全幅で積む（#2715）。
+    if (page.viewportSize()!.width >= 640) {
+      expect(discardBox!.x).toBeGreaterThan(primaryBox!.x + primaryBox!.width - 1);
+      expect(Math.abs(discardBox!.y - primaryBox!.y)).toBeLessThanOrEqual(1);
+    } else {
+      expect(discardBox!.y).toBeGreaterThanOrEqual(primaryBox!.y + primaryBox!.height);
+      expect(Math.abs(discardBox!.x - primaryBox!.x)).toBeLessThanOrEqual(1);
+    }
     // 確定の行は最後の欄の下（フォームの末尾）。
     expect(primaryBox!.y).toBeGreaterThanOrEqual(lastBox!.y + lastBox!.height);
+    // 上から下までスクロールしても、行は画面に貼り付かず PageHeader の上に描かれない（#2715）。
+    expect(await findFloatingFormActionBars(page)).toEqual([]);
     // 変更が無いときの変更を破棄は disabled。
     await expect(discard).toBeDisabled();
     return actions;
@@ -488,7 +496,6 @@ test("ユーザー・ロールの作成と編集の確定は、フォームの�
   await page.getByTestId("security-users-grid").getByText("人事 花子").click();
   await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集", exact: true }).click();
   actions = await expectConfirmAtFormEnd("ユーザーの確定", "ログインユーザーID", "[role=radiogroup][aria-labelledby=security-users-role-legend]", ["保存", "変更を破棄"]);
-  await expect(actions).toHaveAttribute("data-form-action-bar-sticky", "card");
 
   await page.goto("/settings/security/roles");
   await expect(page.getByTestId("security-roles-grid")).toContainText("人事利用者");

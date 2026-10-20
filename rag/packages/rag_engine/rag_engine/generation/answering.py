@@ -234,8 +234,10 @@ from rag_engine.retrieval.extra_retrieval import GUIDE_STEPS_KIND, REQUEST_COVER
 from rag_engine.retrieval.guide_steps import (
     GUIDE_STEP_TRACE_SCHEMA_VERSION,
     GuidePlan,
+    reference_step_sources,
     run_step_searches,
     select_step_parents,
+    unsearched_steps,
 )
 from rag_engine.retrieval.inquiry_conditions import (
     InquiryConditionParse,
@@ -1876,12 +1878,14 @@ def _record_round_audit(step: _ExecutionStep, current: Any, *, accepted: bool, f
                 grounded.GUIDE_STEP_REFERENCE_ONLY,
                 grounded.GUIDE_STEP_UNUSED,
                 grounded.GUIDE_STEP_NO_EVIDENCE,
+                grounded.GUIDE_STEP_NOT_SEARCHED,
             )
         }
         step.field(
             "業務ガイドの手順",
             f"説明 {counts[grounded.GUIDE_STEP_EXPLAINED]}・参考情報のみ {counts[grounded.GUIDE_STEP_REFERENCE_ONLY]}"
-            f"・根拠を未使用 {counts[grounded.GUIDE_STEP_UNUSED]}・根拠なし {counts[grounded.GUIDE_STEP_NO_EVIDENCE]}",
+            f"・根拠を未使用 {counts[grounded.GUIDE_STEP_UNUSED]}・根拠なし {counts[grounded.GUIDE_STEP_NO_EVIDENCE]}"
+            + (f"・検索を打ち切り {counts[grounded.GUIDE_STEP_NOT_SEARCHED]}" if counts[grounded.GUIDE_STEP_NOT_SEARCHED] else ""),
         )
     step.field("残った指摘", join_values(grounded.pending_feedback_labels(current.feedback())))
     if not first:
@@ -1953,15 +1957,32 @@ def synthesize_grounded_answer(
     max_rounds = 1 + max(0, min(grounded.MAX_ROUNDS - 1, int(getattr(settings, "answer_max_correction_rounds", grounded.MAX_ROUNDS - 1))))
     compact_audit_reasons = bool(getattr(settings, "answer_audit_compact_reasons", False))
     # 業務ガイドの手順ごとの根拠と、充足で必須に数えない手順（#2491）。監査・是正・回答の構造で同じ単位を使う。
-    guide_steps = runtime_knowledge.guide_steps if runtime_knowledge is not None else ()
-    guide_optional_steps = runtime_knowledge.guide_optional_steps if runtime_knowledge is not None else ()
-    # 手順ごとの検索の手がかり（共有の根拠の item を手順に対応付ける語。#2649）。
-    guide_step_terms = dict(runtime_knowledge.guide_step_terms) if runtime_knowledge is not None else {}
+    # 根拠の画面の図で業務ガイドの条件が決まったら、round ごとにその条件の手順の計画に切り替える（#2689）。
+    base_knowledge = runtime_knowledge
+    evidence_plans = tuple(getattr(settings, "evidence_plans", ()) or ())
+
+    def guide_view(
+        knowledge: RuntimeKnowledgeContext | None,
+    ) -> tuple[tuple[tuple[str, str, tuple[str, ...]], ...], tuple[str, ...], dict[str, tuple[str, ...]]]:
+        # (手順ごとの根拠, 必須に数えない手順, 手順ごとの検索の手がかり。共有の根拠の item を手順に対応付ける語。#2649)
+        if knowledge is None:
+            return (), (), {}
+        return knowledge.guide_steps, knowledge.guide_optional_steps, dict(knowledge.guide_step_terms)
+
+    guide_steps, guide_optional_steps, guide_step_terms = guide_view(runtime_knowledge)
+    # 手順ごとの検索を期限・回数の上限で打ち切って検索しなかった手順（#2706）。
+    guide_unsearched = runtime_knowledge.guide_unsearched_steps if runtime_knowledge is not None else ()
     # 共有の根拠の item を語で決められないときに意味の近さで決める embedding（#2649）。round と回答の確定で同じ文の
     # vector を再利用する。注入が無ければ語の判定だけ。
     embedder = injected_embedder() if guide_steps else None
     guide_semantics = grounded.GuideStepSemantics(embedder.embed if embedder is not None else None)
     for number in range(max_rounds):
+        # 質問に名前が出た画面の図の項目の種類と、それで決まる業務ガイドの条件（#2404）と、その条件の手順の計画（#2689）。
+        field_kinds = form_field_kinds.question_field_kinds(question, context)
+        resolved_conditions = form_field_kinds.resolve_conditions(field_kinds, settings.evidence_conditions)
+        runtime_knowledge = form_field_kinds.with_resolved_plan(base_knowledge, resolved_conditions, evidence_plans)
+        guide_steps, guide_optional_steps, guide_step_terms = guide_view(runtime_knowledge)
+        guide_unsearched = runtime_knowledge.guide_unsearched_steps if runtime_knowledge is not None else ()
         spans = _grounded_spans(
             question,
             context,
@@ -1970,9 +1991,6 @@ def synthesize_grounded_answer(
             budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
             whole_records=evidence_budget_chars is not None,
         )
-        # 質問に名前が出た画面の図の項目の種類と、それで決まる業務ガイドの条件（#2404）。
-        field_kinds = form_field_kinds.question_field_kinds(question, context)
-        resolved_conditions = form_field_kinds.resolve_conditions(field_kinds, settings.evidence_conditions)
         prompt = _grounded_prompt(
             question,
             spans,
@@ -2014,6 +2032,7 @@ def synthesize_grounded_answer(
                     guide_optional_steps=guide_optional_steps,
                     guide_step_terms=guide_step_terms,
                     guide_step_semantics=guide_semantics,
+                    guide_unsearched_steps=guide_unsearched,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                 )
                 if number == 0:
@@ -2146,9 +2165,12 @@ def synthesize_grounded_answer(
                 remedy_step.field("添付する画像", f"{len(images)} 件")
 
     current, context, spans, images, mode = best
-    # 採用した回の根拠で決まる項目の種類と業務ガイドの条件（#2404）。
+    # 採用した回の根拠で決まる項目の種類と業務ガイドの条件（#2404）と、その条件の手順の計画（#2689）。
     field_kinds = form_field_kinds.question_field_kinds(question, context)
     resolved_conditions = form_field_kinds.resolve_conditions(field_kinds, settings.evidence_conditions)
+    runtime_knowledge = form_field_kinds.with_resolved_plan(base_knowledge, resolved_conditions, evidence_plans)
+    guide_steps, guide_optional_steps, guide_step_terms = guide_view(runtime_knowledge)
+    guide_unsearched = runtime_knowledge.guide_unsearched_steps if runtime_knowledge is not None else ()
     # 同じ質問・同じ根拠に対する summary が 1 度でも不支持と監査されたら、採用 round の summary も公開しない。
     # 初回の監査が見逃した保証（「〜により対象者を確認できる」）が、後続 round の指摘に関係なく残っていた (#621)。
     # 引き継ぐのは、採用 round の summary が不支持の summary の文を繰り返すときだけ（別の結論に書き直した summary は
@@ -2229,7 +2251,9 @@ def synthesize_grounded_answer(
     # 提示など）の後の説明で決め直す。参考情報としてだけ示した手順・根拠の無い手順は本文の不足に出し、回答の構造の
     # 要求にも載せて、充足済みとして確定しない。
     guide_coverage = (
-        grounded.guide_step_coverage(guide_steps, current.checked, spans, guide_optional_steps, guide_step_terms, guide_semantics)
+        grounded.guide_step_coverage(
+            guide_steps, current.checked, spans, guide_optional_steps, guide_step_terms, guide_semantics, guide_unsearched
+        )
         if guide_steps and not off_goal
         else []
     )
@@ -2346,7 +2370,7 @@ def synthesize_grounded_answer(
         "image_fallback": image_decision,
         "final_fact_count": len(published),
         # 質問に名前が出た根拠の画面の図の項目の種類と、それで決まった業務ガイドの条件（#2404）。
-        **({"form_field_kinds": form_field_kinds.trace_payload(field_kinds, resolved_conditions)} if field_kinds else {}),
+        **({"form_field_kinds": form_field_kinds.trace_payload(field_kinds, resolved_conditions, evidence_plans)} if field_kinds else {}),
         # 採用した草稿の構造（#1492）。確認の項目の事実と規則の分け方、説明の種類・適用を残し、LLM を呼ばずに
         # 対応の決定を replay できるようにする（本文・引用は envelope の items にある）。
         "grounded_draft": draft_structure(current.draft, settled, superseded=superseded, withheld=superseded_withheld),
@@ -2730,10 +2754,23 @@ def _cover_guide_steps(
                 document_selection=context.document_selection,
             )
     in_context = {r.chunk_uid or r.id for r in context.records}
+    # 手順の根拠は、手順ごとの検索の結果に、手順の参照の頁に当たる回答の材料の根拠を足したもの（#2706）。期限で検索
+    # しなかった手順の根拠と、同じ根拠を参照する手順どうしの共有が、検索の打ち切りで見えなくならないようにする。
+    referenced = reference_step_sources(plan, context.records)
     step_sources = tuple(
-        (step.step_id, step.title, tuple(key for key in selection.step_sources.get(step.step_id, ()) if key in in_context))
+        (
+            step.step_id,
+            step.title,
+            tuple(
+                key
+                for key in dict.fromkeys((*selection.step_sources.get(step.step_id, ()), *referenced.get(step.step_id, ())))
+                if key in in_context
+            ),
+        )
         for step in plan.steps
     )
+    # 期限・回数の上限で検索しなかった（検索がすべて失敗した）手順。根拠の無いことを「資料に無い」と区別する（#2706）。
+    unsearched = unsearched_steps(plan, results)
     added_by_step: dict[str, list[str]] = {}
     for step_id, kind, parent in selection.added:
         key = parent.record.chunk_uid or parent.record.id
@@ -2743,6 +2780,7 @@ def _cover_guide_steps(
     trace.update(
         {
             "stop_reason": stop or ("rejected:" + rejected if rejected else ""),
+            "unsearched_step_ids": list(unsearched),
             "elapsed_ms": int((clock() - started) * 1000),
             "budget": extra_budget.to_payload(),
             "steps": [
@@ -2765,6 +2803,8 @@ def _cover_guide_steps(
                     ],
                     "evidence_count": len(sources.get(step.step_id, ())),
                     "reference_chunk_count": len(added_by_step.get(f"{step.step_id}:reference", [])),
+                    # 手順の参照の頁に当たる回答の材料の根拠の数（検索の結果に関係なく手順に紐づける。#2706）。
+                    "referenced_count": len(referenced.get(step.step_id, ())),
                 }
                 for step in plan.steps
             ],
@@ -2784,10 +2824,12 @@ _GUIDE_STEP_SKIP_LABELS = {
 def _guide_step_lines(trace: dict[str, Any]) -> list[str]:
     """手順ごとの検索の記録の文（処理の経過の段の詳細）。"""
     lines: list[str] = []
+    cut = "期限" if trace.get("stop_reason") == "deadline" else "上限"
     for step in trace.get("steps") or ():
         searches = step.get("searches") or []
         if not searches:
-            lines.append(f"{step['id']}「{step['title']}」: 検索しない（上限）")
+            referenced = f"、参照の頁の根拠 {step['referenced_count']} 件" if step.get("referenced_count") else ""
+            lines.append(f"{step['id']}「{step['title']}」: 検索しない（{cut}で打ち切り）{referenced}")
             continue
         note = "、参照の頁に絞った検索あり" if any(s["kind"] == "reference" for s in searches) else ""
         lines.append(f"{step['id']}「{step['title']}」: 根拠 {step['evidence_count']} 件{note}")
@@ -4148,6 +4190,7 @@ def answer_question_result(
                         guide_steps=step_sources,
                         guide_optional_steps=guide_plan.optional_step_ids,
                         guide_step_terms=guide_plan.step_terms,
+                        guide_unsearched_steps=tuple(guide_step_trace.get("unsearched_step_ids") or ()),
                     )
                 skipped = str(guide_step_trace.get("skipped") or "")
                 if skipped:

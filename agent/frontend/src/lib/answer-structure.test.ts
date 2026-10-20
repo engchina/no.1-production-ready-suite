@@ -6,7 +6,7 @@ import { noticeHeading, structureAnswer } from "@/lib/answer-structure";
 
 // #2328: Agent の回答を RAG のチャットと同じ節に組み立てる（表示だけ。本文の文は書き換えない）。内容は合成のデータ。
 
-const TITLES = { confirmed: "確認できた", unconfirmed: "確認できなかった" };
+const TITLES = { confirmed: "確認できた", unconfirmed: "確認できなかった", reference: "参考", referenceNote: "原文の説明" };
 const HEADING = "資料で確認できず除いた内容";
 
 function evidence(passages: { text: string; chunk_ids: string[] }[], markers: { text: string; chunk_ids: string[] }[] = []) {
@@ -126,6 +126,128 @@ describe("validationReview", () => {
     });
     // 節の記録が無い古い Run は 0（画面は外した段落の数で出す）。
     expect(validationReview({ ...content, notice: undefined })?.listedItems).toBe(0);
+  });
+});
+
+// #2707: 最終の検証が時間切れ・失敗のときは、決定的な照合の根拠を「参考情報」にする。
+describe("structureAnswer の照合が判定を出さなかった回答", () => {
+  const UNVERIFIED = "この回答は資料との照合を終えられず、本質問の条件への該当は確認できていません。";
+  const answer = [
+    "答えは次のとおりです。",
+    "",
+    "- 申請は 30 日前までに行います。",
+    "- 承認は部署が行います。",
+    "",
+    "**根拠**",
+    "",
+    "- 文書 A.pdf p.3",
+    "",
+    UNVERIFIED,
+  ].join("\n");
+
+  function textEvidence(references: { quote: string; chunk_ids: string[] }[]) {
+    return answerEvidenceData({
+      items: [
+        { document_id: "d1", chunk_id: "c1", file_name: "文書 A.pdf", excerpt: "x", locator: { page_start: 3 }, cited: true },
+      ],
+      passages: [
+        { text: "- 申請は 30 日前までに行います。", chunk_ids: ["c1"] },
+        { text: "- 文書 A.pdf p.3", chunk_ids: ["c1"] },
+      ],
+      binding: "text",
+      references,
+      citation_lines: ["- 文書 A.pdf p.3"],
+    });
+  }
+
+  it("「確認できた」節を作らず、本文に根拠の行を付けず、根拠の原文を「参考」節にする", () => {
+    const blocks = structureAnswer(answer, textEvidence([{ quote: "申請は 30 日前までに行う。", chunk_ids: ["c1"] }]), null, TITLES);
+    expect(blocks).toEqual([
+      { kind: "paragraph", key: "b0", text: "答えは次のとおりです。", chunkIds: [] },
+      {
+        kind: "section",
+        key: "b1",
+        title: null,
+        ordered: false,
+        entries: [
+          { key: "b1-0", text: "申請は 30 日前までに行います。", chunkIds: [] },
+          { key: "b1-1", text: "承認は部署が行います。", chunkIds: [] },
+        ],
+      },
+      // 根拠に結び付いた平文の出典の行と、中身が無くなった見出し（**根拠**）は出さない。
+      { kind: "paragraph", key: "b2", text: UNVERIFIED, chunkIds: [] },
+      {
+        kind: "section",
+        key: "reference",
+        title: "参考",
+        ordered: false,
+        entries: [
+          { key: "reference-note", text: "原文の説明", chunkIds: [], muted: true, plain: true },
+          { key: "reference-0", text: "「申請は 30 日前までに行う。」", chunkIds: ["c1"], plain: true },
+        ],
+      },
+    ]);
+    expect(blocks?.some((block) => block.kind === "section" && block.title === TITLES.confirmed)).toBe(false);
+  });
+
+  it("根拠を 1 つも結び付けられなければ null（Markdown のまま）", () => {
+    expect(structureAnswer(answer, textEvidence([]), null, TITLES)).toBeNull();
+  });
+
+  it("出典の行の後ろに本文が続く見出しは残す", () => {
+    const withBody = "答えです。\n\n**根拠**\n\n- 文書 A.pdf p.3\n\n**補足**\n\n期限があります。";
+    const blocks = structureAnswer(withBody, textEvidence([{ quote: "q", chunk_ids: ["c1"] }]), null, TITLES);
+    const titles = blocks?.filter((block) => block.kind === "section").map((block) => (block.kind === "section" ? block.title : null));
+    expect(titles).toEqual(["補足", "参考"]);
+  });
+});
+
+// #2700・#2707: 検証が時間の上限までに一部の段落だけを確かめた回答（`binding: "partial"`）。
+describe("structureAnswer の一部の段落だけを確かめた回答", () => {
+  const answer = [
+    "答えは次のとおりです。",
+    "",
+    "- 申請は 30 日前までに行います。",
+    "- 承認は部署が行います。",
+    "",
+    `**${HEADING}**`,
+    "",
+    "次の内容は、資料との照合が時間の上限までに終わらず確かめきれませんでした。",
+    "- 確かめが終わっていない: 「承認は部署が行います。」",
+  ].join("\n");
+
+  it("確かめ終わった段落に根拠の行、確かめ終わらなかった段落の根拠は「参考」節、除いた内容の節はその後", () => {
+    const data = answerEvidenceData({
+      items: [
+        { document_id: "d1", chunk_id: "c1", file_name: "文書 A.pdf", excerpt: "x", locator: { page_start: 3 }, cited: true },
+        { document_id: "d2", chunk_id: "c2", file_name: "文書 B.pdf", excerpt: "y", locator: { page_start: 5 }, cited: true },
+      ],
+      passages: [{ text: "- 申請は 30 日前までに行います。", chunk_ids: ["c1"] }],
+      binding: "partial",
+      references: [{ quote: "承認は部署が行う。", chunk_ids: ["c2"] }],
+      citation_lines: [],
+    });
+    const blocks = structureAnswer(answer, data, HEADING, TITLES);
+    const sections = blocks?.filter((block) => block.kind === "section") ?? [];
+    expect(sections.map((block) => (block.kind === "section" ? block.title : null))).toEqual([null, "参考", "確認できなかった"]);
+    const [list, reference] = sections;
+    if (list.kind !== "section" || reference.kind !== "section") throw new Error("節がありません");
+    // 確かめ終わった段落だけに根拠の行。確かめ終わらなかった段落は本文に残し、根拠の行を付けない。
+    expect(list.entries.map((entry) => entry.chunkIds)).toEqual([["c1"], []]);
+    expect(reference.entries.map((entry) => entry.text)).toEqual(["原文の説明", "「承認は部署が行う。」"]);
+    expect(reference.entries[1].chunkIds).toEqual(["c2"]);
+  });
+
+  it("確かめ終わった段落が無くても、参考情報があれば節に組み立てる", () => {
+    const data = answerEvidenceData({
+      items: [{ document_id: "d2", chunk_id: "c2", file_name: "文書 B.pdf", excerpt: "y", locator: { page_start: 5 }, cited: true }],
+      passages: [],
+      binding: "partial",
+      references: [{ quote: "承認は部署が行う。", chunk_ids: ["c2"] }],
+    });
+    const blocks = structureAnswer(answer, data, HEADING, TITLES);
+    expect(blocks?.some((block) => block.kind === "section" && block.title === TITLES.confirmed)).toBe(false);
+    expect(blocks?.some((block) => block.kind === "section" && block.title === "参考")).toBe(true);
   });
 });
 

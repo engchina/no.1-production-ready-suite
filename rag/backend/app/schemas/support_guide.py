@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from datetime import date, datetime
 from typing import Any, Literal, get_args
 
@@ -27,6 +29,9 @@ SUPPORT_GUIDE_TOOLS: tuple[str, ...] = (
 MAX_REFERENCE_PAGE_RANGES = 10
 MAX_STEP_REFERENCES = 10
 MAX_PAGE_NUMBER = 100_000
+# 表計算の行の番号の上限（Excel のシートの行の数）と、セルの範囲の形（A1 形式。#2663）。
+MAX_SHEET_ROW = 1_048_576
+CELL_RANGE_PATTERN = re.compile(r"^([A-Z]{1,3})([1-9]\d{0,6})(?::([A-Z]{1,3})([1-9]\d{0,6}))?$")
 _ID_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]{0,63}$"
 _SHORT = 200
 _TEXT = 2000
@@ -170,6 +175,49 @@ class SupportGuidePageRange(_Strict):
         return self
 
 
+def _cell_rows(cell_range: str) -> tuple[int, int] | None:
+    match = CELL_RANGE_PATTERN.match(cell_range)
+    if match is None:
+        return None
+    start = int(match.group(2))
+    end = int(match.group(4) or start)
+    return min(start, end), max(start, end)
+
+
+class SupportGuideSheetRange(_Strict):
+    """参照する表計算の資料のシートと行の範囲（両端を含む。#2663）。
+
+    行を省けばシートの全体。``cell_range``（A1 形式。例: ``B3:D10``）を書けば、行はセルの範囲の行に
+    する。頁（``SupportGuidePageRange``）とは別の位置で、行の番号を頁として扱わない。
+    """
+
+    sheet_name: str = Field(min_length=1, max_length=_SHORT)
+    row_start: int | None = Field(default=None, ge=1, le=MAX_SHEET_ROW)
+    row_end: int | None = Field(default=None, ge=1, le=MAX_SHEET_ROW)
+    cell_range: str = Field(default="", max_length=32, description="A1 形式のセルの範囲。")
+
+    @model_validator(mode="after")
+    def _ordered(self) -> SupportGuideSheetRange:
+        if self.cell_range:
+            self.cell_range = unicodedata.normalize("NFKC", self.cell_range).upper().strip()
+            rows = _cell_rows(self.cell_range)
+            if rows is None:
+                raise ValueError("セルの範囲は A1 形式（例: B3:D10）で書いてください。")
+            if self.row_start is None:
+                self.row_start, self.row_end = rows
+            elif (self.row_start, self.row_end or self.row_start) != rows:
+                raise ValueError("行の範囲をセルの範囲の行に合わせてください。")
+        if self.row_start is None:
+            if self.row_end is not None:
+                raise ValueError("行の範囲は始まりの行から書いてください。")
+            return self
+        if self.row_end is None:
+            self.row_end = self.row_start
+        if self.row_start > self.row_end:
+            raise ValueError("行の範囲の終わりは始まり以降の行にしてください。")
+        return self
+
+
 class SupportGuideReference(_Strict):
     document_id: str = Field(min_length=1, max_length=64)
     title: str = Field(
@@ -185,6 +233,22 @@ class SupportGuideReference(_Strict):
             "当たった頁の根拠を順位に関係なく回答の材料に入れる。"
         ),
     )
+    sheet_ranges: list[SupportGuideSheetRange] = Field(
+        default_factory=list,
+        max_length=MAX_REFERENCE_PAGE_RANGES,
+        description=(
+            "表計算の資料の根拠にするシートと行の範囲（#2663）。頁の範囲とは同時に書かない。"
+            "回答では手順ごとの検索をこのシートの行に絞る。"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _one_location_kind(self) -> SupportGuideReference:
+        if self.page_ranges and self.sheet_ranges:
+            raise ValueError(
+                "1 つの資料には、頁の範囲か表計算のシートの行の範囲のどちらかだけを書いてください。"
+            )
+        return self
 
 
 class SupportGuideStep(_Strict):
@@ -428,7 +492,9 @@ class SupportGuideDraftTryRequest(BaseModel):
 
 
 # 業務ガイドの手順の充足（#2491。rag_engine の guide_step_coverage の状態）。
-SupportGuideStepStatus = Literal["explained", "reference_only", "unused", "no_evidence"]
+SupportGuideStepStatus = Literal[
+    "explained", "reference_only", "unused", "no_evidence", "not_searched"
+]
 SUPPORT_GUIDE_STEP_STATUSES: tuple[str, ...] = get_args(SupportGuideStepStatus)
 
 
@@ -441,7 +507,8 @@ class SupportGuideDraftTryStep(BaseModel):
         description=(
             "explained=手順の根拠を引いた説明を公開した / "
             "reference_only=根拠を原文のまま示しただけ / "
-            "unused=根拠は回答の材料にあるが説明に引いていない / no_evidence=根拠が材料に無い。"
+            "unused=根拠は回答の材料にあるが説明に引いていない / no_evidence=根拠が材料に無い / "
+            "not_searched=手順ごとの検索を時間・回数の上限で打ち切り、検索しなかった。"
         )
     )
     required: bool = Field(
@@ -540,7 +607,17 @@ class SupportGuideProcessReference(BaseModel):
 
     name: str = Field(description="回答の過程に書いた資料の名前。")
     pages: str = Field(default="", description="回答の過程に書いた頁（書いたまま）。")
+    sheet_name: str = Field(default="", description="回答の過程に書いたシート名（書いたまま）。")
+    rows: str = Field(default="", description="回答の過程に書いた表計算の行（書いたまま）。")
+    cells: str = Field(default="", description="回答の過程に書いたセルの範囲（書いたまま）。")
     section: str = Field(default="", description="回答の過程に書いた章節（書いたまま）。")
+    page_ranges: list[SupportGuidePageRange] = Field(
+        default_factory=list, description="頁から読んだ頁の範囲（解決した資料だけ）。"
+    )
+    sheet_ranges: list[SupportGuideSheetRange] = Field(
+        default_factory=list,
+        description="シート・行・セルから読んだ表計算の範囲（解決した表計算の資料だけ。#2663）。",
+    )
     step_ids: list[str] = Field(
         default_factory=list,
         description="この資料を根拠にする手順の id（空なら全手順に共通の資料。#2395）。",

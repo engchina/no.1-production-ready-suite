@@ -291,11 +291,205 @@ def test_passages_join_the_validated_chunks_and_skip_unknown_ones() -> None:
     assert content["passages"] == [{"text": "期限は 30 日です。", "chunk_ids": [CHUNK_A, CHUNK_B]}]
 
 
-def test_nothing_is_cited_without_written_ids_or_a_completed_validation() -> None:
+def test_nothing_is_cited_when_the_answer_shares_nothing_with_the_evidence() -> None:
     steps = [_step("rag_search", {"evidence": [_evidence(CHUNK_A, used_in_answer=True)]})]
     unvalidated = validation_content("unvalidated", reason="validation_error")
     content = answer_evidence(steps, "期限は 30 日です。", unvalidated)
     assert (content["passed"], content["cited"]) == (1, 0)
+    assert (content["binding"], content["passages"], content["references"]) == ("text", [], [])
+
+
+# ---- 照合が成功 / 失敗 / 時間切れの結び付け（#2707） -----------------------------------
+
+# 合成の根拠: A は申請の期限、B は承認、C は別の文書の手当て。A と B は同じ文書の別の頁。
+EXCERPT_A = "合成の規程では、申請書は利用開始日の 30 日前までに提出する。提出先は窓口 X とする。"
+EXCERPT_B = "承認は担当部署の課長が行う。課長が不在のときは代理者が承認する。"
+EXCERPT_C = "<table><tr><td>区分 Q-77</td><td>手当は月額 5000 円</td></tr></table>"
+# モデルは根拠の ID の印を書かず、文書名と頁を「根拠」の節に平文で並べる
+# （照合が時間切れの Run の形）。
+FREE_ANSWER = "\n".join(
+    [
+        "合成の質問への回答です。",
+        "",
+        "- 申請書は利用開始日の 30 日前までに提出してください。",
+        "- 承認は担当部署の課長が行います。",
+        "- 区分 Q-77 の手当があります。",
+        "- 不明な点は窓口へ確認してください。",
+        "",
+        "**根拠**",
+        "",
+        "- 文書 0f3a.pdf p.3",
+        "- 文書 0f3a.pdf p.5",
+    ]
+)
+
+
+def _free_steps() -> list[RunStep]:
+    return [
+        _step(
+            "rag_search",
+            {
+                "evidence": [
+                    _evidence(CHUNK_A, excerpt=EXCERPT_A, answer_use="confirmed"),
+                    _evidence(
+                        CHUNK_B,
+                        excerpt=EXCERPT_B,
+                        locator={"page_start": 5, "page_end": 5, "section_path": ["第 2 章"]},
+                        section={"section_id": "s2", "title": "第 2 節", "level": 2, "chars": 10},
+                    ),
+                    _evidence(CHUNK_C, excerpt=EXCERPT_C, file_name="文書 C.pdf"),
+                ]
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "validation",
+    [
+        validation_content("unvalidated", reason="mcp.timeout", message="時間切れ"),
+        # RAG が時間の上限までにどの段落も確かめ終わらなかった（status=timed_out。#2700）。
+        validation_content("unvalidated", reason="validation_timed_out"),
+        validation_content("unvalidated", reason="validation_error"),
+        None,
+    ],
+    ids=["timeout", "timed_out", "failure", "disabled"],
+)
+def test_without_a_validation_verdict_the_answer_is_bound_by_text_as_reference(
+    validation: dict[str, Any] | None,
+) -> None:
+    """照合が時間切れ・失敗・無効のときは、決定的な照合で結び付け、参考（該当は未確認）にする。"""
+    content = answer_evidence(_free_steps(), FREE_ANSWER, validation)
+
+    assert content["binding"] == "text"
+    items = {item["chunk_id"]: item for item in content["items"]}
+    assert [items[chunk]["cited"] for chunk in (CHUNK_A, CHUNK_B, CHUNK_C)] == [True, True, True]
+    # 照合で確かめていないので、RAG が付けた「該当確認済み」も残さない。
+    assert {item["answer_use"] for item in items.values()} == {"reference"}
+    passages = {passage["text"]: passage["chunk_ids"] for passage in content["passages"]}
+    # 主張の段落は特徴（同じ文字の並び・コード）で、出典の行は文書名と頁で結び付ける。
+    assert passages["- 申請書は利用開始日の 30 日前までに提出してください。"] == [CHUNK_A]
+    assert passages["- 区分 Q-77 の手当があります。"] == [CHUNK_C]
+    assert passages["- 文書 0f3a.pdf p.3"] == [CHUNK_A]
+    assert passages["- 文書 0f3a.pdf p.5"] == [CHUNK_B]
+    # 見出し・特徴の当たらない段落には結び付けない。
+    assert "**根拠**" not in passages
+    assert "- 不明な点は窓口へ確認してください。" not in passages
+    assert content["citation_lines"] == ["- 文書 0f3a.pdf p.3", "- 文書 0f3a.pdf p.5"]
+    # 参考情報: 根拠ごとの原文（段落と最も当たる文。表の HTML の印は除く）。
+    references = {ref["chunk_ids"][0]: ref["quote"] for ref in content["references"]}
+    assert references[CHUNK_A] == "合成の規程では、申請書は利用開始日の 30 日前までに提出する。"
+    assert references[CHUNK_B] == "承認は担当部署の課長が行う。"
+    assert references[CHUNK_C] == "区分 Q-77 手当は月額 5000 円"
+    # 並びは回答の段落に結び付いた順（B は短い言い換えで特徴が当たらず、出典の行で結び付く）。
+    assert "- 承認は担当部署の課長が行います。" not in passages
+    assert list(references) == [CHUNK_A, CHUNK_C, CHUNK_B]
+
+
+def test_with_a_validation_verdict_only_the_supported_paragraphs_are_cited() -> None:
+    """照合が判定を出したときは、今の判定（supported / 外した段落）をそのまま使う。"""
+    validation = validation_content(
+        "completed",
+        result={
+            "claims": [
+                {
+                    "status": "supported",
+                    "chunk_id": CHUNK_B,
+                    "answer_quote": "- 承認は担当部署の課長が行います。",
+                },
+                {
+                    "status": "unsupported",
+                    "chunk_id": CHUNK_A,
+                    "answer_quote": "- 申請書は利用開始日の 30 日前までに提出してください。",
+                },
+            ]
+        },
+    )
+    content = answer_evidence(_free_steps(), FREE_ANSWER, validation)
+
+    assert content["binding"] == "validation"
+    items = {item["chunk_id"]: item for item in content["items"]}
+    # 文字が当たっても、照合が裏付けていない根拠は引用にしない。
+    assert [items[chunk]["cited"] for chunk in (CHUNK_A, CHUNK_B, CHUNK_C)] == [False, True, False]
+    assert content["passages"] == [
+        {"text": "- 承認は担当部署の課長が行います。", "chunk_ids": [CHUNK_B]}
+    ]
+    assert (content["references"], content["citation_lines"]) == ([], [])
+
+
+def test_a_partial_verdict_keeps_verified_paragraphs_and_binds_the_timed_out_ones_by_text() -> None:
+    """照合が一部の段落だけを確かめた（status=partial。#2700）ときは、確かめ終わった段落は判定の
+    まま引用し、確かめ終わらなかった段落（unassessed）は「参考情報」の根拠にする。"""
+    validation = validation_content(
+        "completed",
+        result={
+            "status": "partial",
+            "valid": False,
+            "timed_out_passage_ids": ["p2", "p3"],
+            "claims": [
+                {
+                    "status": "supported",
+                    "chunk_id": CHUNK_B,
+                    "answer_quote": "- 承認は担当部署の課長が行います。",
+                },
+                {
+                    "status": "unassessed",
+                    "answer_quote": "- 申請書は利用開始日の 30 日前までに提出してください。",
+                },
+                {"status": "unassessed", "answer_quote": "- 区分 Q-77 の手当があります。"},
+            ],
+        },
+    )
+    content = answer_evidence(_free_steps(), FREE_ANSWER, validation)
+
+    assert content["binding"] == "partial"
+    items = {item["chunk_id"]: item for item in content["items"]}
+    assert [items[chunk]["cited"] for chunk in (CHUNK_A, CHUNK_B, CHUNK_C)] == [True, True, True]
+    # 確かめ終わった段落の根拠は RAG の使われ方を残し、時間切れの段落の根拠は参考にする。
+    assert [items[chunk]["answer_use"] for chunk in (CHUNK_A, CHUNK_B, CHUNK_C)] == [
+        "reference",
+        None,
+        "reference",
+    ]
+    # 本文の根拠の行は確かめ終わった段落だけ。
+    assert content["passages"] == [
+        {"text": "- 承認は担当部署の課長が行います。", "chunk_ids": [CHUNK_B]}
+    ]
+    references = {ref["chunk_ids"][0]: ref["quote"] for ref in content["references"]}
+    assert list(references) == [CHUNK_A, CHUNK_C]
+    assert references[CHUNK_A] == "合成の規程では、申請書は利用開始日の 30 日前までに提出する。"
+    assert content["citation_lines"] == []
+
+
+def test_a_partial_verdict_does_not_repeat_a_verified_chunk_as_a_reference() -> None:
+    validation = validation_content(
+        "completed",
+        result={
+            "status": "partial",
+            "claims": [
+                {
+                    "status": "supported",
+                    "chunk_id": CHUNK_A,
+                    "answer_quote": "- 承認は担当部署の課長が行います。",
+                },
+                {
+                    "status": "unassessed",
+                    "answer_quote": "- 申請書は利用開始日の 30 日前までに提出してください。",
+                },
+            ],
+        },
+    )
+    content = answer_evidence(_free_steps(), FREE_ANSWER, validation)
+    assert content["binding"] == "partial"
+    assert content["references"] == []
+
+
+def test_a_citation_line_without_a_page_points_at_the_first_evidence_of_the_document() -> None:
+    content = answer_evidence(_free_steps(), "期限があります。\n\n出典：文書 C.pdf", None)
+    assert content["passages"] == [{"text": "出典：文書 C.pdf", "chunk_ids": [CHUNK_C]}]
+    # 主張の段落の頁の無い文書名は、文書名だけでは結び付けない。
+    claim = answer_evidence(_free_steps(), "文書 C.pdf に記載があります。", None)
+    assert claim["passages"] == []
 
 
 @pytest.mark.parametrize(

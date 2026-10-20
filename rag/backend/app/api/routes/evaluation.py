@@ -57,8 +57,8 @@ from app.rag.evaluation_process import guide_process_row, process_draft
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.support_guide_process_import import (
     GuideDraftLlm,
-    KnowledgeDocument,
     draft_guides,
+    list_knowledge_documents,
     process_headings,
 )
 from app.schemas.common import ApiResponse
@@ -259,11 +259,7 @@ async def draft_evaluation_process_expectations(
     """
     enforce_rate_limit("evaluation", http_request)
     settings = get_settings()
-    documents = [
-        KnowledgeDocument(document.document_id, document.file_name)
-        for document in await _knowledge_base_documents(body.knowledge_base_ids)
-        if not document.superseded
-    ]
+    documents = await list_knowledge_documents(OracleClient(), body.knowledge_base_ids)
     llm = evaluation_process_llm(settings)
     caller = make_ai_caller(settings, "guide_import")
     rows = [guide_process_row(row) for row in body.rows]

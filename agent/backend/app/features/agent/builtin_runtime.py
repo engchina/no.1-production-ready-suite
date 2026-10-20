@@ -112,7 +112,9 @@ from app.features.agent.answer_validation import (
     REASON_RAG_DECLINED,
     REASON_UNUSABLE_RESULT,
     REASON_VALIDATION_ERROR,
+    REASON_VALIDATION_TIMED_OUT,
     REASON_VALIDATOR_UNAVAILABLE,
+    RESULT_TIMED_OUT,
     STATUS_COMPLETED,
     STATUS_SKIPPED,
     STATUS_UNVALIDATED,
@@ -4108,7 +4110,7 @@ async def _validate_final_answer(
     呼ぶ（ポリシー・監査・Run の利用者のサービストークン・step はモデルのツールと同じ境界）。
     利用者が回答前の確認で答えた内容は前提（`premises`）として渡す（#1898）。
     判定が valid でなければ確かめられなかった段落を外して理由を足し、検証が失敗したら
-    「検証できませんでした」を足す（回答は消さない。`answer_validation.combine_validations`）。
+    照合を終えられなかったことを足す（回答は消さない。`answer_validation.combine_validations`）。
     `rag_tools` は Agent が RAG の根拠のツールを持つか（根拠の無い回答に注記するか）。
 
     今のターンに根拠が無いとき（#1879）: 資料に無い・答えられないことだけを述べる回答は注記せずに
@@ -4250,6 +4252,14 @@ async def _validate_with_connection(
             "policy_denied" if result.policy_decision == ToolPolicyDecision.DENY else "tool_failed"
         )
         return unvalidated(reason, result.error, **common)
+    if result.output.get("status") == RESULT_TIMED_OUT:
+        # RAG が時間の上限までにどの段落も確かめ終わらなかった（#2700。回答は消さずに注記する）。
+        return unvalidated(
+            REASON_VALIDATION_TIMED_OUT,
+            "資料との照合が時間の上限までに終わりませんでした。",
+            result=result.output,
+            **common,
+        )
     if not usable_result(result.output):
         return unvalidated(
             REASON_UNUSABLE_RESULT,

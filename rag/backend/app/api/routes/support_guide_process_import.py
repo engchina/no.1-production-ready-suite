@@ -30,8 +30,8 @@ from app.rag.search_answer_profile_config import resolve_search_answer_profile_s
 from app.rag.support_guide_process_import import (
     PROCESS_WORKBOOK_MAX_BYTES,
     GuideDraftLlm,
-    KnowledgeDocument,
     draft_guides,
+    list_knowledge_documents,
     process_headings,
     read_process_workbook,
 )
@@ -60,19 +60,6 @@ async def _profile(
     if view is None:
         raise HTTPException(status_code=404, detail="検索・回答プロファイルが見つかりません。")
     return view
-
-
-async def _documents(
-    oracle: OracleClient, profile: SearchAnswerProfileDetail
-) -> list[KnowledgeDocument]:
-    """プロファイルのナレッジベースの文書（新しい版に置き換えた文書は除く）。"""
-    documents: dict[str, KnowledgeDocument] = {}
-    for knowledge_base_id in profile.config.normalized_knowledge_base_ids():
-        for summary in await oracle.list_documents(knowledge_base_id=knowledge_base_id):
-            if summary.is_superseded:
-                continue
-            documents[summary.id] = KnowledgeDocument(summary.id, summary.file_name)
-    return list(documents.values())
 
 
 @router.post(_BASE + "/workbook", response_model=ApiResponse[SupportGuideProcessWorkbookData])
@@ -131,7 +118,9 @@ async def preview_support_guide_process_import(
             status_code=422,
             detail=f"1 回で下書きにできるのは {max_rows} 行までです。行を分けてください。",
         )
-    documents = await _documents(oracle, profile)
+    documents = await list_knowledge_documents(
+        oracle, profile.config.normalized_knowledge_base_ids()
+    )
     overrides = profile.config.language_pack
     llm = guide_draft_llm(settings)
     caller = make_ai_caller(settings, "guide_import")

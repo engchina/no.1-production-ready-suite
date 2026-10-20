@@ -425,12 +425,14 @@ class SupportGuideApi {
             },
           ],
           clarifications: [],
-          // 手順ごとの充足（#2686）。手順 2 は原文だけ・分岐の手順 3 は必須ではない。
+          // 手順ごとの充足（#2686）。手順 2 は原文だけ・分岐の手順 3 は必須ではない・手順 4 は手順ごとの検索を
+          // 打ち切って検索しなかった（#2706）。
           steps: this.tryUsesDraft
             ? [
                 { step_id: "step1", title: "本人であることを確かめる", status: "explained", required: true },
                 { step_id: "step2", title: "再設定の画面を案内する", status: "reference_only", required: true },
                 { step_id: "step3", title: "別の窓口を案内する", status: "unused", required: false },
+                { step_id: "step4", title: "完了を知らせる", status: "not_searched", required: true },
               ]
             : [],
           elapsed_ms: 4200,
@@ -710,6 +712,61 @@ test("参照する資料の頁と手順ごとの参照を入れて保存でき�
   // 手順の資料を外せる。
   await editor.getByRole("button", { name: "手順 2 の資料 1 を外す" }).click();
   await expect(editor.getByRole("listitem", { name: "手順 2 の資料 1" })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
+// #2663: 表計算の資料はシートと行で参照し、頁と同時には入れない（行の番号を頁にしない）。
+test("表計算の資料をシートと行で参照して保存できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const api = await openSupportGuides(page);
+  await page.getByRole("button", { name: "新しい業務ガイド" }).click();
+  const editor = page.getByTestId("support-guide-editor");
+  await editor.getByLabel("タイトル").fill("設定の値を確かめる");
+  await editor.getByLabel("期待する結果").fill("設定の値が分かる");
+  await editor.getByLabel("質問の例").fill("設定の値を知りたい");
+  await editor.getByRole("button", { name: "手順を足す" }).click();
+  const step = editor.getByRole("listitem", { name: "手順 1", exact: true });
+  await step.getByLabel("題名").fill("一覧で値を確かめる");
+  const stepReferences = step.getByRole("group", { name: "この手順が参照する資料" });
+  await stepReferences.getByRole("button", { name: "この手順の資料を足す" }).click();
+  const stepReference = stepReferences.getByRole("listitem", { name: "手順 1 の資料 1" });
+  await stepReference.getByLabel("文書 ID").fill("doc-s");
+  const sheets = stepReference.getByLabel("根拠のシートと行（表計算）");
+  await expect(sheets).toHaveAccessibleDescription(/シート名!42-45/);
+  await sheets.fill("シートA!42-45\nシートB!B3:D10");
+  // 頁と同時に入れたら保存の前に止め、欄の直下に出す。
+  await stepReference.getByLabel("根拠の頁").fill("42");
+  await editor.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(stepReference.getByText("根拠の頁かシートと行のどちらかだけ", { exact: false })).toBeVisible();
+  expect(api.requests.filter((item) => item.method === "POST")).toHaveLength(0);
+  await expectNoPageOverflow(page);
+  await stepReference.screenshot({ path: testInfo.outputPath("support-guide-sheet-reference.png") });
+
+  await stepReference.getByLabel("根拠の頁").fill("");
+  await editor.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("業務ガイドを下書きとして作りました。")).toBeVisible();
+  const created = api.requests.find((item) => item.method === "POST" && item.path.endsWith("/support-guides"));
+  expect(created?.body).toMatchObject({
+    draft: {
+      steps: [
+        {
+          id: "step1",
+          references: [
+            {
+              document_id: "doc-s",
+              page_ranges: [],
+              sheet_ranges: [
+                { sheet_name: "シートA", row_start: 42, row_end: 45 },
+                { sheet_name: "シートB", row_start: 3, row_end: 10, cell_range: "B3:D10" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  });
+  await expect(
+    editor.getByRole("listitem", { name: "手順 1 の資料 1" }).getByLabel("根拠のシートと行（表計算）"),
+  ).toHaveValue("シートA!42-45\nシートB!B3:D10");
   await expectNoPageOverflow(page);
 });
 
@@ -1038,15 +1095,16 @@ for (const theme of ["light", "dark"] as const) {
     // 手順ごとの充足（#2686）。説明できていない必須の手順の数と、手順ごとの状態を文言で示す。
     const steps = result.getByTestId("support-guide-try-steps");
     await expect(steps.getByTestId("support-guide-try-steps-missing")).toHaveText(
-      "必須の手順のうち 1 件を、回答で説明できていません。",
+      "必須の手順のうち 2 件を、回答で説明できていません。",
     );
     const stepRows = steps.getByTestId("support-guide-try-step");
-    await expect(stepRows).toHaveCount(3);
+    await expect(stepRows).toHaveCount(4);
     await expect(stepRows.nth(0)).toContainText("本人であることを確かめる");
     await expect(stepRows.nth(0)).toContainText("説明した");
     await expect(stepRows.nth(1)).toContainText("資料の原文だけ");
     await expect(stepRows.nth(2)).toContainText("説明していない");
     await expect(stepRows.nth(2)).toContainText("分岐の手順（必須ではない）");
+    await expect(stepRows.nth(3)).toContainText("検索を打ち切った");
     await expect(result).toContainText("ポータルの「パスワードを忘れた」から再設定します。");
     // AI に渡した件数と内訳は検索・チャットと同じ表示（#2040）。
     await expect(result.getByRole("heading", { name: /^AI に渡した 1 件/ })).toBeVisible();

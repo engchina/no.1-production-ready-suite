@@ -109,7 +109,7 @@ from app.rag.graph_expansion import (
 )
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_evaluation_input
-from app.rag.support_guide_evidence import guide_evidence_conditions
+from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
 from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.search import (
     MAX_PAGE_RANGES,
@@ -578,6 +578,7 @@ def build_engine_settings(
         domain_keywords_override=tuple(settings.rag_domain_keywords),
         known_conditions=guide_known_conditions(settings.rag_support_guide),
         evidence_conditions=guide_evidence_conditions(settings.rag_support_guide),
+        evidence_plans=guide_evidence_plans(settings.rag_support_guide),
     )
 
 
@@ -3389,6 +3390,8 @@ def _with_page_ranges(
 def _page_overlap(left: PageRange, right: PageRange) -> PageRange | None:
     if left.document_id != right.document_id:
         return None
+    if left.sheet_name is not None or right.sheet_name is not None:
+        return _sheet_overlap(left, right)
     starts = [value for value in (left.page_start, right.page_start) if value is not None]
     ends = [value for value in (left.page_end, right.page_end) if value is not None]
     start = max(starts) if starts else None
@@ -3396,6 +3399,27 @@ def _page_overlap(left: PageRange, right: PageRange) -> PageRange | None:
     if start is not None and end is not None and start > end:
         return None
     return PageRange(document_id=left.document_id, page_start=start, page_end=end)
+
+
+def _whole_document(item: PageRange) -> bool:
+    return item.sheet_name is None and item.page_start is None and item.page_end is None
+
+
+def _sheet_overlap(left: PageRange, right: PageRange) -> PageRange | None:
+    """シートの行の範囲(#2663)の重なり。文書の全体とはそのまま、頁の範囲・別のシートとは重ならない。"""
+    if _whole_document(left) or _whole_document(right):
+        return right if _whole_document(left) else left
+    if left.sheet_name != right.sheet_name:
+        return None
+    starts = [value for value in (left.row_start, right.row_start) if value is not None]
+    ends = [value for value in (left.row_end, right.row_end) if value is not None]
+    start = max(starts) if starts else None
+    end = min(ends) if ends else None
+    if start is not None and end is not None and start > end:
+        return None
+    return PageRange(
+        document_id=left.document_id, sheet_name=left.sheet_name, row_start=start, row_end=end
+    )
 
 
 def _zero_evidence_diagnostics(

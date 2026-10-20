@@ -36,10 +36,28 @@ export interface AnswerEvidencePassage {
   chunkIds: string[];
 }
 
+/** 「参考情報」の根拠（根拠の原文と chunk。#2707）。 */
+export interface AnswerEvidenceReference {
+  quote: string;
+  chunkIds: string[];
+}
+
+/**
+ * 結び付けの方法（#2707）。`validation` は最終の検証の判定（裏付けた段落は「資料により確認できた事項」）、
+ * `text` は検証が判定を出さなかったときの決定的な照合（照合で確かめていないので「参考情報」）、`partial` は
+ * 検証が時間の上限までに一部の段落だけを確かめたとき（確かめ終わった段落は判定、確かめ終わらなかった段落の
+ * 根拠は決定的な照合で「参考情報」。#2700）。
+ */
+export type AnswerEvidenceBinding = "validation" | "partial" | "text";
+
 export interface AnswerEvidenceData {
   entries: AnswerEvidenceEntry[];
   markers: AnswerEvidenceMarker[];
   passages: AnswerEvidencePassage[];
+  binding: AnswerEvidenceBinding;
+  references: AnswerEvidenceReference[];
+  /** 根拠に結び付いた出典の行（`text` のとき。本文には出さず「参考情報」の根拠の行で示す）。 */
+  citationLines: string[];
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -137,7 +155,19 @@ export function answerEvidenceData(content: Record<string, unknown> | null | und
       const chunkIds = strings(item.chunk_ids);
       return body && chunkIds.length ? [{ text: body, chunkIds }] : [];
     });
-  return { entries, markers: pairs(content?.markers), passages: pairs(content?.passages) };
+  const references = records(content?.references).flatMap((item) => {
+    const quote = text(item.quote).trim();
+    const chunkIds = strings(item.chunk_ids);
+    return quote && chunkIds.length ? [{ quote, chunkIds }] : [];
+  });
+  return {
+    entries,
+    markers: pairs(content?.markers),
+    passages: pairs(content?.passages),
+    binding: content?.binding === "text" || content?.binding === "partial" ? content.binding : "validation",
+    references,
+    citationLines: strings(content?.citation_lines),
+  };
 }
 
 /** Run の成果物から回答の根拠を取り出す（無ければ null）。 */

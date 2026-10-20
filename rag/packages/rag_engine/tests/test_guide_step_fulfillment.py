@@ -305,6 +305,100 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         self.assertNotIn("guide_step_coverage", result.generation_trace)
 
 
+# 画面の図の項目の種類で分かれる業務ガイド（#2689）。共通の画面の確認 → 選択の項目ならコードの登録・自由入力なら画面で
+# 書き換え・種類が分からなければ確認先へ問い合わせる。合成の項目名と手順だけを使う。
+KIND_QUESTION = "区分コードの項目の選択肢を追加したい"
+KIND_SCREEN = "設定画面で区分コードの項目を開きます。"
+KIND_CODE = "コード登録画面で選択肢のコードを追加します。"
+KIND_ASK = "項目の種類が分からない場合は、管理担当に確認します。"
+KIND_GUIDE = (
+    ("screen", "画面で項目を確かめる", ("run:screen",)),
+    ("code", "コードの登録で選択肢を追加する", ("run:code",)),
+    ("ask", "種類が分からなければ確認する", ("run:ask",)),
+)
+# backend が照合で分からなかった条件（選択肢と言い換え）と、決まった値ごとの手順の計画として渡す形。
+KIND_CONDITIONS = (("field_kind", "項目の種類", (("選択の項目", ("選択",)), ("入力の項目", ("自由入力",)))),)
+KIND_PLANS = (
+    ((("field_kind", "選択の項目"),), (("screen", True), ("code", True)), "guide-g1", "分かっている条件: 項目の種類=選択の項目"),
+    ((("field_kind", "入力の項目"),), (("screen", True), ("edit", True)), "guide-g1", "分かっている条件: 項目の種類=入力の項目"),
+)
+
+
+class GuidePlanAfterEvidenceConditionTest(unittest.TestCase):
+    """根拠の画面の図で業務ガイドの条件が決まったら、分岐と必須の手順を決まった条件の計画にする（#2689）。"""
+
+    def _context(self, kind):
+        screen = replace(
+            _record(0, KIND_SCREEN, "設定画面", "run:screen"),
+            metadata={"image_evidence": [{"visual_structure": {"form_fields": [{"name": "区分コード", "kind": kind}]}}]},
+        )
+        return _context(screen, _record(1, KIND_CODE, "コード登録画面", "run:code"), _record(2, KIND_ASK, "問い合わせ", "run:ask"))
+
+    def _run(self, kind, plans=KIND_PLANS):
+        ctx = self._context(kind)
+        # 条件が決まっていない照合の計画: 選択の分岐（code）は必須でなく、「分からない場合」（ask）が必須。
+        knowledge = _knowledge(KIND_GUIDE, optional=("code",))
+        eids = _ids(ctx, knowledge, KIND_QUESTION)
+        screen = item(eids[KIND_SCREEN], "設定画面で区分コードの項目を開きます。", KIND_SCREEN, request_id="Q1")
+        code = item(eids[KIND_CODE], "コード登録画面で選択肢のコードを追加します。", KIND_CODE, request_id="Q1")
+        model = FakeModel(
+            [draft(screen, code)], [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")])]
+        )
+        settings = replace(get_settings(), evidence_conditions=KIND_CONDITIONS, evidence_plans=plans)
+
+        def unused(*a, **k):
+            return (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
+        with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+            result = synthesize_grounded_answer(
+                KIND_QUESTION, ctx, settings, image_prompt_mode="text_only", runtime_knowledge=knowledge
+            ).response
+        return result, model
+
+    def test_resolved_condition_switches_branch_and_required_steps(self):
+        result, model = self._run("select")
+        coverage = result.generation_trace["guide_step_coverage"]
+        # 外れた「分からない場合」の手順は回答の手順から外れ、決まった選択の分岐の手順が必須になる。
+        self.assertEqual([(step["step_id"], step["required"]) for step in coverage], [("screen", True), ("code", True)])
+        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:screen": "addressed", "guide:code": "addressed"})
+        self.assertEqual(result.envelope["outcome"], "answered")
+        self.assertEqual([step["step_id"] for step in _audits(model)[0]["guide_steps"]], ["screen", "code"])
+        trace = result.generation_trace["form_field_kinds"]
+        self.assertEqual(trace["guide_plan"], [{"step_id": "screen", "required": True}, {"step_id": "code", "required": True}])
+        self.assertEqual(trace["resolved_conditions"][0]["value"], "選択の項目")
+
+    def test_resolved_branch_step_cannot_be_skipped(self):
+        """決まった分岐の主の操作を説明しなければ、必須の手順の不足として示す（参考の原文だけで充足しない）。"""
+        ctx = self._context("select")
+        knowledge = _knowledge(KIND_GUIDE, optional=("code",))
+        eids = _ids(ctx, knowledge, KIND_QUESTION)
+        screen = item(eids[KIND_SCREEN], "設定画面で区分コードの項目を開きます。", KIND_SCREEN, request_id="Q1")
+        model = FakeModel([draft(screen)], [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])])
+        settings = replace(get_settings(), evidence_conditions=KIND_CONDITIONS, evidence_plans=KIND_PLANS)
+
+        def unused(*a, **k):
+            return (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
+        with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+            result = synthesize_grounded_answer(
+                KIND_QUESTION, ctx, settings, image_prompt_mode="text_only", runtime_knowledge=knowledge
+            ).response
+        requests = _requests(result)
+        self.assertNotEqual(requests["guide:code"], "addressed")
+        self.assertNotIn("guide:ask", requests)
+        self.assertEqual(result.envelope["outcome"], "conditional")
+
+    def test_split_or_unknown_kind_keeps_the_unresolved_plan(self):
+        """種類が拾えない・計画が無いときは、条件が決まっていない計画（分からない場合の手順が必須）のまま。"""
+        for kind, plans in (("unknown", KIND_PLANS), ("select", ())):
+            with self.subTest(kind=kind, plans=bool(plans)):
+                result, _model = self._run(kind, plans)
+                coverage = {step["step_id"]: step["required"] for step in result.generation_trace["guide_step_coverage"]}
+                self.assertEqual(coverage, {"screen": True, "code": False, "ask": True})
+                self.assertEqual(_requests(result)["guide:ask"], "missing")
+                self.assertNotIn("guide_plan", result.generation_trace.get("form_field_kinds", {}))
+
+
 # 2 つの手順が共有する根拠の chunk（#2649）。手順 1 の主の操作・手順 2 の主の操作・両手順に共通の末尾の操作。
 SHARED_A = "設定画面で設定 A の値を入力します。"
 SHARED_B = "反映画面で反映ボタンを押して変更を反映します。"
@@ -452,6 +546,75 @@ class GuideStepSharedEvidenceAnswerTest(unittest.TestCase):
         self.assertEqual(len(_drafts(model)), 1)
         self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "addressed", "guide:s2": "addressed"})
         self.assertEqual(result.envelope["outcome"], "answered")
+
+
+class GuideStepUnsearchedTest(unittest.TestCase):
+    """手順ごとの検索が期限で止まり、後の手順を検索しなかったとき（#2706）。
+
+    手順 1・2 は同じ chunk（手順 1・2 の主の操作と共通の末尾の操作）を参照する。手順 1 だけを検索し、手順 2 は
+    期限で検索しなかった。共通の文だけの item で手順 1 を説明済みにしない。
+    """
+
+    def setUp(self):
+        self.span = {"source_id": "run:s", "evidence_id": "e-s", "label": "E1", "text": SHARED}
+
+    def _entry(self, quote, *, quote_only=False):
+        entry = grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=quote, applies="matched"), span=self.span)
+        entry.quote_only = quote_only
+        return entry
+
+    def _statuses(self, steps, quotes, *, unsearched=("s2",), semantics=None, terms=SHARED_TERMS):
+        coverage = grounded.guide_step_coverage(
+            steps, [self._entry(quote) for quote in quotes], [self.span], (), dict(terms), semantics, unsearched
+        )
+        return {step["step_id"]: step["status"] for step in coverage}, coverage
+
+    def test_common_sentence_does_not_explain_the_searched_step(self):
+        # 手順 2 の根拠が分からない（参照の頁の根拠も無い）: 手順 1 だけの根拠に見えても、共通の文で説明済みにしない。
+        steps = (SHARED_GUIDE[0], ("s2", "反映ボタンで反映する", ()))
+        before, _ = self._statuses(steps, (SHARED_END,), unsearched=())
+        self.assertEqual(before, {"s1": "explained", "s2": "no_evidence"})  # 検索しなかったことを知らない判定
+        statuses, coverage = self._statuses(steps, (SHARED_END,))
+        self.assertEqual(statuses, {"s1": "unused", "s2": "not_searched"})
+        self.assertEqual([step["step_id"] for step in grounded.unexplained_guide_steps(coverage)], ["s1", "s2"])
+        self.assertIn("手順ごとの検索を時間・回数の上限で打ち切った", grounded.guide_step_gap_line(coverage[1]))
+        # 意味の判定でも同じ（共通の文は両手順に同じくらい近い）。
+        semantics = grounded.GuideStepSemantics(
+            StubEmbedder(SENTENCE_VECTORS + (("設定 A を入力", (1, 0, 0)), ("反映ボタンで", (0, 1, 0)))).embed
+        )
+        self.assertEqual(self._statuses(steps, (SHARED_END,), semantics=semantics)[0], {"s1": "unused", "s2": "not_searched"})
+
+    def test_main_operation_still_explains_the_searched_step(self):
+        steps = (SHARED_GUIDE[0], ("s2", "反映ボタンで反映する", ()))
+        self.assertEqual(self._statuses(steps, (SHARED_A, SHARED_END))[0], {"s1": "explained", "s2": "not_searched"})
+
+    def test_reference_pages_make_the_shared_chunk_visible(self):
+        # 手順 2 の参照の頁の根拠（同じ chunk）を手順 2 の根拠に足すと、手順 2 は no_evidence ではなく unused。
+        statuses, _ = self._statuses(SHARED_GUIDE, (SHARED_END,))
+        self.assertEqual(statuses, {"s1": "unused", "s2": "unused"})
+        self.assertEqual(self._statuses(SHARED_GUIDE, (SHARED_A, SHARED_B))[0], {"s1": "explained", "s2": "explained"})
+
+    def test_unsearched_required_step_is_missing_in_the_envelope(self):
+        requests = guide_step_requests([{"step_id": "s2", "title": "B", "required": True, "status": "not_searched"}])
+        self.assertEqual(requests[0]["status"], "missing")
+
+
+class GuideStepUnsearchedAnswerTest(unittest.TestCase):
+    """手順ごとの検索を期限で打ち切った回答を、共通の文だけで answered にしない（#2706）。"""
+
+    def test_common_sentence_answer_with_unsearched_step(self):
+        ctx = _context(_record(0, SHARED, "設定画面", "run:s"))
+        guide = (SHARED_GUIDE[0], ("s2", "反映ボタンで反映する", ()))
+        knowledge = replace(_knowledge(guide, terms=SHARED_TERMS), guide_unsearched_steps=("s2",))
+        (eid,) = _ids(ctx, knowledge).values()
+        end = item(eid, "最後に保存ボタンを押して画面を閉じます。", SHARED_END, request_id="Q1")
+        model = FakeModel([draft(end)] * 3, [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])] * 3)
+        result = _run(model, ctx, knowledge).response
+
+        self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["unused", "not_searched"])
+        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "missing", "guide:s2": "missing"})
+        self.assertNotEqual(result.envelope["outcome"], "answered")
+        self.assertIn("業務ガイドの手順「反映ボタンで反映する」は、手順ごとの検索を時間・回数の上限で打ち切った", result.answer_text)
 
 
 class StubEmbedder:

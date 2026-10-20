@@ -158,7 +158,8 @@ export function StructuredAnswer({
       collapsible: block.collapsible,
       entries: block.entries.map((entry) => ({
         key: entry.key,
-        content: <MarkdownInlineText text={entry.text} />,
+        // 根拠の原文・決まった説明の文は Markdown として読まない（原文の記号を強調にしない）。
+        content: entry.plain ? entry.text : <MarkdownInlineText text={entry.text} />,
         muted: entry.muted,
         citations: citations(entry.chunkIds),
       })),

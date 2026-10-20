@@ -211,5 +211,45 @@ class AnswerEvidenceTests(unittest.TestCase):
         self.assertIn("NOTE-LINE", prompt)
 
 
+class ResolvedPlanTests(unittest.TestCase):
+    """条件が決まったときの業務ガイドの手順の計画への切り替え（#2689）。"""
+
+    PLAN = ((("field_kind", "選択"),), (("screen", True), ("code", True)), "guide-g1", "RESOLVED-RULE")
+
+    def _knowledge(self):
+        from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext, RuntimeRule
+
+        return RuntimeKnowledgeContext(
+            original_question="q",
+            expanded_question="q",
+            path=Path("rk.json"),
+            matched_rules=(RuntimeRule("guide-g1", "ガイド", content="UNRESOLVED-RULE"), RuntimeRule("r2", "別", content="OTHER")),
+            guide_steps=(("screen", "画面", ("c1",)), ("code", "コード", ("c2",)), ("ask", "確認", ("c3",))),
+            guide_optional_steps=("code",),
+            guide_step_terms=(("code", ("コード",)), ("ask", ("確認",))),
+        )
+
+    def _resolved(self, value: str = "選択") -> list[form_field_kinds.ResolvedCondition]:
+        return [form_field_kinds.ResolvedCondition("field_kind", "項目の種類", value, "select")]
+
+    def test_switches_steps_required_and_rule(self) -> None:
+        knowledge = form_field_kinds.with_resolved_plan(self._knowledge(), self._resolved(), [self.PLAN])
+        self.assertEqual([step[0] for step in knowledge.guide_steps], ["screen", "code"])
+        self.assertEqual(knowledge.guide_optional_steps, ())
+        self.assertEqual(knowledge.guide_step_terms, (("code", ("コード",)),))
+        self.assertEqual([rule.content for rule in knowledge.matched_rules], ["RESOLVED-RULE", "OTHER"])
+        self.assertIn("RESOLVED-RULE", knowledge.prompt_context())
+
+    def test_keeps_knowledge_without_matching_plan(self) -> None:
+        base = self._knowledge()
+        self.assertIs(form_field_kinds.with_resolved_plan(base, [], [self.PLAN]), base)
+        self.assertIs(form_field_kinds.with_resolved_plan(base, self._resolved("入力"), [self.PLAN]), base)
+        self.assertIs(form_field_kinds.with_resolved_plan(base, self._resolved(), []), base)
+        self.assertIsNone(form_field_kinds.with_resolved_plan(None, self._resolved(), [self.PLAN]))
+        payload = form_field_kinds.trace_payload([], self._resolved(), [self.PLAN])
+        self.assertEqual(payload["guide_plan"], [{"step_id": "screen", "required": True}, {"step_id": "code", "required": True}])
+        self.assertNotIn("guide_plan", form_field_kinds.trace_payload([], self._resolved("入力"), [self.PLAN]))
+
+
 if __name__ == "__main__":
     unittest.main()

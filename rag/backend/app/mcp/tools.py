@@ -228,10 +228,17 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 22: rag_validate_answer の claims に、裏付けを採らなかった理由（support_check）を足した（#2659）。
 # 23: rag_retrieve_evidence に、元の質問に当たる検索・回答プロファイルの承認済みのルールと用語の
 #     説明（profile_knowledge）を足した（#2701）。
-# 24: rag_validate_answer の claims の status に、図の見た目だけで決まる主張（figure_only）を、
+# 24: rag_validate_answer に、業務ガイドの手順ごとの説明の充足（guide_steps）と、説明の無い
+#     必須の手順の finding（guide_step_unexplained）を足し、手順の名前の一致だけで
+#     guide_steps_unmatched にしないようにした（#2708）。
+# 25: rag_validate_answer の status に、時間の上限までに一部の段落の監査が終わらなかった
+#     partial と、どの段落も終わらなかった timed_out を足した（#2700）。
+# 26: rag_lookup_guides の参照（references）に、表計算の資料のシートと行の範囲（sheet_ranges）を
+#     足した（#2663）。
+# 27: rag_validate_answer の claims の status に、図の見た目だけで決まる主張（figure_only）を、
 #     reference_check に not_figure・single_figure を、support_check に figure_recheck を
 #     足した（#2678）。
-MCP_OUTPUT_SCHEMA_VERSION = 24
+MCP_OUTPUT_SCHEMA_VERSION = 27
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -706,8 +713,8 @@ class ValidateAnswerInput(BaseModel):
     guide: ValidateGuideInput | None = Field(
         default=None,
         description=(
-            "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順の順序・依存・分岐と影響範囲・"
-            "承認の記載を確かめる。"
+            "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順ごとの説明の有無・手順の順序・"
+            "依存・分岐と影響範囲・承認の記載を確かめる。"
         ),
     )
     answer_trace_ids: list[Annotated[str, Field(min_length=1, max_length=64)]] = Field(
@@ -1589,6 +1596,13 @@ class GuidePageRangeItem(BaseModel):
     page_end: int
 
 
+class GuideSheetRangeItem(BaseModel):
+    sheet_name: str
+    row_start: int | None = Field(default=None, description="始まりの行（無ければシートの全体）。")
+    row_end: int | None = None
+    cell_range: str = Field(default="", description="A1 形式のセルの範囲（書いてあれば）。")
+
+
 class GuideReferenceItem(BaseModel):
     document_id: str
     title: str = Field(default="", description="表示名（参照の正本は document_id）。")
@@ -1599,6 +1613,10 @@ class GuideReferenceItem(BaseModel):
             "根拠の頁の範囲（両端を含む。空なら文書の全体）。rag_read_document に document_id と "
             "page（page_start）を渡すと、その頁から読める。"
         ),
+    )
+    sheet_ranges: list[GuideSheetRangeItem] = Field(
+        default_factory=list,
+        description="表計算の資料の根拠のシートと行の範囲（両端を含む。頁ではない）。",
     )
 
 
@@ -1851,9 +1869,9 @@ class ValidationFinding(BaseModel):
     code: str = Field(
         description=(
             "request_missing / request_partial / request_unverified / guide_unavailable / "
-            "guide_revision_stale / guide_steps_unmatched / step_order / step_wrong_branch / "
-            "step_dependency_missing / step_following_missing / impact_scope_missing / "
-            "approval_missing"
+            "guide_revision_stale / guide_steps_unmatched / guide_step_unexplained / step_order / "
+            "step_wrong_branch / step_dependency_missing / step_following_missing / "
+            "impact_scope_missing / approval_missing"
         )
     )
     severity: Literal["error", "warning"] = Field(
@@ -1867,6 +1885,24 @@ class ValidationFinding(BaseModel):
     )
 
 
+class ValidatedGuideStep(BaseModel):
+    """業務ガイドの手順 1 つの、回答での説明の充足（#2708）。"""
+
+    step_id: str
+    title: str
+    required: bool = Field(
+        description="回答の充足で必須の手順か（分かっている条件で決まらない分岐の手順は false）。"
+    )
+    status: Literal["explained", "reference_only", "unused", "no_evidence"] = Field(
+        description=(
+            "explained=手順の主の操作を根拠で裏付けた段落で説明した / "
+            "reference_only=根拠の原文を参考として示しただけ / "
+            "unused=手順の根拠は渡した根拠にあるが、手順を説明した段落が無い / "
+            "no_evidence=手順の根拠が渡した根拠に無い（その手順の根拠を集めていない）。"
+        )
+    )
+
+
 class ValidateAnswerOutput(VersionedOutput):
     valid: bool = Field(
         description=(
@@ -1874,7 +1910,13 @@ class ValidateAnswerOutput(VersionedOutput):
             " 1 つ以上あるか。"
         )
     )
-    status: str = Field(description="completed / no_claims / no_evidence / input_too_large。")
+    status: str = Field(
+        description=(
+            "completed / partial（時間の上限までに一部の段落の監査が終わらず、"
+            "その段落は unassessed）/ timed_out（どの段落の監査も終わらなかった）"
+            "/ no_claims / no_evidence / input_too_large。"
+        )
+    )
     counts: dict[str, int] = Field(default_factory=dict, description="判定ごとの段落の数。")
     claims: list[ValidatedClaim] = Field(default_factory=list)
     missing_evidence: list[EvidenceRefInput] = Field(
@@ -1895,6 +1937,14 @@ class ValidateAnswerOutput(VersionedOutput):
     )
     guide_revision: int | None = Field(
         default=None, description="検査に使った業務ガイドの今の公開の版。"
+    )
+    guide_steps: list[ValidatedGuideStep] = Field(
+        default_factory=list,
+        description=(
+            "guide の手順ごとの説明の充足（分かっている条件で外れた分岐の手順は含めない。guide を"
+            "渡さないか、段落の判定が出なければ空）。必須の手順で explained でないものは "
+            "guide_step_unexplained の finding にもなる。"
+        ),
     )
     reused_claims: int = Field(
         default=0,
@@ -3635,6 +3685,15 @@ def _guide_reference(reference: SupportGuideReference) -> GuideReferenceItem:
             )
             for item in reference.page_ranges
         ],
+        sheet_ranges=[
+            GuideSheetRangeItem(
+                sheet_name=item.sheet_name,
+                row_start=item.row_start,
+                row_end=item.row_end,
+                cell_range=item.cell_range,
+            )
+            for item in reference.sheet_ranges
+        ],
     )
 
 
@@ -4221,6 +4280,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             checks=result.checks,
             findings=[ValidationFinding.model_validate(item.as_dict()) for item in result.findings],
             guide_revision=result.guide_revision,
+            guide_steps=[ValidatedGuideStep.model_validate(step) for step in result.guide_steps],
             reused_claims=result.reused_claims,
         )
 
@@ -4301,9 +4361,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。"
                     "公開する前の最終の検証に使います。見出し・出典の行・"
                     "利用者への質問の段落は主張ではないので監査せず、claims に含めません。"
-                    "requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順の順序と"
-                    "分岐・影響範囲も"
-                    "決定的に確かめます。"
+                    "requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順ごとの"
+                    "説明と順序・分岐・影響範囲も確かめます。"
                 ),
                 input_model=ValidateAnswerInput,
                 handler=scoped(validate, _check_validate_scope),

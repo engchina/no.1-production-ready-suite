@@ -21,8 +21,8 @@ export interface SaveErrorBannerProps {
  * 同じ失敗を Toast やフォームの下の `FormStatus` に重ねない。欄に結び付く失敗は欄の直下（`FieldError`）に出す。
  *
  * - danger の `Banner`（`role="alert"`）なので、出たときに読み上げる。フォーカスは動かさない。
- * - 長いフォームの途中で（画面の下端に貼り付いた確定の行から）保存したときも気づけるよう、失敗が出たら
- *   Banner を画面の中ほどへ入れる。Banner の直下が確定の行の本来の位置なので、ボタンと失敗が並んで見える。
+ * - 長いフォームの途中から（入力欄の Enter などで）保存したときも気づけるよう、失敗が出たら
+ *   Banner を画面の中ほどへ入れる。Banner の直下が確定の行なので、ボタンと失敗が並んで見える。
  * - 次の保存を始めるまで残す（呼び出し側は mutation の `error` をそのまま渡す）。
  */
 export function SaveErrorBanner({ message, attemptKey, title, testId, className }: SaveErrorBannerProps) {
@@ -33,7 +33,7 @@ export function SaveErrorBanner({ message, attemptKey, title, testId, className 
     const element = ref.current;
     // jsdom / happy-dom には scrollIntoView が無いことがある。
     if (typeof element?.scrollIntoView !== "function") return;
-    // 中央へ寄せると、sticky のヘッダーにも、下端に貼り付いた確定の行にも隠れない。
+    // 中央へ寄せると、上端に貼り付く（lg 以上の）PageHeader に隠れない。
     element.scrollIntoView({ block: "center", inline: "nearest" });
   }, [message, attemptKey]);
 

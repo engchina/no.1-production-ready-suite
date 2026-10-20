@@ -1,15 +1,17 @@
 """回答の最終の検証（#1246、handoff §12）。標準回答を使わず、回答の主張を渡した根拠で監査する。
 
 品質評価の主張の監査（answer_eval の claim_checks）と同じ判定・同じ照合（回答の段落 ID・根拠の
-evidence_id）を使い、モデルを 1 回だけ呼ぶ。根拠は呼び出し側（backend）が今の権限と版で読み直した
+evidence_id）を使う（段落を組に分けて並行に呼ぶことがある。#2700）。根拠は呼び出し側（backend）が今の権限と版で読み直した
 本文を渡す。根拠が予算に収まらないときは、後ろの根拠を切り詰め、切り詰めたことを結果に残す。
 """
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -44,6 +46,7 @@ from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERAT
 from rag_engine.generation.grounded import quote_in_text
 from rag_engine.generation.operation_audit import is_non_claim_passage, list_heading_lines, table_header_lines
 from rag_engine.generation.table_binding import unbound_table_values
+from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline, current_deadline
 
 # 2: 複数の根拠を合わせて裏付ける主張の evidence_id の書き方を足した（#1364）。
 # 3: evidence_id を省かずに書く指示を足し、省いて書いた ID も根拠に結び付けるようにした（#1391）。
@@ -65,10 +68,12 @@ from rag_engine.generation.table_binding import unbound_table_values
 # 13: 主張の関係の裏付け（RELATION_SUPPORT_POLICY）を足し、判定の前に根拠の記載（evidence_quote）と対象の照合
 #     （claim_target・evidence_target・applicability）を返させ、supported は原文が根拠にあり・対象が別でなく・表の行の
 #     対応に反しないときだけにした（結果の support_check。#2659・#2657・#2653）。
-# 14: 図の見た目だけで決まる主張の判定（figure_only）を足し、図の根拠に evidence_type を渡すようにした。図の本文の語の並びから
+# 14: 段落を組に分けて並行に監査し（指示は変えていない）、期限までに返らなかった組の段落を unassessed（status=partial）に
+#     するようにした（#2700）。
+# 15: 図の見た目だけで決まる主張の判定（figure_only）を足し、図の根拠に evidence_type を渡すようにした。図の本文の語の並びから
 #     推した構造を supported にしない（画像で確かめたかは呼び出し側が Run の記録で決める）。図の項目だけで裏付けた supported は
 #     その段落だけで 1 回確かめ直す（support_check=figure_recheck。#2678）。
-VALIDATION_RUBRIC_VERSION = 14
+VALIDATION_RUBRIC_VERSION = 15
 
 # 図の見た目だけで決まる主張（要素の配置・矢印の向き・つながり・分岐への所属など、図の本文が明示しない内容）の判定。
 # 根拠の本文では確かめられず、図の画像を読んだかどうかで扱いが決まる（#2678。検証に通さない判定に数える）。
@@ -648,6 +653,104 @@ def _reaudit_misclassified_passages(
     return result, [passage["id"] for passage in targets if passage["id"] in settled]
 
 
+# ---- 主張の監査の分割と期限（#2700） ---------------------------------------------------------------------
+#
+# 監査の 1 回の呼び出しの時間は、ほぼ出力（判定と推論）の token の数で決まり、段落の数に比例する。推論型のモデルの
+# 出力が遅いと、回答の全段落を 1 回で監査すると呼び出し側（Agent の MCP の待ち時間）を超えていた。段落を組に分けて
+# 並行に監査し、期限（`rag_engine.resources.deadline`）までに返らなかった組の段落は、確かめ終わらなかった段落
+# （unassessed）として返す（確かめ終わった組の判定は使う）。どの組も指示・質問・回答の全文・根拠は同じで、渡す段落
+# だけが違う（判定の基準は変えない）。
+
+# 期限までに監査が終わらなかった段落の判定の理由。
+TIMED_OUT_REASON = "照合の時間の上限までに、この段落の監査が終わりませんでした。"
+# 監査の結果の status。partial は一部の段落が期限までに監査し終わらなかった（確かめ終わった段落の判定は使える）、
+# timed_out はどの段落も監査し終わらなかった。
+STATUS_PARTIAL = "partial"
+STATUS_TIMED_OUT = "timed_out"
+
+
+def passage_batches(passages: Sequence[Mapping[str, str]], size: int | None) -> list[list[Mapping[str, str]]]:
+    """段落を、回答の順のまま ``size`` 個ずつの組に分ける（None・0 以下は分けない）。"""
+    items = list(passages)
+    if not items:
+        return []
+    if size is None or size <= 0 or size >= len(items):
+        return [items]
+    return [items[start : start + size] for start in range(0, len(items), size)]
+
+
+def _deadline_passed() -> bool:
+    """この文脈の期限を過ぎた・取り消されたか（期限が無ければ偽）。"""
+    deadline = current_deadline()
+    return deadline is not None and deadline.expired
+
+
+def _audit_batch(
+    batch: Sequence[Mapping[str, str]],
+    fixed: Mapping[str, Any],
+    evidence: Sequence[Mapping[str, Any]],
+    catalog: Mapping[str, Mapping[str, Any]],
+    settings: Any,
+    provider_id: str | None,
+    max_input_bytes: int,
+) -> list[ValidationClaimCheck] | None:
+    """1 組の段落を監査して根拠へ結び付けた判定。期限までに終わらなければ None。
+
+    組ごとに子の期限を置く（`expire` で切るのはその組だけ。外側の期限・取り消しは引き継ぐ）。``EvaluationInputTooLarge``
+    と、期限の前に起きたほかの失敗は送出する（分けない監査の失敗と同じ扱い）。
+    """
+    parent = current_deadline()
+    child = Deadline(None, parent=parent) if parent is not None else None
+    inputs = {**fixed, "answer_passages": list(batch), "evidence_items": list(evidence)}
+    with bind_deadline(child):
+        try:
+            output = _parse_checked(
+                VALIDATION_SYSTEM_PROMPT,
+                inputs,
+                settings,
+                ClaimAuditOutput,
+                provider_id,
+                _passage_check(batch, str(fixed.get("answer_text") or "")),
+                max_input_bytes=max_input_bytes,
+            )
+        except EvaluationInputTooLarge:
+            raise
+        except Exception as exc:
+            # 期限で切れた（LLM の read timeout が残り時間に縮められて切れたものを含む）組は、確かめ終わらなかった段落にする。
+            if isinstance(exc, DeadlineExceeded) or _deadline_passed():
+                return None
+            raise
+    return _bind_validation(output, catalog, batch).claim_checks
+
+
+def _audit_in_batches(
+    batches: Sequence[Sequence[Mapping[str, str]]],
+    max_concurrency: int,
+    audit: Callable[[Sequence[Mapping[str, str]]], list[ValidationClaimCheck] | None],
+) -> list[list[ValidationClaimCheck] | None]:
+    """組ごとの監査を、同時に ``max_concurrency`` 組までの並行で行う（結果は組の順。期限で終わらない組は None）。
+
+    組が 1 つ・並行が 1 なら、今の thread で順に行う。thread には文脈（期限・LLM の usage・言語資源）を引き継ぐ。
+    どれかの組が期限の前に失敗したら、ほかの組が終わるのを待ってから、最初の失敗を送出する。
+    """
+    workers = max(1, min(int(max_concurrency or 1), len(batches)))
+    if workers == 1:
+        return [audit(batch) for batch in batches]
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="rag-validate-batch") as executor:
+        futures = [executor.submit(contextvars.copy_context().run, audit, batch) for batch in batches]
+        results: list[list[ValidationClaimCheck] | None] = []
+        error: BaseException | None = None
+        for future in futures:
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                error = error or exc
+                results.append(None)
+    if error is not None:
+        raise error
+    return results
+
+
 # 図の項目だけで裏付けた supported を確かめ直す差し戻しの文（入力の validation_feedback。#2678）。
 FIGURE_RECHECK_FEEDBACK = (
     "answer_passages の段落は、図の項目（evidence_type が figure_description / ocr）だけを根拠に supported と判定された"
@@ -688,6 +791,9 @@ def _recheck_figure_supported(
     決まらない・呼び出しが失敗したときは最初の判定のまま（確かめ直しで裏付けを増やすことはしない）。
     戻り値は判定と、判定を替えた段落の ID。
     """
+    if _deadline_passed():
+        # 照合の時間の上限を過ぎていれば確かめ直さない（最初の判定のまま）。
+        return claims, []
     spans: dict[str, Mapping[str, Any]] = {}
     target_ids: set[str] = set()
     for claim in claims:
@@ -803,12 +909,14 @@ def validate_answer_claims(
     audited: Mapping[str, Sequence[str]] | None = None,
     premises: Sequence[Mapping[str, Any]] = (),
     data_results: Sequence[Mapping[str, Any]] = (),
+    batch_passages: int | None = None,
+    max_concurrency: int = 1,
 ) -> dict[str, Any]:
     """回答の主張を根拠で監査する。
 
     evidence_items は ``{id, source, page_start, page_end, text}``（id は chunk の id）に、分かるときは場所の
     ``section_path``・``sheet_name``・``row_start``・``row_end``・``cell_range`` を足したもの（#1450）。
-    戻り値は status（completed / no_claims / input_too_large）・claim_checks・件数・切り詰め。
+    戻り値は status（completed / partial / timed_out / no_claims / input_too_large）・claim_checks・件数・切り詰め。
     見出し・出典の行・表の区切りと見出しの行・利用者への質問の段落は監査せず、claim_checks にも含めない（#1306 / #1317）。
     監査に渡した段落をモデルが not_a_claim と返したら、その段落だけで 1 回監査し直す（``reaudited_passage_ids``。
     決まらなければ unassessed のままで、判定の classification_check が non_claim_mismatch。#2625）。
@@ -826,6 +934,11 @@ def validate_answer_claims(
     ``data_results`` は業務データの照会の結果（``{source, question, sql, result}``。#1950）。前提の次に並べて渡し
     （予算で切り詰めない）、結果の値をそのまま述べた段落と、資料の規則を結果に当てはめた結論を裏付けられるようにする。
     結果だけで裏付けた段落の ``source_id`` は結果の id（``data:<番号>``）。
+
+    ``batch_passages`` は 1 回の監査に渡す段落の数（None は分けない）、``max_concurrency`` は同時に監査する組の数
+    （#2700）。文脈に期限（`rag_engine.resources.deadline`）があれば、期限までに返らなかった組の段落は unassessed
+    （理由 ``TIMED_OUT_REASON``。``timed_out_passage_ids``）にして status を partial にする（確かめ終わった段落の判定は
+    使う）。どの段落も監査し終わらなければ status は timed_out（claim_checks は空）。
     """
     # 見出し・出典の行・表の区切りと見出しの行・利用者への質問は主張ではないので、決定的に除いてから監査する
     # （#1306 / #1317。モデルが not_a_claim にしても見出しと判定できない出典・質問・表の形が「監査されなかった」になっていた）。
@@ -878,36 +991,38 @@ def validate_answer_claims(
     bound_claims: list[ValidationClaimCheck] = []
     rechecked: list[str] = []
     reaudited: list[str] = []
+    timed_out: list[Mapping[str, str]] = []
     catalog = {item["evidence_id"]: item for item in evidence}
     if remaining:
-        inputs = {**fixed, "evidence_items": evidence}
+        batches = passage_batches(remaining, batch_passages)
+
+        def audit(batch: Sequence[Mapping[str, str]]) -> list[ValidationClaimCheck] | None:
+            return _audit_batch(batch, fixed, evidence, catalog, settings, provider_id, max_input_bytes)
+
         try:
-            output = _parse_checked(
-                VALIDATION_SYSTEM_PROMPT,
-                inputs,
-                settings,
-                ClaimAuditOutput,
-                provider_id,
-                _passage_check(remaining, answer_text),
-                max_input_bytes=max_input_bytes,
-            )
+            # 回答の段落が書いた根拠の ID でも結び付ける（モデルが ID を写し損ねても出典の誤りにしない。#1404）。
+            audited_batches = _audit_in_batches(batches, max_concurrency, audit)
         except EvaluationInputTooLarge:
             return {**base, "status": "input_too_large"}
-        # 回答の段落が書いた根拠の ID でも結び付ける（モデルが ID を写し損ねても出典の誤りにしない。#1404）。
-        bound = _bind_validation(output, catalog, remaining)
+        timed_out = [passage for batch, claims in zip(batches, audited_batches, strict=True) if claims is None for passage in batch]
+        if len(timed_out) == len(passages):
+            # どの段落も期限までに監査し終わらなかった（再利用した段落も無い）。
+            return {**base, "status": STATUS_TIMED_OUT}
+        judged = [passage for passage in remaining if passage not in timed_out]
         # モデルが not_a_claim とした本文の段落は、その段落だけで監査し直す（#2625）。
         reaudited_claims, reaudited = _reaudit_misclassified_passages(
-            bound.claim_checks, fixed, remaining, evidence, catalog, settings, provider_id
+            [claim for claims in audited_batches if claims for claim in claims], fixed, judged, evidence, catalog, settings, provider_id
         )
         # ID を書かない段落の出典が決まらなければ、回答の他の段落が引いた根拠で確かめ直す（#1412）。再利用した段落の
         # 根拠も「他の段落が引いた根拠」に入れる。
         rebound, rechecked = _recheck_unreferenced_passages(
-            [*reaudited_claims, *reused], fixed, remaining, evidence, catalog, settings, provider_id
+            [*reaudited_claims, *reused], fixed, judged, evidence, catalog, settings, provider_id
         )
         # 図の見た目だけで決まる主張は、図の根拠に結び付ける（#2678）。
         rebound = _bind_figure_claims(rebound, catalog)
         bound_claims = [_prefer_document_source(claim, catalog) for claim in rebound if claim.answer_passage_id not in settled]
     checked = {claim.answer_passage_id for claim in bound_claims} | set(settled)
+    timed_out_ids = {passage["id"] for passage in timed_out}
     claims = [
         *[claim for passage in passages if passage["id"] in settled for claim in reused if claim.answer_passage_id == passage["id"]],
         *bound_claims,
@@ -918,7 +1033,7 @@ def validate_answer_claims(
                 status="unassessed",
                 source_id="",
                 evidence_quote="",
-                reason="この段落の監査が返されませんでした。",
+                reason=TIMED_OUT_REASON if passage["id"] in timed_out_ids else "この段落の監査が返されませんでした。",
             )
             for passage in passages
             if passage["id"] not in checked
@@ -939,7 +1054,7 @@ def validate_answer_claims(
         counts[claim.status] = counts.get(claim.status, 0) + 1
     return {
         **base,
-        "status": "completed",
+        "status": STATUS_PARTIAL if timed_out_ids else "completed",
         "claim_checks": [claim.model_dump() for claim in claims],
         "counts": counts,
         "evidence_truncated": truncated,
@@ -951,6 +1066,8 @@ def validate_answer_claims(
         "reused_passage_ids": [passage["id"] for passage in passages if passage["id"] in settled],
         # 図の項目だけの裏付けを確かめ直し、supported を採らなかった段落（#2678）。
         "figure_rechecked_passage_ids": figure_rechecked,
+        # 期限までに監査し終わらなかった段落（#2700。判定は unassessed）。
+        "timed_out_passage_ids": [passage["id"] for passage in passages if passage["id"] in timed_out_ids],
     }
 
 
@@ -969,16 +1086,20 @@ __all__ = [
     "REFERENCE_NOT_FIGURE",
     "REFERENCE_SINGLE_FIGURE",
     "REUSED_CLAIM_REASON",
+    "STATUS_PARTIAL",
+    "STATUS_TIMED_OUT",
     "SUPPORT_CHECKS",
     "SUPPORT_QUOTE_UNMATCHED",
     "SUPPORT_TARGET_MISMATCH",
     "SUPPORT_VALUE_UNBOUND",
+    "TIMED_OUT_REASON",
     "VALIDATION_RUBRIC_VERSION",
     "ValidationClaimCheck",
     "audited_answer_items",
     "audited_line_key",
     "data_result_items",
     "is_premise_id",
+    "passage_batches",
     "premise_items",
     "validate_answer_claims",
 ]

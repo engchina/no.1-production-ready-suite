@@ -4,7 +4,7 @@
 回答の材料に確保する。手順 A の後に要る手順 B のように、質問の文だけでは上位に出ない手順の根拠を取るため。
 
 - 検索文は「質問 + 手順の検索の手がかり」（手がかりが無ければ手順の題名）。
-- 手順が資料と頁（`references`）を持てば、その頁に絞った検索も行い、当たった根拠は検索の順位に関係なく
+- 手順が資料と頁（`references`。表計算の資料はシートの行。#2663）を持てば、その範囲に絞った検索も行い、当たった根拠は検索の順位に関係なく
   回答の材料に入れる（`reference_max_chunks` まで）。
 - 回数は追加の検索の枠（`extra_retrieval.ExtraRetrievalBudget`）から取り、手順ごとの検索の上限を超えない。
   まず各手順に 1 回（参照があれば頁に絞った検索）を割り当て、残りで参照のある手順の絞らない検索をする。
@@ -20,7 +20,9 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Literal
 
-GUIDE_STEP_TRACE_SCHEMA_VERSION = 1
+# 2: 手順ごとの検索をしなかった手順（unsearched_step_ids）と、手順の参照の頁に当たる根拠の数（referenced_count）を
+#    足した（#2706）。
+GUIDE_STEP_TRACE_SCHEMA_VERSION = 2
 # 1 手順の検索文に足す手がかりの上限。
 MAX_STEP_HINTS = 5
 
@@ -37,23 +39,40 @@ class GuidePageRange:
 
 
 @dataclass(frozen=True)
+class GuideSheetRange:
+    """表計算の資料のシートと行の範囲（#2663）。行が無ければシートの全体。頁とは別の位置。"""
+
+    sheet_name: str
+    row_start: int | None = None
+    row_end: int | None = None
+
+    def to_payload(self) -> dict[str, Any]:
+        rows = {"row_start": self.row_start, "row_end": self.row_end or self.row_start} if self.row_start else {}
+        return {"sheet_name": self.sheet_name, **rows}
+
+
+@dataclass(frozen=True)
 class GuideStepReference:
     document_id: str
     title: str = ""
     # 空なら文書の全体。
     page_ranges: tuple[GuidePageRange, ...] = ()
+    # 表計算の資料のシートの行の範囲（頁の範囲とは同時に持たない）。
+    sheet_ranges: tuple[GuideSheetRange, ...] = ()
 
     def filters(self) -> list[dict[str, Any]]:
-        """検索の頁の範囲の絞り込み（`page_ranges` の形。頁が無ければ文書の全体）。"""
-        if not self.page_ranges:
+        """検索の範囲の絞り込み（`page_ranges` の形。頁かシートの行。どちらも無ければ文書の全体）。"""
+        ranges = [item.to_payload() for item in self.page_ranges] or [item.to_payload() for item in self.sheet_ranges]
+        if not ranges:
             return [{"document_id": self.document_id}]
-        return [{"document_id": self.document_id, **item.to_payload()} for item in self.page_ranges]
+        return [{"document_id": self.document_id, **item} for item in ranges]
 
     def to_payload(self) -> dict[str, Any]:
         return {
             "document_id": self.document_id,
             "title": self.title,
             "page_ranges": [item.to_payload() for item in self.page_ranges],
+            "sheet_ranges": [item.to_payload() for item in self.sheet_ranges],
         }
 
 
@@ -106,6 +125,15 @@ class GuidePlan:
                         GuidePageRange(int(r["page_start"]), int(r.get("page_end") or r["page_start"]))
                         for r in item.get("page_ranges") or ()
                         if isinstance(r, Mapping) and r.get("page_start")
+                    ),
+                    sheet_ranges=tuple(
+                        GuideSheetRange(
+                            str(r["sheet_name"]),
+                            int(r["row_start"]) if r.get("row_start") else None,
+                            int(r.get("row_end") or r["row_start"]) if r.get("row_start") else None,
+                        )
+                        for r in item.get("sheet_ranges") or ()
+                        if isinstance(r, Mapping) and str(r.get("sheet_name") or "").strip()
                     ),
                 )
                 for item in raw.get("references") or ()
@@ -204,9 +232,52 @@ def run_step_searches(
     return results, stop
 
 
-def _key(parent: Any) -> str:
-    record = getattr(parent, "record", None)
+def unsearched_steps(plan: GuidePlan, results: Sequence[StepSearch]) -> tuple[str, ...]:
+    """検索できなかった手順の id（期限・回数の上限で検索しなかった・検索がすべて失敗した。#2706）。"""
+    searched = {result.step_id for result in results if not result.error}
+    return tuple(step.step_id for step in plan.steps if step.step_id not in searched)
+
+
+def _record_pages(record: Any) -> tuple[str, int, int] | None:
+    """根拠の (文書の id, 頁の始め, 頁の終わり)。分からなければ None。"""
+    metadata = getattr(record, "metadata", None)
+    document_id = str(metadata.get("document_id") or "") if isinstance(metadata, Mapping) else ""
+    start = getattr(record, "page", None)
+    if not document_id or not isinstance(start, int) or isinstance(start, bool):
+        return None
+    end = getattr(record, "page_end", None)
+    return document_id, start, end if isinstance(end, int) and end >= start else start
+
+
+def reference_step_sources(plan: GuidePlan, records: Iterable[Any]) -> dict[str, tuple[str, ...]]:
+    """手順の参照の頁の範囲に当たる根拠（手順 id → 根拠の key。#2706）。
+
+    業務ガイドの定義で手順の根拠になる根拠（参照の文書と頁の範囲が重なる）を、検索の結果に関係なく手順に紐づける。
+    期限で検索しなかった手順の根拠も、複数の手順が同じ根拠を参照すること（共有）も、これで分かる。頁の範囲の無い
+    参照（文書の全体）は手順に固有な範囲を決めないので紐づけない。
+    """
+    pages = [(key, located) for record in records if (key := _key_of(record)) and (located := _record_pages(record))]
+    sources: dict[str, tuple[str, ...]] = {}
+    for step in plan.steps:
+        ranges = [
+            (reference.document_id, item.page_start, item.page_end) for reference in step.references for item in reference.page_ranges
+        ]
+        keys = [
+            key
+            for key, (document_id, start, end) in pages
+            if any(document_id == ref_doc and start <= ref_end and ref_start <= end for ref_doc, ref_start, ref_end in ranges)
+        ]
+        if keys:
+            sources[step.step_id] = tuple(dict.fromkeys(keys))
+    return sources
+
+
+def _key_of(record: Any) -> str:
     return str(getattr(record, "chunk_uid", "") or getattr(record, "id", "") or "")
+
+
+def _key(parent: Any) -> str:
+    return _key_of(getattr(parent, "record", None))
 
 
 @dataclass(frozen=True)
@@ -287,12 +358,15 @@ __all__ = [
     "GUIDE_STEP_TRACE_SCHEMA_VERSION",
     "GuidePageRange",
     "GuidePlan",
+    "GuideSheetRange",
     "GuideStep",
     "GuideStepReference",
     "StepSearch",
     "StepSelection",
     "planned_searches",
+    "reference_step_sources",
     "run_step_searches",
     "select_step_parents",
     "step_queries",
+    "unsearched_steps",
 ]
