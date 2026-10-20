@@ -713,6 +713,61 @@ test("参照する資料の頁と手順ごとの参照を入れて保存でき�
   await expectNoPageOverflow(page);
 });
 
+// #2663: 表計算の資料はシートと行で参照し、頁と同時には入れない（行の番号を頁にしない）。
+test("表計算の資料をシートと行で参照して保存できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const api = await openSupportGuides(page);
+  await page.getByRole("button", { name: "新しい業務ガイド" }).click();
+  const editor = page.getByTestId("support-guide-editor");
+  await editor.getByLabel("タイトル").fill("設定の値を確かめる");
+  await editor.getByLabel("期待する結果").fill("設定の値が分かる");
+  await editor.getByLabel("質問の例").fill("設定の値を知りたい");
+  await editor.getByRole("button", { name: "手順を足す" }).click();
+  const step = editor.getByRole("listitem", { name: "手順 1", exact: true });
+  await step.getByLabel("題名").fill("一覧で値を確かめる");
+  const stepReferences = step.getByRole("group", { name: "この手順が参照する資料" });
+  await stepReferences.getByRole("button", { name: "この手順の資料を足す" }).click();
+  const stepReference = stepReferences.getByRole("listitem", { name: "手順 1 の資料 1" });
+  await stepReference.getByLabel("文書 ID").fill("doc-s");
+  const sheets = stepReference.getByLabel("根拠のシートと行（表計算）");
+  await expect(sheets).toHaveAccessibleDescription(/シート名!42-45/);
+  await sheets.fill("シートA!42-45\nシートB!B3:D10");
+  // 頁と同時に入れたら保存の前に止め、欄の直下に出す。
+  await stepReference.getByLabel("根拠の頁").fill("42");
+  await editor.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(stepReference.getByText("根拠の頁かシートと行のどちらかだけ", { exact: false })).toBeVisible();
+  expect(api.requests.filter((item) => item.method === "POST")).toHaveLength(0);
+  await expectNoPageOverflow(page);
+  await stepReference.screenshot({ path: testInfo.outputPath("support-guide-sheet-reference.png") });
+
+  await stepReference.getByLabel("根拠の頁").fill("");
+  await editor.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("業務ガイドを下書きとして作りました。")).toBeVisible();
+  const created = api.requests.find((item) => item.method === "POST" && item.path.endsWith("/support-guides"));
+  expect(created?.body).toMatchObject({
+    draft: {
+      steps: [
+        {
+          id: "step1",
+          references: [
+            {
+              document_id: "doc-s",
+              page_ranges: [],
+              sheet_ranges: [
+                { sheet_name: "シートA", row_start: 42, row_end: 45 },
+                { sheet_name: "シートB", row_start: 3, row_end: 10, cell_range: "B3:D10" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  });
+  await expect(
+    editor.getByRole("listitem", { name: "手順 1 の資料 1" }).getByLabel("根拠のシートと行（表計算）"),
+  ).toHaveValue("シートA!42-45\nシートB!B3:D10");
+  await expectNoPageOverflow(page);
+});
+
 // #2091: 業務ガイドの検索つきの複数選択（依存する手順・分岐の値・影響範囲・承認が係る手順）の開いた一覧の下部
 // （N 件選択中・表示中をすべて選択・クリア・完了）が 1 行に並び、画面からはみ出さない。
 test("業務ガイドの複数選択の開いた一覧の下部が 1 行に並び、画面からはみ出さない", { tag: "@responsive" }, async ({ page }) => {

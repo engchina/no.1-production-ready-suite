@@ -78,6 +78,18 @@ def test_plan_from_payload_reads_steps_and_page_ranges() -> None:
     assert GuidePlan.from_payload("g", 1, []) is None
 
 
+def test_plan_from_payload_reads_sheet_row_ranges_apart_from_pages() -> None:
+    """表計算の資料はシートの行で絞る（行の番号を頁にしない。#2663）。"""
+    sheets = [{"sheet_name": "シートA", "row_start": 42, "row_end": 45}, {"sheet_name": "シートB"}, {"row_start": 3}]
+    result = plan({"id": "s1", "title": "t", "references": [{"document_id": "doc-s", "sheet_ranges": sheets}]})
+
+    assert result.steps[0].page_filters() == [
+        {"document_id": "doc-s", "sheet_name": "シートA", "row_start": 42, "row_end": 45},
+        {"document_id": "doc-s", "sheet_name": "シートB"},
+    ]
+    assert result.steps[0].references[0].to_payload()["page_ranges"] == []
+
+
 def test_step_queries_use_question_and_hints_or_title() -> None:
     steps = plan(STEP_A, {"id": "s3", "title": "題名だけの手順"}).steps
 

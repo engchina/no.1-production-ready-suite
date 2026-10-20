@@ -507,13 +507,20 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
 
 
 class PageRange(BaseModel):
-    """文書のページ範囲 1 件(章節。#717)。ページの無い範囲は文書全体。"""
+    """文書の範囲 1 件。ページ範囲(章節。#717)か、表計算のシートの行の範囲(#2663)。
+
+    ページもシートも無い範囲は文書全体。シートの範囲(``sheet_name``)は chunk のシート名と行
+    (``row_start``〜``row_end``)で絞り、ページとは同時に持たない。行が無ければシートの全体。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     document_id: str = Field(min_length=1, max_length=64)
     page_start: int | None = Field(default=None, ge=1)
     page_end: int | None = Field(default=None, ge=1)
+    sheet_name: str | None = Field(default=None, min_length=1, max_length=200)
+    row_start: int | None = Field(default=None, ge=1)
+    row_end: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _ordered(self) -> "PageRange":
@@ -523,6 +530,18 @@ class PageRange(BaseModel):
             and self.page_start > self.page_end
         ):
             raise ValueError("ページ範囲の開始が終了より後ろです。")
+        if self.sheet_name is None:
+            if self.row_start is not None or self.row_end is not None:
+                raise ValueError("行の範囲はシート名と一緒に指定してください。")
+            return self
+        if self.page_start is not None or self.page_end is not None:
+            raise ValueError("シートの範囲とページの範囲は同時に指定できません。")
+        if (
+            self.row_start is not None
+            and self.row_end is not None
+            and self.row_start > self.row_end
+        ):
+            raise ValueError("行の範囲の開始が終了より後ろです。")
         return self
 
 
@@ -539,10 +558,17 @@ def parse_page_ranges(value: str) -> list[PageRange]:
     return [PageRange.model_validate(item) for item in raw]
 
 
+_SHEET_RANGE_FIELDS = frozenset({"sheet_name", "row_start", "row_end"})
+
+
 def format_page_ranges(ranges: list[PageRange]) -> str:
     if not ranges:
         return ""
-    items = [item.model_dump() for item in ranges]
+    # シートの範囲でない項目は、ページの範囲の項目だけを書く(従来の形のまま)。
+    items = [
+        item.model_dump(exclude=None if item.sheet_name is not None else set(_SHEET_RANGE_FIELDS))
+        for item in ranges
+    ]
     return json.dumps(items, ensure_ascii=False, separators=(",", ":"))
 
 

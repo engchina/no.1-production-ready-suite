@@ -4571,6 +4571,10 @@ export const ja = {
   "supportGuides.field.pageRanges": "根拠の頁",
   "supportGuides.view.pages": "p.{pages}",
   "supportGuides.field.pageRangesHelp": "例: 3-5, 8。空なら文書の全体です。",
+  "supportGuides.field.sheetRanges": "根拠のシートと行（表計算）",
+  "supportGuides.field.sheetRangesHelp":
+    "表計算の資料だけ。1 行に 1 つ、「シート名!42-45」か「シート名!B3:D10」。シートの全体はシート名だけ。頁とは同時に入れません。",
+  "supportGuides.view.sheetRows": "{sheet} 行 {rows}",
   "supportGuides.field.stepReferences": "この手順が参照する資料",
   "supportGuides.field.stepReferencesHelp":
     "この手順の根拠がある資料と頁です。回答では、手順ごとにこの頁に絞って根拠を探し、見つかった根拠を検索の順位に関係なく回答の材料に入れます。全手順に共通の資料は「参照する資料」に入れます。",
@@ -4687,6 +4691,9 @@ export const ja = {
   "supportGuides.check.date": "日付は 2026-10-01 の形で入れてください。",
   "supportGuides.check.pageRanges":
     "頁は「3-5, 8」の形で入れてください（始まりは 1 以上、終わりは始まり以上、範囲は 10 個まで）。",
+  "supportGuides.check.sheetRanges":
+    "シートと行は 1 行に 1 つ、「シート名!42-45」か「シート名!B3:D10」の形で入れてください（範囲は 10 個まで）。",
+  "supportGuides.check.sheetAndPages": "1 つの資料には、根拠の頁かシートと行のどちらかだけを入れてください。",
   // 項目の名前（検証の結果の位置の表示）
   "supportGuides.path.separator": "・",
   "supportGuides.path.goal": "目的",
@@ -4810,6 +4817,7 @@ export const ja = {
   "supportGuides.processImport.reference.unresolved": "文書が無い",
   "supportGuides.processImport.reference.ambiguous": "複数に当たる",
   "supportGuides.processImport.pages": "頁 {pages}",
+  "supportGuides.processImport.sheetLocation": "シート {sheet} {location}",
   "supportGuides.processImport.resolvedTo": "→ {name}",
   "supportGuides.processImport.content": "下書きの内容",
   "supportGuides.processImport.rules": "ルールの候補",

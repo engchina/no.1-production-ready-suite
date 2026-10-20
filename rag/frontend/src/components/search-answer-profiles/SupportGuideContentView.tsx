@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import type { SupportGuideContent, SupportGuideReference } from "@/lib/api";
+import type { SupportGuideContent, SupportGuideReference, SupportGuideSheetRange } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import { formatPageRanges } from "@/lib/support-guide-form";
 
@@ -8,13 +8,24 @@ function joined(values: readonly string[]): string {
   return values.length > 0 ? values.join("、") : t("supportGuides.view.none");
 }
 
-/** 資料の表示（表示名・節・頁の範囲）。 */
+/** 表計算の資料のシートの行の表示（「シートA 行 42-45」。セルの範囲があればセルの範囲）。 */
+function sheetText(range: SupportGuideSheetRange): string {
+  if (range.cell_range) return `${range.sheet_name}!${range.cell_range}`;
+  if (range.row_start == null) return range.sheet_name;
+  const end = range.row_end ?? range.row_start;
+  const rows = end === range.row_start ? `${range.row_start}` : `${range.row_start}-${end}`;
+  return t("supportGuides.view.sheetRows", { sheet: range.sheet_name, rows });
+}
+
+/** 資料の表示（表示名・節・頁の範囲か表計算のシートの行）。 */
 function referenceText(reference: SupportGuideReference): string {
   const pages = formatPageRanges(reference.page_ranges ?? []);
+  const sheets = (reference.sheet_ranges ?? []).map(sheetText).join("、");
   return [
     reference.title || reference.document_id,
     reference.section_path.length > 0 ? ` — ${reference.section_path.join(" > ")}` : "",
     pages ? `（${t("supportGuides.view.pages", { pages })}）` : "",
+    sheets ? `（${sheets}）` : "",
   ].join("");
 }
 

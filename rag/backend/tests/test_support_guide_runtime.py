@@ -774,10 +774,17 @@ def test_mcp_lookup_guides_returns_step_contents(auth: Any, monkeypatch: MonkeyP
             "title": "画面の説明",
             "section_path": [],
             "page_ranges": [{"page_start": 4, "page_end": 6}],
+            "sheet_ranges": [],
         }
     ]
     assert guide["references"] == [
-        {"document_id": "doc-a", "title": "運用手順書", "section_path": ["3 章"], "page_ranges": []}
+        {
+            "document_id": "doc-a",
+            "title": "運用手順書",
+            "section_path": ["3 章"],
+            "page_ranges": [],
+            "sheet_ranges": [],
+        }
     ]
     assert guide["completion"] == [
         {"id": "done", "description": "付与した権限が表示される", "check_method": ""}

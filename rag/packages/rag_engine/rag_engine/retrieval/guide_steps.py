@@ -4,7 +4,7 @@
 回答の材料に確保する。手順 A の後に要る手順 B のように、質問の文だけでは上位に出ない手順の根拠を取るため。
 
 - 検索文は「質問 + 手順の検索の手がかり」（手がかりが無ければ手順の題名）。
-- 手順が資料と頁（`references`）を持てば、その頁に絞った検索も行い、当たった根拠は検索の順位に関係なく
+- 手順が資料と頁（`references`。表計算の資料はシートの行。#2663）を持てば、その範囲に絞った検索も行い、当たった根拠は検索の順位に関係なく
   回答の材料に入れる（`reference_max_chunks` まで）。
 - 回数は追加の検索の枠（`extra_retrieval.ExtraRetrievalBudget`）から取り、手順ごとの検索の上限を超えない。
   まず各手順に 1 回（参照があれば頁に絞った検索）を割り当て、残りで参照のある手順の絞らない検索をする。
@@ -37,23 +37,40 @@ class GuidePageRange:
 
 
 @dataclass(frozen=True)
+class GuideSheetRange:
+    """表計算の資料のシートと行の範囲（#2663）。行が無ければシートの全体。頁とは別の位置。"""
+
+    sheet_name: str
+    row_start: int | None = None
+    row_end: int | None = None
+
+    def to_payload(self) -> dict[str, Any]:
+        rows = {"row_start": self.row_start, "row_end": self.row_end or self.row_start} if self.row_start else {}
+        return {"sheet_name": self.sheet_name, **rows}
+
+
+@dataclass(frozen=True)
 class GuideStepReference:
     document_id: str
     title: str = ""
     # 空なら文書の全体。
     page_ranges: tuple[GuidePageRange, ...] = ()
+    # 表計算の資料のシートの行の範囲（頁の範囲とは同時に持たない）。
+    sheet_ranges: tuple[GuideSheetRange, ...] = ()
 
     def filters(self) -> list[dict[str, Any]]:
-        """検索の頁の範囲の絞り込み（`page_ranges` の形。頁が無ければ文書の全体）。"""
-        if not self.page_ranges:
+        """検索の範囲の絞り込み（`page_ranges` の形。頁かシートの行。どちらも無ければ文書の全体）。"""
+        ranges = [item.to_payload() for item in self.page_ranges] or [item.to_payload() for item in self.sheet_ranges]
+        if not ranges:
             return [{"document_id": self.document_id}]
-        return [{"document_id": self.document_id, **item.to_payload()} for item in self.page_ranges]
+        return [{"document_id": self.document_id, **item} for item in ranges]
 
     def to_payload(self) -> dict[str, Any]:
         return {
             "document_id": self.document_id,
             "title": self.title,
             "page_ranges": [item.to_payload() for item in self.page_ranges],
+            "sheet_ranges": [item.to_payload() for item in self.sheet_ranges],
         }
 
 
@@ -106,6 +123,15 @@ class GuidePlan:
                         GuidePageRange(int(r["page_start"]), int(r.get("page_end") or r["page_start"]))
                         for r in item.get("page_ranges") or ()
                         if isinstance(r, Mapping) and r.get("page_start")
+                    ),
+                    sheet_ranges=tuple(
+                        GuideSheetRange(
+                            str(r["sheet_name"]),
+                            int(r["row_start"]) if r.get("row_start") else None,
+                            int(r.get("row_end") or r["row_start"]) if r.get("row_start") else None,
+                        )
+                        for r in item.get("sheet_ranges") or ()
+                        if isinstance(r, Mapping) and str(r.get("sheet_name") or "").strip()
                     ),
                 )
                 for item in raw.get("references") or ()
@@ -287,6 +313,7 @@ __all__ = [
     "GUIDE_STEP_TRACE_SCHEMA_VERSION",
     "GuidePageRange",
     "GuidePlan",
+    "GuideSheetRange",
     "GuideStep",
     "GuideStepReference",
     "StepSearch",
