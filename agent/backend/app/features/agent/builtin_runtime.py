@@ -236,6 +236,7 @@ from app.features.agent.support_task import (
     nl2sql_clarification_pending,
     nl2sql_next_step,
     nl2sql_skip_step,
+    profile_knowledge_summary,
     rag_next_step,
     rag_planned_arguments,
     rag_planned_schema,
@@ -1567,6 +1568,14 @@ class _ToolRecorder:
                 next_step = self._without_asking(evidence_clarification_step(output))
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
+                knowledge = profile_knowledge_summary(output)
+                if knowledge is not None:
+                    # 検索・回答プロファイルのルール・用語は結果のまま（根拠と分けた項目で）モデルへ
+                    # 渡す。渡したことを記録する（#2701）。
+                    logger.info(
+                        "builtin_runtime_profile_knowledge_passed",
+                        extra={"run_id": self.run_id, "tool_name": name, **knowledge},
+                    )
                 note = await self.check_guides(name, call.arguments)
                 if note is not None:
                     output = {**output, "guide_check": note}

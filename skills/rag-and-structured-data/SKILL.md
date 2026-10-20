@@ -54,6 +54,7 @@ metadata:
 ## 結果ごとの対応
 
 - `rag_retrieve_evidence` の結果に `clarifications`（検索の前に確かめる条件）がある: 検索していない。問いを利用者に確かめ、答えを `conditions` に入れて呼び直す。
+- `rag_retrieve_evidence` の結果に `profile_knowledge`（検索・回答プロファイルで承認された判断の方針 `rules` と用語の説明 `terms`）がある: 資料の原文ではない。根拠をどう読み、質問にどう当てはめるかの判断に使い、文書名と場所を示す根拠としては引用しない。
 - 資料の根拠だけでは確定できない現場の値・記録（件数・状態・設定値）は、`nl2sql_query` で確かめてから答える。
 - `nl2sql_query` が `pending` / `running` を返した: `nl2sql_get_job` で続きを取る。
 - `nl2sql_query` が `needs_clarification` を返した: SQL はまだ作っていない。
