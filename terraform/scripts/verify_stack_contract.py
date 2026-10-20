@@ -42,6 +42,8 @@ REQUIRED_ENTRIES = {
     "versions.tf",
     "extract_wallet.sh",
     "cloud_init/bootstrap.template.yaml",
+    "bastion.tf",
+    "cloud_init/bastion.sh",
 }
 FORBIDDEN_NAMES = {".terraform.lock.hcl", "wallet_full.zip", "wallet_small.zip"}
 
@@ -62,7 +64,16 @@ SECRET_VARIABLES = [
     "existing_oracle_wallet_password",
     "app_admin_login_user_password",
     "nl2sql_oracle_deepsec_data_user_password",
+    "bastion_vnc_password",
 ]
+# 任意の bastion の Compute（#2670）の入力と既定値（利用者の決定。2026-10-20）。
+BASTION_DEFAULTS = {
+    "bastion_flex_shape_ocpus": "2",
+    "bastion_flex_shape_memory": "16",
+    "bastion_boot_volume_size": "100",
+    "bastion_boot_volume_vpus": "10",
+}
+BASTION_VNC_PORT = "5901"
 # 製品ごとの入力は、その製品を選んだときだけフォームに出す（group の visible と、group 内の変数の接頭辞）。
 PRODUCT_GROUPS = {
     "RAG": "rag",
@@ -1454,9 +1465,10 @@ def verify(package_path: Path) -> None:
         _verify_package_entries(archive)
         sources = {
             name: archive.read(name).decode()
-            for name in ("schema.yaml", "variables.tf", "adb.tf", "compute.tf", "locals.tf", "output.tf")
+            for name in ("schema.yaml", "variables.tf", "adb.tf", "compute.tf", "locals.tf", "output.tf", "bastion.tf")
         }
         bootstrap = archive.read("cloud_init/bootstrap.template.yaml").decode()
+        bastion_script = archive.read("cloud_init/bastion.sh").decode()
     init_sources = {
         product: (REPO_ROOT / product / "init_script.sh").read_text(encoding="utf-8") for product in PRODUCTS
     }
@@ -1470,8 +1482,9 @@ def verify(package_path: Path) -> None:
         sources["output.tf"],
     )
     _verify_bootstrap(bootstrap)
+    _verify_bastion(sources["schema.yaml"], sources["variables.tf"], sources["bastion.tf"], sources["output.tf"], bastion_script)
     _verify_app_db_user(sources["schema.yaml"], sources["variables.tf"], sources["adb.tf"], sources["locals.tf"], bootstrap)
-    stack_sources = "\n".join([*sources.values(), bootstrap])
+    stack_sources = "\n".join([*sources.values(), bootstrap, bastion_script])
     # ADB には Compute からしか接続できない（プライベート・エンドポイント・ACL）。アプリ用の DB ユーザーの作成などの
     # DB の操作は Compute の suite-init.sh が行い、Terraform の provisioner（local-exec など）では行わない（#1668）。
     if re.search(r'(?m)^\s*provisioner\s+"', stack_sources):
@@ -1494,6 +1507,7 @@ def verify(package_path: Path) -> None:
         {
             **sources,
             "bootstrap": bootstrap,
+            "cloud_init/bastion.sh": bastion_script,
             **{f"{p}/init_script.sh": s for p, s in init_sources.items()},
             **deploy_sources,
         }
@@ -1503,8 +1517,98 @@ def verify(package_path: Path) -> None:
         sources["variables.tf"],
         sources["output.tf"],
         bootstrap,
-        {**{f"{p}/init_script.sh": s for p, s in init_sources.items()}, **deploy_sources},
+        {
+            **{f"{p}/init_script.sh": s for p, s in init_sources.items()},
+            **deploy_sources,
+            "cloud_init/bastion.sh": bastion_script,
+        },
     )
+
+
+def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, script: str) -> None:
+    """任意の bastion の Compute（#2670）。既定は作らず、作るときは Suite と同じ shape・image・SSH キーを使う。"""
+    groups = _schema_groups(schema)
+    if groups.get("Bastion") != ("true", ["bastion_enabled"]):
+        raise AssertionError(f"the Bastion group must hold only bastion_enabled: {groups.get('Bastion')}")
+    visible, members = groups.get("Bastion Compute", ("", []))
+    if visible != "bastion_enabled" or any(not name.startswith("bastion_") for name in members):
+        raise AssertionError(f"the Bastion Compute group must hold bastion_* inputs shown only when bastion_enabled: {members}")
+    _require_all(
+        _schema_variable(schema, "bastion_enabled"),
+        ["type: boolean", "required: true", "visible: true", "default: false"],
+        context="bastion_enabled schema",
+    )
+    _require_all(
+        _terraform_variable(variables, "bastion_enabled"),
+        ["type        = bool", "default     = false"],
+        context="bastion_enabled Terraform default",
+    )
+    for name, default in BASTION_DEFAULTS.items():
+        _require_all(_schema_variable(schema, name), [f"default: {default}"], context=f"{name} schema default")
+        _require_all(
+            _terraform_variable(variables, name), [f"default     = {default}"], context=f"{name} Terraform default"
+        )
+    _require_all(
+        _schema_variable(schema, "bastion_vnc_password"),
+        ["type: password", "required: false", "visible: bastion_enabled", "confirmation: true"],
+        context="bastion_vnc_password schema",
+    )
+    _require_all(
+        re.sub(r"[ \t]+", " ", bastion),
+        [
+            'resource "oci_core_instance" "bastion" {',
+            "count = var.bastion_enabled ? 1 : 0",
+            "shape = var.instance_shape",
+            "source_id = var.instance_image_source_id",
+            '"ssh_authorized_keys" = var.ssh_authorized_keys',
+            'base64encode(file("${path.module}/cloud_init/bastion.sh"))',
+            '"bastion_vnc_password_b64" = base64encode(var.bastion_vnc_password)',
+            "memory_in_gbs = var.bastion_flex_shape_memory",
+            "ocpus = var.bastion_flex_shape_ocpus",
+            "boot_volume_size_in_gbs = var.bastion_boot_volume_size",
+            "boot_volume_vpus_per_gb = var.bastion_boot_volume_vpus",
+            "length(var.bastion_vnc_password) >= 8",
+        ],
+        context="bastion.tf",
+    )
+    # bastion に 3 製品の配備・ADB の情報を渡さない（Suite の Compute の cloud-init とは別）。
+    for leaked in ("cloud_init_user_data", "wallet", "platform_env", "backend_envs", "adb_password"):
+        if leaked in bastion:
+            raise AssertionError(f"bastion.tf must not pass the suite deployment inputs: {leaked}")
+    if "oci_core_network_security_group" in bastion or "nsg_ids" in bastion:
+        raise AssertionError("The stack must not create NSGs; allow the bastion ports in the subnet security list")
+    if not script.startswith("#!/bin/bash\n"):
+        raise AssertionError("cloud_init/bastion.sh must start with the shebang (cloud-init runs it as a shell script)")
+    _require_all(
+        script,
+        [
+            "/usr/libexec/oci-growfs -y",
+            'groupinstall "Server with GUI"',
+            "tigervnc-server",
+            "/opc/v2/instance/metadata",
+            "bastion_vnc_password_b64",
+            'firewall-cmd --permanent --add-port="${VNC_PORT}/tcp"',
+            "baseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64",
+            "gpgcheck=1",
+            "dnf -y install google-chrome-stable",
+            'systemctl enable "vncserver@:${VNC_DISPLAY}.service"',
+        ],
+        context="cloud_init/bastion.sh",
+    )
+    if f'VNC_PORT="$((5900 + VNC_DISPLAY))"' not in script or 'VNC_DISPLAY="1"' not in script:
+        raise AssertionError(f"the bastion VNC must listen on TCP {BASTION_VNC_PORT} (display :1)")
+    # VNC のパスワードはスクリプトに書かない（metadata から読む）。
+    if re.search(r'(?m)^\s*VNC_PASS(?:WORD)?="[^$]', script):
+        raise AssertionError("cloud_init/bastion.sh must not hard-code the VNC password")
+    for name, value in (
+        ("bastion_vnc_address", f':{BASTION_VNC_PORT}" : null'),
+        ("ssh_to_bastion", "ssh -o ServerAliveInterval=10 opc@${local.bastion_access_ip}"),
+    ):
+        block = re.search(rf'(?ms)^output "{name}" \{{.*?^\}}', outputs)
+        if block is None or value not in block.group(0) or "var.bastion_enabled ?" not in block.group(0):
+            raise AssertionError(f"output {name} must be shown only when bastion_enabled")
+        if not re.search(rf"(?ms)^  {name}:\n(?:    .*\n)*?    visible: bastion_enabled", _schema_section(schema, "outputs")):
+            raise AssertionError(f"output {name} must be shown only when bastion_enabled in the schema")
 
 
 def _verify_oracle_linux(

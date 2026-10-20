@@ -492,6 +492,83 @@ variable "ssh_authorized_keys" {
   default     = ""
 }
 
+# 任意の bastion の Compute（bastion.tf。#2670）。既定は作らない。作るときの既定は 2 OCPU / 16 GB /
+# boot volume 100 GB / 10 VPUs/GB（利用者の決定。2026-10-20）。shape・image・SSH キーは Suite の Compute と同じ。
+variable "bastion_enabled" {
+  description = "Create a bastion Compute instance with a VNC desktop (GNOME, TigerVNC on TCP 5901) and Google Chrome."
+  type        = bool
+  default     = false
+}
+
+variable "bastion_display_name" {
+  description = "Display name of the bastion Compute instance."
+  type        = string
+  default     = "PRODUCTION_READY_BASTION"
+}
+
+variable "bastion_flex_shape_ocpus" {
+  description = "OCPUs of the bastion Compute instance."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.bastion_flex_shape_ocpus > 0
+    error_message = "bastion_flex_shape_ocpus must be greater than 0."
+  }
+}
+
+variable "bastion_flex_shape_memory" {
+  description = "Memory in GB of the bastion Compute instance."
+  type        = number
+  default     = 16
+
+  validation {
+    condition     = var.bastion_flex_shape_memory > 0
+    error_message = "bastion_flex_shape_memory must be greater than 0."
+  }
+}
+
+variable "bastion_boot_volume_size" {
+  description = "Boot volume size in GB of the bastion Compute instance."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.bastion_boot_volume_size >= 50 && var.bastion_boot_volume_size <= 32768
+    error_message = "bastion_boot_volume_size must be between 50 and 32768 GB."
+  }
+}
+
+variable "bastion_boot_volume_vpus" {
+  description = "Boot volume VPUs/GB of the bastion Compute instance."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = contains(concat([10, 20], range(30, 121)), var.bastion_boot_volume_vpus)
+    error_message = "bastion_boot_volume_vpus must be 10, 20, or a value from 30 through 120."
+  }
+}
+
+variable "bastion_subnet_id" {
+  description = "Subnet OCID of the bastion Compute instance. When empty, the subnet of the Suite Compute instance is used."
+  type        = string
+  default     = ""
+}
+
+# TigerVNC は先頭の 8 文字だけを使う。metadata で渡すため、値は state と instance metadata に残る。
+variable "bastion_vnc_password" {
+  description = "VNC password of the opc user on the bastion Compute instance (TigerVNC uses only the first 8 characters)."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.bastion_vnc_password == "" || (length(var.bastion_vnc_password) >= 8 && !can(regex("[\r\n]", var.bastion_vnc_password)))
+    error_message = "bastion_vnc_password must be at least 8 characters and must not contain line breaks."
+  }
+}
+
 # HTTPS（#1316）。on なら Nginx が 443 で TLS 1.2 / 1.3 を受け、80 は開けない・listen しない（#1638）。
 # 証明書は Compute の中で作る自作の Root CA と、公開 IP・private IP の証明書。port と証明書の発行者は変数にしない
 # （platform/deploy/suite-tls.sh の固定値）。on のとき共通 .env の PLATFORM_AUTH_COOKIE_SECURE を true にする。
