@@ -421,6 +421,14 @@ class SupportGuideApi {
             },
           ],
           clarifications: [],
+          // 手順ごとの充足（#2686）。手順 2 は原文だけ・分岐の手順 3 は必須ではない。
+          steps: this.tryUsesDraft
+            ? [
+                { step_id: "step1", title: "本人であることを確かめる", status: "explained", required: true },
+                { step_id: "step2", title: "再設定の画面を案内する", status: "reference_only", required: true },
+                { step_id: "step3", title: "別の窓口を案内する", status: "unused", required: false },
+              ]
+            : [],
           elapsed_ms: 4200,
         }),
       });
@@ -1016,6 +1024,18 @@ for (const theme of ["light", "dark"] as const) {
     await expect(result).toContainText("所要時間: 4.2 秒");
     await expect(result.getByText("手順どおりに答えた")).toBeVisible();
     await expect(result.getByTestId("support-guide-try-known")).toHaveText("アカウントの種類: 社員");
+    // 手順ごとの充足（#2686）。説明できていない必須の手順の数と、手順ごとの状態を文言で示す。
+    const steps = result.getByTestId("support-guide-try-steps");
+    await expect(steps.getByTestId("support-guide-try-steps-missing")).toHaveText(
+      "必須の手順のうち 1 件を、回答で説明できていません。",
+    );
+    const stepRows = steps.getByTestId("support-guide-try-step");
+    await expect(stepRows).toHaveCount(3);
+    await expect(stepRows.nth(0)).toContainText("本人であることを確かめる");
+    await expect(stepRows.nth(0)).toContainText("説明した");
+    await expect(stepRows.nth(1)).toContainText("資料の原文だけ");
+    await expect(stepRows.nth(2)).toContainText("説明していない");
+    await expect(stepRows.nth(2)).toContainText("分岐の手順（必須ではない）");
     await expect(result).toContainText("ポータルの「パスワードを忘れた」から再設定します。");
     // AI に渡した件数と内訳は検索・チャットと同じ表示（#2040）。
     await expect(result.getByRole("heading", { name: /^AI に渡した 1 件/ })).toBeVisible();
@@ -1036,6 +1056,7 @@ for (const theme of ["light", "dark"] as const) {
     await panel.getByRole("button", { name: "試す", exact: true }).click();
     await expect(result.getByText("この質問では、業務ガイドを使わずに答えました。")).toBeVisible();
     await expect(result).toContainText("質問の例・照合の語・適用範囲");
+    await expect(result.getByTestId("support-guide-try-steps")).toHaveCount(0);
 
     // 保存していない変更があるうちは、保存した下書きでしか試せないので押せない。
     await editor.getByLabel("タイトル").fill("手元で直したタイトル");

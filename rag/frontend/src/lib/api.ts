@@ -4536,6 +4536,18 @@ export interface SupportGuideAnswerSummary {
   draft?: boolean;
 }
 
+/** 業務ガイドの手順の充足（#2491）。 */
+export type SupportGuideStepStatus = "explained" | "reference_only" | "unused" | "no_evidence";
+
+/** 下書きで試した回答の、業務ガイドの手順ごとの充足（#2686）。 */
+export interface SupportGuideDraftTryStep {
+  step_id: string;
+  title: string;
+  status: SupportGuideStepStatus;
+  /** 回答の充足で必須の手順か（条件が決まらない分岐の手順は false）。 */
+  required: boolean;
+}
+
 /** 下書きで試した回答（#1288）。利用者の回答の履歴・評価には入らない。 */
 export interface SupportGuideDraftTryData {
   trace_id: string;
@@ -4549,6 +4561,8 @@ export interface SupportGuideDraftTryData {
   answer: string;
   citations: RetrievedChunk[];
   clarifications: { condition_id: string; label?: string; question?: string; options?: string[] }[];
+  /** この下書きの手順ごとの充足（#2686）。ガイドを使わなかった・手順で答えなかったときは空。 */
+  steps?: SupportGuideDraftTryStep[];
   elapsed_ms: number;
 }
 

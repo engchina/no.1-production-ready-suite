@@ -2993,12 +2993,15 @@ def _guide_words(value: str) -> set[str]:
     return {w[i : i + 2] for w in check_cues().claim_word.findall(fold_width(value or "")) for i in range(len(w) - 1)}
 
 
-# 意味の近さ（cosine）の差がこれより小さい手順の組は、文の近さで区別できないとみなす（#2649）。手順の主の操作の文は
-# その手順の記述に他の手順の記述より 0.1 以上近いのが通常で、同じ文の言い換え・語順の違いでは cosine が数百分の 1
-# 揺れる。差がこの値に満たない文は複数の手順に同じくらい近い共通の文として、どの手順の主の操作の文にもしない。
-# 小さくすると共通の文を手順の説明に数え（誤って explained）、大きくすると正しい説明も決まらない（unused。不足を
-# 示す安全側）ので、揺れの幅より上の安全側に寄せた値。
+# 手順に固有な度合い（`_guide_semantic_owners` の、文と手順の記述をそれぞれの平均から引いた向きの cosine）の、
+# 一番近い手順と 2 番目の手順の差がこれより小さい文は、手順を区別しない共通の文とみなし、どの手順の主の操作の文にも
+# しない（#2649・#2685）。小さくすると共通の文を手順の説明に数え（誤って explained）、大きくすると正しい説明も
+# 決まらない（unused。不足を示す安全側）ので、同じ文の言い換え・語順の違いの揺れ（数百分の 1）より上に寄せた値。
 GUIDE_STEP_COMMON_MARGIN = 0.05
+# 手順の主の操作の文の固有な度合いが、同じ手順の次の文をこれ以上上回らなければ、主の操作の文は決まらないとする
+# （#2685。安全側の unused / reference_only に倒す）。同じ文を embedding にし直したときの固有な度合いの揺れ
+# （実の Cohere Embed の記録で 0.002 以下）の 5 倍。これより小さい差は呼び直しや語の小さな違いで入れ替わりうる。
+GUIDE_STEP_MAIN_LEAD = 0.01
 
 
 @dataclass
@@ -3063,6 +3066,17 @@ def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
     return sum(a * b for a, b in zip(left, right, strict=False))
 
 
+def _mean_vector(vectors: Sequence[Sequence[float]]) -> tuple[float, ...]:
+    return tuple(sum(values) / len(vectors) for values in zip(*vectors, strict=True))
+
+
+def _deviation(vector: Sequence[float], center: Sequence[float]) -> tuple[float, ...] | None:
+    """vector の center からのずれの単位 vector。ずれが無い（平均と同じ）なら None。"""
+    values = tuple(a - b for a, b in zip(vector, center, strict=True))
+    norm = math.sqrt(sum(value * value for value in values))
+    return tuple(value / norm for value in values) if norm > 1e-9 else None
+
+
 def _guide_sentences(step_spans: Sequence[dict]) -> list[str]:
     """手順の根拠の文（語を含む文。同じ文は 1 つ。#2649）。"""
     cues = check_cues()
@@ -3099,10 +3113,15 @@ def _guide_semantic_owners(
 ) -> dict[int, set[str]] | None:
     """語で決まらない共有の item（index → (引用, 引用になる手順)）がどの手順の説明かを、意味の近さで決める（#2649）。
 
-    手順の主の操作の文: 手順の根拠の文のうち、その文を根拠に持つ手順の中で手順の記述（題名・検索の手がかり）が
-    一番近く、2 番目の手順との差が ``GUIDE_STEP_COMMON_MARGIN`` 以上の文（差が小さい文は共通の文で、どの手順の
-    主の操作の文にもしない）の中で、その手順に一番近い文。item は、引用がその文を含むか、引用に意味で一番近い
-    手順の根拠の文がその文で、引用になる手順の中でその手順が一番近い（差が閾値以上）ときに、その手順の説明とする。
+    文が手順に固有な度合い（#2685）: 文の vector から手順の根拠の文全体の平均（章節に共通の成分）を、手順の記述の
+    vector から手順の記述全体の平均（全手順に共通の成分）を引き、残った向きの cosine。絶対の近さでは、章節全体の
+    文・全手順に近い文が言い回しの違う手順の主の操作の文より手順の記述に近くなることがあるので、それを除いて比べる。
+
+    手順の主の操作の文: その文を根拠に持つ手順の中で固有な度合いが一番高く、2 番目の手順との差が
+    ``GUIDE_STEP_COMMON_MARGIN`` 以上の文（差の小さい文は共通の文）のうち、その手順に固有な度合いが一番高い文。
+    ただし、その度合いが手順の根拠の次の文を ``GUIDE_STEP_MAIN_LEAD`` 以上上回らなければ決まらないとし、その手順は
+    どの item の説明にもしない（安全側）。item は、引用がその文を含むか、引用に意味で一番近い手順の根拠の文がその
+    文で、引用になる手順の中で引用がその手順に一番固有（差が閾値以上）なときに、その手順の説明とする。
     embedding が使えなければ None（呼び出し側が語の判定に戻る）。
     """
     involved = list(dict.fromkeys(step_id for _quote, step_ids in items.values() for step_id in step_ids))
@@ -3114,33 +3133,37 @@ def _guide_semantic_owners(
     if any(not descriptions[step_id] for step_id in compared):
         # 記述（題名・手がかり）の無い手順は意味で照らせない。
         return None
-    vectors = semantics.lookup(
-        [
-            *(descriptions[step_id] for step_id in compared),
-            *(sentence for step_id in involved for sentence in sentences[step_id]),
-            *(quote for quote, _step_ids in items.values()),
-        ]
-    )
+    pool = list(dict.fromkeys(sentence for step_id in involved for sentence in sentences[step_id]))
+    vectors = semantics.lookup([*(descriptions[step_id] for step_id in compared), *pool, *(quote for quote, _step_ids in items.values())])
     if vectors is None:
         return None
+    sentence_center = _mean_vector([vectors[sentence] for sentence in pool]) if pool else None
+    step_center = _mean_vector([vectors[descriptions[step_id]] for step_id in compared])
+    axes = {step_id: _deviation(vectors[descriptions[step_id]], step_center) for step_id in compared}
+    deviations: dict[str, tuple[float, ...] | None] = {}
 
-    def near(text: str, step_id: str) -> float:
-        return _cosine(vectors[text], vectors[descriptions[step_id]])
-
-    def nearest(text: str, step_ids: Sequence[str]) -> tuple[str, float]:
-        """text に一番近い手順と、2 番目の手順との近さの差（手順が 1 つなら無限大）。"""
-        ranked = sorted(((near(text, step_id), step_id) for step_id in step_ids), key=lambda pair: -pair[0])
-        return ranked[0][1], (ranked[0][0] - ranked[1][0] if len(ranked) > 1 else math.inf)
+    def specific(text: str, step_id: str) -> float:
+        """text が手順に固有な度合い。章節の平均の文・手順の記述の平均と同じ向き（ずれが無い）なら 0。"""
+        if text not in deviations:
+            deviations[text] = _deviation(vectors[text], sentence_center) if sentence_center is not None else None
+        deviation, axis = deviations[text], axes[step_id]
+        return _cosine(deviation, axis) if deviation is not None and axis is not None else 0.0
 
     def distinct(text: str, step_id: str, step_ids: Sequence[str]) -> bool:
-        owner, margin = nearest(text, step_ids)
-        return owner == step_id and margin >= GUIDE_STEP_COMMON_MARGIN
+        """text に一番固有な手順が step_id で、2 番目の手順との差が閾値以上（手順が 1 つなら固有なら真）。"""
+        ranked = sorted(((specific(text, other), other) for other in step_ids), key=lambda pair: -pair[0])
+        margin = ranked[0][0] - ranked[1][0] if len(ranked) > 1 else ranked[0][0]
+        return ranked[0][1] == step_id and margin >= GUIDE_STEP_COMMON_MARGIN
 
     main: dict[str, str] = {}
     for step_id in involved:
-        candidates = [sentence for sentence in sentences[step_id] if distinct(sentence, step_id, containing[sentence])]
-        if candidates:
-            main[step_id] = max(candidates, key=lambda sentence: near(sentence, step_id))
+        ranked = sorted(sentences[step_id], key=lambda sentence: -specific(sentence, step_id))
+        best = next((sentence for sentence in ranked if distinct(sentence, step_id, containing[sentence])), None)
+        if best is None:
+            continue
+        runner_up = max((specific(sentence, step_id) for sentence in ranked if sentence != best), default=-math.inf)
+        if specific(best, step_id) - runner_up >= GUIDE_STEP_MAIN_LEAD:
+            main[step_id] = best
     owners: dict[int, set[str]] = {}
     for index, (quote, step_ids) in items.items():
         owners[index] = {
@@ -3166,7 +3189,7 @@ def guide_step_coverage(
     step_terms: Mapping[str, Sequence[str]] | None = None,
     semantics: GuideStepSemantics | None = None,
 ) -> list[dict[str, Any]]:
-    """業務ガイドの手順ごとの充足（#2491・#2649）。
+    """業務ガイドの手順ごとの充足（#2491・#2649・#2685）。
 
     手順の根拠（手順ごとの検索で取った chunk）を引いた item を手順の引用とする。同じ本文が別の chunk にも
     あるので、手順の根拠の本文と照合できる引用（``_GUIDE_STEP_QUOTE_MIN_CHARS`` 以上）も手順の根拠を引いたと数える。
@@ -3177,8 +3200,8 @@ def guide_step_coverage(
     根拠の中で手順の語を最も多く含む文（手順の主の操作の文。語で 1 つに決まるとき）と同じ数以上含めば、その手順の
     item。どの手順でも語で決まらない item（手順の語が根拠に無い・主の操作の文が語で 1 つに決まらない・引用が語で
     主の操作の文に届かない）は、``semantics`` が使えれば意味の近さで決める（`_guide_semantic_owners`）。使えない・
-    失敗なら語の判定（主の操作の文と同じ数以上の手順の語を含む引用。手順の語が根拠の文に無い手順には条件を課さない）
-    に戻る。さらに 1 つの item は 1 つの手順の説明にだけ数え（必須の手順を先に割り当てる）、同じ item を別の手順の
+    失敗なら語で決まる item だけを手順の説明にし、語で決まらない共有の item はどの手順の説明にもしない（#2685。
+    手順の語が 1 語しか当たらない文は共通の文のことがあるので、それで対応付けない）。さらに 1 つの item は 1 つの手順の説明にだけ数え（必須の手順を先に割り当てる）、同じ item を別の手順の
     説明に重ねない。
 
     手順の item に公開できる説明（原文のみ提示でも適用未確認でもない）を割り当てられれば explained。手順の item が
@@ -3241,17 +3264,16 @@ def guide_step_coverage(
         else None
     )
 
-    def owns(step_id: str, index: int, score: int) -> bool:
+    def owns(step_id: str, index: int) -> bool:
         if len(citing[index]) == 1:
             return True
-        if owners is None:
-            # 語の判定: 主の操作の文と同じ数以上の手順の語を含む引用（手順の語が根拠の文に無い手順には条件を課さない）。
-            return anchors[step_id][0] == 0 or score >= anchors[step_id][0]
-        return (step_id, index) in word_owned or step_id in owners.get(index, ())
+        # 意味の判定が使えない・失敗したときは語で決まる item だけ（#2685。手順の語が根拠の文に無い・1 語しか当たらない
+        # 手順は、共有の item をその手順の説明にしない安全側）。
+        return (step_id, index) in word_owned or (owners is not None and step_id in owners.get(index, ()))
 
     # 手順の item（index と、引用が含む手順の語の数）。語の数の多い順。
     own = {
-        step_id: sorted((pair for pair in pairs if owns(step_id, *pair)), key=lambda pair: -pair[1]) for step_id, pairs in scored.items()
+        step_id: sorted((pair for pair in pairs if owns(step_id, pair[0])), key=lambda pair: -pair[1]) for step_id, pairs in scored.items()
     }
 
     def publishable(index: int) -> bool:

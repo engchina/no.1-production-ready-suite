@@ -10,7 +10,8 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import ValidationError
@@ -34,11 +35,13 @@ from app.schemas.document import FileStatus
 from app.schemas.search import SearchRequest
 from app.schemas.search_answer_profile import SearchAnswerProfileDetail
 from app.schemas.support_guide import (
+    SUPPORT_GUIDE_STEP_STATUSES,
     SupportGuideContent,
     SupportGuideCreateRequest,
     SupportGuideDetail,
     SupportGuideDraftTryData,
     SupportGuideDraftTryRequest,
+    SupportGuideDraftTryStep,
     SupportGuideDraftUpdate,
     SupportGuideExportData,
     SupportGuideImportData,
@@ -468,15 +471,14 @@ async def try_support_guide_draft(
     envelope = answer.get("envelope")
     raw_clarifications = envelope.get("clarifications") if isinstance(envelope, dict) else None
     outcome = answer.get("outcome")
+    guide_used = bool(guide and guide.get("guide_id") == guide_id and guide.get("draft") is True)
     return ApiResponse(
         data=SupportGuideDraftTryData(
             trace_id=result.trace_id,
             guide_id=guide_id,
             draft_revision=summary.draft_revision,
             published_revision=summary.published_revision,
-            guide_used=bool(
-                guide and guide.get("guide_id") == guide_id and guide.get("draft") is True
-            ),
+            guide_used=guide_used,
             guide=guide,
             outcome=outcome if isinstance(outcome, str) else None,
             answer=result.answer,
@@ -486,9 +488,32 @@ async def try_support_guide_draft(
             ]
             if isinstance(raw_clarifications, list)
             else [],
+            steps=_try_steps(guide, draft) if guide is not None and guide_used else [],
             elapsed_ms=result.elapsed_ms,
         )
     )
+
+
+def _try_steps(
+    guide: Mapping[str, Any], draft: SupportGuideContent
+) -> list[SupportGuideDraftTryStep]:
+    """下書きで試した回答の手順ごとの充足（#2686）。回答の記録の業務ガイドの ``step_coverage`` に、
+    下書きの手順の題名を付ける（記録には題名を持たない）。"""
+    raw = guide.get("step_coverage")
+    coverage = raw if isinstance(raw, list) else []
+    titles = {step.id: step.title for step in draft.steps}
+    return [
+        SupportGuideDraftTryStep(
+            step_id=step_id,
+            title=titles.get(step_id, step_id),
+            status=status,
+            required=step.get("required") is not False,
+        )
+        for step in coverage
+        if isinstance(step, Mapping)
+        and isinstance(step_id := step.get("step_id"), str)
+        and (status := step.get("status")) in SUPPORT_GUIDE_STEP_STATUSES
+    ]
 
 
 @router.get(_GUIDE + "/revisions/{revision}", response_model=ApiResponse[SupportGuideRevision])

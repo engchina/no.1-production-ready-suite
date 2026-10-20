@@ -393,12 +393,12 @@ class GuideStepSharedEvidenceTest(unittest.TestCase):
         self.assertEqual(statuses, {"s1": "explained", "s2": "explained", "s3": "no_evidence"})
         self.assertEqual([step["step_id"] for step in grounded.unexplained_guide_steps(coverage)], ["s3"])
 
-    def test_steps_without_words_still_take_one_item_each(self):
-        """手順の語で照らせない手順でも、1 つの item で複数の手順を説明済みにしない。"""
+    def test_steps_without_words_take_no_shared_item_by_words(self):
+        """手順の語で照らせない手順は、語の判定だけでは共有の item をどの手順の説明にもしない（#2685。安全側）。"""
         span = self._span("run:s", SHARED)
         steps = (("s1", "A", ("run:s",)), ("s2", "B", ("run:s",)))
         statuses, _ = self._statuses(steps, [self._entry(span, SHARED_END)], [span], terms=())
-        self.assertEqual(sorted(statuses.values()), ["explained", "unused"])
+        self.assertEqual(statuses, {"s1": "unused", "s2": "unused"})
 
     def test_exclusive_evidence_is_unchanged(self):
         """根拠を共有しない手順は、従来どおり手順の根拠を引いた公開の説明で explained。"""
@@ -510,8 +510,9 @@ class GuideStepSemanticMatchTest(unittest.TestCase):
         for quotes in ((SHARED_A, SHARED_B, SHARED_END), (SHARED_END, SHARED_B, SHARED_A), (SHARED_A, SHARED_B)):
             self.assertEqual(self._statuses(REWORDED_GUIDE, quotes, embedder), {"s1": "explained", "s2": "explained"})
         # 手がかりが共通の文にだけ当たる（語の判定では主の操作の文が共通の文になる）手順も、意味で主の操作の文を決める。
+        # 語の判定だけでは、語で決まらない共有の item をどの手順の説明にもしない（#2685。安全側）。
         terms = (("s2", ("保存ボタン",)),)
-        self.assertEqual(self._statuses(REWORDED_GUIDE, (SHARED_A, SHARED_B), terms=terms), {"s1": "explained", "s2": "unused"})
+        self.assertEqual(self._statuses(REWORDED_GUIDE, (SHARED_A, SHARED_B), terms=terms), {"s1": "unused", "s2": "unused"})
         self.assertEqual(
             self._statuses(REWORDED_GUIDE, (SHARED_A, SHARED_B), StubEmbedder(REWORDED_VECTORS), terms),
             {"s1": "explained", "s2": "explained"},
@@ -533,8 +534,8 @@ class GuideStepSemanticMatchTest(unittest.TestCase):
 
     def test_common_sentence_with_as_many_step_words_is_not_counted(self):
         """共通の文が主の操作の文と同じ数の手順の語を含んでも、共通の文を手順の説明に数えない。"""
-        # 語の判定だけでは、共通の文を手順 2 の説明に数えてしまう（Embedder の無い構成の従来の結果）。
-        self.assertEqual(self._statuses(TIED_GUIDE, (SHARED_A, SHARED_END)), {"s1": "explained", "s2": "explained"})
+        # 語の判定だけでも、主の操作の文が語で 1 つに決まらない手順 2 には共通の文を数えない（#2685）。
+        self.assertEqual(self._statuses(TIED_GUIDE, (SHARED_A, SHARED_END)), {"s1": "explained", "s2": "unused"})
         embedder = StubEmbedder(TIED_VECTORS)
         self.assertEqual(self._statuses(TIED_GUIDE, (SHARED_A, SHARED_END), embedder), {"s1": "explained", "s2": "unused"})
         self.assertEqual(self._statuses(TIED_GUIDE, (SHARED_A, SHARED_B), embedder), {"s1": "explained", "s2": "explained"})
@@ -594,6 +595,82 @@ class GuideStepSemanticMatchTest(unittest.TestCase):
         self.assertEqual(len(embedder.calls), 2)
         self.assertEqual(embedder.calls[1], ["保存ボタンを押して画面を閉じます。"])
         self.assertEqual(semantics.trace()["calls"], 2)
+
+
+# 言い回しの違う手順の根拠の章節（#2685）。手順 1・2 の主の操作の文、章節全体に掛かる共通の文、末尾の共通の操作、
+# 別の操作の文が 1 つの chunk に並ぶ。手順 2 の手がかりは共通の文の 1 語（「必要」）にだけ当たり、手順 1 の語は根拠に無い。
+SECTION_COMMON = "全体で必要な項目をすべて確認します。"
+SECTION = SHARED_A + SHARED_B + SECTION_COMMON + SHARED_END + STEP_C
+SECTION_TERMS = (("s2", ("必要な手続",)),)
+# 合成の vector（成分: 章節の話題・手順 1 の操作・手順 2 の操作・確認の一般の語・保存・承認・手順 2 の主の操作だけの内容）。
+# 共通の文は話題と一般の語を多く持つので、手順 2 の記述に主の操作の文より近く、手順 1 との差も大きい（絶対の近さで
+# 選ぶと主の操作の文になる）。末尾の共通の操作は両手順に同じくらい近い。
+SECTION_DESCRIPTIONS = (("値の登録", (0.6, 0.6, 0.0, 0.3, 0.0, 0.0, 0.0)), ("内容の確定", (0.6, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0)))
+SECTION_SENTENCES = (
+    ("設定 A の値", (0.6, 0.7, 0.0, 0.1, 0.0, 0.0, 0.0)),
+    ("反映ボタンを押", (0.5, 0.0, 0.45, 0.1, 0.0, 0.0, 0.5)),
+    ("全体で必要な項目", (0.8, 0.0, 0.15, 0.6, 0.0, 0.0, 0.0)),
+    ("保存ボタンを押", (0.7, 0.0, 0.0, 0.2, 0.6, 0.0, 0.0)),
+    ("承認を依頼", (0.6, 0.0, 0.0, 0.0, 0.0, 0.7, 0.0)),
+)
+SECTION_VECTORS = (*SECTION_DESCRIPTIONS, *SECTION_SENTENCES)
+# 公開した item（引用と原文のみ提示か）と、正しい手順の状態（Issue #2685 の表の 4 行と、末尾の共通の操作だけ）。
+SECTION_ROWS = (
+    ("共通の文だけ", ((SECTION_COMMON, False),), {"s1": "unused", "s2": "unused"}),
+    ("手順 1 の主の操作と共通の文", ((SHARED_A, False), (SECTION_COMMON, False)), {"s1": "explained", "s2": "unused"}),
+    ("手順 1・2 の主の操作", ((SHARED_A, False), (SHARED_B, False)), {"s1": "explained", "s2": "explained"}),
+    ("手順 2 の主の操作の原文のみ提示と共通の文", ((SHARED_B, True), (SECTION_COMMON, False)), {"s1": "unused", "s2": "reference_only"}),
+    ("末尾の共通の操作だけ", ((SHARED_END, False),), {"s1": "unused", "s2": "unused"}),
+)
+
+
+class GuideStepSpecificOwnerTest(unittest.TestCase):
+    """手順の主の操作の文を、絶対の近さではなく手順に固有な度合いで決める（#2685）。"""
+
+    def setUp(self):
+        self.span = {"source_id": "run:s", "evidence_id": "e-s", "label": "E1", "text": SECTION}
+
+    def _statuses(self, items, semantics):
+        checked = []
+        for quote, quote_only in items:
+            entry = grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=quote, applies="matched"), span=self.span)
+            entry.quote_only = quote_only
+            checked.append(entry)
+        coverage = grounded.guide_step_coverage(REWORDED_GUIDE, checked, [self.span], (), dict(SECTION_TERMS), semantics)
+        return {step["step_id"]: step["status"] for step in coverage}
+
+    def test_common_sentence_is_nearer_than_the_main_operation(self):
+        """前提: 共通の文は手順 2 の記述に主の操作の文より近く、手順 1 との差も閾値以上（絶対の近さでは共通の文を選ぶ）。"""
+        vectors = {key: grounded._unit_vector(vector) for key, vector in SECTION_VECTORS}
+
+        def near(sentence, description):
+            return grounded._cosine(vectors[sentence], vectors[description])
+
+        self.assertGreater(near("全体で必要な項目", "内容の確定"), near("反映ボタンを押", "内容の確定"))
+        self.assertGreaterEqual(
+            near("全体で必要な項目", "内容の確定") - near("全体で必要な項目", "値の登録"), grounded.GUIDE_STEP_COMMON_MARGIN
+        )
+
+    def test_main_operation_is_chosen_by_specificity(self):
+        for name, items, expected in SECTION_ROWS:
+            with self.subTest(name):
+                self.assertEqual(self._statuses(items, grounded.GuideStepSemantics(StubEmbedder(SECTION_VECTORS).embed)), expected)
+
+    def test_word_fallback_does_not_map_a_one_word_match(self):
+        """語の判定だけ（Embedder が無い・失敗）では、手順の語が 1 語だけ当たる共通の文の item を手順の説明にしない。"""
+        for name, items, _expected in SECTION_ROWS:
+            with self.subTest(name):
+                self.assertEqual(self._statuses(items, None), {"s1": "unused", "s2": "unused"})
+                failing = grounded.GuideStepSemantics(StubEmbedder(SECTION_VECTORS, fail=True).embed)
+                self.assertEqual(self._statuses(items, failing), {"s1": "unused", "s2": "unused"})
+
+    def test_undetermined_main_operation_falls_to_the_safe_side(self):
+        """手順に固有な度合いが同じくらいの文が 2 つあり主の操作の文が決まらない手順は、どの item の説明にもしない。"""
+        tied = tuple((key, SECTION_SENTENCES[1][1] if key == "全体で必要な項目" else vector) for key, vector in SECTION_VECTORS)
+        for name, items, expected in SECTION_ROWS:
+            with self.subTest(name):
+                safe = {**expected, "s2": "unused"}
+                self.assertEqual(self._statuses(items, grounded.GuideStepSemantics(StubEmbedder(tied).embed)), safe)
 
 
 class GuideStepSemanticAnswerTest(unittest.TestCase):

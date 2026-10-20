@@ -621,6 +621,14 @@ def _preview_response(preview: GuidePreview, *, used: bool = True) -> SearchResp
         "unknown_conditions": [{"id": "target", "label": "付与先", "state": "unknown"}],
         "applicability": {},
         **({"draft": True} if used else {}),
+        # 回答の記録の業務ガイドの記録に移した手順ごとの充足と embedding の呼び出し（#2686）。
+        "step_coverage": [
+            {"step_id": "register", "status": "explained", "required": True},
+            {"step_id": "grant", "status": "reference_only", "required": True},
+            {"step_id": "ask", "status": "unused", "required": False},
+            {"step_id": "removed", "status": "unknown", "required": True},
+        ],
+        "step_embedding": {"calls": 1, "texts": 12, "elapsed_ms": 250, "failed": False},
     }
     return SearchResponse(
         answer="権限は詳細画面の権限タブで付与します。",
@@ -671,6 +679,23 @@ def test_try_draft_answers_with_the_draft_and_leaves_published_unchanged(
     assert data["outcome"] == "conditional"
     assert data["guide"]["decision"] == "branch"
     assert data["clarifications"][0]["condition_id"] == "target"
+    # 手順ごとの充足に下書きの手順の題名を付けて返す（#2686。知らない状態の手順は返さない）。
+    assert data["steps"] == [
+        {
+            "step_id": "register",
+            "title": "アカウントを登録する",
+            "status": "explained",
+            "required": True,
+        },
+        {
+            "step_id": "grant",
+            "title": "権限を付与する",
+            "status": "reference_only",
+            "required": True,
+        },
+        {"step_id": "ask", "title": "付与先を確かめる", "status": "unused", "required": False},
+    ]
+    assert data["guide"]["step_embedding"]["calls"] == 1
     request, preview = calls[0]
     assert request.search_answer_profile_id == "bv-1"
     assert request.query == "検証用アカウントに権限を付けたい"
@@ -697,6 +722,8 @@ def test_try_draft_answers_with_the_draft_and_leaves_published_unchanged(
         f"{BASE}/{guide_id}/try", json={"query": "別の質問", "draft_revision": 2}
     ).json()["data"]
     assert unused["guide_used"] is False
+    # 別のガイドの手順の充足は、この下書きの手順として返さない。
+    assert unused["steps"] == []
 
 
 def test_try_draft_refuses_stale_broken_or_archived_drafts(

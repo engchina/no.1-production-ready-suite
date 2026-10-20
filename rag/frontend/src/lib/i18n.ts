@@ -4800,6 +4800,14 @@ export const ja = {
   "supportGuides.try.unknown": "分からない条件",
   "supportGuides.try.conditionValue": "{label}: {value}",
   "supportGuides.try.answer": "回答",
+  // 下書きで試した回答の、業務ガイドの手順ごとの充足（#2686）。
+  "supportGuides.try.steps": "手順の説明",
+  "supportGuides.try.stepsMissing": "必須の手順のうち {count} 件を、回答で説明できていません。",
+  "supportGuides.try.stepOptional": "分岐の手順（必須ではない）",
+  "supportGuides.try.stepStatus.explained": "説明した",
+  "supportGuides.try.stepStatus.reference_only": "資料の原文だけ",
+  "supportGuides.try.stepStatus.unused": "説明していない",
+  "supportGuides.try.stepStatus.no_evidence": "根拠が見つからない",
 
   "status.UPLOADED": "ファイル準備待ち",
   "status.PREPROCESSING": "ファイル準備中",

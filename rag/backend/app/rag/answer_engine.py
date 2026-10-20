@@ -3274,6 +3274,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             if isinstance(trace := (result.generation_trace or {}).get("guide_steps"), Mapping)
             else {}
         ),
+        # 業務ガイドの手順ごとの充足(#2491)と、手順の対応付けの embedding の呼び出し(#2649)。
+        # 業務ガイドの記録(diagnostics.guide)に移す(#2686)。
+        **_guide_step_diagnostics(result.generation_trace),
         # 当たった chunk の章節から親の章節へ広げた記録(#1436。段・読んだ章節・止めた理由・
         # 読めなかった章節)。
         "section_expansion": _section_expansion_diagnostics(result.generation_trace),
@@ -3299,6 +3302,33 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         context_text=context_text,
         evaluation_input=_evaluation_input(result),
     )
+
+
+_GUIDE_STEP_COVERAGE_FIELDS = ("step_id", "status", "required")
+_GUIDE_STEP_EMBEDDING_FIELDS = ("calls", "texts", "elapsed_ms", "failed")
+
+
+def _guide_step_diagnostics(generation_trace: object) -> dict[str, Any]:
+    """回答の記録に残す業務ガイドの手順の充足と embedding の呼び出し(#2686)。
+
+    手順は id・状態・必須かだけ、呼び出しは回数・文の数・時間・失敗かだけにする(手順の題名・
+    根拠の本文・引用は記録に増やさない)。業務ガイドに沿わない回答・呼ばなかった回答では空。
+    """
+    trace = generation_trace if isinstance(generation_trace, Mapping) else {}
+    diagnostics: dict[str, Any] = {}
+    coverage = trace.get("guide_step_coverage")
+    if isinstance(coverage, list) and coverage:
+        diagnostics["guide_step_coverage"] = [
+            {key: step.get(key) for key in _GUIDE_STEP_COVERAGE_FIELDS}
+            for step in coverage
+            if isinstance(step, Mapping)
+        ]
+    embedding = trace.get("guide_step_embedding")
+    if isinstance(embedding, Mapping):
+        diagnostics["guide_step_embedding"] = {
+            key: embedding.get(key) for key in _GUIDE_STEP_EMBEDDING_FIELDS
+        }
+    return diagnostics
 
 
 def adopted_goal_alignment(generation_trace: object) -> str | None:
