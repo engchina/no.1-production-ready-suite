@@ -523,21 +523,35 @@ def nl2sql_clarification_pending(steps: list[RunStep]) -> bool:
 
 
 def tool_clarification_pending(steps: list[RunStep]) -> bool:
-    """この Run の最後の `nl2sql_query` か `rag_search` が確認事項を返して止まったか（#1934）。
+    """この Run の最後の `nl2sql_query` か RAG の検索が確認事項を返して止まったか（#1934）。
 
     その確認事項は Run の完了の後に利用者への確認のカードになる（`builtin_runtime` の
     `_tool_confirmations`）。モデルが同じことを `ask_user_confirmation` で聞き直さないように使う。
+    RAG の検索は `rag_search` の `needs_clarification` と、根拠の取得のルールの確認（#2651）。
     """
     if nl2sql_clarification_pending(steps):
         return True
     for step in reversed(steps):
         call, result = step.tool_call, step.tool_result
-        if call is None or result is None or mcp_base_tool_name(call.name) != RAG_SEARCH:
+        if call is None or result is None or mcp_base_tool_name(call.name) not in _EVIDENCE_TOOLS:
             continue
         if not result.success or not isinstance(result.output, dict):
             return False
+        if mcp_base_tool_name(call.name) == RAG_RETRIEVE_EVIDENCE:
+            return bool(_records(result.output.get("clarifications")))
         return result.output.get("outcome") == "needs_clarification"
     return False
+
+
+def evidence_clarification_step(output: JsonObject) -> JsonObject | None:
+    """根拠の取得が検索・回答プロファイルのルールの確認を返したときの次の手（#2651）。
+
+    確認が要るときは検索していない（根拠は空）。`rag_search` の確認と同じ次の手にする。
+    """
+    clarifications = _records(output.get("clarifications"))
+    if not clarifications:
+        return None
+    return ask_clarification_step(clarifications, reason="needs_clarification")
 
 
 def _reference_sources(tool: str, output: JsonObject) -> list[tuple[str, str | None, str]]:
@@ -1188,6 +1202,54 @@ def adjusted_search_limits(
         if sent != value:
             adjusted[name] = {"requested": value, "sent": sent}
     return adjusted
+
+
+# 組み込み Runtime が RAG の根拠の取得に決める引数（#2651）。検索文はモデル（業務 Agent）が作り、
+# RAG には質問に応じた推論（言い換え・条の選択など）を重ねさせない（planning=caller）。追跡 ID は
+# Run と呼び出しから決める。どちらもモデルに見せず、渡されても上書きする。
+CALLER_PLANNING = "caller"
+CALLER_PLANNED_ARGUMENTS = ("planning", "request_id")
+REQUEST_ID_MAX_CHARS = 128
+
+
+def caller_planned(function_name: str, input_schema: JsonObject | None) -> bool:
+    """呼び先の契約が呼び出し元の検索文の契約を持つ根拠の取得か（古い RAG には送らない）。"""
+    if mcp_base_tool_name(function_name) != RAG_RETRIEVE_EVIDENCE:
+        return False
+    properties = (input_schema or {}).get("properties")
+    planning = properties.get("planning") if isinstance(properties, dict) else None
+    if not isinstance(planning, dict):
+        return False
+    choices = planning.get("enum")
+    return not isinstance(choices, list) or CALLER_PLANNING in choices
+
+
+def caller_planned_arguments(
+    function_name: str, input_schema: JsonObject | None, *, run_id: str, call_id: str
+) -> JsonObject:
+    """根拠の取得に実行環境が決める引数（呼び出し元の検索文の契約が無ければ空）。"""
+    if not caller_planned(function_name, input_schema):
+        return {}
+    properties = (input_schema or {}).get("properties")
+    arguments: JsonObject = {"planning": CALLER_PLANNING}
+    if isinstance(properties, dict) and "request_id" in properties:
+        request_id = f"{run_id}:{call_id}" if call_id else run_id
+        arguments["request_id"] = request_id[:REQUEST_ID_MAX_CHARS]
+    return arguments
+
+
+def caller_planned_schema(function_name: str, schema: JsonObject) -> JsonObject:
+    """モデルに見せる根拠の取得の schema から、実行環境が決める引数を外す（#2651）。"""
+    if not caller_planned(function_name, schema):
+        return schema
+    updated = deepcopy(schema)
+    properties = updated["properties"]
+    for name in CALLER_PLANNED_ARGUMENTS:
+        properties.pop(name, None)
+    required = updated.get("required")
+    if isinstance(required, list):
+        updated["required"] = [name for name in required if name not in CALLER_PLANNED_ARGUMENTS]
+    return updated
 
 
 def search_limit_schema(function_name: str, schema: JsonObject) -> JsonObject:
@@ -1943,28 +2005,26 @@ class _StateBuilder:
             self.outcome = outcome
         clarifications = output.get("clarifications")
         if isinstance(clarifications, list):
-            self.set_rag_pending(
-                [
-                    {
-                        "condition_id": _text(item.get("condition_id"), 100),
-                        "label": _text(item.get("label"), 100),
-                        "question": _text(item.get("question")),
-                        "options": [
-                            option
-                            for value in item.get("options") or []
-                            if (option := _text(value))
-                        ][:10],
-                        **({"multiple": True} if item.get("multiple") is True else {}),
-                    }
-                    for item in _records(clarifications)
-                    if _text(item.get("condition_id"), 100) and _text(item.get("question"))
-                ][:MAX_PENDING_CLARIFICATIONS]
-            )
+            self.set_rag_pending(_rag_pending(clarifications))
         elif isinstance(outcome, str) and outcome != "needs_clarification":
             self.set_rag_pending([])
         gaps = output.get("gaps")
         if isinstance(gaps, list):
             self.gaps = [text for item in gaps if (text := _text(item))][:MAX_GAPS]
+
+    def apply_retrieve(self, arguments: JsonObject, output: JsonObject | None, *, at: str) -> None:
+        """根拠の取得（呼び出し元が検索文を作る取得。#2651）のルールの確認と、渡した答え。
+
+        確認が返ったときだけ確かめ中にする（根拠を返した取得は、業務ガイドの確認を消さない）。
+        """
+        conditions = arguments.get("conditions")
+        if isinstance(conditions, dict):
+            for condition_id, value in conditions.items():
+                self.set_condition(condition_id, value, source=SOURCE_USER_ANSWER, at=at)
+        clarifications = _records(output.get("clarifications")) if output is not None else []
+        if clarifications:
+            self.add_labels(clarifications)
+            self.set_rag_pending(_rag_pending(clarifications))
 
     def apply_lookup(self, arguments: JsonObject, output: JsonObject | None, *, at: str) -> None:
         """`rag_lookup_guides`（モデル・Control Plane の照合。#1322）の最上位の業務ガイド。
@@ -2034,6 +2094,23 @@ class _StateBuilder:
         ]
 
 
+def _rag_pending(clarifications: object) -> list[JsonObject]:
+    """RAG が返した確認（`condition_id` を持つ問い）を、確かめ中の問いにする。"""
+    return [
+        {
+            "condition_id": _text(item.get("condition_id"), 100),
+            "label": _text(item.get("label"), 100),
+            "question": _text(item.get("question")),
+            "options": [option for value in item.get("options") or [] if (option := _text(value))][
+                :10
+            ],
+            **({"multiple": True} if item.get("multiple") is True else {}),
+        }
+        for item in _records(clarifications)
+        if _text(item.get("condition_id"), 100) and _text(item.get("question"))
+    ][:MAX_PENDING_CLARIFICATIONS]
+
+
 def build_support_task(
     previous: JsonObject | None,
     *,
@@ -2077,6 +2154,8 @@ def build_support_task(
         at = (step.completed_at or step.started_at or now or _now()).isoformat()
         if base == RAG_SEARCH:
             builder.apply_search(call.arguments, output, at=at)
+        if base == RAG_RETRIEVE_EVIDENCE:
+            builder.apply_retrieve(call.arguments, output, at=at)
         if base == RAG_LOOKUP_GUIDES:
             builder.apply_lookup(call.arguments, output, at=at)
         if base in _EVIDENCE_TOOLS:

@@ -16,6 +16,8 @@ SKILL.md の frontmatter は仕様のフィールドだけを使う（#1816）:
   - `production-ready-mcp-tools`: 使う MCP ツール。`<接続>:<ツール>` を空白で区切る
     （`<接続>` だけなら接続のすべてのツール）。`mcp_requirements` になる。
   - `production-ready-tags`: タグ（空白区切り）。
+  - `production-ready-evidence-planning`: 根拠の取得の検索文を作る主体。`<接続>:caller` を空白で
+    区切る（その接続の `mcp_requirements` の `evidence_planning`。#2651）。無ければ rag。
 
 SKILL.md と同じディレクトリの `references/` の下のテキスト / Markdown は、スキルの参照文書として
 読む（#1803）。symlink は辿らず、ディレクトリの外は読まない。件数・大きさに上限を置き、超えた分は
@@ -35,6 +37,8 @@ import yaml
 from pydantic import ValidationError
 
 from app.features.agent.skills import (
+    EVIDENCE_PLANNING_CALLER,
+    EVIDENCE_PLANNING_RAG,
     AgentSkillDefinition,
     SkillMcpRequirement,
     SkillReference,
@@ -57,6 +61,7 @@ SKILL_NAME_PATTERN = re.compile(r"^(?=.{1,64}$)[a-z0-9]+(?:-[a-z0-9]+)*$")
 METADATA_DISPLAY_NAME = "production-ready-display-name"
 METADATA_MCP_TOOLS = "production-ready-mcp-tools"
 METADATA_TAGS = "production-ready-tags"
+METADATA_EVIDENCE_PLANNING = "production-ready-evidence-planning"
 
 
 def _split_frontmatter(text: str) -> tuple[JsonObject, str]:
@@ -127,6 +132,25 @@ def mcp_requirements_from_metadata(value: str) -> list[SkillMcpRequirement]:
     ]
 
 
+def with_evidence_planning(
+    requirements: list[SkillMcpRequirement], value: str
+) -> list[SkillMcpRequirement]:
+    """`rag:caller` → その接続の要件の `evidence_planning`（知らない値・接続は無視する）。"""
+    planning: dict[str, str] = {}
+    for token in value.split():
+        server, _, mode = token.partition(":")
+        if server.strip() and mode in {EVIDENCE_PLANNING_RAG, EVIDENCE_PLANNING_CALLER}:
+            planning[server.strip()] = mode
+        else:
+            logger.warning("%s の値を読めないので無視します: %s", METADATA_EVIDENCE_PLANNING, token)
+    return [
+        item.model_copy(update={"evidence_planning": planning[item.server_id]})
+        if item.server_id in planning
+        else item
+        for item in requirements
+    ]
+
+
 def _skill_from_skill_md(
     data: JsonObject, body: str, *, folder: str, source: str
 ) -> AgentSkillDefinition | None:
@@ -151,8 +175,9 @@ def _skill_from_skill_md(
             "name": display_name,
             "description": str(data.get("description") or "").strip(),
             "instructions": body.strip(),
-            "mcp_requirements": mcp_requirements_from_metadata(
-                str(metadata.get(METADATA_MCP_TOOLS) or "")
+            "mcp_requirements": with_evidence_planning(
+                mcp_requirements_from_metadata(str(metadata.get(METADATA_MCP_TOOLS) or "")),
+                str(metadata.get(METADATA_EVIDENCE_PLANNING) or ""),
             ),
             "tags": str(metadata.get(METADATA_TAGS) or "").split(),
             "source": source,

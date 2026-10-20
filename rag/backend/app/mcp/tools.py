@@ -62,6 +62,7 @@ from pydantic import (
     model_validator,
 )
 from rag_engine.retrieval.entity_expansion import entity_expansion_relevant
+from rag_parser_core.extraction import is_derived_content
 from rag_parser_core.xml_tree_json import xml_tree_citation_key
 
 from app.api.errors import DocumentFileMissingError
@@ -208,7 +209,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     （reference_check）を足し、ID を照合できない矛盾を矛盾のまま返すようにした（#2622）。
 # 20: rag_validate_answer の claims に、段落の分類の照合の結果（classification_check）を
 #     足した（#2625）。
-MCP_OUTPUT_SCHEMA_VERSION = 20
+# 21: rag_retrieve_evidence に、呼び出し元が検索文を作る契約（入力の planning・queries・request_id、
+#     出力の planning・request_id・clarifications）を足し、根拠に検索の順位（retrieval_rank）と
+#     本文の由来（origin）を足した（#2651）。
+MCP_OUTPUT_SCHEMA_VERSION = 21
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -217,6 +221,10 @@ EVIDENCE_LIMIT_MAX = 50
 # top_k の既定 20）と同じにし、検索で当たった chunk を既定で全部返す（#1365）。rag_search は回答に
 # 使った根拠が先に並ぶので 12 のまま。
 RETRIEVE_EVIDENCE_LIMIT_DEFAULT = 20
+# rag_retrieve_evidence の planning=caller（呼び出し元が検索文を作る。#2651）で query に足せる
+# 検索文の本数と 1 本の長さの上限（全文検索に使う検索文の本数の上限 6 に、query を合わせて収める）。
+CALLER_QUERIES_MAX = 5
+CALLER_QUERY_MAX_CHARS = 1000
 # 根拠の結果に示す旧版（older_versions。#1405）の最大件数。
 OLDER_VERSIONS_MAX = 10
 # rag_read_source が 1 回で返す本文・親の本文の上限。
@@ -461,9 +469,58 @@ class SearchInput(BaseModel):
         return value
 
 
+# 呼び出し元（業務 Agent）が検索文を作る契約（planning=caller。#2651）は、入力を役割で分ける:
+# 元の質問（original_question）・呼び出し元の検索文（query と queries）・対象（検索・回答
+# プロファイル / ナレッジベース）・フィルター（filters・include_superseded）・件数（top_k・
+# evidence_limit）・追跡 ID（request_id）。対象と認可は RAG が強制し、渡した対象を広げない。
 class RetrieveEvidenceInput(SearchInput):
-    """根拠の収集の条件（rag_search と同じ。返す根拠の件数の既定だけが違う）。"""
+    """根拠の収集の条件（rag_search の項目に、検索文を作る主体の指定を足す）。"""
 
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=8000,
+        description=(
+            "検索文。planning=caller はこの文と queries だけで検索する（言い換えない）。"
+            "planning=rag は質問文でよい。"
+        ),
+    )
+    planning: Literal["rag", "caller"] = Field(
+        default="rag",
+        description=(
+            "検索文を作る主体。rag=RAG が質問に応じて言い換え・関連の条の選択（AI）を足して"
+            "検索する。caller=呼び出し元が作った query と queries だけで検索し、RAG は質問に"
+            "応じた AI の処理をしない（用語の別名・rerank・前後の文脈の取得は同じ）。"
+        ),
+    )
+    queries: list[Annotated[str, Field(min_length=1, max_length=CALLER_QUERY_MAX_CHARS)]] = Field(
+        default_factory=list,
+        max_length=CALLER_QUERIES_MAX,
+        description=(
+            "query に足す検索文（planning=caller のときだけ）。同じ根拠を別の観点・別表記・資料の"
+            f"表記で言い表した文。最大 {CALLER_QUERIES_MAX} 本。"
+        ),
+    )
+    request_id: OptionalText = Field(
+        default=None,
+        max_length=128,
+        description="呼び出し元の追跡 ID（結果の request_id にそのまま返す）。",
+    )
+    conditions: dict[str, str] = Field(
+        default_factory=dict,
+        max_length=30,
+        description=(
+            "planning=caller のとき、検索・回答プロファイルのルールの確認（rule: で始まる id）の"
+            "答え（clarifications の condition_id → 利用者が答えた値。複数は「、」で区切る）。"
+        ),
+    )
+    skip_clarification: bool = Field(
+        default=False,
+        description=(
+            "planning=caller のとき、true ならルールの確認を出さずに検索する"
+            "（利用者が確認せずに進めると選んだとき・利用者に確認できないとき）。"
+        ),
+    )
     evidence_limit: int = Field(
         default=RETRIEVE_EVIDENCE_LIMIT_DEFAULT,
         ge=1,
@@ -473,6 +530,17 @@ class RetrieveEvidenceInput(SearchInput):
             "省略時は検索する件数（top_k。省略時 20）と同じで、検索で当たった根拠を全部返す。"
         ),
     )
+
+    @model_validator(mode="after")
+    def _queries_need_caller_planning(self) -> RetrieveEvidenceInput:
+        # planning=rag は RAG が検索文を足すので、呼び出し元の検索文を黙って捨てず・混ぜずに
+        # 直し方を返す（#2651）。
+        if self.queries and self.planning != "caller":
+            raise ValueError(
+                "queries は planning=caller のときだけ渡せます。"
+                "planning に caller を渡すか、queries を外して呼び直してください。"
+            )
+        return self
 
 
 class LookupGuidesInput(BaseModel):
@@ -1231,6 +1299,20 @@ class RagEvidence(BaseModel):
     )
     score: float | None = None
     rerank_score: float | None = None
+    retrieval_rank: int | None = Field(
+        default=None,
+        description=(
+            "検索で当たった根拠の関連度の順位（1 始まり）。前後の文脈など、検索で当たったのでは"
+            "ない根拠は null。"
+        ),
+    )
+    origin: Literal["source", "derived"] = Field(
+        default="source",
+        description=(
+            "本文の由来。source=文書の原文（表・図の中の文字を含む）/ derived=取込が原文から作った"
+            "要約・抽出した値（引用する前に原文を読んで確かめる）。"
+        ),
+    )
     superseded: bool = Field(
         default=False,
         description=(
@@ -1585,6 +1667,18 @@ class RetrieveEvidenceOutput(VersionedOutput):
     )
     auto_selected_search_answer_profile: AutoSelectedProfile | None = Field(
         default=None, description=AUTO_SELECTED_PROFILE_DESCRIPTION
+    )
+    planning: Literal["rag", "caller"] = Field(
+        default="rag", description="検索文を作った主体（入力の planning）。"
+    )
+    request_id: str | None = Field(default=None, description="入力の request_id。")
+    clarifications: list[GuideClarification] = Field(
+        default_factory=list,
+        description=(
+            "planning=caller で、検索・回答プロファイルのルールが検索の前に利用者に確かめる条件"
+            "（あれば検索せず、evidence は空）。利用者の答えを conditions の condition_id に入れて"
+            "呼び直す。"
+        ),
     )
 
 
@@ -1943,6 +2037,11 @@ def _evidence(
         rerank_score=chunk.rerank_score
         if chunk.rerank_score is not None
         else _float_or_none(metadata.get("rerank_score")),
+        retrieval_rank=_metadata_int(metadata, "evidence_retrieval_rank"),
+        # 派生の判定は取込・章節と同じ（#2590・#2641）。
+        origin="derived"
+        if is_derived_content(metadata.get("content_kind"), metadata)
+        else "source",
         superseded=metadata.get("document_superseded") is True,
         references=_references(metadata),
         reference_from=_metadata_str(metadata, REFERENCE_FROM_KEY),
@@ -3753,10 +3852,38 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         )
 
     async def retrieve_evidence(arguments: RetrieveEvidenceInput) -> RetrieveEvidenceOutput:
-        # 検索の画面と同じく質問の理解・拡張・検索・rerank まで行い、回答（CRAG・生成）は作らない。
+        # planning=rag: 検索の画面と同じく質問の理解・拡張・検索・rerank まで行い、回答（CRAG・
+        # 生成）は作らない。planning=caller（#2651）: 呼び出し元の検索文で検索し、質問に応じた
+        # 推論の LLM / VLM も呼ばない（hybrid search・rerank・文脈の取得は同じ）。
         request = _search_request(arguments).model_copy(update={"generate_answer": False})
         enforce_rate_limit("search", http_request)
-        result = await _run_search(request)
+        echo = {"planning": arguments.planning, "request_id": arguments.request_id}
+        if arguments.planning == "caller":
+            # 検索・回答プロファイルのルールの確認は rag_search と同じ判定（ルールは利用者の質問に
+            # 当てる）。答えがあれば、その範囲（頁）に絞って検索する（範囲は広げない）。
+            rule = await rule_clarification_step(
+                arguments.model_copy(
+                    update={"query": arguments.original_question or arguments.query}
+                ),
+                request,
+            )
+            if isinstance(rule, SearchOutput):
+                return RetrieveEvidenceOutput(
+                    trace_id=rule.trace_id,
+                    guardrail_warnings=[],
+                    evidence=[],
+                    evidence_omitted=0,
+                    clarifications=rule.clarifications,
+                    **echo,
+                )
+            request, scope = rule
+            result = await _run_search(request, scope=scope, caller_queries=list(arguments.queries))
+        else:
+            result = await _run_search(request)
+        logger.info(
+            "rag_mcp_retrieve_evidence",
+            extra={**echo, "trace_id": result.trace_id, "queries": len(arguments.queries)},
+        )
         limit = retrieve_evidence_limit(arguments)
         # 検索で当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。
         # 条の目録で選んだ条とそのために足した親の chunk(#2254・#2261)は、上限に数えず後ろに足す
@@ -3781,6 +3908,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             evidence=[_evidence(chunk, sections) for chunk in citations],
             evidence_omitted=max(0, len(hits) - limit),
             older_versions=await _older_versions(arguments, request, result.citations),
+            **echo,
         )
 
     async def read(arguments: ReadSourceInput) -> ReadSourceOutput | McpToolResult:

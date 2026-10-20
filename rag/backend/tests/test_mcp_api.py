@@ -850,6 +850,131 @@ def test_retrieve_evidence_skips_answer_generation(
     assert denied["isError"] is True
 
 
+def test_retrieve_evidence_with_caller_planning_searches_the_caller_queries(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """planning=caller は呼び出し元の検索文で検索し、根拠に順位と由来を付ける（#2651）。"""
+    captured: dict[str, Any] = {}
+    rule_questions: list[str] = []
+
+    async def fake_rule(arguments: Any, request: SearchRequest) -> Any:
+        rule_questions.append(arguments.query)
+        return request, None
+
+    async def fake_run(request: SearchRequest, **options: Any) -> SearchResponse:
+        captured.update(options, generate_answer=request.generate_answer, query=request.query)
+        return SearchResponse(
+            answer="",
+            citations=[
+                _chunk(
+                    "c1", used=False, evidence_role="retrieved_anchor", evidence_retrieval_rank=1
+                ),
+                _chunk("c-summary", used=False, content_kind="section_summary"),
+            ],
+            trace_id="trace-c",
+            elapsed_ms=1.0,
+        )
+
+    monkeypatch.setattr(mcp_tools, "rule_clarification_step", fake_rule)
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call(
+        "rag_retrieve_evidence",
+        {
+            "query": "経費精算 期限",
+            "queries": ["精算 締め日"],
+            "planning": "caller",
+            "original_question": "経費の精算はいつまで？",
+            "request_id": "run-1:3",
+        },
+        _token(user.user_uuid),
+    )["structuredContent"]
+
+    assert captured == {
+        "scope": None,
+        "caller_queries": ["精算 締め日"],
+        "generate_answer": False,
+        "query": "経費精算 期限",
+    }
+    # ルールの確認は利用者の元の質問に当てる。
+    assert rule_questions == ["経費の精算はいつまで？"]
+    assert (body["planning"], body["request_id"], body["clarifications"]) == (
+        "caller",
+        "run-1:3",
+        [],
+    )
+    by_id = {item["chunk_id"]: item for item in body["evidence"]}
+    assert (by_id["c1"]["retrieval_rank"], by_id["c1"]["origin"]) == (1, "source")
+    assert (by_id["c-summary"]["retrieval_rank"], by_id["c-summary"]["origin"]) == (
+        None,
+        "derived",
+    )
+
+
+def test_retrieve_evidence_with_caller_planning_returns_rule_clarifications(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """ルールの確認が要るなら検索せずに clarifications を返す。rag は今までどおり確認しない。"""
+    runs: list[SearchRequest] = []
+
+    async def fake_rule(arguments: Any, request: SearchRequest) -> Any:
+        return mcp_tools.SearchOutput(
+            answer="確認",
+            trace_id="trace-rule",
+            guardrail_warnings=[],
+            outcome="needs_clarification",
+            clarifications=[
+                mcp_tools.GuideClarification(
+                    condition_id="rule:r1", label="対象", question="どの対象ですか", options=["A"]
+                )
+            ],
+            evidence=[],
+            evidence_omitted=0,
+        )
+
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
+        runs.append(request)
+        return SearchResponse(answer="", citations=[], trace_id="trace-r", elapsed_ms=1.0)
+
+    monkeypatch.setattr(mcp_tools, "rule_clarification_step", fake_rule)
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+
+    caller = _call(
+        "rag_retrieve_evidence",
+        {"query": "申請", "planning": "caller", "search_answer_profile_id": "bv-1"},
+        headers,
+    )["structuredContent"]
+    assert caller["evidence"] == []
+    assert [item["condition_id"] for item in caller["clarifications"]] == ["rule:r1"]
+    assert runs == []
+
+    rag = _call(
+        "rag_retrieve_evidence", {"query": "申請", "search_answer_profile_id": "bv-1"}, headers
+    )["structuredContent"]
+    assert (rag["planning"], rag["clarifications"]) == ("rag", [])
+    assert len(runs) == 1
+
+
+def test_retrieve_evidence_queries_need_caller_planning(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
+        raise AssertionError("検索しない")
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    result = _call(
+        "rag_retrieve_evidence", {"query": "申請", "queries": ["別表記"]}, _token(user.user_uuid)
+    )
+
+    assert result["isError"] is True
+    assert "planning" in result["structuredContent"]["message"] + json.dumps(
+        result["structuredContent"].get("details"), ensure_ascii=False
+    )
+
+
 def test_retrieve_evidence_appends_catalog_articles_outside_the_limit(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:

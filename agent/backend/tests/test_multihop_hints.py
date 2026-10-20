@@ -631,8 +631,8 @@ def test_business_rag_research_instructions_do_not_report_the_work() -> None:
     instructions = skill.instructions.replace("`", "")
     for phrase in (
         "回答には、資料の内容と、資料で確かめられなかった点だけを書く。",
-        "ツールの名前（rag_search・rag_outline など）",
-        "ツールの結果の状態（outcome・needs_human_review などの値）",
+        "ツールの名前（rag_retrieve_evidence・rag_outline など）",
+        "ツールの結果の項目の値（role・origin など）",
         "業務ガイドが見つかった・見つからなかったこと",
         "検索の結果に旧版（older_versions）があったこと",
         "自分の作業の経過は回答に書かない",

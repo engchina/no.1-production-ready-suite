@@ -70,7 +70,7 @@ def test_builtin_agents_use_mcp_connections_of_their_skills() -> None:
     assert set(requirements("data-query")) == {"nl2sql"}
     combined = requirements("default")
     assert set(combined) == {"rag", "nl2sql"}
-    assert {"rag_search"} <= (combined["rag"] or set())
+    assert {"rag_retrieve_evidence"} <= (combined["rag"] or set())
     assert {"nl2sql_query", "nl2sql_get_job"} <= (combined["nl2sql"] or set())
 
 
@@ -83,14 +83,16 @@ def test_combined_skill_does_not_fix_the_order() -> None:
     # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
     instructions = skill.instructions.replace("`", "")
     # 順序を固定しない・往復と繰り返しを許す・止めどきを書く。
-    assert "先に rag_search" not in instructions
+    assert "先に rag_retrieve_evidence" not in instructions
     assert "順序は決めない" in instructions
     assert "nl2sql_query が先でもよい" in instructions
     assert "何度でも呼んでよい" in instructions
     assert "それ以上ツールを呼ばずに答える" in instructions
     # 今の指示の手順を引き継ぐ。
     for phrase in (
-        "needs_environment_data",
+        # 資料の根拠だけでは確定できない現場の値は業務データで確かめる（#2651 で RAG の回答の
+        # 対応から根拠の取得に移した）。
+        "資料の根拠だけでは確定できない現場の値・記録",
         "nl2sql_recommend_profile",
         "nl2sql_get_job",
         "needs_clarification",
@@ -99,7 +101,7 @@ def test_combined_skill_does_not_fix_the_order() -> None:
         # 資料の台帳の値で挙げる・数える質問は資料、業務データの表の集計は NL2SQL（#1958）。
         "値がどこに載っているかで決める",
         "台帳・一覧・名簿・規程の表のような資料そのものに載っている質問",
-        "そこで終えずに資料（rag_search）を引く",
+        "そこで終えずに資料（rag_retrieve_evidence）を引く",
         # 資料と業務データの両方が要る質問（#1979）: 規程の名前で始まっても、業務の対象の値は
         # 業務データで引き、資料に無いと答える前に nl2sql_query を呼ぶ。
         "資料の値と業務データの値の両方が要ることがある",
@@ -117,7 +119,7 @@ def test_combined_skill_does_not_fix_the_order() -> None:
     }
     # 検索・回答プロファイルは推薦で選ぶ（#1850）。
     assert tools["rag"] == [
-        "rag_search",
+        "rag_retrieve_evidence",
         "rag_recommend_search_answer_profile",
         "rag_list_search_answer_profiles",
     ]

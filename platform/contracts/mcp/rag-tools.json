@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 20,
+            "default": 21,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -640,7 +640,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 20,
+            "default": 21,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -810,7 +810,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 20,
+            "default": 21,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1133,7 +1133,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 20,
+            "default": 21,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1513,7 +1513,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 20,
+            "default": 21,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2159,7 +2159,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 20,
+            "default": 21,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2476,7 +2476,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 20,
+            "default": 21,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2516,10 +2516,10 @@
       "description": "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "根拠の収集の条件（rag_search と同じ。返す根拠の件数の既定だけが違う）。",
+        "description": "根拠の収集の条件（rag_search の項目に、検索文を作る主体の指定を足す）。",
         "properties": {
           "query": {
-            "description": "質問文。",
+            "description": "検索文。planning=caller はこの文と queries だけで検索する（言い換えない）。planning=rag は質問文でよい。",
             "maxLength": 8000,
             "minLength": 1,
             "title": "Query",
@@ -2603,16 +2603,51 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "業務ガイドの条件と、検索・回答プロファイルのルールの確認（rule: で始まる id）の値（条件の id → 値）。outcome=needs_clarification の clarifications に利用者が答えた値（選んだ選択肢の表示名・自由入力。複数は「、」で区切る）を入れて呼び直すと、分かっている条件は聞き直さない。",
+            "description": "planning=caller のとき、検索・回答プロファイルのルールの確認（rule: で始まる id）の答え（clarifications の condition_id → 利用者が答えた値。複数は「、」で区切る）。",
             "maxProperties": 30,
             "title": "Conditions",
             "type": "object"
           },
           "skip_clarification": {
             "default": false,
-            "description": "true なら検索・回答プロファイルのルールの回答前の確認を出さずに回答する（利用者が確認せずに回答を選んだとき・利用者に確認できないとき）。",
+            "description": "planning=caller のとき、true ならルールの確認を出さずに検索する（利用者が確認せずに進めると選んだとき・利用者に確認できないとき）。",
             "title": "Skip Clarification",
             "type": "boolean"
+          },
+          "planning": {
+            "default": "rag",
+            "description": "検索文を作る主体。rag=RAG が質問に応じて言い換え・関連の条の選択（AI）を足して検索する。caller=呼び出し元が作った query と queries だけで検索し、RAG は質問に応じた AI の処理をしない（用語の別名・rerank・前後の文脈の取得は同じ）。",
+            "enum": [
+              "rag",
+              "caller"
+            ],
+            "title": "Planning",
+            "type": "string"
+          },
+          "queries": {
+            "description": "query に足す検索文（planning=caller のときだけ）。同じ根拠を別の観点・別表記・資料の表記で言い表した文。最大 5 本。",
+            "items": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 5,
+            "title": "Queries",
+            "type": "array"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "呼び出し元の追跡 ID（結果の request_id にそのまま返す）。",
+            "title": "Request Id"
           }
         },
         "required": [
@@ -3046,6 +3081,46 @@
             "title": "EvidenceSection",
             "type": "object"
           },
+          "GuideClarification": {
+            "properties": {
+              "condition_id": {
+                "description": "条件の id（conditions に値を入れて呼び直す）。",
+                "title": "Condition Id",
+                "type": "string"
+              },
+              "label": {
+                "description": "条件の名前。",
+                "title": "Label",
+                "type": "string"
+              },
+              "question": {
+                "description": "利用者に確かめる問い。",
+                "title": "Question",
+                "type": "string"
+              },
+              "options": {
+                "description": "選択肢（無ければ自由に答える）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Options",
+                "type": "array"
+              },
+              "multiple": {
+                "default": false,
+                "description": "選択肢を複数選べるか。",
+                "title": "Multiple",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "condition_id",
+              "label",
+              "question"
+            ],
+            "title": "GuideClarification",
+            "type": "object"
+          },
           "OlderVersion": {
             "description": "検索で当たった文書を置き換えた旧版（#1405）。",
             "properties": {
@@ -3261,6 +3336,29 @@
                 "default": null,
                 "title": "Rerank Score"
               },
+              "retrieval_rank": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "検索で当たった根拠の関連度の順位（1 始まり）。前後の文脈など、検索で当たったのではない根拠は null。",
+                "title": "Retrieval Rank"
+              },
+              "origin": {
+                "default": "source",
+                "description": "本文の由来。source=文書の原文（表・図の中の文字を含む）/ derived=取込が原文から作った要約・抽出した値（引用する前に原文を読んで確かめる）。",
+                "enum": [
+                  "source",
+                  "derived"
+                ],
+                "title": "Origin",
+                "type": "string"
+              },
               "superseded": {
                 "default": false,
                 "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（include_superseded に true を渡すと含める）。",
@@ -3330,7 +3428,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 20,
+            "default": 21,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3378,6 +3476,37 @@
             ],
             "default": null,
             "description": "見つからない search_answer_profile_id を渡したときに自動で選んだ検索・回答プロファイル（それ以外は null）。"
+          },
+          "planning": {
+            "default": "rag",
+            "description": "検索文を作った主体（入力の planning）。",
+            "enum": [
+              "rag",
+              "caller"
+            ],
+            "title": "Planning",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "入力の request_id。",
+            "title": "Request Id"
+          },
+          "clarifications": {
+            "description": "planning=caller で、検索・回答プロファイルのルールが検索の前に利用者に確かめる条件（あれば検索せず、evidence は空）。利用者の答えを conditions の condition_id に入れて呼び直す。",
+            "items": {
+              "$ref": "#/$defs/GuideClarification"
+            },
+            "title": "Clarifications",
+            "type": "array"
           }
         },
         "required": [
@@ -4409,6 +4538,29 @@
                 "default": null,
                 "title": "Rerank Score"
               },
+              "retrieval_rank": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "検索で当たった根拠の関連度の順位（1 始まり）。前後の文脈など、検索で当たったのではない根拠は null。",
+                "title": "Retrieval Rank"
+              },
+              "origin": {
+                "default": "source",
+                "description": "本文の由来。source=文書の原文（表・図の中の文字を含む）/ derived=取込が原文から作った要約・抽出した値（引用する前に原文を読んで確かめる）。",
+                "enum": [
+                  "source",
+                  "derived"
+                ],
+                "title": "Origin",
+                "type": "string"
+              },
               "superseded": {
                 "default": false,
                 "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（include_superseded に true を渡すと含める）。",
@@ -4478,7 +4630,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 20,
+            "default": 21,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -5116,7 +5268,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 20,
+            "default": 21,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

@@ -129,6 +129,8 @@ logger = logging.getLogger(__name__)
 
 ANSWER_ENGINE = "grounded"
 ENGINE_SOURCE_RUN_ID = "0" * 16
+# 呼び出し元が検索文を作った検索（#2651）の質問拡張の戦略（LLM を呼ばない単純検索）。
+CALLER_QUERY_STRATEGY = "simple_retrieval"
 # 回答フロー 1 件の I/O 待ちの上限(秒)。LLM/検索の個別 timeout は各 client が持つ。
 _IO_TIMEOUT_SECONDS = 600.0
 # 質問が挙げた文書名のうち、ナレッジベースにあるか確かめる数の上限(1 語ごとに SQL 1 回)。
@@ -628,7 +630,22 @@ class AnswerEngine:
         entity_store: EntityExpansionStore | None = None,
         graph_store: GraphExpansionStore | None = None,
         attachment_chunks: Sequence[RetrievedChunk] = (),
+        caller_queries: Sequence[str] | None = None,
     ) -> None:
+        # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら、回答を作らない検索で、
+        # 質問に応じた推論の LLM / VLM（検索戦略の判定・質問拡張・条の目録の選択・画面目録の連携・
+        # 根拠の画像の添付）を設定に関わらず使わない。決定的な工程（規則の質問の理解・用語の別名・
+        # hybrid search・rerank・親子と前後の文脈・交差参照・実体の拡張）は通常の検索と同じ。
+        self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
+        if self._caller_queries is not None:
+            settings = settings.model_copy(
+                update={
+                    "rag_query_strategy": CALLER_QUERY_STRATEGY,
+                    "rag_article_catalog_enabled": False,
+                    "rag_screen_linking_enabled": False,
+                    "rag_answer_vision_enabled": False,
+                }
+            )
         self._settings = settings
         self._oracle = oracle
         # チャットの会話の添付から選んだ根拠の候補（#2517。`app.rag.chat_attachments`）。検索の
@@ -991,6 +1008,7 @@ class AnswerEngine:
                     else None
                 ),
                 guide_plan=guide_step_plan(self._settings.rag_support_guide),
+                caller_queries=self._caller_queries,
             )
 
     async def _search(

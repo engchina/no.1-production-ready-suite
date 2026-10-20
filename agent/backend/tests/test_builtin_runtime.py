@@ -1004,7 +1004,7 @@ def business_agent(monkeypatch: MonkeyPatch) -> Iterator[Any]:
         AgentProfile(
             id=BUSINESS_AGENT_ID,
             name="業務支援の Agent",
-            instructions="rag_search と rag_retrieve_evidence には profile を必ず渡す。",
+            instructions="rag_retrieve_evidence と rag_lookup_guides には profile を必ず渡す。",
             skill_ids=["business-rag-research"],
         )
     )
@@ -1037,7 +1037,6 @@ def test_skill_instructions_name_the_tools_given_to_the_model(
 
     tools = {tool.name for tool in model.calls[0].tools}
     assert {
-        "rag__rag_search",
         "rag__rag_retrieve_evidence",
         "rag__rag_lookup_guides",
         "rag__rag_read_source",
@@ -1046,13 +1045,13 @@ def test_skill_instructions_name_the_tools_given_to_the_model(
     instructions = str(model.calls[0].system_instructions)
     # Skill の指示も業務の指示も、モデルが呼べる名前で書いてある（素の名前は残らない）。
     # Markdown の `code` の中の素の名前も書き直す（#1795）。
-    assert "`rag__rag_search` の `query` として扱い" in instructions
-    assert "rag__rag_search と rag__rag_retrieve_evidence には profile" in instructions
+    assert "`rag__rag_retrieve_evidence` で集め" in instructions
+    assert "rag__rag_retrieve_evidence と rag__rag_lookup_guides には profile" in instructions
     assert "rag__rag_lookup_guides" in instructions
     assert _BARE_RAG_TOOL.search(instructions) is None, instructions
     # 定義の指示は素の名前のまま（Run のときだけ書き直す）。
     skill = skill_registry.get("business-rag-research")
-    assert skill is not None and "`rag_search` の `query`" in skill.instructions
+    assert skill is not None and "`rag_retrieve_evidence` で集め" in skill.instructions
 
 
 def test_bare_tool_name_call_does_not_fail_the_run(

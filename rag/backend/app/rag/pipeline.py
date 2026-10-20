@@ -179,6 +179,7 @@ class RagPipeline:
         run_recorder: RunRecorder | None = None,
         answer_notice: AnswerNoticeSource | None = None,
         attachment_conversation_id: str | None = None,
+        caller_queries: Sequence[str] | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._genai = genai or OciGenAiClient(settings=self._settings)
@@ -203,6 +204,9 @@ class RagPipeline:
         self._answer_notice = answer_notice
         # チャットの会話（#2517）。会話の添付の節・行を、質問の根拠の候補として検索の結果に足す。
         self._attachment_conversation_id = attachment_conversation_id
+        # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら回答を作らない検索だけに
+        # 使い、質問に応じた推論の LLM（抽出項目の条件の読み取り・質問拡張など）を呼ばない。
+        self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
 
     async def run(
         self,
@@ -246,6 +250,10 @@ class RagPipeline:
         """
         started_at = perf_counter()
         trace_id = trace_id or new_trace_id()
+        if self._caller_queries is not None and (request.generate_answer or history):
+            raise ValueError(
+                "呼び出し元の検索文は、会話の履歴の無い、回答を作らない検索だけに使います。"
+            )
         if query_guardrail_result is None:
             query_guardrail = await asyncio.to_thread(
                 self._guardrails.validate_query, request.query
@@ -355,10 +363,20 @@ class RagPipeline:
             )
             if rewritten_query:
                 request = request.model_copy(update={"query": rewritten_query})
+        caller_queries = (
+            await self._checked_caller_queries(self._caller_queries)
+            if self._caller_queries is not None
+            else None
+        )
         # 質問に書かれた条件を抽出項目の条件として読み取る(self-query。有効なときだけ。#652)。
-        # チャットは会話履歴で書き換えた質問から読む。
+        # チャットは会話履歴で書き換えた質問から読む。呼び出し元が検索文を作った検索(#2651)は、
+        # 読み取りの LLM を呼ばない(条件は呼び出し元が filters で渡す)。
         auto_field_conditions: list[ExtractionFieldCondition] = []
-        if self._settings.rag_auto_field_filter_enabled and request.search_answer_profile_id:
+        if (
+            self._settings.rag_auto_field_filter_enabled
+            and request.search_answer_profile_id
+            and caller_queries is None
+        ):
             auto_field_conditions = await _observe_stage(
                 trace_id,
                 "field_filter",
@@ -386,6 +404,7 @@ class RagPipeline:
             approved_faq=self._approved_faq,
             scope=self._scope,
             attachment_chunks=attachment_chunks,
+            caller_queries=caller_queries,
         )
 
         async def emit_step(
@@ -550,8 +569,13 @@ class RagPipeline:
                 answer_diagnostics=diagnostics.answer,
                 storage_failures=storage_failures,
             )
-        # 下書きで試した質問は、利用者の質問の候補（質問履歴）に入れない（#1288）。
-        if outcome_label == "success" and not self._settings.rag_guide_preview:
+        # 下書きで試した質問と、呼び出し元が作った検索文（#2651。利用者の質問ではない）は、
+        # 利用者の質問の候補（質問履歴）に入れない（#1288）。
+        if (
+            outcome_label == "success"
+            and not self._settings.rag_guide_preview
+            and self._caller_queries is None
+        ):
             await self._record_query_history(
                 request, query_guardrail.sanitized_text, chat=history is not None
             )
@@ -682,6 +706,21 @@ class RagPipeline:
                     "answer record purge failed",
                     extra={"trace_id": trace_id, **safe_exception_fields(exc)},
                 )
+
+    async def _checked_caller_queries(self, queries: Sequence[str]) -> list[str]:
+        """呼び出し元の検索文に、質問と同じ安全チェックを当てる(#2651)。
+
+        機微情報は質問と同じく伏せた文で検索し、拒否された検索文は使わない(残りの検索文で続ける)。
+        """
+        checked: list[str] = []
+        for query in queries:
+            result = await asyncio.to_thread(self._guardrails.validate_query, query)
+            record_guardrail_findings(
+                "query", result.findings, "blocked" if not result.allowed else "warning"
+            )
+            if result.allowed and result.sanitized_text.strip():
+                checked.append(result.sanitized_text)
+        return checked
 
     async def _read_field_conditions(
         self, request: SearchRequest

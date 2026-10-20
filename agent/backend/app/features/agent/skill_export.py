@@ -8,7 +8,8 @@ agentskills.io（frontmatter は `name`・`description`・`compatibility`・`met
   `references/` のテキストをそのまま書き出す（`skills/` と同じ内容）。
 - 画面・API・JSON の宣言のスキルは、frontmatter を作る。本プロダクトの拡張は `metadata` の
   `production-ready-display-name`・`production-ready-mcp-tools`（`<接続>:<ツール>`）・
-  `production-ready-tags`（読み込みの `skills_loader` と同じ key）。
+  `production-ready-tags`・`production-ready-evidence-planning`（読み込みの `skills_loader` と
+  同じ key）。
 - `scripts/` などの実行するファイルは書き出さない（読み込みと同じく読まない）。
 """
 
@@ -22,9 +23,14 @@ from pathlib import Path
 
 import yaml
 
-from app.features.agent.skills import BUILTIN_SKILLS_DIR, AgentSkillDefinition
+from app.features.agent.skills import (
+    BUILTIN_SKILLS_DIR,
+    EVIDENCE_PLANNING_RAG,
+    AgentSkillDefinition,
+)
 from app.features.agent.skills_loader import (
     METADATA_DISPLAY_NAME,
+    METADATA_EVIDENCE_PLANNING,
     METADATA_MCP_TOOLS,
     METADATA_TAGS,
     SKILL_NAME_PATTERN,
@@ -98,6 +104,13 @@ def _generated_skill_md(skill: AgentSkillDefinition, name: str) -> str:
     )
     if tools:
         metadata[METADATA_MCP_TOOLS] = tools
+    planning = " ".join(
+        f"{requirement.server_id}:{requirement.evidence_planning}"
+        for requirement in skill.mcp_requirements
+        if requirement.evidence_planning != EVIDENCE_PLANNING_RAG
+    )
+    if planning:
+        metadata[METADATA_EVIDENCE_PLANNING] = planning
     if skill.tags:
         metadata[METADATA_TAGS] = " ".join(skill.tags)
     frontmatter: dict[str, object] = {

@@ -194,6 +194,7 @@ from app.features.agent.section_coverage import (
     with_unread_sections_notice,
 )
 from app.features.agent.skills import (
+    EVIDENCE_PLANNING_CALLER,
     reset_pinned_skills,
     resolve_skill,
     use_pinned_skills,
@@ -218,6 +219,9 @@ from app.features.agent.support_task import (
     assume_step,
     budget_exceeded_message,
     build_support_task,
+    caller_planned_arguments,
+    caller_planned_schema,
+    evidence_clarification_step,
     guide_check_note,
     has_support_task_activity,
     is_environment_tool,
@@ -775,6 +779,26 @@ def agent_mcp_requirements(skill_ids: list[str]) -> dict[str, set[str] | None]:
     return requirements
 
 
+def agent_caller_planned_connections(skill_ids: list[str]) -> frozenset[str]:
+    """根拠の取得の検索文をモデルが作ると宣言したスキルの接続（#2651）。
+
+    公開中の版の Run は固定したスキルの中身で決まる（`resolve_skill`。宣言の無い古い版を固定した
+    公開版は、今までどおり RAG が検索文を計画する）。同じ接続を使うスキルのどれかが宣言すれば、
+    その接続の取得はすべて呼び出し元の検索文にする（1 つの Run で振る舞いを混ぜない）。
+    """
+    connections: set[str] = set()
+    for skill_id in skill_ids:
+        skill = resolve_skill(skill_id)
+        if skill is None or not skill.enabled:
+            continue
+        connections.update(
+            requirement.server_id.strip()
+            for requirement in skill.mcp_requirements
+            if requirement.evidence_planning == EVIDENCE_PLANNING_CALLER
+        )
+    return frozenset(connections)
+
+
 McpRuntimeTool = tuple[ToolDefinition, ToolHandler]
 
 
@@ -1180,6 +1204,9 @@ class _ToolRecorder:
         self.known_conditions: dict[str, str] = {}
         # 業務 Agent のデータの範囲（#1378。接続 → 使えるプロファイル）。空は範囲なし。
         self.data_scopes: data_scope.AgentDataScopes = {}
+        # 根拠の取得の検索文をモデルが作ると宣言したスキルの接続（#2651。`agent_caller_planned_
+        # connections`）。この接続の `rag_retrieve_evidence` だけに planning=caller を付ける。
+        self.caller_planned_connections: frozenset[str] = frozenset()
         # 照合した（する）接続。並列の呼び出しでも 1 回だけにする。
         self._guide_checked: set[str] = set()
         # 回答前の確認（#1839）。利用者に確認しない Run では、RAG の確認の次の手を「前提を示して
@@ -1197,11 +1224,12 @@ class _ToolRecorder:
             definition is None
             or self.confirmation is None
             or not self.confirmation.skips_tool_clarification
-            or mcp_base_tool_name(name) != RAG_SEARCH
+            or mcp_base_tool_name(name) not in {RAG_SEARCH, RAG_RETRIEVE_EVIDENCE}
         ):
             return False
         properties = (definition.input_schema or {}).get("properties")
-        # 確認を持たない RAG（引数の無い版）には送らない（未定義の引数は拒否される）。
+        # 確認を持たない RAG（引数の無い版）には送らない（未定義の引数は拒否される）。根拠の取得の
+        # ルールの確認は、呼び出し元が検索文を作る取得（#2651）でだけ出る。
         return isinstance(properties, dict) and "skip_clarification" in properties
 
     def _original_question(self, name: str, definition: ToolDefinition | None) -> str | None:
@@ -1226,6 +1254,11 @@ class _ToolRecorder:
         if self.confirmation is None or self.confirmation.asks:
             return next_step
         return assume_step(next_step)
+
+    def caller_planned(self, name: str) -> bool:
+        """この呼び出しの接続を、スキルが検索文を作る取得（planning=caller）と宣言したか。"""
+        connection, separator, _tool = name.partition(MCP_TOOL_SEPARATOR)
+        return bool(separator) and connection in self.caller_planned_connections
 
     def add_tool(self, entry: _ToolEntry) -> None:
         """この Run でモデルに渡すツール（呼び出しの境界で使う定義と、モデルに見せた schema）。"""
@@ -1424,6 +1457,15 @@ class _ToolRecorder:
         original_question = self._original_question(name, definition)
         if original_question is not None and not call_arguments.get("original_question"):
             call_arguments = {**call_arguments, "original_question": original_question}
+        if definition is not None and self.caller_planned(name):
+            # スキルが宣言したら、根拠の取得はモデルが作った検索文で RAG に推論を重ねさせずに
+            # 検索する（#2651。モデルに任せず決定的に付け、モデルが渡した値は上書きする）。
+            call_arguments = {
+                **call_arguments,
+                **caller_planned_arguments(
+                    name, definition.input_schema, run_id=self.run_id, call_id=call_id
+                ),
+            }
         call = ToolCall(
             name=name,
             arguments=call_arguments,
@@ -1507,6 +1549,10 @@ class _ToolRecorder:
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
             if base == RAG_RETRIEVE_EVIDENCE and isinstance(output, dict):
+                # 検索・回答プロファイルのルールの確認（#2651。検索文を作る取得だけが返す）。
+                next_step = self._without_asking(evidence_clarification_step(output))
+                if next_step is not None:
+                    output = {**output, "next_step": next_step}
                 note = await self.check_guides(name, call.arguments)
                 if note is not None:
                     output = {**output, "guide_check": note}
@@ -1963,6 +2009,7 @@ def build_function_tools(
     confirmation: ConfirmationBudget | None = None,
     attachment_entries: list[tuple[ToolDefinition, ToolHandler]] | None = None,
     output_entries: list[tuple[ToolDefinition, ToolHandler]] | None = None,
+    caller_planned_connections: Collection[str] = (),
     image_input: bool = False,
 ) -> list[FunctionTool]:
     """ツールを function tool にする。
@@ -1976,6 +2023,7 @@ def build_function_tools(
     recorder = _ToolRecorder(run_id, budget)
     recorder.image_input = image_input
     recorder.data_scopes = dict(data_scopes or {})
+    recorder.caller_planned_connections = frozenset(caller_planned_connections)
     recorder.confirmation = confirmation
     entries: list[tuple[ToolDefinition, ToolHandler | None]] = []
     for name in tool_names:
@@ -2021,12 +2069,13 @@ def build_function_tools(
         # データの範囲が 1 つなら、プロファイルの引数をモデルに見せない（#1378）。実行の定義
         # （`tool_registry.invoke` に渡す schema）は呼び先の契約のまま。
         # 根拠のツールの件数の説明には「多段の質問では省略する」を足す（#1403）。
-        schema = search_limit_schema(
-            definition.name,
-            data_scope.scoped_input_schema(
-                definition.name, dict(definition.input_schema), recorder.data_scopes
-            ),
+        # 根拠の取得の検索文を作る主体（planning）と追跡 ID は実行環境が決める（#2651）。
+        schema = data_scope.scoped_input_schema(
+            definition.name, dict(definition.input_schema), recorder.data_scopes
         )
+        if recorder.caller_planned(definition.name):
+            schema = caller_planned_schema(definition.name, schema)
+        schema = search_limit_schema(definition.name, schema)
         tool = FunctionTool(
             name=definition.name,
             description=definition.description,
@@ -2099,6 +2148,7 @@ def build_sdk_agent(
     confirmation_response: Mapping[str, Any] | None = None,
     thread_id: str | None = None,
     output_fields: Sequence[AgentOutputField] = (),
+    caller_planning: bool = True,
 ) -> Agent[Any]:
     """SDK の Agent を作る（MCP 接続のツール一覧を HTTP で取るので、イベントループの外で呼ぶ）。
 
@@ -2110,6 +2160,8 @@ def build_sdk_agent(
     `output_fields` があれば、その項目の値を記録する `record_output` を渡す（#2549）。
     `cancellations` はこの Run で利用者が取り消した確認（#1441・#1445）。その種類のツールを渡さず、
     ほかの手段で続けるか意図を聞き直す指示を足す。
+    `caller_planning` が False（固定の中身の無い公開の版）なら、スキルの Agent 主体の根拠の取得の
+    宣言に従わない（RAG が検索文を計画する。#2651）。
     """
     from app.features.agent.chat_attachments import (
         attachment_instructions,
@@ -2153,6 +2205,9 @@ def build_sdk_agent(
             else None
         ),
         output_entries=[record_output_tool(run_id, output_fields)] if output_fields else None,
+        caller_planned_connections=(
+            agent_caller_planned_connections(skill_ids) if caller_planning else frozenset()
+        ),
         image_input=target.vision_enabled,
     )
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
@@ -2794,6 +2849,7 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                 confirmation_response=task.response,
                 thread_id=run.thread_id,
                 output_fields=agent.output_fields,
+                caller_planning=agent.caller_planning_allowed,
             )
             result = await _run_sdk(run_id, sdk_agent, conversation_input(run_id, run.goal))
             result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
@@ -2862,6 +2918,7 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                 confirmation_response=task.response,
                 thread_id=run.thread_id,
                 output_fields=agent.output_fields,
+                caller_planning=agent.caller_planning_allowed,
             )
             state = await RunState.from_string(sdk_agent, state_text)
             for item in state.get_interruptions():
