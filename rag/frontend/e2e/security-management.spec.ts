@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "./fixtures/test";
+import { findFloatingFormActionBars } from "../../../platform/packages/ui/e2e/layout-checks";
 
 import {
   ALL_PERMISSION_CODES,
@@ -474,6 +475,8 @@ test("ユーザー・ロールの作成と編集の確定は、フォームの�
     }
     // 確定の行は最後の欄の下（フォームの末尾）。
     expect(primaryBox!.y).toBeGreaterThanOrEqual(lastBox!.y + lastBox!.height);
+    // 上から下までスクロールしても、行は画面に貼り付かず PageHeader の上に描かれない（#2715）。
+    expect(await findFloatingFormActionBars(page)).toEqual([]);
     // 変更が無いときの変更を破棄は disabled。
     await expect(discard).toBeDisabled();
     return actions;

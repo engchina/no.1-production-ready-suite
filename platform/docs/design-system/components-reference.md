@@ -2331,16 +2331,15 @@ type PreconditionBannerProps = {
 
 ---
 
-## FormActionBar の `sticky` — 変更（#1786）
+## FormActionBar の確定の行 — 変更（#1786。#2715 で `sticky` を削除）
 
-詳細・作成・編集の画面の確定（作成・保存と変更を破棄）の行。フォームの末尾に置き、長いフォームの途中では画面の下端に貼り付ける。規則は README §4「詳細・作成・編集の画面の操作」。
+詳細・作成・編集の画面の確定（作成・保存と変更を破棄）の行。フォームの末尾に置き、画面の下端に貼り付けない（内容と一緒にスクロールする）。規則は README §4「詳細・作成・編集の画面の操作」。
 
 ```tsx
 <form ref={formRef} onSubmit={handleSubmit} noValidate className="grid gap-4">
   {/* 欄 … */}
   <SaveErrorBanner message={saveError} attemptKey={mutation.submittedAt} testId="…-save-error" />
   <FormActionBar
-    sticky="card"                       // カードの中のフォーム。複数のカードを 1 つで保存するなら "page"
     ariaLabel={t("editor.actions.formLabel")}   // 「確定の操作」
     primaryActions={[{ id: "save", label: initial ? t("…save") : t("…create"), icon: Save, type: "submit", loading: pending }]}
     secondaryActions={[{ id: "discard", label: t("editor.actions.discard"), icon: RotateCcw, disabled: !dirty || pending, onClick: discard }]}
@@ -2348,27 +2347,16 @@ type PreconditionBannerProps = {
 </form>
 ```
 
-```ts
-type FormActionBarProps = {
-  // …（primaryActions / secondaryActions / dangerActions / status / ariaLabel / testId / moreLabel）
-  /**
-   * 詳細・作成・編集の画面の確定の行。行の本来の位置が画面の下端より下にある間、行を画面の下端に貼り付ける。
-   * "card": カードの中のフォームの末尾（背景 bg-surface）。"page": 最後のカードの下（背景 bg-canvas）。
-   */
-  sticky?: "card" | "page";
-};
-```
-
 | 決めたこと | 理由 |
 |---|---|
-| `position: sticky; bottom: 0`（`--z-sticky`）。貼り付く範囲は親要素の中だけなので、保存の対象のフォーム（または保存の対象の節を包む `div`）の**最後の子**に置く | 節ごとに保存する下の節（検索・回答プロファイルの「プロファイルの知識」など）に付いて来ない |
-| 貼り付いている間だけ `data-stuck="true"`・上向きの影 `--shadow-sticky-footer`・下の余白（`max(1rem, env(safe-area-inset-bottom))`）。判定は `IntersectionObserver`（下端を 1px 狭めた範囲で行の全体が見えず、行の下端が画面の下端にあるとき） | 本来の位置ではふつうのフォームの末尾の行と同じ見た目にする。貼り付いたときは、下に内容が続くことを影で示す |
-| `"page"` は本来の位置では区切り線を出さない（カードの下の余白のまま）。貼り付いたときだけ上の区切り線 | ページの地の上に線だけが浮かない |
-| `sticky` の行は 375px でも縦に積まず、ボタンを 1 行に等分で並べる（`flex-1 sm:flex-none`） | 2 段に積むと 375px で画面の 15% 以上を覆う |
-| `sticky` の行の直置きのボタンは mousedown でフォーカスを動かさず、click でボタンへフォーカスを移してから操作する | 押した瞬間の入力欄の blur の検証でエラーが出て行が動き、クリックが外れるのを防ぐ。キーボード・押した後のフォーカス（loading の間もボタンに残る。#835）は変わらない |
+| 1 枚のカードのフォームはカードの中のフォームの**最後の子**、複数のカードを 1 つの保存で確定する画面（Agent のエディタなど）は保存の対象の節を包む `div` の最後の子（最後のカードの下）。設定のカードの末尾の行（RAG の言語資源など）と同じ形 | 行が保存の対象のフォームの末尾にだけあり、節ごとに保存する下の節（検索・回答プロファイルの「プロファイルの知識」など）の近くにページの保存が出ない |
+| `position` も重なり順（z-index）も持たない（#2715 で `sticky` を削除） | #1786 の `sticky bottom-0`（`--z-sticky`）は貼り付く範囲が親のカードの中だけで、カードの末尾を過ぎると行が上へ流れ、lg 以上の `PageHeader`（同じ `--z-sticky`）の上に DOM の順で描かれた。今は `PageHeader` の下へ隠れる |
+| sm 未満は primary と変更を破棄を全幅で縦に積み、sm 以上は横に並べる | フォームの末尾のほかの行（設定のカード）と同じ |
+| 直置きのボタンは mousedown でフォーカスを動かさず、click でボタンへフォーカスを移してから操作する | 押した瞬間の入力欄の blur の検証でエラーが出て行が動き、クリックが外れるのを防ぐ。キーボード・押した後のフォーカス（loading の間もボタンに残る。#835）は変わらない |
+| 行の目印は `data-form-action-bar` | e2e の `findFloatingFormActionBars`（`packages/ui/e2e/layout-checks.ts`）が、本文を上から下までスクロールして行が画面に貼り付かず、`PageHeader` の上に描かれないことを確かめる |
 
-- 単体テストは `packages/ui/tests/action-components.test.tsx`（`sticky` の class・1 行の並び・`"page"` の区切り線）。
-- E2E: RAG `security-management.spec.ts`（ユーザー・ロールの作成と編集の確定の位置・順・左端）、RAG `search-answer-profiles.spec.ts`（長いフォームで下端に貼り付き、末尾で戻る）、Agent `entity-archetypes.spec.ts`（`"page"` の貼り付きと失敗の Banner の位置）。
+- 単体テストは `packages/ui/tests/action-components.test.tsx`（sticky / fixed / z を持たない・区切り線・並び）。
+- E2E: RAG `security-management.spec.ts`（ユーザー・ロールの作成と編集の確定の位置・順・左端と、貼り付き・重なりが無いこと）、RAG `search-answer-profiles.spec.ts`（長いフォームの末尾に置き、「プロファイルの知識」まで進んでも貼り付かず `PageHeader` に重ならない）、Agent `entity-archetypes.spec.ts`（最後のカードの下の行と失敗の Banner の位置）。
 
 ---
 
@@ -2454,7 +2442,7 @@ type FormActionBarProps = {
     attemptKey={mutation.submittedAt}
     testId="search-answer-profile-save-error"
   />
-  <FormActionBar sticky="card" … />
+  <FormActionBar … />
 </form>
 ```
 
@@ -2475,7 +2463,7 @@ type SaveErrorBannerProps = {
 | 決めたこと | 理由 |
 |---|---|
 | 見た目は danger の `Banner`（アイコン付き・`role="alert"`）。閉じる × は付けない | 状態を色だけで示さない。次の保存まで残し、失敗を消して保存し直したように見せない |
-| 失敗が出たら `scrollIntoView({ block: "center" })` で画面に入れる。フォーカスは動かさない | 長いフォームの途中で、画面の下端に貼り付いた確定の行から保存すると、フォームの末尾の Banner は画面の外にある。中央へ寄せると Banner とその直下の確定の行（本来の位置）が並んで見え、sticky のヘッダーにも隠れない |
+| 失敗が出たら `scrollIntoView({ block: "center" })` で画面に入れる。フォーカスは動かさない | 長いフォームの途中から（入力欄の Enter などで）保存すると、フォームの末尾の Banner は画面の外にある。中央へ寄せると Banner とその直下の確定の行が並んで見え、上端に貼り付く `PageHeader` にも隠れない |
 | Toast・フォームの下の `FormStatus` と併用しない | 同じ失敗が 2 か所に出ていた（検索・回答プロファイルなど） |
 
 - 単体テストは `packages/ui/tests/save-error-banner.test.tsx`（空のときは描かない・`role="alert"`・失敗と再試行のときだけ画面に入れる）。
