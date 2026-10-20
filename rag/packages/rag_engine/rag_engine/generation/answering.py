@@ -1704,6 +1704,7 @@ def _grounded_prompt(
                 feedback=feedback,
                 known_gaps=known_gaps,
                 guide_steps=runtime_knowledge.guide_steps if runtime_knowledge is not None else (),
+                guide_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge is not None else (),
             ),
         },
     )
@@ -2036,6 +2037,7 @@ def synthesize_grounded_answer(
                     guide_step_terms=guide_step_terms,
                     guide_step_semantics=guide_semantics,
                     guide_unsearched_steps=guide_unsearched,
+                    guide_step_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                 )
                 if number == 0:
@@ -2274,6 +2276,9 @@ def synthesize_grounded_answer(
         )
         if guide_steps
         else []
+    )
+    guide_coverage = grounded.apply_guide_contracts(
+        guide_coverage, current.checked, runtime_knowledge.guide_step_contracts if runtime_knowledge else (), current.audit
     )
     guide_gaps = [grounded.guide_step_gap_line(step) for step in grounded.unexplained_guide_steps(guide_coverage)]
     unanswered += guide_gaps
@@ -4243,6 +4248,7 @@ def answer_question_result(
                         guide_steps=step_sources,
                         guide_optional_steps=guide_plan.optional_step_ids,
                         guide_step_terms=guide_plan.step_terms,
+                        guide_step_contracts=guide_plan.step_contracts,
                         guide_unsearched_steps=tuple(guide_step_trace.get("unsearched_step_ids") or ()),
                     )
                 skipped = str(guide_step_trace.get("skipped") or "")

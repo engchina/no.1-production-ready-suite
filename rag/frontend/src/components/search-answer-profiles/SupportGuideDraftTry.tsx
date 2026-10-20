@@ -302,6 +302,11 @@ function DraftTryResult({ result }: { result: SupportGuideDraftTryData }) {
           {t("supportGuides.try.answer")}
         </h6>
         <AnswerText text={result.answer} citations={result.citations} />
+        {result.notice ? (
+          <Banner severity="info" title={t("answer.notice.label")} className="mt-3">
+            <p className="whitespace-pre-wrap break-words">{result.notice}</p>
+          </Banner>
+        ) : null}
       </section>
 
       {result.citations.length > 0 ? (

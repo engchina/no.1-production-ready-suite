@@ -100,6 +100,32 @@ class OutputRetryRecordTest(unittest.TestCase):
         self.assertEqual(usage["incomplete_reasons"], {"content_filter": 1})
         self.assertNotIn("output_retries", usage)
 
+    def test_corrupted_generated_text_retries_without_repairing_characters(self):
+        corrupted = SimpleNamespace(status="completed", output_parsed=TextOutput(text="説明\ufffd"), usage=USAGE)
+        client = _Client([corrupted, _completed()])
+        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
+        with mock.patch.object(oci, "_openai_client_for_provider", return_value=client):
+            result = oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
+        self.assertEqual(result.text, "ok")
+        self.assertEqual(len(client.budgets), 2)
+
+    def test_repeated_corruption_fails_with_existing_retry_limit(self):
+        corrupted = SimpleNamespace(status="completed", output_parsed=TextOutput(text="説明\ufffd"), usage=USAGE)
+        client = _Client([corrupted, corrupted])
+        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
+        with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), self.assertRaises(oci.InvalidStructuredOutput):
+            oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
+        self.assertEqual(len(client.budgets), 2)
+
+    def test_original_replacement_character_is_preserved(self):
+        corrupted = SimpleNamespace(status="completed", output_parsed=TextOutput(text="原文\ufffd"), usage=USAGE)
+        client = _Client([corrupted])
+        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
+        with mock.patch.object(oci, "_openai_client_for_provider", return_value=client):
+            result = oci._parse_text_with_retry("system", "引用: 原文\ufffd", settings, TextOutput, PROVIDER)
+        self.assertEqual(result.text, "原文\ufffd")
+        self.assertEqual(len(client.budgets), 1)
+
     def test_text_call_reaches_the_responses_api(self):
         """text の呼び出し（`_parse_text_with_retry` → `_parse_openai_text_once`）が Responses API まで届く。"""
         client = _Client([_completed()])

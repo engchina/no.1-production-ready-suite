@@ -1114,6 +1114,25 @@ function SearchAnswerProfileEditor({
                       })
                     }
                   />
+                  <QuerySelectRow
+                    id="search-answer-profile-guide-step-deadline"
+                    label={t("searchAnswerProfiles.field.guideStepDeadline")}
+                    helper={t("searchAnswerProfiles.field.guideStepDeadlineHelper")}
+                    value={
+                      config.query.guide_step_deadline_seconds == null
+                        ? null
+                        : String(config.query.guide_step_deadline_seconds)
+                    }
+                    options={[0, 10, 20, 30, 45, 60].map((value) => ({ value: String(value), label: String(value) }))}
+                    width="xs"
+                    defaultOnOverride="10"
+                    disabled={locked}
+                    onChange={(value) =>
+                      updateQuery({
+                        guide_step_deadline_seconds: value === null ? null : Number(value),
+                      })
+                    }
+                  />
                   <EntityExpansionRow
                     value={config.query}
                     knowledgeBaseIds={config.knowledge_base_ids}

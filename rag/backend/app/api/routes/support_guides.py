@@ -482,6 +482,7 @@ async def try_support_guide_draft(
             guide=guide,
             outcome=outcome if isinstance(outcome, str) else None,
             answer=result.answer,
+            notice=result.notice,
             citations=result.citations,
             clarifications=[
                 dict(item) for item in raw_clarifications or [] if isinstance(item, dict)

@@ -413,6 +413,7 @@ class SupportGuideApi {
               }
             : null,
           outcome: "answered",
+          notice: "変更前に管理窓口へ確認してください。",
           answer: "社員の場合は、ポータルの「パスワードを忘れた」から再設定します。",
           citations: [
             {
@@ -1125,7 +1126,7 @@ function guideWithConditionDraft(): Guide {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`下書きで試すと、公開の版を変えずに下書きで答えた回答を示す（${theme}）`, async ({ page }, testInfo) => {
+  test(`下書きで試すと、公開の版を変えずに下書きで答えた回答を示す（${theme}）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await useTheme(page, theme);
     const api = await openSupportGuides(page, [guideWithConditionDraft()]);
     api.tryDelayMs = 400;
@@ -1166,6 +1167,11 @@ for (const theme of ["light", "dark"] as const) {
     await expect(stepRows.nth(2)).toContainText("分岐の手順（必須ではない）");
     await expect(stepRows.nth(3)).toContainText("検索を打ち切った");
     await expect(result).toContainText("ポータルの「パスワードを忘れた」から再設定します。");
+    const notice = result.getByRole("status").filter({ hasText: "回答の注意書き" });
+    await notice.scrollIntoViewIfNeeded();
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("変更前に管理窓口へ確認してください。");
+    await notice.screenshot({ path: testInfo.outputPath(`support-guide-notice-${theme}.png`) });
     // AI に渡した件数と内訳は検索・チャットと同じ表示（#2040）。
     await expect(result.getByRole("heading", { name: /^AI に渡した 1 件/ })).toBeVisible();
     expect(api.requests.find((item) => item.path.endsWith("/try"))?.body).toEqual({

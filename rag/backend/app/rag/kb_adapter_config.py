@@ -126,6 +126,7 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     # 業務ガイドの手順ごとの検索(#2395)。None は全体の既定(on / 上限 4)。
     "guide_step_retrieval_enabled": "rag_guide_step_retrieval_enabled",
     "guide_step_max_queries": "rag_guide_step_max_queries",
+    "guide_step_deadline_seconds": "rag_guide_step_deadline_seconds",
     "auto_field_filter_enabled": "rag_auto_field_filter_enabled",
     # 実体の 1 段の拡張(#1388)。None は Settings の既定(拡張は on。#1402 / 上限は 6)。
     "entity_expansion_enabled": "rag_entity_expansion_enabled",
@@ -352,6 +353,7 @@ class KnowledgeBaseQueryConfig(BaseModel):
     guide_step_retrieval_enabled: bool | None = None
     # 手順ごとの検索の回数の上限(参照の頁に絞った検索を含む)。None は全体の既定(4)。
     guide_step_max_queries: int | None = Field(default=None, ge=0, le=10)
+    guide_step_deadline_seconds: float | None = Field(default=None, ge=0, le=60)
     # 質問から抽出項目の条件を読み取る(#652)。LLM の呼び出しが 1 回増える。
     auto_field_filter_enabled: bool | None = None
     # 質問と上位の候補の実体から、実体の表との SQL の join で関連する chunk を 1 段だけ足す
