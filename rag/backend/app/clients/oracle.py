@@ -5016,7 +5016,8 @@ class OracleClient:
         queued_phase: IngestionJobPhase | None = None,
         limit: int,
     ) -> tuple[list[str], int]:
-        """一覧と同じ条件・順(新しい順)の文書の ID を最大 ``limit`` 件と、条件に一致する件数。
+        """一覧と同じ条件・順(ファイル名の自然順)の文書の ID を最大 ``limit`` 件と、
+        条件に一致する件数。
 
         一覧の「条件に一致する文書をすべて選ぶ」の一括の操作(#2674)で使う。ID だけを読む。
         """
@@ -5032,10 +5033,11 @@ class OracleClient:
             SELECT document_id
             FROM rag_documents
             WHERE {where_sql}
-            ORDER BY uploaded_at DESC, document_id DESC
+            ORDER BY {name_order_sql}
             FETCH FIRST :id_limit ROWS ONLY
             """,
                 where_sql=where_sql,
+                name_order_sql=_oracle_document_list_order_sql(),
             ),
             {**binds, "id_limit": limit},
         )
@@ -9009,11 +9011,12 @@ class OracleClient:
                 {columns}
             FROM rag_documents
             WHERE {where_sql}
-            ORDER BY uploaded_at DESC, document_id DESC
+            ORDER BY {name_order_sql}
             {limit_clause}
             """,
                 columns=_DOCUMENT_LIST_COLUMNS_SQL.strip(),
                 where_sql=where_sql,
+                name_order_sql=_oracle_document_list_order_sql(),
                 limit_clause=limit_clause,
             ),
             binds,
@@ -12396,11 +12399,19 @@ def ingestion_dispatch_order_binds(settings: Settings) -> dict[str, object]:
     }
 
 
+def _oracle_document_list_order_sql() -> str:
+    """管理一覧と全件選択の ID 一覧で、ページング前の順序をそろえる。"""
+    return (
+        _oracle_natural_name_order_sql("rag_documents.file_name")
+        + ", NLSSORT(file_name, 'NLS_SORT=JAPANESE_M'), file_name ASC, document_id ASC"
+    )
+
+
 def _oracle_natural_name_order_sql(expression: str) -> str:
     """名前の数字の連続を桁数と値で比較する。SQL の内部の列式だけを受け取る。
 
     全角の数字をそろえ、先頭のゼロを外した桁数を固定幅で前置する。
-    名前は最大 256 文字なので桁数は 3 桁で表せる。数値への変換はせず、
+    対象の名前は最大 512 文字なので桁数は 3 桁で表せる。数値への変換はせず、
     Oracle の NUMBER の精度より長い数字も比較する。ページングの前に使う。
     """
     normalized = f"TRANSLATE({expression}, '０１２３４５６７８９', '0123456789')"

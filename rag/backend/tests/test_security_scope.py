@@ -694,8 +694,11 @@ async def test_conversations_are_scoped_to_allowed_search_answer_profiles() -> N
 
 @pytest.mark.anyio
 async def test_document_list_orders_by_unique_key_for_stable_paging() -> None:
-    """#281: 同じ uploaded_at の文書が OFFSET ページングで重複・欠落しないよう一意キーで並べる。"""
+    """#281: 同じファイル名の文書が OFFSET ページングで重複・欠落しないよう一意キーで並べる。"""
     pool = FakeOraclePool(execute_results=[[]])
     with _scope():
         await _client(pool).list_documents(limit=20, offset=20)
-    assert "ORDER BY uploaded_at DESC, document_id DESC" in pool.connection.calls[0].statement
+    statement = pool.connection.calls[0].statement
+    assert "JAPANESE_M_CI" in statement
+    assert "file_name ASC, document_id ASC OFFSET" in statement
+    assert "ORDER BY uploaded_at DESC" not in statement

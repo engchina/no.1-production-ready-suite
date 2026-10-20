@@ -611,7 +611,7 @@ async def list_document_ids(
     queued_phase: IngestionJobPhase | None = None,
     limit: int = Query(default=BULK_INGESTION_MAX_DOCUMENTS, ge=1, le=BULK_INGESTION_MAX_DOCUMENTS),
 ) -> ApiResponse[DocumentIdList]:
-    """一覧と同じ条件の文書の ID(新しい順に最大 ``limit`` 件)と件数を返す(#2674)。
+    """一覧と同じ条件の文書の ID(ファイル名の自然順に最大 ``limit`` 件)と件数を返す(#2674)。
 
     一覧の「条件に一致する文書をすべて選ぶ」から一括の投入へ渡す。要約・JSON 列は読まない。
     """
