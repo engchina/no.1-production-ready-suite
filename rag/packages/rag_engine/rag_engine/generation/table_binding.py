@@ -6,8 +6,10 @@
 
 決定的な照合で、意味は見ない。誤って正しい文を外さないように、次のときだけ「対応しない」とする。
 
-- 値のある行のどれにも、文が同じ所で述べた区分・名前（その表の 1 行にだけあるセル）が無く、
-- 別の行の区分・名前を、文が同じ所で述べている。
+- 値のある行のどれにも、文が同じ所で述べた行の手がかり（その表の 1 行にだけあるセル。同じ行のコードなどの値も含む）
+  が無く、
+- 別の行の区分・名前（英数字だけの値でないセル）を、文が同じ所で述べている。別の行の値を同じ所で述べただけ
+  （複数の行の値の列挙・範囲「254・253・300」「A101〜A103」）では疑わない。
 - 見出しの行のセルと、表の複数の行にあるセルは、行を見分ける手がかりにしない。
 
 「同じ所」は文の読点・句点で区切った区間で、値の無い区間（「区分Ⅱの場合、」）は続く区間と合わせて見る。
@@ -220,8 +222,10 @@ def _windows(claim: str, values: set[str]) -> Iterable[str]:
 def _unbound_in_table(window: str, table: Table) -> tuple[list[tuple[str, str]], set[str]]:
     """区間の値のうち、この表で別の行の区分・名前と結び付けたもの（値, 別の行のセル）と、この表で行に結び付いた値。
 
-    別の行は、その行にも値のセルがある行（同じ並びの別の項目）だけを数える。注記・見出しのような値の無い行の
-    語を述べただけでは疑わない。
+    行に結び付いたかは、値の行にあって区間に現れる手がかり（1 行にだけあるセル。区分・名前とコードなどの値）で見る。
+    疑うのは、別の行の区分・名前（値でないセル）を述べたときだけ。別の行の値どうしの共起は、複数の行の値の列挙・
+    範囲で、区分と値の結び付けではない。別の行は、その行にも値のセルがある行（同じ並びの別の項目）だけを数える。
+    注記・見出しのような値の無い行の語を述べただけでは疑わない。
     """
     counts: dict[str, int] = {}
     for row in table.rows:
@@ -241,7 +245,7 @@ def _unbound_in_table(window: str, table: Table) -> tuple[list[tuple[str, str]],
         elsewhere = sorted(
             key
             for key in others
-            if any(key in row and any(_is_value(cell) for cell in row - {key}) for row in table.rows if row not in rows)
+            if _is_label(key) and any(key in row and any(_is_value(cell) for cell in row - {key}) for row in table.rows if row not in rows)
         )
         if elsewhere:
             unbound.append((table.cells.get(value, value), table.cells.get(elsewhere[0], elsewhere[0])))
