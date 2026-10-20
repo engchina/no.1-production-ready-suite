@@ -2663,9 +2663,12 @@ def test_tool_policy_settings_can_force_read_tool_approval() -> None:
         assert direct_result["policy_decision"] == "ask"
         assert direct_result["audit_metadata"]["tool_name"] == "echo"
 
-        # 組み込み Runtime も同じポリシーで承認を求める（SDK の needs_approval）。
+        # 組み込み Runtime も同じポリシーで承認を求める（SDK の needs_approval。呼び出しごとに
+        # 最新のツール権限で決める。#2610）。
         [echo_tool] = build_function_tools("run_policy_ask", ["echo"])
-        assert echo_tool.needs_approval is True
+        gate = echo_tool.needs_approval
+        assert callable(gate)
+        assert anyio.run(gate, cast(Any, None), {"x": 1}, "call-echo") is True
 
         denied = client.patch("/api/settings/tool-policy", json={"ask": [], "deny": ["echo"]})
         assert denied.status_code == 200

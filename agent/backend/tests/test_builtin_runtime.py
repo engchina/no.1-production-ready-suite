@@ -11,7 +11,7 @@ import contextlib
 import re
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import anyio
 import pytest
@@ -173,9 +173,19 @@ def test_instructions_and_tools_come_from_agent_and_skills(calls: _Calls) -> Non
         tool.name: tool for tool in builtin_runtime.build_function_tools("run_x", [LOOKUP, WRITE])
     }
     # 読み取りのツールは承認なし、書き込み（副作用あり）のツールは既定の policy で承認が必要。
-    assert tools[LOOKUP].needs_approval is False
-    assert tools[WRITE].needs_approval is True
+    # 承認が要るかは呼び出しごとに最新のツール権限で決める（#2610）。
+    assert _needs_approval(tools[LOOKUP], {"query": "売上"}) is False
+    assert _needs_approval(tools[WRITE], {"query": "登録"}) is True
     assert tools[LOOKUP].strict_json_schema is True
+
+
+def _needs_approval(tool: FunctionTool, arguments: dict[str, Any]) -> bool:
+    """function tool の `needs_approval`（呼び出しごとの判定。#2610）をその時点で評価する。"""
+    gate = tool.needs_approval
+    assert callable(gate)
+    decided = anyio.run(gate, cast(Any, None), arguments, "call-check")
+    assert isinstance(decided, bool)
+    return decided
 
 
 def test_run_calls_tool_and_records_answer(monkeypatch: MonkeyPatch, calls: _Calls) -> None:
@@ -887,9 +897,14 @@ def test_mcp_connection_tools_are_given_to_the_model(
     assert {"nl2sql__nl2sql_query", "nl2sql__nl2sql_get_job"} <= set(tools)
     # readOnlyHint の無いツールは承認が必要、読み取り専用のツールは承認なし。nl2sql_query は
     # readOnlyHint=false でも標準の接続の既定で承認なし（#1832）。
-    assert tools["nl2sql__nl2sql_cancel_requirement"].needs_approval is True
-    assert tools["nl2sql__nl2sql_query"].needs_approval is False
-    assert tools["rag__rag_search"].needs_approval is False
+    assert (
+        _needs_approval(
+            tools["nl2sql__nl2sql_cancel_requirement"], {"requirement_session_id": "qs-1"}
+        )
+        is True
+    )
+    assert _needs_approval(tools["nl2sql__nl2sql_query"], {"question": "売上"}) is False
+    assert _needs_approval(tools["rag__rag_search"], {"query": "更新条件"}) is False
     # ツールは Run の利用者のサービストークン（aud = 接続）で呼ぶ。
     [call] = mcp_agent.calls_of("rag_search")
     assert call["claims"]["sub"] == USER_UUID

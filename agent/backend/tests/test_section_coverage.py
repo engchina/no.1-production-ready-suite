@@ -536,9 +536,13 @@ def test_cancelled_run_is_not_sent_back(monkeypatch: MonkeyPatch, mcp: FakeProdu
 
     run = _run()
 
-    assert len(model.calls) == 2
+    # 取消の後はモデルを呼ばない（#2609）。差し戻しもしない。
+    assert len(model.calls) == 1
     assert run.status == "cancelled"
     assert not [item for item in run.artifacts if item.kind == "answer"]
+    # 取消の前に送った読み取りの結果は、事実のまま記録する。
+    [step] = run.steps
+    assert step.status == "completed"
 
 
 def test_coverage_is_kept_apart_from_the_claim_validation(

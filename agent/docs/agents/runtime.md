@@ -14,6 +14,8 @@
   - ポリシーが「拒否」のツールはモデルに渡さない。
   - 「承認」のツールは SDK の `needs_approval` で中断する。中断した Run は `waiting_approval` にし、SDK の状態を Run に保存する。
   - 承認がすべて決まったら状態を復元して再開する。却下したツールは実行しない。
+  - 呼び先へ送る直前の境界は、通常の実行・承認の再開・MCP 接続のツール・登録済みのツールで同じ順に通す（`_ToolRecorder.invoke`。#2609・#2610・#2630）: ① 取消（終わった Run と、別の実行に置き換わった実行〔実行の token が違う。#2606〕では step を作らず handler を呼ばない。別のプロセスの取消も保存先の Run の行で判定し、書き込みでも取消を勝たせる。モデルの呼び出しの前も同じ判定で止める）→ ② 引数（壊れた JSON・object 以外を空の引数にせず、モデルに見せた schema で型・必須・enum・範囲・追加の項目・入れ子を確かめる。検索の件数の正規化の後に確かめ、実行環境が埋める非表示の引数は求めない。呼び先の契約は `tool_registry.invoke` も確かめる。外部の `$ref` は取りに行かない。誤りは値を含まない `argument_errors`（場所・種類・直し方）で返す。`tool_arguments.py`）→ ③ ツール権限・承認（SDK の `needs_approval` は呼び出しごとに最新のツール権限で決める。「承認」のツールは、その Run・呼び出し ID・ツール・引数の承認の記録がある呼び出しだけを実行する）→ ④ handler。
+  - 取消の前に送った操作は取り消せない。結果が取消の後に届いたら事実のまま記録し（イベントに `run_status`）、取消のイベントに送っていた step（`in_flight_step_ids`）を残す。
 - モデルに渡す入力は、モデルの入力の上限に収める（#2383。`features/agent/context_window.py`。SDK の `call_model_input_filter`）。
   - 予算は登録モデルの `max_input_tokens`（システム設定 > モデル）から、出力の上限（入力の上限の半分まで）と余白（`AGENT_CONTEXT_SAFETY_MARGIN_RATIO`）を引いた token の数。見積もりは platform の `estimate_input_tokens` × `AGENT_CONTEXT_TOKEN_ESTIMATE_SCALE`。
   - 超えるときは古いツールの結果から段階的に縮め（一覧の項目の長い文字列を先頭だけ → 後ろの項目を ID だけ → すべて ID だけ）、最新のツールの結果は古い結果を縮めても足りないときだけ縮める。利用者の質問・会話の履歴・指示は縮めない。ID の項目（`id`・`*_id`）は消さず、縮めた結果に `context_compaction`（元の文字数と、`rag_read_source` で読み直す次の手）を足す。

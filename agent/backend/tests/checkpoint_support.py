@@ -149,6 +149,11 @@ class CheckpointTable:
             for (row_key, kind, entity_id), row in sorted(self.entities.items()):
                 if row_key != key or kind not in {"run", "agent"}:
                     continue
+                # 1 件の読み込み（`read_entity`）。
+                if "entity_kind" in params and kind != params["entity_kind"]:
+                    continue
+                if "entity_id" in params and entity_id != params["entity_id"]:
+                    continue
                 if after is None and row.text is None:
                     continue
                 if after is not None and row.change_version <= int(after):

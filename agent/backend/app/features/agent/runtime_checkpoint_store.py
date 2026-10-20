@@ -238,6 +238,26 @@ def read_entities(
     ]
 
 
+def read_entity(cursor: Any, checkpoint_key: str, kind: str, entity_id: str) -> EntityRow | None:
+    """1 件の Run・業務 Agent の今の行（無い・削除の印なら None。#2609 の取消の判定）。"""
+    cursor.execute(
+        "SELECT entity_kind, entity_id, entity_json, change_version "  # nosec B608 - 固定値
+        f"FROM {ENTITY_TABLE} WHERE checkpoint_key = :checkpoint_key "
+        "AND entity_kind = :entity_kind AND entity_id = :entity_id AND entity_json IS NOT NULL",
+        checkpoint_key=checkpoint_key,
+        entity_kind=kind,
+        entity_id=entity_id,
+    )
+    for row in cursor.fetchall():
+        return EntityRow(
+            kind=str(row[0]),
+            entity_id=str(row[1]),
+            entity_json=lob_to_text(row[2]) if row[2] is not None else None,
+            change_version=int(row[3]),
+        )
+    return None
+
+
 def write_entities(
     cursor: Any,
     checkpoint_key: str,
