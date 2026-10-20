@@ -4,7 +4,7 @@
 button / unknown）を付け、chunk の metadata（``image_evidence[].visual_structure.form_fields``）に残す。
 回答では、質問に名前が出た項目だけを根拠から拾い、
 
-- 項目の種類を根拠の注記として生成の材料に渡す（どの根拠の画面の図か、表示の語は言語資源）。
+- 項目名と種類を引用できる画像由来の根拠にし、対応する根拠の注記を生成の材料へ渡す（表示の語は言語資源）。
 - 業務ガイドの分からなかった条件（backend が ``evidence_conditions`` として渡す）のうち、選択肢が項目の種類に
   対応する条件（``condition_kind_options``）を、拾った種類が 1 つに決まるときだけ既知にする。種類が割れる・
   拾えないときは決めない（今までどおり）。
@@ -18,6 +18,7 @@ button / unknown）を付け、chunk の metadata（``image_evidence[].visual_st
 
 from __future__ import annotations
 
+import hashlib
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -199,6 +200,55 @@ def with_resolved_plan(runtime_knowledge: Any, resolved: Sequence[ResolvedCondit
     )
 
 
+def with_field_kind_evidence(observations: Sequence[FieldKindObservation], spans: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """取得済みの画像の構造化項目を、同じ出典・頁の独立した根拠にする。"""
+    result = [dict(span) for span in spans]
+    names = content_labels()
+    seen: set[tuple[str, str, str]] = set()
+    for item in observations:
+        key = (item.source_id, item.name, item.kind)
+        if key in seen:
+            continue
+        candidates = [span for span in spans if item.source_id in (span.get("source_id"), *(span.get("source_aliases") or ()))]
+        # parent が複数頁にまたがる場合、構造化項目だけから図の所在を補わない。
+        pages = {span.get("page") for span in candidates}
+        word = names.form_field_kind(item.kind)
+        if not candidates or len(pages) != 1 or not next(iter(pages)) or not word:
+            continue
+        source = next((span for span in candidates if normalized_name(item.name) in normalized_name(span.get("text", ""))), candidates[0])
+        text = f"{item.name} = {word}"
+        identity = hashlib.sha256("\0".join(key).encode()).hexdigest()[:20]
+        evidence = {
+            key: source[key]
+            for key in (
+                "source_id",
+                "source",
+                "document_scope",
+                "business_scope",
+                "page",
+                "page_end",
+                "location",
+                "section_path",
+                "section_path_sources",
+                "source_aliases",
+                "value_context",
+            )
+            if key in source
+        }
+        evidence.update(
+            evidence_id=f"Efield{identity}",
+            text=text,
+            origin="image_extraction",
+            field_kind={"source_id": item.source_id, "name": item.name, "kind": item.kind},
+            excerpt_only=False,
+        )
+        result.append(evidence)
+        seen.add(key)
+        if len(seen) >= MAX_NOTE_OBSERVATIONS:
+            break
+    return result
+
+
 def prompt_note(
     observations: Sequence[FieldKindObservation],
     resolved: Sequence[ResolvedCondition],
@@ -211,10 +261,17 @@ def prompt_note(
         for source_id in (span.get("source_id"), *(span.get("source_aliases") or ())):
             if source_id and span_label:
                 labels.setdefault(str(source_id), span_label)
+    field_labels = {
+        (str(field.get("source_id") or span.get("source_id") or ""), str(field.get("name") or ""), str(field.get("kind") or "")): str(
+            span.get("label") or ""
+        )
+        for span in spans
+        if isinstance(field := span.get("field_kind"), Mapping)
+    }
     names = content_labels()
     lines = []
     for item in observations:
-        label = labels.get(item.source_id)
+        label = field_labels.get((item.source_id, item.name, item.kind)) or labels.get(item.source_id)
         word = names.form_field_kind(item.kind)
         if label and word:
             lines.append(f"- {label}: {item.name} = {word}")
