@@ -2994,6 +2994,8 @@ GUIDE_STEP_EXPLAINED = "explained"  # 手順の根拠を引いた説明を公開
 GUIDE_STEP_REFERENCE_ONLY = "reference_only"  # 手順の根拠を原文のまま（「参考情報」の節に）示しただけ
 GUIDE_STEP_UNUSED = "unused"  # 手順の根拠は回答の材料にあるが、説明に引いていない
 GUIDE_STEP_NO_EVIDENCE = "no_evidence"  # 手順の根拠が回答の材料に無い
+# 手順ごとの検索を期限・回数の上限で打ち切り、その手順を検索しなかった（根拠が無いのは資料に無いからとは限らない。#2706）。
+GUIDE_STEP_NOT_SEARCHED = "not_searched"
 # 同じ根拠のまま作り直せば直せる手順の状態（根拠が材料にある）。
 GUIDE_STEP_REGENERABLE = frozenset({GUIDE_STEP_REFERENCE_ONLY, GUIDE_STEP_UNUSED})
 # 手順の根拠と同じ原文を別の根拠から引いた説明を数える、引用の最短の長さ（短い語句はどの本文にも当たる）。
@@ -3200,8 +3202,22 @@ def guide_step_coverage(
     optional: Sequence[str] = (),
     step_terms: Mapping[str, Sequence[str]] | None = None,
     semantics: GuideStepSemantics | None = None,
+    unsearched: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
-    """業務ガイドの手順ごとの充足（#2491・#2649・#2685）。
+    """業務ガイドの手順ごとの充足（#2491・#2649・#2685・#2706）。規則は `guide_step_assignment`。"""
+    return guide_step_assignment(guide_steps, checked, spans, optional, step_terms, semantics, unsearched)[0]
+
+
+def guide_step_assignment(
+    guide_steps: Sequence[tuple[str, str, Sequence[str]]],
+    checked: Sequence[CheckedItem],
+    spans: Sequence[dict],
+    optional: Sequence[str] = (),
+    step_terms: Mapping[str, Sequence[str]] | None = None,
+    semantics: GuideStepSemantics | None = None,
+    unsearched: Sequence[str] = (),
+) -> tuple[list[dict[str, Any]], dict[int, str]]:
+    """業務ガイドの手順ごとの充足（#2491・#2649・#2685・#2706）と、手順の説明にした item（index → 手順 id）。
 
     手順の根拠（手順ごとの検索で取った chunk）を引いた item を手順の引用とする。同じ本文が別の chunk にも
     あるので、手順の根拠の本文と照合できる引用（``_GUIDE_STEP_QUOTE_MIN_CHARS`` 以上）も手順の根拠を引いたと数える。
@@ -3216,10 +3232,14 @@ def guide_step_coverage(
     手順の語が 1 語しか当たらない文は共通の文のことがあるので、それで対応付けない）。さらに 1 つの item は 1 つの手順の説明にだけ数え（必須の手順を先に割り当てる）、同じ item を別の手順の
     説明に重ねない。
 
+    ``unsearched`` は手順ごとの検索を期限・回数の上限で打ち切って検索しなかった手順（#2706）。その手順の根拠は
+    分からないので、1 つの手順の根拠だけを引いた item でも、検索しなかった手順と根拠を共有しうる item として、
+    共有の item と同じ判定（語・意味）を通す（共通の文だけの item を手順の説明にしない）。
+
     手順の item に公開できる説明（原文のみ提示でも適用未確認でもない）を割り当てられれば explained。手順の item が
     原文のみ提示（検査・監査で降格）か適用未確認（unverified。「参考情報」の節に出る）だけなら reference_only、
-    根拠は回答の材料にあるが手順の説明を引いていなければ unused、材料に無ければ no_evidence。
-    required は回答の充足で必須の手順か（``optional`` は条件が決まらない分岐の行き先とその後続）。
+    根拠は回答の材料にあるが手順の説明を引いていなければ unused、材料に無ければ no_evidence（検索しなかった手順は
+    not_searched）。required は回答の充足で必須の手順か（``optional`` は条件が決まらない分岐の行き先とその後続）。
     """
     by_source: dict[str, list[dict]] = {}
     for span in spans:
@@ -3248,6 +3268,11 @@ def guide_step_coverage(
     for step_id, indexes in cited.items():
         for index in indexes:
             citing.setdefault(index, []).append(step_id)
+    # 検索しなかった手順は根拠が分からないので、どの item もその手順と根拠を共有しうるとして照らす（#2706）。
+    step_ids = {step[0] for step in guide_steps}
+    unknown = [step_id for step_id in dict.fromkeys(unsearched) if step_id in step_ids]
+    if unknown:
+        citing = {index: [*cited_by, *(step_id for step_id in unknown if step_id not in cited_by)] for index, cited_by in citing.items()}
     descriptions = {step_id: " ".join((title, *terms.get(step_id, ()))).strip() for step_id, title, _sources in guide_steps}
     sentences = {step_id: _guide_sentences(spans_of_step) for step_id, spans_of_step in step_spans.items()}
     # 手順の item の候補（index と、引用が含む手順の語の数）と、主の操作の文の語の数・その文が語で 1 つに決まるか。
@@ -3315,6 +3340,8 @@ def guide_step_coverage(
             status = GUIDE_STEP_REFERENCE_ONLY
         elif step_spans[step_id]:
             status = GUIDE_STEP_UNUSED
+        elif step_id in unknown:
+            status = GUIDE_STEP_NOT_SEARCHED
         else:
             status = GUIDE_STEP_NO_EVIDENCE
         coverage.append(
@@ -3328,7 +3355,7 @@ def guide_step_coverage(
                 ],
             }
         )
-    return coverage
+    return coverage, assigned
 
 
 def unexplained_guide_steps(coverage: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -3342,6 +3369,8 @@ def guide_step_gap_line(step: dict[str, Any]) -> str:
         return (
             f"業務ガイドの手順「{step['title']}」は、資料の記載を参考情報として示しただけで、行う操作として確かめた説明になっていません。"
         )
+    if step.get("status") == GUIDE_STEP_NOT_SEARCHED:
+        return f"業務ガイドの手順「{step['title']}」は、手順ごとの検索を時間・回数の上限で打ち切ったため、資料で確かめていません。"
     return f"業務ガイドの手順「{step['title']}」は、取得した資料で説明を確かめられませんでした。"
 
 
@@ -3448,6 +3477,7 @@ def run_round(
     guide_optional_steps: Sequence[str] = (),
     guide_step_terms: Mapping[str, Sequence[str]] | None = None,
     guide_step_semantics: GuideStepSemantics | None = None,
+    guide_unsearched_steps: Sequence[str] = (),
 ) -> Round:
     """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -3463,7 +3493,8 @@ def run_round(
     （`guide_step_coverage`。#2491）を round に持つ。``guide_optional_steps`` は充足で必須に数えない手順の id、
     ``guide_step_terms`` は手順ごとの検索の手がかり（共有の根拠の item を手順に対応付ける語。#2649）。
     ``guide_step_semantics`` は共有の根拠の item を語で決められないときに意味の近さで決める embedding（回答の中で
-    round をまたいで再利用する。None は語の判定だけ。#2649）。
+    round をまたいで再利用する。None は語の判定だけ。#2649）。``guide_unsearched_steps`` は手順ごとの検索を打ち切って
+    検索しなかった手順（#2706）。
     """
     audit_settings = settings if audit_settings is None else audit_settings
     audit_system = audit_system_prompt(compact_reasons=compact_audit_reasons)
@@ -3666,7 +3697,9 @@ def run_round(
         timing=timing,
         applications=applications,
         guide_steps=(
-            guide_step_coverage(guide_steps, checked, spans, guide_optional_steps, guide_step_terms, guide_step_semantics)
+            guide_step_coverage(
+                guide_steps, checked, spans, guide_optional_steps, guide_step_terms, guide_step_semantics, guide_unsearched_steps
+            )
             if guide_steps
             else []
         ),

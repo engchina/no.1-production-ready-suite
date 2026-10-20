@@ -425,12 +425,14 @@ class SupportGuideApi {
             },
           ],
           clarifications: [],
-          // 手順ごとの充足（#2686）。手順 2 は原文だけ・分岐の手順 3 は必須ではない。
+          // 手順ごとの充足（#2686）。手順 2 は原文だけ・分岐の手順 3 は必須ではない・手順 4 は手順ごとの検索を
+          // 打ち切って検索しなかった（#2706）。
           steps: this.tryUsesDraft
             ? [
                 { step_id: "step1", title: "本人であることを確かめる", status: "explained", required: true },
                 { step_id: "step2", title: "再設定の画面を案内する", status: "reference_only", required: true },
                 { step_id: "step3", title: "別の窓口を案内する", status: "unused", required: false },
+                { step_id: "step4", title: "完了を知らせる", status: "not_searched", required: true },
               ]
             : [],
           elapsed_ms: 4200,
@@ -1038,15 +1040,16 @@ for (const theme of ["light", "dark"] as const) {
     // 手順ごとの充足（#2686）。説明できていない必須の手順の数と、手順ごとの状態を文言で示す。
     const steps = result.getByTestId("support-guide-try-steps");
     await expect(steps.getByTestId("support-guide-try-steps-missing")).toHaveText(
-      "必須の手順のうち 1 件を、回答で説明できていません。",
+      "必須の手順のうち 2 件を、回答で説明できていません。",
     );
     const stepRows = steps.getByTestId("support-guide-try-step");
-    await expect(stepRows).toHaveCount(3);
+    await expect(stepRows).toHaveCount(4);
     await expect(stepRows.nth(0)).toContainText("本人であることを確かめる");
     await expect(stepRows.nth(0)).toContainText("説明した");
     await expect(stepRows.nth(1)).toContainText("資料の原文だけ");
     await expect(stepRows.nth(2)).toContainText("説明していない");
     await expect(stepRows.nth(2)).toContainText("分岐の手順（必須ではない）");
+    await expect(stepRows.nth(3)).toContainText("検索を打ち切った");
     await expect(result).toContainText("ポータルの「パスワードを忘れた」から再設定します。");
     // AI に渡した件数と内訳は検索・チャットと同じ表示（#2040）。
     await expect(result.getByRole("heading", { name: /^AI に渡した 1 件/ })).toBeVisible();

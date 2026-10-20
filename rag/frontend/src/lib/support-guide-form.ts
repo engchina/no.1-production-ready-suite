@@ -781,6 +781,7 @@ export const SUPPORT_GUIDE_STEP_STATUS_VARIANT = {
   reference_only: "warning",
   unused: "warning",
   no_evidence: "danger",
+  not_searched: "warning",
 } as const satisfies Record<SupportGuideStepStatus, string>;
 
 /** 試すときに値を選べる条件の選択肢（選択・はい / いいえ）。文字の条件は入力欄にする。 */
