@@ -9,6 +9,9 @@
 - `chat_attachment_read_section`: 節の本文を `READ_SECTION_CHARACTERS` 文字ずつ。
 - `chat_attachment_read_rows`: シートの行を「列名 → 値」で `READ_ROWS_MAX` 行まで。
 - `chat_attachment_find`: 文字の一致で節と行を探す。
+- `chat_attachment_view_image`: 画像の原本を、質問に必要な観点（`focus`）とともに読む（#2652）。
+  この中核は画像の参照と原本のバイト列を返し、モデルの入力に画像を渡すのは製品（Agent の
+  ツールの結果の画像。#2650）。画像の解釈は質問ごとにモデルが行い、原本だけをキーに再利用しない。
 """
 
 from __future__ import annotations
@@ -31,11 +34,13 @@ LIST_TOOL_NAME: Final = "chat_attachment_list"
 READ_SECTION_TOOL_NAME: Final = "chat_attachment_read_section"
 READ_ROWS_TOOL_NAME: Final = "chat_attachment_read_rows"
 FIND_TOOL_NAME: Final = "chat_attachment_find"
+VIEW_IMAGE_TOOL_NAME: Final = "chat_attachment_view_image"
 CHAT_ATTACHMENT_TOOL_NAMES: Final = (
     LIST_TOOL_NAME,
     READ_SECTION_TOOL_NAME,
     READ_ROWS_TOOL_NAME,
     FIND_TOOL_NAME,
+    VIEW_IMAGE_TOOL_NAME,
 )
 READ_SECTION_CHARACTERS: Final = 8_000
 READ_ROWS_MAX: Final = 200
@@ -144,7 +149,36 @@ CHAT_ATTACHMENT_TOOL_SPECS: Final[tuple[ChatAttachmentToolSpec, ...]] = (
             "additionalProperties": False,
         },
     ),
+    ChatAttachmentToolSpec(
+        name=VIEW_IMAGE_TOOL_NAME,
+        description=(
+            "添付の画像（kind が image）の原画像を読む。画像の中の文字・図・表・画面の細部を、"
+            "質問に照らして確かめるときに使う。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "attachment_id": _ATTACHMENT_ID,
+                "focus": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "画像で確かめたいこと（質問に答えるのに要る観点を具体的に）。",
+                },
+            },
+            "required": ["attachment_id", "focus"],
+            "additionalProperties": False,
+        },
+    ),
 )
+
+
+@dataclass(frozen=True)
+class AttachmentImage:
+    """`chat_attachment_view_image` の結果（文字の結果と、原画像のバイト列）。"""
+
+    output: dict[str, Any]
+    data: bytes
+    media_type: str
 
 
 class ChatAttachmentToolError(ValueError):
@@ -211,10 +245,13 @@ class ChatAttachmentToolset:
         self,
         records: Sequence[ChatAttachmentRecord],
         load: Callable[[str], AttachmentReadResult],
+        content: Callable[[str], bytes | None] = lambda _attachment_id: None,
     ) -> None:
         self._records = {record.attachment_id: record for record in records}
         self._order = [record.attachment_id for record in records]
         self._load = load
+        # 原本（期限内の行だけ。画像を読むツールが使う）。
+        self._content = content
         self._ready: dict[str, AttachmentReadResult] = {}
 
     @property
@@ -263,6 +300,10 @@ class ChatAttachmentToolset:
                 _int_argument(arguments, "start_row", minimum=1),
                 _int_argument(arguments, "limit", minimum=1, maximum=READ_ROWS_MAX),
             )
+        if name == VIEW_IMAGE_TOOL_NAME:
+            return self.view_image(
+                _str_argument(arguments, "attachment_id"), _str_argument(arguments, "focus")
+            ).output
         if name == FIND_TOOL_NAME:
             attachment_id = arguments.get("attachment_id")
             if attachment_id is not None and not isinstance(attachment_id, str):
@@ -278,8 +319,19 @@ class ChatAttachmentToolset:
         return {"attachments": [self._listed(attachment_id) for attachment_id in self._order]}
 
     def _listed(self, attachment_id: str) -> dict[str, Any]:
-        result = self.read(attachment_id)
         record = self._records[attachment_id]
+        if record.kind == "image" and attachment_id not in self._ready:
+            # 画像は一覧で読み取らない（原画像は `chat_attachment_view_image` で質問に応じて読む）。
+            return {
+                "attachment_id": record.attachment_id,
+                "file_name": record.file_name,
+                "kind": record.kind,
+                "size_bytes": record.size_bytes,
+                "media_type": record.media_type,
+                "parse_status": record.outline.parse_status,
+                "message": f"原画像は {VIEW_IMAGE_TOOL_NAME} で読めます。",
+            }
+        result = self.read(attachment_id)
         item: dict[str, Any] = {
             "attachment_id": record.attachment_id,
             "file_name": record.file_name,
@@ -382,6 +434,10 @@ class ChatAttachmentToolset:
         truncated = False
         for target in targets:
             if attachment_id is None:
+                record = self._records[target]
+                if record.kind == "image" and record.outline.parse_status != "ready":
+                    # 読み取っていない画像は文字で探さない（原画像は画像を読むツールで）。
+                    continue
                 result = self.read(target)
                 if result.status != "ready":
                     unreadable.append(
@@ -448,6 +504,35 @@ class ChatAttachmentToolset:
         if unreadable:
             found["unreadable"] = unreadable
         return found
+
+    def view_image(self, attachment_id: str, focus: str) -> AttachmentImage:
+        """画像の原本と参照（送信した期限内の画像だけ。解釈はしない）。"""
+        record = self._records.get(attachment_id)
+        if record is None:
+            raise ChatAttachmentToolError(
+                "この会話に無い attachment_id です。"
+                "chat_attachment_list の attachment_id を指定してください。"
+            )
+        if record.kind != "image":
+            raise ChatAttachmentToolError(
+                "この添付は画像ではありません。chat_attachment_read_section か "
+                "chat_attachment_read_rows で読んでください。"
+            )
+        data = self._content(attachment_id)
+        if data is None:
+            raise ChatAttachmentToolError("添付ファイルの期限が切れたか、削除されています。")
+        return AttachmentImage(
+            output={
+                "attachment_id": attachment_id,
+                "file_name": record.file_name,
+                "kind": record.kind,
+                "media_type": record.media_type,
+                "content_sha256": record.content_sha256,
+                "focus": focus,
+            },
+            data=data,
+            media_type=record.media_type,
+        )
 
     def index_lines(self) -> list[str]:
         """モデルへ渡す索引（1 つの添付 = 1 行。本文は入れない）。"""

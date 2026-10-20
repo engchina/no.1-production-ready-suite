@@ -430,7 +430,16 @@ class ChatAttachmentService:
         """
         if not self.enabled():
             return ChatAttachmentToolset([], self.ensure_parsed)
-        return ChatAttachmentToolset(self.conversation_records(conversation_id), self.ensure_parsed)
+        return ChatAttachmentToolset(
+            self.conversation_records(conversation_id), self.ensure_parsed, self.content
+        )
+
+    def content(self, attachment_id: str) -> bytes | None:
+        """送信した期限内の添付の原本（会話の権限は製品が確かめる。無ければ None）。"""
+        record = self.store.get(attachment_id)
+        if record is None or record.product != self.product or record.expires_at <= self._clock():
+            return None
+        return self.store.content(attachment_id)
 
     async def ensure_parsed_async(self, attachment_id: str) -> AttachmentReadResult:
         """`ensure_parsed` を thread で実行する（event loop を止めない）。"""

@@ -35,6 +35,7 @@ from pr_system_settings.chat_attachments.tools import (
     LIST_TOOL_NAME,
     READ_ROWS_TOOL_NAME,
     READ_SECTION_TOOL_NAME,
+    VIEW_IMAGE_TOOL_NAME,
 )
 
 from app.features.agent.answer_passages import passage_spans
@@ -202,11 +203,17 @@ def attachment_evidence(steps: Sequence[RunStep]) -> list[JsonObject]:
         if item["chunk_id"] not in items and len(items) < MAX_ANSWER_EVIDENCE:
             items[item["chunk_id"]] = item
 
-    read_tools = frozenset({READ_SECTION_TOOL_NAME, READ_ROWS_TOOL_NAME, FIND_TOOL_NAME})
+    read_tools = frozenset(
+        {READ_SECTION_TOOL_NAME, READ_ROWS_TOOL_NAME, FIND_TOOL_NAME, VIEW_IMAGE_TOOL_NAME}
+    )
     for name, output in _completed_outputs(steps, read_tools):
         if not isinstance(output, Mapping):
             continue
-        if name == READ_SECTION_TOOL_NAME:
+        if name == VIEW_IMAGE_TOOL_NAME:
+            image = _image_evidence(output)
+            if image is not None:
+                add(image)
+        elif name == READ_SECTION_TOOL_NAME:
             attachment_id, section_id = output.get("attachment_id"), output.get("section_id")
             content = output.get("content")
             if not isinstance(attachment_id, str) or not isinstance(section_id, str):
@@ -283,6 +290,44 @@ def attachment_evidence(steps: Sequence[RunStep]) -> list[JsonObject]:
                         )
                     )
     return list(items.values())
+
+
+def _image_evidence(output: Mapping[str, Any]) -> JsonObject | None:
+    """画像の原本を読んだ根拠（#2652）。モデルへ届いた画像か、Vision モデルが読んだ文だけ。
+
+    モデルに渡らなかった画像（非対応・上限）は読んだ扱いにしない。
+    """
+    attachment_id, sha = output.get("attachment_id"), output.get("content_sha256")
+    if not isinstance(attachment_id, str) or not isinstance(sha, str):
+        return None
+    focus = str(output.get("focus") or "")
+    refs = [ref for ref in output.get("content_images") or [] if isinstance(ref, Mapping)]
+    delivered = [ref for ref in refs if ref.get("model_input") == "attached"]
+    reading = output.get("content")
+    if delivered:
+        text = f"原画像（観点: {focus}）"
+        provenance: JsonObject = {
+            "image_id": delivered[0].get("image_id"),
+            "model_input": "attached",
+        }
+    elif isinstance(reading, str) and reading.strip():
+        text = reading
+        provenance = {
+            "read_by": output.get("read_by"),
+            "content_source": output.get("content_source"),
+        }
+    else:
+        return None
+    item = _attachment_item(
+        attachment_id,
+        str(output.get("file_name") or attachment_id),
+        f"{ATTACHMENT_DOCUMENT_PREFIX}{attachment_id}:image:{sha[:16]}",
+        text,
+        locator={},
+        content_kind="image",
+    )
+    item["image_reading"] = {**provenance, "focus": focus, "content_sha256": sha}
+    return item
 
 
 # ファイル名の照合で同じとみなすダッシュ（モデルは「-」を「‑」などに書き換えることがある）。
@@ -398,6 +443,9 @@ def answer_evidence(
         section = item.get("section")
         if isinstance(section, Mapping) and isinstance(section.get("title"), str):
             view["section_title"] = section["title"]
+        if isinstance(item.get("image_reading"), Mapping):
+            # 画像を読んだ由来（モデルへ届いた画像か、読んだ Vision モデルと観点。#2652）。
+            view["image_reading"] = dict(item["image_reading"])
         view["cited"] = _attachment_cited(answer, str(item.get("file_name") or ""))
         view["answer_use"] = None
         items.append(view)

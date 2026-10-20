@@ -55,12 +55,16 @@ from .store import (
 from .tools import (
     CHAT_ATTACHMENT_TOOL_NAMES,
     CHAT_ATTACHMENT_TOOL_SPECS,
+    VIEW_IMAGE_TOOL_NAME,
+    AttachmentImage,
     ChatAttachmentToolError,
     ChatAttachmentToolset,
     ChatAttachmentToolSpec,
 )
 
 __all__ = [
+    "VIEW_IMAGE_TOOL_NAME",
+    "AttachmentImage",
     "AttachmentParseState",
     "AttachmentReadResult",
     "CHAT_ATTACHMENT_SETTINGS_TABLE",

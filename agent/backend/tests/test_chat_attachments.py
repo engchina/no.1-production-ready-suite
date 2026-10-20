@@ -11,8 +11,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
+import json
+import struct
 from collections.abc import Iterator
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -30,6 +33,7 @@ from pytest import MonkeyPatch
 from security_support import client, enable_production_auth, login
 
 from app.features.agent import builtin_runtime, router
+from app.features.agent import chat_attachments as attachment_module
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.chat_attachments import set_chat_attachment_service
 from app.features.agent.runtime import (
@@ -205,7 +209,7 @@ def test_deleting_thread_deletes_its_attachments(setup: Setup) -> None:
     assert setup.service.store.get(item["attachment_id"]) is None
 
 
-def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
+def _script(monkeypatch: MonkeyPatch, *steps: Any, vision: bool = False) -> ScriptedModel:
     model = ScriptedModel(list(steps))
     monkeypatch.setattr(
         builtin_runtime,
@@ -215,15 +219,18 @@ def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
             endpoint="https://oci.example",
             project_ocid="",
             api_key="k",
+            vision_enabled=vision,
         ),
     )
     monkeypatch.setattr(builtin_runtime, "model_factory", lambda _target: model)
     return model
 
 
-def _run_with_attachment(setup: Setup) -> tuple[str, str]:
+def _run_with_attachment(
+    setup: Setup, file_name: str = "a.csv", data: bytes = CSV
+) -> tuple[str, str]:
     principal = _Principal(setup.alice)
-    item = asyncio.run(setup.service.upload(principal, file_name="a.csv", data=CSV))
+    item = asyncio.run(setup.service.upload(principal, file_name=file_name, data=data))
     references = setup.service.prepare_attachments(
         principal, [item.attachment_id], conversation_id=None
     )
@@ -382,3 +389,122 @@ def test_settings_default_disabled_and_admin_enables(monkeypatch: MonkeyPatch) -
     finally:
         set_chat_attachment_service(None)
         set_security_service(None)
+
+
+# ---- 画像の原本（#2652。ツールの結果の画像は #2650 の仕組みでモデルへ渡す） ----
+
+# 4 × 3 px の PNG のヘッダー（中身は合成。モデルへは原本のバイト列をそのまま渡す）。
+PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + struct.pack(">II", 4, 3) + b"\x08\x02\x00\x00\x00"
+
+
+def _function_output(model_input: Any, call_id: str) -> Any:
+    for item in model_input if isinstance(model_input, list) else []:
+        data = item if isinstance(item, dict) else item.model_dump()
+        if data.get("type") == "function_call_output" and data.get("call_id") == call_id:
+            return data["output"]
+    raise AssertionError(f"{call_id} の結果がモデルの入力にありません")
+
+
+def _view(attachment_id: str, focus: str, call_id: str) -> Any:
+    return function_call(
+        "chat_attachment_view_image",
+        {"attachment_id": attachment_id, "focus": focus},
+        call_id=call_id,
+    )
+
+
+def test_image_model_receives_the_original_for_each_question(
+    setup: Setup, monkeypatch: MonkeyPatch
+) -> None:
+    """画像に対応するモデルには、観点ごとに原画像そのものを渡す（前の解釈を使い回さない）。"""
+    vision_calls: list[str] = []
+    monkeypatch.setattr(
+        attachment_module, "_image_reader", lambda prompt="": vision_calls.append(prompt)
+    )
+    run_id, attachment_id = _run_with_attachment(setup, "a.png", PNG)
+    model = _script(
+        monkeypatch,
+        [_view(attachment_id, "左上の数値", "call-1")],
+        [_view(attachment_id, "凡例の色", "call-2")],
+        [assistant_message("a.png の左上の数値と凡例を確かめました。")],
+        vision=True,
+    )
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    expected = f"data:image/png;base64,{base64.b64encode(PNG).decode()}"
+    for index, call_id in ((1, "call-1"), (2, "call-2")):
+        output = _function_output(model.calls[index].input, call_id)
+        assert isinstance(output, list)
+        assert [part["type"] for part in output] == ["input_text", "input_image"]
+        assert output[1]["image_url"] == expected
+    first = json.loads(_function_output(model.calls[1].input, "call-1")[0]["text"])
+    second = json.loads(_function_output(model.calls[2].input, "call-2")[0]["text"])
+    assert (first["focus"], second["focus"]) == ("左上の数値", "凡例の色")
+    assert first["content_images"][0]["model_input"] == "attached"
+    # 既定の Vision モデルは呼ばない（読むのは Run のモデル）。base64 は Run に残さない。
+    assert vision_calls == []
+    assert base64.b64encode(PNG).decode() not in run.model_dump_json()
+    evidence = next(item for item in run.artifacts if item.kind == "answer_evidence")
+    [image] = evidence.content["items"]
+    assert image["content_kind"] == "image"
+    assert image["image_reading"]["model_input"] == "attached"
+
+
+def test_non_image_model_reads_with_default_vision_model_and_focus(
+    setup: Setup, monkeypatch: MonkeyPatch
+) -> None:
+    """Run のモデルが画像に対応しなければ、観点を添えて既定の Vision モデルで読み、由来を残す。"""
+    prompts: list[str] = []
+
+    def reader(prompt: str = "") -> Any:
+        async def read(data: bytes, media_type: str) -> str:
+            prompts.append(prompt)
+            assert data == PNG and media_type == "image/png"
+            return "左上の数値は 42"
+
+        return read
+
+    monkeypatch.setattr(attachment_module, "_image_model_id", lambda: "vision-model-a")
+    monkeypatch.setattr(attachment_module, "_image_reader", reader)
+    run_id, attachment_id = _run_with_attachment(setup, "a.png", PNG)
+    model = _script(
+        monkeypatch,
+        [_view(attachment_id, "左上の数値", "call-1")],
+        [assistant_message("a.png の左上の数値は 42 です。")],
+    )
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    output = json.loads(_function_output(model.calls[1].input, "call-1"))
+    assert output["content"] == "左上の数値は 42"
+    assert (output["content_source"], output["read_by"]) == ("vision_reading", "vision-model-a")
+    assert len(prompts) == 1 and "観点: 左上の数値" in prompts[0]
+    evidence = next(item for item in run.artifacts if item.kind == "answer_evidence")
+    [image] = evidence.content["items"]
+    assert image["image_reading"]["read_by"] == "vision-model-a"
+
+
+def test_image_without_any_image_model_is_reported_as_not_read(
+    setup: Setup, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.setattr(attachment_module, "_image_model_id", lambda: None)
+    run_id, attachment_id = _run_with_attachment(setup, "a.png", PNG)
+    model = _script(
+        monkeypatch,
+        [_view(attachment_id, "左上の数値", "call-1")],
+        [assistant_message("画像は確認できませんでした。")],
+    )
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    output = json.loads(_function_output(model.calls[1].input, "call-1"))
+    assert output["content_images"][0]["model_input"] == "unsupported_model"
+    assert "画像を読めていません" in output["image_input_note"]
+    run = runtime_repository.get_run(run_id)
+    evidence = [item for item in run.artifacts if item.kind == "answer_evidence"]
+    assert all(not artifact.content.get("items") for artifact in evidence)

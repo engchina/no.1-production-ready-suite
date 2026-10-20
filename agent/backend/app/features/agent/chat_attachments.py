@@ -5,6 +5,10 @@
 - 会話（thread）の持ち主の判定（添付の API の `conversation_owner`）。
 - 画像の読み取り（既定の Vision モデル。OCI Enterprise AI の Responses API）。送信した後、ツールが
   画像を初めて読むときに呼ぶ（アップロードでは呼ばない。#2652）。
+- 画像の原本（`chat_attachment_view_image`）: モデルが画像に対応すれば、原画像をツールの結果の
+  画像（#2650 の `ToolOutputWithImages`）としてモデルの入力へ渡す。対応しなければ、質問の観点
+  （`focus`）を添えて既定の Vision モデルで読み、読んだモデルと観点を結果に残す（質問ごとに読み、
+  原本だけをキーに再利用しない）。Vision モデルも無ければ、読めなかったことを結果で示す。
 - Run に渡すツール: 会話に送信した添付があれば、その Run にだけ 4 つの添付のツール
   （`chat_attachment_list` など）を Control Plane のツールとして渡す（`skill_reference_read` と
   同じ per-run のツール。`tool_registry.invoke` のポリシー・監査を通す）。指示には添付の種類と
@@ -13,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import threading
@@ -26,7 +31,7 @@ from pr_system_settings.chat_attachments import (
     ChatAttachmentToolError,
     ChatAttachmentToolset,
 )
-from pr_system_settings.chat_attachments.tools import LIST_TOOL_NAME
+from pr_system_settings.chat_attachments.tools import LIST_TOOL_NAME, VIEW_IMAGE_TOOL_NAME
 from pr_system_settings.model import (
     enterprise_ai_connection_for_model,
     enterprise_ai_output_token_budget,
@@ -35,6 +40,7 @@ from pr_system_settings.model import (
     seed_payload,
 )
 
+from app.features.agent.tool_media import CONTENT_IMAGES_KEY, ToolImage, ToolOutputWithImages
 from app.features.agent.tools import ToolDefinition, ToolHandler, ToolInvocationContext
 from app.settings import get_settings
 
@@ -47,6 +53,19 @@ ATTACHMENT_READ_TOOLS = frozenset(
 ATTACHMENT_TOOL_NAMES = frozenset(spec.name for spec in CHAT_ATTACHMENT_TOOL_SPECS)
 # 画像の読み取りの応答の待ち時間（秒）。
 IMAGE_READ_TIMEOUT_SECONDS = 120.0
+# 原画像を Vision モデルで読んだ結果の由来（モデルが画像に対応しないとき。#2652）。
+VISION_READING_SOURCE = "vision_reading"
+
+
+def focused_image_prompt(focus: str) -> str:
+    """質問の観点で画像を読む指示（モデルが画像に対応しないときの既定の Vision モデル）。"""
+    return (
+        "次の観点について、この画像に見える内容を日本語で書き出してください。"
+        "画像の中の文字・数値はそのまま書き写してください。"
+        "読み取れない部分は読み取れないと書き、推測で補わないでください。\n"
+        f"観点: {focus}"
+    )
+
 
 _SERVICE: ChatAttachmentService | None = None
 _SERVICE_LOCK = threading.Lock()
@@ -61,7 +80,9 @@ def _image_model_id() -> str | None:
     return str(model_id)
 
 
-def _image_reader() -> Callable[[bytes, str], Awaitable[str]] | None:
+def _image_reader(
+    prompt: str = IMAGE_READING_PROMPT,
+) -> Callable[[bytes, str], Awaitable[str]] | None:
     """既定の Vision モデルで画像を文にする関数（Vision モデル・接続が無ければ None）。"""
     settings = get_settings()
     model_id = _image_model_id()
@@ -90,7 +111,7 @@ def _image_reader() -> Callable[[bytes, str], Awaitable[str]] | None:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "input_text", "text": IMAGE_READING_PROMPT},
+                        {"type": "input_text", "text": prompt},
                         {"type": "input_image", "image_url": image_url, "detail": "auto"},
                     ],
                 }
@@ -118,7 +139,7 @@ def chat_attachment_service() -> ChatAttachmentService:
                     security.chat_attachment_store,
                     product="agent",
                     settings=get_settings,
-                    image_reader=_image_reader,
+                    image_reader=lambda: _image_reader(),
                     image_model_id=_image_model_id,
                     # 運用設定 › チャットの添付（製品ごと。既定は無効）。
                     enabled=security.chat_attachment_settings.enabled,
@@ -149,8 +170,67 @@ def thread_attachment_toolset(thread_id: str | None) -> ChatAttachmentToolset | 
     return toolset if toolset else None
 
 
-def attachment_tools(toolset: ChatAttachmentToolset) -> list[tuple[ToolDefinition, ToolHandler]]:
-    """添付のツールを Run の function tool の定義と handler にする。"""
+async def _await(value: Awaitable[str]) -> str:
+    return await value
+
+
+def view_image(
+    toolset: ChatAttachmentToolset, arguments: dict[str, Any], *, image_input: bool
+) -> ToolOutputWithImages | dict[str, Any]:
+    """画像の原本を読む（`chat_attachment_view_image`。#2652）。
+
+    モデルが画像に対応すれば原画像を結果の画像としてモデルへ渡す（届ける判断・予算・保存からの
+    除外は #2650 の Runtime の仕組み）。対応しなければ、既定の Vision モデルで観点を添えて読む。
+    どちらも無ければ画像を結果に付け、Runtime がモデルの非対応を結果に書く。
+    """
+    image = toolset.view_image(
+        str(arguments.get("attachment_id") or ""), str(arguments.get("focus") or "")
+    )
+    record_source = {
+        "chat_attachment_id": image.output["attachment_id"],
+        "file_name": image.output["file_name"],
+        "content_sha256": image.output["content_sha256"],
+    }
+    original_image = ToolImage(data=image.data, mime_type=image.media_type, source=record_source)
+    original = ToolOutputWithImages(
+        output={**image.output, CONTENT_IMAGES_KEY: [original_image.reference()]},
+        images=(original_image,),
+    )
+    if image_input:
+        return original
+    model_id = _image_model_id()
+    reader = _image_reader(focused_image_prompt(image.output["focus"])) if model_id else None
+    if reader is None:
+        return original
+    try:
+        # handler は thread で呼ばれる（`tool_registry.invoke`）ので、その thread で読む。
+        text = asyncio.run(_await(reader(image.data, image.media_type))).strip()
+    except Exception as exc:  # noqa: BLE001 - 読めなければ読めなかったことを返す
+        logger.warning(
+            "agent_chat_attachment_image_read_failed",
+            extra={
+                "attachment_id": image.output["attachment_id"],
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise ValueError(
+            "画像を読み取れませんでした。画像の内容は確認できていないものとして扱ってください。"
+        ) from exc
+    return {
+        **image.output,
+        "content_source": VISION_READING_SOURCE,
+        "read_by": model_id,
+        "content": text or "画像から、この観点の内容を読み取れませんでした。",
+    }
+
+
+def attachment_tools(
+    toolset: ChatAttachmentToolset, *, image_input: bool = False
+) -> list[tuple[ToolDefinition, ToolHandler]]:
+    """添付のツールを Run の function tool の定義と handler にする。
+
+    `image_input` は Run のモデルが画像の入力に対応するか（画像の原本の渡し方を決める）。
+    """
     entries: list[tuple[ToolDefinition, ToolHandler]] = []
     for spec in CHAT_ATTACHMENT_TOOL_SPECS:
 
@@ -159,8 +239,10 @@ def attachment_tools(toolset: ChatAttachmentToolset) -> list[tuple[ToolDefinitio
             _: ToolInvocationContext,
             *,
             _name: str = spec.name,
-        ) -> dict[str, Any]:
+        ) -> dict[str, Any] | ToolOutputWithImages:
             try:
+                if _name == VIEW_IMAGE_TOOL_NAME:
+                    return view_image(toolset, arguments, image_input=image_input)
                 return toolset.call(_name, arguments)
             except ChatAttachmentToolError as exc:
                 raise ValueError(str(exc)) from exc

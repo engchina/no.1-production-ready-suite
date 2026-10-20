@@ -24,6 +24,7 @@ from chat_attachment_fixtures import PNG_BYTES, docx_bytes, pdf_bytes, pptx_byte
 from pr_system_settings.chat_attachments import (
     ChatAttachmentError,
     ChatAttachmentService,
+    ChatAttachmentToolError,
     InMemoryChatAttachmentStore,
     parsing,
 )
@@ -171,10 +172,15 @@ def test_image_upload_succeeds_without_vision_model(calls: _Calls) -> None:
     assert service.limits_data().image_enabled is False
     assert ".png" in service.limits_data().accept
     _send(service, attachment_id)
-    # 読むときにモデルが無いことを明示する（アップロードは失敗させない）。
-    result = service.toolset("c1").list_attachments()["attachments"][0]
-    assert result["parse_status"] == "failed"
-    assert "画像を読み取れるモデル" in result["message"]
+    toolset = service.toolset("c1")
+    listed = toolset.list_attachments()["attachments"][0]
+    assert (listed["parse_status"], listed["media_type"]) == ("pending", "image/png")
+    assert "chat_attachment_view_image" in listed["message"]
+    # 文字の読み取りは、読むときにモデルが無いことを明示する（アップロードは失敗させない）。
+    with pytest.raises(ChatAttachmentToolError, match="画像を読み取れるモデル"):
+        toolset.parsed(attachment_id)
+    # 原画像はモデルが無くても渡せる（モデルへの入力は製品が決める）。
+    assert toolset.view_image(attachment_id, "表の見出し").data == PNG_BYTES
     assert calls.vision == []
 
 
@@ -518,7 +524,8 @@ def test_image_is_read_after_send_and_reused_per_model(calls: _Calls) -> None:
     _send(service, attachment_id)
     toolset = service.toolset("c1")
     listed = toolset.list_attachments()["attachments"][0]
-    assert listed["content_source"] == IMAGE_TRANSCRIPTION_SOURCE
+    # 一覧では読み取らない（汎用の文字の読み取りは、節を読むときだけ）。
+    assert listed["parse_status"] == "pending" and calls.vision == []
     section = toolset.call(
         "chat_attachment_read_section",
         {"attachment_id": attachment_id, "section_id": "s1", "offset": 0},
@@ -533,6 +540,33 @@ def test_image_is_read_after_send_and_reused_per_model(calls: _Calls) -> None:
     assert result.parsed is not None and result.parsed.extractor is not None
     assert result.parsed.extractor.startswith("vision:vision-model-b@")
     assert calls.vision == ["vision-model-a", "vision-model-b"]
+
+
+def test_view_image_returns_the_original_for_each_focus_without_reusing_a_reading(
+    calls: _Calls,
+) -> None:
+    """原画像は質問の観点ごとにそのまま返す（前の解釈を原画像の代わりに使い回さない）。"""
+    service = _service(calls)
+    attachment_id = _upload(service, "a.png", PNG_BYTES)
+    unsent = _upload(service, "b.png", PNG_BYTES)
+    _send(service, attachment_id)
+    toolset = service.toolset("c1")
+
+    first = toolset.view_image(attachment_id, "左上の数値")
+    second = toolset.call(
+        "chat_attachment_view_image", {"attachment_id": attachment_id, "focus": "凡例の色"}
+    )
+
+    assert first.data == PNG_BYTES and first.media_type == "image/png"
+    assert first.output["focus"] == "左上の数値" and second["focus"] == "凡例の色"
+    record = service.store.get(attachment_id)
+    assert record is not None and second["content_sha256"] == record.content_sha256
+    assert calls.vision == []
+    with pytest.raises(ChatAttachmentToolError, match="この会話に無い"):
+        toolset.view_image(unsent, "x")
+    service.delete(ALICE, attachment_id)
+    with pytest.raises(ChatAttachmentToolError, match="期限が切れたか、削除"):
+        toolset.view_image(attachment_id, "x")
 
 
 def test_image_read_from_event_loop_does_not_block_on_nested_loop(calls: _Calls) -> None:
