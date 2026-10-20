@@ -1846,3 +1846,51 @@ async def test_ingest_audit_uses_given_document_source_instead_of_input_bytes(
     assert [event["outcome"] for event in events] == ["error"]
     assert events[0]["source_sha256"] == "b" * 64
     assert events[0]["source_bytes"] == 4096
+
+
+async def test_pipeline_releases_heavy_slot_after_parse_before_llm_stages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """重い段の枠を返すのは、解析・図表の読み取りの後、見出しの推定・項目抽出の前に 1 回(#2702)。"""
+    from app.rag.ingestion_slots import heavy_slot_releaser
+
+    pipeline = IngestionPipeline(
+        vlm=CapturingVlm(),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, FakeOracle()),
+        object_storage=cast(Any, FakeObjectStorage()),
+        settings=Settings(
+            rag_field_extraction_enabled=False,
+            rag_parser_adapter_backend="local",
+            rag_review_gate_enabled=False,
+            rag_auto_parse_after_preprocess_enabled=True,
+        ),
+    )
+    events: list[str] = []
+
+    def record(name: str, method: Any) -> Any:
+        async def wrapped(*args: Any, **kwargs: Any) -> Any:
+            events.append(name)
+            return await method(*args, **kwargs)
+
+        return wrapped
+
+    for name in ("_attach_vision", "_attach_heading_levels", "_attach_extraction_fields"):
+        monkeypatch.setattr(pipeline, name, record(name, getattr(pipeline, name)))
+
+    with heavy_slot_releaser(lambda: events.append("release")):
+        detail = await pipeline.ingest(
+            "doc-heavy-slot",
+            b"pdfdata",
+            "本文を抽出してください。",
+            content_type="application/pdf",
+            source_profile=_pdf_source_profile(file_size_bytes=7),
+        )
+
+    assert detail.status == FileStatus.INDEXED
+    assert events == [
+        "_attach_vision",
+        "release",
+        "_attach_heading_levels",
+        "_attach_extraction_fields",
+    ]
