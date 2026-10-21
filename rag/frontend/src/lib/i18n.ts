@@ -263,7 +263,7 @@ export const ja = {
   "settings.parserAdapters.postParse.vision.openModel": "モデル設定を開く",
   "settings.parserAdapters.postParse.vision.prompt": "図・画像の読み取りプロンプト",
   "settings.parserAdapters.postParse.headingLevels.hint":
-    "PDF のしおりも見出しの番号も無いため階層を決められない文書だけ、見出しの文字列を OCI Enterprise AI に渡して見出しの階層（章・節の深さ）を推定し、章節の木と chunk の章節にします。対象の文書ごとにモデルの呼び出しが 1 回増えます。応答が使えないときは今の階層のまま取り込みます。",
+    "Docling の解析結果のうち、PDF のしおりの階層を使えず、番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす文書が対象です。見出しの文字列だけ（長さの上限あり）を OCI Enterprise AI にまとめて送り、章・節の深さを推定して章節の木と検索用の分割に反映します。通常は対象の文書ごとに 1 回呼び出しますが、一時的な通信障害や流量制限などで再試行する場合があります。応答が使えないときや呼び出しに失敗したときは、今の階層のまま取り込みます。",
   "settings.parserAdapters.postParse.fieldExtraction.hint":
     "解析した本文全体から、下で定義した項目（標準は文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を OCI Enterprise AI で抽出し、検索の絞り込みに使える項目にします。長い本文は分けて送り、部分ごとにモデルを呼び出します。本文が長いほど入力トークンの総量と処理時間が増えます。",
   "settings.parserAdapters.postParse.fieldExtraction.definitions": "抽出する項目の定義",
@@ -2580,7 +2580,7 @@ export const ja = {
   "knowledgeBases.adapter.field.navigationSummary": "ナビゲーション要約(章節木)",
   "knowledgeBases.adapter.field.headingLevels": "見出しの階層の推定（AI）",
   "knowledgeBases.adapter.field.headingLevels.hint":
-    "しおりも見出しの番号も無い文書だけ、見出しの文字列から見出しの階層を OCI Enterprise AI で推定します。変えると解析からやり直します。",
+    "Docling の解析結果で、しおりの階層を使えず、番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす場合に、見出しの文字列を OCI Enterprise AI にまとめて送り、階層を推定します。通常は文書ごとに 1 回で、再試行する場合があります。変えると解析からやり直します。",
   "knowledgeBases.adapter.field.entityIndex": "実体の索引",
   "knowledgeBases.adapter.field.entityIndex.hint":
     "索引の後に、表の行（ID・名称・略称など）と本文の定義の形（「略号「経」: 経理部」など）から、システム・部署などの実体とその根拠を記録します。AI は使いません。全体の既定は有効で（列の指定が無ければ列名で決めます）、使わない文書は無効にします。記録した実体を検索に使うのは、検索・回答プロファイルで「実体でつながる根拠を 1 段広げる」を有効にしたときだけです。変えると索引から作り直します。",
@@ -3881,7 +3881,7 @@ export const ja = {
     "「図・画像を AI で読み取る」を有効にしたとき（図・表の画像ごと）。指示の本体は文書解析の「図・画像の読み取りプロンプト」",
   "settings.answerPrompts.stage.heading_levels": "見出しの階層を推定する",
   "settings.answerPrompts.stage.heading_levels.condition":
-    "解析後の処理の「見出しの階層の推定（AI）」を有効にし、しおりも見出しの番号も無い文書のとき（文書ごと）",
+    "解析後の処理の「見出しの階層の推定（AI）」を有効にし、Docling の解析結果で、しおりの階層を使えず、階層が未判定の見出しの割合と見出し数が設定の条件を満たすとき（文書ごと。再試行あり）",
   "settings.answerPrompts.stage.field_extraction": "文書から項目を抽出する",
   "settings.answerPrompts.stage.field_extraction.condition":
     "解析後の処理の「メタデータ/項目抽出」を有効にしたとき（本文を分けて送る部分ごと）",

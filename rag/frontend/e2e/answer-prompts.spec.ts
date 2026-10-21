@@ -152,6 +152,10 @@ for (const viewport of [
     ]);
     // 段は区分の中に入り、開かなくても使われる条件を 1 行で示す。
     const ingestion = stages.getByRole("region", { name: "取込" });
+    const headingLevels = ingestion.getByTestId("answer-prompt-stage-heading_levels");
+    await expect(headingLevels).toContainText("Docling の解析結果で、しおりの階層を使えず");
+    await expect(headingLevels).toContainText("階層が未判定の見出しの割合と見出し数が設定の条件を満たすとき");
+    await expect(headingLevels).toContainText("文書ごと。再試行あり");
     await expect(ingestion.getByTestId("answer-prompt-stage-field_extraction")).toContainText(
       "本文を分けて送る部分ごと"
     );
@@ -277,6 +281,7 @@ const FLOW_STAGES: StageFixture[] = [
       { id: "table", content: "表の指示" },
     ],
   },
+  { id: "heading_levels", phase: "ingestion", prompts: [{ id: "instruction", content: "階層の指示" }] },
   { id: "field_extraction", phase: "ingestion", prompts: [{ id: "instruction", content: "項目の指示" }] },
   { id: "support_guide_conditions", phase: "question", prompts: [{ id: "system", content: "条件認識の system" }] },
   { id: "history_rewrite", phase: "question", prompts: [{ id: "system", content: "書き換えの system" }] },
