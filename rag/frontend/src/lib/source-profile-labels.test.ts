@@ -7,6 +7,7 @@ import {
   qualityCodeLabel,
   sourceWarningKey,
   unsupportedReasonLabel,
+  visibleSourceWarningKeys,
 } from "./source-profile-labels";
 import { t } from "./i18n";
 
@@ -28,11 +29,20 @@ describe("source profile labels", () => {
     expect(unsupportedReasonLabel("tiff_image_not_supported")).toContain("PNG/JPEG/WEBP");
     // 手で変換させず、文書レシピのファイル準備で変換を選ぶよう案内する（#2470）。
     expect(unsupportedReasonLabel("macro_enabled_office_not_supported")).toContain("マクロは実行しません");
-    expect(unsupportedReasonLabel("legacy_office_binary_not_supported")).toContain(
-      "Excel は「Excel→JSONL」"
+    expect(unsupportedReasonLabel("legacy_office_binary_not_supported")).toBe(
+      "旧形式の Office は変換が必要です（文書レシピのファイル準備で変換を選択）。"
     );
     expect(unsupportedReasonLabel("outlook_msg_not_supported")).toContain("EML");
     expect(unsupportedReasonLabel("custom_reason")).toBe("custom_reason");
+  });
+
+  it("does not repeat an unsupported reason as a warning line", () => {
+    expect(
+      visibleSourceWarningKeys(["unsupported_legacy_office_binary", "large_file"], "legacy_office_binary_not_supported")
+    ).toEqual(["sourceProfile.warning.largeFile"]);
+    expect(visibleSourceWarningKeys(["unsupported_legacy_office_binary"], null)).toEqual([
+      "sourceProfile.warning.unsupportedLegacyOffice",
+    ]);
   });
 
   it("evaluation quality labels share the same unsupported warning mapping", () => {

@@ -183,8 +183,8 @@ import {
   isSameParserBackend,
   parserBackendLabel,
   parserProfileKey,
-  sourceWarningKey,
   unsupportedReasonLabel,
+  visibleSourceWarningKeys,
 } from "@/lib/source-profile-labels";
 import {
   findTableCellTarget,
@@ -3123,7 +3123,7 @@ function SourceDerivationPanel({
  * 文書 ID は品質評価の Excel の「期待する根拠」に `文書ID:` で書けるよう、コピーできる形で出す（#2086）。
  */
 function SourceProfilePanel({ documentId, profile }: { documentId: string; profile: SourceProfile }) {
-  const warnings = profile.quality_warnings ?? [];
+  const warnings = visibleSourceWarningKeys(profile.quality_warnings ?? [], profile.unsupported_reason);
   return (
     <section className="rounded-md border border-border bg-surface-sunken p-4">
       <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
@@ -3174,7 +3174,7 @@ function SourceProfilePanel({ documentId, profile }: { documentId: string; profi
       {warnings.length > 0 ? (
         <ul className="mt-3 space-y-1 text-xs text-warning-fg">
           {warnings.map((warning) => (
-            <li key={warning}>{t(sourceWarningKey(warning))}</li>
+            <li key={warning}>{t(warning)}</li>
           ))}
         </ul>
       ) : null}

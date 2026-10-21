@@ -299,6 +299,45 @@ test("原本情報に文書 ID を出し、コピーできる（#2086）", { tag
   await expectNoPageOverflow(page);
 });
 
+// 旧形式の Office は未対応理由を 1 回だけ、短い文で出す（同じ文の警告の行を重ねない。#2834）。
+test("原本情報の未対応理由は警告の行と重ねず 1 回だけ出す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockDocumentWorkspace(page, {});
+  const detail = documentDetail();
+  await page.route("**/api/documents/doc-1", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          ...detail,
+          file_name: "legacy.doc",
+          source_profile: {
+            ...detail.source_profile,
+            original_file_name: "legacy.doc",
+            sanitized_file_name: "legacy.doc",
+            extension: ".doc",
+            content_type: "application/msword",
+            parser_profile: "unsupported_legacy_office_binary",
+            unsupported_reason: "legacy_office_binary_not_supported",
+            quality_status: "warning",
+            quality_warnings: ["unsupported_legacy_office_binary"],
+          },
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+
+  await page.goto("/documents/doc-1");
+  await page.getByText("処理の詳細(診断)").click();
+  const sourcePanel = page.getByRole("heading", { name: "原本情報" }).locator("xpath=ancestor::section[1]");
+  await expect(sourcePanel.getByText("旧 Office(要変換)")).toBeVisible();
+  const reason = "旧形式の Office は変換が必要です（文書レシピのファイル準備で変換を選択）。";
+  await expect(sourcePanel.getByText(reason, { exact: false })).toHaveCount(1);
+  await expect(sourcePanel.getByText("未対応理由", { exact: false })).toHaveCount(1);
+  await sourcePanel.screenshot({ path: testInfo.outputPath("legacy-office-reason.png") });
+  await expectNoPageOverflow(page);
+});
+
 test("処理の詳細(診断) は Chevron で開閉の状態を示し、クリック・Enter・Space で開閉できる（#397）", { tag: "@responsive" }, async ({
   page,
 }) => {

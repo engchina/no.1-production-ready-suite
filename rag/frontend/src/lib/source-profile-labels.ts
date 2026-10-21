@@ -132,6 +132,18 @@ export function unsupportedReasonLabel(reason: string | null | undefined): strin
   return key ? t(key) : reason;
 }
 
+/**
+ * 原本情報に出す警告の key。未対応理由と同じ文になる警告（旧形式・マクロ付きの Office など）は、
+ * 未対応理由の行と重ねて出さない（#2834）。
+ */
+export function visibleSourceWarningKeys(
+  warnings: readonly string[],
+  unsupportedReason: string | null | undefined
+): I18nKey[] {
+  const reason = unsupportedReasonLabel(unsupportedReason);
+  return warnings.map(sourceWarningKey).filter((key) => !reason || t(key) !== reason);
+}
+
 /** 取込 job の skip_reason（重複・未対応形式など）を利用者向けの文に直す。 */
 export function ingestionSkipReasonLabel(reason: string | null | undefined): string {
   if (reason === "duplicate_content") return t("sourceProfile.warning.duplicate");

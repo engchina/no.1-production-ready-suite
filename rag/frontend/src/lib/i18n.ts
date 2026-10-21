@@ -2771,9 +2771,9 @@ export const ja = {
   "sourceProfile.warning.unsupportedTiffImage":
     "TIFF 画像は現在の取込対象外です。PNG/JPEG/WEBP へ変換してください。",
   "sourceProfile.warning.unsupportedLegacyOffice":
-    "旧形式の Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Word は「Word→JSONL」も可、Excel は「Excel→JSONL」。マクロは実行しません)。",
+    "旧形式の Office は変換が必要です（文書レシピのファイル準備で変換を選択）。",
   "sourceProfile.warning.unsupportedMacroOffice":
-    "マクロ付きの Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Word は「Word→JSONL」も可、Excel は「Excel→JSONL」。マクロは実行しません)。",
+    "マクロ付きの Office は変換が必要です（文書レシピのファイル準備で変換を選択。マクロは実行しません）。",
   "sourceProfile.warning.parserFallback": "一部の解析で fallback が使われました。",
   "sourceProfile.warning.officeFallback": "Office のローカル解析に失敗したため fallback します。",
   "sourceProfile.warning.officeSegmentFailed": "Office の一部 segment 解析に失敗しました。",
@@ -2788,9 +2788,9 @@ export const ja = {
   "sourceProfile.unsupported.tiffImageNotSupported":
     "TIFF 画像は現在未対応です。PNG/JPEG/WEBP へ変換してください。",
   "sourceProfile.unsupported.legacyOfficeNotSupported":
-    "旧形式の Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Word は「Word→JSONL」も可、Excel は「Excel→JSONL」。マクロは実行しません)。",
+    "旧形式の Office は変換が必要です（文書レシピのファイル準備で変換を選択）。",
   "sourceProfile.unsupported.macroOfficeNotSupported":
-    "マクロ付きの Office 文書は原本のままでは解析できません。文書レシピのファイル準備で変換を選んでから取り込んでください(Word・PowerPoint は「Office→PDF」、Word は「Word→JSONL」も可、Excel は「Excel→JSONL」。マクロは実行しません)。",
+    "マクロ付きの Office は変換が必要です（文書レシピのファイル準備で変換を選択。マクロは実行しません）。",
   "sourceProfile.unsupported.unknownFileType": "対応する parser を判定できないファイル形式です。",
 
   "flow.jobs.title": "工程ごとの実行状況",
