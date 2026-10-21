@@ -1,5 +1,6 @@
 """Chunking アダプター(分割戦略)のテスト。"""
 
+import pytest
 from pytest import MonkeyPatch
 from rag_pipeline_core import chunking as core_chunking
 
@@ -335,3 +336,43 @@ def test_normalize_chunking_strategy_defaults_to_small_to_big() -> None:
     # 削除した親子階層は親子階層（small-to-big）として扱う(#271)。
     assert normalize_chunking_strategy("hierarchical_parent_child") == "small_to_big"
     assert normalize_chunking_strategy("small_to_big") == "small_to_big"
+
+
+@pytest.mark.parametrize(
+    ("text", "size", "overlap", "expected"),
+    [
+        ("abcdefghij", 8, 6, ["abcdefgh", "cdefghij"]),
+        ("abcdefgh", 8, 6, ["abcdefgh"]),
+        ("abc", 8, 6, ["abc"]),
+        ("abcdefghij", 8, 0, ["abcdefgh", "ij"]),
+        ("abcde", 4, 3, ["abcd", "bcde"]),
+        ("", 8, 6, []),
+    ],
+)
+def test_fixed_size_stops_when_the_last_window_covers_the_end(
+    text: str, size: int, overlap: int, expected: list[str]
+) -> None:
+    chunks = chunk_extraction_with_strategy(
+        StructuredExtraction(raw_text=text),
+        strategy="fixed_size",
+        chunk_size=size,
+        overlap=overlap,
+    )
+    assert [chunk.text for chunk in chunks] == expected
+    assert [chunk.index for chunk in chunks] == list(range(len(chunks)))
+    assert all(chunk.metadata["text_chars"] == len(chunk.text) for chunk in chunks)
+    covered = {offset for chunk in chunks for offset in range(chunk.start_offset, chunk.end_offset)}
+    assert covered == set(range(len(text)))
+
+
+def test_fixed_size_offsets_follow_trimmed_window_text() -> None:
+    source = "abcd efgh ijkl"
+    chunks = chunk_extraction_with_strategy(
+        StructuredExtraction(raw_text=source),
+        strategy="fixed_size",
+        chunk_size=5,
+        overlap=1,
+    )
+    assert chunks[1].text == "efgh"
+    assert (chunks[1].start_offset, chunks[1].end_offset) == (5, 9)
+    assert all(source[chunk.start_offset : chunk.end_offset] == chunk.text for chunk in chunks)
