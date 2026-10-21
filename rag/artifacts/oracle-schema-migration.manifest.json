@@ -519,10 +519,17 @@
       "sha256": "f5d5f67730151c03716f07ba00be67bd22a143a46a5cd46fbd8d8a7b28008157",
       "statement_count": 1,
       "table_name": "rag_answer_prompts"
+    },
+    {
+      "destructive": false,
+      "name": "20261021_002_document_delete_fk_indexes",
+      "sha256": "f2a022d87a58f2b8d094cf144a4e78db5d5d41b84f3d4d32aac09506a93879dd",
+      "statement_count": 1,
+      "table_name": "rag_documents"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "1e0c258e75511da21b318fc20e2fbf1dea91b01c32856a90e2602c17fc6ea952",
-  "statement_count": 105
+  "sha256": "e54416a3a25df1e31e559d22ada5ba1e4bee9b4796e7dcea607e0e15d483524c",
+  "statement_count": 106
 }

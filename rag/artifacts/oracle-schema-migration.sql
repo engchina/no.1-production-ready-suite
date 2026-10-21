@@ -3551,4 +3551,23 @@ UPDATE RAG_ANSWER_PROMPTS
 SET CONTENT = REPLACE(REPLACE(CONTENT,
     '{{images}}', '{{answer_context}}'),
     '{{image_metadata}}', '{{evidence_metadata}}')
-WHERE PROMPT_KEY = 'vlm_answer'
+WHERE PROMPT_KEY = 'vlm_answer';
+
+-- migration: 20261021_002_document_delete_fk_indexes
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_indexes
+    WHERE index_name = 'RAG_ARTIFACT_LAYERS_DOCUMENT_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX rag_artifact_layers_document_idx '
+            || 'ON rag_artifact_layers (document_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes
+    WHERE index_name = 'RAG_DOCUMENTS_DUPLICATE_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX rag_documents_duplicate_idx '
+            || 'ON rag_documents (duplicate_of_document_id)';
+    END IF;
+END;
+/

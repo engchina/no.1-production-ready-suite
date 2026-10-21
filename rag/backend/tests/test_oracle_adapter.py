@@ -2668,6 +2668,9 @@ async def test_oci_delete_document_removes_chunks_and_document_with_access_scope
     statements = [call.statement for call in pool.connection.calls]
     assert statements[0].startswith("SELECT")
     assert "document_id IN (:access_document_id_0)" in statements[0]
+    assert "ORDER BY document_id" in statements[0]
+    assert "FOR UPDATE" in statements[0]
+    assert "duplicate_of_document_id = :document_id" in statements[0]
     assert any("FROM rag_graph_entity_chunks" in statement for statement in statements)
     assert any("DELETE FROM rag_graph_entity_chunks" in statement for statement in statements)
     # 関係情報の entity が無い文書は、#621 で廃止した表を見に行かない。

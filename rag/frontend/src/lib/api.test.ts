@@ -1539,3 +1539,55 @@ describe("文書アップロードの送信（XHR）", () => {
     expect((error as ApiError).cause).toBeInstanceOf(ApiTransportError);
   });
 });
+
+describe("document delete confirmation", () => {
+  it("通信断後は DELETE を再送せず、消えた文書を確認して警告つきで返す", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError("network failure"))
+      .mockResolvedValueOnce(jsonResponse({data: {id: "doc-1"}}))
+      .mockResolvedValueOnce(jsonResponse({data: null, error_messages: ["not found"]}, 404));
+    vi.stubGlobal("fetch", fetchMock);
+    const pending = api.deleteDocument("doc-1", "sample.pdf");
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await pending;
+    expect(result.id).toBe("doc-1");
+    expect(result.file_name).toBe("sample.pdf");
+    expect(result.warning_messages).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(1);
+  });
+
+  it("文書が残っている通信断を、確定した削除失敗とは判定しない", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockImplementation(async (_path, init) => {
+      if(init?.method === "DELETE") throw new TypeError("network failure");
+      return jsonResponse({data: {id:"doc-1"}});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const pending = expect(api.deleteDocument("doc-1")).rejects.toMatchObject({errorCode:"document_delete_unconfirmed"});
+    await vi.advanceTimersByTimeAsync(20_000);
+    await pending;
+    expect(fetchMock.mock.calls.filter(([, init])=>init?.method==="DELETE")).toHaveLength(1);
+  });
+
+  it("確定した 409 は再取得や再送をせず、その理由を返す", async () => {
+    const fetchMock=vi.fn().mockResolvedValue(jsonResponse({error_messages:["競合しています。"]},409));
+    vi.stubGlobal("fetch",fetchMock);
+    await expect(api.deleteDocument("doc-1")).rejects.toMatchObject({status:409});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("45 秒後の削除成功を通常の 30 秒で打ち切らない", async () => {
+    vi.useFakeTimers();
+    let aborted=false;
+    vi.stubGlobal("fetch",vi.fn((_path,init)=>new Promise((resolve,reject)=>{
+      init?.signal?.addEventListener("abort",()=>{aborted=true; reject(new DOMException("aborted","AbortError"));});
+      setTimeout(()=>resolve(jsonResponse({data:{id:"doc-1",file_name:"sample.pdf"},warning_messages:[]})),45_000);
+    })));
+    const pending=api.deleteDocument("doc-1");
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect((await pending).id).toBe("doc-1");
+  });
+});

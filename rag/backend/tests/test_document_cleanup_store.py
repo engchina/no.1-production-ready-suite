@@ -33,7 +33,9 @@ class CapturingOracle:
         self.fetches.append((statement, dict(binds or {})))
         return self.rows
 
-    async def _run_transaction(self, operation: Callable[[Any], object]) -> object:
+    async def _run_transaction(
+        self, operation: Callable[[Any], object], *, retry_deadlocks: bool = False
+    ) -> object:
         executes = self.executes
 
         class Cursor:

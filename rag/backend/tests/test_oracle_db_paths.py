@@ -579,3 +579,41 @@ def test_real_oracledb_dead_session_error_is_transient() -> None:
     exc = oracledb.DatabaseError(error)
     assert is_transient_oracle_error(exc) is True
     assert oracle_error_log_fields(exc)["full_code"] == "DPY-4011"
+
+
+@pytest.mark.parametrize("retry", [False, True])
+async def test_deadlock_retries_only_when_explicitly_enabled(retry: bool) -> None:
+    first, second = _Connection(), _Connection()
+    pool = _Pool([first, second])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    operation = _failing_operation([RuntimeError("ORA-00060: deadlock detected")])
+    if retry:
+        assert await client._run_transaction(operation, retry_deadlocks=True) == "ok"
+        assert first.rollbacks == 1 and first.commits == 0 and second.commits == 1
+        assert pool.acquired == [first, second]
+    else:
+        with pytest.raises(RuntimeError, match="ORA-00060"):
+            await client._run_transaction(operation)
+        assert pool.acquired == [first]
+
+
+async def test_deadlock_is_not_retried_after_rollback_failure() -> None:
+    connection = _Connection(rollback_error=RuntimeError("rollback failed"))
+    pool = _Pool([connection, _Connection()])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    with pytest.raises(RuntimeError, match="ORA-00060"):
+        await client._run_transaction(
+            _failing_operation([RuntimeError("ORA-00060: deadlock")]), retry_deadlocks=True
+        )
+    assert pool.acquired == [connection]
+
+
+async def test_deadlock_retry_is_bounded() -> None:
+    pool = _Pool([_Connection(), _Connection(), _Connection()])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    with pytest.raises(RuntimeError, match="ORA-00060"):
+        await client._run_transaction(
+            _failing_operation([RuntimeError("ORA-00060"), RuntimeError("ORA-00060")]),
+            retry_deadlocks=True,
+        )
+    assert len(pool.acquired) == 2

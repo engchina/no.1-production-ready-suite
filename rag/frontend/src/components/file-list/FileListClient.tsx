@@ -395,23 +395,28 @@ export function FileListClient() {
         outcomes.push({ kind: "deleted", warnings: result.warning_messages ?? [] });
       } catch (error) {
         outcomes.push({
-          kind: "failed",
+          kind: error instanceof ApiError && error.errorCode === "document_delete_unconfirmed" ? "unconfirmed" : "failed",
           message:
             error instanceof ApiError ? error.message : t("fileList.bulkDelete.toast.failedHint"),
         });
       }
       setBulkDelete({ done: index + 1, total: targets.length });
     }
-    const { deleted, warned, failed, firstWarning, firstError } =
+    const { deleted, warned, failed, firstWarning, firstError, unconfirmed, firstUnconfirmed } =
       summarizeDeleteOutcomes(outcomes);
     setBulkDelete(null);
-    clearSelection();
+    selection.replace(targets.filter((_, index) => outcomes[index]?.kind === "unconfirmed"));
+    setMatchingAll(false);
     qc.invalidateQueries({ queryKey: ["documents"] });
     qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
     qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
     qc.invalidateQueries({ queryKey: ["documents", "stats"] });
 
-    if (failed === 0 && warned === 0) {
+    if (unconfirmed > 0) {
+      toast.warning(t("fileList.bulkDelete.toast.unconfirmed", {deleted, count: unconfirmed}), {
+        description: firstUnconfirmed ?? undefined,
+      });
+    } else if (failed === 0 && warned === 0) {
       toast.success(t("fileList.bulkDelete.toast.deleted", { count: deleted }));
     } else if (failed === 0) {
       toast.warning(t("fileList.bulkDelete.toast.deletedWithWarning", { count: deleted, warned }), {
@@ -445,7 +450,7 @@ export function FileListClient() {
     });
     if (!confirmed) return;
     try {
-      const result = await deleteDocument.mutateAsync(doc.id);
+      const result = await deleteDocument.mutateAsync({id: doc.id, fileName: doc.file_name});
       clearSelection();
       // 文書は消えたが原本・artifact の削除に失敗した警告は、成功として黙らせない（#281）。
       const warnings = result.warning_messages ?? [];
@@ -457,6 +462,11 @@ export function FileListClient() {
         toast.success(t("fileList.delete.toast.deleted", { name: result.file_name }));
       }
     } catch (error) {
+      if (error instanceof ApiError && error.errorCode === "document_delete_unconfirmed") {
+        toast.warning(error.message);
+        void qc.invalidateQueries({queryKey: ["documents"]});
+        return;
+      }
       toast.error(
         error instanceof ApiError
           ? error.message
@@ -756,7 +766,7 @@ export function FileListClient() {
                   enqueueIngestion.isPending &&
                   enqueueIngestion.variables?.id === doc.id,
                 isDeleting: (doc) =>
-                  deleteDocument.isPending && deleteDocument.variables === doc.id,
+                  deleteDocument.isPending && deleteDocument.variables?.id === doc.id,
                 // 一括選択中は行の操作を止め、一括操作のバーに集める（buttons.md §5.1）。
                 actionsDisabled: bulkBusy || selectedCount > 0,
               })}

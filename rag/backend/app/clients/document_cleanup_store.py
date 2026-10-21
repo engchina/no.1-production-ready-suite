@@ -176,7 +176,7 @@ class DocumentCleanupStore:
             )
             return task
 
-        return await self._oracle._run_transaction(operation)
+        return await self._oracle._run_transaction(operation, retry_deadlocks=True)
 
     async def find_for_document(self, document_id: str) -> DocumentCleanupTask | None:
         """削除の再試行で、今の利用者が扱える文書の後始末の記録を返す。
