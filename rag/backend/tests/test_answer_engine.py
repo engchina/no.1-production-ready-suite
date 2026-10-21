@@ -3045,6 +3045,7 @@ async def _answer_with_coverage(
     import rag_engine.adapters.oci as engine_oci
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    settings.setdefault("rag_request_coverage_retrieval_enabled", True)
     engine = AnswerEngine(
         Settings(
             rag_query_strategy="simple_retrieval",
@@ -3214,7 +3215,7 @@ def test_build_engine_settings_passes_request_coverage(tmp_path: Any) -> None:
     default = build_engine_settings(Settings(), output_dir=tmp_path)
     custom = build_engine_settings(
         Settings(
-            rag_request_coverage_retrieval_enabled=False,
+            rag_request_coverage_retrieval_enabled=True,
             rag_request_coverage_max_queries=1,
             rag_request_coverage_max_chunks=2,
             rag_request_coverage_deadline_seconds=3.5,
@@ -3224,10 +3225,10 @@ def test_build_engine_settings_passes_request_coverage(tmp_path: Any) -> None:
         output_dir=tmp_path,
     )
 
-    assert default.request_coverage_retrieval_enabled is True
+    assert default.request_coverage_retrieval_enabled is False
     assert (default.request_coverage_max_queries, default.request_coverage_max_chunks) == (2, 4)
     assert default.request_coverage_deadline_seconds == 10.0
-    assert custom.request_coverage_retrieval_enabled is False
+    assert custom.request_coverage_retrieval_enabled is True
     assert (custom.request_coverage_max_queries, custom.request_coverage_max_chunks) == (1, 2)
     assert custom.request_coverage_deadline_seconds == 3.5
     # 小問ごとの検索の上限(#2399)。
@@ -3251,13 +3252,13 @@ def test_search_answer_profile_overrides_request_coverage() -> None:
 
     config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(request_coverage_retrieval_enabled=False),
+        query=KnowledgeBaseQueryConfig(request_coverage_retrieval_enabled=True),
     )
 
     settings, _ = resolve_search_answer_profile_settings(Settings(), config)
 
-    assert settings.rag_request_coverage_retrieval_enabled is False
-    assert Settings().rag_request_coverage_retrieval_enabled is True
+    assert settings.rag_request_coverage_retrieval_enabled is True
+    assert Settings().rag_request_coverage_retrieval_enabled is False
 
 
 class HistoryOracle(SavingOracle):
