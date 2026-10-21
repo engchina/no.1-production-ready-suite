@@ -35,6 +35,7 @@ from rag_parser_core.language import current_pack
 from rag_parser_core.language.markers import marker_patterns
 from rag_parser_core.language.text import numbered, text_patterns
 
+from app.rag.pdf_text_correction import correct_docling_pdf_text
 from app.schemas.extraction import (
     DocumentElement,
     ExtractionArtifactValue,
@@ -509,6 +510,11 @@ def consolidate_document_extraction(
     if len(engines) != 1 or not engines <= {DOCLING_LAYOUT_ENGINE, MINERU_LAYOUT_ENGINE}:
         return extraction
     records = [_copy_record(record) for record in raw_records]
+    corrected_text = (
+        correct_docling_pdf_text(records, source_bytes)
+        if engines == {DOCLING_LAYOUT_ENGINE}
+        else set()
+    )
     outline: list[tuple[int, str, int]] = []
     outline_headings = 0
     mineru_paragraphs = mineru_tables = mineru_headers = 0
@@ -544,6 +550,9 @@ def consolidate_document_extraction(
         raw = _raw(record)
         metadata = dict(element.metadata)
         updates: dict[str, Any] = {}
+        if element.element_id in corrected_text:
+            updates["text"] = str(record["text"])
+            metadata["pdf_text_correction"] = "underscore_from_text_layer"
         continues = raw.get("continues_record_id")
         if isinstance(continues, str) and continues:
             metadata["continues_element_id"] = continues
@@ -591,9 +600,22 @@ def consolidate_document_extraction(
             "continuations_rejected_by_geometry": geometry_rejected,
         },
     }
-    return extraction.model_copy(
-        update={"elements": elements, "tables": tables, "parser_artifacts": parser_artifacts}
-    )
+    updates = {"elements": elements, "tables": tables, "parser_artifacts": parser_artifacts}
+    if corrected_text:
+        # Vision が足した本文などを再構成で落とさず、元の要素の出現順で訂正箇所だけ変える。
+        original_raw_text = extraction.raw_text
+        parts: list[str] = []
+        cursor = 0
+        for before, after in zip(extraction.elements, elements, strict=True):
+            if not before.text.strip():
+                continue
+            start = original_raw_text.find(before.text, cursor)
+            if start < 0:
+                continue
+            parts.extend((original_raw_text[cursor:start], after.text))
+            cursor = start + len(before.text)
+        updates["raw_text"] = "".join(parts) + original_raw_text[cursor:]
+    return extraction.model_copy(update=updates)
 
 
 def pdf_outline_entries(source_bytes: bytes) -> list[tuple[int, str, int]]:
