@@ -16,6 +16,9 @@ variableGroups:
       - nl2sql_app_environment
       - app_admin_login_user_id
       - agent_runtime_repository_backend
+      - adb_is_elastic_pool_enabled
+      - adb_resource_pool_size
+      - adb_resource_pool_storage_size_in_tbs
 
   - title: Required Configuration
     visible: true
@@ -72,9 +75,6 @@ variableGroups:
       - adb_is_auto_scaling_enabled
       - adb_data_storage_size_in_tbs
       - adb_is_auto_scaling_for_storage_enabled
-      - adb_is_elastic_pool_enabled
-      - adb_resource_pool_size
-      - adb_resource_pool_storage_size_in_tbs
       - license_model
       - adb_backup_retention_period_in_days
       - adb_password
@@ -389,27 +389,21 @@ variables:
   adb_is_elastic_pool_enabled:
     type: boolean
     required: true
-    visible: true
+    visible: false
     title: "Enable elastic pool"
     default: false
 
   adb_resource_pool_size:
     type: number
     required: true
-    visible:
-      eq:
-        - adb_is_elastic_pool_enabled
-        - true
+    visible: false
     title: "Elastic pool size"
     default: 0
 
   adb_resource_pool_storage_size_in_tbs:
     type: number
     required: true
-    visible:
-      eq:
-        - adb_is_elastic_pool_enabled
-        - true
+    visible: false
     title: "Elastic pool storage (TB)"
     default: 0
 

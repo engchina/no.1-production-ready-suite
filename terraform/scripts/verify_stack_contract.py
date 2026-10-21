@@ -55,6 +55,10 @@ HIDDEN_VARIABLES = [
     "nl2sql_app_environment",
     "app_admin_login_user_id",
     "agent_runtime_repository_backend",
+    # elastic pool は選ばせず既定値（無効）で配備する（#2801）。
+    "adb_is_elastic_pool_enabled",
+    "adb_resource_pool_size",
+    "adb_resource_pool_storage_size_in_tbs",
 ]
 SECRET_VARIABLES = [
     "adb_password",
