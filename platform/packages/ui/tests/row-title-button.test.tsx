@@ -46,7 +46,7 @@ describe("RowTitleButton の見た目と属性", () => {
     expect(html).toContain("[overflow-wrap:anywhere]");
     expect(html).not.toContain("line-clamp");
     expect(html).toContain("group-hover/row-title:underline");
-    expect(html).toMatch(/<span class="[^"]*text-xs[^"]*text-fg-muted[^"]*">kb-001<\/span>/);
+    expect(html).toMatch(/<span[^>]* class="[^"]*text-xs[^"]*text-fg-muted[^"]*">kb-001<\/span>/);
   });
 
   it("maxLines で行数を切り詰める", () => {
@@ -68,6 +68,7 @@ describe("RowTitleButton の見た目と属性", () => {
       )
     );
     expect(tag).toContain('aria-label="A を選ぶ"');
+    expect(tag).not.toContain("aria-labelledby");
     expect(tag).toContain('aria-describedby="comment-1"');
     expect(tag).toContain('data-feedback-row-button="fb-1"');
     expect(tag).toContain("disabled");
@@ -145,6 +146,13 @@ describe("RowTitleButton の操作", () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+  });
+
+  it.each([undefined, "/items?id=synthetic"])("補足を含む表示文と操作の説明を読み上げ名に含める（href=%s）", (href) => {
+    act(() => root.render(<RowTitleButton title="合成の項目" subtitle={<span>合成の説明</span>} href={href} aria-label="詳細を開く" />));
+    const control = host.querySelector("[data-row-title-button]")!;
+    const labels = control.getAttribute("aria-labelledby")!.split(" ").map((id) => id === control.id ? control.getAttribute("aria-label") : document.getElementById(id)?.textContent);
+    expect(labels).toEqual(["詳細を開く", "合成の項目", "合成の説明"]);
   });
 
   it("DataTable の行の中で押すと onClick だけが 1 回呼ばれ、行のクリック（onRowClick）は重ねて呼ばない", () => {

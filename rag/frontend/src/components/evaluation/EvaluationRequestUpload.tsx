@@ -105,7 +105,7 @@ export function EvaluationRequestUpload({
         id={EVALUATION_UPLOAD_ID}
         role="button"
         tabIndex={disabled ? -1 : 0}
-        aria-labelledby={labelId}
+        aria-labelledby={`${labelId} ${EVALUATION_UPLOAD_ID}-text ${EVALUATION_UPLOAD_ID}-hint`}
         aria-describedby={error ? `${hintId} ${EVALUATION_UPLOAD_ERROR_ID}` : hintId}
         aria-invalid={error ? true : undefined}
         aria-disabled={disabled || undefined}
@@ -135,12 +135,12 @@ export function EvaluationRequestUpload({
         )}
       >
         <FileSpreadsheet size={24} className="text-accent-fg" aria-hidden />
-        <p className="break-all text-sm font-medium text-fg">
+        <p id={`${EVALUATION_UPLOAD_ID}-text`} className="break-all text-sm font-medium text-fg">
           {fileName
             ? t("evaluation.import.dropzoneReplace", { name: fileName })
             : t("evaluation.import.dropzone")}
         </p>
-        <p className="text-xs text-fg-muted">
+        <p id={`${EVALUATION_UPLOAD_ID}-hint`} className="text-xs text-fg-muted">
           {t("evaluation.import.dropzoneHint", { rows: maxRows, size: maxMegabytes })}
         </p>
         <input

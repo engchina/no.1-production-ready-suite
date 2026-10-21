@@ -280,7 +280,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByTestId("run-open-chat")).toHaveCount(0);
       await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
 
-      await page.getByRole("link", { name: "二つ目の目標（詳細を開く）", exact: true }).click();
+      await page.getByRole("link", { name: "二つ目の目標（詳細を開く）" }).click();
       await expect(detail.getByText("run-e2e-2", { exact: true }).first()).toBeVisible();
       const openChat = page.getByTestId("run-open-chat");
       await expect(openChat).toHaveText("会話を開く");
@@ -298,8 +298,8 @@ for (const viewport of VIEWPORTS) {
       seedRun(mockApi, "run-e2e-1", "一つ目の目標");
       seedRun(mockApi, "run-e2e-2", "二つ目の目標");
       await page.goto("/runs");
-      const first = page.getByRole("link", { name: "一つ目の目標（詳細を開く）", exact: true });
-      const second = page.getByRole("link", { name: "二つ目の目標（詳細を開く）", exact: true });
+      const first = page.getByRole("link", { name: "一つ目の目標（詳細を開く）" });
+      const second = page.getByRole("link", { name: "二つ目の目標（詳細を開く）" });
       await expect(first).toHaveAttribute("data-row-title-button", "");
       // 一覧では自動で詳細を開かず、選んだ履歴だけを現在の項目にする。
       await expect(first).not.toHaveAttribute("aria-current", /.*/);
