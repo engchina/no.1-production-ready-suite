@@ -1866,3 +1866,9 @@ placeholder を置き換えます。旧名を実行時に展開する互換処�
 自動で書き直しません。組み込みの新しい書式へ戻す場合は、内容を確認してから設定画面の
 「既定に戻す」を使います。外部根拠を囲む `BEGIN_UNTRUSTED_RETRIEVED_CONTEXT` /
 `END_UNTRUSTED_RETRIEVED_CONTEXT` は引き続きモデルへ送信します。
+
+### 安全チェックを OCI Guardrails のスイッチへ更新（#2863）
+
+更新時に `python -m app.rag.guardrail_settings_migration --env-file .env` を実行し、
+回答 backend を再読み込みします。旧 OCI 選択は on、Local 選択は off へ移ります。
+設定・障害時の扱いは [安全チェック](evaluation-observability-guardrails.md) を参照してください。

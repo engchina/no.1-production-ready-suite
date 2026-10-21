@@ -104,12 +104,12 @@ def test_unknown_chunking_strategy_is_rejected() -> None:
 def test_guardrail_default_matches_current_behavior() -> None:
     """Guardrail アダプターの既定は現行挙動と一致させる。"""
     settings = Settings()
-    assert settings.rag_guardrail_policy == "standard"
+    assert settings.rag_guardrails_enabled is False
 
 
 def test_unknown_guardrail_policy_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        Settings(rag_guardrail_policy="paranoid")
+        Settings(rag_guardrails_enabled="not-a-boolean")
 
 
 def test_vector_index_profile_defaults_to_accurate() -> None:
@@ -928,7 +928,7 @@ def test_rate_limit_defaults_protect_expensive_endpoints() -> None:
 
 def test_sensitive_identifier_masking_is_enabled_by_default() -> None:
     """機微な識別子のマスクは既定で有効にする。"""
-    assert Settings().guardrail_mask_sensitive_identifiers is True
+    assert "guardrail_mask_sensitive_identifiers" not in Settings.model_fields
 
 
 def test_audit_context_hash_salt_is_optional() -> None:

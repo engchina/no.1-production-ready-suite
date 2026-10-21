@@ -1,246 +1,77 @@
-import { expect, test, type Page } from "./fixtures/test";
-import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
+import { expect, test } from "./fixtures/test";
+import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
-test.beforeEach(async ({ page }) => {
-  await mockLocalAuth(page);
+test.beforeEach(async ({ page }) => { await mockLocalAuth(page); });
+
+const envelope = (enabled = false, configured = true) => ({
+  data: { enabled, oci_configured: configured, oci_warning_code: configured ? null : "oci_guardrails_compartment_missing", config_source: "runtime" },
+  error_messages: [], warning_messages: [],
 });
 
-for (const viewport of [
-  { name: "desktop", width: 1280, height: 760, collapse: false },
-  { name: "mobile", width: 375, height: 812, collapse: true },
-]) {
-  test(`安全チェック設定は安全チェックを表示する (${viewport.name})`, async ({ page }) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    if (viewport.collapse) await collapseSidebar(page);
-    await mockGuardrail(page);
-
+for (const width of [1280, 375]) {
+  test(`OCI Guardrails は単一スイッチだけを表示する (${width}px)`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.route("**/api/settings/guardrail", (route) => route.fulfill({ json: envelope() }));
     await page.goto("/settings/guardrail");
-
-    await expect(page.getByRole("heading", { name: "安全チェック", exact: true, level: 1 })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /標準/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /規制対応/ })).toBeVisible();
-    // 全体の既定であることと、検索・回答プロファイルの上書きが優先することを案内する（#1024）。
+    const toggle = page.getByRole("switch", { name: "OCI Guardrails", exact: true });
+    await expect(toggle).not.toBeChecked();
+    await expect(page.getByRole("switch")).toHaveCount(1);
+    await expect(page.getByRole("radio")).toHaveCount(0);
     const main = page.getByRole("main");
-    await expect(main).toContainText("保存すると次の回答から使います");
-    await expect(main).toContainText("「検索・回答設定」で方針を上書きしている場合は、その方針を使います");
-    // 内部の英語の用語を画面に出さない。
-    for (const term of ["readiness", "groundedness"]) {
-      await expect(main).not.toContainText(term);
-    }
-    // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
-    await expect((await openSidebarNav(page)).getByRole("link", { name: "安全チェック" })).toHaveAttribute("aria-current", "page");
-    await expectNoHorizontalOverflow(page);
-  });
-}
-
-test("安全チェック設定は方針を保存できる", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 760 });
-  let saved: unknown = null;
-  await page.route("**/api/settings/guardrail", async (route) => {
-    if (route.request().method() === "PATCH") {
-      saved = route.request().postDataJSON();
-      await route.fulfill({ json: guardrailEnvelope("strict") });
-      return;
-    }
-    await route.fulfill({ json: guardrailEnvelope("standard") });
+    for (const removed of ["Local", "根拠チェック方針", "根拠一致数", "根拠一致率", "読み取り専用"])
+      await expect(main).not.toContainText(removed);
+    await expect(main).toContainText("無効なときは検査しません");
+    await expect(main).toContainText("検査を完了できないとき");
+    await expect(page.getByRole("link", { name: /公式ドキュメント/ })).toHaveAttribute("href", "https://docs.oracle.com/en-us/iaas/Content/generative-ai/guardrails.htm");
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath("oci-guardrails-toggle.png"), fullPage: true });
   });
 
-  await page.goto("/settings/guardrail");
-  const strict = page.locator("#guardrail-policy-strict");
-  await page.getByText("厳格", { exact: true }).click();
-  await expect(strict).toBeChecked();
-  const actions = page.getByRole("group", { name: "安全チェックの設定の操作" });
-  await expect(actions).toContainText("未保存の変更があります。");
-  await actions.getByRole("button", { name: "保存" }).click();
-
-  // 保存の成功は Toast（messaging.md §10.2）。操作の行に常設の成功の表示を残さない。
-  await expect(page.getByText("安全チェックを保存しました。")).toBeVisible();
-  await expect(actions).not.toContainText("保存しました");
-  await expect(actions.getByRole("button", { name: "変更を破棄" })).toBeDisabled();
-  expect(saved).toEqual({ policy: "strict", backend: "local" });
-  await expectNoHorizontalOverflow(page);
-});
-
-for (const viewport of [
-  { name: "desktop", width: 1280, height: 900 },
-  { name: "mobile", width: 375, height: 900 },
-]) {
-  test(`安全チェックの保存に失敗しても選択を残して操作の行に出し、変更を破棄で戻せる（#1024, ${viewport.name}）`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+  test(`OCI Guardrails の on/off を保存できる (${width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    let enabled = false;
+    const bodies: unknown[] = [];
     await page.route("**/api/settings/guardrail", async (route) => {
       if (route.request().method() === "PATCH") {
-        await route.fulfill({
-          status: 500,
-          json: {
-            data: null,
-            error_messages: ["安全チェック設定を backend/.env へ保存できませんでした。"],
-            warning_messages: [],
-          },
-        });
-        return;
+        const body = route.request().postDataJSON(); bodies.push(body); enabled = body.enabled;
       }
-      await route.fulfill({ json: guardrailEnvelope("standard") });
+      await route.fulfill({ json: envelope(enabled) });
     });
-
     await page.goto("/settings/guardrail");
-    const strict = page.locator("#guardrail-policy-strict");
-    await page.getByText("厳格", { exact: true }).click();
-    const actions = page.getByRole("group", { name: "安全チェックの設定の操作" });
-    await actions.getByRole("button", { name: "保存" }).click();
-
-    await expect(actions).toContainText("安全チェック設定を backend/.env へ保存できませんでした。");
-    await expect(strict).toBeChecked();
-    await expect(actions.getByRole("button", { name: "保存" })).toBeEnabled();
-    await expectNoHorizontalOverflow(page);
-    await actions.getByRole("button", { name: "変更を破棄" }).click();
-    await expect(page.locator("#guardrail-policy-standard")).toBeChecked();
-    await expect(actions.getByRole("button", { name: "保存" })).toBeDisabled();
-  });
-}
-
-test("安全チェック設定は OCI 検査方式を保存できる", async ({ page }) => {
-  let saved: unknown = null;
-  await page.route("**/api/settings/guardrail", async (route) => {
-    if (route.request().method() === "PATCH") {
-      saved = route.request().postDataJSON();
-      await route.fulfill({ json: guardrailEnvelope("standard", "oci_guardrails", true) });
-      return;
+    const toggle = page.getByRole("switch", { name: "OCI Guardrails", exact: true });
+    const save = page.getByRole("button", { name: "保存", exact: true });
+    for (const value of [true, false]) {
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-checked", String(value));
+      await save.click();
+      await expect(save).toBeDisabled();
     }
-    await route.fulfill({ json: guardrailEnvelope("standard", "local", true) });
+    expect(bodies).toEqual([{ enabled: true }, { enabled: false }]);
+    await expectNoPageOverflow(page);
   });
 
-  await page.goto("/settings/guardrail");
-  await page.getByText("OCI Guardrails", { exact: true }).click();
-  await page.getByRole("button", { name: "保存" }).click();
-
-  await expect(page.getByText("安全チェックを保存しました。")).toBeVisible();
-  expect(saved).toEqual({ policy: "standard", backend: "oci_guardrails" });
-});
-
-test("安全チェックの native radio は方向キーで移動できる", async ({ page }) => {
-  await mockGuardrail(page);
-  await page.goto("/settings/guardrail");
-
-  const standard = page.locator("#guardrail-policy-standard");
-  await standard.focus();
-  await page.keyboard.press("ArrowRight");
-
-  await expect(page.locator("#guardrail-policy-strict")).toBeChecked();
-});
-
-test("OCI 未設定時は保存エラーと OCI 認証導線を表示する", async ({ page }) => {
-  await page.route("**/api/settings/guardrail", async (route) => {
-    if (route.request().method() === "PATCH") {
-      await route.fulfill({
-        status: 422,
-        json: {
-          data: null,
-          error_messages: ["OCI Guardrails を選択する前に OCI 認証を設定してください。"],
-          warning_messages: [],
-        },
-      });
-      return;
-    }
-    await route.fulfill({ json: guardrailEnvelope("standard") });
-  });
-
-  await page.goto("/settings/guardrail");
-  await page.getByText("OCI Guardrails", { exact: true }).click();
-  await page.getByRole("button", { name: "保存" }).click();
-
-  await expect(
-    page.getByText("OCI Guardrails を選択する前に OCI 認証を設定してください。")
-  ).toBeVisible();
-  await expect(page.getByRole("link", { name: "OCI 認証設定を開く" })).toHaveAttribute(
-    "href",
-    "/settings/oci"
-  );
-});
-
-test("OCI の注意は OCI Guardrails を選んだときだけ、未設定の理由どおりに表示する", async ({
-  page,
-}) => {
-  // 保存中は oci_guardrails だが compartment が未設定(.env 直接編集などで起こる)。
-  await page.route("**/api/settings/guardrail", async (route) => {
-    await route.fulfill({
-      json: guardrailEnvelope(
-        "standard",
-        "oci_guardrails",
-        false,
-        "oci_guardrails_compartment_missing"
-      ),
-    });
-  });
-
-  await page.goto("/settings/guardrail");
-  const compartmentWarning = page.getByText("OCI Guardrails の compartment が未設定です。", {
-    exact: false,
-  });
-  await expect(compartmentWarning).toBeVisible();
-  await expect(page.getByText("OCI API キー認証を利用できません。", { exact: false })).toHaveCount(0);
-
-  // Local を選ぶ(未保存)と、OCI の注意は消える。
-  await page.getByText("Local", { exact: true }).click();
-  await expect(compartmentWarning).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "OCI 認証設定を開く" })).toHaveCount(0);
-});
-
-async function collapseSidebar(page: Page) {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "production-ready-rag.ui",
-      JSON.stringify({ state: { sidebarCollapsed: true }, version: 0 })
-    );
+  test(`保存失敗は選択を保持し、変更を破棄すると元に戻る (${width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.route("**/api/settings/guardrail", (route) => route.fulfill(route.request().method() === "PATCH"
+      ? { status: 500, json: { data: null, error_messages: ["保存できませんでした"], warning_messages: [] } }
+      : { json: envelope() }));
+    await page.goto("/settings/guardrail");
+    const toggle = page.getByRole("switch", { name: "OCI Guardrails", exact: true });
+    await toggle.click(); await page.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(page.getByText("保存できませんでした", { exact: true })).toBeVisible();
+    await expect(toggle).toBeChecked();
+    await page.getByRole("button", { name: "変更を破棄" }).click();
+    await expect(toggle).not.toBeChecked();
+    await expect(page.getByText("保存できませんでした", { exact: true })).toHaveCount(0);
   });
 }
 
-function guardrailEnvelope(
-  policy: string,
-  backend: "local" | "oci_guardrails" = "local",
-  ociConfigured = false,
-  ociWarningCode: string | null = null
-) {
-  const specs = [
-    { name: "standard", grounding_min_overlap: 3, grounding_min_ratio: 0.12, audit_emphasis: false },
-    { name: "strict", grounding_min_overlap: 5, grounding_min_ratio: 0.3, audit_emphasis: false },
-    { name: "lenient", grounding_min_overlap: 2, grounding_min_ratio: 0.05, audit_emphasis: false },
-    { name: "regulated", grounding_min_overlap: 5, grounding_min_ratio: 0.3, audit_emphasis: true },
-  ];
-  const selected = specs.find((s) => s.name === policy) ?? specs[0];
-  return {
-    data: {
-      policy,
-      block_prompt_injection: true,
-      mask_sensitive_identifiers: true,
-      max_query_chars: 2000,
-      grounding_min_overlap: selected.grounding_min_overlap,
-      grounding_min_ratio: selected.grounding_min_ratio,
-      audit_emphasis: selected.audit_emphasis,
-      policies: specs.map((s) => ({
-        ...s,
-        origin: "x",
-        recommended_for: ["general"],
-        selected: s.name === policy,
-      })),
-      backend,
-      oci_configured: ociConfigured,
-      oci_warning_code: ociWarningCode,
-      config_source: "runtime",
-    },
-    error_messages: [],
-    warning_messages: [],
-  };
-}
-
-async function mockGuardrail(page: Page) {
-  await page.route("**/api/settings/guardrail", async (route) => {
-    await route.fulfill({ json: guardrailEnvelope("standard") });
-  });
-}
-
-async function expectNoHorizontalOverflow(page: Page) {
-  // documentElement と main の双方を検査する共通ヘルパーへ委譲(_helpers.ts)。
+test("未設定の案内は on を選んだときだけ表示する", async ({ page }) => {
+  await page.route("**/api/settings/guardrail", (route) => route.fulfill({ json: envelope(false, false) }));
+  await page.goto("/settings/guardrail");
+  const link = page.getByRole("link", { name: "OCI 認証設定を開く" });
+  await expect(link).toHaveCount(0);
+  await page.getByRole("switch", { name: "OCI Guardrails", exact: true }).click();
+  await expect(link).toBeVisible();
   await expectNoPageOverflow(page);
-}
+});

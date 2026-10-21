@@ -1077,7 +1077,6 @@ export interface KnowledgeBaseIngestionConfig {
 /** 検索・回答設定。Search Answer Profile の query 設定として使う。 */
 export interface KnowledgeBaseQueryConfig {
   // 検索モード・検索オプション・根拠確認・回答スタイルは #595 で削除した（保存済みの値は backend が読み捨てる）。
-  guardrail_policy: GuardrailPolicyName | null;
   // 回答エンジンの選択(answer_engine)は #594 で削除した(回答は回答フローだけ)。
   /** 回答フローの設定。null / 未指定はグローバル継承。 */
   query_strategy?: QueryStrategyName | null;
@@ -1572,8 +1571,7 @@ export interface SearchDiagnostics {
   retrieval_strategy: string;
   /** "grounded"（回答）/ "retrieval_only"（検索だけ）/ "blocked"（安全チェックで止めた）。 */
   retrieval_strategy_adapter?: string;
-  guardrail_policy?: string;
-  guardrail_backend?: GuardrailBackend;
+  guardrails_enabled?: boolean;
   guardrail_degraded?: boolean;
   filter_keys: string[];
   knowledge_base_count: number;
@@ -2611,19 +2609,6 @@ export interface AnswerRecordSettingsData {
 }
 
 // --- 設定: Guardrail アダプター ---
-export type GuardrailPolicyName =
-  "standard" | "strict" | "lenient" | "regulated";
-
-export interface GuardrailPolicyStatusData {
-  name: GuardrailPolicyName;
-  origin: string;
-  recommended_for: string[];
-  selected: boolean;
-  grounding_min_overlap: number;
-  grounding_min_ratio: number;
-  audit_emphasis: boolean;
-}
-
 /** メタデータ/項目抽出のスキーマ定義(取込・回答設定)。 */
 export type ExtractionFieldValueType = "string" | "number" | "date" | "bool";
 
@@ -2651,26 +2636,15 @@ export interface KnowledgeBaseExtractionFieldsData {
 }
 
 export interface GuardrailSettingsData {
-  policy: GuardrailPolicyName;
-  block_prompt_injection: boolean;
-  mask_sensitive_identifiers: boolean;
-  max_query_chars: number;
-  grounding_min_overlap: number;
-  grounding_min_ratio: number;
-  audit_emphasis: boolean;
-  policies: GuardrailPolicyStatusData[];
-  backend: GuardrailBackend;
+  enabled: boolean;
   oci_configured: boolean;
   oci_warning_code: string | null;
   config_source: "runtime";
 }
 
 export interface GuardrailSettingsUpdate {
-  policy: GuardrailPolicyName;
-  backend?: GuardrailBackend;
+  enabled: boolean;
 }
-
-export type GuardrailBackend = "local" | "oci_guardrails";
 
 // --- 設定: Vector Index アダプター ---
 export type VectorIndexProfileName = "balanced" | "accurate" | "fast";

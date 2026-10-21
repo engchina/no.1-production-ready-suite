@@ -267,7 +267,7 @@ def test_compose_query_settings_empty_returns_global() -> None:
 def test_compose_query_settings_higher_precedence_wins_per_field() -> None:
     """後の overlay(高優先)が同一フィールドを上書きし、別フィールドは両方効く。"""
     settings = get_settings()
-    kb = KnowledgeBaseQueryConfig(guardrail_policy="strict", query_strategy="hyde")
+    kb = KnowledgeBaseQueryConfig(rerank_enabled=False, query_strategy="hyde")
     view = KnowledgeBaseQueryConfig(query_strategy="rag_fusion")
 
     # 低優先=kb, 高優先=view の順で渡す。
@@ -276,18 +276,18 @@ def test_compose_query_settings_higher_precedence_wins_per_field() -> None:
     assert applied is True
     # 同一フィールド(質問拡張戦略)は高優先 view が勝つ。
     assert merged.rag_query_strategy == "rag_fusion"
-    # view が触れていない guardrail は下位 overlay の値が残る(per-field merge の肝)。
-    assert merged.rag_guardrail_policy == "strict"
+    # view が触れていない rerank は下位 overlay の値が残る(per-field merge の肝)。
+    assert merged.rag_rerank_enabled is False
 
 
 def test_compose_query_settings_null_does_not_wipe_lower_layer() -> None:
     """高優先 overlay の None フィールドは下位層の値を消さない。"""
     settings = get_settings()
-    kb = KnowledgeBaseQueryConfig(guardrail_policy="strict")
+    kb = KnowledgeBaseQueryConfig(rerank_enabled=False)
     view = KnowledgeBaseQueryConfig()  # 何も設定しない
 
     merged, _ = compose_query_settings(settings, [kb, view])
-    assert merged.rag_guardrail_policy == "strict"
+    assert merged.rag_rerank_enabled is False
 
 
 def test_invalid_literal_value_is_rejected_at_validation() -> None:

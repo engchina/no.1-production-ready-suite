@@ -29,7 +29,7 @@ from app.rag.file_processing_evaluation import (
     quality_report_metadata_violation,
     run_file_processing_contract_checks,
 )
-from app.rag.guardrails import GroundednessEvaluation, evaluate_groundedness
+from app.rag.grounding_metrics import GroundednessEvaluation, evaluate_groundedness
 from app.rag.ingestion import IngestionPipeline
 from app.rag.parser_adapter_routing import normalize_source_kind
 from app.rag.pipeline import RagPipeline

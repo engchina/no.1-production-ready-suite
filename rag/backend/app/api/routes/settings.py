@@ -87,10 +87,6 @@ from app.rag.graph_adapter import (
     graph_adapter_runtime_settings,
     normalize_graph_profile,
 )
-from app.rag.guardrail_adapter import (
-    guardrail_adapter_runtime_settings,
-    normalize_guardrail_policy,
-)
 from app.rag.oracle_schema import vector_index_reindex_sql
 from app.rag.parser_adapter_readiness import parser_adapter_runtime_settings
 from app.rag.parser_adapter_scorecard import (
@@ -141,7 +137,6 @@ from app.schemas.settings import (
     GraphProfileStatusData,
     GraphSettingsData,
     GraphSettingsUpdate,
-    GuardrailPolicyStatusData,
     GuardrailSettingsData,
     GuardrailSettingsUpdate,
     HuggingFaceSettingsData,
@@ -791,7 +786,7 @@ async def reset_section_rules_settings() -> ApiResponse[SectionRulesSettingsData
 
 @router.get("/guardrail", response_model=ApiResponse[GuardrailSettingsData])
 async def get_guardrail_settings() -> ApiResponse[GuardrailSettingsData]:
-    """Guardrail アダプター(安全ポリシー)の選択と解決内容を返す。"""
+    """OCI Guardrails の有効状態と準備状況を返す。"""
     return ApiResponse(data=_guardrail_settings_data(get_settings()))
 
 
@@ -801,22 +796,14 @@ async def update_guardrail_settings(
 ) -> ApiResponse[GuardrailSettingsData]:
     """安全チェック設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
-    update: dict[str, object] = {"rag_guardrail_policy": normalize_guardrail_policy(payload.policy)}
-    if payload.backend is not None:
-        update["rag_guardrail_backend"] = payload.backend
-    candidate = settings.model_copy(update=update)
-    readiness_issue = _oci_guardrails_warning_code(candidate)
-    if candidate.rag_guardrail_backend == "oci_guardrails" and readiness_issue:
+    candidate = settings.model_copy(update={"rag_guardrails_enabled": payload.enabled})
+    if candidate.rag_guardrails_enabled and _oci_guardrails_readiness_code(candidate):
         raise HTTPException(
             status_code=422,
-            detail=(
-                "OCI Guardrails を選択する前に、compartment と OCI API キー認証を"
-                "システム設定 > OCI 認証で設定してください。"
-            ),
+            detail="OCI Guardrails を有効にする前に、OCI 認証と compartment を設定してください。",
         )
     _persist_guardrail_settings(candidate)
-    settings.rag_guardrail_policy = candidate.rag_guardrail_policy
-    settings.rag_guardrail_backend = candidate.rag_guardrail_backend
+    settings.rag_guardrails_enabled = candidate.rag_guardrails_enabled
     return ApiResponse(data=_guardrail_settings_data(settings))
 
 
@@ -1335,33 +1322,10 @@ def _persist_vector_index_settings(settings: Settings) -> None:
 
 def _guardrail_settings_data(settings: Settings) -> GuardrailSettingsData:
     """Settings から安全チェック設定の表示用データを作る。"""
-    runtime = guardrail_adapter_runtime_settings(settings)
     return GuardrailSettingsData(
-        policy=runtime.policy,
-        block_prompt_injection=runtime.block_prompt_injection,
-        mask_sensitive_identifiers=runtime.mask_sensitive_identifiers,
-        max_query_chars=runtime.max_query_chars,
-        grounding_min_overlap=runtime.grounding_min_overlap,
-        grounding_min_ratio=runtime.grounding_min_ratio,
-        audit_emphasis=runtime.audit_emphasis,
-        policies=[
-            GuardrailPolicyStatusData(
-                name=status.name,
-                origin=status.origin,
-                recommended_for=list(status.recommended_for),
-                selected=status.selected,
-                grounding_min_overlap=status.grounding_min_overlap,
-                grounding_min_ratio=status.grounding_min_ratio,
-                audit_emphasis=status.audit_emphasis,
-            )
-            for status in runtime.policies
-        ],
-        backend=settings.rag_guardrail_backend,
+        enabled=settings.rag_guardrails_enabled,
         oci_configured=_oci_guardrails_configured(settings),
-        # 保存中の検査方式に関係なく返し、画面が「OCI Guardrails を選んだとき」の
-        # 注意を正しい理由で出せるようにする(#277)。
         oci_warning_code=_oci_guardrails_readiness_code(settings),
-        config_source="runtime",
     )
 
 
@@ -1375,13 +1339,6 @@ def _oci_guardrails_configured(settings: Settings) -> bool:
         compartment_configured
         and _test_oci_config(settings, verify_with_oci=False).status == "success"
     )
-
-
-def _oci_guardrails_warning_code(settings: Settings) -> str | None:
-    """oci_guardrails 選択時の静的 readiness warning code を返す。"""
-    if settings.rag_guardrail_backend != "oci_guardrails":
-        return None
-    return _oci_guardrails_readiness_code(settings)
 
 
 def _oci_guardrails_readiness_code(settings: Settings) -> str | None:
@@ -1402,10 +1359,9 @@ def _persist_guardrail_settings(settings: Settings) -> None:
     _write_env_values(
         BACKEND_ENV_FILE,
         {
-            "RAG_GUARDRAIL_POLICY": settings.rag_guardrail_policy,
-            "RAG_GUARDRAIL_BACKEND": settings.rag_guardrail_backend,
+            "RAG_GUARDRAILS_ENABLED": str(settings.rag_guardrails_enabled).lower(),
         },
-        section_comment="# Guardrail アダプター",
+        section_comment="# OCI Guardrails",
         error_detail="安全チェック設定を backend/.env へ保存できませんでした。",
     )
 

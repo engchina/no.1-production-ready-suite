@@ -253,19 +253,6 @@ AnswerFlow = Literal["crag", "standard_rag"]
 # none は送らない、low / medium / high はその値を送る(platform の推論の量の選択肢と同じ)。
 ReasoningEffortOverride = Literal["model", "none", "low", "medium", "high"]
 MineruTier = Literal["flash", "basic", "standard", "advanced"]
-GuardrailPolicyName = Literal[
-    "standard",
-    "strict",
-    "lenient",
-    "regulated",
-]
-# Guardrail のバックエンド。local(既定)は in-process 決定論ヒューリスティック。
-# oci_guardrails は OCI Generative AI Guardrails(ApplyGuardrails、検出専用 API)を併用し、
-# 未設定/失敗時は local へ安全に縮退する。
-GuardrailBackend = Literal[
-    "local",
-    "oci_guardrails",
-]
 VectorIndexProfile = Literal[
     "balanced",
     "accurate",
@@ -2048,22 +2035,9 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "その件を「説明できなかった」などとして記録し、取込を続ける。"
         ),
     )
-    rag_guardrail_policy: GuardrailPolicyName = Field(
-        default="standard",
-        description=(
-            "安全の Guardrail アダプター。standard(既定)は現行フラグ、"
-            "strict/regulated は groundedness 厳格化、lenient は warning 抑制。"
-        ),
-    )
-    rag_guardrail_backend: GuardrailBackend = Field(
-        default="local",
-        description=(
-            "Guardrail のバックエンド。local(既定)は in-process 決定論ヒューリスティック"
-            "(現行挙動)。oci_guardrails は OCI Generative AI Guardrails(ApplyGuardrails、"
-            "content moderation / PII / prompt injection の検出専用 API)を併用する。障害時は"
-            "regulated が拒否し、その他は warning 付きで local へ縮退する。確定スタックは不変"
-            "(別 LLM provider・外部 DB は不採用)。"
-        ),
+    rag_guardrails_enabled: bool = Field(
+        default=False,
+        description="OCI Guardrails で質問と回答のテキストを検査する。無効時は呼び出さない。",
     )
     oci_guardrails_compartment_id: str = Field(
         default="",
@@ -2385,7 +2359,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "guardrail の policy 解決(groundedness 閾値 + 監査強調)の remote 委譲を許可する。"
             "サービス未起動・未到達時は backend in-process の同一実装へ縮退する。"
             "OFF は常に in-process。"
-            "OCI Generative AI Guardrails backend(rag_guardrail_backend)とは別レイヤーで共存。"
+            "RAG の OCI Guardrails の安全チェックからは使用しない。"
         ),
     )
     rag_guardrail_service_url: str = Field(
@@ -2647,11 +2621,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rate_limit_evaluation_runs: int = Field(default=10, ge=1, le=1000)
     rate_limit_uploads: int = Field(default=30, ge=1, le=1000)
     rate_limit_ingest_requests: int = Field(default=20, ge=1, le=1000)
-
-    # --- ガードレール ---
-    guardrail_max_query_chars: int = Field(default=2000, ge=100, le=20000)
-    guardrail_block_prompt_injection: bool = Field(default=True)
-    guardrail_mask_sensitive_identifiers: bool = Field(default=True)
 
     # --- 監査 ---
     audit_context_hash_salt: str = Field(

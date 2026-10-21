@@ -11,7 +11,7 @@ def test_search_diagnostics_exposes_execution_shape_without_secrets() -> None:
     """検索 diagnostics は回答の経路と設定の fingerprint を示し、secret 値を含めない。"""
     settings = Settings(
         oracle_password="super-secret-password",
-        rag_guardrail_policy="strict",
+        rag_guardrails_enabled=True,
     )
     request = SearchRequest(
         query="承認条件",
@@ -30,8 +30,7 @@ def test_search_diagnostics_exposes_execution_shape_without_secrets() -> None:
 
     assert diagnostics.retrieval_strategy == "hybrid"
     assert diagnostics.retrieval_strategy_adapter == "grounded"
-    assert diagnostics.guardrail_policy == "strict"
-    assert diagnostics.guardrail_backend == "local"
+    assert diagnostics.guardrails_enabled is True
     assert diagnostics.guardrail_degraded is True
     assert diagnostics.answer == {"confidence": "high"}
     assert diagnostics.filter_keys == ["file_name", "knowledge_base_id", "status"]

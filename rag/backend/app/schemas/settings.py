@@ -102,8 +102,6 @@ from app.config import (
     ChunkingStrategy,
     EvaluationSuite,
     GraphProfile,
-    GuardrailBackend,
-    GuardrailPolicyName,
     ParserAdapterBackend,
     PreprocessProfile,
     QueryStrategy,
@@ -667,10 +665,6 @@ class ChunkingSettingsUpdate(BaseModel):
         return self
 
 
-GuardrailPolicyNameSchema = GuardrailPolicyName
-GuardrailBackendName = GuardrailBackend
-
-
 class AnswerRecordSettingsData(BaseModel):
     """回答の記録の保持設定。retention_days=0 は無期限。"""
 
@@ -846,43 +840,6 @@ class PipelineSettingsUpdate(BaseModel):
     auto_index_after_chunk_enabled: bool | None = None
 
 
-class GuardrailPolicyStatusData(BaseModel):
-    """安全の 1 ポリシーの選択状態と groundedness 厳格度。"""
-
-    name: GuardrailPolicyNameSchema
-    origin: str
-    recommended_for: list[str] = Field(default_factory=list)
-    selected: bool
-    grounding_min_overlap: int
-    grounding_min_ratio: float
-    audit_emphasis: bool = False
-
-
-class GuardrailSettingsData(BaseModel):
-    """安全チェック設定の非機密 runtime snapshot。"""
-
-    policy: GuardrailPolicyNameSchema
-    block_prompt_injection: bool
-    mask_sensitive_identifiers: bool
-    max_query_chars: int
-    grounding_min_overlap: int
-    grounding_min_ratio: float
-    audit_emphasis: bool
-    policies: list[GuardrailPolicyStatusData] = Field(default_factory=list)
-    backend: GuardrailBackendName = "local"
-    oci_configured: bool = False
-    # OCI Guardrails を使う場合の readiness の問題(保存中の検査方式が local でも返す)。
-    oci_warning_code: str | None = None
-    config_source: Literal["runtime"]
-
-
-class GuardrailSettingsUpdate(BaseModel):
-    """安全チェック設定の更新 payload。"""
-
-    policy: GuardrailPolicyNameSchema
-    backend: GuardrailBackendName | None = None
-
-
 VectorIndexProfileName = VectorIndexProfile
 # 実際の索引と推奨ビルドの比較結果(#562)。unknown = 実際の値を確認できない。
 VectorIndexBuildStatus = Literal["match", "reprovision", "unknown"]
@@ -977,3 +934,19 @@ class GraphSettingsUpdate(BaseModel):
     """関係情報設定の更新 payload。"""
 
     profile: GraphProfileName
+
+
+class GuardrailSettingsData(BaseModel):
+    """OCI Guardrails の有効状態と設定の準備状況。"""
+
+    enabled: bool
+    oci_configured: bool
+    oci_warning_code: str | None = None
+    config_source: str = "runtime"
+
+
+class GuardrailSettingsUpdate(BaseModel):
+    """OCI Guardrails の有効・無効だけを更新する。"""
+
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool

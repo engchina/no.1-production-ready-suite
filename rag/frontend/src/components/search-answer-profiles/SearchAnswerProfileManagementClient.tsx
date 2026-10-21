@@ -69,7 +69,6 @@ import {
   type SearchAnswerProfileDetail,
   type SearchAnswerProfileStatus,
   type SearchAnswerProfileSummary,
-  type GuardrailPolicyName,
   type KnowledgeBaseQueryConfig,
 } from "@/lib/api";
 import { useEditorRoute } from "@/lib/editor-route";
@@ -197,14 +196,8 @@ const GUIDE_STEP_MAX_QUERIES_OPTIONS: SelectFieldOption<string>[] = Array.from({
   value: String(n),
   label: String(n),
 }));
-const GUARDRAIL_OPTIONS: SelectFieldOption<GuardrailPolicyName>[] = [
-  { value: "standard", label: t("settings.guardrail.policy.standard") },
-  { value: "strict", label: t("settings.guardrail.policy.strict") },
-  { value: "lenient", label: t("settings.guardrail.policy.lenient") },
-  { value: "regulated", label: t("settings.guardrail.policy.regulated") },
-];
 function emptyQueryConfig(): KnowledgeBaseQueryConfig {
-  return { guardrail_policy: null };
+  return {};
 }
 
 /** 旧保存 JSON に無い項目は null(継承)で補う。 */
@@ -1159,16 +1152,7 @@ function SearchAnswerProfileEditor({
                     onChange={updateQuery}
                   />
                   <SectionExpansionRow value={config.query} disabled={locked} onChange={updateQuery} />
-                  <QuerySelectRow
-                    id="search-answer-profile-guardrail"
-                    label={t("searchAnswerProfiles.field.guardrail")}
-                    value={config.query.guardrail_policy}
-                    options={GUARDRAIL_OPTIONS}
-                    width="sm"
-                    defaultOnOverride="strict"
-                    disabled={locked}
-                    onChange={(value) => updateQuery({ guardrail_policy: value })}
-                  />
+
                 </div>
               </fieldset>
               {/* 回答前の確認（#1839。3 製品で業務の単位に置く設定）。ルールごとの確認は下の「プロファイルの知識」。 */}

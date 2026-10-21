@@ -526,7 +526,7 @@ def test_build_history_takes_first_assistant_per_turn() -> None:
             messages,
             GuardrailPolicy(
                 Settings(
-                    rag_guardrail_backend="local",
+                    rag_guardrails_enabled=False,
                     rag_guardrail_service_enabled=False,
                 )
             ),
@@ -1024,6 +1024,9 @@ def test_chat_answer_uses_answer_timeout_not_search_timeout(monkeypatch: MonkeyP
 def test_stream_message_sanitizes_user_content_before_database_and_sse(
     monkeypatch: MonkeyPatch,
 ) -> None:
+    from tests.guardrail_support import enable_oci_stub
+
+    enable_oci_stub(monkeypatch)
     fake = FakeChatOracle()
     fake.conversations["conv-safe"] = StoredConversation(
         id="conv-safe",
@@ -1051,6 +1054,9 @@ def test_stream_message_sanitizes_user_content_before_database_and_sse(
 def test_stream_message_does_not_persist_or_echo_blocked_attack(
     monkeypatch: MonkeyPatch,
 ) -> None:
+    from tests.guardrail_support import enable_oci_stub
+
+    enable_oci_stub(monkeypatch)
     fake = FakeChatOracle()
     fake.conversations["conv-block"] = StoredConversation(
         id="conv-block",
@@ -1076,7 +1082,12 @@ def test_stream_message_does_not_persist_or_echo_blocked_attack(
     assert user.guardrail_warnings
 
 
-def test_safe_history_skips_blocked_turn_and_sanitizes_legacy_content() -> None:
+def test_safe_history_skips_blocked_turn_and_sanitizes_legacy_content(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from tests.guardrail_support import enable_oci_stub
+
+    enable_oci_stub(monkeypatch)
     now = datetime(2026, 1, 1, tzinfo=UTC)
     messages = [
         StoredMessage(
@@ -1108,7 +1119,7 @@ def test_safe_history_skips_blocked_turn_and_sanitizes_legacy_content() -> None:
             messages,
             GuardrailPolicy(
                 Settings(
-                    rag_guardrail_backend="local",
+                    rag_guardrails_enabled=True,
                     rag_guardrail_service_enabled=False,
                 )
             ),

@@ -27,7 +27,6 @@ describe("api 検索・回答プロファイル(Search Answer Profile)", () => {
             version: 1,
             knowledge_base_ids: ["kb-1", "kb-2"],
             query: {
-              guardrail_policy: null,
               query_strategy: "rag_fusion",
             },
           },
@@ -51,7 +50,6 @@ describe("api 検索・回答プロファイル(Search Answer Profile)", () => {
         version: 1,
         knowledge_base_ids: ["kb-1", "kb-2"],
         query: {
-          guardrail_policy: null,
           query_strategy: "rag_fusion",
         },
       },
@@ -97,7 +95,6 @@ describe("api 検索・回答プロファイル(Search Answer Profile)", () => {
             version: 1,
             knowledge_base_ids: [],
             query: {
-              guardrail_policy: null,
             },
           },
           knowledge_bases: [],

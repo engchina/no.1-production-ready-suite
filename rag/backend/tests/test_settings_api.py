@@ -931,83 +931,54 @@ def test_update_chunking_settings_allows_fixed_delimiter_without_chunk_bounds(
     assert "RAG_CHUNK_DELIMITER=---" in env_file.read_text(encoding="utf-8")
 
 
-def test_guardrail_settings_reports_runtime_policy(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_guardrail_policy", "strict")
-
-    resp = client.get("/api/settings/guardrail")
-
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["policy"] == "strict"
-    assert body["grounding_min_overlap"] > 3
-    names = [item["name"] for item in body["policies"]]
-    assert names[0] == "standard"
-    selected = [item["name"] for item in body["policies"] if item["selected"]]
-    assert selected == ["strict"]
+def test_guardrail_settings_exposes_only_oci_toggle(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(get_settings(), "rag_guardrails_enabled", False)
+    body = client.get("/api/settings/guardrail").json()["data"]
+    assert body["enabled"] is False
+    assert set(body) == {"enabled", "oci_configured", "oci_warning_code", "config_source"}
 
 
-def test_update_guardrail_settings_persists_env_and_mutates_runtime(
-    monkeypatch: MonkeyPatch,
-    tmp_path: Path,
+@pytest.mark.parametrize("enabled", [True, False])
+def test_guardrail_toggle_persists_env(
+    monkeypatch: MonkeyPatch, tmp_path: Path, enabled: bool
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_guardrail_policy", "standard")
-    monkeypatch.setattr(settings, "rag_guardrail_backend", "local")
+    monkeypatch.setattr(settings, "rag_guardrails_enabled", not enabled)
+    monkeypatch.setattr(settings_routes, "_oci_guardrails_readiness_code", lambda _: None)
     env_file = _settings_env_file(monkeypatch, tmp_path)
-
-    resp = client.patch(
-        "/api/settings/guardrail",
-        json={"policy": "regulated", "backend": "local"},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["data"]["policy"] == "regulated"
-    assert resp.json()["data"]["audit_emphasis"] is True
-    assert settings.rag_guardrail_policy == "regulated"
-    assert "RAG_GUARDRAIL_POLICY=regulated" in env_file.read_text(encoding="utf-8")
-    assert "RAG_GUARDRAIL_BACKEND=local" in env_file.read_text(encoding="utf-8")
+    response = client.patch("/api/settings/guardrail", json={"enabled": enabled})
+    assert response.status_code == 200
+    assert response.json()["data"]["enabled"] is enabled
+    assert settings.rag_guardrails_enabled is enabled
+    assert f"RAG_GUARDRAILS_ENABLED={str(enabled).lower()}" in env_file.read_text()
 
 
-def test_update_guardrail_settings_rejects_unready_oci_backend(
-    monkeypatch: MonkeyPatch,
-) -> None:
+def test_guardrail_on_rejects_missing_oci_configuration(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_guardrail_backend", "local")
+    monkeypatch.setattr(settings, "rag_guardrails_enabled", False)
     monkeypatch.setattr(settings, "oci_guardrails_compartment_id", "")
     monkeypatch.setattr(settings, "oci_compartment_id", "")
-
-    response = client.patch(
-        "/api/settings/guardrail",
-        json={"policy": "standard", "backend": "oci_guardrails"},
-    )
-
+    response = client.patch("/api/settings/guardrail", json={"enabled": True})
     assert response.status_code == 422
-    assert "OCI 認証" in response.json()["error_messages"][0]
-    assert settings.rag_guardrail_backend == "local"
+    assert settings.rag_guardrails_enabled is False
 
 
-def test_guardrail_settings_reports_oci_readiness_even_when_local(
-    monkeypatch: MonkeyPatch,
+def test_guardrail_off_does_not_require_oci_configuration(
+    monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """保存中が local でも、OCI Guardrails を選んだときの未設定理由を返す(#277)。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_guardrail_backend", "local")
-    monkeypatch.setattr(settings, "oci_guardrails_compartment_id", "")
-    monkeypatch.setattr(settings, "oci_compartment_id", "")
-
-    resp = client.get("/api/settings/guardrail")
-
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["backend"] == "local"
-    assert body["oci_configured"] is False
-    assert body["oci_warning_code"] == "oci_guardrails_compartment_missing"
+    monkeypatch.setattr(get_settings(), "rag_guardrails_enabled", True)
+    monkeypatch.setattr(settings_routes, "_oci_guardrails_readiness_code", lambda _: "missing")
+    _settings_env_file(monkeypatch, tmp_path)
+    response = client.patch("/api/settings/guardrail", json={"enabled": False})
+    assert response.status_code == 200
+    assert response.json()["data"]["enabled"] is False
 
 
-def test_update_guardrail_settings_rejects_unknown_policy() -> None:
-    resp = client.patch("/api/settings/guardrail", json={"policy": "paranoid"})
-    assert resp.status_code == 422
+def test_guardrail_rejects_removed_policy_and_backend() -> None:
+    response = client.patch(
+        "/api/settings/guardrail", json={"enabled": False, "policy": "strict", "backend": "local"}
+    )
+    assert response.status_code == 422
 
 
 def _stub_vector_index_build(monkeypatch: MonkeyPatch, actual: tuple[int, int] | None) -> None:

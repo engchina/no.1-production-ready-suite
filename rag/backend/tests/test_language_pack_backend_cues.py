@@ -7,7 +7,7 @@ from rag_parser_core.language import bind_pack, builtin_pack, resolve
 from app.rag.chunking import Chunk
 from app.rag.entity_index import build_entity_index
 from app.rag.extraction_field_adapter import normalize_field_value
-from app.rag.guardrails import grounding_stopwords
+from app.rag.grounding_metrics import grounding_stopwords
 
 
 def _chunk(text: str) -> Chunk:
