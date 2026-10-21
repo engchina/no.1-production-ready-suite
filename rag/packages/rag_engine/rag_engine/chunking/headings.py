@@ -40,6 +40,7 @@ class _HeadingPatterns:
     levels: tuple[tuple[re.Pattern[str], int], ...]
     # 文として終わる「見出し」（Docling が Section-header に分類した手順行「２ . 顧客情報を入力します。」）。
     sentence_heading: re.Pattern[str]
+    numbered_section: re.Pattern[str]
 
 
 _heading_patterns_by_hash: dict[str, _HeadingPatterns] = {}
@@ -57,6 +58,9 @@ def _heading_patterns() -> _HeadingPatterns:
     patterns = _HeadingPatterns(
         sentence_boundary=re.compile(rf"(?<={boundary})(?!{text.sentence_closer})|(?<=\.)(?=\s)"),
         part=re.compile(rf"{numbered(text, text.part_units)}(?=\s|$|[:.、])"),
+        numbered_section=re.compile(
+            numbered(text, f"(?:{text.part_units}|{text.chapter_units}|{text.section_units}|{text.article_units}|{text.paragraph_units})")
+        ),
         levels=(
             (re.compile(numbered(text, part_or_chapter)), 1),
             # 「Ⅰ 月次定例処理」「Ⅴ．定例処理」のローマ数字の章。NFKC で Ⅴ は V になる。英字 1 文字の章記号
@@ -208,6 +212,11 @@ def _page_band(record: dict[str, Any]) -> bool:
     return top < _RUNNING_HEADER_TOP or top > _RUNNING_FOOTER_TOP
 
 
+def _record_raw(record: dict[str, Any]) -> dict[str, Any]:
+    value = record.get("raw")
+    return value if isinstance(value, dict) else {}
+
+
 def _promote_headings(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """Docling の category だけでは決まらない見出し／非見出しを正規化する。
 
@@ -253,15 +262,40 @@ def _promote_headings(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]
         for r in records
         if (str(r.get("category") or "") in SECTION_CATEGORIES and not demotions.get(id(r))) or id(r) in toc_ids
     } - {""}
+    # 同系列の章節が見出しとして認識されている文書では、ページ上端の新しい章名が
+    # Page-header に分類されていても初出を境界へ戻す。同じ章名の再掲は柱のまま残す。
+    numbered = _heading_patterns().numbered_section
+    supported_levels = {
+        _heading_level(_record_text(r))
+        for r in ordered
+        if str(r.get("category") or "") in SECTION_CATEGORIES and numbered.match(_record_text(r).strip())
+    }
+    seen_numbered: set[str] = set()
+    numbered_headers: set[int] = set()
+    for record in ordered:
+        text = _record_text(record).strip()
+        match = numbered.match(text)
+        if not match or not text[match.end() :].strip() or "\n" in text or _heading_patterns().sentence_heading.search(text):
+            continue
+        key = _heading_key(text)
+        category = str(record.get("category") or "")
+        if category == "Page-header" and key not in seen_numbered and _heading_level(text) in supported_levels:
+            numbered_headers.add(id(record))
+        if category in SECTION_CATEGORIES or id(record) in numbered_headers:
+            seen_numbered.add(key)
     promoted: list[dict[str, Any]] = []
     for record in records:
         category = str(record.get("category") or "")
         text = _record_text(record).strip()
+        if id(record) in numbered_headers:
+            raw = _record_raw(record)
+            promoted.append({**record, "category": "Section-header", "raw": {**raw, "promoted_from_category": category}})
+            continue
         if demotions.get(id(record)):
             promoted.append({**record, "category": demotions[id(record)]})
             continue
         if demotions.get(id(record)) == "":
-            raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+            raw = _record_raw(record)
             promoted.append({**record, "raw": {**raw, "heading_level": _CHAPTER_LEVEL}})
             continue
         if id(record) in toc_ids:
@@ -272,11 +306,11 @@ def _promote_headings(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]
         route_caption = category == "Caption" and bool(_route_caption_pattern().match(text))
         if recurring:
             # 本文側の再出現には印を付ける。現在の節名の再掲（柱に近い行）なら節を変えないため (#764)。
-            raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+            raw = _record_raw(record)
             promoted.append({**record, "category": "Section-header", "raw": {**raw, "recurring_heading": True}})
             continue
         if route_caption:
-            raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+            raw = _record_raw(record)
             promoted.append({**record, "category": "Section-header", "raw": {**raw, "heading_source": ROUTE_CAPTION_HEADING_SOURCE}})
             continue
         promoted.append(record)
@@ -364,7 +398,7 @@ def _heading_form(text: str) -> str:
 
 def _heading_source(record: dict[str, Any]) -> str:
     """見出し record の出所。section_path_sources に残し、下流が見出しの信頼度を扱えるようにする (#814)。"""
-    raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+    raw = _record_raw(record)
     if _int_value(raw.get("heading_level")) == _CHAPTER_LEVEL:
         return RUNNING_HEAD_HEADING_SOURCE
     if raw.get("recurring_heading"):
@@ -460,7 +494,7 @@ def _section_path_state_after(state: SectionPathState, record: dict[str, Any]) -
     if not text:
         return state
     path, levels, depths, sources = state
-    raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+    raw = _record_raw(record)
     if raw.get("recurring_heading") and _heading_key(text) in {_heading_key(h) for h in path}:
         # 本文中に現在の節名がそのまま再掲されている（「Ａマスタ管理-（ 4 ）区分管理」）。節は変わらない。
         # 見出しにすると子見出しになり、以降の手順が別の機能ユニットに割れる (#764)。
@@ -508,7 +542,7 @@ def heading_level_candidates(records: Sequence[dict[str, Any]]) -> list[tuple[st
             continue
         record_id = str(record.get("id") or "")
         text = _record_text(record).strip()
-        raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+        raw = _record_raw(record)
         if not record_id or not text or raw.get("recurring_heading") or _int_value(raw.get("heading_level")) is not None:
             continue
         candidates.append((record_id, text, _heading_level(text)))
