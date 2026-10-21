@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  documentFileTypeLabel,
   isSameParserBackend,
   parserProfileKey,
   parserBackendLabel,
@@ -68,5 +69,35 @@ describe("source profile labels", () => {
     expect(parserBackendLabel("marker_adapter")).toBe("marker_adapter");
     expect(parserBackendLabel("unlimited_ocr_adapter")).toBe("unlimited_ocr_adapter");
     expect(parserBackendLabel("glm_ocr")).toBe("glm_ocr");
+  });
+});
+
+
+describe("documentFileTypeLabel", () => {
+  it.each([
+    ["sample.PDF", "PDF"], ["sample.docx", "Word"], ["sample.doc", "Word"],
+    ["sample.xlsx", "Excel"], ["sample.xlsm", "Excel"], ["sample.pptx", "PowerPoint"],
+    ["sample.csv", "CSV"], ["sample.custom", "CUSTOM"],
+  ])("profile がない %s も原本の拡張子で表示する", (file_name, expected) => {
+    expect(documentFileTypeLabel({file_name, source_profile: null, content_type: null})).toBe(expected);
+  });
+
+  it("profile の判定をファイル名より優先する", () => {
+    const profile: import("./api").SourceProfile = {
+      original_file_name: "source", sanitized_file_name: "source", extension: null,
+      content_type: "application/pdf", inferred_content_type: "application/pdf",
+      file_size_bytes: 1, content_sha256: "", modality: "pdf", parser_profile: "",
+      parser_backend: "", parser_version: "", preview_kind: "pdf", text_charset: null,
+      duplicate_of_document_id: null, unsupported_reason: null, quality_status: "ready", quality_warnings: [],
+    };
+    expect(documentFileTypeLabel({file_name: "source.txt", source_profile: profile, content_type: null})).toBe("PDF");
+    expect(documentFileTypeLabel({file_name: "source", source_profile: {...profile, modality: "office", extension: ".xlsx"}, content_type: null})).toBe("Excel");
+  });
+
+  it.each([
+    ["application/pdf", "PDF"], ["image/png", "画像"], ["text/html; charset=utf-8", "HTML"],
+    ["text/plain", "テキスト"], ["application/octet-stream", "不明"], [null, "不明"],
+  ])("拡張子もないときは MIME %s で表示する", (content_type, expected) => {
+    expect(documentFileTypeLabel({file_name: "source", source_profile: null, content_type})).toBe(expected);
   });
 });

@@ -1,3 +1,4 @@
+import type { SourceProfile } from "../src/lib/api";
 import { expect, type Page, test } from "./fixtures/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
@@ -18,7 +19,7 @@ interface DocumentSummary {
   uploaded_at: string;
   indexed_at: string | null;
   knowledge_bases: { id: string; name: string }[];
-  source_profile: null;
+  source_profile: SourceProfile | null;
   layers_rebuild_required?: boolean;
   superseded_by_document_id?: string | null;
   is_superseded?: boolean;
@@ -48,6 +49,37 @@ interface MockOptions {
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
+});
+
+test("文書種別は未分類でも原本の PDF・Word・Excel を表示する", async ({ page }, testInfo) => {
+  const documents = [
+    documentSummary("type-pdf", "sample.pdf", "INDEXED"),
+    documentSummary("type-word", "sample.docx", "UPLOADED"),
+    documentSummary("type-excel", "sample.xlsx", "INDEXED"),
+    documentSummary("type-slides", "sample.pptx", "ERROR"),
+    documentSummary("type-unknown", "source", "UPLOADED"),
+  ];
+  for (const document of documents) { document.category_name = null; document.content_type = null; }
+  documents[0].source_profile = {
+    original_file_name: "sample.pdf", sanitized_file_name: "sample.pdf", extension: ".pdf",
+    content_type: "application/pdf", inferred_content_type: "application/pdf", modality: "pdf",
+    file_size_bytes: 1024, content_sha256: "", parser_profile: "enterprise_ai_pdf_layout",
+    parser_backend: "docling", parser_version: "1", preview_kind: "pdf", text_charset: null,
+    duplicate_of_document_id: null, unsupported_reason: null, quality_status: "ready", quality_warnings: [],
+  };
+  // 旧カテゴリがあってもファイル形式とは混同しない。
+  documents[1].category_name = "カテゴリ A";
+  await mockFileListApi(page, documents);
+  await page.goto("/file-list");
+  await expect(page.getByRole("columnheader", { name: "文書種別", exact: true })).toBeVisible();
+  for (const [index, label] of ["PDF", "Word", "Excel", "PowerPoint", "不明"].entries()) {
+    const row = page.getByRole("row").filter({ has: page.getByRole("link", {name: documents[index].file_name, exact: true}) });
+    await expect(row.getByRole("cell", { name: label, exact: true })).toBeVisible();
+    await expect(row).not.toContainText("カテゴリ A");
+  }
+  await expectNoPageOverflow(page);
+  await page.getByRole("columnheader", { name: "文書種別", exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({path: testInfo.outputPath("document-types.png"), fullPage: true});
 });
 
 test("最後のページの最後の 1 件を削除したら、1 つ前のページへ戻る", async ({ page }) => {
