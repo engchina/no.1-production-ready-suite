@@ -900,6 +900,46 @@ def _check_screen_example_values(question: str, item: GroundedItem, span: dict) 
     return "画面の表示例の値『" + "』『".join(used) + "』を答えに使っている" if used else ""
 
 
+# 画面の一覧の行のコード（#2797）。英字の接頭と数字の語（「B0016」）で、同じ接頭・同じ桁の語が画面の生成説明・OCR に
+# ``_SCREEN_LIST_MIN_ROWS`` 個以上並ぶもの（コードの一覧の画面の行）。1 つだけの画面の ID・パラメータの名前は含めない。
+_LIST_CODE = re.compile(r"(?<![0-9A-Za-z])([A-Za-z]{1,4})([0-9]{2,})(?![0-9A-Za-z])")
+_SCREEN_LIST_MIN_ROWS = 5
+
+
+def _screen_listed_codes(span: dict) -> set[str]:
+    """画面の生成説明・OCR に一覧として並ぶコード（同じ形のコードが ``_SCREEN_LIST_MIN_ROWS`` 個以上）。"""
+    series: dict[tuple[str, int], set[str]] = {}
+    for prefix, digits in _LIST_CODE.findall(str(span.get("text") or "")):
+        series.setdefault((prefix, len(digits)), set()).add(prefix + digits)
+    return {code for codes in series.values() if len(codes) >= _SCREEN_LIST_MIN_ROWS for code in codes}
+
+
+def _check_screen_list_codes(question: str, item: GroundedItem, span: dict) -> str:
+    """画面の一覧に写った行のコードを、本文に対応の記載が無いまま質問の対象として使っていないか (#2797)。
+
+    一覧の画面のスクリーンショットに写る行は画面例で、利用者の環境の全件でも、質問の対象との対応でもない。その
+    コードを text に含み、質問・同じ文書の生成説明以外の本文・見出しのどこにも無ければ、画面例の行を対象と断定
+    している。本文が対応を書いていれば（同じコードが本文にある）警告しない。
+    """
+    if "image_generated" not in span.get("tags", ()):
+        return ""
+    listed = _screen_listed_codes(span)
+    if not listed:
+        return ""
+    known = "\n".join(
+        [
+            question,
+            *map(str, span.get("document_texts", ())),
+            *map(str, span.get("function_texts", ())),
+            *map(str, span.get("section_path") or ()),
+        ]
+    )
+    used = sorted(
+        {prefix + digits for prefix, digits in _LIST_CODE.findall(item.text)} & listed - {code for code in listed if code in known}
+    )
+    return "画面の一覧に写ったコード『" + "』『".join(used) + "』を、本文に対応の記載が無いまま対象に使っている" if used else ""
+
+
 def _check_table_binding(question: str, item: GroundedItem, span: dict) -> str:
     # 引用元の表で、値を別の行の区分・名前と結び付けた説明（区分Ⅱ の値として区分Ⅰ の行の値を書く）は、語と値が
     # 根拠にあっても表の対応と違う。表の行で決定的に確かめる (#2659)。
@@ -924,6 +964,7 @@ ITEM_CHECKS: list[Callable[[str, GroundedItem, dict], str]] = [
     _check_verbatim_conditions,
     _check_value,
     _check_screen_example_values,
+    _check_screen_list_codes,
     _check_table_binding,
 ]
 # 警告の理由（detail）に書く検査の名前。
@@ -934,6 +975,7 @@ ITEM_CHECK_NAMES: dict[Callable[[str, GroundedItem, dict], str], str] = {
     _check_verbatim_conditions: "処理区分の逐語",
     _check_value: "値",
     _check_screen_example_values: "画面の表示例の値",
+    _check_screen_list_codes: "画面の一覧のコード",
     _check_table_binding: "表の行の対応",
 }
 # 本文の手順・規則の検査（verify の中の規則）の名前。

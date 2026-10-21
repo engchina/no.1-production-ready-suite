@@ -38,6 +38,8 @@ class ContentLabels:
     ocr_section: re.Pattern[str]
     # 値の欄の行（「値: …」）。
     screen_value_field: re.Pattern[str]
+    # 生成説明の画面名の欄（#2797。画面の ID は画面を指す名前で、画面に写った表示例の値ではない）。
+    screen_name_field: re.Pattern[str]
     # 表の行の欄（「- N行目: …」）と、その欄の見出し（「表の行:」）。
     table_row: re.Pattern[str]
     table_rows_heading: re.Pattern[str]
@@ -108,6 +110,7 @@ def content_labels(pack: LanguagePack | None = None) -> ContentLabels:
         ),
         ocr_section=re.compile(rf"^\s*{re.escape(ocr)}\s*{_COLON}.*?(?=^\s*{re.escape(prefix.strip())}|\Z)", re.M | re.S),
         screen_value_field=re.compile(rf"^{re.escape(label('visible_values'))}{_COLON}\s*(.+)$", re.M),
+        screen_name_field=re.compile(rf"^{re.escape(label('visible_screen_names'))}{_COLON}\s*(.+)$", re.M),
         table_row=re.compile(rf"^\s*-\s*{row_number}\s*{_COLON}.*$", re.M),
         table_rows_heading=re.compile(rf"^\s*{re.escape(label('table_rows'))}\s*{_COLON}\s*$", re.M),
         index_line=re.compile(r"\s*" + _label_line([label("menu_route"), label("search_keywords"), label("main_topic")])),
