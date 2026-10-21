@@ -3364,3 +3364,39 @@ async def test_search_without_diversity_keeps_only_the_fused_head() -> None:
             candidate_limit=1,
         )
         assert len({chunk.chunk_uid for chunk in result.child_chunks}) == expected
+
+
+async def test_evidence_images_are_cropped_once_per_chunk_in_an_answer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """同じ回答で同じ chunk が何度当たっても、画像の切り出しは 1 回（#2805）。
+
+    画像の根拠の無い chunk は metadata の JSON を解かずに飛ばす。
+    """
+    import app.rag.answer_engine as engine_module
+
+    crops: list[int] = []
+
+    def fake_crop(source: bytes, page: int, bbox: Any, size: Any) -> bytes:
+        crops.append(page)
+        return b"\x89PNG fake"
+
+    async def fake_source(oracle: object, document_id: str) -> bytes:
+        return b"%PDF"
+
+    monkeypatch.setattr(engine_module, "crop_png", fake_crop)
+    monkeypatch.setattr(engine_module, "load_parsed_source", fake_source)
+    oracle = _figure_oracle()
+    engine = AnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+    state = engine_module._SearchState(work_dir=tmp_path)
+    figure, plain = oracle.chunks[0], oracle.chunks[1]
+
+    for _ in range(3):
+        await engine._materialize_image_evidence(figure, state)
+        await engine._materialize_image_evidence(plain, state)
+
+    assert crops == [1]
+    materialized = json.loads(str(state.chunks[figure.chunk_id].metadata["engine_metadata_json"]))
+    assert materialized["image_evidence"][0]["crop_path"] == "crops/docling-p1-5.png"
+    assert state.materialized_images[plain.chunk_id] is None
+    assert plain.chunk_id not in state.chunks
