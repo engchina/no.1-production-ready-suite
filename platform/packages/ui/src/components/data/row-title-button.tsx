@@ -131,9 +131,10 @@ export function RowTitleButton({
   ...props
 }: RowTitleButtonProps) {
   const contentId = useId();
-  const actionId = useId();
+  const generatedId = useId();
+  const controlId = props.id ?? generatedId;
   const actionLabel = props["aria-label"];
-  const labelledBy = props["aria-labelledby"] ?? (actionLabel ? `${contentId} ${actionId}` : undefined);
+  const labelledBy = props["aria-labelledby"] ?? (actionLabel ? `${contentId} ${controlId}` : undefined);
   const titleRef = useRef<HTMLSpanElement | null>(null);
   const [clamped, setClamped] = useState(false);
   const fullText = maxLines ? (fullTitle ?? (typeof title === "string" ? title : undefined)) : undefined;
@@ -179,7 +180,6 @@ export function RowTitleButton({
           </span>
         ) : null}
       </span>
-      {actionLabel ? <span id={actionId} className="sr-only">{actionLabel}</span> : null}
     </>
   );
 
@@ -193,6 +193,7 @@ export function RowTitleButton({
     button = (
       <a
         {...linkProps}
+        id={controlId}
         aria-labelledby={labelledBy}
         ref={(node) => assignRef(ref, node)}
         href={href}
@@ -213,6 +214,7 @@ export function RowTitleButton({
     button = (
       <button
         {...props}
+        id={controlId}
         aria-labelledby={labelledBy}
         ref={(node) => assignRef(ref, node)}
         type="button"
