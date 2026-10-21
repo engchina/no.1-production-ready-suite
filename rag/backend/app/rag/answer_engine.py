@@ -262,6 +262,10 @@ class _SearchState:
     chunks: dict[str, RetrievedChunk] = field(default_factory=dict)
     work_dir: Path | None = None
     sources: dict[str, bytes | None] = field(default_factory=dict)
+    # 根拠の画像を切り出した chunk の metadata(engine_metadata_json。画像の無い chunk は None)。
+    # 同じ回答の検索で同じ chunk が何度も当たるので、切り出しと metadata の書き換えは chunk ごとに
+    # 1 回にする(#2805)。
+    materialized_images: dict[str, str | None] = field(default_factory=dict)
     # 質問の文書名・ページを足した検索条件(#546)。CRAG の各回で同じなので、最初の検索で
     # 1 回だけ決める。
     filters: dict[str, str] | None = None
@@ -2468,15 +2472,30 @@ class AnswerEngine:
 
         rag_poc の answer_images は ``output_dir / source_run_id / crop_path`` を読むため、
         文書ごとの run ディレクトリへ PNG を書き、metadata(engine_metadata_json)を書き換える。
-        切り出せない画像は添付しない(回答は続ける)。
+        切り出せない画像は添付しない(回答は続ける)。同じ chunk は 1 回だけ切り出し、2 回目からは
+        その結果の metadata を当てる(#2805)。
         """
+        if chunk.chunk_id in state.materialized_images:
+            cached = state.materialized_images[chunk.chunk_id]
+            if cached is not None:
+                state.chunks[chunk.chunk_id] = chunk.model_copy(
+                    update={"metadata": {**chunk.metadata, "engine_metadata_json": cached}}
+                )
+            return
+        raw = chunk.metadata.get("engine_metadata_json")
+        if isinstance(raw, str) and "image_evidence" not in raw:
+            # 画像の根拠の無い chunk は metadata を読まない(本文の JSON を解かない)。
+            state.materialized_images[chunk.chunk_id] = None
+            return
         metadata = _engine_metadata(chunk)
         images = metadata.get("image_evidence")
         width = chunk.metadata.get("page_width")
         height = chunk.metadata.get("page_height")
         if not isinstance(images, list) or not images or state.work_dir is None:
+            state.materialized_images[chunk.chunk_id] = None
             return
         if not isinstance(width, int | float) or not isinstance(height, int | float):
+            state.materialized_images[chunk.chunk_id] = None
             return
         run_id = _document_run_id(chunk.document_id)
         crop_dir = state.work_dir / run_id / "crops"
@@ -2508,13 +2527,10 @@ class AnswerEngine:
                 target.write_bytes(png)
             image["source_run_id"] = run_id
             image["crop_path"] = f"crops/{name}"
+        encoded = json.dumps(metadata, ensure_ascii=False, default=str)
+        state.materialized_images[chunk.chunk_id] = encoded
         state.chunks[chunk.chunk_id] = chunk.model_copy(
-            update={
-                "metadata": {
-                    **chunk.metadata,
-                    "engine_metadata_json": json.dumps(metadata, ensure_ascii=False, default=str),
-                }
-            }
+            update={"metadata": {**chunk.metadata, "engine_metadata_json": encoded}}
         )
 
     async def _parsed_source(self, document_id: str, state: _SearchState) -> bytes | None:
