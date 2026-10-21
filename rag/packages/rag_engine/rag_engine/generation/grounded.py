@@ -281,6 +281,7 @@ AUDIT_SYSTEM_PROMPT = (
     "- 質問の対象・変更項目・発生条件と quote の前提が一致すれば matched。quote が同じ業務・機能の種類の一般手順・規則で、質問固有の値（コード名・グループ名・回数・メニュー名の言い回し）が無いだけなら matched とする（資料は一般手順を書く）。\n"
     "- applicability は quote の対象が質問の対象と一致するかで決め、その item 1 つが質問のすべて（承認者・期限・時間帯など）に答えているかでは決めない。「この item だけでは質問に直接答えていない」は not_applicable の理由にならない（答えの充足は request_reviews で判定する）。\n"
     "- 原文に適用条件・限定が明記され、その成立が質問から確認できなければ conditional とし condition に原文の条件を書く。別の対象・項目・業務向けなら not_applicable。\n"
+    "- glossary は運用者が登録した用語の名前と別名。質問の語と quote の語が glossary の同じ用語の名前どうしなら、同じ対象として判定する。\n"
     "- 質問の対象（画面・機能・業務）と quote の対象が別で、共通の操作語（登録・入力・選択・番号・実行）だけが一致する場合は not_applicable（例: マスタの新規登録を尋ねた質問に、伝票入力で既存のマスタを選択する操作。分類の番号入力を別の登録画面の番号入力として説明する text）。\n"
     "- 特定の機能・業務・担当者にだけ適用される条件・制限（『〜機能のみ』『〜の場合は修正不可』『〜担当者が行う』）を、別の機能・設定を対象とする text に適用していれば not_applicable。質問が機能・業務を特定しておらず quote の限定が特定の機能・業務のものなら conditional とし、condition に原文の機能・業務名を写す。\n"
     "- text と quote が同じ画面・同じ項目に対する操作で、違いが新規登録か既存の変更か（登録／変更／修正の別）だけなら not_applicable にせず conditional とし、condition に原文の前提（「新規登録の手順」など）を写す。\n"
@@ -4287,6 +4288,7 @@ def run_round(
     guide_notices: Sequence[str] = (),
     audit_mode: str = AUDIT_MODE_DETAILED,
     invalid_output: Callable[[Exception], bool] | None = None,
+    glossary: Sequence[Mapping[str, Any]] = (),
 ) -> Round:
     """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -4308,6 +4310,8 @@ def run_round(
     ``audit_mode`` は監査の型（#2795）。standard は未使用の根拠を渡さず列挙させない（detailed は列挙させる）。
     ``invalid_output`` は構造化出力の契約を満たさなかった例外か（再試行の後も）の判定。画像を添付した生成がこれで
     失敗したら、画像を添付しない生成で 1 回だけ作り直す（#2772。1 組目には公開できる前の組が無く、回答全体が失敗する）。
+    ``glossary`` は質問に当たった検索・回答プロファイルの用語（名前と別名。#2823）。監査が別名で書いた質問の対象と
+    正式名で書いた根拠の対象を別と判定しないよう、監査の入力に渡す。
     """
     audit_settings = settings if audit_settings is None else audit_settings
     detailed = audit_mode == AUDIT_MODE_DETAILED
@@ -4418,6 +4422,8 @@ def run_round(
             "applications": application_audit_view(applications, lambda item: audit_index.get(id(item))),
             "known_gaps": known_gap_labels(known_gaps),
         }
+        if glossary:
+            inputs["glossary"] = [dict(term) for term in glossary]
         if detailed:
             inputs["unused_evidence"] = _unused_evidence(question, spans, used)
         if contracts:
