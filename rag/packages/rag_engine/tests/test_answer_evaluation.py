@@ -102,7 +102,7 @@ def test_repeated_invalid_output_is_error_without_partial_result():
 
 def test_adapter_validation_error_also_retries_once():
     with pytest.raises(ValidationError) as error:
-        AnswerEvaluationOutput(**(output().model_dump() | {"coverage_checks": [{"requirement_index":0,"status":"invalid"}]}))
+        AnswerEvaluationOutput(**(output().model_dump() | {"coverage_checks": [{"requirement_index": 0, "status": "invalid"}]}))
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=[error.value, output()]) as parse:
         result = evaluate_answer_payload(payload(), object())
     assert parse.call_count == 2
@@ -717,7 +717,10 @@ def test_six_metrics_correctness_uses_reference_without_retrieved_evidence():
     """忠実性・網羅性が高くても、結論の正確性を独立して判定する。"""
     from rag_engine.evaluation.answer_eval import AnswerCorrectnessOutput
 
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=[output(), AnswerCorrectnessOutput(verdict="incorrect", reason="結論が標準回答と異なる")]) as parse:
+    with patch(
+        "rag_engine.evaluation.answer_eval.parse_text_response",
+        side_effect=[output(), AnswerCorrectnessOutput(verdict="incorrect", reason="結論が標準回答と異なる")],
+    ) as parse:
         result = evaluate_answer_payload(payload() | {"six_metrics": True}, object())
     assert result["status"] == "completed"
     assert result["answer_correctness"] == 0
@@ -731,7 +734,10 @@ def test_six_metrics_correctness_uses_reference_without_retrieved_evidence():
 
 def test_six_metrics_audits_claims_without_standard(fixed_scope):
     """標準回答なしでも根拠監査を呼び、標準回答に依存する指標は測らない。"""
-    checks = AnswerEvaluationOutput(coverage_checks=[], claim_checks=[ClaimCheck(answer_quote="回答", status="unsupported", source_id="", evidence_quote="", reason="根拠なし")])
+    checks = AnswerEvaluationOutput(
+        coverage_checks=[],
+        claim_checks=[ClaimCheck(answer_quote="回答", status="unsupported", source_id="", evidence_quote="", reason="根拠なし")],
+    )
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=checks) as parse:
         result = evaluate_answer_payload(payload() | {"standard_answer": "", "six_metrics": True, "allow_without_standard": True}, object())
     assert result["status"] == "completed"

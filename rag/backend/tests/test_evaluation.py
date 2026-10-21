@@ -654,7 +654,8 @@ async def test_judgement_is_unavailable_without_answer_record_input() -> None:
     judgement = metrics.case_results[0].answer_evaluation
     assert judgement is not None and judgement.status == "completed"
     assert len(judge.calls) == 1
-    assert judge.calls[0]["evaluation_input"]["evidence_items"]
+    evaluation_input = judge.calls[0]["evaluation_input"]
+    assert isinstance(evaluation_input, dict) and evaluation_input["evidence_items"]
     assert metrics.metric_case_counts["claim_support_rate"] == 1
 
 
@@ -1448,7 +1449,7 @@ async def test_business_support_cases_score_handling_metrics_and_reasons() -> No
         metrics.category_breakdown["clarification_required"].metrics["response_decision_accuracy"]
         == 0
     )
-    assert "合成の条件" in judge.calls[0]["standard_answer"]
+    assert "合成の条件" in str(judge.calls[0]["standard_answer"])
 
 
 # ---- 検索・回答プロファイルを指定した評価（#1249） ------------------------------------------

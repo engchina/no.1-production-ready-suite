@@ -98,6 +98,7 @@ class AnswerEvaluationOutput(BaseModel):
 
 class AnswerCorrectnessOutput(BaseModel):
     """標準回答に照らした正確性。取得根拠の支持とは独立した判定。"""
+
     model_config = ConfigDict(extra="forbid")
     verdict: Literal["correct", "incorrect", "unassessed"]
     reason: str = Field(min_length=1)
@@ -1005,7 +1006,10 @@ def evaluate_answer_payload(
             correctness = _parse_checked(
                 CORRECTNESS_PROMPT,
                 {key: payload.get(key) for key in ("question", "standard_answer", "answer_text")},
-                settings, AnswerCorrectnessOutput, provider_id, lambda output: None,
+                settings,
+                AnswerCorrectnessOutput,
+                provider_id,
+                lambda output: None,
             )
             base["answer_correctness"] = {"correct": 1.0, "incorrect": 0.0}.get(correctness.verdict)
             base["correctness_reason"] = correctness.reason

@@ -67,45 +67,55 @@ def _response(answer: str, details: dict[str, Any]) -> SearchResponse:
 
 
 def test_evaluation_records_the_marks_per_answer_and_averages_them() -> None:
-    """回答ごとに矛盾で外した数・未確認の数・要注意の数を記録し、1 回答あたりの平均を出す。"""
+    """段落の印は監査の診断に残し、独立した評価指標として集計しない。"""
     example = _example("keep-unverified-remove-contradicted")
-    case = EvaluationCase(id="case-1", query="設定の変更", relevant_document_ids=["doc-1"])
+    case = EvaluationCase(id="case-1", query="合成の質問", relevant_document_ids=["doc-1"])
     details = {"outcome": "conditional", **{key: example[key] for key in PASSAGE_MARK_RECORD_KEYS}}
     marked = score_case_answers(case, [(_response(example["published"], details), {})])
     old = score_case_answers(
-        case.model_copy(update={"id": "case-2"}),
-        [(_response("回答", {"outcome": "answered"}), {})],
+        case.model_copy(update={"id": "case-2"}), [(_response("回答", {"outcome": "answered"}), {})]
     )
-    counts = (marked.removed_passages, marked.unverified_passages, marked.warning_passages)
-    assert counts == (1, 0, 1)
-    assert (old.removed_passages, old.unverified_passages, old.warning_passages) == (
-        None,
-        None,
-        None,
-    )
+    assert marked.diagnostics is not None
+    recorded = passage_mark_record(marked.diagnostics.answer)
+    assert len(recorded["removed_passages"]) == 1
+    assert len(recorded["passage_marks"]) == 1
+    assert old.diagnostics is not None
+    assert passage_mark_record(old.diagnostics.answer)["removed_passages"] == []
     metrics = summarize_case_results([marked, old])
-    assert metrics.removed_passages_per_answer == 1.0
-    assert metrics.warning_passages_per_answer == 1.0
-    assert metrics.metric_case_counts["removed_passages_per_answer"] == 1
+    assert metrics.mrr == 1
+    assert "removed_passages_per_answer" not in metrics.model_dump()
+    assert "warning_passages_per_answer" not in metrics.model_dump()
+    assert "removed_passages_per_answer" not in metrics.metric_case_counts
 
 
 def test_faithfulness_counts_the_body_of_an_all_unverified_answer() -> None:
-    """本文がすべて未確認（対応は insufficient_evidence）でも、印の段落は本文として照合する。"""
-    case = EvaluationCase(id="case-1", query="通知", relevant_document_ids=["doc-1"])
-    unverified = {
+    """未確認の印は監査に保持し、忠実性は主張の支持の判定から求める。"""
+    from app.schemas.evaluation import EvaluationAnswerJudgement
+
+    case = EvaluationCase(
+        id="case-1",
+        query="合成の質問",
+        relevant_document_ids=["doc-1"],
+        expected_response_decision="hold",
+    )
+    details = {
         "outcome": "insufficient_evidence",
         "passage_marks": [
             {
-                "text": "登録後は自動で通知されます。",
+                "text": "合成の主張",
                 "state": "unverified",
-                "reasons": [{"code": "unsupported", "label": "根拠で確かめられない", "detail": ""}],
+                "reasons": [{"code": "unsupported", "label": "未確認", "detail": ""}],
             }
         ],
         "removed_passages": [],
         "answer_warnings": [],
     }
-    response = _response("登録後は自動で通知されます。", unverified)
-    result = score_case_answers(case, [(response, {})])
-    assert result.abstained is True
-    assert result.faithfulness is not None
-    assert result.unverified_passages == 1
+    result = score_case_answers(
+        case,
+        [(_response("合成の主張", details), {})],
+        EvaluationAnswerJudgement(status="completed", claim_support_rate=0),
+    )
+    assert result.response_decision_accuracy == 1
+    assert result.claim_support_rate == 0
+    assert result.diagnostics is not None
+    assert len(passage_mark_record(result.diagnostics.answer)["passage_marks"]) == 1
