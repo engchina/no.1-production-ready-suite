@@ -47,6 +47,7 @@ function formatRate(value: number | null): string {
 }
 
 const CHANGE_VARIANT: Record<EvaluationComparisonChange, StatusVariant> = {
+  not_comparable: "warning",
   improved: "success",
   regressed: "danger",
   unchanged: "neutral",
