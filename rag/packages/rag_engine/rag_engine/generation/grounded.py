@@ -307,13 +307,11 @@ AUDIT_SYSTEM_PROMPT = (
     "- 当てはめた items の function（文書名 / 機能見出し）が質問と別の制度・手続・対象のものなら valid=false。\n"
     "\n"
     "4. 出力\n"
-    "- guide_requirement_reviews: guide_contracts の全要件について、回答 items の text が実際に述べた内容を判定する。"
-    "kind=evidence は、その item の主張と引用元が要求された根拠・対応関係を満たせば addressed とする。根拠を検査する指示自体を回答で復唱する必要はない。"
-    "kind=completion（kind が無い要件も同じ）は、操作・条件・除外・確認先の全てを本文で説明すれば addressed、一部なら partial、無ければ missing。"
-    "確認先は guide_notes の行の index も引ける（kind=evidence は items でだけ満たす）。"
-    "「〜、またはその未確認の範囲」のように未確認の明示を認める要件は、その範囲を明示した gap_items の index で addressed にできる（資料に記載が無いことは missing の理由にならない）。"
-    "完了条件はその手順の範囲で判定し、別手順や質問全体の未解決をその手順の未充足理由にしない。"
-    "資料にある・説明できる・示唆できるだけでは充足しない。対応する item_indexes と、その text を写した answer_quote を返す。\n"
+    "- guide_requirement_reviews: guide_contracts の全要件について、回答が要件の内容をどう扱ったかだけを answer_state で答える（充足かはシステムが決める）。"
+    "explained=items の text が要件の内容（操作・条件・除外・確認先・対応関係）をすべて述べた。partly_explained=一部だけ述べた。"
+    "stated_unavailable=要件の内容が資料に無い・確認できないことを gap_items か guide_notes で明示した。not_mentioned=触れていない。"
+    "資料にある・説明できる・示唆できるだけでは explained にしない。各要件はその手順の範囲で見て、別手順や質問全体の未解決を理由にしない。"
+    "扱った items / gap_items / guide_notes の index と、その text を写した answer_quote を返す（not_mentioned なら空）。\n"
     "- reviews: 各 item の index、support、applicability、condition、reason、output_fields。出力の項目を主張するitemでは、evidenceとfunction_contextが示す根拠の役割と成果物の一致を先に判定する。\n"
     "- application_reviews: 各 application の index、valid、reason。\n"
     "- request_reviews: request_units の各 id について、items（valid な applications を含む）が答えていれば addressed（複数の item をつないで答えていても addressed）、一部なら partial、なければ missing、背景なら context。reason は質問と同じ言語で書く。\n"
@@ -342,12 +340,14 @@ AUDIT_COMPACT_REASON_RULE = (
 )
 
 
-# 監査の型（#2795）。standard（通常の回答）は主張の信頼性と要求・業務ガイドの要件の充足を 1 回の監査で判定し、
-# 未使用の根拠は列挙しない。detailed（業務ガイドの下書きの試答・評価）は未使用の根拠も列挙する。作り直しの違いは
-# `correction_feedback`（standard は事実の問題だけ）。
+# 監査の型（#2795・#2800）。none（通常の回答の既定）は生成の後の LLM の監査と作り直しをせず、決定的な検査だけで印を
+# 付ける（WeKnora と同じく、生成の後に確認の LLM を呼ばない。引用の原文との照合はシステムが行う）。standard は主張の
+# 信頼性と要求・業務ガイドの要件の充足を 1 回の監査で判定し、未使用の根拠は列挙しない。detailed（業務ガイドの下書きの
+# 試答・評価）は未使用の根拠も列挙する。作り直しの違いは `correction_feedback`（standard は事実の問題だけ）。
+AUDIT_MODE_NONE = "none"
 AUDIT_MODE_STANDARD = "standard"
 AUDIT_MODE_DETAILED = "detailed"
-AUDIT_MODES = (AUDIT_MODE_STANDARD, AUDIT_MODE_DETAILED)
+AUDIT_MODES = (AUDIT_MODE_NONE, AUDIT_MODE_STANDARD, AUDIT_MODE_DETAILED)
 # 通常の回答の組の数の上限（1 組目と、事実の問題を直す作り直しの 1 組）。
 STANDARD_MAX_ROUNDS = 2
 # 通常の回答で作り直しに使う指摘（事実の問題）。完全性の不足（答えていない要求・未使用の根拠・説明していない手順・
@@ -3834,6 +3834,28 @@ def _requirement_answer_text(checked: Sequence[CheckedItem], notices: Sequence[s
     return "\n".join(texts)
 
 
+# 要件の監査の観察（`GuideRequirementReview.answer_state`）から要件の充足を決める規則（#2800）。モデルには回答が要件を
+# どう扱ったかだけを答えさせ、「資料に無いことを示した」を充足とみなすかは製品の規則で決める（LLM-as-judge を観察の
+# 判定に寄せる）。必要な根拠（kind=evidence）は回答の説明が述べたときだけ。完了条件（kind=completion）は、資料に無い・
+# 確認できないことを gap か業務ガイドの案内の行で明示したときも満たす。
+_REQUIREMENT_STATES = {"explained": "addressed", "partly_explained": "partial", "not_mentioned": "missing"}
+
+
+def requirement_status(review: Any, requirement: Mapping[str, Any], checked: Sequence[CheckedItem], notices: Sequence[str] = ()) -> str:
+    """要件の監査の観察を、要件の充足（addressed / partial / missing）にする（#2800）。"""
+    if review is None:
+        return "missing"
+    if review.answer_state != "stated_unavailable":
+        return _REQUIREMENT_STATES[review.answer_state]
+    if requirement.get("kind", "completion") != "completion":
+        return "missing"
+    states_unavailable = any(
+        (0 <= index < len(checked) and checked[index].item.kind == "gap") or 0 <= index - len(checked) < len(notices)
+        for index in review.item_indexes
+    )
+    return "addressed" if states_unavailable else "partial"
+
+
 def apply_guide_contracts(
     coverage: Sequence[dict[str, Any]],
     checked: Sequence[CheckedItem],
@@ -3876,7 +3898,7 @@ def apply_guide_contracts(
             valid = bool(cited) and all(citable(index) for index in cited)
             answer_text = _requirement_answer_text(checked, notices, cited)
             quote_matches = bool(review and review.answer_quote.strip() and quote_in_text(review.answer_quote, answer_text))
-            status = review.status if review else "missing"
+            status = requirement_status(review, requirement, checked, notices)
             if status == "addressed" and not (valid and quote_matches):
                 status = "partial"
             requirements.append({**requirement, "status": status, "reason": review.reason if review else "要件の監査がない"})
@@ -4196,7 +4218,8 @@ def run_round(
     """
     audit_settings = settings if audit_settings is None else audit_settings
     detailed = audit_mode == AUDIT_MODE_DETAILED
-    contracts = guide_step_contracts
+    # 監査なしの型は業務ガイドの要件を判定しない（手順の充足は決定的な対応付けだけ。#2800）。
+    contracts = () if audit_mode == AUDIT_MODE_NONE else guide_step_contracts
     audit_system = audit_system_prompt(compact_reasons=compact_audit_reasons, detailed=detailed)
     started, usage_before = monotonic(), usage_snapshot()
     if image_paths:
@@ -4246,7 +4269,7 @@ def run_round(
     # 印の付いた説明も監査する（根拠と矛盾すれば外す。#2738）。システムが補った原文・外した説明は監査しない。
     auditable = [(index, entry) for index, entry in enumerate(checked) if entry.span and entry.published]
     audit_index = {id(entry): index for index, entry in auditable}
-    if spans:
+    if spans and audit_mode != AUDIT_MODE_NONE:
         # 未使用根拠の基準は草稿の items。システムが補った原文のみ提示（必須根拠・確定操作・但し書き）は草稿が
         # 使っていないので未使用に含め、gap だけの草稿でも見落とした根拠を監査に見せる (#1014)。
         used = {entry.span["evidence_id"] for entry in checked if entry.span and not entry.added}
@@ -4331,7 +4354,7 @@ def run_round(
                     entry.requirement_id
                     for entry in audit.guide_requirement_reviews
                     if entry.requirement_id in expected_requirements
-                    and entry.status == "addressed"
+                    and entry.answer_state != "not_mentioned"
                     and not (
                         entry.item_indexes
                         and all(0 <= index < len(checked) + len(guide_notices) for index in entry.item_indexes)
@@ -4346,7 +4369,7 @@ def run_round(
                         "field": "guide_requirement_reviews",
                         "required_once": missing_requirements,
                         "invalid_answer_quotes": invalid_answer_quotes,
-                        "message": "required_once の要件 id は1回ずつ判定してください。invalid_answer_quotes の判定は、item_indexes が指す回答の text から answer_quote をそのまま写してください。根拠の原文や quote を代わりに写さず、回答に必要な説明がなければ partial または missing としてください。全要件の判定を含む監査を返してください。",
+                        "message": "required_once の要件 id は1回ずつ判定してください。invalid_answer_quotes の判定は、item_indexes が指す回答の text から answer_quote をそのまま写してください。根拠の原文や quote を代わりに写さず、回答が要件に触れていなければ not_mentioned としてください。全要件の判定を含む監査を返してください。",
                     }
                     audit_prompt = json.dumps(fold_model_view(inputs), ensure_ascii=False)
                 # reviews も request_reviews も空の応答は監査として使えない。そのまま使うと addressed が空になり、
@@ -4368,6 +4391,10 @@ def run_round(
             apply_audit(checked, audit)
             checked = without_redundant_quotes(checked)
             _reconcile_request_reviews(checked, audit)
+    if audit_mode == AUDIT_MODE_NONE:
+        # 監査なしの型（#2800）: 要求の充足は説明の有無で決め、主張の支持・目的・要約は決定的な検査だけにする。
+        audit = deterministic_audit(question, checked)
+        timing["audit"] = AUDIT_MODE_NONE
     if audit is None and spans:
         # 監査が時間の上限で切れた・応答が空だった round の説明は、原文との照合だけを済ませた未確認の説明（#2738）。
         # 引き継いだ item は前の round で監査済み。
@@ -4375,7 +4402,9 @@ def run_round(
         for _index, entry in auditable:
             if not entry.carried:
                 entry.mark("unassessed", detail)
-    apply_application_audit(applications, audit)
+    if audit_mode != AUDIT_MODE_NONE:
+        # 監査なしの型では、当てはめは決定的な検査（前提の照合・規則の引用・算式の計算）を通ったものを出す。
+        apply_application_audit(applications, audit)
     # 撤回 = 撤回の候補を当該 round の監査が contradicted / not_applicable と判定したもの。新しい主張の印は撤回に数えない。
     withdrawn = [e for e in checked if e.withdrawn and id(e) in restated]
     limits = list(dict.fromkeys(fold_width(limit) for entry in checked if entry.span for limit in entry.span.get("limits", ())))
@@ -4475,8 +4504,34 @@ def run_round(
     )
 
 
+def deterministic_audit(question: str, checked: Sequence[CheckedItem]) -> GroundedAudit:
+    """監査なしの型（#2800）の判定。LLM を呼ばず、要求ごとの充足を説明の有無で決める。
+
+    要求に付いた説明（gap 以外。システムが補った原文・矛盾で外した説明を除く）があれば addressed（印の付いた説明だけなら
+    partial）、無ければ missing。要求の id の付いていない説明は、どの要求の説明か決められないので全要求の説明とする。
+    主張ごとの判定（reviews）は返さない（決定的な検査の印だけ）。
+    """
+    units = [unit for unit in task_contract(question)["request_units"] if unit.get("kind") != "context"]
+    entries = [entry for entry in checked if entry.published and not entry.added and entry.item.kind != "gap"]
+
+    def owns(unit_id: str, request_id: str) -> bool:
+        return not request_id or request_id == unit_id or request_id.startswith(f"{unit_id}.")
+
+    reviews = []
+    for unit in units:
+        own = [entry for entry in entries if owns(str(unit["id"]), entry.item.request_id)]
+        status = "addressed" if any(entry.confirmed for entry in own) else "partial" if own else "missing"
+        reviews.append({"request_id": unit["id"], "status": status, "reason": "説明の有無で判定（監査なし）"})
+    return GroundedAudit.model_validate({"reviews": [], "request_reviews": reviews, "summary_supported": True, "goal_alignment": "aligned"})
+
+
 def correction_feedback(feedback: Mapping[str, Any], audit_mode: str) -> dict:
-    """次の組へ渡す指摘を監査の型で絞る（#2795）。通常の回答は事実の問題だけで、無ければ空（作り直さない）。"""
+    """次の組へ渡す指摘を監査の型で絞る（#2795）。通常の回答は事実の問題だけで、無ければ空（作り直さない）。
+
+    監査なしの型（#2800）は作り直さない（常に空）。
+    """
+    if audit_mode == AUDIT_MODE_NONE:
+        return {}
     if audit_mode == AUDIT_MODE_DETAILED:
         return dict(feedback)
     kept = {key: feedback[key] for key in STANDARD_CORRECTION_KEYS if feedback.get(key)}

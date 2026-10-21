@@ -1967,6 +1967,8 @@ def synthesize_grounded_answer(
         audit_mode = grounded.AUDIT_MODE_DETAILED
     if audit_mode == grounded.AUDIT_MODE_STANDARD:
         max_rounds = min(max_rounds, grounded.STANDARD_MAX_ROUNDS)
+    elif audit_mode == grounded.AUDIT_MODE_NONE:
+        max_rounds = 1
     compact_audit_reasons = bool(getattr(settings, "answer_audit_compact_reasons", False))
     # 作り直しの組の LLM の呼び出しが失敗し、前の組を公開したときの例外の型（#2729）。
     correction_failure = ""
@@ -2212,7 +2214,7 @@ def synthesize_grounded_answer(
     # 当てはめだけを作る段を 1 回行う（生成と監査で LLM 2 回。#2159）。生成の可否の欄（applications）をモデルが
     # 書かないことがあるため、専用の段で作る。失敗しても回答は作り直さず、理由を診断に残す。
     application_step: dict[str, Any] = {"ran": False}
-    if answer_applications.application_step_needed(
+    if audit_mode != grounded.AUDIT_MODE_NONE and answer_applications.application_step_needed(
         question,
         current.summary == grounded.answer_labels().neutral_summary or bool(current.summary_warning),
         current.checked,
@@ -2300,7 +2302,8 @@ def synthesize_grounded_answer(
     guide_coverage = grounded.apply_guide_contracts(
         guide_coverage,
         current.checked,
-        runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
+        # 監査なしの型は要件を判定しない（決定的な対応付けの充足。#2800）。
+        runtime_knowledge.guide_step_contracts if runtime_knowledge and audit_mode != grounded.AUDIT_MODE_NONE else (),
         current.audit,
         guide_notices,
     )

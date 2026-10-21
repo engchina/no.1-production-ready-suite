@@ -506,12 +506,16 @@ class GuideRequirementReview(_StrictModel):
         description="要件を説明している回答 items の text の原文。複数の item を使う場合は該当の text を改変せず改行でつなぐ。説明がなければ空文字。資料から引用しない。",
     )
     requirement_id: str = Field(description="guide_contracts の requirements の id。")
-    status: Literal["addressed", "partial", "missing"] = Field(
-        description="addressed=全体を説明、partial=一部、missing=説明なし。判定の基準は監査の指示に従う。"
+    answer_state: Literal["explained", "partly_explained", "stated_unavailable", "not_mentioned"] = Field(
+        description=(
+            "回答が要件の内容をどう扱ったか（観察した事実だけ。充足かはシステムが決める）。explained=items の text が要件の内容を"
+            "すべて述べた。partly_explained=一部だけ述べた。stated_unavailable=要件の内容が資料に無い・確認できないことを"
+            "gap_items か guide_notes で明示した。not_mentioned=触れていない。"
+        )
     )
     item_indexes: list[int] = Field(
         max_length=40,
-        description="要件を説明する回答の items / gap_items の index。未確認の明示を求める要件は gap_items でもよいが、実施手順の説明を求める要件を不足の文だけで充足にしない。",
+        description="要件を扱った回答の items / gap_items / guide_notes の index。",
     )
     reason: str = Field(max_length=600, description="不足している操作・条件。充足なら空文字。")
 

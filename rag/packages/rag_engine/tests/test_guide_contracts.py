@@ -18,8 +18,13 @@ def audit(*reviews):
     return GroundedAudit(reviews=[], summary_supported=True, goal_alignment="aligned", guide_requirement_reviews=list(reviews))
 
 
+_STATES = {"addressed": "explained", "partial": "partly_explained", "missing": "not_mentioned"}
+
+
 def review(key, indexes, status="addressed"):
-    return {"requirement_id": key, "status": status, "item_indexes": indexes, "reason": "", "answer_quote": "対象を選択します"}
+    """要件の監査の観察（#2800）。status は充足の名前（addressed / partial / missing）か観察の名前。"""
+    state = _STATES.get(status, status)
+    return {"requirement_id": key, "answer_state": state, "item_indexes": indexes, "reason": "", "answer_quote": "対象を選択します"}
 
 
 def contract(step, *requirements, dependencies=()):
@@ -145,8 +150,8 @@ def test_generation_receives_requirements_and_missing_audit_rows_are_retried():
     complete = {
         **incomplete,
         "guide_requirement_reviews": [
-            GuideRequirementReview(requirement_id="s1:0", status="addressed", item_indexes=[0], answer_quote=STEP_A, reason=""),
-            GuideRequirementReview(requirement_id="s2:0", status="addressed", item_indexes=[1], answer_quote=STEP_B, reason=""),
+            GuideRequirementReview(requirement_id="s1:0", answer_state="explained", item_indexes=[0], answer_quote=STEP_A, reason=""),
+            GuideRequirementReview(requirement_id="s2:0", answer_state="explained", item_indexes=[1], answer_quote=STEP_B, reason=""),
         ],
     }
     model = FakeModel([draft(item(labels[STEP_A], STEP_A, STEP_A), item(labels[STEP_B], STEP_B, STEP_B))], [incomplete, complete])
