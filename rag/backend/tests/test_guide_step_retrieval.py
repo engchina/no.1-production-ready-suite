@@ -251,6 +251,8 @@ def test_build_engine_settings_passes_guide_step_settings(tmp_path: Any) -> None
 
     assert default.guide_step_retrieval_enabled is True
     assert (default.guide_step_max_queries, default.extra_retrieval_max_queries) == (4, 8)
+    # 手順の多い業務ガイドで後ろの手順が残らないよう、期限の既定は上限の 60 秒（#2826）。
+    assert default.guide_step_deadline_seconds == 60.0
     assert custom.guide_step_retrieval_enabled is False
     assert (custom.guide_step_max_queries, custom.guide_step_chunks_per_step) == (2, 3)
     assert (custom.guide_reference_max_chunks, custom.guide_step_deadline_seconds) == (1, 2.5)

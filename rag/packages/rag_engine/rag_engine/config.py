@@ -312,7 +312,7 @@ class Settings:
     guide_step_max_queries: int = 4
     guide_step_chunks_per_step: int = 2
     guide_reference_max_chunks: int = 4
-    guide_step_deadline_seconds: float = 10.0
+    guide_step_deadline_seconds: float = 60.0
     # 当たった chunk の章節から親の章節へ段階的に広げて文脈に入れる (#1436)。章節と chunk の対応を注入した
     # 呼び出し元（`AnswerDependencies.section_outline` / `section_chunks`）でだけ動く。上限は、根拠の入力 token
     # （モデルの入力の上限に対する割合）・上がる段の数・回答の開始からの秒数。
@@ -591,7 +591,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         guide_step_max_queries=max(0, _env_int(env, "RAG_ENGINE_GUIDE_STEP_MAX_QUERIES", 4)),
         guide_step_chunks_per_step=max(1, _env_int(env, "RAG_ENGINE_GUIDE_STEP_CHUNKS_PER_STEP", 2)),
         guide_reference_max_chunks=max(0, _env_int(env, "RAG_ENGINE_GUIDE_REFERENCE_MAX_CHUNKS", 4)),
-        guide_step_deadline_seconds=max(0.0, _env_float(env, "RAG_ENGINE_GUIDE_STEP_DEADLINE_SECONDS", 10.0)),
+        guide_step_deadline_seconds=max(0.0, _env_float(env, "RAG_ENGINE_GUIDE_STEP_DEADLINE_SECONDS", 60.0)),
         section_expansion_enabled=_env_bool(env, "RAG_ENGINE_SECTION_EXPANSION", True),
         section_expansion_max_levels=max(0, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS", 4)),
         section_expansion_input_token_percent=max(1, min(100, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT", 50))),

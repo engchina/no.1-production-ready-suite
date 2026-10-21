@@ -1550,10 +1550,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_guide_step_deadline_seconds: float = Field(
-        default=10.0,
+        default=60.0,
         ge=0,
         le=60,
-        description="業務ガイドの手順ごとの検索の期限(秒)。過ぎたら次の検索を始めない(#2395)。",
+        description=(
+            "業務ガイドの手順ごとの検索の期限(秒。既定 60。#2826)。"
+            "過ぎたら次の検索を始めない(#2395)。"
+        ),
     )
     rag_strategy_reasoning_effort: ReasoningEffortOverride = Field(
         default="model",

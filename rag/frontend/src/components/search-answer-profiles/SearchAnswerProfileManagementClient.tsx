@@ -1144,7 +1144,7 @@ function SearchAnswerProfileEditor({
                     }
                     options={[0, 10, 20, 30, 45, 60].map((value) => ({ value: String(value), label: String(value) }))}
                     width="xs"
-                    defaultOnOverride="10"
+                    defaultOnOverride="60"
                     disabled={locked}
                     onChange={(value) =>
                       updateQuery({

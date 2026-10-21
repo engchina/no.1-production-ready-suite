@@ -234,6 +234,8 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   await model.screenshot({ path: testInfo.outputPath("profile-answer-model.png") });
   const deadline = page.getByRole("heading", { name: "手順ごとの検索の時間上限（秒）", level: 3 }).locator("..");
   await deadline.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
+  // 上書きに切り替えた直後は全体の既定（60 秒。#2826）を出す。
+  await expect(deadline.getByRole("combobox")).toHaveText("60");
   await deadline.getByRole("combobox").click();
   await page.getByRole("option", { name: "30", exact: true }).click();
   await deadline.screenshot({ path: testInfo.outputPath("guide-step-deadline.png") });
