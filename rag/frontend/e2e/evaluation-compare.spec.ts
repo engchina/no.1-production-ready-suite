@@ -274,7 +274,7 @@ for (const viewport of [
     await expect(confirm).toHaveAttribute("aria-checked", "true");
 
     // 検索・回答プロファイルでも流して比べる（オンにしてから選ぶ。未選択なら欄の直下に出す）。
-    await page.getByRole("switch", { name: /業務ガイドあり.*比べる/ }).click();
+    await page.getByRole("switch", { name: "検索・回答プロファイルでも評価して比較する" }).click();
     await page.getByRole("button", { name: "評価実行" }).click();
     await expect(page.getByText("比べる検索・回答プロファイルを選んでください。")).toBeVisible();
     await selectSearchAnswerProfile(page, /プロファイル A/);

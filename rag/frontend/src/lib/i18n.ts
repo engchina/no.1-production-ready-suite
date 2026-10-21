@@ -4295,7 +4295,7 @@ export const ja = {
   "evaluation.import.dropzoneHint": ".xlsx・{rows} 行・{size}MB まで",
   "evaluation.import.template": "テンプレートをダウンロード",
   "evaluation.import.templateHint":
-    "列は「質問」「期待する根拠」「標準回答」「必須の回答要点」「期待する応答の判断」「回答の過程」の 6 つで、質問だけが必須です。期待する判断には回答・確認・保留を指定します。ナレッジベースを選んでからダウンロードすると、その文書の一覧（ファイル名・文書 ID）が入ります。",
+    "列は「質問」「期待する根拠」「標準回答」「必須の回答要点」「期待する応答の判断」「回答の過程」の 6 つで、質問だけが必須です。期待する判断には回答・確認・保留を指定します。評価に必要な入力や根拠が不足する指標は「未評価」となり、合格を意味しません。ナレッジベースを選んでからダウンロードすると、その文書の一覧（ファイル名・文書 ID）が入ります。",
   "evaluation.import.templateDone": "テンプレートをダウンロードしました。",
   "evaluation.import.templateError":
     "テンプレートをダウンロードできませんでした。時間をおいて、もう一度試してください。",
@@ -4466,9 +4466,9 @@ export const ja = {
   "evaluation.case.wrongScreens": "別の画面: {screens}",
   "evaluation.case.screenJudged": "回答に画面の名前が無いため、判定器で判定しました。",
   "evaluation.case.screenUnresolved": "回答に画面の名前が無く、判定できませんでした。",
-  "evaluation.compare.toggle": "検索・回答プロファイル（業務ガイドあり）でも流して比べる",
+  "evaluation.compare.toggle": "検索・回答プロファイルでも評価して比較する",
   "evaluation.compare.helper":
-    "同じケースを、選んだナレッジベースの範囲と、検索・回答プロファイルの範囲（参照するナレッジベース・業務ガイド・ルール）の 2 回流して並べます。評価の時間は約 2 倍です。",
+    "同じケースを、選んだナレッジベースの範囲と、検索・回答プロファイルの範囲（参照ナレッジベースと、設定されている業務ガイド・ルール）でそれぞれ評価し、同じ六指標・閾値で比較します。評価は 2 回実行します。所要時間は設定や処理状況によって変わります。",
   "evaluation.compare.profileLabel": "比べる検索・回答プロファイル",
   "evaluation.compare.profileRequired": "比べる検索・回答プロファイルを選んでください。",
   "evaluation.compare.profilesLoadError": "検索・回答プロファイルを読み込めませんでした。",
