@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
+from html.parser import HTMLParser
 from math import fsum
 from time import perf_counter
 from typing import Any, Protocol
@@ -21,6 +22,7 @@ from pr_backend_core.bounded_calls import (
     BoundedCaller,
     BoundedCallFailed,
 )
+from rag_engine.parsing.table_structure import parse_html_table_structure
 
 from app.clients.ai_calls import make_ai_caller
 from app.clients.oracle import OracleClient
@@ -1029,7 +1031,45 @@ def evidence_matches_chunk(
         str(chunk.metadata.get("section_path") or ""), evidence.section
     ):
         return False
-    return evidence.text is None or contains_normalized(chunk.text, evidence.text)
+    if evidence.text is None:
+        return True
+    # 表示上は連続するセルの原文を、HTML のタグを含めず同じ行の中で照合する。
+    # 行を連結すると、別の行にある数値を組み合わせて根拠にしてしまう。
+    if "<table" not in chunk.text.lower():
+        return contains_normalized(chunk.text, evidence.text)
+    structure = parse_html_table_structure(chunk.text)
+    outside = _OutsideTableText()
+    outside.feed(chunk.text)
+    outside.close()
+    if any(contains_normalized(text, evidence.text) for text in outside.segments):
+        return True
+    return any(
+        contains_normalized(" ".join(cell["text"] for cell in row["cells"]), evidence.text)
+        for row in structure.get("rows", [])
+    )
+
+
+class _OutsideTableText(HTMLParser):
+    """表の前後の本文も照合するが、表をまたいで本文をつなげない。"""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.depth = 0
+        self.segments = [""]
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "table":
+            if self.depth == 0:
+                self.segments.append("")
+            self.depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "table" and self.depth:
+            self.depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self.depth:
+            self.segments[-1] += data
 
 
 def _ranges_overlap(found: tuple[int, int] | None, start: int, end: int | None) -> bool:
