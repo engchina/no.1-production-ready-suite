@@ -2042,6 +2042,22 @@ async def test_oracle_knowledge_base_subgraph_requires_current_kb_membership() -
     assert "JSON_EXISTS(r.source_document_ids," in edge_sql
 
 
+async def test_oracle_knowledge_base_subgraph_requires_active_chunk_sets() -> None:
+    """成功前の処理結果を node / edge のどちらにも表示しない。"""
+    pool = FakeOraclePool(
+        execute_results=[[{"entity_id": "entity-active", "canonical_name": "section"}], []]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.fetch_knowledge_base_subgraph("kb-active", limit=10)
+
+    for call, alias in zip(pool.connection.calls, ("e", "r"), strict=True):
+        sql = " ".join(call.statement.split())
+        assert f"{alias}.chunk_set_id IS NULL OR EXISTS" in sql
+        assert f"graph_cs.chunk_set_id = {alias}.chunk_set_id" in sql
+        assert "graph_cs.is_active = 1" in sql
+
+
 async def test_upsert_extraction_artifact_preserves_existing_payload_when_omitted() -> None:
     """後段 status 更新では大きい抽出 JSON を再 bind せず、既存 payload を保持する。"""
     pool = FakeOraclePool()

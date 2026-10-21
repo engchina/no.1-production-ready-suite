@@ -42,9 +42,14 @@ def _chunks(sections: list[tuple[str, int]]) -> list[Chunk]:
 
 
 async def _indexed_document(
-    client: OracleClient, *, file_name: str, chunks: list[Chunk], knowledge_base_id: str
+    client: OracleClient,
+    *,
+    file_name: str,
+    chunks: list[Chunk],
+    knowledge_base_id: str,
+    activate: bool = True,
 ) -> tuple[str, str]:
-    """検索対象（INDEXED・active な chunk_set）の文書と関係情報を作り、(文書 ID, chunk_set ID)。"""
+    """文書と関係情報を作り、文書 ID と chunk_set ID を返す。activate=False は切替前。"""
     detail = await client.create_document(
         file_name=file_name,
         object_storage_path=f"local://{file_name}",
@@ -69,11 +74,12 @@ async def _indexed_document(
     await client.mark_chunk_set_indexed(
         chunk_set_id=chunk_set_id, chunk_count=len(chunks), vector_count=len(chunks)
     )
-    await client.activate_recipe_chunk_set(
-        recipe_id=recipe_id,
-        chunk_set_id=chunk_set_id,
-        materialized_revision=int(str(recipes[0].get("config_revision") or 1)),
-    )
+    if activate:
+        await client.activate_recipe_chunk_set(
+            recipe_id=recipe_id,
+            chunk_set_id=chunk_set_id,
+            materialized_revision=int(str(recipes[0].get("config_revision") or 1)),
+        )
     await client.update_document_status(document_id, FileStatus.INDEXED)
     graph = build_graph_index(
         document_id=document_id,
@@ -147,3 +153,34 @@ async def test_graph_expansion_joins_on_real_oracle() -> None:
             await client.replace_document_graph_index(
                 document_id, GraphIndex(), chunk_set_id=chunk_set_id
             )
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_subgraph_hides_pending_graph_until_activation() -> None:
+    """グラフを保存しても有効化までは表示せず、切替後に node と edge を表示する。"""
+    client = OracleClient()
+    token = uuid4().hex[:8]
+    kb = await client.create_knowledge_base(name=f"graph-activation-{token}")
+    document_id, chunk_set_id = await _indexed_document(
+        client,
+        file_name=f"graph-activation-{token}.pdf",
+        chunks=_chunks([("section-a", 1)]),
+        knowledge_base_id=kb.id,
+        activate=False,
+    )
+    try:
+        nodes, edges = await client.fetch_knowledge_base_subgraph(kb.id, limit=100)
+        assert nodes == []
+        assert edges == []
+
+        recipes = await client.list_document_recipes(document_id)
+        await client.activate_recipe_chunk_set(
+            recipe_id=str(recipes[0]["recipe_id"]), chunk_set_id=chunk_set_id
+        )
+        nodes, edges = await client.fetch_knowledge_base_subgraph(kb.id, limit=100)
+        assert nodes
+        assert edges
+        node_ids = {node["id"] for node in nodes}
+        assert all(edge["source"] in node_ids and edge["target"] in node_ids for edge in edges)
+    finally:
+        await client.delete_document(document_id)
