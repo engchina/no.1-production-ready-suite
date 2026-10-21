@@ -1260,9 +1260,10 @@ def test_ingest_chunks_locally_without_http_delegation(
 ) -> None:
     """取込の分割は HTTP 委譲せず、backend 内の分割実装を直接使う。"""
     import app.rag.ingestion as ingestion
+    from app.rag.chunking import chunk_extraction_with_strategy
 
     calls: list[object] = []
-    original_chunking = ingestion.chunk_extraction_with_strategy
+    original_chunking = chunk_extraction_with_strategy
 
     def local_chunking(*args: Any, **kwargs: Any) -> Any:
         calls.append(args)
