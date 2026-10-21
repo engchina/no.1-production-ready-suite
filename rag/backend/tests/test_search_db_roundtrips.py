@@ -610,8 +610,8 @@ async def test_search_many_matches_hybrid_search_per_query(
     assert [[list(hit.metadata) for hit in hits] for hits in batched] == [
         [list(hit.metadata) for hit in hits] for hits in expected
     ]
-    # vector の検索 4 本で 1 回、keyword の検索 3 本で 1 回。
-    assert len(statements) == 2
+    # vector の検索は 1 本ずつ 4 回（#2800。まとめると索引を使わない）、keyword の検索 3 本で 1 回。
+    assert len(statements) == 5
     assert batched[0]
     assert batched[3]
 

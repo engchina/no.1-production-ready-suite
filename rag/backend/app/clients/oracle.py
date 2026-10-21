@@ -577,9 +577,20 @@ class OracleClient:
         branch_rows: list[list[tuple[int, dict[str, object]]]] = [[] for _ in branch_kinds]
         # vector の検索と keyword の検索は別の SQL にして並行に読む(1 本の SQL の中の検索は順に
         # 実行されるため)。SQL の文は検索文の数だけで決まる(#1498)。
-        reads = []
+        reads: list[Awaitable[None]] = []
         for kind in ("vector", "keyword"):
             numbers = [n for n, branch_kind in enumerate(branch_kinds) if branch_kind == kind]
+            if kind == "vector":
+                # vector の検索は 1 本ずつの SQL で並行に読む(#2800)。まとめた SQL(branch ごとの
+                # CTE)に入れると、文書の集合の副問い合わせを optimizer が行ごとの FILTER にし、
+                # 近傍の検索が chunk の全件の走査になる(検証環境で 2 本 20 秒 → 1 本ずつ 1 秒)。
+                reads.extend(
+                    self._read_vector_branch(
+                        binds[f"embedding_{n}"], top_k=top_k, filters=filters, into=branch_rows[n]
+                    )
+                    for n in numbers
+                )
+                continue
             for start in range(0, len(numbers), _MULTI_SEARCH_MAX_BRANCHES):
                 chunk = numbers[start : start + _MULTI_SEARCH_MAX_BRANCHES]
                 bind_name = "embedding" if kind == "vector" else "query"
@@ -6467,34 +6478,51 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
-    async def _vector_search_with_oracle(
-        self, embedding: list[float], top_k: int, filters: dict[str, str]
-    ) -> list[RetrievedChunk]:
-        """Oracle AI Vector Search で近傍 chunk を取得する。"""
+    async def _read_vector_branch(
+        self,
+        embedding_bind: object,
+        *,
+        top_k: int,
+        filters: dict[str, str],
+        into: list[tuple[int, dict[str, object]]],
+    ) -> None:
+        """vector の検索 1 本の行を (順位, 行) で ``into`` に足す(``search_many`` の branch)。"""
+        for rank, row in enumerate(
+            await self._vector_rows(embedding_bind, top_k=top_k, filters=filters), start=1
+        ):
+            into.append((rank, row))
+
+    async def _vector_rows(
+        self, embedding_bind: object, *, top_k: int, filters: dict[str, str]
+    ) -> list[dict[str, object]]:
+        """vector の検索 1 本の行(``_SEARCH_HIT_COLUMNS`` と ``score``。近い順)。"""
         document_sql, chunk_sql, binds = _oracle_retrieval_where_split(filters)
         binds.update(
-            {
-                "embedding": _to_vector_bind(embedding),
-                "min_similarity": self._settings.rag_min_similarity,
-            }
+            {"embedding": embedding_bind, "min_similarity": self._settings.rag_min_similarity}
         )
         # 解決は初回だけ pipeline-vector-index サービスへ同期の HTTP を送ることがあるため、
         # イベントループを止めないようスレッドで呼ぶ(以降はメモ化した値。#828)。
         vector_index = await asyncio.to_thread(resolve_vector_index_adapter, self._settings)
         fetch_clause = _oracle_vector_fetch_clause(
-            top_k=top_k,
-            target_accuracy=vector_index.target_accuracy,
+            top_k=top_k, target_accuracy=vector_index.target_accuracy
         )
-        rows = await self._fetch_all(
-            _vector_search_sql(
-                select_list=f"{_SEARCH_HIT_COLUMNS}, {_vector_score_sql('embedding')} AS score",
-                embedding_bind="embedding",
-                document_sql=document_sql,
-                chunk_sql=chunk_sql,
-                fetch_clause=fetch_clause,
-            ),
-            binds,
-        )
+        with read_rows_per_round_trip(_SEARCH_FETCH_ROWS):
+            return await self._fetch_all(
+                _vector_search_sql(
+                    select_list=f"{_SEARCH_HIT_COLUMNS}, {_vector_score_sql('embedding')} AS score",
+                    embedding_bind="embedding",
+                    document_sql=document_sql,
+                    chunk_sql=chunk_sql,
+                    fetch_clause=fetch_clause,
+                ),
+                binds,
+            )
+
+    async def _vector_search_with_oracle(
+        self, embedding: list[float], top_k: int, filters: dict[str, str]
+    ) -> list[RetrievedChunk]:
+        """Oracle AI Vector Search で近傍 chunk を取得する。"""
+        rows = await self._vector_rows(_to_vector_bind(embedding), top_k=top_k, filters=filters)
         return [
             _with_retrieval_metadata(
                 chunk,
