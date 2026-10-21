@@ -96,7 +96,7 @@ async function clearListDetailStorage(page: Page) {
 }
 
 function rowButton(page: Page, name: string) {
-  return page.getByRole("button", { name: `APP.${name} を選択`, exact: true });
+  return page.getByRole("button", { name: `APP.${name} を選択` });
 }
 
 test.describe("データの管理のデータの表示の一覧 + 詳細（ListDetailLayout。#2315）", () => {

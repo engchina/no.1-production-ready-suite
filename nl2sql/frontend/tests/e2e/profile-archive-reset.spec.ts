@@ -355,7 +355,7 @@ test("プロファイル名のリンク（共有 RowTitleButton の href）は T
   await mockProfileManagement(page);
   await page.goto("/profiles");
 
-  const salesLink = page.getByRole("link", { name: "営業プロファイル を編集", exact: true });
+  const salesLink = page.getByRole("link", { name: "営業プロファイル を編集" });
   await expect(salesLink).toHaveAttribute("data-row-title-button", "");
   await expect(salesLink).toHaveAttribute("href", "/profiles?profile=sales");
   // 題名の色は 3 製品で共通の本文色（押せることは行の hover と下線で示す）。

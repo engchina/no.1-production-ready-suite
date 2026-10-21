@@ -113,28 +113,10 @@ async function mockMainScreens(page: Page) {
 
 /** 設定の画面（選んだカード = accent の淡い面、方針のチップ、状態の表示）と、フィードバックの一覧・詳細。 */
 async function mockSettingsAndFeedback(page: Page) {
-  const policies = [
-    { name: "standard", grounding_min_overlap: 3, grounding_min_ratio: 0.12, audit_emphasis: false },
-    { name: "strict", grounding_min_overlap: 5, grounding_min_ratio: 0.3, audit_emphasis: false },
-    { name: "regulated", grounding_min_overlap: 5, grounding_min_ratio: 0.3, audit_emphasis: true },
-  ];
   await page.route("**/api/settings/guardrail", (route) =>
     route.fulfill({
       json: apiEnvelope({
-        policy: "regulated",
-        block_prompt_injection: true,
-        mask_sensitive_identifiers: true,
-        max_query_chars: 2000,
-        grounding_min_overlap: 5,
-        grounding_min_ratio: 0.3,
-        audit_emphasis: true,
-        policies: policies.map((policy) => ({
-          ...policy,
-          origin: "x",
-          recommended_for: ["general"],
-          selected: policy.name === "regulated",
-        })),
-        backend: "local",
+        enabled: true,
         oci_configured: false,
         oci_warning_code: null,
         config_source: "runtime",
@@ -402,12 +384,11 @@ const STATES: (Screen & { name: string })[] = [
     },
   },
   {
-    name: "安全チェックの選んだ方針と注意のチップ",
+    name: "安全チェックの OCI Guardrails と未設定の注意",
     path: "/settings/guardrail",
     act: async (page) => {
-      await expect(page.locator('label[data-surface-tint="accent"]').first()).toBeVisible();
-      await expect(page.locator('[data-surface-tint="warning"]').first()).toBeVisible();
-      await expect(page.locator('[data-surface-tint="neutral"]').first()).toBeVisible();
+      await expect(page.getByRole("switch", { name: "OCI Guardrails", exact: true })).toBeChecked();
+      await expect(page.getByRole("status").filter({ hasText: "OCI API キー認証を利用できません" })).toBeVisible();
     },
   },
 ];
@@ -452,6 +433,7 @@ async function expectNoSeriousViolations(page: Page, testInfo: TestInfo, path: s
     .map((item) => `${item.rule}（${item.impact}・${item.count} 件）: ${item.help}\n    ${item.targets.join("\n    ")}`)
     .join("\n");
   expect(summary, `${path} の serious / critical の a11y 違反:\n${message}`).toEqual([]);
+  if (path === "/evaluation") await page.screenshot({ path: test.info().outputPath("evaluation-a11y.png"), fullPage: true });
 }
 
 /** 画面を開き、読み込んだ後の状態にする。 */
