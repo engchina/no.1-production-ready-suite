@@ -98,6 +98,17 @@ for (const viewport of [
     await page.getByRole("radio", { name: /固定分割符/ }).click();
     await expect(page.getByRole("heading", { name: "戦略別パラメータ" })).toBeVisible();
     await expect(page.getByLabel("固定分割符文字列")).toHaveValue("\\n\\n");
+    const delimiter = page.getByLabel("固定分割符文字列");
+    await delimiter.fill("<<<JSONL_RECORD_BOUNDARY>>>");
+    await expect.poll(() => delimiter.evaluate((input: HTMLInputElement) => {
+      const style = getComputedStyle(input);
+      const context = document.createElement("canvas").getContext("2d")!;
+      context.font = style.font;
+      const textWidth = context.measureText(input.value).width;
+      const available = input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      return textWidth <= available;
+    })).toBe(true);
+    await delimiter.screenshot({ path: test.info().outputPath("chunking-delimiter.png") });
     await expect(page.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true })).toHaveCount(0);
     await expect(page.getByLabel("overlap(文字)")).toHaveCount(0);
     await expect(page.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true })).toHaveCount(0);
