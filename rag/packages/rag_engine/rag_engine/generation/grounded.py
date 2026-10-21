@@ -3175,13 +3175,15 @@ def citation_units(text: str) -> list[tuple[int, int]]:
     return units
 
 
-def numbered_text(text: str) -> str:
-    """長い根拠（``CITE_WHOLE_MAX_CHARS`` を超え、複数の単位がある）の本文に行番号を付ける。
+def _numbered(text: str, units: Sequence[tuple[int, int]]) -> bool:
+    """行番号を付けて示す根拠か（``CITE_WHOLE_MAX_CHARS`` を超え、複数の単位がある）。"""
+    return len(units) > 1 and units[-1][1] - units[0][0] > CITE_WHOLE_MAX_CHARS
 
-    短い根拠は本文のまま示し、範囲を指さない引用は全文を引く（行番号の分だけ入力を増やさない）。
-    """
+
+def numbered_text(text: str) -> str:
+    """長い根拠の本文に行番号を付ける。短い根拠は本文のまま示し、引用は全文になる（入力を増やさない）。"""
     units = citation_units(text)
-    if len(units) <= 1 or units[-1][1] - units[0][0] <= CITE_WHOLE_MAX_CHARS:
+    if not _numbered(text, units):
         return text
     return "\n".join(f"{number}| {text[start:end]}" for number, (start, end) in enumerate(units, 1))
 
@@ -3189,9 +3191,10 @@ def numbered_text(text: str) -> str:
 def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem, str]:
     """evidence_id と lines が指す原文を quote にした item と、範囲が不正なときの理由（#2830）。
 
-    モデルが quote を写した item・gap・根拠が決まらない item は変えない（従来の照合に任せる）。
+    行番号の無い根拠は全文、行番号の付いた根拠は lines の範囲を引く。gap・根拠が決まらない item と、lines の無い
+    item に quote が既にあるとき（システムが補った引用・前の組の引き継ぎ）は変えない（従来の照合に任せる）。
     """
-    if item.kind == "gap" or item.quote.strip():
+    if item.kind == "gap" or (item.quote.strip() and not item.lines.strip()):
         return item, ""
     named = _named_spans(item, spans)
     if len(named) != 1:
@@ -3200,8 +3203,7 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem
     units = citation_units(text)
     if not units:
         return item, ""
-    if not item.lines.strip() and (len(units) == 1 or units[-1][1] - units[0][0] <= CITE_WHOLE_MAX_CHARS):
-        # 1 単位か短い根拠は、範囲が無ければ全文を引く。
+    if not _numbered(text, units):
         return item.model_copy(update={"quote": text[units[0][0] : units[-1][1]].strip()}), ""
     found = _CITE_RANGE.match(item.lines or "")
     if not found:

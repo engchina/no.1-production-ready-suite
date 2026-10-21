@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 
 @dataclass(frozen=True)
@@ -269,10 +270,9 @@ class GroundedItem(_StrictModel):
         description="引用する行の範囲。行番号（`3| `）の付いた根拠では、text を支える行の番号か範囲（例: 3、3-5）。"
         "text が述べる操作・値をすべて含む行にする。行番号の無い根拠は空（根拠の全文が引用になる）。",
     )
-    quote: str = Field(
-        default="",
-        max_length=600,
-        description="空にする（引用の原文は evidence_id と lines からシステムが取り出す）。",
+    # 引用の原文。モデルには出力させず（応答の schema に出さない）、evidence_id と lines からシステムが取り出す（#2830）。
+    quote: SkipJsonSchema[str] = Field(
+        default="", max_length=600, description="引用の原文（システムが evidence_id と lines から取り出す。応答の schema には出さない）。"
     )
     applies: Literal["matched", "conditional", "unverified"] = Field(
         default="matched",
