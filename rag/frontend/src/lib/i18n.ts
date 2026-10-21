@@ -2106,7 +2106,7 @@ export const ja = {
   "searchAnswerProfiles.field.rerank": "Rerank で検索候補を並べ替える",
   "searchAnswerProfiles.field.autoFieldFilter": "質問から項目の条件を読み取る",
   "searchAnswerProfiles.field.autoFieldFilterHelper":
-    "質問に書かれた条件（「2025年以降」「10万円以上」など）を、ナレッジベースで定義した抽出項目の条件として AI が読み取り、検索を絞り込みます。読み取った条件で見つからないときは、条件を外して検索し直します。質問ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
+    "質問に書かれた条件（「2025年以降」「10万円以上」など）を、ナレッジベースで定義した抽出項目の条件として AI が読み取り、検索を絞り込みます。読み取った条件で見つからないときは、条件を外して検索し直します。質問ごとに AI の呼び出しが 1 回増えます。継承時は検索方法の現在の設定を使います。",
   "searchAnswerProfiles.languagePack.title": "言語資源の上書き",
   "searchAnswerProfiles.languagePack.helper": "このプロファイルの検索・回答の間だけ、全体の言語資源の値を変えます（質問を読む・回答を確かめて表す項目だけ）。変えない項目は全体の値を使います。",
   "searchAnswerProfiles.languagePack.count": "上書き {count} 項目",
@@ -2115,22 +2115,22 @@ export const ja = {
   "searchAnswerProfiles.field.guideMatching": "業務ガイドの照合",
   "searchAnswerProfiles.field.guideSemanticMatch": "意味の近さで業務ガイドを選ぶ",
   "searchAnswerProfiles.field.guideSemanticMatchHelper":
-    "語の一致に加えて、質問と業務ガイドの質問の例の意味の近さ（埋め込み）を照合の点に足します。言い方が業務ガイドの語と違う質問でも業務ガイドを選べます。質問ごとに埋め込みの呼び出しが 1 回増えます。全体の既定は無効です。",
+    "語の一致に加えて、質問と業務ガイドの質問の例の意味の近さ（埋め込み）を照合の点に足します。言い方が業務ガイドの語と違う質問でも業務ガイドを選べます。質問ごとに埋め込みの呼び出しが 1 回増えます。継承時は検索方法の現在の設定を使います。",
   "searchAnswerProfiles.field.guideCloseMatch": "近い業務ガイドを確かめる",
   "searchAnswerProfiles.field.guideCloseMatchHelper":
-    "質問に合う業務ガイドが複数あり照合の点が近いとき、どの業務ガイドについての質問かを回答の前に確かめます（選択肢は業務ガイドの題名）。全体の既定は無効です。",
+    "質問に合う業務ガイドが複数あり照合の点が近いとき、どの業務ガイドについての質問かを回答の前に確かめます（選択肢は業務ガイドの題名）。継承時は検索方法の現在の設定を使います。",
   "searchAnswerProfiles.field.graphExpansion": "関係情報で根拠を広げる",
   "searchAnswerProfiles.field.graphExpansionHelper":
-    "関係情報の構築で作った章・節・表の見出しのつながりを使い、検索で当たった根拠と同じ章・節・表の根拠と、質問に見出しの語が含まれる章・節の根拠を候補に加えます。関係情報を作った文書にだけ効きます。AI の呼び出しは増えません。全体の既定は無効です。",
+    "関係情報の構築で作った章・節・表の見出しのつながりを使い、検索で当たった根拠と同じ章・節・表の根拠と、質問に見出しの語が含まれる章・節の根拠を候補に加えます。関係情報を作った文書にだけ効きます。AI の呼び出しは増えません。継承時は検索方法の現在の設定を使います。",
   "searchAnswerProfiles.field.screenLinking": "画面目録で操作画面を探す",
   "searchAnswerProfiles.field.screenLinkingHelper":
-    "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
+    "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。継承時は検索方法の現在の設定を使います。",
   "searchAnswerProfiles.field.requestCoverage": "根拠の無い要求を探し直す",
   "searchAnswerProfiles.field.requestCoverageHelper":
-    "質問に複数の要求があるとき、要求ごとに根拠があるかを確かめ、根拠の無い要求だけをその要求の文で 1 回ずつ探し直して回答の材料に加えます。AI の呼び出しは増えませんが、探し直すたびに数秒かかります。全体の既定は有効です。",
+    "質問に複数の要求があるとき、要求ごとに根拠があるかを確かめ、根拠の無い要求だけをその要求の文で 1 回ずつ探し直して回答の材料に加えます。AI の呼び出しは増えませんが、探し直すたびに数秒かかります。継承時は検索方法の現在の設定を使います。",
   "searchAnswerProfiles.field.guideStepRetrieval": "業務ガイドの手順ごとに探す",
   "searchAnswerProfiles.field.guideStepRetrievalHelper":
-    "質問に業務ガイドが当たったとき、ガイドの手順ごとに検索の手がかりで探し、手順が参照する資料の頁の根拠を回答の材料に加えます。AI の呼び出しは増えませんが、手順ごとに数秒かかります。全体の既定は有効です。",
+    "質問に業務ガイドが当たったとき、ガイドの手順ごとに検索の手がかりで探し、手順が参照する資料の頁の根拠を回答の材料に加えます。AI の呼び出しは増えませんが、手順ごとに数秒かかります。継承時は検索方法の現在の設定を使います。",
   "searchAnswerProfiles.field.answerModelLoadFailed": "モデルの候補を取得できませんでした。画面を再読み込みしてください。全体の既定を継承する設定は保存できます。",
   "searchAnswerProfiles.field.answerModel": "回答モデル",
   "searchAnswerProfiles.field.answerModelHelper": "この回答設定で使うモデルです。質問でモデルを選んだ場合は、その選択を優先します。",
@@ -2139,7 +2139,7 @@ export const ja = {
   "searchAnswerProfiles.field.guideStepDeadlineHelper": "この回答設定での上限です。0 は手順検索を開始しません。回答全体の時間上限と検索回数の上限は引き続き適用します。",
   "searchAnswerProfiles.field.guideStepMaxQueries": "手順ごとの検索の上限",
   "searchAnswerProfiles.field.guideStepMaxQueriesHelper":
-    "1 回の回答で手順ごとに探す回数の上限です（参照の頁に絞った検索を含む）。主の検索の後に足す検索の合計の枠も超えません。全体の既定は 4 回です。",
+    "1 回の回答で手順ごとに探す回数の上限です（参照の頁に絞った検索を含む）。主の検索の後に足す検索の合計の枠も超えません。継承時は検索方法の現在の設定を使います。",
   "searchAnswerProfiles.entityExpansion.title": "実体でつながる根拠",
   "searchAnswerProfiles.entityExpansion.enabled": "実体でつながる根拠を 1 段広げる",
   "searchAnswerProfiles.entityExpansion.helper":

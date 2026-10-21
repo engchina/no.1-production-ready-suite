@@ -206,7 +206,7 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   ).toHaveAttribute("aria-pressed", "true");
   await expect(autoFieldFilter).toHaveAccessibleDescription(/AI の呼び出しが 1 回増えます/);
   await autoFieldFilter.getByRole("button", { name: "ON" }).click();
-  // 根拠の無い要求を探し直す（#1279）は既定 有効(継承)。AI の呼び出しは増えないことを説明に出す。
+  // 根拠の無い要求を探し直す（#1279）は既定 無効。継承は検索方法の現在の設定に従う。
   const requestCoverage = page.getByRole("group", { name: "根拠の無い要求を探し直す" });
   await expect(
     requestCoverage.getByRole("button", { name: "グローバル既定を継承" })
@@ -402,6 +402,39 @@ test("実体の索引のある参照先・数えられないときは案内を�
   const query = (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
   expect(query.entity_expansion_enabled).toBe(false);
   expect(query.entity_expansion_max_chunks ?? null).toBeNull();
+  await expectNoPageOverflow(page);
+});
+
+test("要求別の再検索は現在の設定を継承し、ON・OFF・継承を保存・再読込・破棄できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  let body: Record<string, unknown> | null = null;
+  await mockDefaultSearchAnswerProfile(page, (value) => { body = value; });
+  await page.goto("/search-answer-profiles?id=bv-default");
+  const names = [
+    "画面目録で操作画面を探す", "根拠の無い要求を探し直す", "業務ガイドの手順ごとに探す",
+    "質問から項目の条件を読み取る", "関係情報で根拠を広げる", "意味の近さで業務ガイドを選ぶ",
+    "近い業務ガイドを確かめる",
+  ];
+  for (const name of names) {
+    const row = page.getByRole("group", { name, exact: true });
+    await expect(row).not.toHaveAccessibleDescription(/全体の既定は(?:有効|無効)/);
+    await expect(row).toHaveAccessibleDescription(/継承時は検索方法の現在の設定/);
+  }
+  const row = page.getByRole("group", { name: "根拠の無い要求を探し直す", exact: true });
+  const actions = page.getByRole("group", { name: "確定の操作" });
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
+  for (const value of [false, true, null]) {
+    const label = value === null ? "グローバル既定を継承" : value ? "ON" : "OFF";
+    await row.getByRole("button", { name: label, exact: true }).click();
+    await actions.getByRole("button", { name: "保存", exact: true }).click();
+    await expect.poll(() => (body?.config as { query?: { request_coverage_retrieval_enabled?: boolean | null } } | undefined)?.query?.request_coverage_retrieval_enabled ?? null).toBe(value);
+    await page.reload();
+    await expect(row.getByRole("button", { name: label, exact: true })).toHaveAttribute("aria-pressed", "true");
+  }
+  await row.getByRole("button", { name: "ON", exact: true }).click();
+  await actions.getByRole("button", { name: "変更を破棄", exact: true }).click();
+  await expect(row.getByRole("button", { name: "グローバル既定を継承" })).toHaveAttribute("aria-pressed", "true");
+  await row.scrollIntoViewIfNeeded();
+  await row.locator("..").screenshot({ path: testInfo.outputPath("request-coverage-inheritance.png") });
   await expectNoPageOverflow(page);
 });
 
@@ -1229,6 +1262,8 @@ async function mockDefaultSearchAnswerProfile(
     query: {
     },
   };
+  let savedConfig: Record<string, unknown> = config;
+  let savedDescription = summary.description;
 
   await page.route("**/api/search-answer-profiles**", async (route) => {
     const request = route.request();
@@ -1242,6 +1277,8 @@ async function mockDefaultSearchAnswerProfile(
     if (request.method() === "PATCH") {
       const body = request.postDataJSON() as Record<string, unknown>;
       onUpdate(body);
+      savedConfig = body.config as Record<string, unknown>;
+      savedDescription = body.description as string;
       await route.fulfill({
         json: {
           data: { ...summary, description: body.description, config: body.config, knowledge_bases: [] },
@@ -1263,7 +1300,8 @@ async function mockDefaultSearchAnswerProfile(
         json: {
           data: {
             ...summary,
-            config,
+            config: savedConfig,
+            description: savedDescription,
             knowledge_bases: [{ id: "kb-default", name: "DEFAULT" }],
           },
           error_messages: [],
