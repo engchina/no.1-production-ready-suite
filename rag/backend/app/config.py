@@ -1685,6 +1685,16 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "0 は打ち切らない(streaming の時刻の記録だけ)。"
         ),
     )
+    rag_section_expansion_followup_reserve_percent: int = Field(
+        default=20,
+        ge=0,
+        le=50,
+        description=(
+            "業務ガイドの手順ごとの検索が後に来る回答で、最初の章節の拡張が使わずに残す入力の割合"
+            "(#2816。章節の拡張の根拠の入力の上限に対する %。既定 20、0 は残さない)。"
+            "手順の根拠から広げる章節の分を残す。"
+        ),
+    )
     rag_section_skip_regrade_at_scope: bool = Field(
         default=True,
         description=(

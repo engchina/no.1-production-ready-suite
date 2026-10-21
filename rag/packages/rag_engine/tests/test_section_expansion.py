@@ -350,18 +350,43 @@ def test_token_budget_selects_relevant_child_sections_and_stays_under_limit():
     assert stub.read_calls == ["s3-1", "s3", "s3-3", "s3-2"]
     assert "c33a" in _child_ids(result.context) and "c32a" not in _child_ids(result.context)
     assert result.stop_reason == sections.STOP_TOKEN_BUDGET
-    assert [item.section_id for item in result.unread] == ["s3-2"]
-    assert "読み込み量の上限" in result.gap_lines[0]
-    # 本文の行と同じ文と、原文を開くための文書・頁を回答の診断に載せる（#2040）。
-    unread = result.trace["unread"][0]
-    assert unread["line"] == result.gap_lines[0]
-    assert (unread["document_id"], unread["reason"]) == (result.unread[0].document_id, sections.STOP_TOKEN_BUDGET)
-    assert unread["page"] == 6
+    # 3.2 は当たった章節（3.1）の兄弟で起点の chunk を含まないので、回答には出さず診断にだけ残す（#2816）。
+    assert result.unread == [] and result.gap_lines == []
+    assert [item.section_id for item in result.omitted] == ["s3-2"]
+    omitted = result.trace["unread_omitted"][0]
+    assert "読み込み量の上限" in omitted["line"]
+    assert (omitted["document_id"], omitted["reason"], omitted["page"]) == (DOC, sections.STOP_TOKEN_BUDGET, 6)
     # 全体を読む必要があるのに入らない章節は、第 3 段階（#1437）の差し込み口に渡る（今は未実装）。
     assert result.trace["large_section_handoff"] == "extract_then_integrate_unavailable"
 
 
 def test_token_budget_keeps_unread_sections_even_when_grader_says_enough():
+    stub = SectionStub()
+    grader = Grader(needs={"c33a", "c33b"})
+    # 読む範囲が文書全体の網羅の問では、どの章節も読む範囲に入るので、読めなかった兄弟の章節も回答に出す。
+    question = "点検要領で、作業者がしないと決められていることをすべて挙げてください。"
+    assert sections.minimum_scope(question) == "document"
+
+    result = _expand(
+        _seed_context("c31a"),
+        _settings(answer_max_input_tokens=2400),
+        grader,
+        stub,
+        question=question,
+        rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))],
+    )
+
+    assert result.stop_reason == sections.STOP_TOKEN_BUDGET
+    assert [item.section_id for item in result.unread] == ["s3-2"] and result.omitted == []
+    assert "読み込み量の上限" in result.gap_lines[0]
+    # 本文の行と同じ文と、原文を開くための文書・頁を回答の診断に載せる（#2040）。
+    unread = result.trace["unread"][0]
+    assert unread["line"] == result.gap_lines[0]
+    assert (unread["document_id"], unread["reason"], unread["page"]) == (DOC, sections.STOP_TOKEN_BUDGET, 6)
+
+
+def test_unread_sibling_without_seed_does_not_block_sufficient():
+    # 兄弟の章節（3.2）が予算で読めなくても、読んだ根拠で足りると判定されれば足りるで止める（#2816）。
     stub = SectionStub()
     grader = Grader(needs={"c33a", "c33b"})
 
@@ -373,7 +398,97 @@ def test_token_budget_keeps_unread_sections_even_when_grader_says_enough():
         rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))],
     )
 
-    assert result.stop_reason == sections.STOP_TOKEN_BUDGET and result.unread
+    assert result.stop_reason == sections.STOP_SUFFICIENT
+    assert result.unread == [] and [item.section_id for item in result.omitted] == ["s3-2"]
+
+
+class OwnerStub(SectionStub):
+    """当たった chunk の所有の章節を、子の章節を持つ章節にするスタブ（章の前書きに当たった chunk など）。"""
+
+    def __init__(self, owner: str) -> None:
+        super().__init__()
+        self.owner = owner
+
+    def outline(self, *, chunk_uid: str, **options: object) -> sections.SectionOutline | None:
+        outline = super().outline(chunk_uid=chunk_uid, **options)
+        return replace(outline, owner_section_id=self.owner) if outline is not None else None
+
+
+def test_unread_child_of_the_owner_section_is_still_reported():
+    # 所有の章節（読む範囲）の子の章節は、起点の chunk を含まなくても読む範囲なので、読めなければ回答に出す。
+    stub, grader = OwnerStub("s3"), Grader(needs=None)
+
+    result = _expand(
+        _seed_context("c31a"),
+        _settings(answer_max_input_tokens=2400, section_expansion_max_levels=1),
+        grader,
+        stub,
+        rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))],
+    )
+
+    # 第3章の全体（残り 1,500）は入らない。3.3（600）を読み、3.2 は入らず、3.1 の残り（300）を読む。
+    assert stub.read_calls[:2] == ["s3", "s3-3"]
+    assert [item.section_id for item in result.unread] == ["s3-2"] and result.omitted == []
+
+
+def test_read_failure_of_a_sibling_is_still_reported():
+    # 読取の失敗は、起点を含まない兄弟の章節でも回答に出す（予算の上限だけを診断に回す。#2816）。
+    class FailingStub(SectionStub):
+        def chunks(self, *, section_id: str, **options: object) -> list[StoredChunk]:
+            if section_id == "s3-3":
+                self.read_calls.append(section_id)
+                raise RuntimeError("read failed")
+            return super().chunks(section_id=section_id, **options)
+
+    stub, grader = FailingStub(), Grader(needs=None)
+
+    result = _expand(
+        _seed_context("c31a"),
+        _settings(answer_max_input_tokens=2400),
+        grader,
+        stub,
+        rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))],
+    )
+
+    assert ("s3-3", sections.STOP_READ_ERROR) in [(item.section_id, item.reason) for item in result.unread]
+    assert "s3-3" not in [item.section_id for item in result.omitted]
+
+
+def test_reserve_tokens_leaves_input_for_a_later_phase():
+    stub, grader = SectionStub(), Grader(needs=None)
+    settings = _settings(answer_max_input_tokens=2400)
+
+    result = _expand(_seed_context("c31a"), settings, grader, stub, reserve_tokens=600)
+
+    # 上限 1,200 のうち 600 を残す: 3.1（600）を読んだ後、第3章の子の章節（600 ずつ）は読まない。
+    assert sections.context_tokens(result.context) <= 600
+    assert result.trace["reserved_tokens"] == 600 and result.trace["input_token_limit"] == 1200
+    assert "c33a" not in _child_ids(result.context) and "c32a" not in _child_ids(result.context)
+
+
+def test_later_phase_expands_new_seeds_before_retrying_earlier_ones():
+    # 上限 1,000（モデルの入力の上限 2,000 × 50%）。後の段は、前の段で起点にしなかった起点の章節を先に広げる（#2816）。
+    stub, grader = SectionStub(), Grader(needs=None)
+    settings = _settings(answer_max_input_tokens=2000, section_expansion_max_levels=1)
+    reader = sections.SectionReader(read_chunks=stub.chunks, known_ids=set())
+
+    # 前の段: 700 を残すので、3.1 の残り（300）も入らない。
+    first = _expand(_seed_context("c31a"), settings, grader, stub, reader=reader, reserve_tokens=700)
+    assert "c31b" not in _child_ids(first.context)
+
+    # 後の段: 新しい起点（第4章の c4a）の章節を先に読み、残り 100 では 3.1 の残りは入らない。
+    second = _expand(_seed_context("c31a", "c4a"), settings, grader, stub, reader=reader)
+    assert "c4b" in _child_ids(second.context) and "c31b" not in _child_ids(second.context)
+    assert [item.section_id for item in second.unread] == ["s3-1"]
+
+
+def test_followup_reserve_is_share_of_the_input_limit():
+    limits = sections.SectionExpansionLimits.from_settings(_settings(section_expansion_followup_reserve_percent=25))
+    assert limits.input_tokens == 64_000 and limits.followup_reserve_tokens == 16_000
+    assert sections.SectionExpansionLimits.from_settings(_settings()).followup_reserve_tokens == 12_800
+    assert (
+        sections.SectionExpansionLimits.from_settings(_settings(section_expansion_followup_reserve_percent=0)).followup_reserve_tokens == 0
+    )
 
 
 def test_large_section_handler_receives_sections_that_do_not_fit():
@@ -608,3 +723,48 @@ def test_engine_settings_read_section_expansion_environment():
     ) == (False, 2, 30, 300.0)
     defaults = get_settings(environ={}, dotenv_path=None)
     assert defaults.section_expansion_enabled and defaults.section_expansion_max_levels == 4
+
+
+def test_engine_settings_read_followup_reserve_environment():
+    assert get_settings(environ={}, dotenv_path=None).section_expansion_followup_reserve_percent == 20
+    settings = get_settings(environ={"RAG_ENGINE_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT": "80"}, dotenv_path=None)
+    # 上限は 50%（後の段のために先の段を止めすぎない）。
+    assert settings.section_expansion_followup_reserve_percent == 50
+
+
+@pytest.mark.parametrize("reserve", [True, False])
+def test_answer_section_phase_passes_the_followup_reserve(reserve):
+    from rag_engine.generation.answering import _expand_context_by_sections
+
+    stub = SectionStub()
+    unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
+    settings = replace(get_settings(environ={}, dotenv_path=None), section_extraction_enabled=False)
+    with bind_dependencies(
+        AnswerDependencies(unused, unused, unused, unused, unused, section_outline=stub.outline, section_chunks=stub.chunks)
+    ):
+        _context, result = _expand_context_by_sections(
+            QUESTION,
+            _seed_context("c31a"),
+            settings,
+            (),
+            answer_llm_provider=None,
+            rerank_enabled=False,
+            started_at=0.0,
+            use_grader=False,
+            phase="main",
+            reserve=reserve,
+        )
+
+    expected = sections.SectionExpansionLimits.from_settings(settings).followup_reserve_tokens
+    assert expected > 0
+    assert result.trace.get("reserved_tokens", 0) == (expected if reserve else 0)
+
+
+def test_unread_siblings_are_reported_when_no_sibling_was_read():
+    # より上の兄弟の章節を 1 つも読めなければ、起点を含まない兄弟の章節も回答に出す（欠けの手がかりを消さない）。
+    stub, grader = SectionStub(), Grader(needs=None)
+
+    result = _expand(_seed_context("c31a"), _settings(answer_max_input_tokens=1200), grader, stub)
+
+    assert result.stop_reason == sections.STOP_TOKEN_BUDGET
+    assert {item.section_id for item in result.unread} == {"s3-2", "s3-3"} and result.omitted == []
