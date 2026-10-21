@@ -30,7 +30,7 @@ import { useUpdateVectorIndexSettings, useVectorIndexSettings } from "@/lib/quer
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
-const PROFILE_ORDER: VectorIndexProfileName[] = ["balanced", "accurate", "fast"];
+const PROFILE_ORDER: VectorIndexProfileName[] = ["fast", "balanced", "accurate"];
 
 /** 検索インデックスの現在設定を管理する設定画面。 */
 export function VectorIndexSettingsClient() {
@@ -269,7 +269,7 @@ function RuntimeFact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function orderedProfiles(
+export function orderedProfiles(
   profiles: VectorIndexProfileStatusData[]
 ): VectorIndexProfileStatusData[] {
   const byName = new Map(profiles.map((item) => [item.name, item]));
