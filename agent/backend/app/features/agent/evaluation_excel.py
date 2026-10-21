@@ -34,6 +34,7 @@ HEADERS = (
     "ツールの順",
     "問い返しへの答え",
     "期待する出力（JSON）",
+    "承認による停止を期待",
 )
 # 「ツールの順」の列の値（#1845）。書き出しは IN_ORDER_LABEL、読み込みは IN_ORDER_VALUES のどれか。
 IN_ORDER_LABEL = "順どおり"
@@ -46,6 +47,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "expected_tools": ("期待するツール", "expected_tools", "tools"),
     "expected_tools_in_order": ("ツールの順", "期待するツールの順", "expected_tools_in_order"),
     "clarification_answers": ("問い返しへの答え", "clarification_answers"),
+    "expected_approval": ("承認による停止を期待", "expected_approval"),
     "expected_output": ("期待する出力（json）", "期待する出力", "expected_output"),
 }
 # 問い返しへの答えの「その他（自由入力）」の印（#1845）。
@@ -84,9 +86,10 @@ def _workbook(cases: list[EvaluationCase]) -> bytes:
                 json.dumps(case.expected_output, ensure_ascii=False)
                 if case.expected_output
                 else "",
+                "はい" if case.expected_approval else "",
             ]
         )
-    for column, width in zip("ABCDEFG", (18, 48, 56, 28, 12, 40, 48), strict=True):
+    for column, width in zip("ABCDEFGH", (18, 48, 56, 28, 12, 40, 48, 24), strict=True):
         sheet.column_dimensions[column].width = width
     for row in sheet.iter_rows(min_row=2):
         for cell in row:
@@ -200,6 +203,8 @@ def parse_cases_xlsx(data: bytes) -> list[EvaluationCase]:
                     expected=expected,
                     expected_tools=[item for item in tools.replace("、", ",").split(",")],
                     expected_tools_in_order=in_order,
+                    expected_approval=_text(values, columns.get("expected_approval")).lower()
+                    in IN_ORDER_VALUES,
                     clarification_answers=parse_answers(answers_text),
                     expected_output=expected_output,
                 )

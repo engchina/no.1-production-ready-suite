@@ -797,6 +797,7 @@ function SummaryMetrics({ summary, previous }: { summary: EvaluationSummary; pre
           />
         </>
       ) : null}
+      {summary.approval_blocked ? <Metric label={t("evaluation.summary.approvalBlocked")} value={formatNumber(summary.approval_blocked)} detail={t("evaluation.summary.approvalBlockedDetail", { count: summary.approval_blocked })} /> : null}
       <Metric label={t("evaluation.summary.correct")} value={formatNumber(summary.correct)} detail={ofTotal} />
       <Metric
         label={t("evaluation.summary.incorrect")}
@@ -980,6 +981,8 @@ function ToolSelection({ result }: { result: EvaluationCaseResult }) {
       )}
       <span className="break-all font-mono text-fg-muted">
         {result.tool_calls.length ? result.tool_calls.join(", ") : t("evaluation.tools.none")}
+        {result.blocked_tool_calls?.length ? <span className="block text-warning-fg">{t("evaluation.tools.blocked", { tools: result.blocked_tool_calls.join(", ") })}</span> : null}
+        {result.executed_tool_calls ? <span className="block text-fg-muted">{t("evaluation.tools.executed", { tools: result.executed_tool_calls.join(", ") || t("evaluation.tools.none") })}</span> : null}
       </span>
     </span>
   );
@@ -1062,7 +1065,7 @@ function CaseBadge({ result }: { result: EvaluationCaseResult }) {
 function caseVariant(key: string): StatusVariant {
   if (key === "correct") return "success";
   if (key === "incorrect") return "danger";
-  if (key === "uncertain" || key === "needs_approval" || key === "timed_out") return "warning";
+  if (key === "uncertain" || key === "needs_approval" || key === "approval_blocked" || key === "timed_out") return "warning";
   if (key === "running" || key === "pending") return "pending";
   if (key === "run_failed" || key === "judge_failed") return "danger";
   return "neutral";
@@ -1139,6 +1142,8 @@ function CaseDetail({ result }: { result: EvaluationCaseResult }) {
             <span className="text-fg-muted">{`${t("evaluation.detail.calledTools")}: `}</span>
             <span className="font-mono">{result.tool_calls.length ? result.tool_calls.join(", ") : "—"}</span>
           </p>
+          {result.blocked_tool_calls?.length ? <p className="text-warning-fg">{t("evaluation.tools.blocked", { tools: result.blocked_tool_calls.join(", ") })}</p> : null}
+          {result.executed_tool_calls ? <p className="text-fg-muted">{t("evaluation.tools.executed", { tools: result.executed_tool_calls.join(", ") || t("evaluation.tools.none") })}</p> : null}
           <p className="text-fg-muted">{t("evaluation.detail.dryRunNote")}</p>
         </div>
       </DetailSection>

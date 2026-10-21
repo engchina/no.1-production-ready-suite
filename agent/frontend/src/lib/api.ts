@@ -431,6 +431,7 @@ export interface EvaluationCase {
   expected_tools?: string[];
   /** 期待するツールをこの順に呼ぶ（先頭が最初に呼ぶツール。間にほかのツールを挟んでもよい。#1845）。 */
   expected_tools_in_order?: boolean;
+  expected_approval?: boolean;
   /** 問い返しへの答え（任意。#1845）。 */
   clarification_answers?: EvaluationClarificationAnswer[];
   /** ケースの出どころ（フィードバック・Run の詳細から追加したときの Run の ID。#810）。 */
@@ -513,6 +514,7 @@ export type EvaluationCaseStatus =
   | "judged"
   | "run_failed"
   | "needs_approval"
+  | "approval_blocked"
   | "timed_out"
   | "judge_failed"
   | "cancelled";
@@ -543,13 +545,15 @@ export interface EvaluationClarificationRound {
 }
 
 export interface EvaluationCaseResult {
-  case: Required<Omit<EvaluationCase, "expected_output">> & Pick<EvaluationCase, "expected_output">;
+  case: Required<Omit<EvaluationCase, "expected_output" | "expected_approval">> & Pick<EvaluationCase, "expected_output" | "expected_approval">;
   status: EvaluationCaseStatus;
   run_id: string | null;
   answer: string;
   judgement: EvaluationJudgement | null;
   /** 業務 Agent が呼んだ（呼ぼうとした）ツール。評価中は承認が要るツールを実行しない。 */
   tool_calls: string[];
+  blocked_tool_calls?: string[];
+  executed_tool_calls?: string[];
   /** 期待するツールをすべて呼んだか（順を指定したケースは順も合うか。期待するツールが無いケースは null）。 */
   tool_selection_correct: boolean | null;
   /** 期待するツールを順どおりに呼んだか（順を指定しないケースは null。#1845）。 */
@@ -576,6 +580,7 @@ export interface EvaluationSummary {
   errors: number;
   /** 評価できなかったケースのうち、判定のモデルが判定できなかったケース（合格率の分母から除く。#1845）。 */
   unjudged?: number;
+  approval_blocked?: number;
   /** 正しいと判定したケース / 終わったケース（実行の失敗は不合格に数え、判定できなかったケースは除く）。 */
   pass_rate: number | null;
   average_score: number | null;
@@ -630,7 +635,7 @@ export type EvaluationJobItem = Pick<
 >;
 
 /** 評価の比較の変化（合否で決める。#1845）。 */
-export type EvaluationComparisonChange = "improved" | "regressed" | "unchanged" | "base_only" | "target_only";
+export type EvaluationComparisonChange = "improved" | "regressed" | "unchanged" | "base_only" | "target_only" | "not_comparable";
 
 export interface EvaluationComparisonOutcome {
   case_id: string;

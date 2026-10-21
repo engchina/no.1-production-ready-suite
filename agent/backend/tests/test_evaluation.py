@@ -252,7 +252,6 @@ def test_tools_needing_approval_are_not_run_and_tool_selection_is_judged(
         monkeypatch,
         [function_call(WRITE, {"query": "登録"}, call_id="call-776")],
         [assistant_message("登録の内容を確認しました。実際の登録は承認の後に行われます。")],
-        _judgement("correct", 0.9, "登録の手順を答えています。"),
         [assistant_message("登録しませんでした。")],
         _judgement("incorrect", 0.1, "ツールを使っていません。"),
     )
@@ -264,7 +263,10 @@ def test_tools_needing_approval_are_not_run_and_tool_selection_is_judged(
     anyio.run(run_evaluation_job, job.id)
 
     first, second = evaluation_store.get(job.id).results
-    assert first.status == CaseStatus.JUDGED
+    assert first.status == CaseStatus.APPROVAL_BLOCKED
+    assert first.judgement is None
+    assert first.blocked_tool_calls == [WRITE]
+    assert first.executed_tool_calls == []
     assert first.tool_calls == [WRITE]
     assert first.tool_selection_correct is True
     assert (second.tool_calls, second.tool_selection_correct) == ([], False)
@@ -280,6 +282,7 @@ def test_tools_needing_approval_are_not_run_and_tool_selection_is_judged(
     # モデルには実行していないことを伝えて、回答を完成させる。
     assert EVALUATION_DRY_RUN_MESSAGE in str(model.calls[1].input)
     summary = evaluation_store.get(job.id).summary
+    assert (summary.approval_blocked, summary.judged_cases, summary.pass_rate) == (1, 1, 0)
     assert (summary.tool_cases, summary.tool_correct, summary.tool_accuracy) == (2, 1, 0.5)
 
 
@@ -2024,3 +2027,102 @@ def test_summary_counts_the_cases_behind_the_pass_rate() -> None:
 
     assert summary.judged_cases == 3
     assert summary.pass_rate == pytest.approx(1 / 3)
+
+
+@pytest.mark.parametrize("calls_tool", [True, False])
+def test_explicit_approval_expectation_is_checked_without_judge(
+    monkeypatch: MonkeyPatch, agent: None, calls_tool: bool
+) -> None:
+    del agent
+    responses = (
+        (
+            [function_call(WRITE, {"query": "合成の入力"}, call_id="approval-case")],
+            [assistant_message("合成の回答")],
+        )
+        if calls_tool
+        else ([assistant_message("合成の回答")],)
+    )
+    _script(monkeypatch, *responses)
+    case = EvaluationCase(
+        question="合成の質問",
+        expected="承認による停止",
+        expected_tools=[WRITE],
+        expected_approval=True,
+    )
+    job = _job(case)
+    anyio.run(run_evaluation_job, job.id)
+    [result] = evaluation_store.get(job.id).results
+    assert result.status == CaseStatus.JUDGED
+    assert result.judgement is not None
+    assert (result.judgement.verdict == JudgeVerdict.CORRECT) is calls_tool
+    assert result.judge_attempts == 0
+    assert result.executed_tool_calls == []
+
+
+def test_approval_block_is_unassessed_and_not_a_regression() -> None:
+    case = EvaluationCase(question="合成の質問", expected="合成の回答")
+    blocked = EvaluationCaseResult(
+        case=case, status=CaseStatus.APPROVAL_BLOCKED, blocked_tool_calls=["synthetic_tool"]
+    )
+    summary = evaluation.summarize([blocked])
+    assert (summary.approval_blocked, summary.judged_cases, summary.pass_rate) == (1, 0, None)
+    correct = _judged(case, JudgeVerdict.CORRECT, 1)
+    for before, after in [(correct, blocked), (blocked, correct)]:
+        comparison = evaluation.compare_jobs(
+            EvaluationJob(agent_id=AGENT_ID, results=[before]),
+            EvaluationJob(agent_id=AGENT_ID, results=[after]),
+        )
+        assert comparison.rows[0].change == "not_comparable"
+        assert comparison.improved == comparison.regressed == 0
+
+
+def test_approval_expectation_roundtrips_and_changes_fingerprint() -> None:
+    from app.features.agent.evaluation_excel import export_set_xlsx
+
+    case = EvaluationCase(question="合成の質問", expected="合成の回答", expected_approval=True)
+    evaluation_set = evaluation.EvaluationSet(
+        agent_id=AGENT_ID, name="合成の評価セット", cases=[case]
+    )
+    [parsed] = parse_cases_xlsx(export_set_xlsx(evaluation_set))
+    assert parsed.expected_approval is True
+    old = EvaluationJob(
+        agent_id=AGENT_ID,
+        results=[EvaluationCaseResult(case=case.model_copy(update={"expected_approval": False}))],
+    )
+    new = EvaluationJob(agent_id=AGENT_ID, results=[EvaluationCaseResult(case=case)])
+    assert cases_fingerprint(old) != cases_fingerprint(new)
+
+
+def test_output_fingerprint_orders_mixed_json_values_without_type_comparison() -> None:
+    cases = [
+        EvaluationCase(
+            id=f"synthetic-{index}",
+            question="合成の質問",
+            expected="合成の回答",
+            expected_output=[{"value": value, "other": "同じ値"}],
+        )
+        for index, value in enumerate([None, 1, "1", True])
+    ]
+
+    def job(items: list[EvaluationCase]) -> EvaluationJob:
+        return EvaluationJob(
+            agent_id=AGENT_ID, results=[EvaluationCaseResult(case=case) for case in items]
+        )
+
+    original = cases_fingerprint(job(cases))
+    reordered = [
+        case.model_copy(
+            update={
+                "expected_output": [
+                    dict(reversed(list(row.items()))) for row in case.expected_output
+                ]
+            }
+        )
+        for case in reversed(cases)
+    ]
+    assert original == cases_fingerprint(job(reordered))
+    changed = [
+        *cases[:-1],
+        cases[-1].model_copy(update={"expected_output": [{"value": False, "other": "同じ値"}]}),
+    ]
+    assert original != cases_fingerprint(job(changed))
