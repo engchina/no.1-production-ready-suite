@@ -252,6 +252,13 @@ for (const scheme of ["light", "dark"] as const) {
       "3. メタデータ/項目抽出",
       "4. ナビゲーション要約(章節木)",
     ]);
+    await expect(card).toContainText("Docling の解析結果のうち、PDF のしおりの階層を使えず");
+    await expect(card).toContainText("番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす文書が対象です。");
+    await expect(card).toContainText("見出しの文字列だけ（長さの上限あり）");
+    await expect(card).toContainText("通常は対象の文書ごとに 1 回呼び出しますが");
+    await expect(card).toContainText("一時的な通信障害や流量制限などで再試行する場合があります。");
+    await expect(card).toContainText("今の階層のまま取り込みます。");
+    await expect(card).not.toContainText("PDF のしおりも見出しの番号も無い");
     // 見出しの階層の推定は既定で無効（#2277）。
     await expect(page.getByRole("switch", { name: "見出しの階層の推定（AI）" })).toHaveAttribute(
       "aria-checked",

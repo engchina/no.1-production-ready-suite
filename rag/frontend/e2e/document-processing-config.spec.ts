@@ -326,6 +326,13 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   }
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
 
+  const headingLevelsRow = panel.getByTestId("document-processing-config-editor-items")
+    .locator('[data-config-field="heading_level_inference_enabled"]');
+  await expect(headingLevelsRow).toContainText("Docling の解析結果で、しおりの階層を使えず");
+  await expect(headingLevelsRow).toContainText("番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす場合");
+  await expect(headingLevelsRow).toContainText("通常は文書ごとに 1 回で、再試行する場合があります。");
+  await headingLevelsRow.screenshot({ path: test.info().outputPath("heading-level-description.png") });
+
   await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
   await panel.getByRole("combobox", { name: "文書解析" }).click();
   // 解析エンジンの選択肢は文書解析の画面のカードと同じ並び（XML ツリー JSON を含む。#2042）。

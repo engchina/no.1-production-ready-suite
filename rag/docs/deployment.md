@@ -423,6 +423,8 @@ XML ツリー JSON の解析サービス（`parser-xml-tree-json`）は、文書
   決められない見出しの割合が `RAG_HEADING_LEVEL_INFERENCE_UNRESOLVED_RATIO`（既定 0.5）以上の、Docling の解析結果
   （要素の `section_path` を `layout_records` から作る結果）。MinerU など、ほかの解析エンジンの結果には当てない。
 - 段ごとの解析をまとめ、文書全体の整理（#2001）を当てた後の原本全体に 1 回だけ当てる（章節の木・項目抽出・chunk より前）。
+  見出しの一覧を一括で送り、通常のモデル呼び出しは対象文書ごとに 1 回。一時的な通信障害や流量制限などでは
+  共通の実行器が再試行するため、実際の呼び出しは複数回になる場合がある。本文全体を送ったり、見出しを分割して送ったりはしない。
 - OCI Enterprise AI には見出しの文字列だけ（読み順。1 つ `RAG_HEADING_LEVEL_INFERENCE_MAX_TITLE_CHARS` 文字まで）を
   JSON で渡し、構造化出力の `{"levels":[{"i":番号,"level":1〜6}]}` を受け取る。応答は Pydantic で厳密に確かめ（余分な
   key・欠け・重複・範囲外は不可）、合わない・呼び出しの失敗のときは今の階層のまま取込を続ける。
