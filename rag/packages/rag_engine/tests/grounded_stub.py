@@ -85,7 +85,9 @@ def echo_model(system, prompt, settings, schema, **options):
     """最初の根拠の先頭行をそのまま引用する。実際の生成経路で prompt の内容を確認する用途。"""
     if schema is GroundedDraft:
         match = re.search(r"\[(E[0-9]+)\][^\n]*\n([^\n]+)", prompt)
-        items = [{"kind": "rule", "text": match.group(2), "evidence_id": match.group(1), "quote": match.group(2)}] if match else []
+        # 長い根拠の行には行番号（`1| `）が付く（#2830）。番号を外した原文を引く。
+        line = re.sub(r"^[0-9]+\| ", "", match.group(2)) if match else ""
+        items = [{"kind": "rule", "text": line, "evidence_id": match.group(1), "quote": line}] if match else []
         return GroundedDraft.model_validate({"summary": "answer", "items": items, "confidence": "high"})
     # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
     if schema in (GroundedAudit, GroundedFactAudit):

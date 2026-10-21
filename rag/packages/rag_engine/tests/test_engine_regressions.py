@@ -70,6 +70,7 @@ class GeneratorEvidenceTests(TestCase):
     def test_complete_text_of_every_parent_reaches_one_generation_prompt(self):
         from grounded_stub import echo_model
 
+        from rag_engine.generation.grounded import numbered_text
         from rag_engine.models.llm import GroundedDraft
 
         evidence = tuple(Evidence(f"p{n}", f"START_{n}\n" + "A" * 2900 + f"TAIL_{n}") for n in range(6))
@@ -79,7 +80,8 @@ class GeneratorEvidenceTests(TestCase):
             prompts = [call.args[1] for call in parse.call_args_list if call.args[3] is GroundedDraft]
             self.assertEqual(len(prompts), 1)
             for item in evidence:
-                self.assertIn(item.text, prompts[0], item.id)
+                # 長い根拠は行番号を付けて示す（#2830）。番号の付いた全文が 1 回の prompt に入る。
+                self.assertIn(numbered_text(item.text), prompts[0], item.id)
 
     def test_oversized_evidence_returns_explicit_insufficiency_without_model_call(self):
         # 上限判定は親本文の長さそのもの。ちょうど上限の本文は通り、1 文字でも超えれば拒否する。
