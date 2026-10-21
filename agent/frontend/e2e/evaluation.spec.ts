@@ -734,3 +734,26 @@ test("前の評価を表示している間に最新の評価が終わると、�
   await page.getByTestId("evaluation-set-row-actions-evset-seeded").click();
   await expect(page.getByTestId("evaluation-set-start-evset-seeded")).toBeEnabled();
 });
+
+
+test("承認による未実行を合格率と分け、停止の期待を保存する", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  seedFinishedJobs(mockApi);
+  const job = mockApi.state.evaluations[0];
+  job.previous_job_id = null;
+  job.previous_summary = null;
+  const results = [{ ...(job.results as EvaluationResultFixture[])[0], status: "approval_blocked", judgement: null,
+    blocked_tool_calls: ["synthetic_tool"], executed_tool_calls: [], tool_calls: ["synthetic_tool"],
+    error: "承認が必要なツールを実行していないため、回答の合否は判定しません。" }];
+  job.results = results;
+  job.summary = { ...evaluationSummary(results), total: 1, completed: 1, correct: 0, incorrect: 0, errors: 1, judged_cases: 0, approval_blocked: 1, pass_rate: null, average_score: null };
+  await page.goto("/evaluation");
+  await expect(page.getByText("承認で評価できなかった", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 件を合格率の分母から除外", { exact: true })).toBeVisible();
+  await expect(page.getByText("承認で未実行（合格率から除く）", { exact: true })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("evaluation-approval-blocked.png"), fullPage: true });
+  await page.goto(`/evaluation?id=${SET.id}`);
+  await page.getByTestId("evaluation-case-1-expected-approval").click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => (mockApi.lastRequest("PUT", `/api/evaluation-sets/${SET.id}`)?.body as { cases?: { expected_approval?: boolean }[] } | undefined)?.cases?.[0]?.expected_approval).toBe(true);
+});

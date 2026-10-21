@@ -245,6 +245,7 @@ async function expectNoSeriousViolations(page: Page, testInfo: TestInfo, path: s
     .map((item) => `${item.rule}（${item.impact}・${item.count} 件）: ${item.help}\n    ${item.targets.join("\n    ")}`)
     .join("\n");
   expect(summary, `${path} の serious / critical の a11y 違反:\n${message}`).toEqual([]);
+  if (path === "/evaluation") await page.screenshot({ path: test.info().outputPath("evaluation-a11y.png"), fullPage: true });
 }
 
 /** 画面を開き、読み込んだ後の状態にする。 */

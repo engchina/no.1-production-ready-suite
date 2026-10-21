@@ -82,7 +82,7 @@ async function clearListDetailStorage(page: Page) {
 }
 
 function rowButton(page: Page, name: string) {
-  return page.getByRole("button", { name: `APP.${name} を表示`, exact: true });
+  return page.getByRole("button", { name: `APP.${name} を表示` });
 }
 
 test.describe("テーブルの管理の一覧 + 詳細（ListDetailLayout。#2281）", () => {

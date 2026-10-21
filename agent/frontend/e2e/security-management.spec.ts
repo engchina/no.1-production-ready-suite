@@ -47,7 +47,7 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/settings/security/users");
       await expect(page.getByRole("heading", { name: "ユーザー管理", level: 1 })).toBeVisible();
       const users = page.getByTestId("security-users-grid");
-      await expect(users.getByText("実行 花子")).toBeVisible();
+      await expect(users.getByText("実行 花子", { exact: true })).toBeVisible();
       await expect(users.getByText("管理 太郎")).toBeVisible();
       await expectNoPageOverflow(page);
 

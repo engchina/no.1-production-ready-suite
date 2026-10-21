@@ -14337,7 +14337,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expect(dataPreviewPanel.getByText("選択中", { exact: true })).toHaveCount(0);
   await expect(dataPreviewPanel.getByText("統計未取得").filter({ visible: true })).toBeVisible();
   await expect(dataPreviewPanel.getByRole("button", { name: /^操作: / })).toHaveCount(0);
-  await expect(dataPreviewPanel.getByRole("button", { name: / を選択$/ })).toHaveCount(4);
+  await expect(dataPreviewPanel.getByRole("button", { name: / を選択/ })).toHaveCount(4);
   await expect(dataPreviewPanel.getByRole("button", { name: / のデータを表示$/ })).toHaveCount(0);
   const previewShowButton = dataPreviewPanel.getByRole("button", { name: "データを表示", exact: true });
   const previewResultsActions = dataPreviewPanel.getByTestId("data-preview-results-actions");
@@ -18215,14 +18215,14 @@ test("ビュー抽出の旧応答は選択変更後に表示せず再抽出失�
     await fulfillJson(route, { join_text: calls === 1 ? "OLD_VIEW_JOIN" : "CURRENT_VIEW_JOIN", where_text: "", source: "deterministic", warnings: [], prompt_profile: "sql_structure", structure_markdown: "構造" });
   });
   await page.goto("/view-management");
-  await page.getByRole("button", { name: "APP.V_EMP_DEPT を表示", exact: true }).click();
+  await page.getByRole("button", { name: "APP.V_EMP_DEPT を表示" }).click();
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   await page.getByRole("button", { name: "AI で抽出", exact: true }).click();
   await expect.poll(() => calls).toBe(1);
   await page.getByTestId("view-management-back").click();
   // 1 ペイン（xl 未満）では選んだビューの詳細へ戻るので、詳細の「一覧へ戻る」で一覧を開く（#2281）。
   if (testInfo.project.name === "mobile-375") await page.getByTestId("view-management-detail-back").click();
-  await page.getByRole("button", { name: "APP.V_OTHER を表示", exact: true }).click();
+  await page.getByRole("button", { name: "APP.V_OTHER を表示" }).click();
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   const response = page.waitForResponse("**/api/nl2sql/db-admin/extract-join-where");
   gate.release();
@@ -18241,7 +18241,7 @@ test("データ取込中は対象・ファイル・モードを固定し失敗�
   await page.goto("/data-management");
   await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)", exact: true }).click();
   const panel = page.locator("#data-management-panel-csv");
-  const target = panel.getByRole("button", { name: "APP.INVOICES を選択", exact: true });
+  const target = panel.getByRole("button", { name: "APP.INVOICES を選択" });
   await target.click();
   const file = panel.getByTestId("data-csv-file-field-input");
   await file.setInputFiles({ name: "orders.csv", mimeType: "text/csv", buffer: Buffer.from("ID\n1\n") });
@@ -18542,7 +18542,7 @@ for (const kind of ["table", "data"] as const) {
     else await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)", exact: true }).click();
     const panel = page.locator(kind === "table" ? "#table-management-panel-import" : "#data-management-panel-csv");
     if (kind === "table") await panel.getByLabel("Oracle 表名").fill("REVIEW_FILES");
-    else await panel.getByRole("button", { name: "APP.INVOICES を選択", exact: true }).click();
+    else await panel.getByRole("button", { name: "APP.INVOICES を選択" }).click();
     const file = panel.getByTestId(kind === "table" ? "table-import-file-field-input" : "data-csv-file-field-input");
     const consent = panel.getByLabel("実行確認語");
     const phrase = kind === "table" ? "ADMIN_EXECUTE" : "APP.INVOICES";

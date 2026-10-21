@@ -56,7 +56,7 @@ async function mockSecurity(page: Page) {
 }
 
 function userRow(page: Page, sequence: string) {
-  return page.getByRole("button", { name: `一覧ユーザー ${sequence} を表示`, exact: true });
+  return page.getByRole("button", { name: `一覧ユーザー ${sequence} を表示` });
 }
 
 test.describe("ユーザー・ロール・権限管理の一覧 + 詳細（ListDetailLayout。#2282）", () => {

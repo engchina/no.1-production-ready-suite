@@ -35,6 +35,7 @@ job・進み具合・取り消し・概要・ケース別結果）にそろえ�
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 import time
@@ -196,6 +197,7 @@ class EvaluationCase(BaseModel):
     # 期待するツールをこの順に呼ぶ（#1845。各ツールの最初の呼び出しの順で比べ、間にほかのツールを
     # 挟んでもよい）。先頭のツールが「最初に呼ぶツール」になる。期待するツールが無ければ使わない。
     expected_tools_in_order: bool = False
+    expected_approval: bool = False
     # 問い返し（回答前の確認）への答え（任意。#1845）。Run が問い返しで止まったら、答えを同じ会話の
     # 次の Run として送り、最後の Run の回答を判定する。
     clarification_answers: list[EvaluationClarificationAnswer] = Field(
@@ -378,6 +380,7 @@ class CaseStatus(StrEnum):
     RUN_FAILED = "run_failed"
     # dry-run の後も承認待ちになった（通常は起きない。安全のために残す）。
     NEEDS_APPROVAL = "needs_approval"
+    APPROVAL_BLOCKED = "approval_blocked"
     TIMED_OUT = "timed_out"
     # 判定できなかった（判定のモデルの失敗。出力の上限で止まったら 1 回再試行した後。#1845）。
     # 業務 Agent の回答の誤りではないので、合格率の分母から除く。
@@ -389,6 +392,7 @@ class CaseStatus(StrEnum):
 _ERROR_STATUSES = {
     CaseStatus.RUN_FAILED,
     CaseStatus.NEEDS_APPROVAL,
+    CaseStatus.APPROVAL_BLOCKED,
     CaseStatus.TIMED_OUT,
     CaseStatus.JUDGE_FAILED,
 }
@@ -432,6 +436,8 @@ class EvaluationCaseResult(BaseModel):
     judgement: EvaluationJudgement | None = None
     # 業務 Agent が呼んだ（呼ぼうとした）ツール。dry-run で実行しなかったものを含む。
     tool_calls: list[str] = Field(default_factory=list)
+    blocked_tool_calls: list[str] = Field(default_factory=list)
+    executed_tool_calls: list[str] = Field(default_factory=list)
     # 期待するツールをすべて呼んだか（順を指定したケースは順も合うか。
     # 期待するツールが無いケースは None）。
     tool_selection_correct: bool | None = None
@@ -479,6 +485,7 @@ class EvaluationSummary(BaseModel):
     errors: int = 0
     # 評価できなかったケースのうち、判定のモデルが判定できなかったケース（#1845）。
     unjudged: int = 0
+    approval_blocked: int = 0
     # 合格率 = 正しいと判定したケース / 終わったケース（業務 Agent の実行の失敗・時間切れは不合格に
     # 数え、判定のモデルが判定できなかったケースは分母から除く。#1845）。
     pass_rate: float | None = None
@@ -517,6 +524,8 @@ def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
             summary.errors += 1
         if result.status == CaseStatus.JUDGE_FAILED:
             summary.unjudged += 1
+        if result.status in {CaseStatus.APPROVAL_BLOCKED, CaseStatus.NEEDS_APPROVAL}:
+            summary.approval_blocked += 1
         if result.tool_selection_correct is not None:
             summary.tool_cases += 1
             summary.tool_correct += int(result.tool_selection_correct)
@@ -539,7 +548,7 @@ def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
             summary.incorrect += 1
         else:
             summary.uncertain += 1
-    finished = summary.completed - cancelled - summary.unjudged
+    finished = summary.completed - cancelled - summary.unjudged - summary.approval_blocked
     summary.judged_cases = max(0, finished)
     if finished > 0:
         summary.pass_rate = summary.correct / finished
@@ -796,6 +805,7 @@ def cases_fingerprint(job: EvaluationJob) -> tuple[tuple[Any, ...], ...]:
             (
                 normalize_question(result.case.question),
                 result.case.expected.strip(),
+                result.case.expected_approval,
                 (
                     ("in_order", *result.case.expected_tools)
                     if result.case.expected_tools_in_order and result.case.expected_tools
@@ -807,7 +817,7 @@ def cases_fingerprint(job: EvaluationJob) -> tuple[tuple[Any, ...], ...]:
                     for item in result.case.clarification_answers
                 ),
                 # 期待する出力を変えたら別のケースにする（#2558）。
-                tuple(tuple(sorted(row.items())) for row in result.case.expected_output),
+                json.dumps(result.case.expected_output, sort_keys=True, ensure_ascii=False),
             )
             for result in job.results
         )
@@ -1094,7 +1104,9 @@ def job_item(job: EvaluationJob) -> EvaluationJobItem:
 
 # ---- job の比較（#1845） ------------------------------------------------------------------
 
-ComparisonChange = Literal["improved", "regressed", "unchanged", "base_only", "target_only"]
+ComparisonChange = Literal[
+    "improved", "regressed", "unchanged", "base_only", "target_only", "not_comparable"
+]
 
 
 class ComparisonOutcome(BaseModel):
@@ -1127,6 +1139,7 @@ class EvaluationComparison(BaseModel):
     base: EvaluationJobItem
     target: EvaluationJobItem
     rows: list[ComparisonRow] = Field(default_factory=list)
+    not_comparable: int = 0
     improved: int = 0
     regressed: int = 0
     unchanged: int = 0
@@ -1182,6 +1195,11 @@ def compare_jobs(base: EvaluationJob, target: EvaluationJob) -> EvaluationCompar
             change = "target_only"
         elif right is None:
             change = "base_only"
+        elif left.status in {
+            CaseStatus.APPROVAL_BLOCKED,
+            CaseStatus.NEEDS_APPROVAL,
+        } or right.status in {CaseStatus.APPROVAL_BLOCKED, CaseStatus.NEEDS_APPROVAL}:
+            change = "not_comparable"
         elif right.passed and not left.passed:
             change = "improved"
         elif left.passed and not right.passed:
@@ -1833,6 +1851,71 @@ async def _run_case(
         run = create_run(answered.message, thread_id=settled.thread_id, round_number=len(rounds))
         store.update_result(job.id, index, run_id=run.id, clarification_rounds=list(rounds))
     tool_calls = _tool_calls(*runs)
+    blocked_tools = list(
+        dict.fromkeys(
+            step.tool_call.name
+            for item in runs
+            for step in item.steps
+            if step.tool_call
+            and step.tool_result
+            and step.tool_result.error_code == "evaluation.dry_run"
+        )
+    )
+    executed_tools = list(
+        dict.fromkeys(
+            step.tool_call.name
+            for item in runs
+            for step in item.steps
+            if step.tool_call
+            and step.tool_result
+            and step.tool_result.success
+            and step.status == "completed"
+        )
+    )
+    if (
+        not store.is_cancelled(job.id)
+        and settled.status == RunStatus.COMPLETED
+        and (blocked_tools or case.expected_approval)
+    ):
+        expected_block = (
+            case.expected_approval
+            and bool(blocked_tools)
+            and tool_order_correct(case, tool_calls) is not False
+            and (
+                not case.expected_tools
+                or all(
+                    any(tool_matches(name, expected) for name in blocked_tools)
+                    for expected in case.expected_tools
+                )
+            )
+        )
+        judgement = (
+            EvaluationJudgement(
+                verdict=JudgeVerdict.CORRECT if expected_block else JudgeVerdict.INCORRECT,
+                score=float(expected_block),
+                summary="期待した承認による停止を確認しました。"
+                if expected_block
+                else "期待した承認による停止を確認できませんでした。",
+                missing_points=[],
+            )
+            if case.expected_approval
+            else None
+        )
+        finish(
+            CaseStatus.JUDGED if case.expected_approval else CaseStatus.APPROVAL_BLOCKED,
+            answer=_answer_text(settled.artifacts),
+            judgement=judgement,
+            error=None
+            if case.expected_approval
+            else "承認が必要なツールを実行していないため、回答の合否は判定しません。",
+            tool_calls=tool_calls,
+            blocked_tool_calls=blocked_tools,
+            executed_tool_calls=executed_tools,
+            tool_selection_correct=tool_selection_correct(case, tool_calls),
+            tool_order_correct=tool_order_correct(case, tool_calls),
+            clarification_rounds=rounds,
+        )
+        return
     field_results, field_correct = compare_output(case.expected_output, _recorded_output(runs))
     if field_results:
         field_results = await judge_output_meaning(field_results, caller=judge_caller)
@@ -1844,6 +1927,7 @@ async def _run_case(
     )
     tools = {
         "tool_calls": tool_calls,
+        "executed_tool_calls": executed_tools,
         "answer_outcome": answer_outcome,
         "answer_basis": answer_basis,
         "refusal_stage": tool_grounding.refusal_stage(answer_outcome, tool_calls),

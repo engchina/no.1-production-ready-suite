@@ -70,6 +70,7 @@ interface CaseDraft {
   tools: string;
   /** 期待するツールを書いた順に呼ぶ（#1845）。 */
   toolsInOrder: boolean;
+  expectedApproval: boolean;
   /** 問い返しへの答え（#1845）。 */
   answers: ClarificationAnswerDraft[];
   /** フィードバック・Run の詳細から追加したケースの元の Run（保存し直しても保つ。#810）。 */
@@ -99,6 +100,7 @@ function caseDraft(item?: EvaluationCase): CaseDraft {
     expected: item?.expected ?? "",
     tools: (item?.expected_tools ?? []).join(", "),
     toolsInOrder: item?.expected_tools_in_order ?? false,
+    expectedApproval: item?.expected_approval ?? false,
     answers: (item?.clarification_answers ?? []).map((answer) => clarificationAnswerDraft(answer)),
     sourceRunId: item?.source_run_id ?? null,
     output: expectedOutputDrafts(item?.expected_output),
@@ -180,6 +182,7 @@ function toPayload(draft: SetDraft, fields: AgentOutputField[]): EvaluationSetIn
         .map((tool) => tool.trim())
         .filter(Boolean),
       expected_tools_in_order: item.toolsInOrder,
+      ...(item.expectedApproval ? { expected_approval: true } : {}),
       clarification_answers: toClarificationAnswers(item.answers),
       source_run_id: item.sourceRunId,
       // 期待する出力は書いたときだけ送る（#2558）。
@@ -605,6 +608,15 @@ export function EvaluationSetEditor({
                         <p id={`${item.key}-tools-order-helper`} className="text-xs text-fg-muted">
                           {t("evaluation.set.expectedToolsInOrderHelper")}
                         </p>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="inline-flex items-center gap-2 text-sm text-fg">
+                          <Switch checked={item.expectedApproval} data-testid={`evaluation-case-${number}-expected-approval`}
+                            aria-describedby={`${item.key}-approval-helper`}
+                            onCheckedChange={(checked) => updateCase(item.key, { expectedApproval: checked })} />
+                          {t("evaluation.set.expectedApproval")}
+                        </label>
+                        <p id={`${item.key}-approval-helper`} className="text-xs text-fg-muted">{t("evaluation.set.expectedApprovalHelper")}</p>
                       </div>
                       <ClarificationAnswersField
                         idPrefix={item.key}
