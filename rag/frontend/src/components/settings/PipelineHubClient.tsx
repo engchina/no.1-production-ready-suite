@@ -1,6 +1,7 @@
 "use client";
 
 import { PageBody } from "@production-ready/ui";
+import { useId } from "react";
 import { Link } from "react-router-dom";
 
 import { settingsSubtitleKey, visibleNavSections, type NavItem } from "@/components/layout/nav-config";
@@ -102,18 +103,22 @@ function PhaseGroup({
 }
 
 function StageCard({ item, step }: { item: NavItem; step: number | null }) {
+  const cardId = useId();
+  const contentId = useId();
   const Icon = item.icon;
   const name = t(item.labelKey);
   return (
     <Link
       to={item.href}
-      aria-label={`${step === null ? "" : `${step}. `}${name} ${stageDescription(item)} ${t("settings.pipeline.openStage", { name })}`}
+      id={cardId}
+      aria-label={t("settings.pipeline.openStage", { name })}
+      aria-labelledby={`${contentId} ${cardId}`}
       className="flex h-full gap-3 rounded-lg border border-border bg-surface p-4 transition-colors hover:border-accent-emphasis hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
     >
       <span data-surface-tint="accent" className="flex size-9 shrink-0 items-center justify-center rounded-md bg-accent-subtle text-accent-fg">
         <Icon size={20} aria-hidden />
       </span>
-      <span className="min-w-0">
+      <span id={contentId} className="min-w-0">
         <span className="block text-sm font-semibold text-fg">
           {step === null ? null : <span className="tnum text-fg-muted">{step}.</span>} {name}
         </span>
