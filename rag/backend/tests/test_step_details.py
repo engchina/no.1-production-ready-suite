@@ -6,6 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.clients.oci_guardrails import OciGuardrailsClient
+from app.config import Settings
+from app.rag.guardrails import GuardrailPolicy
 from app.rag.step_details import (
     answer_guardrail_details,
     field_filter_details,
@@ -87,20 +90,21 @@ def test_field_filter_details() -> None:
             SimpleNamespace(
                 allowed=True,
                 sanitized_text="伏せた回答",
-                findings=[SimpleNamespace(code="c1", severity="warning", message="指摘 1")],
-                backend_degraded=True,
+                findings=[
+                    SimpleNamespace(code="oci_pii_detected", severity="warning", message="指摘 1")
+                ],
+                backend_degraded=False,
             ),
             [
                 ("結果", "警告 1 件（回答は出します）"),
                 ("回答の書き換え", "機密らしい箇所を伏せました"),
-                ("外部の検査", "使えなかったため、規則の検査だけで確かめました"),
             ],
             ["指摘 1"],
         ),
         (
             SimpleNamespace(
                 allowed=False,
-                sanitized_text="回答",
+                sanitized_text="安全チェックにより処理を停止しました。",
                 findings=[
                     SimpleNamespace(code="c2", severity="error", message="指摘 2"),
                     SimpleNamespace(code="c2", severity="error", message="指摘 2"),
@@ -110,8 +114,35 @@ def test_field_filter_details() -> None:
             [("結果", "回答を止めました")],
             ["指摘 2"],
         ),
+        (
+            SimpleNamespace(
+                allowed=False,
+                sanitized_text="安全検査を完了できないため、処理を停止しました。",
+                findings=[
+                    SimpleNamespace(
+                        code="guardrail_backend_unavailable", severity="error", message="検査不能"
+                    )
+                ],
+                backend_degraded=True,
+            ),
+            [
+                ("結果", "安全検査を完了できず、回答を止めました"),
+                ("外部の検査", "OCI Guardrails を利用できませんでした"),
+            ],
+            ["検査不能"],
+        ),
+        (
+            SimpleNamespace(
+                allowed=True,
+                sanitized_text="別の回答",
+                findings=[SimpleNamespace(code="c3", severity="warning", message="指摘 3")],
+                backend_degraded=False,
+            ),
+            [("結果", "警告 1 件（回答は出します）")],
+            ["指摘 3"],
+        ),
     ],
-    ids=["clean", "warning-sanitized-degraded", "blocked"],
+    ids=["clean", "pii-masked", "blocked", "unavailable", "non-pii-replacement"],
 )
 def test_answer_guardrail_details(
     result: SimpleNamespace, expected_fields: list[tuple[str, str]], expected_lines: list[str]
@@ -120,6 +151,24 @@ def test_answer_guardrail_details(
     assert details is not None
     assert [(item["label"], item["value"]) for item in details["fields"]] == expected_fields
     assert details.get("lines", []) == expected_lines
+
+
+def test_actual_oci_failure_does_not_claim_local_inspection_or_masking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(self: object, text: str) -> None:
+        raise RuntimeError("合成の検査障害")
+
+    monkeypatch.setattr(OciGuardrailsClient, "inspect_text", fail)
+    answer = "合成の正常な回答"
+    result = GuardrailPolicy(Settings(rag_guardrails_enabled=True)).validate_answer(answer)
+    details = answer_guardrail_details(result, answer)
+    assert result.backend_degraded and not result.allowed
+    assert details is not None
+    assert details["fields"] == [
+        {"label": "結果", "value": "安全検査を完了できず、回答を止めました"},
+        {"label": "外部の検査", "value": "OCI Guardrails を利用できませんでした"},
+    ]
 
 
 def test_history_schema_reads_structured_and_legacy_details() -> None:

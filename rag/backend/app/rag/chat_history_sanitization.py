@@ -80,14 +80,15 @@ async def _sanitize_conversation(
     counts: SanitizationCounts,
 ) -> None:
     blocked_user_ids: set[str] = set()
+    checked: list[tuple[StoredMessage, GuardrailResult, str, str]] = []
+    counts.scanned += len(messages)
+    # 会話全体の検査が完了するまで、保存済みの本文を更新しない。
     for message in messages:
-        counts.scanned += 1
         try:
             if message.role == "USER":
                 result, status = await _sanitize_user_message(message, policy)
                 if not result.allowed:
                     blocked_user_ids.add(message.id)
-                    counts.blocked += 1
                     content = BLOCKED_MESSAGE_PLACEHOLDER
                     status = "ERROR"
                 else:
@@ -101,18 +102,26 @@ async def _sanitize_conversation(
                     )
                     content = BLOCKED_ANSWER_PLACEHOLDER
                     status = "ERROR"
-                    counts.blocked += 1
                 else:
                     result = await asyncio.to_thread(policy.validate_answer, message.content)
                     content = (
                         result.sanitized_text if result.allowed else BLOCKED_ANSWER_PLACEHOLDER
                     )
                     status = "COMPLETE" if result.allowed else "ERROR"
-                    if not result.allowed:
-                        counts.blocked += 1
             else:
                 continue
+            if result.backend_degraded:
+                counts.failed += len(messages)
+                return
+            checked.append((message, result, content, status))
+        except Exception:  # noqa: BLE001 - 検査できない会話は原文のまま再実行に残す
+            counts.failed += len(messages)
+            return
 
+    for message, result, content, status in checked:
+        try:
+            if not result.allowed:
+                counts.blocked += 1
             warnings = list(dict.fromkeys([*message.guardrail_warnings, *result.warnings]))
             if any(
                 finding.code in {"sensitive_identifier_redacted", "oci_pii_detected"}
@@ -125,7 +134,6 @@ async def _sanitize_conversation(
                 or warnings != message.guardrail_warnings
             )
             if changed:
-                counts.updated += 1
                 if apply:
                     await client.update_message_for_guardrail_migration(
                         message_id=message.id,
@@ -133,6 +141,7 @@ async def _sanitize_conversation(
                         status=status,
                         guardrail_warnings=warnings,
                     )
+                counts.updated += 1
         except Exception:  # noqa: BLE001 - 集計だけを返し原文/例外本文を出さない
             counts.failed += 1
 
