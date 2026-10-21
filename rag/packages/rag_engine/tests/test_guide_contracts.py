@@ -127,6 +127,33 @@ def test_review_requires_a_quote_that_actually_exists_in_answer(quote):
     assert result[0]["status"] != "explained"
 
 
+def test_review_quote_may_copy_the_cited_items_source_quote():
+    # モデルは引いた item の説明の文ではなく根拠の原文を写すことが多い（#2811）。引いた item に属する文なら受ける。
+    paraphrase = grounded.CheckedItem(
+        GroundedItem(kind="operation", text="一覧で対象を選ぶ", quote="一覧から対象を選択します"),
+        span={"text": "一覧から対象を選択します", "evidence_id": "E1"},
+    )
+    result = grounded.apply_guide_contracts(
+        coverage("a"), [paraphrase], [contract("a", "対象選択")], audit({**review("a:0", [0]), "answer_quote": "一覧から対象を選択します"})
+    )
+    assert result[0]["status"] == "explained"
+
+
+@pytest.mark.parametrize(("kind", "explained"), [("gap", True), ("operation", False)])
+def test_stated_unavailable_may_omit_the_quote_only_for_gap_lines(kind, explained):
+    item = grounded.CheckedItem(
+        GroundedItem(kind=kind, text="列の定義を確認できません。", quote="" if kind == "gap" else "列の定義を確認できません。"),
+        span=None if kind == "gap" else {"text": "列の定義を確認できません。", "evidence_id": "E1"},
+    )
+    result = grounded.apply_guide_contracts(
+        coverage("a"),
+        [item],
+        [contract("a", "列が未確認ならその範囲を明示する")],
+        audit({**review("a:0", [0], "stated_unavailable"), "answer_quote": ""}),
+    )
+    assert (result[0]["status"] == "explained") is explained
+
+
 def test_one_answer_item_cannot_complete_two_distinct_steps():
     result = grounded.apply_guide_contracts(
         coverage("a", "b"), [entry()], [contract("a", "対象選択"), contract("b", "保存確定")], audit(review("a:0", [0]), review("b:0", [0]))
@@ -216,7 +243,7 @@ def test_invalid_answer_proof_uses_one_bounded_audit_retry(repair):
     bad = {
         **base,
         "guide_requirement_reviews": [
-            {**review("s1:0", [0]), "answer_quote": STEP_A},
+            {**review("s1:0", [0]), "answer_quote": "別の操作を説明します"},
             {**review("s2:0", [1]), "answer_quote": STEP_B},
         ],
     }
@@ -235,3 +262,29 @@ def test_invalid_answer_proof_uses_one_bounded_audit_retry(repair):
     assert first_round["audit_calls"] == 2
     first_step = next(s for s in first_round["guide_steps"] if s["step_id"] == "s1")
     assert (first_step["status"] == "explained") is repair
+
+
+def test_partly_explained_quote_does_not_retry_the_audit():
+    # 一部だけの観察は引用によらず partial なので、監査を作り直さない（#2811）。
+    from dataclasses import replace
+
+    from test_grounded_answer import FakeModel, draft, item
+    from test_grounded_answer import audit as make_audit
+    from test_guide_step_fulfillment import GUIDE, STEP_A, STEP_B, _ab_context, _ids, _knowledge, _run
+
+    ctx = _ab_context()
+    knowledge = replace(
+        _knowledge(GUIDE), guide_step_contracts=(contract("s1", "入力方法"), contract("s2", "確定操作", dependencies=["s1"]))
+    )
+    labels = _ids(ctx, knowledge)
+    base = make_audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")])
+    partial = {
+        **base,
+        "guide_requirement_reviews": [
+            {**review("s1:0", [0], "partial"), "answer_quote": "別の操作を説明します"},
+            {**review("s2:0", [1]), "answer_quote": STEP_B},
+        ],
+    }
+    model = FakeModel([draft(item(labels[STEP_A], STEP_A, STEP_A), item(labels[STEP_B], STEP_B, STEP_B))], [partial])
+    result = _run(model, ctx, knowledge).response
+    assert result.generation_trace["rounds"][0]["audit_calls"] == 1
