@@ -2110,34 +2110,22 @@ class CarryOverWithdrawalTest(unittest.TestCase):
             (0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")]
         )
 
-    def test_carried_claim_is_audited_and_withdrawn_when_not_applicable(self):
+    def test_carried_claim_is_re_audited_and_not_applicable_is_only_recorded(self):
         # 2 回目の草稿は STEP_B を落とし、引き継がれた STEP_B（index 1）を監査が not_applicable と判定する。
+        # 適用性の判定は回答に反映せず記録に残す（#2837。回答時の検査は根拠の裏付け（support）だけ）。
         second = audit(
             (0, "supported", "matched", ""), (1, "supported", "not_applicable", ""), requests=[("Q1", "addressed"), ("Q2", "missing")]
         )
         model = FakeModel([self.both, self.only_a], [self.first, second])
         result = run(model, self.ctx).response
         rounds = result.generation_trace["rounds"]
-        self.assertEqual([r["accepted"] for r in rounds], [True, True])
         second_audit = json.loads(model.prompts[3][1])
         self.assertEqual([i["text"] for i in second_audit["items"]], [self.STEP_A, self.STEP_B])  # 引き継いだ item も監査対象
-        self.assertEqual([(i["carried"], i["withdrawn"]) for i in rounds[1]["items"]], [(False, False), (True, True)])
-        self.assertEqual(
-            rounds[1]["score"],
-            {
-                "addressed": ["Q1"],
-                "verified": 1,
-                "marked": 1,
-                "removed": 0,
-                "withdrawn": 1,
-                "withdrawn_requests": ["Q1"],
-                "problems": 1,
-            },
-        )
+        self.assertEqual([(i["carried"], i["withdrawn"]) for i in rounds[1]["items"]], [(False, False), (True, False)])
+        self.assertEqual([review["observed_applicability"] for review in rounds[1]["audit"]["reviews"]], ["", "not_applicable"])
         self.assertIn("1. " + self.STEP_A, result.answer_text)
-        # 撤回した主張（not_applicable）は本文に残し、警告を付ける。
         self.assertIn("2. " + self.STEP_B, result.answer_text)
-        self.assertEqual(marks(result), {self.STEP_B: ["target_mismatch"]})
+        self.assertEqual(marks(result), {})
 
     def test_carried_claim_keeps_its_support_when_the_re_audit_only_says_unsupported(self):
         # 言い換えの支持は前の round で確定済み。引き継いだ item への unsupported は監査の揺れとして無視する。
@@ -2162,9 +2150,9 @@ class CarryOverWithdrawalTest(unittest.TestCase):
         self.assertIn("（処理を選択の場合）" + self.STEP_B, result.answer_text)
 
     def test_withdrawal_is_counted_only_in_the_round_that_withdrew(self):
-        # 3 round 目は 2 round 目で撤回済みの item（警告つき）を引き継ぐが、当該 round の撤回には数えない。
+        # 3 round 目は 2 round 目で撤回済みの item を引き継ぐが、当該 round の撤回には数えない。
         second = audit(
-            (0, "supported", "matched", ""), (1, "supported", "not_applicable", ""), requests=[("Q1", "addressed"), ("Q2", "missing")]
+            (0, "supported", "matched", ""), (1, "contradicted", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")]
         )
         third = audit((0, "supported", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")])
         spans = _grounded_spans(QUESTION, self.ctx, (), None)
@@ -2184,7 +2172,7 @@ class CarryOverWithdrawalTest(unittest.TestCase):
                 )
             )
         self.assertEqual([r.withdrawn for r in rounds], [0, 1, 0])
-        self.assertEqual([(e.carried, e.withdrawn, e.state) for e in rounds[2].checked], [(False, False, ""), (True, False, "warning")])
+        self.assertFalse(any(e.withdrawn for e in rounds[2].checked))  # 引き継いだ撤回済みの item を再び数えない
         self.assertFalse(grounded.better(rounds[2], rounds[1]))  # 同じ内容の round は採用しない
 
     def test_previous_round_items_are_not_mutated_by_the_next_audit(self):
@@ -2539,7 +2527,7 @@ class ApplicabilityAuditTest(unittest.TestCase):
         self.assertIn("（処理を選択の場合）一覧表を選択し", result.answer_text)
         self.assertEqual((result.confidence, result.needs_human_review), ("medium", False))
         self.assertTrue(result.answer_text.startswith("集計表出力から明細一覧を出力できます。"))  # matched の説明が残れば summary は公開
-        unknown = audit((0, "supported", "unknown", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")])
+        unknown = audit((0, "supported", "conditional", "原文に無い条件"), (1, "supported", "matched", ""), requests=[("Q1", "addressed")])
         result = run(FakeModel([steps], [unknown]), ctx).response
         # 該当が未確認の説明は注記を付けず、「参考情報」の節に原文の引用で置く（#2040・#2213）。
         self.assertIn(
@@ -3556,8 +3544,8 @@ class AuditNeededEvidenceTest(unittest.TestCase):
     def _labels(self, ctx):
         return {s["text"]: (s["label"], s["evidence_id"]) for s in _grounded_spans(self.QUESTION, ctx, (), None)}
 
-    def test_audit_evidence_is_shown_beside_claims_with_a_target_warning(self):
-        """監査が対象違いとした説明は警告つきで残し、監査が挙げた根拠も原文で示す (#1106・#2738)。"""
+    def test_audit_evidence_is_shown_beside_claims_judged_off_target(self):
+        """監査が挙げた根拠を原文で示す (#1106)。監査の対象違いの判定は回答に反映せず記録に残す（#2837）。"""
         ctx = context(record(0, self.OTHER, "（９）架空一覧", page=9), record(1, self.SETTING, "（２）帳票設定"))
         labels = self._labels(ctx)
         other = labels[self.OTHER][0]
@@ -3566,7 +3554,7 @@ class AuditNeededEvidenceTest(unittest.TestCase):
         result = run(FakeModel([wrong, wrong, wrong], [needed, needed, needed]), ctx, self.QUESTION).response
 
         self.assertIn("注意書欄の文言を修正し", result.answer_text)
-        self.assertEqual(marks(result)["別の架空一覧画面で抽出条件を入力します。"], ["target_mismatch"])
+        self.assertNotIn("別の架空一覧画面で抽出条件を入力します。", marks(result))
         self.assertIn(labels[self.SETTING][1], result.generation_trace["finalization"]["retained_evidence_ids"])
 
     def test_audit_evidence_is_appended_when_a_request_stays_unanswered(self):
@@ -3707,7 +3695,7 @@ class DisplayedScreenQuoteTest(unittest.TestCase):
         ctx = context(record(0, screen, "（１）架空登録", page=3))
         question = "架空登録の画面を教えてほしい。"
         eid = ids(ctx, question)[screen]
-        model = FakeModel([draft(item(eid, "受付日を入力します。", screen))], [audit((0, "supported", "unknown", ""))])
+        model = FakeModel([draft(item(eid, "受付日を入力します。", screen))], [audit((0, "supported", "conditional", "原文に無い条件"))])
 
         text = run(model, ctx, question).response.answer_text
 
@@ -3725,7 +3713,7 @@ class DisplayedScreenQuoteTest(unittest.TestCase):
         ctx = context(record(0, screen, "（１）架空登録", page=3))
         question = "架空登録の画面を教えてほしい。"
         eid = ids(ctx, question)[screen]
-        model = FakeModel([draft(item(eid, "顧客番号を入力します。", screen))], [audit((0, "supported", "unknown", ""))])
+        model = FakeModel([draft(item(eid, "顧客番号を入力します。", screen))], [audit((0, "supported", "conditional", "原文に無い条件"))])
 
         text = run(model, ctx, question).response.answer_text
 
@@ -3747,7 +3735,7 @@ class DisplayedScreenQuoteTest(unittest.TestCase):
                     item(eid, "取込ボタンを押します。", "ボタン: 取込 / 戻る"),
                 )
             ],
-            [audit((0, "supported", "unknown", ""), (1, "supported", "unknown", ""))],
+            [audit((0, "supported", "conditional", "原文に無い条件"), (1, "supported", "conditional", "原文に無い条件"))],
         )
 
         text = run(model, ctx, question).response.answer_text
