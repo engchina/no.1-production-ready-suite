@@ -1710,6 +1710,8 @@ export interface AnswerPromptsData {
 /** 処理の順の段の区分（backend の answer_prompts.PROMPT_PHASES）。 */
 export type AnswerPromptPhase =
   | "ingestion"
+  | "indexing"
+  | "knowledge"
   | "question"
   | "retrieval"
   | "grounding"

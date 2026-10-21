@@ -151,11 +151,13 @@ for (const viewport of [
 
     await page.goto("/settings/prompts");
 
-    const stages = page.getByRole("region", { name: "処理の各段のプロンプト（読み取り専用）" });
+    const stages = page.getByRole("region", { name: "処理の各段のプロンプト" });
     await expect(stages).toBeVisible();
-    // 区分は処理の順（取込 → 質問の解釈 → 検索 → 根拠の判定 → 回答の生成 → 監査 → 評価）。
-    await expect(stages.getByRole("heading", { level: 4 })).toHaveText([
-      "取込",
+    // 取込は解析と索引に分け、独立した準備の後に検索・回答・評価を並べる。
+    await expect(stages.getByRole("heading", { level: 3 })).toHaveText([
+      "文書解析",
+      "文書分割・索引",
+      "業務ガイドの準備",
       "質問の解釈",
       "検索",
       "根拠の判定",
@@ -163,8 +165,25 @@ for (const viewport of [
       "監査",
       "評価",
     ]);
+    const editor = stages.getByRole("textbox", { name: "テンプレート", exact: true });
+    await expect(editor).toHaveCount(1);
+    await expect(stages.getByRole("region", { name: "回答の生成" }).getByRole("textbox", { name: "テンプレート", exact: true })).toBeEditable();
+    expect(await stages.getByTestId("answer-prompt-stage-generation").evaluate((element) =>
+      Boolean(element.compareDocumentPosition(document.getElementById("answer-prompt-vlm_answer")!) & Node.DOCUMENT_POSITION_FOLLOWING)
+    )).toBe(true);
+    await expect(stages.getByTestId("answer-prompt-stage-section_extraction")).toContainText("標準 RAG と CRAG の両方");
+    await expect(stages.getByTestId("answer-prompt-stage-section_extraction")).toContainText("原文抽出は既定で無効");
+    await expect(stages.getByTestId("answer-prompt-stage-audit")).toContainText("生成後の LLM 監査を有効にしたとき（既定は無効）");
+    await expect(stages.getByTestId("answer-prompt-stage-application")).toContainText("生成後の LLM 監査が有効で");
+    await expect(stages.getByTestId("answer-prompt-stage-history_rewrite")).toContainText("書き換えを有効にしたとき");
+    await expect(stages.getByTestId("answer-prompt-stage-faq_answer")).toContainText("検索しない");
+    await expectNoPageOverflow(page);
+    await stages.getByRole("heading", { name: "文書解析", exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("pipeline-prompt-order.png") });
+    await editor.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("generation-template-position.png") });
     // 段は区分の中に入り、開かなくても使われる条件を 1 行で示す。
-    const ingestion = stages.getByRole("region", { name: "取込" });
+    const ingestion = stages.getByRole("region", { name: "文書解析" });
     const headingLevels = ingestion.getByTestId("answer-prompt-stage-heading_levels");
     await expect(headingLevels).toContainText("Docling の解析結果で、しおりの階層を使えず");
     await expect(headingLevels).toContainText("階層が未判定の見出しの割合と見出し数が設定の条件を満たすとき");
@@ -177,7 +196,7 @@ for (const viewport of [
     await expect(picture).toContainText("使われる条件: 「図・画像を AI で読み取る」を有効にしたとき");
     await expect(picture.getByText("図の system")).toBeHidden();
     await expect(stages.getByRole("region", { name: "回答の生成" }).getByTestId("answer-prompt-stage-generation")).toContainText(
-      "使われる条件: 常に（回答ごと）"
+      "使われる条件: 検索した根拠から回答を生成するとき"
     );
     await expect(stages.getByRole("region", { name: "評価" }).getByTestId("answer-prompt-stage-evaluation")).toContainText(
       "使われる条件: 品質評価と保存した回答の評価。正確性・網羅性は標準回答や必須要点などの期待があるとき、忠実性は取得した根拠があるときに測ります"
@@ -186,6 +205,9 @@ for (const viewport of [
     await expect(stages.getByTestId("answer-prompt-stage-evaluation")).toContainText("回答の品質評価");
     await expect(stages.getByTestId("answer-prompt-stage-evaluation_screen_judge")).toHaveCount(0);
     await stages.getByTestId("answer-prompt-stage-evaluation").locator("summary").click();
+    expect(await stages.getByTestId("answer-prompt-stage-evaluation").getByRole("textbox").evaluateAll((elements) =>
+      elements.map((element) => (element as HTMLTextAreaElement).value)
+    )).toEqual(["範囲の指示", "網羅性・忠実性の指示", "正確性の指示"]);
     await stages.getByTestId("answer-prompt-stage-evaluation").screenshot({ path: testInfo.outputPath("evaluation-prompt-conditions.png") });
 
     const conditions = stages.getByRole("region", { name: "質問の解釈" })
@@ -202,6 +224,7 @@ for (const viewport of [
     await picture.locator("summary").click();
     await expect(picture.getByText("system プロンプト", { exact: true })).toBeVisible();
     await expect(picture.getByText("図の system")).toBeVisible();
+    await expect(picture.getByRole("textbox", { name: "入力テンプレート", exact: true })).toHaveValue("## 現在の図の読み取り指示");
     await expect(picture.getByText("表を読むときの対象の指示", { exact: true })).toBeVisible();
     await expectNoPageOverflow(page);
   });
@@ -287,26 +310,32 @@ type StageFixture = { id: string; phase: string; prompts: { id: string; content:
 
 const DEFAULT_STAGES: StageFixture[] = [
   { id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] },
+  { id: "generation", phase: "generation", prompts: [{ id: "system", content: "生成の system" }] },
   { id: "audit", phase: "audit", prompts: [{ id: "system", content: "監査の system\n\n## 手順\n\n1. `quote` を照合する。\n2. 不足なら指摘する。\n\n<script>window.promptInjected = true</script>" }] },
 ];
 
-// 7 つの区分にまたがる段（backend の PROMPT_STAGES の一部。内容は合成）。
+// 9 つの区分にまたがる段（backend の PROMPT_STAGES の一部。内容は合成）。
 const FLOW_STAGES: StageFixture[] = [
   {
     id: "picture_description",
     phase: "ingestion",
     prompts: [
       { id: "system", content: "図の system" },
+      { id: "template", content: "## 現在の図の読み取り指示" },
       { id: "table", content: "表の指示" },
     ],
   },
   { id: "heading_levels", phase: "ingestion", prompts: [{ id: "instruction", content: "階層の指示" }] },
   { id: "field_extraction", phase: "ingestion", prompts: [{ id: "instruction", content: "項目の指示" }] },
+  { id: "raptor_summary", phase: "indexing", prompts: [{ id: "system", content: "索引要約の指示" }] },
+  { id: "support_guide_draft", phase: "knowledge", prompts: [{ id: "system", content: "下書きの指示" }] },
   { id: "support_guide_conditions", phase: "question", prompts: [{ id: "system", content: "条件認識の system" }] },
   { id: "history_rewrite", phase: "question", prompts: [{ id: "system", content: "書き換えの system" }] },
   { id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] },
   { id: "screen_linking", phase: "retrieval", prompts: [{ id: "system", content: "画面の system" }] },
   { id: "crag", phase: "grounding", prompts: [{ id: "system", content: "判定の system" }] },
+  { id: "section_extraction", phase: "grounding", prompts: [{ id: "system", content: "抽出の指示" }] },
+  { id: "faq_answer", phase: "generation", prompts: [{ id: "system", content: "FAQ の指示" }] },
   { id: "generation", phase: "generation", prompts: [{ id: "system", content: "生成の system" }] },
   {
     id: "audit",
@@ -316,7 +345,8 @@ const FLOW_STAGES: StageFixture[] = [
       { id: "compactRule", content: "理由の規則" },
     ],
   },
-  { id: "evaluation", phase: "evaluation", prompts: [{ id: "scope", content: "範囲の指示" }] },
+  { id: "application", phase: "audit", prompts: [{ id: "system", content: "当てはめの指示" }] },
+  { id: "evaluation", phase: "evaluation", prompts: [{ id: "scope", content: "範囲の指示" }, { id: "system", content: "網羅性・忠実性の指示" }, { id: "correctness", content: "正確性の指示" }] },
 ];
 
 function answerPromptsEnvelope(content: string, customized: boolean, stages: StageFixture[] = DEFAULT_STAGES) {
@@ -337,4 +367,22 @@ function answerPromptsEnvelope(content: string, customized: boolean, stages: Sta
     error_messages: [],
     warning_messages: [],
   };
+}
+
+
+for (const width of [1280, 375]) {
+  test(`回答プロンプトの取得失敗後は再試行で工程と編集欄へ戻れる (${width}px)`, { tag: "@responsive" }, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    let failed = true;
+    await page.route("**/api/settings/answer-prompts**", (route) => failed
+      ? route.fulfill({ status: 503, json: { data: null, error_messages: ["取得できませんでした"], warning_messages: [] } })
+      : route.fulfill({ json: answerPromptsEnvelope("既定 {{question}} {{answer_context}}", false) }));
+    await page.goto("/settings/prompts");
+    await expect(page.getByText("プロンプトを読み込めませんでした。", { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: "テンプレート", exact: true })).toHaveCount(0);
+    failed = false;
+    await page.getByRole("button", { name: "再試行", exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "テンプレート", exact: true })).toBeEditable();
+    await expectNoPageOverflow(page);
+  });
 }

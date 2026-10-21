@@ -285,3 +285,19 @@ async def test_answer_prompts_round_trip_on_real_oracle() -> None:
         assert await oracle.delete_answer_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
     assert VLM_ANSWER_PROMPT_KEY not in await oracle.answer_prompt_overrides()
     assert not await oracle.delete_answer_prompt(VLM_ANSWER_PROMPT_KEY)
+
+
+def test_catalog_uses_current_image_template_with_runtime_rules() -> None:
+    from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt
+
+    content = "## 独自の読み取り指示\n{{image_metadata}}"
+    data = settings_routes._answer_prompts_data(
+        {IMAGE_RETRIEVAL_PROMPT_KEY: {"content": content, "updated_at": None}}
+    )
+    stage = next(stage for stage in data.stages if stage.id == "picture_description")
+    assert [part.id for part in stage.prompts] == ["system", "template", "picture", "table"]
+    assert stage.prompts[1].content == refine_image_retrieval_prompt(content).strip()
+    assert (
+        next(prompt.content for prompt in data.prompts if prompt.key == IMAGE_RETRIEVAL_PROMPT_KEY)
+        == content
+    )
