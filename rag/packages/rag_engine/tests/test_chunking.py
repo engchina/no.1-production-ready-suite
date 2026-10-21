@@ -1795,8 +1795,33 @@ class ChunkingTests(unittest.TestCase):
         real = children_for("OCR抽出テキスト:\nＡ受注管理 －（３）受注入力\n登録ボタン\nCopyright© サンプル株式会社 All rights reserved.")
         self.assertTrue(any("登録ボタン" in c.text for c in real))
 
-    def test_tiny_text_buffer_is_attached_to_next_visual_or_dropped(self):
-        # 手順番号「２」だけの Text は単独 child にせず次の画像 child に付ける。末尾の「以上」は捨てる (#897)。
+    def test_short_nonempty_text_is_kept_without_a_length_threshold(self):
+        for category in ["Text", "Page-header"]:
+            for text in ["a", "ab", "abc", "abcd", "２", "＊"]:
+                with self.subTest(category=category, text=text):
+                    children, _ = self._children(_viewer_payload([_record(1, 1, category, text)]))
+                    self.assertEqual([child.text for child in children], [text])
+
+    def test_short_heading_only_is_preserved(self):
+        from rag_engine.chunking.records import _buffer_has_body
+
+        for category in ["Title", "Section-header"]:
+            with self.subTest(category=category):
+                record = _record(1, 1, category, "章")
+                self.assertFalse(_buffer_has_body([record]))
+                children, _ = self._children(_viewer_payload([record]))
+                self.assertEqual([child.text for child in children], ["章"])
+
+    def test_whitespace_does_not_supply_body(self):
+        from rag_engine.chunking.records import _buffer_has_body
+
+        for text in ["", " ", "　", "\n\t　 "]:
+            with self.subTest(text=text):
+                self.assertFalse(_buffer_has_body([_record(1, 1, "Text", text)]))
+                children, _ = self._children(_viewer_payload([_record(1, 1, "Text", text)]))
+                self.assertEqual(children, [])
+
+    def test_short_text_before_visual_is_kept_as_body(self):
         bbox = [50, 300, 550, 500]
         payload = _viewer_payload(
             [
@@ -1810,9 +1835,9 @@ class ChunkingTests(unittest.TestCase):
         )
         chunks = build_small_to_big_chunks(payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig())
         texts = [c.text for c in chunks if c.chunk_level == CHILD_CHUNK_LEVEL]
-        self.assertFalse(any(t.strip() in {"２", "以上"} for t in texts))
-        # 見出し buffer と一緒に画像 child の前置きになる
-        self.assertTrue(any("（１）登録\n２\n" in t and "保存ボタン" in t for t in texts))
+        self.assertTrue(any("（１）登録\n２" in text for text in texts))
+        self.assertTrue(any("保存ボタン" in text for text in texts))
+        self.assertTrue(any("以上" in text for text in texts))
 
     def test_retrieval_profile_is_computed_once_per_chunk(self):
         # child は検索文確定後の 1 回、親は生成時の 1 回だけ問い合わせ profile を推定する (#867)。

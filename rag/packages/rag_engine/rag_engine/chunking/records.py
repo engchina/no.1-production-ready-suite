@@ -419,22 +419,14 @@ def _records_char_count(records: Sequence[dict[str, Any]]) -> int:
     return sum(len(_record_text_for_chunk(record)) for record in records) + max(0, len(records) - 1)
 
 
-# 本文とみなす最小文字数。手順番号「２」だけの record は本文ではなく、次の画像・表の child に前置きとして付ける (#897)。
-_MIN_BODY_CHARS = 4
-
-
 def _buffer_has_body(records: Sequence[dict[str, Any]]) -> bool:
-    """buffer に見出し以外の本文があるか。
-
-    画像・フォームの根拠を持つ record があれば本文。文字だけなら、空白を除いて _MIN_BODY_CHARS 未満の
-    buffer（手順番号や記号だけ）は本文とみなさない (#897)。
-    """
+    """見出し以外に非空白の本文、または画像・フォームの根拠があるか。"""
     body = [record for record in records if str(record.get("category") or "") not in SECTION_CATEGORIES]
     if not body:
         return False
     if any(_record_can_supply_image_evidence(record) or _is_form_like_record(record) for record in body):
         return True
-    return len(re.sub(r"\s+", "", "".join(_record_text(record) for record in body))) >= _MIN_BODY_CHARS
+    return any(_record_text(record).strip() for record in body)
 
 
 def _filter_image_evidence(images: Sequence[Any]) -> list[dict[str, Any]]:
