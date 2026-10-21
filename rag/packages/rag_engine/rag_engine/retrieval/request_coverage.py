@@ -4,13 +4,15 @@
 要求の語をどれだけ含むかを決定的に判定する（覆域の行列）。モデル（LLM）は呼ばない。
 
 - supported: 1 つの根拠が要求の語の `SUPPORTED_RATIO` 以上を含む。
-- weak: 最良の根拠が `WEAK_RATIO` 以上・`SUPPORTED_RATIO` 未満を含む（小問のほかは再検索しない）。
+- weak: 最良の根拠が `WEAK_RATIO` 以上・`SUPPORTED_RATIO` 未満を含む。
 - missing: どの根拠も `WEAK_RATIO` 未満しか含まない。
 - unassessed: 要求から語を取り出せない（判定しない。再検索もしない）。
 
-再検索は corrective / adaptive RAG の「欠けた所だけを狙って取り直す」に当たる。判定した要求が 2 つ以上あり、
-missing の要求があるときだけ、missing の要求ごとに 1 回だけ、要求の文（＋用語の別名・業務ガイドの検索の
-手がかり）で検索する。1 要求の質問は、最初の検索がすでにその要求の文で検索しているので再検索しない。
+再検索は corrective / adaptive RAG の「欠けた所だけを狙って取り直す」に当たる。missing と weak の要求ごとに
+1 回だけ（missing を先に）、要求の文（＋用語の別名・業務ガイドの検索の手がかり）と、weak の要求では根拠に
+現れなかった語だけの文で検索する。最初の検索と同じ検索文は使わない（同じ文の検索は新しい根拠をほぼ返さない）。
+1 要求の質問は要求の文が最初の検索の文と同じになるので、手がかりの文か、根拠に現れなかった語の文があるときだけ
+検索する（#2810）。作れる検索文が無ければ ``same_query`` として検索しない。
 丸数字・(1) などで並べた小問（要求単位の `subquestion`。#2399）は、根拠が無いか一部だけの小問ごとに、前置き＋
 小問の文で 1 回ずつ検索し、小問ごとに上位の根拠を `chunks_per_subquestion` 件まで確保する。
 どの要求をどの順で何件まで検索するか（追加の検索の枠）は `plan_targeted_retrievals` の 1 か所で数え、
@@ -246,8 +248,20 @@ def coverage_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
 
 
 def _needs_search(row: Mapping[str, Any]) -> bool:
-    """再検索の対象か。小問は根拠が一部（weak）でも小問ごとの根拠を確保するために検索する (#2399)。"""
-    return row["status"] == "missing" or (bool(row.get("subquestion")) and row["status"] == "weak")
+    """再検索の対象か。根拠が無い（missing）か一部だけ（weak）の要求（小問は #2399、通常の要求は #2810）。"""
+    return row["status"] in {"missing", "weak"}
+
+
+def _unmatched_terms(row: Mapping[str, Any]) -> tuple[str, ...]:
+    """weak の要求で、根拠に現れなかった語（不足の論点）。missing と supported は空。"""
+    if row.get("status") != "weak":
+        return ()
+    matched = set(row.get("matched_terms") or ())
+    return tuple(term for term in row.get("terms") or () if term not in matched)
+
+
+def _query_key(text: str) -> str:
+    return re.sub(r"[\s。、．，,.?？!！]+", "", _normalize(text))
 
 
 def within_extra_budget(rows: Sequence[Mapping[str, Any]], budget: CoverageBudget, remaining: int) -> CoverageBudget:
@@ -261,11 +275,7 @@ def re_retrieval_skip_reason(rows: Sequence[Mapping[str, Any]], budget: Coverage
     """再検索しない理由。空なら再検索する（根拠の無い要求と、根拠が無いか一部だけの小問）。"""
     if not budget.enabled:
         return "disabled"
-    assessed = [row for row in rows if row["status"] != "unassessed"]
-    if len(assessed) < 2:
-        # 1 要求の質問は、最初の検索がその要求の文で検索している。同じ文での再検索は新しい根拠をほぼ返さない。
-        return "single_request"
-    wanted = [row for row in assessed if _needs_search(row)]
+    wanted = [row for row in rows if _needs_search(row)]
     if not wanted:
         return "all_covered"
     subquestion_budget = budget.max_subquestions > 0 and budget.chunks_per_subquestion > 0
@@ -300,10 +310,20 @@ def request_hints(target: RequestTarget, runtime_knowledge: Any, tokenize: Calla
     return list(dict.fromkeys(hints))[:MAX_HINTS]
 
 
-def targeted_queries(target: RequestTarget, hints: Sequence[str]) -> tuple[str, ...]:
-    """欠けた要求 1 件の検索文。要求の文（小問は前置き＋小問の文）を主軸にし、手がかりがあれば手がかり付きの文を足す。"""
+def targeted_queries(
+    target: RequestTarget, hints: Sequence[str], *, unmatched: Sequence[str] = (), searched: Iterable[str] = ()
+) -> tuple[str, ...]:
+    """欠けた要求 1 件の検索文。要求の文（小問は前置き＋小問の文）を主軸にし、手がかりがあれば手がかり付きの文を、
+    根拠に現れなかった語（``unmatched``）があればその語だけの文を足す。最初の検索の文（``searched``）と同じ文は除く。"""
     text = target.query or target.text
-    return tuple(dict.fromkeys(q for q in (text, " ".join([text, *hints]) if hints else "") if q))
+    candidates = (text, " ".join([text, *hints]) if hints else "", " ".join(unmatched))
+    done = {_query_key(query) for query in searched}
+    queries: dict[str, str] = {}
+    for query in candidates:
+        key = _query_key(query)
+        if key and key not in done:
+            queries.setdefault(key, query)
+    return tuple(queries.values())
 
 
 @dataclass(frozen=True)
@@ -325,8 +345,10 @@ def plan_targeted_retrievals(
     """
     by_id = {target.id: target for target in targets}
     wanted = [by_id[row["id"]] for row in rows if row["id"] in by_id and _needs_search(row)]
+    status = {row["id"]: row["status"] for row in rows}
     subquestions = [target for target in wanted if target.subquestion]
-    requests = [target for target in wanted if not target.subquestion]
+    # 根拠の無い要求を、一部だけの要求より先に検索する（枠が足りないときは missing を優先）。
+    requests = sorted((target for target in wanted if not target.subquestion), key=lambda target: status[target.id] != "missing")
     plan: list[PlannedRetrieval] = []
     stop = ""
     if budget.chunks_per_subquestion > 0:
@@ -362,22 +384,36 @@ def run_targeted_retrievals(
     retrieve: Callable[[str, tuple[str, ...]], Any],
     runtime_knowledge: Any = None,
     tokenize: Callable[[str], Sequence[str]],
+    searched_queries: Sequence[str] = (),
     clock: Callable[[], float] = monotonic,
 ) -> tuple[list[TargetedRetrieval], str]:
     """計画（`plan_targeted_retrievals`）の要求ごとに 1 回だけ検索する。戻り値は (結果, 打ち切りの理由)。
+
+    最初の検索の文（``searched_queries``）と違う検索文を作れない要求は検索しない。どの要求も作れなければ
+    打ち切りの理由を ``same_query`` にする（#2810）。
 
     retrieve(request_text, queries) は AnswerContext（evidence_tree と expansion_records を持つ）を返す。
     検索の失敗は要求ごとに記録し、回答は既存の根拠で続ける（失敗と「根拠が無い」を区別する。handoff §9 の 5）。
     """
     plan, stop = plan_targeted_retrievals(rows, targets, budget)
+    by_id = {row["id"]: row for row in rows}
     results: list[TargetedRetrieval] = []
     start = clock()
+    same_query = 0
     for planned in plan:
         target = planned.target
         if clock() - start >= budget.deadline_seconds:
             stop = "deadline"
             break
-        queries = targeted_queries(target, request_hints(target, runtime_knowledge, tokenize))
+        queries = targeted_queries(
+            target,
+            request_hints(target, runtime_knowledge, tokenize),
+            unmatched=_unmatched_terms(by_id.get(target.id, {})),
+            searched=searched_queries,
+        )
+        if not queries:
+            same_query += 1
+            continue
         began = clock()
         try:
             context = retrieve(target.query or target.text, queries)
@@ -404,6 +440,8 @@ def run_targeted_retrievals(
                 chunk_cap=planned.chunk_cap,
             )
         )
+    if plan and same_query == len(plan):
+        stop = stop or "same_query"
     return results, stop
 
 

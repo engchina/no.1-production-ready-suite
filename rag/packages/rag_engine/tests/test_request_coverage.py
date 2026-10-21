@@ -112,15 +112,16 @@ def test_weak_status_between_thresholds() -> None:
     ("statuses", "budget", "reason"),
     [
         (["supported", "supported"], CoverageBudget(), "all_covered"),
-        (["supported", "weak"], CoverageBudget(), "all_covered"),
-        (["missing"], CoverageBudget(), "single_request"),
-        (["missing", "unassessed"], CoverageBudget(), "single_request"),
+        (["supported", "unassessed"], CoverageBudget(), "all_covered"),
+        (["supported", "weak"], CoverageBudget(), ""),
+        (["missing"], CoverageBudget(), ""),
+        (["weak", "unassessed"], CoverageBudget(), ""),
         (["supported", "missing"], CoverageBudget(enabled=False), "disabled"),
         (["supported", "missing"], CoverageBudget(max_queries=0), "no_budget"),
         (["supported", "missing"], CoverageBudget(max_chunks=0), "no_budget"),
         (["supported", "missing"], CoverageBudget(), ""),
     ],
-    ids=["covered", "weak-is-not-missing", "single", "single-assessed", "disabled", "no-queries", "no-chunks", "run"],
+    ids=["covered", "unassessed", "weak", "single", "single-assessed", "disabled", "no-queries", "no-chunks", "run"],
 )
 def test_re_retrieval_skip_reason(statuses: list[str], budget: CoverageBudget, reason: str) -> None:
     rows = [{"id": f"Q{i}", "status": status} for i, status in enumerate(statuses, 1)]
@@ -184,6 +185,54 @@ def test_targeted_retrieval_failure_is_recorded_and_continues() -> None:
     assert stop == ""
 
 
+def test_missing_requests_are_searched_before_weak_ones() -> None:
+    targets = [RequestTarget(f"Q{i}", "request", f"要求{i}", (f"語{i}", "共通")) for i in range(1, 4)]
+    rows = [
+        {"id": "Q1", "status": "weak", "terms": ["語1", "共通"], "matched_terms": ["共通"]},
+        {"id": "Q2", "status": "supported"},
+        {"id": "Q3", "status": "missing"},
+    ]
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
+        calls.append((text, queries))
+        return context()
+
+    results, stop = run_targeted_retrievals(rows, targets, budget=CoverageBudget(max_queries=1), retrieve=retrieve, tokenize=split)
+
+    # 枠が 1 回なら根拠の無い要求を先に検索する。
+    assert [r.request_id for r in results] == ["Q3"]
+    assert stop == "max_queries"
+    calls.clear()
+    run_targeted_retrievals(rows, targets, budget=CoverageBudget(max_queries=2), retrieve=retrieve, tokenize=split)
+    # 一部だけの要求は、要求の文に加えて根拠に現れなかった語だけの文でも検索する。
+    assert calls == [("要求3", ("要求3",)), ("要求1", ("要求1", "語1"))]
+
+
+def test_single_request_is_searched_only_with_a_new_query() -> None:
+    """1 要求の質問は、最初の検索と同じ文では検索せず、違う検索文があるときだけ検索する（#2810）。"""
+    target = RequestTarget("Q1", "request", "請求書の再発行方法は？", ("請求書", "再発行", "締め"))
+    calls: list[tuple[str, ...]] = []
+
+    def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
+        calls.append(queries)
+        return context()
+
+    searched = ("請求書の再発行方法は?",)  # 全角・半角の違いは同じ文として扱う
+    missing = [{"id": "Q1", "status": "missing", "terms": list(target.terms), "matched_terms": []}]
+    results, stop = run_targeted_retrievals(
+        missing, [target], budget=CoverageBudget(), retrieve=retrieve, tokenize=split, searched_queries=searched
+    )
+    assert (results, stop, calls) == ([], "same_query", [])
+
+    weak = [{"id": "Q1", "status": "weak", "terms": list(target.terms), "matched_terms": ["請求書"]}]
+    results, stop = run_targeted_retrievals(
+        weak, [target], budget=CoverageBudget(), retrieve=retrieve, tokenize=split, searched_queries=searched
+    )
+    assert calls == [("再発行 締め",)]
+    assert [r.request_id for r in results] == ["Q1"] and stop == ""
+
+
 def test_select_new_parents_round_robin_skips_existing_and_caps() -> None:
     first = TargetedRetrieval("Q1", ("a",), (parent("old", "x"), parent("a1", "x"), parent("a2", "x"), parent("a3", "x")))
     second = TargetedRetrieval("Q2", ("b",), (parent("b1", "x"), parent("a1", "x")))
@@ -208,6 +257,8 @@ def test_hints_come_from_aliases_and_guide_triggers_sharing_request_terms() -> N
     assert hints == ["インボイス", "再発行 承認"]
     assert targeted_queries(target, hints) == ("請求書の再発行方法は？", "請求書の再発行方法は？ インボイス 再発行 承認")
     assert targeted_queries(target, []) == ("請求書の再発行方法は？",)
+    # 最初の検索の文と同じ文は除く。
+    assert targeted_queries(target, hints, searched=["請求書の再発行方法は？"]) == ("請求書の再発行方法は？ インボイス 再発行 承認",)
 
 
 def _settings(**changes: Any) -> Any:
@@ -228,7 +279,9 @@ def _patch_search(monkeypatch: pytest.MonkeyPatch, results: dict[str, AnswerCont
     return calls
 
 
-def _cover(ctx: AnswerContext, settings: Any, question: str = QUESTION) -> tuple[AnswerContext, dict[str, Any]]:
+def _cover(
+    ctx: AnswerContext, settings: Any, question: str = QUESTION, searched: tuple[str, ...] = ()
+) -> tuple[AnswerContext, dict[str, Any]]:
     return a._cover_missing_requests(
         question,
         ctx,
@@ -242,6 +295,7 @@ def _cover(ctx: AnswerContext, settings: Any, question: str = QUESTION) -> tuple
         retrieval_scope="knowledge_base",
         classification_filter=None,
         runtime_knowledge=None,
+        searched_queries=searched,
     )
 
 
@@ -280,6 +334,27 @@ def test_cover_missing_requests_does_not_search_when_all_covered(monkeypatch: py
     assert calls == []
     assert merged is ctx
     assert trace["re_retrieval"] == {"applied": False, "skipped": "all_covered"}
+
+
+def test_cover_single_weak_request_searches_the_missing_terms(monkeypatch: pytest.MonkeyPatch) -> None:
+    """1 要求でも根拠が一部だけなら、根拠に現れなかった語で探し直す。同じ文しか作れなければ探さない（#2810）。"""
+    question = "請求書の再発行と締めの方法は？"
+    calls = _patch_search(monkeypatch, {question: context(parent("cls", "締めの後に請求書を再発行するときは承認が要ります。"))})
+    ctx = context(parent("p1", "請求書の一覧を表示します。"))
+
+    merged, trace = _cover(ctx, _settings(), question, (question,))
+
+    assert calls == [(question, ("再発行 締め",))]
+    assert trace["requests"][0]["status"] == "weak"
+    assert trace["re_retrieval"]["applied"] is True
+    assert [r.chunk_uid for r in merged.records] == ["run:p1", "run:cls"]
+
+    calls.clear()
+    missing_ctx = context(parent("p1", "受注番号を入力します。"))
+    merged, trace = _cover(missing_ctx, _settings(), question, (question,))
+    assert calls == []
+    assert merged is missing_ctx
+    assert trace["re_retrieval"] == {"applied": False, "skipped": "same_query"}
 
 
 def test_cover_missing_requests_respects_disabled_setting(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -453,7 +528,7 @@ def test_requests_come_from_the_original_question_and_search_uses_the_query(
     assert statuses == {"Q1": ("request", "missing"), "Q2": ("request", "missing"), "Q3": ("request", "supported")}
     # 根拠の無い要求ごとに、元の質問の要求の文で探し直す（1 要求として省かない）。
     retrieval = coverage["re_retrieval"]
-    assert retrieval.get("skipped") != "single_request"
+    assert not retrieval.get("skipped")
     assert [item["request_id"] for item in retrieval["queries"]] == ["Q1", "Q2"]
     # 主の検索は検索文で行い、元の質問の全文では検索しない。
     assert searched[0] == query

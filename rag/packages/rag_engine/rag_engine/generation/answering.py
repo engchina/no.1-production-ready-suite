@@ -2621,9 +2621,12 @@ def _cover_missing_requests(
     classification_filter: ClassificationFilter | None,
     runtime_knowledge: RuntimeKnowledgeContext | None,
     extra_budget: ExtraRetrievalBudget | None = None,
+    searched_queries: Sequence[str] = (),
     clock: Callable[[], float] = monotonic,
 ) -> tuple[AnswerContext, dict[str, Any]]:
-    """要求ごとの根拠の覆域を判定し、根拠の無い要求と小問（#2399）を予算の範囲で 1 回ずつ再検索する (#1279)。
+    """要求ごとの根拠の覆域を判定し、根拠が無いか一部だけの要求と小問（#2399）を予算の範囲で 1 回ずつ再検索する (#1279)。
+
+    ``searched_queries`` は最初の検索の文。同じ文では再検索しない（1 要求の質問も、違う検索文を作れれば再検索する。#2810）。
 
     小問ごとの検索と再検索の回数の合計は、追加の検索の枠（``extra_budget``。#2395）の残りも超えない。
 
@@ -2673,8 +2676,18 @@ def _cover_missing_requests(
 
     started = clock()
     results, stop = run_targeted_retrievals(
-        rows, targets, budget=budget, retrieve=retrieve, runtime_knowledge=runtime_knowledge, tokenize=tokenize, clock=clock
+        rows,
+        targets,
+        budget=budget,
+        retrieve=retrieve,
+        runtime_knowledge=runtime_knowledge,
+        tokenize=tokenize,
+        searched_queries=searched_queries,
+        clock=clock,
     )
+    if not results and stop == "same_query":
+        trace["re_retrieval"] = {"applied": False, "skipped": stop}
+        return context, trace
     if extra_budget is not None:
         extra_budget.take(REQUEST_COVERAGE_KIND, len(results))
     existing = {r.chunk_uid or r.id for r in context.records} | {p.record.chunk_uid or p.record.id for p in context.evidence_tree}
@@ -2932,7 +2945,7 @@ def _guide_step_lines(trace: dict[str, Any]) -> list[str]:
 _COVERAGE_SKIP_LABELS = {
     "disabled": "しない（設定で無効）",
     "no_budget": "しない（探し直しの上限が 0）",
-    "single_request": "しない（答える要求が 1 つ）",
+    "same_query": "しない（最初の検索と違う検索文を作れない）",
     "all_covered": "しない（すべての要求に根拠あり）",
 }
 
@@ -4363,7 +4376,7 @@ def answer_question_result(
             )
 
         with _execution_step(
-            "要求ごとの根拠の確認", "質問の要求ごとに根拠があるかを確かめ、根拠の無い要求だけを探し直します。"
+            "要求ごとの根拠の確認", "質問の要求ごとに根拠があるかを確かめ、根拠が無いか一部だけの要求を探し直します。"
         ) as coverage_step:
             context, request_coverage = _cover_missing_requests(
                 request_text,
@@ -4379,10 +4392,11 @@ def answer_question_result(
                 classification_filter=selected_classification_filter,
                 runtime_knowledge=runtime_knowledge,
                 extra_budget=extra_budget,
+                searched_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
             )
             counts = request_coverage["counts"]
             re_retrieval = request_coverage.get("re_retrieval") or {}
-            if re_retrieval.get("skipped") in {"disabled", "single_request"}:
+            if re_retrieval.get("skipped") in {"disabled", "same_query"}:
                 coverage_step.hide()
             coverage_step.result(
                 f"根拠あり {counts['supported']} 件、一部 {counts['weak']} 件、なし {counts['missing']} 件",
@@ -4391,13 +4405,13 @@ def answer_question_result(
             # 探し直しをしたか・しなかった理由（記録の文から省いた工程も段は出る。#2341）。
             skipped = str(re_retrieval.get("skipped") or "")
             coverage_step.field(
-                "根拠の無い要求の探し直し",
+                "根拠が足りない要求の探し直し",
                 f"{len(re_retrieval.get('queries') or ())} 件の要求で実行"
                 if re_retrieval.get("queries")
-                else _COVERAGE_SKIP_LABELS.get(skipped, f"しない（{skipped}）" if skipped else "しない（根拠の無い要求なし）"),
+                else _COVERAGE_SKIP_LABELS.get(skipped, f"しない（{skipped}）" if skipped else "しない（根拠が足りない要求なし）"),
             )
             if re_retrieval.get("applied"):
-                coverage_step.impact(f"根拠の無い要求の根拠 {len(re_retrieval['added_chunk_ids'])} 件を回答の材料に加えます。")
+                coverage_step.impact(f"根拠が足りない要求の根拠 {len(re_retrieval['added_chunk_ids'])} 件を回答の材料に加えます。")
 
         # 不足要求の追加検索も同じ読取記録・時間・入力・抽出呼び出しの予算を使う。
         context, section_expansion = complete_sections(context, "request_coverage")

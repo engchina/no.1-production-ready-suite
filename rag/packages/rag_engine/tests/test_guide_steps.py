@@ -331,3 +331,16 @@ def test_engine_settings_default_and_env_for_guide_steps() -> None:
     assert (default.guide_step_retrieval_enabled, default.guide_step_max_queries, default.extra_retrieval_max_queries) == (True, 4, 8)
     assert (custom.guide_step_retrieval_enabled, custom.guide_step_max_queries, custom.guide_step_chunks_per_step) == (False, 2, 3)
     assert (custom.guide_reference_max_chunks, custom.guide_step_deadline_seconds, custom.extra_retrieval_max_queries) == (1, 2.5, 5)
+
+
+def test_guide_step_instructions_keep_steps_the_user_cannot_perform() -> None:
+    """残った業務ガイドの手順は、分かっている条件で利用者が自分で行えなくても説明させる（#2813）。
+
+    条件で外れる手順は分岐（visible_plan）がコードで外すので、生成の指示は手順を省く理由に条件を挙げない。
+    """
+    from rag_engine.generation.grounded import _GUIDE_STEP_HINT, GENERATE_SYSTEM_PROMPT
+
+    guide_line = next(line for line in GENERATE_SYSTEM_PROMPT.splitlines() if line.startswith("- 業務ガイドがある場合は"))
+    assert "すべて説明し、利用者が自分で行えない手順も省かない" in guide_line
+    assert "外れる操作は混ぜない" not in guide_line
+    assert "条件" not in _GUIDE_STEP_HINT
