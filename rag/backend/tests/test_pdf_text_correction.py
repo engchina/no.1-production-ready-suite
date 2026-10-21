@@ -11,7 +11,7 @@ from app.rag.chunking import chunk_extraction
 from app.rag.chunking_small_to_big import build_parent_child_chunks
 from app.rag.navigation import build_navigation_tree
 from app.rag.pdf_segment_merge import ContinuationGeometry, consolidate_document_extraction
-from app.rag.pdf_text_correction import _restore_underscores, correct_docling_pdf_text
+from app.rag.pdf_text_correction import _restore_source_characters, correct_docling_pdf_text
 from app.schemas.extraction import DocumentElement, StructuredExtraction
 
 
@@ -25,10 +25,49 @@ from app.schemas.extraction import DocumentElement, StructuredExtraction
         ("A\u0332B", "Other_B", "A\u0332B"),
         ("A\u0332B", "", "A\u0332B"),
         ("A\u0332 B", "A_B", "A_ B"),
+        ("09:00\u301c17:00", "09:00\uff5e17:00", "09:00\uff5e17:00"),
+        ("09:00\u301c17:00", "09:00\u301c17:00", "09:00\u301c17:00"),
+        ("09:00\u301c17:00", "09:00\uff5e18:00", "09:00\u301c17:00"),
+        ("A\u033201\u301c02", "A_01\uff5e02", "A_01\uff5e02"),
     ],
 )
 def test_restore_requires_original_text(parsed: str, original: str, expected: str) -> None:
-    assert _restore_underscores(parsed, original) == expected
+    assert _restore_source_characters(parsed, original) == expected
+
+
+def test_wave_character_restoration_preserves_evidence_matching() -> None:
+    from app.rag.evaluation import evidence_matches_chunk
+    from app.schemas.evaluation import EvaluationEvidence
+    from app.schemas.search import RetrievedChunk
+
+    original = "09:00\uff5e17:00"
+    with pymupdf.open() as document:
+        page = document.new_page()
+        page.insert_text((50, 70), original, fontname="japan")
+        record = {
+            "id": "body-1",
+            "engine": "docling",
+            "category": "Text",
+            "page": 1,
+            "text": "09:00\u301c17:00",
+            "bbox": list(page.search_for(original)[0]),
+            "page_width": page.rect.width,
+            "page_height": page.rect.height,
+            "coord_system": "image_top_left",
+        }
+        source = bytes(document.tobytes())
+    chunk = RetrievedChunk(
+        document_id="doc-1",
+        chunk_id="chunk-1",
+        text=record["text"],
+        score=1,
+        metadata={"page_number": 1},
+    )
+    expected = EvaluationEvidence(id="e1", document_id="doc-1", page_start=1, text=original)
+    assert not evidence_matches_chunk(expected, chunk)
+    assert correct_docling_pdf_text([record], source) == {"body-1"}
+    assert record["text"] == original
+    assert evidence_matches_chunk(expected, chunk.model_copy(update={"text": record["text"]}))
 
 
 def _fixture() -> tuple[bytes, dict[str, Any]]:
