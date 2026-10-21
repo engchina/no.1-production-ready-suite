@@ -77,7 +77,7 @@ def correct_docling_pdf_text(records: list[dict[str, Any]], source_bytes: bytes)
                     )
                 original = _text_in_box(pages[page_number], (left, top, right, bottom))
             except Exception:  # noqa: BLE001 - 位置や文字層を読めない record は変更しない。
-                continue
+                original = ""
             previous = str(record.get("text") or "")
             restored = _restore_underscores(previous, original)
             if restored != previous:
