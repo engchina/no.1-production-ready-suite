@@ -655,6 +655,8 @@ class OracleClient:
         行の ``score`` は、その branch の score(1 本ずつの検索の行の ``score`` と同じ値)。
         """
         where_sql, binds = _oracle_retrieval_where(filters)
+        # vector の検索は文書の側と chunk の側の条件を分けて使う(#2800。bind は同じ)。
+        document_sql, chunk_sql, _split_binds = _oracle_retrieval_where_split(filters)
         binds.update(branch_binds)
         fetch_clause = ""
         if "vector" in branch_kinds:
@@ -669,7 +671,12 @@ class OracleClient:
             binds["top_k"] = top_k
         with read_rows_per_round_trip(_SEARCH_FETCH_ROWS):
             rows = await self._fetch_all(
-                _multi_search_sql(branch_kinds, where_sql=where_sql, fetch_clause=fetch_clause),
+                _multi_search_sql(
+                    branch_kinds,
+                    where_sql=where_sql,
+                    fetch_clause=fetch_clause,
+                    vector_where=(document_sql, chunk_sql),
+                ),
                 binds,
             )
         for row in rows:
@@ -6464,7 +6471,7 @@ class OracleClient:
         self, embedding: list[float], top_k: int, filters: dict[str, str]
     ) -> list[RetrievedChunk]:
         """Oracle AI Vector Search で近傍 chunk を取得する。"""
-        where_sql, binds = _oracle_retrieval_where(filters)
+        document_sql, chunk_sql, binds = _oracle_retrieval_where_split(filters)
         binds.update(
             {
                 "embedding": _to_vector_bind(embedding),
@@ -6482,7 +6489,8 @@ class OracleClient:
             _vector_search_sql(
                 select_list=f"{_SEARCH_HIT_COLUMNS}, {_vector_score_sql('embedding')} AS score",
                 embedding_bind="embedding",
-                where_sql=where_sql,
+                document_sql=document_sql,
+                chunk_sql=chunk_sql,
                 fetch_clause=fetch_clause,
             ),
             binds,
@@ -12627,6 +12635,31 @@ def _duplicate_reuses_canonical_sql(*, include_superseded: bool) -> str:
 
 
 def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
+    clauses, binds = _oracle_retrieval_clauses(filters)
+    return " AND ".join(clauses), binds
+
+
+# chunk の側（``c``・``cs``・``r``）の列を読む条件（#2800。それ以外は文書の側の条件）。
+_CHUNK_SIDE_CLAUSE = re.compile(r"(?<![\w.$])(?:c|cs|r)\.")
+
+
+def _oracle_retrieval_where_split(filters: dict[str, str]) -> tuple[str, str, dict[str, object]]:
+    """``_oracle_retrieval_where`` と同じ条件を、文書の側（``d`` だけ）と chunk の側に
+    分ける(#2800)。
+
+    vector の検索は、文書の側の条件で文書の集合を先に決め、chunk には ``document_id`` の集合と
+    chunk の側の条件だけを付けて近傍を探す(``_vector_search_sql``)。条件を 1 つの WHERE に
+    並べると、文書の側の副問い合わせ（ナレッジベースの所属と重複の文書の正本・有効期間）を
+    optimizer が行ごとの FILTER にし、近傍の検索が chunk の全件の走査になっていた(検証環境で
+    1 回 9 秒 → 分けて 0.7 秒。上位の結果は同じ)。
+    """
+    clauses, binds = _oracle_retrieval_clauses(filters)
+    chunk = [clause for clause in clauses if _CHUNK_SIDE_CLAUSE.search(clause)]
+    document = [clause for clause in clauses if not _CHUNK_SIDE_CLAUSE.search(clause)]
+    return " AND ".join(document) or "1 = 1", " AND ".join(chunk) or "1 = 1", binds
+
+
+def _oracle_retrieval_clauses(filters: dict[str, str]) -> tuple[list[str], dict[str, object]]:
     clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
     # 実験: chunk_set_id を明示すると is_serving に関係なくその chunk_set だけを検索する。
@@ -12824,7 +12857,7 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
     binds.update(classification_binds)
     if not _includes_superseded_documents(filters):
         clauses.append(_NOT_SUPERSEDED_SQL)
-    return " AND ".join(clauses), binds
+    return clauses, binds
 
 
 # 交差参照の文書名の照合で文書名から除く文字(title_key の NFKC 前の形も含む。#1280)。
@@ -13193,31 +13226,41 @@ def _vector_score_sql(embedding_bind: str) -> str:
 
 
 def _vector_search_sql(
-    *, select_list: str, embedding_bind: str, where_sql: str, fetch_clause: str
+    *, select_list: str, embedding_bind: str, document_sql: str, chunk_sql: str, fetch_clause: str
 ) -> str:
     """vector 検索の SQL(条件・並び・件数)。
 
     1 本の検索文の検索(``_vector_search_with_oracle``)と、検索文をまとめた検索
-    (``_multi_search_sql``)で同じものを使う(読む列だけが違う)。
+    (``_multi_search_sql``)で同じものを使う(読む列だけが違う)。条件は文書の側
+    (``document_sql``。``d`` だけ)と chunk の側(``chunk_sql``)に分けて受け取る
+    (``_oracle_retrieval_where_split``。#2800)。文書の集合を先に決め、近傍の検索の並びは距離
+    だけにする(Oracle AI Vector Search の近似の検索は ``ORDER BY`` が距離だけのときに vector の
+    索引を使う)。同じ距離の行の並び(文書・chunk の番号)は外側で決める。
     """
     return _render_sql(
         """
-        SELECT {select_list}
-        FROM rag_chunks c
-        JOIN rag_documents d ON d.document_id = c.document_id
-        LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
-        LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
-        WHERE {where_sql}
-          AND {score_sql} >= :min_similarity
-        ORDER BY
-            VECTOR_DISTANCE(c.embedding, :{embedding_bind}, COSINE) ASC,
-            c.document_id ASC,
-            c.chunk_index ASC,
-            c.chunk_id ASC
-        {fetch_clause}
+        SELECT * FROM (
+            SELECT {select_list},
+                VECTOR_DISTANCE(c.embedding, :{embedding_bind}, COSINE) AS vector_sort_key,
+                c.document_id AS vector_document_id,
+                c.chunk_index AS vector_chunk_index,
+                c.chunk_id AS vector_chunk_id
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+            LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
+            WHERE c.document_id IN (SELECT d.document_id FROM rag_documents d WHERE {document_sql})
+              AND {chunk_sql}
+              AND {score_sql} >= :min_similarity
+            ORDER BY VECTOR_DISTANCE(c.embedding, :{embedding_bind}, COSINE)
+            {fetch_clause}
+        )
+        ORDER BY vector_sort_key ASC, vector_document_id ASC,
+            vector_chunk_index ASC, vector_chunk_id ASC
         """,
         select_list=select_list,
-        where_sql=where_sql,
+        document_sql=document_sql,
+        chunk_sql=chunk_sql,
         score_sql=_vector_score_sql(embedding_bind),
         embedding_bind=embedding_bind,
         fetch_clause=fetch_clause,
@@ -13279,7 +13322,13 @@ def _keyword_hits_view_sql(*, query_bind: str, where_sql: str) -> str:
     )
 
 
-def _multi_search_sql(branch_kinds: Sequence[str], *, where_sql: str, fetch_clause: str) -> str:
+def _multi_search_sql(
+    branch_kinds: Sequence[str],
+    *,
+    where_sql: str,
+    fetch_clause: str,
+    vector_where: tuple[str, str] | None = None,
+) -> str:
     """検索文ごとの vector / keyword の検索(branch)を 1 本にまとめた SQL(#1498)。
 
     branch ``n`` の内側は 1 本ずつの検索と同じ SQL(条件・並び・件数。bind は vector が
@@ -13302,7 +13351,10 @@ def _multi_search_sql(branch_kinds: Sequence[str], *, where_sql: str, fetch_clau
                     f"{_vector_score_sql(bind)} AS score"
                 ),
                 embedding_bind=bind,
-                where_sql=where_sql,
+                # 分けた条件が無ければ、すべてを chunk の側の条件にする
+                # (同じ結果。文書の集合を先に決めない)。
+                document_sql=vector_where[0] if vector_where else "1 = 1",
+                chunk_sql=vector_where[1] if vector_where else where_sql,
                 fetch_clause=fetch_clause,
             )
             order = "sort_key ASC"
