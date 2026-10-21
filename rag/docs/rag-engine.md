@@ -123,7 +123,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_GUIDE_STEP_MAX_QUERIES` | `4` | 手順ごとの検索の回数の上限（参照の頁に絞った検索を含む、0〜10）。検索・回答プロファイルで上書きできる |
 | `RAG_GUIDE_STEP_CHUNKS_PER_STEP` | `2` | 1 手順の絞らない検索から手順の根拠にする親 chunk の数（1〜5） |
 | `RAG_GUIDE_REFERENCE_MAX_CHUNKS` | `4` | 参照の頁に絞った検索から、順位に関係なく回答の材料に入れる親 chunk の数の合計（0〜12）。手順の間で交互に選ぶ |
-| `RAG_GUIDE_STEP_DEADLINE_SECONDS` | `10` | 手順ごとの検索の期限（秒、0〜60） |
+| `RAG_GUIDE_STEP_DEADLINE_SECONDS` | `60` | 手順ごとの検索の期限（秒、0〜60。#2826 で 10 → 60。手順の多い業務ガイドで後ろの手順が検索されずに残るため。早く終われば待たない） |
 | `RAG_EXTRA_RETRIEVAL_MAX_QUERIES` | `8` | 主の検索の後に足す検索（手順ごとの検索・小問ごとの検索・根拠の無い要求の再検索）の回数の合計の枠（0〜20）。種類ごとの上限（`RAG_GUIDE_STEP_MAX_QUERIES`・`RAG_REQUEST_COVERAGE_MAX_SUBQUESTIONS`・`RAG_REQUEST_COVERAGE_MAX_QUERIES`）はこの枠の中で数える（`rag_engine/retrieval/extra_retrieval.py` の 1 か所）。手順ごとの検索を先に、小問ごとの検索、根拠の無い要求の再検索の順に、枠の残りの中で行う |
 | `RAG_SECTION_EXTRACTION_ENABLED` | `false` | 章節の拡張で、根拠の入力の上限に入らない章節から質問に関係する原文を LLM で抜き出す（#1437）。既定 `false`（#2800）は抜き出しの LLM を呼ばず、入らない章節を rerank の順（rerank が無ければ語の重なりの順）で上限まで入れ、読めなかった範囲を本文の「回答に未反映の関連章節」に示す。生成の前の LLM の呼び出しを増やさない（WeKnora の rerank → 上位の絞り込みと同じ考え方） |
 | `RAG_STRATEGY_REASONING_EFFORT` | `model` | 質問拡張戦略の判定と検索文の生成の LLM の呼び出しの推論（思考）の量（#1499）。`model` はモデルの登録値（システム設定 › モデルの「推論の量」）のまま、`none` は送らない、`low` / `medium` / `high` はその値を送る。モデルの登録値が `none` のモデルには、上書きしても送らない（推論を受け付けないモデルがある）。rag_engine の `settings_for_llm_purpose` が LLM の呼び出しに渡す設定だけを差し替え、工程の記録（「質問拡張戦略」）に送った量を残す。既定 `model` は A/B の結果（DeepSeek・5 問 × 3 回。`low` では 15 回中 4 回で戦略が検索文 0 本の単純検索に倒れ、1 問で根拠を取り逃した）。品質評価の `rag_overrides` の `strategy_reasoning_effort` で比べられる |
