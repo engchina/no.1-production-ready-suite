@@ -29,6 +29,7 @@ import {
   TextareaField,
   TextField,
   apiErrorMessage,
+  compareNames,
 } from "@production-ready/ui";
 import { agentApi, type AgentSkill } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -173,9 +174,10 @@ export function SkillsPage() {
 
   const list = skills.data?.skills ?? [];
   const [skillQuery, setSkillQuery] = useListSearch("skills");
-  const visibleSkills = list.filter((skill) =>
-    matchesSearch(skillQuery, [skill.name, skill.id, skill.description, skill.tags.join(" ")])
-  );
+  // 管理一覧は由来を優先せず、全件の名前順を決めてからページングする。同名は ID で安定させる。
+  const visibleSkills = list
+    .filter((skill) => matchesSearch(skillQuery, [skill.name, skill.id, skill.description, skill.tags.join(" ")]))
+    .sort((left, right) => compareNames(left.name, right.name) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
   // 追加できない利用者が `?id=new` を開いたら一覧を出す。
   const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
 
