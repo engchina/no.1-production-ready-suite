@@ -998,7 +998,7 @@ test("データ管理の対象一覧はコメントを名前の下に表示し�
     ["EMPTY_COMMENT", "-"],
     ["ORDER_SUMMARY_V", "受注サマリ"],
   ]) {
-    const button = previewList.getByRole("button", { name: `ADMIN.${name} を選択`, exact: true });
+    const button = previewList.getByRole("button", { name: `ADMIN.${name} を選択` });
     await expect(button).toHaveAccessibleDescription(comment);
     const layout = await button.evaluate((node) => {
       // 共有 RowTitleButton（#421）: 題名と補足の枠の中に、名前とコメント（aria-describedby の先）を置く。
@@ -1019,7 +1019,7 @@ test("データ管理の対象一覧はコメントを名前の下に表示し�
   }
   await expectRowCellsDoNotOverlap(previewList.locator("tbody tr"));
   // 識別子は語の途中ではなく . / _ の位置で折り返す（1 行に収まる場合は折り返さない）。
-  const nameBreaks = await previewList.getByRole("button", { name: "ADMIN.DENPYO_ACTIVITY_LOG を選択", exact: true })
+  const nameBreaks = await previewList.getByRole("button", { name: "ADMIN.DENPYO_ACTIVITY_LOG を選択" })
     // 共有 RowTitleButton（#421）の題名の枠の中の識別子（DbObjectName）。
     .locator(":scope > span > span").first()
     .evaluate((node) => Array.from(node.childNodes).filter((child) => child.nodeType === Node.TEXT_NODE).map((child) => child.textContent));
@@ -1035,8 +1035,8 @@ test("データ管理の対象一覧はコメントを名前の下に表示し�
   await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" }).click();
   const csvList = page.getByTestId("data-csv-table-list");
   await expect(csvList.locator("tbody tr")).toHaveCount(3);
-  await expect(csvList.getByRole("button", { name: "ADMIN.DENPYO_ACTIVITY_LOG を選択", exact: true })).toHaveAccessibleDescription(shortComment);
-  await expect(csvList.getByRole("button", { name: "ADMIN.EMPTY_COMMENT を選択", exact: true })).toHaveAccessibleDescription("-");
+  await expect(csvList.getByRole("button", { name: "ADMIN.DENPYO_ACTIVITY_LOG を選択" })).toHaveAccessibleDescription(shortComment);
+  await expect(csvList.getByRole("button", { name: "ADMIN.EMPTY_COMMENT を選択" })).toHaveAccessibleDescription("-");
   await expectRowCellsDoNotOverlap(csvList.locator("tbody tr"));
   await csvList.screenshot({ path: testInfo.outputPath("data-csv-name-comments.png") });
   await expectNoHorizontalScroll(page);
