@@ -9,7 +9,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`検索インデックス設定は検索精度を表示する (${viewport.name})`, async ({ page }) => {
+  test(`検索インデックス設定は高速・バランス・高精度の順に表示する (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockVectorIndex(page, "balanced");
@@ -17,9 +17,22 @@ for (const viewport of [
     await page.goto("/settings/vector-index");
 
     await expect(page.getByRole("heading", { name: "検索インデックス", exact: true, level: 1 })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /バランス/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /高精度/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /高速/ })).toBeVisible();
+    const choices = page.getByRole("radio");
+    await expect(choices).toHaveCount(3);
+    await expect(choices.nth(0)).toHaveAccessibleName(/高速/);
+    await expect(choices.nth(1)).toHaveAccessibleName(/バランス/);
+    await expect(choices.nth(2)).toHaveAccessibleName(/高精度/);
+    await expect(choices.nth(1)).toBeChecked();
+    const boxes = await Promise.all((await choices.all()).map((choice) => choice.boundingBox()));
+    expect(boxes.every(Boolean)).toBe(true);
+    if (viewport.name === "desktop") {
+      expect(boxes[0]!.x).toBeLessThan(boxes[1]!.x);
+      expect(boxes[1]!.x).toBeLessThan(boxes[2]!.x);
+    } else {
+      expect(boxes[0]!.y).toBeLessThan(boxes[1]!.y);
+      expect(boxes[1]!.y).toBeLessThan(boxes[2]!.y);
+    }
+    await page.screenshot({ path: testInfo.outputPath("preset-order.png"), fullPage: true });
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
     await expect((await openSidebarNav(page)).getByRole("link", { name: "検索インデックス" })).toHaveAttribute("aria-current", "page");
     await expectNoHorizontalOverflow(page);

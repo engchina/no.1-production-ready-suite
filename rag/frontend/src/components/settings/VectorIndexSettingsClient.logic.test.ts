@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { VectorIndexSettingsData } from "@/lib/api";
 
-import { currentIndexLabel, reprovisionStatus, showReindexSql } from "./VectorIndexSettingsClient";
+import { currentIndexLabel, orderedProfiles, reprovisionStatus, showReindexSql } from "./VectorIndexSettingsClient";
 
 function settings(overrides: Partial<VectorIndexSettingsData>): VectorIndexSettingsData {
   return {
@@ -55,5 +55,32 @@ describe("currentIndexLabel", () => {
     expect(
       currentIndexLabel(settings({ actual_neighbors: null, actual_efconstruction: null }))
     ).toBe("確認できません");
+  });
+});
+
+
+describe("orderedProfiles", () => {
+  it("高速・バランス・高精度の順に並べても保存済みの選択とパラメータを維持する", () => {
+    const profiles: VectorIndexSettingsData["profiles"] = [
+      { name: "balanced", target_accuracy: 95, neighbors: 32, efconstruction: 500 },
+      { name: "accurate", target_accuracy: 98, neighbors: 48, efconstruction: 800 },
+      { name: "fast", target_accuracy: 85, neighbors: 16, efconstruction: 300 },
+    ].map((profile) => ({
+      ...profile,
+      name: profile.name as VectorIndexSettingsData["profile"],
+      origin: "test",
+      recommended_for: [],
+      distance: "COSINE",
+      selected: profile.name === "accurate",
+      requires_reprovision: false,
+      index_status: "match",
+    }));
+    const ordered = orderedProfiles(profiles);
+    expect(ordered.map((profile) => profile.name)).toEqual(["fast", "balanced", "accurate"]);
+    expect(ordered[0]).toBe(profiles[2]);
+    expect(ordered[1]).toBe(profiles[0]);
+    expect(ordered[2]).toBe(profiles[1]);
+    expect(ordered.filter((profile) => profile.selected).map((profile) => profile.name)).toEqual(["accurate"]);
+    expect(profiles.map((profile) => profile.name)).toEqual(["balanced", "accurate", "fast"]);
   });
 });
