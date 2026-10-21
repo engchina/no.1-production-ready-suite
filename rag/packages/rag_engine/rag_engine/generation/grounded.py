@@ -103,7 +103,7 @@ GENERATE_SYSTEM_PROMPT = (
     "- 機能別の根拠: BEGIN_UNTRUSTED_RETRIEVED_CONTEXT と END_UNTRUSTED_RETRIEVED_CONTEXT の間。"
     "`=== 機能 F1: 文書名 / 版 / 機能見出し ===` の見出しで機能ごとに分かれ、各 Evidence は `[E1] p.頁 origin=… tags=… pinned` の行で始まる。"
     "機能見出しは文書の節名であり、開く画面やメニューとは限らない。\n"
-    "- 前回の草稿の検査結果（是正時のみ）: 指摘を直し、支持済みの item は同じ quote のまま保持する。\n"
+    "- 前回の草稿の検査結果（是正時のみ）: 指摘を直し、支持済みの item は同じ evidence_id・lines のまま保持する。\n"
     "- 添付原画像と根拠レコードの対応（画像がある場合）: 各画像の bbox / context_bbox / target_highlight / asset_kind。\n"
     "- 業務ガイドがある場合は、目的・必要な根拠・終わりの条件を満たす説明を、前提の手順から順に items にする。業務ガイドの手順は質問で分かっている条件に合わせて選んであるので、すべて説明し、利用者が自分で行えない手順も省かない。資料で裏付けられない要件は gap にする。\n"
     "- 業務ガイドは答え方の指示で、資料ではない。items の text には quote の原文が裏付ける内容だけを書き、業務ガイドの文（確認先・方針）を写さない。業務ガイドの窓口と引き継ぐ条件は、システムが「業務ガイドの案内」として本文に出す。\n"
@@ -225,10 +225,10 @@ GENERATE_SYSTEM_PROMPT = (
     "- 機能・前提ごとに分ける手順 → 機能ごとに item を分ける。見出しは書かない。\n"
     "5.2 出力形式と上限\n"
     "- 各項目の意味は応答 schema の説明に従う。まず request_coverage と guide_coverage に使う根拠を挙げ、その後に items を書く。\n"
-    "- items は最大40件、text は600字以内、quote は600字以内。超える出力は形式エラーで全体が破棄されるため、重複する item をまとめ、質問に必要なものを優先する。\n"
+    "- items は最大40件、text は600字以内。超える出力は形式エラーで全体が破棄されるため、重複する item をまとめ、質問に必要なものを優先する。\n"
     "5.3 item の書き方\n"
     "- 1 item は1つの操作・規則・確認方法。operation は実施順に並べ、画面→対象→入力→確定の各段階を省略しない。\n"
-    "- quote は Evidence の本文から連続した原文をそのまま写す（助詞・句読点・記号も変えない）。text は quote が支持する範囲だけを質問の言葉で説明する。\n"
+    "- text は引用（evidence_id と lines が指す原文）が支持する範囲だけを質問の言葉で説明する。\n"
     "- 1つの手順に別機能の item を混ぜない。複数の処理区分が並ぶ原文は区分を選ばず、区分ごとに text=quote（逐語）の item にする。必須根拠（pinned）は質問に適用できる限り必ず item に使う。\n"
     "- 通常は applies=matched。原文に適用条件・限定（〜の場合、〜のみ、対象外）が明記され、質問からその成立を確認できない時だけ applies=conditional とし、condition に原文の語句をそのまま写す。applies=unverified は監査の結果からシステムが付ける値で、あなたは出力しない。\n"
     "- request_units の各 id に対して、答えられる item を request_id 付きで出す。根拠がない要求は kind=gap にする。kind=context の要求単位は経緯・背景で、item も gap も作らない。\n"
@@ -1380,11 +1380,13 @@ def verify(
                 continue
             checked.append(CheckedItem(item.model_copy(update={"evidence_id": "", "quote": "", "applies": "matched", "condition": ""})))
             continue
+        # 行の範囲で指した引用は、その原文を quote にする（#2830）。
+        item, cite_error = cited_quote(item, spans)
         match: dict = {}
         span, quote = resolve_evidence(item, spans, match=match)
         if span is None:
             # 次の生成は前回の草稿を見られないため、どの item への指摘かを本文で示す。
-            entry = {"index": index, "evidence_id": item.evidence_id, "reason": quote, "text": item.text, "quote": item.quote}
+            entry = {"index": index, "evidence_id": item.evidence_id, "reason": cite_error or quote, "text": item.text, "quote": item.quote}
             miscopied = miscopied_sentence(item, spans)
             if miscopied:
                 entry["miscopied"] = miscopied
@@ -3135,6 +3137,82 @@ def function_limits(span: dict, spans: Sequence[dict]) -> list[str]:
     return list(dict.fromkeys(limits))[:6]
 
 
+# 引用の行（#2830）。根拠の本文を行で分け、長い行は文の区切りで分ける。モデルは行番号の範囲で引用を指し、
+# 原文はシステムが取り出す（写し誤り・短すぎる引用を無くす）。
+CITE_UNIT_MAX_CHARS = 160
+CITE_WHOLE_MAX_CHARS = 300
+_CITE_SENTENCE_END = re.compile(r"(?<=[。！？])")
+_CITE_RANGE = re.compile(r"^\s*(\d+)\s*(?:[-~〜–]\s*(\d+))?\s*$")
+
+
+def citation_units(text: str) -> list[tuple[int, int]]:
+    """根拠の本文の引用の単位（本文の中の開始・終了の位置）。
+
+    続く短い行は ``CITE_UNIT_MAX_CHARS`` まで 1 つの単位にまとめ、それを超える行は文の区切りで分ける
+    （OCR・表の 1 語ずつの行に番号を付けて入力を膨らませない）。空の行だけの単位は作らない。
+    """
+    pieces: list[tuple[int, int]] = []
+    position = 0
+    for line in text.split("\n"):
+        start, end = position, position + len(line)
+        position = end + 1
+        if end - start <= CITE_UNIT_MAX_CHARS:
+            pieces.append((start, end))
+            continue
+        piece = start
+        for part in _CITE_SENTENCE_END.split(line):
+            if part:
+                pieces.append((piece, piece + len(part)))
+            piece += len(part)
+    units: list[tuple[int, int]] = []
+    for start, end in pieces:
+        if not text[start:end].strip():
+            continue
+        if units and end - units[-1][0] <= CITE_UNIT_MAX_CHARS:
+            units[-1] = (units[-1][0], end)
+        else:
+            units.append((start, end))
+    return units
+
+
+def numbered_text(text: str) -> str:
+    """長い根拠（``CITE_WHOLE_MAX_CHARS`` を超え、複数の単位がある）の本文に行番号を付ける。
+
+    短い根拠は本文のまま示し、範囲を指さない引用は全文を引く（行番号の分だけ入力を増やさない）。
+    """
+    units = citation_units(text)
+    if len(units) <= 1 or units[-1][1] - units[0][0] <= CITE_WHOLE_MAX_CHARS:
+        return text
+    return "\n".join(f"{number}| {text[start:end]}" for number, (start, end) in enumerate(units, 1))
+
+
+def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem, str]:
+    """evidence_id と lines が指す原文を quote にした item と、範囲が不正なときの理由（#2830）。
+
+    モデルが quote を写した item・gap・根拠が決まらない item は変えない（従来の照合に任せる）。
+    """
+    if item.kind == "gap" or item.quote.strip():
+        return item, ""
+    named = _named_spans(item, spans)
+    if len(named) != 1:
+        return item, ""
+    text = str(named[0].get("text") or "")
+    units = citation_units(text)
+    if not units:
+        return item, ""
+    if not item.lines.strip() and (len(units) == 1 or units[-1][1] - units[0][0] <= CITE_WHOLE_MAX_CHARS):
+        # 1 単位か短い根拠は、範囲が無ければ全文を引く。
+        return item.model_copy(update={"quote": text[units[0][0] : units[-1][1]].strip()}), ""
+    found = _CITE_RANGE.match(item.lines or "")
+    if not found:
+        return item, f"行番号の付いた根拠は lines に引用する行の番号か範囲（1〜{len(units)}）を書く"
+    first = int(found.group(1))
+    last = int(found.group(2) or first)
+    if not 1 <= first <= last <= len(units):
+        return item, f"lines の範囲 {item.lines} が根拠の行（1〜{len(units)}）の外にある"
+    return item.model_copy(update={"quote": text[units[first - 1][0] : units[last - 1][1]].strip()}), ""
+
+
 def format_functions(spans: Sequence[dict]) -> str:
     """根拠を機能ごとの見出しで分けて提示し、別機能の混合を入力の時点で防ぐ。"""
     groups: dict[tuple, list[dict]] = {}
@@ -3156,7 +3234,7 @@ def format_functions(spans: Sequence[dict]) -> str:
             + (" pinned" if span["pinned"] else "")
             + (f"\n{CONTEXT_NOTE_BEGIN}\n{span['answer_context']}\n{CONTEXT_NOTE_END}" if span.get("answer_context") else "")
             + "\n"
-            + span["text"]
+            + numbered_text(span["text"])
             for span in members
         )
         blocks.append(header + "\n" + body)

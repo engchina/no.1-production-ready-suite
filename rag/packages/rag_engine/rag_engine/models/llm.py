@@ -263,10 +263,16 @@ class GroundedItem(_StrictModel):
         description="quote が支持する範囲だけを質問の言葉で説明する。quote にない画面名・ボタン・値・効果・原因・成功保証を足さない。",
     )
     evidence_id: str = Field(default="", description="根拠の先頭にある [E1] 形式の番号（角括弧なし）。gap 以外は必須。")
+    lines: str = Field(
+        default="",
+        max_length=20,
+        description="引用する行の範囲。行番号（`3| `）の付いた根拠では、text を支える行の番号か範囲（例: 3、3-5）。"
+        "text が述べる操作・値をすべて含む行にする。行番号の無い根拠は空（根拠の全文が引用になる）。",
+    )
     quote: str = Field(
         default="",
         max_length=600,
-        description="その Evidence の本文から連続した原文をそのまま写す。改変・要約・結合は不可。gap 以外は必須。",
+        description="空にする（引用の原文は evidence_id と lines からシステムが取り出す）。",
     )
     applies: Literal["matched", "conditional", "unverified"] = Field(
         default="matched",
