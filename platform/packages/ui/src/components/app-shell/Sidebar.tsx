@@ -363,7 +363,7 @@ export function SidebarAccountFooter({
           href={account.href}
           onClick={(event) => followAccountLink(event, account)}
           aria-current={account.active ? "page" : undefined}
-          aria-label={`${name}${roles ? ` ${roles}` : ""} ${account.label}`}
+          aria-label={`${account.label} ${name}${roles ? ` ${roles}` : ""}`}
           className={cn(
             "relative flex min-h-11 min-w-0 items-center gap-2.5 rounded-md px-3 py-1 transition-colors",
             account.active

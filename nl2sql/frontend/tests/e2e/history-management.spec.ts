@@ -205,7 +205,7 @@ function row(page: Page, id: string) {
 }
 
 function titleLink(page: Page, question: string) {
-  return page.getByRole("link", { name: `${question}（詳細を開く）`, exact: true });
+  return page.getByRole("link", { name: `${question}（詳細を開く）` });
 }
 
 /** 375px は絞り込みをシートにまとめる（3 つ以上）。広い画面はツールバーの中の選択欄。 */
