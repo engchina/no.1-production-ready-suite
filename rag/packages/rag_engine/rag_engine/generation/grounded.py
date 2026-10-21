@@ -3897,6 +3897,29 @@ def _requirement_answer_text(checked: Sequence[CheckedItem], notices: Sequence[s
     return "\n".join(texts)
 
 
+# 引用の照合を判定に使う観察（#2811）。partly_explained は引用によらず partial、not_mentioned は missing。
+_QUOTED_REQUIREMENT_STATES = frozenset({"explained", "stated_unavailable"})
+
+
+def requirement_quote_matches(review: Any, checked: Sequence[CheckedItem], notices: Sequence[str] = ()) -> bool:
+    """要件の監査の ``answer_quote`` が、引いた index（items と業務ガイドの案内の行）に属する文か（#2649・#2811）。
+
+    引いた item の説明の文か、その item の根拠の原文（モデルは同じ item の原文を写すことが多い）のどちらかに当たれば
+    受ける。資料に無いことを示した判定（stated_unavailable）で引いた index がすべて不足の item か案内の行なら、
+    その行自体が不足の明示なので引用が空でも受ける。
+    """
+    cited = list(review.item_indexes)
+    if not cited or not all(0 <= index < len(checked) + len(notices) for index in cited):
+        return False
+    quote = review.answer_quote.strip()
+    if not quote:
+        return review.answer_state == "stated_unavailable" and all(
+            index >= len(checked) or checked[index].item.kind == "gap" for index in cited
+        )
+    sources = "\n".join(checked[index].item.quote for index in cited if index < len(checked) and checked[index].item.quote)
+    return quote_in_text(quote, _requirement_answer_text(checked, notices, cited)) or bool(sources and quote_in_text(quote, sources))
+
+
 # 要件の監査の観察（`GuideRequirementReview.answer_state`）から要件の充足を決める規則（#2800）。モデルには回答が要件を
 # どう扱ったかだけを答えさせ、「資料に無いことを示した」を充足とみなすかは製品の規則で決める（LLM-as-judge を観察の
 # 判定に寄せる）。必要な根拠（kind=evidence）は回答の説明が述べたときだけ。完了条件（kind=completion）は、資料に無い・
@@ -3959,8 +3982,7 @@ def apply_guide_contracts(
                 return notice_allowed and 0 <= index - len(checked) < len(notices)
 
             valid = bool(cited) and all(citable(index) for index in cited)
-            answer_text = _requirement_answer_text(checked, notices, cited)
-            quote_matches = bool(review and review.answer_quote.strip() and quote_in_text(review.answer_quote, answer_text))
+            quote_matches = review is not None and requirement_quote_matches(review, checked, notices)
             status = requirement_status(review, requirement, checked, notices)
             if status == "addressed" and not (valid and quote_matches):
                 status = "partial"
@@ -4429,14 +4451,10 @@ def run_round(
                 {
                     entry.requirement_id
                     for entry in audit.guide_requirement_reviews
+                    # 判定に影響する観察の不正な引用だけを作り直す（#2811）。
                     if entry.requirement_id in expected_requirements
-                    and entry.answer_state != "not_mentioned"
-                    and not (
-                        entry.item_indexes
-                        and all(0 <= index < len(checked) + len(guide_notices) for index in entry.item_indexes)
-                        and entry.answer_quote.strip()
-                        and quote_in_text(entry.answer_quote, _requirement_answer_text(checked, guide_notices, entry.item_indexes))
-                    )
+                    and entry.answer_state in _QUOTED_REQUIREMENT_STATES
+                    and not requirement_quote_matches(entry, checked, guide_notices)
                 }
             )
             if _audit_is_empty(audit) or missing_requirements or invalid_answer_quotes:
@@ -4445,7 +4463,7 @@ def run_round(
                         "field": "guide_requirement_reviews",
                         "required_once": missing_requirements,
                         "invalid_answer_quotes": invalid_answer_quotes,
-                        "message": "required_once の要件 id は1回ずつ判定してください。invalid_answer_quotes の判定は、item_indexes が指す回答の text から answer_quote をそのまま写してください。根拠の原文や quote を代わりに写さず、回答が要件に触れていなければ not_mentioned としてください。全要件の判定を含む監査を返してください。",
+                        "message": "required_once の要件 id は1回ずつ判定してください。invalid_answer_quotes の判定は、item_indexes が指す item の text か quote から answer_quote をそのまま写してください。回答が要件に触れていなければ not_mentioned としてください。全要件の判定を含む監査を返してください。",
                     }
                     audit_prompt = json.dumps(fold_model_view(inputs), ensure_ascii=False)
                 # reviews も request_reviews も空の応答は監査として使えない。そのまま使うと addressed が空になり、
