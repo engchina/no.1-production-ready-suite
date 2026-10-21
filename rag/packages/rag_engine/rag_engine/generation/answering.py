@@ -4244,7 +4244,7 @@ def answer_question_result(
             )
         section_state: dict[str, Any] = {}
 
-        def complete_sections(candidate: AnswerContext, phase: str) -> tuple[AnswerContext, Any]:
+        def complete_sections(candidate: AnswerContext, phase: str, *, reserve: bool = False) -> tuple[AnswerContext, Any]:
             return _expand_context_by_sections(
                 normalized_question,
                 candidate,
@@ -4256,9 +4256,13 @@ def answer_question_result(
                 use_grader=selected_answer_flow == CRAG_ANSWER_FLOW,
                 state=section_state,
                 phase=phase,
+                reserve=reserve,
             )
 
-        context, section_expansion = complete_sections(context, "main")
+        # 業務ガイドの手順ごとの検索が後に来るなら、その根拠から広げる分の入力を残す（#2816）。
+        context, section_expansion = complete_sections(
+            context, "main", reserve=guide_plan is not None and bool(getattr(settings, "guide_step_retrieval_enabled", False))
+        )
         # 主の検索の後に足す検索の枠（手順ごとの検索と根拠の無い要求の再検索で共有する。#2395）。
         extra_budget = ExtraRetrievalBudget.from_settings(settings)
         guide_step_trace: dict[str, Any] | None = None
@@ -4560,11 +4564,13 @@ def _expand_context_by_sections(
     use_grader: bool = True,
     state: dict[str, Any] | None = None,
     phase: str = "main",
+    reserve: bool = False,
 ) -> tuple[AnswerContext, Any]:
     """当たった chunk の章節から親の章節へ段階的に広げる (#1436。`section_expansion`)。
 
     標準 RAG は最低範囲を補完し、CRAG は追加で十分性を判定する。state は1回答内で共有し、
     追加検索後も同じ原文・抽出の呼び出し・時間の予算を使う。無効と読み込み未設定は診断で区別する。
+    ``reserve`` は、後の段のために入力の一部（``section_expansion_followup_reserve_percent``）を残す（#2816）。
     """
     from rag_engine.dependencies import section_dependencies
     from rag_engine.generation import section_expansion as sections
@@ -4638,6 +4644,7 @@ def _expand_context_by_sections(
             deadline_remaining=remaining_seconds,
             clock=monotonic,
             reader=state["reader"],
+            reserve_tokens=sections.SectionExpansionLimits.from_settings(settings).followup_reserve_tokens if reserve else 0,
         )
         result.trace["phase"] = phase
         previous = state.get("result")
@@ -4675,6 +4682,9 @@ def _expand_context_by_sections(
         if result.unread:
             step.field("読めなかった章節", f"{len(result.unread)} 件")
             step.impact("上限に達したため、読めなかった章節を「回答に未反映の関連章節」に示し、条件つきの回答にします。")
+        if result.omitted:
+            # 起点を含まない兄弟の章節は、読めなくても回答に出さない（#2816）。
+            step.field("読めなかった参考の章節", f"{len(result.omitted)} 件（当たった章節の外のため、回答には示しません）")
     state["result"] = result
     state["signature"] = signature_of(result.context)
     return result.context, result

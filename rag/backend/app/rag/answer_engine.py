@@ -575,6 +575,10 @@ def build_engine_settings(
         "RAG_ENGINE_LLM_STALL_IDLE_SECONDS": str(settings.rag_llm_stall_idle_seconds),
         "RAG_ENGINE_LLM_STALL_MIN_RATE_RATIO": str(settings.rag_llm_stall_min_rate_ratio),
         "RAG_ENGINE_LLM_STALL_RESENDS": str(settings.rag_llm_stall_resends),
+        # 業務ガイドの手順の段のために最初の章節の拡張が残す入力の割合(#2816)。
+        "RAG_ENGINE_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT": str(
+            settings.rag_section_expansion_followup_reserve_percent
+        ),
         "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE": (
             "1" if settings.rag_section_skip_regrade_at_scope else "0"
         ),
