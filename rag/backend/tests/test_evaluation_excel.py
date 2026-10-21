@@ -782,3 +782,76 @@ def test_template_document_names_and_evidence_are_literal_text() -> None:
     built = build_evaluation_cases(parsed.rows, [document])
     assert parsed.issues == built.issues == []
     assert built.cases[0].relevant_document_ids == [document.document_id]
+
+
+def test_template_examples_keep_all_six_case_columns_and_round_trip() -> None:
+    book = load_workbook(BytesIO(template_xlsx()))
+    assert book.sheetnames == [
+        CASES_SHEET_TITLE,
+        GUIDE_SHEET_TITLE,
+        EXAMPLES_SHEET_TITLE,
+        DOCUMENTS_SHEET_TITLE,
+    ]
+    cases = book[CASES_SHEET_TITLE]
+    assert tuple(cell.value for cell in cases[1]) == HEADERS
+    assert all(cell.comment and cell.comment.text for cell in cases[1])
+    examples = book[EXAMPLES_SHEET_TITLE]
+    assert tuple(cell.value for cell in examples[1]) == (*HEADERS[:3], "この例の説明", *HEADERS[3:])
+    rows = list(examples.iter_rows(min_row=2, values_only=True))
+    assert any(row[4] for row in rows)
+    assert {row[5] for row in rows if row[5]} == {"回答", "確認", "保留"}
+    assert any(row[6] for row in rows)
+    assert not any("別名:" in str(value) for row in rows for value in row if value)
+    for row in rows:
+        cases.append([*row[:3], *row[4:]])
+    buffer = BytesIO()
+    book.save(buffer)
+    parsed = parse_evaluation_workbook(buffer.getvalue())
+    assert parsed.issues == []
+    assert len(parsed.rows) == len(rows)
+    assert {row.response_decision for row in parsed.rows if row.response_decision} == {
+        "answer",
+        "clarify",
+        "hold",
+    }
+    assert any(row.screen_lines for row in parsed.rows)
+    assert any(row.answer_process for row in parsed.rows)
+    documents = [
+        EvaluationDocumentRef(document_id=f"synthetic-{index}", file_name=name)
+        for index, name in enumerate(
+            [
+                "製品マニュアル.pdf",
+                "操作手順.docx",
+                "説明資料.pptx",
+                "料金表.xlsx",
+                "よくある質問.md",
+            ]
+        )
+    ] + [EvaluationDocumentRef(document_id="0123456789abcdef", file_name="synthetic-id.pdf")]
+    built = build_evaluation_cases(parsed.rows, documents)
+    assert built.issues == []
+    assert len(built.cases) == len(rows)
+    assert any(case.required_answer_points for case in built.cases)
+    assert {
+        case.expected_response_decision for case in built.cases if case.expected_response_decision
+    } == {"answer", "clarify", "hold"}
+
+
+def test_template_guide_describes_current_metrics_and_unassessed_results() -> None:
+    book = load_workbook(BytesIO(template_xlsx()))
+    rows = list(book[GUIDE_SHEET_TITLE].iter_rows(values_only=True))
+    metrics = [row for row in rows if row[0] in {"検索", "回答", "応答の判断"}]
+    assert [row[0] for row in metrics] == ["検索", "検索", "回答", "回答", "回答", "応答の判断"]
+    assert all(row[2] and row[3] for row in metrics)
+    text = "\n".join(str(value) for row in rows for value in row if value)
+    for phrase in [
+        "未評価は 0 点でも合格でもありません",
+        "同じ六指標・閾値",
+        "所要時間は設定や処理状況",
+        "表示用に丸める前",
+        "入力しただけでは評価の期待に追加されません",
+    ]:
+        assert phrase in text
+    assert "約 2 倍" not in text
+    assert "閾値 90%" not in text
+    assert "正確性・網羅性" in book[CASES_SHEET_TITLE]["C1"].comment.text
