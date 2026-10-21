@@ -2,20 +2,13 @@
 
 from __future__ import annotations
 
-from typing import cast
-
-import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ValidationError
-from rag_parser_core.extraction import StructuredExtraction
-from rag_pipeline_core.chunking import chunk_extraction_with_strategy
+from pydantic import BaseModel
 from rag_pipeline_core.evaluation import resolve_evaluation
 from rag_pipeline_core.graph import resolve_graph_profile
 from rag_pipeline_core.guardrail import resolve_guardrail
 from rag_pipeline_core.stage import (
-    ChunkingStageRequest,
-    ChunkingStageResponse,
     EvaluationStageRequest,
     EvaluationStageResponse,
     GraphStageRequest,
@@ -26,7 +19,6 @@ from rag_pipeline_core.stage import (
     VectorIndexStageResponse,
 )
 from rag_pipeline_core.stage_service import (
-    create_chunking_app,
     create_evaluation_app,
     create_graph_app,
     create_guardrail_app,
@@ -44,42 +36,6 @@ def _run(app: FastAPI, request: BaseModel, response_model: type[BaseModel]) -> B
         and "POST" in (route.methods or set())
     )
     return response_model.model_validate(route.endpoint(request))
-
-
-def test_chunking_service_matches_local_core() -> None:
-    request = ChunkingStageRequest(
-        extraction=StructuredExtraction(raw_text="第1章 概要\n本文です。"),
-        strategy="fixed_size",
-        chunk_size=200,
-        overlap=0,
-    )
-    remote = _run(create_chunking_app(), request, ChunkingStageResponse)
-    local_chunks = chunk_extraction_with_strategy(
-        request.extraction,
-        strategy=request.strategy,
-        chunk_size=request.chunk_size,
-        overlap=request.overlap,
-        min_chars=request.min_chars,
-        delimiter=request.delimiter,
-    )
-    local = ChunkingStageResponse.from_chunks(cast("list[object]", local_chunks))
-    assert remote == local
-
-
-def test_chunking_stage_request_enforces_product_limits() -> None:
-    extraction = StructuredExtraction(raw_text="本文です。")
-    accepted = ChunkingStageRequest(
-        extraction=extraction,
-        chunk_size=32_000,
-        overlap=8_000,
-    )
-    assert accepted.chunk_size == 32_000
-    assert accepted.overlap == 8_000
-
-    with pytest.raises(ValidationError):
-        ChunkingStageRequest(extraction=extraction, chunk_size=32_001)
-    with pytest.raises(ValidationError):
-        ChunkingStageRequest(extraction=extraction, chunk_size=200, overlap=200)
 
 
 def test_vector_index_service_matches_local_core() -> None:
@@ -109,27 +65,3 @@ def test_evaluation_service_matches_local_core() -> None:
     remote = _run(create_evaluation_app(), request, EvaluationStageResponse)
     local = EvaluationStageResponse(**resolve_evaluation(request.suite).__dict__)
     assert remote == local
-
-
-def test_chunking_service_binds_language_pack_from_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    """分割のサービスは、要求に付いた言語資源の差(#2181)をその要求の間だけ使う。"""
-    import rag_pipeline_core.stage_service as stage_service
-    from rag_parser_core.language import builtin_pack, current_pack
-
-    seen: list[str] = []
-
-    def fake_chunk(*args: object, **kwargs: object) -> list[object]:
-        seen.append(current_pack().hash)
-        return []
-
-    monkeypatch.setattr(stage_service, "chunk_extraction_with_strategy", fake_chunk)
-    request = ChunkingStageRequest(
-        extraction=StructuredExtraction(raw_text="本文"),
-        strategy="fixed_size",
-        chunk_size=200,
-        overlap=0,
-        language_pack={"numbers": {"article_units": ["条", "款"]}},
-    )
-    _run(create_chunking_app(), request, ChunkingStageResponse)
-    assert seen and seen[0] != builtin_pack().hash
-    assert current_pack().hash == builtin_pack().hash

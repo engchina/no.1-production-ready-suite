@@ -1,4 +1,4 @@
-"""PipelineStageClient(chunking 委譲)のテスト。"""
+"""PipelineStageClient の HTTP 委譲と接続障害のテスト。"""
 
 from __future__ import annotations
 
@@ -10,110 +10,10 @@ from typing import Any
 import httpx
 import pytest
 from pytest import MonkeyPatch
-from rag_parser_core.extraction import StructuredExtraction
-from rag_pipeline_core.stage import ChunkingStageRequest, ChunkingStageResponse, ChunkModel
+from rag_pipeline_core.stage import VectorIndexStageRequest
 
 from app.clients.pipeline_stage import PipelineStageClient, PipelineStageServiceError
 from app.config import Settings
-
-
-def _request() -> ChunkingStageRequest:
-    return ChunkingStageRequest(extraction=StructuredExtraction(raw_text="本文。" * 10))
-
-
-def test_chunking_disabled_returns_none(monkeypatch: MonkeyPatch) -> None:
-    class _UnexpectedClient:
-        def __init__(self, *a: Any, **k: Any) -> None:
-            raise AssertionError("disabled chunking service must not be called")
-
-    monkeypatch.setattr(httpx, "Client", _UnexpectedClient)
-    client = PipelineStageClient(
-        Settings(rag_chunking_service_enabled=False, rag_chunking_service_url="http://svc:8000")
-    )
-    assert client.run_chunking(_request()) is None
-
-
-def test_chunking_without_url_returns_none() -> None:
-    client = PipelineStageClient(Settings(rag_chunking_service_url=""))
-    assert client.run_chunking(_request()) is None
-
-
-def test_remote_success_returns_chunks(monkeypatch: MonkeyPatch) -> None:
-    response_payload = ChunkingStageResponse(
-        chunks=[ChunkModel(text="c1", index=0, start_offset=0, end_offset=2, metadata={"k": "v"})]
-    ).model_dump()
-
-    class _FakeResponse:
-        status_code = 200
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, Any]:
-            return response_payload
-
-    class _FakeClient:
-        def __init__(self, *a: Any, **k: Any) -> None:
-            pass
-
-        def __enter__(self) -> _FakeClient:
-            return self
-
-        def __exit__(self, *a: Any) -> None:
-            return None
-
-        def post(self, *a: Any, **k: Any) -> _FakeResponse:
-            return _FakeResponse()
-
-        def request(self, method: str, *a: Any, **k: Any) -> _FakeResponse:
-            assert method == "POST"
-            return self.post(*a, **k)
-
-    monkeypatch.setattr(httpx, "Client", _FakeClient)
-    client = PipelineStageClient(
-        Settings(rag_chunking_service_enabled=True, rag_chunking_service_url="http://svc:8000")
-    )
-    chunks = client.run_chunking(_request())
-    assert chunks is not None
-    assert chunks[0].text == "c1"
-    assert chunks[0].metadata["k"] == "v"
-
-
-def test_remote_connection_failure_returns_none(monkeypatch: MonkeyPatch) -> None:
-    class _BoomClient:
-        def __init__(self, *a: Any, **k: Any) -> None:
-            pass
-
-        def __enter__(self) -> _BoomClient:
-            return self
-
-        def __exit__(self, *a: Any) -> None:
-            return None
-
-        def post(self, *a: Any, **k: Any) -> Any:
-            raise httpx.ConnectError("refused")
-
-        def request(self, method: str, *a: Any, **k: Any) -> Any:
-            assert method == "POST"
-            return self.post(*a, **k)
-
-    monkeypatch.setattr(httpx, "Client", _BoomClient)
-    client = PipelineStageClient(
-        Settings(rag_chunking_service_enabled=True, rag_chunking_service_url="http://svc:8000")
-    )
-    assert client.run_chunking(_request()) is None
-
-
-def test_remote_invalid_payload_raises_when_service_responds(monkeypatch: MonkeyPatch) -> None:
-    _fake_post(monkeypatch, {"chunks": [{"text": "missing indexes"}]})
-
-    client = PipelineStageClient(
-        Settings(rag_chunking_service_enabled=True, rag_chunking_service_url="http://svc:8000")
-    )
-    with pytest.raises(PipelineStageServiceError) as exc:
-        client.run_chunking(_request())
-    assert exc.value.error_code == "chunking_service_unavailable"
-
 
 # --- vector_index / graphrag 委譲 -------------------------------------------
 
@@ -477,9 +377,11 @@ def test_proxy_gateway_error_for_non_internal_host_falls_back(
     monkeypatch.setenv("http_proxy", "http://proxy.invalid:80")
     _gateway_error_client(monkeypatch, status_code)
     client = PipelineStageClient(
-        Settings(rag_chunking_service_enabled=True, rag_chunking_service_url="http://svc:8000")
+        Settings(
+            rag_vector_index_service_enabled=True, rag_vector_index_service_url="http://svc:8000"
+        )
     )
-    assert client.run_chunking(_request()) is None
+    assert client.run_vector_index(VectorIndexStageRequest()) is None
 
 
 @pytest.mark.parametrize(
@@ -516,8 +418,8 @@ def test_service_error_responses_still_stop(
         monkeypatch.setenv(key.lower(), value)
     _gateway_error_client(monkeypatch, status_code)
     client = PipelineStageClient(
-        Settings(rag_chunking_service_enabled=True, rag_chunking_service_url=url)
+        Settings(rag_vector_index_service_enabled=True, rag_vector_index_service_url=url)
     )
     with pytest.raises(PipelineStageServiceError) as exc:
-        client.run_chunking(_request())
+        client.run_vector_index(VectorIndexStageRequest())
     assert exc.value.reason == "remote_error"

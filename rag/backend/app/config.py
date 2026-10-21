@@ -2357,17 +2357,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "応答済みサービスの HTTP error / 不正応答は停止する。"
         ),
     )
-    rag_chunking_service_enabled: bool = Field(
-        default=True,
-        description=(
-            "chunking ステージの remote 委譲を許可する。ON でもサービス未起動・未到達時は "
-            "backend in-process の同一実装へ縮退する。OFF は常に in-process。"
-        ),
-    )
-    rag_chunking_service_url: str = Field(
-        default="http://127.0.0.1:18030",
-        description="chunking ステージマイクロサービスの base URL。",
-    )
     rag_vector_index_service_enabled: bool = Field(
         default=True,
         description=(

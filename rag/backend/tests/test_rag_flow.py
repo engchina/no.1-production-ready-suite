@@ -1255,20 +1255,28 @@ def test_ingest_marks_document_error_when_local_extraction_is_empty(
     assert audit_event["vector_count"] == 0
 
 
-def test_ingest_falls_back_when_chunking_service_is_unavailable(
+def test_ingest_chunks_locally_without_http_delegation(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """chunking service 停止時は backend in-process の同一実装へ縮退する。"""
-    calls: list[object] = []
+    """取込の分割は HTTP 委譲せず、backend 内の分割実装を直接使う。"""
+    import app.rag.ingestion as ingestion
 
-    def unavailable(self: PipelineStageClient, request: object) -> None:
-        calls.append(request)
+    calls: list[object] = []
+    original_chunking = ingestion.chunk_extraction_with_strategy
+
+    def local_chunking(*args: Any, **kwargs: Any) -> Any:
+        calls.append(args)
+        return original_chunking(*args, **kwargs)
+
+    def reject_chunking_http(self: PipelineStageClient, stage: str, payload: str) -> None:
+        assert stage != "chunking", "文書分割を HTTP に委譲しない"
         return None
 
-    monkeypatch.setattr(PipelineStageClient, "run_chunking", unavailable)
+    monkeypatch.setattr(ingestion, "chunk_extraction_with_strategy", local_chunking)
+    monkeypatch.setattr(PipelineStageClient, "_post_run", reject_chunking_http)
     upload_resp = client.post(
         "/api/documents/upload",
-        files={"file": ("chunk-service-down.txt", b"chunk target text", "text/plain")},
+        files={"file": ("local-chunking.txt", b"chunk target text", "text/plain")},
     )
     assert upload_resp.status_code == 200
     document_id = upload_resp.json()["data"]["id"]
@@ -1276,7 +1284,7 @@ def test_ingest_falls_back_when_chunking_service_is_unavailable(
     job = _run_ingestion_and_get_job(document_id)
 
     assert job["status"] == "SUCCEEDED"
-    assert calls, "chunking service を先に呼び、未到達なら縮退する"
+    assert calls, "backend 内の分割実装を呼ぶ"
     stored = asyncio.run(OracleClient().get_document(document_id))
     assert stored is not None
     assert stored.status == FileStatus.INDEXED

@@ -7,8 +7,9 @@ HTTP サーバ依存は `[service]` extra に隔離)。
 
 - `chunking.py` — chunk 分割の決定論ロジック(backend `app.rag.chunking` はここを再 export)。
 - `stage.py` — `StageHealth` と各ステージの request/response wire schema。
-- `stage_service.py` — `create_chunking_app` など 1 ステージ用 FastAPI app factory。
+- `stage_service.py` — `create_vector_index_app` など 1 ステージ用 FastAPI app factory。
 
-backend は `app.clients.pipeline_stage.PipelineStageClient` で `POST /run` へ委譲する。
+文書分割は backend 内で `chunking.py` を直接実行し、分割用の HTTP 契約・サービスは持たない。
+その他のステージは `app.clients.pipeline_stage.PipelineStageClient` で `POST /run` へ委譲する。
 サービス未起動・未到達時は in-process(同一ロジック)へ安全縮退し、remote が応答した後の
 HTTP error / 不正応答は壊れたサービスとして停止する。

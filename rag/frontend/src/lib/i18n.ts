@@ -1426,7 +1426,7 @@ export const ja = {
   "settings.chunking.overview.description":
     "文書を検索の単位（chunk）に分ける方式を選びます。保存した方式とパラメータは、文書のレシピで上書きしていない文書に、次の取込と再処理から使います。取込済みの文書の chunk は、文書の詳細で再処理するまで変わりません。",
   "settings.chunking.serviceNote":
-    "ここで選ぶ 7 個は分割方式です。親子階層（small-to-big）は backend 内で実行します。それ以外は pipeline-chunking が稼働中なら遠隔実行し、未起動なら backend 内処理で実行します。",
+    "ここで選ぶ 7 個は分割方式です。すべて backend 内で実行します。",
   "settings.chunking.strategy": "分割方式",
   "settings.chunking.recommendedFor": "推奨用途",
   "settings.chunking.source": "設定元",
@@ -1695,7 +1695,6 @@ export const ja = {
   "settings.services.item.parserStructuredRecordsJsonl": "構造化レコード JSONL",
   "settings.services.item.parserXmlTreeJson": "XML ツリー JSON",
   "settings.services.item.parserOciDocumentUnderstanding": "OCI Document Understanding",
-  "settings.services.item.pipelineChunking": "文書分割",
   "settings.services.item.pipelineVectorIndex": "検索インデックス",
   "settings.services.item.pipelineGraphrag": "関係情報の構築",
   "settings.services.item.pipelineGuardrail": "安全チェック",

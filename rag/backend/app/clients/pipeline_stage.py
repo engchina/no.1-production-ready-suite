@@ -22,10 +22,7 @@ import httpx
 from pr_backend_core.internal_http import http_client_options, is_internal_url
 from pr_backend_core.logging import safe_exception_fields, safe_url
 from pr_backend_core.observability.request_context import outbound_correlation_headers
-from rag_parser_core.language import overrides_payload
 from rag_pipeline_core.stage import (
-    ChunkingStageRequest,
-    ChunkingStageResponse,
     EvaluationStageRequest,
     EvaluationStageResponse,
     GraphStageRequest,
@@ -37,21 +34,18 @@ from rag_pipeline_core.stage import (
 )
 
 from app.config import Settings
-from app.rag.chunking import Chunk
 from app.services.catalog import resolve_service_base_url
 
 logger = logging.getLogger(__name__)
 
 # ステージ名 → サービス URL の Settings フィールド。
 _STAGE_URL_FIELDS: dict[str, str] = {
-    "chunking": "rag_chunking_service_url",
     "vector_index": "rag_vector_index_service_url",
     "graphrag": "rag_graph_service_url",
     "guardrail": "rag_guardrail_service_url",
     "evaluation": "rag_evaluation_service_url",
 }
 _STAGE_ENABLED_FIELDS: dict[str, str] = {
-    "chunking": "rag_chunking_service_enabled",
     "vector_index": "rag_vector_index_service_enabled",
     "graphrag": "rag_graph_service_enabled",
     "guardrail": "rag_guardrail_service_enabled",
@@ -143,29 +137,6 @@ class PipelineStageClient:
                 extra={"stage": stage, "service_url": safe_url(url), **safe_exception_fields(exc)},
             )
             raise PipelineStageServiceError(stage, "invalid_response", service_url=url) from exc
-
-    def run_chunking(self, request: ChunkingStageRequest) -> list[Chunk] | None:
-        """chunking ステージを remote 実行する。未到達なら None。"""
-        if not request.language_pack:
-            # 画面で上書きした言語資源(#2181)をサービスへ渡す(組み込みとの差だけ)。
-            request = request.model_copy(update={"language_pack": overrides_payload()})
-        payload = self._post_run("chunking", request.model_dump_json())
-        if payload is None:
-            return None
-        try:
-            parsed = ChunkingStageResponse.model_validate(payload)
-        except ValueError as exc:
-            raise PipelineStageServiceError("chunking", "invalid_response") from exc
-        return [
-            Chunk(
-                text=item.text,
-                index=item.index,
-                start_offset=item.start_offset,
-                end_offset=item.end_offset,
-                metadata=dict(item.metadata),
-            )
-            for item in parsed.chunks
-        ]
 
     def run_vector_index(self, request: VectorIndexStageRequest) -> VectorIndexStageResponse | None:
         """vector_index ステージを remote 実行する。委譲不可なら None、失敗時は例外。"""

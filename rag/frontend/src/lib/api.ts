@@ -2415,7 +2415,6 @@ export interface PreprocessSettingsUpdate {
 export type ServiceCategory =
   | "preprocess"
   | "parser"
-  | "chunking"
   | "vector_index"
   | "graphrag"
   | "guardrail"
