@@ -3146,6 +3146,7 @@ async def test_original_question_keeps_numbered_requests_through_coverage(
             rag_query_strategy="simple_retrieval",
             rag_answer_flow="standard_rag",
             rag_rerank_enabled=False,
+            rag_request_coverage_retrieval_enabled=True,
         ),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
@@ -3191,6 +3192,7 @@ async def test_without_original_question_requests_come_from_the_query(
             rag_query_strategy="simple_retrieval",
             rag_answer_flow="standard_rag",
             rag_rerank_enabled=False,
+            rag_request_coverage_retrieval_enabled=True,
         ),
         oracle=ApprovalOnlyOracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]

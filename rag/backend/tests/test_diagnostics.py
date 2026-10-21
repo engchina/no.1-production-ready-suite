@@ -106,7 +106,7 @@ def test_rag_config_fingerprint_changes_when_context_group_max_chunks_changes() 
         {"rag_neighbor_child_count": 5},
         {"rag_rerank_enabled": False},
         {"rag_screen_linking_enabled": True},
-        {"rag_request_coverage_retrieval_enabled": False},
+        {"rag_request_coverage_retrieval_enabled": True},
     ],
     ids=[
         "query_strategy",
