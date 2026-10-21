@@ -711,6 +711,8 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     回答の期限がある文脈で停滞の検出（`settings.llm_stall_detection`。#1926）が ON なら、応答を streaming で受け、
     停滞した呼び出し（`_stream_parsed`）を打ち切って同じ要求を送り直す（`llm_stall_resends` 回まで。最後の送信は
     検出せずに期限まで待つ）。打ち切った呼び出しは理由（`stall_idle` / `stall_slow`）を未完了の理由として残す。
+    stream が失敗の event で終わった呼び出し（`LlmStreamFailed`。理由は `stream_error`）も、同じ要求を
+    ``STREAM_FAILED_RESENDS`` 回まで送り直す（#2814）。
     """
     budget = llm_output_token_limit(settings, provider)
     # 役目に合わせた上限（`bind_output_cap`）があれば、それで抑えて広げない。
@@ -725,6 +727,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     streamed = _stall_detection_enabled(settings)
     attempt = 0
     stall_resends = 0
+    failed_resends = 0
     while True:
         check_deadline()
         reasoning: dict[str, Any] = {"reasoning": {"effort": effort}} if effort else {}
@@ -759,6 +762,10 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 deadline_capped=time_capped,
                 timing=getattr(exc, "timing", None),
             )
+            if isinstance(exc, LlmStreamFailed) and failed_resends < STREAM_FAILED_RESENDS:
+                # 失敗の event で終わった（#2814。provider の一時的な失敗）。同じ要求を送り直す。期限は次の送信の前に確かめる。
+                failed_resends += 1
+                continue
             if not isinstance(exc, LlmStreamStalled):
                 raise
             # 停滞で打ち切った。回数を工程の記録（execution_steps の llm_usage）に残して同じ要求を送り直す（#1926）。
@@ -869,6 +876,10 @@ class LlmStreamStalled(TimeoutError):
         self.timing = timing
 
 
+# 失敗の event で終わった streaming の呼び出しを、同じ要求で送り直す回数（#2814）。
+STREAM_FAILED_RESENDS = 1
+
+
 class LlmStreamFailed(ConnectionError):
     """streaming の応答が失敗の event で終わった・完了の event なしに切れた（通信の失敗として再試行の対象）。"""
 
@@ -972,12 +983,24 @@ def _stream_parsed(client: Any, request: dict[str, Any], settings: Settings, lim
     except Exception as exc:
         if idle_bound and _is_read_timeout(exc):
             raise LlmStreamStalled(f"LLM の応答の event が {read_timeout:.0f} 秒来ませんでした。", "stall_idle", timing) from exc
+        if _is_stream_error_event(exc):
+            # OpenAI SDK は stream の error の event を event として返さず APIError として送出する（#2814）。
+            raise LlmStreamFailed(f"LLM の応答が失敗の event で終わりました: {str(exc)[:300]}", timing) from exc
         with suppress(AttributeError):
             exc.timing = timing  # type: ignore[attr-defined]
         raise
     if final is None:
         raise LlmStreamFailed("LLM の応答の stream が完了の event なしに終わりました。", timing)
     return final, timing
+
+
+def _is_stream_error_event(exc: BaseException) -> bool:
+    """stream の中の error の event を OpenAI SDK が包んだ ``APIError``（HTTP の status の無いもの）か。"""
+    try:
+        from openai import APIConnectionError, APIError, APIStatusError
+    except ImportError:  # pragma: no cover - openai は必須依存
+        return False
+    return isinstance(exc, APIError) and not isinstance(exc, (APIStatusError, APIConnectionError))
 
 
 def _is_read_timeout(exc: BaseException) -> bool:
@@ -1058,7 +1081,9 @@ def _record_failed_call(
         provider,
         text_format,
         status="failed",
-        reason=exc.reason if isinstance(exc, LlmStreamStalled) else type(exc).__name__,
+        reason=exc.reason
+        if isinstance(exc, LlmStreamStalled)
+        else ("stream_error" if isinstance(exc, LlmStreamFailed) else type(exc).__name__),
         attempt=attempt,
         max_output_tokens=max_output_tokens,
         deadline_capped=deadline_capped,
