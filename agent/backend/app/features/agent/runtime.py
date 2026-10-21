@@ -2552,6 +2552,17 @@ class AgentRuntimeRepository:
                 run, "runtime.agent_not_found", "業務 Agent が見つかりません。"
             )
             return None
+        expected_definition = run.metadata.get("_evaluation_definition_hash")
+        if isinstance(expected_definition, str):
+            from app.features.agent.evaluation import draft_definition_hash
+
+            if draft_definition_hash(agent) != expected_definition:
+                self._fail_builtin_locked(
+                    run,
+                    "evaluation.definition_changed",
+                    "評価の開始後に実行条件が変わったため、実行しません。評価し直してください。",
+                )
+                return None
         self._set_builtin_running_locked(run, "実行を開始しました。", claim)
         return run.model_copy(deep=True), _agent_for_run(agent, run)
 

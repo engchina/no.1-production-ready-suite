@@ -515,6 +515,7 @@ export type EvaluationCaseStatus =
   | "run_failed"
   | "needs_approval"
   | "approval_blocked"
+  | "definition_changed"
   | "timed_out"
   | "judge_failed"
   | "cancelled";
@@ -578,7 +579,7 @@ export interface EvaluationSummary {
   incorrect: number;
   uncertain: number;
   errors: number;
-  /** 評価できなかったケースのうち、判定のモデルが判定できなかったケース（合格率の分母から除く。#1845）。 */
+  /** 判定の失敗・実行条件の変更で合格率から除くケース。 */
   unjudged?: number;
   approval_blocked?: number;
   /** 正しいと判定したケース / 終わったケース（実行の失敗は不合格に数え、判定できなかったケースは除く）。 */

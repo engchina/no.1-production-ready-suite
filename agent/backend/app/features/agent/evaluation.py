@@ -35,13 +35,14 @@ job・進み具合・取り消し・概要・ケース別結果）にそろえ�
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
@@ -381,6 +382,7 @@ class CaseStatus(StrEnum):
     # dry-run の後も承認待ちになった（通常は起きない。安全のために残す）。
     NEEDS_APPROVAL = "needs_approval"
     APPROVAL_BLOCKED = "approval_blocked"
+    DEFINITION_CHANGED = "definition_changed"
     TIMED_OUT = "timed_out"
     # 判定できなかった（判定のモデルの失敗。出力の上限で止まったら 1 回再試行した後。#1845）。
     # 業務 Agent の回答の誤りではないので、合格率の分母から除く。
@@ -393,6 +395,7 @@ _ERROR_STATUSES = {
     CaseStatus.RUN_FAILED,
     CaseStatus.NEEDS_APPROVAL,
     CaseStatus.APPROVAL_BLOCKED,
+    CaseStatus.DEFINITION_CHANGED,
     CaseStatus.TIMED_OUT,
     CaseStatus.JUDGE_FAILED,
 }
@@ -483,7 +486,7 @@ class EvaluationSummary(BaseModel):
     incorrect: int = 0
     uncertain: int = 0
     errors: int = 0
-    # 評価できなかったケースのうち、判定のモデルが判定できなかったケース（#1845）。
+    # 判定のモデルの失敗・実行条件の変更で合格率から除くケース（#1845・#2597）。
     unjudged: int = 0
     approval_blocked: int = 0
     # 合格率 = 正しいと判定したケース / 終わったケース（業務 Agent の実行の失敗・時間切れは不合格に
@@ -522,7 +525,7 @@ def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
             cancelled += 1
         if result.status in _ERROR_STATUSES:
             summary.errors += 1
-        if result.status == CaseStatus.JUDGE_FAILED:
+        if result.status in {CaseStatus.JUDGE_FAILED, CaseStatus.DEFINITION_CHANGED}:
             summary.unjudged += 1
         if result.status in {CaseStatus.APPROVAL_BLOCKED, CaseStatus.NEEDS_APPROVAL}:
             summary.approval_blocked += 1
@@ -586,6 +589,7 @@ class EvaluationJob(BaseModel):
     set_name: str = ""
     # 評価した版（版の番号か "draft"。Run の `metadata.agent_version` と同じ値。#810）。
     agent_version: AgentVersionRef = None
+    definition_hash: str | None = None
     status: JobStatus = JobStatus.QUEUED
     created_by_user_uuid: str | None = None
     results: list[EvaluationCaseResult] = Field(default_factory=list)
@@ -1198,7 +1202,12 @@ def compare_jobs(base: EvaluationJob, target: EvaluationJob) -> EvaluationCompar
         elif left.status in {
             CaseStatus.APPROVAL_BLOCKED,
             CaseStatus.NEEDS_APPROVAL,
-        } or right.status in {CaseStatus.APPROVAL_BLOCKED, CaseStatus.NEEDS_APPROVAL}:
+            CaseStatus.DEFINITION_CHANGED,
+        } or right.status in {
+            CaseStatus.APPROVAL_BLOCKED,
+            CaseStatus.NEEDS_APPROVAL,
+            CaseStatus.DEFINITION_CHANGED,
+        }:
             change = "not_comparable"
         elif right.passed and not left.passed:
             change = "improved"
@@ -1681,6 +1690,63 @@ async def _settle_run(run_id: str, timeout_seconds: float) -> RunState:
         await asyncio.sleep(settle_poll_seconds)
 
 
+class EvaluationDefinitionChanged(RuntimeError):
+    pass
+
+
+def draft_definition_hash(agent: Any) -> str:
+    """評価の条件の変更を検知する。資格情報は hash にだけ使い、返さない。"""
+    from app.features.agent.runtime import AGENT_VERSIONED_FIELDS, pin_skills
+
+    definition = agent.model_dump(
+        mode="json", include=set(AGENT_VERSIONED_FIELDS) | {"draft_updated_at"}
+    )
+    definition["skills"] = [item.model_dump(mode="json") for item in pin_skills(agent.skill_ids)]
+    for key, model_id in (("model", agent.model_id), ("judge_model", "")):
+        try:
+            definition[key] = asdict(builtin_runtime.resolve_model_target(model_id))
+        except builtin_runtime.BuiltinRuntimeError as exc:
+            definition[key] = {"error_code": exc.code}
+    return hashlib.sha256(
+        json.dumps(definition, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+
+
+def check_evaluation_definition(job: EvaluationJob, repository: Any) -> None:
+    if job.agent_version != "draft" or not job.definition_hash:
+        return
+    current = next((agent for agent in repository.list_agents() if agent.id == job.agent_id), None)
+    if current is None or draft_definition_hash(current) != job.definition_hash:
+        raise EvaluationDefinitionChanged(
+            "評価中に下書き・スキル・モデルの設定が変更されたため、この評価は無効です。現在の設定で評価し直してください。"
+        )
+
+
+def invalidate_definition(job_id: str, store: EvaluationStore, repository: Any) -> None:
+    _cancel_unfinished_runs(job_id, store, repository)
+    for index, _ in enumerate(store.get(job_id).results):
+        store.update_result(
+            job_id,
+            index,
+            status=CaseStatus.DEFINITION_CHANGED,
+            judgement=None,
+            tool_selection_correct=None,
+            tool_order_correct=None,
+            answer_outcome=None,
+            answer_basis=None,
+            refusal_stage=None,
+            field_results=[],
+            field_correct=None,
+            error="評価中に実行条件が変わったため、回答の合否は判定しません。",
+        )
+    store.update(
+        job_id,
+        status=JobStatus.FAILED,
+        error="評価中に下書き・スキル・モデルの設定が変更されました。現在の設定で評価し直してください。",
+        finished_at=_now(),
+    )
+
+
 async def run_evaluation_job(job_id: str, store: EvaluationStore = evaluation_store) -> None:
     """評価の job を実行する（取り消されたら残りを取り消しにする）。
 
@@ -1695,17 +1761,28 @@ async def run_evaluation_job(job_id: str, store: EvaluationStore = evaluation_st
     if job is None:
         _cancel_remaining(job_id, store)
         return
+    if job.agent_version == "draft" and not job.definition_hash:
+        current = next(
+            (agent for agent in runtime_repository.list_agents() if agent.id == job.agent_id), None
+        )
+        if current is not None:
+            job = store.update(job.id, definition_hash=draft_definition_hash(current))
     concurrency = evaluation_concurrency()
     judge_caller = make_ai_caller("evaluation_judge", max_concurrency=concurrency)
     pending = iter(enumerate(job.results))
     aborted: list[BoundedCallAborted] = []
+    changed: list[EvaluationDefinitionChanged] = []
 
     async def worker() -> None:
         for index, result in pending:
-            if aborted or store.is_cancelled(job_id):
+            if aborted or changed or store.is_cancelled(job_id):
                 return
             try:
                 await _run_case(job, index, result.case, store, runtime_repository, judge_caller)
+            except EvaluationDefinitionChanged as exc:
+                changed.append(exc)
+                _cancel_unfinished_runs(job_id, store, runtime_repository)
+                return
             except BoundedCallAborted as exc:
                 aborted.append(exc)
                 return
@@ -1729,6 +1806,9 @@ async def run_evaluation_job(job_id: str, store: EvaluationStore = evaluation_st
             finished_at=_now(),
         )
         return
+    if changed:
+        invalidate_definition(job_id, store, runtime_repository)
+        return
     if aborted:
         # 権限・設定の誤り・割り当ての使い切り。同じ失敗をくり返さないよう残りを始めない。
         _cancel_remaining(job_id, store)
@@ -1741,6 +1821,11 @@ async def run_evaluation_job(job_id: str, store: EvaluationStore = evaluation_st
         return
     if store.is_cancelled(job_id):
         _cancel_remaining(job_id, store)
+        return
+    try:
+        check_evaluation_definition(job, runtime_repository)
+    except EvaluationDefinitionChanged:
+        invalidate_definition(job_id, store, runtime_repository)
         return
     store.update(job_id, status=JobStatus.COMPLETED, finished_at=_now())
 
@@ -1781,6 +1866,7 @@ async def _run_case(
     repository: Any,
     judge_caller: BoundedCaller | None = None,
 ) -> None:
+    check_evaluation_definition(job, repository)
     started = time.monotonic()
     store.update_result(job.id, index, status=CaseStatus.RUNNING)
 
@@ -1809,6 +1895,11 @@ async def _run_case(
                     "evaluation_job_id": job.id,
                     "evaluation_case_id": case.id,
                     EVALUATION_DRY_RUN_KEY: True,
+                    **(
+                        {"_evaluation_definition_hash": job.definition_hash}
+                        if job.definition_hash
+                        else {}
+                    ),
                     # 問い返しに答えた往復の番号（最初の Run には付けない。#1845）。
                     **({"evaluation_clarification_round": round_number} if round_number else {}),
                 },
@@ -1836,6 +1927,7 @@ async def _run_case(
                 clarification_rounds=rounds,
             )
             return
+        check_evaluation_definition(job, repository)
         runs.append(settled)
         # 問い返しで止まったら、評価ケースの答えを同じ会話の次の Run で送る（#1845）。
         if (
@@ -2007,6 +2099,7 @@ async def _run_case(
             **tools,
         )
         return
+    check_evaluation_definition(job, repository)
     finish(
         CaseStatus.JUDGED,
         answer=answer,

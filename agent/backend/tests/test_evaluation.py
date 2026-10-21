@@ -2059,13 +2059,13 @@ def test_explicit_approval_expectation_is_checked_without_judge(
     assert result.executed_tool_calls == []
 
 
-def test_approval_block_is_unassessed_and_not_a_regression() -> None:
+@pytest.mark.parametrize("status", [CaseStatus.APPROVAL_BLOCKED, CaseStatus.DEFINITION_CHANGED])
+def test_unassessed_case_is_not_a_regression(status: CaseStatus) -> None:
     case = EvaluationCase(question="合成の質問", expected="合成の回答")
-    blocked = EvaluationCaseResult(
-        case=case, status=CaseStatus.APPROVAL_BLOCKED, blocked_tool_calls=["synthetic_tool"]
-    )
+    blocked = EvaluationCaseResult(case=case, status=status, blocked_tool_calls=["synthetic_tool"])
     summary = evaluation.summarize([blocked])
-    assert (summary.approval_blocked, summary.judged_cases, summary.pass_rate) == (1, 0, None)
+    assert (summary.judged_cases, summary.pass_rate) == (0, None)
+    assert summary.approval_blocked == int(status == CaseStatus.APPROVAL_BLOCKED)
     correct = _judged(case, JudgeVerdict.CORRECT, 1)
     for before, after in [(correct, blocked), (blocked, correct)]:
         comparison = evaluation.compare_jobs(
@@ -2126,3 +2126,159 @@ def test_output_fingerprint_orders_mixed_json_values_without_type_comparison() -
         cases[-1].model_copy(update={"expected_output": [{"value": False, "other": "同じ値"}]}),
     ]
     assert original != cases_fingerprint(job(changed))
+
+
+@pytest.mark.parametrize("when", ["queued", "between_cases", "during_judge"])
+def test_draft_change_invalidates_the_entire_job(
+    monkeypatch: MonkeyPatch, agent: None, when: str
+) -> None:
+    del agent
+    _script(
+        monkeypatch,
+        [assistant_message("合成の回答")],
+        _judgement("correct", 1, "合成の判定"),
+        [assistant_message("合成の回答")],
+        _judgement("correct", 1, "合成の判定"),
+    )
+    profile = next(item for item in runtime_repository.list_agents() if item.id == AGENT_ID)
+    job = evaluation_store.update(
+        _job(
+            _case("first", "合成の質問1", "合成の回答", ["synthetic_tool"]),
+            _case("second", "合成の質問2", "合成の回答"),
+        ).id,
+        agent_version="draft",
+        definition_hash=evaluation.draft_definition_hash(profile),
+    )
+
+    def change() -> None:
+        runtime_repository.patch_agent(
+            AGENT_ID, AgentProfilePatch(instructions="変更後の合成の指示")
+        )
+
+    if when == "queued":
+        change()
+    elif when == "during_judge":
+        original = evaluation.judge_answer
+
+        async def judge(*args: Any, **kwargs: Any) -> Any:
+            result = await original(*args, **kwargs)
+            change()
+            return result
+
+        monkeypatch.setattr(evaluation, "judge_answer", judge)
+    else:
+        original_settle = evaluation._settle_run
+        calls = 0
+
+        async def settle(*args: Any, **kwargs: Any) -> Any:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                change()
+            return await original_settle(*args, **kwargs)
+
+        monkeypatch.setattr(evaluation, "_settle_run", settle)
+    anyio.run(run_evaluation_job, job.id)
+    final = evaluation_store.get(job.id)
+    assert final.status == JobStatus.FAILED
+    assert all(
+        item.status == CaseStatus.DEFINITION_CHANGED and item.judgement is None
+        for item in final.results
+    )
+    assert final.summary.pass_rate is None and final.summary.judged_cases == 0
+    assert final.summary.approval_blocked == 0
+    assert final.summary.tool_accuracy is None
+    assert all(item.tool_selection_correct is None for item in final.results)
+
+
+def test_queued_evaluation_does_not_execute_changed_draft(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    del agent
+    _script(monkeypatch)
+    profile = next(item for item in runtime_repository.list_agents() if item.id == AGENT_ID)
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(
+            agent_id=AGENT_ID,
+            goal="合成の質問",
+            draft=True,
+            metadata={"_evaluation_definition_hash": evaluation.draft_definition_hash(profile)},
+        )
+    )
+    runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(instructions="変更後の合成の指示"))
+    assert runtime_repository.begin_builtin_run(run.id) is None
+    assert runtime_repository.get_run(run.id).status == RunStatus.FAILED
+
+
+def test_definition_hash_tracks_skills_output_and_model_settings(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    del agent
+    _script(monkeypatch)
+    profile = next(item for item in runtime_repository.list_agents() if item.id == AGENT_ID)
+    original = evaluation.draft_definition_hash(profile)
+    skill = skill_registry.get(SKILL_ID)
+    assert skill is not None
+    skill_registry.upsert_custom(skill.model_copy(update={"instructions": "変更後の合成の指示"}))
+    assert evaluation.draft_definition_hash(profile) != original
+    output = profile.model_copy(
+        update={"output_fields": [AgentOutputField(key="synthetic", label="合成の項目")]}
+    )
+    assert evaluation.draft_definition_hash(output) != evaluation.draft_definition_hash(profile)
+    before = evaluation.draft_definition_hash(profile)
+    monkeypatch.setattr(
+        builtin_runtime,
+        "resolve_model_target",
+        lambda model_id="": ModelTarget(
+            model_id="different",
+            endpoint="https://oci.example",
+            project_ocid="",
+            api_key="synthetic-secret",
+            max_output_tokens=1234,
+        ),
+    )
+    after = evaluation.draft_definition_hash(profile)
+    assert after != before and "synthetic-secret" not in after
+
+
+def test_definition_change_cancels_other_running_cases(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    import asyncio
+
+    del agent
+    monkeypatch.setattr(evaluation, "evaluation_concurrency", lambda: 2)
+    second_started = asyncio.Event()
+    cancelled = asyncio.Event()
+    runs: list[str] = []
+    original_cancel = runtime_repository.cancel_run
+
+    def cancel(run_id: str) -> Any:
+        result = original_cancel(run_id)
+        cancelled.set()
+        return result
+
+    monkeypatch.setattr(runtime_repository, "cancel_run", cancel)
+
+    async def run_case(
+        job: Any, index: int, case: Any, store: Any, repository: Any, caller: Any
+    ) -> None:
+        run = repository.create_builtin_run(
+            RunCreateRequest(agent_id=AGENT_ID, goal="合成の質問", draft=True)
+        )
+        runs.append(run.id)
+        store.update_result(job.id, index, status=CaseStatus.RUNNING, run_id=run.id)
+        if index == 0:
+            await second_started.wait()
+            raise evaluation.EvaluationDefinitionChanged("合成の条件変更")
+        second_started.set()
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+    monkeypatch.setattr(evaluation, "_run_case", run_case)
+    job = _job(_case("one", "合成の質問1", "合成の回答"), _case("two", "合成の質問2", "合成の回答"))
+    anyio.run(run_evaluation_job, job.id)
+    assert all(runtime_repository.get_run(run_id).status == RunStatus.CANCELLED for run_id in runs)
+    assert all(
+        item.status == CaseStatus.DEFINITION_CHANGED
+        for item in evaluation_store.get(job.id).results
+    )

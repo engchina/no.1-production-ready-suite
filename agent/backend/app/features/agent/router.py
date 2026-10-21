@@ -183,6 +183,7 @@ from app.features.agent.evaluation import (
     JobStatus,
     cases_fingerprint,
     compare_jobs,
+    draft_definition_hash,
     evaluation_set_store,
     evaluation_store,
     recorded_output_rows,
@@ -2851,6 +2852,7 @@ async def create_evaluation(
         set_id=item.id,
         set_name=item.name,
         agent_version="draft" if target == "draft" else agent.published_version,
+        definition_hash=draft_definition_hash(agent) if target == "draft" else None,
         created_by_user_uuid=_run_creator_user_uuid(request),
         results=[EvaluationCaseResult(case=case) for case in item.cases],
     )
@@ -3733,9 +3735,10 @@ def _publish_evaluation_refusal(agent: AgentProfile) -> str | None:
     settings = get_settings()
     threshold = settings.agent_publish_min_pass_rate
     max_drop = settings.agent_publish_max_pass_rate_drop
-    if (threshold <= 0 and max_drop is None) or not agent.draft_changed:
+    if (threshold <= 0 and max_drop is None) or not agent.has_unpublished_changes():
         return None
     since = agent.draft_updated_at or agent.created_at
+    current_definition = draft_definition_hash(agent)
     latest = next(
         (
             job
@@ -3744,6 +3747,7 @@ def _publish_evaluation_refusal(agent: AgentProfile) -> str | None:
             and job.agent_version == "draft"
             and job.status == JobStatus.COMPLETED
             and job.created_at >= since
+            and job.definition_hash == current_definition
         ),
         None,
     )
