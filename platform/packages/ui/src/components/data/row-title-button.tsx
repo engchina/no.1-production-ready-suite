@@ -1,4 +1,5 @@
 import {
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -129,6 +130,10 @@ export function RowTitleButton({
   ref,
   ...props
 }: RowTitleButtonProps) {
+  const contentId = useId();
+  const actionId = useId();
+  const actionLabel = props["aria-label"];
+  const labelledBy = props["aria-labelledby"] ?? (actionLabel ? `${contentId} ${actionId}` : undefined);
   const titleRef = useRef<HTMLSpanElement | null>(null);
   const [clamped, setClamped] = useState(false);
   const fullText = maxLines ? (fullTitle ?? (typeof title === "string" ? title : undefined)) : undefined;
@@ -156,22 +161,25 @@ export function RowTitleButton({
   );
   const content = (
     <>
-      <span
-        ref={titleRef}
-        className={cn(
-          "block break-words text-sm font-medium leading-5 underline-offset-2 [overflow-wrap:anywhere]",
-          // リンクは :enabled を持たないので、ホバーの下線はリンクなら常に、ボタンなら押せるときだけ付ける。
-          asLink ? "group-hover/row-title:underline" : "group-enabled/row-title:group-hover/row-title:underline",
-          maxLines && LINE_CLAMP_CLASS[maxLines]
-        )}
-      >
-        {title}
-      </span>
-      {subtitle ? (
-        <span className="mt-0.5 block break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">
-          {subtitle}
+      <span id={contentId} className="block">
+        <span
+          ref={titleRef}
+          className={cn(
+            "block break-words text-sm font-medium leading-5 underline-offset-2 [overflow-wrap:anywhere]",
+            // リンクは :enabled を持たないので、ホバーの下線はリンクなら常に、ボタンなら押せるときだけ付ける。
+            asLink ? "group-hover/row-title:underline" : "group-enabled/row-title:group-hover/row-title:underline",
+            maxLines && LINE_CLAMP_CLASS[maxLines]
+          )}
+        >
+          {title}
         </span>
-      ) : null}
+        {subtitle ? (
+          <span className="mt-0.5 block break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">
+            {subtitle}
+          </span>
+        ) : null}
+      </span>
+      {actionLabel ? <span id={actionId} className="sr-only">{actionLabel}</span> : null}
     </>
   );
 
@@ -185,6 +193,7 @@ export function RowTitleButton({
     button = (
       <a
         {...linkProps}
+        aria-labelledby={labelledBy}
         ref={(node) => assignRef(ref, node)}
         href={href}
         aria-current={current ? "true" : undefined}
@@ -204,6 +213,7 @@ export function RowTitleButton({
     button = (
       <button
         {...props}
+        aria-labelledby={labelledBy}
         ref={(node) => assignRef(ref, node)}
         type="button"
         aria-current={current ? "true" : undefined}
