@@ -222,25 +222,33 @@ production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` と `X
 
 ## ガードレール
 
-実装: `backend/app/rag/guardrails.py`
+「取込・回答設定 > 安全チェック」で OCI Guardrails の有効・無効を選びます。
+全体の設定であり、検索・回答プロファイルでは上書きしません。
+`RAG_GUARDRAILS_ENABLED` の既定は `false` です。
 
-現在の参照ポリシー:
+有効なときだけ、質問と回答のテキストを OCI Generative AI の `ApplyGuardrails` API に送り、
+PII・プロンプト攻撃・不適切な内容を検出します。API は検出結果を返し、アプリが PII の位置を
+マスクし、攻撃・不適切な内容を検出したときは処理・回答の表示を止めます。
+検査を完了できないときも停止します。無効時は OCI を呼ばず、ローカル検査も行いません。
 
-- 長すぎる query を拒否する。
-- system prompt や過去指示の無視を求める prompt injection を拒否する。判定は NFKC・ゼロ幅空白やソフトハイフンなど表示されない書式文字(Unicode Cf)の除去・大小文字の正規化をした文字列で行い、`system_prompt` / `system-prompt` のような区切りの違いも同じ対象として扱う。
-- `drop/delete/update/insert` などの SQL 変更文らしさは警告し、検索のみ実行する。
-- query と answer の個人番号、口座番号、電話番号、メールアドレスらしき値は `[機微情報]` へマスクし、`sensitive_identifier_redacted` warning として返す。全角英数字・全角記号(`＠` `－`)・長音記号の区切り・不可視文字を挟んだ値もマスクする(その場合、マスク後の文字列は NFKC 正規化した表記になる)。個人番号・口座番号・電話番号はラベル(`マイナンバー` / `個人番号`、`口座番号` / `普通` など、`電話` / `携帯` / `連絡先` / `TEL` / `FAX`)の直後の値をマスクし、ラベルが無い番号は区切り付きの携帯電話の番号(`070` / `080` / `090`-XXXX-XXXX)だけをマスクする(区切りの無い数字・固定電話の形は他の番号と区別できないため。#2062)。マスク後の query を embedding / retrieval / 回答生成に使い(回答の記録に保存する質問もマスク後)、raw 値を監査ログや metrics へ出さない。
-- チャットの会話履歴と今回の質問は、未信頼データとしてタグで囲んで渡す。会話履歴は 3 製品共通の `pr_backend_core.chat_history`（共通の予算 `PLATFORM_CHAT_HISTORY_*` で新しい往復から詰め、`<conversation_history untrusted="true">` で囲む。#1818）で作り、囲む前にタグに見える `<` を実体参照へ置き換え、発話に閉じタグを書いて囲みの外へ指示を置けないようにする。会話履歴から書き換えた質問も、元の質問と同じ安全チェックに通し、拒否されたら書き換えを使わない。
-- 根拠が足りない場合は、回答フローが根拠の評価（CRAG）と回答文の生成後の根拠確認で、足りない理由（`insufficient_reason`）と人手確認の要否を回答に付ける（旧 standard の no-results 回答への短絡は #595 で削除した）。
-- 回答に secret らしき文字列が含まれる場合は表示を止める。
-- citation がある回答でも、回答と検索根拠の token / n-gram 重なりが少ない場合は `low_groundedness` warning を返し、監査ログにも guardrail code を残す。これは軽量なヒューリスティックであり、本番では LLM-as-judge や RAGAS 等の groundedness 評価で補強する。
-- `search`、`evaluation`、`upload`、`ingest` は app 内 rate limit で保護する。bucket key は hash 済み tenant/user context を優先し、匿名時も client host を hash 化して使う。raw tenant/user id、IP、query 本文はログや metrics に出さない。本番では OCI API Gateway / Ingress / Redis などの共有 limiter と併用する。
-- 認可済み document/category scope header がある場合は document 一覧、詳細、chunk count、retrieval のすべてに適用する。
+ローカルの機微情報検査・攻撃パターン検査・秘密文字列検査と、根拠との一致数・一致率による
+安全方針は使いません。引用の整合性の確認や評価専用の指標は、別の目的の処理です。
 
-ガードレールの厳格度は **Guardrail アダプター(`rag_guardrail_policy`)** で手動選択する。`app/rag/guardrail_adapter.py` が policy を effective 値へ解決し、`GuardrailPolicy` と `evaluate_groundedness(min_overlap=..., min_ratio=...)` を駆動する。`standard`(既定・現行値を再現)/ `strict`(groundedness 閾値↑)/ `lenient`(閾値↓で warning 抑制)/ `regulated`(strict + low_groundedness を error severity へ昇格し監査強調)。NeMo Guardrails / Llama Guard 的な概念を外部 SaaS や追加 LLM 呼び出しなしの決定論ヒューリスティックへ再マップする。`GET/PATCH /api/settings/guardrail` と専用設定画面で切替し、`SearchDiagnostics.guardrail_policy` に残す。既定 standard は現行挙動と一致する。
+OCI 認証と compartment はシステム設定で設定します。検出した PII の原値は診断へ残さず、
+位置・長さ・種類だけを扱います。現在の実装はテキストを検査し、画像は送りません。
 
-本番では以下を追加する。
+[Oracle 公式: Guardrails for OCI Generative AI](https://docs.oracle.com/en-us/iaas/Content/generative-ai/guardrails.htm)
 
-- 業務固有の個人情報分類器や DLP サービスによる追加マスキング。
-- citation がある回答に対する LLM-as-judge / RAGAS 等の追加 groundedness 評価。
-- 権限・ロール情報を hash context へ追加する場合は、raw 値を出さず環境変数で管理する salt または HMAC key で相関する。
+### 既存環境の更新
+
+backend の更新前に設定ファイルを安全な場所へバックアップし、更新と合わせて実行します。
+
+```bash
+cd rag/backend
+uv run python -m app.rag.guardrail_settings_migration --env-file .env
+```
+
+旧 OCI 選択は有効、旧 Local 選択は無効へ移します。すでに新しいスイッチを明示した場合は
+その値を保持します。旧方針・ローカル検査の環境変数は削除し、実行時に互換読み込みしません。
+保存済みプロファイルの旧 `guardrail_policy` は読み捨て、次に保存すると除外します。
+独立した旧ステージのサービス基盤は残しますが、RAG の安全チェックからは呼びません。

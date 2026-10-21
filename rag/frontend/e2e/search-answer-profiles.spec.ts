@@ -125,12 +125,7 @@ test("検索・回答プロファイルを作成すると参照 KB と方針を�
   await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("経理ビュー");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("経理規程の問い合わせに回答します");
-  const guardrailSetting = page.getByRole("heading", { name: "安全チェック", level: 3 }).locator("..");
-  const override = guardrailSetting.getByRole("button", { name: "検索・回答プロファイルで上書き" });
-  await override.click();
-  await expect(override).toHaveAttribute("aria-pressed", "true");
-  await guardrailSetting.getByRole("combobox", { name: "安全チェック" }).click();
-  await page.getByRole("option", { name: "規制対応" }).click();
+  await expect(page.getByRole("heading", { name: "安全チェック", level: 3 })).toHaveCount(0);
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
 
   await expect
@@ -140,7 +135,7 @@ test("検索・回答プロファイルを作成すると参照 KB と方針を�
   expect(createBody?.description).toBe("経理規程の問い合わせに回答します");
   expect(
     (createBody?.config as { query?: { guardrail_policy?: string } })?.query?.guardrail_policy
-  ).toBe("regulated");
+  ).toBeUndefined();
   // 削除した項目（#595）は送らない。
   const config = (createBody?.config ?? {}) as Record<string, unknown>;
   expect("system_prompt" in config).toBe(false);
@@ -611,8 +606,6 @@ for (const viewport of [
     // 説明は必須（#521）。説明が空の既存の検索・回答プロファイルは、保存するときに入力を求めて送らない。
     const description = page.getByRole("textbox", { name: "説明", exact: true });
     await expect(description).toHaveAttribute("aria-required", "true");
-    const guardrail = page.getByRole("heading", { name: "安全チェック", level: 3 }).locator("..");
-    await guardrail.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
     await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
     await expect(page.getByText("説明を入力してください。")).toBeVisible();
     await expect(description).toHaveAttribute("aria-invalid", "true");
@@ -628,7 +621,7 @@ for (const viewport of [
       .toEqual(["kb-default"]);
     expect(
       (updateBody?.config as { query?: { guardrail_policy?: string } })?.query?.guardrail_policy
-    ).toBe("strict");
+    ).toBeUndefined();
     expect(updateBody?.description).toBe("全社共通の検索設定");
     await expectNoPageOverflow(page);
   });
@@ -1098,7 +1091,6 @@ async function mockSearchAnswerProfiles(
           version: 1,
           knowledge_base_ids: ["kb-1"],
           query: {
-            guardrail_policy: null,
           },
         },
         knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
@@ -1236,7 +1228,6 @@ async function mockDefaultSearchAnswerProfile(
     version: 1,
     knowledge_base_ids: ["kb-default"],
     query: {
-      guardrail_policy: null,
     },
   };
 
@@ -1324,7 +1315,7 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
     config: {
       version: 1,
       knowledge_base_ids: ["kb-1"],
-      query: { guardrail_policy: "strict", query_strategy: "hyde" },
+      query: { query_strategy: "hyde" },
     },
     knowledge_bases: [{ id: "kb-1", name: "社内規程", status: "ACTIVE" }],
   };

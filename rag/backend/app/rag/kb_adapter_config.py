@@ -52,7 +52,6 @@ from app.config import (
     AnswerFlow,
     ChunkingStrategy,
     GraphProfile,
-    GuardrailPolicyName,
     ParserAdapterBackend,
     PreprocessProfile,
     QueryStrategy,
@@ -116,7 +115,6 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "auto_index_after_chunk_enabled": "rag_auto_index_after_chunk_enabled",
 }
 _QUERY_FIELD_MAP: dict[str, str] = {
-    "guardrail_policy": "rag_guardrail_policy",
     "query_strategy": "rag_query_strategy",
     "answer_flow": "rag_answer_flow",
     "neighbor_child_count": "rag_neighbor_child_count",
@@ -323,7 +321,6 @@ class KnowledgeBaseQueryConfig(BaseModel):
     # 旧 standard の回答エンジンの上書き(検索モード・検索オプション・根拠確認・回答スタイル。
     # retrieval_strategy / retrieval_* / post_retrieval_pipeline / generation_profile)は
     # #595 で削除した。保存済みの値は ``extra=ignore`` で読み込み時に捨て、次回保存で消える。
-    guardrail_policy: GuardrailPolicyName | None = None
     vector_index_profile: VectorIndexProfile | None = Field(
         default=None,
         exclude=True,

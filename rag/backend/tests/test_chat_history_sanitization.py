@@ -2,11 +2,14 @@
 
 from datetime import UTC, datetime
 
+from pytest import MonkeyPatch
+
 from app.clients.oracle import StoredConversation, StoredMessage
 from app.config import Settings
 from app.rag.chat_history_sanitization import sanitize_chat_history
 from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
+from tests.guardrail_support import enable_oci_stub
 
 
 class FakeMigrationOracle:
@@ -68,12 +71,13 @@ class FakeMigrationOracle:
         self.updates.append(dict(kwargs))
 
 
-async def test_chat_history_sanitization_dry_run_never_writes() -> None:
+async def test_chat_history_sanitization_dry_run_never_writes(monkeypatch: MonkeyPatch) -> None:
+    enable_oci_stub(monkeypatch)
     oracle = FakeMigrationOracle()
     counts = await sanitize_chat_history(
         apply=False,
         oracle=oracle,  # type: ignore[arg-type]
-        settings=Settings(rag_guardrail_backend="local"),
+        settings=Settings(rag_guardrails_enabled=True),
     )
 
     assert counts.scanned == 3
@@ -84,12 +88,15 @@ async def test_chat_history_sanitization_dry_run_never_writes() -> None:
     assert oracle.updates == []
 
 
-async def test_chat_history_sanitization_apply_writes_only_sanitized_values() -> None:
+async def test_chat_history_sanitization_apply_writes_only_sanitized_values(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    enable_oci_stub(monkeypatch)
     oracle = FakeMigrationOracle()
     counts = await sanitize_chat_history(
         apply=True,
         oracle=oracle,  # type: ignore[arg-type]
-        settings=Settings(rag_guardrail_backend="local"),
+        settings=Settings(rag_guardrails_enabled=True),
     )
 
     assert counts.updated == 3

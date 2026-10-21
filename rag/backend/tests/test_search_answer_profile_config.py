@@ -28,7 +28,7 @@ def test_query_overrides_apply() -> None:
     merged, applied = resolve_search_answer_profile_settings(settings, config)
     assert applied is True
     assert merged.rag_query_strategy == "rag_fusion"
-    assert merged.rag_guardrail_policy == "strict"
+    assert merged.rag_guardrails_enabled is settings.rag_guardrails_enabled
     # グローバルは破壊しない。
     assert settings.rag_query_strategy == "simple_retrieval"
 
@@ -164,3 +164,12 @@ def test_parse_tolerates_broken_payload() -> None:
     restored = parse_search_answer_profile_config({"query": "not-a-dict"})
     assert restored.normalized_knowledge_base_ids() == []
     assert restored.query == KnowledgeBaseQueryConfig()
+
+
+def test_removed_guardrail_policy_cannot_override_or_be_saved() -> None:
+    settings = get_settings().model_copy(update={"rag_guardrails_enabled": True})
+    config = SearchAnswerProfileConfig(query=KnowledgeBaseQueryConfig(guardrail_policy="regulated"))
+    merged, applied = resolve_search_answer_profile_settings(settings, config)
+    assert merged.rag_guardrails_enabled is True
+    assert applied is False
+    assert "guardrail_policy" not in config.model_dump()["query"]

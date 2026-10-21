@@ -26,7 +26,7 @@ from rag_engine.generation.grounded import (
 from app.config import Settings
 from app.rag.evaluation_adapter import resolve_evaluation_adapter
 from app.rag.file_processing_evaluation import citation_traceability_coverage
-from app.rag.guardrails import evaluate_groundedness
+from app.rag.grounding_metrics import evaluate_groundedness
 from app.schemas.search import RetrievedChunk
 
 UNSUPPORTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})

@@ -97,7 +97,7 @@ from app.rag.evaluation_screens import (
     unresolved_score,
 )
 from app.rag.file_processing_evaluation import citation_traceability_coverage
-from app.rag.guardrails import evaluate_groundedness
+from app.rag.grounding_metrics import evaluate_groundedness
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
     elapsed_ms,

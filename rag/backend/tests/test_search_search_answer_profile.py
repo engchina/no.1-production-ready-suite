@@ -196,7 +196,7 @@ def test_search_answer_profile_guardrail_policy_reaches_pipeline_settings(
 
     assert response.status_code == 200
     assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_guardrail_policy == "regulated"
+    assert RecordingPipeline.captured_settings.rag_guardrails_enabled is False
 
 
 def test_request_kb_ids_take_precedence_over_view(monkeypatch: MonkeyPatch) -> None:

@@ -59,10 +59,6 @@ async def sanitize_chat_history(
             effective_settings, _ = resolve_search_answer_profile_settings(
                 global_settings, config, apply_answer_model=False
             )
-            # 移行 CLI は policy preset の静的 core を使い、stage service の可用性に依存しない。
-            effective_settings = effective_settings.model_copy(
-                update={"rag_guardrail_service_enabled": False}
-            )
             policy = GuardrailPolicy(effective_settings)
             await _sanitize_conversation(
                 client=client,

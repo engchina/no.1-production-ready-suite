@@ -18,10 +18,19 @@ from app.rag.guardrail_adapter import (
 )
 
 
+class StageSettings(Settings):
+    """RAG では使わない独立ステージの合成入力。"""
+
+    rag_guardrail_policy: str = "standard"
+    guardrail_block_prompt_injection: bool = True
+    guardrail_mask_sensitive_identifiers: bool = True
+    guardrail_max_query_chars: int = 2000
+
+
 def test_standard_policy_reproduces_current_thresholds_and_flags() -> None:
     """standard は既存フラグと現行 groundedness 閾値を再現する(後方互換)。"""
     params = resolve_guardrail_adapter(
-        Settings(
+        StageSettings(
             rag_guardrail_policy="standard",
             guardrail_block_prompt_injection=True,
             guardrail_mask_sensitive_identifiers=True,
@@ -38,26 +47,26 @@ def test_standard_policy_reproduces_current_thresholds_and_flags() -> None:
 
 
 def test_strict_raises_groundedness_threshold() -> None:
-    params = resolve_guardrail_adapter(Settings(rag_guardrail_policy="strict"))
+    params = resolve_guardrail_adapter(StageSettings(rag_guardrail_policy="strict"))
     assert params.grounding_min_overlap > DEFAULT_GROUNDING_MIN_OVERLAP
     assert params.grounding_min_ratio > DEFAULT_GROUNDING_MIN_RATIO
     assert params.audit_emphasis is False
 
 
 def test_lenient_lowers_groundedness_threshold() -> None:
-    params = resolve_guardrail_adapter(Settings(rag_guardrail_policy="lenient"))
+    params = resolve_guardrail_adapter(StageSettings(rag_guardrail_policy="lenient"))
     assert params.grounding_min_overlap < DEFAULT_GROUNDING_MIN_OVERLAP
     assert params.grounding_min_ratio < DEFAULT_GROUNDING_MIN_RATIO
 
 
 def test_regulated_is_strict_with_audit_emphasis() -> None:
-    params = resolve_guardrail_adapter(Settings(rag_guardrail_policy="regulated"))
+    params = resolve_guardrail_adapter(StageSettings(rag_guardrail_policy="regulated"))
     assert params.grounding_min_overlap > DEFAULT_GROUNDING_MIN_OVERLAP
     assert params.audit_emphasis is True
 
 
 def test_runtime_settings_orders_and_marks_selected() -> None:
-    runtime = guardrail_adapter_runtime_settings(Settings(rag_guardrail_policy="strict"))
+    runtime = guardrail_adapter_runtime_settings(StageSettings(rag_guardrail_policy="strict"))
     assert tuple(status.name for status in runtime.policies) == GUARDRAIL_POLICY_ORDER
     selected = [status.name for status in runtime.policies if status.selected]
     assert selected == ["strict"]
@@ -82,7 +91,7 @@ def test_static_resolution_is_cached_per_policy(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(PipelineStageClient, "is_enabled", lambda self, stage: True)
     monkeypatch.setattr(PipelineStageClient, "run_guardrail", fake_run_guardrail)
 
-    settings = Settings(rag_guardrail_policy="strict")
+    settings = StageSettings(rag_guardrail_policy="strict")
     first = resolve_guardrail_adapter(settings)
     second = resolve_guardrail_adapter(settings)
 

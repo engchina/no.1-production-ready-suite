@@ -1,18 +1,9 @@
-"""Guardrail アダプター(安全ポリシーの手動選択プリセット)。
-
-policy→groundedness 厳格度 + audit_emphasis の静的解決は共有パッケージ
-``rag_pipeline_core.guardrail`` を単一ソースとして使い、backend と guardrail マイクロサービスが
-同一結果を返す。`rag_guardrail_service_enabled` が真のとき静的解決を pipeline-guardrail サービスへ
-委譲する。無効時と remote 未到達時は in-process(同一ロジック)へ縮退する。応答済み remote の
-HTTP error / 不正応答は処理停止する。
-block_prompt_injection / PII マスク / max_query_chars は backend 設定由来のため解決後に
-上乗せする。OCI Generative AI Guardrails backend(app.clients.oci_guardrails)は別レイヤーで共存。
-外部安全 SaaS は導入しない。
-"""
+"""独立した旧ステージの静的解決。RAG の安全チェックからは呼び出さない。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from rag_pipeline_core.guardrail import (
     DEFAULT_GROUNDING_MIN_OVERLAP,
@@ -25,9 +16,9 @@ from rag_pipeline_core.guardrail import (
     normalize_guardrail_policy as _core_normalize,
 )
 
-from app.config import GuardrailPolicyName, Settings
+from app.config import Settings
 
-GuardrailPolicy = GuardrailPolicyName
+GuardrailPolicy = Literal["standard", "strict", "lenient", "regulated"]
 DEFAULT_GUARDRAIL_POLICY: GuardrailPolicy = "standard"
 GUARDRAIL_POLICY_ORDER: tuple[GuardrailPolicy, ...] = GUARDRAIL_POLICIES  # type: ignore[assignment]
 

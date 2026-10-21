@@ -7,8 +7,8 @@ OCI Generative AI の **ApplyGuardrails API**(`oci.generative_ai_inference`)を�
 回答 LLM/VLM=Enterprise AI、ベクトル DB=Oracle AI Database)は不変で、別 LLM provider・外部
 ベクトル DB は導入しない。
 
-未設定・SDK 失敗・呼び出し失敗時は非機密な例外へ変換し、呼び出し側が policy ごとの
-fail-open / fail-closed を決める。privacy: 検出結果は **PII の値そのものを保持せず、
+未設定・SDK 失敗・呼び出し失敗時は非機密な例外へ変換し、呼び出し側が
+失敗時は処理を止める。privacy: 検出結果は **PII の値そのものを保持せず、
 offset / length / label のみ** を返す。
 """
 
@@ -74,9 +74,8 @@ class OciGuardrailsClient:
         )
 
     def is_configured(self) -> bool:
-        """compartment が解決でき、かつ backend が oci_guardrails のとき True。"""
-        backend = str(getattr(self._settings, "rag_guardrail_backend", "local") or "local")
-        return backend == "oci_guardrails" and bool(self._compartment_id())
+        """compartment が解決でき、かつ OCI Guardrails が有効のとき True。"""
+        return self._settings.rag_guardrails_enabled and bool(self._compartment_id())
 
     def inspect_text(
         self,
@@ -118,9 +117,9 @@ class OciGuardrailsClient:
         timeout = float(getattr(self._settings, "oci_guardrails_timeout_seconds", 5.0))
         kwargs["timeout"] = (min(3.0, timeout), timeout)
         # SDK の既定の再試行(DEFAULT_RETRY_STRATEGY)を切る。残すと届かないときに timeout を
-        # 何度も待ち、方針ごとの縮退(警告付きの Local・規制対応は停止)まで 1 分を超える(#2061)。
+        # 何度も待ち、検査失敗の通知まで 1 分を超える(#2061)。
         kwargs["retry_strategy"] = importlib.import_module("oci.retry").NoneRetryStrategy()
-        # SDK の既定の circuit breaker も切る(失敗の扱いは呼び出し側の縮退が決める。#2211)。
+        # SDK の既定の circuit breaker も切る(失敗の扱いは呼び出し側のエラー処理が決める。#2211)。
         kwargs["circuit_breaker_strategy"] = importlib.import_module(
             "oci.circuit_breaker"
         ).NoCircuitBreakerStrategy()

@@ -1707,7 +1707,7 @@ export const ja = {
   "settings.prompts.subtitle":
     "回答を作るときに回答モデルへ渡す指示のテンプレートを編集します。取込から評価まで、各段で使うプロンプトとその条件も確認できます。",
   "settings.guardrail.subtitle":
-    "プロンプト攻撃、個人情報、根拠不足への安全チェックの厳しさを選択します。",
+    "OCI Guardrails による質問と回答の安全チェックを有効・無効にします。",
   "chat.guardrail": "安全チェック",
   // 回答の場所の処理の段階（3 製品共通の ChatProgress。#1145 / #1146）。実行中は「〜しています」、完了は「〜しました」、
   // 失敗は「〜できませんでした」、未実行は名詞（NL2SQL・Agent と同じ）。
@@ -1736,38 +1736,12 @@ export const ja = {
   "chat.progress.check_guardrail.idle": "回答の確認",
   "settings.guardrail.overview.title": "安全チェック",
   "settings.guardrail.overview.description":
-    "プロンプト攻撃検知と機微情報マスクは常に独立して適用し、方針では根拠確認の警告・阻止だけを選びます。ここで選ぶのは全体の既定で、保存すると次の回答から使います。公開済みの検索・回答プロファイルの「検索・回答設定」で方針を上書きしている場合は、その方針を使います。",
-  "settings.guardrail.policy": "根拠チェック方針",
-  "settings.guardrail.groundingOverlap": "根拠一致数 下限",
-  "settings.guardrail.groundingRatio": "根拠一致率 下限",
-  "settings.guardrail.auditEmphasis": "低根拠を阻止",
-  "settings.guardrail.backend": "検査方式",
-  "settings.guardrail.backend.local": "Local",
-  "settings.guardrail.backend.local.description":
-    "決定論的なローカル検査だけを使用します。",
-  "settings.guardrail.backend.oci_guardrails": "OCI Guardrails",
-  "settings.guardrail.backend.oci_guardrails.description":
-    "ローカル検査に OCI の PII・攻撃・モデレーション検査を追加します。",
-  "settings.guardrail.promptInjection": "プロンプト攻撃検知",
-  "settings.guardrail.piiMask": "機微情報マスク",
-  "settings.guardrail.maxQueryChars": "質問の文字数上限",
-  "settings.guardrail.ociReadiness": "OCI Guardrails の準備",
-  "settings.guardrail.enabled": "有効（読み取り専用）",
-  "settings.guardrail.disabled": "無効（読み取り専用）",
-  "settings.guardrail.ready": "利用可能",
-  "settings.guardrail.notReady": "未設定",
-  "settings.guardrail.capabilityNote":
-    "機微情報マスクのローカル検出範囲は、個人番号・口座番号・電話番号・メールアドレスです。方針を変えてもプロンプト攻撃検知と機微情報マスクの有効状態は変わりません。",
+    "全体の設定です。保存すると次の質問・回答から使います。",
+  "settings.guardrail.ociLabel": "OCI Guardrails",
+  "settings.guardrail.ociDescription": "有効なときだけ、質問と回答のテキストを OCI Guardrails に送信し、個人情報（PII）・プロンプト攻撃・不適切な内容を検査します。無効なときは検査しません。",
+  "settings.guardrail.resultHandling": "検出された個人情報はアプリでマスクします。プロンプト攻撃・不適切な内容を検出したとき、または検査を完了できないときは、処理・回答の表示を停止します。",
+  "settings.guardrail.officialDocs": "OCI Guardrails の公式ドキュメント（新しいタブで開きます）",
   "settings.guardrail.ociSettingsLink": "OCI 認証設定を開く",
-  "settings.guardrail.policy.standard": "標準",
-  "settings.guardrail.policy.standard.description": "既定の一致数・一致率で低根拠を警告",
-  "settings.guardrail.policy.strict": "厳格",
-  "settings.guardrail.policy.strict.description": "根拠の一致数・一致率の下限を高め、低根拠を強く警告",
-  "settings.guardrail.policy.lenient": "寛容",
-  "settings.guardrail.policy.lenient.description": "一致数・一致率を下げ、低根拠の警告を抑制",
-  "settings.guardrail.policy.regulated": "規制対応",
-  "settings.guardrail.policy.regulated.description":
-    "厳格な一致数・一致率を満たさない回答を阻止",
   "settings.guardrail.actions.label": "安全チェックの設定の操作",
   "settings.guardrail.actions.save": "保存",
   "settings.guardrail.actions.saved": "安全チェックを保存しました。",
@@ -2340,7 +2314,6 @@ export const ja = {
   "searchAnswerProfiles.query.title": "検索・回答設定",
   "searchAnswerProfiles.query.helper":
     "検索・回答プロファイルで上書きできる項目です。上書きしない項目は全体の既定（回答の検索と生成は「検索方法」、安全チェックは「安全チェック」の画面）を使います。",
-  "searchAnswerProfiles.field.guardrail": "安全チェック",
   "searchAnswerProfiles.inherit": "グローバル既定を継承",
   "searchAnswerProfiles.override": "検索・回答プロファイルで上書き",
   "searchAnswerProfiles.actions.create": "作成",
@@ -2588,7 +2561,6 @@ export const ja = {
   "knowledgeBases.adapter.field.autoIndexAfterChunk": "Chunk 後に Embedding / 索引へ進む",
   "knowledgeBases.adapter.bool.enabled": "有効",
   "knowledgeBases.adapter.bool.disabled": "無効",
-  "knowledgeBases.adapter.field.guardrailPolicy": "安全チェック",
   "knowledgeBases.adapter.field.vectorIndexProfile": "検索インデックス",
   "knowledgeBases.adapter.field.evaluationSuite": "品質評価",
   "knowledgeBases.adapter.inherit": "グローバルを継承",
