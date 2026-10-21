@@ -68,6 +68,7 @@ describe("RowTitleButton の見た目と属性", () => {
       )
     );
     expect(tag).toContain('aria-label="A を選ぶ"');
+    expect(tag).not.toContain("aria-labelledby");
     expect(tag).toContain('aria-describedby="comment-1"');
     expect(tag).toContain('data-feedback-row-button="fb-1"');
     expect(tag).toContain("disabled");

@@ -18215,14 +18215,14 @@ test("ビュー抽出の旧応答は選択変更後に表示せず再抽出失�
     await fulfillJson(route, { join_text: calls === 1 ? "OLD_VIEW_JOIN" : "CURRENT_VIEW_JOIN", where_text: "", source: "deterministic", warnings: [], prompt_profile: "sql_structure", structure_markdown: "構造" });
   });
   await page.goto("/view-management");
-  await page.getByRole("button", { name: "APP.V_EMP_DEPT を表示", exact: true }).click();
+  await page.getByRole("button", { name: "APP.V_EMP_DEPT を表示" }).click();
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   await page.getByRole("button", { name: "AI で抽出", exact: true }).click();
   await expect.poll(() => calls).toBe(1);
   await page.getByTestId("view-management-back").click();
   // 1 ペイン（xl 未満）では選んだビューの詳細へ戻るので、詳細の「一覧へ戻る」で一覧を開く（#2281）。
   if (testInfo.project.name === "mobile-375") await page.getByTestId("view-management-detail-back").click();
-  await page.getByRole("button", { name: "APP.V_OTHER を表示", exact: true }).click();
+  await page.getByRole("button", { name: "APP.V_OTHER を表示" }).click();
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   const response = page.waitForResponse("**/api/nl2sql/db-admin/extract-join-where");
   gate.release();

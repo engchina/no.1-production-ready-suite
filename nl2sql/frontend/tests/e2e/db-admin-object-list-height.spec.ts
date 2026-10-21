@@ -916,7 +916,7 @@ for (const scenario of scenarios) {
     await expect(grid.locator("tbody tr")).toHaveCount(4);
     await expect(grid.getByRole("columnheader", { name: /コメント/ })).toHaveCount(0);
     for (const [name, comment] of [["INVOICES", shortComment], ["LONG_COMMENT", longComment], [`${scenario.prefix}_01`, "-"], ["WHITESPACE", "-"]]) {
-      const button = grid.getByRole("button", { name: `APP.${name} を表示`, exact: true });
+      const button = grid.getByRole("button", { name: `APP.${name} を表示` });
       const text = button.locator(":scope > span").nth(1);
       await expect(text).toHaveText(comment);
       await expect(button).toHaveAccessibleDescription(comment);
@@ -943,7 +943,7 @@ for (const scenario of scenarios) {
     await grid.getByText(shortComment, { exact: true }).click();
     await expect(page.getByTestId(`${idPrefix}-detail-header`)).toContainText("INVOICES");
     await returnToListIfSinglePane(page, idPrefix);
-    const longButton = grid.getByRole("button", { name: "APP.LONG_COMMENT を表示", exact: true });
+    const longButton = grid.getByRole("button", { name: "APP.LONG_COMMENT を表示" });
     await longButton.focus();
     await page.keyboard.press("Enter");
     await expect(page.getByTestId(`${idPrefix}-detail-header`)).toContainText("LONG_COMMENT");
@@ -1072,7 +1072,7 @@ for (const scenario of scenarios) {
       expect(fit.columnHeight).toBeLessThanOrEqual(fit.viewport);
       expect(fit.position).toBe("sticky");
 
-      await grid.getByRole("button", { name: `APP.${scenario.prefix}_01 を表示`, exact: true }).click();
+      await grid.getByRole("button", { name: `APP.${scenario.prefix}_01 を表示` }).click();
       await expect(detailHeader).toContainText(`${scenario.prefix}_01`);
       await returnToListIfSinglePane(page, `${scenario.objectType}-management`);
       await page.getByRole("searchbox", { name: "検索" }).fill(`${scenario.prefix}_02`);
