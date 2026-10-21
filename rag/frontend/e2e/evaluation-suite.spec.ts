@@ -24,7 +24,7 @@ for (const viewport of [
 ]) {
   test(
     `評価ページは評価の基準を表示だけし、ナレッジベースと評価リクエストの Excel を必須にする (${viewport.name})`,
-    async ({ page }) => {
+    async ({ page }, testInfo) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
 
       await page.goto("/evaluation");
@@ -46,6 +46,12 @@ for (const viewport of [
       const conditions = page.getByRole("form", { name: "評価の条件" });
       await expect(conditions.getByText("必須", { exact: true })).toHaveCount(2);
       await expect(page.getByRole("button", { name: "テンプレートをダウンロード" })).toBeVisible();
+      await expect(conditions).toContainText("評価に必要な入力や根拠が不足する指標は「未評価」となり、合格を意味しません。");
+      await expect(conditions).toContainText("同じ六指標・閾値で比較します。");
+      await expect(conditions).toContainText("所要時間は設定や処理状況によって変わります。");
+      await expect(conditions).not.toContainText("約 2 倍");
+      await expect(conditions.getByRole("switch", { name: "検索・回答プロファイルでも評価して比較する" })).toBeVisible();
+      await conditions.screenshot({ path: testInfo.outputPath("evaluation-guidance.png") });
       // JSON の入力・設定比較・サンプルは無い。
       await expect(page.getByLabel("Golden set JSON")).toHaveCount(0);
       await expect(page.getByRole("button", { name: "比較実行" })).toHaveCount(0);

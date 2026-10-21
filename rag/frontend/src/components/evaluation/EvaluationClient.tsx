@@ -155,7 +155,7 @@ export function EvaluationClient() {
     {},
     isCaseLabels
   );
-  // 検索・回答プロファイル（業務ガイドあり）でも流して比べるか（#2402）。条件と同じく作業状態に残す。
+  // 検索・回答プロファイルでも評価して比較するか（#2402）。条件と同じく作業状態に残す。
   const [compareEnabled, setCompareEnabled] = useWorkspaceState<boolean>(
     "evaluation.compareEnabled",
     false,
@@ -715,7 +715,7 @@ function SuiteSummary({ query }: { query: ReturnType<typeof useEvaluationSetting
 }
 
 /**
- * 検索・回答プロファイル（業務ガイドあり）でも流して比べる選択（#2402）。オンにしたときだけ、比べる
+ * 検索・回答プロファイルでも評価して比較する選択（#2402）。オンにしたときだけ、比べる
  * プロファイルの欄を出す（段階的に開く）。
  */
 function CompareOption({
