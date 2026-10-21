@@ -4420,7 +4420,7 @@ export const ja = {
   "evaluation.metric.answer_pass_rate": "標準回答での合格",
   "evaluation.metric.answer_pass_rate.description":
     "標準回答による評価で、1 件の回答で測れる指標（Faithfulness・標準回答の網羅・回答を控える判断の正しさ・引用の追跡可能性）がすべて閾値以上だった回答の割合。",
-  "evaluation.metric.needsStandardAnswer": "標準回答が必要",
+  "evaluation.metric.needsStandardAnswer": "標準回答または必須要点が必要",
   "evaluation.metric.notMeasured": "未評価（対象 0 件）",
   "evaluation.metric.caseCount": "対象 {count} 件",
   "evaluation.metric.belowThreshold": "閾値未達",

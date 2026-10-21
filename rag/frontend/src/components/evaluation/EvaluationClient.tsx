@@ -1033,7 +1033,8 @@ function MetricGroup({
                         ? t("evaluation.metric.needsStandardAnswer")
                         : t("evaluation.metric.notMeasured")}
                     </span>
-                  ) : count !== null ? (
+                  ) : null}
+                  {count !== null ? (
                     <span className="tnum">{t("evaluation.metric.caseCount", { count })}</span>
                   ) : null}
                   {failedMetrics.has(metric) ? (

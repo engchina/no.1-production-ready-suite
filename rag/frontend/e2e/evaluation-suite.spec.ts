@@ -569,6 +569,7 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
    await group.screenshot({path:testInfo.outputPath(`six-${id}.png`)});
   }
   await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("未評価");
+  await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("対象 0 件");
   await expect(page.getByTestId("evaluation-metric-claim_support_rate")).toContainText("90%");
   await expect(page.getByTestId("evaluation-perspective-grounding")).toHaveCount(0);
   await expect(page.getByTestId("evaluation-perspective-guidance")).toHaveCount(0);

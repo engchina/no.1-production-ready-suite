@@ -33,7 +33,7 @@ for (const viewport of [
     );
     await expect(
       page.getByTestId("settings-evaluation-metric-answer_correctness")
-    ).toContainText("標準回答が必要");
+    ).toContainText("標準回答または必須要点が必要");
     // 変更が実行済みの評価に効かないことを案内する（#1029）。
     await expect(page.getByRole("main")).toContainText("実行済みの評価の合否は変わりません");
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
