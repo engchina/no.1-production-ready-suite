@@ -13,6 +13,7 @@ from app.schemas.evaluation import (
     EvaluationCase,
     EvaluationCaseResult,
     EvaluationEvidence,
+    EvaluationMetricName,
     EvaluationThresholds,
 )
 from app.schemas.search import RetrievedChunk, SearchDiagnostics, SearchResponse
@@ -169,7 +170,9 @@ def test_unassessed_completed_judgement_keeps_null_verdict() -> None:
 @pytest.mark.parametrize("suite", ["standard", "strict"])
 @pytest.mark.parametrize("metric", EVALUATION_METRIC_NAMES)
 @pytest.mark.parametrize("offset", [-0.00001, 0.0, 0.00001])
-def test_thresholds_use_unrounded_scores(suite: str, metric: str, offset: float) -> None:
+def test_thresholds_use_unrounded_scores(
+    suite: str, metric: EvaluationMetricName, offset: float
+) -> None:
     from app.rag.evaluation_adapter import resolve_evaluation_suite
 
     thresholds = resolve_evaluation_suite(suite)
