@@ -6774,13 +6774,16 @@ class OracleClient:
                 kb.archived_at
             ORDER BY
                 CASE WHEN UPPER(kb.name) = 'DEFAULT' THEN 0 ELSE 1 END,
-                kb.updated_at DESC,
-                kb.name ASC
+                {name_order_sql},
+                NLSSORT(kb.name, 'NLS_SORT=JAPANESE_M'),
+                kb.name ASC,
+                kb.knowledge_base_id ASC
             {paging_sql}
             """,
                 where_sql=where_sql,
                 document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 paging_sql=paging_sql,
+                name_order_sql=_oracle_natural_name_order_sql("kb.name"),
             ),
             binds,
         )

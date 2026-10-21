@@ -39,6 +39,27 @@ test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
 });
 
+test("ナレッジベース一覧は DEFAULT と名前の自然順をページをまたいで保つ", async ({ page }, testInfo) => {
+  // API の並びをページ内で並べ直さず表示する。SQL 自体の順序は実 Oracle のテストで確認する。
+  const names = ["DEFAULT", ...Array.from({ length: 26 }, (_, i) => `${i + 1}_サンプル`), "a2", "a10", "あ", "漢字"];
+  const state = createKnowledgeBaseState();
+  state.knowledgeBases = names.map((name, i) => makeKnowledgeBase({
+    id: `kb-order-${i}`, name, document_count: names.length - i,
+    updated_at: `2026-06-${String((i % 28) + 1).padStart(2, "0")}T00:00:00Z`,
+  }));
+  await mockKnowledgeBaseApi(page, state);
+  await page.goto("/knowledge-bases");
+  const links = page.locator("tbody tr").getByRole("link");
+  await expect(links).toHaveText(names.slice(0, 25));
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("knowledge-base-order.png"), fullPage: true });
+  await page.getByTestId("knowledge-bases-pagination").getByRole("button", { name: "次へ" }).click();
+  await expect(links).toHaveText(names.slice(25));
+  await page.reload();
+  await expect(links).toHaveText(names.slice(25));
+  await expectNoPageOverflow(page);
+});
+
 test("ナレッジベース管理で作成、文書追加、文書解除、アーカイブができる", async ({ page }) => {
   const state = createKnowledgeBaseState();
   await mockKnowledgeBaseApi(page, state);
