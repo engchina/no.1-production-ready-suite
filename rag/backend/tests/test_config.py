@@ -608,15 +608,15 @@ def test_vision_setting_reads_only_the_new_env(monkeypatch: pytest.MonkeyPatch) 
     assert "rag_asset_summary_max_assets" not in Settings.model_fields
 
 
-def test_vision_and_field_extraction_are_enabled_by_default(
+def test_vision_is_enabled_and_field_extraction_disabled_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """env に設定がなければ、Vision と項目抽出は有効(#537)。"""
+    """env に設定がなければ、Vision は有効(#537)、項目抽出は無効(#2839)。"""
     monkeypatch.delenv("RAG_VISION_ENABLED", raising=False)
     monkeypatch.delenv("RAG_FIELD_EXTRACTION_ENABLED", raising=False)
     settings = Settings(_env_file=None)
     assert settings.rag_vision_enabled is True
-    assert settings.rag_field_extraction_enabled is True
+    assert settings.rag_field_extraction_enabled is False
 
 
 def test_saved_parser_settings_without_backend_load_as_docling() -> None:
