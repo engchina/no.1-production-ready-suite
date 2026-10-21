@@ -111,6 +111,19 @@ class GuidePlan:
     approval_note: str = ""
 
     @property
+    def reference_ranges(self) -> tuple[tuple[str, int | None, int | None], ...]:
+        """手順が参照する文書と頁の範囲（文書 id, 始まりの頁, 終わりの頁）。頁の無い参照は頁を None にする（#2828）。"""
+        ranges: list[tuple[str, int | None, int | None]] = []
+        for step in self.steps:
+            for reference in step.references:
+                if not reference.document_id:
+                    continue
+                if not reference.page_ranges:
+                    ranges.append((reference.document_id, None, None))
+                ranges.extend((reference.document_id, item.page_start, item.page_end) for item in reference.page_ranges)
+        return tuple(dict.fromkeys(ranges))
+
+    @property
     def optional_step_ids(self) -> tuple[str, ...]:
         """回答の充足で必須に数えない手順の id（#2491）。"""
         return tuple(step.step_id for step in self.steps if not step.required)
