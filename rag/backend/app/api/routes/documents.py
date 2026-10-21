@@ -29,6 +29,7 @@ from fastapi import (
     UploadFile,
 )
 from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
+from pr_backend_core.oracle_errors import oracle_error_codes
 from rag_parser_core.structured_records import RecordBoundaryError
 
 from app.api.errors import DocumentFileMissingError
@@ -2707,6 +2708,13 @@ async def delete_document(document_id: str) -> ApiResponse[DocumentDeleteResult]
         )
     except DocumentDeleteBlockedByRunningIngestionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        if "ORA-00060" not in oracle_error_codes(exc):
+            raise
+        raise HTTPException(
+            status_code=409,
+            detail="文書の更新と競合したため削除できませんでした。最新情報を取得してから再実行してください。",
+        ) from exc
     if task is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
 

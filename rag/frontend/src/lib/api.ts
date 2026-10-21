@@ -119,6 +119,9 @@ import type {
   UploadStorageSettingsUpdate,
 } from "@production-ready/system-settings";
 
+/** 削除 transaction と保存先の後始末を待つ。通信不明時は文書の残存を別途確認する。 */
+export const DOCUMENT_DELETE_TIMEOUT_MS = 120_000;
+
 export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
   import.meta.env.VITE_API_TIMEOUT_MS,
   30_000,
@@ -2989,6 +2992,33 @@ async function requestDegradable<T extends object>(
   };
 }
 
+/** 通信の失敗と確定した削除失敗を分け、通信の失敗後に文書の残存を確認する。 */
+async function deleteDocumentWithConfirmation(id: string, fileName?: string): Promise<Degradable<DocumentDeleteResult>> {
+  const path = `/api/documents/${encodeURIComponent(id)}`;
+  try {
+    return await requestDegradable<DocumentDeleteResult>(path, {method: "DELETE"}, {timeoutMs: DOCUMENT_DELETE_TIMEOUT_MS});
+  } catch (error) {
+    if (!(error instanceof ApiError) || ![0, 404, 408, 500, 502, 503, 504].includes(error.status)) throw error;
+    // DELETE は再送しない。存在確認だけを行い、削除済みと確認できたときだけ一覧から外す。
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        await request<DocumentDetail>(path, undefined, {timeoutMs: 5_000});
+      } catch (lookupError) {
+        if (lookupError instanceof ApiError && lookupError.status === 404) {
+          return {
+            id, file_name: fileName ?? id, object_storage_path: null, object_deleted: false,
+            artifact_deleted_count: 0, artifact_delete_failed_count: 0,
+            warning_messages: [t("fileList.delete.confirmedAfterTransport")],
+          };
+        }
+        if (lookupError instanceof ApiError && [401, 403].includes(lookupError.status)) throw lookupError;
+      }
+      if (attempt < 9) await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+    }
+    throw new ApiError(0, [t("fileList.delete.unconfirmed")], {errorCode: "document_delete_unconfirmed"});
+  }
+}
+
 /** アップロードの送信済みバイト数（multipart の本文全体に対する値）。 */
 export interface UploadTransferProgress {
   loaded: number;
@@ -3230,11 +3260,7 @@ export const api = {
       `/api/documents/${encodeURIComponent(id)}/ingestion-segments`,
     ),
   // 削除は成功しても原本・artifact の後始末の失敗を warning_messages で返すため、併せて返す（#281）。
-  deleteDocument: (id: string) =>
-    requestDegradable<DocumentDeleteResult>(
-      `/api/documents/${encodeURIComponent(id)}`,
-      { method: "DELETE" },
-    ),
+  deleteDocument: deleteDocumentWithConfirmation,
   listDocumentKnowledgeBases: (id: string) =>
     request<KnowledgeBaseRef[]>(
       `/api/documents/${encodeURIComponent(id)}/knowledge-bases`,

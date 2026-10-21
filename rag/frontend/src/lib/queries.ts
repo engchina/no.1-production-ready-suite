@@ -816,7 +816,7 @@ export function useReplaceDocumentKnowledgeBases() {
 export function useDeleteDocument() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.deleteDocument(id),
+    mutationFn: ({id, fileName}: {id: string; fileName: string}) => api.deleteDocument(id, fileName),
     onSuccess: (result) => {
       qc.removeQueries({ queryKey: queryKeys.document(result.id) });
       qc.invalidateQueries({ queryKey: ["documents"] });

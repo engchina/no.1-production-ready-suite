@@ -507,6 +507,31 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=answer_prompt_placeholders_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261021_002_document_delete_fk_indexes",
+            table_name="rag_documents",
+            sql="""
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_indexes
+    WHERE index_name = 'RAG_ARTIFACT_LAYERS_DOCUMENT_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX rag_artifact_layers_document_idx '
+            || 'ON rag_artifact_layers (document_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes
+    WHERE index_name = 'RAG_DOCUMENTS_DUPLICATE_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX rag_documents_duplicate_idx '
+            || 'ON rag_documents (duplicate_of_document_id)';
+    END IF;
+END;
+/
+""".strip(),
+        )
+    )
     return sections
 
 
@@ -1078,7 +1103,9 @@ def oracle_schema_migration_sql(
     resolved_sections = list(sections or oracle_schema_migration_sections())
     return (
         "\n\n".join(
-            f"-- migration: {section.name}\n{section.sql.rstrip()}" for section in resolved_sections
+            f"-- migration: {section.name}\n{section.sql.rstrip()}"
+            + ("" if section.sql.rstrip().endswith((";", "/")) else ";")
+            for section in resolved_sections
         )
         + "\n"
     )

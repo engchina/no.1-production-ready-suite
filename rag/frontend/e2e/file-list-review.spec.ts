@@ -648,3 +648,42 @@ function documentSummary(id: string, fileName: string, status: FileStatus): Docu
     source_profile: null,
   };
 }
+
+
+test("削除は 30 秒を超える応答を待ち、未確認なら選択を残す", async ({ page }, testInfo) => {
+  await page.clock.install();
+  const documents = [documentSummary("doc-slow", "slow.txt", "INDEXED")];
+  await mockFileListApi(page, documents);
+  let release: (() => void) | undefined;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let deleteRequests = 0;
+  let lookups = 0;
+  await page.route("**/api/documents/doc-slow", async (route) => {
+    if (route.request().method() === "DELETE") {
+      deleteRequests++;
+      await pending;
+      await route.abort("connectionreset");
+      return;
+    }
+    lookups++;
+    await route.fulfill({json: {data: documents[0], error_messages: [], warning_messages: []}});
+  });
+  await page.goto("/file-list");
+  await page.getByRole("checkbox", {name: "この行を選択"}).check();
+  await page.getByRole("button", {name: "一括削除 (1)"}).click();
+  await page.getByRole("alertdialog").getByRole("button", {name: "一括削除", exact: true}).click();
+  await expect.poll(() => deleteRequests).toBe(1);
+  await page.clock.runFor(45_000);
+  await expect(page.getByRole("link", {name: "slow.txt"})).toBeVisible();
+  await expect(page.getByText("サーバーの応答が 30 秒以内に返りませんでした。", {exact: false})).toHaveCount(0);
+  release?.();
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    await expect.poll(() => lookups).toBeGreaterThanOrEqual(attempt);
+    await page.clock.runFor(2_000);
+  }
+  await expect(page.getByText(/結果未確認 1 件/).first()).toBeVisible();
+  await expect(page.getByRole("checkbox", {name: "この行を選択"})).toBeChecked();
+  expect(deleteRequests).toBe(1);
+  await expectNoPageOverflow(page);
+  await page.screenshot({path: testInfo.outputPath("delete-unconfirmed.png"), fullPage: true});
+});

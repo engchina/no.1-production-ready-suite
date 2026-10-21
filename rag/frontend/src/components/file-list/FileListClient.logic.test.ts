@@ -173,6 +173,8 @@ describe("summarizeDeleteOutcomes", () => {
       failed: 1,
       firstWarning: "原本を削除できませんでした。 再試行してください。",
       firstError: "実行中です。",
+      unconfirmed: 0,
+      firstUnconfirmed: null,
     });
   });
 });
