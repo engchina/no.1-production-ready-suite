@@ -515,6 +515,7 @@ export type EvaluationCaseStatus =
   | "run_failed"
   | "needs_approval"
   | "approval_blocked"
+  | "definition_changed"
   | "timed_out"
   | "judge_failed"
   | "cancelled";

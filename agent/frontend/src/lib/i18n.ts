@@ -468,6 +468,7 @@ const agentJa = {
   "evaluation.status.incorrect": "誤り",
   "evaluation.status.uncertain": "判定保留",
   "evaluation.status.run_failed": "実行に失敗",
+  "evaluation.status.definition_changed": "実行条件の変更で無効",
   "evaluation.status.approval_blocked": "承認で未実行（合格率から除く）",
   "evaluation.summary.approvalBlocked": "承認で評価できなかった",
   "evaluation.summary.approvalBlockedDetail": "{count} 件を合格率の分母から除外",

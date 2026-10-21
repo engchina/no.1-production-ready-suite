@@ -2126,3 +2126,114 @@ def test_output_fingerprint_orders_mixed_json_values_without_type_comparison() -
         cases[-1].model_copy(update={"expected_output": [{"value": False, "other": "同じ値"}]}),
     ]
     assert original != cases_fingerprint(job(changed))
+
+
+@pytest.mark.parametrize("when", ["queued", "between_cases", "during_judge"])
+def test_draft_change_invalidates_the_entire_job(
+    monkeypatch: MonkeyPatch, agent: None, when: str
+) -> None:
+    del agent
+    _script(
+        monkeypatch,
+        [assistant_message("合成の回答")],
+        _judgement("correct", 1, "合成の判定"),
+        [assistant_message("合成の回答")],
+        _judgement("correct", 1, "合成の判定"),
+    )
+    profile = next(item for item in runtime_repository.list_agents() if item.id == AGENT_ID)
+    job = evaluation_store.update(
+        _job(
+            _case("first", "合成の質問1", "合成の回答"),
+            _case("second", "合成の質問2", "合成の回答"),
+        ).id,
+        agent_version="draft",
+        definition_hash=evaluation.draft_definition_hash(profile),
+    )
+
+    def change() -> None:
+        runtime_repository.patch_agent(
+            AGENT_ID, AgentProfilePatch(instructions="変更後の合成の指示")
+        )
+
+    if when == "queued":
+        change()
+    elif when == "during_judge":
+        original = evaluation.judge_answer
+
+        async def judge(*args: Any, **kwargs: Any) -> Any:
+            result = await original(*args, **kwargs)
+            change()
+            return result
+
+        monkeypatch.setattr(evaluation, "judge_answer", judge)
+    else:
+        original_settle = evaluation._settle_run
+        calls = 0
+
+        async def settle(*args: Any, **kwargs: Any) -> Any:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                change()
+            return await original_settle(*args, **kwargs)
+
+        monkeypatch.setattr(evaluation, "_settle_run", settle)
+    anyio.run(run_evaluation_job, job.id)
+    final = evaluation_store.get(job.id)
+    assert final.status == JobStatus.FAILED
+    assert all(
+        item.status == CaseStatus.DEFINITION_CHANGED and item.judgement is None
+        for item in final.results
+    )
+    assert final.summary.pass_rate is None and final.summary.judged_cases == 0
+    assert final.summary.approval_blocked == 0
+
+
+def test_queued_evaluation_does_not_execute_changed_draft(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    del agent
+    _script(monkeypatch)
+    profile = next(item for item in runtime_repository.list_agents() if item.id == AGENT_ID)
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(
+            agent_id=AGENT_ID,
+            goal="合成の質問",
+            draft=True,
+            metadata={"_evaluation_definition_hash": evaluation.draft_definition_hash(profile)},
+        )
+    )
+    runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(instructions="変更後の合成の指示"))
+    assert runtime_repository.begin_builtin_run(run.id) is None
+    assert runtime_repository.get_run(run.id).status == RunStatus.FAILED
+
+
+def test_definition_hash_tracks_skills_output_and_model_settings(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    del agent
+    _script(monkeypatch)
+    profile = next(item for item in runtime_repository.list_agents() if item.id == AGENT_ID)
+    original = evaluation.draft_definition_hash(profile)
+    skill = skill_registry.get(SKILL_ID)
+    assert skill is not None
+    skill_registry.upsert_custom(skill.model_copy(update={"instructions": "変更後の合成の指示"}))
+    assert evaluation.draft_definition_hash(profile) != original
+    output = profile.model_copy(
+        update={"output_fields": [AgentOutputField(key="synthetic", label="合成の項目")]}
+    )
+    assert evaluation.draft_definition_hash(output) != evaluation.draft_definition_hash(profile)
+    before = evaluation.draft_definition_hash(profile)
+    monkeypatch.setattr(
+        builtin_runtime,
+        "resolve_model_target",
+        lambda model_id="": ModelTarget(
+            model_id="different",
+            endpoint="https://oci.example",
+            project_ocid="",
+            api_key="synthetic-secret",
+            max_output_tokens=1234,
+        ),
+    )
+    after = evaluation.draft_definition_hash(profile)
+    assert after != before and "synthetic-secret" not in after

@@ -334,6 +334,7 @@ def _job(*, pass_rate: float | None, offset_seconds: float, **overrides: Any) ->
     values: dict[str, Any] = {
         "agent_id": AGENT_ID,
         "agent_version": "draft",
+        "definition_hash": agent_router.draft_definition_hash(agent),
         "status": JobStatus.COMPLETED,
         "created_at": agent.draft_updated_at + timedelta(seconds=offset_seconds),
         "set_id": "evset_a",
@@ -485,3 +486,13 @@ def test_max_pass_rate_drop_reads_empty_as_unset(
     """`AGENT_PUBLISH_MAX_PASS_RATE_DROP=` の空の値は、未設定（門を使わない）と同じにする。"""
     monkeypatch.setenv("AGENT_PUBLISH_MAX_PASS_RATE_DROP", raw)
     assert Settings().agent_publish_max_pass_rate_drop == expected
+
+
+def test_publish_gate_rejects_a_changed_definition_hash(
+    agent: None, monkeypatch: MonkeyPatch
+) -> None:
+    _gate(monkeypatch, min_pass_rate=0.8)
+    _jobs(
+        monkeypatch, _job(pass_rate=1.0, offset_seconds=10, definition_hash="different-definition")
+    )
+    assert _publish().status_code == 409
