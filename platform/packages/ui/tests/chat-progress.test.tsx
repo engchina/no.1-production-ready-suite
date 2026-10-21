@@ -518,6 +518,86 @@ describe("ChatProgress", () => {
     expect(lefts).toEqual(["0%", `${(1000 / 3000) * 100}%`, `${(1000 / 3000) * 100}%`]);
   });
 
+  it("実行中の段階は始まった時点で開始順の位置に出し、親の工程が実行中・完了しても行の順は変わらない（#2840）", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse(at(10)));
+    // 開始順の連番の id（RAG の段階の記録と同じ）。親（s2）の中で子（s3・s4）が順に動く。
+    const order = () =>
+      [...host.querySelectorAll<HTMLElement>("[data-run-timeline-step], [data-testid='p-current']")].map(
+        (row) => row.dataset.runTimelineStep ?? `current:${row.dataset.stepId}`
+      );
+    const top = { id: "s1", label: "質問の読み取り", status: "done", startedAt: at(0), finishedAt: at(1) } as const;
+    // 1. 子の工程 s3 が今の段階。親 s2 は開始順の位置（子の上）に回さない実行中の印で出る。
+    render(
+      <ChatProgress
+        steps={[
+          top,
+          { id: "s2", label: "文書の検索", status: "running", startedAt: at(1), level: 1 },
+          { id: "s3", label: "候補の選択", status: "running", startedAt: at(2), level: 2 },
+        ]}
+        progressKey="r"
+        testId="p"
+      />
+    );
+    expect(order()).toEqual(["s1", "s2", "current:s3"]);
+    const parent = q("p-step-s2")!;
+    expect(parent.dataset.status).toBe("running");
+    expect(parent.querySelector("svg.animate-spin")).toBeNull();
+    expect(parent.textContent).toContain("処理中");
+    expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(1);
+    // 2. s3 が終わり、次の子 s4 が今の段階。s3 は同じ位置で完了の行に変わる。
+    render(
+      <ChatProgress
+        steps={[
+          top,
+          { id: "s2", label: "文書の検索", status: "running", startedAt: at(1), level: 1 },
+          { id: "s3", label: "候補の選択", status: "done", startedAt: at(2), finishedAt: at(5), level: 2 },
+          { id: "s4", label: "並べ替え", status: "running", startedAt: at(5), level: 2 },
+        ]}
+        progressKey="r"
+        testId="p"
+      />
+    );
+    expect(order()).toEqual(["s1", "s2", "s3", "current:s4"]);
+    // 3. 子と親が終わり、親の後の工程 s5 が今の段階。親の行は子の上のまま（後から差し込まれない）。
+    render(
+      <ChatProgress
+        steps={[
+          top,
+          { id: "s2", label: "文書の検索", status: "done", startedAt: at(1), finishedAt: at(7), level: 1 },
+          { id: "s3", label: "候補の選択", status: "done", startedAt: at(2), finishedAt: at(5), level: 2 },
+          { id: "s4", label: "並べ替え", status: "done", startedAt: at(5), finishedAt: at(7), level: 2 },
+          { id: "s5", label: "章節の追加", status: "running", startedAt: at(7), level: 1 },
+        ]}
+        progressKey="r"
+        testId="p"
+      />
+    );
+    expect(order()).toEqual(["s1", "s2", "s3", "s4", "current:s5"]);
+    expect(q("p-step-s2")!.dataset.status).toBe("done");
+    expect(q("p-running")!.textContent).toContain("処理中（4 ステップ完了）");
+  });
+
+  it("子が終わって親が今の段階に戻ると、今の行は親の位置（子の上）に出る", () => {
+    render(
+      <ChatProgress
+        steps={[
+          { id: "s1", label: "文書の検索", status: "running", startedAt: at(0) },
+          { id: "s2", label: "候補の選択", status: "done", startedAt: at(1), finishedAt: at(2), level: 1 },
+          { id: "s3", label: "待機中の工程", status: "pending" },
+        ]}
+        testId="p"
+      />
+    );
+    const rows = [...host.querySelectorAll<HTMLElement>("[data-run-timeline-step], [data-testid='p-current']")];
+    expect(rows.map((row) => row.dataset.runTimelineStep ?? `current:${row.dataset.stepId}`)).toEqual([
+      "current:s1",
+      "s2",
+    ]);
+    // 待機中の段階は今の段階の代わりのときだけ出す。
+    expect(q("p-step-s3")).toBeNull();
+  });
+
   it("active と elapsedMs と labels で上書きできる", () => {
     render(
       <ChatProgress
