@@ -90,6 +90,8 @@ def _workbook(cases: list[EvaluationCase]) -> bytes:
         sheet.column_dimensions[column].width = width
     for row in sheet.iter_rows(min_row=2):
         for cell in row:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
             cell.alignment = Alignment(wrap_text=True, vertical="top")
     buffer = BytesIO()
     book.save(buffer)
