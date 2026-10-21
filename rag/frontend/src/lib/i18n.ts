@@ -3896,8 +3896,9 @@ export const ja = {
   "settings.answerPrompts.stage.application": "規則の当てはめ",
   "settings.answerPrompts.stage.application.condition":
     "回答の結論が中立の文になり、質問に数・日付などの事実と、引用で裏付けた規則があるとき（当てはめの生成と監査）",
-  "settings.answerPrompts.stage.evaluation": "標準回答による評価",
-  "settings.answerPrompts.stage.evaluation.condition": "品質評価と、保存した回答を標準回答で評価するときだけ",
+  "settings.answerPrompts.stage.evaluation": "回答の品質評価",
+  "settings.answerPrompts.stage.evaluation.condition":
+    "品質評価と保存した回答の評価。正確性・網羅性は標準回答や必須要点などの期待があるとき、忠実性は取得した根拠があるときに測ります",
   // 回答の文を AI に渡した資料と照らし合わせる工程は、3 製品で「資料との照合」と呼ぶ（#2361）。
   "settings.answerPrompts.stage.answer_validation": "資料との照合",
   "settings.answerPrompts.stage.answer_validation.condition":
