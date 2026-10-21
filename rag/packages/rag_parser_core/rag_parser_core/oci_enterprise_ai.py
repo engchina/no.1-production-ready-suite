@@ -1196,6 +1196,7 @@ def _build_vision_text_payload(
     return _with_call_options(
         {
             "model": model_id,
+            "max_output_tokens": _vision_output_token_limit(config),
             "input": [
                 {
                     "role": "user",

@@ -865,13 +865,16 @@ async def test_oci_incomplete_message_reports_reason_limit_and_used_tokens() -> 
     assert "出力の上限(tokens)" in message
 
 
-async def test_oci_payloads_use_each_model_output_limit() -> None:
+@pytest.mark.parametrize("vision_output_limit", [8192, 32768])
+async def test_oci_payloads_use_each_model_output_limit(vision_output_limit: int) -> None:
     """テキストと Vision の呼び出しは、それぞれのモデルの出力の上限を送る(#1719)。"""
     settings = _oci_settings()
     settings.oci_enterprise_ai_models = [
         EnterpriseAiConfiguredModel(model_id="enterprise-llm", max_output_tokens=16000),
         EnterpriseAiConfiguredModel(
-            model_id="enterprise-vlm", max_input_tokens=200000, max_output_tokens=100000
+            model_id="enterprise-vlm",
+            max_input_tokens=200000,
+            max_output_tokens=vision_output_limit,
         ),
     ]
     transport = FakeEnterpriseAiTransport({"output_text": "回答"})
@@ -879,9 +882,11 @@ async def test_oci_payloads_use_each_model_output_limit() -> None:
 
     await client.generate("質問", "根拠")
     await client.generate_from_images([b"png"], "読み取ってください")
+    await client.generate_from_image(b"png", "確認してください")
 
     assert transport.calls[0]["payload"]["max_output_tokens"] == 16000
-    assert transport.calls[1]["payload"]["max_output_tokens"] == 100000
+    assert transport.calls[1]["payload"]["max_output_tokens"] == vision_output_limit
+    assert transport.calls[2]["payload"]["max_output_tokens"] == vision_output_limit
 
 
 async def test_oci_generate_reports_openai_responses_error_before_empty_text() -> None:

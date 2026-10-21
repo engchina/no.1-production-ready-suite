@@ -652,7 +652,7 @@ test("ターシャリ接続は Endpoint URL と API key だけで設定し、登
   });
 });
 
-test("モデル設定はモデルごとのテスト成功と失敗を行内に表示する", async ({ page }) => {
+test("モデル設定はモデルごとのテスト成功と失敗を行内に表示する", async ({ page }, testInfo) => {
   await mockModelSettings(page);
   await page.goto("/settings/model");
 
@@ -674,8 +674,10 @@ test("モデル設定はモデルごとのテスト成功と失敗を行内に�
   await expect(page.getByText("OCI config、設定名、region")).toBeVisible();
 
   await expect(page.getByText("ServiceError")).toBeVisible();
-  // 共有の結果パネルは生のエラー文を表示しない（NL2SQL と同じ。#103）。
-  await expect(page.getByText("401 Unauthorized: invalid model")).toHaveCount(0);
+  // 機密情報を伏せた API エラー本文も、開いた「詳細」に表示する。
+  await expect(page.getByText("401 Unauthorized: invalid model")).toBeVisible();
+  await expectNoPageOverflow(page);
+  await page.screenshot({path: testInfo.outputPath("model-test-error-detail.png"), fullPage: true});
   // 結果は操作した欄の行のすぐ下に出す: Embedding の結果は Rerank の欄より上（messaging.md §10）。
   const embeddingResult = page.getByText("Embedding モデル「cohere.embed-v4.0」のテストに失敗しました。");
   const embeddingBox = await embeddingResult.boundingBox();

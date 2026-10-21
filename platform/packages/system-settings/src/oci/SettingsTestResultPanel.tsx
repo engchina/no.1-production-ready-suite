@@ -25,6 +25,7 @@ export interface SettingsTestResultPanelProps {
   details?: readonly SettingsTestResultDetail[];
   troubleshooting?: readonly string[];
   errorType?: string | null;
+  /** backend が秘密情報を伏せた、利用者に提示できる診断本文。 */
   rawError?: string | null;
   className?: string;
   testId?: string;
@@ -46,10 +47,12 @@ export function SettingsTestResultPanel({
   details = [],
   troubleshooting = [],
   errorType,
+  rawError,
   className,
   testId,
   children,
 }: SettingsTestResultPanelProps) {
+  const errorDetail = tone === "danger" ? rawError?.trim() : undefined;
   const hasTiming = elapsedMs !== undefined || Boolean(checkedAt);
 
   return (
@@ -93,7 +96,7 @@ export function SettingsTestResultPanel({
             </div>
           ) : null}
 
-          {details.length > 0 || (tone === "danger" && errorType) ? (
+          {details.length > 0 || (tone === "danger" && errorType) || errorDetail ? (
             <Disclosure
               variant="plain"
               size="sm"
@@ -117,6 +120,12 @@ export function SettingsTestResultPanel({
                       {t("settings.testResult.errorType")}
                     </span>
                     <StatusBadge variant="danger" label={errorType} />
+                  </div>
+                ) : null}
+                {errorDetail ? (
+                  <div className="min-w-0 space-y-1 text-xs">
+                    <p className="font-semibold text-fg">{t("settings.testResult.errorDetail")}</p>
+                    <p className="break-words whitespace-pre-wrap text-fg-muted">{errorDetail}</p>
                   </div>
                 ) : null}
               </div>
