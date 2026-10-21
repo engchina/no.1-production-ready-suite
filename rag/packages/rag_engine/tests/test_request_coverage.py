@@ -262,6 +262,7 @@ def test_hints_come_from_aliases_and_guide_triggers_sharing_request_terms() -> N
 
 
 def _settings(**changes: Any) -> Any:
+    changes.setdefault("request_coverage_retrieval_enabled", True)
     return replace(get_settings(environ={}, dotenv_path=None), **changes)
 
 
@@ -419,7 +420,7 @@ def test_engine_settings_default_and_env() -> None:
     default = get_settings(environ={}, dotenv_path=None)
     custom = get_settings(
         environ={
-            "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL": "0",
+            "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL": "1",
             "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES": "1",
             "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS": "3",
             "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": "2.5",
@@ -429,10 +430,10 @@ def test_engine_settings_default_and_env() -> None:
         dotenv_path=None,
     )
 
-    assert default.request_coverage_retrieval_enabled is True
+    assert default.request_coverage_retrieval_enabled is False
     assert (default.request_coverage_max_queries, default.request_coverage_max_chunks) == (2, 4)
     assert default.request_coverage_deadline_seconds == 10.0
-    assert custom.request_coverage_retrieval_enabled is False
+    assert custom.request_coverage_retrieval_enabled is True
     assert (custom.request_coverage_max_queries, custom.request_coverage_max_chunks) == (1, 3)
     assert custom.request_coverage_deadline_seconds == 2.5
     assert (default.request_coverage_max_subquestions, default.request_coverage_chunks_per_subquestion) == (5, 2)

@@ -205,7 +205,7 @@ const ANSWERING_SETTINGS = {
   neighbor_child_count: 3,
   rerank_enabled: true,
   screen_linking_enabled: false,
-  request_coverage_retrieval_enabled: true,
+  request_coverage_retrieval_enabled: false,
   auto_field_filter_enabled: false,
   graph_expansion_enabled: false,
   config_source: "runtime",
@@ -258,9 +258,9 @@ for (const viewport of [
       await expect(page.getByRole("switch", { name: "Rerank で検索候補を並べ替える" })).toBeChecked();
       const screenLinking = page.getByRole("switch", { name: "画面目録で操作画面を探す" });
       await expect(screenLinking).not.toBeChecked();
-      // 根拠の無い要求を探し直す（#1279）は既定で有効。
+      // 根拠の無い要求を探し直す（#1279）は既定で無効。
       const requestCoverage = page.getByRole("switch", { name: "根拠の無い要求を探し直す" });
-      await expect(requestCoverage).toBeChecked();
+      await expect(requestCoverage).not.toBeChecked();
       const autoFieldFilter = page.getByRole("switch", { name: "質問から項目の条件を読み取る" });
       await expect(autoFieldFilter).not.toBeChecked();
       // 関係情報で根拠を広げる（#2055）は既定で無効。AI の呼び出しが増えないことを説明に出す。
@@ -289,7 +289,7 @@ for (const viewport of [
           neighbor_child_count: 5,
           rerank_enabled: true,
           screen_linking_enabled: true,
-          request_coverage_retrieval_enabled: false,
+          request_coverage_retrieval_enabled: true,
           auto_field_filter_enabled: true,
           graph_expansion_enabled: true,
         },
