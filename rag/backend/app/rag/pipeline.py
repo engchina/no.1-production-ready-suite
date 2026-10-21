@@ -261,6 +261,33 @@ class RagPipeline:
             )
         else:
             query_guardrail = query_guardrail_result
+        # 回答対象の原文も外部入力。検索文の検査済み結果だけでは原文を信用しない。
+        if query_guardrail.allowed and request.original_question is not None:
+            original_guardrail = (
+                query_guardrail
+                if request.original_question == request.query
+                else await asyncio.to_thread(
+                    self._guardrails.validate_query, request.original_question
+                )
+            )
+            request = request.model_copy(
+                update={"original_question": original_guardrail.sanitized_text}
+            )
+            if original_guardrail is not query_guardrail:
+                query_guardrail = GuardrailResult(
+                    allowed=original_guardrail.allowed,
+                    sanitized_text=(
+                        query_guardrail.sanitized_text
+                        if original_guardrail.allowed
+                        else original_guardrail.sanitized_text
+                    ),
+                    findings=[*query_guardrail.findings, *original_guardrail.findings],
+                    backend_degraded=(
+                        query_guardrail.backend_degraded or original_guardrail.backend_degraded
+                    ),
+                )
+        if query_guardrail.allowed:
+            request = request.model_copy(update={"query": query_guardrail.sanitized_text})
         record_guardrail_findings(
             "query",
             query_guardrail.findings,
