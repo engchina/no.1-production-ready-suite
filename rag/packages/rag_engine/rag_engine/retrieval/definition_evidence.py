@@ -8,15 +8,17 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from typing import Any
 
 from rag_parser_core.language import LanguagePack, per_pack
-from rag_parser_core.language.text import alternation, char_class, range_class
+from rag_parser_core.language.text import alternation, char_class, numbered, range_class, text_patterns
 
 
 @dataclass(frozen=True)
 class _Patterns:
     question: re.Pattern[str]
     quoted: re.Pattern[str]
+    reference_heading: re.Pattern[str]
     listed: re.Pattern[str]
     separator: re.Pattern[str]
     single: re.Pattern[str]
@@ -51,9 +53,12 @@ def _build(pack: LanguagePack) -> _Patterns:
     particle = alt("label_particles")
     ellipsis = char_class(words("definition_ellipsis_chars"))
     delimiters = rf"(?:{ellipsis}+|{alt('definition_delimiters')})"
+    number = text_patterns(pack)
+    heading_units = "|".join((number.part_units, number.chapter_units, number.section_units, number.article_units, number.paragraph_units))
     return _Patterns(
         question=re.compile(alt("definition_question_cues")),
         quoted=re.compile(rf"{opens}({label}){closes}"),
+        reference_heading=re.compile(rf"{numbered(number, f'(?:{heading_units})')}\s*$"),
         listed=re.compile(rf"({label}(?:\s*{separator}\s*{label})+)\s*{particle}?{fields}"),
         separator=re.compile(rf"\s*{separator}\s*"),
         # 引用符なしの単独項目も、項目・列・欄という構造が明示された時だけ採る。
@@ -80,7 +85,8 @@ def definition_labels(question: str) -> list[str]:
     patterns = _patterns()
     if not patterns.question.search(text):
         return []
-    labels = patterns.quoted.findall(text)
+    # 「第 N 章『題名』では何ですか」は参照先の指定であり、画面項目の定義要求ではない。
+    labels = [match.group(1) for match in patterns.quoted.finditer(text) if not patterns.reference_heading.search(text[: match.start()])]
     for match in patterns.listed.finditer(text):
         labels.extend(patterns.separator.split(match.group(1)))
     if not labels:
@@ -97,7 +103,7 @@ def label_mentioned(text: str, label: str) -> bool:
     return bool(re.search(rf"(?<!{chars}){re.escape(label)}(?!{chars})", text))
 
 
-def definition_ranges(text: str, labels: list[str]) -> list[dict]:
+def definition_ranges(text: str, labels: list[str]) -> list[dict[str, Any]]:
     """定義行と折返し条件を原文位置で返す。列一覧・検索語・途中切れは定義にしない。
 
     句点までを一体で扱い、次の項目・節を越えない。句点なしの場合は単一行だけを
