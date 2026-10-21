@@ -19,7 +19,7 @@ dependencies = [
   "pyyaml>=6.0",
   "production-ready-backend-core",
   "production-ready-system-settings-backend",
-  "openai-agents==0.23.1",
+  "openai-agents==0.24.0",
   # 品質評価の評価セットの Excel の取り込み・書き出し（NL2SQL と同じ。#776）。
   "openpyxl>=3.1",
   # ツールの引数を input schema で検証する（#2630）。openai-agents → mcp が既に使う版を直接の依存に
