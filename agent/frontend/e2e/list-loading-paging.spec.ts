@@ -111,7 +111,7 @@ function seedAuditRecords(mockApi: MockApi, count: number) {
 async function expectScrollsInsideTable(page: Page, regionName: string, visibleRows: number) {
   const region = page.getByRole("region", { name: regionName });
   await expect(region).toBeVisible();
-  const metrics = await region.evaluate((element) => {
+  const metrics = await region.evaluate((element, count) => {
     const header = element.querySelector("thead");
     const rows = Array.from(element.querySelectorAll("tbody tr"));
     return {
@@ -119,15 +119,16 @@ async function expectScrollsInsideTable(page: Page, regionName: string, visibleR
       scrollHeight: element.scrollHeight,
       headerHeight: header?.getBoundingClientRect().height ?? 0,
       rowHeight: rows[0]?.getBoundingClientRect().height ?? 0,
+      visibleHeight: rows.slice(0, count).reduce((height, row) => height + row.getBoundingClientRect().height, 0),
       rowCount: rows.length,
       stickyHeader: header ? getComputedStyle(header).position : "",
     };
-  });
+  }, visibleRows);
   expect(metrics.rowCount).toBe(25);
   expect(metrics.stickyHeader).toBe("sticky");
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
-  // 表頭 + N 行（行の最小高さ 3.5rem）の高さで止まる。1 行ぶんの誤差を許す。
-  const expected = metrics.headerHeight + metrics.rowHeight * visibleRows;
+  // 名前順で先頭の行が変わる。折り返しで行高が違うため、表示する N 行の実際の高さを合計する。
+  const expected = metrics.headerHeight + metrics.visibleHeight;
   expect(Math.abs(metrics.clientHeight - expected)).toBeLessThan(metrics.rowHeight);
 }
 
@@ -158,7 +159,7 @@ for (const viewport of VIEWPORTS) {
       await expectSpinnerStable(loading.locator(".pr-spinner"));
 
       releaseAgents();
-      await expect(page.getByTestId("agent-row-default")).toBeVisible();
+      await expect(page.getByTestId("agent-row-agent-01")).toBeVisible();
 
       await expectScrollsInsideTable(page, "業務 Agent 一覧。スクロールできます。", viewport.visibleRows);
       const pager = page.getByTestId("agent-list-pagination");
