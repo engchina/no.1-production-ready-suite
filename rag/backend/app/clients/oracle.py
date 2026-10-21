@@ -1172,94 +1172,30 @@ class OracleClient:
         if not unique_titles:
             return {}
         where_sql, binds = _oracle_retrieval_where(filters)
-        # 範囲の chunk(x)は ROWNUM で区切った view で 1 回だけ読み(比べる形の文書名・見出しの列も
-        # chunk ごとに 1 回だけ作る)、文書名(q)と突き合わせる(文書名の数だけ読み直さない)。
-        title_rows = " UNION ALL ".join(
-            f"SELECT {number} AS title_number, :reference_title_{number} AS title, "
-            f":reference_title_wide_{number} AS title_wide FROM dual"
-            for number in range(len(unique_titles))
-        )
+        # 範囲の chunk を見出しの列ごとに 1 行にして 1 回だけ読み、文書名との照合・文書名ごとの
+        # 件数と並びはここで決める(#2800)。文書名の行と範囲の chunk を SQL の中で INSTR で結ぶと、
+        # 範囲の chunk を文書名の数だけ読み直し、1 回 9 秒かかった(見出しの列ごとに読むと 1 秒)。
         rows = await self._fetch_all(
             _render_sql(
                 """
-            SELECT g.title_number, g.document_id, g.file_name, g.root_heading
+            SELECT x.document_id, x.file_name, x.section_path,
+                   MIN(x.chunk_index) AS first_chunk_index
             FROM (
-                SELECT t.title_number, t.document_id, t.file_name, t.root_heading,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY t.title_number
-                           ORDER BY LENGTH(t.file_name), t.document_id, MIN(t.chunk_index)
-                       ) AS title_rank
-                FROM (
-                    SELECT q.title_number, x.document_id, x.file_name, x.chunk_index,
-                           CASE
-                               WHEN INSTR(x.section_path, ' > ') > 0
-                               THEN SUBSTR(x.section_path, 1, INSTR(x.section_path, ' > ') - 1)
-                               ELSE x.section_path
-                           END AS root_heading
-                    FROM (
-                        SELECT y.document_id, y.file_name, y.chunk_index, y.section_path,
-                               TRANSLATE(LOWER(y.file_name), :reference_strip_from, 'x')
-                                   AS file_name_key,
-                               TRANSLATE(LOWER(y.section_path), :reference_strip_from, 'x')
-                                   AS section_path_key,
-                               ROWNUM AS chunk_number
-                        FROM (
-                            SELECT d.document_id,
-                                   d.file_name,
-                                   c.chunk_index,
-                                   JSON_VALUE(c.metadata_json, '$.section_path') AS section_path
-                            FROM rag_chunks c
-                            JOIN rag_documents d ON d.document_id = c.document_id
-                            WHERE {where_sql}
-                        ) y
-                    ) x
-                    JOIN ({title_rows}) q
-                      ON INSTR(x.file_name_key, q.title) > 0
-                      OR INSTR(x.file_name_key, q.title_wide) > 0
-                      OR INSTR(x.section_path_key, q.title) > 0
-                      OR INSTR(x.section_path_key, q.title_wide) > 0
-                ) t
-                GROUP BY t.title_number, t.document_id, t.file_name, t.root_heading
-            ) g
-            WHERE g.title_rank <= :reference_limit
-            ORDER BY g.title_number, g.title_rank
+                SELECT d.document_id,
+                       d.file_name,
+                       c.chunk_index,
+                       JSON_VALUE(c.metadata_json, '$.section_path') AS section_path
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {where_sql}
+            ) x
+            GROUP BY x.document_id, x.file_name, x.section_path
             """,
                 where_sql=where_sql,
-                title_rows=title_rows,
             ),
-            {
-                **binds,
-                # 文書名・見出しの空白・区切りの記号を除いて比べる(title は title_key で同じ形)。
-                **{
-                    f"reference_title_{number}": title for number, title in enumerate(unique_titles)
-                },
-                **{
-                    f"reference_title_wide_{number}": _full_width_ascii(title)
-                    for number, title in enumerate(unique_titles)
-                },
-                "reference_strip_from": "x" + _REFERENCE_TITLE_NOISE_CHARS,
-                "reference_limit": max(1, int(limit)),
-            },
+            binds,
         )
-        grouped: dict[str, dict[str, tuple[str, list[str]]]] = {}
-        for row in rows:
-            document_id = row.get("document_id")
-            file_name = row.get("file_name")
-            if not document_id or not file_name:
-                continue
-            title = unique_titles[_int_value(row.get("title_number"))]
-            documents = grouped.setdefault(title, {})
-            _name, headings = documents.setdefault(str(document_id), (str(file_name), []))
-            heading = row.get("root_heading")
-            if heading and str(heading) not in headings:
-                headings.append(str(heading))
-        return {
-            title: [
-                (document_id, file_name, tuple(headings))
-                for document_id, (file_name, headings) in documents.items()
-            ]
-            for title, documents in grouped.items()
-        }
+        return _match_reference_documents(rows, unique_titles, limit=max(1, int(limit)))
 
     async def retrieval_older_versions(
         self, filters: dict[str, str], document_ids: Sequence[str], *, limit: int
@@ -12622,8 +12558,19 @@ def _duplicate_reuses_canonical_sql(*, include_superseded: bool) -> str:
 
 
 def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
-    clauses, binds = _oracle_retrieval_clauses(filters)
-    return " AND ".join(clauses), binds
+    """検索と同じ見え方の条件(``c`` = chunk と ``d`` = 文書を join した SQL の WHERE)。
+
+    文書の側の条件で文書の集合を副問い合わせで先に決め(``c.document_id IN (...)``)、
+    chunk の側の条件を並べる(#2800)。両方を 1 つの WHERE に並べると、ナレッジベースの
+    所属・重複の文書の正本・有効期間の副問い合わせを optimizer が行ごとの FILTER にし、
+    範囲の chunk を読むだけの SQL が 1 回 9 秒かかった(分けると 0.7 秒。読む行は同じ)。
+    """
+    document_sql, chunk_sql, binds = _oracle_retrieval_where_split(filters)
+    return (
+        f"c.document_id IN (SELECT d.document_id FROM rag_documents d WHERE {document_sql})"
+        f" AND {chunk_sql}",
+        binds,
+    )
 
 
 # chunk の側（``c``・``cs``・``r``）の列を読む条件（#2800。それ以外は文書の側の条件）。
@@ -12849,6 +12796,60 @@ def _oracle_retrieval_clauses(filters: dict[str, str]) -> tuple[list[str], dict[
 
 # 交差参照の文書名の照合で文書名から除く文字(title_key の NFKC 前の形も含む。#1280)。
 _REFERENCE_TITLE_NOISE_CHARS = " \u3000_-・:、。,.()[]「」『』【】（）＿－：，．"
+_REFERENCE_TITLE_NOISE = frozenset(_REFERENCE_TITLE_NOISE_CHARS)
+
+
+def _reference_title_key(value: str) -> str:
+    """文書名・見出しの列を照合の形にする(小文字にし、空白と区切りの記号を除く)。"""
+    return "".join(char for char in value.lower() if char not in _REFERENCE_TITLE_NOISE)
+
+
+def _match_reference_documents(
+    rows: Sequence[Mapping[str, object]], titles: Sequence[str], *, limit: int
+) -> dict[str, list[tuple[str, str, tuple[str, ...]]]]:
+    """範囲の (文書, 文書名, 見出しの列, 最初の chunk の番号) の行を、各文書名と照合する(#2800)。
+
+    文書名か見出しの列が文書名(全角の英数字の形も)を含む行を、文書名ごとに (文書, 見出しの列の
+    先頭の見出し) でまとめ、文書名の短い順・文書・最初の chunk の順に ``limit`` 件までを返す。
+    """
+    candidates: list[tuple[str, str, str, str, str | None, int]] = []
+    for row in rows:
+        document_id, file_name = row.get("document_id"), row.get("file_name")
+        if not document_id or not file_name:
+            continue
+        section_path = row.get("section_path")
+        path = str(section_path) if section_path is not None else None
+        candidates.append(
+            (
+                str(document_id),
+                str(file_name),
+                _reference_title_key(str(file_name)),
+                _reference_title_key(path) if path is not None else "",
+                path.split(" > ", 1)[0] if path is not None else None,
+                _int_value(row.get("first_chunk_index")),
+            )
+        )
+    result: dict[str, list[tuple[str, str, tuple[str, ...]]]] = {}
+    for title in titles:
+        needles = (title, _full_width_ascii(title))
+        groups: dict[tuple[str, str, str | None], int] = {}
+        for document_id, file_name, name_key, path_key, root, first in candidates:
+            if not any(needle in name_key or needle in path_key for needle in needles):
+                continue
+            key = (document_id, file_name, root)
+            groups[key] = min(first, groups.get(key, first))
+        ranked = sorted(groups.items(), key=lambda item: (len(item[0][1]), item[0][0], item[1]))
+        documents: dict[str, tuple[str, list[str]]] = {}
+        for (document_id, file_name, root), _first in ranked[:limit]:
+            _name, headings = documents.setdefault(document_id, (file_name, []))
+            if root and root not in headings:
+                headings.append(root)
+        if documents:
+            result[title] = [
+                (document_id, file_name, tuple(headings))
+                for document_id, (file_name, headings) in documents.items()
+            ]
+    return result
 
 
 def _full_width_ascii(value: str) -> str:

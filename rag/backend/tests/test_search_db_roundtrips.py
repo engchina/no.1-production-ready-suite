@@ -610,9 +610,10 @@ def test_vector_search_decides_the_document_set_before_the_nearest_neighbors() -
     document_sql, chunk_sql, split_binds = oracle_module._oracle_retrieval_where_split(filters)
 
     assert split_binds == binds
-    # 同じ条件を分けただけ（文書の側は d だけ、chunk の側は c・cs・r の列）。
-    assert sorted(f"{document_sql} AND {chunk_sql}".split(" AND ")) == sorted(
-        where_sql.split(" AND ")
+    # 検索の条件そのものも、文書の集合を先に決める形（同じ条件を分けただけ）。
+    assert where_sql == (
+        f"c.document_id IN (SELECT d.document_id FROM rag_documents d WHERE {document_sql})"
+        f" AND {chunk_sql}"
     )
     assert "rag_document_knowledge_bases" in document_sql and "c." not in document_sql.replace(
         "duplicate_d.", ""

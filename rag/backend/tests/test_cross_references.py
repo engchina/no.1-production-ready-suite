@@ -1784,22 +1784,38 @@ async def test_oracle_reference_queries_use_search_scope(monkeypatch: pytest.Mon
         statement: str, binds: dict[str, object] | None = None
     ) -> list[dict[str, object]]:
         calls.append((statement, dict(binds or {})))
-        if "TRANSLATE" in statement:
+        if "first_chunk_index" in statement:
+            # 範囲の chunk の見出しの列ごとの行（#2800。文書名との照合は Python で行う）。
             return [
                 {
                     "document_id": "doc-2",
                     "file_name": "経費精算マニュアル.pdf",
-                    "root_heading": None,
+                    "section_path": None,
+                    "first_chunk_index": 0,
                 },
                 {
                     "document_id": "doc-3",
                     "file_name": "manual.pdf",
-                    "root_heading": "経費精算マニュアル 第2版",
+                    "section_path": "経費精算マニュアル 第2版 > 1 はじめに",
+                    "first_chunk_index": 0,
                 },
                 {
                     "document_id": "doc-3",
                     "file_name": "manual.pdf",
-                    "root_heading": "第1章 経費精算マニュアルの使い方",
+                    "section_path": "第1章 経費精算マニュアルの使い方",
+                    "first_chunk_index": 3,
+                },
+                {
+                    "document_id": "doc-3",
+                    "file_name": "manual.pdf",
+                    "section_path": "第9章 別の話",
+                    "first_chunk_index": 9,
+                },
+                {
+                    "document_id": "doc-4",
+                    "file_name": "ＨＲＭ手順書.pdf",
+                    "section_path": None,
+                    "first_chunk_index": 0,
                 },
             ]
         return []
@@ -1813,11 +1829,12 @@ async def test_oracle_reference_queries_use_search_scope(monkeypatch: pytest.Mon
         )
         == []
     )
+    # 文書名の短い順（文書名か見出しの列が文書名を含む。見出しは列の先頭の見出しを読み順に）。
     assert await client.retrieval_reference_documents(
         filters, title="経費精算マニュアル", limit=5
     ) == [
-        ("doc-2", "経費精算マニュアル.pdf", ()),
         ("doc-3", "manual.pdf", ("経費精算マニュアル 第2版", "第1章 経費精算マニュアルの使い方")),
+        ("doc-2", "経費精算マニュアル.pdf", ()),
     ]
 
     chunk_sql, chunk_binds = calls[0]
@@ -1831,23 +1848,23 @@ async def test_oracle_reference_queries_use_search_scope(monkeypatch: pytest.Mon
     assert "ORDER BY c.chunk_set_id, c.chunk_index" in chunk_sql
     document_sql, document_binds = calls[1]
     assert "kb-1" in document_binds.values()
-    assert document_binds["reference_title_0"] == "経費精算マニュアル"
-    # 全角の英数字で保存した文書名・見出しとも比べる(#1400)。
-    assert document_binds["reference_title_wide_0"] == "経費精算マニュアル"
     assert "superseded_by_document_id IS NULL" in document_sql
     # 文書名に加えて、見出しの列(文書のタイトル)でも探す。
     assert "$.section_path" in document_sql
-    assert "root_heading" in document_sql
-    wide_binds = calls[1][1]
-    await client.retrieval_reference_documents(filters, title="hrm手順書", limit=5)
-    assert calls[2][1]["reference_title_wide_0"] == "ｈｒｍ手順書"
-    assert wide_binds["reference_limit"] == 5
+    # 全角の英数字で保存した文書名・見出しとも比べる(#1400)。
+    assert await client.retrieval_reference_documents(filters, title="hrm手順書", limit=5) == [
+        ("doc-4", "ＨＲＭ手順書.pdf", ())
+    ]
+    # 件数の上限は文書名ごと（文書と見出しの組で数える）。
+    assert await client.retrieval_reference_documents(
+        filters, title="経費精算マニュアル", limit=1
+    ) == [("doc-3", "manual.pdf", ("経費精算マニュアル 第2版",))]
 
 
 async def test_oracle_reference_documents_many_reads_chunks_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """複数の文書名を 1 回の SQL で照合し、文書名ごとに分けて返す(#2137)。"""
+    """複数の文書名を、範囲の chunk を 1 回読んだ行で照合し、文書名ごとに返す(#2800)。"""
     from app.clients.oracle import OracleClient
 
     client = OracleClient(settings=Settings())
@@ -1858,9 +1875,24 @@ async def test_oracle_reference_documents_many_reads_chunks_once(
     ) -> list[dict[str, object]]:
         calls.append((statement, dict(binds or {})))
         return [
-            {"title_number": 0, "document_id": "doc-1", "file_name": "a.pdf", "root_heading": "A"},
-            {"title_number": 1, "document_id": "doc-2", "file_name": "b.pdf", "root_heading": None},
-            {"title_number": 1, "document_id": "doc-3", "file_name": "bb.pdf", "root_heading": "B"},
+            {
+                "document_id": "doc-1",
+                "file_name": "a.pdf",
+                "section_path": "A 手順書 > 1",
+                "first_chunk_index": 0,
+            },
+            {
+                "document_id": "doc-2",
+                "file_name": "b規程.pdf",
+                "section_path": None,
+                "first_chunk_index": 0,
+            },
+            {
+                "document_id": "doc-3",
+                "file_name": "bb規程.pdf",
+                "section_path": "B",
+                "first_chunk_index": 2,
+            },
         ]
 
     monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
@@ -1870,18 +1902,13 @@ async def test_oracle_reference_documents_many_reads_chunks_once(
     )
 
     assert found == {
-        "手順書": [("doc-1", "a.pdf", ("A",))],
-        "規程": [("doc-2", "b.pdf", ()), ("doc-3", "bb.pdf", ("B",))],
+        "手順書": [("doc-1", "a.pdf", ("A 手順書",))],
+        "規程": [("doc-2", "b規程.pdf", ()), ("doc-3", "bb規程.pdf", ("B",))],
     }
-    ((statement, binds),) = calls
-    # 文書名は重複と空を除いて 1 回の SQL の bind に並べる。
-    assert binds["reference_title_0"] == "手順書"
-    assert binds["reference_title_1"] == "規程"
-    assert "reference_title_2" not in binds
-    # 範囲の chunk は ROWNUM で区切った view で 1 回だけ読み、文書名ごとに件数を数える。
+    ((statement, _binds),) = calls
+    # 範囲の chunk は 1 回だけ、見出しの列ごとの行で読む（文書名の数だけ読み直さない）。
     assert statement.count("FROM rag_chunks c") == 1
-    assert "ROWNUM AS chunk_number" in statement
-    assert "PARTITION BY t.title_number" in statement
+    assert "GROUP BY x.document_id, x.file_name, x.section_path" in statement
     assert await client.retrieval_reference_documents_many({}, titles=[], limit=3) == {}
     assert len(calls) == 1
 
