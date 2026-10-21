@@ -1138,7 +1138,7 @@ def evaluation_cases_xlsx(
     sheet.title = CASES_SHEET_TITLE
     _write_header(sheet, HEADERS, notes=_HEADER_NOTES)
     for question, evidence, standard_answer in rows:
-        sheet.append([question, "\n".join(evidence), standard_answer or "", "", "", ""])
+        _append_text_row(sheet, [question, "\n".join(evidence), standard_answer or "", "", "", ""])
     _set_widths(sheet, _COLUMN_WIDTHS)
     _wrap(sheet, min_row=2)
     sheet.freeze_panes = "A2"
@@ -1186,7 +1186,7 @@ def evaluation_cases_xlsx(
     _write_header(listing, _DOCUMENT_HEADERS)
     if documents:
         for document in documents:
-            listing.append(_document_row(document))
+            _append_text_row(listing, _document_row(document))
     else:
         listing.append(
             [
@@ -1201,6 +1201,13 @@ def evaluation_cases_xlsx(
     buffer = BytesIO()
     book.save(buffer)
     return buffer.getvalue()
+
+
+def _append_text_row(sheet: Any, values: Sequence[str]) -> None:
+    """入力の記号を保ち、数式やエラー値に見える本文も文字列セルで保存する。"""
+    sheet.append(list(values))
+    for cell in sheet[sheet.max_row]:
+        cell.data_type = "s"
 
 
 def _write_header(

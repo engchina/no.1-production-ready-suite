@@ -753,3 +753,32 @@ def test_import_api_returns_warnings_with_cases(monkeypatch: pytest.MonkeyPatch)
     assert data["warning_count"] == 1
     assert data["warnings"][0]["row"] == 2
     assert "表計算の文書ではない" in data["warnings"][0]["message"]
+
+
+@pytest.mark.parametrize(
+    "text", ["=1+1", '=HYPERLINK("https://example.invalid","synthetic")', "#N/A"]
+)
+def test_generated_evaluation_cells_preserve_literal_text(text: str) -> None:
+    data = evaluation_cases_xlsx([(text, ["synthetic.pdf | p.1"], text)])
+    book = load_workbook(BytesIO(data), data_only=False)
+    sheet = book[CASES_SHEET_TITLE]
+    for address in ("A2", "C2"):
+        assert sheet[address].data_type == "s"
+        assert sheet[address].value == text
+    parsed = parse_evaluation_workbook(data)
+    assert parsed.issues == []
+    assert [(row.question, row.standard_answer) for row in parsed.rows] == [(text, text)]
+
+
+def test_template_document_names_and_evidence_are_literal_text() -> None:
+    name = "=synthetic.pdf"
+    document = EvaluationDocumentRef(document_id="synthetic-doc", file_name=name)
+    data = evaluation_cases_xlsx([("合成の質問", [name], None)], documents=[document])
+    book = load_workbook(BytesIO(data), data_only=False)
+    for cell in (book[CASES_SHEET_TITLE]["B2"], book[DOCUMENTS_SHEET_TITLE]["A2"]):
+        assert cell.value == name
+        assert cell.data_type == "s"
+    parsed = parse_evaluation_workbook(data)
+    built = build_evaluation_cases(parsed.rows, [document])
+    assert parsed.issues == built.issues == []
+    assert built.cases[0].relevant_document_ids == [document.document_id]
