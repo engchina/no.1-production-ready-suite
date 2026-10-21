@@ -24,8 +24,8 @@ from app.features.agent.data_scope import (
 )
 from app.features.agent.drafting import MAX_EVALUATION_CASES
 from app.features.agent.evaluation import EvaluationCase, JobStatus, draft_definition_hash
-from app.features.agent.runtime import runtime_repository
-from app.features.agent.skills import skill_registry
+from app.features.agent.runtime import AgentProfilePatch, runtime_repository
+from app.features.agent.skills import AgentSkillDefinition, skill_registry
 from app.security.permissions import MENU_AGENTS, RUNS_OPERATE
 from app.security.service import set_security_service
 from app.settings import Settings, get_settings
@@ -496,3 +496,25 @@ def test_publish_gate_rejects_a_changed_definition_hash(
         monkeypatch, _job(pass_rate=1.0, offset_seconds=10, definition_hash="different-definition")
     )
     assert _publish().status_code == 409
+
+
+def test_publish_gate_checks_skill_only_changes(agent: None, monkeypatch: MonkeyPatch) -> None:
+    _gate(monkeypatch, min_pass_rate=0)
+    skill = AgentSkillDefinition(
+        id="synthetic-evaluation-gate", name="合成のスキル", instructions="合成の指示"
+    )
+    skill_registry.upsert_custom(skill)
+    try:
+        runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(skill_ids=[skill.id]))
+        assert _publish().status_code == 200
+        old_job = _job(pass_rate=1, offset_seconds=10)
+        skill_registry.upsert_custom(
+            skill.model_copy(update={"instructions": "変更後の合成の指示"})
+        )
+        _gate(monkeypatch, min_pass_rate=0.8)
+        _jobs(monkeypatch, old_job)
+        assert _publish().status_code == 409
+        _jobs(monkeypatch, _job(pass_rate=1, offset_seconds=10))
+        assert _publish().status_code == 200
+    finally:
+        skill_registry.remove(skill.id)

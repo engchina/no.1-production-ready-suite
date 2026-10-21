@@ -3735,7 +3735,7 @@ def _publish_evaluation_refusal(agent: AgentProfile) -> str | None:
     settings = get_settings()
     threshold = settings.agent_publish_min_pass_rate
     max_drop = settings.agent_publish_max_pass_rate_drop
-    if (threshold <= 0 and max_drop is None) or not agent.draft_changed:
+    if (threshold <= 0 and max_drop is None) or not agent.has_unpublished_changes():
         return None
     since = agent.draft_updated_at or agent.created_at
     latest = next(
