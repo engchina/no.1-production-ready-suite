@@ -20,6 +20,7 @@ import {
   RowTitleButton,
   ApiErrorBanner,
   apiErrorMessage,
+  compareNames,
 } from "@production-ready/ui";
 import { agentApi, type AgentProfile, type AgentVersion } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -112,7 +113,10 @@ export function AgentsPage() {
   const agentList = agents.data?.agents ?? [];
   // 一覧の絞り込み（名前・ID・説明。#808）。検索語は作業状態に残し、変わったら 1 ページ目へ戻す。
   const [agentQuery, setAgentQuery] = useListSearch("agents");
-  const visibleAgents = agentList.filter((agent) => matchesSearch(agentQuery, [agent.name, agent.id, agent.description]));
+  // 全件を名前の自然順にしてからページングする。同名は ID で安定させ、取得順に依存させない。
+  const visibleAgents = agentList
+    .filter((agent) => matchesSearch(agentQuery, [agent.name, agent.id, agent.description]))
+    .sort((left, right) => compareNames(left.name, right.name) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
   // 作成できない利用者が `?id=new` を開いたら一覧を出す。
   const target = !canCreate && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
 

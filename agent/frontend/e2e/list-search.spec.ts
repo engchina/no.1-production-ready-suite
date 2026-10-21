@@ -16,6 +16,43 @@ const VIEWPORTS = [
   { name: "mobile-375", width: 375, height: 812 },
 ] as const;
 
+test("業務 Agent は全件を名前の自然順・同名は ID 順にしてからページングする", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  const base = mockApi.state.agents[0];
+  const names = [
+    ["number-2", "2_検証"], ["number-10", "10_検証"], ["number-20", "20_検証"], ["number-21", "21_検証"],
+    ["latin-2", "Agent 2"], ["latin-10", "Agent 10"], ["kana", "あいう"],
+    ...Array.from({ length: 30 }, (_, index) => index + 1).flatMap((number) => {
+      const row = [`agent-${number}`, `検証 Agent ${number}`];
+      if (number === 10) return [["aa-same", row[1]], row, ["zz-same", row[1]]];
+      return number === 21 ? [row, ["default", row[1]]] : [row];
+    }),
+  ];
+  const ordered = names.map(([id, name], index) => ({ ...base, id, name, enabled: index % 2 === 0 }));
+  mockApi.state.agents.splice(0, mockApi.state.agents.length, ...[...ordered].reverse());
+  await page.goto("/agents");
+  const table = page.getByRole("table", { name: "業務 Agent 一覧" });
+  const pager = page.getByTestId("agent-list-pagination");
+  const rowIds = () => table.locator("tbody tr").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-testid")));
+  const expected = ordered.map((row) => `agent-row-${row.id}`);
+  await expect.poll(rowIds).toEqual(expected.slice(0, 25));
+  await expect(pager).toContainText("1–25 / 40 件");
+  await pager.getByRole("button", { name: "次へ", exact: true }).click();
+  await expect.poll(rowIds).toEqual(expected.slice(25));
+
+  // 取得順が変わっても同名の順とページ境界を保つ。
+  mockApi.state.agents.reverse();
+  await page.reload();
+  await expect.poll(rowIds).toEqual(expected.slice(25));
+  await page.locator("#agent-search").fill("10_検証");
+  await expect.poll(rowIds).toEqual(["agent-row-number-10"]);
+  await expect(page.getByTestId("agent-list-toolbar")).toContainText("1 件（全 40 件）");
+  await expect(pager).toHaveCount(0);
+  await page.locator("#agent-search").fill("");
+  await expect.poll(rowIds).toEqual(expected.slice(0, 25));
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("agent-name-order.png"), fullPage: true });
+});
+
 async function useTheme(page: Page, theme: "light" | "dark") {
   await page.addInitScript((value) => {
     window.localStorage.setItem("production-ready-agent.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
