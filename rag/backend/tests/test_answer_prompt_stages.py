@@ -183,5 +183,7 @@ def test_every_stage_phase_and_part_has_screen_copy() -> None:
 
 def test_all_runtime_instructions_use_markdown_sections() -> None:
     for stage in readonly_prompt_stages():
-        for part in stage["prompts"]:
+        parts = stage["prompts"]
+        assert isinstance(parts, list)
+        for part in parts:
             assert re.search(("^## \\S"), str(part["content"]), re.M), (stage["id"], part["id"])

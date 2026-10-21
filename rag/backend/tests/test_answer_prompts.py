@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import UTC, datetime
 from typing import Any
 
@@ -256,7 +257,10 @@ async def test_answer_prompts_round_trip_on_real_oracle() -> None:
         await oracle.save_answer_prompt(VLM_ANSWER_PROMPT_KEY, legacy)
         await oracle.save_answer_prompt(IMAGE_RETRIEVAL_PROMPT_KEY, image_content)
         before = await oracle.list_answer_prompts()
-        with oracle.acquire_connection() as connection, connection.cursor() as cursor:
+        with (
+            closing(oracle.acquire_connection()) as connection,
+            closing(connection.cursor()) as cursor,
+        ):
             cursor.execute(answer_prompt_placeholders_migration_sql())
             cursor.execute(answer_prompt_placeholders_migration_sql())
             connection.commit()
