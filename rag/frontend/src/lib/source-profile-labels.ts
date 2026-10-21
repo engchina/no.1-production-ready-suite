@@ -1,4 +1,4 @@
-import type { SourceModality, SourcePreviewKind } from "./api";
+import type { DocumentSummary, SourceModality, SourcePreviewKind } from "./api";
 import { t, type I18nKey } from "./i18n";
 
 const PARSER_PROFILE_KEYS: Record<string, I18nKey> = {
@@ -158,4 +158,29 @@ export function qualityCodeLabel(value: string): string {
   if (warningKey) return t(warningKey);
   if (value in PARSER_PROFILE_KEYS) return t(parserProfileKey(value));
   return value;
+}
+
+
+const OFFICE_TYPE_KEYS: Record<string, I18nKey> = {
+  ".doc": "sourceProfile.fileType.word", ".docx": "sourceProfile.fileType.word", ".docm": "sourceProfile.fileType.word",
+  ".xls": "sourceProfile.fileType.excel", ".xlsx": "sourceProfile.fileType.excel", ".xlsm": "sourceProfile.fileType.excel", ".xlsb": "sourceProfile.fileType.excel",
+  ".ppt": "sourceProfile.fileType.powerpoint", ".pptx": "sourceProfile.fileType.powerpoint", ".pptm": "sourceProfile.fileType.powerpoint",
+};
+
+/** 原本の種類を表示する。旧カテゴリや本文から抽出した分類は参照しない。 */
+export function documentFileTypeLabel(document: Pick<DocumentSummary, "source_profile" | "file_name" | "content_type">): string {
+  const profile = document.source_profile;
+  const extension = (profile?.extension || document.file_name.match(/\.[a-z0-9]+$/i)?.[0] || "").toLowerCase();
+  if (profile?.modality === "pdf") return t(sourceModalityKey("pdf"));
+  const officeKey = OFFICE_TYPE_KEYS[extension];
+  if (officeKey && (!profile || profile.modality === "office")) return t(officeKey);
+  if (profile && profile.modality !== "unknown") return t(sourceModalityKey(profile.modality));
+  if (extension) return extension.slice(1).toUpperCase();
+  const mime = document.content_type?.split(";", 1)[0]?.trim().toLowerCase();
+  if (mime === "application/pdf") return t(sourceModalityKey("pdf"));
+  if (mime?.startsWith("image/")) return t(sourceModalityKey("image"));
+  if (mime?.startsWith("audio/")) return t(sourceModalityKey("audio"));
+  if (mime === "text/html") return t(sourceModalityKey("html"));
+  if (mime?.startsWith("text/")) return t(sourceModalityKey("text"));
+  return t(sourceModalityKey("unknown"));
 }

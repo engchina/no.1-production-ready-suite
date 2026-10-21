@@ -70,7 +70,7 @@ import { toast } from "@/lib/toast";
 import { listToolbarLabels, paginationLabels } from "@/lib/pagination-labels";
 import { listCountProps } from "@/lib/list-paging";
 import { useWorkspaceState } from "@/lib/workspace-state";
-import { ingestionSkipReasonLabel } from "@/lib/source-profile-labels";
+import { documentFileTypeLabel, ingestionSkipReasonLabel } from "@/lib/source-profile-labels";
 
 import {
   bulkIngestSeverity,
@@ -1000,7 +1000,7 @@ function documentColumns({
       key: "category",
       header: t("fileList.col.category"),
       className: "text-fg-muted",
-      render: (doc) => doc.category_name ?? "—",
+      render: (doc) => documentFileTypeLabel(doc),
     },
     {
       key: "status",
