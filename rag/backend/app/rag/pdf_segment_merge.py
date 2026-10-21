@@ -552,7 +552,7 @@ def consolidate_document_extraction(
         updates: dict[str, Any] = {}
         if element.element_id in corrected_text:
             updates["text"] = str(record["text"])
-            metadata["pdf_text_correction"] = "underscore_from_text_layer"
+            metadata["pdf_text_correction"] = raw["pdf_text_correction"]
         continues = raw.get("continues_record_id")
         if isinstance(continues, str) and continues:
             metadata["continues_element_id"] = continues

@@ -1,4 +1,4 @@
-"""Docling の結合下線を、同じ位置の PDF 原文で確認できる場合だけ復元する。"""
+"""Docling の文字の差を、同じ位置の PDF 原文で確認できる場合だけ復元する。"""
 
 from __future__ import annotations
 
@@ -6,17 +6,19 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-_COMBINING_LOW_LINE = "\N{COMBINING LOW LINE}"
+_SOURCE_CHARACTER_PAIRS = frozenset({("\N{COMBINING LOW LINE}", "_"), ("\u301c", "\uff5e")})
+_SUSPECT_CHARACTERS = frozenset(parsed for parsed, _ in _SOURCE_CHARACTER_PAIRS)
 
 
-def _restore_underscores(text: str, original: str) -> str:
-    """空白以外が同じで、差分が結合下線→ASCII 下線だけのときに原文へ戻す。"""
+def _restore_source_characters(text: str, original: str) -> str:
+    """空白以外が同じで、差分が確認済みの文字の組だけのときに原文へ戻す。"""
     parsed = "".join(text.split())
     native = "".join(original.split())
     if len(parsed) != len(native) or not native:
         return text
     if any(
-        a != b and (a, b) != (_COMBINING_LOW_LINE, "_") for a, b in zip(parsed, native, strict=True)
+        a != b and (a, b) not in _SOURCE_CHARACTER_PAIRS
+        for a, b in zip(parsed, native, strict=True)
     ):
         return text
     source = iter(native)
@@ -33,7 +35,7 @@ def correct_docling_pdf_text(records: list[dict[str, Any]], source_bytes: bytes)
         record
         for record in records
         if record.get("engine") == "docling"
-        and _COMBINING_LOW_LINE in str(record.get("text") or "")
+        and any(char in str(record.get("text") or "") for char in _SUSPECT_CHARACTERS)
         and record.get("category") not in {"Table", "Picture"}
     ]
     if not candidates or not source_bytes.startswith(b"%PDF"):
@@ -79,12 +81,12 @@ def correct_docling_pdf_text(records: list[dict[str, Any]], source_bytes: bytes)
             except Exception:  # noqa: BLE001 - 位置や文字層を読めない record は変更しない。
                 original = ""
             previous = str(record.get("text") or "")
-            restored = _restore_underscores(previous, original)
+            restored = _restore_source_characters(previous, original)
             if restored != previous:
                 record["text"] = restored
                 record["raw"] = {
                     **(record["raw"] if isinstance(record.get("raw"), Mapping) else {}),
-                    "pdf_text_correction": "underscore_from_text_layer",
+                    "pdf_text_correction": "original_characters_from_text_layer",
                 }
                 corrected.add(str(record.get("id") or ""))
     finally:
