@@ -823,11 +823,12 @@ def _lines(match: GuideMatch) -> list[str]:
         lines.append(
             "分かっている条件: " + "、".join(f"{s.condition.label}={s.value}" for s in known)
         )
-        # 既知の条件に当たる場合だけを答える（別の場合の手順を並べない。#1238 の実環境の確認）。
+        # 外れた分岐の手順は visible_plan が外す。残った手順は条件が不成立でも説明させ（#2813）、
+        # 資料にある別の場合の記載だけを混ぜないようにする（#1238）。
         lines.append(
-            "分かっている条件に当たる場合の手順・注意だけを答え、"
+            "資料にある、"
             + "、".join(f"{s.condition.label}が「{s.value}」以外の場合" for s in known)
-            + "の手順は答えに含めない。"
+            + "に限った手順・注意は答えに含めない。"
         )
     conflicting = [state for state in match.states if state.conflicting]
     if conflicting:

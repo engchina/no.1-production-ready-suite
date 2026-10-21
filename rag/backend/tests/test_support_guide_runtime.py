@@ -188,7 +188,12 @@ def test_guide_becomes_a_pinned_rule_with_steps_and_hints() -> None:
     assert rule["tags"] == ["pinned", "support_guide"]
     assert rule["triggers"] == ["権限タブ"]
     assert "分かっている条件: 付与先=グループ" in rule["content"]
-    assert "付与先が「グループ」以外の場合の手順は答えに含めない" in rule["content"]
+    # 別の場合に限った資料の記載だけを外し、残った手順そのものを外す指示は出さない（#2813）。
+    assert (
+        "資料にある、付与先が「グループ」以外の場合に限った手順・注意は答えに含めない。"
+        in rule["content"]
+    )
+    assert "当たる場合の手順・注意だけを答え" not in rule["content"]
     assert "手順 2（grant）. 権限を選んで付与する（open の後）" in rule["content"]
     assert "必要な根拠:" not in rule["content"]
     assert "実施の前に承認が要る" in rule["content"]
