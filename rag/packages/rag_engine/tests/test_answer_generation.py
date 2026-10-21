@@ -178,7 +178,7 @@ class AnswerGenerationTests(unittest.TestCase):
                 self.subTest(mode=mode),
                 patch(
                     "rag_engine.generation.answering.read_prompt",
-                    return_value="独自方針 {{question}} {{images}}",
+                    return_value="独自方針 {{question}} {{answer_context}}",
                 ),
                 patch("rag_engine.generation.answering.parse_text_response", side_effect=echo_model) as text,
                 patch(
@@ -880,7 +880,7 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertIn("登録手順を確認してください。", answer)
         self.assertIn("p.2 #3", answer)
         self.assertIn("契約区分", parse.call_args.args[1])
-        self.assertNotIn("{{images}}", parse.call_args.args[1])
+        self.assertNotIn("{{answer_context}}", parse.call_args.args[1])
 
     def test_answer_question_result_simple_retrieval_does_not_expand(self):
         settings = get_settings()

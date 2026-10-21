@@ -7,6 +7,7 @@ import {
   Disclosure,
   FormActionBar,
   FormGrid,
+  MarkdownText,
   FormStatus,
   Skeleton,
   StatusBadge,
@@ -276,9 +277,11 @@ function ReadonlyStages({ stages }: { stages: AnswerPromptStage[] }) {
                     <p className="text-xs font-medium text-fg-muted">
                       {t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
                     </p>
-                    <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface p-2 font-mono text-xs leading-relaxed text-fg">
-                      {part.content}
-                    </pre>
+                    <MarkdownText
+                      text={part.content}
+                      headingLevel={6}
+                      className="mt-1 max-h-96 overflow-auto rounded-md border border-border bg-surface p-3"
+                    />
                   </div>
                 ))}
               </Disclosure>

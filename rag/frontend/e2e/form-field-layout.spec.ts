@@ -247,10 +247,10 @@ async function mockAnswerPrompts(page: Page) {
         prompts: [
           {
             key: "vlm_answer",
-            content: "次の質問に答えてください。\n{{question}}\n{{images}}",
-            default_content: "既定のテンプレート {{question}} {{images}}",
+            content: "次の質問に答えてください。\n{{question}}\n{{answer_context}}",
+            default_content: "既定のテンプレート {{question}} {{answer_context}}",
             customized: true,
-            required_placeholders: ["question", "images"],
+            required_placeholders: ["question", "answer_context"],
             updated_at: "2026-09-26T01:00:00Z",
           },
         ],

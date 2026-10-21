@@ -2912,3 +2912,643 @@ BEGIN
     rename_permission('menu.business_views', 'menu.search_answer_profiles');
     rename_permission('rag.business_views.manage', 'rag.search_answer_profiles.manage');
 END;
+
+-- migration: 20261005_001_message_answer_runs
+DECLARE
+    v_count NUMBER;
+    v_index_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_MESSAGES' AND column_name = 'PROGRESS_JSON';
+    IF v_count = 0 THEN
+        SELECT COUNT(*) INTO v_index_count
+        FROM user_indexes
+        WHERE index_name = 'RAG_MESSAGES_CONVERSATION_CREATED_IDX';
+        IF v_index_count > 0 THEN
+            EXECUTE IMMEDIATE 'DROP INDEX rag_messages_conversation_created_idx';
+        END IF;
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_messages ADD (progress_json JSON)';
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_messages_conversation_created_idx '
+            || 'ON rag_messages (conversation_id, created_at)';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_MESSAGES' AND column_name = 'LEASE_OWNER';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_messages ADD (lease_owner VARCHAR2(128))';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_MESSAGES' AND column_name = 'HEARTBEAT_AT';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_messages ADD (heartbeat_at TIMESTAMP WITH TIME ZONE)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_MESSAGES'
+      AND constraint_name = 'RAG_MESSAGES_STATUS_CK';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_messages DROP CONSTRAINT rag_messages_status_ck';
+    END IF;
+    EXECUTE IMMEDIATE
+        'ALTER TABLE rag_messages ADD CONSTRAINT rag_messages_status_ck CHECK '
+        || '(status IN (''STREAMING'', ''COMPLETE'', ''ERROR'', ''CANCELLED''))';
+END;
+/
+
+-- migration: 20261007_001_document_superseded
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'SUPERSEDED_BY_DOCUMENT_ID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (superseded_by_document_id VARCHAR2(64))';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'SUPERSEDED_AT';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (superseded_at TIMESTAMP WITH TIME ZONE)';
+    END IF;
+END;
+/
+
+-- migration: 20261009_001_entity_layer
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_ENTITIES';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_entities ( '
+            || 'entity_id       VARCHAR2(64) PRIMARY KEY, '
+            || 'chunk_set_id    VARCHAR2(64) NOT NULL, '
+            || 'document_id     VARCHAR2(64) NOT NULL, '
+            || 'tenant_id_hash  CHAR(64), '
+            || 'entity_key      VARCHAR2(400 CHAR) NOT NULL, '
+            || 'display_name    VARCHAR2(400 CHAR) NOT NULL, '
+            || 'entity_type     VARCHAR2(16) NOT NULL, '
+            || 'scope_label     VARCHAR2(200 CHAR), '
+            || 'created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_entities_document_fk '
+            || 'FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_entities_type_ck '
+            || 'CHECK (entity_type IN (''record'', ''defined'', ''value'', ''term'')) '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_ENTITIES_CHUNK_SET_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_entities_chunk_set_idx '
+            || 'ON rag_entities (chunk_set_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_ENTITIES_DOCUMENT_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_entities_document_idx '
+            || 'ON rag_entities (document_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_ENTITY_ALIASES';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_entity_aliases ( '
+            || 'entity_id   VARCHAR2(64) NOT NULL, '
+            || 'alias_key   VARCHAR2(400 CHAR) NOT NULL, '
+            || 'alias_text  VARCHAR2(400 CHAR) NOT NULL, '
+            || 'alias_kind  VARCHAR2(16) NOT NULL, '
+            || 'CONSTRAINT rag_entity_aliases_pk PRIMARY KEY (entity_id, alias_key), '
+            || 'CONSTRAINT rag_entity_aliases_entity_fk '
+            || 'FOREIGN KEY (entity_id) REFERENCES rag_entities (entity_id) ON DELETE CASCADE '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_ENTITY_ALIASES_KEY_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_entity_aliases_key_idx '
+            || 'ON rag_entity_aliases (alias_key, entity_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_ENTITY_CHUNKS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_entity_chunks ( '
+            || 'entity_id       VARCHAR2(64) NOT NULL, '
+            || 'chunk_id        VARCHAR2(128) NOT NULL, '
+            || 'chunk_role      VARCHAR2(16) NOT NULL, '
+            || 'attribute_name  VARCHAR2(200 CHAR), '
+            || 'CONSTRAINT rag_entity_chunks_pk PRIMARY KEY (entity_id, chunk_id), '
+            || 'CONSTRAINT rag_entity_chunks_entity_fk '
+            || 'FOREIGN KEY (entity_id) REFERENCES rag_entities (entity_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_entity_chunks_chunk_fk '
+            || 'FOREIGN KEY (chunk_id) REFERENCES rag_chunks (chunk_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_entity_chunks_role_ck '
+            || 'CHECK (chunk_role IN (''definition'', ''attribute'', ''mention'')) '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_ENTITY_CHUNKS_CHUNK_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_entity_chunks_chunk_idx '
+            || 'ON rag_entity_chunks (chunk_id, chunk_role)';
+    END IF;
+END;
+/
+
+-- migration: 20261011_001_section_chunk_map
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_CHUNK_SET_SECTIONS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_chunk_set_sections ( '
+            || 'chunk_set_id       VARCHAR2(64) NOT NULL, '
+            || 'section_id         VARCHAR2(64) NOT NULL, '
+            || 'document_id        VARCHAR2(64) NOT NULL, '
+            || 'section_ordinal    NUMBER(10) NOT NULL, '
+            || 'section_level      NUMBER(2) NOT NULL, '
+            || 'parent_section_id  VARCHAR2(64), '
+            || 'title              VARCHAR2(400 CHAR) NOT NULL, '
+            || 'page_start         NUMBER(10), '
+            || 'page_end           NUMBER(10), '
+            || 'chunk_count        NUMBER(10) DEFAULT 0 NOT NULL, '
+            || 'char_count         NUMBER(19) DEFAULT 0 NOT NULL, '
+            || 'first_chunk_index  NUMBER(10), '
+            || 'last_chunk_index   NUMBER(10), '
+            || 'created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_chunk_set_sections_pk PRIMARY KEY (chunk_set_id, section_id), '
+            || 'CONSTRAINT rag_chunk_set_sections_document_fk '
+            || 'FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_CHUNK_SET_SECTIONS_DOCUMENT_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_chunk_set_sections_document_idx '
+            || 'ON rag_chunk_set_sections (document_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_SECTION_CHUNKS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_section_chunks ( '
+            || 'chunk_set_id  VARCHAR2(64) NOT NULL, '
+            || 'section_id    VARCHAR2(64) NOT NULL, '
+            || 'chunk_id      VARCHAR2(128) NOT NULL, '
+            || 'document_id   VARCHAR2(64) NOT NULL, '
+            || 'chunk_order   NUMBER(10) NOT NULL, '
+            || 'chunk_index   NUMBER(10) NOT NULL, '
+            || 'is_owner      NUMBER(1) DEFAULT 0 NOT NULL, '
+            || 'CONSTRAINT rag_section_chunks_pk PRIMARY KEY (chunk_set_id, section_id, chunk_id), '
+            || 'CONSTRAINT rag_section_chunks_section_fk '
+            || 'FOREIGN KEY (chunk_set_id, section_id) '
+            || 'REFERENCES rag_chunk_set_sections (chunk_set_id, section_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_section_chunks_chunk_fk '
+            || 'FOREIGN KEY (chunk_id) REFERENCES rag_chunks (chunk_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_section_chunks_owner_ck CHECK (is_owner IN (0, 1)) '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_SECTION_CHUNKS_CHUNK_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_section_chunks_chunk_idx '
+            || 'ON rag_section_chunks (chunk_id, is_owner)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_SECTION_CHUNKS_DOCUMENT_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_section_chunks_document_idx '
+            || 'ON rag_section_chunks (document_id)';
+    END IF;
+END;
+/
+
+-- migration: 20261015_001_message_clarification
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_MESSAGES' AND column_name = 'CLARIFICATION_JSON';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_messages ADD (clarification_json CLOB)';
+    END IF;
+END;
+/
+
+-- migration: 20261015_002_run_history
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_RUN_HISTORY';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_run_history ( '
+            || 'run_id                    VARCHAR2(64) PRIMARY KEY, '
+            || 'surface                   VARCHAR2(16) NOT NULL, '
+            || 'search_answer_profile_id  VARCHAR2(64), '
+            || 'tenant_id_hash            CHAR(64), '
+            || 'user_id_hash              CHAR(64), '
+            || 'user_uuid                 VARCHAR2(256), '
+            || 'question                  CLOB, '
+            || 'answer_generated          NUMBER(1) DEFAULT 0 NOT NULL, '
+            || 'status                    VARCHAR2(16) NOT NULL, '
+            || 'answer_outcome            VARCHAR2(32), '
+            || 'verification              VARCHAR2(16), '
+            || 'confidence                VARCHAR2(16), '
+            || 'needs_human_review        NUMBER(1), '
+            || 'citation_count            NUMBER(10) DEFAULT 0 NOT NULL, '
+            || 'elapsed_ms                NUMBER(12, 3), '
+            || 'error_stage               VARCHAR2(128), '
+            || 'error_type                VARCHAR2(128), '
+            || 'model_id                  VARCHAR2(256), '
+            || 'conversation_id           VARCHAR2(64), '
+            || 'message_id                VARCHAR2(64), '
+            || 'stages_json               JSON, '
+            || 'citations_json            JSON, '
+            || 'created_at                TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_run_history_surface_ck CHECK (surface IN (''search'', ''chat'')), '
+            || 'CONSTRAINT rag_run_history_status_ck CHECK (status IN (''success'', ''blocked'', ''error'')), '
+            || 'CONSTRAINT rag_run_history_verification_ck '
+            || 'CHECK (verification IS NULL OR verification IN (''verified'', ''partial'', ''unverified'')) '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_RUN_HISTORY_CREATED_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_run_history_created_idx '
+            || 'ON rag_run_history (created_at DESC, run_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_RUN_HISTORY_OWNER_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_run_history_owner_idx '
+            || 'ON rag_run_history (user_id_hash, created_at DESC)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_RUN_HISTORY_CONVERSATION_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_run_history_conversation_idx '
+            || 'ON rag_run_history (conversation_id)';
+    END IF;
+END;
+/
+
+-- migration: 20261015_003_run_history_conversation_idx
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_RUN_HISTORY_CONVERSATION_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_run_history_conversation_idx '
+            || 'ON rag_run_history (conversation_id)';
+    END IF;
+END;
+/
+
+-- migration: 20261015_004_ingestion_job_progress
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_INGESTION_JOBS' AND column_name = 'PROGRESS_JSON';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_ingestion_jobs ADD (progress_json CLOB)';
+    END IF;
+END;
+/
+
+-- migration: 20261016_001_retire_evaluation_compare
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DELETE FROM rag_evaluation_jobs WHERE kind <> ''run''';
+        SELECT COUNT(*) INTO v_count
+        FROM user_constraints
+        WHERE table_name = 'RAG_EVALUATION_JOBS'
+          AND constraint_name = 'RAG_EVALUATION_JOBS_KIND_CK';
+        IF v_count > 0 THEN
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_evaluation_jobs DROP CONSTRAINT rag_evaluation_jobs_kind_ck';
+        END IF;
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_evaluation_jobs ADD CONSTRAINT rag_evaluation_jobs_kind_ck '
+            || 'CHECK (kind IN (''run''))';
+        SELECT COUNT(*) INTO v_count
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'CURRENT_EXPERIMENT_ID';
+        IF v_count > 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs DROP COLUMN current_experiment_id';
+        END IF;
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_EVALUATION_RUNS_BEST_EXPERIMENT_IDX';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP INDEX rag_evaluation_runs_best_experiment_idx';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_RUNS' AND column_name = 'BEST_EXPERIMENT_ID';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_runs DROP COLUMN best_experiment_id';
+    END IF;
+END;
+/
+
+-- migration: 20261016_003_document_categories
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_DOCUMENT_CATEGORIES';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_document_categories ( '
+            || 'category_id     VARCHAR2(64) PRIMARY KEY, '
+            || 'parent_id       VARCHAR2(64), '
+            || 'category_level  NUMBER(1) NOT NULL, '
+            || 'name            VARCHAR2(200 CHAR) NOT NULL, '
+            || 'sort_order      NUMBER(10) DEFAULT 0 NOT NULL, '
+            || 'created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_document_categories_level_ck CHECK (category_level BETWEEN 1 AND 3), '
+            || 'CONSTRAINT rag_document_categories_parent_fk FOREIGN KEY (parent_id) REFERENCES rag_document_categories (category_id) '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_DOCUMENT_CATEGORIES_NAME_UX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE UNIQUE INDEX rag_document_categories_name_ux '
+            || 'ON rag_document_categories (NVL(parent_id, ''-''), name)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_DOCUMENT_CATEGORIES_PARENT_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_document_categories_parent_idx '
+            || 'ON rag_document_categories (parent_id, sort_order)';
+    END IF;
+END;
+/
+
+-- migration: 20261018_001_support_guide_embeddings
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_SUPPORT_GUIDE_EMBEDDINGS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_support_guide_embeddings ( '
+            || 'guide_id         VARCHAR2(64) NOT NULL, '
+            || 'revision         NUMBER(19) NOT NULL, '
+            || 'model_id         VARCHAR2(256) NOT NULL, '
+            || 'dimension        NUMBER(10) NOT NULL, '
+            || 'examples_sha256  CHAR(64) NOT NULL, '
+            || 'vectors_json     CLOB NOT NULL, '
+            || 'created_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_support_guide_embeddings_pk PRIMARY KEY (guide_id, revision), '
+            || 'CONSTRAINT rag_support_guide_embeddings_rev_fk FOREIGN KEY (guide_id, revision) '
+            || 'REFERENCES rag_support_guide_revisions (guide_id, revision) ON DELETE CASCADE '
+            || ')';
+    END IF;
+END;
+/
+
+-- migration: 20261018_002_message_answer_notice
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_MESSAGES' AND column_name = 'ANSWER_NOTICE';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_messages ADD (answer_notice CLOB)';
+    END IF;
+END;
+/
+
+-- migration: 20261018_003_answer_record_notice
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_ANSWER_RECORDS' AND column_name = 'ANSWER_NOTICE';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_answer_records ADD (answer_notice CLOB)';
+    END IF;
+END;
+/
+
+-- migration: 20261018_004_support_guide_schema_v2
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_SUPPORT_GUIDES';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE q'[UPDATE rag_support_guides SET draft_json = JSON_TRANSFORM(draft_json, SET '$.schema_version' = 2) WHERE JSON_VALUE(draft_json, '$.schema_version' RETURNING NUMBER) = 1]';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_SUPPORT_GUIDE_REVISIONS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE q'[UPDATE rag_support_guide_revisions SET content_json = JSON_TRANSFORM(content_json, SET '$.schema_version' = 2) WHERE JSON_VALUE(content_json, '$.schema_version' RETURNING NUMBER) = 1]';
+    END IF;
+    COMMIT;
+END;
+/
+
+-- migration: 20261019_001_restore_document_classification
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_DOCUMENTS';
+    IF v_count > 0 THEN
+        SELECT COUNT(*) INTO v_count
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'CLASSIFICATION';
+        IF v_count = 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (classification JSON)';
+        END IF;
+        SELECT COUNT(*) INTO v_count
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'EFFECTIVE_PERIOD';
+        IF v_count > 0 THEN
+            EXECUTE IMMEDIATE q'[MERGE INTO rag_documents target
+USING (
+    SELECT document_id, period_from, period_to
+    FROM (
+        SELECT document_id,
+            TO_DATE(CASE WHEN REGEXP_LIKE(JSON_VALUE(effective_period, '$.effective_from'), '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') THEN JSON_VALUE(effective_period, '$.effective_from') END DEFAULT NULL ON CONVERSION ERROR, 'YYYY-MM-DD') AS period_from,
+            TO_DATE(CASE WHEN REGEXP_LIKE(JSON_VALUE(effective_period, '$.effective_to'), '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') THEN JSON_VALUE(effective_period, '$.effective_to') END DEFAULT NULL ON CONVERSION ERROR, 'YYYY-MM-DD') AS period_to,
+            JSON_VALUE(effective_period, '$.effective_from') AS raw_from,
+            JSON_VALUE(effective_period, '$.effective_to') AS raw_to
+        FROM rag_documents
+        WHERE effective_period IS NOT NULL AND classification IS NULL
+    )
+    WHERE (period_from IS NOT NULL OR period_to IS NOT NULL)
+        AND (raw_from IS NULL OR period_from IS NOT NULL)
+        AND (raw_to IS NULL OR period_to IS NOT NULL)
+        AND (period_from IS NULL OR period_to IS NULL OR period_from < period_to)
+) source
+ON (target.document_id = source.document_id)
+WHEN MATCHED THEN UPDATE SET target.classification = JSON_OBJECT(
+    'effective_from' VALUE TO_CHAR(source.period_from, 'YYYY-MM-DD'),
+    'effective_to' VALUE TO_CHAR(source.period_to, 'YYYY-MM-DD')
+    ABSENT ON NULL RETURNING JSON)
+WHERE target.classification IS NULL]';
+        END IF;
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_QUERY_HISTORY';
+    IF v_count > 0 THEN
+        SELECT COUNT(*) INTO v_count
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_QUERY_HISTORY' AND column_name = 'CLASSIFICATION_FILTER';
+        IF v_count = 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_query_history ADD (classification_filter JSON)';
+        END IF;
+    END IF;
+END;
+/
+
+-- migration: 20261019_002_document_cleanups
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_DOCUMENT_CLEANUPS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_document_cleanups ( '
+            || 'cleanup_id      VARCHAR2(64) PRIMARY KEY, '
+            || 'document_id     VARCHAR2(64) NOT NULL, '
+            || 'file_name       VARCHAR2(512) NOT NULL, '
+            || 'tenant_id_hash  CHAR(64), '
+            || 'user_id_hash    CHAR(64), '
+            || 'targets         JSON NOT NULL, '
+            || 'attempt_count   NUMBER(10) DEFAULT 0 NOT NULL, '
+            || 'last_error_type VARCHAR2(128), '
+            || 'created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_DOCUMENT_CLEANUPS_DOCUMENT_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_document_cleanups_document_idx '
+            || 'ON rag_document_cleanups (document_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_DOCUMENT_CLEANUPS_UPDATED_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_document_cleanups_updated_idx '
+            || 'ON rag_document_cleanups (updated_at)';
+    END IF;
+END;
+/
+
+-- migration: 20261019_003_structured_records_jsonl_profiles
+DECLARE
+    TYPE t_names IS TABLE OF VARCHAR2(261);
+    v_targets t_names := t_names('RAG_DOCUMENTS.PROCESSING_CONFIG', 'RAG_DOCUMENT_RECIPES.PROCESSING_CONFIG', 'RAG_KNOWLEDGE_BASES.RETRIEVAL_CONFIG', 'RAG_INGESTION_JOBS.SETTINGS_OVERRIDES', 'RAG_CHUNK_SETS.RECIPE_SUBSET', 'RAG_DOCUMENT_EXTRACTIONS.RECIPE_SUBSET');
+    v_recipes t_names := t_names('RAG_DOCUMENTS.PROCESSING_CONFIG', 'RAG_DOCUMENT_RECIPES.PROCESSING_CONFIG');
+    v_table   VARCHAR2(128);
+    v_column  VARCHAR2(128);
+    v_type    VARCHAR2(128);
+    v_text    VARCHAR2(512);
+    v_json    VARCHAR2(512);
+    v_expr    VARCHAR2(32767);
+    FUNCTION stored(p_expr VARCHAR2) RETURN VARCHAR2 IS
+    BEGIN
+        IF v_type = 'JSON' THEN
+            RETURN p_expr;
+        END IF;
+        RETURN 'JSON_SERIALIZE(' || p_expr || ' RETURNING CLOB)';
+    END;
+BEGIN
+    FOR i IN 1 .. v_targets.COUNT LOOP
+        v_table := SUBSTR(v_targets(i), 1, INSTR(v_targets(i), '.') - 1);
+        v_column := SUBSTR(v_targets(i), INSTR(v_targets(i), '.') + 1);
+        SELECT MAX(data_type) INTO v_type
+        FROM user_tab_columns
+        WHERE table_name = v_table AND column_name = v_column;
+        IF v_type IS NOT NULL THEN
+            IF v_type = 'JSON' THEN
+                v_text := 'JSON_SERIALIZE(' || v_column || ' RETURNING CLOB)';
+            ELSE
+                v_text := v_column;
+            END IF;
+            v_expr := v_text;
+            v_expr := 'REPLACE(' || v_expr || ', ''"csv_to_json"'', ''"csv_to_jsonl"'')';
+            v_expr := 'REPLACE(' || v_expr || ', ''"excel_to_json"'', ''"excel_to_jsonl"'')';
+            v_expr := 'REPLACE(' || v_expr || ', ''"csv_to_json_format"'', ''"csv_to_jsonl_format"'')';
+            v_expr := 'REPLACE(' || v_expr || ', ''"excel_to_json_format"'', ''"excel_to_jsonl_format"'')';
+            IF v_type = 'JSON' THEN
+                v_expr := 'JSON(' || v_expr || ')';
+            END IF;
+            EXECUTE IMMEDIATE
+                'UPDATE ' || v_table || ' SET ' || v_column || ' = ' || v_expr
+                || ' WHERE ' || v_text || ' LIKE ''%_to_json"%'''
+                || ' OR ' || v_text || ' LIKE ''%_to_json_format"%''';
+            COMMIT;
+        END IF;
+    END LOOP;
+    FOR i IN 1 .. v_recipes.COUNT LOOP
+        v_table := SUBSTR(v_recipes(i), 1, INSTR(v_recipes(i), '.') - 1);
+        v_column := SUBSTR(v_recipes(i), INSTR(v_recipes(i), '.') + 1);
+        SELECT MAX(data_type) INTO v_type
+        FROM user_tab_columns
+        WHERE table_name = v_table AND column_name = v_column;
+        IF v_type IS NOT NULL THEN
+            IF v_type = 'JSON' THEN
+                v_json := v_column;
+            ELSE
+                v_json := 'JSON(' || v_column || ')';
+            END IF;
+            EXECUTE IMMEDIATE
+                'UPDATE ' || v_table || ' SET ' || v_column || ' = '
+                || stored('JSON_TRANSFORM(' || v_json
+                || ', SET ''$.parser_adapter_backend'' = ''structured_records_jsonl'')')
+                || ' WHERE ' || v_column || ' IS NOT NULL'
+                || ' AND JSON_VALUE(' || v_json || ', ''$.preprocess_profile'')'
+                || ' IN (''csv_to_jsonl'', ''excel_to_jsonl'')'
+                || ' AND NVL(JSON_VALUE(' || v_json || ', ''$.parser_adapter_backend''),'
+                || ' ''docling'') IN (''docling'', ''unstructured'')';
+            EXECUTE IMMEDIATE
+                'UPDATE ' || v_table || ' SET ' || v_column || ' = '
+                || stored('JSON_TRANSFORM(' || v_json
+                || ', SET ''$.chunk_delimiter'' = ''\n\n'')')
+                || ' WHERE ' || v_column || ' IS NOT NULL'
+                || ' AND JSON_VALUE(' || v_json || ', ''$.chunking_strategy'')'
+                || ' = ''fixed_delimiter'''
+                || ' AND JSON_VALUE(' || v_json || ', ''$.chunk_delimiter'') IS NULL';
+            COMMIT;
+        END IF;
+    END LOOP;
+END;
+/
+
+-- migration: 20261019_010_message_attachments
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_MESSAGES' AND column_name = 'ATTACHMENTS_JSON';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_messages ADD (attachments_json CLOB)';
+    END IF;
+END;
+/
+
+-- migration: 20261021_001_answer_prompt_placeholders
+UPDATE RAG_ANSWER_PROMPTS
+SET CONTENT = REPLACE(REPLACE(CONTENT,
+    '{{images}}', '{{answer_context}}'),
+    '{{image_metadata}}', '{{evidence_metadata}}')
+WHERE PROMPT_KEY = 'vlm_answer'

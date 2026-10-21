@@ -4,10 +4,10 @@ import { answerPromptError, groupStagesByPhase } from "./answer-prompt.logic";
 
 // #1010: 編集できるプロンプトは backend の validate_prompt と同じ規則で、送る前に欄の下へ出す。
 describe("編集できるプロンプトの欄の検証", () => {
-  const placeholders = ["question", "images"];
+  const placeholders = ["question", "answer_context"];
 
   it("必須の placeholder がすべてあればエラーにしない", () => {
-    expect(answerPromptError("独自 {{question}} {{images}}", "テンプレート", placeholders)).toBeNull();
+    expect(answerPromptError("独自 {{question}} {{answer_context}}", "テンプレート", placeholders)).toBeNull();
   });
 
   it("空・空白だけは入力を求める", () => {
@@ -16,10 +16,10 @@ describe("編集できるプロンプトの欄の検証", () => {
 
   it("欠けた placeholder を backend と同じ書き方で示す", () => {
     expect(answerPromptError("質問だけ {{question}}", "テンプレート", placeholders)).toBe(
-      "必須の placeholder がありません: {{images}}"
+      "必須の placeholder がありません: {{answer_context}}"
     );
     expect(answerPromptError("何もない", "テンプレート", placeholders)).toBe(
-      "必須の placeholder がありません: {{question}}、{{images}}"
+      "必須の placeholder がありません: {{question}}、{{answer_context}}"
     );
   });
 });

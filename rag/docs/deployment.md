@@ -1852,3 +1852,17 @@ uv run python -m app.rag.file_processing_staging_cli \
 ## 共通ログ（JST）
 
 API / worker の stderr、Nginx JSON access、共有 tail / export の契約と保持・権限確認は [共通ログ仕様](../../platform/docs/logging-standard.md) に従う（#858）。`scripts/tail-logs.sh` で製品の unit を読む。既存 Compute の Nginx は共有 template の反映と `nginx -t` が必要。実ホストの保持値は変更前に確認する。
+
+### 回答テンプレートの placeholder の改名（#2859）
+
+schema の更新で `20261021_001_answer_prompt_placeholders` を適用すると、保存済みの
+`vlm_answer` の `{{images}}` は `{{answer_context}}`、`{{image_metadata}}` は
+`{{evidence_metadata}}` になります。指示本文と更新時刻は保持し、画像読み取り専用の
+`image_retrieval` は変更しません。schema の更新と backend の更新を合わせて行ってください。
+ファイルに保存する SDK の構成では、`prompts/vlm_answer.txt` をバックアップしてから同じ
+placeholder を置き換えます。旧名を実行時に展開する互換処理はありません。
+
+組み込みの指示は Markdown の節・手順・条件で表示します。編集済みの独自の指示本文は
+自動で書き直しません。組み込みの新しい書式へ戻す場合は、内容を確認してから設定画面の
+「既定に戻す」を使います。外部根拠を囲む `BEGIN_UNTRUSTED_RETRIEVED_CONTEXT` /
+`END_UNTRUSTED_RETRIEVED_CONTEXT` は引き続きモデルへ送信します。

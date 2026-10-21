@@ -54,7 +54,7 @@ from rag_engine.resources.llm_usage import (
     response_usage,
 )
 
-VISION_SYSTEM_PROMPT = "あなたは問い合わせRAG用の画像説明作成担当です。JSONだけを返してください。"
+VISION_SYSTEM_PROMPT = "あなたは問い合わせRAG用の画像説明作成担当です。\n\n## 手順\n\n1. JSONだけを返してください。\n"
 API_SIGNING_KEY_FIELDS = ("user", "tenancy", "fingerprint", "key_file", "region")
 
 
