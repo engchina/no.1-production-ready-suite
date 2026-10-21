@@ -1202,6 +1202,7 @@ def compare_jobs(base: EvaluationJob, target: EvaluationJob) -> EvaluationCompar
         elif left.status in {
             CaseStatus.APPROVAL_BLOCKED,
             CaseStatus.NEEDS_APPROVAL,
+            CaseStatus.DEFINITION_CHANGED,
         } or right.status in {
             CaseStatus.APPROVAL_BLOCKED,
             CaseStatus.NEEDS_APPROVAL,
@@ -1780,6 +1781,7 @@ async def run_evaluation_job(job_id: str, store: EvaluationStore = evaluation_st
                 await _run_case(job, index, result.case, store, runtime_repository, judge_caller)
             except EvaluationDefinitionChanged as exc:
                 changed.append(exc)
+                _cancel_unfinished_runs(job_id, store, runtime_repository)
                 return
             except BoundedCallAborted as exc:
                 aborted.append(exc)

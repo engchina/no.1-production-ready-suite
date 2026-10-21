@@ -2059,13 +2059,15 @@ def test_explicit_approval_expectation_is_checked_without_judge(
     assert result.executed_tool_calls == []
 
 
-def test_approval_block_is_unassessed_and_not_a_regression() -> None:
+@pytest.mark.parametrize("status", [CaseStatus.APPROVAL_BLOCKED, CaseStatus.DEFINITION_CHANGED])
+def test_unassessed_case_is_not_a_regression(status: CaseStatus) -> None:
     case = EvaluationCase(question="合成の質問", expected="合成の回答")
     blocked = EvaluationCaseResult(
-        case=case, status=CaseStatus.APPROVAL_BLOCKED, blocked_tool_calls=["synthetic_tool"]
+        case=case, status=status, blocked_tool_calls=["synthetic_tool"]
     )
     summary = evaluation.summarize([blocked])
-    assert (summary.approval_blocked, summary.judged_cases, summary.pass_rate) == (1, 0, None)
+    assert (summary.judged_cases, summary.pass_rate) == (0, None)
+    assert summary.approval_blocked == int(status == CaseStatus.APPROVAL_BLOCKED)
     correct = _judged(case, JudgeVerdict.CORRECT, 1)
     for before, after in [(correct, blocked), (blocked, correct)]:
         comparison = evaluation.compare_jobs(
@@ -2239,3 +2241,46 @@ def test_definition_hash_tracks_skills_output_and_model_settings(
     )
     after = evaluation.draft_definition_hash(profile)
     assert after != before and "synthetic-secret" not in after
+
+
+def test_definition_change_cancels_other_running_cases(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    import asyncio
+
+    del agent
+    monkeypatch.setattr(evaluation, "evaluation_concurrency", lambda: 2)
+    second_started = asyncio.Event()
+    cancelled = asyncio.Event()
+    runs: list[str] = []
+    original_cancel = runtime_repository.cancel_run
+
+    def cancel(run_id: str) -> Any:
+        result = original_cancel(run_id)
+        cancelled.set()
+        return result
+
+    monkeypatch.setattr(runtime_repository, "cancel_run", cancel)
+
+    async def run_case(
+        job: Any, index: int, case: Any, store: Any, repository: Any, caller: Any
+    ) -> None:
+        run = repository.create_builtin_run(
+            RunCreateRequest(agent_id=AGENT_ID, goal="合成の質問", draft=True)
+        )
+        runs.append(run.id)
+        store.update_result(job.id, index, status=CaseStatus.RUNNING, run_id=run.id)
+        if index == 0:
+            await second_started.wait()
+            raise evaluation.EvaluationDefinitionChanged("合成の条件変更")
+        second_started.set()
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+    monkeypatch.setattr(evaluation, "_run_case", run_case)
+    job = _job(_case("one", "合成の質問1", "合成の回答"), _case("two", "合成の質問2", "合成の回答"))
+    anyio.run(run_evaluation_job, job.id)
+    assert all(runtime_repository.get_run(run_id).status == RunStatus.CANCELLED for run_id in runs)
+    assert all(
+        item.status == CaseStatus.DEFINITION_CHANGED
+        for item in evaluation_store.get(job.id).results
+    )

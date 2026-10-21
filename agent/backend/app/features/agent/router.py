@@ -3738,6 +3738,7 @@ def _publish_evaluation_refusal(agent: AgentProfile) -> str | None:
     if (threshold <= 0 and max_drop is None) or not agent.has_unpublished_changes():
         return None
     since = agent.draft_updated_at or agent.created_at
+    current_definition = draft_definition_hash(agent)
     latest = next(
         (
             job
@@ -3746,7 +3747,7 @@ def _publish_evaluation_refusal(agent: AgentProfile) -> str | None:
             and job.agent_version == "draft"
             and job.status == JobStatus.COMPLETED
             and job.created_at >= since
-            and job.definition_hash == draft_definition_hash(agent)
+            and job.definition_hash == current_definition
         ),
         None,
     )
