@@ -27,6 +27,7 @@ from uuid import uuid4
 
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause
 from pr_backend_core.oracle_dsn import apply_cli_connect_mode, dsn_without_tns_retry
+from pr_backend_core.oracle_errors import oracle_error_codes
 from pr_backend_core.oracle_pool import (
     DEFAULT_WAIT_TIMEOUT_MS,
     PoolCloser,
@@ -9653,7 +9654,7 @@ class OracleClient:
         def operation(connection: OracleConnectionProtocol) -> bool:
             return delete_document_rows(connection, document_id)
 
-        return await self._run_transaction(operation)
+        return await self._run_transaction(operation, retry_deadlocks=True)
 
     async def _save_extraction_with_oracle(
         self,
@@ -10073,17 +10074,27 @@ class OracleClient:
                 legacy_binds,
             )
 
-    async def _run_transaction(self, operation: Callable[[OracleConnectionProtocol], T]) -> T:
+    async def _run_transaction(
+        self, operation: Callable[[OracleConnectionProtocol], T], *, retry_deadlocks: bool = False
+    ) -> T:
         """Oracle transaction を同期 SDK thread で実行する。"""
-        return cast(T, await self._db_call_runner(lambda: self._run_transaction_sync(operation)))
+        return cast(
+            T,
+            await self._db_call_runner(
+                lambda: self._run_transaction_sync(operation, retry_deadlocks=retry_deadlocks)
+            ),
+        )
 
-    def _run_transaction_sync(self, operation: Callable[[OracleConnectionProtocol], T]) -> T:
+    def _run_transaction_sync(
+        self, operation: Callable[[OracleConnectionProtocol], T], *, retry_deadlocks: bool = False
+    ) -> T:
         """1 transaction を実行する。一時的な接続断は新しい接続で 1 回だけやり直す(#341)。
 
         やり直すのは、commit の前(``operation`` の中)で一時的な接続断
         (``is_session_dead`` / ``isrecoverable``)になった場合だけ。接続が切れた transaction は
         DB 側で rollback されるため、``operation`` を最初から実行し直しても二重に反映しない。
         commit の途中で切れた場合は反映済みか分からないため、やり直さずに例外を返す。
+        削除が明示的に指定した場合は、ORA-00060 も全体の rollback 成功後に一度だけ再試行する。
         rollback / close の失敗(切断後の ``DPY-1001`` など)はログに残し、元の例外を隠さない。
         """
         for attempt in (1, 2):
@@ -10095,8 +10106,11 @@ class OracleClient:
                 connection.commit()
                 return result
             except Exception as exc:
-                _rollback_quietly(connection, exc)
-                if committing or attempt > 1 or not is_transient_oracle_error(exc):
+                rolled_back = _rollback_quietly(connection, exc)
+                retryable = is_transient_oracle_error(exc) or (
+                    retry_deadlocks and rolled_back and "ORA-00060" in oracle_error_codes(exc)
+                )
+                if committing or attempt > 1 or not retryable:
                     raise
                 logger.warning("oracle_transaction_retry", extra=oracle_error_log_fields(exc))
             finally:
@@ -10251,10 +10265,11 @@ def oracle_error_log_fields(exc: BaseException) -> dict[str, object]:
     }
 
 
-def _rollback_quietly(connection: OracleConnectionProtocol, original: BaseException) -> None:
+def _rollback_quietly(connection: OracleConnectionProtocol, original: BaseException) -> bool:
     """rollback する。失敗しても(切断後の ``DPY-1001`` など)ログに残して元の例外を優先する。"""
     try:
         connection.rollback()
+        return True
     except Exception as rollback_error:  # noqa: BLE001 - 元の例外を隠さない
         logger.warning(
             "oracle_rollback_failed",
@@ -10264,6 +10279,7 @@ def _rollback_quietly(connection: OracleConnectionProtocol, original: BaseExcept
                 "original_full_code": oracle_error_log_fields(original)["full_code"],
             },
         )
+        return False
 
 
 def _close_quietly(connection: OracleConnectionProtocol) -> None:
@@ -10499,8 +10515,31 @@ def delete_document_rows(connection: OracleConnectionProtocol, document_id: str)
     ``DocumentDeleteBlockedByRunningIngestionError``。
     文書の削除と同じ transaction で後始末の記録を残すとき(#2452)にも使う。
     """
-    existing = _select_document_state(connection, document_id)
-    if existing is None:
+    # 参照を外す行も含めて ID 順にロックする。先に権限を確認し、対象が消えたら何もしない。
+    locked = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT {columns}
+        FROM rag_documents
+        WHERE (document_id = :document_id
+            OR duplicate_of_document_id = :document_id
+            OR superseded_by_document_id = :document_id)
+          AND {tenant_sql}
+          AND EXISTS (
+              SELECT 1 FROM rag_documents target
+              WHERE target.document_id = :document_id AND {access_sql}
+          )
+        ORDER BY document_id
+        FOR UPDATE
+        """,
+            columns=_DOCUMENT_STATE_COLUMNS_SQL.strip(),
+            tenant_sql=_oracle_tenant_predicate(),
+            access_sql=_oracle_access_predicate_sql(alias="target"),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    if not any(str(row.get("document_id")) == document_id for row in locked):
         return False
     graph_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
     _delete_graph_rows_for_document(
@@ -15495,6 +15534,8 @@ CREATE TABLE rag_artifact_layers (
         )
 );
 
+CREATE INDEX rag_artifact_layers_document_idx ON rag_artifact_layers (document_id);
+
 CREATE INDEX rag_artifact_layers_parent_idx
     ON rag_artifact_layers (parent_chunk_set_id, layer_kind, status);
 """.strip()
@@ -15533,6 +15574,8 @@ CREATE TABLE {table_name} (
     CONSTRAINT {table_name}_duplicate_fk
         FOREIGN KEY (duplicate_of_document_id) REFERENCES {table_name} (document_id)
 );
+
+CREATE INDEX {table_name}_duplicate_idx ON {table_name} (duplicate_of_document_id);
 
 CREATE INDEX {table_name}_content_sha256_idx
     ON {table_name} (content_sha256);

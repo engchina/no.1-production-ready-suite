@@ -496,7 +496,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 105
+    assert len(statements) == 106
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -590,6 +590,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261019_003_structured_records_jsonl_profiles",
         "20261019_010_message_attachments",
         "20261021_001_answer_prompt_placeholders",
+        "20261021_002_document_delete_fk_indexes",
     ]
 
 
@@ -700,3 +701,22 @@ def test_vector_index_reindex_sql_balanced_uses_current_build() -> None:
     assert "WITH TARGET ACCURACY 95" in sql
     assert "NEIGHBORS 32" in sql
     assert "EFCONSTRUCTION 500" in sql
+
+
+def test_migration_artifact_separates_unterminated_sql_from_plsql() -> None:
+    sections = [
+        oracle_schema.OracleSchemaSection(
+            name="first", table_name="example", sql="UPDATE example SET value = 1"
+        ),
+        oracle_schema.OracleSchemaSection(
+            name="second",
+            table_name="example",
+            sql="DECLARE\n    n NUMBER;\nBEGIN\n    n := 1;\nEND;\n/",
+        ),
+    ]
+    statements = oracle_schema.split_sql_statements(
+        oracle_schema.oracle_schema_migration_sql(sections)
+    )
+    assert len(statements) == 2
+    assert statements[0].endswith("UPDATE example SET value = 1")
+    assert statements[1].endswith("END;")

@@ -110,7 +110,8 @@ export function isFileListView(value: unknown): value is FileListView {
 export type EnqueueOutcome =
   | { kind: "queued"; job: IngestionJob }
   | { kind: "skipped"; job: IngestionJob }
-  | { kind: "failed"; message: string };
+  | { kind: "failed"; message: string }
+  | { kind: "unconfirmed"; message: string };
 
 /** 取込 job の投入結果を分類する。SKIPPED は「何も起きない」ように見えるため、理由を知らせる。 */
 export function classifyEnqueuedJob(job: IngestionJob): EnqueueOutcome {
@@ -148,7 +149,8 @@ export function orderedBulkReasons(
 
 export type DeleteOutcome =
   | { kind: "deleted"; warnings: readonly string[] }
-  | { kind: "failed"; message: string };
+  | { kind: "failed"; message: string }
+  | { kind: "unconfirmed"; message: string };
 
 export interface DeleteSummary {
   deleted: number;
@@ -157,6 +159,8 @@ export interface DeleteSummary {
   failed: number;
   firstWarning: string | null;
   firstError: string | null;
+  unconfirmed: number;
+  firstUnconfirmed: string | null;
 }
 
 /** 一括削除の結果をまとめる。後始末の警告を、1 件の削除と同じく成功として黙らせない（#281 / #699）。 */
@@ -167,8 +171,15 @@ export function summarizeDeleteOutcomes(outcomes: readonly DeleteOutcome[]): Del
     failed: 0,
     firstWarning: null,
     firstError: null,
+    unconfirmed: 0,
+    firstUnconfirmed: null,
   };
   for (const outcome of outcomes) {
+    if (outcome.kind === "unconfirmed") {
+      summary.unconfirmed++;
+      summary.firstUnconfirmed ??= outcome.message;
+      continue;
+    }
     if (outcome.kind === "failed") {
       summary.failed += 1;
       summary.firstError = summary.firstError ?? outcome.message;
