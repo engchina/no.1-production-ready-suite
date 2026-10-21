@@ -2143,7 +2143,7 @@ def test_draft_change_invalidates_the_entire_job(
     profile = next(item for item in runtime_repository.list_agents() if item.id == AGENT_ID)
     job = evaluation_store.update(
         _job(
-            _case("first", "合成の質問1", "合成の回答"),
+            _case("first", "合成の質問1", "合成の回答", ["synthetic_tool"]),
             _case("second", "合成の質問2", "合成の回答"),
         ).id,
         agent_version="draft",
@@ -2187,6 +2187,8 @@ def test_draft_change_invalidates_the_entire_job(
     )
     assert final.summary.pass_rate is None and final.summary.judged_cases == 0
     assert final.summary.approval_blocked == 0
+    assert final.summary.tool_accuracy is None
+    assert all(item.tool_selection_correct is None for item in final.results)
 
 
 def test_queued_evaluation_does_not_execute_changed_draft(

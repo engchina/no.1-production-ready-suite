@@ -766,11 +766,12 @@ test("実行条件の変更で無効になった評価を合格と表示しな�
   job.previous_summary = null;
   job.status = "failed";
   job.error = "評価中に実行条件が変更されました。現在の設定で評価し直してください。";
-  const results = [{ ...(job.results as EvaluationResultFixture[])[0], status: "definition_changed", judgement: null, error: job.error }];
+  const results = [{ ...(job.results as EvaluationResultFixture[])[0], status: "definition_changed", judgement: null, tool_selection_correct: null, error: job.error }];
   job.results = results;
   job.summary = { ...evaluationSummary(results), total: 1, completed: 1, correct: 0, incorrect: 0, errors: 1, unjudged: 1, judged_cases: 0, pass_rate: null, average_score: null };
   await page.goto("/evaluation");
   await expect(page.getByText("実行条件の変更で無効", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("evaluation-summary")).not.toContainText("100%");
   await expect(page.getByText("うち判定できなかった 1 件（合格率から除く）", { exact: true })).toBeVisible();
   await expect(page.getByText(job.error as string, { exact: true }).first()).toBeVisible();
   await expectNoHorizontalOverflow(page);
