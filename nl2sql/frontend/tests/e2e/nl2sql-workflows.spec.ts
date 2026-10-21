@@ -18241,7 +18241,7 @@ test("データ取込中は対象・ファイル・モードを固定し失敗�
   await page.goto("/data-management");
   await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)", exact: true }).click();
   const panel = page.locator("#data-management-panel-csv");
-  const target = panel.getByRole("button", { name: "APP.INVOICES を選択", exact: true });
+  const target = panel.getByRole("button", { name: "APP.INVOICES を選択" });
   await target.click();
   const file = panel.getByTestId("data-csv-file-field-input");
   await file.setInputFiles({ name: "orders.csv", mimeType: "text/csv", buffer: Buffer.from("ID\n1\n") });
@@ -18542,7 +18542,7 @@ for (const kind of ["table", "data"] as const) {
     else await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)", exact: true }).click();
     const panel = page.locator(kind === "table" ? "#table-management-panel-import" : "#data-management-panel-csv");
     if (kind === "table") await panel.getByLabel("Oracle 表名").fill("REVIEW_FILES");
-    else await panel.getByRole("button", { name: "APP.INVOICES を選択", exact: true }).click();
+    else await panel.getByRole("button", { name: "APP.INVOICES を選択" }).click();
     const file = panel.getByTestId(kind === "table" ? "table-import-file-field-input" : "data-csv-file-field-input");
     const consent = panel.getByLabel("実行確認語");
     const phrase = kind === "table" ? "ADMIN_EXECUTE" : "APP.INVOICES";
