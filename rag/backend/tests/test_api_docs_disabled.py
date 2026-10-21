@@ -13,7 +13,6 @@ from rag_parser_core.result import ParseResponse
 from rag_parser_core.service import create_parse_app, create_service_parse_app
 from rag_parser_core.source import SourceProfile
 from rag_pipeline_core.stage_service import (
-    create_chunking_app,
     create_evaluation_app,
     create_graph_app,
     create_guardrail_app,
@@ -47,7 +46,6 @@ def _service_apps() -> list[FastAPI]:
         create_graph_app(),
         create_guardrail_app(),
         create_evaluation_app(),
-        create_chunking_app(),
     ]
 
 

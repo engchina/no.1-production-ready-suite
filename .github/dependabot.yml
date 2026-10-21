@@ -170,7 +170,6 @@ updates:
     directories:
       - /rag/services/parsers/structured_records_jsonl
       - /rag/services/parsers/xml_tree_json
-      - /rag/services/pipeline/chunking
       - /rag/services/pipeline/evaluation
       - /rag/services/pipeline/graphrag
       - /rag/services/pipeline/guardrail

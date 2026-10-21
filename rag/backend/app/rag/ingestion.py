@@ -48,7 +48,6 @@ from rag_parser_core.structured_records import (
     record_boundary_plain_text,
 )
 from rag_pipeline_core.raptor import build_raptor_summaries
-from rag_pipeline_core.stage import ChunkingStageRequest
 
 from app.clients.ai_calls import attach_ingestion_progress, ingestion_ai_calls, make_ai_caller
 from app.clients.object_storage import ObjectStorageClient
@@ -70,7 +69,6 @@ from app.clients.parser_service import (
     structured_records_requires_jsonl_backend_message,
     supported_formats_label,
 )
-from app.clients.pipeline_stage import PipelineStageClient
 from app.clients.preprocess_service import PreprocessServiceClient
 from app.config import (
     DEFAULT_PARSER_ADAPTER_BACKEND,
@@ -616,8 +614,6 @@ class IngestionPipeline:
         self._object_storage = object_storage or ObjectStorageClient(settings=self._settings)
         # 外部 adapter は同一プロセスで import せず parser マイクロサービスへ HTTP 委譲する。
         self._parser_service = ParserServiceClient(settings=self._settings)
-        # pipeline ステージ(chunking 等)のプラグイン委譲。有効化済みサービスの失敗は止める。
-        self._pipeline_stage = PipelineStageClient(self._settings)
         # 前処理(parse 前の原本変換)。軽量正規化は in-process、重い変換はサービスへ委譲。
         self._preprocess = PreprocessServiceClient(self._settings)
         # service 系 backend(OCI Document Understanding)を backend から直接呼ぶ。
@@ -2130,17 +2126,6 @@ class IngestionPipeline:
             )
 
         def _run_standard_chunking() -> list[Chunk]:
-            request = ChunkingStageRequest(
-                extraction=extraction,
-                strategy=effective_strategy,
-                chunk_size=chunking_params.chunk_size,
-                overlap=chunking_params.overlap,
-                min_chars=chunking_params.min_chars,
-                delimiter=chunking_params.delimiter,
-            )
-            remote_chunks = self._pipeline_stage.run_chunking(request)
-            if remote_chunks is not None:
-                return remote_chunks
             try:
                 return chunk_extraction_with_strategy(
                     extraction,

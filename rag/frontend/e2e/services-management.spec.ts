@@ -15,7 +15,6 @@ interface ServiceRow {
   category:
     | "preprocess"
     | "parser"
-    | "chunking"
     | "vector_index"
     | "graphrag"
     | "guardrail"
@@ -85,15 +84,6 @@ function defaultServices(): ServiceRow[] {
       execution_policy: "selected_adapter",
       status: "unconfigured",
       configured: false,
-    },
-    {
-      service_id: "pipeline-chunking",
-      category: "chunking",
-      profile: "cpu",
-      label_key: "settings.services.item.pipelineChunking",
-      execution_policy: "in_process_when_disabled",
-      status: "stopped",
-      configured: true,
     },
     {
       service_id: "pipeline-graphrag",
@@ -249,11 +239,12 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "マイクロサービス" })).toBeVisible();
     // 工程の見出しはサイドナビ（取込・回答設定）と同じ並び・名前（#638）。
     // ナビのリンクと区別するため heading role で限定する。
+    await expect(page.getByTestId("service-row-pipeline-chunking")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "文書分割", exact: true })).toHaveCount(0);
     const stageHeadings = [
       "ファイル準備",
       "文書解析(CPU)",
       "文書解析(OCI)",
-      "文書分割",
       "関係情報の構築",
       "安全チェック",
       "評価の基準",
@@ -268,6 +259,7 @@ for (const viewport of [
       })
     );
     expect(headingTops).toEqual([...headingTops].sort((a, b) => a - b));
+    await page.locator("main").screenshot({ path: test.info().outputPath("services-without-chunking.png") });
     for (const removed of ["前処理 (Preprocess)", "解析 (Parser)(CPU)", "品質評価", "関係情報"]) {
       await expect(page.getByRole("heading", { name: removed, exact: true })).toHaveCount(0);
     }
@@ -533,7 +525,6 @@ for (const viewport of [
       "parser-xml-tree-json": "起動",
       "parser-oci-document-understanding": "起動",
       // backend 内処理の段は操作を出さない。
-      "pipeline-chunking": null,
       "pipeline-guardrail": null,
     };
     for (const [serviceId, primary] of Object.entries(expected)) {

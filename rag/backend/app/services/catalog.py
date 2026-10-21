@@ -26,7 +26,6 @@ ServiceCategory = Literal[
     "preprocess",
     "parser",
     # pipeline 各ステージのプラグイン(マイクロサービス)化。
-    "chunking",
     "vector_index",
     "graphrag",
     "guardrail",
@@ -199,17 +198,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         port=18028,
     ),
     # ---- pipeline ステージのプラグイン(マイクロサービス)----
-    ServiceCatalogEntry(
-        service_id="pipeline-chunking",
-        category="chunking",
-        profile="cpu",
-        url_field="rag_chunking_service_url",
-        label_key="settings.services.item.pipelineChunking",
-        working_dir="services/pipeline/chunking",
-        port=18030,
-        execution_policy="in_process_when_disabled",
-        deployable=False,
-    ),
     ServiceCatalogEntry(
         service_id="pipeline-vector-index",
         category="vector_index",

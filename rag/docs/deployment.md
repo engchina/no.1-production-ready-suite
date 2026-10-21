@@ -413,6 +413,13 @@ XML ツリー JSON の解析サービス（`parser-xml-tree-json`）は、文書
    `RAG_EXTRA_RETRIEVAL_MAX_QUERIES`（8）。手順ごとの検索の ON / OFF と上限は検索・回答プロファイルでも上書きできる。
 3. backend を再起動する。
 
+## 既存環境の更新手順（#2847 文書分割を backend 内で実行）
+
+すべての文書分割方式を backend 内で直接実行する。分割用の HTTP 委譲、専用サービスと HTTP 契約を削除し、
+サービス管理画面から文書分割のサービス項目を除いた。分割方式・分割結果・保存済み chunk は変更しない。
+backend と取込 worker を更新して再起動する。旧 `RAG_CHUNKING_SERVICE_ENABLED` / `RAG_CHUNKING_SERVICE_URL` は
+使わないため、設定ファイルに残っていれば削除する。独自に分割のサービスを起動していた環境では、そのプロセスも停止する。
+
 ## 既存環境の更新手順（#2850 根拠の無い要求の再検索の既定）
 
 「根拠の無い要求を探し直す」の既定を無効にした。`RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED` を

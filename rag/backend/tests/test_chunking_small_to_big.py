@@ -319,6 +319,34 @@ def _plain_extraction() -> StructuredExtraction:
     return StructuredExtraction(raw_text=f"就業規則\n\n{body}")
 
 
+@pytest.mark.parametrize(
+    "strategy",
+    [
+        "structure_aware",
+        "recursive_character",
+        "small_to_big",
+        "markdown_heading",
+        "page_level",
+        "fixed_size",
+        "fixed_delimiter",
+    ],
+)
+async def test_ingestion_chunking_does_not_use_http(
+    monkeypatch: pytest.MonkeyPatch, strategy: str
+) -> None:
+    """どの分割方式でも HTTP 接続を開かずに実際の chunk を作る。"""
+    import httpx
+
+    def reject_http(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("文書分割で HTTP 接続を開かない")
+
+    monkeypatch.setattr(httpx, "Client", reject_http)
+    extraction = _extraction() if strategy == "small_to_big" else _plain_extraction()
+    chunks = await _ingestion_chunks(strategy, extraction)
+    assert chunks
+    assert all(chunk.text.strip() for chunk in chunks)
+
+
 def test_small_to_big_fallback_needed_only_for_small_to_big_without_layout() -> None:
     assert small_to_big_fallback_needed("small_to_big", _plain_extraction()) is True
     assert small_to_big_fallback_needed("small_to_big", _extraction()) is False

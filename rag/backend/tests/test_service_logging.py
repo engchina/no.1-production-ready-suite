@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from rag_parser_core.service import create_parse_app
-from rag_pipeline_core.stage_service import create_chunking_app
+from rag_pipeline_core.stage_service import create_vector_index_app
 
 
 @pytest.mark.parametrize("kind", ["parser", "pipeline"])
@@ -14,7 +14,7 @@ def test_service_factory_uses_common_wire_contract(kind: str, capsys: Any) -> No
     app = (
         create_parse_app(backend="stub", import_name="json", title="parser-stub")
         if kind == "parser"
-        else create_chunking_app(title="pipeline-stub")
+        else create_vector_index_app(title="pipeline-stub")
     )
     with TestClient(app) as client:
         response = client.get(

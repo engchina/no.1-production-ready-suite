@@ -307,7 +307,6 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.oci_genai_embedding_model = "cohere.embed-v4.0"
     settings.oci_genai_embedding_dim = 1536
     settings.oci_genai_rerank_model = "cohere.rerank-v4.0-fast"
-    settings.rag_chunking_service_enabled = False
     settings.rag_vector_index_service_enabled = False
     settings.rag_graph_service_enabled = False
     settings.rag_guardrail_service_enabled = False

@@ -27,7 +27,10 @@ for (const viewport of [
     await expect(
       page.getByText("取込済みの文書の chunk は、文書の詳細で再処理するまで変わりません。", { exact: false })
     ).toBeVisible();
-    await expect(page.getByText("ここで選ぶ 7 個は分割方式です。", { exact: false })).toBeVisible();
+    await expect(page.getByText("ここで選ぶ 7 個は分割方式です。すべて backend 内で実行します。", { exact: true })).toBeVisible();
+    await page.getByText("ここで選ぶ 7 個は分割方式です。すべて backend 内で実行します。", { exact: true })
+      .screenshot({ path: test.info().outputPath("chunking-execution-description.png") });
+    await expect(page.locator("main")).not.toContainText("pipeline-chunking");
     // 画面の文言に移植元の呼び名（DocRAG）を出さない（#598）。
     await expect(page.locator("main")).not.toContainText("DocRAG");
     // 親子階層（small-to-big）は、削除した「親子階層」があった位置(3 番目)に並ぶ(#271)。
