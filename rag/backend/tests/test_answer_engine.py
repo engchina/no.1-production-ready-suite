@@ -3203,7 +3203,8 @@ async def test_without_original_question_requests_come_from_the_query(
 
     coverage = outcome.diagnostics["request_coverage"]
     assert [row["id"] for row in coverage["requests"]] == ["Q1"]
-    assert coverage["re_retrieval"]["skipped"] == "single_request"
+    # 1 要求で、最初の検索と違う検索文を作れないので探し直さない(#2810)。
+    assert coverage["re_retrieval"]["skipped"] == "same_query"
 
 
 def test_build_engine_settings_passes_request_coverage(tmp_path: Any) -> None:
