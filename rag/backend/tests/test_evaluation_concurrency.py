@@ -95,7 +95,7 @@ def _cases(count: int, *, standard_answer: str | None = None) -> list[Evaluation
             id=f"case-{index}",
             query=f"承認条件 {index}",
             relevant_document_ids=["doc-1"],
-            expected_answer_keywords=["120000"],
+            required_answer_points=["120000"],
             standard_answer=standard_answer,
         )
         for index in range(1, count + 1)

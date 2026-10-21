@@ -2,171 +2,43 @@
 
 ## 評価
 
-API: `POST /api/evaluation/jobs/run`（job。#390）。`GET /api/evaluation/jobs/{job_id}` で進捗と結果、`POST /api/evaluation/jobs/{job_id}/cancel` で取り消し。同期の `POST /api/evaluation/run` は互換のため残す。同じケースを複数の回答設定で比べる設定比較の API（`/compare`・`/jobs/compare`）は #2085 で削除した（設定を比べるときは、`rag_overrides` を変えた評価をそれぞれ実行する）。
+「評価の基準」と「品質評価」は六指標だけを扱います。新システムのため旧結果の互換・移行は設けません。
 
-画面の評価リクエストの Excel: `GET /api/evaluation/cases/template?knowledge_base_ids=…`（テンプレート。選んだナレッジベースの文書の一覧を入れる）・`POST /api/evaluation/cases/import`（検証。保存しない）。形は下の「評価リクエストの Excel（#2065）」。
-
-評価ケースは query と、期待値（関連 document id・回答に含めたいキーワード・標準回答）で構成する。
-リポジトリには `evaluation/golden-set.example.json` を同梱している。実データ投入後、document id と期待キーワードを環境に合わせて `evaluation/golden-set.json` として管理する。
-
-```json
-{
-  "cases": [
-    {
-      "id": "policy-flow-001",
-      "query": "経費申請の承認フローは？",
-      "relevant_document_ids": ["<document-id>"],
-      "expected_answer_keywords": ["部門長", "承認"],
-      "standard_answer": "申請者が提出し、部門長が承認します。"
-    },
-    {
-      "id": "out-of-scope-001",
-      "query": "社員食堂の来月の献立は？",
-      "answerable": false
-    }
-  ],
-  "top_k": 20,
-  "filters": {
-    "status": "INDEXED"
-  },
-  "suite": "standard"
-}
-```
-
-`cases` は 1 件以上必須です。各ケースは回答エンジン（根拠付き回答）で、検索・回答プロファイルを使わずに全体の既定の設定で回答し（#301）、回答の記録（引用・根拠・実行記録）から指標を求める（#591）。#594 で回答はこの方式だけになった（#591 では評価だけ回答エンジンを固定していた）。回答の記録は通常の回答と同じく保存し（`trace_id` で確かめられる）、標準回答による評価の結果も同じ回答の記録に保存する。
-
-### 評価の指標（#591）
-
-指標は「検索」「根拠」「回答」の 3 つの観点に整理した 9 つ。rag_poc が最後に使っていた 7 つの指標（平均点・合格・未裏付け主張・必要内容欠落・監査での除去・拒答・引用照合での除外）と、Ragas・TruLens の RAG triad・ARES の観点を照らして、残す・まとめる・削除を決めた。
-
-| 観点 | 指標 | 意味 | 対象のケース | 由来 |
-|---|---|---|---|---|
-| 検索 | `context_recall` | 正解の文書のうち、回答の根拠に取れた割合 | `relevant_document_ids` のあるケース | 旧 `recall_at_k` と `context_recall`（同じ計算）をまとめた。Ragas ID-based context recall |
-| 検索 | `mrr` | 最初の正解の文書の順位の逆数 | 同上 | 残す（rag_poc の検索評価も使う） |
-| 根拠 | `faithfulness`（画面の名前は「根拠との語句の一致率（参考）」） | 回答の語句のうち、根拠の本文に含まれる割合（決定論の近似。業務 Agent の最終の検証が回答の末尾に足す節〔「資料で確認できず除いた内容」#1456、「根拠と矛盾し除いた内容」「確認が必要な点」#2738〕と、RAG の回答の同じ 2 つの節は数えない。印の付いた段落は本文として数える。本文がすべて未確認の回答〔対応は `insufficient_evidence`〕も本文を照合する） | 拒答していないケース | **参考値**。言い換えるだけで下がるため、閾値の判定・ケースの失敗理由・1 件の回答の合否に使わない（#711）。閾値は目安として表示する |
-| 根拠 | `citation_traceability_coverage` | 引用を文書・ページ・要素までたどれる割合（頁のある引用は頁と要素の ID・bbox・節のどれか、表計算の引用は頁の代わりにシート名と行・セル範囲・要素の ID のどれか。#1456） | 引用のあるケース | 旧 `bbox_citation_coverage`・`element_lineage_coverage` をまとめた（bbox・要素の細部は file-processing の golden gate が見る） |
-| 根拠 | `claim_support_rate`（画面の名前は「Faithfulness（根拠への忠実性）」） | LLM が回答を主張に分け、根拠のない主張・根拠と矛盾する主張が無いケースの割合 | `standard_answer` のあるケース | 業界の faithfulness（RAGAS・DeepEval・Azure・Google の groundedness）と同じ考え方。保存値の key は変えない（#711） |
-| 回答 | `answer_keyword_hit_rate` | 期待する語をすべて含む回答の割合 | `expected_answer_keywords` のあるケース | 残す（標準回答の無い golden set の決定論の近似） |
-| 回答 | `refusal_accuracy` | 答えるべき質問に答え、答えるべきでない質問に答えなかった割合 | すべてのケース | rag_poc の「拒答」。RGB の negative rejection。否定 case の特別扱い（#301）もこれにまとめた |
-| 回答 | `requirement_coverage` | 標準回答の必要な項目に、回答が対応した割合 | `standard_answer` のあるケース | rag_poc の「必要内容欠落」（網羅性の軸の対応率） |
-| 回答 | `answer_pass_rate` | 標準回答による評価で、1 件の回答で測れる指標（claim_support_rate・requirement_coverage・refusal_accuracy・citation_traceability_coverage）がすべて閾値以上だった割合（#680） | `standard_answer` のあるケース | faithfulness は語句の一致の近似のため、1 件の回答の合否には使わない（参考値） |
-
-削除した指標: `precision_at_k`（正解の文書が k 件より少ないと 1.0 に届かず、回答エンジンは rerank の件数を使わない）・`context_precision`（正解の文書以外の補足の根拠を減点する。根拠の質は `faithfulness` と `claim_support_rate` で見る）・`response_relevancy`（質問の語を繰り返すだけで上がる近似）・`noise_sensitivity`（失敗理由の件数から作った独自の式で、失敗理由と重なる）・`content_kind_hit_rate`・`section_coverage`（期待値の無いケースを 1.0 と数え平均を押し上げ、ほぼ使われていない）。rag_poc の「監査での除去」「引用照合での除外」は回答生成の工程の診断で、利用者が見る品質ではないため指標にしない（回答の記録の実行記録で確かめる）。
-
-- 各指標は、その指標を測れるケースだけの平均にし、対象の件数を `metric_case_counts` に返す。対象のケースが無い指標は `null`（0 と区別する）。失敗したケース（検索失敗・時間切れ）は `error_count` で数え、指標の平均には入れない。
-- **答えるべきでない質問（#301）**: `answerable: false` のケース（省略時は、正解の文書・期待する語・標準回答のどれも無いケース）は、拒答の正しさだけを測る。拒答は、回答の本文か引用が無い回答と、回答エンジンが不足の理由を返しモデルが使った根拠が 1 つも無い回答。
-- **ケースの分類（#1226）**: ケースに任意の `category`（`document_answerable` 資料で答えられる / `clarification_required` 条件の確認が要る / `environment_data_required` 現場のデータが要る / `knowledge_missing` 資料に答えが無い / `conflicting_sources` 資料が矛盾する）を付けると、結果の `category_breakdown` と画面の「分類ごとの結果」に、分類ごとの件数・失敗・回答の合格率・期待する語の一致率・拒答の割合・拒答の判断の正しさを出す（分類の無いケースは `uncategorized`）。採点の方法と合否は変えない。基線と判断は [answer-baseline-2026-10.md](./answer-baseline-2026-10.md)。
-- **標準回答による評価**: `standard_answer` のあるケースは、回答の記録の評価の入力（根拠・引用）で、標準回答による評価（`evaluate_answer_payload` が標準回答から比較の範囲を固定 → 項目の照合・主張の監査を LLM で行い、`app/rag/answer_metrics.py` が評価の基準の指標と閾値で合否を付ける。#680）を行う。LLM を複数回呼ぶため、1 件の上限は 600 秒。比較できなかったケース（時間切れ・入力の上限・評価の記録が無い）は指標に入れず `answer_evaluation_error` とし、評価を合格にしない。
-- `passed`: 閾値をすべて満たし、`error_count=0` で、標準回答による評価がすべて終わったか。閾値は測れた指標だけに適用する。
-- `threshold_failures`: 閾値を下回った metric、実測値、閾値の一覧。CI gate ではこの配列を失敗理由として出力する。
-- 削除した指標の `thresholds` は受け付けない（422）。ケースの `expected_content_kind`・`expected_section_paths` と評価の `mode`・`rerank_top_n` は以前の評価ファイルを読めるように無視する。保存済みの評価の結果（job・artifact）に残る古い指標は読み込み時に捨て、画面は削除した指標・基準の名前を原文のまま出す。
-
-### Evaluation アダプター(評価の基準 = 閾値のプリセット)
-
-CI gate の閾値を毎回インラインで書かずに選べるよう、**Evaluation アダプター(`rag_evaluation_suite`)** に評価の基準を 2 つ束ねる（#591）。`app/rag/evaluation_adapter.py` が基準を `EvaluationThresholds` へ解決し、`GET/PATCH /api/settings/evaluation-suite` と「評価の基準」画面で切り替える。
-
-| 基準 | 用途 | 閾値 |
+| 分類 | 指標 | 必要な評価情報・算出方法 |
 |---|---|---|
-| `standard`（標準。既定） | 日常の確認と nightly の回帰 | context_recall 0.8 / mrr 0.6 / faithfulness 0.7 / citation_traceability 0.9 / claim_support 0.9 / answer_keyword 0.8 / refusal 0.9 / requirement_coverage 0.8 / answer_pass 0.7 |
-| `strict`（厳格） | リリース前の判定 | context_recall 0.9 / mrr 0.8 / faithfulness 0.8 / citation_traceability 0.95 / claim_support 1.0 / answer_keyword 0.9 / refusal 1.0 / requirement_coverage 0.9 / answer_pass 0.8 |
+| 検索 | 必要な根拠の取得率 (`required_evidence_recall`) | `required_evidence` の本文・ページ・章節・シート・行を引用と照合した取得数 / 必要数。文書だけの命中とは区別します。 |
+| 検索 | 正解文書の順位（MRR） (`mrr`) | `relevant_document_ids` と引用の文書列を比較します。文書の重複を除いた最初の正解の順位 r の 1/r、未取得は 0。 |
+| 回答 | 回答の正確性 (`answer_correctness`) | 標準回答または確認済みの必須要点と、質問への結論・数値・適用条件を意味上比較します。取得根拠に支持されるだけでは正解にしません。 |
+| 回答 | 回答の網羅性 (`requirement_coverage`) | 標準回答・`required_answer_points`・`required_conditions` の必須項目への意味上の対応率。説明済み 1・部分的 0.5・不足 0。 |
+| 回答 | 根拠への忠実性 (`claim_support_rate`) | 根拠が支持する主張 / 監査した実質的な主張。標準回答は不要。引用を検証できない・監査しきれない主張があれば未評価。 |
+| 応答の判断 | 回答・確認・保留の判断の正しさ (`response_decision_accuracy`) | `expected_response_decision` に `answer` / `clarify` / `hold` を明示します。標準回答は不要。省略時は推定しません。 |
 
-- **解決順**: request の明示 `thresholds` > request の `suite`(任意) > 設定 `rag_evaluation_suite`。`EvaluationMetrics.evaluation_suite` に確定した基準を残す。
-- 削除した基準（`request_only` / `retrieval_focused` / `balanced` / `ragas_like` / `strict_ci`）は、保存済みの `RAG_EVALUATION_SUITE` を起動時に後継（`strict_ci` → `strict`、ほか → `standard`）へ寄せる。API では受け付けない。閾値を使わない評価は、request に `thresholds: {}` を書く。
-- 評価の基準はグローバル設定(と request の `suite`)だけで決まり、検索・回答プロファイルでは上書きしない。保存済みの `profile_config.query.evaluation_suite` は読み込み時に無視し、次回保存で消える。
+`expected_outcomes` に明示した回答結果も三分類へ集約します。`answered`・`conditional` は回答、`needs_clarification` は確認、それ以外は保留です。複数往復は各往復の明示的な期待に合っているか確認します。
 
-段落の印（#2738）: 各ケースに、根拠と矛盾して外した段落・未確認の印の段落・要注意の印の段落の数（`removed_passages`・`unverified_passages`・`warning_passages`。印の記録の無い回答は `null`）を残し、1 回答あたりの平均（`removed_passages_per_answer`・`unverified_passages_per_answer`・`warning_passages_per_answer`。参考の集計で閾値の判定に使わない）を出す。
+各指標は測れるケースだけの平均で、`metric_case_counts` が対象件数です。前提不足は `null`（画面は「未評価」）、0 点・合格にしません。判断は期待する回答・確認・保留ごとの内訳も表示します。総合状態 `passed` は六指標から導き、別の指標・閾値にはしません。実行エラー・評価の未完了は不合格、測定情報が不足する場合は未評価です。
 
-レスポンスには `case_results` も含める。各 case について `case_id`、`trace_id`、`status`、取得 document id、関連 document id、hit document id、case 単位の context recall / reciprocal rank / faithfulness（overlap count）/ citation traceability、回答キーワード命中、拒答したか（`abstained`）とそれが期待どおりか（`refusal_correct`）、標準回答による評価の要約（`answer_evaluation`: status・点・合否・主張の裏付け・必要な項目の対応率）、guardrail warning、diagnostics、elapsed ms、error type・error stage・error message を返す。測れない値は `null`。検索失敗または timeout の case は `status=error` として残し、query 本文や例外 message はレスポンスへ出さない。評価 runner が捕捉した case 失敗は `rag_search_audit` にも残し、timeout は `error_stage=timeout`、その他の case 例外は `error_stage=evaluation` とする。
+### 評価の基準
 
-**時間の上限（#383）**: 1 case は、チャット・検索の回答と同じ回答生成の上限（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒。#1425）で打ち切る。回答フローは質問の理解・根拠の評価（CRAG）・回答の生成・監査で LLM を何度か呼ぶため、検索だけの上限（旧 `RAG_SEARCH_TIMEOUT_SECONDS`、30 秒。#383 で削除）では足りない。時間切れの case は `status=error`・`error_type=TimeoutError` とし、時間切れになった工程を `error_stage`（進捗の stage と同じ名前。例: `answer_step:文書検索（1回目）`）と `error_message`（例:「評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 文書検索（1回目））。…」。query 本文は含めない）に残して、評価は次の case へ進む。評価全体の上限は、job（#390）では、投入時の回答の回数（ケース × 往復）× `RAG_ANSWER_TIMEOUT_SECONDS` と `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（最小値。既定 3600 秒）の大きいほうで、86400 秒を超えない（#1430。評価はケースを `RAG_EVALUATION_CONCURRENCY`〔既定 2。#2004〕の並行で回答し、推論型のモデルでは 1 回の回答が数分かかるため、固定の上限では 20 問程度でも打ち切られた）、同期の `/run` では 600 秒（`EVALUATION_RUN_TIMEOUT_SECONDS`。Nginx は 660 秒待つ）。上限に達したら実行中の case を時間切れにし、残りの case は pipeline を呼ばずに `error_type=EvaluationTimeBudgetExceeded` の失敗として返す（`passed=false`）。
+| 基準 | 根拠取得 | MRR | 正確性 | 網羅性 | 忠実性 | 応答判断 |
+|---|---|---|---|---|---|---|
+| 標準 | 0.9 | 0.6 | 0.9 | 0.9 | 0.95 | 0.9 |
+| 厳格 | 1 | 0.8 | 1 | 1 | 1 | 1 |
 
-**評価の job（#390）**: 評価は job で動く。投入（`202`）→ 状態の取得 → 結果の流れで、状態は `rag_evaluation_jobs`（`RUNNING` / `SUCCEEDED` / `FAILED` / `CANCELLED`）に保存する。進捗は終わった case の数 / 全体と、実行中の case の id。job は投入を受けた backend のプロセスで、投入した request の文脈（利用者・対象範囲）のまま動き、query の本文は保存しない。job は投入した利用者（tenant と user の hash）だけが取得・取り消しできる。実行中のプロセスは 10 秒ごとに heartbeat を DB の時刻で書き、取り消し（別のプロセスへの取り消しを含む）は heartbeat・進捗の更新で気づいて評価を止める。プロセスが止まって heartbeat が 120 秒途絶えた job は、状態の取得・投入のときに `FAILED` にする。同時に実行できる job は 2 件まで（`409`）。評価が例外で止まった job は `FAILED` にし、`error_message` には例外の型だけを出す（本文は出さない）。結果は成功したときだけ返し（`run_result`）、評価 artifact（`rag_evaluation_runs`）にも保存する。
+標準は九割を基本とし、捏造・矛盾を測る忠実性はより高い支持率を求めます。厳格は MRR 以外の完全な達成を求めます。MRR は文書順位として別に設定します。プリセットは評価資料と用途に合わせて選びます。
 
-**画面（#390）**: 品質評価の画面は job id を作業状態（`sessionStorage`）に残し、戻ったとき・再読込したときはその id でサーバーの状態を確かめる（評価を送り直さない）。実行中は、実行状況のカードに状態・件数と割合・実行中の case・経過時間（`ProcessingIndicator placement="job"`）と取り消しを出し、結果の領域は Skeleton にする。ケース別結果の表は、失敗した case（`status=error`）に「エラー」のバッジ・時間切れになった工程（`error_stage`。表示名は回答生成の進捗と同じ）・`error_message` を出す。
+### API・入力・出力
 
-**評価リクエストの Excel（#2065・#2086）**: 画面は評価のケースを Excel（テンプレート `GET /api/evaluation/cases/template`）で受け取る。テンプレートは「評価リクエスト」「記入の説明」（列の意味・必須か任意か・上限・照合の規則・形式ごとの書き方の表）「記入例」（形式ごとの例の行。別のシートに置き、取込は「評価リクエスト」のシートだけを読む）「文書一覧」（`knowledge_base_ids` で選んだナレッジベースの文書のファイル名・文書 ID・形式・ページ数 / シート名・アップロード日。ページ数・シート名は chunk の metadata から `OracleClient.evaluation_document_locations` が求める）の 4 つのシートを持ち、「期待する根拠」の列はファイル名を入力規則の選択肢から選べる（選択肢に無い値も書ける）。JSON の手入力・評価の基準の選択は画面に無く、評価の基準は常に設定の既定（`rag_evaluation_suite`）、検索の対象は画面で選ぶナレッジベース（必須）。`POST /api/evaluation/cases/import`（multipart の `file` と `knowledge_base_ids`）が Excel を検証してケース（`EvaluationCase`）にし、画面はそのケースで `POST /api/evaluation/jobs/run` を呼ぶ。Excel は保存しない（ケースは画面の作業状態に残り、評価 artifact には従来どおり hash だけを残す）。JSON の評価セットは評価 CLI（`evaluation_cli`・`evaluation_corpus_cli`）のために残す。
+- `GET/PATCH /api/settings/evaluation-suite`: 基準と六指標の閾値。
+- `GET /api/evaluation/cases/template`: Excel テンプレート。列は質問・期待する根拠・標準回答・必須の回答要点・期待する応答の判断・回答の過程。質問だけが必須です。判断には回答・確認・保留を指定します。
+- `POST /api/evaluation/cases/import`: 保存せず検証し、期待値をプレビューします。空の標準回答から保留の期待は推定しません。
+- 根拠は `資料A.pdf | p.12 | 章節: 初期設定 | 抜粋: 確認する内容` のように指定します。ファイル名だけなら MRR の対象で、必要な根拠の取得率は測りません。
+- 回答の過程からの下書きは、利用者が確認した必須要点・条件・期待する判断・根拠を追加します。
+- `POST /api/evaluation/jobs/run`: 非同期実行。job の取得・取消は `/api/evaluation/jobs/{id}` と `/cancel`。同期は `/api/evaluation/run`。
+- 結果は `six_metrics_v1`、六指標と対象件数、ケース詳細、分類・区分・質問の種類・段数・期待する判断別の内訳を返します。比較も同じ順序です。
+- 単件回答の評価は正確性・網羅性・忠実性を扱い、標準回答なしなら忠実性だけが評価対象になります。
+- CLI (`app.rag.evaluation_cli` / `app.rag.agent_evaluation_cli`) の出力・比較も同じ六指標です。
 
-| 列 | 必須 | 意味（業界の評価データの対応） | 評価のケース |
-|---|---|---|---|
-| 質問 | 必須（2000 文字まで） | 利用者が尋ねる文（Ragas `user_input`・Azure AI `query`） | `query` |
-| 期待する根拠 | 任意（1 行に 1 つ、30 行まで） | 回答の根拠になるべき資料の場所と内容（Ragas `reference_contexts`・TREC の qrels） | ファイル名（か文書 ID）だけの行は `relevant_document_ids`、位置・抜粋のある行は加えて `required_evidence` |
-| 標準回答 | 任意（8000 文字まで） | 期待する回答（Ragas `reference`・Azure AI `ground_truth`） | `standard_answer` |
-| 案内すべき画面 | 任意（1 行に 1 つ、20 行まで） | 回答が案内すべき画面。`<画面の名前> | 別名: <呼び方>、<呼び方>`（#2402） | `expected_screens` |
-| 回答の過程 | 任意（8000 文字まで） | 担当者が書いた回答の過程（回答の手順・必要な確認事項・検索する資料と頁・検索の語・補足。#2402） | ケースにしない（下の「回答の過程から作る期待の下書き」） |
-
-- 「期待する根拠」の 1 行は `<ファイル名> | <位置> | 抜粋: <本文の語句>`（先頭はファイル名か `文書ID: <ID>`、後ろは任意・順不同。区切りは `|`・`｜`、コロンは全角も可）。位置は文書の形式ごとに書く（W3C Web Annotation の selector〔ページ・範囲・引用の文〕、RFC 7111 の行の指定にならう。#2086）:
-  - PDF・Word（PDF にしたもの）: ページ `p.12`・`p.12-14`・`12ページ`。章節 `章節: <見出し>`。
-  - PowerPoint（PDF にしたもの）: `スライド: 3`（PDF にしたページの番号と同じ。`p.3` も可）。
-  - 表計算（Excel・CSV）: `シート: <名前>`・`行: 10-12`（シートの元の行番号）。ページは無い。
-  - Markdown・テキスト・HTML: `章節: <見出し>`。ページは無い。
-  - どの形式も `抜粋: <本文の語句>` が使える。
-- 文書は、`文書ID:` があれば ID で（ファイル名と違えば警告）、無ければファイル名の完全一致（NFKC・大小文字・前後の空白は無視）で引く。無い文書・新しい版に置き換えた旧版だけ、は行の誤りにする。同じ名前の有効な文書が複数あるファイル名は警告にし、新しくアップロードした文書を正解の文書、ほかを同じ文書とみなす文書（`EvaluationCase.equivalent_document_ids`）にして、どれが引用されても一致とする（区別するときは文書 ID で書く）。文書の形式に合わない位置（表計算・ページの無い文書にページ・スライド、表計算でない文書にシート・行）も警告にする（`EvaluationImportResult.warnings`。警告があっても評価は実行できる）。文書 ID は「文書一覧」のシートと、文書の詳細の「処理の詳細（診断）› 原本情報」（コピーのボタンつき）で確かめられる。
-- 照合（`app/rag/evaluation.py` の `evidence_matches_chunk`）: 最後の回答の引用の chunk が、書いた条件をすべて満たせば取れたとみなす。文書は ID が一致（同じ文書とみなす文書は正解の文書の ID にそろえる）、ページは chunk の `page_start`〜`page_end`（無ければ `page_number`）と範囲が重なる（ページの分からない chunk は一致しない）、シートは chunk の `sheet_name` が一致、行は chunk の `row_start`〜`row_end` と範囲が重なる（行の分からない chunk は一致しない）、章節は chunk の `section_path` が見出しを含む、抜粋は本文が語句を含む（NFKC・大小文字・空白を無視）。ファイル名だけの行は正解文書の再現率・順位（`context_recall`・`mrr`）、条件のある行は必要な根拠の再現率（`required_evidence_recall`。参考の集計）で測り、画面の結果の表は行ごとに「見つかった / 見つからない」を出す。
-- 期待する根拠と標準回答の両方が空の行は、資料に答えが無い質問として回答を控えたか（`refusal_accuracy`）を測る（`expects_answer`）。
-- 検証の誤りは行・列・理由（`EvaluationImportIssue`）で返し、1 つでもあればケースを返さない（HTTP は 200）。上限は 1 ファイル 200 行・10MB（`app/rag/evaluation_excel.py`）。ケースの id は Excel の行番号（`row-<行>`）で、実行状況・結果の表は「〈行〉 行目」と質問を出す。
-- フィードバックの「品質評価のケースを書き出す」（`GET /api/feedback/{feedback_id}/evaluation-case`）は、同じ形の Excel の 1 行（質問・期待する根拠〔「役に立った」の引用のファイル名とページ〕・標準回答）を返す。
-
-各 case には `failure_reasons` を付与し、集計として `failure_reason_counts` を返す。理由は `retrieval_miss`・`partial_recall`（検索）、`low_groundedness`・`unsupported_claim`（根拠）、`unexpected_refusal`・`unexpected_answer`・`answer_keyword_miss`・`missing_content`・`answer_failed`（回答）、`answer_evaluation_error`・`guardrail_warning`・`case_error` に固定する。この分布で、検索・根拠・回答のどこを次に調整すべきかを切り分ける。
-
-`/api/evaluation/jobs/run`（と同期の `/run`）は任意の `rag_overrides` を受け取る。`rag_overrides` は回答エンジンの全体の既定（`query_strategy`・`answer_flow`・`neighbor_child_count`・`rerank_enabled`）と、RRF 定数（`rrf_k`）・同じ group から足す child の上限（`context_group_max_chunks`）・交差参照で足す chunk（`reference_expansion_enabled`・`reference_expansion_max_chunks`。#1280）・Oracle vector target accuracy などを、その評価の間だけ一時的に上書きし、secret やモデル credential は扱わない（削除したキーは 422）。
-
-本番運用では、カテゴリごとに 20-50 件の golden set を作り、chunking / embedding model / rerank top N / prompt を変えたときにこの API を CI または nightly job で実行する。CI では `thresholds` を指定し、`passed=false`、`error_count>0`、または `threshold_failures` 非空なら失敗にする。nightly では API レスポンス artifact と trend summary を保存して回帰差分を追う。`python -m app.rag.evaluation_cli` は評価の job を投入し、結果の metrics を終了コードの gate 判定に使う。`--trend-output` は aggregate metrics と result hash だけを含む非機密 JSON を出力し、query/context 原文や `case_results` は含めない。
-
-file-processing staging の promotion guard は、manifest の閾値が緩められていないことも検査する。`retrieval_recall`、`table_qa_accuracy`、`page_hit_accuracy` に加え、`preview_addressability_coverage`、`table_cell_lineage_coverage`、`visual_chunk_metadata_completeness`、`ingestion_quality_report_completeness`、`parser_warning_taxonomy_coverage`、`parser_routing_accuracy`、`adapter_contract_coverage`、source/backend coverage、fallback/failed segment rate を中核閾値として固定し、RAGFlow 的な citation-to-preview、Docling/Marker 的な cell-level lineage、Unstructured 的な warning taxonomy が UI 上だけでなく昇格判定でも退化しないようにする。
-
-`python -m app.rag.parser_adapter_contract_cli` は runtime の parser adapter compatibility matrix を出力する。feature flag と parser サービスの readiness（`/health`。外部 parser は backend の venv に入れず、独立サービスへ HTTP で委譲する。#286 / #343）に加えて、サービスに届く有効な adapter だけ fixture を実 parser path へ通し、`StructuredExtraction` への remap count と source-kind contract を確認する。`--manifest docs/evaluation/file-processing-golden-set.json --strict` を使うと、既定 fixture ではなく staging manifest の `fixture_root` と `adapter_schema_remap=true` が付いた正向き schema-remap `cases[].fixture` を case 単位で展開し、scenario / parser backend / adapter import・distribution・version / element/page/table/cell/asset/bbox count / reason code を remap 証跡として残す。strict では selected adapter ごとに少なくとも 1 件の `passed` remap case を要求し、active package があっても real fixture から schema remap 証跡を出せない場合は `adapter_schema_remap_evidence_missing` の blocking failure にする。さらに manifest の source kind は corrupted / unsupported case を schema-remap smoke から除外した後も縮小せず保持し、可ルーティング source kind に正向き fixture が 1 件もない場合は `adapter_schema_remap_fixture_missing_for_source` で止める。corrupted / unsupported fixture は adapter smoke ではなく staging の safe-error / warning taxonomy gate が担当するが、PDF などの正向き schema-remap fixture なしに HTML だけで adapter contract を合格にはできない。PDF/image は page lineage、image は bbox/asset lineage、HTML/email/Office は semantic/header/slide/sheet/table lineage を要求し、adapter distribution/version metadata が欠ける場合も `adapter_distribution_name_missing` / `adapter_package_version_missing` で失敗にするため、単に element が返っただけでは adapter smoke を合格にしない。artifact には source kind、status、parser backend、adapter import・distribution・version、schema count、reason code、fixture/case の hash label だけを含め、fixture root、fixture file name、case id、抽出本文、OCR 原文は含めない。設定画面の「運用診断」と `GET /api/settings/parser-adapters/contract` は #492 で削除し、この matrix は CLI と nightly だけが出す。staging artifact には `adapter_contract_matrix_summary` も含め、backend/source ごとの status、backend/source/status count、source-kind status count、passed/missing source kinds、passed/missing scenario、passed / blocking failure の `case:<hash>` evidence、blocking failure source/backend/scenario、reason/warning taxonomy だけで失敗箇所を確認できるようにする。trend regression はこの case hash set も比較するため、source/scenario/count が同じでも baseline の実 manifest case を別 fixture に置き換えた strict smoke は regression になる。`backend_source_status` は同一 backend/source の複数 case を最後の結果で上書きせず、失敗・fallback・fixture missing などを passed より優先する代表 status に集約し、詳細分布は `backend_source_status_counts` に残す。この summary も artifact-safe payload から作るため、blocking failure に real-world case id や fixture file name は出さない。
-
-GitHub Actions の `RAG Evaluation Nightly` は parser adapter contract CLI を file-processing golden gate より先に実行し、API base URL が未設定の夜間実行でも非機密 artifact を保存する。通常は parser サービスに届かない adapter を status として記録するだけにする（runner には parser サービスが無いため）。`run_file_processing_staging=true` かつ `require_real_world_file_processing_manifest=true` の production staging では workflow が `--strict` と `--parser-adapter-contract-strict` を自動的に有効化し、単独 smoke を厳格化したい場合は `parser_adapter_contract_strict=true` でも同じ経路を使う。strict が有効な workflow は、届く parser サービスが必要なため（届かなければ `adapter_missing` で失敗する）、job の中で Docling の parser サービスを起動し（`scripts/rag-services.sh sync` / `run parser-docling`。lock の torch は CPU 版。#1650）、`/health` を待ってから gate を実行する（#366。手順と所要時間は deployment.md）。file-processing staging CLI にも `--parser-adapter-contract-strict` を渡す。file-processing staging CLI も contract CLI と同じく、adapter の可用性を常に parser サービスの `/health` で判定する（`RAG_PARSER_READINESS_PROBE_ENABLED` を付けずに手で実行しても backend の venv の package では判定しない）。`--strict` は adapter backend を `auto` 相当にし、Docling / Unstructured の feature flag を有効化した runtime snapshot で remap smoke を実行する。schema remap に失敗した adapter/source kind は promotion blocker として扱い、`parser_adapter_contract_source_kinds` で PDF / Office / HTML / email / image などの対象を絞れる。file-processing staging artifact でも同じ strict settings を preflight、実 ingestion/search client、`adapter_contract_coverage` に使うため、runtime が local のままなのに adapter contract だけ合格する状態を避ける。全 backend を横断する matrix では非 routing 対象 pair の `unsupported` は coverage 情報に留めるが(source kind ごとの候補は `rag_parser_core.capabilities.ADAPTER_CAPABILITIES` が宣言する backend だけで、Docling は PDF と画像だけ。#366)、CLI で `--backend` と `--source-kind` を明示した strict smoke では `unsupported` も blocking failure として扱い、「対応を掲げたが実際は routing されない」状態を合格にしない。
-
-`rag-file-processing-staging --preflight-only --parser-adapter-contract-strict` も、単なる package readiness ではなく manifest の `fixture_root` と `adapter_schema_remap=true` の `cases[].fixture` を使って同じ parser adapter contract を実行する。これにより、Docling / Unstructured が installed/active と表示されても、実 package が staging fixture を `StructuredExtraction` へ remap できない場合は preflight 段階で `parser_adapter_contract.passed=false` になり、実 staging client 作成前に停止できる。
-
-file-processing staging artifact では runtime adapter contract の合否を `promotion_blockers` だけでなく `metrics.adapter_contract_coverage`、`metric_evidence.adapter_contract_coverage`、`threshold_results[adapter_contract_coverage]` にも反映する。contract summary は `reason_code_counts`、`warning_code_counts`、`blocking_failure_reason_counts` も出し、CI / dashboard / 手動レビューのどこから見ても、外部 adapter の schema remap failure が “品質指標は通っているが promotion blocker だけ赤い” という不整合や、case を全件展開しないと失敗理由が分からない状態にならない。adapter golden gate も同じ contract summary の passed / backend passed / blocking failure `case:<hash>` evidence を持つため、golden gate だけを見ても「どの実 manifest case で schema remap が証明されたか」を count ではなく非機密 hash set で確認できる。
-
-Object Storage artifact chain は final artifact の redaction だけでなく、sanitization 前の `metric_evidence` / runtime check evidence / gate evidence に `raw_text`、`ocr_text`、`query`、`answer`、`table_text` などの本文系 key が混入した場合も `object_storage_audit_payload_not_redacted` として promotion blocker にする。これにより extraction artifact 自体は復旧用に Object Storage へ保持しても、CI / audit / staging payload の evidence 経路へ OCR 原文を流す実装を合格にしない。
-
-staging の `parser_adapter_source_routes` は `parser_adapter_contract` の backend/source 成功 case で補正する。runtime 候補順で最初の backend が active でも、その source kind の schema remap 証跡がなければ、同じ source kind で contract passed の active backend へ回し、なければ local fallback とする。route には `*_adapter_contract_unverified_for_source` を warning として残し、promotion artifact では `adapter_golden_gate_source_route_contract_missing` と `source_route_contract_gap_source_kinds` で固定順 routing への退化を止める。staging trend も source kind ごとの candidate / attempted / active / selected backend と route warning を保存し、PDF/Office/HTML/email/image の selected backend が local fallback へ戻る、active candidate が減る、または contract gap warning が増える退化を baseline 比較で止める。
-
-`object_storage_artifact_chain` は preflight の probe put/get だけでは合格にしない。staging ingestion 後に `StructuredExtraction.parser_artifacts.extraction_artifact_path` と成功 segment checkpoint の `artifact_path` を Object Storage から実際に `get` し、JSON payload の `extraction_artifact_schema_version`、`extraction_artifact_kind`、`extraction_artifact_document_id`、segment id、page range が document/checkpoint と一致することを数値 evidence にする。promotion では probe / full artifact / segment artifact の URI scheme も非機密 evidence として保持し、`oci://` でない local/mock chain は readable でも `object_storage_*_not_oci` blocker にする。artifact 本体には OCR / extraction text が含まれ得るため、artifact chain は scheme、readable count、identity verified count、payload byte count、error count だけを report/trend に残し、raw OCR 本文を audit artifact へ出さない。trend regression は roundtrip `ok`、roundtrip scheme の `oci` 維持、full artifact cached/OCI/readable/identity-present/identity-verified case count、segment artifact expected/OCI/readable/identity-verified count、retry case count、retained successful segment artifact count、audit redaction を baseline から落とせず、integrity error、cache miss、successful segment rewrite、non-OCI artifact count の増加も blocker にする。さらに artifact/retry の positive evidence と cache miss / integrity error / rewrite の bad evidence は `case:<hash>` のみを trend に残し、件数が同じでも fixture が別 case に置き換わった場合や bad case が追加された場合を regression にする。
-
-file-processing golden CLI の `--trend-output` は `file-processing-trend.json` として、parser fallback rate、表 QA、page hit、bbox / preview addressability、source/backend coverage、threshold status、promotion blocker count、result hash だけを含む非機密 trend snapshot を出力する。staging CLI の `--trend-output` は `file-processing-staging-trend.json` として、実 OCI / Oracle / Object Storage 経路の retrieval recall、表 QA、page hit、bbox / preview addressability、adapter contract、parser adapter scorecard、backend/source-kind matrix、chunk template scorecard、segment artifact reuse、table cell lineage evidence、preview addressability evidence、runtime check status を保存する。`python -m app.rag.file_processing_trend_cli` は current trend を baseline trend と比較し、高いほど良い metric の低下、低いほど良い metric の増加、failure / promotion blocker の増加、必要時の `promotion_ready` 退化を exit `1` で止める。比較対象は同一 `kind` の trend に限定し、top-level `case_count` / `gate_count` が baseline から減った場合も regression にするため、staging trend を local trend に差し替えたり、fixture / gate 面を縮めて同じ総合 metric を出す運用を合格にしない。baseline にある比較可能 metric が current から消えた場合も `metric_missing_from_current` として止めるため、`adapter_contract_coverage` や `table_qa_accuracy` のような厳しい指標を出力しないことで比較対象から外す運用も合格にしない。`runtime_check_status_counts`、`promotion_blocker_code_counts`、`threshold_status_counts`、`threshold_failures` も比較対象にし、runtime smoke の `ok` 減少、`failed` / `skipped` / `pending` などの bad status 増加、blocker code 追加、threshold failure metric 追加を総合 metric が同じでも regression として止める。`dependency_context_recall`、`chunk_block_integrity`、`chunk_contextual_coherence`、`reading_order_consistency`、`structural_section_coverage`、`cross_page_table_continuity_coverage`、source/backend coverage、warning taxonomy、table/visual lineage などの構造・dependency 指標は zero-drop として扱い、Adaptive Chunking / M3DocDep 的な文書構造能力を 0.01 だけ落として通すことも許可しない。adapter contract trend は case count だけでなく scenario set / passed scenario / missing scenario / blocking scenario、backend/source passed pair、backend/scenario passed pair、backend/source/status count、adapter package/version pair、warning code count、blocking failure reason count も比較するため、two-column PDF や Office table などの難 scenario を同数の簡単 fixture に置き換えた場合、Marker/PDF のような特定 adapter/source 能力が落ちた場合、Docling/two-column PDF のような特定 adapter/scenario 能力が別 adapter に接管された場合、Docling / Unstructured の runtime package version が baseline から drift した場合、代表 status が同じでも fallback / failed / fixture missing / missing / disabled の件数が増えた場合、passed 件数だけが減ってテスト面が薄くなった場合、warning taxonomy や failure reason taxonomy が悪化した場合も regression として検出できる。parser adapter scorecard trend は selected/recommended backend、metrics source/applied target、backend entry ごとの score/status/rank/metric count/installed/executable/warning を比較するため、推奨が local へ戻った、外部 adapter が missing/disabled になった、または scorecard の実測根拠が薄くなった場合も regression にする。backend/source-kind matrix は required/covered/missing source kind と backend/source pair を比較するため、総合 coverage が同じでも特定 source kind や backend/source 証跡が抜けた場合は regression にする。table cell lineage trend は coverage に加えて expected/resolved/covered/lineage ref count と unresolved/uncovered count を比較し、`case:<hash>` の positive/bad evidence set も比較するため、coverage や count が同じでも表 cell fixture や citation evidence が別 case に置き換わった場合は regression にする。preview addressability trend も chunk/extraction bbox target count、bbox chunk count、addressable/unaddressable target count に加えて addressable / unaddressable / chunk-bbox case hash set を比較するため、bbox overlay fixture や element/table-cell/asset bbox evidence の同数入れ替えも止める。chunk template trend は recommended template だけでなく、template entry ごとの score、status、promotion_blocking、expected/measured case count、covered/missing source kind、covered/missing scenario、reason code count も比較するため、特定 template の測定面が薄くなった場合や `html_semantic` / `table_preserve_rows` が未測定化した場合も regression として検出できる。staging trend では real-world manifest の宣言数だけでなく、`executed_real_world_case_count`、`executed_compliant_real_world_case_count`、実行済み source kind / scenario 数、`missing_executed_source_kinds`、`missing_executed_scenarios`、`execution_error_count` の退化も regression にするため、strict adapter smoke が本物 fixture から少しずつ外れる運用を防げる。比較結果は `file-processing-trend-regression.json` / `file-processing-staging-trend-regression.json` として、比較 metric、許容幅、regression reason、result hash だけを含み、case detail / OCR 原文 / chunk 本文 / query / answer は含めない。nightly workflow は full report、trend、regression summary を保存し、RAGFlow / Docling / Marker / Unstructured 的な文書処理能力が時間経過で退化していないかを raw OCR 本文や chunk 本文を保存せずに追跡する。
-
-adapter golden gate trend は、単なる `passed` / `failed` だけでなく、`mode`、`metrics_source`、selected/recommended backend、metrics applied target、required / manifest / covered source kinds、contract case count、contract missing source kinds、source route contract gap source kinds、blocker code count も比較する。bad set は件数だけでなく新規追加された source kind / metric / blocker code も比較するため、`missing_source_kinds` や `blocker_codes` が同数で別の悪化へ入れ替わった場合も regression になる。これにより Docling / Marker / Unstructured の推奨が local fallback へ戻る、staging metrics が runtime 値へすり替わる、PDF/Office/HTML/email/image の coverage が薄くなる、source route が contract gap を抱えたままになる、または blocker taxonomy が増える退化を、総合 metric が同じでも阻断できる。
-
-parser adapter contract trend も、baseline で証明済みの source kind / backend / passed source kind / passed scenario が消えることと、missing / blocking source kind・scenario・backend が新規追加されることを比較する。case 数や missing 件数が同じでも、two-column PDF や Office layout の schema remap 証跡を HTML などの簡単 scenario に置き換えたり、blocking backend を別 adapter にすり替える退化は regression になる。
-
-parser adapter source route、parser adapter scorecard、chunk template scorecard も reason / warning / missing set の新規追加を比較する。さらに source route は candidate / attempted / active backend の削除、chunk template は covered source kind / scenario の削除も検出する。件数が同じでも `local_fallback_due_to_contract_gap`、`adapter_package_missing`、`chunk_template_scenario_evidence_missing` のような悪化 code に置き換わった場合、または Marker/PDF や Office template coverage のような正向き証跡が別 backend/source/scenario に入れ替わった場合は regression とし、strict runtime smoke と staging manifest の schema remap evidence が同量の別 taxonomy で希釈されることを防ぐ。
-
-real-world staging policy と backend/source-kind matrix も集合内容を比較する。`executed_source_kinds` / `executed_scenarios` は baseline から消えた source / scenario を regression にし、`missing_source_kinds` / `missing_scenarios` / `missing_executed_*` は新規追加を regression にする。backend/source-kind matrix の `missing_source_kinds` も同様に新規追加を止めるため、case 数や missing 件数が同じでも、Office fixture を外して別 source の fixture に置き換えるような coverage drift を合格にしない。
-
-表 QA case は任意で `expected_table_cell_refs` を持てる。指定された場合、staging gate は回答に期待値が含まれることに加えて、検索 citation の metadata (`table_cell_refs` / `cell_refs` / `formula_cell_refs` など) が該当 cell ref を覆い、かつ同 ref が `StructuredExtraction.tables[].cells[].metadata` に解決できることを要求する。CSV/TSV/Markdown/HTML/Office の local table parser は A1 形式の `cell_ref` を `ExtractionTableCell.metadata` に付与し、row-group chunk には該当範囲の `table_cell_refs` を保持するため、単なる表 chunk 命中ではなく cell-level citation lineage を CI で検証できる。
-
-外部 parser adapter から来る table cell metadata も同じ契約に正規化する。普通のセル住所は `cell_ref` として保持し、`formula_cell_ref` は `formula` / cached value などの式情報がある場合だけ追加する。これにより Docling / Marker / Unstructured の cell address を表 QA・preview jump へ使いつつ、通常セルを formula lineage と誤判定しない。
-
-staging 用の実データ manifest は任意で `staging_dataset_policy` を持てる。`required_for_promotion=true` の場合、`fixture_kind=real_world` の case 数、required source kinds、required scenarios、`data_sensitivity=non_sensitive`、`reviewed_for_public_ci=true`、既定 `staging/` 配下の fixture 参照を manifest validation で確認する。これにより synthetic fixture をコピーしただけの “real-world gate” や、レビューされていない顧客文書を nightly artifact に流す運用を防ぐ。policy の validation は case id / source kind / scenario / fixture path prefix / status code だけを扱い、OCR 原文や chunk 本文を artifact に出さない。staging promotion では policy が設定されているのに `required_for_promotion=false` の場合を `staging_dataset_policy_not_required`、必須 policy の coverage / review / fixture 隔離が未達の場合を `staging_dataset_policy_failed` として明示的に止める。さらに staging CLI は manifest 上の合規 case だけでなく、本実行の `case_results` に real-world case が含まれ、required source kinds / scenarios を実測したかも `executed_*` evidence として検査する。`rag-file-processing-staging --require-real-world-policy` と nightly workflow の `require_real_world_file_processing_manifest=true` は policy 未設定の synthetic-only manifest を preflight で止めるため、production promotion では宣言なしの staging を通せない。manifest に real-world case を書いただけで実行 plan から漏れた場合も `staging_dataset_policy_failed` になる。promotion blocker には件数と不足 source kind / scenario だけを残し、real-world case id や fixture path を含めない。
-
-**回答の過程から作る期待の下書き（#2402）**: Excel の「回答の過程」の列は、取込ではケースにせず、プレビューの行（`answer_process`）に返す。画面の「期待の下書きを作る」は、行を 10 行ずつ `POST /api/evaluation/cases/process-drafts`（`knowledge_base_ids` と行の `case_id`・`row`・`question`・`answer_process`）へ送る。構造化は業務ガイドの取り込み（#2397。`support_guide_process_import`）と同じ部品で、見出しの語（言語資源の `guide_import_cues.process_headings`）で節に分け、同じ LLM の呼び出し（`support_guide_draft` の構造化出力。並行の上限は `RAG_SUPPORT_GUIDE_IMPORT_CONCURRENCY`）で業務ガイドの下書きにし、資料の名前を選んだナレッジベースの文書に同じ規則で解決する。`app/rag/evaluation_process.py` がその下書きを評価の期待に直す（LLM を呼ばない）: 手順 → `expected_steps`（手順ごとの検索の手がかりの先頭、無ければ題名）、確認事項 → `required_conditions`（条件の名前）、解決できた資料 → `relevant_document_ids`、頁・章節のある資料 → `required_evidence`（id は `p1`…。頁は取り込みで頁として読めた資料だけ。表計算の行・セルは頁にしない。#2663）、対応 → `expected_outcomes`（手順があれば `answered`・`conditional`、利用者に確かめる条件があれば `needs_clarification`、窓口への引き継ぎがあれば `needs_human`）。解決できない資料と、資料の種類に合わない・読めない位置（表計算の資料の頁・頁の資料の行など）は下書きの警告にして足さない。資料の名前の解決は、同じ正本を指す重複のアップロードを正本にまとめてから行う（業務ガイドの取り込み。#2662）。下書きは保存せず、画面で行ごとに確かめて「確かめた下書きを評価に使う」をオンにしたときだけケースに足す（Excel を選び直す・ナレッジベースを変えると作り直す）。
-
-**案内した画面と目的外の割合（#2402）**: 案内すべき画面（`expected_screens`）のあるケースは、最後の回答が案内した画面を比べる（`app/rag/evaluation_screens.py`）。候補は案内すべき画面の名前・別名と、引用の chunk の図の説明の画面名の行（`visible_screen_names`。行の見出しの語は言語資源の `content_labels.vision_fields`）。回答の手順の見出し（番号つきの行・Markdown の見出し・太字で始まる行。無ければ全文）に出る候補を、長い名前から重ならないように拾う（似た名前の別の画面の中の名前は数えない）。候補が 1 つも出ないときだけ判定器（LLM。`evaluation_screen_judge`）に判定させ、判定できなければ `screen_judged_by=unresolved`（案内すべき画面は不一致）。拒答は不一致、確認の質問・引き継ぎで引用の無い回答は測らない。ケースの結果は `screen_match`（案内すべき画面をすべて案内した）・`wrong_screen`（ほかの画面を案内した）・`guided_screens` / `matched_screens` / `missing_screens` / `wrong_screens`、失敗理由は `screen_missing`・`wrong_screen`。回答の記録の `diagnostics.answer.goal_alignment`（採用した草稿の監査の目的との合い方）を `goal_alignment` に写し、`off_target` は失敗理由 `off_target` にする。集計は `screen_match_rate`・`wrong_screen_rate`・`off_target_rate`（参考の集計で閾値の判定に使わない。後ろの 2 つは低いほどよい）。
-
-**ナレッジベースと検索・回答プロファイルの比較（#2402）**: `EvaluationRunRequest.compare_search_answer_profile_id` を渡すと、同じケースをナレッジベースの範囲（`knowledge_base_ids`）と、そのプロファイルの範囲（参照 KB・業務ガイド・ルール。ナレッジベースの指定は渡さない）の 2 回流し、結果の `comparison`（`search_answer_profile_id` と `metrics`）に後者を入れる。job の件数と時間の上限は 2 回分。画面は「検索・回答プロファイル（業務ガイドあり）でも流して比べる」をオンにしてプロファイルを選び、結果は指標ごとの表（ナレッジベースの範囲・プロファイル・差〔ポイント〕と改善 / 悪化の文言とアイコン。低いほどよい指標は向きを逆にする）と、どちらの結果の詳細を見るかのタブで出す。
-
-### 回答品質の検証 CLI
-
-`python -m app.rag.answer_verify_cli` は、rag_poc の検証スクリプトを移植した手動の検証ツール。`answers` / `regression` は、実行中の backend の API を呼ぶ（`--api-base-url`、既定 `http://localhost:8000`。`--tenant-id` / `--user-id` は `evaluation_cli` と同じ）。1 件ずつ `<out>/<id>.json` に保存し、既にあれば飛ばすので、中断しても同じコマンドで残りを実行できる。最後に `<out>/summary.md` を書く。結果には質問と回答の本文が入るため、`--out` は Git 管理外（`.runs/` 配下）にする。
-
-```bash
-# QA（id / question / standard_answer）を検索・回答プロファイルで回答し、標準回答で評価する（評価の基準の指標と閾値。rag_poc の run_answer_eval.py 相当）
-uv run python -m app.rag.answer_verify_cli answers --qa qa.json --search-answer-profile <検索・回答プロファイル ID> --out .runs/answers/<label>
-# rag_poc の cases.json（id / question / expect）で回答を文字列の規則で判定する（rag_poc の run_regression.py）
-uv run python -m app.rag.answer_verify_cli regression --cases cases.json --search-answer-profile <検索・回答プロファイル ID> --out .runs/regression/<label> --repeat 2
-# CRAG goldset をオフラインで評価する（--llm-judge で backend のモデル設定の LLM に判定させる）
-uv run python -m app.rag.answer_verify_cli crag-goldset crag_goldset.json
-```
-
-- `answers` は回答の記録がある回答だけ評価できる（安全ポリシーで止めた質問など、回答フローを通らなかった件はエラーとして記録する。#594 で回答はすべて同じ回答フローになった）。
-- `regression` の判定は rag_poc と同じ規則（`applied_all` / `applied_excludes` / `gap_contains`）で、LLM を使わない。`cases.json` の `run_id` / `pdf` は読み捨てる（検索・回答プロファイルの KB が検索範囲になる）。
-- `crag-goldset` の終了コードも rag_poc と同じ（CRAG が標準 RAG より劣れば 1）。
-- rag_poc の `evaluate_crag_grader.py` は、rag_poc 独自の ADB の保存先から候補を組み立てる設計のため移植していない。
+実行時の安全機構、回答生成の監査、引用リンクは評価指標の整理によって削除しません。
 
 ## 観測性
 

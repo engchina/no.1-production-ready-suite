@@ -44,11 +44,11 @@ export function evaluationImportIssueLocation(issue: EvaluationImportIssue): str
 
 /** 検証した Excel の件数の内訳（答えるべき質問・資料に答えが無い質問・標準回答のある行）。 */
 export function evaluationImportCounts(result: Pick<EvaluationImportResult, "rows">) {
-  const answerable = result.rows.filter((row) => row.expects_answer).length;
+  const answerable = result.rows.filter((row) => row.expected_response_decision === "answer").length;
   return {
     total: result.rows.length,
     answerable,
-    unanswerable: result.rows.length - answerable,
+    unanswerable: result.rows.filter((row) => row.expected_response_decision === "hold").length,
     withStandardAnswer: result.rows.filter((row) => row.has_standard_answer).length,
   };
 }
@@ -173,7 +173,7 @@ export function applyProcessDrafts<
     addedLines[item.id] = lines;
     return {
       ...item,
-      expected_steps: item.expected_steps?.length ? item.expected_steps : draft.expected_steps,
+      required_answer_points: [...new Set([...(item.required_answer_points ?? []), ...draft.required_answer_points])],
       expected_outcomes: item.expected_outcomes?.length
         ? item.expected_outcomes
         : draft.expected_outcomes,
@@ -216,7 +216,7 @@ export interface EvaluationEvidenceSummary {
 export function evaluationEvidenceSummary(
   result: Pick<
     EvaluationCaseResult,
-    "status" | "context_recall" | "evidence_recall" | "hit_document_ids" | "missing_evidence"
+    "status" | "mrr" | "required_evidence_recall" | "hit_document_ids" | "missing_evidence"
   >,
   label: EvaluationCaseLabel | undefined
 ): EvaluationEvidenceSummary | null {
@@ -226,14 +226,14 @@ export function evaluationEvidenceSummary(
   const missing = new Set(result.missing_evidence ?? []);
   const measured =
     result.status === "success" &&
-    (result.context_recall != null || result.evidence_recall != null);
+    (result.mrr != null || result.required_evidence_recall != null);
   const items = evidence.map((item) => ({
     ...item,
     found:
       measured &&
       (item.evidenceId === null
         ? hits.has(item.documentId)
-        : result.evidence_recall != null && !missing.has(item.evidenceId)),
+        : result.required_evidence_recall != null && !missing.has(item.evidenceId)),
   }));
   return {
     measured,

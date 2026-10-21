@@ -70,7 +70,7 @@ def _case(*screens: EvaluationScreen, **kwargs: Any) -> EvaluationCase:
         id=kwargs.pop("id", "case-1"),
         query="設定を変えるには？",
         relevant_document_ids=["doc-1"],
-        expected_screens=list(screens),
+        required_answer_points=[screen.name for screen in screens],
         **kwargs,
     )
 
@@ -193,83 +193,66 @@ async def test_llm_screen_judge_sends_schema_and_parses_response() -> None:
 
 
 def test_case_scoring_and_summary_report_screen_and_off_target_rates() -> None:
-    """一致・別の画面・目的外の割合を、測れるケースだけで集計する。"""
-    label = _label()
+    """画面の要点も意味上の網羅性へ統合し、独立した画面指標を出さない。"""
+    from app.schemas.evaluation import EvaluationAnswerJudgement
+
     matched = score_case_answers(
         _case(SCREEN_A, id="matched"),
-        [
-            (
-                _response(
-                    "1. 画面A で変更する",
-                    answer_details={"outcome": "answered", "goal_alignment": "aligned"},
-                ),
-                {},
-            )
-        ],
+        [(_response("画面Aで変更する"), {})],
+        EvaluationAnswerJudgement(
+            status="completed", answer_correctness=1, requirement_coverage=1, claim_support_rate=1
+        ),
     )
     wrong = score_case_answers(
         _case(SCREEN_A, id="wrong"),
-        [
-            (
-                _response(
-                    "1. 画面C で変更する",
-                    citations=[_chunk(f"{label}: 画面C")],
-                    answer_details={"outcome": "answered", "goal_alignment": "off_target"},
-                ),
-                {},
-            )
-        ],
+        [(_response("画面Cで変更する"), {})],
+        EvaluationAnswerJudgement(
+            status="completed", answer_correctness=0, requirement_coverage=0, claim_support_rate=0
+        ),
     )
-    unmeasured = score_case_answers(
-        _case(id="no-screens"), [(_response("1. 画面A で変更する"), {})]
-    )
-
-    assert matched.screen_match is True and matched.wrong_screen is False
-    assert matched.goal_alignment == "aligned"
-    assert wrong.screen_match is False and wrong.wrong_screens == ["画面C"]
-    assert {"screen_missing", "wrong_screen", "off_target"} <= set(wrong.failure_reasons)
-    assert unmeasured.screen_match is None and unmeasured.screen_judged_by is None
-
+    unmeasured = score_case_answers(_case(id="no-points"), [(_response("変更する"), {})])
+    assert matched.requirement_coverage == 1
+    assert wrong.requirement_coverage == 0
+    assert wrong.answer_correctness == 0
+    assert "answer_failed" in wrong.failure_reasons
+    assert unmeasured.requirement_coverage is None
     metrics = summarize_case_results([matched, wrong, unmeasured])
-    assert metrics.screen_match_rate == 0.5
-    assert metrics.wrong_screen_rate == 0.5
-    assert metrics.off_target_rate == 0.5
-    assert metrics.metric_case_counts["screen_match_rate"] == 2
-    assert metrics.metric_case_counts["off_target_rate"] == 2
+    assert metrics.requirement_coverage == 0.5
+    assert metrics.answer_correctness == 0.5
+    assert metrics.claim_support_rate == 0.5
+    assert metrics.metric_case_counts["requirement_coverage"] == 2
+    assert (
+        not {"screen_match_rate", "wrong_screen_rate", "off_target_rate"}
+        & metrics.model_dump().keys()
+    )
 
 
 def test_case_scoring_refusal_is_not_matched_and_clarification_is_not_measured() -> None:
     refused = score_case_answers(
-        _case(SCREEN_A),
-        [
-            (
-                _response(
-                    "資料からは確認できませんでした。",
-                    answer_details={"outcome": "insufficient_evidence"},
-                ),
-                {},
-            )
-        ],
+        _case(SCREEN_A, expected_response_decision="answer"),
+        [(_response("確認できません", answer_details={"outcome": "insufficient_evidence"}), {})],
     )
     clarification = SearchResponse(
         answer="どちらの場合ですか？",
         citations=[],
         trace_id="trace-2",
-        guardrail_warnings=[],
-        elapsed_ms=1.0,
+        elapsed_ms=1,
         diagnostics=SearchDiagnostics(answer={"outcome": "needs_clarification"}),
     )
-    asked = score_case_answers(_case(SCREEN_A), [(clarification, {})])
-
-    assert refused.screen_match is False and refused.missing_screens == ["画面A"]
-    assert asked.screen_match is None
+    asked = score_case_answers(
+        _case(SCREEN_A, expected_response_decision="clarify"), [(clarification, {})]
+    )
+    assert refused.response_decision_accuracy == 0
+    assert "unexpected_handling" in refused.failure_reasons
+    assert asked.response_decision_accuracy == 1
+    assert asked.requirement_coverage is None
 
 
 def test_case_without_judge_marks_undetermined_answer_unresolved() -> None:
     result = score_case_answers(_case(SCREEN_A), [(_response("設定を変えます。"), {})])
-
-    assert result.screen_match is False
-    assert result.screen_judged_by == "unresolved"
+    assert result.requirement_coverage is None
+    assert result.answer_correctness is None
+    assert result.claim_support_rate is None
 
 
 class _ScreenPipeline:
@@ -287,39 +270,41 @@ class _ScreenPipeline:
 
 
 async def test_runner_calls_screen_judge_only_when_undetermined() -> None:
-    """回答に画面の名前が出ないときだけ判定器を呼び、その結果で採点する。"""
-    calls: list[str] = []
+    """文字列一致の近道を使わず、必須要点は意味上の評価に渡す。"""
+    calls = []
 
-    async def judge(
-        *, answer: str, expected: Sequence[EvaluationScreen], candidates: Sequence[str]
-    ) -> ScreenJudgement:
-        calls.append(answer)
-        return ScreenJudgement(guided_screens=["画面A"], matched_expected=["画面A"])
+    async def judge(**kwargs: Any) -> Mapping[str, Any]:
+        calls.append(kwargs)
+        return {
+            "status": "completed",
+            "answer_correctness": 1,
+            "requirement_coverage": 1,
+            "claim_support_rate": 1,
+        }
 
-    undetermined = await EvaluationRunner(
-        pipeline=_ScreenPipeline("設定を開いて変更します。"), screen_judge=judge
-    ).run(cases=[_case(SCREEN_A)], top_k=5)
-    determined = await EvaluationRunner(
-        pipeline=_ScreenPipeline("1. 画面A で変更します。"), screen_judge=judge
-    ).run(cases=[_case(SCREEN_A)], top_k=5)
-
-    assert len(calls) == 1
-    assert undetermined.case_results[0].screen_judged_by == "judge"
-    assert undetermined.case_results[0].screen_match is True
-    assert determined.case_results[0].screen_judged_by == "deterministic"
+    for answer in ("設定を開いて変更します。", "画面Aで変更します。"):
+        metrics = await EvaluationRunner(pipeline=_ScreenPipeline(answer), answer_judge=judge).run(
+            cases=[_case(SCREEN_A)], top_k=5
+        )
+        assert metrics.case_results[0].requirement_coverage == 1
+        assert metrics.case_results[0].answer_correctness == 1
+    assert len(calls) == 2
+    assert all(call["standard_answer"] == "画面A" for call in calls)
 
 
 async def test_runner_keeps_case_when_screen_judge_fails() -> None:
-    async def judge(**_: object) -> ScreenJudgement:
+    async def judge(**_: object) -> Mapping[str, Any]:
         raise RuntimeError("judge down")
 
     metrics = await EvaluationRunner(
-        pipeline=_ScreenPipeline("設定を開いて変更します。"), screen_judge=judge
+        pipeline=_ScreenPipeline("設定を開いて変更します。"), answer_judge=judge
     ).run(cases=[_case(SCREEN_A)], top_k=5)
-
     result = metrics.case_results[0]
     assert result.status == "success"
-    assert result.screen_judged_by == "unresolved"
+    assert result.requirement_coverage is None
+    assert result.answer_evaluation is not None and result.answer_evaluation.status == "error"
+    assert result.failure_reasons == ["answer_evaluation_error"]
+    assert metrics.passed is False
 
 
 # ---- 回答の監査の目的との合い方 --------------------------------------------------------------
@@ -370,7 +355,7 @@ def test_compare_api_runs_knowledge_base_then_profile(monkeypatch: MonkeyPatch) 
         async def run(self, **kwargs: Any) -> EvaluationMetrics:
             runs.append(kwargs)
             rate = 0.5 if kwargs["search_answer_profile_id"] else 0.25
-            return EvaluationMetrics(case_count=1, screen_match_rate=rate)
+            return EvaluationMetrics(case_count=1, response_decision_accuracy=rate)
 
     class FakeOracleClient:
         async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
@@ -391,9 +376,9 @@ def test_compare_api_runs_knowledge_base_then_profile(monkeypatch: MonkeyPatch) 
 
     assert response.status_code == 200, response.text
     data = response.json()["data"]
-    assert data["screen_match_rate"] == 0.25
+    assert data["response_decision_accuracy"] == 0.25
     assert data["comparison"]["search_answer_profile_id"] == "profile-1"
-    assert data["comparison"]["metrics"]["screen_match_rate"] == 0.5
+    assert data["comparison"]["metrics"]["response_decision_accuracy"] == 0.5
     assert [run["search_answer_profile_id"] for run in runs] == [None, "profile-1"]
     assert runs[0]["knowledge_base_ids"] == ["kb-1"]
     # プロファイルの範囲は、プロファイルの参照 KB で決める（KB の指定は渡さない）。

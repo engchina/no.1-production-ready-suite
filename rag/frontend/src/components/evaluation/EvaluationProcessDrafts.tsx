@@ -176,7 +176,7 @@ function ProcessDraftTable({ drafts }: { drafts: EvaluationProcessDraft[] }) {
                 <span className="text-fg-muted">{draft.error}</span>
               </span>
             ) : (
-              <Lines items={draft.expected_steps} ordered />
+              <Lines items={draft.required_answer_points} ordered />
             ),
         },
         {

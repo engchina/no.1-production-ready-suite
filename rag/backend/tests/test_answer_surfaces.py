@@ -160,7 +160,8 @@ async def test_evaluation_runs_cases_with_answer_engine() -> None:
                 id="case-1",
                 query="受注の登録方法は？",
                 relevant_document_ids=["doc-1"],
-                expected_answer_keywords=["登録ボタン"],
+                required_answer_points=["登録ボタン"],
+                expected_response_decision="answer",
             )
         ],
         top_k=5,
@@ -168,7 +169,8 @@ async def test_evaluation_runs_cases_with_answer_engine() -> None:
 
     assert metrics.case_count == 1
     assert metrics.error_count == 0
-    assert metrics.answer_keyword_hit_rate == 1.0
-    assert metrics.context_recall == 1.0
+    assert metrics.response_decision_accuracy == 1.0
+    assert metrics.mrr == 1.0
     # 回答の記録(引用・根拠・実行記録)から測る指標も求まる(#591)。
-    assert metrics.citation_traceability_coverage is not None
+    assert metrics.required_evidence_recall is None
+    assert metrics.answer_correctness is None

@@ -1,24 +1,8 @@
-"""評価の基準(閾値のプリセット)の決定論解決(backend / サービス共有)。
+"""六指標の評価基準の決定論的な解決。
 
-基準 → CI gate 用の閾値(指標名→最低値の dict)を決定論で解決する(#591)。
-指標は「検索」「根拠」「回答」の 3 つの観点に整理した 9 つだけを持つ。
-
-- 検索: context_recall(正解の文書を取れたか)/ mrr(正解の文書の順位)
-- 根拠: claim_support_rate(画面の名前は Faithfulness。標準回答による評価で、LLM の主張の判定で
-  根拠のない主張が無いか)/ citation_traceability_coverage(引用を原文の位置へたどれるか)/
-  faithfulness(画面の名前は「根拠との語句の一致率」。参考値で、閾値は目安として表示するだけで
-  合否に使わない。#711)
-- 回答: answer_keyword_hit_rate(期待する語を含むか)/ refusal_accuracy(答えるべきでないときに
-  答えず、答えるべきときに答えたか)/ requirement_coverage(標準回答の必要な項目を網羅したか)/
-  answer_pass_rate(標準回答による評価の合格)
-- 対応（業務支援。#1231）: handling_accuracy(期待する対応か)/ step_order_score(手順の網羅と順序)/
-  safe_answer_rate(勧めてはいけない操作を含まないか。どちらの基準でも 100% を求める)/
-  condition_coverage(触れるべき条件に触れたか)
-
-プリセットは「標準」と「厳格」の 2 つ。閾値は、そのケースの集合で測れた指標だけに適用する
-(標準回答の無い golden set では、標準回答による評価の閾値を判定しない)。閾値は素の
-dict[str, float] で受け渡し、backend が `EvaluationThresholds` へ写す。Settings 非依存。
-"""
+標準は根拠取得・正確性・網羅性・応答判断の九割、主張の支持の九割五分を目安とする。
+厳格は MRR を除く全指標で完全一致を求める。MRR は標準 0.6、厳格 0.8。
+設定の解決だけを担当し、前提不足の未評価は合格に置き換えない。"""
 
 from __future__ import annotations
 
@@ -50,19 +34,9 @@ EVALUATION_SPECS: dict[str, EvaluationSpec] = {
         "general_rag",
         ("general", "nightly"),
         {
-            "context_recall": 0.8,
-            "mrr": 0.6,
-            "faithfulness": 0.7,
-            "citation_traceability_coverage": 0.9,
-            "claim_support_rate": 0.9,
-            "answer_keyword_hit_rate": 0.8,
-            "refusal_accuracy": 0.9,
-            "requirement_coverage": 0.8,
-            "answer_pass_rate": 0.7,
-            "handling_accuracy": 0.7,
-            "step_order_score": 0.7,
-            "safe_answer_rate": 1.0,
-            "condition_coverage": 0.6,
+            "required_evidence_recall": 0.9, "mrr": 0.6, "answer_correctness": 0.9,
+            "requirement_coverage": 0.9, "claim_support_rate": 0.95,
+            "response_decision_accuracy": 0.9,
         },
     ),
     "strict": EvaluationSpec(
@@ -70,19 +44,9 @@ EVALUATION_SPECS: dict[str, EvaluationSpec] = {
         "release_gate",
         ("release", "regression"),
         {
-            "context_recall": 0.9,
-            "mrr": 0.8,
-            "faithfulness": 0.8,
-            "citation_traceability_coverage": 0.95,
-            "claim_support_rate": 1.0,
-            "answer_keyword_hit_rate": 0.9,
-            "refusal_accuracy": 1.0,
-            "requirement_coverage": 0.9,
-            "answer_pass_rate": 0.8,
-            "handling_accuracy": 0.85,
-            "step_order_score": 0.85,
-            "safe_answer_rate": 1.0,
-            "condition_coverage": 0.8,
+            "required_evidence_recall": 1.0, "mrr": 0.8, "answer_correctness": 1.0,
+            "requirement_coverage": 1.0, "claim_support_rate": 1.0,
+            "response_decision_accuracy": 1.0,
         },
     ),
 }

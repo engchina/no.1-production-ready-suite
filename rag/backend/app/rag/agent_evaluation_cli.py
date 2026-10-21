@@ -645,7 +645,7 @@ def evaluate(
             f"[{index}/{len(request.cases)}] {case.id}: {outcome.result.status} "
             f"outcome={outcome.result.observed_outcome} "
             f"source={outcome.result.outcome_source} "
-            f"handling={outcome.result.handling_correct}"
+            f"handling={outcome.result.response_decision_accuracy}"
         )
     return summarize_case_results(results, thresholds=request.thresholds), records
 
@@ -662,21 +662,14 @@ def outcome_source_counts(records: Sequence[RunRecord]) -> dict[str, int]:
 # ---- 比較の要約 ---------------------------------------------------------------------------
 
 SUMMARY_METRICS: tuple[tuple[str, str], ...] = (
-    ("handling_accuracy", "対応の正しさ"),
-    ("step_order_score", "手順の網羅と順序"),
-    ("safe_answer_rate", "危険な回答の無さ"),
-    ("condition_coverage", "条件への言及"),
-    ("required_evidence_recall", "必要な根拠の再現率"),
-    ("evidence_chain_complete_rate", "根拠の連鎖の完全率"),
-    ("refusal_accuracy", "拒答の正しさ"),
-    ("context_recall", "正解文書の再現率"),
+    ("required_evidence_recall", "必要な根拠の取得率"),
+    ("mrr", "正解文書の順位（MRR）"),
+    ("answer_correctness", "回答の正確性"),
+    ("requirement_coverage", "回答の網羅性"),
+    ("claim_support_rate", "根拠への忠実性"),
+    ("response_decision_accuracy", "回答・確認・保留の判断の正しさ"),
 )
-# 多段の質問の種類別・段の数別の内訳に出す指標（#1335。RAG の評価の内訳と同じ）。
-REASONING_SUMMARY_METRICS: tuple[tuple[str, str], ...] = (
-    ("evidence_chain_complete_rate", "根拠の連鎖の完全率"),
-    ("required_evidence_recall", "必要な根拠の再現率"),
-    ("answer_keyword_hit_rate", "期待する語の一致率"),
-)
+REASONING_SUMMARY_METRICS = SUMMARY_METRICS
 
 
 def _reasoning_summary(breakdown: object) -> dict[str, dict[str, Any]]:
@@ -742,7 +735,9 @@ def summarize_result(data: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(item, Mapping):
                 summary["categories"][category] = {
                     "case_count": item.get("case_count"),
-                    "handling_correct_rate": item.get("handling_correct_rate"),
+                    "handling_correct_rate": item.get("metrics", {}).get(
+                        "response_decision_accuracy"
+                    ),
                 }
     return summary
 
@@ -777,7 +772,7 @@ def summary_markdown(summaries: Mapping[str, Mapping[str, Any]]) -> str:
         {split for summary in summaries.values() for split in summary.get("splits", {})}
     )
     for split in splits:
-        for metric in ("handling_accuracy", "step_order_score", "safe_answer_rate"):
+        for metric, name in SUMMARY_METRICS:
             name = dict(SUMMARY_METRICS)[metric]
             row(
                 f"{split}: {name}",
@@ -789,12 +784,13 @@ def summary_markdown(summaries: Mapping[str, Mapping[str, Any]]) -> str:
     )
     for category in categories:
         row(
-            f"{category}: 対応の正しさ",
+            f"{category}: 回答・確認・保留の判断の正しさ",
             [
                 summaries[label]
                 .get("categories", {})
                 .get(category, {})
-                .get("handling_correct_rate")
+                .get("metrics", {})
+                .get("response_decision_accuracy")
                 for label in labels
             ],
         )
@@ -825,11 +821,8 @@ def _reasoning_rows(
         }
         for name in _ordered_names(groups.values()):
             row(
-                f"{split} / {name}: 根拠の連鎖の完全率",
-                [
-                    groups[label].get(name, {}).get("evidence_chain_complete_rate")
-                    for label in labels
-                ],
+                f"{split} / {name}: 必要な根拠の取得率",
+                [groups[label].get(name, {}).get("required_evidence_recall") for label in labels],
             )
 
 

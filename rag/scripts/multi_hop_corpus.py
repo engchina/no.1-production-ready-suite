@@ -2426,7 +2426,7 @@ def _case_payload(spec: CaseSpec, evidence: Mapping[str, tuple[str, str]]) -> di
         "hops": spec.hops,
         "query": spec.query,
         "relevant_document_ids": documents,
-        "expected_answer_keywords": list(spec.keywords),
+        "required_answer_points": list(spec.keywords),
         "expected_outcomes": list(EXPECTED_OUTCOMES),
         "required_evidence": [
             {"id": key, "document_id": f"file:{evidence[key][0]}", "text": evidence[key][1]}

@@ -74,7 +74,8 @@ def test_template_has_headers_guide_examples_and_document_sheets() -> None:
         "質問",
         "期待する根拠",
         "標準回答",
-        "案内すべき画面",
+        "必須の回答要点",
+        "期待する応答の判断",
         "回答の過程",
     ]
     # 見出しのセルに意味・必須か任意か・書き方を注記する（形式ごとの位置の書き方も短く）。
@@ -661,7 +662,7 @@ def test_import_api_returns_cases_preview_and_document_names(
     assert preview["evidence"] == ["経費精算規程.pdf | p.3"]
     assert preview["has_standard_answer"] is True
     assert preview["standard_answer_preview"].endswith("…")
-    assert data["rows"][1]["expects_answer"] is False
+    assert data["rows"][1]["expected_response_decision"] is None
     assert data["max_rows"] == EVALUATION_EXCEL_MAX_ROWS
 
 

@@ -153,7 +153,7 @@ describe("parseAnswerEvaluation", () => {
       metrics: [
         { name: "requirement_coverage", value: 0.5, threshold: 0.9, passed: false },
         { name: "claim_support_rate", value: 1, threshold: 1, passed: true, reference: false },
-        { name: "faithfulness", value: 0.4, threshold: 0.8, passed: false, reference: true },
+        { name: "answer_correctness", value: null, threshold: 0.9, passed: null, reference: false },
       ],
       standard_answer_scope: { requirements: [{ requirement: "登録の手順" }] },
       coverage_checks: [{ requirement_index: 1, status: "partial", answer_quote: "受注番号" }],
@@ -165,7 +165,7 @@ describe("parseAnswerEvaluation", () => {
     expect(parsed?.metrics).toEqual([
       { name: "requirement_coverage", value: 0.5, threshold: 0.9, passed: false, reference: false },
       { name: "claim_support_rate", value: 1, threshold: 1, passed: true, reference: false },
-      { name: "faithfulness", value: 0.4, threshold: 0.8, passed: false, reference: true },
+      { name: "answer_correctness", value: null, threshold: 0.9, passed: null, reference: false },
     ]);
     expect(parsed?.coverage).toEqual([
       { index: 1, requirement: "登録の手順", status: "partial", quote: "受注番号" },

@@ -1,152 +1,43 @@
-import { describe, expect, it } from "vitest";
-
-import type { EvaluationMetrics } from "@/lib/api";
-
-import {
-  EVALUATION_METRIC_NAMES,
-  EVALUATION_PERSPECTIVES,
-  STANDARD_ANSWER_METRICS,
-  comparisonRows,
-  formatMetricDelta,
-  isGuidanceShown,
-  failureReasonLabel,
-  formatMetricValue,
-  isPerspectiveShown,
-  outcomeLabel,
-  metricCaseCount,
-  metricLabel,
-  metricValue,
-  orderedThresholdEntries,
-  suiteLabel,
-} from "./evaluation-metrics";
-
-describe("evaluation metrics (issue 591)", () => {
-  it("groups the metrics into retrieval / grounding / answer / handling", () => {
-    expect(EVALUATION_PERSPECTIVES.map((perspective) => perspective.id)).toEqual([
-      "retrieval",
-      "grounding",
-      "answer",
-      "handling",
-    ]);
-    expect(EVALUATION_METRIC_NAMES).toHaveLength(13);
-    expect(new Set(EVALUATION_METRIC_NAMES).size).toBe(13);
-    for (const name of STANDARD_ANSWER_METRICS) {
-      expect(EVALUATION_METRIC_NAMES).toContain(name);
-    }
-  });
-
-  it("uses Japanese labels and keeps removed names of saved results as-is", () => {
-    expect(metricLabel("context_recall")).toBe("正解文書の再現率");
-    expect(metricLabel("precision_at_k")).toBe("precision_at_k");
-    expect(failureReasonLabel("unexpected_refusal")).toBe("答えるべき質問に答えなかった");
-    expect(failureReasonLabel("section_miss")).toBe("section_miss");
-    expect(suiteLabel("strict")).toBe("厳格");
-    expect(suiteLabel("ragas_like")).toBe("ragas_like");
-  });
-
-  it("formats unmeasured values as a dash, not as 0%", () => {
-    expect(formatMetricValue(0.8333)).toBe("83.3%");
-    expect(formatMetricValue(0)).toBe("0%");
-    expect(formatMetricValue(null)).toBe("—");
-    expect(formatMetricValue(undefined)).toBe("—");
-  });
-
-  it("reads values and case counts from legacy results without the new fields", () => {
-    const legacy = {
-      case_count: 1,
-      error_count: 0,
-      evaluation_suite: "balanced",
-      mrr: 1,
-      passed: true,
-      threshold_failures: [],
-      failure_reason_counts: {},
-      case_results: [],
-    } satisfies EvaluationMetrics;
-    expect(metricValue(legacy, "mrr")).toBe(1);
-    expect(metricValue(legacy, "refusal_accuracy")).toBeNull();
-    expect(metricCaseCount(legacy, "mrr")).toBeNull();
-  });
-
-  it("orders thresholds by perspective and drops unset values", () => {
-    expect(
-      orderedThresholdEntries({ answer_pass_rate: 0.7, legacy_metric: 0.5, mrr: 0.6, faithfulness: null })
-    ).toEqual([
-      ["mrr", 0.6],
-      ["answer_pass_rate", 0.7],
-      ["legacy_metric", 0.5],
-    ]);
-  });
+import {describe, expect, it} from "vitest";
+import type {EvaluationMetrics} from "@/lib/api";
+import {EVALUATION_METRIC_NAMES, EVALUATION_PERSPECTIVES, STANDARD_ANSWER_METRICS, comparisonRows, metricCaseCount, metricValue, metricLabel, formatMetricValue, orderedThresholdEntries} from "./evaluation-metrics";
+const result = (values:Partial<EvaluationMetrics>={}):EvaluationMetrics => ({case_count:1,error_count:0,evaluation_suite:"standard",passed:null,threshold_failures:[],failure_reason_counts:{},case_results:[],...values});
+describe("六指標の共通契約",()=>{
+ it("両ページで検索二・回答三・応答判断一の順を使う",()=>{
+  expect(EVALUATION_PERSPECTIVES.map(({id,metrics})=>[id,metrics.length])).toEqual([["retrieval",2],["answer",3],["decision",1]]);
+  expect(EVALUATION_METRIC_NAMES.map(metricLabel)).toEqual(["必要な根拠の取得率","正解文書の順位（MRR）","回答の正確性","回答の網羅性","根拠への忠実性","回答・確認・保留の判断の正しさ"]);
+  expect(STANDARD_ANSWER_METRICS.has("claim_support_rate")).toBe(false);
+ });
+ it("未評価を0点や合格と混同しない",()=>{
+  expect(formatMetricValue(null)).toBe("未評価");expect(formatMetricValue(0)).toBe("0%");
+  expect(metricValue(result(),"answer_correctness")).toBeNull();
+  expect(metricCaseCount(result({metric_case_counts:{mrr:0}}),"mrr")).toBe(0);
+ });
+ it("削除した指標を閾値や比較に戻さない",()=>{
+  expect(orderedThresholdEntries({mrr:0.8,faithfulness:1,answer_pass_rate:1})).toEqual([["mrr",0.8]]);
+  const rows=comparisonRows(result({mrr:0.5}),result({mrr:1}));
+  expect(rows.filter(row=>row.metric==="mrr")).toEqual([{metric:"mrr",base:0.5,compared:1,delta:0.5,direction:"better"}]);
+ });
 });
 
-describe("business support handling (issue 1231)", () => {
-  const handling = EVALUATION_PERSPECTIVES.find((perspective) => perspective.id === "handling")!;
-  const answer = EVALUATION_PERSPECTIVES.find((perspective) => perspective.id === "answer")!;
-  const base = {
-    case_count: 1,
-    error_count: 0,
-    evaluation_suite: "standard",
-    passed: true,
-    threshold_failures: [],
-    failure_reason_counts: {},
-    case_results: [],
-  } satisfies EvaluationMetrics;
-
-  it("shows the handling perspective only when some case measured it", () => {
-    expect(isPerspectiveShown(base, handling)).toBe(false);
-    expect(isPerspectiveShown({ ...base, metric_case_counts: { handling_accuracy: 0 } }, handling)).toBe(false);
-    expect(isPerspectiveShown({ ...base, metric_case_counts: { safe_answer_rate: 2 } }, handling)).toBe(true);
-    expect(isPerspectiveShown(base, answer)).toBe(true);
-  });
-
-  it("labels outcomes and failure reasons in Japanese", () => {
-    expect(outcomeLabel("needs_environment_data")).toBe("現場のデータが必要");
-    expect(outcomeLabel("future_outcome")).toBe("future_outcome");
-    expect(failureReasonLabel("forbidden_action")).toBe("危険な操作を提示");
-    // 必要な根拠の取りこぼしと、分かっている条件の聞き直し（#1284）。
-    expect(failureReasonLabel("evidence_miss")).toBe("必要な根拠を取れなかった");
-    expect(failureReasonLabel("known_condition_reasked")).toBe("分かっている条件を聞き直した");
-    expect(metricLabel("safe_answer_rate")).toBe("危険な回答の無さ");
-  });
+it("比較は六指標の順で差と向きを計算する",()=>{
+ const a=result({mrr:0.8,answer_correctness:1,requirement_coverage:0.5});
+ const b=result({mrr:0.4,answer_correctness:1,requirement_coverage:0.75});
+ expect(comparisonRows(a,b).filter(row=>row.delta!==null).map(row=>[row.metric,row.delta,row.direction])).toEqual([["mrr",-0.4,"worse"],["answer_correctness",0,"same"],["requirement_coverage",0.25,"better"]]);
 });
-
-describe("guidance metrics and comparison (issue 2402)", () => {
-  const base = {
-    case_count: 2,
-    error_count: 0,
-    evaluation_suite: "standard",
-    passed: true,
-    threshold_failures: [],
-    failure_reason_counts: {},
-    case_results: [],
-  } satisfies EvaluationMetrics;
-
-  it("labels the guidance metrics and shows them only when measured", () => {
-    expect(metricLabel("screen_match_rate")).toBe("案内すべき画面の一致");
-    expect(failureReasonLabel("wrong_screen")).toBe("別の画面を案内した");
-    expect(isGuidanceShown(base)).toBe(false);
-    expect(isGuidanceShown({ ...base, metric_case_counts: { off_target_rate: 1 } })).toBe(true);
-  });
-
-  it("compares two runs and flips the direction for lower-is-better metrics", () => {
-    const rows = comparisonRows(
-      { ...base, screen_match_rate: 0.5, wrong_screen_rate: 0.5, context_recall: 1 },
-      { ...base, screen_match_rate: 0.75, wrong_screen_rate: 0.25, context_recall: 1, mrr: 0.5 }
-    );
-    const byMetric = Object.fromEntries(rows.map((row) => [row.metric, row]));
-    expect(rows[0]?.metric).toBe("screen_match_rate");
-    expect(byMetric.screen_match_rate).toMatchObject({ delta: 0.25, direction: "better" });
-    expect(byMetric.wrong_screen_rate).toMatchObject({ delta: -0.25, direction: "better" });
-    expect(byMetric.context_recall).toMatchObject({ delta: 0, direction: "same" });
-    expect(byMetric.mrr).toMatchObject({ base: null, delta: null, direction: null });
-    // どちらでも測れなかった指標は出さない。
-    expect(byMetric.off_target_rate).toBeUndefined();
-  });
-
-  it("formats the delta in percentage points", () => {
-    expect(formatMetricDelta(0.125)).toBe("+12.5pt");
-    expect(formatMetricDelta(-0.03)).toBe("−3pt");
-    expect(formatMetricDelta(0)).toBe("±0pt");
-    expect(formatMetricDelta(null)).toBe("—");
-  });
+it("片側だけ未評価なら差も改善判定も付けない",()=>{
+ expect(comparisonRows(result(),result({claim_support_rate:0})).filter(row=>row.metric==="claim_support_rate")).toEqual([{metric:"claim_support_rate",base:null,compared:0,delta:null,direction:null}]);
 });
-
+it("両側とも未評価でも六指標を表示する",()=>{
+ const rows=comparisonRows(result(),result()); expect(rows).toHaveLength(6);expect(rows.every(row=>row.base===null && row.compared===null && row.direction===null)).toBe(true);
+});
+it("全閾値を共通の表示順に並べる",()=>{
+ expect(orderedThresholdEntries(Object.fromEntries([...EVALUATION_METRIC_NAMES].reverse().map(name=>[name,0.9]))).map(([name])=>name)).toEqual(EVALUATION_METRIC_NAMES);
+});
+it("対象件数は未指定と零件を区別する",()=>{
+ expect(metricCaseCount(result(),"mrr")).toBeNull();
+ expect(metricCaseCount(result({metric_case_counts:{mrr:2}}),"mrr")).toBe(2);
+});
+it("零と小数を正しく百分率表示し、欠損値は未評価にする",()=>{
+ expect(formatMetricValue(0.125)).toBe("12.5%");expect(formatMetricValue(1)).toBe("100%");expect(formatMetricValue(undefined)).toBe("未評価");expect(formatMetricValue(NaN)).toBe("未評価");
+});

@@ -24,15 +24,15 @@ for (const viewport of [
     // 選んだ基準の閾値を、検索・根拠・回答の観点ごとに指標の意味と一緒に出す。
     const metrics = page.getByTestId("settings-evaluation-metrics");
     await expect(metrics.getByRole("heading", { name: "標準の指標と閾値" })).toBeVisible();
-    for (const perspective of ["検索", "根拠", "回答", "対応"]) {
+    for (const perspective of ["検索", "回答", "応答の判断"]) {
       await expect(metrics.getByRole("heading", { name: perspective, exact: true })).toBeVisible();
     }
-    await expect(metrics.locator("[data-testid^='settings-evaluation-metric-']")).toHaveCount(13);
-    await expect(page.getByTestId("settings-evaluation-metric-context_recall")).toContainText(
-      "閾値 80%"
+    await expect(metrics.locator("[data-testid^='settings-evaluation-metric-']")).toHaveCount(6);
+    await expect(page.getByTestId("settings-evaluation-metric-required_evidence_recall")).toContainText(
+      "閾値 90%"
     );
     await expect(
-      page.getByTestId("settings-evaluation-metric-answer_pass_rate")
+      page.getByTestId("settings-evaluation-metric-answer_correctness")
     ).toContainText("標準回答が必要");
     // 変更が実行済みの評価に効かないことを案内する（#1029）。
     await expect(page.getByRole("main")).toContainText("実行済みの評価の合否は変わりません");
@@ -144,19 +144,8 @@ async function collapseSidebar(page: Page) {
 
 function evaluationEnvelope(suite: string) {
   const thresholds = (strict: boolean) => ({
-    context_recall: strict ? 0.9 : 0.8,
-    mrr: strict ? 0.8 : 0.6,
-    faithfulness: strict ? 0.8 : 0.7,
-    citation_traceability_coverage: strict ? 0.95 : 0.9,
-    claim_support_rate: strict ? 1 : 0.9,
-    answer_keyword_hit_rate: strict ? 0.9 : 0.8,
-    refusal_accuracy: strict ? 1 : 0.9,
-    requirement_coverage: strict ? 0.9 : 0.8,
-    answer_pass_rate: strict ? 0.8 : 0.7,
-    handling_accuracy: strict ? 0.85 : 0.7,
-    step_order_score: strict ? 0.85 : 0.7,
-    safe_answer_rate: 1,
-    condition_coverage: strict ? 0.8 : 0.6,
+ required_evidence_recall:strict?1:0.9,mrr:strict?0.8:0.6,answer_correctness:strict?1:0.9,
+ requirement_coverage:strict?1:0.9,claim_support_rate:strict?1:0.95,response_decision_accuracy:strict?1:0.9,
   });
   const specs = [
     { name: "standard", thresholds: thresholds(false) },

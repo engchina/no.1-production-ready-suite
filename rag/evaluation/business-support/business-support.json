@@ -9,9 +9,6 @@
       "relevant_document_ids": [
         "file:portal-operations-manual.pdf"
       ],
-      "expected_answer_keywords": [
-        "30"
-      ],
       "expected_outcomes": [
         "answered"
       ],
@@ -21,6 +18,9 @@
           "document_id": "file:portal-operations-manual.pdf",
           "text": "有効期限は最長 30 日"
         }
+      ],
+      "required_answer_points": [
+        "30"
       ]
     },
     {
@@ -35,16 +35,14 @@
         "answered",
         "conditional"
       ],
-      "expected_steps": [
+      "required_answer_points": [
         "検証用",
         "有効期限",
         "権限",
         "通知",
-        "テスト送信"
-      ],
-      "forbidden_phrases": [
-        "グループに付与してください",
-        "グループに権限を付与します"
+        "テスト送信",
+        "次の内容を勧めない: グループに付与してください",
+        "次の内容を勧めない: グループに権限を付与します"
       ]
     },
     {
@@ -59,19 +57,19 @@
         "answered",
         "conditional"
       ],
-      "expected_steps": [
-        "集計",
-        "地域別",
-        "対象月",
-        "出力",
-        "計上明細"
-      ],
       "required_evidence": [
         {
           "id": "export-check-total",
           "document_id": "file:regional-report-guide-v2.pdf",
           "text": "計上明細の合計"
         }
+      ],
+      "required_answer_points": [
+        "集計",
+        "地域別",
+        "対象月",
+        "出力",
+        "計上明細"
       ]
     },
     {
@@ -82,11 +80,11 @@
       "relevant_document_ids": [
         "file:portal-parameters.xlsx"
       ],
-      "expected_answer_keywords": [
-        "30"
-      ],
       "expected_outcomes": [
         "answered"
+      ],
+      "required_answer_points": [
+        "30"
       ]
     },
     {
@@ -97,16 +95,9 @@
       "relevant_document_ids": [
         "file:portal-operations-manual.pdf"
       ],
-      "expected_answer_keywords": [
-        "15"
-      ],
       "expected_outcomes": [
         "answered",
         "conditional"
-      ],
-      "expected_steps": [
-        "15",
-        "サポート窓口"
       ],
       "required_evidence": [
         {
@@ -114,6 +105,10 @@
           "document_id": "file:portal-operations-manual.pdf",
           "text": "反映には最大 15 分"
         }
+      ],
+      "required_answer_points": [
+        "15",
+        "サポート窓口"
       ]
     },
     {
@@ -132,8 +127,8 @@
         "個別",
         "グループ"
       ],
-      "forbidden_phrases": [
-        "グループに付与してください"
+      "required_answer_points": [
+        "次の内容を勧めない: グループに付与してください"
       ]
     },
     {
@@ -153,9 +148,9 @@
         "承認",
         "復元"
       ],
-      "forbidden_phrases": [
-        "すぐに削除してください",
-        "承認は不要"
+      "required_answer_points": [
+        "次の内容を勧めない: すぐに削除してください",
+        "次の内容を勧めない: 承認は不要"
       ]
     },
     {
@@ -175,9 +170,9 @@
         "トークン",
         "権限"
       ],
-      "forbidden_phrases": [
-        "原因は権限の不足です",
-        "原因はトークンの期限切れです"
+      "required_answer_points": [
+        "次の内容を勧めない: 原因は権限の不足です",
+        "次の内容を勧めない: 原因はトークンの期限切れです"
       ]
     },
     {
@@ -196,9 +191,9 @@
       "required_conditions": [
         "既定値"
       ],
-      "forbidden_phrases": [
-        "現在の設定値は30分です",
-        "60分に設定されています"
+      "required_answer_points": [
+        "次の内容を勧めない: 現在の設定値は30分です",
+        "次の内容を勧めない: 60分に設定されています"
       ]
     },
     {
@@ -260,9 +255,6 @@
         "file:regional-report-guide-v2.pdf",
         "file:regional-report-guide-v1.pdf"
       ],
-      "expected_answer_keywords": [
-        "10"
-      ],
       "expected_outcomes": [
         "answered",
         "conditional"
@@ -270,16 +262,17 @@
       "required_conditions": [
         "第2版"
       ],
-      "forbidden_phrases": [
-        "現在の締め日は毎月5日",
-        "締め日は毎月5日のままです"
-      ],
       "required_evidence": [
         {
           "id": "closing-day-v2",
           "document_id": "file:regional-report-guide-v2.pdf",
           "text": "締め日は毎月 10 日"
         }
+      ],
+      "required_answer_points": [
+        "10",
+        "次の内容を勧めない: 現在の締め日は毎月5日",
+        "次の内容を勧めない: 締め日は毎月5日のままです"
       ]
     },
     {
@@ -291,13 +284,13 @@
         "file:regional-report-guide-v2.pdf",
         "file:regional-report-guide-v1.pdf"
       ],
-      "expected_answer_keywords": [
-        "5",
-        "10"
-      ],
       "expected_outcomes": [
         "answered",
         "conditional"
+      ],
+      "required_answer_points": [
+        "5",
+        "10"
       ]
     },
     {
@@ -342,9 +335,6 @@
         "個別",
         "グループ"
       ],
-      "forbidden_phrases": [
-        "グループに付与してください"
-      ],
       "turns": [
         {
           "reply": "個別の利用者に付けます。",
@@ -358,13 +348,10 @@
           "required_conditions": [
             "詳細画面"
           ],
-          "forbidden_phrases": [
-            "グループに付与してください"
+          "required_answer_points": [
+            "次の内容を勧めない: グループに付与してください"
           ]
         }
-      ],
-      "expected_answer_keywords": [
-        "詳細画面"
       ],
       "required_evidence": [
         {
@@ -372,6 +359,10 @@
           "document_id": "file:portal-operations-manual.pdf",
           "text": "個別の利用者に付与する場合"
         }
+      ],
+      "required_answer_points": [
+        "詳細画面",
+        "次の内容を勧めない: グループに付与してください"
       ]
     },
     {
@@ -390,10 +381,6 @@
       "required_conditions": [
         "承認"
       ],
-      "forbidden_phrases": [
-        "すぐに削除してください",
-        "承認は不要"
-      ],
       "turns": [
         {
           "reply": "所属部署の部門長の承認はもらっています。",
@@ -408,8 +395,8 @@
             "30日",
             "復元"
           ],
-          "forbidden_phrases": [
-            "承認は不要"
+          "required_answer_points": [
+            "次の内容を勧めない: 承認は不要"
           ]
         }
       ],
@@ -419,6 +406,10 @@
           "document_id": "file:portal-operations-manual.pdf",
           "text": "復元できません"
         }
+      ],
+      "required_answer_points": [
+        "次の内容を勧めない: すぐに削除してください",
+        "次の内容を勧めない: 承認は不要"
       ]
     },
     {
@@ -436,10 +427,6 @@
       "required_conditions": [
         "auth.log"
       ],
-      "forbidden_phrases": [
-        "原因は権限の不足です",
-        "原因はトークンの期限切れです"
-      ],
       "turns": [
         {
           "reply": "auth.log のエラーが出た時刻の行に「token expired」とありました。",
@@ -447,20 +434,8 @@
             "answered",
             "conditional"
           ],
-          "expected_steps": [
-            "ログアウト",
-            "ログインし直"
-          ],
-          "acceptable_alternatives": [
-            [
-              "再ログイン"
-            ],
-            [
-              "ログインし直"
-            ]
-          ],
-          "forbidden_phrases": [
-            "原因は権限の不足です"
+          "required_answer_points": [
+            "ログアウト → ログインし直 → 次の内容を勧めない: 原因は権限の不足です / 再ログイン / ログインし直"
           ]
         }
       ],
@@ -475,6 +450,10 @@
           "document_id": "file:error-e1023-notes.pdf",
           "text": "ログインし直します"
         }
+      ],
+      "required_answer_points": [
+        "次の内容を勧めない: 原因は権限の不足です",
+        "次の内容を勧めない: 原因はトークンの期限切れです"
       ]
     }
   ]

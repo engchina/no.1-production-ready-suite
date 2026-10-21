@@ -59,7 +59,7 @@ def test_evaluation_gate_cli_passes_and_writes_output_file(
     assert exit_code == 0
     assert captured.out == ""
     assert "評価 gate passed" in captured.err
-    assert "refusal_accuracy=1.0" in captured.err
+    assert "response_decision_accuracy=1.0" in captured.err
     assert "tenant-secret" not in captured.err
     assert "user-secret" not in captured.err
     assert observed["api_url"] == "http://rag.example.test/api/evaluation/run"
@@ -132,9 +132,9 @@ def test_evaluation_gate_cli_writes_redacted_trend_output(
     assert trend["kind"] == "run"
     assert trend["passed"] is True
     assert trend["metrics"]["case_count"] == 1
-    assert trend["metrics"]["citation_traceability_coverage"] == 1.0
-    assert trend["metrics"]["answer_pass_rate"] is None
-    assert trend["metrics"]["metric_case_counts"]["context_recall"] == 1
+    assert trend["metrics"]["answer_correctness"] == 1.0
+    assert trend["metrics"]["requirement_coverage"] is None
+    assert trend["metrics"]["metric_case_counts"]["required_evidence_recall"] == 1
     assert "bbox_citation_coverage" not in trend["metrics"]
     assert "case_results" not in trend["metrics"]
     trend_text = json.dumps(trend, ensure_ascii=False)
@@ -257,7 +257,7 @@ def test_evaluation_gate_cli_rejects_invalid_golden_set_without_query_leakage(
                         "relevant_document_ids": ["doc-1"],
                     }
                 ],
-                "thresholds": {"context_recall": 1.1},
+                "thresholds": {"required_evidence_recall": 1.1},
             },
             ensure_ascii=False,
         ),
@@ -281,7 +281,7 @@ def test_evaluation_gate_cli_rejects_invalid_golden_set_without_query_leakage(
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "評価ファイルの形式が不正です" in captured.err
-    assert "thresholds.context_recall" in captured.err
+    assert "thresholds.required_evidence_recall" in captured.err
     assert "INV-SECRET" not in captured.err
 
 
@@ -326,16 +326,16 @@ def _write_golden_set(tmp_path: Path) -> Path:
                         "id": "policy-amount",
                         "query": "承認条件はいくらですか。",
                         "relevant_document_ids": ["doc-1"],
-                        "expected_answer_keywords": ["120000"],
+                        "required_answer_points": ["120000"],
                     }
                 ],
                 "top_k": 5,
                 "filters": {"status": "indexed"},
                 "thresholds": {
-                    "context_recall": 0.8,
+                    "required_evidence_recall": 0.8,
                     "mrr": 0.7,
-                    "answer_keyword_hit_rate": 0.8,
-                    "refusal_accuracy": 0.9,
+                    "answer_correctness": 0.8,
+                    "response_decision_accuracy": 0.9,
                 },
             },
             ensure_ascii=False,
@@ -350,7 +350,7 @@ def _metrics_payload(*, passed: bool, error_count: int = 0) -> dict[str, Any]:
     if not passed:
         failures = [
             {
-                "metric": "context_recall",
+                "metric": "required_evidence_recall",
                 "actual": 0.5,
                 "threshold": 0.8,
             }
@@ -358,13 +358,13 @@ def _metrics_payload(*, passed: bool, error_count: int = 0) -> dict[str, Any]:
     return {
         "case_count": 1,
         "error_count": error_count,
-        "context_recall": 1.0 if passed else 0.5,
+        "required_evidence_recall": 1.0 if passed else 0.5,
         "mrr": 1.0,
         "faithfulness": 0.8,
         "citation_traceability_coverage": 1.0 if passed else 0.5,
-        "answer_keyword_hit_rate": 1.0,
-        "refusal_accuracy": 1.0 if passed else 0.0,
-        "metric_case_counts": {"context_recall": 1, "answer_pass_rate": 0},
+        "answer_correctness": 1.0,
+        "response_decision_accuracy": 1.0 if passed else 0.0,
+        "metric_case_counts": {"required_evidence_recall": 1, "requirement_coverage": 0},
         "passed": passed,
         "threshold_failures": failures,
         "case_results": [],

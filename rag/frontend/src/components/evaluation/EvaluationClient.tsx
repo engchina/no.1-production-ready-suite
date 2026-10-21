@@ -47,7 +47,6 @@ import {
 import {
   api,
   ApiError,
-  type EvaluationAnswerJudgement,
   type EvaluationJob,
   type EvaluationJobStatus,
   type EvaluationCaseResult,
@@ -88,16 +87,12 @@ import {
 } from "./evaluation-input";
 import {
   comparisonRows,
-  EVALUATION_GUIDANCE_METRICS,
   EVALUATION_PERSPECTIVES,
   formatMetricDelta,
-  isGuidanceShown,
   isPerspectiveShown,
   LOWER_IS_BETTER_METRICS,
   type ComparisonDirection,
   type EvaluationComparisonRow,
-  type EvaluationGuidanceMetricName,
-  outcomeLabel,
   STANDARD_ANSWER_METRICS,
   failureReasonLabel,
   formatMetricValue,
@@ -496,7 +491,7 @@ function isProcessDrafts(value: unknown): value is Record<string, EvaluationProc
       (draft) =>
         isRecord(draft) &&
         typeof draft.case_id === "string" &&
-        Array.isArray(draft.expected_steps) &&
+        Array.isArray(draft.required_answer_points) &&
         Array.isArray(draft.required_evidence) &&
         Array.isArray(draft.references)
     )
@@ -957,17 +952,6 @@ function EvaluationResult({
           failedMetrics={failedMetrics}
         />
       ))}
-      {/* 案内（#2402）。参考の集計で閾値は無い。案内すべき画面・監査の記録のあるケースがあるときだけ。 */}
-      {isGuidanceShown(metrics) ? (
-        <MetricGroup
-          groupId="guidance"
-          title={t("evaluation.perspective.guidance")}
-          description={t("evaluation.perspective.guidance.description")}
-          metricNames={EVALUATION_GUIDANCE_METRICS}
-          metrics={metrics}
-          failedMetrics={failedMetrics}
-        />
-      ) : null}
 
       {metrics.threshold_failures.length ? (
         <Banner severity="warning" title={t("evaluation.thresholdFailures")}>
@@ -983,6 +967,7 @@ function EvaluationResult({
       ) : null}
 
       <CategoryBreakdown metrics={metrics} />
+      <DecisionBreakdown metrics={metrics} />
 
       {failureReasons.length ? (
         <div className="rounded-md border border-border bg-surface p-4 text-sm">
@@ -1017,7 +1002,7 @@ function MetricGroup({
   groupId: string;
   title: string;
   description: string;
-  metricNames: readonly (EvaluationMetricName | EvaluationGuidanceMetricName)[];
+  metricNames: readonly EvaluationMetricName[];
   metrics: EvaluationMetrics;
   failedMetrics: ReadonlySet<string>;
 }) {
@@ -1120,43 +1105,11 @@ function CaseTable({
                 },
               ]
             : []),
-          {
-            key: "answer",
-            header: t("evaluation.case.answer"),
-            className: "whitespace-nowrap",
-            render: (result) => <AnswerCell result={result} />,
-          },
-          ...(results.some((result) => result.screen_match != null)
-            ? [
-                {
-                  key: "screens",
-                  header: t("evaluation.case.screens"),
-                  className: "min-w-[9rem]",
-                  render: (result: EvaluationCaseResult) => <ScreenCell result={result} />,
-                },
-              ]
-            : []),
-          ...(metrics.case_results.some((result) => result.handling_correct != null || result.missing_steps?.length || result.forbidden_hits?.length)
-            ? [
-                {
-                  key: "handling",
-                  header: t("evaluation.case.handling"),
-                  render: (result: EvaluationCaseResult) => <HandlingCell result={result} />,
-                },
-              ]
-            : []),
-          {
-            key: "judgement",
-            header: t("evaluation.case.judgement"),
-            render: (result) => <JudgementCell judgement={result.answer_evaluation ?? null} />,
-          },
-          {
-            key: "faithfulness",
-            header: metricLabel("faithfulness"),
-            headerClassName: "hidden lg:table-cell",
-            className: "tnum hidden whitespace-nowrap lg:table-cell",
-            render: (result) => formatMetricValue(result.faithfulness),
-          },
+          ...EVALUATION_PERSPECTIVES.flatMap(group => group.metrics.map(metric => ({
+            key: metric, header: `${perspectiveLabel(group.id)}: ${metricLabel(metric)}`,
+            className: "tnum whitespace-nowrap",
+            render: (result: EvaluationCaseResult) => formatMetricValue(result[metric]),
+          }))),
           {
             key: "failures",
             header: t("evaluation.case.failures"),
@@ -1279,132 +1232,8 @@ function EvidenceCell({
  * 業務支援の採点（#1231）。回答の対応と期待どおりか（アイコンと文言）、不足の手順・危険な表現・
  * 触れていない条件。推定した対応は「（推定）」を付ける。
  */
-function HandlingCell({ result }: { result: EvaluationCaseResult }) {
-  const notes = [
-    result.missing_steps?.length ? t("evaluation.case.missingSteps", { steps: result.missing_steps.join("、") }) : null,
-    result.forbidden_hits?.length
-      ? t("evaluation.case.forbiddenHits", { phrases: result.forbidden_hits.join("、") })
-      : null,
-    result.missing_conditions?.length
-      ? t("evaluation.case.missingConditions", { conditions: result.missing_conditions.join("、") })
-      : null,
-  ].filter((note): note is string => Boolean(note));
-  if (!result.observed_outcome && !notes.length) return <>—</>;
-  const outcome = result.observed_outcome ? outcomeLabel(result.observed_outcome) : null;
-  const expected = result.handling_correct;
-  return (
-    <div className="grid min-w-0 gap-1" data-testid="evaluation-case-handling">
-      {outcome ? (
-        <span className="inline-flex items-center gap-1.5">
-          {expected === true ? (
-            <CheckCircle2 size={16} className="shrink-0 text-success-fg" aria-hidden />
-          ) : expected === false ? (
-            <XCircle size={16} className="shrink-0 text-danger-fg" aria-hidden />
-          ) : null}
-          <span>
-            {result.outcome_source === "inferred" ? t("evaluation.case.outcomeInferred", { outcome }) : outcome}
-          </span>
-          {expected != null ? (
-            <span className="sr-only">
-              {t(expected ? "evaluation.case.expected" : "evaluation.case.unexpected")}
-            </span>
-          ) : null}
-        </span>
-      ) : null}
-      {notes.map((note) => (
-        <p key={note} className="break-words text-xs text-fg-muted">
-          {note}
-        </p>
-      ))}
-    </div>
-  );
-}
-
-/**
- * 案内した画面の採点（#2402）。案内すべき画面をすべて案内したか（アイコンと文言）、案内していない画面・
- * 別の画面。判定器で決めたときと決められなかったときは、その旨を添える。
- */
-function ScreenCell({ result }: { result: EvaluationCaseResult }) {
-  if (result.screen_match == null) return <span className="text-fg-muted">—</span>;
-  const matched = result.screen_match;
-  const notes = [
-    result.missing_screens?.length
-      ? t("evaluation.case.missingScreens", { screens: result.missing_screens.join("、") })
-      : null,
-    result.wrong_screens?.length
-      ? t("evaluation.case.wrongScreens", { screens: result.wrong_screens.join("、") })
-      : null,
-    result.screen_judged_by === "judge"
-      ? t("evaluation.case.screenJudged")
-      : result.screen_judged_by === "unresolved"
-        ? t("evaluation.case.screenUnresolved")
-        : null,
-  ].filter((note): note is string => Boolean(note));
-  return (
-    <div className="grid min-w-0 gap-1" data-testid="evaluation-case-screens">
-      <span className="inline-flex items-center gap-1.5">
-        {matched && !result.wrong_screen ? (
-          <CheckCircle2 size={16} className="shrink-0 text-success-fg" aria-hidden />
-        ) : (
-          <XCircle size={16} className="shrink-0 text-danger-fg" aria-hidden />
-        )}
-        <span>{t(matched ? "evaluation.case.screenMatched" : "evaluation.case.screenMissing")}</span>
-      </span>
-      {notes.map((note) => (
-        <p key={note} className="break-words text-xs text-fg-muted">
-          {note}
-        </p>
-      ))}
-    </div>
-  );
-}
-
-/** 回答したか回答を控えたかと、それが期待どおりか（アイコンと読み上げの文言で示す）。 */
-function AnswerCell({ result }: { result: EvaluationCaseResult }) {
-  if (result.abstained === null || result.abstained === undefined) return <>—</>;
-  const expected = result.refusal_correct === true;
-  const label = t(result.abstained ? "evaluation.case.refused" : "evaluation.case.answered");
-  const verdict = t(expected ? "evaluation.case.expected" : "evaluation.case.unexpected");
-  return (
-    <span className="inline-flex items-center gap-1.5" data-testid="evaluation-case-answer">
-      {expected ? (
-        <CheckCircle2 size={16} className="shrink-0 text-success-fg" aria-hidden />
-      ) : (
-        <XCircle size={16} className="shrink-0 text-danger-fg" aria-hidden />
-      )}
-      <span>{label}</span>
-      <span className="sr-only">（{verdict}）</span>
-    </span>
-  );
-}
-
-/** 標準回答による評価の結果（合格・不合格と点数、評価できなかったとき）。 */
-function JudgementCell({ judgement }: { judgement: EvaluationAnswerJudgement | null }) {
-  if (!judgement) return <span className="text-fg-muted">—</span>;
-  if (judgement.status !== "completed") {
-    return (
-      <span className="inline-grid gap-1" data-testid="evaluation-case-judgement">
-        <StatusBadge variant="warning" label={t("evaluation.case.judgement.incomplete")} />
-        {judgement.message ? (
-          <span className="text-xs text-fg-muted">{judgement.message}</span>
-        ) : null}
-      </span>
-    );
-  }
-  return (
-    <span data-testid="evaluation-case-judgement">
-      <StatusBadge
-        variant={judgement.passed ? "success" : "danger"}
-        label={t(
-          judgement.passed ? "evaluation.case.judgement.passed" : "evaluation.case.judgement.failed"
-        )}
-      />
-    </span>
-  );
-}
-
-/** 評価全体の合否（共有の StatusBadge。色だけでなくアイコンと文言でも示す）。 */
-function PassedBadge({ passed }: { passed: boolean }) {
+function PassedBadge({ passed }: { passed: boolean | null }) {
+  if (passed === null) return <StatusBadge variant="neutral" label={t("evaluation.metric.unassessed")} />;
   return (
     <StatusBadge
       variant={passed ? "success" : "danger"}
@@ -1441,50 +1270,29 @@ function CategoryBreakdown({ metrics }: { metrics: EvaluationMetrics }) {
                 ? t("evaluation.category.countWithErrors", { count: row.case_count, errors: row.error_count })
                 : String(row.case_count),
           },
-          {
-            key: "pass",
-            header: t("evaluation.category.column.pass"),
-            className: "tnum",
-            render: (row) => formatMetricValue(row.answer_pass_rate),
-          },
-          {
-            key: "keyword",
-            header: t("evaluation.category.column.keyword"),
-            className: "tnum",
-            render: (row) => formatMetricValue(row.answer_keyword_hit_rate),
-          },
-          {
-            key: "abstain",
-            header: t("evaluation.category.column.abstain"),
-            className: "tnum",
-            render: (row) => formatMetricValue(row.abstain_rate),
-          },
-          {
-            key: "refusal",
-            header: t("evaluation.category.column.refusal"),
-            className: "tnum",
-            render: (row) => formatMetricValue(row.refusal_correct_rate),
-          },
-          ...(rows.some((row) => row.handling_correct_rate != null || row.safe_answer_rate != null)
-            ? [
-                {
-                  key: "handling",
-                  header: t("evaluation.category.column.handling"),
-                  className: "tnum",
-                  render: (row: (typeof rows)[number]) => formatMetricValue(row.handling_correct_rate),
-                },
-                {
-                  key: "safe",
-                  header: t("evaluation.category.column.safe"),
-                  className: "tnum",
-                  render: (row: (typeof rows)[number]) => formatMetricValue(row.safe_answer_rate),
-                },
-              ]
-            : []),
+          ...EVALUATION_PERSPECTIVES.flatMap(group => group.metrics.map(metric => ({
+            key: metric, header: `${perspectiveLabel(group.id)}: ${metricLabel(metric)}`,
+            className: "tnum whitespace-nowrap",
+            render: (row: (typeof rows)[number]) => formatMetricValue(row.metrics[metric]),
+          }))),
         ]}
       />
     </div>
   );
+}
+
+function DecisionBreakdown({metrics}:{metrics:EvaluationMetrics}) {
+ const rows=Object.entries(metrics.decision_breakdown ?? {}).flatMap(([decision,summary])=>summary?[{decision,...summary}]:[]);
+ if (!rows.length) return null;
+ const labels={answer:"evaluation.decision.answer",clarify:"evaluation.decision.clarify",hold:"evaluation.decision.hold"} as const;
+ return <section className="space-y-2" data-testid="evaluation-decision-breakdown">
+   <h3 className="text-sm font-semibold text-fg">{t("evaluation.decision.breakdown")}</h3>
+   <DataTable ariaLabel={t("evaluation.decision.breakdown")} rows={rows} getRowKey={row=>row.decision} columns={[
+     {key:"decision",header:t("evaluation.perspective.decision"),render:row=>row.decision in labels?t(labels[row.decision as keyof typeof labels]):row.decision},
+     {key:"count",header:t("evaluation.category.column.count"),render:row=>String(row.metric_case_counts.response_decision_accuracy ?? 0)},
+     {key:"score",header:metricLabel("response_decision_accuracy"),render:row=>formatMetricValue(row.metrics.response_decision_accuracy)},
+   ]}/>
+ </section>;
 }
 
 const CATEGORY_KEYS = {

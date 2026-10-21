@@ -706,11 +706,4 @@ class AnswerRecordDetail(AnswerRecordSummary):
 class AnswerEvaluationRequest(BaseModel):
     """保存された回答を評価する標準回答。"""
 
-    standard_answer: str = Field(min_length=1, max_length=20000)
-
-    @field_validator("standard_answer")
-    @classmethod
-    def _not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("標準回答を入力してください。")
-        return value
+    standard_answer: str = Field(default="", max_length=20000)

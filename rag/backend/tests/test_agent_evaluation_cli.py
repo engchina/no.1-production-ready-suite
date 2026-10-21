@@ -211,7 +211,7 @@ def test_multi_turn_case_follows_the_thread_and_uses_the_rag_scoring() -> None:
     }
     result = metrics.case_results[0]
     assert result.status == "success"
-    assert result.handling_correct is True
+    assert result.response_decision_accuracy == 1
     assert result.observed_outcome == "answered"
     assert result.outcome_source == "agent_rag_search"
     assert [turn.observed_outcome for turn in result.turn_results] == [
@@ -221,9 +221,9 @@ def test_multi_turn_case_follows_the_thread_and_uses_the_rag_scoring() -> None:
     assert all(turn.outcome_source == "agent_rag_search" for turn in result.turn_results)
     # 根拠は重複なしで、必要な根拠は抜粋で照合する。
     assert result.retrieved_document_ids == ["doc-manual"]
-    assert result.evidence_recall == 1.0
-    assert result.reasked_conditions == []
-    assert metrics.handling_accuracy == 1.0
+    assert result.required_evidence_recall == 1.0
+    assert "unexpected_handling" not in result.failure_reasons
+    assert metrics.response_decision_accuracy == 1.0
     assert metrics.split_breakdown["dev"].case_count == 1
     assert [
         (record.run_id, record.validation_status, record.model_requests) for record in records
@@ -326,7 +326,7 @@ def test_known_conditions_are_added_to_the_first_question_with_guide_labels() ->
     # rag_search を呼ばない Run は、RAG の評価と同じ推定（根拠があり拒答の文でなければ answered）。
     assert result.observed_outcome == "answered"
     assert result.outcome_source == "inferred"
-    assert result.condition_coverage == 1.0
+    assert result.requirement_coverage is None
     # 根拠の無い回答は、RAG の評価と同じく拒答とみなす。
     bare = agent_turn(_run("run-9", answer="グループの詳細画面です。", steps=[]), elapsed_ms=1.0)
     assert bare.response.diagnostics.answer is not None
@@ -374,7 +374,7 @@ def test_outcome_recorded_on_the_answer_artifact_is_used_for_scoring() -> None:
     )
     result = metrics.case_results[0]
     assert (result.observed_outcome, result.outcome_source) == ("conditional", "agent_answer")
-    assert result.handling_correct is True
+    assert result.response_decision_accuracy == 1
     assert (records[0].outcome, records[0].outcome_source) == ("conditional", "agent_answer")
 
 
@@ -478,14 +478,18 @@ def test_summary_compares_results_in_a_markdown_table() -> None:
     data = {
         "case_count": 2,
         "error_count": 0,
-        "handling_accuracy": 0.5,
-        "safe_answer_rate": 0.5,
+        "response_decision_accuracy": 0.5,
+        "claim_support_rate": 0.5,
         "case_results": [
             {"case_id": "a", "status": "success", "elapsed_ms": 1000.0, "forbidden_hits": []},
             {"case_id": "b", "status": "success", "elapsed_ms": 3000.0, "forbidden_hits": ["x"]},
         ],
         "split_breakdown": {
-            "holdout": {"case_count": 1, "error_count": 0, "metrics": {"handling_accuracy": 0.0}}
+            "holdout": {
+                "case_count": 1,
+                "error_count": 0,
+                "metrics": {"response_decision_accuracy": 0.0},
+            }
         },
         "category_breakdown": {
             "clarification_required": {"case_count": 2, "handling_correct_rate": 0.5}
@@ -495,11 +499,11 @@ def test_summary_compares_results_in_a_markdown_table() -> None:
     assert summary["median_elapsed_seconds"] == 2.0
     assert summary["dangerous_case_count"] == 1
     assert summary["dangerous_case_ids"] == ["b"]
-    assert summary["splits"]["holdout"]["handling_accuracy"] == 0.0
+    assert summary["splits"]["holdout"]["response_decision_accuracy"] == 0.0
     table = summary_markdown({"A": summary, "D": summary})
     assert "| 指標 | A | D |" in table
-    assert "| 対応の正しさ | 0.50 | 0.50 |" in table
-    assert "| holdout: 対応の正しさ | 0.00 | 0.00 |" in table
+    assert "| 回答・確認・保留の判断の正しさ | 0.50 | 0.50 |" in table
+    assert "| holdout: 回答・確認・保留の判断の正しさ | 0.00 | 0.00 |" in table
     assert "| 1 問の時間の中央値（秒） | 2.00 | 2.00 |" in table
 
 

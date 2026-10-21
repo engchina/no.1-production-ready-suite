@@ -1056,9 +1056,15 @@ async def test_answer_record_save_failure_still_returns_answer(
 def _fake_evaluation_llm(
     system: str, prompt: str, settings: Any, schema: type, **options: Any
 ) -> Any:
-    from rag_engine.evaluation.answer_eval import AnswerEvaluationOutput, StandardAnswerScope
+    from rag_engine.evaluation.answer_eval import (
+        AnswerCorrectnessOutput,
+        AnswerEvaluationOutput,
+        StandardAnswerScope,
+    )
 
     body = "受注番号を入力し、登録ボタンを押します。"
+    if schema is AnswerCorrectnessOutput:
+        return AnswerCorrectnessOutput(verdict="correct", reason="標準回答と一致")
     if schema is StandardAnswerScope:
         return StandardAnswerScope.model_validate(
             {
@@ -1118,28 +1124,35 @@ async def test_saved_answer_is_evaluated_with_standard_answer(
     # 評価の基準の指標(1 件の回答で測れるもの)と閾値で合否を付ける(#680)。
     assert evaluation["suite"] == "standard"
     metrics = {metric["name"]: metric for metric in evaluation["metrics"]}
-    assert {"claim_support_rate", "requirement_coverage", "refusal_accuracy"} <= set(metrics)
+    assert {"claim_support_rate", "requirement_coverage", "answer_correctness"} == set(metrics)
     assert not {"context_recall", "mrr", "answer_keyword_hit_rate"} & set(metrics)
-    assert evaluation["passed"] is all(metric["passed"] for metric in metrics.values())
+    assert evaluation["passed"] is all(
+        metric["passed"] for metric in metrics.values() if metric["passed"] is not None
+    )
 
 
 def test_evaluation_without_standard_answer_does_not_call_llm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import rag_engine.adapters.oci as engine_oci
+    import rag_engine.evaluation.answer_eval as evaluator
 
     from app.rag.answer_engine import evaluate_answer_record
 
-    def fail(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("LLM を呼ばない")
+    calls = []
 
-    monkeypatch.setattr(engine_oci, "parse_text_response", fail)
+    def fake(payload: Any, settings: Any, **kwargs: Any) -> dict[str, Any]:
+        calls.append(payload)
+        return {"status": "completed", "claim_checks": [], "requirement_coverage": None}
 
+    monkeypatch.setattr(evaluator, "evaluate_answer_payload", fake)
     evaluation = evaluate_answer_record(
         {"question": "q", "answer_text": "a"}, " ", Settings(), citations=[]
     )
-
-    assert evaluation["status"] == "no_standard_answer"
+    assert evaluation["status"] == "completed"
+    assert calls[0]["allow_without_standard"] is True
+    assert calls[0]["six_metrics"] is True
+    assert evaluation["claim_support_rate"] is None
+    assert evaluation["passed"] is None
 
 
 class SavingQueryOracle(QueryRecordingOracle):

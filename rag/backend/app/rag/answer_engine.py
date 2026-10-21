@@ -3677,7 +3677,13 @@ def evaluate_answer_record(
     with tempfile.TemporaryDirectory(prefix="rag-engine-eval-") as work:
         engine_settings = build_engine_settings(settings, output_dir=Path(work))
         evaluation = evaluate_answer_payload(
-            {**evaluation_input, "standard_answer": standard_answer}, engine_settings
+            {
+                **evaluation_input,
+                "standard_answer": standard_answer,
+                "allow_without_standard": True,
+                "six_metrics": True,
+            },
+            engine_settings,
         )
     return score_answer_evaluation(
         evaluation,
