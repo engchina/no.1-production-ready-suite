@@ -43,7 +43,7 @@ from rag_engine.evaluation.answer_eval import (
 )
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY, RELATION_SUPPORT_POLICY
-from rag_engine.generation.grounded import quote_in_text
+from rag_engine.generation.grounded import output_field_claim, quote_in_text
 from rag_engine.generation.operation_audit import is_non_claim_passage, list_heading_lines, table_header_lines
 from rag_engine.generation.table_binding import unbound_table_values
 from rag_engine.models.llm import OutputFieldEvidence
@@ -515,13 +515,9 @@ def _enforce_support(
                 claim = claim.model_copy(update={"reference_check": REFERENCE_QUOTE_UNMATCHED})
             elif claim.applicability == "not_applicable":
                 claim = _not_supported(claim, "unsupported", SUPPORT_TARGET_MISMATCH, "根拠は段落・質問と別の対象についての記載です。")
-            elif (
-                claim.output_fields is not None
-                and claim.output_fields.asserts_output_fields
-                and (
-                    claim.output_fields.output_fields_unconfirmed()
-                    or not any(quote_in_text(claim.output_fields.definition_quote, text) for text in _support_texts(claim, catalog, texts))
-                )
+            elif (fields := output_field_claim(claim.output_fields, claim.answer_quote)) is not None and (
+                fields.output_fields_unconfirmed()
+                or not any(quote_in_text(fields.definition_quote, text) for text in _support_texts(claim, catalog, texts))
             ):
                 claim = _not_supported(
                     claim, "unsupported", "output_field_basis_unconfirmed", "出力ファイルの項目定義と対象の一致を確認できません。"

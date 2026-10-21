@@ -50,5 +50,5 @@ def test_summary_without_output_field_claim_keeps_normal_audit_behavior():
     from rag_engine.models.llm import GroundedAudit
 
     normal = GroundedAudit(reviews=[], summary_supported=True, goal_alignment="aligned")
-    assert summary_output_fields_error(normal, []) == ""
+    assert summary_output_fields_error(normal, [], "CSVには状態列が含まれます。") == ""
     assert normal.summary_supported is True

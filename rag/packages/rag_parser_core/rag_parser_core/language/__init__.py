@@ -713,6 +713,8 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "deletion_words",
         "bare_title_marks",
         "evidence_id_labels",
+        "output_artifact_words",
+        "output_field_words",
         ingest=False,
     ),
     FieldSpec("answer_check_cues", "heading_bracket_pairs", FieldKind.PAIRS, ingest=False),

@@ -4,7 +4,7 @@ import pytest
 
 from rag_engine.evaluation.answer_validation import ValidationClaimCheck, _enforce_support
 from rag_engine.generation import grounded
-from rag_engine.models.llm import GroundedAudit, GroundedItem, GroundedItemReview
+from rag_engine.models.llm import GroundedAudit, GroundedItem
 
 QUOTE = "ファイル A の列は区分と年度です。"
 
@@ -21,10 +21,15 @@ QUOTE = "ファイル A の列は区分と年度です。"
 )
 def test_both_audits_require_the_definition_and_output_identity(quote, matches, supported):
     fields = {"asserts_output_fields": True, "definition_quote": quote, "output_artifact_matches": matches}
-    review = GroundedItemReview(index=0, support="supported", applicability="matched", reason="合成の判定", output_fields=fields)
-    assert (review.support == "supported") is supported
+    text = "ファイル A に区分列があります。"
+    entry = grounded.CheckedItem(
+        GroundedItem(kind="operation", text=text, quote=QUOTE, evidence_id="E1"), {"text": QUOTE, "evidence_id": "E1"}
+    )
+    review = {"index": 0, "support": "supported", "applicability": "matched", "reason": "合成の判定", "output_fields": fields}
+    grounded.apply_audit([entry], GroundedAudit(reviews=[review], summary_supported=True, goal_alignment="aligned"))
+    assert (not entry.marks) is supported
     claim = ValidationClaimCheck(
-        answer_quote="ファイル A に区分列があります。",
+        answer_quote=text,
         answer_passage_id="A1",
         status="supported",
         source_id="c1",
@@ -108,8 +113,6 @@ def test_paragraph_without_column_claim_keeps_supported_with_an_empty_object():
     """列を主張しない段落に空の照合が付いても、出力ファイルの項目定義を求めない（#2821）。"""
     fields = {"asserts_output_fields": False, "definition_quote": "", "output_artifact_matches": None}
     quote = "抽出ボタンを押すと一覧に対象が表示されます。"
-    review = GroundedItemReview(index=0, support="supported", applicability="matched", reason="合成の判定", output_fields=fields)
-    assert review.support == "supported"
     claim = ValidationClaimCheck(
         answer_quote="抽出ボタンを押すと一覧に対象が表示されます。",
         answer_passage_id="A1",
@@ -136,6 +139,43 @@ def test_paragraph_without_column_claim_keeps_supported_with_an_empty_object():
     # 持ち越した支持済みの item は、列を主張しない照合だけで印を増やさない。
     assert not entry.marks
     assert (
-        grounded.summary_output_fields_error(GroundedAudit.model_validate({**audit.model_dump(), "summary_output_fields": fields}), [])
+        grounded.summary_output_fields_error(
+            GroundedAudit.model_validate({**audit.model_dump(), "summary_output_fields": fields}), [], quote
+        )
         == ""
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "送信解除ボタンを押した後、実行ボタンを押して送信中を解除します。",
+        "必要項目を入力して実行ボタンを押します。",
+        "CSV出力ボタンで出力できます。",
+    ],
+)
+def test_operation_paragraph_is_not_checked_even_when_the_model_claims_columns(text):
+    """モデルが列を主張したと申告しても、文が出力物の列・項目を述べていなければ照合しない（#2821 の実モデルの出力）。"""
+    fields = {"asserts_output_fields": True, "definition_quote": "", "output_artifact_matches": True}
+    assert not grounded.mentions_output_fields(text)
+    claim = ValidationClaimCheck(
+        answer_quote=text,
+        answer_passage_id="A1",
+        status="supported",
+        source_id="c1",
+        evidence_id="E1",
+        evidence_quote=text,
+        reason="合成の判定",
+        output_fields=fields,
+    )
+    result = _enforce_support([claim], [{"id": "A1", "text": text}], {"E1": {"id": "c1", "text": text}}, {"c1": text}, [text])
+    assert result[0].status == "supported"
+    entry = grounded.CheckedItem(
+        GroundedItem(kind="operation", text=text, quote=text, evidence_id="E1"), {"text": text, "evidence_id": "E1"}
+    )
+    review = {"index": 0, "support": "supported", "applicability": "matched", "reason": "合成", "output_fields": fields}
+    audit = GroundedAudit(reviews=[review], summary_supported=True, goal_alignment="aligned")
+    grounded.apply_audit([entry], audit)
+    assert not entry.marks
+    summary_audit = GroundedAudit.model_validate({**audit.model_dump(), "summary_output_fields": fields})
+    assert grounded.summary_output_fields_error(summary_audit, [], text) == ""
