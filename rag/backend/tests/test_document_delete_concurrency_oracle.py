@@ -102,14 +102,18 @@ async def test_parallel_document_delete_creates_one_cleanup_record_per_document(
             "RAG_DOCUMENT_SECTIONS",
         )
         for slot, table in enumerate(known_tables):
-            ids = await client._run_transaction(
-                lambda connection: _fetch_all(
-                    connection,
-                    "SELECT object_id FROM user_objects WHERE object_name = :name",
-                    {"name": table},
-                )
-            )
-            print({"table_slot": slot, "resource_ids": [int(str(row["object_id"])) for row in ids]})
+
+            def read_ids(connection: OracleConnectionProtocol, table: str = table) -> list[int]:
+                return [
+                    int(str(row["object_id"]))
+                    for row in _fetch_all(
+                        connection,
+                        "SELECT object_id FROM user_objects WHERE object_name = :name",
+                        {"name": table},
+                    )
+                ]
+
+            print({"table_slot": slot, "resource_ids": await client._run_transaction(read_ids)})
         tasks.extend(
             await asyncio.gather(
                 *(
