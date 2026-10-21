@@ -2868,6 +2868,18 @@
       "根拠",
       "原文"
     ],
+    "output_artifact_words": [
+      "CSV",
+      "ファイル",
+      "出力データ",
+      "出力結果"
+    ],
+    "output_field_words": [
+      "列",
+      "カラム",
+      "フィールド",
+      "項目"
+    ],
     "heading_bracket_pairs": [
       "〔〕",
       "[]",

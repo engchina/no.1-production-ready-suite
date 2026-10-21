@@ -2338,6 +2338,25 @@ def _is_route_navigation(item: GroundedItem, span: dict) -> bool:
     return bool(check_cues().navigation_residue.match(_compact(_without_heading_terms(item.text, span))))
 
 
+def mentions_output_fields(text: str) -> bool:
+    """文が出力物の列・項目を述べているか（言語資源の出力物の語と列・項目の語がどちらもある。#2821）。
+
+    列の主張の有無はモデルの申告（``asserts_output_fields``）だけでは操作の説明にも付くので、出力ファイルの項目定義の
+    照合を当てる文を語でも絞る。どちらかが無い文には照合を当てない。
+    """
+    folded = fold_width(text or "").casefold()
+
+    def has(key: str) -> bool:
+        return any(fold_width(word).casefold() in folded for word in current_pack().words("answer_check_cues", key))
+
+    return has("output_artifact_words") and has("output_field_words")
+
+
+def output_field_claim(fields: Any, text: str) -> Any:
+    """照合を当てる出力項目の判定。モデルが列を主張したと申告し、文も出力物の列・項目を述べるときだけ返す（#2821）。"""
+    return fields if fields is not None and fields.asserts_output_fields and mentions_output_fields(text) else None
+
+
 def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
     """監査の判定で段落の印を付ける（#2738）。supported を決定的検査の印から戻すことはしない。
 
@@ -2357,12 +2376,13 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
         span = entry.span
         if entry.removed or span is None:
             continue
-        if (
-            review.output_fields is not None
-            and review.output_fields.asserts_output_fields
-            and review.output_fields.definition_quote.strip()
-        ):
-            definition = review.output_fields.definition_quote.strip()
+        fields = output_field_claim(review.output_fields, entry.item.text)
+        if fields is not None and fields.output_fields_unconfirmed() and review.support == "supported":
+            review = review.model_copy(
+                update={"support": "unsupported", "reason": "出力ファイルの項目定義と対象の一致を確認できません。" + review.reason}
+            )
+        if fields is not None and fields.definition_quote.strip():
+            definition = fields.definition_quote.strip()
             source_texts = [span["text"], *span.get("document_texts", ())]
             if not any(quote_in_text(definition, text) for text in source_texts):
                 entry.mark("unsupported", "出力ファイルの項目定義の引用を根拠に確認できません。")
@@ -2377,8 +2397,7 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
             if review.support == "unsupported" and not entry.carried:
                 entry.mark("unsupported", review.reason, reason=reason)
             continue
-        asserts_fields = review.output_fields is not None and review.output_fields.asserts_output_fields
-        if review.support != "supported" and (not entry.carried or asserts_fields):
+        if review.support != "supported" and (not entry.carried or fields is not None):
             if review.support == "unsupported" and _is_route_navigation(entry.item, span):
                 continue  # 見出しの画面経路を開くだけの item は、引用に経路がなくても印を付けない (#629)
             entry.mark("unsupported", review.reason, reason=reason)
@@ -4246,10 +4265,10 @@ def _unused_evidence(question: str, spans: Sequence[dict], used: set[str]) -> li
     return [{"evidence_id": s["label"], "function": _function_label(s), "text": s["text"][:AUDIT_UNUSED_EVIDENCE_CHARS]} for s in selected]
 
 
-def summary_output_fields_error(audit: GroundedAudit | None, spans: Sequence[dict]) -> str:
+def summary_output_fields_error(audit: GroundedAudit | None, spans: Sequence[dict], summary: str) -> str:
     """要約も本文と同じ出力項目の契約と原文に照合する。"""
-    fields = audit.summary_output_fields if audit else None
-    if fields is None or not fields.asserts_output_fields:
+    fields = output_field_claim(audit.summary_output_fields if audit else None, summary)
+    if fields is None:
         return ""
     if fields.output_fields_unconfirmed():
         return "要約が主張する出力ファイルの項目定義と対象の一致を確認できません。"
@@ -4522,7 +4541,7 @@ def run_round(
     # summary（items の範囲を超えた保証を含み得る。#621）、保証の過剰、原因の推測（#713）、全要求が missing（#732）、
     # 支持された説明がすべて条件付き・適用未確認（#1012）が警告の理由。
     published = [e for e in checked if e.span and e.published]
-    summary_fields_error = summary_output_fields_error(audit, spans)
+    summary_fields_error = summary_output_fields_error(audit, spans, str(draft.summary))
     if summary_fields_error and audit is not None:
         audit.summary_supported = False
     summary_warning = summary_fields_error or (

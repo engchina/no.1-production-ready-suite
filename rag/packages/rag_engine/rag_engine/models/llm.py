@@ -453,13 +453,6 @@ class GroundedItemReview(_StrictModel):
         default=None, description="上の判定理由に対応する出力ファイルの項目の照合。列の主張がない操作の説明はnull。"
     )
 
-    @model_validator(mode="after")
-    def _require_output_field_basis(self) -> GroundedItemReview:
-        if self.output_fields is not None and self.output_fields.output_fields_unconfirmed() and self.support == "supported":
-            self.support = "unsupported"
-            self.reason = "出力ファイルの項目定義と対象の一致を確認できません。" + self.reason
-        return self
-
 
 class GroundedApplicationReview(_StrictModel):
     """1 つの当てはめの監査（#2155）。"""
