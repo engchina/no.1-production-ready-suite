@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import unicodedata
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -1901,6 +1901,12 @@ def _public_span(span: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in span.items() if key not in _CHECK_ONLY_SPAN_KEYS}
 
 
+def _span_document_id(span: Mapping[str, Any] | None) -> str:
+    """根拠の箇所の文書 id（``document_scope`` の末尾の backend の文書 ID。#2828）。"""
+    scope = (span or {}).get("document_scope") or ()
+    return str(scope[-1] or "") if scope else ""
+
+
 def _audit_glossary(runtime_knowledge: RuntimeKnowledgeContext | None) -> list[dict[str, Any]]:
     """質問に当たった用語のうち別名のあるものの、名前と別名（監査の入力。#2823）。"""
     if runtime_knowledge is None:
@@ -1928,16 +1934,19 @@ def synthesize_grounded_answer(
     answer_llm_provider: str | None = None,
     query_expansion: QueryExpansionResult | None = None,
     known_gaps: Sequence[str] = (),
-    unread_sections: Sequence[str] = (),
+    unread_sections: Sequence[Any] = (),
+    unread_documents: Collection[str] = (),
     evidence_budget_chars: int | None = None,
 ) -> GroundedAnswer:
     """主張と引用の対で回答を生成し、検査・局所監査・最大2回の是正を行う。
 
     known_gaps は CRAG 評価器が根拠を確認できなかった観点（`CragRetrievalAttempt.missing_aspects`）。
     生成の context block と監査入力に既知の欠落として渡す (#986)。
-    unread_sections は章節の拡張が上限で読めなかった章節の文 (#1436)。本文の「回答に未反映の関連章節」に出し、回答を
-    条件つき（conditional）にする。evidence_budget_chars は章節を広げたときの原文の予算（文字）で、渡すと広げた根拠を
-    予算の中で切らずに渡す（None は `settings.evidence_budget_chars`）。
+    unread_sections は章節の拡張が上限で読めなかった章節（``UnreadSection`` か文。#1436）。本文の「回答に未反映の
+    関連章節」に出し、回答を条件つき（conditional）にする。出すのは、回答が根拠にした文書と ``unread_documents``
+    （業務ガイドの手順の参照の文書）の章節だけで、行数に上限がある（#2828。``answer_unread_view``）。
+    evidence_budget_chars は章節を広げたときの原文の予算（文字）で、渡すと広げた根拠を予算の中で切らずに渡す
+    （None は `settings.evidence_budget_chars`）。
 
     是正は1回につき1手段（既取得poolからの同機能根拠の追加、原画像の添付、指摘の反映）。
     支持済みの要求を失うか問題が増える候補は採用せず、最良の回を公開する。
@@ -2289,7 +2298,12 @@ def synthesize_grounded_answer(
     # 章節の拡張が上限で読めなかった章節 (#1436)。本文の「回答に未反映の関連章節」に出し、回答を条件つきにする。
     # 回答時間の上限で確かめられなかった点（#1516。直していない是正の指摘・終わらなかった監査・生成）は
     # 「回答時間の上限により省略した処理」の節に分けて出す（#2040）。不足・条件つきの判定には両方を使う。
-    unread_lines = [line for line in dict.fromkeys(unread_sections) if line]
+    # 回答が根拠にした文書と業務ガイドの手順の参照の文書の章節だけを出す（#2828。関係の弱い別の文書の章節で一覧を
+    # 占めない）。
+    from rag_engine.generation.section_expansion import answer_unread_view
+
+    unread_view = answer_unread_view(unread_sections, {_span_document_id(entry.span) for entry in published}, unread_documents)
+    unread_lines = list(unread_view.lines)
     deadline_lines = [line for line in dict.fromkeys(budget.gap_lines(current, feedback)) if line and line not in unread_lines]
     unread = [*unread_lines, *deadline_lines]
     # 監査が missing と判定した要求は本文にも出す。partial の reason は「Q1.F1 は回答済みで…」のような
@@ -2460,6 +2474,8 @@ def synthesize_grounded_answer(
         # 規則を質問の事実に当てはめた結果と、検査・監査で公開しなかった理由（#2155）。
         "applications": [application.to_payload() for application in current.applications],
         "application_step": application_step,
+        # 「回答に未反映の関連章節」に出さなかった章節と、行の上限でまとめた数（#2828）。
+        **({"unread_sections": unread_view.to_payload()} if unread_view.hidden or unread_view.overflow else {}),
         # 本文の出典行（「根拠：」）ごとの根拠を本文の順に。画面が出典行を根拠に結ぶ（#1330）。
         "citation_lines": citation_lines,
         # 業務ガイドの手順ごとの充足（#2491）。
@@ -4264,6 +4280,9 @@ def answer_question_result(
                 retrieval_top_k=chunk_top_k,
             )
         section_state: dict[str, Any] = {}
+        # 業務ガイドの手順が参照する文書と頁（#2828）。章節の拡張はこの範囲の起点を先に広げ、回答の「回答に未反映の
+        # 関連章節」はこの文書の章節を残す。
+        guide_ranges = guide_plan.reference_ranges if guide_plan is not None else ()
 
         def complete_sections(candidate: AnswerContext, phase: str, *, reserve: bool = False) -> tuple[AnswerContext, Any]:
             return _expand_context_by_sections(
@@ -4278,6 +4297,7 @@ def answer_question_result(
                 state=section_state,
                 phase=phase,
                 reserve=reserve,
+                priority=guide_ranges,
             )
 
         # 業務ガイドの手順ごとの検索が後に来るなら、その根拠から広げる分の入力を残す（#2816）。
@@ -4476,7 +4496,8 @@ def answer_question_result(
             answer_llm_provider=answer_llm_provider,
             query_expansion=expansion,
             known_gaps=_known_gaps(crag_attempts, section_expansion),
-            unread_sections=section_expansion.gap_lines if section_expansion is not None else (),
+            unread_sections=section_expansion.unread if section_expansion is not None else (),
+            unread_documents={document_id for document_id, _start, _end in guide_ranges},
             evidence_budget_chars=_section_evidence_budget(context, settings, section_expansion),
         )
         # 是正で根拠や画像が増えた場合は、回答を生成した入力を参照欄と payload に使う。
@@ -4587,12 +4608,14 @@ def _expand_context_by_sections(
     state: dict[str, Any] | None = None,
     phase: str = "main",
     reserve: bool = False,
+    priority: Sequence[tuple[str, int | None, int | None]] = (),
 ) -> tuple[AnswerContext, Any]:
     """当たった chunk の章節から親の章節へ段階的に広げる (#1436。`section_expansion`)。
 
     標準 RAG は最低範囲を補完し、CRAG は追加で十分性を判定する。state は1回答内で共有し、
     追加検索後も同じ原文・抽出の呼び出し・時間の予算を使う。無効と読み込み未設定は診断で区別する。
     ``reserve`` は、後の段のために入力の一部（``section_expansion_followup_reserve_percent``）を残す（#2816）。
+    ``priority`` は先に広げる範囲（業務ガイドの手順の参照の文書, 始まりの頁, 終わりの頁。#2828）。
     """
     from rag_engine.dependencies import section_dependencies
     from rag_engine.generation import section_expansion as sections
@@ -4667,6 +4690,7 @@ def _expand_context_by_sections(
             clock=monotonic,
             reader=state["reader"],
             reserve_tokens=sections.SectionExpansionLimits.from_settings(settings).followup_reserve_tokens if reserve else 0,
+            priority=tuple(sections.PriorityRange(document_id, start, end) for document_id, start, end in priority),
         )
         result.trace["phase"] = phase
         previous = state.get("result")
@@ -4705,8 +4729,10 @@ def _expand_context_by_sections(
             step.field("読めなかった章節", f"{len(result.unread)} 件")
             step.impact("上限に達したため、読めなかった章節を「回答に未反映の関連章節」に示し、条件つきの回答にします。")
         if result.omitted:
-            # 起点を含まない兄弟の章節は、読めなくても回答に出さない（#2816）。
-            step.field("読めなかった参考の章節", f"{len(result.omitted)} 件（当たった章節の外のため、回答には示しません）")
+            # 起点を含まない兄弟の章節・業務ガイドの参照の外の文書の章節は、読めなくても回答に出さない（#2816・#2828）。
+            step.field(
+                "読めなかった参考の章節", f"{len(result.omitted)} 件（当たった章節や業務ガイドの参照の外のため、回答には示しません）"
+            )
     state["result"] = result
     state["signature"] = signature_of(result.context)
     return result.context, result
