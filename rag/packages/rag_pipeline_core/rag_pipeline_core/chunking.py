@@ -445,17 +445,20 @@ def _chunk_fixed_size(
     cursor = 0
     length = len(normalized)
     while cursor < length:
-        piece = normalized[cursor : cursor + chunk_size].strip()
+        window = normalized[cursor : cursor + chunk_size]
+        piece = window.strip()
         if piece:
             chunks.append(
                 Chunk(
                     text=piece,
                     index=len(chunks),
-                    start_offset=cursor,
-                    end_offset=cursor + len(piece),
+                    start_offset=cursor + len(window) - len(window.lstrip()),
+                    end_offset=cursor + len(window.rstrip()),
                     metadata=dict(metadata),
                 )
             )
+        if cursor + chunk_size >= length:
+            break
         cursor += step
     final_chunks = [_with_chunk_metadata(chunk) for chunk in chunks]
     return _with_chunk_size_compliance_metadata(
