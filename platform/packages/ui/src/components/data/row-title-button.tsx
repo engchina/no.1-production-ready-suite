@@ -131,10 +131,12 @@ export function RowTitleButton({
   ...props
 }: RowTitleButtonProps) {
   const contentId = useId();
+  const subtitleId = useId();
   const generatedId = useId();
   const controlId = props.id ?? generatedId;
   const actionLabel = props["aria-label"];
-  const labelledBy = props["aria-labelledby"] ?? (actionLabel ? `${contentId} ${controlId}` : undefined);
+  // 自己参照は aria-label の操作説明を使い、表示文の参照と併せる（DOM の文は複製しない）。
+  const labelledBy = props["aria-labelledby"] ?? (actionLabel ? `${contentId}${subtitle ? ` ${subtitleId}` : ""} ${controlId}` : undefined);
   const titleRef = useRef<HTMLSpanElement | null>(null);
   const [clamped, setClamped] = useState(false);
   const fullText = maxLines ? (fullTitle ?? (typeof title === "string" ? title : undefined)) : undefined;
@@ -162,24 +164,22 @@ export function RowTitleButton({
   );
   const content = (
     <>
-      <span id={contentId} className="block">
-        <span
-          ref={titleRef}
-          className={cn(
-            "block break-words text-sm font-medium leading-5 underline-offset-2 [overflow-wrap:anywhere]",
-            // リンクは :enabled を持たないので、ホバーの下線はリンクなら常に、ボタンなら押せるときだけ付ける。
-            asLink ? "group-hover/row-title:underline" : "group-enabled/row-title:group-hover/row-title:underline",
-            maxLines && LINE_CLAMP_CLASS[maxLines]
-          )}
-        >
-          {title}
-        </span>
-        {subtitle ? (
-          <span className="mt-0.5 block break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">
-            {subtitle}
-          </span>
-        ) : null}
+      <span
+        id={contentId}
+        ref={titleRef}
+        className={cn(
+          "block break-words text-sm font-medium leading-5 underline-offset-2 [overflow-wrap:anywhere]",
+          asLink ? "group-hover/row-title:underline" : "group-enabled/row-title:group-hover/row-title:underline",
+          maxLines && LINE_CLAMP_CLASS[maxLines]
+        )}
+      >
+        {title}
       </span>
+      {subtitle ? (
+        <span id={subtitleId} className="mt-0.5 block break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">
+          {subtitle}
+        </span>
+      ) : null}
     </>
   );
 

@@ -41,7 +41,7 @@ describe("サイドバーのアカウント欄（#307）", () => {
     expect(html).not.toContain("ログイン省略");
     // 欄の行全体がアカウントの画面へのリンク。個人の操作（API キー・パスワード変更）の行は出さない（#1873）。
     expect(html).toContain('href="/rag/account"');
-    expect(html).toContain('aria-label="アカウント設定を開く（営業ユーザー）"');
+    expect(html).toContain('aria-label="営業ユーザー 営業 アカウント設定を開く（営業ユーザー）"');
     expect(html).not.toContain('aria-current="page"');
     expect(html).not.toContain("パスワード変更");
     expect(html).not.toContain("API キー");

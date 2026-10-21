@@ -46,7 +46,7 @@ describe("RowTitleButton の見た目と属性", () => {
     expect(html).toContain("[overflow-wrap:anywhere]");
     expect(html).not.toContain("line-clamp");
     expect(html).toContain("group-hover/row-title:underline");
-    expect(html).toMatch(/<span class="[^"]*text-xs[^"]*text-fg-muted[^"]*">kb-001<\/span>/);
+    expect(html).toMatch(/<span[^>]* class="[^"]*text-xs[^"]*text-fg-muted[^"]*">kb-001<\/span>/);
   });
 
   it("maxLines で行数を切り詰める", () => {
@@ -151,7 +151,7 @@ describe("RowTitleButton の操作", () => {
     act(() => root.render(<RowTitleButton title="合成の項目" subtitle={<span>合成の説明</span>} href={href} aria-label="詳細を開く" />));
     const control = host.querySelector("[data-row-title-button]")!;
     const labels = control.getAttribute("aria-labelledby")!.split(" ").map((id) => id === control.id ? control.getAttribute("aria-label") : document.getElementById(id)?.textContent);
-    expect(labels).toEqual(["合成の項目合成の説明", "詳細を開く"]);
+    expect(labels).toEqual(["合成の項目", "合成の説明", "詳細を開く"]);
   });
 
   it("DataTable の行の中で押すと onClick だけが 1 回呼ばれ、行のクリック（onRowClick）は重ねて呼ばない", () => {
