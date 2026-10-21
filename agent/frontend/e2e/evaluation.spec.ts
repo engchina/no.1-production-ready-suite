@@ -757,3 +757,23 @@ test("承認による未実行を合格率と分け、停止の期待を保存�
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => (mockApi.lastRequest("PUT", `/api/evaluation-sets/${SET.id}`)?.body as { cases?: { expected_approval?: boolean }[] } | undefined)?.cases?.[0]?.expected_approval).toBe(true);
 });
+
+
+test("実行条件の変更で無効になった評価を合格と表示しない", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  seedFinishedJobs(mockApi);
+  const job = mockApi.state.evaluations[0];
+  job.previous_job_id = null;
+  job.previous_summary = null;
+  job.status = "failed";
+  job.error = "評価中に実行条件が変更されました。現在の設定で評価し直してください。";
+  const results = [{ ...(job.results as EvaluationResultFixture[])[0], status: "definition_changed", judgement: null, error: job.error }];
+  job.results = results;
+  job.summary = { ...evaluationSummary(results), total: 1, completed: 1, correct: 0, incorrect: 0, errors: 1, unjudged: 1, judged_cases: 0, pass_rate: null, average_score: null };
+  await page.goto("/evaluation");
+  await expect(page.getByText("実行条件の変更で無効", { exact: true })).toBeVisible();
+  await expect(page.getByText("うち判定できなかった 1 件（合格率から除く）", { exact: true })).toBeVisible();
+  await expect(page.getByText(job.error as string, { exact: true }).first()).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.getByTestId("evaluation-summary").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("evaluation-definition-changed.png"), fullPage: true });
+});

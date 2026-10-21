@@ -486,7 +486,7 @@ class EvaluationSummary(BaseModel):
     incorrect: int = 0
     uncertain: int = 0
     errors: int = 0
-    # 評価できなかったケースのうち、判定のモデルが判定できなかったケース（#1845）。
+    # 判定のモデルの失敗・実行条件の変更で合格率から除くケース（#1845・#2597）。
     unjudged: int = 0
     approval_blocked: int = 0
     # 合格率 = 正しいと判定したケース / 終わったケース（業務 Agent の実行の失敗・時間切れは不合格に
@@ -1701,11 +1701,11 @@ def draft_definition_hash(agent: Any) -> str:
         mode="json", include=set(AGENT_VERSIONED_FIELDS) | {"draft_updated_at"}
     )
     definition["skills"] = [item.model_dump(mode="json") for item in pin_skills(agent.skill_ids)]
-    try:
-        definition["model"] = asdict(builtin_runtime.resolve_model_target(agent.model_id))
-        definition["judge_model"] = asdict(builtin_runtime.resolve_model_target(""))
-    except builtin_runtime.BuiltinRuntimeError as exc:
-        definition["model"] = {"error_code": exc.code}
+    for key, model_id in (("model", agent.model_id), ("judge_model", "")):
+        try:
+            definition[key] = asdict(builtin_runtime.resolve_model_target(model_id))
+        except builtin_runtime.BuiltinRuntimeError as exc:
+            definition[key] = {"error_code": exc.code}
     return hashlib.sha256(
         json.dumps(definition, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()
