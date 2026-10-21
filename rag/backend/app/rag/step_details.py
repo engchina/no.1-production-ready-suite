@@ -83,8 +83,11 @@ def answer_guardrail_details(result: Any, answer: str) -> dict[str, Any] | None:
 
     findings = list(getattr(result, "findings", ()) or ())
     allowed = bool(getattr(result, "allowed", True))
+    unavailable = bool(getattr(result, "backend_degraded", False))
     errors = sum(1 for item in findings if getattr(item, "severity", "") == "error")
-    if not allowed:
+    if unavailable:
+        verdict = "安全検査を完了できず、回答を止めました"
+    elif not allowed:
         verdict = "回答を止めました"
     elif findings:
         verdict = f"警告 {len(findings)} 件（回答は出します）"
@@ -93,9 +96,14 @@ def answer_guardrail_details(result: Any, answer: str) -> dict[str, Any] | None:
     fields: list[tuple[str, object]] = [("結果", verdict)]
     if errors and allowed:
         fields.append(("重大な指摘", f"{errors} 件"))
-    if getattr(result, "sanitized_text", answer) != answer:
+    if (
+        allowed
+        and not unavailable
+        and any(getattr(item, "code", "") == "oci_pii_detected" for item in findings)
+        and getattr(result, "sanitized_text", answer) != answer
+    ):
         fields.append(("回答の書き換え", "機密らしい箇所を伏せました"))
-    if getattr(result, "backend_degraded", False):
-        fields.append(("外部の検査", "使えなかったため、規則の検査だけで確かめました"))
+    if unavailable:
+        fields.append(("外部の検査", "OCI Guardrails を利用できませんでした"))
     messages = dict.fromkeys(str(getattr(item, "message", "") or "") for item in findings)
     return pipeline_step_details(fields=fields, lines=[message for message in messages if message])
