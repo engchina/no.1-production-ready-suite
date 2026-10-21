@@ -354,7 +354,7 @@ describe("SidebarAccountFooter", () => {
   it("account を渡すと欄の行全体がアカウントの画面へのリンクになり、現在地は aria-current=page（#1873）", () => {
     const account = { href: "/rag/account", label: "アカウント設定を開く（山田）" };
     const html = renderToStaticMarkup(<SidebarAccountFooter name="山田" roles="管理者" collapsed={false} account={account} onLogout={() => {}} />);
-    expect(html).toMatch(/<a href="\/rag\/account" aria-label="アカウント設定を開く（山田）" class="[^"]*\bmin-h-11\b[^"]*"/);
+    expect(html).toMatch(/<a href="\/rag\/account" aria-label="山田 管理者 アカウント設定を開く（山田）" class="[^"]*\bmin-h-11\b[^"]*"/);
     expect(html).not.toContain('aria-current="page"');
     const active = renderToStaticMarkup(
       <SidebarAccountFooter name="山田" roles="管理者" collapsed={false} account={{ ...account, active: true }} />
