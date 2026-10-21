@@ -23,7 +23,7 @@ from app.features.agent.data_scope import (
     DataScopeCandidatesError,
 )
 from app.features.agent.drafting import MAX_EVALUATION_CASES
-from app.features.agent.evaluation import EvaluationCase, JobStatus
+from app.features.agent.evaluation import EvaluationCase, JobStatus, draft_definition_hash
 from app.features.agent.runtime import runtime_repository
 from app.features.agent.skills import skill_registry
 from app.security.permissions import MENU_AGENTS, RUNS_OPERATE
@@ -334,7 +334,7 @@ def _job(*, pass_rate: float | None, offset_seconds: float, **overrides: Any) ->
     values: dict[str, Any] = {
         "agent_id": AGENT_ID,
         "agent_version": "draft",
-        "definition_hash": agent_router.draft_definition_hash(agent),
+        "definition_hash": draft_definition_hash(agent),
         "status": JobStatus.COMPLETED,
         "created_at": agent.draft_updated_at + timedelta(seconds=offset_seconds),
         "set_id": "evset_a",

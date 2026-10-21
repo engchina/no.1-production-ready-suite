@@ -1703,6 +1703,7 @@ def draft_definition_hash(agent: Any) -> str:
     definition["skills"] = [item.model_dump(mode="json") for item in pin_skills(agent.skill_ids)]
     try:
         definition["model"] = asdict(builtin_runtime.resolve_model_target(agent.model_id))
+        definition["judge_model"] = asdict(builtin_runtime.resolve_model_target(""))
     except builtin_runtime.BuiltinRuntimeError as exc:
         definition["model"] = {"error_code": exc.code}
     return hashlib.sha256(
