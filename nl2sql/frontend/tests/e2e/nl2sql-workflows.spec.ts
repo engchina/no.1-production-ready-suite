@@ -14337,7 +14337,7 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expect(dataPreviewPanel.getByText("選択中", { exact: true })).toHaveCount(0);
   await expect(dataPreviewPanel.getByText("統計未取得").filter({ visible: true })).toBeVisible();
   await expect(dataPreviewPanel.getByRole("button", { name: /^操作: / })).toHaveCount(0);
-  await expect(dataPreviewPanel.getByRole("button", { name: / を選択$/ })).toHaveCount(4);
+  await expect(dataPreviewPanel.getByRole("button", { name: / を選択/ })).toHaveCount(4);
   await expect(dataPreviewPanel.getByRole("button", { name: / のデータを表示$/ })).toHaveCount(0);
   const previewShowButton = dataPreviewPanel.getByRole("button", { name: "データを表示", exact: true });
   const previewResultsActions = dataPreviewPanel.getByTestId("data-preview-results-actions");
