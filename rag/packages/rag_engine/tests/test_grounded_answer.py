@@ -2238,6 +2238,54 @@ class CarryOverWithdrawalTest(unittest.TestCase):
         self.assertTrue(grounded.better(round_like({"Q1", "Q2"}, 2, 3), current))  # 要求が増えれば問題が増えても採用
 
 
+class ImageGenerationFallbackTest(unittest.TestCase):
+    """画像を添付した生成の出力が壊れたら、画像なしの生成で 1 回だけ作り直す（#2772）。"""
+
+    def setUp(self):
+        self.ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
+        eid = ids(self.ctx)[LIST_TEXT]
+        step = "一覧表を選択し、処理を選択します。"
+        self.text_model = FakeModel([draft(item(eid, step, step, request_id="Q1"))], [audit((0, "supported", "matched", ""))])
+        self.spans = _grounded_spans(QUESTION, self.ctx, (), None)
+
+    def run_round(self, parse_images, invalid_output):
+        return grounded.run_round(
+            QUESTION,
+            self.spans,
+            None,
+            prompt="p",
+            image_paths=["image.png"],
+            provider_id=None,
+            parse_text=self.text_model,
+            parse_images=parse_images,
+            invalid_output=invalid_output,
+        )
+
+    def test_broken_image_output_is_regenerated_without_images(self):
+        from rag_engine.adapters.oci import InvalidStructuredOutput, is_invalid_structured_output
+
+        def broken(*args, **kwargs):
+            raise InvalidStructuredOutput("置換文字")
+
+        current = self.run_round(broken, is_invalid_structured_output)
+        self.assertEqual(current.verified, 1)
+        self.assertEqual(current.timing["image_fallback"], "InvalidStructuredOutput")
+        self.assertIn("画像なしで作り直し", grounded.round_timing_line(current))
+        self.assertEqual([schema for schema, _ in self.text_model.prompts][0], "GroundedDraft")
+
+    def test_other_failures_are_not_retried_without_images(self):
+        from rag_engine.adapters.oci import is_invalid_structured_output
+
+        def failing(*args, **kwargs):
+            raise TimeoutError("通信")
+
+        with self.assertRaises(TimeoutError):
+            self.run_round(failing, is_invalid_structured_output)
+        with self.assertRaises(TimeoutError):
+            self.run_round(failing, None)
+        self.assertEqual(self.text_model.prompts, [])
+
+
 class RenderStepOrderTest(unittest.TestCase):
     """render は items の順序を変えない。機能の区切りは並びで連続する範囲ごと (#1009)。"""
 
