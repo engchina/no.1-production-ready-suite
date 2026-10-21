@@ -130,8 +130,6 @@ class GuideStepCoverageUnitTest(unittest.TestCase):
             "downgraded_items": [{"text": "t", "reasons": ["監査: supported/not_applicable r"]}],
             "guide_steps_unexplained": [{"step_id": "s2", "status": "reference_only"}],
         }
-        # 監査が質問の対象ではないとした降格だけ、とは扱わない（手順を対象に作り直す）。
-        self.assertFalse(grounded.not_applicable_only(feedback))
         self.assertFalse(grounded.downgraded_only(feedback))
         self.assertFalse(grounded.evidence_shortage_only(feedback, grounded.timed_out_round(QUESTION)))
         self.assertIn("説明していない業務ガイドの手順 1 件", grounded.pending_feedback_labels(feedback))
@@ -185,13 +183,18 @@ class GuideStepFulfillmentTest(unittest.TestCase):
             _record(0, first, "設定画面", "run:a"),
             replace(_record(1, followup, "反映画面", "run:b"), source="反映操作.pdf"),
         )
-        for included, applicability in ((True, "matched"), (False, "matched"), (True, "not_applicable")):
+        for included, applicability in ((True, "matched"), (False, "matched"), (True, "conditional")):
             with self.subTest(included=included, applicability=applicability):
                 knowledge = _knowledge(GUIDE if included else GUIDE[:1])
                 labels = _ids(ctx, knowledge, question)
                 model = FakeModel(
                     [draft(item(labels[first], first, first), item(labels[followup], followup, followup))],
-                    [audit((0, "supported", "matched", ""), (1, "supported", applicability, ""))],
+                    [
+                        audit(
+                            (0, "supported", "matched", ""),
+                            (1, "supported", applicability, "原文に無い条件" if applicability == "conditional" else ""),
+                        )
+                    ],
                 )
                 response = _run(model, ctx, knowledge, question).response
                 if included and applicability == "matched":
@@ -211,7 +214,7 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         model = FakeModel(
             [draft(a, b)],
             [
-                audit((0, "supported", "matched", ""), (1, "supported", "not_applicable", ""), requests=[("Q1", "addressed")]),
+                audit((0, "supported", "matched", ""), (1, "supported", "conditional", "原文に無い条件"), requests=[("Q1", "addressed")]),
                 audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")]),
             ],
         )
@@ -240,7 +243,7 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         b = item(eids[STEP_B], "反映画面で反映ボタンを押して確定します。", STEP_B, request_id="Q1")
         model = FakeModel(
             [draft(a, b)],
-            [audit((0, "supported", "matched", ""), (1, "supported", "not_applicable", ""), requests=[("Q1", "addressed")])],
+            [audit((0, "supported", "matched", ""), (1, "supported", "conditional", "原文に無い条件"), requests=[("Q1", "addressed")])],
         )
         result = _run(model, ctx, knowledge).response
 
@@ -254,9 +257,10 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         self.assertIn("反映ボタンで確定する", result.insufficient_reason)
         coverage = result.generation_trace["guide_step_coverage"]
         self.assertEqual([step["status"] for step in coverage], ["explained", "reference_only"])
-        # 監査の判定は無効にしない（B の説明は警告つきで示し、手順を確かめた説明にはしない。#2738）。
-        (mark,) = result.envelope["passage_marks"]
-        self.assertEqual((mark["text"], mark["reasons"][0]["code"]), ("2. 反映画面で反映ボタンを押して確定します。", "target_mismatch"))
+        # 適用が未確認の B は「参考情報」の原文で示し、手順を確かめた説明にはしない（対象違いの印は付けない。#2837）。
+        self.assertFalse(
+            any(reason["code"] == "target_mismatch" for mark in result.envelope["passage_marks"] for reason in mark["reasons"])
+        )
 
     def test_missing_step_evidence_is_shown_without_regeneration(self):
         """手順 B の根拠が回答の材料に無ければ、同じ根拠での作り直しはせず、不足として示す。"""
@@ -306,7 +310,7 @@ class GuideStepFulfillmentTest(unittest.TestCase):
             [
                 audit(
                     (0, "supported", "matched", ""),
-                    (1, "supported", "not_applicable", ""),
+                    (1, "supported", "conditional", "原文に無い条件"),
                     (2, "supported", "matched", ""),
                     requests=[("Q1", "addressed"), ("Q2", "addressed")],
                 )
@@ -546,7 +550,7 @@ class GuideStepSharedEvidenceAnswerTest(unittest.TestCase):
             [
                 audit(
                     (0, "supported", "matched", ""),
-                    (1, "supported", b_applicability, ""),
+                    (1, "supported", b_applicability, "原文に無い条件" if b_applicability == "conditional" else ""),
                     (2, "supported", "matched", ""),
                     requests=[("Q1", "addressed")],
                 )
@@ -555,7 +559,7 @@ class GuideStepSharedEvidenceAnswerTest(unittest.TestCase):
         return model, _run(model, ctx, knowledge).response
 
     def test_shared_chunk_with_main_operation_as_reference_is_not_answered(self):
-        model, result = self._run_shared("not_applicable")
+        model, result = self._run_shared("conditional")
 
         # 手順 2 を対象に作り直しを求める（共通の操作だけの公開で充足済みにしない）。
         drafts = _drafts(model)
@@ -883,7 +887,7 @@ class GuideStepSemanticAnswerTest(unittest.TestCase):
             [
                 audit(
                     (0, "supported", "matched", ""),
-                    (1, "supported", "not_applicable", ""),
+                    (1, "supported", "conditional", "原文に無い条件"),
                     (2, "supported", "matched", ""),
                     requests=[("Q1", "addressed")],
                 ),
