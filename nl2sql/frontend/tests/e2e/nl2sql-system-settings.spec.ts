@@ -1103,7 +1103,7 @@ test("システム設定の失敗と API エラーを共通 danger パネルで�
   await expect(modelResult.getByRole("alert")).toBeVisible();
   await expect(modelResult).toContainText("確認ポイント");
   await expect(modelResult).toContainText("TimeoutError");
-  await expect(modelResult).not.toContainText("gateway timeout");
+  await expect(modelResult).toContainText("gateway timeout");
   await expectNoHorizontalOverflow(page);
 
   await page.unroute("**/api/settings/database/test");
