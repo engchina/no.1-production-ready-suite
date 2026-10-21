@@ -1901,6 +1901,13 @@ def _public_span(span: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in span.items() if key not in _CHECK_ONLY_SPAN_KEYS}
 
 
+def _audit_glossary(runtime_knowledge: RuntimeKnowledgeContext | None) -> list[dict[str, Any]]:
+    """質問に当たった用語のうち別名のあるものの、名前と別名（監査の入力。#2823）。"""
+    if runtime_knowledge is None:
+        return []
+    return [{"term": term.term, "aliases": list(term.aliases)} for term in runtime_knowledge.matched_terms if term.aliases]
+
+
 def _invalid_structured_output(exc: Exception) -> bool:
     """LLM の応答が構造化出力の契約を満たさなかった例外か（再試行の後も。#2772）。"""
     from rag_engine.adapters.oci import is_invalid_structured_output
@@ -2061,6 +2068,7 @@ def synthesize_grounded_answer(
                     audit_mode=audit_mode,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                     invalid_output=_invalid_structured_output,
+                    glossary=_audit_glossary(runtime_knowledge),
                 )
                 if number == 0:
                     for purpose in (LLM_PURPOSE_GENERATION, LLM_PURPOSE_AUDIT):
