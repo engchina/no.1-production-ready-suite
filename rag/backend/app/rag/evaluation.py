@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
+from math import fsum
 from time import perf_counter
 from typing import Any, Protocol
 
@@ -214,7 +215,7 @@ class _Aggregate:
     def means(self) -> dict[str, float | None]:
         return {
             metric: (
-                round(sum(self.values[metric]) / len(self.values[metric]), 4)
+                fsum(self.values[metric]) / len(self.values[metric])
                 if self.values.get(metric)
                 else None
             )
@@ -957,7 +958,7 @@ def _case_result(
         retrieved_document_ids=retrieved_ids,
         relevant_document_ids=list(case.relevant_document_ids),
         hit_document_ids=_unique_in_order(hits),
-        mrr=_round(reciprocal_rank),
+        mrr=reciprocal_rank,
         requirement_coverage=judgement.requirement_coverage if judgement else None,
         claim_support_rate=judgement.claim_support_rate if judgement else None,
         answer_correctness=judgement.answer_correctness if judgement else None,
@@ -965,7 +966,7 @@ def _case_result(
         expected_decisions=sorted(expected_decisions),
         observed_outcome=observed.outcome,
         outcome_source=observed.source,
-        required_evidence_recall=_round(evidence_recall),
+        required_evidence_recall=evidence_recall,
         missing_evidence=missing_evidence,
         turn_results=turn_results if case.turns else [],
         answer_evaluation=judgement,
@@ -1288,10 +1289,6 @@ def _optional_float(value: object) -> float | None:
 
 def _bool_value(value: bool | None) -> float | None:
     return None if value is None else (1.0 if value else 0.0)
-
-
-def _round(value: float | None) -> float | None:
-    return None if value is None else round(value, 4)
 
 
 def _rate(values: list[bool]) -> float | None:

@@ -11,7 +11,9 @@ from app.schemas.evaluation import (
     EVALUATION_METRIC_NAMES,
     EvaluationAnswerJudgement,
     EvaluationCase,
+    EvaluationCaseResult,
     EvaluationEvidence,
+    EvaluationMetricName,
     EvaluationThresholds,
 )
 from app.schemas.search import RetrievedChunk, SearchDiagnostics, SearchResponse
@@ -163,3 +165,76 @@ def test_unassessed_completed_judgement_keeps_null_verdict() -> None:
     assert summary.answer_correctness is None
     assert summary.claim_support_rate is None
     assert summary.requirement_coverage is None
+
+
+@pytest.mark.parametrize("suite", ["standard", "strict"])
+@pytest.mark.parametrize("metric", EVALUATION_METRIC_NAMES)
+@pytest.mark.parametrize("offset", [-0.00001, 0.0, 0.00001])
+def test_thresholds_use_unrounded_scores(
+    suite: str, metric: EvaluationMetricName, offset: float
+) -> None:
+    from app.rag.evaluation_adapter import resolve_evaluation_suite
+
+    thresholds = resolve_evaluation_suite(suite)
+    target = getattr(thresholds, metric)
+    value = min(1.0, target + offset)
+    values = {name: 1.0 for name in EVALUATION_METRIC_NAMES}
+    values[metric] = value
+    judgement = EvaluationAnswerJudgement(
+        status="completed",
+        **{
+            name: values[name]
+            for name in ("answer_correctness", "requirement_coverage", "claim_support_rate")
+        },
+    )
+    case = EvaluationCaseResult(
+        case_id="synthetic-boundary",
+        trace_id="synthetic",
+        elapsed_ms=1,
+        answer_evaluation=judgement,
+        **values,
+    )
+    result = summarize_case_results([case], thresholds=thresholds)
+    assert result.passed is (offset >= 0)
+    assert [failure.metric for failure in result.threshold_failures] == (
+        [metric] if offset < 0 else []
+    )
+    assert getattr(result, metric) == value
+
+
+def test_thresholds_use_unrounded_mean_of_multiple_cases() -> None:
+    cases = [
+        EvaluationCaseResult(
+            case_id=str(index), trace_id="synthetic", elapsed_ms=1, answer_correctness=value
+        )
+        for index, value in enumerate([0.9, 0.89998])
+    ]
+    result = summarize_case_results(cases, thresholds=EvaluationThresholds(answer_correctness=0.9))
+    assert result.passed is False
+    assert result.answer_correctness == pytest.approx(0.89999)
+    assert result.threshold_failures[0].actual < 0.9
+
+
+def test_retrieval_scores_preserve_precision_before_aggregation() -> None:
+    answer = response()
+    answer.citations.insert(
+        1,
+        RetrievedChunk(
+            document_id="other-two",
+            chunk_id="other-two:c1",
+            text="合成の別の本文",
+            score=0.5,
+        ),
+    )
+    case = EvaluationCase(
+        id="synthetic-precision",
+        query="合成の質問",
+        relevant_document_ids=["correct"],
+        required_evidence=[
+            EvaluationEvidence(id=str(index), document_id="correct", text=text)
+            for index, text in enumerate(["必要な事実", "合成の不足 A", "合成の不足 B"])
+        ],
+    )
+    result = score_case_answers(case, [(answer, {})])
+    assert result.mrr == 1 / 3
+    assert result.required_evidence_recall == 1 / 3
