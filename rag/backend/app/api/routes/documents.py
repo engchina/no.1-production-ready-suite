@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import PurePath
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -2923,7 +2923,12 @@ def _reviewed_extraction_with_edits(
     if text_by_element_id:
         updated_elements = [
             (
-                element.model_copy(update={"text": text_by_element_id[element.element_id]})
+                element.model_copy(
+                    update={
+                        "text": text_by_element_id[element.element_id],
+                        "metadata": {**element.metadata, "reviewed_text": True},
+                    }
+                )
                 if element.element_id in text_by_element_id
                 else element
             )
@@ -3061,7 +3066,68 @@ def _canonicalize_reviewed_extraction(
             }
         ).model_dump()
     )
-    return normalized.model_copy(update={"navigation": build_navigation_tree(normalized)})
+    return normalized.model_copy(
+        update={
+            "navigation": build_navigation_tree(normalized),
+            "parser_artifacts": _reviewed_layout_artifacts(normalized),
+        }
+    )
+
+
+def _reviewed_layout_artifacts(extraction: StructuredExtraction) -> dict[str, Any]:
+    """確認した本文・表・見出しを親子分割の入力へ同期し、元の解析情報を残す。"""
+    artifacts = dict(extraction.parser_artifacts)
+    layout = artifacts.get("layout_records")
+    if not isinstance(layout, Mapping):
+        return artifacts
+    source_records = layout.get("records")
+    if not isinstance(source_records, list):
+        return artifacts
+    elements = {
+        element.element_id: element for element in extraction.elements if element.element_id
+    }
+    tables = {
+        key: table
+        for table in extraction.tables
+        for key in (table.table_id, table.element_id)
+        if key
+    }
+    records: list[Any] = []
+    for source_record in source_records:
+        if not isinstance(source_record, Mapping):
+            records.append(source_record)
+            continue
+        element = elements.get(str(source_record.get("id") or ""))
+        if element is None:
+            records.append(source_record)
+            continue
+        table = tables.get(_review_table_key(element) or "") if element.kind == "table" else None
+        reviewed = (
+            table.metadata.get("reviewed_text") if table else element.metadata.get("reviewed_text")
+        )
+        if not reviewed:
+            records.append(source_record)
+            continue
+        record = dict(source_record)
+        raw_value = record.get("raw")
+        raw = dict(raw_value) if isinstance(raw_value, Mapping) else {}
+        text = element.text
+        if table is not None:
+            text = _structured_table_html(table, "")
+            if previous_html := raw.get("table_enhanced_html"):
+                raw.setdefault("review_original_table_enhanced_html", previous_html)
+            raw["table_enhanced_html"] = text
+        if text != str(record.get("text") or ""):
+            raw.setdefault("review_original_text", record.get("text") or "")
+        record["text"] = text
+        if element.kind == "title":
+            if "heading_level" in raw:
+                raw.setdefault("review_original_heading_level", raw["heading_level"])
+            raw["heading_level"] = element.metadata["section_level"]
+        record["raw"] = raw
+        records.append(record)
+    artifacts["layout_records"] = {**layout, "records": records}
+    return artifacts
 
 
 def _review_table_key(element: DocumentElement) -> str | None:
@@ -3167,6 +3233,11 @@ def _apply_table_cell_edits(
     updated_tables = [
         table.model_copy(
             update={
+                "metadata": (
+                    {**table.metadata, "reviewed_text": True}
+                    if any(key[0] == table.table_id for key in text_by_cell_key)
+                    else table.metadata
+                ),
                 "cells": [
                     (
                         cell.model_copy(
@@ -3176,7 +3247,7 @@ def _apply_table_cell_edits(
                         else cell
                     )
                     for cell in table.cells
-                ]
+                ],
             }
         )
         for table in extraction.tables
