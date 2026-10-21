@@ -682,7 +682,14 @@ def _answer_prompts_data(saved: dict[str, dict[str, object]]) -> AnswerPromptsDa
             )
         )
     return AnswerPromptsData.model_validate(
-        {"prompts": prompts, "stages": readonly_prompt_stages()}
+        {
+            "prompts": prompts,
+            "stages": readonly_prompt_stages(
+                image_prompt=next(
+                    prompt.content for prompt in prompts if prompt.key == "image_retrieval"
+                )
+            ),
+        }
     )
 
 

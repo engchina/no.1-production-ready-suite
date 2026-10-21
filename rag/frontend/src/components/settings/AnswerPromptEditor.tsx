@@ -4,7 +4,6 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  Disclosure,
   FormActionBar,
   FormGrid,
   FormStatus,
@@ -18,15 +17,15 @@ import { History, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 
 import { ErrorState } from "@/components/StateViews";
-import { ApiError, type AnswerPromptKey, type AnswerPromptStage, type AnswerPromptView } from "@/lib/api";
+import { ApiError, type AnswerPromptKey, type AnswerPromptView } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
-import { t, type I18nKey } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useAnswerPrompts, useSaveAnswerPrompt } from "@/lib/queries";
 import { focusFirstInvalidField } from "@/lib/required-fields";
 import { toast } from "@/lib/toast";
 
-import { answerPromptError, groupStagesByPhase } from "./answer-prompt.logic";
+import { answerPromptError } from "./answer-prompt.logic";
 
 const PROMPT_MAX = 50000;
 
@@ -34,13 +33,7 @@ const PROMPT_MAX = 50000;
  * 編集できるプロンプト（回答生成のプロンプト `vlm_answer` / 図・画像の読み取りプロンプト `image_retrieval`）を 1 つ編集する。
  * 全体で 1 つの設定（検索・回答プロファイル・文書レシピでは上書きしない）。保存した内容は次の回答・次の解析から使う。
  */
-export function AnswerPromptCard({
-  promptKey,
-  showStages = false,
-}: {
-  promptKey: AnswerPromptKey;
-  showStages?: boolean;
-}) {
+export function AnswerPromptCard({ promptKey }: { promptKey: AnswerPromptKey }) {
   return (
     <Card>
       <CardHeader>
@@ -48,7 +41,7 @@ export function AnswerPromptCard({
         <CardDescription>{t(`settings.answerPrompts.${promptKey}.description`)}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <AnswerPromptPanel promptKey={promptKey} showStages={showStages} />
+        <AnswerPromptPanel promptKey={promptKey} />
       </CardContent>
     </Card>
   );
@@ -58,13 +51,7 @@ export function AnswerPromptCard({
  * カードの枠を持たないプロンプトの編集欄。ほかの設定の節の中に置くときに使う
  * （文書解析の「解析後の処理」の Vision の中の読み取りプロンプト。#528）。
  */
-export function AnswerPromptPanel({
-  promptKey,
-  showStages = false,
-}: {
-  promptKey: AnswerPromptKey;
-  showStages?: boolean;
-}) {
+export function AnswerPromptPanel({ promptKey }: { promptKey: AnswerPromptKey }) {
   const query = useAnswerPrompts();
   const prompt = query.data?.prompts.find((item) => item.key === promptKey);
   if (query.isPending) {
@@ -88,7 +75,6 @@ export function AnswerPromptPanel({
   return (
     <div className="space-y-4">
       <AnswerPromptEditor prompt={prompt} />
-      {showStages ? <ReadonlyStages stages={query.data.stages} /> : null}
     </div>
   );
 }
@@ -236,57 +222,5 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
         }
       />
     </div>
-  );
-}
-
-/**
- * 取込から評価までの各段のプロンプト（読み取り専用。#2054）。backend が処理の順に返す段を、区分
- * （取込・質問の解釈・検索・根拠の判定・回答の生成・監査・評価）の見出しの下にまとめ、段の名前の下に
- * 使われる条件を 1 行で出す（開かなくても、どの設定で使われるかが分かる）。
- */
-function ReadonlyStages({ stages }: { stages: AnswerPromptStage[] }) {
-  return (
-    <section className="space-y-4 border-t border-border pt-4" aria-labelledby="answer-prompt-stages-title">
-      <div className="space-y-1">
-        <h3 id="answer-prompt-stages-title" className="text-sm font-semibold text-fg">
-          {t("settings.answerPrompts.stages.title")}
-        </h3>
-        <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answerPrompts.stages.description")}</p>
-      </div>
-      {groupStagesByPhase(stages).map((group, index) => {
-        const headingId = `answer-prompt-phase-${index}`;
-        return (
-          <section key={`${group.phase}-${index}`} className="space-y-2" aria-labelledby={headingId}>
-            <h4 id={headingId} className="text-xs font-semibold text-fg-muted">
-              {t(`settings.answerPrompts.phase.${group.phase}` as I18nKey)}
-            </h4>
-            {group.stages.map((stage) => (
-              <Disclosure
-                key={stage.id}
-                summary={t(`settings.answerPrompts.stage.${stage.id}` as I18nKey)}
-                description={t("settings.answerPrompts.condition", {
-                  condition: t(`settings.answerPrompts.stage.${stage.id}.condition` as I18nKey),
-                })}
-                surface="sunken"
-                contentClassName="space-y-3"
-                data-testid={`answer-prompt-stage-${stage.id}`}
-              >
-                {stage.prompts.map((part) => (
-                  <TextareaField
-                    key={part.id}
-                    id={`answer-prompt-${stage.id}-${part.id}`}
-                    label={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
-                    value={part.content}
-                    readOnly
-                    monospace
-                    rows={12}
-                  />
-                ))}
-              </Disclosure>
-            ))}
-          </section>
-        );
-      })}
-    </section>
   );
 }

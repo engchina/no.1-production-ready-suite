@@ -178,6 +178,7 @@ def test_every_stage_phase_and_part_has_screen_copy() -> None:
     )
     expected = {f"settings.answerPrompts.phase.{phase}" for phase in PROMPT_PHASES}
     for stage in PROMPT_STAGES:
+        expected.add(f"settings.answerPrompts.phase.{stage.phase}.description")
         expected.add(f"settings.answerPrompts.stage.{stage.id}")
         expected.add(f"settings.answerPrompts.stage.{stage.id}.condition")
         expected.update(f"settings.answerPrompts.part.{part_id}" for part_id, _ in stage.parts)
@@ -196,3 +197,23 @@ def test_evaluation_catalog_exposes_only_current_evaluation_stages() -> None:
     stages = {stage.id: stage for stage in PROMPT_STAGES if stage.phase == "evaluation"}
     assert set(stages) == {"evaluation", "answer_validation"}
     assert {part for part, _ in stages["evaluation"].parts} == {"scope", "correctness", "system"}
+
+
+def test_catalog_separates_independent_preparation_and_orders_evaluation_calls() -> None:
+    stages = {stage.id: stage for stage in PROMPT_STAGES}
+    assert stages["raptor_summary"].phase == "indexing"
+    assert stages["support_guide_draft"].phase == "knowledge"
+    assert [part for part, _ in stages["evaluation"].parts] == ["scope", "system", "correctness"]
+    assert [part for part, _ in stages["audit"].parts] == [
+        "detailedSystem",
+        "factSystem",
+        "compactRule",
+    ]
+    # 取込内の順は設定の概要が参照するレシピの実行順と同じ。
+    assert [stage.id for stage in PROMPT_STAGES if stage.phase == "ingestion"] == [
+        "external_ocr",
+        "picture_description",
+        "heading_levels",
+        "field_extraction",
+        "navigation_summary",
+    ]

@@ -20,6 +20,7 @@ from rag_engine.knowledge.prompt_files import (
     PROMPT_FILES,
     VLM_ANSWER_PROMPT_KEY,
 )
+from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt
 
 EDITABLE_PROMPT_KEYS = (VLM_ANSWER_PROMPT_KEY, IMAGE_RETRIEVAL_PROMPT_KEY)
 ANSWER_PROMPT_MAX_CHARS = 50_000
@@ -46,9 +47,11 @@ def validate_prompt(key: str, content: str) -> None:
         raise ValueError(f"必須の placeholder がありません: {', '.join(missing)}")
 
 
-# 処理の順の段の区分(取込 → 質問の解釈 → 検索 → 根拠の判定 → 生成 → 監査 → 評価)。
+# 設定の概要の順を土台に、独立した知識の準備と、検索・回答の実行順を区別する。
 PROMPT_PHASES = (
     "ingestion",
+    "indexing",
+    "knowledge",
     "question",
     "retrieval",
     "grounding",
@@ -107,7 +110,7 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
     ),
     PromptStage(
         "raptor_summary",
-        "ingestion",
+        "indexing",
         (
             ("system", "app.rag.ingestion_prompts:RAPTOR_SUMMARY_SYSTEM_PROMPT"),
             ("instruction", "app.rag.ingestion_prompts:RAPTOR_SUMMARY_PROMPT"),
@@ -116,7 +119,7 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
     # 回答の過程の表から業務ガイドの下書きを作る(#2397。検索・回答プロファイルの知識の作成)。
     PromptStage(
         "support_guide_draft",
-        "ingestion",
+        "knowledge",
         (
             ("system", "app.rag.support_guide_process_import:GUIDE_DRAFT_SYSTEM_PROMPT"),
             ("instruction", "app.rag.support_guide_process_import:GUIDE_DRAFT_PROMPT"),
@@ -197,8 +200,8 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "audit",
         "audit",
         (
-            ("system", "rag_engine.generation.grounded:AUDIT_SYSTEM_PROMPT"),
-            # 通常の回答の監査（#2795。事実の信頼性だけ）。
+            ("detailedSystem", "rag_engine.generation.grounded:AUDIT_SYSTEM_PROMPT"),
+            # 標準の監査。未使用の根拠は列挙せず、主張・要求・要件を判定する。
             ("factSystem", "rag_engine.generation.grounded:FACT_AUDIT_SYSTEM_PROMPT"),
             ("compactRule", "rag_engine.generation.grounded:AUDIT_COMPACT_REASON_RULE"),
         ),
@@ -216,8 +219,8 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "evaluation",
         (
             ("scope", "rag_engine.evaluation.answer_eval:SCOPE_PROMPT"),
-            ("correctness", "rag_engine.evaluation.answer_eval:CORRECTNESS_PROMPT"),
             ("system", "rag_engine.evaluation.answer_eval:SYSTEM_PROMPT"),
+            ("correctness", "rag_engine.evaluation.answer_eval:CORRECTNESS_PROMPT"),
         ),
     ),
     PromptStage(
@@ -234,18 +237,26 @@ def prompt_constant(ref: str) -> str:
     return str(getattr(import_module(module_name), name))
 
 
-def readonly_prompt_stages() -> list[dict[str, object]]:
-    """実行で使う各段のプロンプト(コードで管理し、画面では読み取り専用で示す)。"""
-    return [
-        {
-            "id": stage.id,
-            "phase": stage.phase,
-            "prompts": [
-                {"id": part_id, "content": prompt_constant(ref)} for part_id, ref in stage.parts
-            ],
-        }
-        for stage in PROMPT_STAGES
-    ]
+def readonly_prompt_stages(*, image_prompt: str | None = None) -> list[dict[str, object]]:
+    """処理順の固定指示と、図の読み取りで実際に使うテンプレートを示す。"""
+    stages: list[dict[str, object]] = []
+    for stage in PROMPT_STAGES:
+        parts = [{"id": part_id, "content": prompt_constant(ref)} for part_id, ref in stage.parts]
+        if stage.id == "picture_description":
+            # 解析と同じ正規化を使い、保存済みのテンプレートに足す共通規則も含める。
+            parts.insert(
+                1,
+                {
+                    "id": "template",
+                    "content": refine_image_retrieval_prompt(
+                        image_prompt
+                        if image_prompt is not None
+                        else default_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
+                    ).strip(),
+                },
+            )
+        stages.append({"id": stage.id, "phase": stage.phase, "prompts": parts})
+    return stages
 
 
 @contextmanager

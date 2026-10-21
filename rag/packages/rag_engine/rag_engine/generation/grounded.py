@@ -104,6 +104,7 @@ GENERATE_SYSTEM_PROMPT = (
 - 添付原画像と根拠レコードの対応（画像がある場合）: 各画像の bbox / context_bbox / target_highlight / asset_kind。
 - 業務ガイドがある場合は、目的・必要な根拠・終わりの条件を満たす説明を、前提の手順から順に items にする。業務ガイドの手順は質問で分かっている条件に合わせて選んであるので、すべて説明し、利用者が自分で行えない手順も省かない。資料で裏付けられない要件は gap にする。
 - 業務ガイドは答え方の指示で、資料ではない。items の text には quote の原文が裏付ける内容だけを書き、業務ガイドの文（確認先・方針）を写さない。業務ガイドの窓口と引き継ぐ条件は、システムが「業務ガイドの案内」として本文に出す。
+- この指示の quote は、evidence_id と lines が指す根拠の原文を意味する。quote を別に生成するのではなく、その原文が支える内容を書く。
 2.2 Evidence の見出し行
 - origin（見出し行では `origin=` と表記）: document_text は解析された本文、image_extraction は画像からの生成説明・OCR、unclassified は未分類。
 - tags は原文の性質を示す。

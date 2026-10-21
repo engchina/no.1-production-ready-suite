@@ -80,3 +80,10 @@ def test_verify_publishes_the_item_cited_by_lines():
     assert "quote_unmatched" not in [mark.get("code") for mark in first.marks]
     assert [entry["index"] for entry in dropped] == [1]
     assert "範囲" in dropped[0]["reason"]
+
+
+def test_generation_instructions_name_only_the_public_citation_fields():
+    fields = GroundedItem.model_json_schema()["properties"]
+    assert "quote" not in fields
+    assert {"evidence_id", "lines"} <= set(fields)
+    assert "quote は、evidence_id と lines が指す根拠の原文" in grounded.GENERATE_SYSTEM_PROMPT
