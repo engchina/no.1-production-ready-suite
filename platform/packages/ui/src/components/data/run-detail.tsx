@@ -1,4 +1,4 @@
-import { CheckCircle2, Circle, CirclePause, MinusCircle, XCircle, type LucideIcon } from "lucide-react";
+import { CheckCircle2, Circle, CirclePause, CirclePlay, MinusCircle, XCircle, type LucideIcon } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 
 import { operationTimestampMs } from "../../lib/operation-timing";
@@ -443,10 +443,25 @@ function stepIndent(level: number | undefined): string {
 /** 段の行の字下げ（`level`。3 段で止める）。`RunTimeline` の外で同じ形の行を描く部品（チャットの実行中の段）が使う。 */
 export const runTimelineStepIndent = stepIndent;
 
+/**
+ * 回さない実行中の印（`spinRunning` が false の一覧の実行中の段。チャットの処理の経過の、今の段階を包む親の工程）。
+ * `RunStatusBadge` の実行中と同じ形（`CirclePlay`）にする。
+ */
+const RUNNING_STATIC_ICON = { icon: CirclePlay, className: "text-accent-fg" } as const;
+
 /** 段の状態のアイコン。大きさは行の文字の大きさ（`sm` 12px / `md` 14px。#2371）。 */
-function StepIcon({ status, size = TEXT_ICON_SIZE.sm }: { status: RunTimelineStepStatus; size?: number }) {
-  if (status === "running") return <Spinner size={size} className="text-accent-fg" />;
-  const { icon: Icon, className } = STEP_ICON[status];
+function StepIcon({
+  status,
+  size = TEXT_ICON_SIZE.sm,
+  spin = true,
+}: {
+  status: RunTimelineStepStatus;
+  size?: number;
+  /** 実行中の段を `Spinner` で回すか（false は `RUNNING_STATIC_ICON`）。 */
+  spin?: boolean;
+}) {
+  if (status === "running" && spin) return <Spinner size={size} className="text-accent-fg" />;
+  const { icon: Icon, className } = status === "running" ? RUNNING_STATIC_ICON : STEP_ICON[status];
   return <Icon size={size} className={cn("shrink-0", className)} aria-hidden="true" />;
 }
 
@@ -530,6 +545,12 @@ export interface RunTimelineProps {
    * 時間の線を出すか。既定 true。実行中の一覧（全体の長さが伸び続け、線が毎回伸び縮みする）は出さない。
    */
   showBars?: boolean;
+  /**
+   * 実行中の段を `Spinner` で回すか。既定 true。false は回さない実行中の印（`CirclePlay`）で出す。チャットの処理の経過
+   * （`ChatProgress`）は、今の段階（最も内側の実行中の段）の行を自分で描き、その行だけを回す。今の段階を包む実行中の
+   * 親の工程は、この一覧の中で開始順の位置に回さずに出す（同じ処理のスピナーは 1 つ。messaging.md §3.7。#2840）。
+   */
+  spinRunning?: boolean;
   /** 文字の大きさ。`md`（既定。実行の詳細）/ `sm`（チャットの回答の中の控えめな表示）。 */
   size?: "sm" | "md";
   /** 段の所要時間の表記。既定は `formatRunDuration`（「0.4 秒」「1 分 5 秒」）。 */
@@ -560,6 +581,7 @@ export function RunTimeline({
   defaultExpanded = false,
   showSummary = true,
   showBars = true,
+  spinRunning = true,
   size = "md",
   formatDuration = formatRunDuration,
   stepTestIdPrefix,
@@ -636,7 +658,7 @@ export function RunTimeline({
               >
                 <div className={cn("flex min-w-0 items-start gap-2 leading-5", nameText, stepIndent(level))}>
                   <span className="pr-icon-line">
-                    <StepIcon status={step.status} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />
+                    <StepIcon status={step.status} size={RUN_TIMELINE_CHEVRON_SIZE[size]} spin={spinRunning} />
                   </span>
                   {hasDetails ? (
                     <button

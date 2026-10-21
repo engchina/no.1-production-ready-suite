@@ -278,6 +278,8 @@ function StepList({
       steps={steps.map(chatProgressTimelineStep)}
       showSummary={false}
       showBars={bars}
+      // 実行中の一覧の中の実行中の段は、今の段階を包む親の工程（今の段階の行だけを回す。#2840）。
+      spinRunning={false}
       size="sm"
       formatDuration={labels.formatDuration}
       stepTestIdPrefix={testId}
@@ -433,10 +435,11 @@ function CurrentStepRow({
  *
  * - 実行中: 見出しの行は全体の状態だけ（「処理中（N ステップ完了）」と処理全体の経過時間。経過時間は段階が
  *   変わっても 0 に戻さない。#1176）。見出しの直下の行に遅延 / 再接続の案内（#2426。行は最初から予約し、一度出た
- *   遅延の案内は処理が終わるまで消さない）。開いた中身は 1 本のタイムラインで、完了した段階を終わった順に並べ、
- *   その後ろの最後の行に実行中の段階（スピナー・今の段階の経過時間）を出す（#2309。時間の順に上から
- *   下へ。段階が終わると同じ位置で完了の行に変わる）。閉じたときは見出しに今の段階の名前を添える。終端でないのに
- *   実行中・待機中の段階が無いときも、最後の行に「処理を続けています」を出す。
+ *   遅延の案内は処理が終わるまで消さない）。開いた中身は 1 本のタイムラインで、始まった段階を開始順に並べ、今の
+ *   段階（スピナー・今の段階の経過時間）をその位置に出す（#2309 / #2840。段階は始まった時点で開始順の位置に出し、
+ *   その場で状態だけを変える。一度出た行は消えず、位置も変わらない）。今の段階を包む実行中の親の工程も、開始順の
+ *   位置に回さない実行中の印で出す。閉じたときは見出しに今の段階の名前を添える。終端でないのに実行中の段階が
+ *   無いときは、末尾の行に次の待機中の段階か「処理を続けています」を出す。
  * - 完了後: 「処理の経過（N ステップ・M 秒）」の 1 行に閉じる（#2118 / #2265。3 製品で同じ。会話の履歴から開いた
  *   往復も閉じる）。押すと開き、実行の詳細と同じ `RunTimeline`（字下げ・時間の線・右の所要時間）で出す。失敗は
  *   開いたまま。
@@ -476,6 +479,13 @@ export function ChatProgress({
     ? lastRunningStep(steps) ?? steps.find((step) => step.status === "pending")
     : undefined;
   const finished = steps.filter((step) => step.status === "done" || step.status === "failed" || step.status === "skipped");
+  // 実行中の一覧（#2840）: 始まった段階（実行中・終わった段階）を一覧の順（開始順）に 1 本で並べ、今の段階の行は
+  // その位置に置く。今の段階を包む実行中の親の工程も開始順の位置に出す（親の行が出ないまま子だけが出て、親が
+  // 終わったときに子の上へ差し込まれて一覧が入れ替わらない）。待機中の段階は出さない（今の段階の代わりのときは末尾）。
+  const started = steps.filter((step) => step.status !== "pending");
+  const currentIndex = current ? started.indexOf(current) : -1;
+  const beforeCurrent = currentIndex >= 0 ? started.slice(0, currentIndex) : started;
+  const afterCurrent = currentIndex >= 0 ? started.slice(currentIndex + 1) : [];
   // 一覧の開閉（3 製品で同じ。製品は選ばない。#2265）。実行中は開き（何をしているかを見せる。#2096）、完了したら
   // 閉じる（回答の本文を主にする。#2118）。完了した状態で出したとき（会話の履歴から開いた往復）も閉じる。失敗は
   // どこで止まったかを見せるため開いたまま。利用者が開閉したら同じ表示の間はその状態を保ち、実行中と終端が
@@ -532,9 +542,11 @@ export function ChatProgress({
           summaryProps={{ "data-testid": testId ? `${testId}-running` : undefined }}
           summaryClassName="w-full text-fg-muted"
         >
-          {/* 1 本のタイムライン: 完了した段階の後ろに、実行中の段階を最後の行として出す（#2309）。 */}
+          {/* 1 本のタイムライン: 始まった段階を開始順に並べ、今の段階の行をその位置に出す（#2309 / #2840）。 */}
           <div className="grid min-w-0 gap-1.5">
-            {finished.length > 0 ? <StepList steps={finished} bars={false} labels={labels} testId={testId} /> : null}
+            {beforeCurrent.length > 0 ? (
+              <StepList steps={beforeCurrent} bars={false} labels={labels} testId={testId} />
+            ) : null}
             {/* 終端になるまで今の行を必ず出す（段階の外で処理が続くときは「処理を続けています」。#1176）。 */}
             <CurrentStepRow
               step={current ?? null}
@@ -543,6 +555,9 @@ export function ChatProgress({
               labels={labels}
               testId={testId}
             />
+            {afterCurrent.length > 0 ? (
+              <StepList steps={afterCurrent} bars={false} labels={labels} testId={testId} />
+            ) : null}
             {footer}
           </div>
         </Disclosure>
