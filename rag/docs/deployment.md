@@ -234,6 +234,16 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#2839 メタデータ/項目抽出を既定で無効にする）
+
+「メタデータ/項目抽出」（`RAG_FIELD_EXTRACTION_ENABLED`）の既定を無効（`false`）にした（#537 から既定で有効だった）。
+
+- `backend/.env` で値を明示していない環境は、更新後の次の取込から項目を抽出しない（文書ごとの OCI Enterprise AI の
+  呼び出しが減る）。既に抽出した値は消えない。
+- 続けて使うときは、「取込・回答設定 › 文書解析」の「解析後の処理」で「メタデータ/項目抽出」を有効にして保存する
+  （`backend/.env` に `RAG_FIELD_EXTRACTION_ENABLED=true` を書く）。文書のレシピで文書ごとに有効にすることもできる。
+- 値を明示している環境は何も変わらない。データの移行（migration）は不要。
+
 ## 既存環境の更新手順（#2457 ファイル準備 Word→JSONL の追加）
 
 ファイル準備に Word→JSONL（`word_to_jsonl`。サービス `preprocess-word-to-jsonl`、unit `production-ready-rag-preprocess-word-to-jsonl.service`、
@@ -1437,7 +1447,7 @@ schema の変更は無い。表示の本文・embedding は変えない。
 
 - **標準の項目が有効になる条件**: 全体の既定の定義のファイル（`backend/extraction-fields.json`、`RAG_FIELD_SCHEMA_FILE` で
   場所を変えている環境はそのファイル）が**無い**環境だけ。一度も「項目の定義を保存」していない環境が当たる。
-  項目抽出（`RAG_FIELD_EXTRACTION_ENABLED`、#537 から既定で有効）が有効なら、更新後の次の取込から
+  項目抽出（`RAG_FIELD_EXTRACTION_ENABLED`。#2839 から既定で無効）が有効なら、更新後の次の取込から
   **文書ごとに OCI Enterprise AI の呼び出しが 1 回増える**。
 - 定義を保存したことのある環境（0 件で保存した場合を含む）は、ファイルがあるため何も変わらない。
   ナレッジベースで項目を定義している文書も、今までどおりその定義を使う（KB に定義が無い文書だけが全体の既定を使う）。

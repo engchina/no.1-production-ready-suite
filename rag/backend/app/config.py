@@ -1195,11 +1195,11 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description="見出しの階層の推定で LLM に渡す 1 つの見出しの文字数の上限。",
     )
     rag_field_extraction_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
             "取込時に field schema 定義に従い OCI Enterprise AI structured output で named "
-            "field/entity を抽出する（PoweRAG/LangExtract 由来。既定 ON。項目の定義が 0 件の"
-            "ときは何もしない。#537）。"
+            "field/entity を抽出する（PoweRAG/LangExtract 由来。既定 OFF。#2839。"
+            "項目の定義が 0 件のときは何もしない。#537）。"
         ),
     )
     rag_field_extraction_input_token_percent: int = Field(
