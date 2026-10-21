@@ -164,4 +164,7 @@ jobs:
         run: |
           docker logs oracle > "${RUNNER_TEMP}/oracle.log" 2>&1 || true
           tail -n 50 "${RUNNER_TEMP}/oracle.log" || true
+          # SQL・bind 値・環境識別子は出さず、許可した資源 ID とロックの列だけを記録する。
+          docker exec oracle sh -c 'cat /opt/oracle/diag/rdbms/free/FREE/trace/*.trc' 2>/dev/null |
+            python3 .github/scripts/oracle-deadlock-summary.py || true
           docker rm -f oracle || true

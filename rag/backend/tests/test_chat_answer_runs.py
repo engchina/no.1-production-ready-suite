@@ -662,7 +662,7 @@ def test_close_streaming_sql_only_touches_streaming_rows(monkeypatch: MonkeyPatc
         return 1
 
     class _Client(oracle_module.OracleClient):
-        async def _run_transaction(self, operation):  # type: ignore[no-untyped-def]
+        async def _run_transaction(self, operation, *, retry_deadlocks=False):  # type: ignore[no-untyped-def]
             return operation(object())
 
     monkeypatch.setattr(oracle_module, "_execute_count", fake_execute_count)
@@ -706,7 +706,7 @@ def test_close_streaming_sql_locks_row_to_finalize_progress(monkeypatch: MonkeyP
         return 1
 
     class _Client(oracle_module.OracleClient):
-        async def _run_transaction(self, operation):  # type: ignore[no-untyped-def]
+        async def _run_transaction(self, operation, *, retry_deadlocks=False):  # type: ignore[no-untyped-def]
             return operation(object())
 
     monkeypatch.setattr(oracle_module, "_fetch_one", fake_fetch_one)

@@ -238,7 +238,7 @@ def _client(monkeypatch: pytest.MonkeyPatch, table: _Table) -> OracleClient:
     monkeypatch.setattr(oracle_module, "_select_document_detail_with_refs", detail)
 
     class _Client(OracleClient):
-        async def _run_transaction(self, operation):  # type: ignore[no-untyped-def]
+        async def _run_transaction(self, operation, *, retry_deadlocks=False):  # type: ignore[no-untyped-def]
             return operation(object())
 
     return _Client.__new__(_Client)

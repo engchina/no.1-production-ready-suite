@@ -413,8 +413,8 @@ export function FileListClient() {
     qc.invalidateQueries({ queryKey: ["documents", "stats"] });
 
     if (unconfirmed > 0) {
-      toast.warning(t("fileList.bulkDelete.toast.unconfirmed", {deleted, count: unconfirmed}), {
-        description: firstUnconfirmed ?? undefined,
+      toast.warning(t("fileList.bulkDelete.toast.unconfirmed", {deleted, failed, count: unconfirmed}), {
+        description: [firstUnconfirmed, firstError, firstWarning].filter(Boolean).join(" "),
       });
     } else if (failed === 0 && warned === 0) {
       toast.success(t("fileList.bulkDelete.toast.deleted", { count: deleted }));

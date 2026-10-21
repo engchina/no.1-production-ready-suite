@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 from uuid import uuid4
 
 import pytest
 from pr_backend_core.oracle_errors import oracle_error_codes
 
 from app.clients.document_cleanup_store import DocumentCleanupStore, DocumentCleanupTargets
-from app.clients.oracle import OracleClient, OracleConnectionProtocol, _execute
+from app.clients.oracle import OracleClient, OracleConnectionProtocol, _execute, _fetch_all
 
 
 @pytest.mark.usefixtures("oracle_db")
@@ -87,6 +88,28 @@ async def test_parallel_document_delete_creates_one_cleanup_record_per_document(
     targets = DocumentCleanupTargets(prefixes=(f"artifacts/{token}/",))
     tasks = []
     try:
+        # 公開 DDL に定義された表だけを、固定の番号と数値資源 ID で照合する。
+        known_tables = (
+            "RAG_DOCUMENTS",
+            "RAG_ARTIFACT_LAYERS",
+            "RAG_DOCUMENT_RECIPES",
+            "RAG_CHUNK_SETS",
+            "RAG_CHUNKS",
+            "RAG_INGESTION_JOBS",
+            "RAG_INGESTION_SEGMENTS",
+            "RAG_DOCUMENT_KNOWLEDGE_BASES",
+            "RAG_DOCUMENT_EXTRACTIONS",
+            "RAG_DOCUMENT_SECTIONS",
+        )
+        for slot, table in enumerate(known_tables):
+            ids = await client._run_transaction(
+                lambda connection: _fetch_all(
+                    connection,
+                    "SELECT object_id FROM user_objects WHERE object_name = :name",
+                    {"name": table},
+                )
+            )
+            print({"table_slot": slot, "resource_ids": [int(str(row["object_id"])) for row in ids]})
         tasks.extend(
             await asyncio.gather(
                 *(
@@ -113,3 +136,37 @@ async def test_parallel_document_delete_creates_one_cleanup_record_per_document(
                 await store.save_progress(
                     task.cleanup_id, DocumentCleanupTargets(), error_type=None
                 )
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_failed_delete_rolls_back_document_and_cleanup_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = OracleClient()
+    store = DocumentCleanupStore(client)
+    token = uuid4().hex
+    document = await client.create_document(
+        file_name=f"rollback-{token}.txt",
+        object_storage_path=f"local://uploaded/{token}/source.txt",
+        content_type="text/plain",
+    )
+    run_transaction = client._run_transaction
+
+    async def fail_after_write(
+        operation: Callable[[OracleConnectionProtocol], object], *, retry_deadlocks: bool = False
+    ) -> object:
+        def failing(connection: OracleConnectionProtocol) -> None:
+            operation(connection)
+            raise RuntimeError("合成の transaction 失敗")
+
+        return await run_transaction(failing, retry_deadlocks=retry_deadlocks)
+
+    monkeypatch.setattr(client, "_run_transaction", fail_after_write)
+    with pytest.raises(RuntimeError, match="合成の transaction 失敗"):
+        await store.delete_document_with_cleanup(
+            document.id,
+            document.file_name,
+            DocumentCleanupTargets(prefixes=(f"artifacts/{token}/",)),
+        )
+    assert await client.get_document(document.id) is not None
+    assert await store.find_for_document(document.id) is None

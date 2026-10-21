@@ -10094,6 +10094,7 @@ class OracleClient:
         (``is_session_dead`` / ``isrecoverable``)になった場合だけ。接続が切れた transaction は
         DB 側で rollback されるため、``operation`` を最初から実行し直しても二重に反映しない。
         commit の途中で切れた場合は反映済みか分からないため、やり直さずに例外を返す。
+        削除が明示的に指定した場合は、ORA-00060 も全体の rollback 成功後に一度だけ再試行する。
         rollback / close の失敗(切断後の ``DPY-1001`` など)はログに残し、元の例外を隠さない。
         """
         for attempt in (1, 2):

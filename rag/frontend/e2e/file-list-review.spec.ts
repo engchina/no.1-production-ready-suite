@@ -681,7 +681,7 @@ test("削除は 30 秒を超える応答を待ち、未確認なら選択を残�
     await expect.poll(() => lookups).toBeGreaterThanOrEqual(attempt);
     await page.clock.runFor(2_000);
   }
-  await expect(page.getByText(/件は結果を確認できないため/).first()).toBeVisible();
+  await expect(page.getByText(/結果未確認 1 件/).first()).toBeVisible();
   await expect(page.getByRole("checkbox", {name: "この行を選択"})).toBeChecked();
   expect(deleteRequests).toBe(1);
   await expectNoPageOverflow(page);
