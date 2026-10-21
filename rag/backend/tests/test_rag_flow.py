@@ -600,8 +600,13 @@ async def test_candidate_mode_failure_does_not_error_document() -> None:
         assert reloaded is not None and reloaded.status == FileStatus.INDEXED
 
 
-def test_prompt_injection_query_is_blocked(caplog: LogCaptureFixture) -> None:
-    """プロンプト注入らしい検索は拒否する。"""
+def test_prompt_injection_query_is_blocked(
+    caplog: LogCaptureFixture, monkeypatch: MonkeyPatch
+) -> None:
+    """OCI を有効にした検索では、検出した攻撃を監査へ記録して拒否する。"""
+    from tests.guardrail_support import enable_oci_stub
+
+    enable_oci_stub(monkeypatch)
     with caplog.at_level(logging.INFO, logger="app.audit"):
         response = client.post(
             "/api/search",
@@ -615,7 +620,7 @@ def test_prompt_injection_query_is_blocked(caplog: LogCaptureFixture) -> None:
     audit_event = cast(Any, audit_record).audit_event
     assert audit_event["trace_id"] == data["trace_id"]
     assert audit_event["outcome"] == "blocked"
-    assert audit_event["guardrail_codes"] == ["prompt_injection"]
+    assert audit_event["guardrail_codes"] == ["oci_prompt_injection"]
     assert audit_event["citation_count"] == 0
 
 

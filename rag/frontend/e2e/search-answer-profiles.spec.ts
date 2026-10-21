@@ -84,7 +84,6 @@ for (const viewport of [
       "手順ごとの検索の時間上限（秒）",
       "実体でつながる根拠",
       "章節で広げる根拠",
-      "安全チェック",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
     // 品質評価は検索・回答プロファイルで上書きしない(評価はグローバル設定だけで決まる。#301)。
@@ -94,12 +93,12 @@ for (const viewport of [
     await expect(settings.getByRole("combobox", { name: "全文検索の分割方式" })).toHaveCount(0);
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
-    // 継承 chip: セレクト8行(回答の 4 行(1 つの文書から採る根拠の上限。#2167) + 手順ごとの検索の上限(#2395)
-    // + 回答モデル + 時間の上限 + 安全チェック) + 三値トグル8行(回答の Rerank・画面目録・根拠の無い要求を探し直す(#1279)・業務ガイドの
+    // 継承 chip: セレクト7行(回答の 4 行(1 つの文書から採る根拠の上限。#2167) + 手順ごとの検索の上限(#2395)
+    // + 回答モデル + 時間の上限) + 三値トグル8行(回答の Rerank・画面目録・根拠の無い要求を探し直す(#1279)・業務ガイドの
     // 手順ごとに探す(#2395)・質問から項目の条件を読み取る(#652)・関係情報で根拠を広げる(#2055)・業務ガイドの
     // 意味の照合と近いガイドの確認(#2398))。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(16);
-    await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(8);
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(15);
+    await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(7);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
     await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
     await expect(settings.getByTestId("answer-prompt-unused-note")).toHaveCount(0);
@@ -1041,7 +1040,7 @@ test("エディタの見出しに状態と参照 KB の件数を出し、アー�
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveAttribute("readonly", "");
   await expect(page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true })).toBeDisabled();
   await expect(
-    page.getByRole("group", { name: "安全チェック" }).getByRole("button", { name: "検索・回答プロファイルで上書き" })
+    page.getByRole("group", { name: "質問の拡張" }).getByRole("button", { name: "検索・回答プロファイルで上書き" })
   ).toBeDisabled();
   await expectNoPageOverflow(page);
 });
@@ -1339,7 +1338,7 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
 
   await page.goto("/search-answer-profiles?id=bv-old");
   await expect(page.getByText("アーカイブ済みの検索・回答プロファイルは編集・保存できません。")).toBeVisible();
-  await expect(page.getByRole("combobox", { name: "安全チェック" })).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "安全チェック" })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "質問の拡張" })).toBeDisabled();
 });
 
