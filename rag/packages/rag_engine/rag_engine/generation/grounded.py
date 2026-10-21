@@ -2783,7 +2783,7 @@ def missing_request_line(entry: dict, requests: Sequence[dict]) -> str:
     text = " ".join(text.split()).strip("。 ")
     if len(text) > MISSING_REQUEST_MAX_CHARS:
         text = text[:MISSING_REQUEST_MAX_CHARS] + "…"
-    return f"『{text}』については、取得した資料で確認できませんでした。"
+    return answer_labels().missing_request_template.replace("{text}", text)
 
 
 def _compact_text(text: str) -> str:

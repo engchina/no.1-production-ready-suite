@@ -1581,7 +1581,7 @@ class GroundedAnswerTest(unittest.TestCase):
         # 本文は要求原文の定型日本語。英文の reason は本文に出さず insufficient_reason に残す (#728)。
         self.assertIn(
             grounded.answer_labels().gaps_section
-            + "\n\n・『過去の記録の表示に影響はあるか』については、取得した資料で確認できませんでした。",
+            + "\n\n・『過去の記録の表示に影響はあるか』については、根拠付きの説明を十分に示せていません。",
             result.answer_text,
         )
         self.assertNotIn(reason, result.answer_text)

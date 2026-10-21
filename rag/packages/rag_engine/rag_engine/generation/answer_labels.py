@@ -41,6 +41,7 @@ class AnswerLabels:
     condition_link: str
     # 小問ごとの見出しの型（{label} に小問の印、{text} に小問の文。#2399）。
     subquestion_heading_template: str
+    missing_request_template: str
     # 回答の末尾の節（#2738）: 根拠と矛盾して外した内容と、印の付いた段落・回答全体の警告の一覧。
     removed_section: str
     removed_section_note: str
@@ -164,6 +165,7 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         condition_suffix=text("condition_suffix"),
         condition_link=text("condition_link"),
         subquestion_heading_template=text("subquestion_heading_template"),
+        missing_request_template=text("missing_request_template"),
         removed_section=text("removed_section"),
         removed_section_note=text("removed_section_note"),
         marked_section=text("marked_section"),

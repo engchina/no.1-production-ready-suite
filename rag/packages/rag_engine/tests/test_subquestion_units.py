@@ -272,7 +272,8 @@ def test_answer_is_split_by_subquestion_heading_and_only_unsupported_is_gap() ->
     assert body.index(first) < body.index("受注入力画面") < body.index(second) < body.index("請求一覧") < body.index(third)
     # 根拠の無い小問だけを「確認できない」にする。
     missing = grounded.missing_request_line({"request_id": "Q4"}, units)
-    assert body.count("取得した資料で確認できませんでした") == 1
+    assert body.count("根拠付きの説明を十分に示せていません") == 1
+    assert "取得した資料で確認できませんでした" not in body
     assert body.index(third) < body.index(missing)
     assert len(refs) == 2
     # 見出しは回答の主張ではない（忠実さの照合・評価から外す）。
@@ -285,6 +286,17 @@ def test_answer_without_subquestion_items_keeps_the_existing_sections() -> None:
     checked = [_entry("", "受注は受注入力画面で登録します。", 3)]
 
     assert grounded.render_with_citations("要約。", checked, subquestions=subquestions) == grounded.render_with_citations("要約。", checked)
+
+
+def test_missing_request_uses_bound_language_and_keeps_missing_status() -> None:
+    question = "値と条件を答えてください。"
+    units = request_units(question)
+    audit = grounded.deterministic_audit(question, [])
+    assert audit.request_reviews[0].status == "missing"
+    with bind_pack(resolve(builtin_pack(), {"answer_labels": {"missing_request_template": "説明不足: {text}（{補足}）"}})):
+        line = grounded.missing_request_line({"request_id": units[0]["id"]}, units)
+    assert line == "説明不足: 値と条件を答えてください（{補足}）"
+    assert audit.request_reviews[0].status == "missing"
 
 
 def test_audit_missing_subquestion_line_moves_under_its_heading() -> None:
