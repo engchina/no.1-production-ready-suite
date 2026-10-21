@@ -509,6 +509,10 @@ def build_engine_settings(
         ),
         # 追加の検索の枠と、業務ガイドの手順ごとの検索(#2395)。
         "RAG_ENGINE_EXTRA_RETRIEVAL_MAX_QUERIES": str(settings.rag_extra_retrieval_max_queries),
+        # 章節の抜き出しの LLM(#2800)。
+        "RAG_ENGINE_SECTION_EXTRACTION_ENABLED": "1"
+        if settings.rag_section_extraction_enabled
+        else "0",
         "RAG_ENGINE_GUIDE_STEP_RETRIEVAL": "1"
         if settings.rag_guide_step_retrieval_enabled
         else "0",

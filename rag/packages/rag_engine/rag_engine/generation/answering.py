@@ -4606,6 +4606,8 @@ def _expand_context_by_sections(
         state["reader"] = sections.SectionReader(read_chunks=ports[1], known_ids=set())
         state["outlines"] = {}
     extractor = state["extractor"]
+    # 抜き出しを使わない設定（#2800）では、入らない章節を rerank の順で上限まで入れ、残りは未反映として示す。
+    large_sections = extractor if getattr(settings, "section_extraction_enabled", True) else sections.no_large_section_handler
 
     def outline(**kwargs: Any) -> Any:
         uid = kwargs["chunk_uid"]
@@ -4623,7 +4625,7 @@ def _expand_context_by_sections(
             section_outline=outline,
             section_chunks=ports[1],
             rerank=rerank,
-            large_sections=extractor,
+            large_sections=large_sections,
             started_at=started_at,
             deadline_remaining=remaining_seconds,
             clock=monotonic,
