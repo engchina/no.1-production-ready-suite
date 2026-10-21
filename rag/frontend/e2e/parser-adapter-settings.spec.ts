@@ -263,6 +263,10 @@ for (const scheme of ["light", "dark"] as const) {
 
     const vision = page.getByRole("switch", { name: "図・画像を AI で読み取る" });
     const fieldExtraction = page.getByRole("switch", { name: "メタデータ/項目抽出" });
+    await expect(card).toContainText("解析した本文全体から");
+    await expect(card).toContainText("長い本文は分けて送り、部分ごとにモデルを呼び出します。");
+    await expect(card).toContainText("本文が長いほど入力トークンの総量と処理時間が増えます。");
+    await expect(card).not.toContainText("有効にすると、文書ごとにモデルの呼び出しが 1 回増えます。");
     const navigation = page.getByRole("switch", { name: "ナビゲーション要約(章節木)" });
     await expect(vision).toHaveAttribute("aria-checked", "false");
     await vision.click();
