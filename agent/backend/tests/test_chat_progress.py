@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 import anyio
@@ -42,7 +43,7 @@ from app.features.agent.runtime import (
     RunState,
     runtime_repository,
 )
-from app.features.agent.tools import ToolCall
+from app.features.agent.tools import ToolCall, ToolInvocationContext, tool_registry
 from app.security.service import set_security_service
 
 # 組み込み Runtime のテスト用のツール・Skill・業務 Agent（test_builtin_runtime の fixture）。
@@ -204,6 +205,18 @@ def test_same_tool_twice_and_tool_after_tool(monkeypatch: MonkeyPatch) -> None:
 
 
 def test_parallel_tools_in_one_turn(monkeypatch: MonkeyPatch) -> None:
+    # 即時に終わる fake は次のツールの開始より先に完了し得るため、両方の開始を待つ。
+    started = Barrier(2)
+
+    def parallel_lookup(
+        _arguments: dict[str, Any], _context: ToolInvocationContext
+    ) -> dict[str, Any]:
+        started.wait(timeout=5)
+        return {"name": LOOKUP, "rows": 3}
+
+    definition = tool_registry.get(LOOKUP)
+    assert definition is not None
+    tool_registry.register(definition, parallel_lookup)
     _script(
         monkeypatch,
         [
