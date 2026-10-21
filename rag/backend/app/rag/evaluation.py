@@ -795,8 +795,6 @@ def evaluation_settings(
             "section_expansion_input_token_percent": (  # nosec B105 - 設定の名前
                 "rag_section_expansion_input_token_percent"
             ),
-            "section_expansion_time_limit_seconds": "rag_section_expansion_time_limit_seconds",
-            "section_extraction_max_calls": "rag_section_extraction_max_calls",
             "max_anchors_per_document": "rag_max_anchors_per_document",
             "oracle_vector_target_accuracy": "oracle_vector_target_accuracy",
             "strategy_reasoning_effort": "rag_strategy_reasoning_effort",

@@ -159,7 +159,16 @@ def test_new_search_results_share_the_existing_input_and_time_budget(exhausted):
     settings = _settings(answer_max_input_tokens=2000)
     first = _expand(_seed_context("c31a"), settings, None, stub, reader=reader, started_at=0.0, clock=lambda: 0.0)
     context = sections._merge(first.context, _seed_context("c4a").evidence_tree)
-    second = _expand(context, settings, None, stub, reader=reader, started_at=0.0, clock=lambda: 500.0 if exhausted == "time" else 0.0)
+    second = _expand(
+        context,
+        settings,
+        None,
+        stub,
+        reader=reader,
+        started_at=0.0,
+        clock=lambda: 500.0 if exhausted == "time" else 0.0,
+        deadline_remaining=lambda: 60.0 if exhausted == "time" else None,
+    )
     assert second.unread
     assert not second.trace["minimum_scope_complete"]
     assert second.used_tokens <= second.trace["input_token_limit"]

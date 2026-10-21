@@ -530,14 +530,6 @@ def build_engine_settings(
         "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": str(
             settings.rag_section_expansion_input_token_percent
         ),
-        "RAG_ENGINE_SECTION_EXPANSION_TIME_LIMIT_SECONDS": str(
-            min(
-                settings.rag_section_expansion_time_limit_seconds,
-                settings.rag_answer_timeout_seconds,
-            )
-        ),
-        # 入らない章節から原文を抜き出す LLM の呼び出しの上限(#1437。検索・回答プロファイルで選ぶ)。
-        "RAG_ENGINE_SECTION_EXTRACTION_MAX_CALLS": str(settings.rag_section_extraction_max_calls),
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167。検索・回答プロファイルで選ぶ)。
         "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT": str(settings.rag_max_anchors_per_document),
         # 用途ごとの推論の量(#1499。model は空 = モデルの登録値のまま)・CRAG の評価の省略・

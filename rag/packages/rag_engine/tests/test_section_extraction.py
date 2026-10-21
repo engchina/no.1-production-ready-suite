@@ -189,12 +189,10 @@ def _settings(**overrides: object) -> SimpleNamespace:
     # 入力の上限 2,000 token: 1 回分は 60% の 1,200 token（親 2 件）、重なりは 5% の 60 token。
     values = {
         "answer_max_input_tokens": 2000,
-        "section_extraction_max_calls": 8,
         "section_extraction_concurrency": 4,
         "section_expansion_enabled": True,
         "section_expansion_max_levels": 4,
         "section_expansion_input_token_percent": 50,
-        "section_expansion_time_limit_seconds": 600.0,
         "evidence_budget_chars": 48000,
     }
     values.update(overrides)
@@ -222,7 +220,7 @@ def _quotes(outcome: sections.LargeSectionOutcome) -> list[tuple[str, str]]:
 
 def test_split_keeps_heading_and_sentence_boundaries_with_small_overlap():
     limits = extraction.ExtractionLimits.from_settings(_settings())
-    assert (limits.part_tokens, limits.overlap_tokens, limits.max_calls) == (1200, 60, 8)
+    assert (limits.part_tokens, limits.overlap_tokens) == (1200, 60)
     text = _text(1)
     blocks = extraction.split_blocks(text, 0, limits.part_tokens)
     # 見出しは段落になり、段落の中は文の途中で切らない（ブロックの終わりは句点か段落の終わり）。
@@ -323,37 +321,24 @@ def test_document_text_cannot_close_the_untrusted_block(monkeypatch):
     assert any("END-UNTRUSTED-RETRIEVED_CONTEXT" in prompt for prompt in stub.prompts)
 
 
-def test_call_limit_processes_nearest_parts_and_reports_unread_ranges():
+def test_extraction_does_not_stop_after_eight_calls():
     stub = ExtractionStub()
-    # 1 回分を親 1 件にする（入力の上限 1,100 → 1 回分 660 token）。12 分に対して上限 3 回。
-    settings = _settings(answer_max_input_tokens=1100, section_extraction_max_calls=3)
-    extractor = extraction.SectionExtractor(settings, stub)
-
+    extractor = extraction.SectionExtractor(_settings(answer_max_input_tokens=1100), stub)
     outcome = extractor(_request(seeds=(6,)))
-
     assert outcome is not None
-    assert stub.calls == extractor.calls == 3
-    # 当たった chunk（6 件目）に近い分（5〜7 件目）だけを読む。
-    assert [uid for uid, _quote in _quotes(outcome)] == [f"{DOC}:p5", f"{DOC}:p6", f"{DOC}:p7"]
-    assert [item.reason for item in outcome.unread] == [sections.STOP_EXTRACTION_CALLS] * 2
-    lines = [item.gap_line() for item in outcome.unread]
-    assert lines == [
-        f"「{FILE}」の「第5章 設備ごとの点検基準」（p.10〜21）のうちp.10〜13の範囲は、読み込み量の上限に達したため未反映です。",
-        f"「{FILE}」の「第5章 設備ごとの点検基準」（p.10〜21）のうちp.17〜21の範囲は、読み込み量の上限に達したため未反映です。",
-    ]
+    assert stub.calls == extractor.calls == PARENTS > 8
+    assert {uid for uid, _ in _quotes(outcome)} == {f"{DOC}:p{index}" for index in range(1, PARENTS + 1)}
+    assert not outcome.unread
 
 
-def test_call_limit_is_shared_across_sections_in_one_answer():
+def test_extraction_does_not_share_a_call_cap_between_sections():
     stub = ExtractionStub()
-    settings = _settings(answer_max_input_tokens=1100, section_extraction_max_calls=8)
-    extractor = extraction.SectionExtractor(settings, stub)
-
+    extractor = extraction.SectionExtractor(_settings(answer_max_input_tokens=1100), stub)
     first = extractor(_request(tree=_tree(range(1, 7))))
     second = extractor(_request(tree=_tree(range(7, 13))))
-
     assert first is not None and second is not None
-    assert stub.calls == extractor.calls == 8
-    assert first.unread == [] and [item.reason for item in second.unread] == [sections.STOP_EXTRACTION_CALLS]
+    assert stub.calls == extractor.calls == 12
+    assert not first.unread and not second.unread
 
 
 def test_reduces_once_more_when_quotes_do_not_fit_and_stays_within_token_budget():
@@ -369,7 +354,7 @@ def test_reduces_once_more_when_quotes_do_not_fit_and_stays_within_token_budget(
     assert outcome is not None and outcome.unread == []
     assert outcome.trace["stage_two_parts"] >= 1
     stage_two = [prompt for prompt in stub.prompts if "1 段目で抜き出した原文" in prompt]
-    assert len(stage_two) == outcome.trace["stage_two_parts"] and extractor.calls == 4 + len(stage_two) <= 8
+    assert len(stage_two) == outcome.trace["stage_two_parts"] and extractor.calls == 4 + len(stage_two)
     used = sum(sections.estimate_tokens(item.record.text) for item in outcome.tree)
     assert used <= 1500 and outcome.trace["used_tokens"] <= 1500
     # 2 段目も原本と照合した原文だけで、原文の順（続く 2 文は 1 つの原文にまとめる）。
@@ -378,7 +363,7 @@ def test_reduces_once_more_when_quotes_do_not_fit_and_stays_within_token_budget(
 
 def test_truncates_by_distance_when_still_over_budget_and_reports_dropped_quotes():
     stub = ExtractionStub(lambda text: re.findall(r"[^。\n]+。", text))
-    extractor = extraction.SectionExtractor(_settings(answer_max_input_tokens=1100, section_extraction_max_calls=12), stub)
+    extractor = extraction.SectionExtractor(_settings(answer_max_input_tokens=1100), stub)
 
     outcome = extractor(_request(remaining=800, seeds=(1,)))
 
@@ -420,11 +405,11 @@ def test_time_runs_out_during_extraction():
 
 def test_parallel_calls_respect_concurrency_limit():
     stub = ExtractionStub(delay=0.02)
-    settings = _settings(answer_max_input_tokens=1100, section_extraction_concurrency=2, section_extraction_max_calls=6)
+    settings = _settings(answer_max_input_tokens=1100, section_extraction_concurrency=2)
 
     outcome = extraction.SectionExtractor(settings, stub)(_request())
 
-    assert outcome is not None and stub.calls == 6
+    assert outcome is not None and stub.calls == PARENTS
     assert 1 <= stub.max_active <= 2
 
 
@@ -571,9 +556,9 @@ def test_expansion_hands_large_section_to_extraction_and_answer_uses_only_extrac
     assert all(span["text"].strip() in _text(int(span["source_id"].rsplit("p", 1)[1])) for span in extracted)
 
 
-def test_extraction_limits_make_expansion_report_unread_ranges():
+def test_extracted_sections_remain_partial_without_a_call_cap():
     stub = ExtractionStub()
-    settings = _settings(answer_max_input_tokens=1100, section_extraction_max_calls=2)
+    settings = _settings(answer_max_input_tokens=1100)
     store = _Sections()
 
     result = sections.expand_sections(
@@ -587,11 +572,11 @@ def test_extraction_limits_make_expansion_report_unread_ranges():
         large_sections=extraction.SectionExtractor(settings, stub),
     )
 
-    assert stub.calls == 2
+    assert stub.calls >= PARENTS
     assert result.stop_reason == sections.STOP_TOKEN_BUDGET
-    assert [item.reason for item in result.unread] == [sections.STOP_EXTRACTION_CALLS]
-    assert "読み込み量の上限" in result.gap_lines[0]
-    assert result.unread[0].reason == sections.STOP_EXTRACTION_CALLS
+    assert [item.reason for item in result.unread] == [sections.STOP_PARTIAL]
+    assert result.gap_lines
+    assert result.unread[0].reason == sections.STOP_PARTIAL
 
 
 # ---------------------------------------------------------------- 最初の根拠と章節の重なり（#1504）
@@ -705,24 +690,20 @@ def test_first_evidence_over_the_budget_is_replaced_by_extracted_text_within_lim
     assert all("項目2は" not in span["text"] for span in spans if span["source_id"] == f"{DOC}:p2")
 
 
-def test_first_evidence_not_reached_by_call_limit_stays_whole_and_is_not_reported():
-    """呼び出しの上限で抜き出せなかった最初の根拠は、文脈のまま残し、読めなかった範囲に出さない。"""
-    stub = ExtractionStub()
-    settings = _settings(answer_max_input_tokens=1100, section_extraction_max_calls=1)  # 1 回分 = 親 1 件
-    context = _context_in_section((1,), others=(12,))
+def test_first_evidence_not_extracted_on_failure_stays_whole():
+    def choose(text):
+        if _sentence(12, 1) in text:
+            raise RuntimeError("synthetic extraction failure")
+        return re.findall(r"[^。\n]+。", text)[:1]
 
-    result, extractor = _expand_section(context, settings, stub)
-
-    assert extractor.calls == 1
+    stub = ExtractionStub(choose)
+    settings = _settings(answer_max_input_tokens=1100)
+    result, extractor = _expand_section(_context_in_section((1,), others=(12,)), settings, stub)
+    assert extractor.calls >= PARENTS
     by_id = {record.chunk_uid: record for record in result.context.records}
     assert by_id[f"{DOC}:p12"].text == _text(12)
-    # 残した p12 の分を引いた予算に収めるため、抜き出した p1 は原文だけにする（総量は上限の中）。
-    assert by_id[f"{DOC}:p1"].text == _sentence(1, 1)
     assert sections.context_tokens(result.context) <= sections.SectionExpansionLimits.from_settings(settings).input_tokens
-    lines = result.gap_lines
-    assert lines and all(item.reason == sections.STOP_EXTRACTION_CALLS for item in result.unread)
-    # p.21（文脈のまま残した p12）は読めなかった範囲に含めない。
-    assert all("21" not in line.split("（p.10〜21）")[1] for line in lines)
+    assert all(item.reason != sections.STOP_EXTRACTION_CALLS for item in result.unread)
 
 
 def test_skipped_extraction_is_not_reported_as_extracted():
@@ -761,20 +742,17 @@ def test_engine_settings_read_extraction_environment():
     settings = get_settings(
         environ={
             "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS": "200000",
-            "RAG_ENGINE_SECTION_EXTRACTION_MAX_CALLS": "4",
             "RAG_ENGINE_SECTION_EXTRACTION_CONCURRENCY": "2",
         },
         dotenv_path=None,
     )
-    assert (settings.answer_max_input_tokens, settings.section_extraction_max_calls, settings.section_extraction_concurrency) == (
+    assert (settings.answer_max_input_tokens, settings.section_extraction_concurrency) == (
         200_000,
-        4,
         2,
     )
     defaults = get_settings(environ={}, dotenv_path=None)
-    assert (defaults.answer_max_input_tokens, defaults.section_extraction_max_calls, defaults.section_extraction_concurrency) == (
+    assert (defaults.answer_max_input_tokens, defaults.section_extraction_concurrency) == (
         128_000,
-        8,
         4,
     )
     limits = extraction.ExtractionLimits.from_settings(defaults)
