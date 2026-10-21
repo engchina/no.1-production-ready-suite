@@ -712,10 +712,12 @@ class OracleClient:
                 FROM rag_graph_entities e
                 WHERE e.knowledge_base_id = :kb
                   AND {membership_sql}
+                  AND {active_sql}
                 ORDER BY NVL(e.confidence, 1) DESC, e.canonical_name ASC, e.entity_id ASC
             ) WHERE ROWNUM <= :limit
             """,
                 membership_sql=_graph_current_membership_predicate("e"),
+                active_sql=_graph_active_chunk_set_predicate("e"),
             ),
             {"kb": knowledge_base_id, "limit": limit},
         )
@@ -744,10 +746,12 @@ class OracleClient:
                 FROM rag_graph_relationships r
                 WHERE r.knowledge_base_id = :kb
                   AND {membership_sql}
+                  AND {active_sql}
                 ORDER BY NVL(r.confidence, 1) DESC, r.relationship_id ASC
             ) WHERE ROWNUM <= :limit
             """,
                 membership_sql=_graph_current_membership_predicate("r"),
+                active_sql=_graph_active_chunk_set_predicate("r"),
             ),
             {"kb": knowledge_base_id, "limit": limit},
         )
@@ -13196,6 +13200,16 @@ def _parse_filter_datetime(value: str, *, end_of_day: bool) -> datetime:
     if end_of_day and len(raw) == 10:
         parsed = parsed + timedelta(days=1) - timedelta(microseconds=1)
     return parsed
+
+
+def _graph_active_chunk_set_predicate(alias: str) -> str:
+    """成功して有効化された chunk_set だけを表示し、未タグの行は所属で判定する。"""
+    return (
+        f"({alias}.chunk_set_id IS NULL OR EXISTS ("
+        "SELECT 1 FROM rag_chunk_sets graph_cs "
+        f"WHERE graph_cs.chunk_set_id = {alias}.chunk_set_id "
+        "AND graph_cs.is_active = 1))"
+    )
 
 
 def _graph_current_membership_predicate(alias: str) -> str:
