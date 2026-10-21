@@ -297,9 +297,7 @@ PROFILE_ONLY_SETTING_FIELDS = frozenset(
         "rag_section_expansion_enabled",
         "rag_section_expansion_max_levels",
         "rag_section_expansion_input_token_percent",
-        "rag_section_expansion_time_limit_seconds",
         # 抽出してから統合（#1437）の抽出の呼び出しの上限。既定 8。
-        "rag_section_extraction_max_calls",
         # rerank の後、起点に採る同じ文書の chunk の上限（#2167）。既定 5。
         "rag_max_anchors_per_document",
     }
@@ -1062,7 +1060,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             " graph_expansion_max_chunks で上書きできる。"
         ),
     )
-    # 次の 4 つも、検索・回答プロファイル（と品質評価の rag_overrides）の値を回答へ渡すための
+    # 次の 3 つも、検索・回答プロファイル（と品質評価の rag_overrides）の値を回答へ渡すための
     # 項目で、環境変数 / .env からは読まない（PROFILE_ONLY_SETTING_FIELDS。#1436）。
     rag_section_expansion_enabled: bool = Field(
         default=True,
@@ -1100,17 +1098,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "増やさない)。"
         ),
     )
-    rag_section_extraction_max_calls: int = Field(
-        default=8,
-        ge=1,
-        le=16,
-        description=(
-            "章節の拡張で根拠の入力の上限に入らない章節から、質問に関係する原文を抜き出す LLM の"
-            "呼び出しの、1 回の回答の上限（#1437。既定 8）。上限で読めなかった範囲は「確かめられて"
-            "いない点」に示し、条件つきの回答にする。検索・回答プロファイルの "
-            "section_extraction_max_calls で選ぶ。"
-        ),
-    )
     rag_max_anchors_per_document: int = Field(
         default=5,
         ge=0,
@@ -1119,16 +1106,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "rerank の後、回答の根拠の起点(上位 top_k 件)に採る同じ文書の chunk の上限(#2167。"
             "既定 5、0 は上限なし)。超えた chunk は落とさず後ろへ回し、別の文書の関連する chunk を"
             "起点に入れる。検索・回答プロファイルの max_anchors_per_document で選ぶ。"
-        ),
-    )
-    rag_section_expansion_time_limit_seconds: float = Field(
-        default=600.0,
-        ge=60.0,
-        le=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
-        description=(
-            "章節の拡張を終える、回答の開始からの秒数（#1436。既定 600）。回答の通しの上限"
-            "（rag_answer_timeout_seconds）の早いほうから、生成の分（270 秒。"
-            "生成と監査の 1 組の見積もりと回答の確定の分。#1516）を残して止める。"
         ),
     )
     rag_navigation_summary_enabled: bool = Field(

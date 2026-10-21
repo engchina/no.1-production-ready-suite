@@ -405,7 +405,7 @@ test("実体の索引のある参照先・数えられないときは案内を�
   await expectNoPageOverflow(page);
 });
 
-test("章節で広げる根拠は既定 on で、選んだ上限だけを保存する（抜き出す呼び出しの上限を含む）", { tag: "@responsive" }, async ({
+test("章節で広げる根拠は標準 RAG と CRAG で使え、段と入力の上限だけを保存する", { tag: "@responsive" }, async ({
   page,
 }) => {
   const bodies: Record<string, unknown>[] = [];
@@ -413,6 +413,11 @@ test("章節で広げる根拠は既定 on で、選んだ上限だけを保存�
     bodies.push(body);
   });
   await page.goto("/search-answer-profiles?id=new");
+
+  await page.getByRole("group", { name: "回答の生成方式", exact: true })
+    .getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
+  const flow = page.getByRole("combobox", { name: "回答の生成方式", exact: true });
+  await expect(flow).toHaveText(/標準 RAG/);
 
   const section = page.getByTestId("search-answer-profile-section-expansion");
   const toggle = section.getByRole("switch", {
@@ -431,31 +436,25 @@ test("章節で広げる根拠は既定 on で、選んだ上限だけを保存�
   await expect(section).toContainText("一致しないものは使いません");
   const levels = section.getByRole("combobox", { name: "広げる段の上限" });
   const tokens = section.getByRole("combobox", { name: "根拠の入力の上限" });
-  const time = section.getByRole("combobox", { name: "広げるのを終える時間" });
-  const calls = section.getByRole("combobox", {
-    name: "原文を抜き出す呼び出しの上限",
-  });
-  await expect(levels).toHaveText(/4 段（既定）/);
-  await expect(tokens).toHaveText(/50%（既定）/);
-  await expect(time).toHaveText(/600 秒（既定）/);
-  await expect(calls).toHaveText(/8 回（既定）/);
-  // 1 つの行の中の選択欄は同じ高さ（既定の size）。
-  const heights = await Promise.all(
-    [levels, tokens, time, calls].map(
-      async (field) => (await field.boundingBox())?.height,
-    ),
-  );
-  expect(new Set(heights).size).toBe(1);
+  await expect(section.getByRole("combobox")).toHaveCount(2);
+  await expect(section.getByRole("combobox", { name: "広げるのを終える時間", exact: true })).toHaveCount(0);
+  await expect(section.getByRole("combobox", { name: "原文を抜き出す呼び出しの上限", exact: true })).toHaveCount(0);
+  await expect(section).toContainText("標準 RAG と CRAG の両方で効きます");
+  await expect(toggle).toBeEnabled();
+  await flow.click();
+  await page.getByRole("option", { name: /^CRAG/ }).click();
+  await expect(toggle).toBeEnabled();
+  await expect(section.getByRole("combobox")).toHaveCount(2);
+  await flow.click();
+  await page.getByRole("option", { name: /^標準 RAG/ }).click();
+
   await levels.click();
   await page.getByRole("option", { name: "2 段", exact: true }).click();
   await expect(levels).toHaveText(/2 段/);
-  await calls.click();
-  await page.getByRole("option", { name: "4 回", exact: true }).click();
-  await expect(calls).toHaveText(/4 回/);
   await expectNoPageOverflow(page);
   // 選択欄は行の枠の中に収まる（375px で横にはみ出さない）。
   const sectionBox = await section.boundingBox();
-  for (const field of [levels, tokens, time, calls]) {
+  for (const field of [levels, tokens]) {
     const box = await field.boundingBox();
     expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(
       (sectionBox?.x ?? 0) + (sectionBox?.width ?? 0),
@@ -494,12 +493,13 @@ test("章節で広げる根拠は既定 on で、選んだ上限だけを保存�
   await expect.poll(() => bodies.length).toBe(1);
   const query =
     (bodies[0]?.config as { query?: Record<string, unknown> })?.query ?? {};
-  // 既定と同じ on・上限は保存しない（既定に追従させる）。選んだ段・抜き出す呼び出しの上限だけを保存する。
+  // 既定と同じ on・上限は保存しない（既定に追従させる）。選んだ段の上限だけを保存する。
+  expect(query.answer_flow).toBe("standard_rag");
   expect(query.section_expansion_enabled ?? null).toBeNull();
   expect(query.section_expansion_max_levels).toBe(2);
   expect(query.section_expansion_input_token_percent ?? null).toBeNull();
-  expect(query.section_expansion_time_limit_seconds ?? null).toBeNull();
-  expect(query.section_extraction_max_calls).toBe(4);
+  expect(query).not.toHaveProperty("section_expansion_time_limit_seconds");
+  expect(query).not.toHaveProperty("section_extraction_max_calls");
 });
 
 test("章節で広げる根拠を off にすると上限の欄を閉じ、false だけを保存する", async ({

@@ -292,7 +292,6 @@ class SectionExpansionLimits:
 
     max_levels: int
     input_tokens: int
-    time_limit_seconds: float
     # 後に別の起点から広げる段があるとき、先の段で使わずに残す token（``input_tokens`` に対する割合から。#2816）。
     followup_reserve_tokens: int = 0
 
@@ -304,7 +303,6 @@ class SectionExpansionLimits:
         return cls(
             max_levels=max(0, int(getattr(settings, "section_expansion_max_levels", 4))),
             input_tokens=input_tokens,
-            time_limit_seconds=max(0.0, float(getattr(settings, "section_expansion_time_limit_seconds", 600.0))),
             followup_reserve_tokens=input_tokens * reserve // 100,
         )
 
@@ -700,7 +698,6 @@ def expand_sections(
         "enabled": True,
         "max_levels": limits.max_levels,
         "input_token_limit": limits.input_tokens,
-        "time_limit_seconds": limits.time_limit_seconds,
         "levels": [],
     }
     if reserved:
@@ -722,6 +719,7 @@ def expand_sections(
         result.used_tokens = context_tokens(result.context)
         trace.update(
             stop_reason=reason,
+            elapsed_seconds=max(0.0, clock() - start),
             applied=result.applied,
             levels_read=result.levels,
             used_tokens=result.used_tokens,
@@ -815,11 +813,9 @@ def expand_sections(
     extracting = large_sections is not no_large_section_handler
 
     def seconds_left() -> float:
-        """抽出に使える残りの秒数（回答の開始からの上限と回答の期限の早いほうから、生成と次の判定の分を引く）。"""
-        left = limits.time_limit_seconds - (clock() - start)
+        """抽出に使える残りの秒数（回答全体の期限から、生成と次の判定の分を引く）。"""
         remaining_deadline = deadline_remaining()
-        if remaining_deadline is not None:
-            left = min(left, remaining_deadline)
+        left = math.inf if remaining_deadline is None else remaining_deadline
         return left - GENERATION_RESERVE_SECONDS - level_seconds
 
     def remaining_now(added: Sequence[ContextParentEvidence]) -> int:
@@ -1040,12 +1036,9 @@ def expand_sections(
         targets = [chain for chain in chains if chain.next_section is not None]
         if not targets:
             return finish(STOP_DOCUMENT)
-        # 時間: 回答の開始からの上限と回答の期限の早いほうまでに、この段と生成の分が残るか。
-        elapsed = clock() - start
-        left = limits.time_limit_seconds - elapsed
+        # 時間: 回答全体の期限までに、この段と生成の分が残るか。
         remaining_deadline = deadline_remaining()
-        if remaining_deadline is not None:
-            left = min(left, remaining_deadline)
+        left = math.inf if remaining_deadline is None else remaining_deadline
         if left < level_seconds + GENERATION_RESERVE_SECONDS:
             _mark_unread(result, reader, targets, STOP_TIME_LIMIT)
             return finish(STOP_TIME_LIMIT)

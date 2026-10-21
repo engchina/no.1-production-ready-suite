@@ -23,9 +23,7 @@
    ``LargeSectionOutcome.replacements``）。上限で抜き出せなかった親は元のまま残し、読めなかった範囲にしない。
    予算（``remaining_tokens``）は抜き出した原文の量の上限で、1 回の呼び出しの入力（1 回分）はモデルの入力の上限
    から決める（回答の予算の残りには依らない）。
-6. 上限: 抽出の LLM の呼び出しは 1 回の回答で ``section_extraction_max_calls``（既定 8。検索・回答プロファイル
-   で変えられる）まで、時間は回答の時間の上限（既定 600 秒）から生成の分を残した範囲（``seconds_left``）。
-   上限で読めなかった分は ``UnreadSection`` で返し、呼び出し元は回答を条件つき（conditional）にする。
+6. 回答全体の期限と入力予算の範囲で原文を抽出する。
 
 採らない方式: 分ごとに要約してから要約をまとめる方式（原文と出典が失われ、引用で根拠を示せない）と、分ごとに回答を
 直していく refine（直列で遅く、後ろの分ほど影響が大きい）。
@@ -45,7 +43,6 @@ from typing import Any
 from rag_engine.generation.answer_models import AnswerRecord
 from rag_engine.generation.section_expansion import (
     SECTION_CONTEXT_ROLE,
-    STOP_EXTRACTION_CALLS,
     STOP_EXTRACTION_ERROR,
     STOP_SECTION_CHUNKS,
     STOP_TIME_LIMIT,
@@ -70,8 +67,7 @@ OVERLAP_PERCENT = 5
 MAX_OVERLAP_TOKENS = 2_000
 # 1 つのブロックの見出し（[C1 p.5]）の見積もりの token。
 BLOCK_HEADER_TOKENS = 12
-# 抽出の呼び出しの上限・同時数の既定（検索・回答プロファイル / env で変えられる）。
-DEFAULT_MAX_CALLS = 8
+# 抽出の同時数の既定。
 DEFAULT_CONCURRENCY = 4
 # この秒数より残りが少なければ、次の抽出の呼び出しを始めない。
 MIN_CALL_SECONDS = 15.0
@@ -140,7 +136,7 @@ class _Part:
     index: int
     blocks: list[_Block]
     stage: int = 1
-    status: str = "pending"  # done / calls / time / error
+    status: str = "pending"  # done / time / error
     quotes: list[tuple[int, int, int]] = field(default_factory=list)  # (record_index, start, end)
     dropped: int = 0
     error: str = ""
@@ -175,7 +171,6 @@ class ExtractionLimits:
 
     part_tokens: int
     overlap_tokens: int
-    max_calls: int
     concurrency: int
 
     @classmethod
@@ -184,7 +179,6 @@ class ExtractionLimits:
         return cls(
             part_tokens=part,
             overlap_tokens=min(MAX_OVERLAP_TOKENS, part * OVERLAP_PERCENT // 100),
-            max_calls=max(1, int(getattr(settings, "section_extraction_max_calls", DEFAULT_MAX_CALLS) or 1)),
             concurrency=max(1, int(getattr(settings, "section_extraction_concurrency", DEFAULT_CONCURRENCY) or 1)),
         )
 
@@ -377,10 +371,6 @@ class SectionExtractor:
         self._lock = threading.Lock()
         self.trace: list[dict[str, Any]] = []
 
-    @property
-    def calls_left(self) -> int:
-        return max(0, self.limits.max_calls - self.calls)
-
     def __call__(self, request: LargeSectionRequest) -> LargeSectionOutcome | None:
         records = [item.record for item in request.tree]
         sources = [_source_text(record) for record in records]
@@ -389,7 +379,6 @@ class SectionExtractor:
         whole_cost = {index: estimate_tokens(str(getattr(records[index], "text", "") or "")) for index in in_context}
         trace: dict[str, Any] = {
             "part_tokens": self.limits.part_tokens,
-            "max_calls": self.limits.max_calls,
             "remaining_tokens": request.remaining_tokens,
         }
         if in_context:
@@ -429,7 +418,7 @@ class SectionExtractor:
         order = self._priority(parts, records, request.seed_positions)
         trace.update(parts=len(parts), order=[part.index for part in order])
         self._run(request, order, records, sources)
-        # 文脈にある親で、抜き出しが終わらなかった（呼び出し・時間の上限・失敗）ものは、文脈のまま残す（その分を予算から引く）。
+        # 文脈にある親で、抜き出しが終わらなかった（回答全体の期限・失敗）ものは、文脈のまま残す（その分を予算から引く）。
         done_blocks = {(block.record_index, block.start, block.end) for part in parts if part.status == "done" for block in part.blocks}
         processed = {
             index
@@ -440,7 +429,7 @@ class SectionExtractor:
         budget = max(0, request.remaining_tokens - sum(whole_cost[index] for index in whole))
         quotes = _merge_ranges([quote for part in parts for quote in part.quotes if quote[0] not in whole])
         stage_two: list[_Part] = []
-        if quotes and self._tokens(quotes, sources) > budget and self.calls_left:
+        if quotes and self._tokens(quotes, sources) > budget:
             # なお収まらなければ、抜き出した原文を同じ方法でもう 1 段抜き出す（reduce）。
             reduced_blocks = [
                 _Block(record_index, start, end, estimate_tokens(sources[record_index][start:end]) + BLOCK_HEADER_TOKENS)
@@ -481,7 +470,7 @@ class SectionExtractor:
             parts_done=sum(part.status == "done" for part in parts),
             parts_unread={
                 status: sum(part.status == status for part in parts)
-                for status in ("calls", "time", "error")
+                for status in ("time", "error")
                 if any(part.status == status for part in parts)
             },
             quotes=len(quotes),
@@ -511,13 +500,8 @@ class SectionExtractor:
         return sorted(parts, key=lambda part: (distance(part), part.index))
 
     def _run(self, request: LargeSectionRequest, order: Sequence[_Part], records: Sequence[Any], sources: Sequence[str]) -> None:
-        """近い分から、呼び出しの上限まで並列に抽出する（上限を超える分は calls、時間が無い分は time）。"""
-        selected: list[_Part] = []
-        for part in order:
-            if len(selected) < self.calls_left:
-                selected.append(part)
-            else:
-                part.status = "calls"
+        """近い分から並列に抽出する。回答全体の残り時間が無い分は time とする。"""
+        selected = list(order)
         if not selected:
             return
         workers = min(self.limits.concurrency, len(selected))
@@ -536,9 +520,6 @@ class SectionExtractor:
             part.status = "time"
             return
         with self._lock:
-            if self.calls >= self.limits.max_calls:
-                part.status = "calls"
-                return
             self.calls += 1
         part.called = True
         refs = {
@@ -632,7 +613,7 @@ class SectionExtractor:
 
         ``skip`` の親（文脈のまま残す親。#1504）の範囲は読めなかった範囲にしない。
         """
-        reasons = {"calls": STOP_EXTRACTION_CALLS, "time": STOP_TIME_LIMIT, "error": STOP_EXTRACTION_ERROR}
+        reasons = {"time": STOP_TIME_LIMIT, "error": STOP_EXTRACTION_ERROR}
         unread: list[UnreadSection] = []
         group: list[_Part] = []
         for part in [*parts, None]:
@@ -772,7 +753,6 @@ def _pages_label(record: Any) -> str:
 
 __all__ = [
     "DEFAULT_CONCURRENCY",
-    "DEFAULT_MAX_CALLS",
     "EXTRACTION_PART_PERCENT",
     "EXTRACTION_SYSTEM_PROMPT",
     "QUOTE_SEPARATOR",

@@ -198,7 +198,6 @@ def _settings(**overrides: object) -> SimpleNamespace:
         "section_expansion_enabled": True,
         "section_expansion_max_levels": 4,
         "section_expansion_input_token_percent": 50,
-        "section_expansion_time_limit_seconds": 600.0,
         "evidence_budget_chars": 48000,
         "answer_max_input_tokens": 128_000,
     }
@@ -521,16 +520,12 @@ def test_large_section_handler_receives_sections_that_do_not_fit():
     assert handed[0].remaining_tokens == 1200 - section_3_3
 
 
-def test_time_limit_stops_before_climbing():
-    stub, grader = SectionStub(), Grader(needs=None)
-
-    result = _expand(_seed_context("c31a"), _settings(), grader, stub, started_at=0.0, clock=lambda: 500.0)
-
-    # 回答の開始から 500 秒: 上限 600 秒までに、生成の分（270 秒）と 1 段の分が残らない。
-    assert result.stop_reason == sections.STOP_TIME_LIMIT
-    assert stub.read_calls == [] and grader.calls == []
-    assert [item.section_id for item in result.unread] == ["s3-1"]
-    assert "回答時間の上限" in result.gap_lines[0]
+def test_elapsed_time_does_not_impose_a_separate_expansion_deadline():
+    stub = SectionStub()
+    grader = Grader(needs=None)
+    result = _expand(_seed_context("c31a"), _settings(), grader, stub, started_at=0.0, clock=lambda: 900.0)
+    assert result.applied
+    assert result.stop_reason != sections.STOP_TIME_LIMIT
 
 
 def test_answer_deadline_also_limits_time():
@@ -569,7 +564,9 @@ def test_time_estimate_uses_measured_grade_seconds():
         now[0] += 150.0  # 判定 1 回に 150 秒
         return _attempt(sufficient=True, missing=("requested_result",))
 
-    result = _expand(_seed_context("c31a"), _settings(), grade, stub, started_at=0.0, clock=lambda: now[0])
+    result = _expand(
+        _seed_context("c31a"), _settings(), grade, stub, started_at=0.0, clock=lambda: now[0], deadline_remaining=lambda: 600.0 - now[0]
+    )
 
     # 1 段目の後: 経過 150 秒、残り 450 秒 ≧ 判定 150 + 生成の分 270 秒（1 組の見積もり 240 + 確定 30。#1516）の
     # 420 秒なので 2 段目を読み、2 段目の後は残り 300 秒で止める。上限 600 秒を超えない。
@@ -711,7 +708,6 @@ def test_engine_settings_read_section_expansion_environment():
             "RAG_ENGINE_SECTION_EXPANSION": "0",
             "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS": "2",
             "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": "30",
-            "RAG_ENGINE_SECTION_EXPANSION_TIME_LIMIT_SECONDS": "300",
         },
         dotenv_path=None,
     )
@@ -719,8 +715,7 @@ def test_engine_settings_read_section_expansion_environment():
         settings.section_expansion_enabled,
         settings.section_expansion_max_levels,
         settings.section_expansion_input_token_percent,
-        settings.section_expansion_time_limit_seconds,
-    ) == (False, 2, 30, 300.0)
+    ) == (False, 2, 30)
     defaults = get_settings(environ={}, dotenv_path=None)
     assert defaults.section_expansion_enabled and defaults.section_expansion_max_levels == 4
 

@@ -1109,17 +1109,11 @@ export interface KnowledgeBaseQueryConfig {
   graph_expansion_max_chunks?: number | null;
   /**
    * 当たった根拠の章節から親の章節へ段階的に広げる(#1436。段ごとに AI の呼び出しが 1 回増える)。
-   * null / 未指定は既定(使う)、false は使わない。上限は null が既定(4 段 / 50% / 600 秒)。
+   * null / 未指定は既定(使う)、false は使わない。上限は null が既定(4 段 / 50%)。
    */
   section_expansion_enabled?: boolean | null;
   section_expansion_max_levels?: number | null;
   section_expansion_input_token_percent?: number | null;
-  section_expansion_time_limit_seconds?: number | null;
-  /**
-   * 根拠の入力の上限に入らない章節から、質問に関係する原文を抜き出す AI の呼び出しの上限(1 回の回答。1〜16。
-   * #1437)。null は既定(8)。
-   */
-  section_extraction_max_calls?: number | null;
   /**
    * rerank の後、根拠の起点に採る同じ文書の chunk の上限(0〜20。0 は上限なし。#2167)。超えた chunk は後ろへ回す。
    * null は既定(5)。

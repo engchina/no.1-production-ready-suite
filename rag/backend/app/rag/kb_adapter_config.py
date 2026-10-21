@@ -132,15 +132,12 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     # 関係情報で検索の候補を足す(#2055)。None は全体の既定(OFF / 上限 6)。
     "graph_expansion_enabled": "rag_graph_expansion_enabled",
     "graph_expansion_max_chunks": "rag_graph_expansion_max_chunks",
-    # 章節の拡張(#1436)。None は Settings の既定(拡張は on / 4 段 / 50% / 600 秒)。
+    # 章節の拡張(#1436)。None は Settings の既定(拡張は on / 4 段 / 50%)。
     "section_expansion_enabled": "rag_section_expansion_enabled",
     "section_expansion_max_levels": "rag_section_expansion_max_levels",
     "section_expansion_input_token_percent": (  # nosec B105 - 設定の名前
         "rag_section_expansion_input_token_percent"
     ),
-    "section_expansion_time_limit_seconds": "rag_section_expansion_time_limit_seconds",
-    # 抽出してから統合(#1437)の抽出の呼び出しの上限。None は Settings の既定(8)。
-    "section_extraction_max_calls": "rag_section_extraction_max_calls",
     # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。None は Settings の既定(5)。
     "max_anchors_per_document": "rag_max_anchors_per_document",
     # 業務ガイドの照合(#2398)。None は Settings の既定(どちらも OFF)。
@@ -369,9 +366,6 @@ class KnowledgeBaseQueryConfig(BaseModel):
     section_expansion_enabled: bool | None = None
     section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
     section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)
-    section_expansion_time_limit_seconds: float | None = Field(default=None, ge=60.0, le=600.0)
-    # 入らない章節から質問に関係する原文を抜き出す LLM の呼び出しの上限(#1437)。None は既定(8)。
-    section_extraction_max_calls: int | None = Field(default=None, ge=1, le=16)
     # rerank の後、起点(上位 top_k 件)に採る同じ文書の chunk の上限(#2167)。None は既定(5)、
     # 0 は上限なし。LLM は呼ばない。
     max_anchors_per_document: int | None = Field(default=None, ge=0, le=20)

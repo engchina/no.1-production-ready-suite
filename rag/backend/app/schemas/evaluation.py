@@ -832,9 +832,6 @@ class EvaluationRagOverrides(BaseModel):
     section_expansion_enabled: bool | None = None
     section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
     section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)
-    section_expansion_time_limit_seconds: float | None = Field(default=None, ge=60.0, le=600.0)
-    # 抽出してから統合(#1437)の抽出の呼び出しの上限。
-    section_extraction_max_calls: int | None = Field(default=None, ge=1, le=16)
     # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。0 は上限なし。
     max_anchors_per_document: int | None = Field(default=None, ge=0, le=20)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)

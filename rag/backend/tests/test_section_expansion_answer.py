@@ -25,8 +25,6 @@ SECTION_FIELDS = {
     "rag_section_expansion_enabled",
     "rag_section_expansion_max_levels",
     "rag_section_expansion_input_token_percent",
-    "rag_section_expansion_time_limit_seconds",
-    "rag_section_extraction_max_calls",
 }
 
 
@@ -275,8 +273,6 @@ def test_section_expansion_settings_are_profile_only(
     assert settings.rag_section_expansion_enabled is True
     assert settings.rag_section_expansion_max_levels == 4
     assert settings.rag_section_expansion_input_token_percent == 50
-    assert settings.rag_section_expansion_time_limit_seconds == 600.0
-    assert settings.rag_section_extraction_max_calls == 8
 
 
 def test_search_answer_profile_selects_section_expansion_limits() -> None:
@@ -307,19 +303,25 @@ def test_search_answer_profile_selects_section_expansion_limits() -> None:
         selected.rag_section_expansion_enabled,
         selected.rag_section_expansion_max_levels,
         selected.rag_section_expansion_input_token_percent,
-        selected.rag_section_expansion_time_limit_seconds,
-        selected.rag_section_extraction_max_calls,
-    ) == (False, 2, 30, 300.0, 4)
+    ) == (False, 2, 30)
     assert base.rag_section_expansion_enabled is True
     # 範囲の外の保存値は読まない。
     broken = parse_search_answer_profile_config(
         {"knowledge_base_ids": ["kb-1"], "query": {"section_expansion_max_levels": 9}}
     )
     assert broken.query.section_expansion_max_levels is None
-    too_many = parse_search_answer_profile_config(
-        {"knowledge_base_ids": ["kb-1"], "query": {"section_extraction_max_calls": 17}}
+    assert "section_expansion_time_limit_seconds" not in type(broken.query).model_fields
+    assert "section_extraction_max_calls" not in type(broken.query).model_fields
+    legacy = parse_search_answer_profile_config(
+        {
+            "query": {
+                "section_expansion_time_limit_seconds": 60,
+                "section_extraction_max_calls": 1,
+            }
+        }
     )
-    assert too_many.query.section_extraction_max_calls is None
+    assert "section_expansion_time_limit_seconds" not in legacy.query.model_dump()
+    assert "section_extraction_max_calls" not in legacy.query.model_dump()
 
 
 def test_build_engine_settings_passes_section_expansion(tmp_path: Any) -> None:
@@ -329,7 +331,6 @@ def test_build_engine_settings_passes_section_expansion(tmp_path: Any) -> None:
             rag_section_expansion_enabled=False,
             rag_section_expansion_max_levels=2,
             rag_section_expansion_input_token_percent=30,
-            rag_section_expansion_time_limit_seconds=500,
             rag_answer_timeout_seconds=300,
         ),
         output_dir=tmp_path,
@@ -342,15 +343,12 @@ def test_build_engine_settings_passes_section_expansion(tmp_path: Any) -> None:
         Settings(rag_section_extraction_enabled=True), output_dir=tmp_path
     ).section_extraction_enabled
     assert default.section_expansion_input_token_percent == 50
-    assert default.section_expansion_time_limit_seconds == 600.0
     assert (custom.section_expansion_enabled, custom.section_expansion_max_levels) == (False, 2)
     assert custom.section_expansion_input_token_percent == 30
     # 回答の通しの上限より長くしない。
-    assert custom.section_expansion_time_limit_seconds == 300.0
-    assert default.section_extraction_max_calls == 8
 
 
-def test_build_engine_settings_passes_model_input_limit_and_extraction_calls(tmp_path: Any) -> None:
+def test_build_engine_settings_passes_model_input_limit(tmp_path: Any) -> None:
     """回答のモデルの入力の上限は、共通のモデル設定の登録モデルの値（#1437。既定 128000）。"""
     from pr_system_settings.model import EnterpriseAiConfiguredModel
 
@@ -361,7 +359,6 @@ def test_build_engine_settings_passes_model_input_limit_and_extraction_calls(tmp
     settings = Settings(
         oci_enterprise_ai_models=models,
         oci_enterprise_ai_default_text_model="llm-a",
-        rag_section_extraction_max_calls=4,
     )
 
     engine = build_engine_settings(settings, output_dir=tmp_path)
@@ -369,7 +366,6 @@ def test_build_engine_settings_passes_model_input_limit_and_extraction_calls(tmp
 
     assert engine.answer_max_input_tokens == 200_000
     assert other.answer_max_input_tokens == 128_000
-    assert engine.section_extraction_max_calls == 4
     assert build_engine_settings(Settings(), output_dir=tmp_path).answer_max_input_tokens == 128_000
 
 
@@ -426,11 +422,10 @@ def test_evaluation_overrides_switch_section_expansion() -> None:
 
     settings = evaluation_settings(
         Settings(),
-        EvaluationRagOverrides(section_expansion_enabled=False, section_extraction_max_calls=2),
+        EvaluationRagOverrides(section_expansion_enabled=False),
     )
 
     assert settings.rag_section_expansion_enabled is False
-    assert settings.rag_section_extraction_max_calls == 2
 
 
 # ---------------------------------------------------------------- 抽出してから統合（#1437）
@@ -543,9 +538,10 @@ async def test_long_section_is_extracted_then_answered_with_verbatim_quotes(
     entry = expansion["levels"][0]["sections"][0]
     assert entry["read"] == "extracted"
     assert expansion["large_section_handoff"] == "extract_then_integrate"
-    # 抽出の呼び出しは上限（既定 8 回）の中で、作られた引用は捨てる。
-    assert 1 <= len(prompts["extract"]) <= 8
+    # 作られた引用は捨て、原文と一致した引用だけを使う。
+    assert len(prompts["extract"]) >= 1
     assert entry["extraction"]["dropped_quotes"] == len(prompts["extract"])
+    assert "max_calls" not in entry["extraction"]
     assert entry["extraction"]["quotes"] == 8
     # 根拠の入力は、モデルの入力の上限（4096）の 50% の中。
     assert expansion["input_token_limit"] == 2048

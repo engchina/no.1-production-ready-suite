@@ -4626,7 +4626,7 @@ def _expand_context_by_sections(
     """当たった chunk の章節から親の章節へ段階的に広げる (#1436。`section_expansion`)。
 
     標準 RAG は最低範囲を補完し、CRAG は追加で十分性を判定する。state は1回答内で共有し、
-    追加検索後も同じ原文・抽出の呼び出し・時間の予算を使う。無効と読み込み未設定は診断で区別する。
+    追加検索後も同じ原文・根拠入力の予算・回答全体の期限を使う。無効と読み込み未設定は診断で区別する。
     ``reserve`` は、後の段のために入力の一部（``section_expansion_followup_reserve_percent``）を残す（#2816）。
     ``priority`` は先に広げる範囲（業務ガイドの手順の参照の文書, 始まりの頁, 終わりの頁。#2828）。
     """
@@ -4672,7 +4672,7 @@ def _expand_context_by_sections(
     rerank = rerank_text_with_scores if rerank_enabled and _rerank_configured(settings) else None
     from rag_engine.generation.section_extraction import SectionExtractor
 
-    # 予算に入らない章節は、質問に関係する原文を抜き出してから統合する (#1437)。呼び出しの上限は 1 回の回答で数える。
+    # 予算に入らない章節は、質問に関係する原文を抜き出してから統合する (#1437)。回答全体の期限と根拠入力の予算を共有する。
     if "extractor" not in state:
         state["extractor"] = SectionExtractor(settings, parse_text_response, provider_id=answer_llm_provider)
         state["reader"] = sections.SectionReader(read_chunks=ports[1], known_ids=set())
@@ -4718,7 +4718,6 @@ def _expand_context_by_sections(
         if extractor.calls:
             result.trace["extraction"] = {
                 "calls": extractor.calls,
-                "max_calls": extractor.limits.max_calls,
                 "part_tokens": extractor.limits.part_tokens,
             }
         if result.stop_reason in {sections.STOP_SUFFICIENT, sections.STOP_DISABLED} and not result.applied:
@@ -4730,10 +4729,7 @@ def _expand_context_by_sections(
             *(f"  {label}" for level in result.trace.get("levels", []) for label in level.get("labels", [])),
         )
         if extractor.calls:
-            step.add(
-                f"長い章節は、質問に関係する原文を抜き出してから根拠にしました（抜き出しの呼び出し {extractor.calls} 回 / "
-                f"上限 {extractor.limits.max_calls} 回）。"
-            )
+            step.add(f"長い章節は、質問に関係する原文を抜き出してから根拠にしました（抜き出しの呼び出し {extractor.calls} 回）。")
         # 広げた段・判定の回数・止めた理由・読めなかった章節（#2341）。
         step.field("広げた段", f"{result.levels} 段（足りるかの判定 {len(graded)} 回）")
         step.field("止めた理由", _SECTION_STOP_LABELS.get(result.stop_reason, result.stop_reason))
