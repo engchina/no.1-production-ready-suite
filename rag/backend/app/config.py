@@ -1104,6 +1104,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "割合（%。#1436。既定 50）。"
         ),
     )
+    rag_section_extraction_enabled: bool = Field(
+        default=False,
+        description=(
+            "(#2800)章節の拡張で、根拠の入力の上限に入らない章節から質問に関係する原文を LLM で"
+            "抜き出す(#1437)。既定 OFF は、入らない章節を rerank の順で上限まで入れ、"
+            "読めなかった範囲を「回答に未反映の関連章節」に示す(生成の前の LLM の呼び出しを"
+            "増やさない)。"
+        ),
+    )
     rag_section_extraction_max_calls: int = Field(
         default=8,
         ge=1,

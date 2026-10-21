@@ -123,7 +123,14 @@ def section_map(monkeypatch: pytest.MonkeyPatch) -> SectionMapStub:
 
 def _engine(**settings: Any) -> AnswerEngine:
     # 既存の親への追加拡張のテストは CRAG、共通の最低範囲は両方式で確かめる。
-    settings = {"rag_query_strategy": "auto_routing", "rag_answer_flow": "crag", **settings}
+    # 章節の抜き出しの LLM（#1437）を確かめるテストがあるので、
+    # 既定 OFF（#2800）の抜き出しを有効にする。
+    settings = {
+        "rag_query_strategy": "auto_routing",
+        "rag_answer_flow": "crag",
+        "rag_section_extraction_enabled": True,
+        **settings,
+    }
     return AnswerEngine(
         Settings(rag_domain_keywords=["受注番号"], **settings),
         oracle=FakeOracle(),  # type: ignore[arg-type]
@@ -329,6 +336,11 @@ def test_build_engine_settings_passes_section_expansion(tmp_path: Any) -> None:
     )
 
     assert (default.section_expansion_enabled, default.section_expansion_max_levels) == (True, 4)
+    # 章節の抜き出しの LLM は既定で使わない（#2800）。
+    assert default.section_extraction_enabled is False
+    assert build_engine_settings(
+        Settings(rag_section_extraction_enabled=True), output_dir=tmp_path
+    ).section_extraction_enabled
     assert default.section_expansion_input_token_percent == 50
     assert default.section_expansion_time_limit_seconds == 600.0
     assert (custom.section_expansion_enabled, custom.section_expansion_max_levels) == (False, 2)
@@ -515,6 +527,7 @@ async def test_long_section_is_extracted_then_answered_with_verbatim_quotes(
             rag_domain_keywords=["受注番号"],
             rag_query_strategy="auto_routing",
             rag_answer_flow="crag",
+            rag_section_extraction_enabled=True,
             oci_enterprise_ai_models=[
                 EnterpriseAiConfiguredModel(model_id="llm-a", max_input_tokens=4096)
             ],

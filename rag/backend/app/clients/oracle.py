@@ -546,12 +546,10 @@ class OracleClient:
         top_k: int,
         filters: dict[str, str] | None = None,
     ) -> list[list[RetrievedChunk]]:
-        """複数の検索文の検索を、vector と keyword でそれぞれ 1 回の SQL で読む(#1498)。
+        """複数の検索文の検索を、検索文ごとの vector / keyword の SQL を並行に読む(#2800)。
 
         返す値は ``searches`` の順に、``hybrid_search(query, embedding, top_k, mode, filters)``
-        と同じ(候補・順位・score・本文・metadata)。検索文ごとの vector / keyword の条件・並び・
-        件数は 1 本ずつの検索と同じ SQL で、当たった chunk の本文と metadata は SQL ごとに 1 回だけ
-        読む(``_multi_search_sql``)。
+        と同じ(候補・順位・score・本文・metadata)。
         """
         if not searches:
             return []
@@ -575,26 +573,20 @@ class OracleClient:
                     binds[f"query_{keyword_branch}"] = text_query
             plan.append((vector_branch, keyword_branch, mode))
         branch_rows: list[list[tuple[int, dict[str, object]]]] = [[] for _ in branch_kinds]
-        # vector の検索と keyword の検索は別の SQL にして並行に読む(1 本の SQL の中の検索は順に
-        # 実行されるため)。SQL の文は検索文の数だけで決まる(#1498)。
-        reads = []
-        for kind in ("vector", "keyword"):
-            numbers = [n for n, branch_kind in enumerate(branch_kinds) if branch_kind == kind]
-            for start in range(0, len(numbers), _MULTI_SEARCH_MAX_BRANCHES):
-                chunk = numbers[start : start + _MULTI_SEARCH_MAX_BRANCHES]
-                bind_name = "embedding" if kind == "vector" else "query"
-                reads.append(
-                    self._read_search_branches(
-                        [kind] * len(chunk),
-                        {
-                            f"{bind_name}_{local}": binds[f"{bind_name}_{n}"]
-                            for local, n in enumerate(chunk)
-                        },
-                        top_k=top_k,
-                        filters=filters,
-                        into=[branch_rows[n] for n in chunk],
-                    )
-                )
+        # 検索文ごとの vector / keyword の検索は 1 本ずつの SQL で並行に読む(#2800)。まとめた SQL
+        # (branch ごとの CTE。#1498)は、optimizer が文書の集合の副問い合わせを行ごとの FILTER にし、
+        # chunk の全件を走査する計画を選んでいた(検証環境で vector 2 本 20 秒・keyword 4 本 6.5 秒 →
+        # 1 本ずつ vector 0.6 秒・keyword 0.1 秒)。
+        reads: list[Awaitable[None]] = [
+            self._read_vector_branch(
+                binds[f"embedding_{n}"], top_k=top_k, filters=filters, into=branch_rows[n]
+            )
+            if kind == "vector"
+            else self._read_keyword_branch(
+                str(binds[f"query_{n}"]), top_k=top_k, filters=filters, into=branch_rows[n]
+            )
+            for n, kind in enumerate(branch_kinds)
+        ]
         await asyncio.gather(*reads)
         branch_hits: list[list[RetrievedChunk]] = []
         for kind, rows in zip(branch_kinds, branch_rows, strict=True):
@@ -640,44 +632,6 @@ class OracleClient:
                     )
                 )
         return results
-
-    async def _read_search_branches(
-        self,
-        branch_kinds: list[str],
-        branch_binds: dict[str, object],
-        *,
-        top_k: int,
-        filters: dict[str, str],
-        into: list[list[tuple[int, dict[str, object]]]],
-    ) -> None:
-        """``_multi_search_sql`` を 1 回実行し、branch ごとの (順位, 行) を ``into`` に足す。
-
-        行の ``score`` は、その branch の score(1 本ずつの検索の行の ``score`` と同じ値)。
-        """
-        where_sql, binds = _oracle_retrieval_where(filters)
-        binds.update(branch_binds)
-        fetch_clause = ""
-        if "vector" in branch_kinds:
-            binds["min_similarity"] = self._settings.rag_min_similarity
-            # 解決は初回だけ pipeline-vector-index サービスへ同期の HTTP を送ることがあるため、
-            # イベントループを止めないようスレッドで呼ぶ(以降はメモ化した値。#828)。
-            vector_index = await asyncio.to_thread(resolve_vector_index_adapter, self._settings)
-            fetch_clause = _oracle_vector_fetch_clause(
-                top_k=top_k, target_accuracy=vector_index.target_accuracy
-            )
-        if "keyword" in branch_kinds:
-            binds["top_k"] = top_k
-        with read_rows_per_round_trip(_SEARCH_FETCH_ROWS):
-            rows = await self._fetch_all(
-                _multi_search_sql(branch_kinds, where_sql=where_sql, fetch_clause=fetch_clause),
-                binds,
-            )
-        for row in rows:
-            for number, target in enumerate(into):
-                rank = row.get(f"rank_{number}")
-                if rank is None:
-                    continue
-                target.append((_int_value(rank), {**row, "score": row.get(f"score_{number}")}))
 
     def _fuse_hybrid_hits(
         self,
@@ -6460,33 +6414,65 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
-    async def _vector_search_with_oracle(
-        self, embedding: list[float], top_k: int, filters: dict[str, str]
-    ) -> list[RetrievedChunk]:
-        """Oracle AI Vector Search で近傍 chunk を取得する。"""
-        where_sql, binds = _oracle_retrieval_where(filters)
+    async def _read_vector_branch(
+        self,
+        embedding_bind: object,
+        *,
+        top_k: int,
+        filters: dict[str, str],
+        into: list[tuple[int, dict[str, object]]],
+    ) -> None:
+        """vector の検索 1 本の行を (順位, 行) で ``into`` に足す(``search_many`` の branch)。"""
+        for rank, row in enumerate(
+            await self._vector_rows(embedding_bind, top_k=top_k, filters=filters), start=1
+        ):
+            into.append((rank, row))
+
+    async def _read_keyword_branch(
+        self,
+        text_query: str,
+        *,
+        top_k: int,
+        filters: dict[str, str],
+        into: list[tuple[int, dict[str, object]]],
+    ) -> None:
+        """keyword の検索 1 本の行を (順位, 行) で ``into`` に足す(``search_many`` の branch)。"""
+        for rank, row in enumerate(
+            await self._keyword_rows(text_query, top_k=top_k, filters=filters), start=1
+        ):
+            into.append((rank, row))
+
+    async def _vector_rows(
+        self, embedding_bind: object, *, top_k: int, filters: dict[str, str]
+    ) -> list[dict[str, object]]:
+        """vector の検索 1 本の行(``_SEARCH_HIT_COLUMNS`` と ``score``。近い順)。"""
+        document_sql, chunk_sql, binds = _oracle_retrieval_where_split(filters)
         binds.update(
-            {
-                "embedding": _to_vector_bind(embedding),
-                "min_similarity": self._settings.rag_min_similarity,
-            }
+            {"embedding": embedding_bind, "min_similarity": self._settings.rag_min_similarity}
         )
         # 解決は初回だけ pipeline-vector-index サービスへ同期の HTTP を送ることがあるため、
         # イベントループを止めないようスレッドで呼ぶ(以降はメモ化した値。#828)。
         vector_index = await asyncio.to_thread(resolve_vector_index_adapter, self._settings)
         fetch_clause = _oracle_vector_fetch_clause(
-            top_k=top_k,
-            target_accuracy=vector_index.target_accuracy,
+            top_k=top_k, target_accuracy=vector_index.target_accuracy
         )
-        rows = await self._fetch_all(
-            _vector_search_sql(
-                select_list=f"{_SEARCH_HIT_COLUMNS}, {_vector_score_sql('embedding')} AS score",
-                embedding_bind="embedding",
-                where_sql=where_sql,
-                fetch_clause=fetch_clause,
-            ),
-            binds,
-        )
+        with read_rows_per_round_trip(_SEARCH_FETCH_ROWS):
+            return await self._fetch_all(
+                _vector_search_sql(
+                    select_list=f"{_SEARCH_HIT_COLUMNS}, {_vector_score_sql('embedding')} AS score",
+                    embedding_bind="embedding",
+                    document_sql=document_sql,
+                    chunk_sql=chunk_sql,
+                    fetch_clause=fetch_clause,
+                ),
+                binds,
+            )
+
+    async def _vector_search_with_oracle(
+        self, embedding: list[float], top_k: int, filters: dict[str, str]
+    ) -> list[RetrievedChunk]:
+        """Oracle AI Vector Search で近傍 chunk を取得する。"""
+        rows = await self._vector_rows(_to_vector_bind(embedding), top_k=top_k, filters=filters)
         return [
             _with_retrieval_metadata(
                 chunk,
@@ -6497,6 +6483,37 @@ class OracleClient:
             for rank, (chunk, row) in enumerate(_distinct_text_hits(rows), start=1)
         ]
 
+    async def _keyword_rows(
+        self, text_query: str, *, top_k: int, filters: dict[str, str]
+    ) -> list[dict[str, object]]:
+        """keyword の検索 1 本の行(``_SEARCH_HIT_COLUMNS`` と ``score``。score の高い順)。"""
+        where_sql, binds = _oracle_retrieval_where(filters)
+        binds.update({"query": text_query, "top_k": top_k})
+        # 上位の行を命中の列だけで決め、本文・metadata はその行だけ読む(#2137)。
+        with read_rows_per_round_trip(_SEARCH_FETCH_ROWS):
+            return await self._fetch_all(
+                _render_sql(
+                    """
+                    SELECT {columns}, kw.score
+                    FROM ({ranked}) kw
+                    JOIN rag_chunks c ON c.chunk_id = kw.chunk_id
+                    JOIN rag_documents d ON d.document_id = c.document_id
+                    LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+                    LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
+                    ORDER BY kw.sort_key DESC, c.document_id ASC, c.chunk_index ASC, c.chunk_id ASC
+                    """,
+                    columns=_SEARCH_HIT_COLUMNS,
+                    ranked=_keyword_search_sql(
+                        select_list=(
+                            "c.chunk_id, c.text_score AS sort_key, c.text_score / 100 AS score"
+                        ),
+                        query_bind="query",
+                        where_sql=where_sql,
+                    ),
+                ),
+                binds,
+            )
+
     async def _keyword_search_with_oracle(
         self, query: str, top_k: int, filters: dict[str, str]
     ) -> list[RetrievedChunk]:
@@ -6504,29 +6521,7 @@ class OracleClient:
         text_query = _oracle_text_query(query, settings=self._settings)
         if text_query is None:
             return []
-        where_sql, binds = _oracle_retrieval_where(filters)
-        binds.update({"query": text_query, "top_k": top_k})
-        # 上位の行を命中の列だけで決め、本文・metadata はその行だけ読む(#2137)。
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-                SELECT {columns}, kw.score
-                FROM ({ranked}) kw
-                JOIN rag_chunks c ON c.chunk_id = kw.chunk_id
-                JOIN rag_documents d ON d.document_id = c.document_id
-                LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
-                LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
-                ORDER BY kw.sort_key DESC, c.document_id ASC, c.chunk_index ASC, c.chunk_id ASC
-                """,
-                columns=_SEARCH_HIT_COLUMNS,
-                ranked=_keyword_search_sql(
-                    select_list="c.chunk_id, c.text_score AS sort_key, c.text_score / 100 AS score",
-                    query_bind="query",
-                    where_sql=where_sql,
-                ),
-            ),
-            binds,
-        )
+        rows = await self._keyword_rows(text_query, top_k=top_k, filters=filters)
         return [
             _with_retrieval_metadata(
                 chunk,
@@ -12627,6 +12622,31 @@ def _duplicate_reuses_canonical_sql(*, include_superseded: bool) -> str:
 
 
 def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
+    clauses, binds = _oracle_retrieval_clauses(filters)
+    return " AND ".join(clauses), binds
+
+
+# chunk の側（``c``・``cs``・``r``）の列を読む条件（#2800。それ以外は文書の側の条件）。
+_CHUNK_SIDE_CLAUSE = re.compile(r"(?<![\w.$])(?:c|cs|r)\.")
+
+
+def _oracle_retrieval_where_split(filters: dict[str, str]) -> tuple[str, str, dict[str, object]]:
+    """``_oracle_retrieval_where`` と同じ条件を、文書の側（``d`` だけ）と chunk の側に
+    分ける(#2800)。
+
+    vector の検索は、文書の側の条件で文書の集合を先に決め、chunk には ``document_id`` の集合と
+    chunk の側の条件だけを付けて近傍を探す(``_vector_search_sql``)。条件を 1 つの WHERE に
+    並べると、文書の側の副問い合わせ（ナレッジベースの所属と重複の文書の正本・有効期間）を
+    optimizer が行ごとの FILTER にし、近傍の検索が chunk の全件の走査になっていた(検証環境で
+    1 回 9 秒 → 分けて 0.7 秒。上位の結果は同じ)。
+    """
+    clauses, binds = _oracle_retrieval_clauses(filters)
+    chunk = [clause for clause in clauses if _CHUNK_SIDE_CLAUSE.search(clause)]
+    document = [clause for clause in clauses if not _CHUNK_SIDE_CLAUSE.search(clause)]
+    return " AND ".join(document) or "1 = 1", " AND ".join(chunk) or "1 = 1", binds
+
+
+def _oracle_retrieval_clauses(filters: dict[str, str]) -> tuple[list[str], dict[str, object]]:
     clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
     # 実験: chunk_set_id を明示すると is_serving に関係なくその chunk_set だけを検索する。
@@ -12824,7 +12844,7 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
     binds.update(classification_binds)
     if not _includes_superseded_documents(filters):
         clauses.append(_NOT_SUPERSEDED_SQL)
-    return " AND ".join(clauses), binds
+    return clauses, binds
 
 
 # 交差参照の文書名の照合で文書名から除く文字(title_key の NFKC 前の形も含む。#1280)。
@@ -13182,8 +13202,6 @@ _SEARCH_HIT_COLUMNS = """
     d.file_name,
     d.category_name,
     d.superseded_by_document_id"""
-# 検索文をまとめた検索(``_multi_search_sql``)にまとめる vector / keyword の検索の数の上限。
-_MULTI_SEARCH_MAX_BRANCHES = 32
 # 検索の候補の SQL で、1 回の往復で受け取る行の数(python-oracledb の既定は 100 行。#1498)。
 _SEARCH_FETCH_ROWS = 1000
 
@@ -13193,32 +13211,43 @@ def _vector_score_sql(embedding_bind: str) -> str:
 
 
 def _vector_search_sql(
-    *, select_list: str, embedding_bind: str, where_sql: str, fetch_clause: str
+    *, select_list: str, embedding_bind: str, document_sql: str, chunk_sql: str, fetch_clause: str
 ) -> str:
     """vector 検索の SQL(条件・並び・件数)。
 
-    1 本の検索文の検索(``_vector_search_with_oracle``)と、検索文をまとめた検索
-    (``_multi_search_sql``)で同じものを使う(読む列だけが違う)。
+    1 本の検索文の検索(``_vector_search_with_oracle``)と、複数の検索文の検索(``search_many``)で
+    同じものを使う。条件は文書の側
+    (``document_sql``。``d`` だけ)と chunk の側(``chunk_sql``)に分けて受け取る
+    (``_oracle_retrieval_where_split``。#2800)。文書の集合を先に決め、近傍の検索の並びは距離
+    だけにする(Oracle AI Vector Search の近似の検索は ``ORDER BY`` が距離だけのときに vector の
+    索引を使う)。同じ距離の行の並び(文書・chunk の番号)と類似度の下限は外側で決める(近傍の
+    検索の中に類似度の条件を置くと、optimizer が chunk の全件を走査する計画を選ぶことがある。
+    近い順に取った後で下限を掛けても、下限を掛けてから近い順に取るのと同じ結果)。
     """
     return _render_sql(
         """
-        SELECT {select_list}
-        FROM rag_chunks c
-        JOIN rag_documents d ON d.document_id = c.document_id
-        LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
-        LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
-        WHERE {where_sql}
-          AND {score_sql} >= :min_similarity
-        ORDER BY
-            VECTOR_DISTANCE(c.embedding, :{embedding_bind}, COSINE) ASC,
-            c.document_id ASC,
-            c.chunk_index ASC,
-            c.chunk_id ASC
-        {fetch_clause}
+        SELECT * FROM (
+            SELECT {select_list},
+                VECTOR_DISTANCE(c.embedding, :{embedding_bind}, COSINE) AS vector_sort_key,
+                c.document_id AS vector_document_id,
+                c.chunk_index AS vector_chunk_index,
+                c.chunk_id AS vector_chunk_id
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+            LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
+            WHERE c.document_id IN (SELECT d.document_id FROM rag_documents d WHERE {document_sql})
+              AND {chunk_sql}
+            ORDER BY VECTOR_DISTANCE(c.embedding, :{embedding_bind}, COSINE)
+            {fetch_clause}
+        )
+        WHERE 1 - vector_sort_key >= :min_similarity
+        ORDER BY vector_sort_key ASC, vector_document_id ASC,
+            vector_chunk_index ASC, vector_chunk_id ASC
         """,
         select_list=select_list,
-        where_sql=where_sql,
-        score_sql=_vector_score_sql(embedding_bind),
+        document_sql=document_sql,
+        chunk_sql=chunk_sql,
         embedding_bind=embedding_bind,
         fetch_clause=fetch_clause,
     )
@@ -13276,70 +13305,6 @@ def _keyword_hits_view_sql(*, query_bind: str, where_sql: str) -> str:
         ) c""",
         metadata_column=metadata_column,
         query_bind=query_bind,
-    )
-
-
-def _multi_search_sql(branch_kinds: Sequence[str], *, where_sql: str, fetch_clause: str) -> str:
-    """検索文ごとの vector / keyword の検索(branch)を 1 本にまとめた SQL(#1498)。
-
-    branch ``n`` の内側は 1 本ずつの検索と同じ SQL(条件・並び・件数。bind は vector が
-    ``embedding_n``、keyword が ``query_n``)で、読む列だけを id・並びの列・score に減らす。
-    返す行は、どれかの branch に当たった chunk ごとに 1 行(本文と metadata は chunk ごとに 1 回だけ
-    読む)。``rank_n`` は branch ``n`` の中の順位(1 本ずつの検索の行の順。並びは 1 本ずつの検索の
-    ``ORDER BY`` と同じ列で、chunk_id で一意に決まる)、``score_n`` はその score(当たっていなければ
-    どちらも NULL)。行の並びは決めない(呼び出し側が ``rank_n`` で並べる)。
-    """
-    if not branch_kinds or len(branch_kinds) > _MULTI_SEARCH_MAX_BRANCHES:
-        raise ValueError("まとめる検索の数が範囲外です。")
-    ctes: list[str] = []
-    for number, kind in enumerate(branch_kinds):
-        if kind == "vector":
-            bind = f"embedding_{number}"
-            inner = _vector_search_sql(
-                select_list=(
-                    "c.chunk_id, c.document_id, c.chunk_index, "
-                    f"VECTOR_DISTANCE(c.embedding, :{bind}, COSINE) AS sort_key, "
-                    f"{_vector_score_sql(bind)} AS score"
-                ),
-                embedding_bind=bind,
-                where_sql=where_sql,
-                fetch_clause=fetch_clause,
-            )
-            order = "sort_key ASC"
-        elif kind == "keyword":
-            inner = _keyword_search_sql(
-                select_list=(
-                    "c.chunk_id, c.document_id, c.chunk_index, "
-                    "c.text_score AS sort_key, c.text_score / 100 AS score"
-                ),
-                query_bind=f"query_{number}",
-                where_sql=where_sql,
-            )
-            order = "sort_key DESC"
-        else:
-            raise ValueError(f"不明な検索の種類です: {kind}")
-        ctes.append(
-            f"b{number} AS (SELECT /*+ MATERIALIZE */ chunk_id, score, ROW_NUMBER() OVER ("
-            f"ORDER BY {order}, document_id ASC, chunk_index ASC, chunk_id ASC) AS rnk "
-            f"FROM ({inner}))"
-        )
-    numbers = range(len(branch_kinds))
-    return _render_sql(
-        """
-        WITH {ctes}
-        SELECT {columns}, {branch_columns}
-        FROM ({hit_ids}) h
-        JOIN rag_chunks c ON c.chunk_id = h.chunk_id
-        JOIN rag_documents d ON d.document_id = c.document_id
-        LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
-        LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
-        {branch_joins}
-        """,
-        ctes=",\n".join(ctes),
-        columns=_SEARCH_HIT_COLUMNS,
-        branch_columns=", ".join(f"b{n}.rnk AS rank_{n}, b{n}.score AS score_{n}" for n in numbers),
-        hit_ids=" UNION ".join(f"SELECT chunk_id FROM b{n}" for n in numbers),
-        branch_joins="\n".join(f"LEFT JOIN b{n} ON b{n}.chunk_id = h.chunk_id" for n in numbers),
     )
 
 
