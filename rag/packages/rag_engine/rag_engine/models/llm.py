@@ -419,6 +419,10 @@ class GroundedDraft(_StrictModel):
 class OutputFieldEvidence(_StrictModel):
     """出力データの項目と根拠の役割。生成時と最終検証で同じ契約を使う。"""
 
+    # 列の主張の有無をモデルの null / object の選び方に任せない（空の object が「主張なし」と「定義なし」の両方になる。#2821）。
+    asserts_output_fields: bool = Field(
+        description="判定する文が、出力ファイルに含まれる列・項目・値を主張していれば true。画面の操作・抽出条件・帳票名だけなら false。"
+    )
     definition_quote: str = Field(
         default="",
         description="主張している出力ファイルの列・項目・含まれる値を定義する原文をそのまま写す。画面の抽出条件や出力帳票名の一覧しかない場合は空文字。",
@@ -428,7 +432,8 @@ class OutputFieldEvidence(_StrictModel):
     )
 
     def output_fields_unconfirmed(self) -> bool:
-        return not self.definition_quote.strip() or self.output_artifact_matches is not True
+        """列を主張しているのに、定義の原文か成果物の一致が無い。列を主張していなければ照合しない。"""
+        return self.asserts_output_fields and (not self.definition_quote.strip() or self.output_artifact_matches is not True)
 
 
 class GroundedItemReview(_StrictModel):
