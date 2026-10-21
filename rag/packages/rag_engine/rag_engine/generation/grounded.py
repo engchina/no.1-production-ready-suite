@@ -1254,6 +1254,22 @@ def primary_procedure_document(checked: Sequence[CheckedItem]) -> tuple[str, ...
     return max(counts, key=lambda key: counts[key]) if counts else ()  # max は同数なら先に現れた key を返す
 
 
+def _document_order(checked: Sequence[CheckedItem]) -> dict[tuple[str, ...], int]:
+    """回答の文書の順位。手順の主文書を先に、ほかの文書は items に初めて現れた順。"""
+    order: dict[tuple[str, ...], int] = {}
+    if primary := primary_procedure_document(checked):
+        order[primary] = 0
+    for entry in checked:
+        if entry.span:
+            order.setdefault(_document_key(entry.span), len(order))
+    return order
+
+
+def _by_document(entries: Sequence[CheckedItem], order: Mapping[tuple[str, ...], int]) -> list[CheckedItem]:
+    """同じ文書の説明を続けて並べる。文書の中は items の順のまま、出典の無い説明は後ろに置く。"""
+    return sorted(entries, key=lambda entry: order.get(_document_key(entry.span), len(order)) if entry.span else len(order) + 1)
+
+
 # 検査が読む根拠の本文の欄。モデルに渡した形（``fold_width``）にそろえる (#1350)。
 _SPAN_TEXT_FIELDS = (
     "text",
@@ -2986,7 +3002,9 @@ def _body_sections(
     published = [entry for entry in checked if entry.published and not _shown_as_quote(entry)]
     # 資料の出典を付けない説明（引用が原文と照合できない・業務ガイドの文から来た。#2792）は、資料の節に置かず、
     # 出典の行の無い節に分ける。
-    shown = [entry for entry in published if entry.span]
+    # 回答は文書を単位に組み立て、別の文書の説明を交互に並べない。どの節も同じ文書の順にする。
+    order = _document_order(checked)
+    shown = _by_document([entry for entry in published if entry.span], order)
     unsourced = [entry for entry in published if not entry.span]
     sections: list[tuple[str, list[str]]] = []
     rules = [entry for entry in shown if entry.item.kind == "rule"]
@@ -3003,20 +3021,15 @@ def _body_sections(
     # 同じ文書の中では items の並びで機能が連続する範囲ごとに区切る。機能ごとに集約し直すと、機能を往復する
     # 一連の操作（F1 で選択 → F2 で入力 → F1 で保存）が「選択 → 保存」「入力」の順に変わり、保存後に入力する
     # 手順として表示されていた (#1009)。同じ機能が別の機能を挟んで再び現れれば別の節にし、items の順序は変えない。
-    by_document: dict[tuple, list[CheckedItem]] = {}
-    for entry in shown:
-        if entry.item.kind in _PROCEDURE_KINDS and entry.span:
-            by_document.setdefault(_document_key(entry.span), []).append(entry)
-    primary_document = primary_procedure_document(shown)
-    ordered_documents = sorted(by_document, key=lambda key: key != primary_document)
     groups: list[tuple[Any, list[CheckedItem]]] = []
-    for document in ordered_documents:
-        for entry in by_document[document]:
-            function = entry.span["function"] if entry.span else None
-            if groups and groups[-1][0] == function:
-                groups[-1][1].append(entry)
-            else:
-                groups.append((function, [entry]))
+    for entry in shown:
+        if entry.item.kind not in _PROCEDURE_KINDS:
+            continue
+        function = entry.span["function"] if entry.span else None
+        if groups and groups[-1][0] == function:
+            groups[-1][1].append(entry)
+        else:
+            groups.append((function, [entry]))
     for _function, entries in groups:
         title = _block_screen_title(entries) or (_function_title(entries[0].span) if entries[0].span else "")
         labels = answer_labels()
@@ -3028,10 +3041,13 @@ def _body_sections(
         sections.append((labels.unsourced_section, [labels.unsourced_section_note, *lines(unsourced, False)]))
     # 画面の UI ラベル（「管理者」「管理区分」）のような単語だけの引用は説明を含まないので表示しない (#647)。
     # 表示する引用（画面説明は例の値を除いた後）が空・単語だけなら出さない (#1120)。
-    quotes = [entry for entry in checked if _shown_as_quote(entry) and _displayed_quote(entry) and not _bare_label(_displayed_quote(entry))]
+    quotes = _by_document(
+        [entry for entry in checked if _shown_as_quote(entry) and _displayed_quote(entry) and not _bare_label(_displayed_quote(entry))],
+        order,
+    )
     if quotes:
         sections.append((answer_labels().quote_only_section, [answer_labels().quote_only_note, *lines(quotes, False)]))
-    gaps = [entry for entry in checked if entry.item.kind == "gap"]
+    gaps = _by_document([entry for entry in checked if entry.item.kind == "gap"], order)
     bullet = answer_labels().item_bullet
     gap_lines = lines(gaps, False) + [
         f"{bullet}{text}" for text in dict.fromkeys(unanswered) if not any(text in entry.item.text for entry in gaps)
@@ -3099,8 +3115,13 @@ def format_functions(spans: Sequence[dict]) -> str:
     groups: dict[tuple, list[dict]] = {}
     for span in spans:
         groups.setdefault(span["function"], []).append(span)
+    # 同じ文書の機能を続けて並べ、文書を単位に読ませる（文書は初めて現れた順、文書の中は根拠の順）。
+    documents: dict[tuple[str, ...], int] = {}
+    for span in spans:
+        documents.setdefault(_document_key(span), len(documents))
+    ordered = sorted(groups.values(), key=lambda members: documents[_document_key(members[0])])
     blocks = []
-    for number, members in enumerate(groups.values(), 1):
+    for number, members in enumerate(ordered, 1):
         header = f"=== 機能 F{number}: {_function_label(members[0])} ==="
         # 文書の補助情報は原文照合の対象外。表示IDの行より前に置くと直前の Evidence の本文に見え、
         # そこからの引用は「原文と一致しない」として削除されるため、IDの後ろに範囲を明示して置く。

@@ -2561,6 +2561,43 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
         self.assertEqual(body.count("操作手順（出力様式設定）"), 1)  # 別文書を挟んでも同じ文書の手順は 1 つの節
         self.assertIn("操作手順（帳票設定）\n\n・名前を直接入力します。", body)
 
+    def test_render_never_interleaves_documents_in_facts_and_reference_sections(self):
+        """説明・原文のまま示す記載・不足の節も文書を単位に並べ、別の文書の記載を交互に並べない。"""
+
+        def rule(text, source, page):
+            entry = self.entry(text, "設定", source)
+            entry.item.kind = "rule"
+            entry.span["page"] = page
+            return entry
+
+        a1 = rule("区分は二つあります。", "架空設定説明書.pdf", 3)
+        b1 = rule("初期値は空欄です。", "架空設定一覧.pdf", 1)
+        a2 = rule("区分は画面で選びます。", "架空設定説明書.pdf", 5)
+        body = grounded.render("", [a1, b1, a2])
+        self.assertLess(body.index("区分は画面で選びます"), body.index("初期値は空欄です"))
+        self.assertLess(body.index("区分は二つあります"), body.index("区分は画面で選びます"))  # 文書の中は items の順
+        citations = [line for line in body.split("\n") if line.startswith(grounded.answer_labels().citation_prefix)]
+        self.assertEqual([("架空設定一覧" in line) for line in citations], [False, False, True])
+
+    def test_evidence_is_presented_to_the_model_one_document_at_a_time(self):
+        def span(label, source, function):
+            return {
+                "label": label,
+                "text": f"{label} の本文。",
+                "tags": [],
+                "pinned": False,
+                "page": 1,
+                "source": source,
+                "document_scope": [source],
+                "function": (source, function),
+            }
+
+        block = grounded.format_functions(
+            [span("E1", "架空A.pdf", "機能1"), span("E2", "架空B.pdf", "機能2"), span("E3", "架空A.pdf", "機能3")]
+        )
+        self.assertLess(block.index("[E1]"), block.index("[E3]"))
+        self.assertLess(block.index("[E3]"), block.index("[E2]"))
+
     def test_render_with_citations_returns_one_ref_per_citation_line_in_text_order(self):
         """本文の出典行ごとの根拠を本文の順に返す。同じ出典が続いて出典行を省いた分は返さない (#1330)。"""
         a1 = self.entry("対象を選択します。", "出力様式設定", "架空変更手順.pdf")

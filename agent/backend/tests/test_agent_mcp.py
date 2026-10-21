@@ -451,6 +451,41 @@ def test_run_output_sources_use_the_rag_tool_results_checked_by_the_validation()
     assert len(mcp_server.run_output(unvalidated).sources) == 2
 
 
+def test_run_output_sources_list_one_document_at_a_time() -> None:
+    """根拠は資料ごとにまとめ、別の資料の根拠を交互に並べない（資料は初めて現れた順）。"""
+    evidence = [
+        {
+            "evidence_id": f"e{index}",
+            "document_id": document,
+            "chunk_id": f"c{index}",
+            "file_name": f"{document}.pdf",
+        }
+        for index, document in enumerate(("架空A", "架空B", "架空A"))
+    ]
+    run = RunState(
+        id="run_grouped_sources",
+        goal="q",
+        agent_id=AGENT_ID,
+        status=RunStatus.COMPLETED,
+        steps=[
+            RunStep(
+                run_id="run_grouped_sources",
+                status=StepStatus.COMPLETED,
+                tool_call=ToolCall(name="rag__rag_retrieve_evidence", arguments={}),
+                tool_result=ToolResult(
+                    name="rag__rag_retrieve_evidence", success=True, output={"evidence": evidence}
+                ),
+            )
+        ],
+        artifacts=[Artifact(name="回答", kind="answer", content={"text": "a"})],
+    )
+    assert [item.title for item in mcp_server.run_output(run).sources] == [
+        "架空A.pdf",
+        "架空A.pdf",
+        "架空B.pdf",
+    ]
+
+
 def test_audit_shows_mcp_runs_with_the_key_name(agents: None) -> None:
     """監査のツールの呼び出しに、Run のきっかけ「MCP（キーの名前）」を出す（#1874）。"""
     del agents
