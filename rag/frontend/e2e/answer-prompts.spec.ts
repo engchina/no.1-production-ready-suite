@@ -67,7 +67,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 900 },
 ]) {
-  test(`回答生成のプロンプトを検証・保存・既定に戻せて、各段は読み取り専用で見られる (${viewport.name})`, async ({
+  test(`回答生成のプロンプトを検証・保存・既定に戻せて、各段は Markdown 原文で見られる (${viewport.name})`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -120,11 +120,17 @@ for (const viewport of [
 
     await page.getByTestId("answer-prompt-stage-audit").locator("summary").click();
     const audit = page.getByTestId("answer-prompt-stage-audit");
-    await expect(audit.getByText("監査の system", { exact: true })).toBeVisible();
-    await expect(audit.getByRole("heading", { name: "手順", exact: true })).toBeVisible();
-    await expect(audit.locator("ol > li")).toHaveCount(2);
-    await expect(audit.locator("code")).toHaveText("quote");
-    await expect(audit.locator("script")).toHaveCount(0);
+    const source = audit.getByRole("textbox");
+    await expect(source).toHaveValue(DEFAULT_STAGES.find((stage) => stage.id === "audit")!.prompts[0].content);
+    await expect(source).toHaveAttribute("readonly", "");
+    await expect(source).toBeEnabled();
+    await expect(source).toHaveClass(/font-mono/);
+    await source.focus();
+    await source.evaluate((element: HTMLTextAreaElement) => element.select());
+    expect(await source.evaluate((element: HTMLTextAreaElement) =>
+      element.value.slice(element.selectionStart, element.selectionEnd)
+    )).toContain("## 手順");
+    await expect(audit.locator("h6, ol, code, script")).toHaveCount(0);
     expect(await page.evaluate(() => "promptInjected" in window)).toBe(false);
     await audit.screenshot({ path: testInfo.outputPath("markdown-prompt.png") });
     await expectNoPageOverflow(page);
@@ -183,7 +189,8 @@ for (const viewport of [
     await expect(conditions).toContainText("利用者が答える未確認の自由入力条件があるとき");
     await conditions.locator("summary").click();
     await expect(conditions.getByText("条件認識の system", { exact: true })).toBeVisible();
-    await expect(conditions.locator("textarea")).toHaveCount(0);
+    await expect(conditions.getByRole("textbox")).toHaveValue("条件認識の system");
+    await expect(conditions.getByRole("textbox")).toHaveAttribute("readonly", "");
     await conditions.screenshot({ path: testInfo.outputPath("guide-condition-prompt.png") });
 
     // 開くと部分の名前と内容が見える。

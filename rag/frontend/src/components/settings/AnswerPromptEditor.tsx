@@ -7,7 +7,6 @@ import {
   Disclosure,
   FormActionBar,
   FormGrid,
-  MarkdownText,
   FormStatus,
   Skeleton,
   StatusBadge,
@@ -273,16 +272,15 @@ function ReadonlyStages({ stages }: { stages: AnswerPromptStage[] }) {
                 data-testid={`answer-prompt-stage-${stage.id}`}
               >
                 {stage.prompts.map((part) => (
-                  <div key={part.id}>
-                    <p className="text-xs font-medium text-fg-muted">
-                      {t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
-                    </p>
-                    <MarkdownText
-                      text={part.content}
-                      headingLevel={6}
-                      className="mt-1 max-h-96 overflow-auto rounded-md border border-border bg-surface p-3"
-                    />
-                  </div>
+                  <TextareaField
+                    key={part.id}
+                    id={`answer-prompt-${stage.id}-${part.id}`}
+                    label={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
+                    value={part.content}
+                    readOnly
+                    monospace
+                    rows={12}
+                  />
                 ))}
               </Disclosure>
             ))}
