@@ -16,7 +16,7 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import synthesize_grounded_answer
-from rag_engine.models.llm import GroundedAudit, GroundedFactAudit
+from rag_engine.models.llm import GroundedAudit, GroundedFactAudit, GroundedItem, GuideRequirementReview
 
 STEP = "一覧表を選択し、処理を選択します。"
 
@@ -161,3 +161,71 @@ def test_failed_correction_round_is_an_answer_warning():
         ("correction_failed", "RuntimeError")
     ]
     assert wrong in result.answer_text
+
+
+# ---- 監査なしの型（#2800）と、要件の監査の観察（#2800） ------------------------------------
+
+
+def test_none_mode_calls_no_audit_and_does_not_regenerate():
+    ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
+    eid = ids(ctx)[LIST_TEXT]
+    model = FakeModel([draft(item(eid, STEP, STEP))], [_fact(audit((0, "contradicted", "matched", "")))])
+
+    result = _run(model, ctx, grounded.AUDIT_MODE_NONE, answer_max_correction_rounds=2).response
+
+    assert [name for name, _prompt in model.prompts] == ["GroundedDraft"]
+    assert result.generation_trace["audit_mode"] == "none"
+    # 決定的な検査を通った説明は確かめた説明として出る（未確認の印を付けない）。
+    assert STEP in result.answer_text
+    assert STEP not in marks(result)
+    assert result.envelope["removed_passages"] == []
+
+
+def test_none_mode_still_marks_a_quote_that_is_not_in_the_document():
+    ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
+    eid = ids(ctx)[LIST_TEXT]
+    invented = "一覧表を選択すると自動で集計が完了します。"
+    model = FakeModel([draft(item(eid, invented, invented))], [_fact(audit())])
+
+    result = _run(model, ctx, grounded.AUDIT_MODE_NONE).response
+
+    assert [name for name, _prompt in model.prompts] == ["GroundedDraft"]
+    assert marks(result)[invented] == ["quote_unmatched"]
+    # 資料の出典の行を付けない（#2792）。
+    following = result.answer_text.split("・" + invented + "\n", 1)[1]
+    assert not following.startswith(grounded.answer_labels().citation_prefix)
+
+
+def test_deterministic_requests_follow_the_explanations():
+    question = "年次集計の明細一覧表を出力する手順を教えてください"
+    confirmed = grounded.CheckedItem(GroundedItem(kind="operation", text=STEP, quote=STEP, evidence_id="E1"), span={"evidence_id": "E1"})
+    gap = grounded.CheckedItem(GroundedItem(kind="gap", text="資料に無い"))
+
+    def statuses(checked):
+        return {r.status for r in grounded.deterministic_audit(question, checked).request_reviews}
+
+    assert statuses([confirmed]) == {"addressed"}
+    assert statuses([gap]) == {"missing"}
+    confirmed.mark("item_check", "検査")
+    assert statuses([confirmed]) == {"partial"}
+
+
+def test_requirement_status_decides_unavailable_scope_by_the_requirement_kind():
+    gap = grounded.CheckedItem(GroundedItem(kind="gap", text="対応は資料に記載がありません。"))
+    step = grounded.CheckedItem(GroundedItem(kind="operation", text=STEP, quote=STEP, evidence_id="E1"), span={"evidence_id": "E1"})
+    checked = [step, gap]
+
+    def review(state, indexes):
+        return GuideRequirementReview(requirement_id="a:0", answer_state=state, item_indexes=indexes, answer_quote="", reason="")
+
+    completion, evidence = {"kind": "completion"}, {"kind": "evidence"}
+    # 資料に無いことを gap で示したのは、完了条件の充足（製品の規則）。必要な根拠の充足ではない。
+    assert grounded.requirement_status(review("stated_unavailable", [1]), completion, checked) == "addressed"
+    assert grounded.requirement_status(review("stated_unavailable", [1]), evidence, checked) == "missing"
+    # 「無い」と言いながら gap も案内の行も引かないなら、一部だけ。
+    assert grounded.requirement_status(review("stated_unavailable", [0]), completion, checked) == "partial"
+    assert grounded.requirement_status(review("stated_unavailable", [2]), completion, checked, ["窓口へ"]) == "addressed"
+    assert grounded.requirement_status(review("explained", [0]), evidence, checked) == "addressed"
+    assert grounded.requirement_status(review("partly_explained", [0]), completion, checked) == "partial"
+    assert grounded.requirement_status(review("not_mentioned", []), completion, checked) == "missing"
+    assert grounded.requirement_status(None, completion, checked) == "missing"
