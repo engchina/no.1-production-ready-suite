@@ -384,7 +384,7 @@ class Settings:
     # 回答の監査の型(#2795・#2800)。none は生成の後の LLM の監査と作り直しをしない(決定的な検査だけ)。
     # standard は未使用の根拠を列挙させず、作り直しは事実の問題の 1 組まで(完全性の不足は本文に
     # 示す)。detailed は未使用の根拠も列挙させ、完全性の不足でも作り直す(従来)。engine の既定は従来どおり detailed、
-    # backend の既定は standard。
+    # backend の既定は none。
     answer_audit_mode: str = "detailed"
     # 回答の期限のある LLM の呼び出しを streaming で受け、停滞（event が来ない・出力が直近の速さより遅い）を
     # 検出したら打ち切って送り直す(#1926。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。
