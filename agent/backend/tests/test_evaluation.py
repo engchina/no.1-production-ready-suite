@@ -2062,9 +2062,7 @@ def test_explicit_approval_expectation_is_checked_without_judge(
 @pytest.mark.parametrize("status", [CaseStatus.APPROVAL_BLOCKED, CaseStatus.DEFINITION_CHANGED])
 def test_unassessed_case_is_not_a_regression(status: CaseStatus) -> None:
     case = EvaluationCase(question="合成の質問", expected="合成の回答")
-    blocked = EvaluationCaseResult(
-        case=case, status=status, blocked_tool_calls=["synthetic_tool"]
-    )
+    blocked = EvaluationCaseResult(case=case, status=status, blocked_tool_calls=["synthetic_tool"])
     summary = evaluation.summarize([blocked])
     assert (summary.judged_cases, summary.pass_rate) == (0, None)
     assert summary.approval_blocked == int(status == CaseStatus.APPROVAL_BLOCKED)
