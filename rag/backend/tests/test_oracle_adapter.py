@@ -1844,6 +1844,10 @@ async def test_oracle_client_lists_knowledge_bases_with_counts() -> None:
     assert "FROM rag_knowledge_bases kb" in call.statement
     assert "LEFT JOIN rag_document_knowledge_bases dkb" in call.statement
     assert "CASE WHEN UPPER(kb.name) = 'DEFAULT' THEN 0 ELSE 1 END" in call.statement
+    order = call.statement.split("ORDER BY", 1)[1]
+    assert "kb.updated_at DESC" not in order
+    assert "REGEXP_SUBSTR(TRANSLATE(kb.name" in order
+    assert "kb.knowledge_base_id ASC" in order
     assert "kb.status = :knowledge_base_status" in call.statement
     assert call.parameters["knowledge_base_status"] == "ACTIVE"
     assert call.parameters["knowledge_base_query"] == "%規程%"
