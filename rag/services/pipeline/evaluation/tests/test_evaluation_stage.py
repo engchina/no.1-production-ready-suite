@@ -25,8 +25,9 @@ def test_health_ok() -> None:
 
 def test_standard_thresholds() -> None:
     body = _run("standard")
-    assert body["thresholds"]["context_recall"] == 0.8
-    assert body["thresholds"]["refusal_accuracy"] == 0.9
+    assert body["thresholds"]["required_evidence_recall"] == 0.9
+    assert body["thresholds"]["response_decision_accuracy"] == 0.9
+    assert len(body["thresholds"]) == 6
 
 
 def test_strict_thresholds() -> None:
