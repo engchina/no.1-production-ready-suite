@@ -542,6 +542,16 @@ def _review(
     )
 
 
+def _by_document(items: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """同じ資料の根拠を続けて並べる（資料は初めて現れた順、資料の中は元の順）。"""
+    order: dict[str, int] = {}
+    for item in items:
+        order.setdefault(str(item.get("document_id") or item.get("file_name") or ""), len(order))
+    return sorted(
+        items, key=lambda item: order[str(item.get("document_id") or item.get("file_name") or "")]
+    )
+
+
 def _sources(run: RunState) -> list[SourceOutput]:
     """回答の根拠（RAG の資料）。回答で引用した根拠（画面のチャットの「回答で引用」と同じ判定。
     #2328）を選び、1 件も無ければ AI に渡した根拠の全件。
@@ -549,7 +559,7 @@ def _sources(run: RunState) -> list[SourceOutput]:
     items = [item for item in _answer_evidence(run).get("items") or [] if isinstance(item, Mapping)]
     cited = [item for item in items if item.get("cited") is True]
     sources: list[SourceOutput] = []
-    for item in cited or items:
+    for item in _by_document(cited or items):
         title = str(item.get("file_name") or item.get("document_id") or "名前の無い資料")
         excerpt = item.get("excerpt")
         sources.append(
