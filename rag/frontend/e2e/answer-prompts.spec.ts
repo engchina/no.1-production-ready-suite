@@ -152,6 +152,9 @@ for (const viewport of [
     ]);
     // 段は区分の中に入り、開かなくても使われる条件を 1 行で示す。
     const ingestion = stages.getByRole("region", { name: "取込" });
+    await expect(ingestion.getByTestId("answer-prompt-stage-field_extraction")).toContainText(
+      "本文を分けて送る部分ごと"
+    );
     const picture = ingestion.getByTestId("answer-prompt-stage-picture_description");
     await expect(picture).toContainText("図・画像の説明");
     await expect(picture).toContainText("使われる条件: 「図・画像を AI で読み取る」を有効にしたとき");

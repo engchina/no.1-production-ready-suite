@@ -265,7 +265,7 @@ export const ja = {
   "settings.parserAdapters.postParse.headingLevels.hint":
     "PDF のしおりも見出しの番号も無いため階層を決められない文書だけ、見出しの文字列を OCI Enterprise AI に渡して見出しの階層（章・節の深さ）を推定し、章節の木と chunk の章節にします。対象の文書ごとにモデルの呼び出しが 1 回増えます。応答が使えないときは今の階層のまま取り込みます。",
   "settings.parserAdapters.postParse.fieldExtraction.hint":
-    "解析した本文から、下で定義した項目（標準は文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を OCI Enterprise AI で抽出し、検索の絞り込みに使える項目にします。有効にすると、文書ごとにモデルの呼び出しが 1 回増えます。",
+    "解析した本文全体から、下で定義した項目（標準は文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を OCI Enterprise AI で抽出し、検索の絞り込みに使える項目にします。長い本文は分けて送り、部分ごとにモデルを呼び出します。本文が長いほど入力トークンの総量と処理時間が増えます。",
   "settings.parserAdapters.postParse.fieldExtraction.definitions": "抽出する項目の定義",
   "settings.parserAdapters.postParse.fieldExtraction.count": "{count} 件",
   "settings.parserAdapters.postParse.fieldExtraction.standard": "標準の項目",
@@ -3884,7 +3884,7 @@ export const ja = {
     "解析後の処理の「見出しの階層の推定（AI）」を有効にし、しおりも見出しの番号も無い文書のとき（文書ごと）",
   "settings.answerPrompts.stage.field_extraction": "文書から項目を抽出する",
   "settings.answerPrompts.stage.field_extraction.condition":
-    "解析後の処理の「メタデータ/項目抽出」を有効にしたとき（文書ごと）",
+    "解析後の処理の「メタデータ/項目抽出」を有効にしたとき（本文を分けて送る部分ごと）",
   "settings.answerPrompts.stage.support_guide_draft": "回答の過程から業務ガイドの下書きを作る",
   "settings.answerPrompts.stage.support_guide_draft.condition":
     "業務ガイドの取り込みで「回答の過程（Excel・テキスト）」から下書きを作るときと、品質評価で「回答の過程」から期待の下書きを作るとき（行ごと）",
