@@ -536,7 +536,7 @@ def _first_value(vector: object) -> float:
 async def _fake_search_db(
     statement: str, binds: Mapping[str, object] | None = None
 ) -> list[dict[str, object]]:
-    """1 本ずつの検索の SQL と、``_multi_search_sql`` の両方に答える。"""
+    """検索文 1 本ずつの vector / keyword の検索の SQL に答える。"""
     binds = dict(binds or {})
     by_text = {_text_query(word): hits for word, hits in _KEYWORD_HITS.items()}
     if "embedding" in binds:
@@ -548,25 +548,7 @@ async def _fake_search_db(
         return [
             {**_db_row(number), "score": score} for number, score in by_text[str(binds["query"])]
         ]
-    assert "WITH b0 AS" in statement
-    branches: list[list[tuple[int, float]]] = []
-    for number in range(oracle_module._MULTI_SEARCH_MAX_BRANCHES):
-        if f"embedding_{number}" in binds:
-            branches.append(_VECTOR_HITS[_first_value(binds[f"embedding_{number}"])])
-        elif f"query_{number}" in binds:
-            branches.append(by_text[str(binds[f"query_{number}"])])
-    rows: dict[int, dict[str, object]] = {}
-    for branch, hits in enumerate(branches):
-        for rank, (number, score) in enumerate(hits, start=1):
-            row = rows.setdefault(number, _db_row(number))
-            row[f"rank_{branch}"] = rank
-            row[f"score_{branch}"] = score
-    for row in rows.values():
-        for branch in range(len(branches)):
-            row.setdefault(f"rank_{branch}", None)
-            row.setdefault(f"score_{branch}", None)
-    # 行の並びは決めない(呼び出し側が順位で並べる)。
-    return sorted(rows.values(), key=lambda row: str(row["chunk_id"]), reverse=True)
+    raise AssertionError(f"検索の SQL ではありません: {statement[:80]}")
 
 
 async def test_search_many_matches_hybrid_search_per_query(
@@ -610,31 +592,10 @@ async def test_search_many_matches_hybrid_search_per_query(
     assert [[list(hit.metadata) for hit in hits] for hits in batched] == [
         [list(hit.metadata) for hit in hits] for hits in expected
     ]
-    # vector の検索は 1 本ずつ 4 回（#2800。まとめると索引を使わない）、keyword の検索 3 本で 1 回。
-    assert len(statements) == 5
+    # 検索文ごとの vector の検索 4 本・keyword の検索 3 本を 1 本ずつ読む（#2800）。
+    assert len(statements) == 7
     assert batched[0]
     assert batched[3]
-
-
-def test_multi_search_sql_keeps_per_query_conditions() -> None:
-    """まとめた SQL の中の検索は、1 本ずつの検索と同じ条件・並び・件数。"""
-    where_sql, _ = oracle_module._oracle_retrieval_where({"knowledge_base_id": "kb-1"})
-    fetch_clause = oracle_module._oracle_vector_fetch_clause(top_k=150, target_accuracy=95)
-    statement = oracle_module._multi_search_sql(
-        ["vector", "vector", "keyword"], where_sql=where_sql, fetch_clause=fetch_clause
-    )
-
-    assert statement.count(fetch_clause) == 2
-    assert statement.count(where_sql) == 3
-    assert "CONTAINS(hit.search_text, :query_2, 1) > 0" in statement
-    # 近傍の検索の並びは距離だけ（vector の索引を使う）。同じ距離の行の並びは外側（#2800）。
-    assert "ORDER BY VECTOR_DISTANCE(c.embedding, :embedding_1, COSINE)\n" in statement
-    assert "vector_sort_key ASC, vector_document_id ASC," in statement
-    assert statement.count("WHERE ROWNUM <= :top_k") == 1
-    # 本文と metadata は chunk ごとに 1 回だけ読む(内側の検索は読まない)。
-    assert statement.count("c.chunk_text") == 1
-    with pytest.raises(ValueError):
-        oracle_module._multi_search_sql([], where_sql=where_sql, fetch_clause=fetch_clause)
 
 
 def test_vector_search_decides_the_document_set_before_the_nearest_neighbors() -> None:
