@@ -27,7 +27,11 @@ def test_summary_output_field_requires_matching_real_definition(definition, matc
         [
             {
                 **audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")]),
-                "summary_output_fields": {"definition_quote": definition, "output_artifact_matches": matches},
+                "summary_output_fields": {
+                    "asserts_output_fields": True,
+                    "definition_quote": definition,
+                    "output_artifact_matches": matches,
+                },
             }
         ],
     )

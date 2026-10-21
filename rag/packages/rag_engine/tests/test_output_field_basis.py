@@ -20,7 +20,7 @@ QUOTE = "ファイル A の列は区分と年度です。"
     ],
 )
 def test_both_audits_require_the_definition_and_output_identity(quote, matches, supported):
-    fields = {"definition_quote": quote, "output_artifact_matches": matches}
+    fields = {"asserts_output_fields": True, "definition_quote": quote, "output_artifact_matches": matches}
     review = GroundedItemReview(index=0, support="supported", applicability="matched", reason="合成の判定", output_fields=fields)
     assert (review.support == "supported") is supported
     claim = ValidationClaimCheck(
@@ -57,7 +57,7 @@ def test_screen_filter_is_not_a_definition_even_for_a_carried_item(carried):
                 "support": "supported",
                 "applicability": "matched",
                 "reason": "画面項目",
-                "output_fields": {"definition_quote": "", "output_artifact_matches": True},
+                "output_fields": {"asserts_output_fields": True, "definition_quote": "", "output_artifact_matches": True},
             }
         ],
         summary_supported=True,
@@ -69,7 +69,7 @@ def test_screen_filter_is_not_a_definition_even_for_a_carried_item(carried):
 
 
 def test_invented_definition_is_not_supported_by_either_audit():
-    fields = {"definition_quote": "ファイル A に年度列があります。", "output_artifact_matches": True}
+    fields = {"asserts_output_fields": True, "definition_quote": "ファイル A に年度列があります。", "output_artifact_matches": True}
     quote = "抽出条件は年度です。"
     item = GroundedItem(kind="operation", text="ファイル A の年度列で絞ります。", quote=quote, evidence_id="E1")
     entry = grounded.CheckedItem(item, {"text": quote, "evidence_id": "E1"})
@@ -102,3 +102,40 @@ def test_confirmed_export_operation_is_retained_and_unsupported_summary_is_detec
     bad = "出力ファイルの年度列で絞ります。"
     assert grounded.summary_asserts_denied(bad, [bad], [quote])
     assert not grounded.summary_asserts_denied(quote, [bad], [quote])
+
+
+def test_paragraph_without_column_claim_keeps_supported_with_an_empty_object():
+    """列を主張しない段落に空の照合が付いても、出力ファイルの項目定義を求めない（#2821）。"""
+    fields = {"asserts_output_fields": False, "definition_quote": "", "output_artifact_matches": None}
+    quote = "抽出ボタンを押すと一覧に対象が表示されます。"
+    review = GroundedItemReview(index=0, support="supported", applicability="matched", reason="合成の判定", output_fields=fields)
+    assert review.support == "supported"
+    claim = ValidationClaimCheck(
+        answer_quote="抽出ボタンを押すと一覧に対象が表示されます。",
+        answer_passage_id="A1",
+        status="supported",
+        source_id="c1",
+        evidence_id="E1",
+        evidence_quote=quote,
+        reason="合成の判定",
+        output_fields=fields,
+    )
+    result = _enforce_support(
+        [claim], [{"id": "A1", "text": claim.answer_quote}], {"E1": {"id": "c1", "text": quote}}, {"c1": quote}, [quote]
+    )
+    assert result[0].status == "supported"
+    entry = grounded.CheckedItem(
+        GroundedItem(kind="operation", text=quote, quote=quote, evidence_id="E1"), {"text": quote, "evidence_id": "E1"}, carried=True
+    )
+    audit = GroundedAudit(
+        reviews=[{"index": 0, "support": "unsupported", "applicability": "matched", "reason": "揺れ", "output_fields": fields}],
+        summary_supported=True,
+        goal_alignment="aligned",
+    )
+    grounded.apply_audit([entry], audit)
+    # 持ち越した支持済みの item は、列を主張しない照合だけで印を増やさない。
+    assert not entry.marks
+    assert (
+        grounded.summary_output_fields_error(GroundedAudit.model_validate({**audit.model_dump(), "summary_output_fields": fields}), [])
+        == ""
+    )

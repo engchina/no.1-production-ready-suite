@@ -515,9 +515,13 @@ def _enforce_support(
                 claim = claim.model_copy(update={"reference_check": REFERENCE_QUOTE_UNMATCHED})
             elif claim.applicability == "not_applicable":
                 claim = _not_supported(claim, "unsupported", SUPPORT_TARGET_MISMATCH, "根拠は段落・質問と別の対象についての記載です。")
-            elif claim.output_fields is not None and (
-                claim.output_fields.output_fields_unconfirmed()
-                or not any(quote_in_text(claim.output_fields.definition_quote, text) for text in _support_texts(claim, catalog, texts))
+            elif (
+                claim.output_fields is not None
+                and claim.output_fields.asserts_output_fields
+                and (
+                    claim.output_fields.output_fields_unconfirmed()
+                    or not any(quote_in_text(claim.output_fields.definition_quote, text) for text in _support_texts(claim, catalog, texts))
+                )
             ):
                 claim = _not_supported(
                     claim, "unsupported", "output_field_basis_unconfirmed", "出力ファイルの項目定義と対象の一致を確認できません。"

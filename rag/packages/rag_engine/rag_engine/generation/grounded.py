@@ -2356,7 +2356,11 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
         span = entry.span
         if entry.removed or span is None:
             continue
-        if review.output_fields is not None and review.output_fields.definition_quote.strip():
+        if (
+            review.output_fields is not None
+            and review.output_fields.asserts_output_fields
+            and review.output_fields.definition_quote.strip()
+        ):
             definition = review.output_fields.definition_quote.strip()
             source_texts = [span["text"], *span.get("document_texts", ())]
             if not any(quote_in_text(definition, text) for text in source_texts):
@@ -2372,7 +2376,8 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
             if review.support == "unsupported" and not entry.carried:
                 entry.mark("unsupported", review.reason, reason=reason)
             continue
-        if review.support != "supported" and (not entry.carried or review.output_fields is not None):
+        asserts_fields = review.output_fields is not None and review.output_fields.asserts_output_fields
+        if review.support != "supported" and (not entry.carried or asserts_fields):
             if review.support == "unsupported" and _is_route_navigation(entry.item, span):
                 continue  # 見出しの画面経路を開くだけの item は、引用に経路がなくても印を付けない (#629)
             entry.mark("unsupported", review.reason, reason=reason)
@@ -4243,7 +4248,7 @@ def _unused_evidence(question: str, spans: Sequence[dict], used: set[str]) -> li
 def summary_output_fields_error(audit: GroundedAudit | None, spans: Sequence[dict]) -> str:
     """要約も本文と同じ出力項目の契約と原文に照合する。"""
     fields = audit.summary_output_fields if audit else None
-    if fields is None:
+    if fields is None or not fields.asserts_output_fields:
         return ""
     if fields.output_fields_unconfirmed():
         return "要約が主張する出力ファイルの項目定義と対象の一致を確認できません。"
