@@ -153,3 +153,13 @@ def test_failed_case_stays_in_expected_decision_breakdown() -> None:
     assert breakdown.metric_case_counts["response_decision_accuracy"] == 0
     assert result.response_decision_accuracy is None
     assert result.passed is False
+
+
+def test_unassessed_completed_judgement_keeps_null_verdict() -> None:
+    from app.rag.evaluation import summarize_answer_judgement
+
+    summary = summarize_answer_judgement({"status": "completed", "passed": None})
+    assert summary.passed is None
+    assert summary.answer_correctness is None
+    assert summary.claim_support_rate is None
+    assert summary.requirement_coverage is None

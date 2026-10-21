@@ -686,9 +686,10 @@ def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAn
     ]
     coverage_checks = _mapping_list(evaluation.get("coverage_checks"))
     coverage = _optional_float(evaluation.get("requirement_coverage"))
+    passed = evaluation.get("passed")
     return EvaluationAnswerJudgement(
         status="completed",
-        passed=bool(evaluation.get("passed")),
+        passed=passed if isinstance(passed, bool) else None,
         claims_supported=claims_supported(claims),
         answer_correctness=_optional_float(evaluation.get("answer_correctness")),
         claim_support_rate=_optional_float(evaluation.get("claim_support_rate")),
