@@ -443,7 +443,7 @@ for (const theme of ["light", "dark"] as const) {
       // 折りたたみ（アイコンだけ）のサイドナビは名前を出さず（アイコンの行のリンクだけ。#1873）、操作はアイコンの列に収まる。
       await reloaded.getByRole("button", { name: "サイドバーを折りたたむ" }).click();
       await expect(reloaded).toHaveAttribute("data-state", "collapsed");
-      await expect(reloaded.getByTestId("sidebar-account")).toHaveAttribute("aria-label", `アカウント設定を開く（${longName}） ${longName} システム管理者`);
+      await expect(reloaded.getByTestId("sidebar-account")).toHaveAttribute("aria-label", `アカウント設定を開く（${longName}）`);
       await expect(reloaded.getByText(longRoleNames)).toHaveCount(0);
       await expectAccountFooterInsideSidebar(page);
     }
