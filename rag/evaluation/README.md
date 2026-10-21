@@ -26,77 +26,29 @@ job 全体の時間の上限は、投入時の回答の回数（ケース × 往
 同時に実行できる評価の job は 2 件までです。以前の同期の `POST /api/evaluation/run` は、外部から直接呼ぶ
 利用のために残していますが、評価全体を 600 秒で打ち切ります（#383）。
 
-## 評価の指標（#591）
+## 評価の六指標
 
-各ケースは、回答エンジン（根拠付き回答。全体の既定の設定）で回答し、回答の記録（引用・根拠・実行記録）から
-指標を求めます。評価は検索・回答プロファイルを受け取りません（#301）。指標は「検索」「根拠」「回答」の 3 つの観点に整理した
-9 つと、業務支援の「対応」の 4 つ（#1231）です。各指標は、その指標を測れるケースだけの平均で、対象の件数は `metric_case_counts` に返します。対象の
-ケースが無い指標は `null` です（0 と区別します）。失敗したケースは `error_count` で数え、指標の平均には入れません。
+「検索2・回答3・応答の判断1」の順に統一します。定義・閾値・Excelの入力は
+[評価・観測性・ガードレール](../docs/evaluation-observability-guardrails.md#評価)が正本です。
 
-| 観点 | 指標 | 意味 | 対象のケース |
-|---|---|---|---|
-| 検索 | `context_recall` | 正解の文書のうち、回答の根拠に取れた割合 | `relevant_document_ids` のあるケース |
-| 検索 | `mrr` | 最初の正解の文書が何番目の根拠に出たか（逆数の平均） | 同上 |
-| 根拠 | `faithfulness` | 回答の語句のうち、根拠の本文に含まれる割合（決定論の近似。業務 Agent の最終の検証が足す「資料で確認できず除いた内容」の節は数えない。#1456） | 拒答していないケース |
-| 根拠 | `citation_traceability_coverage` | 引用を文書・ページ・要素までたどれる割合（表計算の引用は頁の代わりにシート名と行・セル範囲・要素の ID でたどる。#1456） | 引用のあるケース |
-| 根拠 | `claim_support_rate` | 根拠のない主張・根拠と矛盾する主張が無いケースの割合（主張ごとの監査） | `standard_answer` のあるケース |
-| 回答 | `answer_keyword_hit_rate` | 期待する語をすべて含む回答の割合 | `expected_answer_keywords` のあるケース |
-| 回答 | `refusal_accuracy` | 答えるべき質問に答え、答えるべきでない質問に答えなかった割合 | すべてのケース |
-| 回答 | `requirement_coverage` | 標準回答の必要な項目に、回答が対応した割合 | `standard_answer` のあるケース |
-| 回答 | `answer_pass_rate` | 4 軸（正確性・網羅性・根拠との整合性・生成品質）で 16 / 20 点以上、かつ監査を終えた割合 | `standard_answer` のあるケース |
+| 分類 | 指標 | 評価入力 |
+|---|---|---|
+| 検索 | `required_evidence_recall` | 必要な本文・位置を指定した `required_evidence` |
+| 検索 | `mrr` | `relevant_document_ids`。重複を除いた引用文書の最初の正解の順位 |
+| 回答 | `answer_correctness` | 標準回答または確認済みの `required_answer_points` |
+| 回答 | `requirement_coverage` | 標準回答・必須要点・`required_conditions` |
+| 回答 | `claim_support_rate` | 回答の主張と取得した根拠。標準回答は不要 |
+| 応答の判断 | `response_decision_accuracy` | `expected_response_decision`: `answer` / `clarify` / `hold` |
 
-| 対応 | `handling_accuracy` | 回答の対応が、ケースの受け入れる対応（`expected_outcomes`）のどれかだった割合 | `expected_outcomes` のあるケース |
-| 対応 | `step_order_score` | 期待する手順の語（`expected_steps`）が、期待の順に回答に出た度合い（最長の順序の一致 / 手順の数） | `expected_steps` のあるケース |
-| 対応 | `safe_answer_rate` | 勧めてはいけない操作の表現（`forbidden_phrases`）を含まなかった割合（どちらの基準でも 100% を求める） | `forbidden_phrases` のあるケース |
-| 対応 | `condition_coverage` | 回答が触れるべき条件（`required_conditions`）に触れた割合 | `required_conditions` のあるケース |
+前提不足は `null`（未評価）で、0点や合格にしません。`metric_case_counts`が指標ごとの対象件数です。
+標準回答や根拠が空でも、保留を期待するとは推定しません。判断の期待は明示します。
+`expected_outcomes`を使う場合も、明示値を三つの判断へまとめます。
 
-閾値の判定と画面の指標の一覧には入れず、結果に出すだけの参考の集計（#1284 / #1335）:
-
-| 観点 | 指標 | 意味 | 対象のケース |
-|---|---|---|---|
-| 根拠 | `required_evidence_recall` | 必要な根拠（`required_evidence`）のうち、最後の回答の引用で取れた割合（ケースの平均） | `required_evidence` のあるケース（確認の質問・人への引き継ぎで引用の無い回答を除く） |
-| 根拠 | `evidence_chain_complete_rate` | 必要な根拠を**すべて**取れたケースの割合。多段の質問は 1 つでも欠けると答えられないため、再現率の平均とは別に見る（ケースの値は `evidence_chain_complete`） | 同上 |
-
-- 種類別・段の数別の内訳（#1335）: ケースに多段の質問の種類（`reasoning_type`）・段の数（`hops`）があると、結果の
-  `reasoning_type_breakdown`・`hops_breakdown`（段の数の key は `"1"`・`"2"` などの文字列）に、種類・段の数ごとの
-  `required_evidence_recall`・`evidence_chain_complete_rate`・`answer_keyword_hit_rate` と、件数（`case_count`・
-  `error_count`・`metric_case_counts`）を出します。種類・段の数の無いケースは `unspecified` です。区分ごとの内訳
-  （`split_breakdown`）の中にも同じ内訳があり、dev だけの値を読めます。
-- `reasoning_type` は `single_hop`（1 つの根拠で答えられる対照）/ `bridge`（橋渡し: A の属性で B を引き、B の属性で
-  答える）/ `comparison`（2 つ以上の実体の属性を比べる）/ `intra_document_reference`（同じ文書の中の参照をたどる）/
-  `table_lookup`（本文の実体で表の行を引く）/ `section_read`（複数ページの章節を読み切る。必要な根拠が同じ章節の別々の
-  ページにある。#1438）。`hops` は根拠をたどる回数（比べる質問は 1 つの実体あたりの回数）で、
-  `reasoning_type` と一緒に書きます。`single_hop` は 1、`bridge`・`intra_document_reference` は 2 以上で、
-  `required_evidence` は段ごとに書くため `hops` より少なくできません（422）。採点の方法は変わりません。
-- ケースの `include_superseded: true`（#1366）は、新しい版に置き換えた文書（旧版）も検索して答えるケース（版の
-  比較など）です。そのケースだけ、利用者が旧版・変更点を尋ねるときと同じく `filters` に `include_superseded=true` を
-  足して回答します（既定は `false` で、旧版は検索から外れます）。
-
-- 「対応」の 4 つは業務支援の評価（#1231）です。回答の対応（`answered`・`conditional`・`needs_clarification`・
-  `needs_environment_data`・`needs_human`・`insufficient_evidence`）は、回答の記録の `diagnostics.answer.outcome` が
-  あればそれを使い、無ければ拒答・`external_data_required`・`needs_human_review` から推定します（結果の
-  `outcome_source` が `explicit` / `inferred`）。語の照合は NFKC・大小文字・空白を無視します。LLM は呼びません。
-  期待する語（`expected_answer_keywords`）の照合も同じく NFKC・大小文字・空白を無視します（全角の「ＨＲＭ」と
-  「HRM」、「5 年」と「5年」を同じ語とみなす。#1335）。
-  ケースの分類（`category`）は分類ごとの内訳（`category_breakdown`）に使います。
-- `answerable: false` のケース（資料に答えが無い質問）は、拒答の正しさだけを測ります。`answerable` を省略したときは、
-  `relevant_document_ids`・`expected_answer_keywords`・`standard_answer` のどれも無いケースを答えるべきでない質問と
-  みなします。
-- `standard_answer` のあるケースは、回答を標準回答と LLM で比較します（LLM を複数回呼ぶため時間がかかります）。
-  軸ごとの理由・主張ごとの判定は、`trace_id` の回答の記録に保存します。比較できなかったケース（時間切れ・入力の
-  上限など）は指標に入れず、`answer_evaluation_error` として数え、評価を合格にしません。
-- 削除した指標（`precision_at_k`・`recall_at_k`・`groundedness_pass_rate`・`context_precision`・`response_relevancy`・
-  `noise_sensitivity`・`bbox_citation_coverage`・`element_lineage_coverage`・`content_kind_hit_rate`・`section_coverage`）
-  の `thresholds` は受け付けません（422）。ケースの `expected_content_kind`・`expected_section_paths` と、評価の
-  `mode`・`rerank_top_n` は、以前の評価ファイルを読めるように無視します。
-  保存済みの評価の結果に残る古い指標は、読み込み時に捨てます（画面は削除した指標・基準の名前を原文のまま出します）。
-
-CI / staging gate では `thresholds` か評価の基準（`suite`。`standard`＝標準（既定）/ `strict`＝厳格）を使い、
-レスポンスの `passed=false`、`error_count>0`、または `threshold_failures` 非空を失敗条件にします。閾値は、測れた
-指標だけに適用します（標準回答の無い golden set では、標準回答が必要な指標を判定しません）。`failure_reason_counts`
-は case 単位の失敗理由分布で、`retrieval_miss`・`partial_recall`・`unexpected_refusal`・`unexpected_answer`・
-`answer_keyword_miss`・`low_groundedness`・`unsupported_claim`・`missing_content`・`answer_failed` などから、
-次に調整すべき工程（検索・根拠・回答）を切り分けます。
+`reasoning_type_breakdown`・`hops_breakdown`・`split_breakdown`・`category_breakdown`も同じ六指標と件数です。
+`decision_breakdown`で期待する回答・確認・保留ごとの内訳を確認できます。
+`reasoning_type`・`hops`・`conditions`・`turns`・`include_superseded`は検索と会話の条件として使います。
+実行の失敗は平均に入れず`error_count`で数え、合格にしません。評価の未完了も合格にしません。
+総合状態`passed`は残る指標から導き、CLIは未評価・不合格・実行エラーを成功扱いにしません。
 
 検索・回答プロファイルの用語・ルール・業務ガイド・回答の設定を含めて評価するときは、`search_answer_profile_id`
 （`/run` の request）を指定します（#1249）。ケースごとに検索・回答と同じ解決（参照する
@@ -131,7 +83,7 @@ uv run python -m app.rag.evaluation_cli \
 `multi-hop/` に、架空の「サンプル社」（と子会社）の業務文書（PDF 13 件・xlsx 2 件。旧版・別の会社・似た規程を含む
 子 chunk 約 240）と、資料をまたいで実体をたどる質問 69 問（`multi-hop.json`。dev 40 問・holdout 29 問。種類
 `reasoning_type` と段の数 `hops`、段ごとの必要な根拠つき）を置いています。資料と評価セットは
-`rag/scripts/multi_hop_corpus.py` が実体のデータから作ります。RAG の内部に実体の層を入れるかを、検索・回答（A）と業務 Agent（D）の根拠の連鎖の完全率で決める
+`rag/scripts/multi_hop_corpus.py` が実体のデータから作ります。RAG の内部に実体の層を入れるかを、検索・回答（A）と業務 Agent（D）の必要な根拠の取得率などで確かめる
 ための評価セットです。資料の作り方・取り込み方・実行の手順は [multi-hop/README.md](./multi-hop/README.md) を
 見てください。`evaluation_cli` の `--split dev` で、区分のケースだけを流せます。評価セットの文書の版
 （`document_versions`。#1366）は、`evaluation_corpus_cli` が取り込みのときに旧版を新しい版に置き換えた文書として

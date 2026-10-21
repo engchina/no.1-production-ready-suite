@@ -329,8 +329,8 @@ def _preview_row(row: EvaluationExcelRow) -> EvaluationImportRow:
             else None
         ),
         has_standard_answer=answer is not None,
-        expects_answer=bool(row.evidence or answer),
-        screens=list(row.screen_lines),
+        expected_response_decision=row.response_decision,
+        required_answer_points=list(row.screen_lines),
         answer_process=row.answer_process,
     )
 
@@ -560,10 +560,8 @@ def _case_summary(case: EvaluationCase) -> dict[str, Any]:
         "query_hash": _hash_text(case.query),
         "query_chars": len(case.query),
         "relevant_document_ids": case.relevant_document_ids,
-        "expected_answer_keyword_hashes": [
-            _hash_text(keyword) for keyword in case.expected_answer_keywords
-        ],
-        "expected_answer_keyword_count": len(case.expected_answer_keywords),
+        "required_answer_point_count": len(case.required_answer_points),
+        "expected_response_decision": case.expected_response_decision,
         # 標準回答の本文は残さない(有無と hash だけ。#591)。
         "standard_answer_hash": (
             _hash_text(case.standard_answer) if case.standard_answer is not None else None
@@ -574,12 +572,11 @@ def _case_summary(case: EvaluationCase) -> dict[str, Any]:
         "condition_ids": sorted(case.all_condition_ids()),
         "required_evidence_ids": [evidence.id for evidence in case.required_evidence],
         # 案内すべき画面の数（#2402。画面の名前は残さない）。
-        "expected_screen_count": len(case.expected_screens),
     }
 
 
 def _metrics_passed(metrics: EvaluationMetrics) -> bool:
-    return metrics.passed and metrics.error_count == 0 and not metrics.threshold_failures
+    return metrics.passed is True and metrics.error_count == 0 and not metrics.threshold_failures
 
 
 def _hash_text(value: str) -> str:

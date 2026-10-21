@@ -1,42 +1,8 @@
-"""RAG 評価ランナー。
+"""RAG の六指標評価。検索二・回答三・応答の判断一を独立して集計する。
 
-golden set の各ケースを回答エンジン(根拠付き回答。全体の既定の設定)で回答し、回答の記録
-(引用・根拠・実行記録)から指標を求める(#591)。指標は 3 つの観点に整理した 9 つ。
-
-- 検索: context_recall(正解の文書を取れたか)/ mrr(正解の文書が何番目に出たか)
-- 根拠: claim_support_rate(画面の名前は Faithfulness。標準回答による評価で LLM が回答を主張に
-  分け、根拠のない主張・根拠と矛盾する主張が無いケースの割合)/ citation_traceability_coverage
-  (引用を原文の位置へたどれる割合)/ faithfulness(画面の名前は「根拠との語句の一致率」。回答の語が
-  根拠に含まれる割合。言い換えで下がるため参考値にし、閾値の判定と失敗理由に使わない。#711)
-- 回答: answer_keyword_hit_rate(期待する語をすべて含むケースの割合)/ refusal_accuracy(答える
-  べきケースで答え、答えるべきでないケースで答えなかった割合)/ requirement_coverage(標準回答の
-  必要な項目への対応率)/ answer_pass_rate(標準回答による評価の合格の割合)
-
-各指標は、その指標を測れるケースだけの平均にする(例: 正解の文書が無いケースは検索の指標の
-対象外、期待する語の無いケースは answer_keyword_hit_rate の対象外)。失敗したケースは error_count
-で数え、指標の平均には入れない(1 件でも失敗があれば不合格)。標準回答による評価(LLM を複数回
-呼ぶ)は、標準回答のあるケースだけで行う。
-
-業務支援の評価の契約（#1284。handoff §14.1 / §14.2）: ケースの既知の条件（`conditions`）は
-検索・回答の request の `conditions` に渡す。確認の質問への返答（`turns`）は、チャットと同じく
-返答を次の質問にし、前の往復を会話の履歴として順に実行する。結果は区分（dev / holdout）ごとの
-内訳と、必要な根拠ごとの再現率（`required_evidence_recall`。参考の集計）を持つ。
-
-多段の質問の評価（#1335）: 必要な根拠をすべて取れたケースの割合（`evidence_chain_complete_rate`。
-参考の集計）と、ケースの種類（`reasoning_type`）別・段の数（`hops`）別の内訳（必要な根拠の再現率・
-根拠の連鎖の完全率・期待する語の一致率）を持つ。
-
-案内した画面と目的外（#2402）: 案内すべき画面（`expected_screens`）のあるケースは、最後の回答が
-案内した画面を比べ（`evaluation_screens`。決定的に決め、決められないときだけ判定器）、案内すべき画面を
-すべて案内したケースの割合（`screen_match_rate`）とほかの画面を案内したケースの割合
-（`wrong_screen_rate`）を出す。回答の監査の目的との合い方（`goal_alignment`）が目的外
-（off_target）のケースの割合（`off_target_rate`）も出す。どれも参考の集計（閾値の判定に使わない）。
-
-段落の印（#2738）: 回答ごとに、根拠と矛盾して外した段落・未確認の印の段落・要注意の印の段落の
-数を記録し（`removed_passages` など）、1 回答あたりの平均（`removed_passages_per_answer` など。
-参考の集計）を出す。
-faithfulness は印の段落も本文として数え、外した段落の節は除く（`answer_metrics.grounding_text`）。
-"""
+必要な根拠は本文・位置、MRR は重複を除いた引用文書の順位、回答は意味上の正確性・網羅性・
+主張の支持を測る。期待する応答の判断は明示入力だけを使う。前提不足は None とし平均に入れない。
+会話の履歴・条件・区分・種類別の内訳を保ち、実行エラーと評価の未完了を合格にしない。"""
 
 import asyncio
 import logging
@@ -54,8 +20,6 @@ from pr_backend_core.bounded_calls import (
     BoundedCaller,
     BoundedCallFailed,
 )
-from rag_engine.generation.passage_marks import mark_counts
-from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 
 from app.clients.ai_calls import make_ai_caller
 from app.clients.oracle import OracleClient
@@ -65,7 +29,6 @@ from app.rag.answer_failure import describe_answer_failure
 from app.rag.answer_metrics import (
     REFERENCE_ONLY_METRICS,
     claims_supported,
-    grounding_text,
     is_abstained_answer,
 )
 from app.rag.answer_threads import run_answer_in_thread
@@ -79,25 +42,9 @@ from app.rag.answer_timeout import (
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.evaluation_handling import (
-    asked_condition_ids,
-    best_step_order_score,
-    condition_coverage,
     contains_normalized,
-    forbidden_hits,
     observed_outcome,
 )
-from app.rag.evaluation_screens import (
-    ScreenJudge,
-    ScreenScore,
-    cited_screen_names,
-    llm_screen_judge,
-    score_from_judgement,
-    score_screens,
-    screen_name_labels,
-    unresolved_score,
-)
-from app.rag.file_processing_evaluation import citation_traceability_coverage
-from app.rag.grounding_metrics import evaluate_groundedness
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
     elapsed_ms,
@@ -106,9 +53,9 @@ from app.rag.observability import (
     record_rag_request,
 )
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgressCallback
-from app.rag.stored_answer import PASSAGE_MARK_RECORD_KEYS
 from app.schemas.evaluation import (
     EVALUATION_METRIC_NAMES,
+    EVALUATION_METRICS_VERSION,
     EVALUATION_REASONING_METRIC_NAMES,
     EVALUATION_REPORT_ONLY_METRIC_NAMES,
     EVALUATION_UNASSIGNED_SPLIT,
@@ -119,8 +66,6 @@ from app.schemas.evaluation import (
     EvaluationCaseResult,
     EvaluationCategorySummary,
     EvaluationEvidence,
-    EvaluationFailureReason,
-    EvaluationHandlingExpectation,
     EvaluationMetrics,
     EvaluationRagOverrides,
     EvaluationReasoningSummary,
@@ -335,7 +280,6 @@ class EvaluationRunner:
         settings: Settings | None = None,
         answer_judge: AnswerJudge | None = None,
         profile_resolver: ProfileResolver | None = None,
-        screen_judge: ScreenJudge | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._pipeline = pipeline
@@ -345,10 +289,6 @@ class EvaluationRunner:
         self._answer_judge: AnswerJudge | None = answer_judge
         if answer_judge is None and pipeline is None:
             self._answer_judge = _settings_judge(self._settings)
-        # 案内した画面を決められないときの判定器（#2402）。judge と同じく、既定の pipeline だけ
-        # LLM を使い、テストで pipeline を注入したときは明示した判定器だけを使う。
-        self._screen_judge: ScreenJudge | None = screen_judge
-        self._default_screen_judge = screen_judge is None and pipeline is None
 
     async def run(
         self,
@@ -593,48 +533,7 @@ class EvaluationRunner:
         )
         final_response = turn_runs[-1].response
         judgement = await self._judge(case, final_response, deadline, caller)
-        screen_score = await self._screens(case, final_response, caller)
-        return _case_result(
-            case, final_response, judgement, turn_runs=turn_runs, screen_score=screen_score
-        )
-
-    async def _screens(
-        self, case: EvaluationCase, response: SearchResponse, caller: BoundedCaller
-    ) -> ScreenScore | None:
-        """案内した画面の採点（#2402）。決定的に決め、決められないときだけ判定器を呼ぶ。
-
-        案内すべき画面の無いケース・測れない回答（拒答・検索をしない回答）と、判定器が無い・失敗した
-        ときは None（`_case_result` が測れない / 未判定にする）。
-        """
-        if not _screens_measurable(case, response) or is_abstained(response):
-            return None
-        cited = cited_screen_names(
-            (chunk.text for chunk in response.citations), screen_name_labels()
-        )
-        score = score_screens(response.answer, case.expected_screens, cited)
-        if score is None and self._screen_judge is None and self._default_screen_judge:
-            from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
-
-            self._screen_judge = llm_screen_judge(OciEnterpriseAiClient(settings=self._settings))
-        if score is not None or self._screen_judge is None:
-            return score
-        judge = self._screen_judge
-
-        async def judge_once(_attempt: Attempt) -> ScreenScore:
-            # 流量の制限の送り直しは共通の実行器が行う（SDK の送り直しと重ねない。#2004）。
-            with sdk_retries_disabled():
-                judgement = await judge(
-                    answer=response.answer, expected=case.expected_screens, candidates=cited
-                )
-            return score_from_judgement(case.expected_screens, judgement)
-
-        try:
-            return await _call_unwrapped(caller, judge_once, label=case.id)
-        except BoundedCallAborted:
-            raise
-        except Exception as exc:  # noqa: BLE001 - 判定できなければ未判定としてケースを続ける。
-            logger.info("evaluation_screen_judge_failed", extra={"error_type": type(exc).__name__})
-            return None
+        return _case_result(case, final_response, judgement, turn_runs=turn_runs)
 
     async def _judge(
         self,
@@ -644,20 +543,44 @@ class EvaluationRunner:
         caller: BoundedCaller | None = None,
     ) -> EvaluationAnswerJudgement | None:
         """標準回答のあるケースを LLM で評価する。標準回答が無ければ None。"""
-        if case.standard_answer is None:
+        if not (
+            case.standard_answer
+            or case.required_answer_points
+            or case.required_conditions
+            or response.citations
+        ):
             return None
-        evaluation_input = response.evaluation_input
-        if self._answer_judge is None or not evaluation_input:
-            return EvaluationAnswerJudgement(
-                status="unavailable", message=ANSWER_JUDGE_UNAVAILABLE_MESSAGE
-            )
+        evaluation_input = response.evaluation_input or {
+            "question": case.query,
+            "answer_text": response.answer,
+            "evidence_items": [
+                {
+                    "id": item.chunk_id,
+                    "chunk_uid": item.chunk_id,
+                    "source": item.file_name or item.document_id,
+                    "text": item.text,
+                }
+                for item in response.citations
+            ],
+        }
+        if self._answer_judge is None:
+            return None
         remaining = _remaining_seconds(deadline)
         timeout = ANSWER_JUDGE_TIMEOUT_SECONDS if remaining is None else remaining
         timeout = min(timeout, ANSWER_JUDGE_TIMEOUT_SECONDS)
         if timeout <= 0:
             return EvaluationAnswerJudgement(status="timeout", message=ANSWER_JUDGE_TIMEOUT_MESSAGE)
         judge = self._answer_judge
-        standard_answer = case.standard_answer
+        standard_answer = "\n".join(
+            filter(
+                None,
+                [
+                    case.standard_answer or "",
+                    *case.required_answer_points,
+                    *case.required_conditions,
+                ],
+            )
+        )
 
         async def judge_once(_attempt: Attempt) -> Mapping[str, object]:
             return await judge(
@@ -679,7 +602,16 @@ class EvaluationRunner:
             return EvaluationAnswerJudgement(status="timeout", message=ANSWER_JUDGE_TIMEOUT_MESSAGE)
         except Exception:  # noqa: BLE001 - 評価の失敗はケースの結果に残して続ける。
             return EvaluationAnswerJudgement(status="error", message=ANSWER_JUDGE_ERROR_MESSAGE)
-        return summarize_answer_judgement(evaluation)
+        summary = summarize_answer_judgement(evaluation)
+        if not standard_answer:
+            return summary.model_copy(
+                update={
+                    "answer_correctness": None,
+                    "requirement_coverage": None,
+                    "missing_content": None,
+                }
+            )
+        return summary
 
 
 class _EvaluationStopped(Exception):
@@ -754,10 +686,13 @@ def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAn
     ]
     coverage_checks = _mapping_list(evaluation.get("coverage_checks"))
     coverage = _optional_float(evaluation.get("requirement_coverage"))
+    passed = evaluation.get("passed")
     return EvaluationAnswerJudgement(
         status="completed",
-        passed=bool(evaluation.get("passed")),
+        passed=passed if isinstance(passed, bool) else None,
         claims_supported=claims_supported(claims),
+        answer_correctness=_optional_float(evaluation.get("answer_correctness")),
+        claim_support_rate=_optional_float(evaluation.get("claim_support_rate")),
         requirement_coverage=(
             round(min(1.0, max(0.0, coverage)), 4) if coverage is not None else None
         ),
@@ -844,13 +779,25 @@ def summarize_case_results(
     aggregate_values = aggregate.means()
     threshold_failures = _threshold_failures(thresholds, aggregate_values)
     return EvaluationMetrics(
+        metrics_version=EVALUATION_METRICS_VERSION,
+        decision_breakdown=decision_breakdown(results),
         case_count=len(results),
         error_count=error_count,
         category_breakdown=category_breakdown(results),
         split_breakdown=split_breakdown(results),
         reasoning_type_breakdown=reasoning_type_breakdown(results),
         hops_breakdown=hops_breakdown(results),
-        passed=not threshold_failures and error_count == 0 and judge_incomplete_count == 0,
+        passed=(
+            False
+            if threshold_failures or error_count or judge_incomplete_count
+            else None
+            if not any(aggregate.counts().values())
+            or any(
+                aggregate_values.get(name) is None
+                for name in (thresholds.model_dump(exclude_none=True) if thresholds else ())
+            )
+            else True
+        ),
         threshold_failures=threshold_failures,
         failure_reason_counts=failure_reason_counts,
         metric_case_counts=aggregate.counts(),
@@ -877,6 +824,26 @@ def score_case_answers(
     return _case_result(case, runs[-1].response, judgement, turn_runs=runs)
 
 
+def _response_decision(outcome: str) -> str:
+    if outcome in {"answered", "conditional"}:
+        return "answer"
+    return "clarify" if outcome == "needs_clarification" else "hold"
+
+
+def _expected_case_decisions(case: EvaluationCase) -> list[str]:
+    return sorted(
+        {
+            decision
+            for expectation in [case, *case.turns]
+            for decision in (
+                [expectation.expected_response_decision]
+                if expectation.expected_response_decision
+                else [_response_decision(item) for item in expectation.expected_outcomes]
+            )
+        }
+    )
+
+
 def case_error_result(
     case: EvaluationCase,
     *,
@@ -896,6 +863,7 @@ def case_error_result(
         trace_id=trace_id,
         status="error",
         relevant_document_ids=list(case.relevant_document_ids),
+        expected_decisions=_expected_case_decisions(case),
         failure_reasons=["case_error"],
         elapsed_ms=elapsed_ms,
         error_type=error_type,
@@ -910,7 +878,6 @@ def _case_result(
     judgement: EvaluationAnswerJudgement | None,
     *,
     turn_runs: Sequence[_TurnRun] | None = None,
-    screen_score: ScreenScore | None = None,
 ) -> EvaluationCaseResult:
     """1 ケースの回答から、測れる指標と失敗理由を求める。
 
@@ -926,67 +893,60 @@ def _case_result(
     relevant = set(case.relevant_document_ids)
     # 答えるべきでない質問(#301)は拒答の正しさだけを測る。正解の文書が無いケースは検索の
     # 指標の対象外(#591)。
-    answerable = case.expects_answer
     abstained = is_abstained(response)
     hits: list[str] = []
-    context_recall: float | None = None
     reciprocal_rank: float | None = None
     if relevant and not _skips_retrieval(response):
         hits = [doc_id for doc_id in retrieved_ids if doc_id in relevant]
-        context_recall = len(set(hits)) / len(relevant)
         reciprocal_rank = _reciprocal_rank(retrieved_ids, relevant)
 
-    faithfulness: float | None = None
-    overlap_count = 0
-    feature_count = 0
-    passages = _passage_counts(response)
-    # 印の付いた段落は本文の主張として数える（#2738。本文がすべて未確認の回答は対応が
-    # insufficient_evidence でも、本文の段落を照合する）。
-    marked_body = bool(passages and passages["unverified"] + passages["warning"])
-    if (not abstained or marked_body) and response.answer.strip():
-        groundedness = evaluate_groundedness(
-            grounding_text(response.answer), "\n".join(chunk.text for chunk in response.citations)
-        )
-        faithfulness = groundedness.score
-        overlap_count = groundedness.overlap_count
-        feature_count = groundedness.answer_feature_count
-
-    citation_coverage = (
-        citation_traceability_coverage(response.citations) if response.citations else None
-    )
-    keyword_hit = (
-        _answer_contains_keywords(response.answer, case.expected_answer_keywords)
-        if case.expected_answer_keywords
-        else None
-    )
     evidence_recall, missing_evidence = _evidence_scores(case, response)
-    expectations: list[EvaluationHandlingExpectation] = [case, *case.turns]
-    turn_results = [
-        _turn_result(index, expectation, run)
-        for index, (expectation, run) in enumerate(zip(expectations, runs, strict=False))
-    ]
-    handling = _combine_turn_results(turn_results)
-    failure_reasons = _case_failure_reasons(
-        answerable=answerable,
-        has_relevant=bool(relevant) and not _skips_retrieval(response),
-        relevant_count=len(relevant),
-        hit_count=len(set(hits)),
-        abstained=abstained,
-        keyword_hit=keyword_hit,
-        guardrail_warnings=response.guardrail_warnings,
-        judgement=judgement,
-    ) + _handling_failure_reasons(handling)
+    observed = observed_outcome(response.diagnostics.answer, abstained=abstained)
+
+    expectations_by_turn = [case, *case.turns]
+    decisions = []
+    turn_results = []
+    expected_decisions: set[str] = set()
+    for index, (expectation, run) in enumerate(zip(expectations_by_turn, runs, strict=False)):
+        expected = (
+            {expectation.expected_response_decision}
+            if expectation.expected_response_decision
+            else {_response_decision(item) for item in expectation.expected_outcomes}
+        )
+        actual = observed_outcome(
+            run.response.diagnostics.answer, abstained=is_abstained(run.response)
+        )
+        correct = _response_decision(actual.outcome) in expected if expected else None
+        if correct is not None:
+            decisions.append(correct)
+            expected_decisions.update(expected)
+        turn_results.append(
+            EvaluationTurnResult(
+                turn=index,
+                trace_id=run.response.trace_id,
+                observed_outcome=actual.outcome,
+                outcome_source=actual.source,
+                response_decision_accuracy=_bool_value(correct),
+                expected_decisions=sorted(expected),
+                elapsed_ms=run.response.elapsed_ms,
+            )
+        )
+    failure_reasons: list[str] = []
     if missing_evidence:
         failure_reasons.append("evidence_miss")
-    screens = _case_screen_score(case, response, abstained, screen_score)
-    if screens is not None:
-        if not screens.screen_match:
-            failure_reasons.append("screen_missing")
-        if screens.wrong_screen:
-            failure_reasons.append("wrong_screen")
-    goal_alignment = _goal_alignment(response)
-    if goal_alignment == "off_target":
-        failure_reasons.append("off_target")
+    if relevant and not hits and not _skips_retrieval(response):
+        failure_reasons.append("retrieval_miss")
+    if decisions and not all(decisions):
+        failure_reasons.append("unexpected_handling")
+    if judgement is not None:
+        if judgement.status != "completed":
+            failure_reasons.append("answer_evaluation_error")
+        if judgement.answer_correctness is not None and judgement.answer_correctness < 1:
+            failure_reasons.append("answer_failed")
+        if judgement.missing_content:
+            failure_reasons.append("missing_content")
+        if judgement.claim_support_rate is not None and judgement.claim_support_rate < 1:
+            failure_reasons.append("unsupported_claim")
     return EvaluationCaseResult(
         case_id=case.id,
         trace_id=response.trace_id,
@@ -997,30 +957,16 @@ def _case_result(
         retrieved_document_ids=retrieved_ids,
         relevant_document_ids=list(case.relevant_document_ids),
         hit_document_ids=_unique_in_order(hits),
-        context_recall=_round(context_recall),
-        reciprocal_rank=_round(reciprocal_rank),
-        faithfulness=_round(faithfulness),
-        grounding_overlap_count=overlap_count,
-        grounding_answer_feature_count=feature_count,
-        citation_traceability_coverage=_round(citation_coverage),
-        answer_keyword_hit=keyword_hit,
-        abstained=abstained,
-        refusal_correct=abstained != answerable,
-        **handling,
-        evidence_recall=_round(evidence_recall),
+        mrr=_round(reciprocal_rank),
+        requirement_coverage=judgement.requirement_coverage if judgement else None,
+        claim_support_rate=judgement.claim_support_rate if judgement else None,
+        answer_correctness=judgement.answer_correctness if judgement else None,
+        response_decision_accuracy=_bool_value(all(decisions)) if decisions else None,
+        expected_decisions=sorted(expected_decisions),
+        observed_outcome=observed.outcome,
+        outcome_source=observed.source,
+        required_evidence_recall=_round(evidence_recall),
         missing_evidence=missing_evidence,
-        evidence_chain_complete=None if evidence_recall is None else not missing_evidence,
-        **_screen_fields(screens),
-        goal_alignment=goal_alignment,
-        **(
-            {
-                "removed_passages": passages["removed"],
-                "unverified_passages": passages["unverified"],
-                "warning_passages": passages["warning"],
-            }
-            if passages is not None
-            else {}
-        ),
         turn_results=turn_results if case.turns else [],
         answer_evaluation=judgement,
         guardrail_warnings=response.guardrail_warnings,
@@ -1028,142 +974,6 @@ def _case_result(
         diagnostics=response.diagnostics,
         elapsed_ms=round(sum(run.response.elapsed_ms for run in runs), 3),
     )
-
-
-def _screens_measurable(case: EvaluationCase, response: SearchResponse) -> bool:
-    """案内した画面を測るか（案内すべき画面があり、検索をしない回答でない。#2402）。"""
-    return bool(case.expected_screens) and not _skips_retrieval(response)
-
-
-def _case_screen_score(
-    case: EvaluationCase,
-    response: SearchResponse,
-    abstained: bool,
-    screen_score: ScreenScore | None,
-) -> ScreenScore | None:
-    """案内した画面の採点（#2402）。測れないケースは None。
-
-    拒答（資料から答えられない）は画面を案内していないため、案内すべき画面は不一致にする。
-    """
-    if not _screens_measurable(case, response):
-        return None
-    if abstained:
-        return ScreenScore(
-            screen_match=False,
-            wrong_screen=False,
-            missing=[screen.name for screen in case.expected_screens],
-        )
-    if screen_score is not None:
-        return screen_score
-    cited = cited_screen_names((chunk.text for chunk in response.citations), screen_name_labels())
-    return score_screens(response.answer, case.expected_screens, cited) or unresolved_score(
-        case.expected_screens
-    )
-
-
-def _screen_fields(score: ScreenScore | None) -> dict[str, Any]:
-    if score is None:
-        return {}
-    return {
-        "screen_match": score.screen_match,
-        "wrong_screen": score.wrong_screen,
-        "guided_screens": list(score.guided),
-        "matched_screens": list(score.matched),
-        "missing_screens": list(score.missing),
-        "wrong_screens": list(score.wrong),
-        "screen_judged_by": score.judged_by,
-    }
-
-
-# 回答の監査の目的との合い方（rag_engine の GroundedAudit.goal_alignment）。
-_GOAL_ALIGNMENTS = frozenset({"aligned", "partial", "off_target"})
-
-
-def _goal_alignment(response: SearchResponse) -> str | None:
-    """回答の記録の、採用した草稿の監査の目的との合い方（#2402。記録が無ければ None）。"""
-    value = (response.diagnostics.answer or {}).get("goal_alignment")
-    return value if isinstance(value, str) and value in _GOAL_ALIGNMENTS else None
-
-
-def _passage_counts(response: SearchResponse) -> dict[str, int] | None:
-    """回答の記録の、矛盾で外した段落・未確認の段落・要注意の段落の数（#2738）。
-
-    記録が無ければ None。
-    """
-    details = response.diagnostics.answer or {}
-    if not any(key in details for key in PASSAGE_MARK_RECORD_KEYS):
-        return None
-    return mark_counts(details)
-
-
-def _turn_result(
-    index: int, expectation: EvaluationHandlingExpectation, run: _TurnRun
-) -> EvaluationTurnResult:
-    """1 回の回答の業務支援の採点（#1231 / #1284）。
-
-    対応・手順と別解・危険な回答・条件・渡した条件の聞き直しを採点する。
-    """
-    response = run.response
-    observed = observed_outcome(response.diagnostics.answer, abstained=is_abstained(response))
-    scores: dict[str, Any] = {
-        "turn": index,
-        "trace_id": response.trace_id,
-        "observed_outcome": observed.outcome,
-        "outcome_source": observed.source,
-        "elapsed_ms": response.elapsed_ms,
-    }
-    if expectation.expected_outcomes:
-        scores["handling_correct"] = observed.outcome in expectation.expected_outcomes
-    if expectation.expected_steps:
-        score, missing = best_step_order_score(
-            response.answer, [expectation.expected_steps, *expectation.acceptable_alternatives]
-        )
-        scores["step_order_score"] = _round(score)
-        scores["missing_steps"] = missing
-    if expectation.forbidden_phrases:
-        scores["forbidden_checked"] = True
-        scores["forbidden_hits"] = forbidden_hits(response.answer, expectation.forbidden_phrases)
-    if expectation.required_conditions:
-        coverage, missing = condition_coverage(response.answer, expectation.required_conditions)
-        scores["condition_coverage"] = _round(coverage)
-        scores["missing_conditions"] = missing
-    if run.conditions:
-        scores["reasked_conditions"] = [
-            condition_id
-            for condition_id in asked_condition_ids(response.diagnostics.answer)
-            if condition_id in run.conditions
-        ]
-    return EvaluationTurnResult(**scores)
-
-
-def _combine_turn_results(turn_results: Sequence[EvaluationTurnResult]) -> dict[str, Any]:
-    """往復ごとの採点をケースの採点にまとめる（1 往復ならその往復の採点のまま）。"""
-    final = turn_results[-1]
-    handling = [item.handling_correct for item in turn_results if item.handling_correct is not None]
-    steps = [item.step_order_score for item in turn_results if item.step_order_score is not None]
-    coverages = [
-        item.condition_coverage for item in turn_results if item.condition_coverage is not None
-    ]
-    return {
-        "observed_outcome": final.observed_outcome,
-        "outcome_source": final.outcome_source,
-        "handling_correct": all(handling) if handling else None,
-        "step_order_score": _mean(steps),
-        "missing_steps": _unique_in_order(
-            [step for item in turn_results for step in item.missing_steps]
-        ),
-        "forbidden_checked": any(item.forbidden_checked for item in turn_results),
-        "forbidden_hits": _unique_in_order(
-            [hit for item in turn_results for hit in item.forbidden_hits]
-        ),
-        "condition_coverage": _mean(coverages),
-        "missing_conditions": _unique_in_order(
-            [condition for item in turn_results for condition in item.missing_conditions]
-        ),
-        "reasked_conditions": _unique_in_order(
-            [condition for item in turn_results for condition in item.reasked_conditions]
-        ),
-    }
 
 
 def _evidence_scores(
@@ -1257,29 +1067,6 @@ def _positive_page(value: object) -> int | None:
     return None
 
 
-def _handling_failure_reasons(scores: Mapping[str, Any]) -> list[EvaluationFailureReason]:
-    reasons: list[EvaluationFailureReason] = []
-    if scores.get("handling_correct") is False:
-        reasons.append("unexpected_handling")
-    step_score = scores.get("step_order_score")
-    if step_score is not None and step_score < 1.0:
-        reasons.append("step_missing")
-    if scores.get("forbidden_hits"):
-        reasons.append("forbidden_action")
-    if scores.get("missing_conditions"):
-        reasons.append("condition_missing")
-    if scores.get("reasked_conditions"):
-        reasons.append("known_condition_reasked")
-    return reasons
-
-
-def _safe_answer(result: EvaluationCaseResult, checked: bool) -> float | None:
-    if not checked:
-        return None
-    return 0.0 if result.forbidden_hits else 1.0
-
-
-# 検索をせずに利用者へ確かめる・人へ引き継ぐ回答（#1259）。拒答でも検索の取りこぼしでもない。
 _NO_RETRIEVAL_OUTCOMES = frozenset({"needs_clarification", "needs_human"})
 
 
@@ -1311,30 +1098,14 @@ def is_abstained(response: SearchResponse) -> bool:
 
 def _accumulate_case_metrics(aggregate: _Aggregate, result: EvaluationCaseResult) -> None:
     """成功したケースの測れた指標を集計へ足す。"""
-    aggregate.add("context_recall", result.context_recall)
-    aggregate.add("mrr", result.reciprocal_rank)
-    aggregate.add("faithfulness", result.faithfulness)
-    aggregate.add("citation_traceability_coverage", result.citation_traceability_coverage)
-    aggregate.add("answer_keyword_hit_rate", _bool_value(result.answer_keyword_hit))
-    aggregate.add("refusal_accuracy", _bool_value(result.refusal_correct))
+    aggregate.add("required_evidence_recall", result.required_evidence_recall)
+    aggregate.add("mrr", result.mrr)
+    aggregate.add("answer_correctness", result.answer_correctness)
+    aggregate.add("response_decision_accuracy", result.response_decision_accuracy)
     judgement = result.answer_evaluation
     if judgement is not None and judgement.status == "completed":
-        aggregate.add("claim_support_rate", _bool_value(judgement.claims_supported))
+        aggregate.add("claim_support_rate", judgement.claim_support_rate)
         aggregate.add("requirement_coverage", judgement.requirement_coverage)
-        aggregate.add("answer_pass_rate", _bool_value(judgement.passed))
-    aggregate.add("handling_accuracy", _bool_value(result.handling_correct))
-    aggregate.add("step_order_score", result.step_order_score)
-    aggregate.add("safe_answer_rate", _safe_answer(result, result.forbidden_checked))
-    aggregate.add("condition_coverage", result.condition_coverage)
-    aggregate.add("required_evidence_recall", result.evidence_recall)
-    aggregate.add("evidence_chain_complete_rate", _bool_value(result.evidence_chain_complete))
-    aggregate.add("screen_match_rate", _bool_value(result.screen_match))
-    aggregate.add("wrong_screen_rate", _bool_value(result.wrong_screen))
-    if result.goal_alignment is not None:
-        aggregate.add("off_target_rate", 1.0 if result.goal_alignment == "off_target" else 0.0)
-    aggregate.add("removed_passages_per_answer", result.removed_passages)
-    aggregate.add("unverified_passages_per_answer", result.unverified_passages)
-    aggregate.add("warning_passages_per_answer", result.warning_passages)
 
 
 def _deadline(time_budget_seconds: float | None) -> float | None:
@@ -1392,6 +1163,7 @@ def _case_error_result(
         trace_id=trace_id,
         status="error",
         relevant_document_ids=list(case.relevant_document_ids),
+        expected_decisions=_expected_case_decisions(case),
         failure_reasons=["case_error"],
         elapsed_ms=elapsed,
         error_type=error_type or type(error).__name__,
@@ -1421,6 +1193,7 @@ def _case_skipped_result(
         trace_id=trace_id,
         status="error",
         relevant_document_ids=list(case.relevant_document_ids),
+        expected_decisions=_expected_case_decisions(case),
         failure_reasons=["case_error"],
         elapsed_ms=0.0,
         error_type=EVALUATION_TIME_BUDGET_ERROR_TYPE,
@@ -1471,57 +1244,10 @@ def _unique_in_order(values: list[str]) -> list[str]:
     return unique
 
 
-def _case_failure_reasons(
-    *,
-    answerable: bool,
-    has_relevant: bool,
-    relevant_count: int,
-    hit_count: int,
-    abstained: bool,
-    keyword_hit: bool | None,
-    guardrail_warnings: list[str],
-    judgement: EvaluationAnswerJudgement | None,
-) -> list[EvaluationFailureReason]:
-    """case 単位の失敗原因を安全なカテゴリへ分類する。"""
-    reasons: list[EvaluationFailureReason] = []
-    if has_relevant:
-        if hit_count == 0:
-            reasons.append("retrieval_miss")
-        elif hit_count < relevant_count:
-            reasons.append("partial_recall")
-    if answerable and abstained:
-        reasons.append("unexpected_refusal")
-    elif not answerable and not abstained:
-        reasons.append("unexpected_answer")
-    if keyword_hit is False:
-        reasons.append("answer_keyword_miss")
-    if judgement is not None:
-        if judgement.status != "completed":
-            reasons.append("answer_evaluation_error")
-        else:
-            if judgement.claims_supported is False:
-                reasons.append("unsupported_claim")
-            if judgement.missing_content:
-                reasons.append("missing_content")
-            if judgement.passed is False:
-                reasons.append("answer_failed")
-    if guardrail_warnings and answerable:
-        reasons.append("guardrail_warning")
-    return reasons
-
-
 def _accumulate_failure_reasons(counts: dict[str, int], reasons: Sequence[str]) -> None:
     """失敗理由の case 件数を集計する。"""
     for reason in reasons:
         counts[reason] = counts.get(reason, 0) + 1
-
-
-def _answer_contains_keywords(answer: str, keywords: list[str]) -> bool:
-    """期待する語をすべて含むか（NFKC・大小文字・空白を無視。#1335）。
-
-    全角の「ＨＲＭ」と「HRM」、「5 年」と「5年」を同じ語とみなす（手順・必要な根拠の照合と同じ）。
-    """
-    return all(contains_normalized(answer, keyword) for keyword in keywords if keyword.strip())
 
 
 def _threshold_failures(
@@ -1576,65 +1302,49 @@ def _mean(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 4) if values else None
 
 
-def category_breakdown(
+def decision_breakdown(
     results: list[EvaluationCaseResult],
-) -> dict[str, EvaluationCategorySummary]:
-    """分類ごとの結果の内訳（#1226）。分類のあるケースが 1 つも無ければ空にする。"""
-    if not any(result.category for result in results):
+) -> dict[str, EvaluationReasoningSummary]:
+    """期待する回答・確認・保留ごとの、測定可能なケースの内訳。"""
+    result = {}
+    for decision in ("answer", "clarify", "hold"):
+        cases = [item for item in results if decision in item.expected_decisions]
+        if not cases:
+            continue
+        values = [
+            item.response_decision_accuracy
+            for item in cases
+            if item.response_decision_accuracy is not None
+        ]
+        result[decision] = EvaluationReasoningSummary(
+            case_count=len(cases),
+            error_count=sum(item.status == "error" for item in cases),
+            metrics={"response_decision_accuracy": _mean(values)},
+            metric_case_counts={"response_decision_accuracy": len(values)},
+        )
+    return result
+
+
+def category_breakdown(results: list[EvaluationCaseResult]) -> dict[str, EvaluationCategorySummary]:
+    """ケース分類別の件数。指標は六指標の集計に統一する。"""
+    if not any(item.category for item in results):
         return {}
     grouped: dict[str, list[EvaluationCaseResult]] = {}
-    for result in results:
-        grouped.setdefault(result.category or EVALUATION_UNCATEGORIZED, []).append(result)
-    breakdown: dict[str, EvaluationCategorySummary] = {}
-    for category, members in grouped.items():
-        succeeded = [result for result in members if result.status == "success"]
-        breakdown[category] = EvaluationCategorySummary(
+    for item in results:
+        grouped.setdefault(item.category or EVALUATION_UNCATEGORIZED, []).append(item)
+    summaries = {}
+    for name, members in grouped.items():
+        aggregate = _Aggregate()
+        for item in members:
+            if item.status == "success":
+                _accumulate_case_metrics(aggregate, item)
+        summaries[name] = EvaluationCategorySummary(
             case_count=len(members),
-            error_count=len(members) - len(succeeded),
-            answer_pass_rate=_rate(
-                [
-                    bool(result.answer_evaluation.passed)
-                    for result in succeeded
-                    if result.answer_evaluation is not None
-                    and result.answer_evaluation.passed is not None
-                ]
-            ),
-            answer_keyword_hit_rate=_rate(
-                [
-                    bool(result.answer_keyword_hit)
-                    for result in succeeded
-                    if result.answer_keyword_hit is not None
-                ]
-            ),
-            abstain_rate=_rate(
-                [bool(result.abstained) for result in succeeded if result.abstained is not None]
-            ),
-            refusal_correct_rate=_rate(
-                [
-                    bool(result.refusal_correct)
-                    for result in succeeded
-                    if result.refusal_correct is not None
-                ]
-            ),
-            handling_correct_rate=_rate(
-                [
-                    bool(result.handling_correct)
-                    for result in succeeded
-                    if result.handling_correct is not None
-                ]
-            ),
-            step_order_score=_mean(
-                [
-                    result.step_order_score
-                    for result in succeeded
-                    if result.step_order_score is not None
-                ]
-            ),
-            safe_answer_rate=_rate(
-                [not result.forbidden_hits for result in succeeded if result.forbidden_checked]
-            ),
+            error_count=sum(item.status == "error" for item in members),
+            metrics=aggregate.means(),
+            metric_case_counts=aggregate.counts(),
         )
-    return breakdown
+    return summaries
 
 
 def split_breakdown(results: list[EvaluationCaseResult]) -> dict[str, EvaluationSplitSummary]:

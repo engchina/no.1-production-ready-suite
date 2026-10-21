@@ -65,26 +65,25 @@ def test_screen_line_reads_name_and_aliases() -> None:
 
 def test_workbook_reads_screens_and_answer_process_columns() -> None:
     parsed = parse_evaluation_workbook(
-        _workbook([["通知が出ない", None, None, "設定画面A | 別名: 環境設定\n画面B", PROCESS_TEXT]])
+        _workbook([["通知が出ない", None, None, "設定画面A\n画面B", "回答", PROCESS_TEXT]])
     )
 
     assert parsed.issues == []
     row = parsed.rows[0]
-    assert [screen.name for screen in row.screens] == ["設定画面A", "画面B"]
-    assert row.screen_lines == ("設定画面A | 別名: 環境設定", "画面B")
+    assert row.response_decision == "answer"
+    assert row.screen_lines == ("設定画面A", "画面B")
     assert row.answer_process == PROCESS_TEXT
     built = build_evaluation_cases(parsed.rows, [])
-    assert built.cases[0].expected_screens[0].aliases == ["環境設定"]
+    assert built.cases[0].expected_response_decision == "answer"
     # 回答の過程はケースの期待にしない（下書きにして確かめてから足す）。
-    assert built.cases[0].expected_steps == []
+    assert built.cases[0].required_answer_points == ["設定画面A", "画面B"]
 
 
 def test_workbook_reports_unreadable_screen_line_with_row_and_column() -> None:
-    parsed = parse_evaluation_workbook(_workbook([["質問", None, None, "画面A | 不明: x"]]))
-
+    parsed = parse_evaluation_workbook(_workbook([["質問", None, None, "画面A", "不明な判断"]]))
     assert parsed.rows == []
     assert parsed.issues[0].row == 2
-    assert parsed.issues[0].column == "案内すべき画面"
+    assert parsed.issues[0].column == "期待する応答の判断"
 
 
 class _FakeOracle:
@@ -108,7 +107,7 @@ def test_import_api_returns_screens_and_process_in_preview(monkeypatch: MonkeyPa
         files={
             "file": (
                 "cases.xlsx",
-                _workbook([["通知が出ない", None, None, "設定画面A", PROCESS_TEXT]]),
+                _workbook([["通知が出ない", None, None, "設定画面A", "回答", PROCESS_TEXT]]),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         },
@@ -117,9 +116,9 @@ def test_import_api_returns_screens_and_process_in_preview(monkeypatch: MonkeyPa
 
     data = response.json()["data"]
     assert data["errors"] == []
-    assert data["rows"][0]["screens"] == ["設定画面A"]
+    assert data["rows"][0]["required_answer_points"] == ["設定画面A"]
     assert data["rows"][0]["answer_process"] == PROCESS_TEXT
-    assert data["cases"][0]["expected_screens"] == [{"name": "設定画面A", "aliases": []}]
+    assert data["cases"][0]["required_answer_points"] == ["設定画面A"]
 
 
 # ---- 回答の過程から期待の下書き ----------------------------------------------------------------
@@ -155,7 +154,10 @@ def test_process_draft_maps_guide_draft_to_evaluation_expectations() -> None:
 
     assert draft.error is None
     # 手順は検索の手がかり（画面名・機能名）の先頭。
-    assert draft.expected_steps == ["設定画面A", "通知の設定"]
+    assert draft.required_answer_points == [
+        "設定画面Aを開く — 通知の設定の画面を開く",
+        "通知の設定を有効にする — 注意: 保存を押すまで反映されない",
+    ]
     assert draft.required_conditions == ["利用者が管理者か"]
     # 手順があり、窓口への引き継ぎがある。
     assert draft.expected_outcomes == ["answered", "conditional", "needs_human"]
@@ -198,7 +200,7 @@ def test_process_draft_reports_failed_rows() -> None:
     )
 
     assert draft.error == "失敗"
-    assert draft.expected_steps == []
+    assert draft.required_answer_points == []
 
 
 class _Llm:
@@ -237,7 +239,10 @@ def test_process_drafts_api_uses_the_guide_import_structuring(monkeypatch: Monke
 
     assert response.status_code == 200, response.text
     first, second = response.json()["data"]["drafts"]
-    assert first["case_id"] == "row-2" and first["expected_steps"] == ["設定画面A", "通知の設定"]
+    assert first["case_id"] == "row-2" and first["required_answer_points"] == [
+        "設定画面Aを開く — 通知の設定の画面を開く",
+        "通知の設定を有効にする — 注意: 保存を押すまで反映されない",
+    ]
     assert first["required_evidence"][0]["document_id"] == "doc-a"
     assert second["case_id"] == "row-3" and second["error"]
     # 業務ガイドの取り込みと同じ構造化（構造化出力の schema・見出しで分けた節）。

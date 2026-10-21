@@ -211,20 +211,7 @@ export type EvaluationFailureReason =
   | "off_target"
   | "case_error";
 /** 評価の指標（#591）。検索・根拠・回答の 3 つの観点の 9 つと、業務支援の対応の 4 つ（#1231）。 */
-export type EvaluationMetricName =
-  | "context_recall"
-  | "mrr"
-  | "faithfulness"
-  | "citation_traceability_coverage"
-  | "claim_support_rate"
-  | "answer_keyword_hit_rate"
-  | "refusal_accuracy"
-  | "requirement_coverage"
-  | "answer_pass_rate"
-  | "handling_accuracy"
-  | "step_order_score"
-  | "safe_answer_rate"
-  | "condition_coverage";
+export type EvaluationMetricName = "required_evidence_recall" | "mrr" | "answer_correctness" | "requirement_coverage" | "claim_support_rate" | "response_decision_accuracy";
 
 /** 回答の対応（#1231）。評価のケースは受け入れる対応を複数持てる。 */
 export type EvaluationOutcome =
@@ -1768,7 +1755,6 @@ export interface EvaluationCase {
   relevant_document_ids?: string[];
   /** 同じ文書とみなす別の文書の ID（正解の文書の ID → 別の文書の ID。同じ名前の文書。#2086）。 */
   equivalent_document_ids?: Record<string, string[]>;
-  expected_answer_keywords?: string[];
   /** 標準回答。あるケースは回答を標準回答と LLM で比較する（#591）。 */
   standard_answer?: string | null;
   /** false は答えるべきでない質問。省略時は期待値（文書・語・標準回答）の有無で決まる。 */
@@ -1776,11 +1762,10 @@ export interface EvaluationCase {
   /** 分類（#1226）。結果の分類ごとの内訳に使う。 */
   category?: EvaluationCaseCategory | null;
   /** 業務支援の採点（#1231）。受け入れる対応・手順の語（順）・勧めてはいけない表現・触れるべき条件。 */
+  expected_response_decision?: "answer" | "clarify" | "hold" | null;
   expected_outcomes?: EvaluationOutcome[];
-  expected_steps?: string[];
-  /** expected_steps と同等の別の手順の列（#1284）。いちばん点の高い列で採点する。 */
-  acceptable_alternatives?: string[][];
-  forbidden_phrases?: string[];
+  required_answer_points?: string[];
+  /** required_answer_points と同等の別の手順の列（#1284）。いちばん点の高い列で採点する。 */
   required_conditions?: string[];
   /** 区分（#1284）。dev は調整に使うケース、holdout は最後の確認だけに使うケース。 */
   split?: EvaluationCaseSplit | null;
@@ -1791,7 +1776,6 @@ export interface EvaluationCase {
   /** 最後の回答に必要な根拠（#1284）。 */
   required_evidence?: EvaluationEvidence[];
   /** 回答が案内すべき画面（名前と別名。#2402）。 */
-  expected_screens?: EvaluationScreen[];
 }
 
 /** 回答が案内すべき画面（#2402）。名前と、同じ画面の別の呼び方。 */
@@ -1807,10 +1791,9 @@ export type EvaluationCaseSplit = "dev" | "holdout";
 export interface EvaluationTurn {
   reply: string;
   conditions?: Record<string, string>;
+  expected_response_decision?: "answer" | "clarify" | "hold" | null;
   expected_outcomes?: EvaluationOutcome[];
-  expected_steps?: string[];
-  acceptable_alternatives?: string[][];
-  forbidden_phrases?: string[];
+  required_answer_points?: string[];
   required_conditions?: string[];
 }
 
@@ -1848,9 +1831,9 @@ export interface EvaluationImportRow {
   standard_answer_preview: string | null;
   has_standard_answer: boolean;
   /** 根拠も標準回答も無い行は false（資料に答えが無い質問として、回答を控えたかを測る）。 */
-  expects_answer: boolean;
+  expected_response_decision?: "answer" | "clarify" | "hold" | null;
   /** 案内すべき画面（Excel に書いた元の行。#2402。古い作業状態には無い）。 */
-  screens?: string[];
+  required_answer_points?: string[];
   /** 回答の過程（#2402）。期待の下書きを作るときに下書きの API へ渡す。 */
   answer_process?: string | null;
 }
@@ -1882,7 +1865,7 @@ export interface EvaluationProcessReference {
 export interface EvaluationProcessDraft {
   case_id: string;
   row: number;
-  expected_steps: string[];
+  required_answer_points: string[];
   required_conditions: string[];
   expected_outcomes: EvaluationOutcome[];
   relevant_document_ids: string[];
@@ -1953,16 +1936,9 @@ export type EvaluationCaseCategory =
 
 /** 分類ごとの結果の内訳（#1226）。率は測れたケースだけの割合で、測れなければ null。 */
 export interface EvaluationCategorySummary {
-  case_count: number;
-  error_count: number;
-  answer_pass_rate: number | null;
-  answer_keyword_hit_rate: number | null;
-  abstain_rate: number | null;
-  refusal_correct_rate: number | null;
-  /** 業務支援の対応（#1231。保存済みの古い結果には無い）。 */
-  handling_correct_rate?: number | null;
-  step_order_score?: number | null;
-  safe_answer_rate?: number | null;
+ case_count:number; error_count:number;
+ metrics:Partial<Record<EvaluationMetricName,number|null>>;
+ metric_case_counts:Partial<Record<EvaluationMetricName,number>>;
 }
 
 /** 複数往復のケースの 1 回の回答の採点（#1284）。turn 0 は最初の質問への回答。 */
@@ -1992,59 +1968,14 @@ export interface EvaluationSplitSummary {
 }
 
 /** 1 ケースの結果。測れない指標は null（保存済みの古い結果では欄が無いことがある）。 */
-export interface EvaluationCaseResult {
-  case_id: string;
-  trace_id: string;
-  category?: EvaluationCaseCategory | null;
-  status: "success" | "error";
-  retrieved_document_ids: string[];
-  relevant_document_ids: string[];
-  hit_document_ids: string[];
-  context_recall?: number | null;
-  reciprocal_rank?: number | null;
-  faithfulness?: number | null;
-  citation_traceability_coverage?: number | null;
-  answer_keyword_hit?: boolean | null;
-  abstained?: boolean | null;
-  refusal_correct?: boolean | null;
-  /** 業務支援の採点（#1231）。observed_outcome は回答の対応、outcome_source は explicit / inferred。 */
-  observed_outcome?: EvaluationOutcome | null;
-  outcome_source?: string | null;
-  handling_correct?: boolean | null;
-  step_order_score?: number | null;
-  missing_steps?: string[];
-  forbidden_checked?: boolean;
-  forbidden_hits?: string[];
-  condition_coverage?: number | null;
-  missing_conditions?: string[];
-  /** 区分・聞き直し・必要な根拠・往復ごとの採点（#1284。保存済みの古い結果には無い）。 */
-  split?: EvaluationCaseSplit | null;
-  reasked_conditions?: string[];
-  evidence_recall?: number | null;
-  missing_evidence?: string[];
-  /**
-   * 案内した画面の採点（#2402。案内すべき画面のあるケースだけ）。screen_match は案内すべき画面を
-   * すべて案内したか、wrong_screen はほかの画面を案内したか。
-   */
-  screen_match?: boolean | null;
-  wrong_screen?: boolean | null;
-  guided_screens?: string[];
-  matched_screens?: string[];
-  missing_screens?: string[];
-  wrong_screens?: string[];
-  screen_judged_by?: "deterministic" | "judge" | "unresolved" | null;
-  /** 回答の監査の目的との合い方（aligned / partial / off_target。#2402）。 */
-  goal_alignment?: string | null;
-  turn_results?: EvaluationTurnResult[];
-  answer_evaluation?: EvaluationAnswerJudgement | null;
-  guardrail_warnings: string[];
-  failure_reasons: string[];
-  diagnostics: SearchDiagnostics;
-  elapsed_ms: number;
-  error_type: string | null;
-  /** 時間切れになった工程（進捗の stage と同じ名前）。時間切れ以外は null（#383）。 */
-  error_stage?: string | null;
-  error_message: string | null;
+export interface EvaluationCaseResult extends Partial<Record<EvaluationMetricName, number | null>> {
+  case_id: string; trace_id: string; status: "success"|"error";
+  category?: EvaluationCaseCategory|null; split?: EvaluationCaseSplit|null;
+  retrieved_document_ids: string[]; relevant_document_ids:string[]; hit_document_ids:string[];
+  expected_decisions?: string[]; observed_outcome?: EvaluationOutcome|null; outcome_source?:string|null;
+  missing_evidence?:string[]; answer_evaluation?:EvaluationAnswerJudgement|null;
+  guardrail_warnings:string[]; failure_reasons:string[]; diagnostics:SearchDiagnostics;
+  elapsed_ms:number; error_type:string|null; error_stage?:string|null; error_message:string|null;
 }
 
 export interface EvaluationThresholdFailure {
@@ -2056,27 +1987,13 @@ export interface EvaluationThresholdFailure {
 
 /** 評価結果。各指標は測れたケースだけの平均で、測れなかった指標は null。 */
 export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | null>> & {
-  case_count: number;
-  error_count: number;
-  /** 保存済みの結果には削除した基準の名前が残ることがある。 */
-  evaluation_suite: string;
-  metric_case_counts?: Partial<Record<string, number>>;
-  passed: boolean;
-  threshold_failures: EvaluationThresholdFailure[];
-  failure_reason_counts: Partial<Record<string, number>>;
-  /** 分類ごとの内訳（ケースに分類があるときだけ。分類の無いケースは uncategorized。#1226）。 */
-  category_breakdown?: Partial<Record<string, EvaluationCategorySummary>>;
-  /** 区分ごとの内訳（ケースに区分があるときだけ。区分の無いケースは unassigned。#1284）。 */
-  split_breakdown?: Partial<Record<string, EvaluationSplitSummary>>;
-  /** 必要な根拠ごとの再現率（参考の集計。閾値の判定には使わない。#1284）。 */
-  required_evidence_recall?: number | null;
-  /** 案内した画面と目的外の割合（参考の集計。閾値の判定には使わない。#2402）。 */
-  screen_match_rate?: number | null;
-  wrong_screen_rate?: number | null;
-  off_target_rate?: number | null;
-  case_results: EvaluationCaseResult[];
-  /** 同じケースを検索・回答プロファイルの範囲でも流した結果（#2402）。比べないときは null。 */
-  comparison?: EvaluationComparison | null;
+ metrics_version?:string; case_count:number; error_count:number; evaluation_suite:string;
+ metric_case_counts?:Partial<Record<EvaluationMetricName,number>>; passed:boolean|null;
+ threshold_failures:EvaluationThresholdFailure[]; failure_reason_counts:Partial<Record<string,number>>;
+ category_breakdown?:Partial<Record<string,EvaluationCategorySummary>>;
+ split_breakdown?:Partial<Record<string,EvaluationSplitSummary>>;
+ decision_breakdown?:Partial<Record<string,EvaluationCategorySummary>>;
+ case_results:EvaluationCaseResult[]; comparison?:EvaluationComparison|null;
 };
 
 /** 比べるために検索・回答プロファイルの範囲で流した評価の結果（#2402）。 */

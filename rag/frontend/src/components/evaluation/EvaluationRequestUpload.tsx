@@ -334,23 +334,21 @@ function EvaluationImportPreview({ rows }: { rows: EvaluationImportRow[] }) {
                   </li>
                 ))}
               </ul>
-            ) : row.expects_answer ? (
-              "—"
             ) : (
               t("evaluation.import.noEvidenceUnanswerable")
             ),
         },
         // 案内すべき画面（#2402）。書いた行があるときだけ出す。
-        ...(rows.some((row) => row.screens?.length)
+        ...(rows.some((row) => row.required_answer_points?.length)
           ? [
               {
                 key: "screens",
                 header: t("evaluation.import.column.screens"),
                 className: "break-words text-xs text-fg-muted",
                 render: (row: EvaluationImportRow) =>
-                  row.screens?.length ? (
+                  row.required_answer_points?.length ? (
                     <ul className="grid gap-0.5">
-                      {row.screens.map((line, index) => (
+                      {row.required_answer_points.map((line, index) => (
                         <li key={`${index}:${line}`}>{line}</li>
                       ))}
                     </ul>
@@ -360,6 +358,11 @@ function EvaluationImportPreview({ rows }: { rows: EvaluationImportRow[] }) {
               },
             ]
           : []),
+        {
+          key: "expected_response_decision",
+          header: t("evaluation.import.column.decision"),
+          render: (row) => row.expected_response_decision ? t(`evaluation.decision.${row.expected_response_decision}`) : t("evaluation.metric.unassessed"),
+        },
         {
           key: "standard_answer",
           header: t("evaluation.import.column.standardAnswer"),

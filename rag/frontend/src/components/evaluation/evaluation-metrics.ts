@@ -6,163 +6,23 @@ import type {
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 
-/**
- * 品質評価の指標と基準の表示の定義（#591）。
- *
- * 指標は「検索」「根拠」「回答」の 3 つの観点に整理した 9 つ。評価の基準（設定）と品質評価の
- * 画面は、この並び・名前・説明を共有する。保存済みの古い結果には削除した指標・理由・基準の
- * 名前が残るため、未知の名前は原文のまま表示する（表示を壊さない）。
- */
-export type EvaluationPerspective = "retrieval" | "grounding" | "answer" | "handling";
-
-export const EVALUATION_PERSPECTIVES: ReadonlyArray<{
-  id: EvaluationPerspective;
-  metrics: readonly EvaluationMetricName[];
-}> = [
-  { id: "retrieval", metrics: ["context_recall", "mrr"] },
-  {
-    id: "grounding",
-    // Faithfulness（claim_support_rate。LLM の主張の判定）を先に、語句の一致率（faithfulness。参考値）を
-    // 最後に置く（#711）。保存値の key は変えない。
-    metrics: ["claim_support_rate", "citation_traceability_coverage", "faithfulness"],
-  },
-  {
-    id: "answer",
-    metrics: [
-      "answer_keyword_hit_rate",
-      "refusal_accuracy",
-      "requirement_coverage",
-      "answer_pass_rate",
-    ],
-  },
-  // 業務支援の対応（#1231）。期待する対応・手順・禁止の表現・条件のあるケースだけが対象。
-  {
-    id: "handling",
-    metrics: ["handling_accuracy", "step_order_score", "safe_answer_rate", "condition_coverage"],
-  },
+/** 六指標の分類・順序は評価の基準と品質評価で共有する。 */
+export type EvaluationPerspective = "retrieval" | "answer" | "decision";
+export const EVALUATION_PERSPECTIVES: ReadonlyArray<{id: EvaluationPerspective; metrics: readonly EvaluationMetricName[]}> = [
+  {id:"retrieval", metrics:["required_evidence_recall", "mrr"]},
+  {id:"answer", metrics:["answer_correctness", "requirement_coverage", "claim_support_rate"]},
+  {id:"decision", metrics:["response_decision_accuracy"]},
 ];
-
-export const EVALUATION_METRIC_NAMES: readonly EvaluationMetricName[] =
-  EVALUATION_PERSPECTIVES.flatMap((perspective) => perspective.metrics);
-
-/**
- * 案内の指標（#2402。参考の集計で、評価の基準の閾値には使わない）。案内すべき画面をすべて案内した
- * 割合・ほかの画面を案内した割合・回答の監査が目的外とした割合。後ろの 2 つは低いほどよい。
- */
-export type EvaluationGuidanceMetricName =
-  | "screen_match_rate"
-  | "wrong_screen_rate"
-  | "off_target_rate";
-
-export const EVALUATION_GUIDANCE_METRICS: readonly EvaluationGuidanceMetricName[] = [
-  "screen_match_rate",
-  "wrong_screen_rate",
-  "off_target_rate",
-];
-
-/** 低いほどよい指標（比べる表の差の向き。#2402）。 */
-export const LOWER_IS_BETTER_METRICS: ReadonlySet<string> = new Set([
-  "wrong_screen_rate",
-  "off_target_rate",
-]);
-
-/** 標準回答による LLM の評価で求める指標（標準回答のあるケースだけが対象）。 */
-export const STANDARD_ANSWER_METRICS: ReadonlySet<EvaluationMetricName> = new Set([
-  "claim_support_rate",
-  "requirement_coverage",
-  "answer_pass_rate",
-]);
-
+export const EVALUATION_METRIC_NAMES: readonly EvaluationMetricName[] = EVALUATION_PERSPECTIVES.flatMap(item => item.metrics);
+export const LOWER_IS_BETTER_METRICS: ReadonlySet<string> = new Set();
+export const STANDARD_ANSWER_METRICS: ReadonlySet<EvaluationMetricName> = new Set(["answer_correctness", "requirement_coverage"]);
 export const EVALUATION_SUITE_NAMES: readonly EvaluationSuiteName[] = ["standard", "strict"];
-
-const METRIC_KEYS: Record<EvaluationMetricName, { label: I18nKey; description: I18nKey }> = {
-  context_recall: {
-    label: "evaluation.metric.context_recall",
-    description: "evaluation.metric.context_recall.description",
-  },
-  mrr: { label: "evaluation.metric.mrr", description: "evaluation.metric.mrr.description" },
-  faithfulness: {
-    label: "evaluation.metric.faithfulness",
-    description: "evaluation.metric.faithfulness.description",
-  },
-  citation_traceability_coverage: {
-    label: "evaluation.metric.citation_traceability_coverage",
-    description: "evaluation.metric.citation_traceability_coverage.description",
-  },
-  claim_support_rate: {
-    label: "evaluation.metric.claim_support_rate",
-    description: "evaluation.metric.claim_support_rate.description",
-  },
-  answer_keyword_hit_rate: {
-    label: "evaluation.metric.answer_keyword_hit_rate",
-    description: "evaluation.metric.answer_keyword_hit_rate.description",
-  },
-  refusal_accuracy: {
-    label: "evaluation.metric.refusal_accuracy",
-    description: "evaluation.metric.refusal_accuracy.description",
-  },
-  requirement_coverage: {
-    label: "evaluation.metric.requirement_coverage",
-    description: "evaluation.metric.requirement_coverage.description",
-  },
-  answer_pass_rate: {
-    label: "evaluation.metric.answer_pass_rate",
-    description: "evaluation.metric.answer_pass_rate.description",
-  },
-  handling_accuracy: {
-    label: "evaluation.metric.handling_accuracy",
-    description: "evaluation.metric.handling_accuracy.description",
-  },
-  step_order_score: {
-    label: "evaluation.metric.step_order_score",
-    description: "evaluation.metric.step_order_score.description",
-  },
-  safe_answer_rate: {
-    label: "evaluation.metric.safe_answer_rate",
-    description: "evaluation.metric.safe_answer_rate.description",
-  },
-  condition_coverage: {
-    label: "evaluation.metric.condition_coverage",
-    description: "evaluation.metric.condition_coverage.description",
-  },
-};
-
-const GUIDANCE_METRIC_KEYS: Record<
-  EvaluationGuidanceMetricName,
-  { label: I18nKey; description: I18nKey }
-> = {
-  screen_match_rate: {
-    label: "evaluation.metric.screen_match_rate",
-    description: "evaluation.metric.screen_match_rate.description",
-  },
-  wrong_screen_rate: {
-    label: "evaluation.metric.wrong_screen_rate",
-    description: "evaluation.metric.wrong_screen_rate.description",
-  },
-  off_target_rate: {
-    label: "evaluation.metric.off_target_rate",
-    description: "evaluation.metric.off_target_rate.description",
-  },
-};
-
-const PERSPECTIVE_KEYS: Record<EvaluationPerspective, { label: I18nKey; description: I18nKey }> = {
-  retrieval: {
-    label: "evaluation.perspective.retrieval",
-    description: "evaluation.perspective.retrieval.description",
-  },
-  grounding: {
-    label: "evaluation.perspective.grounding",
-    description: "evaluation.perspective.grounding.description",
-  },
-  answer: {
-    label: "evaluation.perspective.answer",
-    description: "evaluation.perspective.answer.description",
-  },
-  handling: {
-    label: "evaluation.perspective.handling",
-    description: "evaluation.perspective.handling.description",
-  },
-};
+const METRIC_KEYS = Object.fromEntries(EVALUATION_METRIC_NAMES.map(name => [name, {
+ label: `evaluation.metric.${name}` as I18nKey, description: `evaluation.metric.${name}.description` as I18nKey,
+}])) as Record<EvaluationMetricName,{label:I18nKey;description:I18nKey}>;
+const PERSPECTIVE_KEYS = Object.fromEntries(EVALUATION_PERSPECTIVES.map(({id}) => [id, {
+ label: `evaluation.perspective.${id}` as I18nKey, description: `evaluation.perspective.${id}.description` as I18nKey,
+}])) as Record<EvaluationPerspective,{label:I18nKey;description:I18nKey}>;
 
 const FAILURE_REASON_KEYS: Record<string, I18nKey> = {
   retrieval_miss: "evaluation.failureReason.retrieval_miss",
@@ -207,20 +67,11 @@ export function isEvaluationSuite(name: string): name is EvaluationSuiteName {
   return Object.hasOwn(SUITE_KEYS, name);
 }
 
-export function isGuidanceMetric(name: string): name is EvaluationGuidanceMetricName {
-  return Object.hasOwn(GUIDANCE_METRIC_KEYS, name);
-}
-
-/** 指標の表示名。削除した指標（保存済みの結果）は原文の名前を返す。 */
 export function metricLabel(name: string): string {
-  if (isEvaluationMetric(name)) return t(METRIC_KEYS[name].label);
-  return isGuidanceMetric(name) ? t(GUIDANCE_METRIC_KEYS[name].label) : name;
+  return isEvaluationMetric(name) ? t(METRIC_KEYS[name].label) : name;
 }
-
-export function metricDescription(name: EvaluationMetricName | EvaluationGuidanceMetricName): string {
-  return isGuidanceMetric(name)
-    ? t(GUIDANCE_METRIC_KEYS[name].description)
-    : t(METRIC_KEYS[name].description);
+export function metricDescription(name: EvaluationMetricName): string {
+  return t(METRIC_KEYS[name].description);
 }
 
 export function perspectiveLabel(perspective: EvaluationPerspective): string {
@@ -246,16 +97,16 @@ export function suiteDescription(name: EvaluationSuiteName): string {
   return t(SUITE_KEYS[name].description);
 }
 
-/** 0..1 の値を百分率で表示する。測れなかった値（null・欄なし）は「—」。 */
+/** 0..1 の値を百分率で表示する。測れなかった値（null・欄なし）は「未評価」。 */
 export function formatMetricValue(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  if (value === null || value === undefined || Number.isNaN(value)) return t("evaluation.metric.unassessed");
   return `${Math.round(value * 1000) / 10}%`;
 }
 
 /** 集計結果の指標の値（保存済みの古い結果で欄が無いときは null）。 */
 export function metricValue(
   metrics: EvaluationMetrics,
-  name: EvaluationMetricName | EvaluationGuidanceMetricName
+  name: EvaluationMetricName
 ): number | null {
   const value = metrics[name];
   return typeof value === "number" ? value : null;
@@ -264,13 +115,13 @@ export function metricValue(
 /** 指標の対象のケース数。古い結果で件数が無いときは null（件数を表示しない）。 */
 export function metricCaseCount(
   metrics: EvaluationMetrics,
-  name: EvaluationMetricName | EvaluationGuidanceMetricName
+  name: EvaluationMetricName
 ): number | null {
   const count = metrics.metric_case_counts?.[name];
   return typeof count === "number" ? count : null;
 }
 
-/** 閾値の dict を、指標の並び順（観点の順）で返す。未知の指標は後ろに原文の名前で並べる。 */
+/** 閾値の dict を、指標の並び順（観点の順）で返す。六指標以外は含めない。 */
 export function orderedThresholdEntries(
   thresholds: Partial<Record<string, number | null>> | null | undefined
 ): Array<[string, number]> {
@@ -278,7 +129,7 @@ export function orderedThresholdEntries(
     (entry): entry is [string, number] => typeof entry[1] === "number"
   );
   const order = new Map(EVALUATION_METRIC_NAMES.map((name, index) => [name as string, index]));
-  return entries.sort(
+  return entries.filter(([name]) => isEvaluationMetric(name)).sort(
     ([left], [right]) =>
       (order.get(left) ?? Number.MAX_SAFE_INTEGER) - (order.get(right) ?? Number.MAX_SAFE_INTEGER)
   );
@@ -288,13 +139,7 @@ export function orderedThresholdEntries(
  * 結果に出す観点か。業務支援の対応（handling）は、対象のケースが 1 件も無い評価では出さない
  * （期待する対応・手順を持たない評価セットに「対象のケースなし」の欄を並べない。#1231）。
  */
-export function isPerspectiveShown(
-  metrics: EvaluationMetrics,
-  perspective: (typeof EVALUATION_PERSPECTIVES)[number]
-): boolean {
-  if (perspective.id !== "handling") return true;
-  return perspective.metrics.some((metric) => (metricCaseCount(metrics, metric) ?? 0) > 0);
-}
+export function isPerspectiveShown(_metrics: EvaluationMetrics, _perspective: (typeof EVALUATION_PERSPECTIVES)[number]): boolean { return true; }
 
 const OUTCOME_KEYS: Record<EvaluationOutcome, I18nKey> = {
   answered: "evaluation.outcome.answered",
@@ -311,16 +156,11 @@ export function outcomeLabel(outcome: string): string {
 }
 
 
-/** 案内の指標を出すか（案内すべき画面・監査の記録のあるケースが 1 件でもあるとき。#2402）。 */
-export function isGuidanceShown(metrics: EvaluationMetrics): boolean {
-  return EVALUATION_GUIDANCE_METRICS.some((metric) => (metricCaseCount(metrics, metric) ?? 0) > 0);
-}
-
 export type ComparisonDirection = "better" | "worse" | "same";
 
 /** 比べる表の 1 行（#2402）。差はプロファイル − ナレッジベース（0..1）。 */
 export interface EvaluationComparisonRow {
-  metric: EvaluationMetricName | EvaluationGuidanceMetricName;
+  metric: EvaluationMetricName;
   base: number | null;
   compared: number | null;
   delta: number | null;
@@ -329,17 +169,16 @@ export interface EvaluationComparisonRow {
 
 /**
  * ナレッジベースの範囲と検索・回答プロファイルの範囲の結果を、指標ごとに並べる（#2402）。
- * どちらでも測れなかった指標は出さない。差の向きは、低いほどよい指標では逆にする。
+ * 両側とも未評価でも六指標を表示し、差を未評価として扱う。
  */
 export function comparisonRows(
   base: EvaluationMetrics,
   compared: EvaluationMetrics
 ): EvaluationComparisonRow[] {
-  const names = [...EVALUATION_GUIDANCE_METRICS, ...EVALUATION_METRIC_NAMES];
+  const names = EVALUATION_METRIC_NAMES;
   return names.flatMap((metric) => {
     const left = metricValue(base, metric);
     const right = metricValue(compared, metric);
-    if (left === null && right === null) return [];
     const delta = left !== null && right !== null ? Math.round((right - left) * 10000) / 10000 : null;
     let direction: ComparisonDirection | null = null;
     if (delta !== null) {
@@ -352,7 +191,7 @@ export function comparisonRows(
 
 /** 差を百分率のポイントで表示する（+12.5pt / −3pt / ±0pt。測れなければ「—」）。 */
 export function formatMetricDelta(delta: number | null): string {
-  if (delta === null || Number.isNaN(delta)) return "—";
+  if (delta === null || Number.isNaN(delta)) return t("evaluation.metric.unassessed");
   const points = Math.round(delta * 1000) / 10;
   if (points === 0) return "±0pt";
   return `${points > 0 ? "+" : "−"}${Math.abs(points)}pt`;

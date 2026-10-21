@@ -21,7 +21,7 @@
       "relevant_document_ids": [
         "file:approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "5年"
       ],
       "expected_outcomes": [
@@ -46,7 +46,7 @@
       "relevant_document_ids": [
         "file:data-retention-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "7年"
       ],
       "expected_outcomes": [
@@ -71,7 +71,7 @@
       "relevant_document_ids": [
         "file:incident-contact-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "翌営業日",
         "担当部署"
       ],
@@ -97,7 +97,7 @@
       "relevant_document_ids": [
         "file:system-ledger.xlsx"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "AMS",
         "情"
       ],
@@ -124,7 +124,7 @@
         "file:maintenance-plan.pdf",
         "file:system-ledger.xlsx"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "極秘"
       ],
       "expected_outcomes": [
@@ -155,7 +155,7 @@
         "file:maintenance-plan.pdf",
         "file:system-ledger.xlsx"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "総"
       ],
       "expected_outcomes": [
@@ -185,7 +185,7 @@
       "relevant_document_ids": [
         "file:system-ledger.xlsx"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "人事評価システム",
         "予算管理システム"
       ],
@@ -217,7 +217,7 @@
         "file:incident-contact-rules.pdf",
         "file:system-ledger.xlsx"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "受発注管理システム"
       ],
       "expected_outcomes": [
@@ -248,7 +248,7 @@
         "file:organization-rules.pdf",
         "file:system-ledger.xlsx"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "資産管理システム",
         "社外秘"
       ],
@@ -281,7 +281,7 @@
         "file:organization-rules.pdf",
         "file:approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "管理本部長",
         "5営業日"
       ],
@@ -324,7 +324,7 @@
         "file:organization-rules.pdf",
         "file:approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "3営業日"
       ],
       "expected_outcomes": [
@@ -366,7 +366,7 @@
         "file:organization-rules.pdf",
         "file:approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "営業本部長",
         "5営業日"
       ],
@@ -408,7 +408,7 @@
         "file:system-ledger.xlsx",
         "file:organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "総務部"
       ],
       "expected_outcomes": [
@@ -439,7 +439,7 @@
         "file:system-ledger.xlsx",
         "file:data-retention-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "10年"
       ],
       "expected_outcomes": [
@@ -470,7 +470,7 @@
         "file:system-ledger.xlsx",
         "file:data-retention-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "3年"
       ],
       "expected_outcomes": [
@@ -502,7 +502,7 @@
         "file:incident-contact-rules.pdf",
         "file:organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "30分",
         "管理本部長"
       ],
@@ -544,7 +544,7 @@
         "file:system-ledger.xlsx",
         "file:incident-contact-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "1営業日"
       ],
       "expected_outcomes": [
@@ -576,7 +576,7 @@
         "file:change-procedure.pdf",
         "file:maintenance-plan.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "第2土曜"
       ],
       "expected_outcomes": [
@@ -613,7 +613,7 @@
         "file:change-procedure.pdf",
         "file:maintenance-plan.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "最終金曜"
       ],
       "expected_outcomes": [
@@ -655,7 +655,7 @@
         "file:change-procedure.pdf",
         "file:maintenance-plan.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "第4日曜"
       ],
       "expected_outcomes": [
@@ -691,7 +691,7 @@
         "file:system-ledger.xlsx",
         "file:organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "管理本部長"
       ],
       "expected_outcomes": [
@@ -727,7 +727,7 @@
         "file:system-ledger.xlsx",
         "file:organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "担当役員"
       ],
       "expected_outcomes": [
@@ -772,7 +772,7 @@
       "relevant_document_ids": [
         "file:approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "催促"
       ],
       "expected_outcomes": [
@@ -802,7 +802,7 @@
       "relevant_document_ids": [
         "file:maintenance-plan.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "最終金曜"
       ],
       "expected_outcomes": [
@@ -832,7 +832,7 @@
       "relevant_document_ids": [
         "file:change-procedure.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "切り戻し"
       ],
       "expected_outcomes": [
@@ -862,7 +862,7 @@
       "relevant_document_ids": [
         "file:incident-contact-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "#incident"
       ],
       "expected_outcomes": [
@@ -892,7 +892,7 @@
       "relevant_document_ids": [
         "file:approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "24時間",
         "事後"
       ],
@@ -923,7 +923,7 @@
       "relevant_document_ids": [
         "file:data-retention-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "承認",
         "総務部"
       ],
@@ -961,7 +961,7 @@
         "file:organization-rules.pdf",
         "file:approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "経費精算ポータル"
       ],
       "expected_outcomes": [
@@ -1022,7 +1022,7 @@
         "file:system-ledger.xlsx",
         "file:data-retention-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "人事評価システム",
         "10年"
       ],
@@ -1063,7 +1063,7 @@
       "relevant_document_ids": [
         "file:maintenance-plan.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "HRM"
       ],
       "expected_outcomes": [
@@ -1094,7 +1094,7 @@
         "file:system-ledger.xlsx",
         "file:incident-contact-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "人事評価システム",
         "30分"
       ],
@@ -1136,7 +1136,7 @@
         "file:system-ledger.xlsx",
         "file:incident-contact-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "ドキュメントポータル",
         "1営業日"
       ],
@@ -1179,7 +1179,7 @@
         "file:organization-rules.pdf",
         "file:approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "生産本部長",
         "5営業日"
       ],
@@ -1222,7 +1222,7 @@
         "file:organization-rules.pdf",
         "file:approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "担当役員",
         "7営業日"
       ],
@@ -1264,7 +1264,7 @@
         "file:system-ledger.xlsx",
         "file:organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "購買部"
       ],
       "expected_outcomes": [
@@ -1296,7 +1296,7 @@
         "file:change-procedure.pdf",
         "file:maintenance-plan.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "第1火曜"
       ],
       "expected_outcomes": [
@@ -1333,7 +1333,7 @@
         "file:change-procedure.pdf",
         "file:maintenance-plan.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "第3木曜"
       ],
       "expected_outcomes": [
@@ -1369,7 +1369,7 @@
         "file:system-ledger.xlsx",
         "file:data-retention-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "10年"
       ],
       "expected_outcomes": [
@@ -1401,7 +1401,7 @@
         "file:incident-contact-rules.pdf",
         "file:organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "30分",
         "情報セキュリティ部長"
       ],
@@ -1443,7 +1443,7 @@
         "file:system-ledger.xlsx",
         "file:organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "代表取締役"
       ],
       "expected_outcomes": [
@@ -1490,7 +1490,7 @@
         "file:system-ledger.xlsx",
         "file:organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "営業企画部"
       ],
       "expected_outcomes": [
@@ -1526,7 +1526,7 @@
         "file:system-ledger.xlsx",
         "file:backup-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "2回"
       ],
       "expected_outcomes": [
@@ -1558,7 +1558,7 @@
         "file:access-request-procedure.pdf",
         "file:organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "法務部長",
         "情報セキュリティ部長"
       ],
@@ -1604,7 +1604,7 @@
       "relevant_document_ids": [
         "file:system-ledger.xlsx"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "購買管理システム"
       ],
       "expected_outcomes": [
@@ -1641,7 +1641,7 @@
         "file:organization-rules.pdf",
         "file:approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "製造実行システム",
         "5営業日"
       ],
@@ -1703,7 +1703,7 @@
         "file:approval-rules.pdf",
         "file:approval-rules-2023.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "5営業日",
         "7営業日"
       ],
@@ -1737,7 +1737,7 @@
         "file:system-ledger.xlsx",
         "file:organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "倉庫管理システム",
         "物流部"
       ],
@@ -1773,7 +1773,7 @@
       "relevant_document_ids": [
         "file:logistics-system-ledger.xlsx"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "運行管理システム"
       ],
       "expected_outcomes": [
@@ -1799,7 +1799,7 @@
         "file:incident-contact-rules.pdf",
         "file:system-ledger.xlsx"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "在庫管理システム"
       ],
       "expected_outcomes": [
@@ -1829,7 +1829,7 @@
       "relevant_document_ids": [
         "file:backup-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "情シス"
       ],
       "expected_outcomes": [
@@ -1859,7 +1859,7 @@
       "relevant_document_ids": [
         "file:access-request-procedure.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "半年"
       ],
       "expected_outcomes": [
@@ -1889,7 +1889,7 @@
       "relevant_document_ids": [
         "file:purchase-approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "担当役員"
       ],
       "expected_outcomes": [
@@ -1916,7 +1916,7 @@
         "file:organization-rules.pdf",
         "file:approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "管理本部長",
         "5営業日"
       ],
@@ -1959,7 +1959,7 @@
         "file:organization-rules.pdf",
         "file:approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "労務部長",
         "3営業日"
       ],
@@ -2002,7 +2002,7 @@
         "file:change-procedure.pdf",
         "file:maintenance-plan.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "第1日曜"
       ],
       "expected_outcomes": [
@@ -2039,7 +2039,7 @@
         "file:change-procedure.pdf",
         "file:maintenance-plan.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "最終金曜"
       ],
       "expected_outcomes": [
@@ -2080,7 +2080,7 @@
         "file:system-ledger.xlsx",
         "file:data-retention-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "3年"
       ],
       "expected_outcomes": [
@@ -2111,7 +2111,7 @@
         "file:system-ledger.xlsx",
         "file:backup-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "1回"
       ],
       "expected_outcomes": [
@@ -2142,7 +2142,7 @@
         "file:system-ledger.xlsx",
         "file:organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "生産本部長"
       ],
       "expected_outcomes": [
@@ -2179,7 +2179,7 @@
         "file:system-ledger.xlsx",
         "file:organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "製造部"
       ],
       "expected_outcomes": [
@@ -2215,7 +2215,7 @@
         "file:logistics-system-ledger.xlsx",
         "file:logistics-organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "運行管理課長"
       ],
       "expected_outcomes": [
@@ -2251,7 +2251,7 @@
         "file:system-ledger.xlsx",
         "file:data-retention-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "問い合わせ管理システム",
         "10年"
       ],
@@ -2293,7 +2293,7 @@
         "file:system-ledger.xlsx",
         "file:incident-contact-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "資金管理システム",
         "4時間"
       ],
@@ -2335,7 +2335,7 @@
         "file:maintenance-plan.pdf",
         "file:maintenance-plan-2025.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "第1土曜",
         "第2土曜"
       ],
@@ -2368,7 +2368,7 @@
         "file:organization-rules.pdf",
         "file:system-ledger.xlsx"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "ID 管理システム",
         "ログ監視システム"
       ],
@@ -2406,7 +2406,7 @@
         "file:system-ledger.xlsx",
         "file:organization-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "製造実行システム",
         "製造部"
       ],
@@ -2442,7 +2442,7 @@
       "relevant_document_ids": [
         "file:purchase-approval-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "購買部"
       ],
       "expected_outcomes": [
@@ -2472,7 +2472,7 @@
       "relevant_document_ids": [
         "file:backup-rules.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "毎週日曜"
       ],
       "expected_outcomes": [
@@ -2497,7 +2497,7 @@
       "relevant_document_ids": [
         "file:server-room-inspection.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "入室の予約",
         "監視の一時停止",
         "予備部品"
@@ -2534,7 +2534,7 @@
       "relevant_document_ids": [
         "file:server-room-inspection.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "210",
         "27",
         "緑の範囲"
@@ -2571,7 +2571,7 @@
       "relevant_document_ids": [
         "file:server-room-inspection.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "氏名",
         "交換した部品"
       ],
@@ -2602,7 +2602,7 @@
       "relevant_document_ids": [
         "file:server-room-inspection.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "漏水",
         "警報"
       ],
@@ -2633,7 +2633,7 @@
       "relevant_document_ids": [
         "file:server-room-inspection.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "監視の再開",
         "補充"
       ],
@@ -2664,7 +2664,7 @@
       "relevant_document_ids": [
         "file:server-room-inspection.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "漏水",
         "におい",
         "32 度",
@@ -2719,7 +2719,7 @@
       "relevant_document_ids": [
         "file:server-room-inspection.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "5 営業日",
         "3 営業日",
         "10 営業日"
@@ -2766,7 +2766,7 @@
       "relevant_document_ids": [
         "file:server-room-inspection.pdf"
       ],
-      "expected_answer_keywords": [
+      "required_answer_points": [
         "予約の番号",
         "測った値",
         "見つけた場所と時刻",

@@ -319,10 +319,10 @@ for (const viewport of [
             passed: false,
             suite: "standard",
             metrics: [
-              { name: "faithfulness", value: 0.6, threshold: 0.7, passed: false, reference: true },
+              { name: "answer_correctness", value: 1, threshold: 0.9, passed: true },
               { name: "claim_support_rate", value: 1, threshold: 0.9, passed: true },
               { name: "requirement_coverage", value: 0.5, threshold: 0.8, passed: false },
-              { name: "refusal_accuracy", value: 1, threshold: 0.9, passed: true },
+
             ],
             standard_answer: "受注一覧で対象を選び、取消を押します。",
             evaluated_at: "2026-09-26T01:01:00Z",
@@ -348,7 +348,7 @@ for (const viewport of [
     await openAnswerProcessDetails(page, "search-run-progress");
     const evaluation = page.getByRole("region", { name: "標準回答による評価" });
     const run = evaluation.getByRole("button", { name: "標準回答で評価" });
-    await expect(run).toBeDisabled();
+    await expect(run).toBeEnabled();
     await evaluation.getByLabel("標準回答").fill("受注一覧で対象を選び、取消を押します。");
     await run.click();
 
@@ -358,13 +358,13 @@ for (const viewport of [
     // 指標ごとに値・基準・判定を出し、1 つでも閾値未満なら不合格（#680）。
     await expect(evaluation.getByText("不合格", { exact: true })).toBeVisible();
     await expect(evaluation.getByText("評価の基準: 標準")).toBeVisible();
-    const coverage = evaluation.getByRole("row", { name: /標準回答の網羅/ });
+    const coverage = evaluation.getByRole("row", { name: /回答の網羅性/ });
     await expect(coverage).toContainText("50%");
     await expect(coverage).toContainText("80%");
     await expect(coverage).toContainText("閾値未満");
-    await expect(evaluation.getByRole("row", { name: /Faithfulness/ })).toContainText("閾値以上");
-    // 根拠との語句の一致率は参考値で、合否に使わない（#711）。
-    await expect(evaluation.getByRole("row", { name: /根拠との語句の一致率/ })).toContainText("参考");
+    await expect(evaluation.getByRole("row", { name: /根拠への忠実性/ })).toContainText("閾値以上");
+    await expect(evaluation.getByRole("row", { name: /回答の正確性/ })).toContainText("100%");
+    await expect(evaluation.getByRole("row")).toHaveCount(4);
     await evaluation.getByText("標準回答の項目への対応（2）").click();
     await expect(evaluation.getByText("未対応")).toBeVisible();
     await expect(evaluation.getByText("受注一覧で対象を選ぶ")).toBeVisible();

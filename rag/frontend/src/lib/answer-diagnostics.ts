@@ -367,7 +367,7 @@ export type AnswerEvaluationView = {
     name: string;
     value: number | null;
     threshold: number | null;
-    passed: boolean;
+    passed: boolean | null;
     reference: boolean;
   }[];
   /** 以前の方式（4 軸・20 点満点。rubric_version 10 以前）の評価。指標が無いので再評価を促す。 */
@@ -397,7 +397,7 @@ export function parseAnswerEvaluation(value: unknown): AnswerEvaluationView | nu
         name: String(entry.name ?? ""),
         value: num(entry.value),
         threshold: num(entry.threshold),
-        passed: entry.passed === true,
+        passed: typeof entry.passed === "boolean" ? entry.passed : null,
         reference: entry.reference === true,
       };
     }),
@@ -433,6 +433,7 @@ export function evaluationOutcome(
 } {
   if (evaluation.status !== "completed") return { variant: "warning", labelKey: "notCompleted" };
   if (evaluation.legacy) return { variant: "neutral", labelKey: "legacy" };
+  if (evaluation.passed === null) return {variant:"warning",labelKey:"notCompleted"};
   return evaluation.passed
     ? { variant: "success", labelKey: "passed" }
     : { variant: "danger", labelKey: "failed" };

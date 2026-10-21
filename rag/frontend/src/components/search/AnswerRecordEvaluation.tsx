@@ -47,7 +47,7 @@ export function AnswerRecordEvaluation({
   );
   const evaluation = parseAnswerEvaluation(evaluate.data?.evaluation ?? initial);
   const inputId = `standard-answer-${traceId}`;
-  const canSubmit = standardAnswer.trim().length > 0 && !evaluate.isPending;
+  const canSubmit = !evaluate.isPending;
 
   return (
     <section
@@ -63,7 +63,6 @@ export function AnswerRecordEvaluation({
       <TextareaField
         id={inputId}
         label={t("search.evaluation.standardAnswer")}
-        required
         value={standardAnswer}
         onChange={(event) => setStandardAnswer(event.target.value)}
         rows={3}
@@ -139,7 +138,9 @@ function EvaluationResult({ evaluation }: { evaluation: AnswerEvaluationView }) 
       key: "verdict",
       header: t("search.evaluation.verdict"),
       render: (metric) =>
-        metric.reference ? (
+        metric.value === null ? (
+          <StatusBadge variant="neutral" label={t("evaluation.metric.unassessed")} />
+        ) : metric.reference ? (
           <StatusBadge variant="neutral" label={t("search.evaluation.metric.reference")} />
         ) : (
           <StatusBadge

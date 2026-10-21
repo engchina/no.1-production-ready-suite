@@ -47,7 +47,7 @@ const IMPORT: Pick<EvaluationImportResult, "cases" | "rows" | "document_names"> 
       evidence: ["経費精算規程.PDF", "出張旅費規程.docx | p.4"],
       standard_answer_preview: "毎月 25 日です。",
       has_standard_answer: true,
-      expects_answer: true,
+      expected_response_decision: "answer",
     },
     {
       row: 3,
@@ -56,7 +56,7 @@ const IMPORT: Pick<EvaluationImportResult, "cases" | "rows" | "document_names"> 
       evidence: [],
       standard_answer_preview: null,
       has_standard_answer: false,
-      expects_answer: false,
+      expected_response_decision: "hold",
     },
   ],
   document_names: { "doc-expense": "経費精算規程.pdf", "doc-travel": "出張旅費規程.docx" },
@@ -100,8 +100,8 @@ describe("期待する根拠の照合の結果", () => {
   const result = (overrides: Partial<EvaluationCaseResult>) =>
     ({
       status: "success",
-      context_recall: 0.5,
-      evidence_recall: 0,
+      mrr: 0.5,
+      required_evidence_recall: 0,
       hit_document_ids: ["doc-expense"],
       missing_evidence: ["e2"],
       ...overrides,
@@ -124,7 +124,7 @@ describe("期待する根拠の照合の結果", () => {
     expect(summary?.items.map((item) => item.found)).toEqual([true, false]);
 
     const all = evaluationEvidenceSummary(
-      result({ evidence_recall: 1, missing_evidence: [], hit_document_ids: ["doc-expense", "doc-travel"] }),
+      result({ required_evidence_recall: 1, missing_evidence: [], hit_document_ids: ["doc-expense", "doc-travel"] }),
       labels["row-2"]
     );
     expect(all).toMatchObject({ found: 2, total: 2 });
@@ -132,7 +132,7 @@ describe("期待する根拠の照合の結果", () => {
 
   it("測れないケースと根拠の無いケース", () => {
     expect(
-      evaluationEvidenceSummary(result({ context_recall: null, evidence_recall: null }), labels["row-2"])
+      evaluationEvidenceSummary(result({ mrr: null, required_evidence_recall: null }), labels["row-2"])
     ).toMatchObject({ measured: false, found: 0 });
     expect(evaluationEvidenceSummary(result({ status: "error" }), labels["row-2"])?.measured).toBe(false);
     expect(evaluationEvidenceSummary(result({}), labels["row-3"])).toBeNull();
@@ -144,7 +144,7 @@ describe("process drafts (issue 2402)", () => {
   const draft: EvaluationProcessDraft = {
     case_id: "row-3",
     row: 3,
-    expected_steps: ["画面A"],
+    required_answer_points: ["画面A"],
     required_conditions: ["条件X"],
     expected_outcomes: ["answered", "conditional"],
     relevant_document_ids: ["doc-a", "doc-b"],
@@ -184,6 +184,10 @@ describe("process drafts (issue 2402)", () => {
     error: null,
   };
 
+  it("merges explicit and confirmed points without losing either input",()=>{
+    const source={...IMPORT,cases:[{...IMPORT.cases[0],required_answer_points:["既存の要点","画面A"]}]};
+    expect(applyProcessDrafts(source,{[source.cases[0].id]:draft}).cases[0].required_answer_points).toEqual(["既存の要点","画面A"]);
+  });
   it("lists rows with an answer process", () => {
     const rows = [
       { ...IMPORT.rows[0], answer_process: null },
@@ -201,7 +205,7 @@ describe("process drafts (issue 2402)", () => {
     });
     const target = merged.cases.find((item) => item.id === "row-3");
     expect(target).toMatchObject({
-      expected_steps: ["画面A"],
+      required_answer_points: ["画面A"],
       required_conditions: ["条件X"],
       expected_outcomes: ["answered", "conditional"],
       relevant_document_ids: ["doc-a", "doc-b"],

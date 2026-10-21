@@ -1,17 +1,6 @@
-"""標準回答による評価の指標と合否(評価の基準の指標と閾値。#680)。
+"""単件回答の意味上の正確性・網羅性・根拠への忠実性と、測定できた指標の閾値判定。
 
-評価の基準の 9 指標のうち、1 件の回答と標準回答で測れる 5 つを、評価の基準で選んだ suite
-(standard / strict)の閾値で判定する。すべて閾値以上なら合格(品質評価の answer_pass_rate が
-数える合否)。正解の文書が要る context_recall / mrr と、期待する語が要る answer_keyword_hit_rate
-は測らない。
-
-- faithfulness / citation_traceability_coverage: 品質評価と同じ決定的な計算(回答と引用)。
-  faithfulness は語句の一致による近似で、1 件の回答では言い換えだけで閾値を下回る。同じ観点は
-  LLM の主張の監査(claim_support_rate)が判定するので、1 件の回答では参考値にして合否に使わない
-- claim_support_rate: LLM の主張の監査。根拠のない主張・矛盾する主張が無ければ 1
-- requirement_coverage: LLM の照合。標準回答の required 項目の対応率
-- refusal_accuracy: 標準回答がある質問は答えるべき質問。拒答なら 0
-"""
+標準回答がない場合は正確性・網羅性を未評価とし、主張の支持は回答と引用だけで測る。"""
 
 import re
 from collections.abc import Mapping, Sequence
@@ -25,13 +14,11 @@ from rag_engine.generation.grounded import (
 
 from app.config import Settings
 from app.rag.evaluation_adapter import resolve_evaluation_adapter
-from app.rag.file_processing_evaluation import citation_traceability_coverage
-from app.rag.grounding_metrics import evaluate_groundedness
 from app.schemas.search import RetrievedChunk
 
 UNSUPPORTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
 # 1 件の回答では表示だけにして、合否に使わない指標。
-REFERENCE_ONLY_METRICS = frozenset({"faithfulness"})
+REFERENCE_ONLY_METRICS: frozenset[str] = frozenset()
 
 
 # #2738 より前に Agent の最終の検証が回答の末尾に足していた「資料で確認できず除いた内容」の
@@ -138,42 +125,47 @@ def score_answer_evaluation(
     if evaluation.get("status") != "completed":
         return dict(evaluation)
     params = resolve_evaluation_adapter(settings)
-    abstained = is_abstained_answer(answer, citations, insufficient_reason)
     claims = [claim for claim in evaluation.get("claim_checks") or [] if isinstance(claim, Mapping)]
+    assessed = [
+        claim for claim in claims if claim.get("status") not in {"not_a_claim", "data_confirmation"}
+    ]
+    support = (
+        sum(claim.get("status") == "supported" for claim in assessed) / len(assessed)
+        if assessed
+        and citations
+        and all(
+            claim.get("status") in {"supported", "unsupported", "contradicted"}
+            for claim in assessed
+        )
+        else None
+    )
     coverage = evaluation.get("requirement_coverage")
+    correctness = evaluation.get("answer_correctness")
     values: dict[str, float | None] = {
-        "faithfulness": (
-            None
-            if abstained
-            else evaluate_groundedness(
-                grounding_text(answer), "\n".join(chunk.text for chunk in citations)
-            ).score
-        ),
-        "citation_traceability_coverage": (
-            citation_traceability_coverage(citations) if citations else None
-        ),
-        "claim_support_rate": 1.0 if claims_supported(claims) else 0.0,
+        "answer_correctness": float(correctness) if isinstance(correctness, int | float) else None,
         "requirement_coverage": float(coverage) if isinstance(coverage, int | float) else None,
-        "refusal_accuracy": 0.0 if abstained else 1.0,
+        "claim_support_rate": support,
     }
     metrics = []
     for name, value in values.items():
         threshold = getattr(params.thresholds, name)
-        if value is None or threshold is None:
-            continue
         metrics.append(
             {
                 "name": name,
-                "value": round(value, 4),
+                "value": round(value, 4) if value is not None else None,
                 "threshold": threshold,
-                "passed": value >= threshold,
+                "passed": value >= threshold
+                if value is not None and threshold is not None
+                else None,
                 "reference": name in REFERENCE_ONLY_METRICS,
             }
         )
-    judged = [metric for metric in metrics if not metric["reference"]]
+    judged = [metric for metric in metrics if metric["passed"] is not None]
     return {
         **evaluation,
+        "metrics_version": "six_metrics_v1",
+        "claim_support_rate": support,
         "suite": params.suite,
         "metrics": metrics,
-        "passed": bool(judged) and all(metric["passed"] for metric in judged),
+        "passed": (all(metric["passed"] for metric in judged) if judged else None),
     }

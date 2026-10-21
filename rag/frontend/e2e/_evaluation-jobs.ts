@@ -140,7 +140,7 @@ export function evaluationImportResult(overrides: Record<string, unknown> = {}) 
         evidence: ["経費精算規程.pdf | p.3", "出張旅費規程.docx"],
         standard_answer_preview: "毎月 25 日が締め日です。",
         has_standard_answer: true,
-        expects_answer: true,
+        expected_response_decision: "answer",
       },
       {
         row: 3,
@@ -149,7 +149,7 @@ export function evaluationImportResult(overrides: Record<string, unknown> = {}) 
         evidence: [],
         standard_answer_preview: null,
         has_standard_answer: false,
-        expects_answer: false,
+        expected_response_decision: "hold",
       },
     ],
     errors: [],

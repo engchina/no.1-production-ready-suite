@@ -3,15 +3,25 @@
     {
       "id": "policy-approval-flow-basic",
       "query": "経費申請の承認フローを教えてください。",
-      "relevant_document_ids": ["doc-expense-policy"],
-      "expected_answer_keywords": ["部門長", "承認"],
-      "standard_answer": "経費申請は申請者が申請書を提出し、部門長が内容を確認して承認します。10 万円を超える申請は経理部長の承認も必要です。"
+      "relevant_document_ids": [
+        "doc-expense-policy"
+      ],
+      "standard_answer": "経費申請は申請者が申請書を提出し、部門長が内容を確認して承認します。10 万円を超える申請は経理部長の承認も必要です。",
+      "required_answer_points": [
+        "部門長",
+        "承認"
+      ]
     },
     {
       "id": "manual-troubleshooting-basic",
       "query": "検索結果が表示されない場合の確認項目は何ですか。",
-      "relevant_document_ids": ["doc-search-troubleshooting"],
-      "expected_answer_keywords": ["インデックス", "再実行"]
+      "relevant_document_ids": [
+        "doc-search-troubleshooting"
+      ],
+      "required_answer_points": [
+        "インデックス",
+        "再実行"
+      ]
     },
     {
       "id": "out-of-scope-refusal",
@@ -30,14 +40,11 @@
     "oracle_vector_target_accuracy": 95
   },
   "thresholds": {
-    "context_recall": 0.8,
+    "required_evidence_recall": 0.9,
     "mrr": 0.6,
-    "faithfulness": 0.7,
-    "citation_traceability_coverage": 0.9,
-    "claim_support_rate": 0.9,
-    "answer_keyword_hit_rate": 0.8,
-    "refusal_accuracy": 0.9,
-    "requirement_coverage": 0.8,
-    "answer_pass_rate": 0.7
+    "answer_correctness": 0.9,
+    "requirement_coverage": 0.9,
+    "claim_support_rate": 0.95,
+    "response_decision_accuracy": 0.9
   }
 }

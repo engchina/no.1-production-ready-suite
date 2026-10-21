@@ -2,7 +2,7 @@
 
 - 評価セット（`rag/evaluation/multi-hop/multi-hop.json`）が今の評価のスキーマで読め、必要な根拠の
   語句が、指した資料の原稿（HTML / 表の原稿）と同梱の PDF / xlsx に実際に書いてある。
-- 根拠の連鎖の完全率（`evidence_chain_complete_rate`）と、種類別・段の数別の内訳。
+- 必要な根拠の取得率（`evidence_chain_complete_rate`）と、種類別・段の数別の内訳。
 - 資料の生成の script（`rag/scripts/generate_evaluation_corpus.py`）が、表の原稿から同梱と同じ
   xlsx を作る。多段の資料の原稿と評価セットは、実体のデータ（`rag/scripts/multi_hop_corpus.py`）から
   同梱と同じものができる（#1352）。
@@ -116,7 +116,7 @@ def test_multi_hop_set_has_every_reasoning_type_and_both_splits() -> None:
     assert any(case.reasoning_type == "bridge" and (case.hops or 0) >= 3 for case in cases)
     for case in cases:
         assert case.hops is not None and case.required_evidence, case.id
-        assert case.expected_answer_keywords and case.expected_outcomes, case.id
+        assert case.required_answer_points and case.expected_outcomes, case.id
         # 正解の文書は、必要な根拠の文書と同じ（多段は複数の文書をまたぐ）。
         assert set(case.relevant_document_ids) == {
             item.document_id for item in case.required_evidence
@@ -347,7 +347,7 @@ def _chain_case(case_id: str, reasoning_type: str, hops: int, **extra: Any) -> E
             "split": "dev",
             "reasoning_type": reasoning_type,
             "hops": hops,
-            "expected_answer_keywords": ["管理本部長"],
+            "required_answer_points": ["管理本部長"],
             "required_evidence": [
                 {"id": "ledger", "document_id": "ledger", "text": "SYS-101"},
                 {"id": "org", "document_id": "org", "text": "経理部の承認者は管理本部長です"},
@@ -378,7 +378,7 @@ def test_evidence_chain_complete_rate_counts_cases_with_all_evidence() -> None:
         _response([("ledger", "SYS-101")], answer="経理部長が承認します。"),
     )
     no_evidence = _scored(
-        EvaluationCase(id="none", query="q", expected_answer_keywords=["x"]),
+        EvaluationCase(id="none", query="q", required_answer_points=["x"]),
         _response([("ledger", "x")], answer="x"),
     )
     clarification = _scored(
@@ -393,19 +393,19 @@ def test_evidence_chain_complete_rate_counts_cases_with_all_evidence() -> None:
         error_message="失敗",
     )
 
-    assert (complete.evidence_recall, complete.evidence_chain_complete) == (1.0, True)
-    assert (partial.evidence_recall, partial.evidence_chain_complete) == (0.5, False)
+    assert complete.required_evidence_recall == 1.0
+    assert partial.required_evidence_recall == 0.5
     assert partial.missing_evidence == ["org"]
-    assert no_evidence.evidence_chain_complete is None
-    assert clarification.evidence_chain_complete is None
+    assert no_evidence.required_evidence_recall is None
+    assert clarification.required_evidence_recall is None
     assert (failed.reasoning_type, failed.hops) == ("bridge", 2)
 
     metrics = summarize_case_results([complete, partial, no_evidence, clarification, failed])
     # 再現率の平均（0.75）とは別に、全部そろったケースの割合（0.5）を見る。
     assert metrics.required_evidence_recall == 0.75
-    assert metrics.evidence_chain_complete_rate == 0.5
-    assert metrics.metric_case_counts["evidence_chain_complete_rate"] == 2
-    assert metrics.split_breakdown["dev"].metrics["evidence_chain_complete_rate"] == 0.5
+    assert "evidence_chain_complete_rate" not in metrics.model_dump()
+    assert metrics.metric_case_counts["required_evidence_recall"] == 2
+    assert metrics.split_breakdown["dev"].metrics["required_evidence_recall"] == 0.75
 
 
 def test_required_evidence_matches_only_the_document_of_the_evaluation_set() -> None:
@@ -428,8 +428,8 @@ def test_required_evidence_matches_only_the_document_of_the_evaluation_set() -> 
         ),
     )
 
-    assert (leaked.evidence_recall, leaked.missing_evidence) == (0.5, ["org"])
-    assert leaked.evidence_chain_complete is False
+    assert (leaked.required_evidence_recall, leaked.missing_evidence) == (0.5, ["org"])
+    assert "evidence_miss" in leaked.failure_reasons
 
 
 def test_reasoning_and_hops_breakdowns() -> None:
@@ -452,7 +452,7 @@ def test_reasoning_and_hops_breakdowns() -> None:
         ),
     )
     single = _scored(
-        EvaluationCase(id="s1", query="q", expected_answer_keywords=["x"]),
+        EvaluationCase(id="s1", query="q", required_answer_points=["x"]),
         _response([("ledger", "x")], answer="x"),
     )
     failed = case_error_result(
@@ -469,22 +469,18 @@ def test_reasoning_and_hops_breakdowns() -> None:
     assert list(metrics.reasoning_type_breakdown) == ["bridge", "comparison", "unspecified"]
     bridge = metrics.reasoning_type_breakdown["bridge"]
     assert (bridge.case_count, bridge.error_count) == (3, 1)
-    assert bridge.metrics == {
-        "required_evidence_recall": 0.75,
-        "evidence_chain_complete_rate": 0.5,
-        "answer_keyword_hit_rate": 0.5,
-    }
-    assert bridge.metric_case_counts["evidence_chain_complete_rate"] == 2
-    assert (
-        metrics.reasoning_type_breakdown["comparison"].metrics["evidence_chain_complete_rate"]
-        == 1.0
-    )
+    from app.schemas.evaluation import EVALUATION_METRIC_NAMES
+
+    assert set(bridge.metrics) == set(EVALUATION_METRIC_NAMES)
+    assert bridge.metrics["required_evidence_recall"] == 0.75
+    assert bridge.metric_case_counts["required_evidence_recall"] == 2
+    assert metrics.reasoning_type_breakdown["comparison"].metrics["required_evidence_recall"] == 1
     unspecified = metrics.reasoning_type_breakdown["unspecified"]
-    assert unspecified.metrics["evidence_chain_complete_rate"] is None
-    assert unspecified.metrics["answer_keyword_hit_rate"] == 1.0
+    assert unspecified.metrics["required_evidence_recall"] is None
+    assert unspecified.metrics["answer_correctness"] is None
     # 段の数の順（無いケースは最後）。
     assert list(metrics.hops_breakdown) == ["1", "2", "3", "unspecified"]
-    assert metrics.hops_breakdown["2"].metrics["evidence_chain_complete_rate"] == 0.5
+    assert metrics.hops_breakdown["2"].metrics["required_evidence_recall"] == 0.75
     assert metrics.hops_breakdown["3"].error_count == 1
     # 区分の中の内訳。
     dev = metrics.split_breakdown["dev"]
@@ -494,13 +490,13 @@ def test_reasoning_and_hops_breakdowns() -> None:
 
 def test_breakdowns_are_empty_without_reasoning_fields() -> None:
     result = _scored(
-        EvaluationCase(id="s", query="q", expected_answer_keywords=["x"]),
+        EvaluationCase(id="s", query="q", required_answer_points=["x"]),
         _response([("doc", "x")], answer="x"),
     )
     metrics = summarize_case_results([result])
     assert metrics.reasoning_type_breakdown == {}
     assert metrics.hops_breakdown == {}
-    assert metrics.evidence_chain_complete_rate is None
+    assert "evidence_chain_complete_rate" not in metrics.model_dump()
 
 
 @pytest.mark.parametrize(
@@ -517,8 +513,12 @@ def test_breakdowns_are_empty_without_reasoning_fields() -> None:
 def test_answer_keywords_ignore_width_case_and_spaces(
     answer: str, keywords: list[str], hit: bool
 ) -> None:
-    case = EvaluationCase(id="k", query="q", expected_answer_keywords=keywords)
-    assert _scored(case, _response([("doc", "x")], answer=answer)).answer_keyword_hit is hit
+    evidence = [
+        {"id": str(index), "text": text} for index, text in enumerate(keywords) if text.strip()
+    ]
+    case = EvaluationCase(id="k", query="q", required_evidence=evidence)
+    result = _scored(case, _response([("doc", answer)], answer=answer))
+    assert result.required_evidence_recall == (1.0 if hit else 0.0)
 
 
 # ---- CLI -----------------------------------------------------------------------------------
@@ -548,14 +548,11 @@ def test_evaluation_cli_surfaces_chain_rate_and_breakdowns(tmp_path: Path) -> No
 
     metrics = _metrics_with_breakdowns()
     trend = _metrics_trend(metrics)
-    assert trend["evidence_chain_complete_rate"] == 0.5
-    assert (
-        trend["reasoning_type_breakdown"]["bridge"]["metrics"]["evidence_chain_complete_rate"]
-        == 1.0
-    )
+    assert trend["required_evidence_recall"] == 0.75
+    assert trend["reasoning_type_breakdown"]["bridge"]["metrics"]["required_evidence_recall"] == 1.0
     assert trend["hops_breakdown"]["1"]["case_count"] == 1
     summary = _gate_summary(metrics, passed=False)
-    assert "evidence_chain_complete_rate=0.5" in summary
+    assert "required_evidence_recall=0.75" in summary
     assert "reasoning_type=bridge: cases=1, errors=0" in summary
     assert "hops=2: cases=1" in summary
 
@@ -572,15 +569,15 @@ def test_agent_evaluation_summary_shows_reasoning_rows() -> None:
 
     data = _metrics_with_breakdowns().model_dump(mode="json")
     summary = summarize_result(data)
-    assert summary["evidence_chain_complete_rate"] == 0.5
-    assert summary["reasoning_types"]["bridge"]["evidence_chain_complete_rate"] == 1.0
-    assert summary["hops"]["1"]["evidence_chain_complete_rate"] == 0.0
+    assert summary["required_evidence_recall"] == 0.75
+    assert summary["reasoning_types"]["bridge"]["required_evidence_recall"] == 1.0
+    assert summary["hops"]["1"]["required_evidence_recall"] == 0.5
     assert summary["splits"]["dev"]["reasoning_types"]["bridge"]["case_count"] == 1
     table = summary_markdown({"A": summary, "D": summary})
-    assert "| 根拠の連鎖の完全率 | 0.50 | 0.50 |" in table
-    assert "| bridge: 根拠の連鎖の完全率 | 1.00 | 1.00 |" in table
-    assert "| 2 段: 必要な根拠の再現率 | 1.00 | 1.00 |" in table
-    assert "| dev / bridge: 根拠の連鎖の完全率 | 1.00 | 1.00 |" in table
+    assert "| 必要な根拠の取得率 | 0.75 | 0.75 |" in table
+    assert "| bridge: 必要な根拠の取得率 | 1.00 | 1.00 |" in table
+    assert "| 2 段: 必要な根拠の取得率 | 1.00 | 1.00 |" in table
+    assert "| dev / bridge: 必要な根拠の取得率 | 1.00 | 1.00 |" in table
 
 
 # ---- 資料の生成 ----------------------------------------------------------------------------
@@ -672,7 +669,7 @@ def test_multi_hop_set_keeps_the_original_cases() -> None:
     assert len(original) == ORIGINAL_CASE_COUNT
     assert [case.id for case in request.cases[:ORIGINAL_CASE_COUNT]] == original
     for spec, case in zip(builder.ORIGINAL_CASES, request.cases, strict=False):
-        assert (case.query, case.expected_answer_keywords) == (spec.query, list(spec.keywords))
+        assert (case.query, case.required_answer_points) == (spec.query, list(spec.keywords))
     added = request.cases[ORIGINAL_CASE_COUNT:]
     assert len(added) >= 30
     assert {case.split for case in added} == {"dev", "holdout"}

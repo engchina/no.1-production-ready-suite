@@ -15,8 +15,8 @@ def test_default_suite_is_standard_with_thresholds() -> None:
     """既定は標準。閾値を持ち、評価の結果を合格 / 要改善で判定する。"""
     params = resolve_evaluation_adapter(Settings())
     assert params.suite == "standard"
-    assert params.thresholds.context_recall == 0.8
-    assert params.thresholds.refusal_accuracy == 0.9
+    assert params.thresholds.required_evidence_recall == 0.9
+    assert params.thresholds.response_decision_accuracy == 0.9
 
 
 def test_presets_cover_every_metric_and_strict_is_stricter() -> None:

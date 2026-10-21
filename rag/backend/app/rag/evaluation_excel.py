@@ -1,43 +1,7 @@
-"""品質評価の評価リクエストの Excel（#2065）。
+"""品質評価の Excel 入力。質問・根拠・標準回答・必須要点・期待する応答判断・回答の過程を読む。
 
-画面の「評価リクエスト」は、テンプレートの Excel（1 行 = 1 つの評価のケース）を読み、評価の job の
-API（`POST /api/evaluation/jobs/run`）のケース（`EvaluationCase`）にする。列は次の 3 つ。
-
-- 質問（必須）: 利用者が尋ねる文（Ragas の `user_input`、Azure AI の `query`）。
-- 期待する根拠（任意）: 回答の根拠になるべき資料（Ragas の `reference_contexts`、TREC の qrels）。
-  1 行に 1 つ、`<ファイル名>`（か `文書ID: <ID>`）の後に `|` で区切って、任意で位置と本文を書く。
-  位置は文書の形式ごとに、ページ（`p.12` / `p.12-14`。PDF にした Word・PowerPoint も）・スライド
-  （`スライド: 3`。PDF にしたスライドのページ）・シートと行（`シート: <名前>` / `行: 10-12`。
-  表計算）・
-  章節（`章節: <見出し>`）。本文の抜粋（`抜粋: <本文の語句>`）はどの形式にも使える（#2086。W3C Web
-  Annotation の selector〔ページ・範囲・引用の文〕、RFC 7111 の行の指定にならう）。ファイル名は
-  選んだナレッジベースの文書の名前と完全に一致させる（NFKC・大小文字・前後の空白は無視）。
-- 標準回答（任意）: 期待する回答（Ragas の `reference`、Azure AI の `ground_truth`）。
-- 案内すべき画面（任意。#2402）: 回答が案内すべき画面。1 行に 1 つ、`<画面の名前>` の後に任意で
-  `| 別名: <別名>、<別名>` を書く（`EvaluationCase.expected_screens`）。
-- 回答の過程（任意。#2402）: 担当者が書いた回答の過程（回答の手順・確認事項・検索する資料と頁
-  など）。
-  取込はケースにせず、画面が下書きの API（`evaluation_process`）で期待の下書きにして、確かめてから
-  ケースに足す。
-
-期待する根拠と標準回答の両方が空の行は、資料に答えが無い質問（回答を控えるのが正しい）として扱う
-（`EvaluationCase.expects_answer`）。
-
-照合の規則:
-- ファイル名だけの根拠は正解の文書（`relevant_document_ids`）にし、正解文書の再現率・順位で測る。
-- ページ・章節・抜粋のある根拠は、正解の文書に加えて必要な根拠（`required_evidence`）にし、回答の
-  引用にその条件をすべて満たす chunk があるかで測る（`evaluation.evidence_matches_chunk`）。
-
-読み込みは 2 段で、構造の検証（`parse_evaluation_workbook`。ナレッジベースを見ない）と、文書の
-解決（`build_evaluation_cases`。選んだナレッジベースの文書を、文書 ID があれば ID で、無ければ
-ファイル名で引く）に分ける。どちらの誤りも行・列・理由の形（`EvaluationImportIssue`）で返し、
-1 つでもあればケースを作らない。文書の形式に合わない位置の条件（表計算にページなど）と、同じ名前の
-文書が複数あるファイル名は警告にする（評価は実行できる。同じ名前の文書は、どれが引用されても一致とする）。
-
-テンプレート（`template_xlsx`）は「評価リクエスト」「記入の説明」「記入例」「文書一覧」の 4 つの
-シートを持つ。記入例は別のシートに置き、取込は「評価リクエスト」のシートだけを読む（例の行を評価しない）。
-「文書一覧」は、選んだナレッジベースの文書（ファイル名・文書 ID・形式・ページ数 / シート名・
-アップロード日）で、「期待する根拠」の列の入力規則の選択肢にする。
+本文と位置を指定した根拠は取得率、文書だけの指定は MRR の評価入力にする。
+判断は明示値だけを使い、未指定を推定しない。構造の検証とナレッジベース内の文書の解決を分ける。
 """
 
 from __future__ import annotations
@@ -59,7 +23,6 @@ from openpyxl.worksheet.datavalidation import DataValidation  # type: ignore[imp
 from pydantic import ValidationError
 
 from app.schemas.evaluation import (
-    EVALUATION_MAX_SCREENS,
     EVIDENCE_LABEL_MAX_CHARS,
     EVIDENCE_SECTION_MAX_CHARS,
     EVIDENCE_TEXT_MAX_CHARS,
@@ -95,13 +58,15 @@ _AUXILIARY_SHEET_TITLES = frozenset(
 QUESTION_HEADER = "質問"
 EVIDENCE_HEADER = "期待する根拠"
 STANDARD_ANSWER_HEADER = "標準回答"
-SCREENS_HEADER = "案内すべき画面"
+SCREENS_HEADER = "必須の回答要点"
+DECISION_HEADER = "期待する応答の判断"
 PROCESS_HEADER = "回答の過程"
 HEADERS = (
     QUESTION_HEADER,
     EVIDENCE_HEADER,
     STANDARD_ANSWER_HEADER,
     SCREENS_HEADER,
+    DECISION_HEADER,
     PROCESS_HEADER,
 )
 TEMPLATE_FILE_NAME = "evaluation_request_template.xlsx"
@@ -128,7 +93,8 @@ _HEADER_ALIASES: dict[str, tuple[str, ...]] = {
         "expected_answer",
         "standard_answer",
     ),
-    "screens": (SCREENS_HEADER, "案内する画面", "画面", "expected_screens", "screens"),
+    "screens": (SCREENS_HEADER, "required_answer_points"),
+    "response_decision": (DECISION_HEADER, "expected_response_decision"),
     "answer_process": (PROCESS_HEADER, "回答過程", "answer_process", "process"),
 }
 _COLUMN_LABELS = {
@@ -136,6 +102,7 @@ _COLUMN_LABELS = {
     "evidence": EVIDENCE_HEADER,
     "standard_answer": STANDARD_ANSWER_HEADER,
     "screens": SCREENS_HEADER,
+    "response_decision": DECISION_HEADER,
     "answer_process": PROCESS_HEADER,
 }
 # 画面の別名の接頭辞と、別名の区切り（読点・カンマ）。
@@ -244,6 +211,7 @@ class EvaluationExcelRow:
     question: str
     evidence: tuple[EvidenceSpec, ...] = ()
     standard_answer: str | None = None
+    response_decision: str | None = None
     # 案内すべき画面と、書いた元の行（#2402）。
     screens: tuple[EvaluationScreen, ...] = ()
     screen_lines: tuple[str, ...] = ()
@@ -475,19 +443,15 @@ def _parse_row(
         )
     screen_lines = [line.strip() for line in cells.get("screens", "").split("\n") if line.strip()]
     screens: list[EvaluationScreen] = []
-    if len(screen_lines) > EVALUATION_MAX_SCREENS:
+    decision_text = cells.get("response_decision", "").strip()
+    response_decision = {"回答": "answer", "確認": "clarify", "保留": "hold"}.get(
+        decision_text, decision_text
+    ) or None
+    if response_decision not in {None, "answer", "clarify", "hold"}:
         issue(
-            "screens",
-            f"案内すべき画面は {EVALUATION_MAX_SCREENS} 行までにしてください"
-            f"（{len(screen_lines)} 行）。",
+            "response_decision",
+            "回答・確認・保留（answer・clarify・hold）のいずれかを指定してください。",
         )
-        screen_lines = []
-    for index, line in enumerate(screen_lines, start=1):
-        parsed_screen = parse_screen_line(line)
-        if isinstance(parsed_screen, str):
-            issue("screens", f"{index} 行目: {parsed_screen}")
-        else:
-            screens.append(parsed_screen)
     lines = [line.strip() for line in cells.get("evidence", "").split("\n") if line.strip()]
     if len(lines) > EVALUATION_EVIDENCE_MAX_LINES:
         issue(
@@ -511,6 +475,7 @@ def _parse_row(
             question=question,
             evidence=tuple(evidence),
             standard_answer=standard_answer,
+            response_decision=response_decision,
             screens=tuple(screens),
             screen_lines=tuple(screen_lines),
             answer_process=answer_process,
@@ -821,7 +786,8 @@ def build_evaluation_cases(
                     equivalent_document_ids=equivalents,
                     required_evidence=required,
                     standard_answer=row.standard_answer,
-                    expected_screens=list(row.screens),
+                    required_answer_points=list(row.screen_lines),
+                    expected_response_decision=row.response_decision,
                 )
             )
         except ValidationError as exc:
@@ -944,16 +910,19 @@ _HEADER_NOTES = {
         "ファイル名の代わりに文書ID: 〈ID〉も書けます（「文書一覧」のシート）。"
     ),
     STANDARD_ANSWER_HEADER: "任意。期待する回答を書きます。回答をこの文と比べて採点します。",
+    DECISION_HEADER: (
+        "任意。回答・確認・保留（answer・clarify・hold）を指定します。空欄は判断を未評価とします。"
+    ),
     SCREENS_HEADER: (
-        "任意。回答が案内すべき画面を 1 行に 1 つ書きます。形: 画面の名前 | 別名: 呼び方、呼び方。"
-        "回答が案内した画面と比べます（一致・別の画面）。"
+        "任意。回答で説明すべき必須要点を 1 行に 1 つ書きます。"
+        "標準回答と合わせて、正確性と網羅性を意味に基づいて採点します。"
     ),
     PROCESS_HEADER: (
         "任意。回答の過程（回答の手順・確認事項・検索する資料と頁など）を書きます。"
         "画面で期待（手順・条件・根拠・対応）の下書きにし、確かめてから評価に使います。"
     ),
 }
-_COLUMN_WIDTHS = (48, 56, 64, 40, 64)
+_COLUMN_WIDTHS = (48, 56, 64, 48, 28, 64)
 _GUIDE_HEADINGS = frozenset({"照合の規則", "形式ごとの「期待する根拠」の書き方", "上限", "注意"})
 
 # 「記入の説明」のシート（列の説明・書き方・照合の規則・形式ごとの書き方）。例は合成の内容。
@@ -980,16 +949,19 @@ _GUIDE_ROWS: tuple[tuple[str, ...], ...] = (
         "任意",
         "期待する回答。reference / ground_truth にあたります。",
         f"{STANDARD_ANSWER_MAX_CHARS} 文字まで。書くと、回答をこの文と比べて採点します"
-        "（標準回答での合格・主張の裏付け・必要な内容の網羅）。",
+        "（正確性・網羅性）。忠実性は標準回答なしでも測れます。",
     ),
     (
         SCREENS_HEADER,
         "任意",
-        "回答が案内すべき画面（名前と別名）。回答の手順に出た画面と比べ、案内すべき画面をすべて"
-        "案内したか・ほかの画面を案内したかを測ります。",
-        f"1 行に 1 つ（{EVALUATION_MAX_SCREENS} 行まで）。画面の名前の後に"
-        "「| 別名: 呼び方、呼び方」"
-        "で同じ画面の別の呼び方を書けます。",
+        "回答で説明すべき必須要点を 1 行に 1 つ書きます。条件・例外・手順も含められます。",
+        "意味上の正確性と網羅性の比較に使います。",
+    ),
+    (
+        DECISION_HEADER,
+        "任意",
+        "回答・確認・保留を指定します。標準回答は不要です。",
+        "空欄の場合は応答の判断を未評価とします。",
     ),
     (
         PROCESS_HEADER,
@@ -1003,13 +975,13 @@ _GUIDE_ROWS: tuple[tuple[str, ...], ...] = (
     (
         "ファイル名だけ",
         "",
-        "その文書が回答に引用されたか（正解文書の再現率・順位）で測ります。",
+        "重複を除いた引用文書列の最初の正解の順位（MRR）で測ります。",
         "例: 製品マニュアル.pdf",
     ),
     (
         "位置・抜粋つき",
         "",
-        "引用の中に、書いた条件をすべて満たす箇所があるか（必要な根拠の再現率）でも測ります。"
+        "引用の中に、書いた条件をすべて満たす箇所があるか（必要な根拠の取得率）でも測ります。"
         "ページ・行は範囲が重なれば一致、シートは名前が一致、章節は見出しの一部が一致、抜粋は本文に"
         "含まれれば一致です（全角・半角・大小文字・空白の違いは無視）。",
         "例: 製品マニュアル.pdf | p.3-4 | 章節: 初期設定 | 抜粋: 電源を入れる",
@@ -1017,7 +989,7 @@ _GUIDE_ROWS: tuple[tuple[str, ...], ...] = (
     (
         "根拠も標準回答も空",
         "",
-        "資料に答えが無い質問として、回答を控えたか（回答を控える判断の正しさ）を測ります。",
+        "前提情報がない指標は未評価です。期待する判断を保留と指定すれば保留の判断を測れます。",
         "例: 来月の天気を教えてください。",
     ),
     (),
@@ -1140,7 +1112,7 @@ _EXAMPLE_ROWS: tuple[tuple[str, ...], ...] = (
         "来月の天気を教えてください。",
         "",
         "",
-        "根拠も標準回答も空。資料に答えが無い質問として、回答を控えたかを測ります。",
+        "期待する応答の判断を保留と指定すると、標準回答なしで保留の判断を採点できます。",
     ),
 )
 _DOCUMENT_HEADERS = ("ファイル名", "文書 ID", "形式", "ページ数 / シート名", "アップロード日")
@@ -1166,7 +1138,7 @@ def evaluation_cases_xlsx(
     sheet.title = CASES_SHEET_TITLE
     _write_header(sheet, HEADERS, notes=_HEADER_NOTES)
     for question, evidence, standard_answer in rows:
-        sheet.append([question, "\n".join(evidence), standard_answer or "", "", ""])
+        sheet.append([question, "\n".join(evidence), standard_answer or "", "", "", ""])
     _set_widths(sheet, _COLUMN_WIDTHS)
     _wrap(sheet, min_row=2)
     sheet.freeze_panes = "A2"
@@ -1205,7 +1177,7 @@ def evaluation_cases_xlsx(
     # 説明の列は 4 列目（質問・根拠・標準回答の後）に置き、案内すべき画面・回答の過程はその後。
     _write_header(examples, (*HEADERS[:3], _EXAMPLE_NOTE_HEADER, *HEADERS[3:]))
     for example in _EXAMPLE_ROWS:
-        examples.append(list(example))
+        examples.append([*example[:4], "", "", ""])
     _set_widths(examples, (*_COLUMN_WIDTHS[:3], 56, *_COLUMN_WIDTHS[3:]))
     _wrap(examples, min_row=2)
     examples.freeze_panes = "A2"

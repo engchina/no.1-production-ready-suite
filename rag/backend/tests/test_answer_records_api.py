@@ -179,17 +179,28 @@ def test_evaluate_saved_answer_with_standard_answer(
 def test_evaluate_saved_answer_rejects_blank_legacy_and_missing(
     fake_oracle: FakeAnswerOracle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        search_route,
-        "evaluate_answer_record",
-        lambda *args: (_ for _ in ()).throw(AssertionError("評価しない")),
-    )
+    calls: list[str] = []
+
+    def evaluate(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        calls.append(args[1])
+        assert kwargs["citations"]
+        return {
+            "status": "completed",
+            "claim_support_rate": 1,
+            "answer_correctness": None,
+            "requirement_coverage": None,
+        }
+
+    monkeypatch.setattr(search_route, "evaluate_answer_record", evaluate)
 
     blank = client.post("/api/search/answers/trace-1/evaluation", json={"standard_answer": "  "})
     legacy = client.post("/api/search/answers/legacy/evaluation", json={"standard_answer": "a"})
     missing = client.post("/api/search/answers/missing/evaluation", json={"standard_answer": "a"})
 
-    assert blank.status_code == 422
+    assert blank.status_code == 200
+    assert calls == ["  "]
+    assert fake_oracle.evaluations["trace-1"]["claim_support_rate"] == 1
+    assert fake_oracle.evaluations["trace-1"]["answer_correctness"] is None
     assert legacy.status_code == 409
     assert missing.status_code == 404
     assert client.get("/api/search/answers/legacy").json()["data"]["evaluation_available"] is False

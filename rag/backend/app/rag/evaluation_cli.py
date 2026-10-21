@@ -403,7 +403,6 @@ def _metrics_trend(metrics: EvaluationMetrics) -> dict[str, Any]:
             for split, summary in metrics.split_breakdown.items()
         },
         # 根拠の連鎖の完全率と、多段の質問の種類別・段の数別の内訳（#1335）。
-        "evidence_chain_complete_rate": metrics.evidence_chain_complete_rate,
         "reasoning_type_breakdown": {
             name: summary.model_dump(mode="json")
             for name, summary in metrics.reasoning_type_breakdown.items()
@@ -437,9 +436,7 @@ def _reasoning_summary_lines(metrics: EvaluationMetrics) -> list[str]:
     lines: list[str] = []
     if metrics.metric_case_counts.get("required_evidence_recall"):
         lines.append(
-            "required_evidence: "
-            f"required_evidence_recall={metrics.required_evidence_recall}, "
-            f"evidence_chain_complete_rate={metrics.evidence_chain_complete_rate}"
+            f"required_evidence: required_evidence_recall={metrics.required_evidence_recall}"
         )
     for label, breakdown in (
         ("reasoning_type", metrics.reasoning_type_breakdown),

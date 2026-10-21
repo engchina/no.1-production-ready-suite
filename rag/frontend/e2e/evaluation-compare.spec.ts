@@ -54,11 +54,11 @@ test.beforeEach(async ({ page }) => {
     route.fulfill({
       json: envelope({
         suite: "standard",
-        thresholds: { context_recall: 0.8 },
+        thresholds: { required_evidence_recall: 0.8 },
         suites: [
           {
             name: "standard",
-            thresholds: { context_recall: 0.8 },
+            thresholds: { required_evidence_recall: 0.8 },
             origin: "x",
             recommended_for: ["general"],
             selected: true,
@@ -98,11 +98,11 @@ function importWithProcess() {
   const base = evaluationImportResult();
   return evaluationImportResult({
     cases: [
-      { ...base.cases[0], expected_screens: [{ name: "設定画面A", aliases: ["環境設定"] }] },
+      { ...base.cases[0], required_answer_points: ["設定画面A"] },
       base.cases[1],
     ],
     rows: [
-      { ...base.rows[0], screens: ["設定画面A | 別名: 環境設定"], answer_process: PROCESS },
+      { ...base.rows[0], required_answer_points: ["設定画面A"], answer_process: PROCESS },
       base.rows[1],
     ],
   });
@@ -118,7 +118,7 @@ async function mockProcessDrafts(page: Page) {
           {
             case_id: "row-2",
             row: 2,
-            expected_steps: ["設定画面A", "通知の設定"],
+            required_answer_points: ["設定画面A", "通知の設定"],
             required_conditions: ["利用者が管理者か"],
             expected_outcomes: ["answered", "conditional"],
             relevant_document_ids: ["doc-a"],
@@ -163,7 +163,7 @@ function caseResult(overrides: Record<string, unknown>) {
     retrieved_document_ids: ["doc-a"],
     relevant_document_ids: ["doc-a"],
     hit_document_ids: ["doc-a"],
-    context_recall: 1,
+    required_evidence_recall: 1,
     reciprocal_rank: 1,
     faithfulness: 0.8,
     citation_traceability_coverage: 1,
@@ -186,16 +186,16 @@ function metrics(overrides: Record<string, unknown>, caseOverrides: Record<strin
     case_count: 1,
     error_count: 0,
     evaluation_suite: "standard",
-    context_recall: 1,
+    required_evidence_recall: 1,
     mrr: 1,
-    refusal_accuracy: 1,
+    response_decision_accuracy: 1,
     metric_case_counts: {
-      context_recall: 1,
+      required_evidence_recall: 1,
       mrr: 1,
-      refusal_accuracy: 1,
-      screen_match_rate: 1,
-      wrong_screen_rate: 1,
-      off_target_rate: 1,
+      response_decision_accuracy: 1,
+      answer_correctness: 1,
+      requirement_coverage: 1,
+      claim_support_rate: 1,
     },
     passed: true,
     threshold_failures: [],
@@ -218,7 +218,7 @@ for (const viewport of [
     const jobs = await mockEvaluationJobs(page, {
       runResult: () => ({
         ...metrics(
-          { screen_match_rate: 0, wrong_screen_rate: 1, off_target_rate: 1, failure_reason_counts: { wrong_screen: 1 } },
+          { answer_correctness: 0, requirement_coverage: 0, claim_support_rate: 0, failure_reason_counts: { answer_failed: 1 } },
           {
             screen_match: false,
             wrong_screen: true,
@@ -233,7 +233,7 @@ for (const viewport of [
         comparison: {
           search_answer_profile_id: "profile-1",
           metrics: metrics(
-            { screen_match_rate: 1, wrong_screen_rate: 0, off_target_rate: 0 },
+            { answer_correctness: 1, requirement_coverage: 1, claim_support_rate: 1 },
             {
               trace_id: "trace-b",
               screen_match: true,
@@ -254,7 +254,7 @@ for (const viewport of [
     await uploadEvaluationExcel(page);
     await expect(page.getByTestId("evaluation-import-ready")).toBeVisible();
     // 案内すべき画面の列をプレビューに出す。
-    await expect(page.getByTestId("evaluation-import-preview")).toContainText("設定画面A | 別名: 環境設定");
+    await expect(page.getByTestId("evaluation-import-preview")).toContainText("設定画面A");
 
     // 回答の過程の下書きを作り、確かめてから評価に使う。
     const process = page.getByTestId("evaluation-process");
@@ -287,9 +287,8 @@ for (const viewport of [
     };
     expect(payload.compare_search_answer_profile_id).toBe("profile-1");
     expect(payload.cases[0]).toMatchObject({
-      expected_steps: ["設定画面A", "通知の設定"],
+      required_answer_points: ["設定画面A", "通知の設定"],
       required_conditions: ["利用者が管理者か"],
-      expected_screens: [{ name: "設定画面A", aliases: ["環境設定"] }],
     });
     expect((payload.cases[0].required_evidence as { id: string }[]).map((item) => item.id)).toEqual([
       "e1",
@@ -299,27 +298,20 @@ for (const viewport of [
     // 比べる表: 差はポイントと文言（色だけに頼らない）。低いほどよい指標は向きを逆にする。
     const table = page.getByTestId("evaluation-compare-table");
     await expect(page.getByRole("heading", { name: "ナレッジベースと検索・回答プロファイルの比較" })).toBeVisible();
-    const screenRow = table.getByRole("row", { name: /案内すべき画面の一致/ });
-    await expect(screenRow).toContainText("+100pt");
-    await expect(screenRow).toContainText("改善");
-    const wrongRow = table.getByRole("row", { name: /別の画面への案内/ });
-    await expect(wrongRow).toContainText("−100pt");
-    await expect(wrongRow).toContainText("改善");
-    await expect(wrongRow).toContainText("低いほどよい");
-    await expect(table.getByRole("row", { name: /正解文書の再現率/ })).toContainText("変化なし");
-
-    // 詳細はタブで切り替える。ナレッジベースの範囲では別の画面を案内した。
-    await expect(page.getByTestId("evaluation-perspective-guidance")).toBeVisible();
-    await expect(page.getByTestId("evaluation-metric-wrong_screen_rate")).toContainText("100%");
-    const screens = page.getByTestId("evaluation-case-screens").first();
-    await expect(screens).toContainText("不一致");
-    await expect(screens).toContainText("別の画面: 設定画面B");
-    await expect(page.getByTestId("evaluation-failure-reasons")).toContainText("別の画面を案内した: 1");
-    await page.getByRole("tab", { name: "検索・回答プロファイル: プロファイル A" }).click();
-    await expect(page.getByTestId("evaluation-metric-wrong_screen_rate")).toContainText("0%");
-    const comparedScreens = page.getByTestId("evaluation-case-screens").first();
-    await expect(comparedScreens).toContainText("一致");
-    await expect(comparedScreens).toContainText("判定器で判定しました");
+    const correctnessRow=table.getByRole("row",{name:/回答の正確性/});
+    await expect(correctnessRow).toContainText("+100pt");
+    await expect(correctnessRow).toContainText("改善");
+    const coverageRow=table.getByRole("row",{name:/回答の網羅性/});
+    await expect(coverageRow).toContainText("+100pt");
+    await expect(coverageRow).toContainText("改善");
+    await expect(table.getByRole("row",{name:/必要な根拠の取得率/})).toContainText("変化なし");
+    await expect(table.getByRole("row")).toHaveCount(7);
+    await expect(page.getByTestId("evaluation-perspective-guidance")).toHaveCount(0);
+    await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("0%");
+    await expect(page.getByTestId("evaluation-metric-requirement_coverage")).toContainText("0%");
+    await page.getByRole("tab",{name:"検索・回答プロファイル: プロファイル A"}).click();
+    await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("100%");
+    await expect(page.getByTestId("evaluation-metric-requirement_coverage")).toContainText("100%");
     await expectNoPageOverflow(page);
   });
 }
@@ -342,7 +334,7 @@ test("比べないときは比べる表とタブを出さず、下書きは使�
   await expect.poll(() => jobs.runPayloads.length).toBe(1);
   const payload = jobs.runPayloads[0] as Record<string, unknown>;
   expect(payload).not.toHaveProperty("compare_search_answer_profile_id");
-  expect((payload.cases as Record<string, unknown>[])[0]).not.toHaveProperty("expected_steps");
+  expect((payload.cases as Record<string, unknown>[])[0]).not.toHaveProperty("required_conditions");
   await expect(page.getByTestId("evaluation-perspective-retrieval")).toBeVisible();
   await expect(page.getByTestId("evaluation-compare-table")).toHaveCount(0);
   await expect(page.getByRole("tab")).toHaveCount(0);

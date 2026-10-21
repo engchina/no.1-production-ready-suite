@@ -129,56 +129,25 @@ EvaluationFailureReason = Literal[
 ]
 
 # 評価の指標(#591)。検索・根拠・回答の 3 つの観点に整理した 9 つと、業務支援の対応の 4 つ（#1231）。
+EVALUATION_METRICS_VERSION = "six_metrics_v1"
 EvaluationMetricName = Literal[
-    "context_recall",
+    "required_evidence_recall",
     "mrr",
-    "faithfulness",
-    "citation_traceability_coverage",
-    "claim_support_rate",
-    "answer_keyword_hit_rate",
-    "refusal_accuracy",
+    "answer_correctness",
     "requirement_coverage",
-    "answer_pass_rate",
-    "handling_accuracy",
-    "step_order_score",
-    "safe_answer_rate",
-    "condition_coverage",
+    "claim_support_rate",
+    "response_decision_accuracy",
 ]
 EVALUATION_METRIC_NAMES: tuple[EvaluationMetricName, ...] = (
-    "context_recall",
-    "mrr",
-    "faithfulness",
-    "citation_traceability_coverage",
-    "claim_support_rate",
-    "answer_keyword_hit_rate",
-    "refusal_accuracy",
-    "requirement_coverage",
-    "answer_pass_rate",
-    "handling_accuracy",
-    "step_order_score",
-    "safe_answer_rate",
-    "condition_coverage",
-)
-
-# 閾値の判定に使わず、結果に出すだけの集計（#1284）。必要な根拠の再現率は、根拠を持つ評価セットが
-# まだ少ないため、基準（閾値）と画面の指標の一覧には入れない。根拠の連鎖の完全率（#1335）は、必要な
-# 根拠をすべて取れたケースの割合（多段の質問は 1 つでも欠けると答えられないため、再現率の平均とは
-# 別に見る）。
-EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = (
     "required_evidence_recall",
-    "evidence_chain_complete_rate",
-    # 案内した画面（#2402）。案内すべき画面をすべて案内したケースの割合（screen_match_rate）と、
-    # 案内すべき画面のほかの画面を案内したケースの割合（wrong_screen_rate。低いほどよい）。
-    "screen_match_rate",
-    "wrong_screen_rate",
-    # 回答の監査が目的外（goal_alignment=off_target）と判定したケースの割合（#2402。低いほどよい）。
-    "off_target_rate",
-    # 1 回答あたりの、根拠と矛盾して外した段落・未確認の印の段落・要注意の印の段落の数（#2738。
-    # 記録の無い回答は数えない）。
-    "removed_passages_per_answer",
-    "unverified_passages_per_answer",
-    "warning_passages_per_answer",
+    "mrr",
+    "answer_correctness",
+    "requirement_coverage",
+    "claim_support_rate",
+    "response_decision_accuracy",
 )
+EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = ()
+
 
 # 期待する手順の別解の上限（列の数）。
 EVALUATION_MAX_STEP_ALTERNATIVES = 5
@@ -205,45 +174,12 @@ def _clean_alternatives(value: list[list[str]]) -> list[list[str]]:
 
 
 class EvaluationHandlingExpectation(BaseModel):
-    """1 つの回答への業務支援の期待（#1231。往復の回答にも使う。#1284）。
+    """意味による網羅の確認に使う必須要点と、応答の期待値。"""
 
-    どれも空ならその採点の対象外。
-    """
-
-    # 受け入れる回答の対応（1 つでも一致すれば正しい）。
+    expected_response_decision: Literal["answer", "clarify", "hold"] | None = None
     expected_outcomes: list[EvaluationOutcome] = Field(default_factory=list, max_length=6)
-    # 回答に出るべき手順の語（期待の順）。網羅と順序を採点する。
-    expected_steps: list[str] = Field(default_factory=list, max_length=30)
-    # expected_steps と同等の別の手順の列（#1284。handoff §14.1「可接受替代方案」）。
-    # いちばん点の高い列で採点する。同じ目的に根拠のある別の方法・別の画面の呼び方があるときに使う。
-    acceptable_alternatives: list[list[str]] = Field(
-        default_factory=list, max_length=EVALUATION_MAX_STEP_ALTERNATIVES
-    )
-    # 勧めてはいけない操作の表現（影響範囲を広げる操作など）。回答に含まれたら危険な回答。
-    forbidden_phrases: list[str] = Field(default_factory=list, max_length=30)
-    # 回答が触れるべき条件（確かめる条件・適用の前提）。
+    required_answer_points: list[str] = Field(default_factory=list, max_length=30)
     required_conditions: list[str] = Field(default_factory=list, max_length=30)
-
-    @field_validator("expected_steps", "forbidden_phrases", "required_conditions")
-    @classmethod
-    def validate_phrases(cls, value: list[str]) -> list[str]:
-        """前後の空白を除き、空の語を捨てる。"""
-        return _clean_phrase_list(value)
-
-    @field_validator("acceptable_alternatives")
-    @classmethod
-    def validate_alternatives(cls, value: list[list[str]]) -> list[list[str]]:
-        """別解の列ごとに語を整える（1 列は 30 語まで）。"""
-        if any(len(item) > 30 for item in value):
-            raise ValueError("手順の別解は 1 つの列につき 30 語までにしてください。")
-        return _clean_alternatives(value)
-
-    @model_validator(mode="after")
-    def validate_alternatives_need_steps(self) -> Self:
-        """別解は期待する手順の別の書き方なので、期待する手順が無ければ受け付けない。"""
-        if self.acceptable_alternatives and not self.expected_steps:
-            raise ValueError("acceptable_alternatives は expected_steps と一緒に指定してください。")
-        return self
 
 
 class EvaluationTurn(EvaluationHandlingExpectation):
@@ -396,17 +332,10 @@ class EvaluationScreen(BaseModel):
 
 
 class EvaluationCase(EvaluationHandlingExpectation):
-    """1 件の評価ケース。
+    """六指標の評価入力。本文・位置の根拠、正解文書、標準回答・必須要点、応答の期待を持つ。
 
-    `answerable=false` のケース(資料に答えが無い質問)は、拒答の正しさだけを測る。省略したときは、
-    正解の文書・期待する語・標準回答のどれも無いケースを答えるべきでない質問とみなす(#301)。
-    `standard_answer` があるケースは、回答を標準回答と LLM で比較する(4 軸の採点・主張の監査・
-    必要な項目の網羅)。削除した期待値の欄(`expected_content_kind`・`expected_section_paths`。
-    #591)は、既存の golden set を読めるように無視する。
-
-    複数往復のケース（`turns`。#1284）では、ケースの直下の業務支援の期待（対応・手順・別解・危険な
-    表現・条件）は最初の質問への回答を、各往復の期待はその往復の回答を採点する。正解の文書・期待する
-    語・標準回答・答えるべきか・必要な根拠は、最後の回答（往復を終えた後の回答）で採点する。
+    複数往復では各往復の明示的な応答判断を評価し、検索と回答の意味上の評価は最後の回答を使う。
+    評価情報がない指標は未評価とし、標準回答の有無から応答の期待を推定しない。
     """
 
     # 結果の表・job の実行中のケース（`rag_evaluation_jobs.current_case_id` は 200 文字）で
@@ -417,7 +346,6 @@ class EvaluationCase(EvaluationHandlingExpectation):
     # 同じ文書とみなす別の文書の ID（正解の文書の ID → 別の文書の ID の列。#2086）。評価の Excel で
     # 同じ名前の文書が複数あるとき、どれが引用されても正解の文書・必要な根拠の文書に一致させる。
     equivalent_document_ids: dict[str, list[str]] = Field(default_factory=dict)
-    expected_answer_keywords: list[str] = Field(default_factory=list)
     standard_answer: str | None = Field(default=None, max_length=STANDARD_ANSWER_MAX_CHARS)
     answerable: bool | None = None
     # 分類（任意。#1226）。結果の分類ごとの内訳に使う。採点の方法は変えない。
@@ -440,10 +368,6 @@ class EvaluationCase(EvaluationHandlingExpectation):
     # 新しい版に置き換えた文書（旧版）も検索して答えるケース（版の比較など。#1366）。true なら、
     # 利用者が旧版・変更点を尋ねるときと同じく filters に include_superseded=true を足して回答する。
     include_superseded: bool = False
-    # 回答が案内すべき画面（任意。#2402）。最後の回答が案内した画面と比べる（一致・別の画面）。
-    expected_screens: list[EvaluationScreen] = Field(
-        default_factory=list, max_length=EVALUATION_MAX_SCREENS
-    )
 
     def canonical_document_id(self, document_id: str) -> str:
         """同じ文書とみなす文書（`equivalent_document_ids`）を、正解の文書の ID にそろえる。"""
@@ -459,9 +383,9 @@ class EvaluationCase(EvaluationHandlingExpectation):
             return self.answerable
         return bool(
             self.relevant_document_ids
-            or self.expected_answer_keywords
             or self.standard_answer
             or self.required_evidence
+            or self.required_answer_points
         )
 
     @field_validator("id")
@@ -546,6 +470,8 @@ class EvaluationAnswerJudgement(BaseModel):
     status: str
     passed: bool | None = None
     claims_supported: bool | None = None
+    answer_correctness: float | None = Field(default=None, ge=0, le=1)
+    claim_support_rate: float | None = Field(default=None, ge=0, le=1)
     requirement_coverage: float | None = None
     # 原質問に必要な項目のうち、説明の無い項目があったか(rag_poc の「必要内容欠落」)。
     missing_content: bool | None = None
@@ -553,98 +479,40 @@ class EvaluationAnswerJudgement(BaseModel):
 
 
 class EvaluationTurnResult(BaseModel):
-    """複数往復のケースの 1 回の回答の採点（#1284）。
-
-    turn 0 は最初の質問への回答。期待の無い項目は None / 空。
-    """
+    """往復ごとの応答の判断。"""
 
     turn: int
     trace_id: str
     observed_outcome: EvaluationOutcome | None = None
     outcome_source: str | None = None
-    handling_correct: bool | None = None
-    step_order_score: float | None = None
-    missing_steps: list[str] = Field(default_factory=list)
-    forbidden_checked: bool = False
-    forbidden_hits: list[str] = Field(default_factory=list)
-    condition_coverage: float | None = None
-    missing_conditions: list[str] = Field(default_factory=list)
-    # 渡した条件のうち、確認の質問でもう一度聞いた条件の id。
-    reasked_conditions: list[str] = Field(default_factory=list)
-    elapsed_ms: float = 0.0
+    response_decision_accuracy: float | None = None
+    expected_decisions: list[str] = Field(default_factory=list)
+    elapsed_ms: float
 
 
 class EvaluationCaseResult(BaseModel):
-    """1 評価ケースごとの診断結果。測れない指標は None。
-
-    複数往復のケース（#1284）では、検索・根拠・回答の指標は最後の回答で求め、業務支援の対応は
-    往復ごと（`turn_results`）に採点してまとめる（対応はすべての往復で正しいとき正しい、手順・条件は
-    往復の平均、危険な表現・聞き直しは往復の和）。`observed_outcome` は最後の回答の対応、`trace_id`
-    は最後の回答の記録、`elapsed_ms` は往復の合計。
-    """
+    """成功したケースの六指標。資料不足は None。"""
 
     case_id: str
     trace_id: str
     category: EvaluationCaseCategory | None = None
     split: EvaluationCaseSplit | None = None
-    # 多段の質問の種類と段の数（ケースの値。#1335）。
     reasoning_type: EvaluationReasoningType | None = None
     hops: int | None = None
     status: Literal["success", "error"] = "success"
     retrieved_document_ids: list[str] = Field(default_factory=list)
     relevant_document_ids: list[str] = Field(default_factory=list)
     hit_document_ids: list[str] = Field(default_factory=list)
-    context_recall: float | None = None
-    reciprocal_rank: float | None = None
-    faithfulness: float | None = None
-    grounding_overlap_count: int = 0
-    grounding_answer_feature_count: int = 0
-    citation_traceability_coverage: float | None = None
-    answer_keyword_hit: bool | None = None
-    # 回答が「資料から答えられない」旨だけだったか(拒答)と、それが期待どおりだったか。
-    abstained: bool | None = None
-    refusal_correct: bool | None = None
-    # 業務支援の採点（#1231）。ケースに期待が無い項目は None / 空。
+    required_evidence_recall: float | None = None
+    mrr: float | None = None
+    answer_correctness: float | None = None
+    requirement_coverage: float | None = None
+    claim_support_rate: float | None = None
+    response_decision_accuracy: float | None = None
+    expected_decisions: list[str] = Field(default_factory=list)
     observed_outcome: EvaluationOutcome | None = None
-    # explicit（回答の記録が対応を持っていた）/ inferred（診断から推定した）
     outcome_source: str | None = None
-    handling_correct: bool | None = None
-    step_order_score: float | None = None
-    missing_steps: list[str] = Field(default_factory=list)
-    # 勧めてはいけない操作の表現を照合したか（ケースに forbidden_phrases があったか）。
-    forbidden_checked: bool = False
-    forbidden_hits: list[str] = Field(default_factory=list)
-    condition_coverage: float | None = None
-    missing_conditions: list[str] = Field(default_factory=list)
-    # 渡した条件のうち、確認の質問でもう一度聞いた条件の id（#1284）。
-    reasked_conditions: list[str] = Field(default_factory=list)
-    # 必要な根拠の再現率と、取れなかった根拠の id（#1284）。
-    # 根拠の無いケース・検索をしない回答は None。
-    evidence_recall: float | None = None
     missing_evidence: list[str] = Field(default_factory=list)
-    # 必要な根拠をすべて取れたか（#1335。evidence_recall が 1 のとき True）。測れないときは None。
-    evidence_chain_complete: bool | None = None
-    # 案内した画面の採点（#2402。案内すべき画面のあるケースだけ。測れないときは None / 空）。
-    # screen_match は案内すべき画面をすべて案内したか、wrong_screen はほかの画面を案内したか。
-    # guided_screens は回答が案内した画面、matched_screens は案内すべき画面のうち案内したもの
-    # （名前）、missing_screens は案内しなかったもの、wrong_screens はほかの画面の名前。
-    # screen_judged_by は deterministic（回答の手順の見出しと根拠の画面名で決めた）/ judge
-    # （決められず判定器で決めた）/ unresolved（決められず判定器も使えなかった）。
-    screen_match: bool | None = None
-    wrong_screen: bool | None = None
-    guided_screens: list[str] = Field(default_factory=list)
-    matched_screens: list[str] = Field(default_factory=list)
-    missing_screens: list[str] = Field(default_factory=list)
-    wrong_screens: list[str] = Field(default_factory=list)
-    screen_judged_by: Literal["deterministic", "judge", "unresolved"] | None = None
-    # 回答の監査の目的との合い方（#2402。aligned / partial / off_target。記録の無い回答は None）。
-    goal_alignment: str | None = None
-    # 根拠と矛盾して外した段落・未確認の印の段落・要注意の印の段落の数（#2738。記録の無い回答は
-    # None）。
-    removed_passages: int | None = None
-    unverified_passages: int | None = None
-    warning_passages: int | None = None
-    # 往復ごとの採点（往復のあるケースだけ。#1284）。
     turn_results: list[EvaluationTurnResult] = Field(default_factory=list)
     answer_evaluation: EvaluationAnswerJudgement | None = None
     guardrail_warnings: list[str] = Field(default_factory=list)
@@ -652,8 +520,6 @@ class EvaluationCaseResult(BaseModel):
     diagnostics: SearchDiagnostics = Field(default_factory=SearchDiagnostics)
     elapsed_ms: float
     error_type: str | None = None
-    # 時間切れになった工程（進捗の stage と同じ名前。例: answer）。
-    # 時間切れ以外は None（#383）。
     error_stage: str | None = None
     error_message: str | None = None
 
@@ -667,19 +533,12 @@ class EvaluationThresholdFailure(BaseModel):
 
 
 class EvaluationCategorySummary(BaseModel):
-    """分類ごとの結果の内訳（#1226）。率は測れるケースだけの割合で、測れなければ None。"""
+    """ケースの分類ごとの六指標と対象数。"""
 
     case_count: int
     error_count: int = 0
-    answer_pass_rate: float | None = None
-    answer_keyword_hit_rate: float | None = None
-    # 回答が「資料から答えられない」旨だけだった割合と、拒答の判断が期待どおりだった割合。
-    abstain_rate: float | None = None
-    refusal_correct_rate: float | None = None
-    # 業務支援の対応（#1231）。
-    handling_correct_rate: float | None = None
-    step_order_score: float | None = None
-    safe_answer_rate: float | None = None
+    metrics: dict[str, float | None] = Field(default_factory=dict)
+    metric_case_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class EvaluationReasoningSummary(BaseModel):
@@ -696,11 +555,7 @@ class EvaluationReasoningSummary(BaseModel):
 
 
 # 種類別・段の数別の内訳に出す指標（#1335）。
-EVALUATION_REASONING_METRIC_NAMES: tuple[str, ...] = (
-    "required_evidence_recall",
-    "evidence_chain_complete_rate",
-    "answer_keyword_hit_rate",
-)
+EVALUATION_REASONING_METRIC_NAMES: tuple[str, ...] = (*EVALUATION_METRIC_NAMES,)
 
 
 class EvaluationSplitSummary(BaseModel):
@@ -721,55 +576,28 @@ class EvaluationSplitSummary(BaseModel):
 
 
 class EvaluationMetrics(BaseModel):
-    """評価結果の集計指標(#591)。
+    """検索二・回答三・応答判断一の六指標。対象外は None。"""
 
-    各指標は、その指標を測れるケースだけの平均で、対象の件数は `metric_case_counts` に持つ。
-    対象のケースが無い指標は None。保存済みの結果にある削除した指標は読み込み時に捨てる。
-    """
-
+    metrics_version: str = EVALUATION_METRICS_VERSION
     case_count: int
     error_count: int = 0
     evaluation_suite: str = "standard"
-    context_recall: float | None = None
-    mrr: float | None = None
-    faithfulness: float | None = None
-    citation_traceability_coverage: float | None = None
-    claim_support_rate: float | None = None
-    answer_keyword_hit_rate: float | None = None
-    refusal_accuracy: float | None = None
-    requirement_coverage: float | None = None
-    answer_pass_rate: float | None = None
-    handling_accuracy: float | None = None
-    step_order_score: float | None = None
-    safe_answer_rate: float | None = None
-    condition_coverage: float | None = None
-    # 必要な根拠ごとの再現率（ケースの平均。参考の集計で閾値の判定には使わない。#1284）。
     required_evidence_recall: float | None = None
-    # 必要な根拠をすべて取れたケースの割合（参考の集計で閾値の判定には使わない。#1335）。
-    evidence_chain_complete_rate: float | None = None
-    # 案内した画面と目的外の割合（参考の集計で閾値の判定には使わない。#2402）。
-    screen_match_rate: float | None = None
-    wrong_screen_rate: float | None = None
-    off_target_rate: float | None = None
-    # 1 回答あたりの段落の印の数（参考の集計で閾値の判定には使わない。#2738）。
-    removed_passages_per_answer: float | None = None
-    unverified_passages_per_answer: float | None = None
-    warning_passages_per_answer: float | None = None
+    mrr: float | None = None
+    answer_correctness: float | None = None
+    requirement_coverage: float | None = None
+    claim_support_rate: float | None = None
+    response_decision_accuracy: float | None = None
     metric_case_counts: dict[str, int] = Field(default_factory=dict)
-    passed: bool = True
+    passed: bool | None = None
     threshold_failures: list[EvaluationThresholdFailure] = Field(default_factory=list)
     failure_reason_counts: dict[str, int] = Field(default_factory=dict)
-    # 分類ごとの内訳（ケースに分類があるときだけ。分類の無いケースは uncategorized。#1226）。
     category_breakdown: dict[str, EvaluationCategorySummary] = Field(default_factory=dict)
-    # 区分ごとの内訳（ケースに区分があるときだけ。区分の無いケースは unassigned。#1284）。
     split_breakdown: dict[str, EvaluationSplitSummary] = Field(default_factory=dict)
-    # 多段の質問の種類別・段の数別の内訳（ケースに種類・段の数があるときだけ。無いケースは
-    # unspecified。段の数の key は "1"・"2" などの文字列。#1335）。
     reasoning_type_breakdown: dict[str, EvaluationReasoningSummary] = Field(default_factory=dict)
     hops_breakdown: dict[str, EvaluationReasoningSummary] = Field(default_factory=dict)
+    decision_breakdown: dict[str, EvaluationReasoningSummary] = Field(default_factory=dict)
     case_results: list[EvaluationCaseResult] = Field(default_factory=list)
-    # 同じ評価セットを検索・回答プロファイル（業務ガイド・ルールあり）でも流した結果（#2402）。
-    # この結果（ナレッジベースの範囲）と並べて比べる。比べないときは None。
     comparison: "EvaluationComparison | None" = None
 
 
@@ -784,23 +612,15 @@ EvaluationMetrics.model_rebuild()
 
 
 class EvaluationThresholds(BaseModel):
-    """CI gate に使う aggregate metric の最低値。削除した指標の名前は受け付けない。"""
+    """現行の六指標にだけ適用する最低値。"""
 
     model_config = ConfigDict(extra="forbid")
-
-    context_recall: float | None = Field(default=None, ge=0.0, le=1.0)
-    mrr: float | None = Field(default=None, ge=0.0, le=1.0)
-    faithfulness: float | None = Field(default=None, ge=0.0, le=1.0)
-    citation_traceability_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
-    claim_support_rate: float | None = Field(default=None, ge=0.0, le=1.0)
-    answer_keyword_hit_rate: float | None = Field(default=None, ge=0.0, le=1.0)
-    refusal_accuracy: float | None = Field(default=None, ge=0.0, le=1.0)
-    requirement_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
-    answer_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
-    handling_accuracy: float | None = Field(default=None, ge=0.0, le=1.0)
-    step_order_score: float | None = Field(default=None, ge=0.0, le=1.0)
-    safe_answer_rate: float | None = Field(default=None, ge=0.0, le=1.0)
-    condition_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
+    required_evidence_recall: float | None = Field(default=None, ge=0, le=1)
+    mrr: float | None = Field(default=None, ge=0, le=1)
+    answer_correctness: float | None = Field(default=None, ge=0, le=1)
+    requirement_coverage: float | None = Field(default=None, ge=0, le=1)
+    claim_support_rate: float | None = Field(default=None, ge=0, le=1)
+    response_decision_accuracy: float | None = Field(default=None, ge=0, le=1)
 
 
 class EvaluationRagOverrides(BaseModel):
@@ -993,10 +813,8 @@ class EvaluationImportRow(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     standard_answer_preview: str | None = None
     has_standard_answer: bool = False
-    # 根拠も標準回答も無い行（資料に答えが無い質問として、回答を控えたかを測る）。
-    expects_answer: bool = True
-    # 案内すべき画面（#2402。Excel に書いた 1 行ずつの元の文）。
-    screens: list[str] = Field(default_factory=list)
+    expected_response_decision: Literal["answer", "clarify", "hold"] | None = None
+    required_answer_points: list[str] = Field(default_factory=list)
     # 回答の過程（#2402）。期待の下書きを作るときに、この全文を下書きの API に渡す。
     answer_process: str | None = None
 
@@ -1047,7 +865,7 @@ class EvaluationProcessDraft(BaseModel):
 
     case_id: str
     row: int
-    expected_steps: list[str] = Field(default_factory=list)
+    required_answer_points: list[str] = Field(default_factory=list)
     required_conditions: list[str] = Field(default_factory=list)
     expected_outcomes: list[EvaluationOutcome] = Field(default_factory=list)
     relevant_document_ids: list[str] = Field(default_factory=list)

@@ -119,7 +119,7 @@ test(`評価のケース結果は多くても高さ固定・ヘッダー固定�
   await page.getByRole("button", { name: "評価実行" }).click();
 
   // 評価結果は観点ごとの指標とケースの表(取込品質の集計は #591 で評価の結果から外した)。
-  await expect(page.getByTestId("evaluation-metric-context_recall")).toContainText("100%");
+  await expect(page.getByTestId("evaluation-metric-required_evidence_recall")).toContainText("100%");
 
   // 読み込んだ Excel のプレビューの表ではなく、ケースごとの結果の表。
   const table = page.getByTestId("evaluation-case-scroll-region").getByRole("table");
@@ -175,15 +175,12 @@ function evaluationMetrics(caseCount: number) {
     retrieved_document_ids: ["doc-1"],
     relevant_document_ids: ["doc-1"],
     hit_document_ids: ["doc-1"],
-    context_recall: 1,
-    reciprocal_rank: 1,
-    faithfulness: 1,
-    grounding_overlap_count: 2,
-    grounding_answer_feature_count: 2,
-    citation_traceability_coverage: 1,
-    answer_keyword_hit: true,
-    abstained: false,
-    refusal_correct: true,
+    required_evidence_recall: 1,
+    mrr: 1,
+    answer_correctness: 1,
+    requirement_coverage: 1,
+    claim_support_rate: 1,
+    response_decision_accuracy: 1,
     answer_evaluation: null,
     guardrail_warnings: [],
     failure_reasons: [],
@@ -196,15 +193,13 @@ function evaluationMetrics(caseCount: number) {
     case_count: caseCount,
     error_count: 0,
     evaluation_suite: "standard",
-    context_recall: 1,
+    required_evidence_recall: 1,
     mrr: 1,
-    faithfulness: 1,
-    citation_traceability_coverage: 1,
-    claim_support_rate: null,
-    answer_keyword_hit_rate: 1,
-    refusal_accuracy: 1,
-    requirement_coverage: null,
-    answer_pass_rate: null,
+    answer_correctness: 1,
+    requirement_coverage: 1,
+    claim_support_rate: 1,
+    response_decision_accuracy: 1,
+    metric_case_counts: {required_evidence_recall: caseCount, mrr:caseCount, answer_correctness:caseCount, requirement_coverage:caseCount, claim_support_rate:caseCount, response_decision_accuracy:caseCount},
     passed: true,
     threshold_failures: [],
     failure_reason_counts: {},

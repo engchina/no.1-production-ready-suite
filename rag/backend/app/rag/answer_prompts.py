@@ -216,6 +216,7 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "evaluation",
         (
             ("scope", "rag_engine.evaluation.answer_eval:SCOPE_PROMPT"),
+            ("correctness", "rag_engine.evaluation.answer_eval:CORRECTNESS_PROMPT"),
             ("system", "rag_engine.evaluation.answer_eval:SYSTEM_PROMPT"),
         ),
     ),

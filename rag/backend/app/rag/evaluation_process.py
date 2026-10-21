@@ -5,8 +5,7 @@
 内容（`SupportGuideContent`）の下書きにし、資料の名前を同じ規則でナレッジベースの文書に解決する。
 ここでは、その下書きを評価のケースの期待に直す（LLM を呼ばない決定的な対応）。
 
-- 手順 → `expected_steps`: 手順ごとに、検索の手がかり（画面名・機能名）の先頭、無ければ手順の題名。
-  回答の文に出るかで網羅と順序を採点するため、短い語を優先する。
+- 手順 → `required_answer_points`: 手順の題名と説明を使い、意味上の網羅性を測る。
 - 確認事項 → `required_conditions`: 条件の名前。
 - 資料と頁 → 解決できた資料は正解の文書（`relevant_document_ids`）にし、頁・章節があれば必要な根拠
   （`required_evidence`）にする。解決できない・複数に当たる資料は下書きの警告にする。
@@ -76,8 +75,7 @@ def page_range(text: str) -> tuple[int, int | None] | None:
 def _step_terms(content: SupportGuideContent) -> list[str]:
     terms: list[str] = []
     for step in content.steps:
-        hints = [hint.strip() for hint in step.retrieval_hints if hint.strip()]
-        term = hints[0] if hints else step.title.strip()
+        term = " — ".join(part for part in (step.title.strip(), step.purpose.strip()) if part)
         if term and term not in terms:
             terms.append(term)
     return terms[:30]
@@ -162,7 +160,7 @@ def process_draft(
     return EvaluationProcessDraft(
         case_id=row.case_id,
         row=row.row,
-        expected_steps=_step_terms(content),
+        required_answer_points=_step_terms(content),
         required_conditions=list(
             dict.fromkeys(condition.label.strip() for condition in content.conditions)
         )[:30],

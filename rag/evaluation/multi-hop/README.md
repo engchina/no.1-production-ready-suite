@@ -35,7 +35,7 @@
 ### 資料の大きさ
 
 既定の検索（`top_k` = 20）で資料の全部が文脈に入らない大きさにしています（#1335 は 7 文書・31 chunk で、A の文脈が
-全ケースで資料の全部になり、`evidence_chain_complete_rate` が天井だった）。
+全ケースで資料の全部になり、当時の根拠の完全集計が天井だった）。
 
 - 子 chunk は 241（PDF 139・xlsx 102）。PDF は Docling の解析と既定の親子階層の分割での実測（ローカルの Docling
   サービスで確認）。xlsx は Excel を 1 行 = 1 chunk に分ける #1349 の後の数（行と前書きの 1 つ）で、#1349 の前は
@@ -112,8 +112,7 @@
   台帳（xlsx）の根拠は、行を指すシステム ID のセル（`SYS-101` など）にしています。前処理 `excel_to_jsonl` は 1 行を
   1 記録にするため、その行を引用で取れたかを測れます。
 - 対応（`expected_outcomes`）は、すべて答えられる質問なので `answered` / `conditional` を受け入れます（拒答は失敗）。
-  期待する語（`expected_answer_keywords`）は NFKC・大小文字・空白を無視して照合します（「ＨＲＭ」と「HRM」、
-  「5 年」と「5年」は同じ）。
+  確認済みの必須要点（`required_answer_points`）は、正確性・網羅性の意味上の比較に使います。
 
 ## 章節の読み切り（#1438）
 
@@ -132,8 +131,8 @@
 
 - 必要な根拠（`required_evidence`）は同じ章の別々のページの文で、テストが原稿の改ページ（`multi_hop_corpus.py` の
   `Document.pages`）と同梱の PDF のページで照合します（`test_section_read_cases_need_every_page_of_one_section`）。
-- 見る値: `reasoning_type=section_read` の `evidence_chain_complete_rate`（章節の全部のページの根拠を引用で取れた割合）と
-  `answer_keyword_hit_rate`。A（RAG の回答）は検索の上位に章節の全部のページが入らないと欠け、D（業務 Agent）は根拠の
+- 見る値: `reasoning_type=section_read` の `required_evidence_recall`（必要な箇所の取得率）と
+  `requirement_coverage`。A（RAG の回答）は検索の上位に章節の全部のページが入らないと欠け、D（業務 Agent）は根拠の
   `section`（属する章節の頁の範囲・文字数）を見て `rag_read_section` で章節を読み切ると取れます（読んだ chunk は D の引用
   に入る）。章節の読み切りが効いたかは、D の Run の `rag_read_section` の呼び出しと、`sr-inspection-equipment-values` で
   `up` を使ったか（節から親の章へ上がったか）で確かめます。
@@ -156,19 +155,15 @@
   （本文にも現れる値は本文の chunk の引用でも一致するので使わない。p.7・p.9・p.11 の表は該当の値が無く、根拠に入れて
   いない）。`test_document_read_cases_need_evidence_from_several_chapters` が、根拠が 2 つ以上の章にあることと、
   値が表にしか現れないことを確かめます。
-- 見る値: 拡張 on / off の `reasoning_type=document_read`・`section_read` の `evidence_chain_complete_rate` と、回答の診断の
+- 見る値: 拡張 on / off の `reasoning_type=document_read`・`section_read` の `required_evidence_recall` と、回答の診断の
   `section_expansion`（段・止めた理由）。検索の上位に全部の根拠が入る top_k（既定の 20）では拡張が要らないことがあるため、
   拡張の効き目は top_k 1 でも比べます。
 
 ## 指標
 
-[../README.md](../README.md) の「評価の指標」に加えて、次を見ます（どちらも参考の集計で、閾値の判定には使いません）。
-
-| 指標 | 意味 |
-|---|---|
-| `required_evidence_recall` | 必要な根拠のうち、最後の回答の引用で取れた割合（ケースの平均） |
-| `evidence_chain_complete_rate` | 必要な根拠を**すべて**取れたケースの割合（多段は 1 つでも欠けると答えられないため、再現率の平均とは別に見る） |
-| `reasoning_type_breakdown` / `hops_breakdown` | 種類別・段の数別の `required_evidence_recall`・`evidence_chain_complete_rate`・`answer_keyword_hit_rate` と件数。`split_breakdown` の各区分の中にも同じ内訳がある |
+[../README.md](../README.md#評価の六指標)と同じ六指標だけを使います。
+必要な根拠は `required_evidence_recall`、回答の要点は意味上の正確性・網羅性で測ります。
+`reasoning_type_breakdown` / `hops_breakdown`と`split_breakdown`の内訳も同じ六指標と対象件数です。
 
 ## 資料を作り直す
 
@@ -238,7 +233,7 @@ uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop
 ```
 
 `evaluation_cli` は、終わったときに標準エラーへ全体の指標と、`required_evidence`・`reasoning_type=<種類>`・
-`hops=<段の数>` の行（`required_evidence_recall`・`evidence_chain_complete_rate`・`answer_keyword_hit_rate`）を
+`hops=<段の数>` の行（六指標と対象件数）を
 出します。閾値を下回ると終了コード 1 を返しますが、結果の JSON は書きます。質問ごとに回答（モデルの呼び出し
 3〜5 回）を作るため、dev の 40 問で 40 分前後かかります（#1335 の 33 問の実測から見積もり）。
 
@@ -271,7 +266,7 @@ for variant in plain entity; do
 done
 ```
 
-- 見る値: dev の `bridge` の `evidence_chain_complete_rate`（#1362 の完了条件は 0.8 以上）と、1 段の対照
+- 見る値: dev の `bridge` の `required_evidence_recall`（選んだ評価の基準の閾値で判定）と、1 段の対照
   （`single_hop`）が下がらないこと。足した根拠は回答の診断の `entity_expansion`（足した chunk・実体・段・起点・
   `ambiguous`）で確かめます。
 - 同じ実体のナレッジベースで拡張だけを外して比べるときは、品質評価の `rag_overrides` の
@@ -310,8 +305,8 @@ uv run python -m app.rag.agent_evaluation_cli summarize A=/tmp/multi-hop.a.json 
 全角 / 半角の名寄せ（#1336・#1350）・評価セットを大きくする（#1352。この資料）を行ってから、同じ評価で判断し直す
 ことにしました。
 
-- **判断し直す条件**: 上の後に、この大きさの資料（241 chunk）で dev の `bridge` の `evidence_chain_complete_rate` が
-  A（既定の `top_k` = 20）と D の両方で 0.8 未満で、欠けた根拠（`missing_evidence`）の過半が、同じ質問のかけ直しで
+- **判断し直す条件**: 上の後に、この大きさの資料（241 chunk）で dev の `bridge` の `required_evidence_recall` が
+  A（既定の `top_k` = 20）と D の両方で選んだ基準の閾値未満で、欠けた根拠（`missing_evidence`）の過半が、同じ質問のかけ直しで
   「検索の結果（citations）に出ない」（`evidence_limit` で切れたのではない）ものなら、実体の層の Issue を作ります。
 - 資料の全部が文脈に入らないため、A の `bridge` が 1.00 にならないことを先に確かめます（1.00 なら資料がまだ小さい）。
 - #1335 の 33 問だけの値（先頭の 33 問）も出し、1 回目の評価と比べます。増えた資料で #1335 の問だけが下がったなら、
