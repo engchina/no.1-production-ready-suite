@@ -212,11 +212,30 @@ class StallResendTest(unittest.TestCase):
 
     def test_failed_event_is_a_retryable_connection_error(self):
         failed = SimpleNamespace(type="response.failed", response=SimpleNamespace(error=SimpleNamespace(message="overloaded")))
-        client = _Client(self.clock, [_script(10, 200.0, final=failed)])
+        client = _Client(self.clock, [_script(10, 200.0, final=failed), _script(10, 200.0, final=failed)])
         with self.assertRaises(oci.LlmStreamFailed) as raised:
             self.call(client)
         self.assertIn("overloaded", str(raised.exception))
         self.assertTrue(oci._is_retryable_error(raised.exception))
+        self.assertEqual(len(client.streams), 1 + oci.STREAM_FAILED_RESENDS)  # 送り直しは上限まで
+
+    def test_failed_event_is_resent_once(self):
+        """失敗の event で終わった呼び出しは同じ要求を 1 回送り直す（#2814）。"""
+        failed = SimpleNamespace(type="response.failed", response=SimpleNamespace(error=SimpleNamespace(message="overloaded")))
+        client = _Client(self.clock, [_script(0, 200.0, final=failed), _script(10, 200.0)])
+        result, usage, _records = self.call(client)
+        self.assertEqual((result.text, len(client.streams)), ("ok", 2))
+        self.assertEqual(usage["incomplete_reasons"], {"stream_error": 1})
+
+    def test_sdk_stream_error_is_resent_once(self):
+        """OpenAI SDK は stream の error の event を APIError として送出する。失敗の event と同じく送り直す（#2814）。"""
+        import openai
+
+        error = openai.APIError("upstream error", httpx.Request("POST", "https://stub"), body=None)
+        client = _Client(self.clock, [[(0.1, SimpleNamespace(type="response.created")), (None, error)], _script(10, 200.0)])
+        result, usage, _records = self.call(client)
+        self.assertEqual((result.text, len(client.streams)), ("ok", 2))
+        self.assertEqual(usage["incomplete_reasons"], {"stream_error": 1})
 
     def test_without_a_deadline_the_call_is_not_streamed(self):
         """回答の期限が無い文脈（取込など）は従来どおり `responses.parse` で受ける。"""
