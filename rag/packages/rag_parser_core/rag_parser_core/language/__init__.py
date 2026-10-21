@@ -593,6 +593,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "condition_suffix",
         "condition_link",
         "subquestion_heading_template",
+        "missing_request_template",
         "removed_section",
         "removed_section_note",
         "marked_section",

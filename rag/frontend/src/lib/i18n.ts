@@ -974,6 +974,8 @@ export const ja = {
   "settings.language.field.condition_link": "条件と語尾のつなぎ",
   "settings.language.field.condition_link.help": "名詞で終わる条件と語尾の間に挟む語です（例: の → 〇〇の場合）。",
   "settings.language.field.subquestion_heading_template": "小問の見出しの型",
+  "settings.language.field.missing_request_template": "要求の説明が不足したときの案内",
+  "settings.language.field.missing_request_template.help": "回答が要求を十分に説明していないときの案内です。{text} に要求の文が入ります。資料に記載が無いという判定ではありません。",
   "settings.language.field.subquestion_heading_template.help": "小問を並べた質問の回答で、小問ごとに付ける見出しの型です。{label} に小問の印、{text} に小問の文が入ります（例: 質問{label}：{text}）。",
   "settings.language.field.predicate_endings": "用言の終わり",
   "settings.language.field.predicate_endings.help": "条件がこの字で終わるときは、つなぎの語を挟みません（例: た → 過ぎた場合）。",

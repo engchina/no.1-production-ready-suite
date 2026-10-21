@@ -2389,6 +2389,7 @@
     "condition_suffix": "場合",
     "condition_link": "の",
     "subquestion_heading_template": "質問{label}：{text}",
+    "missing_request_template": "『{text}』については、根拠付きの説明を十分に示せていません。",
     "removed_section": "根拠と矛盾し除いた内容",
     "removed_section_note": "次の内容は根拠と矛盾するため、回答から除きました。",
     "marked_section": "確認が必要な点",
