@@ -136,7 +136,7 @@ export function RowTitleButton({
   const controlId = props.id ?? generatedId;
   const actionLabel = props["aria-label"];
   // 自己参照は aria-label の操作説明を使い、表示文の参照と併せる（DOM の文は複製しない）。
-  const labelledBy = props["aria-labelledby"] ?? (actionLabel ? `${contentId}${subtitle ? ` ${subtitleId}` : ""} ${controlId}` : undefined);
+  const labelledBy = props["aria-labelledby"] ?? (actionLabel ? `${controlId} ${contentId}${subtitle ? ` ${subtitleId}` : ""}` : undefined);
   const titleRef = useRef<HTMLSpanElement | null>(null);
   const [clamped, setClamped] = useState(false);
   const fullText = maxLines ? (fullTitle ?? (typeof title === "string" ? title : undefined)) : undefined;
