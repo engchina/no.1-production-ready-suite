@@ -2139,14 +2139,34 @@ class IngestionPipeline:
                 raise IngestionUserError(record_boundary_failure_message(exc)) from exc
 
         def _run_chunking() -> list[Chunk]:
+            diagnostics: dict[str, int] = {}
             if small_to_big_fallback:
-                return mark_small_to_big_fallback(_run_standard_chunking())
-            if is_small_to_big:
-                # 親子階層（small-to-big）は docling レイアウトを入力にするため backend 内で行う。
-                return build_parent_child_chunks(
-                    extraction, source_name=source_name, params=chunking_params.small_to_big
+                result = mark_small_to_big_fallback(_run_standard_chunking())
+            elif is_small_to_big:
+                result = build_parent_child_chunks(
+                    extraction,
+                    source_name=source_name,
+                    params=chunking_params.small_to_big,
+                    diagnostics=diagnostics,
                 )
-            return _run_standard_chunking()
+            else:
+                result = _run_standard_chunking()
+            if not result:
+                # 空の結果は分割段階の失敗として記録し、本文を含めず除去理由の件数を示す。
+                boilerplate_count = diagnostics.get("excluded_page_boilerplate_count", 0)
+                details = (
+                    f"ページ定型文の除外: {boilerplate_count} 件、"
+                    f"装飾の除外: {diagnostics.get('excluded_decorative_count', 0)} 件、"
+                    f"空の要素: {diagnostics.get('empty_record_count', 0)} 件。"
+                    if is_small_to_big and not small_to_big_fallback
+                    else "分割と除外処理の後に索引対象が残りませんでした。"
+                )
+                raise IngestionUserError(
+                    f"索引用チャンクを作成できませんでした（抽出文字数: {len(text)}）。"
+                    + details
+                    + "解析結果と文書の分割設定を確認してください。"
+                )
+            return result
 
         small_to_big_attributes: dict[str, int] = (
             {
@@ -2180,6 +2200,7 @@ class IngestionPipeline:
                 "chunk_min_chars": chunking_params.min_chars,
                 **small_to_big_attributes,
                 "input_chars": len(text),
+                "chunk_count": 0,
                 "parser_profile": parser_profile,
                 "parser_backend": quality_report.parser_backend,
                 "fallback_used": quality_report.fallback_used,
@@ -2188,8 +2209,6 @@ class IngestionPipeline:
             },
             result_attributes=lambda result: {"chunk_count": len(result)},
         )
-        if not chunks:
-            raise IngestionUserError("索引用チャンクを作成できませんでした。")
         # RAPTOR 再帰要約索引(opt-in)。leaf に summary node を足して索引する。要約失敗は leaf のみ。
         chunks = await self._augment_with_raptor(trace_id, chunks, cancel_checker)
         apply_page_labels(chunks, labels_from_artifacts(extraction.parser_artifacts))

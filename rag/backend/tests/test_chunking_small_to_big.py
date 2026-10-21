@@ -27,7 +27,7 @@ from app.rag.chunking_small_to_big import (
     small_to_big_fallback_needed,
 )
 from app.rag.chunking_strategy import SmallToBigParams, normalize_chunking_strategy
-from app.rag.ingestion import IngestionPipeline
+from app.rag.ingestion import IngestionPipeline, IngestionUserError
 from app.rag.ingestion_quality import build_ingestion_quality_report
 from app.schemas.document import DocumentDetail, FileStatus
 from app.schemas.extraction import StructuredExtraction
@@ -446,3 +446,50 @@ def test_chunk_preview_small_to_big_falls_back_without_docling_layout(
             assert metadata[CHUNK_STRATEGY_FALLBACK_REASON_KEY] == "layout_missing"
         else:
             assert CHUNK_STRATEGY_FALLBACK_REASON_KEY not in metadata
+
+
+@pytest.mark.parametrize("category", ["Text", "Page-header"])
+@pytest.mark.parametrize("text", ["a", "ab", "abc", "abcd"])
+async def test_ingestion_keeps_short_layout_text(category: str, text: str) -> None:
+    extraction = StructuredExtraction(
+        raw_text=text,
+        parser_artifacts={
+            "layout_records": {"records": [_record(1, category, text, [0, 0, 100, 20])]}
+        },
+    )
+    chunks = await _ingestion_chunks("small_to_big", extraction)
+    assert [chunk.text for chunk in chunks] == [text]
+
+
+async def test_empty_chunks_explain_exclusions_and_mark_chunking_trace_as_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.rag import ingestion as ingestion_module
+
+    spans: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        ingestion_module, "record_trace_span", lambda **kwargs: spans.append(kwargs)
+    )
+    records = [
+        _record(1, "Page-footer", "1", [0, 1380, 100, 1400]),
+        _record(2, "Picture", "", [0, 0, 10, 10]),
+        _record(3, "Text", "　", [0, 0, 10, 10]),
+    ]
+    records[1]["raw"] = {"visual_role": "decorative", "rag_excluded": True}
+    extraction = StructuredExtraction(
+        raw_text="1",
+        parser_artifacts={"layout_records": {"records": records}},
+    )
+    with pytest.raises(IngestionUserError) as caught:
+        await _ingestion_chunks("small_to_big", extraction)
+    message = str(caught.value)
+    assert "抽出文字数: 1" in message
+    assert "ページ定型文の除外: 1 件" in message
+    assert "装飾の除外: 1 件" in message
+    assert "空の要素: 1 件" in message
+    chunking = next(span for span in spans if span["span_name"] == "chunking")
+    assert chunking["outcome"] == "error"
+    assert chunking["attributes"]["input_chars"] == 1
+    assert chunking["attributes"]["chunk_count"] == 0
+    assert chunking["error"] is caught.value
+    assert "policy.pdf" not in message

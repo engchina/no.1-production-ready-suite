@@ -164,6 +164,7 @@ def build_parent_child_chunks(
     *,
     source_name: str = "",
     params: SmallToBigParams | None = None,
+    diagnostics: dict[str, int] | None = None,
 ) -> list[Chunk]:
     """layout_records から親子分割し、子チャンクを索引用 Chunk として返す。
 
@@ -206,6 +207,7 @@ def build_parent_child_chunks(
         selected_engine_ids=engines,
         config=small_to_big_chunking_config(params),
         source_page_count=len(pages),
+        diagnostics=diagnostics,
     )
     parents = {chunk.chunk_id: chunk for chunk in chunks if chunk.chunk_level != CHILD_CHUNK_LEVEL}
     children = [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL]

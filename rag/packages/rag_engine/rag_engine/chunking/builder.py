@@ -105,9 +105,11 @@ def build_small_to_big_chunks(
     source_file_sha256: str = "",
     source_page_count: int = 0,
     classification: DocumentClassification | dict[str, Any] | None = None,
+    diagnostics: dict[str, int] | None = None,
 ) -> list[DocumentChunk]:
     """LayoutRecord payload から親子チャンク集合を構築します。
 
+    diagnostics を指定すると、本文を含めず除外理由ごとのレコード数を加算する。
     入力 payload は変更しない。Picture の役割（`visual_role` など）は record を複製した上で付ける (#798)。
     解析段階（picture_descriptions / visual_artifacts）が record の raw に書いた `visual_role` は、ここで
     閾値判定をやり直さず正として扱う。Vision の実行有無はその時点で決まっているため、chunking 側で役割を
@@ -119,7 +121,7 @@ def build_small_to_big_chunks(
         source_page_count = _source_page_count(payload)
     document_info = normalize_document_metadata(payload.get("document_metadata"), source_file_name=source_file_name)
     engine_labels = _engine_labels(payload.get("engines"))
-    records = _records_by_engine(payload.get("records"), selected_engine_ids)
+    records = _records_by_engine(payload.get("records"), selected_engine_ids, diagnostics=diagnostics)
     all_chunks: list[DocumentChunk] = []
     engine_documents: dict[str, dict[str, Any]] = {}
     for engine_id in selected_engine_ids:
@@ -144,6 +146,7 @@ def build_small_to_big_chunks(
             source_engine_label=engine_labels.get(engine_id, engine_id),
             config=config,
             classification=document_classification,
+            diagnostics=diagnostics,
         )
         # 親構築中の検索文生成に間に合うよう、先に子へ文書情報を付ける。
         for child in children:
@@ -218,6 +221,7 @@ def _build_child_chunks_for_engine(
     source_engine_label: str,
     config: ChunkingConfig,
     classification: DocumentClassification,
+    diagnostics: dict[str, int] | None = None,
 ) -> list[DocumentChunk]:
     records = _annotate_layout_records(_promote_headings(records))
     metadata_by_page = _metadata_by_page(records, config)
@@ -243,7 +247,7 @@ def _build_child_chunks_for_engine(
         nonlocal text_buffer
         if not text_buffer:
             return
-        # 節の切り替えや末尾で残った、本文が 4 文字未満の buffer（手順番号・「以上」など）は child にしない (#897)。
+        # 空白だけの buffer を除く。本文の長さでは除去しない。
         if not _buffer_has_body(text_buffer) and all(str(r.get("category") or "") not in SECTION_CATEGORIES for r in text_buffer):
             text_buffer = []
             return
@@ -292,6 +296,10 @@ def _build_child_chunks_for_engine(
         text_buffer = []
         return heading_records
 
+    def count_exclusion(reason: str) -> None:
+        if diagnostics is not None:
+            diagnostics[reason] = diagnostics.get(reason, 0) + 1
+
     for record in sorted(records, key=lambda item: (int(item.get("page") or 0), int(item.get("seq_no") or 0))):
         category = str(record.get("category") or "")
         record_id = str(record.get("id") or "")
@@ -303,10 +311,12 @@ def _build_child_chunks_for_engine(
         if record_id in consumed_supplement_ids:
             continue
         if category == "Picture" and visual_role in {DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE}:
+            count_exclusion("excluded_decorative_count")
             continue
         if _is_attached_atomic_annotation(record):
             continue
         if category in METADATA_ONLY_CATEGORIES and _is_excluded_page_boilerplate_record(record, metadata_by_page):
+            count_exclusion("excluded_page_boilerplate_count")
             continue
         if (
             not text
@@ -314,6 +324,7 @@ def _build_child_chunks_for_engine(
             and not _record_can_supply_image_evidence(record)
             and not _is_form_like_record(record)
         ):
+            count_exclusion("empty_record_count")
             continue
         if category in SECTION_CATEGORIES and text_buffer and _buffer_has_body(text_buffer):
             flush_text_buffer()
@@ -698,7 +709,9 @@ def _apply_contextual_child_search_text(
             child.metadata.pop("retrieval_profile", None)
 
 
-def _records_by_engine(raw_records: Any, selected_engine_ids: Sequence[str]) -> dict[str, list[dict[str, Any]]]:
+def _records_by_engine(
+    raw_records: Any, selected_engine_ids: Sequence[str], *, diagnostics: dict[str, int] | None = None
+) -> dict[str, list[dict[str, Any]]]:
     if not isinstance(raw_records, list):
         return {}
     selected = set(selected_engine_ids)
@@ -716,11 +729,15 @@ def _records_by_engine(raw_records: Any, selected_engine_ids: Sequence[str]) -> 
         visual_role = classify_picture_record(raw_record, candidates)
         mark_picture_record_role(raw_record, visual_role)
         if visual_role.exclude_from_rag:
+            if diagnostics is not None:
+                diagnostics["excluded_decorative_count"] = diagnostics.get("excluded_decorative_count", 0) + 1
             if str(raw_record.get("raw_type") or "") != "picture_ocr_text" and (key := _visual_group_key(raw_record)):
                 excluded_picture_groups.add(key)
             continue
         # ロゴなど除外した Picture の OCR 集約（同じ bbox）は、単独では本文にならない。Picture 本体と一緒に除外する。
         if str(raw_record.get("raw_type") or "") == "picture_ocr_text" and _visual_group_key(raw_record) in excluded_picture_groups:
+            if diagnostics is not None:
+                diagnostics["excluded_decorative_count"] = diagnostics.get("excluded_decorative_count", 0) + 1
             continue
         if (
             not _record_text(raw_record)
@@ -728,6 +745,8 @@ def _records_by_engine(raw_records: Any, selected_engine_ids: Sequence[str]) -> 
             and not visual_role.merge_with_text
             and not _is_form_like_record(raw_record)
         ):
+            if diagnostics is not None:
+                diagnostics["empty_record_count"] = diagnostics.get("empty_record_count", 0) + 1
             continue
         records.setdefault(engine_id, []).append(raw_record)
     return records
