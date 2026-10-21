@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-FIELD_FILTER_SYSTEM_PROMPT = "\n".join(
+FIELD_FILTER_SYSTEM_PROMPT = ("## 目的と手順\n\n") + "\n".join(
     (
         "あなたは検索条件の抽出器です。質問に明示された条件だけを、与えられた項目の定義に"
         "当てはめて JSON 配列で出力します。",

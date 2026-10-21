@@ -179,3 +179,9 @@ def test_every_stage_phase_and_part_has_screen_copy() -> None:
         expected.add(f"settings.answerPrompts.stage.{stage.id}.condition")
         expected.update(f"settings.answerPrompts.part.{part_id}" for part_id, _ in stage.parts)
     assert sorted(expected - keys) == []
+
+
+def test_all_runtime_instructions_use_markdown_sections() -> None:
+    for stage in readonly_prompt_stages():
+        for part in stage["prompts"]:
+            assert re.search(("^## \\S"), str(part["content"]), re.M), (stage["id"], part["id"])

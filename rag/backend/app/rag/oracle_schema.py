@@ -500,6 +500,13 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=message_attachments_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261021_001_answer_prompt_placeholders",
+            table_name="rag_answer_prompts",
+            sql=answer_prompt_placeholders_migration_sql(),
+        )
+    )
     return sections
 
 
@@ -1336,6 +1343,17 @@ def _write_json(payload: dict[str, Any], output_path: Path | None) -> None:
 
 def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def answer_prompt_placeholders_migration_sql() -> str:
+    """編集済みの指示を保ち、回答用の placeholder だけを改名する。"""
+    return """
+UPDATE RAG_ANSWER_PROMPTS
+SET CONTENT = REPLACE(REPLACE(CONTENT,
+    '{{images}}', '{{answer_context}}'),
+    '{{image_metadata}}', '{{evidence_metadata}}')
+WHERE PROMPT_KEY = 'vlm_answer'
+""".strip()
 
 
 if __name__ == "__main__":

@@ -31,14 +31,14 @@ from tests.support import AsgiTestClient
 from tests.test_answer_engine import FakeGenAi, FakeOracle
 
 client = AsgiTestClient(app)
-CUSTOM_ANSWER = "独自の指示\n{{question}}\n{{images}}"
+CUSTOM_ANSWER = "独自の指示\n{{question}}\n{{answer_context}}"
 
 
 def test_validate_prompt_rejects_empty_missing_placeholder_and_unknown_key() -> None:
     validate_prompt(VLM_ANSWER_PROMPT_KEY, CUSTOM_ANSWER)
     with pytest.raises(ValueError, match="空"):
         validate_prompt(VLM_ANSWER_PROMPT_KEY, "  ")
-    with pytest.raises(ValueError, match=r"\{\{images\}\}"):
+    with pytest.raises(ValueError, match=r"\{\{answer_context\}\}"):
         validate_prompt(VLM_ANSWER_PROMPT_KEY, "{{question}} だけ")
     with pytest.raises(ValueError, match=r"\{\{image_metadata\}\}"):
         validate_prompt(IMAGE_RETRIEVAL_PROMPT_KEY, "画像を説明して")
@@ -91,7 +91,7 @@ def test_answer_prompts_api_saves_validates_and_resets(monkeypatch: pytest.Monke
     answer = _prompt(initial, VLM_ANSWER_PROMPT_KEY)
     assert answer["customized"] is False
     assert answer["content"] == answer["default_content"] == default_prompt(VLM_ANSWER_PROMPT_KEY)
-    assert answer["required_placeholders"] == ["question", "images"]
+    assert answer["required_placeholders"] == ["question", "answer_context"]
     # 各段は取込から評価まで処理の順(一覧とコードの照合は test_answer_prompt_stages.py。#2054)。
     assert [(stage["id"], stage["phase"]) for stage in initial["stages"]] == [
         (stage.id, stage.phase) for stage in PROMPT_STAGES
@@ -102,7 +102,7 @@ def test_answer_prompts_api_saves_validates_and_resets(monkeypatch: pytest.Monke
     assert _prompt(saved.json()["data"], VLM_ANSWER_PROMPT_KEY)["content"] == CUSTOM_ANSWER
     assert _prompt(saved.json()["data"], VLM_ANSWER_PROMPT_KEY)["customized"] is True
     assert invalid.status_code == 422
-    assert "{{images}}" in invalid.json()["error_messages"][0]
+    assert "{{answer_context}}" in invalid.json()["error_messages"][0]
     assert unknown.status_code == 404
     assert _prompt(reset.json()["data"], VLM_ANSWER_PROMPT_KEY)["customized"] is False
     assert fake.saved == {}
@@ -247,15 +247,37 @@ async def test_ingestion_loads_image_retrieval_prompt(monkeypatch: pytest.Monkey
 async def test_answer_prompts_round_trip_on_real_oracle() -> None:
     """実 Oracle AI Database で、編集したプロンプトの保存・上書き・削除ができる。"""
     from app.clients.oracle import OracleClient
+    from app.rag.oracle_schema import answer_prompt_placeholders_migration_sql
 
     oracle = OracleClient()
     try:
-        await oracle.save_answer_prompt(VLM_ANSWER_PROMPT_KEY, "一回目 {{question}} {{images}}")
+        legacy = "独自の指示\n{{question}}\n{{images}}\n{{image_metadata}}"
+        image_content = "画像の指示 {{image_metadata}}"
+        await oracle.save_answer_prompt(VLM_ANSWER_PROMPT_KEY, legacy)
+        await oracle.save_answer_prompt(IMAGE_RETRIEVAL_PROMPT_KEY, image_content)
+        before = await oracle.list_answer_prompts()
+        with oracle.acquire_connection() as connection, connection.cursor() as cursor:
+            cursor.execute(answer_prompt_placeholders_migration_sql())
+            cursor.execute(answer_prompt_placeholders_migration_sql())
+            connection.commit()
+        after = await oracle.list_answer_prompts()
+        assert after[VLM_ANSWER_PROMPT_KEY]["content"] == (
+            "独自の指示\n{{question}}\n{{answer_context}}\n{{evidence_metadata}}"
+        )
+        assert (
+            after[VLM_ANSWER_PROMPT_KEY]["updated_at"]
+            == before[VLM_ANSWER_PROMPT_KEY]["updated_at"]
+        )
+        assert after[IMAGE_RETRIEVAL_PROMPT_KEY] == before[IMAGE_RETRIEVAL_PROMPT_KEY]
+        await oracle.save_answer_prompt(
+            VLM_ANSWER_PROMPT_KEY, "一回目 {{question}} {{answer_context}}"
+        )
         await oracle.save_answer_prompt(VLM_ANSWER_PROMPT_KEY, CUSTOM_ANSWER)
         assert (await oracle.answer_prompt_overrides())[VLM_ANSWER_PROMPT_KEY] == CUSTOM_ANSWER
         saved = await oracle.list_answer_prompts()
         assert saved[VLM_ANSWER_PROMPT_KEY]["updated_at"] is not None
     finally:
         assert await oracle.delete_answer_prompt(VLM_ANSWER_PROMPT_KEY)
+        assert await oracle.delete_answer_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
     assert VLM_ANSWER_PROMPT_KEY not in await oracle.answer_prompt_overrides()
     assert not await oracle.delete_answer_prompt(VLM_ANSWER_PROMPT_KEY)

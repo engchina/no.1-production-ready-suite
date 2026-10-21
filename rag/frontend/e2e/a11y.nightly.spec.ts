@@ -172,10 +172,10 @@ async function mockSettingsAndFeedback(page: Page) {
         prompts: [
           {
             key: "vlm_answer",
-            content: "保存版 {{question}} {{images}}",
-            default_content: "既定のテンプレート {{question}} {{images}}",
+            content: "保存版 {{question}} {{answer_context}}",
+            default_content: "既定のテンプレート {{question}} {{answer_context}}",
             customized: true,
-            required_placeholders: ["question", "images"],
+            required_placeholders: ["question", "answer_context"],
             updated_at: NOW,
           },
         ],

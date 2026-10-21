@@ -221,21 +221,36 @@ class ScreenJudgement(BaseModel):
 
 SCREEN_JUDGE_RESPONSE_SCHEMA = ScreenJudgement.model_json_schema()
 
-SCREEN_JUDGE_SYSTEM_PROMPT = """\
-あなたは、問い合わせへの回答が、利用者にどの画面での操作を案内しているかを判定します。
-回答に書いてあることだけで判定し、回答に無い画面を足さないでください。
-"""
+SCREEN_JUDGE_SYSTEM_PROMPT = (
+    "あなたは、問い合わせへの回答が、利用者にどの画面での操作を案内してい"
+    "るかを判定します。\n"
+    "\n"
+    "## 手順\n"
+    "\n"
+    "1. 回答に書いてあることだけで判定し、回答に無い画面を足さないでく"
+    "ださい。\n"
+)
 
-SCREEN_JUDGE_PROMPT = """\
-入力の JSON は、回答（answer）、回答が案内すべき画面（expected_screens。name と別名の aliases）、
-回答の根拠に写っていた画面の名前（candidates）です。
-
-- guided_screens: 回答が操作を案内している画面を入れます。expected_screens か candidates の
-  画面ならその名前で、どちらにも無い画面なら回答に書かれた呼び方で入れます。画面を案内して
-  いなければ空にします。
-- matched_expected: expected_screens のうち、回答が案内している画面の name を入れます。別名や
-  言い換えで書かれていても、同じ画面なら入れます。名前が似ていても別の画面なら入れません。
-"""
+SCREEN_JUDGE_PROMPT = (
+    "## 目的と手順\n"
+    "\n"
+    "入力の JSON は、回答（answer）、回答が案内すべき画面（e"
+    "xpected_screens。name と別名の aliases）"
+    "、\n"
+    "回答の根拠に写っていた画面の名前（candidates）です。\n"
+    "\n"
+    "- guided_screens: 回答が操作を案内している画面を入"
+    "れます。expected_screens か candidates "
+    "の\n"
+    "  画面ならその名前で、どちらにも無い画面なら回答に書かれた呼び方で"
+    "入れます。画面を案内して\n"
+    "  いなければ空にします。\n"
+    "- matched_expected: expected_scree"
+    "ns のうち、回答が案内している画面の name を入れます。別名や"
+    "\n"
+    "  言い換えで書かれていても、同じ画面なら入れます。名前が似ていても"
+    "別の画面なら入れません。\n"
+)
 
 
 class ScreenJudgeLlm(Protocol):

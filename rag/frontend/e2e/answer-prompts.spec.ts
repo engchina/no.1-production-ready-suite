@@ -21,7 +21,7 @@ for (const viewport of [
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await page.route("**/api/settings/answer-prompts**", (route) =>
-      route.fulfill({ json: answerPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false) })
+      route.fulfill({ json: answerPromptsEnvelope("既定のテンプレート {{question}} {{answer_context}}", false) })
     );
 
     await page.goto("/settings/prompts");
@@ -50,7 +50,7 @@ for (const viewport of [
     });
     await page.route("**/api/settings/answer-prompts**", async (route) => {
       await gate;
-      await route.fulfill({ json: answerPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false) });
+      await route.fulfill({ json: answerPromptsEnvelope("既定のテンプレート {{question}} {{answer_context}}", false) });
     });
 
     await page.goto("/settings/prompts");
@@ -69,21 +69,21 @@ for (const viewport of [
 ]) {
   test(`回答生成のプロンプトを検証・保存・既定に戻せて、各段は読み取り専用で見られる (${viewport.name})`, async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     const requests: { method: string; body: unknown }[] = [];
     await page.route("**/api/settings/answer-prompts**", async (route) => {
       const method = route.request().method();
       if (method === "GET") {
-        await route.fulfill({ json: answerPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false) });
+        await route.fulfill({ json: answerPromptsEnvelope("既定のテンプレート {{question}} {{answer_context}}", false) });
         return;
       }
       const body = method === "PUT" ? route.request().postDataJSON() : null;
       requests.push({ method, body });
-      if (method === "PUT" && !String((body as { content: string }).content).includes("{{images}}")) {
+      if (method === "PUT" && !String((body as { content: string }).content).includes("{{answer_context}}")) {
         await route.fulfill({
           status: 422,
-          json: { data: null, error_messages: ["必須の placeholder がありません: {{images}}"], warning_messages: [] },
+          json: { data: null, error_messages: ["必須の placeholder がありません: {{answer_context}}"], warning_messages: [] },
         });
         return;
       }
@@ -91,7 +91,7 @@ for (const viewport of [
         json:
           method === "PUT"
             ? answerPromptsEnvelope((body as { content: string }).content, true)
-            : answerPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false),
+            : answerPromptsEnvelope("既定のテンプレート {{question}} {{answer_context}}", false),
       });
     });
 
@@ -104,10 +104,10 @@ for (const viewport of [
     await field.fill("質問だけ {{question}}");
     await save.click();
     // 必須の placeholder の欠けは送る前に欄の下へ出し、欄へフォーカスを移す（#1010）。
-    await expect(page.getByText("必須の placeholder がありません: {{images}}")).toBeVisible();
+    await expect(page.getByText("必須の placeholder がありません: {{answer_context}}")).toBeVisible();
     await expect(field).toBeFocused();
 
-    await field.fill("独自 {{question}} {{images}}");
+    await field.fill("独自 {{question}} {{answer_context}}");
     await save.click();
     await expect(page.getByText("プロンプトを保存しました。")).toBeVisible();
     await expect(page.getByText(/^編集済み/)).toBeVisible();
@@ -115,11 +115,18 @@ for (const viewport of [
     await page.getByRole("button", { name: "既定に戻す" }).click();
     await page.getByRole("alertdialog", { name: "既定のプロンプトに戻しますか？" }).getByRole("button", { name: "既定に戻す" }).click();
     await expect(page.getByText("既定のプロンプトに戻しました。")).toBeVisible();
-    await expect(field).toHaveValue("既定のテンプレート {{question}} {{images}}");
+    await expect(field).toHaveValue("既定のテンプレート {{question}} {{answer_context}}");
     expect(requests.map((request) => request.method)).toEqual(["PUT", "DELETE"]);
 
     await page.getByTestId("answer-prompt-stage-audit").locator("summary").click();
-    await expect(page.getByText("監査の system")).toBeVisible();
+    const audit = page.getByTestId("answer-prompt-stage-audit");
+    await expect(audit.getByText("監査の system", { exact: true })).toBeVisible();
+    await expect(audit.getByRole("heading", { name: "手順", exact: true })).toBeVisible();
+    await expect(audit.locator("ol > li")).toHaveCount(2);
+    await expect(audit.locator("code")).toHaveText("quote");
+    await expect(audit.locator("script")).toHaveCount(0);
+    expect(await page.evaluate(() => "promptInjected" in window)).toBe(false);
+    await audit.screenshot({ path: testInfo.outputPath("markdown-prompt.png") });
     await expectNoPageOverflow(page);
   });
 }
@@ -133,7 +140,7 @@ for (const viewport of [
   }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.route("**/api/settings/answer-prompts**", (route) =>
-      route.fulfill({ json: answerPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false, FLOW_STAGES) })
+      route.fulfill({ json: answerPromptsEnvelope("既定のテンプレート {{question}} {{answer_context}}", false, FLOW_STAGES) })
     );
 
     await page.goto("/settings/prompts");
@@ -199,7 +206,7 @@ for (const viewport of [
     const requests: string[] = [];
     await page.route("**/api/settings/answer-prompts**", async (route) => {
       if (route.request().method() !== "GET") requests.push(route.request().method());
-      await route.fulfill({ json: answerPromptsEnvelope("保存版 {{question}} {{images}}", true) });
+      await route.fulfill({ json: answerPromptsEnvelope("保存版 {{question}} {{answer_context}}", true) });
     });
 
     await page.goto("/settings/prompts");
@@ -217,7 +224,7 @@ for (const viewport of [
     expect(requests).toEqual([]);
 
     await discard.click();
-    await expect(field).toHaveValue("保存版 {{question}} {{images}}");
+    await expect(field).toHaveValue("保存版 {{question}} {{answer_context}}");
     await expect(page.getByText("テンプレートを入力してください。")).toHaveCount(0);
     await expect(save).toBeDisabled();
     await expect(actions.getByText(/^編集済み/)).toBeVisible();
@@ -227,7 +234,7 @@ for (const viewport of [
 
 test("回答生成のプロンプトは編集中の内容を背景の再取得で上書きしない", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
-  let content = "保存版 A {{question}} {{images}}";
+  let content = "保存版 A {{question}} {{answer_context}}";
   await page.route("**/api/settings/answer-prompts**", (route) =>
     route.fulfill({ json: answerPromptsEnvelope(content, true) })
   );
@@ -238,7 +245,7 @@ test("回答生成のプロンプトは編集中の内容を背景の再取得�
 
   // 未編集なら保存値の変更へ追従する。初回の取得（StrictMode の再購読による取り直しを含む）が
   // まだ途中だと、フォーカスの再取得はその取得（保存版 A）にまとめられるため、B が届くまで再取得を促す（#833）。
-  content = "保存版 B {{question}} {{images}}";
+  content = "保存版 B {{question}} {{answer_context}}";
   await expect
     .poll(async () => {
       await refetchOnFocus(page);
@@ -247,12 +254,12 @@ test("回答生成のプロンプトは編集中の内容を背景の再取得�
     .toBe(content);
 
   // 編集中は、保存値が変わっても編集内容を残す。
-  await editor.fill("編集中 {{question}} {{images}}");
-  content = "保存版 C {{question}} {{images}}";
+  await editor.fill("編集中 {{question}} {{answer_context}}");
+  content = "保存版 C {{question}} {{answer_context}}";
   const refetched = page.waitForResponse("**/api/settings/answer-prompts**");
   await refetchOnFocus(page);
   await refetched;
-  await expect(editor).toHaveValue("編集中 {{question}} {{images}}");
+  await expect(editor).toHaveValue("編集中 {{question}} {{answer_context}}");
 });
 
 async function collapseSidebar(page: Page) {
@@ -268,7 +275,7 @@ type StageFixture = { id: string; phase: string; prompts: { id: string; content:
 
 const DEFAULT_STAGES: StageFixture[] = [
   { id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] },
-  { id: "audit", phase: "audit", prompts: [{ id: "system", content: "監査の system" }] },
+  { id: "audit", phase: "audit", prompts: [{ id: "system", content: "監査の system\n\n## 手順\n\n1. `quote` を照合する。\n2. 不足なら指摘する。\n\n<script>window.promptInjected = true</script>" }] },
 ];
 
 // 7 つの区分にまたがる段（backend の PROMPT_STAGES の一部。内容は合成）。
@@ -293,7 +300,7 @@ const FLOW_STAGES: StageFixture[] = [
     id: "audit",
     phase: "audit",
     prompts: [
-      { id: "system", content: "監査の system" },
+      { id: "system", content: "監査の system\n\n## 手順\n\n1. `quote` を照合する。\n2. 不足なら指摘する。\n\n<script>window.promptInjected = true</script>" },
       { id: "compactRule", content: "理由の規則" },
     ],
   },
@@ -307,9 +314,9 @@ function answerPromptsEnvelope(content: string, customized: boolean, stages: Sta
         {
           key: "vlm_answer",
           content,
-          default_content: "既定のテンプレート {{question}} {{images}}",
+          default_content: "既定のテンプレート {{question}} {{answer_context}}",
           customized,
-          required_placeholders: ["question", "images"],
+          required_placeholders: ["question", "answer_context"],
           updated_at: customized ? "2026-09-26T01:00:00Z" : null,
         },
       ],

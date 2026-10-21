@@ -71,7 +71,8 @@ from app.schemas.search import (
 logger = logging.getLogger(__name__)
 
 HISTORY_REWRITE_SYSTEM_PROMPT = (
-    "あなたは検索用の質問を整える担当です。会話履歴(evidence_context)を踏まえ、最新の質問"
+    ("## 目的と手順\n\n")
+    + "あなたは検索用の質問を整える担当です。会話履歴(evidence_context)を踏まえ、最新の質問"
     "(question)を、履歴を読まなくても意味が通る 1 文の日本語の質問に書き換えてください。"
     "代名詞や省略された対象(それ、その手順、さっきの画面など)は"
     "履歴にある具体的な名前へ置き換えます。"

@@ -1,6 +1,6 @@
 {
   "artifact_type": "migration",
-  "migration_artifact_version": "20261003_001",
+  "migration_artifact_version": "20261009_001",
   "migrations": [
     {
       "destructive": false,
@@ -386,10 +386,143 @@
       "sha256": "6ae5a9292aae7c250cd594ec3dd1dbca83fb3ded6b75010b00d73556ececff3a",
       "statement_count": 1,
       "table_name": "rag_search_answer_profiles"
+    },
+    {
+      "destructive": false,
+      "name": "20261005_001_message_answer_runs",
+      "sha256": "3e89166267c85fbcc8e5f604790a6f4616155eb8738b98b7fc707c60f188e7d1",
+      "statement_count": 1,
+      "table_name": "rag_messages"
+    },
+    {
+      "destructive": false,
+      "name": "20261007_001_document_superseded",
+      "sha256": "17aa156ee1660c45c458d1074c3468a881cca4f2f0c9ddec84dd64215b9ebacc",
+      "statement_count": 1,
+      "table_name": "rag_documents"
+    },
+    {
+      "destructive": false,
+      "name": "20261009_001_entity_layer",
+      "sha256": "99b2fae849046f5c1cd5fc8a40d773574a1cf6686156ff1a0454904f29fa0ccb",
+      "statement_count": 1,
+      "table_name": "rag_entities"
+    },
+    {
+      "destructive": false,
+      "name": "20261011_001_section_chunk_map",
+      "sha256": "83108266d487a200165e46321e1a58040a3c8f006ede69c4a31865cf665fba34",
+      "statement_count": 1,
+      "table_name": "rag_chunk_set_sections"
+    },
+    {
+      "destructive": false,
+      "name": "20261015_001_message_clarification",
+      "sha256": "da784b5db0e85ed865e68c96b9290e20837fb26765309afedeed74d5db8aa565",
+      "statement_count": 1,
+      "table_name": "rag_messages"
+    },
+    {
+      "destructive": false,
+      "name": "20261015_002_run_history",
+      "sha256": "76af9c35a0acd4f4462159d41bab232fd8f99db27c66a3a4b726ce18406b0426",
+      "statement_count": 1,
+      "table_name": "rag_run_history"
+    },
+    {
+      "destructive": false,
+      "name": "20261015_003_run_history_conversation_idx",
+      "sha256": "c3c1f492efc1f5b6ffbab4b23c288f5f282b4181a9150d486a6d1e1203cca757",
+      "statement_count": 1,
+      "table_name": "rag_run_history"
+    },
+    {
+      "destructive": false,
+      "name": "20261015_004_ingestion_job_progress",
+      "sha256": "01a382d45ac48164eb10f810a6050c3bee44d48bb43d7a20576ff5104660985d",
+      "statement_count": 1,
+      "table_name": "rag_ingestion_jobs"
+    },
+    {
+      "destructive": true,
+      "name": "20261016_001_retire_evaluation_compare",
+      "sha256": "b75d16b88319273a7950d5595eb0657354a6cb12da950c522db8a92e41c96388",
+      "statement_count": 1,
+      "table_name": "rag_evaluation_jobs"
+    },
+    {
+      "destructive": false,
+      "name": "20261016_003_document_categories",
+      "sha256": "5bc9e65735aed424fa04b22ee320bd8a3f4231aeed827e40c8dd94808a7fc92f",
+      "statement_count": 1,
+      "table_name": "rag_document_categories"
+    },
+    {
+      "destructive": false,
+      "name": "20261018_001_support_guide_embeddings",
+      "sha256": "655e59f204571bfad92e2b23eaf5e608d88b3003dc829e6d78f00330b561b1f6",
+      "statement_count": 1,
+      "table_name": "rag_support_guide_embeddings"
+    },
+    {
+      "destructive": false,
+      "name": "20261018_002_message_answer_notice",
+      "sha256": "c93cbd8fd15160d2e2316560acd2b086ed4f88801b9986a6b0ee4bb468c18fb0",
+      "statement_count": 1,
+      "table_name": "rag_messages"
+    },
+    {
+      "destructive": false,
+      "name": "20261018_003_answer_record_notice",
+      "sha256": "00c0a955219d3e5dc2415e070be250beef86debdc8f5abeeecbf4b83b4004a0c",
+      "statement_count": 1,
+      "table_name": "rag_answer_records"
+    },
+    {
+      "destructive": false,
+      "name": "20261018_004_support_guide_schema_v2",
+      "sha256": "043e7304e0cb965acbfe529cd738b438609af2b1de98ad551f5c36794c2fca86",
+      "statement_count": 1,
+      "table_name": "rag_support_guides"
+    },
+    {
+      "destructive": false,
+      "name": "20261019_001_restore_document_classification",
+      "sha256": "14195714670bd4e9ab4639a52ec0dd39b571e43a426bd0019767bcf8277424e2",
+      "statement_count": 1,
+      "table_name": "rag_documents"
+    },
+    {
+      "destructive": false,
+      "name": "20261019_002_document_cleanups",
+      "sha256": "c3acb61ae4e92cfca02ef864da0529f9f48f9147fbeef50cca06a9d64c189b5d",
+      "statement_count": 1,
+      "table_name": "rag_document_cleanups"
+    },
+    {
+      "destructive": false,
+      "name": "20261019_003_structured_records_jsonl_profiles",
+      "sha256": "8a4c16a914c24bbeb3207bc6320d5277502be92f2edba0f2aee96f2c595bdf67",
+      "statement_count": 1,
+      "table_name": "rag_document_recipes"
+    },
+    {
+      "destructive": false,
+      "name": "20261019_010_message_attachments",
+      "sha256": "5b52bdfc08be481502299fad9da65ad0b7b845076bbfaaf737e222f11de1da38",
+      "statement_count": 1,
+      "table_name": "rag_messages"
+    },
+    {
+      "destructive": false,
+      "name": "20261021_001_answer_prompt_placeholders",
+      "sha256": "f5d5f67730151c03716f07ba00be67bd22a143a46a5cd46fbd8d8a7b28008157",
+      "statement_count": 1,
+      "table_name": "rag_answer_prompts"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "2909cb56222983b459c6526f43784eafaa3562e34ac629bb01812f352e808e2d",
-  "statement_count": 87
+  "sha256": "1e0c258e75511da21b318fc20e2fbf1dea91b01c32856a90e2602c17fc6ea952",
+  "statement_count": 105
 }

@@ -378,35 +378,63 @@ class GuideDraftOutput(_Out):
 
 GUIDE_DRAFT_RESPONSE_SCHEMA = GuideDraftOutput.model_json_schema()
 
-GUIDE_DRAFT_SYSTEM_PROMPT = """\
-あなたは、問い合わせ対応の「回答の過程」を、業務ガイドの下書き（JSON）に直す担当です。
-回答の過程に書いてあることだけを使い、書いていない手順・条件・資料・頁を足さないでください。
-"""
+GUIDE_DRAFT_SYSTEM_PROMPT = (
+    "あなたは、問い合わせ対応の「回答の過程」を、業務ガイドの下書き（JS"
+    "ON）に直す担当です。\n"
+    "\n"
+    "## 手順\n"
+    "\n"
+    "1. 回答の過程に書いてあることだけを使い、書いていない手順・条件・"
+    "資料・頁を足さないでください。\n"
+)
 
-GUIDE_DRAFT_PROMPT = """\
-入力の JSON は、利用者の質問（question）、回答の過程を見出しで分けた節（sections）、任意の標準回答
-（standard_answer）です。節の field は次の項目を表します（null は見出しの無い文）。
-
-- steps（回答の手順）: steps に順に入れる。前の手順を済ませてから行う手順は depends_on に前の手順の
-  id を入れる。手順の画面名・機能名は retrieval_hints に入れる。
-- conditions（必要な確認事項）: 確かめる事項を conditions に、「X なら手順 P」を branches に入れる。
-  選択肢が決まっていれば type=enum（2 つ以上）、はい / いいえなら boolean、それ以外は text。
-  値ごとに案内する操作が違えば、値ごとに別の手順にして goto_step を分け、その値の操作を
-  operation に入れる（同じ手順に進めるのは、値に関わらず同じ操作を案内するときだけ）。
-  「窓口へ連絡」のような人へ引き継ぐ場合は handling=handoff にし、handoff_contact に窓口の名前、
-  handoff_conditions にその場合を入れる。利用者に聞けば決まる事項は handling=ask と question を
-  入れる。
-- references（検索する資料と根拠の頁）: 資料の名前は書いたまま document_name に、頁は pages、
-  表計算のシート・行・セルの範囲は sheet_name・rows・cells、章節は section に入れる。どの手順の
-  根拠の資料かが書いてあれば、step_ids にその手順の id を入れる（全手順に共通の資料なら空）。
-- search_terms（検索の語）: match_terms と、関係する手順の retrieval_hints に入れる。
-- notes（補足）: 1 つの手順に係る注意はその手順の note に入れる。この質問に限らず回答の仕方を決める
-  規則（「この種類の質問はこの画面を案内する」「言い切らず可能性にとどめる」「Aと Bを区別する」
-  「範囲外は窓口へ」など）は rule_candidates に入れる（triggers はその規則を当てる質問の語）。
-
-title は利用者がしたいことを表す短い名前、expected_result は手順のとおり進めたときの結果にします。
-id は手順が s1・s2…、条件が c1・c2… の順の番号にします。
-"""
+GUIDE_DRAFT_PROMPT = (
+    "## 目的と手順\n"
+    "\n"
+    "入力の JSON は、利用者の質問（question）、回答の過程を"
+    "見出しで分けた節（sections）、任意の標準回答\n"
+    "（standard_answer）です。節の field は次の項目"
+    "を表します（null は見出しの無い文）。\n"
+    "\n"
+    "- steps（回答の手順）: steps に順に入れる。前の手順を"
+    "済ませてから行う手順は depends_on に前の手順の\n"
+    "  id を入れる。手順の画面名・機能名は retrieval_hi"
+    "nts に入れる。\n"
+    "- conditions（必要な確認事項）: 確かめる事項を con"
+    "ditions に、「X なら手順 P」を branches に入れ"
+    "る。\n"
+    "  選択肢が決まっていれば type=enum（2 つ以上）、はい "
+    "/ いいえなら boolean、それ以外は text。\n"
+    "  値ごとに案内する操作が違えば、値ごとに別の手順にして goto_"
+    "step を分け、その値の操作を\n"
+    "  operation に入れる（同じ手順に進めるのは、値に関わらず"
+    "同じ操作を案内するときだけ）。\n"
+    "  「窓口へ連絡」のような人へ引き継ぐ場合は handling=ha"
+    "ndoff にし、handoff_contact に窓口の名前、\n"
+    "  handoff_conditions にその場合を入れる。利用者"
+    "に聞けば決まる事項は handling=ask と question"
+    " を\n"
+    "  入れる。\n"
+    "- references（検索する資料と根拠の頁）: 資料の名前は書"
+    "いたまま document_name に、頁は pages、\n"
+    "  表計算のシート・行・セルの範囲は sheet_name・rows"
+    "・cells、章節は section に入れる。どの手順の\n"
+    "  根拠の資料かが書いてあれば、step_ids にその手順の id"
+    " を入れる（全手順に共通の資料なら空）。\n"
+    "- search_terms（検索の語）: match_terms "
+    "と、関係する手順の retrieval_hints に入れる。\n"
+    "- notes（補足）: 1 つの手順に係る注意はその手順の not"
+    "e に入れる。この質問に限らず回答の仕方を決める\n"
+    "  規則（「この種類の質問はこの画面を案内する」「言い切らず可能性に"
+    "とどめる」「Aと Bを区別する」\n"
+    "  「範囲外は窓口へ」など）は rule_candidates に入"
+    "れる（triggers はその規則を当てる質問の語）。\n"
+    "\n"
+    "title は利用者がしたいことを表す短い名前、expected_r"
+    "esult は手順のとおり進めたときの結果にします。\n"
+    "id は手順が s1・s2…、条件が c1・c2… の順の番号にしま"
+    "す。\n"
+)
 
 
 class GuideDraftLlm(Protocol):
