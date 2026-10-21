@@ -420,8 +420,8 @@ for (const scheme of ["light", "dark"] as const) {
     await expectTheme(page, scheme);
 
     const item = page.locator("#post-parse-field-extraction");
-    // 有効にすると文書ごとにモデルの呼び出しが 1 回増えることを明記する。
-    await expect(item).toContainText("文書ごとにモデルの呼び出しが 1 回増えます");
+    // 長い本文は部分ごとにモデルを呼び出すことを明記する。
+    await expect(item).toContainText("長い本文は分けて送り、部分ごとにモデルを呼び出します。");
     await expect(item.getByText("標準の項目", { exact: true })).toBeVisible();
     await expect(item.getByText("4 件", { exact: true })).toBeVisible();
     // 標準の項目は 0 件ではないので、何も抽出しない警告は出さない。
