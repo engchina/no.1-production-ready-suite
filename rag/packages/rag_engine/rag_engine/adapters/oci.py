@@ -404,7 +404,7 @@ def _parse_with_retry[StructuredOutputT: BaseModel](
         except DeadlineExceeded:
             raise
         except Exception as exc:
-            if _is_invalid_structured_output(exc) and invalid_output_retries < INVALID_OUTPUT_RETRIES:
+            if is_invalid_structured_output(exc) and invalid_output_retries < INVALID_OUTPUT_RETRIES:
                 invalid_output_retries += 1  # 通信系の再試行回数は消費しない
                 continue
             if attempt >= retry_count or not _is_retryable_error(exc):
@@ -449,7 +449,7 @@ class InvalidStructuredOutput(RuntimeError):
     """
 
 
-def _is_invalid_structured_output(exc: Exception) -> bool:
+def is_invalid_structured_output(exc: Exception) -> bool:
     """モデルの応答が構造化出力の schema を満たさなかった例外か（pydantic の ValidationError か InvalidStructuredOutput）。"""
     if isinstance(exc, InvalidStructuredOutput):
         return True

@@ -1901,6 +1901,13 @@ def _public_span(span: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in span.items() if key not in _CHECK_ONLY_SPAN_KEYS}
 
 
+def _invalid_structured_output(exc: Exception) -> bool:
+    """LLM の応答が構造化出力の契約を満たさなかった例外か（再試行の後も。#2772）。"""
+    from rag_engine.adapters.oci import is_invalid_structured_output
+
+    return is_invalid_structured_output(exc)
+
+
 def synthesize_grounded_answer(
     question: str,
     context: AnswerContext,
@@ -2053,6 +2060,7 @@ def synthesize_grounded_answer(
                     guide_notices=runtime_knowledge.guide_notices if runtime_knowledge else (),
                     audit_mode=audit_mode,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
+                    invalid_output=_invalid_structured_output,
                 )
                 if number == 0:
                     for purpose in (LLM_PURPOSE_GENERATION, LLM_PURPOSE_AUDIT):

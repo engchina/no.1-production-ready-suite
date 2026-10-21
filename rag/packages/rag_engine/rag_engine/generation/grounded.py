@@ -4238,6 +4238,7 @@ def run_round(
     guide_step_contracts: Sequence[dict[str, Any]] = (),
     guide_notices: Sequence[str] = (),
     audit_mode: str = AUDIT_MODE_DETAILED,
+    invalid_output: Callable[[Exception], bool] | None = None,
 ) -> Round:
     """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -4257,6 +4258,8 @@ def run_round(
     検索しなかった手順（#2706）。``guide_notices`` は業務ガイドの案内の行（窓口・引き継ぐ条件。#2792）。監査は完了条件の
     充足にこの行を引ける。業務ガイドの文（手順の目的・要件・案内）を引いた根拠に無いまま書いた説明には印を付ける。
     ``audit_mode`` は監査の型（#2795）。standard は未使用の根拠を渡さず列挙させない（detailed は列挙させる）。
+    ``invalid_output`` は構造化出力の契約を満たさなかった例外か（再試行の後も）の判定。画像を添付した生成がこれで
+    失敗したら、画像を添付しない生成で 1 回だけ作り直す（#2772。1 組目には公開できる前の組が無く、回答全体が失敗する）。
     """
     audit_settings = settings if audit_settings is None else audit_settings
     detailed = audit_mode == AUDIT_MODE_DETAILED
@@ -4264,13 +4267,23 @@ def run_round(
     contracts = () if audit_mode == AUDIT_MODE_NONE else guide_step_contracts
     audit_system = audit_system_prompt(compact_reasons=compact_audit_reasons, detailed=detailed)
     started, usage_before = monotonic(), usage_snapshot()
+    image_fallback = ""
     if image_paths:
-        draft = parse_images(
-            GENERATE_SYSTEM_PROMPT, prompt, list(image_paths), settings, GroundedDraft, provider_id=image_provider_id or provider_id
-        )
+        try:
+            draft = parse_images(
+                GENERATE_SYSTEM_PROMPT, prompt, list(image_paths), settings, GroundedDraft, provider_id=image_provider_id or provider_id
+            )
+        except Exception as exc:
+            if invalid_output is None or not invalid_output(exc):
+                raise
+            # 画像の説明の文字は根拠のレコードに残るので、文字の根拠の範囲で作り直す（#2772）。
+            image_fallback = type(exc).__name__
+            draft = parse_text(GENERATE_SYSTEM_PROMPT, prompt, settings, GroundedDraft, provider_id=provider_id)
     else:
         draft = parse_text(GENERATE_SYSTEM_PROMPT, prompt, settings, GroundedDraft, provider_id=provider_id)
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
+    if image_fallback:
+        timing["image_fallback"] = image_fallback
     if generation_usage := usage_delta(usage_before):
         timing["generation_usage"] = generation_usage
     checked, dropped = verify(
@@ -4968,6 +4981,7 @@ def round_timing_line(current: Round) -> str:
     parts = [
         f"生成 {timing.get('generation_seconds', 0):.1f} 秒"
         + (f"（{usage_line(timing['generation_usage'])}）" if timing.get("generation_usage") else "")
+        + ("、画像を添付した生成の出力が壊れたため画像なしで作り直し" if timing.get("image_fallback") else "")
     ]
     if "audit_seconds" in timing:
         parts.append(
