@@ -37,7 +37,10 @@ PROMPT_NAME = re.compile(
 # 一覧に載せないプロンプトの定数と、その理由。
 EDITABLE_DEFAULT = "編集できるプロンプトの既定値(画面は編集欄で示す)"
 PROBE_ONLY = "Enterprise AI の契約の確認の CLI だけ"
+UNUSED_SCREEN_JUDGE = "現行の六指標の品質評価から呼ばれない画面専用の補助判定"
 NOT_LISTED = {
+    "app.rag.evaluation_screens:SCREEN_JUDGE_SYSTEM_PROMPT": UNUSED_SCREEN_JUDGE,
+    "app.rag.evaluation_screens:SCREEN_JUDGE_PROMPT": UNUSED_SCREEN_JUDGE,
     "rag_engine.knowledge.prompt_files:DEFAULT_IMAGE_RETRIEVAL_PROMPT": EDITABLE_DEFAULT,
     "rag_engine.knowledge.prompt_files:DEFAULT_VLM_ANSWER_PROMPT": EDITABLE_DEFAULT,
     # 一覧に載せた定数へ組み込み済みの部品。
@@ -187,3 +190,9 @@ def test_all_runtime_instructions_use_markdown_sections() -> None:
         assert isinstance(parts, list)
         for part in parts:
             assert re.search(("^## \\S"), str(part["content"]), re.M), (stage["id"], part["id"])
+
+
+def test_evaluation_catalog_exposes_only_current_evaluation_stages() -> None:
+    stages = {stage.id: stage for stage in PROMPT_STAGES if stage.phase == "evaluation"}
+    assert set(stages) == {"evaluation", "answer_validation"}
+    assert {part for part, _ in stages["evaluation"].parts} == {"scope", "correctness", "system"}

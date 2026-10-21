@@ -180,8 +180,13 @@ for (const viewport of [
       "使われる条件: 常に（回答ごと）"
     );
     await expect(stages.getByRole("region", { name: "評価" }).getByTestId("answer-prompt-stage-evaluation")).toContainText(
-      "使われる条件: 品質評価と、保存した回答を標準回答で評価するときだけ"
+      "使われる条件: 品質評価と保存した回答の評価。正確性・網羅性は標準回答や必須要点などの期待があるとき、忠実性は取得した根拠があるときに測ります"
     );
+
+    await expect(stages.getByTestId("answer-prompt-stage-evaluation")).toContainText("回答の品質評価");
+    await expect(stages.getByTestId("answer-prompt-stage-evaluation_screen_judge")).toHaveCount(0);
+    await stages.getByTestId("answer-prompt-stage-evaluation").locator("summary").click();
+    await stages.getByTestId("answer-prompt-stage-evaluation").screenshot({ path: testInfo.outputPath("evaluation-prompt-conditions.png") });
 
     const conditions = stages.getByRole("region", { name: "質問の解釈" })
       .getByTestId("answer-prompt-stage-support_guide_conditions");
