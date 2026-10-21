@@ -471,7 +471,7 @@ function ParamsCard({
             <TextField
               id="chunking-delimiter"
               maxLength={256}
-              width="sm"
+              width="md"
               label={t("settings.chunking.params.delimiter")}
               value={form.delimiter}
               disabled={saving}
