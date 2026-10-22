@@ -1297,6 +1297,19 @@ export interface SectionRulesSettingsData {
   presets: Partial<Record<SectionRulesMode, SectionRule[]>>;
 }
 
+export interface SectionRulesPreviewData {
+  document_id: string;
+  recipe_id: string;
+  extraction_recipe_id: string | null;
+  mode: SectionRulesMode;
+  effective_mode: SectionRulesMode;
+  recipe_overrides_mode: boolean;
+  extraction_available: boolean;
+  manual_edits_present: boolean;
+  page_count: number | null;
+  sections: DocumentSection[];
+}
+
 export type DocumentRecipeStepStatus =
   | "PENDING"
   | "QUEUED"
@@ -3254,6 +3267,11 @@ export const api = {
       { method: "DELETE" },
     ),
   getProfileGuideSearchDefaults: () => request<{ max_queries: number; deadline_seconds: number }>("/api/settings/profile-guide-search-defaults"),
+
+  previewSectionRules: (documentId: string, body: { recipe_id: string; mode: SectionRulesMode; rules: SectionRule[] }) =>
+    request<SectionRulesPreviewData>(`/api/documents/${encodeURIComponent(documentId)}/sections/preview`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
   getSectionRulesSettings: () => request<SectionRulesSettingsData>("/api/settings/section-rules"),
   saveSectionRulesSettings: (body: { mode: SectionRulesMode; rules: SectionRule[] }) =>
     request<SectionRulesSettingsData>("/api/settings/section-rules", {

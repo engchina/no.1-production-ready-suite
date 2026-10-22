@@ -176,13 +176,13 @@ def test_recipe_mode_overrides_the_global_default(
     assert not rules_file.exists()
 
 
-def test_section_rules_preview_endpoint_is_removed() -> None:
-    """見本の文書でのプレビューは削除した(#2042)。章節の抽出規則の方式の選択と保存は残す。"""
+def test_section_rules_preview_requires_saved_recipe() -> None:
+    """保存済みレシピの明示が必要で、旧来の本文だけの要求は受け付けない。"""
     resp = client.post(
         "/api/documents/doc-1/sections/preview",
         json={"mode": "custom", "rules": []},
     )
-    assert resp.status_code in {404, 405}
+    assert resp.status_code == 422
 
 
 def test_docling_list_markers_survive_into_numbered_sections() -> None:

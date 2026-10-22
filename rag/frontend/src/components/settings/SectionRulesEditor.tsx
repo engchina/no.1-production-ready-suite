@@ -1,5 +1,6 @@
 import {
   Button,
+  Disclosure,
   FormActionBar,
   FormGrid,
   FormSkeleton,
@@ -15,6 +16,8 @@ import {
 } from "@production-ready/ui";
 import { ArrowDown, ArrowUp, Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
 import { useState } from "react";
+
+import { SectionRulesPreview } from "@/components/settings/SectionRulesPreview";
 
 import { SECTION_RULES_OPTIONS } from "@/components/documents/DocumentProcessingConfigPanel.values";
 import { ApiErrorState } from "@/components/StateViews";
@@ -72,6 +75,7 @@ export function SectionRulesEditor() {
   const reset = useResetSectionRulesSettings();
   const confirm = useConfirm();
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
 
@@ -168,6 +172,14 @@ export function SectionRulesEditor() {
   return (
     <div className="space-y-4" data-testid="section-rules-editor">
       <p className="text-xs text-fg-muted">{t("sectionRules.description")}</p>
+      <p className="text-xs text-fg-muted">{t("sectionRules.scopeHint")}</p>
+      <Disclosure summary={t("sectionRules.example.title")}>
+        <div className="space-y-2 text-sm text-fg-muted">
+          <p>{t("sectionRules.example.input")}</p>
+          <pre className="whitespace-pre-wrap text-sm text-fg">{t("sectionRules.example.tree")}</pre>
+          <p>{t("sectionRules.example.output")}</p>
+        </div>
+      </Disclosure>
       {/* 方式と規則の行はフォームの最大幅まで（パターンの欄が 1920px で伸びすぎない。#1891）。 */}
       <FormGrid columns={1}>
         <SelectField
@@ -204,6 +216,7 @@ export function SectionRulesEditor() {
             </Button>
           </div>
         ) : (
+          <Disclosure summary={t("sectionRules.customDetails")} defaultOpen>
           <div className="space-y-2">
             <p className="text-sm text-fg-muted">{t("sectionRules.customHint")}</p>
             {current.rules.length > 0 ? (
@@ -285,8 +298,12 @@ export function SectionRulesEditor() {
               {t("sectionRules.action.add")}
             </Button>
           </div>
+          </Disclosure>
         )}
       </FormGrid>
+      <Disclosure summary={t("sectionRules.preview.title")} open={previewOpen} onOpenChange={setPreviewOpen}>
+        {previewOpen ? <SectionRulesPreview mode={current.mode} rules={current.rules} disabled={Boolean(hasErrors)} /> : null}
+      </Disclosure>
 
       <FormActionBar
         ariaLabel={t("sectionRules.actions.form")}

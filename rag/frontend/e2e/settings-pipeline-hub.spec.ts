@@ -371,7 +371,7 @@ for (const theme of ["light", "dark"] as const) {
       elements.map((element) => element.getAttribute("data-config-field"))
     )).toEqual(["section_rules_mode", "navigation_summary_enabled"]);
     for (const [field, title, value] of [
-      ["section_rules_mode", "章節の抽出規則", "解析エンジンの見出し"],
+      ["section_rules_mode", "章節の抽出規則", "解析済みの見出しを使う"],
       ["navigation_summary_enabled", "章節の要約", "無効"],
     ]) {
       const card = items.locator(`[data-config-field="${field}"]`);

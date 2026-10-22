@@ -542,11 +542,11 @@ test("章節の抽出規則を独自の規則にして保存できる", { tag: "
     "5. 章節の要約",
   ]);
   const editor = page.getByTestId("section-rules-editor");
-  await expect(editor).toContainText("解析エンジンが見出しと判定した行から章節を作ります");
+  await expect(editor).toContainText("保存済みの解析結果にある見出しと階層を使います");
 
   // プリセット（法令）を独自の規則として編集する。
   await editor.getByRole("combobox", { name: "方式" }).click();
-  await page.getByRole("option", { name: "法令（編・章・節・款・目・条）" }).click();
+  await page.getByRole("option", { name: "番号の規則：編・章・節・款・目・条" }).click();
   await expect(editor).toContainText("^第[0-9]+章");
   await editor.getByRole("button", { name: "このプリセットを独自の規則として編集" }).click();
   await expect(editor.getByRole("textbox", { name: "正規表現" })).toHaveValue("^第[0-9]+章");
@@ -1397,4 +1397,62 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
   expect(requests.map((item) => item.method)).toEqual(["PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE"]);
   await page.getByRole("region", { name: "通知", exact: true }).getByRole("button", { name: "閉じる", exact: true }).evaluateAll((buttons) => buttons.forEach((button) => (button as HTMLButtonElement).click()));
   await page.screenshot({ path: test.info().outputPath("feature-prompts.png"), fullPage: true });
+});
+
+// 保存しない章節の比較は、文書と既存レシピを明示して実行する。
+test("章節の候補を保存前に確認し、方式を変えると古い候補を隠す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockParserAdaptersWithPostParse(page, { vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false });
+  await mockExtractionFields(page);
+  const state = await mockSectionRules(page);
+  const bodies: Record<string, unknown>[] = [];
+  await page.route(/\/api\/documents\?/, (route) => route.fulfill({ json: {
+    data: { items: [{ id: "doc-a", file_name: "文書 A.txt" }], total: 1, offset: 0, limit: 25 }, error_messages: [], warning_messages: [],
+  } }));
+  await page.route("**/api/documents/doc-a/recipes", (route) => route.fulfill({ json: {
+    data: [{ recipe_id: "recipe-a", document_id: "doc-a", slot_no: 1, steps: [] }], error_messages: [], warning_messages: [],
+  } }));
+  await page.route("**/api/documents/doc-a/sections/preview", (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    bodies.push(body);
+    if (bodies.length === 4) return route.fulfill({ status: 503, json: { data: null, error_messages: ["候補を読み込めませんでした。"], warning_messages: [] } });
+    return route.fulfill({ json: { data: {
+      document_id: "doc-a", recipe_id: "recipe-a", extraction_recipe_id: "extract-a", mode: body.mode,
+      effective_mode: "parser", recipe_overrides_mode: true, extraction_available: bodies.length !== 3, manual_edits_present: true, page_count: 3,
+      sections: body.mode === "numbered" ? [] : [
+        { id: "section-a", title: "概要", level: 1, page_start: 1, page_end: 3 },
+        { id: "section-b", title: "設定", level: 2, page_start: 2, page_end: 3 },
+      ],
+    }, error_messages: [], warning_messages: [] } });
+  });
+  await page.goto("/settings/parser-adapters#post-parse-section-rules");
+  const editor = page.getByTestId("section-rules-editor");
+  await editor.getByText("文書で章節の候補を確認する", { exact: true }).click();
+  const preview = page.getByTestId("section-rules-preview");
+  const run = preview.getByRole("button", { name: "章節の候補を確認", exact: true });
+  await expect(run).toBeDisabled();
+  await preview.getByRole("button", { name: /^対象文書 / }).click();
+  await page.getByRole("option", { name: "文書 A.txt", exact: true }).click();
+  await run.click();
+  await expect(preview.getByRole("list", { name: "選択中の方式の候補：2 件" })).toBeVisible();
+  await expect(preview).toContainText("人が編集した章節があります");
+  await expect(preview).toContainText("レシピの指定方式");
+  await expect(preview).toContainText("ページ 2〜3");
+  expect(bodies[0]).toMatchObject({ mode: "parser", recipe_id: "recipe-a" });
+  await preview.screenshot({ path: testInfo.outputPath("section-rules-preview.png") });
+  await editor.getByRole("combobox", { name: "方式", exact: true }).click();
+  await page.getByRole("option", { name: "番号の規則：1.・1.1・1.1.1", exact: true }).click();
+  await expect(preview.getByRole("list")).toHaveCount(0);
+  await expect(preview).toContainText("候補をもう一度確認してください");
+  await run.click();
+  await expect(preview).toContainText("この方式では章節の候補はありません");
+  expect(bodies[1]).toMatchObject({ mode: "numbered", recipe_id: "recipe-a" });
+  await run.click();
+  await expect(preview).toContainText("保存済みの抽出結果がありません");
+  await run.click();
+  await expect(preview).toContainText("候補を読み込めませんでした。");
+  await preview.getByRole("button", { name: /再試行|再読み込み/ }).click();
+  await expect(preview).toContainText("この方式では章節の候補はありません");
+  expect(bodies).toHaveLength(5);
+  expect(state.patches).toEqual([]);
+  await expectNoPageOverflow(page);
 });
