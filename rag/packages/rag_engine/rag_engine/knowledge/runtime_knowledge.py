@@ -342,10 +342,11 @@ def runtime_knowledge_status(context: RuntimeKnowledgeContext) -> str:
         parts.append("ルール " + " / ".join(rule.title or rule.rule_id for rule in context.matched_rules))
     if parts:
         return "一致: " + "、".join(parts)
+    # 登録先は検索・回答プロファイルの「プロファイルの知識」のタブ（用語・同義語、回答ルール）。
     if not context.loaded or not context.registered_count:
-        return "未登録：管理 → 用語・ルール管理で登録できます"
+        return "未登録：検索・回答プロファイルの「プロファイルの知識」で用語・同義語と回答ルールを登録できます"
     if not context.active_count:
-        return "有効な登録なし：管理 → 用語・ルール管理で利用状態を確認してください"
+        return "有効な登録なし：検索・回答プロファイルの「プロファイルの知識」で各登録の「回答で使う」を確認してください"
     return "一致なし：登録済みの有効な用語・ルールに一致しませんでした"
 
 
