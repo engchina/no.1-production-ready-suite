@@ -1917,8 +1917,10 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
         effective_settings,
         current_field_definitions(await oracle.list_document_extraction_field_sets(document_id)),
     )
-    graph_counts = await oracle.graph_entity_counts_for_chunk_sets(
-        [str(row["chunk_set_id"]) for row in rows]
+    graph_counts = (
+        await oracle.graph_entity_counts_for_chunk_sets([str(row["chunk_set_id"]) for row in rows])
+        if rows
+        else {}
     )
     chunk_sets: list[DocumentChunkSet] = []
     for row in rows:
