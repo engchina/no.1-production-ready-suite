@@ -1622,3 +1622,84 @@ def test_skill_reads_only_its_own_reference(
     else:
         assert "割り当てられていない" in str(model.calls[1].input)
         assert run.steps[0].status == "failed"
+
+
+@pytest.mark.parametrize("same_actor", [False, True])
+def test_losing_always_allow_keeps_policy(
+    monkeypatch: MonkeyPatch, calls: _Calls, restore_tool_policy: None, same_actor: bool
+) -> None:
+    from security_support import client
+
+    from app.features.agent import control_plane_store, router
+
+    monkeypatch.setattr(router, "_schedule_builtin_run", lambda _run: None)
+    runtime_config_store.patch_tool_policy(ask=[WRITE], allow=[])
+    _script(monkeypatch, [function_call(WRITE, {"query": "合成の操作"}, call_id="race")])
+    run_id = _create_run("合成の操作")
+    anyio.run(builtin_runtime.execute_run, run_id)
+    [approval] = runtime_repository.get_run(run_id).approvals
+    repository = get_runtime_repository()
+    original = repository.decide_approval
+    saves: list[object] = []
+    monkeypatch.setattr(control_plane_store, "save_tool_policy", saves.append)
+
+    def competing(approval_id: str, request: ApprovalDecisionRequest, **kwargs: Any) -> Any:
+        original(
+            approval_id,
+            ApprovalDecisionRequest(
+                approved=True, decided_by=request.decided_by if same_actor else "other-actor"
+            ),
+        )
+        return original(approval_id, request, **kwargs)
+
+    monkeypatch.setattr(repository, "decide_approval", competing)
+    response = client.post(
+        f"/api/approvals/{approval.id}/decision", json={"approved": True, "always_allow": True}
+    )
+    assert response.status_code == 200
+    assert not saves
+    assert WRITE not in runtime_config_store.get_tool_policy().allow
+    assert WRITE in runtime_config_store.get_tool_policy().ask
+    events = [e for e in runtime_repository.get_run(run_id).events if e.type == "approval.decided"]
+    assert len(events) == 1 and not events[0].payload["always_allow"]
+
+
+@pytest.mark.parametrize("mode", ["in_process", "dispatcher"])
+def test_always_allow_failure_is_retryable(
+    monkeypatch: MonkeyPatch, calls: _Calls, restore_tool_policy: None, mode: str
+) -> None:
+    from security_support import client
+
+    from app.features.agent import control_plane_store, router
+    from app.features.agent.control_plane_store import ControlPlaneStoreError
+
+    monkeypatch.setattr(get_settings(), "agent_runtime_dispatch_mode", mode)
+    scheduled: list[str] = []
+    monkeypatch.setattr(router, "_schedule_builtin_run", lambda run: scheduled.append(run.id))
+    runtime_config_store.patch_tool_policy(ask=[WRITE], allow=[])
+    _script(monkeypatch, [function_call(WRITE, {"query": "合成の操作"}, call_id="failure")])
+    run_id = _create_run("合成の操作")
+    anyio.run(builtin_runtime.execute_run, run_id)
+    [approval] = runtime_repository.get_run(run_id).approvals
+    before = runtime_config_store.get_tool_policy()
+
+    def fail(_policy: object) -> None:
+        raise ControlPlaneStoreError("合成の保存失敗")
+
+    monkeypatch.setattr(control_plane_store, "save_tool_policy", fail)
+    url = f"/api/approvals/{approval.id}/decision"
+    assert client.post(url, json={"approved": True, "always_allow": True}).status_code == 503
+    run = runtime_repository.get_run(run_id)
+    assert run.approvals[0].status == "pending"
+    assert run.status == RunStatus.WAITING_APPROVAL
+    assert runtime_config_store.get_tool_policy() == before
+    assert not scheduled
+    assert not any(e.type == "approval.decided" for e in run.events)
+    saves: list[object] = []
+    monkeypatch.setattr(control_plane_store, "save_tool_policy", saves.append)
+    assert client.post(url, json={"approved": True, "always_allow": True}).status_code == 200
+    assert len(saves) == 1
+    assert runtime_repository.get_run(run_id).status == RunStatus.QUEUED
+    assert WRITE in runtime_config_store.get_tool_policy().allow
+    assert client.post(url, json={"approved": True, "always_allow": True}).status_code == 200
+    assert len(saves) == 1

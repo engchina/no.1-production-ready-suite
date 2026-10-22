@@ -1353,7 +1353,13 @@ class AgentRuntimeRepositoryContract(Protocol):
         idle_timeout_seconds: float = 15.0,
     ) -> Iterator[RunEvent | None]: ...
     def cancel_run(self, run_id: str, *, cancelled_by: str | None = None) -> RunState: ...
-    def decide_approval(self, approval_id: str, request: ApprovalDecisionRequest) -> RunState: ...
+    def decide_approval(
+        self,
+        approval_id: str,
+        request: ApprovalDecisionRequest,
+        *,
+        before_decision: Callable[[RunState], None] | None = None,
+    ) -> RunState: ...
     def list_agents(self) -> list[AgentProfile]: ...
     def create_agent(self, agent: AgentProfile) -> AgentProfile: ...
     def patch_agent(self, agent_id: str, patch: AgentProfilePatch) -> AgentProfile: ...
@@ -1903,7 +1909,13 @@ class AgentRuntimeRepository:
         )
         call_abort.abort_run_calls(run.id, call_abort.REASON_RUN_CANCELLED)
 
-    def decide_approval(self, approval_id: str, request: ApprovalDecisionRequest) -> RunState:
+    def decide_approval(
+        self,
+        approval_id: str,
+        request: ApprovalDecisionRequest,
+        *,
+        before_decision: Callable[[RunState], None] | None = None,
+    ) -> RunState:
         with self._lock:
             approval = self._approvals.get(approval_id)
             if approval is None:
@@ -1932,6 +1944,9 @@ class AgentRuntimeRepository:
             if approval.status != ApprovalStatus.PENDING:
                 return run.model_copy(deep=True)
 
+            # 採用する判断だけが外部設定を保存する。失敗したら承認は pending のまま再試行できる。
+            if before_decision is not None:
+                before_decision(run.model_copy(deep=True))
             approval.status = (
                 ApprovalStatus.APPROVED if request.approved else ApprovalStatus.REJECTED
             )
