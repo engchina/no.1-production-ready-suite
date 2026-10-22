@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { answerProcessStepsFromStages, answerStepMeta, type AnswerStageRecord } from "./answer-process";
+import { answerProcessStepsFromStages, answerStepMeta, llmCallsLabel, type AnswerStageRecord } from "./answer-process";
 import { CHAT_PROGRESS_DEFINITIONS } from "./chat-progress";
 
 // 回答の処理の経過（#2096）: チャットと RAG 検索で同じ行（1 工程 = 1 行・字下げ・計測値）を作る。
@@ -173,5 +173,14 @@ describe("チャットの工程の段階（answer_step）", () => {
       { id: "s2", label: "根拠の検索と回答の作成", status: "done" },
       { id: "s3", label: "文書の検索", status: "done", meta: "該当なし · LLM 2 回", level: 1 },
     ]);
+  });
+});
+
+describe("LLM の回数と送信の回数（#2966）", () => {
+  it("送り直しで API への送信が多いときだけ、送信の回数も示す", () => {
+    expect(answerStepMeta({ llmCalls: 1, llmSends: 2 })).toBe("LLM 1 回（送信 2 回）");
+    expect(answerStepMeta({ llmCalls: 2, llmSends: 2 })).toBe("LLM 2 回");
+    expect(answerStepMeta({ llmCalls: 1 })).toBe("LLM 1 回");
+    expect(llmCallsLabel("history.process", 1, 3)).toBe("LLM 1 回（送信 3 回）");
   });
 });

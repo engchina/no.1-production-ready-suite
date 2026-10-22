@@ -15,6 +15,7 @@
 import type { ChatProgressStep, ChatProgressStepStatus } from "@production-ready/ui";
 
 import { parseRunStepDetails, type AnswerDiagnostics } from "./answer-diagnostics";
+import { formatNumber } from "./format";
 import { t, type I18nKey } from "./i18n";
 
 /**
@@ -83,13 +84,35 @@ export function answerStepDisplayName(name: string): string {
   return t("answer.step.attempt", { name: t(ANSWER_STEP_NAME[base]), count: Number(attempt[1]) });
 }
 
-/** 右の列の計測値（結果の説明・LLM の回数）。無ければ undefined。 */
-export function answerStepMeta({ llmCalls, note }: { llmCalls?: number | null; note?: string | null }): string | undefined {
+/**
+ * 右の列の計測値（結果の説明・LLM の回数）。無ければ undefined。送り直しで API への送信（`llmSends`）が呼び出しより
+ * 多いときは送信の回数も示す（#2966。「LLM 1 回」の中で 2 回送ったことを分ける）。
+ */
+export function answerStepMeta({
+  llmCalls,
+  llmSends,
+  note,
+}: {
+  llmCalls?: number | null;
+  llmSends?: number | null;
+  note?: string | null;
+}): string | undefined {
   const parts = [
     note && !PLAIN_STEP_STATUSES.has(note.trim()) ? note.trim() : null,
-    llmCalls && llmCalls > 0 ? t("search.answerDetails.llmCalls", { count: llmCalls }) : null,
+    llmCalls && llmCalls > 0 ? llmCallsLabel("search.answerDetails", llmCalls, llmSends) : null,
   ].filter((part): part is string => Boolean(part));
   return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+/** LLM の回数の文言（送信が呼び出しより多いときは送信の回数も）。`prefix` は i18n の key の接頭辞。 */
+export function llmCallsLabel(
+  prefix: "search.answerDetails" | "history.process",
+  calls: number,
+  sends?: number | null,
+): string {
+  return sends && sends > calls
+    ? t(`${prefix}.llmCallsWithSends`, { count: formatNumber(calls), sends: formatNumber(sends) })
+    : t(`${prefix}.llmCalls`, { count: formatNumber(calls) });
 }
 
 /** 工程のイベントの種類（行にしない工程は null）。 */
@@ -180,8 +203,13 @@ export function answerProcessStepsFromStages(
     if (stageDetails) row.details = stageDetails;
     if (row.stepName !== undefined && event.attributes) {
       const calls = event.attributes.llm_calls;
+      const sends = event.attributes.llm_sends;
       const note = typeof event.attributes.status === "string" ? event.attributes.status : null;
-      const meta = answerStepMeta({ llmCalls: typeof calls === "number" ? calls : null, note });
+      const meta = answerStepMeta({
+        llmCalls: typeof calls === "number" ? calls : null,
+        llmSends: typeof sends === "number" ? sends : null,
+        note,
+      });
       if (meta) row.meta = meta;
       if (note && FAILED_STEP_STATUSES.has(note.trim())) row.status = "failed";
     }
@@ -205,7 +233,7 @@ export function answerProcessStepsFromStages(
     if (match < 0) continue;
     cursor = match + 1;
     const record = executionSteps[match];
-    const meta = answerStepMeta({ llmCalls: record.llmCalls, note: record.status });
+    const meta = answerStepMeta({ llmCalls: record.llmCalls, llmSends: record.llmSends, note: record.status });
     if (meta) row.meta = meta;
     if (FAILED_STEP_STATUSES.has(record.status.trim())) row.status = "failed";
     // 工程の詳細（見出しと値・行。段を開いて見る。#2294 / #2341）。

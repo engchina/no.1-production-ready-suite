@@ -106,6 +106,8 @@ export type AnswerDiagnostics = {
     status: string;
     elapsedSeconds: number | null;
     llmCalls: number;
+    /** API への実際の送信の回数（送り直しで呼び出しより多いときだけ。#2966）。 */
+    llmSends?: number;
     /** この工程だけの詳細（見出しと値・行。選んだ条・検索文・件数など。#2294 / #2341）。 */
     details?: RunStepDetails;
   }[];
@@ -209,6 +211,7 @@ export function parseAnswerDiagnostics(
         status: String(item.status ?? ""),
         elapsedSeconds: num(item.elapsed_seconds),
         llmCalls: num(item.llm_calls) ?? 0,
+        ...(num(item.llm_sends) ? { llmSends: num(item.llm_sends) ?? undefined } : {}),
         // 工程の詳細（段を開いて見る。#2294 / #2341）。古い記録には無い。
         ...(details ? { details } : {}),
       };

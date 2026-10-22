@@ -49,6 +49,7 @@ from rag_engine.resources.deadline import (
 from rag_engine.resources.llm_usage import (
     record_llm_effort_retry,
     record_llm_output_retry,
+    record_llm_runaway_resend,
     record_llm_stall_resend,
     record_llm_usage,
     response_usage,
@@ -712,7 +713,9 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     停滞した呼び出し（`_stream_parsed`）を打ち切って同じ要求を送り直す（`llm_stall_resends` 回まで。最後の送信は
     検出せずに期限まで待つ）。打ち切った呼び出しは理由（`stall_idle` / `stall_slow`）を未完了の理由として残す。
     stream が失敗の event で終わった呼び出し（`LlmStreamFailed`。理由は `stream_error`）も、同じ要求を
-    ``STREAM_FAILED_RESENDS`` 回まで送り直す（#2814）。
+    ``STREAM_FAILED_RESENDS`` 回まで送り直す（#2814）。streaming の呼び出しで暴走の検出（`settings.llm_runaway_detection`）
+    が ON なら、出力が同じ並びの繰り返し・空白だけで続いた呼び出しを打ち切り（`LlmRunawayOutput`）、推論の量を 1 段
+    下げて（下げられなければそのまま）``RUNAWAY_RESENDS`` 回まで送り直す（#2966。出力の上限まで待たない）。
     """
     budget = llm_output_token_limit(settings, provider)
     # 役目に合わせた上限（`bind_output_cap`）があれば、それで抑えて広げない。
@@ -728,6 +731,8 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     attempt = 0
     stall_resends = 0
     failed_resends = 0
+    runaway_resends = 0
+    runaway = streamed and bool(getattr(settings, "llm_runaway_detection", False))
     while True:
         check_deadline()
         reasoning: dict[str, Any] = {"reasoning": {"effort": effort}} if effort else {}
@@ -746,7 +751,9 @@ def _openai_parsed[StructuredOutputT: BaseModel](
         started = time.monotonic()
         try:
             if streamed:
-                response, timing = _stream_parsed(_openai_client_for_provider(provider, settings), request, settings, limits)
+                response, timing = _stream_parsed(
+                    _openai_client_for_provider(provider, settings), request, settings, limits, runaway=runaway
+                )
             else:
                 response = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings).responses.parse(
                     **request
@@ -762,6 +769,18 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 deadline_capped=time_capped,
                 timing=getattr(exc, "timing", None),
             )
+            if isinstance(exc, LlmRunawayOutput):
+                if runaway_resends >= RUNAWAY_RESENDS:
+                    raise
+                # 出力が暴走した（#2966）。推論の量を下げられれば 1 段下げ、送り直しの回数を工程の記録に残して送り直す
+                # （出力の上限で未完了の送り直しと同じく、推論の量の下げは 1 回だけ）。
+                runaway_resends += 1
+                lower = "" if lowered else lower_reasoning_effort(effort)
+                if lower:
+                    effort, lowered = lower, True
+                record_llm_runaway_resend()
+                attempt += 1
+                continue
             if isinstance(exc, LlmStreamFailed) and failed_resends < STREAM_FAILED_RESENDS:
                 # 失敗の event で終わった（#2814。provider の一時的な失敗）。同じ要求を送り直す。期限は次の送信の前に確かめる。
                 failed_resends += 1
@@ -879,6 +898,60 @@ class LlmStreamStalled(TimeoutError):
 # 失敗の event で終わった streaming の呼び出しを、同じ要求で送り直す回数（#2814）。
 STREAM_FAILED_RESENDS = 1
 
+# 出力の暴走（#2966）。出力は速く続くが、同じ短い並びの繰り返し・空白が続くだけで、出力の上限まで書き続ける
+# 生成（degenerate な出力）がある（記録: 32,768 token を 200 秒書き続けて未完了、推論を下げた送り直しは 2 秒で完了）。
+# 停滞の検出（event の間隔・速さ）では見分けられないので、streaming の出力の文の末尾で見分けて早く打ち切る。
+# 正当な長い出力（表・一覧）は行ごとに値が変わるので、末尾の RUNAWAY_WINDOW_CHARS 文字が周期
+# RUNAWAY_MAX_PERIOD_CHARS 文字以下の完全な繰り返しになることはほぼ無い（周期の繰り返しは 8 回以上）。
+RUNAWAY_WINDOW_CHARS = 2400
+RUNAWAY_MAX_PERIOD_CHARS = 300
+RUNAWAY_WHITESPACE_CHARS = 2000
+# 末尾を確かめる間隔（出力の文字数）。
+RUNAWAY_CHECK_EVERY_CHARS = 256
+# 暴走で打ち切って送り直す回数（推論の量を下げられれば下げる）。
+RUNAWAY_RESENDS = 1
+
+
+class LlmRunawayOutput(RuntimeError):
+    """streaming の出力が暴走した（#2966）。``reason`` は `runaway_repetition`（繰り返し）か `runaway_whitespace`（空白）。"""
+
+    def __init__(self, message: str, reason: str, timing: _StreamTiming) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.timing = timing
+
+
+class _RunawayMonitor:
+    """streaming の出力の文の末尾から、出力の暴走（同じ並びの繰り返し・空白の連続）を見分ける（#2966）。"""
+
+    def __init__(self) -> None:
+        self.tail = ""
+        self.whitespace_run = 0
+        self.unchecked = 0
+
+    def feed(self, text: str) -> str | None:
+        """出力の続き ``text`` を足し、暴走なら理由（`runaway_repetition` / `runaway_whitespace`）を返す。"""
+        if not text:
+            return None
+        stripped = text.rstrip()
+        self.whitespace_run = self.whitespace_run + len(text) if not stripped else len(text) - len(stripped)
+        if self.whitespace_run >= RUNAWAY_WHITESPACE_CHARS:
+            return "runaway_whitespace"
+        self.tail = (self.tail + text)[-(RUNAWAY_WINDOW_CHARS + RUNAWAY_MAX_PERIOD_CHARS) :]
+        self.unchecked += len(text)
+        if self.unchecked < RUNAWAY_CHECK_EVERY_CHARS or len(self.tail) < RUNAWAY_WINDOW_CHARS + RUNAWAY_MAX_PERIOD_CHARS:
+            return None
+        self.unchecked = 0
+        return "runaway_repetition" if repeating_tail(self.tail) else None
+
+
+def repeating_tail(text: str) -> bool:
+    """末尾の ``RUNAWAY_WINDOW_CHARS`` 文字が、周期 ``RUNAWAY_MAX_PERIOD_CHARS`` 文字以下の完全な繰り返しか。"""
+    if len(text) < RUNAWAY_WINDOW_CHARS + RUNAWAY_MAX_PERIOD_CHARS:
+        return False
+    window = text[-RUNAWAY_WINDOW_CHARS:]
+    return any(window == text[-RUNAWAY_WINDOW_CHARS - period : -period] for period in range(1, RUNAWAY_MAX_PERIOD_CHARS + 1))
+
 
 class LlmStreamFailed(ConnectionError):
     """streaming の応答が失敗の event で終わった・完了の event なしに切れた（通信の失敗として再試行の対象）。"""
@@ -921,13 +994,17 @@ def _note_stream_timing(provider: LlmProviderSettings, timing: _StreamTiming) ->
         _stream_baselines.setdefault(_rate_key(provider), deque(maxlen=STALL_BASELINE_WINDOW)).append((rate, timing.max_gap_seconds))
 
 
-def _stream_parsed(client: Any, request: dict[str, Any], settings: Settings, limits: _StallLimits | None) -> tuple[Any, _StreamTiming]:
+def _stream_parsed(
+    client: Any, request: dict[str, Any], settings: Settings, limits: _StallLimits | None, *, runaway: bool = False
+) -> tuple[Any, _StreamTiming]:
     """Responses API を streaming で呼び、完了（または未完了）の応答と時刻を返す（#1926）。
 
     1 回の待ちの上限（httpx の read timeout。event の間隔）は、停滞の検出をする送信では ``limits.idle_seconds``、
     しない送信（最後の送り直し）では全体の上限。全体の上限（LLM 1 回の timeout と回答の期限の残りの短いほう）と
     取り消しは event ごとに確かめる。停滞を検出したら stream を閉じて（接続を切って）`LlmStreamStalled` を送出する。
     出力の速さ（直近 `STALL_RATE_WINDOW_SECONDS` 秒の delta の数）は、最初の delta から同じ秒が経ってから確かめる。
+    ``runaway`` なら出力の文の末尾で暴走（`_RunawayMonitor`）を確かめ、暴走なら stream を閉じて `LlmRunawayOutput` を
+    送出する（#2966）。
     """
     import httpx
 
@@ -940,6 +1017,7 @@ def _stream_parsed(client: Any, request: dict[str, Any], settings: Settings, lim
     read_timeout = min(limits.idle_seconds, total) if limits is not None else total
     idle_bound = limits is not None and limits.idle_seconds < total
     timing = _StreamTiming()
+    monitor = _RunawayMonitor() if runaway else None
     window: deque[float] = deque()
     final: Any = None
     last = started
@@ -959,6 +1037,15 @@ def _stream_parsed(client: Any, request: dict[str, Any], settings: Settings, lim
                     if timing.first_delta_seconds is None:
                         timing.first_delta_seconds = elapsed
                     window.append(now)
+                    if monitor is not None and kind == "response.output_text.delta":
+                        reason = monitor.feed(str(_value(event, "delta") or ""))
+                        if reason is not None:
+                            raise LlmRunawayOutput(
+                                f"LLM の出力が{'同じ並びの繰り返し' if reason == 'runaway_repetition' else '空白'}だけで"
+                                "続いたため、打ち切りました。",
+                                reason,
+                                timing,
+                            )
                 elif kind in {"response.completed", "response.incomplete"}:
                     final = _value(event, "response")
                 elif kind in {"response.failed", "error"}:
@@ -978,7 +1065,7 @@ def _stream_parsed(client: Any, request: dict[str, Any], settings: Settings, lim
                         "stall_slow",
                         timing,
                     )
-    except (LlmStreamStalled, LlmStreamFailed, DeadlineExceeded):
+    except (LlmStreamStalled, LlmStreamFailed, LlmRunawayOutput, DeadlineExceeded):
         raise
     except Exception as exc:
         if idle_bound and _is_read_timeout(exc):
@@ -1072,7 +1159,8 @@ def _record_failed_call(
 
     打ち切った呼び出しは usage が返らないので token の数は 0 で、理由（例外の型。timeout は ``APITimeoutError``）を
     未完了の理由として数える。期限で打ち切った呼び出しが何秒かかっていたかを、工程の記録と log で確かめる。
-    停滞で打ち切った呼び出し（#1926）の理由は `stall_idle`（event が来ない）/ `stall_slow`（出力が遅い）。
+    停滞で打ち切った呼び出し（#1926）の理由は `stall_idle`（event が来ない）/ `stall_slow`（出力が遅い）、暴走で打ち切った
+    呼び出し（#2966）は `runaway_repetition` / `runaway_whitespace`。
     """
     usage = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
     _log_call(
@@ -1082,7 +1170,7 @@ def _record_failed_call(
         text_format,
         status="failed",
         reason=exc.reason
-        if isinstance(exc, LlmStreamStalled)
+        if isinstance(exc, LlmStreamStalled | LlmRunawayOutput)
         else ("stream_error" if isinstance(exc, LlmStreamFailed) else type(exc).__name__),
         attempt=attempt,
         max_output_tokens=max_output_tokens,

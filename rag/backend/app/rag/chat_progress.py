@@ -70,11 +70,15 @@ _PLAIN_STEP_STATUSES: frozenset[str] = frozenset({"", "complete", "エラーで�
 def _with_step_values(
     params: dict[str, str | int | float | bool], record: Mapping[str, object]
 ) -> dict[str, str | int | float | bool]:
-    """回答フローの工程の記録の LLM の回数（``llm_calls``）と結果の説明（``note``）を
-    段の値に足す。"""
+    """回答フローの工程の記録の LLM の回数（``llm_calls``。送り直しで API への送信が多ければ
+    ``llm_sends``）と結果の説明（``note``）を段の値に足す。"""
     llm_calls = record.get("llm_calls")
     if isinstance(llm_calls, int) and not isinstance(llm_calls, bool) and llm_calls > 0:
         params["llm_calls"] = llm_calls
+        # API への実際の送信の回数（送り直しで多いときだけ。#2966）。
+        llm_sends = record.get("llm_sends")
+        if isinstance(llm_sends, int) and not isinstance(llm_sends, bool) and llm_sends > llm_calls:
+            params["llm_sends"] = llm_sends
     note = str(record.get("status") or "").strip()
     if note not in _PLAIN_STEP_STATUSES:
         params["note"] = note

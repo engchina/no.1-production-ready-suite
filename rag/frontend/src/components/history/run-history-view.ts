@@ -19,7 +19,7 @@ import {
 } from "@production-ready/ui";
 
 import { outcomeBadge, parseRunStepDetails, type AnswerOutcome } from "@/lib/answer-diagnostics";
-import { answerStepDisplayName } from "@/lib/answer-process";
+import { answerStepDisplayName, llmCallsLabel } from "@/lib/answer-process";
 import { ANSWER_STEP_STAGE_PREFIX, answerStageLabel } from "@/lib/answer-progress";
 import type {
   RunDetail,
@@ -29,7 +29,6 @@ import type {
   RunSurface,
   RunVerification,
 } from "@/lib/api";
-import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 
 export interface BadgeView {
@@ -187,9 +186,10 @@ export function runTimelineStepLabels(): Partial<Record<RunTimelineStepStatus, s
 /** 処理の経過の行（段と、回答フローの中の工程）。 */
 export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "created_at" | "elapsed_ms">): RunTimelineStep[] {
   const llmCalls = new Map(run.steps.map((step) => [step.name, step.llm_calls ?? 0]));
+  const llmSends = new Map(run.steps.map((step) => [step.name, step.llm_sends ?? 0]));
   const detailFor = (name: string) => {
     const calls = llmCalls.get(name) ?? 0;
-    return calls > 0 ? t("history.process.llmCalls", { count: formatNumber(calls) }) : undefined;
+    return calls > 0 ? llmCallsLabel("history.process", calls, llmSends.get(name)) : undefined;
   };
   // 工程の詳細（見出しと値・行。段を開いて見る。#2294 / #2341）。同じ名前の工程は記録の順に対応させる。
   // 旧い記録の行の配列は行として読む。

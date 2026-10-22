@@ -398,6 +398,9 @@ class Settings:
     llm_stall_min_rate_ratio: float = 0.25
     # 停滞で打ち切って送り直す回数の上限（1 回の呼び出しあたり。最後の送信は検出せずに待つ）。
     llm_stall_resends: int = 1
+    # streaming で受ける呼び出しで、出力が同じ並びの繰り返し・空白だけで続いたら打ち切って送り直す(#2966。既定 off。
+    # backend が RAG_LLM_RUNAWAY_DETECTION_ENABLED で ON にする)。
+    llm_runaway_detection: bool = False
     # 章節の拡張で、列挙の問の読む範囲(minimum_scope)まで読んだら CRAG の評価し直しを省いて生成へ進む(#1528)。
     section_skip_regrade_at_scope: bool = False
     # 質問拡張で LLM が作る検索文の本数の上限(#1499。既定は従来の値 MAX_GENERATED_QUERY_COUNT と同じ 5)。
@@ -621,6 +624,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 20.0)),
         llm_stall_min_rate_ratio=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_MIN_RATE_RATIO", 0.25))),
         llm_stall_resends=max(0, min(2, _env_int(env, "RAG_ENGINE_LLM_STALL_RESENDS", 1))),
+        llm_runaway_detection=_env_bool(env, "RAG_ENGINE_LLM_RUNAWAY_DETECTION", False),
         section_skip_regrade_at_scope=_env_bool(env, "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE", False),
         crag_skip_on_strong_signals=_env_bool(env, "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS", False),
         crag_skip_min_rerank_score=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE", 0.8))),

@@ -54,7 +54,7 @@ def _hybrid_metadata(channels: list[str], heading: str) -> dict:
 class StandardFlowStepDetailsTest(unittest.TestCase):
     """通常の回答フロー: 検索の実装と並べ替え・回答の生成だけを差し替えて、工程ごとの詳細を確かめる。"""
 
-    def run_flow(self):
+    def run_flow(self, settings=None):
         search_result = _hybrid_result(
             _stored_child(
                 "chunk-docling-c000001", 1, "合成の手順 A の本文", metadata=_hybrid_metadata(["text", "vector"], "1.1 申請の手順")
@@ -75,7 +75,7 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
                 "合成の申請の期限は？",
                 "abcdef",
                 ["docling"],
-                _rerank_ready_settings(),
+                settings or _rerank_ready_settings(),
                 query_strategy=SIMPLE_RETRIEVAL_LABEL,
                 rerank_enabled=True,
                 answer_flow=STANDARD_ANSWER_FLOW_LABEL,
@@ -143,6 +143,20 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         self.assertIn("監査した説明", answer)
         self.assertIn("要求の充足（監査）", answer)
         self.assertNotIn("採否", answer)  # 1 組目は比べる相手が無い
+
+    def test_answer_round_without_audit_does_not_describe_an_audit(self):
+        """監査の型が none なら、目的・推論の量・要求の充足に、行っていない監査を書かない（#2966）。"""
+        from dataclasses import replace
+
+        steps = _by_name(self.run_flow(replace(_rerank_ready_settings(), answer_audit_mode="none")))
+        step = steps["回答文の生成と根拠確認（1回目）"]
+        answer = _fields(step)
+        self.assertIn("生成の後の LLM の監査はしません", answer["目的"])
+        self.assertNotIn("別のLLM呼出で適用性を監査", answer["目的"])
+        self.assertNotIn("監査した説明", answer)
+        self.assertNotIn("要求の充足（監査）", answer)
+        self.assertIn("要求の充足（原文との照合）", answer)
+        self.assertFalse(any(line.startswith("監査の推論の量") for line in _lines(step)))
 
 
 class CragFlowStepDetailsTest(unittest.TestCase):

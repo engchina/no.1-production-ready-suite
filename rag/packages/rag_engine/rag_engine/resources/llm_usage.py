@@ -22,7 +22,8 @@ USAGE_KEYS = ("calls", "input_tokens", "cached_tokens", "output_tokens", "reason
 # 0 なら記録に出さない（多くの工程では起きない）。理由（`incomplete_details.reason`）ごとの数は ``incomplete_reasons``。
 # 停滞（#1926）で打ち切って送り直した数（``stall_resends``）も同じく 0 なら出さない。
 # 出力の上限を広げても未完了のため推論の量を下げて送り直した数（``effort_retries``。#2023）も同じ。
-RETRY_KEYS = ("incomplete_responses", "output_retries", "effort_retries", "stall_resends")
+# 出力の暴走（同じ並びの繰り返し・空白）で打ち切って送り直した数（``runaway_resends``。#2966）も同じ。
+RETRY_KEYS = ("incomplete_responses", "output_retries", "effort_retries", "stall_resends", "runaway_resends")
 INCOMPLETE_REASONS_KEY = "incomplete_reasons"
 # streaming で受けた呼び出しの時刻（#1926）。最初の event までの秒（待ち）と出力の速さ（delta の event/秒。停滞）を
 # 呼び出しごとに残し、工程の記録には最大の待ち（``first_event_seconds_max``）と最も遅い速さ（``delta_rate_min``）を出す。
@@ -138,6 +139,13 @@ def record_llm_stall_resend() -> None:
         usage.add({"stall_resends": 1})
 
 
+def record_llm_runaway_resend() -> None:
+    """出力が暴走した呼び出しを打ち切って送り直したことを数える（#2966）。"""
+    usage = llm_usage.get()
+    if usage is not None:
+        usage.add({"runaway_resends": 1})
+
+
 def usage_snapshot() -> dict[str, Any]:
     """この文脈の累積（無ければ空）。"""
     usage = llm_usage.get()
@@ -195,4 +203,6 @@ def usage_line(delta: Mapping[str, Any]) -> str:
         text += f"・推論の量を下げた送り直し {int(delta['effort_retries'])} 回"
     if delta.get("stall_resends"):
         text += f"・停滞による送り直し {int(delta['stall_resends'])} 回"
+    if delta.get("runaway_resends"):
+        text += f"・出力の繰り返しを打ち切った送り直し {int(delta['runaway_resends'])} 回"
     return text

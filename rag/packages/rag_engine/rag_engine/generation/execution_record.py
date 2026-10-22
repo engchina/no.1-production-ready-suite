@@ -260,12 +260,17 @@ def _execution_step(name: str, purpose: str = ""):
         _step_depth.reset(depth_token)
         elapsed = monotonic() - start
         llm_calls = llm_call_count.get() - llm_before
+        usage = usage_delta(usage_before)
+        # LLM の API への実際の送信の回数（未完了・停滞・暴走の送り直しを含む）。``llm_calls`` は呼び出しの回数で、
+        # 送り直しを数えないので、送信が多いときだけ両方を示す（#2966）。
+        llm_sends = int(usage.get("calls", 0) or 0)
+        sends = {"llm_sends": llm_sends} if llm_sends > llm_calls else {}
         # 終わった工程の詳細・LLM の回数・結果の説明を、終わったときの通知で渡す（回答の完了を待たない。#2373）。
         _notify_step(
             name,
             "error" if failed else "success",
             elapsed,
-            {"details": step.structured_details(), "llm_calls": llm_calls, "status": step.status or "complete"},
+            {"details": step.structured_details(), "llm_calls": llm_calls, **sends, "status": step.status or "complete"},
         )
         if steps is not None:
             steps[index] = {
@@ -274,10 +279,11 @@ def _execution_step(name: str, purpose: str = ""):
                 "status": step.status or "complete",
                 "elapsed_seconds": elapsed,
                 "llm_calls": llm_calls,
+                **sends,
                 **_step_metrics_delta(metrics_before),
             }
             # LLM の token の数（入力・出力・推論）と呼び出しの秒の和。遅い工程の理由を確かめる（#1516）。
-            if usage := usage_delta(usage_before):
+            if usage:
                 steps[index]["llm_usage"] = usage
             # この工程だけの詳細（処理の経過の段を開いて見る。#2294）。段は省いた工程も出るので、省いた工程も残す（#2341）。
             if details := step.structured_details():
