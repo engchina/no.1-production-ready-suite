@@ -3528,7 +3528,7 @@ async def rule_clarification_step(
     # 利用者の範囲外のプロファイルは、検索と同じく無いもの（None）になる。
     oracle = OracleClient()
     view = await oracle.get_search_answer_profile(profile_id)
-    if view is None or view.config.clarification_policy == "assume":
+    if view is None:
         # プロファイルが無いときの 404 は検索が返す。
         return request, None
     search_route.ensure_search_answer_profile_not_archived(view, profile_id)
@@ -3555,6 +3555,8 @@ async def rule_clarification_step(
                 update={"filters": {**request.filters, PAGE_RANGES_FILTER_KEY: page_ranges}}
             )
         return request, scope
+    if view.config.clarification_policy == "assume":
+        return request, None
     found = await asyncio.to_thread(suggest_clarification, payload, arguments.query)
     if found is None:
         return request, None

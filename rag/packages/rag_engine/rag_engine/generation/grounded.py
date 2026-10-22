@@ -4549,6 +4549,15 @@ def _audit_function_context(span: dict) -> str:
     return "\n".join(span.get("function_texts", ()))[:AUDIT_FUNCTION_CONTEXT_CHARS]
 
 
+ASSUMPTION_SYSTEM_PROMPT = (
+    "\n## 回答の前提\n"
+    "- 未回答の確認事項は未確定の条件として明記し、回答に必要な仮定を置く場合は前提として示す。\n"
+    "- 未回答の選択肢を利用者の事実として選ばず、根拠のある条件別の回答を示す。\n"
+    "- 確認の質問だけで回答を終えず、根拠から答えられる範囲と条件で変わる範囲を分ける。\n"
+    "- 未確定であることの説明は資料の事実と区別し、条件がすべて確定していれば未確定事項を作らない。\n"
+)
+
+
 def run_round(
     question: str,
     spans: Sequence[dict],
@@ -4574,6 +4583,7 @@ def run_round(
     audit_mode: str = AUDIT_MODE_DETAILED,
     invalid_output: Callable[[Exception], bool] | None = None,
     glossary: Sequence[Mapping[str, Any]] = (),
+    assume_unconfirmed: bool = False,
 ) -> Round:
     """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -4605,19 +4615,20 @@ def run_round(
     audit_system = audit_system_prompt(compact_reasons=compact_audit_reasons, detailed=detailed)
     started, usage_before = monotonic(), usage_snapshot()
     image_fallback = ""
+    generation_system = GENERATE_SYSTEM_PROMPT + (ASSUMPTION_SYSTEM_PROMPT if assume_unconfirmed else "")
     if image_paths:
         try:
             draft = parse_images(
-                GENERATE_SYSTEM_PROMPT, prompt, list(image_paths), settings, GroundedDraft, provider_id=image_provider_id or provider_id
+                generation_system, prompt, list(image_paths), settings, GroundedDraft, provider_id=image_provider_id or provider_id
             )
         except Exception as exc:
             if invalid_output is None or not invalid_output(exc):
                 raise
             # 画像の説明の文字は根拠のレコードに残るので、文字の根拠の範囲で作り直す（#2772）。
             image_fallback = type(exc).__name__
-            draft = parse_text(GENERATE_SYSTEM_PROMPT, prompt, settings, GroundedDraft, provider_id=provider_id)
+            draft = parse_text(generation_system, prompt, settings, GroundedDraft, provider_id=provider_id)
     else:
-        draft = parse_text(GENERATE_SYSTEM_PROMPT, prompt, settings, GroundedDraft, provider_id=provider_id)
+        draft = parse_text(generation_system, prompt, settings, GroundedDraft, provider_id=provider_id)
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
     if image_fallback:
         timing["image_fallback"] = image_fallback

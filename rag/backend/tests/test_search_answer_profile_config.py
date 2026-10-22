@@ -219,6 +219,11 @@ def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_sav
             "rag_screen_linking_enabled": False,
             "rag_request_coverage_retrieval_enabled": True,
             "rag_guide_step_retrieval_enabled": True,
+            "rag_entity_expansion_enabled": True,
+            "rag_entity_expansion_max_chunks": 6,
+            "rag_section_expansion_enabled": True,
+            "rag_section_expansion_max_levels": 4,
+            "rag_section_expansion_input_token_percent": 50,
             "rag_guide_step_max_queries": 4,
             "rag_guide_step_deadline_seconds": 60.0,
         }
@@ -233,11 +238,22 @@ def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_sav
         "screen_linking_enabled": True,
         "request_coverage_retrieval_enabled": False,
         "guide_step_retrieval_enabled": False,
+        "entity_expansion_enabled": False,
+        "entity_expansion_max_chunks": 3,
+        "section_expansion_enabled": False,
+        "section_expansion_max_levels": 2,
+        "section_expansion_input_token_percent": 40,
     }
     config = parse_search_answer_profile_config(
         {
             "knowledge_base_ids": ["kb-1"],
-            "query": {**old, "max_anchors_per_document": 2, "support_guide_enabled": True},
+            "query": {
+                **old,
+                "max_anchors_per_document": 2,
+                "support_guide_enabled": True,
+                "guide_step_max_queries": 7,
+                "guide_step_deadline_seconds": 37.5,
+            },
         }
     )
     merged, applied = resolve_search_answer_profile_settings(settings, config)
@@ -245,6 +261,8 @@ def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_sav
     for key in old:
         assert getattr(merged, f"rag_{key}") == getattr(settings, f"rag_{key}")
     assert merged.rag_max_anchors_per_document == 2
+    assert merged.rag_guide_step_max_queries == 7
+    assert merged.rag_guide_step_deadline_seconds == 37.5
     saved = dump_search_answer_profile_config(config)
     assert saved["knowledge_base_ids"] == ["kb-1"]
     query = saved["query"]
@@ -252,6 +270,8 @@ def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_sav
     assert not set(old) & set(query)
     assert query["support_guide_enabled"] is True
     assert query["max_anchors_per_document"] == 2
+    assert query["guide_step_max_queries"] == 7
+    assert query["guide_step_deadline_seconds"] == 37.5
 
 
 def test_profile_can_read_actual_guide_search_defaults_without_global_edit_permission(
