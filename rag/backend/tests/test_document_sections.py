@@ -201,3 +201,41 @@ def test_sections_from_navigation_keeps_levels_continuous() -> None:
         DocumentNavigationNode(section_id="c", title=" ", depth=1),
     ]
     assert [(s.id, s.level) for s in sections_from_navigation(nodes)] == [("a", 1), ("b", 2)]
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_summary_rule_signature_detects_boundary_changes_even_with_same_section_ids(
+    oracle: FakeSectionsOracle, monkeypatch: pytest.MonkeyPatch, changed: bool
+) -> None:
+    from app.rag import document_sections_service as service
+    from app.rag.section_rules import (
+        NAVIGATION_RULES_FINGERPRINT_ARTIFACT,
+        SectionRule,
+        SectionRulesStore,
+        section_rules_fingerprint,
+    )
+    from app.schemas.extraction import DocumentElement
+
+    initial = SectionRulesStore(
+        mode="custom", rules=[SectionRule(name="節", pattern=r"^1\.", level=1)]
+    )
+    current = (
+        initial.model_copy(update={"rules": [initial.rules[0].model_copy(update={"level": 2})]})
+        if changed
+        else initial
+    )
+    monkeypatch.setattr(service, "load_section_rules", lambda: current)
+    extraction = StructuredExtraction(
+        elements=[DocumentElement(kind="text", text="1. 節 A", order=0)],
+        parser_artifacts={
+            NAVIGATION_RULES_FINGERPRINT_ARTIFACT: section_rules_fingerprint("custom", initial)
+        },
+    )
+
+    async def artifact(**kwargs: Any) -> dict[str, Any]:
+        return {"extraction_json": extraction.model_dump(mode="json")}
+
+    monkeypatch.setattr(oracle, "get_document_extraction_artifact", artifact)
+    response = client.get(URL)
+    assert response.status_code == 200
+    assert response.json()["data"]["summary_rules_match"] is (not changed)

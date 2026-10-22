@@ -183,3 +183,66 @@ def test_section_rules_preview_endpoint_is_removed() -> None:
         json={"mode": "custom", "rules": []},
     )
     assert resp.status_code in {404, 405}
+
+
+def test_docling_list_markers_survive_into_numbered_sections() -> None:
+    from rag_engine.adapters.parsers.base import AnalysisContext
+    from rag_engine.adapters.parsers.docling_adapter import DoclingAdapter
+    from rag_engine.config import get_settings
+    from rag_engine.models.layout import PageImage
+
+    settings = get_settings()
+    context = AnalysisContext(
+        pdf_path=Path("synthetic.pdf"),
+        run_dir=Path("."),
+        pages=[
+            PageImage(
+                page=1,
+                width=1000,
+                height=1400,
+                pdf_width=600,
+                pdf_height=840,
+                image_path="synthetic.png",
+            )
+        ],
+        settings=settings,
+    )
+    items = [
+        {
+            "label": "list_item",
+            "text": f"Section {index}",
+            "orig": f"{marker} Section {index}",
+            "marker": marker,
+            "enumerated": True,
+            "prov": [
+                {
+                    "page_no": 1,
+                    "bbox": {
+                        "l": 50,
+                        "t": 100 + index * 100,
+                        "r": 900,
+                        "b": 140 + index * 100,
+                        "coord_origin": "TOPLEFT",
+                    },
+                }
+            ],
+        }
+        for index, marker in enumerate(["2.", "2.1", "2.1.1"])
+    ]
+    records = DoclingAdapter(settings)._records_from_payload({"texts": items}, context)
+    elements = [
+        DocumentElement(
+            kind="list",
+            text=record.text,
+            order=index,
+            element_id=record.id,
+            page_number=record.page,
+        )
+        for index, record in enumerate(records)
+    ]
+    sections = sections_from_rules(elements, preset_rules()["numbered"])
+    assert [(section.title, section.level) for section in sections] == [
+        ("2. Section 0", 1),
+        ("2.1 Section 1", 2),
+        ("2.1.1 Section 2", 3),
+    ]

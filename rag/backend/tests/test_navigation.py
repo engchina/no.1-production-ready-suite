@@ -309,9 +309,7 @@ def test_navigation_summary_chunks_keep_derived_marks_in_every_strategy(
 
     summary_chunks = [chunk for chunk in chunks if _SUMMARY_ONLY_VALUE in chunk.text]
     body_chunks = [chunk for chunk in chunks if _SUMMARY_ONLY_VALUE not in chunk.text]
-    if strategy in {"structure_aware", "page_level"}:
-        # 要素から分割する方式は要約も索引する。本文（raw_text）を分割する方式は要約を含まない。
-        assert summary_chunks
+    assert summary_chunks
     for chunk in summary_chunks:
         assert chunk.text.startswith(title)
         assert chunk.metadata["content_kind"] == "section_summary"
@@ -416,3 +414,101 @@ async def test_section_rules_work_independently_of_navigation_summaries(enabled:
         element for element in result.elements if element.content_kind == "section_summary"
     ]
     assert len(summary_elements) == (2 if enabled else 0)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_rule_summaries_match_visible_sections_and_keep_parser_tree(
+    enabled: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typing import cast
+
+    from app.config import Settings
+    from app.rag import section_rules
+    from app.rag.ingestion import IngestionPipeline
+
+    store = section_rules.SectionRulesStore(mode="numbered")
+    monkeypatch.setattr(section_rules, "load_section_rules", lambda: store)
+    calls: list[str] = []
+
+    class Model:
+        async def generate(self, prompt: str, text: str) -> str:
+            calls.append(text)
+            return "合成の要約"
+
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(
+                kind="text",
+                text=f"{title}\n" + "合成の本文。" * 60,
+                order=index,
+                element_id=f"body-{index}",
+                page_number=index + 1,
+                section_path=["解析見出し A"],
+            )
+            for index, title in enumerate(["1. 節 A", "1.1 節 B", "2. 節 C"])
+        ]
+    )
+    pipeline = IngestionPipeline(
+        vlm=cast(Any, Model()),
+        oracle=cast(Any, object()),
+        settings=Settings(rag_navigation_summary_enabled=enabled),
+    )
+    result = await pipeline._attach_navigation_tree("trace", extraction)
+    visible = section_rules.extraction_sections(result, "numbered", store)
+    assert [node.section_id for node in result.navigation] == [
+        section.source_section_id for section in visible
+    ]
+    assert [node.title for node in result.navigation] == ["1. 節 A", "1.1 節 B", "2. 節 C"]
+    assert result.navigation[1].parent_section_id == result.navigation[0].section_id
+    assert result.navigation[0].element_ids == ["body-0"]
+    assert result.navigation[1].element_ids == ["body-1"]
+    assert len(calls) == (3 if enabled else 0)
+    assert all(bool(node.summary) is enabled for node in result.navigation)
+    parser = section_rules.extraction_sections(result, "parser", store)
+    assert [section.title for section in parser] == ["解析見出し A"]
+    assert section_rules.extraction_section_anchors(result, "parser", store)[
+        parser[0].id
+    ] == frozenset({"body-0", "body-1", "body-2"})
+    if enabled:
+        again = await pipeline._attach_navigation_tree("trace", result)
+        assert len(again.elements) == len(result.elements)
+        assert len(again.navigation) == len(result.navigation)
+
+
+async def test_recipe_section_mode_overrides_global_for_summaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typing import cast
+
+    from app.config import Settings
+    from app.rag import section_rules
+    from app.rag.ingestion import IngestionPipeline
+
+    monkeypatch.setattr(
+        section_rules, "load_section_rules", lambda: section_rules.SectionRulesStore(mode="parser")
+    )
+
+    class Oracle:
+        async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, Any]:
+            assert (document_id, recipe_id) == ("doc-a", "recipe-a")
+            return {"processing_config": {"section_rules_mode": "numbered"}}
+
+    pipeline = IngestionPipeline(
+        oracle=cast(Any, Oracle()), settings=Settings(), recipe_id="recipe-a"
+    )
+    result = await pipeline._attach_navigation_tree(
+        "trace",
+        StructuredExtraction(
+            elements=[
+                DocumentElement(
+                    kind="text",
+                    text="1. 節 A",
+                    order=0,
+                    element_id="body-a",
+                    section_path=["解析見出し A"],
+                )
+            ]
+        ),
+        document_id="doc-a",
+    )
+    assert result.navigation[0].title == "1. 節 A"

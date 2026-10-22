@@ -493,3 +493,190 @@ async def test_empty_chunks_explain_exclusions_and_mark_chunking_trace_as_error(
     assert chunking["attributes"]["chunk_count"] == 0
     assert chunking["error"] is caught.value
     assert "policy.pdf" not in message
+
+
+@pytest.mark.parametrize(
+    "strategy",
+    [
+        "small_to_big",
+        "structure_aware",
+        "recursive_character",
+        "markdown_heading",
+        "page_level",
+        "fixed_size",
+        "fixed_delimiter",
+    ],
+)
+@pytest.mark.parametrize("round_trip", [False, True])
+def test_all_strategies_index_derived_elements_without_polluting_originals(
+    strategy: str, round_trip: bool
+) -> None:
+    from app.rag.chunking import chunk_extraction_with_strategy
+    from app.schemas.extraction import DocumentElement
+
+    records = [
+        _record(1, "Section-header", "1. 節 A", [50, 40, 900, 90]),
+        _record(2, "Text", "合成の本文。" * 30, [50, 120, 900, 250]),
+    ]
+    original = _extraction()
+    layout = original.parser_artifacts["layout_records"]
+    assert isinstance(layout, dict)
+    original = original.model_copy(
+        update={"parser_artifacts": {"layout_records": {**layout, "records": records}}}
+    )
+    elements = [
+        DocumentElement(
+            kind="text",
+            text=str(record["text"]),
+            order=i,
+            element_id=str(record["id"]),
+            page_number=1,
+            section_path=["1. 節 A"],
+        )
+        for i, record in enumerate(records)
+    ]
+    derived = [
+        DocumentElement(
+            kind="text",
+            text="項目 A: 合成値X",
+            order=2,
+            element_id="field-a",
+            content_kind="field",
+            metadata={"extracted_field": True, "field_source_element_id": "docling-p1-2"},
+        ),
+        DocumentElement(
+            kind="text",
+            text="1. 節 A: 合成要約Y",
+            order=3,
+            element_id="summary-a",
+            content_kind="section_summary",
+            section_path=["1. 節 A"],
+            metadata={
+                "nav_summary": True,
+                "section_id": "rule-a",
+                "nav_source_element_ids": "docling-p1-1,docling-p1-2",
+            },
+        ),
+    ]
+    original = original.model_copy(
+        update={"elements": elements, "raw_text": "\n".join(element.text for element in elements)}
+    )
+    augmented = original.model_copy(update={"elements": [*elements, *derived]})
+    if round_trip:
+        original = StructuredExtraction.model_validate(original.model_dump(mode="json"))
+        augmented = StructuredExtraction.model_validate(augmented.model_dump(mode="json"))
+
+    def split(extraction: StructuredExtraction) -> Any:
+        return (
+            build_parent_child_chunks(extraction)
+            if strategy == "small_to_big"
+            else chunk_extraction_with_strategy(
+                extraction, strategy=strategy, chunk_size=800, overlap=0
+            )
+        )
+
+    baseline = split(original)
+    chunks = split(augmented)
+    assert chunks[: len(baseline)] == baseline
+    assert [chunk.index for chunk in chunks] == list(range(len(chunks)))
+    extras = chunks[len(baseline) :]
+    assert [chunk.metadata["content_kind"] for chunk in extras] == ["field", "section_summary"]
+    assert extras[0].metadata["field_source_element_id"] == "docling-p1-2"
+    assert extras[1].metadata["nav_source_element_ids"] == "docling-p1-1,docling-p1-2"
+    assert all("合成要約Y" not in chunk.text and "合成値X" not in chunk.text for chunk in baseline)
+    assert all(
+        "parent_text" not in chunk.metadata and "engine_search_text" not in chunk.metadata
+        for chunk in extras
+    )
+
+
+async def test_parent_child_generated_search_hits_resolve_only_original_evidence() -> None:
+    from app.rag.derived_evidence import derived_source_chunks, is_derived_chunk
+    from app.rag.element_locator import chunk_element_ids
+    from app.schemas.extraction import DocumentElement
+    from app.schemas.search import RetrievedChunk
+
+    records = [
+        _record(1, "Section-header", "1. 節 A", [50, 40, 900, 90]),
+        _record(2, "Text", "原文の合成本文です。" * 25, [50, 120, 900, 250]),
+    ]
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(
+                kind="text",
+                text=str(record["text"]),
+                order=i,
+                element_id=str(record["id"]),
+                page_number=1,
+                section_path=["1. 節 A"],
+            )
+            for i, record in enumerate(records)
+        ],
+        parser_artifacts={
+            "layout_records": {
+                "records": records,
+                "pages": [{"page": 1, "width": 1000, "height": 1400}],
+            }
+        },
+    )
+    extraction = extraction.model_copy(
+        update={
+            "elements": [
+                *extraction.elements,
+                DocumentElement(
+                    kind="text",
+                    text="項目 A: 検索用合成値X",
+                    order=2,
+                    content_kind="field",
+                    element_id="field-a",
+                    metadata={"extracted_field": True, "field_source_element_id": "docling-p1-2"},
+                ),
+                DocumentElement(
+                    kind="text",
+                    text="規則の節: 検索用合成要約Y",
+                    order=3,
+                    content_kind="section_summary",
+                    element_id="summary-a",
+                    section_path=["規則の節"],
+                    metadata={"nav_summary": True, "nav_source_element_ids": "docling-p1-2"},
+                ),
+            ]
+        }
+    )
+    chunks = build_parent_child_chunks(extraction)
+    rows = [
+        RetrievedChunk(
+            document_id="doc-a",
+            chunk_id=f"chunk-{chunk.index}",
+            text=chunk.text,
+            score=1.0,
+            metadata={**chunk.metadata, "chunk_set_id": "set-a"},
+        )
+        for chunk in chunks
+    ]
+
+    class Reader:
+        async def retrieval_reference_chunks(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("章節名の推測で原文を読まない")
+
+        async def retrieval_chunk_set_chunks(
+            self,
+            filters: Any,
+            *,
+            document_id: str,
+            chunk_set_id: str,
+            element_id: str = "",
+            chunk_indices: Any = (),
+            limit: int,
+        ) -> list[RetrievedChunk]:
+            assert (document_id, chunk_set_id) == ("doc-a", "set-a")
+            return [row for row in rows if element_id in chunk_element_ids(row.metadata)][:limit]
+
+    # 検索の一致は決定論スタブ。生成した検索の手がかりだけに一致する 2 つの入力。
+    for question in ("検索用合成値X", "検索用合成要約Y"):
+        hit = next(row for row in rows if question in row.text)
+        assert is_derived_chunk(hit)
+        evidence = await derived_source_chunks(Reader(), hit, filters={})
+        assert evidence
+        assert all(not is_derived_chunk(row) and "原文の合成本文" in row.text for row in evidence)
+        assert all(question not in row.text for row in evidence)

@@ -282,7 +282,7 @@ export const ja = {
   "settings.parserAdapters.postParse.fieldExtraction.empty":
     "項目の定義が 0 件で保存されているため、ナレッジベースで項目を定義していない文書からは何も抽出しません。下の項目の定義で項目を追加するか、「標準の項目に戻す」を使ってください。",
   "settings.parserAdapters.postParse.navigationSummary.hint":
-    "解析エンジンの見出しに基づく章節ごとに、要約を OCI Enterprise AI で作り、検索にも使います。RAPTOR は使いません。章節ごとにモデルを呼び出します（上限あり）。無効でも章節ナビゲーションは作られ、「章節の抽出規則」は独立して適用されます。",
+    "「章節の抽出規則」で作る章節ごとに、要約を OCI Enterprise AI で作り、検索にも使います。RAPTOR は使いません。章節ごとにモデルを呼び出します（上限あり）。無効でも章節ナビゲーションは作られ、「章節の抽出規則」は独立して適用されます。",
   "settings.parserAdapters.postParse.actionsLabel": "解析後の処理の操作",
   "settings.parserAdapters.postParse.save": "解析後の処理を保存",
   "settings.parserAdapters.postParse.saved": "解析後の処理を保存しました。",
@@ -2960,7 +2960,7 @@ export const ja = {
   "sectionRules.error.patternInvalid": "正規表現として読めません。括弧の対応などを確認してください。",
   "sectionRules.toast.saved": "章節の抽出規則を保存しました。",
   "sectionRules.toast.reset": "章節の抽出規則を既定に戻しました。",
-  "sections.summaryMismatch": "保存済みの要約 {count} 件は、現在の章節に対応していません。要約を表示するには、文書レシピの「章節の抽出規則」を「解析エンジンの見出し」に戻してください。",
+  "sections.summaryMismatch": "保存済みの要約 {count} 件は、現在の章節に対応していません。現在の「章節の抽出規則」で要約を生成するには、文書の処理レシピで抽出から再処理してください。",
   "sections.loading": "章節を読み込んでいます",
   "sections.error.load": "章節を取得できませんでした。再試行してください。",
   "sections.error.saveFailed": "章節を保存できませんでした。時間をおいて、もう一度お試しください。",

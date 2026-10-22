@@ -192,7 +192,8 @@ export function DocumentSectionsPanel({
   };
 
   const manual = data?.source === "manual";
-  const unmatched = data && (data.rules_mode ?? "parser") !== "parser"
+  const matchingSummaries = data?.summary_rules_match === false ? undefined : summaries;
+  const unmatched = data?.summary_rules_match === false ? summaries?.size ?? 0 : data
     ? unmatchedSummaryCount(data.sections, summaries)
     : 0;
   return (
@@ -237,7 +238,7 @@ export function DocumentSectionsPanel({
               {sections.map((section) => {
                 const pages = sectionPageLabel(section);
                 const summary = section.source_section_id
-                  ? summaries?.get(section.source_section_id)
+                  ? matchingSummaries?.get(section.source_section_id)
                   : undefined;
                 return (
                   <li key={section.id} style={indentStyle(section.level)}>

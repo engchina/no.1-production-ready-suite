@@ -178,23 +178,23 @@ def test_graph_axis_shares_chunk_set_but_splits_graph_layer() -> None:
     assert compute_graph_layer_id(cs_off, off) != compute_graph_layer_id(cs_entities, entities)
 
 
-def test_field_extraction_axis_shares_chunk_set_but_splits_metadata_layer() -> None:
-    """field_extraction だけ違うとき chunk_set は共有、metadata 層だけ別になる。"""
+def test_field_extraction_axis_splits_chunks_and_metadata_layer() -> None:
+    """項目の検索用 Chunk が増えるため chunk_set と metadata 層を分ける。"""
     off = get_settings().model_copy(update={"rag_field_extraction_enabled": False})
     on = get_settings().model_copy(update={"rag_field_extraction_enabled": True})
 
     cs = compute_chunk_set_id(SRC, off)
-    assert cs == compute_chunk_set_id(SRC, on)
+    assert cs != compute_chunk_set_id(SRC, on)
     assert compute_metadata_layer_id(cs, off) != compute_metadata_layer_id(cs, on)
 
 
-def test_nav_axis_shares_chunk_set_but_splits_nav_layer() -> None:
-    """navigation_summary だけ違うとき chunk_set は共有、nav 層だけ別になる。"""
+def test_nav_axis_splits_chunks_and_nav_layer() -> None:
+    """要約の検索用 Chunk が増えるため chunk_set と nav 層を分ける。"""
     off = get_settings().model_copy(update={"rag_navigation_summary_enabled": False})
     on = get_settings().model_copy(update={"rag_navigation_summary_enabled": True})
 
     cs = compute_chunk_set_id(SRC, off)
-    assert cs == compute_chunk_set_id(SRC, on)
+    assert cs != compute_chunk_set_id(SRC, on)
     assert compute_nav_layer_id(cs, off) != compute_nav_layer_id(cs, on)
 
 
@@ -270,11 +270,11 @@ def test_chunk_set_id_keeps_ids_after_delimiter_default_change() -> None:
     assert compute_chunk_set_id(SRC, fixed_new) != compute_chunk_set_id(SRC, fixed_old)
 
 
-def test_chunk_set_id_is_unchanged_by_the_599_rename() -> None:
+def test_chunk_set_id_uses_legacy_chunking_names_with_current_docling_text_contract() -> None:
     """分割方式の値と 5 項目の属性名の改名(#599)で、既存の chunk_set_id を変えない。
 
-    期待値は改名の前のコード(値 docrag_small_to_big・属性 rag_docrag_*)で計算した ID。
-    変わると、すべての文書の Chunk と embedding を作り直すことになる。
+    期待値は旧い分割名と現在の Docling の本文の契約で計算した ID（#3014）。
+    改名の hash 入力は維持し、解析の内容が変わった場合は別の抽出・Chunk 集合にする。
     """
     # 改名時の明示設定で比較し、その後の既定値変更から独立させる。
     base = Settings(
@@ -286,9 +286,9 @@ def test_chunk_set_id_is_unchanged_by_the_599_rename() -> None:
     )
     structure = base.model_copy(update={"rag_chunking_strategy": "structure_aware"})
 
-    assert compute_chunk_set_id(SRC, small_to_big) == "cs_66a12a4a1dfba485"
-    assert compute_chunk_set_id(SRC, tuned) == "cs_33f6a678012c8097"
-    assert compute_chunk_set_id(SRC, structure) == "cs_f9450f25eacdd0a0"
+    assert compute_chunk_set_id(SRC, small_to_big) == "cs_183a30ff6de58b2b"
+    assert compute_chunk_set_id(SRC, tuned) == "cs_141b82c962ed5833"
+    assert compute_chunk_set_id(SRC, structure) == "cs_c80b5b14a2001b73"
 
 
 def test_chunk_set_id_uses_small_to_big_params_only_for_small_to_big() -> None:

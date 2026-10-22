@@ -206,7 +206,13 @@ class DoclingAdapter:
             text = _item_text(item, category, table_html_by_ref or {})
             # ページまたぎ等で prov が複数ある item は、全文を prov ごとに複製すると
             # チャンクと検索結果が重複する。charspan で分割できなければ最初の 1 件だけに持たせる。
-            span_texts = _charspan_texts(text, provenances) if category not in {"Table", "Picture"} else None
+            source_text = str(item.get("text") or item.get("orig") or item.get("caption") or "")
+            restored_prefix = text[: -len(source_text)] if source_text and text != source_text and text.endswith(source_text) else ""
+            span_texts = (
+                _charspan_texts(source_text if restored_prefix else text, provenances) if category not in {"Table", "Picture"} else None
+            )
+            if span_texts is not None and restored_prefix:
+                span_texts[0] = restored_prefix + span_texts[0]
             text_emitted = False
             aggregate_pages: set[int] = set()
             for prov_index, provenance in enumerate(provenances):
@@ -630,7 +636,18 @@ def _item_text(item: dict[str, Any], category: str, table_html_by_ref: dict[str,
         fallback_html = _table_data_to_html(item.get("data")) or native_html
         if fallback_html:
             return fallback_html
-    return str(item.get("text") or item.get("orig") or item.get("caption") or "")
+    text = str(item.get("text") or item.get("orig") or item.get("caption") or "")
+    if str(item.get("label") or "").casefold() == "list_item":
+        marker = str(item.get("marker") or "").strip()
+        # 原文の番号を優先し、番号が本文にも入っている場合は重ねない。箇条書き記号は従来どおり。
+        if marker and any(character.isdecimal() for character in marker):
+            stripped = text.lstrip()
+            original = str(item.get("orig") or "").strip()
+            if original.startswith(marker) and original[len(marker) :].lstrip() == stripped:
+                return original
+            if not stripped.startswith(marker) or (len(stripped) > len(marker) and stripped[len(marker)].isdecimal()):
+                return f"{marker} {stripped}"
+    return text
 
 
 def _table_data_to_html(data: Any) -> str:

@@ -621,7 +621,7 @@ class DocumentProcessingConfig(KnowledgeBaseIngestionConfig):
 
     model_config = ConfigDict(extra="forbid")
     chunk_context_header_enabled: bool | None = None
-    # 章節の抽出規則の方式(#715)。取込の結果は変えず、章節ナビゲーションの章節だけに当てる。
+    # 章節の抽出規則の方式。章節の表示と、取込時に要約する章節に適用する。
     section_rules_mode: SectionRulesMode | None = None
 
 
@@ -909,6 +909,7 @@ class DocumentSectionsData(BaseModel):
     source: SectionOrigin
     # 抽出結果の章節を作った方式(#715)。
     rules_mode: SectionRulesMode = "parser"
+    summary_rules_match: bool | None = None
     sections: list[DocumentSection] = Field(default_factory=list)
     extraction_section_count: int = 0
     page_count: int | None = None

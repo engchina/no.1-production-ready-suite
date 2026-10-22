@@ -14,7 +14,12 @@ from app.rag.document_sections import (
     refresh_from_extraction,
     stored_sections_payload,
 )
-from app.rag.section_rules import extraction_sections, load_section_rules
+from app.rag.section_rules import (
+    NAVIGATION_RULES_FINGERPRINT_ARTIFACT,
+    extraction_sections,
+    load_section_rules,
+    section_rules_fingerprint,
+)
 from app.schemas.document import (
     DocumentProcessingConfig,
     DocumentSectionsData,
@@ -90,7 +95,16 @@ async def document_sections_with_source(
         return None
     source = await sections_source(oracle, document_id, recipe_id)
     extraction, rules_mode = source.extraction, source.rules_mode
-    extracted = extraction_sections(extraction, rules_mode)
+    store = load_section_rules()
+    extracted = extraction_sections(extraction, rules_mode, store)
+    saved_rules = (
+        extraction.parser_artifacts.get(NAVIGATION_RULES_FINGERPRINT_ARTIFACT)
+        if extraction
+        else None
+    )
+    summary_rules_match = (
+        saved_rules == section_rules_fingerprint(rules_mode, store) if saved_rules else None
+    )
     page_count = (len(extraction.pages) or None) if extraction else None
     stored = await oracle.get_document_sections(document_id)
     if stored is None:
@@ -99,6 +113,7 @@ async def document_sections_with_source(
                 document_id=document_id,
                 source="extraction",
                 rules_mode=rules_mode,
+                summary_rules_match=summary_rules_match,
                 sections=extracted,
                 extraction_section_count=len(extracted),
                 page_count=page_count,
@@ -112,6 +127,7 @@ async def document_sections_with_source(
             document_id=document_id,
             source="manual",
             rules_mode=rules_mode,
+            summary_rules_match=summary_rules_match,
             sections=add_new_extraction(
                 refresh_from_extraction(sections, extracted), extracted, removed
             ),

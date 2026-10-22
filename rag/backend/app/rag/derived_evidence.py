@@ -146,6 +146,29 @@ async def _section_sources(
     filters: dict[str, str],
     limit: int,
 ) -> list[RetrievedChunk]:
+    source_ids = chunk_element_ids({"element_ids": chunk.metadata.get("nav_source_element_ids")})
+    if source_ids:
+        chunk_set_id = _chunk_set_id(chunk)
+        if not chunk_set_id:
+            return []
+        found: dict[str, RetrievedChunk] = {}
+        covered: set[str] = set()
+        for element_id in source_ids[: limit * _SECTION_READ_FACTOR]:
+            if element_id in covered:
+                continue
+            rows = await reader.retrieval_chunk_set_chunks(
+                filters,
+                document_id=chunk.document_id,
+                chunk_set_id=chunk_set_id,
+                element_id=element_id,
+                limit=limit,
+            )
+            for row in original_chunks(rows):
+                covered.update(chunk_element_ids(row.metadata))
+                found.setdefault(row.chunk_id, row)
+            if len(found) >= limit:
+                break
+        return list(found.values())[:limit]
     section_path = _section_path(chunk.metadata)
     if not section_path:
         return []

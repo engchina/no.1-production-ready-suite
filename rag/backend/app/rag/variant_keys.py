@@ -131,6 +131,14 @@ def chunk_set_subset(settings: Settings) -> dict[str, object]:
             value = getattr(settings, name, None)
             if value != Settings.model_fields[name].default:
                 subset[name] = value
+    derived_flags = {
+        name: True
+        for name in (*_METADATA_FIELDS, *_NAV_FIELDS)
+        if getattr(settings, name, False) is True
+    }
+    if derived_flags:
+        subset["derived_content_contract"] = 1
+        subset.update(derived_flags)
     return subset
 
 
@@ -146,6 +154,8 @@ def extraction_recipe_subset(settings: Settings) -> dict[str, object]:
     # csv_to_jsonl / excel_to_jsonl の形式の値を変え、その文書の抽出を作り直しにする。
     # 見出しの階層の推定(#2277)は抽出結果の見出しの階層を変える。有効のときだけ加え、既定(無効)の
     # ID は変えない。
+    if backend == "docling":
+        subset["docling_text_contract"] = "ordered_list_marker_v1"
     if getattr(settings, "rag_heading_level_inference_enabled", False) is True:
         subset["rag_heading_level_inference_enabled"] = True
     profile = getattr(settings, "rag_preprocess_profile", None)

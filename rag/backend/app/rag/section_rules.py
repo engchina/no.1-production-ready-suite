@@ -1,7 +1,8 @@
 """章節の抽出規則(#715)。
 
 保存済みの抽出結果の要素に規則を当てて、章節(並び順 + 階層の一覧)を作る。抽出のやり直しは
-要らず、規則を変えるとすぐ章節ナビゲーションに出る。chunk・検索・抽出結果は変えない。
+要らず、規則を変えるとすぐ章節ナビゲーションに出る。取込で章節の要約を生成するときにも
+同じ規則を使う。保存済みの要約を現在の規則で作り直すときは抽出から再処理する。
 
 - 方式: ``parser``(解析エンジンの見出し。今までどおり抽出結果の章節を使う)/ プリセット
   ``legal``(法令)・``official``(公用文)・``numbered``(番号付き)/ ``custom``(独自の規則)。
@@ -14,6 +15,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import unicodedata
@@ -22,13 +24,14 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from rag_parser_core.extraction import is_derived_content
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import alternation, numbered, text_patterns
 
 from app.config import BACKEND_ROOT
 from app.rag.document_sections import sections_from_navigation
 from app.schemas.document import DocumentSection, SectionRulesMode
-from app.schemas.extraction import DocumentElement, StructuredExtraction
+from app.schemas.extraction import DocumentElement, DocumentNavigationNode, StructuredExtraction
 
 SECTION_RULES_MODES: tuple[SectionRulesMode, ...] = (
     "parser",
@@ -180,6 +183,8 @@ def rules_for_mode(mode: SectionRulesMode, store: SectionRulesStore) -> list[Sec
 
 
 def _heading_line(element: DocumentElement) -> str:
+    if is_derived_content(element.content_kind, element.metadata):
+        return ""
     if (element.kind or "").lower() in _NON_HEADING_KINDS:
         return ""
     if (element.content_kind or "").lower() in _NON_HEADING_KINDS:
@@ -265,7 +270,7 @@ def extraction_sections(
         return []
     rules = rules_for_mode(mode, store or load_section_rules())
     if rules is None:
-        return sections_from_navigation(extraction.navigation)
+        return sections_from_navigation(parser_navigation(extraction))
     return sections_from_rules(extraction.elements, rules)
 
 
@@ -286,7 +291,7 @@ def extraction_section_anchors(
     if rules is None:
         return {
             node.section_id: frozenset(node.element_ids)
-            for node in extraction.navigation
+            for node in parser_navigation(extraction)
             if node.element_ids
         }
     return {
@@ -303,3 +308,72 @@ def section_rules_settings(store: SectionRulesStore | None = None) -> SectionRul
         rules=current.rules,
         presets=preset_rules(),
     )
+
+
+# 規則の木で要約した抽出でも、解析エンジンの見出しの木へ再取込なしで切り替えられる。
+PARSER_NAVIGATION_ARTIFACT = "parser_navigation"
+NAVIGATION_RULES_MODE_ARTIFACT = "navigation_rules_mode"
+
+
+def parser_navigation(extraction: StructuredExtraction) -> list[DocumentNavigationNode]:
+    """規則の要約と別に保持した解析見出しの木。既存の抽出結果は従来の navigation。"""
+    stored = extraction.parser_artifacts.get(PARSER_NAVIGATION_ARTIFACT)
+    if isinstance(stored, list):
+        return [DocumentNavigationNode.model_validate(node) for node in stored]
+    return extraction.navigation
+
+
+def build_rule_navigation(
+    extraction: StructuredExtraction, rules: Sequence[SectionRule]
+) -> list[DocumentNavigationNode]:
+    """表示と同じ章節 ID の木へ、原文の要素を直属の章節だけに割り当てる。"""
+    originals = [
+        element
+        for element in sorted(extraction.elements, key=lambda element: element.order)
+        if not is_derived_content(element.content_kind, element.metadata)
+    ]
+    entries = _rule_sections(originals, rules)
+    nodes: list[DocumentNavigationNode] = []
+    stack: list[DocumentNavigationNode] = []
+    by_heading: dict[str, DocumentNavigationNode] = {}
+    for section, heading_id in entries:
+        while stack and stack[-1].depth >= section.level:
+            stack.pop()
+        parent = stack[-1] if stack else None
+        node = DocumentNavigationNode(
+            section_id=section.id,
+            title=section.title,
+            depth=section.level,
+            section_path=[*(parent.section_path if parent else []), section.title],
+            parent_section_id=parent.section_id if parent else None,
+            page_start=section.page_start,
+            page_end=section.page_end,
+        )
+        if parent:
+            parent.child_section_ids.append(node.section_id)
+        nodes.append(node)
+        stack.append(node)
+        if heading_id:
+            by_heading[heading_id] = node
+    current: DocumentNavigationNode | None = None
+    for element in originals:
+        if element.element_id in by_heading:
+            current = by_heading[element.element_id]
+        if current is not None and element.element_id:
+            current.element_ids.append(element.element_id)
+    return nodes
+
+
+NAVIGATION_RULES_FINGERPRINT_ARTIFACT = "navigation_rules_fingerprint"
+
+
+def section_rules_fingerprint(mode: SectionRulesMode, store: SectionRulesStore) -> str:
+    """要約に使った規則の一致を確かめる。章節 ID が同じでも階層・境界が変わり得る。"""
+    rules = rules_for_mode(mode, store)
+    payload = {
+        "mode": mode,
+        "rules": [rule.model_dump(mode="json") for rule in rules] if rules is not None else None,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()

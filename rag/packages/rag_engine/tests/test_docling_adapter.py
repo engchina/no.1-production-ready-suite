@@ -12,6 +12,7 @@ from rag_engine.adapters.parsers.docling_adapter import (
     DoclingAdapter,
     _build_docling_converter,
     _docling_artifacts_path,
+    _item_text,
     _table_data_to_html,
     _table_html_by_ref,
 )
@@ -705,3 +706,51 @@ class _Document:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OrderedListTextTests(unittest.TestCase):
+    def test_preserves_ordered_list_markers_without_duplicating_them(self):
+        for marker in ("2.", "2.1", "2.1.1", "１．２", "(3)"):
+            with self.subTest(marker=marker):
+                item = {"label": "list_item", "marker": marker, "text": "Section A", "orig": f"{marker} Section A"}
+                self.assertEqual(_item_text(item, "List-item", {}), f"{marker} Section A")
+                item["text"] = item["orig"]
+                self.assertEqual(_item_text(item, "List-item", {}), item["orig"])
+                item.pop("orig")
+                self.assertEqual(_item_text(item, "List-item", {}), item["text"])
+
+    def test_uses_marker_when_orig_is_missing_or_has_different_ocr_text(self):
+        item = {"label": "list_item", "marker": "2.1", "text": "Section A", "orig": "Section B"}
+        self.assertEqual(_item_text(item, "List-item", {}), "2.1 Section A")
+        item.pop("orig")
+        self.assertEqual(_item_text(item, "List-item", {}), "2.1 Section A")
+
+    def test_unordered_bullets_and_other_item_kinds_keep_their_text(self):
+        for marker in ("・", "-", "•"):
+            self.assertEqual(_item_text({"label": "list_item", "marker": marker, "text": "Section A"}, "List-item", {}), "Section A")
+        self.assertEqual(_item_text({"label": "text", "marker": "2.", "text": "Section A"}, "Text", {}), "Section A")
+
+    def test_restored_marker_does_not_truncate_multi_page_charspans(self):
+        settings = get_settings()
+        context = AnalysisContext(
+            pdf_path=Path("synthetic.pdf"),
+            run_dir=Path("."),
+            pages=[PageImage(page=i, width=1000, height=1000, pdf_width=600, pdf_height=600, image_path=f"page-{i}.png") for i in (1, 2)],
+            settings=settings,
+        )
+        item = {
+            "label": "list_item",
+            "text": "AAAA BBBB",
+            "orig": "2.1 AAAA BBBB",
+            "marker": "2.1",
+            "prov": [
+                {"page_no": i, "charspan": span, "bbox": {"l": 10, "t": 10, "r": 100, "b": 50, "coord_origin": "TOPLEFT"}}
+                for i, span in [(1, [0, 5]), (2, [5, 9])]
+            ],
+        }
+        records = DoclingAdapter(settings)._records_from_payload({"texts": [item]}, context)
+        self.assertEqual([record.text for record in records], ["2.1 AAAA", "BBBB"])
+
+    def test_original_disambiguates_a_marker_from_numbered_body_text(self):
+        item = {"label": "list_item", "marker": "2.1", "text": "2.1.1 Section A", "orig": "2.1 2.1.1 Section A"}
+        self.assertEqual(_item_text(item, "List-item", {}), item["orig"])

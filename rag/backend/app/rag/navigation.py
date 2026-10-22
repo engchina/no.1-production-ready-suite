@@ -14,7 +14,11 @@ import hashlib
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
-from rag_parser_core.extraction import NAV_SUMMARY_KEY, SECTION_SUMMARY_CONTENT_KIND
+from rag_parser_core.extraction import (
+    NAV_SUMMARY_KEY,
+    SECTION_SUMMARY_CONTENT_KIND,
+    is_derived_content,
+)
 
 from app.schemas.extraction import (
     DocumentElement,
@@ -57,6 +61,8 @@ def build_navigation_tree(extraction: StructuredExtraction) -> list[DocumentNavi
     accumulators: dict[tuple[str, ...], _NodeAccumulator] = {}
     order: list[tuple[str, ...]] = []
     for element in extraction.elements:
+        if is_derived_content(element.content_kind, element.metadata):
+            continue
         path = tuple(segment for segment in element.section_path if segment)
         if not path:
             continue
@@ -228,6 +234,7 @@ def navigation_summary_elements(
             "section_path": " > ".join(node.section_path),
             NAV_SUMMARY_KEY: True,
             "nav_depth": node.depth,
+            "nav_source_element_ids": ",".join(node.element_ids),
         }
         if node.parent_section_id:
             metadata["parent_section_id"] = node.parent_section_id
