@@ -179,3 +179,35 @@ def test_history_lists_saved_versions_and_restores_one() -> None:
     missing = client.post("/api/settings/language-pack/history/0000/restore")
     assert missing.status_code == 404
     client.put("/api/settings/language-pack", json={"overrides": {}})
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("roman_digits", ["i=1", "v=0"]),
+        ("kanji_multipliers", ["十=0"]),
+        ("kanji_digits", ["一=²"]),
+        ("kanji_digits", ["一=１"]),
+    ],
+)
+def test_numeric_mapping_rejection_preserves_saved_pack(key: str, value: list[str]) -> None:
+    accepted = client.put(
+        "/api/settings/language-pack", json={"overrides": {"numbers": {"article_units": ["款"]}}}
+    )
+    assert accepted.status_code == 200
+    path = Path(resolve_language_pack_file(get_settings()))
+    before = path.read_bytes()
+    response = client.put(
+        "/api/settings/language-pack", json={"overrides": {"numbers": {key: value}}}
+    )
+    assert response.status_code == 422
+    assert f"numbers.{key}" in json.dumps(response.json())
+    assert path.read_bytes() == before
+    assert current_pack().hash == accepted.json()["data"]["hash"]
+
+
+def test_numeric_mapping_metadata_exposes_minimum() -> None:
+    fields = client.get("/api/settings/language-pack").json()["data"]["fields"]
+    minimums = {f["key"]: f["min_value"] for f in fields if f["section"] == "numbers"}
+    assert minimums["kanji_digits"] == 0
+    assert minimums["roman_digits"] == minimums["kanji_multipliers"] == 1

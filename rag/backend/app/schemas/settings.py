@@ -517,6 +517,8 @@ class LanguagePackFieldData(BaseModel):
     ingest: bool
     # 1 つの語の長さの上限(回答の定型文のような文の項目は長い)。
     max_chars: int
+    # 数値マッピングの値の下限。
+    min_value: int = 0
 
 
 class LanguagePackData(BaseModel):

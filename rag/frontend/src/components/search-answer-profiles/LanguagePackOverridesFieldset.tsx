@@ -12,6 +12,7 @@ import {
   languagePackErrors,
   overridesFromTexts,
   textsFromSections,
+  textKey,
 } from "@/lib/language-pack";
 import { useLanguagePack } from "@/lib/queries";
 
@@ -37,17 +38,14 @@ export function LanguagePackOverridesFieldset({
 }) {
   const query = useLanguagePack();
   const panel = useLanguagePackPanelState();
-  const [texts, setTexts] = useState<LanguagePackTexts | null>(null);
-  const [synced, setSynced] = useState<string | null>(null);
+  const valueKey = JSON.stringify(value);
+  const [draft, setDraft] = useState<{ key: string; texts: LanguagePackTexts }>({ key: valueKey, texts: {} });
   const data = query.data;
   const fields = data ? data.fields.filter((field) => !field.ingest) : [];
-  // 持ち主の値（保存・変更の破棄）が変わったときだけ、欄の文字を合わせる（入力中の文字は上書きしない）。
-  const valueKey = JSON.stringify(value);
-  if (data && valueKey !== synced) {
-    setSynced(valueKey);
-    const current = texts ? JSON.stringify(overridesFromTexts(fields, texts, data.effective)) : null;
-    if (current !== valueKey) setTexts(textsFromSections(fields, overlay(data.effective, value)));
-  }
+  // 継承値は最新の全体値から描画し、入力途中の文字だけを保持する。保存・破棄では入力も同期する。
+  if (draft.key !== valueKey) setDraft({ key: valueKey, texts: {} });
+  const baseline = data ? textsFromSections(fields, overlay(data.effective, value)) : {};
+  const texts = { ...baseline, ...(draft.key === valueKey ? draft.texts : {}) };
   const count = Object.values(value).reduce((sum, values) => sum + Object.keys(values).length, 0);
 
   return (
@@ -74,7 +72,7 @@ export function LanguagePackOverridesFieldset({
         >
           <FormSkeleton fields={2} />
         </TimedLoadingState>
-      ) : query.isError || !data || !texts ? (
+      ) : query.isError || !data ? (
         <ApiErrorState
           error={query.error}
           fallback={t("settings.language.loadError")}
@@ -92,10 +90,17 @@ export function LanguagePackOverridesFieldset({
           changedLabel={t("searchAnswerProfiles.languagePack.changed")}
           resetLabel={t("searchAnswerProfiles.languagePack.reset")}
           onChange={(key, text) => {
-            const next = { ...texts, [key]: text };
-            setTexts(next);
-            const overrides = overridesFromTexts(fields, next, data.effective);
-            setSynced(JSON.stringify(overrides));
+            const field = fields.find((item) => textKey(item) === key);
+            if (!field) return;
+            const changed = overridesFromTexts([field], { [key]: text }, data.effective);
+            const section = { ...value[field.section] };
+            if (changed[field.section]) section[field.key] = changed[field.section][field.key];
+            else delete section[field.key];
+            const overrides = { ...value, [field.section]: section };
+            if (!Object.keys(section).length) delete overrides[field.section];
+            const nextTexts = { ...draft.texts, [key]: text };
+            if (!changed[field.section]) delete nextTexts[key];
+            setDraft({ key: JSON.stringify(overrides), texts: nextTexts });
             onChange(overrides);
           }}
         />

@@ -106,6 +106,8 @@ class FieldSpec:
     ingest: bool = True
     # 1 つの語の長さの上限（回答の定型文のような文の項目は長くできる）。
     max_chars: int = MAX_ITEM_CHARS
+    # 数値マッピングの値の下限（除数に使う倍率は正の数）。
+    min_value: int = 0
 
 
 def _fields(section: str, kind: FieldKind, *keys: str, **options: Any) -> tuple[FieldSpec, ...]:
@@ -139,9 +141,10 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "item_units",
     ),
     *_fields("numbers", _PT, "item_patterns"),
-    *_fields("numbers", _CV, "kanji_digits", "kanji_multipliers"),
+    *_fields("numbers", _CV, "kanji_digits"),
+    *_fields("numbers", _CV, "kanji_multipliers", min_value=1),
     # ローマ数字の字と値（「ii」「xiv」。前付きの頁番号を読む。英字の大小は区別しない）。
-    *_fields("numbers", _CV, "roman_digits"),
+    *_fields("numbers", _CV, "roman_digits", min_value=1),
     *_fields(
         "numbers", _W, "branch_connectors", "branch_stop_chars", "era_names", "first_year_words"
     ),
@@ -910,8 +913,12 @@ def _check(spec: FieldSpec, value: Any) -> tuple[Any, str | None]:
             return words, "開きと閉じの 2 文字で書いてください(例: 「」)。"
         if spec.kind is FieldKind.NUMBER_PATTERNS and "N" not in word:
             return words, "番号の位置を N で書いてください(例: 第N号)。"
-        if spec.kind is FieldKind.CHAR_VALUES and not (sep and len(left) == 1 and right.isdigit()):
+        if spec.kind is FieldKind.CHAR_VALUES and not (
+            sep and len(left) == 1 and right.isascii() and right.isdecimal()
+        ):
             return words, "「字=数」の形で、字は 1 文字で書いてください(例: 一=1)。"
+        if spec.kind is FieldKind.CHAR_VALUES and int(right) < spec.min_value:
+            return words, f"数は {spec.min_value} 以上で書いてください。"
         if spec.kind is FieldKind.WORD_MAP and not (sep and left and right):
             return words, "「語=値」の形で書いてください(例: 別添=別紙)。"
         if spec.kind is FieldKind.ENUM_MAP and not (sep and left and right in spec.choices):

@@ -264,7 +264,9 @@ def format_kanji_number(value: int, pack: LanguagePack | None = None) -> str:
             if unit >= _LARGE_MULTIPLIER:
                 parts.append(f"{render(quotient)}{char}")
             else:
-                parts.append(("" if quotient == 1 else render(quotient)) + char)
+                # 倍率 1 では商が元の数と同じなので、再帰せず数字を書く。
+                prefix = "" if quotient == 1 else digits(quotient) if unit == 1 else render(quotient)
+                parts.append(prefix + char)
         if number:
             parts.append(digits(number))
         return "".join(parts)

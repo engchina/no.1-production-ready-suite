@@ -76,7 +76,8 @@ function itemError(field: LanguagePackField, item: string): I18nKey | null {
     case "number_patterns":
       return item.includes("N") ? null : "settings.language.error.numberPattern";
     case "char_values":
-      return at > 0 && [...left].length === 1 && /^\d+$/.test(right) ? null : "settings.language.error.charValue";
+      if (!(at > 0 && [...left].length === 1 && /^[0-9]+$/.test(right))) return "settings.language.error.charValue";
+      return Number(right) >= (field.min_value ?? 0) ? null : "settings.language.error.minValue";
     case "word_map":
       return left && right ? null : "settings.language.error.wordMap";
     case "enum_map":
@@ -116,7 +117,7 @@ export function languagePackErrors(fields: LanguagePackField[], texts: LanguageP
       continue;
     }
     const message = items.map((item) => itemError(field, item)).find(Boolean);
-    if (message) errors[key] = field.kind === "enum_map" ? t(message, { choices: field.choices.join("・") }) : t(message);
+    if (message) errors[key] = field.kind === "enum_map" ? t(message, { choices: field.choices.join("・") }) : t(message, { min: field.min_value ?? 0 });
   }
   return errors;
 }

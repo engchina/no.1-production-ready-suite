@@ -2426,6 +2426,8 @@ export interface LanguagePackField {
   ingest: boolean;
   /** 1 つの語の長さの上限（回答の定型文のような文の項目は長い）。 */
   max_chars: number;
+  /** 数値マッピングの値の下限。 */
+  min_value?: number;
 }
 
 export type LanguagePackValue = string[] | string;

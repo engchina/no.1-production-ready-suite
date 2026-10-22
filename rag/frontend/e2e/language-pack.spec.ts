@@ -4,7 +4,7 @@ import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 // 言語資源（#2181）。項目の定義と組み込みの値は backend の一部（画面の確認に足りる分）。
 const FIELDS = [
   { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true, max_chars: 40 },
-  { section: "numbers", key: "kanji_multipliers", kind: "char_values", choices: [], ingest: true, max_chars: 40 },
+  { section: "numbers", key: "kanji_multipliers", min_value: 1, kind: "char_values", choices: [], ingest: true, max_chars: 40 },
   { section: "symbols", key: "normalization", kind: "choice", choices: ["NFKC", "NFC", "none"], ingest: true, max_chars: 40 },
   { section: "symbols", key: "bracket_pairs", kind: "pairs", choices: [], ingest: true, max_chars: 40 },
   { section: "references", key: "cue_words", kind: "words", choices: [], ingest: true, max_chars: 40 },
@@ -238,4 +238,21 @@ test("言語資源は使い道の組と節の 2 段のタブで開き、項目�
   await page.getByRole("searchbox", { name: "項目を探す" }).fill("見つからない語");
   await expect(page.getByText("検索語に当たる項目はありません。")).toBeVisible();
   await expectNoPageOverflow(page);
+});
+
+
+test("言語資源のゼロ倍率は欄で拒否し、正しい倍率だけを保存する", { tag: "@responsive" }, async ({ page }) => {
+  const { saved } = await mockLanguagePack(page);
+  await page.goto("/settings/language-pack");
+  const field = page.getByLabel("漢数字の位取りの字と倍率", { exact: true });
+  await field.fill("十=0");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("数は 1 以上で書いてください。", { exact: true })).toBeVisible();
+  await expect(field).toBeFocused();
+  expect(saved.overrides).toBeNull();
+  await field.fill("十=10\n百=100\n千=1000");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => saved.overrides).toEqual({ numbers: { kanji_multipliers: ["十=10", "百=100", "千=1000"] } });
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("numeric-mapping.png"), fullPage: true });
 });

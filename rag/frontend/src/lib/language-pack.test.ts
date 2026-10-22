@@ -69,3 +69,13 @@ describe("言語資源の画面の値（Issue 2181）", () => {
     expect(changesIngestFields(fields, { ...saved, "numbers.article_units": "条\n箇条" }, saved)).toBe(true);
   });
 });
+
+
+it("数値マッピングは API の下限に従い、変換不能な数字を拒否する", () => {
+  const field: LanguagePackField = { ...FIELDS[1], key: "roman_digits", min_value: 1 };
+  for (const value of ["v=0", "v=²", "v=１", "v=-1"]) {
+    expect(languagePackErrors([field], { "numbers.roman_digits": value })).toHaveProperty("numbers.roman_digits");
+  }
+  expect(languagePackErrors([field], { "numbers.roman_digits": "i=1\nv=5" })).toEqual({});
+  expect(languagePackErrors([FIELDS[1]], { "numbers.kanji_digits": "〇=0" })).toEqual({});
+});
