@@ -228,6 +228,10 @@
     {
       "id": "nested-item-label",
       "passage": "- 照合すべき項目"
+    },
+    {
+      "id": "count-label-parent",
+      "passage": "- テーブルに記載された件数"
     }
   ],
   "claim_passages": [
@@ -391,6 +395,14 @@
     {
       "id": "table-intro-with-instruction",
       "passage": "- 表「合成の集計」では、登録してください。"
+    },
+    {
+      "id": "count-label-with-value",
+      "passage": "- テーブルに記載された件数は 42 件"
+    },
+    {
+      "id": "count-label-with-instruction",
+      "passage": "- 件数を変更してください"
     }
   ],
   "answers": [
@@ -554,6 +566,49 @@
         "- 削除の前に、所属部署の部門長の承認を得てください。",
         "- 削除したアカウントは 30 日後に完全に消去され、復元できません。"
       ]
+    }
+  ],
+  "table_header_cases": [
+    {
+      "id": "empty-corner",
+      "answer": "| | 項目 A | 項目 B |\n|---|---|---|\n| 値 | 10 | 20 |",
+      "headers": [
+        "| | 項目 A | 項目 B |"
+      ]
+    },
+    {
+      "id": "empty-middle",
+      "answer": "| 項目 A | | 項目 B |\n|---|---|---|",
+      "headers": [
+        "| 項目 A | | 項目 B |"
+      ]
+    },
+    {
+      "id": "empty-last",
+      "answer": "| 項目 A | |\n|---|---|",
+      "headers": [
+        "| 項目 A | |"
+      ]
+    },
+    {
+      "id": "only-empty-cells",
+      "answer": "| | |\n|---|---|",
+      "headers": []
+    },
+    {
+      "id": "instruction-cell",
+      "answer": "| | 値を変更してください |\n|---|---|",
+      "headers": []
+    },
+    {
+      "id": "assertion-cell",
+      "answer": "| | 値は一致します |\n|---|---|",
+      "headers": []
+    },
+    {
+      "id": "missing-separator",
+      "answer": "| | 項目 A |\n| 値 | 10 |",
+      "headers": []
     }
   ]
 }

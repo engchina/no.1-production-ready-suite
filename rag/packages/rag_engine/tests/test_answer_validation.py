@@ -2288,3 +2288,14 @@ def test_other_chapter_table_is_not_supported_when_scope_does_not_apply() -> Non
         )
     assert result["counts"] == {"unsupported": 1}
     assert result["claim_checks"][0]["support_check"] == "target_mismatch"
+
+
+@pytest.mark.parametrize("case", HEADING_CASES["table_header_cases"], ids=lambda case: case["id"])
+def test_table_header_contract_with_empty_cells(case: dict) -> None:
+    from rag_engine.generation.operation_audit import is_non_claim_passage, table_header_lines
+
+    headers = table_header_lines(case["answer"])
+    assert headers == set(case["headers"])
+    for header in headers:
+        assert is_non_claim_passage(header, table_headers=headers)
+    assert not is_non_claim_passage("| 値 | 10 | 20 |", table_headers=headers)
