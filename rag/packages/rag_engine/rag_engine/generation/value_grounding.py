@@ -47,6 +47,17 @@ def _numbers(text: str, *, kanji: bool = False) -> set[str]:
     return set(re.findall(r"[0-9]+(?:\.[0-9]+)?", text))
 
 
+# 段落の数値が引用した根拠のどこにも無いときの理由の先頭（#3088）。呼び出し元はこの理由に未確認の印を付ける。
+ABSENT_VALUE_REASON = "根拠の原文に無い数値"
+
+
+def _number_order(value: str) -> tuple[float, str]:
+    try:
+        return (float(value), value)
+    except ValueError:
+        return (float("inf"), value)
+
+
 def unsupported_document_value_claim(text: str, cited: Sequence[dict[str, Any]], question: str) -> str:
     """明示数値の制約・現在値に、生成画像説明以外の必要な裏付けがあるか確認する。
 
@@ -109,7 +120,12 @@ def unsupported_document_value_claim(text: str, cited: Sequence[dict[str, Any]],
         # 規則文での裏付けは、日付を除いた数字にだけ要求する。質問に明示された数値（「年３回から４回」の 4）は
         # 利用者が与えた条件で、図の例示値ではない (#629)。
         supported |= _numbers(unicodedata.normalize("NFKC", question), kanji=True)
-        if not _numbers(_date().sub("", normalized)) <= supported:
+        missing = _numbers(_date().sub("", normalized)) - supported
+        if missing:
+            # 引用した根拠のどこにも無い数値（表示例・画像の説明にも無い）は、資料の外から足した値（#3088）。
+            anywhere = set().union(*(_numbers(unicodedata.normalize("NFKC", span.get("text", "")), kanji=True) for span in cited))
+            if absent := missing - anywhere:
+                return f"{ABSENT_VALUE_REASON}（{'、'.join(sorted(absent, key=_number_order))}）"
             return "文書の表示例・Vision説明だけでは数値の入力規則を確認できない"
     if re.search(rf"{alt['user_subject_words']}{alt['user_subject_particles']}", normalized):
         known = _numbers(unicodedata.normalize("NFKC", question), kanji=True)

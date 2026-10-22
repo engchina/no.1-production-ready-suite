@@ -57,7 +57,7 @@ from rag_engine.generation.interaction_grounding import interaction_binding_erro
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
-from rag_engine.generation.value_grounding import unsupported_document_value_claim
+from rag_engine.generation.value_grounding import ABSENT_VALUE_REASON, unsupported_document_value_claim
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedFactAudit, GroundedItem
 from rag_engine.parsing.content_labels import content_labels
@@ -1594,7 +1594,9 @@ def verify(
         for check in ITEM_CHECKS:
             reason = check(scoped_question, check_item, view)
             if reason:
-                _mark_check(entry, ITEM_CHECK_NAMES[check], reason)
+                # 根拠のどこにも無い数値は、規則の検査の注意ではなく、根拠で確かめられない説明（#3088）。
+                absent = check is _check_value and reason.startswith(ABSENT_VALUE_REASON)
+                _mark_check(entry, ITEM_CHECK_NAMES[check], reason, code="unsupported" if absent else "item_check")
         if conflict := _table_binding_conflict(check_item, view):
             # 表が否定した対応は、根拠と矛盾した説明として本文から外し、正しい対応を理由に出す（#2998）。
             note = _quote_note(entry)
