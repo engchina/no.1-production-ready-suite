@@ -111,6 +111,18 @@
     {
       "id": "table-name-lead-in",
       "passage": "- 表「合成の集計」では、"
+    },
+    {
+      "id": "italic-source-label",
+      "passage": "*根拠*"
+    },
+    {
+      "id": "italic-reference-label",
+      "passage": "*参考資料*"
+    },
+    {
+      "id": "excerpt-label-colon",
+      "passage": "- 抜粋："
     }
   ],
   "numbered_heading_passages": [
@@ -403,6 +415,26 @@
     {
       "id": "count-label-with-instruction",
       "passage": "- 件数を変更してください"
+    },
+    {
+      "id": "italic-numeric-claim",
+      "passage": "*上限は 30 件*"
+    },
+    {
+      "id": "italic-operation-claim",
+      "passage": "*登録してください*"
+    },
+    {
+      "id": "italic-assertion-claim",
+      "passage": "*承認者は担当者です*"
+    },
+    {
+      "id": "excerpt-label-with-claim",
+      "passage": "- 抜粋：上限は 30 件です。"
+    },
+    {
+      "id": "excerpt-label-with-numeric-value",
+      "passage": "- 抜粋 30 件："
     }
   ],
   "answers": [

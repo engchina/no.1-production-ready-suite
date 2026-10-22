@@ -356,7 +356,12 @@ def _heading_title(text: str) -> str | None:
         match = _LABEL_HEADING.fullmatch(label[: note.start()] + label[note.end() :])
     if match:
         title = match.group("title").strip().strip("*").strip()
-        if title and not _is_sentence(title) and not _OPERATION.search(title):
+        if (
+            title
+            and not _is_sentence(title)
+            and not _OPERATION.search(title)
+            and not _HEADING_QUANTITY.search(title)
+        ):
             return title
     phrase = heading_phrase(value)
     if phrase is not None:
@@ -386,7 +391,7 @@ _HEADING_END = re.compile(rf"{_v('heading_end_words')}$")
 # 箇条書きの行は段落だけでは決めず、次の行がその下の内容のときだけ見出し（`list_heading_lines`。
 # #1481 / #1482 / #1486）。番号・箇条書きの行が続く一覧の項目は主張のまま。
 _HEADING_NUMBER = re.compile(r"^(?:[0-9０-９]{1,3}[.)．）]|[（(][0-9０-９]{1,3}[）)])")
-_HEADING_BULLET = re.compile(r"^(?:[-+・•]|\*(?!\*))")
+_HEADING_BULLET = re.compile(r"^(?:[-+・•]|\*(?=\s))")
 # 「…の…」の名詞句（「重要度 B の復旧目標」「連携元のシステム」）。「ので」「のに」「のみ」は名詞を
 # つなぐ「の」に数えない。
 _HEADING_NO_PHRASE = re.compile(r"[^\sの]\s*の(?![でにみ])\s*[^\sの]")
