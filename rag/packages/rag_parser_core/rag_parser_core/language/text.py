@@ -276,8 +276,36 @@ def format_kanji_number(value: int, pack: LanguagePack | None = None) -> str:
     return render(value)
 
 
+# 桁区切りのカンマ（「14,000」）。3 桁ずつの組の前のカンマだけを除く。
+_THOUSANDS_SEPARATOR = re.compile(r"(?<=[0-9]),(?=[0-9]{3}(?![0-9]))")
+
+
+def arabic_numbers(
+    text: str, pack: LanguagePack | None = None, *, kanji: bool = True, spaced: bool = False
+) -> str:
+    """数の書き方をそろえる（桁区切りのカンマを除く）。
+
+    ``kanji`` なら漢数字の連なり（「一万四千」）を算用数字の値（「14000」）にする。
+    漢数字の字と位取りは言語資源。読めない連なりはそのまま残す。
+    ``spaced`` なら直した値の前後に空白を置き、隣の算用数字と 1 つの数に混ざらないようにする
+    （数を取り出すとき）。
+    """
+    patterns = text_patterns(pack)
+    if kanji and patterns.kanji_digits:
+
+        def value(match: re.Match[str]) -> str:
+            number = parse_number(match.group(0), pack)
+            if number is None:
+                return match.group(0)
+            return f" {number} " if spaced else str(number)
+
+        text = re.sub(f"{patterns.kanji}+", value, text)
+    return _THOUSANDS_SEPARATOR.sub("", text)
+
+
 __all__ = [
     "NEVER",
+    "arabic_numbers",
     "format_kanji_number",
     "format_roman",
     "TextPatterns",

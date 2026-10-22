@@ -9,7 +9,7 @@ from typing import Any
 
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.markers import marker_patterns
-from rag_parser_core.language.text import parse_number, text_patterns
+from rag_parser_core.language.text import arabic_numbers, text_patterns
 
 from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.parsing.content_labels import content_labels
@@ -34,12 +34,6 @@ def _denial() -> re.Pattern[str]:
     return re.compile(rf"{alt['denial_verbs']}{alt['denial_endings']}|{alt['denial_words']}")
 
 
-def _kanji_value(match: re.Match[str]) -> str:
-    """漢数字の連なりを、前後の数字と混ざらない算用数字にする（読めなければそのまま）。"""
-    value = parse_number(match.group(0))
-    return match.group(0) if value is None else f" {value} "
-
-
 def _numbers(text: str, *, kanji: bool = False) -> set[str]:
     """和暦年月の区切りを小数と誤認せず、質問の年月と同じ値として照合する。
 
@@ -48,9 +42,7 @@ def _numbers(text: str, *, kanji: bool = False) -> set[str]:
     （「一般」などの語を回答の主張の数値に数えない）。
     """
     patterns = text_patterns()
-    if kanji and patterns.kanji_digits:
-        text = re.sub(f"{patterns.kanji}+", _kanji_value, text)
-    text = re.sub(r"(?<=[0-9]),(?=[0-9]{3}(?![0-9]))", "", text)
+    text = arabic_numbers(text, kanji=kanji, spaced=True)
     text = re.sub(rf"{patterns.era_letter}([0-9]+)\.([0-9]{{1,2}})(?![0-9])", r"\1 \2", text)
     return set(re.findall(r"[0-9]+(?:\.[0-9]+)?", text))
 

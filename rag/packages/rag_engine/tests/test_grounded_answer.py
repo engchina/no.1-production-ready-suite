@@ -2532,6 +2532,16 @@ class SummaryDeniedClaimTest(unittest.TestCase):
         restated = "窓口が閉まっているときはカードキーを利用できます。"
         self.assertEqual(grounded.summary_asserts_denied(restated, [claim], [verified], distinctive_ratio=True), "")
 
+    def test_marked_claim_written_with_other_numerals_is_still_detected(self):
+        claim = "カードキーの利用については、一回あたりの上限が五千円です。"
+        verified = "カードキーは、窓口が閉まっている場合と、夜間で窓口が動いていない場合に限って使用できます。"
+        summary = "窓口が閉まり夜間で動いていない場合はカードキーを利用できます。ただし、一回あたりの上限は5,000円です。"
+        # 漢数字と算用数字・桁区切りの違いをそろえて比べ、同じ値の断定を見逃さない（#3086）。
+        self.assertTrue(grounded.summary_asserts_denied(summary, [claim], [verified], subject="印", distinctive_ratio=True))
+        # 確かめた説明だけを述べる要約には付けない。
+        restated = "窓口が閉まり夜間で動いていない場合はカードキーを使用できます。"
+        self.assertEqual(grounded.summary_asserts_denied(restated, [claim], [verified], subject="印", distinctive_ratio=True), "")
+
     def test_summary_asserts_denied_ignores_one_bigram_noise(self):
         self.assertEqual(grounded.summary_asserts_denied("実行ボタンで確認します。", ["確認は不要です。"], []), "")
         self.assertTrue(
