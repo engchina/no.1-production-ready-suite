@@ -135,6 +135,11 @@ for (const outcome of ["needs_clarification", "needs_human", "insufficient_evide
     await expect(page.getByText("一致する根拠が見つかりませんでした。")).toHaveCount(outcome === "insufficient_evidence" ? 1 : 0);
     await expect(page.getByText("回答の前に確認が必要です。上の確認事項への回答を質問に含めて、もう一度検索してください。"))
       .toHaveCount(outcome === "needs_clarification" ? 1 : 0);
+    if (outcome === "needs_clarification") {
+      const hint = page.getByText("回答の前に確認が必要です。上の確認事項への回答を質問に含めて、もう一度検索してください。");
+      await hint.scrollIntoViewIfNeeded();
+      await expect(hint).toBeVisible();
+    }
     await expectNoPageOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`search-${outcome}.png`), fullPage: true });
   });
