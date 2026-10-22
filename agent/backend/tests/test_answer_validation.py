@@ -3154,3 +3154,15 @@ def test_table_header_contract_with_empty_cells(case: dict[str, Any]) -> None:
     for header in case["headers"]:
         assert kinds[header] == "table"
     assert "| 値 | 10 | 20 |" not in kinds
+
+
+@pytest.mark.parametrize(
+    "heading", ["**上限は無制限**", "## 上限は無制限。確認してください。", "【上限は無制限】"]
+)
+def test_assertion_in_heading_markup_ends_the_previous_unverified_section(heading: str) -> None:
+    claim = "- 上限は 30 件です。"
+    answer = f"**確認が必要な点**\n- 未確認の項目\n\n{heading}\n{claim}"
+    kinds = non_claim_passages(answer)
+    assert heading not in kinds
+    assert claim not in kinds
+    assert kinds["- 未確認の項目"] == "unverified_section"
