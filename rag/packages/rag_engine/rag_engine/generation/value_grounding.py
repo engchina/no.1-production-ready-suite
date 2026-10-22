@@ -9,7 +9,7 @@ from typing import Any
 
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.markers import marker_patterns
-from rag_parser_core.language.text import text_patterns
+from rag_parser_core.language.text import parse_number, text_patterns
 
 from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.parsing.content_labels import content_labels
@@ -34,10 +34,24 @@ def _denial() -> re.Pattern[str]:
     return re.compile(rf"{alt['denial_verbs']}{alt['denial_endings']}|{alt['denial_words']}")
 
 
-def _numbers(text: str) -> set[str]:
-    """和暦年月の区切りを小数と誤認せず、質問の年月と同じ値として照合する。"""
-    era_letter = text_patterns().era_letter
-    text = re.sub(rf"{era_letter}([0-9]+)\.([0-9]{{1,2}})(?![0-9])", r"\1 \2", text)
+def _kanji_value(match: re.Match[str]) -> str:
+    """漢数字の連なりを、前後の数字と混ざらない算用数字にする（読めなければそのまま）。"""
+    value = parse_number(match.group(0))
+    return match.group(0) if value is None else f" {value} "
+
+
+def _numbers(text: str, *, kanji: bool = False) -> set[str]:
+    """和暦年月の区切りを小数と誤認せず、質問の年月と同じ値として照合する。
+
+    桁区切りのカンマ（「14,000」）は 1 つの数にする。``kanji`` なら漢数字（「一万四千」。字は言語資源）も
+    算用数字の値として読む（#3070）。裏付けの側（根拠の本文・質問）だけで読み、回答の側では読まない
+    （「一般」などの語を回答の主張の数値に数えない）。
+    """
+    patterns = text_patterns()
+    if kanji and patterns.kanji_digits:
+        text = re.sub(f"{patterns.kanji}+", _kanji_value, text)
+    text = re.sub(r"(?<=[0-9]),(?=[0-9]{3}(?![0-9]))", "", text)
+    text = re.sub(rf"{patterns.era_letter}([0-9]+)\.([0-9]{{1,2}})(?![0-9])", r"\1 \2", text)
     return set(re.findall(r"[0-9]+(?:\.[0-9]+)?", text))
 
 
@@ -98,17 +112,17 @@ def unsupported_document_value_claim(text: str, cited: Sequence[dict[str, Any]],
             # 本文の文は、規則の語（「上限」「最大」）が無くても規則を述べる（「14日以内とする」「7日まで認める」）。
             # 守るのは表示例・Vision の値なので、本文の文は例の文でなければ裏付けにする（#2209）。
             if not denial.search(sentence) and (rule.search(sentence) or not cues.has("example_words", sentence)):
-                supported.update(_numbers(sentence))
+                supported.update(_numbers(sentence, kanji=True))
         # 「平成27年度改正で上限額は100万円から120万円に」の 27 は日付で、規則値ではない。
         # 規則文での裏付けは、日付を除いた数字にだけ要求する。質問に明示された数値（「年３回から４回」の 4）は
         # 利用者が与えた条件で、図の例示値ではない (#629)。
-        supported |= _numbers(unicodedata.normalize("NFKC", question))
+        supported |= _numbers(unicodedata.normalize("NFKC", question), kanji=True)
         if not _numbers(_date().sub("", normalized)) <= supported:
             return "文書の表示例・Vision説明だけでは数値の入力規則を確認できない"
     if re.search(rf"{alt['user_subject_words']}{alt['user_subject_particles']}", normalized):
-        known = _numbers(unicodedata.normalize("NFKC", question))
+        known = _numbers(unicodedata.normalize("NFKC", question), kanji=True)
         if not numbers <= known and not any(
-            (rule.search(s) or cues.has("rule_condition_words", s)) and numbers <= _numbers(s) for s in native
+            (rule.search(s) or cues.has("rule_condition_words", s)) and numbers <= _numbers(s, kanji=True) for s in native
         ):
             return "文書の表示例・Vision説明だけでは今回の実値を確認できない"
     return ""
