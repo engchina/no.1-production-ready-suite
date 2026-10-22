@@ -64,8 +64,6 @@ import {
   api,
   ApiError,
   DEFAULT_SEARCH_ANSWER_PROFILE_NAME,
-  type AnswerFlowName,
-  type QueryStrategyName,
   type SearchAnswerProfileConfig,
   type SearchAnswerProfileDetail,
   type SearchAnswerProfileStatus,
@@ -90,6 +88,7 @@ import {
   useSearchAnswerProfile,
   useSearchAnswerProfiles,
   useProfileAnswerModels,
+  useProfileGuideSearchDefaults,
   useListTotal,
   useCreateSearchAnswerProfile,
   useUpdateSearchAnswerProfile,
@@ -97,9 +96,7 @@ import {
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { useWorkspaceState } from "@/lib/workspace-state";
-import { EntityExpansionRow } from "./EntityExpansionRow";
 import { SearchAnswerProfileKnowledgePanel } from "./SearchAnswerProfileKnowledgePanel";
-import { SectionExpansionRow } from "./SectionExpansionRow";
 import { LanguagePackOverridesFieldset } from "@/components/search-answer-profiles/LanguagePackOverridesFieldset";
 
 
@@ -168,34 +165,10 @@ const SCOPE_ERROR_ID = "search-answer-profile-scope-error";
 const NAME_MAX_LENGTH = 256;
 const DESCRIPTION_MAX_LENGTH = 2000;
 
-const QUERY_STRATEGY_OPTIONS: SelectFieldOption<QueryStrategyName>[] = (
-  [
-    "auto_routing",
-    "simple_retrieval",
-    "rag_fusion",
-    "query_decomposition",
-    "step_back_prompting",
-    "hyde",
-  ] as const
-).map((value) => ({ value, label: t(`searchAnswerProfiles.queryStrategy.${value}`) }));
-const ANSWER_FLOW_OPTIONS: SelectFieldOption<AnswerFlowName>[] = [
-  { value: "crag", label: t("searchAnswerProfiles.answerFlow.crag") },
-  { value: "standard_rag", label: t("searchAnswerProfiles.answerFlow.standard_rag") },
-];
-// 0〜20(backend の rag_neighbor_child_count と同じ範囲)。SelectField は文字列値を扱う。
-const NEIGHBOR_CHILD_COUNT_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
-  value: String(n),
-  label: String(n),
-}));
 // 0〜20(backend の rag_max_anchors_per_document と同じ範囲。0 は上限なし。#2167)。
 const MAX_ANCHORS_PER_DOCUMENT_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
   value: String(n),
   label: n === 0 ? t("searchAnswerProfiles.field.maxAnchorsPerDocumentUnlimited") : String(n),
-}));
-// 0〜10(backend の rag_guide_step_max_queries と同じ範囲。#2395)。
-const GUIDE_STEP_MAX_QUERIES_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 11 }, (_, n) => ({
-  value: String(n),
-  label: String(n),
 }));
 function emptyQueryConfig(): KnowledgeBaseQueryConfig {
   return {};
@@ -203,9 +176,11 @@ function emptyQueryConfig(): KnowledgeBaseQueryConfig {
 
 /** 旧保存 JSON に無い項目は null(継承)で補う。 */
 function normalizeSearchAnswerProfileConfig(config: SearchAnswerProfileConfig): SearchAnswerProfileConfig {
+  const query = { ...config.query };
+  for (const key of ["query_strategy", "answer_flow", "neighbor_child_count", "rerank_enabled", "auto_field_filter_enabled", "graph_expansion_enabled", "screen_linking_enabled", "request_coverage_retrieval_enabled", "guide_step_retrieval_enabled", "entity_expansion_enabled", "entity_expansion_max_chunks", "section_expansion_enabled", "section_expansion_max_levels", "section_expansion_input_token_percent"] as const) delete query[key];
   return {
     ...config,
-    query: { ...emptyQueryConfig(), ...config.query },
+    query,
     clarification_policy: config.clarification_policy ?? "confirm",
     language_pack: config.language_pack ?? {},
     contact_override: config.contact_override ?? "",
@@ -689,6 +664,7 @@ function SearchAnswerProfileEditor({
   onArchived: () => void;
 }) {
   const mode: "create" | "edit" = initial ? "edit" : "create";
+  const guideDefaults = useProfileGuideSearchDefaults();
   const answerModels = useProfileAnswerModels();
   const registeredModels = Array.isArray(answerModels.data) ? answerModels.data : [];
   const create = useCreateSearchAnswerProfile();
@@ -942,44 +918,6 @@ function SearchAnswerProfileEditor({
                 <p className="text-xs text-fg-muted">{t("searchAnswerProfiles.query.helper")}</p>
                 <div className="space-y-3">
                   <QuerySelectRow
-                    id="search-answer-profile-query-strategy"
-                    label={t("searchAnswerProfiles.field.queryStrategy")}
-                    value={config.query.query_strategy ?? null}
-                    options={QUERY_STRATEGY_OPTIONS}
-                    width="lg"
-                    defaultOnOverride="simple_retrieval"
-                    disabled={locked}
-                    onChange={(value) => updateQuery({ query_strategy: value })}
-                  />
-                  <QuerySelectRow
-                    id="search-answer-profile-answer-flow"
-                    label={t("searchAnswerProfiles.field.answerFlow")}
-                    value={config.query.answer_flow ?? null}
-                    options={ANSWER_FLOW_OPTIONS}
-                    width="lg"
-                    defaultOnOverride="standard_rag"
-                    disabled={locked}
-                    onChange={(value) => updateQuery({ answer_flow: value })}
-                  />
-                  <QuerySelectRow
-                    id="search-answer-profile-neighbor-child-count"
-                    label={t("searchAnswerProfiles.field.neighborChildCount")}
-                    value={
-                      config.query.neighbor_child_count == null
-                        ? null
-                        : String(config.query.neighbor_child_count)
-                    }
-                    options={NEIGHBOR_CHILD_COUNT_OPTIONS}
-                    width="xs"
-                    defaultOnOverride="3"
-                    disabled={locked}
-                    onChange={(value) =>
-                      updateQuery({
-                        neighbor_child_count: value === null ? null : Number(value),
-                      })
-                    }
-                  />
-                  <QuerySelectRow
                     id="search-answer-profile-max-anchors-per-document"
                     label={t("searchAnswerProfiles.field.maxAnchorsPerDocument")}
                     helper={t("searchAnswerProfiles.field.maxAnchorsPerDocumentHelper")}
@@ -998,69 +936,22 @@ function SearchAnswerProfileEditor({
                       })
                     }
                   />
-                  <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
-                    <h3 className="text-sm font-medium text-fg">
-                      {t("searchAnswerProfiles.field.answerOptions")}
-                    </h3>
-                    <div className="min-w-0 space-y-2">
-                      <QueryToggleRow
-                        label={t("searchAnswerProfiles.field.rerank")}
-                        value={config.query.rerank_enabled ?? null}
-                        disabled={locked}
-                        onChange={(value) => updateQuery({ rerank_enabled: value })}
-                      />
-                      <QueryToggleRow
-                        label={t("searchAnswerProfiles.field.autoFieldFilter")}
-                        description={t("searchAnswerProfiles.field.autoFieldFilterHelper")}
-                        descriptionId="search-answer-profile-auto-field-filter-helper"
-                        value={config.query.auto_field_filter_enabled ?? null}
-                        disabled={locked}
-                        onChange={(value) =>
-                          updateQuery({ auto_field_filter_enabled: value })
-                        }
-                      />
-                      <QueryToggleRow
-                        label={t("searchAnswerProfiles.field.graphExpansion")}
-                        description={t("searchAnswerProfiles.field.graphExpansionHelper")}
-                        descriptionId="search-answer-profile-graph-expansion-helper"
-                        value={config.query.graph_expansion_enabled ?? null}
-                        disabled={locked}
-                        onChange={(value) =>
-                          updateQuery({ graph_expansion_enabled: value })
-                        }
-                      />
-                      <QueryToggleRow
-                        label={t("searchAnswerProfiles.field.guideStepRetrieval")}
-                        description={t("searchAnswerProfiles.field.guideStepRetrievalHelper")}
-                        descriptionId="search-answer-profile-guide-step-retrieval-helper"
-                        value={config.query.guide_step_retrieval_enabled ?? null}
-                        disabled={locked}
-                        onChange={(value) =>
-                          updateQuery({ guide_step_retrieval_enabled: value })
-                        }
-                      />
-                      <QueryToggleRow
-                        label={t("searchAnswerProfiles.field.screenLinking")}
-                        description={t("searchAnswerProfiles.field.screenLinkingHelper")}
-                        descriptionId="search-answer-profile-screen-linking-helper"
-                        value={config.query.screen_linking_enabled ?? null}
-                        disabled={locked}
-                        onChange={(value) =>
-                          updateQuery({ screen_linking_enabled: value })
-                        }
-                      />
-                      <QueryToggleRow
-                        label={t("searchAnswerProfiles.field.requestCoverage")}
-                        description={t("searchAnswerProfiles.field.requestCoverageHelper")}
-                        descriptionId="search-answer-profile-request-coverage-helper"
-                        value={config.query.request_coverage_retrieval_enabled ?? null}
-                        disabled={locked}
-                        onChange={(value) =>
-                          updateQuery({ request_coverage_retrieval_enabled: value })
-                        }
-                      />
-                    </div>
-                  </div>
+                  <QuerySelectRow
+                    id="search-answer-profile-answer-model"
+                    width="md"
+                    label={t("searchAnswerProfiles.field.answerModel")}
+                    helper={answerModels.isError ? t("searchAnswerProfiles.field.answerModelLoadFailed") : t("searchAnswerProfiles.field.answerModelHelper")}
+                    value={config.answer_model_id ?? null}
+                    options={[
+                      ...registeredModels.map((model) => ({ value: model.model_id, label: model.display_name })),
+                      ...(config.answer_model_id && !registeredModels.some((model) => model.model_id === config.answer_model_id)
+                        ? [{ value: config.answer_model_id, label: t("searchAnswerProfiles.field.unavailableModel", { model: config.answer_model_id }) }]
+                        : []),
+                    ]}
+                    defaultOnOverride={registeredModels[0]?.model_id ?? ""}
+                    disabled={locked || (!config.answer_model_id && !registeredModels.length)}
+                    onChange={(value) => setConfig((current) => ({ ...current, answer_model_id: value || null }))}
+                  />
                   <div
                     className="flex items-start justify-between gap-4 rounded-lg border border-border p-3"
                     data-testid="search-answer-profile-guide-matching"
@@ -1085,35 +976,21 @@ function SearchAnswerProfileEditor({
                       className="shrink-0"
                     />
                   </div>
-                  <QuerySelectRow
-                    id="search-answer-profile-answer-model"
-                    width="md"
-                    label={t("searchAnswerProfiles.field.answerModel")}
-                    helper={answerModels.isError ? t("searchAnswerProfiles.field.answerModelLoadFailed") : t("searchAnswerProfiles.field.answerModelHelper")}
-                    value={config.answer_model_id ?? null}
-                    options={[
-                      ...registeredModels.map((model) => ({ value: model.model_id, label: model.display_name })),
-                      ...(config.answer_model_id && !registeredModels.some((model) => model.model_id === config.answer_model_id)
-                        ? [{ value: config.answer_model_id, label: t("searchAnswerProfiles.field.unavailableModel", { model: config.answer_model_id }) }]
-                        : []),
-                    ]}
-                    defaultOnOverride={registeredModels[0]?.model_id ?? ""}
-                    disabled={locked || (!config.answer_model_id && !registeredModels.length)}
-                    onChange={(value) => setConfig((current) => ({ ...current, answer_model_id: value || null }))}
-                  />
+
+                  {guideDefaults.isError ? <ApiErrorState error={guideDefaults.error} fallback={t("searchAnswerProfiles.field.guideDefaultsError")} onRetry={() => void guideDefaults.refetch()} /> : null}
                   <QuerySelectRow
                     id="search-answer-profile-guide-step-max-queries"
                     label={t("searchAnswerProfiles.field.guideStepMaxQueries")}
-                    helper={t("searchAnswerProfiles.field.guideStepMaxQueriesHelper")}
+                    helper={guideDefaults.data ? t("searchAnswerProfiles.field.guideStepMaxQueriesHelper", { defaultValue: guideDefaults.data.max_queries }) : t(guideDefaults.isError ? "searchAnswerProfiles.field.guideDefaultsError" : "searchAnswerProfiles.field.guideDefaultsLoading")}
                     value={
                       config.query.guide_step_max_queries == null
                         ? null
                         : String(config.query.guide_step_max_queries)
                     }
-                    options={GUIDE_STEP_MAX_QUERIES_OPTIONS}
+                    options={Array.from(new Set([...Array.from({ length: 11 }, (_, n) => n), ...(guideDefaults.data ? [guideDefaults.data.max_queries] : [])])).sort((a, b) => a - b).map((value) => ({ value: String(value), label: String(value) }))}
                     width="xs"
-                    defaultOnOverride="4"
-                    disabled={locked}
+                    defaultOnOverride={String(guideDefaults.data?.max_queries ?? "")}
+                    disabled={locked || !guideDefaults.data}
                     onChange={(value) =>
                       updateQuery({
                         guide_step_max_queries: value === null ? null : Number(value),
@@ -1123,29 +1000,23 @@ function SearchAnswerProfileEditor({
                   <QuerySelectRow
                     id="search-answer-profile-guide-step-deadline"
                     label={t("searchAnswerProfiles.field.guideStepDeadline")}
-                    helper={t("searchAnswerProfiles.field.guideStepDeadlineHelper")}
+                    helper={guideDefaults.data ? t("searchAnswerProfiles.field.guideStepDeadlineHelper", { defaultValue: guideDefaults.data.deadline_seconds }) : t(guideDefaults.isError ? "searchAnswerProfiles.field.guideDefaultsError" : "searchAnswerProfiles.field.guideDefaultsLoading")}
                     value={
                       config.query.guide_step_deadline_seconds == null
                         ? null
                         : String(config.query.guide_step_deadline_seconds)
                     }
-                    options={[0, 10, 20, 30, 45, 60].map((value) => ({ value: String(value), label: String(value) }))}
+                    options={Array.from(new Set([0, 10, 20, 30, 45, 60, ...(guideDefaults.data ? [guideDefaults.data.deadline_seconds] : [])])).sort((a, b) => a - b).map((value) => ({ value: String(value), label: String(value) }))}
                     width="xs"
-                    defaultOnOverride="60"
-                    disabled={locked}
+                    defaultOnOverride={String(guideDefaults.data?.deadline_seconds ?? "")}
+                    disabled={locked || !guideDefaults.data}
                     onChange={(value) =>
                       updateQuery({
                         guide_step_deadline_seconds: value === null ? null : Number(value),
                       })
                     }
                   />
-                  <EntityExpansionRow
-                    value={config.query}
-                    knowledgeBaseIds={config.knowledge_base_ids}
-                    disabled={locked}
-                    onChange={updateQuery}
-                  />
-                  <SectionExpansionRow value={config.query} disabled={locked} onChange={updateQuery} />
+
 
                 </div>
               </fieldset>
@@ -1366,53 +1237,6 @@ function QuerySelectRow<T extends string>({
           />
         ) : null}
       </div>
-    </div>
-  );
-}
-
-/** 検索オプションの三値行(グローバル継承 / ON / OFF)。null は継承。 */
-function QueryToggleRow({
-  label,
-  description,
-  descriptionId,
-  value,
-  disabled,
-  onChange,
-}: {
-  label: string;
-  /** 行の下に出す説明(費用・向く質問など)。選択肢のグループの説明として読み上げる。 */
-  description?: string;
-  descriptionId?: string;
-  value: boolean | null;
-  disabled: boolean;
-  onChange: (value: boolean | null) => void;
-}) {
-  const describedBy = description ? descriptionId : undefined;
-  return (
-    // 広い画面でも選択肢を名前のすぐ右に並べる（右端へ離さない。1920px で名前と選択肢の対応が追えるように。#555）。
-    <div className="grid items-center gap-2 sm:grid-cols-[minmax(10rem,16rem)_auto] sm:justify-start">
-      <span className="text-sm text-fg">{label}</span>
-      <div
-        className="flex flex-wrap gap-1"
-        role="group"
-        aria-label={label}
-        aria-describedby={describedBy}
-      >
-        <ToggleChip selected={value === null} disabled={disabled} onClick={() => onChange(null)}>
-          {t("searchAnswerProfiles.inherit")}
-        </ToggleChip>
-        <ToggleChip selected={value === true} disabled={disabled} onClick={() => onChange(true)}>
-          ON
-        </ToggleChip>
-        <ToggleChip selected={value === false} disabled={disabled} onClick={() => onChange(false)}>
-          OFF
-        </ToggleChip>
-      </div>
-      {description ? (
-        <p id={describedBy} className="text-xs text-fg-muted sm:col-span-2">
-          {description}
-        </p>
-      ) : null}
     </div>
   );
 }

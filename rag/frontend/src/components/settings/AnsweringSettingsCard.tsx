@@ -61,6 +61,12 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     request_coverage_retrieval_enabled: settings.request_coverage_retrieval_enabled,
     auto_field_filter_enabled: settings.auto_field_filter_enabled,
     graph_expansion_enabled: settings.graph_expansion_enabled,
+    entity_expansion_enabled: settings.entity_expansion_enabled,
+    entity_expansion_max_chunks: settings.entity_expansion_max_chunks,
+    section_expansion_enabled: settings.section_expansion_enabled,
+    section_expansion_max_levels: settings.section_expansion_max_levels,
+    section_expansion_input_token_percent: settings.section_expansion_input_token_percent,
+
   };
 }
 
@@ -174,14 +180,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
         className="divide-y divide-border rounded-md border border-border"
       >
         <SwitchRow
-          id="answering-rerank"
-          label={t("settings.answering.rerank")}
-          description={t("settings.answering.rerankHint")}
-          checked={form.rerank_enabled}
-          disabled={disabled}
-          onChange={(checked) => update({ rerank_enabled: checked })}
-        />
-        <SwitchRow
           id="answering-auto-field-filter"
           label={t("settings.answering.autoFieldFilter")}
           description={t("settings.answering.autoFieldFilterHint")}
@@ -189,6 +187,16 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           disabled={disabled}
           onChange={(checked) => update({ auto_field_filter_enabled: checked })}
         />
+        <div>
+          <SwitchRow id="answering-entity-expansion" label={t("settings.answering.entityExpansion")}
+            description={t("settings.answering.entityExpansionHint")} checked={form.entity_expansion_enabled}
+            disabled={disabled} onChange={(checked) => update({ entity_expansion_enabled: checked })} />
+          {form.entity_expansion_enabled ? <FormGrid className="px-3 pb-3">
+            <SelectField id="answering-entity_expansion_max_chunks" label={t("settings.answering.entity_expansion_max_chunks")} width="xs"
+              value={String(form.entity_expansion_max_chunks)} disabled={disabled} options={Array.from({ length: 20 }, (_, n) => { const value = n + 1; return { value: String(value), label: String(value) }; })}
+              onValueChange={(value) => update({ entity_expansion_max_chunks: Number(value) })} />
+          </FormGrid> : null}
+        </div>
         <SwitchRow
           id="answering-graph-expansion"
           label={t("settings.answering.graphExpansion")}
@@ -205,6 +213,27 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           disabled={disabled}
           onChange={(checked) => update({ screen_linking_enabled: checked })}
         />
+        <SwitchRow
+          id="answering-rerank"
+          label={t("settings.answering.rerank")}
+          description={t("settings.answering.rerankHint")}
+          checked={form.rerank_enabled}
+          disabled={disabled}
+          onChange={(checked) => update({ rerank_enabled: checked })}
+        />
+        <div>
+          <SwitchRow id="answering-section-expansion" label={t("settings.answering.sectionExpansion")}
+            description={t("settings.answering.sectionExpansionHint")} checked={form.section_expansion_enabled}
+            disabled={disabled} onChange={(checked) => update({ section_expansion_enabled: checked })} />
+          {form.section_expansion_enabled ? <FormGrid className="px-3 pb-3">
+            <SelectField id="answering-section_expansion_max_levels" label={t("settings.answering.section_expansion_max_levels")} width="xs"
+              value={String(form.section_expansion_max_levels)} disabled={disabled} options={Array.from({ length: 8 }, (_, n) => { const value = n + 1; return { value: String(value), label: String(value) }; })}
+              onValueChange={(value) => update({ section_expansion_max_levels: Number(value) })} />
+            <SelectField id="answering-section_expansion_input_token_percent" label={t("settings.answering.section_expansion_input_token_percent")} width="xs"
+              value={String(form.section_expansion_input_token_percent)} disabled={disabled} options={Array.from({ length: 81 }, (_, n) => { const value = n + 10; return { value: String(value), label: String(value) }; })}
+              onValueChange={(value) => update({ section_expansion_input_token_percent: Number(value) })} />
+          </FormGrid> : null}
+        </div>
         <SwitchRow
           id="answering-request-coverage"
           label={t("settings.answering.requestCoverage")}

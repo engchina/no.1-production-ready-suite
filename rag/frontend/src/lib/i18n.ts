@@ -1712,7 +1712,7 @@ export const ja = {
   "settings.services.item.pipelineEvaluation": "評価の基準",
   "settings.services.loadError": "サービス一覧を取得できませんでした。",
   "settings.retrieval.subtitle":
-    "回答の検索と生成の全体の既定（検索・回答プロファイルで上書きできます）と、回答の記録の保存期間・質問履歴を設定します。",
+    "回答の検索方法と生成方式の全体設定、および回答の記録の保存期間・質問履歴を設定します。",
   "settings.retrieval.actions.unsaved": "未保存の変更があります。",
   "settings.retrieval.actions.reset": "変更を破棄",
   "settings.prompts.subtitle":
@@ -2150,11 +2150,13 @@ export const ja = {
   "searchAnswerProfiles.field.answerModel": "回答モデル",
   "searchAnswerProfiles.field.answerModelHelper": "この回答設定で使うモデルです。質問でモデルを選んだ場合は、その選択を優先します。",
   "searchAnswerProfiles.field.unavailableModel": "{model}（登録を確認できません）",
+  "searchAnswerProfiles.field.guideDefaultsLoading": "既定値を読み込んでいます。",
+  "searchAnswerProfiles.field.guideDefaultsError": "既定値を取得できませんでした。もう一度読み込んでください。",
   "searchAnswerProfiles.field.guideStepDeadline": "手順ごとの検索の時間上限（秒）",
-  "searchAnswerProfiles.field.guideStepDeadlineHelper": "この回答設定での上限です。0 は手順検索を開始しません。回答全体の時間上限と検索回数の上限は引き続き適用します。",
+  "searchAnswerProfiles.field.guideStepDeadlineHelper": "既定は {defaultValue} 秒です。この回答設定での上限です。0 は手順検索を開始しません。回答全体の時間上限と検索回数の上限は引き続き適用します。",
   "searchAnswerProfiles.field.guideStepMaxQueries": "手順ごとの検索の上限",
   "searchAnswerProfiles.field.guideStepMaxQueriesHelper":
-    "1 回の回答で手順ごとに探す回数の上限です（参照の頁に絞った検索を含む）。主の検索の後に足す検索の合計の枠も超えません。継承時は検索方法の現在の設定を使います。",
+    "既定は {defaultValue} です。1 回の回答で手順ごとに探す回数の上限です（参照の頁に絞った検索を含む）。主の検索の後に足す検索の合計の枠も超えません。継承時は検索方法の現在の設定を使います。",
   "searchAnswerProfiles.entityExpansion.title": "名称・別名でつながる根拠",
   "searchAnswerProfiles.entityExpansion.enabled": "名称・別名でつながる根拠を 1 段広げる",
   "searchAnswerProfiles.entityExpansion.helper":
@@ -4005,7 +4007,7 @@ export const ja = {
     "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。期限を過ぎた記録は、次の回答の保存時とこの設定の保存時に削除します。",
   "settings.answering.title": "回答の検索と生成",
   "settings.answering.description":
-    "回答の検索と生成の全体の既定です。検索・回答プロファイルを指定しない呼び出し（MCP など）もこの値を使います。公開済みの検索・回答プロファイルの「検索・回答設定」で上書きできます。",
+    "すべての検索・回答プロファイルと、プロファイルを指定しない呼び出しで使う全体設定です。各機能は実行時に最初に呼ばれる順で並べています。",
   "settings.answering.queryStrategy": "質問の拡張",
   "settings.answering.queryStrategyHint":
     "質問の言い回しでは届きにくい資料の表現を補う検索文の作り方です。自動ルーティングは質問ごとに AI が選びます。",
@@ -4015,6 +4017,13 @@ export const ja = {
   "settings.answering.neighborChildCount": "根拠の前後から加える数",
   "settings.answering.neighborChildCountHint":
     "根拠のチャンクの前後から文脈に加えるチャンクの数です。0 は加えません。",
+  "settings.answering.entityExpansion": "名称・別名でつながる根拠",
+  "settings.answering.entityExpansionHint": "質問と上位の候補の名称・別名から、つながる根拠を 1 段だけ検索候補に加えます。名称・別名の索引を作った文書だけに効きます。AI の呼び出しは増えません。全体の検索に適用します。",
+  "settings.answering.sectionExpansion": "章節で広げる根拠",
+  "settings.answering.sectionExpansionHint": "当たった根拠の章節から親の章節へ広げ、原文を回答の材料に加えます。標準 RAG は原文を補完し、CRAG は追加した根拠の十分性も AI で確かめます。段数と回答モデルの入力上限に対する割合で制限します。全体の回答に適用します。",
+  "settings.answering.entity_expansion_max_chunks": "1 回の検索で加える根拠の上限",
+  "settings.answering.section_expansion_max_levels": "広げる段の上限",
+  "settings.answering.section_expansion_input_token_percent": "根拠の入力の上限（%）",
   "settings.answering.options": "回答の検索のオプション",
   "settings.answering.rerank": "Rerank で検索候補を並べ替える",
   "settings.answering.rerankHint":

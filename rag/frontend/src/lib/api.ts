@@ -2519,6 +2519,11 @@ export interface AnsweringSettingsData {
   auto_field_filter_enabled: boolean;
   /** 関係情報で根拠の候補を広げる(#2055。既定 false)。 */
   graph_expansion_enabled: boolean;
+  entity_expansion_enabled: boolean;
+  entity_expansion_max_chunks: number;
+  section_expansion_enabled: boolean;
+  section_expansion_max_levels: number;
+  section_expansion_input_token_percent: number;
   config_source: "runtime";
 }
 
@@ -3248,6 +3253,7 @@ export const api = {
       }`,
       { method: "DELETE" },
     ),
+  getProfileGuideSearchDefaults: () => request<{ max_queries: number; deadline_seconds: number }>("/api/settings/profile-guide-search-defaults"),
   getSectionRulesSettings: () => request<SectionRulesSettingsData>("/api/settings/section-rules"),
   saveSectionRulesSettings: (body: { mode: SectionRulesMode; rules: SectionRule[] }) =>
     request<SectionRulesSettingsData>("/api/settings/section-rules", {
