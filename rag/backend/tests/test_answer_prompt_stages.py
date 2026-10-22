@@ -195,7 +195,10 @@ def test_all_runtime_instructions_use_markdown_sections() -> None:
 
 def test_evaluation_catalog_exposes_only_current_evaluation_stages() -> None:
     stages = {stage.id: stage for stage in PROMPT_STAGES if stage.phase == "evaluation"}
-    assert set(stages) == {"evaluation", "answer_validation"}
+    assert set(stages) == {"evaluation"}
+    assert (
+        next(stage for stage in PROMPT_STAGES if stage.id == "answer_validation").phase == "audit"
+    )
     assert {part for part, _ in stages["evaluation"].parts} == {"scope", "correctness", "system"}
 
 

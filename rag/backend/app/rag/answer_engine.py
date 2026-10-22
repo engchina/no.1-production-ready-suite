@@ -731,6 +731,7 @@ class AnswerEngine:
                 step_callback,
             )
         outcome = _outcome_from_result(result, state)
+        await self._validate_outcome(request, outcome, step_callback=step_callback)
         if self._scope is not None:
             outcome.diagnostics["scope"] = {
                 "label": self._scope.label,
@@ -804,6 +805,83 @@ class AnswerEngine:
         ):
             outcome.diagnostics["zero_evidence"] = zero_evidence
         return outcome
+
+    async def _validate_outcome(
+        self,
+        request: SearchRequest,
+        outcome: AnswerOutcome,
+        *,
+        step_callback: StepCallback | None = None,
+    ) -> None:
+        """LLM 監査が有効な回答の最終の本文を、MCP と共通の検証で確かめる。"""
+        if self._settings.rag_answer_audit_mode == "none" or not outcome.answer.strip():
+            return
+        # answer_validation は engine の設定変換も使うため、循環 import を避けてここで読む。
+        from app.rag.answer_validation import EvidenceRef, validate_answer
+
+        name = "資料との照合"
+        started = time.monotonic()
+        if step_callback is not None:
+            await step_callback(name, "started", 0.0, {})
+        state = "success"
+        llm_usage: dict[str, Any] = {}
+        try:
+            result = await validate_answer(
+                request.query,
+                outcome.answer,
+                [EvidenceRef(chunk.document_id, chunk.chunk_id) for chunk in outcome.citations],
+                self._settings,
+                oracle=self._oracle,
+            )
+            llm_usage = dict(result.llm_usage)
+            validation: dict[str, Any] = {
+                "status": result.status,
+                "valid": result.valid,
+                "counts": dict(result.counts),
+                "claim_checks": list(result.claim_checks),
+                "missing_evidence_count": len(result.missing_evidence),
+                "stale_evidence_count": len(result.stale_evidence),
+            }
+        except Exception:  # noqa: BLE001 - 検証の失敗は未確認として残し、回答の記録を失わない。
+            logger.warning("answer final validation failed", exc_info=True)
+            validation = {"status": "error", "valid": False}
+            state = "error"
+        outcome.diagnostics["answer_validation"] = validation
+        if not validation["valid"]:
+            outcome.diagnostics["needs_human_review"] = True
+            outcome.diagnostics["confidence"] = "low"
+            envelope = outcome.diagnostics.get("envelope")
+            if isinstance(envelope, dict) and envelope.get("outcome") == "answered":
+                envelope["outcome"] = "conditional"
+            if outcome.diagnostics.get("outcome") == "answered":
+                outcome.diagnostics["outcome"] = "conditional"
+            reason = (
+                "資料との照合で回答の裏付けを確認できていません。内容と根拠を確認してください。"
+            )
+            previous = str(outcome.diagnostics.get("insufficient_reason") or "")
+            outcome.diagnostics["insufficient_reason"] = "\n".join(filter(None, (previous, reason)))
+        elapsed = round(time.monotonic() - started, 3)
+        details = {
+            "fields": [
+                {"label": "照合の結果", "value": "確認済み" if validation["valid"] else "未確認"},
+                {"label": "判定した段落", "value": str(len(validation.get("claim_checks") or []))},
+            ],
+        }
+        metrics = {
+            "llm_calls": int(llm_usage.get("calls") or 0),
+            "llm_usage": llm_usage,
+            "details": details,
+        }
+        outcome.diagnostics.setdefault("execution_steps", []).append(
+            {
+                "name": name,
+                "status": "complete" if state == "success" else "error",
+                "elapsed_seconds": elapsed,
+                **metrics,
+            }
+        )
+        if step_callback is not None:
+            await step_callback(name, state, elapsed, metrics)
 
     async def _answer_from_approved_faq(self, request: SearchRequest) -> AnswerOutcome:
         """利用者が選んだ類似問の承認済み FAQ だけから回答する(検索しない。#702)。"""

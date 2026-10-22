@@ -41,6 +41,7 @@ export const FLOW_STAGES: StageFixture[] = [
     ],
   },
   { id: "application", phase: "audit", prompts: [{ id: "system", content: "当てはめの指示" }] },
+  { id: "answer_validation", phase: "audit", prompts: [{ id: "system", content: "合成の資料照合の指示" }] },
   { id: "evaluation", phase: "evaluation", prompts: [{ id: "scope", content: "範囲の指示" }, { id: "system", content: "網羅性・忠実性の指示" }, { id: "correctness", content: "正確性の指示" }] },
 ];
 
