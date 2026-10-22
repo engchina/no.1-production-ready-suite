@@ -109,6 +109,8 @@ class RuntimeKnowledge:
     rules: tuple[RuntimeRule, ...] = ()
     loaded: bool = False
     error: str = ""
+    assume_unconfirmed: bool = False
+    unconfirmed_conditions: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,8 @@ class RuntimeKnowledgeContext:
     matched_rules: tuple[RuntimeRule, ...] = ()
     loaded: bool = False
     error: str = ""
+    assume_unconfirmed: bool = False
+    unconfirmed_conditions: tuple[dict[str, Any], ...] = ()
     registered_count: int = 0
     active_count: int = 0
     expansion_decisions: tuple[dict[str, Any], ...] = ()
@@ -152,7 +156,7 @@ class RuntimeKnowledgeContext:
     @property
     def has_matches(self) -> bool:
         """質問に一致した用語またはルールがあるかを返します。"""
-        return bool(self.matched_terms or self.matched_rules or self.scope_context)
+        return bool(self.matched_terms or self.matched_rules or self.scope_context or self.assume_unconfirmed)
 
     @property
     def is_active(self) -> bool:
@@ -196,6 +200,13 @@ class RuntimeKnowledgeContext:
                     "範囲の資料に記載が無ければ、その範囲には記載が見つからないと答える（範囲の外から補わない）。",
                 ]
             )
+        if self.assume_unconfirmed:
+            lines.extend(
+                [
+                    "未回答の確認事項（未確定の条件。質問と選択肢のデータ）:",
+                    json.dumps(list(self.unconfirmed_conditions), ensure_ascii=False),
+                ]
+            )
         return "\n".join(lines)
 
     def to_payload(self) -> dict[str, Any]:
@@ -212,6 +223,8 @@ class RuntimeKnowledgeContext:
             "active_count": self.active_count,
             "expansion_decisions": list(self.expansion_decisions),
             "scope_context": self.scope_context,
+            "assume_unconfirmed": self.assume_unconfirmed,
+            "unconfirmed_conditions": list(self.unconfirmed_conditions),
         }
 
 
@@ -240,7 +253,27 @@ def load_runtime_knowledge(
         rules = tuple(_parse_rules(payload)[:MAX_RULES])
     except Exception as exc:
         return RuntimeKnowledge(path=path, loaded=False, error=_clean_text(exc, 240))
-    return RuntimeKnowledge(path=path, terms=terms, rules=rules, loaded=True)
+    pending = (
+        tuple(
+            {
+                "condition_id": _clean_text(item.get("condition_id")),
+                "question": _clean_text(item.get("question")),
+                "options": _text_list(item.get("options"))[:MAX_ALIASES_PER_TERM],
+            }
+            for item in (payload.get("unconfirmed_conditions") or [])
+            if isinstance(item, dict) and _clean_text(item.get("question"))
+        )
+        if isinstance(payload, dict) and isinstance(payload.get("unconfirmed_conditions", []), list)
+        else ()
+    )
+    return RuntimeKnowledge(
+        path=path,
+        terms=terms,
+        rules=rules,
+        loaded=True,
+        assume_unconfirmed=isinstance(payload, dict) and payload.get("assume_unconfirmed") is True,
+        unconfirmed_conditions=pending,
+    )
 
 
 def build_runtime_knowledge_context(
@@ -292,6 +325,8 @@ def build_runtime_knowledge_context(
         loaded=knowledge.loaded,
         registered_count=len(knowledge.terms) + len(knowledge.rules),
         active_count=sum(item.active for item in (*knowledge.terms, *knowledge.rules)),
+        assume_unconfirmed=knowledge.assume_unconfirmed,
+        unconfirmed_conditions=knowledge.unconfirmed_conditions,
         expansion_decisions=tuple(decisions),
     )
 

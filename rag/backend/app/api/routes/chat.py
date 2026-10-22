@@ -709,6 +709,10 @@ async def _prepare_chat_turn(
         # 業務ガイドは前の発話も含めて選ぶ（短い返答だけで照合が外れないように。#1238）。
         guide_context=_guide_user_context(prior_messages),
         interactive=True,
+        answered_rule_ids=(request.clarification.rule_id,)
+        if request.clarification is not None
+        and not request.clarification.rule_id.startswith(GUIDE_CLARIFICATION_PREFIX)
+        else (),
     )
     guardrails = GuardrailPolicy(effective_settings)
     query_guardrail = await asyncio.to_thread(guardrails.validate_query, request.content)
