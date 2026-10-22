@@ -159,7 +159,6 @@ for (const viewport of [
       "業務ガイドの準備",
       "回答の生成",
       "監査",
-      "評価",
     ]);
     const editor = stages.getByRole("textbox", { name: "テンプレート", exact: true });
     await expect(editor).toHaveCount(1);
@@ -184,17 +183,8 @@ for (const viewport of [
     await expect(stages.getByRole("region", { name: "回答の生成" }).getByTestId("answer-prompt-stage-generation")).toContainText(
       "使われる条件: 検索した根拠から回答を生成するとき"
     );
-    await expect(stages.getByRole("region", { name: "評価" }).getByTestId("answer-prompt-stage-evaluation")).toContainText(
-      "使われる条件: 品質評価と保存した回答の評価。正確性・網羅性は標準回答や必須要点などの期待があるとき、忠実性は取得した根拠があるときに測ります"
-    );
-
-    await expect(stages.getByTestId("answer-prompt-stage-evaluation")).toContainText("回答の品質評価");
-    await expect(stages.getByTestId("answer-prompt-stage-evaluation_screen_judge")).toHaveCount(0);
-    await stages.getByTestId("answer-prompt-stage-evaluation").locator("summary").click();
-    expect(await stages.getByTestId("answer-prompt-stage-evaluation").getByRole("textbox").evaluateAll((elements) =>
-      elements.map((element) => (element as HTMLTextAreaElement).value)
-    )).toEqual(["範囲の指示", "網羅性・忠実性の指示", "正確性の指示"]);
-    await stages.getByTestId("answer-prompt-stage-evaluation").screenshot({ path: testInfo.outputPath("evaluation-prompt-conditions.png") });
+    await expect(stages.getByTestId("answer-prompt-stage-evaluation")).toHaveCount(0);
+    await expect(stages.getByTestId("answer-prompt-stage-answer_validation")).toContainText("資料との照合");
 
     await expectNoPageOverflow(page);
   });

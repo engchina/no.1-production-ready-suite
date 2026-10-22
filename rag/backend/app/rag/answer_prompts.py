@@ -229,17 +229,8 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         ),
     ),
     PromptStage(
-        "evaluation",
-        "evaluation",
-        (
-            ("scope", "rag_engine.evaluation.answer_eval:SCOPE_PROMPT"),
-            ("system", "rag_engine.evaluation.answer_eval:SYSTEM_PROMPT"),
-            ("correctness", "rag_engine.evaluation.answer_eval:CORRECTNESS_PROMPT"),
-        ),
-    ),
-    PromptStage(
         "answer_validation",
-        "evaluation",
+        "audit",
         (
             ("system", "rag_engine.evaluation.answer_validation:VALIDATION_SYSTEM_PROMPT"),
             # 表の対応と取り違えた段落を、表の正しい値に直す（#3005。取り違えがあるときだけ）。
@@ -249,6 +240,15 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
                 "premiseConsistency",
                 "rag_engine.evaluation.answer_validation:PREMISE_CONSISTENCY_SYSTEM_PROMPT",
             ),
+        ),
+    ),
+    PromptStage(
+        "evaluation",
+        "evaluation",
+        (
+            ("scope", "rag_engine.evaluation.answer_eval:SCOPE_PROMPT"),
+            ("system", "rag_engine.evaluation.answer_eval:SYSTEM_PROMPT"),
+            ("correctness", "rag_engine.evaluation.answer_eval:CORRECTNESS_PROMPT"),
         ),
     ),
 )
