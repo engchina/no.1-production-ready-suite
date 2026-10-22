@@ -638,7 +638,7 @@ function EvaluationJobSection({
 
 /**
  * 評価の基準（表示だけ。#2065）。評価は常に設定の既定の基準を使うので、画面では選ばせず、適用される
- * 閾値と設定の画面（取込・回答設定 › 評価の基準）へのリンクだけを出す。
+ * 閾値と設定の画面（取込・検索・回答設定 › 評価の基準）へのリンクだけを出す。
  */
 function SuiteSummary({ query }: { query: ReturnType<typeof useEvaluationSettings> }) {
   const suite = query.data?.suite ?? null;

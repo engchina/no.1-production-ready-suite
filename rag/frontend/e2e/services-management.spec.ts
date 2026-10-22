@@ -237,7 +237,7 @@ for (const viewport of [
     await page.goto("/settings/services");
 
     await expect(page.getByRole("heading", { name: "マイクロサービス" })).toBeVisible();
-    // 工程の見出しはサイドナビ（取込・回答設定）と同じ並び・名前（#638）。
+    // 工程の見出しはサイドナビ（取込・検索・回答設定）と同じ並び・名前（#638）。
     // ナビのリンクと区別するため heading role で限定する。
     await expect(page.getByTestId("service-row-pipeline-chunking")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "文書分割", exact: true })).toHaveCount(0);

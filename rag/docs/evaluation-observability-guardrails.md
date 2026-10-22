@@ -94,7 +94,7 @@ production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` と `X
 
 ## ガードレール
 
-「取込・回答設定 > 安全チェック」で OCI Guardrails の有効・無効を選びます。
+「取込・検索・回答設定 > 安全チェック」で OCI Guardrails の有効・無効を選びます。
 全体の設定であり、検索・回答プロファイルでは上書きしません。
 `RAG_GUARDRAILS_ENABLED` の既定は `false` です。
 

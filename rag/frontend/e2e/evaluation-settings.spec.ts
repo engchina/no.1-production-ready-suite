@@ -9,7 +9,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`評価の基準は品質評価の基準を表示する (${viewport.name})`, async ({ page }) => {
+  test(`評価の基準は品質評価の基準を表示する (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockEvaluation(page, "standard");
@@ -21,12 +21,29 @@ for (const viewport of [
     await expect(page.getByRole("radio")).toHaveCount(2);
     await expect(page.getByRole("radio", { name: /標準/ })).toBeChecked();
     await expect(page.getByRole("radio", { name: /厳格/ })).toBeVisible();
-    // 選んだ基準の閾値を、検索・根拠・回答の観点ごとに指標の意味と一緒に出す。
+    // 選んだ基準の閾値を、検索・回答・応答の判断の観点ごとに指標の意味と一緒に出す。
     const metrics = page.getByTestId("settings-evaluation-metrics");
     await expect(metrics.getByRole("heading", { name: "標準の指標と閾値" })).toBeVisible();
     for (const perspective of ["検索", "回答", "応答の判断"]) {
       await expect(metrics.getByRole("heading", { name: perspective, exact: true })).toBeVisible();
     }
+    const search = await metrics.getByRole("heading", { name: "検索", exact: true }).locator("..").boundingBox();
+    const answer = await metrics.getByRole("heading", { name: "回答", exact: true }).locator("..").boundingBox();
+    const decision = await metrics.getByRole("heading", { name: "応答の判断", exact: true }).locator("..").boundingBox();
+    expect(search).not.toBeNull();
+    expect(answer).not.toBeNull();
+    expect(decision).not.toBeNull();
+    expect(decision!.x).toBe(answer!.x);
+    expect(decision!.y).toBeGreaterThanOrEqual(answer!.y + answer!.height);
+    if (viewport.name === "desktop") {
+      expect(answer!.x).toBeGreaterThan(search!.x);
+      expect(answer!.y).toBe(search!.y);
+    } else {
+      expect(answer!.x).toBe(search!.x);
+      expect(answer!.y).toBeGreaterThan(search!.y);
+    }
+    await metrics.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("evaluation-decision-under-answer.png") });
     await expect(metrics.locator("[data-testid^='settings-evaluation-metric-']")).toHaveCount(6);
     await expect(page.getByTestId("settings-evaluation-metric-required_evidence_recall")).toContainText(
       "閾値 90%"
