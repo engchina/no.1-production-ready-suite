@@ -227,7 +227,7 @@ def test_get_without_models_returns_one_blank_row(tmp_path: Path) -> None:
             "display_name": "",
             "vision_enabled": False,
             "connection_id": "primary",
-            "reasoning_effort": "medium",
+            "reasoning_effort": "low",
             "max_input_tokens": 128000,
             "max_output_tokens": 32768,
         }

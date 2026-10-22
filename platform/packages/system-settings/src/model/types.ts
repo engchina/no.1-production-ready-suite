@@ -26,7 +26,7 @@ export const MAX_ENTERPRISE_AI_CONNECTIONS = ENTERPRISE_AI_CONNECTION_IDS.length
 
 /**
  * 推論（思考）の量（#1425。Responses API の `reasoning.effort`）。選択肢は 3 モデルとも使える 4 つで、
- * 既定は medium。none は「送らない」（`reasoning` を送らない）。backend の ENTERPRISE_AI_REASONING_EFFORTS と同じ。
+ * 既定は low。none は「送らない」（`reasoning` を送らない）。backend の ENTERPRISE_AI_REASONING_EFFORTS と同じ。
  */
 export const ENTERPRISE_AI_REASONING_EFFORTS = [
   "none",
@@ -38,7 +38,7 @@ export type EnterpriseAiReasoningEffort =
   (typeof ENTERPRISE_AI_REASONING_EFFORTS)[number];
 /** 推論の量の既定（新しく追加するモデル・値の無い保存済みのモデル。backend と同じ）。 */
 export const DEFAULT_ENTERPRISE_AI_REASONING_EFFORT: EnterpriseAiReasoningEffort =
-  "medium";
+  "low";
 
 /**
  * モデルの入力の上限（tokens。#1437）。登録モデルごとに持ち、値の無いモデルは既定の 128000。範囲は backend の
