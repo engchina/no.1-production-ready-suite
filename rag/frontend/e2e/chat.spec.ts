@@ -2339,3 +2339,86 @@ test("業務ガイドの自由入力条件だけを確認して回答へ進め�
   });
   await expect(card).toHaveCount(0);
 });
+
+
+function longProcessReply(index: number) {
+  const id = `long-answer-${index}`;
+  const at = (seconds: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, seconds)).toISOString();
+  return {
+    ...assistantMessage,
+    message_id: id,
+    model: `synthetic-model-${index}`,
+    trace_id: `long-trace-${index}`,
+    content: "合成の回答です。\n\n".repeat(8),
+    citations: Array.from({ length: 118 }, (_, i) => ({
+      ...citationChunk,
+      document_id: "synthetic-document",
+      chunk_id: `${id}-chunk-${i}`,
+      text: `合成の根拠 ${i + 1}`,
+      file_name: "合成の文書.pdf",
+      metadata: { evidence_model_used: i === 0, evidence_answer_use: i === 0 ? "confirmed" : "unused" },
+    })),
+    progress: Array.from({ length: 16 }, (_, i) => ({
+      schema_version: 1, seq: i + 1, target_id: id, attempt: 0, emitted_at: at(i + 1),
+      type: "step", step_id: `s${i}`, kind: "answer_step", status: "done",
+      started_at: at(i), finished_at: at(i + 1),
+      params: { name: `合成の工程 ${i + 1}`, depth: 0, llm_calls: 1 },
+    })),
+  };
+}
+
+for (const compare of [false, true]) {
+  test(`低い画面で処理の経過と詳細を開いても根拠と評価まで読める (${compare ? "比較" : "単一"})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    // desktop の条件は 1920×600 をブラウザで 150% に拡大したときの CSS viewport。
+    // 実ブラウザの zoom と DPR は別途確認し、CI は headless shell で同じレイアウト条件を検査する。
+    if (testInfo.project.name === "desktop") await page.setViewportSize({ width: 1280, height: 400 });
+    const replies = [longProcessReply(1), ...(compare ? [longProcessReply(2)] : [])];
+    await mockChat(page, "ready", [userMessage, ...replies]);
+    await page.route("**/api/search/answers?**", route => route.fulfill({ json: pageEnvelope(replies.map(reply => ({ trace_id: reply.trace_id }))) }));
+    await page.route("**/api/search/answers/*", route => route.fulfill({ json: {
+      data: { trace_id: "synthetic-trace", created_at: assistantMessage.created_at, question: "合成の質問", answer: "合成の回答", citations: [], surface: "chat", evaluation_available: false,
+        answer_diagnostics: { outcome: "answered", confidence: "high", reasoning_summary: "合成の診断です。".repeat(100) } },
+      error_messages: [], warning_messages: [],
+    } }));
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    const history = await openChatHistory(page);
+    await history.getByRole("list", { name: "会話の履歴" }).getByRole("button").filter({ hasText: "件・" }).click();
+    const log = page.getByRole("log", { name: "会話" });
+    for (const reply of replies) {
+      const answer = page.locator(`[id="message-${reply.message_id}"]`);
+      await answer.getByTestId("chat-answer-progress-summary").click();
+      await expect(answer.getByTestId("chat-answer-progress-summary")).toContainText("16 ステップ");
+    }
+    const last = page.locator(`[id="message-${replies.at(-1)!.message_id}"]`);
+    const evidence = last.locator("summary").filter({ hasText: "AI に渡した 118 件 ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" });
+    const feedback = last.getByRole("group", { name: "この回答は役に立ちましたか？" });
+    // scrollTop の代入だけで済ませず、会話の欄の上でホイールを動かして末尾へ進む。
+    await log.hover();
+    await page.mouse.wheel(0, 20_000);
+    await expect(evidence).toBeInViewport({ ratio: 1 });
+    await expect(feedback).toBeInViewport({ ratio: 1 });
+    for (const reply of replies) {
+      const answer = page.locator(`[id="message-${reply.message_id}"]`);
+      await answer.getByTestId("chat-answer-progress-details").click();
+      await expect(answer.getByRole("region", { name: "処理の詳細" }).getByText(/合成の診断です/)).toBeVisible();
+    }
+    await log.hover();
+    await page.mouse.wheel(0, 20_000);
+    await expect(evidence).toBeInViewport({ ratio: 1 });
+    await expect(feedback).toBeInViewport({ ratio: 1 });
+    await evidence.click();
+    const cards = last.getByTestId("answer-citations").getByTestId("evidence-card");
+    await expect(cards).toHaveCount(118);
+    await cards.last().scrollIntoViewIfNeeded();
+    await expect(cards.last()).toBeInViewport();
+    await log.hover();
+    await page.mouse.wheel(0, 20_000);
+    await expect(feedback).toBeInViewport({ ratio: 1 });
+    // 外側のページでも入力欄まで移動できる。低い画面で会話を潰して入力欄だけを固定しない。
+    await page.getByRole("textbox", { name: "質問" }).scrollIntoViewIfNeeded();
+    await expect(page.getByRole("textbox", { name: "質問" })).toBeInViewport();
+    await evidence.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`expanded-process-${compare ? "compare" : "single"}.png`), fullPage: true });
+  });
+}

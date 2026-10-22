@@ -873,6 +873,10 @@ B 型（マスタ詳細の閲覧）の一覧 + 詳細の部品です。以前は
 - `FixedSplitPane` は API を変えず、C 型（入力 | 結果）と 2 つの対象の比較だけに使う。
 - 保存済みの分割の比率（`<prefix>.fixedSplitPane.<splitId>`）のうち、一覧 + 詳細へ移した画面のものは使われなくなる（未リリースのため移さない）。
 
+### チャットの高さ
+
+`ChatLayout` は desktop でも最小 28rem を保ちます。ブラウザの拡大や低いウィンドウで、見出しと入力領域が残りの高さを使い切る場合は、ページ側の縦スクロールで読む形にします。会話欄の内容領域を 0 に縮めず、完了した回答の根拠と評価まで到達できることを確かめます。
+
 ### `ResultTable`（新規。旧名 `ChatResultTable`）— ★ データの結果の表（#1154 / #1178）
 
 データの結果（読み取りだけの行と列）は、どの画面でもこの部品で出します。チャットで SQL・ツールを実行した結果（回答の吹き出しの中、SQL の下）と、画面のクエリの結果・テーブルのデータの表示・取り込みのサンプル行が同じ形になります（#1178。どの画面が合うかの基準は UX 契約 [page-archetypes.md「データの結果の型」](../ux-contracts/page-archetypes.md#データの結果の型resulttable1178)）。ChatGPT の Advanced Data Analysis・Databricks Genie・Snowflake Cortex Analyst・Amazon Q in QuickSight・BigQuery の結果の表に倣い、その場は要約とプレビューに絞り、すべての行は別の面で見ます。製品で結果の表・ページング・CSV を組み立てない。行の操作・選択・編集のある一覧は対象外（`DataTable` / `PagedDataTable` の一覧の型）。
