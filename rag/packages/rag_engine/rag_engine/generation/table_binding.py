@@ -512,4 +512,17 @@ def table_mismatch_notes(pairs: Sequence[tuple[str, str]], evidence_texts: Seque
     return notes
 
 
-__all__ = ["Table", "evidence_tables", "table_mismatch_notes", "unbound_table_values"]
+def table_corrections(pairs: Sequence[tuple[str, str]], evidence_texts: Sequence[str]) -> list[tuple[str, str | None]]:
+    """取り違えた組ごとの（誤った値, 表の正しい値）。正しい値が決まらなければ None。"""
+    tables = [table for text in evidence_texts for table in evidence_tables(text)]
+    return [(value, correct[2] if (correct := _correct_cell((value, other), tables)) else None) for value, other in pairs]
+
+
+def states_value(value: str, text: str) -> bool:
+    """文が値（セル全体か、セルの中のコード）を述べているか（照合の形で比べる）。"""
+    folded = _fold(text)
+    key = _cell_key(value)
+    return bool(key) and (key in folded or any(code in folded for code in _CODE_IN_CELL.findall(_fold(value))))
+
+
+__all__ = ["Table", "evidence_tables", "states_value", "table_corrections", "table_mismatch_notes", "unbound_table_values"]

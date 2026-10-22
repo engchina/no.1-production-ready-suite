@@ -311,6 +311,8 @@ executor が埋まっても待たない。1 回の検証ごとに `rag_answer_va
 （`grounded._table_binding_conflict`。取り違えた説明を根拠と矛盾として外し、表の正しい対応を理由に出す。#2998）でも使い、回答の生成の監査の指示（3.1）にも
 同じ規則（`RELATION_SUPPORT_RULES`）を入れる。
 
+**表の値に直す（#3005）**: 段落・説明が根拠の表の別の行・列の値を結び付けたとき（`value_unbound`）、表の正しい値に直して残す（研究と改訂。RARR と同じ考え方）。`generation/table_revision.py` が LLM に段落と表の正しい対応（`table_mismatch_notes`）だけを渡し、誤った値だけを最小限に直させ（構造化出力 `TableRevision`）、直した文を決定的に確かめる（表の照合で取り違えが無い・正しい値をすべて述べる・元の段落との近さ 0.6 以上・長さ 1.6 倍以内）。確かめに通らない・LLM が失敗したら、今どおり矛盾として外す。回答の生成は `grounded.revise_table_conflicts`（印 `table_corrected`。理由に直した前後）、最終の検証は `rag_validate_answer` の claims の `revised_text`（`support_check=table_corrected`。status は `contradicted` のまま。Agent は段落を直した文に置き換えて `table_corrected` の印を付ける）。LLM の呼び出しは取り違えがある段落だけ。
+
 **段落の印（#2738）**: 本文から外すのは、根拠と矛盾する説明（監査の `contradicted` と、根拠の表が否定した対応。#2998）だけ。根拠で確かめられない
 説明は言い換えを本文に残して印（`unverified`）を、決定的な規則の検査は警告（`warning`）を付ける。形の正本は
 `platform/contracts/answer-passages/passage-marks.json`（RAG・Agent・UI のテストが読む）で、`rag_engine/generation/passage_marks.py`
@@ -326,7 +328,7 @@ executor が埋まっても待たない。1 回の検証ごとに `rag_answer_va
 | 未知の Evidence ID・複数の根拠に一致 / 原文と一致しない引用 | 本文に残す（近い原文・指した根拠があれば出典に結ぶ）。是正の指摘に写し方を渡す | `unverified`（`citation_error` / `quote_unmatched`） |
 | 監査が時間の上限で切れた・応答が空 | 本文に残す | `unverified`（`unassessed`） |
 | `ITEM_CHECKS`（見出しの入口化・削除対象・構成明細・処理区分の逐語・値・画面の表示例の値）・生成説明の値・質問の対象 / エラーが根拠に無い・別文書の手順 | 本文に残し、`detail` に検査の名前・理由と原文の引用 | `warning`（`item_check`） |
-| 表の行・列の対応の取り違え（`_table_binding_conflict`。#2998） | 本文から外し、理由に表の正しい対応を出す | `removed_passages`（`contradicted`） |
+| 表の行・列の対応の取り違え（`_table_binding_conflict`。#2998・#3005） | 表の正しい値に直して本文に残す（`table_revision.revise_table_passage`。LLM が誤った値だけを直し、表の照合・正しい値・元の文との近さで確かめる）。直せなければ外し、理由に表の正しい対応を出す | `warning`（`table_corrected`。直した前後） / `removed_passages`（`contradicted`） |
 | 旧版・廃止の文書の根拠（`withhold_superseded`） | 本文に残す | `warning`（`superseded`） |
 | summary（監査なし・不支持・保証の過剰・原因の推測・全要求が missing・すべて条件付き・確かめた説明が無い・印の主張の断定） | モデルの summary を残す。外した主張を断定するときだけ中立の定型文 | `warning`（`summary_unaudited`） |
 | 当てはめ（監査なし・判定なし・前提が質問に無い・規則が印つき） | 出す。矛盾（監査の valid=false・算式の誤り・規則を外した）・形の誤りは出さない | `warning`（`application_unaudited`） |

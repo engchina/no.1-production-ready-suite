@@ -3928,6 +3928,8 @@ export const ja = {
   "settings.answerPrompts.part.auditSystem": "監査の system プロンプト",
   "settings.answerPrompts.part.answerChoice":
     "確認の自由入力の答えから選択肢を決める（選択肢そのものでない答えのときだけ）",
+  "settings.answerPrompts.part.tableRevision":
+    "根拠の表と食い違う値を表の正しい値に直す（取り違えがあるときだけ）",
   "settings.answerPrompts.part.premiseConsistency":
     "利用者の確認の答えの条件・制約との両立の判定（確認の答えがあるときだけ）",
   "settings.answerPrompts.part.documentSystem": "文書を選ぶ system プロンプト",

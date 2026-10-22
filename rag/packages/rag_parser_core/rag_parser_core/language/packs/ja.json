@@ -2434,6 +2434,7 @@
       "図の画像を読めておらず確かめられない=figure_not_read",
       "根拠は別の対象についての記載=target_mismatch",
       "根拠の表の対応と違う可能性=value_unbound",
+      "根拠の表の値に直した=table_corrected",
       "システムの検査で注意が必要=item_check",
       "旧版・廃止の資料に基づく=superseded",
       "前の手順が根拠と矛盾=after_contradicted_step",

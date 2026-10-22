@@ -642,6 +642,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
             "figure_not_read",
             "target_mismatch",
             "value_unbound",
+            "table_corrected",
             "item_check",
             "superseded",
             "after_contradicted_step",

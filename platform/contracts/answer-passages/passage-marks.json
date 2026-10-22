@@ -9,6 +9,7 @@
     "figure_not_read": {"kind": "passage", "state": "unverified", "label": "図の画像を読めておらず確かめられない"},
     "target_mismatch": {"kind": "passage", "state": "warning", "label": "根拠は別の対象についての記載"},
     "value_unbound": {"kind": "passage", "state": "warning", "label": "根拠の表の対応と違う可能性"},
+    "table_corrected": {"kind": "passage", "state": "warning", "label": "根拠の表の値に直した"},
     "item_check": {"kind": "passage", "state": "warning", "label": "システムの検査で注意が必要"},
     "superseded": {"kind": "passage", "state": "warning", "label": "旧版・廃止の資料に基づく"},
     "after_contradicted_step": {"kind": "passage", "state": "warning", "label": "前の手順が根拠と矛盾"},
