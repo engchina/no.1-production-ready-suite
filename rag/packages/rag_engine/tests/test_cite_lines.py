@@ -63,6 +63,19 @@ def test_invalid_or_missing_range_on_long_evidence_is_reported():
         assert error
 
 
+def test_lines_copied_in_the_numbered_display_form_use_the_leading_range():
+    """モデルが行の表示の形（`3| 本文`）を lines に写しても、先頭の番号・範囲で引用を取り出す（#3002）。"""
+    units = grounded.citation_units(LONG)
+    for lines, (first, last) in (("3| 一覧から対象を", (3, 3)), ("2-3| 抽出条件", (2, 3)), ("4 | 入力欄", (4, 4))):
+        cited, error = grounded.cited_quote(item("E1", lines), spans())
+        assert error == ""
+        assert cited.quote == LONG[units[first - 1][0] : units[last - 1][1]]
+    for lines in ("99| 範囲外", "| 番号が無い", "あ| 文"):
+        cited, error = grounded.cited_quote(item("E1", lines), spans())
+        assert cited.quote == ""
+        assert error
+
+
 def test_copied_quote_and_gap_are_left_to_the_existing_matching():
     copied = item("E2", quote="実行ボタンを押します。")
     assert grounded.cited_quote(copied, spans()) == (copied, "")
