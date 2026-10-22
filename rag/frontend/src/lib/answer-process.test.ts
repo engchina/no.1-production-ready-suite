@@ -176,7 +176,8 @@ describe("チャットの工程の段階（answer_step）", () => {
   });
 });
 
-describe("LLM の回数と送信の回数（#2966）", () => {
+// 送り直しで API への送信が呼び出しより多いとき（#2966）。
+describe("LLM の回数と送信の回数", () => {
   it("送り直しで API への送信が多いときだけ、送信の回数も示す", () => {
     expect(answerStepMeta({ llmCalls: 1, llmSends: 2 })).toBe("LLM 1 回・送信 2 回");
     expect(answerStepMeta({ llmCalls: 2, llmSends: 2 })).toBe("LLM 2 回");
