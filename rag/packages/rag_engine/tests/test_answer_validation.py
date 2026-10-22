@@ -2206,3 +2206,35 @@ def test_figure_only_is_only_in_the_validation_schema() -> None:
     [plain] = list(_evidence_fragments([bare]))
     assert fragment["evidence_type"] == "ocr" and "evidence_type" not in plain
     assert plain["evidence_id"] == fragment["evidence_id"]
+
+
+def test_nested_item_label_and_extra_citation_do_not_pollute_counts() -> None:
+    """父ラベルと、監査が余分に返した出典の行は判定の集計に入れない。"""
+    label = "- 照合すべき項目"
+    fact = EVIDENCE[0]["text"]
+    citation = "出典: manual.pdf p.1"
+    answer = f"{label}\n  - {fact}\n{citation}"
+    calls = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        calls.append(payload)
+        output = _claim_output(payload, {f"- {fact}": "supported", label: "not_a_claim"})
+        output.claim_checks.append(
+            output.claim_checks[0].model_copy(
+                update={
+                    "answer_passage_id": "",
+                    "answer_quote": citation,
+                    "status": "unsupported",
+                }
+            )
+        )
+        return output
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("有効期限は？", answer, EVIDENCE, settings=None)
+    assert len(calls) == 1
+    assert [p["text"] for p in calls[0]["answer_passages"]] == [f"- {fact}"]
+    assert result["counts"] == {"supported": 1}
+    assert result["reaudited_passage_ids"] == []
+    assert [c["answer_quote"] for c in result["claim_checks"]] == [f"- {fact}"]
