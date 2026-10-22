@@ -4267,7 +4267,19 @@ def requirement_quote_matches(review: Any, checked: Sequence[CheckedItem], notic
             index >= len(checked) or checked[index].item.kind == "gap" for index in cited
         )
     sources = "\n".join(checked[index].item.quote for index in cited if index < len(checked) and checked[index].item.quote)
-    return quote_in_text(quote, _requirement_answer_text(checked, notices, cited)) or bool(sources and quote_in_text(quote, sources))
+    answer = _requirement_answer_text(checked, notices, cited)
+    if quote_in_text(quote, answer) or (sources and quote_in_text(quote, sources)):
+        return True
+    # 複数の説明と原文の抜粋を一続きにした引用も、各文を引いた item の中だけで照合する。
+    # 文字・数値の置換や語の断片の継ぎ合わせは受けず、要件全体の意味の判断は監査に任せる。
+    excerpts = [part.strip() for part in check_cues().quote_sentence_split.split(quote) if part.strip()]
+    cited_texts = [
+        text
+        for index in cited
+        for text in ((checked[index].item.text, checked[index].item.quote) if index < len(checked) else (notices[index - len(checked)],))
+        if text
+    ]
+    return len(excerpts) > 1 and all(any(quote_in_text(part, text) for text in cited_texts) for part in excerpts)
 
 
 # 要件の監査の観察（`GuideRequirementReview.answer_state`）から要件の充足を決める規則（#2800）。モデルには回答が要件を
