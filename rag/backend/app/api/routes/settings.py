@@ -687,9 +687,10 @@ def _answer_prompts_data(saved: dict[str, dict[str, object]]) -> AnswerPromptsDa
         {
             "prompts": prompts,
             "stages": readonly_prompt_stages(
+                overrides={prompt.key: prompt.content for prompt in prompts},
                 image_prompt=next(
                     prompt.content for prompt in prompts if prompt.key == "image_retrieval"
-                )
+                ),
             ),
         }
     )

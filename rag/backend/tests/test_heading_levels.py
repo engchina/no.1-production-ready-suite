@@ -6,7 +6,6 @@ LLM は決定論のスタブ。record と見出しは合成の内容。
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -213,9 +212,9 @@ class _FakeVlm:
 
 
 async def _attach(settings: Settings, vlm: _FakeVlm) -> StructuredExtraction:
-    pipeline = SimpleNamespace(_settings=settings, _vlm=vlm)
+    pipeline = IngestionPipeline(settings=settings, vlm=cast(Any, vlm), oracle=cast(Any, object()))
     attach = IngestionPipeline._attach_heading_levels
-    return await attach(cast(IngestionPipeline, pipeline), "trace", _extraction(_records(HEADINGS)))
+    return await attach(pipeline, "trace", _extraction(_records(HEADINGS)))
 
 
 def _enabled() -> Settings:
@@ -278,3 +277,17 @@ def test_extraction_recipe_id_changes_only_when_enabled() -> None:
 
     assert default == disabled
     assert enabled != default
+
+
+async def test_heading_levels_use_the_saved_prompt() -> None:
+    class Oracle:
+        async def answer_prompt_overrides(self) -> dict[str, str]:
+            return {"heading_levels": "合成の独自階層指示"}
+
+    vlm = _FakeVlm(_response(EXPECTED_LEVELS))
+    pipeline = IngestionPipeline(
+        settings=_enabled(), vlm=cast(Any, vlm), oracle=cast(Any, Oracle())
+    )
+    await pipeline._attach_heading_levels("trace", _extraction(_records(HEADINGS)))
+    assert vlm.calls[0][0] == "合成の独自階層指示"
+    assert vlm.calls[0][2]["response_schema"]["required"] == ["levels"]

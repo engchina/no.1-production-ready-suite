@@ -171,6 +171,7 @@ class ParserServiceClient:
         content_type: str,
         *,
         fail_fast: bool = False,
+        dots_ocr_prompt: str | None = None,
     ) -> ParserRegistryResult:
         """`ExternalAdapterRunner` 互換: 1 backend を HTTP で実行する。
 
@@ -180,7 +181,12 @@ class ParserServiceClient:
         if backend in ENGINE_SPECS:
             external_backend = backend
             try:
-                return self._external.parse(
+                external = (
+                    ExternalParserClient(self._settings, dots_ocr_prompt=dots_ocr_prompt)
+                    if dots_ocr_prompt is not None
+                    else self._external
+                )
+                return external.parse(
                     external_backend,
                     source_bytes,
                     source_profile,

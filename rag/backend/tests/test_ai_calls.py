@@ -357,7 +357,7 @@ async def test_embedding_rejects_empty_input_before_calling_the_service() -> Non
     assert client.calls == []
 
 
-# --- ナビゲーション要約 ----------------------------------------------------------------
+# --- 章節の要約 ----------------------------------------------------------------
 
 
 def _nav_inputs(count: int) -> tuple[list[DocumentNavigationNode], StructuredExtraction]:
@@ -464,7 +464,7 @@ async def test_navigation_summary_abort_stops_ingestion(monkeypatch: pytest.Monk
     assert Llm.calls == 1
 
 
-# --- RAPTOR 要約（#2067） ---------------------------------------------------------------------
+# --- RAPTOR の階層の要約（#2067） ---
 
 
 def _raptor_leaves(count: int) -> list[Any]:
@@ -579,7 +579,7 @@ async def test_raptor_permission_error_stops_ingestion(monkeypatch: pytest.Monke
     llm = _RaptorLlm([HttpError(403, "NotAuthorizedOrNotFound")] * 10)
     pipeline = _raptor_pipeline(llm, rag_raptor_concurrency=1)
 
-    with pytest.raises(IngestionUserError, match="RAPTOR 要約を止めました"):
+    with pytest.raises(IngestionUserError, match="RAPTOR の階層の要約を止めました"):
         await pipeline._augment_with_raptor("trace", _raptor_leaves(8), None)
     # 再試行せず、残りの cluster も呼ばない。
     assert llm.calls == 1
@@ -605,7 +605,7 @@ async def test_raptor_item_failure_can_fail_the_job() -> None:
     pipeline = _raptor_pipeline(
         llm, rag_raptor_concurrency=1, rag_ai_call_fail_job_on_item_error=True
     )
-    with pytest.raises(IngestionUserError, match="RAPTOR 要約を止めました"):
+    with pytest.raises(IngestionUserError, match="RAPTOR の階層の要約を止めました"):
         await pipeline._augment_with_raptor("trace", _raptor_leaves(6), None)
 
 

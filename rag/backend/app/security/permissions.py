@@ -606,15 +606,17 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/answer-records"): _any(MENU_SETTINGS_RETRIEVAL),
     ("GET", "/settings/query-history"): _any(MENU_SETTINGS_RETRIEVAL),
     ("PATCH", "/settings/query-history"): _any(MENU_SETTINGS_RETRIEVAL),
-    # 編集できるプロンプトは回答プロンプト（回答生成）と文書解析（図・画像の読み取り）の
+    # 編集できるプロンプトは回答プロンプト・文書解析・文書分割の
     # 画面で編集する。変更（PUT / DELETE）は、route の中で `ANSWER_PROMPT_EDIT_PERMISSIONS`
     # の key ごとの権限も確かめる。
-    ("GET", "/settings/answer-prompts"): _any(MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS),
+    ("GET", "/settings/answer-prompts"): _any(
+        MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS, MENU_SETTINGS_CHUNKING
+    ),
     ("PUT", "/settings/answer-prompts/{key}"): _any(
-        MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS
+        MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS, MENU_SETTINGS_CHUNKING
     ),
     ("DELETE", "/settings/answer-prompts/{key}"): _any(
-        MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS
+        MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS, MENU_SETTINGS_CHUNKING
     ),
     # 抽出項目は文書ワークスペース（処理設定）と文書解析の設定画面が読む。
     ("GET", "/settings/extraction-fields"): _any(
@@ -674,6 +676,12 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
 ANSWER_PROMPT_EDIT_PERMISSIONS: dict[str, str] = {
     "vlm_answer": MENU_SETTINGS_PROMPTS,
     "image_retrieval": MENU_SETTINGS_PARSER_ADAPTERS,
+    "external_ocr": MENU_SETTINGS_PARSER_ADAPTERS,
+    "heading_levels": MENU_SETTINGS_PARSER_ADAPTERS,
+    "field_extraction": MENU_SETTINGS_PARSER_ADAPTERS,
+    "navigation_summary": MENU_SETTINGS_PARSER_ADAPTERS,
+    "raptor_summary_system": MENU_SETTINGS_CHUNKING,
+    "raptor_summary": MENU_SETTINGS_CHUNKING,
 }
 
 

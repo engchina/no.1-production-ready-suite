@@ -2,6 +2,7 @@
 
 import {
   PageBody,
+  Section,
   Card,
   CardContent,
   CardDescription,
@@ -24,6 +25,8 @@ import {
   Scissors,
   SlidersHorizontal,
 } from "lucide-react";
+
+import { FeaturePromptDisclosure } from "./AnswerPromptEditor";
 
 import { ApiErrorState } from "@/components/StateViews";
 import {
@@ -213,6 +216,10 @@ export function ChunkingSettingsClient() {
         errors={fieldErrors}
         onChange={updateForm}
       />
+      <Section title={t("settings.answerPrompts.stage.raptor_summary")} description={t("settings.raptor.description")}>
+        <FeaturePromptDisclosure promptKey="raptor_summary_system" />
+        <FeaturePromptDisclosure promptKey="raptor_summary" />
+      </Section>
     </PageBody>
   );
 }

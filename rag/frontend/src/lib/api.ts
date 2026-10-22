@@ -1689,9 +1689,9 @@ export interface QuerySuggestionsData {
   suggestions: { question: string; count: number }[];
 }
 
-export type AnswerPromptKey = "vlm_answer" | "image_retrieval";
+export type AnswerPromptKey = "vlm_answer" | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "raptor_summary_system" | "raptor_summary";
 
-/** 編集できるプロンプト(回答生成 `vlm_answer` / 図・画像の読み取り `image_retrieval`)。 */
+/** 機能別の設定画面で編集できるプロンプト。 */
 export interface AnswerPromptView {
   key: AnswerPromptKey;
   content: string;

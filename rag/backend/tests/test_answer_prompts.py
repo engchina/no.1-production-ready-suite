@@ -301,3 +301,172 @@ def test_catalog_uses_current_image_template_with_runtime_rules() -> None:
         next(prompt.content for prompt in data.prompts if prompt.key == IMAGE_RETRIEVAL_PROMPT_KEY)
         == content
     )
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "external_ocr",
+        "heading_levels",
+        "field_extraction",
+        "navigation_summary",
+        "raptor_summary_system",
+        "raptor_summary",
+    ],
+)
+def test_feature_prompts_save_and_reset_with_their_screen_permission(
+    key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakePromptOracle()
+    monkeypatch.setattr(settings_routes, "OracleClient", lambda: fake)
+    auth = enable_production_auth(monkeypatch)
+    for name, permission in [
+        ("parser", "menu.settings_parser_adapters"),
+        ("chunking", "menu.settings_chunking"),
+        ("answer", "menu.settings_prompts"),
+    ]:
+        auth.user_with_permissions(name, [permission])
+    headers = {name: login(client, name) for name in ("parser", "chunking", "answer")}
+    owner = "chunking" if key.startswith("raptor") else "parser"
+    path = f"/api/settings/answer-prompts/{key}"
+    for name in headers:
+        response = client.put(path, json={"content": "合成の独自指示"}, headers=headers[name])
+        assert response.status_code == (200 if name == owner else 403)
+        if name != owner:
+            assert client.delete(path, headers=headers[name]).status_code == 403
+    data = client.get("/api/settings/answer-prompts", headers=headers[owner]).json()["data"]
+    assert _prompt(data, key)["content"] == "合成の独自指示"
+    assert _prompt(data, key)["customized"] is True
+    assert any(
+        part["content"] == "合成の独自指示" for stage in data["stages"] for part in stage["prompts"]
+    )
+    assert client.put(path, json={"content": " "}, headers=headers[owner]).status_code == 422
+    reset = client.delete(path, headers=headers[owner]).json()["data"]
+    assert _prompt(reset, key)["content"] == default_prompt(key)
+    assert _prompt(reset, key)["customized"] is False
+
+
+async def test_saved_summary_prompts_reach_the_model_without_cross_pipeline_leaks() -> None:
+    from typing import cast
+
+    from app.rag.chunking import Chunk
+    from app.rag.ingestion import IngestionPipeline
+    from app.schemas.extraction import DocumentElement, StructuredExtraction
+
+    calls: list[tuple[str, str | None]] = []
+
+    class Oracle:
+        async def answer_prompt_overrides(self) -> dict[str, str]:
+            return {
+                "navigation_summary": "独自の章節指示",
+                "raptor_summary": "独自の階層指示",
+                "raptor_summary_system": "独自の共通指示",
+            }
+
+    class Model:
+        async def generate(self, prompt: str, context: str, **options: Any) -> str:
+            calls.append((prompt, options.get("system_prompt")))
+            return "合成の要約"
+
+    pipeline = IngestionPipeline(
+        oracle=cast(Any, Oracle()),
+        vlm=cast(Any, Model()),
+        settings=Settings(
+            rag_navigation_summary_enabled=True,
+            rag_raptor_enabled=True,
+            rag_raptor_cluster_size=2,
+            rag_raptor_max_levels=1,
+        ),
+    )
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(kind="text", text="本文。" * 100, order=1, section_path=["合成の章"])
+        ]
+    )
+    result = await pipeline._attach_navigation_tree("trace", extraction)
+    assert result.navigation[0].summary == "合成の要約"
+    chunks = [
+        Chunk(text=f"本文 {i}", index=i, start_offset=i * 10, end_offset=i * 10 + 9)
+        for i in range(4)
+    ]
+    summaries = await pipeline._augment_with_raptor("trace", chunks, None)
+    assert len(summaries) > len(chunks)
+    assert calls[0] == ("独自の章節指示", None)
+    assert all(call == ("独自の階層指示", "独自の共通指示") for call in calls[1:])
+    unsaved = IngestionPipeline(oracle=cast(Any, object()), settings=Settings())
+    assert await unsaved._stage_prompt("navigation_summary", "既定") == "既定"
+
+
+@pytest.mark.parametrize("backend", ["docling", "dots_ocr"])
+async def test_partition_loads_the_ocr_prompt_only_for_dots(
+    backend: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typing import cast
+
+    from app.rag.ingestion import IngestionPipeline
+
+    loads: list[str] = []
+    seen: list[dict[str, Any]] = []
+
+    class Oracle:
+        async def answer_prompt_overrides(self) -> dict[str, str]:
+            loads.append("loaded")
+            return {"external_ocr": "合成の OCR 指示"}
+
+    pipeline = IngestionPipeline(
+        settings=Settings(rag_parser_adapter_backend=backend), oracle=cast(Any, Oracle())
+    )
+
+    def partition(**options: Any) -> Any:
+        seen.append(options)
+        raise RuntimeError("stop before parser")
+
+    monkeypatch.setattr(pipeline, "_partition_source", partition)
+    with pytest.raises(RuntimeError, match="stop before parser"):
+        await pipeline._run_partition_with_progress(
+            trace_id="trace",
+            parse_bytes=b"synthetic",
+            source_profile=None,
+            content_type="application/pdf",
+            attributes={},
+            on_progress=None,
+        )
+    assert len(loads) == (1 if backend == "dots_ocr" else 0)
+    assert seen[0].get("dots_ocr_prompt") == ("合成の OCR 指示" if backend == "dots_ocr" else None)
+
+
+async def test_partition_cleans_progress_poll_if_prompt_loading_is_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    from typing import cast
+
+    from app.rag.ingestion import IngestionPipeline
+
+    closed: list[bool] = []
+
+    class Oracle:
+        async def answer_prompt_overrides(self) -> dict[str, str]:
+            await asyncio.sleep(0)
+            raise asyncio.CancelledError
+
+    async def poll(*args: Any) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            closed.append(True)
+
+    pipeline = IngestionPipeline(
+        settings=Settings(rag_parser_adapter_backend="dots_ocr"), oracle=cast(Any, Oracle())
+    )
+    monkeypatch.setattr(pipeline, "_poll_parse_progress", poll)
+    with pytest.raises(asyncio.CancelledError):
+        await pipeline._run_partition_with_progress(
+            trace_id="trace",
+            parse_bytes=b"synthetic",
+            source_profile=None,
+            content_type="application/pdf",
+            attributes={},
+            on_progress=lambda _: None,
+        )
+    assert closed == [True]

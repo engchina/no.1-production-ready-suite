@@ -1,3 +1,4 @@
+import { mockFeaturePrompts, verifyFeaturePrompt } from "./_feature-prompt-helpers";
 import { expect, test, type Page } from "./fixtures/test";
 import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
 
@@ -1365,3 +1366,22 @@ for (const viewport of [
     expect(patchCount).toBe(2);
   });
 }
+
+
+test("文書解析の各プロンプトは機能の位置で共通の編集操作を使う", { tag: "@responsive" }, async ({ page }) => {
+  await mockParserAdaptersWithPostParse(page, { vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false });
+  await mockExtractionFields(page);
+  const requests = await mockFeaturePrompts(page);
+  await page.goto("/settings/parser-adapters");
+  for (const [key, title] of [
+    ["external_ocr", "Dots.OCR の読み取りプロンプト"],
+    ["heading_levels", "見出しの階層の推定プロンプト"],
+    ["field_extraction", "メタデータ/項目抽出プロンプト"],
+    ["navigation_summary", "章節の要約プロンプト"],
+  ]) {
+    await verifyFeaturePrompt(page, key, title);
+  }
+  expect(requests.map((item) => item.method)).toEqual(["PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE"]);
+  await page.getByRole("region", { name: "通知", exact: true }).getByRole("button", { name: "閉じる", exact: true }).evaluateAll((buttons) => buttons.forEach((button) => (button as HTMLButtonElement).click()));
+  await page.screenshot({ path: test.info().outputPath("feature-prompts.png"), fullPage: true });
+});

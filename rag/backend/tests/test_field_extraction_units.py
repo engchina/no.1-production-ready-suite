@@ -474,10 +474,11 @@ class _ScriptedLlm:
         self.fail_marker = fail_marker
         self.error = error
         self.texts: list[str] = []
+        self.prompts: list[str] = []
         self.options: list[dict[str, object]] = []
 
     async def generate(self, prompt: str, text: str, **options: object) -> str:
-        _ = prompt
+        self.prompts.append(prompt)
         self.texts.append(text)
         self.options.append(options)
         if self.fail_marker and self.fail_marker in text and self.error is not None:
@@ -627,3 +628,24 @@ async def test_ingestion_stops_when_definitions_leave_no_room_for_text(
             "trace", _long_document(), document_id="doc-a"
         )
     assert llm.texts == []
+
+
+async def test_field_extraction_uses_saved_prompt_and_keeps_definitions_and_schema(
+    monkeypatch: pytest.MonkeyPatch, small_model: int
+) -> None:
+    async def overrides(self: object) -> dict[str, str]:
+        return {"field_extraction": "合成の独自項目指示\n"}
+
+    monkeypatch.setattr(_NoKbOracle, "answer_prompt_overrides", overrides, raising=False)
+    fields_mod.save_field_schema(_DEFS)
+    llm = _ScriptedLlm()
+    await _pipeline(llm, _MemoryStorage())._attach_extraction_fields(
+        "trace", _long_document(), document_id="doc-a"
+    )
+    assert llm.prompts
+    assert all(
+        prompt.startswith("合成の独自項目指示\n抽出する field 定義:") for prompt in llm.prompts
+    )
+    assert all(
+        options["response_schema"] == FIELD_EXTRACTION_RESPONSE_SCHEMA for options in llm.options
+    )

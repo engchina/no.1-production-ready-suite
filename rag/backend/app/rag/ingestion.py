@@ -649,6 +649,7 @@ class IngestionPipeline:
         parse_bytes: bytes,
         source_profile: SourceProfile | None,
         content_type: str,
+        dots_ocr_prompt: str | None = None,
     ) -> ParserRegistryResult:
         """選択 parser backend を parser マイクロサービスへ HTTP 委譲する。
 
@@ -721,6 +722,7 @@ class IngestionPipeline:
             source_profile,
             content_type,
             fail_fast=True,
+            **({"dots_ocr_prompt": dots_ocr_prompt} if dots_ocr_prompt is not None else {}),
         )
 
     async def _poll_parse_progress(
@@ -757,6 +759,11 @@ class IngestionPipeline:
             else None
         )
         try:
+            dots_ocr_prompt = (
+                await self._saved_prompt("external_ocr")
+                if self._settings.rag_parser_adapter_backend == "dots_ocr"
+                else None
+            )
             with parse_progress_id(progress_id):
                 return await _observe_cpu_ingestion_stage(
                     trace_id,
@@ -765,6 +772,11 @@ class IngestionPipeline:
                         parse_bytes=parse_bytes,
                         source_profile=source_profile,
                         content_type=content_type,
+                        **(
+                            {"dots_ocr_prompt": dots_ocr_prompt}
+                            if dots_ocr_prompt is not None
+                            else {}
+                        ),
                     ),
                     attributes=attributes,
                     result_attributes=_parser_result_attributes,
@@ -1191,12 +1203,21 @@ class IngestionPipeline:
         """画面で編集した画像検索のプロンプト(Vision 用)。未編集・読込失敗は None(既定値)。"""
         from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
 
+        return await self._saved_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
+
+    async def _saved_prompt(self, key: str, fallback: str | None = None) -> str | None:
+        """各段の保存済み指示を読む。未編集・読込失敗は既定を使う。"""
+        if not hasattr(self._oracle, "answer_prompt_overrides"):
+            return fallback
         try:
             overrides = await self._oracle.answer_prompt_overrides()
         except Exception:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で解析を続ける。
-            logger.warning("image retrieval prompt load failed", exc_info=True)
-            return None
-        return overrides.get(IMAGE_RETRIEVAL_PROMPT_KEY)
+            logger.warning("ingestion prompt load failed", exc_info=True)
+            return fallback
+        return overrides.get(key, fallback)
+
+    async def _stage_prompt(self, key: str, fallback: str) -> str:
+        return await self._saved_prompt(key, fallback) or fallback
 
     def _raise_if_selected_parser_was_not_used(
         self,
@@ -2688,10 +2709,12 @@ class IngestionPipeline:
         if not plan.planned:
             return with_heading_level_report(extraction, plan, "skipped")
 
+        prompt = await self._stage_prompt("heading_levels", HEADING_LEVEL_PROMPT)
+
         async def once(_: Attempt) -> str:
             with sdk_retries_disabled():
                 return await self._vlm.generate(
-                    HEADING_LEVEL_PROMPT,
+                    prompt,
                     plan.payload,
                     response_schema=HEADING_LEVELS_RESPONSE_SCHEMA,
                     response_schema_name="heading_levels",
@@ -2738,7 +2761,8 @@ class IngestionPipeline:
         if not field_defs:
             return with_field_extraction_outcome(extraction, "no_definitions")
         prompt = (
-            FIELD_EXTRACTION_PROMPT + f"抽出する field 定義: {field_definitions_prompt(field_defs)}"
+            await self._stage_prompt("field_extraction", FIELD_EXTRACTION_PROMPT)
+            + f"抽出する field 定義: {field_definitions_prompt(field_defs)}"
         )
         model_id = enterprise_ai_default_model_id(self._settings)
         schema_json = json.dumps(FIELD_EXTRACTION_RESPONSE_SCHEMA, ensure_ascii=False)
@@ -3199,6 +3223,7 @@ class IngestionPipeline:
         parser_artifacts = extraction.parser_artifacts
         if getattr(self._settings, "rag_navigation_summary_enabled", False):
             max_nodes = int(getattr(self._settings, "rag_navigation_summary_max_nodes", 24))
+            prompt = await self._stage_prompt("navigation_summary", NAVIGATION_SUMMARY_PROMPT)
 
             async def _summarize_one(text: str, attempt: Attempt) -> str:
                 # 大きすぎる(context の長さの超過)ときは入力を短くしてやり直す。
@@ -3208,7 +3233,7 @@ class IngestionPipeline:
                     else text[: max(200, len(text) >> attempt.adaptation)]
                 )
                 with sdk_retries_disabled():
-                    return await self._vlm.generate(NAVIGATION_SUMMARY_PROMPT, source)
+                    return await self._vlm.generate(prompt, source)
 
             try:
                 # 章節の要約は上限つきの並行で呼ぶ(#2002。rag_navigation_summary_concurrency)。
@@ -3228,14 +3253,13 @@ class IngestionPipeline:
             except BoundedCallAborted as exc:
                 logger.warning("navigation_summary_aborted", extra={"trace_id": trace_id})
                 raise IngestionUserError(
-                    f"ナビゲーション要約を止めました。{exc} "
-                    "別経路には切り替えずに取込を停止しました。"
+                    f"章節の要約を止めました。{exc} 別経路には切り替えずに取込を停止しました。"
                 ) from exc
             except Exception as exc:
                 logger.warning("navigation_summary_failed", extra={"trace_id": trace_id})
                 raise IngestionUserError(
-                    "ナビゲーション要約に失敗しました。別経路には切り替えずに取込を停止しました。"
-                    "ナビゲーション要約設定と Enterprise AI の応答を確認してから"
+                    "章節の要約に失敗しました。別経路には切り替えずに取込を停止しました。"
+                    "章節の要約設定と Enterprise AI の応答を確認してから"
                     "再実行してください。"
                 ) from exc
             # 実際に使った要約の上限数を刻む。レイヤーの記録はこれを指紋にする(#550)。
@@ -3630,6 +3654,11 @@ class IngestionPipeline:
             return chunks
         await _raise_if_cancelled(cancel_checker)
 
+        prompt = await self._stage_prompt("raptor_summary", RAPTOR_SUMMARY_PROMPT)
+        system_prompt = await self._stage_prompt(
+            "raptor_summary_system", RAPTOR_SUMMARY_SYSTEM_PROMPT
+        )
+
         async def _summarize_one(text: str, attempt: Attempt) -> str:
             # 大きすぎる(context の長さの超過)ときは入力を短くしてやり直す。
             source = (
@@ -3638,9 +3667,7 @@ class IngestionPipeline:
                 else text[: max(200, len(text) >> attempt.adaptation)]
             )
             with sdk_retries_disabled():
-                return await self._vlm.generate(
-                    RAPTOR_SUMMARY_PROMPT, source, system_prompt=RAPTOR_SUMMARY_SYSTEM_PROMPT
-                )
+                return await self._vlm.generate(prompt, source, system_prompt=system_prompt)
 
         try:
             with ingestion_ai_calls(self._settings, "raptor_summary") as caller:
@@ -3664,12 +3691,12 @@ class IngestionPipeline:
             # (rag_ai_call_fail_job_on_item_error)の件の失敗。
             logger.warning("raptor_summary_aborted", extra={"trace_id": trace_id})
             raise IngestionUserError(
-                f"RAPTOR 要約を止めました。{exc} 別経路には切り替えずに取込を停止しました。"
+                f"RAPTOR の階層の要約を止めました。{exc} 別経路には切り替えずに取込を停止しました。"
             ) from exc
         except Exception as exc:
             logger.warning("raptor_summary_failed", extra={"trace_id": trace_id})
             raise IngestionUserError(
-                "RAPTOR 要約に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "RAPTOR の階層の要約に失敗しました。別経路には切り替えずに取込を停止しました。"
                 "RAPTOR 設定と Enterprise AI の応答を確認してから再実行してください。"
             ) from exc
 

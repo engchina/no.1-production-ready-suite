@@ -694,7 +694,16 @@ class QueryHistorySettingsUpdate(QueryHistorySettingsData):
 class AnswerPromptView(BaseModel):
     """編集できるプロンプト(回答生成 vlm_answer / 図・画像の読み取り image_retrieval)。"""
 
-    key: Literal["vlm_answer", "image_retrieval"]
+    key: Literal[
+        "vlm_answer",
+        "image_retrieval",
+        "external_ocr",
+        "heading_levels",
+        "field_extraction",
+        "navigation_summary",
+        "raptor_summary_system",
+        "raptor_summary",
+    ]
     content: str
     default_content: str
     customized: bool

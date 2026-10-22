@@ -134,7 +134,7 @@ describe("apiWaitingMessage", () => {
     ],
     [
       { waiting_reason: "rate_limited", waiting_seconds: 8, stage: "raptor_summary" as const },
-      "RAPTOR 要約: API の制限のため 8 秒待っています。",
+      "RAPTOR の階層の要約: API の制限のため 8 秒待っています。",
     ],
   ])("待ちの理由 %o", (overrides, expected) => {
     expect(apiWaitingMessage(calls(overrides))).toBe(expected);
