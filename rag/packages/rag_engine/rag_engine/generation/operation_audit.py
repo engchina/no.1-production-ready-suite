@@ -115,6 +115,11 @@ def is_heading(text: str) -> bool:
         text,
     ):
         return True
+    # 箇条書きでも、既知の名詞ラベルとコロンだけなら内容を持たない見出し。
+    if text.strip().endswith((":", "：")):
+        found = _heading_value(text)
+        if found and _HEADING_END.search(found[0]):
+            return True
     return heading_phrase(text) is not None or is_lead_in(text)
 
 
@@ -149,7 +154,7 @@ _HEADING_END = re.compile(rf"{_v('heading_end_words')}$")
 # だけでは決めず、次の行がその下の内容のときだけ見出し（``list_heading_lines``。#1481 / #1482 / #1486）。番号・
 # 箇条書きの行が続く一覧の項目は主張のまま。
 _HEADING_NUMBER = re.compile(r"^(?:[0-9０-９]{1,3}[.)．）]|[（(][0-9０-９]{1,3}[）)])")
-_HEADING_BULLET = re.compile(r"^(?:[-+・•]|\*(?!\*))")
+_HEADING_BULLET = re.compile(r"^(?:[-+・•]|\*(?=\s))")
 # 「…の…」の名詞句（「重要度 B の復旧目標」「連携元のシステム」）。「ので」「のに」「のみ」は名詞をつなぐ「の」に数えない。
 _HEADING_NO_PHRASE = re.compile(r"[^\sの]\s*の(?![でにみ])\s*[^\sの]")
 # 番号つきの見出しの下の内容の行（箇条書き・「→」。字下げした行も、字下げした番号の行も下の内容）。箇条書きの
