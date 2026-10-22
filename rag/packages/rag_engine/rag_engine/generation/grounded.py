@@ -3296,7 +3296,9 @@ def function_limits(span: dict, spans: Sequence[dict]) -> list[str]:
 CITE_UNIT_MAX_CHARS = 160
 CITE_WHOLE_MAX_CHARS = 300
 _CITE_SENTENCE_END = re.compile(r"(?<=[。！？])")
-_CITE_RANGE = re.compile(r"^\s*(\d+)\s*(?:[-~〜–]\s*(\d+))?\s*$")
+# lines の番号・範囲。モデルが行の表示の形（`numbered_text` の `3| 本文`）を写したときは、先頭の番号・範囲だけを読む
+# （行の文の写しは照合に使わない。#3002）。
+_CITE_RANGE = re.compile(r"^\s*(\d+)\s*(?:[-~〜–]\s*(\d+))?\s*(?:\|.*)?$", re.DOTALL)
 
 
 def citation_units(text: str) -> list[tuple[int, int]]:
