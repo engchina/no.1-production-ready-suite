@@ -366,7 +366,7 @@ for (const theme of ["light", "dark"] as const) {
     }
     for (const [field, title, value] of [
       ["navigation_summary_enabled", "章節の要約", "無効"],
-      ["section_rules_mode", "章節の抽出規則", "解析エンジンの見出し"],
+      ["section_rules_mode", "章節の抽出規則", "解析済みの見出しを使う"],
     ]) {
       const card = items.locator(`[data-config-field="${field}"]`);
       await expect(card.locator("dt")).toHaveText(title);

@@ -503,6 +503,13 @@ export function useResetDocumentSections(id: string) {
   });
 }
 
+/** 保存や cache の変更を行わない章節の候補の確認。 */
+export function usePreviewSectionRules() {
+  return useMutation({
+    mutationFn: ({ documentId, ...body }: { documentId: string; recipe_id: string; mode: SectionRulesMode; rules: SectionRule[] }) => api.previewSectionRules(documentId, body),
+  });
+}
+
 /** 章節の抽出規則の全体の既定（#715）。 */
 export function useSectionRulesSettings() {
   return useQuery({

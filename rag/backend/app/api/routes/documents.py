@@ -76,7 +76,11 @@ from app.rag.document_crop import (
     render_page_png,
 )
 from app.rag.document_sections import removed_source_ids, section_errors
-from app.rag.document_sections_service import document_sections, sections_extraction
+from app.rag.document_sections_service import (
+    document_sections,
+    preview_document_sections,
+    sections_extraction,
+)
 from app.rag.extraction_field_adapter import field_extraction_outcome, load_field_schema
 from app.rag.ingestion import (
     IngestionCancelledError,
@@ -108,6 +112,8 @@ from app.rag.request_context import current_audit_request_context
 from app.rag.search_answer_profile_config import MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES
 from app.rag.section_map_service import refresh_document_section_map
 from app.rag.section_rules import (
+    SectionRulesPreviewData,
+    SectionRulesPreviewRequest,
     extraction_sections,
     load_section_rules,
 )
@@ -1687,6 +1693,17 @@ async def get_document_sections(
 ) -> ApiResponse[DocumentSectionsData]:
     """文書の章節(章節ナビゲーション。#713)。"""
     return ApiResponse(data=await _document_sections(OracleClient(), document_id, recipe_id))
+
+
+@router.post("/{document_id}/sections/preview", response_model=ApiResponse[SectionRulesPreviewData])
+async def post_section_rules_preview(
+    document_id: str, request: SectionRulesPreviewRequest
+) -> ApiResponse[SectionRulesPreviewData]:
+    """選択中の規則による候補。設定・成果物・人の修正は変更しない。"""
+    result = await preview_document_sections(OracleClient(), document_id, request)
+    if result is None:
+        raise HTTPException(status_code=404, detail="文書または処理レシピが見つかりません。")
+    return ApiResponse(data=result)
 
 
 @router.put("/{document_id}/sections", response_model=ApiResponse[DocumentSectionsData])
