@@ -872,7 +872,7 @@ def evaluate_answer_payload(
             "answer_text",
             "reasoning_summary",
             "insufficient_reason",
-            "used_images",
+            "cited_evidence",
         )
     }
     fixed["answer_passages"] = _answer_passages(str(payload.get("answer_text") or ""))

@@ -105,7 +105,7 @@ def draft(answer):
         answer=answer,
         confidence="high",
         question_type=["規則"],
-        used_images=[],
+        cited_evidence=[],
         reasoning_summary="",
         insufficient_reason="",
         needs_human_review=False,

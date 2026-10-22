@@ -11,7 +11,7 @@ from unittest.mock import patch
 from pydantic import BaseModel, ConfigDict
 
 from rag_engine.generation import answering, grounded
-from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedFactAudit, UsedImageOutput
+from rag_engine.models.llm import CitedEvidenceOutput, GroundedAudit, GroundedDraft, GroundedFactAudit
 
 
 class AnswerOutput(BaseModel):
@@ -21,7 +21,7 @@ class AnswerOutput(BaseModel):
     answer: str
     confidence: str = ""
     question_type: list[str] = []
-    used_images: list[UsedImageOutput] = []
+    cited_evidence: list[CitedEvidenceOutput] = []
     reasoning_summary: str = ""
     insufficient_reason: str = ""
     needs_human_review: bool | None = None
@@ -65,7 +65,7 @@ def stub_generation(testcase, target: str = "rag_engine.generation.answering.syn
                 answer_text=output.answer,
                 confidence=output.confidence,
                 question_type=tuple(output.question_type),
-                used_images=tuple(answering._used_image_entries([i.model_dump() for i in output.used_images])),
+                cited_evidence=tuple(answering._cited_evidence_entries([i.model_dump() for i in output.cited_evidence])),
                 reasoning_summary=output.reasoning_summary,
                 insufficient_reason=output.insufficient_reason,
                 needs_human_review=output.needs_human_review,

@@ -20,13 +20,15 @@ from rag_engine.models.contracts import ChunkRequest, Evidence, GenerationReques
 from rag_engine.models.layout import LayoutRecord
 
 
-def output(image_id=""):
+def output(evidence_id=""):
     """実 API 呼出を置き換える構造化回答を返す。"""
     return AnswerOutput(
         answer="supported",
         confidence="high",
         question_type=[],
-        used_images=[dict(image_id=image_id, source="guide.pdf", page="1", look_at="row", visible_evidence="value")] if image_id else [],
+        cited_evidence=[dict(evidence_id=evidence_id, source="guide.pdf", page="1", look_at="row", visible_evidence="value")]
+        if evidence_id
+        else [],
         reasoning_summary="",
         insufficient_reason="",
         needs_human_review=False,
@@ -185,7 +187,7 @@ class CitationScopeTests(TestCase):
             for index, item in enumerate(evidence)
         ]
         return resolve_citations(
-            evidence, records, [dict(image_id=identity, source=source, page=page) for identity, source, page in citations]
+            evidence, records, [dict(evidence_id=identity, source=source, page=page) for identity, source, page in citations]
         )
 
     def test_duplicate_local_ids_only_cite_requested_document(self):

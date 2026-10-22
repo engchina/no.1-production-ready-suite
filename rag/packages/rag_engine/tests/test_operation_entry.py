@@ -76,7 +76,7 @@ def draft(answer):
         answer=answer,
         confidence="high",
         question_type=["操作手順"],
-        used_images=[],
+        cited_evidence=[],
         reasoning_summary="未監査の修正操作",
         insufficient_reason="",
         needs_human_review=False,

@@ -111,12 +111,12 @@ def test_citation_line_and_used_mark_point_to_the_child_that_holds_the_quote() -
     assert len(refs) == 1
     assert refs[0]["scope_source_ids"] == ["doc:c-f"]
     assert refs[0]["candidate_source_ids"] == []
-    assert [entry["image_id"] for entry in result.used_images] == ["doc:c-f"]
+    assert [entry["evidence_id"] for entry in result.cited_evidence] == ["doc:c-f"]
 
 
 def test_used_mark_does_not_spread_to_siblings() -> None:
     response = _run([_rule("左の枠に値 B を入れると、右の枠に結果 C が出ます。")]).response
-    used = [entry["image_id"] for entry in response.used_images]
+    used = [entry["evidence_id"] for entry in response.cited_evidence]
     items = answer_evidence_items([PARENT], used, evidence_tree=_context().evidence_tree)
     children = {child["chunk_id"]: child for parent in items for child in parent["children"]}
     assert children["doc:c-f"]["is_model_used"] is True

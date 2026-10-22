@@ -178,7 +178,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual(result.envelope["outcome"], "conditional")
         self.assertIn("contradicted_removed", result.envelope["handoff_reasons"])
 
-    def test_used_images_tell_confirmed_use_from_reference_use(self):
+    def test_cited_evidence_tell_confirmed_use_from_reference_use(self):
         # 回答で引用した箇所ごとに、該当を確認した説明で使ったか（confirmed）、参考として示したか（reference）を返す（#2040）。
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"), record(1, LIMIT_TEXT, "帳票印刷", page=21))
         found = ids(ctx)
@@ -191,7 +191,7 @@ class GroundedAnswerTest(unittest.TestCase):
         # 印の付いた説明（未確認）の根拠は参考（#2738）。
         self.assertIn("unsupported", marks(result)["ファイル出力は顧客名簿にのみ適用されます。"])
         self.assertEqual(
-            {entry["image_id"]: entry.get("answer_use") for entry in result.used_images},
+            {entry["evidence_id"]: entry.get("answer_use") for entry in result.cited_evidence},
             {"r0": grounded.ANSWER_USE_CONFIRMED, "r1": grounded.ANSWER_USE_REFERENCE},
         )
 

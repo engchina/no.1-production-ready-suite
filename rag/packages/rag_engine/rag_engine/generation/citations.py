@@ -16,7 +16,7 @@ from rag_engine.models.contracts import Evidence
 def resolve_citations(
     evidence: Sequence[Evidence],
     records: Sequence[AnswerRecord],
-    used_images: Sequence[Mapping[str, Any]],
+    cited_evidence: Sequence[Mapping[str, Any]],
 ) -> tuple[Evidence, ...]:
     """一対一で対応する証拠と prompt レコードから引用元を返す。
 
@@ -33,8 +33,8 @@ def resolve_citations(
     # 入力位置や引用別名が異なっても、同じ出典は常に先頭の証拠へ解決する。
     representatives = [next((j for j in range(i) if origins[j] == origin), i) for i, origin in enumerate(origins)]
     selected: set[int] = set()
-    for usage in used_images:
-        identity = str(usage.get("image_id") or "").strip()
+    for usage in cited_evidence:
+        identity = str(usage.get("evidence_id") or "").strip()
         key = _evidence_id_key(identity)
         if not key:
             continue

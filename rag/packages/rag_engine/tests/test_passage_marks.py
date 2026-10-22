@@ -160,7 +160,7 @@ def test_unverified_step_stays_in_the_body_with_a_mark():
     assert marks["・対象の行の終了日を入力します。"]["state"] == "unverified"
     assert "・対象の行の終了日を入力します。" in result.answer_text
     # 印の段落の根拠は、確かめた段落の根拠と同じなので確認済み（表の対応を取り違えた説明は外したので、その根拠は使わない）。
-    assert {entry["answer_use"] for entry in result.used_images} == {"confirmed"}
+    assert {entry["answer_use"] for entry in result.cited_evidence} == {"confirmed"}
 
 
 def test_off_goal_keeps_the_body_and_warns_the_whole_answer():

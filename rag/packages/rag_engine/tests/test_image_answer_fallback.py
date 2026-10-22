@@ -16,7 +16,7 @@ def response(*, missing=True, addressed=(), used_image=False):
         answer_text="図で確認できる内容" if not missing else "本文で支持された部分回答",
         confidence="low" if missing else "high",
         insufficient_reason="詳細は本文にない" if missing else "",
-        used_images=({"image_id": "picture-1", "source": "guide.pdf", "page": "1"},) if used_image else (),
+        cited_evidence=({"evidence_id": "picture-1", "source": "guide.pdf", "page": "1"},) if used_image else (),
         generation_trace={
             "reviews": [
                 {
