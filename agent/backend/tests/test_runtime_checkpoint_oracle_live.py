@@ -32,6 +32,7 @@ from app.features.agent.runtime import (
     RUNTIME_CHECKPOINT_TABLE,
     AgentProfile,
     AgentRuntimeOracleCheckpointRepository,
+    AgentRuntimeOracleNormalizedRepository,
     AgentRuntimeSnapshot,
     Artifact,
     FeedbackRating,
@@ -44,6 +45,7 @@ from app.features.agent.runtime import (
     RunStatus,
 )
 from app.features.agent.runtime_checkpoint_store import ENTITY_TABLE, WRITER_ID
+from app.features.agent.tools import ToolCall, ToolResult
 from app.oracle_connection import connect_platform_oracle
 from app.system_schema import MIGRATIONS
 
@@ -396,3 +398,63 @@ def test_small_changes_stay_fast_with_many_runs(
     deleted = json.loads(stored[("run", "run_perf_00020")][0] or "{}")
     assert deleted["thread_id"] is None
     assert deleted["metadata"]["deleted_thread_id"] == "thread_perf_00010"
+
+
+def test_audit_page_artifacts_are_scoped_and_accept_large_bind_in_oracle(
+    checkpoint_key: str,
+) -> None:
+    repository = AgentRuntimeOracleNormalizedRepository(checkpoint_key=checkpoint_key)
+    runs = []
+    try:
+        for _ in range(2):
+            run = repository.create_builtin_run(
+                RunCreateRequest(agent_id="default", goal="確認用の実行")
+            )
+            runs.append(run)
+            assert repository.begin_builtin_run(run.id) is not None
+            for _ in range(2):
+                step_id, _context = repository.start_builtin_tool_step(
+                    run.id, ToolCall(name="rag_search", arguments={})
+                )
+                repository.finish_builtin_tool_step(
+                    run.id,
+                    step_id,
+                    ToolResult(
+                        name="rag_search",
+                        success=True,
+                        output={"items": []},
+                        audit_metadata={"permission_level": "read", "side_effects": False},
+                    ),
+                )
+            repository.complete_builtin_run(run.id, "確認用の回答")
+        run = repository.get_run(runs[0].id)
+        expected = {
+            event.payload["step_id"]: event.payload["artifact_id"]
+            for event in run.events
+            if event.type == RunEventType.ARTIFACT_CREATED and "step_id" in event.payload
+        }
+        for offset in range(2):
+            page = repository.list_tool_call_audit_projection(run_id=run.id, offset=offset, limit=1)
+            assert page.total == 2
+            [item] = page.items
+            assert item.run_id == run.id
+            assert item.artifact_ids == [expected[item.step_id]]
+            assert (item.permission_level, item.side_effects) == ("read", False)
+        assert (
+            repository.list_tool_call_audit_projection(run_id=run.id, offset=2, limit=1).items == []
+        )
+        pairs = [(run.id, run.steps[0].id)] + [
+            (f"absent-run-{i}", f"absent-step-{i}") for i in range(1500)
+        ]
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            actual = repository._projection_artifact_ids_by_step(cursor, pairs)
+        assert actual == {run.steps[0].id: [expected[run.steps[0].id]]}
+    finally:
+        tables = runtime._oracle_projection_tables(runtime.RUNTIME_PROJECTION_PREFIX)
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            for table in reversed(list(tables.values())):
+                for run in runs:
+                    cursor.execute(
+                        f"DELETE FROM {table} WHERE run_id = :run_id", {"run_id": run.id}
+                    )  # nosec B608
+            connection.commit()

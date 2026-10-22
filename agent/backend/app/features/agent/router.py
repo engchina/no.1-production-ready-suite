@@ -4617,7 +4617,6 @@ def _run_audit_data(run: RunState) -> RunAuditData:
         tool_name = _step_tool_name(step)
         result = step.tool_result
         approval = approvals.get(step.approval_id or "")
-        definition = tool_registry.get(tool_name)
         audit_metadata = result.audit_metadata if result is not None else {}
         records.append(
             ToolAuditRecord(
@@ -4627,16 +4626,8 @@ def _run_audit_data(run: RunState) -> RunAuditData:
                 approval_id=step.approval_id,
                 approval_status=approval.status.value if approval else None,
                 policy_decision=result.policy_decision.value if result else None,
-                permission_level=(
-                    definition.permission_level.value
-                    if definition is not None
-                    else _audit_text(audit_metadata, "permission_level")
-                ),
-                side_effects=(
-                    definition.side_effects
-                    if definition is not None
-                    else _audit_bool(audit_metadata, "side_effects")
-                ),
+                permission_level=_audit_text(audit_metadata, "permission_level"),
+                side_effects=_audit_bool(audit_metadata, "side_effects"),
                 started_at=step.started_at.isoformat() if step.started_at else None,
                 completed_at=step.completed_at.isoformat() if step.completed_at else None,
                 duration_ms=result.duration_ms if result else None,
