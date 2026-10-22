@@ -27,9 +27,8 @@ for (const viewport of [
     await expect(
       page.getByText("取込済みの文書の chunk は、文書の詳細で再処理するまで変わりません。", { exact: false })
     ).toBeVisible();
-    await expect(page.getByText("ここで選ぶ 7 個は分割方式です。すべて backend 内で実行します。", { exact: true })).toBeVisible();
-    await page.getByText("ここで選ぶ 7 個は分割方式です。すべて backend 内で実行します。", { exact: true })
-      .screenshot({ path: test.info().outputPath("chunking-execution-description.png") });
+    // 実行の場所の説明（backend 内で実行）は出さない（#3007）。
+    await expect(page.locator("main")).not.toContainText("backend 内で実行");
     await expect(page.locator("main")).not.toContainText("pipeline-chunking");
     // 画面の文言に移植元の呼び名（DocRAG）を出さない（#598）。
     await expect(page.locator("main")).not.toContainText("DocRAG");
