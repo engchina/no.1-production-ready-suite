@@ -3140,3 +3140,4 @@ def test_bibliography_and_table_intro_do_not_make_answer_conditional(
     assert result["passage_marks"] == []
     assert result["withheld"]["listed"] == 0
     assert run_answer_text(run) == answer
+    assert _answer_outcome(run)["value"] == "answered"
