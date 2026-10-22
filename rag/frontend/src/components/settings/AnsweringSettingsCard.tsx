@@ -182,22 +182,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           onChange={(checked) => update({ rerank_enabled: checked })}
         />
         <SwitchRow
-          id="answering-screen-linking"
-          label={t("settings.answering.screenLinking")}
-          description={t("settings.answering.screenLinkingHint")}
-          checked={form.screen_linking_enabled}
-          disabled={disabled}
-          onChange={(checked) => update({ screen_linking_enabled: checked })}
-        />
-        <SwitchRow
-          id="answering-request-coverage"
-          label={t("settings.answering.requestCoverage")}
-          description={t("settings.answering.requestCoverageHint")}
-          checked={form.request_coverage_retrieval_enabled}
-          disabled={disabled}
-          onChange={(checked) => update({ request_coverage_retrieval_enabled: checked })}
-        />
-        <SwitchRow
           id="answering-auto-field-filter"
           label={t("settings.answering.autoFieldFilter")}
           description={t("settings.answering.autoFieldFilterHint")}
@@ -212,6 +196,22 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           checked={form.graph_expansion_enabled}
           disabled={disabled}
           onChange={(checked) => update({ graph_expansion_enabled: checked })}
+        />
+        <SwitchRow
+          id="answering-screen-linking"
+          label={t("settings.answering.screenLinking")}
+          description={t("settings.answering.screenLinkingHint")}
+          checked={form.screen_linking_enabled}
+          disabled={disabled}
+          onChange={(checked) => update({ screen_linking_enabled: checked })}
+        />
+        <SwitchRow
+          id="answering-request-coverage"
+          label={t("settings.answering.requestCoverage")}
+          description={t("settings.answering.requestCoverageHint")}
+          checked={form.request_coverage_retrieval_enabled}
+          disabled={disabled}
+          onChange={(checked) => update({ request_coverage_retrieval_enabled: checked })}
         />
       </div>
       <FormActionBar

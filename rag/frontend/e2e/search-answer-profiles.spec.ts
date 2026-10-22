@@ -164,6 +164,14 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
     createBody = body;
   });
   await page.goto("/search-answer-profiles?id=new");
+  const optionNames = ["Rerank で検索候補を並べ替える", "質問から項目の条件を読み取る", "関係情報で根拠を広げる", "画面目録で操作画面を探す", "根拠の無い要求を探し直す"];
+  const groups = page.getByRole("group", { name: new RegExp(`^(${optionNames.join("|")})$`) });
+  await expect(groups).toHaveCount(5);
+  expect(await groups.evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))))
+    .toEqual(optionNames);
+  await groups.nth(1).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("profile-option-order.png") });
+
 
   await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
   await page.getByRole("option", { name: /社内規程/ }).click();

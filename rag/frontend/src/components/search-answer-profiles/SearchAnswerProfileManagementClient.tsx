@@ -1009,36 +1009,6 @@ function SearchAnswerProfileEditor({
                         onChange={(value) => updateQuery({ rerank_enabled: value })}
                       />
                       <QueryToggleRow
-                        label={t("searchAnswerProfiles.field.screenLinking")}
-                        description={t("searchAnswerProfiles.field.screenLinkingHelper")}
-                        descriptionId="search-answer-profile-screen-linking-helper"
-                        value={config.query.screen_linking_enabled ?? null}
-                        disabled={locked}
-                        onChange={(value) =>
-                          updateQuery({ screen_linking_enabled: value })
-                        }
-                      />
-                      <QueryToggleRow
-                        label={t("searchAnswerProfiles.field.requestCoverage")}
-                        description={t("searchAnswerProfiles.field.requestCoverageHelper")}
-                        descriptionId="search-answer-profile-request-coverage-helper"
-                        value={config.query.request_coverage_retrieval_enabled ?? null}
-                        disabled={locked}
-                        onChange={(value) =>
-                          updateQuery({ request_coverage_retrieval_enabled: value })
-                        }
-                      />
-                      <QueryToggleRow
-                        label={t("searchAnswerProfiles.field.guideStepRetrieval")}
-                        description={t("searchAnswerProfiles.field.guideStepRetrievalHelper")}
-                        descriptionId="search-answer-profile-guide-step-retrieval-helper"
-                        value={config.query.guide_step_retrieval_enabled ?? null}
-                        disabled={locked}
-                        onChange={(value) =>
-                          updateQuery({ guide_step_retrieval_enabled: value })
-                        }
-                      />
-                      <QueryToggleRow
                         label={t("searchAnswerProfiles.field.autoFieldFilter")}
                         description={t("searchAnswerProfiles.field.autoFieldFilterHelper")}
                         descriptionId="search-answer-profile-auto-field-filter-helper"
@@ -1056,6 +1026,36 @@ function SearchAnswerProfileEditor({
                         disabled={locked}
                         onChange={(value) =>
                           updateQuery({ graph_expansion_enabled: value })
+                        }
+                      />
+                      <QueryToggleRow
+                        label={t("searchAnswerProfiles.field.guideStepRetrieval")}
+                        description={t("searchAnswerProfiles.field.guideStepRetrievalHelper")}
+                        descriptionId="search-answer-profile-guide-step-retrieval-helper"
+                        value={config.query.guide_step_retrieval_enabled ?? null}
+                        disabled={locked}
+                        onChange={(value) =>
+                          updateQuery({ guide_step_retrieval_enabled: value })
+                        }
+                      />
+                      <QueryToggleRow
+                        label={t("searchAnswerProfiles.field.screenLinking")}
+                        description={t("searchAnswerProfiles.field.screenLinkingHelper")}
+                        descriptionId="search-answer-profile-screen-linking-helper"
+                        value={config.query.screen_linking_enabled ?? null}
+                        disabled={locked}
+                        onChange={(value) =>
+                          updateQuery({ screen_linking_enabled: value })
+                        }
+                      />
+                      <QueryToggleRow
+                        label={t("searchAnswerProfiles.field.requestCoverage")}
+                        description={t("searchAnswerProfiles.field.requestCoverageHelper")}
+                        descriptionId="search-answer-profile-request-coverage-helper"
+                        value={config.query.request_coverage_retrieval_enabled ?? null}
+                        disabled={locked}
+                        onChange={(value) =>
+                          updateQuery({ request_coverage_retrieval_enabled: value })
                         }
                       />
                     </div>
