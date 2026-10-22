@@ -9,7 +9,7 @@
   （プライマリ接続）・`PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY`（セカンダリ接続）・
   `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_API_KEY`（ターシャリ接続）だけに保存し、JSON には書かない
 - それ以外は `model-settings.json`（`version: 4`）へ保存し、起動時と mtime の変化時に読み込む
-- 登録モデルごとに推論（思考）の量 `reasoning_effort` を持つ（#1425。既定は medium）。
+- 登録モデルごとに推論（思考）の量 `reasoning_effort` を持つ（#1425。既定は low。#3004）。
   3 製品の呼び出しは `enterprise_ai_reasoning`（送る値の解釈はここだけ。none は送らない）で
   モデルから引き、Responses API の `reasoning: {"effort": ...}` を送る
 - 登録モデルごとに入力の上限 `max_input_tokens`（tokens）を持つ（#1437。既定 128000）。
@@ -86,7 +86,7 @@ ENTERPRISE_AI_PROJECT_OCID_OPTIONAL_CONNECTION_IDS: Final = frozenset(
     {ENTERPRISE_AI_TERTIARY_CONNECTION_ID}
 )
 # 4: 登録モデルの `reasoning_effort`（#1425）。3 の JSON はそのまま読める
-# （項目が無い = 既定の medium）。
+# （項目が無い = 既定の low）。
 # 5: 登録モデルの `max_input_tokens`（#1437）。4 の JSON はそのまま読める
 # （項目が無い = 既定の 128000）。
 # 6: 登録モデルの `max_output_tokens`（#1719）。共通の `llm_max_output_tokens` /
@@ -102,7 +102,7 @@ MODEL_SETTINGS_DIRECTORY_MODE = 0o700
 EnterpriseAiVlmInputMode = Literal["auto", "files_api", "inline_image"]
 EnterpriseAiConnectionId = Literal["primary", "secondary", "tertiary"]
 ModelSettingsSecretSource = Literal["environment", "legacy_json", "missing"]
-# 推論（思考）の量（#1425。Responses API の `reasoning.effort`）。選択肢は 4 つで、既定は medium
+# 推論（思考）の量（#1425。Responses API の `reasoning.effort`）。選択肢は 4 つで、既定は low
 # （推論が出力の上限を使い切って未完了のときは、送り直しで 1 段下げる。#2023）。
 # none は「送らない」（`reasoning` を送らない。endpoint の既定のまま）で、それ以外はその値を送る。
 # 解釈は `reasoning_effort_to_send` の 1 か所だけにし、3 製品はこれ
@@ -123,7 +123,10 @@ ENTERPRISE_AI_REASONING_EFFORTS: Final[tuple[str, ...]] = (
     "medium",
     "high",
 )
-DEFAULT_ENTERPRISE_AI_REASONING_EFFORT: Final = "medium"
+# 初期の既定（指定しないモデル・新しく登録するモデル）。#2966 の比較で、回答の生成は
+# low が medium の約 2 倍速く、多くの問の品質は同じだった（#3004）。
+# 役目ごとに上書きできる（RAG の根拠の評価は medium）。
+DEFAULT_ENTERPRISE_AI_REASONING_EFFORT: Final = "low"
 # 「送らない」の値。
 ENTERPRISE_AI_REASONING_EFFORT_OMIT: Final = "none"
 # LLM / VLM の呼び出しの seed（#1434）。全モデルで共通の 1 つで、既定は 42。
@@ -174,7 +177,7 @@ class EnterpriseAiConfiguredModel(BaseModel):
     # 呼び出しに使う接続（#533）。未指定（#533 より前の設定）はプライマリ接続。
     # 存在しない接続を指す値は、保存時に欄のエラーにする（`validate_enterprise_ai_connections`）。
     connection_id: str = Field(default=ENTERPRISE_AI_PRIMARY_CONNECTION_ID, max_length=64)
-    # 推論（思考）の量（#1425）。未指定（#1425 より前の設定も）は既定の medium。
+    # 推論（思考）の量（#1425）。未指定（#1425 より前の設定も）は既定の low。
     # none は `reasoning` を送らない（`reasoning_effort_to_send`）。
     reasoning_effort: EnterpriseAiReasoningEffort = DEFAULT_ENTERPRISE_AI_REASONING_EFFORT
     # 入力の上限（tokens。#1437）。未指定（#1437 より前の設定も）は既定の 128000。
@@ -229,7 +232,7 @@ class EnterpriseAiConfiguredModel(BaseModel):
     @field_validator("reasoning_effort", mode="before")
     @classmethod
     def normalize_reasoning_effort(cls, value: object) -> object:
-        """前後空白・大文字を正規化する。None は未指定と同じ既定（medium）にする。
+        """前後空白・大文字を正規化する。None は未指定と同じ既定（low）にする。
 
         選択肢（none / low / medium / high）以外は、読み込み・保存とも検証エラーにする。
         """
