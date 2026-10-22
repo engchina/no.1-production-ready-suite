@@ -33,8 +33,18 @@ OWNER: dict[str, Any] = {"actor": "chat-user", "all_users": False}
 def test_second_analysis_reads_saved_failed_sql_and_error() -> None:
     ai = _FakeEnterpriseAi(
         [
-            {"analysis": "別の表を確認します。", "corrected_sql": "DELETE FROM T2"},
-            {"analysis": "参照を直します。", "corrected_sql": "DELETE FROM T3"},
+            {
+                "cause": "別の表を確認します。",
+                "fix": "修正方法です。",
+                "conclusion": "確認して実行します。",
+                "corrected_sql": "DELETE FROM T2",
+            },
+            {
+                "cause": "参照を直します。",
+                "fix": "修正方法です。",
+                "conclusion": "確認して実行します。",
+                "corrected_sql": "DELETE FROM T3",
+            },
         ]
     )
     service = _catalog_service(_FakeAdapter(script_fail_at=1), ai)
@@ -76,8 +86,18 @@ def test_second_analysis_reads_saved_failed_sql_and_error() -> None:
 def test_repeated_candidate_is_retried_once_then_suppressed(alternative: str) -> None:
     ai = _FakeEnterpriseAi(
         [
-            {"analysis": "修正", "corrected_sql": "delete from t1; -- comment"},
-            {"analysis": "再分析", "corrected_sql": alternative},
+            {
+                "cause": "修正",
+                "fix": "修正方法です。",
+                "conclusion": "確認して実行します。",
+                "corrected_sql": "delete from t1; -- comment",
+            },
+            {
+                "cause": "再分析",
+                "fix": "修正方法です。",
+                "conclusion": "確認して実行します。",
+                "corrected_sql": alternative,
+            },
         ]
     )
     service = _catalog_service(_FakeAdapter(), ai)
@@ -94,7 +114,17 @@ def test_repeated_candidate_is_retried_once_then_suppressed(alternative: str) ->
 
 
 def test_previous_revision_candidate_is_also_suppressed() -> None:
-    ai = _FakeEnterpriseAi([{"analysis": "修正", "corrected_sql": "DELETE FROM T1"}] * 2)
+    ai = _FakeEnterpriseAi(
+        [
+            {
+                "cause": "修正",
+                "fix": "修正方法です。",
+                "conclusion": "確認して実行します。",
+                "corrected_sql": "DELETE FROM T1",
+            }
+        ]
+        * 2
+    )
     service = _catalog_service(_FakeAdapter(), ai)
     ids = _saved_analysis_turn(service, "DELETE FROM T1")
     updated = service.replace_db_admin_chat_turn_sql(
@@ -151,7 +181,16 @@ def test_histories_are_bounded_per_statement_and_do_not_include_success() -> Non
 
 
 def test_analysis_does_not_trust_client_sql_or_other_statement_history() -> None:
-    ai = _FakeEnterpriseAi([{"analysis": "修正", "corrected_sql": "DELETE FROM T4"}])
+    ai = _FakeEnterpriseAi(
+        [
+            {
+                "cause": "修正",
+                "fix": "修正方法です。",
+                "conclusion": "確認して実行します。",
+                "corrected_sql": "DELETE FROM T4",
+            }
+        ]
+    )
     service = _catalog_service(_FakeAdapter(), ai)
     ids = _saved_analysis_turn(service, "DELETE FROM T1; DELETE FROM T2")
     updated = service.replace_db_admin_chat_turn_sql(

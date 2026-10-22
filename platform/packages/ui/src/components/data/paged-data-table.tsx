@@ -29,6 +29,8 @@ export type PagedDataTableProps<T> = Omit<DataTableProps<T>, "stickyHeader" | "v
   onPageChange?: (page: number) => void;
   paginationTestId?: string;
   paginationAriaLabel?: string;
+  /** page は全行を並べて親の本文でスクロールする。既定は一覧の 5 / 8 行。 */
+  viewport?: "list" | "page";
 };
 
 /**
@@ -49,6 +51,7 @@ export function PagedDataTable<T>({
   onPageChange,
   paginationTestId,
   paginationAriaLabel,
+  viewport = "list",
   ...props
 }: PagedDataTableProps<T>) {
   const [innerPageSize, setInnerPageSize] = useState(pageSize);
@@ -73,7 +76,8 @@ export function PagedDataTable<T>({
           return { ...extra, className: cn(INFORMATION_TABLE_ROW_CLASS, extra?.className) };
         }}
         stickyHeader
-        visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+        visibleRows={viewport === "page" ? undefined : INFORMATION_TABLE_VISIBLE_ROWS}
+        scrollWithinParent={viewport === "page"}
       />
       <Pagination
         page={page}

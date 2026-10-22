@@ -408,7 +408,9 @@ function oracleErrorGuidance(code: string | null) {
   };
 }
 
-function parseDbAdminError(message: string, details?: ApiErrorDetails, errorCode?: string) {
+type ErrorGuidanceContext = "admin_sql" | "db_admin_chat";
+
+function parseDbAdminError(message: string, details?: ApiErrorDetails, errorCode?: string, context: ErrorGuidanceContext = "admin_sql") {
   const helpUrl = message.match(/https?:\/\/\S+/)?.[0] ?? "";
   const summary = message.replace(/\s*Help:\s*https?:\/\/\S+/i, "").trim();
   const code = errorCode || summary.match(/\bORA-\d{5}\b/)?.[0] || null;
@@ -421,7 +423,9 @@ function parseDbAdminError(message: string, details?: ApiErrorDetails, errorCode
     cause: details?.cause || recovery?.cause || guidance.cause,
     // コードから具体的な原因が引けない（汎用の文）か。失敗のカードでは汎用の原因を本文に重ねない（#2342）。
     genericCause: !details?.cause && !recovery?.cause && "generic" in guidance,
-    actions: details?.actions?.length ? details.actions : recovery?.actions ?? guidance.actions,
+    actions: context === "db_admin_chat"
+      ? [t("dbAdminChat.analyze.nextAction")]
+      : details?.actions?.length ? details.actions : recovery?.actions ?? guidance.actions,
     examples: recovery?.examples ?? [],
     rawMessage: details?.raw_message || message,
   };
@@ -527,9 +531,10 @@ function SqlRecoveryExamples({ examples }: { examples: { label: string; sql: str
  * 「詳細」はエラーコード・Oracle のエラーヘルプ。以前は警告の帯・エラー概要・詳細ログの 3 か所に同じ文を出していた。
  */
 export function dbAdminStatementFailure(
-  statement: Pick<DbAdminStatementResult, "error_message" | "error_code" | "status">
+  statement: Pick<DbAdminStatementResult, "error_message" | "error_code" | "status">,
+  context: ErrorGuidanceContext = "admin_sql"
 ): ProcessFailure {
-  const error = parseDbAdminError(statement.error_message ?? "", undefined, statement.error_code ?? undefined);
+  const error = parseDbAdminError(statement.error_message ?? "", undefined, statement.error_code ?? undefined, context);
   return {
     // 実行の前に止めた文（ポリシーの確認）は「実行できません」、実行した後の失敗は「実行に失敗しました」。
     summary:
@@ -544,12 +549,12 @@ export function dbAdminStatementFailure(
   };
 }
 
-function DbAdminStatementError({ statement }: { statement: DbAdminStatementResult }) {
-  const error = parseDbAdminError(statement.error_message ?? "", undefined, statement.error_code ?? undefined);
+function DbAdminStatementError({ statement, context }: { statement: DbAdminStatementResult; context: ErrorGuidanceContext }) {
+  const error = parseDbAdminError(statement.error_message ?? "", undefined, statement.error_code ?? undefined, context);
   return (
     <div className="mt-2 grid min-w-0 gap-3">
       <ProcessFailureNotice
-        failure={dbAdminStatementFailure(statement)}
+        failure={dbAdminStatementFailure(statement, context)}
         labels={{ details: t("failure.details"), errorCode: t("failure.errorCode") }}
         testId="db-admin-statement-failure"
       />
@@ -572,11 +577,13 @@ export function DbAdminExecutionResult({
   result,
   rowLimit,
   hideStatementSql = false,
+  context = "admin_sql",
 }: {
   result: DbAdminExecuteData;
   rowLimit?: number | null;
   /** SQL をすぐ上に出している（DB 管理チャットの文ごとの結果。#2333）ときは、文の SQL を繰り返さない。 */
   hideStatementSql?: boolean;
+  context?: ErrorGuidanceContext;
 }) {
   const summary = resultSummary(result);
   const showStatementDetails = !result.select_result;
@@ -618,7 +625,7 @@ export function DbAdminExecutionResult({
               {hideStatementSql ? null : (
                 <code className="mt-2 block break-words text-xs text-fg">{statement.sql}</code>
               )}
-              {statement.error_message && <DbAdminStatementError statement={statement} />}
+              {statement.error_message && <DbAdminStatementError statement={statement} context={context} />}
             </div>
           ))}
         </div>

@@ -1204,7 +1204,9 @@ class DbAdminChatCorrectionAttempt(BaseModel):
 class DbAdminChatAnalyzeData(BaseModel):
     """失敗の分析と直した SQL（直した SQL も確認からやり直す）。"""
 
-    analysis: str = ""
+    cause: str
+    fix: str
+    conclusion: str
     corrected_plan: DbAdminChatPlan | None = None
     source: str = "deterministic"
     model: str = ""
