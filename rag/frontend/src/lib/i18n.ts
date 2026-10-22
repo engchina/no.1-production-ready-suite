@@ -3957,6 +3957,7 @@ export const ja = {
   "settings.answerPrompts.stage.answer_validation": "資料との照合",
   "settings.answerPrompts.stage.answer_validation.condition":
     "生成後の LLM 監査を有効にしたとき、検索した根拠から生成した最終回答の検証、または MCP の資料との照合（rag_validate_answer）を呼んだとき",
+  "settings.answerPrompts.part.assumptionSystem": "「前提を示して回答する」のときに追加する system 指示",
   "settings.answerPrompts.part.system": "system プロンプト",
   "settings.answerPrompts.part.template": "入力テンプレート",
   "settings.answerPrompts.part.correctness": "回答の正確性の判定",
