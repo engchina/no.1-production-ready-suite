@@ -412,8 +412,10 @@ def test_mineru_v1_rejects_unknown_middle_json_schema(monkeypatch: pytest.Monkey
     assert exc_info.value.warning_code == "mineru_external_invalid_response"
 
 
+@pytest.mark.parametrize("override", [None, "合成の読み取り指示"])
 def test_dots_openai_layout_json_renders_pdf_pages_with_bounded_calls(
     monkeypatch: pytest.MonkeyPatch,
+    override: str | None,
 ) -> None:
     calls: list[dict[str, object]] = []
 
@@ -448,9 +450,12 @@ def test_dots_openai_layout_json_renders_pdf_pages_with_bounded_calls(
             rag_parser_dots_ocr_api_host="https://dots.example.com/v1/",
             rag_parser_dots_ocr_model="dots-model",
             rag_parser_dots_ocr_pdf_workers=2,
-        )
+        ),
+        dots_ocr_prompt=override,
     ).parse("dots_ocr", _pdf(), _profile(), "application/pdf")
 
+    if override:
+        assert all(override in str(call["messages"]) for call in calls)
     assert len(calls) == 2
     assert all(call["model"] == "dots-model" for call in calls)
     assert result.extraction is not None

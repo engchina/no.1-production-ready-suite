@@ -25,7 +25,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
 import { toast } from "@/lib/toast";
 
-import { AnswerPromptPanel } from "./AnswerPromptEditor";
+import { FeaturePromptDisclosure } from "./AnswerPromptEditor";
 import { ExtractionFieldsEditor } from "./ExtractionFieldsEditor";
 
 type PostParseField =
@@ -198,7 +198,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
         <VisionExtras />
       </>
     ),
-    heading_level_inference_enabled: null,
+    heading_level_inference_enabled: <FeaturePromptDisclosure promptKey="heading_levels" />,
     field_extraction_enabled: (
       <>
         {form.field_extraction_enabled && fieldCount === 0 ? (
@@ -208,6 +208,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
             message={t("settings.parserAdapters.postParse.fieldExtraction.empty")}
           />
         ) : null}
+        <FeaturePromptDisclosure promptKey="field_extraction" />
         <Disclosure
           summary={t("settings.parserAdapters.postParse.fieldExtraction.definitions")}
           icon={ListChecks}
@@ -235,7 +236,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
         </Disclosure>
       </>
     ),
-    navigation_summary_enabled: null,
+    navigation_summary_enabled: <FeaturePromptDisclosure promptKey="navigation_summary" />,
   };
 
   return (
@@ -345,13 +346,7 @@ function VisionExtras() {
         ) : null}
       </p>
       {/* 読み取りの指示は Vision を使うときだけ効く。全体で 1 つなので、既定を無効にしていても編集できる（#497）。 */}
-      <Disclosure
-        summary={t("settings.parserAdapters.postParse.vision.prompt")}
-        description={t("settings.answerPrompts.image_retrieval.description")}
-        surface="sunken"
-      >
-        <AnswerPromptPanel promptKey="image_retrieval" />
-      </Disclosure>
+      <FeaturePromptDisclosure promptKey="image_retrieval" />
     </>
   );
 }

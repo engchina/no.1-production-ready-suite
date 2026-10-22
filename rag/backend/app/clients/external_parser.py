@@ -133,7 +133,8 @@ def external_parser_connection(
 class ExternalParserClient:
     """設定済み外部 parser を呼び、共通抽出 schema へ変換する。"""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, dots_ocr_prompt: str | None = None) -> None:
+        self._dots_ocr_prompt = dots_ocr_prompt
         self._settings = settings
         self._timeout = float(settings.rag_parser_service_timeout_seconds)
         self._retry = retry_config_from_settings(settings)
@@ -414,7 +415,7 @@ class ExternalParserClient:
             text = self._openai_chat(
                 connection,
                 [(page.png, page.mime_type)],
-                _DOTS_IMAGE_TOKENS + DOTS_OCR_PROMPT,
+                _DOTS_IMAGE_TOKENS + (self._dots_ocr_prompt or DOTS_OCR_PROMPT),
                 max_tokens=32768,
                 max_tokens_key="max_completion_tokens",
                 temperature=0.1,

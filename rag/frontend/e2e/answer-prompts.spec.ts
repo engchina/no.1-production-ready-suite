@@ -155,8 +155,6 @@ for (const viewport of [
     await expect(stages).toBeVisible();
     // 取込は解析と索引に分け、独立した準備の後に検索・回答・評価を並べる。
     await expect(stages.getByRole("heading", { level: 3 })).toHaveText([
-      "文書解析",
-      "文書分割・索引",
       "業務ガイドの準備",
       "質問の解釈",
       "検索",
@@ -178,23 +176,13 @@ for (const viewport of [
     await expect(stages.getByTestId("answer-prompt-stage-history_rewrite")).toContainText("書き換えを有効にしたとき");
     await expect(stages.getByTestId("answer-prompt-stage-faq_answer")).toContainText("検索しない");
     await expectNoPageOverflow(page);
-    await stages.getByRole("heading", { name: "文書解析", exact: true }).scrollIntoViewIfNeeded();
+    await stages.getByRole("heading", { name: "業務ガイドの準備", exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("pipeline-prompt-order.png") });
     await editor.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("generation-template-position.png") });
     // 段は区分の中に入り、開かなくても使われる条件を 1 行で示す。
-    const ingestion = stages.getByRole("region", { name: "文書解析" });
-    const headingLevels = ingestion.getByTestId("answer-prompt-stage-heading_levels");
-    await expect(headingLevels).toContainText("Docling の解析結果で、しおりの階層を使えず");
-    await expect(headingLevels).toContainText("階層が未判定の見出しの割合と見出し数が設定の条件を満たすとき");
-    await expect(headingLevels).toContainText("文書ごと。再試行あり");
-    await expect(ingestion.getByTestId("answer-prompt-stage-field_extraction")).toContainText(
-      "本文を分けて送る部分ごと"
-    );
-    const picture = ingestion.getByTestId("answer-prompt-stage-picture_description");
-    await expect(picture).toContainText("図・画像の説明");
-    await expect(picture).toContainText("使われる条件: 「図・画像を AI で読み取る」を有効にしたとき");
-    await expect(picture.getByText("図の system")).toBeHidden();
+    await expect(stages.getByRole("region", { name: "文書解析" })).toHaveCount(0);
+    await expect(stages.getByRole("region", { name: "文書分割・索引" })).toHaveCount(0);
     await expect(stages.getByRole("region", { name: "回答の生成" }).getByTestId("answer-prompt-stage-generation")).toContainText(
       "使われる条件: 検索した根拠から回答を生成するとき"
     );
@@ -220,12 +208,6 @@ for (const viewport of [
     await expect(conditions.getByRole("textbox")).toHaveAttribute("readonly", "");
     await conditions.screenshot({ path: testInfo.outputPath("guide-condition-prompt.png") });
 
-    // 開くと部分の名前と内容が見える。
-    await picture.locator("summary").click();
-    await expect(picture.getByText("system プロンプト", { exact: true })).toBeVisible();
-    await expect(picture.getByText("図の system")).toBeVisible();
-    await expect(picture.getByRole("textbox", { name: "入力テンプレート", exact: true })).toHaveValue("## 現在の図の読み取り指示");
-    await expect(picture.getByText("表を読むときの対象の指示", { exact: true })).toBeVisible();
     await expectNoPageOverflow(page);
   });
 }

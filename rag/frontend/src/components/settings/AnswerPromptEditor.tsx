@@ -1,4 +1,5 @@
 import {
+  Disclosure,
   Card,
   CardContent,
   CardDescription,
@@ -19,7 +20,7 @@ import { useState } from "react";
 import { ErrorState } from "@/components/StateViews";
 import { ApiError, type AnswerPromptKey, type AnswerPromptView } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
-import { t } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useAnswerPrompts, useSaveAnswerPrompt } from "@/lib/queries";
 import { focusFirstInvalidField } from "@/lib/required-fields";
@@ -150,9 +151,9 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
           width="full"
           label={fieldLabel}
           required
-          helper={t("settings.answerPrompts.placeholders", {
+          helper={prompt.required_placeholders.length ? t("settings.answerPrompts.placeholders", {
             names: prompt.required_placeholders.map((name) => `{{${name}}}`).join("、"),
-          })}
+          }) : t("settings.answerPrompts.noPlaceholders")}
           error={showError ? (error ?? undefined) : undefined}
           value={content}
           maxLength={PROMPT_MAX}
@@ -222,5 +223,34 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
         }
       />
     </div>
+  );
+}
+
+/** 各機能の設定で共通のプロンプト編集操作を示す。 */
+export function FeaturePromptDisclosure({ promptKey }: { promptKey: AnswerPromptKey }) {
+  return (
+    <Disclosure
+      summary={t(`settings.answerPrompts.${promptKey}.title`)}
+      description={t(`settings.answerPrompts.${promptKey}.description`)}
+      surface="sunken"
+    >
+      <AnswerPromptPanel promptKey={promptKey} />
+      {promptKey === "image_retrieval" ? <VisionPromptRules /> : null}
+    </Disclosure>
+  );
+}
+
+
+/** 画像の読み取りに必ず適用する共通規則は、テンプレートと同じ場所で確認できる。 */
+function VisionPromptRules() {
+  const query = useAnswerPrompts();
+  const parts = query.data?.stages.find((stage) => stage.id === "picture_description")?.prompts.filter((part) => part.id !== "template") ?? [];
+  if (!parts.length) return null;
+  return (
+    <Disclosure summary={t("settings.answerPrompts.fixedRules")} surface="sunken" contentClassName="space-y-3">
+      {parts.map((part) => (
+        <TextareaField key={part.id} id={`picture-prompt-rule-${part.id}`} label={t(`settings.answerPrompts.part.${part.id}` as I18nKey)} value={part.content} readOnly monospace rows={12} />
+      ))}
+    </Disclosure>
   );
 }

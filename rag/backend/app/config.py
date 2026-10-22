@@ -1961,7 +1961,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default=4,
         ge=1,
         le=16,
-        description="ナビゲーション要約の LLM を同時に呼ぶ数の上限（#2002）。",
+        description="章節の要約の LLM を同時に呼ぶ数の上限（#2002）。",
     )
     rag_embedding_concurrency: int = Field(
         default=2,
@@ -2383,15 +2383,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default=2,
         ge=1,
         le=5,
-        description="RAPTOR 要約 tree の最大階層数。",
+        description="RAPTOR の階層の要約 tree の最大階層数。",
     )
     rag_raptor_concurrency: int = Field(
         default=4,
         ge=1,
         le=16,
         description=(
-            "RAPTOR 要約の LLM を同時に呼ぶ数の上限（#2067。1 つの階層の cluster を並べ、階層は"
-            "順に作る）。429 を受けると自動で減らし（最小 1）、成功が続くとこの上限まで戻す。"
+            "RAPTOR の階層の要約の LLM を同時に呼ぶ数の上限（#2067。1 つの階層の cluster を並べ、"
+            "階層は順に作る）。429 を受けると自動で減らし（最小 1）、成功が続くとこの上限まで戻す。"
         ),
     )
     rag_parser_readiness_probe_enabled: bool = Field(

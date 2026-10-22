@@ -67,6 +67,7 @@ import {
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { SectionRulesSettingsCard } from "./SectionRulesEditor";
+import { FeaturePromptDisclosure } from "./AnswerPromptEditor";
 import { PostParseSettingsCard } from "./PostParseSettingsCard";
 
 type ParserAdapterForm = {
@@ -260,6 +261,7 @@ export function ParserAdapterSettingsClient() {
         onSubmit={submit}
       />
       {/* 解析の後の Vision・項目抽出・章節木の全体の既定（#528）。Vision の読み取りの指示もこの中で編集する。 */}
+      <FeaturePromptDisclosure promptKey="external_ocr" />
       <PostParseSettingsCard settings={settings} />
       <SectionRulesSettingsCard />
     </PageBody>

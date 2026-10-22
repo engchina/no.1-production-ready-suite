@@ -1,3 +1,4 @@
+import { mockFeaturePrompts, verifyFeaturePrompt } from "./_feature-prompt-helpers";
 import { expect, test, type Page } from "./fixtures/test";
 import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
 
@@ -505,4 +506,22 @@ test("small-to-big でも文脈ヘッダを既定 OFF から切り替えて保�
     await expect(toggle).toBeChecked({ checked: next });
   }
   await expectNoPageOverflow(page);
+});
+
+
+test("RAPTOR の階層の要約プロンプトは文書分割の後に共通の編集操作を使う", { tag: "@responsive" }, async ({ page }) => {
+  await mockChunkingSettings(page);
+  const requests = await mockFeaturePrompts(page);
+  await page.goto("/settings/chunking");
+  await expect(page.getByRole("heading", { name: "RAPTOR の階層の要約", exact: true })).toBeVisible();
+  await expect(page.getByText(/章節の要約とは独立した機能/)).toBeVisible();
+  for (const [key, title] of [
+    ["raptor_summary_system", "RAPTOR の階層の要約のシステムプロンプト"],
+    ["raptor_summary", "RAPTOR の階層の要約プロンプト"],
+  ]) {
+    await verifyFeaturePrompt(page, key, title);
+  }
+  expect(requests.map((item) => item.method)).toEqual(["PUT", "DELETE", "PUT", "DELETE"]);
+  await page.getByRole("region", { name: "通知", exact: true }).getByRole("button", { name: "閉じる", exact: true }).evaluateAll((buttons) => buttons.forEach((button) => (button as HTMLButtonElement).click()));
+  await page.screenshot({ path: test.info().outputPath("raptor-prompts.png"), fullPage: true });
 });

@@ -3,7 +3,7 @@ import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
 test.beforeEach(async ({ page }) => { await mockLocalAuth(page); });
 
-test("名称・別名の索引は既定 OFF で、切り替え・保存・再読込ができる", async ({ page }) => {
+test("名称・別名の索引は既定 OFF で、切り替え・保存・再読込ができる", { tag: "@responsive" }, async ({ page }) => {
   let enabled = false;
   const patches: unknown[] = [];
   await page.route("**/api/settings/entity-index", async (route) => {
@@ -15,15 +15,16 @@ test("名称・別名の索引は既定 OFF で、切り替え・保存・再読
     await route.fulfill({ json: { data: { enabled }, error_messages: [], warning_messages: [] } });
   });
   await page.goto("/settings/entity-index");
-  const toggle = page.getByRole("switch", { name: "名称・別名の索引を構築する" });
+  const toggle = page.getByRole("radio", { name: /^構築する/ });
+  const off = page.getByRole("radio", { name: /^構築しない/ });
   const save = page.getByRole("button", { name: "保存", exact: true });
-  await expect(toggle).not.toBeChecked();
+  await expect(off).toBeChecked();
   await expect(save).toBeDisabled();
   await toggle.click();
   await page.getByRole("button", { name: "変更を破棄" }).click();
-  await expect(toggle).not.toBeChecked();
+  await expect(off).toBeChecked();
   for (const next of [true, false]) {
-    await toggle.click();
+    await (next ? toggle : off).check();
     await save.click();
     await expect(save).toBeDisabled();
     await page.reload();
@@ -31,10 +32,10 @@ test("名称・別名の索引は既定 OFF で、切り替え・保存・再読
   }
   expect(patches).toEqual([{ enabled: true }, { enabled: false }]);
   await expectNoPageOverflow(page);
-  await page.screenshot({ path: `../../tmp/3008/entity-index-${test.info().project.name}.png`, fullPage: true });
+  await page.screenshot({ path: test.info().outputPath("entity-index.png"), fullPage: true });
 });
 
-test("名称・別名の索引は保存失敗時に選択を残して再試行できる", async ({ page }) => {
+test("名称・別名の索引は保存失敗時に選択を残して再試行できる", { tag: "@responsive" }, async ({ page }) => {
   let fail = true;
   await page.route("**/api/settings/entity-index", async (route) => {
     if (route.request().method() === "PATCH" && fail) {
@@ -45,10 +46,12 @@ test("名称・別名の索引は保存失敗時に選択を残して再試行�
     await route.fulfill({ json: { data: { enabled: route.request().method() === "PATCH" }, error_messages: [], warning_messages: [] } });
   });
   await page.goto("/settings/entity-index");
-  const toggle = page.getByRole("switch", { name: "名称・別名の索引を構築する" });
+  const toggle = page.getByRole("radio", { name: /^構築する/ });
+
   await toggle.click();
   await page.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("設定を保存できませんでした。");
+  await expect(page.getByText("設定を保存できませんでした。再試行してください。", { exact: true })).toBeVisible();
+  await expect(page.getByText("設定を保存できませんでした。再試行してください。", { exact: true })).toContainText("設定を保存できませんでした。");
   await expect(toggle).toBeChecked();
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
