@@ -3122,3 +3122,22 @@ def test_nested_item_label_does_not_add_review_warning(
     section = published.split(f"**{REVIEW_HEADING}**", 1)[1]
     assert label not in section
     assert unsupported in section
+
+
+def test_bibliography_and_table_intro_do_not_make_answer_conditional(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    source = "1. 「合成の記録」第2章 比較 「対象と条件」‑\u202fページ\u202f4"
+    intro = "- 表「合成の集計」では、"
+    answer = f"{ANSWER}\n{source}\n{intro}"
+    mcp.outputs["rag_validate_answer"] = _verdict(
+        _claim(ANSWER, "supported", "根拠に記載。"),
+        _claim(source, "unsupported", "出典だけ。"),
+        _claim(intro, "unsupported", "導入だけ。"),
+    )
+    run, _ = _searched_run(monkeypatch, answer=answer)
+    result = _validation(run)
+    assert result["passage_marks"] == []
+    assert result["withheld"]["listed"] == 0
+    assert run_answer_text(run) == answer
+    assert _answer_outcome(run)["value"] == "answered"

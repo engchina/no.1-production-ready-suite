@@ -552,6 +552,12 @@ def _heading_value(text: str) -> tuple[str, str] | None:
     return value, outside
 
 
+# 表題を示すだけで、表の値を述べない導入行。
+_TABLE_LEAD_IN = re.compile(
+    rf"{_v('table_lead_in_labels')}[「『][^「」『』。\n]{{1,80}}[」』](?:では|は)[、，,:：]?"
+)
+
+
 def is_lead_in(text: str) -> bool:
     """以降の箇条書きを導くだけの導入の文（「根拠の積み上げは次のとおりです。」）と礼・締めくくりの
     定型の文か（#1833。「以上、資料に基づく回答です。」）。
@@ -561,7 +567,12 @@ def is_lead_in(text: str) -> bool:
     次のとおりです。」）は主張のまま（#1469）。
     """
     value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
-    if _COURTESY.fullmatch(value) or _CLOSING.fullmatch(value) or _CLOSING_WISH.fullmatch(value):
+    if (
+        _TABLE_LEAD_IN.fullmatch(value)
+        or _COURTESY.fullmatch(value)
+        or _CLOSING.fullmatch(value)
+        or _CLOSING_WISH.fullmatch(value)
+    ):
         return True
     summary = _CLOSING_SUMMARY.fullmatch(value)
     if summary:
@@ -887,6 +898,15 @@ def is_citation(text: str) -> bool:
     # 場所・題と頁など）で決める。
     location = _LOCATION_LABEL.fullmatch(value)
     if location and _is_location_value(location.group("rest")):
+        return True
+    titles = _TITLE_QUOTE.findall(value)
+    if (
+        titles
+        and not any(
+            _STATEMENT_PARTICLE.search(title) or _HEADING_QUANTITY.search(title) for title in titles
+        )
+        and _is_location_value(value)
+    ):
         return True
     if _LINK_LINE.fullmatch(value):
         return True

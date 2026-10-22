@@ -2238,3 +2238,53 @@ def test_nested_item_label_and_extra_citation_do_not_pollute_counts() -> None:
     assert result["counts"] == {"supported": 1}
     assert result["reaudited_passage_ids"] == []
     assert [c["answer_quote"] for c in result["claim_checks"]] == [f"- {fact}"]
+
+
+@pytest.mark.parametrize("quote", ["対象の状 態を確認します。", "**対象の状態**を確認します。", "対象の`状態`を確認します。"])
+def test_support_quote_accepts_pdf_spaces_and_balanced_markdown(quote: str) -> None:
+    fact = "対象の状態を確認します。"
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        output = _claim_output(payload, {fact: "supported"})
+        output.claim_checks[0].evidence_quote = quote
+        return output
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("対象は？", fact, [{"id": "c1", "text": "対象の状 態を確認します。"}], settings=None)
+    assert result["counts"] == {"supported": 1}
+    assert result["claim_checks"][0]["support_check"] == ""
+
+
+@pytest.mark.parametrize(
+    ("quote", "text"),
+    [
+        ("値は **43** です。", "値は 42 です。"),
+        ("対象の状態を確認します。", "別の記録を保存します。"),
+        ("式は 23 です。", "式は 2*3 です。"),
+        ("値は 23 です。", "値は 2**3 です。"),
+    ],
+)
+def test_quote_format_normalization_does_not_accept_changed_content(quote: str, text: str) -> None:
+    from rag_engine.generation.grounded import quote_in_text
+
+    assert not quote_in_text(quote, text)
+
+
+def test_other_chapter_table_is_not_supported_when_scope_does_not_apply() -> None:
+    fact = "第1章の値は 42 です。"
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        document = _documents(payload)[0]
+        assert document["section_path"] == ["第2章 範囲 B", "集計"]
+        output = _claim_output(payload, {fact: "supported"})
+        output.claim_checks[0].applicability = "not_applicable"
+        return output
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims(
+            "第1章の値は？", fact, [{"id": "c1", "text": "値は42です。", "section_path": ["第2章 範囲 B", "集計"]}], settings=None
+        )
+    assert result["counts"] == {"unsupported": 1}
+    assert result["claim_checks"][0]["support_check"] == "target_mismatch"

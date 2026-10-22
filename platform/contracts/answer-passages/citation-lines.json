@@ -90,6 +90,10 @@
     {
       "id": "document-article-without-caption",
       "passage": "・サンプル法 第7条第1項"
+    },
+    {
+      "id": "numbered-quoted-title-unbracketed-location",
+      "passage": "1. 「合成の記録」第2章 比較 「対象と条件」‑ ページ 4"
     }
   ],
   "claim_passages": [
@@ -162,6 +166,18 @@
     {
       "id": "article-caption-sentence",
       "passage": "- サンプル法 第12条（大臣に届け出なければならない）"
+    },
+    {
+      "id": "numbered-source-with-claim",
+      "passage": "1. 「合成の記録」第2章 受付は 3 日以内、ページ4"
+    },
+    {
+      "id": "numbered-source-with-command",
+      "passage": "1. 「合成の記録」第2章 登録してください、ページ4"
+    },
+    {
+      "id": "quoted-assertion-is-not-bibliography",
+      "passage": "1. 「受付は不要」第2章 p.1"
     }
   ],
   "answers": [
