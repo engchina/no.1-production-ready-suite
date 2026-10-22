@@ -139,6 +139,64 @@ def test_review_quote_may_copy_the_cited_items_source_quote():
     assert result[0]["status"] == "explained"
 
 
+@pytest.mark.parametrize("indexes", [[0, 1], [1, 0]])
+def test_requirement_quote_can_combine_excerpts_from_several_items(indexes):
+    items = [
+        grounded.CheckedItem(
+            GroundedItem(kind="operation", text="一覧で対象を選択します。続けて詳細を開きます。", quote="一覧で対象を選択します。"),
+            span={"text": "一覧で対象を選択します。続けて詳細を開きます。", "evidence_id": "E1"},
+        ),
+        grounded.CheckedItem(
+            GroundedItem(kind="operation", text="内容を確認します。保存ボタンで確定します。", quote="保存ボタンで確定します。"),
+            span={"text": "内容を確認します。保存ボタンで確定します。", "evidence_id": "E2"},
+        ),
+    ]
+    observation = {**review("a:0", indexes), "answer_quote": "一覧で対象を選択します。保存ボタンで確定します。"}
+    result = grounded.apply_guide_contracts(coverage("a"), items, [contract("a", "対象を選び保存する")], audit(observation))
+    assert result[0]["status"] == "explained"
+
+
+def test_requirement_quote_can_combine_answer_text_and_its_source_quote():
+    items = [
+        grounded.CheckedItem(
+            GroundedItem(kind="rule", text="担当者は一覧で対象を選びます。", quote="一覧の対象を担当者が選択します。"),
+            span={"text": "一覧の対象を担当者が選択します。", "evidence_id": "E1"},
+        ),
+        grounded.CheckedItem(
+            GroundedItem(kind="rule", text="承認後、1日以内に設定します。", quote="承認後、一日以内に設定します。"),
+            span={"text": "承認後、一日以内に設定します。", "evidence_id": "E2"},
+        ),
+    ]
+    observation = {**review("a:0", [0, 1]), "answer_quote": "担当者は一覧で対象を選びます。承認後、一日以内に設定します。"}
+    result = grounded.apply_guide_contracts(coverage("a"), items, [contract("a", "担当者と設定までの期間")], audit(observation))
+    assert result[0]["status"] == "explained"
+
+
+@pytest.mark.parametrize(
+    "quote",
+    ["対象を選択します\n資料にない操作です", "対象を選択します。別の手順を実行します。", "対象を選択しません。対象を選択します。"],
+)
+def test_combined_requirement_quote_rejects_invented_or_uncited_excerpts(quote):
+    uncited = grounded.CheckedItem(
+        GroundedItem(kind="operation", text="別の手順を実行します", quote="別の手順を実行します"),
+        span={"text": "別の手順を実行します", "evidence_id": "E2"},
+    )
+    result = grounded.apply_guide_contracts(
+        coverage("a"), [entry(), uncited], [contract("a", "対象選択")], audit({**review("a:0", [0]), "answer_quote": quote})
+    )
+    assert result[0]["status"] != "explained"
+
+
+def test_combined_requirement_quote_does_not_accept_a_changed_number():
+    item = grounded.CheckedItem(
+        GroundedItem(kind="rule", text="担当者が実行します。2日以内に設定します。", quote="担当者が実行します。2日以内に設定します。"),
+        span={"text": "担当者が実行します。2日以内に設定します。", "evidence_id": "E1"},
+    )
+    observation = {**review("a:0", [0]), "answer_quote": "担当者が実行します。1日以内に設定します。"}
+    result = grounded.apply_guide_contracts(coverage("a"), [item], [contract("a", "担当者と期間")], audit(observation))
+    assert result[0]["status"] != "explained"
+
+
 @pytest.mark.parametrize(("kind", "explained"), [("gap", True), ("operation", False)])
 def test_stated_unavailable_may_omit_the_quote_only_for_gap_lines(kind, explained):
     item = grounded.CheckedItem(
