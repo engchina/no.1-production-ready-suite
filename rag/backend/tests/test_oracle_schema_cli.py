@@ -469,7 +469,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     # effective_period の有効期間を classification が NULL の行にだけ写す。改名・削除はしない。
     restore_migration = sql.split("-- migration: 20261019_001_restore_document_classification", 1)[
         1
-    ]
+    ].split("-- migration: ", 1)[0]
     assert "'ALTER TABLE rag_documents ADD (classification JSON)'" in restore_migration
     assert "'ALTER TABLE rag_query_history ADD (classification_filter JSON)'" in restore_migration
     assert "column_name = 'EFFECTIVE_PERIOD'" in restore_migration
@@ -496,7 +496,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 106
+    assert len(statements) == 107
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -591,6 +591,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261019_010_message_attachments",
         "20261021_001_answer_prompt_placeholders",
         "20261021_002_document_delete_fk_indexes",
+        "20261022_001_cited_evidence",
     ]
 
 
