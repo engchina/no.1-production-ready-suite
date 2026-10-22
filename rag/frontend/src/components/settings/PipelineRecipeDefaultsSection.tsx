@@ -8,6 +8,7 @@ import {
 } from "@production-ready/ui";
 import { ArrowDown, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 import {
   globalSettingsHref,
@@ -221,7 +222,7 @@ function PhaseCard({
             <dd className="mt-0.5 text-sm font-medium text-fg">{t(`settings.vectorIndex.profile.${data.vector_index_profile}`)}</dd>
             {canOpenNavRoute(APP_ROUTES.settingsVectorIndex, hasPermission) ? (
               <dd className="mt-1">
-                <ButtonLink to={APP_ROUTES.settingsVectorIndex} variant="ghost" size="sm" className="text-accent-fg underline underline-offset-2" aria-label={t("settings.pipeline.flow.openSettingsAria", { name: t("nav.settingsVectorIndex") })}>
+                <ButtonLink linkComponent={Link} to={APP_ROUTES.settingsVectorIndex} variant="ghost" size="sm" className="text-accent-fg underline underline-offset-2" aria-label={t("settings.pipeline.flow.openSettingsAria", { name: t("nav.settingsVectorIndex") })}>
                   {t("settings.pipeline.flow.openSettings")}
                 </ButtonLink>
               </dd>
@@ -248,6 +249,7 @@ function PhaseCard({
               {href ? (
                 <dd className="mt-1">
                   <ButtonLink
+                    linkComponent={Link}
                     to={href}
                     aria-label={t("settings.pipeline.flow.openSettingsAria", { name })}
                     variant="ghost"
