@@ -1191,7 +1191,7 @@ class _CompletingRecipeOracle(_FakeRecipeJobOracle):
 
     async def get_latest_recipe_chunk_set(
         self, *args: object, **kwargs: object
-    ) -> dict[str, object]:
+    ) -> dict[str, object] | None:
         _ = args, kwargs
         return {"chunk_set_id": "chunk-set-pending"}
 
