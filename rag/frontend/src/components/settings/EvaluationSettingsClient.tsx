@@ -28,7 +28,9 @@ import {
   suiteDescription,
   suiteLabel,
 } from "@/components/evaluation/evaluation-metrics";
-import { ApiErrorState } from "@/components/StateViews";
+import { AnswerPromptStages } from "./AnswerPromptStages";
+
+import { ApiErrorState, ErrorState } from "@/components/StateViews";
 import {
   ApiError,
   type EvaluationSuiteName,
@@ -36,7 +38,7 @@ import {
 } from "@/lib/api";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { t } from "@/lib/i18n";
-import { useEvaluationSettings, useUpdateEvaluationSettings } from "@/lib/queries";
+import { useAnswerPrompts, useEvaluationSettings, useUpdateEvaluationSettings } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
@@ -48,6 +50,7 @@ import { cn } from "@/lib/utils";
  */
 export function EvaluationSettingsClient() {
   const query = useEvaluationSettings();
+  const prompts = useAnswerPrompts();
   const save = useUpdateEvaluationSettings();
   const [suite, setSuite] = useState<EvaluationSuiteName | null>(null);
   // 直前に取り込んだ server の suite。server の suite が変わったレンダーで、未編集なら選択をそろえる。
@@ -224,6 +227,19 @@ export function EvaluationSettingsClient() {
           />
         </CardContent>
       </Card>
+      {prompts.isPending ? (
+        <TimedLoadingState label={t("settings.loading")} operationKey="settings-evaluation-prompts-load">
+          <FormSkeleton />
+        </TimedLoadingState>
+      ) : prompts.isError || !prompts.data ? (
+        <ErrorState message={t("settings.answerPrompts.loadError")} onRetry={() => void prompts.refetch()} />
+      ) : (
+        <AnswerPromptStages
+          stages={prompts.data.stages.filter((stage) => stage.id === "evaluation")}
+          titleKey="settings.evaluation.prompts.title"
+          descriptionKey="settings.evaluation.prompts.description"
+        />
+      )}
     </PageBody>
   );
 }
