@@ -1716,7 +1716,7 @@ export const ja = {
   "settings.retrieval.actions.unsaved": "未保存の変更があります。",
   "settings.retrieval.actions.reset": "変更を破棄",
   "settings.prompts.subtitle":
-    "回答を作るときに回答モデルへ渡す指示のテンプレートを編集します。回答生成・監査・評価のプロンプトとその条件も確認できます。検索関連の指示は「検索方法」、文書解析・文書分割の指示は各設定画面で確認します。",
+    "回答を作るときに回答モデルへ渡す指示のテンプレートを編集します。回答生成・監査・資料との照合のプロンプトとその条件も確認できます。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。",
   "settings.guardrail.subtitle":
     "OCI Guardrails による質問と回答の安全チェックを有効・無効にします。",
   "chat.guardrail": "安全チェック",
@@ -1807,7 +1807,7 @@ export const ja = {
   "settings.vectorIndex.reindexSql.description":
     "保存中の検索精度の推奨ビルド値で HNSW 索引を再作成する DDL です。backend は実行しません。DBA がレビューのうえ実行してください(再作成中は検索が停止します)。",
   "settings.vectorIndex.reindexSql.copy": "SQL をコピー",
-  "settings.evaluation.subtitle": "品質評価の合否の判定に使う評価の基準(閾値のプリセット)を選びます。",
+  "settings.evaluation.subtitle": "品質評価の合否の判定に使う評価の基準(閾値のプリセット)を選び、評価に使うプロンプトを確認します。",
   "settings.evaluation.overview.title": "評価の基準",
   "settings.evaluation.overview.description": "検索 2 項目・回答 3 項目・応答の判断 1 項目の六指標です。正解の根拠・標準回答や必須要点・期待する応答の判断を用意します。必要な評価情報がない指標は未評価となり、0 点や合格にはしません。",
   "settings.evaluation.suite": "評価の基準",
@@ -3854,7 +3854,7 @@ export const ja = {
   "settings.retrieval.prompts.description": "質問の解釈、検索、根拠の判定の順に並べています。各段の中はモデルへ渡す順です。使われる条件と指示の原文を確認できます。すべて読み取り専用です。",
   "settings.answerPrompts.stages.title": "処理の各段のプロンプト",
   "settings.answerPrompts.stages.description":
-    "回答生成・監査・評価の順に並べています。検索関連の指示は「検索方法」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備と MCP の資料との照合は独立した処理で、FAQ は検索による回答とは別の経路です。回答テンプレートだけ編集でき、ほかの指示は読み取り専用です。",
+    "回答生成・監査・資料との照合の順に並べています。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備は独立した処理で、FAQ は検索による回答とは別の経路です。回答テンプレートだけ編集でき、ほかの指示は読み取り専用です。",
   "settings.answerPrompts.phase.ingestion": "文書解析",
   "settings.answerPrompts.phase.question": "質問の解釈",
   "settings.answerPrompts.phase.retrieval": "検索",
@@ -3871,8 +3871,10 @@ export const ja = {
   "settings.answerPrompts.phase.retrieval.description": "検索候補を集めた後、必要に応じて画面や条の目録から根拠を足します。",
   "settings.answerPrompts.phase.grounding.description": "取得した根拠を判定・補完します。CRAG は再検索や章節の拡張の途中で判定を繰り返すため、一方向に一度だけ進む処理ではありません。",
   "settings.answerPrompts.phase.generation.description": "承認済み FAQ を選んだ場合は FAQ の経路、それ以外は検索した根拠による生成です。後者の system 指示と入力テンプレートをこの順に示します。",
-  "settings.answerPrompts.phase.audit.description": "生成後の LLM 監査を有効にした場合の指示です。既定では LLM 監査を行わず、原文との照合などをコードで検査します。",
-  "settings.answerPrompts.phase.evaluation.description": "品質評価の内部では、評価範囲の固定、網羅性・忠実性の検査、正確性の判定の順です。検索と応答判断の指標はコードで計算します。資料との照合は MCP から独立して呼び出します。",
+  "settings.answerPrompts.phase.audit.description": "回答の生成後に使う監査・資料との照合の指示です。RAG では LLM 監査が有効なときに使います（既定は無効）。MCP の資料との照合は独立して呼び出します。",
+  "settings.evaluation.prompts.title": "品質評価のプロンプト",
+  "settings.evaluation.prompts.description": "品質評価と保存した回答の評価で使う指示です。読み取り専用です。",
+  "settings.answerPrompts.phase.evaluation.description": "品質評価の内部では、評価範囲の固定、網羅性・忠実性の検査、正確性の判定の順です。検索と応答判断の指標はコードで計算します。資料との照合は回答プロンプトで確認できます。",
   "settings.answerPrompts.condition": "使われる条件: {condition}",
   "settings.answerPrompts.fixedRules": "共通の読み取り指示（読み取り専用）",
   "settings.answerPrompts.noPlaceholders": "必須の placeholder はありません。",
@@ -3954,7 +3956,7 @@ export const ja = {
   // 回答の文を AI に渡した資料と照らし合わせる工程は、3 製品で「資料との照合」と呼ぶ（#2361）。
   "settings.answerPrompts.stage.answer_validation": "資料との照合",
   "settings.answerPrompts.stage.answer_validation.condition":
-    "MCP の資料との照合（rag_validate_answer）を呼んだときだけ",
+    "生成後の LLM 監査を有効にしたとき、検索した根拠から生成した最終回答の検証、または MCP の資料との照合（rag_validate_answer）を呼んだとき",
   "settings.answerPrompts.part.system": "system プロンプト",
   "settings.answerPrompts.part.template": "入力テンプレート",
   "settings.answerPrompts.part.correctness": "回答の正確性の判定",

@@ -614,6 +614,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
         MENU_SETTINGS_PARSER_ADAPTERS,
         MENU_SETTINGS_CHUNKING,
         MENU_SETTINGS_RETRIEVAL,
+        MENU_SETTINGS_EVALUATION,
     ),
     ("PUT", "/settings/answer-prompts/{key}"): _any(
         MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS, MENU_SETTINGS_CHUNKING

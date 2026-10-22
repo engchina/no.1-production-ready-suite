@@ -1,3 +1,4 @@
+import { FLOW_STAGES } from "./_prompt-stage-fixtures";
 import { expect, test, type Page } from "./fixtures/test";
 import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
 
@@ -196,3 +197,24 @@ async function expectNoHorizontalOverflow(page: Page) {
   // documentElement と main の双方を検査する共通ヘルパーへ委譲(_helpers.ts)。
   await expectNoPageOverflow(page);
 }
+
+
+test("回答の品質評価だけを評価の基準で読み取れる", { tag: "@responsive" }, async ({ page }) => {
+  await mockEvaluation(page, "standard");
+  await page.route("**/api/settings/answer-prompts**", (route) => route.fulfill({
+    json: { data: { prompts: [], stages: FLOW_STAGES }, error_messages: [], warning_messages: [] },
+  }));
+  await page.goto("/settings/evaluation");
+  const stage = page.getByTestId("answer-prompt-stage-evaluation");
+  await expect(stage).toContainText("回答の品質評価");
+  await expect(page.getByTestId("answer-prompt-stage-answer_validation")).toHaveCount(0);
+  await stage.locator("summary").click();
+  const fields = stage.getByRole("textbox");
+  await expect(fields).toHaveCount(3);
+  for (const field of await fields.all()) await expect(field).not.toBeEditable();
+  expect(await fields.evaluateAll((elements) => elements.map((element) => (element as HTMLTextAreaElement).value)))
+    .toEqual(["範囲の指示", "網羅性・忠実性の指示", "正確性の指示"]);
+  await stage.getByRole("textbox").first().scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("quality-evaluation-prompt.png") });
+  await expectNoPageOverflow(page);
+});

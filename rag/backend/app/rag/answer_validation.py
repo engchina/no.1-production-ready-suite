@@ -123,6 +123,7 @@ class AnswerValidation:
     # 呼び出し。
     guide_steps: list[dict[str, Any]] = field(default_factory=list)
     guide_step_embedding: dict[str, Any] | None = None
+    llm_usage: dict[str, Any] = field(default_factory=dict)
 
 
 def evidence_location(metadata: Mapping[str, Any]) -> dict[str, Any]:
@@ -226,6 +227,9 @@ async def audited_answer_lines(
             continue
         diagnostics = row.get("diagnostics_json")
         if not isinstance(diagnostics, Mapping):
+            continue
+        validation = diagnostics.get("answer_validation")
+        if isinstance(validation, Mapping) and validation.get("valid") is not True:
             continue
         budget = diagnostics.get("round_budget")
         if isinstance(budget, Mapping) and budget.get("adopted_audit_cut"):
@@ -448,6 +452,7 @@ async def validate_answer(
         timed_out_claims=timed_out,
         guide_steps=guide_steps,
         guide_step_embedding=step_embedding,
+        llm_usage=dict(usage),
         **deterministic,
     )
 

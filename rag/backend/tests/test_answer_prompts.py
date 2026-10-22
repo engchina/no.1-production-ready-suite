@@ -158,13 +158,14 @@ def test_answer_prompt_edit_requires_the_screen_permission_of_each_prompt(
 
 
 @pytest.mark.parametrize("key", EDITABLE_PROMPT_KEYS)
-def test_retrieval_permission_can_read_but_cannot_edit_prompts(
-    monkeypatch: pytest.MonkeyPatch, key: str
+@pytest.mark.parametrize("permission", ["menu.settings_retrieval", "menu.settings_evaluation"])
+def test_retrieval_and_evaluation_permissions_can_read_but_cannot_edit_prompts(
+    monkeypatch: pytest.MonkeyPatch, key: str, permission: str
 ) -> None:
     fake = FakePromptOracle()
     monkeypatch.setattr(settings_routes, "OracleClient", lambda: fake)
     auth = enable_production_auth(monkeypatch)
-    auth.user_with_permissions("retrieval-admin", ["menu.settings_retrieval"])
+    auth.user_with_permissions("retrieval-admin", [permission])
     headers = login(client, "retrieval-admin")
     result = client.get("/api/settings/answer-prompts", headers=headers)
     assert result.status_code == 200

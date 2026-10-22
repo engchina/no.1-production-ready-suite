@@ -59,7 +59,7 @@ class _RunStore(Protocol):
 
 
 def answer_verification(diagnostics: Mapping[str, Any] | None) -> RunVerification | None:
-    """回答の検証（回答の監査で、質問の要求ごとに根拠で答えられたかを確かめた結果）。
+    """最終の資料との照合を優先し、旧記録は要求ごとの監査から検証状態を読む。
 
     - verified: 監査した要求がすべて根拠で答えられている。
     - partial: 一部の要求が答えられていない・確かめられていない。
@@ -68,6 +68,13 @@ def answer_verification(diagnostics: Mapping[str, Any] | None) -> RunVerificatio
     """
     if diagnostics is None:
         return None
+    validation = diagnostics.get("answer_validation")
+    if isinstance(validation, Mapping):
+        if validation.get("valid") is True:
+            return "verified"
+        counts = validation.get("counts")
+        supported = counts.get("supported") if isinstance(counts, Mapping) else 0
+        return "partial" if isinstance(supported, int) and supported > 0 else "unverified"
     envelope = diagnostics.get("envelope")
     requests = envelope.get("requests") if isinstance(envelope, Mapping) else None
     statuses = [
