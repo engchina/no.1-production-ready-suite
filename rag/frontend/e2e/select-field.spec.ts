@@ -94,6 +94,7 @@ async function mockApi(page: Page) {
 
     // 検索方法の設定（21 件の選択肢を持つ「根拠の前後から加える数」を一覧の操作の確認に使う）。
     const retrievalCards: Record<string, unknown> = {
+      "/api/settings/answer-prompts": { prompts: [], stages: [] },
       "/api/settings/answering": {
         query_strategy: "auto_routing",
         answer_flow: "crag",
