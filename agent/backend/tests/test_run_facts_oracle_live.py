@@ -230,7 +230,7 @@ def test_feedback_counts_owner_and_admin_union_in_oracle(agent_id: str) -> None:
         _fact(agent_id, "admin", now, admin_review=bad),
         _fact(agent_id, "both", now, feedback=good, admin_review=bad),
     ]:
-        store.upsert(fact)
+        store.upsert([fact])
     report = store.feedback_report(
         days=7,
         now=now,
