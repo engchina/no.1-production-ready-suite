@@ -45,7 +45,7 @@ from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY, RELATION_SUPPORT_POLICY
 from rag_engine.generation.grounded import output_field_claim, quote_in_text
 from rag_engine.generation.operation_audit import is_non_claim_passage, list_heading_lines, table_header_lines
-from rag_engine.generation.table_binding import unbound_table_values
+from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.models.llm import OutputFieldEvidence
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline, current_deadline
 
@@ -595,8 +595,9 @@ def _enforce_support(
     - 監査が裏付けとして写した原文（support_quote）が、結び付けた根拠の本文に無い → citation_error（quote_unmatched）。
     - 監査が、根拠の記載の対象は段落の対象と別（not_applicable）とした → unsupported。``unknown`` は採否に使わない
       （実の LLM の確認で、対象が同じ正しい段落にも多く付いた。確かめられない段落は監査の判定〔unsupported〕に任せる）。
-    - 段落、または監査の理由が、根拠の表の別の行の区分・名前と値を結び付けている（決定的な照合。`unbound_table_values`）
-      → unsupported（理由が根拠と逆の対応を「記載あり」と述べた supported を採らない）。
+    - 段落が、根拠の表の別の行の区分・名前（別の列の見出し）と値を結び付けている（決定的な照合。`unbound_table_values`）
+      → contradicted（表が否定した対応。理由に表の正しい対応を書く。#2998）。
+    - 監査の理由だけが、根拠の表と違う対応を「記載あり」と述べている → unsupported（段落は外さない）。
 
     ``texts`` は根拠の id → 分割する前の本文（資料ではない根拠を含む）、``document_texts`` は資料の根拠の本文。
 
@@ -627,8 +628,9 @@ def _enforce_support(
                     claim, "unsupported", "output_field_basis_unconfirmed", "出力ファイルの項目定義と対象の一致を確認できません。"
                 )
             elif pairs := unbound.get(claim.answer_passage_id):
-                detail = "、".join(f"値『{value}』は『{other}』と別の行の値" for value, other in pairs)
-                claim = _not_supported(claim, "unsupported", SUPPORT_VALUE_UNBOUND, f"根拠の表では{detail}です。")
+                # 表が否定した対応（別の行・別の列の値）は、確かめられないのではなく根拠と矛盾する（#2998）。
+                detail = "、".join(table_mismatch_notes(pairs, document_texts))
+                claim = _not_supported(claim, "contradicted", SUPPORT_VALUE_UNBOUND, f"根拠の表では{detail}です。")
             elif pairs := unbound_table_values(claim.reason, document_texts):
                 # 監査の理由が、根拠の表と違う対応（別の行の区分・名前と値）を「記載あり」として述べている。
                 detail = "、".join(f"値『{value}』を『{other}』の値としています" for value, other in pairs)

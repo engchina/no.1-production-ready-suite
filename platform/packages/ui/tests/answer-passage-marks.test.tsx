@@ -140,7 +140,7 @@ describe("AnswerSections の段落の印", () => {
     const reasons = marked[0].querySelector('[data-testid="answer-passage-mark-reasons"]')!;
     expect(reasons.id).toBe(toggle.getAttribute("aria-controls"));
     expect(reasons.textContent).toContain("根拠の表の対応と違う可能性");
-    expect(reasons.textContent).toContain("根拠の表では値『253』は別の行の値です。");
+    expect(reasons.textContent).toContain("監査の理由が、根拠の表と違う対応（値『253』を『項目甲』の値としています）を述べています。");
 
     const removed = host.querySelector('[data-testid="answer-removed-passages"]')!;
     expect(removed.querySelector("h4")?.textContent).toBe("根拠と矛盾し除いた内容");

@@ -250,7 +250,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     条件・制約と両立しない premise_conflict（status は contradicted）を足した。rag_lookup_guides・
 #     rag_search の conditions で、選択式の条件に選択肢そのものでない答えを渡すと、答えが選んだ
 #     選択肢に決めるようにした（#2726）。
-MCP_OUTPUT_SCHEMA_VERSION = 29
+# 30: rag_validate_answer の claims で、段落が根拠の表の別の行・列の値を結び付けた
+#     （value_unbound）とき、status を unsupported から contradicted にし、理由に表の正しい対応を
+#     書くようにした（#2998）。
+MCP_OUTPUT_SCHEMA_VERSION = 30
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -1893,7 +1896,8 @@ class ValidatedClaim(BaseModel):
         description=(
             "監査の supported を採らなかった理由（target_mismatch=根拠は別の対象"
             "〔処理・画面・成果物・状態〕の記載 / "
-            "value_unbound=段落が根拠の表の別の行の区分と値を結び付けている / "
+            "value_unbound=段落が根拠の表の別の行・列の値を結び付けている〔status は contradicted。"
+            "理由に表の正しい対応〕か、監査の理由だけが表と違う対応を述べている〔unsupported〕 / "
             "quote_unmatched=裏付けとして写した原文が根拠に無い / "
             "figure_recheck=図の項目だけの裏付けを確かめ直し、図の見た目だけで決まる・図と矛盾する"
             "とした / premise_conflict=段落が勧める内容が、利用者が確認で答えた条件・制約と"

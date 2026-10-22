@@ -126,8 +126,8 @@ def _run_example(step_review: str = "supported"):
     return run(FakeModel([value], [review]), ctx, QUESTION).response
 
 
-def test_contradicted_item_is_removed_and_the_table_check_only_warns():
-    """契約の例 keep-unverified-remove-contradicted と同じ形: 矛盾だけを外し、表の対応の検査は警告にする。"""
+def test_contradicted_and_table_mismatched_items_are_removed():
+    """監査が矛盾とした説明と、根拠の表の対応を取り違えた説明を外し、表の正しい対応を理由に出す（#2998）。"""
     result = _run_example()
     record = {key: result.envelope[key] for key in ("passage_marks", "removed_passages", "answer_warnings")}
     _assert_contract_shape(record)
@@ -136,21 +136,20 @@ def test_contradicted_item_is_removed_and_the_table_check_only_warns():
     assert result.answer_text.startswith(SUMMARY)
     assert "対象の行の終了日を入力します。" in body and "新しい開始日の行を追加します。" in body
     assert "変更は翌月から反映されます。" not in body
-    assert record["removed_passages"] == [
-        {"text": "変更は翌月から反映されます。", "reasons": [{"code": "contradicted", "label": "根拠と矛盾", "detail": "r"}]}
-    ]
-    (mark,) = record["passage_marks"]
-    assert mark["text"] == "・区分Ⅱの選択肢の値は 01 です。" and mark["text"] in body
-    assert (mark["state"], [reason["code"] for reason in mark["reasons"]]) == ("warning", ["value_unbound"])
-    assert "『01』は『区分Ⅱ』の行に無い" in mark["reasons"][0]["detail"]
-    assert record["answer_warnings"] == []
-    # 本文だけを読む利用者向けの節（外した内容と、確認が必要な点）。
-    assert labels.removed_section in result.answer_text and labels.marked_section in result.answer_text
+    assert "区分Ⅱの選択肢の値は 01 です。" not in body
+    removed, table = record["removed_passages"]
+    assert removed == {"text": "変更は翌月から反映されます。", "reasons": [{"code": "contradicted", "label": "根拠と矛盾", "detail": "r"}]}
+    assert table["text"] == "区分Ⅱの選択肢の値は 01 です。"
+    assert [reason["code"] for reason in table["reasons"]] == ["contradicted"]
+    assert table["reasons"][0]["detail"].startswith("根拠の表では『区分Ⅱ』の値は『02』（『01』は別の行の値）です。")
+    assert record["passage_marks"] == [] and record["answer_warnings"] == []
+    # 本文の節は外した段落と理由の label だけ（表の正しい対応は記録の理由の detail にあり、画面が出す）。
+    assert labels.removed_section in result.answer_text and "「区分Ⅱの選択肢の値は 01 です。」" in result.answer_text
     assert result.envelope["outcome"] == "conditional"
     assert result.generation_trace["finalization"]["passage_mark_counts"] == {
-        "removed": 1,
+        "removed": 2,
         "unverified": 0,
-        "warning": 1,
+        "warning": 0,
         "answer_warnings": 0,
     }
 
@@ -160,8 +159,8 @@ def test_unverified_step_stays_in_the_body_with_a_mark():
     marks = {mark["text"]: mark for mark in result.envelope["passage_marks"]}
     assert marks["・対象の行の終了日を入力します。"]["state"] == "unverified"
     assert "・対象の行の終了日を入力します。" in result.answer_text
-    # 印の段落の根拠は参考（reference）。
-    assert {entry["answer_use"] for entry in result.used_images} == {"confirmed", "reference"}
+    # 印の段落の根拠は、確かめた段落の根拠と同じなので確認済み（表の対応を取り違えた説明は外したので、その根拠は使わない）。
+    assert {entry["answer_use"] for entry in result.used_images} == {"confirmed"}
 
 
 def test_off_goal_keeps_the_body_and_warns_the_whole_answer():
@@ -185,7 +184,7 @@ def test_off_goal_keeps_the_body_and_warns_the_whole_answer():
 
 def test_system_sections_are_not_claims():
     """「根拠と矛盾し除いた内容」「確認が必要な点」の行はシステムの行で、主張の監査・評価に数えない。"""
-    result = _run_example()
+    result = _run_example(step_review="unsupported")
     generated = grounded.generated_section_lines(result.answer_text)
     labels = answer_labels()
     tail = result.answer_text.split(labels.removed_section, 1)[1]
@@ -197,7 +196,8 @@ def test_system_sections_are_not_claims():
             assert grounded.is_structural_line(line), line
     passages = [passage["text"] for passage in _answer_passages(result.answer_text)]
     assert not any("根拠と矛盾（" in text for text in passages)
-    assert any("区分Ⅱの選択肢の値は 01 です。" in text for text in passages)  # 印の段落は本文の主張として数える
+    assert any("対象の行の終了日を入力します。" in text for text in passages)  # 印の段落は本文の主張として数える
+    assert not any("区分Ⅱの選択肢の値は 01 です。" in text for text in passages)  # 外した説明は数えない
 
 
 @pytest.mark.parametrize(

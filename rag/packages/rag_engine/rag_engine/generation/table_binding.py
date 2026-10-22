@@ -474,4 +474,42 @@ def unbound_table_values(claim: str, evidence_texts: Sequence[str]) -> list[tupl
     )
 
 
-__all__ = ["Table", "evidence_tables", "unbound_table_values"]
+def _correct_cell(pair: tuple[str, str], tables: Sequence[Table]) -> tuple[str, str, str] | None:
+    """取り違えた組（値, 別の行の名前か別の列の見出し）について、表の正しい対応（行の名前, 見出し, 正しい値）。
+
+    別の行の名前なら、その行の値の列のセル。別の列の見出しなら、値の行のその列のセル。決まらなければ None。
+    """
+    value, other = (_cell_key(part) for part in pair)
+    for table in tables:
+        if other in table.header:
+            column = table.header.index(other)
+            for cells in table.grid:
+                has_value = value in cells or any(value in _CODE_IN_CELL.findall(cell) for cell in cells)
+                if has_value and column < len(cells) and cells[column] and cells[column] != value:
+                    label = table.cells.get(cells[0], cells[0]) if cells and cells[0] else ""
+                    return label, table.cells.get(other, other), table.cells.get(cells[column], cells[column])
+            continue
+        for column in sorted(table.columns.get(value, frozenset())):
+            for cells in table.grid:
+                if other in cells and column < len(cells) and cells[column] and cells[column] != value:
+                    return table.cells.get(other, other), "", table.cells.get(cells[column], cells[column])
+    return None
+
+
+def table_mismatch_notes(pairs: Sequence[tuple[str, str]], evidence_texts: Sequence[str]) -> list[str]:
+    """取り違えた組（`unbound_table_values`）ごとの、根拠の表の正しい対応の文（外した段落の理由に出す）。"""
+    tables = [table for text in evidence_texts for table in evidence_tables(text)]
+    notes: list[str] = []
+    for value, other in pairs:
+        correct = _correct_cell((value, other), tables)
+        if correct is None:
+            notes.append(f"値『{value}』は『{other}』と別の行の値")
+        elif correct[1]:
+            row = f"『{correct[0]}』の" if correct[0] else ""
+            notes.append(f"{row}『{correct[1]}』は『{correct[2]}』（『{value}』は別の列の値）")
+        else:
+            notes.append(f"『{correct[0]}』の値は『{correct[2]}』（『{value}』は別の行の値）")
+    return notes
+
+
+__all__ = ["Table", "evidence_tables", "table_mismatch_notes", "unbound_table_values"]
