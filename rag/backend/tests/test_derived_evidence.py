@@ -515,3 +515,25 @@ async def test_oracle_chunk_set_chunks_use_search_scope(monkeypatch: pytest.Monk
         == []
     )
     assert len(calls) == 2
+
+
+async def test_rule_summary_resolves_original_elements_when_parser_section_path_differs() -> None:
+    summary = _derived("section_summary").model_copy(
+        update={
+            "metadata": {
+                **_derived("section_summary").metadata,
+                "section_path": "規則の章節 A",
+                "nav_source_element_ids": "el-7",
+            }
+        }
+    )
+    original = _original(section_path="解析見出し A")
+    reader = DerivedSourceStub([summary, original])
+    assert await derived_source_chunks(
+        reader, summary, filters={"content_kind": "section_summary"}
+    ) == [original]
+    assert reader.reference_calls == []
+    assert reader.chunk_set_calls[0]["element_id"] == "el-7"
+    assert "content_kind" not in reader.chunk_set_calls[0]["filters"]
+    missing = DerivedSourceStub([_original(section_path="規則の章節 A", element_ids="other-id")])
+    assert await derived_source_chunks(missing, summary, filters={}) == []

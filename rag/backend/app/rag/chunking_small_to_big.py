@@ -29,7 +29,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from rag_parser_core.extraction import StructuredExtraction
+from rag_parser_core.extraction import StructuredExtraction, is_derived_content
 from rag_parser_core.sheet_records import SHEET_RECORD_CONTENT_KIND
 from rag_parser_core.xml_tree_json import is_xml_tree_json_extraction
 from rag_pipeline_core.chunking import (
@@ -37,7 +37,9 @@ from rag_pipeline_core.chunking import (
     FIGURE_TEXT_SOURCE_OCR,
     FIGURE_TEXT_SOURCE_VISION,
     Chunk,
+    chunk_derived_elements,
     chunk_extraction,
+    without_derived_elements,
 )
 
 if TYPE_CHECKING:
@@ -174,6 +176,27 @@ def build_parent_child_chunks(
     from rag_engine.chunking.builder import build_small_to_big_chunks
     from rag_engine.chunking.constants import CHILD_CHUNK_LEVEL
 
+    derived = [
+        element
+        for element in extraction.elements
+        if is_derived_content(element.content_kind, element.metadata)
+    ]
+    if derived:
+        originals = build_parent_child_chunks(
+            without_derived_elements(extraction),
+            source_name=source_name,
+            params=params,
+            diagnostics=diagnostics,
+        )
+        return [
+            *originals,
+            *chunk_derived_elements(
+                derived,
+                start_index=len(originals),
+                chunk_size=small_to_big_chunking_config(params).child_target_chars,
+                strategy=SMALL_TO_BIG_STRATEGY,
+            ),
+        ]
     layout = extraction.parser_artifacts.get(LAYOUT_ARTIFACT)
     if (not isinstance(layout, Mapping) or not layout.get("records")) and has_xml_tree_units(
         extraction

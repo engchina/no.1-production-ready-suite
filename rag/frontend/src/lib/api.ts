@@ -4323,6 +4323,7 @@ export interface DocumentSectionsData {
   source: DocumentSectionOrigin;
   /** 抽出結果の章節を作った方式（#715）。 */
   rules_mode: SectionRulesMode;
+  summary_rules_match?: boolean | null;
   sections: DocumentSection[];
   extraction_section_count: number;
   page_count: number | null;

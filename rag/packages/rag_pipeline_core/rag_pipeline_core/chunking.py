@@ -9,10 +9,12 @@ from rag_parser_core.extraction import (
     EXTRACTED_FIELD_KEY,
     FIELD_SOURCE_ELEMENT_KEY,
     NAV_SUMMARY_KEY,
+    SEARCHABLE_ELEMENT_KINDS,
     DocumentElement,
     StructuredExtraction,
     bullet_line,
     heading_level_from_prefix,
+    is_derived_content,
     numbered_heading,
 )
 from rag_parser_core.language.text import text_patterns
@@ -178,6 +180,7 @@ ELEMENT_PROVENANCE_METADATA_KEYS: tuple[str, ...] = (
     "section_id",
     "parent_section_id",
     "nav_depth",
+    "nav_source_element_ids",
     EXTRACTED_FIELD_KEY,
     # 項目抽出の値の元の要素（検索で当たった値の chunk の原文を読む。#2641）。
     FIELD_SOURCE_ELEMENT_KEY,
@@ -360,6 +363,31 @@ def chunk_extraction_with_strategy(
     本プロジェクトの `StructuredExtraction` に再マップし、chunks 段階で手動選択できるようにする。
     未知 / 既定の戦略は structure_aware へ安全に fallback する。
     """
+    derived = [
+        element
+        for element in extraction.elements
+        if is_derived_content(element.content_kind, element.metadata)
+    ]
+    if derived:
+        source = without_derived_elements(extraction)
+        originals = (
+            chunk_extraction_with_strategy(
+                source,
+                strategy=strategy,
+                chunk_size=chunk_size,
+                overlap=overlap,
+                min_chars=min_chars,
+                delimiter=delimiter,
+            )
+            if source.elements or source.raw_text
+            else []
+        )
+        return [
+            *originals,
+            *chunk_derived_elements(
+                derived, start_index=len(originals), chunk_size=chunk_size, strategy=strategy
+            ),
+        ]
     aliased_strategy = _LEGACY_CHUNKING_STRATEGY_ALIASES.get(strategy, strategy)
     normalized_strategy = (
         aliased_strategy if aliased_strategy in CHUNKING_STRATEGIES else _DEFAULT_CHUNKING_STRATEGY
@@ -2386,3 +2414,37 @@ def _with_chunk_metadata(chunk: Chunk) -> Chunk:
         end_offset=chunk.end_offset,
         metadata=metadata,
     )
+
+
+def without_derived_elements(extraction: StructuredExtraction) -> StructuredExtraction:
+    """原文の分割入力。elements から補完された raw_text も原文だけに戻す。"""
+    originals = [
+        element
+        for element in extraction.elements
+        if not is_derived_content(element.content_kind, element.metadata)
+    ]
+    joined = "\n".join(
+        element.text for element in extraction.elements if element.kind in SEARCHABLE_ELEMENT_KINDS
+    ).strip()
+    raw_text = extraction.raw_text
+    if raw_text == joined:
+        raw_text = "\n".join(
+            element.text for element in originals if element.kind in SEARCHABLE_ELEMENT_KINDS
+        ).strip()
+    return extraction.model_copy(update={"elements": originals, "raw_text": raw_text})
+
+
+def chunk_derived_elements(
+    elements: list[DocumentElement], *, start_index: int, chunk_size: int = 800, strategy: str
+) -> list[Chunk]:
+    """派生の要素を単独の検索単位へ写す。本文と親グループには混ぜず、由来の印を保つ。"""
+    result: list[Chunk] = []
+    for element in elements:
+        if not is_derived_content(element.content_kind, element.metadata):
+            continue
+        single = StructuredExtraction.model_construct(elements=[element], raw_text=element.text)
+        for chunk in chunk_extraction(single, chunk_size=chunk_size, overlap=0):
+            chunk.index = start_index + len(result)
+            chunk.metadata["chunk_strategy"] = strategy
+            result.append(chunk)
+    return result

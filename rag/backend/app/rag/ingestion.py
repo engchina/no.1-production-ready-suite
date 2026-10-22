@@ -1609,7 +1609,9 @@ class IngestionPipeline:
             extraction = await self._attach_extraction_fields(
                 trace_id, extraction, document_id=document_id
             )
-            extraction = await self._attach_navigation_tree(trace_id, extraction)
+            extraction = await self._attach_navigation_tree(
+                trace_id, extraction, document_id=document_id
+            )
             checkpoint_segments = await self._mark_segments_succeeded(
                 checkpoint_segments,
                 artifact_path=extraction_artifact_path,
@@ -3211,16 +3213,60 @@ class IngestionPipeline:
         self,
         trace_id: str,
         extraction: StructuredExtraction,
+        *,
+        document_id: str | None = None,
     ) -> StructuredExtraction:
         """章節 navigation tree を決定論的に構築し、任意で node 要約を付与する。
 
         tree 構築は LLM 不要で常に実行する。node 要約は
         `rag_navigation_summary_enabled` が真のときだけ OCI Enterprise AI LLM で行う。
         """
-        nodes = build_navigation_tree(extraction)
-        if not nodes:
-            return extraction
-        parser_artifacts = extraction.parser_artifacts
+        from rag_parser_core.extraction import NAV_SUMMARY_KEY, SECTION_SUMMARY_CONTENT_KIND
+
+        from app.rag.section_rules import (
+            NAVIGATION_RULES_FINGERPRINT_ARTIFACT,
+            NAVIGATION_RULES_MODE_ARTIFACT,
+            PARSER_NAVIGATION_ARTIFACT,
+            build_rule_navigation,
+            load_section_rules,
+            rules_for_mode,
+            section_rules_fingerprint,
+        )
+        from app.schemas.document import DocumentProcessingConfig
+
+        # 再実行の前の要約を除き、派生要素が要約の入力や章節の候補に戻らないようにする。
+        extraction = extraction.model_copy(
+            update={
+                "elements": [
+                    element
+                    for element in extraction.elements
+                    if element.content_kind != SECTION_SUMMARY_CONTENT_KIND
+                    and not element.metadata.get(NAV_SUMMARY_KEY)
+                ]
+            }
+        )
+        store = load_section_rules()
+        mode = store.mode
+        if document_id is not None and self._recipe_id is not None:
+            row = await self._oracle.get_document_recipe(document_id, self._recipe_id)
+            config = DocumentProcessingConfig.model_validate(
+                (row or {}).get("processing_config") or {}
+            )
+            mode = config.section_rules_mode or mode
+        parser_nodes = build_navigation_tree(extraction)
+        rules = rules_for_mode(mode, store)
+        nodes = parser_nodes if rules is None else build_rule_navigation(extraction, rules)
+        parser_artifacts = {
+            **extraction.parser_artifacts,
+            NAVIGATION_RULES_MODE_ARTIFACT: mode,
+            NAVIGATION_RULES_FINGERPRINT_ARTIFACT: section_rules_fingerprint(mode, store),
+        }
+        if rules is not None:
+            parser_artifacts[PARSER_NAVIGATION_ARTIFACT] = [
+                node.model_dump(mode="json") for node in parser_nodes
+            ]
+        else:
+            parser_artifacts.pop(PARSER_NAVIGATION_ARTIFACT, None)
         if getattr(self._settings, "rag_navigation_summary_enabled", False):
             max_nodes = int(getattr(self._settings, "rag_navigation_summary_max_nodes", 24))
             prompt = await self._stage_prompt("navigation_summary", NAVIGATION_SUMMARY_PROMPT)
