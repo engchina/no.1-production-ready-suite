@@ -8,6 +8,10 @@ async function mockApi(page: Page) {
       await route.fulfill({ json: LOCAL_AUTH_ME });
       return;
     }
+    if (url.pathname === "/api/settings/answer-prompts") {
+      await route.fulfill({ json: { data: { prompts: [], stages: [] }, error_messages: [], warning_messages: [] } });
+      return;
+    }
     // 取込・回答設定は DB ゲートを通す（#325）。
     if (url.pathname === "/api/ready/database") {
       await route.fulfill({ json: DB_STATUS_OK });

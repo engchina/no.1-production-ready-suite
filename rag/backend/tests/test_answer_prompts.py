@@ -157,6 +157,24 @@ def test_answer_prompt_edit_requires_the_screen_permission_of_each_prompt(
     assert fake.saved == {}
 
 
+@pytest.mark.parametrize("key", EDITABLE_PROMPT_KEYS)
+def test_retrieval_permission_can_read_but_cannot_edit_prompts(
+    monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    fake = FakePromptOracle()
+    monkeypatch.setattr(settings_routes, "OracleClient", lambda: fake)
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("retrieval-admin", ["menu.settings_retrieval"])
+    headers = login(client, "retrieval-admin")
+    result = client.get("/api/settings/answer-prompts", headers=headers)
+    assert result.status_code == 200
+    assert any(stage["phase"] == "retrieval" for stage in result.json()["data"]["stages"])
+    path = f"/api/settings/answer-prompts/{key}"
+    assert client.put(path, json={"content": "合成の指示"}, headers=headers).status_code == 403
+    assert client.delete(path, headers=headers).status_code == 403
+    assert fake.saved == {}
+
+
 class PromptFakeOracle(FakeOracle):
     def __init__(self, overrides: dict[str, str] | Exception) -> None:
         super().__init__()

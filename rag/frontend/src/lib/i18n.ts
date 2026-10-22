@@ -1716,7 +1716,7 @@ export const ja = {
   "settings.retrieval.actions.unsaved": "未保存の変更があります。",
   "settings.retrieval.actions.reset": "変更を破棄",
   "settings.prompts.subtitle":
-    "回答を作るときに回答モデルへ渡す指示のテンプレートを編集します。検索・回答から評価まで、各段で使うプロンプトとその条件も確認できます。文書解析・文書分割のプロンプトは各設定画面で編集します。",
+    "回答を作るときに回答モデルへ渡す指示のテンプレートを編集します。回答生成・監査・評価のプロンプトとその条件も確認できます。検索関連の指示は「検索方法」、文書解析・文書分割の指示は各設定画面で確認します。",
   "settings.guardrail.subtitle":
     "OCI Guardrails による質問と回答の安全チェックを有効・無効にします。",
   "chat.guardrail": "安全チェック",
@@ -3850,9 +3850,11 @@ export const ja = {
   "settings.answerPrompts.missingPlaceholders": "必須の placeholder がありません: {names}",
   "settings.answerPrompts.loading": "プロンプトを読み込んでいます",
   "settings.answerPrompts.loadError": "プロンプトを読み込めませんでした。",
+  "settings.retrieval.prompts.title": "検索に使うプロンプト",
+  "settings.retrieval.prompts.description": "質問の解釈、検索、根拠の判定の順に並べています。各段の中はモデルへ渡す順です。使われる条件と指示の原文を確認できます。すべて読み取り専用です。",
   "settings.answerPrompts.stages.title": "処理の各段のプロンプト",
   "settings.answerPrompts.stages.description":
-    "「設定の概要」の検索・回答、評価の流れに沿って並べています。文書解析・文書分割のプロンプトは各設定画面で編集します。各段の中はモデルへ渡す順です。業務ガイドの準備と MCP の資料との照合は独立した処理で、FAQ は検索による回答とは別の経路です。回答テンプレートだけ編集でき、ほかの指示は読み取り専用です。",
+    "回答生成・監査・評価の順に並べています。検索関連の指示は「検索方法」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備と MCP の資料との照合は独立した処理で、FAQ は検索による回答とは別の経路です。回答テンプレートだけ編集でき、ほかの指示は読み取り専用です。",
   "settings.answerPrompts.phase.ingestion": "文書解析",
   "settings.answerPrompts.phase.question": "質問の解釈",
   "settings.answerPrompts.phase.retrieval": "検索",
