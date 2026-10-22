@@ -296,20 +296,22 @@ executor が埋まっても待たない。1 回の検証ごとに `rag_answer_va
 `answer_policy.RELATION_SUPPORT_POLICY`）。システムは次の `supported` を採らず、理由を `support_check` に、監査の判定を
 `audit_status` に残す（否定の判定は変えない。`evaluation/answer_validation.py` の `_enforce_support`）: 写した原文が
 結び付けた根拠に無い（`quote_unmatched`。`citation_error`）・対象が別（`target_mismatch`。`unsupported`）・段落が根拠の表の
-別の行の区分と値を結び付けている（`value_unbound`。`unsupported`。HTML の表・Markdown の表・「名前：値」の行の並び
+別の行の区分と値を結び付けている（`value_unbound`。表が否定した対応なので `contradicted`〔#2998〕。理由に表の正しい対応
+〔「根拠の表では『項目 X2』の値は『K-01-2』（『K-01-1』は別の行の値）です。」。`table_binding.table_mismatch_notes`〕を書く。HTML の表・Markdown の表・「名前：値」の行の並び
 〔箇条書きの印・等号の区切りを含む〕・1 文の中で並べた「A は x、B は y」を、表の行と列で照合する決定的な検査
 `generation/table_binding.py`。値は英数字だけのセルと、先頭の列以外のセル〔日本語・単位付きの値。数字の無い 2 文字以下の語と
 読点・句点を含む説明の文は除く〕と、セルの中のコード。値の行に段落の区分・名前が無く、同じ列に同じ種類の値を持つ別の行の
 区分・名前を同じ区間で述べたとき。行が合っていても、見出しの行がある表で、値の列の見出しを述べずに同じ行の別の列の見出し
-〔改定前の値に対する改定後〕を述べたとき。監査の理由が根拠の表と違う対応を述べた `supported` も同じく採らない。#2659）。`unknown` は採否に使わない（実の LLM の確認で、対象が同じ正しい段落にも多く付いたため。確かめられない
+〔改定前の値に対する改定後〕を述べたとき。#2659。監査の理由だけが根拠の表と違う対応を述べた `supported` は、段落は
+取り違えていないので `unsupported`〔`value_unbound`。警告〕）。`unknown` は採否に使わない（実の LLM の確認で、対象が同じ正しい段落にも多く付いたため。確かめられない
 段落は監査の判定 `unsupported` に任せる）。`_enforce_support` は判定と `support_check` を返すだけで、段落を外すか印を
 付けるかは呼び出し側が決める（#2738。`claim_mark_code` が判定と `support_check` を段落の印の理由の code に写す:
 `contradicted` だけが外す理由で、`quote_unmatched`・`citation_error`・`unsupported`・`unassessed`・`figure_only`〔`figure_not_read`〕は
-未確認、`target_mismatch`・`value_unbound` は警告）。表の行の照合は回答の生成の検査
-（`grounded.ITEM_CHECKS` の `_check_table_binding`。警告 `value_unbound` を付ける）でも使い、回答の生成の監査の指示（3.1）にも
+未確認、`target_mismatch`・`unsupported` の `value_unbound` は警告）。表の行の照合は回答の生成の検査
+（`grounded._table_binding_conflict`。取り違えた説明を根拠と矛盾として外し、表の正しい対応を理由に出す。#2998）でも使い、回答の生成の監査の指示（3.1）にも
 同じ規則（`RELATION_SUPPORT_RULES`）を入れる。
 
-**段落の印（#2738）**: 本文から外すのは、監査が根拠と矛盾（`contradicted`）と判定した説明だけ。根拠で確かめられない
+**段落の印（#2738）**: 本文から外すのは、根拠と矛盾する説明（監査の `contradicted` と、根拠の表が否定した対応。#2998）だけ。根拠で確かめられない
 説明は言い換えを本文に残して印（`unverified`）を、決定的な規則の検査は警告（`warning`）を付ける。形の正本は
 `platform/contracts/answer-passages/passage-marks.json`（RAG・Agent・UI のテストが読む）で、`rag_engine/generation/passage_marks.py`
 が組み立てる。回答の構造（AnswerEnvelope。版 2）と回答の記録の診断（`diagnostics.answer` の直下）、会話のメッセージ
@@ -324,7 +326,7 @@ executor が埋まっても待たない。1 回の検証ごとに `rag_answer_va
 | 未知の Evidence ID・複数の根拠に一致 / 原文と一致しない引用 | 本文に残す（近い原文・指した根拠があれば出典に結ぶ）。是正の指摘に写し方を渡す | `unverified`（`citation_error` / `quote_unmatched`） |
 | 監査が時間の上限で切れた・応答が空 | 本文に残す | `unverified`（`unassessed`） |
 | `ITEM_CHECKS`（見出しの入口化・削除対象・構成明細・処理区分の逐語・値・画面の表示例の値）・生成説明の値・質問の対象 / エラーが根拠に無い・別文書の手順 | 本文に残し、`detail` に検査の名前・理由と原文の引用 | `warning`（`item_check`） |
-| 表の行の対応（`_check_table_binding`） | 本文に残す | `warning`（`value_unbound`） |
+| 表の行・列の対応の取り違え（`_table_binding_conflict`。#2998） | 本文から外し、理由に表の正しい対応を出す | `removed_passages`（`contradicted`） |
 | 旧版・廃止の文書の根拠（`withhold_superseded`） | 本文に残す | `warning`（`superseded`） |
 | summary（監査なし・不支持・保証の過剰・原因の推測・全要求が missing・すべて条件付き・確かめた説明が無い・印の主張の断定） | モデルの summary を残す。外した主張を断定するときだけ中立の定型文 | `warning`（`summary_unaudited`） |
 | 当てはめ（監査なし・判定なし・前提が質問に無い・規則が印つき） | 出す。矛盾（監査の valid=false・算式の誤り・規則を外した）・形の誤りは出さない | `warning`（`application_unaudited`） |

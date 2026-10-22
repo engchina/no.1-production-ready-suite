@@ -139,8 +139,8 @@ def test_standalone_values_still_detect_wrong_rows(value: str) -> None:
     assert unbound_table_values(f"項目乙では「{value}」を指定する。", [table]) == [(value, "項目乙")]
 
 
-def test_grounded_item_with_a_value_from_another_row_gets_a_warning() -> None:
-    """表の別の行の値を結び付けた説明は、言い換えを残して警告（value_unbound）を付ける（#2738。以前は降格）。"""
+def test_grounded_item_with_a_value_from_another_row_is_removed_with_the_right_value() -> None:
+    """表の別の行の値を結び付けた説明は、根拠と矛盾した説明として外し、表の正しい対応を理由に出す（#2998）。"""
     question = "区分Ⅱで選ぶ選択肢の値は？"
     spans = grounded.tag_spans(
         question, [{"evidence_id": "E1", "source_id": "c1", "source": "m.pdf", "page": 1, "text": TABLE, "section_path": []}]
@@ -153,10 +153,23 @@ def test_grounded_item_with_a_value_from_another_row_gets_a_warning() -> None:
         return next(entry for entry in entries if entry.item.text == item.text)
 
     entry = checked(wrong)
-    assert not entry.quote_only and entry.state == "warning" and "表の別の行の値" in entry.reasons[0]
-    assert [mark["code"] for mark in entry.marks] == ["value_unbound"]
+    assert entry.removed and not entry.published
+    assert [mark["code"] for mark in entry.marks] == ["contradicted"]
+    assert entry.marks[0]["detail"].startswith("根拠の表では『区分Ⅱ』の値は『02』（『01』は別の行の値）です。")
     assert "原文「区分Ⅱ | 02」" in entry.marks[0]["detail"]
-    assert not checked(right).quote_only and checked(right).reasons == [] and checked(right).state == ""
+    kept = checked(right)
+    assert not kept.removed and kept.reasons == [] and kept.state == ""
+
+
+def test_table_mismatch_notes_name_the_right_row_or_column_value() -> None:
+    from rag_engine.generation.table_binding import table_mismatch_notes
+
+    assert table_mismatch_notes([("01", "区分Ⅱ")], [TABLE]) == ["『区分Ⅱ』の値は『02』（『01』は別の行の値）"]
+    revised = "| 項目 | 改定前 | 改定後 |\n|---|---|---|\n| 申請の期限 | 30日以内 | 60日以内 |\n| 保存期間 | 3年 | 5年 |"
+    pairs = unbound_table_values("改定後の申請の期限は30日以内です。", [revised])
+    assert table_mismatch_notes(pairs, [revised]) == ["『申請の期限』の『改定後』は『60日以内』（『30日以内』は別の列の値）"]
+    # 正しい対応が決まらないときは、別の行の値であることだけを書く。
+    assert table_mismatch_notes([("99", "区分Ⅹ")], [TABLE]) == ["値『99』は『区分Ⅹ』と別の行の値"]
 
 
 def test_grounded_item_listing_values_of_several_rows_is_kept() -> None:

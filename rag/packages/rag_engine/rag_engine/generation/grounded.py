@@ -54,7 +54,7 @@ from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
-from rag_engine.generation.table_binding import unbound_table_values
+from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.generation.value_grounding import unsupported_document_value_claim
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedFactAudit, GroundedItem
@@ -1084,11 +1084,14 @@ def _check_screen_list_codes(question: str, item: GroundedItem, span: dict) -> s
     return "画面の一覧に写ったコード『" + "』『".join(used) + "』を、本文に対応の記載が無いまま対象に使っている" if used else ""
 
 
-def _check_table_binding(question: str, item: GroundedItem, span: dict) -> str:
-    # 引用元の表で、値を別の行の区分・名前と結び付けた説明（区分Ⅱ の値として区分Ⅰ の行の値を書く）は、語と値が
-    # 根拠にあっても表の対応と違う。表の行で決定的に確かめる (#2659)。
+def _table_binding_conflict(item: GroundedItem, span: dict) -> str:
+    """引用元の表で、値を別の行の区分・名前（別の列の見出し）と結び付けた説明の、表の正しい対応（無ければ空）。
+
+    区分Ⅱ の値として区分Ⅰ の行の値を書いた説明は、語と値が根拠にあっても表が否定した対応で、根拠と矛盾する。
+    表の行と列で決定的に確かめる (#2659・#2998)。
+    """
     pairs = unbound_table_values(item.text, [span["text"]])
-    return "表の別の行の値: " + "、".join(f"『{value}』は『{other}』の行に無い" for value, other in pairs) if pairs else ""
+    return "、".join(table_mismatch_notes(pairs, [span["text"]])) if pairs else ""
 
 
 def _check_verbatim_conditions(question: str, item: GroundedItem, span: dict) -> str:
@@ -1100,7 +1103,8 @@ def _check_verbatim_conditions(question: str, item: GroundedItem, span: dict) ->
 # 警告を付ける検査。質問が尋ねた対象・画面・要求の種類に合っているか、画面の表示例の値を答えにしていないかを
 # 見る。資料が別の対象を説明していれば引用が正しくても回答として誤りのことがあり、スクリーンショットや生成説明に
 # 写った値は利用者の実値でも規則でもない。規則の検査は誤判定があるので、言い換えは本文に残し、段落に警告
-# （item_check。表の行の対応は value_unbound）を付ける（#2738。以前は原文のみ提示へ落としていた）。
+# （item_check）を付ける（#2738。以前は原文のみ提示へ落としていた）。表の行・列の対応の取り違えは、規則の検査では
+# なく表が否定した対応なので、根拠と矛盾した説明として外す（`_table_binding_conflict`。#2998）。
 ITEM_CHECKS: list[Callable[[str, GroundedItem, dict], str]] = [
     _check_heading,
     _check_deletion_target,
@@ -1109,7 +1113,6 @@ ITEM_CHECKS: list[Callable[[str, GroundedItem, dict], str]] = [
     _check_value,
     _check_screen_example_values,
     _check_screen_list_codes,
-    _check_table_binding,
 ]
 # 警告の理由（detail）に書く検査の名前。
 ITEM_CHECK_NAMES: dict[Callable[[str, GroundedItem, dict], str], str] = {
@@ -1120,7 +1123,6 @@ ITEM_CHECK_NAMES: dict[Callable[[str, GroundedItem, dict], str], str] = {
     _check_value: "値",
     _check_screen_example_values: "画面の表示例の値",
     _check_screen_list_codes: "画面の一覧のコード",
-    _check_table_binding: "表の行の対応",
 }
 # 本文の手順・規則の検査（verify の中の規則）の名前。
 GENERATED_VALUE_CHECK = "生成説明の値"
@@ -1565,7 +1567,11 @@ def verify(
         for check in ITEM_CHECKS:
             reason = check(scoped_question, check_item, view)
             if reason:
-                _mark_check(entry, ITEM_CHECK_NAMES[check], reason, code="value_unbound" if check is _check_table_binding else "item_check")
+                _mark_check(entry, ITEM_CHECK_NAMES[check], reason)
+        if conflict := _table_binding_conflict(check_item, view):
+            # 表が否定した対応は、根拠と矛盾した説明として本文から外し、正しい対応を理由に出す（#2998）。
+            note = _quote_note(entry)
+            entry.remove(f"根拠の表では{conflict}です。" + (f"{note}" if note else ""), reason=f"表の対応: {conflict}")
         for check in ITEM_HINTS:
             hint = check(scoped_question, check_item, view)
             if hint:

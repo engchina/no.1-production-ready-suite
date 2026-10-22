@@ -70,11 +70,11 @@ def test_value_from_another_row_is_not_supported_and_the_audit_reason_is_not_ado
     claims = _by_quote(result)
     assert claims["区分Ⅰでは選択肢の値 01 を選びます。"]["status"] == "supported"  # 正しい対応は残す
     wrong = claims["区分Ⅱでは選択肢の値 01 を選びます。"]
-    assert (wrong["status"], wrong["audit_status"], wrong["support_check"]) == ("unsupported", "supported", SUPPORT_VALUE_UNBOUND)
-    # 理由は根拠の対応を先に書き、監査の「記載あり」は採らなかった判定の理由として残す。
-    assert wrong["reason"].startswith("根拠の表では値『01』は『区分Ⅱ』と別の行の値です。")
+    # 表が否定した対応は根拠と矛盾（#2998）。理由は表の正しい対応を先に書き、監査の「記載あり」は採らなかった判定の理由として残す。
+    assert (wrong["status"], wrong["audit_status"], wrong["support_check"]) == ("contradicted", "supported", SUPPORT_VALUE_UNBOUND)
+    assert wrong["reason"].startswith("根拠の表では『区分Ⅱ』の値は『02』（『01』は別の行の値）です。")
     assert "採らなかった監査の判定 supported の理由: 資料に記載されている" in wrong["reason"]
-    assert result["counts"] == {"supported": 1, "unsupported": 1}
+    assert result["counts"] == {"supported": 1, "contradicted": 1}
 
 
 def test_values_listed_from_several_rows_stay_supported() -> None:
@@ -96,7 +96,7 @@ def test_values_listed_from_several_rows_stay_supported() -> None:
     assert claims[listed]["status"] == "supported"
     assert claims[ranged]["status"] == "supported"
     wrong = claims[wrong_text]
-    assert (wrong["status"], wrong["support_check"]) == ("unsupported", SUPPORT_VALUE_UNBOUND)
+    assert (wrong["status"], wrong["support_check"]) == ("contradicted", SUPPORT_VALUE_UNBOUND)
 
 
 def test_quote_that_is_not_in_the_evidence_is_not_adopted() -> None:
@@ -170,7 +170,7 @@ def test_negative_verdicts_and_reused_claims_are_kept() -> None:
     result = _validate(answer, {"c1": TABLE}, [{"chunk": "c1", "status": "contradicted", "applicability": "not_applicable"}])
     claim = result["claim_checks"][0]
     assert (claim["status"], claim["support_check"]) == ("contradicted", "")
-    # 監査の判定を再利用した段落（#1527）も、表の行の対応に反すれば supported にしない。
+    # 監査の判定を再利用した段落（#1527）も、表の行の対応に反すれば根拠と矛盾にする（#2998）。
     items = [{"id": "c1", "source": "manual.pdf", "page_start": 1, "page_end": 1, "text": TABLE}]
     with patch("rag_engine.evaluation.answer_eval.parse_text_response") as never:
         reused = validate_answer_claims(
@@ -182,7 +182,7 @@ def test_negative_verdicts_and_reused_claims_are_kept() -> None:
         )
         never.assert_not_called()
     assert [(c["status"], c["support_check"]) for c in reused["claim_checks"]] == [
-        ("unsupported", SUPPORT_VALUE_UNBOUND),
+        ("contradicted", SUPPORT_VALUE_UNBOUND),
         ("supported", ""),
     ]
 
@@ -216,7 +216,8 @@ def test_word_values_and_audit_reasons_stating_another_rows_mapping_are_not_supp
         ],
     )
     claims = _by_quote(result)
-    assert (claims[swapped]["status"], claims[swapped]["support_check"]) == ("unsupported", SUPPORT_VALUE_UNBOUND)
+    assert (claims[swapped]["status"], claims[swapped]["support_check"]) == ("contradicted", SUPPORT_VALUE_UNBOUND)
+    assert claims[swapped]["reason"].startswith("根拠の表では『区分B』の値は『日次処理』（『月次処理』は別の行の値）です。")
     misread = claims[correct]
     assert (misread["status"], misread["support_check"]) == ("unsupported", SUPPORT_VALUE_UNBOUND)
     assert misread["reason"].startswith("監査の理由が、根拠の表と違う対応")

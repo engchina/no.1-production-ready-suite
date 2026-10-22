@@ -3038,6 +3038,30 @@ def test_paragraphs_rag_did_not_adopt_as_supported_are_marked_with_the_reason() 
     }
 
 
+def test_paragraph_rag_found_against_the_table_is_removed_with_the_right_value() -> None:
+    """RAG が根拠の表の対応と取り違えたとした段落（contradicted・value_unbound）は本文から外し、
+    表の正しい対応を外した理由に出す（#2998）。"""
+    kept = "区分Ⅰでは選択肢の値 01 を選びます。"
+    swapped = "区分Ⅱでは選択肢の値 01 を選びます。"
+    reason = "根拠の表では『区分Ⅱ』の値は『02』（『01』は別の行の値）です。"
+    table_claim = {
+        **_claim(swapped, "contradicted", reason),
+        "audit_status": "supported",
+        "support_check": "value_unbound",
+    }
+    published = publish_answer(
+        f"{kept}\n\n{swapped}", _verdict(_claim(kept, "supported"), table_claim)
+    )
+    assert published.body == kept
+    assert published.removed_passages == [
+        {
+            "text": swapped,
+            "reasons": [{"code": "contradicted", "label": "根拠と矛盾", "detail": reason}],
+        }
+    ]
+    assert published.passage_marks == []
+
+
 # 段落の印の契約の事例（#2738。RAG・Agent・UI のテストが読む）。
 PASSAGE_MARKS: dict[str, Any] = json.loads(
     (
