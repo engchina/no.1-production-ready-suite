@@ -1004,7 +1004,7 @@ def _stream_parsed(
     取り消しは event ごとに確かめる。停滞を検出したら stream を閉じて（接続を切って）`LlmStreamStalled` を送出する。
     出力の速さ（直近 `STALL_RATE_WINDOW_SECONDS` 秒の delta の数）は、最初の delta から同じ秒が経ってから確かめる。
     ``runaway`` なら出力の文の末尾で暴走（`_RunawayMonitor`）を確かめ、暴走なら stream を閉じて `LlmRunawayOutput` を
-    送出する（#2966）。
+    送出する（#2966）。失敗の event と、SDK が event から応答を組み立てられなかった stream（#3000）は `LlmStreamFailed`。
     """
     import httpx
 
@@ -1073,6 +1073,10 @@ def _stream_parsed(
         if _is_stream_error_event(exc):
             # OpenAI SDK は stream の error の event を event として返さず APIError として送出する（#2814）。
             raise LlmStreamFailed(f"LLM の応答が失敗の event で終わりました: {str(exc)[:300]}", timing) from exc
+        if isinstance(exc, AssertionError):
+            # OpenAI SDK は event から応答を組み立てるとき、delta が指す出力の種類を assert で確かめる。provider が種類の
+            # 合わない出力を指す event を送ると AssertionError になる（#3000）。provider の一時的な失敗として送り直す。
+            raise LlmStreamFailed(f"LLM の応答の stream の event を組み立てられませんでした（{type(exc).__name__}）。", timing) from exc
         with suppress(AttributeError):
             exc.timing = timing  # type: ignore[attr-defined]
         raise

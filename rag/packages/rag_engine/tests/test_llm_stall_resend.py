@@ -237,6 +237,20 @@ class StallResendTest(unittest.TestCase):
         self.assertEqual((result.text, len(client.streams)), ("ok", 2))
         self.assertEqual(usage["incomplete_reasons"], {"stream_error": 1})
 
+    def test_sdk_stream_assembly_error_is_resent_once(self):
+        """SDK が event から応答を組み立てられない stream（delta が message でない出力を指す）も送り直す（#3000）。"""
+        client = _Client(self.clock, [[(0.1, SimpleNamespace(type="response.created")), (None, AssertionError())], _script(10, 200.0)])
+        result, usage, _records = self.call(client)
+        self.assertEqual((result.text, len(client.streams)), ("ok", 2))
+        self.assertEqual(usage["incomplete_reasons"], {"stream_error": 1})
+
+    def test_sdk_stream_assembly_error_resends_are_bounded(self):
+        broken = [(0.1, SimpleNamespace(type="response.created")), (None, AssertionError())]
+        client = _Client(self.clock, [list(broken) for _ in range(1 + oci.STREAM_FAILED_RESENDS)])
+        with self.assertRaises(oci.LlmStreamFailed):
+            self.call(client)
+        self.assertEqual(len(client.streams), 1 + oci.STREAM_FAILED_RESENDS)
+
     def test_without_a_deadline_the_call_is_not_streamed(self):
         """回答の期限が無い文脈（取込など）は従来どおり `responses.parse` で受ける。"""
         client = _Client(self.clock, [])
