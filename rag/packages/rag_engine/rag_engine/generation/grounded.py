@@ -2497,6 +2497,13 @@ def deduplicate_audited_items(
 ) -> tuple[list[CheckedItem], GroundedAudit]:
     """重複を除いた段落へ監査の参照を移す。消えた説明を別の説明や案内に取り違えない。"""
     kept = without_redundant_quotes(checked)
+    return kept, reindex_audit_items(checked, kept, audit, notice_count)
+
+
+def reindex_audit_items(
+    checked: Sequence[CheckedItem], kept: Sequence[CheckedItem], audit: GroundedAudit, notice_count: int
+) -> GroundedAudit:
+    """段落数の変化を監査に反映する。ガイドの案内は段落の後ろに続く。"""
     positions = {id(entry): index for index, entry in enumerate(kept)}
 
     def equivalent(entry: CheckedItem, other: CheckedItem) -> bool:
@@ -2520,7 +2527,7 @@ def deduplicate_audited_items(
             return len(kept) + index - len(checked)
         return mapping.get(index, -1)
 
-    return kept, audit.model_copy(
+    return audit.model_copy(
         update={
             "reviews": [review.model_copy(update={"index": mapping.get(review.index, -1)}) for review in audit.reviews],
             "guide_requirement_reviews": [
@@ -5007,7 +5014,10 @@ def run_round(
         and not any(e.item.kind == "gap" and answer_labels().cause_gap in e.item.text for e in checked)
     ):
         # 原因を裏付ける確かめた規則の item が 1 つもなければ、原因は資料にないと本文で伝える (#713)。
+        before_gap = list(checked)
         checked.append(CheckedItem(GroundedItem(kind="gap", text=answer_labels().cause_gap)))
+        if audit is not None:
+            audit = reindex_audit_items(before_gap, checked, audit, len(guide_notices))
     unused = [ref for label in (audit.unused_evidence_ids if audit else []) if (ref := _evidence_ref(label, spans))]
     return Round(
         summary,
