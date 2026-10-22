@@ -1390,10 +1390,6 @@ WHERE PROMPT_KEY = 'vlm_answer'
 """.strip()
 
 
-if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
-
-
 def cited_evidence_migration_sql() -> str:
     """保存済み評価入力の引用キーを変更し、画像だけの ID は変更しない。"""
     return """
@@ -1422,3 +1418,7 @@ BEGIN
 END;
 /
 """.strip()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
