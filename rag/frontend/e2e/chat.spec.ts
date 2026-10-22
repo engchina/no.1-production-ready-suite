@@ -323,9 +323,15 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`チャットで会話を始めて根拠付き回答を表示する (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
+  test(`チャットで会話を始めて根拠付き回答を表示する (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockChat(page);
+    await page.route("**/api/chat/models", (route) => route.fulfill({
+      json: { data: [
+        { model_id: "text-m", display_name: "Text model", kind: "text" },
+        { model_id: "vision-m", display_name: "Vision model", kind: "vision" },
+      ], error_messages: [], warning_messages: [] },
+    }));
 
     await page.goto("/chat");
     await expect(page.getByRole("heading", { name: "チャット" })).toBeVisible();
@@ -342,9 +348,15 @@ for (const viewport of [
     await composer.scrollIntoViewIfNeeded();
     await expect(composer).toBeVisible();
     await expect(page.getByRole("button", { name: "送信" })).toBeVisible();
+    await expect(page.getByTestId("chat-answer-model")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "回答するモデルの説明" })).toHaveCount(0);
+    const sent = page.waitForRequest((request) =>
+      request.method() === "POST" && request.url().includes("/messages/stream")
+    );
     await composer.fill("経費の上限は？");
     await page.getByRole("button", { name: "送信" }).click();
 
+    expect((await sent).postDataJSON()).toMatchObject({ model_ids: [] });
     // ストリーミング → 永続化後も根拠は既定で閉じ、キーボードで展開できる。
     await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
     // 会話の名前はチャットの上端に出る。履歴を開くと一覧にもある（#664）。
@@ -376,6 +388,7 @@ for (const viewport of [
     await expect(page.getByRole("meter", { name: "Rerank スコア: 0.820" })).toBeVisible();
 
     await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`chat-hidden-model-${viewport.name}.png`) });
   });
 }
 

@@ -403,7 +403,7 @@ const ANSWER_MODELS = [
   { model_id: "vision-m", display_name: "grok-4.3", kind: "vision" },
 ];
 
-test("回答のモデルは既定のテキストモデルと画像対応モデルだけ。検索は 1 つを選び、チャットは比較できる（#675）", { tag: "@responsive" }, async ({
+test("回答のモデルは既定のテキストモデルと画像対応モデルだけ。検索は選択でき、チャットでは選択行を隠す（#675）", { tag: "@responsive" }, async ({
   page,
   isMobile,
 }) => {
@@ -417,7 +417,7 @@ test("回答のモデルは既定のテキストモデルと画像対応モデ�
 
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /経理ビュー/);
-  // 回答を生成しないときはモデルを選ばせない。チャットと同じく入力欄の上のチップの行（#686）。
+  // 回答を生成しないときはモデルを選ばせない。入力欄の上のチップの行（#686）。
   const modelRow = page.getByTestId("search-answer-model");
   await expect(modelRow).toHaveCount(0);
   await enableSearchAnswer(page);
@@ -452,18 +452,10 @@ test("回答のモデルは既定のテキストモデルと画像対応モデ�
   await page.route("**/api/chat/models", (route) => route.fulfill(envelope(ANSWER_MODELS)));
   await page.goto("/chat");
   await selectSearchAnswerProfile(page, "経理ビュー");
-  await expect(page.getByRole("button", { name: "gpt-oss-120b（テキスト）" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "grok-4.3（画像対応）" })).toBeVisible();
-  // 説明は常設せず、ラベルの横の info アイコンを押すと出る（#901）。
-  const help = page.getByTestId("chat-default-model");
-  await expect(help).toBeHidden();
-  await page.getByRole("button", { name: "回答するモデルの説明" }).click();
-  await expect(help).toBeVisible();
-  await expect(help).toHaveText(
-    "未選択ならテキストモデルで回答し、根拠の図や画像を読むときだけ画像対応モデルを使います。両方選ぶと回答を並べて比較できます。"
-  );
-  await page.keyboard.press("Escape");
-  await expect(help).toBeHidden();
+  await expect(page.getByTestId("chat-answer-model")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "回答するモデルの説明" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "gpt-oss-120b（テキスト）" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "grok-4.3（画像対応）" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
@@ -477,12 +469,8 @@ test("既定のテキストモデルが画像対応モデルも兼ねるとき�
   await page.route("**/api/chat/models", (route) => route.fulfill(envelope(shared)));
   await page.goto("/chat");
   await selectSearchAnswerProfile(page, "経理ビュー");
-  const chip = page.getByRole("button", { name: "xai.grok-4.3（テキスト・画像対応）" });
-  await expect(chip).toBeVisible();
-  await expect(page.getByRole("button", { name: "xai.grok-4.3（テキスト）" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "回答するモデルの説明" })).toHaveAccessibleDescription(
-    "このモデルは画像対応モデルも兼ね、根拠の図や画像も読んで回答します。"
-  );
+  await expect(page.getByTestId("chat-answer-model")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "回答するモデルの説明" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 
   await mockAnswerHistory(page, 0);
@@ -598,7 +586,7 @@ async function chooseDefaultModel(page: Page, name: string, option: string) {
   await expect(field).toContainText(option);
 }
 
-test("モデル設定で既定のモデルを変えたら、チャットの回答するモデルは今の既定のモデルになる（#1416）", async ({
+test("モデル設定で既定を変更してもチャットのモデル選択行は表示しない", async ({
   page,
 }) => {
   await mockChat(page, "bv-1");
@@ -606,12 +594,8 @@ test("モデル設定で既定のモデルを変えたら、チャットの回�
   const server = await mockModelSettingsWithAnswerModels(page);
   await page.goto("/chat");
   await selectSearchAnswerProfile(page, "経理ビュー");
-  const chips = page.getByTestId("chat-answer-model").locator("button[aria-pressed]");
-  await expect(chips).toHaveText(["openai.gpt-oss-120b（テキスト）", "xai.grok-4.3（画像対応）"]);
-  // 画像対応モデルを選んでおく（モデル設定で候補から消えたら、選んだ状態を残さない）。
-  const oldVision = page.getByRole("button", { name: "xai.grok-4.3（画像対応）" });
-  await oldVision.click();
-  await expect(oldVision).toHaveAttribute("aria-pressed", "true");
+  const modelRow = page.getByTestId("chat-answer-model");
+  await expect(modelRow).toHaveCount(0);
 
   // 同じタブの中でモデル設定へ移り、既定のテキストモデル・既定の画像対応モデルを claude-opus-5 にして保存する。
   await navigateInApp(page, "/settings/model");
@@ -621,14 +605,12 @@ test("モデル設定で既定のモデルを変えたら、チャットの回�
   await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
   expect(server.defaults).toEqual({ text: "claude-opus-5", vision: "claude-opus-5" });
 
-  // チャットへ戻ると、保存前の候補ではなく今の既定のモデル（同じなので 1 件で「テキスト・画像対応」）を出す。
   await navigateInApp(page, "/chat");
-  await expect(chips).toHaveText(["claude-opus-5（テキスト・画像対応）"]);
-  await expect(chips.first()).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator("#chat-composer")).toBeVisible();
+  await expect(modelRow).toHaveCount(0);
 
-  // ほかのタブ・ほかの製品でモデル設定が保存されたら、このタブに戻ったときに取り直す。
   server.defaults = { text: "openai.gpt-oss-120b", vision: "claude-opus-5" };
   await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
-  await expect(chips).toHaveText(["openai.gpt-oss-120b（テキスト）", "claude-opus-5（画像対応）"]);
+  await expect(modelRow).toHaveCount(0);
   await expectNoPageOverflow(page);
 });

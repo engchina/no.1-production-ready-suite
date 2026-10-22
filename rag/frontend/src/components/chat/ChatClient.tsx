@@ -1,7 +1,6 @@
 import {
   AnswerFooter,
   ChatComposer,
-  ChatComposerOption,
   ChatAnswer,
   ChatHistoryList,
   chatHistoryWindowLabels,
@@ -16,7 +15,6 @@ import {
   Card,
   ProcessFailureNotice,
   CardContent,
-  ToggleChip,
   TimedLoadingState,
   DEFAULT_PAGE_SIZE,
   useChatHistoryActions,
@@ -91,7 +89,6 @@ import {
   type ChatColumn,
   type ChatStreamHandlers,
 } from "@/lib/chat-stream";
-import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { formatDateTime } from "@/lib/format";
 import { unreadSectionLinks } from "@/lib/answer-diagnostics";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
@@ -114,7 +111,6 @@ import { MENU_PERMISSIONS } from "@/lib/permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
-const COMPARE_MAX = 3;
 /**
  * 回答の作成中に、配信（event・heartbeat）がこの時間届かなければ途絶えたとみなし、接続を張り直す（#1160 /
  * #1175）。backend は event の無い間も 10 秒ごとに heartbeat を送るので、その数回分。
@@ -728,13 +724,6 @@ export function ChatClient() {
     inlineOpen: historyPanelOpen,
     onInlineOpenChange: setHistoryPanelOpen,
   });
-  const [storedModelIds, setSelectedModelIds] = useState<string[]>([]);
-  // 選んだモデルは今の候補にあるものだけを使う（RAG 検索と同じ）。モデル設定で既定のモデルを変えたら、
-  // 候補から消えたモデルを選んだ状態を残さない（#1416）。
-  const selectedModelIds = useMemo(
-    () => storedModelIds.filter((id) => compareModels.some((model) => model.model_id === id)),
-    [storedModelIds, compareModels]
-  );
   const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
   // 会話の添付（#2517。運用設定で有効なときだけ入力欄に出す）。送った質問の添付は送信まで持つ。
   const chatAttachments = useRagChatAttachments();
@@ -1002,15 +991,6 @@ export function ChatClient() {
     }
   }
 
-  function toggleModel(modelId: string) {
-    setSelectedModelIds(() => {
-      const current = selectedModelIds;
-      if (current.includes(modelId)) return current.filter((id) => id !== modelId);
-      if (current.length >= COMPARE_MAX) return current;
-      return [...current, modelId];
-    });
-  }
-
   function updateColumn(modelId: string, patch: Partial<LiveColumn>) {
     setLiveTurn((current) => {
       if (!current) return current;
@@ -1023,9 +1003,9 @@ export function ChatClient() {
     });
   }
 
-  /** 回答の場所（作成中の表示）。`start` で列の構成が届くまでは、選んだモデル（無ければ既定のモデル）で仮に作る。 */
+  /** 回答の場所（作成中の表示）。`start` で列の構成が届くまでは、既定のモデルで仮に作る。 */
   function placeholderColumns(startedAtMs: number): LiveColumn[] {
-    const modelIds = selectedModelIds.length > 0 ? selectedModelIds : [""];
+    const modelIds = [""];
     return modelIds.map((modelId) => ({
       model_id: modelId,
       label: modelId ? (modelLabels.get(modelId) ?? modelId) : "",
@@ -1360,7 +1340,7 @@ export function ChatClient() {
       outgoingAttachmentsRef.current = { ids: [], items: [] };
       const body = {
         content,
-        model_ids: selectedModelIds,
+        model_ids: [],
         client_message_id: clientMessageId,
         ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
         ...(approvedFaqId ? { approved_faq_id: approvedFaqId } : {}),
@@ -1708,33 +1688,6 @@ export function ChatClient() {
                   sendTestId="chat-run-stop"
                   // 会話の添付（#2517。運用設定で有効なときだけ）。
                   attachments={chatAttachments.composer}
-                  options={
-                    compareModels.length > 0 ? (
-                      // 候補は既定のテキストモデル（先頭。未選択のときに答える）と既定の画像対応モデル（#675）。
-                      // 同じモデルなら 1 件で、画像対応モデルも兼ねることを名前と説明で出す（#888）。
-                      // 説明は常設せず、ラベルの横の info アイコンから出す（#901）。
-                      <ChatComposerOption
-                        label={t("chat.compare.label")}
-                        info={{
-                          label: t("chat.compare.infoLabel"),
-                          content: t(answerModelHelpKey(compareModels, "chat.compare.default")),
-                          contentTestId: "chat-default-model",
-                          testId: "chat-answer-model-info",
-                        }}
-                        testId="chat-answer-model"
-                      >
-                        {compareModels.map((model) => (
-                          <ToggleChip
-                            key={model.model_id}
-                            selected={selectedModelIds.includes(model.model_id)}
-                            onClick={() => toggleModel(model.model_id)}
-                          >
-                            {answerModelLabel(model)}
-                          </ToggleChip>
-                        ))}
-                      </ChatComposerOption>
-                    ) : null
-                  }
                 />
                 {errorText ? (
                   <p className="text-sm text-danger-fg" role="alert">
