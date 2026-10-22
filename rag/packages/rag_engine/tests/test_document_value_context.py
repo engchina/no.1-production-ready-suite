@@ -91,3 +91,20 @@ def test_kanji_words_in_the_answer_are_not_counted_as_claimed_numbers():
     # 画像の説明だけの値は、桁区切りがあっても裏付けにしない。
     image = [dict(origin="image_extraction", text="上限は8,000円です。")]
     assert unsupported_document_value_claim("利用料の上限は8,000円です。", image, "上限は？")
+
+
+def test_value_missing_from_every_cited_text_is_reported_as_absent():
+    from rag_engine.generation.value_grounding import ABSENT_VALUE_REASON, unsupported_document_value_claim
+
+    source = [dict(origin="document_text", text="カードキーは夜間に限って利用できます。")]
+    reason = unsupported_document_value_claim("カードキーの利用の上限は一回5,000円です。", source, "使える？")
+    # 引用した根拠のどこにも無い数値は、表示例・画像の説明の値ではなく、根拠に無い数値として値を示す（#3088）。
+    assert reason == f"{ABSENT_VALUE_REASON}（5000）"
+    # 画像の説明にだけある値は、今までどおり表示例・Vision の理由。
+    image = [
+        dict(origin="document_text", text="カードキーは夜間に限って利用できます。"),
+        dict(origin="image_extraction", text="上限 5,000円"),
+    ]
+    assert unsupported_document_value_claim("カードキーの利用の上限は一回5,000円です。", image, "使える？") == (
+        "文書の表示例・Vision説明だけでは数値の入力規則を確認できない"
+    )

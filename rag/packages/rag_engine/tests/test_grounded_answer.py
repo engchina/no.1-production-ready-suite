@@ -2357,6 +2357,27 @@ class RenderStepOrderTest(unittest.TestCase):
         self.assertEqual(body.count("操作手順（F1 設定一覧）"), 1)
 
 
+class AbsentValueMarkTest(unittest.TestCase):
+    """根拠のどこにも無い数値を足した説明は、規則の検査の注意ではなく未確認の印にする（#3088）。"""
+
+    QUESTION = "カードキーは使えますか？"
+    TEXT = "カードキーは夜間に限って利用できます。"
+
+    def test_value_absent_from_the_source_is_unverified(self):
+        ctx = context(record(0, self.TEXT, "カードキー"))
+        eid = ids(ctx, self.QUESTION)[self.TEXT]
+        claim = "カードキーは夜間に限って利用でき、一回あたりの上限は5,000円です。"
+        model = FakeModel(
+            [draft(item(eid, claim, self.TEXT, request_id="Q1"), summary="夜間に限って利用できます。")],
+            [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")], summary_supported=True)],
+        )
+        result = run(model, ctx, self.QUESTION).response
+        mark = next(mark for mark in result.envelope["passage_marks"] if claim in mark["text"])
+        self.assertEqual(mark["state"], "unverified")
+        self.assertEqual([reason["code"] for reason in mark["reasons"]], ["unsupported"])
+        self.assertTrue(mark["reasons"][0]["detail"].startswith("値：根拠の原文に無い数値（5000）"))
+
+
 class SummaryDeniedClaimTest(unittest.TestCase):
     """根拠と矛盾して外した主張を summary が断定していれば中立文に、印の付いた主張なら警告にし、要求の充足も
     外した後の item と整合させる (#1013・#2738)。"""
