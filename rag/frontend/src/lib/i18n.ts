@@ -2958,7 +2958,7 @@ export const ja = {
   "sectionRules.error.patternInvalid": "正規表現として読めません。括弧の対応などを確認してください。",
   "sectionRules.toast.saved": "章節の抽出規則を保存しました。",
   "sectionRules.toast.reset": "章節の抽出規則を既定に戻しました。",
-  "sections.summaryMismatch": "保存済みの要約のうち {count} 件は、現在の章節に対応していません。要約は解析エンジンの見出しを基に作成されています。文書レシピの「章節の抽出規則」を「解析エンジンの見出し」に戻すと確認できます。現在の章節での閲覧と、要約を使った検索は続けられます。",
+  "sections.summaryMismatch": "保存済みの要約 {count} 件は、現在の章節に対応していません。要約を表示するには、文書レシピの「章節の抽出規則」を「解析エンジンの見出し」に戻してください。",
   "sections.loading": "章節を読み込んでいます",
   "sections.error.load": "章節を取得できませんでした。再試行してください。",
   "sections.error.saveFailed": "章節を保存できませんでした。時間をおいて、もう一度お試しください。",

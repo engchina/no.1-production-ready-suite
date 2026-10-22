@@ -384,15 +384,19 @@ async def test_section_rules_work_independently_of_navigation_summaries(enabled:
         raw_text="合成の文書",
         elements=[
             DocumentElement(
-                kind="text", text=f"{index}. 節 {index}\n" + "合成の本文。" * 50,
-                order=index, element_id=f"element-{index}", page_number=index,
+                kind="text",
+                text=f"{index}. 節 {index}\n" + "合成の本文。" * 50,
+                order=index,
+                element_id=f"element-{index}",
+                page_number=index,
                 section_path=[f"解析見出し {index}"],
             )
             for index in (1, 2)
         ],
     )
     pipeline = IngestionPipeline(
-        vlm=cast(Any, Summarizer()), oracle=cast(Any, object()),
+        vlm=cast(Any, Summarizer()),
+        oracle=cast(Any, object()),
         settings=Settings(rag_navigation_summary_enabled=enabled),
     )
     result = await pipeline._attach_navigation_tree("trace-3011", extraction)
@@ -405,6 +409,10 @@ async def test_section_rules_work_independently_of_navigation_summaries(enabled:
     assert [section.title for section in parser] == ["解析見出し 1", "解析見出し 2"]
     assert all(section.id.startswith("rule-") for section in numbered)
     # 現行の要約は解析見出しに属する。規則の ID に推測で付け替えず、画面で未対応を案内する。
-    assert {section.id for section in numbered}.isdisjoint(node.section_id for node in result.navigation)
-    summary_elements = [element for element in result.elements if element.content_kind == "section_summary"]
+    assert {section.id for section in numbered}.isdisjoint(
+        node.section_id for node in result.navigation
+    )
+    summary_elements = [
+        element for element in result.elements if element.content_kind == "section_summary"
+    ]
     assert len(summary_elements) == (2 if enabled else 0)
