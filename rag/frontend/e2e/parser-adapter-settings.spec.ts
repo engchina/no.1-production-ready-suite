@@ -251,7 +251,8 @@ for (const scheme of ["light", "dark"] as const) {
       "1. 図・画像を AI で読み取る",
       "2. 見出しの階層の推定（AI）",
       "3. メタデータ/項目抽出",
-      "4. 章節の要約",
+      "4. 章節の抽出規則",
+      "5. 章節の要約",
     ]);
     await expect(card).toContainText("Docling の解析結果のうち、PDF のしおりの階層を使えず");
     await expect(card).toContainText("番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす文書が対象です。");
@@ -513,7 +514,7 @@ async function mockSectionRules(page: Page) {
   return state;
 }
 
-test("章節の抽出規則を独自の規則にして保存できる", async ({ page }) => {
+test("章節の抽出規則を独自の規則にして保存できる", { tag: "@responsive" }, async ({ page }) => {
   await mockParserAdaptersWithPostParse(page, {
     vision_enabled: false,
     field_extraction_enabled: false,
@@ -525,9 +526,21 @@ test("章節の抽出規則を独自の規則にして保存できる", async ({
   await page.goto("/settings/parser-adapters#post-parse-section-rules");
   await expect(page.locator("#post-parse-section-rules")).toBeInViewport();
   const rulesCard = page.locator("#post-parse-section-rules");
-  await expect(rulesCard.getByRole("heading", { name: "章節の抽出規則" })).toBeVisible();
+  const postParse = page.getByRole("heading", { name: "解析後の処理", exact: true })
+    .locator("xpath=ancestor::*[.//ol][1]");
+  await expect(postParse.locator("#post-parse-section-rules")).toHaveCount(1);
+  await expect(rulesCard.getByRole("heading", { name: "4. 章節の抽出規則", exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("section-rules-step.png") });
+  await expectNoPageOverflow(page);
   await expect(page.locator("#post-parse-navigation-summary").getByTestId("section-rules-editor")).toHaveCount(0);
   await expect(page.getByRole("switch", { name: "章節の要約", exact: true })).not.toBeChecked();
+  await expect(postParse.getByRole("heading", { level: 3 })).toHaveText([
+    "1. 図・画像を AI で読み取る",
+    "2. 見出しの階層の推定（AI）",
+    "3. メタデータ/項目抽出",
+    "4. 章節の抽出規則",
+    "5. 章節の要約",
+  ]);
   const editor = page.getByTestId("section-rules-editor");
   await expect(editor).toContainText("解析エンジンが見出しと判定した行から章節を作ります");
 
