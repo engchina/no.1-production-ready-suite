@@ -3117,6 +3117,8 @@ def test_nested_item_label_does_not_add_review_warning(
     claims = {c["answer_quote"]: c for c in validation["result"]["claims"]}
     assert claims[label]["non_claim"] == "heading"
     assert [mark["text"] for mark in validation["passage_marks"]] == [unsupported]
-    section = run_answer_text(run).split(f"**{REVIEW_HEADING}**", 1)[1]
+    published = run_answer_text(run)
+    assert published is not None
+    section = published.split(f"**{REVIEW_HEADING}**", 1)[1]
     assert label not in section
     assert unsupported in section
