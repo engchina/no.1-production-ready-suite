@@ -212,3 +212,23 @@ def test_failure_history_round_trips_through_turn_json() -> None:
     restored = _decode_turn(turn.turn_id, None, _turn_json(turn))
     assert restored.correction_attempts == turn.correction_attempts
     assert len(restored.correction_attempts) == 1
+
+
+def test_failure_without_error_message_can_be_saved() -> None:
+    service = _catalog_service(_FakeAdapter(), _FakeEnterpriseAi([]))
+    ids = _saved_analysis_turn(service, "DELETE FROM T1")
+    turn = service._db_admin_chat_store.get_turn(*ids)
+    assert turn is not None
+    attempts = record_failures(
+        turn,
+        [
+            DbAdminChatStatementLastExecution(
+                index=1,
+                status="failed",
+                outcome="",
+                executed_at="2026-10-22",
+            )
+        ],
+    )
+    assert len(attempts) == 1
+    assert attempts[0].error_summary == ""

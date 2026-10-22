@@ -50,7 +50,7 @@ def record_failures(
             revision=turn.revision,
             sql=statement.sql,
             error_code=next(iter(codes), ""),
-            error_summary=execution.outcome.splitlines()[0][:ERROR_SUMMARY_CHARS],
+            error_summary=next(iter(execution.outcome.splitlines()), "")[:ERROR_SUMMARY_CHARS],
             executed_at=execution.executed_at,
         )
         attempts = [
