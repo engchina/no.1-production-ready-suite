@@ -1113,6 +1113,8 @@ export interface KnowledgeBaseQueryConfig {
    * 業務ガイドの照合で、質問と質問の例の埋め込みの近さを点に足す(#2398。質問ごとに埋め込みの呼び出しが 1 回増える)。
    * null / 未指定は全体の既定(使わない)。
    */
+  /** 業務ガイドの使用。未指定・null は OFF（全体の ON を継承しない）。 */
+  support_guide_enabled?: boolean | null;
   support_guide_semantic_match_enabled?: boolean | null;
   /** 上位の 2 つの業務ガイドの点が近いとき、どれに沿うかを確かめる(#2398)。null / 未指定は全体の既定(確かめない)。 */
   support_guide_close_match_clarification_enabled?: boolean | null;

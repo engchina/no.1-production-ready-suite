@@ -620,6 +620,24 @@ async def _prepare_chat_turn(
                 detail="選んだ類似問が見つかりません。もう一度送信して選び直してください。",
             )
         approved_faq = (record.question, record.approved_answer)
+    guide_reply = request.clarification is not None and request.clarification.rule_id.startswith(
+        GUIDE_CLARIFICATION_PREFIX
+    )
+    guide_skip = bool(request.clarification_skipped_rule_id) and str(
+        request.clarification_skipped_rule_id
+    ).startswith(GUIDE_CLARIFICATION_PREFIX)
+    if guide_reply or guide_skip:
+        view = await oracle.get_search_answer_profile(search_answer_profile_id)
+        if view is None or view.config.query.support_guide_enabled is not True:
+            # スイッチを切る前の確認への回答は、ガイドの条件や検索範囲へ反映しない。
+            request = request.model_copy(
+                update={
+                    "clarification": None if guide_reply else request.clarification,
+                    "clarification_skipped_rule_id": None
+                    if guide_skip
+                    else request.clarification_skipped_rule_id,
+                }
+            )
     scope: AnswerScope | None = None
     filters: dict[str, str] = {}
     conditions: dict[str, str] = {}

@@ -169,6 +169,11 @@ def resolve_search_answer_profile_settings(
         validate_profile_answer_model(global_settings, config)
     overlays: list[KnowledgeBaseQueryConfig] = [config.query]
     settings, applied = compose_query_settings(global_settings, overlays)
+    # 使用の意思を持たない既存プロファイルは、全体の値にかかわらず OFF。
+    guide_enabled = config.query.support_guide_enabled is True
+    if settings.rag_support_guide_enabled != guide_enabled:
+        settings = settings.model_copy(update={"rag_support_guide_enabled": guide_enabled})
+        applied = True
     if apply_answer_model and config.answer_model_id:
         settings = settings.model_copy(
             update={"oci_enterprise_ai_default_text_model": config.answer_model_id}

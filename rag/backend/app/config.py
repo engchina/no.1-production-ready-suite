@@ -1745,6 +1745,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "新しい順に超えた版を消す（公開中の版は残す。版の番号は振り直さない）。"
         ),
     )
+    rag_support_guide_enabled: bool = Field(
+        default=False,
+        description="業務ガイドを質問への回答に使う。既定は OFF。検索・回答プロファイルで選ぶ。",
+    )
     rag_support_guide_semantic_match_enabled: bool = Field(
         default=False,
         description=(

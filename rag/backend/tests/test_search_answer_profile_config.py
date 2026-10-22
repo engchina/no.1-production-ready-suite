@@ -173,3 +173,33 @@ def test_removed_guardrail_policy_cannot_override_or_be_saved() -> None:
     assert merged.rag_guardrails_enabled is True
     assert applied is False
     assert "guardrail_policy" not in config.model_dump()["query"]
+
+
+def test_support_guide_switch_round_trip_preserves_internal_matching_settings() -> None:
+    settings = get_settings().model_copy(update={"rag_support_guide_enabled": True})
+    old = {
+        "support_guide_semantic_match_enabled": True,
+        "support_guide_close_match_clarification_enabled": True,
+    }
+    for enabled in [None, False, True]:
+        config = parse_search_answer_profile_config(
+            {"query": {**old, "support_guide_enabled": enabled}}
+        )
+        reloaded = parse_search_answer_profile_config(dump_search_answer_profile_config(config))
+        resolved, _ = resolve_search_answer_profile_settings(settings, reloaded)
+        assert resolved.rag_support_guide_enabled is (enabled is True)
+        assert resolved.rag_support_guide_semantic_match_enabled is True
+        assert resolved.rag_support_guide_close_match_clarification_enabled is True
+        assert (
+            resolved.rag_support_guide_semantic_threshold
+            == settings.rag_support_guide_semantic_threshold
+        )
+        assert (
+            resolved.rag_support_guide_close_match_margin
+            == settings.rag_support_guide_close_match_margin
+        )
+    missing, _ = resolve_search_answer_profile_settings(
+        settings, parse_search_answer_profile_config({"query": old})
+    )
+    assert missing.rag_support_guide_enabled is False
+    assert settings.rag_support_guide_enabled is True

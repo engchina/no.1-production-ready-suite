@@ -25,6 +25,7 @@ import {
   FormSkeleton,
   TimedLoadingState,
   ToggleChip,
+  Switch,
   FilterChipGroup,
   isFilterActive,
   DEFAULT_PAGE_SIZE,
@@ -1060,36 +1061,29 @@ function SearchAnswerProfileEditor({
                       />
                     </div>
                   </div>
-                  {/* 業務ガイドの照合（#2398）。用語の別名の展開は常に行い、ここでは任意の照合だけを選ぶ。 */}
                   <div
-                    className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]"
+                    className="flex items-start justify-between gap-4 rounded-lg border border-border p-3"
                     data-testid="search-answer-profile-guide-matching"
                   >
-                    <h3 className="text-sm font-medium text-fg">
-                      {t("searchAnswerProfiles.field.guideMatching")}
-                    </h3>
-                    <div className="min-w-0 space-y-2">
-                      <QueryToggleRow
-                        label={t("searchAnswerProfiles.field.guideSemanticMatch")}
-                        description={t("searchAnswerProfiles.field.guideSemanticMatchHelper")}
-                        descriptionId="search-answer-profile-guide-semantic-match-helper"
-                        value={config.query.support_guide_semantic_match_enabled ?? null}
-                        disabled={locked}
-                        onChange={(value) =>
-                          updateQuery({ support_guide_semantic_match_enabled: value })
-                        }
-                      />
-                      <QueryToggleRow
-                        label={t("searchAnswerProfiles.field.guideCloseMatch")}
-                        description={t("searchAnswerProfiles.field.guideCloseMatchHelper")}
-                        descriptionId="search-answer-profile-guide-close-match-helper"
-                        value={config.query.support_guide_close_match_clarification_enabled ?? null}
-                        disabled={locked}
-                        onChange={(value) =>
-                          updateQuery({ support_guide_close_match_clarification_enabled: value })
-                        }
-                      />
+                    <div className="min-w-0 space-y-1">
+                      <h3 className="text-sm font-medium text-fg">
+                        {t("searchAnswerProfiles.field.guideEnabled")}
+                      </h3>
+                      <p id="search-answer-profile-guide-enabled-helper" className="text-xs leading-relaxed text-fg-muted">
+                        {t("searchAnswerProfiles.field.guideEnabledHelper")}
+                      </p>
+                      <p className="text-sm font-medium text-fg" aria-live="polite">
+                        {config.query.support_guide_enabled === true ? t("searchAnswerProfiles.field.guideEnabledOn") : t("searchAnswerProfiles.field.guideEnabledOff")}
+                      </p>
                     </div>
+                    <Switch
+                      aria-label={t("searchAnswerProfiles.field.guideEnabled")}
+                      aria-describedby="search-answer-profile-guide-enabled-helper"
+                      checked={config.query.support_guide_enabled === true}
+                      disabled={locked}
+                      onCheckedChange={(value) => updateQuery({ support_guide_enabled: value })}
+                      className="shrink-0"
+                    />
                   </div>
                   <QuerySelectRow
                     id="search-answer-profile-answer-model"

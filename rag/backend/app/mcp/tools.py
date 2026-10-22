@@ -4170,6 +4170,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         search_route.ensure_search_answer_profile_not_archived(
             view, arguments.search_answer_profile_id
         )
+        settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
+        if not settings.rag_support_guide_enabled:
+            return LookupGuidesOutput(guides=[])
         guides, failed = await search_route.load_published_guides(oracle, view.id)
         if failed:
             # 読めなかったことを「当たるガイドが無い」（0 件）と区別する（#1278）。
@@ -4178,7 +4181,6 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             oracle, guides, arguments.query, search_route.profile_scope_filters(view)
         )
         # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
-        settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
         query = await build_guide_query(
             oracle,
             settings,

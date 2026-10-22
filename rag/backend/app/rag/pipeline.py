@@ -183,6 +183,8 @@ class RagPipeline:
         caller_queries: Sequence[str] | None = None,
     ) -> None:
         self._settings = settings or get_settings()
+        if not self._settings.rag_support_guide_enabled:
+            self._settings = self._settings.model_copy(update={"rag_support_guide": {}})
         self._genai = genai or OciGenAiClient(settings=self._settings)
         self._oracle = oracle or OracleClient(settings=self._settings)
         self._llm = llm or OciEnterpriseAiClient(settings=self._settings)

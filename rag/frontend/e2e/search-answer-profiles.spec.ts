@@ -248,16 +248,16 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   ).toHaveAttribute("aria-pressed", "true");
   await expect(graphExpansion).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
   await graphExpansion.getByRole("button", { name: "ON" }).click();
-  // 業務ガイドの照合（#2398）。意味の照合は埋め込みの呼び出しが増えることを説明に出す。どちらも既定 無効(継承)。
-  const guideSemantic = page.getByRole("group", { name: "意味の近さで業務ガイドを選ぶ" });
-  await expect(
-    guideSemantic.getByRole("button", { name: "グローバル既定を継承" })
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(guideSemantic).toHaveAccessibleDescription(/埋め込みの呼び出しが 1 回増えます/);
-  await guideSemantic.getByRole("button", { name: "ON" }).click();
-  const guideCloseMatch = page.getByRole("group", { name: "近い業務ガイドを確かめる" });
-  await expect(guideCloseMatch).toHaveAccessibleDescription(/選択肢は業務ガイドの題名/);
-  await guideCloseMatch.getByRole("button", { name: "ON" }).click();
+  const guideUsage = page.getByTestId("search-answer-profile-guide-matching");
+  const guideSwitch = guideUsage.getByRole("switch", { name: "業務ガイドを使用する" });
+  await expect(guideSwitch).toHaveAttribute("aria-checked", "false");
+  await expect(guideSwitch).toHaveAccessibleDescription(/既定値は OFF です/);
+  await expect(guideUsage.getByRole("switch")).toHaveCount(1);
+  await expect(page.getByText("意味の近さで業務ガイドを選ぶ", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("近い業務ガイドを確かめる", { exact: true })).toHaveCount(0);
+  await guideSwitch.click();
+  await expect(guideSwitch).toHaveAttribute("aria-checked", "true");
+  await guideUsage.screenshot({ path: testInfo.outputPath("guide-usage-switch.png") });
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
 
   await expect.poll(() => createBody?.name).toBe("手順ビュー");
@@ -275,9 +275,30 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   expect(query.guide_step_deadline_seconds).toBe(30);
   expect((createBody?.config as { answer_model_id?: string })?.answer_model_id).toBe("model-b");
   expect(query.graph_expansion_enabled).toBe(true);
-  expect(query.support_guide_semantic_match_enabled).toBe(true);
-  expect(query.support_guide_close_match_clarification_enabled).toBe(true);
+  expect(query.support_guide_enabled).toBe(true);
   expect(query.answer_flow ?? null).toBeNull();
+});
+
+test("業務ガイドは既定 OFF の単一スイッチで保存・再表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  let body: Record<string, unknown> | null = null;
+  await mockDefaultSearchAnswerProfile(page, (value) => { body = value; });
+  await page.goto("/search-answer-profiles?id=bv-default");
+  const panel = page.getByTestId("search-answer-profile-guide-matching");
+  const toggle = panel.getByRole("switch", { name: "業務ガイドを使用する" });
+  const save = page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true });
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect(panel).toContainText("既定値は OFF です");
+  await expect(panel.getByRole("switch")).toHaveCount(1);
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
+  for (const enabled of [true, false]) {
+    await toggle.click();
+    await save.click();
+    await expect.poll(() => (body?.config as { query?: { support_guide_enabled?: boolean } })?.query?.support_guide_enabled).toBe(enabled);
+    await page.reload();
+    await expect(toggle).toHaveAttribute("aria-checked", String(enabled));
+    await panel.screenshot({ path: testInfo.outputPath(`guide-usage-${enabled ? "on" : "off"}.png`) });
+    await expectNoPageOverflow(page);
+  }
 });
 
 // #1388: 実体の 1 段の拡張は検索・回答プロファイルで選ぶ（既定 off。全体の環境変数は持たない）。
@@ -419,8 +440,7 @@ test("要求別の再検索は現在の設定を継承し、ON・OFF・継承を
   await page.goto("/search-answer-profiles?id=bv-default");
   const names = [
     "画面目録で操作画面を探す", "根拠の無い要求を探し直す", "業務ガイドの手順ごとに探す",
-    "質問から項目の条件を読み取る", "関係情報で根拠を広げる", "意味の近さで業務ガイドを選ぶ",
-    "近い業務ガイドを確かめる",
+    "質問から項目の条件を読み取る", "関係情報で根拠を広げる",
   ];
   for (const name of names) {
     const row = page.getByRole("group", { name, exact: true });

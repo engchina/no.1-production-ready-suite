@@ -356,6 +356,14 @@ async def _resolve_query_context(
         runtime_knowledge = await oracle.get_search_answer_profile_knowledge(
             view.id, RUNTIME_KNOWLEDGE_KIND
         )
+        if guide_preview is not None:
+            # 管理画面から明示した下書きの試答だけ、この回答に限って有効にする。
+            settings = settings.model_copy(update={"rag_support_guide_enabled": True})
+        if not settings.rag_support_guide_enabled:
+            settings = settings.model_copy(
+                update={"rag_support_guide": {}, "rag_runtime_knowledge": runtime_knowledge or {}}
+            )
+            return effective_request, settings, None, view.id if (applied or kb_ids) else None
         # 公開した業務ガイドのうち、質問に合う 1 つを選ぶ（#1238）。適用範囲は質問と検索の
         # 絞り込みの手がかりで確かめる（#1278）。
         guides, guides_failed = await load_published_guides(oracle, view.id)

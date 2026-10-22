@@ -2129,13 +2129,11 @@ export const ja = {
   "searchAnswerProfiles.languagePack.count": "上書き {count} 項目",
   "searchAnswerProfiles.languagePack.changed": "全体の値から変更",
   "searchAnswerProfiles.languagePack.reset": "全体の値に戻す",
-  "searchAnswerProfiles.field.guideMatching": "業務ガイドの照合",
-  "searchAnswerProfiles.field.guideSemanticMatch": "意味の近さで業務ガイドを選ぶ",
-  "searchAnswerProfiles.field.guideSemanticMatchHelper":
-    "語の一致に加えて、質問と業務ガイドの質問の例の意味の近さ（埋め込み）を照合の点に足します。言い方が業務ガイドの語と違う質問でも業務ガイドを選べます。質問ごとに埋め込みの呼び出しが 1 回増えます。継承時は検索方法の現在の設定を使います。",
-  "searchAnswerProfiles.field.guideCloseMatch": "近い業務ガイドを確かめる",
-  "searchAnswerProfiles.field.guideCloseMatchHelper":
-    "質問に合う業務ガイドが複数あり照合の点が近いとき、どの業務ガイドについての質問かを回答の前に確かめます（選択肢は業務ガイドの題名）。継承時は検索方法の現在の設定を使います。",
+  "searchAnswerProfiles.field.guideEnabledOn": "ON",
+  "searchAnswerProfiles.field.guideEnabledOff": "OFF",
+  "searchAnswerProfiles.field.guideEnabled": "業務ガイドを使用する",
+  "searchAnswerProfiles.field.guideEnabledHelper":
+    "既定値は OFF です。ON にすると、質問に合う業務ガイドを選び、その条件と手順に沿って回答します。OFF のときは業務ガイドを使用しません。",
   "searchAnswerProfiles.field.graphExpansion": "関係情報で根拠を広げる",
   "searchAnswerProfiles.field.graphExpansionHelper":
     "関係情報の構築で作った章・節・表の見出しのつながりを使い、検索で当たった根拠と同じ章・節・表の根拠と、質問に見出しの語が含まれる章・節の根拠を候補に加えます。関係情報を作った文書にだけ効きます。AI の呼び出しは増えません。継承時は検索方法の現在の設定を使います。",
