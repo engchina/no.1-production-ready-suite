@@ -26,6 +26,7 @@ from app.config import (
     enterprise_ai_vision_model_id,
     get_settings,
 )
+from app.rag.answer_assumptions import with_answer_assumptions
 from app.rag.answer_engine import AnswerScope, evaluate_answer_record
 from app.rag.answer_failure import (
     ANSWER_API_FAILED_ERROR_CODE,
@@ -300,6 +301,7 @@ async def _resolve_query_context(
     guide_context: Sequence[str] = (),
     interactive: bool = False,
     guide_preview: GuidePreview | None = None,
+    answered_rule_ids: Sequence[str] = (),
 ) -> tuple[SearchRequest, Settings, str | None, str | None]:
     """検索の有効 request / Settings と適用済みの Search Answer Profile id を返す。
 
@@ -456,6 +458,29 @@ async def _resolve_query_context(
                         GUIDE_HANDOFF_CONTACT_KEY: (
                             match.content.handoff.contact if match.decision == "handoff" else ""
                         ),
+                    }
+                }
+            )
+        runtime_knowledge = await asyncio.to_thread(
+            with_answer_assumptions,
+            runtime_knowledge,
+            policy=profile_config.clarification_policy,
+            question=request.query,
+            conditions=request.conditions,
+            guide=settings.rag_support_guide or {},
+            answered_rule_ids=answered_rule_ids,
+        )
+        if (
+            profile_config.clarification_policy == "assume"
+            and settings.rag_support_guide.get("decision") == "clarify"
+        ):
+            # 確認カードの代わりに、未確定の条件を示して根拠に基づく回答を生成する。
+            settings = settings.model_copy(
+                update={
+                    "rag_support_guide": {
+                        **settings.rag_support_guide,
+                        "decision": "branch",
+                        "short_answer": "",
                     }
                 }
             )

@@ -183,6 +183,11 @@ for (const viewport of [
     await expect(stages.getByRole("region", { name: "回答の生成" }).getByTestId("answer-prompt-stage-generation")).toContainText(
       "使われる条件: 検索した根拠から回答を生成するとき"
     );
+    const generation = stages.getByTestId("answer-prompt-stage-generation");
+    await generation.locator("summary").click();
+    await expect(generation).toContainText("「前提を示して回答する」のときに追加する system 指示");
+    await expect(generation).toContainText("未確定の条件を明示する。");
+    await generation.screenshot({ path: testInfo.outputPath("assumption-system-instructions.png") });
     await expect(stages.getByTestId("answer-prompt-stage-evaluation")).toHaveCount(0);
     await expect(stages.getByTestId("answer-prompt-stage-answer_validation")).toContainText("資料との照合");
 

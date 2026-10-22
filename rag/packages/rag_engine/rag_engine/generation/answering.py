@@ -2100,6 +2100,7 @@ def synthesize_grounded_answer(
                     guide_step_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
                     guide_notices=runtime_knowledge.guide_notices if runtime_knowledge else (),
                     audit_mode=audit_mode,
+                    assume_unconfirmed=runtime_knowledge.assume_unconfirmed if runtime_knowledge else False,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                     invalid_output=_invalid_structured_output,
                     glossary=_audit_glossary(runtime_knowledge),
