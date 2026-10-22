@@ -546,8 +546,8 @@ for (const width of [1280, 375]) {
     await expect(prompts.getByTestId("answer-prompt-stage-support_guide_conditions")).toContainText("利用者が答える未確認の自由入力条件があるとき");
     await expect(prompts.getByTestId("answer-prompt-stage-history_rewrite")).toContainText("書き換えを有効にしたとき");
     await expect(prompts.getByTestId("answer-prompt-stage-section_extraction")).toContainText("原文抽出は既定で無効");
-    await prompts.scrollIntoViewIfNeeded();
-    await prompts.screenshot({ path: testInfo.outputPath("retrieval-prompts.png") });
+    await prompts.getByRole("heading", { level: 2 }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("retrieval-prompts.png") });
     await expectNoPageOverflow(page);
   });
 

@@ -40,7 +40,7 @@ export function RetrievalSettingsClient() {
         />
       ) : null}
       <AnsweringSettingsCard />
-      {prompts.isPending ? <FormSkeleton /> : prompts.isError ? (
+      {prompts.isPending ? <FormSkeleton /> : prompts.isError || !prompts.data ? (
         <ErrorState message={t("settings.answerPrompts.loadError")} onRetry={() => void prompts.refetch()} />
       ) : (
         <AnswerPromptStages
