@@ -15,6 +15,7 @@ from test_nl2sql_db_admin_chat import (
     _FakeDescriber,
     _FakeEnterpriseAi,
     _saved,
+    _saved_analysis_turn,
     _Service,
     _store_turn,
 )
@@ -362,12 +363,14 @@ def test_error_analysis_gets_the_real_columns_and_checks_the_corrected_sql() -> 
         [{"analysis": "列の名前が違います。", "corrected_sql": "SELECT SID, LMODE FROM V$LOCK"}]
     )
     service = _catalog_service(adapter, ai)
+    ids = _saved_analysis_turn(
+        service, "SELECT SID, MODE_HELD FROM V$LOCK", "列が存在しません: MODE_HELD"
+    )
     data = service.analyze_db_admin_chat_failure(
-        DbAdminChatAnalyzeRequest(
-            question="ロック",
-            sql="SELECT SID, MODE_HELD FROM V$LOCK",
-            result_text="列が存在しません: MODE_HELD",
-        )
+        *ids,
+        DbAdminChatAnalyzeRequest(statement_index=1),
+        actor="chat-user",
+        all_users=False,
     )
     [call] = ai.calls
     assert "referenced_objects" in call["context"]

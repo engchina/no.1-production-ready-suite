@@ -23,6 +23,7 @@ from app.features.nl2sql.models import (
     DbAdminChatExecuteData,
     DbAdminChatGenerateRequest,
     DbAdminChatHistoryTurn,
+    DbAdminChatStatementLastExecution,
     DbAdminChatTurn,
     DbAdminChatTurnExecuteRequest,
     QueryResults,
@@ -899,13 +900,45 @@ def test_prose_only_answer_is_not_saved_as_a_turn(monkeypatch: pytest.MonkeyPatc
     assert (items, total) == ([], 0)
 
 
+def _saved_analysis_turn(
+    service: Nl2SqlService, sql: str, failure: str = "ORA-00942: synthetic failure"
+) -> tuple[str, str]:
+    conversation_id, turn_id = str(uuid.uuid4()), str(uuid.uuid4())
+    service._db_admin_chat_store.create_conversation(
+        conversation_id, owner_user_uuid="chat-user", title="合成の質問"
+    )
+    service._db_admin_chat_store.append_turn(
+        conversation_id,
+        DbAdminChatTurn(
+            turn_id=turn_id,
+            question="合成の質問",
+            created_at="2026-10-22",
+            generated_at="2026-10-22",
+            plan=service._db_admin_chat_plan(sql),
+            statement_executions=[
+                DbAdminChatStatementLastExecution(
+                    index=1,
+                    status="failed",
+                    outcome=failure,
+                    executed_at="2026-10-22",
+                )
+            ],
+        ),
+    )
+    return conversation_id, turn_id
+
+
 def test_analyze_returns_corrected_plan() -> None:
     ai = _FakeEnterpriseAi(
         [{"analysis": "1) 原因 2) 直し方 3) 結論", "corrected_sql": "DROP TABLE T2 PURGE"}]
     )
     service = _catalog_service(_FakeAdapter(), ai)
+    ids = _saved_analysis_turn(service, "DROP TABLE T1")
     data = service.analyze_db_admin_chat_failure(
-        DbAdminChatAnalyzeRequest(sql="DROP TABLE T1", result_text="ORA-00942")
+        *ids,
+        DbAdminChatAnalyzeRequest(statement_index=1),
+        actor="chat-user",
+        all_users=False,
     )
     assert data.source == "oci_enterprise_ai"
     assert data.corrected_plan is not None
@@ -914,8 +947,12 @@ def test_analyze_returns_corrected_plan() -> None:
 
 def test_analyze_falls_back_without_enterprise_ai() -> None:
     service = _catalog_service(_FakeAdapter(), _FakeEnterpriseAi([], configured=False))
+    ids = _saved_analysis_turn(service, "SELECT * FROM T9")
     data = service.analyze_db_admin_chat_failure(
-        DbAdminChatAnalyzeRequest(sql="SELECT * FROM T9", result_text="ORA-00942: 表がありません")
+        *ids,
+        DbAdminChatAnalyzeRequest(statement_index=1),
+        actor="chat-user",
+        all_users=False,
     )
     assert "ORA-00942" in data.analysis
     assert data.corrected_plan is None

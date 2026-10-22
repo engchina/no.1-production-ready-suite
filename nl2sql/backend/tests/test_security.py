@@ -5665,7 +5665,7 @@ def test_db_admin_chat_requires_its_own_menu_permission(
     from app.features.nl2sql.store import MemoryNl2SqlStore
     from app.security.request_actor import actor_scope
 
-    for route in ("generate", "execute", "analyze-error"):
+    for route in ("generate", "execute"):
         assert permission_for_route("POST", f"/nl2sql/db-admin-chat/{route}") == frozenset(
             {"menu.db_admin_chat"}
         )
@@ -5677,6 +5677,7 @@ def test_db_admin_chat_requires_its_own_menu_permission(
         ("PATCH", conversation),
         ("DELETE", conversation),
         ("PUT", f"{conversation}/turns/{{turn_id}}/plan"),
+        ("POST", f"{conversation}/turns/{{turn_id}}/analyze-error"),
     ):
         assert permission_for_route(method, path) == frozenset({"menu.db_admin_chat"})
     security = _configure_memory_api_auth(monkeypatch)
@@ -5725,9 +5726,9 @@ def test_db_admin_chat_requires_its_own_menu_permission(
                         404,
                     ),
                     (
-                        "analyze-error",
-                        {"sql": "SELECT 1 FROM DUAL", "result_text": "ORA-00942"},
-                        200,
+                        "conversations/missing/turns/missing/analyze-error",
+                        {"statement_index": 1},
+                        404,
                     ),
                 ):
                     response = await client.post(

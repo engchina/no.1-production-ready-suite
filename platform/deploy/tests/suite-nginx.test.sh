@@ -89,6 +89,7 @@ count_of() {
 # Agent の tools/invoke 960 秒（外部 MCP の上限 900 秒 + 60）。ほかの API は 600 秒（SSE は heartbeat）。
 assert_contains "${site_all_https}" "search-answer-profiles/[^/]+/support-guides/[^/]+/try|" "RAG の業務ガイドを試すは長い timeout"
 assert_contains "${site_all_https}" "location ~ ^/nl2sql/api/(nl2sql/analyze|nl2sql/reverse/deep|" "NL2SQL の LLM の同期の API は長い timeout"
+assert_contains "${site_all_https}" "nl2sql/db-admin-chat/conversations/[^/]+/turns/[^/]+/analyze-error" "保存したターンの分析は長い timeout"
 assert_contains "${site_all_https}" "location ~ ^/agent/api/(tools/invoke)\$ {" "Agent の tools/invoke は長い timeout"
 for value in 660 2460 960; do
   [ "$(count_of "${site_all_https}" "proxy_read_timeout ${value}s;")" = 1 ] || fail "proxy_read_timeout ${value}s が 1 か所ではない"

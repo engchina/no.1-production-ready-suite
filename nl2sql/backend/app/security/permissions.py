@@ -863,7 +863,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", "/nl2sql/feedback/{history_id}"): _FEEDBACK_WRITE,
     # ---- データ準備: DB 管理（表・ビュー・データ・管理 SQL） ----
     # DB 管理チャット（#2264）。管理 SQL を実行の権限では代わりにしない。
-    ("POST", "/nl2sql/db-admin-chat/analyze-error"): _DB_ADMIN_CHAT,
+    (
+        "POST",
+        "/nl2sql/db-admin-chat/conversations/{conversation_id}/turns/{turn_id}/analyze-error",
+    ): _DB_ADMIN_CHAT,
     ("POST", "/nl2sql/db-admin-chat/execute"): _DB_ADMIN_CHAT,
     ("POST", "/nl2sql/db-admin-chat/generate"): _DB_ADMIN_CHAT,
     # DB 管理チャットの会話の履歴（#2319）。見え方はサービスが本人（system_admin は全員）に絞る。

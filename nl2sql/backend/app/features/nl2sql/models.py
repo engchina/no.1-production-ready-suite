@@ -1187,9 +1187,18 @@ class DbAdminChatPlanUpdateRequest(BaseModel):
 class DbAdminChatAnalyzeRequest(BaseModel):
     """DB 管理チャットの失敗の AI 分析。"""
 
-    question: str = Field(default="", max_length=4000)
-    sql: str = Field(min_length=1, max_length=200000)
-    result_text: str = Field(default="", max_length=20000)
+    statement_index: int = Field(ge=1)
+
+
+class DbAdminChatCorrectionAttempt(BaseModel):
+    """サーバーが保存する文ごとの失敗。結果の行・確認語は含めない。"""
+
+    statement_index: int
+    revision: int
+    sql: str
+    error_code: str = ""
+    error_summary: str
+    executed_at: str
 
 
 class DbAdminChatAnalyzeData(BaseModel):
@@ -1200,6 +1209,7 @@ class DbAdminChatAnalyzeData(BaseModel):
     source: str = "deterministic"
     model: str = ""
     warnings: list[str] = Field(default_factory=list)
+    previous_attempts: list[DbAdminChatCorrectionAttempt] = Field(default_factory=list)
 
 
 DbAdminChatStatementStatus = Literal[
@@ -1296,6 +1306,7 @@ class DbAdminChatTurn(BaseModel):
     corrected: bool = False
     # 文ごとの最後の実行の要約（今の SQL の文のもの。文の番号の順。#2333）。
     statement_executions: list[DbAdminChatStatementLastExecution] = Field(default_factory=list)
+    correction_attempts: list[DbAdminChatCorrectionAttempt] = Field(default_factory=list)
     last_run_all: DbAdminChatRunAllSummary | None = None
     # 会話の持ち主以外（system_admin）が送ったターンだけに付く送り手（#1928 と同じ）。
     sender_user_uuid: str | None = None

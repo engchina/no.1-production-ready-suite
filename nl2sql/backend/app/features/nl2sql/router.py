@@ -3281,12 +3281,34 @@ def db_admin_chat_execute(
     return ApiResponse(data=data)
 
 
-@router.post("/db-admin-chat/analyze-error", response_model=ApiResponse[DbAdminChatAnalyzeData])
+@router.post(
+    "/db-admin-chat/conversations/{conversation_id}/turns/{turn_id}/analyze-error",
+    response_model=ApiResponse[DbAdminChatAnalyzeData],
+)
 def db_admin_chat_analyze_error(
+    conversation_id: str,
+    turn_id: str,
     req: DbAdminChatAnalyzeRequest,
+    request: Request,
 ) -> ApiResponse[DbAdminChatAnalyzeData]:
-    """失敗の原因と直した SQL（直した SQL も確認からやり直す）。"""
-    return ApiResponse(data=nl2sql_service.analyze_db_admin_chat_failure(req))
+    """保存された文の失敗と履歴を分析する。"""
+    actor, all_users = _db_admin_chat_actor(request)
+    try:
+        return ApiResponse(
+            data=nl2sql_service.analyze_db_admin_chat_failure(
+                conversation_id,
+                turn_id,
+                req,
+                actor=actor,
+                all_users=all_users,
+            )
+        )
+    except (PermissionError, LookupError) as exc:
+        raise HTTPException(
+            status_code=OWNER_NOT_FOUND_STATUS, detail=_CHAT_TURN_NOT_FOUND_DETAIL
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/db-admin/extract-join-where", response_model=ApiResponse[DbAdminJoinWhereData])
