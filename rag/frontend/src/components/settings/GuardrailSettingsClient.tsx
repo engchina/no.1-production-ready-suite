@@ -118,9 +118,11 @@ export function GuardrailSettingsClient() {
             </div>
           </div>
           <p className="text-sm leading-relaxed text-fg-muted">{t("settings.guardrail.resultHandling")}</p>
-          <a href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/guardrails.htm" target="_blank" rel="noopener noreferrer" className="text-sm text-accent-fg underline underline-offset-2">
+          <p>
+            <a href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/guardrails.htm" target="_blank" rel="noopener noreferrer" className="text-sm text-accent-fg underline underline-offset-2">
             {t("settings.guardrail.officialDocs")}
-          </a>
+            </a>
+          </p>
           <FormStatus tone="info" message={t("settings.guardrail.overview.description")} />
           {warning ? (
             <div className="space-y-2">
