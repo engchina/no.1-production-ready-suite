@@ -769,12 +769,17 @@ async def _save_index(settings: Settings) -> _IngestOracle:
     return oracle
 
 
-@pytest.mark.parametrize("overrides", [{}, {"rag_entity_index_enabled": False}])
+@pytest.mark.parametrize("explicit", [False, True])
 async def test_recipe_without_entity_index_does_not_touch_the_entity_tables(
-    overrides: dict[str, bool],
+    explicit: bool,
 ) -> None:
     """未指定・明示 OFF はいずれも実体の表に触らない（SQL も実行しない）。"""
-    oracle = await _save_index(Settings(rag_graph_profile="off", **overrides))
+    settings = (
+        Settings(rag_graph_profile="off", rag_entity_index_enabled=False)
+        if explicit
+        else Settings(rag_graph_profile="off")
+    )
+    oracle = await _save_index(settings)
 
     assert oracle.saved == [ORG]
     assert oracle.transactions == 0
