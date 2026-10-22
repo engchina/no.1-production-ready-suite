@@ -229,3 +229,86 @@ def test_requirement_status_decides_unavailable_scope_by_the_requirement_kind():
     assert grounded.requirement_status(review("partly_explained", [0]), completion, checked) == "partial"
     assert grounded.requirement_status(review("not_mentioned", []), completion, checked) == "missing"
     assert grounded.requirement_status(None, completion, checked) == "missing"
+
+
+# ---- 前提を示して回答する（未回答の確認事項。#3069） ------------------------------------
+
+_ASSUME_QUESTION = "利用料の上限はいくらですか？"
+_ROW_A = "区分Aの利用料の上限は8000円です。"
+_ROW_B = "区分Bの利用料の上限は10000円です。"
+
+
+def _assume_run(model, *, assume):
+    from pathlib import Path
+
+    from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
+
+    def unused(*a, **k):
+        return (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
+    ctx = context(record(0, _ROW_A, "区分A"), record(1, _ROW_B, "区分B"))
+    knowledge = RuntimeKnowledgeContext(
+        original_question=_ASSUME_QUESTION,
+        expanded_question=_ASSUME_QUESTION,
+        path=Path("runtime_knowledge.json"),
+        loaded=True,
+        assume_unconfirmed=assume,
+        unconfirmed_conditions=(
+            ({"condition_id": "rule:a", "question": "区分はどちらですか？", "options": ["区分A", "区分B"]},) if assume else ()
+        ),
+    )
+    settings = replace(get_settings(), answer_audit_mode=grounded.AUDIT_MODE_NONE, answer_max_correction_rounds=2)
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = synthesize_grounded_answer(_ASSUME_QUESTION, ctx, settings, runtime_knowledge=knowledge, image_prompt_mode="text_only")
+    return result.response, ids(ctx, _ASSUME_QUESTION)
+
+
+def _gap_only():
+    return draft(item("", "区分が分からないため上限を答えられません。", "", kind="gap", request_id="Q1"), summary="")
+
+
+def test_assumed_answer_redrafts_a_refusal_that_cites_no_evidence():
+    ctx = context(record(0, _ROW_A, "区分A"), record(1, _ROW_B, "区分B"))
+    eid = ids(ctx, _ASSUME_QUESTION)
+    conditional = draft(
+        item(eid[_ROW_A], _ROW_A, _ROW_A, applies="conditional", condition="区分A", request_id="Q1"),
+        item(eid[_ROW_B], _ROW_B, _ROW_B, applies="conditional", condition="区分B", request_id="Q1"),
+        summary="上限は区分Aなら8000円、区分Bなら10000円です。",
+    )
+    model = FakeModel([_gap_only(), conditional], [])
+
+    result, _ = _assume_run(model, assume=True)
+
+    # 確認事項を理由に拒答した草稿は、選択肢ごとの条件付きの説明を求めて 1 回だけ作り直す。
+    assert [name for name, _prompt in model.prompts] == ["GroundedDraft", "GroundedDraft"]
+    assert grounded._ASSUMPTION_NO_CITED_HINT in model.prompts[1][1]
+    assert _ROW_A in result.answer_text and _ROW_B in result.answer_text
+    assert result.envelope["outcome"] != "insufficient_evidence"
+
+
+def test_refusal_without_assumption_is_not_redrafted_in_none_mode():
+    model = FakeModel([_gap_only()], [])
+
+    result, _ = _assume_run(model, assume=False)
+
+    assert [name for name, _prompt in model.prompts] == ["GroundedDraft"]
+    assert result.envelope["outcome"] == "insufficient_evidence"
+
+
+def test_assumed_answer_with_cited_evidence_is_not_redrafted():
+    ctx = context(record(0, _ROW_A, "区分A"), record(1, _ROW_B, "区分B"))
+    eid = ids(ctx, _ASSUME_QUESTION)
+    model = FakeModel([draft(item(eid[_ROW_A], _ROW_A, _ROW_A, applies="conditional", condition="区分A", request_id="Q1"))], [])
+
+    _assume_run(model, assume=True)
+
+    assert [name for name, _prompt in model.prompts] == ["GroundedDraft"]
+
+
+def test_correction_feedback_in_none_mode_keeps_only_the_assumed_refusal():
+    feedback = {"no_cited_evidence": "根拠を引用した item がありません。", "unanswered_requests": [{"request_id": "Q1"}]}
+    assert grounded.correction_feedback(feedback, grounded.AUDIT_MODE_NONE) == {}
+    assert grounded.correction_feedback(feedback, grounded.AUDIT_MODE_NONE, assume_unconfirmed=True) == {
+        "no_cited_evidence": grounded._ASSUMPTION_NO_CITED_HINT
+    }
+    assert grounded.correction_feedback({"dropped_items": [{"evidence_id": "E1"}]}, "none", assume_unconfirmed=True) == {}
