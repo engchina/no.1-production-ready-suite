@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "./fixtures/test";
+import type { VectorIndexProfileName } from "../src/lib/api";
+import { vectorIndexEnvelope } from "./_vector-index-fixtures";
 import { expectNoPageOverflow, mockAuthUser, mockLocalAuth, openSidebarNav } from "./_helpers";
 
 const SCREENSHOT_DIR = process.env.RAG_E2E_SCREENSHOT_DIR;
@@ -30,6 +32,7 @@ const RECIPE_DEFAULTS = {
   heading_level_inference_enabled: false,
   field_extraction_enabled: false,
   navigation_summary_enabled: false,
+  section_rules_mode: "parser",
 };
 
 /** `/api/settings/pipeline` の GET / PATCH。PATCH の payload を記録する（#528）。 */
@@ -40,7 +43,7 @@ async function mockPipelineSettings(
     auto_chunk_after_extract_enabled: true,
     auto_index_after_chunk_enabled: true,
   },
-  options: { delayMs?: number; fail?: boolean } = {}
+  options: { delayMs?: number; fail?: boolean; vectorIndexProfile?: () => VectorIndexProfileName } = {}
 ) {
   const patches: unknown[] = [];
   let current = { ...initial };
@@ -62,6 +65,7 @@ async function mockPipelineSettings(
       json: {
         data: {
           ...current,
+          vector_index_profile: options.vectorIndexProfile?.() ?? "accurate",
           recipe_defaults: { ...RECIPE_DEFAULTS, ...current },
           config_source: "runtime",
         },
@@ -342,3 +346,73 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 }
+
+for (const theme of ["light", "dark"] as const) {
+  test(`概要の設定リンクは常時識別でき、章節のカードには値と導線だけを出す (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.addInitScript((value) => window.localStorage.setItem(
+      "production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 })
+    ), theme);
+    await page.goto("/settings/pipeline");
+    const items = page.getByTestId("pipeline-recipe-defaults");
+    const links = items.getByRole("link");
+    await expect(links).toHaveCount(12);
+    for (const link of await links.all()) {
+      expect(await link.evaluate((element) => getComputedStyle(element).textDecorationLine)).toContain("underline");
+      const colors = await link.evaluate((element) => ({
+        link: getComputedStyle(element).color,
+        text: getComputedStyle(element.closest("div")!.querySelector("dt")!).color,
+      }));
+      expect(colors.link).not.toBe(colors.text);
+    }
+    for (const [field, title, value] of [
+      ["navigation_summary_enabled", "章節の要約", "無効"],
+      ["section_rules_mode", "章節の抽出規則", "解析エンジンの見出し"],
+    ]) {
+      const card = items.locator(`[data-config-field="${field}"]`);
+      await expect(card.locator("dt")).toHaveText(title);
+      await expect(card.locator("dd")).toHaveCount(2);
+      await expect(card.locator("dd").first()).toHaveText(value);
+      await expect(card.getByRole("link")).toContainText("設定画面へ");
+    }
+    const vision = items.getByRole("link", { name: "図・画像を AI で読み取る を設定する画面を開く" });
+    await vision.focus();
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Shift+Tab");
+    await expect(vision).toBeFocused();
+    expect(await vision.evaluate((element) => parseFloat(getComputedStyle(element).outlineWidth))).toBeGreaterThanOrEqual(2);
+    await page.screenshot({ path: testInfo.outputPath("overview-setting-links.png") });
+    await expectNoPageOverflow(page);
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/settings\/parser-adapters#post-parse-vision$/);
+  });
+}
+
+for (const [profile, label] of [["fast", "高速"], ["balanced", "バランス"], ["accurate", "高精度"]] as const) {
+  test(`概要は保存された検索インデックスの ${label} を表示する`, { tag: "@responsive" }, async ({ page }) => {
+    await mockPipelineSettings(page, undefined, { vectorIndexProfile: () => profile });
+    await page.goto("/settings/pipeline");
+    const card = page.locator('[data-config-field="vector_index"]');
+    await expect(card.locator("dd").first()).toHaveText(label);
+    await expect(card.getByRole("link")).toHaveAttribute("href", "/settings/vector-index");
+    await expectNoPageOverflow(page);
+  });
+}
+
+test("検索インデックスを詳細で保存して概要へ戻ると選択値が変わる", { tag: "@responsive" }, async ({ page }) => {
+  let profile: VectorIndexProfileName = "balanced";
+  await mockPipelineSettings(page, undefined, { vectorIndexProfile: () => profile });
+  await page.route("**/api/settings/vector-index", async (route) => {
+    if (route.request().method() === "PATCH") profile = route.request().postDataJSON().profile;
+    await route.fulfill({ json: vectorIndexEnvelope(profile) });
+  });
+  await page.goto("/settings/pipeline");
+  const card = page.locator('[data-config-field="vector_index"]');
+  await expect(card.locator("dd").first()).toHaveText("バランス");
+  await card.getByRole("link").click();
+  await page.getByRole("radio", { name: /高精度/ }).check();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+  await page.goto("/settings/pipeline");
+  await expect(card.locator("dd").first()).toHaveText("高精度");
+  await expectNoPageOverflow(page);
+});

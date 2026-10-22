@@ -2131,6 +2131,7 @@ export function useUpdateVectorIndexSettings() {
       api.updateVectorIndexSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.vectorIndexSettings, data);
+      void qc.invalidateQueries({ queryKey: queryKeys.pipelineSettings });
     },
   });
 }

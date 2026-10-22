@@ -1120,6 +1120,7 @@ def _pipeline_settings_data(settings: Settings) -> PipelineSettingsData:
         auto_chunk_after_extract_enabled=settings.rag_auto_chunk_after_extract_enabled,
         auto_index_after_chunk_enabled=settings.rag_auto_index_after_chunk_enabled,
         recipe_defaults=global_document_processing_config(settings),
+        vector_index_profile=normalize_vector_index_profile(settings.rag_vector_index_profile),
     )
 
 
