@@ -1760,12 +1760,12 @@ _INLINE_EVIDENCE = re.compile(r"[（(\[【]\s*(E[0-9]{1,3}(?:\s*[,、・]\s*E[0-
 
 def _inline_evidence(item: GroundedItem, spans: Sequence[dict]) -> GroundedItem:
     """本文中の根拠ラベルを非表示にし、一意なら引用元の候補にする。原文中の同じ記号は保つ。"""
-    corpus = "\n".join(str(span.get("text") or "") for span in spans)
+    codes = _document_evidence_codes(spans)
     labels = [
         label.group()
         for match in _INLINE_EVIDENCE.finditer(item.text)
-        if match.group() not in corpus
         for label in _EVIDENCE_LABEL.finditer(match.group(1))
+        if label.group() not in codes
     ]
     text = _clean_evidence_labels(item.text, spans)
     evidence_id = item.evidence_id
@@ -1776,10 +1776,22 @@ def _inline_evidence(item: GroundedItem, spans: Sequence[dict]) -> GroundedItem:
 
 def _clean_evidence_labels(text: str, spans: Sequence[dict]) -> str:
     """表示用の文から内部ラベルを除く。根拠本文にあるコードは説明の対象なので残す。"""
-    corpus = "\n".join(str(span.get("text") or "") for span in spans)
-    text = _INLINE_EVIDENCE.sub(lambda match: match.group() if match.group() in corpus else "", text)
-    codes = set(_EVIDENCE_LABEL.findall(corpus))
+    codes = _document_evidence_codes(spans)
+
+    def bracketed(match: re.Match[str]) -> str:
+        labels = _EVIDENCE_LABEL.findall(match.group(1))
+        retained = [label for label in labels if label in codes]
+        if len(retained) == len(labels):
+            return match.group()
+        return match.group()[0] + "、".join(retained) + match.group()[-1] if retained else ""
+
+    text = _INLINE_EVIDENCE.sub(bracketed, text)
     return _EVIDENCE_LABEL.sub(lambda match: match.group() if match.group() in codes else "", text).strip()
+
+
+def _document_evidence_codes(spans: Sequence[dict]) -> set[str]:
+    """資料のコードを、モデルが読む文字の形にそろえて取り出す。"""
+    return set(_EVIDENCE_LABEL.findall(fold_width("\n".join(str(span.get("text") or "") for span in spans))))
 
 
 def recover_audited_quotes(
@@ -2478,6 +2490,52 @@ def without_redundant_quotes(checked: Sequence[CheckedItem]) -> list[CheckedItem
                 continue
         kept.append(entry)
     return kept
+
+
+def deduplicate_audited_items(
+    checked: Sequence[CheckedItem], audit: GroundedAudit, notice_count: int
+) -> tuple[list[CheckedItem], GroundedAudit]:
+    """重複を除いた段落へ監査の参照を移す。消えた説明を別の説明や案内に取り違えない。"""
+    kept = without_redundant_quotes(checked)
+    return kept, reindex_audit_items(checked, kept, audit, notice_count)
+
+
+def reindex_audit_items(
+    checked: Sequence[CheckedItem], kept: Sequence[CheckedItem], audit: GroundedAudit, notice_count: int
+) -> GroundedAudit:
+    """段落数の変化を監査に反映する。ガイドの案内は段落の後ろに続く。"""
+    positions = {id(entry): index for index, entry in enumerate(kept)}
+
+    def equivalent(entry: CheckedItem, other: CheckedItem) -> bool:
+        return (
+            entry.item.kind == other.item.kind
+            and _compact(fold_width(entry.item.text)) == _compact(fold_width(other.item.text))
+            and entry.item.applies == other.item.applies
+            and entry.item.condition == other.item.condition
+            and entry.confirmed == other.confirmed
+            and entry.added == other.added
+            and entry.quote_only == other.quote_only
+        )
+
+    mapping = {
+        index: positions.get(id(entry), next((i for i, other in enumerate(kept) if equivalent(entry, other)), -1))
+        for index, entry in enumerate(checked)
+    }
+
+    def item_index(index: int) -> int:
+        if len(checked) <= index < len(checked) + notice_count:
+            return len(kept) + index - len(checked)
+        return mapping.get(index, -1)
+
+    return audit.model_copy(
+        update={
+            "reviews": [review.model_copy(update={"index": mapping.get(review.index, -1)}) for review in audit.reviews],
+            "guide_requirement_reviews": [
+                review.model_copy(update={"item_indexes": list(dict.fromkeys(item_index(index) for index in review.item_indexes))})
+                for review in audit.guide_requirement_reviews
+            ],
+        }
+    )
 
 
 def carry_over(candidate: Sequence[CheckedItem], previous: Sequence[CheckedItem]) -> list[CheckedItem]:
@@ -4871,7 +4929,7 @@ def run_round(
                 if entry["index"] in recovered:
                     entry["ignored"] = True
             apply_audit(checked, audit)
-            checked = without_redundant_quotes(checked)
+            checked, audit = deduplicate_audited_items(checked, audit, len(guide_notices))
             _reconcile_request_reviews(checked, audit)
     procedures = [e for e in checked if e.item.kind in _PROCEDURE_KINDS and not e.added]
     timing["procedure_quotes"] = {
@@ -4956,7 +5014,10 @@ def run_round(
         and not any(e.item.kind == "gap" and answer_labels().cause_gap in e.item.text for e in checked)
     ):
         # 原因を裏付ける確かめた規則の item が 1 つもなければ、原因は資料にないと本文で伝える (#713)。
+        before_gap = list(checked)
         checked.append(CheckedItem(GroundedItem(kind="gap", text=answer_labels().cause_gap)))
+        if audit is not None:
+            audit = reindex_audit_items(before_gap, checked, audit, len(guide_notices))
     unused = [ref for label in (audit.unused_evidence_ids if audit else []) if (ref := _evidence_ref(label, spans))]
     return Round(
         summary,

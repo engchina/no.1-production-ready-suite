@@ -101,6 +101,93 @@ def test_a_real_document_code_is_not_an_internal_label():
     assert grounded._clean_evidence_labels("コード E60 を確認します。E6", [{"text": "コード E60"}]) == "コード E60 を確認します。"
 
 
+@pytest.mark.parametrize("source", ["コード E6", "コード Ｅ６", "コード（Ｅ６）"])
+@pytest.mark.parametrize("text", ["コード E6 を確認します。", "コード（E6）を確認します。", "コード [E6] を確認します。"])
+def test_document_codes_survive_different_brackets_and_character_widths(source, text):
+    spans = [{"text": source, "evidence_id": "document", "label": "E1"}]
+    assert grounded._clean_evidence_labels(text + "（E1）", spans) == text
+    cleaned = grounded._inline_evidence(GroundedDraft.model_validate(draft(item("", text, ""))).items[0], spans)
+    assert cleaned.text == text
+    assert cleaned.evidence_id == ""
+
+
+def test_mixed_bracketed_codes_keep_real_codes_and_resolve_only_internal_labels():
+    spans = [{"text": "コード Ｅ６", "evidence_id": "document", "label": "E1"}]
+    cleaned = grounded._inline_evidence(GroundedDraft.model_validate(draft(item("", "コード（E6、E1）を確認します。", ""))).items[0], spans)
+    assert cleaned.text == "コード（E6）を確認します。"
+    assert cleaned.evidence_id == "E1"
+
+
+@pytest.mark.parametrize("mode", ["standard", "detailed"])
+def test_recovered_duplicate_does_not_shift_a_later_guide_requirements_reference(mode):
+    save = "保存画面で保存ボタンを押します。"
+    spans = _grounded_spans(
+        QUESTION,
+        context(record(0, ORIGINAL, "一覧画面", source="手順書 A.pdf"), record(1, save, "保存画面", source="手順書 A.pdf")),
+        (),
+        None,
+    )
+    generated = draft(
+        item("E1", ORIGINAL, ORIGINAL),
+        item("E1", PARAPHRASE, "対象を決めて提出してください。"),
+        item("E2", save, save),
+        summary="操作の説明",
+    )
+    response = audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), (2, "supported", "matched", ""))
+    response["reviews"][1]["support_quote"] = ORIGINAL
+    response["guide_requirement_reviews"] = [
+        {"requirement_id": "save:0", "answer_state": "explained", "item_indexes": [2], "answer_quote": save, "reason": ""}
+    ]
+    if mode == "standard":
+        response.pop("unused_evidence_ids")
+    model = FakeModel([generated], [response])
+    result = grounded.run_round(
+        QUESTION,
+        spans,
+        get_settings(),
+        prompt="合成の質問",
+        image_paths=[],
+        provider_id=None,
+        parse_text=model,
+        parse_images=model,
+        audit_mode=mode,
+        guide_steps=[("save", "保存する", [spans[1]["source_id"]])],
+        guide_step_contracts=[{"step_id": "save", "requirements": [{"id": "save:0", "text": "保存する", "kind": "completion"}]}],
+    )
+    assert len(result.checked) == 2
+    assert result.audit.guide_requirement_reviews[0].item_indexes == [1]
+    assert result.guide_steps[0]["status"] == "explained"
+
+
+def test_a_system_added_cause_gap_does_not_capture_a_notice_reference():
+    question = "送信できない原因を教えてください"
+    notice = "原因の確認は窓口へお問い合わせください。"
+    response = audit((0, "supported", "matched", ""))
+    response["guide_requirement_reviews"] = [
+        {"requirement_id": "contact:0", "answer_state": "explained", "item_indexes": [1], "answer_quote": notice, "reason": ""}
+    ]
+    model = FakeModel([draft(item("E1", ORIGINAL, ORIGINAL), summary="操作の説明")], [response])
+    spans = _spans()
+    result = grounded.run_round(
+        question,
+        spans,
+        get_settings(),
+        prompt="合成の質問",
+        image_paths=[],
+        provider_id=None,
+        parse_text=model,
+        parse_images=model,
+        guide_steps=[("contact", "窓口へ案内する", [spans[0]["source_id"]])],
+        guide_step_contracts=[
+            {"step_id": "contact", "requirements": [{"id": "contact:0", "text": "窓口へ案内する", "kind": "completion"}]}
+        ],
+        guide_notices=[notice],
+    )
+    assert len(result.checked) == 2 and result.checked[1].item.kind == "gap"
+    assert result.audit.guide_requirement_reviews[0].item_indexes == [2]
+    assert result.guide_steps[0]["status"] == "explained"
+
+
 def test_recovered_passage_is_rendered_with_a_source_and_no_internal_label():
     _, model, _ = _run(mode="detailed", suffix="（E1）", evidence_id="")
 
