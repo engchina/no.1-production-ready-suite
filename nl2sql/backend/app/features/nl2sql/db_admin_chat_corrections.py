@@ -21,6 +21,11 @@ def sql_identity(sql: str) -> tuple[tuple[str, str], ...]:
         tokens = Dialect.get_or_raise("oracle").tokenize(sql)
     except TokenError:
         return (("RAW", sql.strip().rstrip(";").strip()),)
+    if tokens and tokens[-1].token_type.name == "SLASH":
+        last = tokens[-1]
+        # SQL*Plus の単独行だけを区切りとする。式の除算と引用の内容は残す。
+        if sql.splitlines()[last.line - 1].strip() == "/":
+            tokens.pop()
     while tokens and tokens[-1].token_type.name == "SEMICOLON":
         tokens.pop()
     return tuple(
