@@ -519,7 +519,6 @@ class RagPipeline:
                 await asyncio.to_thread(self._answer_notice),
                 outcome.diagnostics,
                 contact_override=self._settings.rag_answer_contact_override,
-                spec_then_contact=self._settings.rag_answer_spec_then_contact,
                 guide=guide,
             )
             if request.generate_answer and self._answer_notice is not None

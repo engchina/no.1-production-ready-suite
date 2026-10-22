@@ -3646,7 +3646,7 @@ export const ja = {
   // 回答の末尾の窓口の案内（#2400）
   "searchAnswerProfiles.contact.title": "回答の末尾の窓口の案内",
   "searchAnswerProfiles.contact.helper":
-    "回答の注意書き（システム設定）の窓口の案内を、このプロファイルの回答だけ変えます。業務ガイドの「人への引き継ぎ」の窓口があれば、そちらを優先します。",
+    "回答の注意書き（システム設定）の窓口を、このプロファイルの回答だけ変えます。案内は「解決しない場合は、〈窓口〉へお問い合わせください。」で統一します。業務ガイドの「人への引き継ぎ」の窓口があれば、そちらを優先します。",
   "searchAnswerProfiles.contact.override": "窓口の上書き",
   "searchAnswerProfiles.contact.overrideHelper":
     "このプロファイルの業務の窓口の名前と連絡の方法（電話・URL など）を 1 行で書きます。空ならシステム設定の窓口を継承します。",
@@ -3661,9 +3661,6 @@ export const ja = {
   "searchAnswerProfiles.contact.source.system": "システム設定の窓口を継承",
   "searchAnswerProfiles.contact.sameAsSystem":
     "システム設定と同じ窓口です。空にすると、システム設定の窓口を継承します。",
-  "searchAnswerProfiles.contact.specThenContact": "資料から分かる仕様を示し、当てはまらなければ窓口へ案内する",
-  "searchAnswerProfiles.contact.specThenContactHelper":
-    "資料で答えた回答の末尾の案内を「回答は資料から分かる仕様です。ご自身の状況に当てはまらない場合は、〈窓口〉へお問い合わせください。」にします。根拠が足りない回答は、ふつうの窓口の案内のままです。",
   "searchAnswerProfiles.clarification.title": "回答前の確認",
   "searchAnswerProfiles.clarification.helper":
     "チャットで曖昧な質問に回答する前に、確認事項を利用者に確かめるかを決めます。確認事項はルールごとに「プロファイルの知識」で設定し、業務ガイドの条件の確認も同じ方針に従います。",

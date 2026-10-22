@@ -1811,13 +1811,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "空ならシステム設定の窓口。"
         ),
     )
-    rag_answer_spec_then_contact: bool = Field(
-        default=False,
-        description=(
-            "リクエスト単位で検索・回答プロファイルから解決する、資料で答えた回答の注意書きの窓口の"
-            "案内を「資料から分かる仕様を示し、当てはまらなければ窓口へ」の形にするか（#2400）。"
-        ),
-    )
     rag_language_pack_overrides: dict[str, dict[str, object]] = Field(
         default_factory=dict,
         description=(
