@@ -253,10 +253,15 @@ for (const viewport of [
       // 画面の文言に移植元の呼び名（DocRAG）を出さない（#593）。
       const card = page.getByTestId("answering-settings-card");
       await expect(card).not.toContainText("DocRAG");
+      await expect(card.getByRole("switch")).toHaveCount(5);
+      expect(await card.getByRole("switch").evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))))
+        .toEqual(["Rerank で検索候補を並べ替える", "質問から項目の条件を読み取る", "関係情報で根拠を広げる", "画面目録で操作画面を探す", "根拠の無い要求を探し直す"]);
       const strategy = page.getByRole("combobox", { name: "質問の拡張", exact: true });
       await expect(strategy).toContainText("自動ルーティング");
       await expect(page.getByRole("combobox", { name: "回答の生成方式", exact: true })).toContainText("CRAG");
       await expect(page.getByRole("switch", { name: "Rerank で検索候補を並べ替える" })).toBeChecked();
+      await page.getByRole("switch", { name: "質問から項目の条件を読み取る" }).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: test.info().outputPath("retrieval-option-order.png") });
       const screenLinking = page.getByRole("switch", { name: "画面目録で操作画面を探す" });
       await expect(screenLinking).not.toBeChecked();
       // 根拠の無い要求を探し直す（#1279）は既定で無効。
@@ -507,9 +512,9 @@ const ANSWER_RECORDS = { retention_days: 90, config_source: "runtime" };
 const QUERY_HISTORY = { enabled: false, retention_days: 90, min_count: 3, suggestion_limit: 5, blocklist: [] };
 
 /** 3 つのカードの取得（GET）を mock する。`gate` を渡すと、その間は応答を止める（読み込み中の確認）。 */
-async function mockRetrievalCards(page: Page, gate?: Promise<void>) {
+async function mockRetrievalCards(page: Page, gate?: Promise<void>, stages = FLOW_STAGES) {
   const cards: [string, unknown][] = [
-    ["**/api/settings/answer-prompts", { prompts: [], stages: FLOW_STAGES }],
+    ["**/api/settings/answer-prompts", { prompts: [], stages }],
     ["**/api/settings/answering", ANSWERING_SETTINGS],
     ["**/api/settings/answer-records", ANSWER_RECORDS],
     ["**/api/settings/query-history", QUERY_HISTORY],
@@ -526,11 +531,14 @@ for (const width of [1280, 375]) {
   test(`検索プロンプトは処理順・使用条件・読み取り専用で確認できる (${width}px)`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     await mockAuthUser(page, { permissions: ["menu.settings_retrieval"] });
-    await mockRetrievalCards(page);
+    const displayStages = FLOW_STAGES.map((stage) => stage.id === "history_rewrite" ? {
+      ...stage, prompts: [{ id: "system", content: "## 目的と手順\n\n- 合成の対象名を補います。\n- 質問だけを 1 行で返します。" }],
+    } : stage);
+    await mockRetrievalCards(page, undefined, displayStages);
     await page.goto("/settings/retrieval");
     const prompts = page.getByRole("region", { name: "検索に使うプロンプト", exact: true });
     await expect(prompts.getByRole("heading", { level: 3 })).toHaveText(["質問の解釈", "検索", "根拠の判定"]);
-    const expected = FLOW_STAGES.filter((stage) => ["question", "retrieval", "grounding"].includes(stage.phase));
+    const expected = displayStages.filter((stage) => ["question", "retrieval", "grounding"].includes(stage.phase));
     await expect(prompts.locator("details")).toHaveCount(expected.length);
     for (const stage of expected) {
       const panel = prompts.getByTestId(`answer-prompt-stage-${stage.id}`);
@@ -546,6 +554,12 @@ for (const width of [1280, 375]) {
     await expect(prompts.getByTestId("answer-prompt-stage-support_guide_conditions")).toContainText("利用者が答える未確認の自由入力条件があるとき");
     await expect(prompts.getByTestId("answer-prompt-stage-history_rewrite")).toContainText("書き換えを有効にしたとき");
     await expect(prompts.getByTestId("answer-prompt-stage-section_extraction")).toContainText("原文抽出は既定で無効");
+    const rewrite = prompts.getByTestId("answer-prompt-stage-history_rewrite");
+    await rewrite.locator("summary").click();
+    await expect(rewrite.getByRole("textbox")).toHaveValue(/\n- .+\n- /);
+    await rewrite.getByRole("textbox").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("history-rewrite-bullets.png") });
+    await rewrite.locator("summary").click();
     await prompts.getByRole("heading", { level: 2 }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("retrieval-prompts.png") });
     await expectNoPageOverflow(page);
