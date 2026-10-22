@@ -299,3 +299,15 @@ def test_positive_unit_one_does_not_recurse_without_progress() -> None:
 
     pack = resolve(builtin_pack(), {"numbers": {"kanji_multipliers": ["十=1"]}})
     assert format_kanji_number(2, pack) == "二十"
+
+
+def test_arabic_numbers_unifies_kanji_numbers_and_thousands_separators():
+    from rag_parser_core.language.text import arabic_numbers
+
+    assert arabic_numbers("上限は一回五千円です。") == "上限は1回5000円です。"
+    assert arabic_numbers("上限は1回あたり5,000円です。") == "上限は1回あたり5000円です。"
+    # 漢数字を読まないときは桁区切りだけを除く。小数・4 桁ごとの区切りでない数は変えない。
+    assert arabic_numbers("一万四千円と14,000円", kanji=False) == "一万四千円と14000円"
+    assert arabic_numbers("1,5 と 12,3456") == "1,5 と 12,3456"
+    # 数を取り出すときは、直した値を隣の数字と混ぜない。
+    assert arabic_numbers("一泊一万四千円", spaced=True) == " 1 泊 14000 円"

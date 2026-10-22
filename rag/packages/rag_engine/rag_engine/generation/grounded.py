@@ -29,6 +29,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import arabic_numbers
 
 from rag_engine.chunking import _flatten_table_html, _section_unit
 from rag_engine.generation import passage_marks
@@ -918,6 +919,8 @@ def summary_asserts_denied(
     """
 
     def bigrams(value: str) -> set[str]:
+        # 数の書き方（漢数字・算用数字・桁区切り）をそろえてから比べる。同じ値を違う書き方で断定していても見逃さない（#3086）。
+        value = arabic_numbers(value)
         return {w[i : i + 2] for w in check_cues().claim_word.findall(value) for i in range(len(w) - 1)}
 
     for text in denied:
