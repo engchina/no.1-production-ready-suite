@@ -107,6 +107,10 @@
       "id": "markdown-heading-fiscal-year",
       "note": "年度・章節の番号は数量に数えない（#2625）。",
       "passage": "## 2026年度の申請の流れ"
+    },
+    {
+      "id": "table-name-lead-in",
+      "passage": "- 表「合成の集計」では、"
     }
   ],
   "numbered_heading_passages": [
@@ -379,6 +383,14 @@
     {
       "id": "item-label-with-instruction",
       "passage": "- 項目を保存してください。"
+    },
+    {
+      "id": "table-intro-with-fact",
+      "passage": "- 表「合成の集計」では、値は 42 です。"
+    },
+    {
+      "id": "table-intro-with-instruction",
+      "passage": "- 表「合成の集計」では、登録してください。"
     }
   ],
   "answers": [

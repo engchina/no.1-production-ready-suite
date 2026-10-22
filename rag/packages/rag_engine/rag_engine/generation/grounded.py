@@ -1147,6 +1147,8 @@ def _compact(value: str) -> str:
 
 
 _MARKUP_TAG = re.compile(r"<[^<>]{1,40}>")
+# 対になった Markdown の表示記法だけを除き、単独の演算記号は原文として残す。
+_QUOTE_EMPHASIS = re.compile(r"(?P<mark>\*\*|__|`)(?=\S)(?P<body>[^\n]*?\S)(?P=mark)")
 # 意味を変えない表記の違い。表のセル区切り（HTML tag は別に除く）、句読点、コロン、中点、矢印、括弧・引用符の種類。
 # 文字級の正規化のままで、語（文字・数字）の並びは変えない (#716)。NFKC 後の文字と比べるので半角形も含める。
 
@@ -1163,6 +1165,9 @@ def _canonical(value: str) -> tuple[str, list[int]]:
     masked: set[int] = set()
     for match in _MARKUP_TAG.finditer(value):
         masked.update(range(match.start(), match.end()))
+    for match in _QUOTE_EMPHASIS.finditer(value):
+        masked.update(range(match.start(), match.start("body")))
+        masked.update(range(match.end("body"), match.end()))
     folded, folded_positions = fold_text_with_positions(value)
     chars: list[str] = []
     positions: list[int] = []
