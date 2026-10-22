@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
@@ -100,7 +100,12 @@ function ratingLabel(rating: FeedbackRating): string {
 }
 
 export function FeedbackPage() {
-  const [view, setView] = useWorkspaceState("feedback", "view", "signals" as FeedbackView, isOneOf(VIEWS));
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [savedView, setView] = useWorkspaceState("feedback", "view", "signals" as FeedbackView, isOneOf(VIEWS));
+  const view: FeedbackView = searchParams.has("signal") ? "signals" : searchParams.has("feedback") ? "ratings" : savedView;
+  useEffect(() => {
+    if (savedView !== view) setView(view);
+  }, [savedView, view, setView]);
   const [days, setDays] = useWorkspaceState("feedback", "days", DEFAULT_PERIOD, isPeriod);
   const [agentId, setAgentId] = useWorkspaceState("feedback", "agentId", "", isString);
   const [rating, setRating] = useWorkspaceState("feedback", "rating", "", isRatingFilter);
@@ -115,7 +120,6 @@ export function FeedbackPage() {
   // 一覧 + 詳細（共有 ListDetailLayout。#2283）の選択は URL が唯一の情報源。利用者の評価は `?feedback=`、
   // 確かめるべき実行は `?signal=`（どちらも Run の ID）。先頭の行を自動で選ばない。1 ペイン（xl 未満）で一覧から
   // 詳細へ入るときは履歴に積み、「一覧へ戻る」とブラウザの「戻る」で一覧へ戻る。
-  const [searchParams, setSearchParams] = useSearchParams();
   const split = useListDetailSplit();
   const ratingSelection = useUrlSelection({ param: "feedback", searchParams, setSearchParams, singlePane: !split });
   const signalSelection = useUrlSelection({ param: "signal", searchParams, setSearchParams, singlePane: !split });
@@ -254,7 +258,13 @@ export function FeedbackPage() {
             idPrefix="feedback"
             ariaLabel={t("feedback.view.label")}
             value={view}
-            onChange={(id) => setView(id as FeedbackView)}
+            onChange={(id) => {
+              const nextView = id as FeedbackView;
+              setView(nextView);
+              const nextParams = new URLSearchParams(searchParams);
+              nextParams.delete(nextView === "signals" ? "feedback" : "signal");
+              setSearchParams(nextParams, { replace: true });
+            }}
             items={[
               { id: "signals", label: t("feedback.view.signals") },
               { id: "ratings", label: t("feedback.view.ratings") },
@@ -491,7 +501,7 @@ function FeedbackContent({
             <div className="grid gap-2">
               <h2 className="text-sm font-semibold text-fg">{t("feedback.list.title")}</h2>
               {/* 件数: 絞り込み（評価・理由）中は「N 件（全 M 件）」。M は期間・業務 Agent の評価の全件（#1891）。 */}
-              <ListToolbar count={listCount(summary.total, report.total, filtered)} testId="feedback-list-toolbar" />
+              <ListToolbar count={listCount(summary.rated_runs, report.total, filtered)} testId="feedback-list-toolbar" />
             </div>
           }
           list={

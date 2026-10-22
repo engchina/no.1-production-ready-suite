@@ -479,6 +479,7 @@ function feedbackReportFromRuns(
     if (reason) reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
   }
   const summary = {
+    rated_runs: rated.length,
     total: owned.length,
     helpful,
     not_helpful: owned.length - helpful,
@@ -518,6 +519,7 @@ function feedbackReportFromRuns(
     until: MOCK_NOW,
     summary,
     previous: {
+      rated_runs: 0,
       total: 0,
       helpful: 0,
       not_helpful: 0,
