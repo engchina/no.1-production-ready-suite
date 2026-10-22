@@ -420,7 +420,7 @@ describe("取込の差分と下書きで試す", () => {
 
 describe("業務ガイドの参照と分岐の境界", () => {
   it("Excel の行列上限の外を拒否する", () => {
-    for (const value of ["A1048577", "A1:B1048577", "XFE1", "ZZZ1"]) {
+    for (const value of ["A1048577", "A1:B1048577", "XFE1", "ZZZ1", "D10:B3", "D3:B10", "B10:D3"]) {
       expect(parseSheetRanges(`Sheet1!${value}`)).toBeNull();
     }
     expect(parseSheetRanges("Sheet1!XFD1048576")?.[0].row_start).toBe(1048576);

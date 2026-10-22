@@ -191,12 +191,16 @@ def _cell_rows(cell_range: str) -> tuple[int, int] | None:
     start = int(match.group(2))
     end = int(match.group(4) or start)
     columns = (match.group(1), match.group(3) or match.group(1))
+    column_numbers = []
     for column in columns:
         number = 0
         for char in column:
             number = number * 26 + ord(char) - ord("A") + 1
         if number > MAX_SHEET_COLUMN:
             return None
+        column_numbers.append(number)
+    if start > end or column_numbers[0] > column_numbers[1]:
+        return None
     if max(start, end) > MAX_SHEET_ROW:
         return None
     return min(start, end), max(start, end)
@@ -221,7 +225,8 @@ class SupportGuideSheetRange(_Strict):
             rows = _cell_rows(self.cell_range)
             if rows is None:
                 raise ValueError(
-                    "セルの範囲は A1 形式（例: B3:D10）で、Excel の行・列の上限内にしてください。"
+                    "セルの範囲は A1 形式（例: B3:D10）で、"
+                    "左上から右下の順で Excel の行・列の上限内にしてください。"
                 )
             if self.row_start is None:
                 self.row_start, self.row_end = rows

@@ -794,7 +794,7 @@ test("表計算の資料をシートと行で参照して保存できる", { tag
   const stepReference = stepReferences.getByRole("listitem", { name: "手順 1 の資料 1" });
   const sheets = stepReference.getByLabel("根拠のシートと行（表計算）");
   await expect(sheets).toHaveAccessibleDescription(/シート名!42-45/);
-  for (const invalid of ["Sheet1!A1048577", "Sheet1!XFE1"]) {
+  for (const invalid of ["Sheet1!A1048577", "Sheet1!XFE1", "Sheet1!D10:B3"]) {
     await sheets.fill(invalid);
     await editor.getByRole("button", { name: "保存", exact: true }).click();
     await expect(stepReference.getByText(/シートと行は 1 行に 1 つ/)).toBeVisible();

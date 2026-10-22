@@ -410,7 +410,9 @@ export function parseSheetRanges(text: string): SupportGuideSheetRange[] | null 
       const first = Number(cells[2]);
       const last = cells[4] === undefined ? first : Number(cells[4]);
       const columnNumber = (column: string) => [...column].reduce((total, char) => total * 26 + char.charCodeAt(0) - 64, 0);
-      if (Math.max(first, last) > MAX_SHEET_ROW || columnNumber(cells[1]) > MAX_SHEET_COLUMN || columnNumber(cells[3] ?? cells[1]) > MAX_SHEET_COLUMN) return null;
+      const firstColumn = columnNumber(cells[1]);
+      const lastColumn = columnNumber(cells[3] ?? cells[1]);
+      if (first > last || firstColumn > lastColumn || last > MAX_SHEET_ROW || lastColumn > MAX_SHEET_COLUMN) return null;
       ranges.push({
         sheet_name: sheet,
         row_start: Math.min(first, last),

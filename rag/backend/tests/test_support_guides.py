@@ -831,7 +831,9 @@ def test_try_draft_requires_the_guide_management_permission(
     assert allowed.json()["data"]["guide_used"] is True
 
 
-@pytest.mark.parametrize("cell_range", ["A1048577", "A1:B1048577", "XFE1", "ZZZ1"])
+@pytest.mark.parametrize(
+    "cell_range", ["A1048577", "A1:B1048577", "XFE1", "ZZZ1", "D10:B3", "D3:B10", "B10:D3"]
+)
 def test_sheet_cell_range_enforces_row_and_column_limits(cell_range: str) -> None:
     from pydantic import ValidationError
 

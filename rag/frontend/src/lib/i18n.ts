@@ -4751,7 +4751,7 @@ export const ja = {
   "supportGuides.check.pageRanges":
     "頁は「3-5, 8」の形で入れてください（始まりは 1 以上、終わりは始まり以上、範囲は 10 個まで）。",
   "supportGuides.check.sheetRanges":
-    "シートと行は 1 行に 1 つ、「シート名!42-45」か「シート名!B3:D10」の形で入れてください（範囲は 10 個まで、Excel の行・列の上限内）。",
+    "シートと行は 1 行に 1 つ、「シート名!42-45」か「シート名!B3:D10」の形で入れてください（範囲は 10 個まで、Excel の行・列の上限内で左上から右下へ）。",
   "supportGuides.check.sheetAndPages": "1 つの資料には、根拠の頁かシートと行のどちらかだけを入れてください。",
   // 項目の名前（検証の結果の位置の表示）
   "supportGuides.path.separator": "・",
