@@ -103,6 +103,12 @@ def is_heading(text: str) -> bool:
     """
     if is_value_heading(text):
         return False
+    markup = _MARKUP_HEADING.fullmatch(text)
+    if markup:
+        title = markup.group("md") or markup.group("bracket") or markup.group("bold") or ""
+        if _SENTENCE_END.search(title) or is_operation_instruction(title) or "は" in _HEADING_QUOTED.sub(" ", title):
+            return is_lead_in(text)
+
     # 確定までの短い節名を本文と誤認すると、未監査の見出しだけで全手順が落ちる。
     # 状態条件（登録済みの場合等）や操作を含む文はこの限定規則に含めない。
     operation_word = r"(?:操作|入力|登録|追加|削除|変更|保存|確定|完了|実行)"

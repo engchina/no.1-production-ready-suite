@@ -345,6 +345,7 @@ def _heading_title(text: str) -> str | None:
                 and not _is_sentence(title)
                 and not _OPERATION.search(title)
                 and not _HEADING_QUANTITY.search(title)
+                and "は" not in _HEADING_QUOTED.sub(" ", title)
             ):
                 return title
             return None
@@ -361,6 +362,7 @@ def _heading_title(text: str) -> str | None:
             and not _is_sentence(title)
             and not _OPERATION.search(title)
             and not _HEADING_QUANTITY.search(title)
+            and "は" not in _HEADING_QUOTED.sub(" ", title)
         ):
             return title
     phrase = heading_phrase(value)
