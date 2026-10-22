@@ -862,3 +862,25 @@ async def test_pipeline_returns_answer_when_answer_record_save_fails(
         settings=Settings(rag_answer_record_retention_days=30),
     ).run(SearchRequest(query="受注の登録方法は？", search_answer_profile_id="bv-1"))
     assert purged.storage_failures == []
+
+
+@pytest.mark.parametrize(
+    ("validation", "expected"),
+    [
+        ({"status": "completed", "valid": True}, "verified"),
+        (
+            {"status": "completed", "valid": False, "counts": {"supported": 1, "unsupported": 1}},
+            "partial",
+        ),
+        ({"status": "error", "valid": False}, "unverified"),
+    ],
+)
+def test_final_validation_overrides_request_audit_verification(
+    validation: dict[str, object],
+    expected: str,
+) -> None:
+    diagnostics = {
+        "envelope": {"requests": [{"status": "addressed"}]},
+        "answer_validation": validation,
+    }
+    assert answer_verification(diagnostics) == expected
