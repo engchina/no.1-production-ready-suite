@@ -176,7 +176,7 @@ def test_saved_standard_options_of_search_answer_profile_are_ignored(
     assert response.status_code == 200
     settings = RecordingPipeline.captured_settings
     assert settings is not None
-    assert settings.rag_rerank_enabled is True
+    assert settings.rag_rerank_enabled == get_settings().rag_rerank_enabled
     for removed in ("rag_generation_profile", "rag_generation_system_prompt_override"):
         assert not hasattr(settings, removed)
 
