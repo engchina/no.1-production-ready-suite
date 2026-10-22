@@ -261,7 +261,7 @@ export const ja = {
   "settings.parserAdapters.actions.unsaved": "未保存の変更があります。",
   "settings.parserAdapters.postParse.title": "解析後の処理",
   "settings.parserAdapters.postParse.description":
-    "文書解析の後に、次の順で処理します。ここで選ぶのは全体の既定です。文書のレシピで上書きしていない文書に、次の取込から使います。",
+    "文書解析の後に、次の順で処理します。ここで選ぶのは全体の既定です。文書のレシピで上書きできます。取込時の処理の変更は次の取込から、章節の抽出規則の変更は次に章節を表示するときから使います。",
   "settings.parserAdapters.postParse.step": "{index}. {name}",
   "settings.parserAdapters.postParse.vision.concurrency": "同時に説明する図・表の数",
   "settings.parserAdapters.postParse.vision.concurrencyHint":
