@@ -311,3 +311,15 @@ def test_arabic_numbers_unifies_kanji_numbers_and_thousands_separators():
     assert arabic_numbers("1,5 と 12,3456") == "1,5 と 12,3456"
     # 数を取り出すときは、直した値を隣の数字と混ぜない。
     assert arabic_numbers("一泊一万四千円", spaced=True) == " 1 泊 14000 円"
+
+
+def test_numeric_layout_gaps_and_mixed_notation():
+    from rag_parser_core.language.text import arabic_numbers
+
+    for text in ["四万八 千件", "四万八　千件", "四万八\n千件"]:
+        assert arabic_numbers(text) == "48000件"
+    for text in ["1万4千円", "1万4000円", "14,000円"]:
+        assert arabic_numbers(text, kanji=False) == "14000円"
+    assert arabic_numbers("一般と一部", kanji=False) == "一般と一部"
+    for text in ["四万\t八千", "四万  八千", "四万 八万", "一 二"]:
+        assert "48000" not in arabic_numbers(text)
