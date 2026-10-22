@@ -93,7 +93,7 @@ export interface ChatLayoutProps {
  *   lg 未満はモーダルの `SideSheet`（会話を選ぶ・Escape・scrim・閉じるボタンで閉じ、開閉ボタンへフォーカスを戻す）。
  * - 会話の領域: 上端の行（履歴の開閉・今の会話の名前・「新しい会話」）、`role="log"` の会話の欄（中だけスクロール）、
  *   入力欄の領域の 3 段。lg 未満は高さを 70dvh（最小 28rem）にし、長い会話でページを伸ばさない。lg 以上は残りの高さ
- *   （`embedded` はどの幅でも 70dvh）。
+ *   （`embedded` はどの幅でも 70dvh）。拡大・低いウィンドウでも最小 28rem を保ち、足りない分はページでスクロールする。
  * - 文言は翻訳済みを受け、業務の語彙を持たない。往復の表示・入力欄・履歴の中身は製品が渡す。
  */
 export function ChatLayout({
@@ -135,7 +135,7 @@ export function ChatLayout({
     <div
       className={cn(
         "grid min-w-0 gap-4",
-        embedded ? "h-[70dvh] min-h-[28rem]" : "lg:min-h-0 lg:flex-1",
+        embedded ? "h-[70dvh] min-h-[28rem]" : "min-h-[28rem] lg:flex-1",
         history.inline && history.inlineOpen && "lg:grid-cols-[20rem_minmax(0,1fr)]"
       )}
       data-chat-layout=""

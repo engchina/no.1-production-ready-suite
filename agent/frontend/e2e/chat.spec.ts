@@ -24,7 +24,7 @@ async function useTheme(page: Page, theme: "light" | "dark") {
 
 const THREAD_ID = `thread_${"a".repeat(32)}`;
 
-for (const viewport of [...VIEWPORTS, { name: "desktop-wide", width: 1920, height: 1080 }, { name: "desktop-short", width: 1280, height: 480 }]) {
+for (const viewport of [...VIEWPORTS, { name: "desktop-wide", width: 1920, height: 1080 }, { name: "desktop-short", width: 1280, height: 480 }, { name: "desktop-zoomed", width: 1280, height: 400 }]) {
   for (const theme of ["light", "dark"] as const) {
     test(`長い会話でもページ外へスクロールせず入力欄へ到達できる (${viewport.width === 375 ? "375px" : viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
       seedThread(mockApi, {
@@ -49,9 +49,14 @@ for (const viewport of [...VIEWPORTS, { name: "desktop-wide", width: 1920, heigh
       let measured = await dimensions();
       expect(measured.documentOverflow, JSON.stringify(measured)).toBeLessThanOrEqual(1);
       expect(measured.conversationHeight).toBeLessThan(viewport.height);
-      if (viewport.width >= 1024) {
+      if (viewport.width >= 1024 && viewport.height >= 600) {
         expect(measured.mainTop, JSON.stringify(measured)).toBe(0);
         expect(measured.mainOverflow, JSON.stringify(measured)).toBeLessThanOrEqual(1);
+      }
+      if (viewport.width >= 1024 && viewport.height < 600) {
+        // 拡大や低いウィンドウでは、会話を潰さず main の中でページもスクロールする。
+        expect(measured.mainOverflow).toBeGreaterThan(0);
+        expect(measured.conversationHeight).toBeGreaterThan(150);
       }
       // 内側の末尾で wheel を続けても document の下に空白を作らない。
       await conversation.hover();
@@ -63,7 +68,7 @@ for (const viewport of [...VIEWPORTS, { name: "desktop-wide", width: 1920, heigh
       await expect(page.getByTestId("chat-send")).toBeInViewport();
       measured = await dimensions();
       expect(measured.documentOverflow, JSON.stringify(measured)).toBeLessThanOrEqual(1);
-      if (viewport.width >= 1024) expect(measured.mainTop).toBe(0);
+      if (viewport.width >= 1024 && viewport.height >= 600) expect(measured.mainTop).toBe(0);
       // polling で完了へ変わっても外側を動かさない。
       mockApi.state.runs[0].status = "completed";
       await expect(page.getByTestId("chat-send")).toHaveAccessibleName("送信");
