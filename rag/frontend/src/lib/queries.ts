@@ -88,6 +88,7 @@ import {
   type VectorIndexSettingsUpdate,
   type EvaluationSettingsData,
   type EvaluationSettingsUpdate,
+  type EntityIndexSettingsData,
   type GraphSettingsData,
   type GraphSettingsUpdate,
   type ApprovedFaqListData,
@@ -204,6 +205,7 @@ export const queryKeys = {
   pipelineSettings: ["settings", "pipeline"] as const,
   vectorIndexSettings: ["settings", "vector-index"] as const,
   evaluationSettings: ["settings", "evaluation-suite"] as const,
+  entityIndexSettings: ["settings", "entity-index"] as const,
   graphSettings: ["settings", "graph"] as const,
   services: ["services"] as const,
   serviceCatalog: ["services", "catalog"] as const,
@@ -2050,7 +2052,27 @@ export function useExternalParserStatus(
   });
 }
 
-/** 関係情報の構築(構築する / しない)の runtime 設定。 */
+/** 名称・別名の索引を構築する全体の既定。 */
+export function useEntityIndexSettings() {
+  return useQuery({
+    queryKey: queryKeys.entityIndexSettings,
+    queryFn: api.getEntityIndexSettings,
+    retry: false,
+  });
+}
+
+export function useUpdateEntityIndexSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: EntityIndexSettingsData) => api.updateEntityIndexSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.entityIndexSettings, data);
+      void qc.invalidateQueries({ queryKey: queryKeys.pipelineSettings });
+    },
+  });
+}
+
+/** 関係情報の構築（構築する / しない）の設定。 */
 export function useGraphSettings() {
   return useQuery<GraphSettingsData>({
     queryKey: queryKeys.graphSettings,

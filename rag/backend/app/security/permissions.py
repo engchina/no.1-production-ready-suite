@@ -74,6 +74,7 @@ MENU_SETTINGS_RETRIEVAL = "menu.settings_retrieval"
 MENU_SETTINGS_PROMPTS = "menu.settings_prompts"
 MENU_SETTINGS_GUARDRAIL = "menu.settings_guardrail"
 MENU_SETTINGS_EVALUATION = "menu.settings_evaluation"
+MENU_SETTINGS_ENTITY_INDEX = "menu.settings_entity_index"
 MENU_SETTINGS_GRAPH = "menu.settings_graph"
 MENU_SETTINGS_SYSTEM_TABLES = "menu.settings_system_tables"
 MENU_SETTINGS_HUGGINGFACE = "menu.settings_huggingface"
@@ -136,6 +137,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SETTINGS_PARSER_ADAPTERS, _GROUP_PIPELINE, "文書解析"),
     _menu_permission(MENU_SETTINGS_CHUNKING, _GROUP_PIPELINE, "文書分割"),
     _menu_permission(MENU_SETTINGS_VECTOR_INDEX, _GROUP_PIPELINE, "検索インデックス"),
+    _menu_permission(MENU_SETTINGS_ENTITY_INDEX, _GROUP_PIPELINE, "名称・別名の索引"),
     _menu_permission(MENU_SETTINGS_GRAPH, _GROUP_PIPELINE, "関係情報の構築"),
     _menu_permission(MENU_SETTINGS_RETRIEVAL, _GROUP_PIPELINE, "検索方法"),
     _menu_permission(MENU_SETTINGS_PROMPTS, _GROUP_PIPELINE, "回答プロンプト"),
@@ -634,6 +636,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # 品質評価の画面は評価設定（既定値）を読む。
     ("GET", "/settings/evaluation-suite"): _any(MENU_SETTINGS_EVALUATION, MENU_EVALUATION),
     ("PATCH", "/settings/evaluation-suite"): _any(MENU_SETTINGS_EVALUATION),
+    ("GET", "/settings/entity-index"): _any(MENU_SETTINGS_ENTITY_INDEX),
+    ("PATCH", "/settings/entity-index"): _any(MENU_SETTINGS_ENTITY_INDEX),
     ("GET", "/settings/graph"): _any(MENU_SETTINGS_GRAPH),
     ("PATCH", "/settings/graph"): _any(MENU_SETTINGS_GRAPH),
     # ---- ユーザーとロール（platform の共通 router。NL2SQL と同じ割り当て）----

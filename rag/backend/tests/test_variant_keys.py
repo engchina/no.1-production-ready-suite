@@ -276,7 +276,10 @@ def test_chunk_set_id_is_unchanged_by_the_599_rename() -> None:
     期待値は改名の前のコード(値 docrag_small_to_big・属性 rag_docrag_*)で計算した ID。
     変わると、すべての文書の Chunk と embedding を作り直すことになる。
     """
-    base = Settings(_env_file=None)
+    # 改名時の明示設定で比較し、その後の既定値変更から独立させる。
+    base = Settings(
+        _env_file=None, rag_chunk_context_header_enabled=True, rag_entity_index_enabled=True
+    )
     small_to_big = base.model_copy(update={"rag_chunking_strategy": "small_to_big"})
     tuned = small_to_big.model_copy(
         update={"rag_chunk_child_target_chars": 600, "rag_chunk_parent_max_pages": 2}

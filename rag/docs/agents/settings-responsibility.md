@@ -29,6 +29,8 @@ KB は **どの文書を検索対象にするか（membership）だけ**を持�
 
 文書の KB 出し入れは `rag_document_knowledge_bases` の行 add/delete **のみ**で、chunk へ波及しない（再プラン / materialize / GC を起こさない）。KB UI から preprocess / parser / chunking・検索方法・安全チェック・品質評価を出さない。KB の legacy adapter/query config は読み取りのみ許容し、runtime では使わず、次回保存で再保存しない。
 
+名称・別名の索引は全体の専用設定画面（`/settings/entity-index`）で構築の既定を選び、文書レシピで上書きする。既定は OFF。文脈ヘッダも文書分割画面で既定（OFF）を選び、small-to-big を含め文書レシピで上書きする。既存の明示設定は維持し、変更を既存の文書へ反映するには該当工程から再処理する。検索インデックスへの導線は共有の全体設定だけを開き、文書レシピの上書きにはしない。
+
 ### Search Answer Profile
 
 Search Answer Profile は **検索・回答に使う設定だけ**を持つ。

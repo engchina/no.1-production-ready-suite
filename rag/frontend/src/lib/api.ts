@@ -1051,8 +1051,8 @@ export interface KnowledgeBaseIngestionConfig {
   chunk_parent_max_children?: number | null;
   graph_profile: GraphProfileName | null;
   /**
-   * 実体の索引（#1362 / #1388）。索引の保存の後に、表の行・本文の定義の形から実体を作る。null は全体の
-   * 既定（有効）に従う。列名は表の行の名前・属性にする列（空は列名で決める）。
+   * 名称・別名の索引（#1362 / #1388）。索引の保存の後に、表の行・本文の定義の形から実体を作る。null は全体の
+   * 既定（無効）に従う。列名は表の行の名前・属性にする列（空は列名で決める）。
    */
   entity_index_enabled?: boolean | null;
   entity_name_columns?: string[] | null;
@@ -1085,7 +1085,7 @@ export interface KnowledgeBaseQueryConfig {
   auto_field_filter_enabled?: boolean | null;
   /**
    * 実体でつながる根拠を 1 段広げる(#1388。LLM は呼ばない)。null / 未指定は既定(使う。#1402)、false は使わない。
-   * 文書レシピで実体の索引を有効にした文書にだけ効く。
+   * 文書レシピで名称・別名の索引を有効にした文書にだけ効く。
    */
   entity_expansion_enabled?: boolean | null;
   /** 1 回の検索で加える根拠の上限(1〜20)。null は既定(6)。 */
@@ -1127,7 +1127,7 @@ export interface InheritedAnswerContactData {
   contact: string;
 }
 
-/** 参照するナレッジベースで実体の索引を持つ文書の数(#1388)。 */
+/** 参照するナレッジベースで名称・別名の索引を持つ文書の数(#1388)。 */
 export interface EntityIndexCoverageData {
   document_count: number;
 }
@@ -2633,6 +2633,10 @@ export interface GraphProfileStatusData {
   selected: boolean;
 }
 
+export interface EntityIndexSettingsData {
+  enabled: boolean;
+}
+
 export interface GraphSettingsData {
   profile: GraphProfileName;
   enabled: boolean;
@@ -3542,7 +3546,7 @@ export const api = {
   /** 継承するシステム設定の窓口（プロファイルの画面の権限で読む。#2683）。 */
   getInheritedAnswerContact: () =>
     request<InheritedAnswerContactData>("/api/search-answer-profiles/inherited-contact"),
-  /** 参照するナレッジベースで実体の索引を持つ文書の数(拡張の開閉の案内。#1388)。 */
+  /** 参照するナレッジベースで名称・別名の索引を持つ文書の数(拡張の開閉の案内。#1388)。 */
   entityIndexCoverage: (knowledgeBaseIds: string[]) =>
     request<EntityIndexCoverageData>(
       "/api/search-answer-profiles/entity-index-coverage",
@@ -4203,6 +4207,9 @@ export const api = {
     }),
 
   // 設定: 関係情報の構築
+  getEntityIndexSettings: () => request<EntityIndexSettingsData>("/api/settings/entity-index"),
+  updateEntityIndexSettings: (body: EntityIndexSettingsData) =>
+    request<EntityIndexSettingsData>("/api/settings/entity-index", { method: "PATCH", body: JSON.stringify(body) }),
   getGraphSettings: () => request<GraphSettingsData>("/api/settings/graph"),
   updateGraphSettings: (body: GraphSettingsUpdate) =>
     request<GraphSettingsData>("/api/settings/graph", {

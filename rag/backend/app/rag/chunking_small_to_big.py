@@ -472,10 +472,15 @@ def _items(value: object) -> list[object]:
     return list(value) if isinstance(value, list) else []
 
 
-def engine_search_text(metadata: Mapping[str, object]) -> str | None:
-    """親子階層の chunk の検索用 text(Oracle Text / embedding 入力)を返す。"""
+def engine_search_text(
+    metadata: Mapping[str, object], *, include_context_header: bool = True
+) -> str | None:
+    """親子階層の検索用 text に、選択された文脈ヘッダを付ける。"""
     value = metadata.get(ENGINE_SEARCH_TEXT_KEY)
-    return value if isinstance(value, str) and value.strip() else None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    header = str(metadata.get("context_header") or "").strip() if include_context_header else ""
+    return f"{header}\n{value}" if header and not value.startswith(f"{header}\n") else value
 
 
 def _backend_chunk(

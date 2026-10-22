@@ -126,6 +126,8 @@ from app.schemas.settings import (
     ChunkingSettingsData,
     ChunkingSettingsUpdate,
     ChunkingStrategyStatusData,
+    EntityIndexSettingsData,
+    EntityIndexSettingsUpdate,
     EvaluationSettingsData,
     EvaluationSettingsUpdate,
     EvaluationSuiteStatusData,
@@ -852,6 +854,30 @@ async def update_evaluation_settings(
     _persist_evaluation_settings(candidate)
     settings.rag_evaluation_suite = candidate.rag_evaluation_suite
     return ApiResponse(data=_evaluation_settings_data(settings))
+
+
+@router.get("/entity-index", response_model=ApiResponse[EntityIndexSettingsData])
+async def get_entity_index_settings() -> ApiResponse[EntityIndexSettingsData]:
+    """名称・別名の索引を構築する全体の既定を返す。"""
+    return ApiResponse(
+        data=EntityIndexSettingsData(enabled=get_settings().rag_entity_index_enabled)
+    )
+
+
+@router.patch("/entity-index", response_model=ApiResponse[EntityIndexSettingsData])
+async def update_entity_index_settings(
+    payload: EntityIndexSettingsUpdate,
+) -> ApiResponse[EntityIndexSettingsData]:
+    """保存に成功した場合だけ現在プロセスの設定も更新する。"""
+    settings = get_settings()
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_ENTITY_INDEX_ENABLED": str(payload.enabled).lower()},
+        section_comment="# 名称・別名の索引",
+        error_detail="名称・別名の索引の設定を保存できませんでした。",
+    )
+    settings.rag_entity_index_enabled = payload.enabled
+    return ApiResponse(data=EntityIndexSettingsData(enabled=payload.enabled))
 
 
 @router.get("/graph", response_model=ApiResponse[GraphSettingsData])

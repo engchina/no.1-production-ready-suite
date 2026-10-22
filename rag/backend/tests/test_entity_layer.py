@@ -467,10 +467,11 @@ def test_mcp_orders_entity_expansion_with_ranked_evidence() -> None:
 # ---- 設定・レシピ ----
 
 
-def test_settings_default_on_for_the_recipe_and_the_expansion() -> None:
+def test_settings_default_off_for_recipe_and_on_for_expansion() -> None:
     settings = Settings()
-    # 抽出は既定 ON（#1388。決定的な規則だけで LLM を呼ばない）。
-    assert settings.rag_entity_index_enabled is True
+    # 索引の構築は既定 OFF。検索時の拡張とは別に設定する。
+    assert settings.rag_entity_index_enabled is False
+    assert settings.rag_chunk_context_header_enabled is False
     assert settings.rag_entity_name_columns == []
     assert settings.rag_entity_attribute_columns == []
     # 拡張も既定 ON（#1402。#1362 の再評価で基準を満たした）。止めるのは検索・回答プロファイルで。
@@ -768,17 +769,20 @@ async def _save_index(settings: Settings) -> _IngestOracle:
     return oracle
 
 
-async def test_recipe_without_entity_index_does_not_touch_the_entity_tables() -> None:
-    """文書レシピで実体の索引を無効にした文書は、実体の表に触らない（SQL も実行しない）。"""
-    oracle = await _save_index(Settings(rag_graph_profile="off", rag_entity_index_enabled=False))
+@pytest.mark.parametrize("overrides", [{}, {"rag_entity_index_enabled": False}])
+async def test_recipe_without_entity_index_does_not_touch_the_entity_tables(
+    overrides: dict[str, bool],
+) -> None:
+    """未指定・明示 OFF はいずれも実体の表に触らない（SQL も実行しない）。"""
+    oracle = await _save_index(Settings(rag_graph_profile="off", **overrides))
 
     assert oracle.saved == [ORG]
     assert oracle.transactions == 0
 
 
-async def test_default_recipe_saves_the_entity_index_after_the_index() -> None:
-    """実体の索引は既定 ON（#1388）。列の指定が無くても、索引の保存の後に実体を保存する。"""
-    oracle = await _save_index(Settings(rag_graph_profile="off"))
+async def test_enabled_recipe_saves_the_entity_index_after_the_index() -> None:
+    """構築を選んだときだけ、列の指定が無くても索引を保存する。"""
+    oracle = await _save_index(Settings(rag_graph_profile="off", rag_entity_index_enabled=True))
 
     assert oracle.saved == [ORG]
     assert oracle.transactions == 1

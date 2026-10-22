@@ -21,6 +21,7 @@ import {
   Server,
   ShieldAlert,
   TableProperties,
+  Tags,
   ThumbsUp,
   Upload,
   Waypoints,
@@ -176,6 +177,12 @@ export const NAV_SECTIONS: NavSection[] = [
         sidebarLabelKey: "nav.settingsVectorIndex.sidebar",
         icon: Layers3,
         permission: MENU_PERMISSIONS.settingsVectorIndex,
+      },
+      {
+        href: APP_ROUTES.settingsEntityIndex,
+        labelKey: "nav.settingsEntityIndex",
+        icon: Tags,
+        permission: MENU_PERMISSIONS.settingsEntityIndex,
       },
       {
         href: APP_ROUTES.settingsGraph,

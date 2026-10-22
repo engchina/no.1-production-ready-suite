@@ -82,7 +82,7 @@ for (const viewport of [
       "回答モデル",
       "手順ごとの検索の上限",
       "手順ごとの検索の時間上限（秒）",
-      "実体でつながる根拠",
+      "名称・別名でつながる根拠",
       "章節で広げる根拠",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
@@ -294,7 +294,7 @@ async function mockEntityIndexCoverage(
   return requests;
 }
 
-test("実体でつながる根拠の開閉と上限を保存し、実体の索引の無い参照先では案内する", async ({ page }) => {
+test("名称・別名でつながる根拠の開閉と上限を保存し、名称・別名の索引の無い参照先では案内する", async ({ page }) => {
   let createBody = null as Record<string, unknown> | null;
   await mockSearchAnswerProfiles(page, [], (body) => {
     createBody = body;
@@ -310,10 +310,10 @@ test("実体でつながる根拠の開閉と上限を保存し、実体の索�
   await page.goto("/search-answer-profiles?id=new");
 
   const entity = page.getByTestId("search-answer-profile-entity-expansion");
-  const toggle = entity.getByRole("switch", { name: "実体でつながる根拠を 1 段広げる" });
+  const toggle = entity.getByRole("switch", { name: "名称・別名でつながる根拠を 1 段広げる" });
   // 既定は on（#1402。このプロファイルの検索だけに効く）。上限は on のときだけ出す。
   await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await expect(toggle).toHaveAccessibleDescription(/文書レシピで実体の索引を有効にした文書にだけ効きます/);
+  await expect(toggle).toHaveAccessibleDescription(/文書レシピで名称・別名の索引を有効にした文書にだけ効きます/);
   await expect(toggle).toHaveAccessibleDescription(/既定は有効で、このプロファイルの検索だけに効きます/);
   const maxChunks = entity.getByRole("combobox", { name: "1 回の検索で加える根拠の上限" });
   await expect(maxChunks).toHaveText(/6 件（既定）/);
@@ -330,10 +330,10 @@ test("実体でつながる根拠の開閉と上限を保存し、実体の索�
   await expect(coverage).toHaveCount(0);
   release();
   await expect(coverage).toHaveText(
-    "参照先のナレッジベースに、実体の索引のある文書がありません。文書レシピで実体の索引を有効にすると効きます。"
+    "参照先のナレッジベースに、名称・別名の索引のある文書がありません。文書レシピで名称・別名の索引を有効にすると効きます。"
   );
 
-  await expect(toggle).toHaveAccessibleDescription(/実体の索引のある文書がありません/);
+  await expect(toggle).toHaveAccessibleDescription(/名称・別名の索引のある文書がありません/);
   await maxChunks.click();
   await page.getByRole("option", { name: "10 件", exact: true }).click();
   await expect(maxChunks).toHaveText(/10 件/);
@@ -364,7 +364,7 @@ test("実体でつながる根拠の開閉と上限を保存し、実体の索�
   expect(query.entity_expansion_max_chunks).toBe(10);
 });
 
-test("実体の索引のある参照先・数えられないときは案内を出さず、off は false で保存して上限も外す", async ({ page }) => {
+test("名称・別名の索引のある参照先・数えられないときは案内を出さず、off は false で保存して上限も外す", async ({ page }) => {
   let createBody = null as Record<string, unknown> | null;
   await mockSearchAnswerProfiles(page, [], (body) => {
     createBody = body;
@@ -377,7 +377,7 @@ test("実体の索引のある参照先・数えられないときは案内を�
   await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
 
   const entity = page.getByTestId("search-answer-profile-entity-expansion");
-  const toggle = entity.getByRole("switch", { name: "実体でつながる根拠を 1 段広げる" });
+  const toggle = entity.getByRole("switch", { name: "名称・別名でつながる根拠を 1 段広げる" });
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await expect(entity.getByRole("combobox", { name: "1 回の検索で加える根拠の上限" })).toBeVisible();
   await expect(entity.getByTestId("search-answer-profile-entity-expansion-coverage")).toHaveCount(0);

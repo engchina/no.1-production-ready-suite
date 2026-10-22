@@ -1,4 +1,5 @@
 import {
+  ButtonLink,
   FormActionBar,
   FormStatus,
   Skeleton,
@@ -7,7 +8,6 @@ import {
 } from "@production-ready/ui";
 import { ArrowDown, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router-dom";
 
 import {
   globalSettingsHref,
@@ -27,6 +27,7 @@ import {
 import { t, type I18nKey } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { usePipelineSettings, useUpdatePipelineSettings } from "@/lib/queries";
+import { APP_ROUTES } from "@/lib/routes";
 import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
 import { toast } from "@/lib/toast";
 
@@ -214,9 +215,22 @@ function PhaseCard({
         {t("documents.processingConfig.phaseHeading", { index: group.index, phase: t(group.label) })}
       </h3>
       <dl className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        {group.phase === "INDEX" ? (
+          <div data-config-field="vector_index" className="min-w-0 rounded-md border border-border bg-surface-sunken px-3 py-2">
+            <dt className="text-xs text-fg-muted">{t("nav.settingsVectorIndex")}</dt>
+            <dd className="mt-0.5 text-sm text-fg">{t("settings.vectorIndex.subtitle")}</dd>
+            {canOpenNavRoute(APP_ROUTES.settingsVectorIndex, hasPermission) ? (
+              <dd className="mt-1">
+                <ButtonLink to={APP_ROUTES.settingsVectorIndex} variant="ghost" size="sm" aria-label={t("settings.pipeline.flow.openSettingsAria", { name: t("nav.settingsVectorIndex") })}>
+                  {t("settings.pipeline.flow.openSettings")}
+                </ButtonLink>
+              </dd>
+            ) : null}
+          </div>
+        ) : null}
         {items.map((item) => {
           const name = t(item.label);
-          // 全体の既定を変える画面の無い項目（実体の索引。#1388）はリンクを出さない。
+          // 権限のある設定画面への導線だけを出す。
           const href =
             item.globalSettings && canOpenNavRoute(item.globalSettings.route, hasPermission)
               ? globalSettingsHref(item)
@@ -233,13 +247,14 @@ function PhaseCard({
               </dd>
               {href ? (
                 <dd className="mt-1">
-                  <Link
+                  <ButtonLink
                     to={href}
                     aria-label={t("settings.pipeline.flow.openSettingsAria", { name })}
-                    className="inline-flex min-h-6 items-center text-xs font-medium text-accent-fg underline-offset-2 hover:underline"
+                    variant="ghost"
+                    size="sm"
                   >
                     {t("settings.pipeline.flow.openSettings")}
-                  </Link>
+                  </ButtonLink>
                 </dd>
               ) : null}
             </div>

@@ -616,7 +616,7 @@ class ChunkingSettingsUpdate(BaseModel):
     overlap: int = Field(default=120, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     min_chars: int = Field(default=120, ge=0, le=2000)
     delimiter: str = Field(default=JSONL_RECORD_BOUNDARY, min_length=1, max_length=256)
-    context_header_enabled: bool = True
+    context_header_enabled: bool = False
     chunk_child_target_chars: int = Field(
         default=CHUNK_CHILD_TARGET_CHARS_DEFAULT,
         ge=CHUNK_CHILD_TARGET_CHARS_MIN,
@@ -921,6 +921,18 @@ class GraphProfileStatusData(BaseModel):
 
     name: GraphProfileName
     selected: bool
+
+
+class EntityIndexSettingsData(BaseModel):
+    """名称・別名の索引を構築する全体の既定。"""
+
+    enabled: bool
+
+
+class EntityIndexSettingsUpdate(BaseModel):
+    """文書レシピで上書きできる索引構築の既定。"""
+
+    enabled: bool
 
 
 class GraphSettingsData(BaseModel):

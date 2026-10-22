@@ -28,6 +28,7 @@ export const MENU_PERMISSIONS = {
   settingsPrompts: "menu.settings_prompts",
   settingsGuardrail: "menu.settings_guardrail",
   settingsEvaluation: "menu.settings_evaluation",
+  settingsEntityIndex: "menu.settings_entity_index",
   settingsGraph: "menu.settings_graph",
   settingsSystemTables: "menu.settings_system_tables",
   settingsHuggingface: "menu.settings_huggingface",

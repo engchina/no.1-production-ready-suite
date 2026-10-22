@@ -65,7 +65,7 @@ const effectiveBase: DocumentProcessingConfig = {
   parser_adapter_backend: "docling",
   chunking_strategy: "page_level",
   graph_profile: "off",
-  // 実体の索引は全体の既定で有効（#1388）。
+  // 全体で明示的に有効にした設定の継承・上書きを確かめる。
   entity_index_enabled: true,
   entity_name_columns: [],
   entity_attribute_columns: [],
@@ -469,8 +469,8 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
   });
 });
 
-// #1388: 実体の索引（文書レシピ。全体の既定は有効）と、その列を画面で選んで保存する。
-test("実体の索引は既定で有効で、名前・属性の列を選んで保存でき、無効にもできる", async ({ page }) => {
+// #1388: 名称・別名の索引（文書レシピ。全体の既定は有効）と、その列を画面で選んで保存する。
+test("名称・別名の索引は全体が有効なら継承し、列の上書きと無効化を保存できる", async ({ page }) => {
   const state = await mockWorkspace(page);
   await page.goto("/documents/doc-1");
   const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
@@ -480,7 +480,7 @@ test("実体の索引は既定で有効で、名前・属性の列を選んで�
   const editor = panel.getByTestId("document-processing-config-editor-items");
   const entityRow = editor.locator('[data-config-field="entity_index_enabled"]');
   await expect(entityRow).toContainText("グローバル設定に従う: 有効");
-  await expect(entityRow).toContainText("全体の既定は有効で");
+  await expect(entityRow).toContainText("全体の既定は無効です。");
   // 有効（継承）のあいだは列の行を出し、列は全体の既定（列名で決める）に従う。
   const columns = panel.getByTestId("document-entity-columns");
   await expect(columns.getByTestId("document-entity-columns-inherited")).toContainText(
@@ -517,7 +517,7 @@ test("実体の索引は既定で有効で、名前・属性の列を選んで�
     entity_attribute_columns: ["担当部署", "重要度"],
   });
 
-  // 列を継承に戻し、実体の索引を無効にして保存する。
+  // 列を継承に戻し、名称・別名の索引を無効にして保存する。
   await columns.getByText("グローバルを継承", { exact: true }).click();
   await entityRow.getByText("無効", { exact: true }).click();
   await panel.getByRole("button", { name: "構築設定を保存" }).click();
@@ -546,10 +546,9 @@ const PROCESSING_ORDER = [
   "entity_index_enabled",
   "graph_profile",
 ];
-// 全体の既定を変える画面を持たない項目（実体の索引は文書ごとに選ぶ。#1388）。
-const NO_GLOBAL_SETTINGS_FIELDS = ["entity_index_enabled"];
-const GLOBAL_LINK_COUNT = PROCESSING_ORDER.length - NO_GLOBAL_SETTINGS_FIELDS.length;
-// 上書きの一覧は、実体の索引が有効（全体の既定）のとき、その右に「実体の索引の列」の行を出す。
+// 名称・別名の索引も専用画面への導線を持つ。
+const GLOBAL_LINK_COUNT = PROCESSING_ORDER.length;
+// 上書きの一覧は、名称・別名の索引が有効（全体の既定）のとき、その右に「名称・別名の索引の列」の行を出す。
 const EDITOR_ORDER = PROCESSING_ORDER.flatMap((field) =>
   field === "entity_index_enabled" ? [field, "entity_columns"] : [field]
 );

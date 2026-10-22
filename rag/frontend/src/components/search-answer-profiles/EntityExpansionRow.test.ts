@@ -9,7 +9,7 @@ import {
 } from "./EntityExpansionRow";
 
 // #1388: 実体の 1 段の拡張は検索・回答プロファイルで選ぶ（環境変数は持たない）。既定は on（#1402）。
-describe("実体でつながる根拠を 1 段広げる", () => {
+describe("名称・別名でつながる根拠を 1 段広げる", () => {
   it("on は既定（null）に戻し、off だけを false で保存して、どちらも上限を外す", () => {
     expect(entityExpansionPatch(true)).toEqual({
       entity_expansion_enabled: null,

@@ -67,7 +67,7 @@ for (const viewport of [
       "最小 chunk 文字数",
     ]);
     await expectStrategyParams(page, /親子階層（small-to-big）/, SMALL_TO_BIG_LABELS);
-    await expect(page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" })).toHaveCount(0);
+    await expect(page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" })).toBeVisible();
     await expect(page.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true })).toHaveValue("1000");
     await expect(page.getByRole("spinbutton", { name: "表の子チャンク目標文字数", exact: true })).toHaveValue("3000");
     await expect(page.getByRole("spinbutton", { name: "親チャンク目標文字数", exact: true })).toHaveValue("6000");
@@ -486,4 +486,23 @@ test("文書分割の設定は、方式を切り替えて隠れた欄の不正�
   await expect(page.getByText("文書分割の設定を保存しました。")).toBeVisible();
   // 隠れた欄は保存済みの値で送る（空を null として送ると backend が英語の 422 を返す）。
   expect(savedPayload).toMatchObject({ strategy: "small_to_big", min_chars: 120 });
+});
+
+test("small-to-big でも文脈ヘッダを既定 OFF から切り替えて保存できる", async ({ page }) => {
+  let enabled = false;
+  await page.route("**/api/settings/chunking", async (route) => {
+    if (route.request().method() === "PATCH") enabled = route.request().postDataJSON().context_header_enabled;
+    await route.fulfill({ json: chunkingEnvelope({ strategy: "small_to_big", context_header_enabled: enabled }) });
+  });
+  await page.goto("/settings/chunking");
+  const toggle = page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" });
+  await expect(toggle).not.toBeChecked();
+  for (const next of [true, false]) {
+    await toggle.click();
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+    await page.reload();
+    await expect(toggle).toBeChecked({ checked: next });
+  }
+  await expectNoPageOverflow(page);
 });
