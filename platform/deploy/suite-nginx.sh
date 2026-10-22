@@ -81,7 +81,7 @@ SUITE_NL2SQL_LONG_API_PATHS=(
   'nl2sql/db-admin/analyze-error'
   'nl2sql/db-admin/extract-join-where'
   'nl2sql/db-admin-chat/generate'
-  'nl2sql/db-admin-chat/analyze-error'
+  'nl2sql/db-admin-chat/conversations/[^/]+/turns/[^/]+/analyze-error'
 )
 # Agent: ツールを同期で呼ぶ API（RAG の rag_search などの外部 MCP を待つ）。Run は非同期で、進み具合は SSE。
 # shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
