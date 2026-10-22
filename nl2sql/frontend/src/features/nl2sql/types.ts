@@ -1454,8 +1454,18 @@ export interface DbAdminChatSendData {
   turn: DbAdminChatTurn;
 }
 
+export interface DbAdminChatCorrectionAttempt {
+  statement_index: number;
+  revision: number;
+  sql: string;
+  error_code: string;
+  error_summary: string;
+  executed_at: string;
+}
+
 /** DB 管理チャットの失敗の分析と直した SQL。 */
 export interface DbAdminChatAnalyzeData {
+  previous_attempts: DbAdminChatCorrectionAttempt[];
   analysis: string;
   corrected_plan: DbAdminChatPlan | null;
   source: string;

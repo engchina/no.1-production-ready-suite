@@ -216,6 +216,8 @@ const nl2sqlJa = {
   "dbAdminChat.analyze": "AI でエラーを分析",
   "dbAdminChat.analyze.running": "エラーを分析しています",
   "dbAdminChat.analyze.failed": "エラーを分析できませんでした。",
+  "dbAdminChat.analyze.history": "これまでの修正（{count} 回）",
+  "dbAdminChat.analyze.revision": "版 {revision}",
   "dbAdminChat.analyze.title": "AI のエラー分析",
   "dbAdminChat.analyze.corrected": "修正した SQL",
   "dbAdminChat.analyze.useCorrected": "修正した SQL を使う",

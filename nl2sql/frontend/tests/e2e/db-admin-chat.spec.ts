@@ -365,7 +365,7 @@ async function setup(
       },
     });
   });
-  await page.route("**/api/nl2sql/db-admin-chat/analyze-error", (route) => {
+  await page.route("**/api/nl2sql/db-admin-chat/conversations/*/turns/*/analyze-error", (route) => {
     mock.analyzeBodies.push(body(route.request()));
     return route.fulfill({ json: { data: analyze } });
   });
@@ -740,7 +740,7 @@ test("SELECT 以外は実行確認語を入れたときだけ実行し、失敗�
 
   await turn.getByTestId("db-admin-chat-analyze").click();
   await expect(turn.getByTestId("db-admin-chat-corrected-sql")).toHaveText(corrected);
-  expect(mock.analyzeBodies[0]).toMatchObject({ sql, question: "在庫が 0 の行を消す" });
+  expect(mock.analyzeBodies[0]).toEqual({ statement_index: 1 });
   await turn.getByTestId("db-admin-chat-use-corrected").click();
   // 直した SQL はサーバーがその文を置き換えて分類し直す。
   await expect.poll(() => mock.planBodies).toEqual([{ sql: corrected, statement_index: 1 }]);
@@ -800,7 +800,7 @@ test("参照するオブジェクトに無い列の文は実際の列を添え�
   // 実行の前に止めた文も、止めた理由を渡して AI のエラー分析で直せる。
   await turn.getByTestId("db-admin-chat-analyze").click();
   await expect(turn.getByTestId("db-admin-chat-corrected-sql")).toHaveText(corrected);
-  expect(mock.analyzeBodies[0]).toMatchObject({ sql, result_text: reason });
+  expect(mock.analyzeBodies[0]).toEqual({ statement_index: 1 });
   await turn.getByTestId("db-admin-chat-use-corrected").click();
   await expect.poll(() => mock.planBodies).toEqual([{ sql: corrected, statement_index: 1 }]);
   const updated = page.getByTestId("db-admin-chat-turn").first();
@@ -1028,4 +1028,45 @@ test("回答の注意書きを SQL の後に出す", { tag: "@responsive" }, asy
   ]);
   expect(noticeBox!.y).toBeGreaterThan(sqlBox!.y);
   await expectNoHorizontalOverflow(page);
+});
+
+
+test("修正後の再分析は履歴を表示し、同じ SQL の警告では適用を出さない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const analysis: Json = {
+    analysis: "修正案です。", corrected_plan: plan("DELETE FROM T2"),
+    source: "oci_enterprise_ai", model: "test-text-model", warnings: [], previous_attempts: [],
+  };
+  const mock = await setup(page, {
+    responses: [generated(plan("DELETE FROM T1"))],
+    execute: (_request, turn) => mutationResult(turn.plan.sql, false),
+    analyze: analysis,
+  });
+  await page.goto("/db-admin-chat");
+  await ask(page, "合成の行を削除する");
+  let turn = page.getByTestId("db-admin-chat-turn").first();
+  await turn.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
+  await turn.getByTestId("db-admin-chat-execute").click();
+  await turn.getByTestId("db-admin-chat-analyze").click();
+  await expect(turn.getByTestId("db-admin-chat-use-corrected")).toBeVisible();
+  await turn.getByTestId("db-admin-chat-use-corrected").click();
+  turn = page.getByTestId("db-admin-chat-turn").first();
+  await expect(turn.getByTestId("db-admin-chat-sql")).toHaveText("DELETE FROM T2");
+  analysis.corrected_plan = null;
+  analysis.warnings = ["前に試して失敗した SQL と同じ修正しか得られませんでした。"];
+  analysis.previous_attempts = [{ statement_index: 1, revision: 0, sql: "DELETE FROM T1", error_code: "ORA-00942", error_summary: "ORA-00942: synthetic failure", executed_at: "2026-10-22" }];
+  await turn.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
+  await turn.getByTestId("db-admin-chat-execute").click();
+  await turn.getByTestId("db-admin-chat-analyze").click();
+  await expect(turn.getByTestId("db-admin-chat-analysis")).toContainText("同じ修正しか得られませんでした");
+  await expect(turn.getByTestId("db-admin-chat-use-corrected")).toHaveCount(0);
+  await turn.getByText("これまでの修正（1 回）", { exact: true }).click();
+  await expect(turn.getByText("版 0", { exact: true })).toBeVisible();
+  await expect(turn.getByText("ORA-00942: synthetic failure", { exact: true })).toBeVisible();
+  await expect(turn.getByTestId("db-admin-chat-analysis")).toContainText("DELETE FROM T1");
+  const previousSql = turn.getByTestId("db-admin-chat-analysis").getByText("DELETE FROM T1", { exact: true });
+  await previousSql.scrollIntoViewIfNeeded();
+  await expect(previousSql).toBeVisible();
+  expect(mock.analyzeBodies).toEqual([{ statement_index: 1 }, { statement_index: 1 }]);
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("correction-history.png"), fullPage: true });
 });

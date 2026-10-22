@@ -14,6 +14,7 @@ import {
   createOptimisticChatMessage,
   DEFAULT_PAGE_SIZE,
   EmptyState,
+  Disclosure,
   ExecutionConfirmationField,
   MarkdownText,
   ProcessingIndicator,
@@ -32,7 +33,7 @@ import {
   useWorkspaceState,
 } from "@/components/WorkspaceState";
 import { useAuth } from "@/features/security/AuthProvider";
-import { ApiError, apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
@@ -63,7 +64,6 @@ import {
   dbAdminChatSavedExecutions,
   dbAdminChatStatementKind,
   dbAdminExecutionSucceeded,
-  dbAdminFailureText,
   type DbAdminChatExecution,
   type DbAdminChatRunAll,
   type DbAdminChatTurnExecutions,
@@ -814,18 +814,11 @@ function DbAdminChatStatement({
 
   const analyze = async () => {
     setAnalysis({ status: "running" });
-    const resultText = result
-      ? dbAdminFailureText(result)
-      : executeError instanceof ApiError
-        ? executeError.message
-        : executeError
-          ? String(executeError)
-          : statement.blocked_reason;
     try {
       // 失敗した文だけを分析に渡す（直した SQL はこの文だけを置き換える。#2333）。
       const data = await apiPost<DbAdminChatAnalyzeData>(
-        "/api/nl2sql/db-admin-chat/analyze-error",
-        { question: turn.question, sql: statement.sql, result_text: resultText },
+        `${conversationPath(conversationId)}/turns/${encodeURIComponent(turn.turn_id)}/analyze-error`,
+        { statement_index: statement.index },
         { timeoutMs: API_TIMEOUT_MS.longRunningJob },
       );
       setAnalysis({ status: "done", data });
@@ -1032,6 +1025,19 @@ function AnalysisPanel({
         <>
           <p className="text-sm font-medium text-fg">{t("dbAdminChat.analyze.title")}</p>
           <MarkdownText text={analysis.data.analysis} />
+          {(analysis.data.previous_attempts?.length ?? 0) > 0 ? (
+            <Disclosure summary={t("dbAdminChat.analyze.history", { count: analysis.data.previous_attempts.length })}>
+              <div className="min-w-0 space-y-3">
+                {analysis.data.previous_attempts.map((attempt) => (
+                  <div key={`${attempt.statement_index}-${attempt.revision}`} className="min-w-0 space-y-2">
+                    <p className="text-sm font-medium">{t("dbAdminChat.analyze.revision", { revision: attempt.revision })}</p>
+                    <p className="break-words text-sm text-fg-muted">{attempt.error_summary}</p>
+                    <ChatSqlBlock labels={SQL_BLOCK_LABELS} sql={attempt.sql} badges={null} />
+                  </div>
+                ))}
+              </div>
+            </Disclosure>
+          ) : null}
           {analysis.data.corrected_plan && analysis.data.corrected_plan.statements.length > 0 ? (
             <>
               <p className="text-sm font-medium text-fg">{t("dbAdminChat.analyze.corrected")}</p>

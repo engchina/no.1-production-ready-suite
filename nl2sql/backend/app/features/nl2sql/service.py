@@ -69,6 +69,12 @@ from pydantic import Field as PydanticField
 
 from app import settings as app_settings
 from app.clients.oracle_diagnostics import oracle_connection_diagnostics
+from app.features.nl2sql.db_admin_chat_corrections import (
+    ATTEMPT_LIMIT,
+    SQL_CONTEXT_CHARS,
+    record_failures,
+    sql_identity,
+)
 from app.security.request_actor import (
     actor_scope,
     current_actor_context,
@@ -17923,49 +17929,100 @@ class Nl2SqlService:
         )
 
     def analyze_db_admin_chat_failure(
-        self, request: DbAdminChatAnalyzeRequest
+        self,
+        conversation_id: str,
+        turn_id: str,
+        request: DbAdminChatAnalyzeRequest,
+        *,
+        actor: str,
+        all_users: bool,
     ) -> DbAdminChatAnalyzeData:
-        """失敗の原因と直した SQL（直した SQL も分類し、確認からやり直す）。"""
-
+        """保存した失敗を分析し、すでに失敗した SQL へ戻る修正は返さない。"""
         self._require_db_admin_chat_permission()
+        turn = self._db_admin_chat_turn(conversation_id, turn_id, actor=actor, all_users=all_users)
+        statement = next(
+            (s for s in turn.plan.statements if s.index == request.statement_index), None
+        )
+        if statement is None:
+            raise ValueError("分析する文がありません。")
+        execution = next((e for e in turn.statement_executions if e.index == statement.index), None)
+        failure = (
+            execution.outcome
+            if execution and execution.status == "failed"
+            else statement.blocked_reason
+        )
+        if not failure:
+            raise ValueError("保存された失敗がありません。文を実行してから分析してください。")
+        attempts = record_failures(turn, [execution] if execution else [])
+        previous = [
+            a
+            for a in attempts
+            if a.statement_index == statement.index and a.revision != turn.revision
+        ][-ATTEMPT_LIMIT:]
         deterministic = self._deterministic_failure_analysis(
-            DbAdminAiAnalysisRequest(
-                sql=request.sql, result_text=request.result_text, target="data"
-            )
+            DbAdminAiAnalysisRequest(sql=statement.sql, result_text=failure, target="data")
         )
         if not self._enterprise_ai_client.is_configured():
             return DbAdminChatAnalyzeData(
                 analysis=deterministic.analysis,
+                previous_attempts=previous,
                 warnings=[
                     "OCI Enterprise AI が未設定のため、エラーコードからの分析を使用しました。"
                 ],
             )
-        try:
-            raw = self._enterprise_ai_client.generate(
-                prompt=(
-                    "次の SQL の実行が失敗しました。原因と直し方を示し、"
-                    "直した SQL を作ってください。"
-                ),
-                context=(
-                    f"質問:\n{request.question}\n\nSQL:\n{request.sql}\n\n"
-                    f"実行結果:\n{request.result_text}"
-                    + self._db_admin_chat_referenced_objects_context(request.sql)
-                ),
-                system_prompt=_DB_ADMIN_CHAT_ANALYSIS_SYSTEM_PROMPT,
-                response_format=response_format(DbAdminChatAnalysisOutput),
+        context = (
+            f"質問:\n{turn.question}\n\nSQL:\n{statement.sql}\n\n実行結果:\n{failure}"
+            + self._db_admin_chat_referenced_objects_context(statement.sql)
+            + "\n\nprevious_attempts:\n"
+            + json.dumps(
+                [
+                    a.model_copy(update={"sql": a.sql[:SQL_CONTEXT_CHARS]}).model_dump()
+                    for a in previous
+                ],
+                ensure_ascii=False,
             )
-            output = DbAdminChatAnalysisOutput.model_validate_json(raw)
+        )
+        failed_sql = {sql_identity(statement.sql), *(sql_identity(a.sql) for a in previous)}
+        warnings: list[str] = []
+        try:
+            for attempt in range(2):
+                raw = self._enterprise_ai_client.generate(
+                    prompt=(
+                        "次の SQL の実行が失敗しました。原因と直し方を示し、"
+                        "直した SQL を作ってください。"
+                    ),
+                    context=context,
+                    system_prompt=_DB_ADMIN_CHAT_ANALYSIS_SYSTEM_PROMPT,
+                    response_format=response_format(DbAdminChatAnalysisOutput),
+                )
+                output = DbAdminChatAnalysisOutput.model_validate_json(raw)
+                corrected_sql = _strip_sql_code_fence(output.corrected_sql)
+                if not corrected_sql or sql_identity(corrected_sql) not in failed_sql:
+                    break
+                if attempt == 0:
+                    context += (
+                        "\n\ncorrection_rejected: 失敗済みの SQL と同一です。\nrejected_sql:\n"
+                        + corrected_sql[:SQL_CONTEXT_CHARS]
+                    )
+            else:
+                corrected_sql = ""
+                warnings.append(
+                    "前に試して失敗した SQL と同じ修正しか得られませんでした。"
+                    "質問や作業の進め方を見直してください。"
+                )
         except (EnterpriseAiDirectError, ValueError) as exc:
             return DbAdminChatAnalyzeData(
                 analysis=deterministic.analysis,
+                previous_attempts=previous,
                 warnings=[f"AI の分析に失敗したため、エラーコードからの分析を使用しました: {exc}"],
             )
-        corrected_sql = _strip_sql_code_fence(output.corrected_sql)
         return DbAdminChatAnalyzeData(
             analysis=output.analysis.strip() or deterministic.analysis,
             corrected_plan=self._db_admin_chat_plan(corrected_sql) if corrected_sql else None,
             source="oci_enterprise_ai",
             model=self._enterprise_ai_client.model_id(),
+            warnings=warnings,
+            previous_attempts=previous,
         )
 
     # ---- DB 管理チャットの会話の履歴（#2319）----
@@ -18597,7 +18654,8 @@ class Nl2SqlService:
         }
         kept = [item for item in latest.statement_executions if item.index not in changed]
         update: dict[str, Any] = {
-            "statement_executions": sorted([*kept, *changed.values()], key=lambda item: item.index)
+            "statement_executions": sorted([*kept, *changed.values()], key=lambda item: item.index),
+            "correction_attempts": record_failures(latest, list(changed.values())),
         }
         if data.mode == "all":
             update["last_run_all"] = DbAdminChatRunAllSummary(
@@ -18646,6 +18704,18 @@ class Nl2SqlService:
                 [*current[: statement_index - 1], corrected, *current[statement_index:]]
             )
         plan = self._db_admin_chat_plan(corrected)
+        attempts = record_failures(turn, turn.statement_executions)
+        delta = len(plan.statements) - len(turn.plan.statements)
+        if statement_index is not None:
+            attempts = [
+                a.model_copy(update={"statement_index": a.statement_index + delta})
+                if a.statement_index > statement_index
+                else a
+                for a in attempts
+            ]
+        elif delta:
+            # 文の対応を決められない全体の差し替えでは、別の文へ履歴を結び付けない。
+            attempts = []
         previous_sql = {item.index: item.sql for item in turn.plan.statements}
         unchanged = {
             item.index for item in plan.statements if previous_sql.get(item.index) == item.sql
@@ -18664,6 +18734,7 @@ class Nl2SqlService:
                         ]
                     )
                 ),
+                "correction_attempts": attempts,
                 "revision": turn.revision + 1,
                 "corrected": True,
                 "statement_executions": [

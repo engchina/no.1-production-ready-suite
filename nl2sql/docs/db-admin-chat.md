@@ -14,7 +14,7 @@
 | 分類 | 生成エンジンに関係なく、実行の前にサーバーで必ず分類する（`_split_sql_statements`・`_admin_statement_type`・`is_select_only`）。生成の応答（`plan`）も実行の前に作り直す（画面の値を信じない） |
 | 実行の実装 | 1 文の実行は「管理 SQL を実行」の `_execute_db_admin_sql` にその文だけを `chat=True` で渡す（PL/SQL・暗黙の commit の警告・DB 構造の再取得は同じ。DML も部分の commit の経路（`data_dml`）へ渡さない）。「すべて実行」は `OracleNl2SqlAdapter.execute_admin_script` が 1 つの管理の接続とトランザクションで上から順に実行し（SELECT は同じ cursor から読むので、前の文の commit 前の変更が見える）、最初のエラーで止め、**全部成功したときだけ commit**、失敗したら rollback する（DDL は Oracle の暗黙の commit で戻らない。その前の成功した DML も commit される） |
 | 止める文 | 製品の object（`NL2SQL_` / `PLATFORM_` / `RAG_` / `AGENT_` で始まる名前、`$` / `#` を含む名前）と動的 SQL は「管理 SQL を実行」と同じく止める。例外は読み取り専用の SELECT の動的性能ビュー（`V$` / `GV$`。所有者は無指定・SYS・PUBLIC）だけで、セッション・ロック・版の質問に要るので読ませる（`SYS.OBJ$` などほかの `$` の object は止める）。加えて、方針で止める文を技術の規則としてコードに書く（下の表） |
-| 失敗 | 失敗した文の区画の「AI でエラーを分析」で原因と直した SQL を示す（`POST /api/nl2sql/db-admin-chat/analyze-error` にその文だけと、その文が参照する object の実際の列を渡す（#2352）。OCI Enterprise AI が無いときは ORA のコードからの分析）。直した SQL はその文だけを置き換え、サーバーが分類し直し、確認語からやり直す |
+| 失敗 | 失敗した文の区画の「AI でエラーを分析」で原因と直した SQL を示す（`POST /api/nl2sql/db-admin-chat/conversations/{id}/turns/{turn_id}/analyze-error` に文の番号を渡し、サーバーが保存した SQL・失敗・同じ文の過去の失敗と、参照する object の実際の列を分析する（#2352・#2950）。OCI Enterprise AI が無いときは ORA のコードからの分析）。直した SQL はその文だけを置き換え、サーバーが分類し直し、確認語からやり直す |
 | 会話 | 「チャット」と同じく利用者ごとに保存し、左の「会話の履歴」から開き直せる（#2319。下の「会話の履歴」）。続きの質問の文脈（前の 6 往復の質問・SQL・最後の実行の結果の要約）は、サーバーが保存した会話から作る（画面から受け取らない） |
 | 監査 | 表 `NL2SQL_ADMIN_AUDIT_LOG`（migration 023）に、実行した人・SQL の全文・文の種類・確認語の有無・結果（success / partial / failure / blocked）・commit / rollback・影響行数・時間・経路（`db_admin_chat` / `admin_sql` / `data_preparation`）を件数の上限なく残す。DB 管理チャットは**実行した文ごとに 1 行**で、`detail` の `batch_id`・`batch_mode`（`statement` / `all`）・`statement_index`・`statement_total`・`conversation_id`・`turn_id`（「すべて実行」は `batch_committed`・`batch_rolled_back` も）で同じ実行の行を結び付ける。SELECT の実行と止めた文も残す。確認語の待ちだけの応答と、「すべて実行」で実行しなかった文は残さない。「AI 活用 › 実行履歴」には出さない（実行履歴はチャット・SQL 生成・MCP の実行だけ） |
 | 公開 | 画面だけの API（Cookie / CSRF）。外部の MCP・Agent・API キーからは使えない。四眼原則（別の人の承認）は持たない |
@@ -70,7 +70,7 @@
 | `PUT /api/nl2sql/db-admin-chat/conversations/{id}/turns/{turn_id}/plan` | `menu.db_admin_chat` | `{sql, statement_index}` → ターン。AI のエラー分析で直した SQL に置き換え（`statement_index` があればその文だけ。無い番号は 400）、サーバーが分類し直す（列の検査もし直す。版を進め、変わった文の実行の要約と「すべて実行」の要約は消す。番号と SQL が同じ文の要約は残す） |
 | `GET /api/nl2sql/db-admin-chat/conversations` | `menu.db_admin_chat` | 会話の履歴（新しい順・offset 型。既定 25 件）。system_admin は全員の会話（利用者の表示名つき） |
 | `GET` / `PATCH` / `DELETE /api/nl2sql/db-admin-chat/conversations/{id}` | `menu.db_admin_chat` | 会話の内容（ターン）・名前の変更（1〜80 文字）・削除（ターンも消える。監査の表は残す） |
-| `POST /api/nl2sql/db-admin-chat/analyze-error` | `menu.db_admin_chat` | `{question, sql, result_text}` → `{analysis, corrected_plan}`（保存しない） |
+| `POST /api/nl2sql/db-admin-chat/conversations/{id}/turns/{turn_id}/analyze-error` | `menu.db_admin_chat`・会話の所有範囲 | `{statement_index}` → `{analysis, corrected_plan, previous_attempts, warnings}`（保存した失敗を使う） |
 
 ## 会話の履歴（#2319）
 
@@ -99,3 +99,10 @@
 ## アプリ用の DB ユーザーの権限
 
 データ辞書・動的性能ビューは `PDB_DBA` の範囲で読む（[../../terraform/README.md](../../terraform/README.md)「アプリ用の DB ユーザー」）。開発の ADB（ADMIN の接続）では `V$VERSION`・`PRODUCT_COMPONENT_VERSION`・`DBA_TABLESPACE_USAGE_METRICS`・`DBA_DATA_FILES`・`DBA_FREE_SPACE`・`V$SESSION`・`DBA_OBJECTS`・`DBA_ROLE_PRIVS`・`DBA_USERS`・`V$LOCKED_OBJECT`・`DBA_SEGMENTS`・`V$PARAMETER` が読めた。アプリ用の DB ユーザー（`ADB_APP_USER`）での確認は検証環境で行う（読めないビューは実行の失敗として分析が代わりのビューを示す）。監査の表（migration 023）と会話の履歴の表（migration 024）は製品の migration が作るので、追加の grant は要らない。
+
+
+## 修正を繰り返す場合（#2950）
+
+文の実行が失敗したら、ターンの JSON に文の番号・版・SQL・エラーコード・先頭行の要約・実行時刻を残す。結果の行や確認語は残さない。同じ版の再実行は最後の失敗で置き換え、文ごとに今の失敗と、その前の直近 3 件を保つ。SQL の差し替え時も、保存済みの最後の失敗を履歴へ移す。
+
+分析は会話の所有範囲を確かめ、対象の文の過去の失敗を使う。SQL のコメント・空白・引用しない語の大小文字・末尾のセミコロンだけを正規化し、すでに失敗した SQL と同じ修正は 1 回だけ作り直す。文字列リテラルと引用した識別子の内容は変えない。再度同じ SQL なら修正案を返さず警告する。画面の「これまでの修正」で、前の版と失敗を開いて確認できる。
