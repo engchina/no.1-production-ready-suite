@@ -446,6 +446,7 @@ from .oracle_adapter import (
     TabularImportValidationError,
     select_ai_object_list_entry,
 )
+from .oracle_dialect import OracleConversion
 from .reverse_generation import ReverseStageError, generate_stage
 from .reverse_prompts import (
     QUESTION_TO_SQL_PROMPT,
@@ -3488,7 +3489,7 @@ def _dangerous_oracle_function_names(sql: str) -> list[str]:
 
     try:
         statements = sqlglot.parse(
-            prepare_oracle_query(sql), read="oracle", error_level=ErrorLevel.RAISE
+            prepare_oracle_query(sql), read=OracleConversion, error_level=ErrorLevel.RAISE
         )
     except Exception:
         return []
@@ -3528,7 +3529,7 @@ def _unapproved_function_names(sql: str, allowed_user_functions: Iterable[str]) 
 
     try:
         statements = sqlglot.parse(
-            prepare_oracle_query(sql), read="oracle", error_level=ErrorLevel.RAISE
+            prepare_oracle_query(sql), read=OracleConversion, error_level=ErrorLevel.RAISE
         )
     except Exception:
         return []
@@ -3590,7 +3591,7 @@ def _bind_placeholder_names(sql: str) -> list[str]:
 
     try:
         statements = sqlglot.parse(
-            prepare_oracle_query(sql), read="oracle", error_level=ErrorLevel.RAISE
+            prepare_oracle_query(sql), read=OracleConversion, error_level=ErrorLevel.RAISE
         )
     except Exception:
         return []

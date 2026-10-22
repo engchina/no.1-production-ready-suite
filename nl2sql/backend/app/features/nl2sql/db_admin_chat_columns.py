@@ -30,6 +30,8 @@ from sqlglot import exp
 from sqlglot.errors import SqlglotError
 from sqlglot.optimizer.scope import Scope, build_scope
 
+from .oracle_dialect import OracleConversion
+
 # Oracle の疑似列と、括弧の無い関数（sqlglot は列として読む）。Oracle の SQL の言語の語で、
 # 業務やビューの列の一覧ではない。
 ORACLE_PSEUDO_COLUMNS = frozenset(
@@ -237,7 +239,7 @@ def _identifier(node: exp.Expression | None) -> tuple[str, bool] | None:
 
 def _parse(statement: str) -> exp.Expression | None:
     try:
-        parsed = sqlglot.parse_one(statement.strip().rstrip(";"), read="oracle")
+        parsed = sqlglot.parse_one(statement.strip().rstrip(";"), read=OracleConversion)
     except (SqlglotError, ValueError, RecursionError):
         return None
     if not isinstance(parsed, exp.Expression) or isinstance(parsed, exp.Command):
