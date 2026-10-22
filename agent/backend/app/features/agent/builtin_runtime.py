@@ -2227,7 +2227,9 @@ def build_function_tools(
         confirmation.tools_consulted = lambda: _tools_consulted(run_id)
     if confirmation is not None and CONFIRMATION_TOOL in exposed:
         # ツール（NL2SQL・RAG）の確認事項を聞き直させない（#1934）。
-        confirmation.tool_clarification_pending = lambda: _tool_clarification_pending(run_id)
+        confirmation.tool_clarification_pending = lambda: _tool_clarification_pending(
+            run_id, recorder.known_conditions
+        )
         # ツールのエラーの直後の確認を差し戻す（#2234）。
         confirmation.last_tool_failed = lambda: _last_tool_failed(run_id)
         if any(mcp_base_tool_name(name) == NL2SQL_QUERY for name in exposed):
@@ -3939,11 +3941,16 @@ def _nl2sql_unqueried(run_id: str) -> bool:
     )
 
 
-def _tool_clarification_pending(run_id: str) -> bool:
-    """この Run の最後の NL2SQL・RAG の結果が確認事項を返して止まっているか（#1934）。"""
+def _tool_clarification_pending(run_id: str, known: Mapping[str, str] | None = None) -> bool:
+    """この Run の最後の NL2SQL・RAG の結果が確認事項を返して止まっているか（#1934）。
+
+    `known` は分かっている条件（業務ガイドが確かめる問いのうち、答えたものは数えない。#2726）。
+    """
     from app.features.agent.runtime import runtime_repository
 
-    return tool_clarification_pending(list(runtime_repository.get_run(run_id).steps))
+    return tool_clarification_pending(
+        list(runtime_repository.get_run(run_id).steps), set(known or {})
+    )
 
 
 def _agent_confirmation(

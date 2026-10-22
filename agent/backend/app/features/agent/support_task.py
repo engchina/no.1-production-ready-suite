@@ -522,14 +522,54 @@ def nl2sql_clarification_pending(steps: list[RunStep]) -> bool:
     return nl2sql_pending_in_run(steps) is not None
 
 
-def tool_clarification_pending(steps: list[RunStep]) -> bool:
+def guide_clarification_pending(
+    steps: list[RunStep], known: Collection[str] = ()
+) -> list[JsonObject]:
+    """この Run の最も新しい業務ガイドの判断が、まだ分からない条件を確かめる（clarify）ときの問い。
+
+    業務ガイドの判断は `rag_lookup_guides`（Control Plane の照合・モデルが引いたもの）と
+    `rag_search` の `guide` の新しいほう。根拠の取得（`rag_retrieve_evidence`）は判断を変えない。
+    `known` は分かっている条件の id（前の Run までと、この Run で利用者が答えたもの）で、その問いは
+    数えない（答えた条件をカードで聞き直さない）。
+    """
+    for step in reversed(steps):
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or not result.success:
+            continue
+        output = result.output if isinstance(result.output, dict) else None
+        base = mcp_base_tool_name(call.name)
+        if output is None or base not in {RAG_LOOKUP_GUIDES, RAG_SEARCH}:
+            continue
+        if base == RAG_LOOKUP_GUIDES:
+            guides = _records(output.get("guides"))
+            guide: object = guides[0] if guides else None
+        else:
+            guide = output.get("guide")
+            if not isinstance(guide, dict):
+                continue
+        if not isinstance(guide, dict) or guide.get("decision") != "clarify":
+            return []
+        return [
+            question
+            for question in _questions(guide.get("clarifications"))
+            if question.get("condition_id") not in known
+        ]
+    return []
+
+
+def tool_clarification_pending(steps: list[RunStep], known: Collection[str] = ()) -> bool:
     """この Run の最後の `nl2sql_query` か RAG の検索が確認事項を返して止まったか（#1934）。
 
     その確認事項は Run の完了の後に利用者への確認のカードになる（`builtin_runtime` の
     `_tool_confirmations`）。モデルが同じことを `ask_user_confirmation` で聞き直さないように使う。
     RAG の検索は `rag_search` の `needs_clarification` と、根拠の取得のルールの確認（#2651）。
+    業務ガイドの判断が条件を確かめる（clarify）ときも、その問いが条件の id 付きのカードになるので
+    止まっているとみなす（#2726。Agent 自身の確認で聞くと、答えが業務ガイドの条件に渡らない）。
+    `known` は分かっている条件の id。
     """
     if nl2sql_clarification_pending(steps):
+        return True
+    if guide_clarification_pending(steps, known):
         return True
     for step in reversed(steps):
         call, result = step.tool_call, step.tool_result

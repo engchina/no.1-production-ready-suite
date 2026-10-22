@@ -377,7 +377,7 @@ _EVIDENCE = {
 # 26: rag_lookup_guides の参照に、表計算の資料のシートと行の範囲（sheet_ranges）を足した（#2663）。
 # 27: rag_validate_answer の claims の status に figure_only（図の見た目だけで決まる主張）を
 # 足した（#2678）。
-RAG_OUTPUT_SCHEMA_VERSION = 28
+RAG_OUTPUT_SCHEMA_VERSION = 29
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {

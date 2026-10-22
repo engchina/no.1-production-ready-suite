@@ -3928,6 +3928,10 @@ export const ja = {
   "settings.answerPrompts.part.detailedSystem": "詳細な LLM 監査（未使用の根拠も列挙します。業務ガイドの下書きの試答で使用）",
   "settings.answerPrompts.part.factSystem": "標準の LLM 監査（主張・要求・業務ガイドの要件を判定し、未使用の根拠は列挙しません）",
   "settings.answerPrompts.part.auditSystem": "監査の system プロンプト",
+  "settings.answerPrompts.part.answerChoice":
+    "確認の自由入力の答えから選択肢を決める（選択肢そのものでない答えのときだけ）",
+  "settings.answerPrompts.part.premiseConsistency":
+    "利用者の確認の答えの条件・制約との両立の判定（確認の答えがあるときだけ）",
   "settings.answerPrompts.part.documentSystem": "文書を選ぶ system プロンプト",
   "settings.answerPrompts.part.refineSystem": "同じ章の条を足す system プロンプト",
   "settings.queryHistory.title": "質問履歴",

@@ -445,6 +445,11 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     （利用者の質問のままツールで調べる指示）を返し、2 回目からはモデルが作った選択肢を外した自由入力の確認にする（選択肢を
     ツールの結果から作れないため。`ConfirmationBudget.tools_consulted`）。期間など NL2SQL・RAG が確かめる観点を Agent が先に
     聞き、NL2SQL の確認と重なるのを防ぐ。拒答のガード（`AGENT_TOOL_GROUNDING_REQUIRED`）と同じ設定で切れる。
+    **ツールの確認に任せる**（#1934・#2726）: この Run のツールの結果が確認事項を返して止まっている（NL2SQL・`rag_search` の
+    `needs_clarification`・根拠の取得のルールの確認と、最も新しい業務ガイドの判断（`rag_lookup_guides`・`rag_search` の
+    `guide`）が条件を確かめる `clarify`。答えた条件の問いは数えない）ときは中断せず、`status=tool_confirmation_pending` を返す。
+    確認事項は条件の id 付きのカードになり、答えは次の Run の分かっている条件として業務ガイドの照合・最終の検証の `guide` に渡る
+    （Agent 自身の確認で聞くと、答えが業務ガイドの条件に渡らず、同じ条件の確認が確かめ中のまま残る）。
   - **やめる**（API の `action: "cancel"`。画面は #2311 から出さず、確認を終えるのは「確認せずに回答」だけ。質問を取り消すのは入力欄の「停止」）: 確認を出した Run と、同じ質問の確認の往復の Run に metadata `clarification_withdrawn` を付けて会話・履歴・支援タスクの
     状態から外し、最初の質問を返す。Agent 自身の確認で待っている Run は取り消し、NL2SQL の session は
     `nl2sql_cancel_requirement` で閉じる。

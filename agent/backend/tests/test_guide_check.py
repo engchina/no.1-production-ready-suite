@@ -399,3 +399,105 @@ def test_answer_to_the_question_is_looked_up_with_the_previous_goal(
     note = _tool_output(model, 1, "call-2")["guide_check"]
     assert note["guide"]["decision"] == "answer"
     assert _outcome(second)["value"] == "answered"
+
+
+# ---- 業務ガイドの確認と Agent 自身の確認（#2726） ---------------------------------------------
+
+SCOPE_REPLY = "個別の利用者だけに付与し、グループには付与しません。"
+
+
+def test_guide_clarification_counts_as_a_pending_tool_question_until_answered() -> None:
+    from app.features.agent.runtime import RunStep
+    from app.features.agent.support_task import (
+        guide_clarification_pending,
+        tool_clarification_pending,
+    )
+    from app.features.agent.tools import ToolCall, ToolResult
+
+    def step(name: str, output: dict[str, Any], index: int) -> RunStep:
+        return RunStep(
+            id=f"step-{index}",
+            run_id="run-2726",
+            title=name,
+            status="completed",
+            tool_call=ToolCall(name=f"rag__{name}", arguments={}),
+            tool_result=ToolResult(name=f"rag__{name}", success=True, output=output),
+        )
+
+    clarify = step("rag_lookup_guides", {"guides": [_access_guide("clarify")]}, 1)
+    evidence = step("rag_retrieve_evidence", {"evidence": [{"chunk_id": "c"}]}, 2)
+    assert [item["condition_id"] for item in guide_clarification_pending([clarify, evidence])] == [
+        "target"
+    ]
+    assert tool_clarification_pending([clarify, evidence])
+    # 答えた条件は数えない（カードで聞き直さない）。
+    assert not tool_clarification_pending([clarify, evidence], {"target"})
+    # 条件が分かった新しい判断（答える）が、前の確かめる判断に代わる。
+    answer = step("rag_lookup_guides", {"guides": [_access_guide("answer", {"target": "個別"})]}, 3)
+    assert not tool_clarification_pending([clarify, evidence, answer])
+    searched = step("rag_search", {"outcome": "answered", "guide": _access_guide("answer")}, 4)
+    assert not guide_clarification_pending([clarify, searched])
+
+
+def test_agent_question_on_a_guide_condition_becomes_the_condition_card(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """業務ガイドが条件を確かめる判断のとき、Agent 自身の確認ではなく条件の id 付きのカードで聞く。
+
+    答え（自由入力）は次の Run で業務ガイドの条件になり、照合・最終の検証の業務ガイドに渡る。
+    """
+    from app.features.agent.answer_validation import connection_check_inputs
+    from app.features.agent.confirmation import CONFIRMATION_TOOL, ConfirmationAnswer
+
+    ask = {
+        "question": "権限の付与先は、個別の利用者ですか、グループですか？",
+        "reason": "付与先で手順が変わります。",
+        "options": [
+            {"label": "個別", "description": ""},
+            {"label": "グループ", "description": ""},
+        ],
+        "multiple": False,
+    }
+    model = _script(
+        monkeypatch,
+        _retrieve("call-evidence"),
+        [function_call(CONFIRMATION_TOOL, ask, call_id="call-ask")],
+        [assistant_message("付与先の確認事項に答えてください。")],
+    )
+    first = _run()
+    assert first.status == RunStatus.COMPLETED
+    assert _tool_output(model, 2, "call-ask")["status"] == "tool_confirmation_pending"
+    # Agent 自身の確認は出さず、業務ガイドの条件の確認を 1 つだけ出す。
+    [card] = first.confirmations
+    assert card.source == "rag"
+    [item] = card.items
+    assert item.id == "target"
+    assert [option.label for option in item.options] == ["個別", "グループ"]
+
+    outcome = runtime_repository.decide_confirmation(
+        first.id,
+        card.id,
+        action="answer",
+        answers=[ConfirmationAnswer(item_id="target", other_text=SCOPE_REPLY)],
+    )
+    next_run = outcome.next_run
+    assert next_run is not None
+    answer = "利用者の詳細画面の「権限」タブで、付与する権限を選んで「付与」を押します。"
+    model = _script(monkeypatch, _retrieve("call-2"), [assistant_message(answer)])
+    anyio.run(builtin_runtime.execute_run, next_run.id)
+    second = runtime_repository.get_run(next_run.id)
+    assert second.status == RunStatus.COMPLETED
+    # 答えは業務ガイドの照合の条件として渡り、条件の分かった判断で答える。
+    lookup = mcp.calls_of("rag_lookup_guides")[-1]["arguments"]
+    assert lookup["conditions"] == {"target": SCOPE_REPLY}
+    assert _tool_output(model, 1, "call-2")["guide_check"]["guide"]["decision"] == "answer"
+    # 同じ条件の確認を出し直さない（回答済みの確認と確かめ中の確認が食い違わない）。
+    assert second.confirmations == []
+    state = run_support_task(second)
+    assert state is not None
+    assert state["pending_clarifications"] == []
+    assert state["known_conditions"]["target"]["value"] == SCOPE_REPLY
+    # 最終の検証には、条件の分かった業務ガイドを渡す。
+    inputs = connection_check_inputs(list(second.steps), "rag__rag_retrieve_evidence")
+    assert inputs["guide"]["guide_id"] == "g-access"
+    assert inputs["guide"]["conditions"] == {"target": SCOPE_REPLY}

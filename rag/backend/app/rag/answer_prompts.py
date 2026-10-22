@@ -128,7 +128,11 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
     PromptStage(
         "support_guide_conditions",
         "question",
-        (("system", "app.rag.support_guide_conditions:CONDITION_SYSTEM_PROMPT"),),
+        (
+            ("system", "app.rag.support_guide_conditions:CONDITION_SYSTEM_PROMPT"),
+            # 確認に自由入力で答えた選択式の条件の選択肢を決める（#2726）。
+            ("answerChoice", "app.rag.support_guide_conditions:ANSWER_SYSTEM_PROMPT"),
+        ),
     ),
     PromptStage(
         "history_rewrite",
@@ -226,7 +230,14 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
     PromptStage(
         "answer_validation",
         "evaluation",
-        (("system", "rag_engine.evaluation.answer_validation:VALIDATION_SYSTEM_PROMPT"),),
+        (
+            ("system", "rag_engine.evaluation.answer_validation:VALIDATION_SYSTEM_PROMPT"),
+            # 確認の答えがあるときだけ、勧める内容が答えの条件・制約と両立するかを比べる（#2726）。
+            (
+                "premiseConsistency",
+                "rag_engine.evaluation.answer_validation:PREMISE_CONSISTENCY_SYSTEM_PROMPT",
+            ),
+        ),
     ),
 )
 
