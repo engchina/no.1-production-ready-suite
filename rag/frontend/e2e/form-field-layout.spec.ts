@@ -226,7 +226,8 @@ async function openParserAdapters(page: Page) {
   await expect(page.getByRole("textbox", { name: "Endpoint" }).first()).toBeVisible();
   await page.locator("summary", { hasText: "抽出する項目の定義" }).click();
   await expect(page.getByRole("textbox", { name: /項目名/ }).first()).toBeVisible();
-  await page.locator("summary", { hasText: "章節の抽出規則" }).click();
+  await page.locator("#post-parse-section-rules").scrollIntoViewIfNeeded();
+  await expect(page.getByRole("heading", { name: "章節の抽出規則", exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "正規表現" }).first()).toBeVisible();
 }
 
