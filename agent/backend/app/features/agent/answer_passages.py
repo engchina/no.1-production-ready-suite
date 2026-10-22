@@ -345,6 +345,7 @@ def _heading_title(text: str) -> str | None:
                 and not _is_sentence(title)
                 and not _OPERATION.search(title)
                 and not _HEADING_QUANTITY.search(title)
+                and "は" not in _HEADING_QUOTED.sub(" ", title)
             ):
                 return title
             return None
@@ -361,6 +362,7 @@ def _heading_title(text: str) -> str | None:
             and not _is_sentence(title)
             and not _OPERATION.search(title)
             and not _HEADING_QUANTITY.search(title)
+            and "は" not in _HEADING_QUOTED.sub(" ", title)
         ):
             return title
     phrase = heading_phrase(value)
@@ -1128,6 +1130,13 @@ def non_claim_passages(answer: str) -> dict[str, str]:
         if blank and not _BULLET.match(line.strip()):
             section = None
         blank = False
+        if any(
+            pattern.fullmatch(line.strip())
+            for pattern in (_MD_HEADING, _BOLD_LINE, _BRACKET_HEADING)
+        ):
+            # 新しい節で前の分類を終える。書式中の断定も主張として監査する。
+            section = None
+            options = False
         spans = passage_spans(line)
         if len(spans) == 1:
             title = _heading_title(spans[0][2])

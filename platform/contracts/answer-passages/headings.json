@@ -123,6 +123,10 @@
     {
       "id": "excerpt-label-colon",
       "passage": "- 抜粋："
+    },
+    {
+      "id": "quoted-particle-heading",
+      "passage": "**「は」の意味**"
     }
   ],
   "numbered_heading_passages": [
@@ -435,6 +439,30 @@
     {
       "id": "excerpt-label-with-numeric-value",
       "passage": "- 抜粋 30 件："
+    },
+    {
+      "id": "bold-nonnumeric-assertion",
+      "passage": "**上限は無制限**"
+    },
+    {
+      "id": "markdown-nonnumeric-assertion",
+      "passage": "## 上限は無制限"
+    },
+    {
+      "id": "bracket-nonnumeric-assertion",
+      "passage": "【上限は無制限】"
+    },
+    {
+      "id": "bold-predicate-assertion",
+      "passage": "**受付は不要です**"
+    },
+    {
+      "id": "markdown-operation-instruction",
+      "passage": "## 登録してください"
+    },
+    {
+      "id": "colon-nonnumeric-assertion",
+      "passage": "上限は無制限："
     }
   ],
   "answers": [
