@@ -45,7 +45,7 @@ def _audit(verdicts: list[dict[str, Any]]) -> Callable[..., ClaimAuditOutput]:
                     "applicability": verdict.get("applicability", "matched"),
                     "status": verdict.get("status", "supported"),
                     "source_id": "",
-                    "reason": "資料に記載されている",
+                    "reason": verdict.get("reason", "資料に記載されている"),
                 }
             )
         return ClaimAuditOutput.model_validate({"claim_checks": claims})
@@ -197,3 +197,29 @@ def test_audit_contract_asks_for_the_evidence_and_the_target_before_the_verdict(
     assert not {"audit_status", "reference_check", "classification_check", "support_quote", "support_check"} & set(order)
     assert RELATION_SUPPORT_POLICY in VALIDATION_SYSTEM_PROMPT
     assert "evidence_quote は空文字でよい" not in VALIDATION_SYSTEM_PROMPT
+
+
+def test_word_values_and_audit_reasons_stating_another_rows_mapping_are_not_supported() -> None:
+    """日本語の値の対応の取り違えと、根拠と逆の対応を「記載あり」と述べた監査の理由を supported にしない（#2659）。"""
+    table = (
+        "<table><tr><th>区分</th><th>処理の周期</th></tr>"
+        "<tr><td>区分A</td><td>月次処理</td></tr><tr><td>区分B</td><td>日次処理</td></tr></table>"
+    )
+    swapped, correct = "区分Bは月次処理です。", "区分Aは月次処理です。"
+    result = _validate(
+        "\n\n".join([swapped, correct]),
+        {"c1": table},
+        [
+            {"chunk": "c1"},
+            # 段落は正しいが、監査の理由が逆の対応を根拠にある対応として述べた。
+            {"chunk": "c1", "reason": "根拠の表に、区分Bは月次処理と記載されている。"},
+        ],
+    )
+    claims = _by_quote(result)
+    assert (claims[swapped]["status"], claims[swapped]["support_check"]) == ("unsupported", SUPPORT_VALUE_UNBOUND)
+    misread = claims[correct]
+    assert (misread["status"], misread["support_check"]) == ("unsupported", SUPPORT_VALUE_UNBOUND)
+    assert misread["reason"].startswith("監査の理由が、根拠の表と違う対応")
+    # 理由が根拠どおりの対応なら supported のまま。
+    kept = _validate(correct, {"c1": table}, [{"chunk": "c1", "reason": "根拠の表に、区分Aは月次処理と記載されている。"}])
+    assert kept["counts"] == {"supported": 1}

@@ -86,8 +86,10 @@ def test_shared_values_spanned_cells_and_notes_are_not_suspected() -> None:
     assert unbound_table_values("1. 区分Ⅱの値を選びます。", [digits]) == []
     assert unbound_table_values("手順1で区分Ⅱを選びます。", [digits]) == []
     assert unbound_table_values("区分Ⅱでは「1」を選びます。", [digits]) == [("1", "区分Ⅱ")]
-    # 時刻のコロンは区切りにしない。
-    assert unbound_table_values("区分Ⅱは 9:00 に始まる。", ["区分Ⅰ：9:00\n区分Ⅱ：10:00"]) == []
+    # 時刻のコロンは区切りにしない（時刻は値として照合する）。
+    times = "区分Ⅰ：9:00\n区分Ⅱ：10:00"
+    assert unbound_table_values("区分Ⅱは 10:00 に始まる。", [times]) == []
+    assert unbound_table_values("区分Ⅱは 9:00 に始まる。", [times]) == [("9:00", "区分Ⅱ")]
 
 
 def test_markdown_tables_and_other_tables_binding_the_value() -> None:
@@ -176,3 +178,92 @@ def test_audit_prompt_judges_the_relation_not_the_shared_words() -> None:
     # function_context・evidence の語で支持済みにするのは、同じ対象の記載のときだけ。
     rules = [line for line in grounded.AUDIT_SYSTEM_PROMPT.splitlines() if line.startswith("- function_context は")]
     assert len(rules) == 1 and "同じ対象について述べられていれば" in rules[0]
+
+
+# ---- 行と列の構造での照合（#2659。値の形に依らない） ----------------------------------------------------
+
+WORD_TABLE = (
+    "<table><tr><th>区分</th><th>処理の周期</th><th>保存期間</th></tr>"
+    "<tr><td>区分A</td><td>月次処理</td><td>30日以内</td></tr>"
+    "<tr><td>区分B</td><td>日次処理</td><td>60日以内</td></tr></table>"
+)
+
+
+@pytest.mark.parametrize(
+    ("claim", "expected"),
+    [
+        ("区分Aは月次処理で、保存期間は30日以内です。", []),
+        # 日本語の値・単位付きの値も、別の行の値なら検出する。
+        ("区分Bは月次処理です。", [("月次処理", "区分B")]),
+        ("区分Bの保存期間は30日以内です。", [("30日以内", "区分B")]),
+        # 同じ列の値の列挙（区分の名前を述べない）は疑わない。
+        ("処理の周期は月次処理・日次処理のどちらかです。", []),
+        ("区分Aと区分Bは、それぞれ月次処理と日次処理です。", []),
+    ],
+    ids=["correct", "word-other-row", "unit-other-row", "word-list", "both-rows"],
+)
+def test_word_and_unit_values_are_checked_by_the_row(claim: str, expected: list[tuple[str, str]]) -> None:
+    assert unbound_table_values(claim, [WORD_TABLE]) == expected
+
+
+def test_code_inside_a_cell_with_a_unit_is_the_value_of_its_row() -> None:
+    """「コード／数量 単位」のセルは、セル全体とセルの中のコードを、その行の値として照合する。"""
+    table = (
+        "<table><tr><td>項目</td><td>設定値</td><td>確認方法</td></tr>"
+        "<tr><td>項目X1</td><td>K-01-1／140 分</td><td>記録1と画面を照合</td></tr>"
+        "<tr><td>項目X2</td><td>K-01-2／141 分</td><td>記録2と画面を照合</td></tr>"
+        "<tr><td>項目X3</td><td>K-01-3／142 分</td><td>記録3と画面を照合</td></tr></table>"
+    )
+    assert unbound_table_values("項目X2 の設定値は K-01-2／141 分です。", [table]) == []
+    assert unbound_table_values("項目X2 の設定値は K-01-3／142 分です。", [table]) == [("K-01-3／142 分", "項目X2")]
+    assert unbound_table_values("項目X2 は K-01-1 を設定します。", [table]) == [("k-01-1", "項目X2")]
+    assert unbound_table_values("項目X3 は記録2と画面を照合します。", [table]) == [("記録2と画面を照合", "項目X3")]
+    # 数字だけの並び（数量）はセルの中から取り出さない（ほかの意味の数と見分けられない）。
+    assert unbound_table_values("項目X2 は 140 分ごとに確認します。", [table]) == []
+
+
+def test_value_of_another_column_is_found_by_the_header() -> None:
+    """行は合っていても、見出しが別の列（改定前と改定後）の値を述べた文を検出する。"""
+    table = "| 項目 | 改定前 | 改定後 |\n|---|---|---|\n| 申請の期限 | 30日以内 | 60日以内 |\n| 保存期間 | 3年 | 5年 |"
+    assert unbound_table_values("改定後の申請の期限は60日以内です。", [table]) == []
+    assert unbound_table_values("改定前の申請の期限は30日以内です。", [table]) == []
+    assert unbound_table_values("改定後の申請の期限は30日以内です。", [table]) == [("30日以内", "改定後")]
+    # 見出しを述べない文・両方の列を述べる文は疑わない。
+    assert unbound_table_values("申請の期限は30日以内です。", [table]) == []
+    assert unbound_table_values("申請の期限は改定前の30日以内から改定後の60日以内に変わります。", [table]) == []
+
+
+@pytest.mark.parametrize(
+    ("evidence", "claim", "expected"),
+    [
+        # 1 文の中で並べた対応（表でない本文）。
+        ("区分Aは値x01、区分Bは値y02とする。", "区分Bは値x01です。", [("値x01", "区分B")]),
+        ("区分Aは値x01、区分Bは値y02とする。", "区分Bは値y02です。", []),
+        # 別々の文の記載は並べた対応とみなさない。
+        ("区分Aは値x01です。区分Bは値y02です。", "区分Bは値x01です。", []),
+        # 箇条書きの「名前：値」・等号の区切り。
+        ("- 区分A：x01\n- 区分B：y02", "区分Bは x01 です。", [("x01", "区分B")]),
+        ("区分A = x01\n区分B = y02", "区分Bは x01 です。", [("x01", "区分B")]),
+    ],
+    ids=["prose-swapped", "prose-correct", "separate-sentences", "bullet-pairs", "equals-pairs"],
+)
+def test_enumerated_pairs_outside_tables(evidence: str, claim: str, expected: list[tuple[str, str]]) -> None:
+    assert unbound_table_values(claim, [evidence]) == expected
+
+
+def test_single_roman_numeral_rows_are_names_not_values() -> None:
+    """ローマ数字だけの行の名前（Ⅰ・Ⅱ）は区分の名前として照合し、似た表記（l・1）とは区別する。"""
+    table = "<table><tr><th>区分</th><th>期限</th></tr><tr><td>Ⅰ</td><td>30日</td></tr><tr><td>Ⅱ</td><td>60日</td></tr></table>"
+    assert unbound_table_values("区分Ⅰは30日です。", [table]) == []
+    assert unbound_table_values("区分Ⅰは60日です。", [table]) == [("60日", "Ⅰ")]
+    assert unbound_table_values("区分Ⅱは30日です。", [table]) == [("30日", "Ⅱ")]
+    assert unbound_table_values("区分IIは30日です。", [table]) == [("30日", "Ⅱ")]
+    assert unbound_table_values("区分lは60日です。", [table]) == []
+
+
+def test_short_words_and_note_rows_are_not_values() -> None:
+    """他の語の一部に現れやすい短い語（あり・なし）と、値の列に別の種類の文しか無い注記の行では疑わない。"""
+    flags = "<table><tr><th>区分</th><th>承認</th></tr><tr><td>区分A</td><td>あり</td></tr><tr><td>区分B</td><td>なし</td></tr></table>"
+    assert unbound_table_values("区分Bの申請は承認がありません。", [flags]) == []
+    notes = "区分A：x01\n区分B：y02\n備考：入力は必須"
+    assert unbound_table_values("備考のとおり x01 を入力します。", [notes]) == []

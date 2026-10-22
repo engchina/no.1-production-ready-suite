@@ -287,9 +287,12 @@ executor が埋まっても待たない。1 回の検証ごとに `rag_answer_va
 `answer_policy.RELATION_SUPPORT_POLICY`）。システムは次の `supported` を採らず、理由を `support_check` に、監査の判定を
 `audit_status` に残す（否定の判定は変えない。`evaluation/answer_validation.py` の `_enforce_support`）: 写した原文が
 結び付けた根拠に無い（`quote_unmatched`。`citation_error`）・対象が別（`target_mismatch`。`unsupported`）・段落が根拠の表の
-別の行の区分と値を結び付けている（`value_unbound`。`unsupported`。HTML の表・Markdown の表・「名前：値」の行の並びを行で
-照合する決定的な検査 `generation/table_binding.py`。値の行に段落の区分・名前が無く、値を持つ別の行の区分・名前を同じ区間で
-述べたときだけ）。`unknown` は採否に使わない（実の LLM の確認で、対象が同じ正しい段落にも多く付いたため。確かめられない
+別の行の区分と値を結び付けている（`value_unbound`。`unsupported`。HTML の表・Markdown の表・「名前：値」の行の並び
+〔箇条書きの印・等号の区切りを含む〕・1 文の中で並べた「A は x、B は y」を、表の行と列で照合する決定的な検査
+`generation/table_binding.py`。値は英数字だけのセルと、先頭の列以外のセル〔日本語・単位付きの値。数字の無い 2 文字以下の語と
+読点・句点を含む説明の文は除く〕と、セルの中のコード。値の行に段落の区分・名前が無く、同じ列に同じ種類の値を持つ別の行の
+区分・名前を同じ区間で述べたとき。行が合っていても、見出しの行がある表で、値の列の見出しを述べずに同じ行の別の列の見出し
+〔改定前の値に対する改定後〕を述べたとき。監査の理由が根拠の表と違う対応を述べた `supported` も同じく採らない。#2659）。`unknown` は採否に使わない（実の LLM の確認で、対象が同じ正しい段落にも多く付いたため。確かめられない
 段落は監査の判定 `unsupported` に任せる）。`_enforce_support` は判定と `support_check` を返すだけで、段落を外すか印を
 付けるかは呼び出し側が決める（#2738。`claim_mark_code` が判定と `support_check` を段落の印の理由の code に写す:
 `contradicted` だけが外す理由で、`quote_unmatched`・`citation_error`・`unsupported`・`unassessed`・`figure_only`〔`figure_not_read`〕は
