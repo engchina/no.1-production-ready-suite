@@ -5726,9 +5726,9 @@ def test_db_admin_chat_requires_its_own_menu_permission(
                         404,
                     ),
                     (
-                        "analyze-error",
-                        {"sql": "SELECT 1 FROM DUAL", "result_text": "ORA-00942"},
-                        200,
+                        "conversations/missing/turns/missing/analyze-error",
+                        {"statement_index": 1},
+                        404,
                     ),
                 ):
                     response = await client.post(
