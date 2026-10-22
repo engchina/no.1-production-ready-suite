@@ -190,7 +190,7 @@ token を出す。
 （`runaway_whitespace`）ら stream を閉じ、推論の量を 1 段下げて（下げられなければそのまま）1 回だけ送り直す（`oci._RunawayMonitor`。
 `RAG_LLM_RUNAWAY_DETECTION_ENABLED=false` で切れる）。行ごとに値が変わる表・一覧は打ち切らない。打ち切った呼び出しは
 `incomplete_reasons` に理由、送り直しは `runaway_resends` に残る。工程の記録は呼び出しの回数（`llm_calls`）と API への送信の
-回数（`llm_sends`。送り直しで多いときだけ）を分け、画面は「LLM 1 回（送信 2 回）」と示す。
+回数（`llm_sends`。送り直しで多いときだけ）を分け、画面は「LLM 1 回・送信 2 回」と示す。
 
 **停滞した LLM の呼び出しの送り直し（#1926）**: OCI Enterprise AI の呼び出しは、まれ（#1912 の記録の 206 件で約 1%）に
 通常の 1/10 以下の速さ（13〜23 token/秒。中央値 224）に落ち、同じ token 数で 36 秒 → 183 秒かかった。回答の期限がある文脈では
