@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from threading import Lock
 from typing import Literal
 
@@ -227,15 +228,21 @@ class AgentRuntimeConfigStore:
         with self._lock:
             return self._tool_policy.model_copy(deep=True)
 
-    def allow_tool(self, name: str) -> ToolPolicyRuntimeConfig:
+    def allow_tool(
+        self, name: str, *, persist: Callable[[ToolPolicyRuntimeConfig], None] | None = None
+    ) -> ToolPolicyRuntimeConfig:
         """ツールを「自動実行」（allow）にする（承認の画面の「今後は自動で実行」。#1832）。
 
         「承認を要求」（ask）に入っていれば外す。拒否（deny）のツールは承認に出ないので変えない。
         """
         with self._lock:
-            self._tool_policy.ask.discard(name)
-            self._tool_policy.allow.add(name)
-            return self._tool_policy.model_copy(deep=True)
+            candidate = self._tool_policy.model_copy(deep=True)
+            candidate.ask.discard(name)
+            candidate.allow.add(name)
+            if persist is not None:
+                persist(candidate)
+            self._tool_policy = candidate
+            return candidate.model_copy(deep=True)
 
     def patch_tool_policy(
         self,

@@ -3478,15 +3478,19 @@ async def decide_approval(
         if principal is not None:
             # 決定者はログイン中の利用者（body の decided_by は使わない。なりすまし防止。#215）。
             request = request.model_copy(update={"decided_by": principal.login_user_id})
-        was_pending = _approval_status(run, approval_id) == ApprovalStatus.PENDING
-        decided = await run_in_threadpool(runtime_repository.decide_approval, approval_id, request)
-        if (
-            always_allow
-            and was_pending
-            and _approval_status(decided, approval_id) == ApprovalStatus.APPROVED
-        ):
-            # 再開（同じ Run の次の呼び出し）より先にポリシーを変える。
-            _allow_tool_from_approval(decided, approval_id, request.decided_by)
+        if always_allow:
+            decided = await run_in_threadpool(
+                runtime_repository.decide_approval,
+                approval_id,
+                request,
+                before_decision=lambda current: _allow_tool_from_approval(
+                    current, approval_id, request.decided_by
+                ),
+            )
+        else:
+            decided = await run_in_threadpool(
+                runtime_repository.decide_approval, approval_id, request
+            )
         _schedule_builtin_run(decided)
         return ApiResponse(data=decided)
     except KeyError as exc:
@@ -3505,8 +3509,10 @@ def _allow_tool_from_approval(run: RunState, approval_id: str, decided_by: str) 
     """
     approval = next(item for item in run.approvals if item.id == approval_id)
     tool_name = approval.tool_call.name
-    policy = runtime_config_store.allow_tool(tool_name)
-    _persist(lambda: control_plane_store.save_tool_policy(policy))
+    runtime_config_store.allow_tool(
+        tool_name,
+        persist=lambda policy: _persist(lambda: control_plane_store.save_tool_policy(policy)),
+    )
     logger.info(
         "agent_tool_policy_always_allow",
         extra={
