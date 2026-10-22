@@ -447,8 +447,19 @@ def _max_input_bytes(settings: Any) -> int:
 def _passage_check(passages: Sequence[Mapping[str, str]], answer_text: str):
     """モデルが返した段落の ID が渡した段落にあり、記録する原文が回答の中にあることを確かめる。"""
     texts = {item["id"]: item["text"] for item in passages}
+    headers = table_header_lines(answer_text)
+    headings = list_heading_lines(answer_text)
+    non_claims = {
+        item["text"]
+        for item in _answer_passages(answer_text)
+        if is_non_claim_passage(item["text"], table_headers=headers, heading_lines=headings)
+    }
 
     def check(output: ClaimAuditOutput) -> None:
+        # 全文を読んだモデルが、対象外の見出し・出典も返す場合がある。本文の判定だけを採る。
+        output.claim_checks = [
+            claim for claim in output.claim_checks if claim.answer_passage_id or claim.answer_quote.strip() not in non_claims
+        ]
         for claim in output.claim_checks:
             if claim.answer_passage_id:
                 if claim.answer_passage_id not in texts:
@@ -517,7 +528,7 @@ def _enforce_support(
 
     ``texts`` は根拠の id → 分割する前の本文（資料ではない根拠を含む）、``document_texts`` は資料の根拠の本文。
     """
-    unbound = {passage["id"]: pairs for passage in passages if (pairs := unbound_table_values(passage["text"], document_texts))}
+    unbound = {passage["id"]: values for passage in passages if (values := unbound_table_values(passage["text"], document_texts))}
     result: list[ValidationClaimCheck] = []
     for claim in claims:
         if claim.status == "supported":

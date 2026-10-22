@@ -220,6 +220,10 @@
       "id": "bullet-bold-label",
       "note": "箇条書きの印の後が太字のラベルだけの行（#1898）。",
       "passage": "- **実施権限**"
+    },
+    {
+      "id": "nested-item-label",
+      "passage": "- 照合すべき項目"
     }
   ],
   "claim_passages": [
@@ -367,6 +371,14 @@
     {
       "id": "bracket-label-with-quantity",
       "passage": "【所要 10 分】"
+    },
+    {
+      "id": "item-label-with-value",
+      "passage": "- 必須項目は 3 件"
+    },
+    {
+      "id": "item-label-with-instruction",
+      "passage": "- 項目を保存してください。"
     }
   ],
   "answers": [

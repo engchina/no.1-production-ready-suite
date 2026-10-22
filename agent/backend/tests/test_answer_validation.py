@@ -3098,3 +3098,27 @@ def test_reason_labels_and_states_follow_the_contract() -> None:
         assert contract[code] == {"kind": "removed", "label": label}, code
     for code, label in ANSWER_WARNING_REASONS.items():
         assert contract[code] == {"kind": "answer", "label": label}, code
+
+
+def test_nested_item_label_does_not_add_review_warning(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    label = "- 照合すべき項目"
+    fact = f"- {ANSWER}"
+    unsupported = "延長は 90 日までできます。"
+    answer = f"{label}\n  {fact}\n{unsupported}"
+    mcp.outputs["rag_validate_answer"] = _verdict(
+        _claim(label, "unsupported", "見出しだけ。"),
+        _claim(fact, "supported", "根拠に記載。"),
+        _claim(unsupported, "unsupported", "記載が無い。"),
+    )
+    run, _ = _searched_run(monkeypatch, answer=answer)
+    validation = _validation(run)
+    claims = {c["answer_quote"]: c for c in validation["result"]["claims"]}
+    assert claims[label]["non_claim"] == "heading"
+    assert [mark["text"] for mark in validation["passage_marks"]] == [unsupported]
+    published = run_answer_text(run)
+    assert published is not None
+    section = published.split(f"**{REVIEW_HEADING}**", 1)[1]
+    assert label not in section
+    assert unsupported in section
