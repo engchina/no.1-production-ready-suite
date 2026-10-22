@@ -3215,3 +3215,24 @@ def test_assertion_in_heading_markup_ends_the_previous_unverified_section(headin
     assert heading not in kinds
     assert claim not in kinds
     assert kinds["- 未確認の項目"] == "unverified_section"
+
+
+@pytest.fixture
+def titled_mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
+    from dataclasses import replace
+
+    original = FakeProductMcp._tool
+
+    def titled(self, name, model, **kwargs):
+        tool = original(self, name, model, **kwargs)
+        return replace(tool, title="資料との照合") if name == "rag_validate_answer" else tool
+
+    monkeypatch.setattr(FakeProductMcp, "_tool", titled)
+    yield from mcp.__wrapped__(monkeypatch)
+
+
+def test_control_plane_validator_records_its_display_title(
+    monkeypatch: MonkeyPatch, titled_mcp: FakeProductMcp
+) -> None:
+    run, _ = _searched_run(monkeypatch)
+    assert run.metadata["tool_titles"][VALIDATOR] == "資料との照合"

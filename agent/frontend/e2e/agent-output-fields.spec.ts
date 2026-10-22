@@ -117,6 +117,7 @@ test("チャットに、記録した出力の項目を表と CSV で出す", asy
     rows: [
       { item: "A", matched: true },
       { item: "B", matched: false },
+      { item: "C", matched: null },
     ],
   };
   await page.goto("/chat");
@@ -127,6 +128,8 @@ test("チャットに、記録した出力の項目を表と CSV で出す", asy
   await expect(output).toContainText("出力の項目");
   await expect(output).toContainText("はい");
   await expect(output).toContainText("いいえ");
+  await expect(output).toContainText("記録なし");
+  await expect(output).not.toContainText("NULL");
   await expect(output.getByRole("button", { name: /CSV/ })).toBeVisible();
 });
 

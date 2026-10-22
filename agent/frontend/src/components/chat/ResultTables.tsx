@@ -34,8 +34,10 @@ export function ResultTable({
   name,
   csvFilename,
   testId,
+  labels,
 }: {
   data: TabularData;
+  labels?: Partial<ResultTableLabels>;
   name: string;
   /** 渡すと CSV（取得した行だけ）を出す。 */
   csvFilename?: string;
@@ -49,7 +51,7 @@ export function ResultTable({
       totalRowCount={data.totalRowCount}
       elapsedMs={data.elapsedMs}
       csvFilename={csvFilename}
-      labels={tableLabels(name)}
+      labels={{...tableLabels(name), ...labels}}
       testId={testId}
     />
   );
@@ -119,6 +121,7 @@ export function OutputResultTable({ data, testId }: { data: TabularData; testId?
         data={data}
         name={name}
         csvFilename={toolResultCsvFilename(new Date(), "agent-output")}
+        labels={{ nullValue: t("chat.output.noValue") }}
         testId={testId ? `${testId}-result` : undefined}
       />
     </section>

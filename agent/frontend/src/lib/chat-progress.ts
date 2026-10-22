@@ -20,10 +20,6 @@ export function chatSubmitProgressSteps(sentAtMs: number): ChatProgressStep[] {
   ];
 }
 
-function toolName(params: Readonly<Record<string, string | number | boolean>>): string {
-  return typeof params.tool === "string" ? params.tool : "";
-}
-
 /** ツールの表示名（MCP の `title`。backend が params `title` に入れる）。無ければ空。 */
 function toolTitle(params: Readonly<Record<string, string | number | boolean>>): string {
   return typeof params.title === "string" ? params.title.trim() : "";
@@ -44,7 +40,7 @@ export const AGENT_CHAT_PROGRESS_STEPS: ChatProgressStepDefinitions = {
       })[chatProgressLabelState(status)],
   },
   tool: {
-    // 表示名（MCP の `title`）があれば表示名で出し、内部名は段の詳細に残す。無ければ内部名で出す。
+    // 表示名（MCP の `title`）があれば表示名で出し、内部名は段の詳細に残す。無ければ一般の処理名を出す。
     label: (status, params) => {
       const title = toolTitle(params);
       if (title) {
@@ -55,12 +51,11 @@ export const AGENT_CHAT_PROGRESS_STEPS: ChatProgressStepDefinitions = {
           idle: t("chat.progress.toolTitle.idle", { title }),
         }[chatProgressLabelState(status)];
       }
-      const tool = toolName(params);
       return {
-        running: t("chat.progress.tool.running", { tool }),
-        done: t("chat.progress.tool.done", { tool }),
-        failed: t("chat.progress.tool.failed", { tool }),
-        idle: t("chat.progress.tool.idle", { tool }),
+        running: t("chat.progress.tool.running"),
+        done: t("chat.progress.tool.done"),
+        failed: t("chat.progress.tool.failed"),
+        idle: t("chat.progress.tool.idle"),
       }[chatProgressLabelState(status)];
     },
     // 却下したツールは実行しない（スキップ）。理由を補足に出す。

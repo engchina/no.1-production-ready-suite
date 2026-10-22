@@ -40,7 +40,7 @@ test.describe("Agent の処理の段階の定義（desktop）", () => {
     expect(steps(log)[0].label).toBe("進め方を決めました");
   });
 
-  test("ツールの段階は params のツール名で名前を付け、同じツールの 2 回目は id で分ける", () => {
+  test("表示名の無い処理は内部名を出さず、同じ処理の 2 回目は id で分ける", () => {
     const tool = { params: { tool: "rag__rag_search" } };
     const log = newLog()
       .step("plan", "done")
@@ -49,10 +49,10 @@ test.describe("Agent の処理の段階の定義（desktop）", () => {
       .step("tool:rag__rag_search#2", "running", tool);
     const items = steps(log);
     expect(summary(items)).toEqual(["plan:done", "tool:rag__rag_search:done", "respond:done", "tool:rag__rag_search#2:running"]);
-    expect(items[1].label).toBe("ツール rag__rag_search を呼びました");
+    expect(items[1].label).toBe("処理を実行しました");
     // 回答の作成の後に別のツールを呼んだ段階は、backend が進め方の検討（kind plan）に変える。
     expect(items[2].label).toBe("進め方を決めました");
-    expect(items[3].label).toBe("ツール rag__rag_search を呼んでいます");
+    expect(items[3].label).toBe("処理を実行しています");
   });
 
   test("承認待ちは待っている間だけツール名を補足に出し、待機中のツールは名詞で出す", () => {
@@ -63,7 +63,7 @@ test.describe("Agent の処理の段階の定義（desktop）", () => {
     let items = steps(log);
     expect(summary(items)).toEqual(["plan:done", "approval_wait:running", "tool:nl2sql__execute:pending"]);
     expect(items[1]).toMatchObject({ label: "承認を待っています", detail: "nl2sql__execute" });
-    expect(items[2]).toMatchObject({ label: "ツール nl2sql__execute の呼び出し" });
+    expect(items[2]).toMatchObject({ label: "処理の実行" });
     expect(items[2].startedAt).toBeUndefined();
 
     log.step("approval_wait", "done");
