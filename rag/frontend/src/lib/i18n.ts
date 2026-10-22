@@ -4281,6 +4281,7 @@ export const ja = {
   "answer.progress.elapsed": "経過時間",
   "answer.progress.duration": "処理時間",
   "search.noResults": "一致する根拠が見つかりませんでした。",
+  "search.clarificationHint": "回答の前に確認が必要です。上の確認事項への回答を質問に含めて、もう一度検索してください。",
   "search.noResultsHint": "キーワードを変える、条件を緩めるなどして再度お試しください。",
   "search.initial": "索引済みドキュメントを自然言語で検索します。",
   // 「 の直後で改行しないよう、「 と英字の間を word joiner（U+2060）でつなぐ。

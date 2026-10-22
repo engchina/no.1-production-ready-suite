@@ -198,6 +198,12 @@ async def test_answer_engine_answers_with_backend_search_and_evidence(
             assert rank is None
     assert any(c.metadata["evidence_role"] == "retrieved_anchor" for c in outcome.citations)
     diagnostics = outcome.diagnostics
+    # このスタブは rule だけを返すため、操作の引用の各件数は 0。
+    assert diagnostics["procedure_quotes"] == {
+        "original": 0,
+        "paraphrase_verified": 0,
+        "unmatched": 0,
+    }
     # rag_poc の回答 viewer と同じく外部データの確認・問い合わせ型も診断に載せる(#651)。
     assert diagnostics["external_data_items"] == []
     assert diagnostics["question_type"] == []

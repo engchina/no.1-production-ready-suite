@@ -3428,6 +3428,7 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         # 採用した草稿の監査の目的との合い方(#2402。aligned / partial / off_target)。品質評価が
         # 目的外の割合を集計する。
         "goal_alignment": adopted_goal_alignment(result.generation_trace),
+        "procedure_quotes": dict((result.generation_trace or {}).get("procedure_quotes") or {}),
         "execution_steps": steps,
         "evidence_tree": tree,
     }

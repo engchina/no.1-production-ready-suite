@@ -2496,6 +2496,7 @@ def synthesize_grounded_answer(
         "llm_calls": sum(1 + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds),
         "image_fallback": image_decision,
         "final_fact_count": len(published),
+        "procedure_quotes": dict(current.timing.get("procedure_quotes") or {}),
         # 質問に名前が出た根拠の画面の図の項目の種類と、それで決まった業務ガイドの条件（#2404）。
         **({"form_field_kinds": form_field_kinds.trace_payload(field_kinds, resolved_conditions, evidence_plans)} if field_kinds else {}),
         # 採用した草稿の構造（#1492）。確認の項目の事実と規則の分け方、説明の種類・適用を残し、LLM を呼ばずに
