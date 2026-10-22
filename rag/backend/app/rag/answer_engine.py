@@ -305,6 +305,7 @@ class _SearchState:
     # 計画(CRAG の各回で同じ起点なら SQL を読み直さない)。
     graph_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
     graph_plans: dict[tuple[str, ...], list[Any]] = field(default_factory=dict)
+    graph_attempts: dict[tuple[str, ...], dict[str, object]] = field(default_factory=dict)
     # 取込で参照先を解決していない chunk の参照先(#1382。chunk_id ごと)と、その解決に使う
     # 文書の見出しの列((document_id, chunk_set_id) ごと。1 回の回答で 1 回だけ読む)。
     query_reference_targets: dict[str, list[ReferenceTarget]] = field(default_factory=dict)
@@ -765,9 +766,11 @@ class AnswerEngine:
                 "context_records": self._settings.rag_article_catalog_context_records,
                 "articles": list(state.article_selections.values()),
             }
-        if state.graph_expansions:
+        if self._settings.rag_graph_expansion_enabled:
             outcome.diagnostics["graph_expansion"] = _graph_expansion_diagnostics(
-                state.graph_expansions, max_chunks=self._settings.rag_graph_expansion_max_chunks
+                state.graph_expansions,
+                max_chunks=self._settings.rag_graph_expansion_max_chunks,
+                attempts=list(state.graph_attempts.values()),
             )
         if state.reference_expansions or any(
             search.get("sources") for search in state.reference_sources
@@ -1544,6 +1547,8 @@ class AnswerEngine:
         plan = state.graph_plans.get(key)
         if plan is None:
             try:
+                attempt: dict[str, object] = {}
+                state.graph_attempts[key] = attempt
                 plan = await plan_graph_expansion(
                     self._graph_store_or_default(),
                     scope,
@@ -1551,9 +1556,11 @@ class AnswerEngine:
                     seed_chunks=seeds,
                     exclude_chunk_ids=set(exclude),
                     max_chunks=self._settings.rag_graph_expansion_max_chunks,
+                    diagnostics=attempt,
                 )
             except Exception:  # noqa: BLE001 - 関係情報の拡張は補助。足さずに回答を続ける。
                 logger.warning("graph expansion failed", exc_info=True)
+                state.graph_attempts[key] = {"status": "error"}
                 plan = []
             state.graph_plans[key] = plan
         added: list[RetrievedChunk] = []
@@ -3500,7 +3507,10 @@ def _zero_evidence_diagnostics(
 
 
 def _graph_expansion_diagnostics(
-    expansions: Mapping[str, Mapping[str, object]], *, max_chunks: int
+    expansions: Mapping[str, Mapping[str, object]],
+    *,
+    max_chunks: int,
+    attempts: Sequence[Mapping[str, object]] = (),
 ) -> dict[str, Any]:
     """関係情報で足した chunk の記録(#2055)。使った entity(名前・理由・足した数)と足した chunk。"""
     entities: dict[str, dict[str, Any]] = {}
@@ -3519,7 +3529,26 @@ def _graph_expansion_diagnostics(
         entry["added_count"] += 1
         if item.get("match"):
             entry["match"] = str(item["match"])
+
+    def unique_count(key: str) -> int:
+        values: set[str] = set()
+        for attempt in attempts:
+            items = attempt.get(key)
+            if isinstance(items, list):
+                values.update(str(item) for item in items)
+        return len(values)
+
     return {
+        "status": "error"
+        if any(item.get("status") == "error" for item in attempts)
+        else "completed"
+        if attempts
+        else "not_run",
+        "graph_available": any(item.get("graph_available") for item in attempts),
+        "seed_entity_count": unique_count("seed_entity_ids"),
+        "name_entity_count": unique_count("name_entity_ids"),
+        "planned_count": unique_count("planned_chunk_ids"),
+        "skipped_existing_count": unique_count("skipped_existing_chunk_ids"),
         "added_count": len(expansions),
         "max_chunks": max_chunks,
         "entity_count": len(entities),

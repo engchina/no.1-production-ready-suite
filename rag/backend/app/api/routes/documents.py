@@ -1917,6 +1917,9 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
         effective_settings,
         current_field_definitions(await oracle.list_document_extraction_field_sets(document_id)),
     )
+    graph_counts = await oracle.graph_entity_counts_for_chunk_sets(
+        [str(row["chunk_set_id"]) for row in rows]
+    )
     chunk_sets: list[DocumentChunkSet] = []
     for row in rows:
         chunk_set = DocumentChunkSet.model_validate(row)
@@ -1950,6 +1953,24 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
                 persisted_layers,
                 current_inputs=current_inputs,
             )
+        if chunk_set.layer_statuses is not None and chunk_set.layer_statuses.graph.requested:
+            count = graph_counts.get(chunk_set.chunk_set_id, 0)
+            if chunk_set.status in {"ERROR", "FAILED"}:
+                chunk_set.layer_statuses.graph = chunk_set.layer_statuses.graph.model_copy(
+                    update={
+                        "status": DocumentLayerStatusName.ERROR,
+                        "reason": "索引の処理に失敗したため、関係情報の構築は完了していません。",
+                    }
+                )
+            elif count > 0 or chunk_set.status == "INDEXED":
+                chunk_set.layer_statuses.graph = chunk_set.layer_statuses.graph.model_copy(
+                    update={
+                        "status": DocumentLayerStatusName.MATERIALIZED,
+                        "reason": f"関係情報を構築済みです（{count} 件）。"
+                        if count
+                        else "関係情報の構築は完了しましたが、対象の見出しがありません（0 件）。",
+                    }
+                )
         chunk_sets.append(chunk_set)
     return ApiResponse(data=chunk_sets)
 
@@ -2040,10 +2061,30 @@ async def _materialize_experiment_candidate(
             active=False,
         )
         if pending is None:
-            raise IngestionUserError(
-                "索引対象の Chunk が見つかりません。Chunk 作成から再開してください。"
+            active = await oracle.get_latest_recipe_chunk_set(
+                recipe_id, status="INDEXED", active=True
             )
-        candidate_chunk_set_id = str(pending["chunk_set_id"])
+            if active is None:
+                raise IngestionUserError(
+                    "索引対象の Chunk が見つかりません。Chunk 作成から再開してください。"
+                )
+            await oracle.upsert_chunk_set(
+                chunk_set_id=candidate_chunk_set_id,
+                document_id=job.document_id,
+                recipe_id=recipe_id,
+                extraction_recipe_id=extraction_recipe_id,
+                recipe_subset=_processing_recipe_snapshot(
+                    candidate_config, effective_candidate_config
+                ),
+                status="CHUNKED",
+            )
+            await oracle.clone_recipe_chunk_set_chunks(
+                recipe_id=recipe_id,
+                source_chunk_set_id=str(active["chunk_set_id"]),
+                target_chunk_set_id=candidate_chunk_set_id,
+            )
+        else:
+            candidate_chunk_set_id = str(pending["chunk_set_id"])
         # 成功の監査・metric は工程の中では記録せず、active への切り替えの後に 1 回だけ記録する
         # (#493 / #504)。
         await pipeline.index_chunked(
@@ -2428,6 +2469,15 @@ async def _record_recipe_artifact_layers(
             settings=settings,
             field_definitions_configured=fields_configured,
         )
+        if layer == "graph":
+            counts = await oracle.graph_entity_counts_for_chunk_sets([chunk_set_id])
+            count = counts.get(chunk_set_id, 0)
+            status = DocumentLayerStatusName.MATERIALIZED
+            reason = (
+                f"関係情報を構築済みです（{count} 件）。"
+                if count
+                else "関係情報の構築は完了しましたが、対象の見出しがありません（0 件）。"
+            )
         await oracle.upsert_artifact_layer(
             layer_id=_recipe_layer_id(chunk_set_id, settings, layer),
             layer_kind=layer,

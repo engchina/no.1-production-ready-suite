@@ -209,8 +209,8 @@ async def test_neighbor_adds_other_chunks_of_the_narrow_section_nearest_first() 
     assert {item.info["kind"] for item in plan} == {GRAPH_KIND_NEIGHBOR}
     assert plan[0].info["entity"] == "手順書 A > 第 2 章 作業の準備"
     assert plan[0].info["from_chunk_id"] == ids[2]
-    # 質問の語が短い（4 文字未満）ときは名前の一致の候補を読まない。
-    assert store.calls == ["seed", "chunks"]
+    # 短い質問でも関係情報の有無を記録するが、名前の一致では根拠を追加しない。
+    assert store.calls == ["seed", "name", "chunks"]
 
 
 async def test_neighbor_leaves_wide_sections_to_the_section_expansion() -> None:
@@ -442,3 +442,40 @@ async def test_graph_store_queries_use_the_search_scope(monkeypatch: pytest.Monk
     chunk_sql, chunk_binds = calls[2]
     assert chunk_binds["graph_entity_0"] == "e1" and chunk_binds["graph_per_entity"] == 3
     assert "PARTITION BY ec.entity_id ORDER BY c.chunk_index" in chunk_sql
+
+
+async def test_graph_zero_additions_records_existing_candidates() -> None:
+    from app.rag.answer_engine import _graph_expansion_diagnostics
+
+    store = _store()
+    ids = store.chunk_ids("doc-a")
+    attempt: dict[str, object] = {}
+    plan = await plan_graph_expansion(
+        store,
+        dict(KB),
+        question="質問",
+        seed_chunks=[store.chunks[ids[2]]],
+        exclude_chunk_ids=set(ids),
+        max_chunks=6,
+        diagnostics=attempt,
+    )
+    assert plan == []
+    diagnostic = _graph_expansion_diagnostics({}, max_chunks=6, attempts=[attempt])
+    assert diagnostic["status"] == "completed"
+    assert diagnostic["graph_available"] is True
+    assert diagnostic["added_count"] == 0
+    assert diagnostic["skipped_existing_count"] > 0
+
+
+def test_graph_diagnostics_distinguishes_absent_graph_from_not_run_and_failure() -> None:
+    from app.rag.answer_engine import _graph_expansion_diagnostics
+
+    assert _graph_expansion_diagnostics({}, max_chunks=6)["status"] == "not_run"
+    result = _graph_expansion_diagnostics(
+        {}, max_chunks=6, attempts=[{"status": "completed", "graph_available": False}]
+    )
+    assert result["status"] == "completed" and result["graph_available"] is False
+    assert (
+        _graph_expansion_diagnostics({}, max_chunks=6, attempts=[{"status": "error"}])["status"]
+        == "error"
+    )

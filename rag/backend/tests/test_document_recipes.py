@@ -1195,6 +1195,9 @@ class _CompletingRecipeOracle(_FakeRecipeJobOracle):
         _ = args, kwargs
         return {"chunk_set_id": "chunk-set-pending"}
 
+    async def graph_entity_counts_for_chunk_sets(self, chunk_set_ids: list[str]) -> dict[str, int]:
+        return {chunk_set_id: 4 for chunk_set_id in chunk_set_ids}
+
     async def count_chunk_set_chunks(self, chunk_set_id: str) -> int:
         _ = chunk_set_id
         return 3
@@ -1654,6 +1657,8 @@ async def test_recipe_job_records_layers_and_chunk_sets_endpoint_reports_them(
     assert all(status.requested for status in by_layer.values())
     assert {name: status.layer_id for name, status in by_layer.items()} == expected_ids
     assert statuses.navigation.status == DocumentLayerStatusName.MATERIALIZED
+    assert statuses.graph.status == DocumentLayerStatusName.MATERIALIZED
+    assert "4 件" in (statuses.graph.reason or "")
 
 
 async def test_recipe_chunk_set_reports_not_requested_layers_without_recording(
@@ -1940,3 +1945,82 @@ async def test_documents_list_compares_with_each_documents_knowledge_base_defini
         "doc-kb-stale": True,
         "doc-default": False,
     }
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_index_reprocess_clones_active_chunks_and_activates_only_after_success(
+    monkeypatch: pytest.MonkeyPatch,
+    fails: bool,
+) -> None:
+    class ReindexOracle(_CompletingRecipeOracle):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cloned: list[dict[str, str]] = []
+
+        async def get_latest_recipe_chunk_set(
+            self, *args: object, **kwargs: object
+        ) -> dict[str, object] | None:
+            return {"chunk_set_id": "active-set"} if kwargs.get("active") is True else None
+
+        async def clone_recipe_chunk_set_chunks(self, **kwargs: str) -> None:
+            self.cloned.append(kwargs)
+
+    class ReindexPipeline(_RecordingRecipePipeline):
+        async def index_chunked(self, *args: object, **kwargs: object) -> None:
+            if fails:
+                raise RuntimeError("合成の索引エラー")
+            await super().index_chunked(*args, **kwargs)
+
+    fake = ReindexOracle()
+    monkeypatch.setattr(documents_route, "IngestionPipeline", ReindexPipeline)
+    monkeypatch.setattr(documents_route, "get_settings", lambda: _layer_settings(enabled=False))
+    job = _extract_job().model_copy(
+        update={"phase": IngestionJobPhase.INDEX, "status": IngestionJobStatus.RUNNING}
+    )
+    if fails:
+        with pytest.raises(RuntimeError, match="合成の索引エラー"):
+            await _materialize_experiment_candidate(fake, job)  # type: ignore[arg-type]
+    else:
+        await _materialize_experiment_candidate(fake, job)  # type: ignore[arg-type]
+    assert len(fake.cloned) == 1
+    candidate = fake.cloned[0]["target_chunk_set_id"]
+    assert candidate != "active-set"
+    assert fake.cloned[0]["source_chunk_set_id"] == "active-set"
+    assert fake.activated == ([] if fails else [candidate])
+
+
+@pytest.mark.parametrize(
+    ("chunk_status", "count", "expected"),
+    [
+        ("INDEXED", 0, DocumentLayerStatusName.MATERIALIZED),
+        ("INDEXED", 4, DocumentLayerStatusName.MATERIALIZED),
+        ("ERROR", 4, DocumentLayerStatusName.ERROR),
+        ("CHUNKED", 0, DocumentLayerStatusName.PLANNED_ONLY),
+    ],
+)
+async def test_graph_layer_uses_materialization_result(
+    monkeypatch: pytest.MonkeyPatch,
+    chunk_status: str,
+    count: int,
+    expected: DocumentLayerStatusName,
+) -> None:
+    class GraphOracle(_CompletingRecipeOracle):
+        async def graph_entity_counts_for_chunk_sets(
+            self, chunk_set_ids: list[str]
+        ) -> dict[str, int]:
+            return {chunk_set_id: count for chunk_set_id in chunk_set_ids}
+
+        async def list_document_chunk_sets(self, document_id: str) -> list[dict[str, object]]:
+            rows = await super().list_document_chunk_sets(document_id)
+            return [{**row, "status": chunk_status} for row in rows]
+
+    fake = GraphOracle()
+    fake.activated = ["chunk-set-test"]
+    monkeypatch.setattr(documents_route, "OracleClient", lambda: fake)
+    monkeypatch.setattr(documents_route, "get_settings", lambda: _layer_settings(enabled=True))
+    result = await documents_route.list_document_chunk_sets("doc-1")
+    assert result.data is not None
+    graph = result.data[0].layer_statuses.graph
+    assert graph.status == expected
+    if chunk_status == "INDEXED":
+        assert f"{count} 件" in (graph.reason or "")

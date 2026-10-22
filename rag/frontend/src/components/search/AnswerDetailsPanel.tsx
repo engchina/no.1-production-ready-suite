@@ -200,7 +200,15 @@ export function AnswerDetailsPanel({
       {data.graphExpansion ? (
         // 関係情報で加えた根拠の数と、使った見出し（#2055）。
         <p className="break-words text-xs text-fg-muted" data-testid="answer-graph-expansion">
-          {t("search.answerDetails.graphExpansion", { count: data.graphExpansion.addedCount })}
+          {t(data.graphExpansion.status === "error"
+            ? "search.answerDetails.graphExpansionError"
+            : data.graphExpansion.status === "not_run"
+              ? "search.answerDetails.graphExpansionNotRun"
+              : data.graphExpansion.graphAvailable === false
+                ? "search.answerDetails.graphExpansionNoGraph"
+                : "search.answerDetails.graphExpansion", { count: data.graphExpansion.addedCount })}
+          {data.graphExpansion.skippedExistingCount > 0
+            ? t("search.answerDetails.graphExpansionSkipped", { count: data.graphExpansion.skippedExistingCount }) : ""}
           {data.graphExpansion.entities.length
             ? `: ${data.graphExpansion.entities
                 .map((entity) =>

@@ -4055,6 +4055,12 @@ export const ja = {
   "search.answerDetails.llmCalls": "LLM {count} 回",
   "search.answerDetails.llmCallsWithSends": "LLM {count} 回・送信 {sends} 回",
   "search.answerDetails.queries": "検索に使った質問",
+  "search.answerDetails.graphExpansionError": "関係情報の読み取りに失敗したため、根拠を追加できませんでした。",
+  "search.answerDetails.graphExpansionNotRun": "関係情報による根拠の追加は有効ですが、この回答では検索を実行していません。",
+  "search.answerDetails.graphExpansionNoGraph": "検索範囲に利用できる関係情報がありません（加えた根拠 0 件）。",
+  "search.answerDetails.graphExpansionSkipped": "（{count} 件は既に候補・文脈に含まれています）",
+  "knowledgeBases.graph.contains": "含む",
+  "knowledgeBases.graph.fitView": "全体表示",
   "search.answerDetails.graphExpansion": "関係情報で加えた根拠 {count} 件",
   "search.answerDetails.graphExpansionEntity": "{name}（{count} 件）",
   // 根拠の役割（回答エンジンの retrieval_role。英語の値は画面に出さない）。
