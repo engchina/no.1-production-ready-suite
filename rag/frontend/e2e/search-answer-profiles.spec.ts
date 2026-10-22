@@ -191,7 +191,7 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   const perDocument = page
     .getByRole("heading", { name: "1 つの文書から採る根拠の上限", level: 3 })
     .locator("..");
-  await expect(perDocument.getByText(/既定は 5 です/)).toBeVisible();
+  await expect(perDocument.getByText(/^既定は 5 です。並べ替えの後、/)).toBeVisible();
   await perDocument.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
   await perDocument.getByRole("combobox", { name: "1 つの文書から採る根拠の上限" }).click();
   await page.getByRole("option", { name: "上限なし" }).click();
