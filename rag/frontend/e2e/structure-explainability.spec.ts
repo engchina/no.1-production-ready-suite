@@ -1195,3 +1195,48 @@ test("文書詳細の所属先を 0 件にすると、保存時に欄の下へ�
   expect(state.lastReplacePayload).toBeNull();
   await expectNoHorizontalOverflow(page);
 });
+
+for (const summarized of [false, true]) {
+  test(`規則の章節は要約が ${summarized ? "有効なら未対応を案内し" : "無効でも生成され"}、章節の方式だけを切り替えられる`, async ({ page }) => {
+    const extraction = {
+      raw_text: "1. 節 A\n合成の本文。", confidence: 1, warnings: [],
+      elements: [{ kind: "text", text: "1. 節 A\n合成の本文。", order: 0, element_id: "element-a", page_number: 1, section_path: ["解析見出し A"] }],
+      pages: [{ page_number: 1, element_ids: ["element-a"] }], tables: [], assets: [], parser_artifacts: {},
+      navigation: [{ section_id: "nav-a", title: "解析見出し A", section_path: ["解析見出し A"], depth: 1, parent_section_id: null, child_section_ids: [], element_ids: ["element-a"], page_start: 1, page_end: 1, summary: summarized ? "保存済みの合成要約 A" : null }],
+    };
+    await mockDocumentDetail(page, { extraction });
+    let mode = "numbered";
+    await page.route("**/api/documents/doc-1/sections**", async (route) => {
+      const parser = mode === "parser";
+      const id = parser ? "nav-a" : "rule-a";
+      await route.fulfill({ json: {
+        data: { document_id: "doc-1", source: "extraction", rules_mode: mode,
+          sections: [{ id, title: parser ? "解析見出し A" : "1. 節 A", level: 1, page_start: 1, page_end: 1, origin: "extraction", source_section_id: id, edited: false }],
+          extraction_section_count: 1, page_count: 1, revision: null, updated_at: null },
+        error_messages: [], warning_messages: [],
+      } });
+    });
+    const panel = await openSections(page);
+    await expect(panel.getByText("1. 節 A", { exact: true })).toBeVisible();
+    await expect(panel.getByText("保存済みの合成要約 A", { exact: true })).toHaveCount(0);
+    const mismatch = panel.getByTestId("sections-summary-mismatch");
+    if (summarized) {
+      await expect(mismatch).toContainText("保存済みの要約 1 件は、現在の章節に対応していません。");
+      await expect(mismatch).toContainText("解析エンジンの見出し");
+    } else {
+      await expect(mismatch).toHaveCount(0);
+    }
+    await expectNoPageOverflow(page);
+    if (process.env.RAG_E2E_SCREENSHOT_DIR && summarized) {
+      await panel.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/section-summary-mismatch-${test.info().project.name}.png` });
+    }
+    // 保存済みの抽出結果を変えずに、表示側の方式だけを解析見出しへ戻す。
+    mode = "parser";
+    await page.reload();
+    await page.getByRole("tab", { name: "構造化要素" }).click();
+    await expect(panel.getByText("解析見出し A", { exact: true })).toBeVisible();
+    await expect(mismatch).toHaveCount(0);
+    if (summarized) await expect(panel.getByText("保存済みの合成要約 A", { exact: true })).toBeVisible();
+  });
+}

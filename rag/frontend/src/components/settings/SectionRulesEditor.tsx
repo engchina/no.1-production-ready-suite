@@ -1,5 +1,9 @@
 import {
   Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
   FormActionBar,
   FormGrid,
   FormSkeleton,
@@ -26,6 +30,7 @@ import {
   type SectionRulesSettingsData,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
 import {
   useResetSectionRulesSettings,
   useSaveSectionRulesSettings,
@@ -328,5 +333,20 @@ export function SectionRulesEditor() {
       />
 
     </div>
+  );
+}
+
+
+/** 章節の作り方は、要約を生成する設定から独立して変更できる。 */
+export function SectionRulesSettingsCard() {
+  return (
+    <Card id={SETTINGS_ANCHORS.sectionRules} className="scroll-mt-24" aria-labelledby="section-rules-title">
+      <CardHeader>
+        <CardTitle id="section-rules-title">{t("sectionRules.title")}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <SectionRulesEditor />
+      </CardContent>
+    </Card>
   );
 }

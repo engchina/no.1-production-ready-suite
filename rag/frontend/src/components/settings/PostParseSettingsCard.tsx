@@ -11,7 +11,7 @@ import {
   Switch,
   TextField,
 } from "@production-ready/ui";
-import { ListChecks, ListTree, RotateCcw, Save, Sparkles } from "lucide-react";
+import { ListChecks, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
@@ -27,7 +27,6 @@ import { toast } from "@/lib/toast";
 
 import { AnswerPromptPanel } from "./AnswerPromptEditor";
 import { ExtractionFieldsEditor } from "./ExtractionFieldsEditor";
-import { SectionRulesEditor } from "./SectionRulesEditor";
 
 type PostParseField =
   | "vision_enabled"
@@ -236,14 +235,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
         </Disclosure>
       </>
     ),
-    // 章節の抽出規則（#715）。章節ナビゲーションの章節を作る規則で、要約の有無とは別に設定する。
-    navigation_summary_enabled: (
-      <div id={SETTINGS_ANCHORS.sectionRules} className="scroll-mt-4">
-        <Disclosure summary={t("sectionRules.title")} icon={ListTree} surface="sunken">
-          <SectionRulesEditor />
-        </Disclosure>
-      </div>
-    ),
+    navigation_summary_enabled: null,
   };
 
   return (

@@ -1,4 +1,5 @@
 import {
+  Banner,
   Button,
   Disclosure,
   FormActionBar,
@@ -46,6 +47,7 @@ import {
   sectionErrors,
   sectionPageLabel,
   updateSection,
+  unmatchedSummaryCount,
 } from "@/lib/document-sections";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
@@ -190,6 +192,9 @@ export function DocumentSectionsPanel({
   };
 
   const manual = data?.source === "manual";
+  const unmatched = data && (data.rules_mode ?? "parser") !== "parser"
+    ? unmatchedSummaryCount(data.sections, summaries)
+    : 0;
   return (
     <Disclosure
       summary={t("flow.extraction.navigation.title")}
@@ -222,6 +227,11 @@ export function DocumentSectionsPanel({
               {t("sections.action.edit")}
             </Button>
           </div>
+          {unmatched > 0 ? (
+            <div data-testid="sections-summary-mismatch">
+              <Banner severity="warning">{t("sections.summaryMismatch", { count: unmatched })}</Banner>
+            </div>
+          ) : null}
           {sections.length > 0 ? (
             <ol className="space-y-0.5" aria-label={t("flow.extraction.navigation.title")}>
               {sections.map((section) => {

@@ -280,7 +280,7 @@ export const ja = {
   "settings.parserAdapters.postParse.fieldExtraction.empty":
     "項目の定義が 0 件で保存されているため、ナレッジベースで項目を定義していない文書からは何も抽出しません。下の項目の定義で項目を追加するか、「標準の項目に戻す」を使ってください。",
   "settings.parserAdapters.postParse.navigationSummary.hint":
-    "解析した文書の見出しの階層から章節の木を作り、章節ごとの要約を OCI Enterprise AI で作ります。章節をたどる検索と段階的な表示に使います。章節ごとにモデルの呼び出しがかかります（上限あり）。",
+    "解析エンジンの見出しに基づく章節ごとに、要約を OCI Enterprise AI で作り、検索にも使います。章節ごとにモデルを呼び出します（上限あり）。無効でも章節ナビゲーションは作られ、「章節の抽出規則」は独立して適用されます。",
   "settings.parserAdapters.postParse.actionsLabel": "解析後の処理の操作",
   "settings.parserAdapters.postParse.save": "解析後の処理を保存",
   "settings.parserAdapters.postParse.saved": "解析後の処理を保存しました。",
@@ -2554,7 +2554,7 @@ export const ja = {
   "knowledgeBases.adapter.field.vision": "図・画像を AI で読み取る",
   "knowledgeBases.adapter.field.vision.hint":
     "解析の後に、図や画像を含む表を既定の画像対応モデルで説明し、検索できる本文にします。どの解析エンジンでも使えます。画像 1 枚ごとに画像対応モデルの呼び出しと時間がかかります。",
-  "knowledgeBases.adapter.field.navigationSummary": "ナビゲーション要約(章節木)",
+  "knowledgeBases.adapter.field.navigationSummary": "章節の要約",
   "knowledgeBases.adapter.field.headingLevels": "見出しの階層の推定（AI）",
   "knowledgeBases.adapter.field.headingLevels.hint":
     "Docling の解析結果で、しおりの階層を使えず、番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす場合に、見出しの文字列を OCI Enterprise AI にまとめて送り、階層を推定します。通常は文書ごとに 1 回で、再試行する場合があります。変えると解析からやり直します。",
@@ -2844,7 +2844,7 @@ export const ja = {
   "flow.stages.api.stage.vision": "図・表の説明（Vision）",
   "flow.stages.api.stage.headingLevels": "見出しの階層の推定",
   "flow.stages.api.stage.fieldExtraction": "項目抽出",
-  "flow.stages.api.stage.navigationSummary": "ナビゲーション要約",
+  "flow.stages.api.stage.navigationSummary": "章節の要約",
   "flow.stages.api.stage.raptorSummary": "RAPTOR 要約",
   "flow.stages.api.stage.embedding": "埋め込み（Embedding）",
   "flow.stages.api.stage.rerank": "リランク",
@@ -2921,7 +2921,7 @@ export const ja = {
   "sectionRules.title": "章節の抽出規則",
   "sectionRules.loading": "章節の抽出規則を読み込んでいます",
   "sectionRules.description":
-    "章節ナビゲーションの章節を、どの行から作るかを決めます。取込はやり直さず、次に章節を表示したときから反映します。文書の処理レシピで方式を上書きできます。",
+    "章節ナビゲーションの章節を、どの行から作るかを決めます。章節の要約が無効でも適用され、LLM は使いません。取込はやり直さず、次に章節を表示したときから反映します。文書の処理レシピで方式を上書きできます。",
   "sectionRules.mode.label": "方式",
   "sectionRules.parserHint": "解析エンジンが見出しと判定した行から章節を作ります（これまでどおり）。",
   "sectionRules.presetHint":
@@ -2958,6 +2958,7 @@ export const ja = {
   "sectionRules.error.patternInvalid": "正規表現として読めません。括弧の対応などを確認してください。",
   "sectionRules.toast.saved": "章節の抽出規則を保存しました。",
   "sectionRules.toast.reset": "章節の抽出規則を既定に戻しました。",
+  "sections.summaryMismatch": "保存済みの要約 {count} 件は、現在の章節に対応していません。要約を表示するには、文書レシピの「章節の抽出規則」を「解析エンジンの見出し」に戻してください。",
   "sections.loading": "章節を読み込んでいます",
   "sections.error.load": "章節を取得できませんでした。再試行してください。",
   "sections.error.saveFailed": "章節を保存できませんでした。時間をおいて、もう一度お試しください。",
@@ -3247,7 +3248,7 @@ export const ja = {
   "documents.recipes.layerRebuildTitle": "作成後に{inputs}が変わりました。「再処理」で作り直してください。",
   "documents.recipes.layerRebuildInput.field_schema_hash": "項目の定義",
   "documents.recipes.layerRebuildInput.chunk_metadata_contract": "チャンクのメタデータの形式",
-  "documents.recipes.layerRebuildInput.navigation_summary_max_nodes": "ナビゲーション要約の上限数",
+  "documents.recipes.layerRebuildInput.navigation_summary_max_nodes": "章節の要約の上限数",
   "documents.recipes.layerRebuildInput.unknown": "作成時の設定",
   "documents.recipes.layerRebuildJoin": "、",
   "documents.recipes.addTitle": "処理レシピを追加",
@@ -3879,7 +3880,7 @@ export const ja = {
     "業務ガイドの取り込みで「回答の過程（Excel・テキスト）」から下書きを作るときと、品質評価で「回答の過程」から期待の下書きを作るとき（行ごと）",
   "settings.answerPrompts.stage.navigation_summary": "章節の要約",
   "settings.answerPrompts.stage.navigation_summary.condition":
-    "解析後の処理の「ナビゲーション要約(章節木)」を有効にしたとき（章節ごと。上限あり）",
+    "解析後の処理の「章節の要約」を有効にしたとき（章節ごと。上限あり）",
   "settings.answerPrompts.stage.raptor_summary": "RAPTOR の階層の要約",
   "settings.answerPrompts.stage.raptor_summary.condition":
     "RAPTOR の要約索引を backend の設定で有効にしたとき（既定は無効）",

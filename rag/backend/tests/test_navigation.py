@@ -362,3 +362,57 @@ def test_summary_only_value_never_reaches_the_section_body(strategy: str) -> Non
     assert members
     assert any("本文の段落" in texts[chunk_id] for chunk_id in members)
     assert all(_SUMMARY_ONLY_VALUE not in texts[link.chunk_id] for link in mapping.links)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_section_rules_work_independently_of_navigation_summaries(enabled: bool) -> None:
+    """要約 OFF でも木を作り、再解析せず規則の章節へ切り替えられる。"""
+    from typing import cast
+
+    from app.config import Settings
+    from app.rag.ingestion import IngestionPipeline
+    from app.rag.section_rules import SectionRulesStore, extraction_sections
+
+    calls: list[str] = []
+
+    class Summarizer:
+        async def generate(self, prompt: str, text: str) -> str:
+            calls.append(text)
+            return "合成の要約"
+
+    extraction = StructuredExtraction(
+        raw_text="合成の文書",
+        elements=[
+            DocumentElement(
+                kind="text",
+                text=f"{index}. 節 {index}\n" + "合成の本文。" * 50,
+                order=index,
+                element_id=f"element-{index}",
+                page_number=index,
+                section_path=[f"解析見出し {index}"],
+            )
+            for index in (1, 2)
+        ],
+    )
+    pipeline = IngestionPipeline(
+        vlm=cast(Any, Summarizer()),
+        oracle=cast(Any, object()),
+        settings=Settings(rag_navigation_summary_enabled=enabled),
+    )
+    result = await pipeline._attach_navigation_tree("trace-3011", extraction)
+    assert len(result.navigation) == 2
+    assert len(calls) == (2 if enabled else 0)
+    assert all(bool(node.summary) is enabled for node in result.navigation)
+    numbered = extraction_sections(result, "numbered", SectionRulesStore())
+    parser = extraction_sections(result, "parser", SectionRulesStore())
+    assert [section.title for section in numbered] == ["1. 節 1", "2. 節 2"]
+    assert [section.title for section in parser] == ["解析見出し 1", "解析見出し 2"]
+    assert all(section.id.startswith("rule-") for section in numbered)
+    # 現行の要約は解析見出しに属する。規則の ID に推測で付け替えず、画面で未対応を案内する。
+    assert {section.id for section in numbered}.isdisjoint(
+        node.section_id for node in result.navigation
+    )
+    summary_elements = [
+        element for element in result.elements if element.content_kind == "section_summary"
+    ]
+    assert len(summary_elements) == (2 if enabled else 0)
