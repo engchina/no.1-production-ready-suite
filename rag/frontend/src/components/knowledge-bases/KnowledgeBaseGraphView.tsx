@@ -25,12 +25,11 @@ const NODE_STYLE = {
 
 function toFlow(data: KnowledgeBaseGraphData): { nodes: Node[]; edges: Edge[] } {
   const count = Math.max(1, data.nodes.length);
-  const radius = Math.max(140, count * 26);
+  const columns = Math.ceil(Math.sqrt(count));
   const nodes: Node[] = data.nodes.map((node, index) => {
-    const angle = (index / count) * 2 * Math.PI;
     return {
       id: node.id,
-      position: { x: radius + radius * Math.cos(angle), y: radius + radius * Math.sin(angle) },
+      position: { x: (index % columns) * 220, y: Math.floor(index / columns) * 100 },
       data: { label: node.name || node.id },
       style: NODE_STYLE,
     };
@@ -39,7 +38,7 @@ function toFlow(data: KnowledgeBaseGraphData): { nodes: Node[]; edges: Edge[] } 
     id: edge.id,
     source: edge.source,
     target: edge.target,
-    label: edge.type ?? undefined,
+    label: edge.type === "contains" ? t("knowledgeBases.graph.contains") : edge.type ?? undefined,
     labelStyle: { fill: "var(--color-fg-muted)", fontSize: "var(--font-size-xs)" },
   }));
   return { nodes, edges };
@@ -47,7 +46,7 @@ function toFlow(data: KnowledgeBaseGraphData): { nodes: Node[]; edges: Edge[] } 
 
 /**
  * KB の関係情報(文書と章・節の見出しのつながり)を可視化する読み取り専用ビュー。
- * 展開時のみ subgraph を取得し、@xyflow で entity(node)/relationship(edge) を円形配置で描画する。
+ * 展開時のみ subgraph を取得し、@xyflow で entity(node)/relationship(edge) を格子状に配置して描画する。
  */
 export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: string }) {
   const [open, setOpen] = useState(false);
@@ -105,6 +104,9 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
                   nodes={flow.nodes}
                   edges={flow.edges}
                   fitView
+                  minZoom={0.02}
+                  fitViewOptions={{ padding: 0.15, minZoom: 0.02 }}
+                  ariaLabelConfig={{ "controls.fitView.ariaLabel": t("knowledgeBases.graph.fitView") }}
                   nodesDraggable={false}
                   nodesConnectable={false}
                   elementsSelectable={false}
@@ -112,7 +114,7 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
                   preventScrolling={false}
                 >
                   <Background />
-                  <Controls showInteractive={false} />
+                  <Controls showInteractive={false} fitViewOptions={{ padding: 0.15, minZoom: 0.02 }} />
                 </ReactFlow>
               </div>
               {query.data?.truncated ? (

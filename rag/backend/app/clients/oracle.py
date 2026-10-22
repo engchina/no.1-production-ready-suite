@@ -3075,6 +3075,77 @@ class OracleClient:
             )
         return result
 
+    async def clone_recipe_chunk_set_chunks(
+        self, *, recipe_id: str, source_chunk_set_id: str, target_chunk_set_id: str
+    ) -> None:
+        """有効なレシピの Chunk を別候補へ複製し、embedding を作り直す。"""
+        binds = _with_tenant_bind(
+            {
+                "recipe_id": recipe_id,
+                "source": source_chunk_set_id,
+                "target": target_chunk_set_id,
+            }
+        )
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                INSERT INTO rag_chunks (
+                    chunk_id, document_id, tenant_id_hash, chunk_index,
+                    chunk_text, search_text, metadata_json, embedding, chunk_set_id
+                )
+                SELECT c.document_id || ':' || :target || ':' || TO_CHAR(c.chunk_index),
+                    c.document_id, c.tenant_id_hash, c.chunk_index, c.chunk_text, c.search_text,
+                    JSON_MERGEPATCH(c.metadata_json, JSON_OBJECT(
+                        'chunk_id' VALUE c.document_id || ':' || :target || ':'
+                            || TO_CHAR(c.chunk_index),
+                        'chunk_set_id' VALUE :target RETURNING CLOB
+                    ) RETURNING CLOB), NULL, :target
+                FROM rag_chunks c
+                JOIN rag_chunk_sets src ON src.chunk_set_id = c.chunk_set_id
+                JOIN rag_chunk_sets dst ON dst.chunk_set_id = :target
+                    AND dst.recipe_id = src.recipe_id AND dst.document_id = src.document_id
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE src.chunk_set_id = :source AND src.recipe_id = :recipe_id
+                    AND src.is_active = 1 AND src.status = 'INDEXED'
+                    AND {access_predicate}
+            """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                binds,
+            )
+            _execute(
+                connection,
+                """
+                UPDATE rag_chunk_sets SET first_page_context = (
+                    SELECT first_page_context FROM rag_chunk_sets WHERE chunk_set_id = :source
+                ) WHERE chunk_set_id = :target AND recipe_id = :recipe_id
+            """,
+                {
+                    "source": source_chunk_set_id,
+                    "target": target_chunk_set_id,
+                    "recipe_id": recipe_id,
+                },
+            )
+
+        await self._run_transaction(operation)
+
+    async def graph_entity_counts_for_chunk_sets(
+        self, chunk_set_ids: Sequence[str]
+    ) -> dict[str, int]:
+        """一覧の関係情報の状態を、指定した集合ごとにまとめて読む。"""
+        if not chunk_set_ids:
+            return {}
+        predicate, binds = _oracle_in_predicate("chunk_set_id", "graph_sets", chunk_set_ids)
+        rows = await self._fetch_all(
+            f"SELECT chunk_set_id, COUNT(*) AS entity_count FROM rag_graph_entities "
+            f"WHERE {predicate} GROUP BY chunk_set_id",
+            binds,
+        )
+        return {str(row["chunk_set_id"]): int(str(row["entity_count"])) for row in rows}
+
     async def count_chunk_set_chunks(self, chunk_set_id: str) -> int:
         """指定 chunk_set の chunk 行数(chunk_set 単位の件数記録用)。"""
         row = await self._fetch_one(

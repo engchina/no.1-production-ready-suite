@@ -256,3 +256,37 @@ for (const theme of ["light", "dark"] as const) {
     await expectNoPageOverflow(page);
   });
 }
+
+
+for (const count of [30, 80]) {
+  test(`関係情報 ${count} ノードを全体表示できる`, { tag: "@responsive" }, async ({ page }) => {
+    await mockKb(page, {
+      status: "ok",
+      nodes: Array.from({ length: count }, (_, index) => ({
+        id: `node-${index}`, name: `合成見出し ${index}`, type: "section", confidence: 1,
+      })),
+      edges: Array.from({ length: count - 1 }, (_, index) => ({
+        id: `edge-${index}`, source: "node-0", target: `node-${index + 1}`, type: "contains", confidence: 1,
+      })),
+      truncated: false,
+    });
+    await page.goto("/knowledge-bases/kb-1");
+    await disclosureSummary(page, "関係情報グラフを表示").click();
+    const graph = page.getByRole("region", { name: "関係情報グラフ" });
+    await expect(graph.locator(".react-flow__node")).toHaveCount(count);
+    const fits = () => graph.evaluate((region) => {
+      const bounds = region.getBoundingClientRect();
+      return [...region.querySelectorAll(".react-flow__node")].every((node) => {
+        const box = node.getBoundingClientRect();
+        return box.left >= bounds.left && box.right <= bounds.right && box.top >= bounds.top && box.bottom <= bounds.bottom;
+      });
+    });
+    await expect.poll(fits).toBe(true);
+    await graph.getByRole("button", { name: "全体表示", exact: true }).click();
+    await expect.poll(fits).toBe(true);
+    await expect(graph.locator(".react-flow__edge-text").first()).toHaveText("含む");
+    await graph.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: test.info().outputPath(`graph-${count}.png`) });
+    await expectNoPageOverflow(page);
+  });
+}
