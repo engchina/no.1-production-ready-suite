@@ -449,6 +449,8 @@ def test_usage_report_without_allowed_agents_does_not_query() -> None:
 
 
 def test_feedback_report_is_aggregated_and_paged_in_sql() -> None:
+    import oracledb
+
     rated = datetime(2026, 10, 1, 0, 0)
     connection = _Connection(
         {
@@ -509,6 +511,8 @@ def test_feedback_report_is_aggregated_and_paged_in_sql() -> None:
     ]
     assert (report.summary.admin_reviewed, report.summary.admin_not_helpful) == (2, 1)
     assert (report.summary.rated_runs, report.previous.rated_runs) == (11, 4)
+    assert connection.input_sizes["until"] is oracledb.DB_TYPE_TIMESTAMP
+    assert connection.input_sizes["since"] is oracledb.DB_TYPE_TIMESTAMP
     assert (report.total, report.offset, report.limit, report.has_next) == (42, 20, 10, True)
     [item] = report.items
     assert (item.agent_name, item.display_name, item.reviewer_display_name) == (

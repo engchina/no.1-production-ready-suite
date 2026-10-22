@@ -222,7 +222,7 @@ def test_facts_are_merged_and_runs_to_review_are_aggregated_in_oracle(agent_id: 
 
 def test_feedback_counts_owner_and_admin_union_in_oracle(agent_id: str) -> None:
     store = OracleRunFactsStore()
-    now = datetime.now(UTC)
+    now = datetime.now(UTC).replace(microsecond=654321)
     good = RunFeedback(rating=FeedbackRating.HELPFUL, updated_at=now)
     bad = RunFeedback(rating=FeedbackRating.NOT_HELPFUL, updated_at=now)
     for fact in [

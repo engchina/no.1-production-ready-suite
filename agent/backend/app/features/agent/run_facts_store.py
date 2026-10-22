@@ -708,10 +708,19 @@ class OracleRunFactsStore:
 
     def _query(self, statements: Sequence[tuple[str, dict[str, Any]]]) -> list[list[Any]]:
         """複数の SELECT を 1 つの接続で実行する（CLOB は接続を閉じる前に読む）。"""
+        import oracledb
+
         results: list[list[Any]] = []
         try:
             with self._connect() as connection, connection.cursor() as cursor:
                 for sql, binds in statements:
+                    cursor.setinputsizes(
+                        **{
+                            name: oracledb.DB_TYPE_TIMESTAMP
+                            for name, value in binds.items()
+                            if isinstance(value, datetime)
+                        }
+                    )
                     cursor.execute(sql, binds)
                     rows = cursor.fetchall()
                     results.append(
