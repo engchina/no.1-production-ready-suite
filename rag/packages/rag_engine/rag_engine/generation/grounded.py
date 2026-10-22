@@ -1723,7 +1723,7 @@ def _named_spans(item: GroundedItem, spans: Sequence[dict]) -> list[dict]:
 def _unmatched_item(item: GroundedItem, index: int, spans: Sequence[dict], match: dict, reason: str) -> CheckedItem | None:
     """引用が原文と照合できなかった item を、言い換えを残した印つきの item にする（#2738）。
 
-    近い原文（``match["nearest"]``）があればその根拠に、無ければ evidence_id が指す 1 つの根拠に結び付けて
+    evidence_id が一意に指す根拠を優先し、無ければ近い原文の根拠に結び付けて
     quote_unmatched の印を付ける。どちらでも決まらなければ（未知の Evidence ID・複数の根拠に一致）、根拠を
     結び付けずに citation_error の印を付ける。
     """
@@ -1778,7 +1778,8 @@ def _clean_evidence_labels(text: str, spans: Sequence[dict]) -> str:
     """表示用の文から内部ラベルを除く。根拠本文にあるコードは説明の対象なので残す。"""
     corpus = "\n".join(str(span.get("text") or "") for span in spans)
     text = _INLINE_EVIDENCE.sub(lambda match: match.group() if match.group() in corpus else "", text)
-    return _EVIDENCE_LABEL.sub(lambda match: match.group() if match.group() in corpus else "", text).strip()
+    codes = set(_EVIDENCE_LABEL.findall(corpus))
+    return _EVIDENCE_LABEL.sub(lambda match: match.group() if match.group() in codes else "", text).strip()
 
 
 def recover_audited_quotes(
