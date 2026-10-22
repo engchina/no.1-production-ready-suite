@@ -1,7 +1,8 @@
 import { expect, test, type Page } from "./fixtures/test";
+import { FLOW_STAGES } from "./_prompt-stage-fixtures";
 import { apiEnvelope, expectNoPageOverflow, mockAuthUser, mockLocalAuth, openSidebarNav } from "./_helpers";
 
-// 検索方法の画面（#595）。回答の検索と生成・回答の記録の保存期間・質問履歴の 3 つのカードだけを持つ。
+// 検索方法の画面。検索・回答の既定、検索関連プロンプト、回答の記録・質問履歴を持つ。
 // 以前の検索モード・検索オプションと、根拠確認・回答スタイル・高度な検索の画面は削除した。
 
 test.beforeEach(async ({ page }) => {
@@ -12,7 +13,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`検索方法の画面は回答の設定の 3 つのカードだけを出す (${viewport.name})`, async ({ page }) => {
+  test(`検索方法の画面は回答の設定と検索プロンプトを出す (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockRetrievalCards(page);
@@ -508,6 +509,7 @@ const QUERY_HISTORY = { enabled: false, retention_days: 90, min_count: 3, sugges
 /** 3 つのカードの取得（GET）を mock する。`gate` を渡すと、その間は応答を止める（読み込み中の確認）。 */
 async function mockRetrievalCards(page: Page, gate?: Promise<void>) {
   const cards: [string, unknown][] = [
+    ["**/api/settings/answer-prompts", { prompts: [], stages: FLOW_STAGES }],
     ["**/api/settings/answering", ANSWERING_SETTINGS],
     ["**/api/settings/answer-records", ANSWER_RECORDS],
     ["**/api/settings/query-history", QUERY_HISTORY],
@@ -518,4 +520,51 @@ async function mockRetrievalCards(page: Page, gate?: Promise<void>) {
       await route.fulfill({ json: apiEnvelope(data) });
     });
   }
+}
+
+for (const width of [1280, 375]) {
+  test(`検索プロンプトは処理順・使用条件・読み取り専用で確認できる (${width}px)`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockAuthUser(page, { permissions: ["menu.settings_retrieval"] });
+    await mockRetrievalCards(page);
+    await page.goto("/settings/retrieval");
+    const prompts = page.getByRole("region", { name: "検索に使うプロンプト", exact: true });
+    await expect(prompts.getByRole("heading", { level: 3 })).toHaveText(["質問の解釈", "検索", "根拠の判定"]);
+    const expected = FLOW_STAGES.filter((stage) => ["question", "retrieval", "grounding"].includes(stage.phase));
+    await expect(prompts.locator("details")).toHaveCount(expected.length);
+    for (const stage of expected) {
+      const panel = prompts.getByTestId(`answer-prompt-stage-${stage.id}`);
+      await expect(panel).toContainText("使われる条件:");
+      await panel.locator("summary").click();
+      const fields = panel.getByRole("textbox");
+      expect(await fields.evaluateAll((elements) => elements.map((element) => (element as HTMLTextAreaElement).value))).toEqual(stage.prompts.map((part) => part.content));
+      for (const field of await fields.all()) await expect(field).toHaveAttribute("readonly", "");
+      await panel.locator("summary").click();
+    }
+    await expect(prompts.getByRole("button", { name: "プロンプトを保存" })).toHaveCount(0);
+    await expect(prompts.getByTestId("answer-prompt-stage-generation")).toHaveCount(0);
+    await expect(prompts.getByTestId("answer-prompt-stage-support_guide_conditions")).toContainText("利用者が答える未確認の自由入力条件があるとき");
+    await expect(prompts.getByTestId("answer-prompt-stage-history_rewrite")).toContainText("書き換えを有効にしたとき");
+    await expect(prompts.getByTestId("answer-prompt-stage-section_extraction")).toContainText("原文抽出は既定で無効");
+    await prompts.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("retrieval-prompts.png"), fullPage: true });
+    await expectNoPageOverflow(page);
+  });
+
+  test(`検索プロンプトの取得失敗は他の設定を妨げず再試行できる (${width}px)`, { tag: "@responsive" }, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockRetrievalCards(page);
+    let failed = true;
+    await page.route("**/api/settings/answer-prompts", (route) => failed
+      ? route.fulfill({ status: 503, json: { data: null, error_messages: ["取得できませんでした"], warning_messages: [] } })
+      : route.fulfill({ json: apiEnvelope({ prompts: [], stages: FLOW_STAGES }) }));
+    await page.goto("/settings/retrieval");
+    await expect(page.getByText("プロンプトを読み込めませんでした。", { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole("button", { name: "回答の設定を保存", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "保存期間を保存" })).toBeVisible();
+    failed = false;
+    await page.getByRole("button", { name: "再試行", exact: true }).click();
+    await expect(page.getByRole("region", { name: "検索に使うプロンプト", exact: true })).toBeVisible();
+    await expectNoPageOverflow(page);
+  });
 }

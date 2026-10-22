@@ -6,6 +6,8 @@ import { ErrorState } from "@/components/StateViews";
 import { useAnswerPrompts } from "@/lib/queries";
 import { t } from "@/lib/i18n";
 
+import { isRetrievalPromptStage } from "./answer-prompt.logic";
+
 import { AnswerPromptStages } from "./AnswerPromptStages";
 
 /**
@@ -37,7 +39,7 @@ export function AnswerPromptSettingsClient() {
       </PageBody>
     );
   }
-  const stages = query.data.stages.filter((stage) => stage.phase !== "ingestion" && stage.phase !== "indexing");
+  const stages = query.data.stages.filter((stage) => stage.phase !== "ingestion" && stage.phase !== "indexing" && !isRetrievalPromptStage(stage));
   // 編集欄は回答生成の位置に置く。固定の段が返らない場合も編集欄への導線を残す。
   const withGeneration = [...stages];
   if (!stages.some((stage) => stage.id === "generation")) {

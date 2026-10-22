@@ -607,10 +607,13 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/settings/query-history"): _any(MENU_SETTINGS_RETRIEVAL),
     ("PATCH", "/settings/query-history"): _any(MENU_SETTINGS_RETRIEVAL),
     # 編集できるプロンプトは回答プロンプト・文書解析・文書分割の
-    # 画面で編集する。変更（PUT / DELETE）は、route の中で `ANSWER_PROMPT_EDIT_PERMISSIONS`
-    # の key ごとの権限も確かめる。
+    # 画面で編集する。検索方法では検索関連の指示を読む。変更（PUT / DELETE）は、
+    # route の中で `ANSWER_PROMPT_EDIT_PERMISSIONS` の key ごとの権限も確かめる。
     ("GET", "/settings/answer-prompts"): _any(
-        MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS, MENU_SETTINGS_CHUNKING
+        MENU_SETTINGS_PROMPTS,
+        MENU_SETTINGS_PARSER_ADAPTERS,
+        MENU_SETTINGS_CHUNKING,
+        MENU_SETTINGS_RETRIEVAL,
     ),
     ("PUT", "/settings/answer-prompts/{key}"): _any(
         MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS, MENU_SETTINGS_CHUNKING

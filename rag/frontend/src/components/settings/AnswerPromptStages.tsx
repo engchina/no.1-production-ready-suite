@@ -11,14 +11,22 @@ import { groupStagesByPhase } from "./answer-prompt.logic";
  * backend の順序で各段を分類し、使用条件と原文を示す。
  * 回答テンプレートの編集欄は、生成の system 指示の後に置く。
  */
-export function AnswerPromptStages({ stages }: { stages: AnswerPromptStage[] }) {
+export function AnswerPromptStages({
+  stages,
+  titleKey = "settings.answerPrompts.stages.title",
+  descriptionKey = "settings.answerPrompts.stages.description",
+}: {
+  stages: AnswerPromptStage[];
+  titleKey?: I18nKey;
+  descriptionKey?: I18nKey;
+}) {
   return (
     <section className="space-y-4" aria-labelledby="answer-prompt-stages-title">
       <div className="space-y-1">
         <h2 id="answer-prompt-stages-title" className="text-sm font-semibold text-fg">
-          {t("settings.answerPrompts.stages.title")}
+          {t(titleKey)}
         </h2>
-        <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answerPrompts.stages.description")}</p>
+        <p className="text-xs leading-relaxed text-fg-muted">{t(descriptionKey)}</p>
       </div>
       {groupStagesByPhase(stages).map((group, index) => {
         const headingId = `answer-prompt-phase-${index}`;
