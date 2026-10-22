@@ -537,8 +537,8 @@ const PROCESSING_ORDER = [
   "vision_enabled",
   "heading_level_inference_enabled",
   "field_extraction_enabled",
-  "navigation_summary_enabled",
   "section_rules_mode",
+  "navigation_summary_enabled",
   "auto_chunk_after_extract_enabled",
   "chunking_strategy",
   "chunk_context_header_enabled",
@@ -570,7 +570,7 @@ async function fieldsInReadingOrder(container: ReturnType<Page["locator"]>) {
     .map((box) => box.field);
 }
 
-test("要約と上書きの一覧は、同じ項目を取込の処理順に並べる", async ({ page }) => {
+test("要約と上書きの一覧は、同じ項目を取込の処理順に並べる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockWorkspace(page);
   await page.goto("/documents/doc-1");
 
@@ -580,6 +580,8 @@ test("要約と上書きの一覧は、同じ項目を取込の処理順に並�
   // 以前は要約に無かった文脈ヘッダも出す。
   await expect(summary).toContainText("文脈ヘッダを検索対象へ追加");
   expect(await fieldsInReadingOrder(summary)).toEqual(PROCESSING_ORDER);
+  await summary.locator('[data-config-field="section_rules_mode"]').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("recipe-summary-order.png") });
   await expect(summary.getByRole("heading")).toHaveText([
     "1. ファイル準備",
     "2. 抽出",
@@ -592,6 +594,8 @@ test("要約と上書きの一覧は、同じ項目を取込の処理順に並�
   await expect(editor.locator("[data-config-field]")).toHaveCount(EDITOR_ORDER.length);
   // 2 列でも、左から右・上から下に読むと処理順になる。
   expect(await fieldsInReadingOrder(editor)).toEqual(EDITOR_ORDER);
+  await editor.locator('[data-config-field="section_rules_mode"]').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("recipe-editor-order.png") });
   await expect(panel).toContainText("すべてグローバル継承");
   // 文脈ヘッダを上書きすると、件数と要約のカードの両方に反映される。
   await editor
