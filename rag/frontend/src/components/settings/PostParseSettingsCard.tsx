@@ -12,7 +12,7 @@ import {
   TextField,
 } from "@production-ready/ui";
 import { ListChecks, RotateCcw, Save, Sparkles } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import { canOpenNavRoute } from "@/components/layout/nav-config";
@@ -27,6 +27,7 @@ import { toast } from "@/lib/toast";
 
 import { FeaturePromptDisclosure } from "./AnswerPromptEditor";
 import { ExtractionFieldsEditor } from "./ExtractionFieldsEditor";
+import { SectionRulesEditor } from "./SectionRulesEditor";
 
 type PostParseField =
   | "vision_enabled"
@@ -105,7 +106,7 @@ function sameForm(left: PostParseForm, right: PostParseForm) {
 }
 
 /**
- * 文書解析の「解析後の処理」（#528）。Vision・メタデータ/項目抽出・ナビゲーション要約の全体の既定を、
+ * 文書解析の「解析後の処理」（#528）。Vision・見出し階層・項目抽出・章節規則・章節要約の全体の既定を、
  * 取込の処理順に並べて保存する（保存先は backend/.env。文書のレシピで上書きできる）。
  * Vision の読み取りプロンプトと、項目抽出の項目の定義も、それぞれの項目の中で編集する。
  */
@@ -259,31 +260,49 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
             const hintId = `${step.anchor}-hint`;
             const name = t(step.label);
             return (
-              <li
-                key={step.field}
-                id={step.anchor}
-                // hash で移動したときに、上端の固定ヘッダーに隠れないようにする。
-                className="scroll-mt-24 space-y-3 rounded-md border border-border bg-surface p-3"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <h3 id={labelId} className="text-sm font-semibold text-fg">
-                      {t("settings.parserAdapters.postParse.step", { index: index + 1, name })}
+              <Fragment key={step.field}>
+                {step.field === "navigation_summary_enabled" ? (
+                  <li
+                    id={SETTINGS_ANCHORS.sectionRules}
+                    className="scroll-mt-24 space-y-3 rounded-md border border-border bg-surface p-3"
+                  >
+                    <h3 className="text-sm font-semibold text-fg">
+                      {t("settings.parserAdapters.postParse.step", {
+                        index: 4,
+                        name: t("sectionRules.title"),
+                      })}
                     </h3>
-                    <p id={hintId} className="mt-1 text-xs leading-relaxed text-fg-muted">
-                      {t(step.hint)}
-                    </p>
+                    <SectionRulesEditor />
+                  </li>
+                ) : null}
+                <li
+                  id={step.anchor}
+                  // hash で移動したときに、上端の固定ヘッダーに隠れないようにする。
+                  className="scroll-mt-24 space-y-3 rounded-md border border-border bg-surface p-3"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <h3 id={labelId} className="text-sm font-semibold text-fg">
+                        {t("settings.parserAdapters.postParse.step", {
+                          index: index + (step.field === "navigation_summary_enabled" ? 2 : 1),
+                          name,
+                        })}
+                      </h3>
+                      <p id={hintId} className="mt-1 text-xs leading-relaxed text-fg-muted">
+                        {t(step.hint)}
+                      </p>
+                    </div>
+                    <Switch
+                      checked={form[step.field]}
+                      disabled={save.isPending}
+                      aria-label={name}
+                      aria-describedby={hintId}
+                      onCheckedChange={(checked) => toggle(step.field, checked)}
+                    />
                   </div>
-                  <Switch
-                    checked={form[step.field]}
-                    disabled={save.isPending}
-                    aria-label={name}
-                    aria-describedby={hintId}
-                    onCheckedChange={(checked) => toggle(step.field, checked)}
-                  />
-                </div>
-                {extras[step.field]}
-              </li>
+                  {extras[step.field]}
+                </li>
+              </Fragment>
             );
           })}
         </ol>
