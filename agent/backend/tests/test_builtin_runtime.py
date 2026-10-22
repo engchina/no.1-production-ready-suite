@@ -12,6 +12,7 @@ import re
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import anyio
 import pytest
@@ -25,6 +26,7 @@ from pytest import MonkeyPatch
 from app.features.agent import builtin_runtime
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.config import runtime_config_store
+from app.features.agent.run_facts import fact_from_run
 from app.features.agent.runtime import (
     AUTOMATION_APPROVAL_SKIPPED_CODE,
     BUILTIN_RUNTIME_ID,
@@ -50,6 +52,7 @@ from app.features.agent.tools import (
     ToolPermissionLevel,
     tool_registry,
 )
+from app.features.agent.usage import build_usage_report
 from app.settings import get_settings
 
 LOOKUP = "test754_lookup"
@@ -957,8 +960,15 @@ def test_unreachable_mcp_service_is_a_tool_error_and_the_run_continues(
     """
     _script(
         monkeypatch,
-        [function_call("rag__rag_search", {"query": "契約の更新条件"}, call_id="call-rag")],
-        [assistant_message("RAG に接続できないため、いまは調べられません。")],
+        ModelStep(
+            output=[
+                function_call("rag__rag_search", {"query": "確認用の条件"}, call_id="call-rag")
+            ],
+            usage=_usage(1, 100, 20),
+        ),
+        ModelStep(
+            output=[assistant_message("接続できないため確認できません。")], usage=_usage(1, 150, 30)
+        ),
     )
     run_id = _create_mcp_run("契約の更新条件を調べて")
     # ツールの一覧の取得の後に RAG が止まった（tools/call の前の initialize から接続できない）。
@@ -983,6 +993,69 @@ def test_unreachable_mcp_service_is_a_tool_error_and_the_run_continues(
     assert step.tool_result.error_code == "mcp.unreachable"
     assert "RAG のサービスが起動しているか" in (step.tool_result.error or "")
     assert mcp_agent.calls_of("rag_search") == []
+    _assert_failed_usage(run_id)
+
+
+def _assert_failed_usage(run_id: str) -> None:
+    run = runtime_repository.get_run(run_id)
+    assert run.usage is not None
+    assert (
+        run.usage.requests,
+        run.usage.input_tokens,
+        run.usage.output_tokens,
+        run.usage.total_tokens,
+    ) == (2, 250, 50, 300)
+    report = build_usage_report(
+        [fact_from_run(run)],
+        days=7,
+        now=datetime.now(UTC),
+        tz=ZoneInfo("UTC"),
+        agent_names={},
+        user_names=lambda ids: {},
+    )
+    assert (
+        report.totals.runs,
+        report.totals.runs_with_usage,
+        report.totals.requests,
+        report.totals.total_tokens,
+    ) == (1, 1, 2, 300)
+    assert report.by_model[0].total_tokens == 300
+
+
+@pytest.mark.parametrize(
+    "check", ["_raise_on_grounding_failure", "_require_hops", "_require_output"]
+)
+def test_usage_is_retained_when_postcheck_fails_after_resume(
+    monkeypatch: MonkeyPatch,
+    calls: _Calls,
+    check: str,
+) -> None:
+    del calls
+    _script(
+        monkeypatch,
+        ModelStep(
+            output=[function_call(WRITE, {"query": "確認用"}, call_id="call-usage")],
+            usage=_usage(1, 100, 20),
+        ),
+        ModelStep(output=[assistant_message("確認しました。")], usage=_usage(1, 150, 30)),
+    )
+    run_id = _create_run("確認用の質問")
+    anyio.run(builtin_runtime.execute_run, run_id)
+    [approval] = runtime_repository.get_run(run_id).approvals
+    runtime_repository.decide_approval(approval.id, ApprovalDecisionRequest(approved=True))
+
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise builtin_runtime.BuiltinRuntimeError("runtime.grounding_tool_failed", "確認用の失敗")
+
+    async def async_fail(*args: Any, **kwargs: Any) -> Any:
+        return fail()
+
+    monkeypatch.setattr(
+        builtin_runtime, check, fail if check == "_raise_on_grounding_failure" else async_fail
+    )
+    anyio.run(builtin_runtime.resume_run, run_id)
+    assert runtime_repository.get_run(run_id).status == RunStatus.FAILED
+    _assert_failed_usage(run_id)
 
 
 # ---------------------------------------------------------------------------

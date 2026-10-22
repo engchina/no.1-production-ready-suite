@@ -2944,6 +2944,7 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
         execution = run_claim.bind_execution(run.id, run.metadata)
         # 公開中の版に固定したスキルで動く（#1855。下書きの Run・固定の無い古い版は今のスキル）。
         pinned = use_pinned_skills(agent.pinned_skills)
+        result: Any = None
         try:
             task = _support_task_run(run, agent)
             cancellations = await _apply_clarification_cancel(run, task.previous, agent.data_scopes)
@@ -2989,7 +2990,7 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                 refusal=_refusal_text(agent, sdk_agent) if refused else None,
             )
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
-            _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
+            _record_usage(run_id, getattr(exc, "run_data", None) or result, agent.model_id)
             _record_failure(run_id, exc)
         finally:
             reset_pinned_skills(pinned)
@@ -3012,6 +3013,7 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
         run, agent, state_text, decisions = resumed
         execution = run_claim.bind_execution(run.id, run.metadata)
         pinned = use_pinned_skills(agent.pinned_skills)
+        result: Any = None
         try:
             task = _support_task_run(run, agent)
             # 取り消しは実行の始めに済んでいる（session も閉じた）。記録だけを使う。
@@ -3065,7 +3067,7 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                 refusal=_refusal_text(agent, sdk_agent) if refused else None,
             )
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
-            _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
+            _record_usage(run_id, getattr(exc, "run_data", None) or result, agent.model_id)
             _record_failure(run_id, exc)
         finally:
             reset_pinned_skills(pinned)
