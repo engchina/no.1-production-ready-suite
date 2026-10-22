@@ -257,6 +257,7 @@ AUDIT_SYSTEM_PROMPT = (
         "\n"
         "## 3. 判定規則\n"
         "3.1 support（quote が text を支持するか）\n"
+        "- quote_unmatched が true の item は quote を原文として扱わず、その item の evidence で text の全主張を照合する。支持するときは support_quote に連続した支持原文を写す。原文で裏付けられない主張は unsupported。\n"
         "- quote が text の内容をそのまま裏付ければ suppo"
         "rted。quote にない操作・画面・値・効果・原因を text "
         "が足していれば unsupported。quote と逆なら con"

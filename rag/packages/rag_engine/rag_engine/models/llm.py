@@ -457,7 +457,7 @@ class GroundedItemReview(_StrictModel):
     support_quote: str = Field(
         default="",
         max_length=600,
-        description="quote_unmatched が true の item を supported とする場合、text の全主張を裏付ける連続した原文を、その item の evidence からそのまま写す。裏付けが無ければ空。",
+        description="段落を支持する連続した原文（根拠からの抜粋）。",
     )
     # 監査のモデルが答えた適用性（記録用。応答の schema には出さない）。not_applicable / unknown は回答に反映せず
     # ここに残す（#2837。`grounded.applicability_policy`）。
