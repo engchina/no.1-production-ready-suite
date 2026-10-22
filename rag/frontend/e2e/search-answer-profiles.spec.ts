@@ -1571,3 +1571,66 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 }
+
+
+test("言語資源の全体再取得は継承欄だけを更新し、編集中と保存済みの上書きを保持する", { tag: "@responsive" }, async ({ page }) => {
+  let body: Record<string, unknown> | null = null;
+  await mockDefaultSearchAnswerProfile(page, (value) => { body = value; });
+  const fields = ["cause_cues", "past_markers", "future_markers"].map((key) => ({
+    section: "question_cues", key, kind: "words", choices: [], ingest: false, max_chars: 40,
+  }));
+  let causeValue = "なぜ";
+  let pastValue = "以前";
+  let calls = 0;
+  await page.route("**/api/settings/language-pack", (route) => {
+    calls++;
+    const effective = { question_cues: { cause_cues: [causeValue], past_markers: [pastValue], future_markers: ["以後"] } };
+    return route.fulfill({ json: { data: { fields, effective, builtin: effective, overrides: {}, hash: causeValue }, error_messages: [], warning_messages: [] } });
+  });
+  await page.goto("/search-answer-profiles?id=bv-default");
+  const section = page.getByTestId("search-answer-profile-language-pack");
+  const cause = section.locator("textarea").nth(0);
+  const past = section.locator("textarea").nth(1);
+  const future = section.locator("textarea").nth(2);
+  await expect(cause).toHaveValue("なぜ");
+  await past.fill("過去\n");
+  causeValue = "どうして";
+  const before = calls;
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    window.dispatchEvent(new Event("visibilitychange"));
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    window.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(() => calls).toBeGreaterThan(before);
+  await expect(cause).toHaveValue("どうして");
+  await expect(past).toHaveValue("過去\n");
+  await future.fill("今後");
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の説明");
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack)
+    .toEqual({ question_cues: { past_markers: ["過去"], future_markers: ["今後"] } });
+  causeValue = "理由";
+  pastValue = "過去";
+  const savedCalls = calls;
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    window.dispatchEvent(new Event("visibilitychange"));
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    window.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(() => calls).toBeGreaterThan(savedCalls);
+  await expect(cause).toHaveValue("理由");
+  await expect(past).toHaveValue(/過去/);
+  await future.fill("変更中");
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "変更を破棄", exact: true }).click();
+  await expect(future).toHaveValue("今後");
+  await expect(cause).toHaveValue("理由");
+  // 全体と同じになっても、別の欄の保存で明示的な上書きを消さない。
+  await future.fill("将来");
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack)
+    .toEqual({ question_cues: { past_markers: ["過去"], future_markers: ["将来"] } });
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("inherited-language-refresh.png"), fullPage: true });
+});

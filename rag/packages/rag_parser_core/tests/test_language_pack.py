@@ -260,3 +260,42 @@ def test_field_keys_are_unique_across_sections() -> None:
     """項目の名前は節をまたいで重ねない（画面の名前と説明の鍵は項目の名前だけで引く）。"""
     keys = [spec.key for spec in FIELD_SPECS]
     assert len(keys) == len(set(keys))
+
+
+@pytest.mark.parametrize(
+    ("key", "word"),
+    [
+        ("roman_digits", "v=0"),
+        ("kanji_multipliers", "十=0"),
+        ("kanji_digits", "一=²"),
+    ],
+)
+def test_numeric_maps_reject_values_unusable_by_number_functions(key: str, word: str) -> None:
+    with pytest.raises(LanguagePackError):
+        resolve(builtin_pack(), {"numbers": {key: [word]}})
+
+
+def test_zero_digit_and_positive_multipliers_still_format_numbers() -> None:
+    from rag_parser_core.language.text import format_kanji_number, format_roman, parse_roman
+
+    pack = resolve(
+        builtin_pack(),
+        {
+            "numbers": {
+                "kanji_digits": ["〇=0", "一=1", "二=2"],
+                "kanji_multipliers": ["十=10", "百=100"],
+                "roman_digits": ["i=1", "v=5", "x=10"],
+            }
+        },
+    )
+    assert format_kanji_number(0, pack) == "〇"
+    assert format_kanji_number(12, pack) == "十二"
+    assert format_roman(14, pack) == "xiv"
+    assert parse_roman("xiv", pack) == 14
+
+
+def test_positive_unit_one_does_not_recurse_without_progress() -> None:
+    from rag_parser_core.language.text import format_kanji_number
+
+    pack = resolve(builtin_pack(), {"numbers": {"kanji_multipliers": ["十=1"]}})
+    assert format_kanji_number(2, pack) == "二十"

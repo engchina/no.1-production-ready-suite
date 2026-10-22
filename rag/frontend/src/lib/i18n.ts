@@ -1307,6 +1307,7 @@ export const ja = {
   "settings.language.preview.error": "試せませんでした。",
   "settings.language.error.pair": "開きと閉じの 2 文字で書いてください（例: 「」）。",
   "settings.language.error.numberPattern": "番号の位置を N で書いてください（例: 第N号）。",
+  "settings.language.error.minValue": "数は {min} 以上で書いてください。",
   "settings.language.error.charValue": "「字=数」の形で、字は 1 文字で書いてください（例: 一=1）。",
   "settings.language.error.wordMap": "「語=値」の形で書いてください（例: 別添=別紙）。",
   "settings.language.error.enumMap": "「語=値」の形で、値は {choices} のどれかで書いてください。",
