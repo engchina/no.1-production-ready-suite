@@ -416,3 +416,21 @@ test("検索インデックスを詳細で保存して概要へ戻ると選択�
   await expect(card.locator("dd").first()).toHaveText("高精度");
   await expectNoPageOverflow(page);
 });
+
+// 根パスの通常 E2E に加え、配備と同じ basename の実画面で確認する。
+test("サブパス配備でも全工程の設定リンクと hash を保持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const basePath = process.env.RAG_E2E_BASE_PATH;
+  test.skip(!basePath, "RAG_E2E_BASE_PATH を指定した配備経路の検証で実行する");
+  await page.goto(`${basePath}/settings/pipeline`);
+  const links = page.getByTestId("pipeline-recipe-defaults").getByRole("link");
+  await expect(links).toHaveCount(12);
+  for (const link of await links.all()) await expect(link).toHaveAttribute("href", new RegExp(`^${basePath}/settings/`));
+  const vision = links.filter({ hasText: "設定画面へ" }).filter({ has: page.locator("span") });
+  await expect(vision).toHaveCount(12);
+  const target = page.getByRole("link", { name: "章節の要約 を設定する画面を開く", exact: true });
+  await expect(target).toHaveAttribute("href", `${basePath}/settings/parser-adapters#post-parse-navigation-summary`);
+  await target.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("subpath-setting-links.png") });
+  await target.click();
+  await expect(page).toHaveURL(new RegExp(`${basePath}/settings/parser-adapters#post-parse-navigation-summary$`));
+});

@@ -56,7 +56,7 @@ export default defineConfig({
         // e2e は全 API を page.route で mock する前提（hermetic）。未モック API は Vite 側の
         // 404 middleware（dev サーバと preview）で終端し、実 backend / Oracle 環境へ接続しない。
         // base は FRONTEND_BASE_PATH で変わるので、e2e では空にして `/` で配信する。
-        env: { ...process.env, PLAYWRIGHT_HERMETIC_API: "1", BACKEND_URL: "http://127.0.0.1:9", FRONTEND_BASE_PATH: "" },
+        env: { ...process.env, PLAYWRIGHT_HERMETIC_API: "1", BACKEND_URL: "http://127.0.0.1:9", FRONTEND_BASE_PATH: process.env.RAG_E2E_BASE_PATH ?? "" },
       },
   projects: [
     {
