@@ -17,6 +17,7 @@ import {
   sectionErrors,
   sectionPageLabel,
   updateSection,
+  unmatchedSummaryCount,
 } from "./document-sections";
 
 function section(id: string, level: number, pages: [number, number] | null = null): DocumentSection {
@@ -86,5 +87,23 @@ describe("章節の一覧の操作", () => {
     expect(sectionPageLabel({ page_start: 3, page_end: 5 })).toBe("p.3–5");
     expect(sectionPageLabel({ page_start: 3, page_end: 3 })).toBe("p.3");
     expect(sectionPageLabel({ page_start: null, page_end: null })).toBeNull();
+  });
+});
+
+
+describe("章節と保存済み要約の対応", () => {
+  const summaries = new Map([["nav-a", "要約 A"], ["nav-b", "要約 B"]]);
+  it("対応しない要約を名前やページの類似で割り当てず件数で知らせる", () => {
+    const sections = [{ ...section("rule-a", 1), source_section_id: "rule-a" }];
+    expect(unmatchedSummaryCount(sections, summaries)).toBe(2);
+  });
+  it("人が修正した章節も元の章節 ID で対応させる", () => {
+    const sections = [{ ...section("manual-a", 1), source_section_id: "nav-a" }];
+    expect(unmatchedSummaryCount(sections, summaries)).toBe(1);
+    expect(unmatchedSummaryCount([...sections, { ...section("b", 1), source_section_id: "nav-b" }], summaries)).toBe(0);
+  });
+  it("要約が無効で保存されていないときは未対応の要約も無い", () => {
+    expect(unmatchedSummaryCount(outline, undefined)).toBe(0);
+    expect(unmatchedSummaryCount(outline, new Map())).toBe(0);
   });
 });

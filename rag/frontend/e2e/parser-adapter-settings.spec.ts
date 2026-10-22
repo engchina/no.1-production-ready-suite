@@ -250,7 +250,7 @@ for (const scheme of ["light", "dark"] as const) {
       "1. 図・画像を AI で読み取る",
       "2. 見出しの階層の推定（AI）",
       "3. メタデータ/項目抽出",
-      "4. ナビゲーション要約(章節木)",
+      "4. 章節の要約",
     ]);
     await expect(card).toContainText("Docling の解析結果のうち、PDF のしおりの階層を使えず");
     await expect(card).toContainText("番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす文書が対象です。");
@@ -274,7 +274,7 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(card).toContainText("長い本文は分けて送り、部分ごとにモデルを呼び出します。");
     await expect(card).toContainText("本文が長いほど入力トークンの総量と処理時間が増えます。");
     await expect(card).not.toContainText("有効にすると、文書ごとにモデルの呼び出しが 1 回増えます。");
-    const navigation = page.getByRole("switch", { name: "ナビゲーション要約(章節木)" });
+    const navigation = page.getByRole("switch", { name: "章節の要約" });
     await expect(vision).toHaveAttribute("aria-checked", "false");
     await vision.click();
     await fieldExtraction.click();
@@ -523,7 +523,10 @@ test("章節の抽出規則を独自の規則にして保存できる", async ({
 
   await page.goto("/settings/parser-adapters#post-parse-section-rules");
   await expect(page.locator("#post-parse-section-rules")).toBeInViewport();
-  await page.getByText("章節の抽出規則", { exact: true }).click();
+  const rulesCard = page.locator("#post-parse-section-rules");
+  await expect(rulesCard.getByRole("heading", { name: "章節の抽出規則" })).toBeVisible();
+  await expect(page.locator("#post-parse-navigation-summary").getByTestId("section-rules-editor")).toHaveCount(0);
+  await expect(page.getByRole("switch", { name: "章節の要約", exact: true })).not.toBeChecked();
   const editor = page.getByTestId("section-rules-editor");
   await expect(editor).toContainText("解析エンジンが見出しと判定した行から章節を作ります");
 
@@ -621,7 +624,7 @@ test("hash 付きの URL で解析後の処理の項目へ移動する", async (
 
   const target = page.locator("#post-parse-navigation-summary");
   await expect(target).toBeInViewport();
-  await expect(target.getByRole("switch", { name: "ナビゲーション要約(章節木)" })).toHaveAttribute(
+  await expect(target.getByRole("switch", { name: "章節の要約" })).toHaveAttribute(
     "aria-checked",
     "true"
   );

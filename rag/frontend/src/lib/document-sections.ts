@@ -176,3 +176,13 @@ export function sectionPageLabel(section: Pick<DocumentSection, "page_start" | "
   if (start === null) return null;
   return end !== null && end !== start ? `p.${start}–${end}` : `p.${start}`;
 }
+
+
+/** 現在の章節へ対応付けられない保存済み要約の件数。推測で別の章節には割り当てない。 */
+export function unmatchedSummaryCount(
+  sections: readonly DocumentSection[],
+  summaries: ReadonlyMap<string, string> | undefined,
+): number {
+  const sourceIds = new Set(sections.flatMap((section) => section.source_section_id ? [section.source_section_id] : []));
+  return [...(summaries?.keys() ?? [])].filter((id) => !sourceIds.has(id)).length;
+}

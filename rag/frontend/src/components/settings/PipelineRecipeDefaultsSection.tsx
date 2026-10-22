@@ -245,6 +245,13 @@ function PhaseCard({
               <dd className="mt-0.5 break-words text-sm font-medium text-fg">
                 {recipeConfigValueLabel(item, data.recipe_defaults)}
               </dd>
+              {item.field === "navigation_summary_enabled" || item.field === "section_rules_mode" ? (
+                <dd className="mt-1 text-xs leading-relaxed text-fg-muted">
+                  {t(item.field === "navigation_summary_enabled"
+                    ? "settings.parserAdapters.postParse.navigationSummary.hint"
+                    : "sectionRules.description")}
+                </dd>
+              ) : null}
               {href ? (
                 <dd className="mt-1">
                   <ButtonLink

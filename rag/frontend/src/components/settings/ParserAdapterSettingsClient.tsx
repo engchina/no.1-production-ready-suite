@@ -66,6 +66,7 @@ import {
 } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { SectionRulesSettingsCard } from "./SectionRulesEditor";
 import { PostParseSettingsCard } from "./PostParseSettingsCard";
 
 type ParserAdapterForm = {
@@ -260,6 +261,7 @@ export function ParserAdapterSettingsClient() {
       />
       {/* 解析の後の Vision・項目抽出・章節木の全体の既定（#528）。Vision の読み取りの指示もこの中で編集する。 */}
       <PostParseSettingsCard settings={settings} />
+      <SectionRulesSettingsCard />
     </PageBody>
   );
 }
