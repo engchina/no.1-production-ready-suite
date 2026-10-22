@@ -76,6 +76,7 @@ async def test_pipeline_records_route_for_guide_clarification() -> None:
 
     settings = Settings(
         _env_file=None,
+        rag_support_guide_enabled=True,
         rag_support_guide={
             "guide_id": "g-1",
             "revision": 1,

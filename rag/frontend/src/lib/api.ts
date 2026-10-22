@@ -1113,6 +1113,8 @@ export interface KnowledgeBaseQueryConfig {
    * 業務ガイドの照合で、質問と質問の例の埋め込みの近さを点に足す(#2398。質問ごとに埋め込みの呼び出しが 1 回増える)。
    * null / 未指定は全体の既定(使わない)。
    */
+  /** 業務ガイドの使用。未指定・null は OFF（全体の ON を継承しない）。 */
+  support_guide_enabled?: boolean | null;
   support_guide_semantic_match_enabled?: boolean | null;
   /** 上位の 2 つの業務ガイドの点が近いとき、どれに沿うかを確かめる(#2398)。null / 未指定は全体の既定(確かめない)。 */
   support_guide_close_match_clarification_enabled?: boolean | null;
@@ -1224,7 +1226,6 @@ export interface SearchAnswerProfileConfig {
    */
   contact_override?: string;
   /** 資料で答えた回答の窓口の案内を「資料から分かる仕様を示し、当てはまらなければ窓口へ」の形にするか（#2400。既定 false）。 */
-  spec_then_contact?: boolean;
   // system prompt・既定言語は #595 で削除した（回答は回答プロンプトのテンプレートで作る）。
   // 配信モード（serving_mode）は #1331 で削除した（文書の全 active レシピを常に融合する）。
 }
@@ -1293,6 +1294,19 @@ export interface SectionRulesSettingsData {
   mode: SectionRulesMode;
   rules: SectionRule[];
   presets: Partial<Record<SectionRulesMode, SectionRule[]>>;
+}
+
+export interface SectionRulesPreviewData {
+  document_id: string;
+  recipe_id: string;
+  extraction_recipe_id: string | null;
+  mode: SectionRulesMode;
+  effective_mode: SectionRulesMode;
+  recipe_overrides_mode: boolean;
+  extraction_available: boolean;
+  manual_edits_present: boolean;
+  page_count: number | null;
+  sections: DocumentSection[];
 }
 
 export type DocumentRecipeStepStatus =
@@ -2517,6 +2531,11 @@ export interface AnsweringSettingsData {
   auto_field_filter_enabled: boolean;
   /** 関係情報で根拠の候補を広げる(#2055。既定 false)。 */
   graph_expansion_enabled: boolean;
+  entity_expansion_enabled: boolean;
+  entity_expansion_max_chunks: number;
+  section_expansion_enabled: boolean;
+  section_expansion_max_levels: number;
+  section_expansion_input_token_percent: number;
   config_source: "runtime";
 }
 
@@ -3246,6 +3265,12 @@ export const api = {
       }`,
       { method: "DELETE" },
     ),
+  getProfileGuideSearchDefaults: () => request<{ max_queries: number; deadline_seconds: number }>("/api/settings/profile-guide-search-defaults"),
+
+  previewSectionRules: (documentId: string, body: { recipe_id: string; mode: SectionRulesMode; rules: SectionRule[] }) =>
+    request<SectionRulesPreviewData>(`/api/documents/${encodeURIComponent(documentId)}/sections/preview`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
   getSectionRulesSettings: () => request<SectionRulesSettingsData>("/api/settings/section-rules"),
   saveSectionRulesSettings: (body: { mode: SectionRulesMode; rules: SectionRule[] }) =>
     request<SectionRulesSettingsData>("/api/settings/section-rules", {

@@ -187,7 +187,12 @@ async def test_semantic_off_keeps_the_existing_match(question: str) -> None:
         async def embed(self, texts: list[str], **_: Any) -> list[list[float]]:
             raise AssertionError("OFF では埋め込みを呼ばない")
 
-    settings = get_settings().model_copy(update={"rag_support_guide_semantic_match_enabled": False})
+    settings = get_settings().model_copy(
+        update={
+            "rag_support_guide_enabled": True,
+            "rag_support_guide_semantic_match_enabled": False,
+        }
+    )
     query = await build_guide_query(object(), settings, "bv-1", GUIDES, question, None)  # type: ignore[arg-type]
     assert query.semantic == "off" and query.vector is None and query.expanded == ""
     expected = sorted(
@@ -270,7 +275,7 @@ def test_chat_guide_choice_round_trip() -> None:
 class _ProfileOracle(FakeKnowledgeOracle):
     def __init__(self, **query: Any) -> None:
         super().__init__()
-        self.query = KnowledgeBaseQueryConfig(**query)
+        self.query = KnowledgeBaseQueryConfig(**{"support_guide_enabled": True, **query})
         self.payloads[("bv-1", RUNTIME_KNOWLEDGE_KIND)] = dict(TERMS)
 
     async def get_search_answer_profile(self, search_answer_profile_id: str) -> Any:
@@ -418,6 +423,7 @@ async def test_semantic_on_builds_and_saves_missing_example_embeddings(
 ) -> None:
     settings = get_settings().model_copy(
         update={
+            "rag_support_guide_enabled": True,
             "rag_support_guide_semantic_match_enabled": True,
             "rag_support_guide_semantic_threshold": 0.8,
         }
@@ -471,7 +477,9 @@ async def test_semantic_failure_falls_back_to_term_matching(monkeypatch: MonkeyP
         async def embed(self, texts: list[str], **_: Any) -> list[list[float]]:
             raise RuntimeError("embedding unavailable")
 
-    settings = get_settings().model_copy(update={"rag_support_guide_semantic_match_enabled": True})
+    settings = get_settings().model_copy(
+        update={"rag_support_guide_enabled": True, "rag_support_guide_semantic_match_enabled": True}
+    )
     monkeypatch.setattr(
         support_guide_query, "SupportGuideStore", lambda _oracle: _EmbeddingStore({})
     )
@@ -481,3 +489,125 @@ async def test_semantic_failure_falls_back_to_term_matching(monkeypatch: MonkeyP
     assert query.alias_terms == ("通知画面A",)
     match = match_guide(GUIDES, query)
     assert match is not None and match.guide_id == "g-notice"
+
+
+@pytest.mark.parametrize("enabled", [None, False])
+async def test_master_off_skips_all_guide_work_and_keeps_regular_knowledge(
+    enabled: bool | None, monkeypatch: MonkeyPatch
+) -> None:
+    fake = _ProfileOracle(
+        support_guide_enabled=enabled,
+        support_guide_semantic_match_enabled=True,
+        support_guide_close_match_clarification_enabled=True,
+    )
+    monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
+
+    async def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("総合 OFF では業務ガイドを処理しない")
+
+    monkeypatch.setattr(search_route, "load_published_guides", forbidden)
+    monkeypatch.setattr(search_route, "build_guide_query", forbidden)
+    monkeypatch.setattr(search_route, "resolve_text_conditions", forbidden)
+    request = SearchRequest(query="NA画面の設定", search_answer_profile_id="bv-1")
+    _, settings, _, _ = await search_route._resolve_query_context(
+        request,
+        get_settings().model_copy(update={"rag_support_guide_enabled": True}),
+    )
+    assert settings.rag_support_guide_enabled is False
+    assert settings.rag_support_guide == {}
+    assert settings.rag_runtime_knowledge == TERMS
+    assert settings.rag_support_guide_semantic_match_enabled is True
+    assert settings.rag_support_guide_close_match_clarification_enabled is True
+
+
+def test_master_off_chat_does_not_load_or_confirm_guides(monkeypatch: MonkeyPatch) -> None:
+    fake = _ProfileOracle(
+        support_guide_enabled=False,
+        support_guide_semantic_match_enabled=True,
+        support_guide_close_match_clarification_enabled=True,
+    )
+    monkeypatch.setattr(knowledge_route, "OracleClient", lambda: fake)
+
+    async def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("総合 OFF では業務ガイドを読み込まない")
+
+    monkeypatch.setattr(knowledge_route, "_published_guides", forbidden)
+    result = client.post(
+        "/api/search-answer-profiles/bv-1/clarifications/suggest",
+        json={"query": "集計表Bの手順"},
+    )
+    assert result.status_code == 200
+    assert result.json()["data"]["suggestion"] is None
+
+
+@pytest.mark.usefixtures("auth")
+def test_master_off_mcp_does_not_lookup_guides(auth: Any, monkeypatch: MonkeyPatch) -> None:  # noqa: F811
+    monkeypatch.setattr(
+        mcp_tools,
+        "OracleClient",
+        lambda: _ProfileOracle(
+            support_guide_enabled=False,
+            support_guide_semantic_match_enabled=True,
+            support_guide_close_match_clarification_enabled=True,
+        ),
+    )
+
+    async def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("総合 OFF では MCP も業務ガイドを読み込まない")
+
+    monkeypatch.setattr(search_route, "load_published_guides", forbidden)
+    user = auth.user_with_permissions("guide-master-off", ["menu.search"])
+    result = _call(
+        "rag_lookup_guides",
+        {"search_answer_profile_id": "bv-1", "query": "NA画面の設定"},
+        _token(user.user_uuid),
+    )
+    assert result["structuredContent"]["guides"] == []
+
+
+@pytest.mark.parametrize("skipped", [False, True])
+async def test_master_off_ignores_a_previous_guide_confirmation(
+    skipped: bool, monkeypatch: MonkeyPatch
+) -> None:
+    from app.api.routes import chat as chat_route
+    from app.schemas.chat import ChatMessageRequest
+    from tests.test_chat_api import FakeChatOracle
+
+    oracle = FakeChatOracle()
+    monkeypatch.setattr(
+        oracle,
+        "get_search_answer_profile",
+        _ProfileOracle(support_guide_enabled=False).get_search_answer_profile,
+    )
+    conversation = await oracle.create_conversation(search_answer_profile_id="bv-1")
+
+    async def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("OFF へ切替後は過去のガイドの確認も適用しない")
+
+    async def resolve(request: SearchRequest, settings: Any, **kwargs: Any) -> Any:
+        return request, settings, None, "bv-1"
+
+    monkeypatch.setattr(chat_route, "_published_guides", forbidden)
+    monkeypatch.setattr(chat_route, "_resolve_query_context", resolve)
+    request = ChatMessageRequest.model_validate(
+        {
+            "content": "合成の質問",
+            **(
+                {"clarification_skipped_rule_id": GUIDE_CHOICE_RULE_ID}
+                if skipped
+                else {
+                    "clarification": {"rule_id": GUIDE_CHOICE_RULE_ID, "option_ids": ["g-import"]}
+                }
+            ),
+        }
+    )
+    prepared = await chat_route._prepare_chat_turn(
+        oracle,  # type: ignore[arg-type]
+        conversation.id,
+        "bv-1",
+        request,
+        get_settings(),
+    )
+    assert prepared.scope is None
+    assert prepared.request.conditions == {}
+    assert prepared.user_message.clarification is None

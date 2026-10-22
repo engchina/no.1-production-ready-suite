@@ -243,7 +243,10 @@ def test_loader_creates_profile_imports_and_publishes_guides() -> None:
 
     assert profile_id == "sap-1"
     assert published == ["g0"]
-    assert calls[0][2]["config"] == {"knowledge_base_ids": ["kb-1"]}
+    assert calls[0][2]["config"] == {
+        "knowledge_base_ids": ["kb-1"],
+        "query": {"support_guide_enabled": True},
+    }
     assert calls[1][2]["guides"][0]["references"][0]["document_id"] == "d1"
     assert calls[2] == (
         "POST",
@@ -297,11 +300,7 @@ def test_loader_selects_entity_index_recipe_for_every_document(tmp_path: Path) -
 
 
 def test_entity_index_selects_expansion_in_the_golden_set_and_the_profile() -> None:
-    """``--entity-index``: 拡張は検索・回答プロファイルで選ぶ（#1388）。
-
-    プロファイルを使わない評価（A）は ``rag_overrides`` で、``--guides`` で作るプロファイルは
-    ``query.entity_expansion_enabled`` で選ぶ。評価セットが明示した値は変えない。
-    """
+    """評価の明示値は保持する。指南を使うプロファイルは使用だけ ON にし、拡張は全体を使う。"""
     resolved = resolve_golden_set(GOLDEN_SET, {"manual.pdf": "d1", "params.xlsx": "d2"}, "kb-1")
     selected = with_entity_expansion(resolved)
     assert selected["rag_overrides"] == {"entity_expansion_enabled": True}
@@ -322,7 +321,7 @@ def test_entity_index_selects_expansion_in_the_golden_set_and_the_profile() -> N
     assert loader.create_search_answer_profile("評価", "kb-1") == "sap-1"
     assert bodies[0]["config"] == {
         "knowledge_base_ids": ["kb-1"],
-        "query": {"entity_expansion_enabled": True},
+        "query": {"support_guide_enabled": True},
     }
 
 

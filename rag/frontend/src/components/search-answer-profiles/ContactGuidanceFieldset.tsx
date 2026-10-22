@@ -1,5 +1,4 @@
-import { Switch, TextField } from "@production-ready/ui";
-import { useId } from "react";
+import { TextField } from "@production-ready/ui";
 
 import { profileContactInheritance, type ContactInheritance } from "@/lib/contact-inheritance";
 import { t } from "@/lib/i18n";
@@ -26,22 +25,18 @@ export function profileEffectiveContactText({ effective }: ContactInheritance): 
 
 /**
  * 回答の末尾の窓口の案内（#2400）。回答の注意書き（システム設定。#2405）の窓口を、このプロファイルの回答だけ
- * 上書きし、資料で答えた回答の案内を「資料から分かる仕様を示し、当てはまらなければ窓口へ」の形にできる。
+ * 上書きする。窓口の案内は共通の固定文を使う。
  * 上書きが空のときは継承するシステム設定の窓口を placeholder で示し、欄の下に有効な窓口と出どころを出す（#2683）。
  */
 export function ContactGuidanceFieldset({
   contactOverride,
-  specThenContact,
   disabled,
   onChange,
 }: {
   contactOverride: string;
-  specThenContact: boolean;
   disabled: boolean;
-  onChange: (patch: { contact_override?: string; spec_then_contact?: boolean }) => void;
+  onChange: (patch: { contact_override?: string }) => void;
 }) {
-  const labelId = useId();
-  const helperId = useId();
   const system = useInheritedAnswerContact();
   const inheritance = profileContactInheritance(contactOverride, system.data);
   return (
@@ -71,25 +66,6 @@ export function ContactGuidanceFieldset({
           disabled={disabled}
           width="full"
         />
-        <div className="flex items-start gap-3">
-          <Switch
-            id="search-answer-profile-spec-then-contact"
-            checked={specThenContact}
-            disabled={disabled}
-            aria-labelledby={labelId}
-            aria-describedby={helperId}
-            onCheckedChange={(checked) => onChange({ spec_then_contact: checked })}
-            className="mt-0.5"
-          />
-          <div className="min-w-0">
-            <span id={labelId} className="text-sm text-fg">
-              {t("searchAnswerProfiles.contact.specThenContact")}
-            </span>
-            <p id={helperId} className="mt-0.5 text-xs leading-relaxed text-fg-muted">
-              {t("searchAnswerProfiles.contact.specThenContactHelper")}
-            </p>
-          </div>
-        </div>
       </div>
     </fieldset>
   );

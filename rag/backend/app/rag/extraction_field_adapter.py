@@ -36,6 +36,7 @@ from rag_parser_core.extraction import (
     EXTRACTED_FIELD_CONTENT_KIND,
     EXTRACTED_FIELD_KEY,
     FIELD_SOURCE_ELEMENT_KEY,
+    is_derived_content,
 )
 from rag_parser_core.language import current_pack
 from rag_parser_core.structured_records import record_boundary_plain_text
@@ -502,7 +503,9 @@ def field_definitions_prompt(field_defs: list[FieldDefinition]) -> str:
     )
 
 
-def _field_element(field: ExtractionField, order: int) -> DocumentElement:
+def _field_element(
+    field: ExtractionField, order: int, source: DocumentElement | None
+) -> DocumentElement:
     """抽出 field を検索可能な element として表現する(content_kind=field)。"""
     metadata: dict[str, object] = {
         "field_name": field.name,
@@ -518,8 +521,9 @@ def _field_element(field: ExtractionField, order: int) -> DocumentElement:
         order=order,
         element_id=f"field-{order}-{field.name}"[:128],
         content_kind=EXTRACTED_FIELD_CONTENT_KIND,
-        page_number=field.page_number,
-        bbox=list(field.bbox) if field.bbox else None,
+        section_path=list(source.section_path) if source else [],
+        page_number=source.page_number if source else field.page_number,
+        bbox=list(source.bbox) if source and source.bbox else None,
         metadata=metadata,
     )
 
@@ -661,7 +665,15 @@ async def extract_fields_from_extraction(
         )
 
     next_order = max((element.order for element in extraction.elements), default=0) + 1
-    new_elements = [_field_element(field, next_order + index) for index, field in enumerate(fields)]
+    sources = {
+        element.element_id: element
+        for element in extraction.elements
+        if element.element_id and not is_derived_content(element.content_kind, element.metadata)
+    }
+    new_elements = [
+        _field_element(field, next_order + index, sources.get(field.source_element_id or ""))
+        for index, field in enumerate(fields)
+    ]
     extracted = extraction.model_copy(
         update={
             "fields": [*extraction.fields, *fields],

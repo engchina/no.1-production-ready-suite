@@ -1,5 +1,7 @@
 """検索・回答プロファイル(Search Answer Profile)設定解決の単体テスト(DB 非依存)。"""
 
+from pytest import MonkeyPatch
+
 from app.config import get_settings
 from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
 from app.rag.search_answer_profile_config import (
@@ -23,11 +25,11 @@ def test_query_overrides_apply() -> None:
     settings = get_settings()
     config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1", "kb-2"],
-        query=KnowledgeBaseQueryConfig(query_strategy="rag_fusion", guardrail_policy="strict"),
+        query=KnowledgeBaseQueryConfig(max_anchors_per_document=2),
     )
     merged, applied = resolve_search_answer_profile_settings(settings, config)
     assert applied is True
-    assert merged.rag_query_strategy == "rag_fusion"
+    assert merged.rag_max_anchors_per_document == 2
     assert merged.rag_guardrails_enabled is settings.rag_guardrails_enabled
     # グローバルは破壊しない。
     assert settings.rag_query_strategy == "simple_retrieval"
@@ -39,7 +41,7 @@ def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
     config = parse_search_answer_profile_config(
         {
             "query": {
-                "answer_flow": "standard_rag",
+                "max_anchors_per_document": 2,
                 "vector_index_profile": "accurate",
             }
         }
@@ -48,7 +50,7 @@ def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
     assert config.query.vector_index_profile == "accurate"
     merged, applied = resolve_search_answer_profile_settings(settings, config)
     assert applied is True
-    assert merged.rag_answer_flow == "standard_rag"
+    assert merged.rag_max_anchors_per_document == 2
     assert merged.rag_vector_index_profile == settings.rag_vector_index_profile
     dumped_query = dump_search_answer_profile_config(config)["query"]
     assert isinstance(dumped_query, dict)
@@ -61,14 +63,14 @@ def test_saved_evaluation_suite_is_ignored_on_load_and_dropped_on_save() -> None
     config = parse_search_answer_profile_config(
         {
             "query": {
-                "rerank_enabled": False,
+                "max_anchors_per_document": 3,
                 "evaluation_suite": "strict_ci",
             }
         }
     )
 
     # 他の上書きは生きたまま、評価スイートだけを捨てる(設定全体を空へ縮退させない)。
-    assert config.query.rerank_enabled is False
+    assert config.query.max_anchors_per_document == 3
     assert "evaluation_suite" not in KnowledgeBaseQueryConfig.model_fields
     merged, applied = resolve_search_answer_profile_settings(settings, config)
     assert applied is True
@@ -76,7 +78,7 @@ def test_saved_evaluation_suite_is_ignored_on_load_and_dropped_on_save() -> None
     dumped_query = dump_search_answer_profile_config(config)["query"]
     assert isinstance(dumped_query, dict)
     assert "evaluation_suite" not in dumped_query
-    assert dumped_query["rerank_enabled"] is False
+    assert dumped_query["max_anchors_per_document"] == 3
 
 
 def test_saved_standard_options_are_ignored_on_load_and_dropped_on_save() -> None:
@@ -100,16 +102,16 @@ def test_saved_standard_options_are_ignored_on_load_and_dropped_on_save() -> Non
                 "retrieval_business_fit_weighting": True,
                 "post_retrieval_pipeline": "lean",
                 "generation_profile": "structured_json",
-                "neighbor_child_count": 5,
+                "max_anchors_per_document": 5,
             },
         }
     )
 
     assert config.normalized_knowledge_base_ids() == ["kb-1"]
-    assert config.query.neighbor_child_count == 5
+    assert config.query.max_anchors_per_document == 5
     merged, applied = resolve_search_answer_profile_settings(settings, config)
     assert applied is True
-    assert merged.rag_neighbor_child_count == 5
+    assert merged.rag_max_anchors_per_document == 5
     dumped = dump_search_answer_profile_config(config)
     assert "system_prompt" not in dumped
     assert "default_language" not in dumped
@@ -126,17 +128,17 @@ def test_saved_standard_options_are_ignored_on_load_and_dropped_on_save() -> Non
         "generation_profile",
     ):
         assert removed not in dumped_query
-    assert dumped_query["neighbor_child_count"] == 5
+    assert dumped_query["max_anchors_per_document"] == 5
 
 
 def test_dump_parse_roundtrip() -> None:
     """dump -> parse で設定が保たれる。"""
     config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1", " kb-1 ", "kb-2"],
-        query=KnowledgeBaseQueryConfig(screen_linking_enabled=True),
+        query=KnowledgeBaseQueryConfig(max_anchors_per_document=3),
     )
     restored = parse_search_answer_profile_config(dump_search_answer_profile_config(config))
-    assert restored.query.screen_linking_enabled is True
+    assert restored.query.max_anchors_per_document == 3
     # 正規化で重複・空白は取り除かれる。
     assert restored.normalized_knowledge_base_ids() == ["kb-1", "kb-2"]
 
@@ -173,3 +175,122 @@ def test_removed_guardrail_policy_cannot_override_or_be_saved() -> None:
     assert merged.rag_guardrails_enabled is True
     assert applied is False
     assert "guardrail_policy" not in config.model_dump()["query"]
+
+
+def test_support_guide_switch_round_trip_preserves_internal_matching_settings() -> None:
+    settings = get_settings().model_copy(update={"rag_support_guide_enabled": True})
+    old = {
+        "support_guide_semantic_match_enabled": True,
+        "support_guide_close_match_clarification_enabled": True,
+    }
+    for enabled in [None, False, True]:
+        config = parse_search_answer_profile_config(
+            {"query": {**old, "support_guide_enabled": enabled}}
+        )
+        reloaded = parse_search_answer_profile_config(dump_search_answer_profile_config(config))
+        resolved, _ = resolve_search_answer_profile_settings(settings, reloaded)
+        assert resolved.rag_support_guide_enabled is (enabled is True)
+        assert resolved.rag_support_guide_semantic_match_enabled is True
+        assert resolved.rag_support_guide_close_match_clarification_enabled is True
+        assert (
+            resolved.rag_support_guide_semantic_threshold
+            == settings.rag_support_guide_semantic_threshold
+        )
+        assert (
+            resolved.rag_support_guide_close_match_margin
+            == settings.rag_support_guide_close_match_margin
+        )
+    missing, _ = resolve_search_answer_profile_settings(
+        settings, parse_search_answer_profile_config({"query": old})
+    )
+    assert missing.rag_support_guide_enabled is False
+    assert settings.rag_support_guide_enabled is True
+
+
+def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_save() -> None:
+    settings = get_settings().model_copy(
+        update={
+            "rag_query_strategy": "simple_retrieval",
+            "rag_answer_flow": "crag",
+            "rag_neighbor_child_count": 3,
+            "rag_rerank_enabled": True,
+            "rag_auto_field_filter_enabled": False,
+            "rag_graph_expansion_enabled": False,
+            "rag_screen_linking_enabled": False,
+            "rag_request_coverage_retrieval_enabled": True,
+            "rag_guide_step_retrieval_enabled": True,
+            "rag_entity_expansion_enabled": True,
+            "rag_entity_expansion_max_chunks": 6,
+            "rag_section_expansion_enabled": True,
+            "rag_section_expansion_max_levels": 4,
+            "rag_section_expansion_input_token_percent": 50,
+            "rag_guide_step_max_queries": 4,
+            "rag_guide_step_deadline_seconds": 60.0,
+        }
+    )
+    old = {
+        "query_strategy": "hyde",
+        "answer_flow": "standard_rag",
+        "neighbor_child_count": 0,
+        "rerank_enabled": False,
+        "auto_field_filter_enabled": True,
+        "graph_expansion_enabled": True,
+        "screen_linking_enabled": True,
+        "request_coverage_retrieval_enabled": False,
+        "guide_step_retrieval_enabled": False,
+        "entity_expansion_enabled": False,
+        "entity_expansion_max_chunks": 3,
+        "section_expansion_enabled": False,
+        "section_expansion_max_levels": 2,
+        "section_expansion_input_token_percent": 40,
+    }
+    config = parse_search_answer_profile_config(
+        {
+            "knowledge_base_ids": ["kb-1"],
+            "query": {
+                **old,
+                "max_anchors_per_document": 2,
+                "support_guide_enabled": True,
+                "guide_step_max_queries": 7,
+                "guide_step_deadline_seconds": 37.5,
+            },
+        }
+    )
+    merged, applied = resolve_search_answer_profile_settings(settings, config)
+    assert applied is True
+    for key in old:
+        assert getattr(merged, f"rag_{key}") == getattr(settings, f"rag_{key}")
+    assert merged.rag_max_anchors_per_document == 2
+    assert merged.rag_guide_step_max_queries == 7
+    assert merged.rag_guide_step_deadline_seconds == 37.5
+    saved = dump_search_answer_profile_config(config)
+    assert saved["knowledge_base_ids"] == ["kb-1"]
+    query = saved["query"]
+    assert isinstance(query, dict)
+    assert not set(old) & set(query)
+    assert query["support_guide_enabled"] is True
+    assert query["max_anchors_per_document"] == 2
+    assert query["guide_step_max_queries"] == 7
+    assert query["guide_step_deadline_seconds"] == 37.5
+
+
+def test_profile_can_read_actual_guide_search_defaults_without_global_edit_permission(
+    monkeypatch: "MonkeyPatch",
+) -> None:
+    from app.api.routes import settings as settings_route
+    from app.main import app
+    from tests.security_support import enable_production_auth, login
+    from tests.support import AsgiTestClient
+
+    settings = get_settings().model_copy(
+        update={"rag_guide_step_max_queries": 7, "rag_guide_step_deadline_seconds": 37.5}
+    )
+    monkeypatch.setattr(settings_route, "get_settings", lambda: settings)
+    client = AsgiTestClient(app)
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("profile-settings", ["menu.search_answer_profiles"])
+    headers = login(client, "profile-settings")
+    response = client.get("/api/settings/profile-guide-search-defaults", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == {"max_queries": 7, "deadline_seconds": 37.5}
+    assert client.get("/api/settings/answering", headers=headers).status_code == 403

@@ -95,6 +95,27 @@ class SectionRulesStore(BaseModel):
     rules: list[SectionRule] = Field(default_factory=list, max_length=MAX_SECTION_RULES)
 
 
+class SectionRulesPreviewRequest(SectionRulesStore):
+    """未保存の規則を既存レシピの抽出結果へ当てる。"""
+
+    recipe_id: str = Field(min_length=1, max_length=128)
+
+
+class SectionRulesPreviewData(BaseModel):
+    """抽出結果から得た候補。人が編集した最終表示は合成しない。"""
+
+    document_id: str
+    recipe_id: str
+    extraction_recipe_id: str | None
+    mode: SectionRulesMode
+    effective_mode: SectionRulesMode
+    recipe_overrides_mode: bool
+    extraction_available: bool
+    manual_edits_present: bool
+    page_count: int | None
+    sections: list[DocumentSection]
+
+
 def preset_rules() -> dict[SectionRulesMode, list[SectionRule]]:
     """プリセット(rag_engine/chunking/headings.py・rag_parser_core の見出しの規則を下敷きにした)。
 

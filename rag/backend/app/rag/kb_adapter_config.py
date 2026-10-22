@@ -141,6 +141,7 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。None は Settings の既定(5)。
     "max_anchors_per_document": "rag_max_anchors_per_document",
     # 業務ガイドの照合(#2398)。None は Settings の既定(どちらも OFF)。
+    "support_guide_enabled": "rag_support_guide_enabled",
     "support_guide_semantic_match_enabled": "rag_support_guide_semantic_match_enabled",
     "support_guide_close_match_clarification_enabled": (
         "rag_support_guide_close_match_clarification_enabled"
@@ -371,6 +372,8 @@ class KnowledgeBaseQueryConfig(BaseModel):
     max_anchors_per_document: int | None = Field(default=None, ge=0, le=20)
     # 業務ガイドの意味の照合(#2398)。質問ごとに埋め込みの呼び出しが 1 回増える。None は全体の既定
     # (OFF)。
+    # 未指定・null は OFF。既存プロファイルを自動的に有効へ変更しない。
+    support_guide_enabled: bool | None = None
     support_guide_semantic_match_enabled: bool | None = None
     # 上位の 2 つの業務ガイドの点が近いとき、どのガイドかを確かめる(#2398)。None は全体の既定(OFF)。
     support_guide_close_match_clarification_enabled: bool | None = None

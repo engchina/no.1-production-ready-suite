@@ -1712,7 +1712,7 @@ export const ja = {
   "settings.services.item.pipelineEvaluation": "評価の基準",
   "settings.services.loadError": "サービス一覧を取得できませんでした。",
   "settings.retrieval.subtitle":
-    "回答の検索と生成の全体の既定（検索・回答プロファイルで上書きできます）と、回答の記録の保存期間・質問履歴を設定します。",
+    "回答の検索方法と生成方式の全体設定、および回答の記録の保存期間・質問履歴を設定します。",
   "settings.retrieval.actions.unsaved": "未保存の変更があります。",
   "settings.retrieval.actions.reset": "変更を破棄",
   "settings.prompts.subtitle":
@@ -2129,13 +2129,11 @@ export const ja = {
   "searchAnswerProfiles.languagePack.count": "上書き {count} 項目",
   "searchAnswerProfiles.languagePack.changed": "全体の値から変更",
   "searchAnswerProfiles.languagePack.reset": "全体の値に戻す",
-  "searchAnswerProfiles.field.guideMatching": "業務ガイドの照合",
-  "searchAnswerProfiles.field.guideSemanticMatch": "意味の近さで業務ガイドを選ぶ",
-  "searchAnswerProfiles.field.guideSemanticMatchHelper":
-    "語の一致に加えて、質問と業務ガイドの質問の例の意味の近さ（埋め込み）を照合の点に足します。言い方が業務ガイドの語と違う質問でも業務ガイドを選べます。質問ごとに埋め込みの呼び出しが 1 回増えます。継承時は検索方法の現在の設定を使います。",
-  "searchAnswerProfiles.field.guideCloseMatch": "近い業務ガイドを確かめる",
-  "searchAnswerProfiles.field.guideCloseMatchHelper":
-    "質問に合う業務ガイドが複数あり照合の点が近いとき、どの業務ガイドについての質問かを回答の前に確かめます（選択肢は業務ガイドの題名）。継承時は検索方法の現在の設定を使います。",
+  "searchAnswerProfiles.field.guideEnabledOn": "ON",
+  "searchAnswerProfiles.field.guideEnabledOff": "OFF",
+  "searchAnswerProfiles.field.guideEnabled": "業務ガイドを使用する",
+  "searchAnswerProfiles.field.guideEnabledHelper":
+    "既定値は OFF です。ON にすると、質問に合う業務ガイドを選び、その条件と手順に沿って回答します。OFF のときは業務ガイドを使用しません。",
   "searchAnswerProfiles.field.graphExpansion": "関係情報で根拠を広げる",
   "searchAnswerProfiles.field.graphExpansionHelper":
     "関係情報の構築で作った章・節・表の見出しのつながりを使い、検索で当たった根拠と同じ章・節・表の根拠と、質問に見出しの語が含まれる章・節の根拠を候補に加えます。関係情報を作った文書にだけ効きます。AI の呼び出しは増えません。継承時は検索方法の現在の設定を使います。",
@@ -2152,11 +2150,13 @@ export const ja = {
   "searchAnswerProfiles.field.answerModel": "回答モデル",
   "searchAnswerProfiles.field.answerModelHelper": "この回答設定で使うモデルです。質問でモデルを選んだ場合は、その選択を優先します。",
   "searchAnswerProfiles.field.unavailableModel": "{model}（登録を確認できません）",
+  "searchAnswerProfiles.field.guideDefaultsLoading": "既定値を読み込んでいます。",
+  "searchAnswerProfiles.field.guideDefaultsError": "既定値を取得できませんでした。もう一度読み込んでください。",
   "searchAnswerProfiles.field.guideStepDeadline": "手順ごとの検索の時間上限（秒）",
-  "searchAnswerProfiles.field.guideStepDeadlineHelper": "この回答設定での上限です。0 は手順検索を開始しません。回答全体の時間上限と検索回数の上限は引き続き適用します。",
+  "searchAnswerProfiles.field.guideStepDeadlineHelper": "既定は {defaultValue} 秒です。この回答設定での上限です。0 は手順検索を開始しません。回答全体の時間上限と検索回数の上限は引き続き適用します。",
   "searchAnswerProfiles.field.guideStepMaxQueries": "手順ごとの検索の上限",
   "searchAnswerProfiles.field.guideStepMaxQueriesHelper":
-    "1 回の回答で手順ごとに探す回数の上限です（参照の頁に絞った検索を含む）。主の検索の後に足す検索の合計の枠も超えません。継承時は検索方法の現在の設定を使います。",
+    "既定は {defaultValue} です。1 回の回答で手順ごとに探す回数の上限です（参照の頁に絞った検索を含む）。主の検索の後に足す検索の合計の枠も超えません。継承時は検索方法の現在の設定を使います。",
   "searchAnswerProfiles.entityExpansion.title": "名称・別名でつながる根拠",
   "searchAnswerProfiles.entityExpansion.enabled": "名称・別名でつながる根拠を 1 段広げる",
   "searchAnswerProfiles.entityExpansion.helper":
@@ -2921,21 +2921,44 @@ export const ja = {
     "標準の項目（文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を抽出します。文書が属するナレッジベースで項目を定義していれば、その項目を使います。",
   "flow.extraction.navigation.title": "章節ナビゲーション",
   "documents.processingConfig.sectionRules": "章節の抽出規則",
-  "sectionRules.mode.parser": "解析エンジンの見出し",
-  "sectionRules.mode.legal": "法令（編・章・節・款・目・条）",
-  "sectionRules.mode.official": "公用文（第1・1・(1)・ア・(ア)）",
-  "sectionRules.mode.numbered": "番号付き（1. / 1.1 / 1.1.1）",
-  "sectionRules.mode.custom": "独自の規則",
+  "sectionRules.mode.parser": "解析済みの見出しを使う",
+  "sectionRules.mode.legal": "番号の規則：編・章・節・款・目・条",
+  "sectionRules.mode.official": "番号の規則：第1・1・(1)・ア・(ア)",
+  "sectionRules.mode.numbered": "番号の規則：1.・1.1・1.1.1",
+  "sectionRules.mode.custom": "独自の規則で章節を作る",
   "sectionRules.title": "章節の抽出規則",
   "sectionRules.loading": "章節の抽出規則を読み込んでいます",
   "sectionRules.description":
     "章節ナビゲーションの章節を、どの行から作るかを決めます。章節の要約が無効でも適用され、LLM は使いません。取込はやり直さず、次に章節を表示したときから反映します。文書の処理レシピで方式を上書きできます。",
   "sectionRules.mode.label": "方式",
-  "sectionRules.parserHint": "解析エンジンが見出しと判定した行から章節を作ります（これまでどおり）。",
+  "sectionRules.parserHint": "保存済みの解析結果にある見出しと階層を使います。番号がない見出しも対象です。見出しの構造がなければ章節は0件になります。方式を選ぶだけでは再解析やAIによる見出しの再認識は行いません。番号の規則を試すか、文書の解析結果を確認してください。",
   "sectionRules.presetHint":
     "各要素の 1 行目（全角・半角をそろえたもの）に、上から順に規則を当てます。合った規則の階層の章節にします。",
   "sectionRules.customHint":
     "各要素の 1 行目（全角・半角をそろえたもの）に、上の規則から順に正規表現を行頭から当て、最初に合った規則の階層の章節にします。80 字を超える行と、文で終わる行は見出しにしません。",
+  "sectionRules.scopeHint": "ここで選ぶのは全体の既定です。文書レシピで方式を指定している場合はレシピの設定が優先されます。章節の表示は保存済みの抽出結果から反映でき、既存の章節要約を作り直すには抽出から再処理します。",
+  "sectionRules.example.title": "章節の作られ方（合成の例）",
+  "sectionRules.example.input": "保存済みの見出し：概要（階層1、1ページ）と設定（階層2、2ページ）",
+  "sectionRules.example.output": "章節の候補：概要の下に設定が入ります。見出しの構造がない解析結果では候補は0件です。",
+  "sectionRules.example.tree": "概要（1ページ）\n  設定（2ページ）",
+  "sectionRules.customDetails": "独自規則の詳細を編集する",
+  "sectionRules.preview.title": "文書で章節の候補を確認する",
+  "sectionRules.preview.hint": "選択中の方式と未保存の規則を、文書の保存済みの抽出結果に当てます。設定の保存、再取込、AIの呼び出し、要約生成は行いません。",
+  "sectionRules.preview.document": "対象文書",
+  "sectionRules.preview.recipe": "処理レシピ",
+  "sectionRules.preview.recipeName": "レシピ {number}",
+  "sectionRules.preview.choose": "選択してください",
+  "sectionRules.preview.run": "章節の候補を確認",
+  "sectionRules.preview.loading": "保存済みの抽出結果から章節を確認しています",
+  "sectionRules.preview.count": "選択中の方式の候補：{count} 件",
+  "sectionRules.preview.page": "ページ {start}〜{end}",
+  "sectionRules.preview.noPage": "ページ情報なし",
+  "sectionRules.preview.empty": "この方式では章節の候補はありません。番号の規則を試すか、解析結果に見出しや番号が保存されているか確認してください。",
+  "sectionRules.preview.noExtraction": "このレシピには保存済みの抽出結果がありません。文書の解析を完了してから確認してください。",
+  "sectionRules.preview.manual": "この文書には人が編集した章節があります。ここでは編集済みの最終表示を使わず、抽出結果から作る候補だけを表示します。",
+  "sectionRules.preview.override": "このレシピの指定方式は「{mode}」です。全体の既定を変更してもこの指定が優先されます。下の候補は比較用に選択中の方式で作っています。",
+  "sectionRules.preview.stale": "方式、規則、対象が変わりました。候補をもう一度確認してください。",
+  "sectionRules.preview.error": "章節の候補を確認できませんでした。対象と権限を確認して、もう一度試してください。",
   "sectionRules.level": "階層 {level}",
   "sectionRules.list.label": "独自の規則",
   "sectionRules.empty": "規則がありません。「規則を追加」かプリセットから読み込んでください。",
@@ -3623,7 +3646,7 @@ export const ja = {
   // 回答の末尾の窓口の案内（#2400）
   "searchAnswerProfiles.contact.title": "回答の末尾の窓口の案内",
   "searchAnswerProfiles.contact.helper":
-    "回答の注意書き（システム設定）の窓口の案内を、このプロファイルの回答だけ変えます。業務ガイドの「人への引き継ぎ」の窓口があれば、そちらを優先します。",
+    "回答の注意書き（システム設定）の窓口を、このプロファイルの回答だけ変えます。案内は「解決しない場合は、〈窓口〉へお問い合わせください。」で統一します。業務ガイドの「人への引き継ぎ」の窓口があれば、そちらを優先します。",
   "searchAnswerProfiles.contact.override": "窓口の上書き",
   "searchAnswerProfiles.contact.overrideHelper":
     "このプロファイルの業務の窓口の名前と連絡の方法（電話・URL など）を 1 行で書きます。空ならシステム設定の窓口を継承します。",
@@ -3638,9 +3661,6 @@ export const ja = {
   "searchAnswerProfiles.contact.source.system": "システム設定の窓口を継承",
   "searchAnswerProfiles.contact.sameAsSystem":
     "システム設定と同じ窓口です。空にすると、システム設定の窓口を継承します。",
-  "searchAnswerProfiles.contact.specThenContact": "資料から分かる仕様を示し、当てはまらなければ窓口へ案内する",
-  "searchAnswerProfiles.contact.specThenContactHelper":
-    "資料で答えた回答の末尾の案内を「回答は資料から分かる仕様です。ご自身の状況に当てはまらない場合は、〈窓口〉へお問い合わせください。」にします。根拠が足りない回答は、ふつうの窓口の案内のままです。",
   "searchAnswerProfiles.clarification.title": "回答前の確認",
   "searchAnswerProfiles.clarification.helper":
     "チャットで曖昧な質問に回答する前に、確認事項を利用者に確かめるかを決めます。確認事項はルールごとに「プロファイルの知識」で設定し、業務ガイドの条件の確認も同じ方針に従います。",
@@ -4008,7 +4028,7 @@ export const ja = {
     "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。期限を過ぎた記録は、次の回答の保存時とこの設定の保存時に削除します。",
   "settings.answering.title": "回答の検索と生成",
   "settings.answering.description":
-    "回答の検索と生成の全体の既定です。検索・回答プロファイルを指定しない呼び出し（MCP など）もこの値を使います。公開済みの検索・回答プロファイルの「検索・回答設定」で上書きできます。",
+    "すべての検索・回答プロファイルと、プロファイルを指定しない呼び出しで使う全体設定です。各機能は実行時に最初に呼ばれる順で並べています。",
   "settings.answering.queryStrategy": "質問の拡張",
   "settings.answering.queryStrategyHint":
     "質問の言い回しでは届きにくい資料の表現を補う検索文の作り方です。自動ルーティングは質問ごとに AI が選びます。",
@@ -4018,6 +4038,13 @@ export const ja = {
   "settings.answering.neighborChildCount": "根拠の前後から加える数",
   "settings.answering.neighborChildCountHint":
     "根拠のチャンクの前後から文脈に加えるチャンクの数です。0 は加えません。",
+  "settings.answering.entityExpansion": "名称・別名でつながる根拠",
+  "settings.answering.entityExpansionHint": "質問と上位の候補の名称・別名から、つながる根拠を 1 段だけ検索候補に加えます。名称・別名の索引を作った文書だけに効きます。AI の呼び出しは増えません。全体の検索に適用します。",
+  "settings.answering.sectionExpansion": "章節で広げる根拠",
+  "settings.answering.sectionExpansionHint": "当たった根拠の章節から親の章節へ広げ、原文を回答の材料に加えます。標準 RAG は原文を補完し、CRAG は追加した根拠の十分性も AI で確かめます。段数と回答モデルの入力上限に対する割合で制限します。全体の回答に適用します。",
+  "settings.answering.entity_expansion_max_chunks": "1 回の検索で加える根拠の上限",
+  "settings.answering.section_expansion_max_levels": "広げる段の上限",
+  "settings.answering.section_expansion_input_token_percent": "根拠の入力の上限（%）",
   "settings.answering.options": "回答の検索のオプション",
   "settings.answering.rerank": "Rerank で検索候補を並べ替える",
   "settings.answering.rerankHint":

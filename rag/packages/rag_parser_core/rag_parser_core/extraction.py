@@ -448,10 +448,9 @@ def normalize_document_elements(
         kind = element.kind
         element_id = element.element_id or _metadata_text(metadata.get("element_id"))
         content_kind = element.content_kind or _content_kind_for_element_kind(kind)
+        derived = is_derived_content(content_kind, metadata)
         # 派生の要素（「章節名: 要約」など）は見出しに見えても見出しとして読み直さない(#2590)。
-        if not is_derived_content(content_kind, metadata) and (
-            heading := _parse_heading(element.text)
-        ):
+        if not derived and (heading := _parse_heading(element.text)):
             level, title = heading
             kind = "title"
             content_kind = "text"
@@ -463,7 +462,7 @@ def normalize_document_elements(
             path_by_level[level] = title
             current_path = [path_by_level[key] for key in sorted(path_by_level)]
             metadata.setdefault("section_level", level)
-        elif element.section_path:
+        elif not derived and element.section_path:
             current_path = element.section_path
 
         normalized.append(
@@ -473,7 +472,9 @@ def normalize_document_elements(
                     "order": order,
                     "element_id": element_id or f"el-{order:04d}",
                     "content_kind": content_kind,
-                    "section_path": element.section_path or current_path,
+                    "section_path": element.section_path
+                    if derived
+                    else element.section_path or current_path,
                     "metadata": metadata,
                 }
             )

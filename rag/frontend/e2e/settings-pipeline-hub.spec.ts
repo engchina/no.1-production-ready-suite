@@ -166,8 +166,8 @@ const PROCESSING_ORDER = [
   "vision_enabled",
   "heading_level_inference_enabled",
   "field_extraction_enabled",
-  "navigation_summary_enabled",
   "section_rules_mode",
+  "navigation_summary_enabled",
   "auto_chunk_after_extract_enabled",
   "chunking_strategy",
   "chunk_context_header_enabled",
@@ -364,9 +364,15 @@ for (const theme of ["light", "dark"] as const) {
       }));
       expect(colors.link).not.toBe(colors.text);
     }
+    const sectionFields = items.locator(
+      '[data-config-field="section_rules_mode"], [data-config-field="navigation_summary_enabled"]'
+    );
+    expect(await sectionFields.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-config-field"))
+    )).toEqual(["section_rules_mode", "navigation_summary_enabled"]);
     for (const [field, title, value] of [
+      ["section_rules_mode", "章節の抽出規則", "解析済みの見出しを使う"],
       ["navigation_summary_enabled", "章節の要約", "無効"],
-      ["section_rules_mode", "章節の抽出規則", "解析エンジンの見出し"],
     ]) {
       const card = items.locator(`[data-config-field="${field}"]`);
       await expect(card.locator("dt")).toHaveText(title);

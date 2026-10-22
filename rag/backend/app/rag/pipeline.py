@@ -183,6 +183,8 @@ class RagPipeline:
         caller_queries: Sequence[str] | None = None,
     ) -> None:
         self._settings = settings or get_settings()
+        if not self._settings.rag_support_guide_enabled:
+            self._settings = self._settings.model_copy(update={"rag_support_guide": {}})
         self._genai = genai or OciGenAiClient(settings=self._settings)
         self._oracle = oracle or OracleClient(settings=self._settings)
         self._llm = llm or OciEnterpriseAiClient(settings=self._settings)
@@ -517,7 +519,6 @@ class RagPipeline:
                 await asyncio.to_thread(self._answer_notice),
                 outcome.diagnostics,
                 contact_override=self._settings.rag_answer_contact_override,
-                spec_then_contact=self._settings.rag_answer_spec_then_contact,
                 guide=guide,
             )
             if request.generate_answer and self._answer_notice is not None

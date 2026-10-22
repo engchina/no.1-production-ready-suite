@@ -159,6 +159,7 @@ from app.schemas.settings import (
     PreprocessProfileStatusData,
     PreprocessSettingsData,
     PreprocessSettingsUpdate,
+    ProfileGuideSearchDefaultsData,
     QueryHistorySettingsData,
     QueryHistorySettingsUpdate,
     SystemTablesDeleteOrphansRequest,
@@ -460,6 +461,20 @@ async def update_chunking_settings(
     return ApiResponse(data=_chunking_settings_data(settings))
 
 
+@router.get(
+    "/profile-guide-search-defaults", response_model=ApiResponse[ProfileGuideSearchDefaultsData]
+)
+async def get_profile_guide_search_defaults() -> ApiResponse[ProfileGuideSearchDefaultsData]:
+    """接続情報を含めず、継承する手順検索の既定値だけを返す。"""
+    settings = get_settings()
+    return ApiResponse(
+        data=ProfileGuideSearchDefaultsData(
+            max_queries=settings.rag_guide_step_max_queries,
+            deadline_seconds=settings.rag_guide_step_deadline_seconds,
+        )
+    )
+
+
 @router.get("/answering", response_model=ApiResponse[AnsweringSettingsData])
 async def get_answering_settings() -> ApiResponse[AnsweringSettingsData]:
     """回答の検索と生成の全体既定(質問の拡張・回答の生成方式など。#593)を返す。"""
@@ -489,6 +504,14 @@ async def update_answering_settings(
             ),
             ("rag_auto_field_filter_enabled", payload.auto_field_filter_enabled),
             ("rag_graph_expansion_enabled", payload.graph_expansion_enabled),
+            ("rag_entity_expansion_enabled", payload.entity_expansion_enabled),
+            ("rag_entity_expansion_max_chunks", payload.entity_expansion_max_chunks),
+            ("rag_section_expansion_enabled", payload.section_expansion_enabled),
+            ("rag_section_expansion_max_levels", payload.section_expansion_max_levels),
+            (
+                "rag_section_expansion_input_token_percent",
+                payload.section_expansion_input_token_percent,
+            ),
         )
         if value is not None
     }
@@ -497,6 +520,17 @@ async def update_answering_settings(
         _write_env_values(
             BACKEND_ENV_FILE,
             {
+                "RAG_ENTITY_EXPANSION_ENABLED": _format_env_bool(
+                    candidate.rag_entity_expansion_enabled
+                ),
+                "RAG_ENTITY_EXPANSION_MAX_CHUNKS": str(candidate.rag_entity_expansion_max_chunks),
+                "RAG_SECTION_EXPANSION_ENABLED": _format_env_bool(
+                    candidate.rag_section_expansion_enabled
+                ),
+                "RAG_SECTION_EXPANSION_MAX_LEVELS": str(candidate.rag_section_expansion_max_levels),
+                "RAG_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": str(
+                    candidate.rag_section_expansion_input_token_percent
+                ),
                 "RAG_QUERY_STRATEGY": candidate.rag_query_strategy,
                 "RAG_ANSWER_FLOW": candidate.rag_answer_flow,
                 "RAG_NEIGHBOR_CHILD_COUNT": str(candidate.rag_neighbor_child_count),
@@ -532,6 +566,11 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         request_coverage_retrieval_enabled=settings.rag_request_coverage_retrieval_enabled,
         auto_field_filter_enabled=settings.rag_auto_field_filter_enabled,
         graph_expansion_enabled=settings.rag_graph_expansion_enabled,
+        entity_expansion_enabled=settings.rag_entity_expansion_enabled,
+        entity_expansion_max_chunks=settings.rag_entity_expansion_max_chunks,
+        section_expansion_enabled=settings.rag_section_expansion_enabled,
+        section_expansion_max_levels=settings.rag_section_expansion_max_levels,
+        section_expansion_input_token_percent=settings.rag_section_expansion_input_token_percent,
     )
 
 
