@@ -58,6 +58,7 @@ function seedReport(mockApi: MockApi) {
     since: MOCK_NOW,
     until: MOCK_NOW,
     summary: {
+      rated_runs: 10,
       total: 10,
       helpful: 6,
       not_helpful: 4,
@@ -70,6 +71,7 @@ function seedReport(mockApi: MockApi) {
       admin_not_helpful: 1,
     },
     previous: {
+      rated_runs: 8,
       total: 8,
       helpful: 4,
       not_helpful: 4,
@@ -602,4 +604,35 @@ test("Run の詳細の管理者の評価の下から評価ケースに追加で�
   expect(mockApi.lastRequest("POST", "/api/evaluation-sets/evset-open/cases")?.body).toMatchObject({
     source_run_id: "run-dislike-810",
   });
+});
+
+
+test("管理者のみの評価を一覧の件数に含め、両方の評価を二重に数えない", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  seedRatedRun(mockApi);
+  const template = mockApi.state.runs.at(-1)!;
+  mockApi.state.runs = [
+    { ...template, id: "owner-only", goal: "確認用の質問 A", feedback: rating("helpful"), admin_review: null },
+    { ...template, id: "admin-only", goal: "確認用の質問 B", feedback: null, admin_review: rating("not_helpful", "incorrect") },
+    { ...template, id: "both", goal: "確認用の質問 C", feedback: rating("helpful"), admin_review: rating("not_helpful", "incorrect") },
+  ];
+  await openRatings(page);
+  await expect(page.getByTestId("feedback-list-toolbar")).toContainText("全 3 件");
+  await withListFilters(page.getByTestId("feedback-filters"), async (filters) => {
+    await filters.locator("#feedback-rating").click();
+    await page.getByRole("option", { name: "役に立たなかった", exact: true }).click();
+  });
+  await expect(page.getByTestId("feedback-list-toolbar")).toContainText("2 件（全 3 件）");
+});
+
+
+test("評価の詳細 URL を開くと保存した見方に関わらず評価のタブを出す", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  seedReport(mockApi);
+  await page.goto("/feedback");
+  await page.goto("/feedback?feedback=run-a");
+  await expect(page.getByRole("tab", { name: "利用者の評価", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("feedback-detail")).toBeVisible();
+  if (await page.getByTestId("feedback-detail-back").isVisible()) await page.getByTestId("feedback-detail-back").click();
+  await expect(page.getByRole("tab", { name: "利用者の評価", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "確かめるべき実行", exact: true }).click();
+  await expect(page).not.toHaveURL(/feedback=/);
 });

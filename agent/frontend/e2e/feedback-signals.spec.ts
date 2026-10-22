@@ -420,3 +420,17 @@ for (const viewport of VIEWPORTS) {
     await expectNoHorizontalOverflow(page);
   });
 }
+
+
+test("シグナルの詳細 URL を開くと保存した評価のタブから切り替わる", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  seedSignals(mockApi);
+  await page.goto("/feedback");
+  await page.getByRole("tab", { name: "利用者の評価", exact: true }).click();
+  await page.goto("/feedback?signal=run-tool");
+  await expect(page.getByRole("tab", { name: "確かめるべき実行", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("signals-detail")).toBeVisible();
+  if (await page.getByTestId("feedback-detail-back").isVisible()) await page.getByTestId("feedback-detail-back").click();
+  await expect(page.getByRole("tab", { name: "確かめるべき実行", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "利用者の評価", exact: true }).click();
+  await expect(page).not.toHaveURL(/signal=/);
+});

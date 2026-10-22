@@ -218,3 +218,34 @@ def test_facts_are_merged_and_runs_to_review_are_aggregated_in_oracle(agent_id: 
         user_names=lambda uuids: {},
     )
     assert (feedback.summary.not_helpful, feedback.total) == (1, 1)
+
+
+def test_feedback_counts_owner_and_admin_union_in_oracle(agent_id: str) -> None:
+    store = OracleRunFactsStore()
+    now = datetime.now(UTC).replace(microsecond=654321)
+    good = RunFeedback(rating=FeedbackRating.HELPFUL, updated_at=now)
+    bad = RunFeedback(rating=FeedbackRating.NOT_HELPFUL, updated_at=now)
+    for fact in [
+        _fact(agent_id, "owner", now, feedback=good),
+        _fact(agent_id, "admin", now, admin_review=bad),
+        _fact(agent_id, "both", now, feedback=good, admin_review=bad),
+    ]:
+        store.upsert([fact])
+    report = store.feedback_report(
+        days=7,
+        now=now,
+        agent_ids=frozenset({agent_id}),
+        agent_id=None,
+        rating=FeedbackRating.NOT_HELPFUL,
+        reason=None,
+        offset=0,
+        limit=10,
+        agent_names={},
+        user_names=lambda uuids: {},
+    )
+    assert (report.summary.rated_runs, report.summary.total, report.summary.admin_reviewed) == (
+        3,
+        2,
+        2,
+    )
+    assert report.total == 2

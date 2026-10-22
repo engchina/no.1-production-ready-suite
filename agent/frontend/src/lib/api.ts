@@ -1252,6 +1252,7 @@ export interface RunFeedbackPayload {
 export type FeedbackPeriodDays = ReportPeriodDays;
 
 export interface FeedbackSummary {
+  rated_runs: number;
   total: number;
   helpful: number;
   not_helpful: number;
