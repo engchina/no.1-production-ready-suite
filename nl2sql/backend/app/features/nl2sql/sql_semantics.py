@@ -33,6 +33,7 @@ from .ontology_models import (
     SqlWindowExpression,
     ValidationSeverity,
 )
+from .oracle_dialect import OracleConversion
 from .sql_lexing import prepare_oracle_query
 
 
@@ -109,7 +110,7 @@ def _blocker_analysis(
 
 def _sql(expression: Any) -> str:
     try:
-        return str(expression.sql(dialect="oracle", pretty=False))
+        return str(expression.sql(dialect=OracleConversion, pretty=False))
     except Exception:  # pragma: no cover - sqlglot extension expression の防御
         return str(expression)
 
@@ -389,7 +390,7 @@ def parse_oracle_sql(
 
     try:
         statements = sqlglot.parse(
-            prepare_oracle_query(sql), read="oracle", error_level=ErrorLevel.RAISE
+            prepare_oracle_query(sql), read=OracleConversion, error_level=ErrorLevel.RAISE
         )
     except (ParseError, ValueError, TypeError) as exc:
         detail = str(exc).splitlines()[0][:240]
