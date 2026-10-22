@@ -5075,12 +5075,23 @@ def deterministic_audit(question: str, checked: Sequence[CheckedItem]) -> Ground
     return GroundedAudit.model_validate({"reviews": [], "request_reviews": reviews, "summary_supported": True, "goal_alignment": "aligned"})
 
 
-def correction_feedback(feedback: Mapping[str, Any], audit_mode: str) -> dict:
+# 未回答の確認事項を理由に gap だけで答えた草稿への指摘（#3069）。条件付きの説明の書き方は生成の指示にある。
+_ASSUMPTION_NO_CITED_HINT = (
+    "根拠を引用した item がありません。未回答の確認事項は回答を止める理由になりません。"
+    "選択肢ごとに根拠の原文があれば、その原文を引用し、条件付きの説明として答えられる範囲を示してください。"
+)
+
+
+def correction_feedback(feedback: Mapping[str, Any], audit_mode: str, *, assume_unconfirmed: bool = False) -> dict:
     """次の組へ渡す指摘を監査の型で絞る（#2795）。通常の回答は事実の問題だけで、無ければ空（作り直さない）。
 
-    監査なしの型（#2800）は作り直さない（常に空）。
+    監査なしの型（#2800）は作り直さない（空）。ただし未回答の確認事項を前提として答える回答（``assume_unconfirmed``）で、
+    根拠を引用した説明が 1 つも無い（確認事項を理由に拒答した）草稿だけは、選択肢ごとの条件付きの説明を求めて
+    1 回だけ作り直す（#3069）。
     """
     if audit_mode == AUDIT_MODE_NONE:
+        if assume_unconfirmed and feedback.get("no_cited_evidence"):
+            return {"no_cited_evidence": _ASSUMPTION_NO_CITED_HINT}
         return {}
     if audit_mode == AUDIT_MODE_DETAILED:
         return dict(feedback)

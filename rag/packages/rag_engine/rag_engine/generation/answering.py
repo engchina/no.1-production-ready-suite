@@ -2002,6 +2002,7 @@ def synthesize_grounded_answer(
     budget = grounded.RoundBudget(remaining_seconds)
     # 是正の組の回数の上限（#1912。`answer_max_correction_rounds`、0〜2。既定 2 は従来の MAX_ROUNDS と同じ）。
     max_rounds = 1 + max(0, min(grounded.MAX_ROUNDS - 1, int(getattr(settings, "answer_max_correction_rounds", grounded.MAX_ROUNDS - 1))))
+    assume_unconfirmed = bool(runtime_knowledge and runtime_knowledge.assume_unconfirmed)
     # 監査の型（#2795）。通常の回答（standard）の作り直しは事実の問題があるときの 1 組まで。完全性の不足（答えていない
     # 要求・説明していない手順）は作り直さず、本文の不足・確認の節に示す。
     audit_mode = str(getattr(settings, "answer_audit_mode", grounded.AUDIT_MODE_DETAILED))
@@ -2010,7 +2011,9 @@ def synthesize_grounded_answer(
     if audit_mode == grounded.AUDIT_MODE_STANDARD:
         max_rounds = min(max_rounds, grounded.STANDARD_MAX_ROUNDS)
     elif audit_mode == grounded.AUDIT_MODE_NONE:
-        max_rounds = 1
+        # 監査なしの型は作り直さない。未回答の確認事項を前提として答える回答だけ、確認事項を理由に拒答した草稿を
+        # 1 回作り直せるようにする（指摘は `correction_feedback`。#3069）。
+        max_rounds = min(max_rounds, 2) if assume_unconfirmed else 1
     compact_audit_reasons = bool(getattr(settings, "answer_audit_compact_reasons", False))
     # 作り直しの組の LLM の呼び出しが失敗し、前の組を公開したときの例外の型（#2729）。
     correction_failure = ""
@@ -2162,7 +2165,10 @@ def synthesize_grounded_answer(
             summary_flags.append((number, current.unpublished_claims, str(current.draft.summary)))
         rounds.append({**current.trace(), "accepted": accepted})
         # 採用しなかった草稿の指摘ではなく、公開候補に残る不足を次の是正へ渡す。
-        previous_feedback, feedback = feedback, grounded.correction_feedback(best[0].feedback(), audit_mode)
+        previous_feedback, feedback = (
+            feedback,
+            grounded.correction_feedback(best[0].feedback(), audit_mode, assume_unconfirmed=assume_unconfirmed),
+        )
         budget.note(current, feedback, accepted=accepted)
         if not feedback or number == max_rounds - 1:
             if feedback and max_rounds < grounded.MAX_ROUNDS:
