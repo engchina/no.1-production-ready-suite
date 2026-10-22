@@ -2456,6 +2456,39 @@ class SummaryDeniedClaimTest(unittest.TestCase):
         texts = {mark["text"]: [reason["code"] for reason in mark["reasons"]] for mark in result.envelope["passage_marks"]}
         self.assertEqual(texts, {dropped: ["summary_unaudited"], "・" + dropped: ["quote_unmatched"]})
 
+    def test_summary_asserting_a_claim_without_a_source_gets_a_warning(self):
+        claim = "設定ボタンの利用は一日に三回までです。"
+        model = FakeModel(
+            [
+                draft(
+                    item("E-unknown", claim, "x", request_id="Q1"),
+                    item(self.eid, "実行ボタンを押します。", "実行ボタンを押します。", request_id="Q1"),
+                    summary="実行ボタンを押して進めます。設定ボタンの利用は一日に三回までです。",
+                )
+            ],
+            [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")], summary_supported=True)],
+        )
+        result = run(model, self.ctx, self.QUESTION).response
+        # 根拠に結べない説明は本文で出典を確かめられない説明になり、それを断定する summary にも警告が付く（#3068）。
+        texts = {mark["text"]: [reason["code"] for reason in mark["reasons"]] for mark in result.envelope["passage_marks"]}
+        self.assertEqual(texts["・" + claim], ["citation_error"])
+        self.assertEqual(texts["実行ボタンを押して進めます。設定ボタンの利用は一日に三回までです。"], ["summary_unaudited"])
+        self.assertEqual(result.generation_trace["rounds"][0]["summary_warning"], "印の付いた主張を summary が断定: " + claim)
+
+    def test_summary_restating_only_sourced_claims_has_no_warning_beside_a_claim_without_a_source(self):
+        model = FakeModel(
+            [
+                draft(
+                    item("E-unknown", "設定ボタンの利用は一日に三回までです。", "x", request_id="Q1"),
+                    item(self.eid, "実行ボタンを押します。", "実行ボタンを押します。", request_id="Q1"),
+                    summary="実行ボタンを押します。",
+                )
+            ],
+            [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")], summary_supported=True)],
+        )
+        result = run(model, self.ctx, self.QUESTION).response
+        self.assertNotIn("summary_warning", result.generation_trace["rounds"][0])
+
     def test_request_addressed_only_by_unverified_items_stays_addressed(self):
         claim = "追加ボタンを押すと既存の名簿が削除されます。"
         model = FakeModel(
