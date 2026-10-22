@@ -205,6 +205,22 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `RAG_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#2831 引用証拠のキーの改名）
+
+回答の引用一覧は `cited_evidence`、その ID 一覧は `cited_evidence_ids`、引用一覧の各 ID は `evidence_id` に変更した。旧名の `used_images` / `used_image_ids` / 引用一覧内の `image_id` は実行時には受け付けない。SDK の呼び出し側も新名へ更新する。実際の画像のメタデータ `image_evidence[*].image_id` は変更しない。
+
+DB の保存済み回答は、通常のシステムテーブル更新で migration `20261022_001_cited_evidence` を適用してから新しい backend を使用する。`RAG_ANSWER_RECORDS.EVALUATION_INPUT_JSON` の引用キーだけを改名し、引用順序、`confirmed` / `reference`、画像メタデータ、回答本文を保持する。新旧キーの重複がある場合は上書きせず停止するため、重複内容を確認して解消してから再実行する。再適用しても移行済みの値は変わらない。
+
+SDK / CLI が書き出した回答 JSON は DB の migration の対象外である。対象の回答 JSON ファイル、または回答 artifact だけを置いたディレクトリを指定して、まず変更件数を確認し、その後に保存する。元ファイルは既存のバックアップ手順で退避する。repo の直下で実行する例:
+
+```bash
+cd rag/backend
+uv run python -m rag_engine.knowledge.answer_migration /path/to/answer.json
+uv run python -m rag_engine.knowledge.answer_migration /path/to/answer.json --apply
+```
+
+このコマンドも引用キーだけを変更する。引用根拠のメタデータ内にある同名の項目には触れない。新旧キーが重複しているファイルは保存せずエラーにする。複数ファイルは一つずつ保存するので、途中で停止した場合は問題のファイルを確認し、同じコマンドを再実行する。
+
 ## 既存環境の更新手順の共通の注意（データを削除する migration。#619）
 
 システムテーブルの migration には、テーブルの DROP や行の DELETE で**データを削除するもの**がある（例: #596 の `20260930_005_retire_standard_engine_objects`）。削除したデータは元に戻せないため、次のようにしている。

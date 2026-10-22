@@ -60,14 +60,14 @@ def parse_answer_response(content: str) -> AnswerResponse:
     if not payload or "answer" not in payload:
         return _normalize_answer_response(AnswerResponse(answer_text=raw, raw_text=raw))
 
-    used_images = tuple(_used_image_entries(payload.get("used_images")))
+    cited_evidence = tuple(_cited_evidence_entries(payload.get("cited_evidence")))
     needs_review = payload.get("needs_human_review")
     return _normalize_answer_response(
         AnswerResponse(
             answer_text=str(payload.get("answer") or "").strip(),
             confidence=str(payload.get("confidence") or "").strip(),
             question_type=tuple(_string_list(payload.get("question_type"))),
-            used_images=used_images,
+            cited_evidence=cited_evidence,
             reasoning_summary=str(payload.get("reasoning_summary") or "").strip(),
             insufficient_reason=str(payload.get("insufficient_reason") or "").strip(),
             needs_human_review=needs_review if isinstance(needs_review, bool) else None,
@@ -135,9 +135,9 @@ def _format_answer_response(response: AnswerResponse) -> str:
     if meta_lines:
         lines.append("\n".join(meta_lines))
 
-    used_images = _format_used_images(response.used_images)
-    if used_images:
-        lines.append("使用画像:\n" + used_images)
+    cited_evidence = _format_cited_evidence(response.cited_evidence)
+    if cited_evidence:
+        lines.append("引用証拠:\n" + cited_evidence)
 
     if response.reasoning_summary:
         lines.append(f"判断理由:\n{response.reasoning_summary}")
@@ -269,8 +269,8 @@ def answer_result_payload(
         "answer_text": result.answer_text or result.answer,
         "confidence": result.confidence,
         "question_type": list(result.question_type),
-        "used_image_ids": list(result.used_image_ids),
-        "used_images": list(result.used_images),
+        "cited_evidence_ids": list(result.cited_evidence_ids),
+        "cited_evidence": list(result.cited_evidence),
         "image_evidence": list(result.image_evidence),
         "image_prompt_mode": result.image_prompt_mode,
         "evidence_facts": list(result.evidence_facts),
@@ -327,18 +327,18 @@ def _query_expansion_summary(generated_queries: Sequence[str]) -> str:
 
 def answer_evidence_items(
     records: Sequence[AnswerRecord],
-    used_image_ids: Sequence[str] = (),
+    cited_evidence_ids: Sequence[str] = (),
     *,
     evidence_tree: Sequence[ContextParentEvidence] = (),
     answer_uses: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """回答根拠 tree を viewer が選択・highlight できる item 列へ変換します。
 
-    answer_uses は回答に使った箇所の ID（``_evidence_id_key``）ごとの使われ方（``_used_image_uses``）。回答に使った
+    answer_uses は回答に使った箇所の ID（``_evidence_id_key``）ごとの使われ方（``_cited_evidence_uses``）。回答に使った
     item の ``answer_use`` に載せる（確かめた説明 ``confirmed`` / 参考 ``reference``。分からなければ None。#2040）。
     """
-    used_ids = {_evidence_id_key(image_id) for image_id in used_image_ids if _evidence_id_key(image_id)}
-    usage_order = _model_usage_order(used_image_ids)
+    used_ids = {_evidence_id_key(evidence_id) for evidence_id in cited_evidence_ids if _evidence_id_key(evidence_id)}
+    usage_order = _model_usage_order(cited_evidence_ids)
     uses = dict(answer_uses or {})
     if evidence_tree:
         items: list[dict[str, Any]] = []
@@ -571,10 +571,10 @@ def _normalize_display_box(raw: Any) -> dict[str, Any]:
     }
 
 
-def _model_usage_order(used_image_ids: Sequence[str]) -> dict[str, int]:
+def _model_usage_order(cited_evidence_ids: Sequence[str]) -> dict[str, int]:
     usage_order: dict[str, int] = {}
-    for image_id in used_image_ids:
-        key = _evidence_id_key(image_id)
+    for evidence_id in cited_evidence_ids:
+        key = _evidence_id_key(evidence_id)
         if key and key not in usage_order:
             usage_order[key] = len(usage_order) + 1
     return usage_order
@@ -673,7 +673,7 @@ def _rerank_scores_from_evidence(
     return tuple(scores)
 
 
-def _used_image_entries(value: Any) -> list[dict[str, str]]:
+def _cited_evidence_entries(value: Any) -> list[dict[str, str]]:
     if not isinstance(value, list):
         return []
 
@@ -682,7 +682,7 @@ def _used_image_entries(value: Any) -> list[dict[str, str]]:
         if not isinstance(item, dict):
             continue
         entry = {
-            "image_id": str(item.get("image_id") or "").strip(),
+            "evidence_id": str(item.get("evidence_id") or "").strip(),
             "source": str(item.get("source") or "").strip(),
             "source_run_id": str(item.get("source_run_id") or "").strip(),
             "page": str(item.get("page") or "").strip(),
@@ -705,55 +705,55 @@ def _primary_source_run_id(records: Sequence[AnswerRecord]) -> str:
     return ""
 
 
-def _used_image_ids(entries: Sequence[dict[str, Any]]) -> list[str]:
+def _cited_evidence_ids(entries: Sequence[dict[str, Any]]) -> list[str]:
     ids: list[str] = []
     seen: set[str] = set()
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        image_id = str(entry.get("image_id") or entry.get("id") or "").strip()
-        key = _evidence_id_key(image_id)
+        evidence_id = str(entry.get("evidence_id") or entry.get("id") or "").strip()
+        key = _evidence_id_key(evidence_id)
         if not key or key in seen:
             continue
-        ids.append(image_id)
+        ids.append(evidence_id)
         seen.add(key)
     return ids
 
 
-def _used_image_uses(entries: Sequence[dict[str, Any]]) -> dict[str, str]:
+def _cited_evidence_uses(entries: Sequence[dict[str, Any]]) -> dict[str, str]:
     """回答に使った箇所の ID（``_evidence_id_key``）ごとの使われ方（#2040）。同じ箇所は confirmed を優先する。"""
     uses: dict[str, str] = {}
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        key = _evidence_id_key(str(entry.get("image_id") or entry.get("id") or "").strip())
+        key = _evidence_id_key(str(entry.get("evidence_id") or entry.get("id") or "").strip())
         use = str(entry.get("answer_use") or "")
         if key and use in ANSWER_USES:
             uses[key] = merge_answer_use(uses.get(key), use) or use
     return uses
 
 
-def _format_used_images(value: Any) -> str:
-    entries = _used_image_entries(value) if not isinstance(value, tuple) else list(value)
+def _format_cited_evidence(value: Any) -> str:
+    entries = _cited_evidence_entries(value) if not isinstance(value, tuple) else list(value)
     lines = []
     for item in entries:
         if not isinstance(item, dict):
             continue
-        image_id = str(item.get("image_id") or "").strip()
+        evidence_id = str(item.get("evidence_id") or "").strip()
         source = str(item.get("source") or "").strip()
         page = str(item.get("page") or "").strip()
         look_at = str(item.get("look_at") or "").strip()
         evidence = str(item.get("visible_evidence") or "").strip()
         parts = []
-        if image_id:
-            parts.append(image_id)
+        if evidence_id:
+            parts.append(evidence_id)
         if source:
             parts.append(source)
         if page:
             parts.append(f"p.{page}")
         if look_at:
             parts.append(look_at)
-        header = " / ".join(parts) or "画像"
+        header = " / ".join(parts) or "証拠"
         if evidence:
             lines.append(f"- {header}: {evidence}")
         else:

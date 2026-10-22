@@ -114,7 +114,7 @@ def _evaluation_input() -> dict[str, Any]:
         "answer_text": "上長です。",
         "reasoning_summary": "",
         "insufficient_reason": "",
-        "used_images": [],
+        "cited_evidence": [],
         "external_data_required": False,
         "external_data_items": [],
         "evidence_items": [

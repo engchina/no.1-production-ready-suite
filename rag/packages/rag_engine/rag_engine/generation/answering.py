@@ -113,6 +113,9 @@ from rag_engine.generation.answer_models import (
 )
 from rag_engine.generation.answer_payload import (
     _answer_record_identity_keys,
+    _cited_evidence_entries,
+    _cited_evidence_ids,
+    _cited_evidence_uses,
     _evidence_id_key,
     _format_answer_response,
     _metadata_image_evidence,
@@ -122,9 +125,6 @@ from rag_engine.generation.answer_payload import (
     _records_for_prompt_injection_scan,
     _rerank_scores_from_evidence,
     _string_list,
-    _used_image_entries,
-    _used_image_ids,
-    _used_image_uses,
     answer_evidence_items,
     answer_result_payload,
     format_answer_response,
@@ -2562,11 +2562,11 @@ def synthesize_grounded_answer(
             answer_text=answer_text,
             confidence=confidence,
             question_type=tuple(_string_list(current.draft.question_type)),
-            used_images=tuple(
-                _used_image_entries(
+            cited_evidence=tuple(
+                _cited_evidence_entries(
                     [
                         {
-                            "image_id": used_id,
+                            "evidence_id": used_id,
                             "source": e.span.get("source", ""),
                             "page": e.span.get("page", ""),
                             "look_at": "引用",
@@ -4949,7 +4949,7 @@ def _answer_question_result(
 ) -> AnswerQuestionResult:
     """``request_question`` は要求の単位の正本の質問（#2665。空なら検索の質問 ``expansion.original_question``）。"""
     parsed = response or AnswerResponse(answer_text=answer, raw_text=answer)
-    used_image_ids = tuple(_used_image_ids(parsed.used_images))
+    cited_evidence_ids = tuple(_cited_evidence_ids(parsed.cited_evidence))
     text_search = text_search_info or QuestionTextSearchInfo()
     selected_answer_flow = answer_flow_id(answer_flow)
     selected_retrieval_scope = normalize_retrieval_scope(retrieval_scope)
@@ -4988,8 +4988,8 @@ def _answer_question_result(
         answer_text=parsed.answer_text or answer,
         confidence=parsed.confidence,
         question_type=parsed.question_type,
-        used_image_ids=used_image_ids,
-        used_images=parsed.used_images,
+        cited_evidence_ids=cited_evidence_ids,
+        cited_evidence=parsed.cited_evidence,
         image_evidence=tuple(dict(item) for item in image_evidence),
         image_prompt_mode=image_prompt_mode,
         primary_source_run_id=primary_source_run_id,
@@ -4999,7 +4999,9 @@ def _answer_question_result(
         external_data_required=parsed.external_data_required,
         external_data_items=parsed.external_data_items,
         evidence_items=tuple(
-            answer_evidence_items(records, used_image_ids, evidence_tree=evidence_tree, answer_uses=_used_image_uses(parsed.used_images))
+            answer_evidence_items(
+                records, cited_evidence_ids, evidence_tree=evidence_tree, answer_uses=_cited_evidence_uses(parsed.cited_evidence)
+            )
         ),
         evidence_facts=parsed.evidence_facts,
         generation_trace=parsed.generation_trace,

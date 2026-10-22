@@ -245,7 +245,7 @@ EVALUATION_INPUT_KEYS = (
     "answer_text",
     "reasoning_summary",
     "insufficient_reason",
-    "used_images",
+    "cited_evidence",
     "external_data_required",
     "external_data_items",
     "evidence_items",

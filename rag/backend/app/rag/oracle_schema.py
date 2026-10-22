@@ -532,6 +532,13 @@ END;
 """.strip(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261022_001_cited_evidence",
+            table_name="rag_answer_records",
+            sql=cited_evidence_migration_sql(),
+        )
+    )
     return sections
 
 
@@ -1385,3 +1392,33 @@ WHERE PROMPT_KEY = 'vlm_answer'
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
+
+
+def cited_evidence_migration_sql() -> str:
+    """保存済み評価入力の引用キーを変更し、画像だけの ID は変更しない。"""
+    return """
+DECLARE
+    v_conflicts NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_conflicts FROM rag_answer_records
+    WHERE (JSON_EXISTS(evaluation_input_json, '$.used_images')
+           AND JSON_EXISTS(evaluation_input_json, '$.cited_evidence'))
+       OR (JSON_EXISTS(evaluation_input_json, '$.used_image_ids')
+           AND JSON_EXISTS(evaluation_input_json, '$.cited_evidence_ids'))
+       OR JSON_EXISTS(evaluation_input_json, '$.used_images[*].evidence_id');
+    IF v_conflicts > 0 THEN
+        RAISE_APPLICATION_ERROR(-20001,
+            '引用証拠の新旧キーが重複しています。重複を解消してください。');
+    END IF;
+    UPDATE rag_answer_records
+    SET evaluation_input_json = JSON_TRANSFORM(
+        evaluation_input_json,
+        RENAME '$.used_images' = 'cited_evidence',
+        RENAME '$.used_image_ids' = 'cited_evidence_ids',
+        RENAME '$.cited_evidence[*].image_id' = 'evidence_id'
+    )
+    WHERE JSON_EXISTS(evaluation_input_json, '$.used_images')
+       OR JSON_EXISTS(evaluation_input_json, '$.used_image_ids');
+END;
+/
+""".strip()

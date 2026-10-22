@@ -220,7 +220,7 @@ class AnswerResponse:
     answer_text: str
     confidence: str = ""
     question_type: tuple[str, ...] = ()
-    used_images: tuple[dict[str, Any], ...] = ()
+    cited_evidence: tuple[dict[str, Any], ...] = ()
     reasoning_summary: str = ""
     insufficient_reason: str = ""
     needs_human_review: bool | None = None
@@ -400,8 +400,8 @@ class AnswerQuestionResult:
     answer_text: str = ""
     confidence: str = ""
     question_type: tuple[str, ...] = ()
-    used_image_ids: tuple[str, ...] = ()
-    used_images: tuple[dict[str, Any], ...] = ()
+    cited_evidence_ids: tuple[str, ...] = ()
+    cited_evidence: tuple[dict[str, Any], ...] = ()
     image_evidence: tuple[dict[str, Any], ...] = ()
     image_prompt_mode: str = "text_only"
     primary_source_run_id: str = ""

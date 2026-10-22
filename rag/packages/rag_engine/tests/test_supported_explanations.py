@@ -12,7 +12,7 @@ def make_output(text):
         answer=text,
         confidence="high",
         question_type=["操作手順"],
-        used_images=[],
+        cited_evidence=[],
         reasoning_summary="",
         insufficient_reason="",
         needs_human_review=False,

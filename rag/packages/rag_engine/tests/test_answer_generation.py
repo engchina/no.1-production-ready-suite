@@ -40,8 +40,8 @@ from rag_engine.generation.answering import (
     AnswerContext,
     AnswerRecord,
     QueryExpansionResult,
+    _cited_evidence_uses,
     _synthesize_answer_from_context,
-    _used_image_uses,
     answer_evidence_items,
     answer_flow_id,
     answer_image_evidence,
@@ -66,11 +66,11 @@ from rag_engine.generation.answering import (
 )
 from rag_engine.knowledge.classification import classification_filter_from_values
 from rag_engine.models.llm import (
+    CitedEvidenceOutput,
     CragRetrievalGradeOutput,
     QueryExpansionOutput,
     QueryRoutingOutput,
     RerankTextRank,
-    UsedImageOutput,
 )
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizationResult
@@ -135,14 +135,14 @@ class AnswerGenerationTests(unittest.TestCase):
                     "confidence": "medium",
                     "needs_human_review": False,
                     "insufficient_reason": "該当実行のログを確認してください。",
-                    "used_images": [{"image_id": "r1", "source": "manual.pdf", "page": "1"}],
+                    "cited_evidence": [{"evidence_id": "r1", "source": "manual.pdf", "page": "1"}],
                 }
             )
         )
         self.assertEqual(response.answer_text, answer)
         self.assertEqual(response.confidence, "medium")
         self.assertTrue(response.needs_human_review)
-        self.assertEqual(response.used_images[0]["image_id"], "r1")
+        self.assertEqual(response.cited_evidence[0]["evidence_id"], "r1")
         self.assertIn("該当実行のログ", response.insufficient_reason)
 
     def test_supported_answer_does_not_gain_unnecessary_review_or_caveat(self):
@@ -235,7 +235,7 @@ class AnswerGenerationTests(unittest.TestCase):
                 self.assertEqual(result.confidence, "low")
                 self.assertTrue(result.needs_human_review)
                 self.assertTrue(result.insufficient_reason)
-                self.assertEqual(result.used_images, ())
+                self.assertEqual(result.cited_evidence, ())
                 self.assertEqual(result.evidence_items, ())
                 parse.assert_not_called()
 
@@ -794,9 +794,9 @@ class AnswerGenerationTests(unittest.TestCase):
                 "answer": "登録手順を確認してください。",
                 "confidence": "high",
                 "question_type": ["操作手順を聞く"],
-                "used_images": [
+                "cited_evidence": [
                     {
-                        "image_id": "r1",
+                        "evidence_id": "r1",
                         "page": "2",
                         "look_at": "中央",
                         "visible_evidence": "契約区分",
@@ -1724,7 +1724,7 @@ class AnswerGenerationTests(unittest.TestCase):
                         relevant_chunk_ids=["chunk-good"],
                         reason="根拠が直接回答している",
                     ),
-                    _answer_output(answer="crag answer", used_image_id="chunk-good"),
+                    _answer_output(answer="crag answer", cited_evidence_id="chunk-good"),
                 ],
             ) as parse,
         ):
@@ -1793,7 +1793,7 @@ class AnswerGenerationTests(unittest.TestCase):
                         relevant_chunk_ids=["chunk-default"],
                         reason="根拠が十分",
                     ),
-                    _answer_output(answer="default crag answer", used_image_id="chunk-default"),
+                    _answer_output(answer="default crag answer", cited_evidence_id="chunk-default"),
                 ],
             ) as parse,
         ):
@@ -1825,7 +1825,7 @@ class AnswerGenerationTests(unittest.TestCase):
                 "rag_engine.generation.answering.parse_text_response",
                 side_effect=[
                     _crag_grade(sufficient=True, confidence=0.96, relevant_chunk_ids=["chunk-legacy"], reason="根拠が十分"),
-                    _answer_output(answer="legacy crag answer", used_image_id="chunk-legacy"),
+                    _answer_output(answer="legacy crag answer", cited_evidence_id="chunk-legacy"),
                 ],
             ) as parse,
         ):
@@ -1893,7 +1893,7 @@ class AnswerGenerationTests(unittest.TestCase):
                 "rag_engine.generation.answering.parse_text_response",
                 side_effect=[
                     RuntimeError("grader down"),
-                    _answer_output(answer="fallback answer", used_image_id="chunk-safe"),
+                    _answer_output(answer="fallback answer", cited_evidence_id="chunk-safe"),
                 ],
             ) as parse,
         ):
@@ -1933,7 +1933,7 @@ class AnswerGenerationTests(unittest.TestCase):
                     _crag_grade(sufficient=False, rewritten_query="rewrite two"),
                     _crag_grade(sufficient=False, rewritten_query="rewrite three"),
                     _crag_grade(sufficient=False, rewritten_query="rewrite four"),
-                    _answer_output(answer="best available answer", used_image_id="chunk-3"),
+                    _answer_output(answer="best available answer", cited_evidence_id="chunk-3"),
                 ],
             ),
         ):
@@ -1982,7 +1982,7 @@ class AnswerGenerationTests(unittest.TestCase):
                         relevant_chunk_ids=["chunk-beta"],
                         reason="beta が直接回答している",
                     ),
-                    _answer_output(answer="refined answer", used_image_id="chunk-beta"),
+                    _answer_output(answer="refined answer", cited_evidence_id="chunk-beta"),
                 ],
             ) as parse,
         ):
@@ -2070,7 +2070,7 @@ class AnswerGenerationTests(unittest.TestCase):
                         relevant_chunk_ids=["beta-child"],
                         reason="beta child が直接回答している",
                     ),
-                    _answer_output(answer="tree refined answer", used_image_id="beta-child"),
+                    _answer_output(answer="tree refined answer", cited_evidence_id="beta-child"),
                 ],
             ) as parse,
         ):
@@ -2201,7 +2201,7 @@ class AnswerGenerationTests(unittest.TestCase):
                         relevant_chunk_ids=["child-late"],
                         reason="child anchor が直接回答している",
                     ),
-                    _answer_output(answer="anchor-aware answer", used_image_id="child-late"),
+                    _answer_output(answer="anchor-aware answer", cited_evidence_id="child-late"),
                 ],
             ) as parse,
         ):
@@ -2253,7 +2253,7 @@ class AnswerGenerationTests(unittest.TestCase):
                         relevant_chunk_ids=["chunk-corrected"],
                         reason="補正後の根拠が十分",
                     ),
-                    _answer_output(answer="wrapped crag answer", used_image_id="chunk-corrected"),
+                    _answer_output(answer="wrapped crag answer", cited_evidence_id="chunk-corrected"),
                 ],
             ),
         ):
@@ -2634,7 +2634,7 @@ class AnswerGenerationTests(unittest.TestCase):
                         answer="chunk から回答しました。",
                         confidence="high",
                         question_type=["操作手順を聞く"],
-                        used_image_id="chunk-docling-c000001",
+                        cited_evidence_id="chunk-docling-c000001",
                         reasoning_summary="根拠 chunk を確認しました。",
                         needs_human_review=False,
                     ),
@@ -2652,7 +2652,7 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(result.answer_text, "chunk から回答しました。")
         self.assertEqual(result.confidence, "high")
         self.assertEqual(result.question_type, ("操作手順を聞く",))
-        self.assertEqual(result.used_image_ids, ("chunk-docling-c000001",))
+        self.assertEqual(result.cited_evidence_ids, ("chunk-docling-c000001",))
         self.assertTrue(result.evidence_items)
         parent = result.evidence_items[0]
         self.assertEqual(parent["chunk_level"], "parent")
@@ -2696,7 +2696,7 @@ class AnswerGenerationTests(unittest.TestCase):
             ),
             patch(
                 "rag_engine.generation.answering.parse_text_response",
-                return_value=_answer_output(answer="chunk から回答しました。", used_image_id="r2"),
+                return_value=_answer_output(answer="chunk から回答しました。", cited_evidence_id="r2"),
             ),
         ):
             result = answer_question_result(
@@ -2753,12 +2753,12 @@ class AnswerGenerationTests(unittest.TestCase):
                 ),
             ),
         )
-        uses = _used_image_uses(
+        uses = _cited_evidence_uses(
             [
-                {"image_id": "child-2", "answer_use": "reference"},
-                {"image_id": "child-1", "answer_use": "reference"},
-                {"image_id": "child-1", "answer_use": "confirmed"},
-                {"image_id": "child-3", "answer_use": "unknown"},
+                {"evidence_id": "child-2", "answer_use": "reference"},
+                {"evidence_id": "child-1", "answer_use": "reference"},
+                {"evidence_id": "child-1", "answer_use": "confirmed"},
+                {"evidence_id": "child-3", "answer_use": "unknown"},
             ]
         )
         self.assertEqual(uses, {"child-1": "confirmed", "child-2": "reference"})
@@ -3033,16 +3033,16 @@ def _answer_output(
     answer: str = "answer",
     confidence: str = "",
     question_type: list[str] | None = None,
-    used_image_id: str = "r1",
+    cited_evidence_id: str = "r1",
     reasoning_summary: str = "",
     insufficient_reason: str = "",
     needs_human_review: bool | None = None,
 ) -> AnswerOutput:
-    used_images = []
-    if used_image_id:
-        used_images.append(
-            UsedImageOutput(
-                image_id=used_image_id,
+    cited_evidence = []
+    if cited_evidence_id:
+        cited_evidence.append(
+            CitedEvidenceOutput(
+                evidence_id=cited_evidence_id,
                 source="manual.pdf",
                 page="1",
                 look_at="本文",
@@ -3053,7 +3053,7 @@ def _answer_output(
         answer=answer,
         confidence=confidence,
         question_type=question_type or [],
-        used_images=used_images,
+        cited_evidence=cited_evidence,
         reasoning_summary=reasoning_summary,
         insufficient_reason=insufficient_reason,
         needs_human_review=needs_human_review,

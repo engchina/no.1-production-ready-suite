@@ -230,7 +230,7 @@ class OciGenerator:
             ).response
         from rag_engine.generation.citations import resolve_citations
 
-        citations = resolve_citations(request.evidence, records, response.used_images)
+        citations = resolve_citations(request.evidence, records, response.cited_evidence)
         decision = response.generation_trace.get("image_fallback", {})
         # SDKでも画像添付による是正の有無を確認可能にし、元回答本文は公開traceへ重複保存しない。
         trace = (

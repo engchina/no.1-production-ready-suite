@@ -207,10 +207,10 @@ class CragRetrievalGradeOutput(_StrictModel):
     )
 
 
-class UsedImageOutput(_StrictModel):
-    """回答生成で実際に参照した画像 evidence を表します。"""
+class CitedEvidenceOutput(_StrictModel):
+    """回答生成で実際に参照した証拠 evidence を表します。"""
 
-    image_id: str
+    evidence_id: str
     source: str
     page: str
     look_at: str

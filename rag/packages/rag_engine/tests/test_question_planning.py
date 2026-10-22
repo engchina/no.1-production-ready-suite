@@ -66,7 +66,7 @@ class QuestionPlanningTests(unittest.TestCase):
                     answer="設定資料を確認してください。",
                     confidence="high",
                     question_type=[],
-                    used_images=[],
+                    cited_evidence=[],
                     reasoning_summary="",
                     insufficient_reason="",
                     needs_human_review=False,
