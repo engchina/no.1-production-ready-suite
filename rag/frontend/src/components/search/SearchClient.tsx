@@ -427,7 +427,9 @@ export function SearchClient() {
     setAdvancedOpen(false);
   };
 
-  const noResults = phase === "done" && citations.length === 0;
+  const answerOutcome = parseAnswerDiagnostics(meta?.diagnostics?.answer)?.outcome;
+  const awaitingClarification = answerOutcome === "needs_clarification";
+  const noResults = phase === "done" && citations.length === 0 && !awaitingClarification && answerOutcome !== "needs_human";
   const answerMode = run?.generateAnswer ?? false;
   const isStreaming = phase === "streaming";
   const feedbackSnapshot = buildFeedbackContentSnapshot(submittedQuery, answer, citations);
@@ -905,7 +907,9 @@ export function SearchClient() {
               )}
 
               {/* 引用 / no-results */}
-              {noResults ? (
+              {phase === "done" && awaitingClarification ? (
+                <Banner severity="info">{t("search.clarificationHint")}</Banner>
+              ) : noResults ? (
                 <Card>
                   <CardContent className="pt-5">
                     <EmptyState title={t("search.noResults")} hint={t("search.noResultsHint")} />

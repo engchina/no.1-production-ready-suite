@@ -119,6 +119,27 @@ test("stream の途中の timeout は該当なしではなくエラーとして�
   await expect.poll(() => calls).toBe(2);
 });
 
+for (const outcome of ["needs_clarification", "needs_human", "insufficient_evidence"] as const) {
+  test(`根拠 0 件の表示は回答の状態に合わせる (${outcome})`, async ({ page }, testInfo) => {
+    const answer = outcome === "needs_clarification" ? "対象の種類を教えてください。" : "資料だけでは回答を確定できません。";
+    await page.route("**/api/search/stream", (route) => fulfillStream(route, sse([
+      ["metadata", { trace_id: "t-empty", elapsed_ms: 5, guardrail_warnings: [], diagnostics: { answer: { outcome } } }],
+      ["delta", { text: answer }],
+      ["citations", []],
+      ["done", { trace_id: "t-empty" }],
+    ])));
+    await page.goto("/search");
+    await selectSearchAnswerProfile(page, /経理ビュー/);
+    await search(page, "対象の操作方法");
+    await expect(page.getByText(answer, { exact: true })).toBeVisible();
+    await expect(page.getByText("一致する根拠が見つかりませんでした。")).toHaveCount(outcome === "insufficient_evidence" ? 1 : 0);
+    await expect(page.getByText("回答の前に確認が必要です。上の確認事項への回答を質問に含めて、もう一度検索してください。"))
+      .toHaveCount(outcome === "needs_clarification" ? 1 : 0);
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`search-${outcome}.png`), fullPage: true });
+  });
+}
+
 test("done を受けずに途切れた stream は途中終了のエラーにする", async ({ page }) => {
   await page.route("**/api/search/stream", (route) =>
     fulfillStream(

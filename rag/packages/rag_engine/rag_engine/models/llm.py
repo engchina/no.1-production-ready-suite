@@ -454,6 +454,11 @@ class GroundedItemReview(_StrictModel):
     )
     condition: str = Field(default="", description="conditional のとき原文の条件。")
     reason: str = Field(description="判定の根拠を短く。")
+    support_quote: str = Field(
+        default="",
+        max_length=600,
+        description="quote_unmatched が true の item を supported とする場合、text の全主張を裏付ける連続した原文を、その item の evidence からそのまま写す。裏付けが無ければ空。",
+    )
     # 監査のモデルが答えた適用性（記録用。応答の schema には出さない）。not_applicable / unknown は回答に反映せず
     # ここに残す（#2837。`grounded.applicability_policy`）。
     observed_applicability: SkipJsonSchema[str] = Field(default="", description="監査が答えた適用性の記録（応答の schema には出さない）。")

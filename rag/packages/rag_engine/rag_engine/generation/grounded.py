@@ -1517,6 +1517,8 @@ def verify(
         return check_contexts[text]
 
     for index, item in enumerate(draft.items):
+        if item.kind != "gap":
+            item = _inline_evidence(item, spans)
         scoped_question = item_question(question, item.request_id)
         local = check_context(scoped_question)
         if item.kind == "gap":
@@ -1729,10 +1731,10 @@ def _unmatched_item(item: GroundedItem, index: int, spans: Sequence[dict], match
     nearest = match.get("nearest")
     named = _named_spans(item, spans)
     span: dict | None
-    if nearest:
-        span, quote, code = nearest["span"], nearest["quote"], "quote_unmatched"
-    elif len(named) == 1:
+    if len(named) == 1:
         span, quote, code = named[0], item.quote, "quote_unmatched"
+    elif nearest:
+        span, quote, code = nearest["span"], nearest["quote"], "quote_unmatched"
     else:
         span, quote, code = None, item.quote, "citation_error"
     update: dict[str, Any] = {"quote": quote, "evidence_id": span["evidence_id"] if span else ""}
@@ -1751,7 +1753,62 @@ def _unmatched_item(item: GroundedItem, index: int, spans: Sequence[dict], match
     return entry
 
 
-_EVIDENCE_LABEL = re.compile(r"(?<![A-Za-z0-9])E[0-9]{1,3}(?![0-9])")
+_EVIDENCE_LABEL = re.compile(r"(?<![A-Za-z0-9])E[0-9]{1,3}(?![A-Za-z0-9])")
+_INLINE_EVIDENCE = re.compile(r"[（(\[【]\s*(E[0-9]{1,3}(?:\s*[,、・]\s*E[0-9]{1,3})*)\s*[）)\]】]")
+
+
+def _inline_evidence(item: GroundedItem, spans: Sequence[dict]) -> GroundedItem:
+    """本文中の根拠ラベルを非表示にし、一意なら引用元の候補にする。原文中の同じ記号は保つ。"""
+    corpus = "\n".join(str(span.get("text") or "") for span in spans)
+    labels = [
+        label.group()
+        for match in _INLINE_EVIDENCE.finditer(item.text)
+        if match.group() not in corpus
+        for label in _EVIDENCE_LABEL.finditer(match.group(1))
+    ]
+    text = _clean_evidence_labels(item.text, spans)
+    evidence_id = item.evidence_id
+    if not _named_spans(item, spans) and len(set(labels)) == 1:
+        evidence_id = labels[0]
+    return item.model_copy(update={"text": text, "evidence_id": evidence_id})
+
+
+def _clean_evidence_labels(text: str, spans: Sequence[dict]) -> str:
+    """表示用の文から内部ラベルを除く。根拠本文にあるコードは説明の対象なので残す。"""
+    corpus = "\n".join(str(span.get("text") or "") for span in spans)
+    text = _INLINE_EVIDENCE.sub(lambda match: match.group() if match.group() in corpus else "", text)
+    return _EVIDENCE_LABEL.sub(lambda match: match.group() if match.group() in corpus else "", text).strip()
+
+
+def recover_audited_quotes(
+    question: str, checked: Sequence[CheckedItem], audit: GroundedAudit, spans: Sequence[dict], *, guide_sources: Sequence[str] = ()
+) -> set[int]:
+    """監査が支持した言い換えを、監査の原文引用で再検査する。引用不一致以外の印は消さない。"""
+    recovered: set[int] = set()
+    for review in audit.reviews:
+        if not 0 <= review.index < len(checked) or sum(r.index == review.index for r in audit.reviews) != 1:
+            continue
+        entry = checked[review.index]
+        if not entry.unmatched or entry.carried or entry.removed or entry.span is None or review.support != "supported":
+            continue
+        quote = _original_quote(review.support_quote, entry.span["text"])
+        if not quote:
+            continue
+        item = entry.item.model_copy(update={"quote": quote, "lines": "", "evidence_id": entry.span["evidence_id"]})
+        verified, _ = verify(question, GroundedDraft(items=[item], summary="", confidence="low"), spans, guide_sources=guide_sources)
+        replacement = next((candidate for candidate in verified if candidate.draft_index == 0), None)
+        if replacement is None or replacement.unmatched or replacement.removed:
+            continue
+        entry.item, entry.span = replacement.item, replacement.span
+        entry.marks = [mark for mark in entry.marks if mark.get("code") != "quote_unmatched"] + replacement.marks
+        entry.hints = replacement.hints
+        entry.unmatched = False
+        entry.quote_match = "audited_paraphrase"
+        if entry.draft_index is not None:
+            recovered.add(entry.draft_index)
+    return recovered
+
+
 # 対象の種別。同じ種別の別対象（帳票→別の帳票、画面→別の画面）への置き換えだけを検出する。
 # 「一覧」「リスト」単独は画面上の一覧（帳票設定の一覧）にも使われ、帳票の種別にしない（「一覧表」は帳票）(#654)。
 
@@ -4629,6 +4686,7 @@ def run_round(
             draft = parse_text(generation_system, prompt, settings, GroundedDraft, provider_id=provider_id)
     else:
         draft = parse_text(generation_system, prompt, settings, GroundedDraft, provider_id=provider_id)
+    draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
     if image_fallback:
         timing["image_fallback"] = image_fallback
@@ -4698,6 +4756,7 @@ def run_round(
                     "quote": e.item.quote,
                     "evidence_id": e.span["evidence_id"],
                     "checks": e.hints,
+                    "quote_unmatched": e.unmatched,
                     "function": _function_label(e.span),
                     "origin": e.span.get("origin", ""),
                     "heading": " > ".join(str(h) for h in e.span.get("section_path", []) or []),
@@ -4791,9 +4850,21 @@ def run_round(
         if audit_usage := usage_delta(usage_before):
             timing["audit_usage"] = audit_usage
         if audit is not None:
+            recovered = recover_audited_quotes(
+                question, checked, audit, spans, guide_sources=[source for _id, _title, sources in guide_steps for source in sources]
+            )
+            for entry in dropped:
+                if entry["index"] in recovered:
+                    entry["ignored"] = True
             apply_audit(checked, audit)
             checked = without_redundant_quotes(checked)
             _reconcile_request_reviews(checked, audit)
+    procedures = [e for e in checked if e.item.kind in _PROCEDURE_KINDS and not e.added]
+    timing["procedure_quotes"] = {
+        "original": sum(e.span is not None and quote_in_text(e.item.text, e.span["text"]) for e in procedures),
+        "paraphrase_verified": sum(e.quote_match == "audited_paraphrase" for e in procedures),
+        "unmatched": sum(e.unmatched for e in procedures),
+    }
     if audit_mode == AUDIT_MODE_NONE:
         # 監査なしの型（#2800）: 要求の充足は説明の有無で決め、主張の支持・目的・要約は決定的な検査だけにする。
         audit = deterministic_audit(question, checked)
