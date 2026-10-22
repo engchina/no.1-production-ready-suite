@@ -157,6 +157,8 @@ async def build_guide_query(
     ``settings`` は検索・回答プロファイルを重ねた設定。``unsaved`` は埋め込みを保存しないガイド
     （下書きで試すガイド）の id。
     """
+    if not settings.rag_support_guide_enabled:
+        return GuideQuery(text=text)
     query = expand_guide_query(text, runtime_knowledge)
     if not settings.rag_support_guide_semantic_match_enabled or not any(
         content.goal.intent_examples for _, _, content in guides

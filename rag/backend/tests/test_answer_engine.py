@@ -418,7 +418,7 @@ def test_search_answer_profile_ignores_removed_text_search_tokenizer_override() 
     assert not hasattr(settings, "rag_text_search_tokenizer")
 
 
-def test_search_answer_profile_overrides_answer_options() -> None:
+def test_search_answer_profile_ignores_global_answer_options() -> None:
     from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
     from app.rag.search_answer_profile_config import (
         SearchAnswerProfileConfig,
@@ -435,12 +435,18 @@ def test_search_answer_profile_overrides_answer_options() -> None:
         ),
     )
 
-    settings, _ = resolve_search_answer_profile_settings(Settings(), config)
+    base = Settings(
+        rag_query_strategy="rag_fusion",
+        rag_answer_flow="crag",
+        rag_neighbor_child_count=3,
+        rag_rerank_enabled=True,
+    )
+    settings, _ = resolve_search_answer_profile_settings(base, config)
 
-    assert settings.rag_query_strategy == "hyde"
-    assert settings.rag_answer_flow == "standard_rag"
-    assert settings.rag_neighbor_child_count == 0
-    assert settings.rag_rerank_enabled is False
+    assert settings.rag_query_strategy == "rag_fusion"
+    assert settings.rag_answer_flow == "crag"
+    assert settings.rag_neighbor_child_count == 3
+    assert settings.rag_rerank_enabled is True
 
 
 @pytest.mark.parametrize(
@@ -2298,8 +2304,8 @@ async def test_prefetch_warms_search_cache_without_changing_results() -> None:
     assert warmed == plain
 
 
-def test_search_answer_profile_overrides_screen_linking() -> None:
-    """検索・回答プロファイルで画面目録の連携を上書きできる(#554)。"""
+def test_search_answer_profile_ignores_legacy_screen_linking() -> None:
+    """画面目録は全体の設定を使い、旧個別値を適用しない。"""
     from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
     from app.rag.search_answer_profile_config import (
         SearchAnswerProfileConfig,
@@ -2313,7 +2319,7 @@ def test_search_answer_profile_overrides_screen_linking() -> None:
 
     settings, _ = resolve_search_answer_profile_settings(Settings(), config)
 
-    assert settings.rag_screen_linking_enabled is True
+    assert settings.rag_screen_linking_enabled is False
     assert Settings().rag_screen_linking_enabled is False
 
 
@@ -3269,8 +3275,8 @@ def test_build_engine_settings_passes_request_coverage(tmp_path: Any) -> None:
     ) == (3, 1)
 
 
-def test_search_answer_profile_overrides_request_coverage() -> None:
-    """検索・回答プロファイルで根拠の無い要求の再検索を上書きできる(#1279)。"""
+def test_search_answer_profile_ignores_legacy_request_coverage() -> None:
+    """不足要求の再検索は全体の設定を使い、旧個別値を適用しない。"""
     from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
     from app.rag.search_answer_profile_config import (
         SearchAnswerProfileConfig,
@@ -3284,7 +3290,7 @@ def test_search_answer_profile_overrides_request_coverage() -> None:
 
     settings, _ = resolve_search_answer_profile_settings(Settings(), config)
 
-    assert settings.rag_request_coverage_retrieval_enabled is True
+    assert settings.rag_request_coverage_retrieval_enabled is False
     assert Settings().rag_request_coverage_retrieval_enabled is False
 
 

@@ -291,13 +291,6 @@ DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 # 検証で持つ。
 PROFILE_ONLY_SETTING_FIELDS = frozenset(
     {
-        "rag_entity_expansion_enabled",
-        "rag_entity_expansion_max_chunks",
-        # 章節の拡張（#1436）。既定 on。上限もプロファイルで選ぶ。
-        "rag_section_expansion_enabled",
-        "rag_section_expansion_max_levels",
-        "rag_section_expansion_input_token_percent",
-        # 抽出してから統合（#1437）の抽出の呼び出しの上限。既定 8。
         # rerank の後、起点に採る同じ文書の chunk の上限（#2167）。既定 5。
         "rag_max_anchors_per_document",
     }
@@ -1021,14 +1014,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "空なら名前の列・長い本文の列（説明・備考など）・日付や数値の列を除いた列。"
         ),
     )
-    # 次の 2 つは、検索・回答プロファイル（と品質評価の rag_overrides）の値を回答の検索へ渡すための
-    # 項目で、環境変数 / .env からは読まない（PROFILE_ONLY_SETTING_FIELDS。#1388）。
+    # 名称・別名と章節の拡張は検索方法の全体設定で選ぶ。
     rag_entity_expansion_enabled: bool = Field(
         default=True,
         description=(
             "回答の検索で、質問と上位の候補の chunk の実体から、実体の表との SQL の join で"
-            "関連する chunk を 1 段だけ足す（#1362）。検索・回答プロファイルの"
-            " entity_expansion_enabled で選ぶ（既定 ON。#1402）。実体は文書レシピで実体の抽出"
+            "関連する chunk を 1 段だけ足す（#1362）。検索方法の全体設定で選ぶ（既定 ON。#1402）。"
+            "実体は文書レシピで実体の抽出"
             "（rag_entity_index_enabled）を選んだ文書にだけある。LLM の呼び出しは増えない。"
         ),
     )
@@ -1037,8 +1029,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ge=1,
         le=20,
         description=(
-            "実体の 1 段の拡張で 1 回の検索に足す chunk 数の上限（#1362）。検索・回答プロファイルの"
-            " entity_expansion_max_chunks で選ぶ（#1388）。"
+            "実体の 1 段の拡張で 1 回の検索に足す chunk 数の上限（#1362）。検索方法の"
+            "全体設定で選ぶ（#1388）。"
         ),
     )
     rag_graph_expansion_enabled: bool = Field(
@@ -1060,8 +1052,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             " graph_expansion_max_chunks で上書きできる。"
         ),
     )
-    # 次の 3 つも、検索・回答プロファイル（と品質評価の rag_overrides）の値を回答へ渡すための
-    # 項目で、環境変数 / .env からは読まない（PROFILE_ONLY_SETTING_FIELDS。#1436）。
     rag_section_expansion_enabled: bool = Field(
         default=True,
         description=(
@@ -1070,7 +1060,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "新たな根拠を加えた後に CRAG の十分性を確かめ、足りれば止める"
             "（判定ごとに LLM の呼び出しが 1 回増える）。標準 RAG では必要な範囲の原文を補完し、"
             "十分性の評価器は呼ばない。一部取得は読了にしない。"
-            "検索・回答プロファイルの section_expansion_enabled で選ぶ。"
+            "検索方法の全体設定で選ぶ。"
         ),
     )
     rag_section_expansion_max_levels: int = Field(
@@ -1744,6 +1734,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "業務ガイドの公開の履歴に残す版の数（#2356）。公開・前の版に戻すときに、公開日時の"
             "新しい順に超えた版を消す（公開中の版は残す。版の番号は振り直さない）。"
         ),
+    )
+    rag_support_guide_enabled: bool = Field(
+        default=False,
+        description="業務ガイドを質問への回答に使う。既定は OFF。検索・回答プロファイルで選ぶ。",
     )
     rag_support_guide_semantic_match_enabled: bool = Field(
         default=False,

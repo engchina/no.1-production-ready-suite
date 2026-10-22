@@ -64,6 +64,9 @@ async function mockRetrieval(page: Page) {
         request_coverage_retrieval_enabled: false,
         auto_field_filter_enabled: false,
         graph_expansion_enabled: false,
+        entity_expansion_enabled: true, entity_expansion_max_chunks: 6,
+        section_expansion_enabled: true, section_expansion_max_levels: 4,
+        section_expansion_input_token_percent: 50,
         config_source: "runtime",
       },
     ],
@@ -635,17 +638,6 @@ async function openSupportGuideEditor(page: Page) {
   await expect(editor.getByTestId("support-guide-try-conditions")).toBeVisible();
 }
 
-// ---- 検索・回答プロファイル（章節で広げる根拠・名称・別名でつながる根拠） ----
-
-async function mockNewSearchAnswerProfile(page: Page) {
-  await page.route("**/api/knowledge-bases**", (route) =>
-    route.fulfill({ json: apiEnvelope({ items: [], total: 0, limit: 50, offset: 0, has_next: false }) })
-  );
-  await page.route("**/api/search-answer-profiles**", (route) =>
-    route.fulfill({ json: apiEnvelope({ items: [], total: 0, limit: 50, offset: 0, has_next: false }) })
-  );
-}
-
 // ---- 文書アップロード ----
 
 async function mockUpload(page: Page) {
@@ -686,6 +678,9 @@ const SCREENS: FormScreen[] = [
     mock: mockRetrieval,
     open: async (page) => {
       await expect(page.getByRole("combobox", { name: "質問の拡張", exact: true })).toBeVisible();
+      await expect(page.getByRole("combobox", { name: "広げる段の上限", exact: true })).toBeVisible();
+      await expect(page.getByRole("combobox", { name: "根拠の入力の上限（%）", exact: true })).toBeVisible();
+      await expect(page.getByRole("combobox", { name: "1 回の検索で加える根拠の上限", exact: true })).toBeVisible();
       await expect(page.getByRole("textbox", { name: /保存・表示しない語/ })).toBeVisible();
     },
   },
@@ -775,19 +770,6 @@ const SCREENS: FormScreen[] = [
     open: openSupportGuideEditor,
     widthRoots: ['[data-testid="support-guide-editor"]'],
     screenshotTarget: '[data-testid="support-guide-editor"]',
-  },
-  {
-    name: "search-answer-profile-expansion",
-    path: "/search-answer-profiles?id=new",
-    mock: mockNewSearchAnswerProfile,
-    open: async (page) => {
-      await expect(page.getByRole("combobox", { name: "広げる段の上限" })).toBeVisible();
-    },
-    widthRoots: [
-      '[data-testid="search-answer-profile-section-expansion"]',
-      '[data-testid="search-answer-profile-entity-expansion"]',
-    ],
-    screenshotTarget: '[data-testid="search-answer-profile-section-expansion"]',
   },
   {
     name: "upload",

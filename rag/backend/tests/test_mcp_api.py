@@ -2506,7 +2506,9 @@ class _GuideProfileOracle:
         return SimpleNamespace(
             id="bv-1",
             status=SimpleNamespace(value=self.status),
-            config=SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"]),
+            config=SearchAnswerProfileConfig.model_validate(
+                {"knowledge_base_ids": ["kb-1"], "query": {"support_guide_enabled": True}}
+            ),
         )
 
     async def get_search_answer_profile_knowledge(self, _profile_id: str, _kind: str) -> None:

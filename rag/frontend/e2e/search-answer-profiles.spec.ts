@@ -8,10 +8,16 @@ import {
   selectSearchAnswerProfile,
 } from "./_helpers";
 
+const GLOBAL_QUERY_FIELDS = [
+  "query_strategy", "answer_flow", "neighbor_child_count", "rerank_enabled", "auto_field_filter_enabled",
+  "graph_expansion_enabled", "screen_linking_enabled", "request_coverage_retrieval_enabled", "guide_step_retrieval_enabled",
+];
+
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await mockKnowledgeBases(page);
+  await page.route("**/api/settings/profile-guide-search-defaults", (route) => route.fulfill({ json: { data: { max_queries: 4, deadline_seconds: 60 }, error_messages: [], warning_messages: [] } }));
 });
 
 test("言語資源の上書き（検索・回答の項目だけ）を検索・回答プロファイルに保存できる (#2181)", { tag: "@responsive" }, async ({
@@ -82,17 +88,11 @@ for (const viewport of [
     const settings = page.locator("fieldset").filter({ hasText: "検索・回答設定" });
     // 検索方法・検索オプション・根拠確認・回答スタイル・回答プロンプト（system prompt・既定言語）は削除した(#595)。
     await expect(settings.getByRole("heading", { level: 3 })).toHaveText([
-      "質問の拡張",
-      "回答の生成方式",
-      "根拠の前後から加える数",
       "1 つの文書から採る根拠の上限",
-      "回答の検索のオプション",
-      "業務ガイドの照合",
       "回答モデル",
+      "業務ガイドを使用する",
       "手順ごとの検索の上限",
       "手順ごとの検索の時間上限（秒）",
-      "名称・別名でつながる根拠",
-      "章節で広げる根拠",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
     // 品質評価は検索・回答プロファイルで上書きしない(評価はグローバル設定だけで決まる。#301)。
@@ -102,12 +102,9 @@ for (const viewport of [
     await expect(settings.getByRole("combobox", { name: "全文検索の分割方式" })).toHaveCount(0);
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
-    // 継承 chip: セレクト7行(回答の 4 行(1 つの文書から採る根拠の上限。#2167) + 手順ごとの検索の上限(#2395)
-    // + 回答モデル + 時間の上限) + 三値トグル8行(回答の Rerank・画面目録・根拠の無い要求を探し直す(#1279)・業務ガイドの
-    // 手順ごとに探す(#2395)・質問から項目の条件を読み取る(#652)・関係情報で根拠を広げる(#2055)・業務ガイドの
-    // 意味の照合と近いガイドの確認(#2398))。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(15);
-    await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(7);
+    // 個別に残すのは文書ごとの根拠上限と回答モデルの2選択欄だけ。
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(4);
+    await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(4);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
     await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
     await expect(settings.getByTestId("answer-prompt-unused-note")).toHaveCount(0);
@@ -167,426 +164,101 @@ test("検索・回答プロファイルを作成すると参照 KB と方針を�
   await expect(page.getByRole("button", { name: "新規作成" })).toBeVisible();
 });
 
-test("回答の設定は常に表示し、上書きした値を POST する（回答エンジンは送らない）", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  let createBody = null as Record<string, unknown> | null;
-  await mockSearchAnswerProfiles(page, [], (body) => {
-    createBody = body;
-  });
+test("個別設定は残した項目だけを保存する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  let body = null as Record<string, unknown> | null;
+  await mockSearchAnswerProfiles(page, [], (value) => { body = value; });
   await page.goto("/search-answer-profiles?id=new");
-  const optionNames = ["Rerank で検索候補を並べ替える", "質問から項目の条件を読み取る", "関係情報で根拠を広げる", "画面目録で操作画面を探す", "根拠の無い要求を探し直す"];
-  const groups = page.getByRole("group", { name: new RegExp(`^(${optionNames.join("|")})$`) });
-  await expect(groups).toHaveCount(5);
-  expect(await groups.evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))))
-    .toEqual(optionNames);
-  await groups.nth(1).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("profile-option-order.png") });
-
-
   await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
   await page.getByRole("option", { name: /社内規程/ }).click();
   await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
-  await page.getByRole("textbox", { name: "名前", exact: true }).fill("手順ビュー");
-  await page.getByRole("textbox", { name: "説明", exact: true }).fill("操作手順に回答する検索・回答プロファイル");
-
-  const strategy = page.getByRole("heading", { name: "質問の拡張", level: 3 }).locator("..");
-  await strategy.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
-  await strategy.getByRole("combobox", { name: "質問の拡張" }).click();
-  await page.getByRole("option", { name: "仮説文生成（HyDE）" }).click();
-  const neighbor = page
-    .getByRole("heading", { name: "根拠の前後から加える数", level: 3 })
-    .locator("..");
-  await neighbor.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
-  // 1 つの文書から採る根拠の上限（#2167）。説明は継承のときも出し、上書きは既定の 5 から選ぶ。
-  const perDocument = page
-    .getByRole("heading", { name: "1 つの文書から採る根拠の上限", level: 3 })
-    .locator("..");
+  await page.getByRole("textbox", { name: "名前", exact: true }).fill("プロファイル A");
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
+  const perDocument = page.getByRole("heading", { name: "1 つの文書から採る根拠の上限", level: 3 }).locator("..");
   await expect(perDocument.getByText(/^既定は 5 です。並べ替えの後、/)).toBeVisible();
   await perDocument.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
-  await perDocument.getByRole("combobox", { name: "1 つの文書から採る根拠の上限" }).click();
+  await perDocument.getByRole("combobox").click();
   await page.getByRole("option", { name: "上限なし" }).click();
-  await page
-    .getByRole("group", { name: "Rerank で検索候補を並べ替える" })
-    .getByRole("button", { name: "OFF" })
-    .click();
-  // 画面目録の連携は既定 無効(継承)。LLM の呼び出しが増えることを説明に出す(#554)。
-  const screenLinking = page.getByRole("group", { name: "画面目録で操作画面を探す" });
-  await expect(screenLinking.getByRole("button", { name: "グローバル既定を継承" })).toHaveAttribute(
-    "aria-pressed",
-    "true"
-  );
-  await expect(screenLinking).toHaveAccessibleDescription(/AI の呼び出しが 1 回増えます/);
-  await screenLinking.getByRole("button", { name: "ON" }).click();
-  // 質問から項目の条件を読み取るも既定 無効(継承)。検索・回答プロファイルで ON にできる(#652)。
-  const autoFieldFilter = page.getByRole("group", { name: "質問から項目の条件を読み取る" });
-  await expect(
-    autoFieldFilter.getByRole("button", { name: "グローバル既定を継承" })
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(autoFieldFilter).toHaveAccessibleDescription(/AI の呼び出しが 1 回増えます/);
-  await autoFieldFilter.getByRole("button", { name: "ON" }).click();
-  // 根拠の無い要求を探し直す（#1279）は既定 無効。継承は検索方法の現在の設定に従う。
-  const requestCoverage = page.getByRole("group", { name: "根拠の無い要求を探し直す" });
-  await expect(
-    requestCoverage.getByRole("button", { name: "グローバル既定を継承" })
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(requestCoverage).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
-  await requestCoverage.getByRole("button", { name: "OFF" }).click();
-  // 業務ガイドの手順ごとに探す（#2395）は既定 有効(継承)。AI の呼び出しは増えないことを説明に出す。
-  const guideSteps = page.getByRole("group", { name: "業務ガイドの手順ごとに探す" });
-  await expect(guideSteps.getByRole("button", { name: "グローバル既定を継承" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await expect(guideSteps).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
-  await guideSteps.getByRole("button", { name: "OFF" }).click();
   const model = page.getByRole("heading", { name: "回答モデル", level: 3 }).locator("..");
   await model.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
   await model.getByRole("combobox").click();
   await page.getByRole("option", { name: "モデル B", exact: true }).click();
-  await model.screenshot({ path: testInfo.outputPath("profile-answer-model.png") });
-  const deadline = page.getByRole("heading", { name: "手順ごとの検索の時間上限（秒）", level: 3 }).locator("..");
-  await deadline.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
-  // 上書きに切り替えた直後は全体の既定（60 秒。#2826）を出す。
-  await expect(deadline.getByRole("combobox")).toHaveText("60");
-  await deadline.getByRole("combobox").click();
-  await page.getByRole("option", { name: "30", exact: true }).click();
-  await deadline.screenshot({ path: testInfo.outputPath("guide-step-deadline.png") });
-  // 関係情報で根拠を広げる（#2055）は既定 無効(継承)。AI の呼び出しは増えないことを説明に出す。
-  const graphExpansion = page.getByRole("group", { name: "関係情報で根拠を広げる" });
-  await expect(
-    graphExpansion.getByRole("button", { name: "グローバル既定を継承" })
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(graphExpansion).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
-  await graphExpansion.getByRole("button", { name: "ON" }).click();
-  // 業務ガイドの照合（#2398）。意味の照合は埋め込みの呼び出しが増えることを説明に出す。どちらも既定 無効(継承)。
-  const guideSemantic = page.getByRole("group", { name: "意味の近さで業務ガイドを選ぶ" });
-  await expect(
-    guideSemantic.getByRole("button", { name: "グローバル既定を継承" })
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(guideSemantic).toHaveAccessibleDescription(/埋め込みの呼び出しが 1 回増えます/);
-  await guideSemantic.getByRole("button", { name: "ON" }).click();
-  const guideCloseMatch = page.getByRole("group", { name: "近い業務ガイドを確かめる" });
-  await expect(guideCloseMatch).toHaveAccessibleDescription(/選択肢は業務ガイドの題名/);
-  await guideCloseMatch.getByRole("button", { name: "ON" }).click();
+  await page.getByRole("switch", { name: "業務ガイドを使用する" }).click();
+  await page.getByTestId("search-answer-profile-guide-matching").screenshot({ path: testInfo.outputPath("guide-usage-switch.png") });
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
+  await expect.poll(() => body?.name).toBe("プロファイル A");
+  const config = body?.config as { answer_model_id?: string; query?: Record<string, unknown> };
+  expect(config.answer_model_id).toBe("model-b");
+  expect(config.query?.max_anchors_per_document).toBe(0);
+  expect(config.query?.support_guide_enabled).toBe(true);
+  for (const key of [...GLOBAL_QUERY_FIELDS, "entity_expansion_enabled", "entity_expansion_max_chunks", "section_expansion_enabled", "section_expansion_max_levels", "section_expansion_input_token_percent"]) expect(key in (config.query ?? {})).toBe(false);
+});
 
-  await expect.poll(() => createBody?.name).toBe("手順ビュー");
-  const query = (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
-  expect("answer_engine" in query).toBe(false);
-  expect(query.query_strategy).toBe("hyde");
-  expect(query.neighbor_child_count).toBe(3);
-  expect(query.max_anchors_per_document).toBe(0);
-  expect(query.rerank_enabled).toBe(false);
-  expect(query.screen_linking_enabled).toBe(true);
-  expect(query.auto_field_filter_enabled).toBe(true);
-  expect(query.request_coverage_retrieval_enabled).toBe(false);
-  expect(query.guide_step_retrieval_enabled).toBe(false);
-  expect(query.guide_step_max_queries ?? null).toBeNull();
-  expect(query.guide_step_deadline_seconds).toBe(30);
-  expect((createBody?.config as { answer_model_id?: string })?.answer_model_id).toBe("model-b");
-  expect(query.graph_expansion_enabled).toBe(true);
-  expect(query.support_guide_semantic_match_enabled).toBe(true);
-  expect(query.support_guide_close_match_clarification_enabled).toBe(true);
-  expect(query.answer_flow ?? null).toBeNull();
+test("業務ガイドは既定 OFF の単一スイッチで保存・再表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  let body = null as Record<string, unknown> | null;
+  await mockDefaultSearchAnswerProfile(page, (value) => { body = value; });
+  await page.goto("/search-answer-profiles?id=bv-default");
+  const panel = page.getByTestId("search-answer-profile-guide-matching");
+  const toggle = panel.getByRole("switch", { name: "業務ガイドを使用する" });
+  const save = page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true });
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect(panel).toContainText("既定値は OFF です");
+  await expect(panel.getByRole("switch")).toHaveCount(1);
+  await expect(page.getByRole("group", { name: "業務ガイドの手順ごとに探す", exact: true })).toHaveCount(0);
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
+  for (const enabled of [true, false]) {
+    await toggle.click();
+    await save.click();
+    await expect.poll(() => (body?.config as { query?: { support_guide_enabled?: boolean } })?.query?.support_guide_enabled).toBe(enabled);
+    await page.reload();
+    await expect(toggle).toHaveAttribute("aria-checked", String(enabled));
+    await panel.screenshot({ path: testInfo.outputPath(`guide-usage-${enabled ? "on" : "off"}.png`) });
+    await expectNoPageOverflow(page);
+  }
+});
+
+test("手順検索の説明の先頭と上書きの初期値は実際の全体の既定を使う", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockDefaultSearchAnswerProfile(page, () => undefined);
+  await page.route("**/api/settings/profile-guide-search-defaults", (route) => route.fulfill({ json: { data: { max_queries: 7, deadline_seconds: 37.5 }, error_messages: [], warning_messages: [] } }));
+  await page.goto("/search-answer-profiles?id=bv-default");
+  for (const [name, prefix, value] of [["手順ごとの検索の上限", "既定は 7 です。", "7"], ["手順ごとの検索の時間上限（秒）", "既定は 37.5 秒です。", "37.5"]]) {
+    const row = page.getByRole("heading", { name, exact: true }).locator("..");
+    await expect(row.locator("p")).toHaveText(new RegExp(`^${prefix.replaceAll(".", "\\.")}`));
+    await row.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
+    await expect(row.getByRole("combobox")).toHaveText(value);
+    await row.screenshot({ path: testInfo.outputPath(`guide-default-${value}.png`) });
+  }
+  await expectNoPageOverflow(page);
 });
 
 // #1388: 実体の 1 段の拡張は検索・回答プロファイルで選ぶ（既定 off。全体の環境変数は持たない）。
-async function mockEntityIndexCoverage(
-  page: Page,
-  respond: (knowledgeBaseIds: string[]) => Promise<{ status?: number; count?: number }>
-) {
-  const requests: string[][] = [];
-  await page.route("**/api/search-answer-profiles/entity-index-coverage", async (route) => {
-    const body = route.request().postDataJSON() as { knowledge_base_ids: string[] };
-    requests.push(body.knowledge_base_ids);
-    const { status = 200, count = 0 } = await respond(body.knowledge_base_ids);
-    await route.fulfill(
-      status === 200
-        ? { json: { data: { document_count: count }, error_messages: [], warning_messages: [] } }
-        : {
-            status,
-            json: { data: null, error_messages: ["読み込めませんでした。"], warning_messages: [] },
-          }
-    );
+test("検索方法の全体設定の項目は表示せず、古い個別設定を保存しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  let body = null as Record<string, unknown> | null;
+  await mockDefaultSearchAnswerProfile(page, (value) => { body = value; }, {
+    query_strategy: "hyde", answer_flow: "crag", neighbor_child_count: 0,
+    rerank_enabled: false, auto_field_filter_enabled: true, graph_expansion_enabled: true,
+    screen_linking_enabled: true, request_coverage_retrieval_enabled: false,
+    entity_expansion_enabled: false, entity_expansion_max_chunks: 2, section_expansion_enabled: false, section_expansion_max_levels: 2, section_expansion_input_token_percent: 30,
+    guide_step_retrieval_enabled: false, guide_step_max_queries: 0, guide_step_deadline_seconds: 10,
   });
-  return requests;
-}
-
-test("名称・別名でつながる根拠の開閉と上限を保存し、名称・別名の索引の無い参照先では案内する", async ({ page }) => {
-  let createBody = null as Record<string, unknown> | null;
-  await mockSearchAnswerProfiles(page, [], (body) => {
-    createBody = body;
-  });
-  let release: () => void = () => {};
-  const pending = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const requests = await mockEntityIndexCoverage(page, async () => {
-    await pending;
-    return { count: 0 };
-  });
-  await page.goto("/search-answer-profiles?id=new");
-
-  const entity = page.getByTestId("search-answer-profile-entity-expansion");
-  const toggle = entity.getByRole("switch", { name: "名称・別名でつながる根拠を 1 段広げる" });
-  // 既定は on（#1402。このプロファイルの検索だけに効く）。上限は on のときだけ出す。
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await expect(toggle).toHaveAccessibleDescription(/文書レシピで名称・別名の索引を有効にした文書にだけ効きます/);
-  await expect(toggle).toHaveAccessibleDescription(/既定は有効で、このプロファイルの検索だけに効きます/);
-  const maxChunks = entity.getByRole("combobox", { name: "1 回の検索で加える根拠の上限" });
-  await expect(maxChunks).toHaveText(/6 件（既定）/);
-  // 参照先を選ぶまでは数えない。
-  expect(requests).toEqual([]);
-
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
-  await page.getByRole("option", { name: /社内規程/ }).click();
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
-  await expect.poll(() => requests.length).toBeGreaterThan(0);
-  expect(requests.at(-1)).toEqual(["kb-1"]);
-  // 数えている間は案内を出さない（読み込み中に「無い」と言わない）。
-  const coverage = entity.getByTestId("search-answer-profile-entity-expansion-coverage");
-  await expect(coverage).toHaveCount(0);
-  release();
-  await expect(coverage).toHaveText(
-    "参照先のナレッジベースに、名称・別名の索引のある文書がありません。文書レシピで名称・別名の索引を有効にすると効きます。"
-  );
-
-  await expect(toggle).toHaveAccessibleDescription(/名称・別名の索引のある文書がありません/);
-  await maxChunks.click();
-  await page.getByRole("option", { name: "10 件", exact: true }).click();
-  await expect(maxChunks).toHaveText(/10 件/);
-  await expectNoPageOverflow(page);
-  if (process.env.RAG_E2E_SCREENSHOT_DIR) {
-    await entity.screenshot({
-      path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/profile-entity-expansion-${test.info().project.name}.png`,
-    });
-    await page.evaluate(() => {
-      document.documentElement.dataset.theme = "dark";
-    });
-    await entity.screenshot({
-      path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/profile-entity-expansion-${test.info().project.name}-dark.png`,
-    });
-    await page.evaluate(() => {
-      delete document.documentElement.dataset.theme;
-    });
-  }
-
-  await page.getByRole("textbox", { name: "名前", exact: true }).fill("台帳ビュー");
-  await page.getByRole("textbox", { name: "説明", exact: true }).fill("台帳と規程をつないで回答します");
-  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
-
-  await expect.poll(() => createBody?.name).toBe("台帳ビュー");
-  const query = (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
-  // 既定と同じ on は保存しない（既定に追従させる）。上限は選んだ値を保存する。
-  expect(query.entity_expansion_enabled ?? null).toBeNull();
-  expect(query.entity_expansion_max_chunks).toBe(10);
-});
-
-test("名称・別名の索引のある参照先・数えられないときは案内を出さず、off は false で保存して上限も外す", async ({ page }) => {
-  let createBody = null as Record<string, unknown> | null;
-  await mockSearchAnswerProfiles(page, [], (body) => {
-    createBody = body;
-  });
-  let failing = false;
-  await mockEntityIndexCoverage(page, async () => (failing ? { status: 503 } : { count: 2 }));
-  await page.goto("/search-answer-profiles?id=new");
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
-  await page.getByRole("option", { name: /社内規程/ }).click();
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
-
-  const entity = page.getByTestId("search-answer-profile-entity-expansion");
-  const toggle = entity.getByRole("switch", { name: "名称・別名でつながる根拠を 1 段広げる" });
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await expect(entity.getByRole("combobox", { name: "1 回の検索で加える根拠の上限" })).toBeVisible();
-  await expect(entity.getByTestId("search-answer-profile-entity-expansion-coverage")).toHaveCount(0);
-  // 参照先の選択欄からフォーカスを外す（開いたままの選択欄を押し直すと閉じるため）。
-  await toggle.focus();
-
-  // 参照先を変えて数えられなかったとき（503）も、推測で「無い」とは言わない。
-  failing = true;
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
-  await page.getByRole("option", { name: /DEFAULT/ }).click();
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
-  await expect(entity.getByTestId("search-answer-profile-entity-expansion-coverage")).toHaveCount(0);
-
-  // off にすると上限の欄を閉じ、off（false）だけを保存する（上限は保存しない）。
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-checked", "false");
-  await expect(entity.getByRole("combobox", { name: "1 回の検索で加える根拠の上限" })).toHaveCount(0);
-  await page.getByRole("textbox", { name: "名前", exact: true }).fill("規程ビュー");
-  await page.getByRole("textbox", { name: "説明", exact: true }).fill("規程に回答します");
-  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
-  await expect.poll(() => createBody?.name).toBe("規程ビュー");
-  const query = (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
-  expect(query.entity_expansion_enabled).toBe(false);
-  expect(query.entity_expansion_max_chunks ?? null).toBeNull();
-  await expectNoPageOverflow(page);
-});
-
-test("要求別の再検索は現在の設定を継承し、ON・OFF・継承を保存・再読込・破棄できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  let body: Record<string, unknown> | null = null;
-  await mockDefaultSearchAnswerProfile(page, (value) => { body = value; });
   await page.goto("/search-answer-profiles?id=bv-default");
-  const names = [
-    "画面目録で操作画面を探す", "根拠の無い要求を探し直す", "業務ガイドの手順ごとに探す",
-    "質問から項目の条件を読み取る", "関係情報で根拠を広げる", "意味の近さで業務ガイドを選ぶ",
-    "近い業務ガイドを確かめる",
-  ];
-  for (const name of names) {
-    const row = page.getByRole("group", { name, exact: true });
-    await expect(row).not.toHaveAccessibleDescription(/全体の既定は(?:有効|無効)/);
-    await expect(row).toHaveAccessibleDescription(/継承時は検索方法の現在の設定/);
+  for (const name of ["質問の拡張", "回答の生成方式", "根拠の前後から加える数", "回答の検索のオプション"]) {
+    await expect(page.getByRole("heading", { name, exact: true })).toHaveCount(0);
   }
-  const row = page.getByRole("group", { name: "根拠の無い要求を探し直す", exact: true });
-  const actions = page.getByRole("group", { name: "確定の操作" });
+  for (const name of ["Rerank で検索候補を並べ替える", "質問から項目の条件を読み取る", "関係情報で根拠を広げる", "画面目録で操作画面を探す", "根拠の無い要求を探し直す", "業務ガイドの手順ごとに探す"]) {
+    await expect(page.getByRole("group", { name, exact: true })).toHaveCount(0);
+  }
+  for (const name of ["名称・別名でつながる根拠", "章節で広げる根拠"]) {
+    await expect(page.getByText(name, { exact: true })).toHaveCount(0);
+  }
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
-  for (const value of [false, true, null]) {
-    const label = value === null ? "グローバル既定を継承" : value ? "ON" : "OFF";
-    await row.getByRole("button", { name: label, exact: true }).click();
-    await actions.getByRole("button", { name: "保存", exact: true }).click();
-    await expect.poll(() => (body?.config as { query?: { request_coverage_retrieval_enabled?: boolean | null } } | undefined)?.query?.request_coverage_retrieval_enabled ?? null).toBe(value);
-    await page.reload();
-    await expect(row.getByRole("button", { name: label, exact: true })).toHaveAttribute("aria-pressed", "true");
-  }
-  await row.getByRole("button", { name: "ON", exact: true }).click();
-  await actions.getByRole("button", { name: "変更を破棄", exact: true }).click();
-  await expect(row.getByRole("button", { name: "グローバル既定を継承" })).toHaveAttribute("aria-pressed", "true");
-  await row.scrollIntoViewIfNeeded();
-  await row.locator("..").screenshot({ path: testInfo.outputPath("request-coverage-inheritance.png") });
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => body).not.toBeNull();
+  const query = (body?.config as { query?: Record<string, unknown> })?.query ?? {};
+  for (const key of [...GLOBAL_QUERY_FIELDS, "entity_expansion_enabled", "entity_expansion_max_chunks", "section_expansion_enabled", "section_expansion_max_levels", "section_expansion_input_token_percent"]) expect(key in query).toBe(false);
+  await page.reload();
+  await page.getByTestId("search-answer-profile-guide-matching").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("global-search-options.png") });
   await expectNoPageOverflow(page);
-});
-
-test("章節で広げる根拠は標準 RAG と CRAG で使え、段と入力の上限だけを保存する", { tag: "@responsive" }, async ({
-  page,
-}) => {
-  const bodies: Record<string, unknown>[] = [];
-  await mockSearchAnswerProfiles(page, [], (body) => {
-    bodies.push(body);
-  });
-  await page.goto("/search-answer-profiles?id=new");
-
-  await page.getByRole("group", { name: "回答の生成方式", exact: true })
-    .getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
-  const flow = page.getByRole("combobox", { name: "回答の生成方式", exact: true });
-  await expect(flow).toHaveText(/標準 RAG/);
-
-  const section = page.getByTestId("search-answer-profile-section-expansion");
-  const toggle = section.getByRole("switch", {
-    name: "当たった根拠の章節から親の章節へ広げる",
-  });
-  // 既定は on（#1436）。上限は on のときだけ出す。
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await expect(toggle).toHaveAccessibleDescription(
-    /読めなかった章節を「回答に未反映の関連章節」に示し/,
-  );
-  await expect(toggle).toHaveAccessibleDescription(/根拠が足りると判定した場合でも、最低 1 段/);
-  await expect(section).toContainText("1 段目は当たった根拠が属する章節全体です。");
-  await expect(section).toContainText("標準 RAG と CRAG の両方で効きます。");
-  await expect(section).toContainText("一部だけを取得した章節は読了として扱いません。");
-  await expect(section).toContainText("回答のモデルの入力の上限");
-  await expect(section).toContainText("一致しないものは使いません");
-  const levels = section.getByRole("combobox", { name: "広げる段の上限" });
-  const tokens = section.getByRole("combobox", { name: "根拠の入力の上限" });
-  await expect(section.getByRole("combobox")).toHaveCount(2);
-  await expect(section.getByRole("combobox", { name: "広げるのを終える時間", exact: true })).toHaveCount(0);
-  await expect(section.getByRole("combobox", { name: "原文を抜き出す呼び出しの上限", exact: true })).toHaveCount(0);
-  await expect(section).toContainText("標準 RAG と CRAG の両方で効きます");
-  await expect(toggle).toBeEnabled();
-  await flow.click();
-  await page.getByRole("option", { name: /^CRAG/ }).click();
-  await expect(toggle).toBeEnabled();
-  await expect(section.getByRole("combobox")).toHaveCount(2);
-  await flow.click();
-  await page.getByRole("option", { name: /^標準 RAG/ }).click();
-
-  await levels.click();
-  await page.getByRole("option", { name: "2 段", exact: true }).click();
-  await expect(levels).toHaveText(/2 段/);
-  await expectNoPageOverflow(page);
-  // 選択欄は行の枠の中に収まる（375px で横にはみ出さない）。
-  const sectionBox = await section.boundingBox();
-  for (const field of [levels, tokens]) {
-    const box = await field.boundingBox();
-    expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(
-      (sectionBox?.x ?? 0) + (sectionBox?.width ?? 0),
-    );
-  }
-  if (process.env.RAG_E2E_SCREENSHOT_DIR) {
-    await section.screenshot({
-      path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/profile-section-expansion-${test.info().project.name}.png`,
-    });
-    await page.evaluate(() => {
-      document.documentElement.dataset.theme = "dark";
-    });
-    await section.screenshot({
-      path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/profile-section-expansion-${test.info().project.name}-dark.png`,
-    });
-    await page.evaluate(() => {
-      delete document.documentElement.dataset.theme;
-    });
-  }
-
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
-  await page.getByRole("option", { name: /社内規程/ }).click();
-  await page
-    .getByRole("combobox", { name: "参照するナレッジベース" })
-    .press("Escape");
-  await page
-    .getByRole("textbox", { name: "名前", exact: true })
-    .fill("章節ビュー");
-  await page
-    .getByRole("textbox", { name: "説明", exact: true })
-    .fill("章節を読んで回答します");
-  await page
-    .getByRole("group", { name: "確定の操作" })
-    .getByRole("button", { name: "作成", exact: true })
-    .click();
-  await expect.poll(() => bodies.length).toBe(1);
-  const query =
-    (bodies[0]?.config as { query?: Record<string, unknown> })?.query ?? {};
-  // 既定と同じ on・上限は保存しない（既定に追従させる）。選んだ段の上限だけを保存する。
-  expect(query.answer_flow).toBe("standard_rag");
-  expect(query.section_expansion_enabled ?? null).toBeNull();
-  expect(query.section_expansion_max_levels).toBe(2);
-  expect(query.section_expansion_input_token_percent ?? null).toBeNull();
-  expect(query).not.toHaveProperty("section_expansion_time_limit_seconds");
-  expect(query).not.toHaveProperty("section_extraction_max_calls");
-});
-
-test("章節で広げる根拠を off にすると上限の欄を閉じ、false だけを保存する", async ({
-  page,
-}) => {
-  let createBody = null as Record<string, unknown> | null;
-  await mockSearchAnswerProfiles(page, [], (body) => {
-    createBody = body;
-  });
-  await page.goto("/search-answer-profiles?id=new");
-  const section = page.getByTestId("search-answer-profile-section-expansion");
-  const toggle = section.getByRole("switch", {
-    name: "当たった根拠の章節から親の章節へ広げる",
-  });
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-checked", "false");
-  await expect(section.getByRole("combobox")).toHaveCount(0);
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
-  await page.getByRole("option", { name: /社内規程/ }).click();
-  await page
-    .getByRole("combobox", { name: "参照するナレッジベース" })
-    .press("Escape");
-  await page
-    .getByRole("textbox", { name: "名前", exact: true })
-    .fill("短答ビュー");
-  await page
-    .getByRole("textbox", { name: "説明", exact: true })
-    .fill("当たった根拠だけで回答します");
-  await page
-    .getByRole("group", { name: "確定の操作" })
-    .getByRole("button", { name: "作成", exact: true })
-    .click();
-  await expect.poll(() => createBody?.name).toBe("短答ビュー");
-  const query =
-    (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
-  expect(query.section_expansion_enabled).toBe(false);
-  expect(query.section_expansion_max_levels ?? null).toBeNull();
 });
 
 test("回答前の確認の方針（曖昧な質問の扱い）を検索・回答プロファイルに保存できる (#1839)", { tag: "@responsive" }, async ({
@@ -1090,7 +762,7 @@ test("エディタの見出しに状態と参照 KB の件数を出し、アー�
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveAttribute("readonly", "");
   await expect(page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true })).toBeDisabled();
   await expect(
-    page.getByRole("group", { name: "質問の拡張" }).getByRole("button", { name: "検索・回答プロファイルで上書き" })
+    page.getByRole("group", { name: "1 つの文書から採る根拠の上限" }).getByRole("button", { name: "検索・回答プロファイルで上書き" })
   ).toBeDisabled();
   await expectNoPageOverflow(page);
 });
@@ -1261,7 +933,8 @@ async function mockKnowledgeBases(page: Page) {
 
 async function mockDefaultSearchAnswerProfile(
   page: Page,
-  onUpdate: (body: Record<string, unknown>) => void
+  onUpdate: (body: Record<string, unknown>) => void,
+  initialQuery: Record<string, unknown> = {},
 ) {
   const summary: SearchAnswerProfileSummaryFixture = {
     id: "bv-default",
@@ -1276,8 +949,7 @@ async function mockDefaultSearchAnswerProfile(
   const config = {
     version: 1,
     knowledge_base_ids: ["kb-default"],
-    query: {
-    },
+    query: initialQuery,
   };
   let savedConfig: Record<string, unknown> = config;
   let savedDescription = summary.description;
@@ -1394,7 +1066,7 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
   await page.goto("/search-answer-profiles?id=bv-old");
   await expect(page.getByText("アーカイブ済みの検索・回答プロファイルは編集・保存できません。")).toBeVisible();
   await expect(page.getByRole("combobox", { name: "安全チェック" })).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "質問の拡張" })).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "質問の拡張" })).toHaveCount(0);
 });
 
 // 知識（承認済み FAQ・用語・ドメインキーワード・ルール）の読み込みに失敗したら、空（0 件）と見せずに
@@ -1591,7 +1263,7 @@ for (const viewport of [
 
 
 test("言語資源の全体再取得は継承欄だけを更新し、編集中と保存済みの上書きを保持する", { tag: "@responsive" }, async ({ page }) => {
-  let body: Record<string, unknown> | null = null;
+  let body = null as Record<string, unknown> | null;
   await mockDefaultSearchAnswerProfile(page, (value) => { body = value; });
   const fields = ["cause_cues", "past_markers", "future_markers"].map((key) => ({
     section: "question_cues", key, kind: "words", choices: [], ingest: false, max_chars: 40,

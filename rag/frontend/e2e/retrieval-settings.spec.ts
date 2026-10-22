@@ -210,6 +210,11 @@ const ANSWERING_SETTINGS = {
   auto_field_filter_enabled: false,
   graph_expansion_enabled: false,
   config_source: "runtime",
+  entity_expansion_enabled: true,
+  entity_expansion_max_chunks: 6,
+  section_expansion_enabled: true,
+  section_expansion_max_levels: 4,
+  section_expansion_input_token_percent: 50,
 };
 
 async function mockAnsweringSettings(page: Page, saved: unknown[] = []) {
@@ -253,9 +258,9 @@ for (const viewport of [
       // 画面の文言に移植元の呼び名（DocRAG）を出さない（#593）。
       const card = page.getByTestId("answering-settings-card");
       await expect(card).not.toContainText("DocRAG");
-      await expect(card.getByRole("switch")).toHaveCount(5);
+      await expect(card.getByRole("switch")).toHaveCount(7);
       expect(await card.getByRole("switch").evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))))
-        .toEqual(["Rerank で検索候補を並べ替える", "質問から項目の条件を読み取る", "関係情報で根拠を広げる", "画面目録で操作画面を探す", "根拠の無い要求を探し直す"]);
+        .toEqual(["質問から項目の条件を読み取る", "名称・別名でつながる根拠", "関係情報で根拠を広げる", "画面目録で操作画面を探す", "Rerank で検索候補を並べ替える", "章節で広げる根拠", "根拠の無い要求を探し直す"]);
       const strategy = page.getByRole("combobox", { name: "質問の拡張", exact: true });
       await expect(strategy).toContainText("自動ルーティング");
       await expect(page.getByRole("combobox", { name: "回答の生成方式", exact: true })).toContainText("CRAG");
@@ -298,6 +303,11 @@ for (const viewport of [
           request_coverage_retrieval_enabled: true,
           auto_field_filter_enabled: true,
           graph_expansion_enabled: true,
+          entity_expansion_enabled: true,
+          entity_expansion_max_chunks: 6,
+          section_expansion_enabled: true,
+          section_expansion_max_levels: 4,
+          section_expansion_input_token_percent: 50,
         },
       ]);
       await expect(save).toBeDisabled();

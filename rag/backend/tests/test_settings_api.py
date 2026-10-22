@@ -3466,6 +3466,16 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     monkeypatch.setattr(settings, "rag_request_coverage_retrieval_enabled", True)
     monkeypatch.setattr(settings, "rag_auto_field_filter_enabled", False)
     monkeypatch.setattr(settings, "rag_graph_expansion_enabled", False)
+    expansion_defaults = {
+        "entity_expansion_enabled": True,
+        "entity_expansion_max_chunks": 6,
+        "section_expansion_enabled": True,
+        "section_expansion_max_levels": 4,
+        "section_expansion_input_token_percent": 50,
+    }
+    for name, value in expansion_defaults.items():
+        monkeypatch.setattr(settings, f"rag_{name}", value)
+        monkeypatch.delenv(f"RAG_{name.upper()}", raising=False)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
     assert client.get("/api/settings/answering").json()["data"] == {
@@ -3477,6 +3487,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         "request_coverage_retrieval_enabled": True,
         "auto_field_filter_enabled": False,
         "graph_expansion_enabled": False,
+        **expansion_defaults,
         "config_source": "runtime",
     }
 
@@ -3489,6 +3500,11 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
             "request_coverage_retrieval_enabled": False,
             "auto_field_filter_enabled": True,
             "graph_expansion_enabled": True,
+            "entity_expansion_enabled": False,
+            "entity_expansion_max_chunks": 9,
+            "section_expansion_enabled": False,
+            "section_expansion_max_levels": 3,
+            "section_expansion_input_token_percent": 40,
         },
     )
     assert resp.status_code == 200
@@ -3518,6 +3534,18 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     assert data["graph_expansion_enabled"] is True
     assert settings.rag_graph_expansion_enabled is True
     assert "RAG_GRAPH_EXPANSION_ENABLED=true" in env_text
+
+    reloaded = Settings(_env_file=env_file)
+    for name, expected in {
+        "entity_expansion_enabled": False,
+        "entity_expansion_max_chunks": 9,
+        "section_expansion_enabled": False,
+        "section_expansion_max_levels": 3,
+        "section_expansion_input_token_percent": 40,
+    }.items():
+        assert data[name] == expected
+        assert getattr(settings, f"rag_{name}") == expected
+        assert getattr(reloaded, f"rag_{name}") == expected
 
 
 def test_answering_settings_rejects_invalid_values() -> None:

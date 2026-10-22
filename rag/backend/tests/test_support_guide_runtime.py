@@ -624,7 +624,7 @@ def test_guide_load_failure_is_recorded_in_answer_diagnostics() -> None:
 
 
 async def test_resolve_query_context_records_guide_load_failure(monkeypatch: MonkeyPatch) -> None:
-    fake = FakeKnowledgeOracle()
+    fake = FakeKnowledgeOracle(support_guide_enabled=True)
     monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
 
     class _BrokenStore:
@@ -656,7 +656,7 @@ async def test_resolve_query_context_uses_the_draft_only_for_the_preview(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """下書きで試す（#1288）: 照合だけ下書きを使い、公開の版の一覧は変えない。"""
-    fake = FakeKnowledgeOracle()
+    fake = FakeKnowledgeOracle(support_guide_enabled=True)
     monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
     # 公開の版は「権限」の質問に当たらない（照合の語が違う）。
     published = [
@@ -723,7 +723,7 @@ def test_with_draft_replaces_or_adds_the_guide_and_marks_preview_records() -> No
 
 
 def test_clarification_suggest_falls_back_to_guide_conditions(monkeypatch: MonkeyPatch) -> None:
-    fake = FakeKnowledgeOracle()
+    fake = FakeKnowledgeOracle(support_guide_enabled=True)
     monkeypatch.setattr(knowledge_route, "OracleClient", lambda: fake)
 
     async def published(_oracle: object, _profile: str) -> list[Any]:
@@ -746,7 +746,9 @@ def test_clarification_suggest_falls_back_to_guide_conditions(monkeypatch: Monke
 class _Profile:
     id = "bv-1"
     status = "ACTIVE"
-    config = SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"])
+    config = SearchAnswerProfileConfig.model_validate(
+        {"knowledge_base_ids": ["kb-1"], "query": {"support_guide_enabled": True}}
+    )
 
 
 class _FakeOracle:

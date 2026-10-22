@@ -751,6 +751,11 @@ class AnsweringSettingsData(BaseModel):
     request_coverage_retrieval_enabled: bool
     auto_field_filter_enabled: bool
     # 関係情報(章節・表の見出しの entity と chunk の対応)で検索の候補を足す(#2055。既定 OFF)。
+    entity_expansion_enabled: bool
+    entity_expansion_max_chunks: int
+    section_expansion_enabled: bool
+    section_expansion_max_levels: int
+    section_expansion_input_token_percent: int
     graph_expansion_enabled: bool
     config_source: Literal["runtime"] = "runtime"
 
@@ -766,6 +771,12 @@ class AnsweringSettingsUpdate(BaseModel):
     request_coverage_retrieval_enabled: bool | None = None
     auto_field_filter_enabled: bool | None = None
     graph_expansion_enabled: bool | None = None
+
+    entity_expansion_enabled: bool | None = None
+    entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
+    section_expansion_enabled: bool | None = None
+    section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
+    section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)
 
 
 class AnswerRecordSettingsUpdate(BaseModel):
@@ -974,3 +985,10 @@ class GuardrailSettingsUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     enabled: bool
+
+
+class ProfileGuideSearchDefaultsData(BaseModel):
+    """プロファイルの権限で読める、手順検索の現在の全体の既定値。"""
+
+    max_queries: int
+    deadline_seconds: float
