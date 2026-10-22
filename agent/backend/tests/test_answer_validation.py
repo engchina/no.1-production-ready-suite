@@ -3141,3 +3141,16 @@ def test_bibliography_and_table_intro_do_not_make_answer_conditional(
     assert result["withheld"]["listed"] == 0
     assert run_answer_text(run) == answer
     assert _answer_outcome(run)["value"] == "answered"
+
+
+@pytest.mark.parametrize(
+    "case", HEADING_CASES["table_header_cases"], ids=lambda case: str(case["id"])
+)
+def test_table_header_contract_with_empty_cells(case: dict[str, Any]) -> None:
+    from app.features.agent.answer_passages import table_header_lines
+
+    assert table_header_lines(case["answer"]) == set(case["headers"])
+    kinds = non_claim_passages(case["answer"])
+    for header in case["headers"]:
+        assert kinds[header] == "table"
+    assert "| 値 | 10 | 20 |" not in kinds

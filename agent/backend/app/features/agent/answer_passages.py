@@ -707,7 +707,7 @@ def _table_cells(line: str) -> list[str]:
 def _is_header_cell(cell: str) -> bool:
     value = _EMPHASIS.sub("", cell).strip()
     return (
-        0 < len(value) <= 20
+        len(value) <= 20
         and "。" not in value
         and not _is_sentence(value)
         and not _OPERATION.search(value)
@@ -726,6 +726,7 @@ def table_header_lines(answer: str) -> set[str]:
         if _TABLE_ROW.fullmatch(line)
         and "|" in following
         and is_table_rule(following)
+        and any(_EMPHASIS.sub("", cell).strip() for cell in _table_cells(line))
         and all(_is_header_cell(cell) for cell in _table_cells(line))
     }
 

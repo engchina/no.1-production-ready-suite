@@ -382,7 +382,7 @@ def table_header_lines(text: str) -> set[str]:
 
     def header_cell(cell: str) -> bool:
         value = _EMPHASIS.sub("", cell).strip()
-        return 0 < len(value) <= 20 and "。" not in value and not _SENTENCE_END.search(value) and not is_operation_instruction(value)
+        return len(value) <= 20 and "。" not in value and not _SENTENCE_END.search(value) and not is_operation_instruction(value)
 
     lines = [line.strip() for line in text.split("\n")]
     return {
@@ -391,6 +391,7 @@ def table_header_lines(text: str) -> set[str]:
         if _TABLE_ROW.fullmatch(line)
         and "|" in following
         and is_table_rule(following)
+        and any(_EMPHASIS.sub("", cell).strip() for cell in line.strip("|").split("|"))
         and all(header_cell(cell) for cell in line.strip("|").split("|"))
     }
 
