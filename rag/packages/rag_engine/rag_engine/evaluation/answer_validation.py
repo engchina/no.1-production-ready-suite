@@ -46,6 +46,7 @@ from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERAT
 from rag_engine.generation.grounded import output_field_claim, quote_in_text
 from rag_engine.generation.operation_audit import is_non_claim_passage, list_heading_lines, table_header_lines
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
+from rag_engine.generation.table_revision import revise_table_passage
 from rag_engine.models.llm import OutputFieldEvidence
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline, current_deadline
 
@@ -273,6 +274,8 @@ def _settled_passages(
 SUPPORT_TARGET_MISMATCH = "target_mismatch"  # 根拠は別の対象（処理・画面・成果物・状態）についての記載
 SUPPORT_VALUE_UNBOUND = "value_unbound"  # 段落が、根拠の表の別の行の区分・名前と値を結び付けている
 SUPPORT_QUOTE_UNMATCHED = "quote_unmatched"  # 監査が裏付けとして写した原文が、結び付けた根拠に無い
+# 根拠の表の対応と取り違えた段落を、表の正しい値に直した（#3005。status は contradicted のまま、revised_text に直した文）。
+SUPPORT_TABLE_CORRECTED = "table_corrected"
 # 段落が勧める内容が、利用者が確認で答えた条件・制約と両立しない（#2726）。前提と矛盾するので contradicted にする。
 SUPPORT_PREMISE_CONFLICT = "premise_conflict"
 SUPPORT_CHECKS = (SUPPORT_TARGET_MISMATCH, SUPPORT_VALUE_UNBOUND, SUPPORT_QUOTE_UNMATCHED, SUPPORT_PREMISE_CONFLICT)
@@ -361,6 +364,8 @@ class ValidationClaimCheck(BaseModel):
     # supported を採らなかった理由（SUPPORT_CHECKS）。
     support_quote: SkipJsonSchema[str] = ""
     support_check: SkipJsonSchema[str] = ""
+    # 根拠の表の対応の取り違えを、表の正しい値に直した段落（#3005。support_check が table_corrected のとき）。
+    revised_text: SkipJsonSchema[str] = ""
 
 
 class ClaimAuditOutput(BaseModel):
@@ -575,6 +580,36 @@ def premise_conflicts(
         return set()
     ids = {passage["id"] for passage in passages}
     return {check.answer_passage_id for check in output.checks if check.fit == "conflicts" and check.answer_passage_id in ids}
+
+
+def _revise_table_claims(
+    claims: Sequence[ValidationClaimCheck], document_texts: Sequence[str], settings: Any, provider_id: str | None
+) -> list[ValidationClaimCheck]:
+    """表の対応の取り違え（contradicted・value_unbound）の段落を、表の正しい値に直す（#3005）。
+
+    直せたら ``support_check`` を table_corrected、``revised_text`` を直した文にする（status は contradicted の
+    まま。直した文を使わない呼び出し側は今どおり外す）。期限を過ぎていたら直さない。
+    """
+    from rag_engine.evaluation import answer_eval
+
+    def parse(system: str, user: str, schema: type[BaseModel]) -> BaseModel:
+        output: BaseModel = answer_eval.parse_text_response(system, user, settings, schema, provider_id=provider_id)
+        return output
+
+    result: list[ValidationClaimCheck] = []
+    for claim in claims:
+        if claim.status == "contradicted" and claim.support_check == SUPPORT_VALUE_UNBOUND and not _deadline_passed():
+            revised = revise_table_passage(claim.answer_quote, document_texts, parse)
+            if revised is not None:
+                claim = claim.model_copy(
+                    update={
+                        "support_check": SUPPORT_TABLE_CORRECTED,
+                        "revised_text": revised.text,
+                        "reason": f"根拠の表の値に直しました（{revised.note}）。{claim.reason}",
+                    }
+                )
+        result.append(claim)
+    return result
 
 
 def _enforce_support(
@@ -1200,6 +1235,8 @@ def validate_answer_claims(
         [str(item.get("text") or "") for item in evidence_items],
         premise_conflicts=premise_conflicts(question, passages, premises, settings, provider_id),
     )
+    # 根拠の表の対応と取り違えた段落は、表の正しい値に直せれば直した文を返す（#3005。直せなければ矛盾のまま）。
+    claims = _revise_table_claims(claims, [str(item.get("text") or "") for item in evidence_items], settings, provider_id)
     # 図の項目だけで裏付けた supported は、図の見た目だけで決まる主張でないかを確かめ直す（#2678）。
     claims, figure_rechecked = _recheck_figure_supported(claims, fixed, passages, evidence, catalog, settings, provider_id)
     counts: dict[str, int] = {}
@@ -1243,6 +1280,7 @@ __all__ = [
     "STATUS_TIMED_OUT",
     "SUPPORT_CHECKS",
     "SUPPORT_PREMISE_CONFLICT",
+    "SUPPORT_TABLE_CORRECTED",
     "SUPPORT_QUOTE_UNMATCHED",
     "SUPPORT_TARGET_MISMATCH",
     "SUPPORT_VALUE_UNBOUND",

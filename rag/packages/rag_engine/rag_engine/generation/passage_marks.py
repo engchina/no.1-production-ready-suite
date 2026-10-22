@@ -32,6 +32,8 @@ PASSAGE_REASON_STATES: dict[str, PassageState] = {
     "figure_not_read": UNVERIFIED,
     "target_mismatch": WARNING,
     "value_unbound": WARNING,
+    # 根拠の表の対応と取り違えた段落を、表の正しい値に直して残した（#3005）。
+    "table_corrected": WARNING,
     "item_check": WARNING,
     "superseded": WARNING,
     "after_contradicted_step": WARNING,

@@ -330,7 +330,8 @@ false〕・`listed`〔節の項目の数〕）で件数を出す。MCP の `agen
 表と違う対応を述べた。`support_check`。#2659・#2653）は `unsupported`（原文が無いときは `citation_error`）で返り、Agent は本文に残して、
 別の対象・表の対応は警告（`target_mismatch` / `value_unbound`）、写した原文が無いのは未確認（`quote_unmatched`）の印にする（#2738）。
 段落が根拠の表の別の行・列の値を結び付けた（表が否定した対応）ときは、RAG が `contradicted`（`support_check=value_unbound`。理由に
-表の正しい対応）で返し、Agent は矛盾として外す（#2998）。
+表の正しい対応）で返し、Agent は矛盾として外す（#2998）。RAG が表の正しい値に直せた段落（`support_check=table_corrected`・
+`revised_text`。#3005）は外さず、本文の段落を直した文に置き換えて「根拠の表の値に直した」（`table_corrected`。警告）の印を付ける。
 業務ガイドの手順の説明は、RAG の `rag_validate_answer` の `guide_steps`（RAG の回答と同じ規則の手順ごとの充足。#2708）で
 確かめる。説明を確かめられなかった必須の手順は、本文を残したまま回答全体の警告（`answer_warnings` の `guide_check`。`detail` は
 RAG の finding の文）にして節「確認が必要な点」に示し、回答の対応の不足の印 `guide_steps`（conditional）にする。接続をまたいでは手順ごとに

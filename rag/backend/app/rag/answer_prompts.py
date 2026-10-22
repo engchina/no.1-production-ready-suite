@@ -232,6 +232,8 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "evaluation",
         (
             ("system", "rag_engine.evaluation.answer_validation:VALIDATION_SYSTEM_PROMPT"),
+            # 表の対応と取り違えた段落を、表の正しい値に直す（#3005。取り違えがあるときだけ）。
+            ("tableRevision", "rag_engine.generation.table_revision:REVISION_SYSTEM_PROMPT"),
             # 確認の答えがあるときだけ、勧める内容が答えの条件・制約と両立するかを比べる（#2726）。
             (
                 "premiseConsistency",

@@ -204,6 +204,7 @@ PASSAGE_REASONS: dict[str, tuple[str, str]] = {
     "figure_not_read": (MARK_UNVERIFIED, "図の画像を読めておらず確かめられない"),
     "target_mismatch": (MARK_WARNING, "根拠は別の対象についての記載"),
     "value_unbound": (MARK_WARNING, "根拠の表の対応と違う可能性"),
+    "table_corrected": (MARK_WARNING, "根拠の表の値に直した"),
     "after_contradicted_step": (MARK_WARNING, "前の手順が根拠と矛盾"),
     "after_unverified_step": (MARK_WARNING, "前提の手順が未確認"),
 }
@@ -1794,6 +1795,41 @@ def _section_lines(
     return removed_lines, review
 
 
+def _apply_table_revisions(
+    answer: str, result: JsonObject
+) -> tuple[str, JsonObject, dict[str, JsonObject]]:
+    """RAG が根拠の表の正しい値に直した段落（`revised_text`。#3005）を、本文の段落と置き換える。
+
+    直した段落は根拠と矛盾しないので外さず、「根拠の表の値に直した」の警告の印を付ける（黙って
+    直さない）。段落の原文が本文に 1 回だけ現れるときだけ置き換える。戻り値は (本文, 判定, 直した
+    段落 → 印の理由)。
+    """
+    corrected: dict[str, JsonObject] = {}
+    claims: list[Any] = []
+    for claim in result.get("claims") or []:
+        if not isinstance(claim, dict):
+            claims.append(claim)
+            continue
+        quote = str(claim.get("answer_quote") or "")
+        revised = str(claim.get("revised_text") or "").strip()
+        if (
+            claim.get("support_check") == "table_corrected"
+            and revised
+            and quote.strip()
+            and answer.count(quote) == 1
+        ):
+            answer = answer.replace(quote, revised, 1)
+            corrected[revised] = reason_item("table_corrected", claim.get("reason"))
+            claim = {
+                **claim,
+                "answer_quote": revised,
+                "status": "supported",
+                "audit_status": "supported",
+            }
+        claims.append(claim)
+    return answer, {**result, "claims": claims}, corrected
+
+
 def publish_answer(answer: str, result: JsonObject) -> PublishedAnswer:
     """判定（判定として使える結果）から、利用者に見せる回答と段落の印を組み立てる（#2738）。
 
@@ -1813,6 +1849,7 @@ def publish_answer(answer: str, result: JsonObject) -> PublishedAnswer:
       分かるように）。主張ではない段落（見出し・出典・質問・不足の文・節の行。#1306）には印を
       付けない。
     """
+    answer, result, corrected = _apply_table_revisions(answer, result)
     claims = [item for item in mark_non_claims(answer, result)["claims"] if isinstance(item, dict)]
     # 表の見出しの行・次の行で決まる一覧の見出しの行・名前だけの番号つきの項目（中身は下の行）には
     # 印を付けない。
@@ -1830,6 +1867,8 @@ def publish_answer(answer: str, result: JsonObject) -> PublishedAnswer:
         if all(item["code"] != reason["code"] for item in reasons):
             reasons.append(reason)
 
+    for text, reason in corrected.items():
+        add(text, reason)
     for quote, items in grouped.items():
         contradicted = next((item for item in items if is_contradicted(item)), None)
         if contradicted is not None:

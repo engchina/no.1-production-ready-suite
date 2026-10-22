@@ -55,6 +55,7 @@ from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
+from rag_engine.generation.table_revision import ParseText, revise_table_passage
 from rag_engine.generation.value_grounding import unsupported_document_value_claim
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedFactAudit, GroundedItem
@@ -1350,11 +1351,22 @@ class CheckedItem:
     marks: list[dict[str, str]] = field(default_factory=list)  # 段落の印の理由（#2738）
     removed: bool = False  # 監査が根拠と矛盾と判定し、本文から外した（#2738）
     unmatched: bool = False  # 引用が原文と照合できなかった item（是正の指摘は dropped に出す。#2738）
+    table_conflict: str = ""  # 根拠の表の対応の取り違えで外した item の、表の正しい対応（#2998・#3005）
 
     def mark(self, code: str, detail: str = "", *, reason: str = "") -> None:
         """言い換えを本文に残したまま、段落に印（``code`` は契約の語彙）を付ける。``reason`` は trace・是正の指摘の文。"""
         self.marks.append(passage_marks.reason(code, detail))
         self.reasons.append(reason or detail or code)
+
+    def correct(self, text: str, note: str) -> None:
+        """表の対応の取り違えで外した item を、表の正しい値に直した説明として本文に戻す（#3005）。"""
+        before = self.item.text
+        self.item = self.item.model_copy(update={"text": text})
+        self.removed = False
+        self.table_conflict = ""
+        self.marks = [mark for mark in self.marks if mark.get("code") != "contradicted"]
+        self.marks.append(passage_marks.reason("table_corrected", f"「{before}」を根拠の表の値に直しました（{note}）。"))
+        self.reasons.append(f"表の値に直した: {note}")
 
     def remove(self, detail: str, *, reason: str = "") -> None:
         """根拠と矛盾した item を本文から外す（「根拠と矛盾し除いた内容」の節に理由つきで出す）。"""
@@ -1572,6 +1584,7 @@ def verify(
             # 表が否定した対応は、根拠と矛盾した説明として本文から外し、正しい対応を理由に出す（#2998）。
             note = _quote_note(entry)
             entry.remove(f"根拠の表では{conflict}です。" + (f"{note}" if note else ""), reason=f"表の対応: {conflict}")
+            entry.table_conflict = conflict
         for check in ITEM_HINTS:
             hint = check(scoped_question, check_item, view)
             if hint:
@@ -1672,6 +1685,23 @@ def _quote_note(entry: CheckedItem) -> str:
     """理由に添える原文の引用（「原文「…」」）。画面説明の表示例の値は除く（``_displayed_quote``）。無ければ空。"""
     quote = _short_quote(_displayed_quote(entry) if entry.span is not None else entry.item.quote)
     return f"原文{answer_labels().quote(quote)}" if quote else ""
+
+
+def revise_table_conflicts(checked: Sequence[CheckedItem], parse: ParseText) -> int:
+    """根拠の表の対応の取り違えで外した item を、表の正しい値に直して本文に戻す（#3005）。直した数を返す。
+
+    直した文は表で決定的に確かめる（`table_revision.revise_table_passage`）。直せない・確かめに通らない item は
+    外したまま（理由に表の正しい対応）。
+    """
+    revised = 0
+    for entry in checked:
+        if not entry.removed or not entry.table_conflict or entry.span is None:
+            continue
+        result = revise_table_passage(entry.item.text, [entry.span["text"]], parse)
+        if result is not None:
+            entry.correct(result.text, result.note)
+            revised += 1
+    return revised
 
 
 def _mark_check(entry: CheckedItem, name: str, reason: str, *, code: str = "item_check") -> None:
@@ -4600,6 +4630,8 @@ def run_round(
         ref = _evidence_ref(entry["evidence_id"], spans)
         if ref:
             entry["evidence_ref"] = ref
+    # 根拠の表の対応と取り違えた説明は、表の正しい値に直せれば直して残す（#3005。直せなければ外したまま）。
+    revise_table_conflicts(checked, lambda system, user, schema: parse_text(system, user, settings, schema, provider_id=provider_id))
     # 引き継ぎは監査の前に行い、引き継いだ item も当該 round の根拠・指摘のもとで監査する (#1011)。監査の後に
     # 引き継ぐと、前の round で誤って支持された主張が監査に掛からないまま復活し、撤回できなかった。
     checked = without_redundant_quotes(carry_over(checked, previous))

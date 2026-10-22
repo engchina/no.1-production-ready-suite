@@ -253,7 +253,9 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 30: rag_validate_answer の claims で、段落が根拠の表の別の行・列の値を結び付けた
 #     （value_unbound）とき、status を unsupported から contradicted にし、理由に表の正しい対応を
 #     書くようにした（#2998）。
-MCP_OUTPUT_SCHEMA_VERSION = 30
+# 31: rag_validate_answer の claims に、段落の表の対応の取り違えを表の正しい値に直した文
+#     （revised_text。support_check は table_corrected）を足した（#3005）。
+MCP_OUTPUT_SCHEMA_VERSION = 31
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -1901,7 +1903,17 @@ class ValidatedClaim(BaseModel):
             "quote_unmatched=裏付けとして写した原文が根拠に無い / "
             "figure_recheck=図の項目だけの裏付けを確かめ直し、図の見た目だけで決まる・図と矛盾する"
             "とした / premise_conflict=段落が勧める内容が、利用者が確認で答えた条件・制約と"
-            "両立しない〔status は contradicted〕）。採ったときは null。"
+            "両立しない〔status は contradicted〕 / table_corrected=段落の表の対応の取り違えを、"
+            "表の正しい値に直した〔status は contradicted。直した文は revised_text〕）。"
+            "採ったときは null。"
+        ),
+    )
+    revised_text: str | None = Field(
+        default=None,
+        description=(
+            "support_check が table_corrected のとき、段落を根拠の表の正しい値に直した文"
+            "（表の照合で確かめた）。段落を外す代わりに、この文に置き換えて示せる。"
+            "それ以外は null。"
         ),
     )
 
@@ -4317,6 +4329,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     classification_check=str(claim.get("classification_check") or "") or None,
                     # 裏付けを採らなかった理由（#2659。監査の判定は audit_status）。
                     support_check=str(claim.get("support_check") or "") or None,
+                    # 表の正しい値に直した段落（#3005）。
+                    revised_text=str(claim.get("revised_text") or "") or None,
                 )
                 for claim in result.claim_checks
             ],

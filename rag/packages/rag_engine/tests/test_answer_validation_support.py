@@ -172,7 +172,14 @@ def test_negative_verdicts_and_reused_claims_are_kept() -> None:
     assert (claim["status"], claim["support_check"]) == ("contradicted", "")
     # 監査の判定を再利用した段落（#1527）も、表の行の対応に反すれば根拠と矛盾にする（#2998）。
     items = [{"id": "c1", "source": "manual.pdf", "page_start": 1, "page_end": 1, "text": TABLE}]
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response") as never:
+    schemas: list = []
+
+    def no_audit(system, inputs, settings, schema, provider_id=None):
+        # 監査は呼ばない。表の値に直す呼び出し（#3005）だけが来るので、失敗させて矛盾のままにする。
+        schemas.append(schema.__name__)
+        raise RuntimeError("synthetic failure")
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=no_audit):
         reused = validate_answer_claims(
             "質問",
             "- 区分Ⅱでは選択肢の値 01 を選びます。\n- 区分Ⅱでは選択肢の値 02 を選びます。",
@@ -180,7 +187,7 @@ def test_negative_verdicts_and_reused_claims_are_kept() -> None:
             settings=None,
             audited={"区分Ⅱでは選択肢の値 01 を選びます。": ["c1"], "区分Ⅱでは選択肢の値 02 を選びます。": ["c1"]},
         )
-        never.assert_not_called()
+    assert schemas == ["TableRevision"]
     assert [(c["status"], c["support_check"]) for c in reused["claim_checks"]] == [
         ("contradicted", SUPPORT_VALUE_UNBOUND),
         ("supported", ""),

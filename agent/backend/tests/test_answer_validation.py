@@ -3062,6 +3062,31 @@ def test_paragraph_rag_found_against_the_table_is_removed_with_the_right_value()
     assert published.passage_marks == []
 
 
+def test_passage_rag_corrected_with_the_table_replaces_the_wrong_passage() -> None:
+    """RAG が根拠の表の正しい値に直した段落（revised_text。#3005）は、外さずに直した文に置き換え、
+    「根拠の表の値に直した」の印を付ける。"""
+    kept = "区分Ⅰでは選択肢の値 01 を選びます。"
+    swapped = "区分Ⅱでは選択肢の値 01 を選びます。"
+    revised = "区分Ⅱでは選択肢の値 02 を選びます。"
+    reason = "根拠の表の値に直しました（『区分Ⅱ』の値は『02』（『01』は別の行の値））。"
+    table_claim = {
+        **_claim(swapped, "contradicted", reason),
+        "audit_status": "supported",
+        "support_check": "table_corrected",
+        "revised_text": revised,
+    }
+    published = publish_answer(
+        f"{kept}\n\n{swapped}", _verdict(_claim(kept, "supported"), table_claim)
+    )
+    assert published.body == f"{kept}\n\n{revised}"
+    assert published.removed_passages == []
+    assert [
+        (mark["text"], mark["state"], mark["reasons"][0]["code"])
+        for mark in published.passage_marks
+    ] == [(revised, "warning", "table_corrected")]
+    assert published.passage_marks[0]["reasons"][0]["detail"] == reason
+
+
 # 段落の印の契約の事例（#2738。RAG・Agent・UI のテストが読む）。
 PASSAGE_MARKS: dict[str, Any] = json.loads(
     (
