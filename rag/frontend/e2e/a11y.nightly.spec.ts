@@ -387,7 +387,7 @@ const STATES: (Screen & { name: string })[] = [
     name: "安全チェックの OCI Guardrails と未設定の注意",
     path: "/settings/guardrail",
     act: async (page) => {
-      await expect(page.getByRole("switch", { name: "OCI Guardrails", exact: true })).toBeChecked();
+      await expect(page.getByRole("radio", { name: /^検査する/ })).toBeChecked();
       await expect(page.getByRole("status").filter({ hasText: "OCI API キー認証を利用できません" })).toBeVisible();
     },
   },
