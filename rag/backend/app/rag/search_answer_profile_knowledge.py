@@ -564,6 +564,15 @@ def suggest_clarification(
     payload: Mapping[str, object], question: str
 ) -> tuple[Mapping[str, object], RuleClarification] | None:
     """質問に一致したルールのうち、確認を持つ最初の 1 件(質問で既に答えているものは除く)。"""
+    found = unanswered_rule_clarifications(payload, question)
+    return found[0] if found else None
+
+
+def unanswered_rule_clarifications(
+    payload: Mapping[str, object], question: str
+) -> list[tuple[Mapping[str, object], RuleClarification]]:
+    """一致したルールの未回答の確認事項。確認の提示と前提の明示で同じ判定を使う。"""
+    found: list[tuple[Mapping[str, object], RuleClarification]] = []
     by_id = {str(rule.get("id", "")): rule for rule in _rules(payload)}
     for matched in preview_runtime_knowledge(payload, question).matched_rules:
         rule = by_id.get(matched.rule_id)
@@ -571,8 +580,8 @@ def suggest_clarification(
             continue
         clarification = rule_clarification(rule)
         if clarification is not None and not _already_answered(question, clarification):
-            return rule, clarification
-    return None
+            found.append((rule, clarification))
+    return found
 
 
 def rule_matches(payload: Mapping[str, object], question: str, rule_id: str) -> bool:

@@ -2117,7 +2117,7 @@ export const ja = {
   "searchAnswerProfiles.field.neighborChildCount": "根拠の前後から加える数",
   "searchAnswerProfiles.field.maxAnchorsPerDocument": "1 つの文書から採る根拠の上限",
   "searchAnswerProfiles.field.maxAnchorsPerDocumentHelper":
-    "並べ替えの後、根拠の起点に同じ文書から採る数の上限です。超えた分は後ろへ回し、関連する別の文書を根拠に入れます。既定は 5 です。",
+    "既定は 5 です。並べ替えの後、根拠の起点に同じ文書から採る数の上限です。超えた分は後ろへ回し、関連する別の文書を根拠に入れます。",
   "searchAnswerProfiles.field.maxAnchorsPerDocumentUnlimited": "上限なし",
   "searchAnswerProfiles.field.answerOptions": "回答の検索のオプション",
   "searchAnswerProfiles.field.rerank": "Rerank で検索候補を並べ替える",
@@ -3980,6 +3980,7 @@ export const ja = {
   "settings.answerPrompts.stage.answer_validation": "資料との照合",
   "settings.answerPrompts.stage.answer_validation.condition":
     "生成後の LLM 監査を有効にしたとき、検索した根拠から生成した最終回答の検証、または MCP の資料との照合（rag_validate_answer）を呼んだとき",
+  "settings.answerPrompts.part.assumptionSystem": "「前提を示して回答する」のときに追加する system 指示",
   "settings.answerPrompts.part.system": "system プロンプト",
   "settings.answerPrompts.part.template": "入力テンプレート",
   "settings.answerPrompts.part.correctness": "回答の正確性の判定",

@@ -33,6 +33,9 @@ test("言語資源の上書き（検索・回答の項目だけ）を検索・�
   );
   await page.goto("/search-answer-profiles?id=bv-default");
   const section = page.getByTestId("search-answer-profile-language-pack");
+  await expect(section).not.toHaveAttribute("open");
+  await section.locator("summary").click();
+  await expect(section).toHaveAttribute("open", "");
   // 取込の項目（条の単位）は出さない。
   await expect(section.getByLabel("条の単位", { exact: true })).toHaveCount(0);
   const cause = section.getByLabel("原因を尋ねる語", { exact: true });
@@ -45,6 +48,12 @@ test("言語資源の上書き（検索・回答の項目だけ）を検索・�
   await expect
     .poll(() => (updateBody?.config as { language_pack?: unknown } | undefined)?.language_pack)
     .toEqual({ question_cues: { cause_cues: ["なぜ", "原因", "理屈"] } });
+  await section.locator("summary").click();
+  await expect(cause).not.toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("language-overrides-collapsed.png"), fullPage: true });
+  await section.locator("summary").click();
+  await expect(cause).toHaveValue("なぜ\n原因\n理屈");
+  await page.screenshot({ path: test.info().outputPath("language-overrides-expanded.png"), fullPage: true });
   await expectNoPageOverflow(page);
 });
 
@@ -191,7 +200,7 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   const perDocument = page
     .getByRole("heading", { name: "1 つの文書から採る根拠の上限", level: 3 })
     .locator("..");
-  await expect(perDocument.getByText(/既定は 5 です/)).toBeVisible();
+  await expect(perDocument.getByText(/^既定は 5 です。並べ替えの後、/)).toBeVisible();
   await perDocument.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
   await perDocument.getByRole("combobox", { name: "1 つの文書から採る根拠の上限" }).click();
   await page.getByRole("option", { name: "上限なし" }).click();
@@ -1597,6 +1606,9 @@ test("言語資源の全体再取得は継承欄だけを更新し、編集中�
   });
   await page.goto("/search-answer-profiles?id=bv-default");
   const section = page.getByTestId("search-answer-profile-language-pack");
+  await expect(section).not.toHaveAttribute("open");
+  await section.locator("summary").click();
+  await expect(section).toHaveAttribute("open", "");
   const cause = section.locator("textarea").nth(0);
   const past = section.locator("textarea").nth(1);
   const future = section.locator("textarea").nth(2);
