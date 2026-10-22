@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable, Iterable, Sequence
 from pydantic import BaseModel
 
 from app.schemas.support_guide import (
+    SUPPORT_GUIDE_BOOLEAN_VALUES,
     SUPPORT_GUIDE_TOOLS,
     SupportGuideChange,
     SupportGuideContent,
@@ -167,6 +168,20 @@ def validate_content(content: SupportGuideContent) -> list[SupportGuideIssue]:
                         f"条件「{condition.label}」の選択肢にありません。",
                     )
                 )
+        if condition.type == "boolean":
+            invalid = [
+                value
+                for value in branch.when.values
+                if value.casefold() not in SUPPORT_GUIDE_BOOLEAN_VALUES
+            ]
+            if invalid:
+                issues.append(
+                    _error(
+                        "unknown_value",
+                        f"branches[{index}].when.values",
+                        f"分岐「{branch.id}」の値は、はい／いいえを指定してください。",
+                    )
+                )
         covered.setdefault(condition.id, set()).update(branch.when.values)
     for index, condition in enumerate(content.conditions):
         if condition.unknown_handling == "branch" and condition.id not in has_unknown:
@@ -295,6 +310,28 @@ def _row_changes(
                     section=section, kind="changed", key=row_key, label=label(row), fields=fields
                 )
             )
+    common = set(old) & set(new_keys)
+    old_order = list(dict.fromkeys(key(row) for row in before if key(row) in common))
+    new_order = [row_key for row_key in new_keys if row_key in common]
+    if old_order != new_order:
+        for row_key in new_order:
+            if old_order.index(row_key) == new_order.index(row_key):
+                continue
+            changed = next(
+                (item for item in changes if item.key == row_key and item.kind == "changed"), None
+            )
+            if changed is not None:
+                changed.fields.append("order")
+            else:
+                changes.append(
+                    SupportGuideChange(
+                        section=section,
+                        kind="changed",
+                        key=row_key,
+                        label=label(old[row_key]),
+                        fields=["order"],
+                    )
+                )
     seen: set[str] = set()
     for row in before:
         row_key = key(row)

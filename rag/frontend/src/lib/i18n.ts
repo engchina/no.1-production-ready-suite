@@ -4743,6 +4743,7 @@ export const ja = {
   "supportGuides.check.enumValues": "選択の条件は選択肢を 2 つ以上入れてください。",
   "supportGuides.check.question": "利用者に確かめる条件には、確かめる問いを入れてください。",
   "supportGuides.check.choose": "{field}を選んでください。",
+  "supportGuides.check.booleanValues": "はい／いいえの条件の分岐値は、はい／いいえを指定してください。",
   "supportGuides.check.equalsOne": "「一致する」の値は 1 つです。",
   "supportGuides.check.inValues": "「いずれかに一致する」の値を 1 つ以上入れてください。",
   "supportGuides.check.period": "有効期間の終わりは始まりより後の日付にしてください。",
@@ -4750,7 +4751,7 @@ export const ja = {
   "supportGuides.check.pageRanges":
     "頁は「3-5, 8」の形で入れてください（始まりは 1 以上、終わりは始まり以上、範囲は 10 個まで）。",
   "supportGuides.check.sheetRanges":
-    "シートと行は 1 行に 1 つ、「シート名!42-45」か「シート名!B3:D10」の形で入れてください（範囲は 10 個まで）。",
+    "シートと行は 1 行に 1 つ、「シート名!42-45」か「シート名!B3:D10」の形で入れてください（範囲は 10 個まで、Excel の行・列の上限内）。",
   "supportGuides.check.sheetAndPages": "1 つの資料には、根拠の頁かシートと行のどちらかだけを入れてください。",
   // 項目の名前（検証の結果の位置の表示）
   "supportGuides.path.separator": "・",
@@ -4888,6 +4889,7 @@ export const ja = {
   "supportGuides.change.removed": "削除",
   "supportGuides.change.changed": "変更",
   "supportGuides.change.fields": "変わった項目: {fields}",
+  "supportGuides.change.order": "並び順",
   "supportGuides.change.fieldSeparator": "、",
   // 下書きで試す（#1288）
   "supportGuides.try.title": "下書きで試す",

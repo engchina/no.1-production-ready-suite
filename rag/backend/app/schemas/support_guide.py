@@ -31,6 +31,15 @@ MAX_STEP_REFERENCES = 10
 MAX_PAGE_NUMBER = 100_000
 # 表計算の行の番号の上限（Excel のシートの行の数）と、セルの範囲の形（A1 形式。#2663）。
 MAX_SHEET_ROW = 1_048_576
+MAX_SHEET_COLUMN = 16_384
+SUPPORT_GUIDE_BOOLEAN_VALUES = {
+    "true": "はい",
+    "yes": "はい",
+    "はい": "はい",
+    "false": "いいえ",
+    "no": "いいえ",
+    "いいえ": "いいえ",
+}
 CELL_RANGE_PATTERN = re.compile(r"^([A-Z]{1,3})([1-9]\d{0,6})(?::([A-Z]{1,3})([1-9]\d{0,6}))?$")
 _ID_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]{0,63}$"
 _SHORT = 200
@@ -181,6 +190,15 @@ def _cell_rows(cell_range: str) -> tuple[int, int] | None:
         return None
     start = int(match.group(2))
     end = int(match.group(4) or start)
+    columns = (match.group(1), match.group(3) or match.group(1))
+    for column in columns:
+        number = 0
+        for char in column:
+            number = number * 26 + ord(char) - ord("A") + 1
+        if number > MAX_SHEET_COLUMN:
+            return None
+    if max(start, end) > MAX_SHEET_ROW:
+        return None
     return min(start, end), max(start, end)
 
 
@@ -202,7 +220,9 @@ class SupportGuideSheetRange(_Strict):
             self.cell_range = unicodedata.normalize("NFKC", self.cell_range).upper().strip()
             rows = _cell_rows(self.cell_range)
             if rows is None:
-                raise ValueError("セルの範囲は A1 形式（例: B3:D10）で書いてください。")
+                raise ValueError(
+                    "セルの範囲は A1 形式（例: B3:D10）で、Excel の行・列の上限内にしてください。"
+                )
             if self.row_start is None:
                 self.row_start, self.row_end = rows
             elif (self.row_start, self.row_end or self.row_start) != rows:

@@ -829,3 +829,84 @@ def test_try_draft_requires_the_guide_management_permission(
     allowed = client.post(f"{BASE}/{guide_id}/try", json=body, headers=admin)
     assert allowed.status_code == 200
     assert allowed.json()["data"]["guide_used"] is True
+
+
+@pytest.mark.parametrize("cell_range", ["A1048577", "A1:B1048577", "XFE1", "ZZZ1"])
+def test_sheet_cell_range_enforces_row_and_column_limits(cell_range: str) -> None:
+    from pydantic import ValidationError
+
+    from app.schemas.support_guide import SupportGuideSheetRange
+
+    with pytest.raises(ValidationError):
+        SupportGuideSheetRange(sheet_name="Sheet1", cell_range=cell_range)
+
+
+def test_sheet_cell_range_accepts_last_excel_cell() -> None:
+    from app.schemas.support_guide import SupportGuideSheetRange
+
+    reference = SupportGuideSheetRange(sheet_name="Sheet1", cell_range="XFD1048576")
+    assert reference.row_start == reference.row_end == 1_048_576
+
+
+@pytest.mark.parametrize("value", ["invalid", "1", "yes please"])
+def test_boolean_branch_refuses_values_that_cannot_match(value: str) -> None:
+    draft = content(
+        conditions=[
+            {"id": "check", "label": "確認", "type": "boolean", "question": "確認済みですか？"}
+        ],
+        branches=[
+            {"id": "b1", "when": {"condition_id": "check", "values": [value]}, "goto_step": "grant"}
+        ],
+    )
+    assert any(issue.code == "unknown_value" for issue in validate_content(draft))
+
+
+@pytest.mark.parametrize("value", ["はい", "いいえ", "TRUE", "false", "yes", "no"])
+def test_boolean_branch_accepts_runtime_aliases(value: str) -> None:
+    draft = content(
+        conditions=[
+            {"id": "check", "label": "確認", "type": "boolean", "question": "確認済みですか？"}
+        ],
+        branches=[
+            {"id": "b1", "when": {"condition_id": "check", "values": [value]}, "goto_step": "grant"}
+        ],
+    )
+    assert not has_errors(validate_content(draft))
+
+
+def test_invalid_boolean_branch_cannot_be_published_or_imported(
+    fakes: tuple[FakeStore, FakeOracle],
+) -> None:
+    draft = guide(
+        conditions=[
+            {"id": "check", "label": "確認", "type": "boolean", "question": "確認済みですか？"}
+        ],
+        branches=[
+            {
+                "id": "b1",
+                "when": {"condition_id": "check", "values": ["invalid"]},
+                "goto_step": "grant",
+            }
+        ],
+    )
+    created = client.post(BASE, json={"draft": draft})
+    assert created.status_code == 201
+    guide_id = created.json()["data"]["guide_id"]
+    assert client.post(f"{BASE}/{guide_id}/publish", json={"base_revision": 1}).status_code == 422
+    preview = client.post(f"{BASE}/import/preview", json={"guides": [draft]})
+    assert preview.json()["data"]["items"][0]["valid"] is False
+    assert client.post(f"{BASE}/import", json={"guides": [draft]}).status_code == 422
+
+
+def test_diff_reports_relative_order_but_not_added_rows_as_reordering() -> None:
+    before = content()
+    reordered = before.model_copy(update={"steps": list(reversed(before.steps))})
+    changes = diff_contents(before, reordered)
+    assert changes
+    assert all(change.section == "steps" and change.fields == ["order"] for change in changes)
+    added = before.model_copy(
+        update={"steps": [before.steps[0].model_copy(update={"id": "added"}), *before.steps]}
+    )
+    assert [
+        (change.kind, change.key, change.fields) for change in diff_contents(before, added)
+    ] == [("added", "added", [])]

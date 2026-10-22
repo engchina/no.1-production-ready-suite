@@ -70,6 +70,7 @@ import {
   useValidateSupportGuide,
 } from "@/lib/queries";
 import {
+  booleanConditionValue,
   emptyGuideForm,
   guideContentFromForm,
   guideFormFromContent,
@@ -1012,7 +1013,8 @@ function SupportGuideForm({
           renderRow={(row: BranchForm, index) => {
             const path = (field: string) => `branches[${index}].${field}`;
             const condition = form.conditions.find((item) => item.id === row.conditionId);
-            const enumValues = condition?.type === "enum" ? splitLines(condition.allowedValues) : null;
+            const selectableValues = condition?.type === "enum" ? splitLines(condition.allowedValues) : condition?.type === "boolean" ? ["はい", "いいえ"] : null;
+            const values = splitLines(row.values).map((value) => condition?.type === "boolean" ? booleanConditionValue(value) ?? value : value);
             return (
               <FormGrid>
                 <TextField
@@ -1044,25 +1046,25 @@ function SupportGuideForm({
                   options={OPERATOR_OPTIONS}
                   onValueChange={(value) => updateRow("branches", index, { operator: value })}
                 />
-                {row.operator === "unknown" ? null : row.operator === "equals" && enumValues ? (
+                {row.operator === "unknown" ? null : row.operator === "equals" && selectableValues ? (
                   <SelectField
                     id={domId(path("when.values"))}
                     width="md"
                     label={t("supportGuides.field.values")}
-                    value={splitLines(row.values)[0] ?? ""}
-                    options={enumValues.map((value) => ({ value, label: value }))}
+                    value={values[0] ?? ""}
+                    options={selectableValues.map((value) => ({ value, label: value }))}
                     placeholder={t("supportGuides.select.choose")}
                     required
                     error={errorAt(path("when.values"))}
                     onValueChange={(value) => updateRow("branches", index, { values: value })}
                   />
-                ) : row.operator === "in" && enumValues ? (
+                ) : row.operator === "in" && selectableValues ? (
                   <SearchableMultiSelect
                     id={domId(path("when.values"))}
                     width="lg"
                     label={t("supportGuides.field.values")}
-                    options={enumValues.map((value) => ({ value, label: value }))}
-                    value={splitLines(row.values)}
+                    options={selectableValues.map((value) => ({ value, label: value }))}
+                    value={values}
                     required
                     error={errorAt(path("when.values"))}
                     disabled={archived || busy}

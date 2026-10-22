@@ -37,6 +37,7 @@ from rag_engine.knowledge.runtime_knowledge import label_matches, parse_runtime_
 
 from app.schemas.classification import category_label
 from app.schemas.support_guide import (
+    SUPPORT_GUIDE_BOOLEAN_VALUES,
     SupportGuideBranch,
     SupportGuideCondition,
     SupportGuideContent,
@@ -63,14 +64,7 @@ GUIDE_CHOICE_CONDITION_ID = "_guide"
 _GUIDE_CHOICE_LIMIT = 4
 # 質問の中から名指しを探す値の最短の長さ（#553 の業務の名前と同じ）。
 _MIN_NAME_CHARS = 2
-_BOOLEAN_VALUES = {
-    "true": "はい",
-    "yes": "はい",
-    "はい": "はい",
-    "false": "いいえ",
-    "no": "いいえ",
-    "いいえ": "いいえ",
-}
+_BOOLEAN_VALUES = SUPPORT_GUIDE_BOOLEAN_VALUES
 PINNED_RULE_TAG = "pinned"
 # 公開の業務ガイドを読めなかったとき、回答の診断に残す key（回答は続ける。#1278）。
 GUIDE_LOAD_FAILED_KEY = "guide_load_failed"
