@@ -45,7 +45,9 @@ class DbAdminChatRepairOutput(BaseModel):
 class DbAdminChatAnalysisOutput(BaseModel):
     """DB 管理チャットの失敗の分析（#2264）。直せないときは corrected_sql が空。"""
 
-    analysis: str
+    cause: str
+    fix: str
+    conclusion: str
     corrected_sql: str = ""
 
 

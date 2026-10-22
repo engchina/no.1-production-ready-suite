@@ -279,7 +279,7 @@ def test_context_tables_rank_names_over_columns() -> None:
         SchemaTable(table_name="UNRELATED", logical_name="", owner="APP"),
     ]
     picked = select_context_tables(tables, _similarity_tokens("STOCK の件数"), _similarity_tokens)
-    assert [table.table_name for table in picked] == ["ITEM_STOCK", "OTHER"]
+    assert [table.table_name for table in picked] == ["ITEM_STOCK"]
     assert select_context_tables(tables, set(), _similarity_tokens) == []
 
 
@@ -930,7 +930,14 @@ def _saved_analysis_turn(
 
 def test_analyze_returns_corrected_plan() -> None:
     ai = _FakeEnterpriseAi(
-        [{"analysis": "1) 原因 2) 直し方 3) 結論", "corrected_sql": "DROP TABLE T2 PURGE"}]
+        [
+            {
+                "cause": "1) 原因 2) 直し方 3) 結論",
+                "fix": "修正方法です。",
+                "conclusion": "確認して実行します。",
+                "corrected_sql": "DROP TABLE T2 PURGE",
+            }
+        ]
     )
     service = _catalog_service(_FakeAdapter(), ai)
     ids = _saved_analysis_turn(service, "DROP TABLE T1")
@@ -941,6 +948,8 @@ def test_analyze_returns_corrected_plan() -> None:
         all_users=False,
     )
     assert data.source == "oci_enterprise_ai"
+    assert data.cause and data.fix and data.conclusion
+    assert "analysis" not in data.model_dump()
     assert data.corrected_plan is not None
     assert data.corrected_plan.confirmation_target == "T2"
 
@@ -954,6 +963,79 @@ def test_analyze_falls_back_without_enterprise_ai() -> None:
         actor="chat-user",
         all_users=False,
     )
-    assert "ORA-00942" in data.analysis
+    assert "ORA-00942" in data.cause
     assert data.corrected_plan is None
     assert data.warnings
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "データベースのバージョンと表領域ごとの使用率を確認したい",
+        "累計の待機時間が長い待機イベントを上位100件確認したい",
+        "NL2SQL_TEST を TRUNCATE して",
+    ],
+)
+def test_context_tables_ignore_common_comment_tokens(question: str) -> None:
+    tables = [
+        SchemaTable(
+            table_name=f"SAMPLE_{i}",
+            logical_name="",
+            owner="APP",
+            comment="使用中の表を確認します。",
+            columns=[
+                SchemaColumn(
+                    column_name="NOTE",
+                    logical_name="",
+                    data_type="CHAR",
+                    comment="確認に使用する記録の説明です。",
+                )
+            ],
+        )
+        for i in range(4)
+    ]
+    assert select_context_tables(tables, _similarity_tokens(question), _similarity_tokens) == []
+
+
+def test_context_tables_keep_distinct_names_comments_and_multiple_columns() -> None:
+    tables = [
+        SchemaTable(table_name="SAMPLE_A", logical_name="", owner="APP", comment="星雲の記録"),
+        SchemaTable(
+            table_name="SAMPLE_B",
+            logical_name="",
+            owner="APP",
+            columns=[
+                SchemaColumn(column_name="ALPHA", logical_name="", data_type="NUMBER"),
+                SchemaColumn(column_name="BETA", logical_name="", data_type="NUMBER"),
+            ],
+        ),
+        SchemaTable(table_name="SAMPLE_C", logical_name="", owner="APP"),
+    ]
+    for question, expected in [
+        ("SAMPLE_A", "SAMPLE_A"),
+        ("星雲", "SAMPLE_A"),
+        ("ALPHA と BETA", "SAMPLE_B"),
+    ]:
+        assert [
+            t.table_name
+            for t in select_context_tables(tables, _similarity_tokens(question), _similarity_tokens)
+        ] == [expected]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"analysis": "1) 原因 2) 直し方 3) 結論", "corrected_sql": "SELECT 1 FROM DUAL"},
+        {"cause": "原因だけ", "corrected_sql": "SELECT 1 FROM DUAL"},
+    ],
+)
+def test_analyze_invalid_structure_uses_complete_fallback(payload: dict[str, str]) -> None:
+    service = _catalog_service(_FakeAdapter(), _FakeEnterpriseAi([payload]))
+    ids = _saved_analysis_turn(service, "SELECT * FROM T9")
+    data = service.analyze_db_admin_chat_failure(
+        *ids, DbAdminChatAnalyzeRequest(statement_index=1), actor="chat-user", all_users=False
+    )
+    assert data.source == "deterministic"
+    assert "ORA-00942" in data.cause
+    assert data.fix and data.conclusion and data.warnings
+    assert data.corrected_plan is None

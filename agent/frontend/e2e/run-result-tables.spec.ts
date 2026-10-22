@@ -153,6 +153,11 @@ async function expectLargeResultTable(page: Page, table: Locator, testId: string
   await expect(sheet).toBeVisible();
   await expect(sheet.getByTestId(`${testId}-all-pagination`)).toBeVisible();
   await expect(sheet.getByRole("button", { name: "CSV をダウンロード" })).toBeVisible();
+  const allScroll = sheet.getByTestId(`${testId}-all-scroll`);
+  expect(await allScroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
+  expect((await allScroll.boundingBox())!.height).toBeGreaterThan(page.viewportSize()!.height * 0.7);
+  const body = sheet.locator(":scope > div").last();
+  expect(await body.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
   await page.keyboard.press("Escape");
   // SideSheet は閉じた後も DOM に残る（data-state="closed"・非表示）ので、数ではなく非表示を確かめる。
   await expect(sheet).toBeHidden();
@@ -161,7 +166,7 @@ async function expectLargeResultTable(page: Page, table: Locator, testId: string
 
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`チャットで表の形のツールの結果と回答の表を共通の結果の表で出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`チャットで表の形のツールの結果と回答の表を共通の結果の表で出す (${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
       seedRun(mockApi);
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);

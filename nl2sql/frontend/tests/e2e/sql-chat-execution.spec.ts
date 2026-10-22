@@ -357,9 +357,20 @@ test("「すべての行を見る」は広いシートでページを送り、CS
   await sheet.getByRole("combobox", { name: "1 ページの行数" }).click();
   await page.getByRole("option", { name: "50 行" }).click();
   await expect(pagination).toContainText("1–50 / 60 件");
-  // 表頭固定・表の中のスクロール。シートの中の全文は折り返して読める。
+  // 全行の表はシートの本文でスクロールする（プレビューの高さを引き継がない）。
   const allScroll = sheet.getByTestId("sql-chat-result-all-scroll");
-  expect(await allScroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
+  expect(await allScroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
+  const body = sheet.locator(":scope > div").last();
+  expect(await body.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
+  expect((await allScroll.boundingBox())!.height).toBeGreaterThan(viewport.height * 0.7);
+  // 表頭は本文のスクロールに追従する。
+  await body.evaluate((element) => { element.scrollTop = 160; });
+  const header = allScroll.locator("thead");
+  await expect.poll(async () => (await header.boundingBox())!.y).toBeGreaterThanOrEqual((await body.boundingBox())!.y - 1);
+  const headerTop = (await header.boundingBox())!.y;
+  await body.evaluate((element) => { element.scrollTop = 320; });
+  await expect.poll(async () => (await header.boundingBox())!.y).toBeCloseTo(headerTop, 0);
+  await body.evaluate((element) => { element.scrollTop = 0; });
   await sheet.screenshot({ path: testInfo.outputPath("chat-execution-sheet.png") });
 
   const [download] = await Promise.all([

@@ -360,7 +360,14 @@ def test_corrected_statement_is_checked_again_and_unblocked() -> None:
 def test_error_analysis_gets_the_real_columns_and_checks_the_corrected_sql() -> None:
     adapter = _FakeAdapter(describer=_FakeDescriber(SYNTHETIC))
     ai = _FakeEnterpriseAi(
-        [{"analysis": "列の名前が違います。", "corrected_sql": "SELECT SID, LMODE FROM V$LOCK"}]
+        [
+            {
+                "cause": "列の名前が違います。",
+                "fix": "修正方法です。",
+                "conclusion": "確認して実行します。",
+                "corrected_sql": "SELECT SID, LMODE FROM V$LOCK",
+            }
+        ]
     )
     service = _catalog_service(adapter, ai)
     ids = _saved_analysis_turn(

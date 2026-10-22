@@ -704,7 +704,7 @@ test("SELECT 以外は実行確認語を入れたときだけ実行し、失敗�
       return mutationResult(turn.plan.sql, calls > 1);
     },
     analyze: {
-      analysis: "1) エラーの原因: 表がありません 2) 直し方: 表の名前を直す 3) 結論: 直した SQL を実行してください",
+      cause: "対象の表がありません。", fix: "列の定義を確認します。", conclusion: "修正後に再実行します。",
       corrected_plan: plan(corrected),
       source: "oci_enterprise_ai",
       model: "test-text-model",
@@ -783,7 +783,7 @@ test("参照するオブジェクトに無い列の文は実際の列を添え�
   const mock = await setup(page, {
     responses: [generated(plan([[sql, reason, ["LOCK_TYPE"]]]))],
     analyze: {
-      analysis: "1) エラーの原因: V$LOCK に LOCK_TYPE はありません 2) 直し方: TYPE を使う 3) 結論: 直した SQL を実行してください",
+      cause: "V$LOCK に LOCK_TYPE はありません。", fix: "列の定義を確認します。", conclusion: "修正後に再実行します。",
       corrected_plan: plan(corrected),
       source: "oci_enterprise_ai",
       model: "test-text-model",
@@ -1033,7 +1033,7 @@ test("回答の注意書きを SQL の後に出す", { tag: "@responsive" }, asy
 
 test("修正後の再分析は履歴を表示し、同じ SQL の警告では適用を出さない", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const analysis: Json = {
-    analysis: "修正案です。", corrected_plan: plan("DELETE FROM T2"),
+    cause: "修正案です。", fix: "列の定義を確認します。", conclusion: "修正後に再実行します。", corrected_plan: plan("DELETE FROM T2"),
     source: "oci_enterprise_ai", model: "test-text-model", warnings: [], previous_attempts: [],
   };
   const mock = await setup(page, {
@@ -1070,3 +1070,37 @@ test("修正後の再分析は履歴を表示し、同じ SQL の警告では適
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("correction-history.png"), fullPage: true });
 });
+
+
+for (const code of ["ORA-01489", "ORA-01722"]) {
+  test(`失敗の案内はチャットの操作を示し、分析の三項目を分ける ${code}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await setup(page, {
+      responses: [generated(plan("DELETE FROM T1"))],
+      execute: (_request, turn) => {
+        const result = mutationResult(turn.plan.sql, false);
+        const statements = result.statements as Json[];
+        statements[0]!.error_message = `${code}: synthetic failure`;
+        statements[0]!.error_code = code;
+        return result;
+      },
+      analyze: { cause: "失敗の原因です。", fix: "列の定義を確認します。", conclusion: "修正後に再実行します。", corrected_plan: null, source: "oci_enterprise_ai", model: "test-model", warnings: [], previous_attempts: [] },
+    });
+    await page.goto("/db-admin-chat");
+    await ask(page, "合成の行を削除する");
+    const turn = page.getByTestId("db-admin-chat-turn").first();
+    await turn.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
+    await turn.getByTestId("db-admin-chat-execute").click();
+    const failure = turn.getByTestId("db-admin-statement-failure");
+    await expect(failure).toContainText("「AI でエラーを分析」");
+    for (const obsolete of ["最新情報を取得", "SQL プレビュー", "取込データ"]) await expect(failure).not.toContainText(obsolete);
+    await turn.getByTestId("db-admin-chat-analyze").click();
+    for (const [name, body] of [["原因", "失敗の原因です。"], ["直し方", "列の定義を確認します。"], ["結論", "修正後に再実行します。"]]) {
+      const section = turn.getByRole("region", { name, exact: true });
+      await section.scrollIntoViewIfNeeded();
+      await expect(section.getByRole("heading", { name, exact: true })).toBeVisible();
+      await expect(section).toContainText(body!);
+    }
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`analysis-${code}.png`), fullPage: true });
+  });
+}

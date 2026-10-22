@@ -949,7 +949,7 @@ function DbAdminChatStatement({
           ) : null}
           {!running && result && !(result.select_result && executed) && !savedSelect ? (
             // 更新系の結果・失敗は管理 SQL を実行と同じ表示（状態・影響行数・commit / rollback）。
-            <DbAdminExecutionResult result={result} hideStatementSql />
+            <DbAdminExecutionResult result={result} hideStatementSql context="db_admin_chat" />
           ) : null}
         </section>
       ) : null}
@@ -1024,7 +1024,12 @@ function AnalysisPanel({
       {analysis.status === "done" ? (
         <>
           <p className="text-sm font-medium text-fg">{t("dbAdminChat.analyze.title")}</p>
-          <MarkdownText text={analysis.data.analysis} />
+          {(["cause", "fix", "conclusion"] as const).map((part) => (
+            <section key={part} className="grid min-w-0 gap-2" aria-label={t(`dbAdminChat.analyze.${part}`)}>
+              <h3 className="text-sm font-medium text-fg">{t(`dbAdminChat.analyze.${part}`)}</h3>
+              <MarkdownText text={analysis.data[part]} />
+            </section>
+          ))}
           {(analysis.data.previous_attempts?.length ?? 0) > 0 ? (
             <Disclosure summary={t("dbAdminChat.analyze.history", { count: analysis.data.previous_attempts.length })}>
               <div className="min-w-0 space-y-3">

@@ -17959,12 +17959,12 @@ class Nl2SqlService:
             for a in attempts
             if a.statement_index == statement.index and a.revision != turn.revision
         ][-ATTEMPT_LIMIT:]
-        deterministic = self._deterministic_failure_analysis(
+        deterministic = self._deterministic_failure_parts(
             DbAdminAiAnalysisRequest(sql=statement.sql, result_text=failure, target="data")
         )
         if not self._enterprise_ai_client.is_configured():
             return DbAdminChatAnalyzeData(
-                analysis=deterministic.analysis,
+                **deterministic.model_dump(exclude={"corrected_sql"}),
                 previous_attempts=previous,
                 warnings=[
                     "OCI Enterprise AI が未設定のため、エラーコードからの分析を使用しました。"
@@ -18012,12 +18012,14 @@ class Nl2SqlService:
                 )
         except (EnterpriseAiDirectError, ValueError) as exc:
             return DbAdminChatAnalyzeData(
-                analysis=deterministic.analysis,
+                **deterministic.model_dump(exclude={"corrected_sql"}),
                 previous_attempts=previous,
                 warnings=[f"AI の分析に失敗したため、エラーコードからの分析を使用しました: {exc}"],
             )
         return DbAdminChatAnalyzeData(
-            analysis=output.analysis.strip() or deterministic.analysis,
+            cause=output.cause.strip() or deterministic.cause,
+            fix=output.fix.strip() or deterministic.fix,
+            conclusion=output.conclusion.strip() or deterministic.conclusion,
             corrected_plan=self._db_admin_chat_plan(corrected_sql) if corrected_sql else None,
             source="oci_enterprise_ai",
             model=self._enterprise_ai_client.model_id(),
@@ -19846,6 +19848,18 @@ class Nl2SqlService:
     def _deterministic_failure_analysis(
         self, request: DbAdminAiAnalysisRequest
     ) -> DbAdminAiAnalysisData:
+        parts = self._deterministic_failure_parts(request)
+        return DbAdminAiAnalysisData(
+            analysis=(
+                f"1) エラー原因: {parts.cause}\n"
+                f"2) 解決方法: {parts.fix}\n"
+                f"3) 結論: {parts.conclusion}"
+            )
+        )
+
+    def _deterministic_failure_parts(
+        self, request: DbAdminAiAnalysisRequest
+    ) -> DbAdminChatAnalysisOutput:
         known: dict[str, tuple[str, str]] = {
             "ORA-00955": (
                 "同名のオブジェクトが既に存在します。",
@@ -19880,27 +19894,21 @@ class Nl2SqlService:
         for code in codes:
             if code in known:
                 cause, fix = known[code]
-                return DbAdminAiAnalysisData(
-                    analysis=(
-                        f"1) エラー原因: {code}: {cause}\n"
-                        f"2) 解決方法: {fix}\n"
-                        "3) 結論: SQL を修正して再実行してください。"
-                    ),
+                return DbAdminChatAnalysisOutput(
+                    cause=f"{code}: {cause}",
+                    fix=fix,
+                    conclusion="SQL を修正して再実行してください。",
                 )
         if codes:
-            return DbAdminAiAnalysisData(
-                analysis=(
-                    f"1) エラー原因: {codes[0]} が発生しました。\n"
-                    "2) 解決方法: エラーメッセージの対象オブジェクト・列・値を確認してください。\n"
-                    "3) 結論: メッセージ本文を手掛かりに SQL を修正して再実行してください。"
-                ),
+            return DbAdminChatAnalysisOutput(
+                cause=f"{codes[0]} が発生しました。",
+                fix="エラーメッセージの対象オブジェクト・列・値を確認してください。",
+                conclusion="メッセージ本文を手掛かりに SQL を修正して再実行してください。",
             )
-        return DbAdminAiAnalysisData(
-            analysis=(
-                "1) エラー原因: 実行結果から既知の ORA エラーコードを検出できませんでした。\n"
-                "2) 解決方法: SQL 文法と対象オブジェクトの存在を確認してください。\n"
-                "3) 結論: 詳細分析には OCI Enterprise AI の設定が必要です。"
-            ),
+        return DbAdminChatAnalysisOutput(
+            cause="実行結果から既知の ORA エラーコードを検出できませんでした。",
+            fix="SQL 文法と対象オブジェクトの存在を確認してください。",
+            conclusion="詳細分析には OCI Enterprise AI の設定が必要です。",
         )
 
     def _view_query_sql_from_ddl(self, ddl: str) -> str:

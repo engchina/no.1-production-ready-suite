@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -158,6 +159,11 @@ def single_object_confirmation_target(statement: str, masked_statement: str) -> 
 
 # ---- 生成の文脈 ----
 
+CONTEXT_TOKEN_MIN_LENGTH = 2
+CONTEXT_FREQUENCY_MIN_TABLES = 3
+CONTEXT_COMMON_TOKEN_RATIO = 0.5
+CONTEXT_COLUMN_MIN_MATCHES = 2
+CONTEXT_COLUMN_MIN_SCORE = 1.0
 CONTEXT_TABLE_LIMIT = 12
 CONTEXT_COLUMN_LIMIT = 40
 CONTEXT_OTHER_TABLE_LIMIT = 80
@@ -178,28 +184,71 @@ def select_context_tables(
     一致しなければ空（表の名前の一覧だけを渡す。管理の質問はデータ辞書を使うので表は要らない）。
     """
 
+    def meaningful(tokens: set[str]) -> set[str]:
+        # 日本語の単文字と、ひらがなだけの短い並びは表を識別する根拠にしない。
+        return {
+            token
+            for token in tokens
+            if len(token) >= CONTEXT_TOKEN_MIN_LENGTH and not re.fullmatch(r"[ぁ-ゖー]+", token)
+        }
+
+    query_tokens = meaningful(query_tokens)
     if not query_tokens:
         return []
-    scored: list[tuple[int, str, SchemaTable]] = []
+    documents = []
+    frequency: Counter[str] = Counter()
     for table in tables:
-        name_tokens = tokenize(
-            " ".join([table.table_name, table.table_name.replace("_", " "), table.logical_name])
-        ) | tokenize(table.comment)
-        column_tokens: set[str] = set()
-        for column in table.columns:
-            column_tokens |= tokenize(
+        name_tokens = meaningful(
+            tokenize(
                 " ".join(
                     [
-                        column.column_name,
-                        column.column_name.replace("_", " "),
-                        column.logical_name,
-                        column.comment,
+                        table.table_name,
+                        table.table_name.replace("_", " "),
+                        table.logical_name,
+                        table.comment,
                     ]
                 )
             )
-        score = 3 * len(query_tokens & name_tokens) + len(query_tokens & column_tokens)
-        if score > 0:
-            scored.append((score, table.qualified_name, table))
+        )
+        column_tokens: set[str] = set()
+        for column in table.columns:
+            column_tokens |= meaningful(
+                tokenize(
+                    " ".join(
+                        [
+                            column.column_name,
+                            column.column_name.replace("_", " "),
+                            column.logical_name,
+                            column.comment,
+                        ]
+                    )
+                )
+            )
+        documents.append((table, name_tokens, column_tokens))
+        frequency.update(name_tokens | column_tokens)
+
+    def weight(token: str) -> float:
+        ratio = frequency[token] / len(tables)
+        if len(tables) >= CONTEXT_FREQUENCY_MIN_TABLES and ratio > CONTEXT_COMMON_TOKEN_RATIO:
+            return 0.0
+        return 1.0 / frequency[token]
+
+    scored: list[tuple[float, str, SchemaTable]] = []
+    for table, name_tokens, column_tokens in documents:
+        identifier_tokens = meaningful(tokenize(table.table_name.replace("_", " "))) | meaningful(
+            tokenize(table.table_name)
+        )
+        name_score = sum(
+            1.0 / frequency[token] if token in identifier_tokens else weight(token)
+            for token in query_tokens & name_tokens
+        )
+        column_matches = {token for token in query_tokens & column_tokens if weight(token) > 0}
+        column_score = sum(weight(token) for token in column_matches)
+        if name_score > 0 or (
+            len(column_matches) >= CONTEXT_COLUMN_MIN_MATCHES
+            and column_score >= CONTEXT_COLUMN_MIN_SCORE
+        ):
+            scored.append((3 * name_score + column_score, table.qualified_name, table))
     scored.sort(key=lambda item: (-item[0], item[1]))
     return [table for _score, _name, table in scored[:limit]]
 

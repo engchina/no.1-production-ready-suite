@@ -500,6 +500,7 @@ export function ResultTable({
               </div>
               {/* ページで描く行を絞る（仮想化はしない。読み上げ・ブラウザの検索・印刷がそのまま使える）。 */}
               <PagedDataTable<IndexedRow>
+                viewport="page"
                 columns={fullColumns}
                 rows={indexedRows}
                 getRowKey={(row) => row.index}

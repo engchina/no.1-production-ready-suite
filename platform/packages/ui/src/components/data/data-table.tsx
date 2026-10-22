@@ -73,6 +73,8 @@ export interface DataTableProps<T> {
    * 2 行セルなどで行高が変わっても N 行ちょうどが見える（固定 rem の計算は行高が変わると行数がずれる）。
    */
   visibleRows?: DataTableVisibleRows;
+  /** 縦横のスクロールを親に任せる（全高のシートの本文など）。 */
+  scrollWithinParent?: boolean;
   /** visibleRows 未満の行数でも N 行分の高さを確保する（最後の行の高さで補う）。 */
   fillVisibleRows?: boolean;
   /** 外枠（スクロール領域）の追加 class。 */
@@ -233,6 +235,7 @@ export function DataTable<T>({
   dense,
   stickyHeader,
   visibleRows,
+  scrollWithinParent = false,
   fillVisibleRows,
   className,
   tableClassName,
@@ -334,7 +337,7 @@ export function DataTable<T>({
         // relative: 行の中の読み上げ専用のラベル（`sr-only` は position: absolute）の包含ブロックを表のスクロール領域にする。
         // 無いと包含ブロックが表の外になり、横スクロールで隠れた列のラベルが本文（main）を横にはみ出させる。
         "relative rounded-md border border-border bg-surface",
-        scrollable ? "overflow-auto [scrollbar-gutter:stable]" : "overflow-x-auto",
+        scrollWithinParent ? "overflow-visible" : scrollable ? "overflow-auto [scrollbar-gutter:stable]" : "overflow-x-auto",
         scrollAriaLabel && "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
         className
       )}

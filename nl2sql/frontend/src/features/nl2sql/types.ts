@@ -1466,7 +1466,9 @@ export interface DbAdminChatCorrectionAttempt {
 /** DB 管理チャットの失敗の分析と直した SQL。 */
 export interface DbAdminChatAnalyzeData {
   previous_attempts: DbAdminChatCorrectionAttempt[];
-  analysis: string;
+  cause: string;
+  fix: string;
+  conclusion: string;
   corrected_plan: DbAdminChatPlan | null;
   source: string;
   model: string;
