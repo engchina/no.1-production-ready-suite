@@ -61,7 +61,10 @@ from app.rag.search_answer_profile_config import resolve_search_answer_profile_s
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_citation_metadata
-from app.rag.support_guide_conditions import resolve_text_conditions
+from app.rag.support_guide_conditions import (
+    resolve_answered_conditions,
+    resolve_text_conditions,
+)
 from app.rag.support_guide_evidence import (
     EVIDENCE_CONDITIONS_KEY,
     EVIDENCE_PLANS_KEY,
@@ -396,6 +399,10 @@ async def _resolve_query_context(
                 oracle, guides, guide_text, effective_request.filters
             ),
             close_margin=close_margin,
+        )
+        # 確認に自由入力で答えた選択式の条件は、答えの文が選んだ選択肢に決める（#2726）。
+        selected = await resolve_answered_conditions(
+            selected, request.conditions, settings, interactive=interactive
         )
         if request.generate_answer:
             selected = await resolve_text_conditions(

@@ -1462,11 +1462,20 @@ def test_premises_support_the_user_answer_and_the_conclusion_drawn_from_it() -> 
     前提だけで裏付けた段落の出典は前提の id、資料の根拠と合わせて裏付けた段落の出典は資料の根拠。前提は検証した
     根拠（evidence_ids）に数えない。
     """
-    from rag_engine.evaluation.answer_validation import PREMISE_ID_PREFIX, PREMISE_SOURCE, is_premise_id, premise_items
+    from rag_engine.evaluation.answer_validation import (
+        PREMISE_ID_PREFIX,
+        PREMISE_SOURCE,
+        PremiseConsistencyOutput,
+        is_premise_id,
+        premise_items,
+    )
 
     seen: dict = {}
 
     def parse(system, inputs, settings, schema, provider_id=None):
+        if schema is PremiseConsistencyOutput:
+            # 答えと両立しない内容を勧める段落は無いので、判定を変えない（#2726）。
+            return PremiseConsistencyOutput(checks=[])
         payload = json.loads(inputs)
         seen.update(payload=payload, system=system)
         premise, document = _documents(payload)
@@ -1514,6 +1523,127 @@ def test_premises_support_the_user_answer_and_the_conclusion_drawn_from_it() -> 
     assert len(premise_items([{"question": "q", "answer": "a"}] * 20)) == 10
     only_answer = premise_items([{"question": "", "answer": "はい"}])
     assert only_answer == [{"id": "premise:1", "source": PREMISE_SOURCE, "text": "利用者の答え: はい"}]
+
+
+SCOPE_ANSWER = "共有グループの表示区分を変更し、保存して確定します。\n\n項目 A の所属先だけを変更します。"
+SCOPE_EVIDENCE = [
+    {
+        "id": "c1",
+        "source": "manual.pdf",
+        "page_start": 3,
+        "page_end": 3,
+        "text": "共有グループの表示区分を変更すると、グループのすべての項目に反映されます。保存して確定します。",
+    }
+]
+
+
+def test_paragraph_broader_than_the_users_scope_is_contradicted_by_the_premise() -> None:
+    """利用者が確認で範囲を限定したのに、広い範囲の操作を勧める段落は前提と矛盾する (#2726)。
+
+    主張の監査が資料で supported としても、答えの条件・制約と両立しない（conflicts）段落は contradicted にする。
+    範囲を限定した手順の確かめられない段落は unsupported のまま残す。前提を渡さない検証は答えと比べない。
+    """
+    from rag_engine.evaluation.answer_validation import (
+        PREMISE_CONSISTENCY_SYSTEM_PROMPT,
+        SUPPORT_PREMISE_CONFLICT,
+        PremiseConsistencyOutput,
+        claim_mark_code,
+    )
+
+    scope_inputs: list = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        ids = [item["id"] for item in payload["answer_passages"]]
+        if schema is PremiseConsistencyOutput:
+            assert system == PREMISE_CONSISTENCY_SYSTEM_PROMPT
+            scope_inputs.append(payload)
+            return PremiseConsistencyOutput.model_validate(
+                {
+                    "checks": [
+                        {
+                            "answer_passage_id": ids[0],
+                            "constraints": "項目 A だけ",
+                            "recommendation": "共有グループの表示区分を変える",
+                            "fit": "conflicts",
+                        },
+                        {
+                            "answer_passage_id": ids[1],
+                            "constraints": "項目 A だけ",
+                            "recommendation": "項目 A の所属先を変える",
+                            "fit": "fits",
+                        },
+                        {"answer_passage_id": "A9", "constraints": "", "recommendation": "", "fit": "conflicts"},
+                    ]
+                }
+            )
+        document = _documents(payload)[-1]
+
+        def check(passage_id: str, status: str, evidence_id: str) -> dict:
+            return {
+                "answer_quote": "段落",
+                "answer_passage_id": passage_id,
+                "status": status,
+                "evidence_id": evidence_id,
+                "source_id": "",
+                "evidence_quote": "",
+                "reason": "判定",
+            }
+
+        return ClaimAuditOutput.model_validate(
+            {"claim_checks": [check(ids[0], "supported", document["evidence_id"]), check(ids[1], "unsupported", "")]}
+        )
+
+    premises = [{"question": "変更するのは個別の項目ですか、共有グループ全体ですか？", "answer": "項目 A だけ。グループは変えない"}]
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("表示設定 A を変更したい", SCOPE_ANSWER, SCOPE_EVIDENCE, settings=None, premises=premises)
+        unlimited = validate_answer_claims("表示設定 A を変更したい", SCOPE_ANSWER, SCOPE_EVIDENCE, settings=None)
+
+    [scope] = scope_inputs
+    assert scope["user_answers"] == [
+        "確認の質問: 変更するのは個別の項目ですか、共有グループ全体ですか？\n利用者の答え: 項目 A だけ。グループは変えない"
+    ]
+    assert [item["text"] for item in scope["answer_passages"]] == SCOPE_ANSWER.split("\n\n")
+    broader, narrow = result["claim_checks"]
+    assert (broader["status"], broader["support_check"], broader["audit_status"]) == ("contradicted", SUPPORT_PREMISE_CONFLICT, "supported")
+    assert claim_mark_code(broader["status"], broader["support_check"]) == "contradicted"
+    assert narrow["status"] == "unsupported"
+    assert result["counts"] == {"contradicted": 1, "unsupported": 1}
+    # 前提が無ければ答えと比べず、監査の判定のまま。
+    assert len(scope_inputs) == 1
+    assert [claim["status"] for claim in unlimited["claim_checks"]] == ["supported", "unsupported"]
+
+
+def test_premise_consistency_check_failure_keeps_the_audit_verdicts() -> None:
+    """答えとの比較が失敗しても、主張の監査の判定を返す (#2726)。"""
+    from rag_engine.evaluation.answer_validation import PremiseConsistencyOutput
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        if schema is PremiseConsistencyOutput:
+            raise RuntimeError("synthetic failure")
+        payload = json.loads(inputs)
+        document = _documents(payload)[-1]
+        return ClaimAuditOutput.model_validate(
+            {
+                "claim_checks": [
+                    {
+                        "answer_quote": "段落",
+                        "answer_passage_id": item["id"],
+                        "status": "supported",
+                        "evidence_id": document["evidence_id"],
+                        "source_id": "",
+                        "evidence_quote": "",
+                        "reason": "判定",
+                    }
+                    for item in payload["answer_passages"]
+                ]
+            }
+        )
+
+    premises = [{"question": "範囲は？", "answer": "項目 A だけ"}]
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("表示設定 A を変更したい", SCOPE_ANSWER, SCOPE_EVIDENCE, settings=None, premises=premises)
+    assert result["counts"] == {"supported": 2}
 
 
 def test_premises_are_not_truncated_by_the_evidence_budget() -> None:

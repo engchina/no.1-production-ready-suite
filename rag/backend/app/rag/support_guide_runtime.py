@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import math
+import re
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -460,7 +461,7 @@ def _provided_value(condition: SupportGuideCondition, raw: str) -> str | None:
     if condition.type == "boolean":
         return _BOOLEAN_VALUES.get(value.casefold())
     if condition.type == "enum":
-        return next(
+        exact = next(
             (
                 option
                 for option in condition.allowed_values
@@ -468,7 +469,41 @@ def _provided_value(condition: SupportGuideCondition, raw: str) -> str | None:
             ),
             None,
         )
+        if exact is not None:
+            return exact
+        # 選んだ選択肢に補足を足した答え（「個別、検証用だけ」）。区切った部分のうち選択肢そのもの
+        # が 1 つだけなら、その選択肢（2 つ以上・0 個なら決めない。自由入力の文は呼び出し元）。
+        parts = {_normalized(part) for part in _ANSWER_PARTS.split(value) if part.strip()}
+        chosen = [option for option in condition.allowed_values if _normalized(option) in parts]
+        return chosen[0] if len(chosen) == 1 else None
     return value
+
+
+# 確認の答え（選んだ選択肢と自由入力を「、」でつないだ値）の区切り。
+_ANSWER_PARTS = re.compile(r"[、,，;；/／\n]")
+
+
+def unresolved_answers(
+    match: GuideMatch, provided: Mapping[str, str]
+) -> dict[str, tuple[SupportGuideCondition, str]]:
+    """渡した答えが選択肢そのものでなく、まだ決まらない選択式の条件（条件の id → (条件, 答え)）。
+
+    利用者が確認に自由入力で答えたとき（「A だけを変え、グループは変えない」）。答えの文から選択肢を
+    決めるのは呼び出し元（`support_guide_conditions.resolve_answered_conditions`）。
+    """
+    unresolved: dict[str, tuple[SupportGuideCondition, str]] = {}
+    for state in match.states:
+        condition = state.condition
+        raw = provided.get(condition.id, "").strip()
+        if (
+            raw
+            and not state.known
+            and condition.type == "enum"
+            and condition.source == "user"
+            and condition.allowed_values
+        ):
+            unresolved[condition.id] = (condition, raw)
+    return unresolved
 
 
 def condition_states(
@@ -1423,6 +1458,7 @@ __all__ = [
     "score_guide",
     "select_guide",
     "short_circuit_answer",
+    "unresolved_answers",
     "visible_plan",
     "with_draft",
     "with_guide_rule",

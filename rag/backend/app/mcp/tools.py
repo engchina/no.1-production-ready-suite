@@ -172,6 +172,7 @@ from app.rag.stored_answer import (
     passage_mark_record,
     stored_citation_metadata,
 )
+from app.rag.support_guide_conditions import resolve_answered_conditions
 from app.rag.support_guide_query import build_guide_query
 from app.rag.support_guide_runtime import (
     GuideMatch,
@@ -245,7 +246,11 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 28: rag_search に、段落の印（passage_marks）・根拠と矛盾して除いた段落（removed_passages）・
 #     回答全体の警告（answer_warnings）を足した。answer の末尾に「根拠と矛盾し除いた内容」
 #     「確認が必要な点」の節が付く（#2738）。
-MCP_OUTPUT_SCHEMA_VERSION = 28
+# 29: rag_validate_answer の claims の support_check に、段落が勧める内容が利用者の確認の答えの
+#     条件・制約と両立しない premise_conflict（status は contradicted）を足した。rag_lookup_guides・
+#     rag_search の conditions で、選択式の条件に選択肢そのものでない答えを渡すと、答えが選んだ
+#     選択肢に決めるようにした（#2726）。
+MCP_OUTPUT_SCHEMA_VERSION = 29
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -1891,7 +1896,8 @@ class ValidatedClaim(BaseModel):
             "value_unbound=段落が根拠の表の別の行の区分と値を結び付けている / "
             "quote_unmatched=裏付けとして写した原文が根拠に無い / "
             "figure_recheck=図の項目だけの裏付けを確かめ直し、図の見た目だけで決まる・図と矛盾する"
-            "とした）。採ったときは null。"
+            "とした / premise_conflict=段落が勧める内容が、利用者が確認で答えた条件・制約と"
+            "両立しない〔status は contradicted〕）。採ったときは null。"
         ),
     )
 
@@ -4165,18 +4171,19 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             arguments.query,
             await load_runtime_knowledge_payload(oracle, view.id),
         )
-        return LookupGuidesOutput(
-            guides=[
-                _lookup_item(match)
-                for match in rank_guides(
-                    guides,
-                    query,
-                    arguments.conditions,
-                    limit=arguments.limit,
-                    context=context,
-                )
-            ]
+        matches = rank_guides(
+            guides, query, arguments.conditions, limit=arguments.limit, context=context
         )
+        if arguments.conditions:
+            # 確認に自由入力で答えた選択式の条件は、答えの文が選んだ選択肢に決める（#2726）。
+            resolved = await asyncio.gather(
+                *(
+                    resolve_answered_conditions(match, arguments.conditions, settings)
+                    for match in matches
+                )
+            )
+            matches = [item for item in resolved if isinstance(item, GuideMatch)]
+        return LookupGuidesOutput(guides=[_lookup_item(match) for match in matches])
 
     async def retrieve_evidence(arguments: RetrieveEvidenceInput) -> RetrieveEvidenceOutput:
         # planning=rag: 検索の画面と同じく質問の理解・拡張・検索・rerank まで行い、回答（CRAG・
