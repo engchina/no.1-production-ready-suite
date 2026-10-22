@@ -4993,9 +4993,10 @@ def run_round(
         summary_warning = "確かめた説明が無い"
     if not summary_warning:
         # 印の付いた（未確認・要注意の）item の主張を summary が断定していれば、summary にも警告を付ける（#2738）。
+        # 根拠に結べなかった説明（span なし。本文では「資料の出典を確かめられない説明」）も印の付いた主張に数える（#3068）。
         summary_warning = summary_asserts_denied(
             str(draft.summary),
-            [e.item.text for e in published if e.state and not e.added],
+            [e.item.text for e in checked if e.published and e.state and not e.added],
             [e.item.text for e in checked if e.confirmed],
             subject="印の付いた主張",
         )
