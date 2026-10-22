@@ -71,3 +71,23 @@ def test_numbers_given_in_the_question_are_not_display_examples():
     text = "新しい2桁のコードを入力し、適用月のチェックボックスで希望する月（例：4回分）にチェックを入れます。"
     assert not unsupported_document_value_claim(text, source, "掛率Bの適用月を年３回から４回に変更したい。")
     assert unsupported_document_value_claim(text, source, "掛率Bの適用月を変更したい。")
+
+
+def test_kanji_numbers_in_the_source_support_the_same_value_written_in_digits():
+    from rag_engine.generation.value_grounding import unsupported_document_value_claim
+
+    source = [dict(origin="document_text", text="利用料の上限は、一回一万四千円です。区域Aでは一万六千円です。")]
+    assert not unsupported_document_value_claim("利用料の上限は一回14,000円です。区域Aでは16,000円です。", source, "上限は？")
+    assert not unsupported_document_value_claim("利用料の上限は一回14000円です。", source, "上限は？")
+    # 値が違えば、漢数字の根拠でも裏付けにならない。
+    assert unsupported_document_value_claim("利用料の上限は一回15,000円です。", source, "上限は？")
+
+
+def test_kanji_words_in_the_answer_are_not_counted_as_claimed_numbers():
+    from rag_engine.generation.value_grounding import unsupported_document_value_claim
+
+    source = [dict(origin="document_text", text="通常の利用料の上限は8000円です。")]
+    assert not unsupported_document_value_claim("一般の利用料の上限は8,000円です。", source, "上限は？")
+    # 画像の説明だけの値は、桁区切りがあっても裏付けにしない。
+    image = [dict(origin="image_extraction", text="上限は8,000円です。")]
+    assert unsupported_document_value_claim("利用料の上限は8,000円です。", image, "上限は？")
