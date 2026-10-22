@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from rag_parser_core.extraction import DocumentElement, DocumentNavigationNode
+from rag_parser_core.extraction import DocumentElement, DocumentNavigationNode, StructuredExtraction
 
 from app.api.routes import documents as documents_route
 from app.api.routes import settings as settings_route
@@ -259,7 +259,7 @@ def test_section_parents_follow_order_and_levels() -> None:
 
 
 def test_extraction_anchors_use_navigation_elements_or_rule_headings() -> None:
-    extraction = SimpleNamespace(
+    extraction = StructuredExtraction(
         navigation=[
             DocumentNavigationNode(section_id="nav-1", title="第1章", element_ids=["e1", "e2"]),
             DocumentNavigationNode(section_id="nav-2", title="第2章"),
@@ -271,9 +271,9 @@ def test_extraction_anchors_use_navigation_elements_or_rule_headings() -> None:
         ],
     )
 
-    parser = extraction_section_anchors(extraction, "parser")  # type: ignore[arg-type]
+    parser = extraction_section_anchors(extraction, "parser")
     assert parser == {"nav-1": frozenset({"e1", "e2"})}
-    legal = extraction_section_anchors(extraction, "legal")  # type: ignore[arg-type]
+    legal = extraction_section_anchors(extraction, "legal")
     assert sorted(next(iter(ids)) for ids in legal.values()) == ["e1", "e3"]
     assert extraction_section_anchors(None, "parser") == {}
 
