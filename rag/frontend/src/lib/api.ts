@@ -2271,6 +2271,8 @@ export interface PipelineSettingsData {
   auto_index_after_chunk_enabled: boolean;
   /** レシピで何も上書きしないときの実効値（レシピの「グローバル設定に従う」と同じ）。 */
   recipe_defaults: DocumentProcessingConfig;
+  /** 検索インデックス画面と同じ、保存済みの検索精度。文書レシピでは上書きしない。 */
+  vector_index_profile: VectorIndexProfileName;
   config_source: "runtime";
 }
 
@@ -2527,7 +2529,7 @@ export interface AnswerRecordSettingsData {
 }
 
 // --- 設定: Guardrail アダプター ---
-/** メタデータ/項目抽出のスキーマ定義(取込・回答設定)。 */
+/** メタデータ/項目抽出のスキーマ定義(取込・検索・回答設定)。 */
 export type ExtractionFieldValueType = "string" | "number" | "date" | "bool";
 
 export interface ExtractionFieldDefinition {

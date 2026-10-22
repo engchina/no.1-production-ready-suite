@@ -17,7 +17,7 @@ from pytest import MonkeyPatch
 
 from app import config as app_config
 from app.api.routes import settings as settings_routes
-from app.config import Settings, get_settings, reload_env_settings_if_changed
+from app.config import Settings, VectorIndexProfile, get_settings, reload_env_settings_if_changed
 from app.main import app
 from app.rag import extraction_field_adapter as fields_mod
 from app.rag import parser_adapter_readiness
@@ -260,6 +260,27 @@ def test_pipeline_settings_report_auto_advance_and_recipe_defaults(settings: Set
     assert defaults["parser_adapter_backend"] == "docling"
     assert defaults["chunking_strategy"] == settings.rag_chunking_strategy
     assert defaults["chunk_context_header_enabled"] == settings.rag_chunk_context_header_enabled
+
+
+@pytest.mark.parametrize("profile", ["fast", "balanced", "accurate"])
+def test_pipeline_reports_saved_vector_index_profile(
+    settings: Settings, monkeypatch: MonkeyPatch, profile: VectorIndexProfile
+) -> None:
+    class IndexOracle:
+        def __init__(self, _settings: Settings) -> None:
+            pass
+
+        async def get_vector_index_build_params(self) -> tuple[int, int]:
+            return (32, 500)
+
+    monkeypatch.setattr(settings_routes, "OracleClient", IndexOracle)
+    monkeypatch.setattr(settings, "rag_vector_index_profile", "balanced")
+    saved = client.patch("/api/settings/vector-index", json={"profile": profile})
+    assert saved.status_code == 200
+    detail = client.get("/api/settings/vector-index").json()["data"]
+    overview = client.get("/api/settings/pipeline").json()["data"]
+    assert overview["vector_index_profile"] == detail["profile"] == profile
+    assert "vector_index_profile" not in overview["recipe_defaults"]
 
 
 def test_patch_pipeline_persists_env_and_keeps_omitted_gates(settings: Settings) -> None:

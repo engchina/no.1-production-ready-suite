@@ -218,10 +218,10 @@ function PhaseCard({
         {group.phase === "INDEX" ? (
           <div data-config-field="vector_index" className="min-w-0 rounded-md border border-border bg-surface-sunken px-3 py-2">
             <dt className="text-xs text-fg-muted">{t("nav.settingsVectorIndex")}</dt>
-            <dd className="mt-0.5 text-sm text-fg">{t("settings.vectorIndex.subtitle")}</dd>
+            <dd className="mt-0.5 text-sm font-medium text-fg">{t(`settings.vectorIndex.profile.${data.vector_index_profile}`)}</dd>
             {canOpenNavRoute(APP_ROUTES.settingsVectorIndex, hasPermission) ? (
               <dd className="mt-1">
-                <ButtonLink to={APP_ROUTES.settingsVectorIndex} variant="ghost" size="sm" aria-label={t("settings.pipeline.flow.openSettingsAria", { name: t("nav.settingsVectorIndex") })}>
+                <ButtonLink to={APP_ROUTES.settingsVectorIndex} variant="ghost" size="sm" className="text-accent-fg underline underline-offset-2" aria-label={t("settings.pipeline.flow.openSettingsAria", { name: t("nav.settingsVectorIndex") })}>
                   {t("settings.pipeline.flow.openSettings")}
                 </ButtonLink>
               </dd>
@@ -245,19 +245,13 @@ function PhaseCard({
               <dd className="mt-0.5 break-words text-sm font-medium text-fg">
                 {recipeConfigValueLabel(item, data.recipe_defaults)}
               </dd>
-              {item.field === "navigation_summary_enabled" || item.field === "section_rules_mode" ? (
-                <dd className="mt-1 text-xs leading-relaxed text-fg-muted">
-                  {t(item.field === "navigation_summary_enabled"
-                    ? "settings.parserAdapters.postParse.navigationSummary.hint"
-                    : "sectionRules.description")}
-                </dd>
-              ) : null}
               {href ? (
                 <dd className="mt-1">
                   <ButtonLink
                     to={href}
                     aria-label={t("settings.pipeline.flow.openSettingsAria", { name })}
                     variant="ghost"
+                    className="text-accent-fg underline underline-offset-2"
                     size="sm"
                   >
                     {t("settings.pipeline.flow.openSettings")}

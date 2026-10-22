@@ -15,7 +15,7 @@
   （backend は取込を止める。黙って切らない）
 
 Docling・Unstructured と同じ「使用エンジン」の 1 つ（`RAG_PARSER_ADAPTER_BACKEND=structured_records_jsonl`）。
-「取込・回答設定 › 文書解析」の既定か、文書の処理レシピの使用エンジンで構造化レコード JSONL を選んだときだけ、
+「取込・検索・回答設定 › 文書解析」の既定か、文書の処理レシピの使用エンジンで構造化レコード JSONL を選んだときだけ、
 backend がこのサービスへ回す（形式を見て自動では回さない）。サービスは統合 stack と `rag-services.sh install` の既定で配備・起動する。
 
 ## 起動（uv の venv + systemd。#286）

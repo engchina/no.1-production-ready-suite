@@ -615,6 +615,7 @@ test("グローバル設定に従う行に、全体の既定を変える画面�
         auto_chunk_after_extract_enabled: true,
         auto_index_after_chunk_enabled: true,
         recipe_defaults: effectiveBase,
+        vector_index_profile: "accurate",
         config_source: "runtime",
       }),
     })

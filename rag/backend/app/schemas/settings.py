@@ -840,6 +840,7 @@ class PipelineSettingsData(BaseModel):
     auto_chunk_after_extract_enabled: bool
     auto_index_after_chunk_enabled: bool
     recipe_defaults: DocumentProcessingConfig
+    vector_index_profile: VectorIndexProfile
     config_source: Literal["runtime"] = "runtime"
 
 

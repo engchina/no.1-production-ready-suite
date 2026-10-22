@@ -43,7 +43,7 @@ import { cn } from "@/lib/utils";
 /**
  * 評価の基準（閾値のプリセット）を選ぶ設定画面（#591）。
  *
- * 基準は「標準」「厳格」の 2 つ。選んだ基準の閾値を、検索・根拠・回答の 3 つの観点ごとに
+ * 基準は「標準」「厳格」の 2 つ。選んだ基準の閾値を、検索・回答・応答の判断の 3 つの観点ごとに
  * 指標の意味と一緒に出す（どの指標を見ればよいかを、この画面で分かるようにする）。
  */
 export function EvaluationSettingsClient() {
@@ -243,7 +243,7 @@ function SuiteMetrics({ suite }: { suite: EvaluationSuiteStatusData | null }) {
       <p className="mt-1 text-xs text-fg-muted">{t("settings.evaluation.metrics.description")}</p>
       <div className="mt-3 grid gap-4 lg:grid-cols-2">
         {EVALUATION_PERSPECTIVES.map((perspective) => (
-          <div key={perspective.id} className="min-w-0">
+          <div key={perspective.id} className={cn("min-w-0", perspective.id === "decision" && "lg:col-start-2")}>
             <h3 className="text-sm font-semibold text-fg">{perspectiveLabel(perspective.id)}</h3>
             <p className="text-xs text-fg-muted">{perspectiveDescription(perspective.id)}</p>
             <dl className="mt-2 space-y-2">

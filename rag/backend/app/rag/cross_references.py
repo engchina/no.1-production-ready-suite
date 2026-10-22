@@ -433,7 +433,7 @@ def _extract_english(text: str) -> list[ReferenceSpec]:
 # (「サンプル社の定期保守計画」は「定期保守計画」)。文字の間の空白 1 つは許す(PDF の抽出)。
 # 文書名に使う文字は「参照の解析」の設定(#2179。``ReferenceGrammar.name_char``)。
 # 参照の書き方の語（文書名の語尾・部の前置き・枝番・相対の参照など）は
-# 「取込・回答設定 > 文書分割」の設定にあり、``reference_grammar`` が正規表現にする（#2157）。
+# 「取込・検索・回答設定 > 文書分割」の設定にあり、``reference_grammar`` が正規表現にする（#2157）。
 # 述語の直前の文書名と、述語が「で〜」のときの同じ文の前の「〈文書名〉で、」は、題名の括弧・読点を
 # 「参照の解析」の設定から作る(#2177。``ReferenceGrammar.document_name_before`` /
 # ``document_name_coordinated``。「担当部署はシステム台帳で、承認者は組織規程で確かめます」)。

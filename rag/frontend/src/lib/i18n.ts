@@ -117,7 +117,7 @@ export const ja = {
 
   "nav.section.ingestion": "ナレッジ構築",
   "nav.section.use": "AI 活用",
-  "nav.section.pipeline": "取込・回答設定",
+  "nav.section.pipeline": "取込・検索・回答設定",
   "nav.section.improve": "改善・運用",
   "nav.section.operations": "運用設定",
   "nav.section.settings": "システム設定",
@@ -2468,7 +2468,7 @@ export const ja = {
     "このナレッジベースの文書から項目抽出で取り出す項目です。複数のナレッジベースに属する文書は、それぞれの項目を合わせて抽出します。変更は次の取込から効きます。",
   "knowledgeBases.extractionFields.loading": "抽出する項目を読み込んでいます",
   "knowledgeBases.extractionFields.inherited":
-    "全体の既定の項目（{count} 件）を使っています。既定は「取込・回答設定 › 文書解析」で変更できます。",
+    "全体の既定の項目（{count} 件）を使っています。既定は「取込・検索・回答設定 › 文書解析」で変更できます。",
   "knowledgeBases.extractionFields.own": "このナレッジベースの項目（{count} 件）を使っています。",
   "knowledgeBases.extractionFields.ownDescription":
     "このナレッジベースの項目です。全体の既定は使いません。項目を 0 件にすると、このナレッジベースでは項目を抽出しません。",
@@ -3214,7 +3214,7 @@ export const ja = {
   "documents.excelWarning.reviewBody":
     "表頭を推定できなかったシートがあるため、索引を作る前に止めました（{sheets}）。抽出の内容が正しければ承認し、違えば文書レシピの「Excel の読み方」で表頭の行か読む範囲を指定して処理し直してください。",
   "documents.processingConfig.subtitle":
-    "選択中のレシピだけの処理設定です。個別設定がない項目は取込・回答設定の既定値を使います。",
+    "選択中のレシピだけの処理設定です。個別設定がない項目は取込・検索・回答設定の既定値を使います。",
   "documents.processingConfig.editHint":
     "変更する項目だけ「上書き」を選んでください。保存しても現在の索引は自動で作り直しません。",
   "documents.processingConfig.actions.edit": "処理設定を編集",

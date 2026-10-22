@@ -17,7 +17,7 @@
 
 ## 用語
 
-- ユーザー向けの主概念は **ナレッジ構築** / **検索・回答プロファイル** / **取込・回答設定**。「検索・回答プロファイル」は正式な製品語で、parser / source profile 等の工程の技術語とは区別する（KB membership・文書レシピの責務を移さない）。
+- ユーザー向けの主概念は **ナレッジ構築** / **検索・回答プロファイル** / **取込・検索・回答設定**。「検索・回答プロファイル」は正式な製品語で、parser / source profile 等の工程の技術語とは区別する（KB membership・文書レシピの責務を移さない）。
 - `producer` / `consumer` / `Pipeline` / `Adapter` / `Profile` / `Runtime` / `Backend` などの技術語は、code identifier・コード内部・開発者向けの診断パネルに限る。
 - `SearchAnswerProfile` は正式な code / API 名として維持し、ユーザー表示は「検索・回答プロファイル」。
 - **「DocRAG」は使わない。** rag_poc から移したときの名前で、画面・API のメッセージ・docs の地の文にも、コードの識別子・設定（env）・API・DB の名前にも使わない。RAG の標準の用語・名前で呼ぶ（回答フロー・親子階層（small-to-big）・回答の記録・回答生成のプロンプト・質問の拡張・回答の生成方式（CRAG / 標準 RAG）。package は `rag_engine`、回答は `app/rag/answer_engine.py`、分割方式は `small_to_big`、回答の設定は `RAG_QUERY_STRATEGY` など）。旧名は migration（保存値・表の改名）と docs/deployment.md の更新手順にだけ残す。
@@ -42,7 +42,7 @@
 詳細（サイドナビの各セクションの項目・会話と回答の記録の見え方・画面の差分 spec）は [docs/agents/ui.md](./docs/agents/ui.md)。
 
 - 静かで読み取りやすい情報密度、安定したナビゲーション、明確なフォームの状態を優先する（SaaS / 業務ツール）。
-- サイドナビは ナレッジ構築 / AI 活用 / 取込・回答設定 / 改善・運用 / セキュリティ設定 / ユーザーとロール / 運用設定 / システム設定。
+- サイドナビは ナレッジ構築 / AI 活用 / 取込・検索・回答設定 / 改善・運用 / セキュリティ設定 / ユーザーとロール / 運用設定 / システム設定。
 - ナビ・ルート・ページ内の操作は権限（`backend/app/security/permissions.py`）で出し分ける。画面を足したら使う API を backend の manifest にも登録する（既定で拒否。完全性テストがある）。
 - 「AI 活用」（チャットの会話・回答の記録・実行履歴）は、system_admin は全員、それ以外は自分のデータだけを backend で絞る（他人のデータは 404）。`rag.feedback.manage` などの管理権限は全員を見る理由にしない。
 - lint は `frontend/eslint.config.mjs` が `../../platform/docs/design-system/adherence.oxlintrc.json` を import する。
@@ -54,7 +54,7 @@
 
 設定・工程に触る前に [docs/agents/settings-responsibility.md](./docs/agents/settings-responsibility.md)（各層が持つもの・設定群ごとの上書きの可否・複数レシピの融合・ジョブの直列 / 並行）を読む。特に次を守る。
 
-- 文書は 1〜3 件の独立した処理レシピ（preprocess / parser / chunking）を持つ。レシピの既定値は global（「取込・回答設定」）から解決し、**KB からは解決しない**。解析エンジンは形式で自動に振り分けない。
+- 文書は 1〜3 件の独立した処理レシピ（preprocess / parser / chunking）を持つ。レシピの既定値は global（「取込・検索・回答設定」）から解決し、**KB からは解決しない**。解析エンジンは形式で自動に振り分けない。
 - KB は文書の membership だけを持ち（例外は項目抽出の項目の定義）、出し入れは chunk へ波及しない。KB にレシピ・検索・回答設定を持たせず、KB の legacy の設定は runtime で使わず再保存しない。
 - Search Answer Profile は検索・回答に使う設定（参照 KB・検索方法・安全チェック）だけを持つ。検索時の解決順は **request 明示 > Published Search Answer Profile > global defaults**。
 - 各レシピの直近成功した active chunk_set はすべて検索対象（主レシピ・配信モードは持たない）。成功時だけ active を原子切替し、失敗時は旧 active を保つ。
