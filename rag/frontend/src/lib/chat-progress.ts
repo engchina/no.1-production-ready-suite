@@ -60,7 +60,8 @@ const PIPELINE_DEFINITIONS: ChatProgressStepDefinitions = Object.fromEntries(
 export const CHAT_PROGRESS_DEFINITIONS: ChatProgressStepDefinitions = {
   [ANSWER_STEP_KIND]: {
     label: (_status, params) => answerStepDisplayName(text(params, "name")),
-    meta: (_status, params) => answerStepMeta({ llmCalls: count(params, "llm_calls"), note: text(params, "note") }),
+    meta: (_status, params) =>
+      answerStepMeta({ llmCalls: count(params, "llm_calls"), llmSends: count(params, "llm_sends"), note: text(params, "note") }),
     level: (params) => count(params, "depth"),
   },
   ...PIPELINE_DEFINITIONS,

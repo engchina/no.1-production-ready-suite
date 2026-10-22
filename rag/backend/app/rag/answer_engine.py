@@ -567,6 +567,9 @@ def build_engine_settings(
         "RAG_ENGINE_LLM_STALL_IDLE_SECONDS": str(settings.rag_llm_stall_idle_seconds),
         "RAG_ENGINE_LLM_STALL_MIN_RATE_RATIO": str(settings.rag_llm_stall_min_rate_ratio),
         "RAG_ENGINE_LLM_STALL_RESENDS": str(settings.rag_llm_stall_resends),
+        "RAG_ENGINE_LLM_RUNAWAY_DETECTION": "1"
+        if settings.rag_llm_runaway_detection_enabled
+        else "0",
         # 業務ガイドの手順の段のために最初の章節の拡張が残す入力の割合(#2816)。
         "RAG_ENGINE_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT": str(
             settings.rag_section_expansion_followup_reserve_percent
@@ -3256,6 +3259,13 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             "status": str(step.get("status") or ""),
             "elapsed_seconds": step.get("elapsed_seconds"),
             "llm_calls": step.get("llm_calls"),
+            # API への実際の送信の回数（送り直しで呼び出しの回数より多いときだけ。#2966）。
+            **(
+                {"llm_sends": step["llm_sends"]}
+                if isinstance(step.get("llm_sends"), int)
+                and not isinstance(step.get("llm_sends"), bool)
+                else {}
+            ),
             # 入れ子の深さ（0 が最上位。画面の処理の経過の字下げ。#2096）。
             "depth": step.get("depth") if isinstance(step.get("depth"), int) else 0,
             # 工程の中で実行した SQL の回数・行数・LOB の読み取りの回数・時間(#1490)。

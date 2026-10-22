@@ -1652,6 +1652,16 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "0 は打ち切らない(streaming の時刻の記録だけ)。"
         ),
     )
+    rag_llm_runaway_detection_enabled: bool = Field(
+        default=True,
+        description=(
+            "(#2966)回答の LLM の呼び出しを streaming で受けるとき(停滞の検出が ON)、"
+            "出力が同じ並びの繰り返し・空白だけで続いたら打ち切り、"
+            "推論の量を下げて 1 回だけ送り直す。出力が速く続くまま出力の上限"
+            "(32,768 tokens)まで書き続け、200 秒かかって未完了になった記録がある。"
+            "正当な長い出力(表・一覧)は行ごとに値が変わるので打ち切らない。"
+        ),
+    )
     rag_section_expansion_followup_reserve_percent: int = Field(
         default=20,
         ge=0,

@@ -75,7 +75,7 @@ const slowSearchStream: TimedChunk[] = [
     text: [
       // 終わった工程の詳細と計測値は、工程が終わったときのイベントで届く（#2373）。
       searchStage("answer_step:質問の理解", "success", 1500, {
-        attributes: { llm_calls: 1, status: "complete" },
+        attributes: { llm_calls: 1, llm_sends: 2, status: "complete" },
         details: { fields: [{ label: "答える要求", value: "1 件" }], lines: ["読み取った条件: なし"] },
       }),
       searchStage("answer_step:文書検索", "started"),
@@ -279,7 +279,8 @@ for (const viewport of [
     await expect(progress.locator("li").filter({ hasText: "質問の条件の読み取り" })).toContainText("1.5 秒");
     // 終わった工程の詳細は、後の工程の実行中から開ける（回答の完了を待たない。#2373）。計測値も実行中から出す。
     await expect(current).toContainText("文書の検索");
-    await expect(page.getByTestId("search-run-progress-step-s1")).toContainText("（LLM 1 回）");
+    // 送り直しで API への送信が多いときは送信の回数も示す（#2966）。
+    await expect(page.getByTestId("search-run-progress-step-s1")).toContainText("LLM 1 回・送信 2 回");
     const liveToggle = page.getByTestId("search-run-progress-step-s1-toggle");
     await liveToggle.click();
     await expect(liveToggle).toHaveAttribute("aria-expanded", "true");

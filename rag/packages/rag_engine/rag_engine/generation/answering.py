@@ -1869,17 +1869,23 @@ def _stop_without_improvement(budget: Any, rounds: list[dict[str, Any]], reason:
             stop_step.add(f"残った指摘: {'・'.join(labels)}")
 
 
-def _record_round_audit(step: _ExecutionStep, current: Any, *, accepted: bool, first: bool) -> None:
-    """回答の作成と根拠の確認の 1 組の結果（監査の判定の件数・残った指摘・採否）を見出しと値で書く（#2341）。"""
+def _record_round_audit(step: _ExecutionStep, current: Any, *, accepted: bool, first: bool, audited: bool = True) -> None:
+    """回答の作成と根拠の確認の 1 組の結果（監査の判定の件数・残った指摘・採否）を見出しと値で書く（#2341）。
+
+    ``audited`` が False（監査の型が none。#2800）なら、要求の充足は決定的な照合の結果として書き、行っていない監査の
+    件数は書かない（#2966。実行しない監査を実績と読ませない）。
+    """
     from rag_engine.generation import grounded
 
+    label = "要求の充足（監査）" if audited else "要求の充足（原文との照合）"
     reviews = current.audit.request_reviews if current.audit is not None else []
     if reviews:
         counts = {status: sum(1 for review in reviews if review.status == status) for status in ("addressed", "partial", "missing")}
-        step.field("要求の充足（監査）", f"答えた {counts['addressed']}・一部 {counts['partial']}・未回答 {counts['missing']}")
+        step.field(label, f"答えた {counts['addressed']}・一部 {counts['partial']}・未回答 {counts['missing']}")
     elif current.requests:
-        step.field("要求の充足（監査）", f"監査なし（要求 {len(current.requests)} 件を未確認として扱う）")
-    step.field("監査した説明", f"{current.audited_items} 件（監査の呼び出し {current.audit_calls} 回）")
+        step.field(label, f"監査なし（要求 {len(current.requests)} 件を未確認として扱う）")
+    if audited:
+        step.field("監査した説明", f"{current.audited_items} 件（監査の呼び出し {current.audit_calls} 回）")
     if current.withdrawn:
         step.field("監査で撤回した説明", f"{current.withdrawn} 件")
     if current.marked or current.removed:
@@ -2061,7 +2067,13 @@ def synthesize_grounded_answer(
             budget.round(),
             _execution_step(
                 f"回答文の生成と根拠確認（{number + 1}回目）",
-                "主張と原文引用の対で回答を作り、引用を原文と照合してから、別のLLM呼出で適用性を監査します。" if number == 0 else "",
+                (
+                    "主張と原文引用の対で回答を作り、引用を原文と照合します（生成の後の LLM の監査はしません）。"
+                    if audit_mode == grounded.AUDIT_MODE_NONE
+                    else "主張と原文引用の対で回答を作り、引用を原文と照合してから、別のLLM呼出で適用性を監査します。"
+                )
+                if number == 0
+                else "",
             ) as step,
         ):
             try:
@@ -2093,7 +2105,11 @@ def synthesize_grounded_answer(
                     glossary=_audit_glossary(runtime_knowledge),
                 )
                 if number == 0:
-                    for purpose in (LLM_PURPOSE_GENERATION, LLM_PURPOSE_AUDIT):
+                    # 監査の推論の量は、監査をする型のときだけ書く（#2966）。
+                    purposes = (
+                        (LLM_PURPOSE_GENERATION,) if audit_mode == grounded.AUDIT_MODE_NONE else (LLM_PURPOSE_GENERATION, LLM_PURPOSE_AUDIT)
+                    )
+                    for purpose in purposes:
                         if note := llm_reasoning_effort_note(settings, purpose, provider):
                             step.add(("監査の" if purpose == LLM_PURPOSE_AUDIT else "生成の") + note)
             except Exception as exc:
@@ -2137,7 +2153,7 @@ def synthesize_grounded_answer(
                     "回答の時間の上限までに監査が終わらなかったため、原文との照合だけを済ませた説明を示し、条件つきの回答にします。"
                 )
             accepted = best is None or grounded.better(current, best[0])
-            _record_round_audit(step, current, accepted=accepted, first=best is None)
+            _record_round_audit(step, current, accepted=accepted, first=best is None, audited=audit_mode != grounded.AUDIT_MODE_NONE)
         if accepted:
             best = (current, context, spans, images, mode)
             best_number = number

@@ -183,6 +183,15 @@ token を出す。
 （`incomplete_responses`・`incomplete_reasons`）も、起きたときだけ `llm_usage` と log（`llm_incomplete_reason`・
 `llm_attempt`・`llm_max_output_tokens`）に残す（#1527）。
 
+**暴走した出力の打ち切り（#2966）**: 出力は速く続くのに、同じ並びの繰り返し・空白だけを出力の上限（32,768 tokens）まで書き続ける
+生成がある（記録: 1 回目が 200 秒で上限に届いて未完了、推論の量を下げた送り直しは 2 秒で完了）。停滞の検出（event の間隔・速さ）
+では見分けられないので、streaming で受ける呼び出し（下の停滞の検出が ON のとき）は出力の文（`response.output_text.delta`）の
+末尾を確かめ、末尾の 2,400 文字が周期 300 文字以下の完全な繰り返し（`runaway_repetition`）か、空白が 2,000 文字続いた
+（`runaway_whitespace`）ら stream を閉じ、推論の量を 1 段下げて（下げられなければそのまま）1 回だけ送り直す（`oci._RunawayMonitor`。
+`RAG_LLM_RUNAWAY_DETECTION_ENABLED=false` で切れる）。行ごとに値が変わる表・一覧は打ち切らない。打ち切った呼び出しは
+`incomplete_reasons` に理由、送り直しは `runaway_resends` に残る。工程の記録は呼び出しの回数（`llm_calls`）と API への送信の
+回数（`llm_sends`。送り直しで多いときだけ）を分け、画面は「LLM 1 回・送信 2 回」と示す。
+
 **停滞した LLM の呼び出しの送り直し（#1926）**: OCI Enterprise AI の呼び出しは、まれ（#1912 の記録の 206 件で約 1%）に
 通常の 1/10 以下の速さ（13〜23 token/秒。中央値 224）に落ち、同じ token 数で 36 秒 → 183 秒かかった。回答の期限がある文脈では
 LLM の呼び出しを streaming で受け（`rag_engine.adapters.oci._stream_parsed`）、次のとき stream を閉じて同じ要求を送り直す

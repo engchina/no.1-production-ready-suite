@@ -206,7 +206,7 @@ def test_finish_adds_llm_calls_and_note_from_execution_steps() -> None:
             {"name": "質問の理解", "status": "complete", "llm_calls": 1, "depth": 0},
             {"name": "用語・ルールの確認", "status": "該当なし", "llm_calls": 0, "depth": 0},
             {"name": "文書検索", "status": "complete", "llm_calls": 0, "depth": 0},
-            {"name": "文書検索", "status": "complete", "llm_calls": 2, "depth": 0},
+            {"name": "文書検索", "status": "complete", "llm_calls": 2, "llm_sends": 3, "depth": 0},
             "壊れた記録",
         ]
     )
@@ -217,7 +217,13 @@ def test_finish_adds_llm_calls_and_note_from_execution_steps() -> None:
         "note": "該当なし",
     }
     assert _step(tracker, "s3").params == {"name": "文書検索", "depth": 0}
-    assert _step(tracker, "s4").params == {"name": "文書検索", "depth": 0, "llm_calls": 2}
+    # 送り直しで API への送信が多い工程は、送信の回数も渡す（#2966）。
+    assert _step(tracker, "s4").params == {
+        "name": "文書検索",
+        "depth": 0,
+        "llm_calls": 2,
+        "llm_sends": 3,
+    }
     assert tracker.terminal == "done"
 
 

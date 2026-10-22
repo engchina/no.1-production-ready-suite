@@ -121,7 +121,8 @@ function detail(row: RunRow) {
       : [{ stage: "retrieval", outcome: row.status === "error" ? "error" : "success", elapsed_ms: 1100 }],
     steps: row.answer_generated
       ? [
-          { name: "質問の理解", status: "complete", elapsed_seconds: 0.3, llm_calls: 1 },
+          // 送り直しで API への送信が呼び出しより多い工程（#2966）。
+          { name: "質問の理解", status: "complete", elapsed_seconds: 0.3, llm_calls: 1, llm_sends: 2 },
           {
             name: "文書検索",
             status: "complete",
@@ -490,7 +491,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(4);
     await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("根拠の検索と回答の生成");
     await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("1.1 秒");
-    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問の条件の読み取り（LLM 1 回）");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問の条件の読み取り（LLM 1 回・送信 2 回）");
     await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答の安全チェック");
     if (!isNarrow(page)) await expect(timeline.locator("[data-run-timeline-bar]").first()).toBeVisible();
     // 段の詳細（#2341）: 詳細のある工程・段だけを開ける（既定で閉じる）。詳細の無い工程に開閉の印は出さない。
