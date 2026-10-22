@@ -634,7 +634,7 @@ async function openSupportGuideEditor(page: Page) {
   await expect(editor.getByTestId("support-guide-try-conditions")).toBeVisible();
 }
 
-// ---- 検索・回答プロファイル（章節で広げる根拠・実体でつながる根拠） ----
+// ---- 検索・回答プロファイル（章節で広げる根拠・名称・別名でつながる根拠） ----
 
 async function mockNewSearchAnswerProfile(page: Page) {
   await page.route("**/api/knowledge-bases**", (route) =>

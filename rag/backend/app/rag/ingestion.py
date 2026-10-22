@@ -2292,7 +2292,10 @@ class IngestionPipeline:
         保存される chunk 本文・引用表示は変えず、chunk metadata の context_header を使う。
         """
         if not self._settings.rag_chunk_context_header_enabled:
-            return [engine_search_text(chunk.metadata) or chunk.text for chunk in chunks]
+            return [
+                engine_search_text(chunk.metadata, include_context_header=False) or chunk.text
+                for chunk in chunks
+            ]
         return [
             engine_search_text(chunk.metadata) or _embedding_input_with_context_header(chunk)
             for chunk in chunks

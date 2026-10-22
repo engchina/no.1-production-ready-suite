@@ -1652,6 +1652,7 @@ async def test_index_chunked_rebuilds_context_header_without_document_lookup() -
         object_storage=cast(Any, FakeObjectStorage()),
         settings=Settings(
             rag_chunk_context_header_enabled=True,
+            rag_entity_index_enabled=True,
             rag_graph_profile="off",
         ),
         recipe_id="recipe-1",
@@ -1663,7 +1664,7 @@ async def test_index_chunked_rebuilds_context_header_without_document_lookup() -
     expected = "製品マニュアル.pdf > 第1章 > 概要"
     assert embedding.texts == [f"{expected}\n本文です。"]
     assert oracle.updated_chunks[0].metadata["context_header"] == expected
-    # 実体の索引は既定 ON（#1388）。保存済み Chunk の索引の工程でも、索引の後に 1 回保存する。
+    # 索引の構築を明示した場合、保存済み Chunk の索引の後にも 1 回保存する。
     assert oracle.entity_transactions == 1
 
 
@@ -1894,3 +1895,37 @@ async def test_pipeline_releases_heavy_slot_after_parse_before_llm_stages(
         "_attach_heading_levels",
         "_attach_extraction_fields",
     ]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_small_to_big_search_input_respects_context_header(enabled: bool) -> None:
+    """専用の検索本文を保ち、文脈ヘッダの追加だけを切り替える。"""
+    from app.rag.chunking_small_to_big import engine_search_text
+
+    pipeline = IngestionPipeline(
+        vlm=cast(Any, object()),
+        genai=cast(Any, object()),
+        oracle=cast(Any, object()),
+        object_storage=cast(Any, object()),
+        settings=Settings(rag_chunk_context_header_enabled=enabled),
+    )
+    item = Chunk(
+        text="本文",
+        index=0,
+        start_offset=0,
+        end_offset=2,
+        metadata={"engine_search_text": "検索用の文脈と本文", "section_path": "節 A"},
+    )
+    contextualized = ingestion_module._chunks_with_context_headers(
+        [item],
+        document_title="文書 A",
+        enabled=enabled,
+    )
+    expected = "文書 A > 節 A\n検索用の文脈と本文" if enabled else "検索用の文脈と本文"
+    assert pipeline._chunk_embedding_inputs(contextualized) == [expected]
+    assert engine_search_text(contextualized[0].metadata) == expected
+    assert contextualized[0].text == "本文"
+    # OFF は保存済みのヘッダも embedding に追加しない。
+    if not enabled:
+        item.metadata["context_header"] = "古いヘッダ"
+        assert pipeline._chunk_embedding_inputs([item]) == ["検索用の文脈と本文"]

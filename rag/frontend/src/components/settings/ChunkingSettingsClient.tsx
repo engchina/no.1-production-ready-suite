@@ -431,24 +431,22 @@ function ParamsCard({
       </CardHeader>
       <CardContent>
         <FormGrid>
-          {!smallToBig ? (
-            <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-surface p-3 col-span-full">
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-fg">
-                  {t("settings.chunking.params.contextHeader")}
-                </div>
-                <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-                  {t("settings.chunking.params.contextHeaderHint")}
-                </p>
+          <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-surface p-3 col-span-full">
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-fg">
+                {t("settings.chunking.params.contextHeader")}
               </div>
-              <Switch
-                checked={form.context_header_enabled}
-                disabled={saving}
-                aria-label={t("settings.chunking.params.contextHeader")}
-                onCheckedChange={(checked) => onChange({ context_header_enabled: checked })}
-              />
+              <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+                {t("settings.chunking.params.contextHeaderHint")}
+              </p>
             </div>
-          ) : null}
+            <Switch
+              checked={form.context_header_enabled}
+              disabled={saving}
+              aria-label={t("settings.chunking.params.contextHeader")}
+              onCheckedChange={(checked) => onChange({ context_header_enabled: checked })}
+            />
+          </div>
           {smallToBig
             ? SMALL_TO_BIG_PARAMS.map((spec) => (
                 <NumberField

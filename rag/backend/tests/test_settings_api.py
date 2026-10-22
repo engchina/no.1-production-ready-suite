@@ -3618,3 +3618,41 @@ def test_upload_storage_check_reports_stages_without_saving(
     ]
     assert not env_file.exists() or "missing-bucket" not in env_file.read_text(encoding="utf-8")
     assert settings.object_storage_bucket != "missing-bucket"
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_entity_index_settings_persist_and_follow_pipeline_defaults(
+    monkeypatch: MonkeyPatch, tmp_path: Path, enabled: bool
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_entity_index_enabled", not enabled)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    response = client.patch("/api/settings/entity-index", json={"enabled": enabled})
+    assert response.status_code == 200
+    assert response.json()["data"] == {"enabled": enabled}
+    assert settings.rag_entity_index_enabled is enabled
+    assert f"RAG_ENTITY_INDEX_ENABLED={str(enabled).lower()}" in env_file.read_text()
+    assert client.get("/api/settings/entity-index").json()["data"] == {"enabled": enabled}
+    defaults = client.get("/api/settings/pipeline").json()["data"]["recipe_defaults"]
+    assert defaults["entity_index_enabled"] is enabled
+
+
+def test_entity_index_settings_require_an_explicit_value() -> None:
+    assert client.patch("/api/settings/entity-index", json={}).status_code == 422
+
+
+def test_entity_index_settings_keep_runtime_on_save_failure(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_entity_index_enabled", False)
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=500, detail="設定を保存できませんでした。")
+
+    monkeypatch.setattr(settings_routes, "_write_env_values", fail)
+    response = client.patch("/api/settings/entity-index", json={"enabled": True})
+    assert response.status_code == 500
+    assert settings.rag_entity_index_enabled is False

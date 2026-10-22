@@ -21,10 +21,10 @@ const RECIPE_DEFAULTS = {
   chunk_size: 800,
   chunk_overlap: 120,
   chunk_min_chars: 120,
-  chunk_context_header_enabled: true,
+  chunk_context_header_enabled: false,
   graph_profile: "off",
-  // 実体の索引は全体の既定で有効（#1388）。
-  entity_index_enabled: true,
+  // 名称・別名の索引の全体の既定は OFF（#3008）。
+  entity_index_enabled: false,
   entity_name_columns: [],
   entity_attribute_columns: [],
   heading_level_inference_enabled: false,
@@ -110,6 +110,12 @@ test("取込・回答設定の概要ハブが工程をフェーズ別カード�
       .getByRole("link", { name: "関係情報の構築 の設定を開く" })
   ).toHaveAttribute("href", "/settings/graph");
 
+  const ingestion = page.getByRole("region", { name: "ナレッジ構築" });
+  await expect(ingestion.getByRole("link", { name: "名称・別名の索引 の設定を開く" })).toContainText("5.");
+  await expect(ingestion.getByRole("link", { name: "関係情報の構築 の設定を開く" })).toContainText("6.");
+  await expect(page.getByRole("link", { name: "検索方法 の設定を開く" })).toContainText("7.");
+  await expect(page.getByRole("link", { name: "評価の基準 の設定を開く" })).toContainText("10.");
+
   // カードから実際に詳細設定へ遷移できる。
   await page.getByRole("link", { name: "文書分割 の設定を開く" }).click();
   await expect(page).toHaveURL(/\/settings\/chunking$/);
@@ -148,7 +154,7 @@ test("サイドバーの取込・回答設定の名前と順番は設定の概�
   expect(sidebarNames).toEqual(cardNames);
 });
 
-// #528: レシピ 14 項目を、選択中レシピの設定と同じ処理順で出す（実体の索引は #1388）。
+// #528: レシピ 14 項目を、選択中レシピの設定と同じ処理順で出す（名称・別名の索引は #1388）。
 const PROCESSING_ORDER = [
   "preprocess_profile",
   "auto_parse_after_preprocess_enabled",
@@ -162,12 +168,13 @@ const PROCESSING_ORDER = [
   "chunking_strategy",
   "chunk_context_header_enabled",
   "auto_index_after_chunk_enabled",
+  "vector_index",
   "entity_index_enabled",
   "graph_profile",
 ];
 
 for (const scheme of ["light", "dark"] as const) {
-  test(`取込の流れは 14 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
+  test(`取込の流れは検索インデックスと 14 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
     page,
   }, testInfo) => {
     await page.addInitScript((theme) => {
@@ -222,11 +229,12 @@ for (const scheme of ["light", "dark"] as const) {
       items.getByRole("link", { name: "見出しの階層の推定（AI） を設定する画面を開く" })
     ).toHaveAttribute("href", "/settings/parser-adapters#post-parse-heading-levels");
     await expect(items.locator('[data-config-field="heading_level_inference_enabled"]')).toContainText("無効");
-    await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(10);
-    // 実体の索引は全体の既定で有効（文書ごとに無効にできる。変える画面は持たない。#1388）。
+    await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(12);
+    // 索引構築の全体の既定は OFF。専用の設定画面から変更できる。
     const entityIndex = items.locator('[data-config-field="entity_index_enabled"]');
-    await expect(entityIndex).toContainText("有効");
-    await expect(entityIndex.getByRole("link")).toHaveCount(0);
+    await expect(entityIndex).toContainText("無効");
+    await expect(entityIndex.getByRole("link")).toHaveAttribute("href", "/settings/entity-index");
+    await expect(items.locator('[data-config-field="vector_index"]').getByRole("link")).toHaveAttribute("href", "/settings/vector-index");
 
     // 工程の間の 3 つのスイッチ。
     const parseGate = items.getByRole("switch", { name: "ファイル準備後に抽出へ進む" });

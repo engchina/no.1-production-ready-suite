@@ -969,7 +969,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_chunk_context_header_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
             "embedding 入力の先頭へ「文書名 > section_path」の文脈ヘッダを前置する"
             "(Anthropic Contextual Retrieval の決定論版)。保存 chunk 本文・引用表示は変えない。"
@@ -997,12 +997,12 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description="交差参照で 1 回の検索に足す参照先の chunk 数の上限(#1280)。",
     )
     rag_entity_index_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
             "取込の索引の保存の後に、chunk から実体（表の行の名前・属性の値、本文の定義の形・"
             "言及）と「実体と chunk の関連」を決定的に抜き出し、Oracle の rag_entities / "
-            "rag_entity_aliases / rag_entity_chunks に保存する（#1362。既定 ON（#1388）。文書"
-            "レシピの「実体の索引」で文書ごとに無効にできる。LLM は使わない）。回答の検索は、"
+            "rag_entity_aliases / rag_entity_chunks に保存する。既定 OFF。全体の設定と文書"
+            "レシピの「名称・別名の索引」で構築を選ぶ。LLM は使わない。回答の検索は、"
             "この表との SQL の join で関連する chunk を 1 段だけ足す（検索・回答プロファイルの"
             " entity_expansion_enabled。#1388）。"
         ),

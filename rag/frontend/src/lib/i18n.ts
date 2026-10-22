@@ -165,6 +165,14 @@ export const ja = {
   // 評価を実行する「品質評価」（改善・運用）と区別する（#409）。
   "nav.settingsEvaluation": "評価の基準",
   "nav.settingsEvaluation.sidebar": "評価の基準",
+  "nav.settingsEntityIndex": "名称・別名の索引",
+  "settings.entityIndex.subtitle": "文書中の名称・別名と根拠のつながりを記録するかを選びます。",
+  "settings.entityIndex.description": "名称・別名と文書の断片の関連を記録します。Embedding（ベクトル化）とは別の処理で、AI は使いません。検索で利用するかは、検索・回答プロファイルの「名称・別名でつながる根拠を 1 段広げる」で設定します。",
+  "settings.entityIndex.enabled": "名称・別名の索引を構築する",
+  "settings.entityIndex.hint": "既定は無効です。文書レシピで個別に上書きできます。変更は次回の索引構築から適用され、既存の文書へ反映するには索引から再処理します。",
+  "settings.entityIndex.saved": "名称・別名の索引の設定を保存しました。",
+  "settings.entityIndex.error": "名称・別名の索引の設定を取得・保存できませんでした。",
+  "settings.entityIndex.actions": "名称・別名の索引の設定の操作",
   "nav.settingsGraph": "関係情報の構築",
   "nav.settingsModel": "モデル設定",
   "nav.settingsModel.sidebar": "モデル",
@@ -1201,7 +1209,7 @@ export const ja = {
   "settings.language.field.native_operation_words.help": "画像の根拠を選ぶとき、原文の操作の文とみなす語です（例: 入力、押、選択）。",
   "settings.language.field.grounding_stopwords": "根拠との重なりに数えない語",
   "settings.language.field.grounding_stopwords.help": "安全チェックで回答と根拠の重なりを数えるとき、数えない一般的な語です（例: 根拠、質問、です）。",
-  "settings.language.section.entity_cues": "実体の索引の手がかり",
+  "settings.language.section.entity_cues": "名称・別名の索引の手がかり",
   "settings.language.section.entity_cues.help": "表の行・本文から実体（システム・部署・属性の値）と別名を抜き出すときの語です。取込で使うので、変えたら文書を分割し直すと反映します。",
   "settings.language.field.id_column_words": "ID の列名の終わり",
   "settings.language.field.id_column_words.help": "この語で終わる列を ID の列とみなします（例: ID、番号、コード）。",
@@ -1234,9 +1242,9 @@ export const ja = {
   "settings.language.field.subject_topic_particles": "主語の後の助詞",
   "settings.language.field.subject_topic_particles.help": "「経理部の承認者は」の「は」です。",
   "settings.language.field.sentence_marks": "文末の字（実体）",
-  "settings.language.field.sentence_marks.help": "実体の索引で文の区切りとみなす字です（例: 。）。",
+  "settings.language.field.sentence_marks.help": "名称・別名の索引で文の区切りとみなす字です（例: 。）。",
   "settings.language.field.clause_marks": "読点（実体）",
-  "settings.language.field.clause_marks.help": "実体の索引で句の区切りとみなす字です（例: 、）。",
+  "settings.language.field.clause_marks.help": "名称・別名の索引で句の区切りとみなす字です（例: 、）。",
   "settings.language.field.entity_script_chars": "実体の名前の文字",
   "settings.language.field.entity_script_chars.help": "実体の名前に使う文字の範囲です（ひらがな・カタカナ・漢字など）。",
   "settings.language.field.entity_kana_kanji_chars": "実体のカナ・漢字",
@@ -1497,7 +1505,7 @@ export const ja = {
   "settings.chunking.params.minCharsHint": "0 で微小 chunk の吸収を無効化します。",
   "settings.chunking.params.contextHeader": "文脈ヘッダを検索対象へ追加",
   "settings.chunking.params.contextHeaderHint":
-    "文書名と章節パスを embedding / キーワード索引へ追加します。表示本文と引用は変わりません。",
+    "既定は無効です。文書名と章節パスを embedding / キーワード索引へ追加します。親子階層の検索用の文脈は維持し、このヘッダの追加だけを切り替えます。表示本文と引用は変わりません。",
   "settings.chunking.actions.save": "保存",
   "settings.chunking.actions.label": "文書分割の設定の操作",
   "settings.chunking.actions.saved": "文書分割の設定を保存しました。",
@@ -2141,12 +2149,12 @@ export const ja = {
   "searchAnswerProfiles.field.guideStepMaxQueries": "手順ごとの検索の上限",
   "searchAnswerProfiles.field.guideStepMaxQueriesHelper":
     "1 回の回答で手順ごとに探す回数の上限です（参照の頁に絞った検索を含む）。主の検索の後に足す検索の合計の枠も超えません。継承時は検索方法の現在の設定を使います。",
-  "searchAnswerProfiles.entityExpansion.title": "実体でつながる根拠",
-  "searchAnswerProfiles.entityExpansion.enabled": "実体でつながる根拠を 1 段広げる",
+  "searchAnswerProfiles.entityExpansion.title": "名称・別名でつながる根拠",
+  "searchAnswerProfiles.entityExpansion.enabled": "名称・別名でつながる根拠を 1 段広げる",
   "searchAnswerProfiles.entityExpansion.helper":
-    "質問と上位の根拠に出てくるシステム・部署の略号などの実体から、台帳の行やその略号を定義した規程など、実体でつながる根拠を 1 段だけ加えます。文書レシピで実体の索引を有効にした文書にだけ効きます。AI の呼び出しは増えません。既定は有効で、このプロファイルの検索だけに効きます。",
+    "質問と上位の根拠に出てくる名称・別名（システム名・部署の略号など）から、台帳の行やその略号を定義した規程など、名称・別名でつながる根拠を 1 段だけ加えます。文書レシピで名称・別名の索引を有効にした文書にだけ効きます。AI の呼び出しは増えません。既定は有効で、このプロファイルの検索だけに効きます。",
   "searchAnswerProfiles.entityExpansion.noEntityDocuments":
-    "参照先のナレッジベースに、実体の索引のある文書がありません。文書レシピで実体の索引を有効にすると効きます。",
+    "参照先のナレッジベースに、名称・別名の索引のある文書がありません。文書レシピで名称・別名の索引を有効にすると効きます。",
   "searchAnswerProfiles.entityExpansion.maxChunks": "1 回の検索で加える根拠の上限",
   "searchAnswerProfiles.entityExpansion.maxChunksHelper":
     "多くすると関係の遠い根拠も回答の材料に入ります。",
@@ -2550,9 +2558,9 @@ export const ja = {
   "knowledgeBases.adapter.field.headingLevels": "見出しの階層の推定（AI）",
   "knowledgeBases.adapter.field.headingLevels.hint":
     "Docling の解析結果で、しおりの階層を使えず、番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす場合に、見出しの文字列を OCI Enterprise AI にまとめて送り、階層を推定します。通常は文書ごとに 1 回で、再試行する場合があります。変えると解析からやり直します。",
-  "knowledgeBases.adapter.field.entityIndex": "実体の索引",
+  "knowledgeBases.adapter.field.entityIndex": "名称・別名の索引",
   "knowledgeBases.adapter.field.entityIndex.hint":
-    "索引の後に、表の行（ID・名称・略称など）と本文の定義の形（「略号「経」: 経理部」など）から、システム・部署などの実体とその根拠を記録します。AI は使いません。全体の既定は有効で（列の指定が無ければ列名で決めます）、使わない文書は無効にします。記録した実体を検索に使うのは、検索・回答プロファイルで「実体でつながる根拠を 1 段広げる」を有効にしたときだけです。変えると索引から作り直します。",
+    "索引の後に、表の行（ID・名称・略称など）と本文の定義の形（「略号「経」: 経理部」など）から、名称・別名（システム名・部署名など）とその根拠を記録します。AI は使いません。全体の既定は無効です。設定画面で既定を選び、文書ごとに上書きできます（列の指定が無ければ列名で決めます）。記録した名称・別名を検索に使うのは、検索・回答プロファイルで「名称・別名でつながる根拠を 1 段広げる」を有効にしたときだけです。変えると索引から作り直します。",
   "knowledgeBases.adapter.field.autoParseAfterPreprocess": "ファイル準備後に抽出へ進む",
   "knowledgeBases.adapter.field.autoChunkAfterExtract": "抽出後に Chunk 作成へ進む",
   "knowledgeBases.adapter.field.autoIndexAfterChunk": "Chunk 後に Embedding / 索引へ進む",
@@ -3116,7 +3124,7 @@ export const ja = {
   "flow.buildConfig.loading": "構築設定を読み込んでいます",
   "flow.buildConfig.loadError": "構築設定を取得できません",
   "flow.buildConfig.loadErrorHint": "時間をおいて再試行してください。",
-  "documents.entityIndex.columns.title": "実体の索引の列",
+  "documents.entityIndex.columns.title": "名称・別名の索引の列",
   "documents.entityIndex.columns.names": "名前の列",
   "documents.entityIndex.columns.names.hint":
     "表の行の名前（同じ実体の別名）にする列名を「、」で区切って入力します。空欄なら列名で決めます（ID・正式名・名称・略称など）。",

@@ -27,7 +27,7 @@ describe("選択中レシピの設定の項目と並び順", () => {
       "文書分割",
       "文脈ヘッダを検索対象へ追加",
       "Chunk 後に Embedding / 索引へ進む",
-      "実体の索引",
+      "名称・別名の索引",
       "関係情報の構築",
     ]);
   });
@@ -67,7 +67,7 @@ describe("選択中レシピの設定の項目と並び順", () => {
 
 // #528: 「グローバル設定に従う」の各行から、その全体の既定を変える画面へ移動する。
 describe("グローバル設定を開くリンク", () => {
-  it("実体の索引のほかの 13 項目それぞれに、全体の既定を変える画面がある", () => {
+  it("すべての項目それぞれに、全体の既定を変える画面がある", () => {
     expect(
       Object.fromEntries(RECIPE_CONFIG_ITEMS.map((item) => [item.field, globalSettingsHref(item)]))
     ).toEqual({
@@ -83,8 +83,8 @@ describe("グローバル設定を開くリンク", () => {
       chunking_strategy: "/settings/chunking",
       chunk_context_header_enabled: "/settings/chunking",
       auto_index_after_chunk_enabled: "/settings/pipeline#pipeline-gate-auto-index",
-      // 実体の索引は文書ごとに選ぶ（全体の既定は env だけ。画面を持たない。#1388）。
-      entity_index_enabled: null,
+      // 名称・別名の索引も全体の既定を設定画面で選ぶ。
+      entity_index_enabled: "/settings/entity-index",
       graph_profile: "/settings/graph",
     });
   });
