@@ -7,6 +7,7 @@
 """
 
 from collections.abc import Callable, Mapping
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -110,3 +111,56 @@ async def test_activate_recipe_chunk_set_records_materialized_revision(
     assert activated["status"] == "INDEXED"
     assert activated["active_chunk_set_id"] == chunk_set_id
     assert activated["materialized_revision"] == expected_revision
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_clone_active_recipe_chunks_preserves_metadata_and_keeps_old_active() -> None:
+    from app.rag.chunking import Chunk
+    from app.schemas.extraction import StructuredExtraction
+
+    client = OracleClient()
+    document = await client.create_document(
+        file_name="synthetic-reindex.txt",
+        object_storage_path="synthetic-reindex.txt",
+        content_type="text/plain",
+    )
+    recipe = await client.ensure_default_document_recipe(document.id)
+    recipe_id = str(recipe["recipe_id"])
+    source = f"source_{uuid4().hex[:16]}"
+    target = f"target_{uuid4().hex[:16]}"
+    await client.upsert_chunk_set(chunk_set_id=source, document_id=document.id, recipe_id=recipe_id)
+    await client.save_chunk_preview(
+        document.id,
+        StructuredExtraction(raw_text="合成の本文"),
+        [
+            Chunk(
+                index=0,
+                text="合成の本文",
+                start_offset=0,
+                end_offset=5,
+                metadata={
+                    "source_element_ids": cast(Any, ["element-1", "element-2"]),
+                    "page_start": 2,
+                },
+            )
+        ],
+        chunk_set_id=source,
+    )
+    await client.mark_chunk_set_indexed(chunk_set_id=source, chunk_count=1, vector_count=0)
+    await client.activate_recipe_chunk_set(recipe_id=recipe_id, chunk_set_id=source)
+    await client.upsert_chunk_set(chunk_set_id=target, document_id=document.id, recipe_id=recipe_id)
+    await client.clone_recipe_chunk_set_chunks(
+        recipe_id=recipe_id,
+        source_chunk_set_id=source,
+        target_chunk_set_id=target,
+    )
+    original = await client.list_chunk_set_chunks(source)
+    copied = await client.list_chunk_set_chunks(target)
+    assert len(original) == len(copied) == 1
+    assert copied[0].text == original[0].text
+    assert copied[0].chunk_id != original[0].chunk_id
+    assert copied[0].metadata["chunk_id"] == copied[0].chunk_id
+    assert copied[0].metadata["chunk_set_id"] == target
+    assert copied[0].metadata["source_element_ids"] == ["element-1", "element-2"]
+    active = await client.get_document_recipe(document.id, recipe_id)
+    assert active is not None and active["active_chunk_set_id"] == source

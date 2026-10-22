@@ -93,9 +93,9 @@ export type AnswerDiagnostics = {
   rewrittenQuestion: string;
   generatedQueries: string[];
   /**
-   * 関係情報で加えた根拠（#2055）。使った見出し（entity）ごとの加えた数。加えていなければ null。
+   * 関係情報で根拠を加えた処理の記録（0 件も含む）。処理の記録がなければ null。
    */
-  graphExpansion: { addedCount: number; entities: { name: string; addedCount: number }[] } | null;
+  graphExpansion: { addedCount: number; status: string; graphAvailable: boolean | null; plannedCount: number; skippedExistingCount: number; entities: { name: string; addedCount: number }[] } | null;
   /**
    * 使ったモデル（#649）。LLM（既定のテキストモデル）は質問の理解・拡張と回答の生成、vision は根拠の原画像を
    * 添付して答えたときの既定の Vision モデル（添付しなければ null）、rerank は無効なら空。
@@ -244,8 +244,12 @@ export function parseAnswerDiagnostics(
 function parseGraphExpansion(value: unknown): AnswerDiagnostics["graphExpansion"] {
   const item = record(value);
   const addedCount = num(item.added_count) ?? 0;
-  if (addedCount <= 0) return null;
+  if (Object.keys(item).length === 0) return null;
   return {
+    status: typeof item.status === "string" ? item.status : "completed",
+    graphAvailable: typeof item.graph_available === "boolean" ? item.graph_available : null,
+    plannedCount: num(item.planned_count) ?? addedCount,
+    skippedExistingCount: num(item.skipped_existing_count) ?? 0,
     addedCount,
     entities: list(item.entities)
       .map((entity) => {

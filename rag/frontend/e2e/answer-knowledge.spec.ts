@@ -372,7 +372,7 @@ for (const viewport of [
   });
 }
 
-async function mockAnswerStream(page: Page) {
+async function mockAnswerStream(page: Page, graphExpansion?: Record<string, unknown>) {
   const answerDiagnostics = {
     confidence: "high",
     needs_human_review: true,
@@ -380,7 +380,7 @@ async function mockAnswerStream(page: Page) {
     generated_queries: ["受注 取消 手順"],
     execution_steps: [{ name: "質問の理解", status: "complete", elapsed_seconds: 0.3, llm_calls: 1 }],
     // 関係情報で加えた根拠（#2055）。処理の経過の「詳細」に件数と使った見出しを出す。
-    graph_expansion: {
+    graph_expansion: graphExpansion ?? {
       added_count: 2,
       entities: [{ entity: "manual.pdf > 第 3 章 取消の手順", added_count: 2 }],
     },
@@ -586,3 +586,22 @@ test("回答ルールに回答前の確認と章節を設定して保存でき�
   });
   await expectNoPageOverflow(page);
 });
+
+
+for (const graph of [
+  { status: "completed", graph_available: true, added_count: 0, skipped_existing_count: 3 },
+  { status: "completed", graph_available: false, added_count: 0 },
+]) {
+  test(`関係情報の追加0件でも処理の詳細に理由を表示する (${graph.graph_available})`, { tag: "@responsive" }, async ({ page }) => {
+    await mockCommon(page);
+    await mockSearchAnswerProfileApi(page, { suggestions: [faqSuggestion] });
+    await mockAnswerStream(page, graph);
+    await selectSearchAnswerProfileAndAsk(page, "合成の操作方法を確認する");
+    await page.getByRole("button", { name: "類似問を使用しない" }).click();
+    const panel = await openAnswerProcessDetails(page, "search-run-progress");
+    const diagnostic = panel.getByTestId("answer-graph-expansion");
+    await expect(diagnostic).toContainText("0 件");
+    await expect(diagnostic).toContainText(graph.graph_available ? "既に候補・文脈に含まれています" : "利用できる関係情報がありません");
+    await page.screenshot({ path: test.info().outputPath("graph-zero-diagnostic.png") });
+  });
+}

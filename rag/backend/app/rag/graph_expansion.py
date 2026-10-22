@@ -170,6 +170,7 @@ async def plan_graph_expansion(
     seed_chunks: Sequence[RetrievedChunk],
     exclude_chunk_ids: set[str],
     max_chunks: int,
+    diagnostics: dict[str, object] | None = None,
 ) -> list[GraphExpansion]:
     """質問と検索の上位の chunk から、関係情報で足す chunk を順に返す（名前の一致 → 広げ）。
 
@@ -185,11 +186,9 @@ async def plan_graph_expansion(
         if seeds
         else []
     )
+    available_rows = await store.graph_name_entities(filters, limit=GRAPH_NAME_CANDIDATE_LIMIT)
     name_rows = (
-        _name_matches(
-            await store.graph_name_entities(filters, limit=GRAPH_NAME_CANDIDATE_LIMIT),
-            question_key,
-        )
+        _name_matches(available_rows, question_key)
         if len(question_key) >= GRAPH_NAME_MIN_CHARS
         else []
     )
@@ -197,6 +196,17 @@ async def plan_graph_expansion(
     entity_ids = list(
         dict.fromkeys([*(row.entity_id for row, _ in name_rows), *neighbor_rows.values()])
     )
+    if diagnostics is not None:
+        diagnostics.update(
+            {
+                "status": "completed",
+                "graph_available": bool(seed_rows or available_rows),
+                "seed_entity_ids": list(set(neighbor_rows.values())),
+                "name_entity_ids": list({row.entity_id for row, _ in name_rows}),
+                "planned_chunk_ids": [],
+                "skipped_existing_chunk_ids": [],
+            }
+        )
     if not entity_ids:
         return []
     chunk_rows = await store.graph_entity_chunks(
@@ -238,6 +248,11 @@ async def plan_graph_expansion(
                     },
                 )
             )
+    if diagnostics is not None:
+        candidates = {item.chunk.chunk_id for item in [*name_items, *neighbor_items]}
+        candidates.difference_update(chunk.chunk_id for chunk in seeds)
+        diagnostics["planned_chunk_ids"] = sorted(candidates)
+        diagnostics["skipped_existing_chunk_ids"] = sorted(candidates & exclude_chunk_ids)
     return _take_balanced(name_items, neighbor_items, exclude=exclude_chunk_ids, limit=max_chunks)
 
 

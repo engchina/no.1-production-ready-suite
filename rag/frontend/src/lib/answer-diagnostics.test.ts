@@ -120,14 +120,18 @@ describe("parseAnswerDiagnostics", () => {
         },
       })?.graphExpansion,
     ).toEqual({
+      status: "completed",
+      graphAvailable: null,
+      plannedCount: 3,
+      skippedExistingCount: 0,
       addedCount: 3,
       entities: [
         { name: "手順書 > 第 2 章 作業の準備", addedCount: 2 },
         { name: "手順書 > 第 4 章 作業の記録", addedCount: 1 },
       ],
     });
-    // 加えていない・記録の無い回答は null。
-    expect(parseAnswerDiagnostics({ graph_expansion: { added_count: 0 } })?.graphExpansion).toBeNull();
+    // 0 件でも実行の記録は残し、記録のない回答と区別する。
+    expect(parseAnswerDiagnostics({ graph_expansion: { added_count: 0 } })?.graphExpansion).toMatchObject({ addedCount: 0, status: "completed" });
     expect(parseAnswerDiagnostics({})?.graphExpansion).toBeNull();
   });
 
