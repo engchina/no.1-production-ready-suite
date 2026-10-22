@@ -202,13 +202,14 @@ function emptyQueryConfig(): KnowledgeBaseQueryConfig {
 
 /** 旧保存 JSON に無い項目は null(継承)で補う。 */
 function normalizeSearchAnswerProfileConfig(config: SearchAnswerProfileConfig): SearchAnswerProfileConfig {
+  const retained = { ...config };
+  delete (retained as Record<string, unknown>).spec_then_contact;
   return {
-    ...config,
+    ...retained,
     query: { ...emptyQueryConfig(), ...config.query },
     clarification_policy: config.clarification_policy ?? "confirm",
     language_pack: config.language_pack ?? {},
     contact_override: config.contact_override ?? "",
-    spec_then_contact: config.spec_then_contact ?? false,
   };
 }
 
@@ -226,7 +227,6 @@ function emptyConfig(): SearchAnswerProfileConfig {
     clarification_policy: "confirm",
     language_pack: {},
     contact_override: "",
-    spec_then_contact: false,
   };
 }
 
@@ -1184,7 +1184,6 @@ function SearchAnswerProfileEditor({
               {/* 回答の末尾の窓口の案内（#2400。回答の注意書きの窓口を、このプロファイルの回答だけ上書きする）。 */}
               <ContactGuidanceFieldset
                 contactOverride={config.contact_override ?? ""}
-                specThenContact={config.spec_then_contact ?? false}
                 disabled={locked}
                 onChange={(patch) => setConfig((current) => ({ ...current, ...patch }))}
               />

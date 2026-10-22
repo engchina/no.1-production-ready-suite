@@ -83,9 +83,6 @@ class SearchAnswerProfileConfig(BaseModel):
     # 回答の注意書きの窓口の上書き（#2400。業務ごとに窓口が違うとき。窓口の名前・連絡の方法の
     # 1 行）。空ならシステム設定の窓口。業務ガイドの人への引き継ぎの窓口（handoff.contact）が優先。
     contact_override: str = Field(default="", max_length=CONTACT_OVERRIDE_MAX_CHARS * 2)
-    # 資料で答えた回答の窓口の案内を「資料から分かる仕様を示し、当てはまらなければ窓口へ」の形に
-    # するか（#2400。既定 OFF）。
-    spec_then_contact: bool = False
 
     @field_validator("contact_override")
     @classmethod
@@ -177,12 +174,11 @@ def resolve_search_answer_profile_settings(
     if config.language_pack:
         settings = settings.model_copy(update={"rag_language_pack_overrides": config.language_pack})
         applied = True
-    if config.contact_override or config.spec_then_contact:
+    if config.contact_override:
         # 回答の注意書きの窓口（#2400）。検索・回答の挙動は変えないので applied にしない。
         settings = settings.model_copy(
             update={
                 "rag_answer_contact_override": config.contact_override,
-                "rag_answer_spec_then_contact": config.spec_then_contact,
             }
         )
     return settings, applied

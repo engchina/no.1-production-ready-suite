@@ -1261,7 +1261,8 @@ async function mockKnowledgeBases(page: Page) {
 
 async function mockDefaultSearchAnswerProfile(
   page: Page,
-  onUpdate: (body: Record<string, unknown>) => void
+  onUpdate: (body: Record<string, unknown>) => void,
+  initialConfig: Record<string, unknown> = {}
 ) {
   const summary: SearchAnswerProfileSummaryFixture = {
     id: "bv-default",
@@ -1278,6 +1279,7 @@ async function mockDefaultSearchAnswerProfile(
     knowledge_base_ids: ["kb-default"],
     query: {
     },
+    ...initialConfig,
   };
   let savedConfig: Record<string, unknown> = config;
   let savedDescription = summary.description;
@@ -1540,19 +1542,19 @@ test("確定の行はフォームの末尾に置き、スクロールしても�
   await expectNoPageOverflow(page);
 });
 
-// #2400: 回答の末尾の窓口の案内（回答の注意書きの窓口の上書きと「仕様を示し、当てはまらなければ窓口へ」の形）。
+// 固定文の窓口の案内は上書きだけを提供し、旧方針を再保存しない。
 for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`窓口の上書きと「仕様を示し、当てはまらなければ窓口へ」を検索・回答プロファイルに保存できる (${viewport.name})`, { tag: "@responsive" }, async ({
+  test(`窓口の上書きを保存し、旧案内の方針を再保存しない (${viewport.name})`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     let updateBody = null as Record<string, unknown> | null;
     await mockDefaultSearchAnswerProfile(page, (body) => {
       updateBody = body;
-    });
+    }, { spec_then_contact: true });
     await page.goto("/search-answer-profiles?id=bv-default");
     const section = page.getByTestId("search-answer-profile-contact");
     await expect(section.getByText("回答の末尾の窓口の案内", { exact: true })).toBeVisible();
@@ -1565,10 +1567,8 @@ for (const viewport of [
     await expect(effective).toHaveText("有効な窓口: 窓口 A（システム設定の窓口を継承）");
     await expect(contact).toHaveAccessibleDescription(/有効な窓口: 窓口 A/);
     expect(await findClippedPlaceholders(page)).toEqual([]);
-    const specThenContact = section.getByRole("switch", {
-      name: "資料から分かる仕様を示し、当てはまらなければ窓口へ案内する",
-    });
-    await expect(specThenContact).toHaveAttribute("aria-checked", "false");
+    await expect(section.getByRole("switch")).toHaveCount(0);
+    await expect(section).toContainText("解決しない場合は、〈窓口〉へお問い合わせください。");
 
     // システム設定と同じ値は、作業を止めずに「空にすると継承する」と案内する。
     const same = section.getByTestId("search-answer-profile-contact-same");
@@ -1578,13 +1578,12 @@ for (const viewport of [
     await contact.fill("窓口 B（内線 1234）");
     await expect(same).toHaveCount(0);
     await expect(effective).toHaveText("有効な窓口: 窓口 B（内線 1234）（このプロファイルの上書き）");
-    await specThenContact.click();
-    await expect(specThenContact).toHaveAttribute("aria-checked", "true");
     await page.getByRole("textbox", { name: "説明", exact: true }).fill("全社共通の検索設定");
     await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
     await expect
-      .poll(() => updateBody?.config as { contact_override?: string; spec_then_contact?: boolean } | undefined)
-      .toMatchObject({ contact_override: "窓口 B（内線 1234）", spec_then_contact: true });
+      .poll(() => updateBody?.config as { contact_override?: string } | undefined)
+      .toMatchObject({ contact_override: "窓口 B（内線 1234）" });
+    expect(updateBody?.config).not.toHaveProperty("spec_then_contact");
     await expectNoPageOverflow(page);
   });
 }
