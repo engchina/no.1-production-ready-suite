@@ -5015,6 +5015,10 @@ def run_round(
             subject="印の付いた主張",
             distinctive_ratio=True,
         )
+    # 要約にだけ書いた数値も、本文の説明と同じ数値の裏付けの検査に掛ける。根拠のどこにも無い数値（資料の外から
+    # 足した値）や表示例・画像の説明にだけある値を断定する要約に、値つきの警告を付ける（#3090）。
+    if not summary_warning and (value_reason := unsupported_document_value_claim(str(draft.summary), spans, question)):
+        summary_warning = f"値：{value_reason}"
     # 根拠と矛盾して外した item の主張を summary が断定していれば、summary は中立文にする。本文から外しても、
     # 冒頭の要約から同じ誤案内が残っていた (#1013)。
     summary_reason = summary_asserts_denied(

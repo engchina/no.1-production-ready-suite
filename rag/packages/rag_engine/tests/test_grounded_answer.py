@@ -2378,6 +2378,35 @@ class AbsentValueMarkTest(unittest.TestCase):
         self.assertTrue(mark["reasons"][0]["detail"].startswith("値：根拠の原文に無い数値（5000）"))
 
 
+class SummaryValueTest(unittest.TestCase):
+    """要約にだけ書いた根拠に無い数値に警告を付ける（#3090）。"""
+
+    QUESTION = "カードキーは使えますか？"
+    TEXT = "カードキーは夜間に限って利用できます。一回の利用の上限は二千円です。"
+
+    def _run(self, summary):
+        ctx = context(record(0, self.TEXT, "カードキー"))
+        eid = ids(ctx, self.QUESTION)[self.TEXT]
+        body = "カードキーは夜間に限って利用できます。"
+        model = FakeModel(
+            [draft(item(eid, body, body, request_id="Q1"), summary=summary)],
+            [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")], summary_supported=True)],
+        )
+        return run(model, ctx, self.QUESTION).response
+
+    def test_summary_with_a_value_absent_from_the_sources_gets_a_warning(self):
+        summary = "夜間に限って利用できます（1回あたり上限5,000円）。"
+        result = self._run(summary)
+        marks = {mark["text"]: mark for mark in result.envelope["passage_marks"]}
+        self.assertEqual([reason["code"] for reason in marks[summary]["reasons"]], ["summary_unaudited"])
+        self.assertIn("根拠の原文に無い数値（5000）", marks[summary]["reasons"][0]["detail"])
+
+    def test_summary_with_a_value_from_the_sources_has_no_warning(self):
+        # 根拠の漢数字の値を算用数字で書いた要約には付けない。
+        result = self._run("夜間に限って利用できます（1回あたり上限2,000円）。")
+        self.assertEqual(result.envelope["passage_marks"], [])
+
+
 class SummaryDeniedClaimTest(unittest.TestCase):
     """根拠と矛盾して外した主張を summary が断定していれば中立文に、印の付いた主張なら警告にし、要求の充足も
     外した後の item と整合させる (#1013・#2738)。"""
