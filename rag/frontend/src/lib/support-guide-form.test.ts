@@ -417,3 +417,27 @@ describe("取込の差分と下書きで試す", () => {
     });
   });
 });
+
+describe("業務ガイドの参照と分岐の境界", () => {
+  it("Excel の行列上限の外を拒否する", () => {
+    for (const value of ["A1048577", "A1:B1048577", "XFE1", "ZZZ1", "D10:B3", "D3:B10", "B10:D3"]) {
+      expect(parseSheetRanges(`Sheet1!${value}`)).toBeNull();
+    }
+    expect(parseSheetRanges("Sheet1!XFD1048576")?.[0].row_start).toBe(1048576);
+  });
+
+  it("はい／いいえの分岐値は実行時に使える値だけを許可する", () => {
+    const form = guideFormFromContent(content);
+    form.conditions[0] = { ...form.conditions[0], type: "boolean", allowedValues: "" };
+    for (const value of ["invalid", "__proto__", "constructor"]) {
+      form.branches[0].values = value;
+      expect(guideFormIssues(form).some((issue) => issue.path === "branches[0].when.values")).toBe(true);
+    }
+    form.branches[0].values = "はい";
+    expect(guideFormIssues(form).some((issue) => issue.path === "branches[0].when.values")).toBe(false);
+  });
+
+  it("取り込みの順序の差分を日本語で表示する", () => {
+    expect(changeFieldLabels({section: "steps", kind: "changed", key: "step1", label: "合成の手順", fields: ["order"]})).toEqual(["並び順"]);
+  });
+});

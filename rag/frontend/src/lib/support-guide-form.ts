@@ -46,6 +46,13 @@ export const MAX_GUIDE_REFERENCES = 30;
 const MAX_PAGE = 100_000;
 /** 表計算の行の番号の上限（backend の MAX_SHEET_ROW。Excel のシートの行の数）。 */
 const MAX_SHEET_ROW = 1_048_576;
+const MAX_SHEET_COLUMN = 16_384;
+const BOOLEAN_VALUES: Record<string, string> = { true: "はい", yes: "はい", はい: "はい", false: "いいえ", no: "いいえ", いいえ: "いいえ" };
+
+export function booleanConditionValue(value: string): string | null {
+  const key = value.trim().toLowerCase();
+  return Object.hasOwn(BOOLEAN_VALUES, key) ? BOOLEAN_VALUES[key] : null;
+}
 const CELL_RANGE = /^([A-Z]{1,3})([1-9]\d{0,6})(?::([A-Z]{1,3})([1-9]\d{0,6}))?$/;
 
 export type ConditionForm = {
@@ -402,6 +409,10 @@ export function parseSheetRanges(text: string): SupportGuideSheetRange[] | null 
     if (cells) {
       const first = Number(cells[2]);
       const last = cells[4] === undefined ? first : Number(cells[4]);
+      const columnNumber = (column: string) => [...column].reduce((total, char) => total * 26 + char.charCodeAt(0) - 64, 0);
+      const firstColumn = columnNumber(cells[1]);
+      const lastColumn = columnNumber(cells[3] ?? cells[1]);
+      if (first > last || firstColumn > lastColumn || last > MAX_SHEET_ROW || lastColumn > MAX_SHEET_COLUMN) return null;
       ranges.push({
         sheet_name: sheet,
         row_start: Math.min(first, last),
@@ -642,6 +653,10 @@ export function guideFormIssues(form: GuideForm): SupportGuideIssue[] {
     if (branch.operator === "in" && values.length === 0) {
       issues.push(clientIssue(`${base}.when.values`, t("supportGuides.check.inValues")));
     }
+    const condition = form.conditions.find((item) => item.id === branch.conditionId);
+    if (branch.operator !== "unknown" && condition?.type === "boolean" && values.some((value) => booleanConditionValue(value) === null)) {
+      issues.push(clientIssue(`${base}.when.values`, t("supportGuides.check.booleanValues")));
+    }
     if (!branch.gotoStep.trim()) {
       issues.push(
         clientIssue(
@@ -823,6 +838,7 @@ export function changeSectionLabel(section: SupportGuideDiffSection): string {
 /** 変わった項目の名前（編集の画面の欄の名前）。分からない項目は backend の名前のまま。 */
 export function changeFieldLabels(change: SupportGuideChange): string[] {
   return change.fields.map((field) => {
+    if (field === "order") return t("supportGuides.change.order");
     const key = change.section === "basic" ? SECTION_LABEL[field] : FIELD_LABEL[`${change.section}.${field}`];
     return key ? t(key) : field;
   });

@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, type Locator, type Page, type Route, test } from "./fixtures/test";
 import { findClippedPlaceholders } from "../../../platform/packages/ui/e2e/layout-checks";
 import { expectNoPageOverflow, expectSearchablePanelFits, mockDatabaseReady, mockLocalAuth } from "./_helpers";
@@ -331,7 +332,7 @@ class SupportGuideApi {
                     kind: "changed",
                     key: "account",
                     label: "アカウントの種類",
-                    fields: ["allowed_values"],
+                    fields: ["allowed_values", "order"],
                   },
                   { section: "steps", kind: "added", key: "notify", label: "利用者に知らせる", fields: [] },
                   { section: "steps", kind: "removed", key: "step1", label: "本人を確かめる", fields: [] },
@@ -793,6 +794,12 @@ test("表計算の資料をシートと行で参照して保存できる", { tag
   const stepReference = stepReferences.getByRole("listitem", { name: "手順 1 の資料 1" });
   const sheets = stepReference.getByLabel("根拠のシートと行（表計算）");
   await expect(sheets).toHaveAccessibleDescription(/シート名!42-45/);
+  for (const invalid of ["Sheet1!A1048577", "Sheet1!XFE1", "Sheet1!D10:B3"]) {
+    await sheets.fill(invalid);
+    await editor.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(stepReference.getByText(/シートと行は 1 行に 1 つ/)).toBeVisible();
+    expect(api.requests.filter((item) => item.method === "POST")).toHaveLength(0);
+  }
   await sheets.fill("シートA!42-45\nシートB!B3:D10");
   // 頁と同時に入れたら保存の前に止め、欄の直下に出す。
   await stepReference.getByLabel("根拠の頁").fill("42");
@@ -1220,7 +1227,7 @@ test("取り込みの確認で、同じ名前の既存のガイドとの違い�
   await expect(diff).toContainText("取り込んでも既存のガイドは変わらず、別の下書きとして作ります。");
   await expect(diff).toContainText("追加 1・削除 1・変更 3");
   await expect(diff).toContainText("確認する条件");
-  await expect(diff).toContainText("変わった項目: 選択肢");
+  await expect(diff).toContainText("変わった項目: 選択肢、並び順");
   await expect(diff.locator('[data-change-kind="added"]')).toContainText("利用者に知らせる");
   await expect(diff.locator('[data-change-kind="removed"]')).toContainText("本人を確かめる");
   await expect(diff).toContainText("変わった項目: 影響の範囲");
@@ -1298,4 +1305,55 @@ test("回答の注意書きが無効なら、引き継ぎ先が空のときは�
   await expect(editor.getByTestId("support-guide-handoff-contact-effective")).toHaveText(
     "引き継ぎのときの窓口: なし。回答の本文は「担当の窓口」と案内します（システム設定で回答の注意書きが無効のため、窓口の案内を出しません）。",
   );
+});
+
+
+test("はい／いいえ条件の分岐値を選んで保存する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const guide = publishedGuide();
+  guide.draft = content("合成の条件分岐", {
+    conditions: [{id: "checked", label: "確認", type: "boolean", allowed_values: [], required: true, source: "user", unknown_handling: "ask", question: "確認済みですか？", value_aliases: {}}],
+    branches: [{id: "b1", when: {condition_id: "checked", operator: "equals", values: ["true"]}, goto_step: "step1", note: ""}],
+  });
+  const api = await openSupportGuides(page, [guide]);
+  await page.getByRole("button", { name: /合成の条件分岐/ }).first().click();
+  const editor = page.getByTestId("support-guide-editor");
+  const branch = editor.getByRole("listitem", { name: "分岐 1", exact: true });
+  const value = branch.getByRole("combobox", {name: /^値/});
+  await expect(value).toContainText("はい");
+  await value.click();
+  await page.getByRole("option", {name: "いいえ", exact: true}).click();
+  await editor.getByRole("button", {name: "保存", exact: true}).click();
+  const saved = api.requests.find((item) => item.method === "PUT" && item.path.endsWith("/guide-1"));
+  expect(saved?.body).toMatchObject({draft: {branches: [{when: {values: ["いいえ"]}}]}});
+  await expectNoPageOverflow(page);
+  await branch.scrollIntoViewIfNeeded();
+  await expect(value).toBeInViewport();
+  await page.screenshot({path: testInfo.outputPath("boolean-branch.png")});
+});
+
+
+test("公開版だけを書き出し、アーカイブから復元できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const guide = publishedGuide();
+  guide.draft = { ...guide.draft, title: "合成の未公開変更" };
+  const api = await openSupportGuides(page, [guide]);
+  await page.route("**/api/search-answer-profiles/bv-1/support-guides/export", (route) => route.fulfill({json: envelope({schema_version: 2, guides: api.guides.filter((item) => item.status === "active" && item.published_revision != null).map((item) => item.revisions.find((revision) => revision.revision === item.published_revision)!.content)})}));
+  const pending = page.waitForEvent("download");
+  await page.getByRole("button", {name: "書き出し", exact: true}).click();
+  const download = await pending;
+  const data = JSON.parse(await readFile((await download.path())!, "utf8"));
+  expect(data.guides).toHaveLength(1);
+  expect(data.guides[0].title).toBe(guide.revisions[1].content.title);
+  expect(data.guides[0].title).not.toBe(guide.draft.title);
+  await page.getByRole("button", {name: /合成の未公開変更/}).first().click();
+  const editor = page.getByTestId("support-guide-editor");
+  const actions = editor.getByTestId("support-guide-object-actions");
+  await actions.getByRole("button", {name: "アーカイブ", exact: true}).click();
+  await page.getByRole("alertdialog").getByRole("button", {name: "アーカイブ", exact: true}).click();
+  await expect(editor.getByLabel("タイトル")).toBeDisabled();
+  await expect(page.getByRole("rowheader", {name: "合成の未公開変更 を編集", exact: true})).toHaveCount(0);
+  await actions.getByRole("button", {name: "アーカイブから戻す", exact: true}).click();
+  await expect(editor.getByLabel("タイトル")).toBeEnabled();
+  await expect(page.getByRole("rowheader", {name: "合成の未公開変更 を編集", exact: true})).toBeVisible();
+  await expectNoPageOverflow(page);
+  await page.screenshot({path: testInfo.outputPath("restored-guide.png")});
 });
