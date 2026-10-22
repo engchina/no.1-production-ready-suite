@@ -758,8 +758,12 @@ class IngestionPipeline:
             if on_progress is not None and progress_id is not None
             else None
         )
-        dots_ocr_prompt = await self._saved_prompt("external_ocr")
         try:
+            dots_ocr_prompt = (
+                await self._saved_prompt("external_ocr")
+                if self._settings.rag_parser_adapter_backend == "dots_ocr"
+                else None
+            )
             with parse_progress_id(progress_id):
                 return await _observe_cpu_ingestion_stage(
                     trace_id,
