@@ -1,6 +1,6 @@
 "use client";
 
-import { FormSkeleton, StatusBadge, TimedLoadingState } from "@production-ready/ui";
+import { Disclosure, FormSkeleton, StatusBadge, TimedLoadingState } from "@production-ready/ui";
 import { useState } from "react";
 
 import { ApiErrorState } from "@/components/StateViews";
@@ -49,11 +49,12 @@ export function LanguagePackOverridesFieldset({
   const count = Object.values(value).reduce((sum, values) => sum + Object.keys(values).length, 0);
 
   return (
-    <fieldset
-      className="space-y-3 rounded-lg border border-border p-4"
+    <Disclosure
+      summary={t("searchAnswerProfiles.languagePack.title")}
+      defaultOpen={false}
+      contentClassName="space-y-3 border-t border-border p-4"
       data-testid="search-answer-profile-language-pack"
     >
-      <legend className="px-1 text-sm font-semibold text-fg">{t("searchAnswerProfiles.languagePack.title")}</legend>
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-xs text-fg-muted">{t("searchAnswerProfiles.languagePack.helper")}</p>
         {count > 0 ? (
@@ -105,6 +106,6 @@ export function LanguagePackOverridesFieldset({
           }}
         />
       )}
-    </fieldset>
+    </Disclosure>
   );
 }
