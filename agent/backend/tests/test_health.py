@@ -180,6 +180,7 @@ class _FakeOracleStore:
         self.session_statements: list[str] = []
         self.executed_statements: list[str] = []
         self.input_sizes: list[dict[str, Any]] = []
+        self.artifact_event_reads: list[int] = []
 
     @property
     def snapshot_by_key(self) -> dict[str, Any]:
@@ -263,7 +264,7 @@ class _FakeOracleCursor:
             )
             return
         if (
-            normalized.startswith("SELECT PAYLOAD_JSON")
+            normalized.startswith(("SELECT PAYLOAD_JSON", "SELECT E.PAYLOAD_JSON"))
             and "FROM AGENT_RUNTIME_EVENTS" in normalized
         ):
             event_type = str(params.get("event_type", ""))
@@ -272,6 +273,17 @@ class _FakeOracleCursor:
                 for row in self._store.rows_by_table.get("AGENT_RUNTIME_EVENTS", [])
                 if row.get("event_type") == event_type
             ]
+            if "audit_page" in params:
+                scope = {
+                    (item["run_id"], item["step_id"]) for item in json.loads(params["audit_page"])
+                }
+                self._rows = [
+                    (row.get("payload_json"),)
+                    for row in self._store.rows_by_table.get("AGENT_RUNTIME_EVENTS", [])
+                    if row.get("event_type") == event_type
+                    and (row["run_id"], json.loads(row["payload_json"]).get("step_id")) in scope
+                ]
+            self._store.artifact_event_reads.append(len(self._rows))
             return
         if (
             normalized.startswith("SELECT DISTINCT S.TOOL_NAME")
@@ -3391,3 +3403,105 @@ def test_upload_storage_check_reports_stages_without_saving(
     ]
     assert not env_file.exists() or "missing-bucket" not in env_file.read_text(encoding="utf-8")
     assert settings.object_storage_bucket != "missing-bucket"
+
+
+@pytest.mark.parametrize("recorded", [True, False])
+def test_audit_uses_historical_attributes_in_memory_and_csv(
+    monkeypatch: MonkeyPatch, recorded: bool
+) -> None:
+    run = _seed_api_run("確認用の実行", [ToolCall(name="echo", arguments={})])
+    repository: Any = runtime_module.runtime_repository
+    with repository._lock:
+        result = repository._runs[run["id"]].steps[0].tool_result
+        result.audit_metadata = (
+            {"permission_level": "read", "side_effects": False} if recorded else {}
+        )
+    original_get = tool_registry.get
+    definition = original_get("echo")
+    assert definition is not None
+    changed = definition.model_copy(
+        update={"permission_level": tools_module.ToolPermissionLevel.WRITE, "side_effects": True}
+    )
+    monkeypatch.setattr(
+        tool_registry, "get", lambda name: changed if name == "echo" else original_get(name)
+    )
+    response = client.get(f"/api/runs/{run['id']}/audit")
+    assert response.status_code == 200
+    record = response.json()["data"]["records"][0]
+    assert (record["permission_level"], record["side_effects"]) == (
+        ("read", False) if recorded else (None, None)
+    )
+    exported = client.get(f"/api/audit/tool-calls.csv?run_id={run['id']}")
+    assert exported.status_code == 200
+    [row] = list(csv.DictReader(io.StringIO(exported.text.lstrip("\ufeff"))))
+    assert row["permission_level"] == ("read" if recorded else "")
+    assert row["side_effects"] == ("False" if recorded else "")
+
+
+@pytest.mark.parametrize("recorded", [True, False])
+def test_projection_audit_uses_historical_attributes(
+    monkeypatch: MonkeyPatch, recorded: bool
+) -> None:
+    store = _FakeOracleStore()
+    repository = AgentRuntimeOracleNormalizedRepository(
+        connect_factory=lambda: _FakeOracleConnection(store)
+    )
+    run = _seed_run(repository, "確認用の実行", [ToolCall(name="echo", arguments={})])
+    for row in store.rows_by_table["AGENT_RUNTIME_STEPS"]:
+        result = json.loads(row["tool_result_json"])
+        result["audit_metadata"] = (
+            {"permission_level": "read", "side_effects": False} if recorded else {}
+        )
+        row["tool_result_json"] = json.dumps(result)
+    original_get = tool_registry.get
+    definition = original_get("echo")
+    assert definition is not None
+    changed = definition.model_copy(
+        update={"permission_level": tools_module.ToolPermissionLevel.WRITE, "side_effects": True}
+    )
+    monkeypatch.setattr(
+        tool_registry, "get", lambda name: changed if name == "echo" else original_get(name)
+    )
+    [record] = repository.list_tool_call_audit_projection(run_id=run.id).items
+    assert (record.permission_level, record.side_effects) == (
+        ("read", False) if recorded else (None, None)
+    )
+
+
+@pytest.mark.parametrize("offset, expected_events", [(0, 2), (1, 2), (10, 0)])
+def test_projection_audit_reads_only_page_artifact_events(
+    offset: int, expected_events: int
+) -> None:
+    store = _FakeOracleStore()
+    repository = AgentRuntimeOracleNormalizedRepository(
+        connect_factory=lambda: _FakeOracleConnection(store)
+    )
+    runs = [
+        _seed_run(
+            repository, "確認用の実行", [ToolCall(name="echo", arguments={}) for _ in range(3)]
+        )
+        for _ in range(3)
+    ]
+    events = store.rows_by_table.setdefault("AGENT_RUNTIME_EVENTS", [])
+    expected = {}
+    for run in runs:
+        for step in run.steps:
+            ids = [f"{step.id}-{index}" for index in range(2)]
+            expected[step.id] = ids
+            for artifact_id in ids:
+                events.append(
+                    {
+                        "run_id": run.id,
+                        "event_type": "artifact.created",
+                        "payload_json": json.dumps(
+                            {"step_id": step.id, "artifact_id": artifact_id}
+                        ),
+                    }
+                )
+    store.artifact_event_reads.clear()
+    page = repository.list_tool_call_audit_projection(run_id=runs[0].id, offset=offset, limit=1)
+    assert sum(store.artifact_event_reads) == expected_events
+    if page.items:
+        assert set(page.items[0].artifact_ids) == set(expected[page.items[0].step_id])
+    else:
+        assert store.artifact_event_reads == []

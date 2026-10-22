@@ -4486,7 +4486,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
     ) -> RuntimeToolCallAuditData:
         """正規化 projection tables からツール監査ログを読み出す。"""
         with self._connect_oracle() as connection, connection.cursor() as cursor:
-            artifact_ids_by_step = self._projection_artifact_ids_by_step(cursor)
             total = self._projection_tool_call_count(
                 cursor,
                 run_id=run_id,
@@ -4506,6 +4505,9 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
                 has_guardrail_warnings=has_guardrail_warnings,
                 offset=offset,
                 limit=limit,
+            )
+            artifact_ids_by_step = self._projection_artifact_ids_by_step(
+                cursor, [(str(row[0]), str(row[7])) for row in rows]
             )
             # CLOB の列は接続を閉じる前に読む（閉じた後に読むと DPY-1001。#765）。
             records: list[RuntimeToolCallAuditRecord] = []
@@ -4625,16 +4627,31 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
         row = cursor.fetchone()
         return int(row[0]) if row is not None else 0
 
-    def _projection_artifact_ids_by_step(self, cursor: Any) -> dict[str, list[str]]:
+    def _projection_artifact_ids_by_step(
+        self, cursor: Any, steps: Sequence[tuple[str, str]]
+    ) -> dict[str, list[str]]:
+        if not steps:
+            return {}
+        import oracledb
+
         table = self._oracle_projection_tables["events"]
+        cursor.setinputsizes(audit_page=oracledb.DB_TYPE_CLOB)
         cursor.execute(
             f"""
-            SELECT
-                payload_json
-            FROM {table}
-            WHERE event_type = :event_type
+            SELECT e.payload_json
+            FROM {table} e
+            JOIN JSON_TABLE(:audit_page, '$[*]' COLUMNS (
+                run_id VARCHAR2(200) PATH '$.run_id',
+                step_id VARCHAR2(200) PATH '$.step_id'
+            )) p ON p.run_id = e.run_id
+            WHERE e.event_type = :event_type
+              AND JSON_VALUE(e.payload_json, '$.step_id' RETURNING VARCHAR2(200)) = p.step_id
+            ORDER BY e.created_at, e.event_id
             """,
             event_type=RunEventType.ARTIFACT_CREATED.value,
+            audit_page=_json_dump(
+                [{"run_id": run_id, "step_id": step_id} for run_id, step_id in sorted(set(steps))]
+            ),
         )
         artifact_ids_by_step: dict[str, list[str]] = {}
         for (payload_json,) in cursor.fetchall():
@@ -5376,18 +5393,9 @@ def _runtime_audit_record_from_projection_row(
     tool_call = _projection_tool_call(tool_call_json)
     result = _projection_tool_result(tool_result_json)
     tool_name = str(row_tool_name or (tool_call.name if tool_call is not None else "tool"))
-    definition = tool_registry.get(tool_name)
     audit_metadata = result.audit_metadata if result is not None else {}
-    permission_level = (
-        definition.permission_level.value
-        if definition is not None
-        else _audit_text(audit_metadata, "permission_level")
-    )
-    side_effects = (
-        definition.side_effects
-        if definition is not None
-        else _audit_bool(audit_metadata, "side_effects")
-    )
+    permission_level = _audit_text(audit_metadata, "permission_level")
+    side_effects = _audit_bool(audit_metadata, "side_effects")
 
     return RuntimeToolCallAuditRecord(
         run_id=str(run_id),
