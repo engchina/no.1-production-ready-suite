@@ -333,3 +333,17 @@ def test_admin_reviews_any_answer_separately_from_the_owner(seeded_runs: None) -
     # 評価・理由の絞り込みは、管理者の評価にも当てる。
     by_reason = client.get("/api/feedback", params={"days": 7, "reason": "incorrect"}).json()
     assert "feedback-774-other" in [item["run_id"] for item in by_reason["data"]["items"]]
+
+
+def test_summary_counts_distinct_rated_runs_before_filtering() -> None:
+    owner = _run("owner-only", rated_at=NOW)
+    admin = _run("admin-only")
+    admin.admin_review = RunFeedback(rating=FeedbackRating.NOT_HELPFUL, updated_at=NOW)
+    both = _run("both", rated_at=NOW)
+    both.admin_review = RunFeedback(rating=FeedbackRating.NOT_HELPFUL, updated_at=NOW)
+    report = _report([owner, admin, both], rating=FeedbackRating.NOT_HELPFUL)
+    assert report.summary.rated_runs == 3
+    assert report.summary.total == 2
+    assert report.summary.admin_reviewed == 2
+    assert report.total == 2
+    assert report.previous.rated_runs == 0

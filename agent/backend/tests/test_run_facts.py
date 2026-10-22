@@ -457,7 +457,7 @@ def test_feedback_report_is_aggregated_and_paged_in_sql() -> None:
                 (1, "incomplete", 3),
                 (0, "incorrect", 1),
             ],
-            "GROUP BY IN_PERIOD": [(1, 10, 5, 5, 2, 1), (0, 4, 3, 1, 0, 0)],
+            "GROUP BY IN_PERIOD": [(1, 10, 5, 5, 2, 1, 11), (0, 4, 3, 1, 0, 0, 4)],
             "SELECT COUNT(*)": [(42,)],
             "OFFSET :page_offset": [
                 (
@@ -508,6 +508,7 @@ def test_feedback_report_is_aggregated_and_paged_in_sql() -> None:
         (FeedbackReason.INCORRECT, 2),
     ]
     assert (report.summary.admin_reviewed, report.summary.admin_not_helpful) == (2, 1)
+    assert (report.summary.rated_runs, report.previous.rated_runs) == (11, 4)
     assert (report.total, report.offset, report.limit, report.has_next) == (42, 20, 10, True)
     [item] = report.items
     assert (item.agent_name, item.display_name, item.reviewer_display_name) == (

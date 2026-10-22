@@ -468,7 +468,7 @@ def feedback_summary_sql(filters: str) -> str:
         "SUM(CASE WHEN FEEDBACK_RATING = 'helpful' THEN 1 ELSE 0 END), "
         "SUM(CASE WHEN FEEDBACK_RATING = 'not_helpful' THEN 1 ELSE 0 END), "
         "COUNT(ADMIN_RATING), "
-        "SUM(CASE WHEN ADMIN_RATING = 'not_helpful' THEN 1 ELSE 0 END) "
+        "SUM(CASE WHEN ADMIN_RATING = 'not_helpful' THEN 1 ELSE 0 END), COUNT(*) "
         f"FROM ({feedback_source_sql(filters)}) GROUP BY IN_PERIOD"  # nosec B608
     )
 
@@ -837,6 +837,7 @@ class OracleRunFactsStore:
             for row in summary_rows:
                 period = int(row[0])
                 summary = FeedbackSummary(
+                    rated_runs=int(row[6] or 0),
                     total=int(row[1] or 0),
                     helpful=int(row[2] or 0),
                     not_helpful=int(row[3] or 0),
