@@ -271,3 +271,36 @@ def test_failure_without_error_message_can_be_saved() -> None:
     )
     assert len(attempts) == 1
     assert attempts[0].error_summary == ""
+
+
+def test_sqlplus_terminator_does_not_make_the_same_failed_block_a_new_fix() -> None:
+    ai = _FakeEnterpriseAi(
+        [
+            {
+                "cause": "区切りだけを変えた候補です。",
+                "fix": "修正方法です。",
+                "conclusion": "確認します。",
+                "corrected_sql": "BEGIN NULL; END;\n/",
+            }
+        ]
+        * 2
+    )
+    service = _catalog_service(_FakeAdapter(), ai)
+    ids = _saved_analysis_turn(service, "BEGIN NULL; END;")
+    result = service.analyze_db_admin_chat_failure(
+        *ids, DbAdminChatAnalyzeRequest(statement_index=1), **OWNER
+    )
+    assert len(ai.calls) == 2
+    assert result.corrected_plan is None
+    assert result.warnings
+
+
+@pytest.mark.parametrize("terminator", ["\n/", "\n  /  \n", ";\n/\n-- tail"])
+def test_sql_identity_ignores_a_standalone_sqlplus_terminator(terminator: str) -> None:
+    assert sql_identity("BEGIN NULL; END;" + terminator) == sql_identity("begin null; end;")
+
+
+def test_sql_identity_preserves_division_and_slashes_in_literals() -> None:
+    assert sql_identity("SELECT 6 / 2 FROM DUAL") != sql_identity("SELECT 6 FROM DUAL")
+    assert sql_identity("SELECT '/' FROM DUAL") != sql_identity("SELECT '' FROM DUAL")
+    assert sql_identity('SELECT "/" FROM T') != sql_identity('SELECT "" FROM T')
