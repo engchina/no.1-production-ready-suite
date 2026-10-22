@@ -899,7 +899,12 @@ _DENIED_CLAIM_MIN_BIGRAMS = 2
 
 
 def summary_asserts_denied(
-    summary: str, denied: Sequence[str], verified: Sequence[str], *, subject: str = "根拠と矛盾して外した主張"
+    summary: str,
+    denied: Sequence[str],
+    verified: Sequence[str],
+    *,
+    subject: str = "根拠と矛盾して外した主張",
+    distinctive_ratio: bool = False,
 ) -> str:
     """summary の文が、外した・印の付いた item（``subject``）の主張を繰り返していれば理由を返す (#1013・#2738)。
 
@@ -907,6 +912,9 @@ def summary_asserts_denied(
     矛盾した応答が通る。否定した item の text の語（漢字・カタカナ・英数字の 2 文字組）のうち、支持された item の
     text に無いもの（その主張に固有の語）が summary の同じ文に一定割合以上現れる場合、summary は否定された主張を
     断定しているとみなす。支持された主張の言い換えは固有の語が無いので判定しない。語の並びで判定し、意味は見ない。
+
+    割合の分母は既定で主張の全部の 2 文字組（中立文に置き換える判定。#1013）。``distinctive_ratio`` なら固有の組の
+    数にする（警告だけを付ける印の付いた主張の判定。確かめた説明と共有する語が分母を増やし、断定を見逃さない。#3083）。
     """
 
     def bigrams(value: str) -> set[str]:
@@ -923,7 +931,8 @@ def summary_asserts_denied(
         distinctive = claim - supported
         for sentence in sentences:
             present = distinctive & sentence
-            if len(present) >= _DENIED_CLAIM_MIN_BIGRAMS and len(present) / len(claim) >= _DENIED_CLAIM_RATIO:
+            base = len(distinctive) if distinctive_ratio else len(claim)
+            if len(present) >= _DENIED_CLAIM_MIN_BIGRAMS and len(present) / base >= _DENIED_CLAIM_RATIO:
                 return f"{subject}を summary が断定: " + text[:60]
     return ""
 
@@ -4999,6 +5008,7 @@ def run_round(
             [e.item.text for e in checked if e.published and e.state and not e.added],
             [e.item.text for e in checked if e.confirmed],
             subject="印の付いた主張",
+            distinctive_ratio=True,
         )
     # 根拠と矛盾して外した item の主張を summary が断定していれば、summary は中立文にする。本文から外しても、
     # 冒頭の要約から同じ誤案内が残っていた (#1013)。

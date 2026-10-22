@@ -2520,6 +2520,18 @@ class SummaryDeniedClaimTest(unittest.TestCase):
         self.assertEqual(result.confidence, "low")  # 公開できる説明が 0 件
         self.assertTrue(result.needs_human_review)
 
+    def test_marked_claim_sharing_words_with_a_verified_claim_is_still_detected(self):
+        claim = "カードキー利用の上限は1回あたり5,000円です。"
+        verified = "窓口が閉まっている、または夜間で窓口が動いていない場合に限り、カードキーの利用が認められます。"
+        summary = "窓口が閉まっている、または夜間はカードキーの利用が認められ、1回あたり上限は5,000円です。"
+        # 固有の語（上限・回数・金額）がそろって要約に現れれば、確かめた説明と共有する語が多くても断定とみなす（#3083）。
+        self.assertTrue(grounded.summary_asserts_denied(summary, [claim], [verified], subject="印", distinctive_ratio=True))
+        # 中立文に置き換える判定（既定の分母）は変えない。
+        self.assertEqual(grounded.summary_asserts_denied(summary, [claim], [verified]), "")
+        # 確かめた説明だけを述べる要約には付けない。
+        restated = "窓口が閉まっているときはカードキーを利用できます。"
+        self.assertEqual(grounded.summary_asserts_denied(restated, [claim], [verified], distinctive_ratio=True), "")
+
     def test_summary_asserts_denied_ignores_one_bigram_noise(self):
         self.assertEqual(grounded.summary_asserts_denied("実行ボタンで確認します。", ["確認は不要です。"], []), "")
         self.assertTrue(
