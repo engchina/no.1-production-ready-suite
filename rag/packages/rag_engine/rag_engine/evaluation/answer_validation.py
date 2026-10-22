@@ -524,7 +524,8 @@ def _enforce_support(
     - 監査が裏付けとして写した原文（support_quote）が、結び付けた根拠の本文に無い → citation_error（quote_unmatched）。
     - 監査が、根拠の記載の対象は段落の対象と別（not_applicable）とした → unsupported。``unknown`` は採否に使わない
       （実の LLM の確認で、対象が同じ正しい段落にも多く付いた。確かめられない段落は監査の判定〔unsupported〕に任せる）。
-    - 段落が、根拠の表の別の行の区分・名前と値を結び付けている（決定的な照合。`unbound_table_values`）→ unsupported。
+    - 段落、または監査の理由が、根拠の表の別の行の区分・名前と値を結び付けている（決定的な照合。`unbound_table_values`）
+      → unsupported（理由が根拠と逆の対応を「記載あり」と述べた supported を採らない）。
 
     ``texts`` は根拠の id → 分割する前の本文（資料ではない根拠を含む）、``document_texts`` は資料の根拠の本文。
     """
@@ -550,6 +551,12 @@ def _enforce_support(
             elif pairs := unbound.get(claim.answer_passage_id):
                 detail = "、".join(f"値『{value}』は『{other}』と別の行の値" for value, other in pairs)
                 claim = _not_supported(claim, "unsupported", SUPPORT_VALUE_UNBOUND, f"根拠の表では{detail}です。")
+            elif pairs := unbound_table_values(claim.reason, document_texts):
+                # 監査の理由が、根拠の表と違う対応（別の行の区分・名前と値）を「記載あり」として述べている。
+                detail = "、".join(f"値『{value}』を『{other}』の値としています" for value, other in pairs)
+                claim = _not_supported(
+                    claim, "unsupported", SUPPORT_VALUE_UNBOUND, f"監査の理由が、根拠の表と違う対応（{detail}）を述べています。"
+                )
         result.append(claim)
     return result
 

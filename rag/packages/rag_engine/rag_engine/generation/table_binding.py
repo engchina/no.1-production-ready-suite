@@ -1,16 +1,23 @@
-"""表・一覧の行の対応に反して、別の行の値を述べた文を見つける（#2659）。
+"""表・一覧の行と列の対応に反して、別の行・列の値を述べた文を見つける（#2659）。
 
-根拠の表（HTML の表・Markdown の表・「名前：値」の行の並び）は、値をその行の区分・名前に対応させる。文が
-ある行の区分・名前と、別の行にしか無い値（コード・番号など英数字だけの値）を同じ所で結び付けていれば、語と値が
-根拠のどこかにあっても、根拠の対応とは違う。語の一致・話題の一致では見分けられないので、表の行で確かめる。
+根拠の表（HTML の表・Markdown の表・「名前：値」の行の並び・1 文の中で並べた「A は x、B は y」）は、値をその行の
+区分・名前と、その列の見出しに対応させる。文がある行の区分・名前と、別の行にしか無い値を同じ所で結び付けていれば、
+語と値が根拠のどこかにあっても、根拠の対応とは違う。語の一致・話題の一致では見分けられないので、表の構造（行・列）で
+確かめる（表の事実の検証で、セルを行と列の見出しに結び付けて照らす考え方）。
+
+値は、英数字だけのセル（コード・番号）と、先頭の列（行の区分・名前の列）以外のセル（日本語の値・単位付きの値）と、
+そのセルの中のコード（「A-05-13-1／140 分」の「A-05-13-1」）。他の語の一部に現れやすい短い語（数字の無い 2 文字以下。
+「あり」「なし」）は値にしない。
 
 決定的な照合で、意味は見ない。誤って正しい文を外さないように、次のときだけ「対応しない」とする。
 
 - 値のある行のどれにも、文が同じ所で述べた行の手がかり（その表の 1 行にだけあるセル。同じ行のコードなどの値も含む）
   が無く、
-- 別の行の区分・名前（英数字だけの値でないセル）を、文が同じ所で述べている。別の行の値を同じ所で述べただけ
+- 別の行の区分・名前（値でないセル）を、文が同じ所で述べている。別の行の値を同じ所で述べただけ
   （複数の行の値の列挙・範囲「254・253・300」「A101〜A103」）では疑わない。
 - 見出しの行のセルと、表の複数の行にあるセルは、行を見分ける手がかりにしない。
+- 列: 行は合っていても、表に見出しの行があり、文がその値の列の見出しを述べず、同じ行に値のある別の列の見出し
+  （「改定前」の値に対する「改定後」）を同じ所で述べている。
 
 「同じ所」は文の読点・句点で区切った区間で、値の無い区間（「区分Ⅱの場合、」）は続く区間と合わせて見る。
 最終の検証（`evaluation.answer_validation`）と回答の生成の検査（`generation.grounded`）が同じ判定を使う。
@@ -21,8 +28,8 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
 
 from rag_engine.retrieval.character_forms import fold_width
 
@@ -32,6 +39,15 @@ _MAX_VALUE_CHARS = 16
 # 区分・名前とみなすセルの長さ（短すぎると別の語の一部に当たり、長い説明の文は文が丸ごと写すことが少ない）。
 _MIN_LABEL_CHARS = 2
 _MAX_LABEL_CHARS = 40
+# 先頭の列以外の英数字だけでないセルを値とみなす最小の長さ（数字を含まない語。短い語は別の語の一部に現れやすい）。
+_MIN_WORD_VALUE_CHARS = 3
+# セルの中のコード（区切りを含む英数字の並びか、英字と数字の両方を含む並び。数字だけの並びは数量・番号と
+# 見分けられないので除く）。
+_CODE_IN_CELL = re.compile(r"(?<![0-9a-z])(?:[0-9a-z]+(?:[-_.][0-9a-z]+)+|(?=[0-9a-z]*[a-z])(?=[0-9a-z]*[0-9])[0-9a-z]{2,})(?![0-9a-z])")
+# 説明の文のセル（読点・句点を含む）。
+_SENTENCE_PUNCTUATION = re.compile(r"[、。，．]")
+# ローマ数字だけのセル（「Ⅱ」）。NFKC で「ii」になるが、値ではなく区分の名前として扱う。
+_ROMAN_CELL = re.compile(r"[\u2160-\u217f]{1,4}")
 # セルの照合に使う頭の部分（「01（通常）」「区分Ⅱ (旧)」の括弧・空白の前）。
 _CELL_KEY_END = re.compile(r"\s*[（(［\[〔【「『<＜]|\s{2,}|\s*[、。,，;；]")
 _ROW = re.compile(r"<tr\b[^>]*>(.*?)</tr\s*>", re.IGNORECASE | re.DOTALL)
@@ -41,8 +57,15 @@ _TAG = re.compile(r"<[^<>]*>")
 _TABLE_BLOCK = re.compile(r"<table\b.*?</table\s*>", re.IGNORECASE | re.DOTALL)
 # Markdown の表の区切りの行（| --- | :---: |）。
 _PIPE_RULE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?\s*$")
-# 「名前：値」の行の区切り（全角のコロン・縦棒・タブ。半角のコロンは時刻「9:00」と区別する）。
-_PAIR_SEPARATOR = re.compile(r"[：｜|\t]|(?<![0-9]):(?![0-9])")
+# 「名前：値」の行の区切り（全角のコロン・縦棒・タブ・等号。半角のコロンは時刻「9:00」と区別する）。
+_PAIR_SEPARATOR = re.compile(r"[：｜|\t＝]|(?<![0-9]):(?![0-9])|\s=\s")
+# 「名前：値」の行の先頭の箇条書きの印（「- 」「・」「1. 」）。
+_PAIR_MARKER = re.compile(r"^\s*(?:[-*]\s+|[・•]\s*|[0-9]{1,3}[.)．]\s+)")
+# 1 文の中で並べた「A は x、B は y」の区間（名前と値の区切りは「は」・コロン・等号。値は短い語・数・コード）。
+_PROSE_PAIR = re.compile(
+    r"^\s*(?P<label>[^、。，,；;：:＝=]{2,30}?)\s*(?:は|：|:|＝|=)\s*(?P<value>[^、。，,；;]{1,20}?)\s*"
+    r"(?:です|である|であり|とする|とします|とし|となる|となります|となり|で)?\s*$"
+)
 # 文の区間の区切り（読点・句点・改行・セミコロン）。
 _SENTENCE_END = re.compile(r"[。！？!?\n]+")
 _CLAUSE_END = re.compile(r"[、，,；;]")
@@ -83,10 +106,27 @@ def _is_label(key: str) -> bool:
 
 @dataclass(frozen=True)
 class Table:
-    """表の本文の行（見出しの行を除く）。各行はセルの照合の形の集合。``cells`` は照合の形 → 原文のセル。"""
+    """表の本文の行（見出しの行を除く）。各行はセルの照合の形の集合。``cells`` は照合の形 → 原文のセル。
+
+    ``values`` は先頭の列以外の値のセルとセルの中のコード（英数字だけの値は ``_is_value`` で見る）、``labels`` は
+    値の形でも区分の名前として扱うセル（ローマ数字だけの先頭の列）。``header`` は列の見出し（無ければ空）、``grid``
+    は本文の行の列ごとのセル（照合の形。空欄は空文字）。
+    """
 
     rows: tuple[frozenset[str], ...]
     cells: dict[str, str]
+    values: frozenset[str] = frozenset()
+    labels: frozenset[str] = frozenset()
+    header: tuple[str, ...] = ()
+    grid: tuple[tuple[str, ...], ...] = ()
+    # セル（とセルの中のコード）の照合の形 → そのセルがある列。
+    columns: dict[str, frozenset[int]] = field(default_factory=dict)
+
+    def is_value(self, key: str) -> bool:
+        return key not in self.labels and (_is_value(key) or key in self.values)
+
+    def is_label(self, key: str) -> bool:
+        return key in self.labels or _is_label(key)
 
 
 def _take_carried(carried: dict[int, tuple[int, str]], column: int, cells: list[str]) -> int:
@@ -141,7 +181,8 @@ def _pair_runs(lines: Sequence[str]) -> list[list[tuple[bool, list[str]]]]:
     """「名前：値」の行（区切りで 2 つ以上のセルに分かれる行）の、続いて並ぶ行のまとまり。見出しの行は持たない。"""
     runs: list[list[tuple[bool, list[str]]]] = [[]]
     for line in lines:
-        cells = [cell.strip() for cell in _PAIR_SEPARATOR.split(line) if cell.strip()] if line.count("|") < 2 else []
+        body = _PAIR_MARKER.sub("", line, count=1)
+        cells = [cell.strip() for cell in _PAIR_SEPARATOR.split(body) if cell.strip()] if line.count("|") < 2 else []
         if len(cells) >= 2:
             runs[-1].append((False, cells))
         elif runs[-1]:
@@ -149,18 +190,81 @@ def _pair_runs(lines: Sequence[str]) -> list[list[tuple[bool, list[str]]]]:
     return [run for run in runs if run]
 
 
+def _prose_runs(lines: Sequence[str]) -> list[list[tuple[bool, list[str]]]]:
+    """1 文の中で読点で並べた「A は x、B は y」（名前と値の組が 2 つ以上・名前がすべて違う）を表の行にする。"""
+    runs: list[list[tuple[bool, list[str]]]] = []
+    for line in lines:
+        for sentence in _SENTENCE_END.split(line):
+            pairs = [match for clause in _CLAUSE_END.split(sentence) if (match := _PROSE_PAIR.match(clause))]
+            labels = [_cell_key(match["label"]) for match in pairs]
+            if len(pairs) >= 2 and all(labels) and len(set(labels)) == len(labels):
+                runs.append([(False, [match["label"].strip(), match["value"].strip()]) for match in pairs])
+    return runs
+
+
+def _value_cell(key: str, cell: str) -> bool:
+    """先頭の列以外のセルを値とみなすか（英数字だけ・数字を含む・数字の無い 3 文字以上の語）。
+
+    読点・句点で区切った文のセルは説明で、値ではない（頭の部分だけが文に現れても対応の手がかりにならない）。
+    """
+    if _is_value(key):
+        return True
+    if not key or len(key) > _MAX_LABEL_CHARS or _SENTENCE_PUNCTUATION.search(cell):
+        return False
+    return any(char.isdigit() for char in key) or len(key) >= _MIN_WORD_VALUE_CHARS
+
+
 def _table(rows: Sequence[tuple[bool, list[str]]]) -> Table | None:
     body = [cells for header, cells in rows if not header]
+    headers = [cells for header, cells in rows if header]
     # 見出しの印（<th>・区切りの行）が無い HTML の表は、値のセルが無い最初の行を見出しとみなす。
     if body and len(body) == len(rows) and len(body) >= 3 and not any(_is_value(_cell_key(cell)) for cell in body[0]):
+        headers = [body[0]]
         body = body[1:]
-    keyed = tuple(frozenset(key for cell in cells if (key := _cell_key(cell))) for cells in body)
+    grid = tuple(tuple(_cell_key(cell) for cell in cells) for cells in body)
+    values: set[str] = set()
+    labels: set[str] = set()
+    keyed: list[frozenset[str]] = []
     originals: dict[str, str] = {}
-    for cells in body:
-        for cell in cells:
-            if key := _cell_key(cell):
+    columns: dict[str, set[int]] = {}
+    for cells, keys in zip(body, grid, strict=True):
+        row = {key for key in keys if key}
+        for column, (cell, key) in enumerate(zip(cells, keys, strict=True)):
+            if not key:
+                continue
+            originals.setdefault(key, " ".join(cell.split())[:_MAX_LABEL_CHARS])
+            columns.setdefault(key, set()).add(column)
+            if column == 0:
+                if _ROMAN_CELL.fullmatch(cell.strip()):
+                    labels.add(key)
+                continue
+            if _value_cell(key, cell):
+                values.add(key)
+            # セルの中のコード（文がコードだけを述べたときも、その行の値として照合する）。
+            for code in _CODE_IN_CELL.findall(_fold(cell)):
+                if code != key and _is_value(code):
+                    row.add(code)
+                    values.add(code)
+                    originals.setdefault(code, code)
+                    columns.setdefault(code, set()).add(column)
+        keyed.append(frozenset(row))
+    header: tuple[str, ...] = ()
+    if headers:
+        header = tuple(_cell_key(cell) for cell in headers[-1])
+        for cell, key in zip(headers[-1], header, strict=True):
+            if key:
                 originals.setdefault(key, " ".join(cell.split())[:_MAX_LABEL_CHARS])
-    return Table(keyed, originals) if len(keyed) >= 2 else None
+    if len(keyed) < 2:
+        return None
+    return Table(
+        tuple(keyed),
+        originals,
+        frozenset(values),
+        frozenset(labels),
+        header,
+        grid,
+        {key: frozenset(found) for key, found in columns.items()},
+    )
 
 
 def evidence_tables(text: str) -> list[Table]:
@@ -173,7 +277,7 @@ def evidence_tables(text: str) -> list[Table]:
             tables.append(table)
     rest = _TABLE_BLOCK.sub("\n", source)
     lines = [line for line in rest.split("\n") if line.strip()]
-    for rows in (_pipe_rows(lines), *_pair_runs(lines)):
+    for rows in (_pipe_rows(lines), *_pair_runs(lines), *_prose_runs(lines)):
         table = _table(rows)
         if table is not None:
             tables.append(table)
@@ -189,12 +293,13 @@ def _clean_claim(text: str) -> str:
     return _fold(_EMPHASIS.sub("", text))
 
 
-def _mentions(key: str, window: str, *, shortened_label: bool = False) -> bool:
+def _mentions(key: str, window: str, *, shortened_label: bool = False, roman_label: bool = False) -> bool:
     """セルの照合の形が区間に現れるか。
 
     英数字で終わる・始まるセルは、前後が英数字の続きなら別の語。1 文字の値（「1」）は、前後が漢字なら手順の番号・
     数量（「手順1」「1件」）とみなして数えない。区切り付きの番号・コードの内部も独立した値として扱わない。
     セルを短くした区分・名前は、漢字・カタカナが続く複合語の内部だけでは行の手がかりにしない。
+    ローマ数字だけの区分の名前（``roman_label``。「区分Ⅰ」の「Ⅰ」）は、漢字に続いても数える。
     """
     start = window.find(key)
     while start >= 0:
@@ -216,7 +321,7 @@ def _mentions(key: str, window: str, *, shortened_label: bool = False) -> bool:
             joined = joined or (key[0].isdigit() and before in {"+", "-", "−"})
         if shortened_label:
             joined = joined or bool(_LABEL_LETTER.fullmatch(before) or _LABEL_LETTER.fullmatch(after))
-        counted = len(key) == 1 and (_IDEOGRAPH.fullmatch(before or " ") or _IDEOGRAPH.fullmatch(after or " "))
+        counted = not roman_label and (len(key) == 1 and (_IDEOGRAPH.fullmatch(before or " ") or _IDEOGRAPH.fullmatch(after or " ")))
         if not joined and not counted:
             return True
         start = window.find(key, start + 1)
@@ -248,30 +353,96 @@ def _unbound_in_table(window: str, table: Table) -> tuple[list[tuple[str, str]],
     for row in table.rows:
         for key in row:
             counts[key] = counts.get(key, 0) + 1
-    mentioned = {
-        key
-        for key in counts
-        if (_is_value(key) or _is_label(key))
-        and _mentions(key, window, shortened_label=_is_label(key) and _fold(table.cells.get(key, key)) != key)
-    }
+
+    def said(key: str) -> bool:
+        return _mentions(
+            key,
+            window,
+            shortened_label=table.is_label(key) and not table.is_value(key) and _fold(table.cells.get(key, key)) != key,
+            roman_label=key in table.labels,
+        )
+
+    mentioned = {key for key in counts if (table.is_value(key) or table.is_label(key)) and said(key)}
     # 行を見分ける手がかり: その表の 1 行にだけあり、区間に現れるセル。
     distinct = {key for key in mentioned if counts[key] == 1}
     unbound: list[tuple[str, str]] = []
     bound: set[str] = set()
-    for value in sorted(key for key in mentioned if _is_value(key)):
+    for value in sorted(key for key in mentioned if table.is_value(key)):
         rows = [row for row in table.rows if value in row]
-        others = distinct - {value}
-        if any(row & others for row in rows):
-            bound.add(table.cells.get(value, value))
+        value_columns = table.columns.get(value, frozenset())
+        # 行の手がかりは別の列のセル（同じセルの中のコードは、そのセル自身なので数えない）。
+        others = {key for key in distinct - {value} if not (table.columns.get(key, frozenset()) & value_columns)}
+        matched = [index for index, row in enumerate(table.rows) if value in row and row & others]
+        if matched:
+            other_column = _other_column(table, value, matched, said)
+            if other_column:
+                unbound.append((table.cells.get(value, value), table.cells.get(other_column, other_column)))
+            else:
+                bound.add(table.cells.get(value, value))
             continue
         elsewhere = sorted(
             key
             for key in others
-            if _is_label(key) and any(key in row and any(_is_value(cell) for cell in row - {key}) for row in table.rows if row not in rows)
+            if table.is_label(key)
+            and not (table.columns.get(key, frozenset()) & value_columns)
+            and any(key in row and _parallel(table, index, value, value_columns) for index, row in enumerate(table.rows) if row not in rows)
         )
         if elsewhere:
             unbound.append((table.cells.get(value, value), table.cells.get(elsewhere[0], elsewhere[0])))
     return unbound, bound
+
+
+def _kind(key: str) -> str:
+    """値の種類（コード・番号 / 数字を含む語 / 語）。別の行が同じ並びの項目かを見分けるのに使う。"""
+    if _is_value(key):
+        return "code"
+    return "number" if any(char.isdigit() for char in key) else "word"
+
+
+def _parallel(table: Table, index: int, value: str, value_columns: frozenset[int]) -> bool:
+    """別の行（``index``）が、値と同じ列に同じ種類の値を持つ（同じ並びの別の項目の行）か。
+
+    注記・見出しのような、値の列に別の種類の文（「入力は必須」）しか無い行の語を述べただけでは疑わない。
+    """
+    cells = table.grid[index] if index < len(table.grid) else ()
+    kind = _kind(value)
+    for column in value_columns:
+        cell = cells[column] if column < len(cells) else ""
+        if not cell or not table.is_value(cell) and not _CODE_IN_CELL.findall(cell):
+            continue
+        if _kind(cell) == kind or (kind == "code" and _CODE_IN_CELL.findall(cell)):
+            return True
+    return False
+
+
+def _other_column(table: Table, value: str, rows: Sequence[int], said: Callable[[str], bool]) -> str:
+    """行は合っている値について、文がその値の列の見出しを述べず、同じ行の別の列の見出しを述べたらその見出し。
+
+    見出しの行が無い表・先頭の列（行の区分・名前の列）・同じ見出しが 2 列以上ある表は見ない。その行の別の列が
+    空欄・同じ値なら疑わない。
+    """
+    names = [key for key in table.header if key]
+    if not names or len(set(names)) != len(names):
+        return ""
+    header = table.header
+    for index in rows:
+        cells = table.grid[index] if index < len(table.grid) else ()
+        for column, key in enumerate(cells):
+            if column == 0 or column >= len(header) or not (key == value or value in _CODE_IN_CELL.findall(key)):
+                continue
+            if not _is_label(header[column]) or said(header[column]):
+                continue
+            for other, name in enumerate(header):
+                if (
+                    other not in {0, column}
+                    and other < len(cells)
+                    and cells[other]
+                    and cells[other] != key
+                    and _is_label(name)
+                    and said(name)
+                ):
+                    return name
+    return ""
 
 
 def unbound_table_values(claim: str, evidence_texts: Sequence[str]) -> list[tuple[str, str]]:
@@ -282,7 +453,7 @@ def unbound_table_values(claim: str, evidence_texts: Sequence[str]) -> list[tupl
     tables = [table for text in evidence_texts for table in evidence_tables(text)]
     if not tables:
         return []
-    values = {key for table in tables for row in table.rows for key in row if _is_value(key)}
+    values = {key for table in tables for row in table.rows for key in row if table.is_value(key)}
     found: dict[str, str] = {}
     for window in _windows(_clean_claim(claim), values):
         bound: set[str] = set()
@@ -295,7 +466,12 @@ def unbound_table_values(claim: str, evidence_texts: Sequence[str]) -> list[tupl
         for value, other in candidates.items():
             if value not in bound:
                 found.setdefault(value, other)
-    return sorted(found.items())
+    # セルの中のコードと、そのセル全体の両方が当たったら、セル全体だけを返す（同じ誤りを 2 回数えない）。
+    return sorted(
+        (value, other)
+        for value, other in found.items()
+        if not any(value != whole and _fold(value) in _fold(whole) and found[whole] == other for whole in found)
+    )
 
 
 __all__ = ["Table", "evidence_tables", "unbound_table_values"]
