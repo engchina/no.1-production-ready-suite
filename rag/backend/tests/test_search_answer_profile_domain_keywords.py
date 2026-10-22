@@ -16,7 +16,8 @@ client = AsgiTestClient(app)
 
 
 class FakeKnowledgeOracle:
-    def __init__(self) -> None:
+    def __init__(self, *, support_guide_enabled: bool = False) -> None:
+        self.support_guide_enabled = support_guide_enabled
         self.payloads: dict[tuple[str, str], dict[str, object]] = {}
         self.chunk_texts = [
             ("c1", "d1", "伝票区分を変更するには伝票区分マスタを開きます。"),
@@ -35,7 +36,12 @@ class FakeKnowledgeOracle:
             name="受注サポート",
             status=SearchAnswerProfileStatus.ACTIVE,
             knowledge_base_count=1,
-            config=SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"]),
+            config=SearchAnswerProfileConfig.model_validate(
+                {
+                    "knowledge_base_ids": ["kb-1"],
+                    "query": {"support_guide_enabled": self.support_guide_enabled},
+                }
+            ),
             created_at=datetime(2026, 1, 1, tzinfo=UTC),
             updated_at=datetime(2026, 1, 1, tzinfo=UTC),
         )

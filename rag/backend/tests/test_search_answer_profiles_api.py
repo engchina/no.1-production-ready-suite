@@ -193,7 +193,7 @@ def test_create_and_get_search_answer_profile(fake_oracle: FakeSearchAnswerProfi
             "config": {
                 "knowledge_base_ids": ["kb-1", "kb-2"],
                 "query": {
-                    "query_strategy": "rag_fusion",
+                    "max_anchors_per_document": 3,
                     "vector_index_profile": "accurate",
                     # 検索・回答プロファイルは品質評価を上書きしない。送られても保存しない(#301)。
                     "evaluation_suite": "strict_ci",
@@ -211,7 +211,7 @@ def test_create_and_get_search_answer_profile(fake_oracle: FakeSearchAnswerProfi
     data = resp.json()["data"]
     assert data["name"] == "経理アシスタント"
     assert data["knowledge_base_count"] == 2
-    assert data["config"]["query"]["query_strategy"] == "rag_fusion"
+    assert data["config"]["query"]["max_anchors_per_document"] == 3
     assert "vector_index_profile" not in data["config"]["query"]
     assert "evaluation_suite" not in data["config"]["query"]
     assert "generation_profile" not in data["config"]["query"]
@@ -424,14 +424,14 @@ def test_default_search_answer_profile_allows_settings_but_protects_identity_and
             "description": "全社共通の検索設定",
             "config": {
                 "knowledge_base_ids": ["kb-default"],
-                "query": {"answer_flow": "standard_rag"},
+                "query": {"max_anchors_per_document": 3},
             },
         },
     )
     assert update.status_code == 200
     assert update.json()["data"]["description"] == "全社共通の検索設定"
     assert update.json()["data"]["config"]["knowledge_base_ids"] == ["kb-default"]
-    assert update.json()["data"]["config"]["query"]["answer_flow"] == "standard_rag"
+    assert update.json()["data"]["config"]["query"]["max_anchors_per_document"] == 3
 
     # 画面の保存と同じ形（名前を送らず説明と設定を送る）で DEFAULT を保存できる（#521）。
     assert default["description"] == DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION

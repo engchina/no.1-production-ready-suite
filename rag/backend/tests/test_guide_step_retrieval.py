@@ -84,7 +84,7 @@ async def _answer(monkeypatch: pytest.MonkeyPatch, oracle: GuideStepOracle, **se
             rag_query_strategy="simple_retrieval",
             rag_answer_flow="standard_rag",
             rag_rerank_enabled=False,
-            **settings,
+            **{"rag_support_guide_enabled": True, **settings},
         ),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
@@ -236,7 +236,9 @@ def test_build_engine_settings_passes_guide_step_settings(tmp_path: Any) -> None
     """手順ごとの検索の設定と追加の検索の枠を rag_engine の設定へ渡す。"""
     from app.rag.answer_engine import build_engine_settings
 
-    default = build_engine_settings(Settings(), output_dir=tmp_path)
+    off = build_engine_settings(Settings(_env_file=None), output_dir=tmp_path)
+    assert off.guide_step_retrieval_enabled is False
+    default = build_engine_settings(Settings(rag_support_guide_enabled=True), output_dir=tmp_path)
     custom = build_engine_settings(
         Settings(
             rag_guide_step_retrieval_enabled=False,
@@ -492,3 +494,19 @@ def test_mcp_guide_reference_carries_sheet_ranges_apart_from_pages() -> None:
     )
     assert [(r.page_start, r.page_end) for r in pages.page_ranges] == [(3, 3)]
     assert pages.sheet_ranges == []
+
+
+async def test_master_off_discards_stale_guide_and_does_not_run_step_retrieval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oracle = GuideStepOracle()
+    outcome = await _answer(
+        monkeypatch,
+        oracle,
+        rag_support_guide_enabled=False,
+        rag_guide_step_retrieval_enabled=True,
+        rag_support_guide=_guide(),
+    )
+    assert "guide_step_retrieval" not in outcome.diagnostics
+    assert not any("page_ranges" in filters for _, filters in oracle.calls)
+    assert "doc-b:c1" not in _evidence_ids(outcome)

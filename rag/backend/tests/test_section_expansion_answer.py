@@ -259,23 +259,23 @@ async def test_answer_continues_when_section_map_cannot_be_read(
     assert outcome.diagnostics["section_expansion"]["stop_reason"] == "no_sections"
 
 
-def test_section_expansion_settings_are_profile_only(
+def test_section_expansion_settings_are_global(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
-    """拡張の開閉と上限は検索・回答プロファイルで選ぶ。環境変数 / .env は読まない（#1436）。"""
-    assert SECTION_FIELDS <= PROFILE_ONLY_SETTING_FIELDS
+    """章節の拡張は検索方法の全体設定を保存した環境変数から読む。"""
+    assert SECTION_FIELDS.isdisjoint(PROFILE_ONLY_SETTING_FIELDS)
     monkeypatch.setenv("RAG_SECTION_EXPANSION_ENABLED", "false")
     env_file = tmp_path / "backend.env"
     env_file.write_text("RAG_SECTION_EXPANSION_MAX_LEVELS=2\n", encoding="utf-8")
 
     settings = Settings(_env_file=env_file)
 
-    assert settings.rag_section_expansion_enabled is True
-    assert settings.rag_section_expansion_max_levels == 4
+    assert settings.rag_section_expansion_enabled is False
+    assert settings.rag_section_expansion_max_levels == 2
     assert settings.rag_section_expansion_input_token_percent == 50
 
 
-def test_search_answer_profile_selects_section_expansion_limits() -> None:
+def test_search_answer_profile_ignores_legacy_section_expansion() -> None:
     from app.rag.search_answer_profile_config import (
         parse_search_answer_profile_config,
         resolve_search_answer_profile_settings,
@@ -298,12 +298,12 @@ def test_search_answer_profile_selects_section_expansion_limits() -> None:
         ),
     )
 
-    assert applied is True
+    assert applied is False
     assert (
         selected.rag_section_expansion_enabled,
         selected.rag_section_expansion_max_levels,
         selected.rag_section_expansion_input_token_percent,
-    ) == (False, 2, 30)
+    ) == (True, 4, 50)
     assert base.rag_section_expansion_enabled is True
     # 範囲の外の保存値は読まない。
     broken = parse_search_answer_profile_config(

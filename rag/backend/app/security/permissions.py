@@ -380,6 +380,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", f"{_R}/review-edits"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/chunk-sets"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/sections"): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_D}/sections/preview"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/sections"): _DOCUMENT_WORKSPACE,
     ("DELETE", f"{_D}/sections"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/ingestion-segments"): _DOCUMENT_WORKSPACE,
@@ -600,6 +601,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ),
     # 回答履歴の保存設定は、検索・チャットの回答履歴表示も読む。
     # 回答の検索と生成の全体既定・回答の記録の保存期間・質問履歴は「検索方法」の画面にある(#593)。
+    ("GET", "/settings/profile-guide-search-defaults"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("GET", "/settings/answering"): _any(MENU_SETTINGS_RETRIEVAL),
     ("PATCH", "/settings/answering"): _any(MENU_SETTINGS_RETRIEVAL),
     ("GET", "/settings/answer-records"): _any(MENU_SETTINGS_RETRIEVAL, MENU_SEARCH, MENU_CHAT),

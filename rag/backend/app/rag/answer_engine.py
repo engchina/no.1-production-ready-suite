@@ -519,7 +519,7 @@ def build_engine_settings(
         if settings.rag_section_extraction_enabled
         else "0",
         "RAG_ENGINE_GUIDE_STEP_RETRIEVAL": "1"
-        if settings.rag_guide_step_retrieval_enabled
+        if settings.rag_support_guide_enabled and settings.rag_guide_step_retrieval_enabled
         else "0",
         "RAG_ENGINE_GUIDE_STEP_MAX_QUERIES": str(settings.rag_guide_step_max_queries),
         "RAG_ENGINE_GUIDE_STEP_CHUNKS_PER_STEP": str(settings.rag_guide_step_chunks_per_step),
@@ -587,9 +587,15 @@ def build_engine_settings(
     return replace(
         engine_settings,
         domain_keywords_override=tuple(settings.rag_domain_keywords),
-        known_conditions=guide_known_conditions(settings.rag_support_guide),
-        evidence_conditions=guide_evidence_conditions(settings.rag_support_guide),
-        evidence_plans=guide_evidence_plans(settings.rag_support_guide),
+        known_conditions=guide_known_conditions(
+            settings.rag_support_guide if settings.rag_support_guide_enabled else {}
+        ),
+        evidence_conditions=guide_evidence_conditions(
+            settings.rag_support_guide if settings.rag_support_guide_enabled else {}
+        ),
+        evidence_plans=guide_evidence_plans(
+            settings.rag_support_guide if settings.rag_support_guide_enabled else {}
+        ),
     )
 
 
@@ -658,6 +664,8 @@ class AnswerEngine:
                     "rag_answer_vision_enabled": False,
                 }
             )
+        if not settings.rag_support_guide_enabled:
+            settings = settings.model_copy(update={"rag_support_guide": {}})
         self._settings = settings
         self._oracle = oracle
         # チャットの会話の添付から選んだ根拠の候補（#2517。`app.rag.chat_attachments`）。検索の

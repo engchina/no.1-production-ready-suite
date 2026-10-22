@@ -524,8 +524,10 @@ async def post_clarification_suggest(
     if found is None:
         # 業務ガイドの不明・矛盾の条件（選択肢付き）を、ルールの確認と同じ形で聞く（#1238）。
         # 適用範囲は検索と同じ手がかりで確かめる（#1278）。
-        guides = await _published_guides(oracle, search_answer_profile_id)
         settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
+        if not settings.rag_support_guide_enabled:
+            return ApiResponse(data=ClarificationSuggestionsData())
+        guides = await _published_guides(oracle, search_answer_profile_id)
         # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
         query = await build_guide_query(
             oracle, settings, search_answer_profile_id, guides, request.query, payload

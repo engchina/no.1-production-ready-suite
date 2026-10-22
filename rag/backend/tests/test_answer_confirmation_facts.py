@@ -30,6 +30,7 @@ def test_guide_known_conditions_take_labels_with_values() -> None:
 def test_engine_settings_carry_known_conditions(tmp_path: Path) -> None:
     settings = _oci_settings()
     assert build_engine_settings(settings, output_dir=tmp_path).known_conditions == ()
+    settings.rag_support_guide_enabled = True
     settings.rag_support_guide = {
         "guide_id": "g1",
         "known_conditions": [{"id": "approved", "label": "部門長の承認", "value": "はい"}],

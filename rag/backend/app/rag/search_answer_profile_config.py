@@ -28,7 +28,7 @@ from pr_system_settings.answer_notice import (
     ANSWER_NOTICE_CONTACT_MAX_CHARS,
     normalize_notice_contact,
 )
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 from rag_parser_core.language import FIELD_SPECS, LanguagePackError, builtin_pack, resolve
 
 from app.config import Settings, enterprise_ai_model_catalog
@@ -43,6 +43,27 @@ SEARCH_ANSWER_PROFILE_CONFIG_VERSION = 1
 MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES = 200
 # 窓口の上書きの長さの上限（システム設定の窓口と同じ。#2400）。
 CONTACT_OVERRIDE_MAX_CHARS = ANSWER_NOTICE_CONTACT_MAX_CHARS
+
+
+# 検索方法の全体設定だけで決め、プロファイルへは保存・適用しない。
+PROFILE_GLOBAL_QUERY_FIELDS = frozenset(
+    (
+        "query_strategy",
+        "answer_flow",
+        "neighbor_child_count",
+        "rerank_enabled",
+        "auto_field_filter_enabled",
+        "graph_expansion_enabled",
+        "screen_linking_enabled",
+        "request_coverage_retrieval_enabled",
+        "guide_step_retrieval_enabled",
+        "entity_expansion_enabled",
+        "entity_expansion_max_chunks",
+        "section_expansion_enabled",
+        "section_expansion_max_levels",
+        "section_expansion_input_token_percent",
+    )
+)
 
 
 class ProfileAnswerModelUnavailableError(ValueError):
@@ -72,6 +93,11 @@ class SearchAnswerProfileConfig(BaseModel):
         description="束ねる参照 KB の ID 群(多対多)。検索時にこの集合を検索対象へ展開する。",
     )
     query: KnowledgeBaseQueryConfig = Field(default_factory=KnowledgeBaseQueryConfig)
+
+    @field_serializer("query")
+    def _serialize_query(self, value: KnowledgeBaseQueryConfig) -> dict[str, object]:
+        return value.model_dump(mode="json", exclude=set(PROFILE_GLOBAL_QUERY_FIELDS))
+
     # 回答前の確認（#1839）の方針。confirm = 曖昧な質問を確認してから回答する（ルールごとの確認・
     # 業務ガイドの条件の確認を出す）/ assume = 確認せずに前提を示して回答する
     # （チャットに確認を出さない）。
@@ -83,9 +109,6 @@ class SearchAnswerProfileConfig(BaseModel):
     # 回答の注意書きの窓口の上書き（#2400。業務ごとに窓口が違うとき。窓口の名前・連絡の方法の
     # 1 行）。空ならシステム設定の窓口。業務ガイドの人への引き継ぎの窓口（handoff.contact）が優先。
     contact_override: str = Field(default="", max_length=CONTACT_OVERRIDE_MAX_CHARS * 2)
-    # 資料で答えた回答の窓口の案内を「資料から分かる仕様を示し、当てはまらなければ窓口へ」の形に
-    # するか（#2400。既定 OFF）。
-    spec_then_contact: bool = False
 
     @field_validator("contact_override")
     @classmethod
@@ -167,8 +190,13 @@ def resolve_search_answer_profile_settings(
     """
     if apply_answer_model:
         validate_profile_answer_model(global_settings, config)
-    overlays: list[KnowledgeBaseQueryConfig] = [config.query]
+    overlays = [config.query.model_copy(update={key: None for key in PROFILE_GLOBAL_QUERY_FIELDS})]
     settings, applied = compose_query_settings(global_settings, overlays)
+    # 使用の意思を持たない既存プロファイルは、全体の値にかかわらず OFF。
+    guide_enabled = config.query.support_guide_enabled is True
+    if settings.rag_support_guide_enabled != guide_enabled:
+        settings = settings.model_copy(update={"rag_support_guide_enabled": guide_enabled})
+        applied = True
     if apply_answer_model and config.answer_model_id:
         settings = settings.model_copy(
             update={"oci_enterprise_ai_default_text_model": config.answer_model_id}
@@ -177,12 +205,11 @@ def resolve_search_answer_profile_settings(
     if config.language_pack:
         settings = settings.model_copy(update={"rag_language_pack_overrides": config.language_pack})
         applied = True
-    if config.contact_override or config.spec_then_contact:
+    if config.contact_override:
         # 回答の注意書きの窓口（#2400）。検索・回答の挙動は変えないので applied にしない。
         settings = settings.model_copy(
             update={
                 "rag_answer_contact_override": config.contact_override,
-                "rag_answer_spec_then_contact": config.spec_then_contact,
             }
         )
     return settings, applied

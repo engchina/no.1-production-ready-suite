@@ -1,4 +1,4 @@
-"""検索・回答プロファイルの窓口の上書きと「仕様を示し、当てはまらなければ窓口へ」の形（#2400）。
+"""検索・回答プロファイルの窓口の上書きと固定した窓口の案内。
 
 回答の注意書き（#2405）の窓口の案内の 1 行を、プロファイルの上書き・業務ガイドの引き継ぎで決める。
 同じ窓口の案内を 2 度出さない。外部 I/O はスタブ（`tests.test_answer_surfaces` と同じ）。
@@ -92,40 +92,24 @@ def test_guide_contact_is_ignored_when_the_answer_is_not_the_handoff() -> None:
 
 
 @pytest.mark.parametrize(
-    ("outcome", "spec_form"),
-    [
-        ("answered", True),
-        ("conditional", True),
-        ("insufficient_evidence", False),
-        ("needs_environment_data", False),
-        ("needs_human", False),
-    ],
-    ids=lambda value: str(value),
+    "outcome",
+    ["answered", "conditional", "insufficient_evidence", "needs_environment_data", "needs_human"],
 )
-def test_spec_then_contact_form_only_for_answers_from_documents(
-    outcome: str, spec_form: bool
-) -> None:
-    notice = compose_rag_answer_notice(
-        PARTS, {"outcome": outcome}, contact_override="窓口 B", spec_then_contact=True
-    )
+def test_contact_form_is_fixed_for_all_answer_outcomes(outcome: str) -> None:
+    notice = compose_rag_answer_notice(PARTS, {"outcome": outcome}, contact_override="窓口 B")
     assert notice is not None
-    last_line = notice.splitlines()[-1]
-    if spec_form:
-        assert last_line == (
-            "回答は資料から分かる仕様です。ご自身の状況に当てはまらない場合は、"
-            "窓口 Bへお問い合わせください。"
-        )
-    else:
-        assert last_line == "解決しない場合は、窓口 Bへお問い合わせください。"
+    assert notice.splitlines()[-1] == "解決しない場合は、窓口 Bへお問い合わせください。"
     assert notice.count("お問い合わせください") == 1
 
 
-def test_spec_then_contact_is_off_by_default() -> None:
-    config = SearchAnswerProfileConfig()
-    assert config.spec_then_contact is False
-    assert config.contact_override == ""
+@pytest.mark.parametrize("legacy_value", [True, False, None])
+def test_removed_contact_policy_is_ignored_and_not_saved(legacy_value: bool | None) -> None:
+    config = SearchAnswerProfileConfig.model_validate({"spec_then_contact": legacy_value})
+    assert "spec_then_contact" not in config.model_dump()
+    settings, _ = resolve_search_answer_profile_settings(Settings(), config)
+    assert not hasattr(settings, "rag_answer_spec_then_contact")
     notice = compose_rag_answer_notice(PARTS, {"outcome": "answered"})
-    assert notice is not None and "仕様" not in notice
+    assert notice == f"本文の 1 行目\n{SYSTEM_LINE}"
 
 
 def test_no_notice_for_clarification_or_disabled() -> None:
@@ -144,19 +128,21 @@ def test_profile_config_normalizes_and_limits_the_contact_override() -> None:
 
 def test_profile_settings_carry_the_contact_override() -> None:
     settings, _ = resolve_search_answer_profile_settings(
-        Settings(), SearchAnswerProfileConfig(contact_override="窓口 B", spec_then_contact=True)
+        Settings(), SearchAnswerProfileConfig(contact_override="窓口 B")
     )
     assert settings.rag_answer_contact_override == "窓口 B"
-    assert settings.rag_answer_spec_then_contact is True
     plain, _ = resolve_search_answer_profile_settings(Settings(), SearchAnswerProfileConfig())
     assert plain.rag_answer_contact_override == ""
-    assert plain.rag_answer_spec_then_contact is False
 
 
 def test_search_api_uses_the_profile_contact_override(monkeypatch: MonkeyPatch) -> None:
     oracle = _install(monkeypatch)
-    oracle._views["bv-1"] = SearchAnswerProfileConfig(  # noqa: SLF001 - テストのスタブ
-        knowledge_base_ids=["kb-1"], contact_override="窓口 B（内線 2）"
+    oracle._views["bv-1"] = SearchAnswerProfileConfig.model_validate(  # noqa: SLF001 - テストのスタブ
+        {
+            "knowledge_base_ids": ["kb-1"],
+            "contact_override": "窓口 B（内線 2）",
+            "spec_then_contact": True,
+        }
     )
     _local_service()
     response = client.post(
@@ -165,6 +151,6 @@ def test_search_api_uses_the_profile_contact_override(monkeypatch: MonkeyPatch) 
     assert response.status_code == 200, response.text
     data: dict[str, Any] = response.json()["data"]
     assert data["notice"].startswith(DEFAULT_ANSWER_NOTICE_BODY)
-    assert data["notice"].endswith("窓口 B（内線 2）へお問い合わせください。")
+    assert data["notice"].endswith("解決しない場合は、窓口 B（内線 2）へお問い合わせください。")
     assert "ヘルプデスク" not in data["notice"]
     assert oracle.saved[-1]["answer_notice"] == data["notice"]

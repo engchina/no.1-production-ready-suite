@@ -535,3 +535,147 @@ async def test_ingestion_skips_extraction_when_no_definitions_apply() -> None:
     assert result.fields == []
     assert field_extraction_outcome(result) == ("no_definitions", 0)
     assert vlm.prompts == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("strategy", ["small_to_big", "structure_aware"])
+@pytest.mark.parametrize("infer_levels", [False, True])
+async def test_field_chunks_keep_source_location_after_roundtrip(
+    strategy: str, infer_levels: bool
+) -> None:
+    """末尾に追加した値は原文の位置を保ち、所在不明の値へ最後の章節を補わない。"""
+    from rag_pipeline_core.chunking import chunk_extraction_with_strategy
+
+    from app.rag.heading_levels import HeadingLevelPlan, apply_heading_levels
+
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(kind="title", text="# 冒頭", element_id="h1", page_number=1),
+            DocumentElement(
+                kind="text",
+                text="項目 A: VALUE-A",
+                element_id="source",
+                page_number=1,
+                bbox=[1, 2, 30, 40],
+                order=1,
+            ),
+            DocumentElement(kind="title", text="# 末尾", element_id="h2", page_number=3, order=2),
+            DocumentElement(
+                kind="text", text="最後の本文。", element_id="end", page_number=3, order=3
+            ),
+        ],
+        parser_artifacts={
+            "layout_records": {
+                "version": 1,
+                "pages": [],
+                "records": [
+                    {
+                        "id": "h1",
+                        "engine": "docling",
+                        "category": "Section-header",
+                        "text": "冒頭",
+                        "page": 1,
+                        "seq_no": 1,
+                    },
+                    {
+                        "id": "source",
+                        "engine": "docling",
+                        "category": "Text",
+                        "text": "項目 A: VALUE-A",
+                        "page": 1,
+                        "seq_no": 2,
+                    },
+                    {
+                        "id": "h2",
+                        "engine": "docling",
+                        "category": "Section-header",
+                        "text": "末尾",
+                        "page": 3,
+                        "seq_no": 1,
+                    },
+                    {
+                        "id": "end",
+                        "engine": "docling",
+                        "category": "Text",
+                        "text": "最後の本文。",
+                        "page": 3,
+                        "seq_no": 2,
+                    },
+                ],
+            }
+        },
+    )
+    if infer_levels:
+        extraction = apply_heading_levels(
+            extraction, HeadingLevelPlan(reason="planned", record_ids=("h1", "h2")), [1, 1]
+        )
+    result = await extract_fields_from_extraction(
+        extraction,
+        [FieldDefinition(name="項目 A"), FieldDefinition(name="項目 B")],
+        _extractor(
+            ExtractionField(name="項目 A", value="VALUE-A"),
+            ExtractionField(name="項目 B", value="NORMALIZED"),
+        ),
+        text_budget_tokens=_BUDGET,
+    )
+    result.elements.append(
+        DocumentElement(
+            kind="text",
+            text="末尾の要約。",
+            order=99,
+            content_kind="section_summary",
+            section_path=["末尾"],
+            page_number=3,
+            metadata={"nav_summary": True},
+        )
+    )
+    # 保存して読み戻す通常の経路を複数回通しても、派生要素へ直前の章節を補わない。
+    for _ in range(2):
+        result = StructuredExtraction.model_validate_json(result.model_dump_json())
+    source = next(element for element in result.elements if element.element_id == "source")
+    values = {
+        element.metadata["field_name"]: element
+        for element in result.elements
+        if element.content_kind == "field"
+    }
+    assert values["項目 A"].section_path == source.section_path
+    assert values["項目 A"].page_number == 1
+    assert values["項目 A"].bbox == [1, 2, 30, 40]
+    assert values["項目 B"].section_path == []
+    assert values["項目 B"].page_number is None
+    chunks = chunk_extraction_with_strategy(result, strategy=strategy, min_chars=0)
+    by_name = {
+        chunk.text.split(":", 1)[0]: chunk
+        for chunk in chunks
+        if chunk.metadata.get("content_kind") == "field"
+    }
+    assert by_name["項目 A"].metadata.get("section_path", "") == " > ".join(source.section_path)
+    assert not by_name["項目 B"].metadata.get("section_path")
+    summaries = [
+        chunk for chunk in chunks if chunk.metadata.get("content_kind") == "section_summary"
+    ]
+    assert len(summaries) == 1
+    assert summaries[0].metadata["section_path"] == "末尾"
+
+
+def test_derived_paths_do_not_change_following_original_section() -> None:
+    from rag_parser_core.extraction import normalize_document_elements
+
+    elements = [
+        DocumentElement(kind="text", text="原文。", section_path=["原文の章節"]),
+        DocumentElement(
+            kind="text",
+            text="# 要約の見出し",
+            content_kind="section_summary",
+            section_path=["別の章節"],
+        ),
+        DocumentElement(kind="text", text="続き。"),
+        DocumentElement(kind="text", text="値: A", metadata={"extracted_field": True}),
+    ]
+    result = normalize_document_elements(elements, fallback_text="")
+    assert [element.section_path for element in result] == [
+        ["原文の章節"],
+        ["別の章節"],
+        ["原文の章節"],
+        [],
+    ]

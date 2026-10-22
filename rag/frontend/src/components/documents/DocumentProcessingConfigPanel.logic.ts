@@ -18,8 +18,8 @@ import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
  * `rag/backend/app/api/routes/documents.py` の自動進行）にそろえる。
  * - PREPROCESS: ファイル準備 → 「ファイル準備後に抽出へ進む」のゲート
  *   （`ingest` が preprocess の artifact を保存した直後に `rag_auto_parse_after_preprocess_enabled` を見て止まる）
- * - EXTRACT: 文書解析 → Vision（`_attach_vision`）→ 項目抽出（`_attach_extraction_fields`）
- *   → 章節木（`_attach_navigation_tree`）→ 「抽出後に Chunk 作成へ進む」のゲート（REVIEW で止まり、
+ * - EXTRACT: 文書解析 → Vision（`_attach_vision`）→ 見出しの階層の推定 → 項目抽出（`_attach_extraction_fields`）
+ *   → 章節の抽出規則 → 章節の要約（`_attach_navigation_tree`）→ 「抽出後に Chunk 作成へ進む」のゲート（REVIEW で止まり、
  *   `rag_auto_chunk_after_extract_enabled` なら CHUNK の job を積む）
  * - CHUNK: 文書分割 → 文脈ヘッダ（`_chunks_with_context_headers` は分割の直後に chunk metadata へ付ける）
  *   → 「Chunk 後に Embedding / 索引へ進む」のゲート（CHUNKED で止まり、
@@ -121,17 +121,7 @@ export const RECIPE_CONFIG_ITEMS = [
       anchor: SETTINGS_ANCHORS.fieldExtraction,
     },
   },
-  {
-    field: "navigation_summary_enabled",
-    kind: "boolean",
-    label: "knowledgeBases.adapter.field.navigationSummary",
-    phase: "EXTRACT",
-    globalSettings: {
-      route: APP_ROUTES.settingsParserAdapters,
-      anchor: SETTINGS_ANCHORS.navigationSummary,
-    },
-  },
-  // 章節の抽出規則（#715）。取込の結果は変えず、章節ナビゲーションの章節だけに当てる。
+  // 章節の抽出規則で章節を作り、その章節ごとに要約を作る。
   {
     field: "section_rules_mode",
     kind: "select",
@@ -140,6 +130,16 @@ export const RECIPE_CONFIG_ITEMS = [
     globalSettings: {
       route: APP_ROUTES.settingsParserAdapters,
       anchor: SETTINGS_ANCHORS.sectionRules,
+    },
+  },
+  {
+    field: "navigation_summary_enabled",
+    kind: "boolean",
+    label: "knowledgeBases.adapter.field.navigationSummary",
+    phase: "EXTRACT",
+    globalSettings: {
+      route: APP_ROUTES.settingsParserAdapters,
+      anchor: SETTINGS_ANCHORS.navigationSummary,
     },
   },
   {

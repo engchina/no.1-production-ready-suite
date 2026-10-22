@@ -481,16 +481,16 @@ def test_settings_default_off_for_recipe_and_on_for_expansion() -> None:
         Settings(rag_entity_expansion_max_chunks=0)
 
 
-def test_entity_expansion_is_not_read_from_the_environment(
+def test_entity_expansion_uses_global_environment_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
-    """拡張の開閉と上限は検索・回答プロファイルで選ぶ。環境変数 / .env は読まない（#1388）。"""
+    """拡張の開閉と上限は検索方法の全体設定を保存した環境変数から読む。"""
     from app.config import PROFILE_ONLY_SETTING_FIELDS
 
     assert {
         "rag_entity_expansion_enabled",
         "rag_entity_expansion_max_chunks",
-    } <= PROFILE_ONLY_SETTING_FIELDS
+    }.isdisjoint(PROFILE_ONLY_SETTING_FIELDS)
     monkeypatch.setenv("RAG_ENTITY_EXPANSION_ENABLED", "false")
     monkeypatch.setenv("RAG_ENTITY_EXPANSION_MAX_CHUNKS", "3")
     # 同じ source のほかの項目は今までどおり読む。
@@ -504,16 +504,16 @@ def test_entity_expansion_is_not_read_from_the_environment(
 
     settings = Settings(_env_file=env_file)
 
-    assert settings.rag_entity_expansion_enabled is True
-    assert settings.rag_entity_expansion_max_chunks == 6
+    assert settings.rag_entity_expansion_enabled is False
+    assert settings.rag_entity_expansion_max_chunks == 3
     assert settings.rag_entity_index_enabled is False
     assert settings.rag_reference_expansion_max_chunks == 7
     # 属性名での生成（テスト・評価の上書き）は受け付ける。
     assert Settings(rag_entity_expansion_enabled=False).rag_entity_expansion_enabled is False
 
 
-def test_search_answer_profile_selects_entity_expansion_and_budget() -> None:
-    """プロファイルの ``query.entity_expansion_*`` がそのプロファイルの検索だけに効く（#1388）。"""
+def test_search_answer_profile_ignores_legacy_entity_expansion() -> None:
+    """保存済みの個別設定は適用せず、全体の名称・別名の拡張を使う。"""
     from app.rag.search_answer_profile_config import (
         parse_search_answer_profile_config,
         resolve_search_answer_profile_settings,
@@ -529,9 +529,9 @@ def test_search_answer_profile_selects_entity_expansion_and_budget() -> None:
             }
         ),
     )
-    assert applied is True
-    assert selected.rag_entity_expansion_enabled is False
-    assert selected.rag_entity_expansion_max_chunks == 3
+    assert applied is False
+    assert selected.rag_entity_expansion_enabled is True
+    assert selected.rag_entity_expansion_max_chunks == 6
     # 全体の設定は変えない（ほかのプロファイルの検索には効かない）。
     assert base.rag_entity_expansion_enabled is True
     # 選んでいない（未指定 / null）プロファイルは既定の on（#1402）。明示した true もそのまま。

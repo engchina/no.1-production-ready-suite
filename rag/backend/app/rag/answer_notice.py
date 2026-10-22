@@ -12,8 +12,6 @@
    案内を出さない（ガイドを優先する）。
 2. 検索・回答プロファイルの窓口の上書き（`contact_override`）があれば、その窓口。無ければ
    システム設定の窓口。
-3. 検索・回答プロファイルで「資料から分かる仕様を示し、当てはまらなければ窓口へ」を選んだとき
-   （`spec_then_contact`）、資料で答えた回答（answered / conditional）だけ、その形の 1 行にする。
 """
 
 from __future__ import annotations
@@ -32,13 +30,6 @@ logger = logging.getLogger(__name__)
 AnswerNoticeSource = Callable[[], AnswerNoticeParts | None]
 # 回答ではなく確認の質問の outcome（回答の封筒の `outcome`）。注意書きを付けない。
 NOTICE_EXCLUDED_OUTCOMES = frozenset({"needs_clarification"})
-# 「資料から分かる仕様を示し、当てはまらなければ窓口へ」の形にする回答（資料で答えた回答）。
-SPEC_THEN_CONTACT_OUTCOMES = frozenset({"answered", "conditional"})
-# その形の窓口の案内の 1 行（`{contact}` に窓口が入る）。
-SPEC_THEN_CONTACT_TEMPLATE = (
-    "回答は資料から分かる仕様です。"
-    "ご自身の状況に当てはまらない場合は、{contact}へお問い合わせください。"
-)
 # 業務ガイドの人への引き継ぎの判断（`rag_support_guide.decision`）。
 GUIDE_HANDOFF_DECISION = "handoff"
 # 引き継ぎの判断のときに、ガイドの窓口（handoff.contact）を持つ要求ごとの印。
@@ -75,7 +66,6 @@ def compose_rag_answer_notice(
     diagnostics: Mapping[str, object],
     *,
     contact_override: str = "",
-    spec_then_contact: bool = False,
     guide: Mapping[str, object] | None = None,
 ) -> str | None:
     """回答に付ける注意書き（モジュールの説明の順で窓口の案内を決める）。付けないなら None。"""
@@ -89,6 +79,4 @@ def compose_rag_answer_notice(
     ):
         return parts.text("")
     contact = contact_override.strip() or parts.contact
-    if spec_then_contact and diagnostics.get("outcome") in SPEC_THEN_CONTACT_OUTCOMES:
-        return parts.text(answer_notice_contact_line(contact, SPEC_THEN_CONTACT_TEMPLATE))
     return parts.text(answer_notice_contact_line(contact))

@@ -71,14 +71,14 @@ def test_settings_ignore_removed_answer_engine_env(monkeypatch: MonkeyPatch) -> 
 def test_saved_search_answer_profile_answer_engine_is_dropped() -> None:
     """検索・回答プロファイルに保存済みの ``answer_engine`` は読み捨て、ほかの上書きは効かせる。"""
     query = KnowledgeBaseQueryConfig.model_validate(
-        {"answer_engine": "standard", "rerank_enabled": False}
+        {"answer_engine": "standard", "max_anchors_per_document": 3}
     )
     config = SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"], query=query)
 
     settings, _ = resolve_search_answer_profile_settings(Settings(), config)
 
     assert "answer_engine" not in query.model_dump()
-    assert settings.rag_rerank_enabled is False
+    assert settings.rag_max_anchors_per_document == 3
 
 
 def test_search_api_answers_with_answer_engine_for_view_saved_as_standard(

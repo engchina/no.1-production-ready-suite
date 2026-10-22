@@ -150,6 +150,7 @@ def test_known_condition_is_not_a_candidate() -> None:
 def test_engine_settings_carry_evidence_conditions(tmp_path: Path) -> None:
     settings = _oci_settings()
     assert build_engine_settings(settings, output_dir=tmp_path).evidence_conditions == ()
+    settings.rag_support_guide_enabled = True
     settings.rag_support_guide = _guide_settings(_match())
     assert build_engine_settings(settings, output_dir=tmp_path).evidence_conditions == (
         ("field_kind", "項目の種類", (("選択の項目", ("選択",)), ("入力の項目", ("自由入力",)))),
@@ -273,6 +274,7 @@ def test_engine_settings_carry_evidence_plans(tmp_path: Path) -> None:
     match = _match(branching_guide())
     settings = _oci_settings()
     assert build_engine_settings(settings, output_dir=tmp_path).evidence_plans == ()
+    settings.rag_support_guide_enabled = True
     settings.rag_support_guide = {
         **_guide_settings(match),
         EVIDENCE_PLANS_KEY: evidence_plans(match),

@@ -104,7 +104,9 @@ async def test_search_chat_mcp_shared_context_forwards_rule_and_guide_questions(
             return view.model_copy(
                 update={
                     "config": SearchAnswerProfileConfig(
-                        knowledge_base_ids=["kb-1"], clarification_policy=policy
+                        knowledge_base_ids=["kb-1"],
+                        clarification_policy=policy,
+                        query={"support_guide_enabled": with_guide},
                     )
                 }
             )

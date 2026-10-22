@@ -270,7 +270,7 @@ async def test_ensure_default_search_answer_profile_preserves_settings_and_fixes
         profile_config=dump_search_answer_profile_config(
             SearchAnswerProfileConfig(
                 knowledge_base_ids=["kb-old"],
-                query={"query_strategy": "rag_fusion"},
+                query={"max_anchors_per_document": 3},
             )
         ),
         archived_at=now,
@@ -296,7 +296,7 @@ async def test_ensure_default_search_answer_profile_preserves_settings_and_fixes
     assert detail.status == SearchAnswerProfileStatus.ACTIVE
     assert detail.archived_at is None
     assert detail.config.knowledge_base_ids == ["kb-default"]
-    assert detail.config.query.query_strategy == "rag_fusion"
+    assert detail.config.query.max_anchors_per_document == 3
     # 説明が空の既存 DEFAULT には既定の説明を補う（#521）。
     assert detail.description == DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION
     assert len(connection.calls) == 1

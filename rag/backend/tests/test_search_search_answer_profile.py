@@ -11,7 +11,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from app.api.routes import search as search_route
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.main import app
 from app.rag import extraction_field_adapter as fields_mod
 from app.rag.diagnostics import build_search_diagnostics
@@ -124,8 +124,10 @@ def test_search_answer_profile_expands_kbs_and_applies_query_config(
     assert response.status_code == 200
     diagnostics = response.json()["data"]["diagnostics"]
     assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_query_strategy == "rag_fusion"
-    assert RecordingPipeline.captured_settings.rag_answer_flow == "standard_rag"
+    assert (
+        RecordingPipeline.captured_settings.rag_query_strategy == get_settings().rag_query_strategy
+    )
+    assert RecordingPipeline.captured_settings.rag_answer_flow == get_settings().rag_answer_flow
     assert diagnostics["search_answer_profile_applied"] == "bv-1"
     # 参照 KB が検索対象へ展開されている。
     assert RecordingPipeline.captured_request is not None
@@ -174,7 +176,7 @@ def test_saved_standard_options_of_search_answer_profile_are_ignored(
     assert response.status_code == 200
     settings = RecordingPipeline.captured_settings
     assert settings is not None
-    assert settings.rag_rerank_enabled is False
+    assert settings.rag_rerank_enabled == get_settings().rag_rerank_enabled
     for removed in ("rag_generation_profile", "rag_generation_system_prompt_override"):
         assert not hasattr(settings, removed)
 
