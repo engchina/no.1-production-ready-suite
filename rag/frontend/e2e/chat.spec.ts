@@ -975,7 +975,7 @@ for (const viewport of [
         {
           text: "・新しい開始日の行を追加します。",
           state: "warning",
-          reasons: [{ code: "value_unbound", label: "根拠の表の対応と違う可能性", detail: "合成の理由 A。" }],
+          reasons: [{ code: "value_unbound", label: "根拠の表の対応と違う可能性", detail: "合成の理由 A。" }, { code: "value_unbound", label: "根拠の表の対応と違う可能性", detail: "合成の理由 C。" }],
         },
         {
           text: unverified,
@@ -1002,6 +1002,7 @@ for (const viewport of [
     await page.getByRole("textbox").fill("合成の質問です。");
     await page.getByRole("button", { name: "送信" }).click();
 
+    await expect(page.getByText("複数のモデルの回答を並べて比べることもできる")).toHaveCount(0);
     const answer = page.getByTestId("answer-text");
     // 回答全体の注意は本文の上の warning の Banner。
     await expect(answer.getByTestId("answer-passage-warnings")).toHaveText("質問からずれている可能性");
@@ -1018,7 +1019,7 @@ for (const viewport of [
     await toggle.focus();
     await page.keyboard.press("Enter");
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await expect(marked.nth(0).getByTestId("answer-passage-mark-reasons")).toHaveText("根拠の表の対応と違う可能性合成の理由 A。");
+    await expect(marked.nth(0).getByTestId("answer-passage-mark-reasons")).toHaveText("根拠の表の対応と違う可能性合成の理由 A。根拠の表の対応と違う可能性合成の理由 C。");
     // 詳しい理由（detail）の無い印は短い理由だけを出す。
     await marked.nth(1).getByTestId("answer-passage-mark-toggle").click();
     await expect(marked.nth(1).getByTestId("answer-passage-mark-reasons")).toHaveText("根拠で確かめられない");

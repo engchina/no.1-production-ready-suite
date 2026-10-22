@@ -15,6 +15,7 @@ export interface MessageTextSegment {
 
 /** 全角の文末の記号。続く閉じ括弧・引用符までを 1 つの文末にする。 */
 const FULLWIDTH_TERMINATORS = new Set(["。", "！", "？", "；"]);
+const OPENERS = new Set(["「", "『", "（", "【", "〔", "［", "〈", "《", "(", "[", "{"]);
 const FULLWIDTH_CLOSERS = new Set(["」", "』", "】", "）", ")", "]", '"', "'", "”", "’"]);
 /** 半角の文末の記号。空白か本文の末尾が続くときだけ文末にする（`3.14`・`a!b` は切らない）。 */
 const ASCII_TERMINATORS = new Set([".", "!", "?"]);
@@ -87,7 +88,15 @@ export function segmentMessageText(text: string, locale = "ja"): MessageTextSegm
       ...collectIntlBoundaries(normalized, locale),
       ...collectFallbackBoundaries(normalized),
       normalized.length,
-    ])
+    ].map((boundary) => {
+      let start = boundary;
+      let opening = false;
+      while (start > 0 && (OPENERS.has(normalized[start - 1] ?? "") || normalized[start - 1] === "\u2060")) {
+        opening ||= OPENERS.has(normalized[start - 1] ?? "");
+        start -= 1;
+      }
+      return opening ? start : boundary;
+    }))
   ).sort((left, right) => left - right);
 
   const segments: MessageTextSegment[] = [];
