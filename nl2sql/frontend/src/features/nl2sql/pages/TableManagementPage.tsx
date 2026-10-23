@@ -265,7 +265,7 @@ function ImportWizard({
       </FormGrid>
 
       <div className="grid gap-3">
-        <Button icon={Eye} onClick={onPreview} loading={loading}
+        <Button type="button" icon={Eye} onClick={onPreview} loading={loading}
           disabled={!table.trim() || !fileReady || (sheetRequired && !sheet.trim())}
           data-testid="table-import-preview-button">
           {t("tableMgmt.importWizard.preview")}
