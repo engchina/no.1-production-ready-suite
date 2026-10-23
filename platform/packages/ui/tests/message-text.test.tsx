@@ -38,6 +38,10 @@ describe("MessageText", () => {
     expect(segmentMessageText("「保存しました。」次へ。").map((s) => s.text)).toEqual(["「保存しました。」", "次へ。"]);
   });
 
+  it.each(["「", "保存しました。「", "「\u2060"])("開き括弧で終わっても文字を失わない: %s", (text) => {
+    expect(segmentMessageText(text).map((segment) => segment.text).join("")).toBe(text);
+  });
+
   it("小数・バージョン・URL 内の句点を分割しない", () => {
     const text = "Version 1.2 is current. See https://example.com/docs. Done.";
     expect(segmentMessageText(text, "en").map((segment) => segment.text)).toEqual([

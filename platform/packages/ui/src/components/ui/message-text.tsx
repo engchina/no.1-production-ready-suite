@@ -89,6 +89,7 @@ export function segmentMessageText(text: string, locale = "ja"): MessageTextSegm
       ...collectFallbackBoundaries(normalized),
       normalized.length,
     ].map((boundary) => {
+      if (boundary === normalized.length) return boundary;
       let start = boundary;
       let opening = false;
       while (start > 0 && (OPENERS.has(normalized[start - 1] ?? "") || normalized[start - 1] === "\u2060")) {
