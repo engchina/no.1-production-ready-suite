@@ -320,3 +320,56 @@ def test_job_api_does_not_show_validation_error_as_bad_request(
 
     assert response.status_code == 500
     assert "validation error" not in response.text
+
+
+@pytest.mark.parametrize("identifier", ["001", "002", "+001", "-001", "00", "00.5"])
+def test_leading_zero_values_remain_text(identifier: str) -> None:
+    assert chat_attachments._sql_type([identifier]) == "VARCHAR2(4000)"
+    assert chat_attachments._typed(identifier, "VARCHAR2(4000)") == identifier
+
+
+@pytest.mark.parametrize(
+    "value", ["9007199254740993", "9007199254740995", "-9007199254740993", "9,007,199,254,740,993"]
+)
+def test_integer_text_does_not_pass_through_float(value: str) -> None:
+    expected = int(value.replace(",", ""))
+    assert chat_attachments._number(value) == expected
+    assert chat_attachments._typed(value, "NUMBER") == expected
+
+
+def test_csv_source_values_reach_sql_binds_without_precision_loss(
+    service: ChatAttachmentService,
+) -> None:
+    import json
+
+    data = b"id,value\n001,9007199254740993\n002,9007199254740995\n"
+    principal = _Principal("user-1", True)
+    item = asyncio.run(service.upload(principal, file_name="precision.csv", data=data))
+    service.attach_to_conversation(
+        principal, [item.attachment_id], conversation_id="c1", owner_user_uuid="user-1"
+    )
+    context = attachment_context("c1")
+    [table] = context.tables
+    assert [column.sql_type for column in table.columns] == ["VARCHAR2(4000)", "NUMBER"]
+    sql, binds = executable_with_attachments('SELECT "id", "value" FROM ATTACHMENT_1', context)
+    assert '"id" VARCHAR2(4000)' in sql
+    assert json.loads(binds["attachment_1"]) == [
+        ["001", 9007199254740993],
+        ["002", 9007199254740995],
+    ]
+
+
+@pytest.mark.parametrize(
+    "source,expected",
+    [
+        ("0", 0),
+        ("-0", 0),
+        ("+10", 10),
+        ("1,200", 1200),
+        ("0.25", 0.25),
+        ("-0.25", -0.25),
+        ("3400.5", 3400.5),
+    ],
+)
+def test_ordinary_numbers_keep_existing_types(source: str, expected: int | float) -> None:
+    assert chat_attachments._number(source) == expected

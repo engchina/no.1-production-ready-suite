@@ -193,8 +193,11 @@ def _number(value: CellValue) -> int | float | None:
         return value
     if isinstance(value, str) and _NUMBER_RE.match(value.strip()):
         text = value.strip().replace(",", "")
-        number = float(text)
-        return int(number) if number.is_integer() and "." not in text else number
+        # 先頭のゼロは識別子の一部として残す。整数を float にすると大きな値が丸められる。
+        integer_part = text.lstrip("+-").split(".", 1)[0]
+        if len(integer_part) > 1 and integer_part.startswith("0"):
+            return None
+        return float(text) if "." in text else int(text)
     return None
 
 
