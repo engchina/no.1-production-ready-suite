@@ -467,18 +467,37 @@ def test_mcp_orders_entity_expansion_with_ranked_evidence() -> None:
 # ---- 設定・レシピ ----
 
 
-def test_settings_default_off_for_recipe_and_on_for_expansion() -> None:
-    settings = Settings()
+def test_settings_default_off_for_recipe_and_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in (
+        "RAG_ENTITY_EXPANSION_ENABLED",
+        "RAG_SCREEN_LINKING_ENABLED",
+        "RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    settings = Settings(_env_file=None)
     # 索引の構築は既定 OFF。検索時の拡張とは別に設定する。
     assert settings.rag_entity_index_enabled is False
     assert settings.rag_chunk_context_header_enabled is False
     assert settings.rag_entity_name_columns == []
     assert settings.rag_entity_attribute_columns == []
-    # 拡張も既定 ON（#1402。#1362 の再評価で基準を満たした）。止めるのは検索・回答プロファイルで。
-    assert settings.rag_entity_expansion_enabled is True
+    # 任意の検索拡張は明示的に有効化した場合だけ使う。
+    assert settings.rag_entity_expansion_enabled is False
+    assert settings.rag_screen_linking_enabled is False
+    assert settings.rag_request_coverage_retrieval_enabled is False
     assert settings.rag_entity_expansion_max_chunks == 6
     with pytest.raises(ValueError):
         Settings(rag_entity_expansion_max_chunks=0)
+
+
+@pytest.mark.parametrize(
+    "field", ["entity_expansion", "screen_linking", "request_coverage_retrieval"]
+)
+def test_optional_search_expansion_accepts_explicit_environment_enable(
+    monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    monkeypatch.setenv(f"RAG_{field.upper()}_ENABLED", "true")
+    settings = Settings(_env_file=None)
+    assert getattr(settings, f"rag_{field}_enabled") is True
 
 
 def test_entity_expansion_uses_global_environment_settings(
@@ -519,7 +538,7 @@ def test_search_answer_profile_ignores_legacy_entity_expansion() -> None:
         resolve_search_answer_profile_settings,
     )
 
-    base = Settings()
+    base = Settings(rag_entity_expansion_enabled=True)
     selected, applied = resolve_search_answer_profile_settings(
         base,
         parse_search_answer_profile_config(
@@ -534,7 +553,7 @@ def test_search_answer_profile_ignores_legacy_entity_expansion() -> None:
     assert selected.rag_entity_expansion_max_chunks == 6
     # 全体の設定は変えない（ほかのプロファイルの検索には効かない）。
     assert base.rag_entity_expansion_enabled is True
-    # 選んでいない（未指定 / null）プロファイルは既定の on（#1402）。明示した true もそのまま。
+    # プロファイルの値に関係なく、明示的に有効化した全体の設定を使う。
     for query in ({}, {"entity_expansion_enabled": None}, {"entity_expansion_enabled": True}):
         other, _ = resolve_search_answer_profile_settings(
             base,
