@@ -765,7 +765,8 @@ class OracleRunFactsStore:
             fixed_offset = not isinstance(tz, ZoneInfo)
             if fixed_offset:
                 offset = now.astimezone(tz).utcoffset()
-                assert offset is not None
+                if offset is None:
+                    raise ValueError("タイムゾーンの時差を解決できません。")
                 binds["timezone_minutes"] = int(offset.total_seconds() // 60)
             else:
                 binds["timezone"] = timezone_name(tz)
