@@ -209,6 +209,7 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "generation",
         "generation",
         (
+            ("instruction", "rag_engine.generation.grounded:SCOPE_PLAN_SYSTEM_PROMPT"),
             ("system", "rag_engine.generation.grounded:GENERATE_SYSTEM_PROMPT"),
             ("assumptionSystem", "rag_engine.generation.grounded:ASSUMPTION_SYSTEM_PROMPT"),
         ),
