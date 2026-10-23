@@ -4929,6 +4929,9 @@ def run_round(
             json.dumps(
                 {
                     "question_contract": _contract_view(question),
+                    "glossary": [dict(term) for term in glossary],
+                    "guide_contracts": list(guide_step_contracts),
+                    "guide_steps": guide_step_evidence_lines(guide_steps, spans),
                     "evidence": [
                         {
                             "evidence_id": span["label"],
