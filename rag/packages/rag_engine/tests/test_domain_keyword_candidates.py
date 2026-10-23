@@ -54,12 +54,13 @@ class DomainKeywordCandidateTests(unittest.TestCase):
     def test_candidates_keep_surface_nouns_codes_and_exclude_predicates_and_layout_fragments(self):
         text = (
             "設定識別番号を変える。画面接続情報を確かめる。合成マスタをまとめて表示する。"
-            "サンプルを開く。サンプ\nルを閉じる。e-2045 を受ける。"
+            "サンプルを開く。サンプ\nルを閉じる。e-2045 と e_2045 を受ける。"
         )
         keywords = {item.keyword for item in suggest_domain_keyword_candidates([_source("a", text)])}
         self.assertIn("設定識別番号", keywords)
         self.assertIn("画面接続情報", keywords)
         self.assertIn("e-2045", keywords)
+        self.assertIn("e_2045", keywords)
         self.assertIn("マスタ", keywords)
         self.assertIn("サンプル", keywords)
         self.assertFalse(keywords & {"変える", "変え", "確かめる", "確かめ", "受ける", "受け", "纏める", "マスター", "サンプ"})

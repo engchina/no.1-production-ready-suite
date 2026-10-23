@@ -254,6 +254,10 @@ def tokenize_domain_keyword_candidates(
     for pattern in _EXTRA_PATTERNS:
         for match in pattern.finditer(body):
             tokens.append(match.group())
+    for match in _LATIN_RUN.finditer(body):
+        code = match.group()
+        if any(char.isalpha() for char in code) and any(char.isdecimal() for char in code):
+            tokens.append(code)
     for chunk in _split_for_sudachi(body):
         compound: list[str] = []
         previous_end = -1
