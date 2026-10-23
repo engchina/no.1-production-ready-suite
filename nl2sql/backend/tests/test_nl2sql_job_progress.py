@@ -134,6 +134,11 @@ def test_done_chat_turn_records_every_step_and_params(jobs: Fixture) -> None:
     service, repository = jobs
     job = run(service, start(service))
     assert job.status == JobStatus.DONE, job.error_message
+    history = repository.list_documents("history", limit=100)
+    assert len(history) == 1
+    assert history[0]["progress_events"] == [
+        event.model_dump(mode="json") for event in job.progress_events
+    ]
 
     events = job.progress_events
     assert_contiguous(events)

@@ -20,7 +20,7 @@ from app.config import Settings
 from app.rag.guardrails import GuardrailFinding
 
 trace_logger = logging.getLogger("app.trace")
-TraceOutcome = Literal["success", "error", "cancelled"]
+TraceOutcome = Literal["success", "error", "cancelled", "skipped"]
 TraceAttribute = str | int | float | bool | None
 SAFE_TRACE_ATTRIBUTE_SUFFIXES = (
     "_chars",

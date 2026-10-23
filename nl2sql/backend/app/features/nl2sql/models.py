@@ -2059,6 +2059,8 @@ class SqlChatData(BaseModel):
 class HistoryItem(BaseModel):
     """実行履歴。"""
 
+    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
+
     generation_only: bool = False
 
     trace_summary: TraceSummary | None = None

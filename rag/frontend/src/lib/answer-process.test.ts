@@ -102,6 +102,14 @@ describe("answerProcessStepsFromStages（RAG 検索）", () => {
     expect(rows[1].status).toBe("running");
   });
 
+  it("無効で省略した安全チェックは成功や失敗へ置き換えず、理由を残す", () => {
+    const rows = answerProcessStepsFromStages([
+      stage("answer_guardrail", "started"),
+      { ...stage("answer_guardrail", "skipped", 1), details: { fields: [{ label: "結果", value: "無効のため省略" }] } },
+    ], { terminal: "done" });
+    expect(rows[0]).toMatchObject({ status: "skipped", details: { fields: [{ label: "結果", value: "無効のため省略" }] } });
+  });
+
   it("停止した検索の実行中の工程はスキップにする", () => {
     const rows = answerProcessStepsFromStages(
       [stage("answer_step:文書検索", "started"), stage("answer_step:文書検索", "cancelled")],

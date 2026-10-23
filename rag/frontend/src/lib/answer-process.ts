@@ -37,7 +37,7 @@ export const PIPELINE_STEP_LABEL: Readonly<Record<string, I18nKey>> = {
 export const ANSWER_STEP_KIND = "answer_step";
 
 /** 回答の記録の工程の状態のうち、結果の説明ではないもの（完了・例外で中断・中止。失敗は状態で示す）。 */
-const PLAIN_STEP_STATUSES = new Set(["", "complete", "エラーで中断", "中止"]);
+const PLAIN_STEP_STATUSES = new Set(["", "complete", "completed", "done", "ok", "エラーで中断", "中止"]);
 /** 回答の記録の工程の状態のうち、工程の失敗（#2056 と同じ）。 */
 const FAILED_STEP_STATUSES = new Set(["エラーで中断", "中止"]);
 
@@ -116,7 +116,8 @@ export function llmCallsLabel(
 }
 
 /** 工程のイベントの種類（行にしない工程は null）。 */
-function stageKind(stage: string): string | null {
+function stageKind(stage: string, includeWrapper = false): string | null {
+  if (includeWrapper && (stage === "retrieval" || stage === "answer")) return stage;
   if (stage.startsWith(ANSWER_STEP_STAGE_PREFIX)) {
     return stage.slice(ANSWER_STEP_STAGE_PREFIX.length).trim() ? ANSWER_STEP_KIND : null;
   }
@@ -125,6 +126,8 @@ function stageKind(stage: string): string | null {
 
 /** 工程の名前（行の名前）。 */
 function stageLabel(stage: string, kind: string): string {
+  if (kind === "retrieval") return t("search.stage.retrieval");
+  if (kind === "answer") return t("search.stage.answer");
   if (kind === ANSWER_STEP_KIND) return answerStepDisplayName(stage.slice(ANSWER_STEP_STAGE_PREFIX.length));
   return t(PIPELINE_STEP_LABEL[kind]);
 }
@@ -132,7 +135,7 @@ function stageLabel(stage: string, kind: string): string {
 /** SSE の工程のイベント（RAG 検索。受け取った時刻を足したもの）。 */
 export interface AnswerStageRecord {
   stage: string;
-  outcome: "started" | "success" | "error" | "cancelled";
+  outcome: "started" | "success" | "error" | "cancelled" | "skipped";
   elapsed_ms: number;
   /** 終わった工程の詳細（backend の共有の詳細の形。工程が終わったときに届く。#2341 / #2373）。 */
   details?: unknown;
@@ -167,10 +170,11 @@ export function answerProcessStepsFromStages(
     executionSteps = [],
   }: { terminal?: AnswerProcessTerminal; executionSteps?: AnswerDiagnostics["steps"] } = {}
 ): ChatProgressStep[] {
+  const includeWrapper = !stages.some((event) => event.stage.startsWith(ANSWER_STEP_STAGE_PREFIX));
   const rows: StageRow[] = [];
   const open: { stage: string; index: number }[] = [];
   for (const event of stages) {
-    const kind = stageKind(event.stage);
+    const kind = stageKind(event.stage, includeWrapper);
     if (kind === null) continue;
     if (event.outcome === "started") {
       const depth = kind === ANSWER_STEP_KIND ? open.filter((item) => stageKind(item.stage) === ANSWER_STEP_KIND).length : 0;
@@ -196,8 +200,9 @@ export function answerProcessStepsFromStages(
       // 中断（停止・時間切れ）は終端で決める。
       continue;
     }
-    row.status = event.outcome === "success" ? "done" : "failed";
+    row.status = event.outcome === "skipped" ? "skipped" : event.outcome === "success" ? "done" : "failed";
     if (Number.isFinite(event.elapsed_ms)) row.durationMs = Math.max(0, event.elapsed_ms);
+    if (event.receivedAtMs !== undefined) row.finishedAt = new Date(event.receivedAtMs).toISOString();
     // 終わった工程の詳細と計測値は、工程が終わったときのイベントで届く（回答の完了を待たずに段を開ける。#2341 / #2373）。
     const stageDetails = parseRunStepDetails(event.details);
     if (stageDetails) row.details = stageDetails;
@@ -242,6 +247,7 @@ export function answerProcessStepsFromStages(
   return rows.map((row) => {
     const step: ChatProgressStep = { id: row.id, label: row.label, status: row.status };
     if (row.startedAt) step.startedAt = row.startedAt;
+    if (row.finishedAt) step.finishedAt = row.finishedAt;
     if (row.durationMs != null) step.durationMs = row.durationMs;
     if (row.meta) step.meta = row.meta;
     if (row.level) step.level = row.level;

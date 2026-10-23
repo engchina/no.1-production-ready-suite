@@ -336,7 +336,7 @@ export function SearchClient() {
                 ? {
                     ...current,
                     traceId: stage.trace_id || current.traceId,
-                    stages: [...current.stages, { ...stage, receivedAtMs: Date.now() }],
+                    stages: [...current.stages, { ...stage, receivedAtMs: stage.occurred_at_ms ?? Date.now() }],
                   }
                 : current
             ),

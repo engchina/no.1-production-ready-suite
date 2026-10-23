@@ -330,7 +330,7 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
         SearchRequest(query="受注の登録方法は？"), progress_callback=capture
     )
     # 回答の安全チェックの結果は、成功の進捗の詳細で運ぶ（処理の経過の段を開いて見る。#2341）。
-    assert details["answer_guardrail"]["fields"][0]["label"] == "結果"
+    assert details["answer_guardrail"]["fields"][0] == {"label": "結果", "value": "無効のため省略"}
 
     assert "登録ボタン" in response.answer
     # 最後は回答の記録の保存の工程（#2342。この FakeOracle は保存できないので失敗、回答は返す）。
@@ -343,7 +343,7 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
     assert observed[-3:] == [
         ("answer", "success"),
         ("answer_guardrail", "started"),
-        ("answer_guardrail", "success"),
+        ("answer_guardrail", "skipped"),
     ]
     # 回答フローの中の各工程は、入れ子の工程として開始と終了を通知する（#593）。
     inner = observed[1:-3]

@@ -85,7 +85,14 @@ def answer_guardrail_details(result: Any, answer: str) -> dict[str, Any] | None:
     allowed = bool(getattr(result, "allowed", True))
     unavailable = bool(getattr(result, "backend_degraded", False))
     errors = sum(1 for item in findings if getattr(item, "severity", "") == "error")
-    if unavailable:
+    skipped_reason = getattr(result, "skipped_reason", None)
+    if skipped_reason is not None:
+        verdict = {
+            "disabled": "無効のため省略",
+            "empty_text": "検査する回答がないため省略",
+            "client_unavailable": "検査の接続がないため省略",
+        }.get(skipped_reason, "省略")
+    elif unavailable:
         verdict = "安全検査を完了できず、回答を止めました"
     elif not allowed:
         verdict = "回答を止めました"

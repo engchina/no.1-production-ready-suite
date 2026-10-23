@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 from app.clients.oci_guardrails import GuardrailInspection, OciGuardrailsClient
 from app.config import Settings, get_settings
@@ -32,6 +32,7 @@ class GuardrailResult:
     sanitized_text: str
     findings: list[GuardrailFinding]
     backend_degraded: bool = False
+    skipped_reason: Literal["disabled", "empty_text", "client_unavailable"] | None = None
 
     @property
     def warnings(self) -> list[str]:
@@ -64,7 +65,16 @@ class GuardrailPolicy:
 
     def _inspect(self, text: str, *, enabled: bool) -> GuardrailResult:
         if not enabled or self._oci_client is None or not text.strip():
-            return GuardrailResult(allowed=True, sanitized_text=text, findings=[])
+            return GuardrailResult(
+                allowed=True,
+                sanitized_text=text,
+                findings=[],
+                skipped_reason="disabled"
+                if not enabled
+                else "empty_text"
+                if not text.strip()
+                else "client_unavailable",
+            )
         try:
             inspection = self._oci_client.inspect_text(text)
         except Exception:  # noqa: BLE001 - SDK の詳細や入力を応答へ出さない

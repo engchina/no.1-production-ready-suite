@@ -8,9 +8,9 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass
-from time import perf_counter
-from typing import Any, cast
+from dataclasses import dataclass, field
+from time import perf_counter, time
+from typing import Any, Literal, cast
 
 from pr_backend_core.chat_history import (
     CHAT_HISTORY_UNTRUSTED_NOTE,
@@ -104,6 +104,7 @@ class SearchStageProgress:
     # 終わった工程の詳細（処理の経過の段を開いて見る。共有の詳細の形 fields / lines。#2341）。
     # 会話を踏まえた質問の書き換え・検索条件の読み取り・回答の安全チェックが成功のときに付ける。
     details: Mapping[str, object] | None = None
+    occurred_at_ms: float = field(default_factory=lambda: time() * 1000)
 
 
 type SearchStageProgressCallback = Callable[[SearchStageProgress], Awaitable[None]]
@@ -566,6 +567,7 @@ class RagPipeline:
                 ),
                 progress_callback=stage_callback,
                 result_details=lambda result: answer_guardrail_details(result, outcome.answer),
+                result_outcome=guardrail_stage_outcome,
             )
             record_guardrail_findings(
                 "answer",
@@ -896,6 +898,13 @@ class RagPipeline:
         return "" if rewritten == query.strip() else rewritten
 
 
+def guardrail_stage_outcome(result: GuardrailResult) -> Literal["success", "skipped", "error"]:
+    """検査の実施・省略・検査不能を工程の結果へ写す。検出による拒否は完了した検査。"""
+    if result.skipped_reason is not None:
+        return "skipped"
+    return "error" if result.backend_degraded else "success"
+
+
 async def _observe_stage[T](
     trace_id: str,
     stage: str,
@@ -905,13 +914,14 @@ async def _observe_stage[T](
     result_attributes: Callable[[T], Mapping[str, object]] | None = None,
     result_details: Callable[[T], Mapping[str, object] | None] | None = None,
     progress_callback: SearchStageProgressCallback | None = None,
+    result_outcome: Callable[[T], Literal["success", "skipped", "error"]] | None = None,
 ) -> T:
     """非同期 stage の処理時間を outcome 付きで記録する。
 
     stage の中で実行した SQL の回数・行数・LOB の読み取りの回数・時間を span の属性に足す
     (``db_*``。SQL を実行しなかった stage には足さない。#1490)。
     """
-    with observed_span(f"rag.{stage}", attributes={"pr.stage": stage}):
+    with observed_span(f"rag.{stage}", attributes={"pr.stage": stage}) as span:
         started_at = perf_counter()
         base_attributes = dict(attributes or {})
         await _emit_stage_progress(
@@ -975,13 +985,15 @@ async def _observe_stage[T](
             )
             raise
         elapsed = perf_counter() - started_at
+        outcome = result_outcome(result) if result_outcome is not None else "success"
+        span.set_status({"success": "done", "skipped": "skipped", "error": "failed"}[outcome])
         if result_attributes is not None:
             base_attributes.update(result_attributes(result))
-        record_rag_stage(SEARCH_METRIC_MODE, stage, "success", elapsed)
+        record_rag_stage(SEARCH_METRIC_MODE, stage, outcome, elapsed)
         record_trace_span(
             trace_id=trace_id,
             span_name=stage,
-            outcome="success",
+            outcome=outcome,
             seconds=elapsed,
             attributes=base_attributes,
         )
@@ -996,7 +1008,7 @@ async def _observe_stage[T](
             progress_callback,
             trace_id=trace_id,
             stage=stage,
-            outcome="success",
+            outcome=outcome,
             elapsed=elapsed,
             attributes=base_attributes,
             details=details,

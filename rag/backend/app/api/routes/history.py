@@ -107,6 +107,7 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
         **{key: value for key, value in fields.items() if not key.endswith("_json")},
         "trace_summary": stages.get("trace_summary"),
         "stages": stages.get("stages") or [],
+        "stage_events": stages.get("stage_events") or [],
         "steps": stages.get("steps") or [],
         "error_code": _text_or_none(stages.get("error_code")),
         "storage_failures": [
@@ -114,6 +115,10 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
         ],
         "citations": _citations(row.get("citations_json")),
     }
+    if row.get("conversation_id") and row.get("message_id"):
+        message = await oracle.get_chat_message(str(row["conversation_id"]), str(row["message_id"]))
+        if message is not None:
+            detail["progress_events"] = message.progress or []
     if detail["answer_generated"]:
         # 回答・引用・診断は回答の記録が正本（保持期間で消えていれば出さない）。
         record = await oracle.get_answer_record(run_id)

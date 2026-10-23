@@ -1,3 +1,5 @@
+import {chatProgressStepsFromEvents, parseChatProgressEvents, chatProgressTimelineStep} from "@production-ready/ui";
+import {CHAT_PROGRESS_STEP_DEFINITIONS} from "../src/features/nl2sql/chatProgress.ts";
 // 実行履歴（#1955）の取得条件と、行 → 共通の実行履歴の形への写し。
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -206,4 +208,16 @@ test("「会話を開く」はチャットの往復だけ、会話を見られ�
     historyConversationHref({ ...chat, owned_by_me: false }, { seesAllUsers: true, canOpenChat: true }),
     "/chat?profile_id=sales&conversation_id=conv-1"
   );
+});
+
+test("履歴はチャットと同じイベントを使い、旧い計時表から工程を追加しない", () => {
+  const events = parseChatProgressEvents(["generate_sql", "safety_check", "execute_sql"].map((kind, index) => ({
+    schema_version: 1, target_id: "synthetic", seq: index + 1, attempt: 0, type: "step", step_id: kind, kind,
+    status: index === 1 ? "skipped" : "done", emitted_at: "2026-10-23T00:00:02Z", started_at: "2026-10-23T00:00:00Z", finished_at: "2026-10-23T00:00:02Z",
+    params: {engine: "enterprise_ai_direct", rows: 1, safety_check_skipped: true}, details: {fields: [{label: "結果", value: "合成の結果"}]},
+  })));
+  const rows = historyTimelineSteps({...base, progress_events: events});
+  const actual = chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS).map(chatProgressTimelineStep);
+  assert.deepEqual(rows.map(({offsetMs: _offset, durationMs: _duration, level: _level, ...row}) => row), actual);
+  assert.deepEqual(rows.map((row) => row.status), ["done", "skipped", "done"]);
 });

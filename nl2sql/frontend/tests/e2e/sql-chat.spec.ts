@@ -1,3 +1,4 @@
+import {timelineSnapshot} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
 import { expect, test, type Locator, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import {
@@ -2305,4 +2306,28 @@ test("実測 trace の親子関係を SQL チャットで開ける", { tag: "@re
   await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await captureTraceLayouts(page, testInfo, "sql-chat-trace");
+});
+
+test("チャットと履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  const state = await setup(page);
+  const turn: Turn = {job_id: "synthetic-parity", question: "合成の質問", status: "done", created_at: now, engine: "enterprise_ai_direct", steps: [],
+    result: {generated_sql: "SELECT 1 AS VALUE FROM DUAL", original_question: "合成の質問", explanation: "合成の回答", safety: {is_safe: true, safety_checked: true}}};
+  state.turns.push(turn);
+  const events = turnProgressEvents(turn);
+  await page.goto("/chat?profile_id=sales&conversation_id=chat-1");
+  await page.getByTestId("sql-chat-progress-summary").click();
+  const live = await timelineSnapshot(page.getByTestId("sql-chat-progress"));
+  expect(live).toHaveLength(6);
+  await page.screenshot({path: testInfo.outputPath("chat-process.png")});
+  await page.route("**/api/nl2sql/history/synthetic-parity", (route) => route.fulfill({json: {data: {
+    id: "synthetic-parity", kind: "chat", session_id: "chat-1", question: "合成の質問", engine: "enterprise_ai_direct", generated_sql: "SELECT 1 AS VALUE FROM DUAL",
+    executable_sql: "SELECT 1 AS VALUE FROM DUAL", created_at: now, elapsed_ms: 0, engine_timings: [], stage_timings: [],
+    profile_id: "sales", profile_name: "プロファイル A", rewritten_question: "合成の質問", safety_is_safe: true,
+    result_row_count: 1, result_columns: ["VALUE"], feedback_comment: "", feedback_updated_at: "", progress_events: events,
+  }}}));
+  await page.goto("/history?id=synthetic-parity");
+  await page.getByTestId("history-detail-timeline-summary").click();
+  expect(await timelineSnapshot(page.getByTestId("history-detail-timeline"))).toEqual(live);
+  await expectChatNoOverflow(page);
+  await page.getByTestId("history-detail-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
 });

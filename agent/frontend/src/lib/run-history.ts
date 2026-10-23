@@ -283,6 +283,24 @@ export function withToolStepDetails(progress: ChatProgressStep[], steps: readonl
   });
 }
 
+/** イベントとツールの記録を、チャットと履歴で同じ工程に写す。 */
+export function runProgressSteps(run: RunState, progress: ChatProgressStep[]): ChatProgressStep[] {
+  const rows = withToolStepDetails(progress, run.steps);
+  const used = new Set([...pairToolProgressSteps(progress, run.steps).values()].map((step) => step.id));
+  const titles = runToolTitles(run);
+  return [...rows, ...run.steps.filter((step) => !used.has(step.id)).map((step): ChatProgressStep => {
+    const status = stepTimelineStatus(step);
+    return {
+      id: `step:${step.id}`, label: toolStepLabel(step, status, titles),
+      status: status === "waiting" ? "running" : status,
+      startedAt: step.started_at ?? step.tool_result?.started_at ?? undefined,
+      finishedAt: step.completed_at ?? step.tool_result?.completed_at ?? undefined,
+      durationMs: step.tool_result?.duration_ms ?? undefined,
+      details: toolStepDetails(step),
+    };
+  })];
+}
+
 export function runTimelineSteps(
   run: RunState,
   detailsOf: (step: RunStep) => RunTimelineStep["children"]
@@ -290,41 +308,11 @@ export function runTimelineSteps(
   const progress = run.progress_events?.length
     ? chatProgressStepsFromEvents(run.progress_events, AGENT_CHAT_PROGRESS_STEPS, run.id)
     : [];
-  const pairs = pairToolProgressSteps(progress, run.steps);
-  const used = new Set([...pairs.values()].map((step) => step.id));
-  const titles = runToolTitles(run);
-  const steps: RunTimelineStep[] = progress.map((item) => {
-    const waiting =
-      item.status === "running" &&
-      (item.id.startsWith("approval") || item.id.startsWith("confirmation")) &&
-      (run.status === "waiting_approval" || run.status === "waiting_confirmation");
-    const status: RunTimelineStepStatus = waiting ? "waiting" : item.status;
-    const runStep = pairs.get(item.id);
-    // 段の写しはチャットの処理の経過と同じ共通の変換（補足・計測値・入れ子。#2265）に、Run の step の時刻と中身を足す。
-    return {
-      ...chatProgressTimelineStep(item),
-      status,
-      startedAt: item.startedAt ?? runStep?.started_at ?? null,
-      finishedAt: item.finishedAt ?? runStep?.completed_at ?? null,
-      durationMs: runStep?.tool_result?.duration_ms ?? null,
-      children: runStep ? detailsOf(runStep) : undefined,
-    };
-  });
-  // 段の記録に無い step（古い Run・記録の前の step）は、ツールの段として後ろに並べる。
-  for (const step of run.steps) {
-    if (used.has(step.id)) continue;
-    const status = stepTimelineStatus(step);
-    steps.push({
-      id: `step:${step.id}`,
-      label: toolStepLabel(step, status, titles),
-      status,
-      startedAt: step.started_at ?? step.tool_result?.started_at ?? null,
-      finishedAt: step.completed_at ?? step.tool_result?.completed_at ?? null,
-      durationMs: step.tool_result?.duration_ms ?? null,
-      children: detailsOf(step),
-    });
-  }
-  return steps;
+  return runProgressSteps(run, progress).map((step) => ({
+    ...chatProgressTimelineStep(step),
+    // イベントを持たない旧記録の詳細の表示を保つ。
+    ...(progress.length === 0 ? {children: detailsOf(run.steps.find((item) => `step:${item.id}` === step.id)!)} : {}),
+  }));
 }
 
 /**

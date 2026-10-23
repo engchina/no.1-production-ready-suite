@@ -84,7 +84,6 @@ import {
   runStatusLabels,
   runStatusParam,
   runSurfaceLabel,
-  runTimelineStepLabels,
   runTimelineSteps,
   runVerificationView,
   toRunStatus,
@@ -575,7 +574,6 @@ function RunDetailView({ run }: { run: RunDetail }) {
           title={t("history.process.title")}
           steps={timelineSteps}
           totalDurationMs={run.elapsed_ms}
-          labels={{ stepStatus: runTimelineStepLabels() }}
           empty={<p className="text-sm text-fg-muted">{t("history.process.empty")}</p>}
           processDetails={processDetails}
           testId="run-history-timeline"

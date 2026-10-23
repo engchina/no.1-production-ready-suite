@@ -12,7 +12,7 @@ import { t, type I18nKey } from "./i18n";
 
 export interface AnswerStageEvent {
   stage: string;
-  outcome: "started" | "success" | "error" | "cancelled";
+  outcome: "started" | "success" | "error" | "cancelled" | "skipped";
 }
 
 export const ANSWER_STAGE_LABEL: Record<string, I18nKey> = {

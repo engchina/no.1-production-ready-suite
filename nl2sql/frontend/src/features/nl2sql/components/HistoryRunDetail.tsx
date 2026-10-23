@@ -1,3 +1,4 @@
+import { CHAT_PROGRESS_LABELS } from "../chatProgress";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -76,8 +77,9 @@ function timelineSteps(item: HistoryItem): RunTimelineStep[] {
     id: step.id,
     label: step.label,
     status: step.status,
-    startedAt: at(step.offsetMs),
-    finishedAt: at(step.offsetMs + Math.max(0, step.durationMs)),
+    startedAt: step.startedAt ?? at(step.offsetMs),
+    finishedAt: step.finishedAt ?? at(step.offsetMs + Math.max(0, step.durationMs)),
+    detail: step.detail,
     durationMs: step.durationMs,
     level: step.level,
     details: step.details,
@@ -210,6 +212,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
           traceSummary={item.trace_segments && item.trace_segments.length > 1 ? item.trace_segments : item.trace_summary}
               title={t("history.detail.timeline")}
               steps={steps}
+              labels={{ stepStatus: CHAT_PROGRESS_LABELS.status }}
               totalDurationMs={item.elapsed_ms ?? null}
               processDetails={processDetails}
               testId="history-detail-timeline"

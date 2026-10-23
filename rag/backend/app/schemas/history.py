@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
+from pr_backend_core.chat_progress import ChatProgressEvent
 from pr_backend_core.observability.tracing import TraceSummary
 from pydantic import BaseModel, Field, model_validator
 
@@ -89,6 +90,7 @@ class RunStep(BaseModel):
     status: str = ""
     elapsed_seconds: float | None = None
     llm_calls: int | None = None
+    llm_sends: int | None = None
     # この工程だけの詳細（見出しと値・行。選んだ条・検索文・件数など。#2294 / #2341）。
     details: RunStepDetails | None = None
 
@@ -127,6 +129,8 @@ class RunDetail(RunSummary):
     answer_notice: str | None = None
     citations: list[RetrievedChunk] = Field(default_factory=list)
     answer_diagnostics: dict[str, JsonValue] | None = None
+    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
+    stage_events: list[dict[str, JsonValue]] = Field(default_factory=list)
     stages: list[RunStage] = Field(default_factory=list)
     steps: list[RunStep] = Field(default_factory=list)
     feedback: list[RunFeedback] = Field(default_factory=list)

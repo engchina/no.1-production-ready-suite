@@ -789,7 +789,7 @@ for (const viewport of [
     const limit1 = page.getByRole("spinbutton", { name: "モデル 1 の入力の上限（tokens）" });
     // 値の無い保存済みのモデルは既定の 128000。
     await expect(limit1).toHaveValue("128000");
-    await expect(limit1).toHaveAccessibleDescription(/コンテキストウィンドウ.*既定は 128000/);
+    await expect(limit1).toHaveAccessibleDescription(/入力と出力を合わせたコンテキスト長.*token 予算/);
     if (viewport.name === "desktop") {
       // xl〜2xl は 1 つのモデルの欄を 2 列に並べる（表の形は 2xl から）。入力の上限は接続の下の左の列。
       const connectionBox = await page.getByRole("combobox", { name: "モデル 1 の接続" }).boundingBox();

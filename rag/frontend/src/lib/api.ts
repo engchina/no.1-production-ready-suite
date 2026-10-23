@@ -4845,6 +4845,8 @@ export interface RunDetail extends RunSummary {
   answer_notice?: string | null;
   citations: RetrievedChunk[];
   answer_diagnostics: Record<string, JsonValue> | null;
+  progress_events?: import("@production-ready/ui").ChatProgressEvent[];
+  stage_events?: import("./answer-process").AnswerStageRecord[];
   stages: RunStage[];
   steps: RunStep[];
   feedback: RunFeedback[];

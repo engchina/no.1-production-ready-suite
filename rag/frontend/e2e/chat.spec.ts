@@ -1,3 +1,4 @@
+import {timelineSnapshot} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import { findIconTextMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
 
 import { expect, type Locator, type Page, test } from "./fixtures/test";
@@ -2460,4 +2461,30 @@ test("実測 trace の親子関係を RAG チャットで開ける", { tag: "@re
   await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
   await expectNoPageOverflow(page);
   await captureTraceLayouts(page, testInfo, "rag-chat-trace");
+});
+
+test("チャットと履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  const reply = longProcessReply(1);
+  reply.progress = reply.progress.slice(0, 3).map((event, index) => ({...event, params: {...event.params, depth: index, note: "根拠不足で終了"}}));
+  reply.citations = [];
+  await openPersistedConversation(page, page.viewportSize()!.width, [{...userMessage, content: "合成の質問"}, reply]);
+  const progress = page.getByTestId("chat-answer-progress");
+  await progress.getByTestId("chat-answer-progress-summary").click();
+  const live = await timelineSnapshot(progress);
+  expect(live.map((row) => row.level)).toEqual([0,1,2]);
+  await page.screenshot({path: testInfo.outputPath("chat-process.png")});
+  await page.route("**/api/history/runs/synthetic-parity", (route) => route.fulfill({json: {data: {
+    citation_count: 0, answer_outcome: "insufficient_evidence", search_answer_profile_id: "bv-1", search_answer_profile_name: "プロファイル A",
+    run_id: "synthetic-parity", surface: "chat", question: "合成の質問", status: "success", answer_generated: true,
+    created_at: "2026-01-01T00:00:03Z", elapsed_ms: 3000, executed_by_me: true, executor_display_name: "利用者 A",
+    conversation_id: "conv-1", message_id: reply.message_id, progress_events: reply.progress,
+    stages: [], steps: [], feedback: [], citations: [], answer: reply.content, answer_available: true,
+    answer_diagnostics: null, conversation_owner_display_name: "利用者 A", owned_by_me: true,
+  }}}));
+  await page.goto("/history/synthetic-parity");
+  const history = page.getByTestId("run-history-timeline");
+  await page.getByTestId("run-history-timeline-summary").click();
+  expect(await timelineSnapshot(history)).toEqual(live);
+  await expectNoPageOverflow(page);
+  await page.getByTestId("run-history-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
 });

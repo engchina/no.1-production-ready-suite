@@ -1,3 +1,6 @@
+import {chatProgressStepsFromEvents, chatProgressTimelineStep, parseChatProgressEvents} from "@production-ready/ui";
+import {CHAT_PROGRESS_DEFINITIONS} from "@/lib/chat-progress";
+import {answerProcessStepsFromStages, type AnswerStageRecord} from "@/lib/answer-process";
 import { describe, expect, it } from "vitest";
 
 import type { RunStage, RunStep } from "@/lib/api";
@@ -120,7 +123,7 @@ describe("実行履歴の表示の対応表", () => {
     expect(runStepStatus("cancelled")).toBe("skipped");
   });
 
-  it("処理の経過: 回答フローの工程を「根拠の検索と回答の生成」の段の下に字下げで並べ、線の位置を所要時間から作る", () => {
+  it("処理の経過: 旧記録は外側の工程を重複させず、未知の階層を補わない", () => {
     const stages: RunStage[] = [
       { stage: "history_rewrite", outcome: "success", elapsed_ms: 1000 },
       { stage: "answer_step:質問の理解", outcome: "success", elapsed_ms: 500 },
@@ -131,15 +134,13 @@ describe("実行履歴の表示の対応表", () => {
     const rows = runTimelineSteps({ stages, steps, created_at: "2026-10-15T09:00:01.900Z", elapsed_ms: 1900 });
     expect(rows.map((row) => [row.label, row.level ?? 0, row.status])).toEqual([
       ["会話を踏まえた質問の書き換え", 0, "done"],
-      ["根拠の検索と回答の生成", 0, "failed"],
-      ["質問の条件の読み取り", 1, "done"],
-      ["文書の検索", 1, "failed"],
+      ["質問の条件の読み取り", 0, "done"],
+      ["文書の検索", 0, "failed"],
     ]);
     // 工程は親の段の始まり（1 秒後）から順に置く。
     expect(rows[1].startedAt).toBe("2026-10-15T09:00:01.000Z");
-    expect(rows[2].startedAt).toBe("2026-10-15T09:00:01.000Z");
-    expect(rows[3].startedAt).toBe("2026-10-15T09:00:01.500Z");
-    expect(rows[2].detail).toBe("LLM 2 回");
+    expect(rows[2].startedAt).toBe("2026-10-15T09:00:01.500Z");
+    expect(rows[1].detail).toBe("LLM 2 回");
   });
 
   it("回答の記録の工程の状態を処理の経過の状態にする", () => {
@@ -167,12 +168,11 @@ describe("実行履歴の表示の対応表", () => {
       elapsed_ms: 1000,
     });
     expect(rows.map((row) => [row.label, row.status])).toEqual([
-      ["根拠の検索と回答の生成", "done"],
       ["質問の条件の読み取り", "done"],
       ["文書の検索", "done"],
       ["関係する画面の選択", "done"],
     ]);
-    expect(rows[2]).toMatchObject({ level: 1, durationMs: null, startedAt: null });
+    expect(rows[1]).toMatchObject({ level: 0, durationMs: null, startedAt: null });
   });
 
   it("処理の経過: 工程と段の詳細を段を開いて見る詳細にする（同じ名前は記録の順。旧い行の配列も読む）", () => {
@@ -206,11 +206,40 @@ describe("実行履歴の表示の対応表", () => {
       elapsed_ms: 900,
     });
     expect(rows.map((row) => row.details)).toEqual([
-      undefined,
       { lines: ["検索文: 2 本"] },
       { fields: [{ label: "検索の候補", value: "4 件（2 文書）" }], lines: ["1. 文書 A"], truncated: true },
       undefined,
       { fields: [{ label: "結果", value: "問題なし" }] },
     ]);
   });
+});
+
+it("保存したチャットのイベントは内容・階層・補足・状態・時間を変えずに履歴へ写す", () => {
+  const events = parseChatProgressEvents([0, 1, 2].map((depth) => ({
+    schema_version: 1, target_id: "synthetic", seq: depth + 1, attempt: 0,
+    emitted_at: "2026-10-23T00:00:02Z", type: "step", step_id: `s${depth}`, kind: "answer_step", status: "done",
+    started_at: "2026-10-23T00:00:00Z", finished_at: "2026-10-23T00:00:02Z",
+    params: {name: "回答生成フロー", depth, note: "根拠不足で終了", llm_calls: depth + 1, llm_sends: depth + 2},
+    details: {fields: [{label: "結果", value: "合成の結果"}]},
+  })));
+  const actual = runTimelineSteps({progress_events: events, stages: [], steps: [], created_at: "2026-10-23T00:00:02Z", elapsed_ms: 2000});
+  expect(actual).toEqual(chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS).map(chatProgressTimelineStep));
+  expect(actual.map((row) => row.level ?? 0)).toEqual([0,1,2]);
+  expect(actual[0].detail).toContain("根拠不足で終了");
+});
+it("検索の開始・終了イベントは検索画面と同じ順序と入れ子で履歴へ写す", () => {
+  const stage_events: AnswerStageRecord[] = [
+    {stage: "answer", outcome: "started", elapsed_ms: 0},
+    {stage: "answer_step:回答生成フロー", outcome: "started", elapsed_ms: 0},
+    {stage: "answer_step:文書検索", outcome: "started", elapsed_ms: 0},
+    {stage: "answer_step:文書検索", outcome: "success", elapsed_ms: 100},
+    {stage: "answer_step:回答生成フロー", outcome: "success", elapsed_ms: 300, attributes: {status: "根拠不足で終了", llm_calls: 1}},
+    {stage: "answer", outcome: "success", elapsed_ms: 300},
+    {stage: "answer_guardrail", outcome: "started", elapsed_ms: 0},
+    {stage: "answer_guardrail", outcome: "skipped", elapsed_ms: 1, details: {fields: [{label: "結果", value: "無効のため省略"}]}},
+  ];
+  const rows = runTimelineSteps({stage_events, stages: [], steps: [], created_at: "2026-10-23T00:00:02Z", elapsed_ms: 301});
+  expect(rows).toEqual(answerProcessStepsFromStages(stage_events, {terminal: "done"}).map(chatProgressTimelineStep));
+  expect(rows.map((row) => row.level ?? 0)).toEqual([0,1,0]);
+  expect(rows.map((row) => row.status)).toEqual(["done","done","skipped"]);
 });

@@ -126,7 +126,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         "（回答・根拠・回答の検証・処理の経過）を見られます（自分の実行だけ。"
         "すべての利用者の実行を見られるのは SYSTEM_ADMIN だけ）。",
     ),
-    _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "アップロード"),
+    _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "文書アップロード"),
     _menu_permission(MENU_FILE_LIST, _GROUP_INGESTION, "文書インデックス"),
     _menu_permission(MENU_DOCUMENT_CATEGORIES, _GROUP_INGESTION, "文書の分類"),
     _menu_permission(MENU_KNOWLEDGE_BASES, _GROUP_INGESTION, "ナレッジベース"),

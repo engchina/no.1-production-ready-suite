@@ -895,6 +895,7 @@ async def _stream_search_events_with_timeout(
                     "stage": progress.stage,
                     "outcome": progress.outcome,
                     "elapsed_ms": progress.elapsed_ms,
+                    "occurred_at_ms": progress.occurred_at_ms,
                     "attributes": dict(progress.attributes),
                     # 終わった工程の詳細（処理の経過の段を開いて見る。#2341）。上限で切り伏せる。
                     **(
