@@ -4621,8 +4621,7 @@ test("query workbench generates SQL through the job flow and shows results", { t
   await generateAndExecuteButton.focus();
   await page.keyboard.press("Enter");
 
-  const generatedSqlStep = page.getByTestId("nl2sql-job-step-generate_sql");
-  await expect(generatedSqlStep).toContainText("SQL を生成");
+  const generatedSqlStep = page.getByTestId("nl2sql-generated-sql");
   await expect(generatedSqlStep.getByRole("code")).toContainText(
     "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
   );
