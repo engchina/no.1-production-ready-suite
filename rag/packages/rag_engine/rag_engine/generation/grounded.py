@@ -29,7 +29,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from rag_parser_core.language import current_pack
-from rag_parser_core.language.text import arabic_numbers
+from rag_parser_core.language.text import alternation, arabic_numbers
 
 from rag_engine.chunking import _flatten_table_html, _section_unit
 from rag_engine.generation import passage_marks
@@ -4687,6 +4687,32 @@ def summary_output_fields_error(audit: GroundedAudit | None, spans: Sequence[dic
     return ""
 
 
+def summary_deletion_error(summary: str, checked: Sequence[CheckedItem]) -> str:
+    """削除を指示する要約は、確認済みの手順の引用文を省略せず使う。
+
+    連続する部分文字列でも対象を修飾する否定・除外を落とせるため、文全体で照合する。
+    資料全体に同じ文があるだけでは足りず、回答で使った削除手順の引用だけを使う。
+    """
+    cues = check_cues()
+    deletion_instruction = re.compile(
+        cues.alt["deletion_words"] + alternation(current_pack().words("operation_audit_cues", "deletion_endings"))
+    )
+    instructions = [part.strip() for part in cues.sentence_split.split(summary) if part.strip()]
+    deletions = [part for part in instructions if deletion_instruction.search(part)]
+    if not deletions:
+        return ""
+    supported = {
+        _canonical(part)[0]
+        for entry in checked
+        if entry.confirmed and cues.has("deletion_words", entry.item.text)
+        for part in cues.sentence_split.split(entry.item.quote)
+        if part.strip()
+    }
+    if any(_canonical(part)[0] not in supported for part in deletions):
+        return "要約の削除操作で、引用原文の対象・否定・除外条件を省略せず保持したことを確認できません。"
+    return ""
+
+
 def _audit_function_context(span: dict) -> str:
     """監査に渡す同じ機能の本文。`function_texts` を読み順につないで上限で切る。"""
     return "\n".join(span.get("function_texts", ()))[:AUDIT_FUNCTION_CONTEXT_CHARS]
@@ -5029,6 +5055,9 @@ def run_round(
         [e.item.text for e in checked if e.removed and not e.added],
         [e.item.text for e in published],
     )
+    # 要約にだけ書かれた削除対象も、本文と同じ対象の照合を通す（#2722）。
+    # 原文どおりの手順は残し、対象の対応を確かめられない操作を冒頭で断定しない。
+    summary_reason = summary_reason or summary_deletion_error(str(draft.summary), checked)
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
     if (
