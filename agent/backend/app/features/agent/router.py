@@ -234,6 +234,7 @@ from app.features.agent.runtime import (
     AgentProfilePatch,
     AgentPublishRequest,
     AgentsData,
+    AgentShareApprovalNotice,
     AgentShareRequest,
     ApprovalDecisionRequest,
     ApprovalDetailData,
@@ -3527,12 +3528,21 @@ def _allow_tool_from_approval(run: RunState, approval_id: str, decided_by: str) 
 @router.get("/agents", response_model=ApiResponse[AgentsData])
 async def list_agents(request: Request) -> ApiResponse[AgentsData]:
     """業務 Agent の一覧。RBAC が有効なら利用者が使えるエージェントだけに絞る（#215）。"""
-    agents = [
-        agent
-        for agent in await run_in_threadpool(runtime_repository.list_agents)
-        if _agent_allowed(request, agent.id)
+    all_agents = await run_in_threadpool(runtime_repository.list_agents)
+    agents = [agent for agent in all_agents if _agent_allowed(request, agent.id)]
+    data = await _agents_data(agents)
+    actor = _run_creator_user_uuid(request)
+    data.share_approvals = [
+        AgentShareApprovalNotice(
+            agent_id=agent.id, name=sharing.approved_name, decided_at=sharing.decided_at
+        )
+        for agent in all_agents
+        if (sharing := agent.share_request) is not None
+        and sharing.status == "approved"
+        and sharing.requested_by_user_uuid == actor
+        and not _agent_allowed(request, agent.id)
     ]
-    return ApiResponse(data=await _agents_data(agents))
+    return ApiResponse(data=data)
 
 
 async def _agents_data(agents: list[AgentProfile]) -> AgentsData:
@@ -3980,7 +3990,9 @@ async def request_agent_share(
             runtime_repository.update_agent_sharing,
             agent_id,
             owner_user_uuid=agent.owner_user_uuid,
-            share_request=AgentShareRequest(note=payload.note.strip()),
+            share_request=AgentShareRequest(
+                note=payload.note.strip(), requested_by_user_uuid=agent.owner_user_uuid
+            ),
         )
     )
     return ApiResponse(data=updated)
@@ -4004,13 +4016,21 @@ async def approve_agent_share(
     組織の業務 Agent（持ち主なし）になり、権限管理でロールに割り当てて共有する。持ち主だった
     利用者も、割り当てたロールを通して使う。
     """
-    await _requested_share(request, agent_id)
+    agent = await _requested_share(request, agent_id)
     updated = await run_in_threadpool(
         partial(
             runtime_repository.update_agent_sharing,
             agent_id,
             owner_user_uuid=None,
-            share_request=None,
+            share_request=AgentShareRequest(
+                status="approved",
+                requested_by_user_uuid=agent.owner_user_uuid or "",
+                requested_at=agent.share_request.requested_at
+                if agent.share_request
+                else datetime.now(UTC),
+                decided_at=datetime.now(UTC),
+                approved_name=agent.name,
+            ),
         )
     )
     return ApiResponse(data=updated)

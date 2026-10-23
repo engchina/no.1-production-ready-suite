@@ -1,8 +1,10 @@
+import { Link } from "react-router-dom";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Send, X } from "lucide-react";
+import { Check, Send, ShieldCheck, X } from "lucide-react";
 import {
   Banner,
+  ButtonLink,
   Button,
   Card,
   CardContent,
@@ -15,6 +17,9 @@ import {
 
 import { agentApi, type AgentProfile } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { APP_ROUTES } from "@/lib/routes";
+import { MENU_PERMISSIONS } from "@/lib/permissions";
+import { useAuth } from "@/components/security/AuthProvider";
 import { formatDate } from "@/pages/shared/page-helpers";
 
 /** 申請の一言・却下の理由の文字数の上限（backend の `AgentShareRequestInput` / `AgentShareRejectInput`）。 */
@@ -35,6 +40,7 @@ export function AgentSharingSection({
   ownerName: string;
 }) {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
   const confirm = useConfirm();
   const [note, setNote] = useState("");
   const [reason, setReason] = useState("");
@@ -90,6 +96,18 @@ export function AgentSharingSection({
   }
 
   if (mode === "admin") {
+    if (request?.status === "approved") return (
+      <div data-testid="agent-share-approved-admin"><Banner severity="info">
+        <div className="grid gap-3">
+          <p>{t("agent.share.approvedNeedsAssignment")}</p>
+          {hasPermission(MENU_PERMISSIONS.securityPermissions) && (
+            <ButtonLink to={APP_ROUTES.securityPermissions} linkComponent={Link} icon={ShieldCheck}>
+              {t("agent.share.assignRoles")}
+            </ButtonLink>
+          )}
+        </div>
+      </Banner></div>
+    );
     if (!requested || !request) return null;
     return (
       <Section title={t("agent.share.reviewTitle")} description={t("agent.share.reviewDescription")}>

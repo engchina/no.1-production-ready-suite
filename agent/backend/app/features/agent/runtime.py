@@ -290,11 +290,13 @@ class AgentVersion(BaseModel):
 
 
 class AgentShareRequest(BaseModel):
-    """個人の業務 Agent の共有の申請（#2523）。承認すると組織の業務 Agent になり、申請は消える。"""
+    """個人の業務 Agent の共有の申請と、申請者へ返す承認の記録。"""
 
-    status: Literal["requested", "rejected"] = "requested"
+    status: Literal["requested", "rejected", "approved"] = "requested"
     note: str = Field(default="", max_length=500)
     requested_at: datetime = Field(default_factory=_now)
+    requested_by_user_uuid: str = ""
+    approved_name: str = ""
     # 却下の理由と時刻（status が rejected のとき）。
     reason: str = Field(default="", max_length=500)
     decided_at: datetime | None = None
@@ -1126,8 +1128,15 @@ class ApprovalDetailData(BaseModel):
     creator_display_names: dict[str, str] = Field(default_factory=dict)
 
 
+class AgentShareApprovalNotice(BaseModel):
+    agent_id: str
+    name: str
+    decided_at: datetime | None = None
+
+
 class AgentsData(BaseModel):
     agents: list[AgentProfile]
+    share_approvals: list[AgentShareApprovalNotice] = Field(default_factory=list)
     # 版の公開者（ログイン ID）→ 表示名。画面は公開者を表示名で出す（保存しない。#1696）。
     user_display_names: dict[str, str] = Field(default_factory=dict)
     # 版の履歴に残す版の数（`AGENT_MAX_PUBLISHED_VERSIONS`。画面の版の履歴の案内に出す。#2356）。

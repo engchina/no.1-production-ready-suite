@@ -123,12 +123,14 @@ test("Agent 管理は共有の申請を承認し、組織の業務 Agent にす�
   await expect(review).toContainText("部署で使いたい");
   await review.getByRole("button", { name: "承認" }).click();
   const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
+  await expect(dialog).toContainText("ロールに割り当てるまで、申請した本人も使えなくなります");
   await dialog.getByRole("button", { name: "承認", exact: true }).click();
-  await expect(page.getByText("共有を承認しました")).toBeVisible();
+  await expect(page.getByText("共有を承認しました。権限管理でロールに割り当ててください", { exact: true })).toBeVisible();
 
   const agent = mockApi.state.agents.find((item) => item.id === "personal-2523");
   expect(agent?.owner_user_uuid).toBeNull();
   await expect(page.getByTestId("agent-share-review")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "権限管理でロールに割り当てる" })).toBeVisible();
   await expect(page.getByText("個人", { exact: true })).toHaveCount(0);
 });
 
@@ -148,4 +150,26 @@ test("Agent 管理は理由を添えて却下し、持ち主に理由が見え�
   await page.goto("/agents?id=personal-2523");
   await expect(page.getByTestId("agent-share-rejected")).toContainText("評価の問いを足してください");
   await expect(page.getByTestId("agent-share").getByRole("button", { name: "共有を申請" })).toBeEnabled();
+});
+
+
+test("共有の承認後は申請した本人に割り当て待ちを案内する", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  seedPersonalAgent(mockApi, { owner_user_uuid: null, share_request: {
+    status: "approved", requested_by_user_uuid: BUILDER.user_uuid, approved_name: "Agent P",
+    note: "", reason: "", requested_at: MOCK_NOW, decided_at: MOCK_NOW,
+  } });
+  mockApi.setCurrentUser(BUILDER);
+  await page.goto("/agents");
+  await expect(page.getByTestId("agent-share-approved-notice")).toContainText("使うには管理者によるロールへの割り当てが必要です");
+  await page.goto("/agents?id=personal-2523");
+  await expect(page.getByTestId("agent-share-approved-notice")).toContainText("Agent P");
+  await expect(page.getByText("削除されたか、存在しません", { exact: false })).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("share-approved-notice.png") });
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
+  await expect(page.getByRole("heading", { name: "業務 Agent", exact: true }).first()).toBeVisible();
+  mockApi.setCurrentUser({ ...BUILDER, allowed_agent_ids: ["personal-2523"] });
+  await page.reload();
+  await expect(page.getByTestId("agent-share-approved-notice")).toHaveCount(0);
+  await expect(page.getByRole("row", { name: /Agent P/ })).toBeVisible();
 });

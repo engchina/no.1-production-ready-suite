@@ -923,12 +923,14 @@ export interface AgentProfile {
   updated_at: string;
   /** 個人の業務 Agent の持ち主（#2523）。null は組織の業務 Agent。 */
   owner_user_uuid?: string | null;
-  /** 共有の申請（#2523。承認すると消え、組織の業務 Agent になる）。 */
+  /** 共有の申請と承認の記録。 */
   share_request?: AgentShareRequest | null;
 }
 
 export interface AgentShareRequest {
-  status: "requested" | "rejected";
+  status: "requested" | "rejected" | "approved";
+  requested_by_user_uuid?: string;
+  approved_name?: string;
   note: string;
   requested_at: string;
   /** 却下の理由（status が rejected のとき）。 */
@@ -2119,6 +2121,7 @@ export const agentApi = {
   listAgents: () =>
     request<{
       agents: AgentProfile[];
+      share_approvals?: Array<{ agent_id: string; name: string; decided_at: string | null }>;
       user_display_names?: Record<string, string>;
       max_published_versions?: number;
       owner_display_names?: Record<string, string>;
