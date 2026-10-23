@@ -15,6 +15,6 @@ export function answerModelLabel(model: CompareModel): string {
 export function answerModelHelpKey(models: readonly CompareModel[], multipleKey: I18nKey): I18nKey {
   if (models.length > 1) return multipleKey;
   return models[0]?.kind === "text_vision"
-    ? "chat.compare.defaultTextVision"
-    : "chat.compare.defaultTextOnly";
+    ? "search.answerModel.helpTextVision"
+    : "search.answerModel.helpTextOnly";
 }

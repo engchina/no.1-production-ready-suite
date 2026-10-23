@@ -212,6 +212,20 @@ describe("AnswerSections の段落の印", () => {
     expect(items[1].textContent).toContain("要注意：旧版の資料に基づく");
   });
 
+  it("同じ理由名は一覧で一度だけ表示し、詳細は両方保持する", () => {
+    act(() => root.render(<AnswerSections blocks={paragraphs("段落。")}
+      passages={{marks:[{text:"段落。",state:"warning",reasons:[
+        {code:"application_unaudited",label:"条件への当てはめを確かめていない",detail:"前提 A"},
+        {code:"application_unaudited",label:"条件への当てはめを確かめていない",detail:"前提 B"},
+      ]}],removed:[],warnings:[]}} />));
+    const summary = host.querySelector('[data-testid="answer-marked-passage"]');
+    expect(summary?.textContent?.match(/条件への当てはめを確かめていない/g)).toHaveLength(1);
+    const button=host.querySelector('[data-testid="answer-passage-mark"] button') as HTMLButtonElement;
+    act(()=>button.click());
+    expect(host.textContent).toContain("前提 A");
+    expect(host.textContent).toContain("前提 B");
+  });
+
   it("記録が無い（過去の回答）なら印・節・注意を出さない", () => {
     act(() => root.render(<AnswerSections blocks={paragraphs("段落 1。\n\n段落 2。")} passages={null} />));
     expect(host.querySelector('[data-testid="answer-passage-mark"]')).toBeNull();

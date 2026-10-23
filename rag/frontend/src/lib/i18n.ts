@@ -3506,7 +3506,9 @@ export const ja = {
 
   // チャット（会話 / マルチモデル比較）
   "chat.title": "チャット",
-  "chat.subtitle": "検索・回答プロファイルの資料に質問し、根拠を確かめながら会話を続ける。複数のモデルの回答を並べて比べることもできる",
+  "search.answerModel.helpTextOnly": "テキストモデルで回答します。",
+  "search.answerModel.helpTextVision": "このモデルは画像対応モデルも兼ね、根拠の図や画像も読んで回答します。",
+  "chat.subtitle": "検索・回答プロファイルの資料に質問し、根拠を確かめながら会話を続ける",
   "chat.searchAnswerProfile.empty": "公開済みの検索・回答プロファイルがありません。先に検索・回答プロファイルを作成してください。",
   "chat.searchAnswerProfile.required": "検索・回答プロファイルを選択するとチャットを始められます。",
   "chat.searchAnswerProfile.open": "検索・回答プロファイルを作成",
@@ -3539,8 +3541,6 @@ export const ja = {
   "chat.composer.stop": "停止",
   // system_admin が他の利用者の会話で送る前の案内（#1954）。
   "chat.composer.ownerSeesNotice": "この会話の持ち主にも、回答と途中の結果が見えます",
-  "chat.compare.label": "回答するモデル",
-  "chat.compare.infoLabel": "回答するモデルの説明",
   "chat.error.send": "メッセージの送信に失敗しました。",
   "chat.error.model": "エラーが発生しました。",
   "chat.error.retry": "もう一度送信",
@@ -3764,9 +3764,6 @@ export const ja = {
   "search.generateAnswer.help": "オフのときは検索結果までを表示します。オンにすると、チャットと同じ方法で検索結果を確かめ、LLM が根拠付きの回答を作ります（時間がかかります）。",
   "search.results": "検索結果",
   "search.results.hint": "チャットと同じ工程（質問の理解・拡張、ハイブリッド検索、Rerank、前後の文脈の展開）で見つけた文書の箇所です。",
-  "chat.compare.default": "未選択ならテキストモデルで回答し、根拠の図や画像を読むときだけ画像対応モデルを使います。両方選ぶと回答を並べて比較できます。",
-  "chat.compare.defaultTextOnly": "テキストモデルで回答します。",
-  "chat.compare.defaultTextVision": "このモデルは画像対応モデルも兼ね、根拠の図や画像も読んで回答します。",
   "answerModel.text": "{name}（テキスト）",
   "answerModel.vision": "{name}（画像対応）",
   "answerModel.text_vision": "{name}（テキスト・画像対応）",
