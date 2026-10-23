@@ -1752,6 +1752,7 @@ const agentJa = {
   "agent.dataScope.search": "プロファイルを検索して追加…",
   "agent.dataScope.empty": "あなたが使えるプロファイルがありません",
   "agent.dataScope.emptyOnError": "候補を読み込めませんでした",
+  "agent.dataScope.forbidden": "{product}を使う権限がないため、範囲は選べません。",
   "agent.dataScope.loadError": "プロファイルの候補を読み込めませんでした。",
   "agent.dataScope.unavailable": "使えません",
   "agent.dataScope.missing":

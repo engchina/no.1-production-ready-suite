@@ -51,6 +51,7 @@ _SNIPPET_CHARACTERS: Final = 160
 @dataclass(frozen=True)
 class ChatAttachmentToolSpec:
     name: str
+    title: str
     description: str
     input_schema: dict[str, Any]
 
@@ -59,6 +60,7 @@ _ATTACHMENT_ID = {"type": "string", "description": "chat_attachment_list の att
 CHAT_ATTACHMENT_TOOL_SPECS: Final[tuple[ChatAttachmentToolSpec, ...]] = (
     ChatAttachmentToolSpec(
         name=LIST_TOOL_NAME,
+        title="添付の一覧",
         description=(
             "この会話に利用者が添付したファイルの一覧と、各ファイルの解析の状態、節（section_id・見出し・"
             "頁・文字数）と表のシート（列名・行数）を返す。本文は返さない。"
@@ -72,6 +74,7 @@ CHAT_ATTACHMENT_TOOL_SPECS: Final[tuple[ChatAttachmentToolSpec, ...]] = (
     ),
     ChatAttachmentToolSpec(
         name=READ_SECTION_TOOL_NAME,
+        title="添付の節の読み取り",
         description=(
             f"添付ファイルの 1 つの節の本文を {READ_SECTION_CHARACTERS} 文字ずつ返す。"
             "続きがあれば next_offset を返す。"
@@ -96,6 +99,7 @@ CHAT_ATTACHMENT_TOOL_SPECS: Final[tuple[ChatAttachmentToolSpec, ...]] = (
     ),
     ChatAttachmentToolSpec(
         name=READ_ROWS_TOOL_NAME,
+        title="添付の行の読み取り",
         description=(
             "添付の Excel・CSV のシートの行を「列名 → 値」で返す。"
             "続きがあれば next_start_row を返す。"
@@ -123,6 +127,7 @@ CHAT_ATTACHMENT_TOOL_SPECS: Final[tuple[ChatAttachmentToolSpec, ...]] = (
     ),
     ChatAttachmentToolSpec(
         name=FIND_TOOL_NAME,
+        title="添付の中の検索",
         description=(
             "添付ファイルの本文と表の行から、文字が一致する箇所（節・行と前後の文）を探す。"
         ),
@@ -151,6 +156,7 @@ CHAT_ATTACHMENT_TOOL_SPECS: Final[tuple[ChatAttachmentToolSpec, ...]] = (
     ),
     ChatAttachmentToolSpec(
         name=VIEW_IMAGE_TOOL_NAME,
+        title="添付の画像の確認",
         description=(
             "添付の画像（kind が image）の原画像を読む。画像の中の文字・図・表・画面の細部を、"
             "質問に照らして確かめるときに使う。"

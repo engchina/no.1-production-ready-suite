@@ -466,8 +466,8 @@ direct logon と対象 object 参照に必要な DB role を有効化する。�
 許可していても、旧 VPD/RLS policy が同じ object に残っていると Oracle は追加で行を絞り込むため、
 `SQL_ASSIST_VPD_%` のような legacy policy は無効化または削除してから DeepSec を適用する。
 
-`SYSTEM_ADMIN` は application feature permission では将来権限を含む wildcard だが、data entitlement では
-wildcard ではない。実データへのアクセス範囲は、他の role と同じく `データ権限` workflow で明示的に
+`SYSTEM_ADMIN` の SQL 実行はアプリ用の接続を使い、Deep Data Security の DATA USER を通らない。
+Data Grant は非 system_admin の利用者に適用される。非 system_admin の実データへのアクセス範囲は、`データ権限` workflow で明示的に
 設定・適用する。
 
 ## 対象識別子の引用規則（Issue #560）

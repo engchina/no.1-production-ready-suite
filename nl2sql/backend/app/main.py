@@ -333,7 +333,7 @@ async def http_exception_problem_handler(
         detail = "サーバー内部でエラーが発生しました。時間をおいて再試行してください。"
     elif isinstance(exc.detail, str) and exc.detail.strip():
         detail = _ORACLE_RAW_DETAIL_RE.sub("", exc.detail.strip()).rstrip(" :。")
-        if detail != exc.detail.strip():
+        if _ORACLE_RAW_DETAIL_RE.search(exc.detail):
             detail += "。データベースの状態と実行権限を確認して再試行してください。"
     elif isinstance(exc.detail, dict):
         raw_code = exc.detail.get("code")

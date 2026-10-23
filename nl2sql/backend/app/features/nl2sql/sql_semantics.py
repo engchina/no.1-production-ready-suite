@@ -415,7 +415,9 @@ def parse_oracle_sql(
         return _blocker_analysis(
             sql,
             code="SQL_MULTIPLE_STATEMENTS",
-            message_ja="複数の SQL statement は実行できません。1 つの問い合わせに分けてください。",
+            message_ja=(
+                "複数の SQL 文は実行できません。SELECT / WITH の文を1つだけ入力してください。"
+            ),
             intent_version=intent_version,
             ontology_revision_id=ontology_revision_id,
         )
@@ -430,7 +432,7 @@ def parse_oracle_sql(
         return _blocker_analysis(
             sql,
             code="SQL_NOT_READ_ONLY_QUERY",
-            message_ja="SELECT 系以外の SQL statement は Ontology 問い合わせとして実行できません。",
+            message_ja="SELECT / WITH の文だけを実行できます。SQL の種類を確認してください。",
             intent_version=intent_version,
             ontology_revision_id=ontology_revision_id,
         )

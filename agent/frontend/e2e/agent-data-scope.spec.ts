@@ -300,3 +300,15 @@ test("処理の経過のツールの段に、使ったプロファイルと範�
   await expect(page.getByTestId("run-step-data-scope-step-filled")).toHaveText("profile-cost を範囲から補完");
   await expectNoHorizontalOverflow(page);
 });
+
+
+test("権限のない候補は障害や再試行として表示しない", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  seedAgent(mockApi);
+  mockApi.state.dataScopeCandidateErrors.nl2sql = { status: 403, message: "この製品を使う権限がありません。" };
+  await openAgent(page);
+  const card = page.getByTestId("agent-data-scope-nl2sql");
+  await expect(card.getByTestId("agent-data-scope-nl2sql-forbidden")).toBeVisible();
+  await expect(card.getByRole("button", { name: "再試行" })).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("candidate-forbidden.png"), fullPage: true });
+});

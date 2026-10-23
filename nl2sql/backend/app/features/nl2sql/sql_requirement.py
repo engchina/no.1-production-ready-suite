@@ -37,7 +37,10 @@ from datetime import date, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError, field_validator
+from sqlglot import exp, parse_one
+from sqlglot.errors import ParseError
 
+from .chat_attachments import AttachmentContext
 from .models import (
     AllowedObjects,
     Nl2SqlProfile,
@@ -76,7 +79,7 @@ from .structured_outputs import response_format
 logger = logging.getLogger(__name__)
 
 REQUIREMENT_SCHEMA_VERSION = "sql_requirement_v2"
-REQUIREMENT_PROMPT_VERSION = "sql_requirement_v5_cap"
+REQUIREMENT_PROMPT_VERSION = "sql_requirement_v6_attachments"
 
 # LLM に渡す Schema の上限（Schema が大きいときは質問との関連で絞る。
 # 絞り込みはあいまいさを作らない）。
@@ -489,8 +492,9 @@ SYSTEM_PROMPT = (  # nosec B608
     "missing=SQL を決めるのに要る情報が無い、ambiguous=SQL を決めるのに要る情報に複数の解釈がある。"
     "missing / ambiguous には question_ja（利用者への 1 つの質問）と reason_ja を書き、"
     "ambiguous には根拠のある候補を candidates に入れてください（evidence_ja に根拠）。\n"
-    "3. 表・列は schema にある物理名で書いてください（tables は `OWNER.TABLE`、columns は"
-    " `OWNER.TABLE.COLUMN`。文言では `TABLE.COLUMN`、論理名は括弧で添える）。"
+    "3. 表・列は schema にある物理名で書いてください。文言では `TABLE.COLUMN` と書き、"
+    "論理名は括弧で添えてください。"
+    "添付の表は schema にある表名・列名のまま使ってください。"
     "schema に無い名前を作らないでください。表の結合は relationships の id だけを使ってください。\n"
     "4. 表のデータは渡していません。値の候補は列のコメント・用語集・オントロジー・業務プロファイル"
     "に書かれた値だけにし、masked=true の列の値は候補にしないでください。\n"
@@ -504,7 +508,7 @@ SYSTEM_PROMPT = (  # nosec B608
     "6. sql_hint にはその項目の SQL の断片を物理名で書いてください（句のキーワードは付けない。"
     "決められなければ空）。\n"
     "7. clarified_question_ja は、項目を反映した自然な日本語の 1 つの質問の文にしてください"
-    "（表・列は物理名）。業務プロファイルの表で答えられないときだけ answerable=false と"
+    "（表・列は物理名）。業務プロファイルと添付の表で答えられないときだけ answerable=false と"
     "unanswerable_reason_ja に理由、答えられるなら true と空にしてください。\n"
     "8. mode=review のときは、answered_items（利用者が答えた項目。同じ key の項目は出力しない）を"
     "変えずに見直し、SQL を 1 つに決められないものが残っているときだけ missing / ambiguous に"
@@ -663,6 +667,7 @@ def build_requirement_context(
     view: ProfileOntologyView | None,
     today: date,
     conversation: Sequence[Mapping[str, str]] = (),
+    attachments: AttachmentContext | None = None,
 ) -> RequirementContext:
     """業務プロファイルの範囲の Schema・関係・業務の文脈を集める（代表値・件数は入れない）。
 
@@ -729,6 +734,31 @@ def build_requirement_context(
                 info.references_other_tables = True
         tables[qualified] = info
         short_names.setdefault(short, []).append(qualified)
+
+    for attachment in attachments.tables if attachments else ():
+        key = catalog_match_key(attachment.name)
+        info = TableInfo(
+            key=key,
+            owner="",
+            name=attachment.name,
+            logical_name="",
+            comment=attachment.file_name,
+            table_type="ATTACHMENT",
+        )
+        for attachment_column in attachment.columns:
+            column_key = catalog_match_key(attachment.name, attachment_column.name)
+            info.columns[column_key] = ColumnInfo(
+                key=column_key,
+                display=column_key,
+                name=attachment_column.name,
+                logical_name="",
+                data_type=attachment_column.sql_type,
+                nullable=True,
+                comment="",
+                domain_name="",
+            )
+        tables[key] = info
+        short_names.setdefault(key, []).append(key)
 
     table_lookup: dict[str, str] = {}
     column_lookup: dict[str, str] = {}
@@ -1286,6 +1316,7 @@ def build_draft(
     answered_keys = {item.key for item in items if item.answered}
     position = {item.key: index for index, item in enumerate(items)}
     seen_keys: set[str] = set()
+    projection_aliases = _projection_alias_columns(output.items[:_MAX_ITEMS], context)
     for raw in output.items[:_MAX_ITEMS]:
         key = _normalize_key(llm_text(raw.key)) or _normalize_key(f"{raw.section}_{len(items)}")
         if raw.section == "other" and key in _OUTPUT_FIELD_KEYS:
@@ -1296,7 +1327,7 @@ def build_draft(
         while key in seen_keys:
             key = f"{key}_2"
         seen_keys.add(key)
-        validated = _validated_item(raw, key, context, warnings)
+        validated = _validated_item(raw, key, context, warnings, projection_aliases)
         if key in position:
             items[position[key]] = validated
         else:
@@ -1333,11 +1364,43 @@ def _normalize_key(value: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", value.strip().casefold()).strip("_")[:64]
 
 
+def _projection_alias_columns(
+    items: Sequence[_LlmItem], context: RequirementContext
+) -> dict[str, list[str]]:
+    """SELECT の検証済みの式の別名を、参照元の列へ解決する。"""
+    aliases: dict[str, list[str]] = {}
+    duplicates: set[str] = set()
+    for item in items:
+        if item.section != "select":
+            continue
+        hint = strip_clause_keyword(llm_text(item.sql_hint))
+        try:
+            tree = parse_one(f"SELECT {hint}", read="oracle")
+        except ParseError:
+            continue
+        for projection in tree.expressions:
+            if not isinstance(projection, exp.Alias):
+                continue
+            key = projection.alias.casefold()
+            if key in aliases or key in duplicates:
+                aliases.pop(key, None)
+                duplicates.add(key)
+                continue
+            references = [
+                column.sql(dialect="oracle") for column in projection.this.find_all(exp.Column)
+            ]
+            resolved, rejected = _resolve_columns(references, context)
+            if not rejected:
+                aliases[key] = resolved
+    return aliases
+
+
 def _validated_item(
     raw: _LlmItem,
     key: str,
     context: RequirementContext,
     warnings: list[str],
+    projection_aliases: Mapping[str, list[str]],
 ) -> RequirementItem:
     section = RequirementSection(raw.section)
     status = RequirementStatus(raw.status)
@@ -1349,7 +1412,14 @@ def _validated_item(
     reason = llm_text(raw.reason_ja)
     reasons: list[str] = [reason] if reason else []
     tables, bad_tables = _resolve_tables(raw.tables, context)
-    columns, bad_columns = _resolve_columns(raw.columns, context)
+    column_references: list[str] = []
+    for reference in raw.columns:
+        alias_key = llm_text(reference).strip('"').casefold()
+        if section == RequirementSection.ORDER_BY and alias_key in projection_aliases:
+            column_references.extend(projection_aliases[alias_key])
+        else:
+            column_references.append(reference)
+    columns, bad_columns = _resolve_columns(column_references, context)
     relationship_ids, bad_relationships = _resolve_relationships(raw.relationship_ids, context)
     rejected = [*bad_tables, *bad_columns]
     if rejected:

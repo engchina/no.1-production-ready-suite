@@ -103,8 +103,9 @@ class FakeOracleGenerator:
         profile_name: str,
         question: str,
         call_timeout_seconds: float | None = None,
+        attributes: dict[str, Any] | None = None,
     ) -> str:
-        del profile_name, call_timeout_seconds
+        del profile_name, call_timeout_seconds, attributes
         self.questions.append(question)
         return "SELECT * FROM INVOICES"
 

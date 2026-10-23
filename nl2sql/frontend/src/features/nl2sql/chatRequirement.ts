@@ -98,6 +98,7 @@ export function chatRequirementSessionRequest(request: ChatJobRequest): QuerySes
     clarification_mode: "guided",
     chat: true,
     previous_job_id: request.previous_job_id,
+    attachment_ids: request.attachment_ids,
   };
 }
 

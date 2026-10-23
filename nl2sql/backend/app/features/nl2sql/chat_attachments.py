@@ -35,6 +35,7 @@ from pr_system_settings.chat_attachments import (
     IMAGE_READING_PROMPT,
     ChatAttachmentService,
     ChatAttachmentToolError,
+    ChatAttachmentToolset,
 )
 from pr_system_settings.chat_attachments.models import TABULAR_KINDS, CellValue
 
@@ -242,12 +243,21 @@ def _relevant_text(question: str, text: str, limit: int) -> str:
     return "\n\n".join(picked)
 
 
-def attachment_context(conversation_id: str | None, question: str = "") -> AttachmentContext:
+def attachment_context(
+    conversation_id: str | None,
+    question: str = "",
+    *,
+    prepared_toolset: ChatAttachmentToolset | None = None,
+) -> AttachmentContext:
     """会話の添付の表と文書の参考（添付が無い・読めないときは空。SQL の生成は止めない）。"""
-    if not conversation_id:
+    if not conversation_id and prepared_toolset is None:
         return AttachmentContext()
     try:
-        toolset = chat_attachment_service().toolset(conversation_id)
+        toolset = (
+            prepared_toolset
+            if prepared_toolset is not None
+            else chat_attachment_service().toolset(conversation_id or "")
+        )
         if not toolset:
             return AttachmentContext()
         tables: list[AttachmentTable] = []

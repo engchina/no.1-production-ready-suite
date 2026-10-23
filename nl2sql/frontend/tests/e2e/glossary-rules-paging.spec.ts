@@ -57,6 +57,7 @@ for (const list of LISTS) {
     await mockMaterial(page);
     await page.goto(list.path);
 
+    await expect(page.getByText(/見出しだけの Excel を取り込むと、すべて削除できます/)).toBeVisible();
     const toolbar = page.getByTestId(list.toolbar);
     const pagination = page.getByTestId(list.pagination);
     await expect(toolbar.getByRole("status")).toHaveText(`全 ${list.total} 件`);

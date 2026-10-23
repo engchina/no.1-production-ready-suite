@@ -108,3 +108,10 @@ test.describe("Run の表のデータ（desktop）", () => {
     expect(artifactTable(artifact("json", { rows: [1] }))).toBeNull();
   });
 });
+
+// 添付などの組み込みツールも、保存した表示名を結果の表に使う。
+test("結果の表はツールの表示名を優先する", () => {
+  const value = run([step("s1", "chat_attachment_read_rows", { columns: ["VALUE"], rows: [[1]] })]);
+  value.metadata = { tool_titles: { chat_attachment_read_rows: "添付の行の読み取り" } };
+  expect(runToolResultTables(value)[0]?.toolName).toBe("添付の行の読み取り");
+});

@@ -355,5 +355,7 @@ export const SQL_BLOCK_LABELS = sqlBlockLabels({
   copyFailed: t("chat.copyFailed"),
   safe: t("chat.safe"),
   safeExecuted: t("chat.safeExecuted"),
+  unchecked: t("chat.safetySkipped"),
+  uncheckedExecuted: t("chat.safetySkippedExecuted"),
   blocked: t("chat.blocked"),
 });

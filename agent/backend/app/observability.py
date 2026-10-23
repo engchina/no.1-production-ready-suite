@@ -214,11 +214,12 @@ def record_runtime_event(event_type: str, payload: JsonObject) -> None:
         RUNS_TOTAL.labels(status="completed").inc()
     elif event_type == "run.cancelled":
         RUNS_TOTAL.labels(status="cancelled").inc()
+    elif event_type == "runtime.failed":
+        RUNS_TOTAL.labels(status="failed").inc()
     elif event_type == "tool.completed":
         TOOL_CALLS_TOTAL.labels(tool=_payload_text(payload, "tool_name"), status="success").inc()
     elif event_type == "tool.failed":
         TOOL_CALLS_TOTAL.labels(tool=_payload_text(payload, "tool_name"), status="failed").inc()
-        RUNS_TOTAL.labels(status="failed").inc()
     elif event_type == "approval.decided":
         decision = "approved" if payload.get("approved") is True else "rejected"
         APPROVALS_TOTAL.labels(tool=_payload_text(payload, "tool_name"), decision=decision).inc()
@@ -415,7 +416,7 @@ def _should_sample_trace_event(event: TraceEvent, sample_rate: float) -> bool:
     if bounded_rate <= 0.0:
         return False
     basis = event.trace_id or event.run_id or event.id
-    digest = sha256(f"{basis}:{event.event_type}".encode()).hexdigest()
+    digest = sha256(basis.encode()).hexdigest()
     bucket = int(digest[:8], 16) / 0xFFFFFFFF
     return bucket < bounded_rate
 
@@ -685,8 +686,8 @@ def _otlp_traces_endpoint(endpoint: str) -> str:
 
 
 def _otlp_trace_payload(event: TraceEvent, *, service_name: str) -> JsonObject:
-    start_unix_nano = _datetime_to_unix_nano(event.created_at)
-    end_unix_nano = start_unix_nano + _duration_attribute_to_nanos(
+    end_unix_nano = _datetime_to_unix_nano(event.created_at)
+    start_unix_nano = end_unix_nano - _duration_attribute_to_nanos(
         event.attributes.get("duration_ms")
     )
     return {

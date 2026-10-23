@@ -33,7 +33,9 @@ describe("ChatSqlBlock", () => {
 
   it("安全検査と実行の状態を文言と色で分け、文言は上書きできる", () => {
     expect(html(<SqlSafetyBadge safe executed />).textContent).toBe("安全検査済み・実行済み");
-    const blocked = html(<SqlSafetyBadge safe={false} executed />);
+    expect(html(<SqlSafetyBadge safe checked={false} executed />).textContent).toBe("安全確認を省略・実行済み");
+    expect(html(<SqlSafetyBadge safe checked={false} executed={false} />).textContent).toBe("安全確認を省略・未実行");
+    const blocked = html(<SqlSafetyBadge safe={false} checked={false} executed />);
     expect(blocked.textContent).toBe("安全検査でブロック");
     expect(blocked.querySelector("[data-status-variant]")?.getAttribute("data-status-variant")).toBe("danger");
     expect(html(<SqlSafetyBadge safe executed={false} labels={sqlBlockLabels({ safe: "OK" })} />).textContent).toBe("OK");

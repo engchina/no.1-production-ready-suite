@@ -7853,8 +7853,6 @@ class Nl2SqlService:
                 if ontology_instructions
                 else requirement_block
             )
-        if (overrides is None or not overrides.has_values()) and not ontology_instructions:
-            return None
         attributes: dict[str, Any] = {}
         request_instructions = overrides.additional_instructions if overrides is not None else ""
         role = (
@@ -7867,8 +7865,8 @@ class Nl2SqlService:
         )
         if role:
             attributes["role"] = role
-        if instructions:
-            attributes["additional_instructions"] = instructions
+        # 空も明示し、保存済み profile の古い共通ルールを残さない。
+        attributes["additional_instructions"] = instructions
         if sql_requirement is not None and sql_requirement.tables:
             # object_list を回答前の確認で選んだ表に絞る（#1439。業務プロファイルの範囲の中だけ）。
             object_list = self._select_ai_requirement_object_list(profile, sql_requirement.tables)
@@ -9418,6 +9416,23 @@ class Nl2SqlService:
             {"query": turn.text("question"), "sql": turn.text("sql"), "status": turn.text("status")}
             for turn in fitted
         ]
+
+    def chat_requirement_attachments(
+        self, request: JobCreateRequest, *, actor_user_uuid: str, actor_is_system_admin: bool
+    ) -> AttachmentContext:
+        """確認段階の添付を、生成と同じ会話の権限で読む。会話への確定は行わない。"""
+        from .chat_attachments import attachment_owner_principal, chat_attachment_service
+
+        parent = self._chat_parent(request, actor_user_uuid, all_users=actor_is_system_admin)
+        conversation_id = parent.conversation_id if parent else None
+        if not request.attachment_ids:
+            return attachment_context(conversation_id, request.question)
+        toolset = chat_attachment_service().preparation_toolset(
+            attachment_owner_principal(actor_user_uuid, actor_is_system_admin),
+            request.attachment_ids,
+            conversation_id=conversation_id,
+        )
+        return attachment_context(conversation_id, request.question, prepared_toolset=toolset)
 
     def chat_requirement_history(
         self,
@@ -12874,18 +12889,20 @@ class Nl2SqlService:
         self, filename: str, content: bytes, warnings: list[str]
     ) -> dict[str, str]:
         glossary: dict[str, str] = {}
+        has_columns = False
         for headers, rows in self._legacy_material_rows(filename, content, warnings):
             term_index = self._learning_header_index(headers, {"TERM", "KEY", "WORD", "用語"})
             definition_index = self._learning_header_index(
                 headers,
                 {"DEFINITION", "DESCRIPTION", "VALUE", "REPLACEMENT", "定義", "説明"},
             )
+            has_columns = has_columns or (term_index is not None and definition_index is not None)
             for row in rows:
                 term = self._row_cell(row, term_index)
                 definition = self._row_cell(row, definition_index)
                 if term and definition:
                     glossary[term] = definition
-        if not glossary:
+        if not has_columns:
             warnings.append("取り込み可能な TERM/DEFINITION 列が見つかりません。")
         return glossary
 
@@ -12894,17 +12911,19 @@ class Nl2SqlService:
     ) -> list[str]:
         rules: list[str] = []
         seen: set[str] = set()
+        has_columns = False
         for headers, rows in self._legacy_material_rows(filename, content, warnings):
             rule_index = self._learning_header_index(
                 headers, {"RULE", "SQL_RULE", "GUIDELINE", "INSTRUCTION", "TEXT", "ルール"}
             )
+            has_columns = has_columns or rule_index is not None
             for row in rows:
                 rule = self._row_cell(row, rule_index)
                 if not rule or rule in seen:
                     continue
                 seen.add(rule)
                 rules.append(rule)
-        if not rules:
+        if not has_columns:
             warnings.append("取り込み可能な RULE 列が見つかりません。")
         return rules
 

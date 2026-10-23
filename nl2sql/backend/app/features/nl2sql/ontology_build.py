@@ -29,6 +29,7 @@ from typing import Any, cast, get_args
 from uuid import uuid4
 
 from pr_backend_core.bounded_calls import BoundedCallAborted, SyncBoundedCaller
+from sqlglot import parse_one
 
 from app.features.nl2sql.ai_calls import (
     BoundedEnterpriseAiClient,
@@ -46,7 +47,7 @@ from app.features.nl2sql.object_identity import (
     split_match_key,
     sql_identifier_token,
 )
-from app.features.nl2sql.ontology_catalog import SchemaOntology, catalog_schema_fingerprint
+from app.features.nl2sql.ontology_catalog import SchemaOntology
 from app.features.nl2sql.ontology_definition_service import definition_fingerprint
 from app.features.nl2sql.ontology_definitions import DefinitionPhase, DefinitionSource
 from app.features.nl2sql.ontology_models import (
@@ -412,7 +413,13 @@ def build_schema_context_from_catalog(
         schema_context=schema_context,
         object_count=len(objects),
         column_count=sum(len(item["columns"]) for item in objects),
-        schema_fingerprint=catalog_schema_fingerprint(catalog),
+        schema_fingerprint=hashlib.sha256(
+            json.dumps(
+                {"objects": objects, "relationships": relationships},
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest(),
         warnings=warnings,
         errors=errors,
     )
@@ -1363,6 +1370,19 @@ def _qa_sql_generation_rules_from_pattern(pattern: Mapping[str, Any]) -> list[st
     return rules
 
 
+def _qa_order_expression(expression: str, direction: str) -> str:
+    """ORDER BY の向きと NULLS 指定を AST から一度だけ組み立てる。"""
+    parsed = parse_one(f"SELECT 1 ORDER BY {expression}", read="oracle")
+    ordered = parsed.args["order"].expressions[0]
+    text = f"{ordered.this.sql(dialect='oracle')} {direction}"
+    if "nulls_first" in ordered.args:
+        # Oracle の既定と違う NULLS 指定だけ残す。
+        first = ordered.args["nulls_first"]
+        if first != (direction == "desc"):
+            text += " NULLS FIRST" if first else " NULLS LAST"
+    return text
+
+
 def _qa_sql_pattern_from_pair(pair: QaPair) -> dict[str, Any]:
     try:
         analysis = parse_oracle_sql(
@@ -1424,7 +1444,7 @@ def _qa_sql_pattern_from_pair(pair: QaPair) -> dict[str, Any]:
         ),
         "group_by": _unique_values([group.expression_sql for group in graph.groups], limit=20),
         "order_by": _unique_values(
-            [f"{order.expression_sql} {order.direction}".strip() for order in graph.orders],
+            [_qa_order_expression(order.expression_sql, order.direction) for order in graph.orders],
             limit=20,
         ),
     }

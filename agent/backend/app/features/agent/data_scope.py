@@ -571,6 +571,12 @@ def list_candidates(connection: str, *, user_uuid: str | None) -> DataScopeCandi
             tool_name, {"limit": list_tool.max_limit}, idempotent=True, trace_id=trace_id
         )
     except ExternalToolError as exc:
+        if exc.details.get("error_code") == "MCP_TOOL_FORBIDDEN":
+            raise DataScopeCandidatesError(
+                403,
+                f"{label}を使う権限がないため、プロファイルを選べません。",
+                "data_scope_candidates_forbidden",
+            ) from None
         if exc.code == "mcp.not_configured":
             raise DataScopeCandidatesError(
                 409,
