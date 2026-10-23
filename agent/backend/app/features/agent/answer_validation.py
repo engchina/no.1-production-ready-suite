@@ -295,7 +295,9 @@ def locator_labels(item: JsonObject) -> list[object]:
 _EvidenceRef = tuple[tuple[str, str], object, list[object], list[object]]
 
 
-def _evidence_refs(tool: str, output: JsonObject) -> list[_EvidenceRef]:
+def _evidence_refs(
+    tool: str, output: JsonObject, *, original_only: bool = False
+) -> list[_EvidenceRef]:
     """根拠を集める・読むツールの出力の（参照, 本文, 見出し, 文書のファイル名）（出てきた順）。"""
     items: list[tuple[object, object, list[object], list[object]]]
     if tool in EVIDENCE_TOOLS:
@@ -304,6 +306,7 @@ def _evidence_refs(tool: str, output: JsonObject) -> list[_EvidenceRef]:
             (item, item.get("excerpt"), locator_labels(item), [item.get("file_name")])
             for item in (evidence if isinstance(evidence, list) else [])
             if isinstance(item, dict)
+            and (not original_only or item.get("origin", "source") == "source")
         ]
     elif tool == RAG_READ_SOURCE:
         items = [(output, output.get("text"), locator_labels(output), [output.get("file_name")])]
@@ -336,6 +339,23 @@ def _evidence_refs(tool: str, output: JsonObject) -> list[_EvidenceRef]:
         if isinstance(document_id, str) and isinstance(chunk_id, str) and document_id and chunk_id:
             refs.append(((document_id, chunk_id), text, labels, file_names))
     return refs
+
+
+def evidence_source_texts(steps: Sequence[RunStep]) -> list[str]:
+    """モデルの生成した回答を含めず、根拠を取得・読むツールが返した原文を集める。"""
+    texts: list[str] = []
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or not result.success or step.status != "completed":
+            continue
+        if not isinstance(result.output, dict):
+            continue
+        for _ref, text, _labels, _names in _evidence_refs(
+            mcp_base_tool_name(call.name), result.output, original_only=True
+        ):
+            if isinstance(text, str):
+                texts.append(text)
+    return texts
 
 
 def _cited_in(answer: str, chunk_id: str) -> bool:

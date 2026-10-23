@@ -3277,3 +3277,157 @@ def test_trailing_note_and_invisible_lines_do_not_receive_warning_marks(
     run, _ = _searched_run(monkeypatch, answer=heading + "\n\u200b\n" + fact)
     content = _validation(run)
     assert [item["text"] for item in content["passage_marks"]] == [fact]
+
+
+@pytest.mark.parametrize("validate", [True, False])
+def test_answer_table_preserves_source_identifier_characters(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, validate: bool
+) -> None:
+    """モデルが表のハイフンを変えても、保存と検証に渡す値は根拠と同じ文字にする。"""
+    from copy import deepcopy
+
+    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", validate)
+    search = deepcopy(mcp.outputs["rag_search"])
+    assert isinstance(search, dict)
+    search["evidence"][0]["excerpt"] = "| id | value |\n|---|---|\n| row-a | 10 |\n| row‑b | 20 |"
+    mcp.outputs["rag_search"] = search
+    answer = (
+        "| id | value |\n|---|---|\n| row‑a | 10 |\n| row‑b | 20 |\n\n"
+        "一般の説明では word‑word の表記を保ちます。"
+    )
+    model = _script(
+        monkeypatch,
+        [
+            function_call(
+                "rag__rag_search", {"query": "資料の識別子を確認"}, call_id="c-identifiers"
+            )
+        ],
+        [assistant_message(answer)],
+    )
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(
+            goal="資料に記載された識別子と値を表で示してください。", agent_id=AGENT_ID
+        ),
+        created_by_user_uuid=USER_UUID,
+    )
+    anyio.run(builtin_runtime.execute_run, run.id)
+    finished = runtime_repository.get_run(run.id)
+    assert finished.status == RunStatus.COMPLETED
+    published = run_answer_text(finished) or ""
+    assert "| row-a | 10 |" in published
+    assert "| row‑b | 20 |" in published
+    assert "word‑word" in published
+    assert len(model.calls) == 2
+    if validate:
+        [checked] = mcp.calls_of("rag_validate_answer")
+        assert "| row-a | 10 |" in checked["arguments"]["answer"]
+        assert "row‑a" not in checked["arguments"]["answer"]
+
+
+def test_ambiguous_identifier_is_reported_without_guessing(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    from copy import deepcopy
+
+    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
+    search = deepcopy(mcp.outputs["rag_search"])
+    assert isinstance(search, dict)
+    search["evidence"][0]["excerpt"] = "| id |\n|---|\n| row-a |\n| row‑a |"
+    mcp.outputs["rag_search"] = search
+    _script(
+        monkeypatch,
+        [function_call("rag__rag_search", {"query": "識別子の確認"}, call_id="ambiguous")],
+        [assistant_message("| id |\n|---|\n| row–a |")],
+    )
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="資料の識別子を表で示してください。", agent_id=AGENT_ID),
+        created_by_user_uuid=USER_UUID,
+    )
+    anyio.run(builtin_runtime.execute_run, run.id)
+    finished = runtime_repository.get_run(run.id)
+    assert "row–a" in (run_answer_text(finished) or "")
+    validation = _validation(finished)
+    assert validation["status"] == "unvalidated" and validation["valid"] is False
+    assert validation["reason"] == "identifier_ambiguous"
+    assert validation["identifier_check"] == {"corrected": 0, "ambiguous": 1}
+
+
+@pytest.mark.parametrize("ambiguous", [True, False])
+def test_recorded_output_uses_the_same_source_identifier_check(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, ambiguous: bool
+) -> None:
+    from copy import deepcopy
+
+    from app.features.agent.output_fields import AgentOutputField
+    from app.features.agent.runtime import AgentProfilePatch
+
+    search = deepcopy(mcp.outputs["rag_search"])
+    assert isinstance(search, dict)
+    search["evidence"][0]["excerpt"] = "row-a row‑a" if ambiguous else "row-a"
+    mcp.outputs["rag_search"] = search
+    runtime_repository.patch_agent(
+        AGENT_ID, AgentProfilePatch(output_fields=[AgentOutputField(key="id", label="識別子")])
+    )
+    written = "row–a" if ambiguous else "row‑a"
+    scripted = [
+        [function_call("rag__rag_search", {"query": "識別子の確認"}, call_id="source")],
+        [function_call("record_output", {"rows": [{"id": written}]}, call_id="record")],
+    ]
+    if ambiguous:
+        # 候補を推測して保存せず、モデルへ返した誤りに従って原文の表記で呼び直す。
+        scripted.append(
+            [function_call("record_output", {"rows": [{"id": "row-a"}]}, call_id="record-correct")]
+        )
+    scripted.append([assistant_message("資料の値を記録しました。")])
+    _script(monkeypatch, *scripted)
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="資料の識別子を記録してください。", agent_id=AGENT_ID, draft=True),
+        created_by_user_uuid=USER_UUID,
+    )
+    anyio.run(builtin_runtime.execute_run, run.id)
+    finished = runtime_repository.get_run(run.id)
+    assert finished.status == RunStatus.COMPLETED
+    [output] = [a.content for a in finished.artifacts if a.kind == "structured_output"]
+    assert output["rows"] == [{"id": "row-a"}]
+    recorded = [s for s in finished.steps if s.tool_call and s.tool_call.name == "record_output"]
+    if ambiguous:
+        assert recorded[0].tool_result is not None
+        assert recorded[0].tool_result.error_code == "output.identifier_ambiguous"
+    else:
+        assert output["identifier_check"] == {"corrected": 1, "ambiguous": 0}
+
+
+def test_falling_back_to_an_earlier_answer_preserves_identifiers_too(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    from copy import deepcopy
+    from functools import partial
+
+    from app.features.agent import tool_grounding
+
+    search = deepcopy(mcp.outputs["rag_search"])
+    assert isinstance(search, dict)
+    search["evidence"][0]["excerpt"] = "row-a"
+    mcp.outputs["rag_search"] = search
+    original = "| id |\n|---|\n| row‑a |"
+    run, _ = _searched_run(monkeypatch, answer=original)
+    monkeypatch.setattr(tool_grounding, "hop_original_answer", lambda _: original)
+
+    async def validate(run_id: str, answer: str, **_: Any) -> tuple[str, dict[str, Any]]:
+        assert "row-a" in answer and "row‑a" not in answer
+        return answer, {"status": "completed", "withheld": {"removed": 0, "unverified": 0}}
+
+    monkeypatch.setattr(builtin_runtime, "_validate_final_answer", validate)
+    result = anyio.run(
+        partial(
+            builtin_runtime._answer_before_hop_retry,
+            run.id,
+            "後の回答",
+            {"status": "completed", "withheld": {"removed": 1}},
+            rag_tools=True,
+            data_scopes=None,
+        )
+    )
+    assert result is not None
+    assert result[0] == result[1] == original.replace("row‑a", "row-a")
+    assert result[2]["identifier_check"] == {"corrected": 1, "ambiguous": 0}

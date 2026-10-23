@@ -92,6 +92,7 @@ from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_NAME,
     answer_evidence,
 )
+from app.features.agent.answer_identifiers import IdentifierCheck, identifier_index
 from app.features.agent.answer_notice import answer_takes_notice, current_answer_notice
 from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.answer_passages import is_absence_only, is_clarification_only
@@ -3816,6 +3817,8 @@ async def _finish(
         answer = without_output_record_sections(
             answer, get_settings().agent_output_record_section_titles
         )
+    identifiers = identifier_index(runtime_repository.get_run(run_id).steps).answer(answer)
+    answer = identifiers.text
     # モデルの最終の回答（最終の検証で段落を外す前。対応を決めるのに使う。#1305）。
     model_answer = answer
     validation: dict[str, Any] | None = None
@@ -3829,6 +3832,9 @@ async def _finish(
             )
             if reverted is not None:
                 model_answer, answer, validation = reverted
+                identifiers = IdentifierCheck(
+                    model_answer, **validation.get("identifier_check", {})
+                )
         except Exception as exc:  # noqa: BLE001 - 検証の失敗で回答を落とさない
             logger.warning(
                 "builtin_runtime_answer_validation_failed",
@@ -3844,6 +3850,22 @@ async def _finish(
                 run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=validation
             )
             answer = with_unverified_notice(answer)
+    if identifiers.corrected or identifiers.ambiguous:
+        validation = validation or validation_content(
+            STATUS_SKIPPED, reason="identifier_check_only"
+        )
+        validation["identifier_check"] = identifiers.counts
+        if identifiers.ambiguous:
+            validation.update(
+                status=STATUS_UNVALIDATED,
+                valid=False,
+                reason="identifier_ambiguous",
+                message="資料に表記の異なる値があり、識別子を一意に照合できませんでした。",
+            )
+            answer = with_unverified_notice(answer)
+        runtime_repository.save_builtin_artifact(
+            run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=validation
+        )
     # 主張の照合（最終の検証）とは別に、回答に使った章節を終わりまで読んだかを残し、読めていない
     # 章節は回答に示す（#2492。続きを読まずに確定した手順の不足を、照合は見つけられない）。
     coverage = _coverage(runtime_repository.get_run(run_id), model_answer, task)
@@ -3939,6 +3961,8 @@ async def _answer_before_hop_retry(
     original = without_lookup_notes(original) if original else original
     if not original or original.strip() == answer.strip() or is_clarification_only(original):
         return None
+    identifiers = identifier_index(runtime_repository.get_run(run_id).steps).answer(original)
+    original = identifiers.text
     published, before = await _validate_final_answer(
         run_id, original, rag_tools=rag_tools, data_scopes=data_scopes
     )
@@ -3949,6 +3973,7 @@ async def _answer_before_hop_retry(
             "builtin_runtime_hop_retry_reverted",
             extra={"run_id": run_id, "before": list(rank), "after": list(after)},
         )
+        before["identifier_check"] = identifiers.counts
         return original, published, before
     if validation is not None:
         runtime_repository.save_builtin_artifact(
