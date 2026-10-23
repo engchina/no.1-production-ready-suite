@@ -352,3 +352,58 @@ def test_unsectioned_contiguous_chunks_keep_separate_numbered_headings():
     # 未取得の章境界を飛び越えた本文へ、前章の名前を与えない。
     gap = _retrieved_heading_context([span for span in spans if span["text"] in [parts[0], parts[5]]])
     assert next(span for span in gap if span["text"] == parts[5])["function"][-1] == ""
+
+
+def test_missing_section_metadata_is_planned_before_the_answer_and_cannot_be_overridden():
+    from dataclasses import replace
+
+    from test_grounded_answer import FakeModel, context, ids, record
+
+    from rag_engine.config import get_settings
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.generation.answering import synthesize_grounded_answer
+    from rag_engine.models.llm import RequestScopePlan
+
+    correct, other = CASES["summary"]["evidence"], CASES["coverage"]["additional_evidence"]
+    texts = ["第1節 対象選択の設定", other, "第2節 CSV の更新", correct]
+    records = [replace(record(i, text, "", source="operations.txt"), metadata={}, chunk_seq=i) for i, text in enumerate(texts)]
+    ctx = context(records[2], records[3], records[1], records[0])
+    labels = ids(ctx, CASES["summary"]["question"])
+    plan = {
+        "request_id": "Q1",
+        "evidence_ids": [labels[correct]],
+        "evidence_scope": [{"evidence_id": labels[correct], "target": "CSV の更新", "relation": "direct", "link_quote": ""}],
+    }
+    model = FakeModel(
+        [
+            {
+                "request_coverage": [{"request_id": "Q1", "evidence_ids": list(labels.values())}],
+                "items": [
+                    {"kind": "operation", "request_id": "Q1", "text": text, "quote": text, "evidence_id": labels[text]}
+                    for text in (correct, other)
+                ],
+                "summary": other,
+                "confidence": "high",
+            }
+        ],
+        [],
+    )
+    calls = []
+
+    def parse(system, prompt, settings, schema, **options):
+        calls.append(schema)
+        if schema is RequestScopePlan:
+            return schema.model_validate({"request_coverage": [plan]})
+        assert other not in prompt
+        return model(system, prompt, settings, schema, **options)
+
+    def unused(*args, **kwargs):
+        raise AssertionError("追加の外部呼び出しは不可")
+
+    with bind_dependencies(AnswerDependencies(unused, unused, parse, unused, unused)):
+        result = synthesize_grounded_answer(
+            CASES["summary"]["question"], ctx, replace(get_settings(), answer_audit_mode="none"), image_prompt_mode="text_only"
+        ).response
+    assert correct in result.answer_text and other not in result.answer_text
+    assert calls == [RequestScopePlan, GroundedDraft]
+    assert result.generation_trace["llm_calls"] == 2
