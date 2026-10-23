@@ -21,19 +21,19 @@ describe("answerModelLabel", () => {
 
 describe("answerModelHelpKey", () => {
   it("候補が 2 件なら画面ごとの説明", () => {
-    expect(answerModelHelpKey([text, vision], "chat.compare.default")).toBe("chat.compare.default");
+    expect(answerModelHelpKey([text, vision], "search.answerModel.help")).toBe("search.answerModel.help");
     expect(answerModelHelpKey([text, vision], "search.answerModel.help")).toBe(
       "search.answerModel.help"
     );
   });
 
   it("テキストモデルだけなら「テキストモデルで回答します」", () => {
-    expect(answerModelHelpKey([text], "chat.compare.default")).toBe("chat.compare.defaultTextOnly");
+    expect(answerModelHelpKey([text], "search.answerModel.help")).toBe("search.answerModel.helpTextOnly");
   });
 
   it("画像対応モデルを兼ねる 1 件なら、画像も読むことを伝える", () => {
-    expect(answerModelHelpKey([both], "chat.compare.default")).toBe(
-      "chat.compare.defaultTextVision"
+    expect(answerModelHelpKey([both], "search.answerModel.help")).toBe(
+      "search.answerModel.helpTextVision"
     );
   });
 });
