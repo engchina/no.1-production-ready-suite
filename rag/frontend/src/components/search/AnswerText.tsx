@@ -12,6 +12,7 @@ import type { ReactNode } from "react";
 import type { RetrievedChunk } from "@/lib/api";
 import { answerPassageLabels, answerPassages } from "@/lib/answer-passages";
 import {
+  answerFormat,
   parseAnswerText,
   parseCitationLine,
   resolveCitationLine,
@@ -67,8 +68,9 @@ export function AnswerText({
   diagnostics?: unknown;
 }) {
   const source = useEvidenceSource<CitationTarget>();
+  const format = answerFormat(diagnostics);
   const passages = streaming ? null : answerPassages(diagnostics);
-  const blocks = streaming ? null : (parseAnswerText(text) ?? (passages ? plainParagraphs(text) : null));
+  const blocks = streaming ? null : (parseAnswerText(text, format) ?? (passages ? plainParagraphs(text) : null));
   if (!blocks) {
     return (
       <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg" aria-live={live ? "polite" : undefined}>
@@ -91,7 +93,7 @@ export function AnswerText({
               key: String(index),
               title: block.title,
               ordered: block.ordered,
-              collapsible: block.title === GAPS_SECTION_TITLE,
+              collapsible: block.title === (format?.gaps_section ?? GAPS_SECTION_TITLE),
               entries: block.entries.map((entry, entryIndex) => toEntry(entry, entryIndex, block.title)),
             }
       )}
@@ -110,7 +112,7 @@ export function AnswerText({
   );
 
   function toCitation(citation: string, ordinal: number | undefined): AnswerCitationRef {
-    const ref = parseCitationLine(citation);
+    const ref = parseCitationLine(citation, format);
     const target = resolveCitationLine(ordinal, ref, citations);
     return target == null
       ? { key: citation, label: citation }
@@ -123,7 +125,7 @@ export function AnswerText({
   }
 
   function renderSectionLink(text: string, title: string) {
-    if (title !== UNREAD_SECTION_TITLE) return null;
+    if (title !== (format?.unverified_section ?? UNREAD_SECTION_TITLE)) return null;
     const section = unreadSections.find((item) => item.line === text);
     if (!section) return null;
     const query = section.page != null ? `?page=${section.page}` : "";

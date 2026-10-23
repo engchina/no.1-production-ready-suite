@@ -1789,6 +1789,7 @@ for (const viewport of [
     await expect(prompt).toBeVisible();
     // 送信の直後に出るので、確認事項の文へフォーカスを移す。
     await expect(prompt).toBeFocused();
+    await expect(prompt).toHaveCSS("outline-style", "none");
     await expect(choice).toContainText("対象: 「出張旅費規程.pdf」第6条 申請と精算 p.2–3");
     const confirm = choice.getByRole("button", { name: "この内容で回答" });
     await expect(confirm).toBeDisabled();

@@ -334,7 +334,7 @@ async def suggest_search_answer_profile_approved_faq(
         limit=min(request.limit, CHAT_APPROVED_FAQ_LIMIT)
         if request.purpose == "chat"
         else request.limit,
-        min_score=settings.rag_approved_faq_chat_min_score if request.purpose == "chat" else None,
+        min_score=settings.rag_approved_faq_suggestion_min_score,
         embed=(
             (lambda texts, input_type: genai.embed(texts, input_type=input_type))
             if genai is not None
@@ -343,13 +343,13 @@ async def suggest_search_answer_profile_approved_faq(
         embedding_model=settings.oci_genai_embedding_model,
         embedding_dimensions=settings.oci_genai_embedding_dim,
     )
-    if request.purpose == "chat" and suggestions:
+    if suggestions:
         # 1 位とほぼ同じくらい近い候補だけを出す(#709)。
         top = max(item.score for item in suggestions)
         suggestions = [
             item
             for item in suggestions
-            if item.score >= top - settings.rag_approved_faq_chat_max_gap
+            if item.score >= top - settings.rag_approved_faq_suggestion_max_gap
         ]
     return ApiResponse(
         data=ApprovedFaqSuggestionsData(

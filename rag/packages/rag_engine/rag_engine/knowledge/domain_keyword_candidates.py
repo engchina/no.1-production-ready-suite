@@ -23,7 +23,7 @@ from rag_engine.chunking import (
     load_latest_chunk_run,
 )
 from rag_engine.knowledge.domain_keywords import normalize_domain_keyword, normalize_domain_keywords
-from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig, tokenize_text_search_query
+from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig, tokenize_domain_keyword_candidates
 
 DEFAULT_DOMAIN_KEYWORD_CANDIDATE_LIMIT = 300
 DEFAULT_DOMAIN_KEYWORD_SOURCE_CHUNK_LIMIT = 2000
@@ -328,9 +328,8 @@ def suggest_domain_keyword_candidates(
             continue
         document_ids.add(str(source.document_id))
         try:
-            tokens = tokenize_text_search_query(
+            tokens = tokenize_domain_keyword_candidates(
                 text,
-                domain_keywords=(),
                 config=tokenizer_config,
                 max_tokens=MAX_DOMAIN_KEYWORD_CANDIDATE_TOKENS_PER_CHUNK,
             )

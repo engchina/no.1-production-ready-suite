@@ -296,3 +296,20 @@ describe("matchCitation（表計算）", () => {
     expect(matchCitation({ fileName: "book.xlsx", page: null, sheet: "別", rowStart: 1, rowEnd: 1 }, citations)).toBe(0);
   });
 });
+
+
+describe("生成時に保存した回答の表示形式", () => {
+  const format = { rules_section: "確認結果[例]", gaps_section: "不足箇所", citation_prefix: "出典[例]：",
+    item_bullet: "※", operation_steps_heading: "実行順", confirmation_steps_heading: "確認順",
+    steps_heading_template: "{heading}[{title}]", page_location: "頁[{page}]", sheet_location: "表[{sheet}] {cell_range}" };
+
+  it("上書きした節・箇条・出典行を読み、根拠の行の番号を保持する", () => {
+    const blocks = parseAnswerText("要約\n\n確認結果[例]\n※説明\n出典[例]：文書 A.pdf 頁[3]\n\n実行順[機能 A]\n1. 操作\n出典[例]：文書 A.pdf 頁[4]", format);
+    expect(blocks?.[1]).toEqual({ kind: "section", title: "確認結果[例]", ordered: false, entries: [
+      { kind: "item", text: "説明", citations: ["出典[例]：文書 A.pdf 頁[3]"], citationLines: [1] },
+    ] });
+    expect(blocks?.[2]).toMatchObject({ title: "実行順[機能 A]", entries: [{ citationLines: [2] }] });
+    expect(parseCitationLine("出典[例]：文書 A.pdf 頁[3]", format)).toEqual({ fileName: "文書 A.pdf", page: 3 });
+    expect(parseCitationLine("出典[例]：文書 A.xlsx 表[シート A] A3:D6", format)).toEqual({ fileName: "文書 A.xlsx", page: null, sheet: "シート A", rowStart: 3, rowEnd: 6 });
+  });
+});

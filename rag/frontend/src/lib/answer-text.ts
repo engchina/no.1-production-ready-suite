@@ -41,9 +41,46 @@ const CITATION = /^根拠：/;
 const BULLET = /^・/;
 const NUMBERED = /^\d+\.\s/;
 
-export function parseAnswerText(text: string): AnswerTextBlock[] | null {
+export type AnswerFormat = Readonly<Record<string, string>>;
+
+/** 生成時に保存した表示形式。現在の言語設定は参照しない。 */
+export function answerFormat(diagnostics: unknown): AnswerFormat | undefined {
+  if (!diagnostics || typeof diagnostics !== "object") return undefined;
+  const value = (diagnostics as Record<string, unknown>).answer_format;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string");
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function escapePattern(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function templatePattern(template: string, values: Record<string, string>): string {
+  return template.split(/(\{\w+\})/).map((part) =>
+    part.startsWith("{") && part.endsWith("}")
+      ? (values[part.slice(1, -1)] ?? ".+?")
+      : escapePattern(part)
+  ).join("");
+}
+
+function sectionTitle(line: string, format?: AnswerFormat): boolean {
+  if (!format) return SECTION_TITLE.test(line);
+  if (Object.entries(format).some(([key, value]) => key.endsWith("_section") && value === line)) return true;
+  return [format.operation_steps_heading, format.confirmation_steps_heading].some((heading) =>
+    heading && (line === heading || new RegExp("^" + templatePattern(
+      format.steps_heading_template ?? "{heading}（{title}）", { heading: escapePattern(heading), title: ".+" }
+    ) + "$").test(line))
+  ) || Boolean(format.subquestion_heading_template && new RegExp("^" + templatePattern(
+    format.subquestion_heading_template, { label: ".+?", text: ".+" }
+  ) + "$").test(line));
+}
+
+export function parseAnswerText(text: string, format?: AnswerFormat): AnswerTextBlock[] | null {
   const lines = text.split("\n");
-  if (!lines.some((line) => SECTION_TITLE.test(line.trim()))) return null;
+  const citation = format?.citation_prefix ? new RegExp("^" + escapePattern(format.citation_prefix)) : CITATION;
+  const bullet = format?.item_bullet ? new RegExp("^" + escapePattern(format.item_bullet)) : BULLET;
+  if (!lines.some((line) => sectionTitle(line.trim(), format))) return null;
   const blocks: AnswerTextBlock[] = [];
   let section: Extract<AnswerTextBlock, { kind: "section" }> | null = null;
   let paragraph: string[] = [];
@@ -62,26 +99,26 @@ export function parseAnswerText(text: string): AnswerTextBlock[] | null {
       flushParagraph();
       continue;
     }
-    if (CITATION.test(line)) citationOrdinal += 1;
-    if (SECTION_TITLE.test(line)) {
+    if (citation.test(line)) citationOrdinal += 1;
+    if (sectionTitle(line, format)) {
       flushParagraph();
       section = { kind: "section", title: line, ordered: true, entries: [] };
       blocks.push(section);
       continue;
     }
-    if (section && (BULLET.test(line) || NUMBERED.test(line))) {
+    if (section && (bullet.test(line) || NUMBERED.test(line))) {
       flushParagraph();
       if (!NUMBERED.test(line)) section.ordered = false;
       section.entries.push({
         kind: "item",
-        text: line.replace(BULLET, "").replace(NUMBERED, ""),
+        text: line.replace(bullet, "").replace(NUMBERED, ""),
         citations: [],
         citationLines: [],
       });
       continue;
     }
     const last = section?.entries[section.entries.length - 1];
-    if (CITATION.test(line) && last?.kind === "item" && paragraph.length === 0) {
+    if (citation.test(line) && last?.kind === "item" && paragraph.length === 0) {
       last.citations.push(line);
       last.citationLines.push(citationOrdinal);
       continue;
@@ -114,7 +151,25 @@ export interface AnswerCitationRef {
 const CITATION_LINE = /^根拠：(.+?)(?:\s+p\.(\d*))?$/;
 const SHEET_CITATION_LINE = /^根拠：(.+?)\s+シート「(.+)」(?:[A-Z]+(\d+):[A-Z]+(\d+))?$/;
 
-export function parseCitationLine(line: string): AnswerCitationRef | null {
+export function parseCitationLine(line: string, format?: AnswerFormat): AnswerCitationRef | null {
+  if (format?.citation_prefix) {
+    const value = line.trim();
+    if (!value.startsWith(format.citation_prefix)) return null;
+    const body = value.slice(format.citation_prefix.length);
+    const sheetPattern = templatePattern(format.sheet_location ?? 'シート「{sheet}」{cell_range}', {
+      sheet: "(?<sheet>.+)", cell_range: "(?<cells>[A-Z]+[0-9]+:[A-Z]+[0-9]+)?",
+    });
+    const sheet = new RegExp("^(?<file>.+?)\\s+" + sheetPattern + "$").exec(body)?.groups;
+    if (sheet) {
+      const rows = sheet.cells?.match(/[0-9]+/g);
+      return { fileName: sheet.file.trim(), page: null, sheet: sheet.sheet,
+        rowStart: rows?.[0] ? Number(rows[0]) : null, rowEnd: rows?.[1] ? Number(rows[1]) : null };
+    }
+    const pagePattern = templatePattern(format.page_location ?? "p.{page}", { page: "(?<page>[0-9]*)" });
+    const page = new RegExp("^(?<file>.+?)\\s+" + pagePattern + "$").exec(body)?.groups;
+    if (page) return { fileName: page.file.trim(), page: page.page ? Number(page.page) : null };
+    return body.trim() ? { fileName: body.trim(), page: null } : null;
+  }
   const trimmed = line.trim();
   const sheet = SHEET_CITATION_LINE.exec(trimmed);
   if (sheet) {

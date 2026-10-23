@@ -269,3 +269,8 @@ svg.animate-spin {
 .pr-skip-link:focus-visible {
   transform: none;
 }
+
+/* 確認事項の見出しは読み上げの移動先。操作部品ではないので自動フォーカスに外枠を付けない。 */
+.pr-clarification-heading:focus-visible {
+  outline: none;
+}

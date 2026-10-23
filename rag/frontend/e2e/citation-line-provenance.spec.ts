@@ -77,7 +77,7 @@ const ANSWER = [
   "根拠：文書 A.pdf p.3",
 ].join("\n");
 
-async function ask(page: Page, citations: unknown[]) {
+async function ask(page: Page, citations: unknown[], format?: Record<string, string>) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) => {
@@ -99,10 +99,10 @@ async function ask(page: Page, citations: unknown[]) {
           diagnostics: {
             search_answer_profile_applied: PROFILE.id,
             retrieval_strategy: "hybrid",
-            answer: { confidence: "high", execution_steps: [], evidence_tree: [] },
+            answer: { confidence: "high", execution_steps: [], evidence_tree: [], answer_format: format },
           },
         })}\n\n`,
-        `event: delta\ndata: ${JSON.stringify({ text: ANSWER })}\n\n`,
+        `event: delta\ndata: ${JSON.stringify({ text: format ? ANSWER.replaceAll("資料により確認できた事項", format.rules_section).replaceAll("根拠：", format.citation_prefix).replaceAll("・", format.item_bullet).replaceAll("p.3", "頁[3]") : ANSWER })}\n\n`,
         `event: citations\ndata: ${JSON.stringify(citations)}\n\n`,
         `event: done\ndata: ${JSON.stringify({ trace_id: "trace-provenance" })}\n\n`,
       ].join(""),
@@ -115,7 +115,7 @@ async function ask(page: Page, citations: unknown[]) {
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
   await page.getByRole("button", { name: "検索", exact: true }).click();
   const answer = page.getByTestId("answer-text");
-  await expect(answer.getByRole("heading", { name: "資料により確認できた事項" })).toBeVisible();
+  await expect(answer.getByRole("heading", { name: format?.rules_section ?? "資料により確認できた事項" })).toBeVisible();
   return answer;
 }
 
@@ -202,4 +202,17 @@ test.describe("本文の根拠の行と根拠の一覧の対応（issue 2710）"
     await expect(notice).toContainText("この回答の記録は");
     await expect(notice).toContainText("文書名と頁が合う箇所 3 件");
   });
+});
+
+
+test("保存した表示形式の回答でも原文を開ける", { tag: "@responsive" }, async ({ page }) => {
+  const answer = await ask(page, RESOLVED, { rules_section: "確認結果[例]", citation_prefix: "出典[例]：", item_bullet: "※", page_location: "頁[{page}]" });
+  const lines = answer.getByRole("button", { name: "出典[例]：文書 A.pdf 頁[3] の原文を開く" });
+  await expect(lines).toHaveCount(2);
+  await lines.first().click();
+  const { excerpt } = await openedSheet(page);
+  expect(excerpt).toContain(FIGURE);
+  await closeSheet(page);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("custom-answer-format.png"), fullPage: true });
 });
