@@ -3521,7 +3521,7 @@ async def test_approved_faq_generation_reports_usage_and_failure(
 
     engine = AnswerEngine(
         Settings(),
-        oracle=FakeOracle(),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
         approved_faq=("設定 A は？", "設定 A の回答です。"),
     )
