@@ -35,12 +35,7 @@ from app.security.permissions import PROFILE_MANAGE_PERMISSION, SQL_EXECUTE_PERM
 from app.security.request_actor import actor_scope
 from app.settings import get_settings
 
-from .chat_attachments import (
-    AttachmentContext,
-    attachment_context,
-    attachment_owner_principal,
-    chat_attachment_service,
-)
+from .chat_attachments import AttachmentContext
 from .models import (
     AllowedObjects,
     ExplainPlanData,
@@ -3152,26 +3147,28 @@ class OntologyApiRuntime:
     ) -> AttachmentContext:
         if not request.chat or (not request.attachment_ids and not request.previous_job_id):
             return AttachmentContext()
-        parent = self.legacy_service._chat_parent(
-            JobCreateRequest(
-                question=request.question,
-                profile_id=request.profile_id,
-                chat=True,
-                previous_job_id=request.previous_job_id,
+        reader = getattr(self.legacy_service, "chat_requirement_attachments", None)
+        if not callable(reader):
+            if request.attachment_ids:
+                raise RequirementAiUnavailableError(
+                    "REQUIREMENT_ATTACHMENTS_UNAVAILABLE", "添付の表の構造を読み込めません。"
+                )
+            return AttachmentContext()
+        return cast(
+            AttachmentContext,
+            reader(
+                JobCreateRequest(
+                    question=request.question,
+                    profile_id=request.profile_id,
+                    chat=True,
+                    previous_job_id=request.previous_job_id,
+                    attachment_ids=request.attachment_ids,
+                    engine=request.engine,
+                ),
+                actor_user_uuid=actor_user_uuid,
+                actor_is_system_admin=actor_is_system_admin,
             ),
-            actor_user_uuid,
-            all_users=actor_is_system_admin,
         )
-        conversation_id = parent.conversation_id if parent else None
-        service = chat_attachment_service()
-        if not request.attachment_ids:
-            return attachment_context(conversation_id, request.question)
-        toolset = service.preparation_toolset(
-            attachment_owner_principal(actor_user_uuid, actor_is_system_admin),
-            request.attachment_ids,
-            conversation_id=conversation_id,
-        )
-        return attachment_context(conversation_id, request.question, prepared_toolset=toolset)
 
     def _requirement_client(self) -> Any:
         return getattr(self.legacy_service, "_enterprise_ai_client", None)

@@ -9417,6 +9417,23 @@ class Nl2SqlService:
             for turn in fitted
         ]
 
+    def chat_requirement_attachments(
+        self, request: JobCreateRequest, *, actor_user_uuid: str, actor_is_system_admin: bool
+    ) -> AttachmentContext:
+        """確認段階の添付を、生成と同じ会話の権限で読む。会話への確定は行わない。"""
+        from .chat_attachments import attachment_owner_principal, chat_attachment_service
+
+        parent = self._chat_parent(request, actor_user_uuid, all_users=actor_is_system_admin)
+        conversation_id = parent.conversation_id if parent else None
+        if not request.attachment_ids:
+            return attachment_context(conversation_id, request.question)
+        toolset = chat_attachment_service().preparation_toolset(
+            attachment_owner_principal(actor_user_uuid, actor_is_system_admin),
+            request.attachment_ids,
+            conversation_id=conversation_id,
+        )
+        return attachment_context(conversation_id, request.question, prepared_toolset=toolset)
+
     def chat_requirement_history(
         self,
         *,
