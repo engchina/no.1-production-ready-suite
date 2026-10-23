@@ -56,3 +56,13 @@ def test_verbatim_multi_condition_item_is_preserved():
 def test_only_requested_place_units_are_used():
     question = "上限は何件ですか。数字と千を混ぜた表記で答えてください。"
     assert format_draft_numbers(question, draft(SOURCE), []).summary == "上限は24千件です。"
+
+
+@pytest.mark.parametrize("number", ["二万四 千", "二万四\n千", "二万四　千"])
+def test_layout_gap_is_read_as_a_whole_quantity(number):
+    assert format_draft_numbers(QUESTION, draft(f"上限は{number}件です。"), []).summary == "上限は2万4千件です。"
+
+
+def test_independent_numbers_and_identifier_fragments_are_not_joined():
+    text = "2 4000件、E24000 千件。"
+    assert format_draft_numbers(QUESTION, draft(text), []).summary == text

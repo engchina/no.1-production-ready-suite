@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from rag_parser_core.language import current_pack
-from rag_parser_core.language.text import alternation, parse_number, text_patterns
+from rag_parser_core.language.text import alternation, arabic_numbers, parse_number, text_patterns
 
 from rag_engine.models.llm import GroundedDraft
 from rag_engine.retrieval.task_contract import answer_instruction_texts
@@ -30,7 +30,8 @@ def format_draft_numbers(question: str, draft: GroundedDraft, spans: Sequence[Ma
     counters = (
         set(pack.words("grounding_cues", "amount_units")) - set(pack.words("numbers", "date_units")) - set(patterns.kanji_multipliers)
     )
-    quantity = re.compile(rf"(?<![A-Za-z0-9_.{chars}])([{chars}]+)(?=\s*{alternation(tuple(counters))})")
+    run = rf"[{chars}]+"
+    quantity = re.compile(rf"(?<![A-Za-z0-9_.{chars}])({run}(?:[ \u3000\n]{run})*)(?=\s*{alternation(tuple(counters))})")
     quotes = [
         re.escape(pair[0]) + r"[^" + re.escape(pair[1]) + r"\n]*" + re.escape(pair[1]) for pair in pack.words("symbols", "quote_brackets")
     ]
@@ -46,7 +47,10 @@ def format_draft_numbers(question: str, draft: GroundedDraft, spans: Sequence[Ma
             return original
         if len(raw) > 1 and raw.startswith("0"):
             return original
-        number = parse_number(raw.replace(",", ""))
+        # 排版で分かれた位取りも全体で読む。独立した数の並びは結ばない。
+        if re.search(rf"[{chars}][ \u3000\n]$", match.string[: match.start()]):
+            return original
+        number = parse_number(arabic_numbers(raw))
         if number is None:
             return original
         remaining = number
