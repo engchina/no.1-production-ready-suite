@@ -1981,7 +1981,7 @@ def synthesize_grounded_answer(
 
     是正は1回につき1手段（既取得poolからの同機能根拠の追加、原画像の添付、指摘の反映）。
     支持済みの要求を失うか問題が増える候補は採用せず、最良の回を公開する。
-    外部検索は行わない。LLM 呼出は生成と監査で各回最大2回、全体で最大6回。
+    外部検索は行わない。通常は各回で生成と監査を1回ずつ行う。生成した根拠計画の構造が不正な場合だけ、1回修正する。
     """
     from rag_engine.generation import grounded
     from rag_engine.models.llm import GroundedItem

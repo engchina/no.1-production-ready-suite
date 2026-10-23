@@ -237,3 +237,21 @@ def test_inconsistent_scope_plan_is_repaired_once_and_the_call_is_counted():
     assert correct in result.answer_text and other not in result.answer_text
     assert result.generation_trace["llm_calls"] == 2
     assert "invalid_request_plan" in model.prompts[1][1]
+
+
+def test_an_explicitly_empty_scope_does_not_authorize_an_operation():
+    from rag_engine.generation.grounded import _outside_request_plan, _request_plan_errors
+
+    text = CASES["coverage"]["additional_evidence"]
+    span = {"evidence_id": "E2", "text": text}
+    item = GroundedItem(kind="operation", request_id="Q1", text=text, evidence_id="E2")
+    draft = GroundedDraft.model_validate(
+        {
+            "request_coverage": [{"request_id": "Q1", "evidence_ids": ["E2"], "evidence_scope": []}],
+            "items": [item.model_dump()],
+            "summary": text,
+            "confidence": "high",
+        }
+    )
+    assert _request_plan_errors(draft)
+    assert _outside_request_plan(item, span, draft, [span])

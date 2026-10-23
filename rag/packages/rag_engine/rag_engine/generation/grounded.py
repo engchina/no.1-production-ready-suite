@@ -81,7 +81,7 @@ from rag_engine.retrieval.task_contract import task_contract
 
 logger = logging.getLogger(__name__)
 
-MAX_ROUNDS = 3  # 初回 + 是正は最大2回。各回は生成1回と監査1回。
+MAX_ROUNDS = 3  # 初回 + 是正は最大2回。生成した計画の構造の修正は、各回1回まで。
 MAX_PINNED = 4
 CONTEXT_NOTE_BEGIN, CONTEXT_NOTE_END = "<補助情報（quote 不可）>", "</補助情報>"
 # 回答本文の節の見出し・定型文・出典の表示は言語資源（answer_labels。#2181）。``answer_labels()`` が今の言語資源の
@@ -1518,24 +1518,22 @@ def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, 
         plans = list(draft.request_coverage)
     if not plans:
         return bool(draft.request_coverage) or "request_coverage" in draft.model_fields_set
-    labels = {
-        label
-        for plan in plans
-        for label in plan.evidence_ids
-        if not plan.evidence_scope
-        or any(
-            scope.evidence_id == label
-            and (
-                scope.relation == "direct"
-                or (
-                    scope.relation == "linked"
-                    and scope.link_quote.strip()
-                    and any(quote_in_text(scope.link_quote, str(candidate.get("text") or "")) for candidate in spans)
-                )
-            )
-            for scope in plan.evidence_scope
-        )
-    }
+    labels: set[str] = set()
+    for plan in plans:
+        for label in plan.evidence_ids:
+            if "evidence_scope" not in plan.model_fields_set:
+                labels.add(label)
+                continue
+            scopes = [scope for scope in plan.evidence_scope if scope.evidence_id == label]
+            if len(scopes) != 1:
+                continue
+            scope = scopes[0]
+            if scope.relation == "direct" or (
+                scope.relation == "linked"
+                and scope.link_quote.strip()
+                and any(quote_in_text(scope.link_quote, str(candidate.get("text") or "")) for candidate in spans)
+            ):
+                labels.add(label)
     labels.update(label for plan in draft.guide_coverage for label in plan.evidence_ids)
     allowed = {
         str(candidate["evidence_id"])
@@ -4831,7 +4829,7 @@ def run_round(
     glossary: Sequence[Mapping[str, Any]] = (),
     assume_unconfirmed: bool = False,
 ) -> Round:
-    """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
+    """生成と監査。計画の構造不正だけは、生成を一度やり直す。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
     引用した回答の正しさだけでなく「引用せずに拒答した判断」も独立に検査するため、items が空でも監査を呼び、
     要求ごとの充足（request_reviews）と見落とした根拠（unused_evidence_ids）を返させる (#1014)。監査対象の
