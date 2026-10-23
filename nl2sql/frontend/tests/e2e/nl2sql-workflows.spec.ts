@@ -5033,7 +5033,7 @@ for (const failure of [
     await expect(progress).toHaveAttribute("data-job-status", "error");
     await expect(progress).toContainText(failure.errorMessage);
     // 生成した SQL は確かめられる（フィードバックにも使える）が、実行していない結果の表は出さない。
-    await expect(page.getByTestId("nl2sql-job-step-generate_sql").getByRole("code")).toContainText(
+    await expect(page.getByTestId("nl2sql-generated-sql").getByRole("code")).toContainText(
       "SELECT TOTAL FROM INVOICES"
     );
     await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
