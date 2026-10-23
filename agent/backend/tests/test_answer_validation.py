@@ -21,8 +21,9 @@ import pytest
 from agents import FunctionTool
 from agents.testing import ScriptedModel, assistant_message, function_call
 from mcp_support import DEFAULT_OUTPUTS, FakeProductMcp, McpToolError, fake_product_mcp
-from pr_backend_core.mcp import McpServer
+from pr_backend_core.mcp import McpServer, McpTool
 from pr_system_settings.answer_notice import DEFAULT_ANSWER_NOTICE_TEXT
+from pydantic import BaseModel
 from pytest import MonkeyPatch
 from test_clarification_preface import CLARIFICATIONS
 
@@ -86,6 +87,10 @@ ANSWER = "契約の更新は 30 日前までに申し出ます。"
 
 @pytest.fixture
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
+    yield from _mcp(monkeypatch)
+
+
+def _mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     """RAG の rag_search・rag_retrieve_evidence だけを使う業務 Agent（検証のツールは渡さない）。"""
     fake = fake_product_mcp(monkeypatch)
     monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
@@ -3223,12 +3228,14 @@ def titled_mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
 
     original = FakeProductMcp._tool
 
-    def titled(self, name, model, **kwargs):
-        tool = original(self, name, model, **kwargs)
+    def titled(
+        self: FakeProductMcp, name: str, model: type[BaseModel], *, read_only: bool = True
+    ) -> McpTool:
+        tool = original(self, name, model, read_only=read_only)
         return replace(tool, title="資料との照合") if name == "rag_validate_answer" else tool
 
     monkeypatch.setattr(FakeProductMcp, "_tool", titled)
-    yield from mcp.__wrapped__(monkeypatch)
+    yield from _mcp(monkeypatch)
 
 
 def test_control_plane_validator_records_its_display_title(

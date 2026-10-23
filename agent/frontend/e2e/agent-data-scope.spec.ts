@@ -292,7 +292,7 @@ test("処理の経過のツールの段に、使ったプロファイルと範�
   // 処理の経過の段（#1955）。失敗した段は最初から開き、完了した段は行を開いて中身を見る。
   const timeline = page.getByTestId("run-timeline-section");
   await page.getByTestId("run-timeline-section-summary").click();
-  await timeline.getByRole("button", { name: /ツール nl2sql__nl2sql_query を呼びました/ }).click();
+  await timeline.getByRole("button", { name: /処理を実行しました/ }).click();
 
   await expect(page.getByTestId("run-step-data-scope-step-rejected")).toHaveText(
     "profile-hr は範囲外のため実行していません"

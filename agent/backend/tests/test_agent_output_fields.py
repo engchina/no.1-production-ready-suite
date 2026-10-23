@@ -317,7 +317,7 @@ def test_fields_saved_by_patch_work_in_draft_runs(monkeypatch: MonkeyPatch, agen
 @pytest.mark.parametrize(
     "heading", ["## 記録（record_output の結果）", "**記録（record_output）**"]
 )
-def test_internal_record_section_is_removed_without_hiding_next_section(heading):
+def test_internal_record_section_is_removed_without_hiding_next_section(heading: str) -> None:
     from app.features.agent.output_fields import without_output_record_sections
 
     text = "回答です。\n\n" + heading + "\n\n- 値の記録\n\n## 補足\n次の操作。"
