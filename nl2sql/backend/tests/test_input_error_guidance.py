@@ -15,6 +15,6 @@ async def test_validation_error_keeps_input_guidance() -> None:
     response = await http_exception_problem_handler(
         request, HTTPException(400, "SELECT の文を1つだけ入力してください。")
     )
-    text = json.dumps(json.loads(response.body), ensure_ascii=False)
+    text = json.dumps(json.loads(bytes(response.body)), ensure_ascii=False)
     assert "データベースの状態と実行権限" not in text
     assert "SELECT の文を1つだけ" in text

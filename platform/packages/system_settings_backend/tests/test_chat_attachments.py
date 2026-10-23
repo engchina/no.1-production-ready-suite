@@ -945,7 +945,9 @@ def test_preparation_toolset_checks_ownership_without_binding() -> None:
     toolset = service.preparation_toolset(ALICE, [first.attachment_id], conversation_id=None)
     assert [record.attachment_id for record in toolset.records] == [first.attachment_id]
     assert toolset.parsed(first.attachment_id).sheets[0].rows == [["1", "2"]]
-    assert service.store.get(first.attachment_id).conversation_id is None
+    record = service.store.get(first.attachment_id)
+    assert record is not None
+    assert record.conversation_id is None
     with pytest.raises(ChatAttachmentError) as error:
         service.preparation_toolset(BOB, [first.attachment_id], conversation_id=None)
     assert error.value.status_code == 404

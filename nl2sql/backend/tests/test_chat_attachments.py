@@ -401,7 +401,9 @@ def test_requirement_preparation_uses_pending_files_without_binding(
     )
     assert len(context.tables) == 1
     assert context.tables[0].name == "ATTACHMENT_1"
-    assert service.store.get(attachment_id).conversation_id is None
+    record = service.store.get(attachment_id)
+    assert record is not None
+    assert record.conversation_id is None
     from pr_system_settings.chat_attachments import ChatAttachmentError
 
     with pytest.raises(ChatAttachmentError) as error:

@@ -1,8 +1,8 @@
 """見出しだけの取込で登録内容を空に戻せる。"""
 
+import importlib
 import io
 
-import openpyxl
 import pytest
 
 from app.features.nl2sql.models import Nl2SqlProfile
@@ -11,7 +11,7 @@ from app.features.nl2sql.store import MemoryNl2SqlStore
 
 
 def workbook(header: str, row: list[str] | None = None) -> bytes:
-    book = openpyxl.Workbook()
+    book = importlib.import_module("openpyxl").Workbook()
     sheet = book.active
     assert sheet is not None
     sheet.append(header.split(","))
