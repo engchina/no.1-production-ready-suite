@@ -33,6 +33,7 @@ export const MENU_PERMISSIONS = {
   settingsChatAttachments: "menu.settings_chat_attachments",
   securityUsers: "menu.security_users",
   securityRoles: "menu.security_roles",
+  securityApiKeys: "menu.security_api_keys",
   securityPermissions: "menu.security_permissions",
 } as const;
 

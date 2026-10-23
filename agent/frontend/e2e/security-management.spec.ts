@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import { closeSidebarNav, openSidebarNav } from "./fixtures/nav";
 
 import { ALL_PERMISSION_CODES, dbUser } from "./fixtures/auth";
 import { expect, test } from "./fixtures/mock-api";
@@ -153,3 +154,43 @@ for (const viewport of VIEWPORTS) {
     });
   });
 }
+
+
+test("API キーの管理は専用権限で開け、削除を確定できる", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  mockApi.setCurrentUser(dbUser({ permissions: ["menu.security_api_keys"] }));
+  const key = {
+    id: "key-a", name: "検証キー A", token_prefix: "prak_example", products: ["agent"],
+    owner_user_uuid: "user-a", owner_display_name: "利用者 A", created_at: "2026-01-01T00:00:00Z",
+    expires_at: null, last_used_at: null, expired: false, resource_scopes: {},
+  };
+  let keys = [key];
+  const revoked: string[] = [];
+  await page.route("**/api/security/api-keys**", async (route) => {
+    if (route.request().method() === "DELETE") {
+      revoked.push(route.request().url().split("/").pop() ?? "");
+      keys = [];
+      await route.fulfill({ json: { data: { status: "revoked" } } });
+    } else await route.fulfill({ json: { data: { keys } } });
+  });
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/settings\/security\/api-keys$/);
+  const sidebar = await openSidebarNav(page);
+  await expect(sidebar.getByRole("link", { name: "API キー", exact: true })).toHaveAttribute("aria-current", "page");
+  await closeSidebarNav(page);
+  await expect(page.getByRole("table", { name: "API キーの一覧" })).toContainText("利用者 A");
+  await expect(page.getByTestId("api-key-create")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => {}))));
+  await page.screenshot({ path: testInfo.outputPath("api-keys-admin.png"), fullPage: true });
+  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+  await page.screenshot({ path: testInfo.outputPath("api-keys-admin-dark.png"), fullPage: true });
+  await page.getByTestId("api-key-row-actions-key-a-trigger").click();
+  await page.getByRole("menuitem", { name: "削除", exact: true }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("利用者 A");
+  await dialog.getByRole("button", { name: "削除", exact: true }).click();
+  await expect.poll(() => revoked).toEqual(["key-a"]);
+  mockApi.setCurrentUser(dbUser({ permissions: ["menu.chat", "agent.runs.operate"] }));
+  await page.goto("/settings/security/api-keys");
+  await expect(page).toHaveURL(/\/forbidden$/);
+});

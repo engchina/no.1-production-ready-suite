@@ -2511,7 +2511,7 @@ def synthesize_grounded_answer(
         "same_unit_fill": unit_fill,
         "rounds": rounds,
         "round_budget": budget.trace(current),
-        "llm_calls": sum(1 + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds),
+        "llm_calls": sum(r.get("timing", {}).get("generation_calls", 1) + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds),
         "image_fallback": image_decision,
         "final_fact_count": len(published),
         "procedure_quotes": dict(current.timing.get("procedure_quotes") or {}),

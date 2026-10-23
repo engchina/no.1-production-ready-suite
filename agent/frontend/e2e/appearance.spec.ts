@@ -168,7 +168,8 @@ for (const viewport of [
     await expect(operations.getByRole("link").first()).toHaveAttribute("href", "/settings/system-tables");
     await expect(operations.getByRole("link").nth(1)).toHaveAttribute("href", "/settings/chat-attachments");
     await expect(operations.getByRole("link").nth(2)).toHaveAttribute("href", "/settings/answer-notice");
-    await expect(userRoles.getByRole("link")).toHaveCount(2);
+    await expect(userRoles.getByRole("link")).toHaveCount(3);
+    await expect(userRoles.getByRole("link").last()).toHaveAttribute("href", "/settings/security/api-keys");
     // システム設定は 3 製品で共通の 5 項目（回答の注意書きは運用設定。#2449）。
     await expect(settings.getByRole("link")).toHaveCount(5);
     for (const href of [

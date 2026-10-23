@@ -71,6 +71,7 @@ MENU_RUNTIMES = "menu.runtimes"
 MENU_SETTINGS_EXTERNAL_MCP = "menu.settings_external_mcp"
 MENU_SECURITY_USERS = "menu.security_users"
 MENU_SECURITY_ROLES = "menu.security_roles"
+MENU_SECURITY_API_KEYS = "menu.security_api_keys"
 MENU_SETTINGS_OCI = "menu.settings_oci"
 MENU_SETTINGS_UPLOAD_STORAGE = "menu.settings_upload_storage"
 MENU_SETTINGS_MODEL = "menu.settings_model"
@@ -136,6 +137,7 @@ _ADMIN_MENUS = (
     MENU_FEEDBACK,
     MENU_USAGE,
     MENU_AUDIT,
+    MENU_SECURITY_API_KEYS,
     MENU_SETTINGS_SYSTEM_TABLES,
     MENU_SETTINGS_CHAT_ATTACHMENTS,
     MENU_SETTINGS_ANSWER_NOTICE,
@@ -170,6 +172,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # （セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。#658）。
     _menu_permission(MENU_SECURITY_USERS, _GROUP_USERS_ROLES, "ユーザー管理"),
     _menu_permission(MENU_SECURITY_ROLES, _GROUP_USERS_ROLES, "ロール管理"),
+    _menu_permission(MENU_SECURITY_API_KEYS, _GROUP_USERS_ROLES, "API キー"),
     # 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ。#658 / #751）。
     _menu_permission(MENU_SETTINGS_SYSTEM_TABLES, _GROUP_OPERATIONS, "システムテーブル"),
     _menu_permission(MENU_SETTINGS_CHAT_ATTACHMENTS, _GROUP_OPERATIONS, "チャットの添付"),
@@ -569,10 +572,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/security/permissions"): _any(MENU_SECURITY_PERMISSIONS),
     ("GET", "/security/access-targets/agents"): _any(MENU_SECURITY_PERMISSIONS),
     ("PUT", "/security/roles/{role_id}/access"): _any(MENU_SECURITY_PERMISSIONS),
-    # 全員の API キーの一覧・削除（#1874。共通の API。画面は RAG / NL2SQL の「ユーザーとロール」
-    # にあり、Agent では Agent 管理だけが API で使える）。
-    ("GET", "/security/api-keys"): _ADMIN_ONLY,
-    ("DELETE", "/security/api-keys/{key_id}"): _ADMIN_ONLY,
+    # 全員の API キーの一覧・削除（3 製品共通の管理メニュー）。
+    ("GET", "/security/api-keys"): _any(MENU_SECURITY_API_KEYS),
+    ("DELETE", "/security/api-keys/{key_id}"): _any(MENU_SECURITY_API_KEYS),
 }
 
 

@@ -264,7 +264,8 @@ def test_manifest_key_assignments() -> None:
     assert ("POST", "/mcp") in OPEN_API_OPERATIONS
     assert ("GET", "/mcp") not in OPEN_API_OPERATIONS
     assert frozenset({"/mcp"}) == API_KEY_API_PATHS
-    assert _perm("GET", "/security/api-keys") == {"agent.admin"}
+    assert _perm("GET", "/security/api-keys") == {"menu.security_api_keys"}
+    assert _perm("DELETE", "/security/api-keys/{key_id}") == {"menu.security_api_keys"}
     assert permission_for_route("GET", "/runtime/status") == frozenset(
         {"menu.runtimes", "menu.agents", "agent.runs.operate"}
     )
@@ -1174,3 +1175,24 @@ def test_system_settings_actions_use_menu_permissions_for_session(
     monkeypatch.setattr(security_dependencies, "permission_for_route", lambda *_args: None)
     assert _read_missing_oci_config(model_admin, tmp_path) == 403
     assert _read_missing_oci_config(oci_admin, tmp_path) not in {401, 403}
+
+
+def test_api_key_menu_can_list_and_revoke_other_users_keys(auth: ProductionAuth) -> None:
+    """専用メニュー権限だけで全員のキーを管理でき、権限なしでは一覧も削除も拒否する。"""
+    auth.user_with_permissions("key-owner", [])
+    auth.user_with_permissions("key-manager", ["menu.security_api_keys"])
+    owner = login("key-owner")
+    issued = client.post(
+        "/api/account/api-keys", headers=owner, json={"name": "検証キー A", "products": ["agent"]}
+    )
+    assert issued.status_code == 200
+    key_id = issued.json()["data"]["key"]["id"]
+    assert client.get("/api/security/api-keys", headers=owner).status_code == 403
+    assert client.delete(f"/api/security/api-keys/{key_id}", headers=owner).status_code == 403
+    manager = login("key-manager")
+    listed = client.get("/api/security/api-keys", headers=manager)
+    assert listed.status_code == 200
+    assert key_id in {key["id"] for key in listed.json()["data"]["keys"]}
+    assert client.delete(f"/api/security/api-keys/{key_id}", headers=manager).status_code == 200
+    assert client.get("/api/account/api-keys", headers=owner).json()["data"]["keys"] == []
+    assert "menu.security_api_keys" in expand_permissions(["agent.admin"])

@@ -307,13 +307,30 @@ class GroundedApplication(_StrictModel):
     result: str = Field(min_length=1, max_length=300, description="当てはめの結果（要求への答え）。1〜2 文。")
 
 
+class RequestEvidenceScope(_StrictModel):
+    """質問の対象と、各根拠が扱う対象の対応。"""
+
+    evidence_id: str = Field(description="対象を照合する Evidence の id。")
+    target: str = Field(description="この根拠が操作・説明する対象。原文の対象名を写す。")
+    relation: Literal["direct", "linked", "unrelated"] = Field(
+        description="direct=質問の対象に直接答える。linked=別対象だが、質問の操作の前提・後続とする関係が原文に明記されている。unrelated=別の対象・独立した操作。同じ文書や頁にあるだけでは linked にしない。"
+    )
+    link_quote: str = Field(
+        default="", description="linked のとき、操作同士の関係を明記した連続する原文。関係が書かれていなければ unrelated とし空文字にする。"
+    )
+
+
 class RequestCoverage(_StrictModel):
     """要求単位ごとに、どの根拠で答えるかの計画。items を書く前に根拠を選ばせる (#986)。"""
 
     request_id: str = Field(description="request_units の id。")
+    evidence_scope: list[RequestEvidenceScope] = Field(
+        default_factory=list,
+        description="候補の根拠を対象ごとに照合する。各 evidence_id を1回ずつ、質問の対象との関係を決めてから evidence_ids を選ぶ。",
+    )
     evidence_ids: list[str] = Field(
         default_factory=list,
-        description="この要求に使う根拠の evidence_id（[E1] 形式の番号）。無ければ空にし、items では kind=gap にする。",
+        description="この要求に直接答える根拠と、原文に関係が明記された前提・後続操作の evidence_id（[E1] 形式の番号）。同じ文書・頁にあるだけの別操作は含めない。items はこの計画の根拠だけで作る。無ければ空にし kind=gap にする。",
     )
 
 

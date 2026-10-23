@@ -23,6 +23,7 @@ export const MENU_PERMISSION_CODES = [
   "menu.security_permissions",
   "menu.security_users",
   "menu.security_roles",
+  "menu.security_api_keys",
   "menu.settings_system_tables",
   "menu.settings_chat_attachments",
   "menu.settings_answer_notice",
@@ -47,6 +48,7 @@ export const CAPABILITY_PERMISSION_CODES = [
 export const ALL_PERMISSION_CODES: string[] = [...MENU_PERMISSION_CODES, ...CAPABILITY_PERMISSION_CODES];
 
 const ADMIN_MENUS = [
+  "menu.security_api_keys",
   "menu.chat",
   "menu.runs",
   "menu.approvals",
@@ -88,6 +90,7 @@ const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string
   "menu.settings_external_mcp": ["運用設定", "MCP 接続"],
   "menu.security_users": ["ユーザーとロール", "ユーザー管理"],
   "menu.security_roles": ["ユーザーとロール", "ロール管理"],
+  "menu.security_api_keys": ["ユーザーとロール", "API キー"],
   "menu.settings_oci": ["システム設定", "OCI 認証"],
   "menu.settings_upload_storage": ["システム設定", "アップロード保存先"],
   "menu.settings_model": ["システム設定", "モデル"],

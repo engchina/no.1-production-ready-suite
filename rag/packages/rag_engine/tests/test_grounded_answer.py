@@ -1384,10 +1384,11 @@ class GroundedAnswerTest(unittest.TestCase):
         quote = "窓口は4月27日（土）～5月6日（月）はご利用いただけません。"
         good = {"kind": "rule", "text": "窓口は4月27日から5月6日まで利用できません。", "evidence_id": eid, "quote": quote}
         wrong_year = {"kind": "rule", "text": "2020年4月27日から5月6日まで利用できません。", "evidence_id": eid, "quote": quote}
-        model = FakeModel([draft(good, wrong_year)], [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""))])
-        text = run(model, ctx, question).response.answer_text
+        model = FakeModel([draft(good, wrong_year)], [audit((0, "supported", "matched", ""), (1, "unsupported", "matched", ""))])
+        result = run(model, ctx, question).response
+        text = result.answer_text
         self.assertIn("窓口は4月27日から5月6日まで利用できません。", text)
-        self.assertNotIn("2020年", text)  # 根拠にも質問にもない年は公開しない
+        self.assertIn("unsupported", marks(result)[wrong_year["text"]])  # 別主張は残し、監査で未確認の印を付ける
         self.assertIn("「なお、空港にある店舗の両替窓口は同期間も営業しております。」", text)  # 例外を落とさない
 
     def test_unquoted_button_is_flagged_to_the_audit_and_suppressed_when_it_rejects(self):
@@ -1757,9 +1758,10 @@ class AuditRetryAndHeadingTest(unittest.TestCase):
             [draft(item(eid, navigation, steps), item(eid, deletion, steps))],
             [audit((0, "unsupported", "matched", ""), (1, "unsupported", "matched", ""))],
         )
-        text = run(model, ctx, question).response.answer_text
+        result = run(model, ctx, question).response
+        text = result.answer_text
         self.assertIn(navigation, text)  # 経路は見出しにあり、引用に経路がなくても降格しない
-        self.assertNotIn(deletion, text)  # 経路以外の操作は監査どおり降格
+        self.assertIn("unsupported", marks(result)[deletion])  # 経路以外の操作は監査どおり未確認にする
 
 
 class GeneratedDescriptionOperationTest(unittest.TestCase):
@@ -1846,11 +1848,11 @@ class ScreenKeyBindingTest(unittest.TestCase):
         wrong_key = "営業所を選択し、伝票タイトルを変更する様式を選択して、実行(F9)ボタンを押します。"
         model = FakeModel(
             [draft(item(eid, with_key, self.STEPS), item(eid, wrong_key, self.STEPS))],
-            [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""))],
+            [audit((0, "supported", "matched", ""), (1, "unsupported", "matched", ""))],
         )
         result = run(model, ctx, self.QUESTION).response
         self.assertIn(with_key, result.answer_text)
-        self.assertNotIn(wrong_key, result.answer_text)  # 画面にない F9 は引き続き降格
+        self.assertIn("unsupported", marks(result)[wrong_key])  # 同じ引用でも別のキーの主張を監査する
 
     def test_key_is_still_unverified_without_a_screenshot_of_the_function(self):
         ctx = context(record(0, self.STEPS, "[ 画面：サンプルシステム管理⇒伝票様式設定 ]"), record(1, self.SCREEN, "別機能の画面", page=9))
@@ -2064,7 +2066,7 @@ class SameQuoteDedupeTest(unittest.TestCase):
 
     def test_same_quote_from_generated_and_document_text_is_shown_once_with_the_document_source(self):
         text_a = "切替日を過ぎると「旧様式残あり」ボタンが表示され、押すとポップアップで旧様式のままの伝票の一覧を確認できる。"
-        text_b = "切替日を過ぎると「旧様式残あり」ボタンが表示され、押すとポップアップで旧様式のままの伝票の一覧を確認できます。"
+        text_b = text_a
         model = FakeModel(
             [
                 draft(
@@ -2085,7 +2087,7 @@ class SameQuoteDedupeTest(unittest.TestCase):
             item(self.by_text["A【画面説明】\n" + self.NOTE], text, self.NOTE, kind="rule"),
             item(self.by_text[self.generated], "切替日を過ぎると別の画面が開く。", "存在しない引用", kind="rule"),
         )
-        second = draft(item(self.by_text[self.generated], text + "（同文）", self.NOTE, kind="rule"))
+        second = draft(item(self.by_text[self.generated], text, self.NOTE, kind="rule"))
         model = FakeModel([first, second], [audit((0, "supported", "matched", ""), requests=(("Q1", "addressed"),))])
         result = run(model, self.ctx, self.QUESTION).response
         self.assertEqual(result.answer_text.count("旧様式残あり」ボタンが表示され"), 1)
@@ -3077,11 +3079,12 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         wrong = "伝票タイトルを選択し、保存ボタンを押して変更を確定します。"
         model = FakeModel(
             [draft(item(by_text[first], ok, first), item(by_text[first], wrong, first))],
-            [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""))],
+            [audit((0, "supported", "matched", ""), (1, "unsupported", "matched", ""))],
         )
-        text = run(model, ctx, question).response.answer_text
+        result = run(model, ctx, question).response
+        text = result.answer_text
         self.assertIn(ok, text)  # 実行ボタンは同じ機能の隣の span にある
-        self.assertNotIn(wrong, text)  # 保存ボタンは機能の本文のどこにもない
+        self.assertIn("unsupported", marks(result)[wrong])  # 別主張を重複で落とさず監査する
 
     def test_operation_term_in_a_neighbouring_span_of_the_same_function_is_supported(self):
         first = "（３）削除ボタンを押します。"
@@ -3097,11 +3100,12 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         wrong = "実行ボタンを押して印刷します。"
         model = FakeModel(
             [draft(item(by_text[second], ok, second), item(by_text[second], wrong, second))],
-            [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""))],
+            [audit((0, "supported", "matched", ""), (1, "unsupported", "matched", ""))],
         )
-        text = run(model, ctx, question).response.answer_text
+        result = run(model, ctx, question).response
+        text = result.answer_text
         self.assertIn(ok, text)  # 「削除」は同じ機能の隣の span にある
-        self.assertNotIn(wrong, text)  # 「印刷」は別機能の本文にしかない
+        self.assertIn("unsupported", marks(result)[wrong])  # 別機能の操作は監査で未確認にする
 
     def test_procedure_for_another_object_is_not_applied_when_the_asked_target_is_absent(self):
         """質問の操作対象（社印）が根拠のどこにもなければ、別対象（ロゴ画像）の手順に警告を付け gap を出す (#700・#2738)。"""

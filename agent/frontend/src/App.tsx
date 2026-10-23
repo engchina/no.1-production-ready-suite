@@ -25,6 +25,9 @@ const AccountRoute = lazy(() =>
 const SecurityPermissionsPage = lazy(() =>
   import("@/components/security/SecurityPermissionsPage").then((module) => ({ default: module.SecurityPermissionsPage }))
 );
+const SecurityApiKeysPage = lazy(() =>
+  import("@/components/security/SecurityApiKeysPage").then((module) => ({ default: module.SecurityApiKeysPage }))
+);
 const SecurityRolesPage = lazy(() =>
   import("@/components/security/SecurityRolesPage").then((module) => ({ default: module.SecurityRolesPage }))
 );
@@ -183,6 +186,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsChatAttachments} element={<SettingsChatAttachmentsRoute />} />
         <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
         <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
+        <Route path={APP_ROUTES.securityApiKeys} element={<SecurityApiKeysPage />} />
         <Route path={APP_ROUTES.securityPermissions} element={<SecurityPermissionsPage />} />
         {/* アカウントの画面（API キー / パスワード変更のタブ。#1873）。ログインだけで開ける。 */}
         <Route path={APP_ROUTES.account} element={<AccountRoute />} />
