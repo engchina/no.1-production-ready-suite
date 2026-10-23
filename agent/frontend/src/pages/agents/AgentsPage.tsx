@@ -1,8 +1,9 @@
 import { type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Power, PowerOff, Rocket, RotateCcw } from "lucide-react";
+import { ArrowLeft, Plus, Power, PowerOff, Rocket, RotateCcw } from "lucide-react";
 import {
   Button,
+  Banner,
   EmptyState,
   FormSkeleton,
   ListToolbar,
@@ -111,6 +112,7 @@ export function AgentsPage() {
       : [];
 
   const agentList = agents.data?.agents ?? [];
+  const shareApprovals = agents.data?.share_approvals ?? [];
   // 一覧の絞り込み（名前・ID・説明。#808）。検索語は作業状態に残し、変わったら 1 ページ目へ戻す。
   const [agentQuery, setAgentQuery] = useListSearch("agents");
   // 全件を名前の自然順にしてからページングする。同名は ID で安定させ、取得順に依存させない。
@@ -119,6 +121,8 @@ export function AgentsPage() {
     .sort((left, right) => compareNames(left.name, right.name) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
   // 作成できない利用者が `?id=new` を開いたら一覧を出す。
   const target = !canCreate && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
+
+  const selectedApproval = target.kind === "edit" ? shareApprovals.find((notice) => notice.agent_id === target.id) : undefined;
 
   if (target.kind === "list") {
     return (
@@ -135,6 +139,11 @@ export function AgentsPage() {
         />
         <PageBody wide>
           <NonPersistentStorageNotice />
+          {shareApprovals.map((notice) => (
+            <div key={notice.agent_id} data-testid="agent-share-approved-notice"><Banner severity="info">
+              {t("agent.share.approvedNotice", { name: notice.name })}
+            </Banner></div>
+          ))}
           {skills.error ? <ApiErrorBanner error={skills.error} fallback={t("common.error.load")} /> : null}
           {/* スキルの更新があります（N 件）と、確かめてまとめて再公開する（#1867）。 */}
           <SkillUpdatesPanel agents={agentList} skills={skills.data?.skills ?? []} canManage={canManage} />
@@ -193,7 +202,16 @@ export function AgentsPage() {
         />
         <PageBody wide>
           <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<FormSkeleton fields={3} />}>
-            <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />
+            {selectedApproval ? (
+              <div data-testid="agent-share-approved-notice"><Banner severity="info">
+                <div className="grid gap-3">
+                  <p>{t("agent.share.approvedNotice", { name: selectedApproval.name })}</p>
+                  <Button variant="secondary" icon={ArrowLeft} onClick={() => editor.backToList()}>
+                    {t("common.backToList")}
+                  </Button>
+                </div>
+              </Banner></div>
+            ) : <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />}
           </QueryState>
         </PageBody>
       </>
@@ -213,12 +231,12 @@ export function AgentsPage() {
       actions={agent ? agentActions(agent) : []}
       readOnly={agent ? !managesAgent(agent) : !canCreate}
       sharing={
-        agent?.owner_user_uuid ? (
+        agent && (agent.owner_user_uuid || (canManage && agent.share_request?.status === "approved")) ? (
           <AgentSharingSection
             agent={agent}
             // 持ち主は申請、Agent 管理は承認・却下（Agent 管理が自分の個人の Agent を開いたときも承認の側）。
             mode={canManage ? "admin" : "owner"}
-            ownerName={agents.data?.owner_display_names?.[agent.owner_user_uuid] ?? t("agent.share.ownerMissing")}
+            ownerName={agents.data?.owner_display_names?.[agent.owner_user_uuid ?? ""] ?? t("agent.share.ownerMissing")}
           />
         ) : null
       }

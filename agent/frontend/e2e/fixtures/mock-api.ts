@@ -2546,6 +2546,13 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (method === "GET" && at("agents"))
       return {
         agents: state.agents.filter((agent) => agentAllowed(state, agent.id)),
+        share_approvals: state.agents.filter((agent) => {
+          const sharing = agent.share_request as Json | null | undefined;
+          return sharing?.status === "approved" && sharing.requested_by_user_uuid === state.auth.currentUser?.user_uuid && !agentAllowed(state, agent.id);
+        }).map((agent) => {
+          const sharing = agent.share_request as Json;
+          return { agent_id: agent.id, name: sharing.approved_name, decided_at: sharing.decided_at };
+        }),
         user_display_names: state.userDisplayNames,
         max_published_versions: MAX_PUBLISHED_VERSIONS,
         // 個人の業務 Agent の持ち主（user_uuid）→ 表示名（#2523）。
@@ -2689,8 +2696,10 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         throw new HttpError(409, "この業務 Agent は共有を申請していません。");
       }
       if (segments[3] === "approve") {
+        agent.share_request = { status: "approved", requested_by_user_uuid: agent.owner_user_uuid,
+          approved_name: agent.name, requested_at: (agent.share_request as Json).requested_at,
+          decided_at: MOCK_NOW, note: "", reason: "" };
         agent.owner_user_uuid = null;
-        agent.share_request = null;
       } else {
         const reason = String(body.reason ?? "").trim();
         if (!reason) throw new HttpError(422, "却下の理由を入力してください。");

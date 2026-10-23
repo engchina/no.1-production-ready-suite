@@ -149,7 +149,7 @@ def _put_access(role_id: str, version: int, agent_ids: list[str]) -> Any:
 def test_share_request_approval_makes_organization_agent(
     auth: ProductionAuth, scheduled: list[str]
 ) -> None:
-    auth.user_with_permissions("builder-share-2523", [AGENTS_BUILD])
+    builder = auth.user_with_permissions("builder-share-2523", [AGENTS_BUILD])
     mine = login("builder-share-2523")
     admin = login_configured_admin()
     assert _create(mine, "share-2523").status_code == 200
@@ -182,7 +182,19 @@ def test_share_request_approval_makes_organization_agent(
     approved = client.post("/api/agents/share-2523/share-request/approve", headers=admin)
     assert approved.status_code == 200, approved.text
     data = approved.json()["data"]
-    assert (data["owner_user_uuid"], data["share_request"]) == (None, None)
+    assert data["owner_user_uuid"] is None
+    assert data["share_request"]["status"] == "approved"
+    assert data["share_request"]["requested_by_user_uuid"] == builder.user_uuid
+    assert data["share_request"]["note"] == ""
+    assert "share-2523" not in _agent_ids(mine)
+    notices = client.get("/api/agents", headers=mine).json()["data"]["share_approvals"]
+    assert len(notices) == 1
+    assert set(notices[0]) == {"agent_id", "name", "decided_at"}
+    assert notices[0]["agent_id"] == "share-2523"
+    assert notices[0]["name"] == "Agent share-2523"
+    auth.user_with_permissions("other-share-notice", [AGENTS_BUILD])
+    other = login("other-share-notice")
+    assert client.get("/api/agents", headers=other).json()["data"]["share_approvals"] == []
     # 組織の業務 Agent になったので、元の持ち主は変えられず（ロールが無ければ使えない）、
     # ロールに割り当てられる。
     assert (
