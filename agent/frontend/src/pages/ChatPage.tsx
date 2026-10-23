@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  createTraceDetailsLabels,
   AnswerFooter,
   Banner,
   ProcessFailureNotice,
@@ -1055,6 +1056,9 @@ function RunChatTurn({
         {/* 承認・回答前の確認の答えは人の操作を待つので、遅延の案内を出さない（実行の詳細と同じ。#1839）。 */}
         <ChatProgress
           {...progress.progressProps}
+          cancelled={run.status === "cancelled"}
+          traceLabels={createTraceDetailsLabels(t)}
+          traceSummary={run.trace_segments && run.trace_segments.length > 1 ? run.trace_segments : run.trace_summary}
           steps={stepsWithDetails}
           startedAt={run.created_at}
           slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}

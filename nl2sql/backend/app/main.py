@@ -16,6 +16,7 @@ from pr_backend_core.api.validation import (
     VALIDATION_ERROR_CODE,
     validation_error_messages,
 )
+from pr_backend_core.observability.tracing import tracing_lifecycle
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
@@ -80,27 +81,28 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     # Startup is intentionally DB-free. A fresh Compute can boot before the
     # database, wallet, or any application table is ready; those failures belong
     # to readiness probes or the first operation that actually needs them.
-    application.state.services = ServiceContainer(
-        nl2sql=nl2sql_service,
-        ontology=ontology_runtime,
-    )
-    runtime_settings = get_settings()
-    if runtime_settings.local_debug_enabled:
-        logger.warning("local_debug_auth_bypass_enabled")
-    synthetic_stop = threading.Event()
-    if runtime_settings.nl2sql_synthetic_worker_mode == "inprocess":
-        threading.Thread(target=worker_loop, args=(synthetic_stop,), daemon=True).start()
-    try:
-        yield
-    finally:
-        synthetic_stop.set()
-        await run_in_threadpool(profile_sync_service.shutdown)
-        await run_in_threadpool(shutdown_markdown_preparations, ontology_runtime)
-        await run_in_threadpool(ontology_build_service.shutdown)
-        await run_in_threadpool(ontology_publish_service.shutdown)
-        await run_in_threadpool(shutdown_validation_jobs, ontology_runtime)
-        await run_in_threadpool(nl2sql_service.shutdown_select_ai_db_profile_refresh_jobs)
-        close_oracle_pools()
+    with tracing_lifecycle(get_settings(), service_name=get_settings().service_name):
+        application.state.services = ServiceContainer(
+            nl2sql=nl2sql_service,
+            ontology=ontology_runtime,
+        )
+        runtime_settings = get_settings()
+        if runtime_settings.local_debug_enabled:
+            logger.warning("local_debug_auth_bypass_enabled")
+        synthetic_stop = threading.Event()
+        if runtime_settings.nl2sql_synthetic_worker_mode == "inprocess":
+            threading.Thread(target=worker_loop, args=(synthetic_stop,), daemon=True).start()
+        try:
+            yield
+        finally:
+            synthetic_stop.set()
+            await run_in_threadpool(profile_sync_service.shutdown)
+            await run_in_threadpool(shutdown_markdown_preparations, ontology_runtime)
+            await run_in_threadpool(ontology_build_service.shutdown)
+            await run_in_threadpool(ontology_publish_service.shutdown)
+            await run_in_threadpool(shutdown_validation_jobs, ontology_runtime)
+            await run_in_threadpool(nl2sql_service.shutdown_select_ai_db_profile_refresh_jobs)
+            close_oracle_pools()
 
 
 def _assert_route_manifest(application: FastAPI) -> None:

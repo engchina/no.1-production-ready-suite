@@ -54,6 +54,7 @@ from rag_engine.resources.llm_usage import (
     record_llm_usage,
     response_usage,
 )
+from rag_engine.resources.tracing import observe_call
 
 VISION_SYSTEM_PROMPT = "あなたは問い合わせRAG用の画像説明作成担当です。\n\n## 手順\n\n1. JSONだけを返してください。\n"
 API_SIGNING_KEY_FIELDS = ("user", "tenancy", "fingerprint", "key_file", "region")
@@ -750,14 +751,17 @@ def _openai_parsed[StructuredOutputT: BaseModel](
         timing: _StreamTiming | None = None
         started = time.monotonic()
         try:
-            if streamed:
-                response, timing = _stream_parsed(
-                    _openai_client_for_provider(provider, settings), request, settings, limits, runaway=runaway
-                )
-            else:
-                response = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings).responses.parse(
-                    **request
-                )
+            with observe_call("chat", provider.model) as observation:
+                if streamed:
+                    response, timing = _stream_parsed(
+                        _openai_client_for_provider(provider, settings), request, settings, limits, runaway=runaway
+                    )
+                else:
+                    response = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings).responses.parse(
+                        **request
+                    )
+                usage = _value(response, "usage")
+                observation.usage(usage.model_dump() if hasattr(usage, "model_dump") else usage)
         except Exception as exc:
             _record_failed_call(
                 exc,
@@ -1664,10 +1668,11 @@ def _embed_text_batch_once(
         truncate=models.EmbedTextDetails.TRUNCATE_NONE,
         input_type=input_type_value,
     )
-    response = runtime.client.embed_text(
-        embed_text_details=request,
-        retry_strategy=runtime.oci.retry.NoneRetryStrategy(),
-    )
+    with observe_call("embeddings", settings.embedding_model):
+        response = runtime.client.embed_text(
+            embed_text_details=request,
+            retry_strategy=runtime.oci.retry.NoneRetryStrategy(),
+        )
     embeddings = _embedding_vectors(response.data, expected_count=len(texts), expected_dimensions=dimensions)
     return embeddings
 
@@ -1727,10 +1732,11 @@ def _embed_image_once(
         truncate=models.EmbedTextDetails.TRUNCATE_NONE,
         input_type=input_type_value,
     )
-    response = runtime.client.embed_text(
-        embed_text_details=request,
-        retry_strategy=runtime.oci.retry.NoneRetryStrategy(),
-    )
+    with observe_call("embeddings", settings.embedding_model):
+        response = runtime.client.embed_text(
+            embed_text_details=request,
+            retry_strategy=runtime.oci.retry.NoneRetryStrategy(),
+        )
     embeddings = _embedding_vectors(response.data, expected_count=1, expected_dimensions=dimensions)
     return embeddings[0]
 
@@ -1833,10 +1839,11 @@ def _rerank_text_once(
         top_n=top_n if top_n is not None else len(documents),
         **chunk_options,
     )
-    response = runtime.client.rerank_text(
-        request,
-        retry_strategy=runtime.oci.retry.NoneRetryStrategy(),
-    )
+    with observe_call("rerank", settings.rerank_model):
+        response = runtime.client.rerank_text(
+            request,
+            retry_strategy=runtime.oci.retry.NoneRetryStrategy(),
+        )
     ranks = getattr(response.data, "document_ranks", None) or []
     ranks_with_scores: list[RerankTextRank] = []
     for rank in ranks:

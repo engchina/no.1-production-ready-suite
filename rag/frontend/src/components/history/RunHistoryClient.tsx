@@ -14,6 +14,7 @@
  */
 
 import {
+  createTraceDetailsLabels,
   AnswerNotice,
   Banner,
   ProcessFailureNotice,
@@ -569,6 +570,8 @@ function RunDetailView({ run }: { run: RunDetail }) {
       }
       timeline={
         <RunTimelineSection
+            traceLabels={createTraceDetailsLabels(t)}
+          traceSummary={run.trace_summary}
           title={t("history.process.title")}
           steps={timelineSteps}
           totalDurationMs={run.elapsed_ms}

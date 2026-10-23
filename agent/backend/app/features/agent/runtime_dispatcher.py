@@ -24,9 +24,11 @@ from uuid import uuid4
 
 from pr_backend_core import configure_logging
 from pr_backend_core.observability.request_context import bind_log_context
+from pr_backend_core.observability.tracing import tracing_lifecycle
 
 from app.features.agent import builtin_runtime, run_claim
 from app.features.agent.runtime import builtin_resume_pending, runtime_repository
+from app.observability import start_trace_export_retry_worker, stop_trace_export_retry_worker
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -93,16 +95,25 @@ async def run_forever() -> None:
             await _sleep(poll_seconds)
 
 
+async def _run_with_event_delivery() -> None:
+    await start_trace_export_retry_worker()
+    try:
+        await run_forever()
+    finally:
+        await stop_trace_export_retry_worker()
+
+
 def main() -> None:
-    settings = get_settings()
-    configure_logging(
-        settings.log_level,
-        service_name=settings.service_name,
-        service_version=settings.app_version,
-        environment=settings.environment,
-        component="runtime_dispatcher",
-    )
-    asyncio.run(run_forever())
+    with tracing_lifecycle(get_settings(), service_name=get_settings().service_name):
+        settings = get_settings()
+        configure_logging(
+            settings.log_level,
+            service_name=settings.service_name,
+            service_version=settings.app_version,
+            environment=settings.environment,
+            component="runtime_dispatcher",
+        )
+        asyncio.run(_run_with_event_delivery())
 
 
 if __name__ == "__main__":

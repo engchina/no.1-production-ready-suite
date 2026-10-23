@@ -319,3 +319,22 @@ CI は backend の pytest を pytest-xdist で並列に実行する（`uv run py
 - `parametrize` のテスト ID を、実行のたびに変わる値（作成時刻を含む zip / xlsx / docx の bytes 等）から作らない。worker ごとに ID が変わり収集が失敗するので、`ids=` で固定する。
 - retry / backoff の待ちは `time.sleep` を直接呼ばず、module 変数などで差し替えられるようにし、テストは conftest で待たない関数にする（例: NL2SQL の `reverse_generation._retry_sleep`）。
 - 同時に動かせないテスト（RAG の実 Oracle のテスト）は `xdist_group` で 1 つの worker にまとめる（RAG は `--dist loadgroup` を pyproject の `addopts` に入れている）。
+
+## 共通 trace の基盤
+
+`pr_backend_core.observability.tracing` は専用の OpenTelemetry provider を持つ。API は lifespan、別プロセスの実行 worker は main の起動後に `tracing_lifecycle` を使う。import 時や fork 前に送信用の thread を作らず、他の SDK のグローバル provider を置き換えない。Agent SDK の外部向け tracing を有効にする仕組みではない。
+
+共通の設定は `TracingSettings` と `platform/.env.example` の `PLATFORM_TRACE_*` が正本。設定の変更は各 API / worker の再起動で反映する。OTLP/HTTP の endpoint は traces の完全な URL を指定し、空なら外部へ送らない。送信には SDK の件数に上限のある `BatchSpanProcessor` を使い、アプリの処理を collector の応答待ちにしない。終了の待ち時間にも上限を設ける。実運用の再送・保存・tail sampling は collector 側の構成とあわせて検証する（[SDK の送信処理](https://opentelemetry-python.readthedocs.io/en/stable/sdk/trace.export.html)）。
+
+`observed_span` は実際の実行の範囲に置き、既存の終了イベントから開始・終了を作らない。属性はコードの allowlist だけとし、質問・プロンプト・SQL・引数・結果・例外の本文は含めない。例外は種類だけを記録し、取消は失敗と区別する。usage が取得できない呼び出しの値をゼロで補わない。
+
+プロセスや HTTP の境界へ渡す値は `capture_trace_context` / `attach_trace_context` の traceparent だけとし、認証・actor・baggage と混ぜない。受信した span は親、処理中のローカル span は現在の span としてログに出し分ける。HTTP の SERVER span は最終 body・SSE の終了・切断まで保持する。再開や非同期処理では、親の HTTP span が閉じた後も受け取った context を使える。
+
+`operation_trace` の表示用 `TraceSummary` は、export の sampling と独立して件数の上限まで保持し、欠落・上限超過・外部送信の抽出状態を区別する。永続化するときは製品の既存の所有者判定・排他・fencing の内側で `finish_operation_trace` を使う。異なる実行の記録は確定しない。UI の段階表示と技術的な span は別の情報であり、標準 span が無い過去の履歴を実測として扱わない。
+
+
+GenAI の属性は semantic conventions 1.44.0 の `gen_ai.operation.name` / `gen_ai.provider.name` / model / tool / usage を採用する。仕様は Development のため、互換性の判断と属性の allowlist は共通層に置く。`cached_tokens` は入力の内数、`reasoning_tokens` は出力の内数として扱い、合計へ重ねて足さない。DB 内の Select AI は呼び出せた DB の区間だけを記録し、見えない provider の token を推定しない。
+
+Agent の既存の終了イベントは実行 span とは別の log として扱う。`AGENT_OPENTELEMETRY_ENDPOINT` はイベントの OTLP/HTTP logs（`/v1/logs`）へ送り、実測 trace は `PLATFORM_TRACE_OTLP_ENDPOINT`（`/v1/traces`）へ送る。従来の traces の URL を設定していた場合、イベントの送信先を logs に変更する。webhook / Langfuse のイベント連携も、通常送信から件数に上限のある queue を使う。再送は失敗した送信先に限り、停止では共通の待ち時間の上限まで待つ。配送の満杯・再送・送信完了は `agent_trace_deliveries_total` で確認する。サンプルで落とした失敗イベントだけを完全な trace として残す例外は設けない。
+
+表示用の span summary は Run / job / 実行履歴の既存 JSON に保存し、既存の所有者と system_admin の参照判定を通す。RAG の回答保存中の snapshot は未終了の span を作らず partial とする。実行履歴と完了した応答には実測済みの記録を渡す。Agent の承認前後の実行区間は `trace_segments` に保存し、同じ Run ID と trace ID で対応付ける。保存する区間と span の上限は `PLATFORM_TRACE_UI_MAX_SEGMENTS` / `PLATFORM_TRACE_UI_MAX_SPANS` で設定し、欠落を完全として表示しない。

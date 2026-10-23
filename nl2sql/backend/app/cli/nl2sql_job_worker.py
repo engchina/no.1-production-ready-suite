@@ -8,6 +8,7 @@ import socket
 import time
 
 from pr_backend_core import configure_logging
+from pr_backend_core.observability.tracing import tracing_lifecycle
 
 from app.features.nl2sql.service import nl2sql_service
 from app.settings import get_settings
@@ -22,23 +23,24 @@ def _stop(_signum: int, _frame: object) -> None:
 
 
 def main() -> None:
-    settings = get_settings()
-    configure_logging(
-        settings.log_level,
-        service_name=settings.service_name,
-        service_version=settings.app_version,
-        environment=settings.environment,
-        component="job_worker",
-    )
-    worker_id = f"{socket.gethostname()}:nl2sql-job"
-    signal.signal(signal.SIGTERM, _stop)
-    signal.signal(signal.SIGINT, _stop)
-    logger.info("nl2sql_job_worker_started", extra={"worker_id": worker_id})
-    while _running:
-        processed = nl2sql_service.run_next_nl2sql_job(worker_id=worker_id)
-        if not processed:
-            time.sleep(max(0.1, settings.nl2sql_job_worker_poll_seconds))
-    logger.info("nl2sql_job_worker_stopped", extra={"worker_id": worker_id})
+    with tracing_lifecycle(get_settings(), service_name=get_settings().service_name):
+        settings = get_settings()
+        configure_logging(
+            settings.log_level,
+            service_name=settings.service_name,
+            service_version=settings.app_version,
+            environment=settings.environment,
+            component="job_worker",
+        )
+        worker_id = f"{socket.gethostname()}:nl2sql-job"
+        signal.signal(signal.SIGTERM, _stop)
+        signal.signal(signal.SIGINT, _stop)
+        logger.info("nl2sql_job_worker_started", extra={"worker_id": worker_id})
+        while _running:
+            processed = nl2sql_service.run_next_nl2sql_job(worker_id=worker_id)
+            if not processed:
+                time.sleep(max(0.1, settings.nl2sql_job_worker_poll_seconds))
+        logger.info("nl2sql_job_worker_stopped", extra={"worker_id": worker_id})
 
 
 if __name__ == "__main__":

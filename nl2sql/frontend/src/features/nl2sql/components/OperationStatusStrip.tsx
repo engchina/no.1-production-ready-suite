@@ -2,34 +2,19 @@ import { CircleStop, Database } from "lucide-react";
 import type { ReactNode } from "react";
 
 import {
+  createTraceDetailsLabels,
+  ChatProgress,
   Button,
   Banner,
   FormStatus,
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
-import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
 import { normalizeNl2SqlJobSteps } from "../jobProgressState";
-import type { JobData, JobStatus, JobStepData, JobStepStatus } from "../types";
+import type { JobData, JobStepData } from "../types";
 import { GeneratedSqlSummary } from "./GeneratedSqlPanel";
 import { JobFailureBody } from "./JobFailureBody";
 import { QuestionText } from "./QuestionText";
-import { WorkflowProgressStrip, type WorkflowProgressStepStatus } from "./WorkflowProgressStrip";
-
-function statusLabel(status: JobStatus) {
-  if (status === "done") return t("nl2sql.status.done");
-  if (status === "error") return t("nl2sql.status.error");
-  if (status === "running") return t("nl2sql.status.running");
-  return t("nl2sql.status.pending");
-}
-
-function stepStatusLabel(status: JobStepStatus) {
-  if (status === "done") return t("nl2sql.progress.step.done");
-  if (status === "error") return t("nl2sql.progress.step.error");
-  if (status === "skipped") return t("nl2sql.progress.step.skipped");
-  if (status === "running") return t("nl2sql.progress.step.running");
-  return t("nl2sql.progress.step.pending");
-}
 
 /** Select AI / Select AI Agent の SQL で省略した安全性の確認（#1523）。 */
 function isSafetyCheckSkipped(job: JobData, step: JobStepData) {
@@ -38,12 +23,6 @@ function isSafetyCheckSkipped(job: JobData, step: JobStepData) {
     step.status === "skipped" &&
     job.result?.safety.safety_checked === false
   );
-}
-
-function jobStepStatusLabel(job: JobData, step: JobStepData) {
-  return isSafetyCheckSkipped(job, step)
-    ? t("nl2sql.progress.step.safetyCheckSkipped")
-    : stepStatusLabel(step.status);
 }
 
 function jobStepDescription(job: JobData, step: JobStepData) {
@@ -58,21 +37,6 @@ function stepLabel(stage: string) {
 
 function stepDescription(stage: string) {
   return t(`nl2sql.progress.${stage}.description`);
-}
-
-function progressMessage(status: JobStatus) {
-  if (status === "done") return t("nl2sql.progress.done");
-  if (status === "error") return t("nl2sql.progress.error");
-  if (status === "running") return t("nl2sql.progress.running");
-  return t("nl2sql.progress.pending");
-}
-
-function normalizeStepStatus(status: JobStepStatus): WorkflowProgressStepStatus {
-  if (status === "done") return "done";
-  if (status === "error") return "error";
-  if (status === "running") return "running";
-  if (status === "skipped") return "skipped";
-  return "pending";
 }
 
 export function OperationStatusStrip({
@@ -120,10 +84,8 @@ export function OperationStatusStrip({
     job?.elapsed_ms ?? job?.result?.timing.elapsed_ms ?? job?.timing?.elapsed_ms;
   if (!job) return null;
 
-  const variant = job.status === "done" ? "success" : job.status === "error" ? "danger" : "info";
   const steps = normalizeNl2SqlJobSteps(job);
   // プレビュー経路: execute/format 未実行(skipped)。「完了」ではなく確認を促す文言に差し替える。
-  const isPreview = Boolean(onPreviewExecute);
   const warningMessage = job.warning_message?.trim();
   const errorMessage = job.status === "error" ? job.error_message?.trim() : "";
   // 利用者要求のキャンセルは「失敗」ではなく警告トーンで表示する。
@@ -132,43 +94,24 @@ export function OperationStatusStrip({
   const failureMessage = cancelled ? "" : errorMessage;
 
   return (
-    <WorkflowProgressStrip
+    <div data-testid="nl2sql-job-progress" data-job-status={job.status}>
+    <ChatProgress
       active={active}
-      operationKey={job.job_id}
+      activityIndicator={!cancelRequesting}
+      progressKey={job.job_id}
       startedAt={startedAtMs}
       elapsedMs={finalElapsed}
-      title={t("nl2sql.progress.title")}
-      titleId="nl2sql-progress-title"
-      message={
-        isPreview && job.status === "done"
-          ? t("nl2sql.progress.previewDone")
-          : progressMessage(job.status)
-      }
-      statusLabel={statusLabel(job.status)}
-      statusVariant={variant}
-      tone={job.status === "error" ? "danger" : job.status === "done" ? "success" : "active"}
-      stepsAriaLabel={t("nl2sql.progress.stepsLabel")}
-      testId="nl2sql-job-progress"
-      dataJobStatus={job.status}
-      // 「中止」の要求中は、そのボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。#416）。
-      activityIcon={cancelRequesting ? "none" : "spinner"}
-      role={active ? "status" : undefined}
-      meta={
-        <span className="font-mono">
-          {t("nl2sql.status.jobId", { id: `${job.job_id.slice(0, 8)}...` })}
-        </span>
-      }
+      cancelled={cancelled}
+      traceLabels={createTraceDetailsLabels(t)}
+          traceSummary={job.trace_segments && job.trace_segments.length > 1 ? job.trace_segments : job.trace_summary}
+      testId="nl2sql-job"
       steps={steps.map((step) => ({
         id: step.stage,
         label: stepLabel(step.stage),
-        description: jobStepDescription(job, step),
-        status: normalizeStepStatus(step.status),
-        statusLabel: jobStepStatusLabel(job, step),
-        elapsedLabel: step.elapsed_ms != null ? formatElapsed(step.elapsed_ms) : "",
-        open: step.status === "running" || (step.stage === "generate_sql" && Boolean(job.result)),
-        testId: `nl2sql-job-step-${step.stage}`,
-        dataStatus: step.status,
-        content: (
+        detail: jobStepDescription(job, step),
+        status: step.status === "error" ? "failed" as const : step.status,
+        durationMs: step.elapsed_ms,
+        children: (
           <>
             {step.stage === "prepare_context" && job.result && (
               <dl className="mt-2 grid gap-2 border-l border-border pl-3 text-xs">
@@ -206,15 +149,13 @@ export function OperationStatusStrip({
                 <GeneratedSqlSummary
                   result={job.result}
                   profileId={profileId}
-                  onExecute={onPreviewExecute}
-                  executeLoading={previewExecuteLoading}
                 />
               </div>
             )}
           </>
         ),
       }))}
-      footer={
+    />
         <>
           {active && onCancelJob && (
             <div className="mx-4 mb-4 flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
@@ -293,7 +234,9 @@ export function OperationStatusStrip({
             </Banner>
           )}
         </>
-      }
-    />
+    {onPreviewExecute && job.result ? (
+      <GeneratedSqlSummary result={job.result} profileId={profileId} onExecute={onPreviewExecute} executeLoading={previewExecuteLoading} />
+    ) : null}
+    </div>
   );
 }

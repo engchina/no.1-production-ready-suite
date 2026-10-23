@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import Literal, Self
 
 from pr_backend_core.api.validation import validation_error_messages
+from pr_backend_core.observability.tracing import TraceSummary
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -375,6 +376,7 @@ class SearchDiagnostics(BaseModel):
     """
 
     # 回答の経路は常に回答フロー。保存済みの評価結果などの古い値も読めるよう str のままにする。
+    trace_summary: TraceSummary | None = None
     retrieval_strategy: str = "hybrid"
     # grounded(根拠付き回答)/ retrieval_only(検索だけ)/ blocked(質問の安全チェック)
     retrieval_strategy_adapter: str = "grounded"

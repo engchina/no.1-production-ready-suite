@@ -102,7 +102,7 @@ describe("ChatProgress", () => {
     expect(schema.textContent).toContain("完了");
     expect(schema.textContent).toContain("1.6 秒");
     // 実行中の段階は完了の行ではなく、最後の今の段階の行に出す。
-    expect(q("p-step-generate_sql")).toBeNull();
+    expect(q("p-current")?.contains(q("p-step-generate_sql"))).toBe(true);
     act(() => {
       q("p-running")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     });

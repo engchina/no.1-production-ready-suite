@@ -1565,6 +1565,7 @@ export interface CompareModel {
 }
 
 export interface SearchDiagnostics {
+  trace_summary?: unknown;
   /** 回答エンジンの名前（"grounded"）。 */
   retrieval_strategy: string;
   /** "grounded"（回答）/ "retrieval_only"（検索だけ）/ "blocked"（安全チェックで止めた）。 */
@@ -4827,6 +4828,7 @@ export interface StorageFailure {
 }
 
 export interface RunDetail extends RunSummary {
+  trace_summary?: unknown;
   error_type: string | null;
   /** 失敗のエラーコード（ORA-03146 など。#2342）。古い記録には無い。 */
   error_code?: string | null;

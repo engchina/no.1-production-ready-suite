@@ -7,6 +7,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
+from pr_backend_core.observability.genai import record_genai_usage
+from pr_backend_core.observability.tracing import observed_span
 from rag_parser_core.oci_enterprise_ai import (
     DEFAULT_MIME_TYPE,
     EnterpriseAiHttpTransport,
@@ -113,3 +118,19 @@ class OciEnterpriseAiClient(_SharedOciEnterpriseAiClient):
         # config で駆動する。
         config = config_from_settings(settings or get_settings(), model_id=model_id or None)
         super().__init__(config, http_transport=http_transport)
+
+    async def _post_enterprise_ai(
+        self, path: str, payload: Mapping[str, Any], *, vision: bool = False
+    ) -> Mapping[str, Any]:
+        with observed_span(
+            "gen_ai.chat",
+            kind="client",
+            attributes={
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": "oracle",
+                "gen_ai.request.model": str(payload.get("model") or ""),
+            },
+        ) as span:
+            response = await super()._post_enterprise_ai(path, payload, vision=vision)
+            record_genai_usage(span, response.get("usage"))
+            return response

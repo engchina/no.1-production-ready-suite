@@ -2289,3 +2289,20 @@ test("安全確認を省略した SQL を安全検査済みと表示しない", 
   await expect(page.getByText("安全検査済み・未実行", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("sql-safety-skipped.png"), fullPage: true });
 });
+
+test("実測 trace の親子関係を SQL チャットで開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const { syntheticTraceSummary, captureTraceLayouts } = await import("../../../../platform/packages/ui/e2e/trace-fixture");
+  const state = await setup(page);
+  state.turns.push({ job_id: "chat-1", question: "合成データの件数", status: "done", created_at: now, steps: [], trace_summary: syntheticTraceSummary,
+    result: { generated_sql: "SELECT 1 FROM DUAL", original_question: "合成データの件数", explanation: "合成の応答です。", safety: { is_safe: true, safety_checked: true, referenced_tables: [], referenced_columns: [] } } });
+  await page.goto("/chat");
+  await page.getByRole("button", { name: "会話の履歴", exact: true }).click();
+  await page.getByTestId("sql-chat-history").getByText("合成データの件数", { exact: true }).click();
+  if ((page.viewportSize()?.width ?? 0) >= 1024) await page.getByRole("button", { name: "会話の履歴", exact: true }).click();
+  await page.getByTestId("sql-chat-progress-summary").click();
+  await page.getByTestId("trace-details-toggle").click();
+  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await captureTraceLayouts(page, testInfo, "sql-chat-trace");
+});

@@ -3,6 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import {
+  createTraceDetailsLabels,
   CopyButton,
   ApiErrorBanner,
   Banner,
@@ -205,6 +206,8 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
         timeline={
           steps.length > 0 || processDetails ? (
             <RunTimelineSection
+            traceLabels={createTraceDetailsLabels(t)}
+          traceSummary={item.trace_segments && item.trace_segments.length > 1 ? item.trace_segments : item.trace_summary}
               title={t("history.detail.timeline")}
               steps={steps}
               totalDurationMs={item.elapsed_ms ?? null}

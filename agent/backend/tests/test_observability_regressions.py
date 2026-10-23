@@ -14,11 +14,11 @@ def test_completed_event_span_ends_at_completion() -> None:
         attributes={"duration_ms": 1000},
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
-    span = obs._otlp_trace_payload(event, service_name="test")["resourceSpans"][0]["scopeSpans"][0][
-        "spans"
-    ][0]
-    assert int(span["endTimeUnixNano"]) == obs._datetime_to_unix_nano(event.created_at)
-    assert int(span["endTimeUnixNano"]) - int(span["startTimeUnixNano"]) == 1_000_000_000
+    payload = obs._otlp_event_payload(event, service_name="test")
+    record = payload["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]
+    assert int(record["timeUnixNano"]) == obs._datetime_to_unix_nano(event.created_at)
+    assert "resourceSpans" not in payload
+    assert "spanId" not in record
 
 
 def test_sampling_keeps_trace_events_together() -> None:

@@ -887,3 +887,8 @@ export {
   type DocumentPreviewPagesState,
   type DocumentPreviewProps,
 } from "./components/document-preview/document-preview";
+
+export { TraceDetails } from "./components/data/trace-details";
+export { traceTimeline } from "./lib/trace-tree";
+
+export { TRACE_DETAILS_JA, createTraceDetailsLabels, type TraceDetailsLabels } from "./lib/trace-labels";

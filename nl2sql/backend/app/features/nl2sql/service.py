@@ -24,7 +24,7 @@ import unicodedata
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack, contextmanager, suppress
+from contextlib import ExitStack, contextmanager, nullcontext, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -62,6 +62,16 @@ from pr_backend_core.chat_progress import (
     parse_chat_progress_events,
 )
 from pr_backend_core.observability.request_context import bind_log_context
+from pr_backend_core.observability.tracing import (
+    TraceSummary,
+    append_trace_segment,
+    attach_trace_context,
+    capture_trace_context,
+    finish_operation_trace,
+    observed_span,
+    operation_trace,
+    validated_trace_context,
+)
 from pr_backend_core.oracle_errors import oracle_error_codes
 from pr_system_settings.auth.visibility import DEFAULT_RUN_EXECUTOR_FILTER, RunExecutorFilter
 from pydantic import BaseModel, ValidationError
@@ -3964,6 +3974,9 @@ class StoredJob:
     progress_events: list[ChatProgressStepEvent | ChatProgressTerminalEvent] = field(
         default_factory=list
     )
+    trace_context: dict[str, str] = field(default_factory=dict)
+    trace_summary: TraceSummary | None = None
+    trace_segments: list[TraceSummary] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -5726,8 +5739,29 @@ class Nl2SqlService:
         }
 
     def _job_to_snapshot(self, job: StoredJob) -> dict[str, Any]:
+        if job.status in {JobStatus.DONE, JobStatus.ERROR}:
+            summary = finish_operation_trace(
+                job.job_id,
+                status=(
+                    "cancelled"
+                    if job.error_code == JOB_CANCELLED_ERROR_CODE
+                    else "failed"
+                    if job.status == JobStatus.ERROR
+                    else "done"
+                ),
+            )
+            if summary is not None:
+                job.trace_summary = summary
+                job.trace_segments = append_trace_segment(
+                    job.trace_segments, summary, limit=get_settings().trace_ui_max_segments
+                )
         return {
             "job_id": job.job_id,
+            "trace_context": validated_trace_context(job.trace_context),
+            "trace_segments": [item.model_dump(mode="json") for item in job.trace_segments],
+            "trace_summary": job.trace_summary.model_dump(mode="json")
+            if job.trace_summary
+            else None,
             "conversation_id": job.conversation_id,
             "chat_root": "1"
             if job.request.is_chat_turn and not job.request.previous_job_id and not job.chat_deleted
@@ -5884,6 +5918,17 @@ class Nl2SqlService:
             attempt = 0
         return StoredJob(
             job_id=str(data["job_id"]),
+            trace_context=validated_trace_context(data.get("trace_context")),
+            trace_segments=[
+                TraceSummary.model_validate(item)
+                for item in data.get("trace_segments", [])
+                if isinstance(item, dict)
+            ]
+            if isinstance(data.get("trace_segments", []), list)
+            else [],
+            trace_summary=TraceSummary.model_validate(data["trace_summary"])
+            if isinstance(data.get("trace_summary"), dict)
+            else None,
             conversation_id=str(data.get("conversation_id") or ""),
             request=JobCreateRequest.model_validate(
                 data["request"], context={STORED_JOB_REQUEST_CONTEXT: True}
@@ -8763,6 +8808,7 @@ class Nl2SqlService:
         # 要求の中で待つと、job ID を返せないまま画面の上限（120 秒）を超える。
         job = StoredJob(
             job_id=job_id,
+            trace_context=capture_trace_context(),
             request=request,
             conversation_id=conversation_id,
             business_release_pending=request.use_ontology_context,
@@ -9243,6 +9289,8 @@ class Nl2SqlService:
         with self._lock:
             return JobData(
                 job_id=job.job_id,
+                trace_summary=job.trace_summary,
+                trace_segments=job.trace_segments,
                 business_release_id=job.business_release_id,
                 attachments=list(job.request.attachments),
                 status=job.status,
@@ -23085,110 +23133,118 @@ class Nl2SqlService:
         ]
 
     def _run_job_safely(self, job_id: str) -> None:
-        with bind_log_context(job_id=job_id):
+        with self._lock:
+            pending_trace = self._jobs.get(job_id)
+            carrier = pending_trace.trace_context if pending_trace is not None else {}
+            trace_attempt = pending_trace.attempt if pending_trace is not None else 0
+        with (
+            bind_log_context(job_id=job_id),
+            attach_trace_context(carrier),
+            operation_trace(
+                "nl2sql.execute", operation_id=job_id, attributes={"pr.attempt": trace_attempt}
+            ),
+        ):
+            self._run_job_attempt_safely(job_id)
+
+    def _run_job_attempt_safely(self, job_id: str) -> None:
+        try:
+            with self._lock:
+                pending = self._jobs.get(job_id)
+                if pending is None:
+                    logger.warning("nl2sql_job_missing_before_run", extra={"job_id": job_id})
+                    return
+                actor_user_uuid = pending.actor_user_uuid
+                actor_is_system_admin = pending.actor_is_system_admin
+                chat_turn = pending.request.is_chat_turn
+                conversation_id = pending.conversation_id
+                question = pending.request.question
+            # 会話の添付の表と文書（#2517）。SQL の生成・検証・実行が読む（lock の外で読む）。
+            attachments = (
+                attachment_context(conversation_id, question) if chat_turn else AttachmentContext()
+            )
+            with (
+                self._keep_job_lease_alive(job_id),
+                actor_scope(actor_user_uuid, is_system_admin=actor_is_system_admin),
+                use_attachment_context(attachments),
+            ):
+                self._run_job(job_id)
+        except JobExecutionLost:
+            finish_operation_trace(job_id, status="cancelled")
+            logger.info("nl2sql_job_execution_lost", extra={"job_id": job_id})
+        except Exception as exc:  # pragma: no cover - defensive boundary
             try:
-                with self._lock:
-                    pending = self._jobs.get(job_id)
-                    if pending is None:
-                        logger.warning("nl2sql_job_missing_before_run", extra={"job_id": job_id})
-                        return
-                    actor_user_uuid = pending.actor_user_uuid
-                    actor_is_system_admin = pending.actor_is_system_admin
-                    chat_turn = pending.request.is_chat_turn
-                    conversation_id = pending.conversation_id
-                    question = pending.request.question
-                # 会話の添付の表と文書（#2517）。SQL の生成・検証・実行が読む（lock の外で読む）。
-                attachments = (
-                    attachment_context(conversation_id, question)
-                    if chat_turn
-                    else AttachmentContext()
-                )
-                with (
-                    self._keep_job_lease_alive(job_id),
-                    actor_scope(actor_user_uuid, is_system_admin=actor_is_system_admin),
-                    use_attachment_context(attachments),
-                ):
-                    self._run_job(job_id)
+                self._assert_job_execution(job_id)
             except JobExecutionLost:
-                logger.info("nl2sql_job_execution_lost", extra={"job_id": job_id})
-            except Exception as exc:  # pragma: no cover - defensive boundary
-                try:
-                    self._assert_job_execution(job_id)
-                except JobExecutionLost:
-                    logger.info("nl2sql_job_late_error_discarded", extra={"job_id": job_id})
-                    return
-                except Exception:
+                logger.info("nl2sql_job_late_error_discarded", extra={"job_id": job_id})
+                return
+            except Exception:
+                logger.exception("nl2sql_job_error_owner_probe_failed", extra={"job_id": job_id})
+                return
+            with self._lock:
+                job = self._jobs.get(job_id)
+                if job is None:
+                    # 例外ハンドラ内で KeyError を起こすと worker スレッドごと落ちる。
                     logger.exception(
-                        "nl2sql_job_error_owner_probe_failed", extra={"job_id": job_id}
+                        "nl2sql_job_failed_without_record",
+                        extra={"job_id": job_id, "exception_type": type(exc).__name__},
                     )
                     return
-                with self._lock:
-                    job = self._jobs.get(job_id)
-                    if job is None:
-                        # 例外ハンドラ内で KeyError を起こすと worker スレッドごと落ちる。
-                        logger.exception(
-                            "nl2sql_job_failed_without_record",
-                            extra={"job_id": job_id, "exception_type": type(exc).__name__},
-                        )
-                        return
-                    if (
-                        self._incremental_repository is not None
-                        and job.execution_owner != self._job_execution_owner(job)
-                    ):
-                        return
-                    job.status = JobStatus.ERROR
-                    if isinstance(exc, JobCancelledError):
-                        job.error_message = str(exc)
-                        job.error_code = JOB_CANCELLED_ERROR_CODE
-                    else:
-                        job.error_message, job.error_detail = _job_failure_presentation(exc)
-                        job.error_code = (
-                            SCHEMA_CATALOG_EMPTY_ERROR_CODE
-                            if isinstance(exc, SchemaCatalogEmptyError)
-                            else _job_failure_error_code(exc, fallback=JOB_FAILED_ERROR_CODE)
-                        )
-                    job.finished_at = _utc_now()
-                    self._clear_job_worker_state_locked(job)
-                    failure_index = _job_failure_step_index(job.steps)
-                    failure_stage = (
-                        job.steps[failure_index].stage if failure_index is not None else ""
+                if (
+                    self._incremental_repository is not None
+                    and job.execution_owner != self._job_execution_owner(job)
+                ):
+                    return
+                job.status = JobStatus.ERROR
+                if isinstance(exc, JobCancelledError):
+                    job.error_message = str(exc)
+                    job.error_code = JOB_CANCELLED_ERROR_CODE
+                else:
+                    job.error_message, job.error_detail = _job_failure_presentation(exc)
+                    job.error_code = (
+                        SCHEMA_CATALOG_EMPTY_ERROR_CODE
+                        if isinstance(exc, SchemaCatalogEmptyError)
+                        else _job_failure_error_code(exc, fallback=JOB_FAILED_ERROR_CODE)
                     )
-                    if failure_index is not None:
-                        job.steps[failure_index] = job.steps[failure_index].model_copy(
-                            update={"status": JobStepStatus.ERROR, "finished_at": job.finished_at}
-                        )
-                    _record_job_progress_failed(
-                        job, cancelled=job.error_code == JOB_CANCELLED_ERROR_CODE
+                job.finished_at = _utc_now()
+                self._clear_job_worker_state_locked(job)
+                failure_index = _job_failure_step_index(job.steps)
+                failure_stage = job.steps[failure_index].stage if failure_index is not None else ""
+                if failure_index is not None:
+                    job.steps[failure_index] = job.steps[failure_index].model_copy(
+                        update={"status": JobStepStatus.ERROR, "finished_at": job.finished_at}
                     )
-                    request = job.request
+                _record_job_progress_failed(
+                    job, cancelled=job.error_code == JOB_CANCELLED_ERROR_CODE
+                )
+                request = job.request
+            logger.exception(
+                "nl2sql_job_failed",
+                extra={
+                    "job_id": job_id,
+                    "failure_stage": failure_stage,
+                    "engine": request.engine.value,
+                    "profile_id": request.profile_id or "",
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            try:
+                self._persist_job(job_id)
+            except Exception as persist_exc:  # pragma: no cover - defensive log boundary
                 logger.exception(
-                    "nl2sql_job_failed",
+                    "nl2sql_job_error_state_persist_failed",
                     extra={
                         "job_id": job_id,
                         "failure_stage": failure_stage,
                         "engine": request.engine.value,
                         "profile_id": request.profile_id or "",
-                        "exception_type": type(exc).__name__,
+                        "exception_type": type(persist_exc).__name__,
                     },
                 )
-                try:
-                    self._persist_job(job_id)
-                except Exception as persist_exc:  # pragma: no cover - defensive log boundary
-                    logger.exception(
-                        "nl2sql_job_error_state_persist_failed",
-                        extra={
-                            "job_id": job_id,
-                            "failure_stage": failure_stage,
-                            "engine": request.engine.value,
-                            "profile_id": request.profile_id or "",
-                            "exception_type": type(persist_exc).__name__,
-                        },
-                    )
-            finally:
-                owners = getattr(self._job_execution_context, "owners", {})
-                owners.pop(job_id, None)
-                probes = getattr(self._job_execution_context, "probes", {})
-                probes.pop(job_id, None)
+        finally:
+            owners = getattr(self._job_execution_context, "owners", {})
+            owners.pop(job_id, None)
+            probes = getattr(self._job_execution_context, "probes", {})
+            probes.pop(job_id, None)
 
     def _build_interpretation_artifact(
         self,
@@ -23501,6 +23557,7 @@ class Nl2SqlService:
         with self._lock:
             job = self._execution_job_locked(job_id)
             job.status = JobStatus.RUNNING
+            job.trace_summary = None
             job.started_at = job.started_at or _utc_now()
             job.timing = TimingEnvelope(created_at=job.created_at, started_at=job.started_at)
             if job.attempt > 1:
@@ -23528,40 +23585,43 @@ class Nl2SqlService:
 
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
-        step_started = stage_started
-        business_release_id = self._resolve_job_business_release(job_id, request)
-        _log_job_stage_step_finished(
-            job_id, "prepare_context", "business_release", started=step_started, attempt=attempt
-        )
-        step_started = time.monotonic()
-        rewritten = self._rewrite_question_for_generation(
-            request.generation_question,
-            profile,
-            use_glossary=request.use_glossary,
-        )
-        _log_job_stage_step_finished(
-            job_id, "prepare_context", "rewrite_question", started=step_started, attempt=attempt
-        )
-        step_started = time.monotonic()
-        allowed = self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
-        _log_job_stage_step_finished(
-            job_id, "prepare_context", "allowed_objects", started=step_started, attempt=attempt
-        )
-        step_started = time.monotonic()
-        row_limit = self._resolve_row_limit(request.profile_id, request.row_limit)
-        _log_job_stage_step_finished(
-            job_id, "prepare_context", "row_limit", started=step_started, attempt=attempt
-        )
-        step_started = time.monotonic()
-        ontology_context = self._job_published_ontology_markdown(
-            request=request,
-            profile=profile,
-            business_release_id=business_release_id,
-            allowed=allowed,
-        )
-        _log_job_stage_step_finished(
-            job_id, "prepare_context", "ontology_context", started=step_started, attempt=attempt
-        )
+        with observed_span(
+            "nl2sql.prepare_context", attributes={"pr.stage": "prepare_context"}
+        ) as stage_trace:
+            step_started = stage_started
+            business_release_id = self._resolve_job_business_release(job_id, request)
+            _log_job_stage_step_finished(
+                job_id, "prepare_context", "business_release", started=step_started, attempt=attempt
+            )
+            step_started = time.monotonic()
+            rewritten = self._rewrite_question_for_generation(
+                request.generation_question,
+                profile,
+                use_glossary=request.use_glossary,
+            )
+            _log_job_stage_step_finished(
+                job_id, "prepare_context", "rewrite_question", started=step_started, attempt=attempt
+            )
+            step_started = time.monotonic()
+            allowed = self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
+            _log_job_stage_step_finished(
+                job_id, "prepare_context", "allowed_objects", started=step_started, attempt=attempt
+            )
+            step_started = time.monotonic()
+            row_limit = self._resolve_row_limit(request.profile_id, request.row_limit)
+            _log_job_stage_step_finished(
+                job_id, "prepare_context", "row_limit", started=step_started, attempt=attempt
+            )
+            step_started = time.monotonic()
+            ontology_context = self._job_published_ontology_markdown(
+                request=request,
+                profile=profile,
+                business_release_id=business_release_id,
+                allowed=allowed,
+            )
+            _log_job_stage_step_finished(
+                job_id, "prepare_context", "ontology_context", started=step_started, attempt=attempt
+            )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="prepare_context", elapsed_ms=stage_elapsed))
         self._transition_job_steps(
@@ -23578,23 +23638,26 @@ class Nl2SqlService:
 
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
-        generated = self._generate_selected_engine(
-            question=self._chat_generation_question(
-                request,
-                job.actor_user_uuid,
-                conversation_id=job.conversation_id,
-                # system_admin が他の利用者の会話に送ったターン（#1928）。
-                all_users=job.actor_is_system_admin,
-            ),
-            engine=request.engine,
-            profile=profile,
-            allowed=allowed,
-            row_limit=row_limit,
-            select_ai_overrides=request.select_ai_overrides,
-            ontology_context=ontology_context,
-            use_glossary=request.use_glossary,
-            sql_requirement=request.sql_requirement,
-        )
+        with observed_span(
+            "nl2sql.generate_sql", attributes={"pr.stage": "generate_sql"}
+        ) as stage_trace:
+            generated = self._generate_selected_engine(
+                question=self._chat_generation_question(
+                    request,
+                    job.actor_user_uuid,
+                    conversation_id=job.conversation_id,
+                    # system_admin が他の利用者の会話に送ったターン（#1928）。
+                    all_users=job.actor_is_system_admin,
+                ),
+                engine=request.engine,
+                profile=profile,
+                allowed=allowed,
+                row_limit=row_limit,
+                select_ai_overrides=request.select_ai_overrides,
+                ontology_context=ontology_context,
+                use_glossary=request.use_glossary,
+                sql_requirement=request.sql_requirement,
+            )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="generate_sql", elapsed_ms=stage_elapsed))
         self._transition_job_steps(
@@ -23607,14 +23670,21 @@ class Nl2SqlService:
 
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
-        analysis = self.analyze_sql(
-            generated.generated_sql,
-            allowed,
-            row_limit,
-            catalog=generated.schema_catalog,
-            engine=generated.engine,
-        )
-        analysis = self._apply_empty_filter_generation_guard(rewritten, analysis)
+        with observed_span(
+            "nl2sql.safety_check", attributes={"pr.stage": "safety_check"}
+        ) as stage_trace:
+            analysis = self.analyze_sql(
+                generated.generated_sql,
+                allowed,
+                row_limit,
+                catalog=generated.schema_catalog,
+                engine=generated.engine,
+            )
+            analysis = self._apply_empty_filter_generation_guard(rewritten, analysis)
+            if not analysis.safety.safety_checked:
+                stage_trace.set_status("skipped")
+            elif not analysis.safety.is_safe:
+                stage_trace.set_status("failed")
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="safety_check", elapsed_ms=stage_elapsed))
         self._transition_job_steps(
@@ -23634,54 +23704,64 @@ class Nl2SqlService:
 
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
-        # 生成 SQL の実行時エラー（ORA-00904 等）は job 全体の失敗にせず、生成 SQL と safety を
-        # 含む result と履歴を残したうえで ERROR として公開する。
-        execution_error: str | None = None
-        execution_error_code: str | None = None
-        execution_error_detail: str | None = None
-        # チャットのターンの実行の結果（#1176）。行は会話（ジョブの結果）に残さず、
-        # 画面が 1 回だけ受け取る。
-        chat_execution: SqlChatExecuteData | None = None
-        if analysis.safety.is_safe and not request.generation_only and request.is_chat_turn:
-            # チャットも SQL 生成の画面と同じく、生成した SQL を同じジョブで実行する（#1176）。
-            # 経路は SQL 生成のジョブの実行と同じ（安全検査 → `_execute_generated_sql`。actor は
-            # `_run_job_safely` の actor_scope。#904）。上限はチャットの上限（#1154）。実行の失敗は
-            # ジョブを失敗にしない（生成した SQL は残り、「もう一度実行」できる）。
-            chat_execution = self._run_chat_sql(
-                job_id=job_id,
-                conversation_id=job.conversation_id,
-                profile_id=request.profile_id,
-                generated_sql=generated.generated_sql,
-                question=rewritten,
-                allowed=allowed,
-                log_event="nl2sql_job_execute_sql_failed",
-                engine=generated.engine,
-            )
-            safety = analysis.safety
-            executable = chat_execution.executable_sql or analysis.executable_sql
-            results = QueryResults(columns=[], rows=[], total=0)
-        elif analysis.safety.is_safe and not request.generation_only:
-            execution = self._execute_generated_sql(
-                generated.generated_sql,
-                allowed,
-                row_limit,
-                analysis=analysis,
-                log_extra={
-                    "job_id": job_id,
-                    "engine": request.engine.value,
-                    "profile_id": request.profile_id or "",
-                },
-            )
-            safety = execution.safety
-            executable = execution.executable_sql
-            results = execution.results
-            execution_error = execution.error_message
-            execution_error_code = execution.error_code
-            execution_error_detail = execution.error_detail
-        else:
-            safety = analysis.safety
-            executable = analysis.executable_sql
-            results = QueryResults(columns=[], rows=[], total=0)
+        with (
+            observed_span("nl2sql.execute_sql", attributes={"pr.stage": "execute_sql"})
+            if analysis.safety.is_safe and not request.generation_only
+            else nullcontext()
+        ) as stage_trace:
+            # 生成 SQL の実行時エラー（ORA-00904 等）は job 全体の失敗にせず、生成 SQL と safety を
+            # 含む result と履歴を残したうえで ERROR として公開する。
+            execution_error: str | None = None
+            execution_error_code: str | None = None
+            execution_error_detail: str | None = None
+            # チャットのターンの実行の結果（#1176）。行は会話（ジョブの結果）に残さず、
+            # 画面が 1 回だけ受け取る。
+            chat_execution: SqlChatExecuteData | None = None
+            if analysis.safety.is_safe and not request.generation_only and request.is_chat_turn:
+                # チャットも SQL 生成の画面と同じく、生成した SQL を同じジョブで実行する（#1176）。
+                # 経路は SQL 生成のジョブの実行と同じ（安全検査 → `_execute_generated_sql`。actor は
+                # `_run_job_safely` の actor_scope。#904）。上限はチャットの上限（#1154）。
+                # 実行の失敗は
+                # ジョブを失敗にしない（生成した SQL は残り、「もう一度実行」できる）。
+                chat_execution = self._run_chat_sql(
+                    job_id=job_id,
+                    conversation_id=job.conversation_id,
+                    profile_id=request.profile_id,
+                    generated_sql=generated.generated_sql,
+                    question=rewritten,
+                    allowed=allowed,
+                    log_event="nl2sql_job_execute_sql_failed",
+                    engine=generated.engine,
+                )
+                safety = analysis.safety
+                executable = chat_execution.executable_sql or analysis.executable_sql
+                results = QueryResults(columns=[], rows=[], total=0)
+            elif analysis.safety.is_safe and not request.generation_only:
+                execution = self._execute_generated_sql(
+                    generated.generated_sql,
+                    allowed,
+                    row_limit,
+                    analysis=analysis,
+                    log_extra={
+                        "job_id": job_id,
+                        "engine": request.engine.value,
+                        "profile_id": request.profile_id or "",
+                    },
+                )
+                safety = execution.safety
+                executable = execution.executable_sql
+                results = execution.results
+                execution_error = execution.error_message
+                execution_error_code = execution.error_code
+                execution_error_detail = execution.error_detail
+            else:
+                safety = analysis.safety
+                executable = analysis.executable_sql
+                results = QueryResults(columns=[], rows=[], total=0)
+            if stage_trace is not None and (
+                execution_error or (chat_execution is not None and chat_execution.status == "error")
+            ):
+                stage_trace.set_status("failed")
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="execute_sql", elapsed_ms=stage_elapsed))
         execute_status = (
@@ -23718,114 +23798,117 @@ class Nl2SqlService:
 
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
-        timing = TimingEnvelope(
-            created_at=job.created_at,
-            started_at=job.started_at,
-            stage_timings=stage_timings,
-        )
-        interpretation: Nl2SqlInterpretationArtifact | None = None
-        # include_interpretation は処理手順、ontology_grounding_requested は Ontology
-        # 接地確認を担う。どちらかが要る場合に artifact を構築し、不要な部分は空にする。
-        grounding_requested = request.ontology_grounding_requested
-        if request.use_ontology_context and not grounding_requested:
-            # 生成の文脈には公開版を使うが、生成後の接地確認は求められていない（接地確認を表示
-            # しないチャット。#1172）。グラフを読まない。
-            _log_job_stage_step_finished(
-                job_id,
-                "format_results",
-                "ontology_graph",
-                started=time.monotonic(),
-                attempt=attempt,
-                skip_reason="grounding_not_requested",
+        with observed_span(
+            "nl2sql.format_results", attributes={"pr.stage": "format_results"}
+        ) as stage_trace:
+            timing = TimingEnvelope(
+                created_at=job.created_at,
+                started_at=job.started_at,
+                stage_timings=stage_timings,
             )
-        if request.include_interpretation or grounding_requested:
-            try:
-                ontology_graph: Nl2SqlOntologyGraphSnapshot | None = None
-                ontology_graph_warnings: list[str] = []
-                grounding_skip_reason: OntologyGroundingSkipReason = ""
-                if grounding_requested:
-                    step_started = time.monotonic()
-                    if business_release_id:
-                        # 準備の段階で確定した公開版だけで接地確認する（#1168）。
-                        ontology_graph, ontology_graph_warnings = (
-                            self._build_interpretation_ontology_graph_snapshot(
-                                profile=profile,
-                                allowed=allowed,
-                                release_id=business_release_id,
+            interpretation: Nl2SqlInterpretationArtifact | None = None
+            # include_interpretation は処理手順、ontology_grounding_requested は Ontology
+            # 接地確認を担う。どちらかが要る場合に artifact を構築し、不要な部分は空にする。
+            grounding_requested = request.ontology_grounding_requested
+            if request.use_ontology_context and not grounding_requested:
+                # 生成の文脈には公開版を使うが、生成後の接地確認は求められていない（接地確認を表示
+                # しないチャット。#1172）。グラフを読まない。
+                _log_job_stage_step_finished(
+                    job_id,
+                    "format_results",
+                    "ontology_graph",
+                    started=time.monotonic(),
+                    attempt=attempt,
+                    skip_reason="grounding_not_requested",
+                )
+            if request.include_interpretation or grounding_requested:
+                try:
+                    ontology_graph: Nl2SqlOntologyGraphSnapshot | None = None
+                    ontology_graph_warnings: list[str] = []
+                    grounding_skip_reason: OntologyGroundingSkipReason = ""
+                    if grounding_requested:
+                        step_started = time.monotonic()
+                        if business_release_id:
+                            # 準備の段階で確定した公開版だけで接地確認する（#1168）。
+                            ontology_graph, ontology_graph_warnings = (
+                                self._build_interpretation_ontology_graph_snapshot(
+                                    profile=profile,
+                                    allowed=allowed,
+                                    release_id=business_release_id,
+                                )
                             )
+                        else:
+                            # 公開されたオントロジーが無い。その場でカタログから同期・構築しない
+                            # （prompt の文脈と同じ規則。#1168）。
+                            grounding_skip_reason = "no_published_ontology"
+                        _log_job_stage_step_finished(
+                            job_id,
+                            "format_results",
+                            "ontology_graph",
+                            started=step_started,
+                            attempt=attempt,
+                            skip_reason=grounding_skip_reason,
                         )
-                    else:
-                        # 公開されたオントロジーが無い。その場でカタログから同期・構築しない
-                        # （prompt の文脈と同じ規則。#1168）。
-                        grounding_skip_reason = "no_published_ontology"
-                    _log_job_stage_step_finished(
-                        job_id,
-                        "format_results",
-                        "ontology_graph",
-                        started=step_started,
-                        attempt=attempt,
-                        skip_reason=grounding_skip_reason,
+                    interpretation = self._build_interpretation_artifact(
+                        request=request,
+                        profile=profile,
+                        rewritten_question=rewritten,
+                        generated_sql=generated.generated_sql,
+                        executable_sql=executable,
+                        analysis=analysis,
+                        safety=safety,
+                        row_limit=row_limit,
+                        ontology_graph=ontology_graph,
+                        ontology_graph_warnings=ontology_graph_warnings,
+                        include_logical_steps=request.include_interpretation,
+                        ontology_grounding_enabled=grounding_requested,
+                        ontology_grounding_skip_reason=grounding_skip_reason,
                     )
-                interpretation = self._build_interpretation_artifact(
-                    request=request,
-                    profile=profile,
-                    rewritten_question=rewritten,
-                    generated_sql=generated.generated_sql,
-                    executable_sql=executable,
-                    analysis=analysis,
-                    safety=safety,
-                    row_limit=row_limit,
-                    ontology_graph=ontology_graph,
-                    ontology_graph_warnings=ontology_graph_warnings,
-                    include_logical_steps=request.include_interpretation,
-                    ontology_grounding_enabled=grounding_requested,
-                    ontology_grounding_skip_reason=grounding_skip_reason,
-                )
-            except Exception as exc:  # pragma: no cover - defensive artifact boundary
-                logger.warning("nl2sql_interpretation_artifact_boundary_failed", exc_info=True)
-                interpretation = Nl2SqlInterpretationArtifact(
-                    available=False,
-                    warnings=[f"解釈 artifact の生成に失敗しました: {exc}"],
-                )
-        show_prompt: Nl2SqlShowPromptArtifact | None = None
-        if request.include_show_prompt:
-            try:
-                show_prompt = self._build_show_prompt_artifact(
-                    request=request,
-                    profile=profile,
-                    generated=generated,
-                    rewritten_question=rewritten,
-                    ontology_context=ontology_context,
-                )
-            except Exception as exc:  # pragma: no cover - defensive artifact boundary
-                logger.warning("nl2sql_showprompt_artifact_boundary_failed", exc_info=True)
-                show_prompt = Nl2SqlShowPromptArtifact(
-                    available=False,
-                    engine=generated.engine,
-                    unavailable_reason="Show Prompt の取得に失敗しました。",
-                    warnings=[str(exc)],
-                )
-        history_id = str(uuid.uuid4())
-        result = Nl2SqlResult(
-            business_release_id=business_release_id,
-            history_id=history_id,
-            engine=generated.engine,
-            engine_meta=generated.engine_meta,
-            fallback_reason=generated.fallback_reason,
-            original_question=request.question,
-            rewritten_question=rewritten,
-            generated_sql=generated.generated_sql,
-            executable_sql=executable,
-            explanation=generated.explanation,
-            safety=safety,
-            recommendations=analysis.recommendations,
-            repaired_sql=analysis.repaired_sql,
-            optimization_hints=analysis.optimization_hints,
-            results=results,
-            timing=timing,
-            interpretation=interpretation,
-            show_prompt=show_prompt,
-        )
+                except Exception as exc:  # pragma: no cover - defensive artifact boundary
+                    logger.warning("nl2sql_interpretation_artifact_boundary_failed", exc_info=True)
+                    interpretation = Nl2SqlInterpretationArtifact(
+                        available=False,
+                        warnings=[f"解釈 artifact の生成に失敗しました: {exc}"],
+                    )
+            show_prompt: Nl2SqlShowPromptArtifact | None = None
+            if request.include_show_prompt:
+                try:
+                    show_prompt = self._build_show_prompt_artifact(
+                        request=request,
+                        profile=profile,
+                        generated=generated,
+                        rewritten_question=rewritten,
+                        ontology_context=ontology_context,
+                    )
+                except Exception as exc:  # pragma: no cover - defensive artifact boundary
+                    logger.warning("nl2sql_showprompt_artifact_boundary_failed", exc_info=True)
+                    show_prompt = Nl2SqlShowPromptArtifact(
+                        available=False,
+                        engine=generated.engine,
+                        unavailable_reason="Show Prompt の取得に失敗しました。",
+                        warnings=[str(exc)],
+                    )
+            history_id = str(uuid.uuid4())
+            result = Nl2SqlResult(
+                business_release_id=business_release_id,
+                history_id=history_id,
+                engine=generated.engine,
+                engine_meta=generated.engine_meta,
+                fallback_reason=generated.fallback_reason,
+                original_question=request.question,
+                rewritten_question=rewritten,
+                generated_sql=generated.generated_sql,
+                executable_sql=executable,
+                explanation=generated.explanation,
+                safety=safety,
+                recommendations=analysis.recommendations,
+                repaired_sql=analysis.repaired_sql,
+                optimization_hints=analysis.optimization_hints,
+                results=results,
+                timing=timing,
+                interpretation=interpretation,
+                show_prompt=show_prompt,
+            )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="format_results", elapsed_ms=stage_elapsed))
         finished = _utc_now()
@@ -23866,7 +23949,15 @@ class Nl2SqlService:
             if execution_error is not None
             else None
         )
+        trace_summary = finish_operation_trace(
+            job_id, status="done" if final_status == JobStatus.DONE else "failed"
+        )
+        trace_segments = append_trace_segment(
+            job.trace_segments, trace_summary, limit=get_settings().trace_ui_max_segments
+        )
         history_item = HistoryItem(
+            trace_segments=trace_segments,
+            trace_summary=trace_summary,
             generation_only=request.generation_only,
             business_release_id=business_release_id,
             id=history_id,
@@ -23935,6 +24026,8 @@ class Nl2SqlService:
             result = result.model_copy(update={"notice": current_answer_notice()})
         published = replace(
             job,
+            trace_summary=trace_summary,
+            trace_segments=trace_segments,
             steps=final_steps,
             status=final_status,
             error_message=final_error_message,
@@ -23975,6 +24068,8 @@ class Nl2SqlService:
             )
         with self._lock:
             job = self._execution_job_locked(job_id)
+            job.trace_summary = trace_summary
+            job.trace_segments = trace_segments
             job.steps = final_steps
             job.status = final_status
             job.error_message = final_error_message

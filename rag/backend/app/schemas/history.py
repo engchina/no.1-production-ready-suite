@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
+from pr_backend_core.observability.tracing import TraceSummary
 from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.common import JsonValue
@@ -104,6 +105,7 @@ class RunFeedback(BaseModel):
 
 
 class RunDetail(RunSummary):
+    trace_summary: TraceSummary | None = None
     """実行の詳細（質問の全文・回答・根拠・回答の診断・処理の段・フィードバック）。"""
 
     error_type: str | None = None

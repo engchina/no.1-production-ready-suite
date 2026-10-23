@@ -6,8 +6,8 @@
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from contextlib import nullcontext
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, cast
@@ -19,6 +19,15 @@ from pr_backend_core.chat_history import (
     build_chat_history,
 )
 from pr_backend_core.logging import safe_error_code, safe_exception_fields
+from pr_backend_core.observability.genai import record_genai_usage
+from pr_backend_core.observability.tracing import (
+    finish_operation_trace,
+    observed_span,
+    operation_trace,
+    snapshot_operation_trace,
+)
+from rag_engine.resources.deadline import current_deadline
+from rag_engine.resources.tracing import CallObservation, bind_trace_observer
 from rag_parser_core.language import bind_pack, current_pack, resolve
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
@@ -159,6 +168,42 @@ def _format_chat_history(history: Sequence[ChatTurn], budget: ChatHistoryBudget)
     return build_chat_history(chat_history_turns(history), budget)
 
 
+def _engine_cancelled() -> bool:
+    deadline = current_deadline()
+    return bool(deadline is not None and deadline.cancelled)
+
+
+@contextmanager
+def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation]:
+    if operation == "stage":
+        with observed_span(
+            "rag.engine.stage", attributes={"pr.stage": model}, cancellation_check=_engine_cancelled
+        ):
+
+            class StageObservation:
+                def usage(self, value: object) -> None:
+                    pass
+
+            yield StageObservation()
+        return
+    with observed_span(
+        f"gen_ai.{operation}",
+        kind="client",
+        cancellation_check=_engine_cancelled,
+        attributes={
+            "gen_ai.operation.name": operation,
+            "gen_ai.provider.name": "oracle",
+            "gen_ai.request.model": model,
+        },
+    ) as span:
+
+        class Observation:
+            def usage(self, value: object) -> None:
+                record_genai_usage(span, value)
+
+        yield Observation()
+
+
 class RagPipeline:
     """回答フローで検索・回答する RAG パイプライン。
 
@@ -226,15 +271,36 @@ class RagPipeline:
         検索・回答プロファイルの言語資源の上書きがあれば、この要求の間だけ束ねる(#2181)。
         """
         overrides = self._settings.rag_language_pack_overrides
-        with bind_pack(resolve(current_pack(), overrides)) if overrides else nullcontext():
-            return await self._run(
-                request,
-                trace_id,
-                progress_callback,
-                token_callback,
-                history=history,
-                query_guardrail_result=query_guardrail_result,
-            )
+        trace_id = trace_id or new_trace_id()
+        trace_summary = None
+        try:
+            with (
+                operation_trace(
+                    "rag.answer" if request.generate_answer else "rag.search", operation_id=trace_id
+                ) as trace_summary,
+                bind_trace_observer(_observe_engine_call),
+                bind_pack(resolve(current_pack(), overrides)) if overrides else nullcontext(),
+            ):
+                response = await self._run(
+                    request,
+                    trace_id,
+                    progress_callback,
+                    token_callback,
+                    history=history,
+                    query_guardrail_result=query_guardrail_result,
+                )
+                response.diagnostics.trace_summary = finish_operation_trace(trace_id)
+                if (
+                    response.diagnostics.answer is not None
+                    and response.diagnostics.trace_summary is not None
+                ):
+                    response.diagnostics.answer["trace_summary"] = (
+                        response.diagnostics.trace_summary.model_dump(mode="json")
+                    )
+                return response
+        finally:
+            if self._run_recorder is not None and trace_summary is not None:
+                self._run_recorder.trace_summary = trace_summary.model_copy(deep=True)
 
     async def _run(
         self,
@@ -710,6 +776,7 @@ class RagPipeline:
         warn_if_large_answer_record(
             trace_id=trace_id, citations=stored, evaluation_input=evaluation_input
         )
+        summary = snapshot_operation_trace()
         await self._oracle.save_answer_record(
             {
                 "trace_id": trace_id,
@@ -720,7 +787,10 @@ class RagPipeline:
                 "rewritten_question": rewritten_question,
                 "answer": answer,
                 "citations": stored,
-                "diagnostics": dict(diagnostics),
+                "diagnostics": {
+                    **dict(diagnostics),
+                    **({"trace_summary": summary.model_dump(mode="json")} if summary else {}),
+                },
                 "evaluation_input": evaluation_input,
                 "answer_notice": answer_notice,
             }
@@ -841,96 +911,97 @@ async def _observe_stage[T](
     stage の中で実行した SQL の回数・行数・LOB の読み取りの回数・時間を span の属性に足す
     (``db_*``。SQL を実行しなかった stage には足さない。#1490)。
     """
-    started_at = perf_counter()
-    base_attributes = dict(attributes or {})
-    await _emit_stage_progress(
-        progress_callback,
-        trace_id=trace_id,
-        stage=stage,
-        outcome="started",
-        elapsed=0.0,
-        attributes=base_attributes,
-    )
-    try:
-        with track_db_calls() as db_stats:
-            try:
-                result = await operation
-            finally:
-                if db_stats.execute_count or db_stats.lob_read_count:
-                    base_attributes.update(db_stats.snapshot())
-    except asyncio.CancelledError as exc:
-        elapsed = perf_counter() - started_at
-        record_rag_stage(SEARCH_METRIC_MODE, stage, "cancelled", elapsed)
-        record_trace_span(
-            trace_id=trace_id,
-            span_name=stage,
-            outcome="cancelled",
-            seconds=elapsed,
-            attributes=base_attributes,
-            error=exc,
-        )
+    with observed_span(f"rag.{stage}", attributes={"pr.stage": stage}):
+        started_at = perf_counter()
+        base_attributes = dict(attributes or {})
         await _emit_stage_progress(
             progress_callback,
             trace_id=trace_id,
             stage=stage,
-            outcome="cancelled",
-            elapsed=elapsed,
+            outcome="started",
+            elapsed=0.0,
             attributes=base_attributes,
         )
-        raise
-    except Exception as exc:
-        elapsed = perf_counter() - started_at
-        error_attributes = {**base_attributes, "error_type": type(exc).__name__}
-        error_code = safe_error_code(exc)
-        if error_code is not None:
-            # 画面の工程の失敗の詳細とログに出す（ORA-03146 など。例外の本文は出さない。#2342）。
-            error_attributes["error_code"] = error_code
-        record_rag_stage(SEARCH_METRIC_MODE, stage, "error", elapsed)
-        record_trace_span(
-            trace_id=trace_id,
-            span_name=stage,
-            outcome="error",
-            seconds=elapsed,
-            attributes=error_attributes,
-            error=exc,
-        )
-        await _emit_stage_progress(
-            progress_callback,
-            trace_id=trace_id,
-            stage=stage,
-            outcome="error",
-            elapsed=elapsed,
-            attributes=error_attributes,
-        )
-        raise
-    elapsed = perf_counter() - started_at
-    if result_attributes is not None:
-        base_attributes.update(result_attributes(result))
-    record_rag_stage(SEARCH_METRIC_MODE, stage, "success", elapsed)
-    record_trace_span(
-        trace_id=trace_id,
-        span_name=stage,
-        outcome="success",
-        seconds=elapsed,
-        attributes=base_attributes,
-    )
-    details: Mapping[str, object] | None = None
-    if result_details is not None and progress_callback is not None:
-        # 詳細は処理の経過の補助。作れなくても工程は成功のまま続ける。
         try:
-            details = result_details(result)
+            with track_db_calls() as db_stats:
+                try:
+                    result = await operation
+                finally:
+                    if db_stats.execute_count or db_stats.lob_read_count:
+                        base_attributes.update(db_stats.snapshot())
+        except asyncio.CancelledError as exc:
+            elapsed = perf_counter() - started_at
+            record_rag_stage(SEARCH_METRIC_MODE, stage, "cancelled", elapsed)
+            record_trace_span(
+                trace_id=trace_id,
+                span_name=stage,
+                outcome="cancelled",
+                seconds=elapsed,
+                attributes=base_attributes,
+                error=exc,
+            )
+            await _emit_stage_progress(
+                progress_callback,
+                trace_id=trace_id,
+                stage=stage,
+                outcome="cancelled",
+                elapsed=elapsed,
+                attributes=base_attributes,
+            )
+            raise
         except Exception as exc:
-            logger.warning("stage details failed", extra={**safe_exception_fields(exc)})
-    await _emit_stage_progress(
-        progress_callback,
-        trace_id=trace_id,
-        stage=stage,
-        outcome="success",
-        elapsed=elapsed,
-        attributes=base_attributes,
-        details=details,
-    )
-    return result
+            elapsed = perf_counter() - started_at
+            error_attributes = {**base_attributes, "error_type": type(exc).__name__}
+            error_code = safe_error_code(exc)
+            if error_code is not None:
+                # 工程の失敗の詳細には安全なコードだけを出す（#2342）。
+                error_attributes["error_code"] = error_code
+            record_rag_stage(SEARCH_METRIC_MODE, stage, "error", elapsed)
+            record_trace_span(
+                trace_id=trace_id,
+                span_name=stage,
+                outcome="error",
+                seconds=elapsed,
+                attributes=error_attributes,
+                error=exc,
+            )
+            await _emit_stage_progress(
+                progress_callback,
+                trace_id=trace_id,
+                stage=stage,
+                outcome="error",
+                elapsed=elapsed,
+                attributes=error_attributes,
+            )
+            raise
+        elapsed = perf_counter() - started_at
+        if result_attributes is not None:
+            base_attributes.update(result_attributes(result))
+        record_rag_stage(SEARCH_METRIC_MODE, stage, "success", elapsed)
+        record_trace_span(
+            trace_id=trace_id,
+            span_name=stage,
+            outcome="success",
+            seconds=elapsed,
+            attributes=base_attributes,
+        )
+        details: Mapping[str, object] | None = None
+        if result_details is not None and progress_callback is not None:
+            # 詳細は処理の経過の補助。作れなくても工程は成功のまま続ける。
+            try:
+                details = result_details(result)
+            except Exception as exc:
+                logger.warning("stage details failed", extra={**safe_exception_fields(exc)})
+        await _emit_stage_progress(
+            progress_callback,
+            trace_id=trace_id,
+            stage=stage,
+            outcome="success",
+            elapsed=elapsed,
+            attributes=base_attributes,
+            details=details,
+        )
+        return result
 
 
 async def _emit_stage_progress(

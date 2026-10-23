@@ -16,6 +16,7 @@ from uuid import UUID
 from pr_backend_core import CursorPage, Page
 from pr_backend_core.chat_history_window import ChatHistoryPage
 from pr_backend_core.chat_progress import ChatProgressEvent
+from pr_backend_core.observability.tracing import TraceSummary
 from pr_system_settings.chat_attachments import ChatAttachmentReference
 from pr_system_settings.model import (
     DEFAULT_ENTERPRISE_AI_SEED,
@@ -1959,6 +1960,9 @@ class SqlChatExecuteData(BaseModel):
 class JobData(BaseModel):
     """非同期 job status response."""
 
+    trace_summary: TraceSummary | None = None
+    trace_segments: list[TraceSummary] = Field(default_factory=list)
+
     business_release_id: str = ""
     # チャットの質問に添付したファイル（#2517。名前・種類・大きさ）。
     attachments: list[ChatAttachmentReference] = Field(default_factory=list)
@@ -2056,6 +2060,9 @@ class HistoryItem(BaseModel):
     """実行履歴。"""
 
     generation_only: bool = False
+
+    trace_summary: TraceSummary | None = None
+    trace_segments: list[TraceSummary] = Field(default_factory=list)
 
     business_release_id: str = ""
     id: str

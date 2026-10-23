@@ -459,6 +459,7 @@ export function SearchClient() {
       elapsedMs={
         running ? undefined : (meta?.elapsed_ms ?? (run.endedAtMs != null ? run.endedAtMs - run.startedAtMs : null))
       }
+      traceSummary={running ? undefined : meta?.diagnostics?.trace_summary}
       diagnostics={running ? undefined : meta?.diagnostics?.answer}
       traceId={answerMode && phase === "done" ? meta?.trace_id : null}
       showNotices={!answerMode}

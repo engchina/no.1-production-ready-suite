@@ -10,6 +10,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import {
+  createTraceDetailsLabels,
   ApiErrorBanner,
   Banner,
   Button,
@@ -439,6 +440,8 @@ export function SqlChatPage() {
               ...job,
               // 作成時の段階（開始待ち）を、会話を取り直す前から出す（取り直しで段階の行が増えて動かない。#1359）。
               progress_events: parseChatProgressEvents(job.progress_events),
+              trace_summary: "trace_summary" in job ? job.trace_summary : undefined,
+              trace_segments: "trace_segments" in job ? job.trace_segments : undefined,
               question,
               requirement_question: requirementQuestionByJob.current[clientJobId] ?? "",
               requirement_skipped: Boolean(variables.requirement_skipped),
@@ -1067,6 +1070,9 @@ function SqlChatTurn({
       <ChatAnswer>
           {/* 処理の段階（#1145）。実行中は今の段階と開いた一覧、完了後は回答の上に「処理の経過」の 1 行（押すと開く。3 製品で同じ。#2265）。 */}
           <ChatProgress
+            cancelled={turn.error_code === "JOB_CANCELLED"}
+            traceLabels={createTraceDetailsLabels(t)}
+          traceSummary={turn.trace_segments && turn.trace_segments.length > 1 ? turn.trace_segments : turn.trace_summary}
             {...progress.progressProps}
             startedAt={sentAtMs}
             labels={CHAT_PROGRESS_LABELS}

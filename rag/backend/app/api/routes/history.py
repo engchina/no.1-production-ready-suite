@@ -105,6 +105,7 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
     stages: dict[str, Any] = raw_stages if isinstance(raw_stages, dict) else {}
     detail: dict[str, Any] = {
         **{key: value for key, value in fields.items() if not key.endswith("_json")},
+        "trace_summary": stages.get("trace_summary"),
         "stages": stages.get("stages") or [],
         "steps": stages.get("steps") or [],
         "error_code": _text_or_none(stages.get("error_code")),

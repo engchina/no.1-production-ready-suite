@@ -1,6 +1,9 @@
 import { CheckCircle2, Circle, CirclePause, CirclePlay, MinusCircle, XCircle, type LucideIcon } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 
+import { CopyButton } from "../ui/copy-button";
+import { DEFAULT_TRACE_DETAILS_LABELS, TRACE_DETAILS_JA, type TraceDetailsLabels } from "../../lib/trace-labels";
+import { traceTimeline } from "../../lib/trace-tree";
 import { operationTimestampMs } from "../../lib/operation-timing";
 import { cn } from "../../lib/utils";
 import type { ChatProgressStepStatus } from "../feedback/chat-progress";
@@ -530,6 +533,17 @@ export const RUN_TIMELINE_CHEVRON_SIZE = {
   md: TEXT_ICON_SIZE.sm,
 } as const satisfies Record<"sm" | "md", number>;
 
+/** 並列の段は経過の範囲で数え、呼び出し時間を足し合わせない。 */
+export function runTimelineDuration(steps: readonly RunTimelineStep[]): number | null {
+  const roots = steps.filter(step => !step.level);
+  const intervals = roots.map(step => [operationTimestampMs(step.startedAt), operationTimestampMs(step.finishedAt)]);
+  if (intervals.length && intervals.every(([start, end]) => start != null && end != null && end >= start)) {
+    return Math.max(...intervals.map(([, end]) => end!)) - Math.min(...intervals.map(([start]) => start!));
+  }
+  const sum = roots.reduce((total, step) => total + (stepDurationMs(step) ?? 0), 0);
+  return sum > 0 ? sum : null;
+}
+
 export interface RunTimelineProps {
   steps: readonly RunTimelineStep[];
   /** 処理全体の所要時間（ミリ秒）。要約の行に出す（無ければ段の合計の範囲）。 */
@@ -598,8 +612,7 @@ export function RunTimeline({
         .map((step) => [step.id, defaultExpanded || step.status === "failed"])
     )
   );
-  const summedMs = steps.reduce((sum, step) => sum + (step.level ? 0 : stepDurationMs(step) ?? 0), 0);
-  const total = totalDurationMs ?? (summedMs > 0 ? summedMs : null);
+  const total = totalDurationMs ?? runTimelineDuration(steps);
   const nameText = size === "sm" ? "text-xs" : "text-sm";
 
   return (
@@ -609,6 +622,9 @@ export function RunTimeline({
       data-run-timeline-bars={showBars ? "true" : "false"}
       data-testid={testId}
     >
+      {showBars && steps.some(step => stepDurationMs(step) != null && (!step.startedAt || !step.finishedAt)) ? (
+        <p className="text-xs text-fg-muted">{TRACE_DETAILS_JA["trace.timing.reconstructed"]}</p>
+      ) : null}
       {showSummary ? (
         <p className="text-xs text-fg-muted tnum">
           {labels.timelineSummary(steps.length, formatRunDuration(total, labels.notRecorded))}
@@ -734,6 +750,8 @@ export function RunTimeline({
 // 処理の経過の節
 
 export interface RunTimelineSectionProps {
+  traceLabels?: TraceDetailsLabels;
+  traceSummary?: unknown;
   /** 節の見出し（翻訳済み。「処理の経過」）。 */
   title: string;
   steps: readonly RunTimelineStep[];
@@ -757,6 +775,8 @@ export interface RunTimelineSectionProps {
  * 3 製品の実行の詳細はこの部品を使い、節の中の並びを自分で組まない。
  */
 export function RunTimelineSection({
+  traceLabels,
+  traceSummary,
   title,
   steps,
   totalDurationMs,
@@ -767,8 +787,7 @@ export function RunTimelineSection({
   testId,
 }: RunTimelineSectionProps) {
   const labels = resolveRunDetailLabels(labelsInput);
-  const summedMs = steps.reduce((sum, step) => sum + (step.level ? 0 : stepDurationMs(step) ?? 0), 0);
-  const total = totalDurationMs ?? (summedMs > 0 ? summedMs : null);
+  const total = totalDurationMs ?? runTimelineDuration(steps);
   const failed = steps.some((step) => step.status === "failed");
   return (
     <RunDetailSection title={title} testId={testId}>
@@ -785,11 +804,13 @@ export function RunTimelineSection({
           data-run-timeline-section=""
         >
           <RunTimeline steps={steps} totalDurationMs={totalDurationMs} showSummary={false} labels={labelsInput} />
+          <TraceDetails summary={traceSummary} labels={traceLabels} />
           {processDetails}
         </Disclosure>
       ) : (
         <>
           {empty}
+          <TraceDetails summary={traceSummary} labels={traceLabels} />
           {processDetails}
         </>
       )}
@@ -865,4 +886,35 @@ export function RunDetailSkeleton({ testId }: { testId?: string }) {
       ))}
     </div>
   );
+}
+
+function TraceSegmentDetails({ summary, labels }: { summary: unknown; labels: TraceDetailsLabels }) {
+  const trace = traceTimeline(summary, labels);
+  const notSampled = summary && typeof summary === "object" && "sampled" in summary && summary.sampled === false;
+  return <div className="grid min-w-0 gap-2">
+    <p className="text-xs text-fg-muted">{trace.steps.length === 0 ? labels.empty : trace.partial ? labels.partial : labels.measured}</p>
+    {notSampled ? <p className="text-xs text-fg-muted">{labels.notSampled}</p> : null}
+    {trace.traceId ? <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <span className="min-w-0 break-all font-mono text-xs text-fg-muted">Trace ID: {trace.traceId}</span>
+      <CopyButton type="button" variant="ghost" size="sm" iconOnly text={trace.traceId} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} />
+    </div> : null}
+    <RunTimeline steps={trace.steps} />
+  </div>;
+}
+
+/** 5 つの質問の入口で使う、安全な実測 trace の詳細。実行区間の追加でも開閉を保つ。 */
+export function TraceDetails({ summary, labels = DEFAULT_TRACE_DETAILS_LABELS }: { summary: unknown; labels?: TraceDetailsLabels }) {
+  if (summary == null) return null;
+  const segments = Array.isArray(summary)
+    ? summary.filter(segment => segment && typeof segment === "object" && !Array.isArray(segment)).slice(0, 1000)
+    : [summary];
+  return <Disclosure variant="plain" size="sm" summary={labels.title} summaryProps={{ "data-testid": "trace-details-toggle" }}>
+    <div className="grid min-w-0 gap-3" data-testid="trace-details">
+      {segments.length === 0 ? <p className="text-xs text-fg-muted">{labels.empty}</p> : null}
+      {segments.map((segment, index) => <div key={segment && typeof segment === "object" && "root_span_id" in segment && typeof segment.root_span_id === "string" ? segment.root_span_id : index}>
+        {segments.length > 1 ? <p className="mb-2 text-xs font-medium text-fg-muted">{labels.segment(index + 1, segments.length)}</p> : null}
+        <TraceSegmentDetails summary={segment} labels={labels} />
+      </div>)}
+    </div>
+  </Disclosure>;
 }

@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRoute
 from pr_backend_core import ApiResponse, configure_logging, create_app
+from pr_backend_core.observability.tracing import tracing_lifecycle
 from pr_system_settings.auth.errors import SecurityApiError, SecurityMigrationRequired
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, Response
@@ -38,31 +39,32 @@ logger = logging.getLogger(__name__)
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # Run の repository・定義・履歴は DB を待たずにバックグラウンドで読み込む（DB に接続できない
     # あいだも起動する。RAG / NL2SQL と同じ。#1212）。
-    storage_bootstrap.start_background_load()
-    await start_trace_export_retry_worker()
-    # 業務 Agent の自動実行のスケジューラ（#784。gunicorn は 1 worker のため 1 つだけ動く）。
-    from app.features.agent.automations import run_scheduler
+    with tracing_lifecycle(get_settings(), service_name=get_settings().service_name):
+        storage_bootstrap.start_background_load()
+        await start_trace_export_retry_worker()
+        # 業務 Agent の自動実行のスケジューラ（#784。gunicorn は 1 worker のため 1 つだけ動く）。
+        from app.features.agent.automations import run_scheduler
 
-    scheduler = asyncio.create_task(run_scheduler())
-    try:
-        yield
-    finally:
-        scheduler.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await scheduler
-        storage_bootstrap.stop_background_load()
-        await stop_trace_export_retry_worker()
-        # まだ書いていない Run・業務 Agent の変更を書いてから終える（#1939。event loop の上の
-        # 変更はバックグラウンドで書くため）。書けなければログに残す。
-        await _flush_runtime_writes()
-        # キューに残った Run の事実を書いてから終える（間に合わない分は次の起動の backfill）。
-        from app.features.agent import run_facts_store
+        scheduler = asyncio.create_task(run_scheduler())
+        try:
+            yield
+        finally:
+            scheduler.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await scheduler
+            storage_bootstrap.stop_background_load()
+            await stop_trace_export_retry_worker()
+            # まだ書いていない Run・業務 Agent の変更を書いてから終える（#1939。event loop の上の
+            # 変更はバックグラウンドで書くため）。書けなければログに残す。
+            await _flush_runtime_writes()
+            # キューに残った Run の事実を書いてから終える（間に合わない分は次の起動の backfill）。
+            from app.features.agent import run_facts_store
 
-        await asyncio.to_thread(run_facts_store.flush, 5.0)
-        # 共通 DB（PLATFORM_ORACLE_*）の接続 pool を閉じる（#793）。
-        from app.oracle_connection import close_platform_oracle_pool
+            await asyncio.to_thread(run_facts_store.flush, 5.0)
+            # 共通 DB（PLATFORM_ORACLE_*）の接続 pool を閉じる（#793）。
+            from app.oracle_connection import close_platform_oracle_pool
 
-        await asyncio.to_thread(close_platform_oracle_pool)
+            await asyncio.to_thread(close_platform_oracle_pool)
 
 
 async def _flush_runtime_writes() -> None:

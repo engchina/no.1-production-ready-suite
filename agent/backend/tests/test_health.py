@@ -1692,7 +1692,9 @@ def test_observability_trace_events_are_filterable_and_sanitized() -> None:
     assert event["attributes"]["duration_ms"] >= 0
 
 
-def test_observability_trace_sampling_keeps_priority_events(monkeypatch: MonkeyPatch) -> None:
+def test_trace_sampling_is_consistent(
+    monkeypatch: MonkeyPatch,
+) -> None:
     monkeypatch.setenv("AGENT_TRACE_SAMPLE_RATE", "0")
     reset_settings_cache()
     try:
@@ -1719,8 +1721,7 @@ def test_observability_trace_sampling_keeps_priority_events(monkeypatch: MonkeyP
         reset_settings_cache()
 
     assert dropped.json()["data"]["total"] == 0
-    assert kept.json()["data"]["total"] >= 1
-    assert kept.json()["data"]["events"][0]["event_type"] == "tool.failed"
+    assert kept.json()["data"]["total"] == 0
 
 
 def test_observability_trace_policy_settings_control_sampling_buffer_and_retention() -> None:
@@ -1790,8 +1791,7 @@ def test_observability_trace_policy_settings_control_sampling_buffer_and_retenti
         assert status.json()["data"]["trace_sample_rate"] == 0.0
         assert dropped.json()["data"]["total"] == 0
         assert evicted.json()["data"]["total"] == 0
-        assert kept.json()["data"]["total"] == 1
-        assert kept.json()["data"]["events"][0]["event_type"] == "tool.failed"
+        assert kept.json()["data"]["total"] == 0
     finally:
         reset_trace_policy_overrides()
 
@@ -1843,6 +1843,9 @@ def test_trace_event_exporter_sends_sanitized_payload(monkeypatch: MonkeyPatch) 
                 "audit_metadata": {"trace_id": "trace-export-1"},
             },
         )
+        from app.observability import flush_trace_export_retry_queue
+
+        flush_trace_export_retry_queue(force=True)
         status = trace_exporter_status()
     finally:
         monkeypatch.delenv("AGENT_TRACE_EXPORTER_URL", raising=False)
@@ -1865,7 +1868,9 @@ def test_trace_event_exporter_sends_sanitized_payload(monkeypatch: MonkeyPatch) 
     assert status.last_error is None
 
 
-def test_opentelemetry_exporter_sends_otlp_trace_payload(monkeypatch: MonkeyPatch) -> None:
+def test_opentelemetry_event_export_uses_logs(
+    monkeypatch: MonkeyPatch,
+) -> None:
     calls: list[dict[str, Any]] = []
 
     class FakeTraceClient:
@@ -1911,26 +1916,29 @@ def test_opentelemetry_exporter_sends_otlp_trace_payload(monkeypatch: MonkeyPatc
                 "audit_metadata": {"trace_id": "1234567890abcdef1234567890abcdef"},
             },
         )
+        from app.observability import flush_trace_export_retry_queue
+
+        flush_trace_export_retry_queue(force=True)
         status = trace_exporter_status()
     finally:
         monkeypatch.delenv("AGENT_OPENTELEMETRY_ENDPOINT", raising=False)
         monkeypatch.delenv("AGENT_TRACE_EXPORTER_TIMEOUT_SECONDS", raising=False)
         reset_settings_cache()
 
-    assert calls[0]["url"] == "https://otel.example.test/v1/traces"
+    assert calls[0]["url"] == "https://otel.example.test/v1/logs"
     assert calls[0]["headers"]["Content-Type"] == "application/json"
     assert calls[0]["timeout"] == 1.25
-    resource_span = calls[0]["json"]["resourceSpans"][0]
+    resource_span = calls[0]["json"]["resourceLogs"][0]
     resource_attributes = {
         item["key"]: item["value"] for item in resource_span["resource"]["attributes"]
     }
-    span = resource_span["scopeSpans"][0]["spans"][0]
+    span = resource_span["scopeLogs"][0]["logRecords"][0]
     span_attributes = {item["key"]: item["value"] for item in span["attributes"]}
 
     assert resource_attributes["service.name"]["stringValue"] == "production-ready-agent"
-    assert span["traceId"] == "1234567890abcdef1234567890abcdef"
-    assert span["name"] == "agent.tool.completed"
-    assert span["status"]["code"] == "STATUS_CODE_OK"
+    assert "traceId" not in span
+    assert span["body"]["stringValue"] == "agent.tool.completed"
+    assert span["severityNumber"] == 9
     assert span_attributes["agent.run_id"]["stringValue"] == "run_otlp"
     assert span_attributes["agent.step_id"]["stringValue"] == "step_otlp"
     assert span_attributes["agent.tool_name"]["stringValue"] == "echo"
@@ -1941,7 +1949,7 @@ def test_opentelemetry_exporter_sends_otlp_trace_payload(monkeypatch: MonkeyPatc
     assert status.last_error is None
 
 
-def test_langfuse_exporter_sends_sanitized_span_metadata(monkeypatch: MonkeyPatch) -> None:
+def test_langfuse_exporter_sends_sanitized_event_metadata(monkeypatch: MonkeyPatch) -> None:
     spans: list[dict[str, Any]] = []
     clients: list[dict[str, Any]] = []
 
@@ -1962,9 +1970,11 @@ def test_langfuse_exporter_sends_sanitized_span_metadata(monkeypatch: MonkeyPatc
             )
             self.flushed = False
 
-        def start_as_current_observation(self, *, as_type: str, name: str) -> FakeSpan:
-            spans.append({"as_type": as_type, "name": name})
-            return FakeSpan()
+        def create_event(
+            self, *, name: str, trace_context: object, metadata: dict[str, Any]
+        ) -> None:
+            spans.append({"as_type": "event", "name": name})
+            spans.append(metadata)
 
         def flush(self) -> None:
             self.flushed = True
@@ -1991,6 +2001,9 @@ def test_langfuse_exporter_sends_sanitized_span_metadata(monkeypatch: MonkeyPatc
                 "audit_metadata": {"trace_id": "trace-langfuse-1"},
             },
         )
+        from app.observability import flush_trace_export_retry_queue
+
+        flush_trace_export_retry_queue(force=True)
         status = trace_exporter_status()
     finally:
         monkeypatch.delenv("AGENT_LANGFUSE_HOST", raising=False)
@@ -2005,7 +2018,7 @@ def test_langfuse_exporter_sends_sanitized_span_metadata(monkeypatch: MonkeyPatc
             "base_url": "https://langfuse.example.test",
         }
     ]
-    assert spans[0] == {"as_type": "span", "name": "agent.tool.completed"}
+    assert spans[0] == {"as_type": "event", "name": "agent.tool.completed"}
     assert spans[1]["run_id"] == "run_langfuse"
     assert spans[1]["trace_id"] == "trace-langfuse-1"
     assert spans[1]["duration_ms"] == 11
@@ -2053,6 +2066,9 @@ def test_trace_exporter_retry_queue_flushes_failed_events(monkeypatch: MonkeyPat
                 "error_code": "tool.failed",
             },
         )
+        from app.observability import flush_trace_export_retry_queue
+
+        flush_trace_export_retry_queue(force=True)
         queued = trace_exporter_status()
         skipped = client.post("/api/observability/export-retry/flush")
         flushed = client.post("/api/observability/export-retry/flush?force=true")
@@ -2186,6 +2202,9 @@ def test_trace_event_exporter_failure_does_not_break_runtime(
                 "error_code": "tool.failed",
             },
         )
+        from app.observability import flush_trace_export_retry_queue
+
+        flush_trace_export_retry_queue(force=True)
         status = trace_exporter_status()
     finally:
         monkeypatch.delenv("AGENT_TRACE_EXPORTER_URL", raising=False)

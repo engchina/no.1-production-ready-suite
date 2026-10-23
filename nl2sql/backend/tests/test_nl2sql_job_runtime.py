@@ -733,3 +733,43 @@ def test_enterprise_ai_temporary_failure_keeps_retry_guidance(
     assert job.error_message is not None and job.error_message.startswith(
         "SQL の生成に失敗しました。時間をおいてもう一度実行してください。"
     )
+
+
+def test_worker_trace_survives_snapshot_and_does_not_invent_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pr_backend_core.config.tracing import TracingSettings
+    from pr_backend_core.observability.tracing import (
+        configure_tracing,
+        observed_span,
+        shutdown_tracing,
+    )
+
+    monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
+    repository = _repository()
+    owner = _worker(repository)
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    try:
+        with observed_span("http.request", kind="server"):
+            created = owner.start_job(
+                _request().model_copy(update={"generation_only": True}),
+                actor_user_uuid="user-1",
+                actor_is_system_admin=True,
+            )
+        assert owner.run_next_nl2sql_job(job_id=created.job_id, worker_id="synthetic")
+        observer = _worker(repository)
+        job = observer.get_job(created.job_id, actor_user_uuid="user-1")
+        assert job is not None and job.status == JobStatus.DONE
+        summary = job.trace_summary
+        assert summary is not None
+        names = [span.operation_name for span in summary.spans]
+        assert "nl2sql.generate_sql" in names
+        assert "nl2sql.execute_sql" not in names
+        root = next(span for span in summary.spans if span.span_id == summary.root_span_id)
+        assert root.parent_span_id is not None
+        assert all(span.parent_span_id == root.span_id for span in summary.spans if span != root)
+        assert summary.completeness == "complete"
+        with pytest.raises(PermissionError):
+            observer.get_job(created.job_id, actor_user_uuid="user-2")
+    finally:
+        shutdown_tracing()

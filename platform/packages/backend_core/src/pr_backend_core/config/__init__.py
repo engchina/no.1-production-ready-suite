@@ -15,11 +15,13 @@ from .env import (
     settings_env_name,
     settings_env_names,
 )
+from .tracing import TracingSettings
 
 __all__ = [
     "PLATFORM_ENV_FILE_ENV",
     "PLATFORM_SETTING_FIELDS",
     "BaseServiceSettings",
+    "TracingSettings",
     "EnvFieldReloader",
     "PlatformEnvSourcesMixin",
     "isolate_env_files_for_tests",

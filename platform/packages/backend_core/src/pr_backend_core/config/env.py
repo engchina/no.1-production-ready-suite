@@ -33,6 +33,17 @@ PLATFORM_ENV_PREFIX = "PLATFORM_"
 # 共通 `.env` に置く Settings の属性。製品が持たない属性は無視される。
 PLATFORM_SETTING_FIELDS = frozenset(
     {
+        # trace（3 製品共通）
+        "trace_enabled",
+        "trace_sample_rate",
+        "trace_otlp_endpoint",
+        "trace_otlp_api_key",
+        "trace_queue_size",
+        "trace_batch_size",
+        "trace_export_timeout_seconds",
+        "trace_shutdown_timeout_seconds",
+        "trace_ui_max_segments",
+        "trace_ui_max_spans",
         # OCI 認証
         "oci_config_file",
         "oci_config_profile",

@@ -1,0 +1,172 @@
+{
+  "$defs": {
+    "SafeValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "SpanSummary": {
+      "properties": {
+        "span_id": {
+          "pattern": "^[0-9a-f]{16}$",
+          "title": "Span Id",
+          "type": "string"
+        },
+        "parent_span_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{16}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Span Id"
+        },
+        "trace_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Trace Id",
+          "type": "string"
+        },
+        "operation_name": {
+          "maxLength": 128,
+          "title": "Operation Name",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "done",
+            "failed",
+            "cancelled",
+            "skipped"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "finished_at": {
+          "format": "date-time",
+          "title": "Finished At",
+          "type": "string"
+        },
+        "duration_ms": {
+          "minimum": 0,
+          "title": "Duration Ms",
+          "type": "number"
+        },
+        "timing_source": {
+          "const": "measured",
+          "default": "measured",
+          "title": "Timing Source",
+          "type": "string"
+        },
+        "attributes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SafeValue"
+          },
+          "title": "Attributes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "span_id",
+        "trace_id",
+        "operation_name",
+        "kind",
+        "status",
+        "started_at",
+        "finished_at",
+        "duration_ms"
+      ],
+      "title": "SpanSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "operation_id": {
+      "default": "",
+      "title": "Operation Id",
+      "type": "string"
+    },
+    "root_span_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Root Span Id"
+    },
+    "telemetry_trace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Telemetry Trace Id"
+    },
+    "completeness": {
+      "default": "unavailable",
+      "enum": [
+        "complete",
+        "partial",
+        "unavailable"
+      ],
+      "title": "Completeness",
+      "type": "string"
+    },
+    "spans": {
+      "items": {
+        "$ref": "#/$defs/SpanSummary"
+      },
+      "title": "Spans",
+      "type": "array"
+    },
+    "truncated": {
+      "default": false,
+      "title": "Truncated",
+      "type": "boolean"
+    },
+    "sampled": {
+      "default": false,
+      "title": "Sampled",
+      "type": "boolean"
+    }
+  },
+  "title": "TraceSummary",
+  "type": "object"
+}
