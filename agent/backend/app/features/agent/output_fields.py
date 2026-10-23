@@ -233,6 +233,7 @@ def record_output_tool(
             description=(
                 "この業務 Agent の出力の項目の値を記録する。回答を書く前に、確かめた値で呼ぶ。"
                 "呼び直すと前の記録を置き換えるので、すべての行をまとめて渡す。"
+                "記録した値は画面の表に表示される。回答本文に記録の報告・同じ値の一覧・このツール名を書かない。"
             ),
             input_schema=output_input_schema(columns),
             output_schema={"type": "object"},
@@ -455,3 +456,22 @@ def meaning_candidates(results: Sequence[OutputFieldResult]) -> list[int]:
         and not _empty(item.expected)
         and not _empty(item.actual)
     ]
+
+
+def without_output_record_sections(answer: str) -> str:
+    """記録の内部名を見出しにした報告だけを、資料との照合の前に外す。"""
+    lines: list[str] = []
+    skipping = False
+    fenced = False
+    for line in answer.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+        heading = None if fenced else re.fullmatch(r"\s*(?:#{1,6}\s+(.+)|\*\*(.+)\*\*)\s*", line)
+        if heading:
+            title = heading.group(1) or heading.group(2)
+            skipping = bool(
+                re.search(rf"(?<![a-zA-Z0-9_]){RECORD_OUTPUT_TOOL}(?![a-zA-Z0-9_])", title)
+            )
+        if not skipping:
+            lines.append(line)
+    return "\n".join(lines).strip()

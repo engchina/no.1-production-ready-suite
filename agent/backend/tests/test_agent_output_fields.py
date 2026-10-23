@@ -204,7 +204,12 @@ def test_record_output_is_validated_and_saved(monkeypatch: MonkeyPatch, agents: 
         # 1 回目は必須の項目が欠けている（誤りがモデルに返り、直して呼び直す）。
         [function_call(RECORD_OUTPUT_TOOL, {"rows": [{"item": "A"}]}, call_id="call-r1")],
         [function_call(RECORD_OUTPUT_TOOL, {"rows": [ROW]}, call_id="call-r2")],
-        [assistant_message("A は業務データと一致しました。")],
+        [
+            assistant_message(
+                "A は業務データと一致しました。\n\n"
+                "**記録（record_output の結果）**\n\n| item | amount |\n| A | 10 |"
+            )
+        ],
     )
 
     run_id = _run(AGENT_ID)
@@ -226,6 +231,10 @@ def test_record_output_is_validated_and_saved(monkeypatch: MonkeyPatch, agents: 
     retry_input = json.dumps(model.calls[2].input, ensure_ascii=False)
     assert "argument_errors" in retry_input and "rows.0.matched" in retry_input
     assert not output_retried(run.metadata)
+    assert run.metadata["tool_titles"][RECORD_OUTPUT_TOOL] == "出力の項目の記録"
+    answer = next(a.content["text"] for a in run.artifacts if a.kind == "answer")
+    assert "record_output" not in answer
+    assert "| item |" not in answer
 
 
 def test_agents_without_fields_get_no_record_tool(monkeypatch: MonkeyPatch, agents: None) -> None:
@@ -303,3 +312,13 @@ def test_fields_saved_by_patch_work_in_draft_runs(monkeypatch: MonkeyPatch, agen
     assert done.status == RunStatus.COMPLETED
     assert RECORD_OUTPUT_TOOL in _tool_names(model)
     assert [item for item in done.artifacts if item.kind == OUTPUT_KIND]
+
+
+@pytest.mark.parametrize(
+    "heading", ["## 記録（record_output の結果）", "**記録（record_output）**"]
+)
+def test_internal_record_section_is_removed_without_hiding_next_section(heading: str) -> None:
+    from app.features.agent.output_fields import without_output_record_sections
+
+    text = "回答です。\n\n" + heading + "\n\n- 値の記録\n\n## 補足\n次の操作。"
+    assert without_output_record_sections(text) == "回答です。\n\n## 補足\n次の操作。"

@@ -96,12 +96,12 @@ describe("詳細の時間と処理の経過", () => {
       () => "中身"
     );
     expect(steps).toHaveLength(1);
-    expect(steps[0]).toMatchObject({ id: "step:s1", status: "failed", label: "ツール rag__rag_search を呼べませんでした" });
+    expect(steps[0]).toMatchObject({ id: "step:s1", status: "failed", label: "処理を実行できませんでした" });
     expect(steps[0].children).toBe("中身");
   });
 
   // #2324: ツールの表示名（MCP の title。metadata `tool_titles`）があれば段の名前に出す。
-  it("ツールの表示名があれば段の名前を表示名にし、無ければ内部名に戻る", () => {
+  it("ツールの表示名があれば段の名前を表示名にし、無ければ一般の処理名を出す", () => {
     const titled = run({
       metadata: { tool_titles: { rag__rag_search: "ナレッジベースの検索", bad: 1 } },
       steps: [
@@ -113,13 +113,13 @@ describe("詳細の時間と処理の経過", () => {
     expect(runToolTitles(run({ metadata: { tool_titles: ["x"] } }))).toEqual({});
     expect(runTimelineSteps(titled, () => undefined).map((step) => step.label)).toEqual([
       "「ナレッジベースの検索」を実行しました",
-      "ツール ext__other を呼びました",
+      "処理を実行しました",
     ]);
     const label = AGENT_CHAT_PROGRESS_STEPS.tool.label;
     expect(label("running", { tool: "rag__rag_search", title: "ナレッジベースの検索" })).toBe(
       "「ナレッジベースの検索」を実行しています"
     );
-    expect(label("failed", { tool: "rag__rag_search", title: " " })).toBe("ツール rag__rag_search を呼べませんでした");
+    expect(label("failed", { tool: "rag__rag_search", title: " " })).toBe("処理を実行できませんでした");
   });
 });
 
@@ -138,8 +138,8 @@ describe("チャットの処理の経過のツールの段の詳細", () => {
   it("同じツールの n 回目の段を n 回目の step に結び、引数と結果の JSON・エラーを詳細にする", () => {
     const progress = [
       { id: "plan", label: "進め方を決めました", status: "done" as const },
-      { id: "tool:rag__rag_search", label: "ツール rag__rag_search を呼びました", status: "done" as const },
-      { id: "tool:rag__rag_search#2", label: "ツール rag__rag_search を呼べませんでした", status: "failed" as const },
+      { id: "tool:rag__rag_search", label: "処理を実行しました", status: "done" as const },
+      { id: "tool:rag__rag_search#2", label: "処理を実行できませんでした", status: "failed" as const },
     ];
     const steps = [
       toolStep("s1", "rag__rag_search", {
@@ -170,7 +170,7 @@ describe("チャットの処理の経過のツールの段の詳細", () => {
   it("段の終わりのイベントの詳細は、結果をまだ持たない step で上書きしない", () => {
     const eventDetails = { fields: [{ label: "ツール", value: "rag__rag_search", mono: true }], lines: ["イベントの詳細"] };
     const progress = [
-      { id: "tool:rag__rag_search", label: "ツール rag__rag_search を呼びました", status: "done" as const, details: eventDetails },
+      { id: "tool:rag__rag_search", label: "処理を実行しました", status: "done" as const, details: eventDetails },
     ];
     const [kept] = withToolStepDetails(progress, [toolStep("s1", "rag__rag_search", { status: "running" })]);
     expect(kept.details).toEqual(eventDetails);

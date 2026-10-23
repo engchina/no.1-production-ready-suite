@@ -194,6 +194,7 @@ from app.features.agent.output_fields import (
     output_recorded,
     output_retried,
     record_output_tool,
+    without_output_record_sections,
 )
 from app.features.agent.run_claim import RunClaim
 from app.features.agent.section_coverage import (
@@ -1793,6 +1794,10 @@ class _ToolRecorder:
         """
         from app.features.agent.runtime import RunNotActiveError, runtime_repository
 
+        if definition is not None and definition.title:
+            runtime_repository.note_builtin_tool_titles(
+                self.run_id, {definition.name: definition.title}
+            )
         try:
             step_id, context = runtime_repository.start_builtin_tool_step(
                 self.run_id, call, cleanup=cleanup
@@ -2298,12 +2303,13 @@ def build_sdk_agent(
     )
     for warning in warnings:
         runtime_repository.note_builtin_warning(run_id, warning)
+    output_entries = [record_output_tool(run_id, output_fields)] if output_fields else []
     # ツールの表示名（MCP の `title`）は、画面の処理の段階の名前に使う（モデルには渡さない）。
     runtime_repository.note_builtin_tool_titles(
         run_id,
         {
             definition.name: definition.title
-            for definition, _handler in mcp_tools
+            for definition, _handler in [*mcp_tools, *output_entries]
             if definition.title
         },
     )
@@ -2323,7 +2329,7 @@ def build_sdk_agent(
             if attachments
             else None
         ),
-        output_entries=[record_output_tool(run_id, output_fields)] if output_fields else None,
+        output_entries=output_entries or None,
         caller_planned_connections=(
             agent_caller_planned_connections(skill_ids) if caller_planning else frozenset()
         ),
@@ -3776,6 +3782,8 @@ async def _finish(
     # 調べるのに使ったツール・プロファイル・内部の ID だけを述べる行は、資料の主張ではないので
     # 検証の前に外す（#2328。使ったツールと根拠は画面と MCP の sources が別に示す）。
     answer = without_lookup_notes(answer)
+    if output_recorded(runtime_repository.get_run(run_id).artifacts):
+        answer = without_output_record_sections(answer)
     # モデルの最終の回答（最終の検証で段落を外す前。対応を決めるのに使う。#1305）。
     model_answer = answer
     validation: dict[str, Any] | None = None

@@ -59,7 +59,7 @@ function seedRun(
   });
 }
 
-const TOOL_STEP = "ツール nl2sql__nl2sql_query を呼びました";
+const TOOL_STEP = "処理を実行しました";
 
 // #1874: 一覧の「種類」（きっかけ）に、外部の MCP クライアントの Run は「MCP（キーの名前）」を出す。
 test("一覧の種類で MCP の Run とキーの名前が分かる", { tag: "@responsive" }, async ({ page, mockApi }) => {
