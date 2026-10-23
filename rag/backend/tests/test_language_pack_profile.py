@@ -14,6 +14,7 @@ from app.rag.search_answer_profile_config import (
     SearchAnswerProfileConfig,
     resolve_search_answer_profile_settings,
 )
+from app.schemas.search import SearchRequest, SearchResponse
 
 
 def test_profile_accepts_only_search_and_answer_fields() -> None:
@@ -36,12 +37,13 @@ def test_profile_overrides_reach_settings_and_are_bound_during_the_request() -> 
     seen: list[tuple[str, ...]] = []
 
     class _Probe(pipeline_module.RagPipeline):
-        async def _run(self, *args: object, **kwargs: object) -> object:  # type: ignore[override]
+        async def _run(self, *args: object, **kwargs: object) -> SearchResponse:
             seen.append(current_pack().words("question_cues", "cause_cues"))
-            return None
+            return SearchResponse(answer="", trace_id="synthetic", elapsed_ms=0)
 
     probe = _Probe.__new__(_Probe)
     probe._settings = settings
-    asyncio.run(probe.run(object()))  # type: ignore[arg-type]
+    probe._run_recorder = None
+    asyncio.run(probe.run(SearchRequest(query="合成の質問")))
     assert seen == [("理屈",)]
     assert current_pack().words("question_cues", "cause_cues") != ("理屈",)

@@ -67,7 +67,7 @@ test("「中止」の要求中は、進行状況の帯のスピナーを止め�
   const build = read("../src/features/nl2sql/ontology/OntologyBuildSection.tsx");
 
   assert.match(strip, /active: active && activityIcon === "spinner"/u);
-  assert.match(operation, /activityIcon=\{cancelRequesting \? "none" : "spinner"\}/u);
+  assert.match(operation, /activityIndicator=\{!cancelRequesting\}/u);
   assert.match(operation, /loading=\{cancelRequesting\}/u);
   assert.match(build, /activityIcon=\{busy === "cancel" \? "none" : "spinner"\}/u);
   assert.match(build, /loading=\{busy === "cancel"\}/u);

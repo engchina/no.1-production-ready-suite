@@ -150,3 +150,23 @@ for (const theme of ["light", "dark"] as const) {
     await expect(turn).toBeVisible();
   });
 }
+
+// trace と進捗の開閉は、実際の会話の API と画面を通して確かめる。
+test("実測 trace の親子関係を会話で開ける", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  const { syntheticTraceSummary, captureTraceLayouts } = await import("../../../platform/packages/ui/e2e/trace-fixture");
+  const { run, progress } = seedRunningRun(mockApi);
+  complete(run, progress);
+  run.trace_summary = syntheticTraceSummary;
+  await page.goto("/chat");
+  await openThread(page);
+  await page.getByTestId("chat-progress-summary").click();
+  await page.getByTestId("trace-details-toggle").click();
+  const trace = page.getByTestId("trace-details");
+  await expect(trace).toContainText("synthetic.execute");
+  await expect(trace).toContainText("gen_ai.chat");
+  await expect(trace).toContainText("gen_ai.execute_tool");
+  await expect(trace).toContainText("2.0 秒");
+  await expect(page.locator("body")).not.toHaveText(/private-payload/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await captureTraceLayouts(page, testInfo, "agent-trace");
+});

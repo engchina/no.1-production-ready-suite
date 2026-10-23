@@ -30,7 +30,9 @@ import functools
 import json
 import logging
 import re
+import sys
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
+from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -54,12 +56,20 @@ from agents.run_config import CallModelData, ModelInputData, ToolErrorFormatterA
 from agents.tool_context import ToolContext
 from openai import DEFAULT_MAX_RETRIES, APIStatusError, AsyncOpenAI, BadRequestError
 from openai.types.shared import Reasoning, ReasoningEffort
+from opentelemetry import trace
 from pr_backend_core.chat_history import (
     CHAT_HISTORY_UNTRUSTED_NOTE,
     ChatHistoryBudget,
     build_chat_history,
 )
+from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.request_context import bind_log_context
+from pr_backend_core.observability.tracing import (
+    attach_trace_context,
+    finish_operation_trace,
+    observed_span,
+    operation_trace,
+)
 from pr_system_settings.enterprise_ai_errors import (
     EnterpriseAiIncomplete,
     enterprise_ai_incomplete_from_response,
@@ -576,12 +586,106 @@ def _raise_for_incomplete(
     )
 
 
+class _ObservedStream:
+    def __init__(self, inner: Any, span: Any) -> None:
+        self._inner, self._span = inner, span
+        self._exhausted = False
+
+    def __aiter__(self) -> Any:
+        return self
+
+    async def __anext__(self) -> Any:
+        try:
+            with trace.use_span(
+                self._span.span, record_exception=False, set_status_on_exception=False
+            ):
+                event = await self._inner.__anext__()
+            kind = getattr(event, "type", "")
+            if kind in {"response.completed", "response.incomplete", "response.failed"}:
+                self._exhausted = True
+                if kind != "response.completed":
+                    self._span.set_status("failed")
+                    self._span.set_attributes(
+                        {
+                            "error.type": "IncompleteResponse"
+                            if kind == "response.incomplete"
+                            else "ProviderResponseFailed"
+                        }
+                    )
+            response = getattr(event, "response", None)
+            self._span.set_attributes({"gen_ai.response.model": getattr(response, "model", None)})
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                record_genai_usage(
+                    self._span, usage.model_dump() if hasattr(usage, "model_dump") else usage
+                )
+            return event
+        except StopAsyncIteration:
+            self._exhausted = True
+            self._span.finish()
+            raise
+        except BaseException as exc:
+            self._span.set_attributes({"error.type": type(exc).__name__})
+            self._span.set_status(
+                "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
+            )
+            self._span.finish()
+            raise
+
+    async def close(self) -> None:
+        if not self._exhausted:
+            self._span.set_status("cancelled")
+        try:
+            await self._inner.close()
+        finally:
+            self._span.finish()
+
+    async def __aenter__(self) -> Any:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        await self.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+class _ObservedResponseManager:
+    def __init__(self, inner: Any, model: str) -> None:
+        self._inner = inner
+        self._scope = observed_span(
+            "gen_ai.chat",
+            kind="client",
+            attributes={
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": "oracle",
+                "gen_ai.request.model": model,
+            },
+        )
+
+    async def __aenter__(self) -> Any:
+        self._scope.__enter__()
+        try:
+            return await self._inner.__aenter__()
+        except BaseException:
+            self._scope.__exit__(*sys.exc_info())
+            raise
+
+    async def __aexit__(self, *args: Any) -> Any:
+        try:
+            return await self._inner.__aexit__(*args)
+        finally:
+            self._scope.__exit__(*args)
+
+
 class _OciStreamingResponses:
     def __init__(self, inner: Any) -> None:
         self._inner = inner
 
     def create(self, **kwargs: Any) -> Any:
-        return self._inner.create(**_oci_request(kwargs))
+        return _ObservedResponseManager(
+            self._inner.create(**_oci_request(kwargs)), str(kwargs.get("model") or "")
+        )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -606,9 +710,11 @@ class _OciResponses:
         lowered_effort = False
         transient_retried = False
         overflow_retried = False
+        send_attempt = 0
         while True:
             try:
-                response = await self._inner.create(**request)
+                send_attempt += 1
+                response = await self._send(request, send_attempt)
                 incomplete = (
                     None if request.get("stream") else _response_incomplete(response, request)
                 )
@@ -685,6 +791,33 @@ class _OciResponses:
                     "builtin_runtime_model_output_invalid_retry",
                     extra={"attempt": attempt, "max_retries": MODEL_OUTPUT_INVALID_RETRIES},
                 )
+
+    async def _send(self, request: dict[str, Any], attempt: int) -> Any:
+        with observed_span(
+            "gen_ai.chat",
+            kind="client",
+            finish_on_exit=False,
+            attributes={
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": "oracle",
+                "gen_ai.request.model": str(request.get("model") or ""),
+                "pr.attempt": attempt,
+            },
+        ) as span:
+            response = await self._inner.create(**request)
+            if request.get("stream"):
+                return _ObservedStream(response, span)
+            span.set_attributes({"gen_ai.response.model": getattr(response, "model", None)})
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                record_genai_usage(
+                    span, usage.model_dump() if hasattr(usage, "model_dump") else usage
+                )
+            if _response_incomplete(response, request) is not None:
+                span.set_attributes({"error.type": "IncompleteResponse"})
+                span.set_status("failed")
+            span.finish()
+            return response
 
     @property
     def with_streaming_response(self) -> _OciStreamingResponses:
@@ -1539,15 +1672,31 @@ class _ToolRecorder:
                 ensure_ascii=False,
             )
         # 4. handler（呼び先へ送る）。
-        result = await self.execute(
-            step_id,
-            call,
-            context,
-            definition=definition,
-            handler=handler,
-            scoped=scoped,
-            authorization=authorization,
-        )
+        with observed_span(
+            "gen_ai.execute_tool",
+            attributes={
+                "gen_ai.operation.name": "execute_tool",
+                "gen_ai.tool.name": name,
+                "gen_ai.tool.call.id": call_id,
+            },
+        ) as tool_span:
+            result = await self.execute(
+                step_id,
+                call,
+                context,
+                definition=definition,
+                handler=handler,
+                scoped=scoped,
+                authorization=authorization,
+            )
+            if not result.success:
+                tool_span.set_status(
+                    "cancelled"
+                    if result.error_code == RUN_CANCELLED_CODE
+                    or result.error_details.get("reason")
+                    in {call_abort.REASON_RUN_CANCELLED, call_abort.REASON_TASK_CANCELLED}
+                    else "failed"
+                )
         if result.success:
             output = result.output or {}
             base = mcp_base_tool_name(name)
@@ -2961,60 +3110,73 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
         if started is None:
             return
         run, agent = started
-        execution = run_claim.bind_execution(run.id, run.metadata)
-        # 公開中の版に固定したスキルで動く（#1855。下書きの Run・固定の無い古い版は今のスキル）。
-        pinned = use_pinned_skills(agent.pinned_skills)
-        result: Any = None
-        try:
-            task = _support_task_run(run, agent)
-            cancellations = await _apply_clarification_cancel(run, task.previous, agent.data_scopes)
-            sdk_agent = await asyncio.to_thread(
-                build_sdk_agent,
-                run_id,
-                name=agent.name,
-                instructions=agent.instructions,
-                skill_ids=agent.skill_ids,
-                model_id=agent.model_id,
-                agent_id=agent.id,
-                user_uuid=run.created_by_user_uuid,
-                budget=task.budget,
-                support_task=task.instructions,
-                goal=support_task_goal(run.goal, task.previous),
-                known_conditions=task.known_conditions(),
-                data_scopes=agent.data_scopes,
-                cancellations=cancellations,
-                confirmation=task.confirmation,
-                confirmation_response=task.response,
-                thread_id=run.thread_id,
-                output_fields=agent.output_fields,
-                caller_planning=agent.caller_planning_allowed,
-            )
-            result = await _run_sdk(run_id, sdk_agent, conversation_input(run_id, run.goal))
-            result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
-            result, refused = await _require_tool_grounding(
-                run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
-            )
-            if not refused:
-                _raise_on_grounding_failure(run.id, result)
-                result = await _require_hops(run, sdk_agent, result, agent.data_scopes, task=task)
-                result = await _require_output(
-                    run, sdk_agent, result, agent.data_scopes, agent.output_fields
+        with (
+            attach_trace_context(run.trace_context),
+            operation_trace("agent.execute", operation_id=run.id),
+        ):
+            execution = run_claim.bind_execution(run.id, run.metadata)
+            # 公開中の版に固定したスキルで動く（#1855）。
+            pinned = use_pinned_skills(agent.pinned_skills)
+            result: Any = None
+            try:
+                task = _support_task_run(run, agent)
+                cancellations = await _apply_clarification_cancel(
+                    run, task.previous, agent.data_scopes
                 )
-            _record_usage(run_id, result, agent.model_id)
-            await _finish(
-                run_id,
-                result,
-                task,
-                rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids, cancellations),
-                data_scopes=agent.data_scopes,
-                refusal=_refusal_text(agent, sdk_agent) if refused else None,
-            )
-        except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
-            _record_usage(run_id, getattr(exc, "run_data", None) or result, agent.model_id)
-            _record_failure(run_id, exc)
-        finally:
-            reset_pinned_skills(pinned)
-            run_claim.release_execution(execution)
+                sdk_agent = await asyncio.to_thread(
+                    build_sdk_agent,
+                    run_id,
+                    name=agent.name,
+                    instructions=agent.instructions,
+                    skill_ids=agent.skill_ids,
+                    model_id=agent.model_id,
+                    agent_id=agent.id,
+                    user_uuid=run.created_by_user_uuid,
+                    budget=task.budget,
+                    support_task=task.instructions,
+                    goal=support_task_goal(run.goal, task.previous),
+                    known_conditions=task.known_conditions(),
+                    data_scopes=agent.data_scopes,
+                    cancellations=cancellations,
+                    confirmation=task.confirmation,
+                    confirmation_response=task.response,
+                    thread_id=run.thread_id,
+                    output_fields=agent.output_fields,
+                    caller_planning=agent.caller_planning_allowed,
+                )
+                result = await _run_sdk(run_id, sdk_agent, conversation_input(run_id, run.goal))
+                result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
+                result, refused = await _require_tool_grounding(
+                    run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
+                )
+                if not refused:
+                    _raise_on_grounding_failure(run.id, result)
+                    result = await _require_hops(
+                        run, sdk_agent, result, agent.data_scopes, task=task
+                    )
+                    result = await _require_output(
+                        run, sdk_agent, result, agent.data_scopes, agent.output_fields
+                    )
+                _record_usage(run_id, result, agent.model_id)
+                await _finish(
+                    run_id,
+                    result,
+                    task,
+                    rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids, cancellations),
+                    data_scopes=agent.data_scopes,
+                    refusal=_refusal_text(agent, sdk_agent) if refused else None,
+                )
+            except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
+                _record_usage(run_id, getattr(exc, "run_data", None) or result, agent.model_id)
+                _record_failure(run_id, exc)
+            finally:
+                final_status: str | None = None
+                with suppress(KeyError):
+                    final_status = runtime_repository.get_run(run_id).status.value
+                if final_status == "cancelled":
+                    finish_operation_trace(run_id, status="cancelled")
+                reset_pinned_skills(pinned)
+                run_claim.release_execution(execution)
 
 
 async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
@@ -3031,86 +3193,97 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
         if resumed is None:
             return
         run, agent, state_text, decisions = resumed
-        execution = run_claim.bind_execution(run.id, run.metadata)
-        pinned = use_pinned_skills(agent.pinned_skills)
-        result: Any = None
-        try:
-            if decisions and not any(decisions.values()):
-                runtime_repository.complete_builtin_run(
+        with (
+            attach_trace_context(run.trace_context),
+            operation_trace("agent.resume", operation_id=run.id),
+        ):
+            execution = run_claim.bind_execution(run.id, run.metadata)
+            pinned = use_pinned_skills(agent.pinned_skills)
+            result: Any = None
+            try:
+                if decisions and not any(decisions.values()):
+                    runtime_repository.complete_builtin_run(
+                        run_id,
+                        "承認が却下されたため、対象の処理は実行していません。",
+                        outcome=tool_grounding.refusal_outcome(declined=True),
+                    )
+                    return
+                task = _support_task_run(run, agent)
+                # 取り消しは実行の始めに済んでいる（session も閉じた）。記録だけを使う。
+                cancellations = _run_cancellations(run)
+                sdk_agent = await asyncio.to_thread(
+                    build_sdk_agent,
                     run_id,
-                    "承認が却下されたため、対象の処理は実行していません。",
-                    outcome=tool_grounding.refusal_outcome(declined=True),
+                    name=agent.name,
+                    instructions=agent.instructions,
+                    skill_ids=agent.skill_ids,
+                    model_id=agent.model_id,
+                    agent_id=agent.id,
+                    user_uuid=run.created_by_user_uuid,
+                    budget=task.budget,
+                    support_task=task.instructions,
+                    goal=support_task_goal(run.goal, task.previous),
+                    known_conditions=task.known_conditions(),
+                    data_scopes=agent.data_scopes,
+                    cancellations=cancellations,
+                    confirmation=task.confirmation,
+                    confirmation_response=task.response,
+                    thread_id=run.thread_id,
+                    output_fields=agent.output_fields,
+                    caller_planning=agent.caller_planning_allowed,
                 )
-                return
-            task = _support_task_run(run, agent)
-            # 取り消しは実行の始めに済んでいる（session も閉じた）。記録だけを使う。
-            cancellations = _run_cancellations(run)
-            sdk_agent = await asyncio.to_thread(
-                build_sdk_agent,
-                run_id,
-                name=agent.name,
-                instructions=agent.instructions,
-                skill_ids=agent.skill_ids,
-                model_id=agent.model_id,
-                agent_id=agent.id,
-                user_uuid=run.created_by_user_uuid,
-                budget=task.budget,
-                support_task=task.instructions,
-                goal=support_task_goal(run.goal, task.previous),
-                known_conditions=task.known_conditions(),
-                data_scopes=agent.data_scopes,
-                cancellations=cancellations,
-                confirmation=task.confirmation,
-                confirmation_response=task.response,
-                thread_id=run.thread_id,
-                output_fields=agent.output_fields,
-                caller_planning=agent.caller_planning_allowed,
-            )
-            rejected = not all(decisions.values())
-            if rejected:
-                # 承認済みの同時呼出しだけを実行し、却下を再提案するモデルのターンを作らない。
-                sdk_agent.tool_use_behavior = "stop_on_first_tool"
-            state = await RunState.from_string(sdk_agent, state_text)
-            for item in state.get_interruptions():
-                call_id = str(getattr(item, "call_id", "") or "")
-                if decisions.get(call_id, False):
-                    state.approve(item)
-                else:
-                    state.reject(item)
-            result = await _run_sdk(run_id, sdk_agent, state)
-            if rejected:
+                rejected = not all(decisions.values())
+                if rejected:
+                    # 承認済みの同時呼出しだけを実行し、却下を再提案するモデルのターンを作らない。
+                    sdk_agent.tool_use_behavior = "stop_on_first_tool"
+                state = await RunState.from_string(sdk_agent, state_text)
+                for item in state.get_interruptions():
+                    call_id = str(getattr(item, "call_id", "") or "")
+                    if decisions.get(call_id, False):
+                        state.approve(item)
+                    else:
+                        state.reject(item)
+                result = await _run_sdk(run_id, sdk_agent, state)
+                if rejected:
+                    _record_usage(run_id, result, agent.model_id)
+                    runtime_repository.complete_builtin_run(
+                        run_id,
+                        "却下された処理は実行していません。承認された処理の結果は実行の経過で確認してください。",
+                        outcome=tool_grounding.refusal_outcome(declined=True),
+                    )
+                    return
+                result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
+                result, refused = await _require_tool_grounding(
+                    run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
+                )
+                if not refused:
+                    _raise_on_grounding_failure(run.id, result)
+                    result = await _require_hops(
+                        run, sdk_agent, result, agent.data_scopes, task=task
+                    )
+                    result = await _require_output(
+                        run, sdk_agent, result, agent.data_scopes, agent.output_fields
+                    )
                 _record_usage(run_id, result, agent.model_id)
-                runtime_repository.complete_builtin_run(
+                await _finish(
                     run_id,
-                    "却下された処理は実行していません。承認された処理の結果は実行の経過で確認してください。",
-                    outcome=tool_grounding.refusal_outcome(declined=True),
+                    result,
+                    task,
+                    rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids, cancellations),
+                    data_scopes=agent.data_scopes,
+                    refusal=_refusal_text(agent, sdk_agent) if refused else None,
                 )
-                return
-            result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
-            result, refused = await _require_tool_grounding(
-                run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
-            )
-            if not refused:
-                _raise_on_grounding_failure(run.id, result)
-                result = await _require_hops(run, sdk_agent, result, agent.data_scopes, task=task)
-                result = await _require_output(
-                    run, sdk_agent, result, agent.data_scopes, agent.output_fields
-                )
-            _record_usage(run_id, result, agent.model_id)
-            await _finish(
-                run_id,
-                result,
-                task,
-                rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids, cancellations),
-                data_scopes=agent.data_scopes,
-                refusal=_refusal_text(agent, sdk_agent) if refused else None,
-            )
-        except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
-            _record_usage(run_id, getattr(exc, "run_data", None) or result, agent.model_id)
-            _record_failure(run_id, exc)
-        finally:
-            reset_pinned_skills(pinned)
-            run_claim.release_execution(execution)
+            except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
+                _record_usage(run_id, getattr(exc, "run_data", None) or result, agent.model_id)
+                _record_failure(run_id, exc)
+            finally:
+                final_status: str | None = None
+                with suppress(KeyError):
+                    final_status = runtime_repository.get_run(run_id).status.value
+                if final_status == "cancelled":
+                    finish_operation_trace(run_id, status="cancelled")
+                reset_pinned_skills(pinned)
+                run_claim.release_execution(execution)
 
 
 def _run_cancellations(run: Any) -> list[dict[str, Any]]:

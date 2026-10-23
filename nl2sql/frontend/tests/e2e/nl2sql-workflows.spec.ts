@@ -497,6 +497,7 @@ async function expectOnlyNeutralConfirmationFieldInDialog(dialog: Locator) {
 type JsonValue = Record<string, unknown> | unknown[];
 
 interface MockApiState {
+  traceSummary?: unknown;
   previewPayload: Record<string, unknown> | null;
   executePayload: Record<string, unknown> | null;
   jobPayload: Record<string, unknown> | null;
@@ -2709,6 +2710,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     const engine = String(state.jobPayload?.engine ?? "select_ai");
     return fulfillJson(route, {
       job_id: "job-default-001",
+      trace_summary: state.traceSummary,
       status: "done",
       created_at: "2026-06-21T10:00:00.000Z",
       started_at: "2026-06-21T10:00:00.000Z",
@@ -4619,8 +4621,7 @@ test("query workbench generates SQL through the job flow and shows results", { t
   await generateAndExecuteButton.focus();
   await page.keyboard.press("Enter");
 
-  const generatedSqlStep = page.getByTestId("nl2sql-job-step-generate_sql");
-  await expect(generatedSqlStep).toContainText("SQL を生成");
+  const generatedSqlStep = page.getByTestId("nl2sql-generated-sql");
   await expect(generatedSqlStep.getByRole("code")).toContainText(
     "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
   );
@@ -5032,7 +5033,7 @@ for (const failure of [
     await expect(progress).toHaveAttribute("data-job-status", "error");
     await expect(progress).toContainText(failure.errorMessage);
     // 生成した SQL は確かめられる（フィードバックにも使える）が、実行していない結果の表は出さない。
-    await expect(page.getByTestId("nl2sql-job-step-generate_sql").getByRole("code")).toContainText(
+    await expect(page.getByTestId("nl2sql-generated-sql").getByRole("code")).toContainText(
       "SELECT TOTAL FROM INVOICES"
     );
     await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
@@ -6006,9 +6007,9 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
   try {
     await expect(progress).toBeVisible();
     await expect(progress).toHaveAttribute("data-job-status", "running");
-    await expect(prepare).toHaveAttribute("data-step-status", "done");
+    await expect(prepare).toHaveAttribute("data-status", "done");
     await expect(prepare).toContainText("質問と実行条件を準備");
-    await expect(generate).toHaveAttribute("data-step-status", "running");
+    await expect(generate).toHaveAttribute("data-status", "running");
     await expect(generate).toHaveAttribute("aria-current", "step");
     await expect(generate).toContainText("SQL を生成");
     await expect(progress.getByRole("timer")).toHaveAccessibleName(/経過時間 \d{2}:\d{2}/);
@@ -6020,7 +6021,7 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
     await expect(page.getByRole("button", { name: "SQL を生成して実行" })).not.toHaveAttribute("aria-busy", "true");
     // スピナーは reduced motion でも回転を止めない（#440）。
     expect(await runningIcon.evaluate((element) => getComputedStyle(element).animationName)).toBe("spin");
-    await expect(safetyStep).toHaveAttribute("data-step-status", "pending");
+    await expect(safetyStep).toHaveCount(0);
     expect(jobPayload).toMatchObject({
       // 用語・同義語を ON にしたため、job runner 側で一度だけ辞書適用する。
       question: questionText,
@@ -6036,27 +6037,29 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
   await expect(progress).toHaveAttribute("data-job-status", "done");
   for (const item of stageTimings) {
     const step = page.getByTestId(`nl2sql-job-step-${item.stage}`);
-    await expect(step).toHaveAttribute("data-step-status", "done");
-    await expect(step).toContainText(item.elapsed_ms < 1000 ? `${item.elapsed_ms}ms` : "");
+    await expect(step).toHaveAttribute("data-status", "done");
+    await expect(step).toContainText(item.elapsed_ms < 100 ? "0.1 秒未満" : "0.1 秒");
   }
-  await expect(progress.getByRole("timer")).toHaveAccessibleName("処理時間 00:00");
-  await prepare.locator("summary").click();
+  await page.getByTestId("nl2sql-job-summary").click();
+  await expect(page.getByTestId("nl2sql-job-summary")).toContainText("0.1 秒");
+  await prepare.getByRole("button").first().click();
   await expect(prepare).toContainText("今月の請求金額を確認したい");
   // 参照表・列は生成前の推測ではなく、生成 SQL を解析した safety step に表示する。
-  await safetyStep.locator("summary").click();
+  await safetyStep.getByRole("button").first().click();
   await expect(safetyStep).toContainText("INVOICES");
   await expect(safetyStep).toContainText("TOTAL_AMOUNT");
-  // 生成 SQL は「SQL を生成」ステップ内(自動展開)に一本化して表示する。
-  await expect(generate).toContainText("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
-  await expect(generate).toContainText("請求情報を取得します。");
-  await expect(generate.getByText("安全", { exact: true })).toBeVisible();
-  const copySql = generate.getByRole("button", { name: "コピー" });
+  // 生成 SQL は処理の経過を閉じても確認できる。
+  const generated = page.getByTestId("nl2sql-generated-sql");
+  await expect(generated).toContainText("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
+  await expect(generated).toContainText("請求情報を取得します。");
+  await expect(generated.getByText("安全", { exact: true })).toBeVisible();
+  const copySql = generated.getByRole("button", { name: "コピー" });
   await expect(copySql).toBeVisible();
-  await expectContentActionsRightAligned(generate.getByTestId("generated-sql-content-actions"));
+  await expectContentActionsRightAligned(generated.getByTestId("generated-sql-content-actions"));
   await copySql.click();
   // コピーの成功はボタンのアイコンの Check と読み上げ（共有の CopyButton。成功の Toast は出さない。#2099）。
   await expect(copySql).toHaveAttribute("data-copy-state", "copied");
-  await expect(generate.getByRole("status").filter({ hasText: "コピーしました" })).toHaveCount(1);
+  await expect(generated.getByRole("status").filter({ hasText: "コピーしました" })).toHaveCount(1);
   await expect(page.getByRole("region", { name: "通知" })).not.toContainText("コピーしました");
   await expect(copySql).toHaveAttribute("data-copy-state", "idle");
   await page.evaluate(() => {
@@ -6200,11 +6203,12 @@ test("結果整形が完了した job は SQL 実行ステップを処理中の�
   const formatStep = page.getByTestId("nl2sql-job-step-format_results");
 
   await expect(progress).toHaveAttribute("data-job-status", "done");
-  await expect(executeStep).toHaveAttribute("data-step-status", "done");
+  await page.getByTestId("nl2sql-job-summary").click();
+  await expect(executeStep).toHaveAttribute("data-status", "done");
   await expect(executeStep).not.toHaveAttribute("aria-current", "step");
   await expect(executeStep.locator("svg.animate-spin")).toHaveCount(0);
   await expect(executeStep).toContainText("完了");
-  await expect(formatStep).toHaveAttribute("data-step-status", "done");
+  await expect(formatStep).toHaveAttribute("data-status", "done");
   await expect(page.getByRole("heading", { name: "実行結果（0 行）" })).toBeVisible();
   // 0 行は要約だけ（表・すべての行・CSV は出さない。#1178）。
   await expect(page.getByTestId("query-results-summary")).toContainText("該当する行はありません");
@@ -6348,8 +6352,8 @@ test("SQL の生成と実行のジョブの失敗段階を示し、入力を保�
   await expect(progress).not.toHaveAttribute("role", "alert");
   await expect(progress.getByRole("alert")).toContainText("SQL 生成サービスに接続できませんでした。");
   await expect(page.getByTestId("nl2sql-job-step-generate_sql")).toHaveAttribute(
-    "data-step-status",
-    "error"
+    "data-status",
+    "failed"
   );
   await expect(progress).toContainText("SQL 生成サービスに接続できませんでした。");
   await expect(question).toHaveValue(questionText);
@@ -20039,16 +20043,17 @@ test("Select AI の SQL は安全性の確認の工程を「省略」と出す�
 
   const progress = page.getByTestId("nl2sql-job-progress");
   await expect(progress).toHaveAttribute("data-job-status", "done");
+  await page.getByTestId("nl2sql-job-summary").click();
   const safetyStep = page.getByTestId("nl2sql-job-step-safety_check");
-  await expect(safetyStep).toHaveAttribute("data-step-status", "skipped");
+  await expect(safetyStep).toHaveAttribute("data-status", "skipped");
   // 状態は色だけでなく「省略」の文字で示す（「未実行」ではない）。
-  await expect(safetyStep.locator("summary")).toContainText("省略");
-  await expect(safetyStep.locator("summary")).not.toContainText("未実行");
-  await safetyStep.locator("summary").click();
+  await expect(safetyStep).toContainText("スキップ");
+  await expect(safetyStep.getByRole("button").first()).not.toContainText("未実行");
+  await safetyStep.getByRole("button").first().click();
   await expect(safetyStep).toContainText("Select AI が生成した SELECT 文のため");
   await expect(safetyStep).toContainText("INVOICES");
   await expect(page.getByTestId("nl2sql-job-step-execute_sql")).toHaveAttribute(
-    "data-step-status",
+    "data-status",
     "done"
   );
   await expectNoHorizontalScroll(page);
@@ -20131,4 +20136,20 @@ test("新規テーブル取込は編集した型を再プレビューしてか�
   await execute.click();
   await expect.poll(() => api.importTabularPayload?.preview).toBe(false);
   expect(api.importTabularPayload?.column_types).toEqual({ ID: "VARCHAR2(1000 CHAR)" });
+});
+
+test("実測 trace の親子関係を SQL 生成で開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const { syntheticTraceSummary, captureTraceLayouts } = await import("../../../../platform/packages/ui/e2e/trace-fixture");
+  const api = await mockNl2SqlApi(page);
+  api.traceSummary = syntheticTraceSummary;
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill("合成データの件数");
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
+  await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "done");
+  await page.getByTestId("nl2sql-job-summary").click();
+  await page.getByTestId("trace-details-toggle").click();
+  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await captureTraceLayouts(page, testInfo, "sql-generate-trace");
 });

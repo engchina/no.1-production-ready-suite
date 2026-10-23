@@ -716,3 +716,22 @@ test("FAQ の提示対象が無いときは質問を止めず検索する", { ta
   await expect.poll(() => searched).toBe(true);
   await expect(page.getByText("類似する承認済み FAQ があります")).toHaveCount(0);
 });
+
+test("実測 trace の親子関係を RAG 検索で開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const { syntheticTraceSummary, captureTraceLayouts } = await import("../../../platform/packages/ui/e2e/trace-fixture");
+  await page.route("**/api/search/stream", route => fulfillStream(route, sse([
+    ["stage", { trace_id: "synthetic-a", stage: "field_filter", outcome: "started", elapsed_ms: 0, attributes: {} }],
+    ["stage", { trace_id: "synthetic-a", stage: "field_filter", outcome: "success", elapsed_ms: 2000, attributes: {} }],
+    ["metadata", { trace_id: "synthetic-a", elapsed_ms: 2000, guardrail_warnings: [], diagnostics: { trace_summary: syntheticTraceSummary, answer: { outcome: "answered" } } }],
+    ["delta", { text: "合成の回答です。" }], ["citations", []], ["done", { trace_id: "synthetic-a" }],
+  ])));
+  await page.goto("/search");
+  await selectSearchAnswerProfile(page, VIEWS[0].name);
+  await search(page, "合成データを確認");
+  await page.getByTestId("search-run-progress-summary").click();
+  await page.getByTestId("trace-details-toggle").click();
+  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
+  await expectNoPageOverflow(page);
+  await captureTraceLayouts(page, testInfo, "rag-search-trace");
+});

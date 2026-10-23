@@ -23,6 +23,7 @@ from uuid import uuid4
 import httpx
 from pr_backend_core.internal_http import http_client_options
 from pr_backend_core.observability.request_context import outbound_correlation_headers
+from pr_backend_core.observability.tracing import capture_trace_context, observed_span
 from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.auth.service_token import issue_service_token
 from pydantic import BaseModel, Field, PrivateAttr, ValidationError, model_validator
@@ -783,8 +784,23 @@ def _post_mcp_attempts(
         timeout = httpx.Timeout(remaining, connect=min(remaining, _MCP_CONNECT_TIMEOUT_SECONDS))
         retry_after: float | None = None
         try:
-            with httpx.Client(timeout=timeout, **http_client_options(url)) as client:
-                response = client.post(url, json=payload, headers=headers, **request_options)
+            with (
+                observed_span(
+                    "mcp.request",
+                    kind="client",
+                    attributes={
+                        "pr.attempt": attempt,
+                        "http.request.method": "POST",
+                    },
+                ),
+                httpx.Client(timeout=timeout, **http_client_options(url)) as client,
+            ):
+                response = client.post(
+                    url,
+                    json=payload,
+                    headers={**headers, **capture_trace_context()},
+                    **request_options,
+                )
                 response.raise_for_status()
                 response_headers = response.headers
                 if response.status_code == 202 or not response.content:

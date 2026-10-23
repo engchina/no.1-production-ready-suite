@@ -113,7 +113,7 @@ export function RunStepDetailsView({ details, labels: labelsInput, className, te
         <dl className="grid min-w-0 gap-x-3 gap-y-1 @md:grid-cols-[max-content_minmax(0,1fr)]">
           {fields.map((field, index) => (
             <div key={`${field.label}-${index}`} className="contents">
-              <dt className="text-fg-muted">{field.label}</dt>
+              <dt className="min-w-0 break-words text-fg-muted [overflow-wrap:anywhere]">{field.label}</dt>
               <dd
                 className={cn(
                   "min-w-0 whitespace-pre-wrap break-words text-fg [overflow-wrap:anywhere]",

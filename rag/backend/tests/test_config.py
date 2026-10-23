@@ -947,11 +947,11 @@ def test_trace_exporter_is_disabled_by_default_and_bounded() -> None:
     settings = Settings()
 
     assert settings.trace_export_http_endpoint == ""
-    assert settings.trace_export_timeout_seconds == 2.0
+    assert settings.trace_export_http_timeout_seconds == 2.0
     assert settings.trace_export_queue_size == 1024
 
     with pytest.raises(ValidationError):
-        Settings(trace_export_timeout_seconds=0)
+        Settings(trace_export_http_timeout_seconds=0)
     with pytest.raises(ValidationError):
         Settings(trace_export_queue_size=0)
 

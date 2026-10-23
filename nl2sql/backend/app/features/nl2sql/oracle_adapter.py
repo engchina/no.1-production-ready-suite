@@ -21,6 +21,7 @@ from typing import Any
 from uuid import uuid4
 
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause
+from pr_backend_core.observability.tracing import observed_span
 from pr_backend_core.oracle_dsn import dsn_without_tns_retry
 from pr_backend_core.oracle_pool import OraclePoolSize, SharedOraclePool
 from pr_backend_core.oracle_session import init_oracle_session
@@ -3880,48 +3881,56 @@ class OracleNl2SqlAdapter:
         profile は引数で渡し、session の profile（`DBMS_CLOUD_AI.SET_PROFILE`）は変えないため、
         アプリの接続の pool（`runtime_connection`。actor の種類ごとに別の pool）から借りる（#904）。
         """
-        connection = (
-            self.runtime_connection(call_timeout_seconds=call_timeout_seconds)
-            if call_timeout_seconds is not None
-            else self.runtime_connection()
-        )
-        with connection as conn, conn.cursor() as cursor:
-            # 生成結果の CLOB は行と一緒に文字列で受け取る（LOB の read の往復を無くす。#904）。
-            configure_clob_fetch_as_text(cursor)
-            binds: dict[str, str] = {
-                "prompt": question,
-                "profile_name": profile_name,
-                "action": action,
-            }
-            if attributes:
-                binds["attributes"] = json.dumps(attributes, ensure_ascii=False)
-                cursor.execute(
-                    """
-                    SELECT DBMS_CLOUD_AI.GENERATE(
-                        prompt => :prompt,
-                        profile_name => :profile_name,
-                        action => :action,
-                        attributes => :attributes
+        with observed_span(
+            "oracle.select_ai",
+            kind="client",
+            attributes={
+                "db.system.name": "oracle.db",
+                "db.operation.name": "SELECT_AI",
+            },
+        ):
+            connection = (
+                self.runtime_connection(call_timeout_seconds=call_timeout_seconds)
+                if call_timeout_seconds is not None
+                else self.runtime_connection()
+            )
+            with connection as conn, conn.cursor() as cursor:
+                # 生成結果の CLOB は行と一緒に文字列で受け取る（LOB の read の往復を無くす。#904）。
+                configure_clob_fetch_as_text(cursor)
+                binds: dict[str, str] = {
+                    "prompt": question,
+                    "profile_name": profile_name,
+                    "action": action,
+                }
+                if attributes:
+                    binds["attributes"] = json.dumps(attributes, ensure_ascii=False)
+                    cursor.execute(
+                        """
+                        SELECT DBMS_CLOUD_AI.GENERATE(
+                            prompt => :prompt,
+                            profile_name => :profile_name,
+                            action => :action,
+                            attributes => :attributes
+                        )
+                        FROM DUAL
+                        """,
+                        binds,
                     )
-                    FROM DUAL
-                    """,
-                    binds,
-                )
-            else:
-                cursor.execute(
-                    """
-                    SELECT DBMS_CLOUD_AI.GENERATE(
-                        prompt => :prompt,
-                        profile_name => :profile_name,
-                        action => :action
+                else:
+                    cursor.execute(
+                        """
+                        SELECT DBMS_CLOUD_AI.GENERATE(
+                            prompt => :prompt,
+                            profile_name => :profile_name,
+                            action => :action
+                        )
+                        FROM DUAL
+                        """,
+                        binds,
                     )
-                    FROM DUAL
-                    """,
-                    binds,
-                )
-            row = cursor.fetchone()
-            text = _coerce_text(row[0] if row else "")
-        return text
+                row = cursor.fetchone()
+                text = _coerce_text(row[0] if row else "")
+            return text
 
     def generate_select_ai_sql(
         self,
@@ -4199,57 +4208,65 @@ class OracleNl2SqlAdapter:
         指示を通らず、利用者が選んだ方式と違う結果になるため）。RUN_TEAM の引数は公式の文書の
         ``(team_name, user_prompt, params)`` で、conversation_id は ``params`` の JSON に入れる。
         """
-        active_conversation_id = (conversation_id or "").strip()
-        if not active_conversation_id:
-            active_conversation_id = self.create_agent_conversation(
-                call_timeout_seconds=call_timeout_seconds
-            )
-        params = json.dumps(
-            {"conversation_id": active_conversation_id},
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        connection = (
-            self.connection(call_timeout_seconds=call_timeout_seconds)
-            if call_timeout_seconds is not None
-            else self.connection()
-        )
-        with connection as conn, conn.cursor() as cursor:
-            try:
-                cursor.execute(
-                    """
-                    SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(
-                        team_name => :team_name,
-                        user_prompt => :user_prompt,
-                        params => :params
-                    )
-                    FROM DUAL
-                    """,
-                    {"team_name": team_name, "user_prompt": question, "params": params},
-                )
-                row = cursor.fetchone()
-                text = _coerce_text(row[0] if row else "")
-                return _extract_select_statement(text), active_conversation_id
-            except Exception as exc:
-                message = str(exc)
-                if not self._looks_like_agent_profile_loss(message):
-                    raise self._agent_runtime_error(exc) from exc
-        # team が参照する profile（AGENT$<team>）が消えたときだけ、tool を直接呼んで復旧する。
-        # conversation_id は "run_tool:<tool>" になり、service が engine_meta と warning に残す。
-        fallback_tool = tool_name or self._tool_name_from_team_name(team_name)
-        logger.warning(
-            "Select AI Agent team の profile が見つからないため RUN_TOOL に切り替えます。",
-            extra={
-                "event": "select_ai_agent_run_tool_fallback",
-                "team_name": team_name,
-                "tool_name": fallback_tool,
+        with observed_span(
+            "oracle.select_ai",
+            kind="client",
+            attributes={
+                "db.system.name": "oracle.db",
+                "db.operation.name": "SELECT_AI",
             },
-        )
-        return self.run_select_ai_agent_tool(
-            tool_name=fallback_tool,
-            question=question,
-            call_timeout_seconds=call_timeout_seconds,
-        )
+        ):
+            active_conversation_id = (conversation_id or "").strip()
+            if not active_conversation_id:
+                active_conversation_id = self.create_agent_conversation(
+                    call_timeout_seconds=call_timeout_seconds
+                )
+            params = json.dumps(
+                {"conversation_id": active_conversation_id},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            connection = (
+                self.connection(call_timeout_seconds=call_timeout_seconds)
+                if call_timeout_seconds is not None
+                else self.connection()
+            )
+            with connection as conn, conn.cursor() as cursor:
+                try:
+                    cursor.execute(
+                        """
+                        SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(
+                            team_name => :team_name,
+                            user_prompt => :user_prompt,
+                            params => :params
+                        )
+                        FROM DUAL
+                        """,
+                        {"team_name": team_name, "user_prompt": question, "params": params},
+                    )
+                    row = cursor.fetchone()
+                    text = _coerce_text(row[0] if row else "")
+                    return _extract_select_statement(text), active_conversation_id
+                except Exception as exc:
+                    message = str(exc)
+                    if not self._looks_like_agent_profile_loss(message):
+                        raise self._agent_runtime_error(exc) from exc
+            # team が参照する profile（AGENT$<team>）が消えたときだけ、tool を直接呼んで復旧する。
+            # conversation_id は直接実行の名前になり、service が復旧を記録する。
+            fallback_tool = tool_name or self._tool_name_from_team_name(team_name)
+            logger.warning(
+                "Select AI Agent team の profile が見つからないため RUN_TOOL に切り替えます。",
+                extra={
+                    "event": "select_ai_agent_run_tool_fallback",
+                    "team_name": team_name,
+                    "tool_name": fallback_tool,
+                },
+            )
+            return self.run_select_ai_agent_tool(
+                tool_name=fallback_tool,
+                question=question,
+                call_timeout_seconds=call_timeout_seconds,
+            )
 
     def run_select_ai_agent_tool(
         self,
@@ -4258,32 +4275,40 @@ class OracleNl2SqlAdapter:
         question: str,
         call_timeout_seconds: float | None = None,
     ) -> tuple[str, str]:
-        payload = json.dumps(
-            {"TOOL_NAME": tool_name, "QUERY": question, "ACTION": "SHOWSQL"},
-            ensure_ascii=False,
-        )
-        connection = (
-            self.connection(call_timeout_seconds=call_timeout_seconds)
-            if call_timeout_seconds is not None
-            else self.connection()
-        )
-        with connection as conn, conn.cursor() as cursor:
-            try:
-                cursor.execute(
-                    """
-                    SELECT DBMS_CLOUD_AI_AGENT.RUN_TOOL(
-                        tool_name => :tool_name,
-                        input => :input
+        with observed_span(
+            "oracle.select_ai",
+            kind="client",
+            attributes={
+                "db.system.name": "oracle.db",
+                "db.operation.name": "SELECT_AI",
+            },
+        ):
+            payload = json.dumps(
+                {"TOOL_NAME": tool_name, "QUERY": question, "ACTION": "SHOWSQL"},
+                ensure_ascii=False,
+            )
+            connection = (
+                self.connection(call_timeout_seconds=call_timeout_seconds)
+                if call_timeout_seconds is not None
+                else self.connection()
+            )
+            with connection as conn, conn.cursor() as cursor:
+                try:
+                    cursor.execute(
+                        """
+                        SELECT DBMS_CLOUD_AI_AGENT.RUN_TOOL(
+                            tool_name => :tool_name,
+                            input => :input
+                        )
+                        FROM DUAL
+                        """,
+                        {"tool_name": tool_name, "input": payload},
                     )
-                    FROM DUAL
-                    """,
-                    {"tool_name": tool_name, "input": payload},
-                )
-            except Exception as exc:
-                raise self._agent_runtime_error(exc) from exc
-            row = cursor.fetchone()
-            text = _coerce_text(row[0] if row else "")
-        return _extract_select_statement(text), f"run_tool:{tool_name}"
+                except Exception as exc:
+                    raise self._agent_runtime_error(exc) from exc
+                row = cursor.fetchone()
+                text = _coerce_text(row[0] if row else "")
+            return _extract_select_statement(text), f"run_tool:{tool_name}"
 
     def create_agent_conversation(self, *, call_timeout_seconds: float | None = None) -> str:
         """Select AI Agent の会話の id を ``DBMS_CLOUD_AI.CREATE_CONVERSATION`` で作る（#1681）。

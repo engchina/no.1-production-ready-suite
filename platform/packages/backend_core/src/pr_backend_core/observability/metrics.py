@@ -19,6 +19,7 @@ from .request_context import (
     traceparent_var,
     validated_traceparent,
 )
+from .tracing import ObservedSpan, attach_trace_context, capture_trace_context, observed_span
 
 logger = logging.getLogger("pr_backend_core.http")
 
@@ -49,7 +50,7 @@ def _route_path(request: Request) -> str:
     """label cardinality を抑えるため route template を返す。"""
     route = request.scope.get("route")
     path = getattr(route, "path", None)
-    return path if isinstance(path, str) else request.url.path
+    return path if isinstance(path, str) else "/unmatched"
 
 
 class HttpRecorder(Protocol):
@@ -71,6 +72,23 @@ class MetricsMiddleware:
         self.record_request = record_request
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        with (
+            attach_trace_context({"traceparent": headers.get("traceparent", "")}),
+            observed_span(
+                "http.request",
+                kind="server",
+                attributes={"http.request.method": scope.get("method", "GET")},
+            ) as span,
+        ):
+            await self._call_with_context(scope, receive, send, span)
+
+    async def _call_with_context(
+        self, scope: Scope, receive: Receive, send: Send, span: ObservedSpan
+    ) -> None:
         if scope["type"] not in {"http", "websocket"}:
             await self.app(scope, receive, send)
             return
@@ -97,7 +115,11 @@ class MetricsMiddleware:
             if message["type"] == "http.response.start":
                 status = message["status"]
                 headers_ms = (perf_counter() - started) * 1000
-                MutableHeaders(scope=message)["X-Request-ID"] = request_id
+                response_headers = MutableHeaders(scope=message)
+                response_headers["X-Request-ID"] = request_id
+                parent = capture_trace_context().get("traceparent")
+                if parent:
+                    response_headers["traceparent"] = parent
             if message["type"] == "http.response.body" and not message.get("more_body", False):
                 outcome = "success" if status < 400 else "error"
             await send(message)
@@ -118,6 +140,15 @@ class MetricsMiddleware:
                     route = getattr(scope.get("route"), "path", None)
                     # 未解決 URL の値は利用者入力。route template がなければ原文を出さない。
                     path = route if isinstance(route, str) else "/unmatched"
+                    span.set_attributes(
+                        {
+                            "http.route": path,
+                            "http.response.status_code": status,
+                            "pr.operation.status": outcome,
+                        }
+                    )
+                    if status >= 500 and outcome != "cancelled":
+                        span.set_status("failed")
                     if self.enable_metrics:
                         self.record_request(
                             method=request.method, path=path, status=status, seconds=elapsed

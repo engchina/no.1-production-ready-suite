@@ -17,6 +17,7 @@ from numbers import Real
 from typing import Any, Literal, Protocol
 
 from pr_backend_core.bounded_calls import KIND_LABELS, Attempt, BoundedCallFailed, ErrorKind
+from pr_backend_core.observability.tracing import observed_span
 
 from app.clients.ai_calls import embedding_rejection_reason, ingestion_ai_calls
 from app.clients.oci_auth import load_oci_config_without_prompt
@@ -264,7 +265,16 @@ class OciGenAiClient:
             input_type=input_type,
             output_dimensions=self._settings.oci_genai_embedding_dim,
         )
-        response = await self._sdk_call_runner(lambda: self._client().embed_text(details))
+        with observed_span(
+            "gen_ai.embeddings",
+            kind="client",
+            attributes={
+                "gen_ai.operation.name": "embeddings",
+                "gen_ai.provider.name": "oracle",
+                "gen_ai.request.model": self._settings.oci_genai_embedding_model,
+            },
+        ):
+            response = await self._sdk_call_runner(lambda: self._client().embed_text(details))
         embeddings = getattr(response.data, "embeddings", None)
         if not isinstance(embeddings, list):
             raise ValueError("OCI embedding response に embeddings がありません。")
@@ -282,7 +292,16 @@ class OciGenAiClient:
             compartment_id=self._settings.oci_compartment_id,
             top_n=top_n,
         )
-        response = await self._sdk_call_runner(lambda: self._client().rerank_text(details))
+        with observed_span(
+            "gen_ai.rerank",
+            kind="client",
+            attributes={
+                "gen_ai.operation.name": "rerank",
+                "gen_ai.provider.name": "oracle",
+                "gen_ai.request.model": self._settings.oci_genai_rerank_model,
+            },
+        ):
+            response = await self._sdk_call_runner(lambda: self._client().rerank_text(details))
         document_ranks = getattr(response.data, "document_ranks", None)
         if not isinstance(document_ranks, list):
             raise ValueError("OCI rerank response に document_ranks がありません。")

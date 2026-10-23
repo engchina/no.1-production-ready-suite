@@ -6,21 +6,18 @@ Secret 設定の有無を状態として露出する。SDK exporter は本番接
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
 from datetime import UTC, datetime, timedelta
-from functools import partial
 from hashlib import sha256
-from threading import Lock
+from threading import Event, Lock, Thread
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
 import httpx
 from pr_backend_core.internal_http import http_client_options
+from pr_backend_core.observability.tracing import current_span_fields
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     Counter,
@@ -38,8 +35,14 @@ TRACE_EXPORT_STATUS_LOCK = Lock()
 TRACE_POLICY_LOCK = Lock()
 TRACE_EXPORT_RETRY_QUEUE: deque[TraceExportRetryItem] = deque()
 TRACE_EXPORT_RETRY_QUEUE_LOCK = Lock()
-TRACE_EXPORT_RETRY_WORKER_TASK: asyncio.Task[None] | None = None
-TRACE_EXPORT_RETRY_WORKER_EXECUTOR: ThreadPoolExecutor | None = None
+TRACE_EXPORT_RETRY_WORKER: Thread | None = None
+TRACE_EXPORT_RETRY_STOP: Event | None = None
+
+TRACE_DELIVERIES = Counter(
+    "agent_trace_deliveries_total",
+    "Trace event delivery outcomes.",
+    ("outcome",),
+)
 
 HTTP_REQUESTS = Counter(
     "agent_http_requests_total",
@@ -147,6 +150,8 @@ class TraceEvent(BaseModel):
     trace_id: str | None = None
     attributes: JsonObject
     created_at: datetime
+    telemetry_trace_id: str | None = None
+    telemetry_span_id: str | None = None
     sampled: bool = True
 
 
@@ -199,7 +204,7 @@ def request_path_label(request: Request) -> str:
     path = getattr(route, "path", None)
     if isinstance(path, str):
         return path
-    return request.url.path
+    return "/unmatched"
 
 
 def observe_http_request(method: str, path: str, status_code: int, duration_seconds: float) -> None:
@@ -298,50 +303,38 @@ def reset_trace_policy_overrides() -> None:
 
 
 async def start_trace_export_retry_worker() -> None:
-    """到期済み exporter retry event をバックグラウンドで再送する。"""
-
-    global TRACE_EXPORT_RETRY_WORKER_EXECUTOR, TRACE_EXPORT_RETRY_WORKER_TASK
-
-    from app.settings import get_settings
-
-    if not get_settings().agent_trace_exporter_retry_worker_enabled:
+    """初回の送信も再送も daemon worker に任せ、アプリの lock から通信しない。"""
+    global TRACE_EXPORT_RETRY_WORKER, TRACE_EXPORT_RETRY_STOP
+    if TRACE_EXPORT_RETRY_WORKER is not None and TRACE_EXPORT_RETRY_WORKER.is_alive():
         return
-    if TRACE_EXPORT_RETRY_WORKER_TASK is not None and not TRACE_EXPORT_RETRY_WORKER_TASK.done():
-        return
-    if TRACE_EXPORT_RETRY_WORKER_EXECUTOR is None:
-        TRACE_EXPORT_RETRY_WORKER_EXECUTOR = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="agent-trace-export-retry",
-        )
-    TRACE_EXPORT_RETRY_WORKER_TASK = asyncio.create_task(
-        _trace_export_retry_worker_loop(),
-        name="agent-trace-export-retry-worker",
+    stop = Event()
+    TRACE_EXPORT_RETRY_STOP = stop
+    TRACE_EXPORT_RETRY_WORKER = Thread(
+        target=_trace_export_retry_worker_loop,
+        args=(stop,),
+        name="agent-trace-event-delivery",
+        daemon=True,
     )
+    TRACE_EXPORT_RETRY_WORKER.start()
 
 
 async def stop_trace_export_retry_worker() -> None:
-    """起動済み exporter retry worker を停止する。"""
+    """停止の待ちに上限を設ける。通信が止まってもプロセスの終了を妨げない。"""
+    global TRACE_EXPORT_RETRY_WORKER, TRACE_EXPORT_RETRY_STOP
+    worker, TRACE_EXPORT_RETRY_WORKER = TRACE_EXPORT_RETRY_WORKER, None
+    stop, TRACE_EXPORT_RETRY_STOP = TRACE_EXPORT_RETRY_STOP, None
+    if stop is not None:
+        stop.set()
+    if worker is not None:
+        from app.settings import get_settings
 
-    global TRACE_EXPORT_RETRY_WORKER_EXECUTOR, TRACE_EXPORT_RETRY_WORKER_TASK
-
-    task = TRACE_EXPORT_RETRY_WORKER_TASK
-    executor = TRACE_EXPORT_RETRY_WORKER_EXECUTOR
-    TRACE_EXPORT_RETRY_WORKER_TASK = None
-    TRACE_EXPORT_RETRY_WORKER_EXECUTOR = None
-    if task is None:
-        if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=True)
-        return
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task
-    if executor is not None:
-        executor.shutdown(wait=True, cancel_futures=True)
+        worker.join(timeout=get_settings().trace_shutdown_timeout_seconds)
+        if worker.is_alive():
+            _mark_trace_export_error("shutdown_deadline_exceeded")
 
 
 def trace_export_retry_worker_running() -> bool:
-    task = TRACE_EXPORT_RETRY_WORKER_TASK
-    return task is not None and not task.done()
+    return TRACE_EXPORT_RETRY_WORKER is not None and TRACE_EXPORT_RETRY_WORKER.is_alive()
 
 
 def trace_exporter_status() -> TraceExporterStatus:
@@ -378,9 +371,12 @@ def _append_trace_event(event_type: str, payload: JsonObject) -> None:
     policy = get_trace_policy()
     if not policy.trace_events_enabled:
         return
+    current = current_span_fields()
     event = TraceEvent(
         id=f"trace_event_{uuid4().hex}",
         event_type=event_type,
+        telemetry_trace_id=current.get("trace_id"),
+        telemetry_span_id=current.get("span_id"),
         run_id=_payload_text_or_none(payload, "run_id"),
         step_id=_payload_text_or_none(payload, "step_id"),
         tool_name=_payload_text_or_none(payload, "tool_name"),
@@ -393,7 +389,8 @@ def _append_trace_event(event_type: str, payload: JsonObject) -> None:
     with TRACE_EVENTS_LOCK:
         TRACE_EVENTS.append(event)
         _prune_trace_events_locked(event.created_at, policy)
-    _export_trace_event(event)
+    if trace_exporter_status().configured:
+        _enqueue_trace_export_retry(event, "", initial=True)
 
 
 def _prune_trace_events_locked(now: datetime, policy: TracePolicySettings) -> None:
@@ -408,8 +405,6 @@ def _prune_trace_events_locked(now: datetime, policy: TracePolicySettings) -> No
 
 
 def _should_sample_trace_event(event: TraceEvent, sample_rate: float) -> bool:
-    if _is_trace_priority_event(event):
-        return True
     bounded_rate = min(1.0, max(0.0, sample_rate))
     if bounded_rate >= 1.0:
         return True
@@ -460,46 +455,44 @@ def flush_trace_export_retry_queue(
             data.skipped += 1
             continue
         data.attempted += 1
-        errors, exported = _export_trace_event_once(item.event)
+        sinks = {error.split(":", 1)[0] for error in item.last_error.split(";") if error}
+        errors, exported = _export_trace_event_once(item.event, sinks=sinks or None)
         if errors:
             item.attempts += 1
             item.last_error = ";".join(errors)
-            if item.attempts >= max_attempts:
+            _mark_trace_export_error(item.last_error)
+            if (
+                item.attempts >= max_attempts
+                or not settings.agent_trace_exporter_retry_worker_enabled
+            ):
                 data.dropped += 1
+                TRACE_DELIVERIES.labels(outcome="exhausted").inc()
                 _mark_trace_export_error(item.last_error)
             else:
                 item.next_retry_at = _next_trace_retry_at(item.attempts)
                 _requeue_trace_export_retry(item)
                 data.requeued += 1
+                TRACE_DELIVERIES.labels(outcome="retried").inc()
         elif exported:
             data.succeeded += 1
+            TRACE_DELIVERIES.labels(outcome="delivered").inc()
             _mark_trace_export_success()
     with TRACE_EXPORT_RETRY_QUEUE_LOCK:
         data.queue_size = len(TRACE_EXPORT_RETRY_QUEUE)
     return data
 
 
-async def _trace_export_retry_worker_loop() -> None:
+def _trace_export_retry_worker_loop(stop: Event) -> None:
     while True:
         try:
-            with TRACE_EXPORT_RETRY_QUEUE_LOCK:
-                has_retry_items = bool(TRACE_EXPORT_RETRY_QUEUE)
-            if has_retry_items:
-                flush_due_items = partial(
-                    flush_trace_export_retry_queue,
-                    limit=_trace_retry_worker_batch_size(),
-                    force=False,
-                )
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(
-                    TRACE_EXPORT_RETRY_WORKER_EXECUTOR,
-                    flush_due_items,
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - worker 失敗は runtime を止めない
-            _mark_trace_export_error(f"retry_worker:{_safe_trace_export_error(exc)}")
-        await asyncio.sleep(_trace_retry_worker_interval_seconds())
+            flush_trace_export_retry_queue(
+                limit=_trace_retry_worker_batch_size(), force=stop.is_set()
+            )
+        except Exception as exc:  # noqa: BLE001 - 観測の失敗は実行を止めない
+            _mark_trace_export_error(type(exc).__name__)
+        if stop.is_set():
+            return
+        stop.wait(_trace_retry_worker_interval_seconds())
 
 
 def clear_trace_export_retry_queue() -> None:
@@ -507,7 +500,9 @@ def clear_trace_export_retry_queue() -> None:
         TRACE_EXPORT_RETRY_QUEUE.clear()
 
 
-def _export_trace_event_once(event: TraceEvent) -> tuple[list[str], bool]:
+def _export_trace_event_once(
+    event: TraceEvent, *, sinks: set[str] | None = None
+) -> tuple[list[str], bool]:
     from app.settings import get_settings
 
     settings = get_settings()
@@ -519,19 +514,19 @@ def _export_trace_event_once(event: TraceEvent) -> tuple[list[str], bool]:
         return [], False
     errors: list[str] = []
     exported = False
-    if settings.agent_trace_exporter_url:
+    if settings.agent_trace_exporter_url and (sinks is None or "webhook" in sinks):
         try:
             _export_trace_event_webhook(event)
             exported = True
         except Exception as exc:  # noqa: BLE001 - exporter は runtime を止めない
             errors.append(f"webhook:{_safe_trace_export_error(exc)}")
-    if settings.agent_opentelemetry_endpoint:
+    if settings.agent_opentelemetry_endpoint and (sinks is None or "otlp" in sinks):
         try:
             _export_trace_event_otlp(event)
             exported = True
         except Exception as exc:  # noqa: BLE001 - exporter は runtime を止めない
             errors.append(f"otlp:{_safe_trace_export_error(exc)}")
-    if _langfuse_configured(settings):
+    if _langfuse_configured(settings) and (sinks is None or "langfuse" in sinks):
         try:
             _export_trace_event_langfuse(event)
             exported = True
@@ -540,7 +535,9 @@ def _export_trace_event_once(event: TraceEvent) -> tuple[list[str], bool]:
     return errors, exported
 
 
-def _enqueue_trace_export_retry(event: TraceEvent, last_error: str) -> None:
+def _enqueue_trace_export_retry(
+    event: TraceEvent, last_error: str, *, initial: bool = False
+) -> None:
     from app.settings import get_settings
 
     settings = get_settings()
@@ -549,15 +546,16 @@ def _enqueue_trace_export_retry(event: TraceEvent, last_error: str) -> None:
         return
     item = TraceExportRetryItem(
         event=event,
-        attempts=1,
+        attempts=0 if initial else 1,
         last_error=last_error,
         queued_at=datetime.now(UTC),
-        next_retry_at=_next_trace_retry_at(1),
+        next_retry_at=datetime.now(UTC) if initial else _next_trace_retry_at(1),
     )
     with TRACE_EXPORT_RETRY_QUEUE_LOCK:
         TRACE_EXPORT_RETRY_QUEUE.append(item)
         while len(TRACE_EXPORT_RETRY_QUEUE) > max_size:
             TRACE_EXPORT_RETRY_QUEUE.popleft()
+            TRACE_DELIVERIES.labels(outcome="dropped").inc()
 
 
 def _requeue_trace_export_retry(item: TraceExportRetryItem) -> None:
@@ -571,6 +569,7 @@ def _requeue_trace_export_retry(item: TraceExportRetryItem) -> None:
         TRACE_EXPORT_RETRY_QUEUE.append(item)
         while len(TRACE_EXPORT_RETRY_QUEUE) > max_size:
             TRACE_EXPORT_RETRY_QUEUE.popleft()
+            TRACE_DELIVERIES.labels(outcome="dropped").inc()
 
 
 def _next_trace_retry_at(attempts: int) -> datetime:
@@ -626,14 +625,14 @@ def _export_trace_event_otlp(event: TraceEvent) -> None:
     settings = get_settings()
     if settings.agent_opentelemetry_endpoint is None:
         return
-    endpoint = _otlp_traces_endpoint(settings.agent_opentelemetry_endpoint)
+    endpoint = _otlp_logs_endpoint(settings.agent_opentelemetry_endpoint)
     with httpx.Client(
         timeout=settings.agent_trace_exporter_timeout_seconds,
         **http_client_options(endpoint),
     ) as client:
         response = client.post(
             endpoint,
-            json=_otlp_trace_payload(event, service_name=settings.service_name),
+            json=_otlp_event_payload(event, service_name=settings.service_name),
             headers={"Content-Type": "application/json"},
         )
         response.raise_for_status()
@@ -660,11 +659,16 @@ def _export_trace_event_langfuse(event: TraceEvent) -> None:
         "trace_id": event.trace_id,
         **event.attributes,
     }
-    with client.start_as_current_observation(
-        as_type="span",
+    client.create_event(
         name=f"agent.{event.event_type}",
-    ) as span:
-        span.update(metadata={key: value for key, value in metadata.items() if value is not None})
+        trace_context={
+            "trace_id": event.telemetry_trace_id,
+            "parent_span_id": event.telemetry_span_id,
+        }
+        if event.telemetry_trace_id and event.telemetry_span_id
+        else None,
+        metadata={key: value for key, value in metadata.items() if value is not None},
+    )
     flush = getattr(client, "flush", None)
     if callable(flush):
         flush()
@@ -678,41 +682,31 @@ def _langfuse_configured(settings: Any) -> bool:
     )
 
 
-def _otlp_traces_endpoint(endpoint: str) -> str:
+def _otlp_logs_endpoint(endpoint: str) -> str:
     normalized = endpoint.rstrip("/")
     if normalized.endswith("/v1/traces"):
-        return normalized
-    return f"{normalized}/v1/traces"
+        normalized = normalized.removesuffix("/v1/traces")
+    return normalized if normalized.endswith("/v1/logs") else f"{normalized}/v1/logs"
 
 
-def _otlp_trace_payload(event: TraceEvent, *, service_name: str) -> JsonObject:
-    end_unix_nano = _datetime_to_unix_nano(event.created_at)
-    start_unix_nano = end_unix_nano - _duration_attribute_to_nanos(
-        event.attributes.get("duration_ms")
-    )
+def _otlp_event_payload(event: TraceEvent, *, service_name: str) -> JsonObject:
+    # 終了イベントは時点の log。推測した開始時刻や span ID は作らない。
+    record: JsonObject = {
+        "timeUnixNano": str(_datetime_to_unix_nano(event.created_at)),
+        "body": {"stringValue": f"agent.{event.event_type}"},
+        "severityNumber": 17 if event.event_type.endswith(".failed") else 9,
+        "attributes": _otlp_trace_attributes(event),
+    }
+    if event.telemetry_trace_id and event.telemetry_span_id:
+        record.update(traceId=event.telemetry_trace_id, spanId=event.telemetry_span_id)
     return {
-        "resourceSpans": [
+        "resourceLogs": [
             {
-                "resource": {
-                    "attributes": [
-                        _otlp_attribute("service.name", service_name),
-                    ]
-                },
-                "scopeSpans": [
+                "resource": {"attributes": [_otlp_attribute("service.name", service_name)]},
+                "scopeLogs": [
                     {
                         "scope": {"name": "production-ready-agent.agent-runtime"},
-                        "spans": [
-                            {
-                                "traceId": _otlp_trace_id(event),
-                                "spanId": _otlp_span_id(event),
-                                "name": f"agent.{event.event_type}",
-                                "kind": "SPAN_KIND_INTERNAL",
-                                "startTimeUnixNano": str(start_unix_nano),
-                                "endTimeUnixNano": str(end_unix_nano),
-                                "attributes": _otlp_trace_attributes(event),
-                                "status": _otlp_status(event),
-                            }
-                        ],
+                        "logRecords": [record],
                     }
                 ],
             }
@@ -755,34 +749,8 @@ def _otlp_any_value(value: Any) -> JsonObject:
     return {"stringValue": json.dumps(value, ensure_ascii=False, sort_keys=True)}
 
 
-def _otlp_trace_id(event: TraceEvent) -> str:
-    source = event.trace_id or event.run_id or event.id
-    normalized = source.lower()
-    if len(normalized) == 32 and all(char in "0123456789abcdef" for char in normalized):
-        return normalized
-    return sha256(source.encode("utf-8")).hexdigest()[:32]
-
-
-def _otlp_span_id(event: TraceEvent) -> str:
-    return sha256(event.id.encode("utf-8")).hexdigest()[:16]
-
-
 def _datetime_to_unix_nano(value: datetime) -> int:
     return int(value.timestamp() * 1_000_000_000)
-
-
-def _duration_attribute_to_nanos(value: Any) -> int:
-    if isinstance(value, bool):
-        return 0
-    if isinstance(value, int | float):
-        return max(0, int(value * 1_000_000))
-    return 0
-
-
-def _otlp_status(event: TraceEvent) -> JsonObject:
-    if event.event_type.endswith(".failed") or event.attributes.get("error_code"):
-        return {"code": "STATUS_CODE_ERROR"}
-    return {"code": "STATUS_CODE_OK"}
 
 
 def _trace_export_headers(api_key: str | None) -> dict[str, str]:

@@ -2437,3 +2437,27 @@ for (const compare of [false, true]) {
     await page.screenshot({ path: testInfo.outputPath(`expanded-process-${compare ? "compare" : "single"}.png`), fullPage: true });
   });
 }
+
+test("実測 trace の親子関係を RAG チャットで開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const { syntheticTraceSummary, captureTraceLayouts } = await import("../../../platform/packages/ui/e2e/trace-fixture");
+  const { savedChatProgress } = await import("./_chat-progress");
+  const progress = savedChatProgress("a1", { rewrite_query: "done", retrieve: "done", rerank: "done", generate_answer: "done", check_guardrail: "done" }, { terminal: "done" });
+  const streamBody = [
+    sseStart,
+    ...progress.map(event => `event: chat_progress\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", event })}\n\n`),
+    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "合成の回答です。" })}\n\n`,
+    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "synthetic-a", elapsed_ms: 2000, guardrail_warnings: [], answer_diagnostics: { trace_summary: syntheticTraceSummary, outcome: "answered", execution_steps: [{ name: "合成の処理", status: "完了", elapsed_seconds: 2 }] } })}\n\n`,
+    `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+  ].join("");
+  await mockChat(page, "ready", [], { streamBody });
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, searchAnswerProfile.name);
+  await page.getByRole("textbox").fill("合成データを確認");
+  await page.getByRole("button", { name: "送信" }).click();
+  await expect(page.getByTestId("chat-answer-progress-summary")).toBeVisible();
+  await page.getByTestId("chat-answer-progress-summary").click();
+  await page.getByTestId("trace-details-toggle").click();
+  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expectNoPageOverflow(page);
+  await captureTraceLayouts(page, testInfo, "rag-chat-trace");
+});

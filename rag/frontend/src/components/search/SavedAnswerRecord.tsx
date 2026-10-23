@@ -1,4 +1,4 @@
-import { AnswerFooter, FormStatus, Skeleton, TimedLoadingState } from "@production-ready/ui";
+import { createTraceDetailsLabels,  TraceDetails, AnswerFooter, FormStatus, Skeleton, TimedLoadingState } from "@production-ready/ui";
 
 import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -90,6 +90,7 @@ export function SavedAnswerRecord({
       />
 
       {/* 根拠（引用の一覧）を先、回答の記録の詳細を後に並べる（#1417。page-archetypes.md §6.1）。 */}
+      <TraceDetails labels={createTraceDetailsLabels(t)} summary={record.answer_diagnostics?.trace_summary} />
       <AnswerDetailsPanel
         diagnostics={record.answer_diagnostics}
         traceId={record.evaluation_available ? record.trace_id : null}

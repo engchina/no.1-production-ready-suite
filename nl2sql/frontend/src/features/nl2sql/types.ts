@@ -654,6 +654,8 @@ export interface JobCreateData {
 }
 
 export interface JobData {
+  trace_segments?: unknown[];
+  trace_summary?: unknown;
   job_id: string;
   /** チャットの質問に添付したファイル（#2517）。 */
   attachments?: ChatAttachmentApiReference[];
@@ -747,6 +749,8 @@ export interface SqlChatExecuteData {
 }
 
 export interface HistoryItem {
+  trace_segments?: unknown[];
+  trace_summary?: unknown;
   generation_only?: boolean;
   id: string;
   question: string;

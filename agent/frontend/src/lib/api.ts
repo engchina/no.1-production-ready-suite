@@ -312,6 +312,8 @@ export interface ConfirmationResponseRecord {
 }
 
 export interface RunState {
+  trace_segments?: unknown[];
+  trace_summary?: unknown;
   id: string;
   goal: string;
   agent_id: string;

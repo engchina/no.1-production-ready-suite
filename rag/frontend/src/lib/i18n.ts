@@ -1,7 +1,9 @@
+import { TRACE_DETAILS_JA } from "@production-ready/ui";
 /**
  * 日本語文言。文言はハードコードせずここを経由する。
  */
 export const ja = {
+  ...TRACE_DETAILS_JA,
   "app.title": "Production Ready RAG",
   "app.sidebarTitle.line1": "Production Ready",
   "app.sidebarTitle.line2": "RAG",

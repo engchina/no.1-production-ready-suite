@@ -37,6 +37,13 @@ from pr_backend_core.chat_progress import (
     dump_chat_progress_events,
     parse_chat_progress_events,
 )
+from pr_backend_core.observability.tracing import (
+    TraceSummary,
+    append_trace_segment,
+    capture_trace_context,
+    finish_operation_trace,
+    validated_trace_context,
+)
 from pr_backend_core.oracle_errors import is_oracle_connection_error, oracle_error_codes
 from pr_backend_core.version_retention import DEFAULT_MAX_PUBLISHED_VERSIONS, versions_to_prune
 from pr_system_settings.chat_attachments import ChatAttachmentReference
@@ -684,6 +691,9 @@ class RunState(BaseModel):
     goal: str
     agent_id: str
     runtime_id: str = "legacy-native"
+    trace_context: dict[str, str] = Field(default_factory=dict)
+    trace_summary: TraceSummary | None = None
+    trace_segments: list[TraceSummary] = Field(default_factory=list)
     status: RunStatus
     steps: list[RunStep] = Field(default_factory=list)
     events: list[RunEvent] = Field(default_factory=list)
@@ -717,6 +727,11 @@ class RunState(BaseModel):
     progress_events: list[ChatProgressEvent] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
+
+    @field_validator("trace_context", mode="before")
+    @classmethod
+    def _parse_trace_context(cls, value: object) -> dict[str, str]:
+        return validated_trace_context(value)
 
     @field_validator("progress_events", mode="before")
     @classmethod
@@ -1535,6 +1550,25 @@ class AgentRuntimeRepository:
 
     def _mark_run_changed(self, run: RunState | str) -> None:
         """Run を変えた（次の `_persist_locked` で保存する。lock の中で呼ぶ）。"""
+        state = self._runs.get(run) if isinstance(run, str) else run
+        if state is not None and (
+            _is_terminal(state.status)
+            or state.status in {RunStatus.WAITING_APPROVAL, RunStatus.WAITING_CONFIRMATION}
+        ):
+            status = (
+                "failed"
+                if state.status == RunStatus.FAILED
+                else ("cancelled" if state.status == RunStatus.CANCELLED else "done")
+            )
+            summary = finish_operation_trace(state.id, status=status)
+            if summary is not None:
+                state.trace_context = capture_trace_context()
+                state.trace_summary = summary
+                from app.settings import get_settings
+
+                state.trace_segments = append_trace_segment(
+                    state.trace_segments, summary, limit=get_settings().trace_ui_max_segments
+                )
         self._changed.add((RUN_ENTITY, run if isinstance(run, str) else run.id))
 
     def _mark_agent_changed(self, agent_id: str) -> None:
@@ -2251,6 +2285,7 @@ class AgentRuntimeRepository:
             goal=request.goal,
             agent_id=request.agent_id,
             runtime_id=BUILTIN_RUNTIME_ID,
+            trace_context=capture_trace_context(),
             created_by_user_uuid=created_by_user_uuid,
             thread_id=request.thread_id or f"thread_{uuid4().hex}",
             thread_owner_user_uuid=thread_owner,

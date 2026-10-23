@@ -1,9 +1,11 @@
-import { Clock3, ListChecks, XCircle } from "lucide-react";
+import { CircleStop, Clock3, ListChecks, XCircle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { operationTimestampMs } from "../../lib/operation-timing";
 import { cn } from "../../lib/utils";
+import { DEFAULT_TRACE_DETAILS_LABELS, type TraceDetailsLabels } from "../../lib/trace-labels";
+import { TraceDetails } from "../data/trace-details";
 import { RunTimeline, runTimelineStepIndent, type RunTimelineStep } from "../data/run-detail";
 import { hasRunStepDetails, type RunStepDetails } from "../data/run-step-details";
 import { Disclosure } from "../ui/disclosure";
@@ -24,6 +26,7 @@ export type ChatProgressStepStatus = "pending" | "running" | "done" | "failed" |
  * backend は製品の既存の配信（polling / SSE / WebSocket）で、この形の一覧を画面へ渡す。
  */
 export interface ChatProgressStep {
+  children?: ReactNode;
   /** 段階の識別子（例: "classify" / "schema" / "generate_sql" / "execute" / "summarize" / "tool:<name>"）。 */
   id: string;
   /** 利用者向けの日本語（例:「SQL を生成しています」）。翻訳済みの文を渡す。 */
@@ -115,6 +118,10 @@ export const DEFAULT_CHAT_PROGRESS_LABELS: ChatProgressLabels = {
 };
 
 export interface ChatProgressProps {
+  traceSummary?: unknown;
+  traceLabels?: TraceDetailsLabels;
+  activityIndicator?: boolean;
+  cancelled?: boolean;
   steps: ChatProgressStep[];
   /**
    * 処理中か。省略時は段階から決める（実行中の段階がある、または失敗が無く待機中の段階が残る）。
@@ -158,7 +165,7 @@ export interface ChatProgressProps {
   testId?: string;
 }
 
-type ProgressState = "running" | "done" | "failed";
+type ProgressState = "running" | "done" | "failed" | "cancelled";
 
 /**
  * 段階から処理中かを決める（実行中の段階がある、または失敗が無く待機中の段階が残る）。3 製品共通の終端の判定。
@@ -255,6 +262,7 @@ export function chatProgressTimelineStep(step: ChatProgressStep): RunTimelineSte
   if (detail) result.detail = detail;
   if (step.level) result.level = step.level;
   if (hasRunStepDetails(step.details)) result.details = step.details;
+  if (step.children != null) result.children = step.children;
   return result;
 }
 
@@ -379,12 +387,14 @@ function ProgressNotice({
  * （行が跳ばない）。今の段階の経過時間は秒の単位で数える（#1176）。
  */
 function CurrentStepRow({
+  activityIndicator,
   step,
   slow,
   reconnecting,
   labels,
   testId,
 }: {
+  activityIndicator: boolean;
   /** 今の段階。終端でないのに実行中・待機中の段階が無いときは null（「処理を続けています」を出す）。 */
   step: ChatProgressStep | null;
   slow: boolean;
@@ -408,10 +418,12 @@ function CurrentStepRow({
       data-slow={slow ? "true" : "false"}
       data-reconnecting={reconnecting ? "true" : "false"}
     >
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3">
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3"
+        data-testid={testId && step ? `${testId}-step-${step.id}` : undefined}
+        data-status="running" aria-current="step">
         <div className={cn("flex min-w-0 items-start gap-2 text-xs leading-5", runTimelineStepIndent(step?.level))}>
           <span className="pr-icon-line">
-            <Spinner size={TEXT_ICON_SIZE.xs} className="text-accent-fg" />
+            {activityIndicator ? <Spinner size={TEXT_ICON_SIZE.xs} className="text-accent-fg" /> : <Clock3 size={TEXT_ICON_SIZE.xs} className="text-fg-muted" aria-hidden />}
           </span>
           <span className="min-w-0 break-words [overflow-wrap:anywhere]">
             <span className="font-medium text-fg">{label}</span>
@@ -463,16 +475,21 @@ export function ChatProgress({
   reconnecting = false,
   progressKey = null,
   labels: labelOverrides,
-  footer,
+  footer: footerInput,
+  traceSummary,
+  traceLabels = DEFAULT_TRACE_DETAILS_LABELS,
+  activityIndicator = true,
+  cancelled = false,
   className,
   testId,
 }: ChatProgressProps) {
+  const footer = traceSummary != null ? <>{footerInput}<TraceDetails summary={traceSummary} labels={traceLabels} /></> : footerInput;
   const labels = { ...DEFAULT_CHAT_PROGRESS_LABELS, ...labelOverrides };
   // 終端の判定は配信の最新の一覧で行い、表示する一覧は処理中に段階を消さない・戻さない（#1358）。
   const active = activeProp ?? isChatProgressActive(incomingSteps);
   const steps = useChatProgressSteps({ key: progressKey, steps: incomingSteps, active });
-  const failed = steps.some((step) => step.status === "failed");
-  const state: ProgressState = active ? "running" : failed ? "failed" : "done";
+  const failed = !cancelled && steps.some((step) => step.status === "failed");
+  const state: ProgressState = active ? "running" : cancelled ? "cancelled" : failed ? "failed" : "done";
   // 実行中の段階が無い（段階の間・開始前）ときは、次に進む段階を今の段階として出す。
   // 入れ子の工程（親と子が同時に実行中）は、最後に始まった実行中の段階（いちばん内側）を今の段階にする。
   const current = active
@@ -549,6 +566,7 @@ export function ChatProgress({
             ) : null}
             {/* 終端になるまで今の行を必ず出す（段階の外で処理が続くときは「処理を続けています」。#1176）。 */}
             <CurrentStepRow
+              activityIndicator={activityIndicator}
               step={current ?? null}
               slow={slow}
               reconnecting={reconnecting}
@@ -566,8 +584,8 @@ export function ChatProgress({
           variant="plain"
           size="sm"
           summary={
-            <SummaryText icon={failed ? XCircle : ListChecks}>
-              {labels.summary(finished.length, total !== null ? labels.formatDuration(total) : "-")}
+            <SummaryText icon={cancelled ? CircleStop : failed ? XCircle : ListChecks}>
+              {cancelled ? traceLabels.stopped : labels.summary(finished.length, total !== null ? labels.formatDuration(total) : "-")}
             </SummaryText>
           }
           open={summaryIsOpen}

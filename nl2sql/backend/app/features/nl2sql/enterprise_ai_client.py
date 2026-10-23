@@ -13,9 +13,12 @@ import re
 import time
 from base64 import b64encode
 from collections.abc import Callable, Mapping
+from contextlib import ExitStack
 from typing import Any, Protocol, cast
 
 import httpx
+from pr_backend_core.observability.genai import record_genai_usage
+from pr_backend_core.observability.tracing import observed_span
 from pr_system_settings.enterprise_ai_errors import (
     ENTERPRISE_AI_RETRYABLE_STATUS_CODES,
     EnterpriseAiCallFailureKind,
@@ -493,79 +496,103 @@ class OciEnterpriseAiDirectClient:
         last_error = ""
         with httpx.Client(timeout=timeout) as client:
             for attempt in range(retry_count + 1):
-                try:
-                    response = client.post(url, headers=headers, json=dict(payload))
-                except httpx.TimeoutException as exc:
-                    last_error = f"timeout after {timeout:.1f}s"
-                    if attempt < retry_count:
+                with ExitStack() as attempt_scope:
+                    call_span = attempt_scope.enter_context(
+                        observed_span(
+                            "gen_ai.chat",
+                            kind="client",
+                            attributes={
+                                "gen_ai.operation.name": "chat",
+                                "gen_ai.provider.name": "oracle",
+                                "gen_ai.request.model": model_id or str(payload.get("model") or ""),
+                                "pr.attempt": attempt + 1,
+                            },
+                        )
+                    )
+                    try:
+                        response = client.post(url, headers=headers, json=dict(payload))
+                    except httpx.TimeoutException as exc:
+                        call_span.set_attributes({"error.type": type(exc).__name__})
+                        call_span.set_status("failed")
+                        attempt_scope.close()
+                        last_error = f"timeout after {timeout:.1f}s"
+                        if attempt < retry_count:
+                            time.sleep(min(0.2 * (attempt + 1), 1.0))
+                            continue
+                        raise EnterpriseAiDirectError(
+                            last_error,
+                            code="timeout",
+                            retryable=True,
+                            model_id=model_id,
+                            endpoint_host=enterprise_ai_endpoint_host(connection.endpoint),
+                            attempts=attempt + 1,
+                            timeout_seconds=timeout,
+                        ) from exc
+                    except httpx.HTTPError as exc:
+                        call_span.set_attributes({"error.type": type(exc).__name__})
+                        call_span.set_status("failed")
+                        attempt_scope.close()
+                        last_error = str(exc)
+                        if attempt < retry_count:
+                            time.sleep(min(0.2 * (attempt + 1), 1.0))
+                            continue
+                        raise EnterpriseAiDirectError(
+                            f"OCI Enterprise AI HTTP error: {exc}",
+                            code="connection",
+                            retryable=True,
+                            model_id=model_id,
+                            endpoint_host=enterprise_ai_endpoint_host(connection.endpoint),
+                            provider_message=type(exc).__name__,
+                            attempts=attempt + 1,
+                            timeout_seconds=timeout,
+                        ) from exc
+                    if response.status_code >= 400:
+                        call_span.set_attributes({"error.type": str(response.status_code)})
+                        call_span.set_status("failed")
+                    if response.status_code in retryable and attempt < retry_count:
+                        attempt_scope.close()
+                        last_error = f"HTTP {response.status_code}: {response.text[:300]}"
                         time.sleep(min(0.2 * (attempt + 1), 1.0))
                         continue
-                    raise EnterpriseAiDirectError(
-                        last_error,
-                        code="timeout",
-                        retryable=True,
-                        model_id=model_id,
-                        endpoint_host=enterprise_ai_endpoint_host(connection.endpoint),
-                        attempts=attempt + 1,
-                        timeout_seconds=timeout,
-                    ) from exc
-                except httpx.HTTPError as exc:
-                    last_error = str(exc)
-                    if attempt < retry_count:
-                        time.sleep(min(0.2 * (attempt + 1), 1.0))
-                        continue
-                    raise EnterpriseAiDirectError(
-                        f"OCI Enterprise AI HTTP error: {exc}",
-                        code="connection",
-                        retryable=True,
-                        model_id=model_id,
-                        endpoint_host=enterprise_ai_endpoint_host(connection.endpoint),
-                        provider_message=type(exc).__name__,
-                        attempts=attempt + 1,
-                        timeout_seconds=timeout,
-                    ) from exc
-                if response.status_code in retryable and attempt < retry_count:
-                    last_error = f"HTTP {response.status_code}: {response.text[:300]}"
-                    time.sleep(min(0.2 * (attempt + 1), 1.0))
-                    continue
-                if response.status_code >= 400:
-                    # 分類は 3 製品で共通の対応表（#1684）。OCI の 404 は認可の失敗で、
-                    # モデルが無いときは 400 になる。設定の誤りは再試行しない。
-                    body = response.text[:500]
-                    failure = classify_enterprise_ai_http_failure(response.status_code, body)
-                    raise EnterpriseAiDirectError(
-                        f"OCI Enterprise AI HTTP {response.status_code}: {body}",
-                        code=failure.kind,
-                        retryable=failure.retryable,
-                        http_failure=failure,
-                        model_id=model_id or str(payload.get("model") or ""),
-                        endpoint_host=enterprise_ai_endpoint_host(connection.endpoint),
-                        provider_message=enterprise_ai_provider_message(body),
-                        upstream_request_id=_upstream_request_id(response),
-                        attempts=attempt + 1,
-                        timeout_seconds=timeout,
-                        headers=_retry_after_headers(response),
-                    )
-                try:
-                    parsed = response.json()
-                except ValueError as exc:
-                    raise EnterpriseAiDirectError(
-                        "OCI Enterprise AI response が JSON ではありません。",
-                        code="response_format",
-                        retryable=True,
-                        upstream_request_id=_upstream_request_id(response),
-                        attempts=attempt + 1,
-                    ) from exc
-                if not isinstance(parsed, Mapping):
-                    raise EnterpriseAiDirectError(
-                        "OCI Enterprise AI response が object ではありません。",
-                        code="response_format",
-                        retryable=True,
-                        upstream_request_id=_upstream_request_id(response),
-                        attempts=attempt + 1,
-                    )
-                # 応答の検査の失敗（未完了・形式の誤り）の「詳細」に request id を出す（#1715）。
-                return _ResponseBody(parsed, upstream_request_id=_upstream_request_id(response))
+                    if response.status_code >= 400:
+                        # 分類は 3 製品で共通の対応表（#1684）。OCI の 404 は認可の失敗で、
+                        # モデルが無いときは 400 になる。設定の誤りは再試行しない。
+                        body = response.text[:500]
+                        failure = classify_enterprise_ai_http_failure(response.status_code, body)
+                        raise EnterpriseAiDirectError(
+                            f"OCI Enterprise AI HTTP {response.status_code}: {body}",
+                            code=failure.kind,
+                            retryable=failure.retryable,
+                            http_failure=failure,
+                            model_id=model_id or str(payload.get("model") or ""),
+                            endpoint_host=enterprise_ai_endpoint_host(connection.endpoint),
+                            provider_message=enterprise_ai_provider_message(body),
+                            upstream_request_id=_upstream_request_id(response),
+                            attempts=attempt + 1,
+                            timeout_seconds=timeout,
+                            headers=_retry_after_headers(response),
+                        )
+                    try:
+                        parsed = response.json()
+                    except ValueError as exc:
+                        raise EnterpriseAiDirectError(
+                            "OCI Enterprise AI response が JSON ではありません。",
+                            code="response_format",
+                            retryable=True,
+                            upstream_request_id=_upstream_request_id(response),
+                            attempts=attempt + 1,
+                        ) from exc
+                    if not isinstance(parsed, Mapping):
+                        raise EnterpriseAiDirectError(
+                            "OCI Enterprise AI response が object ではありません。",
+                            code="response_format",
+                            retryable=True,
+                            upstream_request_id=_upstream_request_id(response),
+                            attempts=attempt + 1,
+                        )
+                    record_genai_usage(call_span, parsed.get("usage"))
+                    # 応答の検査の失敗の「詳細」に request id を出す（#1715）。
+                    return _ResponseBody(parsed, upstream_request_id=_upstream_request_id(response))
         raise EnterpriseAiDirectError(last_error or "OCI Enterprise AI call failed.")
 
 

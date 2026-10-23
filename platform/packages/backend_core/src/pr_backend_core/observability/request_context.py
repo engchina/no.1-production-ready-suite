@@ -39,6 +39,12 @@ def correlation_fields() -> dict[str, str]:
     request_id = request_id_var.get()
     if request_id:
         fields["request_id"] = request_id
+    from .tracing import current_span_fields
+
+    local_fields = current_span_fields()
+    if local_fields:
+        fields.update(local_fields)
+        return fields
     traceparent = validated_traceparent(traceparent_var.get())
     if traceparent:
         _, trace_id, parent_span_id, flags = traceparent.split("-")
@@ -53,7 +59,11 @@ def outbound_correlation_headers() -> dict[str, str]:
     request_id = request_id_var.get()
     if request_id and REQUEST_ID_PATTERN.fullmatch(request_id):
         headers["X-Request-ID"] = request_id
-    traceparent = validated_traceparent(traceparent_var.get())
+    from .tracing import capture_trace_context
+
+    traceparent = capture_trace_context().get("traceparent") or validated_traceparent(
+        traceparent_var.get()
+    )
     if traceparent:
         headers["traceparent"] = traceparent
     for key in ("run_id", "job_id"):

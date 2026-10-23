@@ -30,6 +30,7 @@ from pr_backend_core.chat_history_window import (
 )
 from pr_backend_core.config import (
     PlatformEnvSourcesMixin,
+    TracingSettings,
     platform_env_file,
     product_env_file,
     product_settings_config,
@@ -405,7 +406,7 @@ def resolve_ingestion_queue_concurrency(
     )
 
 
-class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
+class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, TracingSettings, BaseSettings):
     """環境変数ベースの設定。旧名（属性名と同じ環境変数名）は読まない（#211）。"""
 
     # 環境変数名は属性名から決める（共通の属性は `PLATFORM_*`、それ以外は `RAG_*`。#211）。
@@ -2613,7 +2614,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     # --- Trace export（OpenTelemetry / Langfuse gateway 連携用）---
     trace_export_http_endpoint: str = Field(default="")
     trace_export_http_bearer_token: str = Field(default="")
-    trace_export_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
+    trace_export_http_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
     trace_export_queue_size: int = Field(default=1024, ge=1, le=100000)
 
     @field_validator("model_settings_file")

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
+from pr_backend_core.observability.tracing import TraceSummary
 from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.common import JsonValue
@@ -105,6 +106,8 @@ class RunFeedback(BaseModel):
 
 class RunDetail(RunSummary):
     """実行の詳細（質問の全文・回答・根拠・回答の診断・処理の段・フィードバック）。"""
+
+    trace_summary: TraceSummary | None = None
 
     error_type: str | None = None
     # 失敗のエラーコード（ORA-03146 など。例外の本文は持たない。#2342）。

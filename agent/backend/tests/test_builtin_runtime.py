@@ -230,7 +230,21 @@ def test_run_calls_tool_and_records_answer(monkeypatch: MonkeyPatch, calls: _Cal
     assert '"rows": 3' in str(second.input)
 
 
-def test_tool_requiring_approval_waits_and_resumes(monkeypatch: MonkeyPatch, calls: _Calls) -> None:
+@pytest.fixture
+def trace_provider() -> Iterator[None]:
+    from pr_backend_core.config.tracing import TracingSettings
+    from pr_backend_core.observability.tracing import configure_tracing, shutdown_tracing
+
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    try:
+        yield
+    finally:
+        shutdown_tracing()
+
+
+def test_tool_requiring_approval_waits_and_resumes(
+    monkeypatch: MonkeyPatch, calls: _Calls, trace_provider: None
+) -> None:
     _script(
         monkeypatch,
         [function_call(WRITE, {"query": "登録"}, call_id="call-w")],
@@ -257,6 +271,17 @@ def test_tool_requiring_approval_waits_and_resumes(monkeypatch: MonkeyPatch, cal
 
     run = runtime_repository.get_run(run_id)
     assert run.status == RunStatus.COMPLETED
+    assert len(run.trace_segments) == 2
+    first, resumed = run.trace_segments
+    assert first.telemetry_trace_id == resumed.telemetry_trace_id
+    resumed_root = next(span for span in resumed.spans if span.span_id == resumed.root_span_id)
+    assert resumed_root.parent_span_id == first.root_span_id
+    assert all(
+        span.finished_at >= span.started_at
+        for segment in run.trace_segments
+        for span in segment.spans
+    )
+
     assert [name for name, _, _ in calls.items] == [WRITE]
     # 承認後のツールも承認者ではなく Run の利用者として呼ぶ（MCP のサービストークンの sub。#233）。
     [(_, _, context)] = calls.items
@@ -1775,3 +1800,29 @@ def test_mixed_approval_executes_only_approved_calls_without_another_model_turn(
     assert [args["query"] for _, args, _ in calls.items] == ["処理 A"]
     assert len(model.calls) == 1
     assert not run.confirmations
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+def test_terminal_transition_counts_once_even_when_repeated(
+    monkeypatch: MonkeyPatch, calls: _Calls, status: str
+) -> None:
+    from unittest.mock import Mock
+
+    from app import observability
+
+    del calls
+    counter = Mock()
+    monkeypatch.setattr(observability, "RUNS_TOTAL", counter)
+    run_id = _create_run("合成の実行")
+    assert runtime_repository.begin_builtin_run(run_id) is not None
+    for _ in range(2):
+        if status == "completed":
+            runtime_repository.complete_builtin_run(run_id, "合成の回答")
+        elif status == "failed":
+            runtime_repository.fail_builtin_run(
+                run_id, code="synthetic_failure", detail="合成の失敗"
+            )
+        else:
+            runtime_repository.cancel_run(run_id)
+    counter.labels.assert_called_once_with(status=status)
+    counter.labels.return_value.inc.assert_called_once_with()

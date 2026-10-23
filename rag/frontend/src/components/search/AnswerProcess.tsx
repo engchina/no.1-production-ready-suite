@@ -1,4 +1,4 @@
-import { ChatProgress, RunProcessDetails, type ChatProgressStep } from "@production-ready/ui";
+import { createTraceDetailsLabels,  TraceDetails, ChatProgress, RunProcessDetails, type ChatProgressStep } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
@@ -27,6 +27,7 @@ export function AnswerProcess({
   reconnecting,
   progressKey,
   diagnostics,
+  traceSummary,
   traceId,
   savedRecord,
   showNotices = false,
@@ -45,6 +46,7 @@ export function AnswerProcess({
   progressKey?: string | null;
   /** 回答の記録の診断（`diagnostics.answer`）。完了後の「処理の詳細」に出す。実行中は渡さない。 */
   diagnostics?: unknown;
+  traceSummary?: unknown;
   /** 保存した回答の trace ID（「処理の詳細」の標準回答による評価）。回答を作らない検索は渡さない。 */
   traceId?: string | null;
   /** 診断の無い保存済みの回答（会話を開き直したとき）。回答の記録を読み直して「処理の詳細」に出す。 */
@@ -57,6 +59,7 @@ export function AnswerProcess({
   testId?: string;
   className?: string;
 }) {
+  const resolvedTrace = traceSummary ?? (diagnostics && typeof diagnostics === "object" && "trace_summary" in diagnostics ? diagnostics.trace_summary : undefined);
   const details = diagnostics ? (
     <AnswerDetailsPanel
       diagnostics={diagnostics}
@@ -72,7 +75,7 @@ export function AnswerProcess({
       showCitations={false}
     />
   ) : null;
-  if (steps.length === 0 && !details) return null;
+  if (steps.length === 0 && !details && resolvedTrace == null) return null;
   // 実行の詳細の「処理の経過」の節と同じ共有の部品・名前（`RunProcessDetails`。#2325）。
   const detailsDisclosure = details ? (
     <RunProcessDetails
@@ -90,6 +93,8 @@ export function AnswerProcess({
     >
       {steps.length > 0 ? (
         <ChatProgress
+          traceLabels={createTraceDetailsLabels(t)}
+          traceSummary={resolvedTrace}
           steps={steps}
           active={active}
           startedAt={startedAt}
@@ -100,7 +105,7 @@ export function AnswerProcess({
           testId={testId}
         />
       ) : (
-        detailsDisclosure
+        <>{detailsDisclosure}<TraceDetails labels={createTraceDetailsLabels(t)} summary={resolvedTrace} /></>
       )}
     </section>
   );

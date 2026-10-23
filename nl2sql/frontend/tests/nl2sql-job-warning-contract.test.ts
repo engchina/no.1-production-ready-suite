@@ -30,7 +30,7 @@ test("operation status strip renders done warnings separately from red job error
   assert.equal(statusStripSource.includes("{job.error_message && ("), false);
   assert.match(statusStripSource, /<Banner severity="warning"/);
   assert.match(statusStripSource, /<Banner[\s\S]*severity="danger"/);
-  assert.match(statusStripSource, /role=\{active \? "status" : undefined\}/);
+  assert.match(statusStripSource, /<ChatProgress[\s\S]*active=\{active\}/);
   assert.doesNotMatch(statusStripSource, /role=\{job\.status === "error" \? "alert"/);
   assert.match(i18nSource, /nl2sql\.progress\.persistenceWarning/);
 });

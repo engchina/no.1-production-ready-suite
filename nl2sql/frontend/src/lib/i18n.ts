@@ -1,3 +1,4 @@
+import { TRACE_DETAILS_JA } from "@production-ready/ui";
 // 最小 i18n。日本語第一。UI 文言はここ経由で参照し、ハードコードしない。
 import { ja as nl2sqlBaseJa } from "./nl2sql-base-i18n";
 
@@ -6,6 +7,7 @@ import { ja as nl2sqlBaseJa } from "./nl2sql-base-i18n";
 const CONFIRM_FEATURE = "回答前の確認";
 
 const nl2sqlJa = {
+  ...TRACE_DETAILS_JA,
   "nav.chat": "チャット",
   "chat.subtitle": "業務プロファイルのデータに質問し、生成・実行した SQL と結果を確かめながら会話を続ける",
   "chat.profile": "業務プロファイル",
