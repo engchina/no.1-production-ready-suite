@@ -18,7 +18,6 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   ListSkeleton,
-  MessageText,
   ListToolbar,
   OffsetPagination,
   PageBody,
@@ -43,6 +42,7 @@ import {
   adjacentListItems,
 } from "@production-ready/ui";
 
+import { AnswerBody } from "@/components/chat/ResultTables";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { listTotal } from "@/components/ListFilters";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, usePersistedServerPaging } from "@/components/ListViews";
@@ -1098,7 +1098,7 @@ function CaseDetail({ result }: { result: EvaluationCaseResult }) {
       <DetailSection title={t("evaluation.detail.answer")}>
         {result.answer ? (
           <div className="rounded-md border border-border p-3">
-            <MessageText text={result.answer} className="text-sm text-fg" />
+            <AnswerBody text={result.answer} className="text-sm text-fg" />
           </div>
         ) : (
           <p className="text-fg-muted">{t("evaluation.detail.noAnswer")}</p>

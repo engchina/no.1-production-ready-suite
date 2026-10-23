@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from rag_engine.generation.grounded import CheckedItem, carry_over, verify, without_redundant_quotes
 from rag_engine.models.llm import GroundedDraft, GroundedItem
 
@@ -407,3 +409,51 @@ def test_missing_section_metadata_is_planned_before_the_answer_and_cannot_be_ove
     assert correct in result.answer_text and other not in result.answer_text
     assert calls == [RequestScopePlan, GroundedDraft]
     assert result.generation_trace["llm_calls"] == 2
+
+
+@pytest.mark.parametrize("correction_rounds, repair", [(1, True), (1, False), (0, False)])
+def test_csv_current_value_warning_is_rephrased_in_none_mode(correction_rounds, repair):
+    from dataclasses import replace
+
+    from test_grounded_answer import FakeModel, context, ids, marks, record
+
+    from rag_engine.config import get_settings
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.generation.answering import synthesize_grounded_answer
+
+    question = "CSV の更新対象と記載された値を教えてください。"
+    quote = (EXAMPLES / "rows.csv").read_text()
+    ctx = context(record(0, quote, "", source="rows.csv"))
+    eid = ids(ctx, question)[quote]
+    wrong = "更新が必要な行は id が row-a と row-c で、現在の値はそれぞれ 10 と 30 です。"
+    corrected = "CSV に記載された更新対象は row-a（値 10）と row-c（値 30）です。"
+
+    def draft(text):
+        return {
+            "summary": "",
+            "items": [{"kind": "rule", "request_id": "Q1", "evidence_id": eid, "quote": quote, "text": text}],
+            "confidence": "high",
+        }
+
+    model = FakeModel([draft(wrong), draft(corrected if repair else wrong)], [])
+
+    def unused(*args, **kwargs):
+        raise AssertionError("追加の外部呼び出しは不可")
+
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = synthesize_grounded_answer(
+            question,
+            ctx,
+            replace(get_settings(), answer_audit_mode="none", answer_max_correction_rounds=correction_rounds),
+            image_prompt_mode="text_only",
+        ).response
+    if not repair:
+        assert wrong in result.answer_text
+        assert "item_check" in marks(result)[wrong]
+        assert len(model.prompts) == 1 + correction_rounds
+        return
+    assert corrected in result.answer_text
+    assert wrong not in result.answer_text
+    assert not marks(result)
+    assert [name for name, _ in model.prompts] == ["GroundedDraft", "GroundedDraft"]
+    assert wrong in model.prompts[1][1]

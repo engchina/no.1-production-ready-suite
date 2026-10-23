@@ -3243,3 +3243,37 @@ def test_control_plane_validator_records_its_display_title(
 ) -> None:
     run, _ = _searched_run(monkeypatch)
     assert run.metadata["tool_titles"][VALIDATOR] == "資料との照合"
+
+
+@pytest.mark.parametrize("heading", ["**出力**（記録済み）", "**結果** (補足)"])
+def test_bold_heading_with_trailing_note_is_not_a_claim(heading: str) -> None:
+    from app.features.agent.answer_validation import claim_paragraphs
+
+    answer = heading + "\n\n\u200b\n\ufeff\n\n値は 7 です。"
+    assert claim_paragraphs(answer) == ["値は 7 です。"]
+    assert non_claim_passages(answer)[heading] == "heading"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["**上限は 7 日**（設定済み）", "**設定**（上限は 7 日）", "**保存してください**（必須）"],
+)
+def test_trailing_note_does_not_hide_facts(text: str) -> None:
+    from app.features.agent.answer_validation import claim_paragraphs
+
+    assert claim_paragraphs(text) == [text]
+
+
+def test_trailing_note_and_invisible_lines_do_not_receive_warning_marks(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    heading = "**出力**（記録済み）"
+    fact = "値は 7 です。"
+    mcp.outputs["rag_validate_answer"] = _verdict(
+        _claim(heading, "unsupported", "根拠に記載なし。"),
+        _claim("\u200b", "unsupported", "空白。"),
+        _claim(fact, "unsupported", "値の裏付けなし。"),
+    )
+    run, _ = _searched_run(monkeypatch, answer=heading + "\n\u200b\n" + fact)
+    content = _validation(run)
+    assert [item["text"] for item in content["passage_marks"]] == [fact]

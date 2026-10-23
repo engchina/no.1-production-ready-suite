@@ -236,3 +236,38 @@ def test_usage_needs_the_menu_permission_and_is_limited_to_allowed_agents(
     assert [(item["user_uuid"], item["display_name"]) for item in data["by_user"]] == [
         (bob.user_uuid, "usage-772")
     ]
+
+
+@pytest.mark.parametrize(
+    "name, minutes",
+    [("+00:00", 0), ("+09:00", 540), ("+05:30", 330), ("-03:30", -210), ("+23:59", 1439)],
+)
+def test_browser_offset_timezone(name: str, minutes: int) -> None:
+    tz = resolve_timezone(name)
+    assert NOW.astimezone(tz).utcoffset() == timedelta(minutes=minutes)
+    report = build_usage_report(
+        [fact_from_run(_run("boundary", datetime(2026, 10, 1, 23, 30, tzinfo=UTC)))],
+        days=7,
+        now=NOW,
+        tz=tz,
+        agent_names={},
+        user_names=lambda _: {},
+    )
+    assert report.timezone == name
+    assert (
+        next(day.day for day in report.by_day if day.runs)
+        == datetime(2026, 10, 1, 23, 30, tzinfo=UTC).astimezone(tz).date()
+    )
+
+
+@pytest.mark.parametrize("name", ["+24:00", "+09:60", "09:00", "+9:00", "Invalid/Zone"])
+def test_invalid_browser_timezone(name: str) -> None:
+    with pytest.raises(ValueError):
+        resolve_timezone(name)
+
+
+@pytest.mark.parametrize("name", ["+00:00", "+09:00", "+05:30", "-03:30"])
+def test_usage_api_accepts_browser_offset(name: str) -> None:
+    response = client.get("/api/usage", params={"timezone": name, "days": 7})
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["timezone"] == name

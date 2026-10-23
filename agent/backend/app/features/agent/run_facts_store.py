@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from importlib import import_module
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
@@ -50,6 +50,7 @@ from app.features.agent.run_signals import (
     signal_items,
 )
 from app.features.agent.runtime import FeedbackRating, FeedbackReason, RunFeedback, RunState
+from app.features.agent.timezones import timezone_name
 from app.features.agent.usage import (
     AgentUsage,
     ModelUsage,
@@ -93,7 +94,7 @@ class RunFactsStore(Protocol):
         *,
         days: int,
         now: datetime,
-        tz: ZoneInfo,
+        tz: tzinfo,
         agent_ids: frozenset[str] | None,
         agent_names: Mapping[str, str],
         user_names: UserNames,
@@ -157,7 +158,7 @@ class MemoryRunFactsStore:
         *,
         days: int,
         now: datetime,
-        tz: ZoneInfo,
+        tz: tzinfo,
         agent_ids: frozenset[str] | None,
         agent_names: Mapping[str, str],
         user_names: UserNames,
@@ -406,37 +407,43 @@ def agent_scope_clause(agent_ids: frozenset[str] | None, binds: dict[str, Any]) 
     return " AND (" + " OR ".join(groups) + ")"
 
 
-def usage_source_sql(scope: str) -> str:
+def usage_source_sql(scope: str, *, fixed_offset: bool = False) -> str:
     """利用状況の集計の元（期間と直前の期間の Run。日は利用者のタイムゾーンで区切る）。
 
     bind を含む式を GROUP BY に書くと ORA-00979 になるため、inline view の列にしてから集計する。
     `AT TIME ZONE` の直後に素の bind を書くと ORA-00907 になるため、bind を括弧で囲む（#1822 で
     実 Oracle の結合テストが見つけた。それまでは Oracle の構成でもメモリの Run を集計した）。
     """
+    local_time = (
+        "CREATED_AT + NUMTODSINTERVAL(:timezone_minutes, 'MINUTE')"
+        if fixed_offset
+        else "FROM_TZ(CREATED_AT, 'UTC') AT TIME ZONE (:timezone)"
+    )
     return (
         "SELECT AGENT_ID, AGENT_NAME, CREATED_BY_USER_UUID, MODEL, REQUESTS, INPUT_TOKENS, "
         "OUTPUT_TOKENS, TOTAL_TOKENS, "
         "CASE WHEN CREATED_AT >= :since THEN 1 ELSE 0 END AS IN_PERIOD, "
-        "TO_CHAR(FROM_TZ(CREATED_AT, 'UTC') AT TIME ZONE (:timezone), 'YYYY-MM-DD') AS RUN_DAY "
+        f"TO_CHAR({local_time}, 'YYYY-MM-DD') AS RUN_DAY "
         f"FROM {RUN_FACTS_TABLE} "  # nosec B608 - 固定のテーブル名と bind の条件
         f"WHERE CREATED_AT >= :previous_since AND CREATED_AT <= :until{scope}"
     )
 
 
-def usage_totals_sql(scope: str) -> str:
+def usage_totals_sql(scope: str, *, fixed_offset: bool = False) -> str:
     return (
         f"SELECT IN_PERIOD, {_USAGE_MEASURES} "  # nosec B608 - 固定の列
-        f"FROM ({usage_source_sql(scope)}) GROUP BY IN_PERIOD"
+        f"FROM ({usage_source_sql(scope, fixed_offset=fixed_offset)}) GROUP BY IN_PERIOD"
     )
 
 
-def usage_dimension_sql(dimension: str, scope: str) -> str:
+def usage_dimension_sql(dimension: str, scope: str, *, fixed_offset: bool = False) -> str:
     column = USAGE_DIMENSIONS[dimension]
     # モデル内訳だけは利用量記録済みの実行が対象。他の内訳は全実行数を維持する。
     usage_filter = " AND REQUESTS IS NOT NULL" if dimension == "model" else ""
     return (
         f"SELECT {column}, MAX(AGENT_NAME), {_USAGE_MEASURES} "  # nosec B608 - 固定の列
-        f"FROM ({usage_source_sql(scope)}) WHERE IN_PERIOD = 1{usage_filter} GROUP BY {column}"
+        f"FROM ({usage_source_sql(scope, fixed_offset=fixed_offset)}) "
+        f"WHERE IN_PERIOD = 1{usage_filter} GROUP BY {column}"
     )
 
 
@@ -737,7 +744,7 @@ class OracleRunFactsStore:
         *,
         days: int,
         now: datetime,
-        tz: ZoneInfo,
+        tz: tzinfo,
         agent_ids: frozenset[str] | None,
         agent_names: Mapping[str, str],
         user_names: UserNames,
@@ -754,13 +761,22 @@ class OracleRunFactsStore:
                 "since": to_utc_naive(since),
                 "previous_since": to_utc_naive(previous_since),
                 "until": to_utc_naive(now),
-                "timezone": tz.key,
             }
+            fixed_offset = not isinstance(tz, ZoneInfo)
+            if fixed_offset:
+                offset = now.astimezone(tz).utcoffset()
+                assert offset is not None
+                binds["timezone_minutes"] = int(offset.total_seconds() // 60)
+            else:
+                binds["timezone"] = timezone_name(tz)
             scope = agent_scope_clause(agent_ids, binds)
             dimensions = ("agent", "user", "model", "day")
             results = self._query(
-                [(usage_totals_sql(scope), binds)]
-                + [(usage_dimension_sql(dimension, scope), binds) for dimension in dimensions]
+                [(usage_totals_sql(scope, fixed_offset=fixed_offset), binds)]
+                + [
+                    (usage_dimension_sql(dimension, scope, fixed_offset=fixed_offset), binds)
+                    for dimension in dimensions
+                ]
             )
             for row in results[0]:
                 _totals(row[1:], totals if int(row[0]) == 1 else previous)

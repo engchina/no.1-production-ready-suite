@@ -81,7 +81,7 @@ function seedReport(mockApi: MockApi) {
       admin_not_helpful: 0,
     },
     items: [
-      item("run-a", { feedback: rating("not_helpful", "incomplete", "先月との比較が無い。") }),
+      item("run-a", { answer: "**確認結果**\n\nA は 1200、B は 900 です。\n\n| 項目 | 値 |\n| --- | --- |\n| A | 1200 |", feedback: rating("not_helpful", "incomplete", "先月との比較が無い。") }),
       item("run-b"),
     ],
     total: 2,
@@ -127,7 +127,7 @@ for (const viewport of VIEWPORTS) {
   });
 
   for (const theme of ["light", "dark"] as const) {
-    test(`フィードバックの集計・理由・一覧と詳細を出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`フィードバックの集計・理由・一覧と詳細を出す (${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
       seedReport(mockApi);
@@ -160,7 +160,8 @@ for (const viewport of VIEWPORTS) {
       await expect(page).toHaveURL(/feedback=run-a/);
       const detail = page.getByRole("region", { name: "フィードバックの詳細" });
       await expect(page.getByRole("dialog")).toHaveCount(0);
-      await expect(detail).toContainText("今月の契約件数は 12 件です。");
+      await expect(detail.locator("strong").filter({ hasText: "確認結果" })).toBeVisible();
+      await expect(detail.getByRole("table", { name: "回答の表", exact: true }).getByRole("cell", { name: "1200", exact: true })).toBeVisible();
       await expect(detail).toContainText("先月との比較が無い。");
       await expect(detail).toContainText("情報が足りない");
       await expect(detail).toContainText("山田 太郎");

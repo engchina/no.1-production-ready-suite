@@ -367,3 +367,25 @@ def test_record_report_titles_can_be_configured(monkeypatch: pytest.MonkeyPatch)
         )
         == "回答です。"
     )
+
+
+@pytest.mark.parametrize("heading", ["**記録内容**（記録済み）", "## 記録内容（記録済み）"])
+def test_record_report_note_does_not_reach_answer_validation(heading: str) -> None:
+    from app.features.agent.output_fields import without_output_record_sections
+
+    text = "回答です。\n\n" + heading + "\n- 項目 A: 7\n\n## 補足\n値は 8 です。"
+    assert (
+        without_output_record_sections(text, ["記録内容（記録済み）"])
+        == "回答です。\n\n## 補足\n値は 8 です。"
+    )
+
+
+def test_recorded_output_title_uses_the_shared_section_filter() -> None:
+    from app.features.agent.output_fields import without_output_record_sections
+    from app.settings import Settings
+
+    answer = "本文。\n\n**出力**（記録済み）\n- 項目 A: 7\n\n## 補足\n値は 8 です。"
+    assert (
+        without_output_record_sections(answer, Settings().agent_output_record_section_titles)
+        == "本文。\n\n## 補足\n値は 8 です。"
+    )

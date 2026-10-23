@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Any, Literal
 
+from pr_backend_core.markdown import normalize_heading_markup
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.features.agent.tools import (
@@ -467,7 +468,13 @@ def without_output_record_sections(answer: str, report_titles: Sequence[str] = (
     for line in answer.splitlines():
         if line.lstrip().startswith(("```", "~~~")):
             fenced = not fenced
-        heading = None if fenced else re.fullmatch(r"\s*(?:#{1,6}\s+(.+)|\*\*(.+)\*\*)\s*", line)
+        heading = (
+            None
+            if fenced
+            else re.fullmatch(
+                r"\s*(?:#{1,6}\s+(.+)|\*\*(.+)\*\*)\s*", normalize_heading_markup(line)
+            )
+        )
         if heading:
             title = heading.group(1) or heading.group(2)
             skipping = title.strip().rstrip(":：") in titles or bool(

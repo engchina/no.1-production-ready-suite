@@ -267,3 +267,22 @@ for (const recorded of [false, true]) {
     }
   });
 }
+
+
+for (const viewport of VIEWPORTS) {
+  test(`時差形式のタイムゾーンで利用状況を取得する (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.addInitScript(() => {
+      const original = Intl.DateTimeFormat.prototype.resolvedOptions;
+      Intl.DateTimeFormat.prototype.resolvedOptions = function () {
+        return { ...original.call(this), timeZone: "+00:00" };
+      };
+    });
+    seedReport(mockApi);
+    await page.goto("/usage");
+    await expect(page.getByTestId("usage-summary")).toContainText("100,000");
+    expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("timezone")).toBe("+00:00");
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`usage-offset-${viewport.name}.png`), fullPage: true });
+  });
+}
