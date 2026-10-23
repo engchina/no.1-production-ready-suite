@@ -454,6 +454,8 @@ def evidence_spans(
                         or ""
                     ),
                     "source": getattr(record, "source", ""),
+                    # 関連度順で選んだ根拠も、生成時は見出しと本文を原文順に読めるようにする。
+                    "source_order": (getattr(record, "chunk_seq", 0), getattr(record, "seq_no", 0), start),
                     "page": getattr(record, "page", 0),
                     # 新しい版に置き換えた文書（旧版）の根拠（backend の document_superseded。#1492）。
                     "superseded": (getattr(record, "metadata", {}) or {}).get("document_superseded") is True,

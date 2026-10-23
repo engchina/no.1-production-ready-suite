@@ -334,6 +334,12 @@ class RequestCoverage(_StrictModel):
     )
 
 
+class RequestScopePlan(_StrictModel):
+    """章節情報が欠けた候補を、本文の生成とは分けて照合する。"""
+
+    request_coverage: list[RequestCoverage] = Field(max_length=64, description="質問契約の要求ごとに使用する Evidence の計画。")
+
+
 class ExternalDataItem(_StrictModel):
     """回答の確定に確かめる点 1 件と、観察できる事実 (#1453、#1492)。
 

@@ -1363,7 +1363,9 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(result.retrieval_query_plan["vector_queries"], ["needle"])
         self.assertEqual(result.retrieval_query_plan["candidate_limit"], 150)
         self.assertEqual(result.rerank_scores[0]["relevance_score"], 0.94)
-        self.assertLess(final_prompt.index("needle second evidence"), final_prompt.index("needle first evidence"))
+        # 候補の選択順位と、同じ資料をモデルへ読ませる原文順は区別する。
+        self.assertEqual(max(result.rerank_scores, key=lambda row: row["relevance_score"])["id"], "chunk-docling-c000002")
+        self.assertLess(final_prompt.index("needle first evidence"), final_prompt.index("needle second evidence"))
 
     def test_default_rerank_setting_reorders_hybrid_candidates(self):
         settings = replace(_rerank_ready_settings(), default_rerank_enabled=True)
@@ -1385,7 +1387,7 @@ class AnswerGenerationTests(unittest.TestCase):
                 return_value=_answer_output(answer="default rerank answer"),
             ) as parse,
         ):
-            answer_question_result(
+            result = answer_question_result(
                 "needle",
                 "abcdef",
                 ["docling"],
@@ -1396,7 +1398,9 @@ class AnswerGenerationTests(unittest.TestCase):
 
         final_prompt = parse.call_args.args[1]
         self.assertEqual(rerank.call_args.args[0], "needle")
-        self.assertLess(final_prompt.index("needle second evidence"), final_prompt.index("needle first evidence"))
+        # 候補の選択順位と、同じ資料をモデルへ読ませる原文順は区別する。
+        self.assertEqual(max(result.rerank_scores, key=lambda row: row["relevance_score"])["id"], "chunk-docling-c000002")
+        self.assertLess(final_prompt.index("needle first evidence"), final_prompt.index("needle second evidence"))
 
     def test_answer_question_result_uses_records_without_draft_refinement(self):
         settings = get_settings()
@@ -2364,7 +2368,7 @@ class AnswerGenerationTests(unittest.TestCase):
                 ],
             ) as parse,
         ):
-            answer_question_result(
+            result = answer_question_result(
                 "original",
                 "abcdef",
                 ["docling"],
@@ -2377,7 +2381,9 @@ class AnswerGenerationTests(unittest.TestCase):
         final_prompt = parse.call_args_list[-1].args[1]
         # 原質問のあとに検索文ごとにも rerank し、候補ごとの最高値で並べる（#2161）。
         self.assertEqual([call.args[0] for call in rerank.call_args_list], ["original", "alpha", "beta"])
-        self.assertLess(final_prompt.index("beta source evidence"), final_prompt.index("alpha source evidence"))
+        # 候補の選択順位と、同じ資料をモデルへ読ませる原文順は区別する。
+        self.assertEqual(max(result.rerank_scores, key=lambda row: row["relevance_score"])["id"], "chunk-beta")
+        self.assertLess(final_prompt.index("alpha source evidence"), final_prompt.index("beta source evidence"))
 
     def test_matched_term_query_lists_matched_terms_and_aliases(self):
         """用語・同義語に一致したら、用語と別名だけの検索文にする（#2163）。"""
