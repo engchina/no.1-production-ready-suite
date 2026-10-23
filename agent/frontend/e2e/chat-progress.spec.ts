@@ -199,7 +199,7 @@ for (const viewport of VIEWPORTS) {
       run.steps = [toolStep("step-search", "rag__rag_search", "running", { completed_at: null })];
       log.step("plan", "done").step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search" } });
       await expect(current).toHaveAttribute("data-step-id", "tool:rag__rag_search");
-      await expect(current).toContainText("ツール rag__rag_search を呼んでいます");
+      await expect(current).toContainText("処理を実行しています");
       await expect(turn.getByTestId("chat-progress-running")).toContainText("処理中（1 ステップ完了）");
       await page.screenshot({ path: testInfo.outputPath(`progress-tool-${viewport.name}-${theme}.png`) });
 
@@ -286,7 +286,7 @@ for (const viewport of VIEWPORTS) {
       await expect(bars).toHaveCount(6);
       if (viewport.width >= 1280) await expect(bars.first()).toBeVisible();
       else await expect(bars.first()).toBeHidden();
-      await expect(turn.getByTestId("chat-progress-step-tool:nl2sql__execute")).toContainText("ツール nl2sql__execute を呼びました");
+      await expect(turn.getByTestId("chat-progress-step-tool:nl2sql__execute")).toContainText("処理を実行しました");
       await expect(turn.getByTestId("chat-progress-step-respond#2")).toHaveAttribute("data-status", "done");
       // 回答の作成の後にツールを呼んだ段階は、進め方の検討の完了として残る（#1358）。
       await expect(turn.getByTestId("chat-progress-step-respond")).toContainText("進め方を決めました");
