@@ -1522,6 +1522,7 @@ export interface DbAdminImportTabularData {
   columns: CsvImportColumn[];
   row_count: number;
   executed: boolean;
+  preview?: boolean;
   ddl: string;
   insert_sql: string;
   schema_refresh_job_id?: string;

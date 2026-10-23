@@ -26,7 +26,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
 
@@ -19166,6 +19166,17 @@ class Nl2SqlService:
             infer_data_types=mode in {"create", "replace"},
         )
         warnings.extend(parse_warnings)
+        known_columns = {column.column_name for column in columns}
+        if set(request.column_types) - known_columns:
+            raise ValueError("取込ファイルに存在しない列の型は指定できません。")
+        if request.column_types and mode not in {"create", "replace"}:
+            raise ValueError("既存テーブルへの取込では列の型を変更できません。")
+        columns = [
+            column.model_copy(
+                update={"data_type": request.column_types.get(column.column_name, column.data_type)}
+            )
+            for column in columns
+        ]
         table_name = self._sanitize_import_table_name(request.table_name)
         ddl = self._csv_import_ddl(table_name, columns)
         insert_sql = self._csv_import_insert_sql(table_name, columns)
@@ -19178,7 +19189,9 @@ class Nl2SqlService:
             confirmation=request.confirmation,
             target=confirmation_target,
         )
-        if confirmation_error:
+        if request.preview:
+            pass
+        elif confirmation_error:
             warnings.append(confirmation_error)
         elif self._use_oracle_runtime():
             try:
@@ -19252,6 +19265,7 @@ class Nl2SqlService:
             columns=columns,
             row_count=len(rows),
             executed=executed,
+            preview=request.preview,
             ddl=ddl,
             insert_sql=insert_sql,
             schema_refresh_job_id=schema_refresh_job_id,
@@ -20421,6 +20435,22 @@ class Nl2SqlService:
         normalized = [value.strip() for value in values if value.strip()]
         if normalized and all(self._is_csv_number(value) for value in normalized):
             return "NUMBER"
+        if normalized:
+            try:
+                if all(
+                    re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) and date.fromisoformat(value)
+                    for value in normalized
+                ):
+                    return "DATE"
+                parsed = [datetime.fromisoformat(value) for value in normalized]
+                if all("T" in value or " " in value for value in normalized):
+                    return (
+                        "TIMESTAMP WITH TIME ZONE"
+                        if any(value.tzinfo for value in parsed)
+                        else "TIMESTAMP"
+                    )
+            except ValueError:
+                pass
         max_len = max((len(value) for value in normalized), default=1)
         if max_len > 4000:
             if not enforce_varchar2_limit:
@@ -20429,7 +20459,15 @@ class Nl2SqlService:
                 "4000 文字を超えるセルは自動 VARCHAR2 取込できません。"
                 "値を短くするか、CLOB 列を持つ既存テーブルへ取り込んでください。"
             )
-        return f"VARCHAR2({max(max_len, 1)} CHAR)"
+        settings = get_settings()
+        capacity = min(
+            4000,
+            max(
+                settings.nl2sql_csv_import_text_min_chars,
+                math.ceil(max_len * settings.nl2sql_csv_import_text_growth_factor),
+            ),
+        )
+        return f"VARCHAR2({capacity} CHAR)"
 
     def _is_csv_number(self, value: str) -> bool:
         stripped = value.strip()

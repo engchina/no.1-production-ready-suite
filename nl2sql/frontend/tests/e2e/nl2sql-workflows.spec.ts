@@ -1,3 +1,4 @@
+import { mockTabularPreview } from "./_helpers/tabular-preview";
 import { readFile } from "node:fs/promises";
 import { draftKey, WORKSPACE_DRAFT_PREFIX } from "../../src/lib/workspace-drafts";
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
@@ -15364,6 +15365,8 @@ test("Excel/CSV取込の列幅エラーは取込フォーム内に表示して�
   await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
 
   const executeButton = importPanel.getByRole("button", { name: "取込を実行" });
+  await mockTabularPreview(page);
+  await importPanel.getByTestId("table-import-preview-button").click();
   await executeButton.focus();
   await executeButton.press("Enter");
 
@@ -15418,6 +15421,8 @@ test("Excel/CSV取込の重複名は対象と安全な復旧手順を表示す�
     { name: "test.csv", type: "text/csv", content: "ID\n1\n" },
   ]);
   await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await mockTabularPreview(page);
+  await importPanel.getByTestId("table-import-preview-button").click();
   await importPanel.getByRole("button", { name: "取込を実行" }).click();
 
   const alert = importPanel.getByRole("alert");
@@ -15444,7 +15449,7 @@ test("Excel/CSV取込はSheet不一致をエラーで止め旧結果を残さな
   });
   await page.unroute("**/api/nl2sql/db-admin/import-tabular");
   await page.route("**/api/nl2sql/db-admin/import-tabular", async (route) => {
-    const payload = route.request().postDataJSON() as { table_name?: string; sheet_name?: string };
+    const payload = route.request().postDataJSON() as { table_name?: string; sheet_name?: string; preview?: boolean };
     const tableName = payload.table_name ?? "TABLE_2026081301";
     if (payload.sheet_name === "Sheet1") {
       await fulfillJson(route, {
@@ -15457,7 +15462,7 @@ test("Excel/CSV取込はSheet不一致をエラーで止め旧結果を残さな
           { source_name: "B", column_name: "B", data_type: "NUMBER", nullable: true },
         ],
         row_count: 2,
-        executed: true,
+        executed: !payload.preview,
         ddl: `CREATE TABLE "${tableName}" ("A" NUMBER, "B" NUMBER)`,
         insert_sql: `INSERT INTO "${tableName}" ("A", "B") VALUES (:c0, :c1)`,
         schema_refresh_job_id: "",
@@ -15496,6 +15501,7 @@ test("Excel/CSV取込はSheet不一致をエラーで止め旧結果を残さな
     },
   ]);
   await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await importPanel.getByTestId("table-import-preview-button").click();
   await importPanel.getByRole("button", { name: "取込を実行" }).click();
   await expect(importPanel.getByTestId("table-import-result-panel")).toContainText(
     'CREATE TABLE "TABLE_2026081301"'
@@ -15504,7 +15510,7 @@ test("Excel/CSV取込はSheet不一致をエラーで止め旧結果を残さな
   await importPanel.getByLabel("Sheet 名").fill("Shell1");
   await expect(importPanel.getByLabel("実行確認語")).toHaveValue("");
   await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
-  await importPanel.getByRole("button", { name: "取込を実行" }).click();
+  await importPanel.getByTestId("table-import-preview-button").click();
 
   const alert = importPanel.getByRole("alert").filter({ hasText: "Sheet が見つかりません" });
   await expect(alert).toBeVisible();
@@ -15587,6 +15593,8 @@ test("Excel/CSV取込はDB構造再取得を待たず結果を実行枠下に表
     { name: "orders.csv", type: "text/csv", content: "ORDER_ID,ORDER_NAME\n1,架空商事\n" },
   ]);
   await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await mockTabularPreview(page);
+  await importPanel.getByTestId("table-import-preview-button").click();
   await executeButton.click();
 
   const resultPanel = executionFieldset.getByTestId("table-import-result-panel");
@@ -15715,6 +15723,8 @@ test("Excel/CSV取込後の差分同期不整合はDB構造再取得CTAを表示
     { name: "orders.csv", type: "text/csv", content: "ORDER_ID\n1\n" },
   ]);
   await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await mockTabularPreview(page);
+  await importPanel.getByTestId("table-import-preview-button").click();
   await importPanel.getByRole("button", { name: "取込を実行" }).click();
 
   await expect(importPanel).toContainText("DB 構造の差分同期で不整合を検出しました。");
@@ -16219,6 +16229,8 @@ test("table and view management pages run guarded DDL and AI workflows", { tag: 
   await importConfirmationInput.fill("ADMIN_EXECUTE");
   await expect(importPanel.getByText("入力条件: ADMIN_EXECUTE")).toBeVisible();
   await expect(importPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
+  await mockTabularPreview(page);
+  await importPanel.getByTestId("table-import-preview-button").click();
   await expect(importExecuteButton).toBeEnabled();
   await importExecuteButton.click();
   await expect(importPanel.getByText("IMPORTED_ORDERS", { exact: true })).toBeVisible();
@@ -18155,6 +18167,8 @@ test("テーブル取込中は対象とファイルの変更を停止し失敗�
   await file.setInputFiles({ name: "orders.csv", mimeType: "text/csv", buffer: Buffer.from("ID\n1\n") });
   await expect(panel.getByText("選択中: orders.csv")).toBeVisible();
   await consent.fill("ADMIN_EXECUTE");
+  await mockTabularPreview(page);
+  await panel.getByTestId("table-import-preview-button").click();
   const gate = createRequestGate();
   await page.route("**/api/nl2sql/db-admin/import-tabular", async (route) => {
     await gate.promise;
@@ -18177,6 +18191,7 @@ test("テーブル取込中は対象とファイルの変更を停止し失敗�
   await expect(consent).toHaveValue("ADMIN_EXECUTE");
   await page.unroute("**/api/nl2sql/db-admin/import-tabular");
   await page.route("**/api/nl2sql/db-admin/import-tabular", (route) => fulfillJson(route, {
+    columns: [{ source_name: "ID", column_name: "ID", data_type: "NUMBER", nullable: true }],
     executed: true, table_name: "IMPORTED_ORDERS", owner: "APP", qualified_name: "APP.IMPORTED_ORDERS", row_count: 1, mode: "create", warnings: [],
     ddl: "CREATE TABLE IMPORTED_ORDERS (ID NUMBER)", insert_sql: "INSERT INTO IMPORTED_ORDERS VALUES (1)", sample_rows: [{ ID: 1 }],
   }));
@@ -18550,6 +18565,10 @@ for (const kind of ["table", "data"] as const) {
     const select = async (name: string, value: number) => file.setInputFiles({ name, mimeType: "text/csv", buffer: Buffer.from(`ID\n${value}\n`) });
     await select("old.csv", 1);
     await consent.fill(phrase);
+    if (kind === "table") {
+      await mockTabularPreview(page);
+      await panel.getByTestId("table-import-preview-button").click();
+    }
     await expect(execute).toBeEnabled();
     await select("slow.csv", 2);
     await expect(consent).toHaveValue("");
@@ -18562,6 +18581,10 @@ for (const kind of ["table", "data"] as const) {
     await select("slow-again.csv", 3);
     await select("new.csv", 4);
     await consent.fill(phrase);
+    if (kind === "table") {
+      await mockTabularPreview(page);
+      await panel.getByTestId("table-import-preview-button").click();
+    }
     await expect(execute).toBeEnabled();
     await releaseReviewFileRead(page);
     await execute.click();
@@ -18572,6 +18595,10 @@ for (const kind of ["table", "data"] as const) {
     await expect(execute).toBeDisabled();
     await select("retry.csv", 6);
     await consent.fill(phrase);
+    if (kind === "table") {
+      await mockTabularPreview(page);
+      await panel.getByTestId("table-import-preview-button").click();
+    }
     await expect(execute).toBeEnabled();
   });
 }
@@ -20070,4 +20097,38 @@ test("Select AI Credential が無いと合成データの生成開始を止め�
   await expect(generate).toBeEnabled();
   await generate.click();
   await expect.poll(() => writes).toBe(1);
+});
+
+
+test("新規テーブル取込は編集した型を再プレビューしてから実行する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const api = await mockNl2SqlApi(page);
+  await mockTabularPreview(page);
+  const submitted: Record<string, unknown>[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/db-admin/import-tabular")) submitted.push(request.postDataJSON());
+  });
+  await page.goto("/table-management");
+  await clickPageHeaderAction(page, "table-management-actions", "Excel/CSV 取込(新規テーブル)");
+  const panel = page.locator("#table-management-panel-import");
+  await panel.getByLabel("Oracle 表名").fill("TABLE_A");
+  await panel.getByTestId("table-import-file-field-input").setInputFiles({ name: "table-a.csv", mimeType: "text/csv", buffer: Buffer.from("ID\n1\n") });
+  await panel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  const execute = panel.getByRole("button", { name: "取込を実行", exact: true });
+  await expect(execute).toBeDisabled();
+  await panel.getByTestId("table-import-preview-button").click();
+  await expect(panel.getByTestId("table-import-result-panel")).toContainText('CREATE TABLE "TABLE_A"');
+  await expect(execute).toBeEnabled();
+  await panel.getByLabel("ID", { exact: true }).fill("VARCHAR2(1000 CHAR)");
+  await expect(execute).toBeDisabled();
+  await panel.getByTestId("table-import-preview-button").click();
+  await expect(panel.getByTestId("table-import-result-panel")).toContainText("VARCHAR2(1000 CHAR)");
+  await expect(execute).toBeEnabled();
+  expect(submitted).toHaveLength(2);
+  expect(submitted.every((request) => request.preview === true && request.confirmation === "")).toBe(true);
+  await panel.getByTestId("table-import-result-panel").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("table-import-preview.png") });
+  await expectNoHorizontalScroll(page);
+  await execute.click();
+  await expect.poll(() => api.importTabularPayload?.preview).toBe(false);
+  expect(api.importTabularPayload?.column_types).toEqual({ ID: "VARCHAR2(1000 CHAR)" });
 });

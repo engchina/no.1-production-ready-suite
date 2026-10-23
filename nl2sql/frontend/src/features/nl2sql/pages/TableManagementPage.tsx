@@ -8,7 +8,7 @@ import {
   useWorkspaceUrlSelection,
 } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Code2, RefreshCw, Table2, Upload } from "lucide-react";
+import { Code2, Eye, RefreshCw, Table2, Upload } from "lucide-react";
 
 import {
   Button,
@@ -99,7 +99,7 @@ function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
   return (
     <section
       className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm"
-      aria-label={t("tableMgmt.importWizard.result")}
+      aria-label={t(result.preview ? "tableMgmt.importWizard.previewResult" : "tableMgmt.importWizard.result")}
       data-testid="table-import-result-panel"
     >
       <div className="flex flex-wrap items-center gap-2">
@@ -111,7 +111,7 @@ function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
         {/* 実行の状態・モードは API の内部値（executed / create）を出さず、文言で出す（#935）。 */}
         <StatusBadge
           variant={result.executed ? "success" : "warning"}
-          label={t(result.executed ? "dbAdmin.result.summary.executed" : "dbAdmin.result.summary.notExecuted")}
+          label={t(result.preview ? "tableMgmt.importWizard.previewResult" : result.executed ? "dbAdmin.result.summary.executed" : "dbAdmin.result.summary.notExecuted")}
         />
         <StatusBadge icon={false} variant="info" label={t("tableMgmt.importWizard.rows", { count: result.row_count })} />
         <StatusBadge icon={false} variant="neutral" label={importModeLabel(result.mode)} />
@@ -146,6 +146,7 @@ function ImportWizard({
   step,
   confirmation,
   loading,
+  previewing,
   canClear,
   error,
   schemaSync,
@@ -156,6 +157,9 @@ function ImportWizard({
   onFileClear,
   onClear,
   onExecute,
+  onPreview,
+  columnTypes,
+  onColumnTypeChange,
   onConfirmationChange,
   onReturnToList,
 }: {
@@ -168,6 +172,7 @@ function ImportWizard({
   step: ImportStep;
   confirmation: string;
   loading: boolean;
+  previewing: boolean;
   canClear: boolean;
   error: unknown;
   schemaSync: MutationSchemaSync;
@@ -179,6 +184,9 @@ function ImportWizard({
   onFileClear: () => void;
   onClear: () => void;
   onExecute: () => void;
+  onPreview: () => void;
+  columnTypes: Record<string, string>;
+  onColumnTypeChange: (column: string, dataType: string) => void;
   onConfirmationChange: (value: string) => void;
   onReturnToList: () => void;
 }) {
@@ -194,7 +202,8 @@ function ImportWizard({
     Boolean(table.trim()) &&
     fileReady &&
     (!sheetRequired || Boolean(sheet.trim())) &&
-    isConfirmed;
+    isConfirmed && Boolean(result) &&
+    Boolean(result?.columns.every((column) => columnTypes[column.column_name] === column.data_type));
 
   return (
     <div className="grid gap-4">
@@ -255,6 +264,25 @@ function ImportWizard({
         />
       </FormGrid>
 
+      <div className="grid gap-3">
+        <Button icon={Eye} onClick={onPreview} loading={loading}
+          disabled={!table.trim() || !fileReady || (sheetRequired && !sheet.trim())}
+          data-testid="table-import-preview-button">
+          {t("tableMgmt.importWizard.preview")}
+        </Button>
+        {result && !result.executed && (
+          <FormGrid>
+            {result.columns.map((column) => (
+              <TextField key={column.column_name} id={`table-import-column-${column.column_name}`}
+                label={column.column_name} value={columnTypes[column.column_name] ?? column.data_type}
+                disabled={loading} width="md"
+                helper={t("tableMgmt.importWizard.columnTypeHint")}
+                onValueChange={(value) => onColumnTypeChange(column.column_name, value)} />
+            ))}
+          </FormGrid>
+        )}
+      </div>
+
       <fieldset
         className="grid gap-3 rounded-md border border-border bg-surface p-3"
         data-testid="table-import-execution-fieldset"
@@ -296,7 +324,7 @@ function ImportWizard({
           // 表の作成と行の投入を行うため、行数が多いと数十秒かかる（messaging.md §3.7）。
           <ProcessingIndicator
             active
-            label={t("tableMgmt.importWizard.progress.importing")}
+            label={t(previewing ? "tableMgmt.importWizard.progress.previewing" : "tableMgmt.importWizard.progress.importing")}
             operationKey="table-import"
             placement="action"
             activityIcon="none"
@@ -343,6 +371,7 @@ export function TableManagementPage() {
   const [importStep, setImportStep] = useState<ImportStep>("file");
   const [importConfirmation, setImportConfirmation] = useState("");
   const [importResult, setImportResult] = useState<DbAdminImportTabularData | null>(null);
+  const [importColumnTypes, setImportColumnTypes] = useState<Record<string, string>>({});
   useTransientDraftGuard(Boolean(importBase64) && !importResult?.executed);
   const [importError, setImportError] = useState<unknown>(null);
   const [loading, setLoading] = useState("");
@@ -528,6 +557,7 @@ export function TableManagementPage() {
     setImportConfirmation("");
     setImportBase64("");
     setImportResult(null);
+    setImportColumnTypes({});
     setImportError(null);
     taskSchemaSync.reset();
     setImportStep("file");
@@ -545,6 +575,7 @@ export function TableManagementPage() {
     setImportFilename("");
     setImportBase64("");
     setImportResult(null);
+    setImportColumnTypes({});
     setImportError(null);
     taskSchemaSync.reset();
     setImportStep("file");
@@ -569,16 +600,16 @@ export function TableManagementPage() {
     clearImportFile();
   };
 
-  const importTabular = async () => {
+  const importTabular = async (preview = false) => {
     if (
-      loading === "import-tabular" || !importTable.trim() || !importBase64 ||
-      importConfirmation.trim() !== "ADMIN_EXECUTE" ||
+      Boolean(loading) || !importTable.trim() || !importBase64 ||
+      (!preview && (importConfirmation.trim() !== "ADMIN_EXECUTE" || !importResult ||
+        !importResult.columns.every((column) => importColumnTypes[column.column_name] === column.data_type))) ||
       (!importFilename.toLowerCase().endsWith(".csv") && !importSheet.trim())
     ) return;
-    setLoading("import-tabular");
+    setLoading(preview ? "import-preview" : "import-tabular");
     setMessage("");
     setImportError(null);
-    setImportResult(null);
     taskSchemaSync.reset();
     try {
       const result = await apiPost<DbAdminImportTabularData>("/api/nl2sql/db-admin/import-tabular", {
@@ -587,10 +618,13 @@ export function TableManagementPage() {
         filename: importFilename || "upload.csv",
         sheet_name: importSheet,
         mode: "create",
-        confirmation: importConfirmation,
+        preview,
+        column_types: importColumnTypes,
+        confirmation: preview ? "" : importConfirmation,
         reason: "ui-table-management-import-tabular",
       });
       setImportResult(result);
+      setImportColumnTypes(Object.fromEntries(result.columns.map((column) => [column.column_name, column.data_type])));
       setImportStep("execute");
       if (result.executed && !taskSchemaSync.track(result)) {
         void refreshObjects();
@@ -703,7 +737,8 @@ export function TableManagementPage() {
         result={importResult}
         step={importStep}
         confirmation={importConfirmation}
-        loading={loading === "import-tabular"}
+        loading={loading === "import-tabular" || loading === "import-preview"}
+        previewing={loading === "import-preview"}
         canClear={canClearImportWizard}
         error={importError}
         schemaSync={taskSchemaSync}
@@ -711,6 +746,7 @@ export function TableManagementPage() {
         onTableChange={(value) => {
           setImportTable(value);
           setImportResult(null);
+          setImportColumnTypes({});
           setImportError(null);
           taskSchemaSync.reset();
           setImportStep("file");
@@ -718,6 +754,7 @@ export function TableManagementPage() {
         onSheetChange={(value) => {
           setImportSheet(value);
           setImportResult(null);
+          setImportColumnTypes({});
           setImportError(null);
           taskSchemaSync.reset();
           setImportStep("file");
@@ -726,6 +763,9 @@ export function TableManagementPage() {
         onFileClear={clearImportFile}
         onClear={clearImportWizard}
         onExecute={() => void importTabular()}
+        onPreview={() => void importTabular(true)}
+        columnTypes={importColumnTypes}
+        onColumnTypeChange={(column, value) => setImportColumnTypes((current) => ({ ...current, [column]: value }))}
         onConfirmationChange={(value) => {
           setImportConfirmation(value);
           setImportError(null);
