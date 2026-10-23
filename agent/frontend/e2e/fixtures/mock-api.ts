@@ -1543,6 +1543,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
   }
   if (head === "security") {
+    if (method === "GET" && at("security", "api-keys")) return { keys: state.apiKeys.keys };
+    if (method === "DELETE" && at("security", "api-keys", "*")) {
+      state.apiKeys.keys = state.apiKeys.keys.filter((key) => (key as { id: string }).id !== third);
+      return { id: third };
+    }
     if (method === "GET" && at("security", "users")) return state.security.users;
     if (method === "GET" && at("security", "roles")) {
       const includeArchived = query.get("include_archived") === "true";
