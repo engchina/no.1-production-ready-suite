@@ -255,3 +255,75 @@ def test_an_explicitly_empty_scope_does_not_authorize_an_operation():
     )
     assert _request_plan_errors(draft)
     assert _outside_request_plan(item, span, draft, [span])
+
+
+def test_retrieval_rank_does_not_reorder_a_documents_heading_and_body():
+    from dataclasses import replace
+
+    from test_grounded_answer import context, record
+
+    from rag_engine.generation.answering import _grounded_spans
+    from rag_engine.generation.grounded import format_functions
+
+    sections = (EXAMPLES / "operations.txt").read_text().strip().split("\n\n")
+    parts = [line for section in sections for line in section.splitlines()]
+    records = [replace(record(i, text, "", source="operations.txt"), chunk_seq=i) for i, text in enumerate(parts)]
+    ranked = [records[i] for i in [8, 9, 5, 4, 6, 7, 0, 1, 2, 3]]
+    spans = _grounded_spans(CASES["summary"]["question"], context(*ranked), (), None)
+    packet = format_functions(spans)
+    assert all(packet.index(parts[i]) < packet.index(parts[i + 1]) for i in range(len(parts) - 1))
+    # 根拠の選択と表示 ID は関連度順のまま、モデルへ読ませる本文だけ原文順にする。
+    assert spans[0]["text"] == parts[8]
+
+
+def test_same_evidence_used_for_two_claims_can_repeat_a_consistent_scope_decision():
+    from rag_engine.generation.grounded import _outside_request_plan, _request_plan_errors
+
+    text = (EXAMPLES / "rows.csv").read_text()
+    span = {"evidence_id": "E1", "text": text}
+    item = GroundedItem(kind="rule", request_id="Q1", text="残す行は row-a と row-c です。", evidence_id="E1")
+    draft = GroundedDraft.model_validate(
+        {
+            "request_coverage": [
+                {
+                    "request_id": "Q1",
+                    "evidence_ids": ["E1"],
+                    "evidence_scope": [
+                        {"evidence_id": "E1", "target": target, "relation": "direct", "link_quote": ""}
+                        for target in ["残す行", "削除する行"]
+                    ],
+                }
+            ],
+            "items": [item.model_dump()],
+            "summary": "行を区別します。",
+            "confidence": "high",
+        }
+    )
+    assert not _request_plan_errors(draft)
+    assert not _outside_request_plan(item, span, draft, [span])
+
+
+def test_conflicting_scope_decisions_for_the_same_evidence_are_not_merged():
+    from rag_engine.generation.grounded import _outside_request_plan, _request_plan_errors
+
+    span = {"evidence_id": "E1", "text": "対象を選択します。"}
+    item = GroundedItem(kind="operation", request_id="Q1", text=span["text"], evidence_id="E1")
+    draft = GroundedDraft.model_validate(
+        {
+            "request_coverage": [
+                {
+                    "request_id": "Q1",
+                    "evidence_ids": ["E1"],
+                    "evidence_scope": [
+                        {"evidence_id": "E1", "target": "対象", "relation": relation, "link_quote": ""}
+                        for relation in ["direct", "unrelated"]
+                    ],
+                }
+            ],
+            "items": [item.model_dump()],
+            "summary": "対象を選択します。",
+            "confidence": "high",
+        }
+    )
+    assert _request_plan_errors(draft)
+    assert _outside_request_plan(item, span, draft, [span])

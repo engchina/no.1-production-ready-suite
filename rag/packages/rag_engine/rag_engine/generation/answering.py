@@ -2642,6 +2642,7 @@ def draft_structure(draft: Any, settled: Any, *, superseded: Sequence[str] | set
         "settled_confirmations": settled.diagnostics(),
         "external_data_required": bool(draft.external_data_required),
         "reference_materials": _string_list(draft.reference_materials),
+        "request_coverage": [plan.model_dump(mode="json") for plan in draft.request_coverage],
         "items": [
             {
                 "kind": item.kind,

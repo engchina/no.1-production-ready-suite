@@ -1490,6 +1490,16 @@ def item_question(question: str, request_id: str) -> str:
     return "\n".join(part for part in (preface, str(unit["text"])) if part)
 
 
+def _scope_decisions(plan: Any, label: str) -> list[Any]:
+    """同じ根拠の別主張に重ねた同一の判断をまとめ、矛盾する判断は残す。"""
+    unique = {}
+    for scope in plan.evidence_scope:
+        if scope.evidence_id == label:
+            key = (scope.relation, scope.link_quote.strip() if scope.relation == "linked" else "")
+            unique.setdefault(key, scope)
+    return list(unique.values())
+
+
 def _request_plan_errors(draft: GroundedDraft) -> list[str]:
     """計画と説明の構造の不整合を列挙する。旧形式の応答は追加の欄を要求しない。"""
     errors = []
@@ -1499,7 +1509,7 @@ def _request_plan_errors(draft: GroundedDraft) -> list[str]:
         if "evidence_scope" not in plan.model_fields_set:
             continue
         for label in plan.evidence_ids:
-            scopes = [scope for scope in plan.evidence_scope if scope.evidence_id == label]
+            scopes = _scope_decisions(plan, label)
             if len(scopes) != 1:
                 errors.append(f"{plan.request_id}: {label} の対象の照合は1件必要です。")
             elif scopes[0].relation == "unrelated":
@@ -1524,7 +1534,7 @@ def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, 
             if "evidence_scope" not in plan.model_fields_set:
                 labels.add(label)
                 continue
-            scopes = [scope for scope in plan.evidence_scope if scope.evidence_id == label]
+            scopes = _scope_decisions(plan, label)
             if len(scopes) != 1:
                 continue
             scope = scopes[0]
@@ -3619,6 +3629,9 @@ def format_functions(spans: Sequence[dict]) -> str:
     ordered = sorted(groups.values(), key=lambda members: documents[_document_key(members[0])])
     blocks = []
     for number, members in enumerate(ordered, 1):
+        # 選択順位と表示 ID を保ち、原文位置の分かる同じ機能の本文だけを読み順へ戻す。
+        if all(span.get("source_order") is not None for span in members):
+            members = sorted(members, key=lambda span: span["source_order"])
         header = f"=== 機能 F{number}: {_function_label(members[0])} ==="
         # 文書の補助情報は原文照合の対象外。表示IDの行より前に置くと直前の Evidence の本文に見え、
         # そこからの引用は「原文と一致しない」として削除されるため、IDの後ろに範囲を明示して置く。
