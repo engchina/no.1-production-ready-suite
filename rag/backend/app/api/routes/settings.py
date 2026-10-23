@@ -845,14 +845,22 @@ async def update_guardrail_settings(
 ) -> ApiResponse[GuardrailSettingsData]:
     """安全チェック設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
-    candidate = settings.model_copy(update={"rag_guardrails_enabled": payload.enabled})
-    if candidate.rag_guardrails_enabled and _oci_guardrails_readiness_code(candidate):
+    candidate = settings.model_copy(
+        update={
+            "rag_guardrails_input_enabled": payload.input_enabled,
+            "rag_guardrails_output_enabled": payload.output_enabled,
+        }
+    )
+    if (
+        candidate.rag_guardrails_input_enabled or candidate.rag_guardrails_output_enabled
+    ) and _oci_guardrails_readiness_code(candidate):
         raise HTTPException(
             status_code=422,
             detail="OCI Guardrails を有効にする前に、OCI 認証と compartment を設定してください。",
         )
     _persist_guardrail_settings(candidate)
-    settings.rag_guardrails_enabled = candidate.rag_guardrails_enabled
+    settings.rag_guardrails_input_enabled = candidate.rag_guardrails_input_enabled
+    settings.rag_guardrails_output_enabled = candidate.rag_guardrails_output_enabled
     return ApiResponse(data=_guardrail_settings_data(settings))
 
 
@@ -1397,7 +1405,8 @@ def _persist_vector_index_settings(settings: Settings) -> None:
 def _guardrail_settings_data(settings: Settings) -> GuardrailSettingsData:
     """Settings から安全チェック設定の表示用データを作る。"""
     return GuardrailSettingsData(
-        enabled=settings.rag_guardrails_enabled,
+        input_enabled=settings.rag_guardrails_input_enabled,
+        output_enabled=settings.rag_guardrails_output_enabled,
         oci_configured=_oci_guardrails_configured(settings),
         oci_warning_code=_oci_guardrails_readiness_code(settings),
     )
@@ -1433,7 +1442,8 @@ def _persist_guardrail_settings(settings: Settings) -> None:
     _write_env_values(
         BACKEND_ENV_FILE,
         {
-            "RAG_GUARDRAILS_ENABLED": str(settings.rag_guardrails_enabled).lower(),
+            "RAG_GUARDRAILS_INPUT_ENABLED": str(settings.rag_guardrails_input_enabled).lower(),
+            "RAG_GUARDRAILS_OUTPUT_ENABLED": str(settings.rag_guardrails_output_enabled).lower(),
         },
         section_comment="# OCI Guardrails",
         error_detail="安全チェック設定を backend/.env へ保存できませんでした。",

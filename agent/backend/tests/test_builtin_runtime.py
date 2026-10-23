@@ -929,7 +929,7 @@ def test_mcp_connection_tools_are_given_to_the_model(
     assert evidence.content["evidence"][0]["file_name"] == "契約書.pdf"
 
 
-def test_unavailable_mcp_connection_is_skipped_with_a_warning(
+def test_partially_unavailable_required_mcp_stops_before_the_model(
     monkeypatch: MonkeyPatch, mcp_agent: Any
 ) -> None:
     # 根拠・データのツールの拒答（#1835。test_tool_grounding.py）の外の振る舞いを確かめる。
@@ -941,10 +941,9 @@ def test_unavailable_mcp_connection_is_skipped_with_a_warning(
     anyio.run(builtin_runtime.execute_run, run_id)
 
     run = runtime_repository.get_run(run_id)
-    assert run.status == RunStatus.COMPLETED
-    names = {tool.name for tool in model.calls[0].tools}
-    assert "rag__rag_search" in names
-    assert not any(name.startswith("nl2sql__") for name in names)
+    assert run.status == RunStatus.FAILED
+    assert not model.calls
+    assert run.events[-1].payload["error_code"] == "runtime.mcp_unavailable"
     warning = next(event for event in run.events if event.type == "runtime.event")
     assert "NL2SQL" in warning.message
     assert warning.payload == {"severity": "warning"}
@@ -1703,3 +1702,76 @@ def test_always_allow_failure_is_retryable(
     assert WRITE in runtime_config_store.get_tool_policy().allow
     assert client.post(url, json={"approved": True, "always_allow": True}).status_code == 200
     assert len(saves) == 1
+
+
+def test_required_mcp_discovery_failure_stops_before_the_model(
+    monkeypatch: MonkeyPatch, calls: _Calls
+) -> None:
+    model = _script(monkeypatch, [assistant_message('{"command":"lookup","parameters":{}}')])
+    monkeypatch.setattr(
+        builtin_runtime,
+        "discover_mcp_tools",
+        lambda *args, **kwargs: (
+            [],
+            ["MCP 接続 A のツールを取得できません。接続を確認してください。 "],
+        ),
+    )
+    run_id = _create_run("資料の値を確認してください。")
+    anyio.run(builtin_runtime.execute_run, run_id)
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.FAILED
+    assert not model.calls
+    assert not calls.items
+    assert "MCP" in run.events[-1].message
+    assert fact_from_run(run).tool_failures == 1
+    assert not any(item.kind == "answer" for item in run.artifacts)
+
+
+def test_rejected_approval_does_not_ask_for_execution_again(
+    monkeypatch: MonkeyPatch, calls: _Calls
+) -> None:
+    model = _script(
+        monkeypatch,
+        [function_call(WRITE, {"query": "処理 A"}, call_id="call-reject")],
+        [assistant_message("同じ処理を実行してよろしいですか？")],
+    )
+    run_id = _create_run("処理 A を実行してください。")
+    anyio.run(builtin_runtime.execute_run, run_id)
+    [approval] = runtime_repository.get_run(run_id).approvals
+    runtime_repository.decide_approval(approval.id, ApprovalDecisionRequest(approved=False))
+    anyio.run(builtin_runtime.resume_run, run_id)
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED
+    assert not calls.items
+    assert len(model.calls) == 1
+    answer = next(item.content["text"] for item in run.artifacts if item.kind == "answer")
+    assert "却下" in answer and "実行していません" in answer
+    assert "よろしい" not in answer
+
+
+def test_mixed_approval_executes_only_approved_calls_without_another_model_turn(
+    monkeypatch: MonkeyPatch, calls: _Calls
+) -> None:
+    model = _script(
+        monkeypatch,
+        [
+            function_call(WRITE, {"query": "処理 A"}, call_id="call-a"),
+            function_call(WRITE, {"query": "処理 B"}, call_id="call-b"),
+        ],
+        [assistant_message("却下した処理をもう一度実行しますか？")],
+    )
+    run_id = _create_run("処理 A と処理 B を実行してください。")
+    anyio.run(builtin_runtime.execute_run, run_id)
+    approvals = runtime_repository.get_run(run_id).approvals
+    assert len(approvals) == 2
+    for approval in approvals:
+        runtime_repository.decide_approval(
+            approval.id,
+            ApprovalDecisionRequest(approved=approval.tool_call.arguments["query"] == "処理 A"),
+        )
+    anyio.run(builtin_runtime.resume_run, run_id)
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED
+    assert [args["query"] for _, args, _ in calls.items] == ["処理 A"]
+    assert len(model.calls) == 1
+    assert not run.confirmations

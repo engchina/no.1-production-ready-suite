@@ -75,7 +75,10 @@ class OciGuardrailsClient:
 
     def is_configured(self) -> bool:
         """compartment が解決でき、かつ OCI Guardrails が有効のとき True。"""
-        return self._settings.rag_guardrails_enabled and bool(self._compartment_id())
+        return (
+            self._settings.rag_guardrails_input_enabled
+            or self._settings.rag_guardrails_output_enabled
+        ) and bool(self._compartment_id())
 
     def inspect_text(
         self,

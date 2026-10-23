@@ -457,3 +457,38 @@ def test_csv_current_value_warning_is_rephrased_in_none_mode(correction_rounds, 
     assert not marks(result)
     assert [name for name, _ in model.prompts] == ["GroundedDraft", "GroundedDraft"]
     assert wrong in model.prompts[1][1]
+
+
+@pytest.mark.parametrize("plan_kind", ["absent", "legacy", "scoped"])
+def test_planned_table_evidence_does_not_need_question_words(plan_kind):
+    from rag_engine.generation.grounded import OTHER_DOCUMENT_CHECK
+
+    operation = "入力ファイルを開いて値を確認します。"
+    rows = (EXAMPLES / "rows.csv").read_text()
+    spans = [
+        {"evidence_id": "op", "label": "E1", "source_id": "op", "document_id": "doc-a", "source": "steps.txt", "text": operation},
+        {"evidence_id": "rows", "label": "E2", "source_id": "rows", "document_id": "doc-b", "source": "rows.csv", "text": rows},
+    ]
+    payload = {
+        "items": [
+            {"kind": "operation", "request_id": "Q1", "text": operation, "quote": operation, "evidence_id": "E1"},
+            {"kind": "confirmation", "request_id": "Q1", "text": "row-a の値は 10 です。", "quote": rows, "evidence_id": "E2"},
+        ],
+        "summary": operation,
+        "confidence": "high",
+    }
+    if plan_kind != "absent":
+        payload["request_coverage"] = [
+            {
+                "request_id": "Q1",
+                "evidence_ids": ["E1", "E2"],
+                "evidence_scope": [
+                    {"evidence_id": e, "target": "入力の確認", "relation": "direct", "link_quote": ""} for e in ("E1", "E2")
+                ],
+            }
+        ]
+    if plan_kind == "legacy":
+        payload["request_coverage"][0].pop("evidence_scope")
+    result, _ = verify("入力ファイルの更新方法を教えてください。", GroundedDraft.model_validate(payload), spans)
+    entry = next(e for e in result if e.item.evidence_id == "rows")
+    assert any(OTHER_DOCUMENT_CHECK in str(mark) for mark in entry.marks) is (plan_kind != "scoped")

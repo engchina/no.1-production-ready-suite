@@ -167,7 +167,7 @@ export const ja = {
   "nav.settingsEvaluation.sidebar": "評価の基準",
   "nav.settingsEntityIndex": "名称・別名の索引",
   "settings.entityIndex.subtitle": "文書中の名称・別名と根拠のつながりを記録するかを選びます。",
-  "settings.entityIndex.description": "名称・別名と文書の断片の関連を記録します。Embedding（ベクトル化）とは別の処理で、AI は使いません。検索で利用するかは、検索・回答プロファイルの「名称・別名でつながる根拠を 1 段広げる」で設定します。",
+  "settings.entityIndex.description": "名称・別名と文書の断片の関連を記録します。Embedding（ベクトル化）とは別の処理で、AI は使いません。検索で利用するかは、検索方法の「名称・別名でつながる根拠」で設定します（全体の設定）。",
   "settings.entityIndex.enabled": "名称・別名の索引を構築する",
   "settings.entityIndex.hint": "既定は無効です。文書レシピで個別に上書きできます。変更は次回の索引構築から適用され、既存の文書へ反映するには索引から再処理します。",
   "settings.entityIndex.off.description": "名称・別名と文書の断片を結ぶ索引を構築しません。",
@@ -1758,13 +1758,12 @@ export const ja = {
   "settings.guardrail.overview.description":
     "全体の設定です。保存すると次の質問・回答から使います。",
   "settings.guardrail.ociLabel": "OCI Guardrails",
-  "settings.guardrail.ociDescription": "有効なときだけ、質問と回答のテキストを OCI Guardrails に送信し、個人情報（PII）・プロンプト攻撃・不適切な内容を検査します。無効なときは検査しません。",
-  "settings.guardrail.selection": "質問と回答を検査するか",
-  "settings.guardrail.disabled": "検査しない",
-  "settings.guardrail.enabled": "検査する",
-  "settings.guardrail.defaultTag": "既定",
-  "settings.guardrail.disabled.description": "質問と回答を OCI Guardrails に送信せず、安全チェックを行いません。",
-  "settings.guardrail.enabled.description": "質問と回答を OCI Guardrails に送信し、個人情報・プロンプト攻撃・不適切な内容を検査します。",
+  "settings.guardrail.ociDescription": "入力と出力を個別に選択できます。選択したテキストだけを OCI Guardrails に送信します。",
+  "settings.guardrail.selection": "検査するテキスト（既定は両方とも未選択）",
+  "settings.guardrail.input": "入力を検査する",
+  "settings.guardrail.output": "出力を検査する",
+  "settings.guardrail.input.description": "質問を OCI Guardrails に送信し、個人情報・プロンプト攻撃・不適切な内容を検査します。未選択のときは質問を送信しません。",
+  "settings.guardrail.output.description": "回答を OCI Guardrails に送信し、個人情報・プロンプト攻撃・不適切な内容を検査します。未選択のときは回答を送信しません。",
   "settings.guardrail.resultHandling": "検出された個人情報はアプリでマスクします。プロンプト攻撃・不適切な内容を検出したとき、または検査を完了できないときは、処理・回答の表示を停止します。",
   "settings.guardrail.officialDocs": "OCI Guardrails の公式ドキュメント（新しいタブで開きます）",
   "settings.guardrail.ociSettingsLink": "OCI 認証設定を開く",
@@ -2166,17 +2165,6 @@ export const ja = {
   "searchAnswerProfiles.field.guideStepMaxQueries": "手順ごとの検索の上限",
   "searchAnswerProfiles.field.guideStepMaxQueriesHelper":
     "既定は {defaultValue} です。1 回の回答で手順ごとに探す回数の上限です（参照の頁に絞った検索を含む）。主の検索の後に足す検索の合計の枠も超えません。継承時は検索方法の現在の設定を使います。",
-  "searchAnswerProfiles.entityExpansion.title": "名称・別名でつながる根拠",
-  "searchAnswerProfiles.entityExpansion.enabled": "名称・別名でつながる根拠を 1 段広げる",
-  "searchAnswerProfiles.entityExpansion.helper":
-    "質問と上位の根拠に出てくる名称・別名（システム名・部署の略号など）から、台帳の行やその略号を定義した規程など、名称・別名でつながる根拠を 1 段だけ加えます。文書レシピで名称・別名の索引を有効にした文書にだけ効きます。AI の呼び出しは増えません。既定は有効で、このプロファイルの検索だけに効きます。",
-  "searchAnswerProfiles.entityExpansion.noEntityDocuments":
-    "参照先のナレッジベースに、名称・別名の索引のある文書がありません。文書レシピで名称・別名の索引を有効にすると効きます。",
-  "searchAnswerProfiles.entityExpansion.maxChunks": "1 回の検索で加える根拠の上限",
-  "searchAnswerProfiles.entityExpansion.maxChunksHelper":
-    "多くすると関係の遠い根拠も回答の材料に入ります。",
-  "searchAnswerProfiles.entityExpansion.maxChunksValue": "{count} 件",
-  "searchAnswerProfiles.entityExpansion.maxChunksDefault": "{count} 件（既定）",
   "searchAnswerProfiles.sectionExpansion.title": "章節で広げる根拠",
   "searchAnswerProfiles.sectionExpansion.enabled": "当たった根拠の章節から親の章節へ広げる",
   "searchAnswerProfiles.sectionExpansion.helper":
@@ -2577,7 +2565,7 @@ export const ja = {
     "Docling の解析結果で、しおりの階層を使えず、番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす場合に、見出しの文字列を OCI Enterprise AI にまとめて送り、階層を推定します。通常は文書ごとに 1 回で、再試行する場合があります。変えると解析からやり直します。",
   "knowledgeBases.adapter.field.entityIndex": "名称・別名の索引",
   "knowledgeBases.adapter.field.entityIndex.hint":
-    "索引の後に、表の行（ID・名称・略称など）と本文の定義の形（「略号「経」: 経理部」など）から、名称・別名（システム名・部署名など）とその根拠を記録します。AI は使いません。全体の既定は無効です。設定画面で既定を選び、文書ごとに上書きできます（列の指定が無ければ列名で決めます）。記録した名称・別名を検索に使うのは、検索・回答プロファイルで「名称・別名でつながる根拠を 1 段広げる」を有効にしたときだけです。変えると索引から作り直します。",
+    "索引の後に、表の行（ID・名称・略称など）と本文の定義の形（「略号「経」: 経理部」など）から、名称・別名（システム名・部署名など）とその根拠を記録します。AI は使いません。全体の既定は無効です。設定画面で既定を選び、文書ごとに上書きできます（列の指定が無ければ列名で決めます）。記録した名称・別名を検索に使うかは、検索方法の「名称・別名でつながる根拠」で設定します（全体の設定）。変えると索引から作り直します。",
   "knowledgeBases.adapter.field.autoParseAfterPreprocess": "ファイル準備後に抽出へ進む",
   "knowledgeBases.adapter.field.autoChunkAfterExtract": "抽出後に Chunk 作成へ進む",
   "knowledgeBases.adapter.field.autoIndexAfterChunk": "Chunk 後に Embedding / 索引へ進む",

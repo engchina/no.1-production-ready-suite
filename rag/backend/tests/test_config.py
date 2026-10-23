@@ -104,12 +104,15 @@ def test_unknown_chunking_strategy_is_rejected() -> None:
 def test_guardrail_default_matches_current_behavior() -> None:
     """Guardrail アダプターの既定は現行挙動と一致させる。"""
     settings = Settings()
-    assert settings.rag_guardrails_enabled is False
+    assert settings.rag_guardrails_input_enabled is False
 
 
 def test_unknown_guardrail_policy_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        Settings(rag_guardrails_enabled="not-a-boolean")
+        Settings(
+            rag_guardrails_input_enabled="not-a-boolean",
+            rag_guardrails_output_enabled="not-a-boolean",
+        )
 
 
 def test_vector_index_profile_defaults_to_accurate() -> None:

@@ -974,7 +974,8 @@ class GraphSettingsUpdate(BaseModel):
 class GuardrailSettingsData(BaseModel):
     """OCI Guardrails の有効状態と設定の準備状況。"""
 
-    enabled: bool
+    input_enabled: bool
+    output_enabled: bool
     oci_configured: bool
     oci_warning_code: str | None = None
     config_source: str = "runtime"
@@ -984,7 +985,8 @@ class GuardrailSettingsUpdate(BaseModel):
     """OCI Guardrails の有効・無効だけを更新する。"""
 
     model_config = ConfigDict(extra="forbid")
-    enabled: bool
+    input_enabled: bool
+    output_enabled: bool
 
 
 class ProfileGuideSearchDefaultsData(BaseModel):

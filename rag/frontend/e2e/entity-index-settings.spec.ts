@@ -15,6 +15,7 @@ test("名称・別名の索引は既定 OFF で、切り替え・保存・再読
     await route.fulfill({ json: { data: { enabled }, error_messages: [], warning_messages: [] } });
   });
   await page.goto("/settings/entity-index");
+  await expect(page.getByText(/検索で利用するかは、検索方法の「名称・別名でつながる根拠」/)).toBeVisible();
   const toggle = page.getByRole("radio", { name: /^構築する/ });
   const off = page.getByRole("radio", { name: /^構築しない/ });
   const save = page.getByRole("button", { name: "保存", exact: true });

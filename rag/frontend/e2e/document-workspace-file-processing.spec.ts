@@ -3402,3 +3402,27 @@ async function expectBelow(target: Locator, origin: Locator) {
   expect(targetBox.y).toBeGreaterThanOrEqual(originBox.y + originBox.height - 1);
   expect(targetBox.y - (originBox.y + originBox.height)).toBeLessThan(48);
 }
+
+
+for (const width of [1280, 375]) {
+  test(`JSONL の本文とコピーは表示用テキストを使う (${width}px)`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockDocumentWorkspace(page);
+    const display = "id: row-a\nvalue: 10\nid: row-b\nvalue: 20";
+    await page.route("**/api/documents/doc-1/recipes/*/extraction-export?format=json", route => {
+      const view = extractionExport("json");
+      return route.fulfill({ json: { data: { ...view, payload: { ...view.payload, raw_text: "id: row-a\n<<<JSONL_RECORD_BOUNDARY>>>\nid: row-b", display_text: display } }, error_messages: [], warning_messages: [] } });
+    });
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", { value: { writeText: async (text: string) => { (window as unknown as { copiedText: string }).copiedText = text; } } });
+    });
+    await page.goto("/documents/doc-1");
+    const panel = page.getByTestId("document-inspector-pane");
+    await expect(panel).toContainText("row-a"); await expect(panel).toContainText("row-b");
+    await expect(panel).not.toContainText("<<<JSONL_RECORD_BOUNDARY>>>");
+    await panel.getByRole("button", { name: "本文をコピー" }).click();
+    await expect.poll(() => page.evaluate(() => (window as unknown as { copiedText: string }).copiedText)).toBe(display);
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath("jsonl-display-text.png"), fullPage: true });
+  });
+}

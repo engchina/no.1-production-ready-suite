@@ -37,9 +37,13 @@
 
 ## 関連
 
-- これは **取込時**(ingest)の PII マスク。**クエリ/回答時**の安全は Guardrail アダプター
-  (`rag_guardrail_policy`)が担い、`rag_guardrail_backend=oci_guardrails` で OCI Generative AI
-  Guardrails(content moderation / PII / prompt injection)を併用できる。
+- これは **取込時**のローカル PII マスクです。質問と回答の安全チェックは、OCI Guardrails の
+  `RAG_GUARDRAILS_INPUT_ENABLED` / `RAG_GUARDRAILS_OUTPUT_ENABLED` で個別に選びます。
+- 日本語の人名形態素を結合し、NER が姓だけを返す場合も氏名全体をマスクします。
+  「項目: 姓 名（補足）」のような二つの名詞からなる単一の値では、未知の姓も名前に含めます。
+  自由文の一般名詞へ範囲を広げず、組織として識別された語を人名として追加しません。
+- 統計モデルに検出漏れ・誤検出があり、すべての個人情報の削除は保証しません。
+  原本を確認し、既存のマスク済み派生物にも変更を適用する場合はファイル準備から再実行してください。
 
 ## 起動
 

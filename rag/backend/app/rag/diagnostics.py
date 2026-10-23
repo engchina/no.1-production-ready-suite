@@ -41,7 +41,8 @@ def build_search_diagnostics(
     return SearchDiagnostics(
         retrieval_strategy="hybrid",
         retrieval_strategy_adapter=retrieval_strategy_adapter,
-        guardrails_enabled=resolved_settings.rag_guardrails_enabled,
+        guardrails_input_enabled=resolved_settings.rag_guardrails_input_enabled,
+        guardrails_output_enabled=resolved_settings.rag_guardrails_output_enabled,
         guardrail_degraded=guardrail_degraded,
         filter_keys=sorted(request.filters),
         knowledge_base_count=len(request.knowledge_base_ids),

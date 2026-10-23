@@ -500,12 +500,12 @@ def _result(
         for document_id in ordered_ids
     ]
     counts: dict[BulkIngestionOutcome, int] = dict.fromkeys(BulkIngestionOutcome, 0)
-    reasons: dict[tuple[BulkIngestionOutcome, str], BulkIngestionReasonCount] = {}
+    reasons: dict[tuple[BulkIngestionOutcome, str, str | None], BulkIngestionReasonCount] = {}
     for item in items:
         counts[item.outcome] += 1
         if item.reason is None:
             continue
-        key = (item.outcome, item.reason)
+        key = (item.outcome, item.reason, item.message)
         existing = reasons.get(key)
         if existing is None:
             reasons[key] = BulkIngestionReasonCount(

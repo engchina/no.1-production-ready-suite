@@ -25,6 +25,7 @@ export interface SourceDerivationView {
 
 export interface ParsedStructuredExtraction {
   rawText: string;
+  displayText: string;
   documentType: string;
   confidence: number | null;
   warnings: string[];
@@ -65,6 +66,7 @@ export function parseStructuredExtraction(input: unknown): ParsedStructuredExtra
 
   return {
     rawText,
+    displayText: typeof source.display_text === "string" ? source.display_text : rawText,
     documentType,
     confidence,
     warnings,

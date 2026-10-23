@@ -156,7 +156,7 @@ def _pii_redact(
     return ConvertOutcome(
         converted=True,
         converter_name="pii_redact",
-        converter_version="v2",
+        converter_version="v3",
         derived_bytes=redacted.encode("utf-8"),
         derived_content_type=_utf8_content_type(content_type),
         warnings=tuple(warnings),
@@ -331,6 +331,7 @@ def _build_analyzer(analyzer_cls: type) -> object:
     analyzer.registry.add_recognizer(
         CreditCardRecognizer(supported_language=_DEFAULT_LANGUAGE, context=_CREDIT_CARD_CONTEXT)
     )
+    analyzer.registry.add_recognizer(japanese_person_recognizer())
     for recognizer in japanese_recognizers():
         analyzer.registry.add_recognizer(recognizer)
     return analyzer
@@ -362,3 +363,63 @@ def japanese_recognizers() -> list[object]:
             context=["個人番号", "マイナンバー"],
         ),
     ]
+
+
+def japanese_person_recognizer() -> object:
+    """NER が氏名の一部だけを返しても、日本語の人名形態素をまとめて検出する。"""
+    from presidio_analyzer import EntityRecognizer, RecognizerResult
+    from presidio_analyzer.predefined_recognizers import SpacyRecognizer
+
+    score = SpacyRecognizer().ner_strength
+
+    class JapanesePersonRecognizer(EntityRecognizer):
+        def load(self) -> None:
+            pass
+
+        def analyze(self, text, entities, nlp_artifacts=None):
+            if "PERSON" not in entities or nlp_artifacts is None:
+                return []
+            return [
+                RecognizerResult("PERSON", start, end, score)
+                for start, end in japanese_person_spans(text, nlp_artifacts.tokens)
+            ]
+
+    return JapanesePersonRecognizer(
+        supported_entities=["PERSON"],
+        supported_language=_DEFAULT_LANGUAGE,
+        name="JapanesePersonMorphologyRecognizer",
+    )
+
+
+def japanese_person_spans(text: str, tokens) -> list[tuple[int, int]]:
+    """人名の形態素を空白越しに結合する。範囲は行内に限定する。"""
+    spans: list[tuple[int, int]] = []
+    tokens = list(tokens)
+    for index, token in enumerate(tokens):
+        if not token.tag_.startswith("名詞-固有名詞-人名") or getattr(token, "ent_type_", "") in {
+            "ORG",
+            "ORGANIZATION",
+        }:
+            continue
+        start, end = token.idx, token.idx + len(token.text)
+        # 「項目: 姓 名（補足）」の単一の名詞値は、未知の姓を NER が落としてもまとめる。
+        # 自由文や組織名を人名へ広げず、空白で区切られた二つの名詞に限定する。
+        if token.tag_ == "名詞-固有名詞-人名-名" and index:
+            previous = tokens[index - 1]
+            before = text[: previous.idx].rstrip()
+            gap = text[previous.idx + len(previous.text) : start]
+            after = text[end:].lstrip()
+            if (
+                previous.tag_.startswith("名詞-")
+                and getattr(previous, "ent_type_", "") not in {"ORG", "ORGANIZATION"}
+                and gap
+                and not gap.strip()
+                and before.endswith((":", "："))
+                and (not after or after.startswith(("(", "（")))
+            ):
+                start = previous.idx
+        if spans and (start <= spans[-1][1] or not text[spans[-1][1] : start].strip()):
+            spans[-1] = (spans[-1][0], end)
+        else:
+            spans.append((start, end))
+    return spans

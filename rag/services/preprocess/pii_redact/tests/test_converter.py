@@ -360,3 +360,39 @@ def test_my_number_check_digit() -> None:
     assert converters._my_number_is_valid("１２３４５６７８９０１８")
     assert not converters._my_number_is_valid("123456789012")
     assert not converters._my_number_is_valid("12345678901")
+
+
+def test_person_morphology_joins_only_name_tokens() -> None:
+    from types import SimpleNamespace
+
+    text = "佐藤 花子（営業部）"
+    tokens = [
+        SimpleNamespace(text="佐藤", idx=0, tag_="名詞-固有名詞-人名-姓"),
+        SimpleNamespace(text="花子", idx=3, tag_="名詞-固有名詞-人名-名"),
+        SimpleNamespace(text="営業", idx=6, tag_="名詞-普通名詞-サ変可能"),
+    ]
+    assert converters.japanese_person_spans(text, tokens) == [(0, 5)]
+    artifacts = SimpleNamespace(tokens=tokens)
+    results = converters.japanese_person_recognizer().analyze(text, ["PERSON"], artifacts)
+    assert [(r.entity_type, r.start, r.end) for r in results] == [("PERSON", 0, 5)]
+    assert converters.japanese_person_recognizer().analyze(text, ["LOCATION"], artifacts) == []
+    assert converters.japanese_person_recognizer().analyze(text, ["PERSON"], None) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "start", "expected"),
+    [
+        ("項目：検証 花子（補足）", 3, [(3, 8)]),
+        ("検証 花子を確認します。", 0, [(3, 5)]),
+    ],
+)
+def test_unknown_surname_expansion_is_limited_to_a_scalar_field(text, start, expected):
+    from types import SimpleNamespace
+
+    tokens = [
+        SimpleNamespace(text="検証", idx=start, tag_="名詞-普通名詞-サ変可能"),
+        SimpleNamespace(text="花子", idx=start + 3, tag_="名詞-固有名詞-人名-名"),
+    ]
+    assert converters.japanese_person_spans(text, tokens) == expected
+    tokens[1].ent_type_ = "ORG"
+    assert converters.japanese_person_spans(text, tokens) == []

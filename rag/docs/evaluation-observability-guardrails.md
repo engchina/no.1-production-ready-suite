@@ -94,11 +94,11 @@ production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` と `X
 
 ## ガードレール
 
-「取込・検索・回答設定 > 安全チェック」で OCI Guardrails の有効・無効を選びます。
+「取込・検索・回答設定 > 安全チェック」で入力と出力の検査を個別に選びます。
 全体の設定であり、検索・回答プロファイルでは上書きしません。
-`RAG_GUARDRAILS_ENABLED` の既定は `false` です。
+`RAG_GUARDRAILS_INPUT_ENABLED` と `RAG_GUARDRAILS_OUTPUT_ENABLED` の既定は両方 `false` です。
 
-有効なときだけ、質問と回答のテキストを OCI Generative AI の `ApplyGuardrails` API に送り、
+選択した側だけ、質問または回答のテキストを OCI Generative AI の `ApplyGuardrails` API に送り、
 PII・プロンプト攻撃・不適切な内容を検出します。API は検出結果を返し、アプリが PII の位置を
 マスクし、攻撃・不適切な内容を検出したときは処理・回答の表示を止めます。
 検査を完了できないときも停止します。無効時は OCI を呼ばず、ローカル検査も行いません。
@@ -120,7 +120,7 @@ cd rag/backend
 uv run python -m app.rag.guardrail_settings_migration --env-file .env
 ```
 
-旧 OCI 選択は有効、旧 Local 選択は無効へ移します。すでに新しいスイッチを明示した場合は
+再配備でもサービスの起動前に同じ移行を行います。旧単一スイッチの値を入力・出力の両方へ移し、旧 OCI 選択は両方有効、旧 Local 選択は両方無効へ移します。すでに新しいスイッチを明示した場合は
 その値を保持します。旧方針・ローカル検査の環境変数は削除し、実行時に互換読み込みしません。
 保存済みプロファイルの旧 `guardrail_policy` は読み捨て、次に保存すると除外します。
 独立した旧ステージのサービス基盤は残しますが、RAG の安全チェックからは呼びません。

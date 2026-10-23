@@ -519,7 +519,7 @@ def test_answer_with_a_tool_is_not_sent_back(monkeypatch: MonkeyPatch, mcp: Fake
 def test_rejected_data_tool_counts_as_an_attempt(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """承認を却下したデータのツールも、確かめようとした呼び出しとして数える（差し戻さない）。"""
+    """承認を却下したデータのツールも、確かめようとした呼び出しとして数え、モデルへ差し戻さず終了する。"""
     model = _script(
         monkeypatch,
         [function_call(QUERY, {"question": "先月の受注金額", "profile_id": "p1"}, call_id="c1")],
@@ -536,9 +536,10 @@ def test_rejected_data_tool_counts_as_an_attempt(
 
     run = runtime_repository.get_run(created.id)
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
-    assert len(model.calls) == 2
+    assert len(model.calls) == 1
     assert mcp.calls_of("nl2sql_query") == []
-    assert run_answer_text(run) == "受注金額を確かめられなかったため、お答えできません。"
+    answer = run_answer_text(run) or ""
+    assert "却下" in answer and "実行していません" in answer
     assert _grounding_events(run) == []
 
 

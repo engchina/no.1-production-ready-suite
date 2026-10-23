@@ -404,8 +404,11 @@ class StructuredExtraction(BaseModel):
 
     def to_document_payload(self) -> dict[str, object]:
         """DocumentDetail.extraction に格納する JSON 互換 dict を返す。"""
+        from rag_parser_core.structured_records import record_boundary_plain_text
+
         payload: dict[str, object] = {
             "raw_text": self.raw_text,
+            "display_text": record_boundary_plain_text(self),
             "document_type": self.document_type,
             "confidence": self.confidence,
             "warnings": self.warnings,
