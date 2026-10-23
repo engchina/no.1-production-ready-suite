@@ -1630,7 +1630,7 @@ export const ja = {
   "settings.services.profile.gpu": "GPU",
   "settings.services.profile.oci": "OCI",
   "settings.services.cpuNote":
-    "Docling は既定の解析エンジン(PDF と画像)です。取込時は常時起動してください。Unstructured は Docling が扱えない形式(テキスト・HTML・Office・メール など)を、XML ツリー JSON は XML の要素の木を JSON にした文書を、処理レシピで選んだ場合だけ使用します。",
+    "「既定で使用」は文書解析の全体設定で選んだエンジンです。処理レシピでエンジンを指定しない取込で使うため、取込時は起動してください。その他のエンジンは、処理レシピで選んだ場合に使います。",
   "settings.services.ociNote":
     "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。「縮退」は OCI 設定不足が原因です — Document Understanding は「OCI 認証」+「Object Storage」で設定すると稼働中になります。",
   "settings.services.status.running": "稼働中",
@@ -1660,6 +1660,9 @@ export const ja = {
     "起動に失敗しました。ログで原因を確認してから起動し直してください。",
   "settings.services.executionPolicy.requiredNoFallback": "必須 / fallbackなし",
   "settings.services.executionPolicy.inProcessWhenDisabled": "既定は backend 内処理",
+  "settings.services.executionPolicy.defaultAdapter": "既定で使用",
+  "settings.services.defaultStoppedHint": "停止中です。このエンジンを処理レシピで指定する取込と、エンジンを指定せず全体設定を継承する取込は、解析が失敗します。取込前に起動してください。",
+  "settings.services.confirm.stop.defaultDescription": "{service} は既定の解析エンジンです。停止すると、このエンジンを指定する取込と、処理レシピでエンジンを指定せず全体設定を継承する取込の解析が失敗します。",
   "settings.services.executionPolicy.selectedAdapter": "選択時のみ使用",
   "settings.services.requiredStoppedHint": "文書分割サービス停止中 / 取込不可",
   "settings.services.optionalStoppedHint.inProcess":

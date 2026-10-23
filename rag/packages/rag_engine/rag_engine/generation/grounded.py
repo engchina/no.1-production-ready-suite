@@ -2635,7 +2635,7 @@ def carry_over(candidate: Sequence[CheckedItem], previous: Sequence[CheckedItem]
     for entry in previous:
         if entry.span and not any(
             (_covers(current, entry) or _same_quote(current, entry))
-            if entry.quote_only or (entry.state and not entry.removed)
+            if entry.quote_only or ((entry.state or entry.item.applies == "unverified") and not entry.removed)
             else _same_claim(current, entry)
             for current in kept
         ):

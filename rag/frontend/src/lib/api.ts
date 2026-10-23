@@ -2362,7 +2362,7 @@ export type ServiceRuntimeStatus =
   | "unconfigured"
   | "in_process";
 export type ServiceExecutionPolicy =
-  "required_no_fallback" | "in_process_when_disabled" | "selected_adapter";
+  "required_no_fallback" | "in_process_when_disabled" | "selected_adapter" | "default_adapter";
 // 起動 = systemctl enable --now、停止 = systemctl disable --now、再起動 = systemctl restart。
 export type ServiceAction = "start" | "stop" | "restart";
 
