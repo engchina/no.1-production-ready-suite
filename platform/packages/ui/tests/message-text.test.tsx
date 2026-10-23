@@ -30,6 +30,18 @@ describe("MessageText", () => {
     ]);
   });
 
+  it.each(["「設定」を開いてください。", "「\u2060設定」を開いてください。", "（設定）を開いてください。"])("開き括弧を次の文と同じ箱にする: %s", (next) => {
+    expect(segmentMessageText("保存しました。" + next).map((s) => s.text)).toEqual(["保存しました。", next]);
+  });
+
+  it("閉じ括弧は前の文に残す", () => {
+    expect(segmentMessageText("「保存しました。」次へ。").map((s) => s.text)).toEqual(["「保存しました。」", "次へ。"]);
+  });
+
+  it.each(["「", "保存しました。「", "「\u2060"])("開き括弧で終わっても文字を失わない: %s", (text) => {
+    expect(segmentMessageText(text).map((segment) => segment.text).join("")).toBe(text);
+  });
+
   it("小数・バージョン・URL 内の句点を分割しない", () => {
     const text = "Version 1.2 is current. See https://example.com/docs. Done.";
     expect(segmentMessageText(text, "en").map((segment) => segment.text)).toEqual([

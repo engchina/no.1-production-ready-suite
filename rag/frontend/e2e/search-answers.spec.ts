@@ -614,3 +614,14 @@ test("モデル設定で既定を変更してもチャットのモデル選択�
   await expect(modelRow).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
+
+
+test("検索前の案内の開き括弧を次の文に付ける", {tag:"@responsive"}, async ({page}) => {
+  await page.goto("/search");
+  const sentences=page.locator('[data-message-sentence]');
+  await expect(sentences.first()).toBeVisible();
+  const text=await sentences.allTextContents();
+  expect(text.some(t=>/検索します。「$/.test(t))).toBe(false);
+  expect(text.some(t=>t.startsWith("「") && t.includes("LLM"))).toBe(true);
+  await expectNoPageOverflow(page);
+});

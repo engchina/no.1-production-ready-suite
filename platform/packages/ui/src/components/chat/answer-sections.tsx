@@ -337,7 +337,7 @@ function passageSections(
           const Icon = ANSWER_PASSAGE_STATE_ICON[mark.state];
           const quote = answerPassageQuote(mark.text);
           const anchor = anchors[index];
-          const reasons = mark.reasons.map((reason) => reason.label).join("・");
+          const reasons = [...new Set(mark.reasons.map((reason) => reason.label))].join("・");
           return {
             key: `mark-${index}`,
             content: (
