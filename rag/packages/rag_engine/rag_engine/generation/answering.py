@@ -645,7 +645,8 @@ def select_documents(
     hits: dict[tuple[str, ...], int] = {}
     sources: dict[tuple[str, ...], str] = {}
     for position, record in enumerate(ranked_children):
-        if is_added_catalog_article(record):
+        if is_added_catalog_article(record) or record.metadata.get("is_attachment_chunk"):
+            # 会話の添付は利用者が明示した入力なので、文書間の関連度の比較に数えない。
             # 目録で選んで加えた条（#2254）は文書の分数に数えない（加えた条の関連度で他の文書を後回しにしない）。
             continue
         key = document_context_key(record)
@@ -666,7 +667,13 @@ def select_documents(
     # 下限未満の拡張の根拠は、印の無い候補と同じに扱う（#1390）。
     # 参照元の直後へ置いた交差参照の参照先（#1549）も、参照元に従うので後回しにしない。
     # 目録で選んで加えた条（#2254）も、事例の言葉の質問では rerank の関連度が低いので後回しにしない。
-    reserved = [is_reserved_entity_expansion(r) or is_followed_reference(r) or is_added_catalog_article(r) for r in ranked_children]
+    reserved = [
+        is_reserved_entity_expansion(r)
+        or is_followed_reference(r)
+        or is_added_catalog_article(r)
+        or bool(r.metadata.get("is_attachment_chunk"))
+        for r in ranked_children
+    ]
     kept = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) not in excluded or keep]
     deferred = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) in excluded and not keep]
     if step is not None:
@@ -706,7 +713,12 @@ def cap_anchors_per_document(
     later: list[AnswerRecord] = []
     for record in ranked_children:
         # 目録で選んで加えた条（#2254）は起点・親の枠の外に足すので数えない。
-        if is_reserved_entity_expansion(record) or is_followed_reference(record) or is_added_catalog_article(record):
+        if (
+            is_reserved_entity_expansion(record)
+            or is_followed_reference(record)
+            or is_added_catalog_article(record)
+            or record.metadata.get("is_attachment_chunk")
+        ):
             kept.append(record)
             continue
         key = document_context_key(record)
