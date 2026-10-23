@@ -1016,10 +1016,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     )
     # 名称・別名と章節の拡張は検索方法の全体設定で選ぶ。
     rag_entity_expansion_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
             "回答の検索で、質問と上位の候補の chunk の実体から、実体の表との SQL の join で"
-            "関連する chunk を 1 段だけ足す（#1362）。検索方法の全体設定で選ぶ（既定 ON。#1402）。"
+            "関連する chunk を 1 段だけ足す（#1362）。検索方法の全体設定で選ぶ（既定 OFF）。"
             "実体は文書レシピで実体の抽出"
             "（rag_entity_index_enabled）を選んだ文書にだけある。LLM の呼び出しは増えない。"
         ),
