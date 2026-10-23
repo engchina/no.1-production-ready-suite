@@ -18,6 +18,7 @@ import {
 
 import {
   ANSWER_NOTICE_NAV_ITEM,
+  API_KEY_ADMIN_NAV_ITEM,
   CHAT_ATTACHMENT_SETTINGS_NAV_ITEM,
   SYSTEM_SETTINGS_NAV_ITEMS,
   USER_ROLE_NAV_ITEMS,
@@ -142,11 +143,19 @@ export const NAV_SECTIONS: NavSection[] = [
 
     // 共有パッケージの型は platform 側の @types/react で解決されるため、icon だけ Agent の型へそろえる
     // （実体は同じ lucide-react のコンポーネント）。
-    items: USER_ROLE_NAV_ITEMS.map((item) => ({
-      ...item,
-      icon: item.icon as LucideIcon,
-      permission: USER_ROLE_MENU_PERMISSIONS[item.key],
-    })),
+    items: [
+      ...USER_ROLE_NAV_ITEMS.map((item) => ({
+        ...item,
+        icon: item.icon as LucideIcon,
+        permission: USER_ROLE_MENU_PERMISSIONS[item.key],
+      })),
+      {
+        href: API_KEY_ADMIN_NAV_ITEM.href,
+        labelKey: "nav.securityApiKeys",
+        icon: API_KEY_ADMIN_NAV_ITEM.icon as LucideIcon,
+        permission: MENU_PERMISSIONS.securityApiKeys,
+      },
+    ],
   },
   {
     // Agent 固有の運用設定（実行環境・接続先。#87 / #791）。先頭はシステムテーブル

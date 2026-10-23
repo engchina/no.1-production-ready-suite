@@ -38,6 +38,7 @@ ServiceExecutionPolicy = Literal[
     "required_no_fallback",
     "in_process_when_disabled",
     "selected_adapter",
+    "default_adapter",
 ]
 
 # systemd の unit 名の接頭辞。init_script.sh / scripts/rag-services.sh が作る unit と同じ。
@@ -289,3 +290,13 @@ def resolve_service_base_url(settings: Settings, url_field: str) -> str:
 def service_health_url(settings: Settings, entry: ServiceCatalogEntry) -> str:
     """エントリの /health base URL を返す(``resolve_service_base_url`` と同じ解決)。"""
     return resolve_service_base_url(settings, entry.url_field)
+
+
+def effective_execution_policy(
+    settings: Settings, entry: ServiceCatalogEntry
+) -> ServiceExecutionPolicy:
+    """文書解析の全体設定で選んだサービスは、未指定のレシピが使う既定として示す。"""
+    default_parser_id = "parser-" + settings.rag_parser_adapter_backend.replace("_", "-")
+    if entry.category == "parser" and entry.service_id == default_parser_id:
+        return "default_adapter"
+    return entry.execution_policy

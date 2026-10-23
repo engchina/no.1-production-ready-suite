@@ -10,6 +10,8 @@ import { apiErrorMessage } from "@production-ready/ui";
 import {
   rolePermissionTargetSearchParams,
   type ApiKeyCreated,
+  type ApiKeysAdminApi,
+  type ApiKeysList,
   type ApiKeyCreateRequest,
   type AuthApi,
   type DescribeApiError,
@@ -197,4 +199,10 @@ export const myApiKeysApi: MyApiKeysApi = {
   list: () => request<MyApiKeysList>("/api/account/api-keys"),
   create: (payload: ApiKeyCreateRequest) => mutate<ApiKeyCreated>("/api/account/api-keys", send("POST", payload)),
   revoke: (keyId: string) => mutate<unknown>(`/api/account/api-keys/${encodeURIComponent(keyId)}`, send("DELETE")),
+};
+
+/** 全員の API キー（共通の管理画面）。 */
+export const apiKeysAdminApi: ApiKeysAdminApi = {
+  list: () => request<ApiKeysList>("/api/security/api-keys"),
+  revoke: (keyId: string) => mutate<unknown>(`/api/security/api-keys/${encodeURIComponent(keyId)}`, send("DELETE")),
 };

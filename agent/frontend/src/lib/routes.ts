@@ -1,5 +1,6 @@
 import {
   ACCOUNT_PATH,
+  API_KEY_PATHS,
   ANSWER_NOTICE_PATH,
   CHAT_ATTACHMENT_SETTINGS_PATH,
   SYSTEM_SETTINGS_PATHS,
@@ -45,6 +46,7 @@ export const APP_ROUTES = {
   // 共通のユーザー管理・ロール管理（#206）と、Agent 固有の権限管理（#215）。
   securityUsers: USER_ROLE_PATHS.users,
   securityRoles: USER_ROLE_PATHS.roles,
+  securityApiKeys: API_KEY_PATHS.admin,
   securityPermissions: "/settings/security/permissions",
   // アカウントの画面（API キー / パスワード変更のタブ。3 製品で同じ。#1873）。サイドナビのアカウントの欄から開き、
   // メニュー権限を問わない。

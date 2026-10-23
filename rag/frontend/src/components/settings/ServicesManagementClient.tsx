@@ -99,6 +99,8 @@ export function serviceExecutionPolicyLabelKey(policy: ServiceExecutionPolicy): 
       return "settings.services.executionPolicy.requiredNoFallback";
     case "in_process_when_disabled":
       return "settings.services.executionPolicy.inProcessWhenDisabled";
+    case "default_adapter":
+      return "settings.services.executionPolicy.defaultAdapter";
     case "selected_adapter":
       return "settings.services.executionPolicy.selectedAdapter";
   }
@@ -110,6 +112,8 @@ export function serviceStoppedHintKey(policy: ServiceExecutionPolicy): I18nKey |
       return "settings.services.requiredStoppedHint";
     case "in_process_when_disabled":
       return "settings.services.optionalStoppedHint.inProcess";
+    case "default_adapter":
+      return "settings.services.defaultStoppedHint";
     case "selected_adapter":
       return "settings.services.optionalStoppedHint.selectedAdapter";
   }
@@ -239,7 +243,9 @@ export function ServicesManagementClient() {
     if (action === "stop") {
       const ok = await confirm({
         title: t("settings.services.confirm.stop.title"),
-        description: t("settings.services.confirm.stop.description", {
+        description: t(service.execution_policy === "default_adapter"
+          ? "settings.services.confirm.stop.defaultDescription"
+          : "settings.services.confirm.stop.description", {
           service: serviceLabel(service),
         }),
         confirmLabel: t("settings.services.confirm.stop.confirm"),

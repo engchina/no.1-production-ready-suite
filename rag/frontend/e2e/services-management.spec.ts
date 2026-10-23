@@ -24,7 +24,8 @@ interface ServiceRow {
   execution_policy:
     | "required_no_fallback"
     | "in_process_when_disabled"
-    | "selected_adapter";
+    | "selected_adapter"
+    | "default_adapter";
   status: ServiceStatus;
   configured: boolean;
 }
@@ -45,7 +46,7 @@ function defaultServices(): ServiceRow[] {
       category: "parser",
       profile: "cpu",
       label_key: "settings.services.item.parserDocling",
-      execution_policy: "selected_adapter",
+      execution_policy: "default_adapter",
       status: "stopped",
       configured: true,
     },
@@ -712,3 +713,23 @@ async function expectNoHorizontalOverflow(page: Page) {
   );
   expect(overflow).toBeLessThanOrEqual(1);
 }
+
+
+test("既定の解析サービスには使用方針と停止の影響を表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const services = defaultServices().map((service) => service.service_id === "parser-docling"
+    ? { ...service, status: "running" as const } : service);
+  await mockServices(page, { controlEnabled: true, services });
+  await page.goto("/settings/services");
+  const row = page.getByTestId("service-row-parser-docling");
+  await expect(row.getByText("既定で使用", { exact: true })).toBeVisible();
+  await expect(row.getByText("選択時のみ使用", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Docling 停止" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("Docling は既定の解析エンジンです");
+  await expect(dialog).toContainText("全体設定を継承する取込の解析が失敗します");
+  await page.screenshot({ path: testInfo.outputPath("default-parser-stop.png"), fullPage: true });
+  await dialog.getByRole("button", { name: "停止する", exact: true }).click();
+  await expect(row.getByText("停止中です。このエンジン", { exact: false })).toBeVisible();
+  await expect(row).toContainText("取込前に起動してください");
+  await expectNoPageOverflow(page);
+});

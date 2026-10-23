@@ -70,3 +70,9 @@ test("権限管理の機能の一覧は、左のナビと同じグループ・�
   expect(arranged.slice(menu.length).map((item) => item.code).sort()).toEqual([...capabilities].sort());
   expect(arranged.map((item) => item.description)).toEqual(arranged.map((item) => `${item.code} の説明`));
 });
+
+
+test("ユーザーとロールの末尾に共通の API キー管理を置く", () => {
+  const section = NAV_SECTIONS.find((section) => section.titleKey === "nav.section.userRoles");
+  expect(section?.items.map((item) => t(item.labelKey))).toEqual(["ユーザー管理", "ロール管理", "API キー"]);
+});

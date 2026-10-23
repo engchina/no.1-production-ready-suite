@@ -65,10 +65,10 @@ def test_invalid_indexes_do_not_become_item_or_notice_references(index):
     assert not grounded.requirement_quote_matches(result.guide_requirement_reviews[0], checked, ["窓口へ連絡してください。"])
 
 
-def test_discarded_text_is_not_replaced_by_an_unrelated_item_or_a_notice():
+def test_distinct_claims_from_one_quote_keep_their_own_reference():
     quote = "対象を送信します。送信結果を確認します。"
     items = [entry("対象を送信します。", quote=quote), entry("送信結果を確認します。", quote=quote)]
     checked, result = grounded.deduplicate_audited_items(items, audit(observation([1], items[1].item.text)), 1)
-    assert len(checked) == 1
-    assert result.guide_requirement_reviews[0].item_indexes == [-1]
-    assert not grounded.requirement_quote_matches(result.guide_requirement_reviews[0], checked, ["送信結果を確認します。"])
+    assert len(checked) == 2
+    assert result.guide_requirement_reviews[0].item_indexes == [1]
+    assert grounded.requirement_quote_matches(result.guide_requirement_reviews[0], checked, ["別の案内です。/notice"])

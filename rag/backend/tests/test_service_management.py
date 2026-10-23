@@ -1152,3 +1152,29 @@ def test_preprocess_service_url_uses_resolved_setting(monkeypatch: MonkeyPatch) 
         settings, "rag_preprocess_csv_to_jsonl_service_url", "http://127.0.0.1:18012/"
     )
     assert preprocess_service_url(settings, "csv_to_jsonl") == "http://127.0.0.1:18012"
+
+
+@pytest.mark.parametrize(
+    ("backend", "expected"),
+    [
+        ("docling", "parser-docling"),
+        ("unstructured", "parser-unstructured"),
+        ("xml_tree_json", "parser-xml-tree-json"),
+    ],
+)
+def test_catalog_marks_the_current_global_parser_as_default(
+    monkeypatch: MonkeyPatch, backend: str, expected: str
+) -> None:
+    """固定の製品名でなく、未指定のレシピが継承するエンジンを既定として表示する。"""
+    monkeypatch.setattr(get_settings(), "rag_parser_adapter_backend", backend)
+    response = client.get("/api/services/catalog")
+    assert response.status_code == 200
+    services = response.json()["data"]["services"]
+    assert [
+        item["service_id"] for item in services if item["execution_policy"] == "default_adapter"
+    ] == [expected]
+    assert all(
+        item["execution_policy"] == "selected_adapter"
+        for item in services
+        if item["category"] == "parser" and item["service_id"] != expected
+    )

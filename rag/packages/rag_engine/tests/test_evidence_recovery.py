@@ -119,7 +119,7 @@ def test_mixed_bracketed_codes_keep_real_codes_and_resolve_only_internal_labels(
 
 
 @pytest.mark.parametrize("mode", ["standard", "detailed"])
-def test_recovered_duplicate_does_not_shift_a_later_guide_requirements_reference(mode):
+def test_recovered_claims_keep_a_later_guide_requirements_reference(mode):
     save = "保存画面で保存ボタンを押します。"
     spans = _grounded_spans(
         QUESTION,
@@ -154,8 +154,8 @@ def test_recovered_duplicate_does_not_shift_a_later_guide_requirements_reference
         guide_steps=[("save", "保存する", [spans[1]["source_id"]])],
         guide_step_contracts=[{"step_id": "save", "requirements": [{"id": "save:0", "text": "保存する", "kind": "completion"}]}],
     )
-    assert len(result.checked) == 2
-    assert result.audit.guide_requirement_reviews[0].item_indexes == [1]
+    assert len(result.checked) == 3
+    assert result.audit.guide_requirement_reviews[0].item_indexes == [2]
     assert result.guide_steps[0]["status"] == "explained"
 
 

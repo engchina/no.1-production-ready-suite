@@ -24,6 +24,7 @@ from app.schemas.service_management import (
 from app.services.catalog import (
     SERVICE_CATALOG,
     ServiceCatalogEntry,
+    effective_execution_policy,
     get_catalog_entry,
     is_dev_mode,
     service_health_url,
@@ -75,7 +76,7 @@ def _catalog_item(settings: Settings, entry: ServiceCatalogEntry) -> ServiceCata
         category=entry.category,
         profile=entry.profile,
         label_key=entry.label_key,
-        execution_policy=entry.execution_policy,
+        execution_policy=effective_execution_policy(settings, entry),
         deployable=entry.deployable,
         configured=bool(service_health_url(settings, entry)),
         systemd_unit=entry.systemd_unit,

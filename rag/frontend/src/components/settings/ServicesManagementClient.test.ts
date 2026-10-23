@@ -12,6 +12,9 @@ import {
 
 describe("ServicesManagementClient service policy helpers", () => {
   it("maps execution policies to compact badge labels", () => {
+    expect(t(serviceExecutionPolicyLabelKey("default_adapter"))).toBe("既定で使用");
+    expect(t(serviceStoppedHintKey("default_adapter")!)).toContain("解析が失敗します");
+    expect(t("settings.services.confirm.stop.defaultDescription", { service: "Docling" })).toContain("既定の解析エンジン");
     expect(serviceExecutionPolicyLabelKey("required_no_fallback")).toBe(
       "settings.services.executionPolicy.requiredNoFallback"
     );
@@ -85,7 +88,7 @@ describe("ServicesManagementClient service policy helpers", () => {
       expect(t(key)).not.toMatch(/docker|compose|コンテナ/i);
     }
     // 既定の解析エンジンは Docling（#286）。
-    expect(t("settings.services.cpuNote")).toContain("Docling は既定の解析エンジン");
+    expect(t("settings.services.cpuNote")).toContain("文書解析の全体設定");
   });
 
   // 稼働状態は共有の StatusBadge の variant で出す（messaging.md §10.2。#723）。

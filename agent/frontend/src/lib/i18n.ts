@@ -1002,6 +1002,7 @@ const agentJa = {
   "nav.section.userRoles": "ユーザーとロール",
   "nav.securityUsers": "ユーザー管理",
   "nav.securityRoles": "ロール管理",
+  "nav.securityApiKeys": "API キー",
   "nav.securityPermissions": "権限管理",
   "capability.required.title": "この画面のデータを表示する権限がありません",
   "capability.required.description":

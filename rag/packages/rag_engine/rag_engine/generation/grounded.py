@@ -81,7 +81,7 @@ from rag_engine.retrieval.task_contract import task_contract
 
 logger = logging.getLogger(__name__)
 
-MAX_ROUNDS = 3  # 初回 + 是正は最大2回。各回は生成1回と監査1回。
+MAX_ROUNDS = 3  # 初回 + 是正は最大2回。生成した計画の構造の修正は、各回1回まで。
 MAX_PINNED = 4
 CONTEXT_NOTE_BEGIN, CONTEXT_NOTE_END = "<補助情報（quote 不可）>", "</補助情報>"
 # 回答本文の節の見出し・定型文・出典の表示は言語資源（answer_labels。#2181）。``answer_labels()`` が今の言語資源の
@@ -1490,6 +1490,59 @@ def item_question(question: str, request_id: str) -> str:
     return "\n".join(part for part in (preface, str(unit["text"])) if part)
 
 
+def _request_plan_errors(draft: GroundedDraft) -> list[str]:
+    """計画と説明の構造の不整合を列挙する。旧形式の応答は追加の欄を要求しない。"""
+    errors = []
+    if "request_coverage" in draft.model_fields_set and not draft.request_coverage and any(item.kind != "gap" for item in draft.items):
+        errors.append("説明に使う要求ごとの根拠計画がありません。")
+    for plan in draft.request_coverage:
+        if "evidence_scope" not in plan.model_fields_set:
+            continue
+        for label in plan.evidence_ids:
+            scopes = [scope for scope in plan.evidence_scope if scope.evidence_id == label]
+            if len(scopes) != 1:
+                errors.append(f"{plan.request_id}: {label} の対象の照合は1件必要です。")
+            elif scopes[0].relation == "unrelated":
+                errors.append(f"{plan.request_id}: unrelated の {label} は evidence_ids と items に使えません。")
+            elif scopes[0].relation == "linked" and not scopes[0].link_quote.strip():
+                errors.append(f"{plan.request_id}: linked の {label} は関係を明記した原文が必要です。")
+    return errors
+
+
+def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, spans: Sequence[dict]) -> bool:
+    """要求の根拠計画を最終説明にも適用する。計画の無い旧応答は従来の原文照合を使う。"""
+    plans = [
+        plan for plan in draft.request_coverage if item.request_id == plan.request_id or item.request_id.startswith(plan.request_id + ".")
+    ]
+    if not plans and not item.request_id and len(draft.request_coverage) == 1:
+        plans = list(draft.request_coverage)
+    if not plans:
+        return bool(draft.request_coverage) or "request_coverage" in draft.model_fields_set
+    labels: set[str] = set()
+    for plan in plans:
+        for label in plan.evidence_ids:
+            if "evidence_scope" not in plan.model_fields_set:
+                labels.add(label)
+                continue
+            scopes = [scope for scope in plan.evidence_scope if scope.evidence_id == label]
+            if len(scopes) != 1:
+                continue
+            scope = scopes[0]
+            if scope.relation == "direct" or (
+                scope.relation == "linked"
+                and scope.link_quote.strip()
+                and any(quote_in_text(scope.link_quote, str(candidate.get("text") or "")) for candidate in spans)
+            ):
+                labels.add(label)
+    labels.update(label for plan in draft.guide_coverage for label in plan.evidence_ids)
+    allowed = {
+        str(candidate["evidence_id"])
+        for label in labels
+        for candidate in _named_spans(item.model_copy(update={"evidence_id": label}), spans)
+    }
+    return str(span["evidence_id"]) not in allowed
+
+
 def verify(
     question: str, draft: GroundedDraft, spans: Sequence[dict], *, guide_sources: Sequence[str] = ()
 ) -> tuple[list[CheckedItem], list[dict]]:
@@ -1582,6 +1635,19 @@ def verify(
                 checked.append(kept)
                 entry["kept"] = True
             dropped.append(entry)
+            continue
+        if _outside_request_plan(item, span, draft, spans):
+            dropped.append(
+                {
+                    "index": index,
+                    "evidence_id": span["evidence_id"],
+                    "text": item.text,
+                    "quote": quote,
+                    "reason": "要求の根拠計画にない説明",
+                    "ignored": True,
+                    "scope_excluded": True,
+                }
+            )
             continue
         view = views.get(id(span)) or check_view(span)
         entry = CheckedItem(
@@ -2462,6 +2528,17 @@ def _prefers_document_text(entry: CheckedItem, other: CheckedItem) -> bool:
     return "image_generated" in (other.span or {}).get("tags", ()) and "image_generated" not in (entry.span or {}).get("tags", ())
 
 
+def _same_claim(entry: CheckedItem, other: CheckedItem) -> bool:
+    """引用範囲でなく、要求・説明・条件がすべて同じ主張だけを重複とする。"""
+    return (
+        entry.item.request_id == other.item.request_id
+        and entry.item.kind == other.item.kind
+        and _compact(fold_width(entry.item.text)) == _compact(fold_width(other.item.text))
+        and entry.item.applies == other.item.applies
+        and _compact(fold_width(entry.item.condition)) == _compact(fold_width(other.item.condition))
+    )
+
+
 def without_redundant_quotes(checked: Sequence[CheckedItem]) -> list[CheckedItem]:
     """言い換えで説明済みの原文を、原文のみの欄へ重ねて表示しない。
 
@@ -2482,18 +2559,11 @@ def without_redundant_quotes(checked: Sequence[CheckedItem]) -> list[CheckedItem
             if any(k.quote_only and (_covers(k, entry) or _same_quote(k, entry)) for k in kept):
                 continue
             kept = [k for k in kept if not (k.quote_only and _covers(entry, k))]
-        # 同じ引用を同じ種類の説明として繰り返した item は 1 つだけ残す。同じ文が parent と child、
-        # または本文と画像の生成説明の両方の根拠に現れると、引用元だけが違う同文の item になる。
+        # 同じ原文から異なる操作・値を説明できるため、引用の一致だけでは主張を落とさない。
+        # 本文と画像の生成説明などに重複する、要求・説明・条件が同じ主張だけを一つにする。
         if entry.span and entry.published:
             duplicate = next(
-                (
-                    k
-                    for k in kept
-                    if k.span
-                    and k.published
-                    and k.item.kind == entry.item.kind
-                    and (_covers(k, entry) or _same_quote(k, entry) or _compact(k.item.text) == _compact(entry.item.text))
-                ),
+                (k for k in kept if k.span and k.published and _same_claim(k, entry)),
                 None,
             )
             if duplicate is not None:
@@ -2561,7 +2631,12 @@ def carry_over(candidate: Sequence[CheckedItem], previous: Sequence[CheckedItem]
     """
     kept = list(candidate)
     for entry in previous:
-        if entry.span and not any(_covers(current, entry) or _same_quote(current, entry) for current in kept):
+        if entry.span and not any(
+            (_covers(current, entry) or _same_quote(current, entry))
+            if entry.quote_only or ((entry.state or entry.item.applies == "unverified") and not entry.removed)
+            else _same_claim(current, entry)
+            for current in kept
+        ):
             # 撤回（withdrawn）はその round の監査の判定なので、引き継いだ複製では数え直す（#2738）。
             kept.append(
                 replace(entry, reasons=list(entry.reasons), marks=[dict(mark) for mark in entry.marks], carried=True, withdrawn=False)
@@ -4754,7 +4829,7 @@ def run_round(
     glossary: Sequence[Mapping[str, Any]] = (),
     assume_unconfirmed: bool = False,
 ) -> Round:
-    """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
+    """生成と監査。計画の構造不正だけは、生成を一度やり直す。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
     引用した回答の正しさだけでなく「引用せずに拒答した判断」も独立に検査するため、items が空でも監査を呼び、
     要求ごとの充足（request_reviews）と見落とした根拠（unused_evidence_ids）を返させる (#1014)。監査対象の
@@ -4798,11 +4873,37 @@ def run_round(
             draft = parse_text(generation_system, prompt, settings, GroundedDraft, provider_id=provider_id)
     else:
         draft = parse_text(generation_system, prompt, settings, GroundedDraft, provider_id=provider_id)
+    generation_calls = 1
+    plan_errors = _request_plan_errors(draft)
+    if plan_errors:
+        # 構造の不整合だけを一度直す。回答の生成後の意味の監査や、無制限の是正にはしない。
+        repair_prompt = (
+            prompt
+            + "\n"
+            + json.dumps(
+                {
+                    "invalid_request_plan": plan_errors,
+                    "previous_draft": draft.model_dump(mode="json"),
+                    "instruction": "対象の照合が抜けた根拠を照合し、unrelated を計画と説明から除き、根拠計画と items が対応する完全な草稿を返してください。",
+                },
+                ensure_ascii=False,
+            )
+        )
+        if image_paths and not image_fallback:
+            draft = parse_images(
+                generation_system, repair_prompt, list(image_paths), settings, GroundedDraft, provider_id=image_provider_id or provider_id
+            )
+        else:
+            draft = parse_text(generation_system, repair_prompt, settings, GroundedDraft, provider_id=provider_id)
+        generation_calls += 1
     from rag_engine.generation.number_notation import format_draft_numbers
 
     draft = format_draft_numbers(question, draft, spans)
     draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
+    timing["generation_calls"] = generation_calls
+    if plan_errors:
+        timing["request_plan_errors"] = plan_errors
     if image_fallback:
         timing["image_fallback"] = image_fallback
     if generation_usage := usage_delta(usage_before):
@@ -4818,7 +4919,8 @@ def run_round(
     revise_table_conflicts(checked, lambda system, user, schema: parse_text(system, user, settings, schema, provider_id=provider_id))
     # 引き継ぎは監査の前に行い、引き継いだ item も当該 round の根拠・指摘のもとで監査する (#1011)。監査の後に
     # 引き継ぐと、前の round で誤って支持された主張が監査に掛からないまま復活し、撤回できなかった。
-    checked = without_redundant_quotes(carry_over(checked, previous))
+    previous_in_scope = [entry for entry in previous if entry.span and not _outside_request_plan(entry.item, entry.span, draft, spans)]
+    checked = without_redundant_quotes(carry_over(checked, previous_in_scope))
     # 業務ガイドの文を資料の説明として書いた item は、資料の出典を付けない（#2792）。
     mark_guide_text(checked, guide_texts(guide_step_contracts, guide_notices))
     carried = sum(entry.carried for entry in checked)
@@ -5058,6 +5160,8 @@ def run_round(
     # 要約にだけ書かれた削除対象も、本文と同じ対象の照合を通す（#2722）。
     # 原文どおりの手順は残し、対象の対応を確かめられない操作を冒頭で断定しない。
     summary_reason = summary_reason or summary_deletion_error(str(draft.summary), checked)
+    if any(entry.get("scope_excluded") for entry in dropped):
+        summary_reason = summary_reason or "要求の根拠計画にない説明を除外したため、要約の結論を保留"
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
     if (

@@ -149,7 +149,7 @@ export const API_KEY_PATHS = {
 } as const;
 
 /**
- * サイドナビ「ユーザーとロール」の末尾に置く「API キー」（管理の画面。RAG / NL2SQL だけ。#1805）。
+ * サイドナビ「ユーザーとロール」の末尾に置く「API キー」（管理の画面。RAG / NL2SQL / Agent 共通。#1805・#1874・#3123）。
  * KeyRound は共通の OCI 認証が使うため、別のアイコンにする（#658）。
  */
 export const API_KEY_ADMIN_NAV_ITEM = {
