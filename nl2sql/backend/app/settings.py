@@ -298,6 +298,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # DeepSec の DATA USER の接続・状態の保存先の接続は含まない。
     nl2sql_oracle_runtime_pool_max: int = Field(default=8, ge=1, le=64)
     nl2sql_csv_import_max_rows: int = 5000
+    # 新規取込の文字列列は、追記の余地を持たせる。
+    nl2sql_csv_import_text_min_chars: int = Field(default=255, ge=1, le=4000)
+    nl2sql_csv_import_text_growth_factor: float = Field(default=2.0, ge=1.0, le=10.0)
     # 件数未指定の SELECT 実行で読み込む行数の安全上限(超えた分は読まず truncated にする)。
     nl2sql_max_result_rows: int = Field(default=100000, ge=1)
     # チャットで生成した SQL の実行（#1154）の上限。行は 1 回の実行で取得する行数（超えた分は読まず

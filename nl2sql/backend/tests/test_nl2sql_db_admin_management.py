@@ -4583,7 +4583,7 @@ def test_import_tabular_keeps_leading_zero_codes_as_text() -> None:
     )
 
     assert warnings == []
-    assert columns[0].data_type == "VARCHAR2(5 CHAR)"
+    assert columns[0].data_type == "VARCHAR2(255 CHAR)"
     assert rows == [{"CODE": "00123"}]
 
 
@@ -4725,9 +4725,9 @@ def test_import_tabular_infers_explicit_char_semantics_for_japanese() -> None:
 
     assert warnings == []
     assert rows == [{"ID": "1", "NAME": "株式会社架空"}]
-    assert [column.data_type for column in columns] == ["NUMBER", "VARCHAR2(6 CHAR)"]
+    assert [column.data_type for column in columns] == ["NUMBER", "VARCHAR2(255 CHAR)"]
     assert service._csv_import_ddl("TEST_TABLE", columns) == (
-        'CREATE TABLE "TEST_TABLE" ("ID" NUMBER, "NAME" VARCHAR2(6 CHAR))'
+        'CREATE TABLE "TEST_TABLE" ("ID" NUMBER, "NAME" VARCHAR2(255 CHAR))'
     )
 
 

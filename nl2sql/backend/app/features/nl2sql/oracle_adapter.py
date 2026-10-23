@@ -4639,4 +4639,8 @@ class OracleNl2SqlAdapter:
                 return int(value)
             except ValueError:
                 return float(value)
+        if column.data_type == "DATE":
+            return datetime.fromisoformat(value)
+        if column.data_type.startswith("TIMESTAMP"):
+            return datetime.fromisoformat(value)
         return value

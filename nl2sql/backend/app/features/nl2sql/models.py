@@ -979,6 +979,30 @@ class DbAdminImportTabularRequest(AdminExecutionConfirmation):
     filename: str = "upload.csv"
     sheet_name: str = ""
     mode: str = "create"
+    preview: bool = False
+    column_types: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("column_types")
+    @classmethod
+    def validate_column_types(cls, value: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for name, data_type in value.items():
+            kind = " ".join(data_type.upper().split())
+            varchar = re.fullmatch(r"VARCHAR2\(([1-9][0-9]*) CHAR\)", kind)
+            if kind not in {
+                "NUMBER",
+                "DATE",
+                "TIMESTAMP",
+                "TIMESTAMP WITH TIME ZONE",
+                "CLOB",
+            } and not (varchar and int(varchar.group(1)) <= 4000):
+                raise ValueError(
+                    "列の型は NUMBER、DATE、TIMESTAMP、TIMESTAMP WITH TIME ZONE、"
+                    "CLOB、VARCHAR2(n CHAR) で指定してください。"
+                )
+            normalized[name] = kind
+        return normalized
+
     max_rows: int | None = Field(default=None, ge=1, le=50000)
 
 
@@ -3528,6 +3552,7 @@ class DbAdminImportTabularData(BaseModel):
     mode: str = "create"
     columns: list[CsvImportColumn]
     row_count: int
+    preview: bool = False
     executed: bool
     ddl: str
     insert_sql: str
