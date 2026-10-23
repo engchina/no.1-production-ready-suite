@@ -6043,24 +6043,24 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
   }
   await page.getByTestId("nl2sql-job-summary").click();
   await expect(page.getByTestId("nl2sql-job-summary")).toContainText("0.1 秒");
-  await prepare.locator("summary").click();
+  await prepare.getByRole("button").first().click();
   await expect(prepare).toContainText("今月の請求金額を確認したい");
   // 参照表・列は生成前の推測ではなく、生成 SQL を解析した safety step に表示する。
-  await safetyStep.locator("summary").click();
+  await safetyStep.getByRole("button").first().click();
   await expect(safetyStep).toContainText("INVOICES");
   await expect(safetyStep).toContainText("TOTAL_AMOUNT");
-  // 生成 SQL は共通の工程の詳細を開いて確認する。
-  await generate.locator("summary").first().click();
-  await expect(generate).toContainText("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
-  await expect(generate).toContainText("請求情報を取得します。");
-  await expect(generate.getByText("安全", { exact: true })).toBeVisible();
-  const copySql = generate.getByRole("button", { name: "コピー" });
+  // 生成 SQL は処理の経過を閉じても確認できる。
+  const generated = page.getByTestId("nl2sql-generated-sql");
+  await expect(generated).toContainText("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
+  await expect(generated).toContainText("請求情報を取得します。");
+  await expect(generated.getByText("安全", { exact: true })).toBeVisible();
+  const copySql = generated.getByRole("button", { name: "コピー" });
   await expect(copySql).toBeVisible();
-  await expectContentActionsRightAligned(generate.getByTestId("generated-sql-content-actions"));
+  await expectContentActionsRightAligned(generated.getByTestId("generated-sql-content-actions"));
   await copySql.click();
   // コピーの成功はボタンのアイコンの Check と読み上げ（共有の CopyButton。成功の Toast は出さない。#2099）。
   await expect(copySql).toHaveAttribute("data-copy-state", "copied");
-  await expect(generate.getByRole("status").filter({ hasText: "コピーしました" })).toHaveCount(1);
+  await expect(generated.getByRole("status").filter({ hasText: "コピーしました" })).toHaveCount(1);
   await expect(page.getByRole("region", { name: "通知" })).not.toContainText("コピーしました");
   await expect(copySql).toHaveAttribute("data-copy-state", "idle");
   await page.evaluate(() => {
@@ -20048,9 +20048,9 @@ test("Select AI の SQL は安全性の確認の工程を「省略」と出す�
   const safetyStep = page.getByTestId("nl2sql-job-step-safety_check");
   await expect(safetyStep).toHaveAttribute("data-status", "skipped");
   // 状態は色だけでなく「省略」の文字で示す（「未実行」ではない）。
-  await expect(safetyStep.locator("summary")).toContainText("スキップ");
-  await expect(safetyStep.locator("summary")).not.toContainText("未実行");
-  await safetyStep.locator("summary").click();
+  await expect(safetyStep).toContainText("スキップ");
+  await expect(safetyStep.getByRole("button").first()).not.toContainText("未実行");
+  await safetyStep.getByRole("button").first().click();
   await expect(safetyStep).toContainText("Select AI が生成した SELECT 文のため");
   await expect(safetyStep).toContainText("INVOICES");
   await expect(page.getByTestId("nl2sql-job-step-execute_sql")).toHaveAttribute(

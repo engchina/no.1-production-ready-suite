@@ -105,8 +105,9 @@ class RunFeedback(BaseModel):
 
 
 class RunDetail(RunSummary):
-    trace_summary: TraceSummary | None = None
     """実行の詳細（質問の全文・回答・根拠・回答の診断・処理の段・フィードバック）。"""
+
+    trace_summary: TraceSummary | None = None
 
     error_type: str | None = None
     # 失敗のエラーコード（ORA-03146 など。例外の本文は持たない。#2342）。

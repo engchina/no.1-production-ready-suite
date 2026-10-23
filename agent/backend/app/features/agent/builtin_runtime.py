@@ -600,7 +600,20 @@ class _ObservedStream:
                 self._span.span, record_exception=False, set_status_on_exception=False
             ):
                 event = await self._inner.__anext__()
+            kind = getattr(event, "type", "")
+            if kind in {"response.completed", "response.incomplete", "response.failed"}:
+                self._exhausted = True
+                if kind != "response.completed":
+                    self._span.set_status("failed")
+                    self._span.set_attributes(
+                        {
+                            "error.type": "IncompleteResponse"
+                            if kind == "response.incomplete"
+                            else "ProviderResponseFailed"
+                        }
+                    )
             response = getattr(event, "response", None)
+            self._span.set_attributes({"gen_ai.response.model": getattr(response, "model", None)})
             usage = getattr(response, "usage", None)
             if usage is not None:
                 record_genai_usage(
@@ -794,6 +807,7 @@ class _OciResponses:
             response = await self._inner.create(**request)
             if request.get("stream"):
                 return _ObservedStream(response, span)
+            span.set_attributes({"gen_ai.response.model": getattr(response, "model", None)})
             usage = getattr(response, "usage", None)
             if usage is not None:
                 record_genai_usage(

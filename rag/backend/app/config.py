@@ -2614,7 +2614,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, TracingSettings, 
     # --- Trace export（OpenTelemetry / Langfuse gateway 連携用）---
     trace_export_http_endpoint: str = Field(default="")
     trace_export_http_bearer_token: str = Field(default="")
-    trace_export_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
+    trace_export_http_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
     trace_export_queue_size: int = Field(default=1024, ge=1, le=100000)
 
     @field_validator("model_settings_file")

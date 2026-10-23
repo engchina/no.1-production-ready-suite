@@ -13,10 +13,10 @@ from typing import Any
 
 from rag_engine.dependencies import llm_call_count
 from rag_engine.generation.answer_models import QUESTION_DISPLAY_METADATA_SEPARATOR, extract_original_question
-from rag_engine.resources.tracing import observe_call
 from rag_engine.resources.deadline import check_cancelled
 from rag_engine.resources.llm_usage import LlmUsage, usage_delta, usage_snapshot
 from rag_engine.resources.llm_usage import llm_usage as _llm_usage
+from rag_engine.resources.tracing import observe_call
 
 
 @dataclass

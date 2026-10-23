@@ -429,7 +429,7 @@ describe("RunTimelineSection（#2473）", () => {
     expect(details?.open).toBe(true);
     expect(container.querySelectorAll("[data-run-timeline-step]")).toHaveLength(3);
     // 開いた中に要約の行を重ねて出さない。処理の詳細はタイムラインの後ろ。
-    expect(container.querySelector("[data-run-timeline] > p")).toBeNull();
+    expect(container.querySelector("[data-run-timeline] > p")?.textContent).toContain("再構成");
     expect(container.textContent).toContain("処理の詳細の中身");
   });
 

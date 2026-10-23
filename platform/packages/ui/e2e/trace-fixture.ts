@@ -9,13 +9,13 @@ export const syntheticTraceSummary = {
     { span_id: "5".repeat(16), parent_span_id: "4".repeat(16), operation_name: "synthetic.child" },
     { span_id: "6".repeat(16), parent_span_id: "5".repeat(16), operation_name: "synthetic.child" },
     { span_id: "7".repeat(16), parent_span_id: "6".repeat(16), operation_name: "synthetic.child" },
-  ].map(span => ({ ...span, trace_id: "a".repeat(32), kind: "internal", status: "done", started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:00:02.000Z", duration_ms: 2000, timing_source: "measured", attributes: { "gen_ai.request.model": "model-a", "gen_ai.usage.input_tokens": 12, "gen_ai.usage.output_tokens": 0 } })),
+  ].map(span => ({ ...span, trace_id: "a".repeat(32), kind: "internal", status: "done", started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:00:02.000Z", duration_ms: 2000, timing_source: "measured", attributes: { "gen_ai.request.model": span.operation_name === "gen_ai.chat" ? `synthetic_model_${"segment_".repeat(24)}` : "model-a", "gen_ai.usage.input_tokens": 12, "gen_ai.usage.output_tokens": 0 } })),
 };
 
 export async function captureTraceLayouts(
   page: {
     keyboard: { press(key: string): Promise<void> };
-    getByTestId(id: string): { focus(): Promise<void>; isVisible(): Promise<boolean> };
+    getByTestId(id: string): { focus(): Promise<void>; isVisible(): Promise<boolean>; getByText(text: string, options: { exact: boolean }): { click(): Promise<void> } };
     viewportSize(): { width: number; height: number } | null;
     setViewportSize(size: { width: number; height: number }): Promise<void>;
     evaluate(fn: () => unknown): Promise<unknown>;
@@ -32,6 +32,7 @@ export async function captureTraceLayouts(
   if (!(await page.getByTestId("trace-details").isVisible())) throw new Error("Enter で詳細を開けません。");
   await page.keyboard.press("Tab");
   if (!(await page.evaluate(() => document.activeElement?.closest('[data-testid="trace-details"]') != null))) throw new Error("Tab で詳細の操作へ移れません。");
+  await page.getByTestId("trace-details").getByText("gen_ai.chat", { exact: true }).click();
   const mobile = (page.viewportSize()?.width ?? 1280) <= 375;
   for (const width of mobile ? [375] : [1280, 1920]) {
     await page.setViewportSize({ width, height: mobile ? 812 : 900 });

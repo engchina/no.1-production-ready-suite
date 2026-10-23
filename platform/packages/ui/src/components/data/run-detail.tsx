@@ -888,10 +888,12 @@ export function RunDetailSkeleton({ testId }: { testId?: string }) {
   );
 }
 
-function TraceSegmentDetails({ summary, labels }: { summary: unknown; labels: TraceDetailsLabels }) {
-  const trace = traceTimeline(summary, labels);
+function TraceSegmentDetails({ summary, labels, title, defaultOpen }: { summary: unknown; labels: TraceDetailsLabels; title: string; defaultOpen: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const trace = open ? traceTimeline(summary, labels) : null;
   const notSampled = summary && typeof summary === "object" && "sampled" in summary && summary.sampled === false;
-  return <div className="grid min-w-0 gap-2">
+  return <Disclosure variant="plain" size="sm" summary={title} open={open} onOpenChange={setOpen}>
+    {trace ? <div className="grid min-w-0 gap-2">
     <p className="text-xs text-fg-muted">{trace.steps.length === 0 ? labels.empty : trace.partial ? labels.partial : labels.measured}</p>
     {notSampled ? <p className="text-xs text-fg-muted">{labels.notSampled}</p> : null}
     {trace.traceId ? <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -899,22 +901,23 @@ function TraceSegmentDetails({ summary, labels }: { summary: unknown; labels: Tr
       <CopyButton type="button" variant="ghost" size="sm" iconOnly text={trace.traceId} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} />
     </div> : null}
     <RunTimeline steps={trace.steps} />
-  </div>;
+  </div> : null}
+  </Disclosure>;
 }
 
 /** 5 つの質問の入口で使う、安全な実測 trace の詳細。実行区間の追加でも開閉を保つ。 */
 export function TraceDetails({ summary, labels = DEFAULT_TRACE_DETAILS_LABELS }: { summary: unknown; labels?: TraceDetailsLabels }) {
+  const [open, setOpen] = useState(false);
   if (summary == null) return null;
   const segments = Array.isArray(summary)
     ? summary.filter(segment => segment && typeof segment === "object" && !Array.isArray(segment)).slice(0, 1000)
     : [summary];
-  return <Disclosure variant="plain" size="sm" summary={labels.title} summaryProps={{ "data-testid": "trace-details-toggle" }}>
-    <div className="grid min-w-0 gap-3" data-testid="trace-details">
+  return <Disclosure variant="plain" size="sm" summary={labels.title} open={open} onOpenChange={setOpen} summaryProps={{ "data-testid": "trace-details-toggle" }}>
+    {open ? <div className="grid min-w-0 gap-3" data-testid="trace-details">
       {segments.length === 0 ? <p className="text-xs text-fg-muted">{labels.empty}</p> : null}
       {segments.map((segment, index) => <div key={segment && typeof segment === "object" && "root_span_id" in segment && typeof segment.root_span_id === "string" ? segment.root_span_id : index}>
-        {segments.length > 1 ? <p className="mb-2 text-xs font-medium text-fg-muted">{labels.segment(index + 1, segments.length)}</p> : null}
-        <TraceSegmentDetails summary={segment} labels={labels} />
+        <TraceSegmentDetails summary={segment} labels={labels} title={labels.segment(index + 1, segments.length)} defaultOpen={index === segments.length - 1} />
       </div>)}
-    </div>
+    </div> : null}
   </Disclosure>;
 }

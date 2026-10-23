@@ -68,7 +68,7 @@ export function OperationStatusStrip({
   /** 取込の失敗（同じ案内の中に出す。Toast・ページの先頭に重ねない。#2034）。 */
   sampleImportError?: string;
   sampleImportUnavailableHint?: string;
-  /** プレビュー(擬似 job)経路で `generate_sql` ステップ内に実行ボタンを出すためのハンドラ。 */
+  /** プレビューの生成 SQL に実行ボタンを出すためのハンドラ。 */
   onPreviewExecute?: () => void;
   previewExecuteLoading?: boolean;
   /** 実行中 job の協調キャンセル要求(POST /jobs/{id}/cancel)。取消可能な処理は同じ領域に置く。 */
@@ -143,14 +143,6 @@ export function OperationStatusStrip({
                   </dd>
                 </div>
               </dl>
-            )}
-            {step.stage === "generate_sql" && job.result && (
-              <div className="mt-2 border-l border-border pl-3">
-                <GeneratedSqlSummary
-                  result={job.result}
-                  profileId={profileId}
-                />
-              </div>
             )}
           </>
         ),
@@ -234,8 +226,10 @@ export function OperationStatusStrip({
             </Banner>
           )}
         </>
-    {onPreviewExecute && job.result ? (
+    {job.result ? (
+      <div data-testid="nl2sql-generated-sql">
       <GeneratedSqlSummary result={job.result} profileId={profileId} onExecute={onPreviewExecute} executeLoading={previewExecuteLoading} />
+      </div>
     ) : null}
     </div>
   );

@@ -1,5 +1,6 @@
 """実際の呼び出し境界と stream の終了を、合成応答だけで検査する。"""
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -86,7 +87,7 @@ def test_retry_only_repeats_failed_sink() -> None:
         id="synthetic",
         event_type="tool.completed",
         attributes={},
-        created_at=obs.datetime.now(obs.UTC),
+        created_at=datetime.now(UTC),
     )
     with (
         patch("app.settings.get_settings", return_value=settings),

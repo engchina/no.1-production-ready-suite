@@ -390,7 +390,7 @@ def configure_trace_exporter(settings: Settings) -> None:
         HttpTraceExporter(
             endpoint=endpoint,
             bearer_token=settings.trace_export_http_bearer_token,
-            timeout_seconds=settings.trace_export_timeout_seconds,
+            timeout_seconds=settings.trace_export_http_timeout_seconds,
             queue_size=settings.trace_export_queue_size,
             retry=retry_config_from_settings(settings),
         )
