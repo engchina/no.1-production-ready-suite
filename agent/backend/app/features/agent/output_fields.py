@@ -18,6 +18,7 @@ from typing import Any, Literal
 from pr_backend_core.markdown import normalize_heading_markup
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.features.agent.answer_identifiers import identifier_index
 from app.features.agent.tools import (
     ExternalToolError,
     ToolDefinition,
@@ -221,8 +222,25 @@ def record_output_tool(
         from app.features.agent.runtime import runtime_repository
 
         rows = validate_rows(columns, arguments)
+        index = identifier_index(runtime_repository.get_run(run_id).steps)
+        corrected = 0
+        for row in rows:
+            for key, value in row.items():
+                if not isinstance(value, str):
+                    continue
+                checked = index.scalar(value)
+                if checked.ambiguous:
+                    raise ExternalToolError(
+                        "output.identifier_ambiguous",
+                        "識別子を取得したデータと同じ表記で記録してください。",
+                    )
+                row[key] = checked.text
+                corrected += checked.corrected
+        content = output_content(columns, rows)
+        if corrected:
+            content["identifier_check"] = {"corrected": corrected, "ambiguous": 0}
         runtime_repository.save_builtin_artifact(
-            run_id, kind=OUTPUT_KIND, name=OUTPUT_NAME, content=output_content(columns, rows)
+            run_id, kind=OUTPUT_KIND, name=OUTPUT_NAME, content=content
         )
         # 表の形で返すと、画面がツールの結果の表としても出すので、件数だけを返す。
         return {"recorded": len(rows)}

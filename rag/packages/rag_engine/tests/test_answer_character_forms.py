@@ -154,3 +154,10 @@ def test_answer_validation_reads_folded_evidence_and_keeps_the_original_quote():
     assert result["status"] == "completed" and result["counts"] == {"supported": 1}
     supported = result["claim_checks"][0]
     assert supported["source_id"] == "c1" and "ＨＲＭ：第２水曜" in supported["evidence_quote"]
+
+
+def test_figure_dash_is_folded_only_for_comparison() -> None:
+    from rag_engine.retrieval.character_forms import fold_text
+
+    assert fold_text("row‒a") == "row-a"
+    assert fold_width("row‒a") == "row‒a"

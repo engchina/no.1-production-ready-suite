@@ -280,3 +280,10 @@ def test_short_words_and_note_rows_are_not_values() -> None:
     assert unbound_table_values("区分Bの申請は承認がありません。", [flags]) == []
     notes = "区分A：x01\n区分B：y02\n備考：入力は必須"
     assert unbound_table_values("備考のとおり x01 を入力します。", [notes]) == []
+
+
+@pytest.mark.parametrize("dash", ["-", "‐", "‑", "‒", "–", "−", "－"])
+def test_identifier_with_unicode_dash_is_not_a_different_row_label(dash: str) -> None:
+    table = f"| id | value |\n| row-a | 10 |\n| row{dash}b | 20 |\n| row-c | 30 |"
+    reason = f"CSV に row{dash}b の value が 20 と記載されています。"
+    assert unbound_table_values(reason, [table]) == []

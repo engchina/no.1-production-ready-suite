@@ -31,7 +31,7 @@ import unicodedata
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
-from rag_engine.retrieval.character_forms import fold_width
+from rag_engine.retrieval.character_forms import SYMBOL_FOLD, fold_width
 
 # 値とみなすセル（英数字と区切りの「-」「_」「.」だけ。NFKC でローマ数字・全角も英数字にそろえる）。
 _VALUE_CELL = re.compile(r"[0-9a-z]+(?:[-_.][0-9a-z]+)*")
@@ -97,7 +97,8 @@ def _cell_key(cell: str) -> str:
 
 
 def _is_value(key: str) -> bool:
-    return 0 < len(key) <= _MAX_VALUE_CHARS and _VALUE_CELL.fullmatch(key) is not None
+    # 種類を決めるときだけ横線をそろえる。セルの値と照合のキーは元の表記のまま残す。
+    return 0 < len(key) <= _MAX_VALUE_CHARS and _VALUE_CELL.fullmatch(key.translate(SYMBOL_FOLD)) is not None
 
 
 def _is_label(key: str) -> bool:
