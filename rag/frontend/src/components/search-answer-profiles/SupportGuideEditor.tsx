@@ -847,7 +847,10 @@ function SupportGuideForm({
                   disabled={archived || busy}
                   onValueChange={(value) => updateRow("steps", index, { dependsOn: value })}
                 />
-                <Fieldset legend={t("supportGuides.field.allowedTools")}>
+                <Fieldset
+                  legend={t("supportGuides.field.allowedTools")}
+                  helper={t("supportGuides.field.allowedToolsHelp")}
+                >
                   <div className="grid grid-cols-1 gap-1.5">
                     {SUPPORT_GUIDE_TOOLS.map((tool) => (
                       <label key={tool} className="flex cursor-pointer items-center gap-2 text-sm text-fg">

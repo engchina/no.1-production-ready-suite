@@ -1357,3 +1357,35 @@ test("公開版だけを書き出し、アーカイブから復元できる", { 
   await expectNoPageOverflow(page);
   await page.screenshot({path: testInfo.outputPath("restored-guide.png")});
 });
+
+// #3060: 外部 Agent の道具の許可と RAG 自身の処理を区別し、既存の保存値を維持する。
+test("道具の許可の対象を説明し、外部 Agent 用の選択を保存して再表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const guide = publishedGuide();
+  guide.draft = content("ガイド A", {
+    steps: [{
+      id: "step-a", title: "手順 A", purpose: "", depends_on: [], retrieval_hints: [],
+      evidence_requirements: [], allowed_tools: ["rag_search", "nl2sql_query"], done_when: "", references: [],
+    }],
+  });
+  const api = await openSupportGuides(page, [guide]);
+  await page.getByRole("button", { name: "ガイド A を編集", exact: true }).click();
+  const editor = page.getByTestId("support-guide-editor");
+  const tools = editor.getByRole("group", { name: "外部 Agent に許可する道具", exact: true });
+  await expect(tools).toHaveAccessibleDescription(
+    "この業務ガイドを参照する外部 Agent が、手順で使ってよい道具を選びます。RAG 自身の実行範囲は資料の検索・読み取りと回答です。NL2SQL は外部 Agent 側で利用します。"
+  );
+  await expect(tools.getByRole("checkbox", { name: "データを問い合わせる（NL2SQL）" })).toBeChecked();
+  await expect(tools.getByRole("checkbox", { name: "資料を検索する", exact: true })).toBeChecked();
+  await tools.scrollIntoViewIfNeeded();
+  await expectNoPageOverflow(page);
+  await tools.screenshot({ path: testInfo.outputPath("external-agent-tools.png") });
+
+  await tools.getByRole("checkbox", { name: "資料を検索する", exact: true }).uncheck();
+  await editor.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => api.guides[0].draft.steps).toMatchObject([{ allowed_tools: ["nl2sql_query"] }]);
+  await page.reload();
+  await page.getByRole("tab", { name: "業務ガイド" }).click();
+  await page.getByRole("button", { name: "ガイド A を編集", exact: true }).click();
+  await expect(tools.getByRole("checkbox", { name: "データを問い合わせる（NL2SQL）" })).toBeChecked();
+  await expect(tools.getByRole("checkbox", { name: "資料を検索する", exact: true })).not.toBeChecked();
+});

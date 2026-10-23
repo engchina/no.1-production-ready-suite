@@ -4693,7 +4693,9 @@ export const ja = {
   "supportGuides.field.dependsOn": "依存する手順",
   "supportGuides.field.retrievalHints": "検索の手がかり",
   "supportGuides.field.evidenceRequirements": "必要な根拠",
-  "supportGuides.field.allowedTools": "使ってよい道具",
+  "supportGuides.field.allowedTools": "外部 Agent に許可する道具",
+  "supportGuides.field.allowedToolsHelp":
+    "この業務ガイドを参照する外部 Agent が、手順で使ってよい道具を選びます。RAG 自身の実行範囲は資料の検索・読み取りと回答です。NL2SQL は外部 Agent 側で利用します。",
   "supportGuides.field.doneWhen": "終わりの条件",
   "supportGuides.field.branchCondition": "条件",
   "supportGuides.field.operator": "比べ方",
