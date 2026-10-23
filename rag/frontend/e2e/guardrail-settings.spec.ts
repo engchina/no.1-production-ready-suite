@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/test";
 import { mockDatabaseReady, mockLocalAuth, expectNoPageOverflow } from "./_helpers";
 
 for (const width of [1280, 375]) {

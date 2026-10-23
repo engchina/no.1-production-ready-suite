@@ -4140,4 +4140,4 @@ def test_record_boundaries_are_hidden_in_review_and_exports() -> None:
     assert JSONL_RECORD_BOUNDARY not in documents_route._extraction_markdown(extraction)
     assert JSONL_RECORD_BOUNDARY not in documents_route._extraction_html(extraction)
     literal = StructuredExtraction(raw_text=f"原文の記号: {JSONL_RECORD_BOUNDARY}")
-    assert JSONL_RECORD_BOUNDARY in literal.to_document_payload()["display_text"]
+    assert JSONL_RECORD_BOUNDARY in str(literal.to_document_payload()["display_text"])
