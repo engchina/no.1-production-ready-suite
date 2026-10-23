@@ -322,3 +322,48 @@ def test_internal_record_section_is_removed_without_hiding_next_section(heading:
 
     text = "回答です。\n\n" + heading + "\n\n- 値の記録\n\n## 補足\n次の操作。"
     assert without_output_record_sections(text) == "回答です。\n\n## 補足\n次の操作。"
+
+
+@pytest.mark.parametrize(
+    "heading", ["## 記録された項目", "**記録**", "### 記録した項目：", "**記録内容**"]
+)
+def test_record_report_section_uses_configured_titles(heading: str) -> None:
+    from app.features.agent.output_fields import without_output_record_sections
+    from app.settings import Settings
+
+    text = (
+        "回答です。\n\n" + heading + "\n\n| 項目 | 値 |\n| --- | --- |\n| A | 7 |\n"
+        "\n（record_output に記録済みです）\n\n## 補足\n次の操作。"
+    )
+    assert (
+        without_output_record_sections(text, Settings().agent_output_record_section_titles)
+        == "回答です。\n\n## 補足\n次の操作。"
+    )
+
+
+def test_report_title_is_not_removed_inside_a_code_fence() -> None:
+    from app.features.agent.output_fields import without_output_record_sections
+
+    text = "回答です。\n\n```md\n## 記録\n記録の例。\n```\n\n## 別の節\n残す。"
+    assert without_output_record_sections(text, ["記録"]) == text
+
+
+def test_unconfigured_heading_remains() -> None:
+    from app.features.agent.output_fields import without_output_record_sections
+
+    text = "回答です。\n\n## 記録\n文書で定めた記録の規則。"
+    assert without_output_record_sections(text) == text
+
+
+def test_record_report_titles_can_be_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.features.agent.output_fields import without_output_record_sections
+    from app.settings import Settings
+
+    monkeypatch.setenv("AGENT_OUTPUT_RECORD_SECTION_TITLES", '["記録報告"]')
+    settings = Settings(_env_file=None)
+    assert (
+        without_output_record_sections(
+            "回答です。\n\n## 記録報告\n記録済みの値。", settings.agent_output_record_section_titles
+        )
+        == "回答です。"
+    )

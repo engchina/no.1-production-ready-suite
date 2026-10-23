@@ -26,13 +26,21 @@ def test_layout_gap_matches_source():
 
 @pytest.mark.parametrize(
     "instruction",
-    ["資料にない値は不明と明記してください。", "確認できなければ分からないと書いてください。", "答えは不明と表記してください。"],
+    [
+        "資料にない値は不明と明記してください。",
+        "確認できなければ分からないと書いてください。",
+        "答えは不明と表記してください。",
+        "数字と万・千の混ざった表記で答えてください。",
+        "添付を読んで回答してください。",
+        "項目と値を出力の項目に記録してください。",
+    ],
 )
 def test_output_instruction_is_not_a_document_request(instruction):
     units = task_contract("上限と期限を教えてください。" + instruction)["request_units"]
     assert units[0]["kind"] == "request"
     assert units[-1]["kind"] == "context"
     assert instruction in units[-1]["text"]
+    assert not any(unit.get("request_id") == units[-1]["id"] for unit in units)
 
 
 def test_factual_question_about_writing_is_kept():
@@ -41,3 +49,16 @@ def test_factual_question_about_writing_is_kept():
 
 def test_question_about_a_written_value_is_still_factual():
     assert task_contract("資料に不明と明記されていますか？")["request_units"][0]["kind"] == "request"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "不明と明記する方法を教えてください。",
+        "出力の項目に記録する方法を教えてください。",
+        "どの形式で回答されていますか？",
+        "添付を読んで回答する手順を教えてください。",
+    ],
+)
+def test_question_about_an_answer_instruction_remains_factual(question):
+    assert task_contract(question)["request_units"][0]["kind"] == "request"

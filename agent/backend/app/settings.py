@@ -302,6 +302,17 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 外して「根拠と矛盾し除いた内容」に示し、確かめられない段落は本文に残して印を付ける（#2738）。
     # 予算（上の 2 つ）には数えない。
     agent_final_validation_enabled: bool = True
+    # 記録済みの出力を本文で繰り返す報告の見出し。語を変える場合はこの設定で選ぶ。
+    agent_output_record_section_titles: list[str] = Field(
+        default_factory=lambda: [
+            "記録",
+            "記録内容",
+            "記録された項目",
+            "記録した項目",
+            "出力の記録",
+            "出力項目の記録",
+        ]
+    )
     # 根拠・データのツールを呼ばずに作った回答の拒答（#1835。既定 on）。on のとき、根拠・
     # データのツール（RAG・NL2SQL・登録した MCP 接続）を持つ業務 Agent が、どれも呼ばずに最終の
     # 回答を作ったら 1 回だけモデルへ差し戻し、それでも呼ばなければ決まった拒答の文に置き換える

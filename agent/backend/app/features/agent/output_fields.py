@@ -458,8 +458,9 @@ def meaning_candidates(results: Sequence[OutputFieldResult]) -> list[int]:
     ]
 
 
-def without_output_record_sections(answer: str) -> str:
-    """記録の内部名を見出しにした報告だけを、資料との照合の前に外す。"""
+def without_output_record_sections(answer: str, report_titles: Sequence[str] = ()) -> str:
+    """記録報告の節を、資料との照合の前に外す。"""
+    titles = {title.strip().rstrip(":：") for title in report_titles if title.strip()}
     lines: list[str] = []
     skipping = False
     fenced = False
@@ -469,7 +470,7 @@ def without_output_record_sections(answer: str) -> str:
         heading = None if fenced else re.fullmatch(r"\s*(?:#{1,6}\s+(.+)|\*\*(.+)\*\*)\s*", line)
         if heading:
             title = heading.group(1) or heading.group(2)
-            skipping = bool(
+            skipping = title.strip().rstrip(":：") in titles or bool(
                 re.search(rf"(?<![a-zA-Z0-9_]){RECORD_OUTPUT_TOOL}(?![a-zA-Z0-9_])", title)
             )
         if not skipping:
