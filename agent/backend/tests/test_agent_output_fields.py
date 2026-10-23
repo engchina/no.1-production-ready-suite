@@ -197,7 +197,10 @@ def _tool_names(model: ScriptedModel) -> set[str]:
 ROW = {"item": "A", "amount": 10, "due": "2026-10-01", "matched": True}
 
 
-def test_record_output_is_validated_and_saved(monkeypatch: MonkeyPatch, agents: None) -> None:
+@pytest.mark.parametrize("heading", ["**記録（record_output の結果）**", "**出力**（記録済み）"])
+def test_record_output_is_validated_and_saved(
+    monkeypatch: MonkeyPatch, agents: None, heading: str
+) -> None:
     model = _script(
         monkeypatch,
         [function_call(LOOKUP, {"query": "A"}, call_id="call-l")],
@@ -206,8 +209,7 @@ def test_record_output_is_validated_and_saved(monkeypatch: MonkeyPatch, agents: 
         [function_call(RECORD_OUTPUT_TOOL, {"rows": [ROW]}, call_id="call-r2")],
         [
             assistant_message(
-                "A は業務データと一致しました。\n\n"
-                "**記録（record_output の結果）**\n\n| item | amount |\n| A | 10 |"
+                f"A は業務データと一致しました。\n\n{heading}\n\n| item | amount |\n| A | 10 |"
             )
         ],
     )
@@ -233,6 +235,7 @@ def test_record_output_is_validated_and_saved(monkeypatch: MonkeyPatch, agents: 
     assert not output_retried(run.metadata)
     assert run.metadata["tool_titles"][RECORD_OUTPUT_TOOL] == "出力の項目の記録"
     answer = next(a.content["text"] for a in run.artifacts if a.kind == "answer")
+    assert heading not in answer
     assert "record_output" not in answer
     assert "| item |" not in answer
 

@@ -48,7 +48,7 @@ function signalItem(runId: string, signals: string[], overrides: Record<string, 
     user_uuid: "u-1",
     display_name: "山田 太郎",
     question: `${runId} の質問：先月の解約件数は？`,
-    answer: "先月の解約件数は資料から確かめられませんでした。",
+    answer: "**確認結果**\n\n確認できた値です。\n\n| 項目 | 値 |\n| --- | --- |\n| A | 1200 |",
     status: "completed",
     signals,
     answer_outcome: null,
@@ -81,7 +81,7 @@ function seedSignals(mockApi: MockApi, items = [
 
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`確かめるべき実行の集計・種類・一覧と詳細を出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`確かめるべき実行の集計・種類・一覧と詳細を出す (${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
       seedSignals(mockApi);
@@ -124,7 +124,8 @@ for (const viewport of VIEWPORTS) {
       await expect(signals).toContainText("ツールの呼び出しが失敗しました。");
       await expect(signals).toContainText("失敗したツールの呼び出し: 2 件");
       await expect(signals).toContainText("回答の対応: 根拠不足");
-      await expect(detail).toContainText("先月の解約件数は資料から確かめられませんでした。");
+      await expect(detail.locator("strong").filter({ hasText: "確認結果" })).toBeVisible();
+      await expect(detail.getByRole("table", { name: "回答の表", exact: true })).toContainText("1200");
       await expect(detail.getByTestId("signals-open-run")).toHaveAttribute("href", "/runs?id=run-tool");
       await expect(detail.getByTestId("signals-add-case-toggle")).toBeVisible();
       await expect(detail).toContainText("山田 太郎");
