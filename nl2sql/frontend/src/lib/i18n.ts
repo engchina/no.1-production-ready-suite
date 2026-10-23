@@ -2298,7 +2298,7 @@ const nl2sqlJa = {
   "globalRules.status.count": "共通ルール",
   "globalRules.status.lastLoaded": "最終読込",
   "globalRules.title": "共通 SQL 生成ルール",
-  "globalRules.hint": "全プロファイルで利用する SQL ルールを RULE の1列で管理します。取込後の SQL 生成から反映されます。見出しだけの Excel を取り込むと、すべて削除できます。",
+  "globalRules.hint": "全プロファイルで利用する SQL ルールを RULE の1列で管理します。取込は既存データを全置換します。取込後の SQL 生成から反映されます。見出しだけの Excel を取り込むと、すべて削除できます。",
   "globalRules.workspace": "共通ルール作業領域",
   "globalRules.loading": "共通ルールを読み込んでいます",
   "globalRules.import": "共通ルール Excel 取込",
