@@ -282,7 +282,7 @@ export function ClarificationCard({
           ref={titleRef}
           id={titleId}
           tabIndex={-1}
-          className="flex items-center gap-2 text-sm font-semibold leading-6 text-fg"
+          className="pr-clarification-heading flex items-center gap-2 text-sm font-semibold leading-6 text-fg"
         >
           <MessageCircleQuestion size={16} aria-hidden className="shrink-0 text-accent-fg" />
           {labels.title}
@@ -516,7 +516,7 @@ function ClarificationItemFields({
             ref={promptRef}
             id={legendId}
             tabIndex={-1}
-            className="min-w-0 break-words text-sm font-medium leading-6 text-fg"
+            className="pr-clarification-heading min-w-0 break-words text-sm font-medium leading-6 text-fg"
           >
             {item.prompt}
           </Prompt>

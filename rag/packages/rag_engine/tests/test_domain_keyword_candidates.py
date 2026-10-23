@@ -51,6 +51,20 @@ class DomainKeywordCandidateTests(unittest.TestCase):
         self.assertNotIn("出庫伝票", keywords)
         self.assertFalse(any(keyword.startswith("2026") for keyword in keywords))
 
+    def test_candidates_keep_surface_nouns_codes_and_exclude_predicates_and_layout_fragments(self):
+        text = (
+            "設定識別番号を変える。画面接続情報を確かめる。合成マスタをまとめて表示する。"
+            "サンプルを開く。サンプ\nルを閉じる。e-2045 と e_2045 を受ける。"
+        )
+        keywords = {item.keyword for item in suggest_domain_keyword_candidates([_source("a", text)])}
+        self.assertIn("設定識別番号", keywords)
+        self.assertIn("画面接続情報", keywords)
+        self.assertIn("e-2045", keywords)
+        self.assertIn("e_2045", keywords)
+        self.assertIn("マスタ", keywords)
+        self.assertIn("サンプル", keywords)
+        self.assertFalse(keywords & {"変える", "変え", "確かめる", "確かめ", "受ける", "受け", "纏める", "マスター", "サンプ"})
+
     def test_candidates_exclude_search_text_context_labels(self):
         """検索文の文脈行は全 chunk 共通の定型なので、そのラベル語を候補にしない (#1035)。"""
         search_text = (
@@ -156,7 +170,7 @@ class DomainKeywordCandidateTests(unittest.TestCase):
 
         with (
             patch(
-                "rag_engine.knowledge.domain_keyword_candidates.tokenize_text_search_query",
+                "rag_engine.knowledge.domain_keyword_candidates.tokenize_domain_keyword_candidates",
                 side_effect=RuntimeError("broken tokenizer"),
             ),
             self.assertRaisesRegex(DomainKeywordCandidateTokenizationError, "broken tokenizer"),

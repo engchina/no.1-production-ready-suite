@@ -693,7 +693,7 @@ class AnswerEngine:
     ) -> AnswerOutcome:
         """回答する。``step_callback`` は回答フローの各工程の開始・終了を受け取る(進捗。#593)。"""
         if self._approved_faq is not None:
-            return await self._answer_from_approved_faq(request)
+            return await self._answer_from_approved_faq(request, step_callback=step_callback)
         # 回答の中の読み取りは、chunk の本文(CLOB)を行ごとに読み直さず値で受け取る(#1490)。
         with read_lobs_as_values():
             return await self._run(request, step_callback=step_callback)
@@ -740,6 +740,13 @@ class AnswerEngine:
                 step_callback,
             )
         outcome = _outcome_from_result(result, state)
+        from rag_parser_core.language import current_pack
+
+        outcome.diagnostics["answer_format"] = {
+            key: value
+            for key, value in current_pack().sections["answer_labels"].items()
+            if isinstance(value, str)
+        }
         await self._validate_outcome(request, outcome, step_callback=step_callback)
         if self._scope is not None:
             outcome.diagnostics["scope"] = {
@@ -894,22 +901,47 @@ class AnswerEngine:
         if step_callback is not None:
             await step_callback(name, state, elapsed, metrics)
 
-    async def _answer_from_approved_faq(self, request: SearchRequest) -> AnswerOutcome:
+    async def _answer_from_approved_faq(
+        self, request: SearchRequest, *, step_callback: StepCallback | None = None
+    ) -> AnswerOutcome:
         """利用者が選んだ類似問の承認済み FAQ だけから回答する(検索しない。#702)。"""
         from rag_engine.generation.faq_answer import answer_from_approved_faq
+        from rag_engine.resources.llm_usage import bind_llm_usage
 
         assert self._approved_faq is not None
         faq_question, faq_answer = self._approved_faq
-        with tempfile.TemporaryDirectory(prefix="rag-engine-faq-") as work:
-            engine_settings = build_engine_settings(
-                self._settings,
-                output_dir=Path(work),
-                runtime_knowledge_path=None,
-                answer_model_id=self._answer_model_id,
-            )
-            answer = await run_answer_in_thread(
-                answer_from_approved_faq, request.query, faq_question, faq_answer, engine_settings
-            )
+        name = "承認済み FAQ からの回答"
+        started = time.monotonic()
+        if step_callback is not None:
+            await step_callback(name, "started", 0.0, {})
+        status = "success"
+        with bind_llm_usage() as usage:
+            try:
+                with tempfile.TemporaryDirectory(prefix="rag-engine-faq-") as work:
+                    engine_settings = build_engine_settings(
+                        self._settings,
+                        output_dir=Path(work),
+                        runtime_knowledge_path=None,
+                        answer_model_id=self._answer_model_id,
+                    )
+                    answer = await run_answer_in_thread(
+                        answer_from_approved_faq,
+                        request.query,
+                        faq_question,
+                        faq_answer,
+                        engine_settings,
+                    )
+            except BaseException:
+                status = "error"
+                raise
+            finally:
+                elapsed = time.monotonic() - started
+                metrics = {"llm_calls": 1, "llm_usage": usage.snapshot()}
+                if step_callback is not None:
+                    await step_callback(name, status, elapsed, metrics)
+        models = self._models_used()
+        models["embedding"] = ""
+        models["rerank"] = ""
         return AnswerOutcome(
             answer=f"{answer}\n\n（出典: 承認済み FAQ「{faq_question}」）",
             citations=[],
@@ -921,7 +953,10 @@ class AnswerEngine:
                 "approved_faq_question": faq_question,
                 # 回答した時点の承認済みの回答。FAQ が変わっても根拠の原文を出せる(#737)。
                 "approved_faq_answer": faq_answer,
-                "models": self._models_used(),
+                "models": models,
+                "execution_steps": [
+                    {"name": name, "status": "complete", "elapsed_seconds": elapsed, **metrics}
+                ],
             },
             # 回答の安全チェックが照合する根拠は、選んだ FAQ だけ。
             context_text=f"類似問: {faq_question}\n承認済みの回答: {faq_answer}",

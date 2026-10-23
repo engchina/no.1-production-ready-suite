@@ -283,6 +283,8 @@ describe("ClarificationCard", () => {
     act(() => root.render(<ClarificationCard items={[next]} onConfirm={vi.fn()} />));
     expect(optionInput("regions-2", "east").checked).toBe(false);
     expect(document.activeElement).toBe(host.querySelector("h4"));
+    expect(host.querySelector("h4")?.classList.contains("pr-clarification-heading")).toBe(true);
+    expect(host.querySelector("h3")?.classList.contains("pr-clarification-heading")).toBe(true);
     expect(document.activeElement?.textContent).toBe(regions.prompt);
   });
 
@@ -293,6 +295,8 @@ describe("ClarificationCard", () => {
     root = createRoot(host);
     render({ autoFocus: true });
     expect(document.activeElement).toBe(host.querySelector("h4"));
+    expect(host.querySelector("h4")?.classList.contains("pr-clarification-heading")).toBe(true);
+    expect(host.querySelector("h3")?.classList.contains("pr-clarification-heading")).toBe(true);
   });
 
   it("受控の答えを使い、変更を onValueChange に渡す", () => {

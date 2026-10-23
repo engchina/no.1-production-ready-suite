@@ -699,3 +699,20 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 }
+
+
+test("FAQ の提示対象が無いときは質問を止めず検索する", { tag: "@responsive" }, async ({ page }) => {
+  let searched = false;
+  await page.route("**/api/search/stream", (route) => {
+    searched = true;
+    return fulfillStream(route, sse([
+      ["metadata", { trace_id: "faq-filtered", elapsed_ms: 5, guardrail_warnings: [], diagnostics: {} }],
+      ["citations", []], ["done", { trace_id: "faq-filtered" }],
+    ]));
+  });
+  await page.goto("/search");
+  await selectSearchAnswerProfile(page, /経理ビュー/);
+  await search(page, "合成の設定 A");
+  await expect.poll(() => searched).toBe(true);
+  await expect(page.getByText("類似する承認済み FAQ があります")).toHaveCount(0);
+});

@@ -1212,21 +1212,23 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "Approved FAQ(類似問)の照合に embedding の意味類似度を加える(rag_poc と同じ既定 ON)。"
         ),
     )
-    rag_approved_faq_chat_min_score: float = Field(
+    rag_approved_faq_suggestion_min_score: float = Field(
         default=0.75,
         ge=0.0,
         le=1.0,
         description=(
-            "チャットで類似問を提示する一致度の下限(0〜1。#684 / #709)。低いと弱い候補が毎回出て、"
+            "チャットと RAG 検索で類似問を提示する一致度の下限(0〜1。#684 / #709)。"
+            "低いと弱い候補が毎回出て、"
             "利用者に毎回「どれでもない」を選ばせることになる。"
         ),
     )
-    rag_approved_faq_chat_max_gap: float = Field(
+    rag_approved_faq_suggestion_max_gap: float = Field(
         default=0.1,
         ge=0.0,
         le=1.0,
         description=(
-            "チャットで類似問を提示するとき、1 位の一致度からこの差より離れた候補を出さない(#709)。"
+            "チャットと RAG 検索で類似問を提示するとき、1 位の一致度からこの差より離れた候補を"
+            "出さない(#709)。"
             "1 位とほぼ同じくらい近い候補だけを並べ、遠い 2・3 位で迷わせない。"
         ),
     )

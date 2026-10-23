@@ -236,6 +236,57 @@ def normalize_text_search_index_text(text: Any) -> str:
     return fold_text(text)
 
 
+def tokenize_domain_keyword_candidates(
+    text: str,
+    *,
+    config: TextSearchTokenizerConfig | None = None,
+    max_tokens: int = MAX_TEXT_SEARCH_TOKENS,
+) -> list[str]:
+    """登録候補には本文の名詞の表層形とコードだけを使う。検索用の派生形は作らない。"""
+    cfg = normalize_text_search_tokenizer_config(config)
+    tokenizer = _get_sudachi_tokenizer(cfg.sudachi_dict_type, cfg.sudachi_config_path)
+    # 片仮名の途中の改行は文書の折り返しとして読む。語の間の空白はつなげない。
+    katakana = range_class(current_pack().words("search_terms", "katakana_chars"))
+    body = re.sub(rf"(?<={katakana})[^\S\n]*\n[^\S\n]*(?={katakana})", "", text)
+    body = normalize_text_search_text(body)
+    vocabulary = _vocabulary()
+    tokens: list[str] = []
+    for pattern in _EXTRA_PATTERNS:
+        for match in pattern.finditer(body):
+            tokens.append(match.group())
+    for match in _LATIN_RUN.finditer(body):
+        code = match.group()
+        if any(char.isalpha() for char in code) and any(char.isdecimal() for char in code):
+            tokens.append(code)
+    for chunk in _split_for_sudachi(body):
+        compound: list[str] = []
+        previous_end = -1
+
+        def flush(parts: list[str] = compound) -> None:
+            if parts:
+                tokens.append("".join(parts))
+                parts.clear()
+
+        for morpheme in tokenizer.tokenize(chunk, _sudachi_split_mode("C")):
+            pos = morpheme.part_of_speech()
+            surface = morpheme.surface()
+            if pos and pos[0] == "名詞" and not any(part in vocabulary.drop_pos_details for part in pos[1:]):
+                if morpheme.begin() != previous_end:
+                    flush()
+                compound.append(surface)
+                tokens.append(surface)
+                previous_end = morpheme.end()
+            else:
+                flush()
+                previous_end = -1
+        flush()
+    return list(
+        dict.fromkeys(
+            token for token in tokens if token and token in body and token not in vocabulary.stopwords and token not in vocabulary.deny
+        )
+    )[:max_tokens]
+
+
 def tokenize_text_search_query(
     query: str,
     *,

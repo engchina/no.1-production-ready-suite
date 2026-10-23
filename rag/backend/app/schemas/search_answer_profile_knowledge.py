@@ -96,7 +96,7 @@ class ApprovedFaqImportPreviewData(BaseModel):
 class ApprovedFaqSuggestRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     limit: int = Field(default=5, ge=1, le=20)
-    # chat はチャットの提示(一致度の下限 RAG_APPROVED_FAQ_CHAT_MIN_SCORE。#684)。
+    # chat はチャットの提示(一致度の下限 RAG_APPROVED_FAQ_SUGGESTION_MIN_SCORE。#684)。
     purpose: Literal["search", "chat"] = "search"
 
 

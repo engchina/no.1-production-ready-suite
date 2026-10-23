@@ -128,7 +128,7 @@ def test_suggestion_toggle_is_kept_across_faq_edits_and_stops_suggestions(
 def test_chat_suggestions_use_the_chat_min_score_and_at_most_three(
     fake_oracle: FakeKnowledgeOracle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """チャットは一致度の下限(RAG_APPROVED_FAQ_CHAT_MIN_SCORE)以上を最大 3 件だけ出す(#684)。"""
+    """チャットは共通の一致度の下限以上を最大 3 件だけ出す。"""
     for index in range(5):
         client.post(
             BASE, json={"question": f"受注 {index} を取り消すには？", "answer": f"回答 {index}"}
@@ -142,8 +142,8 @@ def test_chat_suggestions_use_the_chat_min_score_and_at_most_three(
 
     from app.config import get_settings
 
-    monkeypatch.setattr(get_settings(), "rag_approved_faq_chat_min_score", 1.0)
-    # 下限を上げると、検索では出る近い候補もチャットでは出さない。
+    monkeypatch.setattr(get_settings(), "rag_approved_faq_suggestion_min_score", 1.0)
+    # 下限を上げると、近い候補でも提示しない。
     weak = client.post(f"{BASE}/suggest", json={"query": "受注を取り消すには？", "purpose": "chat"})
     assert weak.json()["data"]["suggestions"] == []
 
@@ -151,22 +151,40 @@ def test_chat_suggestions_use_the_chat_min_score_and_at_most_three(
 def test_chat_suggestions_drop_candidates_far_from_the_top(
     fake_oracle: FakeKnowledgeOracle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """チャットは 1 位から RAG_APPROVED_FAQ_CHAT_MAX_GAP より離れた候補を出さない(#709)。"""
+    """チャットは 1 位から RAG_APPROVED_FAQ_SUGGESTION_MAX_GAP より離れた候補を出さない(#709)。"""
     from app.config import get_settings
 
     client.post(BASE, json={"question": "受注を取り消すには？", "answer": "取消ボタンを押す。"})
     client.post(BASE, json={"question": "受注 1 を取り消すには？", "answer": "回答 1"})
-    monkeypatch.setattr(get_settings(), "rag_approved_faq_chat_min_score", 0.5)
+    monkeypatch.setattr(get_settings(), "rag_approved_faq_suggestion_min_score", 0.5)
 
-    monkeypatch.setattr(get_settings(), "rag_approved_faq_chat_max_gap", 1.0)
+    monkeypatch.setattr(get_settings(), "rag_approved_faq_suggestion_max_gap", 1.0)
     both = client.post(f"{BASE}/suggest", json={"query": "受注を取り消すには？", "purpose": "chat"})
     assert len(both.json()["data"]["suggestions"]) == 2
 
-    monkeypatch.setattr(get_settings(), "rag_approved_faq_chat_max_gap", 0.0)
+    monkeypatch.setattr(get_settings(), "rag_approved_faq_suggestion_max_gap", 0.0)
     top = client.post(f"{BASE}/suggest", json={"query": "受注を取り消すには？", "purpose": "chat"})
     assert [item["question"] for item in top.json()["data"]["suggestions"]] == [
         "受注を取り消すには？"
     ]
-    # 検索の画面の候補は変えない。
+    # 検索の画面も同じ提示条件で絞る。
     search = client.post(f"{BASE}/suggest", json={"query": "受注を取り消すには？"})
-    assert len(search.json()["data"]["suggestions"]) == 2
+    assert len(search.json()["data"]["suggestions"]) == 1
+
+
+@pytest.mark.parametrize("purpose", ["chat", "search"])
+def test_suggestion_minimum_applies_to_both_answer_entry_points(
+    fake_oracle: FakeKnowledgeOracle, monkeypatch: pytest.MonkeyPatch, purpose: str
+) -> None:
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "rag_approved_faq_semantic_enabled", False)
+    client.post(BASE, json={"question": "合成の設定 A はどこですか？", "answer": "画面 A です。"})
+    monkeypatch.setattr(get_settings(), "rag_approved_faq_suggestion_min_score", 1.0)
+    weak = client.post(f"{BASE}/suggest", json={"query": "別の設定 B", "purpose": purpose})
+    assert weak.status_code == 200
+    assert weak.json()["data"]["suggestions"] == []
+    exact = client.post(
+        f"{BASE}/suggest", json={"query": "合成の設定 A はどこですか？", "purpose": purpose}
+    )
+    assert len(exact.json()["data"]["suggestions"]) == 1
