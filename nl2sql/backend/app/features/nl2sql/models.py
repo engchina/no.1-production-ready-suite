@@ -28,6 +28,7 @@ from pydantic import (
     Field,
     ValidationInfo,
     computed_field,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -740,6 +741,20 @@ class QueryResults(BaseModel):
         "admin_control_plane",
     ] = "deterministic"
     vpd_context_enforced: bool = False
+
+    @field_serializer("rows", when_used="json")
+    def serialize_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # JSON の数値を browser が Number に変えても失わない範囲。内部の整数は変更しない。
+        max_safe_integer = 2**53 - 1
+        return [
+            {
+                key: str(value)
+                if isinstance(value, int) and abs(value) > max_safe_integer
+                else value
+                for key, value in row.items()
+            }
+            for row in rows
+        ]
 
     @model_validator(mode="after")
     def fill_returned_count(self) -> QueryResults:
