@@ -256,3 +256,19 @@ test("言語資源のゼロ倍率は欄で拒否し、正しい倍率だけを�
   await expectNoPageOverflow(page);
   await page.screenshot({ path: test.info().outputPath("numeric-mapping.png"), fullPage: true });
 });
+
+
+test("数量の混在表記の語は質問用の言語資源で確認できる", async ({ page }) => {
+  await mockLanguagePack(page);
+  const fields = [...FIELDS, { section: "question_cues", key: "mixed_number_notation_cues", kind: "words", choices: [], ingest: false, max_chars: 40 }];
+  const builtin = { ...BUILTIN, question_cues: { mixed_number_notation_cues: ["混在", "組み合"] } };
+  await page.route("**/api/settings/language-pack", route => route.fulfill({ json: envelope({ fields, builtin, overrides: {}, effective: builtin, hash: "a" }) }));
+  await page.goto("/settings/language-pack");
+  await page.getByRole("tablist", { name: "言語資源の使い道" }).getByRole("tab", { name: "質問を読む" }).click();
+  for (const width of [1280, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(page.getByLabel("数字と位取りを混ぜる指定の語", { exact: true })).toHaveValue("混在\n組み合");
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: test.info().outputPath(`mixed-number-${width}.png`) });
+  }
+});

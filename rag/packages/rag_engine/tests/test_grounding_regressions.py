@@ -62,3 +62,35 @@ def test_question_about_a_written_value_is_still_factual():
 )
 def test_question_about_an_answer_instruction_remains_factual(question):
     assert task_contract(question)["request_units"][0]["kind"] == "request"
+
+
+@pytest.mark.parametrize(
+    "value, instruction",
+    [
+        ("2万4千", "数字と万・千の混ざった表記で答えてください。"),
+        ("24000", "半角数字で答えてください。"),
+        ("24,000", "桁区切り付きの数字で答えてください。"),
+        ("二万四千", "漢数字で答えてください。"),
+    ],
+)
+def test_requested_number_spelling_preserves_source_and_grounding(value, instruction):
+    from test_grounded_answer import FakeModel, audit, context, draft, record, run
+
+    from rag_engine.generation.answering import _grounded_spans
+
+    question = "上限は何件ですか。" + instruction
+    source = "保存件数の上限は二万四千件です。"
+    ctx = context(record(0, source, "設定", page=2, source="document-a.pdf"))
+    evidence_id = _grounded_spans(question, ctx, (), None)[0]["evidence_id"]
+    text = f"保存件数の上限は{value}件です。"
+    model = FakeModel(
+        [draft({"kind": "rule", "request_id": "Q1", "text": text, "evidence_id": evidence_id, "quote": source}, summary=text)],
+        [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])],
+    )
+    result = run(model, ctx, question).response
+    assert text in result.answer_text
+    assert not result.envelope["passage_marks"]
+    assert source == ctx.records[0].text
+    generation_prompt = next(prompt for schema, prompt in model.prompts if schema == "GroundedDraft")
+    assert instruction in generation_prompt
+    assert '"kind": "context"' in generation_prompt

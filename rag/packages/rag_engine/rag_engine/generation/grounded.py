@@ -193,14 +193,14 @@ GENERATE_SYSTEM_PROMPT = (
 - text は引用（evidence_id と lines が指す原文）が支持する範囲だけを質問の言葉で説明する。
 - 1つの手順に別機能の item を混ぜない。複数の処理区分が並ぶ原文は区分を選ばず、区分ごとに text=quote（逐語）の item にする。必須根拠（pinned）は質問に適用できる限り必ず item に使う。
 - 通常は applies=matched。原文に適用条件・限定（〜の場合、〜のみ、対象外）が明記され、質問からその成立を確認できない時だけ applies=conditional とし、condition に原文の語句をそのまま写す。applies=unverified は監査の結果からシステムが付ける値で、あなたは出力しない。
-- request_units の各 id に対して、答えられる item を request_id 付きで出す。根拠がない要求は kind=gap にする。kind=context の要求単位は経緯・背景で、item も gap も作らない。
+- request_units の各 id に対して、答えられる item を request_id 付きで出す。根拠がない要求は kind=gap にする。kind=context の要求単位は経緯・背景・回答の書き方の指示で、item も gap も作らない。
 5.4 根拠が無い場合
 - 引用できる根拠が1つも無い場合は、items を kind=gap だけにして summary を空文字にする（根拠不足の案内文はシステムが表示する）。不足する範囲は gap に、確認すれば確定できる実データ・利用者に確かめる条件・別の資料は external_data_items / reference_materials に書く。
 - 質問の語（画面名・メッセージ文・帳票名）が原文になくても、同じ対象の条件・操作を述べた原文があれば kind=rule / operation の item にし、質問の語との対応が未確認なことは gap に書く（全面拒答にしない）。
 - user message の「検索評価で未確認の観点」は、根拠があれば答え、無ければその観点の gap を書く。
 5.5 summary と言語
 - summary は items で裏付けた結論だけを1〜2文で述べる（複数の item をつないだ多段の結論（4.8）も items で裏付けた結論）。見出し・番号・出典表記・Markdown は書かない（体裁はシステムが組み立てる）。
-- summary・text は質問と同じ言語で書く。quote、原文の語句を写す condition、逐語にする text（multi_condition）は原文の言語のままにする。
+- summary・text は質問の回答指示（kind=context にある書き方の指示も含む）に従い、言語の指定がなければ質問と同じ言語で書く。quote、原文の語句を写す condition、逐語にする text（multi_condition）は原文の表記と言語のままにする。
 """
 )
 
@@ -4772,6 +4772,9 @@ def run_round(
             draft = parse_text(generation_system, prompt, settings, GroundedDraft, provider_id=provider_id)
     else:
         draft = parse_text(generation_system, prompt, settings, GroundedDraft, provider_id=provider_id)
+    from rag_engine.generation.number_notation import format_draft_numbers
+
+    draft = format_draft_numbers(question, draft, spans)
     draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
     if image_fallback:

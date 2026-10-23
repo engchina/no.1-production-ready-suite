@@ -372,6 +372,21 @@ def error_messages(question: str) -> list[str]:
 # 疑問・依頼・可否・方法を尋ねる標識は言語資源（request_cues）。含まない文（「課名が変更になった。」）は経緯・背景。
 
 
+def _answer_instruction_pattern() -> re.Pattern[str]:
+    """回答指示と依頼の語尾が連続する文末。"""
+    cues = _cues()
+    return re.compile(
+        rf"{cues.alt['answer_instruction_cues']}{cues.alt['answer_instruction_endings']}"
+        rf"[{re.escape(''.join(cues.words['unit_split_chars']))}\s]*$"
+    )
+
+
+def answer_instruction_texts(question: str) -> list[str]:
+    """根拠の要求にしない回答指示の原文。表記の解決でも同じ判定を使う。"""
+    pattern = _answer_instruction_pattern()
+    return [unit["text"] for unit in _base_units(question) if pattern.search(unit["text"])]
+
+
 def _with_request_kind(units: list[dict[str, str]]) -> list[dict[str, str]]:
     """各文に kind=request / context を付ける。背景文は単位として残すが、答える対象ではない (#650)。
 
@@ -379,11 +394,7 @@ def _with_request_kind(units: list[dict[str, str]]) -> list[dict[str, str]]:
     """
     cues = _cues()
     marker = cues.request_marker
-    instruction_pattern = re.compile(
-        rf"{cues.alt['answer_instruction_cues']}{cues.alt['answer_instruction_endings']}"
-        rf"[{re.escape(''.join(cues.words['unit_split_chars']))}\s]*$"
-    )
-    instructions = [bool(instruction_pattern.search(unit["text"])) for unit in units]
+    instructions = [bool(_answer_instruction_pattern().search(unit["text"])) for unit in units]
     kinds = [
         "request" if marker.search(unit["text"]) and not instruction else "context"
         for unit, instruction in zip(units, instructions, strict=True)

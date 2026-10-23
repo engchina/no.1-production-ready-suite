@@ -412,6 +412,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "requested_action_words",
         "output_format_words",
         "answer_instruction_cues",
+        "mixed_number_notation_cues",
         "answer_instruction_endings",
         "explicit_condition_cues",
         "aggregation_words",

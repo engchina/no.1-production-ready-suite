@@ -695,6 +695,8 @@ export const ja = {
   "settings.language.field.procedure_cues.help": "手順を求める質問とみなす語です（例: できない、登録）。",
   "settings.language.field.requested_action_words": "要求された操作の語",
   "settings.language.field.requested_action_words.help": "質問が求める操作として記録する語です（済みの印が続くときは除きます）。",
+  "settings.language.field.mixed_number_notation_cues": "数字と位取りを混ぜる指定の語",
+  "settings.language.field.mixed_number_notation_cues.help": "回答指示で数字と位取りの字を組み合わせる指定を見分けます。指定された位取りで数量だけを表記し、原文の引用と日付は変えません。",
   "settings.language.field.answer_instruction_cues": "回答方法の指定の語",
   "settings.language.field.answer_instruction_cues.help": "事実への質問と区別する、回答の書き方を指定する表現です。元の質問は回答の生成に渡します。",
   "settings.language.field.answer_instruction_endings": "回答方法の依頼の文末",
