@@ -286,3 +286,17 @@ for (const viewport of VIEWPORTS) {
     await page.screenshot({ path: testInfo.outputPath(`usage-offset-${viewport.name}.png`), fullPage: true });
   });
 }
+
+
+test("ブラウザが不正なタイムゾーンを返すと既定を送る", async ({ page, mockApi }) => {
+  await page.addInitScript(() => {
+    const original = Intl.DateTimeFormat.prototype.resolvedOptions;
+    Intl.DateTimeFormat.prototype.resolvedOptions = function () {
+      return { ...original.call(this), timeZone: "Invalid/Zone" };
+    };
+  });
+  seedReport(mockApi);
+  await page.goto("/usage");
+  await expect(page.getByTestId("usage-summary")).toContainText("100,000");
+  expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("timezone")).toBe("Asia/Tokyo");
+});

@@ -26,6 +26,7 @@ import { ReportSourceNote } from "@/components/ReportSourceNote";
 import { agentApi, REPORT_PERIOD_DAYS, type UsagePeriodDays, type UsageReport, type UsageTotals } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
+import { browserTimezone } from "@/lib/timezones";
 import { useWorkspaceState, type WorkspaceValidator } from "@/lib/workspace-state";
 
 // 利用状況（#772）。業務 Agent の Run が使ったモデルの量を、期間・業務 Agent・利用者・モデル・日ごとに見る。
@@ -41,19 +42,10 @@ const isPeriod: WorkspaceValidator<UsagePeriodDays> = (value): value is UsagePer
   PERIODS.includes(value as UsagePeriodDays);
 const isView: WorkspaceValidator<UsageView> = (value): value is UsageView => VIEWS.includes(value as UsageView);
 
-/** 日を区切るタイムゾーン（このブラウザ）。取れない環境は backend の既定（Asia/Tokyo）。 */
-function viewerTimezone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Tokyo";
-  } catch {
-    return "Asia/Tokyo";
-  }
-}
-
 export function UsagePage() {
   const [days, setDays] = useWorkspaceState("usage", "days", DEFAULT_PERIOD, isPeriod);
   const [view, setView] = useWorkspaceState("usage", "view", "agent" as UsageView, isView);
-  const timezone = useMemo(() => viewerTimezone(), []);
+  const timezone = useMemo(() => browserTimezone(), []);
   const report = useQuery({
     queryKey: ["usage", days, timezone],
     queryFn: () => agentApi.getUsageReport(days, timezone),

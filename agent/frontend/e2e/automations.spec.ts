@@ -48,9 +48,15 @@ function seedAutomation(mockApi: MockApi, overrides: Record<string, unknown> = {
 
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`スケジュールの自動実行を作り、一覧に次回とスケジュールを出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`スケジュールの自動実行を作り、一覧に次回とスケジュールを出す (${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
+      await page.addInitScript(() => {
+        const original = Intl.DateTimeFormat.prototype.resolvedOptions;
+        Intl.DateTimeFormat.prototype.resolvedOptions = function () {
+          return { ...original.call(this), timeZone: "+00:00" };
+        };
+      });
       await page.goto("/automations");
       await expect(page.getByRole("heading", { name: "自動実行", level: 1 })).toBeVisible();
       await expect(page.getByText("自動実行はまだありません")).toBeVisible();
@@ -80,7 +86,7 @@ for (const viewport of VIEWPORTS) {
         agent_id: "default",
         name: "週次の品質の点検",
         enabled: true,
-        schedule: { frequency: "weekly", time: "08:30", weekdays: [0, 2], minute: 0 },
+        schedule: { frequency: "weekly", time: "08:30", weekdays: [0, 2], minute: 0, timezone: "+00:00" },
       });
       expect(body).not.toHaveProperty("trigger");
       await expect(page.getByTestId("automation-next")).toContainText("次回の実行");
