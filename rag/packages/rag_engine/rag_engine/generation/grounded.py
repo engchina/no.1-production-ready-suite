@@ -3644,7 +3644,7 @@ def _retrieved_heading_context(spans: Sequence[dict]) -> list[dict]:
                     "text": span["text"],
                     "category": "Section-header"
                     if not span.get("excerpt_only")
-                    and span.get("origin") in {"native", "unclassified"}
+                    and span.get("origin") in {"document_text", "unclassified"}
                     and "image_generated" not in span["tags"]
                     and "\n" not in span["text"].strip()
                     and _heading_level(span["text"]) is not None
@@ -3657,7 +3657,7 @@ def _retrieved_heading_context(spans: Sequence[dict]) -> list[dict]:
                 if path := paths.get(span["evidence_id"]):
                     functions[span["evidence_id"]] = (*span["function"][:-1], " > ".join(path))
     # 提示だけを補い、原文の所属・照合・保存する根拠を書き換えない。
-    return [{**span, "function": functions.get(span["evidence_id"], span["function"])} for span in spans]
+    return [{**span, "function": functions.get(span.get("evidence_id"), span["function"])} for span in spans]
 
 
 def format_functions(spans: Sequence[dict]) -> str:
