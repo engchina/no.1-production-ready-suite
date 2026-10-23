@@ -35,7 +35,7 @@ for (const viewport of [
     await expect(modelSettings.locator("svg").first()).toHaveClass(/lucide-brain-cog/);
   });
 
-  test(`sidebar brand and short labels are stable on ${viewport.name}`, { tag: "@responsive" }, async ({ page }) => {
+  test(`sidebar brand and menu labels are stable on ${viewport.name}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockApi(page);
     await page.goto("/settings/oci");
@@ -53,7 +53,8 @@ for (const viewport of [
       // 文書アップロードは既定で閉じている「ナレッジ構築」にある（#1563）。
       await expandSidebarSections(sidebar, "ナレッジ構築");
       await expect(brand.getByText("Production Ready", { exact: true })).toBeVisible();
-      await expect(uploadLink.getByText("アップロード", { exact: true })).toBeVisible();
+      await expect(uploadLink.getByText("文書アップロード", { exact: true })).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath("document-upload-menu.png") });
       await expect(page.getByRole("button", { name: "サイドバーを展開" })).toHaveCount(0);
       await expect(page.getByRole("button", { name: "サイドバーを折りたたむ" })).toHaveCount(0);
       return;
@@ -64,7 +65,8 @@ for (const viewport of [
     await expect(brand.getByText("RAG", { exact: true })).toBeVisible();
     await expandSidebarSections(sidebar, "ナレッジ構築");
     await expect(uploadLink).toHaveAttribute("href", /\/upload$/);
-    await expect(uploadLink.getByText("アップロード", { exact: true })).toBeVisible();
+    await expect(uploadLink.getByText("文書アップロード", { exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("document-upload-menu.png") });
 
     await page.getByRole("button", { name: "サイドバーを折りたたむ" }).click();
 

@@ -133,7 +133,7 @@ export const ja = {
   "appearance.theme.dark": "ダーク",
   "appearance.theme.system": "自動（OS 設定）",
   "nav.upload": "文書アップロード",
-  "nav.upload.sidebar": "アップロード",
+  "nav.upload.sidebar": "文書アップロード",
   "nav.fileList": "文書インデックス",
   "nav.knowledgeBases": "ナレッジベース",
   "nav.search": "RAG 検索",
@@ -3635,7 +3635,7 @@ export const ja = {
   "search.filters.knowledgeBaseHelper": "回答生成に使う検索対象をナレッジベース単位で絞り込みます。",
   "search.filters.clear": "クリア",
   "search.tuning.topK": "候補取得数",
-  "search.tuning.topKHelp": "大きいほど見つけやすく、遅くなります。",
+  "search.tuning.topKHelp": "検索で上位から選ぶ文書内の箇所（テキスト断片）の基準件数です。文書数や回答の引用数ではなく、検索設定や文脈の追加で実際の件数は変わります。増やすと候補が広がる一方、処理時間が増える場合があり、精度の向上は保証されません。",
   "search.answer": "回答",
   "search.faq.title": "類似する承認済み FAQ があります",
   "search.faq.description":

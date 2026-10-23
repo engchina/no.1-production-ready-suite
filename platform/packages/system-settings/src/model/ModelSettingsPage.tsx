@@ -6,6 +6,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  Disclosure,
   EmptyState,
   ErrorState,
   FormActionBar,
@@ -1521,27 +1522,30 @@ function ModelCatalogEditor({
           );
         })}
       </div>
-      {/* 推論の量の説明（#1425）。各行の選択欄の aria-describedby から読む。 */}
-      <p
-        id={REASONING_EFFORT_HELP_ID}
-        className="text-xs leading-relaxed text-fg-muted"
+      <Disclosure
+        summary={t("settings.model.enterprise.parameterHelp")}
+        defaultOpen={false}
+        data-testid="model-parameter-help"
+        contentClassName="space-y-3 border-t border-border p-3"
       >
-        {t("settings.model.enterprise.reasoningEffortHelp")}
-      </p>
-      {/* 入力の上限の説明（#1437）。各行の欄の aria-describedby から読む。 */}
-      <p
-        id={MAX_INPUT_TOKENS_HELP_ID}
-        className="text-xs leading-relaxed text-fg-muted"
-      >
-        {t("settings.model.enterprise.maxInputTokensHelp")}
-      </p>
-      {/* 出力の上限の説明（#1719）。各行の欄の aria-describedby から読む。 */}
-      <p
-        id={MAX_OUTPUT_TOKENS_HELP_ID}
-        className="text-xs leading-relaxed text-fg-muted"
-      >
-        {t("settings.model.enterprise.maxOutputTokensHelp")}
-      </p>
+        <p id={REASONING_EFFORT_HELP_ID} className="text-xs leading-relaxed text-fg-muted">
+          {t("settings.model.enterprise.reasoningEffortHelp")}
+        </p>
+        <p id={MAX_INPUT_TOKENS_HELP_ID} className="text-xs leading-relaxed text-fg-muted">
+          {t("settings.model.enterprise.maxInputTokensHelp")}
+        </p>
+        <p id={MAX_OUTPUT_TOKENS_HELP_ID} className="text-xs leading-relaxed text-fg-muted">
+          {t("settings.model.enterprise.maxOutputTokensHelp")}
+        </p>
+        <div className="flex flex-wrap gap-3 text-xs">
+          <a href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/models.htm" target="_blank" rel="noopener noreferrer" className="text-accent-fg underline underline-offset-2">
+            {t("settings.model.enterprise.modelDocs")}
+          </a>
+          <a href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/responses-api.htm" target="_blank" rel="noopener noreferrer" className="text-accent-fg underline underline-offset-2">
+            {t("settings.model.enterprise.apiDocs")}
+          </a>
+        </div>
+      </Disclosure>
     </div>
   );
 }

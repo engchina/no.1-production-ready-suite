@@ -361,7 +361,7 @@ test("検索・回答プロファイルの読み込み中は読み込み中の�
   await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toBeVisible();
 });
 
-test("詳細条件は条件を設定したままでも閉じられ、閉じると「設定中」を出す（#461）", async ({ page }) => {
+test("詳細条件は条件を設定したままでも閉じられ、閉じると「設定中」を出す（#461）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /経理ビュー/);
   const advanced = page.getByRole("button", { name: /詳細条件/ });
@@ -369,6 +369,9 @@ test("詳細条件は条件を設定したままでも閉じられ、閉じる�
 
   await advanced.click();
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("combobox", { name: "候補取得数" })).toHaveAccessibleDescription(/文書内の箇所（テキスト断片）の基準件数/);
+  await expect(page.getByText(/文書数や回答の引用数ではなく/)).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("retrieval-candidate-help.png") });
   await page.getByRole("combobox", { name: "候補取得数" }).click();
   await page.getByRole("option", { name: "50", exact: true }).click();
 

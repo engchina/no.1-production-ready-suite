@@ -17,6 +17,8 @@ dependencies = [
 ]
 
 [tool.uv]
+# FileLock の context manager と timeout は維持し、既知の脆弱性の修正版を使う。
+override-dependencies = ["filelock>=4.2.1"]
 # unstructured-inference が要求する GUI 版の opencv-python を入れない(cv2 は上の headless 版が
 # 提供する)。両方を入れると同じ cv2 パッケージを上書きし合うため、依存の解決から外す。
 # triton（GPU の kernel の compiler。約 190MB）は openai-whisper（音声の文字起こし）が Linux の x86_64 で直接の依存に

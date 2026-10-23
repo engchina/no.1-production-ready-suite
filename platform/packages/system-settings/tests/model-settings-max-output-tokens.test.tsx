@@ -156,9 +156,13 @@ describe("ModelSettingsPage の登録モデルの出力の上限（#1719）", ()
     expect(
       input("enterprise-model-max-output-tokens-0")?.getAttribute("aria-describedby"),
     ).toContain("enterprise-model-max-output-tokens-help");
+    const help = host.querySelector<HTMLDetailsElement>('[data-testid="model-parameter-help"]');
+    expect(help?.open).toBe(false);
+    await act(async () => help?.querySelector("summary")?.click());
+    expect(help?.open).toBe(true);
     // 入力の上限と取り違えないよう、両方の説明に違いを書く。
     expect(host.querySelector("#enterprise-model-max-output-tokens-help")?.textContent).toContain(
-      "推論の token も含みます",
+      "推論の token も含まれる場合があります",
     );
     expect(host.querySelector("#enterprise-model-max-input-tokens-help")?.textContent).toContain(
       "出力の上限は別の設定です",
