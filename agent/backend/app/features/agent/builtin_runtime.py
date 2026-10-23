@@ -3783,7 +3783,9 @@ async def _finish(
     # 検証の前に外す（#2328。使ったツールと根拠は画面と MCP の sources が別に示す）。
     answer = without_lookup_notes(answer)
     if output_recorded(runtime_repository.get_run(run_id).artifacts):
-        answer = without_output_record_sections(answer)
+        answer = without_output_record_sections(
+            answer, get_settings().agent_output_record_section_titles
+        )
     # モデルの最終の回答（最終の検証で段落を外す前。対応を決めるのに使う。#1305）。
     model_answer = answer
     validation: dict[str, Any] | None = None

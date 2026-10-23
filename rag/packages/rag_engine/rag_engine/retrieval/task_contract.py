@@ -379,8 +379,11 @@ def _with_request_kind(units: list[dict[str, str]]) -> list[dict[str, str]]:
     """
     cues = _cues()
     marker = cues.request_marker
-    instruction_end = re.compile(rf"{cues.alt['answer_instruction_endings']}[{re.escape(''.join(cues.words['unit_split_chars']))}\s]*$")
-    instructions = [cues.has("answer_instruction_cues", unit["text"]) and bool(instruction_end.search(unit["text"])) for unit in units]
+    instruction_pattern = re.compile(
+        rf"{cues.alt['answer_instruction_cues']}{cues.alt['answer_instruction_endings']}"
+        rf"[{re.escape(''.join(cues.words['unit_split_chars']))}\s]*$"
+    )
+    instructions = [bool(instruction_pattern.search(unit["text"])) for unit in units]
     kinds = [
         "request" if marker.search(unit["text"]) and not instruction else "context"
         for unit, instruction in zip(units, instructions, strict=True)
@@ -464,6 +467,7 @@ def definition_targets(question: str) -> list[dict[str, str]]:
             marker="*" if "*" in unicodedata.normalize("NFKC", unit["text"]) else "",
         )
         for unit in _base_units(question)
+        if unit.get("kind") != "context"
         for n, label in enumerate(definition_labels(unit["text"]), 1)
     ]
 
@@ -489,10 +493,12 @@ def request_units(question: str) -> list[dict[str, str]]:
         dict(id=f"{unit['id']}.G{n}", text=goal, kind="desired_outcome", request_id=unit["id"])
         for unit in units
         for n, goal in enumerate(goals, 1)
-        if goal in unit["text"] and goal != unit["text"].strip("。！？? \n")
+        if unit.get("kind") != "context" and goal in unit["text"] and goal != unit["text"].strip("。！？? \n")
     ]
     facets = []
     for unit in units:
+        if unit.get("kind") == "context":
+            continue
         # 最終集計の構成員を尋ねる要求では、候補の閲覧と集計への採否を
         # 別々に検証する。集計値だけの質問へ明細要求を追加しない。
         if cues.has("aggregation_words", unit["text"]) and cues.has("member_subject_words", unit["text"]):
