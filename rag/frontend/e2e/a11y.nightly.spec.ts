@@ -387,8 +387,14 @@ const STATES: (Screen & { name: string })[] = [
   {
     name: "安全チェックの OCI Guardrails と未設定の注意",
     path: "/settings/guardrail",
+    setup: async (page) => {
+      await page.route("**/api/settings/guardrail", (route) => route.fulfill({
+        json: apiEnvelope({ input_enabled: true, output_enabled: true, oci_configured: false, oci_warning_code: "oci_credentials_invalid" }),
+      }));
+    },
     act: async (page) => {
-      await expect(page.getByRole("radio", { name: /^検査する/ })).toBeChecked();
+      await expect(page.getByRole("checkbox", { name: "入力を検査する", exact: true })).toBeChecked();
+      await expect(page.getByRole("checkbox", { name: "出力を検査する", exact: true })).toBeChecked();
       await expect(page.getByRole("status").filter({ hasText: "OCI API キー認証を利用できません" })).toBeVisible();
     },
   },

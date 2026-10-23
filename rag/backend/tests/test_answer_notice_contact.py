@@ -152,5 +152,5 @@ def test_search_api_uses_the_profile_contact_override(monkeypatch: MonkeyPatch) 
     data: dict[str, Any] = response.json()["data"]
     assert data["notice"].startswith(DEFAULT_ANSWER_NOTICE_BODY)
     assert data["notice"].endswith("解決しない場合は、窓口 B（内線 2）へお問い合わせください。")
-    assert "ヘルプデスク" not in data["notice"]
+    assert "サポート窓口" not in data["notice"]
     assert oracle.saved[-1]["answer_notice"] == data["notice"]

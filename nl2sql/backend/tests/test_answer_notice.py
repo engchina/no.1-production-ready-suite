@@ -56,7 +56,7 @@ def test_chat_uses_saved_text_and_omits_when_disabled(chat: ChatFixture) -> None
     assert job.result is not None
     assert (
         job.result.notice
-        == "独自の注意書き\n解決しない場合は、ヘルプデスクへお問い合わせください。"
+        == "独自の注意書き\n解決しない場合は、サポート窓口へお問い合わせください。"
     )
 
     notice.save(AnswerNoticeRecord(enabled=False, text="独自の注意書き"))
