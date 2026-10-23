@@ -327,3 +327,28 @@ def test_conflicting_scope_decisions_for_the_same_evidence_are_not_merged():
     )
     assert _request_plan_errors(draft)
     assert _outside_request_plan(item, span, draft, [span])
+
+
+def test_unsectioned_contiguous_chunks_keep_separate_numbered_headings():
+    from dataclasses import replace
+
+    from test_grounded_answer import context, record
+
+    from rag_engine.generation.answering import _grounded_spans
+    from rag_engine.generation.grounded import _retrieved_heading_context, format_functions
+
+    sections = (EXAMPLES / "operations.txt").read_text().strip().split("\n\n")
+    parts = [line for section in sections for line in section.splitlines()]
+    records = [replace(record(i, text, "", source="operations.txt"), chunk_seq=i, metadata={}) for i, text in enumerate(parts)]
+    ranked = [records[i] for i in [8, 9, 5, 4, 6, 7, 0, 1, 2, 3]]
+    spans = _grounded_spans(CASES["summary"]["question"], context(*ranked), (), None)
+    presented = _retrieved_heading_context(spans)
+    by_text = {span["text"]: span for span in presented}
+    assert by_text[parts[9]]["function"][-1] == parts[8]
+    assert by_text[parts[5]]["function"][-1] == parts[4]
+    assert by_text[parts[7]]["function"][-1] == parts[6]
+    assert all(not span["section_path"] and not span["function"][-1] for span in spans)
+    assert parts[8] in format_functions(spans)
+    # 未取得の章境界を飛び越えた本文へ、前章の名前を与えない。
+    gap = _retrieved_heading_context([span for span in spans if span["text"] in [parts[0], parts[5]]])
+    assert next(span for span in gap if span["text"] == parts[5])["function"][-1] == ""

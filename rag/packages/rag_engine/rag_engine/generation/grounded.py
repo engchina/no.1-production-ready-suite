@@ -3617,8 +3617,52 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem
     return item.model_copy(update={"quote": text[units[first - 1][0] : units[last - 1][1]].strip()}), ""
 
 
+def _retrieved_heading_context(spans: Sequence[dict]) -> list[dict]:
+    """章節情報の無い根拠は、連続して取得した原文の番号見出しで読み分ける。"""
+    from rag_engine.chunking.headings import _heading_level, layout_section_paths
+
+    groups: dict[tuple, list[dict]] = {}
+    for span in spans:
+        if not span["function"][-1] and span.get("source_order") is not None:
+            groups.setdefault(span["function"], []).append(span)
+    functions = {}
+    for members in groups.values():
+        members = sorted(members, key=lambda span: span["source_order"])
+        # 取得していない位置をまたいで見出しの所属を推測しない。
+        runs: list[list[dict]] = []
+        position_index = 0 if len({span["source_order"][0] for span in members}) > 1 else 1
+        for span in members:
+            if not runs or span["source_order"][position_index] > runs[-1][-1]["source_order"][position_index] + 1:
+                runs.append([])
+            runs[-1].append(span)
+        for run in runs:
+            records = [
+                {
+                    "id": span["evidence_id"],
+                    "page": 1,
+                    "seq_no": index,
+                    "text": span["text"],
+                    "category": "Section-header"
+                    if not span.get("excerpt_only")
+                    and span.get("origin") in {"native", "unclassified"}
+                    and "image_generated" not in span["tags"]
+                    and "\n" not in span["text"].strip()
+                    and _heading_level(span["text"]) is not None
+                    else "Text",
+                }
+                for index, span in enumerate(run)
+            ]
+            paths = layout_section_paths(records)
+            for span in run:
+                if path := paths.get(span["evidence_id"]):
+                    functions[span["evidence_id"]] = (*span["function"][:-1], " > ".join(path))
+    # 提示だけを補い、原文の所属・照合・保存する根拠を書き換えない。
+    return [{**span, "function": functions.get(span["evidence_id"], span["function"])} for span in spans]
+
+
 def format_functions(spans: Sequence[dict]) -> str:
     """根拠を機能ごとの見出しで分けて提示し、別機能の混合を入力の時点で防ぐ。"""
+    spans = _retrieved_heading_context(spans)
     groups: dict[tuple, list[dict]] = {}
     for span in spans:
         groups.setdefault(span["function"], []).append(span)
