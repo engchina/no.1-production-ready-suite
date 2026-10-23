@@ -538,7 +538,8 @@ def test_rejected_data_tool_counts_as_an_attempt(
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
     assert len(model.calls) == 1
     assert mcp.calls_of("nl2sql_query") == []
-    assert "却下" in run_answer_text(run) and "実行していません" in run_answer_text(run)
+    answer = run_answer_text(run) or ""
+    assert "却下" in answer and "実行していません" in answer
     assert _grounding_events(run) == []
 
 

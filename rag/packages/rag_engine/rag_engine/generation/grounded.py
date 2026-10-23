@@ -59,7 +59,7 @@ from rag_engine.generation.table_binding import table_mismatch_notes, unbound_ta
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
 from rag_engine.generation.value_grounding import ABSENT_VALUE_REASON, CURRENT_VALUE_REASON, unsupported_document_value_claim
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
-from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedFactAudit, GroundedItem, RequestScopePlan
+from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedFactAudit, GroundedItem, RequestCoverage, RequestScopePlan
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.resources.deadline import (
     ANSWER_FINALIZE_RESERVE_SECONDS,
@@ -1524,13 +1524,19 @@ def _request_plan_errors(draft: GroundedDraft) -> list[str]:
     return errors
 
 
-def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, spans: Sequence[dict]) -> bool:
-    """要求の根拠計画を最終説明にも適用する。計画の無い旧応答は従来の原文照合を使う。"""
+def _item_request_plans(item: GroundedItem, draft: GroundedDraft) -> list[RequestCoverage]:
+    """説明に対応する小問の根拠計画。"""
     plans = [
         plan for plan in draft.request_coverage if item.request_id == plan.request_id or item.request_id.startswith(plan.request_id + ".")
     ]
     if not plans and not item.request_id and len(draft.request_coverage) == 1:
         plans = list(draft.request_coverage)
+    return plans
+
+
+def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, spans: Sequence[dict]) -> bool:
+    """要求の根拠計画を最終説明にも適用する。計画の無い旧応答は従来の原文照合を使う。"""
+    plans = _item_request_plans(item, draft)
     if not plans:
         return bool(draft.request_coverage) or "request_coverage" in draft.model_fields_set
     labels: set[str] = set()
@@ -1714,7 +1720,7 @@ def verify(
         if (
             local["terms"]
             # 根拠計画を通過した説明は質問の語が無い表も扱う。計画外は上で除外済み。
-            and not draft.request_coverage
+            and not any("evidence_scope" in plan.model_fields_set for plan in _item_request_plans(item, draft))
             and entry.item.kind in {"operation", "confirmation"}
             and primary_document
             and _document_key(entry.span) != primary_document
