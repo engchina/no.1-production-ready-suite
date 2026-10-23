@@ -28,7 +28,7 @@ from typing import Any
 SYMBOL_FOLD = str.maketrans(
     {
         **dict.fromkeys("〜～", "~"),
-        **dict.fromkeys("－‐‑–—―−", "-"),
+        **dict.fromkeys("－‐‑‒–—―−", "-"),
     }
 )
 # 改行（\n）とタブ以外の制御文字。連続をまとめて 1 つの空白にする。
