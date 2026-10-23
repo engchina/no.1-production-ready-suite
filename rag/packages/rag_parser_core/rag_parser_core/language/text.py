@@ -170,7 +170,10 @@ def parse_number(text: str, pack: LanguagePack | None = None) -> int | None:
     patterns = text_patterns(pack)
     if cleaned in patterns.first_year_words:
         return 1
-    digits, multipliers = patterns.kanji_digits, patterns.kanji_multipliers
+    digits, multipliers = (
+        {**{str(n): n for n in range(10)}, **patterns.kanji_digits},
+        patterns.kanji_multipliers,
+    )
     if any(char not in digits and char not in multipliers for char in cleaned):
         return None
     if not any(char in multipliers for char in cleaned):
@@ -291,16 +294,44 @@ def arabic_numbers(
     （数を取り出すとき）。
     """
     patterns = text_patterns(pack)
-    if kanji and patterns.kanji_digits:
+    text = _THOUSANDS_SEPARATOR.sub("", text)
+    chars = "0-9" + re.escape("".join([*patterns.kanji_digits, *patterns.kanji_multipliers]))
+    run = f"[{chars}]+"
 
-        def value(match: re.Match[str]) -> str:
-            number = parse_number(match.group(0), pack)
-            if number is None:
-                return match.group(0)
-            return f" {number} " if spaced else str(number)
+    def value(match: re.Match[str]) -> str:
+        original = match.group()
+        compact = re.sub(r"[ \u3000\n]", "", original)
+        if compact.isdigit():
+            return original
+        mixed = any(c.isascii() and c.isdigit() for c in compact) and any(
+            c in patterns.kanji_multipliers for c in compact
+        )
+        if not kanji and not mixed:
+            return original
+        if compact != original:
+            # 位取りが降順の連なりだけを結ぶ。tab・複数空白・独立した数は結ばない。
+            units = [
+                patterns.kanji_multipliers[c] for c in compact if c in patterns.kanji_multipliers
+            ]
+            digit_chars = "0-9" + re.escape("".join(patterns.kanji_digits))
+            joins_digits = bool(
+                re.search(
+                    rf"[{digit_chars}][ \u3000\n][{digit_chars}]",
+                    original,
+                )
+            )
+            if (
+                not units
+                or any(a <= b for a, b in zip(units, units[1:], strict=False))
+                or joins_digits
+            ):
+                return re.sub(run, value, original)
+        number = parse_number(compact, pack)
+        if number is None:
+            return original
+        return f" {number} " if spaced else str(number)
 
-        text = re.sub(f"{patterns.kanji}+", value, text)
-    return _THOUSANDS_SEPARATOR.sub("", text)
+    return re.sub(rf"{run}(?:[ \u3000\n]{run})*", value, text)
 
 
 __all__ = [

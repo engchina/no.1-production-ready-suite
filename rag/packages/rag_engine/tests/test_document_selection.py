@@ -205,3 +205,19 @@ class DeferredRestoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_explicit_attachment_survives_document_selection_and_anchor_cap():
+    from dataclasses import replace
+
+    attached = child("attachment", 1, "入力の行", "input.csv", "attached", 0.1)
+    attached.metadata["is_attachment_chunk"] = True
+    other = child("a", 2, "規則", "a.pdf", "pa", 0.9)
+    kept, deferred, trace = a.select_documents([other, attached], settings())
+    assert attached in kept and attached not in deferred
+    assert all(e["source"] != "input.csv" for e in trace["deferred"])
+    assert a.cap_anchors_per_document([attached, attached, other], replace(settings(), max_anchors_per_document=1), top_k=3) == [
+        attached,
+        attached,
+        other,
+    ]

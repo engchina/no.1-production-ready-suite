@@ -377,9 +377,15 @@ def _with_request_kind(units: list[dict[str, str]]) -> list[dict[str, str]]:
 
     要求の標識を持つ文が 1 つもない質問（「〇〇の件。」だけ等）は、全文を request として扱う。
     """
-    marker = _cues().request_marker
-    kinds = ["request" if marker.search(unit["text"]) else "context" for unit in units]
-    if "request" not in kinds:
+    cues = _cues()
+    marker = cues.request_marker
+    instruction_end = re.compile(rf"{cues.alt['answer_instruction_endings']}[{re.escape(''.join(cues.words['unit_split_chars']))}\s]*$")
+    instructions = [cues.has("answer_instruction_cues", unit["text"]) and bool(instruction_end.search(unit["text"])) for unit in units]
+    kinds = [
+        "request" if marker.search(unit["text"]) and not instruction else "context"
+        for unit, instruction in zip(units, instructions, strict=True)
+    ]
+    if "request" not in kinds and not any(instructions):
         kinds = ["request"] * len(units)
     return [{**unit, "kind": kind} for unit, kind in zip(units, kinds, strict=False)]
 
