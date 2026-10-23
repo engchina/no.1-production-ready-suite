@@ -58,7 +58,7 @@ function seedJob(mockApi: MockApi) {
       case: CASE,
       status: "judged",
       run_id: "run-out-1",
-      answer: "A は 1200、B は 900 です。",
+      answer: "**確認結果**\n\nA は 1200、B は 900 です。\n\n| 項目 | 値 |\n| --- | --- |\n| A | 1200 |",
       judgement: { verdict: "correct", score: 1, summary: "要点を満たしています。", missing_points: [] },
       tool_calls: ["record_output"],
       tool_selection_correct: null,
@@ -134,7 +134,7 @@ for (const viewport of VIEWPORTS) {
     expect(body.cases[0].expected_output).toEqual([{ item: "A", amount: 1200, matched: true }]);
   });
 
-  test(`評価の結果に出力の項目の正答率と項目ごとの判定を出す (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+  test(`評価の結果に出力の項目の正答率と項目ごとの判定を出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     useOutputFields(mockApi);
     seedJob(mockApi);
@@ -152,6 +152,9 @@ for (const viewport of VIEWPORTS) {
 
     await results.getByRole("button", { name: /書類の値を読んで/ }).click();
     const detail = page.getByRole("dialog", { name: "ケースの詳細" });
+    await expect(detail.locator("strong").filter({ hasText: "確認結果" })).toBeVisible();
+    await expect(detail.getByRole("table", { name: "回答の表", exact: true }).getByRole("cell", { name: "1200", exact: true })).toBeVisible();
+    await detail.screenshot({ path: testInfo.outputPath(`evaluation-markdown-${viewport.name}.png`) });
     const table = detail.getByTestId("evaluation-output-fields");
     await expect(table).toContainText("金額");
     await expect(table).toContainText("900");

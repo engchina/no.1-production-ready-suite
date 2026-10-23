@@ -14,7 +14,6 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   ListDetailLayout,
   ListDetailPager,
-  MessageText,
   ListToolbar,
   OffsetPagination,
   PageBody,
@@ -34,6 +33,7 @@ import {
   useUrlSelection,
 } from "@production-ready/ui";
 
+import { AnswerBody } from "@/components/chat/ResultTables";
 import { AGENT_LIST_DETAIL_STORAGE_PREFIX } from "@/components/EntityLayout";
 import { listCount } from "@/components/ListFilters";
 import {
@@ -681,7 +681,7 @@ function FeedbackDetail({ item, onReviewed }: { item: FeedbackItem; onReviewed: 
       <section className="space-y-1">
         <h3 className="text-xs font-semibold text-fg-muted">{t("feedback.detail.answer")}</h3>
         <div className="rounded-md border border-border p-3">
-          <MessageText text={item.answer} className="text-sm text-fg" />
+          <AnswerBody text={item.answer} className="text-sm text-fg" />
         </div>
       </section>
       <RatingSection title={t("feedback.detail.ownerRating")} rating={item.feedback} testId="feedback-detail-owner" />

@@ -2,7 +2,7 @@
 
 Run に記録した `RunUsage`（組み込み Runtime が SDK の `Usage` から書く）を、期間・業務 Agent・
 利用者・モデル・日ごとに合計する。期間は Run の作成日時で決め、日は利用者のタイムゾーン（画面の
-ブラウザの IANA 名）で区切る。
+ブラウザの IANA 名または固定時差）で区切る。
 
 - Oracle の構成は、保存した Run の事実（`AGENT_RUN_FACTS`）を SQL で集計する
   （`run_facts_store.OracleRunFactsStore`。#794）。
@@ -13,17 +13,24 @@ Run に記録した `RunUsage`（組み込み Runtime が SDK の `Usage` から
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, tzinfo
 from typing import Literal
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field
 
 from app.features.agent.run_facts import REPORT_PERIOD_DAYS, RunFact
+from app.features.agent.timezones import (
+    DEFAULT_TIMEZONE as DEFAULT_TIMEZONE,
+)
+from app.features.agent.timezones import (
+    resolve_timezone as resolve_timezone,
+)
+from app.features.agent.timezones import (
+    timezone_name,
+)
 
 # 画面で選べる期間（日）。
 USAGE_PERIOD_DAYS: tuple[int, ...] = REPORT_PERIOD_DAYS
-DEFAULT_TIMEZONE = "Asia/Tokyo"
 # 集計元。history = 保存した Run の事実（Oracle）、memory = このプロセスのメモリの Run。
 ReportSource = Literal["history", "memory"]
 
@@ -83,15 +90,7 @@ class UsageReport(BaseModel):
     by_day: list[DailyUsage] = Field(default_factory=list)
 
 
-def resolve_timezone(name: str | None) -> ZoneInfo:
-    """IANA のタイムゾーン名を解決する。知らない名前は ValueError（API は 422 にする）。"""
-    try:
-        return ZoneInfo((name or "").strip() or DEFAULT_TIMEZONE)
-    except (ZoneInfoNotFoundError, ValueError) as exc:
-        raise ValueError("タイムゾーンが正しくありません。") from exc
-
-
-def usage_period(days: int, now: datetime, tz: ZoneInfo) -> tuple[date, datetime, datetime]:
+def usage_period(days: int, now: datetime, tz: tzinfo) -> tuple[date, datetime, datetime]:
     """期間の初日・始まり（初日の 0 時）・直前の期間の始まり。"""
     today = now.astimezone(tz).date()
     first_day = today - timedelta(days=days - 1)
@@ -111,7 +110,7 @@ def build_usage_report(
     *,
     days: int,
     now: datetime,
-    tz: ZoneInfo,
+    tz: tzinfo,
     agent_names: Mapping[str, str],
     user_names: Callable[[list[str]], Mapping[str, str]],
     source: ReportSource = "memory",
@@ -176,7 +175,7 @@ def finish_usage_report(
     *,
     days: int,
     source: ReportSource,
-    tz: ZoneInfo,
+    tz: tzinfo,
     since: datetime,
     now: datetime,
     totals: UsageTotals,
@@ -197,7 +196,7 @@ def finish_usage_report(
     return UsageReport(
         days=days,
         source=source,
-        timezone=tz.key,
+        timezone=timezone_name(tz),
         since=since,
         until=now,
         totals=totals,

@@ -2023,9 +2023,9 @@ def synthesize_grounded_answer(
     if audit_mode == grounded.AUDIT_MODE_STANDARD:
         max_rounds = min(max_rounds, grounded.STANDARD_MAX_ROUNDS)
     elif audit_mode == grounded.AUDIT_MODE_NONE:
-        # 監査なしの型は作り直さない。未回答の確認事項を前提として答える回答だけ、確認事項を理由に拒答した草稿を
-        # 1 回作り直せるようにする（指摘は `correction_feedback`。#3069）。
-        max_rounds = min(max_rounds, 2) if assume_unconfirmed else 1
+        # 決定的検査の実値の断定と、前提付き回答の過剰な拒答だけを 1 回是正する。
+        # 対象外の指摘は correction_feedback が返さないので、通常は 1 回の生成で終える。
+        max_rounds = min(max_rounds, 2)
     compact_audit_reasons = bool(getattr(settings, "answer_audit_compact_reasons", False))
     # 作り直しの組の LLM の呼び出しが失敗し、前の組を公開したときの例外の型（#2729）。
     correction_failure = ""

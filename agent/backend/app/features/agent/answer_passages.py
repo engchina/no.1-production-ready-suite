@@ -51,6 +51,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from pr_backend_core.markdown import is_blank_text, normalize_heading_markup
+
 from app.features.agent.answer_passage_vocabulary import alt as _v
 
 KIND_HEADING = "heading"
@@ -112,6 +114,8 @@ def sentence_ranges(line: str) -> list[tuple[int, int]]:
 
 def passage_spans(line: str) -> list[tuple[int, int, str]]:
     """1 行の段落（行の中の開始・終了の位置と原文）。"""
+    if is_blank_text(line):
+        return []
     pieces = [(0, len(line))] if _QUOTE_ONLY_LINE.fullmatch(line) else sentence_ranges(line)
     spans: list[tuple[int, int, str]] = []
     for start, end in pieces:
@@ -333,7 +337,7 @@ def _is_sentence(title: str) -> bool:
 
 def _heading_title(text: str) -> str | None:
     """見出しなら見出しの語（見出しでなければ None）。"""
-    value = text.strip()
+    value = normalize_heading_markup(text).strip()
     for pattern in (_MD_HEADING, _BOLD_LINE, _BRACKET_HEADING):
         match = pattern.fullmatch(value)
         if match:
@@ -1123,7 +1127,9 @@ def non_claim_passages(answer: str) -> dict[str, str]:
     options = False
     blank = False
     for line in answer.split("\n"):
-        if not line.strip():
+        if is_blank_text(line):
+            if line.strip():
+                kinds[line.strip()] = KIND_HEADING
             # 質問と選択肢の間の空行では、選択肢の続きを切らない（#1322）。
             blank = True
             continue
@@ -1131,7 +1137,7 @@ def non_claim_passages(answer: str) -> dict[str, str]:
             section = None
         blank = False
         if any(
-            pattern.fullmatch(line.strip())
+            pattern.fullmatch(normalize_heading_markup(line).strip())
             for pattern in (_MD_HEADING, _BOLD_LINE, _BRACKET_HEADING)
         ):
             # 新しい節で前の分類を終える。書式中の断定も主張として監査する。

@@ -57,7 +57,7 @@ from rag_engine.generation.interaction_grounding import interaction_binding_erro
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
-from rag_engine.generation.value_grounding import ABSENT_VALUE_REASON, unsupported_document_value_claim
+from rag_engine.generation.value_grounding import ABSENT_VALUE_REASON, CURRENT_VALUE_REASON, unsupported_document_value_claim
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedFactAudit, GroundedItem, RequestScopePlan
 from rag_engine.parsing.content_labels import content_labels
@@ -1368,6 +1368,7 @@ class CheckedItem:
     marks: list[dict[str, str]] = field(default_factory=list)  # 段落の印の理由（#2738）
     removed: bool = False  # 監査が根拠と矛盾と判定し、本文から外した（#2738）
     unmatched: bool = False  # 引用が原文と照合できなかった item（是正の指摘は dropped に出す。#2738）
+    document_value_issue: bool = False  # 資料の値を今回の実値として述べた説明。是正後も同じ検査で確かめる。
     table_conflict: str = ""  # 根拠の表の対応の取り違えで外した item の、表の正しい対応（#2998・#3005）
 
     def mark(self, code: str, detail: str = "", *, reason: str = "") -> None:
@@ -1675,6 +1676,7 @@ def verify(
             reason = check(scoped_question, check_item, view)
             if reason:
                 # 根拠のどこにも無い数値は、規則の検査の注意ではなく、根拠で確かめられない説明（#3088）。
+                entry.document_value_issue |= check is _check_value and reason == CURRENT_VALUE_REASON
                 absent = check is _check_value and reason.startswith(ABSENT_VALUE_REASON)
                 _mark_check(entry, ITEM_CHECK_NAMES[check], reason, code="unsupported" if absent else "item_check")
         if conflict := _table_binding_conflict(check_item, view):
@@ -3836,6 +3838,15 @@ class Round:
                 for e in self.checked
                 if (e.state or e.removed) and not e.added and not e.unmatched
             ],
+            "document_value_issues": [
+                {
+                    "text": e.item.text,
+                    "reason": CURRENT_VALUE_REASON,
+                    "hint": "根拠に記載された値と今回の実値を区別してください。今回の実値が未確認なら資料の記載として説明してください。",
+                }
+                for e in self.checked
+                if e.document_value_issue and not e.removed
+            ],
             "unanswered_requests": [{k: v for k, v in entry.items() if k not in {"reviewed", "text"}} for entry in self.unanswered],
             "unused_evidence_ids": self.unused,  # 表示IDへの変換は build_context_block が現在の根拠で行う
             "goal_alignment": audit.goal_alignment if audit and audit.goal_alignment != "aligned" else "",
@@ -5353,13 +5364,15 @@ _ASSUMPTION_NO_CITED_HINT = (
 def correction_feedback(feedback: Mapping[str, Any], audit_mode: str, *, assume_unconfirmed: bool = False) -> dict:
     """次の組へ渡す指摘を監査の型で絞る（#2795）。通常の回答は事実の問題だけで、無ければ空（作り直さない）。
 
-    監査なしの型（#2800）は作り直さない（空）。ただし未回答の確認事項を前提として答える回答（``assume_unconfirmed``）で、
+    監査なしの型でも、資料の値を今回の実値と断定した決定的検査の指摘は是正する。未回答の確認事項を前提として答える回答（``assume_unconfirmed``）で、
     根拠を引用した説明が 1 つも無い（確認事項を理由に拒答した）草稿だけは、選択肢ごとの条件付きの説明を求めて
     1 回だけ作り直す（#3069）。
     """
     if audit_mode == AUDIT_MODE_NONE:
         if assume_unconfirmed and feedback.get("no_cited_evidence"):
             return {"no_cited_evidence": _ASSUMPTION_NO_CITED_HINT}
+        if feedback.get("document_value_issues"):
+            return {key: feedback[key] for key in ("document_value_issues", "supported_items") if feedback.get(key)}
         return {}
     if audit_mode == AUDIT_MODE_DETAILED:
         return dict(feedback)

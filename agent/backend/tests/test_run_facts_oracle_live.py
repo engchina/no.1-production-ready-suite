@@ -249,3 +249,30 @@ def test_feedback_counts_owner_and_admin_union_in_oracle(agent_id: str) -> None:
         2,
     )
     assert report.total == 2
+
+
+@pytest.mark.parametrize(
+    "name, day",
+    [
+        ("+00:00", "2026-10-01"),
+        ("+05:30", "2026-10-02"),
+        ("-03:30", "2026-10-01"),
+        ("+23:59", "2026-10-02"),
+    ],
+)
+def test_browser_offset_usage_days_in_oracle(agent_id: str, name: str, day: str) -> None:
+    from app.features.agent.timezones import resolve_timezone
+
+    store = OracleRunFactsStore()
+    store.upsert([_fact(agent_id, "boundary", datetime(2026, 10, 1, 23, 30, tzinfo=UTC))])
+    report = store.usage_report(
+        days=7,
+        now=datetime(2026, 10, 2, 1, tzinfo=UTC),
+        tz=resolve_timezone(name),
+        agent_ids=frozenset({agent_id}),
+        agent_names={},
+        user_names=lambda _: {},
+    )
+    assert report.timezone == name
+    assert report.totals.runs == 1
+    assert next(entry.day.isoformat() for entry in report.by_day if entry.runs) == day

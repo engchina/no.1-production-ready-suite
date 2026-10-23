@@ -49,6 +49,7 @@ def _numbers(text: str, *, kanji: bool = False) -> set[str]:
 
 # 段落の数値が引用した根拠のどこにも無いときの理由の先頭（#3088）。呼び出し元はこの理由に未確認の印を付ける。
 ABSENT_VALUE_REASON = "根拠の原文に無い数値"
+CURRENT_VALUE_REASON = "文書の表示例・Vision説明だけでは今回の実値を確認できない"
 
 
 def _number_order(value: str) -> tuple[float, str]:
@@ -132,5 +133,5 @@ def unsupported_document_value_claim(text: str, cited: Sequence[dict[str, Any]],
         if not numbers <= known and not any(
             (rule.search(s) or cues.has("rule_condition_words", s)) and numbers <= _numbers(s, kanji=True) for s in native
         ):
-            return "文書の表示例・Vision説明だけでは今回の実値を確認できない"
+            return CURRENT_VALUE_REASON
     return ""

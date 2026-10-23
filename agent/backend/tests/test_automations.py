@@ -349,3 +349,18 @@ def test_unpublished_agents_cannot_be_automated(store: Path) -> None:
     finally:
         with contextlib.suppress(KeyError, ValueError):
             runtime_repository.delete_agent(draft_id)
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("+00:00", "2026-10-02T09:00:00+00:00"),
+        ("+05:30", "2026-10-02T03:30:00+00:00"),
+        ("-03:30", "2026-10-02T12:30:00+00:00"),
+    ],
+)
+def test_browser_offset_schedule(name: str, expected: str) -> None:
+    from app.features.agent.automations import AutomationSchedule, next_run_after
+
+    schedule = AutomationSchedule(time="09:00", timezone=name)
+    assert next_run_after(schedule, datetime(2026, 10, 2, tzinfo=UTC)).isoformat() == expected

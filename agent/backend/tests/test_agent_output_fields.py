@@ -197,7 +197,10 @@ def _tool_names(model: ScriptedModel) -> set[str]:
 ROW = {"item": "A", "amount": 10, "due": "2026-10-01", "matched": True}
 
 
-def test_record_output_is_validated_and_saved(monkeypatch: MonkeyPatch, agents: None) -> None:
+@pytest.mark.parametrize("heading", ["**記録（record_output の結果）**", "**出力**（記録済み）"])
+def test_record_output_is_validated_and_saved(
+    monkeypatch: MonkeyPatch, agents: None, heading: str
+) -> None:
     model = _script(
         monkeypatch,
         [function_call(LOOKUP, {"query": "A"}, call_id="call-l")],
@@ -206,8 +209,7 @@ def test_record_output_is_validated_and_saved(monkeypatch: MonkeyPatch, agents: 
         [function_call(RECORD_OUTPUT_TOOL, {"rows": [ROW]}, call_id="call-r2")],
         [
             assistant_message(
-                "A は業務データと一致しました。\n\n"
-                "**記録（record_output の結果）**\n\n| item | amount |\n| A | 10 |"
+                f"A は業務データと一致しました。\n\n{heading}\n\n| item | amount |\n| A | 10 |"
             )
         ],
     )
@@ -233,6 +235,7 @@ def test_record_output_is_validated_and_saved(monkeypatch: MonkeyPatch, agents: 
     assert not output_retried(run.metadata)
     assert run.metadata["tool_titles"][RECORD_OUTPUT_TOOL] == "出力の項目の記録"
     answer = next(a.content["text"] for a in run.artifacts if a.kind == "answer")
+    assert heading not in answer
     assert "record_output" not in answer
     assert "| item |" not in answer
 
@@ -366,4 +369,26 @@ def test_record_report_titles_can_be_configured(monkeypatch: pytest.MonkeyPatch)
             "回答です。\n\n## 記録報告\n記録済みの値。", settings.agent_output_record_section_titles
         )
         == "回答です。"
+    )
+
+
+@pytest.mark.parametrize("heading", ["**記録内容**（記録済み）", "## 記録内容（記録済み）"])
+def test_record_report_note_does_not_reach_answer_validation(heading: str) -> None:
+    from app.features.agent.output_fields import without_output_record_sections
+
+    text = "回答です。\n\n" + heading + "\n- 項目 A: 7\n\n## 補足\n値は 8 です。"
+    assert (
+        without_output_record_sections(text, ["記録内容（記録済み）"])
+        == "回答です。\n\n## 補足\n値は 8 です。"
+    )
+
+
+def test_recorded_output_title_uses_the_shared_section_filter() -> None:
+    from app.features.agent.output_fields import without_output_record_sections
+    from app.settings import Settings
+
+    answer = "本文。\n\n**出力**（記録済み）\n- 項目 A: 7\n\n## 補足\n値は 8 です。"
+    assert (
+        without_output_record_sections(answer, Settings().agent_output_record_section_titles)
+        == "本文。\n\n## 補足\n値は 8 です。"
     )

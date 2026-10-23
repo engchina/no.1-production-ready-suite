@@ -3,7 +3,8 @@
 - 自動実行は業務 Agent・指示（Run の目標）・スケジュールを持ち、作った利用者として Run を作る
   （RAG / NL2SQL の MCP はこの利用者として呼ぶ）。`metadata.automation_id` で自動実行の Run と
   分かる。
-- スケジュール: 毎日 / 平日 / 毎週（曜日）/ 毎時（分）。時刻はタイムゾーン（IANA）で決める。
+- スケジュール: 毎日 / 平日 / 毎週（曜日）/ 毎時（分）。時刻はタイムゾーン
+  （IANA 名または固定時差）で決める。
   予定の時刻を過ぎたら Run を作り、次回を計算し直す。停止中に過ぎた回は実行しない
   （起動時に次回へ送る）。
 - 画面の「今すぐ実行」でも Run を作る（Run の `metadata.automation_trigger` は `manual`）。
@@ -27,7 +28,6 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, time, timedelta
 from enum import StrEnum
 from uuid import uuid4
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -39,12 +39,12 @@ from app.features.agent.runtime import (
     RunStatus,
     agent_unavailable_reason,
 )
+from app.features.agent.timezones import DEFAULT_TIMEZONE, resolve_timezone, timezone_name
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
 AUTOMATION_GOAL_MAX_CHARS = 4000
-DEFAULT_TIMEZONE = "Asia/Tokyo"
 # スケジューラの間隔（秒）。テストは tick を直接呼ぶ。
 SCHEDULER_INTERVAL_SECONDS = 30.0
 _TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -95,11 +95,7 @@ class AutomationSchedule(BaseModel):
     @field_validator("timezone")
     @classmethod
     def _timezone(cls, value: str) -> str:
-        try:
-            ZoneInfo(value.strip() or DEFAULT_TIMEZONE)
-        except (ZoneInfoNotFoundError, ValueError) as exc:
-            raise ValueError("タイムゾーンが正しくありません。") from exc
-        return value.strip() or DEFAULT_TIMEZONE
+        return timezone_name(resolve_timezone(value))
 
     @model_validator(mode="after")
     def _weekly_needs_days(self) -> AutomationSchedule:
@@ -110,7 +106,7 @@ class AutomationSchedule(BaseModel):
 
 def next_run_after(schedule: AutomationSchedule, after: datetime) -> datetime:
     """`after` より後の最初の予定の時刻（UTC）。"""
-    tz = ZoneInfo(schedule.timezone)
+    tz = resolve_timezone(schedule.timezone)
     local = after.astimezone(tz)
     if schedule.frequency == ScheduleFrequency.HOURLY:
         candidate = local.replace(minute=schedule.minute, second=0, microsecond=0)

@@ -310,6 +310,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
             "記録された項目",
             "記録した項目",
             "出力の記録",
+            "出力（記録済み）",
             "出力項目の記録",
         ]
     )

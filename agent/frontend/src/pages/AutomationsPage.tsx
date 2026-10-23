@@ -61,6 +61,7 @@ import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 import { useCapabilities } from "@/lib/permissions";
 import { canOpenRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
+import { browserTimezone, isValidTimezone } from "@/lib/timezones";
 import { runStatusView } from "@/lib/status-labels";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
@@ -69,26 +70,6 @@ import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 const FREQUENCIES: readonly ScheduleFrequency[] = ["daily", "weekdays", "weekly", "hourly"];
 const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6];
-
-function browserTimezone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Tokyo";
-  } catch {
-    return "Asia/Tokyo";
-  }
-}
-
-/** IANA のタイムゾーンか（空は backend が既定の Asia/Tokyo にする）。#927 */
-function isValidTimezone(value: string): boolean {
-  const timezone = value.trim();
-  if (!timezone) return true;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: timezone });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function defaultSchedule(): AutomationSchedule {
   return { frequency: "daily", time: "09:00", weekdays: [0], minute: 0, timezone: browserTimezone() };
