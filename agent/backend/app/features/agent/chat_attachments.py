@@ -251,6 +251,7 @@ def attachment_tools(
             (
                 ToolDefinition(
                     name=spec.name,
+                    title=spec.title,
                     description=spec.description,
                     input_schema=spec.input_schema,
                     output_schema={"type": "object"},

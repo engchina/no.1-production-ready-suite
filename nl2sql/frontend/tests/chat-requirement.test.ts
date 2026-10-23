@@ -83,6 +83,7 @@ test("自動の検査は会話の続き（前のターン）とチャットの�
     clarification_mode: "guided",
     chat: true,
     previous_job_id: "job-1",
+    attachment_ids: undefined,
   });
   // 同じ送信は同じ key（再読込で作り直しても同じ session）。
   assert.equal(
@@ -198,3 +199,8 @@ test("作業状態には JSON の文字列で残し、空・壊れた文字列�
   assert.equal(decodeChatRequirementCheck("{"), null);
 });
 
+
+
+test("回答前の確認へ添付 ID を渡す", () => {
+  assert.deepEqual(chatRequirementSessionRequest({ ...request, engine: "enterprise_ai_direct", attachment_ids: ["attachment-a"] }).attachment_ids, ["attachment-a"]);
+});

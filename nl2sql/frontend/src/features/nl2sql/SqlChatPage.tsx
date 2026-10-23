@@ -1106,6 +1106,7 @@ function SqlChatTurn({
                 badges={
                   <SqlSafetyBadge
                     safe={result.safety.is_safe}
+                    checked={result.safety.safety_checked}
                     executed={executed}
                     labels={SQL_BLOCK_LABELS}
                   />

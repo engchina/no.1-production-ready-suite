@@ -673,12 +673,6 @@ class OntologyQuerySessionService:
         edges: Sequence[OntologyEdge] = (),
     ) -> OntologyRevision:
         with self._lock:
-            if revision.id in self._revisions:
-                raise OntologyVersionConflictError(
-                    "REVISION_ALREADY_EXISTS",
-                    "同じ Ontology revision ID は上書きできません。"
-                    "新しい revision を作成してください。",
-                )
             node_map = {node.id: _copy_model(node) for node in nodes}
             if len(node_map) != len(nodes):
                 raise OntologyIntegrityError(
@@ -702,6 +696,30 @@ class OntologyQuerySessionService:
                     raise OntologyIntegrityError(
                         "EDGE_ENDPOINT_NOT_FOUND", "edge の始点または終点 node が存在しません。"
                     )
+
+            existing = self._revisions.get(revision.id)
+            if existing is not None:
+                # 再構成の観測日時は内容の変更ではない。ノード・辺の順にも依存しない。
+                def content(value: Any) -> Any:
+                    if isinstance(value, OntologyRevision):
+                        return value.model_dump(mode="json", exclude={"created_at", "etag"})
+                    if isinstance(value, (OntologyNode, OntologyEdge)):
+                        data = value.model_dump(mode="json")
+                        data["provenance"].pop("observed_at", None)
+                        return data
+                    if isinstance(value, dict):
+                        return {key: content(item) for key, item in value.items()}
+                    return value
+
+                same_header = content(existing) == content(revision)
+                same_nodes = content(self._nodes[revision.id]) == content(node_map)
+                same_edges = content(self._edges[revision.id]) == content(edge_map)
+                if same_header and same_nodes and same_edges:
+                    return _copy_model(existing)
+                raise OntologyVersionConflictError(
+                    "REVISION_ALREADY_EXISTS",
+                    "同じ版の識別子に異なる内容は登録できません。新しい版を作成してください。",
+                )
 
             stored = _copy_model(revision)
             if not stored.etag:

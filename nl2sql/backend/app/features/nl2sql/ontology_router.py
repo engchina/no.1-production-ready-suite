@@ -35,9 +35,16 @@ from app.security.permissions import PROFILE_MANAGE_PERMISSION, SQL_EXECUTE_PERM
 from app.security.request_actor import actor_scope
 from app.settings import get_settings
 
+from .chat_attachments import (
+    AttachmentContext,
+    attachment_context,
+    attachment_owner_principal,
+    chat_attachment_service,
+)
 from .models import (
     AllowedObjects,
     ExplainPlanData,
+    JobCreateRequest,
     Nl2SqlEngine,
     Nl2SqlProfile,
     PreviewData,
@@ -402,6 +409,7 @@ class QuerySessionApiCreate(OntologyContract):
     # ターンで、その会話の履歴（前の質問と SQL）を要件の検査に渡す。
     chat: bool = False
     previous_job_id: str | None = Field(default=None, max_length=64)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=50)
 
     @model_validator(mode="after")
     def validate_chat(self) -> QuerySessionApiCreate:
@@ -409,6 +417,10 @@ class QuerySessionApiCreate(OntologyContract):
             raise ValueError("チャットでは回答前の確認（guided）だけを使えます。")
         if self.previous_job_id and not self.chat:
             raise ValueError("会話の続きはチャットの回答前の確認で指定できます。")
+        if self.attachment_ids and (
+            not self.chat or self.engine != Nl2SqlEngine.ENTERPRISE_AI_DIRECT
+        ):
+            raise ValueError("添付ファイルは Enterprise AI のチャットで使えます。")
         return self
 
 
@@ -549,6 +561,7 @@ class QueryRuntimeContext(OntologyContract):
     profile_selection_source: str = "legacy"
     # 回答前の確認で、公開版のオントロジーの業務の概念を使うか（公開版が古ければ使わない。#1439）。
     requirement_ontology_current: bool = True
+    attachment_ids: list[str] = Field(default_factory=list)
 
 
 class OntologyGraphData(OntologyContract):
@@ -2090,7 +2103,8 @@ class OntologyApiRuntime:
         with self._lock:
             profile = self._strict_profile(profile_id)
             latest = self._sync_ontology()
-            if schema_fingerprint and latest.revision.schema_fingerprint != schema_fingerprint:
+            current_schema = self.prepare_build_schema_context(profile_id)
+            if schema_fingerprint and current_schema.schema_fingerprint != schema_fingerprint:
                 raise OntologyStateConflictError(
                     "ONTOLOGY_BUILD_SCHEMA_CHANGED",
                     "AI 構築中に DB schema catalog が更新されました。"
@@ -3058,6 +3072,7 @@ class OntologyApiRuntime:
         view: ProfileOntologyView,
         allowed: AllowedObjects,
         conversation: list[RequirementConversationTurn] | None = None,
+        attachments: AttachmentContext | None = None,
     ) -> RequirementContext:
         try:
             # SQL の生成と同じく、業務プロファイルの範囲の Schema を読む（増分の store では表ごとの
@@ -3082,6 +3097,7 @@ class OntologyApiRuntime:
             view=view,
             today=self._requirement_today(),
             conversation=[turn.model_dump(mode="json") for turn in conversation or []],
+            attachments=attachments,
         )
 
     def _requirement_conversation(
@@ -3131,6 +3147,32 @@ class OntologyApiRuntime:
             for turn in turns
         ]
 
+    def _requirement_attachments(
+        self, request: QuerySessionApiCreate, *, actor_user_uuid: str, actor_is_system_admin: bool
+    ) -> AttachmentContext:
+        if not request.chat or (not request.attachment_ids and not request.previous_job_id):
+            return AttachmentContext()
+        parent = self.legacy_service._chat_parent(
+            JobCreateRequest(
+                question=request.question,
+                profile_id=request.profile_id,
+                chat=True,
+                previous_job_id=request.previous_job_id,
+            ),
+            actor_user_uuid,
+            all_users=actor_is_system_admin,
+        )
+        conversation_id = parent.conversation_id if parent else None
+        service = chat_attachment_service()
+        if not request.attachment_ids:
+            return attachment_context(conversation_id, request.question)
+        toolset = service.preparation_toolset(
+            attachment_owner_principal(actor_user_uuid, actor_is_system_admin),
+            request.attachment_ids,
+            conversation_id=conversation_id,
+        )
+        return attachment_context(conversation_id, request.question, prepared_toolset=toolset)
+
     def _requirement_client(self) -> Any:
         return getattr(self.legacy_service, "_enterprise_ai_client", None)
 
@@ -3172,6 +3214,11 @@ class OntologyApiRuntime:
             view=view,
             allowed=allowed,
             conversation=conversation,
+            attachments=self._requirement_attachments(
+                request,
+                actor_user_uuid=actor_user_uuid,
+                actor_is_system_admin=actor_is_system_admin,
+            ),
         )
         if not ontology_current:
             context.ontology_concepts = []
@@ -3224,6 +3271,7 @@ class OntologyApiRuntime:
                 profile_recommendation_id=recommendation_id,
                 profile_selection_source="confirmed" if recommendation_id else "legacy",
                 requirement_ontology_current=ontology_current,
+                attachment_ids=list(request.attachment_ids),
             )
             self._session_views[session.id] = view
             self._contexts[session.id] = runtime_context
@@ -4125,6 +4173,19 @@ class OntologyApiRuntime:
             view=view,
             allowed=allowed,
             conversation=current.conversation_history,
+            attachments=self._requirement_attachments(
+                QuerySessionApiCreate(
+                    question=current.original_question,
+                    profile_id=current.profile_id,
+                    chat=current.chat,
+                    previous_job_id=current.chat_previous_job_id,
+                    engine=runtime_context.engine if runtime_context else Nl2SqlEngine.SELECT_AI,
+                    clarification_mode=ClarificationMode.GUIDED,
+                    attachment_ids=runtime_context.attachment_ids if runtime_context else [],
+                ),
+                actor_user_uuid=current.actor_user_uuid,
+                actor_is_system_admin=current.actor_is_system_admin,
+            ),
         )
         if runtime_context is not None and not runtime_context.requirement_ontology_current:
             context.ontology_concepts = []

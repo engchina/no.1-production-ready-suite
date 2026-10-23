@@ -918,6 +918,7 @@ export interface QuerySessionCreateRequest {
    */
   chat?: boolean;
   previous_job_id?: string | null;
+  attachment_ids?: string[];
 }
 
 export interface ClarificationAnswerRequest {

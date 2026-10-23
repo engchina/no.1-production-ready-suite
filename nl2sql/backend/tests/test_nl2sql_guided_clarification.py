@@ -2691,7 +2691,7 @@ def test_prompt_asks_target_table_when_several_tables_fit() -> None:
     """表が複数当てはまる短い入力（「employee」）は、推測で 1 つに決めず対象を選ぶ質問にする。"""
     from app.features.nl2sql.sql_requirement import REQUIREMENT_PROMPT_VERSION, SYSTEM_PROMPT
 
-    assert REQUIREMENT_PROMPT_VERSION == "sql_requirement_v5_cap"
+    assert REQUIREMENT_PROMPT_VERSION == "sql_requirement_v6_attachments"
     assert "表を推測で 1 つに決めないでください" in SYSTEM_PROMPT
     assert "「employee」" in SYSTEM_PROMPT
     # 最低限の要件の方針（細部まで聞かない）は保つ。
@@ -3436,3 +3436,97 @@ def test_plain_select_column_beside_an_aggregate_becomes_the_grouping() -> None:
     kept = next(item for item in draft.items if item.key == "select")
     assert kept.sql_hint == "COUNT(*) AS ORDER_COUNT, APP.CUSTOMERS.REGION"
     assert "GROUP BY APP.CUSTOMERS.REGION" in draft.sql_skeleton
+
+
+@pytest.mark.parametrize("section,valid", [("order_by", True), ("where", False)])
+def test_projection_alias_is_valid_only_for_order_by(section: str, valid: bool) -> None:
+    context = _requirement_context("合計を降順で並べる")
+    output = LlmRequirementOutput.model_validate(
+        _output(
+            _from_orders(),
+            _item(
+                "total",
+                "select",
+                "confirmed",
+                columns=["APP.ORDERS.AMOUNT"],
+                sql_hint="SUM(APP.ORDERS.AMOUNT) AS TOTAL_VALUE",
+            ),
+            _item(
+                "sort", section, "confirmed", columns=["TOTAL_VALUE"], sql_hint="TOTAL_VALUE DESC"
+            ),
+        )
+    )
+    draft = build_draft(output, context, question="合計を降順で並べる")
+    item = next(item for item in draft.items if item.key == "sort")
+    assert (item.status == RequirementStatus.CONFIRMED) is valid
+    if valid:
+        assert item.columns == ["APP.ORDERS.AMOUNT"]
+        assert item.sql_hint == "TOTAL_VALUE DESC"
+    else:
+        assert not item.sql_hint
+
+
+def test_projection_alias_cannot_hide_an_unknown_column() -> None:
+    context = _requirement_context("合計を降順で並べる")
+    output = LlmRequirementOutput.model_validate(
+        _output(
+            _from_orders(),
+            _item(
+                "total",
+                "select",
+                "confirmed",
+                sql_hint="SUM(APP.ORDERS.UNKNOWN_VALUE) AS TOTAL_VALUE",
+            ),
+            _item(
+                "sort",
+                "order_by",
+                "confirmed",
+                columns=["TOTAL_VALUE"],
+                sql_hint="TOTAL_VALUE DESC",
+            ),
+        )
+    )
+    draft = build_draft(output, context, question="合計を降順で並べる")
+    item = next(item for item in draft.items if item.key == "sort")
+    assert item.status == RequirementStatus.AMBIGUOUS
+    assert not item.sql_hint
+
+
+def test_requirement_context_includes_authorized_attachment_tables() -> None:
+    from app.features.nl2sql.chat_attachments import (
+        AttachmentColumn,
+        AttachmentContext,
+        AttachmentTable,
+    )
+
+    attachments = AttachmentContext(
+        tables=(
+            AttachmentTable(
+                name="ATTACHMENT_1",
+                attachment_id="attachment-a",
+                file_name="table-a.csv",
+                sheet="sheet-a",
+                columns=(AttachmentColumn(name="VALUE", sql_type="NUMBER"),),
+                rows=((10,),),
+            ),
+        )
+    )
+    context = build_requirement_context(
+        question="添付の値の合計",
+        profile=_LegacyService().profile,
+        catalog_tables=_catalog().tables,
+        allowed=AllowedObjects(),
+        ontology=None,
+        view=None,
+        today=TODAY,
+        attachments=attachments,
+    )
+    assert context.resolve_table("ATTACHMENT_1") == "ATTACHMENT_1"
+    assert context.resolve_column("ATTACHMENT_1.VALUE") == "ATTACHMENT_1.VALUE"
+    from app.features.nl2sql.sql_requirement import context_payload
+
+    payload = context_payload(context, mode="draft")
+    table = next(table for table in payload["schema"] if table["table"] == "ATTACHMENT_1")
+    assert table["columns"][0]["data_type"] == "NUMBER"
+    assert "rows" not in table
+    assert "sample_values" not in table["columns"][0]

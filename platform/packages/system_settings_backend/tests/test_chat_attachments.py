@@ -401,6 +401,8 @@ def _toolset() -> Any:
 def test_tool_specs_cover_the_fixed_names() -> None:
     assert tuple(spec.name for spec in CHAT_ATTACHMENT_TOOL_SPECS) == CHAT_ATTACHMENT_TOOL_NAMES
     for spec in CHAT_ATTACHMENT_TOOL_SPECS:
+        assert spec.title.strip()
+        assert spec.title != spec.name
         schema = spec.input_schema
         assert schema["additionalProperties"] is False
         assert set(schema["required"]) == set(schema["properties"])
@@ -935,3 +937,23 @@ def test_settings_api_and_oracle_sql() -> None:
     oracle.save(loaded)
     assert log[1][0].startswith("MERGE INTO PLATFORM_CHAT_ATTACHMENT_SETTINGS")
     assert "CREATE TABLE PLATFORM_CHAT_ATTACHMENT_SETTINGS" in "\n".join(PLATFORM_AUTH_DDL)
+
+
+def test_preparation_toolset_checks_ownership_without_binding() -> None:
+    service = _service()
+    first = _upload(service, ALICE, "a.csv", b"ID,VALUE\n1,2\n")
+    toolset = service.preparation_toolset(ALICE, [first.attachment_id], conversation_id=None)
+    assert [record.attachment_id for record in toolset.records] == [first.attachment_id]
+    assert toolset.parsed(first.attachment_id).sheets[0].rows == [["1", "2"]]
+    assert service.store.get(first.attachment_id).conversation_id is None
+    with pytest.raises(ChatAttachmentError) as error:
+        service.preparation_toolset(BOB, [first.attachment_id], conversation_id=None)
+    assert error.value.status_code == 404
+    service.bind_references(
+        service.prepare_attachments(ALICE, [first.attachment_id], conversation_id=None),
+        conversation_id="conversation-a",
+        owner_user_uuid=ALICE.user_uuid,
+    )
+    with pytest.raises(ChatAttachmentError) as error:
+        service.preparation_toolset(ALICE, [first.attachment_id], conversation_id="conversation-b")
+    assert error.value.status_code == 409

@@ -434,6 +434,24 @@ class ChatAttachmentService:
             self.conversation_records(conversation_id), self.ensure_parsed, self.content
         )
 
+    def preparation_toolset(
+        self,
+        principal: AttachmentPrincipal,
+        attachment_ids: Sequence[str],
+        *,
+        conversation_id: str | None,
+    ) -> ChatAttachmentToolset:
+        """送信された質問の確認に使う添付。認可し、会話への結び付けは確定時まで保留する。"""
+        self.prepare_attachments(principal, attachment_ids, conversation_id=conversation_id)
+        records = self.conversation_records(conversation_id) if conversation_id else []
+        known = {record.attachment_id for record in records}
+        records.extend(
+            self._visible(principal, attachment_id)
+            for attachment_id in dict.fromkeys(attachment_ids)
+            if attachment_id not in known
+        )
+        return ChatAttachmentToolset(records, self.ensure_parsed, self.content)
+
     def content(self, attachment_id: str) -> bytes | None:
         """送信した期限内の添付の原本（会話の権限は製品が確かめる。無ければ None）。"""
         record = self.store.get(attachment_id)

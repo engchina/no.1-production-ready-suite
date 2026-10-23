@@ -17,6 +17,8 @@ export interface SqlBlockLabels {
   safe: string;
   /** 安全検査を通り、実行した。 */
   safeExecuted: string;
+  unchecked: string;
+  uncheckedExecuted: string;
   /** 安全検査で止めた。 */
   blocked: string;
 }
@@ -28,6 +30,8 @@ export function sqlBlockLabels(overrides: Partial<SqlBlockLabels> = {}): SqlBloc
     copyFailed: "SQL をコピーできませんでした。",
     safe: "安全検査済み・未実行",
     safeExecuted: "安全検査済み・実行済み",
+    unchecked: "安全確認を省略・未実行",
+    uncheckedExecuted: "安全確認を省略・実行済み",
     blocked: "安全検査でブロック",
     ...overrides,
   };
@@ -39,16 +43,18 @@ export const DEFAULT_SQL_BLOCK_LABELS: SqlBlockLabels = sqlBlockLabels();
 export function SqlSafetyBadge({
   safe,
   executed,
+  checked = true,
   labels = DEFAULT_SQL_BLOCK_LABELS,
 }: {
   safe: boolean;
   executed: boolean;
+  checked?: boolean;
   labels?: SqlBlockLabels;
 }) {
   return (
     <StatusBadge
-      variant={safe ? "success" : "danger"}
-      label={!safe ? labels.blocked : executed ? labels.safeExecuted : labels.safe}
+      variant={!safe ? "danger" : checked ? "success" : "neutral"}
+      label={!safe ? labels.blocked : !checked ? (executed ? labels.uncheckedExecuted : labels.unchecked) : executed ? labels.safeExecuted : labels.safe}
     />
   );
 }

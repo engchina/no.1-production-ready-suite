@@ -2,6 +2,7 @@ import { toTabularData, type TabularData } from "@production-ready/ui";
 
 import type { Artifact, RunState, RunStep } from "./api";
 import { t } from "./i18n";
+import { runToolTitles } from "./run-history";
 
 /**
  * Run の中の表のデータ（#1158）。ツールの結果・成果物が表の形なら、共通の結果の表の部品で出す。
@@ -48,13 +49,14 @@ export function stepResultTable(step: RunStep): TabularData | null {
  */
 export function runToolResultTables(run: RunState): ToolResultTable[] {
   const tables: ToolResultTable[] = [];
+  const titles = runToolTitles(run);
   const indexByJob = new Map<string, number>();
   for (const step of run.steps) {
     const data = stepResultTable(step);
     if (!data || !step.tool_call) continue;
     const table = {
       stepId: step.id,
-      toolName: step.tool_call.name,
+      toolName: titles[step.tool_call.name] || step.tool_call.name,
       data,
       sql: toolResultSql(step.tool_result?.output ?? null),
     };

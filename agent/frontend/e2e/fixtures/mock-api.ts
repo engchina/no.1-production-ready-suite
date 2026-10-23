@@ -2153,7 +2153,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     const connection = String(second);
     if (!(connection in DATA_SCOPE_LABELS)) throw new HttpError(404, "データの範囲を設定できない接続です。");
     const failure = state.dataScopeCandidateErrors[connection];
-    if (failure) throw new HttpError(failure.status, failure.message);
+    if (failure) throw new HttpError(failure.status, failure.message, failure.status === 403 ? "data_scope_candidates_forbidden" : undefined);
     return {
       connection,
       label: DATA_SCOPE_LABELS[connection],

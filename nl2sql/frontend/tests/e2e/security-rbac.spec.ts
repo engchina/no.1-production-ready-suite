@@ -4088,6 +4088,7 @@ test("DeepSec は3つの管理タブで認証・基盤構成・データ権限�
   await expect(dataPermissionsTab).toBeFocused();
   await expect(dataPermissionsTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "構造化データ権限" })).toBeVisible();
+  await expect(page.getByText(/システム管理者は別の接続で実行するため、Data Grant による行・列の制限は適用されません/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "ロール別 Data Grant ポリシー" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "実行計画", exact: true })).toHaveCount(0);
   await expect(page.getByTestId("security-deepsec-step-3")).toHaveCount(0);

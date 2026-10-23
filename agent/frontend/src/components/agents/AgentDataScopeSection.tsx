@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import {
   ApiErrorBanner,
+  Banner,
   Button,
   Card,
   CardContent,
@@ -18,6 +19,7 @@ import {
 } from "@production-ready/ui";
 import {
   agentApi,
+  ApiError,
   type AgentDataScope,
   type AgentDataScopeConnection,
   type AgentDataScopes,
@@ -133,6 +135,7 @@ function DataScopeCard({
     retry: false,
     staleTime: 60_000,
   });
+  const forbidden = candidates.error instanceof ApiError && candidates.error.status === 403;
   const ids = scope?.profile_ids ?? [];
   const profiles = candidates.data?.profiles ?? [];
   const known = new Map(profiles.map((profile) => [profile.id, profile]));
@@ -192,7 +195,11 @@ function DataScopeCard({
           </TimedLoadingState>
         ) : (
           <>
-            {candidates.error ? (
+            {forbidden ? (
+              <div data-testid={`agent-data-scope-${connection}-forbidden`}>
+                <Banner severity="info">{t("agent.dataScope.forbidden", { product: t(keys.title) })}</Banner>
+              </div>
+            ) : candidates.error ? (
               <ApiErrorBanner
                 error={candidates.error}
                 fallback={t("agent.dataScope.loadError")}
@@ -220,7 +227,7 @@ function DataScopeCard({
               selectedOptions={selectedOptions}
               value={ids}
               onValueChange={setIds}
-              disabled={disabled || readOnly}
+              disabled={disabled || readOnly || forbidden}
               labels={{
                 empty: candidates.error ? t("agent.dataScope.emptyOnError") : t("agent.dataScope.empty"),
                 searchPlaceholder: t("agent.dataScope.search"),

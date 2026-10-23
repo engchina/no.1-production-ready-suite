@@ -2081,7 +2081,11 @@ class OracleNl2SqlAdapter:
                 SELECT c.column_name,
                        c.data_type ||
                        CASE
-                         WHEN c.data_type IN ('VARCHAR2','CHAR','NVARCHAR2','NCHAR')
+                         WHEN c.data_type IN ('VARCHAR2','CHAR') AND c.char_used = 'C'
+                         THEN '(' || c.char_length || ' CHAR)'
+                         WHEN c.data_type IN ('NVARCHAR2','NCHAR')
+                         THEN '(' || c.char_length || ')'
+                         WHEN c.data_type IN ('VARCHAR2','CHAR')
                          THEN '(' || c.data_length || ')'
                          WHEN c.data_type = 'NUMBER' AND c.data_precision IS NOT NULL
                          THEN '(' || c.data_precision ||

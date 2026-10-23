@@ -1205,8 +1205,16 @@ class DeepSecService:
             self.security._raise_security_migration_if_needed(exc)  # noqa: SLF001
             raise
         steps = []
+        foundation_verified = self.status().get("configured") is True
         for step in build_v001_plan(self.settings):
             state = self._state_for_step(states, step)
+            recorded = states.get((PLAN_VERSION, step.step_no), {})
+            if (
+                foundation_verified
+                and step.step_no in {1, 2}
+                and (not recorded or recorded.get("checksum") == step.checksum)
+            ):
+                state = {**state, "status": "APPLIED", "error_message": ""}
             steps.append(
                 {
                     "step_no": step.step_no,

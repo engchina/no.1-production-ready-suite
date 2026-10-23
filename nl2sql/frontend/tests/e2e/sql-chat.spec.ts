@@ -57,6 +57,7 @@ async function setup(page: Page, requirementOptions: ChatRequirementMockOptions 
     turns: [] as Turn[],
     requests: [] as Record<string, unknown>[],
     failSend: false,
+    safetyChecked: true,
     pending: false,
     // 投入したジョブを、backend と同じく worker の開始前（status: pending・段階はすべて待機中）で作る。
     queued: false,
@@ -105,7 +106,7 @@ async function setup(page: Page, requirementOptions: ChatRequirementMockOptions 
       generated_sql: `SELECT CATEGORY, SUM(AMOUNT) FROM APP.SALES GROUP BY CATEGORY${state.turns.length ? " ORDER BY SUM(AMOUNT) DESC" : ""}`,
       original_question: body.question,
       explanation: "カテゴリごとの売上合計です。",
-      safety: { is_safe: true },
+      safety: { is_safe: true, safety_checked: state.safetyChecked },
       notice: state.notice,
     };
     const turn: Turn = {
@@ -2275,3 +2276,16 @@ for (const width of [1280, 375]) {
     expect(await noHorizontalOverflow(page)).toBeLessThanOrEqual(0);
   });
 }
+
+
+test("安全確認を省略した SQL を安全検査済みと表示しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const state = await setup(page);
+  state.safetyChecked = false;
+  await page.goto("/chat");
+  await page.getByRole("textbox", { name: "質問", exact: true }).fill("合成の値を集計してください");
+  await page.getByTestId("sql-chat-send").click();
+  await confirmChatRequirement(page);
+  await expect(page.getByText("安全確認を省略・未実行", { exact: true })).toBeVisible();
+  await expect(page.getByText("安全検査済み・未実行", { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("sql-safety-skipped.png"), fullPage: true });
+});

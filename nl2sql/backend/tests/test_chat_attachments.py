@@ -373,3 +373,39 @@ def test_csv_source_values_reach_sql_binds_without_precision_loss(
 )
 def test_ordinary_numbers_keep_existing_types(source: str, expected: int | float) -> None:
     assert chat_attachments._number(source) == expected
+
+
+def test_requirement_preparation_uses_pending_files_without_binding(
+    service: ChatAttachmentService,
+) -> None:
+    from app.features.nl2sql.ontology_models import ClarificationMode
+    from app.features.nl2sql.ontology_router import OntologyApiRuntime, QuerySessionApiCreate
+    from app.features.nl2sql.ontology_store import InMemoryOntologyStore
+
+    attachment_id = _upload(service)
+    runtime = OntologyApiRuntime(
+        legacy_service=_worker(_repository()), store=InMemoryOntologyStore()
+    )
+    request = QuerySessionApiCreate(
+        question="添付の値を集計",
+        profile_id="profile-a",
+        chat=True,
+        engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+        clarification_mode=ClarificationMode.GUIDED,
+        attachment_ids=[attachment_id],
+    )
+    context = runtime._requirement_attachments(
+        request,
+        actor_user_uuid="user-1",
+        actor_is_system_admin=False,
+    )
+    assert len(context.tables) == 1
+    assert context.tables[0].name == "ATTACHMENT_1"
+    assert service.store.get(attachment_id).conversation_id is None
+    from pr_system_settings.chat_attachments import ChatAttachmentError
+
+    with pytest.raises(ChatAttachmentError) as error:
+        runtime._requirement_attachments(
+            request, actor_user_uuid="user-2", actor_is_system_admin=False
+        )
+    assert error.value.status_code == 404

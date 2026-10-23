@@ -29,7 +29,7 @@ const attachmentRef = { attachment_id: "att-1", file_name: "照合表.csv", kind
 
 async function setup(page: Page, { enabled }: { enabled: boolean }) {
   await mockDatabaseGateReady(page);
-  await mockChatRequirement(page);
+  const requirement = await mockChatRequirement(page);
   const requests: Record<string, unknown>[] = [];
   const turns: Record<string, unknown>[] = [];
   await page.route("**/api/nl2sql/profiles/search**", (route) =>
@@ -95,7 +95,7 @@ async function setup(page: Page, { enabled }: { enabled: boolean }) {
     turns.push(turn);
     return route.fulfill({ json: { data: { job_id: "chat-1", status: "done", created_at: now, steps: [] } } });
   });
-  return { requests };
+  return { requests, requirement };
 }
 
 const csv = { name: "照合表.csv", mimeType: "text/csv", buffer: Buffer.from("注文 ID,金額\n1,1200\n2,3400\n") };
@@ -116,6 +116,7 @@ test.describe("SQL チャットの添付", { tag: "@responsive" }, () => {
 
     await page.getByRole("textbox", { name: "質問", exact: true }).fill("添付の注文が売上にあるか照合して");
     await page.getByTestId("sql-chat-send").click();
+    expect(state.requirement.creates[0]).toMatchObject({ attachment_ids: ["att-1"] });
     await confirmChatRequirement(page);
     await expect.poll(() => state.requests[0]?.attachment_ids).toEqual(["att-1"]);
     await expect(page.getByTestId("sql-chat-turn").getByRole("list", { name: "添付ファイル" })).toContainText(
