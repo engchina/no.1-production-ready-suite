@@ -191,7 +191,7 @@ def test_subquestion_targets_judge_body_and_search_with_preamble() -> None:
 
 def test_weak_and_missing_subquestions_are_searched_and_supported_is_not() -> None:
     targets = coverage_targets(LINE_QUESTION, split)
-    ctx = context(parent("p1", "受注は受注入力画面で登録します。"), parent("p2", "請求書の一覧"))
+    ctx = context(parent("p1", "システムAの画面Bでは、受注は受注入力画面で登録します。"), parent("p2", "システムAの画面Bの請求書の一覧"))
     rows = assess_targets(targets, evidence_texts(ctx))
 
     assert {r["id"]: r["status"] for r in rows} == {"Q2": "supported", "Q3": "weak", "Q4": "missing"}
@@ -200,6 +200,16 @@ def test_weak_and_missing_subquestions_are_searched_and_supported_is_not() -> No
     plan, stop = plan_targeted_retrievals(rows, targets, CoverageBudget(chunks_per_subquestion=2))
     assert [(p.target.id, p.chunk_cap) for p in plan] == [("Q3", 2), ("Q4", 2)]
     assert stop == ""
+
+
+def test_subquestion_word_overlap_without_the_requested_scope_is_not_supported() -> None:
+    """小問の一般語が一致しても、共通の対象を確認できなければ追加探索を省かない。"""
+    targets = coverage_targets(LINE_QUESTION, split)
+    ctx = context(parent("p1", "受注は受注入力画面で登録します。"), parent("p2", "請求書の一覧"))
+    rows = assess_targets(targets, evidence_texts(ctx))
+    assert all(row["status"] == "missing" for row in rows)
+    plan, _ = plan_targeted_retrievals(rows, targets, CoverageBudget())
+    assert [item.target.id for item in plan] == ["Q2", "Q3", "Q4"]
 
 
 def test_plan_counts_subquestions_and_missing_requests_in_one_place() -> None:
