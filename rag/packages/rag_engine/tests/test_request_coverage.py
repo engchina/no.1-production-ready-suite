@@ -398,11 +398,11 @@ def test_cover_missing_requests_searches_each_subquestion_with_preamble(monkeypa
     calls = _patch_search(
         monkeypatch,
         {
-            "業務の件です。 請求書の再発行方法は？": context(*(parent(f"inv{i}", "請求書の再発行") for i in range(3))),
-            "業務の件です。 承認の担当は？": context(parent("apr", "承認の担当は課長")),
+            "業務の件です。 請求書の再発行方法は？": context(*(parent(f"inv{i}", "業務の請求書の再発行") for i in range(3))),
+            "業務の件です。 承認の担当は？": context(parent("apr", "業務の承認の担当は課長")),
         },
     )
-    ctx = context(parent("p1", "受注番号を入力し、登録ボタンを押します。"))
+    ctx = context(parent("p1", "業務の受注番号を入力し、登録ボタンを押します。"))
 
     merged, trace = _cover(ctx, _settings(request_coverage_chunks_per_subquestion=2), question)
 

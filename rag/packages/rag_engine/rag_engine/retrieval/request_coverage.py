@@ -101,6 +101,8 @@ class RequestTarget:
     # 小問の印（小問でなければ空）と、検索に使う文（空なら text。小問は前置き＋小問の文）。
     subquestion: str = ""
     query: str = ""
+    # 要求に先行する、質問中で明示された対象・状況。要求の語だけの一致で覆域を確定しない。
+    context_terms: tuple[str, ...] = ()
 
 
 def _normalize(text: Any) -> str:
@@ -142,7 +144,14 @@ def coverage_targets(question: str, tokenize: Callable[[str], Sequence[str]]) ->
     """質問契約の要求単位から、覆域を判定する要求を返す。語の集合が同じ要求は 1 つにまとめる。"""
     targets: list[RequestTarget] = []
     seen: set[tuple[str, ...]] = set()
-    for unit in task_contract(question)["request_units"]:
+    contract = task_contract(question)
+    contexts = [str(unit["text"]) for unit in task_contract(contract["current_request"])["request_units"] if unit.get("kind") == "context"]
+    context_text = " ".join(contexts)
+    try:
+        context_terms = _content_terms(tokenize(context_text)) if context_text else ()
+    except Exception:  # noqa: BLE001 - 分かち書きの失敗で質問を失敗にしない。
+        context_terms = ()
+    for unit in contract["request_units"]:
         focus = _focus_text(unit)
         if not focus:
             continue
@@ -165,7 +174,8 @@ def coverage_targets(question: str, tokenize: Callable[[str], Sequence[str]]) ->
                 text=focus,
                 terms=terms,
                 subquestion=label,
-                query=" ".join(part for part in (str(unit.get("preamble") or ""), body) if part) if label else "",
+                query=" ".join(part for part in (str(unit.get("preamble") or context_text), body) if part) if label or context_text else "",
+                context_terms=context_terms,
             )
         )
     return targets
@@ -218,7 +228,12 @@ def assess_targets(targets: Sequence[RequestTarget], evidence: Sequence[tuple[st
         for position, (key, text) in enumerate(evidence):
             matched = [term for term in target.terms if term in text]
             if matched:
-                scored.append((len(matched) / len(target.terms), position, key, matched))
+                ratio = len(matched) / len(target.terms)
+                if target.context_terms:
+                    # 同じ根拠で対象・状況と要求の両方が一致する必要がある。
+                    context_ratio = sum(term in text for term in target.context_terms) / len(target.context_terms)
+                    ratio = min(ratio, context_ratio)
+                scored.append((ratio, position, key, matched))
         scored.sort(key=lambda item: (-item[0], item[1]))
         best = scored[0][0] if scored else 0.0
         status: CoverageStatus = "supported" if best >= SUPPORTED_RATIO else "weak" if best >= WEAK_RATIO else "missing"
@@ -232,6 +247,7 @@ def assess_targets(targets: Sequence[RequestTarget], evidence: Sequence[tuple[st
                 "best_ratio": round(best, 3),
                 "matched_terms": scored[0][3] if scored else [],
                 "evidence_ids": [key for ratio, _, key, _ in scored if ratio >= WEAK_RATIO and key][:MAX_EVIDENCE_PER_REQUEST],
+                **({"context_terms": list(target.context_terms)} if target.context_terms else {}),
             }
         )
     for row, target in zip(rows, targets, strict=True):
@@ -253,11 +269,16 @@ def _needs_search(row: Mapping[str, Any]) -> bool:
 
 
 def _unmatched_terms(row: Mapping[str, Any]) -> tuple[str, ...]:
-    """weak の要求で、根拠に現れなかった語（不足の論点）。missing と supported は空。"""
-    if row.get("status") != "weak":
+    """一部だけの要求と、対象・状況が一致しなかった要求の追加検索語。"""
+    if row.get("status") not in {"weak", "missing"}:
         return ()
     matched = set(row.get("matched_terms") or ())
-    return tuple(term for term in row.get("terms") or () if term not in matched)
+    terms = [*(row.get("terms") or ()), *(row.get("context_terms") or ())]
+    return (
+        tuple(dict.fromkeys(term for term in terms if term not in matched))
+        if row.get("context_terms") or row.get("status") == "weak"
+        else ()
+    )
 
 
 def _query_key(text: str) -> str:

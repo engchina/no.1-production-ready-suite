@@ -1541,7 +1541,7 @@ def test_paragraph_broader_than_the_users_scope_is_contradicted_by_the_premise()
     """利用者が確認で範囲を限定したのに、広い範囲の操作を勧める段落は前提と矛盾する (#2726)。
 
     主張の監査が資料で supported としても、答えの条件・制約と両立しない（conflicts）段落は contradicted にする。
-    範囲を限定した手順の確かめられない段落は unsupported のまま残す。前提を渡さない検証は答えと比べない。
+    範囲を限定した手順の確かめられない段落は unsupported のまま残す。確認の答えが無い操作要求も、原質問の対象と比べる。
     """
     from rag_engine.evaluation.answer_validation import (
         PREMISE_CONSISTENCY_SYSTEM_PROMPT,
@@ -1565,7 +1565,7 @@ def test_paragraph_broader_than_the_users_scope_is_contradicted_by_the_premise()
                             "answer_passage_id": ids[0],
                             "constraints": "項目 A だけ",
                             "recommendation": "共有グループの表示区分を変える",
-                            "fit": "conflicts",
+                            "fit": "conflicts" if payload["user_answers"] else "fits",
                         },
                         {
                             "answer_passage_id": ids[1],
@@ -1599,7 +1599,7 @@ def test_paragraph_broader_than_the_users_scope_is_contradicted_by_the_premise()
         result = validate_answer_claims("表示設定 A を変更したい", SCOPE_ANSWER, SCOPE_EVIDENCE, settings=None, premises=premises)
         unlimited = validate_answer_claims("表示設定 A を変更したい", SCOPE_ANSWER, SCOPE_EVIDENCE, settings=None)
 
-    [scope] = scope_inputs
+    scope, question_only = scope_inputs
     assert scope["user_answers"] == [
         "確認の質問: 変更するのは個別の項目ですか、共有グループ全体ですか？\n利用者の答え: 項目 A だけ。グループは変えない"
     ]
@@ -1609,8 +1609,9 @@ def test_paragraph_broader_than_the_users_scope_is_contradicted_by_the_premise()
     assert claim_mark_code(broader["status"], broader["support_check"]) == "contradicted"
     assert narrow["status"] == "unsupported"
     assert result["counts"] == {"contradicted": 1, "unsupported": 1}
-    # 前提が無ければ答えと比べず、監査の判定のまま。
-    assert len(scope_inputs) == 1
+    # 確認の答えが無くても原質問で検査する。限定を捏造せず、両立する判定なら元の監査を保つ。
+    assert question_only["user_answers"] == []
+    assert question_only["question"] == "表示設定 A を変更したい"
     assert [claim["status"] for claim in unlimited["claim_checks"]] == ["supported", "unsupported"]
 
 
