@@ -12,13 +12,14 @@ from dotenv import dotenv_values
 _OLD_KEYS = frozenset(
     {
         "RAG_GUARDRAIL_BACKEND",
+        "RAG_GUARDRAILS_ENABLED",
         "RAG_GUARDRAIL_POLICY",
         "RAG_GUARDRAIL_MAX_QUERY_CHARS",
         "RAG_GUARDRAIL_BLOCK_PROMPT_INJECTION",
         "RAG_GUARDRAIL_MASK_SENSITIVE_IDENTIFIERS",
     }
 )
-_KEY = "RAG_GUARDRAILS_ENABLED"
+_KEYS = ("RAG_GUARDRAILS_INPUT_ENABLED", "RAG_GUARDRAILS_OUTPUT_ENABLED")
 _ASSIGNMENT = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 
 
@@ -39,8 +40,14 @@ def migrate_env(path: Path) -> bool:
         if not ((match := _ASSIGNMENT.match(line)) and match.group(1) in _OLD_KEYS)
     ]
     content = "".join(lines)
-    if _KEY not in values:
-        content = content.rstrip("\n") + f"\n{_KEY}={str(backend == 'oci_guardrails').lower()}\n"
+    enabled = values.get("RAG_GUARDRAILS_ENABLED")
+    if enabled is None:
+        enabled = str(backend == "oci_guardrails").lower()
+    if enabled.lower() not in {"true", "false", "1", "0", "yes", "no", "on", "off"}:
+        raise ValueError("旧検査スイッチが不明なため、自動で移行できません。")
+    for key in _KEYS:
+        if key not in values:
+            content = content.rstrip("\n") + f"\n{key}={enabled}\n"
     # 同じディレクトリで置き換え、元のアクセス権を保持する。
     staging = path.with_name(path.name + ".guardrails-migration")
     created = False

@@ -64,7 +64,9 @@ async def test_original_question_blocks_before_any_engine(
     boundary: dict[str, Any], mode: str, original: str, prechecked: bool
 ) -> None:
     checked = GuardrailResult(allowed=True, sanitized_text="合成の安全な検索文", findings=[])
-    response = await RagPipeline(settings=Settings(rag_guardrails_enabled=True)).run(
+    response = await RagPipeline(
+        settings=Settings(rag_guardrails_input_enabled=True, rag_guardrails_output_enabled=True)
+    ).run(
         SearchRequest(
             query="合成の安全な検索文",
             original_question=original,
@@ -89,9 +91,9 @@ async def test_both_inputs_are_masked_and_findings_preserved(
     result = GuardrailResult(allowed=True, sanitized_text="検査済みの検索文", findings=[])
     original = "元の質問 synthetic@example.com"
     request = SearchRequest(query=query, original_question=original, retrieval_only=retrieval_only)
-    response = await RagPipeline(settings=Settings(rag_guardrails_enabled=True)).run(
-        request, query_guardrail_result=result if prechecked else None
-    )
+    response = await RagPipeline(
+        settings=Settings(rag_guardrails_input_enabled=True, rag_guardrails_output_enabled=True)
+    ).run(request, query_guardrail_result=result if prechecked else None)
     passed = boundary["requests"][0]
     assert "synthetic@example.com" not in passed.query
     assert passed.original_question == "元の質問 [機微情報]"
@@ -105,17 +107,17 @@ async def test_both_inputs_are_masked_and_findings_preserved(
 async def test_missing_or_identical_original_does_not_add_inspection(
     boundary: dict[str, Any], original: str | None
 ) -> None:
-    await RagPipeline(settings=Settings(rag_guardrails_enabled=True)).run(
-        SearchRequest(query="合成の質問", original_question=original)
-    )
+    await RagPipeline(
+        settings=Settings(rag_guardrails_input_enabled=True, rag_guardrails_output_enabled=True)
+    ).run(SearchRequest(query="合成の質問", original_question=original))
     assert boundary["checks"] == ["合成の質問"]
     assert len(boundary["requests"]) == 1
 
 
 async def test_disabled_guardrails_preserves_original(boundary: dict[str, Any]) -> None:
-    await RagPipeline(settings=Settings(rag_guardrails_enabled=False)).run(
-        SearchRequest(query="合成の質問", original_question="合成の攻撃")
-    )
+    await RagPipeline(
+        settings=Settings(rag_guardrails_input_enabled=False, rag_guardrails_output_enabled=False)
+    ).run(SearchRequest(query="合成の質問", original_question="合成の攻撃"))
     assert boundary["checks"] == []
     assert boundary["requests"][0].original_question == "合成の攻撃"
 
@@ -128,7 +130,8 @@ def test_rest_checks_original_before_entering_engine(
     generate_answer: bool,
     original: str,
 ) -> None:
-    monkeypatch.setattr(get_settings(), "rag_guardrails_enabled", True)
+    monkeypatch.setattr(get_settings(), "rag_guardrails_input_enabled", True)
+    monkeypatch.setattr(get_settings(), "rag_guardrails_output_enabled", True)
     monkeypatch.setattr(RunRecorder, "record", AsyncMock())
     response = AsgiTestClient(app).post(
         "/api/search",

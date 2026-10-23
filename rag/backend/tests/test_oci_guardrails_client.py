@@ -16,32 +16,51 @@ from app.config import Settings
 
 def test_is_configured_requires_backend_and_compartment() -> None:
     # backend=local は常に未設定扱い。
-    assert OciGuardrailsClient(Settings(rag_guardrails_enabled=False)).is_configured() is False
+    assert (
+        OciGuardrailsClient(
+            Settings(rag_guardrails_input_enabled=False, rag_guardrails_output_enabled=False)
+        ).is_configured()
+        is False
+    )
     # backend=oci_guardrails でも compartment が無ければ未設定。
     assert (
         OciGuardrailsClient(
-            Settings(rag_guardrails_enabled=True, oci_compartment_id="")
+            Settings(
+                rag_guardrails_input_enabled=True,
+                rag_guardrails_output_enabled=True,
+                oci_compartment_id="",
+            )
         ).is_configured()
         is False
     )
     # backend + compartment が揃えば設定済み。
     assert (
         OciGuardrailsClient(
-            Settings(rag_guardrails_enabled=True, oci_compartment_id="ocid1.compartment")
+            Settings(
+                rag_guardrails_input_enabled=True,
+                rag_guardrails_output_enabled=True,
+                oci_compartment_id="ocid1.compartment",
+            )
         ).is_configured()
         is True
     )
 
 
 def test_inspect_text_raises_safe_error_when_unconfigured() -> None:
-    client = OciGuardrailsClient(Settings(rag_guardrails_enabled=False))
+    client = OciGuardrailsClient(
+        Settings(rag_guardrails_input_enabled=False, rag_guardrails_output_enabled=False)
+    )
     with pytest.raises(OciGuardrailsUnavailableError):
         client.inspect_text("some text")
 
 
 def test_inspect_text_empty_returns_none() -> None:
     client = OciGuardrailsClient(
-        Settings(rag_guardrails_enabled=True, oci_compartment_id="ocid1.compartment")
+        Settings(
+            rag_guardrails_input_enabled=True,
+            rag_guardrails_output_enabled=True,
+            oci_compartment_id="ocid1.compartment",
+        )
     )
     assert client.inspect_text("   ") is None
 
@@ -167,7 +186,8 @@ def test_client_disables_sdk_retries_and_keeps_timeout(monkeypatch: pytest.Monke
     monkeypatch.setattr(module, "load_oci_config_without_prompt", lambda *_args: {"region": "x"})
     client = OciGuardrailsClient(
         Settings(
-            rag_guardrails_enabled=True,
+            rag_guardrails_input_enabled=True,
+            rag_guardrails_output_enabled=True,
             oci_compartment_id="ocid1.compartment",
             oci_guardrails_timeout_seconds=2.0,
         )

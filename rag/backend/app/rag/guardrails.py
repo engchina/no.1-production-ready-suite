@@ -46,23 +46,24 @@ class GuardrailPolicy:
         self, settings: Settings | None = None, oci_client: _OciGuardrailsLike | None = None
     ) -> None:
         settings = settings or get_settings()
-        self._enabled = settings.rag_guardrails_enabled
+        self._input_enabled = settings.rag_guardrails_input_enabled
+        self._output_enabled = settings.rag_guardrails_output_enabled
         self._oci_client = (
             (oci_client if oci_client is not None else OciGuardrailsClient(settings))
-            if self._enabled
+            if self._input_enabled or self._output_enabled
             else None
         )
 
     def validate_query(self, query: str) -> GuardrailResult:
         """有効時だけ質問を検査する。"""
-        return self._inspect(query)
+        return self._inspect(query, enabled=self._input_enabled)
 
     def validate_answer(self, answer: str, context: str | None = None) -> GuardrailResult:
         """有効時だけ回答を検査する。根拠との語の重なりは判定しない。"""
-        return self._inspect(answer)
+        return self._inspect(answer, enabled=self._output_enabled)
 
-    def _inspect(self, text: str) -> GuardrailResult:
-        if self._oci_client is None or not text.strip():
+    def _inspect(self, text: str, *, enabled: bool) -> GuardrailResult:
+        if not enabled or self._oci_client is None or not text.strip():
             return GuardrailResult(allowed=True, sanitized_text=text, findings=[])
         try:
             inspection = self._oci_client.inspect_text(text)

@@ -502,3 +502,28 @@ def test_document_ids_use_the_list_filters(monkeypatch: MonkeyPatch) -> None:
         }
     ]
     assert client.get("/api/documents/ids", params={"limit": 10001}).status_code == 422
+
+
+def test_rejected_formats_keep_their_own_message_and_count() -> None:
+    from app.rag.bulk_ingestion import _Decision, _result
+
+    xlsx = "既定の解析エンジンは .xlsx を処理できません。Excel→JSONL を選んでください。"
+    markdown = "既定の解析エンジンは .md を処理できません。別の解析エンジンを選んでください。"
+    decisions = {
+        "xlsx-a": _Decision(
+            outcome=BulkIngestionOutcome.REJECTED, reason="parser_unsupported_source", message=xlsx
+        ),
+        "md-a": _Decision(
+            outcome=BulkIngestionOutcome.REJECTED,
+            reason="parser_unsupported_source",
+            message=markdown,
+        ),
+        "md-b": _Decision(
+            outcome=BulkIngestionOutcome.REJECTED,
+            reason="parser_unsupported_source",
+            message=markdown,
+        ),
+    }
+    result = _result(raw_count=3, ordered_ids=list(decisions), decisions=decisions)
+    assert result.rejected_count == 3
+    assert {entry.message: entry.count for entry in result.reasons} == {xlsx: 1, markdown: 2}

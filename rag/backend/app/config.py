@@ -2011,9 +2011,11 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "その件を「説明できなかった」などとして記録し、取込を続ける。"
         ),
     )
-    rag_guardrails_enabled: bool = Field(
-        default=False,
-        description="OCI Guardrails で質問と回答のテキストを検査する。無効時は呼び出さない。",
+    rag_guardrails_input_enabled: bool = Field(
+        default=False, description="OCI Guardrails で質問を検査する。無効時は質問を送信しない。"
+    )
+    rag_guardrails_output_enabled: bool = Field(
+        default=False, description="OCI Guardrails で回答を検査する。無効時は回答を送信しない。"
     )
     oci_guardrails_compartment_id: str = Field(
         default="",

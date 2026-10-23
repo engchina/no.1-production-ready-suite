@@ -1569,7 +1569,8 @@ export interface SearchDiagnostics {
   retrieval_strategy: string;
   /** "grounded"（回答）/ "retrieval_only"（検索だけ）/ "blocked"（安全チェックで止めた）。 */
   retrieval_strategy_adapter?: string;
-  guardrails_enabled?: boolean;
+  guardrails_input_enabled?: boolean;
+  guardrails_output_enabled?: boolean;
   guardrail_degraded?: boolean;
   filter_keys: string[];
   knowledge_base_count: number;
@@ -2575,14 +2576,16 @@ export interface KnowledgeBaseExtractionFieldsData {
 }
 
 export interface GuardrailSettingsData {
-  enabled: boolean;
+  input_enabled: boolean;
+  output_enabled: boolean;
   oci_configured: boolean;
   oci_warning_code: string | null;
   config_source: "runtime";
 }
 
 export interface GuardrailSettingsUpdate {
-  enabled: boolean;
+  input_enabled: boolean;
+  output_enabled: boolean;
 }
 
 // --- 設定: Vector Index アダプター ---

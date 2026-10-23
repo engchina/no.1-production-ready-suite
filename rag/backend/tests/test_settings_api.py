@@ -931,47 +931,70 @@ def test_update_chunking_settings_allows_fixed_delimiter_without_chunk_bounds(
     assert "RAG_CHUNK_DELIMITER=---" in env_file.read_text(encoding="utf-8")
 
 
-def test_guardrail_settings_exposes_only_oci_toggle(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "rag_guardrails_enabled", False)
+def test_guardrail_settings_exposes_independent_switches(monkeypatch: MonkeyPatch) -> None:
+    for side in ("input", "output"):
+        monkeypatch.setattr(get_settings(), f"rag_guardrails_{side}_enabled", False)
     body = client.get("/api/settings/guardrail").json()["data"]
-    assert body["enabled"] is False
-    assert set(body) == {"enabled", "oci_configured", "oci_warning_code", "config_source"}
+    assert body["input_enabled"] is False and body["output_enabled"] is False
+    assert set(body) == {
+        "input_enabled",
+        "output_enabled",
+        "oci_configured",
+        "oci_warning_code",
+        "config_source",
+    }
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-def test_guardrail_toggle_persists_env(
-    monkeypatch: MonkeyPatch, tmp_path: Path, enabled: bool
+@pytest.mark.parametrize("input_enabled", [True, False])
+@pytest.mark.parametrize("output_enabled", [True, False])
+def test_guardrail_switches_persist_env(
+    monkeypatch: MonkeyPatch, tmp_path: Path, input_enabled: bool, output_enabled: bool
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_guardrails_enabled", not enabled)
+    monkeypatch.setattr(settings, "rag_guardrails_input_enabled", not input_enabled)
+    monkeypatch.setattr(settings, "rag_guardrails_output_enabled", not output_enabled)
     monkeypatch.setattr(settings_routes, "_oci_guardrails_readiness_code", lambda _: None)
     env_file = _settings_env_file(monkeypatch, tmp_path)
-    response = client.patch("/api/settings/guardrail", json={"enabled": enabled})
+    body = {"input_enabled": input_enabled, "output_enabled": output_enabled}
+    response = client.patch("/api/settings/guardrail", json=body)
     assert response.status_code == 200
-    assert response.json()["data"]["enabled"] is enabled
-    assert settings.rag_guardrails_enabled is enabled
-    assert f"RAG_GUARDRAILS_ENABLED={str(enabled).lower()}" in env_file.read_text()
+    for side, enabled in (("input", input_enabled), ("output", output_enabled)):
+        assert response.json()["data"][f"{side}_enabled"] is enabled
+        assert getattr(settings, f"rag_guardrails_{side}_enabled") is enabled
+        assert (
+            f"RAG_GUARDRAILS_{side.upper()}_ENABLED={str(enabled).lower()}" in env_file.read_text()
+        )
 
 
-def test_guardrail_on_rejects_missing_oci_configuration(monkeypatch: MonkeyPatch) -> None:
+@pytest.mark.parametrize("side", ["input", "output"])
+def test_guardrail_on_rejects_missing_oci_configuration(
+    monkeypatch: MonkeyPatch, side: str
+) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_guardrails_enabled", False)
+    monkeypatch.setattr(settings, "rag_guardrails_input_enabled", False)
+    monkeypatch.setattr(settings, "rag_guardrails_output_enabled", False)
     monkeypatch.setattr(settings, "oci_guardrails_compartment_id", "")
     monkeypatch.setattr(settings, "oci_compartment_id", "")
-    response = client.patch("/api/settings/guardrail", json={"enabled": True})
-    assert response.status_code == 422
-    assert settings.rag_guardrails_enabled is False
+    body = {"input_enabled": False, "output_enabled": False, f"{side}_enabled": True}
+    assert client.patch("/api/settings/guardrail", json=body).status_code == 422
+    assert not settings.rag_guardrails_input_enabled and not settings.rag_guardrails_output_enabled
 
 
 def test_guardrail_off_does_not_require_oci_configuration(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(get_settings(), "rag_guardrails_enabled", True)
+    monkeypatch.setattr(get_settings(), "rag_guardrails_input_enabled", True)
+    monkeypatch.setattr(get_settings(), "rag_guardrails_output_enabled", True)
     monkeypatch.setattr(settings_routes, "_oci_guardrails_readiness_code", lambda _: "missing")
     _settings_env_file(monkeypatch, tmp_path)
-    response = client.patch("/api/settings/guardrail", json={"enabled": False})
+    response = client.patch(
+        "/api/settings/guardrail", json={"input_enabled": False, "output_enabled": False}
+    )
     assert response.status_code == 200
-    assert response.json()["data"]["enabled"] is False
+    assert (
+        not response.json()["data"]["input_enabled"]
+        and not response.json()["data"]["output_enabled"]
+    )
 
 
 def test_guardrail_rejects_removed_policy_and_backend() -> None:

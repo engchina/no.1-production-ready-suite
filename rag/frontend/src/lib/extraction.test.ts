@@ -188,3 +188,11 @@ describe("summarizeDocumentElements", () => {
     });
   });
 });
+
+
+it("表示用本文を元の分割用本文と独立に保持する", () => {
+  const parsed = parseStructuredExtraction({ raw_text: "a\n<<<JSONL_RECORD_BOUNDARY>>>\nb", display_text: "a\nb" });
+  expect(parsed.rawText).toContain("<<<JSONL_RECORD_BOUNDARY>>>");
+  expect(parsed.displayText).toBe("a\nb");
+  expect(parseStructuredExtraction({ raw_text: "本文" }).displayText).toBe("本文");
+});

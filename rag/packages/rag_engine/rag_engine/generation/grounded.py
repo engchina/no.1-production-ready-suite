@@ -1713,6 +1713,8 @@ def verify(
             )
         if (
             local["terms"]
+            # 根拠計画を通過した説明は質問の語が無い表も扱う。計画外は上で除外済み。
+            and not draft.request_coverage
             and entry.item.kind in {"operation", "confirmation"}
             and primary_document
             and _document_key(entry.span) != primary_document

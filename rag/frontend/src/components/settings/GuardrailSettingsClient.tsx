@@ -2,10 +2,10 @@
 
 import {
   PageBody, Card, CardContent, CardDescription, CardHeader, CardTitle,
-  FormActionBar, FormStatus, TimedLoadingState, FormSkeleton, ButtonLink,
+  Fieldset, FormActionBar, FormStatus, TimedLoadingState, FormSkeleton, ButtonLink,
 } from "@production-ready/ui";
 import { useState } from "react";
-import { CheckCircle2, RotateCcw, Save, ShieldCheck } from "lucide-react";
+import { RotateCcw, Save, ShieldCheck } from "lucide-react";
 
 import { ApiErrorState } from "@/components/StateViews";
 import { ApiError } from "@/lib/api";
@@ -15,16 +15,16 @@ import { t } from "@/lib/i18n";
 import { useGuardrailSettings, useUpdateGuardrailSettings } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
-import { cn } from "@/lib/utils";
+
 
 /** 全体の OCI Guardrails の有効・無効を管理する。 */
 export function GuardrailSettingsClient() {
   const query = useGuardrailSettings();
   const save = useUpdateGuardrailSettings();
-  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [selection, setSelection] = useState<{ input_enabled: boolean; output_enabled: boolean } | null>(null);
   const serverChanged = useValuesChanged([query.data]);
-  if (serverChanged && query.data) setEnabled(query.data.enabled);
-  const dirty = enabled !== null && query.data !== undefined && enabled !== query.data.enabled;
+  if (serverChanged && query.data) setSelection({ input_enabled: query.data.input_enabled, output_enabled: query.data.output_enabled });
+  const dirty = selection !== null && query.data !== undefined && (selection.input_enabled !== query.data.input_enabled || selection.output_enabled !== query.data.output_enabled);
   useLeaveGuard(dirty, save.isPending);
 
   if (query.isPending) return (
@@ -40,8 +40,8 @@ export function GuardrailSettingsClient() {
     </PageBody>
   );
   const settings = query.data;
-  if (!settings || enabled === null) return null;
-  const warning = enabled && !settings.oci_configured
+  if (!settings || selection === null) return null;
+  const warning = (selection.input_enabled || selection.output_enabled) && !settings.oci_configured
     ? t(settings.oci_warning_code === "oci_guardrails_compartment_missing"
       ? "settings.guardrail.ociWarning.compartmentMissing"
       : "settings.guardrail.ociWarning.credentialsInvalid")
@@ -62,61 +62,23 @@ export function GuardrailSettingsClient() {
           </div>
         </CardHeader>
         <CardContent className="space-y-5">
-          <div className="space-y-2">
-            <div className="text-sm font-medium text-fg" id="settings-guardrail-enabled-label">
-              {t("settings.guardrail.selection")}
+          <Fieldset legend={t("settings.guardrail.selection")}>
+            <div className="space-y-3">
+              {(["input", "output"] as const).map((side) => (
+                <div key={side}>
+                  <label className="flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-3 text-sm text-fg">
+                    <input type="checkbox" aria-label={t(`settings.guardrail.${side}`)}
+                      aria-describedby={`guardrail-${side}-description`}
+                      className="accent-accent-emphasis focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      checked={selection[`${side}_enabled`]} disabled={save.isPending}
+                      onChange={(event) => { save.reset(); setSelection({ ...selection, [`${side}_enabled`]: event.target.checked }); }} />
+                    {t(`settings.guardrail.${side}`)}
+                  </label>
+                  <p id={`guardrail-${side}-description`} className="mt-1 text-sm text-fg-muted">{t(`settings.guardrail.${side}.description`)}</p>
+                </div>
+              ))}
             </div>
-            <div
-              role="radiogroup"
-              aria-labelledby="settings-guardrail-enabled-label"
-              className="grid grid-cols-1 gap-2 md:grid-cols-2"
-            >
-              {[false, true].map((value) => {
-                const selected = enabled === value;
-                return (
-                  <div key={String(value)} className="relative min-w-0">
-                    <input
-                      id={`settings-guardrail-enabled-${String(value)}`}
-                      className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-                      type="radio"
-                      name="settings-guardrail-enabled"
-                      value={String(value)}
-                      checked={selected}
-                      disabled={save.isPending}
-                      onChange={() => { save.reset(); setEnabled(value); }}
-                    />
-                    <label
-                      data-surface-tint={selected ? "accent" : undefined}
-                      htmlFor={`settings-guardrail-enabled-${String(value)}`}
-                      className={cn(
-                        "block h-full cursor-pointer rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
-                        selected
-                          ? "border-accent-emphasis bg-accent-subtle text-fg"
-                          : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
-                      )}
-                    >
-                      <span className="flex items-center justify-between gap-2">
-                        <span className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-semibold">{t(value ? "settings.guardrail.enabled" : "settings.guardrail.disabled")}</span>
-                          {!value ? (
-                            <span className="inline-flex min-h-5 items-center rounded border border-border px-1.5 text-xs text-fg-muted">
-                              {t("settings.guardrail.defaultTag")}
-                            </span>
-                          ) : null}
-                        </span>
-                        {selected ? (
-                          <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
-                        ) : null}
-                      </span>
-                      <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
-                        {t(value ? "settings.guardrail.enabled.description" : "settings.guardrail.disabled.description")}
-                      </span>
-                    </label>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          </Fieldset>
           <p className="text-sm leading-relaxed text-fg-muted">{t("settings.guardrail.resultHandling")}</p>
           <p>
             <a href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/guardrails.htm" target="_blank" rel="noopener noreferrer" className="text-sm text-accent-fg underline underline-offset-2">
@@ -132,10 +94,10 @@ export function GuardrailSettingsClient() {
           ) : null}
           <FormActionBar ariaLabel={t("settings.guardrail.actions.label")}
             primaryActions={[{ id: "save", label: t("settings.guardrail.actions.save"), icon: Save, loading: save.isPending, disabled: !dirty,
-              onClick: () => save.mutate({ enabled }, { onSuccess: (data) => { setEnabled(data.enabled); toast.success(t("settings.guardrail.actions.saved")); } }),
+              onClick: () => save.mutate(selection, { onSuccess: (data) => { setSelection({ input_enabled: data.input_enabled, output_enabled: data.output_enabled }); toast.success(t("settings.guardrail.actions.saved")); } }),
             }]}
             secondaryActions={[{ id: "reset", label: t("settings.guardrail.actions.reset"), icon: RotateCcw, disabled: !dirty || save.isPending,
-              onClick: () => { save.reset(); setEnabled(settings.enabled); },
+              onClick: () => { save.reset(); setSelection({ input_enabled: settings.input_enabled, output_enabled: settings.output_enabled }); },
             }]}
             status={save.isError ? <FormStatus tone="danger" message={save.error instanceof ApiError ? save.error.message : t("settings.guardrail.saveError")} />
               : dirty ? <FormStatus tone="warning" message={t("settings.guardrail.actions.unsaved")} /> : null}

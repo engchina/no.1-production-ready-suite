@@ -526,7 +526,8 @@ def test_build_history_takes_first_assistant_per_turn() -> None:
             messages,
             GuardrailPolicy(
                 Settings(
-                    rag_guardrails_enabled=False,
+                    rag_guardrails_input_enabled=False,
+                    rag_guardrails_output_enabled=False,
                     rag_guardrail_service_enabled=False,
                 )
             ),
@@ -1119,7 +1120,8 @@ def test_safe_history_skips_blocked_turn_and_sanitizes_legacy_content(
             messages,
             GuardrailPolicy(
                 Settings(
-                    rag_guardrails_enabled=True,
+                    rag_guardrails_input_enabled=True,
+                    rag_guardrails_output_enabled=True,
                     rag_guardrail_service_enabled=False,
                 )
             ),

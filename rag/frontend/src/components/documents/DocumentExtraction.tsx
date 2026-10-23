@@ -62,8 +62,8 @@ const KIND_LABELS: Record<string, Parameters<typeof t>[0]> = {
 
 /** RAG 取込で得た本文テキストを表示する。 */
 export function DocumentRawText({ extraction }: { extraction: Record<string, unknown> }) {
-  const { rawText } = parseStructuredExtraction(extraction);
-  if (!rawText) {
+  const { displayText } = parseStructuredExtraction(extraction);
+  if (!displayText) {
     return <p className="text-sm text-fg-muted">{t("flow.extraction.noRawText")}</p>;
   }
 
@@ -73,9 +73,9 @@ export function DocumentRawText({ extraction }: { extraction: Record<string, unk
         <h4 className="text-sm font-semibold text-fg">
           {t("flow.extraction.rawText")}
         </h4>
-        <CopyRawTextButton text={rawText} />
+        <CopyRawTextButton text={displayText} />
       </div>
-      <ExtractedText text={rawText} />
+      <ExtractedText text={displayText} />
     </section>
   );
 }

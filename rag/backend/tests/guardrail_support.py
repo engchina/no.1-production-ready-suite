@@ -26,5 +26,6 @@ class RecordedGuardrails:
 
 
 def enable_oci_stub(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "rag_guardrails_enabled", True)
+    monkeypatch.setattr(get_settings(), "rag_guardrails_input_enabled", True)
+    monkeypatch.setattr(get_settings(), "rag_guardrails_output_enabled", True)
     monkeypatch.setattr(guardrails, "OciGuardrailsClient", lambda settings: RecordedGuardrails())

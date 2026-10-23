@@ -30,7 +30,7 @@ from fastapi import (
 )
 from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
 from pr_backend_core.oracle_errors import oracle_error_codes
-from rag_parser_core.structured_records import RecordBoundaryError
+from rag_parser_core.structured_records import RecordBoundaryError, record_boundary_plain_text
 
 from app.api.errors import DocumentFileMissingError
 from app.clients.document_cleanup_store import DocumentCleanupStore, DocumentCleanupTargets
@@ -4777,7 +4777,7 @@ def _extraction_markdown(extraction: StructuredExtraction) -> str:
     lines: list[str] = []
     current_page: int | None = None
     if not extraction.elements and extraction.raw_text:
-        lines.append(extraction.raw_text)
+        lines.append(record_boundary_plain_text(extraction))
     for element in sorted(extraction.elements, key=lambda item: item.order):
         if element.page_number is not None and element.page_number != current_page:
             current_page = element.page_number
@@ -4800,7 +4800,7 @@ def _extraction_markdown(extraction: StructuredExtraction) -> str:
             if lines and lines[-1] != "":
                 lines.append("")
             lines.append(rendered)
-    return "\n".join(lines).strip() or extraction.raw_text
+    return "\n".join(lines).strip() or record_boundary_plain_text(extraction)
 
 
 def _element_markdown(element: DocumentElement) -> str:
@@ -4844,12 +4844,12 @@ def _extraction_html(extraction: StructuredExtraction) -> str:
     title = escape(extraction.document_type or "ドキュメント")
     tables_by_element_id = _tables_by_element_id(extraction)
     if not extraction.elements and not extraction.assets:
-        body = _html_text_block(extraction.raw_text)
+        body = _html_text_block(record_boundary_plain_text(extraction))
         return f'<article data-document-type="{title}">\n{body}\n</article>'
     lines = [f'<article data-document-type="{title}">']
     current_page: int | None = None
     if not extraction.elements and extraction.raw_text:
-        lines.append(_html_text_block(extraction.raw_text))
+        lines.append(_html_text_block(record_boundary_plain_text(extraction)))
     for element in sorted(extraction.elements, key=lambda item: item.order):
         if element.page_number is not None and element.page_number != current_page:
             current_page = element.page_number

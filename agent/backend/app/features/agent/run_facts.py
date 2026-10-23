@@ -200,8 +200,13 @@ def run_validation_result(run: RunState) -> str | None:
 
 
 def run_tool_failures(run: RunState) -> int:
-    """失敗したツールの呼び出し（step）の数。"""
-    return sum(1 for step in run.steps if step.status == StepStatus.FAILED)
+    """失敗した呼出しと、呼出し前に停止した必須 MCP 接続の取得失敗。"""
+    discovery_failed = any(
+        event.type == RunEventType.RUNTIME_FAILED
+        and event.payload.get("error_code") == "runtime.mcp_unavailable"
+        for event in run.events
+    )
+    return sum(1 for step in run.steps if step.status == StepStatus.FAILED) + int(discovery_failed)
 
 
 def run_approvals_rejected(run: RunState) -> int:

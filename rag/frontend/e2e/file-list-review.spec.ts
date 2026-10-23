@@ -484,7 +484,7 @@ async function mockFileListApi(
       const reasons = new Map<string, { outcome: string; reason: string; count: number; message: string | null }>();
       for (const item of items) {
         if (!item.reason) continue;
-        const key = `${item.outcome}:${item.reason}`;
+        const key = `${item.outcome}:${item.reason}:${item.message ?? ""}`;
         const entry = reasons.get(key);
         if (entry) entry.count += 1;
         else reasons.set(key, { outcome: item.outcome, reason: item.reason, count: 1, message: item.message });
@@ -687,3 +687,21 @@ test("削除は 30 秒を超える応答を待ち、未確認なら選択を残�
   await expectNoPageOverflow(page);
   await page.screenshot({path: testInfo.outputPath("delete-unconfirmed.png"), fullPage: true});
 });
+
+
+for (const width of [1280, 375]) {
+  test(`混在形式の受付不可理由を形式ごとに表示する (${width}px)`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockFileListApi(page, [documentSummary("doc-a", "input.xlsx", "UPLOADED"), documentSummary("doc-b", "input.md", "UPLOADED")], {
+      onBulkItem: id => bulkItem(id, "rejected", "parser_unsupported_source", id === "doc-a" ? "Excel 形式は別の解析エンジンを選んでください。" : "Markdown 形式は別の解析エンジンを選んでください。"),
+    });
+    await page.goto("/file-list");
+    await page.getByRole("checkbox", { name: "すべて選択" }).check();
+    await page.getByRole("button", { name: "一括投入 (2)" }).click();
+    const result = page.getByTestId("file-list-bulk-ingest-result");
+    await expect(result).toContainText("Excel 形式は別の解析エンジンを選んでください。");
+    await expect(result).toContainText("Markdown 形式は別の解析エンジンを選んでください。");
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath("bulk-mixed-reasons.png"), fullPage: true });
+  });
+}

@@ -161,7 +161,9 @@ def test_actual_oci_failure_does_not_claim_local_inspection_or_masking(
 
     monkeypatch.setattr(OciGuardrailsClient, "inspect_text", fail)
     answer = "合成の正常な回答"
-    result = GuardrailPolicy(Settings(rag_guardrails_enabled=True)).validate_answer(answer)
+    result = GuardrailPolicy(
+        Settings(rag_guardrails_input_enabled=True, rag_guardrails_output_enabled=True)
+    ).validate_answer(answer)
     details = answer_guardrail_details(result, answer)
     assert result.backend_degraded and not result.allowed
     assert details is not None

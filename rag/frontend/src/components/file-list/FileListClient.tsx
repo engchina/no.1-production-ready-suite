@@ -907,7 +907,7 @@ function BulkIngestResultBanner({
         {result.reasons.length > 0 ? (
           <ul className="mt-1 list-disc space-y-0.5 pl-5">
             {orderedBulkReasons(result.reasons).map((entry) => (
-              <li key={`${entry.outcome}:${entry.reason}`}>
+              <li key={`${entry.outcome}:${entry.reason}:${entry.message ?? ""}`}>
                 {t("fileList.bulkQueue.result.reason", {
                   outcome: t(BULK_OUTCOME_KEYS[entry.outcome]),
                   label: bulkReasonLabel(entry),

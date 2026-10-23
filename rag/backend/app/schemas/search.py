@@ -379,7 +379,8 @@ class SearchDiagnostics(BaseModel):
     # grounded(根拠付き回答)/ retrieval_only(検索だけ)/ blocked(質問の安全チェック)
     retrieval_strategy_adapter: str = "grounded"
     answer: dict[str, JsonValue] | None = None
-    guardrails_enabled: bool = False
+    guardrails_input_enabled: bool = False
+    guardrails_output_enabled: bool = False
     guardrail_degraded: bool = False
     filter_keys: list[str] = Field(default_factory=list)
     knowledge_base_count: int = 0

@@ -835,6 +835,11 @@ def discover_mcp_tools(
                 f"MCP 接続「{config.label or server_id}」のツールを取得できません: {exc}"
             )
             continue
+        available = {tool.name for tool in listed.tools}
+        if not available or (allowed is not None and not set(allowed).issubset(available)):
+            warnings.append(
+                f"MCP 接続「{config.label or server_id}」の必須ツールを取得できません。"
+            )
         for tool in listed.tools:
             if allowed is not None and tool.name not in allowed:
                 continue
@@ -2303,6 +2308,12 @@ def build_sdk_agent(
     )
     for warning in warnings:
         runtime_repository.note_builtin_warning(run_id, warning)
+    if warnings:
+        # 必須の接続が一部でも使えなければ、欠けたツールのまま回答させない。
+        raise BuiltinRuntimeError(
+            "runtime.mcp_unavailable",
+            "必要な MCP 接続を利用できません。" + "\n" + "\n".join(warnings),
+        )
     output_entries = [record_output_tool(run_id, output_fields)] if output_fields else []
     # ツールの表示名（MCP の `title`）は、画面の処理の段階の名前に使う（モデルには渡さない）。
     runtime_repository.note_builtin_tool_titles(
@@ -3023,6 +3034,13 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
         pinned = use_pinned_skills(agent.pinned_skills)
         result: Any = None
         try:
+            if decisions and not any(decisions.values()):
+                runtime_repository.complete_builtin_run(
+                    run_id,
+                    "承認が却下されたため、対象の処理は実行していません。",
+                    outcome=tool_grounding.refusal_outcome(declined=True),
+                )
+                return
             task = _support_task_run(run, agent)
             # 取り消しは実行の始めに済んでいる（session も閉じた）。記録だけを使う。
             cancellations = _run_cancellations(run)
@@ -3047,6 +3065,10 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                 output_fields=agent.output_fields,
                 caller_planning=agent.caller_planning_allowed,
             )
+            rejected = not all(decisions.values())
+            if rejected:
+                # 承認済みの同時呼出しだけを実行し、却下を再提案するモデルのターンを作らない。
+                sdk_agent.tool_use_behavior = "stop_on_first_tool"
             state = await RunState.from_string(sdk_agent, state_text)
             for item in state.get_interruptions():
                 call_id = str(getattr(item, "call_id", "") or "")
@@ -3055,6 +3077,14 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                 else:
                     state.reject(item)
             result = await _run_sdk(run_id, sdk_agent, state)
+            if rejected:
+                _record_usage(run_id, result, agent.model_id)
+                runtime_repository.complete_builtin_run(
+                    run_id,
+                    "却下された処理は実行していません。承認された処理の結果は実行の経過で確認してください。",
+                    outcome=tool_grounding.refusal_outcome(declined=True),
+                )
+                return
             result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
             result, refused = await _require_tool_grounding(
                 run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)

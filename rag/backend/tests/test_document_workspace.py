@@ -4118,3 +4118,26 @@ def test_document_content_does_not_sandbox_plain_text() -> None:
 
     assert resp.status_code == 200
     assert "content-security-policy" not in resp.headers
+
+
+def test_record_boundaries_are_hidden_in_review_and_exports() -> None:
+    from rag_parser_core.structured_records import (
+        JSONL_RECORD_BOUNDARY,
+        STRUCTURED_RECORDS_BOUNDARY_ARTIFACT_KEY,
+        join_record_boundary_text,
+    )
+
+    original = ["id: row-a\nvalue: 10", "id: row-b\nvalue: 20"]
+    raw = join_record_boundary_text(original)
+    extraction = StructuredExtraction(
+        raw_text=raw,
+        parser_artifacts={STRUCTURED_RECORDS_BOUNDARY_ARTIFACT_KEY: JSONL_RECORD_BOUNDARY},
+    )
+    assert extraction.to_document_payload()["display_text"] == "\n".join(original)
+    assert extraction.raw_text == raw
+    # 要素が無い場合の表示も同じ復元を使う。
+    extraction.elements = []
+    assert JSONL_RECORD_BOUNDARY not in documents_route._extraction_markdown(extraction)
+    assert JSONL_RECORD_BOUNDARY not in documents_route._extraction_html(extraction)
+    literal = StructuredExtraction(raw_text=f"原文の記号: {JSONL_RECORD_BOUNDARY}")
+    assert JSONL_RECORD_BOUNDARY in literal.to_document_payload()["display_text"]
