@@ -1,4 +1,4 @@
-"""関係情報の構築プロファイルの決定論解決(backend / サービス共有)。
+"""関係情報の構築プロファイルの決定論解決(backend の中で使う)。
 
 profile(off/entities)→ 構築フラグを決定論で解決する。entities は文書と章・節の見出しの
 つながり(entity + relationship)を作る。claims / community summary まで作る full は、読む経路が

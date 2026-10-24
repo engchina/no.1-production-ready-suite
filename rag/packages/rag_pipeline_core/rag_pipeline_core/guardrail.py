@@ -1,4 +1,4 @@
-"""Guardrail ポリシーの決定論解決(backend / サービス共有)。
+"""Guardrail ポリシーの決定論解決(backend の中で使う)。
 
 policy → groundedness 厳格度(min_overlap / min_ratio)+ audit_emphasis を決定論で解決する。
 NeMo Guardrails 的な strict/regulated は「より厳しい groundedness + 監査強調」へ再マップ済み。

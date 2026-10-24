@@ -30,8 +30,6 @@ logger = logging.getLogger(__name__)
 #   unit の外のプロセスが同じポートで応答しているときは、その /health の状態を返す
 # - not_installed: systemd の unit が登録されていない(配備で選ばなかったサービスなど)
 # - unconfigured: URL 未設定
-# - in_process: deployable=False のステージ。backend 内処理で動作し、サービス化は将来対応
-#   (/health も systemctl も叩かず固定で返す)。
 ServiceRuntimeStatus = Literal[
     "running",
     "degraded",
@@ -40,7 +38,6 @@ ServiceRuntimeStatus = Literal[
     "stopped",
     "not_installed",
     "unconfigured",
-    "in_process",
 ]
 HealthStatus = Literal["ok", "degraded", "unreachable"]
 _ACTIVE_STATES = {"active", "reloading", "activating"}  # unit が動いている(起動中を含む)
@@ -75,9 +72,6 @@ async def probe_service_status(
     settings: Settings, entry: ServiceCatalogEntry
 ) -> ServiceRuntimeStatus:
     """1 サービスの unit の状態と /health を問い合わせて稼働状態を返す。"""
-    # deployable=False は backend 内処理で動作するため、固定で in_process を返す。
-    if not entry.deployable:
-        return "in_process"
     url = service_health_url(settings, entry)
     if not url:
         return "unconfigured"

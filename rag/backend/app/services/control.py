@@ -237,21 +237,11 @@ def write_service_runtime_env(settings: Settings) -> Path:
     return path
 
 
-def _unit_of(entry: ServiceCatalogEntry) -> str:
-    unit = entry.systemd_unit
-    if unit is None:
-        raise _UnitError(
-            f"{entry.service_id} は backend 内処理で動作します(systemd の unit はありません)。",
-            "failed",
-        )
-    return unit
-
-
 async def read_unit_state(settings: Settings, entry: ServiceCatalogEntry) -> UnitState:
     """``systemctl show`` で unit の状態を読む(失敗は ``_UnitError``)。"""
     timeout = float(settings.rag_service_control_timeout_seconds)
     try:
-        output = await run_command(systemctl_show_argv(_unit_of(entry)), timeout)
+        output = await run_command(systemctl_show_argv(entry.systemd_unit), timeout)
     except CommandUnavailableError as exc:
         raise _UnitError(systemd_unavailable_message(str(exc)), "unavailable") from exc
     if output.returncode != 0:
@@ -266,7 +256,7 @@ async def read_unit_state(settings: Settings, entry: ServiceCatalogEntry) -> Uni
 
 
 async def _require_installed_unit(settings: Settings, entry: ServiceCatalogEntry) -> str:
-    unit = _unit_of(entry)
+    unit = entry.systemd_unit
     state = await read_unit_state(settings, entry)
     if not state.installed:
         raise _UnitError(unit_not_found_message(entry), "unit_not_found")

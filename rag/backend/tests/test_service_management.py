@@ -81,9 +81,9 @@ def test_catalog_ids_unique_and_url_fields_resolve() -> None:
 
 def test_catalog_covers_preprocess_and_parser_without_gpu() -> None:
     categories = {entry.category for entry in SERVICE_CATALOG}
-    # 文書分割は backend 内だけで実行し、独立サービスのカテゴリには含めない。
-    assert {"preprocess", "parser", "vector_index"} <= categories
-    assert "chunking" not in categories
+    # 文書分割・検索インデックス・関係情報の構築・安全チェック・評価の基準は backend 内だけで
+    # 実行し、独立サービスのカテゴリには含めない(#3218)。
+    assert categories == {"preprocess", "parser"}
     # GPU のサービスは持たない(ASR は削除した。#2042)。
     gpu_ids = {entry.service_id for entry in SERVICE_CATALOG if entry.profile == "gpu"}
     assert gpu_ids == set()
@@ -105,26 +105,29 @@ def test_catalog_covers_preprocess_and_parser_without_gpu() -> None:
 
 def test_catalog_execution_policies_mark_fallback_boundaries() -> None:
     by_id = {entry.service_id: entry for entry in SERVICE_CATALOG}
-    assert by_id["pipeline-guardrail"].execution_policy == "in_process_when_disabled"
     assert by_id["parser-docling"].execution_policy == "selected_adapter"
     assert by_id["preprocess-office-to-pdf"].execution_policy == "selected_adapter"
 
 
-# サービス化が未成熟な純 CPU 段。UI/API のデプロイ操作を出さず backend 内処理で動作する。
-_DEMOTED_STAGE_IDS = {
-    "pipeline-vector-index",
-    "pipeline-graphrag",
-    "pipeline-guardrail",
-    "pipeline-evaluation",
-}
+def test_catalog_has_no_backend_internal_stages() -> None:
+    """backend の中で動く段はサービスを持たない(サービスの実装も無い)。
 
-
-def test_catalog_has_no_removed_standard_engine_stages() -> None:
-    """旧 standard の回答エンジンだけのステージは #595 で削除した(サービスの実装も無い)。"""
+    旧 standard の回答エンジンだけのステージは #595、検索インデックス・関係情報の構築・
+    安全チェック・評価の基準の段は #3218 で削除した。
+    """
     ids = {entry.service_id for entry in SERVICE_CATALOG}
-    for stage in ("retrieval", "grounding", "agentic", "generation"):
+    for stage in (
+        "retrieval",
+        "grounding",
+        "agentic",
+        "generation",
+        "vector-index",
+        "graphrag",
+        "guardrail",
+        "evaluation",
+    ):
         assert f"pipeline-{stage}" not in ids
-        assert not (RAG_ROOT / "services" / "pipeline" / stage).exists()
+        assert not (RAG_ROOT / "services" / "pipeline" / stage.replace("-", "_")).exists()
 
 
 def test_catalog_is_ordered_by_service_category() -> None:
@@ -134,17 +137,6 @@ def test_catalog_is_ordered_by_service_category() -> None:
     assert set(categories) == set(order)
     positions = [order.index(category) for category in categories]
     assert positions == sorted(positions)
-
-
-def test_catalog_deployable_marks_future_service_stages() -> None:
-    by_id = {entry.service_id: entry for entry in SERVICE_CATALOG}
-    # 格下げ 4 段は deployable=False かつ backend 内処理(in_process_when_disabled)。
-    for sid in _DEMOTED_STAGE_IDS:
-        assert by_id[sid].deployable is False, sid
-        assert by_id[sid].execution_policy == "in_process_when_disabled", sid
-    # サービス維持: parser/preprocess 代表。
-    assert by_id["parser-docling"].deployable is True
-    assert by_id["preprocess-office-to-pdf"].deployable is True
 
 
 def test_model_cache_path_set_only_for_model_downloading_parsers() -> None:
@@ -184,15 +176,10 @@ def test_service_url_defaults_point_to_native_localhost_ports() -> None:
         assert entry.default_url == f"http://127.0.0.1:{entry.port}"
 
 
-def test_catalog_systemd_units_cover_only_deployable_services() -> None:
+def test_catalog_systemd_units_cover_catalog_services() -> None:
     for entry in SERVICE_CATALOG:
-        if entry.deployable:
-            assert entry.systemd_unit == f"{SYSTEMD_UNIT_PREFIX}{entry.service_id}.service"
-        else:
-            assert entry.systemd_unit is None
-    assert {
-        entry.systemd_unit for entry in SERVICE_CATALOG if entry.deployable
-    } == ALLOWED_SYSTEMD_UNITS
+        assert entry.systemd_unit == f"{SYSTEMD_UNIT_PREFIX}{entry.service_id}.service"
+    assert {entry.systemd_unit for entry in SERVICE_CATALOG} == ALLOWED_SYSTEMD_UNITS
     assert DOCLING_UNIT in ALLOWED_SYSTEMD_UNITS
     # backend / ingestion-worker の unit は画面から操作させない。
     assert "production-ready-rag-backend.service" not in ALLOWED_SYSTEMD_UNITS
@@ -866,19 +853,6 @@ def test_probe_unconfigured_when_url_blank(
     assert statuses["parser-docling"] == "unconfigured"
 
 
-def test_probe_non_deployable_returns_in_process_without_probe(
-    monkeypatch: MonkeyPatch, fake_http: type[_FakeAsyncClient]
-) -> None:
-    fake = _FakeSystemd().install(monkeypatch)
-    entry = get_catalog_entry("pipeline-vector-index")
-    assert entry is not None and entry.deployable is False
-    status = asyncio.run(probe_service_status(get_settings(), entry))
-    # backend 内処理の段は /health も systemctl も叩かず固定で in_process を返す。
-    assert status == "in_process"
-    assert fake_http.calls == []
-    assert fake.calls == []
-
-
 # --- API ----------------------------------------------------------------------
 
 
@@ -895,10 +869,8 @@ def test_list_service_catalog_returns_catalog_prod(monkeypatch: MonkeyPatch) -> 
     assert {s["service_id"] for s in data["services"]} == {e.service_id for e in SERVICE_CATALOG}
     docling = next(s for s in data["services"] if s["service_id"] == "parser-docling")
     assert docling["systemd_unit"] == DOCLING_UNIT
-    vector_index = next(s for s in data["services"] if s["service_id"] == "pipeline-vector-index")
-    assert vector_index["execution_policy"] == "in_process_when_disabled"
-    assert vector_index["deployable"] is False
-    assert vector_index["systemd_unit"] is None
+    assert all(s["systemd_unit"] for s in data["services"])
+    assert all("deployable" not in s for s in data["services"])
 
 
 def test_list_service_catalog_exposes_model_cache_path() -> None:
@@ -908,8 +880,8 @@ def test_list_service_catalog_exposes_model_cache_path() -> None:
         "path": str(Path("~/.cache").expanduser()),
         "editable": False,
     }
-    vector_index = next(s for s in data["services"] if s["service_id"] == "pipeline-vector-index")
-    assert vector_index["model_cache"] is None
+    unstructured = next(s for s in data["services"] if s["service_id"] == "parser-unstructured")
+    assert unstructured["model_cache"] is None
 
 
 def test_list_service_catalog_dev_auto_enables_control(monkeypatch: MonkeyPatch) -> None:
@@ -1012,16 +984,10 @@ def test_control_unknown_service_is_404(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "rag_service_control_enabled", True)
     fake = _FakeSystemd().install(monkeypatch)
     assert client.post("/api/services/pipeline-chunking/start").status_code == 404
+    # backend の中で動く段はサービスを持たない(#3218)。
+    assert client.post("/api/services/pipeline-vector-index/start").status_code == 404
     assert client.post("/api/services/unknown-service/stop").status_code == 404
     assert client.post("/api/services/sshd/stop").status_code == 404
-    assert fake.calls == []
-
-
-def test_control_rejects_non_deployable_stage(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "dev")  # dev は制御自動有効
-    fake = _FakeSystemd().install(monkeypatch)
-    assert client.post("/api/services/pipeline-vector-index/start").status_code == 409
     assert fake.calls == []
 
 

@@ -14,7 +14,6 @@ from app.clients.object_storage import ObjectStorageClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.clients.parser_service import ParserServiceClient
-from app.clients.pipeline_stage import PipelineStageClient
 from app.config import Settings, get_settings
 from app.main import app
 from app.rag.ingestion import INGESTION_INTERNAL_ERROR_MESSAGE, IngestionPipeline
@@ -1274,12 +1273,7 @@ def test_ingest_chunks_locally_without_http_delegation(
         calls.append(args)
         return original_chunking(*args, **kwargs)
 
-    def reject_chunking_http(self: PipelineStageClient, stage: str, payload: str) -> None:
-        assert stage != "chunking", "文書分割を HTTP に委譲しない"
-        return None
-
     monkeypatch.setattr(ingestion, "chunk_extraction_with_strategy", local_chunking)
-    monkeypatch.setattr(PipelineStageClient, "_post_run", reject_chunking_http)
     upload_resp = client.post(
         "/api/documents/upload",
         files={"file": ("local-chunking.txt", b"chunk target text", "text/plain")},

@@ -1,9 +1,7 @@
 """関係情報の構築アダプター(構築する / しない)。
 
-決定論ロジックは共有パッケージ ``rag_pipeline_core.graph`` を単一ソースとして使い、backend と
-graphrag マイクロサービスが同一結果を返す。`rag_graph_service_enabled` が真のとき profile 解決を
-pipeline-graphrag サービスへ委譲する。無効時は in-process(同一ロジック)、有効時の
-未到達時も in-process へ縮退する。応答済み remote の HTTP error / 不正応答は処理停止する。
+決定論ロジックは共有パッケージ ``rag_pipeline_core.graph`` を単一ソースとして使い、backend の中で
+解決する(サービスへは委譲しない。#3218)。
 
 - ``off``(既定): 構築しない。
 - ``entities``: 文書と章・節の見出しのつながり(entity + relationship)を構築する。LLM は使わない
@@ -63,37 +61,12 @@ def normalize_graph_profile(value: object) -> GraphProfileName:
 
 
 def resolve_graph_adapter(settings: Settings) -> GraphAdapterParams:
-    """Settings から関係情報の構築の解決済みパラメータを作る。
-
-    `rag_graph_service_enabled` のときは pipeline-graphrag サービスへ委譲する。
-    無効時と remote 未到達時は in-process(同一 rag_pipeline_core ロジック)へ縮退する。
-    """
+    """Settings から関係情報の構築の解決済みパラメータを作る。"""
     profile = normalize_graph_profile(getattr(settings, "rag_graph_profile", DEFAULT_GRAPH_PROFILE))
-    remote = _resolve_remote(settings, profile)
-    if remote is not None:
-        return remote
     resolved = resolve_graph_profile(profile)
     return GraphAdapterParams(
         profile=normalize_graph_profile(resolved.profile),
         enabled=resolved.build_entities,
-    )
-
-
-def _resolve_remote(settings: Settings, profile: str) -> GraphAdapterParams | None:
-    """サービス委譲が有効なら remote 解決する(未達/無効は None)。"""
-    from rag_pipeline_core.stage import GraphStageRequest
-
-    from app.clients.pipeline_stage import PipelineStageClient
-
-    client = PipelineStageClient(settings)
-    if not client.is_enabled("graphrag"):
-        return None
-    response = client.run_graph(GraphStageRequest(profile=profile))
-    if response is None:
-        return None
-    return GraphAdapterParams(
-        profile=normalize_graph_profile(response.profile),
-        enabled=response.build_entities,
     )
 
 
