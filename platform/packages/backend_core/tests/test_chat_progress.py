@@ -551,3 +551,20 @@ def test_record_span_turns_trace_into_progress_events() -> None:
     events = parse_chat_progress_events(dump_chat_progress_events(recorder.events))
     assert any(getattr(event, "parent_id", None) == summary.root_span_id for event in events)
     assert events[-1].type == "terminal"
+
+
+def test_complete_cancelled_marks_running_spans_as_cancelled() -> None:
+    """停止の終端は、開いていた span の段を「停止」（skipped と cancelled）で閉じる（#3226）。"""
+    from pr_backend_core.chat_progress import ChatProgressRecorder
+    from pr_backend_core.observability.tracing import observed_span, operation_trace
+
+    recorder = ChatProgressRecorder("target-b")
+    with (
+        operation_trace("task", operation_id="target-b", listener=recorder.record_span),
+        observed_span("stage", finish_on_exit=False),
+    ):
+        recorder.complete("cancelled")
+    stage = next(step for step in recorder.steps() if step.span and step.span["name"] == "stage")
+    assert stage.status == "skipped"
+    assert stage.span is not None and stage.span["cancelled"] is True
+    assert recorder.terminal == "cancelled"
