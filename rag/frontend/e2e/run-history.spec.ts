@@ -561,15 +561,18 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     ]);
 
     await page.goto("/history/run-2");
-    await expect(page.getByTestId("run-history-summary")).toContainText("回答なし（検索のみ）");
+    const summary = page.getByTestId("run-history-summary");
+    await expect(summary).toBeVisible();
+    await expect(summary.locator('[data-run-fact="kind"] dd')).toHaveText("RAG 検索");
+    await expect(summary.locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);
     await expect(page.getByTestId("run-history-answer")).toHaveCount(0);
     await expect(page.getByTestId("run-history-citations")).toContainText("受注マニュアル.pdf");
     // 会話の無い実行には会話への導線を出さない。
     await expect(page.getByTestId("run-history-open-chat")).toHaveCount(0);
 
     await page.goto("/history/run-4");
-    const summary = page.getByTestId("run-history-summary");
-    await expect(summary.locator('[data-run-status="failed"]')).toBeVisible();
+    await expect(summary).toBeVisible();
+    await expect(summary.locator("[data-run-status]")).toHaveCount(0);
     // 失敗は共通の失敗のカード: 止まった段を含む 1 文目・次の操作・開いた「詳細」（#2342）。
     const failure = summary.getByTestId("run-history-failure");
     await expect(failure.getByRole("alert")).toContainText("「検索」で処理が止まりました。");
