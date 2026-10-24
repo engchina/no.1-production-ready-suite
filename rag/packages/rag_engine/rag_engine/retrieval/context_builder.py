@@ -16,6 +16,7 @@ from rag_engine.parsing.decorative_pictures import (
     visual_role_from_ref,
 )
 from rag_engine.retrieval.article_catalog import is_added_catalog_article, is_catalog_article
+from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
 from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.evidence_selection import evidence_relevance
@@ -216,6 +217,7 @@ class ContextBuildRequest:
     max_anchors_per_parent: int = MAX_ANCHORS_PER_PARENT
     # 条の目録で選んだ条（#2254）の起点と親を、上の起点の数（top_k）と親の数（max_records）の外に足す数。
     # 選んだ条は起点に数えず、検索の根拠の親を減らさない。0 は足さない（選んだ条も他の候補と同じに扱う）。
+    # 会話の添付の箇所（#3212）も同じく起点・親の数の外にすべて足す（数の上限は backend が選ぶ箇所の数）。
     catalog_records: int = 0
 
 
@@ -323,7 +325,12 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
     catalog_limit = max(0, int(request.catalog_records or 0))
     # 目録で選んだ条（#2254）は、検索の根拠の起点と親を決めた後に足す（検索の根拠の選び方を変えない）。
     catalog_children: list[tuple[int, Any]] = []
+    # 会話の添付の箇所（#3212）は、rerank の順位に関わらず起点・親を決めた後に足す。利用者が明示した入力だが、
+    # 質問の文と表の行の rerank の関連度は低く出やすく、順位で起点を取ると `top_k` の外に落ちる。
+    attachment_children = [(rank, child) for rank, child in enumerate(ranked_children, start=1) if is_attachment_evidence(child)]
     for retrieval_rank, child in enumerate(ranked_children, start=1):
+        if is_attachment_evidence(child):
+            continue
         catalog = catalog_limit > 0 and is_catalog_article(child)
         # 加えた条は検索の根拠の起点に数えない。検索の候補にあった条は今までどおり起点になり、枠の外に出たときだけ足す。
         if catalog and (is_added_catalog_article(child) or anchor_count >= top_k):
@@ -452,16 +459,20 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         support.append(neighbor)
         selected_ids.add(key)
     selected = primary + support
-    # 目録で選んだ条（#2254）: 親が選んだ親にあれば起点として添え、無ければ親を親の数の外に足す。
+    # 目録で選んだ条（#2254）と会話の添付（#3212）: 親が選んだ親にあれば起点として添え、無ければ親を親の数の外に足す。
     selected_groups = {id(group) for group in selected}
-    for retrieval_rank, child in catalog_children:
+    added_children = [
+        *((rank, child, "catalog_article") for rank, child in catalog_children),
+        *((rank, child, "conversation_attachment") for rank, child in attachment_children),
+    ]
+    for retrieval_rank, child, reason in added_children:
         group = group_for_child(child)
         if group is None:
             continue
-        add_child(group, child, "retrieved_anchor", "catalog_article", retrieval_rank=retrieval_rank)
+        add_child(group, child, "retrieved_anchor", reason, retrieval_rank=retrieval_rank)
         if id(group) not in selected_groups:
-            # 選んだ条のために足した親（呼び出し元は検索の根拠と分けて扱う。MCP の根拠の上限に数えない）。
-            group.reason = "catalog_article"
+            # 選んだ条・添付のために足した親（条は呼び出し元が検索の根拠と分けて扱う。MCP の根拠の上限に数えない）。
+            group.reason = reason
             parent_key = _child_sibling_context_key(child)
             for neighbor in _chunk_neighbors(child, children_by_parent.get(parent_key, []), request.neighbor_child_count):
                 add_child(group, neighbor, "neighbor_context", "adjacent_child")
