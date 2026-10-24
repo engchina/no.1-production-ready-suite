@@ -129,6 +129,10 @@ def test_first_question_starts_a_conversation_and_is_reopened(
     assert turn.explanation == "在庫の数量です"
     assert turn.statement_executions == [] and turn.last_run_all is None
     assert turn.sender_user_uuid is None
+    # 生成したときの処理の経過（span の木。#3226）を、応答と開き直した会話の両方に残す。
+    assert turn.progress_events == sent.turn.progress_events
+    assert {event.target_id for event in turn.progress_events} == {turn_id}
+    assert turn.progress_events[-1].type == "terminal"
 
 
 def test_resend_with_the_same_turn_id_does_not_generate_twice(

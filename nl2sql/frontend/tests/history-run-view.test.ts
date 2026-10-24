@@ -17,7 +17,7 @@ import {
   historyOwner,
   historyRequestUrl,
   historyRunStatus,
-  historyTimelineSteps,
+  historyTimeline,
   normalizeHistoryFilters,
 } from "../src/features/nl2sql/historyManagementState.ts";
 import type { HistoryItem } from "../src/features/nl2sql/types.ts";
@@ -125,69 +125,6 @@ test("history rows map to the common status, kind, executor and owner", () => {
   );
 });
 
-test("timeline steps follow the recorded stages with engine attempts under SQL generation", () => {
-  const steps = historyTimelineSteps({
-    ...base,
-    safety_is_safe: false,
-    stage_timings: [
-      { stage: "prepare_context", elapsed_ms: 20 },
-      { stage: "generate_sql", elapsed_ms: 190 },
-      { stage: "unknown_stage", elapsed_ms: 1 },
-      { stage: "safety_check", elapsed_ms: 15 },
-    ],
-    engine_timings: [
-      { engine: "select_ai_agent", elapsed_ms: 80, status: "failed", error: "team execution failed" },
-      { engine: "enterprise_ai_direct", elapsed_ms: 110, status: "success" },
-    ],
-  });
-  assert.deepEqual(
-    steps.map((step) => [step.id, step.status, step.level, step.durationMs, step.offsetMs]),
-    [
-      ["prepare_context-0", "done", 0, 20, 0],
-      ["generate_sql-1", "done", 0, 190, 20],
-      // 試行は生成の段の中に重ねる（後の段の位置をずらさない）。
-      ["engine-0", "failed", 1, 80, 20],
-      ["engine-1", "done", 1, 110, 100],
-      // ブロックした行は安全性の確認を失敗にする。未知の段は出さない（位置には数える）。
-      ["safety_check-3", "failed", 0, 15, 211],
-    ]
-  );
-  // 段を開いて見る詳細（#2294）: 試行の失敗の文・安全性の確認の結果。書き換えの無い準備は詳細を付けない。
-  assert.deepEqual(steps[2].details, { fields: [{ label: "エラー", value: "team execution failed" }] });
-  assert.equal(steps[3].details, undefined);
-  assert.equal(steps[0].details, undefined);
-  assert.deepEqual(steps[4].details, { fields: [{ label: "結果", value: "遮断" }] });
-  assert.ok(steps.every((step) => !step.label.includes("_")));
-  assert.deepEqual(historyTimelineSteps(base), []);
-});
-
-test("timeline step details come from the recorded rewritten question, safety and rows", () => {
-  const steps = historyTimelineSteps({
-    ...base,
-    rewritten_question: "書き換えた質問 A",
-    result_row_count: 1234,
-    result_columns: ["COL_A", "COL_B"],
-    stage_timings: [
-      { stage: "prepare_context", elapsed_ms: 20 },
-      { stage: "safety_check", elapsed_ms: 15 },
-      { stage: "execute_sql", elapsed_ms: 40 },
-    ],
-  });
-  assert.deepEqual(
-    steps.map((step) => step.details),
-    [
-      { fields: [{ label: "生成に使った質問", value: "書き換えた質問 A" }] },
-      { fields: [{ label: "結果", value: "安全" }] },
-      {
-        fields: [
-          { label: "取得した行数", value: "1,234 行" },
-          { label: "列", value: "COL_A, COL_B", mono: true },
-        ],
-      },
-    ]
-  );
-});
-
 test("detail path opens the run by id", () => {
   assert.equal(historyDetailPath("/history", "run 1"), "/history?id=run+1");
 });
@@ -210,23 +147,46 @@ test("「会話を開く」はチャットの往復だけ、会話を見られ�
   );
 });
 
-test("履歴はチャットと同じイベントを使い、旧い計時表から工程を追加しない", () => {
-  const events = parseChatProgressEvents(["generate_sql", "safety_check", "execute_sql"].map((kind, index) => ({
-    schema_version: 1, target_id: "synthetic", seq: index + 1, attempt: 0, type: "step", step_id: kind, kind,
-    status: index === 1 ? "skipped" : "done", emitted_at: "2026-10-23T00:00:02Z", started_at: "2026-10-23T00:00:00Z", finished_at: "2026-10-23T00:00:02Z",
-    params: {engine: "enterprise_ai_direct", rows: 1, safety_check_skipped: true}, details: {fields: [{label: "結果", value: "合成の結果"}]},
-  })));
-  const rows = historyTimelineSteps({...base, progress_events: events});
+const TRACE_ID = "b".repeat(32);
+const ROOT = "0".repeat(16);
+
+/** 実行の span の木（実行の全体の下に工程の span。合成の値）。 */
+function spanEvents(): unknown[] {
+  const at = { emitted_at: "2026-10-23T00:00:02Z", started_at: "2026-10-23T00:00:00Z" };
+  const event = (seq: number, value: Record<string, unknown>) => ({ schema_version: 1, target_id: "synthetic", seq, attempt: 0, type: "step", trace_id: TRACE_ID, ...at, ...value });
+  return [
+    event(1, { step_id: ROOT, name: "nl2sql.execute", root: true, status: "running" }),
+    event(2, { step_id: "1".padStart(16, "0"), kind: "generate_sql", name: "nl2sql.generate_sql", parent_id: ROOT, status: "done", finished_at: "2026-10-23T00:00:02Z", params: { engine: "enterprise_ai_direct" } }),
+    event(3, { step_id: "2".padStart(16, "0"), name: "gen_ai.chat", parent_id: "1".padStart(16, "0"), status: "done", finished_at: "2026-10-23T00:00:01Z" }),
+    event(4, { step_id: "3".padStart(16, "0"), kind: "safety_check", name: "nl2sql.safety_check", parent_id: ROOT, status: "skipped", finished_at: "2026-10-23T00:00:02Z", params: { safety_check_skipped: true }, details: { fields: [{ label: "結果", value: "合成の結果" }] } }),
+    event(5, { step_id: ROOT, name: "nl2sql.execute", root: true, status: "done", finished_at: "2026-10-23T00:00:02Z" }),
+    { schema_version: 1, target_id: "synthetic", seq: 6, attempt: 0, type: "terminal", status: "done", emitted_at: "2026-10-23T00:00:02Z" },
+  ];
+}
+
+test("実行の詳細の処理の経過はチャットと同じ span の木（#3226）", () => {
+  const events = parseChatProgressEvents(spanEvents());
+  const timeline = historyTimeline({ ...base, progress_events: events });
   const actual = chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS).map(chatProgressTimelineStep);
-  assert.deepEqual(rows.map(({offsetMs: _offset, durationMs: _duration, level: _level, ...row}) => row), actual);
-  assert.deepEqual(rows.map((row) => row.status), ["done", "skipped", "done"]);
+  assert.deepEqual(timeline.steps, actual);
+  // 実行の全体は行にせず、段の中の span（モデルの呼び出し）は段の下に入れ子。
+  assert.deepEqual(timeline.steps.map((row) => [row.status, row.level ?? 0]), [["done", 0], ["done", 1], ["skipped", 0]]);
+  assert.equal(timeline.steps[0].label, "SQL を生成しました");
+  assert.equal(timeline.traceId, TRACE_ID);
+  assert.equal(timeline.legacy, false);
 });
 
-test("未実行の工程に記録の無い時刻や所要時間を補わない", () => {
-  const events = parseChatProgressEvents([{schema_version: 1, target_id: "synthetic", seq: 1, attempt: 0,
-    type: "step", step_id: "safety_check", kind: "safety_check", status: "skipped", emitted_at: "2026-10-23T00:00:02Z"}]);
-  const [row] = historyTimelineSteps({...base, progress_events: events});
-  assert.equal(row.durationMs, null);
-  assert.equal(row.startedAt, null);
-  assert.equal(row.finishedAt, null);
+test("span の無い古い形式の記録は再構成せず、古い形式として扱う（#3226）", () => {
+  // 工程の秒だけの記録（`stage_timings`）からは工程を作らない。
+  const timed = historyTimeline({ ...base, stage_timings: [{ stage: "prepare_context", elapsed_ms: 20 }] });
+  assert.deepEqual(timed.steps, []);
+  assert.equal(timed.legacy, true);
+  // 段だけのイベント（span の無い記録）も出さない。
+  const staged = historyTimeline({
+    ...base,
+    progress_events: parseChatProgressEvents([{ schema_version: 1, target_id: "synthetic", seq: 1, attempt: 0,
+      type: "step", step_id: "safety_check", kind: "safety_check", status: "skipped", emitted_at: "2026-10-23T00:00:02Z" }]),
+  });
+  assert.equal(staged.legacy, true);
+  assert.equal(staged.traceId, undefined);
 });

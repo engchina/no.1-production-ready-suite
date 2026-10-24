@@ -29,6 +29,7 @@ import {
   EmptyState,
   MessageText,
   ProcessFailureNotice,
+  chatProgressTraceIdOf,
   parseChatProgressEvents,
   parseChatProgressPage,
   SearchableSelectField,
@@ -103,7 +104,10 @@ import {
   CHAT_PROGRESS_LABELS,
   CHAT_PROGRESS_STEP_DEFINITIONS,
   chatJobElapsedMs,
+  chatProgressIsLegacy,
+  chatQueueProgressSteps,
 } from "./chatProgress";
+import { ProgressLegacyNotice } from "./components/ProgressLegacyNotice";
 import type { ChatHistoryOffsetPage, JobCreateData, JobData, Nl2SqlEngine } from "./types";
 import { useProfileEngine } from "./useProfileEngine";
 import { SelectAiCredentialPrecondition } from "./components/SelectAiCredentialPrecondition";
@@ -437,10 +441,8 @@ export function SqlChatPage() {
             ...(previous?.turns ?? []),
             {
               ...job,
-              // 作成時の段階（開始待ち）を、会話を取り直す前から出す（取り直しで段階の行が増えて動かない。#1359）。
+              // worker が受け取るまで span は無い（処理の経過は開始待ちの仮の行。#3226）。
               progress_events: parseChatProgressEvents(job.progress_events),
-              trace_summary: "trace_summary" in job ? job.trace_summary : undefined,
-              trace_segments: "trace_segments" in job ? job.trace_segments : undefined,
               question,
               requirement_question: requirementQuestionByJob.current[clientJobId] ?? "",
               requirement_skipped: Boolean(variables.requirement_skipped),
@@ -1001,9 +1003,9 @@ function SqlChatTurn({
     (since: number, signal: AbortSignal) => fetchJobProgress(jobId, since, signal),
     [jobId],
   );
-  // 処理の段階は backend が記録したイベントを積んで出す（3 製品共通。#1359）。処理中は SSE で受け取り
-  // （使えなければ polling）、会話の取り直しに入っている記録も積む。引き継いだ実行（試行が変わった）では
-  // 段階の一覧を作り直す（#1358）。配信が途絶えたら会話も取り直し、終端まで追う（#1160）。
+  // 処理の経過は backend が記録した span のイベントを積んだ木（3 製品共通。#1359・#3226）。処理中は SSE で
+  // 受け取り（使えなければ polling）、会話の取り直しに入っている記録も積む。引き継いだ実行（試行が変わった）では
+  // 木を作り直す（#1358）。配信が途絶えたら会話も取り直し、終端まで追う（#1160）。
   const progress = useChatProgressStream({
     key: jobId,
     definitions: CHAT_PROGRESS_STEP_DEFINITIONS,
@@ -1023,6 +1025,13 @@ function SqlChatTurn({
   useEffect(() => {
     touchProgress();
   }, [receivedAt, touchProgress]);
+  // worker が受け取るまでは span が無いので、開始待ちの仮の行を出す（最初の span で木に置き換わる。#3226）。
+  const queuePlaceholder = progress.steps.length === 0 && running;
+  const progressSteps = queuePlaceholder ? chatQueueProgressSteps(turn.created_at) : progress.steps;
+  // 仮の行から span の木に替わったら一覧を作り直す（処理中に出した行を残す規則で仮の行が残らないように）。
+  const progressKey = progress.progressProps.progressKey;
+  const savedEvents = turn.progress_events ?? [];
+  const legacyProgress = !running && chatProgressIsLegacy(savedEvents);
   // 送信のジョブが実行まで行い（#1176）、結果の行はここで 1 回だけ受け取る。「もう一度実行」は明示の
   // 操作（#1154）。安全検査を通った生成 SQL だけを実行できる。
   const execution = useChatSqlExecution(
@@ -1067,22 +1076,29 @@ function SqlChatTurn({
         />
       ) : null}
       <ChatAnswer>
-          {/* 処理の段階（#1145）。実行中は今の段階と開いた一覧、完了後は回答の上に「処理の経過」の 1 行（押すと開く。3 製品で同じ。#2265）。 */}
-          <ChatProgress
-            cancelled={turn.error_code === "JOB_CANCELLED"}
-          traceSummary={turn.trace_segments && turn.trace_segments.length > 1 ? turn.trace_segments : turn.trace_summary}
-            {...progress.progressProps}
-            startedAt={sentAtMs}
-            labels={CHAT_PROGRESS_LABELS}
-            testId="sql-chat-progress"
-          />
+          {/* 処理の経過（#1145・#3226）は span の木。実行中は今の段階と開いた一覧、完了後は回答の上に「処理の経過」の
+              1 行（押すと開く。3 製品で同じ。#2265）。span の無い古い形式の記録は案内の文を出す。 */}
+          {legacyProgress ? (
+            <ProgressLegacyNotice testId="sql-chat-progress-legacy" />
+          ) : (
+            <ChatProgress
+              cancelled={turn.error_code === "JOB_CANCELLED"}
+              traceId={chatProgressTraceIdOf(savedEvents)}
+              {...progress.progressProps}
+              steps={progressSteps}
+              progressKey={queuePlaceholder && progressKey ? `${progressKey}:queue` : progressKey}
+              startedAt={sentAtMs}
+              labels={CHAT_PROGRESS_LABELS}
+              testId="sql-chat-progress"
+            />
+          )}
           {turn.error_message && turn.error_code === "JOB_CANCELLED" ? (
             <Banner severity="info">{t("chat.cancelled")}</Banner>
           ) : turn.error_message ? (
             // 失敗は 3 製品共通の失敗のカード（止まった段・原因・次の操作・「詳細」。#2342）。進めない理由を先に
             // 読めるよう、処理の経過の直下（SQL・説明・結果の上）に 1 つだけ出す。
             <ProcessFailureNotice
-              failure={chatJobFailure(turn, progress.steps)}
+              failure={chatJobFailure(turn, progressSteps)}
               labels={processFailureLabels()}
               testId="sql-chat-turn-failure"
             />

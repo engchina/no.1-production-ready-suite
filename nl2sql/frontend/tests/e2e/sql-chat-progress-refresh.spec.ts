@@ -153,7 +153,7 @@ async function setup(page: Page): Promise<State> {
           status: "pending",
           created_at: createdAt,
           steps: [],
-          // 作成時の処理の段階のイベント（backend の start_job と同じ。#1359）。
+          // 作成時は span が無い（backend の start_job と同じ。worker が受け取るまで開始待ちの仮の行。#3226）。
           progress_events: turnProgressEvents({ job_id: "chat-2", status: "pending", created_at: createdAt }),
         },
       },
@@ -193,7 +193,10 @@ for (const colorScheme of ["light", "dark"] as const) {
       await expect(turn.locator("pre")).toContainText("ORDER BY 2 DESC");
       await expect(turn.getByTestId("sql-chat-progress-summary")).toContainText("処理の経過");
       // 実行中は開いていた一覧を、完了したら閉じる（3 製品で同じ。#2265）。
-      await expect(turn.getByTestId("sql-chat-progress").locator("details")).not.toHaveAttribute("open", "");
+      await expect(turn.getByTestId("sql-chat-progress").locator("details").first()).not.toHaveAttribute("open", "");
+      // 処理の詳細に trace id を出す（「トレースの詳細」の 2 つ目の表示は無い。#3226）。
+      await expect(turn.getByTestId("sql-chat-progress").locator("[data-trace-id-row]")).toHaveCount(1);
+      await expect(turn.getByText("トレースの詳細")).toHaveCount(0);
       await expect(page.getByTestId("sql-chat-send")).toHaveAccessibleName("送信");
     });
 

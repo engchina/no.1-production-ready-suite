@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager, nullcontext, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
 
@@ -63,6 +64,9 @@ from pr_backend_core.chat_progress import (
 )
 from pr_backend_core.observability.request_context import bind_log_context
 from pr_backend_core.observability.tracing import (
+    SpanDisplay,
+    SpanListener,
+    SpanUpdate,
     TraceSummary,
     append_trace_segment,
     attach_trace_context,
@@ -70,6 +74,7 @@ from pr_backend_core.observability.tracing import (
     finish_operation_trace,
     observed_span,
     operation_trace,
+    record_span,
     validated_trace_context,
 )
 from pr_backend_core.oracle_errors import oracle_error_codes
@@ -4016,23 +4021,15 @@ def _new_job_steps() -> list[JobStepData]:
     return [JobStepData(stage=stage) for stage in _NL2SQL_JOB_STAGES]
 
 
-# 処理の段階のイベント（チャットの `ChatProgress`。#1359）の段階: 開始待ち（ジョブの作成から
-# worker が処理を始めるまで）とジョブの 5 段階。並びはこの順（`declare`）。名前は画面の段階の
-# 定義が付ける。
+# 処理の経過（チャット・SQL 生成・実行履歴の `ChatProgress`）は実行の trace（span の木）の投影
+# （#3226）。工程の span（開始待ち `queue` とジョブの 5 段階）は表示用のデータ（`SpanDisplay`）の
+# `kind` に段階の id を持ち、名前は画面の段階の定義が付ける。
 _JOB_PROGRESS_QUEUE_STEP = "queue"
-_JOB_PROGRESS_STEPS = (_JOB_PROGRESS_QUEUE_STEP, *_NL2SQL_JOB_STAGES)
-# 段階を止めた印（`params`）。停止は失敗ではないので、画面は「未実行」と「停止しました」を出す。
-_JOB_PROGRESS_STOPPED_PARAM = "stopped"
+_JOB_PROGRESS_STAGE_KINDS = frozenset({_JOB_PROGRESS_QUEUE_STEP, *_NL2SQL_JOB_STAGES})
 # 安全性の確認を省略した印（Select AI / Select AI Agent の SQL。#1523）。
 _JOB_PROGRESS_SAFETY_CHECK_SKIPPED_PARAM = "safety_check_skipped"
 # 安全性の確認の補足に出す参照した表の数（残りは件数だけ。画面の「ほか N 件」）。
 _JOB_PROGRESS_TABLES_SHOWN = 3
-
-_JOB_PROGRESS_FINISH_STATUS: dict[JobStepStatus, Literal["done", "failed", "skipped"]] = {
-    JobStepStatus.DONE: "done",
-    JobStepStatus.ERROR: "failed",
-    JobStepStatus.SKIPPED: "skipped",
-}
 
 type JobProgressParams = dict[str, ChatProgressParamValue]
 
@@ -4050,123 +4047,57 @@ def _parse_job_time(value: str | None) -> datetime | None:
 
 
 def _job_progress_attempt(job: StoredJob) -> int:
-    """処理の段階のイベントの試行（最初の実行が 0）。
+    """処理の経過のイベントの試行（最初の実行が 0）。
 
-    ジョブの `attempt` は worker が claim するたびに増える（未着手 0・最初の実行 1）。最初の
-    claim で試行を変えると、開始待ちから始まった段階の一覧を画面が作り直してしまうので、lease の
-    切れたジョブを引き継いだ実行（2 回目以降の claim）から試行を増やす。
+    ジョブの `attempt` は worker が claim するたびに増える（未着手 0・最初の実行 1）。lease の
+    切れたジョブを引き継いだ実行（2 回目以降の claim）から試行を増やし、span の木を作り直す。
     """
 
     return max(0, job.attempt - 1)
 
 
-def _record_job_progress(job: StoredJob, record: Callable[[ChatProgressRecorder], object]) -> None:
-    """ジョブの処理の段階のイベントを記録する（記録の位置はすべてここを通す。#1359）。
+def _job_progress_recorder(job: StoredJob) -> ChatProgressRecorder:
+    """保存済みのイベントから記録を作り直す（別の worker が引き継いでも続きの番号から記録する）。
 
-    呼ぶ側はジョブの lock の中で、保存（`_persist_job` など）の前に呼ぶ。保存済みのイベントから
-    記録を作り直すので、別の worker が引き継いでも続きの番号から記録する。試行が増えていれば
-    （引き継いだ実行）、記録は段階の一覧を空にして新しい試行を始める。
+    試行が増えていれば（引き継いだ実行）、記録は段階の一覧を空にして新しい試行を始める。
     """
 
-    recorder = ChatProgressRecorder(
+    return ChatProgressRecorder(
         job.job_id, attempt=_job_progress_attempt(job), events=job.progress_events
     )
-    record(recorder)
-    job.progress_events = recorder.events
 
 
-def _record_job_progress_created(job: StoredJob) -> None:
-    """作成: 開始待ちと 5 段階を待機中で出し、開始待ちを実行中にする（ジョブの作成時刻から）。"""
+def _record_job_progress_span(job: StoredJob, update: SpanUpdate) -> bool:
+    """span の開始・表示用のデータの変更・終了を、ジョブの処理の経過に記録する（#3226）。
 
-    def record(recorder: ChatProgressRecorder) -> None:
-        recorder.declare(*_JOB_PROGRESS_STEPS)
-        recorder.start(_JOB_PROGRESS_QUEUE_STEP, at=_parse_job_time(job.created_at))
-
-    _record_job_progress(job, record)
-
-
-def _record_job_progress_started(job: StoredJob) -> None:
-    """worker の開始: 開始待ちを完了にし、準備を実行中にする。
-
-    引き継いだ実行（試行が増えた）は段階の一覧が空なので、開始待ちと 5 段階を出し直す。
+    呼ぶ側はジョブの lock の中で呼ぶ。記録したかを返す。終端の後の span（実行の全体の終了など）は
+    記録しない。保存は呼ぶ側の続く保存に任せる（結果の整形は結果の保存まで実行中のまま。#1176）。
     """
 
-    def record(recorder: ChatProgressRecorder) -> None:
-        recorder.declare(*_JOB_PROGRESS_STEPS)
-        recorder.start(_JOB_PROGRESS_QUEUE_STEP, at=_parse_job_time(job.created_at))
-        recorder.finish(_JOB_PROGRESS_QUEUE_STEP, at=_parse_job_time(job.started_at))
-        recorder.start(_NL2SQL_JOB_STAGES[0])
-
-    _record_job_progress(job, record)
-
-
-def _record_job_progress_transition(
-    job: StoredJob,
-    *,
-    completed_stage: str | None,
-    completed_status: JobStepStatus,
-    completed_params: JobProgressParams | None,
-    running_stage: str | None,
-    running_params: JobProgressParams | None,
-    completed_details: ChatProgressStepDetails | None = None,
-) -> None:
-    """段階の終了（完了・失敗・未実行）と次の段階の開始。補足の値は `params`、段を開いて見る詳細は
-    `completed_details`（#2294）。"""
-
-    def record(recorder: ChatProgressRecorder) -> None:
-        if completed_stage is not None:
-            status = _JOB_PROGRESS_FINISH_STATUS.get(completed_status, "done")
-            extra: dict[str, Any] = {}
-            if completed_params is not None:
-                extra["params"] = completed_params
-            if completed_details is not None:
-                extra["details"] = completed_details
-            recorder.finish(completed_stage, status, **extra)
-        if running_stage is not None:
-            if running_params is None:
-                recorder.start(running_stage)
-            else:
-                recorder.start(running_stage, params=running_params)
-
-    _record_job_progress(job, record)
+    recorder = _job_progress_recorder(job)
+    if recorder.terminal is not None or recorder.record_span(update) is None:
+        return False
+    job.progress_events = recorder.events
+    return True
 
 
 def _record_job_progress_finished(job: StoredJob, *, failed: bool, at: str | None) -> None:
-    """完了: 最後の段階（結果の整形）を完了にして終端にする（SQL の遮断・実行の失敗は失敗）。
+    """完了: 処理の経過を終端にする（SQL の遮断・実行の失敗は失敗）。
 
-    最後の段階は結果の保存まで実行中のまま（終端でないのに実行中・待機中の段階が無い時間を
-    作らない。#1176）。この記録は保存する完了の snapshot に入れる。
+    この記録は保存する完了の snapshot に入れる（結果の整形の終了も同じ保存で出る。#1176）。
     """
 
-    finished_at = _parse_job_time(at)
-
-    def record(recorder: ChatProgressRecorder) -> None:
-        recorder.finish(_NL2SQL_JOB_STAGES[-1], at=finished_at)
-        recorder.complete("failed" if failed else "done", at=finished_at)
-
-    _record_job_progress(job, record)
+    recorder = _job_progress_recorder(job)
+    recorder.complete("failed" if failed else "done", at=_parse_job_time(at))
+    job.progress_events = recorder.events
 
 
 def _record_job_progress_failed(job: StoredJob, *, cancelled: bool) -> None:
-    """失敗・停止: 実行中の段階を失敗（停止なら停止の印を付けて未実行）にして終端にする。
+    """失敗・停止: 処理の経過を終端にする（実行中の span は失敗、停止なら未実行）。"""
 
-    worker が始める前の失敗・停止は、開始待ちの段階が失敗・停止になる。
-    """
-
-    finished_at = _parse_job_time(job.finished_at)
-
-    def record(recorder: ChatProgressRecorder) -> None:
-        if not cancelled:
-            recorder.complete("failed", at=finished_at)
-            return
-        for step in recorder.steps():
-            if step.status == "running":
-                recorder.update(
-                    step.step_id, params={**(step.params or {}), _JOB_PROGRESS_STOPPED_PARAM: True}
-                )
-        recorder.complete("cancelled", at=finished_at)
-
-    _record_job_progress(job, record)
+    recorder = _job_progress_recorder(job)
+    recorder.complete("cancelled" if cancelled else "failed", at=_parse_job_time(job.finished_at))
+    job.progress_events = recorder.events
 
 
 def _job_progress_tables_params(tables: Sequence[str]) -> JobProgressParams | None:
@@ -4723,6 +4654,55 @@ def _db_admin_chat_join_statements(statements: Sequence[str]) -> str:
         else:
             parts.append(f"{text};")
     return "\n".join(parts)
+
+
+# DB 管理チャットの SQL の確認（サーバーの分類）の工程の種類（画面の段階の定義の key。#3226）。
+_DB_ADMIN_CHAT_CHECK_KIND = "db_admin_check"
+
+
+@dataclass(frozen=True)
+class _DbAdminChatGenerated:
+    """DB 管理チャットの生成の段の結果（確認の前の SQL と説明）。"""
+
+    sql: str
+    explanation: str
+    context_tables: list[str]
+    warnings: list[str]
+
+
+def _db_admin_chat_check_params(plan: DbAdminChatPlan) -> JobProgressParams:
+    """SQL の確認の補足の値: 文の分類ごとの数と、1 文のときの確認語（名前は画面が付ける）。"""
+
+    params: JobProgressParams = {
+        "statements": len(plan.statements),
+        "read_only": sum(
+            1 for item in plan.statements if not item.blocked_reason and item.select_only
+        ),
+        "change": sum(
+            1 for item in plan.statements if not item.blocked_reason and not item.select_only
+        ),
+        "blocked": sum(1 for item in plan.statements if item.blocked_reason),
+    }
+    if len(plan.statements) == 1 and plan.statements[0].requires_confirmation:
+        params["confirmation_target"] = plan.statements[0].confirmation_target
+    return params
+
+
+def _db_admin_chat_check_details(
+    plan: DbAdminChatPlan, warnings: Sequence[str], repaired: bool
+) -> ChatProgressStepDetails | None:
+    """SQL の確認の段を開いて見る詳細: 実行できない文・確認語・列を直したか・注意。"""
+
+    blocked = [f"#{item.index}" for item in plan.statements if item.blocked_reason]
+    return chat_progress_details(
+        fields=[
+            ("文の数", len(plan.statements)),
+            ("実行できない文", "・".join(blocked) or None),
+            ("確認語", plan.confirmation_target or None, True),
+            ("参照する列を直した", "あり" if repaired else None),
+        ],
+        lines=[warning for warning in warnings if warning],
+    )
 
 
 def _db_admin_chat_plan_warnings(plan: DbAdminChatPlan) -> list[str]:
@@ -8651,16 +8631,12 @@ class Nl2SqlService:
         completed_status: JobStepStatus = JobStepStatus.DONE,
         elapsed_ms: int | None = None,
         running_stage: str | None = None,
-        completed_params: JobProgressParams | None = None,
-        running_params: JobProgressParams | None = None,
-        completed_details: ChatProgressStepDetails | None = None,
     ) -> None:
-        """実処理と UI の段階表示を同じ job snapshot 上で進める。
+        """job の段階（`steps`）を進めて保存する。
 
-        SQL 生成の画面の工程（`steps`）と、チャットの処理の段階のイベント（`progress_events`。
-        補足の値は `completed_params` / `running_params`。#1359）を同じ保存で進める。
-        実行所有権は保存（`_persist_job` の fence 付きの更新）で確かめる。保存の前に読み直さない
-        （stage ごとの往復を減らす。#830）。
+        処理の経過（`progress_events`）は段の span が記録する（#3226）。終わった段の span の
+        記録もこの保存で出る（`_record_job_progress_span`）。実行所有権は保存（`_persist_job` の
+        fence 付きの更新）で確かめる。保存の前に読み直さない（stage ごとの往復を減らす。#830）。
         """
 
         with self._lock:
@@ -8697,15 +8673,6 @@ class Nl2SqlService:
                     )
                 next_steps.append(step)
             job.steps = next_steps
-            _record_job_progress_transition(
-                job,
-                completed_stage=completed_stage,
-                completed_status=completed_status,
-                completed_params=completed_params,
-                running_stage=running_stage,
-                running_params=running_params,
-                completed_details=completed_details,
-            )
             if job.timing is not None:
                 job.timing = job.timing.model_copy(
                     update={
@@ -8819,7 +8786,6 @@ class Nl2SqlService:
             steps=_new_job_steps(),
             owned=self._incremental_repository is None,
         )
-        _record_job_progress_created(job)
         with self._lock:
             self._jobs[job_id] = job
             self._prune_terminal_jobs_locked()
@@ -17916,11 +17882,17 @@ class Nl2SqlService:
         )
 
     def generate_db_admin_chat_sql(
-        self, question: str, history: Sequence[DbAdminChatHistoryTurn] = ()
+        self,
+        question: str,
+        history: Sequence[DbAdminChatHistoryTurn] = (),
+        *,
+        operation_id: str = "",
     ) -> DbAdminChatGenerateData:
         """質問から Oracle の SQL を作る（実行も保存もしない）。DB 全体が対象。
 
-        `history` は同じ会話の前の往復（保存したターンから作る。#2319）。
+        `history` は同じ会話の前の往復（保存したターンから作る。#2319）。処理の経過は生成と
+        SQL の確認の span の木（#3226）で、`operation_id`（ターンの ID）を対象に記録して返す
+        （同期の要求なので、実行中は画面の送信中の表示だけ）。
         """
 
         self._require_db_admin_chat_permission()
@@ -17928,6 +17900,66 @@ class Nl2SqlService:
         created_at = _utc_now()
         if not self._enterprise_ai_client.is_configured():
             raise DbAdminChatGenerationError(_DB_ADMIN_CHAT_MODEL_UNAVAILABLE, status_code=409)
+        target_id = operation_id or str(uuid.uuid4())
+        recorder = ChatProgressRecorder(target_id)
+        recorder_lock = threading.Lock()
+
+        def listen(update: SpanUpdate) -> None:
+            # 生成の中の thread からも知らされる。
+            with recorder_lock:
+                recorder.record_span(update)
+
+        with operation_trace("nl2sql.db_admin_chat", operation_id=target_id, listener=listen):
+            with observed_span(
+                "nl2sql.generate_sql",
+                attributes={"pr.stage": "generate_sql"},
+                display=SpanDisplay(
+                    kind="generate_sql",
+                    params={"engine": Nl2SqlEngine.ENTERPRISE_AI_DIRECT.value},
+                ),
+            ) as stage_trace:
+                generated = self._generate_db_admin_chat_output(question, history)
+                stage_trace.set_display(
+                    details=chat_progress_details(code=[("生成した SQL", generated.sql, "sql")])
+                )
+            with observed_span(
+                "nl2sql.safety_check",
+                attributes={"pr.stage": "safety_check"},
+                display=SpanDisplay(kind=_DB_ADMIN_CHAT_CHECK_KIND),
+            ) as stage_trace:
+                # 参照する object の実際の列で確かめ、存在しない列・object を参照する文は 1 回
+                # だけ直させる（#2352）。直らなければ文は残し、理由を添えてその文の実行を止める。
+                plan, checks = self._db_admin_chat_checked_plan(generated.sql)
+                repaired_sql = self._repair_db_admin_chat_sql(question, plan, checks)
+                if repaired_sql:
+                    plan = self._db_admin_chat_plan(repaired_sql)
+                plan_warnings = _db_admin_chat_plan_warnings(plan)
+                if plan.statements and all(item.blocked_reason for item in plan.statements):
+                    # 止める文があっても、ほかの文は実行できる。すべての文が止める文のときだけ失敗。
+                    stage_trace.set_status("failed")
+                stage_trace.set_display(
+                    params=_db_admin_chat_check_params(plan),
+                    details=_db_admin_chat_check_details(plan, plan_warnings, bool(repaired_sql)),
+                )
+        with recorder_lock:
+            recorder.complete("done")
+            progress_events = recorder.events
+        return DbAdminChatGenerateData(
+            question=question,
+            explanation=generated.explanation.strip(),
+            plan=plan,
+            context_tables=generated.context_tables,
+            model=self._enterprise_ai_client.model_id(),
+            warnings=[*generated.warnings, *plan_warnings],
+            timing=self._timing(created_at, started, "db_admin_chat_generate"),
+            progress_events=progress_events,
+        )
+
+    def _generate_db_admin_chat_output(
+        self, question: str, history: Sequence[DbAdminChatHistoryTurn]
+    ) -> _DbAdminChatGenerated:
+        """生成の段: 文脈の表を選び、OCI Enterprise AI で SQL と説明を作る。"""
+
         warnings: list[str] = []
         tables: list[SchemaTable] = []
         try:
@@ -17979,21 +18011,11 @@ class Nl2SqlService:
             raise DbAdminChatGenerationError(_DB_ADMIN_CHAT_NO_SQL)
         if output is None:  # pragma: no cover - 上のループは SQL を受け取るか例外で抜ける
             raise DbAdminChatGenerationError(_DB_ADMIN_CHAT_NO_SQL)
-        # 参照する object の実際の列で確かめ、存在しない列・object を参照する文は 1 回だけ直させる
-        # （#2352）。直らなければ文は残し、理由を添えてその文の実行を止める。
-        plan, checks = self._db_admin_chat_checked_plan(sql)
-        repaired_sql = self._repair_db_admin_chat_sql(question, plan, checks)
-        if repaired_sql:
-            plan = self._db_admin_chat_plan(repaired_sql)
-        warnings.extend(_db_admin_chat_plan_warnings(plan))
-        return DbAdminChatGenerateData(
-            question=question,
-            explanation=output.explanation.strip(),
-            plan=plan,
+        return _DbAdminChatGenerated(
+            sql=sql,
+            explanation=output.explanation,
             context_tables=[table.qualified_name for table in context_tables],
-            model=self._enterprise_ai_client.model_id(),
             warnings=warnings,
-            timing=self._timing(created_at, started, "db_admin_chat_generate"),
         )
 
     def analyze_db_admin_chat_failure(
@@ -18220,7 +18242,7 @@ class Nl2SqlService:
             for turn in turns[-_DB_ADMIN_CHAT_HISTORY_LIMIT:]
         ]
         sent_at = _utc_now()
-        generated = self.generate_db_admin_chat_sql(request.question, history)
+        generated = self.generate_db_admin_chat_sql(request.question, history, operation_id=turn_id)
         if keep_result is not None and not keep_result():
             logger.info(
                 "nl2sql_db_admin_chat_generation_discarded",
@@ -18240,6 +18262,7 @@ class Nl2SqlService:
             sender_user_uuid=None if owner == actor else actor,
             # 回答の注意書き（#2405）。SQL を作った後に、回答とは別の項目として付ける。
             notice=current_answer_notice(),
+            progress_events=generated.progress_events,
         )
         if conversation is None:
             store.create_conversation(
@@ -23132,6 +23155,35 @@ class Nl2SqlService:
             if len(token) >= 2 and re.search(r"[A-Z0-9_\u4e00-\u9fff]", token)
         ]
 
+    def _job_cancel_requested(self, job_id: str) -> bool:
+        """停止の要求を受け取ったジョブか（段の span を停止で終える）。"""
+
+        with self._lock:
+            job = self._jobs.get(job_id)
+            return bool(job is not None and job.cancel_requested)
+
+    def _job_progress_listener(self, job_id: str) -> SpanListener:
+        """実行の span を、ジョブの処理の経過に記録する listener（#3226）。
+
+        span は worker の thread のほか、生成の中の thread からも知らされる。記録はジョブの lock の
+        中で行い、実行所有権を失った（別の worker が引き継いだ）ジョブには記録しない。保存は
+        段の切り替え（`_transition_job_steps`。次の段の span の中で呼ぶので、前の段の終わり・段の
+        中の span・次の段の開始が 1 回の保存で出る）と、完了・失敗の保存が行う（保存の往復を
+        増やさない。#904）。
+        """
+
+        def listen(update: SpanUpdate) -> None:
+            with self._lock:
+                job = self._jobs.get(job_id)
+                if job is None or (
+                    self._incremental_repository is not None
+                    and job.execution_owner != self._job_execution_owner(job)
+                ):
+                    return
+                _record_job_progress_span(job, update)
+
+        return listen
+
     def _run_job_safely(self, job_id: str) -> None:
         with self._lock:
             pending_trace = self._jobs.get(job_id)
@@ -23141,7 +23193,10 @@ class Nl2SqlService:
             bind_log_context(job_id=job_id),
             attach_trace_context(carrier),
             operation_trace(
-                "nl2sql.execute", operation_id=job_id, attributes={"pr.attempt": trace_attempt}
+                "nl2sql.execute",
+                operation_id=job_id,
+                attributes={"pr.attempt": trace_attempt},
+                listener=self._job_progress_listener(job_id),
             ),
         ):
             self._run_job_attempt_safely(job_id)
@@ -23555,39 +23610,58 @@ class Nl2SqlService:
         # 実行所有権は直後の保存（fence 付きの更新）で確かめる（#830）。
         total_started = time.monotonic()
         with self._lock:
-            job = self._execution_job_locked(job_id)
-            job.status = JobStatus.RUNNING
-            job.trace_summary = None
-            job.started_at = job.started_at or _utc_now()
-            job.timing = TimingEnvelope(created_at=job.created_at, started_at=job.started_at)
-            if job.attempt > 1:
-                # lease の切れたジョブを引き継いだ実行（2 回目以降の attempt）は、段階を
-                # 初めからにする。前の実行の段階（完了・実行中）を残すと、準備から実行し直す間に
-                # 後の段階が実行中のまま残り、チャットの段階の一覧が前後する（#1358。画面は
-                # attempt で一覧を作り直す）。
-                job.steps = _new_job_steps()
-            job.steps[0] = job.steps[0].model_copy(
-                update={
-                    "status": JobStepStatus.RUNNING,
-                    "started_at": _utc_now(),
-                    "finished_at": None,
-                }
+            pending = self._execution_job_locked(job_id)
+            pending.started_at = pending.started_at or _utc_now()
+            queued_at = _parse_job_time(pending.created_at)
+            claimed_at = _parse_job_time(pending.started_at)
+        if queued_at is not None and claimed_at is not None:
+            # 開始待ち（ジョブの作成から worker が受け取るまで）は実行の外で過ぎた区間なので、
+            # 終わった span として記録する（#3226）。記録は直後の保存で出る。
+            record_span(
+                "nl2sql.queue",
+                started_at=queued_at,
+                finished_at=max(queued_at, claimed_at),
+                attributes={"pr.stage": _JOB_PROGRESS_QUEUE_STEP},
+                display=SpanDisplay(kind=_JOB_PROGRESS_QUEUE_STEP),
             )
-            _record_job_progress_started(job)
-            self._renew_job_lease_locked(job)
-            request = job.request
-            attempt = job.attempt
-        self._persist_job(job_id)
-        _log_job_stage_started(job_id, _NL2SQL_JOB_STAGES[0], attempt=attempt)
-
-        stage_timings: list[StageTiming] = []
-        profile = self.get_profile(request.profile_id)
-
-        self._raise_if_job_cancelled(job_id)
-        stage_started = time.monotonic()
+        # 段の span の開始は、段の切り替えの保存（`_transition_job_steps`）で前の段の終わりと
+        # 一緒に出す（#3226。保存の往復を増やさない。#904）。停止は段の span の中で確かめ、
+        # 止めた段は停止にする。
+        cancelled = partial(self._job_cancel_requested, job_id)
         with observed_span(
-            "nl2sql.prepare_context", attributes={"pr.stage": "prepare_context"}
+            "nl2sql.prepare_context",
+            attributes={"pr.stage": "prepare_context"},
+            display=SpanDisplay(kind="prepare_context"),
+            cancellation_check=cancelled,
         ) as stage_trace:
+            with self._lock:
+                job = self._execution_job_locked(job_id)
+                job.status = JobStatus.RUNNING
+                job.trace_summary = None
+                job.timing = TimingEnvelope(created_at=job.created_at, started_at=job.started_at)
+                if job.attempt > 1:
+                    # lease の切れたジョブを引き継いだ実行（2 回目以降の attempt）は、段階を
+                    # 初めからにする。前の実行の段階（完了・実行中）を残すと、準備から実行し直す間に
+                    # 後の段階が実行中のまま残り、チャットの段階の一覧が前後する（#1358。画面は
+                    # attempt で一覧を作り直す）。
+                    job.steps = _new_job_steps()
+                job.steps[0] = job.steps[0].model_copy(
+                    update={
+                        "status": JobStepStatus.RUNNING,
+                        "started_at": _utc_now(),
+                        "finished_at": None,
+                    }
+                )
+                self._renew_job_lease_locked(job)
+                request = job.request
+                attempt = job.attempt
+            self._persist_job(job_id)
+            _log_job_stage_started(job_id, _NL2SQL_JOB_STAGES[0], attempt=attempt)
+
+            stage_timings: list[StageTiming] = []
+            profile = self.get_profile(request.profile_id)
+            self._raise_if_job_cancelled(job_id)
+            stage_started = time.monotonic()
             step_started = stage_started
             business_release_id = self._resolve_job_business_release(job_id, request)
             _log_job_stage_step_finished(
@@ -23622,25 +23696,29 @@ class Nl2SqlService:
             _log_job_stage_step_finished(
                 job_id, "prepare_context", "ontology_context", started=step_started, attempt=attempt
             )
+            stage_trace.set_display(
+                details=_job_progress_prepare_details(
+                    request.generation_question, rewritten, row_limit
+                )
+            )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="prepare_context", elapsed_ms=stage_elapsed))
-        self._transition_job_steps(
-            job_id,
-            completed_stage="prepare_context",
-            elapsed_ms=stage_elapsed,
-            running_stage="generate_sql",
-            # 生成の段階の補足は生成方法（画面が名前に変える）。
-            running_params={"engine": request.engine.value},
-            completed_details=_job_progress_prepare_details(
-                request.generation_question, rewritten, row_limit
-            ),
-        )
 
-        self._raise_if_job_cancelled(job_id)
-        stage_started = time.monotonic()
         with observed_span(
-            "nl2sql.generate_sql", attributes={"pr.stage": "generate_sql"}
+            "nl2sql.generate_sql",
+            attributes={"pr.stage": "generate_sql"},
+            # 生成の段階の補足は生成方法（画面が名前に変える）。
+            display=SpanDisplay(kind="generate_sql", params={"engine": request.engine.value}),
+            cancellation_check=cancelled,
         ) as stage_trace:
+            self._transition_job_steps(
+                job_id,
+                completed_stage="prepare_context",
+                elapsed_ms=stage_elapsed,
+                running_stage="generate_sql",
+            )
+            self._raise_if_job_cancelled(job_id)
+            stage_started = time.monotonic()
             generated = self._generate_selected_engine(
                 question=self._chat_generation_question(
                     request,
@@ -23658,21 +23736,24 @@ class Nl2SqlService:
                 use_glossary=request.use_glossary,
                 sql_requirement=request.sql_requirement,
             )
+            stage_trace.set_display(details=_job_progress_generate_details(generated))
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="generate_sql", elapsed_ms=stage_elapsed))
-        self._transition_job_steps(
-            job_id,
-            completed_stage="generate_sql",
-            elapsed_ms=stage_elapsed,
-            running_stage="safety_check",
-            completed_details=_job_progress_generate_details(generated),
-        )
 
-        self._raise_if_job_cancelled(job_id)
-        stage_started = time.monotonic()
         with observed_span(
-            "nl2sql.safety_check", attributes={"pr.stage": "safety_check"}
+            "nl2sql.safety_check",
+            attributes={"pr.stage": "safety_check"},
+            display=SpanDisplay(kind="safety_check"),
+            cancellation_check=cancelled,
         ) as stage_trace:
+            self._transition_job_steps(
+                job_id,
+                completed_stage="generate_sql",
+                elapsed_ms=stage_elapsed,
+                running_stage="safety_check",
+            )
+            self._raise_if_job_cancelled(job_id)
+            stage_started = time.monotonic()
             analysis = self.analyze_sql(
                 generated.generated_sql,
                 allowed,
@@ -23685,30 +23766,48 @@ class Nl2SqlService:
                 stage_trace.set_status("skipped")
             elif not analysis.safety.is_safe:
                 stage_trace.set_status("failed")
+            stage_trace.set_display(
+                # 安全性の確認の補足は参照した表（省略したときは省略の印も。#1523）。
+                params=_job_progress_safety_params(analysis.safety)
+                if analysis.safety.is_safe
+                else None,
+                details=_job_progress_safety_details(analysis.safety),
+            )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="safety_check", elapsed_ms=stage_elapsed))
-        self._transition_job_steps(
-            job_id,
-            completed_stage="safety_check",
-            completed_status=_job_safety_check_status(analysis.safety),
-            elapsed_ms=stage_elapsed,
-            running_stage="execute_sql"
-            if analysis.safety.is_safe and not request.generation_only
-            else None,
-            # 安全性の確認の補足は参照した表（省略したときは省略の印も。#1523）。
-            completed_params=_job_progress_safety_params(analysis.safety)
-            if analysis.safety.is_safe
-            else None,
-            completed_details=_job_progress_safety_details(analysis.safety),
-        )
-
-        self._raise_if_job_cancelled(job_id)
-        stage_started = time.monotonic()
+        execute_planned = analysis.safety.is_safe and not request.generation_only
+        safety_status = _job_safety_check_status(analysis.safety)
+        safety_elapsed = stage_elapsed
+        if not execute_planned:
+            # 実行しない SQL（遮断・生成だけ）も、実行の段を未実行の span として残す（#3226）。
+            skipped_at = datetime.now(UTC)
+            record_span(
+                "nl2sql.execute_sql",
+                started_at=skipped_at,
+                finished_at=skipped_at,
+                status="skipped",
+                attributes={"pr.stage": "execute_sql"},
+                display=SpanDisplay(kind="execute_sql"),
+            )
         with (
-            observed_span("nl2sql.execute_sql", attributes={"pr.stage": "execute_sql"})
-            if analysis.safety.is_safe and not request.generation_only
+            observed_span(
+                "nl2sql.execute_sql",
+                attributes={"pr.stage": "execute_sql"},
+                display=SpanDisplay(kind="execute_sql"),
+                cancellation_check=cancelled,
+            )
+            if execute_planned
             else nullcontext()
         ) as stage_trace:
+            self._transition_job_steps(
+                job_id,
+                completed_stage="safety_check",
+                completed_status=safety_status,
+                elapsed_ms=safety_elapsed,
+                running_stage="execute_sql" if execute_planned else None,
+            )
+            self._raise_if_job_cancelled(job_id)
+            stage_started = time.monotonic()
             # 生成 SQL の実行時エラー（ORA-00904 等）は job 全体の失敗にせず、生成 SQL と safety を
             # 含む result と履歴を残したうえで ERROR として公開する。
             execution_error: str | None = None
@@ -23762,6 +23861,13 @@ class Nl2SqlService:
                 execution_error or (chat_execution is not None and chat_execution.status == "error")
             ):
                 stage_trace.set_status("failed")
+            elif stage_trace is not None:
+                executed_results = chat_execution.results if chat_execution is not None else results
+                # 実行の段階の補足は取得した行数。
+                stage_trace.set_display(
+                    params={"rows": executed_results.total},
+                    details=_job_progress_execute_details(executed_results),
+                )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="execute_sql", elapsed_ms=stage_elapsed))
         execute_status = (
@@ -23775,32 +23881,21 @@ class Nl2SqlService:
                 else JobStepStatus.ERROR
             )
         )
-        self._transition_job_steps(
-            job_id,
-            completed_stage="execute_sql",
-            completed_status=execute_status,
-            elapsed_ms=stage_elapsed,
-            running_stage="format_results",
-            # 実行の段階の補足は取得した行数。
-            completed_params={
-                "rows": (
-                    chat_execution.results.total if chat_execution is not None else results.total
-                )
-            }
-            if execute_status == JobStepStatus.DONE
-            else None,
-            completed_details=_job_progress_execute_details(
-                chat_execution.results if chat_execution is not None else results
-            )
-            if execute_status == JobStepStatus.DONE
-            else None,
-        )
-
-        self._raise_if_job_cancelled(job_id)
-        stage_started = time.monotonic()
         with observed_span(
-            "nl2sql.format_results", attributes={"pr.stage": "format_results"}
+            "nl2sql.format_results",
+            attributes={"pr.stage": "format_results"},
+            display=SpanDisplay(kind="format_results"),
+            cancellation_check=cancelled,
         ) as stage_trace:
+            self._transition_job_steps(
+                job_id,
+                completed_stage="execute_sql",
+                completed_status=execute_status,
+                elapsed_ms=stage_elapsed,
+                running_stage="format_results",
+            )
+            self._raise_if_job_cancelled(job_id)
+            stage_started = time.monotonic()
             timing = TimingEnvelope(
                 created_at=job.created_at,
                 started_at=job.started_at,

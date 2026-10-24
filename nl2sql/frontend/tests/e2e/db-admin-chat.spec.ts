@@ -9,6 +9,7 @@
 import { expect, test, type Page, type Request, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { openSidebarNav } from "./_helpers/sidebar-nav";
+import { dbAdminChatProgressEvents } from "./_helpers/job-progress";
 
 const timing = { created_at: "2026-10-18T00:00:00Z", finished_at: "2026-10-18T00:00:01Z", elapsed_ms: 120 };
 
@@ -175,6 +176,11 @@ function storedTurn(turnId: string, question: string, next: Generated): StoredTu
     statement_executions: [],
     last_run_all: null,
     notice: next.notice ?? null,
+    // 生成したときの処理の経過（生成と SQL の確認の span の木。#3226）。
+    progress_events: dbAdminChatProgressEvents(turnId, next.plan, {
+      createdAt: "2026-10-18T00:00:00Z",
+      generatedAt: "2026-10-18T00:00:02Z",
+    }),
   };
 }
 

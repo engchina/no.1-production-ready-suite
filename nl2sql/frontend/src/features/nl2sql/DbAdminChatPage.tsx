@@ -23,6 +23,7 @@ import {
   useChatAutoScroll,
   useChatHistoryActions,
   useChatHistoryPanel,
+  useTraceDetailsLabels,
   withOptimisticChatStatus,
   type OptimisticChatMessage,
 } from "@production-ready/ui";
@@ -39,6 +40,7 @@ import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 
 import { CHAT_PROGRESS_LABELS } from "./chatProgress";
+import { ProgressLegacyNotice } from "./components/ProgressLegacyNotice";
 import {
   Nl2SqlChatComposer,
   Nl2SqlChatHistoryList,
@@ -60,7 +62,7 @@ import {
   dbAdminChatConfirmed,
   dbAdminChatExecutionFromOutcome,
   dbAdminChatGenerateStep,
-  dbAdminChatProgressSteps,
+  dbAdminChatProgress,
   dbAdminChatSavedExecutions,
   dbAdminChatStatementKind,
   dbAdminExecutionSucceeded,
@@ -496,8 +498,8 @@ function DbAdminChatTurn({
 }) {
   const queryClient = useQueryClient();
   const { plan } = turn;
-  const sentAtMs = Date.parse(turn.created_at);
-  const generatedAtMs = Date.parse(turn.generated_at);
+  const traceLabels = useTraceDetailsLabels();
+  const progress = useMemo(() => dbAdminChatProgress(turn, traceLabels), [turn, traceLabels]);
   const [runAllConfirmation, setRunAllConfirmation] = useState("");
   const { executions, update } = useDbAdminChatExecutions(turn);
   const refreshSchemaReadModels = useCallback(() => {
@@ -607,13 +609,17 @@ function DbAdminChatTurn({
       testId={`${TEST_ID}-turn`}
     >
       <ChatAnswer>
-        <ChatProgress
-          // 実行は経過に足さない（生成したときの経過のまま。実行の表示は文の区画）。
-          steps={dbAdminChatProgressSteps({ sentAtMs, generatedAtMs, plan })}
-          startedAt={sentAtMs}
-          labels={CHAT_PROGRESS_LABELS}
-          testId={`${TEST_ID}-progress`}
-        />
+        {progress.legacy ? (
+          <ProgressLegacyNotice testId={`${TEST_ID}-progress-legacy`} />
+        ) : (
+          <ChatProgress
+            // 生成したときの span の木（実行は経過に足さない。実行の表示は文の区画。#3226）。
+            steps={progress.steps}
+            traceId={progress.traceId}
+            labels={CHAT_PROGRESS_LABELS}
+            testId={`${TEST_ID}-progress`}
+          />
+        )}
         {turn.explanation ? (
           // 説明は Markdown を含みうるので、共通の Markdown の表示で描く（記号を生で出さない）。
           <MarkdownText text={turn.explanation} />

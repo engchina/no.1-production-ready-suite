@@ -254,8 +254,11 @@ def _step_status(job: JobData, stage: str) -> JobStepStatus:
     return next(step.status for step in job.steps if step.stage == stage)
 
 
-def _progress(job: JobData, step_id: str) -> tuple[str, dict[str, Any]]:
-    step = fold_chat_progress_events(job.progress_events).steps[step_id]
+def _progress(job: JobData, kind: str) -> tuple[str, dict[str, Any]]:
+    """処理の経過の工程の span（`kind` が段階の id。#3226）の状態と補足の値。"""
+
+    fold = fold_chat_progress_events(job.progress_events)
+    [step] = [item for item in fold.step_list() if item.kind == kind]
     return step.status, dict(step.params or {})
 
 
