@@ -701,12 +701,3 @@ class AnswerRecordDetail(AnswerRecordSummary):
     answer_diagnostics: dict[str, JsonValue] = Field(default_factory=dict)
     # 回答に付けた注意書き（#2405。この機能より前の回答・確認の質問は None）。
     notice: str | None = None
-    # 標準回答で評価できるか(この機能より前の回答は評価の入力を持たない)。
-    evaluation_available: bool = False
-    evaluation: dict[str, JsonValue] | None = None
-
-
-class AnswerEvaluationRequest(BaseModel):
-    """保存された回答を評価する標準回答。"""
-
-    standard_answer: str = Field(default="", max_length=20000)

@@ -4,12 +4,15 @@ import type { ReactNode } from "react";
 import {
   createTraceDetailsLabels,
   ChatProgress,
+  chatProgressStepsFromEvents,
+  parseChatProgressEvents,
   Button,
   Banner,
   FormStatus,
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
+import { CHAT_PROGRESS_LABELS, CHAT_PROGRESS_STEP_DEFINITIONS } from "../chatProgress";
 import { normalizeNl2SqlJobSteps } from "../jobProgressState";
 import type { JobData, JobStepData } from "../types";
 import { GeneratedSqlSummary } from "./GeneratedSqlPanel";
@@ -85,6 +88,10 @@ export function OperationStatusStrip({
   if (!job) return null;
 
   const steps = normalizeNl2SqlJobSteps(job);
+  // 保存したイベントを優先し、古い steps は互換用に読む。
+  const recordedSteps = chatProgressStepsFromEvents(
+    parseChatProgressEvents(job.progress_events), CHAT_PROGRESS_STEP_DEFINITIONS, job.job_id
+  );
   // プレビュー経路: execute/format 未実行(skipped)。「完了」ではなく確認を促す文言に差し替える。
   const warningMessage = job.warning_message?.trim();
   const errorMessage = job.status === "error" ? job.error_message?.trim() : "";
@@ -105,7 +112,8 @@ export function OperationStatusStrip({
       traceLabels={createTraceDetailsLabels(t)}
           traceSummary={job.trace_segments && job.trace_segments.length > 1 ? job.trace_segments : job.trace_summary}
       testId="nl2sql-job"
-      steps={steps.map((step) => ({
+      labels={recordedSteps.length ? CHAT_PROGRESS_LABELS : undefined}
+      steps={recordedSteps.length ? recordedSteps : steps.map((step) => ({
         id: step.stage,
         label: stepLabel(step.stage),
         detail: jobStepDescription(job, step),

@@ -15,6 +15,7 @@ import {
   RunStatusBadge,
   RunSummary,
   RunTimeline,
+  TraceDetails,
   RunTimelineSection,
   formatRunDateTime,
   formatRunDuration,
@@ -449,7 +450,7 @@ describe("RunTimelineSection（#2473）", () => {
     expect(summary?.querySelectorAll("svg")).toHaveLength(2);
   });
 
-  it("段が無いときは開閉を出さず、空の表示と処理の詳細を出す", () => {
+  it("段が無いときは工程の開閉を出さず、空の表示と処理の詳細の開閉を出す", () => {
     render(
       <RunTimelineSection
         title="処理の経過"
@@ -459,7 +460,7 @@ describe("RunTimelineSection（#2473）", () => {
         testId="section"
       />
     );
-    expect(container.querySelector("details")).toBeNull();
+    expect(container.querySelector<HTMLDetailsElement>("[data-run-process-details]")?.open).toBe(false);
     expect(container.querySelector("[data-testid='section-summary']")).toBeNull();
     expect(container.textContent).toContain("段の記録はありません");
     expect(container.textContent).toContain("処理の詳細の中身");
@@ -592,6 +593,24 @@ describe("RunDetailLayout / RunDetailSection", () => {
       />
     );
     expect(container.querySelector("[data-run-detail]")?.textContent).toBe("SPAEFT");
+  });
+
+  it("履歴の trace は処理の詳細の中に置き、両方の開閉を既定で閉じる", () => {
+    render(<RunTimelineSection title="処理の経過" steps={[]} traceSummary={{spans: []}} processDetails={<p>診断情報</p>} />);
+    const details = container.querySelector<HTMLDetailsElement>("[data-run-process-details]");
+    const trace = container.querySelector('[data-testid="trace-details-toggle"]');
+    expect(details?.open).toBe(false);
+    expect(details?.contains(trace!)).toBe(true);
+    expect(trace?.closest("details")?.open).toBe(false);
+  });
+
+  it("単一の trace には実行区間の余分な開閉を作らず、複数区間では区別する", async () => {
+    render(<TraceDetails summary={{spans: []}} />);
+    await act(async () => container.querySelector<HTMLElement>('[data-testid="trace-details-toggle"]')?.click());
+    expect(container.querySelector('[data-testid="trace-details"]')?.textContent).not.toContain("実行区間");
+    render(<TraceDetails summary={[{spans: []}, {spans: []}]} />);
+    expect(container.querySelector('[data-testid="trace-details"]')?.textContent).toContain("実行区間 1/2");
+    expect(container.querySelector('[data-testid="trace-details"]')?.textContent).toContain("実行区間 2/2");
   });
 
   it("処理の詳細（RunProcessDetails）は処理の経過の節の中に既定で閉じて置く、見出しの既定は「処理の詳細」（#2325）", () => {

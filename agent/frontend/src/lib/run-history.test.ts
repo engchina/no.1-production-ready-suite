@@ -228,6 +228,8 @@ it("承認待ちとイベントに欠けたツールもチャットと履歴で�
     type: "step", step_id: "approval_wait", kind: "approval", status: "running", started_at: NOW}]);
   const state = run({status: "waiting_approval", progress_events: events, steps: [{
     id: "synthetic-step", run_id: "run-1", kind: "tool", status: "completed", tool_call: {name: "synthetic_tool", arguments: {}},
+  }, {
+    id: "future-step", run_id: "run-1", kind: "tool", status: "waiting_approval", tool_call: {name: "synthetic_future_tool", arguments: {}},
   }] as RunState["steps"]});
   const live = runProgressSteps(state, chatProgressStepsFromEvents(events, AGENT_CHAT_PROGRESS_STEPS, state.id));
   expect(runTimelineSteps(state, () => "履歴だけの詳細")).toEqual(live.map(chatProgressTimelineStep));

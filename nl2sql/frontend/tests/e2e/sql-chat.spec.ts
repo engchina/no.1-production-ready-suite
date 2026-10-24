@@ -2301,7 +2301,13 @@ test("実測 trace の親子関係を SQL チャットで開ける", { tag: "@re
   await page.getByTestId("sql-chat-history").getByText("合成データの件数", { exact: true }).click();
   if ((page.viewportSize()?.width ?? 0) >= 1024) await page.getByRole("button", { name: "会話の履歴", exact: true }).click();
   await page.getByTestId("sql-chat-progress-summary").click();
-  await page.getByTestId("trace-details-toggle").click();
+  const details = page.locator("[data-run-process-details]");
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.locator(":scope > summary").click();
+  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
+  await expect(page.getByTestId("trace-details")).toHaveCount(0);
+  await details.getByTestId("trace-details-toggle").click();
+  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
   await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
   await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -2309,6 +2315,7 @@ test("実測 trace の親子関係を SQL チャットで開ける", { tag: "@re
 });
 
 test("チャットと履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  const {syntheticTraceSummary, captureTraceLayouts} = await import("../../../../platform/packages/ui/e2e/trace-fixture");
   const state = await setup(page);
   const turn: Turn = {job_id: "synthetic-parity", question: "合成の質問", status: "done", created_at: now, engine: "enterprise_ai_direct", steps: [{stage: "safety_check", status: "skipped"}],
     result: {generated_sql: "SELECT 1 AS VALUE FROM DUAL", original_question: "合成の質問", explanation: "合成の回答", safety: {is_safe: true, safety_checked: false}}};
@@ -2320,7 +2327,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   expect(live).toHaveLength(6);
   await page.screenshot({path: testInfo.outputPath("chat-process.png")});
   await page.route("**/api/nl2sql/history/synthetic-parity", (route) => route.fulfill({json: {data: {
-    id: "synthetic-parity", kind: "chat", session_id: "chat-1", question: "合成の質問", engine: "enterprise_ai_direct", generated_sql: "SELECT 1 AS VALUE FROM DUAL",
+    trace_summary: syntheticTraceSummary, id: "synthetic-parity", kind: "chat", session_id: "chat-1", question: "合成の質問", engine: "enterprise_ai_direct", generated_sql: "SELECT 1 AS VALUE FROM DUAL",
     executable_sql: "SELECT 1 AS VALUE FROM DUAL", created_at: now, elapsed_ms: 0, engine_timings: [], stage_timings: [],
     profile_id: "sales", profile_name: "プロファイル A", rewritten_question: "合成の質問", safety_is_safe: true,
     result_row_count: 1, result_columns: ["VALUE"], feedback_comment: "", feedback_updated_at: "", progress_events: events,
@@ -2329,5 +2336,14 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await page.getByTestId("history-detail-timeline-summary").click();
   expect(await timelineSnapshot(page.getByTestId("history-detail-timeline"))).toEqual(live);
   await expectChatNoOverflow(page);
+  const details = page.locator("[data-run-process-details]");
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.locator(":scope > summary").click();
+  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
+  await expect(page.getByTestId("trace-details")).toHaveCount(0);
+  await details.getByTestId("trace-details-toggle").click();
+  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
+  await captureTraceLayouts(page, testInfo, "history-trace");
   await page.getByTestId("history-detail-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
 });

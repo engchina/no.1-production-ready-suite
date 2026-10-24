@@ -90,6 +90,7 @@ import { t } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { useCapabilities } from "@/lib/permissions";
 import { answerNoticeText } from "@/lib/run-artifacts";
+import { toolProgressTable } from "@/components/chat/ToolProgressTable";
 import { runProgressSteps } from "@/lib/run-history";
 import { outputMissing, runOutputTable, runToolResultTables } from "@/lib/run-tables";
 import { runStatusView } from "@/lib/status-labels";
@@ -1026,7 +1027,7 @@ function RunChatTurn({
   // ツールの段に、Run の step の引数・結果・エラーを段を開いて見る詳細として結ぶ（実行の詳細と同じ対応。#2294）。
   // 結果は会話の取り直し（実行中は 1.5 秒ごと・終わったとき）で届く。
   const progressSteps = progress.progressProps.steps;
-  const stepsWithDetails = useMemo(() => runProgressSteps(run, progressSteps), [progressSteps, run]);
+  const stepsWithDetails = useMemo(() => runProgressSteps(run, progressSteps, toolProgressTable), [progressSteps, run]);
 
   return (
     // 1 往復の入れ物（質問の吹き出し・回答の枠）は 3 製品共通の ChatTurn / ChatAnswer（#1161）。

@@ -145,6 +145,7 @@ export function useNl2SqlJobPolling({
       status: isJobInFlight(data.status) ? data.status : "pending",
       created_at: data.created_at,
       steps: data.steps,
+      progress_events: data.progress_events,
       result: null,
       error_message: null,
       warning_message: null,

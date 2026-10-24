@@ -1,19 +1,15 @@
 """回答フローの回答品質をまとめて確かめる検証 CLI(rag_poc の検証スクリプトの移植)。
 
-- ``answers``: QA を検索・回答プロファイルで回答し、標準回答で 4 軸評価する
-  (rag_poc の ``scripts/run_answer_eval.py``)。
 - ``regression``: rag_poc の ``cases.json`` の質問に回答し、文字列の規則で判定する
   (rag_poc の ``scripts/regression/run_regression.py``)。
 - ``crag-goldset``: CRAG goldset をオフラインで評価する
   (rag_poc の ``scripts/evaluate_crag_goldset.py``)。
 
-``answers`` / ``regression`` は実行中の backend の API を呼ぶ(``evaluation_cli`` と同じ)。
+``regression`` は実行中の backend の API を呼ぶ(``evaluation_cli`` と同じ)。
 1 件ずつ ``<out>/<id>.json`` へ保存し、既にあれば飛ばすので、中断後は同じコマンドで
 残りだけ実行できる。
 結果には質問と回答の本文が入るため、出力先は Git 管理外(既定は ``.runs/``)にする。
 
-    uv run python -m app.rag.answer_verify_cli answers --qa qa.json --search-answer-profile <id> \\
-        --out .runs/answers/<label>
     uv run python -m app.rag.answer_verify_cli regression --cases cases.json \\
         --search-answer-profile <id> --out .runs/regression/<label> --repeat 2
     uv run python -m app.rag.answer_verify_cli crag-goldset crag_goldset.json
@@ -77,7 +73,7 @@ class VerifyError(RuntimeError):
 
 
 class RagApi:
-    """検証で使う backend API(検索と、保存した回答の評価)。"""
+    """検証で使う backend の検索 API。"""
 
     def __init__(
         self,
@@ -103,11 +99,6 @@ class RagApi:
             "/api/search", {"query": question, "search_answer_profile_id": search_answer_profile_id}
         )
 
-    def evaluate(self, trace_id: str, standard_answer: str) -> dict[str, Any]:
-        return self._post(
-            f"/api/search/answers/{trace_id}/evaluation", {"standard_answer": standard_answer}
-        )
-
     def _post(self, path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         try:
             response = self._client.post(path, json=payload)
@@ -125,88 +116,6 @@ class RagApi:
         if not isinstance(data, dict):
             raise VerifyError(f"{path} の応答に data がありません。")
         return data
-
-
-# ---- answers ---------------------------------------------------------------------------------
-
-
-def run_answers(
-    api: RagApi,
-    items: Sequence[Mapping[str, Any]],
-    *,
-    search_answer_profile_id: str,
-    out: Path,
-    log: Callable[[str], None] = print,
-) -> None:
-    out.mkdir(parents=True, exist_ok=True)
-    for item in items:
-        path = out / f"{item['id']}.json"
-        if path.exists():
-            log(f"skip {path.name} (exists)")
-            continue
-        log(f"run  {item['id']} ({time.strftime('%H:%M:%S')})")
-        started = time.time()
-        record: dict[str, Any] = {"id": item["id"], "question": item["question"]}
-        try:
-            answer = api.search(str(item["question"]), search_answer_profile_id)
-            record.update(trace_id=answer.get("trace_id"), answer=answer.get("answer", ""))
-            # 回答の記録を残すのは根拠付き回答だけ(安全ポリシーで止めた質問は "blocked")。
-            answer_path = (answer.get("diagnostics") or {}).get("retrieval_strategy_adapter")
-            if answer_path != "grounded":
-                raise VerifyError(
-                    "回答の記録が無い回答(安全ポリシーで止めた質問など)のため、"
-                    "標準回答で評価できません。"
-                )
-            detail = api.evaluate(str(answer["trace_id"]), str(item["standard_answer"]))
-            record["evaluation"] = detail.get("evaluation") or {}
-        except VerifyError as exc:
-            record["error"] = str(exc)
-        record["seconds"] = round(time.time() - started)
-        path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-        evaluation = record.get("evaluation") or {}
-        log(
-            f"     {evaluation.get('status', 'error')} {_verdict(evaluation)} "
-            f"{record.get('error', '')}".rstrip()
-        )
-
-
-def _verdict(evaluation: Mapping[str, Any]) -> str:
-    passed = evaluation.get("passed")
-    return "—" if passed is None else ("合格" if passed else "不合格")
-
-
-def _failed_metrics(evaluation: Mapping[str, Any]) -> str:
-    """閾値に届かなかった評価の基準の指標(#680)。"""
-    names = [
-        str(metric.get("name"))
-        for metric in evaluation.get("metrics") or []
-        if isinstance(metric, Mapping) and metric.get("passed") is False
-    ]
-    return ", ".join(names) or "—"
-
-
-def summarize_answers(items: Sequence[Mapping[str, Any]], out: Path) -> str:
-    rows = ["| id | 状態 | 合否 | 閾値に届かない指標 |", "|---|---|---|---|"]
-    passed = completed = 0
-    for item in items:
-        path = out / f"{item['id']}.json"
-        if not path.exists():
-            rows.append(f"| {item['id']} | 未実行 | — | — |")
-            continue
-        record = json.loads(path.read_text(encoding="utf-8"))
-        evaluation = record.get("evaluation") or {}
-        status = "エラー" if record.get("error") else str(evaluation.get("status") or "—")
-        if evaluation.get("status") == "completed":
-            completed += 1
-            passed += bool(evaluation.get("passed"))
-        rows.append(
-            f"| {item['id']} | {status} | {_verdict(evaluation)} | {_failed_metrics(evaluation)} |"
-        )
-    rate = f"{passed / completed:.0%}" if completed else "—"
-    text = f"評価完了 {completed} / {len(items)} 件、合格率 {rate}\n\n" + "\n".join(rows) + "\n"
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "summary.md").write_text(text, encoding="utf-8")
-    return text
 
 
 # ---- regression ------------------------------------------------------------------------------
@@ -424,10 +333,6 @@ def _build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--only", default="", help="カンマ区切りの id。指定した件だけ実行")
         sub.add_argument("--summary-only", action="store_true", help="実行せず summary.md だけ作る")
 
-    answers = subparsers.add_parser("answers", help="QA を回答し標準回答で 4 軸評価する")
-    answers.add_argument("--qa", type=Path, required=True, help="id / question / standard_answer")
-    api_options(answers)
-
     regression = subparsers.add_parser("regression", help="cases.json の質問を回答し規則で判定する")
     regression.add_argument("--cases", type=Path, required=True)
     regression.add_argument("--repeat", type=int, default=2)
@@ -454,24 +359,16 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
         transport=transport,
     )
     try:
-        if args.command == "answers":
-            items = _only(_load_items(args.qa, "items"), args.only)
-            if not args.summary_only:
-                run_answers(
-                    api, items, search_answer_profile_id=args.search_answer_profile, out=args.out
-                )
-            print(summarize_answers(items, args.out))
-        else:
-            cases = _only(_load_items(args.cases, "cases"), args.only)
-            if not args.summary_only:
-                run_regression(
-                    api,
-                    cases,
-                    search_answer_profile_id=args.search_answer_profile,
-                    out=args.out,
-                    repeat=args.repeat,
-                )
-            print(summarize_regression(cases, args.out, args.repeat))
+        cases = _only(_load_items(args.cases, "cases"), args.only)
+        if not args.summary_only:
+            run_regression(
+                api,
+                cases,
+                search_answer_profile_id=args.search_answer_profile,
+                out=args.out,
+                repeat=args.repeat,
+            )
+        print(summarize_regression(cases, args.out, args.repeat))
     finally:
         api.close()
     return 0

@@ -505,3 +505,22 @@ def test_progress_stream_delivers_events_recorded_by_another_worker(
     persisted = repository.get_document("jobs", job_id)
     assert persisted is not None
     assert len(persisted["progress_events"]) == len(sent)
+
+
+@pytest.mark.parametrize("generation_only", [False, True])
+def test_query_history_keeps_the_same_progress_as_the_generation_page(
+    jobs: Fixture, generation_only: bool
+) -> None:
+    service, repository = jobs
+    request = _request().model_copy(update={"chat": False, "generation_only": generation_only})
+    job = run(service, start(service, request))
+    assert job.status == JobStatus.DONE
+    history = repository.list_documents("history", limit=100)
+    assert len(history) == 1
+    assert history[0]["progress_events"] == [
+        event.model_dump(mode="json") for event in job.progress_events
+    ]
+    execute = fold_chat_progress_events(job.progress_events).steps["execute_sql"]
+    assert execute.status == ("skipped" if generation_only else "done")
+    if generation_only:
+        assert execute.started_at is None and execute.finished_at is None

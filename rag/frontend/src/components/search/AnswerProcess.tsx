@@ -1,4 +1,4 @@
-import { createTraceDetailsLabels,  TraceDetails, ChatProgress, RunProcessDetails, type ChatProgressStep } from "@production-ready/ui";
+import { createTraceDetailsLabels, ChatProgress, RunProcessDetails, type ChatProgressStep } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
@@ -15,7 +15,7 @@ import { SavedAnswerRecord } from "./SavedAnswerRecord";
  *
  * チャットと RAG 検索は、この 1 つの部品で同じ位置（回答・検索結果の上。#2115）・同じ開閉・同じ「処理の詳細」を出す
  * （#2118。チャットの形にそろえる）。工程の一覧は実行中は開き、完了したら閉じる（`ChatProgress` の既定。3 製品で同じ。#2265）。
- * 「処理の詳細」は回答の記録の診断（`diagnostics`）があればその詳細（`traceId` があれば標準回答による評価も）、無ければ
+ * 「処理の詳細」は回答の記録の診断（`diagnostics`）があればその詳細、無ければ
  * 保存済みの回答の記録（`savedRecord`。会話を開き直したとき）を読み直して出す。回答の記録の削除はチャット・RAG 検索では
  * 出さない（#2325）。
  */
@@ -28,7 +28,6 @@ export function AnswerProcess({
   progressKey,
   diagnostics,
   traceSummary,
-  traceId,
   savedRecord,
   showNotices = false,
   showAutoFieldFilter,
@@ -47,8 +46,6 @@ export function AnswerProcess({
   /** 回答の記録の診断（`diagnostics.answer`）。完了後の「処理の詳細」に出す。実行中は渡さない。 */
   diagnostics?: unknown;
   traceSummary?: unknown;
-  /** 保存した回答の trace ID（「処理の詳細」の標準回答による評価）。回答を作らない検索は渡さない。 */
-  traceId?: string | null;
   /** 診断の無い保存済みの回答（会話を開き直したとき）。回答の記録を読み直して「処理の詳細」に出す。 */
   savedRecord?: { traceId: string; searchAnswerProfileId: string } | null;
   /** 回答を読むときに要る案内を「処理の詳細」に出すか。回答の本文の下に出すときは false（既定）。 */
@@ -63,7 +60,6 @@ export function AnswerProcess({
   const details = diagnostics ? (
     <AnswerDetailsPanel
       diagnostics={diagnostics}
-      traceId={traceId}
       showNotices={showNotices}
       showAutoFieldFilter={showAutoFieldFilter}
     />
@@ -77,8 +73,10 @@ export function AnswerProcess({
   ) : null;
   if (steps.length === 0 && !details && resolvedTrace == null) return null;
   // 実行の詳細の「処理の経過」の節と同じ共有の部品・名前（`RunProcessDetails`。#2325）。
-  const detailsDisclosure = details ? (
+  const detailsDisclosure = details || resolvedTrace != null ? (
     <RunProcessDetails
+      traceSummary={resolvedTrace}
+      traceLabels={createTraceDetailsLabels(t)}
       title={t("answer.process.details")}
       summaryTestId={testId ? `${testId}-details` : undefined}
     >
@@ -94,7 +92,6 @@ export function AnswerProcess({
       {steps.length > 0 ? (
         <ChatProgress
           traceLabels={createTraceDetailsLabels(t)}
-          traceSummary={resolvedTrace}
           steps={steps}
           active={active}
           startedAt={startedAt}
@@ -105,7 +102,7 @@ export function AnswerProcess({
           testId={testId}
         />
       ) : (
-        <>{detailsDisclosure}<TraceDetails labels={createTraceDetailsLabels(t)} summary={resolvedTrace} /></>
+        detailsDisclosure
       )}
     </section>
   );

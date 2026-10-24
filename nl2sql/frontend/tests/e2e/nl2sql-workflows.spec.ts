@@ -1,3 +1,5 @@
+import {timelineSnapshot} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
+import {jobProgressEvents, type JobProgressStep} from "./_helpers/job-progress";
 import { mockTabularPreview } from "./_helpers/tabular-preview";
 import { readFile } from "node:fs/promises";
 import { draftKey, WORKSPACE_DRAFT_PREFIX } from "../../src/lib/workspace-drafts";
@@ -20147,9 +20149,99 @@ test("実測 trace の親子関係を SQL 生成で開ける", { tag: "@responsi
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "done");
   await page.getByTestId("nl2sql-job-summary").click();
-  await page.getByTestId("trace-details-toggle").click();
+  const details = page.locator("[data-run-process-details]");
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.locator(":scope > summary").click();
+  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
+  await expect(page.getByTestId("trace-details")).toHaveCount(0);
+  await details.getByTestId("trace-details-toggle").click();
+  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
   await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
   await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await captureTraceLayouts(page, testInfo, "sql-generate-trace");
+});
+
+for (const scenario of ["正常", "プレビュー", "安全性の確認の省略", "安全性の確認で停止", "取消"] as const) {
+  test(`SQL 生成のイベントを履歴と同じ工程に表示する: ${scenario}`, {tag: "@responsive"}, async ({page}, testInfo) => {
+    await mockNl2SqlApi(page);
+    const start = "2026-10-23T00:00:00.000Z";
+    const end = "2026-10-23T00:00:00.600Z";
+    const cancelled = scenario === "取消";
+    const blocked = scenario === "安全性の確認で停止";
+    const skippedSafety = scenario === "安全性の確認の省略";
+    const preview = scenario === "プレビュー";
+    const eventSteps = Object.fromEntries((["queue", "prepare_context", "generate_sql", "safety_check", "execute_sql", "format_results"] as JobProgressStep[]).map((stage, index) => {
+      const skipped = (stage === "execute_sql" && (preview || blocked || cancelled)) || (stage === "format_results" && cancelled) || (stage === "safety_check" && (skippedSafety || cancelled));
+      return [stage, {
+        status: skipped ? "skipped" : stage === "safety_check" && blocked ? "failed" : "done",
+        ...(!skipped ? {startedAt: new Date(Date.parse(start) + index * 100).toISOString(), finishedAt: new Date(Date.parse(start) + index * 100 + 50).toISOString()} : {}),
+        params: {engine: "enterprise_ai_direct", rows: 1, ...(skippedSafety ? {safety_check_skipped: true} : {}), ...(cancelled ? {stopped: true} : {})},
+      }];
+    }));
+    const events = jobProgressEvents("synthetic-3198", {at: end, steps: eventSteps, terminal: cancelled ? "cancelled" : blocked ? "failed" : "done"});
+    const result = {
+      history_id: "synthetic-3198", engine: "enterprise_ai_direct", engine_meta: {}, fallback_reason: "",
+      original_question: "合成の質問", rewritten_question: "合成の質問", generated_sql: "SELECT 1 AS VALUE FROM DUAL", executable_sql: "SELECT 1 AS VALUE FROM DUAL",
+      explanation: "合成の回答", safety: {...safety, is_safe: !blocked, safety_checked: !skippedSafety, referenced_tables: [], referenced_columns: [], blocked_reason: blocked ? "合成の停止理由" : ""},
+      results: {columns: ["VALUE"], rows: [{VALUE: 1}], total: 1}, recommendations: [], repaired_sql: "", optimization_hints: [], timing: {...timing, elapsed_ms: 600},
+    };
+    const job = {job_id: "synthetic-3198", generation_only: preview, status: cancelled || blocked ? "error" : "done", created_at: start, finished_at: end, elapsed_ms: 600,
+      error_code: cancelled ? "JOB_CANCELLED" : null, error_message: cancelled ? "停止しました。" : blocked ? "合成の停止理由" : null,
+      steps: [], progress_events: events, result: cancelled ? null : result};
+    await page.route("**/api/nl2sql/jobs", (route) => fulfillJson(route, {job_id: job.job_id, status: "running", created_at: start, steps: []}));
+    await page.route("**/api/nl2sql/jobs/synthetic-3198", (route) => fulfillJson(route, job));
+    await page.goto("/query");
+    await nl2sqlQuestionInput(page).fill("合成の質問");
+    await page.getByRole("button", {name: "SQL を生成して実行", exact: true}).click();
+    await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", job.status);
+    const progress = page.getByTestId("nl2sql-job");
+    const rows = progress.locator("[data-run-timeline-step]");
+    if (!(await rows.first().isVisible())) await page.getByTestId("nl2sql-job-summary").click();
+    const live = await timelineSnapshot(progress);
+    expect(live).toHaveLength(6);
+    await progress.screenshot({path: testInfo.outputPath("sql-generation-process.png")});
+    if (cancelled) {
+      await expect(page.getByTestId("nl2sql-job-cancelled")).toContainText("停止しました。");
+      expect(live.some((row) => row.status === "skipped")).toBe(true);
+      return;
+    }
+    await page.route("**/api/nl2sql/history/synthetic-3198", (route) => fulfillJson(route, {
+      id: "synthetic-3198", question: "合成の質問", engine: "enterprise_ai_direct", generated_sql: result.generated_sql, executable_sql: result.executable_sql,
+      created_at: start, elapsed_ms: 600, generation_only: preview, engine_timings: [], stage_timings: [], profile_id: "default", profile_name: "プロファイル A",
+      rewritten_question: "合成の質問", safety_is_safe: !blocked, result_row_count: preview || blocked ? 0 : 1, result_columns: ["VALUE"], feedback_comment: "", feedback_updated_at: "", progress_events: events,
+    }));
+    await page.goto("/history?id=synthetic-3198");
+    await page.getByTestId("history-detail-timeline-summary").click();
+    expect(await timelineSnapshot(page.getByTestId("history-detail-timeline"))).toEqual(live);
+    await page.getByTestId("history-detail-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
+    await expectNoHorizontalScroll(page);
+  });
+}
+
+test("SQL 生成は最初の取得が終わる前から作成応答の開始待ちイベントを表示する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  await mockNl2SqlApi(page);
+  const at = new Date().toISOString();
+  const events = jobProgressEvents("synthetic-queue", {at, steps: {queue: "running"}});
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {release = resolve;});
+  await page.route("**/api/nl2sql/jobs", (route) => fulfillJson(route, {job_id: "synthetic-queue", status: "pending", created_at: at, steps: [], progress_events: events}));
+  await page.route("**/api/nl2sql/jobs/synthetic-queue", async (route) => {
+    await gate;
+    await fulfillJson(route, {job_id: "synthetic-queue", status: "pending", created_at: at, steps: [], progress_events: events, result: null});
+  });
+  try {
+    await page.goto("/query");
+    await nl2sqlQuestionInput(page).fill("合成の質問");
+    await page.getByRole("button", {name: "SQL を生成して実行", exact: true}).click();
+    await expect(page.getByTestId("nl2sql-job-current")).toHaveAttribute("data-step-id", "queue");
+    await expect(page.getByTestId("nl2sql-job-current")).toContainText("待っています");
+    await expect(page.getByTestId("nl2sql-job-running")).toBeVisible();
+    await expect(page.getByTestId("nl2sql-job-step-queue")).toBeVisible();
+    const progress = page.getByTestId("nl2sql-job");
+    await progress.screenshot({path: testInfo.outputPath("sql-generation-queue.png")});
+    await expectNoHorizontalScroll(page);
+  } finally {
+    release();
+  }
 });

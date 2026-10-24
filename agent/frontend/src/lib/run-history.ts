@@ -284,31 +284,47 @@ export function withToolStepDetails(progress: ChatProgressStep[], steps: readonl
 }
 
 /** イベントとツールの記録を、チャットと履歴で同じ工程に写す。 */
-export function runProgressSteps(run: RunState, progress: ChatProgressStep[]): ChatProgressStep[] {
-  const rows = withToolStepDetails(progress, run.steps);
-  const used = new Set([...pairToolProgressSteps(progress, run.steps).values()].map((step) => step.id));
+export function runProgressSteps(
+  run: RunState,
+  progress: ChatProgressStep[],
+  tableOf?: (step: RunStep) => RunTimelineStep["children"]
+): ChatProgressStep[] {
+  const pairs = pairToolProgressSteps(progress, run.steps);
+  const rows = withToolStepDetails(progress, run.steps).map((item) => {
+    const step = pairs.get(item.id);
+    const table = step && tableOf?.(step);
+    return table ? {...item, children: table} : item;
+  });
+  const used = new Set([...pairs.values()].map((step) => step.id));
   const titles = runToolTitles(run);
-  return [...rows, ...run.steps.filter((step) => !used.has(step.id)).map((step): ChatProgressStep => {
+  const missing = run.steps.filter((step) => !used.has(step.id) && (
+    progress.length === 0 || ["completed", "failed", "cancelled"].includes(step.status) ||
+    (step.status === "running" && run.status === "running")
+  ));
+  return [...rows, ...missing.map((step): ChatProgressStep => {
     const status = stepTimelineStatus(step);
     return {
-      id: `step:${step.id}`, label: toolStepLabel(step, status, titles),
+      id: `step:${step.id}`,
+      label: toolStepLabel(step, status, titles),
       status: status === "waiting" ? "running" : status,
       startedAt: step.started_at ?? step.tool_result?.started_at ?? undefined,
       finishedAt: step.completed_at ?? step.tool_result?.completed_at ?? undefined,
       durationMs: step.tool_result?.duration_ms ?? undefined,
       details: toolStepDetails(step),
+      children: tableOf?.(step),
     };
   })];
 }
 
 export function runTimelineSteps(
   run: RunState,
-  detailsOf: (step: RunStep) => RunTimelineStep["children"]
+  detailsOf: (step: RunStep) => RunTimelineStep["children"],
+  tableOf?: (step: RunStep) => RunTimelineStep["children"]
 ): RunTimelineStep[] {
   const progress = run.progress_events?.length
     ? chatProgressStepsFromEvents(run.progress_events, AGENT_CHAT_PROGRESS_STEPS, run.id)
     : [];
-  return runProgressSteps(run, progress).map((step) => ({
+  return runProgressSteps(run, progress, tableOf).map((step) => ({
     ...chatProgressTimelineStep(step),
     // イベントを持たない旧記録の詳細の表示を保つ。
     ...(progress.length === 0 ? {children: detailsOf(run.steps.find((item) => `step:${item.id}` === step.id)!)} : {}),

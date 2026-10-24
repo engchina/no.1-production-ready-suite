@@ -5,7 +5,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { operationTimestampMs } from "../../lib/operation-timing";
 import { cn } from "../../lib/utils";
 import { DEFAULT_TRACE_DETAILS_LABELS, type TraceDetailsLabels } from "../../lib/trace-labels";
-import { TraceDetails } from "../data/trace-details";
+import { RunProcessDetails } from "../data/run-detail";
 import { RunTimeline, runTimelineStepIndent, type RunTimelineStep } from "../data/run-detail";
 import { hasRunStepDetails, type RunStepDetails } from "../data/run-step-details";
 import { Disclosure } from "../ui/disclosure";
@@ -483,7 +483,7 @@ export function ChatProgress({
   className,
   testId,
 }: ChatProgressProps) {
-  const footer = traceSummary != null ? <>{footerInput}<TraceDetails summary={traceSummary} labels={traceLabels} /></> : footerInput;
+  const footer = traceSummary != null ? <RunProcessDetails traceSummary={traceSummary} traceLabels={traceLabels} summaryTestId={testId ? `${testId}-details` : undefined}>{footerInput}</RunProcessDetails> : footerInput;
   const labels = { ...DEFAULT_CHAT_PROGRESS_LABELS, ...labelOverrides };
   // 終端の判定は配信の最新の一覧で行い、表示する一覧は処理中に段階を消さない・戻さない（#1358）。
   const active = activeProp ?? isChatProgressActive(incomingSteps);

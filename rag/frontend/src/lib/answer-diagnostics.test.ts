@@ -3,9 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   unreadSectionLinks,
   confidenceVariant,
-  evaluationOutcome,
   outcomeBadge,
-  parseAnswerEvaluation,
   parseAnswerDiagnostics,
   parseRunStepDetails,
 } from "./answer-diagnostics";
@@ -144,54 +142,6 @@ describe("parseAnswerDiagnostics", () => {
     expect(confidenceVariant("high")).toBe("success");
     expect(confidenceVariant("low")).toBe("danger");
     expect(confidenceVariant("")).toBe("neutral");
-  });
-});
-
-describe("parseAnswerEvaluation", () => {
-  it("評価の基準の指標と固定項目の対応を表示用に正規化する", () => {
-    const parsed = parseAnswerEvaluation({
-      status: "completed",
-      passed: false,
-      suite: "strict",
-      standard_answer: "受注番号を入力する",
-      metrics: [
-        { name: "requirement_coverage", value: 0.5, threshold: 0.9, passed: false },
-        { name: "claim_support_rate", value: 1, threshold: 1, passed: true, reference: false },
-        { name: "answer_correctness", value: null, threshold: 0.9, passed: null, reference: false },
-      ],
-      standard_answer_scope: { requirements: [{ requirement: "登録の手順" }] },
-      coverage_checks: [{ requirement_index: 1, status: "partial", answer_quote: "受注番号" }],
-      claim_checks: [{ answer_quote: "受注番号", status: "supported", reason: "原文" }],
-      external_data_items: [],
-    });
-
-    expect(parsed?.suite).toBe("strict");
-    expect(parsed?.metrics).toEqual([
-      { name: "requirement_coverage", value: 0.5, threshold: 0.9, passed: false, reference: false },
-      { name: "claim_support_rate", value: 1, threshold: 1, passed: true, reference: false },
-      { name: "answer_correctness", value: null, threshold: 0.9, passed: null, reference: false },
-    ]);
-    expect(parsed?.coverage).toEqual([
-      { index: 1, requirement: "登録の手順", status: "partial", quote: "受注番号" },
-    ]);
-    expect(parsed?.legacy).toBe(false);
-    expect(parsed && evaluationOutcome(parsed)).toEqual({ variant: "danger", labelKey: "failed" });
-  });
-
-  it("以前の方式（4 軸・20 点満点）の結果は指標を持たず、再評価を促す", () => {
-    const parsed = parseAnswerEvaluation({ status: "completed", total_score: 20, passed: true });
-
-    expect(parsed?.metrics).toEqual([]);
-    expect(parsed && evaluationOutcome(parsed)).toEqual({ variant: "neutral", labelKey: "legacy" });
-  });
-
-  it("評価できなかった結果は指標を持たず、未完了として扱う", () => {
-    const parsed = parseAnswerEvaluation({ status: "error", message: "評価を完了できませんでした。" });
-
-    expect(parsed?.metrics).toEqual([]);
-    expect(parsed?.legacy).toBe(false);
-    expect(parsed && evaluationOutcome(parsed).labelKey).toBe("notCompleted");
-    expect(parseAnswerEvaluation(null)).toBeNull();
   });
 });
 

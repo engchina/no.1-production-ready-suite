@@ -128,14 +128,6 @@ export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
 );
 
 /**
- * 保存済みの回答の評価（標準回答による評価）の timeout（#304）。評価は LLM を複数回呼ぶため、
- * 通常の API の 30 秒では足りない。backend は評価全体を LLM 1 回の timeout の設定の上限（600 秒）で
- * 打ち切って 504 と理由を返すので、画面はそれより 30 秒長く待ち、backend の理由を表示する。
- * Nginx（`init_script.sh` が生成する設定）はさらに長い 660 秒にしている。
- */
-export const ANSWER_EVALUATION_TIMEOUT_MS = 630_000;
-
-/**
  * 回答を LLM で生成する `POST /api/search`（非ストリーム）の timeout（#375）。backend は回答生成を
  * `RAG_ANSWER_TIMEOUT_SECONDS`（上限 600 秒）で打ち切って 504 と理由（時間切れになった工程）を返すので、
  * 画面はそれより 30 秒長く待つ。SSE（`/api/search/stream`・チャットの送信）は画面で打ち切らない。
@@ -3709,12 +3701,6 @@ export const api = {
     request<AnswerRecordDetail>(
       `/api/search/answers/${encodeURIComponent(traceId)}`,
     ),
-  evaluateAnswerRecord: (traceId: string, standardAnswer: string) =>
-    request<AnswerRecordDetail>(
-      `/api/search/answers/${encodeURIComponent(traceId)}/evaluation`,
-      jsonBody({ standard_answer: standardAnswer }),
-      { timeoutMs: ANSWER_EVALUATION_TIMEOUT_MS },
-    ),
   getRuntimeKnowledge: (id: string) =>
     request<RuntimeKnowledgeData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/runtime-knowledge`,
@@ -4870,8 +4856,5 @@ export interface AnswerRecordDetail extends AnswerRecordSummary {
   answer_diagnostics: Record<string, JsonValue>;
   /** 回答に付けた注意書き（この機能より前の回答・確認の質問は null / 未指定。#2405）。 */
   notice?: string | null;
-  /** 標準回答で評価できるか(この機能より前の回答は評価の入力を持たない)。 */
-  evaluation_available?: boolean;
-  /** 標準回答による評価の結果(未評価は null)。 */
-  evaluation?: Record<string, JsonValue> | null;
+
 }

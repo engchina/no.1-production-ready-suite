@@ -93,8 +93,6 @@ export function SavedAnswerRecord({
       <TraceDetails labels={createTraceDetailsLabels(t)} summary={record.answer_diagnostics?.trace_summary} />
       <AnswerDetailsPanel
         diagnostics={record.answer_diagnostics}
-        traceId={record.evaluation_available ? record.trace_id : null}
-        evaluation={record.evaluation}
         title={detailsTitle}
       />
     </div>

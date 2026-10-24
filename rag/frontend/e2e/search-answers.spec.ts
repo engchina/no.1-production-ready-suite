@@ -403,10 +403,9 @@ const ANSWER_MODELS = [
   { model_id: "vision-m", display_name: "grok-4.3", kind: "vision" },
 ];
 
-test("回答のモデルは既定のテキストモデルと画像対応モデルだけ。検索は選択でき、チャットでは選択行を隠す（#675）", { tag: "@responsive" }, async ({
+test("検索とチャットの入力欄に回答するモデルを表示せず既定を使う", { tag: "@responsive" }, async ({
   page,
-  isMobile,
-}) => {
+}, testInfo) => {
   const bodies: Record<string, unknown>[] = [];
   await mockAnswerHistory(page, 0);
   await page.route("**/api/search/models", (route) => route.fulfill(envelope(ANSWER_MODELS)));
@@ -417,35 +416,17 @@ test("回答のモデルは既定のテキストモデルと画像対応モデ�
 
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /経理ビュー/);
-  // 回答を生成しないときはモデルを選ばせない。入力欄の上のチップの行（#686）。
   const modelRow = page.getByTestId("search-answer-model");
   await expect(modelRow).toHaveCount(0);
   await enableSearchAnswer(page);
-  await expect(modelRow.locator("button[aria-pressed]")).toHaveText(["gpt-oss-120b（テキスト）", "grok-4.3（画像対応）"]);
-  // 説明は常設せず、ラベルの横の info アイコンから出す（#901）。マウスはポインタを乗せると出し、
-  // タッチ端末（ホバーが無い）はタップで出す。
-  await expect(modelRow).not.toContainText("根拠の図や画像を読むときだけ画像対応モデルを使います");
-  const modelInfo = modelRow.getByRole("button", { name: "回答するモデルの説明" });
-  if (isMobile) await modelInfo.tap();
-  else await modelInfo.hover();
-  await expect(page.getByTestId("search-answer-model-help")).toBeVisible();
-  await expect(page.getByTestId("search-answer-model-help")).toContainText(
-    "根拠の図や画像を読むときだけ画像対応モデルを使います"
-  );
-  const vision = modelRow.getByRole("button", { name: "grok-4.3（画像対応）" });
-  await vision.click();
-  await expect(vision).toHaveAttribute("aria-pressed", "true");
-  // 比較はしないので 1 つだけ。テキストを選ぶと画像対応は外れ、もう一度押すと未選択に戻る。
-  const text = modelRow.getByRole("button", { name: "gpt-oss-120b（テキスト）" });
-  await text.click();
-  await expect(vision).toHaveAttribute("aria-pressed", "false");
-  await text.click();
-  await expect(text).toHaveAttribute("aria-pressed", "false");
-  await vision.click();
+  await expect(modelRow).toHaveCount(0);
+  await expect(page.getByRole("button", {name: "回答するモデルの説明"})).toHaveCount(0);
+  await page.screenshot({path: testInfo.outputPath("search-without-model-selection.png")});
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("図の数値は？");
   await page.getByRole("button", { name: "検索", exact: true }).click();
   await expect.poll(() => bodies.length).toBe(1);
-  expect(bodies[0]).toMatchObject({ generate_answer: true, model_id: "vision-m" });
+  expect(bodies[0]).toMatchObject({ generate_answer: true });
+  expect(bodies[0]).not.toHaveProperty("model_id");
   await expectNoPageOverflow(page);
 
   await mockChat(page, "bv-1");
@@ -459,9 +440,9 @@ test("回答のモデルは既定のテキストモデルと画像対応モデ�
   await expectNoPageOverflow(page);
 });
 
-test("既定のテキストモデルが画像対応モデルも兼ねるとき、回答するモデルに画像対応を出す（#888）", async ({
+test("テキストと画像の既定が同じ場合もモデル選択行を表示しない", {tag: "@responsive"}, async ({
   page,
-}) => {
+}, testInfo) => {
   // 既定のテキストモデルと既定の画像対応モデルが同じ（例: xai.grok-4.3）なら 1 件で kind は text_vision。
   const shared = [{ model_id: "xai.grok-4.3", display_name: "xai.grok-4.3", kind: "text_vision" }];
   const bodies: Record<string, unknown>[] = [];
@@ -483,17 +464,14 @@ test("既定のテキストモデルが画像対応モデルも兼ねるとき�
   await selectSearchAnswerProfile(page, /経理ビュー/);
   await enableSearchAnswer(page);
   const modelRow = page.getByTestId("search-answer-model");
-  await expect(modelRow.locator("button[aria-pressed]")).toHaveText(["xai.grok-4.3（テキスト・画像対応）"]);
-  // 説明は info アイコンの説明として読み上げに結び付く（閉じている間も読める。#901）。
-  await expect(modelRow.getByRole("button", { name: "回答するモデルの説明" })).toHaveAccessibleDescription(
-    "このモデルは画像対応モデルも兼ね、根拠の図や画像も読んで回答します。"
-  );
-  // 選ぶと、そのモデルで回答する（比較はしない）。
-  await modelRow.getByRole("button", { name: "xai.grok-4.3（テキスト・画像対応）" }).click();
+  await expect(modelRow).toHaveCount(0);
+  await expect(page.getByRole("button", {name: "回答するモデルの説明"})).toHaveCount(0);
+  await page.screenshot({path: testInfo.outputPath("search-without-model-selection.png")});
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("図の数値は？");
   await page.getByRole("button", { name: "検索", exact: true }).click();
   await expect.poll(() => bodies.length).toBe(1);
-  expect(bodies[0]).toMatchObject({ generate_answer: true, model_id: "xai.grok-4.3" });
+  expect(bodies[0]).toMatchObject({ generate_answer: true });
+  expect(bodies[0]).not.toHaveProperty("model_id");
   await expectNoPageOverflow(page);
 });
 

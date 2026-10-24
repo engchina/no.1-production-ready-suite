@@ -51,25 +51,6 @@ class FakeApi:
                     },
                 }
             )
-        if request.url.path.endswith("/evaluation"):
-            passed = "承認" in body["standard_answer"]
-            return _envelope(
-                {
-                    "trace_id": request.url.path.split("/")[-2],
-                    "evaluation": {
-                        "status": "completed",
-                        "passed": passed,
-                        "metrics": [
-                            {
-                                "name": "requirement_coverage",
-                                "value": 1.0 if passed else 0.5,
-                                "threshold": 0.8,
-                                "passed": passed,
-                            }
-                        ],
-                    },
-                }
-            )
         return _envelope(None, 404, ["not found"])
 
 
@@ -110,66 +91,10 @@ def test_split_sections_and_judge_follow_rag_poc_rules() -> None:
     assert judge(ANSWER, {"applied_all": [["印影"]]})["passed"] is False
 
 
-def test_answers_evaluates_resumes_and_summarizes(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    qa = _write(
-        tmp_path / "qa.json",
-        {
-            "items": [
-                {"id": "a1", "question": "承認者は？", "standard_answer": "部長の承認が必要"},
-                {"id": "a2", "question": "締め日は？", "standard_answer": "月末"},
-                {"id": "a3", "question": "失敗する質問", "standard_answer": "x"},
-            ]
-        },
-    )
-    out = tmp_path / "out"
-    api = FakeApi(fail_ids={"失敗する質問"})
-    args = ["answers", "--qa", str(qa), "--search-answer-profile", "bv-1", "--out", str(out)]
-
-    assert main([*args, "--tenant-id", "tenant-a"], transport=httpx.MockTransport(api)) == 0
-    first_calls = len(api.requests)
-    # 2 回目は保存済みの件を飛ばす(失敗した件も記録済みなので再実行しない)。
-    assert main(args, transport=httpx.MockTransport(api)) == 0
-
-    assert len(api.requests) == first_calls
-    search_path, search_body, headers = api.requests[0]
-    assert (search_path, search_body) == (
-        "/api/search",
-        {"query": "承認者は？", "search_answer_profile_id": "bv-1"},
-    )
-    assert headers["x-tenant-id"] == "tenant-a"
-    a1 = json.loads((out / "a1.json").read_text(encoding="utf-8"))
-    assert a1["evaluation"]["passed"] is True
-    assert "検索が一時的に利用できません" in json.loads((out / "a3.json").read_text())["error"]
-    summary = (out / "summary.md").read_text(encoding="utf-8")
-    assert summary.startswith("評価完了 2 / 3 件、合格率 50%")
-    assert "| 不合格 | requirement_coverage |" in summary
-    assert "| a3 | エラー | — | — |" in summary
-    assert "合格率 50%" in capsys.readouterr().out
-
-
-def test_answers_records_error_when_answer_has_no_record(tmp_path: Path) -> None:
-    """回答フローを通らなかった回答(安全ポリシーで止めた質問など)は評価せず、エラーにする。"""
-    qa = _write(tmp_path / "qa.json", [{"id": "a1", "question": "q", "standard_answer": "s"}])
-    api = FakeApi(path="blocked")
-
-    main(
-        [
-            "answers",
-            "--qa",
-            str(qa),
-            "--search-answer-profile",
-            "bv-1",
-            "--out",
-            str(tmp_path / "out"),
-        ],
-        transport=httpx.MockTransport(api),
-    )
-
-    record = json.loads((tmp_path / "out" / "a1.json").read_text(encoding="utf-8"))
-    assert "回答の記録が無い" in record["error"]
-    assert [path for path, _, _ in api.requests] == ["/api/search"]
+def test_individual_answer_evaluation_command_is_removed() -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["answers"])
+    assert exc.value.code == 2
 
 
 def test_regression_runs_repeats_resumes_and_summarizes(tmp_path: Path) -> None:

@@ -733,7 +733,13 @@ test("実測 trace の親子関係を RAG 検索で開ける", { tag: "@responsi
   await selectSearchAnswerProfile(page, VIEWS[0].name);
   await search(page, "合成データを確認");
   await page.getByTestId("search-run-progress-summary").click();
-  await page.getByTestId("trace-details-toggle").click();
+  const details = page.locator("[data-run-process-details]");
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.locator(":scope > summary").click();
+  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
+  await expect(page.getByTestId("trace-details")).toHaveCount(0);
+  await details.getByTestId("trace-details-toggle").click();
+  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
   await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
   await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
   await expectNoPageOverflow(page);

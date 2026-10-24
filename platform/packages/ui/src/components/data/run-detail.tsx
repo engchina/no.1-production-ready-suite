@@ -331,6 +331,8 @@ export function RunDetailSection({
 // 処理の詳細
 
 export interface RunProcessDetailsProps {
+  traceSummary?: unknown;
+  traceLabels?: TraceDetailsLabels;
   /** 見出し（翻訳済み）。既定「処理の詳細」。 */
   title?: ReactNode;
   /** 開いた中身の先頭の補足。 */
@@ -354,6 +356,8 @@ export interface RunProcessDetailsProps {
  * 入れ子の `Disclosure` に畳む。
  */
 export function RunProcessDetails({
+  traceSummary,
+  traceLabels,
   title = DEFAULT_RUN_DETAIL_LABELS.processDetails,
   description,
   defaultOpen = false,
@@ -376,6 +380,7 @@ export function RunProcessDetails({
       data-testid={testId}
     >
       {description ? <p className="text-xs text-fg-muted">{description}</p> : null}
+      <TraceDetails summary={traceSummary} labels={traceLabels} />
       {children}
     </Disclosure>
   );
@@ -759,8 +764,9 @@ export interface RunTimelineSectionProps {
   totalDurationMs?: number | null;
   /** 段が無いときの表示（開閉の見出しを出さずに置く）。 */
   empty?: ReactNode;
-  /** 処理の詳細（`RunProcessDetails`。#2325）。開いた中身のタイムラインの後ろに置く。 */
+  /** 処理の詳細の中身。共通の開閉内に trace とまとめる。 */
   processDetails?: ReactNode;
+  processDetailsProps?: Omit<RunProcessDetailsProps, "children" | "traceSummary" | "traceLabels">;
   /** 段の一覧を最初から開く。既定は閉じる（#2473）。 */
   defaultOpen?: boolean;
   labels?: RunDetailLabelsInput;
@@ -782,6 +788,7 @@ export function RunTimelineSection({
   totalDurationMs,
   empty,
   processDetails,
+  processDetailsProps,
   defaultOpen = false,
   labels: labelsInput,
   testId,
@@ -804,14 +811,12 @@ export function RunTimelineSection({
           data-run-timeline-section=""
         >
           <RunTimeline steps={steps} totalDurationMs={totalDurationMs} showSummary={false} labels={labelsInput} />
-          <TraceDetails summary={traceSummary} labels={traceLabels} />
-          {processDetails}
+          {processDetails != null || traceSummary != null ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceLabels={traceLabels}>{processDetails}</RunProcessDetails> : null}
         </Disclosure>
       ) : (
         <>
           {empty}
-          <TraceDetails summary={traceSummary} labels={traceLabels} />
-          {processDetails}
+          {processDetails != null || traceSummary != null ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceLabels={traceLabels}>{processDetails}</RunProcessDetails> : null}
         </>
       )}
     </RunDetailSection>
@@ -888,12 +893,10 @@ export function RunDetailSkeleton({ testId }: { testId?: string }) {
   );
 }
 
-function TraceSegmentDetails({ summary, labels, title, defaultOpen }: { summary: unknown; labels: TraceDetailsLabels; title: string; defaultOpen: boolean }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const trace = open ? traceTimeline(summary, labels) : null;
+function TraceSegmentContent({ summary, labels }: { summary: unknown; labels: TraceDetailsLabels }) {
+  const trace = traceTimeline(summary, labels);
   const notSampled = summary && typeof summary === "object" && "sampled" in summary && summary.sampled === false;
-  return <Disclosure variant="plain" size="sm" summary={title} open={open} onOpenChange={setOpen}>
-    {trace ? <div className="grid min-w-0 gap-2">
+  return trace ? <div className="grid min-w-0 gap-2">
     <p className="text-xs text-fg-muted">{trace.steps.length === 0 ? labels.empty : trace.partial ? labels.partial : labels.measured}</p>
     {notSampled ? <p className="text-xs text-fg-muted">{labels.notSampled}</p> : null}
     {trace.traceId ? <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -901,7 +904,13 @@ function TraceSegmentDetails({ summary, labels, title, defaultOpen }: { summary:
       <CopyButton type="button" variant="ghost" size="sm" iconOnly text={trace.traceId} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} />
     </div> : null}
     <RunTimeline steps={trace.steps} />
-  </div> : null}
+  </div> : null;
+}
+
+function TraceSegmentDetails({ summary, labels, title, defaultOpen }: { summary: unknown; labels: TraceDetailsLabels; title: string; defaultOpen: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return <Disclosure variant="plain" size="sm" summary={title} open={open} onOpenChange={setOpen}>
+    {open ? <TraceSegmentContent summary={summary} labels={labels} /> : null}
   </Disclosure>;
 }
 
@@ -915,7 +924,7 @@ export function TraceDetails({ summary, labels = DEFAULT_TRACE_DETAILS_LABELS }:
   return <Disclosure variant="plain" size="sm" summary={labels.title} open={open} onOpenChange={setOpen} summaryProps={{ "data-testid": "trace-details-toggle" }}>
     {open ? <div className="grid min-w-0 gap-3" data-testid="trace-details">
       {segments.length === 0 ? <p className="text-xs text-fg-muted">{labels.empty}</p> : null}
-      {segments.map((segment, index) => <div key={segment && typeof segment === "object" && "root_span_id" in segment && typeof segment.root_span_id === "string" ? segment.root_span_id : index}>
+      {segments.length === 1 ? <TraceSegmentContent summary={segments[0]} labels={labels} /> : segments.map((segment, index) => <div key={segment && typeof segment === "object" && "root_span_id" in segment && typeof segment.root_span_id === "string" ? segment.root_span_id : index}>
         <TraceSegmentDetails summary={segment} labels={labels} title={labels.segment(index + 1, segments.length)} defaultOpen={index === segments.length - 1} />
       </div>)}
     </div> : null}

@@ -739,7 +739,7 @@ for (const viewport of [
       expect(Math.abs(effortBox!.y - connectionBox!.y)).toBeLessThan(1);
     }
     // 説明（none は送らない・保存の前にテスト）を欄から読める。
-    await expect(effort1).toHaveAccessibleDescription(/none は推論の量を送らず.*保存の前に「テスト」/);
+    await expect(effort1).toHaveAccessibleDescription(/none は指定を送らず.*「テスト」で確認/);
     await effort1.click();
     await expect(
       page.getByRole("listbox", { name: "モデル 1 の推論の量" }).getByRole("option")

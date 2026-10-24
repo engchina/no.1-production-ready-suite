@@ -15,7 +15,6 @@ import {
   PageBody,
   PageHeader,
   RunDetailLayout,
-  RunProcessDetails,
   RunDetailSection,
   RunDetailSkeleton,
   RunFactList,
@@ -137,11 +136,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
   // （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置）。
   const processDetails =
     showGeneratedSql || engineErrors.length > 0 || callerFacts.length > 0 ? (
-      <RunProcessDetails
-        title={t("history.detail.technical")}
-        testId="history-detail-technical"
-        summaryTestId="history-detail-process-details"
-      >
+      <>
         {callerFacts.length > 0 ? <RunFactList facts={callerFacts} testId="history-detail-caller" /> : null}
         {showGeneratedSql ? (
           <div className="grid min-w-0 gap-1">
@@ -157,7 +152,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
             </pre>
           </div>
         ) : null}
-      </RunProcessDetails>
+      </>
     ) : null;
 
   return (
@@ -214,6 +209,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
               steps={steps}
               labels={{ stepStatus: CHAT_PROGRESS_LABELS.status }}
               totalDurationMs={item.elapsed_ms ?? null}
+              processDetailsProps={{ title: t("history.detail.technical"), testId: "history-detail-technical", summaryTestId: "history-detail-process-details" }}
               processDetails={processDetails}
               testId="history-detail-timeline"
             />

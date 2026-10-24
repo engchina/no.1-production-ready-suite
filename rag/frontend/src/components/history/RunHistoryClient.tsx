@@ -32,7 +32,6 @@ import {
   RUN_PERIODS,
   RunDetailLayout,
   RunDetailSection,
-  RunProcessDetails,
   RunDetailSkeleton,
   RunFactList,
   type RunExecutorFilter,
@@ -485,14 +484,10 @@ function RunDetailView({ run }: { run: RunDetail }) {
   // チャット・RAG 検索の処理の経過の「処理の詳細」と同じ名前・同じ部品（`RunProcessDetails`）・同じ位置。
   const processDetails =
     run.answer_diagnostics || technicalFacts.length ? (
-      <RunProcessDetails
-        title={t("answer.process.details")}
-        testId="run-history-technical"
-        summaryTestId="run-history-process-details"
-      >
+      <>
         {run.answer_diagnostics ? <AnswerDetailsPanel diagnostics={run.answer_diagnostics} /> : null}
         {technicalFacts.length ? <RunFactList facts={technicalFacts} /> : null}
-      </RunProcessDetails>
+      </>
     ) : null;
 
   return (
@@ -575,7 +570,8 @@ function RunDetailView({ run }: { run: RunDetail }) {
           steps={timelineSteps}
           totalDurationMs={run.elapsed_ms}
           empty={<p className="text-sm text-fg-muted">{t("history.process.empty")}</p>}
-          processDetails={processDetails}
+          processDetailsProps={{ title: t("answer.process.details"), testId: "run-history-technical", summaryTestId: "run-history-process-details" }}
+              processDetails={processDetails}
           testId="run-history-timeline"
         />
       }

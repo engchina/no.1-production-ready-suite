@@ -334,7 +334,9 @@ for (const viewport of VIEWPORTS) {
 }
 
 test("チャットと履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
+  const {syntheticTraceSummary, captureTraceLayouts} = await import("../../../platform/packages/ui/e2e/trace-fixture");
   const {run} = seedRunningRun(mockApi);
+  run.trace_summary = syntheticTraceSummary;
   const start = "2026-10-23T00:00:00.000Z";
   const end = "2026-10-23T00:00:02.000Z";
   run.created_at = start;
@@ -356,5 +358,14 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await page.getByTestId("run-timeline-section-summary").click();
   expect(await timelineSnapshot(page.getByTestId("run-timeline-section"))).toEqual(live);
   await expectNoHorizontalOverflow(page);
+  const details = page.locator("[data-run-process-details]");
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.locator(":scope > summary").click();
+  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
+  await expect(page.getByTestId("trace-details")).toHaveCount(0);
+  await details.getByTestId("trace-details-toggle").click();
+  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
+  await captureTraceLayouts(page, testInfo, "history-trace");
   await page.getByTestId("run-timeline-section").screenshot({path: testInfo.outputPath("history-process.png")});
 });
