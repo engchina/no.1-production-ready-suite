@@ -10,9 +10,11 @@ import {
   CHAT_PROGRESS_SSE_HEARTBEAT_EVENT,
   CHAT_PROGRESS_STEP_STATUSES,
   CHAT_PROGRESS_TERMINAL_STATUSES,
+  chatProgressHasSpans,
   chatProgressLabelState,
   chatProgressStepsFromEvents,
   chatProgressTerminalOf,
+  chatProgressTraceIdOf,
   parseChatProgressEvent,
   parseChatProgressEvents,
   parseChatProgressPage,
@@ -106,6 +108,12 @@ describe("契約（platform/contracts/chat-progress）", () => {
       "detail",
       "params",
       "details",
+      "name",
+      "parent_id",
+      "root",
+      "trace_id",
+      "attributes",
+      "cancelled",
     ];
     expect(Object.keys(defs.ChatProgressStepEvent.properties).sort()).toEqual([...stepFields].sort());
     // 段の詳細（#2294）の形は共有 UI の `RunStepDetails` と同じ。
@@ -284,5 +292,53 @@ describe("段の詳細（#2294）", () => {
       tool: { label: () => "ツール", details: (_status, _params, value) => (value ? { lines: [...(value.lines ?? []), "追加"] } : undefined) },
     };
     expect(chatProgressStepsFromEvents(events, relabeled)[0].details).toEqual({ lines: ["選んだ条: 第 1 条", "追加"] });
+  });
+});
+
+// #3226: 処理の経過は trace（span の木）の投影。段のイベントは span の開始・変更・終了。
+describe("span の段（#3226）", () => {
+  const at = (seconds: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, seconds)).toISOString();
+  const trace = "a".repeat(32);
+  let seq = 0;
+  const span = (id: string, parent: string | undefined, name: string, status: ChatProgressStepStatus, extra: Partial<ChatProgressStepEvent> = {}): ChatProgressStepEvent => ({
+    schema_version: 1, seq: ++seq, target_id: "t", attempt: 0, emitted_at: at(seq), type: "step",
+    step_id: id, status, name, trace_id: trace, started_at: at(0), ...(parent ? { parent_id: parent } : {}),
+    ...(status === "running" ? {} : { finished_at: at(5) }), ...extra,
+  });
+  const definitions: ChatProgressStepDefinitions = {
+    answer_step: { label: (status, params) => `工程 ${String(params.name)}${status === "running" ? "（実行中）" : ""}`, meta: (_s, params) => (params.llm_calls ? `LLM ${params.llm_calls} 回` : undefined) },
+  };
+
+  it("親子から木の順に並べ、root は行にせず、名前は定義と共通の規則で付ける", () => {
+    seq = 0;
+    const events: ChatProgressEvent[] = [
+      span("r", undefined, "rag.answer", "running", { root: true }),
+      span("a", "r", "rag.engine.stage", "running", { kind: "answer_step", params: { name: "検索" } }),
+      span("b", "r", "rag.history_rewrite", "done", { attributes: { "pr.stage": "history_rewrite" } }),
+      span("c", "a", "gen_ai.embeddings", "done", { attributes: { "gen_ai.request.model": "embed-x" } }),
+      span("a", "r", "rag.engine.stage", "done", { kind: "answer_step", params: { name: "検索", llm_calls: 1 } }),
+      span("d", "a", "mcp.request", "skipped", { cancelled: true }),
+    ];
+    const steps = chatProgressStepsFromEvents(events, definitions, "t");
+    expect(steps.map((step) => [step.label, step.level ?? 0])).toEqual([
+      ["工程 検索", 0],
+      ["埋め込みの作成 · embed-x", 1],
+      ["MCP の呼び出し", 1],
+      ["history_rewrite", 0],
+    ]);
+    expect(steps[0].meta).toBe("LLM 1 回");
+    expect(steps[2].detail).toBe("停止");
+    // 開いた詳細に元の span の名前と技術の値を残す。
+    expect(steps[1].details?.fields).toContainEqual({ label: "Span name", value: "gen_ai.embeddings", mono: true });
+    expect(chatProgressTraceIdOf(events)).toBe(trace);
+    expect(chatProgressHasSpans(events)).toBe(true);
+  });
+
+  it("実行中の span は実行中の行として出し、古い形式の段だけの記録は span の記録としない", () => {
+    seq = 0;
+    const running = chatProgressStepsFromEvents([span("r", undefined, "op", "running", { root: true }), span("x", "r", "gen_ai.chat", "running", { attributes: { "gen_ai.request.model": "m" } })], {}, "t");
+    expect(running).toMatchObject([{ label: "モデルの呼び出し · m", status: "running" }]);
+    const legacy: ChatProgressEvent[] = [{ schema_version: 1, seq: 1, target_id: "t", attempt: 0, emitted_at: at(1), type: "step", step_id: "s1", status: "done" }];
+    expect(chatProgressHasSpans(legacy)).toBe(false);
   });
 });

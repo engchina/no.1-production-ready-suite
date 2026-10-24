@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { useTraceDetailsLabels } from "../data/trace-labels-provider";
 import {
   CHAT_PROGRESS_SSE_EVENT,
   CHAT_PROGRESS_SSE_HEARTBEAT_EVENT,
@@ -216,7 +217,12 @@ export function useChatProgressStream({
     },
     [pull]
   );
-  const steps = useMemo(() => labelChatProgressSteps(current.steps, definitions), [current.steps, definitions]);
+  // span の段の技術の名前と段の名前は、製品の root の文言（`TraceDetailsLabelsProvider`）で付ける（#3226）。
+  const traceLabels = useTraceDetailsLabels();
+  const steps = useMemo(
+    () => labelChatProgressSteps(current.steps, definitions, { traceLabels }),
+    [current.steps, definitions, traceLabels]
+  );
   const canRefresh = fetchEvents !== undefined || Boolean(streamUrl) || onStalled !== undefined;
   const tracker = useChatProgressTracker({
     key,

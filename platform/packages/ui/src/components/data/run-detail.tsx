@@ -336,6 +336,11 @@ export function RunDetailSection({
 export interface RunProcessDetailsProps {
   /** 実測の trace（「トレースの詳細」）。文言は製品の root の `TraceDetailsLabelsProvider` から取る。 */
   traceSummary?: unknown;
+  /**
+   * 処理の経過が trace の投影のとき（#3226）の trace id。「処理の詳細」の先頭に Trace ID とコピーのボタンを出す。
+   * `traceSummary` は渡さない（処理の経過と同じ記録を 2 回出さない）。
+   */
+  traceId?: string;
   /** 見出し（翻訳済み）。既定「処理の詳細」。 */
   title?: ReactNode;
   /** 開いた中身の先頭の補足。 */
@@ -360,6 +365,7 @@ export interface RunProcessDetailsProps {
  */
 export function RunProcessDetails({
   traceSummary,
+  traceId,
   title = DEFAULT_RUN_DETAIL_LABELS.processDetails,
   description,
   defaultOpen = false,
@@ -368,6 +374,7 @@ export function RunProcessDetails({
   summaryTestId,
   className,
 }: RunProcessDetailsProps) {
+  const traceLabels = useTraceDetailsLabels();
   return (
     <Disclosure
       variant="plain"
@@ -382,6 +389,7 @@ export function RunProcessDetails({
       data-testid={testId}
     >
       {description ? <p className="text-xs text-fg-muted">{description}</p> : null}
+      {traceId ? <TraceIdRow traceId={traceId} labels={traceLabels} /> : null}
       <TraceDetails summary={traceSummary} />
       {children}
     </Disclosure>
@@ -760,6 +768,8 @@ export function RunTimeline({
 
 export interface RunTimelineSectionProps {
   traceSummary?: unknown;
+  /** 処理の経過が trace の投影のときの trace id（「処理の詳細」に出す。#3226）。 */
+  traceId?: string;
   /** 節の見出し（翻訳済み。「処理の経過」）。 */
   title: string;
   steps: readonly RunTimelineStep[];
@@ -769,7 +779,7 @@ export interface RunTimelineSectionProps {
   empty?: ReactNode;
   /** 処理の詳細の中身。共通の開閉内に trace とまとめる。 */
   processDetails?: ReactNode;
-  processDetailsProps?: Omit<RunProcessDetailsProps, "children" | "traceSummary">;
+  processDetailsProps?: Omit<RunProcessDetailsProps, "children" | "traceSummary" | "traceId">;
   /** 段の一覧を最初から開く。既定は閉じる（#2473）。 */
   defaultOpen?: boolean;
   labels?: RunDetailLabelsInput;
@@ -785,6 +795,7 @@ export interface RunTimelineSectionProps {
  */
 export function RunTimelineSection({
   traceSummary,
+  traceId,
   title,
   steps,
   totalDurationMs,
@@ -814,12 +825,12 @@ export function RunTimelineSection({
           data-run-timeline-section=""
         >
           <RunTimeline steps={steps} totalDurationMs={totalDurationMs} showSummary={false} labels={labelsInput} />
-          {processDetails != null || traceSummary != null ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary}>{processDetails}</RunProcessDetails> : null}
+          {processDetails != null || traceSummary != null || traceId ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceId={traceId}>{processDetails}</RunProcessDetails> : null}
         </Disclosure>
       ) : (
         <>
           {empty}
-          {processDetails != null || traceSummary != null ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary}>{processDetails}</RunProcessDetails> : null}
+          {processDetails != null || traceSummary != null || traceId ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceId={traceId}>{processDetails}</RunProcessDetails> : null}
         </>
       )}
     </RunDetailSection>
@@ -896,17 +907,21 @@ export function RunDetailSkeleton({ testId }: { testId?: string }) {
   );
 }
 
+/** Trace ID とコピーのボタン。ID の文字列だけを折り返し、ボタンを同じ行に保つ（375px。#3219）。 */
+function TraceIdRow({ traceId, labels }: { traceId: string; labels: TraceDetailsLabels }) {
+  return <div className="flex min-w-0 items-center gap-2" data-trace-id-row="">
+    <span className="min-w-0 break-all font-mono text-xs text-fg-muted">Trace ID: {traceId}</span>
+    <CopyButton type="button" variant="ghost" size="sm" iconOnly className="shrink-0" text={traceId} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} />
+  </div>;
+}
+
 function TraceSegmentContent({ summary, labels }: { summary: unknown; labels: TraceDetailsLabels }) {
   const trace = traceTimeline(summary, labels);
   const notSampled = summary && typeof summary === "object" && "sampled" in summary && summary.sampled === false;
   return trace ? <div className="grid min-w-0 gap-2">
     <p className="text-xs text-fg-muted">{trace.steps.length === 0 ? labels.empty : trace.partial ? labels.partial : labels.measured}</p>
     {notSampled ? <p className="text-xs text-fg-muted">{labels.notSampled}</p> : null}
-    {/* ID の文字列だけを折り返し、コピーのボタンを同じ行に保つ（375px。#3219）。 */}
-    {trace.traceId ? <div className="flex min-w-0 items-center gap-2" data-trace-id-row="">
-      <span className="min-w-0 break-all font-mono text-xs text-fg-muted">Trace ID: {trace.traceId}</span>
-      <CopyButton type="button" variant="ghost" size="sm" iconOnly className="shrink-0" text={trace.traceId} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} />
-    </div> : null}
+    {trace.traceId ? <TraceIdRow traceId={trace.traceId} labels={labels} /> : null}
     <RunTimeline steps={trace.steps} />
   </div> : null;
 }
