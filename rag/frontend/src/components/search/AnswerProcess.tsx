@@ -1,5 +1,6 @@
-import { createTraceDetailsLabels, ChatProgress, RunProcessDetails, type ChatProgressStep } from "@production-ready/ui";
+import { ChatProgress, RunProcessDetails, type ChatProgressStep } from "@production-ready/ui";
 
+import { ragTraceDetailsLabels } from "@/lib/answer-process";
 import { t } from "@/lib/i18n";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
 import { SavedAnswerRecord } from "./SavedAnswerRecord";
@@ -76,7 +77,7 @@ export function AnswerProcess({
   const detailsDisclosure = details || resolvedTrace != null ? (
     <RunProcessDetails
       traceSummary={resolvedTrace}
-      traceLabels={createTraceDetailsLabels(t)}
+      traceLabels={ragTraceDetailsLabels()}
       title={t("answer.process.details")}
       summaryTestId={testId ? `${testId}-details` : undefined}
     >
@@ -91,7 +92,7 @@ export function AnswerProcess({
     >
       {steps.length > 0 ? (
         <ChatProgress
-          traceLabels={createTraceDetailsLabels(t)}
+          traceLabels={ragTraceDetailsLabels()}
           steps={steps}
           active={active}
           startedAt={startedAt}

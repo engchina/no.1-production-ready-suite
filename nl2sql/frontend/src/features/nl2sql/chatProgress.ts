@@ -6,12 +6,15 @@
 // にする。段階の状態（開始前の失敗・停止・終端の未実行・終端まで今の段階がある〔#1176〕）は backend が決める。
 import {
   chatProgressLabelState,
+  createTraceDetailsLabels,
   type ChatProgressLabels,
   type ChatProgressLabelState,
   type ChatProgressParams,
   type ChatProgressStep,
   type ChatProgressStepDefinitions,
   type ChatProgressStepStatus,
+  type TraceDetailsLabels,
+  type TraceSpanLabelInput,
 } from "@production-ready/ui";
 
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
@@ -93,6 +96,22 @@ export const CHAT_PROGRESS_LABELS: Partial<ChatProgressLabels> = {
 export function chatStageLabel(stage: string, failed = false): string | null {
   if (!Object.prototype.hasOwnProperty.call(STAGE_LABELS, stage)) return null;
   return STAGE_LABELS[stage as ChatStage][failed ? "failed" : "done"];
+}
+
+/**
+ * 「トレースの詳細」の段の span（`nl2sql.<段>`。属性 `pr.stage`）の名前を、処理の経過の段と同じ文言にする（#3214）。
+ * 停止・未実行の段は未実行の形。知らない span は部品の既定の名前にする。
+ */
+export function nl2sqlTraceSpanLabel({ operationName, stage, status }: TraceSpanLabelInput): string | undefined {
+  if (!stage || operationName !== `nl2sql.${stage}` || !Object.prototype.hasOwnProperty.call(STAGE_LABELS, stage)) {
+    return undefined;
+  }
+  return STAGE_LABELS[stage as ChatStage][status === "done" ? "done" : status === "failed" ? "failed" : "idle"];
+}
+
+/** NL2SQL の「トレースの詳細」の文言（段の span の名前は処理の経過と同じ）。 */
+export function nl2sqlTraceDetailsLabels(): TraceDetailsLabels {
+  return createTraceDetailsLabels(t, { spanLabel: nl2sqlTraceSpanLabel });
 }
 
 function label(stage: ChatStage) {

@@ -10,7 +10,6 @@ import {
   RefreshCw,
 } from "lucide-react";
 import {
-  createTraceDetailsLabels,
   ApiErrorBanner,
   Banner,
   Button,
@@ -104,6 +103,7 @@ import {
   CHAT_PROGRESS_LABELS,
   CHAT_PROGRESS_STEP_DEFINITIONS,
   chatJobElapsedMs,
+  nl2sqlTraceDetailsLabels,
 } from "./chatProgress";
 import type { ChatHistoryOffsetPage, JobCreateData, JobData, Nl2SqlEngine } from "./types";
 import { useProfileEngine } from "./useProfileEngine";
@@ -1071,7 +1071,7 @@ function SqlChatTurn({
           {/* 処理の段階（#1145）。実行中は今の段階と開いた一覧、完了後は回答の上に「処理の経過」の 1 行（押すと開く。3 製品で同じ。#2265）。 */}
           <ChatProgress
             cancelled={turn.error_code === "JOB_CANCELLED"}
-            traceLabels={createTraceDetailsLabels(t)}
+            traceLabels={nl2sqlTraceDetailsLabels()}
           traceSummary={turn.trace_segments && turn.trace_segments.length > 1 ? turn.trace_segments : turn.trace_summary}
             {...progress.progressProps}
             startedAt={sentAtMs}

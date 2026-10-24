@@ -12,7 +12,13 @@
  * 全体を包む工程（`answer` / `retrieval`）は、中の工程を行にするので出さない。工程の名前は
  * `answerStepDisplayName` で利用者向けの名前にする。
  */
-import type { ChatProgressStep, ChatProgressStepStatus } from "@production-ready/ui";
+import {
+  createTraceDetailsLabels,
+  type ChatProgressStep,
+  type ChatProgressStepStatus,
+  type TraceDetailsLabels,
+  type TraceSpanLabelInput,
+} from "@production-ready/ui";
 
 import { parseRunStepDetails, type AnswerDiagnostics } from "./answer-diagnostics";
 import { formatNumber } from "./format";
@@ -82,6 +88,27 @@ export function answerStepDisplayName(name: string): string {
   const base = attempt ? value.slice(0, attempt.index) : value;
   if (!attempt || !Object.prototype.hasOwnProperty.call(ANSWER_STEP_NAME, base)) return value;
   return t("answer.step.attempt", { name: t(ANSWER_STEP_NAME[base]), count: Number(attempt[1]) });
+}
+
+/**
+ * 「トレースの詳細」の span の名前を、処理の経過の行と同じ名前にする（#3214）。
+ *
+ * 回答エンジンの工程の span（`rag.engine.stage`）は工程名（属性 `pr.stage`）から `answerStepDisplayName` で、
+ * パイプラインの段の span（`rag.<段>`）は処理の経過の段の名前にする。root（`rag.answer` / `rag.search`）は
+ * 部品の既定の「実行の全体」にし、中の同名の段（`rag.answer`）と分ける。知らない span は部品の既定の名前にする。
+ */
+export function ragTraceSpanLabel({ operationName, stage, root }: TraceSpanLabelInput): string | undefined {
+  if (root || !stage) return undefined;
+  if (operationName === "rag.engine.stage") return answerStepDisplayName(stage);
+  if (operationName !== `rag.${stage}`) return undefined;
+  if (stage === "answer") return t("search.stage.answer");
+  if (stage === "retrieval") return t("search.stage.retrieval");
+  return Object.prototype.hasOwnProperty.call(PIPELINE_STEP_LABEL, stage) ? t(PIPELINE_STEP_LABEL[stage]) : undefined;
+}
+
+/** RAG の「トレースの詳細」の文言（span の名前は処理の経過と同じ）。 */
+export function ragTraceDetailsLabels(): TraceDetailsLabels {
+  return createTraceDetailsLabels(t, { spanLabel: ragTraceSpanLabel });
 }
 
 /**

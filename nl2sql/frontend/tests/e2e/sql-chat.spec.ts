@@ -2292,7 +2292,9 @@ test("安全確認を省略した SQL を安全検査済みと表示しない", 
 });
 
 test("実測 trace の親子関係を SQL チャットで開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const { syntheticTraceSummary, captureTraceLayouts } = await import("../../../../platform/packages/ui/e2e/trace-fixture");
+  const { syntheticTraceSummary: baseTrace, syntheticSpan, captureTraceLayouts } = await import("../../../../platform/packages/ui/e2e/trace-fixture");
+  // 段の span は処理の経過と同じ名前で出す（#3214）。
+  const syntheticTraceSummary = { ...baseTrace, spans: [...baseTrace.spans, syntheticSpan("8", "1", "nl2sql.generate_sql", { "pr.stage": "generate_sql" })] };
   const state = await setup(page);
   state.turns.push({ job_id: "chat-1", question: "合成データの件数", status: "done", created_at: now, steps: [], trace_summary: syntheticTraceSummary,
     result: { generated_sql: "SELECT 1 FROM DUAL", original_question: "合成データの件数", explanation: "合成の応答です。", safety: { is_safe: true, safety_checked: true, referenced_tables: [], referenced_columns: [] } } });
@@ -2309,6 +2311,7 @@ test("実測 trace の親子関係を SQL チャットで開ける", { tag: "@re
   await details.getByTestId("trace-details-toggle").click();
   await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
   await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expect(page.getByTestId("trace-details").locator("[data-run-timeline-label]")).toContainText(["実行の全体", "SQL を生成しました"]);
   await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await captureTraceLayouts(page, testInfo, "sql-chat-trace");

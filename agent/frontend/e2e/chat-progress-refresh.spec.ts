@@ -153,7 +153,7 @@ for (const theme of ["light", "dark"] as const) {
 
 // trace と進捗の開閉は、実際の会話の API と画面を通して確かめる。
 test("実測 trace の親子関係を会話で開ける", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
-  const { syntheticTraceSummary, captureTraceLayouts } = await import("../../../platform/packages/ui/e2e/trace-fixture");
+  const { syntheticTraceSummary, syntheticChatSpanLabel, captureTraceLayouts } = await import("../../../platform/packages/ui/e2e/trace-fixture");
   const { run, progress } = seedRunningRun(mockApi);
   complete(run, progress);
   run.trace_summary = syntheticTraceSummary;
@@ -168,8 +168,9 @@ test("実測 trace の親子関係を会話で開ける", { tag: "@responsive" }
   await details.getByTestId("trace-details-toggle").click();
   await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
   const trace = page.getByTestId("trace-details");
-  await expect(trace).toContainText("synthetic.execute");
-  await expect(trace).toContainText("gen_ai.chat");
+  // root は「実行の全体」、gen_ai の呼び出しはモデル名つきの名前にする（#3214）。
+  await expect(trace).toContainText("実行の全体");
+  await expect(trace).toContainText(syntheticChatSpanLabel);
   await expect(trace).toContainText("gen_ai.execute_tool");
   await expect(trace).toContainText("2.0 秒");
   await expect(page.locator("body")).not.toHaveText(/private-payload/);

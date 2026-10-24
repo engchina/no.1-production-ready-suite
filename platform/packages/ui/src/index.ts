@@ -891,4 +891,4 @@ export {
 export { TraceDetails } from "./components/data/trace-details";
 export { traceTimeline } from "./lib/trace-tree";
 
-export { TRACE_DETAILS_JA, createTraceDetailsLabels, type TraceDetailsLabels } from "./lib/trace-labels";
+export { TRACE_DETAILS_JA, createTraceDetailsLabels, type TraceDetailsLabels, type TraceSpanLabel, type TraceSpanLabelInput } from "./lib/trace-labels";
