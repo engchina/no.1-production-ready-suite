@@ -1,12 +1,12 @@
 /**
  * チャットの回答の処理の段階（3 製品共通の `ChatProgress`。#1145 / #1147）の、Agent の段階の定義（#1359）。
  *
- * 段階は backend が Run の状態から記録したイベント（`RunState.progress_events`。3 製品共通の契約）で届き、
- * 共通の `useChatProgressStream` が段階の一覧にまとめる。ここは段階の種類（`kind`）→ i18n の名前だけを持つ。
- * 並びは backend の記録の順（最初に出た順）: 進め方の検討（`plan`）→ ツールの呼び出し（`tool:<名前>[#n]`）→
- * 承認待ち（`approval_wait[#n]`。承認を求めた回ごと）→ 回答前の確認の待ち（`confirmation_wait[#n]`。#1839）→
- * 回答の作成（`respond[#n]`）。回答の作成の後に別のツールを
- * 呼んだら、backend がその段階を `plan`（進め方の検討の完了）に変える。
+ * 処理の経過は Run の trace（span の木。#3226）の投影で、backend が記録した span のイベント
+ * （`RunState.progress_events`。3 製品共通の契約）で届き、共通の `useChatProgressStream` / `chatProgressStepsFromEvents`
+ * が木の順・入れ子にする。ここは工程の span の種類（`kind`）→ i18n の名前だけを持つ: モデルの呼び出しがツールを
+ * 求めたら進め方の検討（`plan`）、最終の回答なら回答の作成（`respond`）、ツールの呼び出し（`tool`）、承認の待ち
+ * （`approval`）、回答前の確認の待ち（`confirmation`。#1839）。種類の無い span（呼び出し中のモデル・MCP の呼び出し
+ * など）は共通の規則の名前で出す。
  */
 
 import { chatProgressLabelState, type ChatProgressStep, type ChatProgressStepDefinitions } from "@production-ready/ui";
@@ -69,8 +69,8 @@ export const AGENT_CHAT_PROGRESS_STEPS: ChatProgressStepDefinitions = {
         failed: t("chat.progress.approval.failed"),
         idle: t("chat.progress.approval.idle"),
       })[chatProgressLabelState(status)],
-    // 承認を待っている間は、承認を待つツールの名前を補足に出す。
-    detail: (status, params) => (status === "running" && typeof params.tools === "string" && params.tools ? params.tools : undefined),
+    // 承認を待ったツールの名前を補足に出す（待ちの span は待ちが終わったときに記録する。#3226）。
+    detail: (_status, params) => (typeof params.tools === "string" && params.tools ? params.tools : undefined),
   },
   // Agent 自身の回答前の確認（`ask_user_confirmation`。#1839）で、利用者の答えを待つ段階。
   confirmation: {

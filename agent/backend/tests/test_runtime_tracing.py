@@ -57,6 +57,66 @@ async def test_stream_span_lives_until_consumption_and_records_known_usage() -> 
         shutdown_tracing()
 
 
+@pytest.mark.asyncio
+async def test_model_call_span_carries_the_turn_kind_for_progress() -> None:
+    """モデルの呼び出しの span は、応答がツールを求めたら進め方の検討、最終の回答なら回答の作成の
+    工程の種類を持ち、実行中から span の知らせで届く（処理の経過。#3226）。"""
+    updates: list[Any] = []
+
+    class Client:
+        def __init__(self, output: list[Any]) -> None:
+            self.output = output
+
+        async def create(self, **kwargs: Any) -> Any:
+            return SimpleNamespace(status="completed", output=self.output, usage=None)
+
+    with operation_trace("agent.execute", operation_id="run-k", listener=updates.append):
+        await _OciResponses(Client([SimpleNamespace(type="function_call")])).create(
+            model="model-a", input="x"
+        )
+        await _OciResponses(Client([SimpleNamespace(type="message")])).create(
+            model="model-a", input="x"
+        )
+    chats = [update for update in updates if update.operation_name == "gen_ai.chat"]
+    # 呼び出しの間は種類が決まっていない（共通の名前「モデルの呼び出し」で出す）。
+    assert (chats[0].status, chats[0].display) == ("running", None)
+    finished = [update for update in chats if update.status == "done"]
+    assert [update.display.kind if update.display else None for update in finished] == [
+        "plan",
+        "respond",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streamed_model_call_takes_the_turn_kind_from_the_completed_event() -> None:
+    class Stream:
+        def __init__(self) -> None:
+            self.sent = False
+
+        async def __anext__(self) -> Any:
+            if self.sent:
+                raise StopAsyncIteration
+            self.sent = True
+            return SimpleNamespace(
+                type="response.completed",
+                response=SimpleNamespace(output=[{"type": "message"}], usage=None),
+            )
+
+        async def close(self) -> None:
+            pass
+
+    class Client:
+        async def create(self, **kwargs: Any) -> Any:
+            return Stream()
+
+    with operation_trace("agent.execute", operation_id="run-s") as summary:
+        stream = await _OciResponses(Client()).create(model="model-a", stream=True, input="x")
+        async for _ in stream:
+            pass
+    [chat] = [span for span in summary.spans if span.operation_name == "gen_ai.chat"]
+    assert chat.display is not None and chat.display.kind == "respond"
+
+
 def test_initial_event_export_never_calls_transport_inline() -> None:
     obs.clear_trace_export_retry_queue()
     with (

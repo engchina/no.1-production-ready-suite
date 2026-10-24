@@ -38,6 +38,7 @@ from pr_backend_core.chat_progress import (
     parse_chat_progress_events,
 )
 from pr_backend_core.observability.tracing import (
+    SpanUpdate,
     TraceSummary,
     append_trace_segment,
     capture_trace_context,
@@ -59,7 +60,7 @@ from pydantic import (
 
 from app.features.agent import call_abort, run_claim, storage_backend
 from app.features.agent import runtime_checkpoint_store as checkpoint_store
-from app.features.agent.chat_progress import record_run_progress
+from app.features.agent.chat_progress import record_run_span, record_run_terminal
 from app.features.agent.clarification_cancel import (
     CANCEL_METADATA_KEY,
     button_record,
@@ -721,9 +722,9 @@ class RunState(BaseModel):
     admin_review: RunFeedback | None = None
     # モデルの利用量（#772）。組み込み Runtime がモデルを呼ぶ前の Run・#772 より前の Run は None。
     usage: RunUsage | None = None
-    # チャットの処理の段階のイベント（3 製品共通の契約。#1359）。Run のイベントを足すたびに
-    # `chat_progress.record_run_progress` が Run の状態から記録する。checkpoint の snapshot に入る
-    # ので、memory / file / Oracle のどの保存先でも Run と一緒に残る。
+    # チャットの処理の経過のイベント（3 製品共通の契約。#1359）。実行区間の span の開始・終了
+    # （#3226。`record_builtin_span`）と、Run が終わったときの終端を記録する。checkpoint の
+    # snapshot に入るので、memory / file / Oracle のどの保存先でも Run と一緒に残る。
     progress_events: list[ChatProgressEvent] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
@@ -1322,6 +1323,10 @@ class AgentRuntimeRepositoryContract(Protocol):
     def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
     def note_builtin_tool_titles(self, run_id: str, titles: Mapping[str, str]) -> None: ...
+    def builtin_tool_titles(self, run_id: str) -> dict[str, str]: ...
+    def builtin_tool_steps(self, run_id: str, call_ids: Collection[str]) -> list[RunStep]: ...
+    def builtin_tool_step(self, run_id: str, step_id: str) -> RunStep | None: ...
+    def record_builtin_span(self, run_id: str, update: SpanUpdate) -> None: ...
     def record_tool_grounding(
         self, run_id: str, action: str, answer: str, *, declined: bool = False
     ) -> None: ...
@@ -1426,6 +1431,8 @@ class AgentRuntimeRepositoryContract(Protocol):
 # event loop のスレッドからの変更をバックグラウンドで書くか（テストは conftest で False にし、
 # 書き込みを待つ。バックグラウンドの書き込みを確かめるテストだけ True にする）。
 BACKGROUND_WRITES = True
+# 処理の経過の span の記録をまとめて保存の予定に積むまでの時間（秒。#3226）。
+SPAN_PERSIST_DELAY_SECONDS = 0.2
 # 印の付け忘れの検出（テストの conftest が True にする）。保存のたびに全 Run・業務 Agent の JSON を
 # 比べ、変わったのに印の無いものがあれば AssertionError（本番では比べない。O(Run 数) のため）。
 VERIFY_CHANGE_TRACKING = False
@@ -1471,32 +1478,42 @@ class _RepositoryLock:
         self._local = threading.local()
         self._flush = flush
         self._on_enter = on_enter
+        # lock を持つスレッド（span の知らせが lock の中から届いたかの判定。#3226）。
+        self._owner: int | None = None
 
     def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
-        return self._lock.acquire(blocking, timeout)
+        acquired = self._lock.acquire(blocking, timeout)
+        if acquired:
+            self._owner = threading.get_ident()
+        return acquired
 
     def release(self) -> None:
+        self._owner = None
         self._lock.release()
 
     def locked(self) -> bool:
         return self._lock.locked()
+
+    def held_by_current_thread(self) -> bool:
+        """今のスレッドが lock を持っているか。"""
+        return self._owner == threading.get_ident() and self._lock.locked()
 
     def note_staged(self, ticket: int) -> None:
         """lock を持つスレッドが保存の予定を積んだ（放した後に `ticket` まで書く）。"""
         self._local.ticket = max(int(getattr(self._local, "ticket", 0)), ticket)
 
     def __enter__(self) -> _RepositoryLock:
-        self._lock.acquire()
+        self.acquire()
         if self._on_enter is not None:
             try:
                 self._on_enter()
             except BaseException:
-                self._lock.release()
+                self.release()
                 raise
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        self._lock.release()
+        self.release()
         ticket = int(getattr(self._local, "ticket", 0))
         if not ticket:
             return
@@ -1532,6 +1549,8 @@ class AgentRuntimeRepository:
         self._written_ticket = 0
         self._writer_wake = threading.Event()
         self._writer_thread: threading.Thread | None = None
+        # span の記録をまとめて保存する予定があるか（`record_builtin_span`。#3226）。
+        self._span_persist_scheduled = False
         self._tracking_baseline: dict[EntityKey, str] = {}
         self._runs: dict[str, RunState] = {}
         self._approvals: dict[str, ApprovalRequest] = {}
@@ -1600,15 +1619,19 @@ class AgentRuntimeRepository:
     def _quarantine_json_locked(self) -> list[Any]:
         return [record.model_dump(mode="json") for record in self._quarantined]
 
-    def _persist_locked(self) -> None:
-        """印を付けた変更を保存の予定に積む（書き込みは lock を放した後。lock の中で呼ぶ）。"""
+    def _persist_locked(self, *, background: bool = False) -> bool:
+        """印を付けた変更を保存の予定に積む（書き込みは lock を放した後。lock の中で呼ぶ）。
+
+        `background` なら、lock を放したスレッドで書かずに background の書き込みに任せる（True を
+        返したら、呼んだ側が lock を放した後に `_request_background_write` を呼ぶ）。
+        """
         if VERIFY_CHANGE_TRACKING:
             self._verify_change_tracking_locked()
         if not self._stores_changes():
             self._clear_change_marks_locked()
-            return
+            return False
         if not (self._changed or self._quarantine_changed):
-            return
+            return False
         self._staged_ticket += 1
         staged = _StagedChanges(
             ticket=self._staged_ticket,
@@ -1618,7 +1641,10 @@ class AgentRuntimeRepository:
             staged.quarantined = self._quarantine_json_locked()
         self._pending.append(staged)
         self._clear_change_marks_locked()
+        if background and BACKGROUND_WRITES:
+            return True
         self._lock.note_staged(staged.ticket)
+        return False
 
     def _clear_change_marks_locked(self) -> None:
         self._changed.clear()
@@ -3186,6 +3212,87 @@ class AgentRuntimeRepository:
             self._mark_run_changed(run)
             self._persist_locked()
 
+    def builtin_tool_titles(self, run_id: str) -> dict[str, str]:
+        """Run に渡したツールの表示名（処理の経過のツールの span の名前の値。無い Run は空）。"""
+        from app.features.agent.chat_progress import tool_titles
+
+        with self._lock:
+            run = self._runs.get(run_id)
+            return tool_titles(run) if run is not None else {}
+
+    def builtin_tool_steps(self, run_id: str, call_ids: Collection[str]) -> list[RunStep]:
+        """呼び出し ID のツールの step（処理の経過のツールの span の詳細。記録の順）。"""
+        wanted = {call_id for call_id in call_ids if call_id}
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None or not wanted:
+                return []
+            return [
+                step.model_copy(deep=True)
+                for step in run.steps
+                if step.tool_call is not None and step.tool_call.trace_id in wanted
+            ]
+
+    def builtin_tool_step(self, run_id: str, step_id: str) -> RunStep | None:
+        """ツールの step（処理の経過のツールの span の詳細。無ければ None）。"""
+        with self._lock:
+            run = self._runs.get(run_id)
+            step = (
+                next((item for item in run.steps if item.id == step_id), None)
+                if run is not None
+                else None
+            )
+            return step.model_copy(deep=True) if step is not None else None
+
+    def record_builtin_span(self, run_id: str, update: SpanUpdate) -> None:
+        """実行区間の span の知らせを、Run の処理の経過のイベントに記録する（#3226）。
+
+        `operation_trace` の listener から呼ぶ。知らせは event loop・ツールのスレッドのどちらから
+        も届き、Run の lock の中（実行区間を確定する `finish_operation_trace` が root の span を
+        閉じる）からも届くので、lock を持っていればそのまま記録する（保存は lock を持つ側が積む）。
+        lock を取って記録したときは、少し待ってまとめて保存の予定に積み、background の書き込みに
+        任せる（ツールのスレッドで保存先への書き込みを待たない。`SPAN_PERSIST_DELAY_SECONDS`）。
+        終端の後の知らせは記録しない。
+        """
+        if self._lock.held_by_current_thread():
+            self._record_builtin_span_locked(run_id, update)
+            return
+        schedule = False
+        with self._lock:
+            if not self._record_builtin_span_locked(run_id, update):
+                return
+            self._condition.notify_all()
+            if not (BACKGROUND_WRITES and self._stores_changes()):
+                self._persist_locked()
+                return
+            # span の知らせは 1 回の実行で多いので、少し待ってまとめて保存の予定に積む（Run の
+            # JSON を知らせのたびに作らない）。メモリの Run はすぐ変わるので、同じプロセスの
+            # 読み取りは待たない。
+            schedule = not self._span_persist_scheduled
+            self._span_persist_scheduled = True
+        if schedule:
+            timer = threading.Timer(SPAN_PERSIST_DELAY_SECONDS, self._persist_span_changes)
+            timer.daemon = True
+            timer.start()
+
+    def _persist_span_changes(self) -> None:
+        """まとめた span の記録を保存の予定に積み、background の書き込みに任せる。"""
+        with self._lock:
+            self._span_persist_scheduled = False
+            staged = self._persist_locked(background=True)
+        if staged:
+            self._request_background_write()
+
+    def _record_builtin_span_locked(self, run_id: str, update: SpanUpdate) -> bool:
+        """span の知らせを記録して保存の印を付ける（置き換わった実行の知らせは捨てる）。"""
+        run = self._runs.get(run_id)
+        if run is None or self._stale_execution_locked(run, "progress_span", segment_end=False):
+            return False
+        if not record_run_span(run, update):
+            return False
+        self._changed.add((RUN_ENTITY, run.id))
+        return True
+
     def record_tool_grounding(
         self, run_id: str, action: str, answer: str, *, declined: bool = False
     ) -> None:
@@ -3814,8 +3921,9 @@ class AgentRuntimeRepository:
         )
         run.events.append(event)
         self._mark_run_changed(run)
-        # 処理の段階（#1359）は Run の状態から照合して記録する（変わらなければ記録しない）。
-        record_run_progress(run)
+        # 処理の経過（#1359）は span の記録（#3226。`record_builtin_span`）。Run が終わったら終端を
+        # 記録する（終わっていない・記録済みなら何もしない）。
+        record_run_terminal(run)
         record_runtime_event(event.type.value, {"run_id": run.id, **event.payload})
         self._condition.notify_all()
 
@@ -5767,8 +5875,8 @@ def _repair_run(run: RunState) -> list[str]:
                 payload={"source": "storage_repair", "repairs": list(repairs)},
             )
         )
-        # 直した状態（失敗にした Run など）を処理の段階にも反映する（#1359）。
-        record_run_progress(run)
+        # 直した状態（失敗にした Run など）を処理の経過の終端にも反映する（#1359）。
+        record_run_terminal(run)
     return repairs
 
 

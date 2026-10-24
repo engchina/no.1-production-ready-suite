@@ -32,7 +32,7 @@ import logging
 import re
 import sys
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
-from contextlib import suppress
+from contextlib import AbstractContextManager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -65,10 +65,14 @@ from pr_backend_core.chat_history import (
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.request_context import bind_log_context
 from pr_backend_core.observability.tracing import (
+    ObservedSpan,
+    SpanListener,
+    SpanUpdate,
     attach_trace_context,
     finish_operation_trace,
     observed_span,
     operation_trace,
+    record_span,
 )
 from pr_system_settings.enterprise_ai_errors import (
     EnterpriseAiIncomplete,
@@ -142,6 +146,22 @@ from app.features.agent.answer_validation import (
     with_no_evidence_notice,
     with_unverified_notice,
     without_lookup_notes,
+)
+from app.features.agent.chat_progress import (
+    APPROVAL_WAIT_SPAN,
+    CONFIRMATION_WAIT_SPAN,
+    EXECUTE_TOOL_SPAN,
+    KIND_APPROVAL,
+    KIND_CONFIRMATION,
+    approval_rounds,
+    approval_wait_display,
+    confirmation_wait_display,
+    model_turn_kind,
+    recorded_wait_rounds,
+    tool_attributes,
+    tool_details,
+    tool_display,
+    tool_titles,
 )
 from app.features.agent.clarification_cancel import (
     CANCEL_METADATA_KEY,
@@ -601,6 +621,9 @@ class _ObservedStream:
             ):
                 event = await self._inner.__anext__()
             kind = getattr(event, "type", "")
+            if kind == "response.completed":
+                # 応答がツールを求めたか・最終の回答かで、処理の経過の工程の種類を決める（#3226）。
+                _set_turn_kind(self._span, getattr(event, "response", None))
             if kind in {"response.completed", "response.incomplete", "response.failed"}:
                 self._exhausted = True
                 if kind != "response.completed":
@@ -648,6 +671,13 @@ class _ObservedStream:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
+
+
+def _set_turn_kind(span: ObservedSpan, response: object) -> None:
+    """モデルの呼び出しの span に工程の種類（進め方の検討・回答の作成）を付ける（#3226）。"""
+    kind = model_turn_kind(getattr(response, "output", None))
+    if kind is not None:
+        span.set_display(kind=kind)
 
 
 class _ObservedResponseManager:
@@ -816,6 +846,9 @@ class _OciResponses:
             if _response_incomplete(response, request) is not None:
                 span.set_attributes({"error.type": "IncompleteResponse"})
                 span.set_status("failed")
+            else:
+                # 応答がツールを求めたか・最終の回答かで、処理の経過の工程の種類を決める（#3226）。
+                _set_turn_kind(span, response)
             span.finish()
             return response
 
@@ -1555,6 +1588,8 @@ class _ToolRecorder:
         # Run は次のモデルの呼び出しの前に失敗にする）。
         stop = await asyncio.to_thread(self.loop_stop_finding)
         if stop is not None:
+            # 上限で実行しなかった呼び出しも処理の経過に残す（step は作らない。#3226）。
+            record_skipped_tool(self.run_id, ToolCall(name=name, arguments={}, trace_id=call_id))
             return self.loop_refused(name, stop)
         # 2. 引数: 読めない JSON・object 以外を空の引数にせず、モデルに見せた schema で確かめる
         # （#2630）。
@@ -1656,47 +1691,30 @@ class _ToolRecorder:
             return self.cancelled_result(name)
         if exceeded is not None:
             message = budget_exceeded_message(name, exceeded)
-            runtime_repository.finish_builtin_tool_step(
-                self.run_id,
-                step_id,
-                ToolResult(
-                    name=name,
-                    success=False,
-                    error=message,
-                    error_code=BUDGET_EXCEEDED_CODE,
-                    error_details={"budget": exceeded},
-                ),
+            exceeded_result = ToolResult(
+                name=name,
+                success=False,
+                error=message,
+                error_code=BUDGET_EXCEEDED_CODE,
+                error_details={"budget": exceeded},
             )
+            runtime_repository.finish_builtin_tool_step(self.run_id, step_id, exceeded_result)
+            # 予算の上限で実行しなかった呼び出し（#3226）。
+            record_skipped_tool(self.run_id, call, step_id=step_id, result=exceeded_result)
             return json.dumps(
                 {"error": message, "error_code": BUDGET_EXCEEDED_CODE, "budget": exceeded},
                 ensure_ascii=False,
             )
-        # 4. handler（呼び先へ送る）。
-        with observed_span(
-            "gen_ai.execute_tool",
-            attributes={
-                "gen_ai.operation.name": "execute_tool",
-                "gen_ai.tool.name": name,
-                "gen_ai.tool.call.id": call_id,
-            },
-        ) as tool_span:
-            result = await self.execute(
-                step_id,
-                call,
-                context,
-                definition=definition,
-                handler=handler,
-                scoped=scoped,
-                authorization=authorization,
-            )
-            if not result.success:
-                tool_span.set_status(
-                    "cancelled"
-                    if result.error_code == RUN_CANCELLED_CODE
-                    or result.error_details.get("reason")
-                    in {call_abort.REASON_RUN_CANCELLED, call_abort.REASON_TASK_CANCELLED}
-                    else "failed"
-                )
+        # 4. handler（呼び先へ送る。ツールの span は `execute` が測る）。
+        result = await self.execute(
+            step_id,
+            call,
+            context,
+            definition=definition,
+            handler=handler,
+            scoped=scoped,
+            authorization=authorization,
+        )
         if result.success:
             output = result.output or {}
             base = mcp_base_tool_name(name)
@@ -1784,19 +1802,18 @@ class _ToolRecorder:
             step_id, _context = runtime_repository.start_builtin_tool_step(self.run_id, call)
         except RunNotActiveError:
             return self.cancelled_result(call.name)
-        runtime_repository.finish_builtin_tool_step(
-            self.run_id,
-            step_id,
-            ToolResult(
-                name=call.name,
-                success=False,
-                error=str(payload.get("error") or ""),
-                error_code=error_code,
-                error_details={key: value for key, value in payload.items() if key != "error"},
-                policy_decision=policy_decision,
-                approval_required=approval_required,
-            ),
+        rejected = ToolResult(
+            name=call.name,
+            success=False,
+            error=str(payload.get("error") or ""),
+            error_code=error_code,
+            error_details={key: value for key, value in payload.items() if key != "error"},
+            policy_decision=policy_decision,
+            approval_required=approval_required,
         )
+        runtime_repository.finish_builtin_tool_step(self.run_id, step_id, rejected)
+        # 呼び先へ送らなかった呼び出しも、実行しなかったツールとして処理の経過に残す（#3226）。
+        record_skipped_tool(self.run_id, call, step_id=step_id, result=rejected)
         logger.info(
             "builtin_runtime_tool_call_rejected",
             extra={"run_id": self.run_id, "tool_name": call.name, "error_code": error_code},
@@ -2002,6 +2019,59 @@ class _ToolRecorder:
             )
         if authorization.approval_id and not context.approval_id:
             context = context.model_copy(update={"approval_id": authorization.approval_id})
+        # ツールの呼び出しの span（処理の経過のツールの行。#3226）。回答前の確認のツールは
+        # 利用者の答えを返すだけなので span にしない（待ちの区間の span が表す）。実行中も
+        # 呼んだ引数を開いて見られる。
+        scope: AbstractContextManager[ObservedSpan | None] = (
+            nullcontext(None)
+            if call.name == CONFIRMATION_TOOL
+            else observed_span(
+                EXECUTE_TOOL_SPAN,
+                attributes=tool_attributes(call.name, call.trace_id),
+                display=tool_display(
+                    call, runtime_repository.builtin_tool_titles(self.run_id), run_step=step_id
+                ),
+            )
+        )
+        with scope as tool_span:
+            result = await self._execute_handler(
+                step_id,
+                call,
+                context,
+                definition=definition,
+                handler=handler,
+                scoped=scoped,
+                authorization=authorization,
+                abortable=abortable,
+            )
+            if tool_span is not None:
+                if not result.success:
+                    tool_span.set_status(
+                        "cancelled"
+                        if result.error_code == RUN_CANCELLED_CODE
+                        or result.error_details.get("reason")
+                        in {call_abort.REASON_RUN_CANCELLED, call_abort.REASON_TASK_CANCELLED}
+                        else "failed"
+                    )
+                # 終わったツールの詳細（内部名・エラー・引数と結果）は終わりのイベントで送る
+                # （#2373）。
+                tool_span.set_display(details=tool_details(call, result))
+        return result
+
+    async def _execute_handler(
+        self,
+        step_id: str,
+        call: ToolCall,
+        context: ToolInvocationContext,
+        *,
+        definition: ToolDefinition | None,
+        handler: ToolHandler | None,
+        scoped: data_scope.ScopeEnforcement | None,
+        authorization: _Authorization,
+        abortable: bool,
+    ) -> ToolResult:
+        from app.features.agent.runtime import runtime_repository
+
         # 境界で確かめたのと同じポリシーで呼ぶ（`force` は承認の記録と結び付けた呼び出しなど、
         # 「承認」を実行してよいと判断したときだけ。#2610）。
         invoke = functools.partial(
@@ -3091,6 +3161,99 @@ def _save_support_task(run_id: str, task: _SupportTaskRun) -> dict[str, Any] | N
         return None
 
 
+def _progress_listener(run_id: str) -> SpanListener:
+    """実行区間の span の知らせを Run の処理の経過に記録する listener（#3226）。"""
+    from app.features.agent.runtime import runtime_repository
+
+    def listen(update: SpanUpdate) -> None:
+        runtime_repository.record_builtin_span(run_id, update)
+
+    return listen
+
+
+def record_skipped_tool(
+    run_id: str,
+    call: ToolCall,
+    *,
+    step_id: str | None = None,
+    result: ToolResult | None = None,
+    rejected: bool = False,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+) -> None:
+    """実行しなかったツールの呼び出し（却下・方針で拒否・上限・引数の誤り）を、`skipped` の
+    ツールの span として残す（#3226。処理の経過のツールの行）。回答前の確認のツールは残さない。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    if call.name == CONFIRMATION_TOOL:
+        return
+    now = datetime.now(UTC)
+    record_span(
+        EXECUTE_TOOL_SPAN,
+        started_at=started_at or now,
+        finished_at=finished_at or now,
+        status="skipped",
+        attributes=tool_attributes(call.name, call.trace_id),
+        display=tool_display(
+            call,
+            runtime_repository.builtin_tool_titles(run_id),
+            result=result,
+            run_step=step_id,
+            rejected=rejected,
+        ),
+    )
+
+
+def _record_wait_spans(run: Any) -> None:
+    """再開した区間の始めに、終わった承認・回答前の確認の待ちを span で記録する（#3226）。
+
+    待ちの区間（求めた時刻から決めた時刻まで）を、承認を求めた回・確認の回ごとに 1 回だけ残す
+    （再開し直しても重ねない）。却下したツールは実行しなかったツールとして待ちの後に残す。
+    """
+    titles = tool_titles(run)
+    steps = {step.id: step for step in run.steps}
+    recorded = recorded_wait_rounds(run, KIND_APPROVAL)
+    for index, round_ in enumerate(approval_rounds(list(run.approvals))):
+        decided = [item.decided_at for item in round_ if item.decided_at is not None]
+        if index + 1 in recorded or not decided or len(decided) < len(round_):
+            continue
+        record_span(
+            APPROVAL_WAIT_SPAN,
+            started_at=min(item.created_at for item in round_),
+            finished_at=max(decided),
+            display=approval_wait_display(round_, index, titles),
+        )
+        for approval in round_:
+            if str(approval.status) != "rejected":
+                continue
+            step = steps.get(approval.step_id) if approval.step_id else None
+            record_skipped_tool(
+                run.id,
+                step.tool_call if step is not None and step.tool_call else approval.tool_call,
+                step_id=step.id if step is not None else None,
+                result=step.tool_result if step is not None else None,
+                rejected=True,
+                started_at=approval.decided_at,
+                finished_at=approval.decided_at,
+            )
+    answered = recorded_wait_rounds(run, KIND_CONFIRMATION)
+    for confirmation in run.confirmations:
+        if (
+            confirmation.source != "agent"
+            or confirmation.status not in {"answered", "skipped"}
+            or confirmation.decided_at is None
+            or max(1, confirmation.round) in answered
+        ):
+            continue
+        record_span(
+            CONFIRMATION_WAIT_SPAN,
+            started_at=confirmation.created_at,
+            finished_at=confirmation.decided_at,
+            display=confirmation_wait_display(confirmation),
+        )
+
+
 async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
     """Run を最初から実行する（作成直後・dispatcher から呼ぶ）。
 
@@ -3112,7 +3275,9 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
         run, agent = started
         with (
             attach_trace_context(run.trace_context),
-            operation_trace("agent.execute", operation_id=run.id),
+            operation_trace(
+                "agent.execute", operation_id=run.id, listener=_progress_listener(run.id)
+            ),
         ):
             execution = run_claim.bind_execution(run.id, run.metadata)
             # 公開中の版に固定したスキルで動く（#1855）。
@@ -3195,9 +3360,20 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
         run, agent, state_text, decisions = resumed
         with (
             attach_trace_context(run.trace_context),
-            operation_trace("agent.resume", operation_id=run.id),
+            operation_trace(
+                "agent.resume", operation_id=run.id, listener=_progress_listener(run.id)
+            ),
         ):
             execution = run_claim.bind_execution(run.id, run.metadata)
+            # 終わった承認・確認の待ちは、再開した区間の span として残す（#3226）。表示の記録
+            # なので、残せなくても再開は止めない。
+            try:
+                _record_wait_spans(run)
+            except Exception as exc:  # noqa: BLE001 - 処理の経過の記録は補助
+                logger.warning(
+                    "builtin_runtime_wait_span_failed",
+                    extra={"run_id": run_id, "exception_type": type(exc).__name__},
+                )
             pinned = use_pinned_skills(agent.pinned_skills)
             result: Any = None
             try:
@@ -3500,6 +3676,22 @@ async def _unattended_approvals(
             runtime_repository.record_builtin_dry_run_steps(run.id, calls)
         else:
             runtime_repository.record_builtin_unattended_skips(run.id, calls, mcp=mcp)
+        # 実行しなかったツールとして処理の経過に残す（#3226）。
+        skipped_steps = {
+            step.tool_call.trace_id: step
+            for step in runtime_repository.builtin_tool_steps(
+                run.id, [call.trace_id or "" for call in calls]
+            )
+            if step.tool_call is not None
+        }
+        for call in calls:
+            skipped = skipped_steps.get(call.trace_id or "")
+            record_skipped_tool(
+                run.id,
+                call,
+                step_id=skipped.id if skipped is not None else None,
+                result=skipped.tool_result if skipped is not None else None,
+            )
             logger.info(
                 "builtin_runtime_tool_call_rejected",
                 extra={
