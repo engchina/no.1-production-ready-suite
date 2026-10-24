@@ -44,6 +44,10 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "trace_shutdown_timeout_seconds",
         "trace_ui_max_segments",
         "trace_ui_max_spans",
+        "trace_retention_days",
+        "trace_store_flush_seconds",
+        "trace_store_batch_size",
+        "trace_store_queue_size",
         # OCI 認証
         "oci_config_file",
         "oci_config_profile",

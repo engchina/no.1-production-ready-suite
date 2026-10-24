@@ -30,7 +30,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from pr_system_settings.auth.migrations import apply_platform_auth_schema
+from pr_system_settings.auth.migrations import TRACE_SPAN_TABLES, apply_platform_auth_schema
 from pr_system_settings.auth.store import PLATFORM_AUTH_TABLES, OracleAuthStore
 from pr_system_settings.chat_attachments import CHAT_ATTACHMENT_TABLES
 from pr_system_settings.system_schema import (
@@ -742,7 +742,11 @@ RETIRED_MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
 DOMAIN_TABLES = frozenset(MANAGED_TABLES) - {CONTROL_TABLE, MIGRATION_TABLE}
 # 3 製品共通の認証テーブルと会話の添付の表（#2517）。先に作るが管理対象ではないため、
 # 全再作成でも削除しない。
-PRESERVED_TABLES: tuple[str, ...] = (*PLATFORM_AUTH_TABLES, *CHAT_ATTACHMENT_TABLES)
+PRESERVED_TABLES: tuple[str, ...] = (
+    *PLATFORM_AUTH_TABLES,
+    *CHAT_ATTACHMENT_TABLES,
+    *TRACE_SPAN_TABLES,
+)
 
 MANAGED_FOREIGN_KEYS: tuple[ForeignKeySpec, ...] = tuple(
     foreign_key

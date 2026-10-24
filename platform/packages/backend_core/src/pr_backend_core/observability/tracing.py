@@ -206,6 +206,7 @@ class SpanUpdate(BaseModel):
     started_at: AwareDatetime
     finished_at: AwareDatetime | None = None
     root: bool = False
+    span_kind: Literal["internal", "client", "server", "producer", "consumer"] = "internal"
     attributes: dict[str, SafeValue] = Field(default_factory=dict)
     display: SpanDisplay | None = None
 
@@ -474,13 +475,14 @@ def observed_span(
     finish_on_exit: bool = True,
     cancellation_check: Callable[[], bool] | None = None,
     display: SpanDisplay | None = None,
+    links: Sequence[trace.Link] = (),
 ) -> Iterator[ObservedSpan]:
     """実際の呼出しの範囲に置く。例外の本文や stack trace は span に記録しない。"""
     provider, _ = _active_provider()
     tracer = provider.get_tracer("production-ready-suite")
     start = time_ns()
     span_kind = trace.SpanKind[kind.upper()]
-    sdk_span = tracer.start_span(name, kind=span_kind, start_time=start)
+    sdk_span = tracer.start_span(name, kind=span_kind, start_time=start, links=list(links))
     observed = ObservedSpan(sdk_span)
     observed.set_attributes(attributes or {})
     if display is not None:
@@ -506,6 +508,7 @@ def observed_span(
             started_at=datetime.fromtimestamp(start / 1e9, UTC),
             finished_at=datetime.fromtimestamp(end / 1e9, UTC) if end is not None else None,
             root=bool(root),
+            span_kind=kind,
             attributes=dict(observed.attributes),
             display=observed.display,
         )
@@ -575,6 +578,8 @@ def operation_trace(
     attributes: Mapping[str, object] | None = None,
     listener: SpanListener | None = None,
     display: SpanDisplay | None = None,
+    kind: str = "internal",
+    links: Sequence[trace.Link] = (),
 ) -> Iterator[TraceSummary]:
     """1 回の実行の表示用 summary。子 task と thread は同じ記録へ追加できる。
 
@@ -592,8 +597,10 @@ def operation_trace(
     try:
         with observed_span(
             name,
+            kind=kind,
             attributes={**(attributes or {}), "pr.operation.id": operation_id},
             display=display,
+            links=links,
         ) as root:
             if root_token is not None:
                 _ROOT_PENDING.reset(root_token)
@@ -675,6 +682,7 @@ def record_span(
             status=status,
             started_at=datetime.fromtimestamp(start / 1e9, UTC),
             finished_at=datetime.fromtimestamp(end / 1e9, UTC),
+            span_kind=kind,
             attributes=dict(observed.attributes),
             display=display,
         )
