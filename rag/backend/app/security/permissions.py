@@ -126,7 +126,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         "（回答・根拠・回答の検証・処理の経過）を見られます（自分の実行だけ。"
         "すべての利用者の実行を見られるのは SYSTEM_ADMIN だけ）。",
     ),
-    _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "アップロード"),
+    _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "文書アップロード"),
     _menu_permission(MENU_FILE_LIST, _GROUP_INGESTION, "文書インデックス"),
     _menu_permission(MENU_DOCUMENT_CATEGORIES, _GROUP_INGESTION, "文書の分類"),
     _menu_permission(MENU_KNOWLEDGE_BASES, _GROUP_INGESTION, "ナレッジベース"),
@@ -497,7 +497,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/history/runs/{run_id}"): _any(MENU_HISTORY),
     ("GET", "/search/answers"): _ANSWER_USE,
     ("GET", "/search/answers/{trace_id}"): _ANSWER_USE,
-    ("POST", "/search/answers/{trace_id}/evaluation"): _ANSWER_USE,
     # ---- 検索・回答プロファイル: 品質評価 ----
     ("POST", "/evaluation/run"): _any(MENU_EVALUATION),
     # 評価リクエストの Excel のテンプレートと検証（#2065。保存しない）。

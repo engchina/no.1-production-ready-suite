@@ -5,7 +5,6 @@ import json
 import logging
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from contextlib import suppress
-from datetime import UTC, datetime
 from time import perf_counter
 from typing import Annotated
 
@@ -19,7 +18,6 @@ from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore
 from app.clients.support_guide_store import SupportGuideStore
 from app.config import (
-    OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
     Settings,
     enterprise_ai_default_model_id,
     enterprise_ai_model_catalog,
@@ -27,7 +25,7 @@ from app.config import (
     get_settings,
 )
 from app.rag.answer_assumptions import with_answer_assumptions
-from app.rag.answer_engine import AnswerScope, evaluate_answer_record
+from app.rag.answer_engine import AnswerScope
 from app.rag.answer_failure import (
     ANSWER_API_FAILED_ERROR_CODE,
     ANSWER_INCOMPLETE_ERROR_CODE,
@@ -38,7 +36,6 @@ from app.rag.answer_failure import (
 )
 from app.rag.answer_notice import GUIDE_HANDOFF_CONTACT_KEY, current_answer_notice
 from app.rag.answer_provenance import search_answer_profile_revision
-from app.rag.answer_threads import run_answer_in_thread
 from app.rag.answer_timeout import (
     AnswerTimeoutError,
     StageTracker,
@@ -83,7 +80,6 @@ from app.rag.support_guide_runtime import (
     clarification_questions,
     guide_notices,
     guide_step_plan,
-    is_guide_preview_record,
     query_summary,
     select_guide,
     short_circuit_answer,
@@ -92,10 +88,8 @@ from app.rag.support_guide_runtime import (
 )
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search import (
-    AnswerEvaluationRequest,
     AnswerRecordDetail,
     AnswerRecordSummary,
-    RetrievedChunk,
     SearchRequest,
     SearchResponse,
     format_search_id_filter,
@@ -156,23 +150,6 @@ def _log_answer_failure(event: str, trace_id: str, exc: Exception, fallback: str
             **({"error_stage": failure.stage} if failure.stage else {}),
         },
     )
-
-
-# 保存済みの回答の評価（標準回答による 4 軸評価）の時間の上限（秒。#304）。
-# 評価は LLM を複数回呼ぶため、回答生成の timeout（`rag_answer_timeout_seconds`）ではなく、
-# LLM 1 回の timeout の設定の上限（`OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS` = 600 秒）を
-# 評価全体の上限にする。
-# 画面の timeout（frontend の `ANSWER_EVALUATION_TIMEOUT_MS` = 630 秒）と nginx の待ち時間（660 秒。
-# `init_script.sh` が生成する設定）はこれより長くし、backend の 504 と理由が画面に
-# 届くようにする（画面が先に諦めた後で backend が評価を保存する、を起こさない）。
-ANSWER_EVALUATION_TIMEOUT_SECONDS = OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
-GUIDE_PREVIEW_EVALUATION_MESSAGE = (
-    "業務ガイドの下書きで試した回答は評価できません。公開してから回答を作り直して評価してください。"
-)
-ANSWER_EVALUATION_TIMEOUT_MESSAGE = (
-    "標準回答による評価が時間内に終わりませんでした。評価は保存していません。"
-    "時間をおいて再度お試しください。"
-)
 
 
 def answer_model_choices(settings: Settings) -> list[dict[str, str]]:
@@ -895,6 +872,7 @@ async def _stream_search_events_with_timeout(
                     "stage": progress.stage,
                     "outcome": progress.outcome,
                     "elapsed_ms": progress.elapsed_ms,
+                    "occurred_at_ms": progress.occurred_at_ms,
                     "attributes": dict(progress.attributes),
                     # 終わった工程の詳細（処理の経過の段を開いて見る。#2341）。上限で切り伏せる。
                     **(
@@ -1137,8 +1115,6 @@ def _answer_record_detail(row: dict[str, object]) -> AnswerRecordDetail:
             **row,
             "citations": _stored_citation_rows(row.get("citations_json")),
             "answer_diagnostics": row.get("diagnostics_json") or {},
-            "evaluation_available": bool(row.get("evaluation_input_json")),
-            "evaluation": row.get("evaluation_json") or None,
             "notice": row.get("answer_notice") or None,
         }
     )
@@ -1154,58 +1130,3 @@ def _stored_citation_rows(value: object) -> list[dict[str, object]]:
         else item
         for item in value
     ]
-
-
-@router.post("/answers/{trace_id}/evaluation", response_model=ApiResponse[AnswerRecordDetail])
-async def evaluate_saved_answer(
-    http_request: Request, trace_id: str, body: AnswerEvaluationRequest
-) -> ApiResponse[AnswerRecordDetail]:
-    """保存された回答を標準回答で評価し(評価の基準の指標と閾値。#680)、結果を保存して返す。
-
-    評価は LLM を複数回呼ぶ。失敗しても例外にせず、status=error の評価として保存する
-    (rag_poc と同じく部分評価は採用しない)。
-    """
-    enforce_rate_limit("search", http_request)
-    oracle = OracleClient()
-    row = await oracle.get_answer_record(trace_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="回答が見つかりません。")
-    if is_guide_preview_record(row.get("diagnostics_json")):
-        # 下書きで試した回答は、利用者の回答の評価に混ぜない（#1288）。
-        raise HTTPException(status_code=409, detail=GUIDE_PREVIEW_EVALUATION_MESSAGE)
-    evaluation_input = row.get("evaluation_input_json")
-    if not isinstance(evaluation_input, dict) or not evaluation_input:
-        raise HTTPException(
-            status_code=409,
-            detail="この回答には評価に必要な記録がありません。もう一度回答を生成してから評価してください。",
-        )
-    raw_citations = row.get("citations_json")
-    citations = [
-        RetrievedChunk.model_validate(citation)
-        for citation in (raw_citations if isinstance(raw_citations, list) else [])
-        if isinstance(citation, dict)
-    ]
-    try:
-        # 時間切れのときは結果を捨てて保存しない。評価の thread には同じ期限を渡し、時間切れの後は
-        # LLM を呼ばない(#1422)。
-        evaluation = await asyncio.wait_for(
-            run_answer_in_thread(
-                evaluate_answer_record,
-                evaluation_input,
-                body.standard_answer,
-                get_settings(),
-                citations=citations,
-                timeout_seconds=ANSWER_EVALUATION_TIMEOUT_SECONDS,
-            ),
-            timeout=ANSWER_EVALUATION_TIMEOUT_SECONDS,
-        )
-    except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail=ANSWER_EVALUATION_TIMEOUT_MESSAGE) from exc
-    saved = {
-        **evaluation,
-        "standard_answer": body.standard_answer,
-        "evaluated_at": datetime.now(UTC).isoformat(),
-    }
-    if not await oracle.save_answer_evaluation(trace_id, saved):
-        raise HTTPException(status_code=404, detail="回答が見つかりません。")
-    return ApiResponse(data=_answer_record_detail({**row, "evaluation_json": saved}))

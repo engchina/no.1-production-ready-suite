@@ -65,7 +65,7 @@ def test_get_returns_default_text_when_unset() -> None:
     # 回答に付ける文は本文の後に窓口の案内の 1 行を続ける（#2400）。
     assert data["effective_text"] == DEFAULT_ANSWER_NOTICE_TEXT
     assert DEFAULT_ANSWER_NOTICE_TEXT == (
-        DEFAULT_ANSWER_NOTICE_BODY + "\n解決しない場合は、ヘルプデスクへお問い合わせください。"
+        DEFAULT_ANSWER_NOTICE_BODY + "\n解決しない場合は、サポート窓口へお問い合わせください。"
     )
     assert data["max_chars"] == ANSWER_NOTICE_MAX_CHARS
     assert data["contact_max_chars"] == ANSWER_NOTICE_CONTACT_MAX_CHARS
@@ -82,7 +82,7 @@ def test_put_saves_custom_text_and_next_answer_uses_it() -> None:
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["text"] == "1 行目\n2 行目 https://example.com/help"
-    expected = data["text"] + "\n解決しない場合は、ヘルプデスクへお問い合わせください。"
+    expected = data["text"] + "\n解決しない場合は、サポート窓口へお問い合わせください。"
     assert data["effective_text"] == expected
     assert data["updated_at"]
     assert service.answer_notice.current_text() == expected
@@ -148,7 +148,7 @@ def test_provider_caches_and_expires() -> None:
     assert provider.current_text() == DEFAULT_ANSWER_NOTICE_TEXT
     now[0] += 6
     assert provider.current_text() == (
-        "別の製品で保存した文\n解決しない場合は、ヘルプデスクへお問い合わせください。"
+        "別の製品で保存した文\n解決しない場合は、サポート窓口へお問い合わせください。"
     )
 
 

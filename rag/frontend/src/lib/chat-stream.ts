@@ -41,7 +41,7 @@ export interface ChatStreamHandlers {
   onStage?: (payload: {
     model_id: string;
     stage: string;
-    outcome: "started" | "success" | "error" | "cancelled";
+    outcome: "started" | "success" | "error" | "cancelled" | "skipped";
     elapsed_ms: number;
   }) => void;
   /** 処理の段階のイベント（#1359）。`messageId` は作成中の回答のメッセージ（イベントの対象）。 */

@@ -10,7 +10,6 @@ import {
 import { answerPassageLabels, answerPassages } from "@/lib/answer-passages";
 import { t } from "@/lib/i18n";
 import { AnswerGuideConditions } from "./AnswerGuideConditions";
-import { AnswerRecordEvaluation } from "./AnswerRecordEvaluation";
 import { extractionFieldConditionLabel } from "./extraction-field-filters";
 
 /**
@@ -18,19 +17,14 @@ import { extractionFieldConditionLabel } from "./extraction-field-filters";
  * （`AnswerProcess`）が出す（#2096。工程を 2 か所に出さない）。チャット・RAG 検索では「処理の経過」の中の
  * 「処理の詳細」（#2325）に見出しなしで置き、実行履歴では見出し（`title`）を付けて置く。根拠の一覧とまとまりは
  * `CitationList`（#2097）。
- * traceId を渡すと、保存した回答を標準回答で評価する欄も出す。
  */
 export function AnswerDetailsPanel({
   diagnostics,
-  traceId,
-  evaluation,
   title,
   showAutoFieldFilter = true,
   showNotices = true,
 }: {
   diagnostics: unknown;
-  traceId?: string | null;
-  evaluation?: unknown;
   /** 見出し。省略すると見出しを出さない（「処理の経過」の中の「処理の詳細」）。 */
   title?: string;
   /** 質問から読み取った条件（#652）を出すか。RAG 検索は外せるチップで出すので出さない。 */
@@ -220,9 +214,6 @@ export function AnswerDetailsPanel({
                 .join(" / ")}`
             : ""}
         </p>
-      ) : null}
-      {traceId ? (
-        <AnswerRecordEvaluation key={traceId} traceId={traceId} evaluation={evaluation} />
       ) : null}
     </section>
   );

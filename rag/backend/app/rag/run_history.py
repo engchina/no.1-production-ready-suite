@@ -15,7 +15,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from time import monotonic
+from time import monotonic, time
 from typing import Any, Literal, Protocol, cast
 
 from pr_backend_core.logging import safe_error_code, safe_exception_fields
@@ -109,6 +109,7 @@ def _answer_steps(diagnostics: Mapping[str, Any] | None) -> list[dict[str, objec
                 "status": str(step.get("status") or ""),
                 "elapsed_seconds": step.get("elapsed_seconds"),
                 "llm_calls": step.get("llm_calls"),
+                "llm_sends": step.get("llm_sends"),
                 **(
                     {"details": details}
                     if (details := step_details_payload(step.get("details")))
@@ -130,6 +131,7 @@ class RunRecorder:
     message_id: str | None = None
     model_id: str | None = None
     stages: list[dict[str, object]] = field(default_factory=list)
+    stage_events: list[dict[str, object]] = field(default_factory=list)
     # 安全チェックの後の質問（pipeline が受け取った時点で入れる。失敗の記録に使う）。
     question: str | None = None
     trace_summary: TraceSummary | None = None
@@ -140,6 +142,20 @@ class RunRecorder:
         """段の進捗の callback を包み、終わった段（成功・失敗・停止）と時間を集める。"""
 
         async def collect(progress: _StageProgress) -> None:
+            self.stage_events.append(
+                {
+                    "stage": progress.stage,
+                    "outcome": progress.outcome,
+                    "elapsed_ms": progress.elapsed_ms,
+                    "receivedAtMs": getattr(progress, "occurred_at_ms", None) or time() * 1000,
+                    "details": step_details_payload(getattr(progress, "details", None)),
+                    "attributes": {
+                        key: value
+                        for key, value in (getattr(progress, "attributes", {}) or {}).items()
+                        if key in {"llm_calls", "llm_sends", "status", "error_type", "error_code"}
+                    },
+                }
+            )
             if progress.outcome != "started":
                 details = step_details_payload(getattr(progress, "details", None))
                 self.stages.append(
@@ -217,6 +233,7 @@ class RunRecorder:
             "message_id": self.message_id,
             "stages": {
                 "stages": list(self.stages),
+                "stage_events": list(self.stage_events),
                 **({"trace_summary": summary.model_dump(mode="json")} if summary else {}),
                 "steps": _answer_steps(answer_diagnostics),
                 # 失敗のエラーコードと保存できなかった記録（処理の段と一緒に持つ。#2342）。

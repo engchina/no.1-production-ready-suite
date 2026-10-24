@@ -160,7 +160,13 @@ test("実測 trace の親子関係を会話で開ける", { tag: "@responsive" }
   await page.goto("/chat");
   await openThread(page);
   await page.getByTestId("chat-progress-summary").click();
-  await page.getByTestId("trace-details-toggle").click();
+  const details = page.locator("[data-run-process-details]");
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.locator(":scope > summary").click();
+  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
+  await expect(page.getByTestId("trace-details")).toHaveCount(0);
+  await details.getByTestId("trace-details-toggle").click();
+  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
   const trace = page.getByTestId("trace-details");
   await expect(trace).toContainText("synthetic.execute");
   await expect(trace).toContainText("gen_ai.chat");

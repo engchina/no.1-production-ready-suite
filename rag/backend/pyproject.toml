@@ -45,7 +45,8 @@ unstructured = ["unstructured[all-docs]==0.27.8", "torch>=2.13,<3", "torchvision
 
 [tool.uv]
 # docling-slim（最新 2.141.0）が pillow を <13 に制約するが、取り込む文書の画像の解析の脆弱性（GHSA-462x-pgg6-55fp ほか 8 件）の修正版は 13.0.0。13.0.0 の非互換は削除された API だけで docling・本リポジトリは使わないため、制約を上書きする（#2790）。docling が 13 を許したら外す。
-override-dependencies = ["pillow>=13.0.0"]
+# unstructured の filelock <4 制約を、既知の脆弱性の修正版へ置き換える。FileLock の context manager と timeout を確認済み。
+override-dependencies = ["pillow>=13.0.0", "filelock>=4.2.1"]
 # triton（GPU の kernel の compiler）は unstructured の extra の openai-whisper が Linux の x86_64 で直接の依存に持つが、
 # CUDA の GPU でだけ使う。GPU の無い環境で使わないので入れない（#1650）。
 exclude-dependencies = ["triton"]

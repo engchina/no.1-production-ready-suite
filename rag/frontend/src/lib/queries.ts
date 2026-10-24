@@ -1523,18 +1523,6 @@ export function useAnswerRecord(traceId: string | null) {
   });
 }
 
-/** 保存された回答を標準回答で評価する(LLM を複数回呼ぶ)。詳細のキャッシュを更新する。 */
-export function useEvaluateAnswerRecord() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ traceId, standardAnswer }: { traceId: string; standardAnswer: string }) =>
-      api.evaluateAnswerRecord(traceId, standardAnswer),
-    onSuccess: (detail) => {
-      qc.setQueryData(["answer-record", detail.trace_id], detail);
-    },
-  });
-}
-
 /** 質問履歴の設定。 */
 export function useQueryHistorySettings() {
   return useQuery({ queryKey: ["settings", "query-history"], queryFn: api.getQueryHistorySettings });

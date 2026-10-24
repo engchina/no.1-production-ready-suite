@@ -342,7 +342,6 @@ function AssistantColumn({
           steps={progress?.steps ?? []}
           testId="chat-answer-progress"
           diagnostics={answerDiagnostics}
-          traceId={traceId}
           savedRecord={savedAnswer && traceId ? { traceId, searchAnswerProfileId } : null}
         />
       ) : null}

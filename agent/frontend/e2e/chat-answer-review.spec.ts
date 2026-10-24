@@ -411,6 +411,7 @@ test("確認待ちの質問だけがある回答は、見出しにバッジを�
 test("実行の詳細は内部の記録を成果物に出さず、監査ログで元の JSON まで見る", async ({ page, mockApi }, testInfo) => {
   seedRun(mockApi, "run-review-1", [answer(WITHHELD_ANSWER), supportTask(), WITHHELD]);
   await page.goto("/runs?id=run-review-1");
+  await expect(page.getByTestId("run-summary")).toBeVisible();
 
   await expect(page.getByTestId("run-answer-section")).toContainText("精算は申請から始めます。");
   // 出すものが無いので「成果物」の節ごと出さない。
@@ -499,12 +500,11 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`outcome-chat-${viewport.name}-${theme}.png`), fullPage: true });
 
-      // 実行の詳細の回答にも同じバッジを出す。
+      // 実行の概要の見出しにはバッジを出さない。
       await page.goto("/runs?id=run-outcome-1");
+      await expect(page.getByTestId("run-summary")).toBeVisible();
       const runBadge = page.getByTestId("run-answer-outcome-answer-outcome-1").locator("[data-status-variant]");
-      await expect(runBadge).toHaveText("条件付きの回答");
-      await expect(runBadge).toHaveAttribute("data-status-variant", "warning");
-      await expect(runBadge.locator("svg")).toHaveCount(1);
+      await expect(runBadge).toHaveCount(0);
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`outcome-run-${viewport.name}-${theme}.png`), fullPage: true });
     });
@@ -553,9 +553,10 @@ for (const viewport of VIEWPORTS) {
     await page.screenshot({ path: testInfo.outputPath(`no-tool-chat-${viewport.name}.png`), fullPage: true });
 
     await page.goto("/runs?id=run-no-tool");
+
+    await expect(page.getByTestId("run-summary")).toBeVisible();
     const runBadge = page.getByTestId("run-answer-outcome-answer-no-tool").locator("[data-status-variant]");
-    await expect(runBadge).toHaveText("根拠不足");
-    await expect(runBadge).toHaveAttribute("data-status-variant", "danger");
+    await expect(runBadge).toHaveCount(0);
     await expect(page.getByText("社内の資料・業務データで確かめられなかったため、お答えできません。", { exact: false }).first()).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`no-tool-run-${viewport.name}.png`), fullPage: true });
@@ -622,7 +623,7 @@ test("回答の対応ごとに RAG と同じ文言・色のバッジを出し、
   await expect(page.getByTestId("chat-turn-run-o-plain").getByText("対応も検証も無い回答")).toBeVisible();
 });
 
-test("実行の詳細の回答に回答の対応のバッジを出し、対応の無い古い Run では出さない", async ({ page, mockApi }) => {
+test("実行の概要は回答の対応の有無によらずバッジを出さない", async ({ page, mockApi }) => {
   seedRun(mockApi, "run-detail-outcome", [
     { ...answer("現場の値を確かめてください。", outcome("needs_environment_data")), id: "answer-detail-1" },
   ]);
@@ -630,16 +631,20 @@ test("実行の詳細の回答に回答の対応のバッジを出し、対応�
   seedRun(mockApi, "run-detail-answered", [{ ...answer("答えた実行の回答", outcome("answered")), id: "answer-detail-3" }]);
 
   await page.goto("/runs?id=run-detail-outcome");
+
+  await expect(page.getByTestId("run-summary")).toBeVisible();
   const badge = page.getByTestId("run-answer-outcome-answer-detail-1").locator("[data-status-variant]");
-  await expect(badge).toHaveText("現場のデータが必要");
-  await expect(badge).toHaveAttribute("data-status-variant", "warning");
-  await expect(badge.locator("svg")).toHaveCount(1);
+  await expect(badge).toHaveCount(0);
 
   await page.goto("/runs?id=run-detail-legacy");
+
+  await expect(page.getByTestId("run-summary")).toBeVisible();
   await expect(page.getByText("古い実行の回答")).toBeVisible();
   await expect(page.getByTestId("run-answer-outcome-answer-detail-2")).toHaveCount(0);
 
   await page.goto("/runs?id=run-detail-answered");
+
+  await expect(page.getByTestId("run-summary")).toBeVisible();
   await expect(page.getByText("答えた実行の回答")).toBeVisible();
   await expect(page.getByTestId("run-answer-outcome-answer-detail-3")).toHaveCount(0);
 });

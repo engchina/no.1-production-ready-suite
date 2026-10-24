@@ -216,7 +216,11 @@ async def test_recorder_saves_summary_stages_and_purges_once() -> None:
     assert first["confidence"] == "high"
     # 回答を作った実行の根拠は回答の記録にあるので、ここには持たない。
     assert first["citations"] is None
-    assert first["stages"] == {
+    stored_stages = dict(first["stages"])
+    events = stored_stages.pop("stage_events")
+    assert [event["outcome"] for event in events] == ["started", "success", "started", "success"]
+    assert events[-1]["details"]["fields"][0]["value"] == "問題なし"
+    assert stored_stages == {
         "stages": [
             {"stage": "answer", "outcome": "success", "elapsed_ms": 1200.0},
             {
@@ -232,6 +236,7 @@ async def test_recorder_saves_summary_stages_and_purges_once() -> None:
                 "status": "ok",
                 "elapsed_seconds": 0.4,
                 "llm_calls": 0,
+                "llm_sends": None,
                 "details": {"lines": ["検索文: 2 本"]},
             },
             {
@@ -239,6 +244,7 @@ async def test_recorder_saves_summary_stages_and_purges_once() -> None:
                 "status": "complete",
                 "elapsed_seconds": 0.1,
                 "llm_calls": 0,
+                "llm_sends": None,
                 "details": {
                     "fields": [{"label": "並べ替える候補", "value": "3 件"}],
                     "lines": ["1. 0.940 文書 A", "token=***"],
@@ -569,6 +575,35 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
     assert OWNER_PREDICATE in pool.connection.calls[0].statement
     assert OWNER_CONVERSATION_PREDICATE in pool.connection.calls[0].statement
 
+    from app.clients.oracle import OracleClient, StoredMessage
+
+    saved_progress = [
+        {
+            "schema_version": 1,
+            "seq": 1,
+            "target_id": "synthetic-message",
+            "attempt": 0,
+            "emitted_at": "2026-10-23T00:00:01Z",
+            "type": "step",
+            "step_id": "s1",
+            "kind": "answer_step",
+            "status": "done",
+            "params": {"name": "文書検索", "depth": 1},
+        }
+    ]
+
+    async def saved_message(self: Any, conversation_id: str, message_id: str) -> StoredMessage:
+        assert conversation_id == "conv-1" and message_id == "synthetic-message"
+        return StoredMessage(
+            id=message_id,
+            conversation_id=conversation_id,
+            role="ASSISTANT",
+            content="合成の回答",
+            created_at=datetime(2026, 10, 23, tzinfo=UTC),
+            progress=saved_progress,
+        )
+
+    monkeypatch.setattr(OracleClient, "get_chat_message", saved_message)
     # 回答を作った自分の実行は、回答の記録から回答・根拠・診断を読む。
     stages = {
         "stages": [{"stage": "answer", "outcome": "success", "elapsed_ms": 900.0}],
@@ -604,6 +639,7 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
                         surface="chat",
                         answer_generated=1,
                         conversation_id="conv-1",
+                        message_id="synthetic-message",
                         verification="verified",
                         answer_outcome="answered",
                     ),
@@ -634,6 +670,7 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
     assert data["answer_available"] is True
     assert data["citations"][0]["chunk_id"] == "doc-1:c1"
     assert data["answer_diagnostics"]["outcome"] == "answered"
+    assert data["progress_events"][0]["params"] == {"name": "文書検索", "depth": 1}
     assert data["stages"][0]["stage"] == "answer"
     assert data["steps"][0]["name"] == "文書検索"
     assert data["feedback"][0]["feedback_id"] == "fb-1"

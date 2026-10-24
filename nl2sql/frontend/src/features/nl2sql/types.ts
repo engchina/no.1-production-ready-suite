@@ -749,6 +749,7 @@ export interface SqlChatExecuteData {
 }
 
 export interface HistoryItem {
+  progress_events?: ChatProgressEvent[];
   trace_segments?: unknown[];
   trace_summary?: unknown;
   generation_only?: boolean;

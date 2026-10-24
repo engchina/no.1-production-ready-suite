@@ -4,6 +4,9 @@
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
 import {
   runPeriodSince,
+  chatProgressStepsFromEvents,
+  chatProgressTimelineStep,
+  parseChatProgressEvents,
   RUN_EXECUTOR_FILTERS,
   RUN_PERIODS,
   type RunExecutorFilter,
@@ -16,7 +19,7 @@ import {
 
 import { t } from "../../lib/i18n";
 import { APP_ROUTES } from "../../lib/routes";
-import { chatStageLabel } from "./chatProgress";
+import { chatStageLabel, CHAT_PROGRESS_STEP_DEFINITIONS } from "./chatProgress";
 import type { EngineTiming, HistoryItem } from "./types";
 
 /** NL2SQL が写せる共通の状態（完了 = 安全性の判定を通過、ブロック = 実行を止めた）。失敗は記録しない。 */
@@ -181,13 +184,16 @@ export interface HistoryTimelineStep {
   id: string;
   label: string;
   status: RunTimelineStepStatus;
-  durationMs: number;
+  durationMs: number | null;
   /**
    * 処理の始まりからの位置（ミリ秒）。記録は段ごとの所要時間だけなので、段は順に積み、生成の方式の試行は
    * SQL の生成の段の始まりから積む（時間の線で試行が親の段の中に重なり、後の段の位置をずらさない）。
    */
   offsetMs: number;
-  level: 0 | 1;
+  level: number;
+  detail?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
   /**
    * 段を開いて見る詳細（#2294）。実行履歴に残した値（書き換えた質問・安全性の確認の結果・行数と列・生成の方式の
    * 試行の失敗の文）から作る。SQL は「SQL と結果」の節に出すので重ねない。
@@ -234,6 +240,23 @@ function stageDetails(item: HistoryItem, stage: string, failed: boolean): RunSte
  * 未知の段は飛ばす（段の id を画面に出さない）。
  */
 export function historyTimelineSteps(item: HistoryItem): HistoryTimelineStep[] {
+  const events = parseChatProgressEvents(item.progress_events);
+  if (events.length) {
+    return chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS).map((step) => {
+      const row = chatProgressTimelineStep(step);
+      const duration = row.durationMs ?? (
+        row.startedAt && row.finishedAt ? Date.parse(row.finishedAt) - Date.parse(row.startedAt) : null
+      );
+      return {
+        ...row,
+        durationMs: duration,
+        startedAt: row.startedAt ?? null,
+        finishedAt: row.finishedAt ?? null,
+        level: row.level ?? 0,
+        offsetMs: 0,
+      };
+    });
+  }
   const steps: HistoryTimelineStep[] = [];
   const blocked = !item.safety_is_safe;
   const engines = item.engine_timings ?? [];

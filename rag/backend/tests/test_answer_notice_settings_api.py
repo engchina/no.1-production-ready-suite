@@ -34,7 +34,7 @@ def test_menu_permission_can_read_save_and_reset(monkeypatch: MonkeyPatch) -> No
     assert saved.json()["data"]["text"] == "独自の注意書き"
     # 次の回答から効く（同じプロセスの cache は保存で捨てる）。
     assert auth.service.answer_notice.current_text() == (
-        "独自の注意書き\n解決しない場合は、ヘルプデスクへお問い合わせください。"
+        "独自の注意書き\n解決しない場合は、サポート窓口へお問い合わせください。"
     )
 
     reset = client.put(

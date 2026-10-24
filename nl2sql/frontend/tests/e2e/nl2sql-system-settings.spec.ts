@@ -1965,10 +1965,10 @@ test("登録モデルは入力の上限の隣に出力の上限を持ち、入�
   await expect(output).toHaveValue("32768");
   // 入力の上限と取り違えないよう、両方の説明に違いを書く。
   await expect(page.locator("#enterprise-model-max-output-tokens-help")).toContainText(
-    "推論のあるモデルは推論の token も含みます"
+    "推論の token も含まれる場合があります"
   );
   await expect(page.locator("#enterprise-model-max-input-tokens-help")).toContainText(
-    "出力の上限は別の設定です"
+    "入力と出力を合わせたコンテキスト長"
   );
   const isWide = (page.viewportSize()?.width ?? 0) >= 1536;
   if (isWide) {

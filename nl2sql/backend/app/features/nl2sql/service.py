@@ -24049,6 +24049,9 @@ class Nl2SqlService:
             _record_job_progress_finished(
                 published, failed=final_status != JobStatus.DONE, at=finished
             )
+        history_item = history_item.model_copy(
+            update={"progress_events": list(published.progress_events)}
+        )
         persistence_warning: str | None = None
         self._raise_if_job_cancelled(job_id)
         try:

@@ -430,7 +430,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 
   test("詳細: 概要 → 処理の経過（処理の詳細を含む）→ 回答 → 根拠 → フィードバックの 1 枚。一覧へ戻ると条件・ページと開いた行が戻る", async ({
     page,
-  }) => {
+  }, testInfo) => {
     await mockLocalAuth(page);
     const rows = Array.from({ length: 30 }, (_, index) => run(index + 1));
     await mockRuns(page, rows);
@@ -460,9 +460,11 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(page.getByRole("tablist")).toHaveCount(0);
 
     const summary = page.getByTestId("run-history-summary");
-    await expect(summary.locator('[data-run-status="succeeded"]')).toBeVisible();
+    await expect(summary.locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);
+    await expect(summary.locator("[data-run-status]")).toHaveCount(0);
+    await summary.screenshot({path: testInfo.outputPath("summary-without-badges.png")});
     await expect(summary).toContainText("受注の登録方法 21");
-    await expect(summary).toContainText("照合済み");
+    await expect(summary.locator("[data-run-summary-heading]")).not.toContainText("照合済み");
     await expect(summary.locator('[data-run-fact="target"]')).toContainText("受注業務");
     await expect(summary.locator('[data-run-fact="executor"] dd')).toHaveText("自分");
     // 自分が実行した自分の会話は「会話の持ち主」を出さない。
@@ -484,24 +486,24 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     // 段の数は入れ子の工程も数える。開くと段と、回答フローの工程（字下げ）。所要時間は文字でも出す。
     const timeline = page.getByTestId("run-history-timeline");
     const timelineSummary = page.getByTestId("run-history-timeline-summary");
-    await expect(timelineSummary).toHaveText("4 ステップ・合計 1.2 秒");
+    await expect(timelineSummary).toHaveText("3 ステップ・合計 1.2 秒");
     await expect(timeline.locator("details[data-run-timeline-section]")).not.toHaveAttribute("open", "");
     await expect(timeline.locator("[data-run-timeline-step]").first()).toBeHidden();
     await timelineSummary.click();
-    await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(4);
-    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("根拠の検索と回答の生成");
-    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("1.1 秒");
-    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問の条件の読み取り（LLM 1 回・送信 2 回）");
-    await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答の安全チェック");
+    await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(3);
+    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の条件の読み取り");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("0.3 秒");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の条件の読み取り（LLM 1 回・送信 2 回）");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(2)).toContainText("回答の安全チェック");
     if (!isNarrow(page)) await expect(timeline.locator("[data-run-timeline-bar]").first()).toBeVisible();
     // 段の詳細（#2341）: 詳細のある工程・段だけを開ける（既定で閉じる）。詳細の無い工程に開閉の印は出さない。
     const steps = timeline.locator("[data-run-timeline-step]");
-    await expect(steps.nth(1).locator("[data-run-timeline-toggle]")).toHaveCount(0);
-    const searchToggle = steps.nth(2).locator("[data-run-timeline-toggle]");
+    await expect(steps.nth(0).locator("[data-run-timeline-toggle]")).toHaveCount(0);
+    const searchToggle = steps.nth(1).locator("[data-run-timeline-toggle]");
     await expect(searchToggle).toHaveAttribute("aria-expanded", "false");
     await searchToggle.click();
     await expect(searchToggle).toHaveAttribute("aria-expanded", "true");
-    const searchDetails = steps.nth(2).locator("[data-run-timeline-details]");
+    const searchDetails = steps.nth(1).locator("[data-run-timeline-details]");
     await expect(searchDetails.locator("dt").first()).toHaveText("検索の候補");
     await expect(searchDetails).toContainText("12 件（3 文書）");
     await expect(searchDetails).toContainText("1. 文書 A › 第 1 章（p.3）");
@@ -510,9 +512,9 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expectNoPageOverflow(page);
     await searchToggle.click();
     await expect(searchDetails).toBeHidden();
-    const guardrailToggle = steps.nth(3).locator("[data-run-timeline-toggle]");
+    const guardrailToggle = steps.nth(2).locator("[data-run-timeline-toggle]");
     await guardrailToggle.click();
-    await expect(steps.nth(3).locator("[data-run-timeline-details]")).toContainText("問題なし");
+    await expect(steps.nth(2).locator("[data-run-timeline-details]")).toContainText("問題なし");
 
     await expect(page.getByTestId("run-history-feedback-open-fb-1")).toHaveAttribute(
       "href",
@@ -523,7 +525,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     const technical = timeline.getByTestId("run-history-technical");
     const processDetailsSummary = page.getByTestId("run-history-process-details");
     await expect(processDetailsSummary).toHaveText("処理の詳細");
-    const lastStepBox = await timeline.locator("[data-run-timeline-step]").nth(3).boundingBox();
+    const lastStepBox = await timeline.locator("[data-run-timeline-step]").last().boundingBox();
     const detailsSummaryBox = await processDetailsSummary.boundingBox();
     expect(lastStepBox && detailsSummaryBox && detailsSummaryBox.y > lastStepBox.y).toBeTruthy();
     await expect(technical.getByText("conv-21")).toBeHidden();
@@ -559,15 +561,18 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     ]);
 
     await page.goto("/history/run-2");
-    await expect(page.getByTestId("run-history-summary")).toContainText("回答なし（検索のみ）");
+    const summary = page.getByTestId("run-history-summary");
+    await expect(summary).toBeVisible();
+    await expect(summary.locator('[data-run-fact="kind"] dd')).toHaveText("RAG 検索");
+    await expect(summary.locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);
     await expect(page.getByTestId("run-history-answer")).toHaveCount(0);
     await expect(page.getByTestId("run-history-citations")).toContainText("受注マニュアル.pdf");
     // 会話の無い実行には会話への導線を出さない。
     await expect(page.getByTestId("run-history-open-chat")).toHaveCount(0);
 
     await page.goto("/history/run-4");
-    const summary = page.getByTestId("run-history-summary");
-    await expect(summary.locator('[data-run-status="failed"]')).toBeVisible();
+    await expect(summary).toBeVisible();
+    await expect(summary.locator("[data-run-status]")).toHaveCount(0);
     // 失敗は共通の失敗のカード: 止まった段を含む 1 文目・次の操作・開いた「詳細」（#2342）。
     const failure = summary.getByTestId("run-history-failure");
     await expect(failure.getByRole("alert")).toContainText("「検索」で処理が止まりました。");

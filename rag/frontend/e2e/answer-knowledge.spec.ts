@@ -289,85 +289,24 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 900 },
 ]) {
-  test(`回答を標準回答で評価し、評価の基準の指標と合否を表示する (${viewport.name})`, async ({
-    page,
-  }) => {
+  test(`回答の詳細に標準回答の評価操作を表示しない (${viewport.name})`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockCommon(page);
     await mockSearchAnswerProfileApi(page);
     await mockAnswerStream(page);
-    let evaluationBody: Record<string, unknown> | null = null;
-    await page.route("**/api/search/answers/trace-answer/evaluation", (route) => {
-      evaluationBody = route.request().postDataJSON() as Record<string, unknown>;
-      return route.fulfill({
-        json: envelope({
-          trace_id: "trace-answer",
-          search_answer_profile_id: "bv-1",
-          surface: "search",
-          answer_engine: "grounded",
-          question: "受注を取り消すには？",
-          rewritten_question: null,
-          confidence: "high",
-          created_at: "2026-09-26T01:00:00Z",
-          answer: "受注一覧で取消を押します。",
-          citations: [],
-          answer_diagnostics: {},
-          evaluation_available: true,
-          evaluation: {
-            status: "completed",
-            message: "",
-            passed: false,
-            suite: "standard",
-            metrics: [
-              { name: "answer_correctness", value: 1, threshold: 0.9, passed: true },
-              { name: "claim_support_rate", value: 1, threshold: 0.9, passed: true },
-              { name: "requirement_coverage", value: 0.5, threshold: 0.8, passed: false },
-
-            ],
-            standard_answer: "受注一覧で対象を選び、取消を押します。",
-            evaluated_at: "2026-09-26T01:01:00Z",
-            standard_answer_scope: {
-              requirements: [{ requirement: "受注一覧で対象を選ぶ" }, { requirement: "取消を押す" }],
-            },
-            coverage_checks: [
-              { requirement_index: 1, status: "missing", answer_quote: "" },
-              { requirement_index: 2, status: "addressed", answer_quote: "取消を押します" },
-            ],
-            claim_checks: [
-              { answer_quote: "受注一覧で取消を押します。", status: "supported", reason: "手順書に記載" },
-            ],
-            external_data_items: [],
-          },
-        }),
-      });
+    let evaluationCalls = 0;
+    await page.route("**/api/search/answers/*/evaluation", (route) => {
+      evaluationCalls += 1;
+      return route.fulfill({ status: 404 });
     });
-
-    await selectSearchAnswerProfileAndAsk(page, "受注を取り消すには？");
-
-    // 標準回答による評価は、処理の経過の中の「処理の詳細」（回答の記録の詳細と同じ所。#2096 / #2325）。
+    await selectSearchAnswerProfileAndAsk(page, "合成の質問");
     await openAnswerProcessDetails(page, "search-run-progress");
-    const evaluation = page.getByRole("region", { name: "標準回答による評価" });
-    const run = evaluation.getByRole("button", { name: "標準回答で評価" });
-    await expect(run).toBeEnabled();
-    await evaluation.getByLabel("標準回答").fill("受注一覧で対象を選び、取消を押します。");
-    await run.click();
-
-    await expect.poll(() => evaluationBody).toEqual({
-      standard_answer: "受注一覧で対象を選び、取消を押します。",
-    });
-    // 指標ごとに値・基準・判定を出し、1 つでも閾値未満なら不合格（#680）。
-    await expect(evaluation.getByText("不合格", { exact: true })).toBeVisible();
-    await expect(evaluation.getByText("評価の基準: 標準")).toBeVisible();
-    const coverage = evaluation.getByRole("row", { name: /回答の網羅性/ });
-    await expect(coverage).toContainText("50%");
-    await expect(coverage).toContainText("80%");
-    await expect(coverage).toContainText("閾値未満");
-    await expect(evaluation.getByRole("row", { name: /根拠への忠実性/ })).toContainText("閾値以上");
-    await expect(evaluation.getByRole("row", { name: /回答の正確性/ })).toContainText("100%");
-    await expect(evaluation.getByRole("row")).toHaveCount(4);
-    await evaluation.getByText("標準回答の項目への対応（2）").click();
-    await expect(evaluation.getByText("未対応")).toBeVisible();
-    await expect(evaluation.getByText("受注一覧で対象を選ぶ")).toBeVisible();
+    await expect(page.getByTestId("answer-graph-expansion")).toBeVisible();
+    await expect(page.getByRole("region", { name: "標準回答による評価" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "標準回答で評価" })).toHaveCount(0);
+    await expect(page.getByLabel("標準回答", { exact: true })).toHaveCount(0);
+    expect(evaluationCalls).toBe(0);
+    await page.screenshot({ path: testInfo.outputPath("answer-details-without-evaluation.png") });
     await expectNoPageOverflow(page);
   });
 }

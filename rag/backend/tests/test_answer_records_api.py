@@ -1,8 +1,6 @@
 """保存済み回答の一覧・詳細 API。"""
 
 import json
-import threading
-import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -148,162 +146,13 @@ def test_list_saved_answers_filters_trace_ids(fake_oracle: FakeAnswerOracle) -> 
     assert too_many.status_code == 422
 
 
-def test_evaluate_saved_answer_with_standard_answer(
-    fake_oracle: FakeAnswerOracle, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[tuple[dict[str, Any], str, list[Any]]] = []
-
-    def fake_evaluate(
-        evaluation_input: dict[str, Any], standard_answer: str, settings: Any, *, citations: Any
-    ) -> Any:
-        calls.append((evaluation_input, standard_answer, citations))
-        return {"status": "completed", "passed": True, "metrics": [], "suite": "standard"}
-
-    monkeypatch.setattr(search_route, "evaluate_answer_record", fake_evaluate)
-
+def test_saved_answer_evaluation_is_not_exposed(fake_oracle: FakeAnswerOracle) -> None:
+    assert "/api/search/answers/{trace_id}/evaluation" not in app.openapi()["paths"]
     response = client.post(
-        "/api/search/answers/trace-1/evaluation", json={"standard_answer": "受注番号を入力する"}
+        "/api/search/answers/trace-1/evaluation", json={"standard_answer": "合成の回答"}
     )
-
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["evaluation_available"] is True
-    assert data["evaluation"]["suite"] == "standard"
-    assert data["evaluation"]["standard_answer"] == "受注番号を入力する"
-    assert [call[:2] for call in calls] == [
-        ({"question": "受注の登録方法は？", "answer_text": "回答"}, "受注番号を入力する")
-    ]
-    assert fake_oracle.evaluations["trace-1"]["passed"] is True
-
-
-def test_evaluate_saved_answer_rejects_blank_legacy_and_missing(
-    fake_oracle: FakeAnswerOracle, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[str] = []
-
-    def evaluate(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        calls.append(args[1])
-        assert kwargs["citations"]
-        return {
-            "status": "completed",
-            "claim_support_rate": 1,
-            "answer_correctness": None,
-            "requirement_coverage": None,
-        }
-
-    monkeypatch.setattr(search_route, "evaluate_answer_record", evaluate)
-
-    blank = client.post("/api/search/answers/trace-1/evaluation", json={"standard_answer": "  "})
-    legacy = client.post("/api/search/answers/legacy/evaluation", json={"standard_answer": "a"})
-    missing = client.post("/api/search/answers/missing/evaluation", json={"standard_answer": "a"})
-
-    assert blank.status_code == 200
-    assert calls == ["  "]
-    assert fake_oracle.evaluations["trace-1"]["claim_support_rate"] == 1
-    assert fake_oracle.evaluations["trace-1"]["answer_correctness"] is None
-    assert legacy.status_code == 409
-    assert missing.status_code == 404
-    assert client.get("/api/search/answers/legacy").json()["data"]["evaluation_available"] is False
-
-
-def test_evaluate_saved_answer_times_out_without_saving(
-    fake_oracle: FakeAnswerOracle, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """評価が時間の上限を超えたら 504 と理由を返し、評価を保存しない（#304）。"""
-
-    finished = threading.Event()
-
-    def slow_evaluate(*_args: Any, **_kwargs: Any) -> Any:
-        try:
-            time.sleep(0.3)  # 上限（0.05 秒）の 6 倍。
-            return {"status": "completed", "passed": True}
-        finally:
-            finished.set()
-
-    monkeypatch.setattr(search_route, "evaluate_answer_record", slow_evaluate)
-    monkeypatch.setattr(search_route, "ANSWER_EVALUATION_TIMEOUT_SECONDS", 0.05)
-
-    response = client.post(
-        "/api/search/answers/trace-1/evaluation", json={"standard_answer": "受注番号を入力する"}
-    )
-
-    assert response.status_code == 504
-    assert response.json()["error_messages"] == [search_route.ANSWER_EVALUATION_TIMEOUT_MESSAGE]
-    # worker thread の評価が終わっても保存しない。テストの client（`anyio.run`）は、504 を返した後も
-    # worker thread の終了を待ってから戻るため、固定の時間は待たない（#401）。
-    assert finished.wait(timeout=5)
+    assert response.status_code == 404
     assert fake_oracle.evaluations == {}
-
-
-def test_answer_evaluation_timeout_follows_llm_timeout_limit() -> None:
-    """評価全体の上限は LLM 1 回の timeout の設定の上限（画面・nginx はこれより長い）。"""
-    from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings
-
-    field = Settings.model_fields["oci_enterprise_ai_timeout_seconds"]
-    upper = [item.le for item in field.metadata if getattr(item, "le", None) is not None]
-    assert upper == [OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS]
-    assert search_route.ANSWER_EVALUATION_TIMEOUT_SECONDS == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
-
-
-@pytest.mark.usefixtures("oracle_db")
-async def test_answer_evaluation_round_trip_on_real_oracle() -> None:
-    """実 Oracle AI Database で、評価の入力と結果の JSON 列を保存・読み戻しできる。"""
-    from app.clients.oracle import OracleClient
-    from tests import _oracle_test_db
-
-    oracle = OracleClient()
-    trace_id = "pytest-evaluation-round-trip"
-    await oracle.save_answer_record(
-        {
-            "trace_id": trace_id,
-            "surface": "search",
-            "answer_engine": "grounded",
-            "question": "受注の登録方法は？",
-            "answer": "受注番号を入力します。",
-            "citations": [],
-            "diagnostics": {"confidence": "high"},
-            "evaluation_input": {
-                "question": "受注の登録方法は？",
-                "evidence_items": [{"text": "本文"}],
-            },
-        }
-    )
-    try:
-        assert await oracle.save_answer_evaluation(
-            trace_id, {"status": "completed", "total_score": 17}
-        )
-        assert not await oracle.save_answer_evaluation("pytest-missing", {"status": "completed"})
-        row = await oracle.get_answer_record(trace_id)
-        assert row is not None
-        assert row["evaluation_input_json"] == {
-            "question": "受注の登録方法は？",
-            "evidence_items": [{"text": "本文"}],
-        }
-        assert row["evaluation_json"] == {"status": "completed", "total_score": 17}
-        # 同じ trace_id で回答を保存し直すと、古い評価は消える。
-        await oracle.save_answer_record(
-            {
-                "trace_id": trace_id,
-                "surface": "search",
-                "answer_engine": "grounded",
-                "question": "受注の登録方法は？",
-                "answer": "別の回答",
-                "citations": [],
-                "diagnostics": {},
-            }
-        )
-        row = await oracle.get_answer_record(trace_id)
-        assert row is not None and row["evaluation_json"] is None
-    finally:
-        # 回答の記録を 1 件ずつ消す API は無い（保存期間で消える。#2348）ので SQL で後始末する。
-        connection = _oracle_test_db._connect()
-        try:
-            connection.cursor().execute(
-                "DELETE FROM rag_answer_records WHERE trace_id = :trace_id", {"trace_id": trace_id}
-            )
-            connection.commit()
-        finally:
-            connection.close()
 
 
 def test_oracle_rows_turn_json_decimals_into_numbers() -> None:
@@ -329,25 +178,9 @@ def test_oracle_rows_turn_json_decimals_into_numbers() -> None:
     json.dumps([row["payload_json"], row["items_json"]])
 
 
-def test_guide_preview_answers_are_kept_out_of_history_and_evaluation(
-    fake_oracle: FakeAnswerOracle, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """業務ガイドの下書きで試した回答（#1288）は、回答の履歴に出さず、評価もしない。"""
+def test_guide_preview_answers_are_kept_out_of_history() -> None:
     from app.clients.oracle import _answer_record_list_where
     from app.rag.support_guide_runtime import GUIDE_PREVIEW_TRACE_PREFIX
 
-    monkeypatch.setattr(
-        search_route,
-        "evaluate_answer_record",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("評価しない")),
-    )
-    preview = client.post(
-        f"/api/search/answers/{PREVIEW_TRACE_ID}/evaluation", json={"standard_answer": "a"}
-    )
-    assert preview.status_code == 409
-    assert preview.json()["error_messages"] == [search_route.GUIDE_PREVIEW_EVALUATION_MESSAGE]
-    assert fake_oracle.evaluations == {}
-
-    # 一覧・件数の条件は、下書きで試した回答の trace_id を外す。
     where, _ = _answer_record_list_where(search_answer_profile_id="bv-1", trace_ids=None)
     assert f"trace_id NOT LIKE '{GUIDE_PREVIEW_TRACE_PREFIX}%'" in where

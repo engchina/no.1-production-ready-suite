@@ -194,7 +194,7 @@ class ChatProgressTracker:
         if index is None:
             return False
         _, step_id = self._open.pop(index)
-        if progress.outcome in ("success", "error"):
+        if progress.outcome in ("success", "error", "skipped"):
             # 終わった工程の詳細（見出しと値・行）と、回答フローの工程の LLM の回数・結果の説明を、
             # 終わったときに段に付ける（回答の完了を待たない。実行中から段を開ける。失敗した回答でも
             # 残る。#2341 / #2373）。
@@ -211,7 +211,11 @@ class ChatProgressTracker:
             if current is not None and params != (current.params or {}):
                 values["params"] = params
             failed = progress.outcome == "error"
-            self._recorder.finish(step_id, "failed" if failed else "done", **values)
+            self._recorder.finish(
+                step_id,
+                "skipped" if progress.outcome == "skipped" else "failed" if failed else "done",
+                **values,
+            )
             if failed:
                 self._describe_failure(step_id, kind, progress.attributes, base=details)
         # cancelled（時間切れなどの中断）は終端（fail / close）で失敗・停止にする。

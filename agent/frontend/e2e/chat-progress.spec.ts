@@ -1,3 +1,4 @@
+import {timelineSnapshot} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import type { Page } from "@playwright/test";
 
 import { findIconTextMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
@@ -331,3 +332,42 @@ for (const viewport of VIEWPORTS) {
     });
   }
 }
+
+test("チャットと履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
+  const {syntheticTraceSummary, captureTraceLayouts} = await import("../../../platform/packages/ui/e2e/trace-fixture");
+  const {run} = seedRunningRun(mockApi);
+  run.trace_summary = syntheticTraceSummary;
+  const start = "2026-10-23T00:00:00.000Z";
+  const end = "2026-10-23T00:00:02.000Z";
+  run.created_at = start;
+  run.updated_at = end;
+  run.status = "completed";
+  run.steps = [toolStep("synthetic-step", "synthetic_tool", "completed", {tool_result: {name: "synthetic_tool", success: true, output: {value: 1}, duration_ms: 777}})];
+  run.progress_events = new ProgressLog(RUN_ID, () => end)
+    .step("plan", "done", {startedAt: start, finishedAt: end})
+    .step("tool:synthetic_tool", "done", {startedAt: start, finishedAt: end, params: {tool: "synthetic_tool"}})
+    .step("respond", "done", {startedAt: start, finishedAt: end}).terminal("done").events;
+  run.events = [{id: "end", run_id: RUN_ID, type: "run.completed", message: "", payload: {}, created_at: end}];
+  await page.goto("/chat");
+  await openThread(page);
+  await page.getByTestId("chat-progress-summary").click();
+  const live = await timelineSnapshot(page.getByTestId("chat-progress"));
+  expect(live).toHaveLength(3);
+  await page.screenshot({path: testInfo.outputPath("chat-process.png")});
+  await page.goto(`/runs?id=${RUN_ID}`);
+  await expect(page.getByTestId("run-summary")).toBeVisible();
+  await expect(page.getByTestId("run-summary").locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);
+  await page.getByTestId("run-timeline-section-summary").click();
+  expect(await timelineSnapshot(page.getByTestId("run-timeline-section"))).toEqual(live);
+  await expectNoHorizontalOverflow(page);
+  const details = page.locator("[data-run-process-details]");
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.locator(":scope > summary").click();
+  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
+  await expect(page.getByTestId("trace-details")).toHaveCount(0);
+  await details.getByTestId("trace-details-toggle").click();
+  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
+  await captureTraceLayouts(page, testInfo, "history-trace");
+  await page.getByTestId("run-timeline-section").screenshot({path: testInfo.outputPath("history-process.png")});
+});

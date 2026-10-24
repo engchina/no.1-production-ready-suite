@@ -3,11 +3,14 @@
  *
  * - 状態は共通の 7 つ（`@production-ready/ui` の `RunStatus`）に写す（run-history.md「状態の写し方」）。
  *   RAG は `success` → 完了、`blocked`（安全チェック）→ ブロック（文言は「安全チェックで停止」）、`error` → 失敗。
- * - 処理の経過は、段（`stages`）を `RunTimeline` の 1 行ずつにし、回答フローの中の工程（`answer_step:` の段か、
- *   回答の記録の `execution_steps`）を「根拠の検索と回答の生成」の段の下に字下げで並べる。
+ * - 処理の経過は、保存したチャットのイベントか検索の開始・終了イベントを操作画面と同じ関数で写す。
+ *   終了の記録だけの旧データは、記録の無い階層を推測しない。
  */
 import {
   formatRunDuration,
+  chatProgressTimelineStep,
+  chatProgressStepsFromEvents,
+  parseChatProgressEvents,
   type RunExecutorFilter as SharedRunExecutorFilter,
   type RunStatus as SharedRunStatus,
   type RunStatusFilter as SharedRunStatusFilter,
@@ -19,7 +22,7 @@ import {
 } from "@production-ready/ui";
 
 import { outcomeBadge, parseRunStepDetails, type AnswerOutcome } from "@/lib/answer-diagnostics";
-import { answerStepDisplayName, llmCallsLabel } from "@/lib/answer-process";
+import { answerStepDisplayName, answerStepMeta, answerProcessStepsFromStages } from "@/lib/answer-process";
 import { ANSWER_STEP_STAGE_PREFIX, answerStageLabel } from "@/lib/answer-progress";
 import type {
   RunDetail,
@@ -30,6 +33,7 @@ import type {
   RunVerification,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { CHAT_PROGRESS_DEFINITIONS } from "@/lib/chat-progress";
 
 export interface BadgeView {
   variant: StatusVariant;
@@ -178,19 +182,28 @@ export function answerStepStatus(status: string | null | undefined): RunTimeline
   return /^[a-z_]+$/i.test(value) ? runStepStatus(value) : "done";
 }
 
-/** 処理の経過の文言の RAG の上書き（止めた段は「停止」）。 */
-export function runTimelineStepLabels(): Partial<Record<RunTimelineStepStatus, string>> {
-  return { skipped: t("history.process.outcome.cancelled") };
-}
-
 /** 処理の経過の行（段と、回答フローの中の工程）。 */
-export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "created_at" | "elapsed_ms">): RunTimelineStep[] {
+export function runTimelineSteps(
+  run: Pick<RunDetail, "stages" | "steps" | "stage_events" | "progress_events" | "created_at" | "elapsed_ms"> &
+    Partial<Pick<RunDetail, "status" | "error_type">>
+): RunTimelineStep[] {
+  const events = parseChatProgressEvents(run.progress_events);
+  if (events.length) return chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS).map(chatProgressTimelineStep);
+  if (run.stage_events?.length) {
+    return answerProcessStepsFromStages(run.stage_events, {
+      terminal: run.error_type === "CancelledError" ? "cancelled" : run.status === "error" ? "failed" : "done",
+      executionSteps: run.steps.map((step) => ({
+        name: step.name,
+        status: step.status,
+        elapsedSeconds: step.elapsed_seconds,
+        llmCalls: step.llm_calls ?? 0,
+        llmSends: step.llm_sends ?? undefined,
+        details: parseRunStepDetails(step.details) ?? undefined,
+      })),
+    }).map(chatProgressTimelineStep);
+  }
   const llmCalls = new Map(run.steps.map((step) => [step.name, step.llm_calls ?? 0]));
   const llmSends = new Map(run.steps.map((step) => [step.name, step.llm_sends ?? 0]));
-  const detailFor = (name: string) => {
-    const calls = llmCalls.get(name) ?? 0;
-    return calls > 0 ? llmCallsLabel("history.process", calls, llmSends.get(name)) : undefined;
-  };
   // 工程の詳細（見出しと値・行。段を開いて見る。#2294 / #2341）。同じ名前の工程は記録の順に対応させる。
   // 旧い記録の行の配列は行として読む。
   const detailsQueue = new Map<string, (RunStepDetails | undefined)[]>();
@@ -211,7 +224,11 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
             label: answerStageLabel(stage.stage),
             status: runStepStatus(stage.outcome),
             durationMs: stage.elapsed_ms,
-            detail: detailFor(name),
+            detail: answerStepMeta({
+              llmCalls: llmCalls.get(name),
+              llmSends: llmSends.get(name),
+              note: run.steps.find((step) => step.name === name)?.status,
+            }),
             // 回答の記録が無い（失敗した）実行は、工程が終わったときの段の詳細を出す（#2373）。
             details: detailsFor(name) ?? parseRunStepDetails(stage.details),
           };
@@ -220,7 +237,7 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
           label: step.name ? answerStepDisplayName(step.name) : t("history.notRecorded"),
           status: answerStepStatus(step.status),
           durationMs: step.elapsed_seconds == null ? null : step.elapsed_seconds * 1000,
-          detail: detailFor(step.name),
+          detail: answerStepMeta({ llmCalls: step.llm_calls, llmSends: step.llm_sends, note: step.status }),
           details: detailsFor(step.name),
         }));
 
@@ -245,7 +262,7 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
         finishedAt: timed ? iso(childCursor + duration) : null,
         detail: child.detail,
         ...(child.details ? { details: child.details } : {}),
-        level: 1,
+        level: 0,
       });
       if (timed) childCursor += duration;
     });
@@ -255,6 +272,11 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
     const timed = duration != null && Number.isFinite(duration);
     // 段の詳細（書き換えた質問・読み取った条件・回答の安全チェックの結果。#2341）。
     const stageDetails = parseRunStepDetails(stage.details);
+    if (index === parentIndex && children.length > 0) {
+      placeChildren(cursor);
+      if (timed) cursor += duration;
+      return;
+    }
     rows.push({
       id: `stage-${index}`,
       label: answerStageLabel(stage.stage),
@@ -264,7 +286,7 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
       finishedAt: timed ? iso(cursor + duration) : null,
       ...(stageDetails ? { details: stageDetails } : {}),
     });
-    if (index === parentIndex) placeChildren(cursor);
+
     if (timed) cursor += duration;
   });
   if (parentIndex < 0) placeChildren(base);

@@ -225,7 +225,7 @@ test(
   }
 );
 
-test("処理の経過のツールの段に、使ったプロファイルと範囲の補完・拒否が出る", async ({ page, mockApi }) => {
+test("処理の経過のツールの段に、使ったプロファイルと範囲の補完・拒否が出る", {tag: "@responsive"}, async ({ page, mockApi }, testInfo) => {
   const step = (id: string, status: string, dataScope: Record<string, unknown>, error?: string) => ({
     id,
     run_id: "run-1378",
@@ -294,10 +294,9 @@ test("処理の経過のツールの段に、使ったプロファイルと範�
   await page.getByTestId("run-timeline-section-summary").click();
   await timeline.getByRole("button", { name: /処理を実行しました/ }).click();
 
-  await expect(page.getByTestId("run-step-data-scope-step-rejected")).toHaveText(
-    "profile-hr は範囲外のため実行していません"
-  );
-  await expect(page.getByTestId("run-step-data-scope-step-filled")).toHaveText("profile-cost を範囲から補完");
+  await expect(timeline.getByText("profile-hr は範囲外のため実行していません", {exact: true})).toBeVisible();
+  await expect(timeline.getByText("profile-cost を範囲から補完", {exact: true})).toBeVisible();
+  await timeline.screenshot({path: testInfo.outputPath("tool-data-scope.png")});
   await expectNoHorizontalOverflow(page);
 });
 

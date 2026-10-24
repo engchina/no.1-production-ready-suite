@@ -106,21 +106,24 @@ export const MODEL_MESSAGES = {
     "OCI OpenAI-compatible API 呼び出しに必要な Generative AI project OCID。",
   "settings.model.enterprise.projectHelpTertiary":
     "OCI Enterprise AI を使うときだけ、Generative AI project OCID を入力します（入力したときだけ OpenAI-Project ヘッダーで送ります）。OpenAI や OpenAI 互換 API では空のままにします。",
+  "settings.model.enterprise.parameterHelp": "推論の量・入力と出力の上限について",
+  "settings.model.enterprise.modelDocs": "Oracle 公式: モデルの仕様",
+  "settings.model.enterprise.apiDocs": "Oracle 公式: API の仕様",
   "settings.model.enterprise.reasoningEffort": "推論の量",
   "settings.model.enterprise.reasoningEffortOfModel": "モデル {number} の推論の量",
   "settings.model.enterprise.reasoningEffortHelp":
-    "推論の量は、モデルが回答の前に考える量（reasoning.effort）です。既定は low で、low → medium → high の順に多く考えます。少ないほど回答が速く、出力の上限にも届きにくくなります。none は推論の量を送らず、モデルの既定のままにします。保存の前に「テスト」で、選んだ値でモデルが応答するかを確かめてください。NL2SQL の Select AI・Select AI Agent には推論の量は効きません（Oracle の AI profile に推論の量の属性がないため）。",
+    "推論に対応するモデルへ、回答の生成に使う推論の程度を指定します。対応する値や効果はモデル・API により異なり、応答時間や品質を保証する設定ではありません。このシステムの none は指定を送らず、モデル側の既定を使います。選択した接続と値は「テスト」で確認してください。NL2SQL の Select AI・Select AI Agent には、この画面の推論の量は送信しません。",
   "settings.model.enterprise.reasoningEffort.none": "none（送らない）",
   "settings.model.enterprise.maxInputTokens": "入力の上限（tokens）",
   "settings.model.enterprise.maxInputTokensOfModel": "モデル {number} の入力の上限（tokens）",
   "settings.model.enterprise.maxInputTokensHelp":
-    "入力の上限は、モデルが 1 回の呼び出しで扱える token の数（コンテキストウィンドウ。prompt と応答の合計）です。既定は 128000 で、4096〜2000000 の整数を入力します。回答の根拠と、長い章節から原文を抜き出す 1 回分の量を、この値の割合で決めます（指示と出力の余地を残します）。モデルの仕様より大きくすると呼び出しが失敗することがあるため、仕様の値以下にしてください（OCI の公式の値の例: xai.grok-4.3 は 1000000、openai.gpt-oss-120b は 128000）。出力の上限は別の設定です。",
+    "この画面の「入力の上限」は、入力と出力を合わせたコンテキスト長を、このシステムの token 予算として設定するものです。指示・質問・会話履歴・資料などの入力と、出力のための余地を含めて扱います。選択したモデルのコンテキスト上限以下に設定してください。値を大きくしてもモデル自体の上限は増えません。出力の上限は別の設定です。",
   "settings.model.enterprise.maxInputTokensInvalid":
     "入力の上限は 4096〜2000000 の整数で入力してください。",
   "settings.model.enterprise.maxOutputTokens": "出力の上限（tokens）",
   "settings.model.enterprise.maxOutputTokensOfModel": "モデル {number} の出力の上限（tokens）",
   "settings.model.enterprise.maxOutputTokensHelp":
-    "出力の上限は、1 回の応答で出せる token の数です。入力の上限（prompt と応答の合計）の中の応答の分で、推論のあるモデルは推論の token も含みます。既定は 32768 で、1〜2000000 の整数を入力の上限以下で入力します。小さすぎると、表・列の多いコメントの生成などで応答が途中で終わり（未完了）、AI を使わない規則ベースの結果になります。呼び出しでは、入力の上限から prompt の分を引いた残りを超えない値を送ります。",
+    "1 回の呼び出しで生成する token 数の上限です。モデル・API によっては、表示される回答だけでなく推論の token も含まれる場合があります。モデルの出力上限と、入力に使った分を除くコンテキストの残りに収まるよう設定してください。小さすぎると回答が途中で終わったり、本文が得られなかったりします。未完了時の再試行やエラーの扱いは、使用する機能によって異なります。",
   "settings.model.enterprise.maxOutputTokensInvalid":
     "出力の上限は 1〜2000000 の整数で入力してください。",
   "settings.model.enterprise.maxOutputTokensOverInput":

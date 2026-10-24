@@ -49,7 +49,7 @@ DEFAULT_ANSWER_NOTICE_BODY = (
     "業務に使う前に、必ず回答の根拠（資料・SQL・結果）で内容を確かめてください。"
 )
 # 窓口（連絡先の名前・連絡の方法）。管理者が電話・URL などを書く。
-DEFAULT_ANSWER_NOTICE_CONTACT = "ヘルプデスク"
+DEFAULT_ANSWER_NOTICE_CONTACT = "サポート窓口"
 # 本文の後に続ける窓口の案内の 1 行（`{contact}` に窓口が入る）。
 ANSWER_NOTICE_CONTACT_TEMPLATE = "解決しない場合は、{contact}へお問い合わせください。"
 

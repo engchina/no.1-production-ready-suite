@@ -17,8 +17,6 @@ import {
   SelectField,
   type SelectFieldOption,
   Switch,
-  InfoTip,
-  ToggleChip,
   TextField,
   TimedLoadingState,
   Skeleton,
@@ -53,11 +51,9 @@ import { streamSearch } from "@/lib/search-stream";
 import { answerProcessStepsFromStages, type AnswerStageRecord } from "@/lib/answer-process";
 import { isSubmitEnter } from "@/lib/keyboard";
 import { t } from "@/lib/i18n";
-import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { APP_ROUTES } from "@/lib/routes";
 import {
   useSearchAnswerProfiles,
-  useSearchAnswerModels,
   useSearchExtractionFields,
 } from "@/lib/queries";
 import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-state";
@@ -112,7 +108,6 @@ interface SearchRequestSnapshot {
   searchAnswerProfileId: string;
   generateAnswer: boolean;
   /** 回答のモデル（空は既定のテキストモデル）。 */
-  answerModelId: string;
   topK: TopKOption;
   filters: Record<string, string>;
   /** 質問から読み取った条件のうち、利用者が外した項目（#652）。 */
@@ -161,13 +156,6 @@ export function SearchClient() {
   const [advancedOpen, setAdvancedOpen] = useWorkspaceState("search.advancedOpen", false);
   // 回答の生成は既定でオフ（検索結果までを表示する。#649）。選んだ値は作業状態に残す。
   const [generateAnswer, setGenerateAnswer] = useWorkspaceState("search.generateAnswer", false);
-  // 回答のモデル（既定のテキストモデルか既定の Vision モデル。比較はしない。#675）。
-  // 候補に無い保存値（モデルの設定が変わった後など）は既定（テキスト）として扱う。
-  const [storedAnswerModelId, setAnswerModelId] = useWorkspaceState("search.answerModelId", "");
-  const answerModels = useSearchAnswerModels().data ?? [];
-  const answerModelId = answerModels.some((model) => model.model_id === storedAnswerModelId)
-    ? storedAnswerModelId
-    : "";
   const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>({});
   // 対象の検索・回答プロファイルは 1 つ（#635）。チャットと同じく ID を 1 つだけ作業状態に残す。
   const [searchAnswerProfileId, setSearchAnswerProfileId] = useWorkspaceState<string | null>(
@@ -245,7 +233,6 @@ export function SearchClient() {
         query: trimmed,
         searchAnswerProfileId,
         generateAnswer,
-        answerModelId: generateAnswer ? answerModelId : "",
         topK,
         filters: buildSearchFilters({
           classification,
@@ -321,9 +308,6 @@ export function SearchClient() {
           top_k: Number(request.topK),
           search_answer_profile_id: request.searchAnswerProfileId,
           generate_answer: request.generateAnswer,
-          ...(request.generateAnswer && request.answerModelId
-            ? { model_id: request.answerModelId }
-            : {}),
           ...(request.excludedAutoFields.length
             ? { auto_field_filter_excluded: request.excludedAutoFields }
             : {}),
@@ -336,7 +320,7 @@ export function SearchClient() {
                 ? {
                     ...current,
                     traceId: stage.trace_id || current.traceId,
-                    stages: [...current.stages, { ...stage, receivedAtMs: Date.now() }],
+                    stages: [...current.stages, { ...stage, receivedAtMs: stage.occurred_at_ms ?? Date.now() }],
                   }
                 : current
             ),
@@ -443,7 +427,7 @@ export function SearchClient() {
     : [];
   // 処理の経過（#2096。チャットと同じ AnswerProcess）。実行中も終わった後も回答・検索結果の上の同じ場所に 1 つ出す
   // （作成中の「N ステップ完了」が終わると「処理の経過」になり、完了したら一覧を閉じる。末尾に出し直さない。
-  // #2115 / #2118）。「処理の詳細」（処理の経過の中の末尾。#2325）は回答の記録の詳細（回答を作ったときは標準回答による評価も）でチャットと同じ。
+  // #2115 / #2118）。「処理の詳細」（処理の経過の中の末尾。#2325）は回答の記録の詳細でチャットと同じ。
   const running = phase === "streaming";
   const processView = run ? (
     <AnswerProcess
@@ -461,7 +445,6 @@ export function SearchClient() {
       }
       traceSummary={running ? undefined : meta?.diagnostics?.trace_summary}
       diagnostics={running ? undefined : meta?.diagnostics?.answer}
-      traceId={answerMode && phase === "done" ? meta?.trace_id : null}
       showNotices={!answerMode}
       showAutoFieldFilter={false}
       testId="search-run-progress"
@@ -708,36 +691,6 @@ export function SearchClient() {
                   Enter で検索、Shift+Enter で改行（IME の変換を確定する Enter では検索しない。#459）。
                   実行中の Enter は submit が無視し、停止しない。 */}
               <div className="space-y-2 border-t border-border pt-4">
-                {/* 回答するモデル。チャットと同じく入力欄のすぐ上のチップの行（#686）。比較はしないので
-                    1 つだけ選べ、もう一度押すと未選択（既定のテキストモデル）に戻る。 */}
-                {generateAnswer && answerModels.length > 0 ? (
-                  <div className="flex flex-wrap items-center gap-2" data-testid="search-answer-model">
-                    {/* 説明は常設せず、ラベルの横の info アイコンから出す（#901）。 */}
-                    <span className="inline-flex items-center gap-0.5">
-                      <span className="text-xs font-medium text-fg-muted">
-                        {t("search.answerModel.label")}
-                      </span>
-                      <InfoTip
-                        label={t("search.answerModel.infoLabel")}
-                        content={t(answerModelHelpKey(answerModels, "search.answerModel.help"))}
-                        contentTestId="search-answer-model-help"
-                        data-testid="search-answer-model-info"
-                      />
-                    </span>
-                    {answerModels.map((model) => (
-                      <ToggleChip
-                        key={model.model_id}
-                        selected={answerModelId === model.model_id}
-                        disabled={isStreaming}
-                        onClick={() =>
-                          setAnswerModelId(answerModelId === model.model_id ? "" : model.model_id)
-                        }
-                      >
-                        {answerModelLabel(model)}
-                      </ToggleChip>
-                    ))}
-                  </div>
-                ) : null}
                 <FieldActionRow
                   actions={
                     <RunStopButton

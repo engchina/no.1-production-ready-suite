@@ -1,3 +1,4 @@
+import {chatProgressStepsFromEvents, chatProgressTimelineStep, parseChatProgressEvents} from "@production-ready/ui";
 import { describe, expect, it } from "vitest";
 
 import type { RunState } from "@/lib/api";
@@ -14,6 +15,7 @@ import {
   pairToolProgressSteps,
   runConversationHref,
   runTimelineSteps,
+  runProgressSteps,
   runToolTitles,
   toolStepDetails,
   withToolStepDetails,
@@ -219,4 +221,17 @@ describe("runConversationHref（会話を開く。Issue 2343）", () => {
       "/chat?agent_id=default&thread_id=t1"
     );
   });
+});
+
+it("承認待ちとイベントに欠けたツールもチャットと履歴で同じ工程にする", () => {
+  const events = parseChatProgressEvents([{schema_version: 1, seq: 1, attempt: 0, target_id: "run-1", emitted_at: NOW,
+    type: "step", step_id: "approval_wait", kind: "approval", status: "running", started_at: NOW}]);
+  const state = run({status: "waiting_approval", progress_events: events, steps: [{
+    id: "synthetic-step", run_id: "run-1", kind: "tool", status: "completed", tool_call: {name: "synthetic_tool", arguments: {}},
+  }, {
+    id: "future-step", run_id: "run-1", kind: "tool", status: "waiting_approval", tool_call: {name: "synthetic_future_tool", arguments: {}},
+  }] as RunState["steps"]});
+  const live = runProgressSteps(state, chatProgressStepsFromEvents(events, AGENT_CHAT_PROGRESS_STEPS, state.id));
+  expect(runTimelineSteps(state, () => "履歴だけの詳細")).toEqual(live.map(chatProgressTimelineStep));
+  expect(live.map((step) => step.status)).toEqual(["running", "done"]);
 });

@@ -618,3 +618,11 @@ header           : StatusBadge（エンティティの状態の正本 = P1）
   - 開いている会話の内容を読めなかった: 会話の欄に失敗の表示（再試行付き）を出し、空の状態は出さない。送信は無効のまま（内容の分からない会話に続けて送らない）。「新しい会話」と履歴は使えるままにし、失敗の後も別の会話へ移れるようにする。
 - 送った質問の表示（§11.1）を出している間は、その会話の読み込み中の表示で隠さない（作った会話の内容はキャッシュに先に入れる。§11.2）。
 - 実装: `ChatSkeleton`（`packages/ui`、[components-reference.md](../design-system/components-reference.md)「読み込み中と一覧の表示密度」）。製品は RAG `components/chat/ChatClient.tsx`、NL2SQL `features/nl2sql/SqlChatPage.tsx`、Agent `pages/ChatPage.tsx`。Playwright は対象の一覧の応答を遅らせ、空の状態が出ず Skeleton が出ること・経過時間が 1 つであること・入力欄と送信などが無効で入力欄の文字が残ること・読み込み後に使えること・失敗の表示を、会話の内容の応答を遅らせ、入力欄に書けて送信だけが止まることを、desktop / 375px・light / dark で確かめる（RAG `e2e/chat-loading.spec.ts`・NL2SQL `tests/e2e/sql-chat-loading.spec.ts`・Agent `e2e/chat-loading.spec.ts`）。
+
+### 処理の詳細とトレースの階層（#3201）
+
+Agent・RAG・NL2SQL の操作画面と実行履歴は、処理の経過 → 処理の詳細 → トレースの詳細の順にする。処理の詳細とトレースの詳細は既定で閉じる。工程は利用者向けの進行、trace は span・識別子・計測の診断情報として扱う。単一の実行区間は追加の開閉を作らず、複数の区間がある場合だけ区間ごとの開閉を置く。
+
+### 実行の概要の見出し（#3203）
+
+Agent・RAG・NL2SQL の実行の概要は、見出しの横に状態・回答の対応・照合・評価のバッジを置かない。見出しと対象への操作を共通の構成にし、質問・実行日時などの事実と、必要な失敗・ブロック理由を本文で示す。

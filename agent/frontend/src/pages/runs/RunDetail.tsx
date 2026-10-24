@@ -20,7 +20,6 @@ import {
   RunDetailLayout,
   RunDetailSection,
   RunEventLog,
-  RunProcessDetails,
   RunFactList,
   RunSummary,
   RunTimelineSection,
@@ -44,6 +43,7 @@ import {
 } from "@/lib/api";
 import { QueryState, listCountLabels } from "@/components/ListViews";
 import { useAuth } from "@/components/security/AuthProvider";
+import { toolProgressTable } from "@/components/chat/ToolProgressTable";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { OutcomeBadge } from "@/components/chat/AnswerReview";
 import { AnswerBody, ResultTable } from "@/components/chat/ResultTables";
@@ -157,7 +157,7 @@ export function RunDetail({
   const passages = runAnswerPassages(run.artifacts);
   const latestAnswer = answers.at(-1);
   const outcome = latestAnswer ? answerOutcome(latestAnswer.content) : null;
-  const timelineSteps = runTimelineSteps(run, (step) => stepDetails(step));
+  const timelineSteps = runTimelineSteps(run, (step) => stepDetails(step), toolProgressTable);
   const failure = runFailure(run, timelineSteps, "detail");
   const usage = run.usage;
 
@@ -300,13 +300,9 @@ export function RunDetail({
             testId="run-timeline-section"
             // 処理の詳細（識別子・イベントの記録・ストリームの接続）は、処理の経過のタイムラインの後ろに既定で閉じて置く
             // （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置。#2325）。
+            processDetailsProps={{ title: t("run.section.processDetails"), description: t("run.section.processDetailsDescription"), testId: "run-technical-section", summaryTestId: "run-process-details" }}
             processDetails={
-              <RunProcessDetails
-                title={t("run.section.processDetails")}
-                description={t("run.section.processDetailsDescription")}
-                testId="run-technical-section"
-                summaryTestId="run-process-details"
-              >
+              <>
                 <RunFactList
                   facts={[
                     { id: "agentId", label: t("run.fact.agent"), value: run.agent_id, mono: true },
@@ -327,7 +323,7 @@ export function RunDetail({
                   <EventLog events={run.events} />
                 </div>
                 <RunStreamControls sseState={sseState} />
-              </RunProcessDetails>
+              </>
             }
           />
         }

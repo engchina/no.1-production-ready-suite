@@ -1,3 +1,4 @@
+import {timelineSnapshot} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import { expect, type Page, type Route, test } from "./fixtures/test";
 
 import {
@@ -361,7 +362,7 @@ test("検索・回答プロファイルの読み込み中は読み込み中の�
   await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toBeVisible();
 });
 
-test("詳細条件は条件を設定したままでも閉じられ、閉じると「設定中」を出す（#461）", async ({ page }) => {
+test("詳細条件は条件を設定したままでも閉じられ、閉じると「設定中」を出す（#461）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /経理ビュー/);
   const advanced = page.getByRole("button", { name: /詳細条件/ });
@@ -369,6 +370,9 @@ test("詳細条件は条件を設定したままでも閉じられ、閉じる�
 
   await advanced.click();
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("combobox", { name: "候補取得数" })).toHaveAccessibleDescription(/文書内の箇所（テキスト断片）の基準件数/);
+  await expect(page.getByText(/文書数や回答の引用数ではなく/)).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("retrieval-candidate-help.png") });
   await page.getByRole("combobox", { name: "候補取得数" }).click();
   await page.getByRole("option", { name: "50", exact: true }).click();
 
@@ -729,9 +733,85 @@ test("実測 trace の親子関係を RAG 検索で開ける", { tag: "@responsi
   await selectSearchAnswerProfile(page, VIEWS[0].name);
   await search(page, "合成データを確認");
   await page.getByTestId("search-run-progress-summary").click();
-  await page.getByTestId("trace-details-toggle").click();
+  const details = page.locator("[data-run-process-details]");
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.locator(":scope > summary").click();
+  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
+  await expect(page.getByTestId("trace-details")).toHaveCount(0);
+  await details.getByTestId("trace-details-toggle").click();
+  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
   await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
   await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
   await expectNoPageOverflow(page);
   await captureTraceLayouts(page, testInfo, "rag-search-trace");
+});
+
+
+for (const scenario of [
+  { name: "無効", outcome: "skipped", status: "skipped", verdict: "無効のため省略", enabled: false },
+  { name: "正常", outcome: "success", status: "done", verdict: "問題なし", enabled: true },
+  { name: "検出による停止", outcome: "success", status: "done", verdict: "回答を止めました", enabled: true },
+  { name: "検査不能", outcome: "error", status: "failed", verdict: "安全検査を完了できず、回答を止めました", enabled: true },
+]) {
+  test(`出力の安全チェックの実施結果を区別する: ${scenario.name}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.route("**/api/search/stream", route => fulfillStream(route, sse([
+      ["stage", { trace_id: "synthetic-guardrail", stage: "answer_guardrail", outcome: "started", elapsed_ms: 0, attributes: {} }],
+      ["stage", { trace_id: "synthetic-guardrail", stage: "answer_guardrail", outcome: scenario.outcome, elapsed_ms: 1, attributes: {}, details: { fields: [{ label: "結果", value: scenario.verdict }] } }],
+      ["metadata", { trace_id: "synthetic-guardrail", elapsed_ms: 2, guardrail_warnings: [], diagnostics: { guardrails_output_enabled: scenario.enabled, answer: { outcome: "answered" } } }],
+      ["delta", { text: "合成の回答です。" }], ["citations", []], ["done", { trace_id: "synthetic-guardrail" }],
+    ])));
+    await page.goto("/search");
+    await selectSearchAnswerProfile(page, VIEWS[0].name);
+    await search(page, "合成データを確認");
+    await expect(page.getByText("合成の回答です。", { exact: true })).toBeVisible();
+    const row = page.getByTestId("search-run-progress-step-s1");
+    if (!(await row.isVisible())) await page.getByTestId("search-run-progress-summary").click();
+    await expect(row).toHaveAttribute("data-status", scenario.status);
+    const toggle = row.getByRole("button").first();
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+    await expect(row).toContainText(scenario.verdict);
+    if (!scenario.enabled) await expect(row).not.toContainText("問題なし");
+    await row.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("answer-guardrail-state.png") });
+    await expectNoPageOverflow(page);
+  });
+}
+
+test("RAG 検索と履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  const at = Date.parse("2026-10-23T00:00:00Z");
+  const stage_events = [
+    {stage: "answer_step:回答生成フロー", outcome: "started", elapsed_ms: 0, receivedAtMs: at},
+    {stage: "answer_step:文書検索", outcome: "started", elapsed_ms: 0, receivedAtMs: at + 100},
+    {stage: "answer_step:Rerank", outcome: "started", elapsed_ms: 0, receivedAtMs: at + 200},
+    {stage: "answer_step:Rerank", outcome: "success", elapsed_ms: 200, receivedAtMs: at + 400},
+    {stage: "answer_step:文書検索", outcome: "success", elapsed_ms: 400, receivedAtMs: at + 500},
+    {stage: "answer_step:回答生成フロー", outcome: "success", elapsed_ms: 1000, receivedAtMs: at + 1000, attributes: {status: "根拠不足で終了", llm_calls: 1}},
+    {stage: "answer_guardrail", outcome: "started", elapsed_ms: 0, receivedAtMs: at + 1000},
+    {stage: "answer_guardrail", outcome: "skipped", elapsed_ms: 1, receivedAtMs: at + 1001, details: {fields: [{label: "結果", value: "無効のため省略"}]}},
+  ];
+  await page.route("**/api/search/stream", (route) => fulfillStream(route, sse([
+    ...stage_events.map((event): [string, unknown] => ["stage", {...event, trace_id: "synthetic-parity", occurred_at_ms: event.receivedAtMs, attributes: event.attributes ?? {}}]),
+    ["metadata", {trace_id: "synthetic-parity", elapsed_ms: 1001, guardrail_warnings: [], diagnostics: {answer: {outcome: "insufficient_evidence"}}}],
+    ["delta", {text: "合成の回答です。"}], ["citations", []], ["done", {trace_id: "synthetic-parity"}],
+  ])));
+  await page.goto("/search");
+  await selectSearchAnswerProfile(page, VIEWS[0].name);
+  await search(page, "合成の質問");
+  await expect(page.getByText("合成の回答です。", {exact: true})).toBeVisible();
+  await page.getByTestId("search-run-progress-summary").click();
+  const live = await timelineSnapshot(page.getByTestId("search-run-progress"));
+  expect(live.map((row) => row.level)).toEqual([0,1,2,0]);
+  await page.screenshot({path: testInfo.outputPath("search-process.png")});
+  await page.route("**/api/history/runs/synthetic-parity", (route) => route.fulfill(envelope({
+    citation_count: 0, answer_outcome: "insufficient_evidence", search_answer_profile_id: "bv-1", search_answer_profile_name: "プロファイル A",
+    run_id: "synthetic-parity", surface: "search", question: "合成の質問", status: "success", answer_generated: true,
+    created_at: "2026-10-23T00:00:01.001Z", elapsed_ms: 1001, executed_by_me: true, executor_display_name: "利用者 A",
+    stages: [], stage_events, steps: [], feedback: [], citations: [], answer: "合成の回答です。", answer_available: true,
+    answer_diagnostics: null, conversation_owner_display_name: null, owned_by_me: null,
+  })));
+  await page.goto("/history/synthetic-parity");
+  await page.getByTestId("run-history-timeline-summary").click();
+  expect(await timelineSnapshot(page.getByTestId("run-history-timeline"))).toEqual(live);
+  await expectNoPageOverflow(page);
+  await page.getByTestId("run-history-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
 });

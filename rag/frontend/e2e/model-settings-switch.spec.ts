@@ -739,7 +739,7 @@ for (const viewport of [
       expect(Math.abs(effortBox!.y - connectionBox!.y)).toBeLessThan(1);
     }
     // 説明（none は送らない・保存の前にテスト）を欄から読める。
-    await expect(effort1).toHaveAccessibleDescription(/none は推論の量を送らず.*保存の前に「テスト」/);
+    await expect(effort1).toHaveAccessibleDescription(/none は指定を送らず.*「テスト」で確認/);
     await effort1.click();
     await expect(
       page.getByRole("listbox", { name: "モデル 1 の推論の量" }).getByRole("option")
@@ -789,7 +789,7 @@ for (const viewport of [
     const limit1 = page.getByRole("spinbutton", { name: "モデル 1 の入力の上限（tokens）" });
     // 値の無い保存済みのモデルは既定の 128000。
     await expect(limit1).toHaveValue("128000");
-    await expect(limit1).toHaveAccessibleDescription(/コンテキストウィンドウ.*既定は 128000/);
+    await expect(limit1).toHaveAccessibleDescription(/入力と出力を合わせたコンテキスト長.*token 予算/);
     if (viewport.name === "desktop") {
       // xl〜2xl は 1 つのモデルの欄を 2 列に並べる（表の形は 2xl から）。入力の上限は接続の下の左の列。
       const connectionBox = await page.getByRole("combobox", { name: "モデル 1 の接続" }).boundingBox();
@@ -859,7 +859,7 @@ for (const viewport of [
     await expect(seed).toHaveAccessibleDescription(/既定 42.*業務プロファイルの seed/);
     await expect(
       page.getByRole("combobox", { name: "モデル 1 の推論の量" })
-    ).toHaveAccessibleDescription(/Select AI・Select AI Agent には推論の量は効きません/);
+    ).toHaveAccessibleDescription(/Select AI・Select AI Agent には、この画面の推論の量は送信しません/);
 
     // 空欄は保存の前に欄のエラーで止め、欄へフォーカスする（送らない）。
     await seed.fill("");
@@ -993,3 +993,30 @@ async function expectControlContentToBeVerticallyCentered(
   const childCenter = childBox!.y + childBox!.height / 2;
   expect(Math.abs(controlCenter - childCenter)).toBeLessThanOrEqual(0.75);
 }
+
+
+test("モデルの説明は初期状態で閉じ、クリックとキーボードでモデルに依存しない説明を開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockModelSettings(page);
+  await page.goto("/settings/model");
+  const help = page.getByTestId("model-parameter-help");
+  const toggle = help.locator("summary");
+  const inputHelp = help.locator("#enterprise-model-max-input-tokens-help");
+  await expect(help).toHaveAttribute("data-state", "closed");
+  await expect(inputHelp).toBeHidden();
+  await toggle.click();
+  await expect(help).toHaveAttribute("data-state", "open");
+  await expect(inputHelp).toBeVisible();
+  await expect(inputHelp).toContainText("入力と出力を合わせたコンテキスト長");
+  await expect(help).toContainText("対応する値や効果はモデル・API により異なり");
+  await expect(help).toContainText("推論の token も含まれる場合があります");
+  await expect(help).not.toContainText(/xai\.|openai\.|claude-|128000|32768/);
+  await expect(help.getByRole("link", { name: "Oracle 公式: モデルの仕様" })).toHaveAttribute("href", "https://docs.oracle.com/en-us/iaas/Content/generative-ai/models.htm");
+  await toggle.focus();
+  await page.keyboard.press("Space");
+  await expect(inputHelp).toBeHidden();
+  await page.keyboard.press("Enter");
+  await expect(inputHelp).toBeVisible();
+  await toggle.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("model-parameter-help.png") });
+  await expectNoPageOverflow(page);
+});

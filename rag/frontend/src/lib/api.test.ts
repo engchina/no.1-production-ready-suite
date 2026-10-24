@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  ANSWER_EVALUATION_TIMEOUT_MS,
   ANSWER_GENERATION_TIMEOUT_MS,
   API_REQUEST_TIMEOUT_MS,
   ApiError,
@@ -151,39 +150,6 @@ describe("api.request envelope", () => {
 
     await expect(requestPromise).resolves.toMatchObject({ status: 408 });
     expect(fetchMock).toHaveBeenCalledWith("/api/search", expect.objectContaining({ method: "POST" }));
-  });
-
-  it("保存済みの回答の評価は通常の timeout で打ち切らず、評価用の長い timeout を使う", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi.fn((_path: string, init?: RequestInit) => {
-      const signal = init?.signal as AbortSignal | undefined;
-      return new Promise<Response>((_resolve, reject) => {
-        signal?.addEventListener("abort", () => {
-          reject(new DOMException("The operation was aborted.", "AbortError"));
-        });
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    let settled = false;
-    const requestPromise = api.evaluateAnswerRecord("trace-1", "標準回答").catch((error: unknown) => {
-      settled = true;
-      return error;
-    });
-
-    // backend の上限（600 秒）より長く待つ。通常の API の 30 秒では失敗にしない。
-    expect(ANSWER_EVALUATION_TIMEOUT_MS).toBeGreaterThan(600_000);
-    await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS + 1_000);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(ANSWER_EVALUATION_TIMEOUT_MS);
-
-    await expect(requestPromise).resolves.toMatchObject({
-      status: 408,
-      messages: [timeoutMessage(ANSWER_EVALUATION_TIMEOUT_MS)],
-    });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/search/answers/trace-1/evaluation",
-      expect.objectContaining({ method: "POST" })
-    );
   });
 
   // Issue 390: 品質評価は job で動く。投入・状態の取得・取り消しは通常の API の timeout に収まる。

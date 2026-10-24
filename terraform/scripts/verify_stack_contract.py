@@ -1352,7 +1352,7 @@ def _verify_nginx_limits() -> None:
         rag_config, r"(?m)^OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS = ([0-9.]+)", context="rag config"
     )
     rag_api = (REPO_ROOT / "rag" / "frontend" / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
-    for name in ("ANSWER_GENERATION_TIMEOUT_MS", "ANSWER_EVALUATION_TIMEOUT_MS"):
+    for name in ("ANSWER_GENERATION_TIMEOUT_MS",):
         frontend_seconds = _python_number(rag_api, rf"export const {name} = ([0-9_]+);", context="rag api.ts") / 1000
         if not rag_answer_max < frontend_seconds < rag_timeout:
             raise AssertionError(

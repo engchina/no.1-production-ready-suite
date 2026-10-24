@@ -18,9 +18,10 @@ import {
 import { t } from "./i18n";
 
 export interface SearchStageEvent {
+  occurred_at_ms?: number;
   trace_id: string;
   stage: string;
-  outcome: "started" | "success" | "error" | "cancelled";
+  outcome: "started" | "success" | "error" | "cancelled" | "skipped";
   elapsed_ms: number;
   attributes: Record<string, unknown>;
   /** 終わった工程の詳細（共有の詳細の形。回答の安全チェックの結果など。#2341）。 */

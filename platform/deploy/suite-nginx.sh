@@ -52,13 +52,12 @@ SUITE_NL2SQL_LONG_API_TIMEOUT_SECONDS=2460
 # shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
 SUITE_AGENT_LONG_API_TIMEOUT_SECONDS=960
 # 長い待ち時間にする API（/<製品>/api/ の後ろの path の正規表現。完全一致）。
-# RAG: 保存済みの回答の評価（#304）・チャットと RAG 検索の回答生成（#375）・作成中の回答の再購読（#1175）・
+# RAG: チャットと RAG 検索の回答生成（#375）・作成中の回答の再購読（#1175）・
 # 品質評価の同期の API（#383）・業務ガイドの下書きを試す（#1288）と、同じ回答生成を呼ぶ MCP（rag_search）。
 # shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
 SUITE_RAG_LONG_API_PATHS=(
   'search'
   'search/stream'
-  'search/answers/[^/]+/evaluation'
   'search-answer-profiles/[^/]+/support-guides/[^/]+/try'
   'evaluation/run'
   'chat/conversations/[^/]+/messages/stream'

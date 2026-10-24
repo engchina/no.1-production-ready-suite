@@ -679,7 +679,7 @@ grep -Fq 'FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/rag/}"' "${REPO_DIR}/init_s
 # suite の Nginx の site を生成して確かめる（path と待ち時間の値は suite-nginx.sh の SUITE_RAG_LONG_API_*。#1597）。
 suite_site="$(bash -c 'source "$1"; suite_nginx_site false /srv/suite /srv/ssl 80 443 rag' _ \
   "${REPO_DIR}/../platform/deploy/suite-nginx.sh")"
-for path in 'search' 'search/stream' 'search/answers/[^/]+/evaluation' \
+for path in 'search' 'search/stream' \
   'search-answer-profiles/[^/]+/support-guides/[^/]+/try' 'evaluation/run' \
   'chat/conversations/[^/]+/messages/stream' 'chat/conversations/[^/]+/messages/[^/]+/stream' 'mcp'; do
   printf '%s\n' "${suite_site}" | grep -E '^    location ~ \^/rag/api/\(' | grep -Fq "|${path}|" \
