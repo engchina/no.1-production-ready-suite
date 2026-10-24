@@ -418,15 +418,11 @@ for (const viewport of VIEWPORTS) {
     await expectNoHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`answer-marks-chat-${viewport.name}.png`), fullPage: true });
 
-    // 実行の詳細の回答も同じ部品・同じバッジ。
+    // 実行の詳細は回答の印を保ち、概要見出しのバッジは出さない。
     await page.goto(`/runs?id=${RUN_ID}`);
     const section = page.getByTestId("run-answer-section");
     await expectMarkedAnswer(page, section.getByTestId("run-answer-artifact-answer"), viewport.width);
-    await expect(page.getByTestId("run-answer-passages").locator("[data-status-variant]")).toHaveText([
-      "未確認 1 件",
-      "要注意 1 件",
-      "矛盾で除外 1 件",
-    ]);
+    await expect(page.getByTestId("run-answer-passages")).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`answer-marks-run-${viewport.name}.png`), fullPage: true });
 

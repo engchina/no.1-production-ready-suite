@@ -154,6 +154,8 @@ export function RunFactList({ facts, className, testId }: { facts: readonly RunF
 // 概要
 
 export interface RunSummaryProps {
+  /** 補助用途のバッジ表示。実行履歴の概要は既定で表示しない。 */
+  showBadges?: boolean;
   status: RunStatus;
   /** 製品に固有の状態の文言（例: waiting →「承認待ち」）。 */
   statusLabel?: string;
@@ -190,6 +192,7 @@ export interface RunSummaryProps {
  * 対象・モデル・token・費用・製品の事実・実行 ID）。記録の無い事実は並べない（「—」の並びにしない）。
  */
 export function RunSummary({
+  showBadges = false,
   status,
   statusLabel,
   badges,
@@ -233,10 +236,9 @@ export function RunSummary({
   return (
     <Card className="min-w-0" data-run-summary="" data-testid={testId}>
       <CardHeader className="flex-row flex-wrap items-start justify-between gap-x-4 gap-y-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2" data-run-summary-heading="">
           <CardTitle>{labels.summary}</CardTitle>
-          <RunStatusBadge status={status} label={statusLabel} labels={labels.status} />
-          {badges}
+          {showBadges ? <><RunStatusBadge status={status} label={statusLabel} labels={labels.status} />{badges}</> : null}
         </div>
         {actions ? <div className="min-w-0">{actions}</div> : null}
       </CardHeader>

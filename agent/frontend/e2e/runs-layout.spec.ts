@@ -243,10 +243,7 @@ test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査�
   await expect(page.getByTestId("run-timeline-section").getByTestId("run-technical-section")).toHaveCount(1);
   await expect(page.getByTestId("run-process-details")).toHaveText("処理の詳細");
   await expect(page.getByText("技術的な詳細", { exact: true })).toHaveCount(0);
-  await expect(page.getByTestId("run-summary").locator("[data-run-status]").first()).toHaveAttribute(
-    "data-run-status",
-    "succeeded"
-  );
+  await expect(page.getByTestId("run-summary").locator("[data-run-status]")).toHaveCount(0);
   // 処理の経過のツールの段は、行のボタンを Enter で開いて結果を見る。
   const step = page.getByTestId("run-timeline-section").getByRole("button", { name: new RegExp(TOOL_STEP) });
   await expect(step).toHaveAttribute("aria-expanded", "false");
@@ -534,10 +531,7 @@ test("回答を成果物より先に出し、失敗した実行は理由と処�
   run.events = [{ id: "event-failed", type: "runtime.failed", message: "モデルに接続できませんでした", created_at: MOCK_NOW, payload: {} }];
   await page.reload();
   await expect(page.getByTestId("run-answer-section")).toHaveCount(0);
-  await expect(page.getByTestId("run-summary").locator("[data-run-status]").first()).toHaveAttribute(
-    "data-run-status",
-    "failed"
-  );
+  await expect(page.getByTestId("run-summary").locator("[data-run-status]")).toHaveCount(0);
   await expect(page.getByTestId("run-summary").getByRole("alert")).toContainText("モデルに接続できませんでした");
   // 3 製品共通の失敗のカード: チャットでもう一度質問する案内（#2342）。
   await expect(page.getByTestId("run-failure")).toContainText("チャットでもう一度質問してください");
@@ -560,8 +554,8 @@ test("承認待ちの判断は概要の操作から行い、承認の記録も�
   ];
   await page.goto("/runs?id=run-layout");
   const summary = page.getByTestId("run-summary");
-  await expect(summary.locator("[data-run-status]").first()).toHaveAttribute("data-run-status", "waiting");
-  await expect(summary.locator("[data-run-status]").first()).toHaveText("承認待ち");
+  await expect(summary.locator("[data-run-status]")).toHaveCount(0);
+  await expect(summary.locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);
   const bar = page.getByTestId("run-object-actions");
   await expect(bar.getByRole("button", { name: "承認", exact: true })).toBeVisible();
   await expect(page.getByTestId("run-approvals-section")).toContainText("nl2sql__nl2sql_query");

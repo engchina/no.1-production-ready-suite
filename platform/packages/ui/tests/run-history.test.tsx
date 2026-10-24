@@ -296,6 +296,7 @@ describe("RunSummary", () => {
     render(
       <RunSummary
         status="succeeded"
+        badges={<span>合成の追加バッジ</span>}
         question={"先月の売上は？\n地域別に"}
         startedAt="2026-10-15T00:12:05.000Z"
         durationMs={3200}
@@ -315,7 +316,9 @@ describe("RunSummary", () => {
     expect(container.querySelector("[data-run-fact='owner'] dd")?.textContent).toBe("自分");
     expect(container.querySelector("[data-run-fact='target'] dt")?.textContent).toBe("業務プロファイル");
     expect(container.querySelector("[data-run-question]")?.textContent).toContain("地域別に");
-    expect(container.querySelector("[data-run-status]")?.getAttribute("data-run-status")).toBe("succeeded");
+    expect(container.querySelector("[data-run-status]")).toBeNull();
+    expect(container.querySelector("[data-run-summary-heading]")?.textContent).toBe("概要");
+    expect(container.textContent).not.toContain("合成の追加バッジ");
   });
 });
 

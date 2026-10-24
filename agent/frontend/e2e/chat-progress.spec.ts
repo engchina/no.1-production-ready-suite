@@ -355,6 +355,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   expect(live).toHaveLength(3);
   await page.screenshot({path: testInfo.outputPath("chat-process.png")});
   await page.goto(`/runs?id=${RUN_ID}`);
+  await expect(page.getByTestId("run-summary").locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);
   await page.getByTestId("run-timeline-section-summary").click();
   expect(await timelineSnapshot(page.getByTestId("run-timeline-section"))).toEqual(live);
   await expectNoHorizontalOverflow(page);

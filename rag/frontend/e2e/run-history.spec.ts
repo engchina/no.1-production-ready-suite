@@ -430,7 +430,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 
   test("詳細: 概要 → 処理の経過（処理の詳細を含む）→ 回答 → 根拠 → フィードバックの 1 枚。一覧へ戻ると条件・ページと開いた行が戻る", async ({
     page,
-  }) => {
+  }, testInfo) => {
     await mockLocalAuth(page);
     const rows = Array.from({ length: 30 }, (_, index) => run(index + 1));
     await mockRuns(page, rows);
@@ -460,9 +460,11 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(page.getByRole("tablist")).toHaveCount(0);
 
     const summary = page.getByTestId("run-history-summary");
-    await expect(summary.locator('[data-run-status="succeeded"]')).toBeVisible();
+    await expect(summary.locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);
+    await expect(summary.locator("[data-run-status]")).toHaveCount(0);
+    await summary.screenshot({path: testInfo.outputPath("summary-without-badges.png")});
     await expect(summary).toContainText("受注の登録方法 21");
-    await expect(summary).toContainText("照合済み");
+    await expect(summary.locator("[data-run-summary-heading]")).not.toContainText("照合済み");
     await expect(summary.locator('[data-run-fact="target"]')).toContainText("受注業務");
     await expect(summary.locator('[data-run-fact="executor"] dd')).toHaveText("自分");
     // 自分が実行した自分の会話は「会話の持ち主」を出さない。
