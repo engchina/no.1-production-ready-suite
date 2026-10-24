@@ -44,6 +44,7 @@ from typing import Any, Literal, TypeVar, cast
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.deadline import check_deadline, current_deadline
+from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
 
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
@@ -66,6 +67,7 @@ from app.rag.answer_metrics import score_answer_evaluation
 from app.rag.answer_prompts import prompt_overrides
 from app.rag.answer_provenance import answer_prompt_version
 from app.rag.answer_threads import run_answer_in_thread
+from app.rag.chat_attachments import is_attachment_chunk
 from app.rag.chunking_small_to_big import engine_search_text
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
@@ -3081,6 +3083,11 @@ def _stored_child(
             "label": str(chunk.metadata.get(REFERENCE_LABEL_KEY) or ""),
             **({"rank": rank} if isinstance(rank, int) else {}),
         }
+    if is_attachment_chunk(chunk.metadata):
+        # 会話の添付から選んだ箇所(#2517)。rag_engine は文書の選択で後回しにせず、文書ごとの
+        # 起点の上限で数えない(#3100)。backend の印(`chat_attachment_id`)は engine の metadata に
+        # 入らないので、engine の印に写す(#3126)。
+        metadata[ATTACHMENT_EVIDENCE_KEY] = True
     page_start = _int(chunk.metadata.get("page_start") or chunk.metadata.get("page_number"), 1)
     return StoredChunk(
         chunk_uid=chunk.chunk_id,
