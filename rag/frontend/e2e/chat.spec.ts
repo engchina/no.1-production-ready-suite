@@ -1,4 +1,4 @@
-import {timelineSnapshot} from "../../../platform/packages/ui/e2e/timeline-snapshot";
+import {timelineSnapshot, timelineTypography} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import { findIconTextMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
 
 import { expect, type Locator, type Page, test } from "./fixtures/test";
@@ -2478,6 +2478,10 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   const progress = page.getByTestId("chat-answer-progress");
   await progress.getByTestId("chat-answer-progress-summary").click();
   const live = await timelineSnapshot(progress);
+  const liveTypography = await timelineTypography(progress);
+  expect(liveTypography.steps.length).toBeGreaterThan(0);
+  expect(liveTypography.steps.every(style => style?.fontSize === "12px" && style.fontFamily.includes("Noto Sans JP"))).toBe(true);
+  expect(liveTypography.summary?.fontSize).toBe("12px");
   expect(live.map((row) => row.level)).toEqual([0,1,2]);
   await page.screenshot({path: testInfo.outputPath("chat-process.png")});
   await page.route("**/api/history/runs/synthetic-parity", (route) => route.fulfill({json: {data: {
@@ -2494,6 +2498,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   const history = page.getByTestId("run-history-timeline");
   await page.getByTestId("run-history-timeline-summary").click();
   expect(await timelineSnapshot(history)).toEqual(live);
+  expect(await timelineTypography(history)).toEqual(liveTypography);
   await expectNoPageOverflow(page);
   const details = page.locator("[data-run-process-details]");
   await expect(details).not.toHaveAttribute("open", "");

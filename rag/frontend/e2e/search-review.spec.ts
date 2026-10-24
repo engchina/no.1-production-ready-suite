@@ -1,4 +1,4 @@
-import {timelineSnapshot} from "../../../platform/packages/ui/e2e/timeline-snapshot";
+import {timelineSnapshot, timelineTypography} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import { expect, type Page, type Route, test } from "./fixtures/test";
 
 import {
@@ -800,6 +800,10 @@ test("RAG 検索と履歴の工程の内容・階層・状態・時間が一致�
   await expect(page.getByText("合成の回答です。", {exact: true})).toBeVisible();
   await page.getByTestId("search-run-progress-summary").click();
   const live = await timelineSnapshot(page.getByTestId("search-run-progress"));
+  const liveTypography = await timelineTypography(page.getByTestId("search-run-progress"));
+  expect(liveTypography.steps.length).toBeGreaterThan(0);
+  expect(liveTypography.steps.every(style => style?.fontSize === "12px" && style.fontFamily.includes("Noto Sans JP"))).toBe(true);
+  expect(liveTypography.summary?.fontSize).toBe("12px");
   expect(live.map((row) => row.level)).toEqual([0,1,2,0]);
   await page.screenshot({path: testInfo.outputPath("search-process.png")});
   await page.route("**/api/history/runs/synthetic-parity", (route) => route.fulfill(envelope({
@@ -812,6 +816,7 @@ test("RAG 検索と履歴の工程の内容・階層・状態・時間が一致�
   await page.goto("/history/synthetic-parity");
   await page.getByTestId("run-history-timeline-summary").click();
   expect(await timelineSnapshot(page.getByTestId("run-history-timeline"))).toEqual(live);
+  expect(await timelineTypography(page.getByTestId("run-history-timeline"))).toEqual(liveTypography);
   await expectNoPageOverflow(page);
   await page.getByTestId("run-history-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
 });

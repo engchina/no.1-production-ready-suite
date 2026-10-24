@@ -572,7 +572,7 @@ export interface RunTimelineProps {
    * 親の工程は、この一覧の中で開始順の位置に回さずに出す（同じ処理のスピナーは 1 つ。messaging.md §3.7。#2840）。
    */
   spinRunning?: boolean;
-  /** 文字の大きさ。`md`（既定。実行の詳細）/ `sm`（チャットの回答の中の控えめな表示）。 */
+  /** 文字の大きさ。`sm`（既定。全製品の操作画面・履歴で共通）/ `md`（大きな表示）。 */
   size?: "sm" | "md";
   /** 段の所要時間の表記。既定は `formatRunDuration`（「0.4 秒」「1 分 5 秒」）。 */
   formatDuration?: (ms: number) => string;
@@ -603,7 +603,7 @@ export function RunTimeline({
   showSummary = true,
   showBars = true,
   spinRunning = true,
-  size = "md",
+  size = "sm",
   formatDuration = formatRunDuration,
   stepTestIdPrefix,
   labels: labelsInput,
@@ -656,6 +656,7 @@ export function RunTimeline({
                 className={
                   step.status === "failed" ? "text-danger-fg" : step.status === "pending" ? "text-fg-muted" : "text-fg"
                 }
+                data-run-timeline-label=""
               >
                 {step.label}
               </span>
@@ -803,12 +804,13 @@ export function RunTimelineSection({
       {steps.length ? (
         <Disclosure
           variant="plain"
+          size="sm"
           summary={<span className="tnum">{labels.timelineSummary(steps.length, formatRunDuration(total, labels.notRecorded))}</span>}
           // 失敗した段がある実行は、色だけでなく失敗のアイコンでも伝える（チャットの処理の経過と同じ）。
           icon={failed ? XCircle : undefined}
           defaultOpen={defaultOpen}
           summaryClassName={failed ? "text-danger-fg [&>span:first-child]:text-danger-fg" : undefined}
-          summaryProps={{ "data-testid": testId ? `${testId}-summary` : undefined }}
+          summaryProps={{ "data-testid": testId ? `${testId}-summary` : undefined, "data-run-progress-summary": "" }}
           contentClassName="grid min-w-0 gap-3 pt-2"
           data-run-timeline-section=""
         >

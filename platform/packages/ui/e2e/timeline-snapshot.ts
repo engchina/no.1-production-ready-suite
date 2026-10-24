@@ -10,3 +10,18 @@ export async function timelineSnapshot(container: TimelineContainer) {
     text: (row.firstElementChild as HTMLElement).innerText.replace(/\s+/g, " ").trim(),
   })));
 }
+
+/** 進捗の文字の実測値。操作画面と履歴で同じ書体・大きさ・字重・行高かを比較する。 */
+export async function timelineTypography(container: TimelineContainer) {
+  return container.evaluate((node) => {
+    const textStyle = (element: Element | null) => {
+      if (!element) return null;
+      const style = getComputedStyle(element);
+      return {fontFamily: style.fontFamily, fontSize: style.fontSize, fontWeight: style.fontWeight, lineHeight: style.lineHeight};
+    };
+    return {
+      summary: textStyle(node.querySelector("[data-run-progress-summary]")),
+      steps: Array.from(node.querySelectorAll("[data-run-timeline-label]"), textStyle),
+    };
+  });
+}

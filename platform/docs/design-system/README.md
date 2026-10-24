@@ -1551,3 +1551,7 @@ TIER 2 のトークンを `@theme inline` に登録すると `bg-surface` / `tex
 - **`CommandPalette`** — 3 製品とも持たないと決めた（#308）。サイドバーの起動ボタンも削除した。`--shadow-palette` / `--z-palette` は未使用のトークンとして残っている
 - **`html { font-size: 14px }` の撤去** — ルート上書きは利用者のブラウザ設定を無視します。撤去すると Tailwind の rem ユーティリティ経由で全余白が 14.3% 増えるため、単独のタスクとして計画が必要
 - **空状態 / ローディングの使い分け規定** — `DataTable` の `emptyText`（表内1行）と `StateViews` の `EmptyState`（カードごと置換）の2系統、ローディングは4系統あり、どちらを使うかの規定が無い。推奨: 「行が0件 → 表内テキスト」「取得前・権限なし・前提未達 → StateViews」「200ms 未満は何も出さない / 200ms–1s は Skeleton / 1s 超は LoadingState」
+
+#### 処理の経過の共通の文字（#3204）
+
+ChatProgress・RunTimeline・RunTimelineSection の段名と開閉要約は sm（--font-size-xs、12px）を既定とし、操作画面・実行履歴・トレースでそろえる。所要時間は同じ補助文字の大きさ、段の状態は同じ sm のアイコンにする。ページやカードの見出しと SQL・コードの等幅文字の規則は変えない。
