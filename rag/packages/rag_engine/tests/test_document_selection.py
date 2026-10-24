@@ -223,3 +223,41 @@ def test_explicit_attachment_survives_document_selection_and_anchor_cap():
         attached,
         other,
     ]
+
+
+def _attachment_context_record(name):
+    from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
+    from tests.test_article_catalog import _context_record
+
+    record = _context_record(name, "child")
+    record.metadata[ATTACHMENT_EVIDENCE_KEY] = True
+    return record
+
+
+def test_attachment_below_the_anchor_limit_is_added_outside_it():
+    """rerank で top_k より下の会話の添付も、起点・親の数の外に足して根拠に入れる（#3212）。"""
+    from tests.test_article_catalog import _bundle, _context_record
+
+    children = [_context_record(f"m{index}", "child") for index in range(5)]
+    attached = _attachment_context_record("att1")
+
+    bundle = _bundle([*children, attached], top_k=3, max_records=3, catalog_records=0)
+
+    # ナレッジベースの起点・親は添付が無いときと同じ 3 つで、添付の親を後ろに足す。
+    assert [r.id for r in bundle.records] == ["m0-p", "m1-p", "m2-p", "att1-p"]
+    assert bundle.evidence_tree[-1].reason == "conversation_attachment"
+    assert [child.role for child in bundle.evidence_tree[-1].children] == ["retrieved_anchor"]
+
+
+def test_attachment_inside_the_anchor_limit_does_not_take_a_knowledge_base_anchor():
+    """top_k の内に並んだ添付も起点に数えず、ナレッジベースの起点を減らさない（#3212）。"""
+    from tests.test_article_catalog import _bundle, _context_record
+
+    children = [_context_record(f"m{index}", "child") for index in range(5)]
+    attached = _attachment_context_record("att1")
+
+    bundle = _bundle([attached, *children], top_k=3, max_records=3, catalog_records=0)
+    plain = _bundle(children, top_k=3, max_records=3, catalog_records=0)
+
+    assert [r.id for r in plain.records] == ["m0-p", "m1-p", "m2-p"]
+    assert [r.id for r in bundle.records] == ["m0-p", "m1-p", "m2-p", "att1-p"]
