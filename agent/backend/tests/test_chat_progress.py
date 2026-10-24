@@ -1,12 +1,15 @@
-"""チャットの処理の段階のイベント（3 製品共通の契約。#1359）を Run の状態から記録・配信するテスト。
+"""チャットの処理の経過（3 製品共通の契約。#1359）を、Run の trace（span の木。#3226）から
+記録・配信するテスト。
 
-組み込み Runtime は SDK の `ScriptedModel` で台本にし（OCI へは接続しない）、記録の位置
-（ツールなし・ツール・同じツールの 2 回目・承認・却下・承認の 2 回目・ツールの後のツール・失敗・
-停止）、保存先（file / Oracle の checkpoint・normalized）、polling と SSE の endpoint を確かめる。
+組み込み Runtime は SDK の `ScriptedModel` で台本にし（OCI へは接続しない）、モデルの呼び出しの
+span は OCI の client と同じ形（`gen_ai.chat` に工程の種類を付ける）で作る。記録の位置（ツール
+なし・ツール・実行中・並列・承認・却下・承認の 2 回目・引数の誤り・失敗・停止・実行中の停止）、
+保存先（file / Oracle の checkpoint・normalized）、polling と SSE の endpoint を確かめる。
 """
 
 from __future__ import annotations
 
+import contextvars
 import json
 from pathlib import Path
 from threading import Barrier
@@ -14,12 +17,13 @@ from typing import Any
 
 import anyio
 import pytest
-from agents.testing import assistant_message, function_call
+from agents.testing import ScriptedModel, assistant_message, function_call
 from pr_backend_core.chat_progress import (
     ChatProgressStepEvent,
     ChatProgressTerminalEvent,
     fold_chat_progress_events,
 )
+from pr_backend_core.observability.tracing import observed_span, operation_trace
 from pr_system_settings.auth.domain import LOCAL_DEBUG_USER_UUID
 from pytest import MonkeyPatch
 from security_support import (
@@ -28,12 +32,17 @@ from security_support import (
     enable_production_auth,
     login,
 )
-from test_builtin_runtime import AGENT_ID, LOOKUP, WRITE, _create_run, _script
+from test_builtin_runtime import AGENT_ID, LOOKUP, WRITE, _create_run
+from test_builtin_runtime import _script as _script_model
 from test_builtin_runtime import calls as _calls_fixture  # noqa: F401 - pytestmark の fixture
 from test_health import _FakeOracleConnection, _FakeOracleStore
 
 from app.features.agent import builtin_runtime
-from app.features.agent.chat_progress import approval_rounds, record_run_progress
+from app.features.agent.chat_progress import (
+    RUN_STEP_PARAM,
+    model_turn_kind,
+    record_run_terminal,
+)
 from app.features.agent.runtime import (
     AgentRuntimeOracleCheckpointRepository,
     AgentRuntimeOracleNormalizedRepository,
@@ -49,17 +58,64 @@ from app.security.service import set_security_service
 # 組み込み Runtime のテスト用のツール・Skill・業務 Agent（test_builtin_runtime の fixture）。
 pytestmark = pytest.mark.usefixtures("_calls_fixture")
 
-Step = tuple[str, str, str, dict[str, Any] | None]
+CHAT = "gen_ai.chat"
+TOOL = "gen_ai.execute_tool"
+APPROVAL = "agent.approval_wait"
+
+Row = tuple[str | None, str | None, str, dict[str, Any] | None]
 
 
-def _steps(run: RunState) -> list[Step]:
-    """組み立てた段階（id・種類・状態・params）。"""
-    fold = fold_chat_progress_events(run.progress_events)
-    return [(step.step_id, step.kind, step.status, step.params) for step in fold.step_list()]
+class _TracedScriptedModel(ScriptedModel):
+    """OCI の client と同じく、モデルの呼び出しを `gen_ai.chat` の span で測る台本のモデル。"""
+
+    async def get_response(self, *args: Any, **kwargs: Any) -> Any:
+        with observed_span(
+            CHAT,
+            kind="client",
+            attributes={
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": "oracle",
+                "gen_ai.request.model": "test-model",
+            },
+        ) as span:
+            response = await super().get_response(*args, **kwargs)
+            builtin_runtime._set_turn_kind(span, response)  # noqa: SLF001 - OCI の client と同じ印
+            return response
+
+
+def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
+    model = _TracedScriptedModel(list(steps))
+    _script_model(monkeypatch)
+    monkeypatch.setattr(builtin_runtime, "model_factory", lambda _target: model)
+    return model
+
+
+def _rows(run: RunState) -> list[Row]:
+    """組み立てた行（実行の全体の span を除く。span の名前・工程の種類・状態・params）。
+
+    params の Run の step の id は値が毎回変わるので省く（`_run_step_of` で確かめる）。
+    """
+    rows: list[Row] = []
+    for step in fold_chat_progress_events(run.progress_events).step_list():
+        span = step.span or {}
+        if span.get("root"):
+            continue
+        params = {key: value for key, value in (step.params or {}).items() if key != RUN_STEP_PARAM}
+        kind = step.kind if step.kind != step.step_id else None
+        rows.append((span.get("name"), kind, step.status, params or None))
+    return rows
 
 
 def _terminal(run: RunState) -> str | None:
     return fold_chat_progress_events(run.progress_events).terminal
+
+
+def _roots(run: RunState) -> list[Any]:
+    return [
+        step
+        for step in fold_chat_progress_events(run.progress_events).step_list()
+        if (step.span or {}).get("root")
+    ]
 
 
 def _assert_contiguous(run: RunState) -> None:
@@ -80,71 +136,62 @@ def _approve(run_id: str, *, approved: bool = True) -> None:
 
 
 # --------------------------------------------------------------------------------------------
+# 工程の種類
+# --------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("output", "kind"),
+    [
+        ([{"type": "reasoning"}, {"type": "function_call"}], "plan"),
+        ([{"type": "message"}], "respond"),
+        ([{"type": "reasoning"}], None),
+        (None, None),
+    ],
+    ids=["tool", "answer", "reasoning-only", "none"],
+)
+def test_model_turn_kind_follows_the_response_output(
+    output: list[dict[str, str]] | None, kind: str | None
+) -> None:
+    assert model_turn_kind(output) == kind
+
+
+# --------------------------------------------------------------------------------------------
 # 記録の位置
 # --------------------------------------------------------------------------------------------
 
 
-def test_queued_run_starts_with_planning() -> None:
+def test_queued_run_has_no_progress_yet() -> None:
+    """受け付けただけの Run には span が無い（実行の区間が始まってから記録する）。"""
     run = runtime_repository.get_run(_create_run())
 
-    assert _steps(run) == [("plan", "plan", "running", None)]
+    assert run.progress_events == []
     assert _terminal(run) is None
 
 
-def test_answer_without_tools_records_plan_and_respond(
-    monkeypatch: MonkeyPatch,
-) -> None:
+def test_answer_without_tools_records_one_model_call(monkeypatch: MonkeyPatch) -> None:
     _script(monkeypatch, [assistant_message("こんにちは。")])
     run_id = _create_run("挨拶して")
 
     anyio.run(builtin_runtime.execute_run, run_id)
 
     run = runtime_repository.get_run(run_id)
-    assert _steps(run) == [
-        ("plan", "plan", "done", None),
-        ("respond", "respond", "done", None),
-    ]
+    assert _rows(run) == [(CHAT, "respond", "done", None)]
     assert _terminal(run) == "done"
     _assert_contiguous(run)
+    # 実行の全体の span（root）も記録し（行にはしない）、モデルの呼び出しはその子。
+    [root] = _roots(run)
+    assert root.span is not None and root.span["name"] == "agent.execute"
     fold = fold_chat_progress_events(run.progress_events)
-    # ツールを呼ばずに答えたときの回答の作成は、始まりの時刻を持たない（所要時間を出さない）。
-    assert fold.steps["respond"].started_at is None
-    assert fold.steps["respond"].finished_at is not None
-    assert fold.steps["plan"].started_at is not None
+    [chat] = [step for step in fold.step_list() if (step.span or {}).get("name") == CHAT]
+    assert chat.span is not None
+    assert chat.span["parent_id"] == root.step_id
+    assert chat.span["trace_id"] == root.span["trace_id"]
+    assert chat.span["attributes"]["gen_ai.request.model"] == "test-model"
+    assert chat.started_at is not None and chat.finished_at is not None
 
 
-def test_tool_call_records_tool_then_respond(monkeypatch: MonkeyPatch) -> None:
-    _script(
-        monkeypatch,
-        [function_call(LOOKUP, {"query": "売上"}, call_id="call-1")],
-        [assistant_message("3 件です。")],
-    )
-    run_id = _create_run()
-
-    anyio.run(builtin_runtime.execute_run, run_id)
-
-    run = runtime_repository.get_run(run_id)
-    assert _steps(run) == [
-        ("plan", "plan", "done", None),
-        (f"tool:{LOOKUP}", "tool", "done", {"tool": LOOKUP}),
-        ("respond", "respond", "done", None),
-    ]
-    assert _terminal(run) == "done"
-    _assert_contiguous(run)
-    # 段階のイベントは名前（文言）を持たない。kind が step_id と同じなら省く。
-    plan_events = [
-        event
-        for event in run.progress_events
-        if isinstance(event, ChatProgressStepEvent) and event.step_id == "plan"
-    ]
-    assert all(event.kind is None for event in plan_events)
-
-
-def test_finished_tool_step_carries_its_details_in_the_progress_event(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """終わったツールの段の詳細（内部名・引数・結果）は、その段の終わりのイベントで送る（会話の取り直しを
-    待たずに、後の段の実行中から開ける。#2373）。"""
+def test_tool_call_records_plan_tool_and_respond(monkeypatch: MonkeyPatch) -> None:
     _script(
         monkeypatch,
         [function_call(LOOKUP, {"query": "合成の語"}, call_id="call-1")],
@@ -155,14 +202,28 @@ def test_finished_tool_step_carries_its_details_in_the_progress_event(
     anyio.run(builtin_runtime.execute_run, run_id)
 
     run = runtime_repository.get_run(run_id)
+    assert _rows(run) == [
+        (CHAT, "plan", "done", None),
+        (TOOL, "tool", "done", {"tool": LOOKUP}),
+        (CHAT, "respond", "done", None),
+    ]
+    assert _terminal(run) == "done"
+    _assert_contiguous(run)
+    # ツールの span は Run の step と結ぶ（画面がデータの範囲・表の結果を足す）。
+    [step] = run.steps
     finished = [
         event
         for event in run.progress_events
         if isinstance(event, ChatProgressStepEvent)
-        and event.step_id == f"tool:{LOOKUP}"
+        and event.name == TOOL
         and event.status == "done"
     ]
     assert len(finished) == 1
+    assert finished[0].params is not None
+    assert finished[0].params[RUN_STEP_PARAM] == step.id
+    assert finished[0].attributes is not None
+    assert finished[0].attributes["gen_ai.tool.name"] == LOOKUP
+    # 終わったツールの詳細（内部名・引数・結果）は、その span の終わりのイベントで送る（#2373）。
     details = finished[0].details
     assert details is not None
     assert [(field.label, field.value) for field in details.fields][0] == ("ツール", LOOKUP)
@@ -172,36 +233,36 @@ def test_finished_tool_step_carries_its_details_in_the_progress_event(
     assert "結果" in labels
 
 
-def test_same_tool_twice_and_tool_after_tool(monkeypatch: MonkeyPatch) -> None:
-    """同じツールの 2 回目は `#2`。ツールの後にまたツールを呼んだら、回答の作成を「進め方の検討」の
-    完了に変える（完了した段階を実行中に戻さない・消さない。#1358）。"""
+def test_running_tool_is_visible_while_it_runs(monkeypatch: MonkeyPatch) -> None:
+    """実行中のツールは、終わる前から実行中の span として記録され、呼んだ引数を開いて見られる。"""
+    seen: list[list[Row]] = []
+    details: list[Any] = []
+
+    def lookup(_arguments: dict[str, Any], context: ToolInvocationContext) -> dict[str, Any]:
+        current = runtime_repository.get_run(context.run_id or "")
+        seen.append(_rows(current))
+        details.extend(
+            event.details
+            for event in current.progress_events
+            if isinstance(event, ChatProgressStepEvent) and event.name == TOOL
+        )
+        return {"rows": 1}
+
+    definition = tool_registry.get(LOOKUP)
+    assert definition is not None
+    tool_registry.register(definition, lookup)
     _script(
         monkeypatch,
-        [function_call(LOOKUP, {"query": "今月"}, call_id="call-1")],
-        [function_call(LOOKUP, {"query": "先月"}, call_id="call-2")],
-        [assistant_message("比べました。")],
+        [function_call(LOOKUP, {"query": "合成の語"}, call_id="call-1")],
+        [assistant_message("1 件です。")],
     )
-    run_id = _create_run("今月と先月を比べて")
+    run_id = _create_run()
 
     anyio.run(builtin_runtime.execute_run, run_id)
 
-    run = runtime_repository.get_run(run_id)
-    assert _steps(run) == [
-        ("plan", "plan", "done", None),
-        (f"tool:{LOOKUP}", "tool", "done", {"tool": LOOKUP}),
-        ("respond", "plan", "done", None),
-        (f"tool:{LOOKUP}#2", "tool", "done", {"tool": LOOKUP}),
-        ("respond#2", "respond", "done", None),
-    ]
-    _assert_contiguous(run)
-    # 途中の記録でも、終わった段階が実行中に戻るイベントは無い。
-    rank = {"pending": 0, "running": 1, "done": 2, "failed": 2, "skipped": 2}
-    seen: dict[str, str] = {}
-    for event in run.progress_events:
-        if isinstance(event, ChatProgressStepEvent):
-            before = seen.get(event.step_id)
-            assert before is None or rank[event.status] >= rank[before]
-            seen[event.step_id] = event.status
+    assert seen == [[(CHAT, "plan", "done", None), (TOOL, "tool", "running", {"tool": LOOKUP})]]
+    assert details and details[0] is not None
+    assert "合成の語" in details[0].code[0].text
 
 
 def test_parallel_tools_in_one_turn(monkeypatch: MonkeyPatch) -> None:
@@ -230,12 +291,43 @@ def test_parallel_tools_in_one_turn(monkeypatch: MonkeyPatch) -> None:
     anyio.run(builtin_runtime.execute_run, run_id)
 
     run = runtime_repository.get_run(run_id)
-    ids = [step_id for step_id, *_ in _steps(run)]
-    assert ids == ["plan", f"tool:{LOOKUP}", f"tool:{LOOKUP}#2", "respond"]
-    assert {status for _, _, status, _ in _steps(run)} == {"done"}
+    assert [(name, kind) for name, kind, _status, _params in _rows(run)] == [
+        (CHAT, "plan"),
+        (TOOL, "tool"),
+        (TOOL, "tool"),
+        (CHAT, "respond"),
+    ]
+    assert {status for _, _, status, _ in _rows(run)} == {"done"}
 
 
-def test_approval_waits_then_runs_the_tool(monkeypatch: MonkeyPatch) -> None:
+def test_span_from_a_tool_thread_is_nested_under_the_tool(monkeypatch: MonkeyPatch) -> None:
+    """ツールのスレッドで開いた span（MCP の呼び出しなど）も、ツールの span の子として記録する。"""
+
+    def lookup(_arguments: dict[str, Any], _context: ToolInvocationContext) -> dict[str, Any]:
+        with observed_span("mcp.request", kind="client", attributes={"pr.attempt": 1}):
+            return {"rows": 1}
+
+    definition = tool_registry.get(LOOKUP)
+    assert definition is not None
+    tool_registry.register(definition, lookup)
+    _script(
+        monkeypatch,
+        [function_call(LOOKUP, {"query": "x"}, call_id="call-1")],
+        [assistant_message("1 件です。")],
+    )
+    run_id = _create_run()
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    steps = fold_chat_progress_events(run.progress_events).step_list()
+    [tool] = [step for step in steps if (step.span or {}).get("name") == TOOL]
+    [mcp] = [step for step in steps if (step.span or {}).get("name") == "mcp.request"]
+    assert mcp.span is not None and mcp.span["parent_id"] == tool.step_id
+    assert mcp.status == "done"
+
+
+def test_approval_wait_is_recorded_when_the_run_resumes(monkeypatch: MonkeyPatch) -> None:
     _script(
         monkeypatch,
         [function_call(WRITE, {"query": "登録"}, call_id="call-w")],
@@ -245,35 +337,38 @@ def test_approval_waits_then_runs_the_tool(monkeypatch: MonkeyPatch) -> None:
     anyio.run(builtin_runtime.execute_run, run_id)
 
     waiting = runtime_repository.get_run(run_id)
-    # 承認待ちはツールの前に出し、ツールは承認の後に実行するので待機中。
-    assert _steps(waiting) == [
-        ("plan", "plan", "done", None),
-        ("approval_wait", "approval", "running", {"tools": WRITE}),
-        (f"tool:{WRITE}", "tool", "pending", {"tool": WRITE}),
-    ]
+    # 待っている間は待ちの行を出さない（見出しの状態と承認のカードで示す）。実行の区間は閉じる。
+    assert _rows(waiting) == [(CHAT, "plan", "done", None)]
     assert _terminal(waiting) is None
+    assert [root.status for root in _roots(waiting)] == ["done"]
 
     _approve(run_id)
-    decided = runtime_repository.get_run(run_id)
-    assert _steps(decided)[1] == ("approval_wait", "approval", "done", {"tools": WRITE})
-    assert _steps(decided)[2][2] == "pending"
-
     anyio.run(builtin_runtime.resume_run, run_id)
 
     run = runtime_repository.get_run(run_id)
-    assert _steps(run) == [
-        ("plan", "plan", "done", None),
-        ("approval_wait", "approval", "done", {"tools": WRITE}),
-        (f"tool:{WRITE}", "tool", "done", {"tool": WRITE}),
-        ("respond", "respond", "done", None),
+    assert _rows(run) == [
+        (CHAT, "plan", "done", None),
+        (APPROVAL, "approval", "done", {"tools": WRITE, "round": 1}),
+        (TOOL, "tool", "done", {"tool": WRITE}),
+        (CHAT, "respond", "done", None),
     ]
     assert _terminal(run) == "done"
     _assert_contiguous(run)
+    # 再開の区間は同じ trace の、実行の区間の子（画面は 2 つの root を行にせず、1 本の木にする）。
+    execute, resume = _roots(run)
+    assert (execute.span["name"], resume.span["name"]) == ("agent.execute", "agent.resume")
+    assert resume.span["parent_id"] == execute.step_id
+    assert resume.span["trace_id"] == execute.span["trace_id"]
+    approval = run.approvals[0]
+    fold = fold_chat_progress_events(run.progress_events)
+    [wait] = [step for step in fold.step_list() if (step.span or {}).get("name") == APPROVAL]
+    assert wait.span is not None and wait.span["parent_id"] == resume.step_id
+    assert (wait.started_at, wait.finished_at) == (approval.created_at, approval.decided_at)
 
 
 def test_tool_titles_are_in_tool_and_approval_params(monkeypatch: MonkeyPatch) -> None:
-    """ツールの表示名（MCP の `title`。Run の metadata）があれば、ツールの段の params に `title`、
-    承認待ちの補足に表示名を出す（内部名の `tool` は残す）。"""
+    """ツールの表示名（MCP の `title`。Run の metadata）があれば、ツールの span の params に
+    `title`、承認の待ちの補足に表示名を出す（内部名の `tool` は残す）。"""
     _script(
         monkeypatch,
         [function_call(WRITE, {"query": "登録"}, call_id="call-t")],
@@ -282,28 +377,20 @@ def test_tool_titles_are_in_tool_and_approval_params(monkeypatch: MonkeyPatch) -
     run_id = _create_run("登録して")
     runtime_repository.note_builtin_tool_titles(run_id, {WRITE: "記録の登録"})
     anyio.run(builtin_runtime.execute_run, run_id)
-
-    waiting = runtime_repository.get_run(run_id)
-    assert _steps(waiting)[1:] == [
-        ("approval_wait", "approval", "running", {"tools": "記録の登録"}),
-        (f"tool:{WRITE}", "tool", "pending", {"tool": WRITE, "title": "記録の登録"}),
-    ]
     _approve(run_id)
     anyio.run(builtin_runtime.resume_run, run_id)
 
     run = runtime_repository.get_run(run_id)
-    assert _steps(run)[2] == (
-        f"tool:{WRITE}",
-        "tool",
-        "done",
-        {"tool": WRITE, "title": "記録の登録"},
-    )
+    assert _rows(run)[1:3] == [
+        (APPROVAL, "approval", "done", {"tools": "記録の登録", "round": 1}),
+        (TOOL, "tool", "done", {"tool": WRITE, "title": "記録の登録"}),
+    ]
     # 表示名は足すだけ（空は記録しない）。
     runtime_repository.note_builtin_tool_titles(run_id, {})
     assert runtime_repository.get_run(run_id).metadata["tool_titles"] == {WRITE: "記録の登録"}
 
 
-def test_rejected_tool_is_skipped(monkeypatch: MonkeyPatch) -> None:
+def test_rejected_tool_is_a_skipped_tool_span(monkeypatch: MonkeyPatch) -> None:
     _script(
         monkeypatch,
         [function_call(WRITE, {"query": "登録"}, call_id="call-r")],
@@ -315,17 +402,16 @@ def test_rejected_tool_is_skipped(monkeypatch: MonkeyPatch) -> None:
     anyio.run(builtin_runtime.resume_run, run_id)
 
     run = runtime_repository.get_run(run_id)
-    assert _steps(run) == [
-        ("plan", "plan", "done", None),
-        ("approval_wait", "approval", "done", {"tools": WRITE}),
-        (f"tool:{WRITE}", "tool", "skipped", {"tool": WRITE, "rejected": True}),
-        ("respond", "respond", "done", None),
+    assert _rows(run) == [
+        (CHAT, "plan", "done", None),
+        (APPROVAL, "approval", "done", {"tools": WRITE, "round": 1}),
+        (TOOL, "tool", "skipped", {"tool": WRITE, "rejected": True}),
     ]
     assert _terminal(run) == "done"
 
 
-def test_second_approval_round_is_its_own_step(monkeypatch: MonkeyPatch) -> None:
-    """承認の後に別の承認を求めたら、承認待ちを回ごとに出す（#1358）。"""
+def test_second_approval_round_is_its_own_wait(monkeypatch: MonkeyPatch) -> None:
+    """承認の後に別の承認を求めたら、承認の待ちを回ごとに出す（同じ待ちを重ねない。#1358）。"""
     _script(
         monkeypatch,
         [function_call(WRITE, {"query": "1 件目"}, call_id="call-1")],
@@ -339,32 +425,85 @@ def test_second_approval_round_is_its_own_step(monkeypatch: MonkeyPatch) -> None
 
     second = runtime_repository.get_run(run_id)
     assert second.status == "waiting_approval"
-    assert _steps(second) == [
-        ("plan", "plan", "done", None),
-        ("approval_wait", "approval", "done", {"tools": WRITE}),
-        (f"tool:{WRITE}", "tool", "done", {"tool": WRITE}),
-        ("respond", "plan", "done", None),
-        ("approval_wait#2", "approval", "running", {"tools": WRITE}),
-        (f"tool:{WRITE}#2", "tool", "pending", {"tool": WRITE}),
+    assert _rows(second) == [
+        (CHAT, "plan", "done", None),
+        (APPROVAL, "approval", "done", {"tools": WRITE, "round": 1}),
+        (TOOL, "tool", "done", {"tool": WRITE}),
+        (CHAT, "plan", "done", None),
     ]
-    assert len(approval_rounds(second.approvals)) == 2
 
     _approve(run_id)
     anyio.run(builtin_runtime.resume_run, run_id)
 
     run = runtime_repository.get_run(run_id)
-    assert [step_id for step_id, *_ in _steps(run)] == [
-        "plan",
-        "approval_wait",
-        f"tool:{WRITE}",
-        "respond",
-        "approval_wait#2",
-        f"tool:{WRITE}#2",
-        "respond#2",
+    assert _rows(run) == [
+        (CHAT, "plan", "done", None),
+        (APPROVAL, "approval", "done", {"tools": WRITE, "round": 1}),
+        (TOOL, "tool", "done", {"tool": WRITE}),
+        (CHAT, "plan", "done", None),
+        (APPROVAL, "approval", "done", {"tools": WRITE, "round": 2}),
+        (TOOL, "tool", "done", {"tool": WRITE}),
+        (CHAT, "respond", "done", None),
     ]
-    assert {status for _, _, status, _ in _steps(run)} == {"done"}
     assert _terminal(run) == "done"
     _assert_contiguous(run)
+    # 3 つの区間（実行・再開・再開）は 1 つの trace。
+    assert len({root.span["trace_id"] for root in _roots(run)}) == 1
+
+
+def test_invalid_arguments_are_a_skipped_tool_span(monkeypatch: MonkeyPatch) -> None:
+    """引数の誤りで呼び先へ送らなかった呼び出しも、実行しなかったツールとして残す（#3226）。"""
+    _script(
+        monkeypatch,
+        [function_call(LOOKUP, {"other": "x"}, call_id="call-bad")],
+        [assistant_message("調べられませんでした。")],
+    )
+    run_id = _create_run()
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    rows = _rows(run)
+    assert rows[0] == (CHAT, "plan", "done", None)
+    assert rows[1] == (TOOL, "tool", "skipped", {"tool": LOOKUP})
+    skipped = [
+        event
+        for event in run.progress_events
+        if isinstance(event, ChatProgressStepEvent) and event.name == TOOL
+    ]
+    details = skipped[-1].details
+    assert details is not None
+    assert any(field.label == "エラー" for field in details.fields)
+
+
+def test_unattended_run_keeps_the_tool_it_did_not_run(monkeypatch: MonkeyPatch) -> None:
+    """承認の要るツールを呼ばない Run（外部の MCP クライアント）も、呼ばなかったツールを残す。"""
+    _script(
+        monkeypatch,
+        [function_call(WRITE, {"query": "登録"}, call_id="call-mcp")],
+        [assistant_message("登録はできませんでした。")],
+    )
+    run_id = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="登録して", agent_id=AGENT_ID),
+        created_by_user_uuid=LOCAL_DEBUG_USER_UUID,
+        extra_metadata={"source": "mcp", "api_key_id": "0123456789abcdef"},
+    ).id
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert _rows(run) == [
+        (CHAT, "plan", "done", None),
+        (TOOL, "tool", "skipped", {"tool": WRITE}),
+        (CHAT, "respond", "done", None),
+    ]
+    [step] = run.steps
+    skipped = [
+        event
+        for event in run.progress_events
+        if isinstance(event, ChatProgressStepEvent) and event.name == TOOL
+    ]
+    assert skipped[-1].params is not None and skipped[-1].params[RUN_STEP_PARAM] == step.id
 
 
 def test_failed_run_records_failed_terminal(monkeypatch: MonkeyPatch) -> None:
@@ -381,11 +520,9 @@ def test_failed_run_records_failed_terminal(monkeypatch: MonkeyPatch) -> None:
     run = runtime_repository.get_run(run_id)
     assert run.status == "failed"
     assert _terminal(run) == "failed"
-    steps = _steps(run)
-    assert steps[0][:3] == ("plan", "plan", "done")
-    # 失敗の時点で実行中だった段階は失敗にする。
-    assert steps[-1][2] == "failed"
-    assert not any(status == "running" for _, _, status, _ in steps)
+    rows = _rows(run)
+    assert rows[0][:3] == (CHAT, "plan", "done")
+    assert not any(status == "running" for _, _, status, _ in rows)
 
 
 def test_cancelled_run_records_cancelled_terminal() -> None:
@@ -393,39 +530,56 @@ def test_cancelled_run_records_cancelled_terminal() -> None:
 
     cancelled = runtime_repository.cancel_run(run_id)
 
-    assert _steps(cancelled) == [("plan", "plan", "skipped", None)]
+    assert _rows(cancelled) == []
     assert _terminal(cancelled) == "cancelled"
-    # 終端の後は記録しない（もう一度照合しても増えない）。
+    # 終端の後は記録しない（もう一度呼んでも増えない）。
     before = len(cancelled.progress_events)
-    record_run_progress(cancelled)
+    record_run_terminal(cancelled)
     assert len(cancelled.progress_events) == before
 
 
-def test_cancel_while_waiting_for_approval_skips_open_steps(
-    monkeypatch: MonkeyPatch,
-) -> None:
+def test_cancel_while_waiting_for_approval_ends_the_progress(monkeypatch: MonkeyPatch) -> None:
     _script(monkeypatch, [function_call(WRITE, {"query": "登録"}, call_id="call-c")])
     run_id = _create_run("登録して")
     anyio.run(builtin_runtime.execute_run, run_id)
 
     run = runtime_repository.cancel_run(run_id)
 
-    assert _steps(run) == [
-        ("plan", "plan", "done", None),
-        ("approval_wait", "approval", "skipped", {"tools": WRITE}),
-        (f"tool:{WRITE}", "tool", "skipped", {"tool": WRITE}),
-    ]
+    assert _rows(run) == [(CHAT, "plan", "done", None)]
     assert _terminal(run) == "cancelled"
 
 
-def test_recording_is_idempotent() -> None:
-    run = runtime_repository.get_run(_create_run())
-    before = list(run.progress_events)
+def test_cancel_from_another_context_while_a_tool_runs(monkeypatch: MonkeyPatch) -> None:
+    """実行中のツールの間に別の文脈（画面の操作）で停止したら、終端は停止で、開いていた span は
+    スキップで閉じる。停止の後に終わった span は記録しない（終端の後に行を増やさない）。"""
 
-    record_run_progress(run)
-    record_run_progress(run)
+    def lookup(_arguments: dict[str, Any], context: ToolInvocationContext) -> dict[str, Any]:
+        # 実行の文脈（trace の記録）を持たない、新しい文脈で停止する。
+        contextvars.Context().run(runtime_repository.cancel_run, context.run_id or "")
+        return {"rows": 1}
 
-    assert run.progress_events == before
+    definition = tool_registry.get(LOOKUP)
+    assert definition is not None
+    tool_registry.register(definition, lookup)
+    _script(
+        monkeypatch,
+        [function_call(LOOKUP, {"query": "x"}, call_id="call-1")],
+        [assistant_message("1 件です。")],
+    )
+    run_id = _create_run()
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == "cancelled"
+    assert _terminal(run) == "cancelled"
+    assert isinstance(run.progress_events[-1], ChatProgressTerminalEvent)
+    assert _rows(run) == [
+        (CHAT, "plan", "done", None),
+        (TOOL, "tool", "skipped", {"tool": LOOKUP}),
+    ]
+    assert all(root.status == "skipped" for root in _roots(run))
+    _assert_contiguous(run)
 
 
 # --------------------------------------------------------------------------------------------
@@ -436,15 +590,21 @@ def test_recording_is_idempotent() -> None:
 def _seed_completed_run(repository: AgentRuntimeRepository) -> RunState:
     run = repository.create_builtin_run(RunCreateRequest(goal="保存", agent_id="default"))
     assert repository.begin_builtin_run(run.id) is not None
-    step_id, _context = repository.start_builtin_tool_step(
-        run.id, ToolCall(name="echo", arguments={"text": "x"}, trace_id="call-1")
-    )
     from app.features.agent.tools import ToolResult
 
-    repository.finish_builtin_tool_step(
-        run.id, step_id, ToolResult(name="echo", success=True, output={"text": "x"})
-    )
-    return repository.complete_builtin_run(run.id, "回答しました。")
+    with operation_trace(
+        "agent.execute",
+        operation_id=run.id,
+        listener=lambda update: repository.record_builtin_span(run.id, update),
+    ):
+        with observed_span("gen_ai.execute_tool", attributes={"gen_ai.tool.name": "echo"}):
+            step_id, _context = repository.start_builtin_tool_step(
+                run.id, ToolCall(name="echo", arguments={"text": "x"}, trace_id="call-1")
+            )
+            repository.finish_builtin_tool_step(
+                run.id, step_id, ToolResult(name="echo", success=True, output={"text": "x"})
+            )
+        return repository.complete_builtin_run(run.id, "回答しました。")
 
 
 def test_progress_events_survive_the_file_snapshot(tmp_path: Path) -> None:
@@ -452,6 +612,7 @@ def test_progress_events_survive_the_file_snapshot(tmp_path: Path) -> None:
     repository = AgentRuntimeRepository(snapshot_path=path)
     completed = _seed_completed_run(repository)
     assert _terminal(completed) == "done"
+    assert [row[0] for row in _rows(completed)] == ["gen_ai.execute_tool"]
 
     reloaded = AgentRuntimeRepository(snapshot_path=path).get_run(completed.id)
 
@@ -460,6 +621,53 @@ def test_progress_events_survive_the_file_snapshot(tmp_path: Path) -> None:
     saved = json.loads(path.read_text(encoding="utf-8"))
     [saved_run] = [item for item in saved["runs"] if item["id"] == completed.id]
     assert all("detail" not in event for event in saved_run["progress_events"])
+
+
+def test_span_records_are_saved_together_in_the_background(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """span の知らせはメモリの Run にすぐ記録し、保存先へは少し待ってまとめて書く（知らせのたびに
+    Run の JSON を書かない）。"""
+    from app.features.agent import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "BACKGROUND_WRITES", True)
+    monkeypatch.setattr(runtime_module, "SPAN_PERSIST_DELAY_SECONDS", 0.05)
+    path = tmp_path / "runtime.json"
+    repository = AgentRuntimeRepository(snapshot_path=path)
+    run = repository.create_builtin_run(RunCreateRequest(goal="保存", agent_id="default"))
+    assert repository.begin_builtin_run(run.id) is not None
+    repository.flush_writes()
+    staged: list[int] = []
+    original = repository._persist_locked  # noqa: SLF001 - 保存の予定の回数を数える
+
+    def counting(*, background: bool = False) -> bool:
+        staged.append(1)
+        return original(background=background)
+
+    monkeypatch.setattr(repository, "_persist_locked", counting)
+    with operation_trace(
+        "agent.execute",
+        operation_id=run.id,
+        listener=lambda update: repository.record_builtin_span(run.id, update),
+    ):
+        for _ in range(5):
+            with observed_span("mcp.request", kind="client"):
+                pass
+        # メモリの Run にはすぐ入る。
+        assert len(_rows(repository.get_run(run.id))) == 5
+
+    def saved_rows() -> int:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        [item] = [entry for entry in saved["runs"] if entry["id"] == run.id]
+        return sum(1 for event in item["progress_events"] if event.get("name") == "mcp.request")
+
+    for _ in range(100):
+        if repository.pending_writes() == 0 and saved_rows() == 10:
+            break
+        anyio.run(anyio.sleep, 0.05)
+    # 開始と終了の 10 個のイベントが保存され、保存の予定は知らせの数より少ない。
+    assert saved_rows() == 10
+    assert 0 < len(staged) < 12
 
 
 @pytest.mark.parametrize(
@@ -480,6 +688,7 @@ def test_progress_events_survive_the_oracle_checkpoint(repository_class: Any) ->
 
     assert reloaded.progress_events == completed.progress_events
     assert _terminal(reloaded) == "done"
+    assert [row[0] for row in _rows(reloaded)] == ["gen_ai.execute_tool"]
 
 
 def test_broken_saved_progress_events_are_dropped() -> None:
@@ -558,6 +767,10 @@ def test_thread_and_run_responses_include_progress_events(
         "type": "terminal",
         "status": "done",
     }
+    # span のイベントは span の名前・親・trace id を持つ（画面が木にする）。
+    spans = [event for event in events if event["type"] == "step"]
+    assert spans and all(event.get("name") and event.get("trace_id") for event in spans)
+    assert {event["name"] for event in spans} >= {"agent.execute", CHAT, TOOL}
     thread = client.get(f"/api/threads/{run.thread_id}")
     assert thread.status_code == 200, thread.text
     assert thread.json()["data"]["runs"][0]["progress_events"] == events
@@ -654,12 +867,11 @@ def test_progress_endpoints_follow_the_run_scope(
     assert client.get(paths[0]).status_code == 401
 
 
-def test_created_run_response_carries_the_first_step(monkeypatch: MonkeyPatch) -> None:
+def test_created_run_response_has_no_progress_yet(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr("app.features.agent.router._schedule_builtin_run", lambda run: None)
 
     created = client.post("/api/runs", json={"goal": "質問", "agent_id": "default"})
 
     assert created.status_code == 200, created.text
-    [event] = created.json()["data"]["progress_events"]
-    assert (event["step_id"], event["status"]) == ("plan", "running")
-    assert event["target_id"] == created.json()["data"]["id"]
+    # 処理の経過は実行の区間の span から記録する（受け付けただけの Run は空）。
+    assert created.json()["data"]["progress_events"] == []

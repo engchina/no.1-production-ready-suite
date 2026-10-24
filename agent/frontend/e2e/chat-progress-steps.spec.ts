@@ -1,15 +1,15 @@
 /**
- * チャットの処理の段階（3 製品共通の ChatProgressStep。#1147）の、Agent の段階の定義の確認（#1359）。
+ * チャットの処理の経過（3 製品共通の ChatProgressStep。#1147）の、Agent の工程の定義の確認（#1359）。
  *
- * 段階は backend が Run の状態から記録したイベント（`progress_events`）で届く。画面は段階の種類（`kind`）から
- * i18n の名前と補足を付けるだけなので、backend と同じ形のイベントから名前を付けた一覧を確かめる。
- * Agent の frontend は Vitest を持たないため、画面を開かずに Playwright の test で関数を確かめる。
+ * 処理の経過は Run の trace（span の木。#3226）の投影で、backend が記録した span のイベント（`progress_events`）で
+ * 届く。画面は span の親子から木にし、工程の span の種類（`kind`）から i18n の名前と補足を付けるので、backend と同じ
+ * 形のイベントから名前を付けた一覧を確かめる。画面を開かずに Playwright の test で関数を確かめる。
  */
 import { chatProgressStepsFromEvents, chatProgressTerminalOf, parseChatProgressEvents, type ChatProgressStep } from "@production-ready/ui";
 
 import { AGENT_CHAT_PROGRESS_STEPS, chatSubmitProgressSteps } from "../src/lib/chat-progress";
 
-import { ProgressLog } from "./fixtures/chat-progress-events";
+import { EXECUTE_SPAN, ProgressLog, SYNTHETIC_MODEL } from "./fixtures/chat-progress-events";
 import { expect, test } from "./fixtures/test";
 
 const T0 = "2026-10-04T12:00:00.000Z";
@@ -27,69 +27,86 @@ function newLog(): ProgressLog {
 }
 
 // 画面幅に関係しないので、題名の「（desktop）」で mobile-375 の project では実行しない（playwright.config.ts の grepInvert）。
-test.describe("Agent の処理の段階の定義（desktop）", () => {
+test.describe("Agent の処理の経過の定義（desktop）", () => {
   test("送信中は質問の送信の段階だけを出す", () => {
     const [submit] = chatSubmitProgressSteps(Date.parse(T0));
     expect(submit).toMatchObject({ id: "submit", label: "質問を送信しています", status: "running", startedAt: T0 });
   });
 
-  test("考えている段階の名前は状態で変わる", () => {
-    const log = newLog().step("plan", "running");
-    expect(steps(log)[0]).toMatchObject({ label: "考えています", startedAt: T0 });
-    log.step("plan", "done");
-    expect(steps(log)[0].label).toBe("進め方を決めました");
-  });
-
-  test("表示名の無い処理は内部名を出さず、同じ処理の 2 回目は id で分ける", () => {
-    const tool = { params: { tool: "rag__rag_search" } };
-    const log = newLog()
-      .step("plan", "done")
-      .step("tool:rag__rag_search", "done", tool)
-      .step("respond", "done", { kind: "plan" })
-      .step("tool:rag__rag_search#2", "running", tool);
-    const items = steps(log);
-    expect(summary(items)).toEqual(["plan:done", "tool:rag__rag_search:done", "respond:done", "tool:rag__rag_search#2:running"]);
-    expect(items[1].label).toBe("処理を実行しました");
-    // 回答の作成の後に別のツールを呼んだ段階は、backend が進め方の検討（kind plan）に変える。
-    expect(items[2].label).toBe("進め方を決めました");
-    expect(items[3].label).toBe("処理を実行しています");
-  });
-
-  test("承認待ちは待っている間だけツール名を補足に出し、待機中のツールは名詞で出す", () => {
-    const log = newLog()
-      .step("plan", "done")
-      .step("approval_wait", "running", { params: { tools: "nl2sql__execute" } })
-      .step("tool:nl2sql__execute", "pending", { params: { tool: "nl2sql__execute" } });
+  test("実行の全体の span は行にせず、呼び出し中のモデルは共通の名前、終わったら工程の名前で出す", () => {
+    const log = newLog().step("chat-1", "running");
     let items = steps(log);
-    expect(summary(items)).toEqual(["plan:done", "approval_wait:running", "tool:nl2sql__execute:pending"]);
-    expect(items[1]).toMatchObject({ label: "承認を待っています", detail: "nl2sql__execute" });
-    expect(items[2]).toMatchObject({ label: "処理の実行" });
-    expect(items[2].startedAt).toBeUndefined();
-
-    log.step("approval_wait", "done");
+    expect(summary(items)).toEqual(["chat-1:running"]);
+    expect(items.map((step) => step.id)).not.toContain(EXECUTE_SPAN);
+    expect(items[0]).toMatchObject({ label: `モデルの呼び出し · ${SYNTHETIC_MODEL}`, startedAt: T0 });
+    log.step("chat-1", "done", { kind: "plan" });
     items = steps(log);
-    expect(items[1]).toMatchObject({ label: "承認の判断を受け取りました" });
-    expect(items[1].detail).toBeUndefined();
+    expect(items[0].label).toBe("進め方を決めました");
+    // 行を開くと span の技術の値（Span name・モデル）を出す。
+    expect(items[0].details?.fields).toEqual(
+      expect.arrayContaining([
+        { label: "Span name", value: "gen_ai.chat", mono: true },
+        { label: "gen_ai.request.model", value: SYNTHETIC_MODEL, mono: true },
+      ])
+    );
+  });
+
+  test("表示名の無い処理は内部名を出さず、ツールの中の MCP の呼び出しは入れ子にする", () => {
+    const log = newLog()
+      .step("chat-1", "done", { kind: "plan" })
+      .step("tool:rag__rag_search", "running")
+      .step("mcp-1", "done", { parent: "tool:rag__rag_search" })
+      .step("tool:rag__rag_search", "done")
+      .step("chat-2", "running");
+    const items = steps(log);
+    expect(summary(items)).toEqual(["chat-1:done", "tool:rag__rag_search:done", "mcp-1:done", "chat-2:running"]);
+    expect(items[1].label).toBe("処理を実行しました");
+    expect(items[2]).toMatchObject({ label: "MCP の呼び出し", level: 1 });
+    expect(items[3].label).toBe(`モデルの呼び出し · ${SYNTHETIC_MODEL}`);
+  });
+
+  test("承認の待ちは、再開の区間で待ったツール名と一緒に出す", () => {
+    const log = newLog().step("chat-1", "done", { kind: "plan" }).pause();
+    // 待っている間は待ちの行を出さない（見出しと承認のカードで示す）。
+    expect(summary(steps(log))).toEqual(["chat-1:done"]);
+
+    log
+      .resume()
+      .step("approval_wait", "done", { params: { tools: "nl2sql__execute", round: 1 } })
+      .step("tool:nl2sql__execute", "done")
+      .step("chat-2", "done", { kind: "respond" })
+      .terminal("done");
+    const items = steps(log);
+    expect(summary(items)).toEqual(["chat-1:done", "approval_wait:done", "tool:nl2sql__execute:done", "chat-2:done"]);
+    expect(items[3].label).toBe("回答を作りました");
+    expect(items[1]).toMatchObject({ label: "承認の判断を受け取りました", detail: "nl2sql__execute" });
+    expect(items.every((step) => !step.level)).toBe(true);
+    expect(chatProgressTerminalOf(parseChatProgressEvents(log.events))).toBe("done");
   });
 
   test("却下したツールはスキップと補足を出す", () => {
     const log = newLog()
-      .step("plan", "done")
-      .step("approval_wait", "done", { params: { tools: "nl2sql__execute" } })
+      .step("chat-1", "done", { kind: "plan" })
+      .pause()
+      .resume()
+      .step("approval_wait", "done", { params: { tools: "nl2sql__execute", round: 1 } })
       .step("tool:nl2sql__execute", "skipped", { params: { tool: "nl2sql__execute", rejected: true } })
-      .step("respond", "done")
       .terminal("done");
     const items = steps(log);
-    expect(summary(items)).toEqual(["plan:done", "approval_wait:done", "tool:nl2sql__execute:skipped", "respond:done"]);
+    expect(summary(items)).toEqual(["chat-1:done", "approval_wait:done", "tool:nl2sql__execute:skipped"]);
     expect(items[2].detail).toBe("承認されませんでした");
-    expect(chatProgressTerminalOf(parseChatProgressEvents(log.events))).toBe("done");
   });
 
-  test("回答の作成の 2 回目と失敗の名前", () => {
-    const log = newLog().step("plan", "done").step("respond#2", "running");
-    expect(steps(log)[1]).toMatchObject({ id: "respond#2", label: "回答を作っています" });
-    log.step("respond#2", "failed").terminal("failed");
-    expect(steps(log)[1]).toMatchObject({ label: "回答を作れませんでした", status: "failed" });
+  test("失敗したモデルの呼び出しは共通の名前で失敗を出す", () => {
+    const log = newLog().step("chat-1", "done", { kind: "plan" }).step("chat-2", "running");
+    log.step("chat-2", "failed").terminal("failed");
+    expect(steps(log)[1]).toMatchObject({ label: `モデルの呼び出し · ${SYNTHETIC_MODEL}`, status: "failed" });
     expect(chatProgressTerminalOf(parseChatProgressEvents(log.events))).toBe("failed");
+  });
+
+  test("停止は開いていた span をスキップで閉じる", () => {
+    const log = newLog().step("chat-1", "done", { kind: "plan" }).step("tool:rag__rag_search", "running").terminal("cancelled");
+    expect(summary(steps(log))).toEqual(["chat-1:done", "tool:rag__rag_search:skipped"]);
+    expect(chatProgressTerminalOf(parseChatProgressEvents(log.events))).toBe("cancelled");
   });
 });

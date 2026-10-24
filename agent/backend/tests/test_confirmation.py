@@ -30,6 +30,7 @@ from mcp_support import (
     fake_product_mcp,
     nl2sql_needs_clarification,
 )
+from pr_backend_core.chat_progress import ChatProgressStepEvent
 from pydantic import ValidationError
 from pytest import MonkeyPatch
 
@@ -424,8 +425,8 @@ def test_agent_confirmation_waits_and_the_answer_resumes_the_same_run(
     assert confirmation.items[0].prompt == "どの期間の売上を見ますか？"
     assert [option.label for option in confirmation.items[0].options] == ["今月", "今年度"]
     assert run.approvals == []
-    # 処理の段階は「回答前の確認の答えを待っています」。
-    assert any(getattr(event, "kind", None) == "confirmation" for event in run.progress_events)
+    # 待っている間は処理の経過に待ちの行を出さない（見出しの状態とカードで示す。#3226）。
+    assert not any(getattr(event, "kind", None) == "confirmation" for event in run.progress_events)
 
     outcome = runtime_repository.decide_confirmation(
         run.id,
@@ -439,6 +440,20 @@ def test_agent_confirmation_waits_and_the_answer_resumes_the_same_run(
     seen = _tool_output(model, 1, "call-ask")
     assert (seen["status"], seen["selected"]) == ("answered", ["今年度"])
     assert resumed.confirmations[0].status == "answered"
+    # 答えを待った区間は、再開した区間の span（回答前の確認の待ち）として残る（#3226）。確認の
+    # ツールの呼び出しは処理の経過に出さない。
+    waits = [
+        event
+        for event in resumed.progress_events
+        if isinstance(event, ChatProgressStepEvent) and event.name == "agent.confirmation_wait"
+    ]
+    assert [(event.kind, event.status, event.params) for event in waits] == [
+        ("confirmation", "done", {"round": 1})
+    ]
+    assert not any(
+        (getattr(event, "params", None) or {}).get("tool") == CONFIRMATION_TOOL
+        for event in resumed.progress_events
+    )
     # 確認のツールの呼び出しも step（監査）に残る。
     assert any(
         step.tool_call is not None and step.tool_call.name == CONFIRMATION_TOOL
