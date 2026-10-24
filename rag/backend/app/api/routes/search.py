@@ -43,6 +43,7 @@ from app.rag.answer_timeout import (
     run_answer_with_timeout,
 )
 from app.rag.audit import record_rag_search_audit
+from app.rag.chat_progress import ChatProgressTracker
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
 from app.rag.observability import (
@@ -57,7 +58,6 @@ from app.rag.request_context import current_audit_request_context
 from app.rag.run_history import RunRecorder
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
-from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_citation_metadata
 from app.rag.support_guide_conditions import (
     resolve_answered_conditions,
@@ -688,8 +688,14 @@ async def _run_search_with_timeout(
     if guide_preview is not None:
         trace_id = GUIDE_PREVIEW_TRACE_PREFIX + trace_id
     answer_model_id = _answer_model_id(request, settings)
+    # 実行履歴の詳細の処理の経過（実行の trace の span のイベント。#3226）。
+    # 実行履歴に残す実行だけ記録する。
+    progress: ChatProgressTracker | None = None
     if run_recorder is not None:
         run_recorder.model_id = answer_model_id if request.generate_answer else None
+        progress = ChatProgressTracker(trace_id)
+        progress.trace_id = trace_id
+        run_recorder.progress_source = progress.dump
     # 取り消したときに止まった工程を残す（#2691）。
     stages = StageTracker(_report_tool_progress)
     try:
@@ -701,7 +707,12 @@ async def _run_search_with_timeout(
                 scope=scope,
                 answer_notice=current_answer_notice,
                 caller_queries=caller_queries,
-            ).run(request, trace_id=trace_id, progress_callback=tracker),
+            ).run(
+                request,
+                trace_id=trace_id,
+                progress_callback=tracker,
+                span_listener=progress.span_listener() if progress is not None else None,
+            ),
             settings,
             stages,
         )
@@ -734,6 +745,8 @@ async def _run_search_with_timeout(
             error=exc.original_error,
             error_stage="timeout",
         )
+        if progress is not None:
+            progress.fail()
         await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
         raise HTTPException(status_code=504, detail=exc.user_message) from exc
     except asyncio.CancelledError:
@@ -753,6 +766,8 @@ async def _run_search_with_timeout(
     except HTTPException:
         raise
     except Exception as exc:
+        if progress is not None:
+            progress.fail()
         await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
         incomplete = find_incomplete_response(exc)
         if incomplete is not None and incomplete.user_message:
@@ -852,34 +867,39 @@ async def _stream_search_events_with_timeout(
     *,
     run_recorder: RunRecorder | None = None,
 ) -> AsyncIterator[str]:
-    """stage progress を即時 SSE で返しながら検索 pipeline を実行する。
+    """処理の経過を即時 SSE で返しながら検索 pipeline を実行する。
 
     `resolved` は `_resolve_query_context` の結
     果（有効 request・Settings・適用 KB・検索・回答プロファイル）。
 
+    処理の経過は実行の trace の span のイベント（`chat_progress`。対象は trace_id。#3226）で送り、
+    実行履歴にも同じイベントを残す。工程の開始・終了の `stage` は状態の 1 行（ナレッジベースの検索
+    テスト）だけに使う。
     """
     request, settings, applied_kb, applied_view = resolved
     started_at = perf_counter()
     trace_id = new_trace_id()
     queue: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
+    progress = ChatProgressTracker(
+        trace_id,
+        sink=lambda event: queue.put_nowait(
+            ("chat_progress", {"event": event.model_dump(mode="json", exclude_none=True)})
+        ),
+    )
+    progress.trace_id = trace_id
+    if run_recorder is not None:
+        run_recorder.progress_source = progress.dump
 
-    async def emit_progress(progress: SearchStageProgress) -> None:
+    async def emit_progress(stage: SearchStageProgress) -> None:
         await queue.put(
             (
                 "stage",
                 {
-                    "trace_id": progress.trace_id,
-                    "stage": progress.stage,
-                    "outcome": progress.outcome,
-                    "elapsed_ms": progress.elapsed_ms,
-                    "occurred_at_ms": progress.occurred_at_ms,
-                    "attributes": dict(progress.attributes),
-                    # 終わった工程の詳細（処理の経過の段を開いて見る。#2341）。上限で切り伏せる。
-                    **(
-                        {"details": details}
-                        if (details := step_details_payload(progress.details))
-                        else {}
-                    ),
+                    "trace_id": stage.trace_id,
+                    "stage": stage.stage,
+                    "outcome": stage.outcome,
+                    "elapsed_ms": stage.elapsed_ms,
+                    "occurred_at_ms": stage.occurred_at_ms,
                 },
             )
         )
@@ -900,16 +920,19 @@ async def _stream_search_events_with_timeout(
                     request,
                     trace_id=trace_id,
                     progress_callback=tracker,
+                    span_listener=progress.span_listener(),
                 ),
                 settings,
                 emit_progress,
             )
+            progress.finish()
             if applied_kb is not None:
                 result.diagnostics.kb_adapter_config_applied = applied_kb
             if applied_view is not None:
                 result.diagnostics.search_answer_profile_applied = applied_view
             await queue.put(("result", result))
         except AnswerTimeoutError as exc:
+            progress.fail()
             elapsed = elapsed_ms(started_at)
             diagnostics = build_search_diagnostics(
                 request, settings=settings, retrieval_strategy_adapter="grounded"
@@ -952,6 +975,7 @@ async def _stream_search_events_with_timeout(
             # それ以外は秘匿した定型文を返し、画面の「詳細」に出す項目（種類・工程・理由）を
             # 添える（#2023）。
             _log_answer_failure("rag_search_stream_failed", trace_id, exc, STREAM_ERROR_MESSAGE)
+            progress.fail()
             await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
             failure = describe_answer_failure(exc, STREAM_ERROR_MESSAGE)
             await queue.put(("error", {"trace_id": trace_id, **failure.event_fields()}))

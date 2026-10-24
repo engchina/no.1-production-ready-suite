@@ -15,7 +15,6 @@ from app.rag.step_details import (
     history_rewrite_details,
     step_details_payload,
 )
-from app.schemas.history import RunStage, RunStep
 
 
 def test_payload_reads_new_and_legacy_records_and_drops_empty() -> None:
@@ -171,25 +170,3 @@ def test_actual_oci_failure_does_not_claim_local_inspection_or_masking(
         {"label": "結果", "value": "安全検査を完了できず、回答を止めました"},
         {"label": "外部の検査", "value": "OCI Guardrails を利用できませんでした"},
     ]
-
-
-def test_history_schema_reads_structured_and_legacy_details() -> None:
-    step = RunStep.model_validate(
-        {
-            "name": "Rerank",
-            "details": {"fields": [{"label": "件数", "value": "3 件"}], "lines": ["行"]},
-        }
-    )
-    assert step.details is not None
-    assert step.details.fields[0].label == "件数"
-    legacy = RunStep.model_validate({"name": "文書検索", "details": ["行 1"]})
-    assert legacy.details is not None and legacy.details.lines == ["行 1"]
-    assert RunStep.model_validate({"name": "古い工程"}).details is None
-    stage = RunStage.model_validate(
-        {
-            "stage": "answer_guardrail",
-            "outcome": "success",
-            "details": {"fields": [{"label": "結果", "value": "問題なし"}]},
-        }
-    )
-    assert stage.details is not None and stage.details.fields[0].value == "問題なし"

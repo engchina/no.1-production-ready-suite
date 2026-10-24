@@ -20,10 +20,13 @@ import {
   useChatHistoryActions,
   ChatUserMessage,
   createOptimisticChatMessage,
+  chatProgressHasSpans,
   chatProgressStepsFromEvents,
+  chatProgressTraceIdOf,
   parseChatProgressEvents,
   parseChatProgressPage,
   useChatProgressStream,
+  useTraceDetailsLabels,
   withOptimisticChatStatus,
   type ChatUserMessageStatus,
   type OptimisticChatMessage,
@@ -247,6 +250,18 @@ function buildTurns(messages: ChatMessage[]): Turn[] {
     .map((user) => ({ user, replies: byReply.get(user.message_id) ?? [] }));
 }
 
+/**
+ * 列の処理の経過（#1146 / #3226）。行は回答の trace の span のイベントから作る。`traceId` は「処理の詳細」に出す
+ * trace id、`legacy` は span の無い古い形式の記録（工程の行の代わりに案内を出す）。
+ */
+interface ColumnProgress {
+  steps: ChatProgressStep[];
+  startedAtMs: number;
+  reconnecting?: boolean;
+  traceId?: string;
+  legacy?: boolean;
+}
+
 /** 回答 1 カラム（モデル単位）。ストリーミング中はカーソルを出す。 */
 function AssistantColumn({
   label,
@@ -296,7 +311,7 @@ function AssistantColumn({
    * 処理の段階（#1146）。生成中は今の段階と経過時間、完了後は回答の上に「処理の経過」の 1 行を出す。
    * 段階がまだ届いていない（送信の応答待ち）ときは `steps` を空にし、「質問を送信しています」を出す。
    */
-  progress?: { steps: ChatProgressStep[]; startedAtMs: number; reconnecting?: boolean } | null;
+  progress?: ColumnProgress | null;
   /** 停止した回答の文（利用者の停止。#1175）。失敗の Banner ではなく、停止の 1 行で出す。 */
   stoppedMessage?: string | null;
   /** 失敗した回答をもう一度送信する（最新の質問だけ）。 */
@@ -332,6 +347,8 @@ function AssistantColumn({
           // 経過時間は送信から数え続ける（段階ごとに 0 に戻さない。#1176）。
           startedAt={progress.startedAtMs || undefined}
           reconnecting={progress.reconnecting}
+          // 保存した失敗・停止の回答の、span の無い古い形式の記録（作成中は古い形式にしない）。
+          legacy={progress.legacy}
           testId="chat-answer-progress"
         />
       ) : finished && (progress || answerDiagnostics || (savedAnswer && traceId)) ? (
@@ -341,6 +358,8 @@ function AssistantColumn({
         <AnswerProcess
           steps={progress?.steps ?? []}
           testId="chat-answer-progress"
+          traceId={progress?.traceId}
+          legacy={progress?.legacy ?? Boolean(savedAnswer && traceId)}
           diagnostics={answerDiagnostics}
           savedRecord={savedAnswer && traceId ? { traceId, searchAnswerProfileId } : null}
         />
@@ -486,7 +505,7 @@ function MessageTurn({
     passageSource?: unknown;
     notice?: string | null;
     savedAnswer?: boolean;
-    progress?: { steps: ChatProgressStep[]; startedAtMs: number; reconnecting?: boolean } | null;
+    progress?: ColumnProgress | null;
     stoppedMessage?: string | null;
   }[];
 }) {
@@ -589,6 +608,8 @@ function MessageTurn({
 
 export function ChatClient() {
   const navigate = useNavigate();
+  // span の段の名前（段の名前・技術の span の名前）は root の文言で付ける（#3226）。
+  const traceLabels = useTraceDetailsLabels();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -936,7 +957,17 @@ export function ChatClient() {
   /** 列の段階（追っている対象は配信の hook、ほかはイベントから組み立てる）。 */
   function columnProgressSteps(messageId: string | null, events: readonly ChatProgressEvent[]): ChatProgressStep[] {
     if (messageId !== null && messageId === (liveProgressKey ?? savedProgressReplyId)) return progressStream.steps;
-    return chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS, messageId);
+    return chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS, messageId, { traceLabels });
+  }
+
+  /**
+   * 列の処理の経過の trace id と古い形式か（#3226）。作成中の列は古い形式にしない（span のイベントが届く前）。
+   */
+  function columnProgressTrace(
+    events: readonly ChatProgressEvent[],
+    { finished }: { finished: boolean }
+  ): Pick<ColumnProgress, "traceId" | "legacy"> {
+    return { traceId: chatProgressTraceIdOf(events), legacy: finished && !chatProgressHasSpans(events) };
   }
 
   function selectConversation(id: string) {
@@ -1465,6 +1496,7 @@ export function ChatClient() {
         notice: column.status === "done" ? (column.notice ?? null) : null,
         progress: {
           steps: columnProgressSteps(column.messageId, column.progressEvents),
+          ...columnProgressTrace(column.progressEvents, { finished: column.status !== "streaming" }),
           startedAtMs: column.startedAtMs,
           // 配信が途絶え、接続を張り直している間は「接続を確認しています」（#1160）。
           reconnecting: progressStream.reconnecting && column.status === "streaming",
@@ -1743,10 +1775,9 @@ export function ChatClient() {
                     columns={turn.replies.map((reply) => {
                       // 保存した処理の段階のイベント（#1175 / #1359）。無ければ、この画面で受け取ったイベント（#1146）。
                       const savedEvents = parseChatProgressEvents(reply.progress);
-                      const steps = columnProgressSteps(
-                        reply.message_id,
-                        savedEvents.length > 0 ? savedEvents : (finishedProgress[reply.message_id] ?? [])
-                      );
+                      const replyEvents =
+                        savedEvents.length > 0 ? savedEvents : (finishedProgress[reply.message_id] ?? []);
+                      const steps = columnProgressSteps(reply.message_id, replyEvents);
                       const streaming = reply.status === "STREAMING";
                       const tracked = streaming && reply.message_id === savedProgressReplyId;
                       return {
@@ -1771,9 +1802,10 @@ export function ChatClient() {
                           reply.trace_id && answerTraceIds.has(reply.trace_id)
                         ),
                         progress:
-                          streaming || steps.length
+                          streaming || replyEvents.length
                             ? {
                                 steps,
+                                ...columnProgressTrace(replyEvents, { finished: !streaming }),
                                 startedAtMs: Date.parse(reply.created_at) || Date.now(),
                                 // 段階の配信が途絶え、取り直している間は「接続を確認しています」（#1160）。
                                 reconnecting: tracked && progressStream.reconnecting,

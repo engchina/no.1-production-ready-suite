@@ -31,7 +31,6 @@ from app.rag.chat_answer_runs import ChatAnswerRunService
 from app.rag.guardrails import GuardrailPolicy
 from app.rag.pipeline import (
     ChatTurn,
-    SearchStageProgress,
     _format_chat_history,
     chat_history_turns,
 )
@@ -41,6 +40,7 @@ from app.rag.request_context import (
     set_audit_request_context,
 )
 from app.schemas.search import RetrievedChunk, SearchResponse, StorageFailure
+from tests.span_progress_support import answer_step, answer_trace, pipeline_stage
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -618,9 +618,15 @@ class _FakePipeline:
         *,
         history=None,
         query_guardrail_result=None,
+        span_listener=None,
     ):
         assert token_callback is None
         _FakePipeline.filters.append(dict(request.filters))
+        # 本物の pipeline と同じく、実行の全体の span を処理の経過に流す（#3226）。
+        with answer_trace(span_listener, trace_id=trace_id or "trace"):
+            return self._response(request, trace_id)
+
+    def _response(self, request: Any, trace_id: str | None) -> SearchResponse:
         return SearchResponse(
             answer="回答",
             citations=[
@@ -723,23 +729,12 @@ class _SlowPlanningPipeline(_FakePipeline):
         *,
         history=None,
         query_guardrail_result=None,
+        span_listener=None,
     ):
         assert progress_callback is not None
-        for stage, outcome in (
-            ("history_rewrite", "started"),
-            ("history_rewrite", "success"),
-            ("answer", "started"),
-        ):
-            await progress_callback(
-                SearchStageProgress(
-                    trace_id=trace_id or "trace",
-                    stage=stage,
-                    outcome=outcome,
-                    elapsed_ms=0.0,
-                    attributes={},
-                )
-            )
-        await asyncio.sleep(1)
+        with answer_trace(span_listener, trace_id=trace_id or "trace"):
+            await pipeline_stage("history_rewrite", progress_callback=progress_callback)
+            await pipeline_stage("answer", asyncio.sleep(1), progress_callback=progress_callback)
         raise AssertionError("時間切れの前に終わらない")
 
 
@@ -755,6 +750,7 @@ class _SlowAnswerPipeline(_FakePipeline):
         *,
         history=None,
         query_guardrail_result=None,
+        span_listener=None,
     ):
         await asyncio.sleep(0.1)
         return await super().run(  # type: ignore[no-untyped-call]
@@ -764,6 +760,7 @@ class _SlowAnswerPipeline(_FakePipeline):
             token_callback,
             history=history,
             query_guardrail_result=query_guardrail_result,
+            span_listener=span_listener,
         )
 
 
@@ -781,9 +778,10 @@ def test_stream_message_timeout_names_stage_and_saves_error(monkeypatch: MonkeyP
 
     assert resp.status_code == 200
     text = resp.text
-    # 質問の書き換え・回答フローの進捗は時間切れの前に届く。
-    assert '"stage": "history_rewrite", "outcome": "started"' in text
-    assert '"stage": "answer", "outcome": "started"' in text
+    # 質問の書き換え・回答フローの処理の経過（span）は時間切れの前に届く（#3226）。
+    names = [event.get("name") for event in _progress_events(text)]
+    assert "rag.history_rewrite" in names
+    assert "rag.answer" in names
     expected = answer_timeout_message("answer", 0.05)
     assert "event: error" in text
     assert expected in text
@@ -822,39 +820,22 @@ class _StagedPipeline(_FakePipeline):
         *,
         history=None,
         query_guardrail_result=None,
+        span_listener=None,
     ):
         assert progress_callback is not None
-        for stage, outcome in (
-            ("answer", "started"),
-            ("answer_step:質問の理解", "started"),
-            ("answer_step:質問の理解", "success"),
-            ("answer_step:文書検索", "started"),
-            ("answer_step:Rerank", "started"),
-            ("answer_step:Rerank", "success"),
-            ("answer_step:文書検索", "success"),
-            ("answer_step:回答文の生成と根拠確認（1回目）", "started"),
-            ("answer_step:回答文の生成と根拠確認（1回目）", "success"),
-            ("answer", "success"),
-            ("answer_guardrail", "started"),
-            ("answer_guardrail", "success"),
-        ):
-            await progress_callback(
-                SearchStageProgress(
-                    trace_id=trace_id or "trace",
-                    stage=stage,
-                    outcome=outcome,
-                    elapsed_ms=0.0,
-                    attributes={},
-                )
-            )
-        return await super().run(  # type: ignore[no-untyped-call]
-            request,
-            trace_id,
-            None,
-            token_callback,
-            history=history,
-            query_guardrail_result=query_guardrail_result,
-        )
+
+        async def answer() -> None:
+            with answer_step("質問の理解"):
+                pass
+            with answer_step("文書検索"), answer_step("Rerank"):
+                pass
+            with answer_step("回答文の生成と根拠確認（1回目）"):
+                pass
+
+        with answer_trace(span_listener, trace_id=trace_id or "trace"):
+            await pipeline_stage("answer", answer(), progress_callback=progress_callback)
+            await pipeline_stage("answer_guardrail", progress_callback=progress_callback)
+            return self._response(request, trace_id)
 
 
 class _SlowPipeline(_FakePipeline):
@@ -869,6 +850,7 @@ class _SlowPipeline(_FakePipeline):
         *,
         history=None,
         query_guardrail_result=None,
+        span_listener=None,
     ):
         await asyncio.sleep(0.25)
         return await super().run(  # type: ignore[no-untyped-call]
@@ -878,6 +860,7 @@ class _SlowPipeline(_FakePipeline):
             token_callback,
             history=history,
             query_guardrail_result=query_guardrail_result,
+            span_listener=span_listener,
         )
 
 
@@ -944,32 +927,33 @@ def test_stream_message_sends_chat_progress_events(monkeypatch: MonkeyPatch) -> 
     # 番号は 1 から連続し、対象は作成中の回答のメッセージ。
     assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
     assert {event["target_id"] for event in events} == {assistant.id}
-    # 工程ごとに段階を出す（#2096。全体を包む `answer` は出さない）。名前（文言）は入れない。
+    # 段は span（#3226）。包む段・工程を始まった順に出す。名前（文言）は入れない。
     assert all("label" not in event and "detail" not in event for event in events)
     running = [
-        (
-            event.get("kind"),
-            (event.get("params") or {}).get("name"),
-            (event.get("params") or {}).get("depth"),
-        )
+        (event.get("name"), event.get("kind"), (event.get("params") or {}).get("name"))
         for event in events
-        if event.get("status") == "running"
+        if event.get("status") == "running" and not event.get("root")
     ]
     assert running == [
-        ("answer_step", "質問の理解", 0),
-        ("answer_step", "文書検索", 0),
-        ("answer_step", "Rerank", 1),
-        ("answer_step", "回答文の生成と根拠確認（1回目）", 0),
-        ("answer_guardrail", None, None),
+        ("rag.answer", None, None),
+        ("rag.engine.stage", "answer_step", "質問の理解"),
+        ("rag.engine.stage", "answer_step", "文書検索"),
+        ("rag.engine.stage", "answer_step", "Rerank"),
+        ("rag.engine.stage", "answer_step", "回答文の生成と根拠確認（1回目）"),
+        ("rag.answer_guardrail", "answer_guardrail", None),
     ]
+    by_id = {event["step_id"]: event for event in events if event["type"] == "step"}
+    rerank = next(e for e in by_id.values() if (e.get("params") or {}).get("name") == "Rerank")
+    assert (by_id[rerank["parent_id"]].get("params") or {}).get("name") == "文書検索"
+    assert len({event["step_id"] for event in events if event.get("root")}) == 1
     assert events[-1]["type"] == "terminal"
     assert events[-1]["status"] == "done"
     assert set(_fold_statuses(events).values()) == {"done"}
-    # 完了の終端は回答（delta）の前に届く。旧形式の `progress`（snapshot）は送らない。
+    # 完了の終端は回答（delta）の前に届く。旧形式の `progress`（snapshot）と工程の `stage` は
+    # 送らない（処理の経過は span のイベントだけ）。
     assert resp.text.rindex("event: chat_progress") < resp.text.index("event: delta")
     assert "event: progress" not in resp.text
-    # 既存の stage イベントは変えない。
-    assert '"stage": "answer_step:文書検索", "outcome": "started"' in resp.text
+    assert "event: stage" not in resp.text
     # 保存した段階は配信と同じイベントの一覧（会話の取得でも同じものを返す）。
     assert assistant.progress == events
     detail = client.get("/api/chat/conversations/conv-progress").json()["data"]
@@ -995,9 +979,13 @@ def test_stream_message_progress_marks_running_step_failed_on_timeout(
 
     text = resp.text
     events = _progress_events(text)
-    statuses = _fold_statuses(events)
-    # 質問の書き換えは完了。時間切れの終端は失敗（#2096。工程ごとの段階）。
-    assert statuses == {"s1": "done"}
+    latest = {event["step_id"]: event for event in events if event["type"] == "step"}
+    # 質問の書き換えは完了。時間切れで止まった段は取り消しの印で終わり、終端は失敗（#3226）。
+    by_name = {event["name"]: event for event in latest.values() if not event.get("root")}
+    assert by_name["rag.history_rewrite"]["status"] == "done"
+    assert by_name["rag.answer"]["status"] == "skipped"
+    assert by_name["rag.answer"]["cancelled"] is True
+    assert "running" not in {event["status"] for event in latest.values()}
     assert events[-1] == {**events[-1], "type": "terminal", "status": "failed"}
     assert text.rindex("event: chat_progress") < text.index("event: error")
     assert fake.messages["conv-progress-timeout"][1].progress == events
@@ -1380,24 +1368,17 @@ class _RecordSaveFailedPipeline(_FakePipeline):
         *,
         history=None,
         query_guardrail_result=None,
+        span_listener=None,
     ):
         assert progress_callback is not None
-        for outcome, attributes in (
-            ("started", {}),
-            ("error", {"error_type": "DatabaseError", "error_code": "ORA-03146"}),
-        ):
-            await progress_callback(
-                SearchStageProgress(
-                    trace_id=trace_id or "trace",
-                    stage="answer_record_save",
-                    outcome=outcome,
-                    elapsed_ms=0.0,
-                    attributes=attributes,
+        with answer_trace(span_listener, trace_id=trace_id or "trace"):
+            with pytest.raises(_DatabaseError):
+                await pipeline_stage(
+                    "answer_record_save",
+                    error=_DatabaseError("ORA-03146"),
+                    progress_callback=progress_callback,
                 )
-            )
-        result = await super().run(  # type: ignore[no-untyped-call]
-            request, trace_id, progress_callback, token_callback, history=history
-        )
+            result = self._response(request, trace_id)
         failure = StorageFailure(
             step="answer_record_save", error_type="DatabaseError", error_code="ORA-03146"
         )
@@ -1429,7 +1410,7 @@ def test_stream_message_marks_failed_record_save_step_and_still_answers(
     assert {event.get("kind") for event in failed} == {"answer_record_save"}
     assert failed[-1]["details"]["lines"] == [
         "回答の記録をデータベースに保存できませんでした。回答は表示しています。",
-        "エラーの種類: DatabaseError",
+        "エラーの種類: _DatabaseError",
         "エラーコード: ORA-03146",
     ]
     assistant = fake.messages["conv-record"][1]
