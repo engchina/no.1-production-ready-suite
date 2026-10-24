@@ -1,3 +1,12 @@
+const syntheticChatModel = `synthetic_model_${"segment_".repeat(24)}`;
+/** 合成記録の `gen_ai.chat` の行の名前（部品の既定は技術の名前とモデル名。モデル名は 128 字まで。#3214）。 */
+export const syntheticChatSpanLabel = `gen_ai.chat · ${syntheticChatModel.slice(0, 128)}`;
+
+/** 合成記録の span（製品の段の span を足すときに使う）。 */
+export function syntheticSpan(id: string, parent: string | null, operationName: string, attributes: Record<string, string | number> = {}) {
+  return { span_id: id.repeat(16), parent_span_id: parent?.repeat(16) ?? null, operation_name: operationName, trace_id: "a".repeat(32), kind: "internal", status: "done", started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:00:02.000Z", duration_ms: 2000, timing_source: "measured", attributes };
+}
+
 /** 3 製品の実画面で使う、機密を含まない並列呼び出しの合成記録。 */
 export const syntheticTraceSummary = {
   schema_version: 1, operation_id: "synthetic-a", root_span_id: "1".repeat(16), telemetry_trace_id: "a".repeat(32), completeness: "complete", truncated: false, sampled: true,
@@ -9,7 +18,7 @@ export const syntheticTraceSummary = {
     { span_id: "5".repeat(16), parent_span_id: "4".repeat(16), operation_name: "synthetic.child" },
     { span_id: "6".repeat(16), parent_span_id: "5".repeat(16), operation_name: "synthetic.child" },
     { span_id: "7".repeat(16), parent_span_id: "6".repeat(16), operation_name: "synthetic.child" },
-  ].map(span => ({ ...span, trace_id: "a".repeat(32), kind: "internal", status: "done", started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:00:02.000Z", duration_ms: 2000, timing_source: "measured", attributes: { "gen_ai.request.model": span.operation_name === "gen_ai.chat" ? `synthetic_model_${"segment_".repeat(24)}` : "model-a", "gen_ai.usage.input_tokens": 12, "gen_ai.usage.output_tokens": 0 } })),
+  ].map(span => ({ ...span, trace_id: "a".repeat(32), kind: "internal", status: "done", started_at: "2026-01-01T00:00:00.000Z", finished_at: "2026-01-01T00:00:02.000Z", duration_ms: 2000, timing_source: "measured", attributes: { "gen_ai.request.model": span.operation_name === "gen_ai.chat" ? syntheticChatModel : "model-a", "gen_ai.usage.input_tokens": 12, "gen_ai.usage.output_tokens": 0 } })),
 };
 
 export async function captureTraceLayouts(
@@ -32,7 +41,7 @@ export async function captureTraceLayouts(
   if (!(await page.getByTestId("trace-details").isVisible())) throw new Error("Enter で詳細を開けません。");
   await page.keyboard.press("Tab");
   if (!(await page.evaluate(() => document.activeElement?.closest('[data-testid="trace-details"]') != null))) throw new Error("Tab で詳細の操作へ移れません。");
-  await page.getByTestId("trace-details").getByText("gen_ai.chat", { exact: true }).click();
+  await page.getByTestId("trace-details").getByText(syntheticChatSpanLabel, { exact: true }).click();
   const mobile = (page.viewportSize()?.width ?? 1280) <= 375;
   for (const width of mobile ? [375] : [1280, 1920]) {
     await page.setViewportSize({ width, height: mobile ? 812 : 900 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { traceTimeline } from "../src/lib/trace-tree";
+import { TRACE_DETAILS_JA, createTraceDetailsLabels } from "../src/lib/trace-labels";
 import { runTimelineDuration } from "../src/components/data/run-detail";
 const at = (n: number) => new Date(Date.UTC(2026, 0, 1) + n).toISOString();
 const span = (id: string, parent?: string) => ({ span_id: id.repeat(16), parent_span_id: parent?.repeat(16), trace_id: "a".repeat(32), operation_name: "synthetic", status: "done", started_at: at(0), finished_at: at(2000), duration_ms: 2000 });
@@ -26,5 +27,29 @@ describe("安全な trace の表示", () => {
     expect(steps[0].status).toBe("skipped");
     expect(steps[0].detail).toBe("停止");
     expect(traceTimeline(null).steps).toEqual([]);
+  });
+});
+describe("span の表示名", () => {
+  const stage = (id: string, parent: string | undefined, operation_name: string, attributes: Record<string, unknown> = {}) => ({ ...span(id, parent), operation_name, attributes });
+  const summary = { completeness: "complete", root_span_id: "1".repeat(16), spans: [
+    stage("1", undefined, "op.answer"),
+    stage("2", "1", "op.answer", { "pr.stage": "answer" }),
+    stage("3", "2", "op.engine.stage", { "pr.stage": "工程 A" }),
+    stage("4", "3", "gen_ai.chat", { "gen_ai.request.model": "model-x" }),
+    stage("5", "3", "gen_ai.execute_tool", { "gen_ai.tool.name": "tool_y", "gen_ai.request.model": "model-x" }),
+  ] };
+  it("既定は root を実行の全体、gen_ai をモデル名・ツール名つきにする", () => {
+    const steps = traceTimeline(summary).steps;
+    expect(steps.map(s => s.label)).toEqual(["実行の全体", "op.answer", "op.engine.stage", "gen_ai.chat · model-x", "gen_ai.execute_tool · tool_y"]);
+  });
+  it("製品の名前を優先し、詳細に技術の名前と段を残す", () => {
+    const labels = createTraceDetailsLabels(key => TRACE_DETAILS_JA[key], {
+      spanLabel: ({ operationName, stage: name, root }) => root ? undefined : operationName === "op.engine.stage" ? `表示 ${name}` : name === "answer" ? "回答の段" : null,
+    });
+    const steps = traceTimeline(summary, labels).steps;
+    expect(steps.map(s => s.label).slice(0, 3)).toEqual(["実行の全体", "回答の段", "表示 工程 A"]);
+    const fields = steps[2].details?.fields ?? [];
+    expect(fields).toContainEqual({ label: "Span name", value: "op.engine.stage", mono: true });
+    expect(fields).toContainEqual({ label: "pr.stage", value: "工程 A", mono: true });
   });
 });

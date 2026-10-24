@@ -14,7 +14,6 @@
  */
 
 import {
-  createTraceDetailsLabels,
   AnswerNotice,
   Banner,
   ProcessFailureNotice,
@@ -60,6 +59,7 @@ import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
 import { AnswerCitations, CitationList } from "@/components/search/CitationList";
+import { ragTraceDetailsLabels } from "@/lib/answer-process";
 import { api, type RunDetail, type RunFeedback, type RunSummary } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -564,7 +564,7 @@ function RunDetailView({ run }: { run: RunDetail }) {
       }
       timeline={
         <RunTimelineSection
-            traceLabels={createTraceDetailsLabels(t)}
+            traceLabels={ragTraceDetailsLabels()}
           traceSummary={run.trace_summary}
           title={t("history.process.title")}
           steps={timelineSteps}

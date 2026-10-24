@@ -1,10 +1,18 @@
-import { chatProgressStepsFromEvents, type ChatProgressEvent } from "@production-ready/ui";
+import { chatProgressStepsFromEvents, traceTimeline, type ChatProgressEvent } from "@production-ready/ui";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { answerProcessStepsFromStages, answerStepMeta, llmCallsLabel, type AnswerStageRecord } from "./answer-process";
+import {
+  answerProcessStepsFromStages,
+  answerStepDisplayName,
+  answerStepMeta,
+  llmCallsLabel,
+  ragTraceDetailsLabels,
+  type AnswerStageRecord,
+} from "./answer-process";
 import { CHAT_PROGRESS_DEFINITIONS } from "./chat-progress";
+import { t } from "./i18n";
 
 // 回答の処理の経過（#2096）: チャットと RAG 検索で同じ行（1 工程 = 1 行・字下げ・計測値）を作る。
 
@@ -191,5 +199,38 @@ describe("LLM の回数と送信の回数", () => {
     expect(answerStepMeta({ llmCalls: 2, llmSends: 2 })).toBe("LLM 2 回");
     expect(answerStepMeta({ llmCalls: 1 })).toBe("LLM 1 回");
     expect(llmCallsLabel("history.process", 1, 3)).toBe("LLM 1 回・送信 3 回");
+  });
+});
+
+// #3214: トレースの詳細の span は、処理の経過の行と同じ名前にする（root と同名の段は分ける）。
+describe("ragTraceDetailsLabels（トレースの span の名前）", () => {
+  const at = (ms: number) => new Date(T0 + ms).toISOString();
+  const span = (id: string, parent: string | null, operation_name: string, attributes: Record<string, unknown> = {}) => ({
+    span_id: id.repeat(16), parent_span_id: parent?.repeat(16) ?? null, trace_id: "a".repeat(32), operation_name, kind: "internal",
+    status: "done", started_at: at(0), finished_at: at(1000), duration_ms: 1000, attributes,
+  });
+  const summary = { schema_version: 1, completeness: "complete", root_span_id: "1".repeat(16), spans: [
+    span("1", null, "rag.answer"),
+    span("2", "1", "rag.history_rewrite", { "pr.stage": "history_rewrite" }),
+    span("3", "1", "rag.answer", { "pr.stage": "answer" }),
+    span("4", "3", "rag.engine.stage", { "pr.stage": "回答生成フロー" }),
+    span("5", "4", "rag.engine.stage", { "pr.stage": "文書検索（2回目）" }),
+    span("6", "5", "gen_ai.embeddings", { "gen_ai.request.model": "synthetic-embed" }),
+    span("7", "1", "rag.answer_guardrail", { "pr.stage": "answer_guardrail" }),
+  ] };
+
+  it("処理の経過と同じ名前を付け、root と中の同名の段を分ける", () => {
+    const labels = traceTimeline(summary, ragTraceDetailsLabels()).steps.map((step) => step.label);
+    expect(labels).toEqual([
+      t("trace.span.root"),
+      t("search.stage.historyRewrite"),
+      t("search.stage.answer"),
+      answerStepDisplayName("回答生成フロー"),
+      answerStepDisplayName("文書検索（2回目）"),
+      "gen_ai.embeddings · synthetic-embed",
+      t("search.stage.answerGuardrail"),
+    ]);
+    expect(labels).not.toContain("rag.engine.stage");
+    expect(labels[3]).toBe(t("answer.step.answerFlow"));
   });
 });

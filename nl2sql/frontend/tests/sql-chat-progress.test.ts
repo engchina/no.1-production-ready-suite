@@ -13,7 +13,9 @@ import {
 import {
   CHAT_PROGRESS_STEP_DEFINITIONS,
   chatJobElapsedMs,
+  chatStageLabel,
   chatSubmitProgressSteps,
+  nl2sqlTraceSpanLabel,
 } from "../src/features/nl2sql/chatProgress.ts";
 import type { JobData } from "../src/features/nl2sql/types.ts";
 
@@ -234,4 +236,15 @@ test("全体の所要時間はジョブの作成から終了まで（終わっ�
   assert.equal(chatJobElapsedMs(job({ finished_at: "2026-10-04T00:00:12.000Z" })), 12_000);
   assert.equal(chatJobElapsedMs(job({ status: "running" })), null);
   assert.equal(chatJobElapsedMs(job({ finished_at: null, elapsed_ms: 900 })), 900);
+});
+
+// #3214: トレースの詳細の段の span は、処理の経過の段と同じ名前にする。
+test("トレースの段の span は処理の経過と同じ名前になる", () => {
+  const span = (operationName: string, stage: string | undefined, status: "done" | "failed" | "cancelled" | "skipped" = "done") =>
+    nl2sqlTraceSpanLabel({ operationName, stage, status, root: false, attributes: {} });
+  assert.equal(span("nl2sql.generate_sql", "generate_sql"), chatStageLabel("generate_sql"));
+  assert.equal(span("nl2sql.safety_check", "safety_check", "failed"), chatStageLabel("safety_check", true));
+  assert.equal(span("nl2sql.execute_sql", "execute_sql", "cancelled"), "SQL の実行");
+  assert.equal(span("nl2sql.unknown_stage", "unknown_stage"), undefined);
+  assert.equal(span("gen_ai.chat", undefined), undefined);
 });

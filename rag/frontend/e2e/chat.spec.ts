@@ -2440,7 +2440,13 @@ for (const compare of [false, true]) {
 }
 
 test("実測 trace の親子関係を RAG チャットで開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const { syntheticTraceSummary, captureTraceLayouts } = await import("../../../platform/packages/ui/e2e/trace-fixture");
+  const { syntheticTraceSummary: baseTrace, syntheticSpan, captureTraceLayouts } = await import("../../../platform/packages/ui/e2e/trace-fixture");
+  // RAG の段・回答エンジンの工程の span を足し、処理の経過と同じ名前で出ることを確かめる（#3214）。
+  const syntheticTraceSummary = { ...baseTrace, spans: [
+    ...baseTrace.spans,
+    syntheticSpan("8", "1", "rag.answer", { "pr.stage": "answer" }),
+    syntheticSpan("9", "8", "rag.engine.stage", { "pr.stage": "回答生成フロー" }),
+  ] };
   const { savedChatProgress } = await import("./_chat-progress");
   const progress = savedChatProgress("a1", { rewrite_query: "done", retrieve: "done", rerank: "done", generate_answer: "done", check_guardrail: "done" }, { terminal: "done" });
   const streamBody = [
@@ -2465,6 +2471,10 @@ test("実測 trace の親子関係を RAG チャットで開ける", { tag: "@re
   await details.getByTestId("trace-details-toggle").click();
   await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
   await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  const traceLabels = page.getByTestId("trace-details").locator("[data-run-timeline-label]");
+  await expect(traceLabels).toContainText(["実行の全体", "根拠の検索と回答の生成", "根拠の検索と回答の作成"]);
+  await expect(page.getByTestId("trace-details").getByText("rag.engine.stage", { exact: true })).toHaveCount(0);
+  await page.getByTestId("trace-details").screenshot({ path: testInfo.outputPath("rag-trace-stages.png") });
   await expectNoPageOverflow(page);
   await captureTraceLayouts(page, testInfo, "rag-chat-trace");
 });
