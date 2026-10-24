@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from typing import Any, Literal
 
 import pytest
+from pr_backend_core.chat_progress import fold_chat_progress_events
 
 from app.features.nl2sql.db_admin_chat import (
     forbidden_statement_error,
@@ -832,6 +833,49 @@ def test_generate_returns_plan_without_executing() -> None:
     assert "table APP.ITEM_STOCK" in call["context"]
     assert "APP.OTHER_TABLE" in call["context"]
     assert "前の質問" in call["context"]
+
+
+def _progress_steps(events: list[Any]) -> dict[str, Any]:
+    fold = fold_chat_progress_events(events)
+    return {step.kind: step for step in fold.step_list() if not (step.span or {}).get("root")}
+
+
+def test_generate_records_the_generation_and_check_as_span_tree() -> None:
+    """処理の経過は生成と SQL の確認の span の木（#3226）。ターンの ID を対象に記録して返す。"""
+    ai = _FakeEnterpriseAi(
+        [{"sql": "SELECT QTY FROM APP.ITEM_STOCK; DROP TABLESPACE TS1", "explanation": ""}]
+    )
+    service = _catalog_service(_FakeAdapter(), ai)
+    data = service.generate_db_admin_chat_sql("合成の質問", operation_id="turn-1")
+    events = data.progress_events
+    assert {event.target_id for event in events} == {"turn-1"}
+    assert [event.seq for event in events] == list(range(1, len(events) + 1))
+    fold = fold_chat_progress_events(events)
+    assert fold.terminal == "done"
+    steps = _progress_steps(events)
+    assert list(steps) == ["generate_sql", "db_admin_check"]
+    generate, check = steps["generate_sql"], steps["db_admin_check"]
+    assert generate.status == "done" and generate.params == {"engine": "enterprise_ai_direct"}
+    assert generate.span is not None and generate.span["name"] == "nl2sql.generate_sql"
+    assert generate.details is not None and generate.details.code[0].language == "sql"
+    # SQL の確認の補足は文の分類ごとの数（止める文があっても、ほかの文は実行できるので完了）。
+    assert check.status == "done"
+    assert check.params == {"statements": 2, "read_only": 1, "change": 0, "blocked": 1}
+    assert check.details is not None
+    fields = {field.label: field.value for field in check.details.fields}
+    assert fields["文の数"] == "2" and fields["実行できない文"] == "#2"
+    # 2 つの段は同じ実行の全体（root）の子。
+    [root] = [step for step in fold.step_list() if (step.span or {}).get("root")]
+    assert {step.span["parent_id"] for step in steps.values() if step.span} == {root.step_id}
+
+
+def test_generate_fails_the_check_when_every_statement_is_blocked() -> None:
+    ai = _FakeEnterpriseAi([{"sql": "DROP TABLESPACE TS1", "explanation": ""}])
+    service = _catalog_service(_FakeAdapter(), ai)
+    data = service.generate_db_admin_chat_sql("合成の質問")
+    check = _progress_steps(data.progress_events)["db_admin_check"]
+    assert check.status == "failed"
+    assert check.params == {"statements": 1, "read_only": 0, "change": 0, "blocked": 1}
 
 
 def test_generate_requires_enterprise_ai() -> None:

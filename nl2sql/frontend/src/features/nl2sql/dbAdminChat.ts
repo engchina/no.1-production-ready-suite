@@ -4,13 +4,21 @@
 // 生成した SQL はサーバーが文に分け（PL/SQL のブロックは 1 文）、文ごとに分類・実行する（#2333。
 // SQL Developer などのワークシートと同じ）。「すべて実行」は上から順に実行し、最初のエラーで止める。
 //
-// 処理の経過は NL2SQL のチャットと同じ段階の名前（`CHAT_PROGRESS_STEP_DEFINITIONS`）と共通の
-// `ChatProgress` で出す（生成 → SQL の確認（サーバーの分類））。実行は経過に足さない（文の区画に出す）。
-import type { ChatProgressStep, ChatProgressStepStatus } from "@production-ready/ui";
+// 処理の経過は backend が生成のときに記録した span の木（#3226）を、NL2SQL のチャットと同じ工程の定義
+// （`CHAT_PROGRESS_STEP_DEFINITIONS`）と共通の `ChatProgress` で出す（生成 → SQL の確認（サーバーの分類））。
+// 実行は経過に足さない（文の区画に出す）。
+import {
+  chatProgressStepsFromEvents,
+  chatProgressTraceIdOf,
+  parseChatProgressEvents,
+  type ChatProgressStep,
+  type ChatProgressStepStatus,
+  type TraceDetailsLabels,
+} from "@production-ready/ui";
 
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
 import { t } from "../../lib/i18n";
-import { CHAT_PROGRESS_STEP_DEFINITIONS } from "./chatProgress";
+import { CHAT_PROGRESS_STEP_DEFINITIONS, chatProgressIsLegacy } from "./chatProgress";
 import type {
   DbAdminChatExecuteData,
   DbAdminChatPlan,
@@ -132,25 +140,7 @@ function stepLabel(stage: "generate_sql" | "safety_check", status: ChatProgressS
   return CHAT_PROGRESS_STEP_DEFINITIONS[stage]?.label(status, {}) ?? stage;
 }
 
-/** SQL の確認（サーバーの分類）の段階の補足（文の分類ごとの数）。 */
-export function planCheckDetail(plan: DbAdminChatPlan): string {
-  const counts: Record<DbAdminChatStatementKind, number> = { readOnly: 0, change: 0, blocked: 0 };
-  for (const statement of plan.statements) counts[dbAdminChatStatementKind(statement)] += 1;
-  if (plan.statements.length === 1) {
-    const [only] = plan.statements;
-    if (only?.blocked_reason) return t("dbAdminChat.check.blocked");
-    if (only?.requires_confirmation) {
-      return t("dbAdminChat.check.confirmation", { target: only.confirmation_target });
-    }
-    return t("dbAdminChat.check.readOnly");
-  }
-  return (["readOnly", "change", "blocked"] as const)
-    .filter((kind) => counts[kind] > 0)
-    .map((kind) => t("dbAdminChat.check.count", { kind: t(`dbAdminChat.kind.${kind}`), count: counts[kind] }))
-    .join("・");
-}
-
-/** 生成の段階（送信中・失敗の表示にも使う）。 */
+/** 生成の段階（送信中・失敗の表示。応答が届くまでの仮の行）。 */
 export function dbAdminChatGenerateStep(
   status: ChatProgressStepStatus,
   startedAtMs: number,
@@ -166,33 +156,33 @@ export function dbAdminChatGenerateStep(
   };
 }
 
+/** 1 往復の処理の経過（#3226）。 */
+export interface DbAdminChatProgress {
+  steps: ChatProgressStep[];
+  traceId?: string;
+  /** span の無い古い形式のターン（処理の経過の位置に古い形式の案内を出す）。 */
+  legacy: boolean;
+}
+
 /**
- * 1 往復の処理の経過（生成 → SQL の確認）。実行（「実行」「もう一度実行」「すべて実行」）は利用者が後から押す
- * 操作なので経過に足さず、その文の区画の実行の表示（実行中の経過時間・結果の要約）に出す。経過は生成した
- * ときのまま変わらない。
+ * 1 往復の処理の経過: backend が生成のときに記録した span の木（生成 → SQL の確認と、その中のモデルの呼び出し）。
+ * 実行（「実行」「もう一度実行」「すべて実行」）は利用者が後から押す操作なので経過に足さず、その文の区画の実行の
+ * 表示に出す。経過は生成したときのまま変わらない。
  */
-export function dbAdminChatProgressSteps({
-  sentAtMs,
-  generatedAtMs,
-  plan,
-}: {
-  sentAtMs: number;
-  generatedAtMs: number;
-  plan: DbAdminChatPlan;
-}): ChatProgressStep[] {
-  const steps: ChatProgressStep[] = [dbAdminChatGenerateStep("done", sentAtMs, generatedAtMs)];
-  if (plan.statements.length === 0) return steps;
-  // 止める文があっても、ほかの文は実行できる。すべての文が止める文のときだけ確認の段を失敗にする。
-  const allBlocked = plan.statements.every((statement) => statement.blocked_reason);
-  steps.push({
-    id: "safety_check",
-    label: stepLabel("safety_check", allBlocked ? "failed" : "done"),
-    status: allBlocked ? "failed" : "done",
-    detail: planCheckDetail(plan),
-    startedAt: iso(generatedAtMs),
-    finishedAt: iso(generatedAtMs),
+export function dbAdminChatProgress(
+  turn: Pick<DbAdminChatTurn, "turn_id" | "progress_events">,
+  traceLabels?: TraceDetailsLabels,
+): DbAdminChatProgress {
+  const events = parseChatProgressEvents(turn.progress_events);
+  const steps = chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS, turn.turn_id, {
+    traceLabels,
   });
-  return steps;
+  const traceId = chatProgressTraceIdOf(events);
+  return {
+    steps,
+    ...(traceId ? { traceId } : {}),
+    legacy: chatProgressIsLegacy(events),
+  };
 }
 
 /** 実行の結果が成功か（全部の文が成功・実行済み）。 */

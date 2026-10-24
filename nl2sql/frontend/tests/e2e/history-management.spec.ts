@@ -4,6 +4,7 @@ import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
+import { jobProgressEvents } from "./_helpers/job-progress";
 import {
   findClippedPlaceholders,
   findIconTextMisalignment,
@@ -44,12 +45,36 @@ const historyItems: HistoryRecord[] = [
       { engine: "select_ai_agent", elapsed_ms: 80, status: "failed", error: "team execution failed" },
       { engine: "enterprise_ai_direct", elapsed_ms: 100, status: "success", error: "" },
     ],
-    stage_timings: [
-      { stage: "prepare_context", elapsed_ms: 20 },
-      { stage: "generate_sql", elapsed_ms: 190 },
-      { stage: "safety_check", elapsed_ms: 15 },
-      { stage: "execute_sql", elapsed_ms: 25 },
-    ],
+    // 処理の経過は実行の span の木（#3226）。生成の中のモデルの呼び出しの 1 回目は失敗。
+    progress_events: jobProgressEvents("history-new", {
+      at: "2026-06-22T10:00:00.250Z",
+      terminal: "done",
+      steps: {
+        queue: { status: "done", startedAt: "2026-06-22T10:00:00.000Z", finishedAt: "2026-06-22T10:00:00.010Z" },
+        prepare_context: {
+          status: "done",
+          startedAt: "2026-06-22T10:00:00.010Z",
+          finishedAt: "2026-06-22T10:00:00.030Z",
+          details: { fields: [{ label: "生成に使った質問", value: "未入金顧客" }] },
+        },
+        generate_sql: {
+          status: "done",
+          startedAt: "2026-06-22T10:00:00.030Z",
+          finishedAt: "2026-06-22T10:00:00.210Z",
+          params: { engine: "select_ai_agent" },
+          children: [{ name: "gen_ai.chat", status: "failed", attributes: { "gen_ai.request.model": "test-text-model", "error.type": "TimeoutError" } }],
+        },
+        safety_check: { status: "done", startedAt: "2026-06-22T10:00:00.210Z", finishedAt: "2026-06-22T10:00:00.225Z", params: { tables: "APP.INVOICES", table_count: 1 } },
+        execute_sql: {
+          status: "done",
+          startedAt: "2026-06-22T10:00:00.225Z",
+          finishedAt: "2026-06-22T10:00:00.245Z",
+          params: { rows: 2 },
+          details: { fields: [{ label: "取得した行数", value: "2 行" }, { label: "列", value: "CUSTOMER_NAME", mono: true }] },
+        },
+        format_results: { status: "done", startedAt: "2026-06-22T10:00:00.245Z", finishedAt: "2026-06-22T10:00:00.250Z" },
+      },
+    }),
     feedback_rating: "good",
     profile_id: "finance",
     profile_name: "経理プロファイル",
@@ -97,10 +122,11 @@ const historyItems: HistoryRecord[] = [
     executable_sql: "",
     created_at: "2026-06-20T10:00:00.000Z",
     elapsed_ms: 30,
-    stage_timings: [
-      { stage: "generate_sql", elapsed_ms: 20 },
-      { stage: "safety_check", elapsed_ms: 10 },
-    ],
+    progress_events: jobProgressEvents("history-old", {
+      at: "2026-06-20T10:00:00.030Z",
+      terminal: "failed",
+      steps: { queue: "done", prepare_context: "done", generate_sql: "done", safety_check: "failed", execute_sql: "skipped", format_results: "done" },
+    }),
     feedback_rating: null,
     profile_id: "audit",
     profile_name: "監査プロファイル",
@@ -436,8 +462,12 @@ test("品質評価の実行は既定で隠し、種類で品質評価・すべ�
   await titleLink(page, "品質評価のケース 1").click();
   const summary = page.getByTestId("history-detail-summary");
   await expect(summary.locator('[data-run-fact="kind"] dd')).toHaveText("品質評価");
-  // 段の記録の無い実行は開閉の見出しを出さず、処理の詳細を節の中に直接置く（#2473）。
+  // span の記録の無い（古い形式の）実行は開閉の見出しを出さず、古い形式の案内と処理の詳細を節の中に直接置く
+  // （#2473・#3226。空白にしない）。
   await expect(page.getByTestId("history-detail-timeline-summary")).toHaveCount(0);
+  await expect(page.getByTestId("history-detail-timeline-legacy")).toHaveText(
+    "この実行は古い形式の記録のため、処理の経過を表示できません。",
+  );
   await page.getByTestId("history-detail-process-details").click();
   await expect(page.getByTestId("history-detail-caller")).toContainText("run-eval-1");
   await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();
@@ -564,27 +594,32 @@ test("詳細は概要 → 処理の経過（処理の詳細を含む）→ SQL �
   await expect(summary.locator('[data-run-fact="startedAt"] time')).toHaveAttribute("datetime", "2026-06-22T10:00:00.000Z");
 
   // 処理の経過: 既定は「N ステップ・合計 M 秒」の 1 行に閉じる（回答の根拠・チャットの処理の経過と同じ開閉。#2473）。
-  // 開くとチャットの処理の経過と同じ段の名前。失敗した生成の方式の試行は最初から開く。
+  // 開くとチャットの処理の経過と同じ span の木（#3226）。実行の全体は行にせず、生成の中のモデルの呼び出しは入れ子。
   const timeline = page.getByTestId("history-detail-timeline");
   const timelineSummary = page.getByTestId("history-detail-timeline-summary");
-  await expect(timelineSummary).toContainText("6 ステップ・合計");
+  await expect(timelineSummary).toContainText("7 ステップ・合計");
   await expect(timeline.locator("details[data-run-timeline-section]")).not.toHaveAttribute("open", "");
   await expect(timeline.locator("[data-run-timeline-step]").first()).toBeHidden();
   await timelineSummary.click();
-  await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(6);
-  const failed = timeline.locator('[data-run-timeline-step="engine-0"]');
+  const rows = timeline.locator("[data-run-timeline-step]");
+  await expect(rows).toHaveCount(7);
+  await expect(rows.nth(0)).toContainText("処理を開始しました");
+  await expect(rows.nth(2)).toContainText("SQL を生成しました");
+  // 「トレースの詳細」の 2 つ目の表示は無い。Trace ID は処理の詳細に出す。
+  await expect(timeline.getByText("トレースの詳細")).toHaveCount(0);
+  await expect(timeline.locator("[data-trace-id-row]")).toHaveCount(1);
+  const failed = rows.nth(3);
   await expect(failed).toHaveAttribute("data-status", "failed");
-  const toggle = failed.getByRole("button");
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  await expect(failed).toContainText("team execution failed");
+  await expect(failed).toContainText("モデルの呼び出し");
+  const toggle = failed.locator("[data-run-timeline-toggle]");
+  const expanded = await toggle.getAttribute("aria-expanded");
   await toggle.focus();
   await page.keyboard.press("Enter");
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle).toHaveAttribute("aria-expanded", expanded === "true" ? "false" : "true");
   await page.keyboard.press("Enter");
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  // 段の詳細（#2294）: 記録の値（書き換えた質問・安全性の確認・行数と列）がある段だけを開ける。既定で閉じる。
-  await expect(timeline.locator('[data-run-timeline-step="generate_sql-1"] [data-run-timeline-toggle]')).toHaveCount(0);
-  const prepare = timeline.locator('[data-run-timeline-step="prepare_context-0"]');
+  await expect(toggle).toHaveAttribute("aria-expanded", expanded ?? "false");
+  // 段の詳細（#2294）: 記録の値（書き換えた質問・行数と列）と span の名前。既定で閉じる。
+  const prepare = rows.nth(1);
   const prepareToggle = prepare.locator("[data-run-timeline-toggle]");
   await expect(prepareToggle).toHaveAttribute("aria-expanded", "false");
   // 開閉の印は行の文字の大きさ（実行の詳細は md の 14px）にそろえる（#2338。lucide の既定の 24px にしない）。
@@ -597,7 +632,7 @@ test("詳細は概要 → 処理の経過（処理の詳細を含む）→ SQL �
   await expect(prepare.locator("[data-run-timeline-details]")).toContainText("生成に使った質問");
   // 文字の横のアイコン（状態・開閉の印・処理の詳細）は、文字の 1 行目の中心にそろえる（#2371）。
   expect(await findIconTextMisalignment(page, { root: "[data-run-detail]" })).toEqual([]);
-  const execute = timeline.locator('[data-run-timeline-step="execute_sql-3"]');
+  const execute = rows.nth(5);
   await execute.locator("[data-run-timeline-toggle]").click();
   await expect(execute.locator("[data-run-timeline-details]")).toContainText("2 行");
   await expect(execute.locator("[data-run-timeline-details]")).toContainText("CUSTOMER_NAME");
@@ -632,7 +667,10 @@ test("ブロックした実行は概要に理由を出し、無い実行・見�
   await expect(summary.locator("[data-run-status]")).toHaveCount(0);
   await expect(summary.locator("[data-run-summary-heading] [data-status-variant]")).toHaveCount(0);
   await expect(page.getByTestId("history-detail-blocked")).toContainText("安全性の判定で SQL の実行を止めました");
-  await expect(page.getByTestId("history-detail-timeline").locator('[data-run-timeline-step="safety_check-1"]')).toHaveAttribute("data-status", "failed");
+  await page.getByTestId("history-detail-timeline-summary").click();
+  await expect(
+    page.getByTestId("history-detail-timeline").locator("[data-run-timeline-step]").filter({ hasText: "SQL の安全性を確認できませんでした" })
+  ).toHaveAttribute("data-status", "failed");
   await expect(summary.locator('[data-run-fact="rows"] dd')).toHaveText("未実行");
 
   await page.goto("/history?id=missing-run");

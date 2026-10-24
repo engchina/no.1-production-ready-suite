@@ -7,17 +7,29 @@ import { chatProgressStepsFromEvents, type ChatProgressEvent } from "@production
 import { CHAT_PROGRESS_STEP_DEFINITIONS } from "../src/features/nl2sql/chatProgress.ts";
 import { chatJobFailure } from "../src/features/nl2sql/processFailure.ts";
 
-const event = (seq: number, step_id: string, status: "done" | "failed" | "pending") =>
-  ({ schema_version: 1, seq, target_id: "job-1", attempt: 1, emitted_at: "", type: "step", step_id, kind: step_id, status }) as ChatProgressEvent;
-// 段階の定義で名前を付けた一覧（失敗した段の名前は「SQL を生成できませんでした」、名詞の名前は「SQL の生成」）。
+const ROOT = "0".repeat(16);
+/** 処理の経過の span のイベント（#3226。実行の全体の下に工程の span、生成の中にモデルの呼び出し）。 */
+const event = (seq: number, step_id: string, status: "running" | "done" | "failed", value: Partial<ChatProgressEvent> = {}) =>
+  ({
+    schema_version: 1, seq, target_id: "job-1", attempt: 1, emitted_at: "", type: "step", step_id, status,
+    parent_id: ROOT, trace_id: "d".repeat(32), ...value,
+  }) as ChatProgressEvent;
+// 工程の定義で名前を付けた一覧（失敗した段の名前は「SQL を生成できませんでした」、名詞の名前は「SQL の生成」）。
 const steps = chatProgressStepsFromEvents(
-  [event(1, "prepare_context", "done"), event(2, "generate_sql", "failed"), event(3, "safety_check", "pending")],
+  [
+    event(1, ROOT, "running", { name: "nl2sql.execute", root: true, parent_id: undefined }),
+    event(2, "1".padStart(16, "0"), "done", { kind: "prepare_context", name: "nl2sql.prepare_context" }),
+    event(3, "2".padStart(16, "0"), "failed", { kind: "generate_sql", name: "nl2sql.generate_sql" }),
+    event(4, "3".padStart(16, "0"), "failed", { name: "gen_ai.chat", parent_id: "2".padStart(16, "0") }),
+  ],
   CHAT_PROGRESS_STEP_DEFINITIONS
 );
 
 test("止まった段は失敗した段の名詞の名前（状態の文ではない）", () => {
   assert.equal(steps[1].label, "SQL を生成できませんでした");
   assert.equal(steps[1].name, "SQL の生成");
+  // 段の中の span（モデルの呼び出し）は入れ子。
+  assert.equal(steps[2].level, 1);
 });
 
 test("1 文目に止まった段、本文に backend の文、詳細にコード・ジョブ ID・時刻・元のメッセージ", () => {
@@ -31,6 +43,7 @@ test("1 文目に止まった段、本文に backend の文、詳細にコード
     },
     steps
   );
+  // 段の中の span が失敗しても、止まった段は工程の段の名前。
   assert.equal(failure.summary, "「SQL の生成」で処理が止まりました。");
   assert.equal(failure.cause, "SQL を生成できませんでした。");
   assert.match(failure.nextAction ?? "", /ジョブ ID を添えて管理者に連絡/);

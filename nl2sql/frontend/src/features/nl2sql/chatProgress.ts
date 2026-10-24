@@ -1,12 +1,14 @@
-// チャットのジョブの処理の段階の定義（#1145 / #1359）。
+// NL2SQL の処理の経過の工程の定義（#1145 / #1359 / #3226）。
 //
-// 段階は backend がジョブの処理の段階のイベント（3 製品共通の契約。`progress_events`）として記録する（開始待ち・
-// 準備・生成・安全性の確認・実行・結果の整形。並びは backend の記録の順）。画面はイベントを共有の
-// `useChatProgressStream` で積み、ここで段階の名前（i18n）と補足（生成方法・参照した表・行数・停止）を付けるだけ
-// にする。段階の状態（開始前の失敗・停止・終端の未実行・終端まで今の段階がある〔#1176〕）は backend が決める。
+// 処理の経過は実行の trace（span の木）の投影で、backend が span のイベント（3 製品共通の契約。`progress_events`）
+// として記録する（開始待ち・準備・生成・安全性の確認・実行・結果の整形と、その中のモデルの呼び出しなど）。画面は
+// イベントを共有の `useChatProgressStream` / `chatProgressStepsFromEvents` で木にし、ここは工程の span（`kind`）の
+// 名前（i18n）と補足（生成方法・参照した表・行数）を付けるだけにする。状態と時刻は span の実測。
 import {
+  chatProgressHasSpans,
   chatProgressLabelState,
   createTraceDetailsLabels,
+  type ChatProgressEvent,
   type ChatProgressLabels,
   type ChatProgressLabelState,
   type ChatProgressParams,
@@ -89,16 +91,7 @@ export const CHAT_PROGRESS_LABELS: Partial<ChatProgressLabels> = {
 };
 
 /**
- * 実行履歴の処理の経過（#1955）の段の名前。チャットの処理の経過と同じ文言（完了・失敗の形）を使う。
- * 記録の無い・未知の段は null（呼び出し側が段の id をそのまま出さない）。
- */
-export function chatStageLabel(stage: string, failed = false): string | null {
-  if (!Object.prototype.hasOwnProperty.call(STAGE_LABELS, stage)) return null;
-  return STAGE_LABELS[stage as ChatStage][failed ? "failed" : "done"];
-}
-
-/**
- * 段の名前（#3219）。処理の経過の行と「トレースの詳細」の段の span（属性 `pr.stage`）で同じ文言を使う
+ * 段の名前（#3219）。工程の定義の無い span でも属性 `pr.stage` があれば、処理の経過の行と同じ文言を使う
  * （停止・未実行は未実行の形）。知らない段は undefined。
  */
 export function chatStageName(stage: string, status: ChatProgressStepStatus | "cancelled"): string | undefined {
@@ -106,7 +99,7 @@ export function chatStageName(stage: string, status: ChatProgressStepStatus | "c
   return label(stage as ChatStage)(status === "cancelled" ? "skipped" : status);
 }
 
-/** NL2SQL の「トレースの詳細」の文言（root の `TraceDetailsLabelsProvider` で全画面に渡す。段の名前は処理の経過と同じ）。 */
+/** NL2SQL の trace の文言（root の `TraceDetailsLabelsProvider` で全画面に渡す。段の名前は処理の経過と同じ）。 */
 export const NL2SQL_TRACE_DETAILS_LABELS: TraceDetailsLabels = createTraceDetailsLabels(t, { stageName: chatStageName });
 
 function label(stage: ChatStage) {
@@ -115,11 +108,6 @@ function label(stage: ChatStage) {
 
 function count(value: ChatProgressParams[string] | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
-}
-
-/** 止めた段階（backend の停止の印）は「停止しました」。停止は失敗ではないので、状態は「未実行」。 */
-function stoppedDetail(params: ChatProgressParams): string | undefined {
-  return params.stopped === true ? t("chat.progress.stopped") : undefined;
 }
 
 /** 生成方法の名前（未知の値は出さない）。 */
@@ -146,44 +134,64 @@ function rowsDetail(params: ChatProgressParams): string | undefined {
 }
 
 /**
- * チャットのジョブの段階の定義（`kind` = backend の段階の id → 名前と補足）。並びは backend の記録の順。
+ * DB 管理チャットの SQL の確認（サーバーの分類）の補足（#2264）。1 文なら実行できない・確認語・読み取り専用、
+ * 2 文以上なら文の分類ごとの数（「読み取り専用 1・実行できない 1」）。
+ */
+function dbAdminCheckDetail(params: ChatProgressParams): string | undefined {
+  const total = count(params.statements);
+  if (!total) return undefined;
+  if (total === 1) {
+    if ((count(params.blocked) ?? 0) > 0) return t("dbAdminChat.check.blocked");
+    const target = typeof params.confirmation_target === "string" ? params.confirmation_target : "";
+    if (target) return t("dbAdminChat.check.confirmation", { target });
+    return t("dbAdminChat.check.readOnly");
+  }
+  const kinds = [
+    ["readOnly", count(params.read_only) ?? 0],
+    ["change", count(params.change) ?? 0],
+    ["blocked", count(params.blocked) ?? 0],
+  ] as const;
+  return kinds
+    .filter(([, value]) => value > 0)
+    .map(([kind, value]) => t("dbAdminChat.check.count", { kind: t(`dbAdminChat.kind.${kind}`), count: value }))
+    .join("・");
+}
+
+/**
+ * 工程の span の定義（`kind` = backend の工程の id → 名前と補足）。並びと入れ子は span の木（始まった順・親子）。
  *
  * - 開始待ち（ジョブの作成から worker が処理を始めるまで）: worker が起動していない・混んでいるときに、生成では
  *   なく開始を待っていることが分かる。
  * - 生成の段階の補足は生成方法、安全性の確認（完了）は参照した表、実行（完了）は取得した行数。
  *   Select AI / Select AI Agent の SQL で省略した安全性の確認（未実行）は省略の理由。
- * - 止めた段階は「停止しました」（ほかの補足より先）。
+ * - DB 管理チャットの SQL の確認（`db_admin_check`）は安全性の確認と同じ名前で、補足は文の分類ごとの数。
  */
 export const CHAT_PROGRESS_STEP_DEFINITIONS: ChatProgressStepDefinitions = {
-  queue: { label: label("queue"), detail: (_status, params) => stoppedDetail(params) },
-  prepare_context: {
-    label: label("prepare_context"),
-    detail: (_status, params) => stoppedDetail(params),
-  },
+  queue: { label: label("queue") },
+  prepare_context: { label: label("prepare_context") },
   generate_sql: {
     label: label("generate_sql"),
-    detail: (_status, params) => stoppedDetail(params) ?? engineDetail(params),
+    detail: (_status, params) => engineDetail(params),
   },
   safety_check: {
     label: label("safety_check"),
     detail: (status, params) =>
-      stoppedDetail(params) ??
-      (status === "done"
+      status === "done"
         ? tablesDetail(params)
         : // Select AI / Select AI Agent の SQL で省略した（#1523）。
           status === "skipped" && params.safety_check_skipped === true
           ? t("chat.progress.safety_check.safetyCheckSkipped")
-          : undefined),
+          : undefined,
+  },
+  db_admin_check: {
+    label: label("safety_check"),
+    detail: (_status, params) => dbAdminCheckDetail(params),
   },
   execute_sql: {
     label: label("execute_sql"),
-    detail: (status, params) =>
-      stoppedDetail(params) ?? (status === "done" ? rowsDetail(params) : undefined),
+    detail: (status, params) => (status === "done" ? rowsDetail(params) : undefined),
   },
-  format_results: {
-    label: label("format_results"),
-    detail: (_status, params) => stoppedDetail(params),
-  },
+  format_results: { label: label("format_results") },
 };
 
 function isoFromMs(ms: number): string {
@@ -200,6 +208,26 @@ export function chatSubmitProgressSteps(sentAtMs: number): ChatProgressStep[] {
       startedAt: isoFromMs(sentAtMs),
     },
   ];
+}
+
+/**
+ * 受け付けたジョブを worker が受け取るまでの仮の行（#3226）。開始待ちは worker が受け取ったときに終わった span として
+ * 記録されるので、それまでは span が無い。最初の span が届いたら span の木に置き換わる。
+ */
+export function chatQueueProgressSteps(createdAt: string | null | undefined): ChatProgressStep[] {
+  const step: ChatProgressStep = { id: "queue", label: label("queue")("running"), status: "running" };
+  if (createdAt) step.startedAt = createdAt;
+  return [step];
+}
+
+/**
+ * 古い形式の記録か（#3226）: span の記録が無く、段だけのイベントか記録そのものが無い。処理の経過の位置に
+ * 古い形式の案内（`TraceDetailsLabels.legacy`）を出す。終端だけの記録（worker が受け取る前に止まった）は古い形式では
+ * ない（処理の経過を出さない）。
+ */
+export function chatProgressIsLegacy(events: readonly ChatProgressEvent[]): boolean {
+  if (chatProgressHasSpans(events)) return false;
+  return events.length === 0 || events.some((event) => event.type === "step");
 }
 
 /** 完了後の全体の所要時間（ジョブの作成から終了まで）。段階の時刻が無い古いジョブにも出す。 */

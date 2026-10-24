@@ -6,6 +6,7 @@ import {
   runPeriodSince,
   chatProgressStepsFromEvents,
   chatProgressTimelineStep,
+  chatProgressTraceIdOf,
   parseChatProgressEvents,
   RUN_EXECUTOR_FILTERS,
   RUN_PERIODS,
@@ -13,14 +14,14 @@ import {
   type RunPeriod,
   type RunStatus,
   type RunStatusFilter,
-  type RunStepDetails,
-  type RunTimelineStepStatus,
+  type RunTimelineStep,
+  type TraceDetailsLabels,
 } from "@production-ready/ui";
 
 import { t } from "../../lib/i18n";
 import { APP_ROUTES } from "../../lib/routes";
-import { chatStageLabel, CHAT_PROGRESS_STEP_DEFINITIONS } from "./chatProgress";
-import type { EngineTiming, HistoryItem } from "./types";
+import { CHAT_PROGRESS_STEP_DEFINITIONS, chatProgressIsLegacy } from "./chatProgress";
+import type { HistoryItem } from "./types";
 
 /** NL2SQL が写せる共通の状態（完了 = 安全性の判定を通過、ブロック = 実行を止めた）。失敗は記録しない。 */
 export const HISTORY_RUN_STATUSES: readonly RunStatus[] = ["succeeded", "blocked"] as const;
@@ -165,136 +166,26 @@ export function historyOwner(item: HistoryItem) {
   return { name, isSelf: ownerIsSelf };
 }
 
-function engineTimingLabel(engine: string) {
-  if (engine === "deterministic") return t("history.timing.engine.deterministic");
-  if (engine === "select_ai_agent") return t("nl2sql.engine.select_ai_agent");
-  if (engine === "select_ai") return t("nl2sql.engine.select_ai");
-  if (engine === "enterprise_ai_direct") return t("nl2sql.engine.enterprise_ai_direct");
-  return engine || t("history.timing.engine.unknown");
-}
-
-const ENGINE_STEP_STATUS: Record<EngineTiming["status"], RunTimelineStepStatus> = {
-  success: "done",
-  failed: "failed",
-  skipped: "skipped",
-};
-
-/** 処理の経過の 1 段（画面が `RunTimelineStep` にし、中身の `children` を足す）。 */
-export interface HistoryTimelineStep {
-  id: string;
-  label: string;
-  status: RunTimelineStepStatus;
-  durationMs: number | null;
-  /**
-   * 処理の始まりからの位置（ミリ秒）。記録は段ごとの所要時間だけなので、段は順に積み、生成の方式の試行は
-   * SQL の生成の段の始まりから積む（時間の線で試行が親の段の中に重なり、後の段の位置をずらさない）。
-   */
-  offsetMs: number;
-  level: number;
-  detail?: string;
-  startedAt?: string | null;
-  finishedAt?: string | null;
-  /**
-   * 段を開いて見る詳細（#2294）。実行履歴に残した値（書き換えた質問・安全性の確認の結果・行数と列・生成の方式の
-   * 試行の失敗の文）から作る。SQL は「SQL と結果」の節に出すので重ねない。
-   */
-  details?: RunStepDetails;
-}
-
-function stageDetails(item: HistoryItem, stage: string, failed: boolean): RunStepDetails | undefined {
-  switch (stage) {
-    case "prepare_context": {
-      const rewritten = item.rewritten_question?.trim();
-      if (!rewritten || rewritten === item.question.trim()) return undefined;
-      return { fields: [{ label: t("history.timeline.details.rewritten"), value: rewritten }] };
-    }
-    case "safety_check":
-      return {
-        fields: [
-          {
-            label: t("history.timeline.details.safety"),
-            value: t(failed ? "history.timeline.details.blocked" : "history.timeline.details.safe"),
-          },
-        ],
-      };
-    case "execute_sql": {
-      const fields: NonNullable<RunStepDetails["fields"]> = [
-        {
-          label: t("history.timeline.details.rows"),
-          value: t("history.timeline.details.rowsValue", { count: item.result_row_count.toLocaleString("ja-JP") }),
-        },
-      ];
-      const columns = (item.result_columns ?? []).filter(Boolean);
-      return columns.length
-        ? { fields: [...fields, { label: t("history.timeline.details.columns"), value: columns.join(", "), mono: true }] }
-        : { fields };
-    }
-    default:
-      return undefined;
-  }
+/** 実行の詳細の処理の経過（#1955・#3226）。 */
+export interface HistoryTimeline {
+  steps: RunTimelineStep[];
+  traceId?: string;
+  /** span の無い古い形式の記録（処理の経過の位置に古い形式の案内を出す）。 */
+  legacy: boolean;
 }
 
 /**
- * 処理の経過（`stage_timings` の記録の順）。段の名前はチャットの処理の経過と同じ i18n（`chatStageLabel`）。
- * ブロックした行は安全性の確認を失敗にする。SQL の生成の下に、生成の方式の試行（`engine_timings`）を字下げで並べる。
- * 未知の段は飛ばす（段の id を画面に出さない）。
+ * 実行の詳細の処理の経過: 実行のときに backend が記録した span の木（チャット・SQL 生成と同じ記録・工程の定義）。
+ * span の無い古い形式の記録（段だけのイベント・工程の秒だけの記録）は再構成せず、古い形式として扱う（#3226）。
  */
-export function historyTimelineSteps(item: HistoryItem): HistoryTimelineStep[] {
+export function historyTimeline(item: HistoryItem, traceLabels?: TraceDetailsLabels): HistoryTimeline {
   const events = parseChatProgressEvents(item.progress_events);
-  if (events.length) {
-    return chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS).map((step) => {
-      const row = chatProgressTimelineStep(step);
-      const duration = row.durationMs ?? (
-        row.startedAt && row.finishedAt ? Date.parse(row.finishedAt) - Date.parse(row.startedAt) : null
-      );
-      return {
-        ...row,
-        durationMs: duration,
-        startedAt: row.startedAt ?? null,
-        finishedAt: row.finishedAt ?? null,
-        level: row.level ?? 0,
-        offsetMs: 0,
-      };
-    });
-  }
-  const steps: HistoryTimelineStep[] = [];
-  const blocked = !item.safety_is_safe;
-  const engines = item.engine_timings ?? [];
-  let cursor = 0;
-  for (const [index, timing] of (item.stage_timings ?? []).entries()) {
-    const start = cursor;
-    cursor += Math.max(0, timing.elapsed_ms);
-    const failed = blocked && timing.stage === "safety_check";
-    const label = chatStageLabel(timing.stage, failed);
-    if (!label) continue;
-    const details = stageDetails(item, timing.stage, failed);
-    steps.push({
-      id: `${timing.stage}-${index}`,
-      label,
-      status: failed ? "failed" : "done",
-      durationMs: timing.elapsed_ms,
-      offsetMs: start,
-      level: 0,
-      ...(details ? { details } : {}),
-    });
-    if (timing.stage === "generate_sql") {
-      let attemptStart = start;
-      for (const [engineIndex, attempt] of engines.entries()) {
-        const error = attempt.error?.trim();
-        steps.push({
-          id: `engine-${engineIndex}`,
-          label: t("history.timeline.engineAttempt", { engine: engineTimingLabel(attempt.engine) }),
-          status: ENGINE_STEP_STATUS[attempt.status] ?? "done",
-          durationMs: attempt.elapsed_ms,
-          offsetMs: attemptStart,
-          level: 1,
-          ...(error ? { details: { fields: [{ label: t("history.timeline.details.error"), value: error }] } } : {}),
-        });
-        attemptStart += Math.max(0, attempt.elapsed_ms);
-      }
-    }
-  }
-  return steps;
+  const steps = chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS, undefined, { traceLabels }).map(
+    chatProgressTimelineStep
+  );
+  const traceId = chatProgressTraceIdOf(events);
+  const legacy = chatProgressIsLegacy(events);
+  return { steps: legacy ? [] : steps, ...(traceId ? { traceId } : {}), legacy };
 }
 
 /** 詳細の URL（`?id=<run_id>`。新しいタブでも開ける）。 */

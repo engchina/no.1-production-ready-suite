@@ -1178,6 +1178,8 @@ class DbAdminChatGenerateData(BaseModel):
     model: str = ""
     warnings: list[str] = Field(default_factory=list)
     timing: TimingEnvelope
+    # 生成の処理の経過（生成と SQL の確認の span の木。#3226）。
+    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
 
 
 class DbAdminChatTurnExecuteRequest(AdminExecutionConfirmation):
@@ -1355,6 +1357,8 @@ class DbAdminChatTurn(BaseModel):
     sender_display_name: str | None = None
     # 回答の注意書き（システム設定の文。#2405）。モデルに渡す会話の履歴には入れない。
     notice: str | None = None
+    # 生成したときの処理の経過（span の木。#3226）。実行（利用者が後から押す操作）は足さない。
+    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
 
 
 class DbAdminChatSummary(BaseModel):

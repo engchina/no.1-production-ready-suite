@@ -16,7 +16,7 @@ import {
   expectProgressTimerMonotonic,
   startProgressTimerSampler,
 } from "./_helpers/progress-timer";
-import { jobProgressEvents, turnProgressEvents, withJobProgress } from "./_helpers/job-progress";
+import { jobProgressEvents, jobProgressTraceId, turnProgressEvents, withJobProgress } from "./_helpers/job-progress";
 import {
   REQUIREMENT_CLARIFIED_QUESTION,
   REQUIREMENT_PENDING_HINT,
@@ -1113,7 +1113,7 @@ for (const width of [1280, 375]) {
     // 動くスピナーは今の段階の 1 つだけ（messaging.md §3.7）。
     await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
     // 完了した段階の一覧は既定で開く（#2096。行が増えていく）。
-    await expect(progress.locator("details")).toHaveAttribute("open", "");
+    await expect(progress.locator("details").first()).toHaveAttribute("open", "");
     const prepared = progress.getByTestId("sql-chat-progress-step-prepare_context");
     await expect(prepared).toContainText("質問と対象の表を準備しました");
     await expect(prepared).toContainText("1.0 秒");
@@ -1194,11 +1194,11 @@ for (const width of [1280, 375]) {
     await expect(summary).toHaveText(/^処理の経過（6 ステップ・2\d 秒）$/);
     await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
     // 完了したら閉じ（3 製品で同じ。#2118 / #2265）、押すと実行の詳細と同じ一覧（時間の線つき）を開く。
-    await expect(progress.locator("details")).not.toHaveAttribute("open", "");
+    await expect(progress.locator("details").first()).not.toHaveAttribute("open", "");
     await expect(progress.getByTestId("sql-chat-progress-step-safety_check")).toBeHidden();
     await expect(page.locator("svg.animate-spin:visible")).toHaveCount(0);
     await summary.click();
-    await expect(progress.locator("details")).toHaveAttribute("open", "");
+    await expect(progress.locator("details").first()).toHaveAttribute("open", "");
     await expect(progress.getByTestId("sql-chat-progress-step-safety_check")).toContainText(
       "SQL の安全性を確認しました（APP.EMPLOYEE）",
     );
@@ -1253,14 +1253,13 @@ test("生成に失敗した段階は「処理の経過」を開いて失敗を�
   });
   const progress = turn.getByTestId("sql-chat-progress");
   await expect(progress).toHaveAttribute("data-chat-progress-state", "failed");
-  await expect(progress.locator("details")).toHaveAttribute("open", "");
+  await expect(progress.locator("details").first()).toHaveAttribute("open", "");
   const failed = progress.getByTestId("sql-chat-progress-step-generate_sql");
   await expect(failed).toHaveAttribute("data-status", "failed");
   await expect(failed).toContainText("SQL を生成できませんでした");
   await expect(failed).toContainText("失敗");
-  await expect(progress.getByTestId("sql-chat-progress-step-safety_check")).toContainText(
-    "未実行",
-  );
+  // 後の段は始まっていないので span が無い（行を出さない。#3226）。
+  await expect(progress.getByTestId("sql-chat-progress-step-safety_check")).toHaveCount(0);
   await expect(turn.getByText("Select AI で SQL を生成できませんでした。")).toBeVisible();
   // 失敗は 3 製品共通の失敗のカード: 止まった段・原因・次の操作・開いた「詳細」（#2342）。
   const failure = turn.getByTestId("sql-chat-turn-failure");
@@ -1365,13 +1364,13 @@ for (const width of [1280, 375]) {
     await composer.press("Enter");
     await confirmChatRequirement(page);
     await expect.poll(() => state.turns.length).toBe(1);
-    // 会話の取り直しは開始待ちのまま（記録の 7 件目まで）。続きは SSE だけが届ける。
+    // 会話の取り直しは開始待ちまで（実行の全体と開始待ちの span の 3 件目まで）。続きは SSE だけが届ける。
     Object.assign(state.turns[0], {
       status: "running",
       engine: "select_ai",
       created_at: createdAt,
       started_at: createdAt,
-      progress_events: generating.slice(0, 7),
+      progress_events: generating.slice(0, 3),
     });
     const current = page.getByTestId("sql-chat-turn").getByTestId("sql-chat-progress-current");
     await expect(current).toHaveAttribute("data-step-id", "generate_sql");
@@ -1442,10 +1441,11 @@ for (const width of [1280, 375]) {
     await expect(progress.getByTestId("sql-chat-progress-summary")).toHaveText(/^処理の経過（6 ステップ・/);
     // 詳細のある段だけに開閉のボタンが付き、既定で閉じる（#2294）。
     await progress.getByTestId("sql-chat-progress-summary").click();
-    await expect(progress.getByTestId("sql-chat-progress-step-queue-toggle")).toHaveCount(0);
+    // span の行は開くと span の名前（技術の値）も見られる（#3226）。既定で閉じる。
+    await expect(progress.getByTestId("sql-chat-progress-step-queue-toggle")).toHaveAttribute("aria-expanded", "false");
+    // 実行中に開いた段（生成）は、完了した一覧でも利用者の開閉のまま（処理の詳細が続く一覧は同じ行を保つ）。
     const toggle = progress.getByTestId("sql-chat-progress-step-generate_sql-toggle");
-    await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await toggle.click();
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(progress.getByTestId("sql-chat-progress-step-generate_sql-details").getByLabel("生成した SQL")).toHaveText(
       generatedSql,
@@ -2291,34 +2291,45 @@ test("安全確認を省略した SQL を安全検査済みと表示しない", 
   await page.screenshot({ path: testInfo.outputPath("sql-safety-skipped.png"), fullPage: true });
 });
 
-test("実測 trace の親子関係を SQL チャットで開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const { syntheticTraceSummary: baseTrace, syntheticSpan, captureTraceLayouts } = await import("../../../../platform/packages/ui/e2e/trace-fixture");
-  // 段の span は処理の経過と同じ名前で出す（#3214）。
-  const syntheticTraceSummary = { ...baseTrace, spans: [...baseTrace.spans, syntheticSpan("8", "1", "nl2sql.generate_sql", { "pr.stage": "generate_sql" })] };
+test("処理の経過は span の木で、段の中のモデルの呼び出しを入れ子で出し、Trace ID を処理の詳細に出す (#3226)", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const state = await setup(page);
-  state.turns.push({ job_id: "chat-1", question: "合成データの件数", status: "done", created_at: now, steps: [], trace_summary: syntheticTraceSummary,
+  state.turns.push({ job_id: "chat-1", question: "合成データの件数", status: "done", created_at: now, steps: [],
+    progress_events: jobProgressEvents("chat-1", { at: now, terminal: "done", steps: {
+      queue: "done",
+      prepare_context: "done",
+      generate_sql: { status: "done", params: { engine: "enterprise_ai_direct" }, children: [{ name: "gen_ai.chat", status: "done", attributes: { "gen_ai.request.model": "synthetic-model" } }] },
+      safety_check: "done",
+      execute_sql: "done",
+      format_results: "done",
+    } }),
     result: { generated_sql: "SELECT 1 FROM DUAL", original_question: "合成データの件数", explanation: "合成の応答です。", safety: { is_safe: true, safety_checked: true, referenced_tables: [], referenced_columns: [] } } });
   await page.goto("/chat");
   await page.getByRole("button", { name: "会話の履歴", exact: true }).click();
   await page.getByTestId("sql-chat-history").getByText("合成データの件数", { exact: true }).click();
   if ((page.viewportSize()?.width ?? 0) >= 1024) await page.getByRole("button", { name: "会話の履歴", exact: true }).click();
+  const progress = page.getByTestId("sql-chat-progress");
+  // 実行の全体は行にせず、段の中の span は段の下に入れ子（数は工程 6 とモデルの呼び出し 1）。
+  await expect(page.getByTestId("sql-chat-progress-summary")).toHaveText(/^処理の経過（7 ステップ・/);
   await page.getByTestId("sql-chat-progress-summary").click();
+  const generate = progress.getByTestId("sql-chat-progress-step-generate_sql");
+  await expect(generate).toContainText("SQL を生成しました");
+  const model = progress.getByTestId("sql-chat-progress-step-generate_sql.1");
+  await expect(model).toContainText("モデルの呼び出し");
+  await expect(model).toContainText("synthetic-model");
+  await expect(progress.locator('[data-level="1"]')).toContainText("モデルの呼び出し");
+  // 「トレースの詳細」の 2 つ目の表示は無い。Trace ID は処理の詳細にコピーのボタンと出す。
+  await expect(page.getByText("トレースの詳細")).toHaveCount(0);
+  await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);
   const details = page.locator("[data-run-process-details]");
   await expect(details).not.toHaveAttribute("open", "");
   await details.locator(":scope > summary").click();
-  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
-  await expect(page.getByTestId("trace-details")).toHaveCount(0);
-  await details.getByTestId("trace-details-toggle").click();
-  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
-  await expect(page.getByTestId("trace-details")).toContainText("モデルの呼び出し");
-  await expect(page.getByTestId("trace-details").locator("[data-run-timeline-label]")).toContainText(["実行の全体", "SQL を生成しました"]);
-  await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
+  await expect(details.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${jobProgressTraceId("chat-1")}`);
+  await expect(details.locator("[data-trace-id-row]").getByRole("button")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await captureTraceLayouts(page, testInfo, "sql-chat-trace");
+  await page.screenshot({ path: testInfo.outputPath("sql-chat-span-tree.png"), fullPage: true });
 });
 
 test("チャットと履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
-  const {syntheticTraceSummary, captureTraceLayouts} = await import("../../../../platform/packages/ui/e2e/trace-fixture");
   const state = await setup(page);
   const turn: Turn = {job_id: "synthetic-parity", question: "合成の質問", status: "done", created_at: now, engine: "enterprise_ai_direct", steps: [{stage: "safety_check", status: "skipped"}],
     result: {generated_sql: "SELECT 1 AS VALUE FROM DUAL", original_question: "合成の質問", explanation: "合成の回答", safety: {is_safe: true, safety_checked: false}}};
@@ -2334,7 +2345,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   expect(live).toHaveLength(6);
   await page.screenshot({path: testInfo.outputPath("chat-process.png")});
   await page.route("**/api/nl2sql/history/synthetic-parity", (route) => route.fulfill({json: {data: {
-    trace_summary: syntheticTraceSummary, id: "synthetic-parity", kind: "chat", session_id: "chat-1", question: "合成の質問", engine: "enterprise_ai_direct", generated_sql: "SELECT 1 AS VALUE FROM DUAL",
+    id: "synthetic-parity", kind: "chat", session_id: "chat-1", question: "合成の質問", engine: "enterprise_ai_direct", generated_sql: "SELECT 1 AS VALUE FROM DUAL",
     executable_sql: "SELECT 1 AS VALUE FROM DUAL", created_at: now, elapsed_ms: 0, engine_timings: [], stage_timings: [],
     profile_id: "sales", profile_name: "プロファイル A", rewritten_question: "合成の質問", safety_is_safe: true,
     result_row_count: 1, result_columns: ["VALUE"], feedback_comment: "", feedback_updated_at: "", progress_events: events,
@@ -2346,14 +2357,11 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   expect(await timelineSnapshot(page.getByTestId("history-detail-timeline"))).toEqual(live);
   expect(await timelineTypography(page.getByTestId("history-detail-timeline"))).toEqual(liveTypography);
   await expectChatNoOverflow(page);
+  // 実行の詳細もチャットと同じ記録（span の木）で、Trace ID を処理の詳細に出す（「トレースの詳細」は無い。#3226）。
   const details = page.locator("[data-run-process-details]");
   await expect(details).not.toHaveAttribute("open", "");
   await details.locator(":scope > summary").click();
-  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
-  await expect(page.getByTestId("trace-details")).toHaveCount(0);
-  await details.getByTestId("trace-details-toggle").click();
-  await expect(page.getByTestId("trace-details")).toContainText("モデルの呼び出し");
-  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
-  await captureTraceLayouts(page, testInfo, "history-trace");
+  await expect(details.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${jobProgressTraceId("synthetic-parity")}`);
+  await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);
   await page.getByTestId("history-detail-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
 });

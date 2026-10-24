@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  chatProgressHasSpans,
   chatProgressStepsFromEvents,
   chatProgressTerminalOf,
+  chatProgressTraceIdOf,
   type ChatProgressEvent,
   type ChatProgressParams,
   type ChatProgressStepStatus,
@@ -13,7 +15,8 @@ import {
 import {
   CHAT_PROGRESS_STEP_DEFINITIONS,
   chatJobElapsedMs,
-  chatStageLabel,
+  chatProgressIsLegacy,
+  chatQueueProgressSteps,
   chatSubmitProgressSteps,
   NL2SQL_TRACE_DETAILS_LABELS,
   chatStageName,
@@ -21,19 +24,31 @@ import {
 import type { JobData } from "../src/features/nl2sql/types.ts";
 
 // #1145: チャットのジョブの段階を 3 製品共通の段階の形にする。
-// #1359: 段階の状態は backend が処理の段階のイベントとして記録する。画面は段階の定義（名前と補足）だけを持つ。
+// #3226: 処理の経過は実行の trace（span の木）の投影。backend は span のイベントを記録し、画面は工程の span の
+// 定義（名前と補足）だけを持つ。実行の全体（root）は行にしない。
 
 const created = "2026-10-04T00:00:00.000Z";
+const TRACE_ID = "a".repeat(32);
+const ROOT_ID = "0".repeat(16);
 const STEPS = ["queue", "prepare_context", "generate_sql", "safety_check", "execute_sql", "format_results"];
 
-interface StepState {
+interface SpanState {
   status: ChatProgressStepStatus;
   params?: ChatProgressParams;
+  /** 親の span（省略は実行の全体）。 */
+  parent?: string;
+  name?: string;
+  kind?: string | null;
+  cancelled?: boolean;
 }
 
-/** backend の記録と同じ順のイベント（待機中で出し、前から順に進める）。 */
+function spanId(index: number): string {
+  return (index + 1).toString(16).padStart(16, "0");
+}
+
+/** backend の記録と同じ span のイベント（実行の全体の下に、始まった順に開始 → 終了）。 */
 function events(
-  states: Record<string, StepState>,
+  states: Record<string, SpanState>,
   terminal?: ChatProgressTerminalStatus,
 ): ChatProgressEvent[] {
   const list: ChatProgressEvent[] = [];
@@ -44,18 +59,29 @@ function events(
     attempt: 0,
     emitted_at: created,
   });
-  for (const step of STEPS) list.push({ ...base(), type: "step", step_id: step, status: "pending" });
-  for (const step of STEPS) {
-    const state = states[step];
-    if (!state || state.status === "pending") continue;
-    list.push({ ...base(), type: "step", step_id: step, status: state.status, started_at: created, params: state.params });
-  }
+  list.push({ ...base(), type: "step", step_id: ROOT_ID, status: "running", started_at: created, name: "nl2sql.execute", root: true, trace_id: TRACE_ID });
+  Object.entries(states).forEach(([key, state], index) => {
+    const kind = state.kind === undefined ? key : state.kind;
+    const span = {
+      type: "step" as const,
+      step_id: spanId(index),
+      ...(kind ? { kind } : {}),
+      name: state.name ?? `nl2sql.${key}`,
+      parent_id: state.parent ?? ROOT_ID,
+      trace_id: TRACE_ID,
+      started_at: created,
+      ...(state.params ? { params: state.params } : {}),
+    };
+    list.push({ ...base(), ...span, status: "running" });
+    if (state.status === "running") return;
+    list.push({ ...base(), ...span, status: state.status, finished_at: created, ...(state.cancelled ? { cancelled: true } : {}) });
+  });
   if (terminal) list.push({ ...base(), type: "terminal", status: terminal });
   return list;
 }
 
-const view = (list: ChatProgressEvent[]) => chatProgressStepsFromEvents(list, CHAT_PROGRESS_STEP_DEFINITIONS);
-const summary = (list: ChatProgressEvent[]) => view(list).map((step) => `${step.id}:${step.status}`);
+const view = (list: ChatProgressEvent[]) => chatProgressStepsFromEvents(list, CHAT_PROGRESS_STEP_DEFINITIONS, undefined, { traceLabels: NL2SQL_TRACE_DETAILS_LABELS });
+const summary = (list: ChatProgressEvent[]) => view(list).map((step) => `${step.label}:${step.status}`);
 
 test("送信の応答待ちは「質問を送信しています」の 1 段階", () => {
   const [step] = chatSubmitProgressSteps(Date.parse(created));
@@ -65,15 +91,14 @@ test("送信の応答待ちは「質問を送信しています」の 1 段階",
   assert.equal(step.startedAt, created);
 });
 
-test("開始待ちと 5 段階の名前を状態ごとに付ける（並びは backend の記録の順）", () => {
-  const waiting = view(events({ queue: { status: "running" } }));
-  assert.deepEqual(
-    waiting.map((step) => step.id),
-    STEPS,
-  );
-  assert.equal(waiting[0].label, "処理の開始を待っています");
-  assert.equal(waiting[1].label, "質問と対象の表の準備");
+test("worker が受け取るまでの仮の行は開始待ち（span が届いたら木に置き換わる。#3226）", () => {
+  const [step] = chatQueueProgressSteps(created);
+  assert.equal(step.status, "running");
+  assert.equal(step.label, "処理の開始を待っています");
+  assert.equal(step.startedAt, created);
+});
 
+test("工程の span に名前を付け、実行の全体は行にしない（並びは始まった順）", () => {
   const running = view(
     events({
       queue: { status: "done" },
@@ -81,11 +106,27 @@ test("開始待ちと 5 段階の名前を状態ごとに付ける（並びは b
       generate_sql: { status: "running", params: { engine: "select_ai" } },
     }),
   );
-  assert.equal(running[0].label, "処理を開始しました");
-  assert.equal(running[1].label, "質問と対象の表を準備しました");
-  assert.equal(running[2].label, "SQL を生成しています");
+  assert.deepEqual(
+    running.map((step) => step.label),
+    ["処理を開始しました", "質問と対象の表を準備しました", "SQL を生成しています"],
+  );
+  assert.equal(running[2].status, "running");
   assert.equal(running[2].detail, "Select AI");
-  assert.equal(running[3].label, "SQL の安全性の確認");
+  // 始まっていない段の行は無い（span は始まったときに出る）。
+  assert.ok(!running.some((step) => step.status === "pending"));
+});
+
+test("段の中の span（モデルの呼び出し）は段の下に入れ子で出る", () => {
+  const list = events({
+    queue: { status: "done" },
+    generate_sql: { status: "running", params: { engine: "enterprise_ai_direct" } },
+    model: { status: "running", kind: null, name: "gen_ai.chat", parent: spanId(1) },
+  });
+  const steps = view(list);
+  assert.equal(steps.length, 3);
+  assert.equal(steps[2].level, 1);
+  assert.match(steps[2].label, /モデルの呼び出し/);
+  assert.equal(chatProgressTraceIdOf(list), TRACE_ID);
 });
 
 test("完了したジョブは参照した表と取得した行数を補足する", () => {
@@ -120,13 +161,13 @@ test("完了したジョブは参照した表と取得した行数を補足す�
       execute_sql: { status: "done", params: { rows: "x" } },
     }),
   );
+  assert.equal(few[0].detail, undefined);
+  assert.equal(few[1].detail, "APP.A");
   assert.equal(few[2].detail, undefined);
-  assert.equal(few[3].detail, "APP.A");
-  assert.equal(few[4].detail, undefined);
 });
 
-test("backend の段の詳細（生成した SQL・安全性の確認の結果）をそのまま段を開いて見る詳細にする（#2294）", () => {
-  const list = events({ queue: { status: "done" }, generate_sql: { status: "done", params: { engine: "enterprise_ai_direct" } } });
+test("backend の段の詳細（生成した SQL）を段を開いて見る詳細の先頭にする（#2294）", () => {
+  const list = events({ queue: { status: "done" }, generate_sql: { status: "running", params: { engine: "enterprise_ai_direct" } } });
   const details = { code: [{ label: "生成した SQL", language: "sql" as const, text: "SELECT 1 FROM DUAL" }] };
   list.push({
     schema_version: 1,
@@ -135,36 +176,35 @@ test("backend の段の詳細（生成した SQL・安全性の確認の結果�
     attempt: 0,
     emitted_at: created,
     type: "step",
-    step_id: "generate_sql",
+    step_id: spanId(1),
+    kind: "generate_sql",
+    name: "nl2sql.generate_sql",
+    parent_id: ROOT_ID,
+    trace_id: TRACE_ID,
     status: "done",
+    started_at: created,
+    finished_at: created,
     params: { engine: "enterprise_ai_direct" },
     details,
   });
   const steps = view(list);
-  assert.deepEqual(steps[2].details, details);
-  assert.equal(steps[1].details, undefined);
+  assert.deepEqual(steps[1].details?.code, details.code);
 });
 
-test("失敗した段階は「〜できませんでした」、未実行の段階は名詞", () => {
+test("失敗した段は「〜できませんでした」で、後の段は始まらない", () => {
   const steps = view(
     events(
       {
         queue: { status: "done" },
         prepare_context: { status: "done" },
         generate_sql: { status: "failed", params: { engine: "select_ai" } },
-        safety_check: { status: "skipped" },
-        execute_sql: { status: "skipped" },
-        format_results: { status: "skipped" },
       },
       "failed",
     ),
   );
+  assert.equal(steps.length, 3);
   assert.equal(steps[2].label, "SQL を生成できませんでした");
-  assert.equal(steps[3].label, "SQL の安全性の確認");
-  assert.equal(steps[3].status, "skipped");
-  // 開始する前の失敗は開始待ちの段階の失敗（backend が決める）。
-  const beforeStart = view(events({ queue: { status: "failed" } }, "failed"));
-  assert.equal(beforeStart[0].label, "処理を開始できませんでした");
+  assert.equal(steps[2].name, "SQL の生成");
 });
 
 test("Select AI / Agent の SQL で省略した安全性の確認は、未実行と省略の理由（#1523）", () => {
@@ -190,24 +230,19 @@ test("Select AI / Agent の SQL で省略した安全性の確認は、未実行
   assert.equal(steps[4].status, "done");
 });
 
-test("止めた段階（backend の停止の印）は未実行と「停止しました」", () => {
+test("止めた段（停止の span）は未実行と停止の文言", () => {
   const list = events(
     {
       queue: { status: "done" },
-      prepare_context: { status: "done" },
-      generate_sql: { status: "skipped", params: { engine: "select_ai", stopped: true } },
-      safety_check: { status: "skipped" },
+      prepare_context: { status: "skipped", cancelled: true },
     },
     "cancelled",
   );
   const steps = view(list);
   assert.ok(!steps.some((step) => step.status === "failed"));
-  assert.equal(steps[2].status, "skipped");
-  assert.equal(steps[2].detail, "停止しました");
-  assert.equal(steps[3].detail, undefined);
+  assert.equal(steps[1].status, "skipped");
+  assert.equal(steps[1].detail, NL2SQL_TRACE_DETAILS_LABELS.cancelled);
   assert.equal(chatProgressTerminalOf(list), "cancelled");
-  const queueStopped = view(events({ queue: { status: "skipped", params: { stopped: true } } }, "cancelled"));
-  assert.equal(queueStopped[0].detail, "停止しました");
 });
 
 test("生成だけのターンは実行を「未実行」にして結果の整形へ進む", () => {
@@ -222,8 +257,36 @@ test("生成だけのターンは実行を「未実行」にして結果の整�
         format_results: { status: "running" },
       }),
     ).slice(4),
-    ["execute_sql:skipped", "format_results:running"],
+    ["SQL の実行:skipped", "結果をまとめています:running"],
   );
+});
+
+test("DB 管理チャットの SQL の確認は安全性の確認と同じ名前で、補足は文の分類ごとの数", () => {
+  const steps = view(
+    events({
+      generate_sql: { status: "done", params: { engine: "enterprise_ai_direct" } },
+      check: { status: "done", kind: "db_admin_check", params: { statements: 2, read_only: 1, change: 0, blocked: 1 } },
+    }),
+  );
+  assert.equal(steps[1].label, "SQL の安全性を確認しました");
+  assert.equal(steps[1].detail, "読み取り専用 1・実行できない 1");
+  const single = (params: ChatProgressParams) =>
+    view(events({ check: { status: "done", kind: "db_admin_check", params } }))[0].detail;
+  assert.equal(single({ statements: 1, read_only: 1, change: 0, blocked: 0 }), "読み取り専用（確認語は不要）");
+  assert.equal(single({ statements: 1, read_only: 0, change: 1, blocked: 0, confirmation_target: "ADMIN_EXECUTE" }), "確認語 ADMIN_EXECUTE が必要");
+  assert.equal(single({ statements: 1, read_only: 0, change: 0, blocked: 1 }), "実行できない文です");
+});
+
+test("span の無い記録は古い形式（終端だけの記録は古い形式ではない）", () => {
+  const legacy: ChatProgressEvent[] = [
+    { schema_version: 1, seq: 1, target_id: "j1", attempt: 0, emitted_at: created, type: "step", step_id: "prepare_context", status: "done" },
+    { schema_version: 1, seq: 2, target_id: "j1", attempt: 0, emitted_at: created, type: "terminal", status: "done" },
+  ];
+  assert.equal(chatProgressHasSpans(legacy), false);
+  assert.equal(chatProgressIsLegacy(legacy), true);
+  assert.equal(chatProgressIsLegacy([]), true);
+  assert.equal(chatProgressIsLegacy(legacy.slice(1)), false);
+  assert.equal(chatProgressIsLegacy(events({ queue: { status: "done" } }, "done")), false);
 });
 
 test("全体の所要時間はジョブの作成から終了まで（終わっていなければ出さない）", () => {
@@ -239,12 +302,12 @@ test("全体の所要時間はジョブの作成から終了まで（終わっ�
   assert.equal(chatJobElapsedMs(job({ finished_at: null, elapsed_ms: 900 })), 900);
 });
 
-// #3214 / #3219: トレースの詳細の段の span は、処理の経過の段と同じ関数で名前にする。
-test("トレースの段の span は処理の経過と同じ名前になる", () => {
+// #3214 / #3219: 工程の定義の無い段の span（属性 `pr.stage`）も、処理の経過の段と同じ関数で名前にする。
+test("段の span の名前は処理の経過の工程と同じ", () => {
   const stageName = NL2SQL_TRACE_DETAILS_LABELS.stageName;
   assert.equal(stageName, chatStageName);
-  assert.equal(stageName?.("generate_sql", "done"), chatStageLabel("generate_sql"));
-  assert.equal(stageName?.("safety_check", "failed"), chatStageLabel("safety_check", true));
+  assert.equal(stageName?.("generate_sql", "done"), "SQL を生成しました");
+  assert.equal(stageName?.("safety_check", "failed"), "SQL の安全性を確認できませんでした");
   assert.equal(stageName?.("execute_sql", "cancelled"), "SQL の実行");
   assert.equal(stageName?.("unknown_stage", "done"), undefined);
 });
