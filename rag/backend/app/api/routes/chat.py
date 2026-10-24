@@ -9,7 +9,7 @@ file)配下に置く。メッセージ送信は既存 RAG パイプラインを
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -75,7 +75,7 @@ from app.rag.chat_progress import ChatProgressTracker
 from app.rag.document_sections_service import current_section_pages
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import elapsed_ms, new_trace_id
-from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress, storage_failure
+from app.rag.pipeline import ChatTurn, RagPipeline, storage_failure
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import (
     current_audit_request_context,
@@ -792,7 +792,6 @@ async def _generate_chat_answer(
     message_id: str,
     *,
     lease_owner: str,
-    progress_callback: Callable[[SearchStageProgress], Awaitable[None]] | None = None,
     tracker: ChatProgressTracker | None = None,
 ) -> tuple[StoredMessage, SearchResponse]:
     """1 モデル分の回答を生成し、作成中の ASSISTANT メッセージに最終の状態を書く(#1175)。
@@ -800,10 +799,12 @@ async def _generate_chat_answer(
     生成は回答生成の上限（`rag_answer_timeout_seconds`。#375）で打ち切る。時間切れは
     最後の工程を持つ `AnswerTimeoutError` になる。
     失敗したら ERROR を保存してから例外をそのまま送出する。保存は作成中（STREAMING）の行だけに
-    当たる（利用者の停止・中断の後は書かない）。処理の段階（`tracker`）は終端（完了・失敗）まで
-    記録して一緒に保存する。
+    当たる（利用者の停止・中断の後は書かない）。処理の段階（`tracker`）は回答の trace の span を
+    記録し（#3226）、終端（完了・失敗）まで記録して一緒に保存する。
     """
     trace_id = new_trace_id()
+    if tracker is not None:
+        tracker.trace_id = trace_id
     # 実行履歴（#1890）。会話と回答のメッセージに結び付け、比較の列ごとに 1 件残す。
     run_recorder = RunRecorder(
         surface="chat",
@@ -812,6 +813,8 @@ async def _generate_chat_answer(
         conversation_id=turn.conversation_id,
         message_id=message_id,
         model_id=model_id or None,
+        # 実行履歴の詳細の処理の経過（会話の回答の記録と同じイベント。#3226）。
+        progress_source=tracker.dump if tracker is not None else None,
     )
     started_at = perf_counter()
     try:
@@ -837,13 +840,13 @@ async def _generate_chat_answer(
                 progress_callback=progress_tracker,
                 history=turn.history,
                 query_guardrail_result=turn.query_guardrail,
+                # 処理の経過は回答の trace の span（#3226）。
+                span_listener=tracker.span_listener() if tracker is not None else None,
             ),
             turn.settings,
-            progress_callback,
         )
         if tracker is not None:
-            # 工程の段階に、回答の記録の LLM の回数・結果の説明を足す（#2096）。
-            tracker.finish(execution_steps=(result.diagnostics.answer or {}).get("execution_steps"))
+            tracker.finish()
         assistant = StoredMessage(
             id=message_id,
             conversation_id=turn.conversation_id,
@@ -1048,17 +1051,15 @@ async def _answer_turn(
         model_id = column["model_id"]
         message_id = run.message_ids[model_id]
         tracker = trackers[model_id]
-        persist_lock = asyncio.Lock()
         persisted_seq = tracker.last_seq
+        persist_task: asyncio.Task[None] | None = None
 
         async def persist_progress() -> None:
             # 段階を保存する（再読込・別の worker から作成中の段階を見せる。#1175 / #1359）。
-            # 保存は補助。保存が入れ違っても古い一覧で新しい一覧を上書きしないよう、
-            # 1 つずつ新しい分だけ書く。
+            # 保存は補助。span の知らせが続いても書き込みは 1 つずつにし、書いている間に増えた分は
+            # 書き終わってからまとめて書く（古い一覧で新しい一覧を上書きしない）。
             nonlocal persisted_seq
-            async with persist_lock:
-                if tracker.terminal is not None or tracker.last_seq <= persisted_seq:
-                    return
+            while tracker.terminal is None and tracker.last_seq > persisted_seq:
                 seq = tracker.last_seq
                 try:
                     await oracle.update_chat_message_progress(
@@ -1072,21 +1073,13 @@ async def _answer_turn(
                     return
                 persisted_seq = seq
 
-        async def emit_progress(progress: SearchStageProgress) -> None:
-            run.publish(
-                "stage",
-                {
-                    "model_id": model_id,
-                    "trace_id": progress.trace_id,
-                    "stage": progress.stage,
-                    "outcome": progress.outcome,
-                    "elapsed_ms": progress.elapsed_ms,
-                },
-            )
+        def schedule_persist() -> None:
             # 段階のイベントは記録したときに回答の配信へ送っている（`_progress_publisher`）。
-            if tracker.observe(progress):
-                await persist_progress()
+            nonlocal persist_task
+            if persist_task is None or persist_task.done():
+                persist_task = asyncio.get_running_loop().create_task(persist_progress())
 
+        tracker.attach(on_change=schedule_persist)
         try:
             assistant, result = await _generate_chat_answer(
                 oracle,
@@ -1094,7 +1087,6 @@ async def _answer_turn(
                 model_id,
                 message_id,
                 lease_owner=lease_owner,
-                progress_callback=emit_progress,
                 tracker=tracker,
             )
         except Exception as exc:

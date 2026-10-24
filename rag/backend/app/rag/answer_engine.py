@@ -36,11 +36,13 @@ import re
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
 
+from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, observed_span
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.deadline import check_deadline, current_deadline
@@ -110,6 +112,7 @@ from app.rag.graph_expansion import (
     graph_expansion_metadata,
     plan_graph_expansion,
 )
+from app.rag.span_display import ANSWER_STEP_KIND, answer_step_details, answer_step_params
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import passage_mark_record, stored_evaluation_input
 from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
@@ -227,6 +230,28 @@ ANSWER_STEP_STAGE_PREFIX = "answer_step:"
 def answer_step_stage(name: str) -> str:
     """回答フローの工程名を、進捗の工程の名前にする。"""
     return f"{ANSWER_STEP_STAGE_PREFIX}{name}"
+
+
+def _answer_step_span(name: str) -> AbstractContextManager[ObservedSpan]:
+    """回答フローの外で行う回答の工程（資料との照合・承認済み FAQ からの回答）の span（#3226）。
+
+    `rag_engine` の工程（`rag.engine.stage`）と同じ名前・種類にし、処理の経過の行にする。
+    """
+    return observed_span(
+        "rag.engine.stage",
+        attributes={"pr.stage": name},
+        display=SpanDisplay(kind=ANSWER_STEP_KIND, params={"name": name}),
+    )
+
+
+def _validation_details(validation: Mapping[str, Any]) -> dict[str, Any]:
+    """資料との照合の工程の詳細（照合の結果・判定した段落の数）。"""
+    return {
+        "fields": [
+            {"label": "照合の結果", "value": "確認済み" if validation.get("valid") else "未確認"},
+            {"label": "判定した段落", "value": str(len(validation.get("claim_checks") or []))},
+        ],
+    }
 
 
 @dataclass(frozen=True)
@@ -845,27 +870,34 @@ class AnswerEngine:
             await step_callback(name, "started", 0.0, {})
         state = "success"
         llm_usage: dict[str, Any] = {}
-        try:
-            result = await validate_answer(
-                request.query,
-                outcome.answer,
-                [EvidenceRef(chunk.document_id, chunk.chunk_id) for chunk in outcome.citations],
-                self._settings,
-                oracle=self._oracle,
+        # 回答フローの工程と同じ工程の span にする（処理の経過の行。#3226）。
+        with _answer_step_span(name) as span:
+            try:
+                result = await validate_answer(
+                    request.query,
+                    outcome.answer,
+                    [EvidenceRef(chunk.document_id, chunk.chunk_id) for chunk in outcome.citations],
+                    self._settings,
+                    oracle=self._oracle,
+                )
+                llm_usage = dict(result.llm_usage)
+                validation: dict[str, Any] = {
+                    "status": result.status,
+                    "valid": result.valid,
+                    "counts": dict(result.counts),
+                    "claim_checks": list(result.claim_checks),
+                    "missing_evidence_count": len(result.missing_evidence),
+                    "stale_evidence_count": len(result.stale_evidence),
+                }
+            except Exception:  # noqa: BLE001 - 検証の失敗は未確認として残し、回答の記録を失わない。
+                logger.warning("answer final validation failed", exc_info=True)
+                validation = {"status": "error", "valid": False}
+                state = "error"
+                span.set_status("failed")
+            span.set_display(
+                params=answer_step_params({"llm_calls": int(llm_usage.get("calls") or 0)}),
+                details=answer_step_details(_validation_details(validation)),
             )
-            llm_usage = dict(result.llm_usage)
-            validation: dict[str, Any] = {
-                "status": result.status,
-                "valid": result.valid,
-                "counts": dict(result.counts),
-                "claim_checks": list(result.claim_checks),
-                "missing_evidence_count": len(result.missing_evidence),
-                "stale_evidence_count": len(result.stale_evidence),
-            }
-        except Exception:  # noqa: BLE001 - 検証の失敗は未確認として残し、回答の記録を失わない。
-            logger.warning("answer final validation failed", exc_info=True)
-            validation = {"status": "error", "valid": False}
-            state = "error"
         outcome.diagnostics["answer_validation"] = validation
         if not validation["valid"]:
             outcome.diagnostics["needs_human_review"] = True
@@ -881,12 +913,7 @@ class AnswerEngine:
             previous = str(outcome.diagnostics.get("insufficient_reason") or "")
             outcome.diagnostics["insufficient_reason"] = "\n".join(filter(None, (previous, reason)))
         elapsed = round(time.monotonic() - started, 3)
-        details = {
-            "fields": [
-                {"label": "照合の結果", "value": "確認済み" if validation["valid"] else "未確認"},
-                {"label": "判定した段落", "value": str(len(validation.get("claim_checks") or []))},
-            ],
-        }
+        details = _validation_details(validation)
         metrics = {
             "llm_calls": int(llm_usage.get("calls") or 0),
             "llm_usage": llm_usage,
@@ -917,7 +944,8 @@ class AnswerEngine:
         if step_callback is not None:
             await step_callback(name, "started", 0.0, {})
         status = "success"
-        with bind_llm_usage() as usage:
+        # 回答フローの工程と同じ工程の span にする（処理の経過の行。#3226）。
+        with _answer_step_span(name) as span, bind_llm_usage() as usage:
             try:
                 with tempfile.TemporaryDirectory(prefix="rag-engine-faq-") as work:
                     engine_settings = build_engine_settings(
@@ -939,6 +967,7 @@ class AnswerEngine:
             finally:
                 elapsed = time.monotonic() - started
                 metrics = {"llm_calls": 1, "llm_usage": usage.snapshot()}
+                span.set_display(params=answer_step_params({"llm_calls": 1}))
                 if step_callback is not None:
                     await step_callback(name, status, elapsed, metrics)
         models = self._models_used()

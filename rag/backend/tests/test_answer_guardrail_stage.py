@@ -52,11 +52,12 @@ async def test_inspection_outcome_reaches_progress_chat_and_trace(
 
     async def capture(event: SearchStageProgress) -> None:
         events.append(event)
-        tracker.observe(event)
 
     configure_tracing(TracingSettings(), service_name="synthetic")
     try:
-        with operation_trace("task", operation_id="synthetic") as summary:
+        with operation_trace(
+            "task", operation_id="synthetic", listener=tracker.span_listener()
+        ) as summary:
             result = await _observe_stage(
                 "synthetic",
                 "answer_guardrail",
@@ -67,17 +68,15 @@ async def test_inspection_outcome_reaches_progress_chat_and_trace(
             )
         assert calls == (["合成の回答"] if enabled else [])
         assert [event.outcome for event in events] == ["started", expected_outcome]
-        assert events[-1].details is not None
-        fields = events[-1].details["fields"]
-        assert isinstance(fields, list)
-        assert fields[0] == {"label": "結果", "value": expected_verdict}
-        if expected_outcome == "error":
-            assert fields[1] == {
-                "label": "外部の検査",
-                "value": "OCI Guardrails を利用できませんでした",
-            }
+        # 処理の経過は span（#3226）。検査の段の span に、種類と検査の結果の詳細を付ける。
         rows = fold_chat_progress_events(tracker.events).step_list()
-        assert rows[-1].status == expected_status
+        step = next(row for row in rows if row.kind == "answer_guardrail")
+        assert step.status == expected_status
+        assert step.details is not None
+        fields = [(field.label, field.value) for field in step.details.fields]
+        assert fields[0] == ("結果", expected_verdict)
+        if expected_outcome == "error":
+            assert fields[1] == ("外部の検査", "OCI Guardrails を利用できませんでした")
         assert (
             next(
                 span for span in summary.spans if span.operation_name == "rag.answer_guardrail"
@@ -105,4 +104,3 @@ async def test_cancelled_inspection_does_not_report_clean_or_skipped() -> None:
             "synthetic", "answer_guardrail", cancelled(), progress_callback=capture
         )
     assert [event.outcome for event in events] == ["started", "cancelled"]
-    assert events[-1].details is None

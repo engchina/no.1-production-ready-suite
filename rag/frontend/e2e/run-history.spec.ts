@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page, test } from "./fixtures/test";
+import { ragSpan, savedSpanProgress, SPAN_TRACE_ID } from "./_chat-progress";
 import {
   apiEnvelope,
   expectNoPageOverflow,
@@ -105,40 +106,53 @@ function detail(row: RunRow) {
     answer_available: row.answer_generated,
     citations: [CITATION],
     answer_diagnostics: row.answer_generated ? { outcome: "answered", confidence: "high", execution_steps: [] } : null,
-    stages: row.answer_generated
-      ? [
-          { stage: "answer_step:質問の理解", outcome: "success", elapsed_ms: 300 },
-          { stage: "answer_step:文書検索", outcome: "success", elapsed_ms: 500 },
-          { stage: "answer", outcome: "success", elapsed_ms: 1100 },
-          // 段と工程の詳細（見出しと値・行。#2341）。
-          {
-            stage: "answer_guardrail",
-            outcome: "success",
-            elapsed_ms: 40,
-            details: { fields: [{ label: "結果", value: "問題なし" }] },
-          },
-        ]
-      : [{ stage: "retrieval", outcome: row.status === "error" ? "error" : "success", elapsed_ms: 1100 }],
-    steps: row.answer_generated
-      ? [
-          // 送り直しで API への送信が呼び出しより多い工程（#2966）。
-          { name: "質問の理解", status: "complete", elapsed_seconds: 0.3, llm_calls: 1, llm_sends: 2 },
-          {
-            name: "文書検索",
-            status: "complete",
-            elapsed_seconds: 0.5,
-            llm_calls: 0,
-            details: {
-              fields: [
-                { label: "検索の候補", value: "12 件（3 文書）" },
-                { label: "候補の経路", value: "ベクトルと全文の両方 4・ベクトルだけ 6・全文だけ 2" },
-                { label: "結果", value: "回答に渡す根拠 4 件（2 文書）" },
-              ],
-              lines: ["回答に渡す根拠:", "1. 文書 A › 第 1 章（p.3）"],
+    // 処理の経過は実行の trace の span のイベント（#3226）。回答を作った実行は回答の段の中に工程の span、
+    // 回答を作らない検索は検索の段。
+    progress_events: savedSpanProgress(
+      row.message_id ?? row.run_id,
+      row.answer_generated
+        ? [
+            { key: "root", spec: ragSpan.root(), at: [0, 1.2] },
+            { key: "answer", spec: ragSpan.stage("answer"), at: [0, 1.1] },
+            {
+              key: "understand",
+              spec: ragSpan.step("質問の理解"),
+              at: [0, 0.3],
+              // 送り直しで API への送信が呼び出しより多い工程（#2966）。
+              params: { llm_calls: 1, llm_sends: 2 },
             },
-          },
-        ]
-      : [],
+            {
+              key: "search",
+              spec: ragSpan.step("文書検索"),
+              at: [0.3, 0.8],
+              details: {
+                fields: [
+                  { label: "検索の候補", value: "12 件（3 文書）" },
+                  { label: "候補の経路", value: "ベクトルと全文の両方 4・ベクトルだけ 6・全文だけ 2" },
+                  { label: "結果", value: "回答に渡す根拠 4 件（2 文書）" },
+                ],
+                lines: ["回答に渡す根拠:", "1. 文書 A › 第 1 章（p.3）"],
+              },
+            },
+            // 段の詳細（見出しと値・行。#2341）。
+            {
+              key: "guardrail",
+              spec: ragSpan.stage("answer_guardrail"),
+              at: [1.1, 1.14],
+              details: { fields: [{ label: "結果", value: "問題なし" }] },
+            },
+          ]
+        : [
+            { key: "root", spec: ragSpan.root(false), at: [0, 1.1], status: row.status === "error" ? "failed" : "done" },
+            {
+              key: "retrieval",
+              spec: ragSpan.stage("retrieval"),
+              at: [0, 1.1],
+              status: row.status === "error" ? "failed" : "done",
+            },
+          ],
+      { base: "2026-10-15T00:00:00Z" }
+    ),
     feedback: row.answer_generated
       ? [
           {
@@ -486,24 +500,28 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     // 段の数は入れ子の工程も数える。開くと段と、回答フローの工程（字下げ）。所要時間は文字でも出す。
     const timeline = page.getByTestId("run-history-timeline");
     const timelineSummary = page.getByTestId("run-history-timeline-summary");
-    await expect(timelineSummary).toHaveText("3 ステップ・合計 1.2 秒");
+    await expect(timelineSummary).toHaveText("4 ステップ・合計 1.2 秒");
     await expect(timeline.locator("details[data-run-timeline-section]")).not.toHaveAttribute("open", "");
     await expect(timeline.locator("[data-run-timeline-step]").first()).toBeHidden();
     await timelineSummary.click();
-    await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(3);
-    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の条件の読み取り");
-    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("0.3 秒");
-    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の条件の読み取り（LLM 1 回・送信 2 回）");
-    await expect(timeline.locator("[data-run-timeline-step]").nth(2)).toContainText("回答の安全チェック");
+    // 行は span の木（#3226）: 包む段（質問の読み取りから回答の作成まで）と、その子の工程（字下げ）。
+    await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(4);
+    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の読み取りから回答の作成まで");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("0.3 秒");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問の条件の読み取り（LLM 1 回・送信 2 回）");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答の安全チェック");
     if (!isNarrow(page)) await expect(timeline.locator("[data-run-timeline-bar]").first()).toBeVisible();
-    // 段の詳細（#2341）: 詳細のある工程・段だけを開ける（既定で閉じる）。詳細の無い工程に開閉の印は出さない。
+    // 段の詳細（#2341）: 行を開くと工程の詳細と技術の値（span の名前）を出す（既定で閉じる）。
     const steps = timeline.locator("[data-run-timeline-step]");
-    await expect(steps.nth(0).locator("[data-run-timeline-toggle]")).toHaveCount(0);
-    const searchToggle = steps.nth(1).locator("[data-run-timeline-toggle]");
+    await steps.nth(1).locator("[data-run-timeline-toggle]").click();
+    await expect(steps.nth(1).locator("[data-run-timeline-details]")).toContainText("rag.engine.stage");
+    await steps.nth(1).locator("[data-run-timeline-toggle]").click();
+    const searchToggle = steps.nth(2).locator("[data-run-timeline-toggle]");
     await expect(searchToggle).toHaveAttribute("aria-expanded", "false");
     await searchToggle.click();
     await expect(searchToggle).toHaveAttribute("aria-expanded", "true");
-    const searchDetails = steps.nth(1).locator("[data-run-timeline-details]");
+    const searchDetails = steps.nth(2).locator("[data-run-timeline-details]");
     await expect(searchDetails.locator("dt").first()).toHaveText("検索の候補");
     await expect(searchDetails).toContainText("12 件（3 文書）");
     await expect(searchDetails).toContainText("1. 文書 A › 第 1 章（p.3）");
@@ -512,9 +530,9 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expectNoPageOverflow(page);
     await searchToggle.click();
     await expect(searchDetails).toBeHidden();
-    const guardrailToggle = steps.nth(2).locator("[data-run-timeline-toggle]");
+    const guardrailToggle = steps.nth(3).locator("[data-run-timeline-toggle]");
     await guardrailToggle.click();
-    await expect(steps.nth(2).locator("[data-run-timeline-details]")).toContainText("問題なし");
+    await expect(steps.nth(3).locator("[data-run-timeline-details]")).toContainText("問題なし");
 
     await expect(page.getByTestId("run-history-feedback-open-fb-1")).toHaveAttribute(
       "href",
@@ -531,6 +549,9 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(technical.getByText("conv-21")).toBeHidden();
     await processDetailsSummary.click();
     await expect(technical.getByText("conv-21")).toBeVisible();
+    // 「処理の詳細」の先頭に Trace ID（「トレースの詳細」の 2 つ目の表示は無い。#3226）。
+    await expect(technical.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${SPAN_TRACE_ID}`);
+    await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);
     await expect(technical.getByText("信頼度: high")).toBeVisible();
     // 信頼度は回答の記録の詳細のバッジだけに出し、識別子の一覧に重ねない。旧「回答の詳細」「技術的な詳細」は出さない。
     await expect(technical.getByText("回答の確からしさ", { exact: true })).toHaveCount(0);

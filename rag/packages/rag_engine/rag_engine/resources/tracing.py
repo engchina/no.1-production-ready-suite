@@ -1,6 +1,11 @@
-"""実行環境が任意に注入する観測。本文や認証情報は observer に渡さない。"""
+"""実行環境が任意に注入する観測。本文や認証情報は observer に渡さない。
 
-from collections.abc import Callable, Iterator
+工程の観測（``observe_call("stage", 工程名)``）は、工程の表示用のデータ（``display``: 種類・名前の値・開いて見る
+詳細）も受け取る。実行環境は工程の span に付けて画面の処理の経過にする（#3226）。詳細には工程の記録の見出しと値・行
+（``{"fields": [{"label", "value"}], "lines": [...]}``）だけを渡し、回答の本文・文書の本文は渡さない。
+"""
+
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from typing import Protocol
@@ -9,9 +14,26 @@ from typing import Protocol
 class CallObservation(Protocol):
     def usage(self, value: object) -> None: ...
 
+    def display(
+        self,
+        kind: str | None = None,
+        params: Mapping[str, object] | None = None,
+        details: Mapping[str, object] | None = None,
+    ) -> None:
+        """工程の表示用のデータを足す（``params`` は前の値に重ねる）。"""
+        ...
+
 
 class _NoObservation:
     def usage(self, value: object) -> None:
+        pass
+
+    def display(
+        self,
+        kind: str | None = None,
+        params: Mapping[str, object] | None = None,
+        details: Mapping[str, object] | None = None,
+    ) -> None:
         pass
 
 

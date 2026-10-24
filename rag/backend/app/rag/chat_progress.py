@@ -1,20 +1,16 @@
-"""チャットの処理の段階（3 製品共通の契約 `pr_backend_core.chat_progress`。#1146 / #1359 / #2096）。
+"""回答の処理の経過（3 製品共通の契約 `pr_backend_core.chat_progress`。#1359 / #3226）。
 
-回答の生成の内部の工程（``SearchStageProgress``）を、そのまま 1 工程 = 1 段階として記録する（#2096。
-「処理の経過」に回答の記録（`execution_steps`）と同じ細かい工程を出す）。
+処理の経過は trace（span の木）の投影にする（#3226）。回答の pipeline の
+`operation_trace` の listener が知らせる span の開始・表示用のデータの変更・終了を、
+そのまま処理の経過のイベント（`ChatProgressRecorder.record_span`。`step_id` は
+span の id、親子は span の親子）として記録する。工程の名前は span の表示用のデータ
+（種類と工程名。`app/rag/span_display.py`）から画面が付ける。
 
-- 回答フローの工程（``answer_step:<工程名>``。`rag_engine.generation.answering` の
-  `_execution_step`）は種類 ``answer_step`` の段階にし、値（`params`）に工程名（``name``）と
-  入れ子の深さ（``depth``）を入れる。
-- 回答フローの外の工程（会話を踏まえた質問の書き換え `history_rewrite`・質問から条件を読み取る
-  `field_filter`・回答の安全チェック `answer_guardrail`）は、工程の名前を種類にした段階にする。
-- 全体を包む工程（`answer` / `retrieval`）は、中の工程を段階にするので出さない。
-- 回答ができたら（`finish`）、回答の記録の工程の LLM の呼び出し回数（``llm_calls``）と結果の説明
-  （``note``。「該当なし」など）を、同じ工程の段階の値に足してから終端にする。
-
-対象（`target_id`）は作成中の ASSISTANT のメッセージの id。記録したイベントの一覧は、
-そのメッセージの `progress_json` に保存し、回答の配信（SSE の `chat_progress`）と、段階の
-polling / SSE の endpoint（`GET .../messages/{回答の id}/progress[/stream]`）で配る。
+対象（`target_id`）は、チャットでは作成中の ASSISTANT のメッセージの id、RAG 検索では
+実行の trace_id。記録したイベントの一覧は、チャットはそのメッセージの `progress_json`、
+実行履歴は `stages_json.progress_events` に保存し、回答・検索の配信（SSE の
+`chat_progress`）と、段階の polling / SSE の endpoint
+（`GET .../messages/{回答の id}/progress[/stream]`）で配る。
 
 段階の名前（利用者向けの文言）は記録に入れない。画面が種類と工程名から i18n で付ける
 （`frontend/src/lib/chat-progress.ts`）。
@@ -22,120 +18,62 @@ polling / SSE の endpoint（`GET .../messages/{回答の id}/progress[/stream]`
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
-from collections.abc import Callable, Mapping
+import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
-from time import perf_counter
 from typing import Any
 
 from pr_backend_core.chat_progress import (
     ChatProgressRecorder,
     ChatProgressSink,
-    ChatProgressStepDetails,
     ChatProgressStepEvent,
     ChatProgressTerminalEvent,
     ChatProgressTerminalStatus,
-    chat_progress_details,
     dump_chat_progress_events,
 )
 from pr_backend_core.observability import request_id_var
-
-from app.rag.answer_engine import ANSWER_STEP_STAGE_PREFIX
-from app.rag.pipeline import SearchStageProgress
-from app.rag.step_details import step_details_model
+from pr_backend_core.observability.tracing import SpanListener, SpanUpdate
 
 logger = logging.getLogger(__name__)
-
-# 回答フローの工程の段階の種類（値の ``name`` が工程名、``depth`` が入れ子の深さ）。
-ANSWER_STEP_KIND = "answer_step"
-
-# 回答フローの外の工程のうち、段階にするもの（工程の名前を種類にする）。
-PIPELINE_STEP_KINDS: frozenset[str] = frozenset(
-    {"history_rewrite", "field_filter", "answer_guardrail", "answer_record_save"}
-)
-
-# 工程の失敗の詳細の行（段を開いて見る。利用者向けの短い要約とコード。#2342）。
-_STEP_FAILURE_SUMMARY: Mapping[str, str] = {
-    "answer_record_save": "回答の記録をデータベースに保存できませんでした。回答は表示しています。",
-}
-_STEP_FAILURE_DEFAULT = "この工程でエラーが発生しました。"
-
-# 全体を包む工程（中の工程を段階にするので、包む工程は段階にしない）。
-_WRAPPER_STAGES: frozenset[str] = frozenset({"answer", "retrieval"})
-
-# 回答の記録の工程の状態のうち、結果の説明ではないもの（完了・例外で中断）。
-_PLAIN_STEP_STATUSES: frozenset[str] = frozenset({"", "complete", "エラーで中断"})
-
-
-def _with_step_values(
-    params: dict[str, str | int | float | bool], record: Mapping[str, object]
-) -> dict[str, str | int | float | bool]:
-    """回答フローの工程の記録の LLM の回数（``llm_calls``。送り直しで API への送信が多ければ
-    ``llm_sends``）と結果の説明（``note``）を段の値に足す。"""
-    llm_calls = record.get("llm_calls")
-    if isinstance(llm_calls, int) and not isinstance(llm_calls, bool) and llm_calls > 0:
-        params["llm_calls"] = llm_calls
-        # API への実際の送信の回数（送り直しで多いときだけ。#2966）。
-        llm_sends = record.get("llm_sends")
-        if isinstance(llm_sends, int) and not isinstance(llm_sends, bool) and llm_sends > llm_calls:
-            params["llm_sends"] = llm_sends
-    note = str(record.get("status") or "").strip()
-    if note not in _PLAIN_STEP_STATUSES:
-        params["note"] = note
-    return params
-
-
-def chat_progress_step_kind(stage: str) -> str | None:
-    """内部の工程の名前を段階の種類にする。段階にしない工程（全体を包む工程など）は None。"""
-    if stage.startswith(ANSWER_STEP_STAGE_PREFIX):
-        return ANSWER_STEP_KIND if stage.removeprefix(ANSWER_STEP_STAGE_PREFIX).strip() else None
-    if stage in PIPELINE_STEP_KINDS:
-        return stage
-    return None
-
 
 type ChatProgressEventItem = ChatProgressStepEvent | ChatProgressTerminalEvent
 
 
 class ChatProgressTracker:
-    """1 モデル分の回答（作成中の ASSISTANT のメッセージ）の段階を、内部の工程の進捗から記録する。
+    """1 回の回答・検索の処理の経過を、span の知らせから記録する（#3226）。
 
-    工程が始まったら段階を実行中にし、終わったら完了（失敗した工程は失敗）にする。工程は入れ子になる
-    （回答フローの中の文書の検索など）ので、実行中の段階は同時に複数あってよい（画面は最後に始まった
-    段階を今の段階にする）。段階の id は記録の順の連番（``s1`` / ``s2`` …）で、同じ工程名の 2 回目
-    （補正検索など）も別の段階にする。工程の中断（`cancelled`。時間切れ）では段階を終えず、続く
-    `fail()` / `close()` の終端で失敗・停止にする。
+    span の開始は実行中、終了は完了・失敗・スキップ（停止は `cancelled` の印）の段に
+    なる。入れ子は span の親子で、実行の全体の span（root）も記録する（画面は行にしない）。
 
-    記録したイベントは `sink`（`attach` で後から付けられる）に 1 件ずつ渡す。保存は呼び出し元が
-    `dump()` で行う。スレッドから同時に呼ばない（イベントループの中で呼ぶ）。
+    記録したイベントは `sink`（`attach` で後から付けられる）に 1 件ずつ渡し、
+    `on_change` を呼ぶ（保存の予約）。記録はイベントループの中で行う。回答の thread から
+    届く span の知らせは `span_listener` がループへ渡す（届いた順を保つ）。
     """
 
     def __init__(
         self,
-        message_id: str,
+        target_id: str,
         *,
         model_id: str = "",
         events: list[ChatProgressEventItem] | None = None,
         sink: ChatProgressSink | None = None,
+        on_change: Callable[[], None] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-        timer: Callable[[], float] = perf_counter,
     ) -> None:
         self._model_id = model_id
-        self._timer = timer
         self._trace_id: str | None = None
         self._sink = sink
-        # 段階が実行中になった時刻（ログの所要時間）。
-        self._running_since: dict[str, float] = {}
-        # 終わっていない工程（工程の名前・段階の id。入れ子の順）。
-        self._open: list[tuple[str, str]] = []
+        self._on_change = on_change
         self._recorder = ChatProgressRecorder(
-            message_id, events=events or (), sink=self._on_event, clock=clock
+            target_id, events=events or (), sink=self._on_event, clock=clock
         )
-        # 保存済みのイベントから作り直したときは、続きの番号で段階の id を付ける。
-        self._next_index = len(self._recorder.steps()) + 1
 
     @property
     def message_id(self) -> str:
+        """対象の id（チャットは作成中のメッセージの id）。"""
         return self._recorder.target_id
 
     @property
@@ -144,8 +82,12 @@ class ChatProgressTracker:
 
     @property
     def trace_id(self) -> str | None:
-        """段階の進捗から分かった回答の trace_id（失敗の「詳細」に出す。#2023）。"""
+        """回答の trace_id（失敗の「詳細」に出す。#2023）。"""
         return self._trace_id
+
+    @trace_id.setter
+    def trace_id(self, value: str | None) -> None:
+        self._trace_id = value
 
     @property
     def events(self) -> list[ChatProgressEventItem]:
@@ -161,131 +103,50 @@ class ChatProgressTracker:
         return self._recorder.terminal
 
     def dump(self) -> list[dict[str, Any]]:
-        """保存の JSON（`progress_json`）。"""
+        """保存の JSON（`progress_json` / `stages_json.progress_events`）。"""
         return dump_chat_progress_events(self._recorder.events)
 
-    def attach(self, sink: ChatProgressSink) -> None:
-        """記録の送り先を付ける（これより後に記録したイベントを渡す）。"""
-        self._sink = sink
-
-    def observe(self, progress: SearchStageProgress) -> bool:
-        """内部の工程の開始・終了を段階へ反映する。イベントを記録したら True。"""
-        self._trace_id = progress.trace_id or self._trace_id
-        kind = chat_progress_step_kind(progress.stage)
-        if kind is None or self._recorder.terminal is not None:
-            return False
-        before = self._recorder.last_seq
-        if progress.outcome == "started":
-            step_id = f"s{self._next_index}"
-            self._next_index += 1
-            params: dict[str, str | int | float | bool] = {}
-            if kind == ANSWER_STEP_KIND:
-                params["name"] = progress.stage.removeprefix(ANSWER_STEP_STAGE_PREFIX).strip()
-                params["depth"] = sum(
-                    1 for stage, _ in self._open if stage.startswith(ANSWER_STEP_STAGE_PREFIX)
-                )
-            self._recorder.start(step_id, kind=kind, params=params or None)
-            self._open.append((progress.stage, step_id))
-            return self._recorder.last_seq != before
-        index = next(
-            (i for i in range(len(self._open) - 1, -1, -1) if self._open[i][0] == progress.stage),
-            None,
-        )
-        if index is None:
-            return False
-        _, step_id = self._open.pop(index)
-        if progress.outcome in ("success", "error", "skipped"):
-            # 終わった工程の詳細（見出しと値・行）と、回答フローの工程の LLM の回数・結果の説明を、
-            # 終わったときに段に付ける（回答の完了を待たない。実行中から段を開ける。失敗した回答でも
-            # 残る。#2341 / #2373）。
-            current = next(
-                (step for step in self._recorder.steps() if step.step_id == step_id), None
-            )
-            params = dict(current.params or {}) if current is not None else {}
-            if kind == ANSWER_STEP_KIND:
-                params = _with_step_values(params, progress.attributes)
-            details = step_details_model(progress.details)
-            values: dict[str, Any] = {}
-            if details is not None:
-                values["details"] = details
-            if current is not None and params != (current.params or {}):
-                values["params"] = params
-            failed = progress.outcome == "error"
-            self._recorder.finish(
-                step_id,
-                "skipped" if progress.outcome == "skipped" else "failed" if failed else "done",
-                **values,
-            )
-            if failed:
-                self._describe_failure(step_id, kind, progress.attributes, base=details)
-        # cancelled（時間切れなどの中断）は終端（fail / close）で失敗・停止にする。
-        return self._recorder.last_seq != before
-
-    def _describe_failure(
-        self,
-        step_id: str,
-        kind: str,
-        attributes: Mapping[str, object],
-        *,
-        base: ChatProgressStepDetails | None = None,
+    def attach(
+        self, sink: ChatProgressSink | None = None, *, on_change: Callable[[], None] | None = None
     ) -> None:
-        """失敗した段に、短い要約とエラーの種類・コードの行を足す（段を開いて見る。#2342）。
+        """記録の送り先・変更の知らせを付ける（これより後に記録したイベントを渡す）。"""
+        if sink is not None:
+            self._sink = sink
+        if on_change is not None:
+            self._on_change = on_change
 
-        例外の本文は入れない（ORA のメッセージ・業務データを出さない）。工程が終わったときの詳細
-        （``base``。#2373）があれば、見出しと値はそのまま残し、行の先頭に要約を足す。
+    def record_span(self, update: SpanUpdate) -> bool:
+        """span の知らせを段として記録する。イベントを記録したら True（終端の後は何もしない）。"""
+        if self._recorder.terminal is not None:
+            return False
+        return self._recorder.record_span(update) is not None
+
+    def span_listener(self) -> SpanListener:
+        """`operation_trace(listener=...)` に渡す listener（回答の thread からも呼ばれる）。
+
+        ループの thread から呼ばれたらその場で、ほかの thread からなら
+        `call_soon_threadsafe` でループの中で記録する（ループへ渡した順に記録するので、
+        span の開始・終了の順は保たれる）。イベントループの中で作る。
         """
-        lines = [_STEP_FAILURE_SUMMARY.get(kind, _STEP_FAILURE_DEFAULT)]
-        error_type = attributes.get("error_type")
-        error_code = attributes.get("error_code")
-        if isinstance(error_type, str) and error_type:
-            lines.append(f"エラーの種類: {error_type}")
-        if isinstance(error_code, str | int) and str(error_code):
-            lines.append(f"エラーコード: {error_code}")
-        if base is not None:
-            details = chat_progress_details(
-                fields=[(field.label, field.value, bool(field.mono)) for field in base.fields],
-                lines=[*lines, *base.lines],
-                code=[(block.label, block.text, block.language) for block in base.code],
-                truncated=bool(base.truncated),
-            )
-        else:
-            details = chat_progress_details(lines=lines)
-        self._recorder.update(step_id, details=details)
+        target_loop = asyncio.get_running_loop()
+        loop_thread = threading.get_ident()
 
-    def finish(self, *, execution_steps: object = None) -> None:
-        """回答ができた。回答の記録の工程の値を段階に足してから、終端（完了）にする。
+        def listen(update: SpanUpdate) -> None:
+            if threading.get_ident() == loop_thread:
+                self.record_span(update)
+                return
+            # 回答の thread の span。ループが閉じた後（取り消し）の知らせは捨てる。
+            with contextlib.suppress(RuntimeError):
+                target_loop.call_soon_threadsafe(self.record_span, update)
 
-        `execution_steps` は回答の記録（`diagnostics.answer.execution_steps`）。工程名の順に段階と
-        対応させ、LLM の呼び出し回数（``llm_calls``）と結果の説明（``note``）を値に足し、
-        工程の詳細の行（``details``。選んだ条・検索文・件数など）を段を開いて見る詳細にする
-        （#2294）。実行中の段階は完了になる（`complete("done")`）。
-        """
-        records: list[Mapping[str, Any]] = (
-            [step for step in execution_steps if isinstance(step, Mapping)]
-            if isinstance(execution_steps, list | tuple)
-            else []
-        )
-        cursor = 0
-        for step in self._recorder.steps():
-            if step.kind != ANSWER_STEP_KIND or not step.params:
-                continue
-            name = step.params.get("name")
-            match = next(
-                (i for i in range(cursor, len(records)) if records[i].get("name") == name), None
-            )
-            if match is None:
-                continue
-            cursor = match + 1
-            record = records[match]
-            params = _with_step_values(dict(step.params), record)
-            # 工程の詳細（見出しと値・行。旧い記録の行の list は行。#2294 / #2341）。
-            details = step_details_model(record.get("details")) or step.details
-            if params != step.params or details != step.details:
-                self._recorder.update(step.step_id, params=params, details=details)
+        return listen
+
+    def finish(self) -> None:
+        """回答・検索ができた。終端（完了）を記録する（実行中の段は完了になる）。"""
         self._recorder.complete("done")
 
     def fail(self) -> None:
-        """回答の生成が失敗した（時間切れを含む）。実行中の段階を失敗にして終端（失敗）にする。"""
+        """回答の生成が失敗した（時間切れを含む）。実行中の段を失敗にして終端（失敗）にする。"""
         self._recorder.complete("failed")
 
     def close(self, status: ChatProgressTerminalStatus) -> None:
@@ -297,44 +158,32 @@ class ChatProgressTracker:
             self._log(event)
         if self._sink is not None:
             self._sink(event)
+        if self._on_change is not None:
+            self._on_change()
 
     def _log(self, event: ChatProgressStepEvent) -> None:
-        if event.status == "running":
-            if event.step_id in self._running_since:
-                return
-            self._running_since[event.step_id] = self._timer()
-            logger.info(
-                "チャットの段階を開始しました",
-                extra={**self._log_fields(event.step_id), "status": "running"},
-            )
+        # 工程の span（表示用のデータの種類がある）の終了だけをログに出す（技術の span・root
+        # は出さない）。
+        if event.status in ("running", "pending") or event.kind == event.step_id or event.root:
             return
-        if event.status == "pending":
-            return
-        since = self._running_since.pop(event.step_id, None)
-        if since is None and event.status != "failed":
-            # 始まらなかった段階のスキップ（rerank 無効・回答の完了）は記録しない。
-            return
+        duration_ms = (
+            round((event.finished_at - event.started_at).total_seconds() * 1000, 3)
+            if event.started_at is not None and event.finished_at is not None
+            else None
+        )
         logger.log(
             logging.WARNING if event.status == "failed" else logging.INFO,
             "チャットの段階が終わりました",
             extra={
-                **self._log_fields(event.step_id),
+                "event": "chat_progress_step",
+                "request_id": request_id_var.get(),
+                "trace_id": self._trace_id,
+                "model_id": self._model_id,
+                "message_id": self._recorder.target_id,
+                "step_id": event.step_id,
+                "step_kind": event.kind,
+                "step_name": (event.params or {}).get("name"),
                 "status": event.status,
-                "duration_ms": (
-                    round((self._timer() - since) * 1000, 3) if since is not None else None
-                ),
+                "duration_ms": duration_ms,
             },
         )
-
-    def _log_fields(self, step_id: str) -> dict[str, object]:
-        step = self._recorder.step(step_id)
-        return {
-            "event": "chat_progress_step",
-            "request_id": request_id_var.get(),
-            "trace_id": self._trace_id,
-            "model_id": self._model_id,
-            "message_id": self._recorder.target_id,
-            "step_id": step_id,
-            "step_kind": step.kind if step is not None else None,
-            "step_name": (step.params or {}).get("name") if step is not None else None,
-        }

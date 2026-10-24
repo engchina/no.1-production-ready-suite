@@ -30,47 +30,31 @@ function step(
 
 // 処理の段階の定義（Issue 1146 / 1359）。
 describe("CHAT_PROGRESS_DEFINITIONS", () => {
-  it("段階の id と状態から名前を付け、時刻はイベントのものを使う", () => {
+  it("工程の span は種類と工程名から名前を付け、LLM の回数・結果の説明を補足にする（名前は状態で変えない）", () => {
     seq = 0;
     const steps = chatProgressStepsFromEvents(
       [
-        step("rewrite_query", "pending"),
-        step("retrieve", "pending"),
-        step("rerank", "pending"),
-        step("generate_answer", "pending"),
-        step("check_guardrail", "pending"),
-        step("rewrite_query", "done", {
+        step("a".repeat(16), "done", {
+          kind: "history_rewrite",
+          name: "rag.history_rewrite",
           started_at: "2026-10-04T00:00:00.000Z",
           finished_at: "2026-10-04T00:00:01.000Z",
         }),
-        step("retrieve", "running", { started_at: "2026-10-04T00:00:01.000Z", params: { attempt: 2 } }),
-        step("rerank", "skipped"),
-        step("generate_answer", "failed"),
+        step("b".repeat(16), "running", { kind: "answer_step", name: "rag.engine.stage", params: { name: "文書検索" } }),
+        step("c".repeat(16), "failed", {
+          kind: "answer_step",
+          name: "rag.engine.stage",
+          params: { name: "質問の理解", llm_calls: 1, llm_sends: 2, note: "該当なし" },
+        }),
       ],
       CHAT_PROGRESS_DEFINITIONS
     );
-    expect(steps.map((item) => item.label)).toEqual([
-      "質問を整理しました",
-      "関係する文書を探しています",
-      "並べ替え",
-      "回答を作れませんでした",
-      "回答の確認",
+    expect(steps.map((item) => [item.label, item.status, item.meta ?? null])).toEqual([
+      ["会話を踏まえた質問の書き換え", "done", null],
+      ["文書の検索", "running", null],
+      ["質問の条件の読み取り", "failed", "該当なし · LLM 1 回・送信 2 回"],
     ]);
     expect(steps[0]).toMatchObject({ startedAt: "2026-10-04T00:00:00.000Z", finishedAt: "2026-10-04T00:00:01.000Z" });
-    // 補正検索の回数は値から i18n で作る。
-    expect(steps[1].detail).toBe("2 回目");
-  });
-
-  it("完了した検索は根拠の件数を補足にし、1 回目の検索は回数を出さない", () => {
-    seq = 0;
-    const done = chatProgressStepsFromEvents(
-      [step("retrieve", "running", { params: { attempt: 2 } }), step("retrieve", "done", { params: { attempt: 2, citations: 3 } })],
-      CHAT_PROGRESS_DEFINITIONS
-    );
-    expect(done[0]).toMatchObject({ label: "関係する文書を探しました", detail: "AI に渡した 3 件" });
-    seq = 0;
-    const first = chatProgressStepsFromEvents([step("retrieve", "running", { params: { attempt: 1 } })], CHAT_PROGRESS_DEFINITIONS);
-    expect(first[0].detail).toBeUndefined();
   });
 
   it("未知の段階は id をそのまま出す", () => {
