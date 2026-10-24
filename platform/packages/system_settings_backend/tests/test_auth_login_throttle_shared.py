@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any
@@ -306,6 +308,76 @@ def test_returns_to_db_after_recovery_and_keeps_memory_failures(
     assert _retry_after(service) == WINDOW_SECONDS - RETRY_SECONDS
     # 別の worker は DB の 3 回だけを数える。
     assert _fail(_worker(clock, db)) == 401
+
+
+def test_slow_database_bounds_login_wait_and_keeps_memory_limit(
+    clock: _Clock, db: _FakeOracle
+) -> None:
+    service = _worker(clock, db)
+    entered, finish = threading.Event(), threading.Event()
+    original = db.connection
+
+    @contextmanager
+    def slow_connection() -> Iterator[_FakeConnection]:
+        entered.set()
+        assert finish.wait(5)
+        with original() as connection:
+            yield connection
+
+    service.login_throttle = LoginThrottle(
+        clock=clock,
+        shared_store=OracleLoginAttemptStore(slow_connection),
+        key_secret=SERVICE_SECRET,
+        shared_timeout_seconds=0.05,
+    )
+    try:
+        started = time.monotonic()
+        principal, _, _ = service.login("system_admin", CONFIGURED_PASSWORD, client_ip=OTHER_IP)
+        assert principal.is_system_admin
+        assert entered.is_set()
+        assert time.monotonic() - started < 1
+        for _ in range(5):
+            assert _fail(service) == 401
+        assert _retry_after(service) == WINDOW_SECONDS
+        # 再試行の時刻を過ぎても、止まった処理を増やさない。
+        clock.now += RETRY_SECONDS
+        assert _retry_after(service) == WINDOW_SECONDS - RETRY_SECONDS
+        assert db.connects == 0
+    finally:
+        finish.set()
+        assert service.login_throttle._shared_operation_lock.acquire(timeout=2)
+        service.login_throttle._shared_operation_lock.release()
+
+
+@pytest.mark.parametrize("operation", ["clear", "purge", "release"])
+def test_shared_cleanup_also_has_wait_limit(
+    clock: _Clock, db: _FakeOracle, operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    throttle = _throttle(clock, db)
+    throttle._shared_timeout_seconds = 0.05
+    attempt = throttle.begin("system_admin", IP, LoginThrottleLimits(5, 20, WINDOW_SECONDS))
+    finish = threading.Event()
+
+    def slow(*args: object) -> None:
+        assert finish.wait(5)
+
+    store = throttle.shared_store
+    assert store is not None
+    monkeypatch.setattr(store, "purge_expired" if operation == "purge" else operation, slow)
+    try:
+        started = time.monotonic()
+        if operation == "clear":
+            throttle.record_success(attempt)
+        elif operation == "purge":
+            throttle.record_failure(attempt)
+        else:
+            throttle.cancel(attempt)
+        assert time.monotonic() - started < 1
+        assert throttle._available_shared_store() is None
+    finally:
+        finish.set()
+        assert throttle._shared_operation_lock.acquire(timeout=2)
+        throttle._shared_operation_lock.release()
 
 
 def test_missing_table_falls_back_with_migration_hint(

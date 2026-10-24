@@ -53,10 +53,11 @@ import secrets
 import threading
 import time
 from collections.abc import Callable, Sequence
+from concurrent.futures import Future
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from math import ceil
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,9 @@ LOGIN_ATTEMPTS_TABLE = "PLATFORM_LOGIN_ATTEMPTS"
 LOGIN_THROTTLE_MIN_SECRET_LENGTH = 32
 # DB が使えなかった後、プロセス内で数え続ける秒数。これを過ぎたら DB を試し直す。
 DEFAULT_SHARED_RETRY_SECONDS = 30.0
+# 接続・再試行・SQL・後処理を含む共有ストアの 1 操作の待機上限。
+DEFAULT_SHARED_TIMEOUT_SECONDS = 2.0
+_Result = TypeVar("_Result")
 # 失敗を記録するついでに消す、期限切れの行の上限（1 回の DELETE を短くする）。
 PURGE_BATCH_ROWS = 1000
 # 1 回の確認で読む行の上限（鍵ごとの行は上限＋同時の試行の数しか残らない）。
@@ -344,6 +348,7 @@ class LoginThrottle:
         shared_store: LoginAttemptStore | None = None,
         key_secret: str = "",
         shared_retry_seconds: float = DEFAULT_SHARED_RETRY_SECONDS,
+        shared_timeout_seconds: float = DEFAULT_SHARED_TIMEOUT_SECONDS,
     ) -> None:
         self._clock = clock
         self.memory = MemoryLoginAttemptStore(clock)
@@ -362,6 +367,9 @@ class LoginThrottle:
         # 鍵が無いときはプロセスごとの乱数の鍵（プロセスの外に出ないので共有しなくてよい）。
         self._key = key or secrets.token_bytes(32)
         self._shared_retry_seconds = shared_retry_seconds
+        self._shared_timeout_seconds = shared_timeout_seconds
+        # 時間切れでも DB 処理を強制終了できないため、同時に残す処理を 1 つに制限する。
+        self._shared_operation_lock = threading.Lock()
         self._shared_unavailable_until: float | None = None
         self._state_lock = threading.Lock()
 
@@ -402,8 +410,10 @@ class LoginThrottle:
         shared = self._available_shared_store()
         if shared is not None:
             try:
-                shared_rows = shared.reserve(
-                    attempt.attempt_id, attempt.key_hashes, attempt.window_seconds
+                shared_rows = self._call_shared(
+                    lambda: shared.reserve(
+                        attempt.attempt_id, attempt.key_hashes, attempt.window_seconds
+                    )
                 )
             except Exception as exc:
                 self._mark_shared_unavailable(exc, "reserve")
@@ -440,7 +450,7 @@ class LoginThrottle:
         if store is None or store is self.memory:
             return
         try:
-            store.purge_expired(attempt.window_seconds)
+            self._call_shared(lambda: store.purge_expired(attempt.window_seconds))
         except Exception as exc:
             self._mark_shared_unavailable(exc, "purge")
 
@@ -452,7 +462,9 @@ class LoginThrottle:
         if store is None or store is self.memory:
             return
         try:
-            store.clear(attempt.attempt_id, attempt.key_hashes, attempt.login_key_hash)
+            self._call_shared(
+                lambda: store.clear(attempt.attempt_id, attempt.key_hashes, attempt.login_key_hash)
+            )
         except Exception as exc:
             self._mark_shared_unavailable(exc, "clear")
 
@@ -487,6 +499,29 @@ class LoginThrottle:
         return max(1, ceil(max(waits)))
 
     # ---- 共有の記録の切り替え ----
+
+    def _call_shared(self, operation: Callable[[], _Result]) -> _Result:
+        """共有の処理を時間内だけ待つ。遅れて確定した予約も失敗として残す（安全側）。"""
+        deadline = time.monotonic() + self._shared_timeout_seconds
+        if not self._shared_operation_lock.acquire(timeout=self._shared_timeout_seconds):
+            raise TimeoutError("Shared login attempt store is busy")
+        result: Future[_Result] = Future()
+
+        def run() -> None:
+            try:
+                result.set_result(operation())
+            except BaseException as exc:
+                result.set_exception(exc)
+            finally:
+                self._shared_operation_lock.release()
+
+        worker = threading.Thread(target=run, name="login-throttle-store", daemon=True)
+        try:
+            worker.start()
+        except BaseException:
+            self._shared_operation_lock.release()
+            raise
+        return result.result(timeout=max(0.0, deadline - time.monotonic()))
 
     def _available_shared_store(self) -> LoginAttemptStore | None:
         if self.shared_store is None:
@@ -530,7 +565,7 @@ class LoginThrottle:
 
     def _release_quietly(self, store: LoginAttemptStore, attempt: LoginAttempt) -> None:
         try:
-            store.release(attempt.attempt_id, attempt.key_hashes)
+            self._call_shared(lambda: store.release(attempt.attempt_id, attempt.key_hashes))
         except Exception as exc:
             # 消せなかった行は失敗 1 回として窓の間だけ数える（安全側）。
             self._mark_shared_unavailable(exc, "release")
