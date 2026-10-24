@@ -60,6 +60,14 @@ describe("ChatProgress", () => {
     expect(renderToStaticMarkup(<ChatProgress steps={[]} />)).toBe("");
   });
 
+  it("実行中で段（span）がまだ無いときは「処理を開始しています」の行を出し、段が届いたら消す（#3226）", () => {
+    render(<ChatProgress steps={[]} active startedAt={T0} testId="p" />);
+    expect(host.textContent).toContain("処理を開始しています");
+    render(<ChatProgress steps={[{ id: "s", label: "段 A", status: "running", startedAt: at(1) }]} active startedAt={T0} testId="p" />);
+    expect(host.textContent).not.toContain("処理を開始しています");
+    expect(host.textContent).toContain("段 A");
+  });
+
   it("実行中は見出しに全体の状態と経過時間、開いた 1 本のタイムラインの最後の行に今の段階を出す（#2309）", () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse(at(5)));

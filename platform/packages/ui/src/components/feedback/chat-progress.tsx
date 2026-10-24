@@ -82,6 +82,8 @@ export interface ChatProgressLabels {
    * 製品は段階を写し漏らさないようにし、これは最後の備えにする。
    */
   working: string;
+  /** 受け付けの直後で、最初の段（span）が届くまでの行の名前（#3226）。 */
+  starting: string;
   /** 更新が途絶え、状態を取り直している間の案内（#1160。遅延の案内より優先する）。 */
   reconnecting: string;
   /** 段階の状態（アイコンに添える。色だけに頼らない）。 */
@@ -104,6 +106,7 @@ export const DEFAULT_CHAT_PROGRESS_LABELS: ChatProgressLabels = {
   elapsed: "経過時間",
   slow: "通常より時間がかかっています。",
   working: "処理を続けています",
+  starting: "処理を開始しています",
   reconnecting: "接続を確認しています。",
   status: {
     pending: "待機中",
@@ -467,6 +470,11 @@ function CurrentStepRow({
  *
  * SQL 生成の画面のような詳細な工程の表示（NL2SQL の WorkflowProgressStrip）より情報を絞る。
  */
+function startingSteps(label: string, startedAt: string | number | null | undefined): ChatProgressStep[] {
+  const started = operationTimestampMs(startedAt);
+  return [{ id: "chat-progress-starting", label, status: "running", ...(started !== null ? { startedAt: new Date(started).toISOString() } : {}) }];
+}
+
 export function ChatProgress({
   steps: incomingSteps,
   active: activeProp,
@@ -489,7 +497,10 @@ export function ChatProgress({
   const labels = { ...DEFAULT_CHAT_PROGRESS_LABELS, ...labelOverrides };
   // 終端の判定は配信の最新の一覧で行い、表示する一覧は処理中に段階を消さない・戻さない（#1358）。
   const active = activeProp ?? isChatProgressActive(incomingSteps);
-  const steps = useChatProgressSteps({ key: progressKey, steps: incomingSteps, active });
+  const trackedSteps = useChatProgressSteps({ key: progressKey, steps: incomingSteps, active });
+  // 処理の経過は trace の投影なので、受け付けの直後は最初の span が届くまで行が無い。その間は「処理を開始しています」の
+  // 行を出し、空白にしない（#3226）。この行は一覧の保持（`useChatProgressSteps`）に入れず、span が届いたら消える。
+  const steps = trackedSteps.length === 0 && activeProp === true ? startingSteps(labels.starting, startedAt) : trackedSteps;
   const failed = !cancelled && steps.some((step) => step.status === "failed");
   const state: ProgressState = active ? "running" : cancelled ? "cancelled" : failed ? "failed" : "done";
   // 実行中の段階が無い（段階の間・開始前）ときは、次に進む段階を今の段階として出す。
