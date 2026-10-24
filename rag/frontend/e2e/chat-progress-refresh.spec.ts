@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "./fixtures/test";
 
-import { chatProgressRecorder, type ChatProgressEventJson } from "./_chat-progress";
+import { ragSpan, spanProgressRecorder, type ChatProgressEventJson } from "./_chat-progress";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
 
 /**
@@ -11,7 +11,7 @@ import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAns
  * 再起動の後）ときは保存済みの会話（作成中の回答）に引き継ぎ、会話の取り直しで完了に変わる。ページを読み込み
  * 直しても作成中の回答は「作成中」で出る。停止は取消の API で止める。
  *
- * 処理の段階は 3 製品共通の段階のイベント（#1359）。作成中の今のターンは回答の配信の `chat_progress` で、保存済みの
+ * 処理の段階は 3 製品共通の段階のイベント（#1359）で、回答の trace の span の開始・終了（#3226）。作成中の今のターンは回答の配信の `chat_progress` で、保存済みの
  * 作成中の回答は段階の SSE（`GET .../messages/{回答の id}/progress/stream`。保存済みの記録を読み直す）で受け取る。
  *
  * `page.route` の fulfill は本文を一度に返すため、画面の fetch を init script で差し替えて、SSE を時間をおいて
@@ -75,23 +75,30 @@ function runEvent(event: string, data: unknown): string {
   return sse(runEventId, event, data);
 }
 
-/** 回答（a1）の段階のイベント。配信と保存済みの会話で同じ記録を使う（番号は回答ごとに 1 から）。 */
-const answerProgress = chatProgressRecorder("a1");
-const declared = answerProgress.declare();
-const rewriting = answerProgress.set({ rewrite_query: "running" });
-const retrieving = answerProgress.set({ rewrite_query: "done", retrieve: "running" });
+/** 回答（a1）の段階（span）のイベント。配信と保存済みの会話で同じ記録を使う（番号は回答ごとに 1 から）。 */
+const answerProgress = spanProgressRecorder("a1");
+const declared = answerProgress.start("root", ragSpan.root());
+const rewriting = answerProgress.start("rewrite", ragSpan.stage("history_rewrite"));
+const retrieving = [
+  ...answerProgress.finish("rewrite"),
+  ...answerProgress.start("answer", ragSpan.stage("answer")),
+  ...answerProgress.start("search", ragSpan.step("文書検索")),
+];
 /** 段階の SSE だけが先に届ける段階（会話の取得はまだ前の段階。別の worker の記録を読み直す SSE を確かめる）。 */
-const reranking = answerProgress.set({ retrieve: "done", rerank: "running" });
-const finished = answerProgress.set(
-  { rerank: "done", generate_answer: "done", check_guardrail: "done" },
-  { retrieve: { citations: 1 } }
-);
+const reranking = [...answerProgress.finish("search"), ...answerProgress.start("rerank", ragSpan.step("Rerank"))];
+const finished = [
+  ...answerProgress.finish("rerank"),
+  ...answerProgress.finish("answer"),
+  ...answerProgress.start("guardrail", ragSpan.stage("answer_guardrail")),
+  ...answerProgress.finish("guardrail"),
+  ...answerProgress.finish("root"),
+];
 const completed = answerProgress.terminal("done");
 const STREAMING_PROGRESS = [...declared, ...rewriting, ...retrieving];
 const COMPLETE_PROGRESS = [...STREAMING_PROGRESS, ...reranking, ...finished, ...completed];
 const CANCELLED_PROGRESS = [
   ...STREAMING_PROGRESS,
-  ...chatProgressRecorder("a1").terminal("cancelled").map((event) => ({ ...event, seq: STREAMING_PROGRESS.length + 1 })),
+  ...spanProgressRecorder("a1").terminal("cancelled").map((event) => ({ ...event, seq: STREAMING_PROGRESS.length + 1 })),
 ];
 
 function progressEvents(events: ChatProgressEventJson[]): string {
@@ -347,7 +354,7 @@ async function send(page: Page) {
   await page.getByRole("textbox").fill(QUESTION);
   await page.getByRole("button", { name: "送信" }).click();
   const current = page.getByTestId("chat-answer-progress-current");
-  await expect(current).toContainText("関係する文書を探しています", { timeout: 5_000 });
+  await expect(current).toContainText("文書の検索", { timeout: 5_000 });
   return current;
 }
 
@@ -415,7 +422,7 @@ for (const colorScheme of ["light", "dark"] as const) {
         // 保存済みの作成中の回答（今の段階）が出て、送信のボタンは「停止」のまま。
         const saved = page.getByTestId("chat-saved-streaming-turn");
         await expect(saved).toBeVisible({ timeout: 10_000 });
-        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("関係する文書を探しています");
+        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("文書の検索");
         await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
         await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("停止");
         await applyTheme(page, colorScheme);
@@ -436,20 +443,20 @@ for (const colorScheme of ["light", "dark"] as const) {
         const state = await mockChatPage(page, null, { reply: "streaming", existingUserId: "u-saved" });
         await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
         const saved = page.getByTestId("chat-saved-streaming-turn");
-        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("関係する文書を探しています", {
+        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("文書の検索", {
           timeout: 10_000,
         });
         // 段階の SSE（使えなければ polling）は保存済みの記録を読み直して届ける（別の worker の記録。#1359）。会話の
         // 取得がまだ前の段階でも、新しい段階を出し、会話の取り直しで前の段階に戻さない。
         await expect.poll(() => state.progressRequests.some((item) => item.path.endsWith("/progress/stream"))).toBe(true);
         state.streamAhead = reranking;
-        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("並べ替えています", {
+        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("検索結果の並べ替え", {
           timeout: 10_000,
         });
         await expect(saved.getByTestId("chat-answer-progress-running")).toContainText("処理中（2 ステップ完了）");
         const conversationReads = state.conversationRequests;
         await expect.poll(() => state.conversationRequests, { timeout: 10_000 }).toBeGreaterThan(conversationReads);
-        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("並べ替えています");
+        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("検索結果の並べ替え");
         await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("停止");
         await applyTheme(page, colorScheme);
         await expectNoPageOverflow(page);
@@ -523,7 +530,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       const reconnecting = page.getByTestId("chat-answer-progress-reconnecting");
       await expect(reconnecting).toHaveText("接続を確認しています。", { timeout: 40_000 });
       // 今の段階の行は残したまま、遅延の案内の代わりに出す。
-      await expect(current).toContainText("関係する文書を探しています");
+      await expect(current).toContainText("文書の検索");
       await expect(current).toHaveAttribute("data-reconnecting", "true");
       // 案内は見出し「処理中（N ステップ完了）」の直下に出す（今の段階の行の下には出さない。#2426）。
       await expect(page.getByTestId("chat-answer-progress-running").getByTestId("chat-answer-progress-reconnecting")).toHaveCount(1);

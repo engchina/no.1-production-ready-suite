@@ -22,6 +22,11 @@ import {
   Skeleton,
   StatusBadge,
   RunStopButton,
+  chatProgressStepsFromEvents,
+  chatProgressTraceIdOf,
+  useTraceDetailsLabels,
+  type ChatProgressEvent,
+  type ChatProgressStep,
 } from "@production-ready/ui";
 import {
   Plus,
@@ -48,7 +53,7 @@ import {
   type SearchDiagnostics,
 } from "@/lib/api";
 import { streamSearch } from "@/lib/search-stream";
-import { answerProcessStepsFromStages, type AnswerStageRecord } from "@/lib/answer-process";
+import { CHAT_PROGRESS_DEFINITIONS } from "@/lib/chat-progress";
 import { isSubmitEnter } from "@/lib/keyboard";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
@@ -95,8 +100,8 @@ interface SearchRun {
   startedAtIso: string;
   endedAtMs: number | null;
   traceId: string | null;
-  /** 工程のイベント（受け取った時刻つき。処理の経過の行を作る）。 */
-  stages: AnswerStageRecord[];
+  /** 処理の経過のイベント（回答の trace の span の開始・終了と終端。#3226）。 */
+  progressEvents: ChatProgressEvent[];
 }
 
 /**
@@ -129,6 +134,8 @@ const TOP_K_SELECT_OPTIONS = TOP_K_OPTIONS.map((option) => ({
 export function SearchClient() {
   // 「回答に未反映の関連章節」の行から章節の原文を開くリンクは、文書の詳細を開ける利用者だけ（#2040・#303）。
   const canOpenSections = canOpenDocumentDetail(useAuth().hasPermission);
+  // span の段の名前（段の名前・技術の span の名前）は root の文言で付ける（#3226）。
+  const traceLabels = useTraceDetailsLabels();
   // 入力中の質問・検索・回答プロファイル・詳細条件は、ページを行き来しても再読込しても残す（workspace-state.md）。
   // 回答・引用などの結果は保存せず、戻っただけで検索を送り直さない。
   const [query, setQuery] = useWorkspaceState("search.query", "");
@@ -273,7 +280,7 @@ export function SearchClient() {
       startedAtIso: new Date(startedAtMs).toISOString(),
       endedAtMs: null,
       traceId: null,
-      stages: [],
+      progressEvents: [],
     });
 
     try {
@@ -314,15 +321,9 @@ export function SearchClient() {
           ...(Object.keys(request.filters).length ? { filters: request.filters } : {}),
         },
         {
-          onStage: (stage) =>
+          onChatProgress: (event) =>
             setRun((current) =>
-              current
-                ? {
-                    ...current,
-                    traceId: stage.trace_id || current.traceId,
-                    stages: [...current.stages, { ...stage, receivedAtMs: stage.occurred_at_ms ?? Date.now() }],
-                  }
-                : current
+              current ? { ...current, progressEvents: [...current.progressEvents, event] } : current
             ),
           onMetadata: (m) => {
             setMeta({
@@ -417,14 +418,15 @@ export function SearchClient() {
   const answerMode = run?.generateAnswer ?? false;
   const isStreaming = phase === "streaming";
   const feedbackSnapshot = buildFeedbackContentSnapshot(submittedQuery, answer, citations);
-  // 処理の経過の行（工程のイベント → 1 工程 = 1 行。完了の後は回答の記録の LLM の回数・結果の説明を足す。#2096）。
+  // 処理の経過の行（回答の trace の span の木。チャットと同じ共通の組み立て。#3226）。画面で止めた・失敗した実行は
+  // 終端のイベントが届かないので、実行中の行を止めた・失敗した状態にする。
   const processSteps = run
-    ? answerProcessStepsFromStages(run.stages, {
-        terminal:
-          phase === "done" ? "done" : phase === "cancelled" ? "cancelled" : phase === "error" ? "failed" : null,
-        executionSteps: parseAnswerDiagnostics(meta?.diagnostics?.answer)?.steps ?? [],
-      })
+    ? searchProcessSteps(
+        chatProgressStepsFromEvents(run.progressEvents, CHAT_PROGRESS_DEFINITIONS, undefined, { traceLabels }),
+        phase
+      )
     : [];
+  const processTraceId = run ? chatProgressTraceIdOf(run.progressEvents) : undefined;
   // 処理の経過（#2096。チャットと同じ AnswerProcess）。実行中も終わった後も回答・検索結果の上の同じ場所に 1 つ出す
   // （作成中の「N ステップ完了」が終わると「処理の経過」になり、完了したら一覧を閉じる。末尾に出し直さない。
   // #2115 / #2118）。「処理の詳細」（処理の経過の中の末尾。#2325）は回答の記録の詳細でチャットと同じ。
@@ -443,7 +445,7 @@ export function SearchClient() {
       elapsedMs={
         running ? undefined : (meta?.elapsed_ms ?? (run.endedAtMs != null ? run.endedAtMs - run.startedAtMs : null))
       }
-      traceSummary={running ? undefined : meta?.diagnostics?.trace_summary}
+      traceId={running ? undefined : processTraceId}
       diagnostics={running ? undefined : meta?.diagnostics?.answer}
       showNotices={!answerMode}
       showAutoFieldFilter={false}
@@ -903,6 +905,15 @@ export function SearchClient() {
  * 実行を始めた時刻。`runRequest` はイベントの処理（検索・再試行など）からだけ呼ばれるが、await の前で
  * 時刻を取るため、React Compiler の lint が描画中の呼び出しと見なさないよう関数に分ける。
  */
+/** 画面で止めた・失敗した実行の、実行中のままの行を止めた（スキップ）・失敗の状態にする。 */
+function searchProcessSteps(steps: ChatProgressStep[], phase: string): ChatProgressStep[] {
+  const ended = phase === "cancelled" ? "skipped" : phase === "error" ? "failed" : null;
+  if (ended === null) return steps;
+  return steps.map((step) =>
+    step.status === "running" || step.status === "pending" ? { ...step, status: ended } : step
+  );
+}
+
 function runStartedAtMs(): number {
   return Date.now();
 }

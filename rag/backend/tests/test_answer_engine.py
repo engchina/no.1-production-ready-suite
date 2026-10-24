@@ -318,19 +318,54 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
 
+    from pr_backend_core.chat_progress import fold_chat_progress_events
+
+    from app.rag.chat_progress import ChatProgressTracker
+
     observed: list[tuple[str, str]] = []
-    details: dict[str, Any] = {}
 
     async def capture(progress: Any) -> None:
         observed.append((progress.stage, progress.outcome))
-        if progress.details:
-            details[progress.stage] = progress.details
 
+    tracker = ChatProgressTracker("a" * 32)
     response = await pipeline.run(
-        SearchRequest(query="受注の登録方法は？"), progress_callback=capture
+        SearchRequest(query="受注の登録方法は？"),
+        progress_callback=capture,
+        span_listener=tracker.span_listener(),
     )
-    # 回答の安全チェックの結果は、成功の進捗の詳細で運ぶ（処理の経過の段を開いて見る。#2341）。
-    assert details["answer_guardrail"]["fields"][0] == {"label": "結果", "value": "無効のため省略"}
+    # 処理の経過は回答の trace の span（#3226）。回答の安全チェックの結果は、その段の span の
+    # 詳細で運ぶ（処理の経過の段を開いて見る。#2341）。
+    steps = fold_chat_progress_events(tracker.events).step_list()
+    guardrail = next(step for step in steps if step.kind == "answer_guardrail")
+    assert guardrail.details is not None
+    assert (guardrail.details.fields[0].label, guardrail.details.fields[0].value) == (
+        "結果",
+        "無効のため省略",
+    )
+    # 回答フローの工程は種類 answer_step と工程名の span で、回答の段（rag.answer）の中に
+    # 入れ子にする。
+    answer_span = next(
+        step
+        for step in steps
+        if (step.span or {}).get("name") == "rag.answer" and not (step.span or {}).get("root")
+    )
+    engine_steps = [step for step in steps if step.kind == "answer_step"]
+    assert engine_steps
+    assert all(step.status == "done" for step in engine_steps)
+    understand = next(s for s in engine_steps if (s.params or {}).get("name") == "質問の理解")
+    assert (understand.span or {}).get("parent_id") == answer_span.step_id
+    # 工程の詳細（目的・結果など）は終わった工程の span に付く。
+    search = next(
+        s for s in engine_steps if str((s.params or {}).get("name")).startswith("文書検索")
+    )
+    assert search.details is not None
+    assert {"目的", "結果"} <= {field.label for field in search.details.fields}
+    # 回答の記録に保存する trace にも、表示用のデータ（工程の種類・名前）を残す。
+    summary = response.diagnostics.trace_summary
+    assert summary is not None
+    assert any(
+        span.display is not None and span.display.kind == "answer_step" for span in summary.spans
+    )
 
     assert "登録ボタン" in response.answer
     # 最後は回答の記録の保存の工程（#2342。この FakeOracle は保存できないので失敗、回答は返す）。

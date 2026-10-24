@@ -7,7 +7,7 @@ import {
   mockLocalAuth,
   selectSearchAnswerProfile,
 } from "./_helpers";
-import { chatProgressRecorder, type ChatStepId, type ChatStepParams, type ChatStepStatus } from "./_chat-progress";
+import { ragSpan, spanProgressRecorder, spanStartMark, spanStepId, type SpanSpec } from "./_chat-progress";
 import { expectProgressTimerMonotonic, startProgressTimerSampler } from "./_progress-timer";
 
 /**
@@ -54,45 +54,57 @@ const citation = {
   metadata: {},
 };
 
-function searchStage(stage: string, outcome: string, elapsed_ms = 0, extra: Record<string, unknown> = {}) {
-  return sse("stage", { trace_id: "trace-1", stage, outcome, elapsed_ms, attributes: {}, ...extra });
+/**
+ * RAG 検索の処理の経過（span のイベント。#3226）を SSE の `chat_progress` で送る。時刻は配信した時刻に置き換える
+ * （mockStreams）。
+ */
+function searchProgressStream(traceId: string) {
+  const recorder = spanProgressRecorder(traceId, () => "__NOW__", spanStartMark);
+  const send = (events: unknown[]) => events.map((event) => sse("chat_progress", { event })).join("");
+  return {
+    start: (key: string, spec: SpanSpec) => send(recorder.start(key, spec)),
+    finish: (...args: Parameters<typeof recorder.finish>) => send(recorder.finish(...args)),
+    terminal: (status: "done" | "failed" | "cancelled") => send(recorder.terminal(status)),
+  };
 }
 
+const slowSearch = searchProgressStream("trace-1");
+
 /**
- * 質問の読み取りから回答の作成まで（answer）の中を、質問の理解 → 文書検索 と時間をおいて進む検索の SSE。
- * 中の各工程は `answer_step:` の入れ子の工程として届く（#593）。
+ * 質問の読み取りから回答の作成まで（answer の段）の中を、質問の理解 → 文書検索 と時間をおいて進む検索の SSE。
+ * 中の各工程は段の span の子の span として届く（#3226）。
  */
 const slowSearchStream: TimedChunk[] = [
   {
     afterMs: 0,
     text: [
-      searchStage("answer", "started"),
-      searchStage("answer_step:質問の理解", "started"),
+      slowSearch.start("root", ragSpan.root()),
+      slowSearch.start("answer", ragSpan.stage("answer")),
+      slowSearch.start("understand", ragSpan.step("質問の理解")),
     ].join(""),
   },
   {
     afterMs: 1500,
     text: [
       // 終わった工程の詳細と計測値は、工程が終わったときのイベントで届く（#2373）。
-      searchStage("answer_step:質問の理解", "success", 1500, {
-        attributes: { llm_calls: 1, llm_sends: 2, status: "complete" },
+      slowSearch.finish("understand", "done", {
+        params: { llm_calls: 1, llm_sends: 2 },
         details: { fields: [{ label: "答える要求", value: "1 件" }], lines: ["読み取った条件: なし"] },
       }),
-      searchStage("answer_step:文書検索", "started"),
+      slowSearch.start("search", ragSpan.step("文書検索")),
     ].join(""),
   },
   {
     afterMs: 1500,
-    text: [
-      searchStage("answer_step:文書検索", "success", 1500),
-      searchStage("answer_step:回答の生成", "started"),
-    ].join(""),
+    text: [slowSearch.finish("search"), slowSearch.start("generate", ragSpan.step("回答の生成"))].join(""),
   },
   {
     afterMs: 600,
     text: [
-      searchStage("answer_step:回答の生成", "success", 600),
-      searchStage("answer", "success", 3600),
+      slowSearch.finish("generate"),
+      slowSearch.finish("answer"),
+      slowSearch.finish("root"),
+      slowSearch.terminal("done"),
       sse("metadata", {
         trace_id: "trace-1",
         elapsed_ms: 3600,
@@ -114,15 +126,20 @@ const slowSearchStream: TimedChunk[] = [
   },
 ];
 
+const retrievalSearch = searchProgressStream("trace-1");
+
 // 回答を作らない検索（検索結果だけ）。処理の経過は検索結果の一覧の上に出す。
 const retrievalOnlySearchStream: TimedChunk[] = [
   {
     afterMs: 0,
     text: [
-      searchStage("answer", "started"),
-      searchStage("answer_step:文書検索", "started"),
-      searchStage("answer_step:文書検索", "success", 400),
-      searchStage("answer", "success", 400),
+      retrievalSearch.start("root", ragSpan.root(false)),
+      retrievalSearch.start("retrieval", ragSpan.stage("retrieval")),
+      retrievalSearch.start("search", ragSpan.step("文書検索", "retrieval")),
+      retrievalSearch.finish("search"),
+      retrievalSearch.finish("retrieval"),
+      retrievalSearch.finish("root"),
+      retrievalSearch.terminal("done"),
       sse("metadata", {
         trace_id: "trace-1",
         elapsed_ms: 400,
@@ -141,17 +158,25 @@ const retrievalOnlySearchStream: TimedChunk[] = [
   },
 ];
 
+const timedOutSearch = searchProgressStream("trace-1");
 const timedOutSearchStream: TimedChunk[] = [
   {
     afterMs: 0,
     text: [
-      searchStage("answer", "started"),
-      searchStage("answer_step:文書検索", "started"),
+      timedOutSearch.start("root", ragSpan.root()),
+      timedOutSearch.start("answer", ragSpan.stage("answer")),
+      timedOutSearch.start("search", ragSpan.step("文書検索")),
     ].join(""),
   },
   {
     afterMs: 800,
-    text: sse("error", {
+    text: [
+      // 時間切れで止まった span は取り消しの印で終わり、終端は失敗（#3226）。
+      timedOutSearch.finish("search", "cancelled"),
+      timedOutSearch.finish("answer", "cancelled"),
+      timedOutSearch.finish("root", "cancelled"),
+      timedOutSearch.terminal("failed"),
+    ].join("") + sse("error", {
       trace_id: "trace-1",
       message: TIMEOUT_MESSAGE,
       error_type: "TimeoutError",
@@ -160,9 +185,14 @@ const timedOutSearchStream: TimedChunk[] = [
   },
 ];
 
+const incompleteSearch = searchProgressStream("trace-incomplete");
+
 /** 回答が送り直しても出力の上限で未完了だった検索の SSE（backend の `describe_answer_failure` の形。#2023）。 */
 const incompleteSearchStream: TimedChunk[] = [
-  { afterMs: 0, text: searchStage("answer", "started") },
+  {
+    afterMs: 0,
+    text: [incompleteSearch.start("root", ragSpan.root()), incompleteSearch.start("answer", ragSpan.stage("answer"))].join(""),
+  },
   {
     afterMs: 300,
     text: sse("error", {
@@ -204,6 +234,8 @@ async function mockStreams(page: Page, scenarios: StreamScenarios): Promise<void
       const chunks = list[Math.min(index, list.length - 1)];
       const encoder = new TextEncoder();
       const signal = init?.signal ?? undefined;
+      // span の開始の時刻（印 → 最初に送った時刻）。回答ごとに作り直す。
+      const startMarks: Record<string, string> = {};
       const stream = new ReadableStream<Uint8Array>({
         async start(controller) {
           for (const chunk of chunks) {
@@ -213,7 +245,12 @@ async function mockStreams(page: Page, scenarios: StreamScenarios): Promise<void
               return;
             }
             // 段階の時刻（`__NOW__`）は送った時刻にする（段階の時刻で経過時間を数え直すと減ることを確かめる。#1176）。
-            controller.enqueue(encoder.encode(chunk.text.replaceAll("__NOW__", new Date().toISOString())));
+            // span の開始の印（`__START_<key>__`）は最初に送った時刻にし、終了のイベントでも同じ時刻にする。
+            const sentAt = new Date().toISOString();
+            const text = chunk.text
+              .replaceAll("__NOW__", sentAt)
+              .replace(/__START_([A-Za-z0-9-]+)__/g, (_mark, key: string) => (startMarks[key] ??= sentAt));
+            controller.enqueue(encoder.encode(text));
           }
           controller.close();
         },
@@ -274,17 +311,26 @@ for (const viewport of [
     const firstElapsed = await timer.textContent();
     await expect(current).toContainText("文書の検索", { timeout: 4_000 });
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
-    // 終わった工程は一覧に増えていく（既定で開く）。
+    // 終わった工程は一覧に増えていく（既定で開く）。行は span で、実行中の span は実行中の行になる（#3226）。
     await expect(page.getByTestId("search-run-progress-running")).toContainText("処理中（1 ステップ完了）");
-    await expect(progress.locator("li").filter({ hasText: "質問の条件の読み取り" })).toContainText("1.5 秒");
+    const understand = page.getByTestId(`search-run-progress-step-${spanStepId("understand")}`);
+    await expect(understand).toContainText(/1\.[5-9] 秒/);
+    // 今の工程は実行中の span（文書検索）。
+    await expect(current).toHaveAttribute("data-step-id", spanStepId("search"));
+    // 包む段（質問の読み取りから回答の作成まで）も実行中の行で、中の工程はその子（字下げ）。
+    await expect(page.getByTestId(`search-run-progress-step-${spanStepId("answer")}`)).toContainText(
+      "質問の読み取りから回答の作成まで"
+    );
     // 終わった工程の詳細は、後の工程の実行中から開ける（回答の完了を待たない。#2373）。計測値も実行中から出す。
     await expect(current).toContainText("文書の検索");
     // 送り直しで API への送信が多いときは送信の回数も示す（#2966）。
-    await expect(page.getByTestId("search-run-progress-step-s1")).toContainText("LLM 1 回・送信 2 回");
-    const liveToggle = page.getByTestId("search-run-progress-step-s1-toggle");
+    await expect(understand).toContainText("LLM 1 回・送信 2 回");
+    const liveToggle = page.getByTestId(`search-run-progress-step-${spanStepId("understand")}-toggle`);
     await liveToggle.click();
     await expect(liveToggle).toHaveAttribute("aria-expanded", "true");
-    await expect(page.getByTestId("search-run-progress-step-s1-details")).toContainText("答える要求");
+    await expect(page.getByTestId(`search-run-progress-step-${spanStepId("understand")}-details`)).toContainText(
+      "答える要求"
+    );
     await expect(current).toContainText("文書の検索");
     // 検索のボタンは実行中に「停止」になりスピナーを出さないため、動くスピナーは今の工程の 1 つだけ（#413）。
     await expect(progress.locator("svg.animate-spin")).toHaveCount(1);
@@ -296,9 +342,10 @@ for (const viewport of [
     });
 
     const summary = page.getByTestId("search-run-progress-summary");
-    await expect(summary).toHaveText(/^処理の経過（3 ステップ・3\.6 秒）$/, { timeout: 4_000 });
+    // 包む段（質問の読み取りから回答の作成まで）も span の行になる（実行の全体の span は行にしない。#3226）。
+    await expect(summary).toHaveText(/^処理の経過（4 ステップ・3\.6 秒）$/, { timeout: 4_000 });
     await expect(page.getByText("銀行の得点は 82 点です。").first()).toBeVisible();
-    // 完了したら一覧を閉じ（チャットと同じ。#2118）、押すと開く。全体を包む工程（質問の読み取りから回答の作成まで）は行にしない。
+    // 完了したら一覧を閉じ（チャットと同じ。#2118）、押すと開く。
     const process = page.getByRole("region", { name: "処理の経過" });
     await expect(process.getByText("文書の検索", { exact: true })).toBeHidden();
     // 「処理の詳細」は処理の経過の中にあり、閉じているときは一緒に隠れる（回答の本文との間に独立して置かない。#2325）。
@@ -316,7 +363,9 @@ for (const viewport of [
     // 回答を読む場には回答の記録の削除（「その他の操作」）を出さない（#2325）。
     await expect(process.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
     await process.screenshot({ path: `test-results/answer-progress-search-details-${viewport.name}.png` });
-    await expect(process.getByText("質問の読み取りから回答の作成まで", { exact: true })).toHaveCount(0);
+    // 「トレースの詳細」の 2 つ目の表示は出さず、Trace ID は「処理の詳細」の中に出す（#3226）。
+    await expect(process.getByText("トレースの詳細")).toHaveCount(0);
+    await expect(process.getByText(/Trace ID: 0123456789abcdef/)).toBeVisible();
     // 名前は「処理の経過」1 つ（旧「検索実行」「実行記録」「ステージ」は出さない）。
     await expect(page.getByRole("region", { name: "検索実行" })).toHaveCount(0);
     await expect(page.getByText("検索の工程と使ったモデル")).toHaveCount(0);
@@ -454,9 +503,6 @@ const okReply = {
   created_at: "2026-01-01T00:01:05Z",
 };
 
-function chatStage(stage: string, outcome: string, elapsed_ms = 0) {
-  return sse("stage", { model_id: "m1", trace_id: "t1", stage, outcome, elapsed_ms });
-}
 
 /** ライト・ダークの両方の画面を残す（処理の段階の色は共有のトークン。#1146）。 */
 async function screenshotBothThemes(page: Page, path: (theme: string) => string) {
@@ -470,20 +516,16 @@ async function screenshotBothThemes(page: Page, path: (theme: string) => string)
 }
 
 /**
- * 処理の段階のイベント（3 製品共通の契約。#1359）を回答の配信（`chat_progress`）で送る。回答（`messageId`）ごとに
- * 番号を続け、状態が変わった段階だけを送る。時刻は配信した時刻に置き換える（mockStreams）。
+ * 処理の経過のイベント（span のイベント。#1359 / #3226）を回答の配信（`chat_progress`）で送る。回答（`messageId`）
+ * ごとに番号を続ける。時刻は配信した時刻に置き換える（mockStreams）。
  */
 function chatProgressStream(messageId: string) {
-  const recorder = chatProgressRecorder(messageId, () => "__NOW__");
+  const recorder = spanProgressRecorder(messageId, () => "__NOW__", spanStartMark);
   const send = (events: unknown[]) =>
     events.map((event) => sse("chat_progress", { model_id: "m1", message_id: messageId, event })).join("");
   return {
-    declare: () => send(recorder.declare()),
-    set: (
-      statuses: Partial<Record<ChatStepId, ChatStepStatus>>,
-      params: Partial<Record<ChatStepId, ChatStepParams>> = {},
-      details: Partial<Record<ChatStepId, Record<string, unknown>>> = {}
-    ) => send(recorder.set(statuses, params, details)),
+    start: (key: string, spec: SpanSpec) => send(recorder.start(key, spec)),
+    finish: (...args: Parameters<typeof recorder.finish>) => send(recorder.finish(...args)),
     terminal: (status: "done" | "failed" | "cancelled") => send(recorder.terminal(status)),
   };
 }
@@ -500,31 +542,25 @@ const timedOutChatStream: TimedChunk[] = [
         user_message: userMessage,
         columns: [{ model_id: "m1", label: "MODEL 1" }],
       }),
-      timedOutProgress.declare(),
-      chatStage("answer", "started"),
-      chatStage("answer_step:質問の理解", "started"),
-      timedOutProgress.set({ rewrite_query: "running" }),
+      timedOutProgress.start("root", ragSpan.root()),
+      timedOutProgress.start("rewrite", ragSpan.stage("history_rewrite")),
     ].join(""),
   },
   {
     afterMs: 1500,
     text: [
-      chatStage("answer_step:質問の理解", "success", 1500),
-      chatStage("answer_step:文書検索", "started"),
-      // 終わった段階の詳細は、終わったときのイベントで届く（後の段階の実行中から開ける。#2373）。
-      timedOutProgress.set(
-        { rewrite_query: "done", retrieve: "running" },
-        {},
-        { rewrite_query: { fields: [{ label: "答える要求", value: "1 件" }] } }
-      ),
+      // 終わった段の詳細は、終わったときのイベントで届く（後の段の実行中から開ける。#2373）。
+      timedOutProgress.finish("rewrite", "done", { details: { fields: [{ label: "答える要求", value: "1 件" }] } }),
+      timedOutProgress.start("answer", ragSpan.stage("answer")),
+      timedOutProgress.start("search", ragSpan.step("文書検索")),
     ].join(""),
   },
   {
     afterMs: 1500,
     text: [
-      chatStage("answer_step:文書検索", "cancelled", 1500),
-      chatStage("answer", "cancelled", 1500),
-      timedOutProgress.set({ retrieve: "failed", rerank: "skipped", generate_answer: "skipped", check_guardrail: "skipped" }),
+      timedOutProgress.finish("search", "failed"),
+      timedOutProgress.finish("answer", "failed"),
+      timedOutProgress.finish("root", "failed"),
       timedOutProgress.terminal("failed"),
       sse("error", {
         model_id: "m1",
@@ -535,7 +571,7 @@ const timedOutChatStream: TimedChunk[] = [
     ].join(""),
   },
   {
-    // 失敗した段階を確かめる間をとってから、会話を取り直す。
+    // 失敗した段を確かめる間をとってから、会話を取り直す。
     afterMs: 1500,
     text: sse("all_done", { conversation_id: "conv-1" }),
   },
@@ -550,26 +586,22 @@ const okChatStream: TimedChunk[] = [
         user_message: retryUserMessage,
         columns: [{ model_id: "m1", label: "MODEL 1" }],
       }),
-      chatStage("answer", "started"),
-      okProgress.declare(),
-      okProgress.set({ rewrite_query: "running" }),
+      okProgress.start("root", ragSpan.root()),
+      okProgress.start("rewrite", ragSpan.stage("history_rewrite")),
     ].join(""),
   },
   {
     afterMs: 500,
     text: [
-      chatStage("answer", "success", 500),
-      okProgress.set(
-        {
-          rewrite_query: "done",
-          retrieve: "done",
-          rerank: "done",
-          generate_answer: "done",
-          check_guardrail: "done",
-        },
-        // 根拠の件数は値で届き、画面が i18n で補足にする。
-        { retrieve: { citations: 1 } }
-      ),
+      okProgress.finish("rewrite"),
+      okProgress.start("answer", ragSpan.stage("answer")),
+      okProgress.start("search", ragSpan.step("文書検索")),
+      // LLM の回数・結果の説明は値で届き、画面が i18n で補足にする。
+      okProgress.finish("search", "done", { params: { llm_calls: 1, note: "根拠 1 件" } }),
+      okProgress.finish("answer"),
+      okProgress.start("guardrail", ragSpan.stage("answer_guardrail")),
+      okProgress.finish("guardrail"),
+      okProgress.finish("root"),
       okProgress.terminal("done"),
       sse("metadata", {
         model_id: "m1",
@@ -665,19 +697,18 @@ for (const viewport of [
     const progress = page.getByTestId("chat-answer-progress");
     const current = page.getByTestId("chat-answer-progress-current");
     const timer = page.getByTestId("chat-answer-progress-timer");
-    await expect(current).toContainText("質問を整理しています");
+    await expect(current).toContainText("会話を踏まえた質問の書き換え");
     await expect(timer).toContainText("経過時間");
     const firstElapsed = await timer.textContent();
-    await expect(current).toContainText("関係する文書を探しています", {
-      timeout: 4_000,
-    });
+    await expect(current).toContainText("文書の検索", { timeout: 4_000 });
     await expect(page.getByTestId("chat-answer-progress-running")).toContainText("処理中（1 ステップ完了）");
-    // 終わった段階の詳細は、後の段階の実行中から開ける（回答の完了・失敗を待たない。#2373）。
-    const liveToggle = page.getByTestId("chat-answer-progress-step-rewrite_query-toggle");
+    // 終わった段の詳細は、後の段の実行中から開ける（回答の完了・失敗を待たない。#2373）。
+    const rewriteId = spanStepId("rewrite");
+    const liveToggle = page.getByTestId(`chat-answer-progress-step-${rewriteId}-toggle`);
     await liveToggle.click();
     await expect(liveToggle).toHaveAttribute("aria-expanded", "true");
-    await expect(page.getByTestId("chat-answer-progress-step-rewrite_query-details")).toContainText("答える要求");
-    await expect(current).toContainText("関係する文書を探しています");
+    await expect(page.getByTestId(`chat-answer-progress-step-${rewriteId}-details`)).toContainText("答える要求");
+    await expect(current).toContainText("文書の検索");
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
     await progress.scrollIntoViewIfNeeded();
     await page.screenshot({
@@ -692,8 +723,9 @@ for (const viewport of [
     await expectProgressTimerMonotonic(page, 2);
     // 止まった段階を開いて出す（原因は段階ではなく Banner に出す）。
     await expect(progress).toHaveAttribute("data-chat-progress-state", "failed");
-    await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toContainText(
-      "関係する文書を探せませんでした"
+    await expect(page.getByTestId(`chat-answer-progress-step-${spanStepId("search")}`)).toHaveAttribute(
+      "data-status",
+      "failed"
     );
     await progress.scrollIntoViewIfNeeded();
     await screenshotBothThemes(page, (theme) => `test-results/answer-progress-chat-failed-${viewport.name}-${theme}.png`);
@@ -711,9 +743,10 @@ for (const viewport of [
     await expect(page.getByText(okReply.content).first()).toBeVisible({ timeout: 5_000 });
     // 完了した回答の上（作成中の「N ステップ完了」の場所のまま）に「処理の経過」を閉じて残す（#1146 / #2115 / #2118）。
     const summary = page.getByTestId("chat-answer-progress-summary");
-    await expect(summary).toContainText("処理の経過（5 ステップ・");
-    await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toContainText(
-      "関係する文書を探しました（AI に渡した 1 件）"
+    await expect(summary).toContainText("処理の経過（4 ステップ・");
+    await summary.click();
+    await expect(page.getByTestId(`chat-answer-progress-step-${spanStepId("search")}`)).toContainText(
+      "根拠 1 件 · LLM 1 回"
     );
     const answerBox = await page.getByText(okReply.content).first().boundingBox();
     const summaryBox = await summary.boundingBox();

@@ -2,6 +2,7 @@ import {timelineSnapshot, timelineTypography} from "../../../platform/packages/u
 import { findIconTextMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
 
 import { expect, type Locator, type Page, test } from "./fixtures/test";
+import { answerSpans, ragSpan, savedSpanProgress, SPAN_TRACE_ID } from "./_chat-progress";
 
 import {
   expectNoPageOverflow,
@@ -1047,21 +1048,23 @@ for (const viewport of [
   });
 }
 
-// #2096: 回答の処理の経過は、回答の工程ごとの段階（answer_step。工程名・入れ子の深さ・LLM の回数）を 1 か所に
-// 既定で開いて出す。名前は「処理の経過」1 つで、処理の経過 → 回答の本文 → 根拠の一覧 → 評価 の順（#2115）。
+// #2096 / #3226: 回答の処理の経過は、回答の trace の span の木（工程の span は種類 answer_step と工程名・LLM の回数）を
+// 1 か所に出す。名前は「処理の経過」1 つで、処理の経過 → 回答の本文 → 根拠の一覧 → 評価 の順（#2115）。
 for (const theme of ["light", "dark"] as const) {
   test(`保存した回答の処理の経過は工程の一覧を閉じて出し、開くと入れ子と計測値を出す (${theme})`, { tag: "@responsive" }, async ({
     page,
   }) => {
     const at = (seconds: number) => new Date(Date.parse("2026-01-01T00:00:01Z") + seconds * 1000).toISOString();
     let seq = 0;
+    // span のイベント（step_id は span の id、親子は parent_id。実行の全体の span は行にしない。#3226）。
     const step = (
       stepId: string,
       kind: string,
       start: number,
       end: number,
       params?: Record<string, string | number>,
-      details?: Record<string, unknown>
+      details?: Record<string, unknown>,
+      parent = "s0"
     ) => ({
       schema_version: 1,
       seq: ++seq,
@@ -1076,8 +1079,12 @@ for (const theme of ["light", "dark"] as const) {
       finished_at: at(end),
       ...(params ? { params } : {}),
       ...(details ? { details } : {}),
+      name: kind === "answer_step" ? "rag.engine.stage" : `rag.${kind}`,
+      parent_id: parent,
+      trace_id: SPAN_TRACE_ID,
     });
     const progress = [
+      { ...step("s0", "s0", 0, 9), name: "rag.answer", parent_id: undefined, root: true },
       // 会話を踏まえた質問の書き換えの詳細（#2341。パイプラインの工程の詳細）。
       step("s1", "history_rewrite", 0, 0.4, undefined, {
         fields: [
@@ -1085,18 +1092,19 @@ for (const theme of ["light", "dark"] as const) {
           { label: "書き換えた質問", value: "合成の書き換えた質問" },
         ],
       }),
-      step("s2", "answer_step", 0.4, 1.2, { name: "質問の理解", depth: 0, llm_calls: 1 }),
-      step("s3", "answer_step", 1.2, 9, { name: "回答生成フロー", depth: 0, llm_calls: 2 }),
+      step("s2", "answer_step", 0.4, 1.2, { name: "質問の理解", llm_calls: 1 }),
+      step("s3", "answer_step", 1.2, 9, { name: "回答生成フロー", llm_calls: 2 }),
       // 工程の詳細（見出しと値・行。#2294 / #2341。backend が回答の記録の工程の詳細を段の詳細にする）。
       step(
         "s4",
         "answer_step",
         1.3,
         1.34,
-        { name: "文書検索", depth: 1, note: "該当なし" },
-        { fields: [{ label: "検索の候補", value: "0 件" }, { label: "結果", value: "回答に渡す根拠 0 件" }], lines: ["検索文: 2 本"] }
+        { name: "文書検索", note: "該当なし" },
+        { fields: [{ label: "検索の候補", value: "0 件" }, { label: "結果", value: "回答に渡す根拠 0 件" }], lines: ["検索文: 2 本"] },
+        "s3"
       ),
-      step("s5", "answer_step", 2, 9, { name: "回答文の生成と根拠確認（1回目）", depth: 1, llm_calls: 2 }),
+      step("s5", "answer_step", 2, 9, { name: "回答文の生成と根拠確認（1回目）", llm_calls: 2 }, undefined, "s3"),
       { schema_version: 1, seq: ++seq, target_id: "a1", attempt: 0, emitted_at: at(9), type: "terminal", status: "done" },
     ];
     await page.emulateMedia({ colorScheme: theme });
@@ -1127,8 +1135,10 @@ for (const theme of ["light", "dark"] as const) {
     const understood = page.getByTestId("chat-answer-progress-step-s2");
     await expect(understood).toContainText("（LLM 1 回）");
     await expect(understood).toContainText("0.8 秒");
-    // 詳細のある工程だけを開ける（既定で閉じる。#2294）。
-    await expect(page.getByTestId("chat-answer-progress-step-s2-toggle")).toHaveCount(0);
+    // 工程の行は span なので、開くと工程の詳細の後ろに技術の値（span の名前）が付く（既定で閉じる。#2294 / #3226）。
+    await page.getByTestId("chat-answer-progress-step-s2-toggle").click();
+    await expect(page.getByTestId("chat-answer-progress-step-s2-details")).toContainText("rag.engine.stage");
+    await page.getByTestId("chat-answer-progress-step-s2-toggle").click();
     const nestedToggle = page.getByTestId("chat-answer-progress-step-s4-toggle");
     await expect(nestedToggle).toHaveAttribute("aria-expanded", "false");
     await nestedToggle.click();
@@ -2195,11 +2205,16 @@ function progressEvent(seq: number, extra: Record<string, unknown>) {
   })}\n\n`;
 }
 
+// 処理の経過は span のイベント（#3226）。工程の span（文書検索）が失敗し、実行の全体の span も失敗で終わる。
+const failedSpan = { name: "rag.engine.stage", kind: "answer_step", params: { name: "文書検索" }, parent_id: "r0", trace_id: SPAN_TRACE_ID };
+const failedRoot = { step_id: "r0", kind: "r0", name: "rag.answer", root: true, trace_id: SPAN_TRACE_ID };
 const failedStreamBody = [
   sseStart,
-  progressEvent(1, { type: "step", step_id: "s1", kind: "answer_step", status: "running", params: { name: "文書検索", depth: 0 } }),
-  progressEvent(2, { type: "step", step_id: "s1", kind: "answer_step", status: "failed", params: { name: "文書検索", depth: 0 } }),
-  progressEvent(3, { type: "terminal", status: "failed" }),
+  progressEvent(1, { type: "step", ...failedRoot, status: "running" }),
+  progressEvent(2, { type: "step", step_id: "s1", ...failedSpan, status: "running" }),
+  progressEvent(3, { type: "step", step_id: "s1", ...failedSpan, status: "failed" }),
+  progressEvent(4, { type: "step", ...failedRoot, status: "failed" }),
+  progressEvent(5, { type: "terminal", status: "failed" }),
   `event: error\ndata: ${JSON.stringify({
     model_id: "m1",
     message_id: "a1",
@@ -2374,12 +2389,21 @@ function longProcessReply(index: number) {
       file_name: "合成の文書.pdf",
       metadata: { evidence_model_used: i === 0, evidence_answer_use: i === 0 ? "confirmed" : "unused" },
     })),
-    progress: Array.from({ length: 16 }, (_, i) => ({
-      schema_version: 1, seq: i + 1, target_id: id, attempt: 0, emitted_at: at(i + 1),
-      type: "step", step_id: `s${i}`, kind: "answer_step", status: "done",
-      started_at: at(i), finished_at: at(i + 1),
-      params: { name: `合成の工程 ${i + 1}`, depth: 0, llm_calls: 1 },
-    })),
+    // 処理の経過は span のイベント（実行の全体の span と 16 の工程の span。#3226）。
+    progress: [
+      {
+        schema_version: 1, seq: 1, target_id: id, attempt: 0, emitted_at: at(16),
+        type: "step", step_id: "r0", kind: "r0", status: "done", started_at: at(0), finished_at: at(16),
+        name: "rag.answer", root: true, trace_id: SPAN_TRACE_ID,
+      } as Record<string, unknown>,
+      ...Array.from({ length: 16 }, (_, i): Record<string, unknown> => ({
+        schema_version: 1, seq: i + 2, target_id: id, attempt: 0, emitted_at: at(i + 1),
+        type: "step", step_id: `s${i}`, kind: "answer_step", status: "done",
+        started_at: at(i), finished_at: at(i + 1),
+        params: { name: `合成の工程 ${i + 1}`, llm_calls: 1 },
+        name: "rag.engine.stage", parent_id: "r0", trace_id: SPAN_TRACE_ID,
+      })),
+    ],
   };
 }
 
@@ -2429,6 +2453,8 @@ for (const compare of [false, true]) {
     await cards.last().scrollIntoViewIfNeeded();
     await expect(cards.last()).toBeInViewport();
     await log.hover();
+    // ポインタの下が根拠の一覧（一定の高さの中のスクロール）なら、一覧の末尾の後で会話の欄へ続けて動く（スクロールの連鎖）。
+    await page.mouse.wheel(0, 20_000);
     await page.mouse.wheel(0, 20_000);
     await expect(feedback).toBeInViewport({ ratio: 1 });
     // 外側のページでも入力欄まで移動できる。低い画面で会話を潰して入力欄だけを固定しない。
@@ -2439,21 +2465,29 @@ for (const compare of [false, true]) {
   });
 }
 
-test("実測 trace の親子関係を RAG チャットで開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const { syntheticTraceSummary: baseTrace, syntheticSpan, captureTraceLayouts } = await import("../../../platform/packages/ui/e2e/trace-fixture");
-  // RAG の段・回答エンジンの工程の span を足し、処理の経過と同じ名前で出ることを確かめる（#3214）。
-  const syntheticTraceSummary = { ...baseTrace, spans: [
-    ...baseTrace.spans,
-    syntheticSpan("8", "1", "rag.answer", { "pr.stage": "answer" }),
-    syntheticSpan("9", "8", "rag.engine.stage", { "pr.stage": "回答生成フロー" }),
-  ] };
-  const { savedChatProgress } = await import("./_chat-progress");
-  const progress = savedChatProgress("a1", { rewrite_query: "done", retrieve: "done", rerank: "done", generate_answer: "done", check_guardrail: "done" }, { terminal: "done" });
+/** Trace ID とコピーのボタンが同じ行にあるか（375px でも。#3219）。 */
+async function traceIdRowsOnOneLine(page: Page): Promise<boolean> {
+  return page.evaluate(() => [...document.querySelectorAll("[data-trace-id-row]")].every((row) => {
+    const [text, button] = [row.querySelector("span"), row.querySelector("button")].map((el) => el?.getBoundingClientRect());
+    return text != null && button != null && button.top < text.bottom && text.top < button.bottom;
+  }));
+}
+
+test("処理の経過は回答の trace の span の木で、2 つ目の「トレースの詳細」は出さない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  // RAG の段・回答エンジンの工程・モデルの呼び出しの span（#3226）。
+  const progress = savedSpanProgress(
+    "a1",
+    [
+      ...answerSpans(["回答生成フロー"]),
+      { key: "chat", spec: ragSpan.technical("gen_ai.chat", "step-0", { "gen_ai.request.model": "synthetic-model" }) },
+    ],
+    { terminal: "done" }
+  );
   const streamBody = [
     sseStart,
     ...progress.map(event => `event: chat_progress\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", event })}\n\n`),
     `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "合成の回答です。" })}\n\n`,
-    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "synthetic-a", elapsed_ms: 2000, guardrail_warnings: [], answer_diagnostics: { trace_summary: syntheticTraceSummary, outcome: "answered", execution_steps: [{ name: "合成の処理", status: "完了", elapsed_seconds: 2 }] } })}\n\n`,
+    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "synthetic-a", elapsed_ms: 2000, guardrail_warnings: [], answer_diagnostics: { outcome: "answered", execution_steps: [{ name: "合成の処理", status: "完了", elapsed_seconds: 2 }] } })}\n\n`,
     `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
   ].join("");
   await mockChat(page, "ready", [], { streamBody });
@@ -2461,39 +2495,33 @@ test("実測 trace の親子関係を RAG チャットで開ける", { tag: "@re
   await selectSearchAnswerProfile(page, searchAnswerProfile.name);
   await page.getByRole("textbox").fill("合成データを確認");
   await page.getByRole("button", { name: "送信" }).click();
-  await expect(page.getByTestId("chat-answer-progress-summary")).toBeVisible();
+  const progressRegion = page.getByTestId("chat-answer-progress");
+  await expect(page.getByTestId("chat-answer-progress-summary")).toContainText("処理の経過（3 ステップ・");
   await page.getByTestId("chat-answer-progress-summary").click();
+  // 段は処理の経過と同じ名前、技術の span は日本語の名前とモデル名。入れ子は span の親子（root は行にしない）。
+  const labels = progressRegion.locator("[data-run-timeline-label]");
+  await expect(labels).toHaveText(["質問の読み取りから回答の作成まで", "根拠の検索と回答の作成", "モデルの呼び出し · synthetic-model"]);
+  await expect(progressRegion.locator("[data-run-timeline-step]").nth(2)).toHaveAttribute("data-level", "2");
+  await expect(labels.filter({ hasText: /rag\.|gen_ai\./ })).toHaveCount(0);
+  // 「処理の詳細」には Trace ID とコピーのボタンを出し、「トレースの詳細」の 2 つ目の表示は無い。
   const details = page.locator("[data-run-process-details]");
   await expect(details).not.toHaveAttribute("open", "");
   await details.locator(":scope > summary").click();
-  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
+  await expect(details.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${SPAN_TRACE_ID}`);
+  await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);
   await expect(page.getByTestId("trace-details")).toHaveCount(0);
-  await details.getByTestId("trace-details-toggle").click();
-  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
-  await expect(page.getByTestId("trace-details")).toContainText("モデルの呼び出し");
-  const traceLabels = page.getByTestId("trace-details").locator("[data-run-timeline-label]");
-  await expect(traceLabels).toContainText(["実行の全体", "質問の読み取りから回答の作成まで", "根拠の検索と回答の作成"]);
-  await expect(traceLabels.filter({ hasText: /rag\.|gen_ai\./ })).toHaveCount(0);
-  await page.getByTestId("trace-details").screenshot({ path: testInfo.outputPath("rag-trace-stages.png") });
+  expect(await traceIdRowsOnOneLine(page)).toBe(true);
   await expectNoPageOverflow(page);
-  await captureTraceLayouts(page, testInfo, "rag-chat-trace");
+  await page.screenshot({ path: testInfo.outputPath("rag-chat-span-tree.png"), fullPage: true });
 });
 
-test("保存した回答の記録の trace も処理の経過と同じ名前で出す", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const { syntheticTraceSummary: baseTrace, syntheticSpan, captureTraceLayouts } = await import("../../../platform/packages/ui/e2e/trace-fixture");
-  // 会話を開き直したときは回答の記録（SavedAnswerRecord）を読み直し、その中の trace を同じ部品・同じ名前で出す（#3219）。
-  const trace = { ...baseTrace, spans: [
-    ...baseTrace.spans,
-    syntheticSpan("8", "1", "rag.answer", { "pr.stage": "answer" }),
-    syntheticSpan("9", "8", "rag.engine.stage", { "pr.stage": "回答生成フロー" }),
-    syntheticSpan("a", "9", "gen_ai.rerank", { "gen_ai.request.model": "synthetic-rerank" }),
-  ] };
+test("保存した回答を開き直しても処理の経過は span の木 1 つで、回答の記録の詳細に trace を重ねない", { tag: "@responsive" }, async ({ page }) => {
   const reply = longProcessReply(1);
   await mockChat(page, "ready", [userMessage, reply]);
   await page.route("**/api/search/answers?**", route => route.fulfill({ json: pageEnvelope([{ trace_id: reply.trace_id }]) }));
   await page.route("**/api/search/answers/*", route => route.fulfill({ json: {
     data: { trace_id: reply.trace_id, created_at: assistantMessage.created_at, question: "合成の質問", answer: "合成の回答", citations: [], surface: "chat", evaluation_available: false,
-      answer_diagnostics: { outcome: "answered", confidence: "high", trace_summary: trace } },
+      answer_diagnostics: { outcome: "answered", confidence: "high", trace_summary: { schema_version: 1, spans: [] } } },
     error_messages: [], warning_messages: [],
   } }));
   await page.goto("/chat");
@@ -2501,20 +2529,45 @@ test("保存した回答の記録の trace も処理の経過と同じ名前で�
   const history = await openChatHistory(page);
   await history.getByRole("list", { name: "会話の履歴" }).getByRole("button").filter({ hasText: "件・" }).click();
   const answer = page.locator(`[id="message-${reply.message_id}"]`);
+  await expect(answer.getByTestId("chat-answer-progress-summary")).toContainText("16 ステップ");
   await answer.getByTestId("chat-answer-progress-summary").click();
   await answer.getByTestId("chat-answer-progress-details").click();
-  await answer.getByTestId("trace-details-toggle").click();
-  const labels = answer.getByTestId("trace-details").locator("[data-run-timeline-label]");
-  await expect(labels).toContainText(["実行の全体", "質問の読み取りから回答の作成まで", "根拠の検索と回答の作成", "並べ替え（rerank） · synthetic-rerank"]);
-  await expect(labels.filter({ hasText: /rag\.|gen_ai\./ })).toHaveCount(0);
+  await expect(answer.getByRole("region", { name: "処理の詳細" }).getByText("信頼度: high")).toBeVisible();
+  await expect(answer.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${SPAN_TRACE_ID}`);
+  await expect(answer.getByTestId("trace-details-toggle")).toHaveCount(0);
   await expectNoPageOverflow(page);
-  await captureTraceLayouts(page, testInfo, "rag-saved-record-trace");
+});
+
+test("span の無い古い形式の処理の経過は、空白にせず古い形式の案内を出す", { tag: "@responsive" }, async ({ page }) => {
+  const reply = {
+    ...longProcessReply(1),
+    // 段だけのイベント（#3226 の前の形式）。
+    progress: [
+      { schema_version: 1, seq: 1, target_id: "long-answer-1", attempt: 0, emitted_at: "2026-01-01T00:00:01Z",
+        type: "step", step_id: "s1", kind: "answer_step", status: "done", params: { name: "文書検索", depth: 0 } },
+      { schema_version: 1, seq: 2, target_id: "long-answer-1", attempt: 0, emitted_at: "2026-01-01T00:00:01Z", type: "terminal", status: "done" },
+    ],
+  };
+  await mockChat(page, "ready", [userMessage, reply]);
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  const history = await openChatHistory(page);
+  await history.getByRole("list", { name: "会話の履歴" }).getByRole("button").filter({ hasText: "件・" }).click();
+  const answer = page.locator(`[id="message-${reply.message_id}"]`);
+  await expect(answer.getByTestId("chat-answer-progress-legacy")).toHaveText(
+    "この実行は古い形式の記録のため、処理の経過を表示できません。"
+  );
+  await expect(answer.getByTestId("chat-answer-progress-summary")).toHaveCount(0);
+  await expect(answer.getByText(/文書の検索/)).toHaveCount(0);
+  await expectNoPageOverflow(page);
 });
 
 test("チャットと履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
-  const {syntheticTraceSummary, captureTraceLayouts} = await import("../../../platform/packages/ui/e2e/trace-fixture");
   const reply = longProcessReply(1);
-  reply.progress = reply.progress.slice(0, 3).map((event, index) => ({...event, params: {...event.params, depth: index, note: "根拠不足で終了"}}));
+  // 工程の span を親子に 3 段つなぐ（入れ子は span の親子。#3226）。
+  reply.progress = [reply.progress[0], ...reply.progress.slice(1, 4).map((event, index) => ({
+    ...event, parent_id: index === 0 ? "r0" : `s${index - 1}`, params: {...(event.params as Record<string, unknown>), note: "根拠不足で終了"},
+  }))];
   reply.citations = [];
   await openPersistedConversation(page, page.viewportSize()!.width, [{...userMessage, content: "合成の質問"}, reply]);
   const progress = page.getByTestId("chat-answer-progress");
@@ -2527,11 +2580,11 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   expect(live.map((row) => row.level)).toEqual([0,1,2]);
   await page.screenshot({path: testInfo.outputPath("chat-process.png")});
   await page.route("**/api/history/runs/synthetic-parity", (route) => route.fulfill({json: {data: {
-    trace_summary: syntheticTraceSummary, citation_count: 0, answer_outcome: "insufficient_evidence", search_answer_profile_id: "bv-1", search_answer_profile_name: "プロファイル A",
+    citation_count: 0, answer_outcome: "insufficient_evidence", search_answer_profile_id: "bv-1", search_answer_profile_name: "プロファイル A",
     run_id: "synthetic-parity", surface: "chat", question: "合成の質問", status: "success", answer_generated: true,
     created_at: "2026-01-01T00:00:03Z", elapsed_ms: 3000, executed_by_me: true, executor_display_name: "利用者 A",
     conversation_id: "conv-1", message_id: reply.message_id, progress_events: reply.progress,
-    stages: [], steps: [], feedback: [], citations: [], answer: reply.content, answer_available: true,
+    feedback: [], citations: [], answer: reply.content, answer_available: true,
     answer_diagnostics: null, conversation_owner_display_name: "利用者 A", owned_by_me: true,
   }}}));
   await page.goto("/history/synthetic-parity");
@@ -2542,14 +2595,12 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   expect(await timelineSnapshot(history)).toEqual(live);
   expect(await timelineTypography(history)).toEqual(liveTypography);
   await expectNoPageOverflow(page);
+  // 「処理の詳細」には Trace ID とコピーのボタンを出し、「トレースの詳細」の 2 つ目の表示は無い（#3226）。
   const details = page.locator("[data-run-process-details]");
   await expect(details).not.toHaveAttribute("open", "");
   await details.locator(":scope > summary").click();
-  await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
-  await expect(page.getByTestId("trace-details")).toHaveCount(0);
-  await details.getByTestId("trace-details-toggle").click();
-  await expect(page.getByTestId("trace-details")).toContainText("モデルの呼び出し");
-  await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
-  await captureTraceLayouts(page, testInfo, "history-trace");
+  await expect(details.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${SPAN_TRACE_ID}`);
+  await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);
+  expect(await traceIdRowsOnOneLine(page)).toBe(true);
   await page.getByTestId("run-history-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
 });

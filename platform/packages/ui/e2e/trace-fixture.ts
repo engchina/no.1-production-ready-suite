@@ -62,3 +62,71 @@ export async function captureTraceLayouts(
     }
   }
 }
+
+/**
+ * 処理の経過が trace の投影のとき（#3226）の合成の span のイベント（3 製品の e2e で共通）。root（行にしない）・
+ * 工程の span（`kind` を製品の定義で名前にする）・モデルの呼び出し・ツールの実行の木。`running` に入れた span は実行中。
+ */
+export function syntheticSpanEvents(
+  targetId: string,
+  { stages = [] as { id: string; kind: string; params?: Record<string, string | number | boolean>; parent?: string }[], running = [] as string[], terminal = "done" as "done" | "failed" | "cancelled" | null } = {},
+) {
+  const trace = "a".repeat(32);
+  const at = (seconds: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, seconds)).toISOString();
+  const events: Record<string, unknown>[] = [];
+  let seq = 0;
+  const span = (id: string, parent: string | null, name: string, extra: Record<string, unknown> = {}, index = 0) => {
+    const done = !running.includes(id);
+    events.push({
+      schema_version: 1, seq: ++seq, target_id: targetId, attempt: 0, emitted_at: at(index + 1), type: "step",
+      step_id: id.padStart(16, "0").slice(-16), name, trace_id: trace, started_at: at(index),
+      ...(parent ? { parent_id: parent.padStart(16, "0").slice(-16) } : { root: true }),
+      status: done ? "done" : "running", ...(done ? { finished_at: at(index + 1) } : {}), ...extra,
+    });
+  };
+  span("1", null, "synthetic.execute", {}, 0);
+  stages.forEach((stage, index) => span(stage.id, stage.parent ?? "1", "synthetic.stage", { kind: stage.kind, ...(stage.params ? { params: stage.params } : {}) }, index + 1));
+  span("c", "1", "gen_ai.chat", { attributes: { "gen_ai.request.model": syntheticChatModel, "gen_ai.usage.input_tokens": 12, "gen_ai.usage.output_tokens": 0 } }, stages.length + 1);
+  if (terminal && running.length === 0) events.push({ schema_version: 1, seq: ++seq, target_id: targetId, attempt: 0, emitted_at: at(stages.length + 3), type: "terminal", status: terminal });
+  return events;
+}
+
+/**
+ * 処理の経過（trace の投影。#3226）の画面の幅とテーマの確認。「処理の詳細」を開いて Trace ID の行（コピーのボタンが
+ * 同じ行）を確かめ、1280 / 1920 / 375px・ライト / ダークで横あふれが無いことを確かめて撮る。
+ */
+export async function captureSpanProgressLayouts(
+  page: {
+    locator(selector: string): { first(): { click(): Promise<void>; isVisible(): Promise<boolean> } };
+    viewportSize(): { width: number; height: number } | null;
+    setViewportSize(size: { width: number; height: number }): Promise<void>;
+    evaluate(fn: () => unknown): Promise<unknown>;
+    evaluate(fn: (value: string) => unknown, value: string): Promise<unknown>;
+    screenshot(options: { path: string; fullPage: boolean }): Promise<unknown>;
+  },
+  testInfo: { outputPath(name: string): string },
+  name: string,
+) {
+  const details = page.locator("[data-run-process-details] > summary").first();
+  if (!(await page.evaluate(() => document.querySelector("[data-trace-id-row]") != null))) await details.click();
+  if (!(await page.evaluate(() => document.querySelector("[data-trace-id-row]") != null))) throw new Error("処理の詳細に Trace ID の行がありません。");
+  const mobile = (page.viewportSize()?.width ?? 1280) <= 375;
+  for (const width of mobile ? [375] : [1280, 1920]) {
+    await page.setViewportSize({ width, height: mobile ? 812 : 900 });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(value => {
+        document.documentElement.classList.remove("light", "dark");
+        document.documentElement.setAttribute("data-theme", value);
+      }, theme);
+      await page.evaluate(() => document.fonts.ready);
+      if (!(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))) throw new Error("ページに横方向のはみ出しがあります。");
+      const sameRow = await page.evaluate(() => [...document.querySelectorAll("[data-trace-id-row]")].every(row => {
+        const [text, button] = [row.querySelector("span"), row.querySelector("button")].map(el => el?.getBoundingClientRect());
+        return text != null && button != null && button.top < text.bottom && text.top < button.bottom;
+      }));
+      if (!sameRow) throw new Error("Trace ID とコピーのボタンが別の行にあります。");
+      if (await page.evaluate(() => document.querySelector('[data-testid="trace-details"]') != null)) throw new Error("処理の経過のほかに「トレースの詳細」が出ています。");
+      await page.screenshot({ path: testInfo.outputPath(`${name}-${width}-${theme}.png`), fullPage: true });
+    }
+  }
+}

@@ -1,4 +1,9 @@
-import {chatProgressStepsFromEvents, chatProgressTimelineStep, parseChatProgressEvents} from "@production-ready/ui";
+import {
+  chatProgressStepsFromEvents,
+  chatProgressTimelineStep,
+  chatProgressTraceIdOf,
+  parseChatProgressEvents,
+} from "@production-ready/ui";
 import { describe, expect, it } from "vitest";
 
 import type { RunState } from "@/lib/api";
@@ -12,13 +17,14 @@ import {
   runDurationMs,
   runFinishedAt,
   runStatusLabel,
-  pairToolProgressSteps,
+  agentProgressDefinitions,
+  progressRunSteps,
   runConversationHref,
+  runProgressIsLegacy,
   runTimelineSteps,
   runProgressSteps,
   runToolTitles,
   toolStepDetails,
-  withToolStepDetails,
 } from "@/lib/run-history";
 
 const NOW = "2026-10-15T09:00:00.000Z";
@@ -82,41 +88,12 @@ describe("詳細の時間と処理の経過", () => {
     expect(runDurationMs(run({ status: "waiting_approval" }))).toBeNull();
   });
 
-  it("段の記録の無い Run は step をチャットと同じ名前のツールの段にする", () => {
-    const steps = runTimelineSteps(
-      run({
-        steps: [
-          {
-            id: "s1",
-            run_id: "run-1",
-            kind: "tool",
-            status: "failed",
-            tool_call: { name: "rag__rag_search", arguments: {} },
-          } as RunState["steps"][number],
-        ],
-      }),
-      () => "中身"
-    );
-    expect(steps).toHaveLength(1);
-    expect(steps[0]).toMatchObject({ id: "step:s1", status: "failed", label: "処理を実行できませんでした" });
-    expect(steps[0].children).toBe("中身");
-  });
-
-  // #2324: ツールの表示名（MCP の title。metadata `tool_titles`）があれば段の名前に出す。
-  it("ツールの表示名があれば段の名前を表示名にし、無ければ一般の処理名を出す", () => {
-    const titled = run({
-      metadata: { tool_titles: { rag__rag_search: "ナレッジベースの検索", bad: 1 } },
-      steps: [
-        { id: "s1", run_id: "run-1", kind: "tool", status: "completed", tool_call: { name: "rag__rag_search", arguments: {} } },
-        { id: "s2", run_id: "run-1", kind: "tool", status: "completed", tool_call: { name: "ext__other", arguments: {} } },
-      ] as RunState["steps"],
+  // #2324: ツールの表示名（MCP の title。metadata `tool_titles`）を読む。
+  it("ツールの表示名を metadata から読み、名前の定義で表示名を使う", () => {
+    expect(runToolTitles(run({ metadata: { tool_titles: { rag__rag_search: "ナレッジベースの検索", bad: 1 } } }))).toEqual({
+      rag__rag_search: "ナレッジベースの検索",
     });
-    expect(runToolTitles(titled)).toEqual({ rag__rag_search: "ナレッジベースの検索" });
     expect(runToolTitles(run({ metadata: { tool_titles: ["x"] } }))).toEqual({});
-    expect(runTimelineSteps(titled, () => undefined).map((step) => step.label)).toEqual([
-      "「ナレッジベースの検索」を実行しました",
-      "処理を実行しました",
-    ]);
     const label = AGENT_CHAT_PROGRESS_STEPS.tool.label;
     expect(label("running", { tool: "rag__rag_search", title: "ナレッジベースの検索" })).toBe(
       "「ナレッジベースの検索」を実行しています"
@@ -125,63 +102,158 @@ describe("詳細の時間と処理の経過", () => {
   });
 });
 
-// #2294: チャットの処理の経過のツールの段を開いて見る詳細。
-describe("チャットの処理の経過のツールの段の詳細", () => {
-  const toolStep = (id: string, name: string, extra: Partial<RunState["steps"][number]> = {}) =>
-    ({
-      id,
-      run_id: "run-1",
-      kind: "tool",
-      status: "completed",
-      tool_call: { name, arguments: { query: "条件 A" } },
-      ...extra,
-    }) as RunState["steps"][number];
+// #3226: 処理の経過は Run の trace（span の木）の投影。
+const TRACE = "0123456789abcdef0123456789abcdef";
 
-  it("同じツールの n 回目の段を n 回目の step に結び、引数と結果の JSON・エラーを詳細にする", () => {
-    const progress = [
-      { id: "plan", label: "進め方を決めました", status: "done" as const },
-      { id: "tool:rag__rag_search", label: "処理を実行しました", status: "done" as const },
-      { id: "tool:rag__rag_search#2", label: "処理を実行できませんでした", status: "failed" as const },
-    ];
-    const steps = [
+function span(seq: number, id: string, name: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    seq,
+    attempt: 0,
+    target_id: "run-1",
+    emitted_at: NOW,
+    type: "step",
+    step_id: id,
+    status: "done",
+    name,
+    trace_id: TRACE,
+    started_at: NOW,
+    finished_at: NOW,
+    ...extra,
+  };
+}
+
+const toolStep = (id: string, name: string, extra: Partial<RunState["steps"][number]> = {}) =>
+  ({
+    id,
+    run_id: "run-1",
+    kind: "tool",
+    status: "completed",
+    tool_call: { name, arguments: { query: "条件 A" } },
+    ...extra,
+  }) as RunState["steps"][number];
+
+function spanRun(overrides: Partial<RunState> = {}): RunState {
+  const events = parseChatProgressEvents([
+    span(1, "a000000000000001", "agent.execute", { root: true }),
+    span(2, "a000000000000002", "gen_ai.chat", { parent_id: "a000000000000001", kind: "plan" }),
+    span(3, "a000000000000003", "gen_ai.execute_tool", {
+      parent_id: "a000000000000001",
+      kind: "tool",
+      params: { tool: "rag__rag_search", title: "ナレッジベースの検索", run_step: "s1" },
+      attributes: { "gen_ai.tool.name": "rag__rag_search" },
+    }),
+    span(4, "a000000000000004", "mcp.request", { parent_id: "a000000000000003" }),
+    span(5, "a000000000000005", "gen_ai.chat", { parent_id: "a000000000000001", kind: "respond" }),
+    { schema_version: 1, seq: 6, attempt: 0, target_id: "run-1", emitted_at: NOW, type: "terminal", status: "done" },
+  ]);
+  return run({
+    progress_events: events,
+    steps: [
       toolStep("s1", "rag__rag_search", {
+        tool_call: {
+          name: "rag__rag_search",
+          arguments: { query: "条件 A" },
+          data_scope: { profile_id: "profile-a", action: "filled" },
+        } as never,
         tool_result: { name: "rag__rag_search", success: true, output: { answer: "回答 A" } } as never,
       }),
-      toolStep("s2", "rag__rag_search", {
-        status: "failed",
-        tool_result: { name: "rag__rag_search", success: false, error: "時間切れ" } as never,
-      }),
-    ];
-    const [plan, first, second] = withToolStepDetails(progress, steps);
-    expect(plan.details).toBeUndefined();
-    expect(first.details?.code?.map((block) => [block.label, block.language])).toEqual([
-      ["引数", "json"],
-      ["結果", "json"],
+    ],
+    ...overrides,
+  });
+}
+
+describe("処理の経過（span の木。Issue 3226）", () => {
+  it("span のイベントを木の順に並べ、実行の全体の span は行にせず、工程の種類で名前を付ける", () => {
+    const steps = runTimelineSteps(spanRun());
+    expect(steps.map((step) => [step.label, step.level ?? 0])).toEqual([
+      ["進め方を決めました", 0],
+      ["「ナレッジベースの検索」を実行しました", 0],
+      ["MCP の呼び出し", 1],
+      ["回答を作りました", 0],
     ]);
-    expect(first.details?.code?.[1].text).toContain("回答 A");
-    // 段の名前は表示名のことがあるので、内部名を詳細の先頭に出す（#2324）。
-    expect(first.details?.fields).toEqual([{ label: "ツール", value: "rag__rag_search", mono: true }]);
-    expect(second.details?.fields).toEqual([
-      { label: "ツール", value: "rag__rag_search", mono: true },
-      { label: "エラー", value: "時間切れ" },
-    ]);
-    expect(pairToolProgressSteps(progress, steps).get("tool:rag__rag_search#2")?.id).toBe("s2");
+    expect(steps.map((step) => step.id)).not.toContain("a000000000000001");
+    expect(chatProgressTraceIdOf(spanRun().progress_events ?? [])).toBe(TRACE);
   });
 
-  // #2373
-  it("段の終わりのイベントの詳細は、結果をまだ持たない step で上書きしない", () => {
+  it("ツールの行は Run の step と結び、データの範囲の記録・引数と結果・表の結果を中身にする", () => {
+    const state = spanRun();
+    expect(progressRunSteps(state.progress_events ?? [], state.steps).get("a000000000000003")?.id).toBe("s1");
+    const tool = runTimelineSteps(state, (step) => `表:${step.id}`)[1];
+    expect(tool.children).toBe("表:s1");
+    const fields = tool.details?.fields ?? [];
+    // 内部名を先頭に出し（#2324）、共通の技術の値（Span name）を後ろに足す。
+    expect(fields[0]).toEqual({ label: "ツール", value: "rag__rag_search", mono: true });
+    expect(fields.some((field) => field.label === "Span name" && field.value === "gen_ai.execute_tool")).toBe(true);
+    expect(tool.details?.code?.map((block) => block.label)).toEqual(["引数", "結果"]);
+    expect(tool.details?.code?.[1].text).toContain("回答 A");
+    expect(tool.details?.lines?.length).toBeGreaterThan(0);
+  });
+
+  it("span の終わりのイベントの詳細は、結果をまだ持たない step で上書きしない（Issue 2373）", () => {
     const eventDetails = { fields: [{ label: "ツール", value: "rag__rag_search", mono: true }], lines: ["イベントの詳細"] };
-    const progress = [
-      { id: "tool:rag__rag_search", label: "処理を実行しました", status: "done" as const, details: eventDetails },
-    ];
-    const [kept] = withToolStepDetails(progress, [toolStep("s1", "rag__rag_search", { status: "running" })]);
-    expect(kept.details).toEqual(eventDetails);
-    const [replaced] = withToolStepDetails(progress, [
+    const definitions = agentProgressDefinitions([toolStep("s1", "rag__rag_search", { status: "running" })]);
+    const details = definitions.tool.details?.("done", { tool: "rag__rag_search", run_step: "s1" }, eventDetails);
+    expect(details).toEqual(eventDetails);
+    const withResult = agentProgressDefinitions([
       toolStep("s1", "rag__rag_search", {
         tool_result: { name: "rag__rag_search", success: true, output: { answer: "回答 A" } } as never,
       }),
     ]);
-    expect(replaced.details?.code?.[1].text).toContain("回答 A");
+    expect(withResult.tool.details?.("done", { run_step: "s1" }, eventDetails)?.code?.[1].text).toContain("回答 A");
+    // ツールの step が無い Run は Agent の段の定義のまま。
+    expect(agentProgressDefinitions([])).toBe(AGENT_CHAT_PROGRESS_STEPS);
+  });
+
+  it("承認の待ちは待ったツールを補足に出し、却下したツールはスキップと理由で出す", () => {
+    const events = parseChatProgressEvents([
+      span(1, "b000000000000001", "agent.resume", { root: true }),
+      span(2, "b000000000000002", "agent.approval_wait", {
+        parent_id: "b000000000000001",
+        kind: "approval",
+        params: { tools: "記録の登録", round: 1 },
+      }),
+      span(3, "b000000000000003", "gen_ai.execute_tool", {
+        parent_id: "b000000000000001",
+        kind: "tool",
+        status: "skipped",
+        params: { tool: "write", rejected: true },
+      }),
+    ]);
+    const steps = runTimelineSteps(run({ progress_events: events }));
+    expect(steps.map((step) => [step.label, step.detail, step.status])).toEqual([
+      ["承認の判断を受け取りました", "記録の登録", "done"],
+      ["処理の実行", "承認されませんでした", "skipped"],
+    ]);
+  });
+
+  it("span の無い古い形式の記録は古い形式として扱い、行を作らない", () => {
+    const legacy = run({
+      progress_events: parseChatProgressEvents([
+        { schema_version: 1, seq: 1, attempt: 0, target_id: "run-1", emitted_at: NOW, type: "step", step_id: "plan", status: "done" },
+      ]),
+      steps: [toolStep("s1", "rag__rag_search")],
+    });
+    expect(runProgressIsLegacy(legacy)).toBe(true);
+    expect(runTimelineSteps(legacy)).toEqual([]);
+    // 記録の無い終わった Run（#1359 の前）も古い形式。実行中・受け付けただけ・終端だけの Run は古い形式ではない。
+    expect(runProgressIsLegacy(run({ status: "completed", progress_events: [] }))).toBe(true);
+    expect(runProgressIsLegacy(run({ status: "running", progress_events: [] }))).toBe(false);
+    expect(runProgressIsLegacy(run({ status: "queued" }))).toBe(false);
+    const terminalOnly = parseChatProgressEvents([
+      { schema_version: 1, seq: 1, attempt: 0, target_id: "run-1", emitted_at: NOW, type: "terminal", status: "cancelled" },
+    ]);
+    expect(runProgressIsLegacy(run({ status: "cancelled", progress_events: terminalOnly }))).toBe(false);
+    expect(runProgressIsLegacy(spanRun())).toBe(false);
+  });
+
+  it("チャットの処理の経過（イベント → 名前）と実行の詳細の行は同じ", () => {
+    const state = spanRun();
+    const live = runProgressSteps(
+      state,
+      chatProgressStepsFromEvents(state.progress_events ?? [], agentProgressDefinitions(state.steps), state.id)
+    );
+    expect(runTimelineSteps(state)).toEqual(live.map(chatProgressTimelineStep));
   });
 
   it("長い結果は先頭だけにして省略の印を付け、ツールの呼び出しでなければ詳細を付けない", () => {
@@ -221,17 +293,4 @@ describe("runConversationHref（会話を開く。Issue 2343）", () => {
       "/chat?agent_id=default&thread_id=t1"
     );
   });
-});
-
-it("承認待ちとイベントに欠けたツールもチャットと履歴で同じ工程にする", () => {
-  const events = parseChatProgressEvents([{schema_version: 1, seq: 1, attempt: 0, target_id: "run-1", emitted_at: NOW,
-    type: "step", step_id: "approval_wait", kind: "approval", status: "running", started_at: NOW}]);
-  const state = run({status: "waiting_approval", progress_events: events, steps: [{
-    id: "synthetic-step", run_id: "run-1", kind: "tool", status: "completed", tool_call: {name: "synthetic_tool", arguments: {}},
-  }, {
-    id: "future-step", run_id: "run-1", kind: "tool", status: "waiting_approval", tool_call: {name: "synthetic_future_tool", arguments: {}},
-  }] as RunState["steps"]});
-  const live = runProgressSteps(state, chatProgressStepsFromEvents(events, AGENT_CHAT_PROGRESS_STEPS, state.id));
-  expect(runTimelineSteps(state, () => "履歴だけの詳細")).toEqual(live.map(chatProgressTimelineStep));
-  expect(live.map((step) => step.status)).toEqual(["running", "done"]);
 });

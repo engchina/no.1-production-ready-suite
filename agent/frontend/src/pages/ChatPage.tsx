@@ -22,7 +22,9 @@ import {
   ChatLayout,
   ChatProgress,
   ChatSkeleton,
+  chatProgressTraceIdOf,
   useChatProgressStream,
+  useTraceDetailsLabels,
   ChatAnswer,
   ChatPendingTurn,
   ChatTurn,
@@ -74,7 +76,7 @@ import {
 } from "@/lib/answer-review";
 import { runAnswerEvidence } from "@/lib/answer-evidence";
 import { answerStructureTitles, noticeHeading, structureAnswer } from "@/lib/answer-structure";
-import { AGENT_CHAT_PROGRESS_STEPS, chatSubmitProgressSteps } from "@/lib/chat-progress";
+import { chatSubmitProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { useAgentChatAttachments } from "@/components/chat/useAgentChatAttachments";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
@@ -90,7 +92,7 @@ import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { useCapabilities } from "@/lib/permissions";
 import { answerNoticeText } from "@/lib/run-artifacts";
 import { toolProgressTable } from "@/components/chat/ToolProgressTable";
-import { runProgressSteps } from "@/lib/run-history";
+import { agentProgressDefinitions, runProgressIsLegacy, runProgressSteps } from "@/lib/run-history";
 import { outputMissing, runOutputTable, runToolResultTables } from "@/lib/run-tables";
 import { runStatusView } from "@/lib/status-labels";
 import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-state";
@@ -999,18 +1001,22 @@ function RunChatTurn({
   const cancelKinds = (
     latest && run.status === "completed" ? pendingClarificationKinds(run.artifacts) : []
   ).filter((kind) => kind !== toolConfirmationKind);
-  // 処理の段階（3 製品共通のイベント。#1359）。backend が Run の状態から記録したイベントを、実行中は SSE で受け取り
-  // （承認待ちの間も heartbeat で途絶えない）、使えなければ polling に縮退する。会話の取り直しに入っている記録も積む。
-  // 途絶えたら共通の hook が取り直し、「接続を確認しています」を出す（#1160）。
+  // 処理の経過（3 製品共通のイベント。#1359）は Run の trace（span の木。#3226）の投影。backend が記録した span の
+  // イベントを、実行中は SSE で受け取り（承認待ちの間も heartbeat で途絶えない）、使えなければ polling に縮退する。
+  // 会話の取り直しに入っている記録も積む。途絶えたら共通の hook が取り直し、「接続を確認しています」を出す（#1160）。
   const stoppable = STOPPABLE_STATUSES.has(run.status);
   const runId = run.id;
   const fetchProgress = useCallback(
     (since: number, signal: AbortSignal) => agentApi.getRunProgress(runId, since, { signal }),
     [runId]
   );
+  // ツールの span の詳細に、Run の step のデータの範囲の記録・取り直した結果を足す（実行の詳細と同じ。#2294）。
+  const definitions = useMemo(() => agentProgressDefinitions(run.steps), [run.steps]);
+  const traceLabels = useTraceDetailsLabels();
+  const legacyProgress = runProgressIsLegacy(run);
   const progress = useChatProgressStream({
     key: run.id,
-    definitions: AGENT_CHAT_PROGRESS_STEPS,
+    definitions,
     events: run.progress_events ?? NO_PROGRESS_EVENTS,
     streamUrl: stoppable ? runProgressStreamUrl(run.id) : null,
     fetchEvents: fetchProgress,
@@ -1023,10 +1029,18 @@ function RunChatTurn({
     },
   });
   const failure = runFailure(run, progress.steps, "chat");
-  // ツールの段に、Run の step の引数・結果・エラーを段を開いて見る詳細として結ぶ（実行の詳細と同じ対応。#2294）。
-  // 結果は会話の取り直し（実行中は 1.5 秒ごと・終わったとき）で届く。
+  // ツールの行に、Run の step の表の結果を中身として結ぶ（実行の詳細と同じ対応。#2294）。結果は会話の取り直し
+  // （実行中は 1.5 秒ごと・終わったとき）で届く。
   const progressSteps = progress.progressProps.steps;
   const stepsWithDetails = useMemo(() => runProgressSteps(run, progressSteps, toolProgressTable), [progressSteps, run]);
+  // 承認・回答前の確認の答えを待っている間は、実行中の span が無い。待っていることを今の行の名前で示す（待ちの
+  // 区間は、待ちが終わったときに span として記録する。#3226）。
+  const waitingLabel =
+    run.status === "waiting_approval"
+      ? t("chat.progress.approval.running")
+      : run.status === "waiting_confirmation"
+        ? t("chat.progress.confirmation.running")
+        : undefined;
 
   return (
     // 1 往復の入れ物（質問の吹き出し・回答の枠）は 3 製品共通の ChatTurn / ChatAnswer（#1161）。
@@ -1053,15 +1067,24 @@ function RunChatTurn({
         */}
         {/* 経過時間は Run の作成（送信の受付）から数え続ける（段階ごとに 0 に戻さない。#1176）。 */}
         {/* 承認・回答前の確認の答えは人の操作を待つので、遅延の案内を出さない（実行の詳細と同じ。#1839）。 */}
-        <ChatProgress
-          {...progress.progressProps}
-          cancelled={run.status === "cancelled"}
-          traceSummary={run.trace_segments && run.trace_segments.length > 1 ? run.trace_segments : run.trace_summary}
-          steps={stepsWithDetails}
-          startedAt={run.created_at}
-          slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}
-          testId="chat-progress"
-        />
+        {legacyProgress ? (
+          // span の無い古い形式の記録は、処理の経過を出せないことを同じ位置に示す（空白にしない。#3226）。
+          <p className="text-xs text-fg-muted" data-testid="chat-progress-legacy">
+            {traceLabels.legacy}
+          </p>
+        ) : (
+          <ChatProgress
+            {...progress.progressProps}
+            cancelled={run.status === "cancelled"}
+            // 処理の経過は trace の投影なので、「処理の詳細」には Trace ID だけを出す（2 つ目の表示を置かない。#3226）。
+            traceId={chatProgressTraceIdOf(run.progress_events ?? NO_PROGRESS_EVENTS)}
+            steps={stepsWithDetails}
+            startedAt={run.created_at}
+            slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}
+            labels={waitingLabel ? { working: waitingLabel } : undefined}
+            testId="chat-progress"
+          />
+        )}
         {failure ? (
           // 失敗は 3 製品共通の失敗のカード（止まった段・原因・次の操作・「詳細」。#2342）。進めない理由を先に
           // 読めるよう、処理の経過の直下（回答・結果の上）に 1 つだけ出す。

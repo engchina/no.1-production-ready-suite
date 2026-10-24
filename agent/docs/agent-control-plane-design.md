@@ -756,12 +756,15 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 名前の変更は `PATCH /threads/{thread_id}`（`{"title"}`。1〜80 文字。最初の Run の `metadata.thread_title` に置く）、削除は
 `DELETE /threads/{thread_id}`（#1817。作った利用者だけ）。削除は Run を監査・フィードバック・評価・利用量のために残し、会話からの参照
 （`thread_id`）だけを外す（元の会話は `metadata.deleted_thread_id`）。回答の作成中・承認待ちの Run がある会話は 409。
-回答の処理の段階（画面の `ChatProgress`。#1359）は 3 製品共通の追記型のイベント（`pr_backend_core.chat_progress`）で、
-repository が Run のイベントを足すたびに（Run の lock の中で）`features/agent/chat_progress.py` が Run の状態から照合して
-`RunState.progress_events` に記録する（変わらなければ記録しない。checkpoint の snapshot に入るので保存先に関係なく残る）。
-段階は「進め方の検討（`plan`）」→ ツールの呼び出し（`tool:<名前>`、2 回目から `#n`）→ 承認待ち（`approval_wait`。承認を
-求めた回ごと、ツールの前。ツールは承認まで待機中）→「回答の作成（`respond`、2 回目から `#n`。その後にツールを呼んだら
-進め方の検討の完了に変える）」、終わりは完了・失敗・停止の終端。画面は会話の取得に入っている記録に加えて、実行中は
+回答の処理の経過（画面の `ChatProgress` と実行の詳細の処理の経過。#1359）は Run の trace（span の木）の投影で（#3226）、
+3 製品共通の追記型のイベント（`pr_backend_core.chat_progress`）で配る。組み込み Runtime の実行の区間（`agent.execute` /
+`agent.resume`）の `operation_trace(listener=...)` が span の開始・表示用のデータの変更・終了を知らせ、repository が Run の
+lock の中で `RunState.progress_events` に記録する（`record_builtin_span`。checkpoint の snapshot に入るので保存先に関係なく
+残る）。工程の span は表示用のデータ（`SpanDisplay`）で種類を持つ: モデルの呼び出し（`gen_ai.chat`）は応答がツールを求めたら
+`plan`、最終の回答なら `respond`（呼び出しの後に決める）、ツールの呼び出し（`gen_ai.execute_tool`）は `tool`（実行しなかった
+ツール〔却下・方針で拒否・上限・引数の誤り〕も `skipped` で残す）、承認・回答前の確認の待ちは、待ちが終わって再開した区間で
+終わった区間の span（`agent.approval_wait` / `agent.confirmation_wait`）にする（待っている間は見出しの状態とカードで示す）。
+終わりは Run が終わったときの完了・失敗・停止の終端。画面は会話の取得に入っている記録に加えて、実行中は
 `GET /runs/{run_id}/progress/stream`（SSE。`Last-Event-ID` / `since` の続きから。承認待ちの間も heartbeat）で受け取り、
 使えなければ `GET /runs/{run_id}/progress?since=` の polling に縮退する（共通の `useChatProgressStream`）。
 支援タスクの状態（#1243）: 組み込み Runtime は Run の終わり（承認待ちで止めるときも）に、ツールの呼び出しから

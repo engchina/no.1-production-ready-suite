@@ -1,8 +1,12 @@
 import {
+  chatProgressHasSpans,
   chatProgressStepsFromEvents,
   chatProgressTimelineStep,
   runStepDetailsJson,
+  type ChatProgressEvent,
+  type ChatProgressLabelOptions,
   type ChatProgressStep,
+  type ChatProgressStepDefinitions,
   type RunStepDetailCode,
   type RunStepDetailField,
   type RunStepDetails,
@@ -12,7 +16,6 @@ import {
   type RunStatus as CommonRunStatus,
   type RunStatusFilter as CommonRunStatusFilter,
   type RunTimelineStep,
-  type RunTimelineStepStatus,
 } from "@production-ready/ui";
 
 import type { RunExecutorFilter, RunListKind, RunListKindQuery, RunListStatus, RunState, RunStep } from "@/lib/api";
@@ -171,23 +174,6 @@ export function runDurationMs(run: RunState): number | null {
   return Number.isFinite(ms) ? Math.max(0, ms) : null;
 }
 
-function stepTimelineStatus(step: RunStep): RunTimelineStepStatus {
-  switch (step.status) {
-    case "completed":
-      return "done";
-    case "failed":
-      return "failed";
-    case "running":
-      return "running";
-    case "waiting_approval":
-      return "waiting";
-    case "cancelled":
-      return "skipped";
-    default:
-      return "pending";
-  }
-}
-
 /** Run に渡したツールの表示名（MCP の `title`。backend の metadata `tool_titles`）。 */
 export function runToolTitles(run: Pick<RunState, "metadata">): Record<string, string> {
   const value = run.metadata?.tool_titles;
@@ -197,37 +183,23 @@ export function runToolTitles(run: Pick<RunState, "metadata">): Record<string, s
   );
 }
 
-/** ツールの段（`run.steps`）の名前（チャットの処理の経過と同じ文言。表示名があれば表示名）。 */
-function toolStepLabel(step: RunStep, status: RunTimelineStepStatus, titles: Record<string, string>): string {
-  const tool = step.tool_call?.name ?? step.kind;
-  const progressStatus = status === "waiting" ? "running" : status;
-  const title = step.tool_call ? titles[step.tool_call.name] : undefined;
-  return AGENT_CHAT_PROGRESS_STEPS.tool.label(progressStatus, title ? { tool, title } : { tool });
-}
+/** ツールの span の params の、Run の step の id の key（backend の `RUN_STEP_PARAM`。#3226）。 */
+export const RUN_STEP_PARAM = "run_step";
+
+const TERMINAL_RUN_STATUSES: ReadonlySet<RunState["status"]> = new Set(["completed", "failed", "cancelled"]);
 
 /**
- * 処理の経過の段（`RunTimeline`）。段の名前と状態はチャットの処理の経過（`progress_events` →
- * `AGENT_CHAT_PROGRESS_STEPS`）と同じにし、ツールの段には Run の step（引数・結果・エラー）を中身として結び付ける
- * （同じツールの n 回目の段 ↔ n 回目の step）。段の記録の無い古い Run は step だけで並べる。
+ * 処理の経過の行（span の id）と、ツールの span が結んだ Run の step（引数・結果・データの範囲）。backend はツールの
+ * span の params に Run の step の id を入れる（#3226）。チャットと実行の詳細で同じ対応にする（#2294）。
  */
-/**
- * 処理の経過のツールの段（`tool:<name>` / `tool:<name>#n`）と Run の step（引数・結果）を結ぶ（同じツールの n 回目の段
- * ↔ n 回目の step）。実行の詳細とチャットの処理の経過で同じ対応にする（#2294）。
- */
-export function pairToolProgressSteps(
-  progress: readonly Pick<ChatProgressStep, "id">[],
-  steps: readonly RunStep[]
-): Map<string, RunStep> {
-  const toolSteps = steps.filter((step) => step.tool_call);
-  const used = new Set<string>();
+export function progressRunSteps(events: readonly ChatProgressEvent[], steps: readonly RunStep[]): Map<string, RunStep> {
+  const byId = new Map(steps.map((step) => [step.id, step]));
   const pairs = new Map<string, RunStep>();
-  for (const item of progress) {
-    if (!item.id.startsWith("tool:")) continue;
-    const tool = item.id.slice("tool:".length).replace(/#\d+$/, "");
-    const match = toolSteps.find((step) => step.tool_call?.name === tool && !used.has(step.id));
-    if (!match) continue;
-    used.add(match.id);
-    pairs.set(item.id, match);
+  for (const event of events) {
+    if (event.type !== "step") continue;
+    const id = event.params?.[RUN_STEP_PARAM];
+    const step = typeof id === "string" ? byId.get(id) : undefined;
+    if (step) pairs.set(event.step_id, step);
   }
   return pairs;
 }
@@ -268,67 +240,69 @@ export function toolStepDetails(step: RunStep): RunStepDetails | undefined {
 }
 
 /**
- * チャットの処理の経過の段に、ツールの段の詳細を足す（Run の step と結べた段だけ）。段の終わりのイベントは backend が
- * 詳細（内部名・引数・結果）を持って届く（#2373）ので、取り直した Run の step がまだ結果を持たないときはイベントの
- * 詳細を残す。結果を持つ step はデータの範囲の記録も足した詳細にする。
+ * Agent の段の定義（`AGENT_CHAT_PROGRESS_STEPS`）に、ツールの span と結んだ Run の step の詳細（データの範囲の記録・
+ * 取り直した結果）を足したもの。span の終わりのイベントは backend が詳細（内部名・引数・結果）を持って届く（#2373）
+ * ので、結果をまだ持たない step（取り直す前）はイベントの詳細を残す。
  */
-export function withToolStepDetails(progress: ChatProgressStep[], steps: readonly RunStep[]): ChatProgressStep[] {
-  const pairs = pairToolProgressSteps(progress, steps);
-  if (pairs.size === 0) return progress;
-  return progress.map((item) => {
-    const runStep = pairs.get(item.id);
-    if (!runStep || (item.details && !runStep.tool_result)) return item;
-    const details = toolStepDetails(runStep);
-    return details ? { ...item, details } : item;
-  });
+export function agentProgressDefinitions(steps: readonly RunStep[]): ChatProgressStepDefinitions {
+  const byId = new Map(steps.filter((step) => step.tool_call).map((step) => [step.id, step]));
+  if (byId.size === 0) return AGENT_CHAT_PROGRESS_STEPS;
+  const tool = AGENT_CHAT_PROGRESS_STEPS.tool;
+  return {
+    ...AGENT_CHAT_PROGRESS_STEPS,
+    tool: {
+      ...tool,
+      details: (_status, params, details) => {
+        const id = params[RUN_STEP_PARAM];
+        const step = typeof id === "string" ? byId.get(id) : undefined;
+        if (!step || (details && !step.tool_result)) return details;
+        return toolStepDetails(step) ?? details;
+      },
+    },
+  };
 }
 
-/** イベントとツールの記録を、チャットと履歴で同じ工程に写す。 */
+/**
+ * 処理の経過が古い形式の記録か（#3226）。span の記録が無く、段だけのイベント（span の前の記録）か、記録の無い
+ * 終わった Run（#1359 の前）。実行中・受け付けただけの Run と、終端だけの Run（開始の前に終わった）は古い形式では
+ * ない。
+ */
+export function runProgressIsLegacy(run: Pick<RunState, "status" | "progress_events">): boolean {
+  const events = run.progress_events ?? [];
+  if (chatProgressHasSpans(events)) return false;
+  if (events.some((event) => event.type === "step")) return true;
+  return events.length === 0 && TERMINAL_RUN_STATUSES.has(run.status);
+}
+
+/** 処理の経過の行に、ツールの span と結んだ Run の step の表の結果を中身として付ける（チャットと履歴で同じ）。 */
 export function runProgressSteps(
-  run: RunState,
+  run: Pick<RunState, "steps" | "progress_events">,
   progress: ChatProgressStep[],
   tableOf?: (step: RunStep) => RunTimelineStep["children"]
 ): ChatProgressStep[] {
-  const pairs = pairToolProgressSteps(progress, run.steps);
-  const rows = withToolStepDetails(progress, run.steps).map((item) => {
+  if (!tableOf) return progress;
+  const pairs = progressRunSteps(run.progress_events ?? [], run.steps);
+  if (pairs.size === 0) return progress;
+  return progress.map((item) => {
     const step = pairs.get(item.id);
-    const table = step && tableOf?.(step);
-    return table ? {...item, children: table} : item;
+    const table = step && tableOf(step);
+    return table ? { ...item, children: table } : item;
   });
-  const used = new Set([...pairs.values()].map((step) => step.id));
-  const titles = runToolTitles(run);
-  const missing = run.steps.filter((step) => !used.has(step.id) && (
-    progress.length === 0 || ["completed", "failed", "cancelled"].includes(step.status) ||
-    (step.status === "running" && run.status === "running")
-  ));
-  return [...rows, ...missing.map((step): ChatProgressStep => {
-    const status = stepTimelineStatus(step);
-    return {
-      id: `step:${step.id}`,
-      label: toolStepLabel(step, status, titles),
-      status: status === "waiting" ? "running" : status,
-      startedAt: step.started_at ?? step.tool_result?.started_at ?? undefined,
-      finishedAt: step.completed_at ?? step.tool_result?.completed_at ?? undefined,
-      durationMs: step.tool_result?.duration_ms ?? undefined,
-      details: toolStepDetails(step),
-      children: tableOf?.(step),
-    };
-  })];
 }
 
+/**
+ * 実行の詳細の処理の経過（`RunTimeline`）。チャットの処理の経過と同じ記録（span のイベント → 木。#3226）を、同じ
+ * 名前（`AGENT_CHAT_PROGRESS_STEPS` と共通の span の名前）で写す。古い形式の記録は空（画面は古い形式の案内を出す）。
+ */
 export function runTimelineSteps(
   run: RunState,
-  detailsOf: (step: RunStep) => RunTimelineStep["children"],
-  tableOf?: (step: RunStep) => RunTimelineStep["children"]
+  tableOf?: (step: RunStep) => RunTimelineStep["children"],
+  options: ChatProgressLabelOptions = {}
 ): RunTimelineStep[] {
-  const progress = run.progress_events?.length
-    ? chatProgressStepsFromEvents(run.progress_events, AGENT_CHAT_PROGRESS_STEPS, run.id)
-    : [];
-  return runProgressSteps(run, progress, tableOf).map((step) => ({
-    ...chatProgressTimelineStep(step),
-    // イベントを持たない旧記録の詳細の表示を保つ。
-    ...(progress.length === 0 ? {children: detailsOf(run.steps.find((item) => `step:${item.id}` === step.id)!)} : {}),
-  }));
+  const events = run.progress_events ?? [];
+  if (!chatProgressHasSpans(events)) return [];
+  const progress = chatProgressStepsFromEvents(events, agentProgressDefinitions(run.steps), run.id, options);
+  return runProgressSteps(run, progress, tableOf).map(chatProgressTimelineStep);
 }
 
 /**

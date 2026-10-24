@@ -25,7 +25,7 @@ from app.rag.chat_answer_runs import (
     CHAT_ANSWER_INTERRUPTED_MESSAGE,
     ChatAnswerRunService,
 )
-from app.rag.pipeline import SearchStageProgress
+from tests.span_progress_support import answer_step, answer_trace
 from tests.support import TEST_REQUEST_HEADERS
 from tests.test_chat_api import (
     FakeChatOracle,
@@ -55,32 +55,21 @@ class _GatedPipeline(_FakePipeline):
         *,
         history=None,
         query_guardrail_result=None,
+        span_listener=None,
     ):
         assert progress_callback is not None
-        await progress_callback(
-            SearchStageProgress(
-                trace_id=trace_id or "trace",
-                stage="answer_step:文書検索",
-                outcome="started",
-                elapsed_ms=0.0,
-                attributes={},
-            )
-        )
         assert _GatedPipeline.started is not None and _GatedPipeline.release is not None
-        _GatedPipeline.started.set()
-        try:
-            await _GatedPipeline.release.wait()
-        except asyncio.CancelledError:
-            _GatedPipeline.cancelled.append(True)
-            raise
-        return await super().run(  # type: ignore[no-untyped-call]
-            request,
-            trace_id,
-            None,
-            token_callback,
-            history=history,
-            query_guardrail_result=query_guardrail_result,
-        )
+        # 工程の span を 1 つ開いたまま待つ（処理の経過の実行中の段。#3226）。
+        with answer_trace(span_listener, trace_id=trace_id or "trace"), answer_step("文書検索"):
+            # 開いた段の保存（別の task）が先に進むよう、ループに 1 回譲る。
+            await asyncio.sleep(0)
+            _GatedPipeline.started.set()
+            try:
+                await _GatedPipeline.release.wait()
+            except asyncio.CancelledError:
+                _GatedPipeline.cancelled.append(True)
+                raise
+        return self._response(request, trace_id)
 
 
 @pytest.fixture
@@ -594,17 +583,19 @@ async def test_shutdown_marks_running_answers_interrupted(
     await service.shutdown()
     assistant = _assistant(fake)
     assert (assistant.status, assistant.content) == ("ERROR", CHAT_ANSWER_INTERRUPTED_MESSAGE)
-    # 処理の段階は中断の失敗の終端まで記録して保存する（実行中の検索は失敗。#1359）。
+    # 処理の段階は中断の失敗の終端まで記録して保存する（#1359）。
     assert assistant.progress is not None
     assert assistant.progress[-1]["type"] == "terminal"
     assert assistant.progress[-1]["status"] == "failed"
-    # 段階は工程ごと（#2096）。実行中だった文書検索の工程を失敗にする。
+    # 段は span（#3226）。実行中だった文書検索の工程は、打ち切りで取り消した span として終わる
+    # （実行中のまま残さない）。
     search = [
         event
         for event in assistant.progress
         if (event.get("params") or {}).get("name") == "文書検索"
     ][-1]
-    assert search["status"] == "failed"
+    assert search["status"] == "skipped"
+    assert search["cancelled"] is True
 
 
 def test_message_schema_and_migration_add_answer_run_columns() -> None:
