@@ -38,9 +38,7 @@ def test_step_passes_kind_name_and_result_to_the_observer() -> None:
         step.status = "該当なし"
         step.field("検索文", "合成の検索文")
     assert recorder.calls == [("stage", "根拠確認")]
-    (start_kind, start_params, start_details), (end_kind, end_params, end_details) = (
-        recorder.displays
-    )
+    (start_kind, start_params, start_details), (end_kind, end_params, end_details) = recorder.displays
     assert (start_kind, start_params, start_details) == ("answer_step", {"name": "根拠確認"}, None)
     assert end_kind == "answer_step"
     assert end_params == {"llm_calls": 0, "status": "該当なし"}
