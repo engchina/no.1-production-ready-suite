@@ -241,7 +241,7 @@ export function runTimelineSteps(
           details: detailsFor(step.name),
         }));
 
-  // 段は順に並び、時刻は記録していないので所要時間から位置を作る（工程は「根拠の検索と回答の生成」の段の始まりから）。
+  // 段は順に並び、時刻は記録していないので所要時間から位置を作る（工程は「質問の読み取りから回答の作成まで」の段の始まりから）。
   const origin = Date.parse(runStartedAt(run));
   const base = Number.isNaN(origin) ? 0 : origin;
   const iso = (ms: number) => new Date(ms).toISOString();

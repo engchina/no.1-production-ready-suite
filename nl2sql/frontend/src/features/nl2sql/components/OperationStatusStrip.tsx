@@ -11,7 +11,7 @@ import {
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
-import { CHAT_PROGRESS_LABELS, CHAT_PROGRESS_STEP_DEFINITIONS, nl2sqlTraceDetailsLabels } from "../chatProgress";
+import { CHAT_PROGRESS_LABELS, CHAT_PROGRESS_STEP_DEFINITIONS } from "../chatProgress";
 import { normalizeNl2SqlJobSteps } from "../jobProgressState";
 import type { JobData, JobStepData } from "../types";
 import { GeneratedSqlSummary } from "./GeneratedSqlPanel";
@@ -108,7 +108,6 @@ export function OperationStatusStrip({
       startedAt={startedAtMs}
       elapsedMs={finalElapsed}
       cancelled={cancelled}
-      traceLabels={nl2sqlTraceDetailsLabels()}
           traceSummary={job.trace_segments && job.trace_segments.length > 1 ? job.trace_segments : job.trace_summary}
       testId="nl2sql-job"
       labels={recordedSteps.length ? CHAT_PROGRESS_LABELS : undefined}

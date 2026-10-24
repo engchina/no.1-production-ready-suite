@@ -4,8 +4,8 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { operationTimestampMs } from "../../lib/operation-timing";
 import { cn } from "../../lib/utils";
-import { DEFAULT_TRACE_DETAILS_LABELS, type TraceDetailsLabels } from "../../lib/trace-labels";
 import { RunProcessDetails } from "../data/run-detail";
+import { useTraceDetailsLabels } from "../data/trace-labels-provider";
 import { RunTimeline, runTimelineStepIndent, type RunTimelineStep } from "../data/run-detail";
 import { hasRunStepDetails, type RunStepDetails } from "../data/run-step-details";
 import { Disclosure } from "../ui/disclosure";
@@ -119,7 +119,6 @@ export const DEFAULT_CHAT_PROGRESS_LABELS: ChatProgressLabels = {
 
 export interface ChatProgressProps {
   traceSummary?: unknown;
-  traceLabels?: TraceDetailsLabels;
   activityIndicator?: boolean;
   cancelled?: boolean;
   steps: ChatProgressStep[];
@@ -477,13 +476,13 @@ export function ChatProgress({
   labels: labelOverrides,
   footer: footerInput,
   traceSummary,
-  traceLabels = DEFAULT_TRACE_DETAILS_LABELS,
   activityIndicator = true,
   cancelled = false,
   className,
   testId,
 }: ChatProgressProps) {
-  const footer = traceSummary != null ? <RunProcessDetails traceSummary={traceSummary} traceLabels={traceLabels} summaryTestId={testId ? `${testId}-details` : undefined}>{footerInput}</RunProcessDetails> : footerInput;
+  const traceLabels = useTraceDetailsLabels();
+  const footer = traceSummary != null ? <RunProcessDetails traceSummary={traceSummary} summaryTestId={testId ? `${testId}-details` : undefined}>{footerInput}</RunProcessDetails> : footerInput;
   const labels = { ...DEFAULT_CHAT_PROGRESS_LABELS, ...labelOverrides };
   // 終端の判定は配信の最新の一覧で行い、表示する一覧は処理中に段階を消さない・戻さない（#1358）。
   const active = activeProp ?? isChatProgressActive(incomingSteps);

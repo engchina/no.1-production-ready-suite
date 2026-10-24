@@ -1,4 +1,4 @@
-import { DEFAULT_TRACE_DETAILS_LABELS, type TraceDetailsLabels, type TraceSpanLabelInput } from "./trace-labels";
+import { DEFAULT_TRACE_DETAILS_LABELS, type TraceDetailsLabels, type TraceSpanNames, type TraceSpanStatus } from "./trace-labels";
 import type { RunTimelineStep } from "../components/data/run-detail";
 
 function textAttribute(attributes: Readonly<Record<string, unknown>>, key: string): string | undefined {
@@ -6,19 +6,45 @@ function textAttribute(attributes: Readonly<Record<string, unknown>>, key: strin
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/** 技術の span の名前と、名前に添える対象（モデル・ツール）の属性。 */
+const TECHNICAL_SPANS: Readonly<Record<string, { name: Exclude<keyof TraceSpanNames, "attempt" | "root">; target?: string }>> = {
+  "gen_ai.chat": { name: "chat", target: "gen_ai.request.model" },
+  "gen_ai.embeddings": { name: "embeddings", target: "gen_ai.request.model" },
+  "gen_ai.rerank": { name: "rerank", target: "gen_ai.request.model" },
+  "gen_ai.execute_tool": { name: "executeTool", target: "gen_ai.tool.name" },
+  "mcp.request": { name: "mcpRequest" },
+  "oracle.select_ai": { name: "selectAi" },
+  "http.request": { name: "httpRequest" },
+};
+
+interface SpanNameInput {
+  operationName: string;
+  status: TraceSpanStatus;
+  root: boolean;
+  attributes: Readonly<Record<string, unknown>>;
+}
+
 /**
- * span の行の名前。製品の名前（処理の経過と同じ）を優先し、無ければ root は「実行の全体」、
- * `gen_ai.*` は技術の名前にツール名かモデル名を添え、それ以外は `operation_name` にする。
+ * span の行の名前（3 製品の 9 画面で共通の規則。#3219）。root は「実行の全体」、段（`pr.stage`）は製品の段の名前
+ * （処理の経過と同じ。無ければ `pr.stage` の値）、`gen_ai.*`・MCP・Select AI・HTTP は日本語の名前に対象を添え、
+ * それ以外は `operation_name`。2 回目以降の試行（`pr.attempt`）は回数を付ける。元の名前は詳細の `Span name` に残す。
  */
-function spanDisplayName(span: TraceSpanLabelInput, labels: TraceDetailsLabels): string {
-  const custom = labels.spanLabel?.(span)?.trim();
-  if (custom) return custom.slice(0, 128);
-  if (span.root) return labels.root;
-  if (span.operationName.startsWith("gen_ai.")) {
-    const target = textAttribute(span.attributes, "gen_ai.tool.name") ?? textAttribute(span.attributes, "gen_ai.request.model");
-    if (target) return `${span.operationName} · ${target.slice(0, 128)}`;
+function spanDisplayName(span: SpanNameInput, labels: TraceDetailsLabels): string {
+  const names = labels.spanNames;
+  const stage = textAttribute(span.attributes, "pr.stage");
+  let name: string;
+  if (span.root) {
+    name = names.root;
+  } else if (stage) {
+    name = (labels.stageName?.(stage, span.status)?.trim() || stage).slice(0, 128);
+  } else {
+    const technical = TECHNICAL_SPANS[span.operationName] ?? (span.operationName.startsWith("gen_ai.") ? { name: "genAi" as const, target: "gen_ai.request.model" } : undefined);
+    if (!technical) return span.operationName;
+    const target = technical.target ? textAttribute(span.attributes, technical.target) : undefined;
+    name = target ? `${names[technical.name]} · ${target.slice(0, 128)}` : names[technical.name];
   }
-  return span.operationName;
+  const attempt = span.attributes["pr.attempt"];
+  return typeof attempt === "number" && Number.isInteger(attempt) && attempt > 1 ? names.attempt(name, attempt) : name;
 }
 
 /** 外部の summary を検証し、親子関係を有限回で並べる。本文や任意の属性は描画しない。 */
@@ -51,12 +77,11 @@ export function traceTimeline(value: unknown, labels: TraceDetailsLabels = DEFAU
     const operationName = String(span.operation_name).slice(0, 128);
     const label = spanDisplayName({
       operationName,
-      stage: textAttribute(attributes, "pr.stage"),
-      status: span.status as TraceSpanLabelInput["status"],
+      status: span.status as TraceSpanStatus,
       root: data.root_span_id != null ? id === data.root_span_id : !span.parent_span_id,
       attributes,
     }, labels);
-    // 名前を言い換えた行も、実測の記録を引けるように技術の名前を詳細に残す。
+    // 行の名前は日本語にし、実測の記録を引けるように元の span の名前を詳細に残す。
     const fields = [{ label: "Span ID", value: id, mono: true }, { label: "Span name", value: operationName, mono: true }];
     for (const key of ["pr.stage", "gen_ai.request.model", "gen_ai.tool.name", "pr.attempt", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.reasoning.output_tokens", "error.type"]) {
       const v = attributes[key];

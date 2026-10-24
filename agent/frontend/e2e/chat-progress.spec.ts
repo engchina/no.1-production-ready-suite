@@ -371,7 +371,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
   await expect(page.getByTestId("trace-details")).toHaveCount(0);
   await details.getByTestId("trace-details-toggle").click();
-  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expect(page.getByTestId("trace-details")).toContainText("モデルの呼び出し");
   await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
   await captureTraceLayouts(page, testInfo, "history-trace");
   await page.getByTestId("run-timeline-section").screenshot({path: testInfo.outputPath("history-process.png")});

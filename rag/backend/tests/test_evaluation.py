@@ -874,7 +874,7 @@ async def test_evaluation_case_is_limited_by_answer_timeout() -> None:
     assert slow.error_stage == "answer"
     assert slow.error_message is not None
     assert "上限の 1 秒以内に終わりませんでした" in slow.error_message
-    assert "時間切れになった工程: 根拠の検索と回答の生成" in slow.error_message
+    assert "時間切れになった工程: 質問の読み取りから回答の作成まで" in slow.error_message
     assert "遅い" not in slow.error_message
     assert fast.status == "success"
     assert pipeline.queries == ["遅い: 承認条件は？", "承認条件は？"]

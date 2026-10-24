@@ -2310,7 +2310,7 @@ test("実測 trace の親子関係を SQL チャットで開ける", { tag: "@re
   await expect(page.getByTestId("trace-details")).toHaveCount(0);
   await details.getByTestId("trace-details-toggle").click();
   await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
-  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expect(page.getByTestId("trace-details")).toContainText("モデルの呼び出し");
   await expect(page.getByTestId("trace-details").locator("[data-run-timeline-label]")).toContainText(["実行の全体", "SQL を生成しました"]);
   await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -2352,7 +2352,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
   await expect(page.getByTestId("trace-details")).toHaveCount(0);
   await details.getByTestId("trace-details-toggle").click();
-  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expect(page.getByTestId("trace-details")).toContainText("モデルの呼び出し");
   await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
   await captureTraceLayouts(page, testInfo, "history-trace");
   await page.getByTestId("history-detail-timeline").screenshot({path: testInfo.outputPath("history-process.png")});

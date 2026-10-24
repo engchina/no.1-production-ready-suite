@@ -2470,13 +2470,45 @@ test("実測 trace の親子関係を RAG チャットで開ける", { tag: "@re
   await expect(page.getByTestId("trace-details")).toHaveCount(0);
   await details.getByTestId("trace-details-toggle").click();
   await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
-  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expect(page.getByTestId("trace-details")).toContainText("モデルの呼び出し");
   const traceLabels = page.getByTestId("trace-details").locator("[data-run-timeline-label]");
-  await expect(traceLabels).toContainText(["実行の全体", "根拠の検索と回答の生成", "根拠の検索と回答の作成"]);
-  await expect(page.getByTestId("trace-details").getByText("rag.engine.stage", { exact: true })).toHaveCount(0);
+  await expect(traceLabels).toContainText(["実行の全体", "質問の読み取りから回答の作成まで", "根拠の検索と回答の作成"]);
+  await expect(traceLabels.filter({ hasText: /rag\.|gen_ai\./ })).toHaveCount(0);
   await page.getByTestId("trace-details").screenshot({ path: testInfo.outputPath("rag-trace-stages.png") });
   await expectNoPageOverflow(page);
   await captureTraceLayouts(page, testInfo, "rag-chat-trace");
+});
+
+test("保存した回答の記録の trace も処理の経過と同じ名前で出す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const { syntheticTraceSummary: baseTrace, syntheticSpan, captureTraceLayouts } = await import("../../../platform/packages/ui/e2e/trace-fixture");
+  // 会話を開き直したときは回答の記録（SavedAnswerRecord）を読み直し、その中の trace を同じ部品・同じ名前で出す（#3219）。
+  const trace = { ...baseTrace, spans: [
+    ...baseTrace.spans,
+    syntheticSpan("8", "1", "rag.answer", { "pr.stage": "answer" }),
+    syntheticSpan("9", "8", "rag.engine.stage", { "pr.stage": "回答生成フロー" }),
+    syntheticSpan("a", "9", "gen_ai.rerank", { "gen_ai.request.model": "synthetic-rerank" }),
+  ] };
+  const reply = longProcessReply(1);
+  await mockChat(page, "ready", [userMessage, reply]);
+  await page.route("**/api/search/answers?**", route => route.fulfill({ json: pageEnvelope([{ trace_id: reply.trace_id }]) }));
+  await page.route("**/api/search/answers/*", route => route.fulfill({ json: {
+    data: { trace_id: reply.trace_id, created_at: assistantMessage.created_at, question: "合成の質問", answer: "合成の回答", citations: [], surface: "chat", evaluation_available: false,
+      answer_diagnostics: { outcome: "answered", confidence: "high", trace_summary: trace } },
+    error_messages: [], warning_messages: [],
+  } }));
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  const history = await openChatHistory(page);
+  await history.getByRole("list", { name: "会話の履歴" }).getByRole("button").filter({ hasText: "件・" }).click();
+  const answer = page.locator(`[id="message-${reply.message_id}"]`);
+  await answer.getByTestId("chat-answer-progress-summary").click();
+  await answer.getByTestId("chat-answer-progress-details").click();
+  await answer.getByTestId("trace-details-toggle").click();
+  const labels = answer.getByTestId("trace-details").locator("[data-run-timeline-label]");
+  await expect(labels).toContainText(["実行の全体", "質問の読み取りから回答の作成まで", "根拠の検索と回答の作成", "並べ替え（rerank） · synthetic-rerank"]);
+  await expect(labels.filter({ hasText: /rag\.|gen_ai\./ })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await captureTraceLayouts(page, testInfo, "rag-saved-record-trace");
 });
 
 test("チャットと履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
@@ -2516,7 +2548,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await expect(details.getByTestId("trace-details-toggle")).toBeVisible();
   await expect(page.getByTestId("trace-details")).toHaveCount(0);
   await details.getByTestId("trace-details-toggle").click();
-  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expect(page.getByTestId("trace-details")).toContainText("モデルの呼び出し");
   await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
   await captureTraceLayouts(page, testInfo, "history-trace");
   await page.getByTestId("run-history-timeline").screenshot({path: testInfo.outputPath("history-process.png")});

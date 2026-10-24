@@ -5,10 +5,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   answerProcessStepsFromStages,
+  answerStageName,
   answerStepDisplayName,
   answerStepMeta,
   llmCallsLabel,
-  ragTraceDetailsLabels,
+  RAG_TRACE_DETAILS_LABELS,
   type AnswerStageRecord,
 } from "./answer-process";
 import { CHAT_PROGRESS_DEFINITIONS } from "./chat-progress";
@@ -202,8 +203,8 @@ describe("LLM の回数と送信の回数", () => {
   });
 });
 
-// #3214: トレースの詳細の span は、処理の経過の行と同じ名前にする（root と同名の段は分ける）。
-describe("ragTraceDetailsLabels（トレースの span の名前）", () => {
+// #3214 / #3219: トレースの詳細の span は、処理の経過の行と同じ名前（同じ関数）にし、技術の span も日本語にする。
+describe("RAG_TRACE_DETAILS_LABELS（トレースの span の名前）", () => {
   const at = (ms: number) => new Date(T0 + ms).toISOString();
   const span = (id: string, parent: string | null, operation_name: string, attributes: Record<string, unknown> = {}) => ({
     span_id: id.repeat(16), parent_span_id: parent?.repeat(16) ?? null, trace_id: "a".repeat(32), operation_name, kind: "internal",
@@ -220,17 +221,26 @@ describe("ragTraceDetailsLabels（トレースの span の名前）", () => {
   ] };
 
   it("処理の経過と同じ名前を付け、root と中の同名の段を分ける", () => {
-    const labels = traceTimeline(summary, ragTraceDetailsLabels()).steps.map((step) => step.label);
+    const labels = traceTimeline(summary, RAG_TRACE_DETAILS_LABELS).steps.map((step) => step.label);
     expect(labels).toEqual([
       t("trace.span.root"),
       t("search.stage.historyRewrite"),
       t("search.stage.answer"),
       answerStepDisplayName("回答生成フロー"),
       answerStepDisplayName("文書検索（2回目）"),
-      "gen_ai.embeddings · synthetic-embed",
+      `${t("trace.span.embeddings")} · synthetic-embed`,
       t("search.stage.answerGuardrail"),
     ]);
-    expect(labels).not.toContain("rag.engine.stage");
+    expect(labels.some((label) => /rag\.|gen_ai\./.test(label))).toBe(false);
     expect(labels[3]).toBe(t("answer.step.answerFlow"));
+    // 入れ子の段（回答エンジンの全体と、その中の回答生成フロー）は別の名前にする。
+    expect(labels[2]).not.toBe(labels[3]);
+  });
+
+  it("処理の経過の段の名前と trace の段の名前は同じ関数から作る", () => {
+    for (const stage of ["history_rewrite", "field_filter", "answer", "retrieval", "answer_guardrail", "answer_record_save", "質問の理解", "根拠確認（2回目）"]) {
+      expect(RAG_TRACE_DETAILS_LABELS.stageName?.(stage, "done")).toBe(answerStageName(stage));
+    }
+    expect(answerStageName("未知の工程")).toBeUndefined();
   });
 });

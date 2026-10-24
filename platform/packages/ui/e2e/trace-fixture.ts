@@ -1,6 +1,6 @@
 const syntheticChatModel = `synthetic_model_${"segment_".repeat(24)}`;
-/** 合成記録の `gen_ai.chat` の行の名前（部品の既定は技術の名前とモデル名。モデル名は 128 字まで。#3214）。 */
-export const syntheticChatSpanLabel = `gen_ai.chat · ${syntheticChatModel.slice(0, 128)}`;
+/** 合成記録の `gen_ai.chat` の行の名前（日本語の名前とモデル名。モデル名は 128 字まで。#3214・#3219）。 */
+export const syntheticChatSpanLabel = `モデルの呼び出し · ${syntheticChatModel.slice(0, 128)}`;
 
 /** 合成記録の span（製品の段の span を足すときに使う）。 */
 export function syntheticSpan(id: string, parent: string | null, operationName: string, attributes: Record<string, string | number> = {}) {
@@ -52,6 +52,12 @@ export async function captureTraceLayouts(
       }, theme);
       await page.evaluate(() => document.fonts.ready);
       if (!(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))) throw new Error("ページに横方向のはみ出しがあります。");
+      // Trace ID が折り返しても、コピーのボタンは同じ行に置く（#3219）。
+      const sameRow = await page.evaluate(() => [...document.querySelectorAll("[data-trace-id-row]")].every(row => {
+        const [text, button] = [row.querySelector("span"), row.querySelector("button")].map(el => el?.getBoundingClientRect());
+        return text != null && button != null && button.top < text.bottom && text.top < button.bottom;
+      }));
+      if (!sameRow) throw new Error("Trace ID とコピーのボタンが別の行にあります。");
       await page.screenshot({ path: testInfo.outputPath(`${name}-${width}-${theme}.png`), fullPage: true });
     }
   }
