@@ -215,6 +215,7 @@ from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput
 from rag_engine.models.storage import AdbHybridSearchUnavailable
 from rag_engine.resources.runtime import current_profile
 from rag_engine.retrieval.article_catalog import is_added_catalog_article
+from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.character_forms import fold_model_view, fold_width
 from rag_engine.retrieval.context_builder import (
     MAX_ANCHORS_PER_PARENT,
@@ -645,7 +646,7 @@ def select_documents(
     hits: dict[tuple[str, ...], int] = {}
     sources: dict[tuple[str, ...], str] = {}
     for position, record in enumerate(ranked_children):
-        if is_added_catalog_article(record) or record.metadata.get("is_attachment_chunk"):
+        if is_added_catalog_article(record) or is_attachment_evidence(record):
             # 会話の添付は利用者が明示した入力なので、文書間の関連度の比較に数えない。
             # 目録で選んで加えた条（#2254）は文書の分数に数えない（加えた条の関連度で他の文書を後回しにしない）。
             continue
@@ -667,11 +668,9 @@ def select_documents(
     # 下限未満の拡張の根拠は、印の無い候補と同じに扱う（#1390）。
     # 参照元の直後へ置いた交差参照の参照先（#1549）も、参照元に従うので後回しにしない。
     # 目録で選んで加えた条（#2254）も、事例の言葉の質問では rerank の関連度が低いので後回しにしない。
+    # 会話の添付（#3100）も、利用者が明示した入力なので後回しにしない。
     reserved = [
-        is_reserved_entity_expansion(r)
-        or is_followed_reference(r)
-        or is_added_catalog_article(r)
-        or bool(r.metadata.get("is_attachment_chunk"))
+        is_reserved_entity_expansion(r) or is_followed_reference(r) or is_added_catalog_article(r) or is_attachment_evidence(r)
         for r in ranked_children
     ]
     kept = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) not in excluded or keep]
@@ -712,12 +711,12 @@ def cap_anchors_per_document(
     kept: list[AnswerRecord] = []
     later: list[AnswerRecord] = []
     for record in ranked_children:
-        # 目録で選んで加えた条（#2254）は起点・親の枠の外に足すので数えない。
+        # 目録で選んで加えた条（#2254）は起点・親の枠の外に足すので数えない。会話の添付（#3100）も数えない。
         if (
             is_reserved_entity_expansion(record)
             or is_followed_reference(record)
             or is_added_catalog_article(record)
-            or record.metadata.get("is_attachment_chunk")
+            or is_attachment_evidence(record)
         ):
             kept.append(record)
             continue

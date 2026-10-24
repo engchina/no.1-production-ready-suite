@@ -210,8 +210,10 @@ if __name__ == "__main__":
 def test_explicit_attachment_survives_document_selection_and_anchor_cap():
     from dataclasses import replace
 
+    from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
+
     attached = child("attachment", 1, "入力の行", "input.csv", "attached", 0.1)
-    attached.metadata["is_attachment_chunk"] = True
+    attached.metadata[ATTACHMENT_EVIDENCE_KEY] = True
     other = child("a", 2, "規則", "a.pdf", "pa", 0.9)
     kept, deferred, trace = a.select_documents([other, attached], settings())
     assert attached in kept and attached not in deferred
