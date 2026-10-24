@@ -59,7 +59,7 @@ function searchStage(stage: string, outcome: string, elapsed_ms = 0, extra: Reco
 }
 
 /**
- * 根拠の検索と回答の生成（answer）の中を、質問の理解 → 文書検索 と時間をおいて進む検索の SSE。
+ * 質問の読み取りから回答の作成まで（answer）の中を、質問の理解 → 文書検索 と時間をおいて進む検索の SSE。
  * 中の各工程は `answer_step:` の入れ子の工程として届く（#593）。
  */
 const slowSearchStream: TimedChunk[] = [
@@ -298,7 +298,7 @@ for (const viewport of [
     const summary = page.getByTestId("search-run-progress-summary");
     await expect(summary).toHaveText(/^処理の経過（3 ステップ・3\.6 秒）$/, { timeout: 4_000 });
     await expect(page.getByText("銀行の得点は 82 点です。").first()).toBeVisible();
-    // 完了したら一覧を閉じ（チャットと同じ。#2118）、押すと開く。全体を包む工程（根拠の検索と回答の生成）は行にしない。
+    // 完了したら一覧を閉じ（チャットと同じ。#2118）、押すと開く。全体を包む工程（質問の読み取りから回答の作成まで）は行にしない。
     const process = page.getByRole("region", { name: "処理の経過" });
     await expect(process.getByText("文書の検索", { exact: true })).toBeHidden();
     // 「処理の詳細」は処理の経過の中にあり、閉じているときは一緒に隠れる（回答の本文との間に独立して置かない。#2325）。
@@ -316,7 +316,7 @@ for (const viewport of [
     // 回答を読む場には回答の記録の削除（「その他の操作」）を出さない（#2325）。
     await expect(process.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
     await process.screenshot({ path: `test-results/answer-progress-search-details-${viewport.name}.png` });
-    await expect(process.getByText("根拠の検索と回答の生成", { exact: true })).toHaveCount(0);
+    await expect(process.getByText("質問の読み取りから回答の作成まで", { exact: true })).toHaveCount(0);
     // 名前は「処理の経過」1 つ（旧「検索実行」「実行記録」「ステージ」は出さない）。
     await expect(page.getByRole("region", { name: "検索実行" })).toHaveCount(0);
     await expect(page.getByText("検索の工程と使ったモデル")).toHaveCount(0);

@@ -17,7 +17,6 @@ import {
   type ChatProgressStep,
   type ChatProgressStepStatus,
   type TraceDetailsLabels,
-  type TraceSpanLabelInput,
 } from "@production-ready/ui";
 
 import { parseRunStepDetails, type AnswerDiagnostics } from "./answer-diagnostics";
@@ -79,37 +78,37 @@ const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
 
 const STEP_ATTEMPT = /（(\d+)回目）$/;
 
+/** 回答エンジンの工程の利用者向けの名前。知らない工程名は undefined。 */
+function knownAnswerStepName(value: string): string | undefined {
+  if (Object.prototype.hasOwnProperty.call(ANSWER_STEP_NAME, value)) return t(ANSWER_STEP_NAME[value]);
+  const attempt = STEP_ATTEMPT.exec(value);
+  const base = attempt ? value.slice(0, attempt.index) : value;
+  if (!attempt || !Object.prototype.hasOwnProperty.call(ANSWER_STEP_NAME, base)) return undefined;
+  return t("answer.step.attempt", { name: t(ANSWER_STEP_NAME[base]), count: Number(attempt[1]) });
+}
+
 /** 工程の利用者向けの名前（backend の工程名から。知らない工程名はそのまま）。 */
 export function answerStepDisplayName(name: string): string {
   const value = name.trim();
   if (!value) return t("search.stage.processing");
-  if (Object.prototype.hasOwnProperty.call(ANSWER_STEP_NAME, value)) return t(ANSWER_STEP_NAME[value]);
-  const attempt = STEP_ATTEMPT.exec(value);
-  const base = attempt ? value.slice(0, attempt.index) : value;
-  if (!attempt || !Object.prototype.hasOwnProperty.call(ANSWER_STEP_NAME, base)) return value;
-  return t("answer.step.attempt", { name: t(ANSWER_STEP_NAME[base]), count: Number(attempt[1]) });
+  return knownAnswerStepName(value) ?? value;
 }
 
 /**
- * 「トレースの詳細」の span の名前を、処理の経過の行と同じ名前にする（#3214）。
- *
- * 回答エンジンの工程の span（`rag.engine.stage`）は工程名（属性 `pr.stage`）から `answerStepDisplayName` で、
- * パイプラインの段の span（`rag.<段>`）は処理の経過の段の名前にする。root（`rag.answer` / `rag.search`）は
- * 部品の既定の「実行の全体」にし、中の同名の段（`rag.answer`）と分ける。知らない span は部品の既定の名前にする。
+ * 段の利用者向けの名前（#3219）。処理の経過の行と「トレースの詳細」の段の span（属性 `pr.stage`）で同じ関数を使う。
+ * パイプラインの段（全体を包む `answer` / `retrieval` を含む）と回答エンジンの工程名を引き、知らない段は undefined
+ * （処理の経過も trace も段の名前をそのまま出す）。
  */
-export function ragTraceSpanLabel({ operationName, stage, root }: TraceSpanLabelInput): string | undefined {
-  if (root || !stage) return undefined;
-  if (operationName === "rag.engine.stage") return answerStepDisplayName(stage);
-  if (operationName !== `rag.${stage}`) return undefined;
-  if (stage === "answer") return t("search.stage.answer");
-  if (stage === "retrieval") return t("search.stage.retrieval");
-  return Object.prototype.hasOwnProperty.call(PIPELINE_STEP_LABEL, stage) ? t(PIPELINE_STEP_LABEL[stage]) : undefined;
+export function answerStageName(stage: string): string | undefined {
+  const value = stage.trim();
+  if (value === "answer") return t("search.stage.answer");
+  if (value === "retrieval") return t("search.stage.retrieval");
+  if (Object.prototype.hasOwnProperty.call(PIPELINE_STEP_LABEL, value)) return t(PIPELINE_STEP_LABEL[value]);
+  return knownAnswerStepName(value);
 }
 
-/** RAG の「トレースの詳細」の文言（span の名前は処理の経過と同じ）。 */
-export function ragTraceDetailsLabels(): TraceDetailsLabels {
-  return createTraceDetailsLabels(t, { spanLabel: ragTraceSpanLabel });
-}
+/** RAG の「トレースの詳細」の文言（root の `TraceDetailsLabelsProvider` で全画面に渡す。段の名前は処理の経過と同じ）。 */
+export const RAG_TRACE_DETAILS_LABELS: TraceDetailsLabels = createTraceDetailsLabels(t, { stageName: answerStageName });
 
 /**
  * 右の列の計測値（結果の説明・LLM の回数）。無ければ undefined。送り直しで API への送信（`llmSends`）が呼び出しより
@@ -153,10 +152,8 @@ function stageKind(stage: string, includeWrapper = false): string | null {
 
 /** 工程の名前（行の名前）。 */
 function stageLabel(stage: string, kind: string): string {
-  if (kind === "retrieval") return t("search.stage.retrieval");
-  if (kind === "answer") return t("search.stage.answer");
   if (kind === ANSWER_STEP_KIND) return answerStepDisplayName(stage.slice(ANSWER_STEP_STAGE_PREFIX.length));
-  return t(PIPELINE_STEP_LABEL[kind]);
+  return answerStageName(kind) ?? kind;
 }
 
 /** SSE の工程のイベント（RAG 検索。受け取った時刻を足したもの）。 */

@@ -4203,7 +4203,7 @@ export const ja = {
   "search.stage.processing": "処理中",
   "search.stage.historyRewrite": "会話を踏まえた質問の書き換え",
   "search.stage.fieldFilter": "検索条件の読み取り",
-  "search.stage.answer": "根拠の検索と回答の生成",
+  "search.stage.answer": "質問の読み取りから回答の作成まで",
   "search.stage.answerGuardrail": "回答の安全チェック",
   "search.stage.retrieval": "検索",
   "search.stage.answerRecordSave": "回答の記録の保存",

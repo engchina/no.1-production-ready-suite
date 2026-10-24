@@ -168,10 +168,12 @@ test("実測 trace の親子関係を会話で開ける", { tag: "@responsive" }
   await details.getByTestId("trace-details-toggle").click();
   await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
   const trace = page.getByTestId("trace-details");
-  // root は「実行の全体」、gen_ai の呼び出しはモデル名つきの名前にする（#3214）。
+  // root は「実行の全体」、gen_ai の呼び出しは日本語の名前とモデル名にする（#3214・#3219）。
   await expect(trace).toContainText("実行の全体");
   await expect(trace).toContainText(syntheticChatSpanLabel);
-  await expect(trace).toContainText("gen_ai.execute_tool");
+  await expect(trace).toContainText("ツールの実行");
+  // 行の名前に英語の span の名前を出さない（元の名前は開いた詳細の Span name だけ。#3219）。
+  await expect(trace.locator("[data-run-timeline-label]").filter({ hasText: /gen_ai\.|mcp\.|synthetic\.execute/ })).toHaveCount(0);
   await expect(trace).toContainText("2.0 秒");
   await expect(page.locator("body")).not.toHaveText(/private-payload/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Check, FileText, GitBranch, PlayCircle, RefreshCw, Server, ShieldAlert } from "lucide-react";
 import {
-  createTraceDetailsLabels,
   AnswerPassageBadges,
   AnswerNotice,
   Banner,
@@ -289,7 +288,6 @@ export function RunDetail({
         }
         timeline={
           <RunTimelineSection
-            traceLabels={createTraceDetailsLabels(t)}
           traceSummary={run.trace_segments && run.trace_segments.length > 1 ? run.trace_segments : run.trace_summary}
             key={run.id}
             title={t("run.section.timeline")}

@@ -20156,7 +20156,7 @@ test("実測 trace の親子関係を SQL 生成で開ける", { tag: "@responsi
   await expect(page.getByTestId("trace-details")).toHaveCount(0);
   await details.getByTestId("trace-details-toggle").click();
   await expect(page.getByText("実行区間 1/1", {exact: true})).toHaveCount(0);
-  await expect(page.getByTestId("trace-details")).toContainText("gen_ai.chat");
+  await expect(page.getByTestId("trace-details")).toContainText("モデルの呼び出し");
   await expect(page.getByTestId("trace-details")).toContainText("2.0 秒");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await captureTraceLayouts(page, testInfo, "sql-generate-trace");

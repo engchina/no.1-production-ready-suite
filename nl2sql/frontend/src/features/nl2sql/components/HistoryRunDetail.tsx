@@ -1,4 +1,4 @@
-import { CHAT_PROGRESS_LABELS, nl2sqlTraceDetailsLabels } from "../chatProgress";
+import { CHAT_PROGRESS_LABELS } from "../chatProgress";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -202,7 +202,6 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
         timeline={
           steps.length > 0 || processDetails ? (
             <RunTimelineSection
-            traceLabels={nl2sqlTraceDetailsLabels()}
           traceSummary={item.trace_segments && item.trace_segments.length > 1 ? item.trace_segments : item.trace_summary}
               title={t("history.detail.timeline")}
               steps={steps}

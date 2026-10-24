@@ -794,7 +794,7 @@ def test_stream_message_timeout_names_stage_and_saves_error(monkeypatch: MonkeyP
     assert (user.role, user.status) == ("USER", "COMPLETE")
     assert (assistant.role, assistant.status) == ("ASSISTANT", "ERROR")
     assert assistant.content == expected
-    assert "根拠の検索と回答の生成" in assistant.content
+    assert "質問の読み取りから回答の作成まで" in assistant.content
     assert assistant.reply_to_message_id == user.id
 
 

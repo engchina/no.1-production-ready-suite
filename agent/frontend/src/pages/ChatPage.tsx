@@ -10,7 +10,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  createTraceDetailsLabels,
   AnswerFooter,
   Banner,
   ProcessFailureNotice,
@@ -1057,7 +1056,6 @@ function RunChatTurn({
         <ChatProgress
           {...progress.progressProps}
           cancelled={run.status === "cancelled"}
-          traceLabels={createTraceDetailsLabels(t)}
           traceSummary={run.trace_segments && run.trace_segments.length > 1 ? run.trace_segments : run.trace_summary}
           steps={stepsWithDetails}
           startedAt={run.created_at}
