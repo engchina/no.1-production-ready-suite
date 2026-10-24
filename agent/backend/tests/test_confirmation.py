@@ -30,6 +30,7 @@ from mcp_support import (
     fake_product_mcp,
     nl2sql_needs_clarification,
 )
+from pr_backend_core.chat_progress import ChatProgressStepEvent
 from pydantic import ValidationError
 from pytest import MonkeyPatch
 
@@ -444,7 +445,7 @@ def test_agent_confirmation_waits_and_the_answer_resumes_the_same_run(
     waits = [
         event
         for event in resumed.progress_events
-        if getattr(event, "name", None) == "agent.confirmation_wait"
+        if isinstance(event, ChatProgressStepEvent) and event.name == "agent.confirmation_wait"
     ]
     assert [(event.kind, event.status, event.params) for event in waits] == [
         ("confirmation", "done", {"round": 1})
